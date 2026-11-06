@@ -539,8 +539,20 @@ def salvage (here other s : Store) (label n : String) : Store × List String × 
     if op.history == bp || sp.history.length > hp.history.length then (s, [], false) else
     match hp.render?, op.render?, (bp.getLast?.map fun G => render G n op.who) with
     | some hText, some oText, some bText =>
-      let moved := fieldsMoved bText oText
-      if moved.isEmpty then (s, [], false) else
+      -- a field here's moves set too is the other's to move only if the other saw here's value (its
+      -- history passes through it) and moved on; otherwise here's stands (2026-11-06: a fork that never
+      -- saw its job landed brought `state: proposed` back over `landed`)
+      let seenThere : String → List String := fun k =>
+        op.history.filterMap fun G => (frontFields (render G n op.who)).lookup k
+      let hf := frontFields hText
+      let bf := frontFields bText
+      let all := fieldsMoved bText oText
+      let theirsToMove := fun (kv : String × String) =>
+        hf.lookup kv.1 == bf.lookup kv.1 || ((hf.lookup kv.1).map fun hv => (seenThere kv.1).contains hv) == some true
+      let moved := all.filter theirsToMove
+      let contested := (all.filter (!theirsToMove ·)).map fun (k, v) =>
+        k ++ " (here " ++ ((hf.lookup k).getD "unset") ++ ", " ++ label ++ " " ++ v ++ ")"
+      if moved.isEmpty && contested.isEmpty then (s, [], false) else
       let restored := sp.history.length < hp.history.length
       let s0 := if restored then s.setPage hp else s
       let step := fun (acc : Store × List (String × String) × List String) (kv : String × String) =>
@@ -570,6 +582,8 @@ def salvage (here other s : Store) (label n : String) : Store × List String × 
       let keptText := ", ".intercalate (kept.map fun (k, v) =>
         k ++ " " ++ ((hText |> frontFields |>.lookup k).getD "unset") ++ " → " ++ v)
       let lines := (if restored then [n ++ ": here's write stands (landed here before the merge)"] else []) ++
+        (if contested.isEmpty then [] else [n ++ ": here's stands where " ++ label ++ " did not see it move: " ++
+          ", ".intercalate contested]) ++
         (if kept.isEmpty then [] else [n ++ ": kept from " ++ label ++ ": " ++ keptText]) ++
         (match why with
           | some w => [n ++ ": pending here, as " ++ label ++ " wrote it on this page as it is (" ++
@@ -621,7 +635,7 @@ def joinReasons (label : String) (r o : Obend.Reasons.State) (behind : List (Str
   -- assumption this merge holds while some page moved here that the other has not seen
   let flag := "behind-" ++ label
   let (r, flagNotes) : Obend.Reasons.State × List String :=
-    if !behind.isEmpty && !r.base.held.contains flag then
+    if !behind.isEmpty && !b.explanations.isEmpty && !r.base.held.contains flag then
       match r.step (.assume flag) with
       | .ok st => (st, [flag ++ ": assumed here, " ++ label ++ " has not seen " ++ "; ".intercalate (behind.map fun (n, fs) =>
           n ++ " " ++ ", ".intercalate fs) ++ "; its explanations hold here only without it"])
@@ -634,7 +648,8 @@ def joinReasons (label : String) (r o : Obend.Reasons.State) (behind : List (Str
   let mine := r.base
   let clash := (b.observations.filter fun x => mine.observations.any fun y => y.name == x.name && y != x).map
       (fun x => label ++ "'s observation " ++ x.name ++ ": not joined: observed here otherwise") ++
-    (b.explanations.filter fun x => mine.explanations.any fun y => y.name == x.name && y != x).map
+    (b.explanations.filter fun x => mine.explanations.any fun y =>
+        y.name == x.name && { y with neg := y.neg.filter (· != flag) } != { x with neg := x.neg.filter (· != flag) }).map
       (fun x => label ++ "'s explanation " ++ x.name ++ ": not joined: a different explanation has that name here")
   let evs : List Obend.Reasons.Event :=
     (b.observations.filter fun x => !mine.observations.any (·.name == x.name)).map .observe ++
@@ -652,8 +667,10 @@ def joinReasons (label : String) (r o : Obend.Reasons.State) (behind : List (Str
 
 /-- After a merge: the pages it refused keep what they can (`salvage`), and the other's reasons join. -/
 def afterMerge (w0 w : World) (o : Outcome) (label : String) (other : Store)
-    (rs : Option Obend.Reasons.State) : World × Outcome :=
-  let moved := other.pages.map (·.name)
+    (rs : Option Obend.Reasons.State) (held : String → Bool := fun _ => false) : World × Outcome :=
+  -- a page the merge held back on purpose (a landing whose grants were revoked here, a duplicate, the
+  -- ledger's register) is not the merge's refusal: nothing of it is kept
+  let moved := (other.pages.map (·.name)).filter (!held ·)
   let (s, lines, restored) := moved.foldl (fun (acc : Store × List String × List String) n =>
     let (st, ls, r) := salvage w0.store other acc.1 label n
     (st, acc.2.1 ++ ls, if r then acc.2.2 ++ [n] else acc.2.2)) (w.store, [], [])
@@ -668,12 +685,15 @@ def afterMerge (w0 w : World) (o : Outcome) (label : String) (other : Store)
   ({ w with store := if lines.isEmpty then w.store else settle H s, reasons := r }, o')
 
 /-- After a merge, what is outstanding and what landed are as the merge left them. -/
-theorem afterMerge_keeps (w0 w : World) (o : Outcome) (label : String) (other : Store)
-    (rs : Option Obend.Reasons.State) :
-    (afterMerge w0 w o label other rs).1.outstanding = w.outstanding ∧
-      (afterMerge w0 w o label other rs).1.landed = w.landed := by
-  unfold afterMerge
-  constructor <;> rfl
+theorem afterMerge_outstanding (w0 w : World) (o : Outcome) (label : String) (other : Store)
+    (rs : Option Obend.Reasons.State) (held : String → Bool) :
+    (afterMerge w0 w o label other rs held).1.outstanding = w.outstanding := by
+  unfold afterMerge; rfl
+
+theorem afterMerge_landed (w0 w : World) (o : Outcome) (label : String) (other : Store)
+    (rs : Option Obend.Reasons.State) (held : String → Bool) :
+    (afterMerge w0 w o label other rs held).1.landed = w.landed := by
+  unfold afterMerge; rfl
 
 /-- **The step of a turn**: the store function its command calls, or a refusal (a refused turn is
 never logged). -/
@@ -723,7 +743,12 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     | none =>
       match mergeStep w label other skipLedger og theirs with
       | .ok (w', o) =>
+        let held : List String := match og with
+          | some g => let (_, refused, dups) := sortLandings w (w.grants.merge g) theirs
+                      (refused ++ dups).flatMap (·.pages)
+          | none => []
         let (w'', o') := afterMerge w w' o label other rs
+          (fun n => held.contains n || (skipLedger && Obend.Ledger.Cli.ledgerOwned n))
         .ok ({ w'' with forks := markMerged w''.forks label }, o')
       | .error e => .error e
   | .resolved k right =>
@@ -1363,8 +1388,8 @@ theorem merged_keeps {w w' : World} {o : Outcome} {label : String} {other : Stor
       simp only [Except.ok.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, -⟩ := h
       have := mergeStep_keeps hm
-      have ha := afterMerge_keeps w w1 o1 label other rs
-      exact ⟨fun x hx => by simp [ha.1, this.1, hx], fun x hx => by simp only [ha.2]; exact this.2 x hx⟩
+      exact ⟨fun x hx => by simp [afterMerge_outstanding, this.1, hx],
+        fun x hx => by simp only [afterMerge_landed]; exact this.2 x hx⟩
     · cases h
 
 /-- **An obligation outlives every turn but its confirmation**: a revision, a transport, a merge, a
