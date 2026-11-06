@@ -1936,11 +1936,19 @@ def Store.write (s : Store) (p : Page) (G' : Graph) (added : List (AtomId × Str
 
 /-- **A page write lands**: each of its versions in turn, through `Store.write`, the one judgment and
 the one landing rule every write of the store goes through. -/
-def Store.writeText (s : Store) (page : String) (w : PageWrite) : Except String Store :=
-  w.versions.foldlM (fun s (G, added) =>
+def Store.writeVersions (s : Store) (page : String) (poster : Option String) :
+    List (Graph × List (AtomId × String)) → Except String Store
+  | [] => .ok s
+  | (G, added) :: rest =>
     match s.page? page with
-    | some p => s.write p G added .owner w.poster
-    | none => .error (page ++ ": no such page")) s
+    | some p =>
+      match s.write p G added .owner poster with
+      | .ok s' => s'.writeVersions page poster rest
+      | .error e => .error e
+    | none => .error (page ++ ": no such page")
+
+def Store.writeText (s : Store) (page : String) (w : PageWrite) : Except String Store :=
+  s.writeVersions page w.poster w.versions
 
 /-! ### Merge -/
 

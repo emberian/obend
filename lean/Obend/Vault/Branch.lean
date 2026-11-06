@@ -49,8 +49,20 @@ tip when it merges; the difference is only the configuration it is judged at.
   write (`Store.writeText`: `prepareWrite`, `judgePrepared` with rows, kind pins, `poster` and
   `unresolved`), and by nothing else: admitted at the tip exactly when the store's write lands, the
   tip keeping exactly the store it reaches, refused in the store's own words
-  (`tip_lands_iff_store_lands`, `tip_refuses_iff_store_refuses`). The page's laws are lines of its
-  text, so in a vault they are the store's, not the book's.
+  (`tip_lands_iff_store_lands`, `tip_refuses_iff_store_refuses`), its consent the store's
+  (`WriteConsents`, `StoreConsents` through `judgePrepared`). The page's laws are lines of its text, so
+  in a vault they are the store's, not the book's. The store of states and the vault agree on every
+  page at its current version, at the base and so after the merge (`Agrees`, `merge_vault_agrees`).
+* **Laws settle first, in every store.** The tip applies relaws before any write, and the writes that
+  change a page's law lines (`BTurn.lawKey`: a vault page's law lines are its text), of either side
+  and merged, land before every other write (`lawFirst`); a law-changing write that also changes data
+  is ordered as a law and judged as a whole. Two such writes of one page leaving different law lines
+  do not merge: a conflict, the base laws standing.
+* **Pins and the tip's judgment both stand.** A write's pins say what it read on its branch; the tip
+  judges it again on what is there. The judgment at the tip is what consent is; the pins are what
+  makes a read that moved a refusal by name rather than a silent re-reading (a write whose text was
+  composed against a page as it was is not landed against the page as it is), which the vault's
+  walkthrough shows (section 8).
 * **Consent from the causal cone.** A write is judged by every law of every page in its cone at the
   tip: the written page's own laws (old to new), its laws over links at every page it links to, and
   the laws over links of every page that links to it, at it as written. A landed write has the
@@ -100,6 +112,7 @@ open Obend.Vault.Rehydration (Sturdyref)
 open Obend.Vault.Affordance (Auth fireGate)
 open Obend.Spec.Law (LawExpr Facts)
 open Obend.Core.Data (Data)
+open Obend.Doc (Graph AtomId)
 
 set_option autoImplicit false
 
@@ -212,6 +225,12 @@ structure BTurn where
   relies : List String := []
   /-- the text the write lands, in a configuration that keeps the store's texts (`Config.vault`) -/
   text : Option PageWrite := none
+  /-- the page's law lines as the write leaves them, when it changes them (a vault's page carries
+  its laws in its text): a law-changing write, settled before every other write at the tip -/
+  lawKey : Option String := none
+
+/-- A write that changes a page's law lines. -/
+def BTurn.isLaw (t : BTurn) : Bool := t.lawKey.isSome
 
 def BTurn.writes (t : BTurn) : List String := t.turn.writeFootprint
 
@@ -376,18 +395,37 @@ def preRefusal (c : Config) (t : BTurn) : Option Refusal :=
 def dropPage (page msg : String) : String :=
   if msg.startsWith (page ++ ": ") then String.ofList (msg.toList.drop (page.length + 2)) else msg
 
-/-- **The judgment of a write, and what it lands.** In a vault (`Config.vault`), a write of one page
-that carries its text is the store's write of it (`Store.writeText`: `prepareWrite`, `judgePrepared`
-with its rows, kind pins, `poster` and `unresolved`, and the landing rule), refused by name with the
-store's own words; the vault it reaches is the configuration's next. Otherwise every page in the
-write's cone is judged on the store of states (`coneRefusal`). -/
+/-- The state of a page not born: an empty record. -/
+def unborn : Data := .record []
+
+/-- A page's state at the last version of a history, or `unborn`. -/
+def stateAt (h : List Graph) : Data :=
+  match h.getLast? with
+  | some G => pageState G (h.length - 1)
+  | none => unborn
+
+/-- The states a vault's store holds: each page at its current version (`unborn` before its birth). -/
+def vaultStates (v : Store) : VaultStore := fun c => (v.page? c).map fun p => stateAt p.history
+
+/-- **The judgment of a write, and what it lands.** In a vault (`Config.vault`), every write is a
+write of one page carrying its text, and it is the store's write of it (`Store.writeText`:
+`prepareWrite`, `judgePrepared` with its rows, kind pins, `poster` and `unresolved`, and the landing
+rule), refused by name in the store's own words; it lands only if the state its turn says it writes
+is the state the store lands (so the store of states and the vault never part, `Agrees`). Otherwise
+every page in the write's cone is judged on the store of states (`coneRefusal`). -/
 def judgeWrite (c : Config) (t : BTurn) : Except Refusal (Option Store) :=
-  match c.vault, t.text, t.writes with
-  | some s, some w, [page] =>
-    match s.writeText page w with
-    | .ok s' => .ok (some s')
-    | .error m => .error (.store page (dropPage page m))
-  | _, _, _ =>
+  match c.vault, t.text, t.turn.writeCells with
+  | some s, some w, [d] =>
+    match s.writeText d.cell w with
+    | .error m => .error (.store d.cell (dropPage d.cell m))
+    | .ok s' =>
+      match vaultStates s' d.cell with
+      | some x =>
+        if Obend.Law.termEq x.term d.postState.term then .ok (some s')
+        else .error (.store d.cell "its turn does not say the state its text lands")
+      | none => .error (.store d.cell "its text lands no page")
+  | some _, _, _ => .error (.store (t.writes.headD "") "a write in a vault carries its text, for one page")
+  | none, _, _ =>
     match t.turn.writeCells.findSome? (coneRefusal c.book (applyTurn c.store t.turn)
         (requestAt t.actor c.history.length)) with
     | some r => .error r
@@ -612,6 +650,8 @@ each clashes with no other write of the other side, and every cell merges. The m
 on both sides' sturdyrefs; its actor is the two actors. -/
 def mergeFor (text : TextMerge) (book : LawBook) (lw rw : List BTurn) (a b : BTurn) : Option BTurn :=
   if !(b.writes.all a.writes.contains && a.writes.all b.writes.contains) then none
+  -- two edits of a page's law lines that differ do not merge: a conflict, the base laws standing
+  else if a.isLaw && b.isLaw && a.lawKey != b.lawKey then none
   else if (rw.filter fun b' => !(clash a b').isEmpty).length != 1 then none
   else if (lw.filter fun a' => !(clash a' b).isEmpty).length != 1 then none
   else
@@ -624,7 +664,8 @@ def mergeFor (text : TextMerge) (book : LawBook) (lw rw : List BTurn) (a b : BTu
                     turn := vt, relies := a.relies ++ b.relies,
                     text := match a.writes with
                       | [c] => text.write c
-                      | _ => none }
+                      | _ => none,
+                    lawKey := if a.isLaw then a.lawKey else b.lawKey }
 
 /-- The writes of the left that clash with no write of the right. -/
 def freeLeft (lw rw : List BTurn) : List BTurn :=
@@ -651,6 +692,17 @@ def pairAuthority (auth : Authority) (book : LawBook) (p : BTurn × BTurn × BTu
   | none, some r => some r
   | none, none => none
 
+/-- **Laws settle first**: the writes that change a page's law lines, of either side and merged, before
+every other write, each part in its order. So the laws at the tip are known before any write that
+does not change them is judged, in a vault as in a store whose laws are its book's. -/
+def lawFirst (xs : List (Side × BTurn)) : List (Side × BTurn) :=
+  xs.filter (·.2.isLaw) ++ xs.filter (!·.2.isLaw)
+
+theorem mem_lawFirst {xs : List (Side × BTurn)} {x : Side × BTurn} : x ∈ lawFirst xs ↔ x ∈ xs := by
+  unfold lawFirst
+  rw [List.mem_append, List.mem_filter, List.mem_filter]
+  cases x.2.isLaw <;> simp
+
 /-- A merge: the tip configuration, what landed, what was refused and why, the conflicts. -/
 structure Merged where
   tip : Config
@@ -660,7 +712,7 @@ structure Merged where
 
 /-- **Merge two branches of `base`**: settle their non-write acts into the tip, keep the clashing
 writes as conflicts, replay the others at the tip. A branch that did not fork from `base`'s history
-is not merged. -/
+is not merged. The writes that change law lines are replayed first (`lawFirst`). -/
 def merge (base : Config) (L R : Branch) (text : TextMerge := noText) : Except String Merged :=
   if L.base ≠ base.history then .error (L.name ++ " did not fork from this history")
   else if R.base ≠ base.history then .error (R.name ++ " did not fork from this history")
@@ -674,9 +726,9 @@ def merge (base : Config) (L R : Branch) (text : TextMerge := noText) : Except S
     let mp := mergedPairs text book lw rw
     let pre : List (Side × String × Refusal) := mp.filterMap fun p =>
       (pairAuthority t.config.auth book p).map fun r => (.both, p.2.2.label, r)
-    let w := runWrites (sideName L.name R.name) t.config
+    let w := runWrites (sideName L.name R.name) t.config (lawFirst
       ((freeLeft lw rw).map (.left, ·) ++ (freeRight lw rw).map (.right, ·) ++
-        ((mp.filter fun p => (pairAuthority t.config.auth book p).isNone).map fun p => (.both, p.2.2)))
+        ((mp.filter fun p => (pairAuthority t.config.auth book p).isNone).map fun p => (.both, p.2.2))))
     .ok ⟨{ w.config with conflicts := w.config.conflicts ++ cs }, t.landed ++ w.landed,
       t.refused ++ pre ++ w.refused, cs⟩
 
@@ -732,30 +784,53 @@ theorem admitWrite_ok {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c
 
 /-- **Landed at the tip is landed in the store.** In a vault, a write of one page that carries its
 text and whose authority and pins hold is admitted exactly when the store's own write of that text
-lands (`Store.writeText`), and the configuration it reaches keeps exactly the store that write
-reaches; refused, it is refused with the store's own words. One judgment, one event. -/
+lands (`Store.writeText`) at the state its turn says, and the configuration it reaches keeps exactly
+the store that write reaches. One judgment, one event. -/
 theorem tip_lands_iff_store_lands {c : Config} {o : String} {t : BTurn} {s s' : Store} {w : PageWrite}
-    {page : String} (hv : c.vault = some s) (ht : t.text = some w) (hw : t.writes = [page])
+    {d : CellDelta} (hv : c.vault = some s) (ht : t.text = some w) (hw : t.turn.writeCells = [d])
     (hpre : preRefusal c t = none) :
-    (∃ c', admitWrite c o t = .ok c' ∧ c'.vault = some s') ↔ s.writeText page w = .ok s' := by
-  have hj : judgeWrite c t = match s.writeText page w with
-      | .ok s' => .ok (some s')
-      | .error m => .error (.store page (dropPage page m)) := by
-    unfold judgeWrite; rw [hv, ht, hw]
-  unfold admitWrite
+    (∃ c', admitWrite c o t = .ok c' ∧ c'.vault = some s') ↔
+      s.writeText d.cell w = .ok s' ∧ (vaultStates s' d.cell).map Data.term = some d.postState.term := by
+  unfold admitWrite judgeWrite
   rw [hpre]
   simp only
-  rw [hj]
-  cases hs : s.writeText page w with
+  rw [hv, ht, hw]
+  simp only
+  cases hs : s.writeText d.cell w with
   | error m => simp
   | ok s'' =>
-    simp only [Except.ok.injEq, exists_eq_left', Option.some.injEq]
+    simp only [Except.ok.injEq]
+    cases hx : vaultStates s'' d.cell with
+    | none =>
+      simp only
+      constructor
+      · rintro ⟨_, h, _⟩; cases h
+      · rintro ⟨rfl, h⟩; simp [hx] at h
+    | some x =>
+      simp only
+      by_cases hq : Obend.Law.termEq x.term d.postState.term = true
+      · simp only [hq, ↓reduceIte]
+        have := Obend.Law.termEq_sound_local hq
+        constructor
+        · rintro ⟨_, h, hv'⟩
+          cases h
+          simp only [Option.some.injEq] at hv'
+          subst hv'
+          exact ⟨rfl, by simp [hx, this]⟩
+        · rintro ⟨rfl, _⟩
+          exact ⟨_, rfl, rfl⟩
+      · simp only [hq, Bool.false_eq_true, ↓reduceIte]
+        constructor
+        · rintro ⟨_, h, _⟩; cases h
+        · rintro ⟨rfl, h⟩
+          simp only [hx, Option.map_some, Option.some.injEq] at h
+          exact absurd (h ▸ Obend.Law.termEq_refl_local _) hq
 
 /-- The store's refusal of a vault write is the tip's, in the store's words. -/
 theorem tip_refuses_iff_store_refuses {c : Config} {o : String} {t : BTurn} {s : Store} {w : PageWrite}
-    {page m : String} (hv : c.vault = some s) (ht : t.text = some w) (hw : t.writes = [page])
-    (hpre : preRefusal c t = none) (hm : s.writeText page w = .error m) :
-    admitWrite c o t = .error (.store page (dropPage page m)) := by
+    {d : CellDelta} {m : String} (hv : c.vault = some s) (ht : t.text = some w) (hw : t.turn.writeCells = [d])
+    (hpre : preRefusal c t = none) (hm : s.writeText d.cell w = .error m) :
+    admitWrite c o t = .error (.store d.cell (dropPage d.cell m)) := by
   unfold admitWrite judgeWrite
   rw [hpre]
   simp only
@@ -873,28 +948,78 @@ theorem coneRefusal_none {book : LawBook} {s' : VaultStore} {actor : String} {h 
         rw [ite_eq_left hcond] at hb
         exact linksRefusal_none hb d.cell (List.mem_singleton_self _) p hp
 
-/-- A vault write landed by the store's own write: the configuration keeps a store, the write carries
-its text for one page, and `Store.writeText` lands it. -/
-def StoreLanded (c : Config) (t : BTurn) : Prop :=
-  ∃ s w page s', c.vault = some s ∧ t.text = some w ∧ t.writes = [page] ∧ s.writeText page w = .ok s'
+/-- **A store's consent to a page write**: each version of it prepared (`prepareWrite`) and admitted
+by the store's judgment (`judgePrepared`: its own laws and its kinds', its laws over rows, the laws
+over links of the pages it links to and of every page linking to it) at the store as the versions
+before it left it. -/
+def StoreConsents (s : Store) (page : String) (poster : Option String) :
+    List (Graph × List (AtomId × String)) → Prop
+  | [] => True
+  | (G, a) :: rest => ∃ p pr, s.page? page = some p ∧
+      prepareWrite s.entries p G a .owner s.turn (poster.getD "owner") s.environment = .ok pr ∧
+      judgePrepared s.entries s.entries pr [] = .ok () ∧
+      StoreConsents (s.setPage (p.withChange pr.change)) page poster rest
 
-/-- **An admitted write was consented to**: by every page of its cone on the store of states, or, in
-a vault, by the store's own judgment of its text (`Store.writeText`). -/
+/-- **What consent to a write is**, at the configuration it is judged at: in a vault, the store's
+consent to its text (`StoreConsents`); otherwise the consent of every page of its cone (`Consents`). -/
+def WriteConsents (c c' : Config) (t : BTurn) : Prop :=
+  match c.vault with
+  | some s => ∃ w d, t.text = some w ∧ t.turn.writeCells = [d] ∧ StoreConsents s d.cell w.poster w.versions
+  | none => ∀ d ∈ t.turn.writeCells, Consents c.book c'.store (factsAt c.history.length) d
+
+theorem write_consents {s s' : Store} {p : Page} {G : Graph} {a : List (AtomId × String)} {po : Option String}
+    (h : s.write p G a .owner po = .ok s') :
+    ∃ pr, prepareWrite s.entries p G a .owner s.turn (po.getD "owner") s.environment = .ok pr ∧
+      judgePrepared s.entries s.entries pr [] = .ok () ∧ s' = s.setPage (p.withChange pr.change) := by
+  unfold Store.write commit at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  cases hp : prepareWrite s.entries p G a .owner s.turn (po.getD Actor.owner.name) s.environment with
+  | error e => rw [hp] at h; cases h
+  | ok pr =>
+    rw [hp] at h
+    simp only at h
+    cases hj : judgePrepared s.entries s.entries pr [] with
+    | error e => rw [hj] at h; cases h
+    | ok u =>
+      rw [hj] at h
+      cases h
+      exact ⟨pr, hp, hj, rfl⟩
+
+theorem writeVersions_consents {page : String} {po : Option String} :
+    ∀ {s s' : Store} {vs : List (Graph × List (AtomId × String))},
+      s.writeVersions page po vs = .ok s' → StoreConsents s page po vs
+  | _, _, [], _ => trivial
+  | s, s', (G, a) :: rest, h => by
+    simp only [Store.writeVersions] at h
+    split at h
+    · rename_i p hp
+      split at h
+      · rename_i s₁ h₁
+        obtain ⟨pr, hpr, hj, rfl⟩ := write_consents h₁
+        exact ⟨p, pr, hp, hpr, hj, writeVersions_consents h⟩
+      · cases h
+    · cases h
+
+/-- **An admitted write was consented to**, at the configuration it was admitted at: in a vault by
+the store's judgment of its text, otherwise by every page of its cone. -/
 theorem admitWrite_consents {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c o t = .ok c') :
-    (∀ d ∈ t.turn.writeCells, Consents c.book c'.store (factsAt c.history.length) d) ∨ StoreLanded c t := by
+    WriteConsents c c' t := by
   obtain ⟨_, _, v, hj, rfl⟩ := admitWrite_ok h
   unfold judgeWrite at hj
+  unfold WriteConsents
   split at hj
-  · rename_i s w page hv ht hw
-    cases hs : s.writeText page w with
-    | ok s' => exact .inr ⟨s, w, page, s', hv, ht, hw, hs⟩
+  · rename_i s w d hv ht hw
+    rw [hv]
+    cases hs : s.writeText d.cell w with
+    | ok s' => exact ⟨w, d, ht, hw, writeVersions_consents hs⟩
     | error m => rw [hs] at hj; cases hj
-  · split at hj
+  · cases hj
+  · rename_i hv
+    rw [hv]
+    split at hj
     · cases hj
     · rename_i hc
-      refine .inl fun d hd => coneRefusal_none (List.findSome?_eq_none_iff.1 hc d hd)
-
-/-! ## Runs -/
+      exact fun d hd => coneRefusal_none (List.findSome?_eq_none_iff.1 hc d hd)
 
 theorem admitWrite_keeps {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c o t = .ok c') :
     c'.book = c.book ∧ c'.auth = c.auth ∧ c'.conflicts = c.conflicts := by
@@ -1063,9 +1188,9 @@ theorem merge_ok {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} 
     let mp := mergedPairs text book lw rw
     let pre : List (Side × String × Refusal) := mp.filterMap fun p =>
       (pairAuthority t.config.auth book p).map fun r => (.both, p.2.2.label, r)
-    let w := runWrites (sideName L.name R.name) t.config
+    let w := runWrites (sideName L.name R.name) t.config (lawFirst
       ((freeLeft lw rw).map (.left, ·) ++ (freeRight lw rw).map (.right, ·) ++
-        ((mp.filter fun p => (pairAuthority t.config.auth book p).isNone).map fun p => (.both, p.2.2)))
+        ((mp.filter fun p => (pairAuthority t.config.auth book p).isNone).map fun p => (.both, p.2.2))))
     m = ⟨{ w.config with conflicts := w.config.conflicts ++ cs }, t.landed ++ w.landed,
       t.refused ++ pre ++ w.refused, cs⟩ := by
   unfold merge at h
@@ -1151,17 +1276,15 @@ theorem revoked_elsewhere_never_lands {base : Config} {L R : Branch} {text : Tex
   have hrev := tip_sees_every_revocation h hr
   simp [Authority.live, hrev] at hlive
 
-/-- **A landed write is consented to at the tip**: by every law of every page in the cone of every
-cell it writes, read from the tip's law book, or, in a vault, by the store's own judgment of its text
-at the tip (`StoreLanded`, `tip_lands_iff_store_lands`). -/
+/-- **A landed write is consented to at the tip**: it was admitted at a configuration with the tip's
+law book and authority, and consented to there (`WriteConsents`): in a vault by the store's judgment
+of its text, otherwise by every law of every page in its cone. -/
 theorem landed_consents {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m)
     {sd : Side} {t : BTurn} (ht : (sd, .write t) ∈ m.landed) :
-    (∃ s' height, ∀ d ∈ t.turn.writeCells, Consents m.tip.book s' (factsAt height) d) ∨
-      ∃ c₀, c₀.book = m.tip.book ∧ c₀.auth = m.tip.auth ∧ StoreLanded c₀ t := by
+    ∃ c₀ c₁, c₀.book = m.tip.book ∧ c₀.auth = m.tip.auth ∧
+      admitWrite c₀ (sideName L.name R.name sd) t = .ok c₁ ∧ WriteConsents c₀ c₁ t := by
   obtain ⟨c₀, c₁, hb, ha, h0⟩ := merge_landed_write h ht
-  rcases admitWrite_consents h0 with hc | hs
-  · exact .inl ⟨c₁.store, c₀.history.length, by rw [← hb]; exact hc⟩
-  · exact .inr ⟨c₀, hb, ha, hs⟩
+  exact ⟨c₀, c₁, hb, ha, h0, admitWrite_consents h0⟩
 
 /-! ### The merge is a pushout over the base -/
 
@@ -1320,6 +1443,36 @@ theorem freeRight_sub {lw rw : List BTurn} {b : BTurn} (h : b ∈ freeRight lw r
   obtain ⟨hb, hall⟩ := List.mem_filter.1 h
   exact ⟨hb, fun a ha => List.all_eq_true.1 hall a ha⟩
 
+theorem admitAct_nonwrite_keeps {c c' : Config} {o : String} {a : Act} (hw : a.isWrite = false)
+    (h : admitAct c o a = .ok c') : c'.store = c.store ∧ c'.vault = c.vault := by
+  cases a with
+  | write t => simp [Act.isWrite] at hw
+  | relaw l w p pl =>
+    simp only [admitAct] at h
+    split at h
+    · split at h
+      · cases h; exact ⟨rfl, rfl⟩
+      · cases h
+    · split at h
+      · cases h; exact ⟨rfl, rfl⟩
+      · cases h
+  | revoke l w u =>
+    simp only [admitAct] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · split at h
+        · cases h; exact ⟨rfl, rfl⟩
+        · cases h
+  | grant l w sr =>
+    simp only [admitAct] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h; exact ⟨rfl, rfl⟩
+      · cases h
+
 theorem admitAct_store_nonwrite {c c' : Config} {o : String} {a : Act} (hw : a.isWrite = false)
     (h : admitAct c o a = .ok c') : c'.store = c.store := by
   cases a with
@@ -1410,6 +1563,8 @@ theorem mergeFor_writes {text : TextMerge} {book : LawBook} {lw rw : List BTurn}
       List.contains_iff_mem] at hsame
     split at h
     · cases h
+    split at h
+    · cases h
     · split at h
       · cases h
       · split at h
@@ -1451,6 +1606,64 @@ theorem mem_mergedTurns {text : TextMerge} {book : LawBook} {lw rw : List BTurn}
   obtain ⟨ha, hb, hm⟩ := mem_mergedPairs (List.mem_filter.1 hp).1
   exact ⟨a, b, ha, hb, hm⟩
 
+theorem applyAll_congr_at {s s' : VaultStore} {c : String} (h : s c = s' c) (ts : List BTurn) :
+    applyAll s ts c = applyAll s' ts c := by
+  by_cases hc : c ∈ writesAll ts
+  · exact applyAll_mem hc
+  · rw [applyAll_not_mem hc, applyAll_not_mem hc, h]
+
+theorem mem_landedOn {sd : Side} {L : List (Side × Act)} {t : BTurn} (h : t ∈ landedOn sd L) :
+    (sd, .write t) ∈ L := by
+  obtain ⟨sd', hx⟩ := mem_turnsOf h
+  have hm := List.mem_filter.1 hx
+  have he : sd' = sd := by simpa using hm.2
+  rw [← he]
+  exact hm.1
+
+theorem mem_writesAll_landedOn {sd : Side} {L : List (Side × Act)} {t : BTurn} {c : String}
+    (h : (sd, .write t) ∈ L) (hc : c ∈ t.writes) : c ∈ writesAll (landedOn sd L) := by
+  unfold writesAll landedOn turnsOf
+  refine List.mem_flatMap.2 ⟨t, List.mem_filterMap.2 ⟨(sd, .write t), List.mem_filter.2 ⟨h, by simp⟩, rfl⟩, hc⟩
+
+/-- **The other sides' writes leave a cell they do not write**: the turns landed, applied in order,
+read at a cell only one side writes, as that side's turns alone. -/
+theorem applyAll_side (sd : Side) (c : String) :
+    ∀ {s : VaultStore} {L : List (Side × Act)}, (∀ x ∈ L, ∀ t, x.2 = .write t → x.1 ≠ sd → c ∉ t.writes) →
+      applyAll s (turnsOf L) c = applyAll s (landedOn sd L) c
+  | _, [], _ => rfl
+  | s, (sd', a) :: rest, h => by
+    have ih : ∀ s, applyAll s (turnsOf rest) c = applyAll s (landedOn sd rest) c :=
+      fun s => applyAll_side sd c (fun x hx => h x (List.mem_cons_of_mem _ hx))
+    cases a with
+    | write t =>
+      have hT : turnsOf ((sd', Act.write t) :: rest) = t :: turnsOf rest := rfl
+      rw [hT, applyAll_cons, ih]
+      by_cases hs : sd' = sd
+      · subst hs
+        have hL : landedOn sd' ((sd', Act.write t) :: rest) = t :: landedOn sd' rest := by
+          simp [landedOn, turnsOf]
+        rw [hL, applyAll_cons]
+      · have hL : landedOn sd ((sd', Act.write t) :: rest) = landedOn sd rest := by
+          simp [landedOn, hs]
+        rw [hL]
+        exact applyAll_congr_at
+          (applyTurn_frame_of_not_mem s t.turn c (h _ (List.mem_cons_self ..) t rfl hs)) _
+    | relaw l w p pl =>
+      have hT : turnsOf ((sd', Act.relaw l w p pl) :: rest) = turnsOf rest := rfl
+      have hL : landedOn sd ((sd', Act.relaw l w p pl) :: rest) = landedOn sd rest := by
+        unfold landedOn; rw [List.filter_cons]; split <;> rfl
+      rw [hT, hL, ih]
+    | revoke l w u =>
+      have hT : turnsOf ((sd', Act.revoke l w u) :: rest) = turnsOf rest := rfl
+      have hL : landedOn sd ((sd', Act.revoke l w u) :: rest) = landedOn sd rest := by
+        unfold landedOn; rw [List.filter_cons]; split <;> rfl
+      rw [hT, hL, ih]
+    | grant l w sr =>
+      have hT : turnsOf ((sd', Act.grant l w sr) :: rest) = turnsOf rest := rfl
+      have hL : landedOn sd ((sd', Act.grant l w sr) :: rest) = landedOn sd rest := by
+        unfold landedOn; rw [List.filter_cons]; split <;> rfl
+      rw [hT, hL, ih]
+
 /-- **The merge is the pushout over the base.** The left's landed writes, the right's, and the
 merged writes (pairs merged by their pages' laws) write pairwise disjoint cells — the left's and
 the right's apart, the merged apart from both — and the tip's store is the merged writes on their
@@ -1482,94 +1695,106 @@ theorem merge_is_pushout {base : Config} {L R : Branch} {text : TextMerge} {m : 
       fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (·.2.2)) => mem_mergedTurns hx
   generalize ((mergedPairs text t.config.book (writesOf L.acts) (writesOf R.acts)).filter
       fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (·.2.2) = mf at hmem ⊢
-  rw [runWrites_append, runWrites_append]
-  simp only
-  generalize hr1 : runWrites (sideName L.name R.name) t.config (lf.map (Side.left, ·)) = r1
-  generalize hr2 : runWrites (sideName L.name R.name) r1.config (rf.map (Side.right, ·)) = r2
-  generalize hr3 : runWrites (sideName L.name R.name) r2.config (mf.map (Side.both, ·)) = r3
-  have h1 : ∀ x ∈ r1.landed, x.1 = .left := fun x hx => by
-    obtain ⟨_, _, rfl⟩ := runWrites_landed_side (name := sideName L.name R.name) .left x (hr1 ▸ hx)
-    rfl
-  have h2 : ∀ x ∈ r2.landed, x.1 = .right := fun x hx => by
-    obtain ⟨_, _, rfl⟩ := runWrites_landed_side (name := sideName L.name R.name) .right x (hr2 ▸ hx)
-    rfl
-  have h3 : ∀ x ∈ r3.landed, x.1 = .both := fun x hx => by
-    obtain ⟨_, _, rfl⟩ := runWrites_landed_side (name := sideName L.name R.name) .both x (hr3 ▸ hx)
-    rfl
-  have hLL : landedOn .left (t.landed ++ (r1.landed ++ r2.landed ++ r3.landed)) = turnsOf r1.landed := by
-    rw [landedOn_append, landedOn_append, landedOn_append, landedOn_nonwrites _ htl, (landedOn_side .left h1).1,
-      (landedOn_side .right h2).2 .left (by decide), (landedOn_side .both h3).2 .left (by decide)]
-    simp
-  have hRR : landedOn .right (t.landed ++ (r1.landed ++ r2.landed ++ r3.landed)) = turnsOf r2.landed := by
-    rw [landedOn_append, landedOn_append, landedOn_append, landedOn_nonwrites _ htl,
-      (landedOn_side .left h1).2 .right (by decide), (landedOn_side .right h2).1,
-      (landedOn_side .both h3).2 .right (by decide)]
-    simp
-  have hBB : landedOn .both (t.landed ++ (r1.landed ++ r2.landed ++ r3.landed)) = turnsOf r3.landed := by
-    rw [landedOn_append, landedOn_append, landedOn_append, landedOn_nonwrites _ htl,
-      (landedOn_side .left h1).2 .both (by decide), (landedOn_side .right h2).2 .both (by decide),
-      (landedOn_side .both h3).1]
-    simp
-  rw [hLL, hRR, hBB]
-  have hsub : ∀ {r : Run} {sd : Side} {xs : List BTurn} {c : Config},
-      runWrites (sideName L.name R.name) c (xs.map (sd, ·)) = r → ∀ a ∈ turnsOf r.landed, a ∈ xs := by
-    intro r sd xs c hr a ha
-    obtain ⟨sd', hx⟩ := mem_turnsOf ha
-    obtain ⟨a', ha', he⟩ := runWrites_landed_side (name := sideName L.name R.name) sd _ (hr ▸ hx)
-    cases he; exact ha'
-  have hdisj : ∀ c ∈ writesAll (turnsOf r1.landed), c ∉ writesAll (turnsOf r2.landed) := by
-    intro c hc hc'
-    simp only [writesAll, List.mem_flatMap] at hc hc'
-    obtain ⟨a, ha, hca⟩ := hc
-    obtain ⟨b, hb, hcb⟩ := hc'
-    have ha' := hsub hr1 a ha
-    have hb' := hsub hr2 b hb
-    rw [← hlf] at ha'
-    rw [← hrf] at hb'
-    have hcl := (freeLeft_sub ha').2 b (freeRight_sub hb').1
-    exact clash_nil_iff.1 hcl c hca hcb
-  have hdisjM : ∀ c ∈ writesAll (turnsOf r3.landed),
-      c ∉ writesAll (turnsOf r1.landed) ∧ c ∉ writesAll (turnsOf r2.landed) := by
-    intro c hc
+  generalize hw : runWrites (sideName L.name R.name) t.config
+    (lawFirst (lf.map (Side.left, ·) ++ rf.map (Side.right, ·) ++ mf.map (Side.both, ·))) = w
+  have hland : ∀ sd, landedOn sd (t.landed ++ w.landed) = landedOn sd w.landed := by
+    intro sd; rw [landedOn_append, landedOn_nonwrites _ htl]; rfl
+  rw [hland, hland, hland]
+  -- every landed write came from its side's part of the schedule
+  have hsub : ∀ {sd : Side} {x : BTurn}, (sd, Act.write x) ∈ w.landed →
+      (sd = .left ∧ x ∈ lf) ∨ (sd = .right ∧ x ∈ rf) ∨ (sd = .both ∧ x ∈ mf) := by
+    intro sd x hx
+    obtain ⟨sd', x', he, hx'⟩ := runWrites_landed_shape (hw ▸ hx)
+    simp only [Prod.mk.injEq, Act.write.injEq] at he
+    obtain ⟨rfl, rfl⟩ := he
+    rcases List.mem_append.1 (mem_lawFirst.1 hx') with hx' | hx'
+    · rcases List.mem_append.1 hx' with hx' | hx'
+      · obtain ⟨a, ha, he⟩ := List.mem_map.1 hx'
+        simp only [Prod.mk.injEq] at he
+        obtain ⟨rfl, rfl⟩ := he
+        exact .inl ⟨rfl, ha⟩
+      · obtain ⟨a, ha, he⟩ := List.mem_map.1 hx'
+        simp only [Prod.mk.injEq] at he
+        obtain ⟨rfl, rfl⟩ := he
+        exact .inr (.inl ⟨rfl, ha⟩)
+    · obtain ⟨a, ha, he⟩ := List.mem_map.1 hx'
+      simp only [Prod.mk.injEq] at he
+      obtain ⟨rfl, rfl⟩ := he
+      exact .inr (.inr ⟨rfl, ha⟩)
+  have hside : ∀ {sd : Side} {c : String}, c ∈ writesAll (landedOn sd w.landed) →
+      ∃ x, (sd, Act.write x) ∈ w.landed ∧ c ∈ x.writes := by
+    intro sd c hc
     simp only [writesAll, List.mem_flatMap] at hc
     obtain ⟨x, hx, hcx⟩ := hc
-    obtain ⟨a, b, ha, hb, hab⟩ := hmem x (hsub hr3 x hx)
+    exact ⟨x, mem_landedOn hx, hcx⟩
+  have hdisj : ∀ c ∈ writesAll (landedOn .left w.landed), c ∉ writesAll (landedOn .right w.landed) := by
+    intro c hc hc'
+    obtain ⟨a, ha, hca⟩ := hside hc
+    obtain ⟨b, hb, hcb⟩ := hside hc'
+    have ha' : a ∈ lf := by rcases hsub ha with ⟨_, h⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> first | exact h | cases h
+    have hb' : b ∈ rf := by rcases hsub hb with ⟨h, _⟩ | ⟨_, h⟩ | ⟨h, _⟩ <;> first | exact h | cases h
+    rw [← hlf] at ha'
+    rw [← hrf] at hb'
+    exact clash_nil_iff.1 ((freeLeft_sub ha').2 b (freeRight_sub hb').1) c hca hcb
+  have hdisjM : ∀ c ∈ writesAll (landedOn .both w.landed),
+      c ∉ writesAll (landedOn .left w.landed) ∧ c ∉ writesAll (landedOn .right w.landed) := by
+    intro c hc
+    obtain ⟨x, hx, hcx⟩ := hside hc
+    have hx' : x ∈ mf := by rcases hsub hx with ⟨h, _⟩ | ⟨h, _⟩ | ⟨_, h⟩ <;> first | exact h | cases h
+    obtain ⟨a, b, ha, hb, hab⟩ := hmem x hx'
     obtain ⟨hxw, hab'⟩ := mergeFor_writes hab
     rw [hxw] at hcx
     refine ⟨fun hc1 => ?_, fun hc2 => ?_⟩
-    · simp only [writesAll, List.mem_flatMap] at hc1
-      obtain ⟨a', ha', hca'⟩ := hc1
-      have ha'' := hsub hr1 a' ha'
+    · obtain ⟨a', ha', hca'⟩ := hside hc1
+      have ha'' : a' ∈ lf := by rcases hsub ha' with ⟨_, h⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> first | exact h | cases h
       rw [← hlf] at ha''
-      have hcl := (freeLeft_sub ha'').2 b hb
-      exact clash_nil_iff.1 hcl c hca' (hab' c hcx)
-    · simp only [writesAll, List.mem_flatMap] at hc2
-      obtain ⟨b', hb', hcb'⟩ := hc2
-      have hb'' := hsub hr2 b' hb'
+      exact clash_nil_iff.1 ((freeLeft_sub ha'').2 b hb) c hca' (hab' c hcx)
+    · obtain ⟨b', hb', hcb'⟩ := hside hc2
+      have hb'' : b' ∈ rf := by rcases hsub hb' with ⟨h, _⟩ | ⟨_, h⟩ | ⟨h, _⟩ <;> first | exact h | cases h
       rw [← hrf] at hb''
-      have hcl := (freeRight_sub hb'').2 a ha
-      exact clash_nil_iff.1 hcl c hcx hcb'
-  have hs1 : r1.config.store = applyAll base.store (turnsOf r1.landed) := by
-    rw [← hr1, runWrites_store, hts]
-  have hs2 : r2.config.store = applyAll r1.config.store (turnsOf r2.landed) := by
-    rw [← hr2, runWrites_store]
-  have hs3 : r3.config.store = applyAll r2.config.store (turnsOf r3.landed) := by
-    rw [← hr3, runWrites_store]
+      exact clash_nil_iff.1 ((freeRight_sub hb'').2 a ha) c hcx hcb'
+  have hst : w.config.store = applyAll base.store (turnsOf w.landed) := by
+    rw [← hw, runWrites_store, hts]
+  -- a landed write of a side other than `sd` that writes `c` puts `c` among that side's writes
+  have hother : ∀ (sd : Side) (c : String),
+      (∀ sd', sd' ≠ sd → c ∉ writesAll (landedOn sd' w.landed)) →
+      ∀ x ∈ w.landed, ∀ y, x.2 = .write y → x.1 ≠ sd → c ∉ y.writes := by
+    intro sd c hnot x hx y he hne hcy
+    obtain ⟨sd', a⟩ := x
+    simp only at he hne
+    subst he
+    exact hnot sd' hne (mem_writesAll_landedOn hx hcy)
   refine ⟨hdisj, hdisjM, fun c => ?_⟩
-  rw [hs3]
+  rw [hst]
   split
   · rename_i hc
-    exact applyAll_mem hc
-  · rename_i hc3
-    rw [applyAll_not_mem hc3, hs2]
+    rw [applyAll_side .both c (hother .both c fun sd' hne => by
+      cases sd' with
+      | left => exact (hdisjM c hc).1
+      | right => exact (hdisjM c hc).2
+      | both => exact absurd rfl hne)]
+  · rename_i hcB
     split
-    · rename_i hc
-      rw [applyAll_not_mem (hdisj c hc), hs1]
-    · split
-      · rename_i _ hc
-        exact applyAll_mem hc
-      · rename_i hc1 hc2
-        rw [applyAll_not_mem hc2, hs1, applyAll_not_mem hc1]
+    · rename_i hcL
+      rw [applyAll_side .left c (hother .left c fun sd' hne => by
+        cases sd' with
+        | left => exact absurd rfl hne
+        | right => exact hdisj c hcL
+        | both => exact hcB)]
+    · rename_i hcL
+      split
+      · rename_i hcR
+        rw [applyAll_side .right c (hother .right c fun sd' hne => by
+          cases sd' with
+          | left => exact hcL
+          | right => exact absurd rfl hne
+          | both => exact hcB)]
+      · rename_i hcR
+        rw [applyAll_side .both c (hother .both c fun sd' hne => by
+          cases sd' with
+          | left => exact hcL
+          | right => exact hcR
+          | both => exact absurd rfl hne), applyAll_not_mem hcB]
 
 /-! ### A conflict is a state -/
 
@@ -1598,7 +1823,7 @@ theorem clash_is_conflict_state {base : Config} {L R : Branch} {text : TextMerge
     · have := htl _ hl; simp [Act.isWrite] at this
     · obtain ⟨sd, t', he, hx⟩ := runWrites_landed_shape hl
       cases he
-      rcases List.mem_append.1 hx with hx | hx
+      rcases List.mem_append.1 (mem_lawFirst.1 hx) with hx | hx
       · rcases List.mem_append.1 hx with hx | hx
         · obtain ⟨t'', ht'', he⟩ := List.mem_map.1 hx
           cases he
@@ -1611,7 +1836,7 @@ theorem clash_is_conflict_state {base : Config} {L R : Branch} {text : TextMerge
     · have := htl _ hl; simp [Act.isWrite] at this
     · obtain ⟨sd, t', he, hx⟩ := runWrites_landed_shape hl
       cases he
-      rcases List.mem_append.1 hx with hx | hx
+      rcases List.mem_append.1 (mem_lawFirst.1 hx) with hx | hx
       · rcases List.mem_append.1 hx with hx | hx
         · obtain ⟨_, _, he⟩ := List.mem_map.1 hx; cases he
         · obtain ⟨t'', ht'', he⟩ := List.mem_map.1 hx
@@ -2139,6 +2364,21 @@ theorem merge_extends_history {base : Config} {L R : Branch} {text : TextMerge} 
 
 /-! ### What a branch cannot learn of the other side's hidden cells -/
 
+/-- With no law-changing write on the right, laws-first keeps the left's writes before the right's. -/
+theorem lawFirst_left_right (A B : List BTurn) (hB : ∀ b ∈ B, b.isLaw = false) :
+    lawFirst (A.map (Side.left, ·) ++ B.map (Side.right, ·)) =
+      (A.filter (·.isLaw) ++ A.filter (!·.isLaw)).map (Side.left, ·) ++ B.map (Side.right, ·) := by
+  have h1 : B.filter (·.isLaw) = [] := List.filter_eq_nil_iff.2 fun b hb => by simp [hB b hb]
+  have h2 : B.filter (!·.isLaw) = B := List.filter_eq_self.2 fun b hb => by simp [hB b hb]
+  unfold lawFirst
+  simp only [List.filter_append, List.filter_map, List.map_append]
+  have e1 : ((fun x : Side × BTurn => x.2.isLaw) ∘ (Side.right, ·)) = (·.isLaw) := rfl
+  have e2 : ((fun x : Side × BTurn => !x.2.isLaw) ∘ (Side.right, ·)) = (!·.isLaw) := rfl
+  have e3 : ((fun x : Side × BTurn => x.2.isLaw) ∘ (Side.left, ·)) = (·.isLaw) := rfl
+  have e4 : ((fun x : Side × BTurn => !x.2.isLaw) ∘ (Side.left, ·)) = (!·.isLaw) := rfl
+  rw [e1, e2, e3, e4, h1, h2]
+  simp
+
 /-- **Confinement of the store.** If two right branches have the same name and the same non-write
 acts, every write of either accesses only cells of `H` (at the tip's law book), and no write of the
 left accesses a cell of `H`, then the left's landed writes are the same against both, and the tip
@@ -2146,6 +2386,7 @@ agrees outside `H`. What the right wrote inside `H` does not reach the left's vi
 theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {text : TextMerge} {m₁ m₂ : Merged} {H : List String}
     (h₁ : merge base L R₁ text = .ok m₁) (h₂ : merge base L R₂ text = .ok m₂)
     (hname : R₁.name = R₂.name) (hacts : nonWrites R₁.acts = nonWrites R₂.acts)
+    (hlaw₁ : ∀ t ∈ writesOf R₁.acts, t.isLaw = false) (hlaw₂ : ∀ t ∈ writesOf R₂.acts, t.isLaw = false)
     (hR₁ : ∀ t ∈ writesOf R₁.acts, ∀ c ∈ t.access
       (tipConfig base L.name R₁.name (nonWrites L.acts) (nonWrites R₁.acts)).config.book, c ∈ H)
     (hR₂ : ∀ t ∈ writesOf R₂.acts, ∀ c ∈ t.access
@@ -2184,9 +2425,12 @@ theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {text : Tex
     cases he
   rw [hnomerge _ hR₁, hnomerge _ hR₂]
   simp only [List.filter_nil, List.map_nil, List.append_nil]
-  rw [hfree _ hR₁, hfree _ hR₂, runWrites_append, runWrites_append]
+  rw [hfree _ hR₁, hfree _ hR₂,
+    lawFirst_left_right _ _ (fun b hb => hlaw₁ b (freeRight_sub hb).1),
+    lawFirst_left_right _ _ (fun b hb => hlaw₂ b (freeRight_sub hb).1), runWrites_append, runWrites_append]
   simp only
-  generalize hr1 : runWrites (sideName L.name R₁.name) t.config ((writesOf L.acts).map (Side.left, ·)) = r1
+  generalize hr1 : runWrites (sideName L.name R₁.name) t.config
+    (((writesOf L.acts).filter (·.isLaw) ++ (writesOf L.acts).filter (!·.isLaw)).map (Side.left, ·)) = r1
   have h1 : ∀ x ∈ r1.landed, x.1 = .left := fun x hx => by
     obtain ⟨_, _, rfl⟩ := runWrites_landed_side (name := sideName L.name R₁.name) .left x (hr1 ▸ hx)
     rfl
@@ -2219,6 +2463,135 @@ theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {text : Tex
       (fun b hb => hR₁ b (freeRight_sub hb).1) c hc,
     hstore (freeRight (writesOf L.acts) (writesOf R₂.acts))
       (fun b hb => hR₂ b (freeRight_sub hb).1) c hc]
+
+/-! ## The store of states and the vault agree
+
+In a vault the configuration keeps two views of one thing: the store of states the merge's laws
+over the pushout speak of (`Config.store`), and the vault's store itself (`Config.vault`), which
+judges and lands. They agree page by page, at each page's current version (`Agrees`): a write lands
+only when its turn says the state the store lands (`judgeWrite`), every other act leaves both, and
+so a merge that starts from agreement ends in it (`merge_vault_agrees`). -/
+
+/-- The store of states and the vault agree on every page: its state is the state of its current
+version (as terms). -/
+def Agrees (c : Config) : Prop :=
+  ∀ v, c.vault = some v → ∀ x, (c.store x).map Data.term = (vaultStates v x).map Data.term
+
+theorem page?_setPage_ne (s : Store) (p : Page) {n : String} (hn : p.name ≠ n) :
+    (s.setPage p).page? n = s.page? n := by
+  unfold Store.page? Store.setPage
+  simp only
+  rw [find?_map_page s _ (fun q => by
+    split
+    · rename_i h; exact (beq_iff_eq.1 h).symm
+    · rfl) n]
+  cases hq : s.pages.find? (·.name == n) with
+  | none => rfl
+  | some q =>
+    have hqn : q.name = n := by simpa using List.find?_some hq
+    have : ¬ q.name = p.name := fun h => hn (h ▸ hqn)
+    simp [this]
+
+theorem write_page?_ne {s s' : Store} {p : Page} {G : Graph} {a : List (AtomId × String)} {po : Option String}
+    {n : String} (h : s.write p G a .owner po = .ok s') (hn : p.name ≠ n) : s'.page? n = s.page? n := by
+  obtain ⟨pr, _, _, rfl⟩ := write_consents h
+  exact page?_setPage_ne s _ (by simpa [Page.withChange] using hn)
+
+theorem writeVersions_page?_ne {page n : String} {po : Option String} (hn : page ≠ n) :
+    ∀ {s s' : Store} {vs : List (Graph × List (AtomId × String))},
+      s.writeVersions page po vs = .ok s' → s'.page? n = s.page? n
+  | _, _, [], h => by cases h; rfl
+  | s, s', (G, a) :: rest, h => by
+    simp only [Store.writeVersions] at h
+    split at h
+    · rename_i p hp
+      have hpn : p.name = page := by simpa [Store.page?] using List.find?_some hp
+      split at h
+      · rename_i s₁ h₁
+        rw [writeVersions_page?_ne hn h, write_page?_ne h₁ (hpn ▸ hn)]
+      · cases h
+    · cases h
+
+/-- **A write keeps the agreement.** -/
+theorem admitWrite_agrees {c c' : Config} {o : String} {t : BTurn} (hc : Agrees c)
+    (h : admitWrite c o t = .ok c') : Agrees c' := by
+  obtain ⟨_, _, v, hj, rfl⟩ := admitWrite_ok h
+  intro v' hv' x
+  simp only at hv'
+  subst hv'
+  unfold judgeWrite at hj
+  split at hj
+  · rename_i s w d hv ht hw
+    cases hs : s.writeText d.cell w with
+    | error m => rw [hs] at hj; cases hj
+    | ok s' =>
+      rw [hs] at hj
+      simp only at hj
+      cases hx : vaultStates s' d.cell with
+      | none => rw [hx] at hj; cases hj
+      | some y =>
+        rw [hx] at hj
+        simp only at hj
+        split at hj
+        · rename_i hq
+          cases hj
+          dsimp only
+          by_cases hxd : x = d.cell
+          · subst hxd
+            rw [applyTurn_write c.store t.turn d (by rw [hw]; exact List.mem_singleton_self _), hx]
+            simp [Obend.Law.termEq_sound_local hq]
+          · have hnot : x ∉ t.turn.writeFootprint := by
+              simp [VaultTurn.writeFootprint, hw, hxd]
+            rw [applyTurn_frame_of_not_mem _ _ _ hnot]
+            have hfr : vaultStates v' x = vaultStates s x := by
+              unfold vaultStates
+              rw [writeVersions_page?_ne (Ne.symm hxd) hs]
+            rw [hfr]
+            exact hc s hv x
+        · cases hj
+  · cases hj
+  · rename_i hv
+    split at hj
+    · cases hj
+    · simp only [Except.ok.injEq] at hj
+      rw [hv] at hj
+      cases hj
+
+theorem runWrites_agrees {name : Side → String} :
+    ∀ {c : Config} {xs : List (Side × BTurn)}, Agrees c → Agrees (runWrites name c xs).config
+  | _, [], hc => hc
+  | c, (sd, t) :: rest, hc => by
+    simp only [runWrites]
+    split
+    · rename_i c' h'
+      exact runWrites_agrees (admitWrite_agrees hc h')
+    · exact runWrites_agrees hc
+
+theorem runActs_agrees_nonwrites {name : Side → String} :
+    ∀ {c : Config} {xs : List (Side × Act)}, (∀ x ∈ xs, x.2.isWrite = false) → Agrees c →
+      Agrees (runActs name c xs).config
+  | _, [], _, hc => hc
+  | c, (sd, a) :: rest, hw, hc => by
+    simp only [runActs]
+    split
+    · rename_i c' h'
+      obtain ⟨hs, hv⟩ := admitAct_nonwrite_keeps (hw _ (List.mem_cons_self ..)) h'
+      refine runActs_agrees_nonwrites (fun x hx => hw x (List.mem_cons_of_mem _ hx)) ?_
+      intro v hv' x
+      rw [hv] at hv'
+      rw [hs]
+      exact hc v hv' x
+    · exact runActs_agrees_nonwrites (fun x hx => hw x (List.mem_cons_of_mem _ hx)) hc
+
+/-- **After a merge the store of states and the vault agree**: every page's state at the tip is the
+state of the vault's page at its current version, when they agreed at the base. -/
+theorem merge_vault_agrees {base : Config} {L R : Branch} {text : TextMerge} {m : Merged}
+    (h : merge base L R text = .ok m) (hb : Agrees base) : Agrees m.tip := by
+  obtain ⟨_, _, hm⟩ := merge_ok h
+  subst hm
+  have ht : Agrees (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config :=
+    runActs_agrees_nonwrites (tip_input_nonwrites _ _ nonWrites_isWrite nonWrites_isWrite _) hb
+  exact runWrites_agrees ht
 
 /-! ## Teeth -/
 

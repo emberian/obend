@@ -21,13 +21,15 @@ the base they share:
   the side wrote since the base, each with the authors of what it added), and the tip judges and
   lands it by the store's own write (`Store.writeText`: `prepareWrite`, `judgePrepared` with its rows,
   kind pins, `poster` and `unresolved`), so landed at the tip and landed in the store are one event
-  (`Branch.tip_lands_iff_store_lands`). Writes of different pages are replayed at the tip, here's
-  first; a write whose pins the other side moved is refused by name (`Branch.Refusal.stale`). Two
+  (`Branch.tip_lands_iff_store_lands`). Writes that change a page's law lines land first, of
+  either side (`BTurn.lawKey`, `lawKeyOf`), so a law the laptop wrote judges a write made here; the
+  other writes of different pages are replayed at the tip, here's first; a write whose pins the other side moved is refused by name (`Branch.Refusal.stale`). Two
   writes of one page merge by their texts (`TextMerge`): the pushout of the two versions
   (`mergePage`, `mergePage_pushout`), where two edits of one place become a section with both
   candidates, landed after here's versions as one more. Two versions that name one atom differently
   do not merge: a conflict.
-* **The tip is the store.** The store the merge leaves is the tip's. Here's writes the tip did not
+* **The tip is the store.** The store the merge leaves is the tip's, and the tip's states agree with
+  it page by page at each page's current version (`mergeVault_agrees`, from `plan_agrees`). Here's writes the tip did not
   land (refused, or held in a conflict) stay at the base version, their files keeping here's text
   as refused writes (`Page.note`), judged again when a pin they read moves, exactly as an open keeps
   a refused write. A conflict is a state of the store (`Store.conflicts`, a `PageConflict` with both
@@ -67,15 +69,6 @@ theorem sharedPrefix_prefix_right : ∀ (a b : List Graph), sharedPrefix a b <+:
     split
     · rename_i h; subst h; exact List.cons_prefix_cons.2 ⟨rfl, sharedPrefix_prefix_right xs ys⟩
     · exact List.nil_prefix
-
-/-- The state of a page not born at the base: an empty record. -/
-def unborn : Data := .record []
-
-/-- A page's state at the last version of a history, or `unborn`. -/
-def stateAt (h : List Graph) : Data :=
-  match h.getLast? with
-  | some G => pageState G (h.length - 1)
-  | none => unborn
 
 /-- A page's history in a store, live or in its tombs. -/
 def historyIn (s : Store) (name : String) : List Graph :=
@@ -126,12 +119,25 @@ def linksAt (es : List Entry) (name : String) (G : Graph) : List String :=
 
 /-- The base store: here's, every merged page at its base version (a page only the other has, born
 here unborn, with the other's id). -/
-def baseStore (here other : Store) (names : List String) (baseOf : String → List Graph) : Store :=
-  let mine := here.pages.map fun p => if names.contains p.name then { p with history := baseOf p.name } else p
-  let theirs := (names.filter fun n => (here.page? n).isNone).filterMap fun n =>
+def baseMine (here : Store) (names : List String) (baseOf : String → List Graph) : List Page :=
+  here.pages.map fun p => if names.contains p.name then { p with history := baseOf p.name } else p
+
+def baseTheirs (here other : Store) (names : List String) (baseOf : String → List Graph) : List Page :=
+  (names.filter fun n => (here.page? n).isNone).filterMap fun n =>
     (other.page? n).map fun q =>
       ({ name := n, id := q.id, history := baseOf n, seen := none, authors := q.authors, note := none, kind := q.kind } : Page)
-  { here with pages := mine ++ theirs }
+
+def baseStore (here other : Store) (names : List String) (baseOf : String → List Graph) : Store :=
+  { here with pages := baseMine here names baseOf ++ baseTheirs here other names baseOf }
+
+/-- The law lines (and the kind) a write leaves a page with, when it changes them from the base's:
+the write is then a law-changing write, settled before every other write at the tip. -/
+def lawKeyOf (bp : List Graph) (G : Graph) : Option String :=
+  let old := (bp.getLast?.map settled).getD ""
+  let new := settled G
+  if lawsKept old new then none
+  else some ("\n".intercalate ((lawLines new).map fun (n, v) => n ++ ": " ++ v) ++ "\nkind: " ++
+    (kindLine new).getD "")
 
 /-- A side's write of a page: from its base state to its state now, its read pins the pages its laws
 over links read, at the side's states, and its text the versions it wrote since the base. -/
@@ -140,7 +146,8 @@ def writeOf (s : Store) (label name : String) (bp : List Graph) (G : Graph) : BT
   { label := name, actor := "owner",
     turn := writeTurn name (stateAt bp) (pageState G ((liveHistory s name).length - 1)) pins
       (requestAt "owner" 0),
-    text := some { versions := versionsSince s label name bp } }
+    text := some { versions := versionsSince s label name bp },
+    lawKey := lawKeyOf bp G }
 
 /-- A side's writes in an order its own pins hold in: a write that pins a page the side also wrote
 comes after that write (`fuel` bounds the passes; what is left is appended as it stands). -/
@@ -160,15 +167,25 @@ def actsOf (s : Store) (label : String) (names : List String) (baseOf : String �
   let writes := moved.filterMap fun n => (liveHistory s n).getLast?.map (writeOf s label n (baseOf n))
   (orderWrites writes.length writes).map Act.write
 
+/-- The pages a merge reads: here's, then the other's, each once. -/
+def namesOf (here other : Store) : List String := ((here.pages.map (·.name)) ++ (other.pages.map (·.name))).eraseDups
+
+/-- Each page's base history (a page `skip` names: here's). -/
+def baseOfPlan (here other : Store) (skip : String → Bool) : String → List Graph := fun n =>
+  if skip n then liveHistory here n else sharedPrefix (historyIn here n) (historyIn other n)
+
+/-- The base's store of states: every page merged at its base state. -/
+def baseStates (names : List String) (baseOf : String → List Graph) : VaultStore := fun c =>
+  if names.contains c then some (stateAt (baseOf c)) else none
+
 /-- **Read two stores as two branches of their base.** Pages `skip` names (another merge's: the
 ledger's register) are left out: at the base as here holds them, acted on by neither side. -/
 def plan (here other : Store) (label : String) (skip : String → Bool := fun _ => false) : Plan :=
-  let names := ((here.pages.map (·.name)) ++ (other.pages.map (·.name))).eraseDups
-  let baseOf : String → List Graph := fun n =>
-    if skip n then liveHistory here n else sharedPrefix (historyIn here n) (historyIn other n)
+  let names := namesOf here other
+  let baseOf := baseOfPlan here other skip
   -- the book names each page's owner; its laws are the store's, judged by the store's own write
   let book : LawBook := names.map fun n => (n, ⟨"owner", [], [], []⟩)
-  let store : VaultStore := fun c => if names.contains c then some (stateAt (baseOf c)) else none
+  let store : VaultStore := baseStates names baseOf
   let receipts := baseReceipts names baseOf
   let live := names.filter (!skip ·)
   let merged : String → Option Graph := fun c =>
@@ -261,21 +278,20 @@ def mergeVault (here other : Store) (label : String) (skip : String → Bool := 
 /-- The configuration a store is, for resolving its conflicts: the store itself, its pages' states,
 and its conflicts as the tip's (`Conflict.writes`, each candidate a write carrying its text). -/
 def configOf (s : Store) : Config :=
-  let es := s.entries
-  -- a page not born reads as `unborn`, as at the merge's base
-  let states : VaultStore := fun c =>
-    match stateStore es c with
-    | some d => some d
-    | none => if s.pages.any (·.name == c) then some unborn else none
+  let states := vaultStates s
   { store := states,
     book := s.pages.map fun p => (p.name, ⟨"owner", [], [], []⟩),
     history := [],
     vault := some s,
     conflicts := s.conflicts.map fun pc =>
       let bt (c : String × String × PageWrite) : BTurn :=
-        let pre := states pc.page
+        let pre := (states pc.page).getD unborn
+        -- the state the candidate's text lands, which its turn must say (`judgeWrite`)
+        let post := match s.writeText pc.page c.2.2 with
+          | .ok s' => (vaultStates s' pc.page).getD pre
+          | .error _ => pre
         { label := c.2.1, actor := "owner",
-          turn := writeTurn pc.page (pre.getD unborn) (pre.getD unborn) [] (requestAt "owner" 0),
+          turn := writeTurn pc.page pre post [] (requestAt "owner" 0),
           text := some c.2.2 }
       .writes [pc.page] (pc.left.1, bt pc.left) (pc.right.1, bt pc.right) }
 
@@ -287,5 +303,131 @@ def resolveIn (s : Store) (k : Nat) (pick : Side) : Except String (Store × Stri
   let some s' := c.vault | throw "the resolved configuration keeps no store"
   let r := (c.history.getLast?.map (·.label)).getD ""
   return ({ s' with conflicts := s.conflicts.eraseIdx k }, r)
+
+/-! ## The base agrees with its store -/
+
+theorem find?_states {l : List Page} {x : String} {h : List Graph}
+    (hh : ∀ y ∈ l, y.name = x → y.history = h) :
+    (l.find? (·.name == x)).map (fun p => stateAt p.history) =
+      if l.any (·.name == x) then some (stateAt h) else none := by
+  cases hf : l.find? (·.name == x) with
+  | none =>
+    have : l.any (·.name == x) = false := by
+      rw [List.any_eq_false]
+      intro y hy hyx
+      exact absurd hyx (by simpa using List.find?_eq_none.1 hf y hy)
+    simp [this]
+  | some y =>
+    have hm := List.mem_of_find?_eq_some hf
+    have hy : y.name = x := by simpa using List.find?_some hf
+    have : l.any (·.name == x) = true := List.any_eq_true.2 ⟨y, hm, by simp [hy]⟩
+    simp [this, hh y hm hy]
+
+theorem page?_none_iff {s : Store} {x : String} : s.page? x = none ↔ ∀ p ∈ s.pages, p.name ≠ x := by
+  unfold Store.page?
+  rw [List.find?_eq_none]
+  simp
+
+theorem page?_some_name {s : Store} {x : String} {p : Page} (h : s.page? x = some p) :
+    p ∈ s.pages ∧ p.name = x :=
+  ⟨List.mem_of_find?_eq_some h, by simpa using List.find?_some h⟩
+
+theorem mem_namesOf {here other : Store} {x : String} :
+    x ∈ namesOf here other ↔ (∃ p ∈ here.pages, p.name = x) ∨ ∃ q ∈ other.pages, q.name = x := by
+  simp [namesOf, List.mem_eraseDups]
+
+theorem mem_baseMine {here : Store} {names : List String} {baseOf : String → List Graph} {y : Page} :
+    y ∈ baseMine here names baseOf → ∃ p ∈ here.pages, y.name = p.name ∧
+      (names.contains p.name = true → y.history = baseOf p.name) := by
+  intro hy
+  obtain ⟨p, hp, rfl⟩ := List.mem_map.1 hy
+  refine ⟨p, hp, ?_, fun hc => ?_⟩
+  · split <;> rfl
+  · simp only [hc, ↓reduceIte]
+
+theorem mem_baseTheirs {here other : Store} {names : List String} {baseOf : String → List Graph} {y : Page} :
+    y ∈ baseTheirs here other names baseOf ↔
+      y.name ∈ names ∧ here.page? y.name = none ∧ ∃ q, other.page? y.name = some q ∧
+        y = { name := y.name, id := q.id, history := baseOf y.name, seen := none, authors := q.authors,
+              note := none, kind := q.kind } := by
+  unfold baseTheirs
+  rw [List.mem_filterMap]
+  constructor
+  · rintro ⟨n, hn, hq⟩
+    obtain ⟨hn, hh⟩ := List.mem_filter.1 hn
+    cases hq' : other.page? n with
+    | none => rw [hq'] at hq; cases hq
+    | some q =>
+      rw [hq'] at hq
+      simp only [Option.map_some, Option.some.injEq] at hq
+      subst hq
+      exact ⟨hn, by simpa using hh, q, hq', rfl⟩
+  · rintro ⟨hn, hh, q, hq, he⟩
+    refine ⟨y.name, List.mem_filter.2 ⟨hn, by simp [hh]⟩, ?_⟩
+    rw [hq, he]
+    rfl
+
+/-- **The base's two views agree**: its store of states is the vault's base store, page by page. -/
+theorem baseStore_states (here other : Store) (baseOf : String → List Graph) :
+    vaultStates (baseStore here other (namesOf here other) baseOf) = baseStates (namesOf here other) baseOf := by
+  funext x
+  have hall : ∀ y ∈ baseMine here (namesOf here other) baseOf ++ baseTheirs here other (namesOf here other) baseOf,
+      y.name = x → y.history = baseOf x := by
+    intro y hy hyx
+    rcases List.mem_append.1 hy with hy | hy
+    · obtain ⟨p, hp, hyp, hh⟩ := mem_baseMine hy
+      have hin : (namesOf here other).contains p.name = true := by
+        simpa using mem_namesOf.2 (.inl ⟨p, hp, rfl⟩)
+      rw [hh hin, ← hyp, hyx]
+    · obtain ⟨_, _, q, _, he⟩ := mem_baseTheirs.1 hy
+      rw [he]
+      simp only
+      rw [hyx]
+  have hany : (baseMine here (namesOf here other) baseOf ++ baseTheirs here other (namesOf here other) baseOf).any
+      (·.name == x) = (namesOf here other).contains x := by
+    apply Bool.eq_iff_iff.2
+    simp only [List.any_append, Bool.or_eq_true, List.any_eq_true, beq_iff_eq, List.contains_iff_mem,
+      mem_namesOf]
+    constructor
+    · rintro (⟨y, hy, hyx⟩ | ⟨y, hy, hyx⟩)
+      · obtain ⟨p, hp, hyp, _⟩ := mem_baseMine hy
+        exact .inl ⟨p, hp, hyp ▸ hyx⟩
+      · obtain ⟨_, _, q, hq, _⟩ := mem_baseTheirs.1 hy
+        obtain ⟨hqm, hqn⟩ := page?_some_name hq
+        exact .inr ⟨q, hqm, hqn.trans hyx⟩
+    · rintro (⟨p, hp, hpx⟩ | ⟨q, hq, hqx⟩)
+      · refine .inl ⟨_, List.mem_map.2 ⟨p, hp, rfl⟩, ?_⟩
+        split <;> exact hpx
+      · by_cases hh : ∃ p ∈ here.pages, p.name = x
+        · obtain ⟨p, hp, hpx⟩ := hh
+          refine .inl ⟨_, List.mem_map.2 ⟨p, hp, rfl⟩, ?_⟩
+          split <;> exact hpx
+        · have hnone : here.page? x = none := page?_none_iff.2 fun p hp hpx => hh ⟨p, hp, hpx⟩
+          cases hq' : other.page? x with
+          | none => exact absurd hqx ((page?_none_iff.1 hq') q hq)
+          | some q' =>
+            let y : Page := { name := x, id := q'.id, history := baseOf x, seen := none, authors := q'.authors, note := none, kind := q'.kind }
+            refine .inr ⟨y, mem_baseTheirs.2 ⟨?_, hnone, q', hq', rfl⟩, rfl⟩
+            exact mem_namesOf.2 (.inr ⟨q, hq, hqx⟩)
+  unfold vaultStates baseStates
+  show ((baseMine here (namesOf here other) baseOf ++ baseTheirs here other (namesOf here other) baseOf).find?
+      (·.name == x)).map (fun p => stateAt p.history) = _
+  rw [find?_states hall, hany]
+
+/-- **A merge's base agrees**: the store of states it starts from is the vault's base store. -/
+theorem plan_agrees (here other : Store) (label : String) (skip : String → Bool) :
+    Agrees (plan here other label skip).base := by
+  intro v hv x
+  simp only [plan, Option.some.injEq] at hv
+  subst hv
+  show (baseStates (namesOf here other) (baseOfPlan here other skip) x).map Obend.Core.Data.Data.term = _
+  rw [baseStore_states]
+
+/-- **After a vault merge the store's page versions and the vault's agree**: the tip's state of every
+page is the state of the tip store's page at its current version. -/
+theorem mergeVault_agrees (here other : Store) (label : String) (skip : String → Bool) {m : Merged}
+    (h : Branch.merge (plan here other label skip).base (plan here other label skip).left
+      (plan here other label skip).right (plan here other label skip).text = .ok m) : Agrees m.tip :=
+  merge_vault_agrees h (plan_agrees here other label skip)
 
 end Obend.Vault.Merge
