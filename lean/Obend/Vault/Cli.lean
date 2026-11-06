@@ -128,6 +128,7 @@ it (`new.unresolved`, `new.unresolvedInserted`); a named file that is not there 
 -/
 public import Obend.Vault.Replay
 public import Obend.Vault.Cost
+public import Obend.Vault.LogBytes
 public section
 
 namespace Obend.Vault.Cli
@@ -138,7 +139,7 @@ open Obend.Doc Obend.Vault Obend.Vault.Json Obend.Vault.Log Obend.Vault.Replay
 def H : Obend.Digest.HashBytes.Hash := Obend.Vault.Replay.H
 
 /-- Every `.md` under `dir`, by name (its path from `dir` without `.md`), sorted. -/
-def readVault (dir : System.FilePath) : IO (List (String × String)) := do
+def readVault (dir : System.FilePath) : IO (List (String × String)) := Obend.Vault.Cost.phase "read" do
   let files ← System.FilePath.walkDir dir fun p => pure !((p.fileName.getD "").startsWith ".")
   let mut out : Array (String × String) := #[]
   let pre := dir.toString ++ "/"
@@ -237,28 +238,44 @@ def readBytes (f : System.FilePath) : IO Bytes := do
   if !(← f.pathExists) then return []
   return (← Obend.Vault.Cost.readBinFile f).toList
 
-/-- A checkpoint's file: `obend-checkpoint 1 COUNT START STOP ANCHOR`, a newline, the world's bytes. -/
-def checkpointBytes (ck : Checkpoint) : Bytes :=
-  textBytes ("obend-checkpoint 1 " ++ toString ck.count ++ " " ++ toString ck.start ++ " " ++
-    toString ck.stop ++ " " ++ toString ck.anchor ++ "\n") ++ ck.world
+/-- A file's bytes as they are (`Obend.Vault.LogBytes` reads records at offsets into them). -/
+def readArray (f : System.FilePath) : IO ByteArray := do
+  if !(← f.pathExists) then return .empty
+  Obend.Vault.Cost.readBinFile f
 
-def readCheckpoint (dir : System.FilePath) : IO (Option Checkpoint) := do
-  let bs ← readBytes (checkpointPath dir)
+open Obend.Vault.LogBytes (parseOneAt parseFromAt parseLogAt holdsAt encodeRecordBytes)
+
+/-- A checkpoint's file: `obend-checkpoint 1 COUNT START STOP ANCHOR BASE`, a newline, the world's bytes.
+`BASE` is the length of the log's checkpoint record when it starts with one, else 0 (a checkpoint
+without it, from before, is read as not saying). -/
+def checkpointBytes (ck : Checkpoint) (base : Nat) : Bytes :=
+  textBytes ("obend-checkpoint 1 " ++ toString ck.count ++ " " ++ toString ck.start ++ " " ++
+    toString ck.stop ++ " " ++ toString ck.anchor ++ " " ++ toString base ++ "\n") ++ ck.world
+
+def readCheckpoint (dir : System.FilePath) : IO (Option (Checkpoint × Option Nat)) := do
+  let bs ← readArray (checkpointPath dir)
   if bs.isEmpty then return none
-  Obend.Vault.Cost.addCheckpoint bs.length
-  let line := bs.takeWhile (· != 10)
-  let some txt := bytesText line | return none
-  match txt.splitOn " " with
-  | ["obend-checkpoint", "1", c, a, b, h] =>
-    match c.toNat?, a.toNat?, b.toNat?, h.toNat? with
-    | some c, some a, some b, some h => return some ⟨c, a, b, h, bs.drop (line.length + 1)⟩
-    | _, _, _, _ => return none
-  | _ => return none
+  Obend.Vault.Cost.addCheckpoint bs.size
+  let some nl := (List.range (min bs.size 200)).find? (fun i => bs.get! i == 10) | return none
+  let some txt := bytesText (bs.extract 0 nl).data.toList | return none
+  let (fields, base) := match txt.splitOn " " with
+    | ["obend-checkpoint", "1", c, a, b, h] => (some (c, a, b, h), none)
+    | ["obend-checkpoint", "1", c, a, b, h, k] => (some (c, a, b, h), k.toNat?)
+    | _ => (none, none)
+  let some (c, a, b, h) := fields | return none
+  match c.toNat?, a.toNat?, b.toNat?, h.toNat? with
+  | some c, some a, some b, some h => return some (⟨c, a, b, h, (bs.extract (nl + 1) bs.size).data.toList⟩, base)
+  | _, _, _, _ => return none
 
 /-- Write a file whole or not at all: beside it, then renamed over it. -/
 def writeAtomically (f : System.FilePath) (bs : Bytes) : IO Unit := do
   let tmp := f.withExtension "tmp"
   Obend.Vault.Cost.writeBinFile tmp ⟨bs.toArray⟩
+  IO.FS.rename tmp f
+
+def writeAtomicallyArray (f : System.FilePath) (bs : ByteArray) : IO Unit := do
+  let tmp := f.withExtension "tmp"
+  Obend.Vault.Cost.writeBinFile tmp bs
   IO.FS.rename tmp f
 
 /-- What a process holds of a vault's log: the world (the replay of the log), the receipt digest of
@@ -273,6 +290,9 @@ structure Head where
   base : Bool := false
   /-- the checkpoint record's length, when the log starts with one -/
   baseSize : Nat := 0
+  /-- the world's bytes and their commitment, when known (the last record's `newCommit`): a turn
+  needs the commitment of the world it steps from, and a checkpoint the bytes -/
+  known : Option (Bytes × Nat) := none
 
 /-- The digest of a world, as `obend log` says it: the first 16 hex digits of its commitment. -/
 def worldDigest (w : Replay.World) : String :=
@@ -280,7 +300,7 @@ def worldDigest (w : Replay.World) : String :=
 
 /-- **Write a checkpoint** of the head's world, anchored to the log's last record, after checking that
 the world's bytes decode to the world (`checkpoint_is_cache`'s premise). -/
-def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := do
+def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := Obend.Vault.Cost.phase "write" do
   if h.count == 0 then return
   -- a log that is its checkpoint record alone needs no checkpoint (and the record's anchor is the
   -- forgotten prefix's, not its own digest)
@@ -288,11 +308,13 @@ def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := do
   -- after a forget the checkpoint record holds the world: a checkpoint is written again only once the
   -- records after it outweigh it
   if h.base && h.size < 2 * h.baseSize then return
-  let wb := encodeWorld h.world
+  let wb := match h.known with
+    | some (wb, _) => wb
+    | none => encodeWorld h.world
   if decodeWorld wb != some h.world then
     IO.eprintln "checkpoint not written: the world's bytes do not decode to the world (the log stays the truth)"
     return
-  writeAtomically (checkpointPath dir) (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, wb⟩)
+  writeAtomically (checkpointPath dir) (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, wb⟩ (if h.base then h.baseSize else 0))
 
 /-- The test-only write barrier (`OBEND_TEST_TEAR=N:K:PATH`): appending record `N`, write its first `K`
 bytes (`all`: the whole record, and stop before its files are written), create `PATH` and wait to be
@@ -329,18 +351,29 @@ def appendRecord (dir : System.FilePath) (n : Nat) (bs : Bytes) : IO Unit := do
 /-- **Commit a turn**: admit its bytes at the head (`Obend.Vault.Log.admit` at the deployed machine)
 and append the record; the head after it and what the turn said, or the refusal (nothing appended). -/
 def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String (Head × Outcome)) := do
-  match Log.admit logHash deployed h.world h.prev (encodeTurn t) with
+  let b := encodeTurn t
+  if b.length ≥ 256 ^ 4 then return .error "a turn is under 4 GiB"
+  -- the step (`judge`), then the record (`land`): `admit_of_step` says this is `Log.admit`'s record,
+  -- the commitment of the world stepped from being the one the head knows
+  let step ← Obend.Vault.Cost.phase "judge" (Obend.Vault.Cost.compute fun _ => deployed.step h.world b)
+  match step with
   | .error e => return .error e
-  | .ok (w', o, r) =>
-    let bs := encodeRecord logHash r
-    appendRecord dir (h.count + 1) bs
-    let h' : Head :=
-      { h with
+  | .ok (w', o) =>
+    let h' ← Obend.Vault.Cost.phase "land" do
+      let oldC ← match h.known with
+        | some (_, c) => pure c
+        | none => pure (dig logHash (encodeWorld h.world))
+      let (wb, newC) ← Obend.Vault.Cost.compute fun _ => let wb := encodeWorld w'; (wb, dig logHash wb)
+      let r : Record := ⟨⟨h.prev, oldC, newC, dig logHash b⟩, b⟩
+      let bs := encodeRecord logHash r
+      appendRecord dir (h.count + 1) bs
+      return ({ h with
         world := w'
         prev := Hr logHash r.receipt
         count := h.count + 1
         size := h.size + bs.length
-        lastStart := h.size }
+        lastStart := h.size
+        known := some (wb, newC) } : Head)
     return .ok (h', o)
 
 /-- The receipt digest a chain of records read from `prev` ends at: a checkpoint record first in a
@@ -374,23 +407,33 @@ def dropText : Drop → String
 (`Obend.Vault.Log.recoverWith`; `checkpoint_is_cache`), reading nothing past the longest prefix of
 whole, linked records (`recover_eq_replay_prefix`). The replayed world must commit to what the last
 record's receipt names; otherwise the command stops. -/
-def recoverLog (dir : System.FilePath) : IO Recovery := do
-  let bs ← readBytes (logPath dir)
-  let ck? ← readCheckpoint dir
-  let held := ck?.bind fun ck => (ck.holds logHash decodeWorld bs).map (ck, ·)
+def recoverLog (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.phase "read" do
+  let bs ← readArray (logPath dir)
+  let ckb? ← readCheckpoint dir
+  let ck? := ckb?.map (·.1)
+  -- `holdsAt_eq`, `parseLogAt_eq`, `parseFromAt_eq`: these read what `Checkpoint.holds`,
+  -- `Retention.parseLog` and `parseFrom` read of the log's list, at offsets into its bytes
+  let held := ck?.bind fun ck => (holdsAt logHash decodeWorld ck bs).map (ck, ·)
   let (base, anchor, from_, count0, note) := match ck?, held with
     | _, some (ck, w) => (w, ck.anchor, ck.stop, ck.count, "the world after record " ++ toString ck.count)
     | some _, none => (genesis, Rehydration.genesisSentinel, 0, 0,
         "dropped (it does not hold against the log); the world is replayed from genesis")
     | none, none => (genesis, Rehydration.genesisSentinel, 0, 0, "none; the world is replayed from genesis")
-  let (qs, tail, why) := if from_ == 0 then Retention.parseLog logHash anchorOfTurn bs
-    else parseFrom logHash anchor (bs.drop from_)
-  let (isBase, baseSize) := match parseOne logHash (some Rehydration.genesisSentinel) bs with
-    | .ok (r, _) => if (anchorOfTurn r.payload).isSome then (true, (encodeRecord logHash r).length) else (false, 0)
-    | .error _ => (false, 0)
+  let (qs, stop, why) := if from_ == 0 then parseLogAt logHash anchorOfTurn bs
+    else parseFromAt logHash anchor bs from_
+  let tail := (bs.extract stop bs.size).data.toList
+  let (isBase, baseSize) ← if from_ == 0 then
+      pure (match qs.head? with
+        | some r => if (anchorOfTurn r.payload).isSome then (true, (encodeRecord logHash r).length) else (false, 0)
+        | none => (false, 0))
+    else match ckb?.bind (·.2) with
+      | some k => pure (k != 0, k)
+      | none => pure (match parseOneAt logHash (some Rehydration.genesisSentinel) bs 0 with
+        | .ok (r, o) => if (anchorOfTurn r.payload).isSome then (true, o) else (false, 0)
+        | .error _ => (false, 0))
   Obend.Vault.Cost.addReplayed qs.length
   let world := replay deployed base qs
-  let size := from_ + (encodeAll logHash qs).length
+  let size := stop
   let count := count0 + qs.length
   let lastStart := match qs.getLast? with
     | some r => size - (encodeRecord logHash r).length
@@ -401,15 +444,27 @@ def recoverLog (dir : System.FilePath) : IO Recovery := do
   let last? : Option Record := match qs.getLast? with
     | some r => some r
     | none => match held with
-      | some (ck, _) => match parseOne logHash none ((bs.drop ck.start).take (ck.stop - ck.start)) with
+      | some (ck, _) => match parseOneAt logHash none bs ck.start with
         | .ok (r, _) => some r
         | .error _ => none
       | none => none
-  if let some r := last? then
-    if r.receipt.newCommit != dig logHash (encodeWorld world) then
-      throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
-        " commits to: the log was written by another step (relinking is not done here)"))
-  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize⟩, base, qs, tail, why, note⟩
+  -- the replayed world commits to what the last record's receipt names (with no record after the
+  -- checkpoint, `holdsAt` checked that the record commits to the checkpoint's bytes, which the writer
+  -- checked decode to the world)
+  let known ← match last?, held with
+    | some r, some (ck, _) =>
+      if qs.isEmpty then pure (some (ck.world, r.receipt.newCommit))
+      else do
+        let wb := encodeWorld world
+        pure (if r.receipt.newCommit == dig logHash wb then some (wb, r.receipt.newCommit) else none)
+    | some r, none => do
+      let wb := encodeWorld world
+      pure (if r.receipt.newCommit == dig logHash wb then some (wb, r.receipt.newCommit) else none)
+    | none, _ => pure (some (encodeWorld world, dig logHash (encodeWorld world)))
+  if last?.isSome && known.isNone then
+    throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
+      " commits to: the log was written by another step (relinking is not done here)"))
+  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize, known⟩, base, qs, tail, why, note⟩
 
 /-- The world from the log, read only (nothing is truncated, rewritten or redone). -/
 def readWorld (dir : System.FilePath) : IO Replay.World := do
@@ -433,7 +488,7 @@ def writeIfChanged (f : System.FilePath) (t : String) : IO Unit := do
 form is sent in), the receipt chain as `.obend/forms/receipts.json`, the forms received and the
 proposals sent under `.obend/forms/received/` and `sent/`. Derived from the world after every turn
 and at recovery; the truth is the log's records. -/
-def writeExports (dir : System.FilePath) (w : Replay.World) : IO Unit := do
+def writeExports (dir : System.FilePath) (w : Replay.World) : IO Unit := Obend.Vault.Cost.phase "write" do
   let fd := dir / ".obend" / "forms"
   for f in w.forms do
     writeIfChanged (fd / (f.name ++ ".json")) ((Obend.Vault.Form.formJson f).pretty ++ "\n")
@@ -532,7 +587,7 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
   if !r.tail.isEmpty then
     IO.println ("recovered: dropped a tail of " ++ toString r.tail.length ++ " bytes after record " ++
       toString r.head.count ++ " (" ++ ((r.why.map dropText).getD "") ++ ")")
-    writeAtomically (logPath dir) ((← readBytes (logPath dir)).take r.head.size)
+    writeAtomicallyArray (logPath dir) ((← readArray (logPath dir)).extract 0 r.head.size)
   match r.suffix.getLast? with
   | none => pure ()
   | some last =>
@@ -552,8 +607,8 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
     let n := (← readBytes (newLogPath dir)).length
     IO.FS.removeFile (newLogPath dir)
     IO.println ("recovered: an interrupted forget's new log (" ++ toString n ++ " bytes) dropped; the log stands")
-  let bs ← readBytes (logPath dir)
-  match parseOne logHash none ((bs.drop r.head.lastStart).take (r.head.size - r.head.lastStart)) with
+  let bs ← readArray (logPath dir)
+  match parseOneAt logHash none (bs.extract r.head.lastStart r.head.size) 0 with
   | .ok (last, _) =>
     if let .ok (.forget _) := decodeTurn last.payload then
       let h ← compactLog dir r.head
@@ -585,7 +640,7 @@ def commitWith {α : Type} (dir : System.FilePath) (t : Turn) (files : Head → 
       saveCheckpoint dir h'
       return .ok a
 
-def writeFiles (dir : System.FilePath) (w : List (String × String)) : IO Unit :=
+def writeFiles (dir : System.FilePath) (w : List (String × String)) : IO Unit := Obend.Vault.Cost.phase "write" do
   for (n, t) in w do
     let f := dir / (n ++ ".md")
     if let some parent := f.parent then IO.FS.createDirAll parent
@@ -759,9 +814,10 @@ receipt commits to it), which must be one world. -/
 def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
   if !(← (logPath dir).pathExists) then
     IO.println "no log"; return 2
-  let bs ← readBytes (logPath dir)
-  let (qs, tail, why) := Retention.parseLog logHash anchorOfTurn bs
-  IO.println ("log: " ++ toString qs.length ++ " records, " ++ toString (encodeAll logHash qs).length ++
+  let bs ← readArray (logPath dir)
+  let (qs, stop, why) := parseLogAt logHash anchorOfTurn bs
+  let tail := (bs.extract stop bs.size).data.toList
+  IO.println ("log: " ++ toString qs.length ++ " records, " ++ toString stop ++
     " bytes, each following the one before it from the genesis sentinel" ++
     (match qs.head? with
       | some r => match decodeTurn r.payload with
@@ -770,8 +826,8 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
             "), ending at receipt " ++ String.ofList ((hex (be 32 a)).toList.take 16)
         | _ => ""
       | none => ""))
-  IO.println ("a command reads: the log, " ++ toString bs.length ++ " bytes, and the checkpoint, " ++
-    toString (← readBytes (checkpointPath dir)).length ++ " bytes")
+  IO.println ("a command reads: the log, " ++ toString bs.size ++ " bytes, and the checkpoint, " ++
+    toString (← readArray (checkpointPath dir)).size ++ " bytes")
   if records then
     let mut pos := 0
     let mut i := 0
@@ -784,7 +840,6 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
       IO.println ("  record " ++ toString i ++ " (" ++ kind ++ "): bytes " ++ toString pos ++ " to " ++ toString (pos + len))
       pos := pos + len
   if let some last := qs.getLast? then
-    let stop := (encodeAll logHash qs).length
     let start := stop - (encodeRecord logHash last).length
     let kind := match decodeTurn last.payload with
       | .ok t => t.kind
@@ -795,7 +850,8 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
     IO.println ("torn tail: " ++ toString tail.length ++ " bytes after record " ++ toString qs.length ++
       ", dropped (" ++ ((why.map dropText).getD "") ++ ")")
   Obend.Vault.Cost.addReplayed qs.length
-  let fromGenesis := (Retention.recoverLog logHash deployed anchorOfTurn genesis bs).world
+  -- `Retention.recoverLog` of the log's list, through `parseLogAt_eq`
+  let fromGenesis := replay deployed genesis qs
   let r ← recoverLog dir
   IO.println ("checkpoint: " ++ r.checkpoint)
   let committed := match qs.getLast? with
@@ -1019,18 +1075,18 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     for l in ls do IO.println l
     return (if ls.any (·.endsWith ": no such page") then 2 else 0)
   | ["merge", other] => some do
-    let (_, V) ← openDir dir false
-    let (ow, _) ← openWorld other false
+    let (_, V) ← Obend.Vault.Cost.phase "read" (openDir dir false)
+    let (ow, _) ← Obend.Vault.Cost.phase "read" (openWorld other false)
     let label := (System.FilePath.mk other).fileName.getD other
-    let w0 ← readWorld dir
+    let w0 ← Obend.Vault.Cost.phase "read" (readWorld dir)
     let (admitted, refused, dups) := sortLandings w0 (w0.grants.merge ow.grants) ow.landed
     -- after a forget, whether the other log reaches the horizon: holds, among its receipt digests (and
     -- the anchors of its own checkpoint record), the receipt the forgotten prefix here ended at
-    let mine ← readBytes (logPath dir)
-    let reaches ← match parseOne logHash (some Rehydration.genesisSentinel) mine with
+    let mine ← readArray (logPath dir)
+    let reaches ← match parseOneAt logHash (some Rehydration.genesisSentinel) mine 0 with
       | .ok (r, _) => match anchorOfTurn r.payload with
         | some a => do
-          let (qs, _, _) := Retention.parseLog logHash anchorOfTurn (← readBytes (logPath other))
+          let (qs, _, _) := parseLogAt logHash anchorOfTurn (← readArray (logPath other))
           let ds := qs.map (fun q => Hr logHash q.receipt) ++ qs.filterMap (fun q => anchorOfTurn q.payload)
           pure (some (ds.contains a))
         | none => pure none

@@ -48,7 +48,7 @@ cd alice && obend log | head -2
 
 ```text
 log: 52 records, 14381 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 14381 bytes, and the checkpoint, 5213 bytes
+a command reads: the log, 14381 bytes, and the checkpoint, 5215 bytes
 ```
 
 ## 2. Refused while something needs the prefix
