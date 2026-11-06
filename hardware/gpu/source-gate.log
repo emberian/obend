@@ -1,0 +1,24 @@
+compiled Leaf member run for arrays of length 8
+book expected values agree with independent modular-integer oracle
+run: 2 vectors, 1 dispatches, 0 disagree, 1.230 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+compiled Leaf member run for arrays of length 8
+caught planted book addAsSub by output comparison
+compiled Leaf member run for arrays of length 8
+book expected values agree with independent modular-integer oracle
+run: 2 vectors, 1 dispatches, 0 disagree, 1.091 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+compiled Leaf member run for arrays of length 8
+surface source run, book emission and GPU agree; caught planted addAsSub by output comparison
+  source-leaf-affine: 5 wires (55 words), 4 edges, 1 after fusion, 2 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /home/hbox/obend/frontend-recovery/source/source-leaf-affine
+source-leaf-affine: 2 vectors, 1 dispatches, 0 disagree, 1.185 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-mux: 10 wires (110 words), 9 edges, 1 after fusion, 4 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /home/hbox/obend/frontend-recovery/source/source-leaf-mux
+source-leaf-mux: 2 vectors, 1 dispatches, 0 disagree, 1.219 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-shl: 3 wires (30 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /home/hbox/obend/frontend-recovery/source/source-leaf-shl
+source-leaf-shl: 2 vectors, 1 dispatches, 0 disagree, 1.224 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-shr: 3 wires (30 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /home/hbox/obend/frontend-recovery/source/source-leaf-shr
+source-leaf-shr: 2 vectors, 1 dispatches, 0 disagree, 1.092 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-fixed-square: 2 wires (22 words), 1 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /home/hbox/obend/frontend-recovery/source/source-leaf-fixed-square
+source-leaf-fixed-square: 2 vectors, 1 dispatches, 0 disagree, 1.096 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+refused missing-member before emission
+refused wrong-shape before emission
+refused bad-book before emission
+PASS source book GPU gate; retained artifacts in /home/hbox/obend/frontend-recovery/source

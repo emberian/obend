@@ -218,7 +218,7 @@ greedy `layerHyperEdges` stays there as its own.
 
 `Obend.Hardware.Gpu` lowers the fused, layered graph to one WGSL compute shader per stage: every wire
 has a base in one flat buffer `w` (`base`, a prefix sum; `base_disjoint`), every hyperedge of a stage is a
-kernel whose threads are its elements, a constant buffer `c` holds constants and an index buffer `ix` the
+kernel whose threads are its elements (or segments for a collective fold), a constant buffer `c` holds constants and an index buffer `ix` the
 gather tables, and thread `t` of a stage finds its kernel by the thread ranges laid end to end. A map
 kernel is its program as one `let` per instruction (a source name reads `w` at its base, a scalar constant
 is `c[i] + 0`, a scale `c[i] * x`, every other name a local) and the store of its value.
@@ -233,7 +233,7 @@ no two threads write one word, so no claim about the device's memory model is ma
 stages are separate dispatches.
 
 `lean/tools/emitgpu` (`obend-emit-gpu`) writes `gpu/graphs/<graph>/`: `plan.json`, `stage_<k>.wgsl` and
-`expected.tsv` (the model's output wires per vector, signed 64-bit) for sixteen graphs: nine scalar ones
+`expected.tsv` (the model's output wires per vector, signed 64-bit) for scalar and array programs: scalar ones
 through `ofScalar` (the golden diamond, three single-op optics, two whole-graph adjoints, every operation
 with wrap-around, a `mux` chain, a 512-input addition tree), an elementwise multiply-accumulate with a
 reversing gather over a thousand elements, the Goldilocks field multiply over 256 elements (the limb
@@ -244,8 +244,11 @@ upper half by `ω_{2Ns}^{j mod Ns}` gathered from one table of the powers of `ω
 halves from the sum and difference by the Stockham expansion, so there is no bit reversal and the edges
 are a few dozen per stage over whole wires; after fusion each stage is the two field kernels (sum and
 difference, each one thread running the limb network as `let`s), the concatenation and the two gathers,
-and an NTT of `n` points is `3 log₂ n + 1` dispatches. The emitter refuses a graph that fails
-`ArrayGraph.wf` and an NTT whose model disagrees with a recursive radix-2 NTT in `Nat` arithmetic
+and an NTT of `n` points is `3 log₂ n + 1` dispatches. Field multiplication, NTT and SOAC workloads now
+come from lexical array programs encoded as actual closed composition members. `ArrayMember.checkMember`
+checks the selected member's syntax and scope; `ArrayTyping.checkTypedGraph` constructs a shape/element
+typing derivation, from which `ArrayGraph.wf` follows. `Plan.source_to_gpu_encoded` composes `book_sound`
+with the source compiler and GPU lowering. The emitter refuses an NTT whose model disagrees with a recursive radix-2 NTT in `Nat` arithmetic
 (`nttFast`), itself checked against the naive DFT (`nttReference`) up to 4096 points. `gpu/runner`
 (`obend-gpu-run`: Rust, wgpu 27, a standalone crate outside the workspace) runs a plan on a chosen
 adapter, compares, and prints the dispatch time per vector (not gated). `verify_gpu.sh` is the gate:
@@ -253,6 +256,15 @@ bytes (the 65536-point NTT's plan is tens of megabytes, so it is kept as `graphs
 regenerated, `verify_gpu.sh --digest`), every vector on the device, planted `addAsSub` and `swapMux`
 caught, and with Mesa's RADV the final ISA of every stage extracted to `gpu/isa/<graph>.txt` by
 `isa_extract.py` (one program per stage, its 64-bit stores counted; the compiler merges cases).
+
+The frontend also accepts exported scalar book files and serialized integer catgrad models.
+[`gpu/SOURCE.md`](gpu/SOURCE.md) describes the book workflow, accepted syntax and composed theorem;
+[`gpu/catgrad/README.md`](gpu/catgrad/README.md) describes the upstream MLP, explicit integer adaptation,
+interpreter comparison and float boundary. Reductions and scans include segmented forms with empty
+segments; [`gpu/SOAC.md`](gpu/SOAC.md) records their semantics, actual invocation-loop proof and NumPy
+baseline. The current fold schedule is sequential within each segment and is substantially slower
+than that CPU baseline on long segments. The new frontend gates were run under RADV; the older
+cross-driver results below do not establish coverage of the new operations on those other drivers.
 
 Passed 2026-11-06 on hbox's RX 6750 XT under RADV (Mesa 24.2.8, the ISA artifact) and under AMDVLK
 2025.Q2.1 (`GPU_ICD=any GPU_ADAPTER="AMD open-source"`), and on the Mac's M2 Max under Metal. Things the
