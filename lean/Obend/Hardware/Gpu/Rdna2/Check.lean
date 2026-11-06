@@ -24,7 +24,7 @@ What the model is told about the host, each fact with its source:
   programs: no two threads of a stage write one word and no stage reads a word it writes).
 -/
 module
-public import Obend.Hardware.Gpu.Rdna2.Semantics
+public import Obend.Hardware.Gpu.Rdna2.Host
 public import Lean.Data.Json
 @[expose] public section
 
@@ -100,59 +100,26 @@ def parseDump (s : String) : Array (Array (Array UInt32)) := Id.run do
 
 /-! ## 2. The memory as RADV binds it -/
 
-def descSetHi : UInt64 := 0xffff8000
-def descSetLo : UInt32 := 0x1000
-def descSetAddr : UInt64 := (descSetHi <<< 32) ||| descSetLo.toUInt64
-def wAddr : UInt64 := 0x100000000
-def cAddr : UInt64 := 0x200000000
-def ixAddr : UInt64 := 0x300000000
-
-/-- `ac_build_raw_buffer_descriptor` (Mesa 24.2.8): `desc[0] = va`, `desc[1] = BASE_ADDRESS_HI(va >> 32) |
-STRIDE(0)`, `desc[2] = size`, `desc[3]` with `OOB_SELECT_RAW` (3, bits 29:28) and `RESOURCE_LEVEL` (bit 24);
-the format and channel selects of `desc[3]` do not reach untyped dword loads (manual 8.1.4: the data
-format of `BUFFER_LOAD_<type>` is derived from the opcode, dst_sel identity) and the model does not read them. -/
-def rawBufferDescriptor (va : UInt64) (size : Nat) : Array UInt32 :=
-  #[va.toUInt32, ((va >>> 32) &&& 0xFFFF).toUInt32, UInt32.ofNat size, ((3 : UInt32) <<< 28) ||| ((1 : UInt32) <<< 24)]
-
-def writeDwords (m : Memory) (addr : UInt64) (ws : Array UInt32) : Memory :=
-  ws.zipIdx.foldl (fun m (w, k) => m.insert ((addr >>> 2) + UInt64.ofNat k) w) m
-
 def int64Dwords (v : Int) : Array UInt32 :=
   let u : UInt64 := UInt64.ofNat ((v % (2 ^ 64 : Int)).toNat)
   #[u.toUInt32, (u >>> 32).toUInt32]
 
-/-- The memory for one vector: zeros in `w` except the input wires at their bases, the constants, the
-gather tables, and the three descriptors at the set. -/
-def initialMemory (p : Plan) (v : Vector) : Memory := Id.run do
-  let mut m : Memory := {}
-  m := writeDwords m wAddr (Array.replicate (2 * p.words) 0)
+/-- The wire buffer for one vector: the input wires at their bases, zeros elsewhere. -/
+def flatOf (p : Plan) (v : Vector) (i : Nat) : BitVec 64 := Id.run do
   for (wire, k) in p.inputs.zipIdx do
     let base := p.wireBase.getD wire 0
-    for (x, e) in (v.inputs.getD k #[]).zipIdx do
-      m := writeDwords m (wAddr + UInt64.ofNat (8 * (base + e))) (int64Dwords x)
-  m := writeDwords m cAddr (p.consts.flatMap int64Dwords)
-  m := writeDwords m ixAddr (p.tables.map UInt32.ofNat)
-  m := writeDwords m descSetAddr (rawBufferDescriptor wAddr (8 * p.words))
-  m := writeDwords m (descSetAddr + 16) (rawBufferDescriptor cAddr (8 * p.consts.size))
-  m := writeDwords m (descSetAddr + 32) (rawBufferDescriptor ixAddr (4 * p.tables.size))
-  return m
+    let xs := v.inputs.getD k #[]
+    if base ≤ i && i < base + xs.size then return BitVec.ofInt 64 (xs.getD (i - base) 0)
+  return 0#64
+
+/-- The memory for one vector (`Host.memOf`: the layout, and the wire buffer). -/
+def initialMemory (p : Plan) (v : Vector) : Memory :=
+  memOf p.words (p.consts.toList.map (BitVec.ofInt 64)) p.tables.toList (flatOf p v)
 
 /-- The wave of workgroup `g`: `s2` the set's low address, `s3` the group id, `v0` the lane. -/
-def initialWave (mem : Memory) (g : Nat) : WaveState := Id.run do
-  let mut s := WaveState.init mem
-  s := writeSgpr s 2 descSetLo
-  s := writeSgpr s 3 (UInt32.ofNat g)
-  for lane in [0:lanes] do
-    s := writeVgpr s 0 lane (UInt32.ofNat lane)
-  return s
+def initialWave (mem : Memory) (g : Nat) : WaveState := initWave mem descSetLo g
 
 /-! ## 3. Running -/
-
-def readWord64 (m : Memory) (addr : UInt64) : Option Int := do
-  let lo ← m.get? (addr >>> 2)
-  let hi ← m.get? ((addr >>> 2) + 1)
-  let u : UInt64 := lo.toUInt64 ||| (hi.toUInt64 <<< 32)
-  pure (if u ≥ ((1 : UInt64) <<< 63) then (u.toNat : Int) - 2 ^ 64 else (u.toNat : Int))
 
 /-- Every stage of the dump on every workgroup of its dispatch, then the output wires. -/
 def runVector (p : Plan) (progs : Array Program) (v : Vector) : Except String (Nat × Array (Array Int)) := do
@@ -171,9 +138,7 @@ def runVector (p : Plan) (progs : Array Program) (v : Vector) : Except String (N
   let outs ← p.outputs.mapM fun wire => do
     let base := p.wireBase.getD wire 0
     (Array.range (p.wireLen.getD wire 0)).mapM fun e =>
-      match readWord64 mem (wAddr + UInt64.ofNat (8 * (base + e))) with
-      | some x => pure x
-      | none => throw s!"vector {v.index}: output wire {wire} element {e} is not in memory"
+      pure (wordAt mem (base + e)).toInt
   pure (steps, outs)
 
 def flipBit (progs : Array (Array (Array UInt32))) (stage instr bit : Nat) : Except String (Array (Array (Array UInt32))) := do
@@ -219,8 +184,10 @@ def stateOfRow (regs sgprs vgprs : String) (mem : Memory) : Except String (WaveS
   let some vc := r[1]? | throw "row: no vcc"
   let some sc := r[2]? | throw "row: no scc"
   let pc := match r[3]? with | some p => p.toNat?.getD 0 | none => 0
-  let mut s := WaveState.init mem
-  s := { s with exec := parseHex64 ex, vcc := parseHex64 vc, scc := sc == "1", pc := pc }
+  let mut s : WaveState := GWave.init mem
+  let vcc := parseHex64 vc
+  s := { s with exec := parseHex64 ex, scc := if sc == "1" then 1 else 0, pc := pc }
+  s := writeSgpr (writeSgpr s 106 vcc.toUInt32) 107 (vcc >>> 32).toUInt32
   for (h, k) in ((sgprs.splitOn " ").filter (· != "")).zipIdx do
     s := writeSgpr s k (parseHex32 h)
   for (reg, rk) in (vgprs.splitOn ";").zipIdx do
@@ -243,7 +210,7 @@ def checkGem5Row (ln : String) : Except String Unit := do
     let check (field : String) (ok : Bool) : Except String Unit :=
       if ok || skips.contains field then pure () else throw s!"{name}: {field} differs from gem5's body"
     check "exec" (got.exec == want.exec)
-    check "vcc" (got.vcc == want.vcc)
+    check "vcc" (readSgpr got 106 == readSgpr want 106 && readSgpr got 107 == readSgpr want 107)
     check "scc" (got.scc == want.scc)
     check "pc" (got.pc == wantPc)
     for k in [0:8] do check s!"s{k}" (readSgpr got k == readSgpr want k)
