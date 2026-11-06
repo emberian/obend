@@ -327,15 +327,15 @@ def cmdCert (args : List String) : IO UInt32 := do
       if !done then
         IO.eprintln "no switch-matrix entry"; return 1
       let C' := { C with chunks := chunks.toList }
-      if C'.check N then
-        IO.eprintln "[FAIL] Cert.check accepted a certificate with a switch-matrix select changed"; return 1
-      IO.println "mutant certificate (one switch-matrix select changed): Cert.check refuses it"
+      if C'.check N || C'.checkF N (endCodes C') then
+        IO.eprintln "[FAIL] Cert.check or Cert.checkF accepted a certificate with a switch-matrix select changed"; return 1
+      IO.println "mutant certificate (one switch-matrix select changed): Cert.check and Cert.checkF refuse it"
       return 0
     let out ← need "--out" args
     IO.FS.writeFile out (certLean C (flagVal "--source" args |>.getD binPath))
     if let some chk := flagVal "--out-check" args then
       IO.FS.writeFile chk (checkLean C N.gates.length N.flops.length N.outs.length)
-    IO.println s!"wrote {out}: {C.entries.length} wires in the cone, {C.gates.length} gates, {C.flops.length} flops, {C.outs.length} outputs, {C.tiles.length} tiles; check against the net: {C.check N}"
+    IO.println s!"wrote {out}: {C.entries.length} wires in the cone, {C.gates.length} gates, {C.flops.length} flops, {C.outs.length} outputs, {C.tiles.length} tiles; check against the net: {C.check N}, kernel-cheap form: {C.checkF N (endCodes C)}"
     return 0
 
 /-- `obend fabric binlit --project DIR --bin FILE --out FILE`: write `Mac8Bin.lean`, the bitstream as data. -/

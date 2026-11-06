@@ -53,11 +53,13 @@ What is here, and what is not.
   state the cone has exactly one assignment (`Cert.solve`), so loops through unused multiplexer inputs,
   outside the cone, do not make anything vacuous; `cone_sound` and `cone_run_eq`: every run of the cone
   shows `Net.run`, and `Cert.runFrom_run` gives one. `Mac8CertCheck.lean` (generated) decides
-  `mac8Cert_check` one chunk or block at a time, and `mac8_bin_required`: the committed bitstream, as the
+  `mac8Cert_check` through `Cert.checkF` (the table, switch matrices and frame positions read through balanced
+  trees, names compared as numbers, each entry's path end from a witness checked one hop at a time;
+  `Cert.checkF_sound`), a few blocks per `decide +kernel`, and `mac8_bin_required`: the committed bitstream, as the
   Lean number `Mac8Bin.lean` and read through `binBits` (FABulous's bit_gen frame layout, header and frame-select
   words checked by `mac8Bin_framed`), has every bit the certificate requires (11,267).
   `Mac8Tiles.mac8_bitstream_realizes_module` is the MAC theorem for that configuration with no hypothesis
-  on the bits. Those modules build on hbox only (`swarm-build`, `SWARM_MEM_MAX=48G`); on the Mac,
+  on the bits. Those modules build on hbox (`swarm-build`, `SWARM_MEM_MAX=16G`); on the Mac,
   `verify_fabric.sh` regenerates the three files byte for byte. Taken as given: the tiles' top-level
   wiring (`LUT4AB.v`'s jump and nested wires, as `pips.txt` fixed pips, which `obend fabric check` checks),
   the configuration latches' index-to-frame map (`*_ConfigMem.v`), `binBits` as FABulous's bit_gen layout, and
