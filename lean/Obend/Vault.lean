@@ -17,6 +17,10 @@ its frontmatter lines), the members and their grants.
   `select_needs_grant`), `reciteIn`.
 * `Obend.Vault.Json` — `.obend/world.json`.
 * `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`.
+* `Obend.Vault.Branch` — offline branches with a base, merged at the tip: the pushout of the two
+  sides' disjoint writes (`merge_is_pushout`), clashes kept as conflict states, consent from every
+  page in a write's cone (`landed_consents`), authority read where every revocation is visible
+  (`settled_at_tip`). Its walkthrough is `lean/tests/vault/Branch.lean`.
 
 The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`.
 -/
@@ -35,4 +39,5 @@ public import Obend.Vault.DragonsExchange
 public import Obend.Vault.HardwareProjection
 public import Obend.Vault.PhysicalProjection
 public import Obend.Vault.SovereignEngine
+public import Obend.Vault.Branch
 public import Obend.Vault.Cli

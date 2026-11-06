@@ -213,16 +213,21 @@ def isLinkLaw (txt : String) : Bool := (txt.splitOn "linked.").length > 1
 state it is judged on, the linked page's. -/
 def linkLawText (txt : String) : String := txt.replace "linked." "new."
 
-/-- The laws of a page as written in a version, each named `PAGE: NAME`, with its text. A law over
-links reads the linked page only: one that also reads `new.` is refused. -/
-def lawsIn (pageName : String) (G : Graph) : Except String (List (String × LawExpr × String)) :=
-  (lawLines (settled G)).mapM fun (n, txt) =>
+/-- One law line `(NAME, TEXT)` of the page `pageName`, read as the judge takes it: named
+`PAGE: NAME`, with its text (`Obend.Vault.Branch` reads a law book's lines through it). -/
+def lawOfLine (pageName : String) : String × String → Except String (String × LawExpr × String)
+  | (n, txt) =>
     if isLinkLaw txt && (txt.splitOn "new.").length > 1 then
       .error (pageName ++ ": law " ++ n ++ ": a law over links reads the linked page as `linked.`; \
         the page's own fields (`new.`) are not readable in it")
     else match Obend.Spec.Law.parse (if isLinkLaw txt then linkLawText txt else txt) with
     | .ok e => .ok (pageName ++ ": " ++ n, e, txt)
     | .error msg => .error (pageName ++ ": law " ++ n ++ ": " ++ msg)
+
+/-- The laws of a page as written in a version, each named `PAGE: NAME`, with its text. A law over
+links reads the linked page only: one that also reads `new.` is refused. -/
+def lawsIn (pageName : String) (G : Graph) : Except String (List (String × LawExpr × String)) :=
+  (lawLines (settled G)).mapM (lawOfLine pageName)
 
 /-! ## The vault's kinds are kind cells
 
