@@ -16,11 +16,19 @@ are always the unplanted model's.
 
 The graphs, their vectors and the `expected.tsv` printer are `Obend.Hardware.SquareGraphs`, shared with
 `obend-emit-sv`'s `square-<graph>` targets (the same graphs through the RTL lowering). Expected values
-are `evalGraphArr`'s, which is `evalGraph` with the wires stored (`evalGraphArr_eq`). Before writing, the
-emitter refuses a graph that fails `ArrayGraph.wf` (which is the hypothesis of `lowerArrayToGpu_sound`,
-so the expected values are `evalGraph`'s and the device must show them) and an NTT graph whose
-evaluation disagrees with the naive DFT over the Goldilocks field (`nttReference`). These are tests of
-the fixtures, run on every emission.
+are `evalGraphArr`'s, which is `evalGraph` with the wires stored (`evalGraphArr_eq`).
+Before writing, the emitter refuses a graph that fails `ArrayGraph.wf` (the hypothesis of
+`lowerArrayToGpu_sound`, so the expected values are `evalGraph`'s and the device must show them) and an
+NTT graph whose evaluation disagrees with a recursive radix-2 NTT over the Goldilocks field in `Nat`
+arithmetic (`nttFast`), which for the smaller sizes is itself checked against the naive DFT
+(`nttReference`). These are tests of the fixtures, run on every emission.
+
+The NTT graphs are Stockham radix-2 (Govindaraju et al. 2008; ec-gpu's `radix_fft` kernel with
+`deg = 1`, whose output index is `((j - k) << 1) + k`): every stage reads the two halves of the
+previous stage's output, multiplies the upper half by `ω_{2Ns}^{j mod Ns}`, and writes the sum and
+difference expanded by the sub-transform size, so an NTT of `n` points is `log₂ n` stages of a few
+dozen edges over whole wires, and no bit reversal. The field operations are the limb network of
+`Obend.Apps.ZkNtt.glMul`; after fusion each stage's sum and difference are one kernel each.
 -/
 import Obend.Hardware.SquareGraphs
 
@@ -41,13 +49,18 @@ def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.File
     IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (emitStageWgsl plant name k p.stages.length s)
   if kind == .ntt && name.startsWith "ntt" then
     for (vals, v) in (graphVectors g kind).zipIdx do
-      let ref := nttReference ((vals.getD 0 []).map Int.toNat)
-      unless ((arrayModel g vals).getD 0 []).map (·.toNat) == ref do
-        throw <| IO.userError s!"{name} vector {v}: the NTT graph disagrees with the naive DFT"
+      let input := (vals.getD 0 []).map Int.toNat
+      let fast := (nttFast input.toArray (rootOfUnity input.length)).toList
+      unless ((arrayModel g vals).getD 0 []).map (·.toNat) == fast do
+        throw <| IO.userError s!"{name} vector {v}: the NTT graph disagrees with the recursive NTT"
+      if input.length ≤ 4096 then
+        unless nttReference input == fast do
+          throw <| IO.userError s!"{name} vector {v}: the recursive NTT disagrees with the naive DFT"
   IO.FS.writeFile (dir / "expected.tsv") (expectedTsv g kind (arrayModel g))
-  IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {p.consts.length} constants, \
-    {p.tables.length} indices, {p.stages.length} stages \
-    ({String.intercalate "," (p.stages.map fun s => toString s.threads)} threads), \
+  IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {g.edges.length} edges, \
+    {(fuseGraph g).edges.length} after fusion, {p.consts.length} constants, \
+    {p.tables.length} indices, {p.stages.length} dispatches \
+    ({String.intercalate "," (p.stages.map fun s => toString s.kernels.length)} kernels), \
     {vectorCount g} vectors -> {dir}"
 
 /-! ## Main -/

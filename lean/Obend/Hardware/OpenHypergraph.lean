@@ -987,9 +987,8 @@ theorem map_getD_eq_getElem? {α : Type} (xs : List α) (f : α → BitVec 64) (
   cases xs[i]? <;> rfl
 
 /-- Lower a `HypergraphOp` applied to operand expressions `args` to an `Obend.Hardware.HDL.RtlExpr`; a
-missing operand is `0`, as in `evalHypergraphOpBv`. The three RTL compilers below differ only in what
-an operand reads: an input port, a combinational wire, or a pipeline stage's entry (`stageEntryExpr`);
-`Obend.Hardware.Square.elemOpToRtl` reads an element of an array wire through the same function. -/
+missing operand is `0`, as in `evalHypergraphOpBv`. The pipelined compiler below reads a stage's entry
+(`stageEntryExpr`) through it, and `Obend.Hardware.Square.elemOpToRtl` an element of an array wire. -/
 def compileHypergraphOpExpr (op : HypergraphOp) (args : List RtlExpr) : RtlExpr :=
   let a (i : Nat) : RtlExpr := args.getD i (.const 0#64)
   match op with
@@ -1017,76 +1016,8 @@ theorem evalRtlExpr_compileHypergraphOpExpr (op : HypergraphOp) (args : List Rtl
   cases op <;>
     simp only [compileHypergraphOpExpr, evalRtlExpr, evalAluOp, evalHypergraphOpBv, evalRtlExpr_getD_const]
 
-/-- Lower a `HypergraphOp` whose operands are the input ports `srcWires`. -/
-def compileHypergraphOpToRtl (op : HypergraphOp) (srcWires : List Nat) : RtlExpr :=
-  compileHypergraphOpExpr op (srcWires.map RtlExpr.inputPort)
-
-/-- **Theorem (`compileHypergraphOpToRtl_sound`)**:
-For EVERY `op : HypergraphOp` and source wire triple `(w0, w1, w2 : Nat)`, evaluating the lowered
-`RtlExpr` `compileHypergraphOpToRtl op [w0, w1, w2]` via `Obend.Hardware.HDL.evalRtlExpr` produces
-the exact same 64-bit value as `evalHypergraphOpBv op [inputs w0, inputs w1, inputs w2]`. -/
-theorem compileHypergraphOpToRtl_sound
-    (op : HypergraphOp) (w0 w1 w2 : Nat)
-    (inputs wires regs : Nat → BitVec 64) :
-    evalRtlExpr inputs wires regs (compileHypergraphOpToRtl op [w0, w1, w2]) =
-      evalHypergraphOpBv op [inputs w0, inputs w1, inputs w2] := by
-  cases op <;> rfl
-
-/-- The hypergraph wires in the order the module defines them: the boundary inputs, then every
-hyperedge's destination. The module's wire `i` holds the `i`-th of these, whatever the graph's own
-numbering, so the wire table is indexed `0, 1, …` as `checkWireTableDAG` asks (`compileOpticToHypergraph`
-and `compileGraphAdjoint` number wires out of topological order). -/
-def wireDefs (g : StrictOpenHypergraph) : List Nat :=
-  g.boundaryIn.table ++ (extractHyperEdges g).map (·.dstWire)
-
-/-- The module's wire holding hypergraph wire `w`: its first definition in `defs`; a wire never defined
-reads as `0`, as an unset hypergraph wire does. -/
-def wireExprOf (defs : List Nat) (w : Nat) : RtlExpr :=
-  match defs.idxOf? w with
-  | some i => .wireRef i
-  | none   => .const 0#64
-
-/-- A module wire environment read as a hypergraph wire environment through `defs`. -/
-def readWire (defs : List Nat) (wires : Nat → BitVec 64) (w : Nat) : BitVec 64 :=
-  match defs.idxOf? w with
-  | some i => wires i
-  | none   => 0#64
-
-theorem evalRtlExpr_wireExprOf (defs : List Nat) (w : Nat) (inputs wires regs : Nat → BitVec 64) :
-    evalRtlExpr inputs wires regs (wireExprOf defs w) = readWire defs wires w := by
-  unfold wireExprOf readWire
-  cases defs.idxOf? w <;> rfl
-
-/-- Lower a `HypergraphOp` reading hypergraph wires `srcWires` from the module's wires through `defs`. -/
-def compileHypergraphWireOpToRtl (defs : List Nat) (op : HypergraphOp) (srcWires : List Nat) : RtlExpr :=
-  compileHypergraphOpExpr op (srcWires.map (wireExprOf defs))
-
-/-- The wire lowering for every source list: the operation over the wires' values, read through `defs`. -/
-theorem evalRtlExpr_compileHypergraphWireOpToRtl (defs : List Nat) (op : HypergraphOp) (srcWires : List Nat)
-    (inputs wires regs : Nat → BitVec 64) :
-    evalRtlExpr inputs wires regs (compileHypergraphWireOpToRtl defs op srcWires) =
-      evalHypergraphOpBv op (srcWires.map (readWire defs wires)) := by
-  rw [compileHypergraphWireOpToRtl, evalRtlExpr_compileHypergraphOpExpr, List.map_map]
-  congr 1
-  apply List.map_congr_left
-  intro u _
-  exact evalRtlExpr_wireExprOf defs u inputs wires regs
-
-/-- Lower an entire `StrictOpenHypergraph` into a combinational `Obend.Hardware.HDL.RtlModule`: wire
-`idx` is boundary input `idx`, wire `|inputs| + k` is the `k`-th hyperedge of `extractHyperEdges g`
-(`compileHypergraphWireOpToRtl` over the wires of its sources), and each boundary output reads its
-wire (`wireExprOf`). `compileHypergraphToRtl_sound` is the whole module. -/
-def compileHypergraphToRtl (name : String) (g : StrictOpenHypergraph) : RtlModule :=
-  let defs := wireDefs g
-  { name       := name
-  , inputNames := g.boundaryIn.table.map (fun w => s!"in_w{w}")
-  , wires      :=
-      (g.boundaryIn.table.zipIdx.map (fun (w, idx) =>
-        { wireIdx := idx, name := s!"w_{w}", expr := RtlExpr.inputPort idx })) ++
-      (((extractHyperEdges g).zipIdx g.boundaryIn.table.length).map (fun (e, k) =>
-        { wireIdx := k, name := s!"w_{e.dstWire}", expr := compileHypergraphWireOpToRtl defs e.op e.srcWires }))
-  , regs       := []
-  , outputs    := g.boundaryOut.table.map (fun w => { name := s!"out_w{w}", expr := wireExprOf defs w }) }
+/- The combinational lowering of a whole graph is `Obend.Hardware.Square.compileHypergraphToRtl`, the
+scalar graph as the one-element instance (`ofScalar`) of `compileArrayGraphToRtl`. -/
 
 /-! ## 5. Whole-Graph Functorial Reverse-AD (`compileGraphAdjoint`, `compileGraphAdjoint_multiEdge_sound`) -/
 
@@ -2236,7 +2167,7 @@ theorem compileGraphAdjoint_dag_sound
       inWires (edges.reverse.foldl (fun st e => pullbackHyperEdge e st) initSt) hInvAfter
   refine ⟨hInvAfter, hInvFinal, hInvFinal.primal_preserved, hMapFinal⟩
 
-/-! ## 6. Pipelined Wavefront RTL Compilation (`compileHypergraphToRtlPipelined`, `compileHypergraphToRtlPipelined_latency_sound`) -/
+/-! ## 6. Pipelined Wavefront RTL Compilation (`compileHypergraphToRtlPipelined`; its whole-module theorem is `compileHypergraphToRtlPipelined_sound`, §8c) -/
 
 /-- Synchronous 64-bit hardware step for a hyperedge `e` inside a wavefront stage, reading all
 `e.srcWires` from the frozen stage-entry snapshot `stageEntryEnv : Nat → BitVec 64`. -/
@@ -2522,99 +2453,11 @@ theorem compileGraphAdjoint_diamond_symbolic_sound (x0 x1 x2 x3 dOut : Int) :
     (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0)
   exact ⟨hComb, hPipe.1.trans hComb, hPipe.2.trans hComb⟩
 
-/-- **Theorem (`compileHypergraphToRtlPipelined_diamond_symbolic_latency`)**:
-Universal 3-Cycle Pipeline Latency Soundness for `goldenDiamondHypergraph`:
-For EVERY symbolic input vector `insBv : Nat → BitVec 64`, EVERY symbolic integer environment
-`initEnv : Nat → Int`, and EVERY initial register state `initRegs : Nat → BitVec 64`:
-1. Executing `mPipe := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph`
-   for $K = 3$ synchronous clock cycles (`runModuleTrace`) produces the exact same output vector
-   as `goldenDiamondHypergraph.boundaryOut.table.map (evalLayeredStagesSyncBv insBv (layerHypergraph goldenDiamondHypergraph))`,
-2. When `insBv = fun u => BitVec.ofInt 64 (initEnv u)`, the 3-cycle pipelined RTL output equals
-   `(evalHypergraphLayeredSync goldenDiamondHypergraph initEnv).map (BitVec.ofInt 64)`! -/
-theorem compileHypergraphToRtlPipelined_diamond_symbolic_latency
-    (insBv initRegs : Nat → BitVec 64) (initEnv : Nat → Int) :
-    let mPipe := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph
-    let trace3Bv : List (Bool × (Nat → BitVec 64)) :=
-      [(false, insBv), (false, insBv), (false, insBv)]
-    let insOfInt : Nat → BitVec 64 := fun u => BitVec.ofInt 64 (initEnv u)
-    let trace3Int : List (Bool × (Nat → BitVec 64)) :=
-      [(false, insOfInt), (false, insOfInt), (false, insOfInt)]
-    (evalModuleOutputs mPipe insBv (runModuleTrace mPipe initRegs trace3Bv)).map Prod.snd =
-      goldenDiamondHypergraph.boundaryOut.table.map
-        (evalLayeredStagesSyncBv insBv (layerHypergraph goldenDiamondHypergraph)) ∧
-    (evalModuleOutputs mPipe insOfInt (runModuleTrace mPipe initRegs trace3Int)).map Prod.snd =
-      (evalHypergraphLayeredSync goldenDiamondHypergraph initEnv).map (BitVec.ofInt 64) := by
-  have hBv :
-      (evalModuleOutputs (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph)
-        insBv
-        (runModuleTrace (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph)
-          initRegs [(false, insBv), (false, insBv), (false, insBv)])).map Prod.snd =
-      goldenDiamondHypergraph.boundaryOut.table.map
-        (evalLayeredStagesSyncBv insBv (layerHypergraph goldenDiamondHypergraph)) := rfl
-  have hBvInt :
-      (evalModuleOutputs (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph)
-        (fun u => BitVec.ofInt 64 (initEnv u))
-        (runModuleTrace (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph)
-          initRegs
-          [ (false, fun u => BitVec.ofInt 64 (initEnv u))
-          , (false, fun u => BitVec.ofInt 64 (initEnv u))
-          , (false, fun u => BitVec.ofInt 64 (initEnv u)) ])).map Prod.snd =
-      goldenDiamondHypergraph.boundaryOut.table.map
-        (evalLayeredStagesSyncBv (fun u => BitVec.ofInt 64 (initEnv u))
-          (layerHypergraph goldenDiamondHypergraph)) := rfl
-  refine ⟨hBv, ?_⟩
-  rw [hBvInt]
-  have hArith :
-      (layerHypergraph goldenDiamondHypergraph).all
-        (fun s => s.all (fun e => e.op.isArithmetic)) = true := rfl
-  rw [evalLayeredStagesSyncBv_ofInt initEnv (layerHypergraph goldenDiamondHypergraph) hArith]
-  unfold evalHypergraphLayeredSync
-  simp [List.map_map]
+/-! ## 8b. The Single Pass at 64 Bits (`evalHyperEdgesCombBv`)
 
-/-- **Theorem (`compileHypergraphToRtlPipelined_latency_sound`)**:
-1. **Universal Synchronous Wavefront Stage RTL Soundness**:
-   For EVERY wavefront stage `stage : List HyperEdge`, stage index `stageIdx`, wire count `numWires`,
-   and wire `w`, the pipelined register next-state expression
-   `compileWavefrontStageExpr numWires stageIdx stage w` evaluates to `evalWavefrontStageSyncBv entryEnv stage w`,
-   and for every arithmetic hypergraph stage list `stages`, $k$-stage synchronous bitvector wavefront
-   evaluation `evalLayeredStagesSyncBv` equals `BitVec.ofInt 64 (evalLayeredStagesSync initEnv stages w)`.
-2. **Concrete $K$-Cycle Pipeline Latency Verification on `goldenDiamondHypergraph` ($K = 3$ Wavefront Stages)**:
-   - `compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph` passes all structural
-     DAG and CDC checks (`checkRtlModule = true`),
-   - Inserts `27` synchronous pipeline stage registers (`3` wavefront stages $\times$ `9` hypergraph wires),
-   - Executing the pipelined `RtlModule` for $K = 3$ synchronous clock cycles (`runModuleTrace` of
-     length `(layerHypergraph goldenDiamondHypergraph).length = 3`) latches the exact boundary output
-     `[87#64]` matching `evalHypergraphLayeredSync goldenDiamondHypergraph initEnv = [87]`! -/
-theorem compileHypergraphToRtlPipelined_latency_sound
-    (numWires stageIdx : Nat) (stage : List HyperEdge)
-    (inputs wireEnv regState : Nat → BitVec 64) (w : Nat) :
-    let entryEnv := if stageIdx == 0 then inputs else fun u => regState ((stageIdx - 1) * numWires + u)
-    let mPipe := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph
-    let initEnvInt : Nat → Int := fun u =>
-      match u with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | _ => 0
-    let insBv : Nat → BitVec 64 := fun u => BitVec.ofInt 64 (initEnvInt u)
-    let initRegs : Nat → BitVec 64 := fun _ => 0#64
-    let trace3 : List (Bool × (Nat → BitVec 64)) :=
-      [(false, insBv), (false, insBv), (false, insBv)]
-    let regsAfter3 := runModuleTrace mPipe initRegs trace3
-    (evalRtlExpr inputs wireEnv regState (compileWavefrontStageExpr numWires stageIdx stage w) =
-      evalWavefrontStageSyncBv entryEnv stage w) ∧
-    checkRtlModule mPipe = true ∧
-    mPipe.regs.length = (layerHypergraph goldenDiamondHypergraph).length * goldenDiamondHypergraph.nodeTypes.length ∧
-    mPipe.regs.length = 27 ∧
-    (evalModuleOutputs mPipe insBv regsAfter3).map Prod.snd = [87#64] ∧
-    (evalHypergraphLayeredSync goldenDiamondHypergraph initEnvInt).map (BitVec.ofInt 64) = [87#64] := by
-  refine ⟨compileWavefrontStageExpr_sound numWires stageIdx stage inputs wireEnv regState w, ?_⟩
-  decide +kernel
-
-/-! ## 8b. The Whole Combinational Module (`compileHypergraphToRtl_sound`)
-
-`compileHypergraphToRtl` is one wire assignment per boundary input and one per hyperedge, in the
-hypergraph's own order; `evalWireTable` folds them in that order, which is `evalHyperEdgesComb` with
-the operations read at 64 bits, once the module's wires are read back as hypergraph wires
-(`readWire`). The one hypothesis is single assignment, `(wireDefs g).Nodup`: a wire defined twice
-would have two module wires and readers of the first would miss the second. The `Int` statement
-follows for graphs without `mux` through `evalHypergraphOpBv_ofInt`. -/
+`evalHyperEdgesComb` with the operations read at 64 bits: the scalar meaning the RTL lowerings are
+stated against (`Obend.Hardware.Square.compileHypergraphToRtl_sound`), and over `Int` modulo `2^64`
+for graphs without `mux` (`evalHyperEdgesCombBv_ofInt`). A specification, not run. -/
 
 /-- Combinational 64-bit step of one hyperedge: `stepHyperEdge` over `BitVec 64`. -/
 def stepHyperEdgeBv (env : Nat → BitVec 64) (e : HyperEdge) : Nat → BitVec 64 :=
@@ -2624,153 +2467,6 @@ def stepHyperEdgeBv (env : Nat → BitVec 64) (e : HyperEdge) : Nat → BitVec 6
 /-- Single-pass 64-bit combinational evaluation of a list of `HyperEdge`s. -/
 def evalHyperEdgesCombBv (initEnv : Nat → BitVec 64) (edges : List HyperEdge) : Nat → BitVec 64 :=
   edges.foldl stepHyperEdgeBv initEnv
-
-/-- `evalHypergraphComb` over `BitVec 64`: the boundary outputs after the single combinational pass. -/
-def evalHypergraphCombBv (g : StrictOpenHypergraph) (initEnv : Nat → BitVec 64) : List (BitVec 64) :=
-  g.boundaryOut.table.map (evalHyperEdgesCombBv initEnv (extractHyperEdges g))
-
-/-- The wire environment the module's input ports induce: boundary port `idx` drives wire
-`g.boundaryIn.table[idx]` (a later port wins a wire named twice), every other wire is `0`. -/
-def inputEnv (g : StrictOpenHypergraph) (ins : Nat → BitVec 64) : Nat → BitVec 64 :=
-  g.boundaryIn.table.zipIdx.foldl
-    (fun env (p : Nat × Nat) => fun u => if u == p.1 then ins p.2 else env u) (fun _ => 0#64)
-
-/-- The same over `Int`, for `evalHypergraphComb`. -/
-def inputEnvInt (g : StrictOpenHypergraph) (ins : Nat → Int) : Nat → Int :=
-  g.boundaryIn.table.zipIdx.foldl
-    (fun env (p : Nat × Nat) => fun u => if u == p.1 then ins p.2 else env u) (fun _ => 0)
-
-theorem idxOf?_of_nodup (defs : List Nat) (hN : defs.Nodup) (k d : Nat) (hk : defs[k]? = some d) :
-    defs.idxOf? d = some k := by
-  rw [List.idxOf?_eq_some_iff]
-  obtain ⟨hlt, hkd⟩ := List.getElem?_eq_some_iff.mp hk
-  refine ⟨hlt, hkd, ?_⟩
-  intro j hj hjd
-  have : defs[j]? = defs[k]? := by
-    rw [List.getElem?_eq_getElem (by omega), List.getElem?_eq_getElem hlt, hjd, hkd]
-  have := (List.Nodup.getElem?_inj (by omega) hN).mp this
-  omega
-
-/-- Defining module wire `k`, which holds hypergraph wire `d`, is defining `d`. -/
-theorem readWire_update (defs : List Nat) (hN : defs.Nodup) (k d : Nat) (hk : defs[k]? = some d)
-    (W : Nat → BitVec 64) (v : BitVec 64) (u : Nat) :
-    readWire defs (fun i => if i == k then v else W i) u =
-      if u == d then v else readWire defs W u := by
-  unfold readWire
-  by_cases hud : u = d
-  · subst hud
-    rw [idxOf?_of_nodup defs hN k u hk]
-    simp
-  · have hne : (u == d) = false := by simpa using hud
-    simp only [hne, Bool.false_eq_true, ↓reduceIte]
-    cases h : defs.idxOf? u with
-    | none => rfl
-    | some i =>
-      have hik : i ≠ k := by
-        intro hik
-        subst hik
-        rw [List.idxOf?_eq_some_iff] at h
-        obtain ⟨hlt, hi, _⟩ := h
-        rw [List.getElem?_eq_getElem hlt, hi] at hk
-        exact hud (Option.some.inj hk)
-      simp [hik]
-
-/-- The input phase: the module's first `|inputs|` wires carry `inputEnv`. -/
-theorem readWire_foldl_inputs (defs : List Nat) (hN : defs.Nodup) (ins regs : Nat → BitVec 64)
-    (xs : List Nat) (n : Nat) (hdef : ∀ j, j < xs.length → defs[n + j]? = xs[j]?)
-    (W : Nat → BitVec 64) (env : Nat → BitVec 64) (hW : readWire defs W = env) :
-    readWire defs
-      (((xs.zipIdx n).map (fun (w, idx) =>
-        ({ wireIdx := idx, name := s!"w_{w}", expr := RtlExpr.inputPort idx } : WireAssign))).foldl
-        (fun (env : Nat → BitVec 64) a =>
-          let v := evalRtlExpr ins env regs a.expr
-          fun i => if i == a.wireIdx then v else env i) W) =
-    (xs.zipIdx n).foldl (fun env (p : Nat × Nat) => fun u => if u == p.1 then ins p.2 else env u) env := by
-  induction xs generalizing n W env with
-  | nil => exact hW
-  | cons x rest ih =>
-    simp only [List.zipIdx_cons, List.map_cons, List.foldl_cons]
-    apply ih (n + 1)
-    · intro j hj
-      rw [show n + 1 + j = n + (j + 1) by omega]
-      exact hdef (j + 1) (by simp; omega)
-    · funext u
-      have hk : defs[n]? = some x := by
-        have := hdef 0 (by simp)
-        simpa using this
-      rw [← hW]
-      exact readWire_update defs hN n x hk W (ins n) u
-
-/-- The edge phase: wire `n + k` carries the `k`-th hyperedge's destination. -/
-theorem readWire_foldl_edges (defs : List Nat) (hN : defs.Nodup) (ins regs : Nat → BitVec 64)
-    (es : List HyperEdge) (n : Nat) (hdef : ∀ j, j < es.length → defs[n + j]? = (es.map (·.dstWire))[j]?)
-    (W : Nat → BitVec 64) (env : Nat → BitVec 64) (hW : readWire defs W = env) :
-    readWire defs
-      (((es.zipIdx n).map (fun (e, k) =>
-        ({ wireIdx := k, name := s!"w_{e.dstWire}", expr := compileHypergraphWireOpToRtl defs e.op e.srcWires } : WireAssign))).foldl
-        (fun (env : Nat → BitVec 64) a =>
-          let v := evalRtlExpr ins env regs a.expr
-          fun i => if i == a.wireIdx then v else env i) W) =
-    es.foldl stepHyperEdgeBv env := by
-  induction es generalizing n W env with
-  | nil => exact hW
-  | cons e rest ih =>
-    simp only [List.zipIdx_cons, List.map_cons, List.foldl_cons]
-    apply ih (n + 1)
-    · intro j hj
-      rw [show n + 1 + j = n + (j + 1) by omega]
-      have := hdef (j + 1) (by simp; omega)
-      simpa using this
-    · funext u
-      have hk : defs[n]? = some e.dstWire := by
-        have := hdef 0 (by simp)
-        simpa using this
-      simp only [stepHyperEdgeBv]
-      rw [← hW, evalRtlExpr_compileHypergraphWireOpToRtl]
-      exact readWire_update defs hN n e.dstWire hk W _ u
-
-theorem readWire_evalWireTable_compileHypergraphToRtl (name : String) (g : StrictOpenHypergraph)
-    (hN : (wireDefs g).Nodup) (ins regs : Nat → BitVec 64) :
-    readWire (wireDefs g) (evalWireTable ins regs (compileHypergraphToRtl name g).wires) =
-      evalHyperEdgesCombBv (inputEnv g ins) (extractHyperEdges g) := by
-  have hWires : (compileHypergraphToRtl name g).wires =
-      (g.boundaryIn.table.zipIdx.map (fun (w, idx) =>
-        ({ wireIdx := idx, name := s!"w_{w}", expr := RtlExpr.inputPort idx } : WireAssign))) ++
-      (((extractHyperEdges g).zipIdx g.boundaryIn.table.length).map (fun (e, k) =>
-        ({ wireIdx := k, name := s!"w_{e.dstWire}"
-         , expr := compileHypergraphWireOpToRtl (wireDefs g) e.op e.srcWires } : WireAssign))) := rfl
-  rw [hWires, evalWireTable, List.foldl_append, evalHyperEdgesCombBv]
-  apply readWire_foldl_edges (wireDefs g) hN ins regs (extractHyperEdges g) g.boundaryIn.table.length
-  · intro j hj
-    simp only [wireDefs]
-    rw [List.getElem?_append_right (Nat.le_add_right _ _), Nat.add_sub_cancel_left]
-  · rw [inputEnv]
-    apply readWire_foldl_inputs (wireDefs g) hN ins regs g.boundaryIn.table 0
-    · intro j hj
-      simp only [wireDefs, Nat.zero_add]
-      rw [List.getElem?_append_left hj]
-    · funext u
-      simp only [readWire]
-      cases (wireDefs g).idxOf? u <;> rfl
-
-/-- **`compileHypergraphToRtl_sound`**: for every scalar open hypergraph that defines each wire once
-(`wireDefs g` has no repeats: the boundary inputs and the destinations are distinct wires) and every
-input, the combinational `RtlModule` evaluated by the HDL semantics shows, on its output ports in
-order, the 64-bit single-pass evaluation of the graph from the environment its input ports induce. -/
-theorem compileHypergraphToRtl_sound (name : String) (g : StrictOpenHypergraph)
-    (hN : (wireDefs g).Nodup) (ins regs : Nat → BitVec 64) :
-    (evalModuleOutputs (compileHypergraphToRtl name g) ins regs).map Prod.snd =
-      evalHypergraphCombBv g (inputEnv g ins) := by
-  have hW := readWire_evalWireTable_compileHypergraphToRtl name g hN ins regs
-  have hOut : (compileHypergraphToRtl name g).outputs =
-      g.boundaryOut.table.map (fun w => ({ name := s!"out_w{w}", expr := wireExprOf (wireDefs g) w } : OutputPort)) := rfl
-  simp only [evalModuleOutputs, evalHypergraphCombBv]
-  rw [hOut]
-  simp only [List.map_map]
-  apply List.map_congr_left
-  intro w _
-  simp only [Function.comp_def, evalRtlExpr_wireExprOf]
-  exact congrFun hW w
 
 theorem evalHyperEdgesCombBv_ofInt (env : Nat → Int) (edges : List HyperEdge)
     (hArith : edges.all (fun e => e.op.isArithmetic) = true) :
@@ -2794,40 +2490,6 @@ theorem evalHyperEdgesCombBv_ofInt (env : Nat → Int) (edges : List HyperEdge)
       · simp [hu]
     rw [hStep]
     exact ih (stepHyperEdge env e) hArith.2
-
-theorem foldl_inputEnv_ofInt (ins : Nat → Int) (l : List (Nat × Nat)) (env : Nat → Int) :
-    l.foldl (fun env (p : Nat × Nat) => fun u => if u == p.1 then BitVec.ofInt 64 (ins p.2) else env u)
-        (fun u => BitVec.ofInt 64 (env u)) =
-      fun u => BitVec.ofInt 64
-        (l.foldl (fun env (p : Nat × Nat) => fun u => if u == p.1 then ins p.2 else env u) env u) := by
-  induction l generalizing env with
-  | nil => rfl
-  | cons p rest ih =>
-    simp only [List.foldl_cons]
-    have h : (fun u => if u == p.1 then BitVec.ofInt 64 (ins p.2) else BitVec.ofInt 64 (env u)) =
-        fun u => BitVec.ofInt 64 (if u == p.1 then ins p.2 else env u) := by
-      funext u
-      split <;> rfl
-    rw [h]
-    exact ih _
-
-theorem inputEnv_ofInt (g : StrictOpenHypergraph) (ins : Nat → Int) :
-    inputEnv g (fun i => BitVec.ofInt 64 (ins i)) = fun u => BitVec.ofInt 64 (inputEnvInt g ins u) := by
-  unfold inputEnv inputEnvInt
-  exact foldl_inputEnv_ofInt ins _ (fun _ => 0)
-
-/-- **`compileHypergraphToRtl_sound_ofInt`**: on a graph whose operations are all arithmetic (no `mux`,
-whose test `≠ 0` is not a ring homomorphism), the module's outputs are `evalHypergraphComb` reduced
-modulo `2^64`, for every integer input. -/
-theorem compileHypergraphToRtl_sound_ofInt (name : String) (g : StrictOpenHypergraph)
-    (hN : (wireDefs g).Nodup) (ins : Nat → Int) (regs : Nat → BitVec 64)
-    (hArith : (extractHyperEdges g).all (fun e => e.op.isArithmetic) = true) :
-    (evalModuleOutputs (compileHypergraphToRtl name g) (fun i => BitVec.ofInt 64 (ins i)) regs).map Prod.snd =
-      (evalHypergraphComb g (inputEnvInt g ins)).map (BitVec.ofInt 64) := by
-  rw [compileHypergraphToRtl_sound name g hN, evalHypergraphCombBv, inputEnv_ofInt,
-    evalHyperEdgesCombBv_ofInt _ _ hArith]
-  simp only [evalHypergraphComb, List.map_map]
-  rfl
 
 /-! ## 8c. The Whole Pipelined Module (`compileHypergraphToRtlPipelined_sound`)
 

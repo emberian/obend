@@ -30,6 +30,7 @@ TWINS = [
     ("V_LSHLREV_B32", "v_lshlrev_b32_e32 v4, v0, v1", "Inst_VOP2__V_LSHLREV_B32"),
     ("V_LSHL_ADD_U32", "v_lshl_add_u32 v4, v0, v1, v2", "Inst_VOP3__V_LSHL_ADD_U32"),
     ("V_ADD3_U32", "v_add3_u32 v4, v0, v1, v2", "Inst_VOP3__V_ADD3_U32"),
+    ("V_AND_OR_B32", "v_and_or_b32 v4, v0, v1, v2", "Inst_VOP3__V_AND_OR_B32"),
     ("V_MUL_LO_U32", "v_mul_lo_u32 v4, v0, v1", "Inst_VOP3__V_MUL_LO_U32"),
     ("V_MUL_HI_U32", "v_mul_hi_u32 v4, v0, v1", "Inst_VOP3__V_MUL_HI_U32"),
     ("V_LSHLREV_B64", "v_lshlrev_b64 v[4:5], v0, v[2:3]", "Inst_VOP3__V_LSHLREV_B64"),

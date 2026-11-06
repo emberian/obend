@@ -9,8 +9,6 @@
   "inputs": [0,1,2,3],
   "outputs": [8],
   "stages": [
-    {"file":"stage_0.wgsl","threads":2},
-    {"file":"stage_1.wgsl","threads":2},
-    {"file":"stage_2.wgsl","threads":1}
+    {"file":"stage_0.wgsl","threads":1}
   ]
 }

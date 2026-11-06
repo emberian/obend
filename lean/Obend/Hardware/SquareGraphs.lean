@@ -5,12 +5,12 @@ module
 One list of graphs with their test vectors, shared by `obend-emit-gpu` (`lean/tools/emitgpu`: the
 shaders, plan and `expected.tsv` of `hardware/gpu/graphs/<graph>/`) and `obend-emit-sv`'s `square-<graph>`
 targets (`lean/tools/emitsv`: the SystemVerilog, the LEC half, the Verilator harness and the HDL model's
-expected values of `hardware/gpu/square/`). `squareGraphs` names the ones the square runs through both
-devices with the `RtlModule` of each: a scalar graph through `compileHypergraphToRtl`
-(`rtl_eq_gpu`), an array graph through `compileArrayGraphToRtl` (`rtl_eq_gpu_array`).
+expected values of `hardware/gpu/square/`). `squarePlan` names the ones the square runs through both
+devices and what each is for; `squareGraphs` pairs each with its `RtlModule`.
 
 The scalar fixtures (`treeGraph`, `muxChainGraph`, `allOpsGraph`), the Goldilocks field network
-(`glMul`, the limb network of `Obend.Apps.ZkNtt.glMul`, elementwise), the radix-2 NTT (`nttGraph`) and the
+(`glMul`, the limb network of `Obend.Apps.ZkNtt.glMul`, elementwise), the Stockham radix-2 NTT
+(`nttGraph`, with its references `nttFast` and `nttReference`) and the
 vectors (`vectorFor`) are here; `expectedTsv` prints `expected.tsv` from any model of the outputs, so the
 array model's file and the HDL model's can be compared byte for byte.
 -/
@@ -46,13 +46,19 @@ def node (n : Nat) (op : ArrayOp) (srcs : List Nat) : BuildM Nat := do
   emit op srcs w
   pure w
 
+/-- A fresh wire of length `n` holding `op` of `srcs` elementwise: the primitive one-instruction program. -/
+def mapN (n : Nat) (op : ElemOp) (srcs : List Nat) : BuildM Nat := do
+  let w ← newWire n
+  emit (.map n (ElemProg.single op srcs w)) srcs w
+  pure w
+
 def constWire (vals : List Word) : BuildM Nat := node vals.length (.const vals) []
 
 /-- `n` copies of one word. -/
 def broadcast (n : Nat) (v : Word) : BuildM Nat := constWire (List.replicate n v)
 
-def map2 (n : Nat) (op : ElemOp) (a b : Nat) : BuildM Nat := node n (.map n op) [a, b]
-def map3 (n : Nat) (op : ElemOp) (a b c : Nat) : BuildM Nat := node n (.map n op) [a, b, c]
+def map2 (n : Nat) (op : ElemOp) (a b : Nat) : BuildM Nat := mapN n op [a, b]
+def map3 (n : Nat) (op : ElemOp) (a b c : Nat) : BuildM Nat := mapN n op [a, b, c]
 
 def runBuild (inputs : List Nat → BuildM (List Nat)) (inputLens : List Nat) : ArrayGraph :=
   let ((ins, outs), st) := (do
@@ -151,39 +157,81 @@ def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksP - 1) / 2 ^ 32) goldilocksP
 /-- A primitive `n`-th root, `n` a power of two dividing `2^32`. -/
 def rootOfUnity (n : Nat) : Nat := powMod rootOfUnity2to32 (2 ^ 32 / n) goldilocksP
 
-/-- The even and odd positions of a length-`n` wire, as gather tables. -/
-def evens (n : Nat) : FiniteFunction := { source := n / 2, target := n, table := (List.range (n / 2)).map (2 * ·) }
-def odds (n : Nat) : FiniteFunction := { source := n / 2, target := n, table := (List.range (n / 2)).map (2 * · + 1) }
+/-- The output permutation of a Stockham radix-2 stage with sub-transform size `ns` over `n` points, for
+the half of the output starting at `offset`: output `i` is `a[(i / 2ns)·ns + r]` when `r = i mod 2ns < ns`,
+else `b[(i / 2ns)·ns + (r - ns)]`, as an index into `a ++ b`. For the last stage it is the identity. -/
+def expandTable (n ns offset : Nat) : FiniteFunction :=
+  let half := n / 2
+  { source := half, target := n, table := (List.range half).map fun j =>
+      let i := offset + j
+      let group := i / (2 * ns)
+      let r := i % (2 * ns)
+      if r < ns then group * ns + r else half + group * ns + (r - ns) }
 
-/-- Radix-2 Cooley–Tukey over a wire of length `n = 2^levels`: `y_k = E_k + ω^k O_k`,
-`y_{k + n/2} = E_k - ω^k O_k`, the halves concatenated. Inputs are assumed canonical (`< p`). -/
-partial def nttOf (x : Nat) (n : Nat) : BuildM Nat := do
-  if n ≤ 1 then pure x
-  else
-    let half := n / 2
-    let ev ← node half (.gather (evens n)) [x]
-    let od ← node half (.gather (odds n)) [x]
-    let e ← nttOf ev half
-    let o ← nttOf od half
-    let ω := rootOfUnity n
-    let twiddles ← constWire ((List.range half).map fun k => BitVec.ofNat 64 (powMod ω k goldilocksP))
-    let k ← glConsts half
-    let t ← glMul half k o twiddles
-    let lo ← glAdd half k e t
-    let hi ← glSub half k e t
-    node n .concat [lo, hi]
+/-- The identity on a half of a length-`n` wire. -/
+def halfTable (n offset : Nat) : FiniteFunction :=
+  { source := n / 2, target := n, table := (List.range (n / 2)).map (offset + ·) }
+
+/-- Stockham radix-2 NTT of `n = 2^L` points, inputs canonical (`< p`). The halves `lo`, `hi` of the
+current array travel as two wires; stage `s` (`ns = 2^s`) computes `t = hi · ω_{2ns}^{j mod ns}`,
+`a = lo + t`, `b = lo - t`, and gathers the next halves from `a ++ b` by `expandTable`; the last stage's
+`a ++ b` is the output in natural order. The twiddles are gathered from one table of the powers of
+`ω_n`, so the constants are `n/2` words and each stage's twiddle is an index table. -/
+def nttStockham (x n : Nat) : BuildM Nat := do
+  if n ≤ 1 then return x
+  let half := n / 2
+  let L := Nat.log2 n
+  let k ← glConsts half
+  let ω := rootOfUnity n
+  let powers ← constWire ((List.range half).map fun i => BitVec.ofNat 64 (powMod ω i goldilocksP))
+  let mut lo ← node half (.gather (halfTable n 0)) [x]
+  let mut hi ← node half (.gather (halfTable n half)) [x]
+  let mut out := x
+  for s in List.range L do
+    let ns := 2 ^ s
+    let twTable : FiniteFunction :=
+      { source := half, target := half, table := (List.range half).map fun j => (j % ns) * (half / ns) }
+    let tw ← node half (.gather twTable) [powers]
+    let t ← glMul half k hi tw
+    let a ← glAdd half k lo t
+    let b ← glSub half k lo t
+    let ab ← node n .concat [a, b]
+    if s + 1 < L then
+      lo ← node half (.gather (expandTable n ns 0)) [ab]
+      hi ← node half (.gather (expandTable n ns half)) [ab]
+    else
+      out := ab
+  pure out
 
 def nttGraph (n : Nat) : ArrayGraph :=
   runBuild (fun ins => do
-    let y ← nttOf (ins.getD 0 0) n
+    let y ← nttStockham (ins.getD 0 0) n
     pure [y]) [n]
 
-/-- The naive DFT, the reference the emitter checks the graph against. -/
+/-- The naive DFT over the Goldilocks field, `y_k = Σ_j x_j ω^{jk}`, with a table of the powers of `ω`. -/
 def nttReference (xs : List Nat) : List Nat :=
   let n := xs.length
+  if n == 0 then [] else
   let ω := rootOfUnity n
+  let pw : Array Nat := (Array.range n).map fun i => powMod ω i goldilocksP
+  let xa := xs.toArray
   (List.range n).map fun k =>
-    (xs.zipIdx.foldl (fun acc (xj, j) => (acc + xj * powMod ω (j * k) goldilocksP) % goldilocksP) 0)
+    (List.range n).foldl (fun acc j => (acc + xa[j]! * pw[(j * k) % n]!) % goldilocksP) 0
+
+/-- The recursive radix-2 NTT in `Nat` arithmetic: `y_k = E_k + ω^k O_k`, `y_{k+n/2} = E_k - ω^k O_k`. -/
+partial def nttFast (xs : Array Nat) (ω : Nat) : Array Nat :=
+  let n := xs.size
+  if n ≤ 1 then xs else
+  let half := n / 2
+  let ω2 := ω * ω % goldilocksP
+  let ev := nttFast ((Array.range half).map fun i => xs[2 * i]!) ω2
+  let od := nttFast ((Array.range half).map fun i => xs[2 * i + 1]!) ω2
+  let pw := (Array.range half).map fun j => powMod ω j goldilocksP
+  (Array.range n).map fun j =>
+    if j < half then (ev[j]! + pw[j]! * od[j]! % goldilocksP) % goldilocksP
+    else
+      let j' := j - half
+      (ev[j']! + goldilocksP - pw[j']! * od[j']! % goldilocksP) % goldilocksP
 
 /-! ## Array graphs besides the NTT -/
 
@@ -273,7 +321,9 @@ def arrayGraphs : List (String × String × ArrayGraph × Kind) :=
   , ("glmul-256",        "Obend.Hardware.SquareGraphs.glMulGraph 256", glMulGraph 256, .ntt)
   , ("ntt-4",            "Obend.Hardware.SquareGraphs.nttGraph 4", nttGraph 4, .ntt)
   , ("ntt-16",           "Obend.Hardware.SquareGraphs.nttGraph 16", nttGraph 16, .ntt)
-  , ("ntt-64",           "Obend.Hardware.SquareGraphs.nttGraph 64", nttGraph 64, .ntt) ]
+  , ("ntt-64",           "Obend.Hardware.SquareGraphs.nttGraph 64", nttGraph 64, .ntt)
+  , ("ntt-1024",         "Obend.Hardware.SquareGraphs.nttGraph 1024", nttGraph 1024, .ntt)
+  , ("ntt-65536",        "Obend.Hardware.SquareGraphs.nttGraph 65536", nttGraph 65536, .ntt) ]
 
 /-- Every graph the GPU gate runs: the scalar ones as their one-element instance, then the array ones. -/
 def graphs : List (String × ArrayGraph × Kind) :=
@@ -307,7 +357,8 @@ def vectorFor (kind : Kind) (lens : List Nat) (v : Nat) : List (List Int) :=
         else signed (draw v w i)
 
 def vectorCount (g : ArrayGraph) : Nat :=
-  if sumNatList (g.inputs.map (g.lengths.getD · 0)) ≥ 64 then 6 else 12
+  let total := sumNatList (g.inputs.map (g.lengths.getD · 0))
+  if total ≥ 2 ^ 14 then 2 else if total ≥ 64 then 6 else 12
 
 /-! ## Expected values and the checks -/
 
@@ -334,46 +385,54 @@ def expectedTsv (g : ArrayGraph) (kind : Kind) (model : List (List Int) → List
 /-- The array model's outputs for one vector (`evalGraphArr`, which is `evalGraph`: `evalGraphArr_eq`). -/
 def arrayModel (g : ArrayGraph) (vals : List (List Int)) : List Vec :=
   let env := mkEnv g.lengths g.inputs (vals.map toVec)
-  evalGraphArr g ((List.range g.lengths.length).map env).toArray
+  evalGraphArr g ((List.range g.lengths.length).map fun w => (env w).toArray).toArray
 
 /-! ## The square -/
 
-/-- A graph the square runs through both devices, with its RTL module and the name of the Lean value
-the module is, for the SystemVerilog header. -/
+/-- A graph the square runs through both devices: its RTL module, the name of the Lean value the module
+is (for the SystemVerilog header) and what the graph is there to exercise. -/
 structure SquareGraph where
-  name  : String
-  graph : ArrayGraph
-  kind  : Kind
-  rtl   : RtlModule
-  lean  : String
-  /-- The square theorem's hypothesis beyond `ArrayGraph.wf`, decided: `(wireDefs g).Nodup` for a
-  scalar graph (`rtl_eq_gpu`), `edgesAcyclic g` for an array graph (`rtl_eq_gpu_array`). -/
-  hyp   : Bool
+  name    : String
+  graph   : ArrayGraph
+  kind    : Kind
+  rtl     : RtlModule
+  lean    : String
+  purpose : String
 
 /-- The SystemVerilog module name of a graph. -/
 def svName (n : String) : String := "sq_" ++ String.map (fun c => if c == '-' then '_' else c) n
 
-/-- The scalar graphs through `compileHypergraphToRtl`, and the array graphs small enough for Verilator
-and the LEC through `compileArrayGraphToRtl`. -/
+/-- The graphs the square runs and what each is for; each exercises something no other one does. -/
+def squarePlan : List (String × String) :=
+  [ ("allops", "every scalar operation: const (negative), add, sub, mul, scale (by -2^40), mac, mux, with wrap-around")
+  , ("muxchain", "a multiply that reaches an output only through a mux's test against zero; its operator swap is seen only by a vector with a zero operand")
+  , ("adjoint-square-bilinear", "a compileGraphAdjoint graph, whose wires are numbered out of definition order: the single-assignment lowering's reason")
+  , ("tree512", "size: 511 chained adders, where the LEC's time goes")
+  , ("glmul-4", "the bit operations of the Goldilocks multiply (ult, and, or, both shifts) as elementwise maps over arrays")
+  , ("ntt-16", "gathers, concatenation and constant arrays: the Stockham NTT") ]
+
+/-- The graphs of `squarePlan`, a scalar one as its one-element instance through `compileHypergraphToRtl`
+(`rtl_eq_gpu`), an array one through `compileArrayGraphToRtl` (`rtl_eq_gpu_array`). -/
 def squareGraphs : List SquareGraph :=
-  scalarGraphs.map (fun (n, ln, g) =>
-    { name := n, graph := ofScalar g, kind := .plain
-    , rtl := compileHypergraphToRtl (svName n) g
-    , lean := s!"Obend.Hardware.OpenHypergraph.compileHypergraphToRtl \"{svName n}\" ({ln})"
-    , hyp := decide (wireDefs g).Nodup }) ++
-  (arrayGraphs.filter (fun (n, _, _, _) => n == "glmul-4" || n == "ntt-16")).map (fun (n, ln, g, k) =>
-    { name := n, graph := g, kind := k
-    , rtl := compileArrayGraphToRtl (svName n) g
-    , lean := s!"Obend.Hardware.Square.compileArrayGraphToRtl \"{svName n}\" ({ln})"
-    , hyp := edgesAcyclic g })
+  squarePlan.filterMap fun (n, purpose) =>
+    match scalarGraphs.find? (·.1 == n), arrayGraphs.find? (·.1 == n) with
+    | some (_, ln, g), _ =>
+      some { name := n, graph := ofScalar g, kind := .plain, purpose := purpose
+           , rtl := compileHypergraphToRtl (svName n) g
+           , lean := s!"Obend.Hardware.Square.compileHypergraphToRtl \"{svName n}\" ({ln})" }
+    | none, some (_, ln, g, k) =>
+      some { name := n, graph := g, kind := k, purpose := purpose
+           , rtl := compileArrayGraphToRtl (svName n) g
+           , lean := s!"Obend.Hardware.Square.compileArrayGraphToRtl \"{svName n}\" ({ln})" }
+    | none, none => none
 
 /-- The flat output ports of the RTL module, regrouped by the output wires' lengths. -/
 def regroup : List Nat → List Word → List Vec
   | [], _ => []
   | n :: rest, xs => xs.take n :: regroup rest (xs.drop n)
 
-/-- The input ports for one vector: the input wires' elements in order (`boundaryElems`; a scalar graph's
-wires are singletons, so the same flattening serves `compileHypergraphToRtl`'s ports). -/
+/-- The input ports for one vector: the input wires' elements in order (`boundaryElems`), as
+`inputEnvOf` reads them. -/
 def squareInputs (vals : List (List Int)) : Nat → Word :=
   let flat := (vals.map toVec).flatten
   fun p => flat.getD p 0#64

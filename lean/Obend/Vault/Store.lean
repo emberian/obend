@@ -501,6 +501,33 @@ def linkTargets (G : Graph) : List PageId :=
     | some (.cite _ c) => if c.span = .identity then some c.page else none
     | _ => none).eraseDups
 
+/-- Whether a version stores a cite of the page `id` at all: a scan of its atoms, without the walk
+`linkTargets` takes. A page that does not cite `id` does not link to it (`linkTargets_contains_cites`). -/
+def citesPage (G : Graph) (id : PageId) : Bool :=
+  G.atoms.any fun (_, c) => match c with
+    | .cite _ c => c.page == id
+    | _ => false
+
+theorem linkTargets_contains_cites {G : Graph} {id : PageId} (h : (linkTargets G).contains id = true) :
+    citesPage G id = true := by
+  simp only [linkTargets, List.contains_iff_mem, List.mem_eraseDups, List.mem_filterMap] at h
+  obtain ⟨a, _, ha⟩ := h
+  split at ha
+  · rename_i nm c hl
+    split at ha
+    · cases ha
+      simp only [citesPage, List.any_eq_true]
+      exact ⟨(a, .cite nm c), Obend.Doc.Graph.lookup_mem hl, by simp⟩
+    · cases ha
+  · cases ha
+
+/-- The backlink test the judge runs for each page, the cheap scan first: the same test. -/
+theorem citesPage_and_contains (G : Graph) (id : PageId) :
+    (citesPage G id && (linkTargets G).contains id) = (linkTargets G).contains id := by
+  cases h : (linkTargets G).contains id
+  · simp
+  · simp [linkTargets_contains_cites h]
+
 /-- The laws over links among a page's laws, as the judge takes them. -/
 def linkLaws (laws : Laws) : List (String × LawExpr) :=
   (laws.filter fun l => isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
@@ -882,7 +909,8 @@ def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × 
     if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq wt.readFootprint) then
       throw (linkRefusalText p.name laws r facts)
     for e in es do
-      if e.name != p.name && (linkTargets e.graph).contains p.id then
+      -- `citesPage_and_contains`: the scan first, the walk only for a page that cites this one
+      if e.name != p.name && (citesPage e.graph p.id && (linkTargets e.graph).contains p.id) then
         match lawsFor es e.name e.graph with
         | .ok elaws =>
           let theirs := linkLaws elaws
@@ -1225,13 +1253,19 @@ def judgeAt (H : Hash) (res : List Entry) (s : Store) (p : Page) (md : String) :
 def afterAdmit (H : Hash) (res : List Entry) (s : Store) (p : Page) (md : String) : Store :=
   s.setPage (p.withChange (judgeAt H res s p md))
 
-/-- The refused writes whose pins no longer hold at `st`: woken, to be judged again. -/
-def woken (st : Store) (refused : List RefusedWrite) : List Write :=
-  (refused.filter fun r => !pinsHold (stateStore st.entries) r.pins).map fun r => (r.name, r.md)
+/-- Whether a refused write read the page `n`. -/
+def RefusedWrite.reads (r : RefusedWrite) (n : String) : Bool := r.pins.any (·.cell == n)
 
-/-- The refused writes whose pins hold at `st`: still refused. -/
-def held (st : Store) (refused : List RefusedWrite) : List RefusedWrite :=
-  refused.filter fun r => pinsHold (stateStore st.entries) r.pins
+/-- The refused writes that read the page `n` just written and whose pins no longer hold at `st`:
+woken, to be judged again. Only the writes that read `n` are asked: the others' pins held before
+the write of `n`, and the write moved no other page (`held_pins`). -/
+def woken (n : String) (st : Store) (refused : List RefusedWrite) : List Write :=
+  (refused.filter fun r => !(!r.reads n || pinsHold (stateStore st.entries) r.pins)).map fun r => (r.name, r.md)
+
+/-- The refused writes still refused after the write of `n`: those that did not read it, and those
+that did and whose pins hold at `st`. -/
+def held (n : String) (st : Store) (refused : List RefusedWrite) : List RefusedWrite :=
+  refused.filter fun r => !r.reads n || pinsHold (stateStore st.entries) r.pins
 
 theorem length_filter_add_length_filter_not {α : Type} (p : α → Bool) :
     ∀ l : List α, (l.filter p).length + (l.filter fun a => !p a).length = l.length
@@ -1241,8 +1275,8 @@ theorem length_filter_add_length_filter_not {α : Type} (p : α → Bool) :
     cases hp : p a <;> simp only [List.filter_cons, hp, Bool.not_true, Bool.not_false, List.length_cons] <;>
       simp <;> omega
 
-theorem woken_held_length (st : Store) (refused : List RefusedWrite) :
-    (woken st refused).length + (held st refused).length = refused.length := by
+theorem woken_held_length (n : String) (st : Store) (refused : List RefusedWrite) :
+    (woken n st refused).length + (held n st refused).length = refused.length := by
   simp only [woken, held, List.length_map]
   rw [Nat.add_comm]
   exact length_filter_add_length_filter_not _ refused
@@ -1267,8 +1301,8 @@ def admitWrites (H : Hash) (res : List Entry) (s : Store) (pending : List Write)
     | some p =>
       match (judgeAt H res s p md).note with
       | none =>
-        admitWrites H res (afterAdmit H res s p md) (rest ++ woken (afterAdmit H res s p md) refused)
-          (held (afterAdmit H res s p md) refused)
+        admitWrites H res (afterAdmit H res s p md) (rest ++ woken p.name (afterAdmit H res s p md) refused)
+          (held p.name (afterAdmit H res s p md) refused)
       | some _ =>
         admitWrites H res (afterAdmit H res s p md) rest
           (refused ++ [⟨n, md, pinsOf (afterAdmit H res s p md).entries res n p.id (readAs H res md)⟩])
@@ -1276,7 +1310,7 @@ termination_by (pending.length + refused.length, pending.length)
 decreasing_by
   all_goals simp only [Prod.lex_def, List.length_cons, List.length_append, List.length_nil]
   · omega
-  · have := woken_held_length (afterAdmit H res s p md) refused
+  · have := woken_held_length p.name (afterAdmit H res s p md) refused
     omega
   · omega
 
@@ -1289,13 +1323,13 @@ theorem admitWrites_ind (H : Hash) (res : List Entry)
       P s rest refused (admitWrites H res s rest refused) →
       P s ((n, md) :: rest) refused (admitWrites H res s rest refused))
     (hadm : ∀ s n md rest refused p, s.page? n = some p → (judgeAt H res s p md).note = none →
-      P (afterAdmit H res s p md) (rest ++ woken (afterAdmit H res s p md) refused)
-        (held (afterAdmit H res s p md) refused)
-        (admitWrites H res (afterAdmit H res s p md) (rest ++ woken (afterAdmit H res s p md) refused)
-          (held (afterAdmit H res s p md) refused)) →
+      P (afterAdmit H res s p md) (rest ++ woken p.name (afterAdmit H res s p md) refused)
+        (held p.name (afterAdmit H res s p md) refused)
+        (admitWrites H res (afterAdmit H res s p md) (rest ++ woken p.name (afterAdmit H res s p md) refused)
+          (held p.name (afterAdmit H res s p md) refused)) →
       P s ((n, md) :: rest) refused
-        (admitWrites H res (afterAdmit H res s p md) (rest ++ woken (afterAdmit H res s p md) refused)
-          (held (afterAdmit H res s p md) refused)))
+        (admitWrites H res (afterAdmit H res s p md) (rest ++ woken p.name (afterAdmit H res s p md) refused)
+          (held p.name (afterAdmit H res s p md) refused)))
     (href : ∀ s n md rest refused p m, s.page? n = some p → (judgeAt H res s p md).note = some m →
       P (afterAdmit H res s p md) rest
         (refused ++ [⟨n, md, pinsOf (afterAdmit H res s p md).entries res n p.id (readAs H res md)⟩])
@@ -1342,7 +1376,7 @@ theorem admitWrites_ind (H : Hash) (res : List Entry)
             | none =>
               dsimp only
               refine hadm s n md rest refused p hp hnote (ihN _ _ _ _ ?_ (Nat.le_refl _))
-              have := woken_held_length (afterAdmit H res s p md) refused
+              have := woken_held_length p.name (afterAdmit H res s p md) refused
               simp only [List.length_append]
               omega
             | some m =>
@@ -1352,6 +1386,40 @@ theorem admitWrites_ind (H : Hash) (res : List Entry)
                   (by omega))
   intro s pending refused
   exact key _ _ s pending refused (Nat.le_refl _) (Nat.le_refl _)
+
+/-- `admitWrites` with each write judged once: the change judged, then the store after it, named
+once and shared by the three places the store after it is read. -/
+def admitWritesShared (H : Hash) (res : List Entry) (s : Store) (pending : List Write)
+    (refused : List RefusedWrite) : Store × List RefusedWrite :=
+  match pending with
+  | [] => (s, refused)
+  | (n, md) :: rest =>
+    match s.page? n with
+    | none => admitWritesShared H res s rest refused
+    | some p =>
+      let c := judgeAt H res s p md
+      let s' := s.setPage (p.withChange c)
+      match c.note with
+      | none => admitWritesShared H res s' (rest ++ woken p.name s' refused) (held p.name s' refused)
+      | some _ => admitWritesShared H res s' rest (refused ++ [⟨n, md, pinsOf s'.entries res n p.id (readAs H res md)⟩])
+termination_by (pending.length + refused.length, pending.length)
+decreasing_by
+  all_goals simp only [Prod.lex_def, List.length_cons, List.length_append, List.length_nil]
+  · omega
+  · have := woken_held_length p.name (s.setPage (p.withChange (judgeAt H res s p md))) refused
+    omega
+  · omega
+
+/-- **Each write judged once is the admission**: `admitWrites` is compiled as `admitWritesShared`. -/
+@[csimp] theorem admitWrites_eq_shared : @admitWrites = @admitWritesShared := by
+  funext H res s pending refused
+  refine (admitWrites_ind H res (fun s pending refused out => admitWritesShared H res s pending refused = out)
+    ?_ ?_ ?_ ?_ s pending refused).symm
+  · intro s refused; rw [admitWritesShared]
+  · intro s n md rest refused hp ih; rw [admitWritesShared]; simp only [hp]; exact ih
+  · intro s n md rest refused p hp hnote ih; rw [admitWritesShared]; simp only [hp, hnote]; exact ih
+  · intro s n md rest refused p m hp hnote ih; rw [admitWritesShared]; simp only [hp, hnote]; exact ih
+
 
 /-- The folders enclosing a page name, counted. -/
 def depthOf (name : String) : Nat := (name.splitOn "/").length
@@ -1864,6 +1932,72 @@ theorem entries_setPage {s : Store} {n : String} {p q : Page} (hnd : (s.pages.ma
     simp [Page.current, hh, hid, hq]
   · rfl
 
+theorem firstStale?_congr {store store' : VaultStore} :
+    ∀ {fp : Footprint}, (∀ q ∈ fp, store q.cell = store' q.cell) →
+      Footprint.firstStale? store fp = Footprint.firstStale? store' fp
+  | [], _ => rfl
+  | q :: rest, h => by
+    have ih := firstStale?_congr (fp := rest) fun x hx => h x (List.mem_cons_of_mem _ hx)
+    have hq := h q List.mem_cons_self
+    simp only [Footprint.firstStale?, hq, ih]
+
+/-- The pins of a footprint are judged by the states at their cells alone. -/
+theorem pinsHold_congr {store store' : VaultStore} {fp : Footprint}
+    (h : ∀ q ∈ fp, store q.cell = store' q.cell) : pinsHold store fp = pinsHold store' fp := by
+  simp only [pinsHold, admitFootprint, firstStale?_congr h]
+
+/-- A page replaced by name leaves every other page's state as it was. -/
+theorem stateStore_setPage (s : Store) (q : Page) {c : String} (hc : q.name ≠ c) :
+    stateStore (s.setPage q).entries c = stateStore s.entries c := by
+  simp only [stateStore, Store.entries, Store.setPage, List.find?_filterMap, List.find?_map]
+  let f : Page → Option Entry := fun p =>
+    Option.map (fun G => { name := p.name, id := p.id, graph := G, version := p.history.length - 1 }) p.current
+  let g : Page → Page := fun x => if (x.name == q.name) = true then q else x
+  have hp : ∀ x, ((f (g x)).any fun e => e.name == c) = ((f x).any fun e => e.name == c) := by
+    intro x
+    by_cases hx : (x.name == q.name) = true
+    · have hxn : x.name ≠ c := by rw [beq_iff_eq.1 hx]; exact hc
+      simp only [g, f, if_pos hx]
+      cases q.current <;> cases x.current <;>
+        simp [beq_eq_false_iff_ne.2 hc, beq_eq_false_iff_ne.2 hxn]
+    · simp only [g, if_neg hx]
+  have hfind : s.pages.find? ((fun x => (f x).any fun e => e.name == c) ∘ g) =
+      s.pages.find? (fun x => (f x).any fun e => e.name == c) := by
+    congr 1; funext x; exact hp x
+  show Option.map _ (Option.bind (Option.map g (s.pages.find? ((fun x => (f x).any fun e => e.name == c) ∘ g))) f) =
+    Option.map _ (Option.bind (s.pages.find? (fun x => (f x).any fun e => e.name == c)) f)
+  rw [hfind]
+  cases hy : s.pages.find? (fun x => (f x).any fun e => e.name == c) with
+  | none => rfl
+  | some y =>
+    have py := List.find?_some hy
+    have hyc : y.name = c := by
+      simp only [f] at py
+      cases hyc : y.current with
+      | none => rw [hyc] at py; simp at py
+      | some G => rw [hyc] at py; simpa using py
+    have hyq : (y.name == q.name) = false := by
+      rw [beq_eq_false_iff_ne, hyc]; exact fun h => hc h.symm
+    simp only [Option.map_some, Option.bind_some, g, hyq, Bool.false_eq_true, if_false]
+
+/-- **A held write's pins hold**: one that read the page written was asked again; one that did not
+read it held before, and the write moved no other page. -/
+theorem held_pins (H : Hash) (res : List Entry) (s : Store) (p : Page) (md : String)
+    {refused : List RefusedWrite} (h : ∀ r ∈ refused, pinsHold (stateStore s.entries) r.pins = true) :
+    ∀ r ∈ held p.name (afterAdmit H res s p md) refused,
+      pinsHold (stateStore (afterAdmit H res s p md).entries) r.pins = true := by
+  intro r hr
+  simp only [held, List.mem_filter, Bool.or_eq_true, Bool.not_eq_true'] at hr
+  rcases hr.2 with hn | hp
+  · rw [pinsHold_congr (store' := stateStore s.entries) fun q hq => ?_]
+    · exact h r hr.1
+    · simp only [afterAdmit]
+      apply stateStore_setPage
+      intro he
+      simp only [RefusedWrite.reads, List.any_eq_false, beq_iff_eq] at hn
+      exact hn q hq he.symm
+  · exact hp
+
 theorem admitWrites_admitted (H : Hash) (res : List Entry) (s : Store) (pending : List Write)
     (refused : List RefusedWrite) (hnd : (s.pages.map (·.name)).Nodup)
     (h : ∀ r ∈ refused, pinsHold (stateStore s.entries) r.pins = true) :
@@ -1875,10 +2009,8 @@ theorem admitWrites_admitted (H : Hash) (res : List Entry) (s : Store) (pending 
       ∀ r ∈ out.2, pinsHold (stateStore out.1.entries) r.pins = true)
     (fun _ _ _ h => h)
     (fun _ _ _ _ _ _ ih hnd h => ih hnd h)
-    (fun s n md rest refused p hp _ ih hnd _ =>
-      ih (by rw [afterAdmit, setPage_names]; exact hnd) fun r hr => by
-        simp only [held, List.mem_filter] at hr
-        exact hr.2)
+    (fun s n md rest refused p hp _ ih hnd h =>
+      ih (by rw [afterAdmit, setPage_names]; exact hnd) (held_pins H res s p md h))
     (fun s n md rest refused p m hp hnote ih hnd h =>
       ih (by rw [afterAdmit, setPage_names]; exact hnd) fun r hr => by
         have hent : (afterAdmit H res s p md).entries = s.entries :=

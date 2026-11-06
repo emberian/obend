@@ -108,7 +108,7 @@ for g in "${GRAPHS[@]}"; do
     if [[ " ${EQY_GRAPHS} " == *" ${g} "* ]]; then
       "${LEC}" "square-${g}" "${sv}" "${lec}" --eqy | sed 's/^/  [3]/'
     else
-      "${LEC}" "square-${g}" "${sv}" "${lec}" --no-eqy "a 64-bit variable multiply; gate-level SAT equivalence does not terminate" | sed 's/^/  [3]/'
+      "${LEC}" "square-${g}" "${sv}" "${lec}" --no-eqy "opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour" | sed 's/^/  [3]/'
     fi
   fi
 

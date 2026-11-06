@@ -115,14 +115,13 @@ def targets : List (String × String) :=
   , ("mux8lut", "hardware/fabulous/tile/MUX8LUT_frame_config_mux.sv") ] ++
   squareGraphs.map fun sq => (s!"square-{sq.name}", s!"hardware/gpu/square/sv/{svName sq.name}.sv")
 
-/-- `square-<graph>`: a graph of `squareGraphs`. The theorems' hypotheses (`ArrayGraph.wf` and
-`SquareGraph.hyp`) are checked here, so a module this prints is one `rtl_eq_gpu`/`rtl_eq_gpu_array` is about. -/
+/-- `square-<graph>`: a graph of `squareGraphs`. The theorems' one hypothesis, `ArrayGraph.wf`, is checked
+here, so a module this prints is one `rtl_eq_gpu`/`rtl_eq_gpu_array` is about. -/
 def squareTarget (t : String) : Option (Except String SquareGraph) :=
   if t.startsWith "square-" then
     match squareGraphs.find? (fun sq => s!"square-{sq.name}" == t) with
     | some sq =>
       if !sq.graph.wf then some (.error s!"{t}: the graph fails ArrayGraph.wf")
-      else if !sq.hyp then some (.error s!"{t}: the square theorem's hypothesis fails (a wire defined twice, or an edge reading its own destination)")
       else some (.ok sq)
     | none => some (.error s!"unknown square graph {t}; `obend-emit-sv list`")
   else none

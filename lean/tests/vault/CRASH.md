@@ -48,16 +48,16 @@ invoices/INV-1: posted as P-0001 (period 11): debit accounts/Receivables 500, cr
 receipt .obend/receipts/P-0001.json
 invoices/INV-2: posted as P-0002 (period 11): debit accounts/Receivables 250, credit accounts/Revenue 250
 receipt .obend/receipts/P-0002.json
-log: 7 records, 3983 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 3983 bytes, and the checkpoint, 6698 bytes
+log: 7 records, 3618 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 3618 bytes, and the checkpoint, 6701 bytes
   record 1 (open): bytes 0 to 821
-  record 2 (open): bytes 821 to 1208
-  record 3 (rows): bytes 1208 to 1668
-  record 4 (open): bytes 1668 to 2377
-  record 5 (open): bytes 2377 to 2789
-  record 6 (rows): bytes 2789 to 3249
-  record 7 (open): bytes 3249 to 3983
-last record: 7 (open), bytes 3249 to 3983
+  record 2 (open): bytes 821 to 1038
+  record 3 (rows): bytes 1038 to 1498
+  record 4 (open): bytes 1498 to 2207
+  record 5 (open): bytes 2207 to 2424
+  record 6 (rows): bytes 2424 to 2884
+  record 7 (open): bytes 2884 to 3618
+last record: 7 (open), bytes 2884 to 3618
 checkpoint: the world after record 7
 world 30c543485a796b87: replayed from genesis
 world 30c543485a796b87: the checkpoint and the records after it
@@ -90,9 +90,9 @@ ls register; obend log
 P-0001.md
 P-0002.md
 _kind.md
-log: 8 records, 4502 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 4602 bytes, and the checkpoint, 7101 bytes
-last record: 8 (open), bytes 3983 to 4502
+log: 8 records, 4137 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 4237 bytes, and the checkpoint, 7103 bytes
+last record: 8 (open), bytes 3618 to 4137
 torn tail: 100 bytes after record 8, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 8
 world c10586f08cba41b3: replayed from genesis
@@ -131,9 +131,9 @@ trial balance, period 11 (register root b1d5cdfe0dc6…, 2 posting(s) in the reg
 postings: P-0001, P-0002
 checked (trial-balance@1, decidable, compiled): every posting of period 11 is in it
 wrote reports/TB-11.md
-log: 11 records, 6148 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 6148 bytes, and the checkpoint, 8159 bytes
-last record: 11 (open), bytes 5424 to 6148
+log: 11 records, 5295 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 5295 bytes, and the checkpoint, 8160 bytes
+last record: 11 (open), bytes 4571 to 5295
 checkpoint: the world after record 11
 world b5055f7b4289e044: replayed from genesis
 world b5055f7b4289e044: the checkpoint and the records after it
@@ -150,9 +150,9 @@ cd books && obend ledger post invoices/INV-3 && obend log
 ```text
 invoices/INV-3: posted as P-0003 (period 11): debit accounts/Receivables 125, credit accounts/Revenue 125
 receipt .obend/receipts/P-0003.json
-log: 14 records, 7898 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 7898 bytes, and the checkpoint, 9927 bytes
-last record: 14 (open), bytes 7092 to 7898
+log: 14 records, 6778 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 6778 bytes, and the checkpoint, 9928 bytes
+last record: 14 (open), bytes 5972 to 6778
 checkpoint: the world after record 14
 world 12cc447348db8da3: replayed from genesis
 world 12cc447348db8da3: the checkpoint and the records after it
@@ -173,7 +173,7 @@ cd books && obend member add ann --grant post:invoices/* && obend log | sed -n '
 
 ```text
 member ann may post invoices/*
-last record: 15 (member), bytes 7898 to 8129
+last record: 15 (member), bytes 6778 to 7009
 ```
 
 ```sh
@@ -199,7 +199,7 @@ rm -rf ../cut ../log.whole
 ```
 
 ```text
-232 cuts of record 15, at bytes 7898 to 8129, each reopened: 0 failed
+232 cuts of record 15, at bytes 6778 to 7009, each reopened: 0 failed
 ```
 
 ## 4. Stopped after a record and before its files
@@ -253,9 +253,9 @@ trial balance, period 11 (register root d5d3385424e2…, 4 posting(s) in the reg
 postings: P-0001, P-0002, P-0003, P-0004
 checked (trial-balance@1, decidable, compiled): every posting of period 11 is in it
 wrote reports/TB-11.md
-log: 20 records, 11425 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 11425 bytes, and the checkpoint, 14196 bytes
-last record: 20 (open), bytes 10585 to 11425
+log: 20 records, 9645 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 9645 bytes, and the checkpoint, 14197 bytes
+last record: 20 (open), bytes 9124 to 9645
 checkpoint: the world after record 20
 world 0329e714cb13e55f: replayed from genesis
 world 0329e714cb13e55f: the checkpoint and the records after it
@@ -278,10 +278,10 @@ cd ../gap && obend log
 ```
 
 ```text
-log: 2 records, 1208 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 10965 bytes, and the checkpoint, 14196 bytes
-last record: 2 (open), bytes 821 to 1208
-torn tail: 9757 bytes after record 2, dropped (link: it does not follow the record before it)
+log: 2 records, 1038 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 9185 bytes, and the checkpoint, 14197 bytes
+last record: 2 (open), bytes 821 to 1038
+torn tail: 8147 bytes after record 2, dropped (link: it does not follow the record before it)
 checkpoint: dropped (it does not hold against the log); the world is replayed from genesis
 world 2d9c173f134be93c: replayed from genesis
 world 2d9c173f134be93c: the checkpoint and the records after it
@@ -302,10 +302,10 @@ cd ../gap && obend log
 ```
 
 ```text
-log: 2 records, 1208 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 11425 bytes, and the checkpoint, 14196 bytes
-last record: 2 (open), bytes 821 to 1208
-torn tail: 10217 bytes after record 2, dropped (digest: its turn is not the one its receipt names)
+log: 2 records, 1038 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 9645 bytes, and the checkpoint, 14197 bytes
+last record: 2 (open), bytes 821 to 1038
+torn tail: 8607 bytes after record 2, dropped (digest: its turn is not the one its receipt names)
 checkpoint: the world after record 20
 world 2d9c173f134be93c: replayed from genesis
 world 0329e714cb13e55f: the checkpoint and the records after it
@@ -358,7 +358,7 @@ the torn turn: {"label":"laptop…
 code: 1000
 ---
 # Cash
-last record: 21 (open), bytes 11425 to 11983
+last record: 21 (open), bytes 9645 to 9862
 torn tail: 400 bytes after record 21, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 21
 world 0329e714cb13e55f: replayed from genesis
@@ -423,7 +423,7 @@ echo "the torn turn: $(tail -c 64 .obend/log | head -c 16)…"; head -2 ledger/a
 the torn turn: {"digest":"3036c…
 balance: 100
 pay.json
-last record: 6 (open), bytes 1470 to 1742
+last record: 6 (open), bytes 1415 to 1632
 torn tail: 200 bytes after record 6, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 6
 world 548a2745384f373f: replayed from genesis

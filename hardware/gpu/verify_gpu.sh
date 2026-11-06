@@ -4,14 +4,18 @@
 # Obend.Hardware.Gpu.runProgram.
 #
 #   verify_gpu.sh                 the gate: [1] byte equality of every committed plan, shader and
-#                                 expected.tsv with obend-emit-gpu, [2] every vector of every graph agrees
-#                                 on the device, [3] each planted shader rule makes at least one graph's
+#                                 expected.tsv with obend-emit-gpu (a graph committed as graphs/<g>.sha256
+#                                 instead of a directory is regenerated and its digests compared; the
+#                                 65536-point NTT's plan is too large to commit), [2] every vector of every
+#                                 graph agrees on the device, with the dispatch time per vector printed and
+#                                 not gated, [3] each planted shader rule makes at least one graph's
 #                                 comparison fail, [4] with Mesa's RADV, the final ISA of every stage is
 #                                 extracted under isa/ with its machine code and resource usage
 #                                 (isa_extract.py: one program per stage, at least one 64-bit store)
 #   verify_gpu.sh --plant NAME    only the comparison, on shaders emitted with the planted rule NAME
 #                                 (addAsSub, swapMux); it fails, and says where
 #   verify_gpu.sh --stage N       only stage N of the gate (1-4)
+#   verify_gpu.sh --digest NAME   write graphs/NAME.sha256 from a fresh emission (for a graph kept as a digest)
 #
 # The device: GPU_ADAPTER (a substring of the adapter's name or driver, e.g. radv, "6750", Apple) picks
 # it; unset, the first non-CPU adapter wgpu finds. On Linux, if Mesa's radeon ICD is installed it is
@@ -39,6 +43,25 @@ ADAPTER_ARGS=()
 [[ -n "${GPU_ADAPTER:-}" ]] && ADAPTER_ARGS=(--adapter "${GPU_ADAPTER}")
 
 mapfile -t GRAPHS < <("${EMIT}" list)
+if command -v sha256sum >/dev/null 2>&1; then SHA=(sha256sum); else SHA=(shasum -a 256); fi
+
+# graph_dir NAME : the committed directory, or a fresh emission under WORK for a graph kept as a digest
+graph_dir() {
+  if [[ -d "${SCRIPT_DIR}/graphs/$1" ]]; then
+    echo "${SCRIPT_DIR}/graphs/$1"
+  else
+    [[ -d "${WORK}/emit/$1" ]] || "${EMIT}" "$1" --out "${WORK}/emit/$1" >/dev/null
+    echo "${WORK}/emit/$1"
+  fi
+}
+
+if [[ "${1:-}" == "--digest" ]]; then
+  g="${2:?--digest NAME}"
+  "${EMIT}" "${g}" --out "${WORK}/digest/${g}" | sed 's/^/  /'
+  (cd "${WORK}/digest/${g}" && "${SHA[@]}" expected.tsv plan.json stage_*.wgsl) > "${SCRIPT_DIR}/graphs/${g}.sha256"
+  echo "[PASS] wrote graphs/${g}.sha256"
+  exit 0
+fi
 
 # run_graph DIR : the device against expected.tsv; output in RUN_OUT, status in RUN_RC
 run_graph() {
@@ -75,9 +98,21 @@ if run_stage 1; then
 echo "=== [1/4] byte equality: committed plan, shaders and expected.tsv == obend-emit-gpu ==="
 "${EMIT}" all --out "${WORK}/emit" | sed 's/^/  /'
 for g in "${GRAPHS[@]}"; do
-  if ! diff -r "${WORK}/emit/${g}" "${SCRIPT_DIR}/graphs/${g}" >"${WORK}/diff.txt"; then
-    echo "[FAIL] graphs/${g} differs from \`obend-emit-gpu ${g}\` (regenerate; do not hand-edit)" >&2
-    head -20 "${WORK}/diff.txt" >&2
+  if [[ -d "${SCRIPT_DIR}/graphs/${g}" ]]; then
+    if ! diff -r "${WORK}/emit/${g}" "${SCRIPT_DIR}/graphs/${g}" >"${WORK}/diff.txt"; then
+      echo "[FAIL] graphs/${g} differs from \`obend-emit-gpu ${g}\` (regenerate; do not hand-edit)" >&2
+      head -20 "${WORK}/diff.txt" >&2
+      exit 1
+    fi
+  elif [[ -f "${SCRIPT_DIR}/graphs/${g}.sha256" ]]; then
+    if ! (cd "${WORK}/emit/${g}" && "${SHA[@]}" -c --quiet "${SCRIPT_DIR}/graphs/${g}.sha256" >"${WORK}/diff.txt" 2>&1); then
+      echo "[FAIL] graphs/${g}.sha256 differs from \`obend-emit-gpu ${g}\` (verify_gpu.sh --digest ${g}; do not hand-edit)" >&2
+      head -20 "${WORK}/diff.txt" >&2
+      exit 1
+    fi
+    echo "  ${g}: digests identical (kept as graphs/${g}.sha256)"
+  else
+    echo "[FAIL] graphs/${g}: neither a directory nor a digest is committed" >&2
     exit 1
   fi
 done
@@ -87,7 +122,7 @@ fi
 if run_stage 2; then
 echo "=== [2/4] the device against runProgram ==="
 for g in "${GRAPHS[@]}"; do
-  run_graph "${SCRIPT_DIR}/graphs/${g}"
+  run_graph "$(graph_dir "${g}")"
   echo "${RUN_OUT}" | sed 's/^/  /'
   if (( RUN_RC != 0 )); then
     echo "[FAIL] ${g}: $(cat "${WORK}/run.err")" >&2
@@ -122,10 +157,11 @@ else
   mkdir -p "${SCRIPT_DIR}/isa"
   adapter="$(echo "${probe}" | head -1 | sed 's/ type=.*//')"
   for g in "${GRAPHS[@]}"; do
-    RADV_DEBUG=shaders,shaderstats "${RUN}" "${SCRIPT_DIR}/graphs/${g}" --adapter radv >/dev/null 2>"${WORK}/isa-${g}.txt" || {
+    dir="$(graph_dir "${g}")"
+    RADV_DEBUG=shaders,shaderstats "${RUN}" "${dir}" --adapter radv >/dev/null 2>"${WORK}/isa-${g}.txt" || {
       echo "[FAIL] ${g} under RADV_DEBUG=shaders" >&2; exit 1; }
     echo "  ${g}:"
-    python3 -I "${SCRIPT_DIR}/isa_extract.py" "${WORK}/isa-${g}.txt" "${SCRIPT_DIR}/graphs/${g}/plan.json" \
+    python3 -I "${SCRIPT_DIR}/isa_extract.py" "${WORK}/isa-${g}.txt" "${dir}/plan.json" \
       "${SCRIPT_DIR}/isa/${g}.txt" "${adapter}" || exit 1
   done
 fi
