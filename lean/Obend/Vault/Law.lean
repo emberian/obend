@@ -277,6 +277,15 @@ def fieldLabelConsts (f : String) : LawExpr → List String
   | .and l r | .or l r | .implies l r => fieldLabelConsts f l ++ fieldLabelConsts f r
   | _ => []
 
+/-- The fields a law compares the field `f` with (`new.on == new.base`): their labels are values to try
+for `f` (2026-11-06: a proposal on the wrong base was told "another `state:` value would pass", the
+premise, not "the line `on: "751b497"` would pass"). -/
+def fieldLabelPeers (f : String) : LawExpr → List String
+  | .eqR (.field g) (.field h) => if g == f then [h] else if h == f then [g] else []
+  | .not e => fieldLabelPeers f e
+  | .and l r | .or l r | .implies l r => fieldLabelPeers f l ++ fieldLabelPeers f r
+  | _ => []
+
 /-- The constants a law mentions. -/
 def lawConsts : LawExpr → List Int
   | .eqC _ v | .leC _ v => [v]
@@ -333,8 +342,10 @@ def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (fron
   let labelFound := fields.findSome? fun f =>
     match labelAt new f with
     | some cur =>
-      match (fieldLabelConsts f e ++ ((old.bind (labelAt · f)).toList)).eraseDups.find? fun v =>
-          v != cur && e.denote facts old (setLabel new f v) with
+      match (fieldLabelConsts f e ++ (fieldLabelPeers f e).filterMap (labelAt new ·) ++
+          ((old.bind (labelAt · f)).toList)).eraseDups.find? fun v =>
+          -- never the unset label: "the line `on: ` would pass" unsets the field, it names no value
+          v != cur && v != "" && e.denote facts old (setLabel new f v) with
       | some v => some (f, cur, some v)
       | none =>
         -- no named label passes, but some value would: the law asks for the line, not for a value
