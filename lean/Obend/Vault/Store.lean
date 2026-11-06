@@ -654,6 +654,40 @@ structure LinkRefusal where
   law : String
   reason : String
 
+/-- **One judgment**: the laws `lin` of the page `pkg`, compiled for the state type `S`, on the old
+and new states and the request. Every judgment of a write is one of these: the page's own laws on
+its old and new states (`Prepared.call`), and a page's laws over links at a page it links to, on that
+page's state as both (`linkCall`, `linked`). -/
+structure JudgeCall where
+  S : Obend.Core.Ty.Ty
+  pkg : String
+  lin : List (String × LawExpr)
+  o : Obend.Core.Data.Data
+  n : Obend.Core.Data.Data
+  rq : Obend.Core.Data.Data
+  /-- the old state is the new (a law over links judges the linked page as it is) -/
+  linked : Bool
+
+/-- The term a judgment runs: the effective law applied to the states and the request. -/
+def JudgeCall.term (c : JudgeCall) : Obend.Core.Term.Term :=
+  Obend.Law.applyLaw (Obend.Law.effective (compiled c.S c.pkg c.lin)) c.o c.n c.rq
+
+/-- The verdict of a judgment (`judge`). -/
+def JudgeCall.verdict (c : JudgeCall) : Verdict := judge c.S c.pkg c.lin c.o c.n c.rq
+
+/-- **A judgment runs its term**: where the states fit the laws and the compiled laws are closed, the
+verdict is what a run of `c.term` reaches. -/
+theorem JudgeCall.verdict_runs (c : JudgeCall)
+    (hfit : c.lin.all (fun p => Obend.Spec.LawCompile.Fits c.S p.2 c.o && Obend.Spec.LawCompile.Fits c.S p.2 c.n) = true)
+    (hcl : (compiled c.S c.pkg c.lin).all (fun p => Obend.Law.closedB p.2) = true) :
+    c.verdict = readVerdict (Obend.Law.run lawFuel c.term) := by
+  simp [JudgeCall.verdict, JudgeCall.term, judge, hfit, hcl]
+
+/-- The judgment of the laws over links `lin` of the page `pkg` at a page of state `d`: the state
+restated for the laws (`rekey`), as old and new. -/
+def linkCall (pkg : String) (lin : List (String × LawExpr)) (d rq : Obend.Core.Data.Data) : JudgeCall :=
+  ⟨(rekey lin d).1, pkg, lin, (rekey lin d).2, (rekey lin d).2, rq, true⟩
+
 /-- Judge the laws over links `lin` (named under `pkg`) at each page of `cells`, on the state `store`
 holds for it: the first refusal, if any. A page the store has no state for cannot be judged and is
 refused as such. -/
@@ -664,11 +698,10 @@ def judgeLinksIn (store : VaultStore) (pkg : String) (lin : List (String × LawE
     match store c with
     | none => some ⟨c, none, "", "the linked page " ++ c ++ " has no version to judge"⟩
     | some d =>
-      let (S, n) := rekey lin d
-      match judge S pkg lin n n rq with
+      match (linkCall pkg lin d rq).verdict with
       | .admitted => judgeLinksIn store pkg lin rq rest
-      | .refused law why => some ⟨c, some n, law, why⟩
-      | .undecided why => some ⟨c, some n, "", why⟩
+      | .refused law why => some ⟨c, some (linkCall pkg lin d rq).n, law, why⟩
+      | .undecided why => some ⟨c, some (linkCall pkg lin d rq).n, "", why⟩
 
 /-- The store a footprint's pins describe: each pinned page at its observed state. -/
 def Footprint.store (fp : Footprint) : VaultStore := fun c =>
@@ -859,6 +892,38 @@ def overlay (over : List (String × Obend.Core.Data.Data)) (store : VaultStore) 
   | some d => some d
   | none => store c
 
+/-- The judgment of a prepared write's own laws: on its old and new states, under its request. -/
+def Prepared.call (pr : Prepared) : JudgeCall := ⟨pr.S, pr.p.name, pr.lin, pr.o, pr.n, pr.rq, false⟩
+
+/-- The turn a prepared write is: its page from the old state to the new, pinned at the pages it
+cites (as the entries `res` name them), at the states the entries hold. -/
+def Prepared.writeTurnAt (pr : Prepared) (es res : List Entry) : VaultTurn :=
+  writeTurn pr.p.name pr.o pr.n (pinsAt es (citedNames res pr.G')) pr.rq
+
+/-- The store the laws over links of a prepared write are judged on: the store its write turn
+describes, with the pages `over` at the states given. -/
+def Prepared.worldAt (pr : Prepared) (es res : List Entry) (over : List (String × Obend.Core.Data.Data)) :
+    VaultStore :=
+  overlay over (applyTurn (pr.writeTurnAt es res).readPins.store (pr.writeTurnAt es res))
+
+/-- **The judgments of laws over links at a prepared write's page**: each page of `es` linking to it
+with laws over links, those laws at the page's state on the store the write is judged on. These are
+the judgments `judgePrepared` makes of every linking page's laws over links, page by page and in
+order. -/
+def Prepared.theirCalls (pr : Prepared) (es res : List Entry) (over : List (String × Obend.Core.Data.Data)) :
+    List JudgeCall :=
+  es.flatMap fun e =>
+    if e.name != pr.p.name && (linkTargets e.graph).contains pr.p.id then
+      match lawsFor es e.name e.graph with
+      | .ok elaws =>
+        let theirs := linkLaws elaws
+        if theirs.isEmpty then [] else
+        match pr.worldAt es res over pr.p.name with
+        | some d => [linkCall e.name theirs d pr.rq]
+        | none => []
+      | .error _ => []
+    else []
+
 /-- **Judge a prepared write**: its laws on its old and new states, its rows, and the laws over links
 (this page's at the pages it links to, every linking page's at this page), read on the store its
 write turn describes with the pages `over` at the states given (the tip of a turn over several
@@ -870,7 +935,7 @@ def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × 
   let v := p.history.length
   let (laws, occ, S, o, n, facts, rq, lin, poster, who, env) :=
     (pr.laws, pr.occ, pr.S, pr.o, pr.n, pr.facts, pr.rq, pr.lin, pr.poster, pr.who, pr.env)
-  match judge S p.name lin o n rq with
+  match pr.call.verdict with
   | .admitted =>
     -- the laws over rows (`law NAME per ##`): each row the marker begins, in the new version and in
     -- the old, judged on its own measures and its write's (`rowMeasures`); a row of the old version
@@ -903,8 +968,8 @@ def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × 
         | .undecided why => throw ("undecided: " ++ why)
     -- the laws over links, judged through the write's turn: this page's at the pages it links to,
     -- and every linking page's at this page as written
-    let wt := writeTurn p.name o n (pinsAt es (citedNames res G')) rq
-    let world := overlay over (applyTurn wt.readPins.store wt)
+    let wt := pr.writeTurnAt es res
+    let world := pr.worldAt es res over
     let mine := linkLaws laws
     if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq wt.readFootprint) then
       throw (linkRefusalText p.name laws r facts)

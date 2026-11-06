@@ -9,8 +9,9 @@ hold when it comes back, and refuses it by name or lands it as one turn with a r
 
 Every block below is run, in order, by `python3 tests/vault/walkthrough.py --doc tests/vault/FORMS.md`
 (from `lean/`, after `lake build obend`), and what it prints is checked against the block after it.
-`python3 tests/vault/forms_planted.py` builds the binary twice more with the membrane's checks taken
-out, one at a time, and requires this walkthrough to fail both times.
+`python3 tests/vault/forms_planted.py` builds the binary three more times, with one of the membrane's
+checks taken out, or with every judgment counted as checked at capture, and requires this walkthrough
+to fail each time.
 
 ## 1. Alice's vault
 
@@ -90,24 +91,40 @@ pay: a form for bob (read, write on ledger/*)
   to.balance := to.balance + amount
 ```
 
-Every law the kernel will judge a page of the form by (the page's own laws and the laws over its
-links; here `Accounts`' `cap`) is applied, at capture, to that page's state with the hole still in
-it, and checked by the kernel's checker once: the state's `balance` is `100 - amount` at Alice's
-page, and at each page `to` may be, that page's balance plus `amount`. The hole is a declared
-variable of the kernel's own terms (`PartialTyping.hole`); a fill puts a natural for it, and the
-filled law is typed by the derivation this one check returned (`Obend.Vault.Form.checked_once`,
-through `Obend.Core.Proofs.FillTyping.fill_typed`), so no fill is checked again.
+Every judgment a fill of the form will make (each page's own laws, and the laws over links of every
+page linking to it: here `Accounts`' `cap`, at each page the fill may write) is a term of the
+kernel's own language: the law applied to the page's state with the fields a write changes left as
+declared holes (`PartialTyping.hole`: the moved `balance`, and the measures a write moves, such as
+its bytes and its poster), and to the request, a hole too (who signs, the turn, the height). The
+capture and each abstraction check every such term once, and the checks the checker accepts are part
+of the vault's world: made by the turn that captured or abstracted the form, so made the same way by
+every replay of its log. A judgment of a fill runs exactly such a term, filled with the values its
+write holds there and with its request (`Obend.Vault.Form.judge_runs_checked`), and is typed by the
+derivation that one check returned (`Obend.Vault.Form.kept_typed`, through
+`Obend.Core.Proofs.FillTyping.fill_typed`); it is not checked again.
 
 ```sh
 cd alice && obend checked pay
 ```
 
 ```text
-pay: 4 law(s) over its holed states, checked once with amount open:
-  Accounts: cap at ledger/alice (debited)
-  Accounts: cap at ledger/alice (credited)
-  Accounts: cap at ledger/carol (credited)
-  Accounts: cap at ledger/bob (credited)
+pay: 3 law(s) over its holed states, checked once with amount, the request open:
+  Accounts: cap at ledger/alice
+  Accounts: cap at ledger/carol
+  Accounts: cap at ledger/bob
+```
+
+No file stands for a check. A vault that kept them in `.obend/checked/` (as this one once did) would
+take a planted file for the checker's word; here a planted one is never read, and a world read back
+from bytes (a checkpoint, a compacted log) keeps a check only where the checker accepts it again
+(`Obend.Vault.Form.checkedOf`):
+
+```sh
+cd alice && mkdir -p .obend/checked && echo '[]' > .obend/checked/pay.json && obend checked pay | head -1
+```
+
+```text
+pay: 3 law(s) over its holed states, checked once with amount, the request open:
 ```
 
 The form goes to Bob as a file. Nothing of the private page is in it.
@@ -198,6 +215,17 @@ pay: filled by dave: amount = 10, to = ledger/bob
 wrote ../dave.json (intent 45e8764b022b95f9)
 ```
 
+Before anything is judged, Alice can ask what a judgment of Bob's proposal would keep from the
+capture and what it would check now (`obend checked FORM PROPOSAL` judges and lands nothing):
+
+```sh
+cd alice && obend checked pay ../pay.json
+```
+
+```text
+work: laws over the holed states: 2 kept from the capture, 0 checked now, re-checked 0
+```
+
 Anyone can write anything into a file they send back. Dave adds a hop to the chain that grants
 himself the write Bob's reshare withheld:
 
@@ -221,6 +249,17 @@ cd alice && sed -i.bak 's/^law cap: linked.balance <= 100$/&\nlaw floor: not (li
 
 ```text
 Accounts: v2 written
+```
+
+The laws of `Accounts` changed, so the judgments the capture checked are not the ones a fill makes
+now: a judgment of the same proposal checks them now, and keeps none.
+
+```sh
+cd alice && obend checked pay ../pay.json
+```
+
+```text
+work: laws over the holed states: 0 kept from the capture, 4 checked now, re-checked 0
 ```
 
 ## 6. The proposals come back
@@ -332,7 +371,7 @@ pay: landed as one turn over 2 pages by bob, receipt 2f06af57e712e4d3 (1 in the 
 rendered ledger/alice.md
 rendered ledger/carol.md
 work: performed 1, retained 1 of 1
-work: laws over the holed states: 2 kept from the capture, 2 checked now, re-checked 0
+work: laws over the holed states: 0 kept from the capture, 4 checked now, re-checked 0
 ---
 balance: 60
 ---
