@@ -59,7 +59,8 @@ yosys_smt2() {  # $1 = .sv, $2 = out .smt2
 # width W, in both halves, becomes the same free function |lec_mul_W|. An `unsat` there is a proof
 # for every interpretation of multiplication, so for the real one; z3 then needs only to see that the
 # two sides multiply equal operands, not to bit-blast two multipliers. A `sat` there is reported as
-# undecided, never as a pass. Sets `verdict` (unsat, sat, undecided or z3's own words), `answer` (z3's
+# undecided, never as a pass; so is a timeout of this second query, which has no limit unless
+# LEC_ABS_SECS is set (the square gate's tooth sets it). Sets `verdict` (unsat, sat, undecided or z3's own words), `answer` (z3's
 # whole output) and `how`; `$3` = 1 keeps the counterexample query.
 decide() {  # $1 = yosys .smt2, $2 = lean half, $3 = with get-value (0/1)
   local lean="${work}/lean.smt2"
@@ -71,9 +72,9 @@ decide() {  # $1 = yosys .smt2, $2 = lean half, $3 = with get-value (0/1)
   perl -pe 's/\(bvmul \(\(_ sign_extend 64\)/(|lec_mul_128| ((_ sign_extend 64)/g; s/\(bvmul /(|lec_mul_64| /g' "${lean}" > "${work}/abs.lean.smt2"
   answer="$( { grep -ohE 'lec_mul_[0-9]+' "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2" | sort -u \
                | sed -E 's/lec_mul_([0-9]+)/(declare-fun |&| ((_ BitVec \1) (_ BitVec \1)) (_ BitVec \1))/'
-             cat "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2"; } | "${Z3}" -in 2>&1 || true)"
+             cat "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2"; } | "${Z3}" ${LEC_ABS_SECS:+-T:"${LEC_ABS_SECS}"} -in 2>&1 || true)"
   how="multiplication uninterpreted"; verdict="$(head -1 <<< "${answer}")"
-  if [[ "${verdict}" == "sat" ]]; then verdict="undecided"; fi
+  if [[ "${verdict}" == "sat" || "${verdict}" == "timeout" || "${verdict}" == "unknown" ]]; then verdict="undecided"; fi
 }
 
 # 2. LEC of the emitted SV against Lean's model
