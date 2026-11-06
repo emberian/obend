@@ -83,7 +83,7 @@ def specMetaRow : Ty :=
   .field "declared" (.field "name" .label (.field "interface" .label (.field "claims" (.variable claimsVariable) .emptyRow)))
     (.field "composed" composedPayload (.field "extension" .emptyRow .emptyRow))
 def metaAssumptions : Assumptions :=
-  ⟨[(claimsVariable, .variant specClaimsRow), (metaVariable, .variant specMetaRow)], [claimsVariable, metaVariable], []⟩
+  ⟨[(claimsVariable, .variant specClaimsRow), (metaVariable, .variant specMetaRow)], [claimsVariable, metaVariable], [], []⟩
 
 def extTy (T : Ty) : Ty := .arrow .reusable .unrestricted T (.arrow .reusable .unrestricted T T)
 def specTy (T : Ty) : Ty := .specification (.variable metaVariable) (extTy T)

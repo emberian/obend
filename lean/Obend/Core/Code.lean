@@ -527,7 +527,7 @@ quotation carries them exactly; the assumptions are carried so that an importer 
 quotation checked under another theory, by name. Lists are `Syntax` lists (`listData`). -/
 
 open Obend.Core.Ty (Ty Quantity Reuse LambdaAnnotation Context Binding)
-open Obend.Core.Check (Assumptions AnnotatedTerm Checked PartialTyping)
+open Obend.Core.Check (Assumptions AnnotatedTerm Checked PartialTyping HoleDecl)
 open Obend.Core.Bidirectional (CheckRefusal checkAgainst checkAgainst_sound)
 open Obend.Elab.Work (checkWork)
 open Obend.Core.Proofs.BidirectionalCompleteness (AnnotationTree treeAnnotations)
@@ -678,18 +678,37 @@ def naturalOf : Data → Option Nat
   | .natural n => some n
   | _ => none
 
+def bindingData (b : Binding) : Data := .record [("type", tyData b.type), ("quantity", quantityData b.quantity)]
+def bindingOf : Data → Option Binding
+  | .record [("type", ty), ("quantity", q)] => do pure ⟨← tyOf ty, ← quantityOf q⟩
+  | _ => none
+theorem bindingOf_bindingData (b : Binding) : bindingOf (bindingData b) = some b := by
+  simp [bindingData, bindingOf, tyOf_tyData, quantityOf_quantityData]
+
+/-- A declared hole: its number, the context its fillers are checked in, and their type. -/
+def holeEntryData (e : Nat × HoleDecl) : Data :=
+  .record [("index", .natural e.1), ("context", listWith bindingData e.2.context), ("type", tyData e.2.type)]
+def holeEntryOf : Data → Option (Nat × HoleDecl)
+  | .record [("index", .natural i), ("context", c), ("type", ty)] => do
+      pure (i, ⟨← listOfWith bindingOf c, ← tyOf ty⟩)
+  | _ => none
+theorem holeEntryOf_holeEntryData (e : Nat × HoleDecl) : holeEntryOf (holeEntryData e) = some e := by
+  simp [holeEntryData, holeEntryOf, listOfWith_listWith bindingOf bindingData bindingOf_bindingData, tyOf_tyData]
+
 def assumptionsData (θ : Assumptions) : Data :=
   .record [("bounds", listWith boundData θ.bounds),
     ("shareableVariables", listWith Data.natural θ.shareableVariables),
-    ("rigid", listWith Data.natural θ.rigid)]
+    ("rigid", listWith Data.natural θ.rigid), ("holes", listWith holeEntryData θ.holes)]
 def assumptionsOf : Data → Option Assumptions
-  | .record [("bounds", b), ("shareableVariables", s), ("rigid", r)] => do
-      pure ⟨← listOfWith boundOf b, ← listOfWith naturalOf s, ← listOfWith naturalOf r⟩
+  | .record [("bounds", b), ("shareableVariables", s), ("rigid", r), ("holes", h)] => do
+      pure ⟨← listOfWith boundOf b, ← listOfWith naturalOf s, ← listOfWith naturalOf r,
+        ← listOfWith holeEntryOf h⟩
   | _ => none
 theorem assumptionsOf_assumptionsData (θ : Assumptions) :
     assumptionsOf (assumptionsData θ) = some θ := by
   simp [assumptionsData, assumptionsOf, listOfWith_listWith boundOf boundData boundOf_boundData,
-    listOfWith_listWith naturalOf Data.natural (fun _ => rfl)]
+    listOfWith_listWith naturalOf Data.natural (fun _ => rfl),
+    listOfWith_listWith holeEntryOf holeEntryData holeEntryOf_holeEntryData]
 
 /-! ## §5b. The schema: every rule of every codec, and the checker's edition
 
@@ -860,11 +879,23 @@ theorem bound_conforms (b : Nat × Ty) : boundData b = byTable boundRules (0, [.
   simp [boundData, byTable, ruleOf, boundRules, fill, fillFields, hole]
 
 def assumptionsRules : List Data :=
-  [.record [("bounds", hole 0), ("shareableVariables", hole 1), ("rigid", hole 2)]]
+  [.record [("bounds", hole 0), ("shareableVariables", hole 1), ("rigid", hole 2), ("holes", hole 3)]]
 theorem assumptions_conforms (θ : Assumptions) :
     assumptionsData θ = byTable assumptionsRules (0, [listWith boundData θ.bounds,
-      listWith Data.natural θ.shareableVariables, listWith Data.natural θ.rigid]) := by
+      listWith Data.natural θ.shareableVariables, listWith Data.natural θ.rigid,
+      listWith holeEntryData θ.holes]) := by
   simp [assumptionsData, byTable, ruleOf, assumptionsRules, fill, fillFields, hole]
+
+/-- A declared hole (rule 0) and a binding of its context (rule 1). -/
+def holeRules : List Data :=
+  [.record [("index", hole 0), ("context", hole 1), ("type", hole 2)],
+    .record [("type", hole 0), ("quantity", hole 1)]]
+theorem holeEntry_conforms (e : Nat × HoleDecl) :
+    holeEntryData e = byTable holeRules (0, [.natural e.1, listWith bindingData e.2.context, tyData e.2.type]) := by
+  simp [holeEntryData, byTable, ruleOf, holeRules, fill, fillFields, hole]
+theorem binding_conforms (b : Binding) :
+    bindingData b = byTable holeRules (1, [tyData b.type, quantityData b.quantity]) := by
+  simp [bindingData, byTable, ruleOf, holeRules, fill, fillFields, hole]
 
 /-- A kind at a version: what a quotation pins of each kind its types name. -/
 def kindVersionData (kv : Obend.Kind.KindVersion) : Data :=
@@ -892,7 +923,8 @@ theorem versioned_conforms (v : Nat) (body : Data) :
 /-- **The checker's edition**: the typing rules a quotation was checked by. A reader re-reads a
 quotation as it was checked only under this edition; under another it may recheck it (a migration,
 by its own judgment), never replay it. Bumped with every change to what `checkAgainst` accepts. -/
-def checkerEdition : String := "obend-core4-bidirectional/2026-11-01 (C1: kinds nominal by brand; C2: the record destructor)"
+def checkerEdition : String :=
+  "obend-core4-bidirectional/2026-11-06 (C1: kinds nominal by brand; C2: the record destructor; C3: declared holes)"
 
 /-- A schema: the edition and every codec table, in a fixed order. -/
 structure Schema where
@@ -909,6 +941,7 @@ structure Schema where
   tree : List Data
   bound : List Data
   assumptions : List Data
+  hole : List Data
   kindVersion : List Data
   held : List Data
   versioned : List Data
@@ -916,12 +949,12 @@ structure Schema where
 /-- This edition's schema. -/
 def schema : Schema :=
   ⟨checkerEdition, primitiveRules, tagRules, shapeRules, listRules, quantityRules, reuseRules, tyRules,
-    annotationRules, optionRules, treeRules, boundRules, assumptionsRules, kindVersionRules, heldRules,
+    annotationRules, optionRules, treeRules, boundRules, assumptionsRules, holeRules, kindVersionRules, heldRules,
     versionedRules⟩
 
 def Schema.tables (s : Schema) : List (List Data) :=
   [s.primitive, s.tag, s.shape, s.list, s.quantity, s.reuse, s.ty, s.annotation, s.option, s.tree,
-    s.bound, s.assumptions, s.kindVersion, s.held, s.versioned]
+    s.bound, s.assumptions, s.hole, s.kindVersion, s.held, s.versioned]
 
 /-- A schema as data: its edition, then its tables. -/
 def schemaData (s : Schema) : Data :=
@@ -930,7 +963,8 @@ def schemaData (s : Schema) : Data :=
 def schemaOf : Data → Option Schema
   | .record [("edition", .label e), ("tables", ts)] => do
       match (← listOfWith listOf ts) with
-      | [p, t, sh, l, q, r, ty, a, o, tr, b, th, kv, h, v] => pure ⟨e, p, t, sh, l, q, r, ty, a, o, tr, b, th, kv, h, v⟩
+      | [p, t, sh, l, q, r, ty, a, o, tr, b, th, ho, kv, h, v] =>
+        pure ⟨e, p, t, sh, l, q, r, ty, a, o, tr, b, th, ho, kv, h, v⟩
       | _ => none
   | _ => none
 
@@ -1105,14 +1139,14 @@ inductive NoHole : Term → Prop where
   | done {value : Term} : NoHole value → NoHole (.done value)
   | split {t f : Term} {names : List String} : NoHole t → NoHole f → NoHole (.split t names f)
 
-/-- A typed term has no hole: `PartialTyping` has no rule for one. -/
+/-- A term typed with no hole declared has no hole: `PartialTyping.hole` types only declared ones. -/
 theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : Obend.Core.Ty.Uses}
-    (typed : PartialTyping θ Γ t A u) : NoHole t := by
+    (typed : PartialTyping θ Γ t A u) (closed : θ.holes = []) : NoHole t := by
   refine PartialTyping.rec
     (motive_1 := fun _ term _ _ _ => NoHole term)
     (motive_2 := fun _ fields _ _ _ => ∀ field ∈ fields, NoHole field.2)
     (motive_3 := fun _ _ arms _ _ _ _ => ∀ arm ∈ arms, NoHole arm.2)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; exact .bound _
   · intros; exact .natural _
   · intros; exact .boolean _
@@ -1139,6 +1173,8 @@ theorem typed_noHole {θ : Assumptions} {Γ : Context} {t : Term} {A : Ty} {u : 
   · intros; exact .done (by assumption)
   · intros; exact .case (by assumption) (by assumption)
   · intros; rename_i h1 h2; exact .split h1 h2
+  · intro _ n _ _ _ found _ _ _ _ _
+    rw [closed] at found; cases found
   · intro _ field member; simp at member
   · intro _ name body rest type row bu ru hb hr _ ihb ihr field member
     simp only [List.mem_cons] at member
@@ -1349,10 +1385,10 @@ theorem import_scoped {r : Reader} {Ψ : Context} {A : Ty} {θ : Assumptions} {d
     {c : Code Ψ A θ} (_ : importWith r Ψ A θ d = .ok c) :
     Obend.Core.Invariant.Scoped Ψ.length c.val.term := code_scoped c
 
-/-- Holes are never code (orientation §8.2). -/
+/-- Holes are never code (orientation §8.2): code is checked under valid assumptions, which declare none. -/
 theorem code_noHole {Ψ : Context} {A : Ty} {θ : Assumptions} (c : Code Ψ A θ) : NoHole c.val.term := by
   obtain ⟨_, k, _⟩ := c.2
-  exact typed_noHole k.derivation
+  exact typed_noHole k.derivation (Obend.Core.Check.Assumptions.valid_holes k.assumptionsValid)
 
 /-- **`splice_scoped`** (T8's second half): hypotheses `Scoped |Ψ|` substituted by fillings
 `Scoped |Ψ′|` give a term `Scoped |Ψ′|`. -/
@@ -1521,7 +1557,8 @@ theorem import_holeInCode (r : Reader) {Ψ : Context} (A : Ty) {θ : Assumptions
     importWith r Ψ A θ (quotation r.version held) = .error (.holeInCode found.1 found.2) := by
   have refused : ∀ k, checkAgainst held.annotated Ψ A ≠ .ok k := by
     intro k accepted
-    rw [noHole_holeOf (typed_noHole (accepted_typed accepted))] at hole
+    rw [noHole_holeOf (typed_noHole (accepted_typed accepted)
+      (Obend.Core.Check.Assumptions.valid_holes k.assumptionsValid))] at hole
     cases hole
   obtain ⟨e, he⟩ := checkHeld_refused hθ refused
   rw [import_reads, pinsAgainst_held pins]

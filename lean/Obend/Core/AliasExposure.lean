@@ -205,27 +205,27 @@ theorem expose_computation_alias (assumptions : Assumptions) (index : Nat) (body
   split <;> simp_all
 
 theorem computation_alias_refused_probe :
-    expose ⟨[(0, .computation .emptyRow .natural .natural)], [], []⟩ (.variable 0) =
+    expose ⟨[(0, .computation .emptyRow .natural .natural)], [], [], []⟩ (.variable 0) =
       .nominal 0 := by
   simp [expose, exposeWalk, Assumptions.alias, constructorHead, cycleRepresentative, Ty.isComputation, List.lookup]
 
 theorem productive_alias_probe :
-    expose ⟨[(0, .arrow .once .affine (.variable 0) .natural)], [], []⟩ (.variable 0) =
+    expose ⟨[(0, .arrow .once .affine (.variable 0) .natural)], [], [], []⟩ (.variable 0) =
       .constructor ⟨.arrow .once .affine, [.variable 0, .natural]⟩ := by
   simp [expose, exposeWalk, Assumptions.alias, constructorHead, cycleRepresentative, Ty.isComputation, List.lookup]
 
 theorem unproductive_cycle_probe :
-    expose ⟨[(0, .variable 1), (1, .variable 0)], [], []⟩ (.variable 0) =
+    expose ⟨[(0, .variable 1), (1, .variable 0)], [], [], []⟩ (.variable 0) =
       .unproductive 0 := by
   simp [expose, exposeWalk, Assumptions.alias, constructorHead, cycleRepresentative, Ty.isComputation, List.lookup]
 
 theorem unproductive_cycle_same_class_probe :
-    expose ⟨[(0, .variable 1), (1, .variable 0)], [], []⟩ (.variable 1) =
+    expose ⟨[(0, .variable 1), (1, .variable 0)], [], [], []⟩ (.variable 1) =
       .unproductive 0 := by
   simp [expose, exposeWalk, Assumptions.alias, constructorHead, cycleRepresentative, Ty.isComputation, List.lookup]
 
 theorem cycle_prefix_probe :
-    expose ⟨[(0, .variable 2), (2, .variable 3), (3, .variable 2)], [], []⟩ (.variable 0) =
+    expose ⟨[(0, .variable 2), (2, .variable 3), (3, .variable 2)], [], [], []⟩ (.variable 0) =
       .unproductive 2 := by
   simp [expose, exposeWalk, Assumptions.alias, constructorHead, cycleRepresentative, Ty.isComputation, List.lookup]
 

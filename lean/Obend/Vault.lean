@@ -25,6 +25,8 @@ its frontmatter lines), the members and their grants.
 * `Obend.Vault.Form` — a captured membrane as a form: holes for data, a residual, a fill as a
   proposal the kernel judges through `commit` (`admit_no_amplification`, `eval_fill_eq_subst_residual`,
   `admit_conserves_total`).
+* `Obend.Vault.FormCheck` — a law over a form's holed state, checked by the kernel's checker once at
+  capture, each fill typed by that check through the fill lemma (`checked_once`).
 * `Obend.Vault.Transport` — a form out in the world, carried across changes of its context:
   consumer-relative equality (value, support, authority; `effect_fresh_display_fresh`), the fresh
   capture and what it admits (`admitsAt_recapture`, `judge_recapture_iff`), a continuity contract and
@@ -70,6 +72,7 @@ public import Obend.Vault.Projection
 public import Obend.Vault.Mandate
 public import Obend.Vault.Rehydration
 public import Obend.Vault.Form
+public import Obend.Vault.FormCheck
 public import Obend.Vault.Carry
 public import Obend.Vault.DragonsExchange
 public import Obend.Vault.HardwareProjection

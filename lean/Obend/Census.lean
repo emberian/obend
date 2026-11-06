@@ -147,6 +147,7 @@ import Obend.Core.EquiRecursiveSubstitutionTransport
 import Obend.Core.Extensions
 import Obend.Core.FieldCongruence
 import Obend.Core.Fill
+import Obend.Core.Proofs.FillTyping
 import Obend.Core.FilteredStream
 import Obend.Core.FilteredStreamCompleteness
 import Obend.Core.FilteredStreamSoundness
@@ -591,6 +592,7 @@ import Obend.Vault.Cli
 import Obend.Vault.DragonsExchange
 import Obend.Vault.Escrow
 import Obend.Vault.Form
+import Obend.Vault.FormCheck
 import Obend.Vault.HardwareProjection
 import Obend.Vault.Hyperedge
 import Obend.Vault.Json

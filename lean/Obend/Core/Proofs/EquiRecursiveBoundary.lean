@@ -9,7 +9,7 @@ namespace Obend.Core.Proofs.EquiRecursiveBoundary
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional
 set_option autoImplicit false
 
-@[expose] public def natAlias : Assumptions := ⟨[(0, .natural)], [], []⟩
+@[expose] public def natAlias : Assumptions := ⟨[(0, .natural)], [], [], []⟩
 @[expose] public def identityTerm : Term := .lam (.bound 0)
 @[expose] public def naturalArrow : Ty := .arrow .reusable .unrestricted .natural .natural
 @[expose] public def aliasDomainArrow : Ty := .arrow .reusable .unrestricted (.variable 0) .natural

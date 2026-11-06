@@ -106,7 +106,7 @@ public inductive UsesLE : Uses → Uses → Prop
 @[expose] public def linearContext : Context := [⟨.natural, .unrestricted⟩, ⟨.natural, .linear⟩]
 
 @[expose] public def sumRow : Ty := .field "l" .natural .emptyRow
-@[expose] public def sumAssumptions : Assumptions := ⟨[(0, .variant sumRow)], [], []⟩
+@[expose] public def sumAssumptions : Assumptions := ⟨[(0, .variant sumRow)], [], [], []⟩
 @[expose] public def aliasFilling : AnnotatedTerm :=
   ⟨.inject "l" (.nat 1), fun p => if p = [] then some ⟨.natural, .variable 0, .unrestricted, .reusable⟩ else none,
     sumAssumptions⟩
