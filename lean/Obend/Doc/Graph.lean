@@ -256,6 +256,119 @@ theorem not_before_of_closed {G : Graph} {a b : AtomId} (hc : G.Closed (G.cone a
     (h : G.beforeB a b = false) : ¬ G.Before a b := fun hb => by
   rw [beforeB_complete hc hb] at h; cases h
 
+/-! ### The cone, computed from its frontier
+
+`coneN` grows the whole set by every edge at every step, keeping repeats: on a page of `E` edges it
+does `E` steps over a list that can reach `E²` entries. `coneFrom` grows only from the atoms the last
+step added, keeps no repeats, and stops when a step adds nothing. It holds the same atoms
+(`mem_coneFrom`), so `beforeB` is compiled as it (`beforeB_eq_fast`, `@[csimp]`). -/
+
+/-- The successors of `fr` that `seen` does not hold, without repeats. -/
+@[expose] def fresh (G : Graph) (seen fr : List AtomId) : List AtomId :=
+  ((fr.flatMap G.succs).filter fun y => !seen.contains y).eraseDups
+
+/-- `n` steps of the cone from `seen`, growing from its frontier `fr`. -/
+@[expose] def coneFrom (G : Graph) : Nat → List AtomId → List AtomId → List AtomId
+  | 0, seen, _ => seen
+  | n + 1, seen, fr =>
+    let new := G.fresh seen fr
+    if new.isEmpty then seen else G.coneFrom n (seen ++ new) new
+
+/-- The decided order, from the frontier. -/
+@[expose] def beforeBFast (G : Graph) (a b : AtomId) : Bool :=
+  (G.coneFrom G.edges.length (G.succs a) (G.succs a)).contains b
+
+theorem mem_fresh {G : Graph} {seen fr : List AtomId} {y : AtomId} :
+    y ∈ G.fresh seen fr ↔ y ∉ seen ∧ ∃ f ∈ fr, G.edge f y = true := by
+  simp only [fresh, List.mem_eraseDups, List.mem_filter, List.mem_flatMap, mem_succs,
+    Bool.not_eq_true']
+  constructor
+  · rintro ⟨⟨f, hf, he⟩, hn⟩
+    refine ⟨fun hm => ?_, f, hf, he⟩
+    rw [List.contains_iff_mem.2 hm] at hn
+    exact Bool.noConfusion hn
+  · rintro ⟨hn, f, hf, he⟩
+    exact ⟨⟨f, hf, he⟩, Bool.eq_false_iff.2 fun h => hn (List.contains_iff_mem.1 h)⟩
+
+/-- The cone's atoms depend only on the atoms it starts from. -/
+theorem coneN_congr {G : Graph} : ∀ (n : Nat) {S T : List AtomId}, (∀ y, y ∈ S ↔ y ∈ T) →
+    ∀ y, y ∈ G.coneN n S ↔ y ∈ G.coneN n T
+  | 0, _, _, h => h
+  | n + 1, S, T, h => coneN_congr n (S := G.grow S) (T := G.grow T) fun y => by
+      simp only [mem_grow, h]
+
+/-- A set closed under the edges is its own cone. -/
+theorem coneN_closed {G : Graph} {S : List AtomId} (hc : ∀ x ∈ S, ∀ y, G.edge x y = true → y ∈ S) :
+    ∀ (n : Nat) y, y ∈ G.coneN n S ↔ y ∈ S
+  | 0, _ => Iff.rfl
+  | n + 1, y => by
+      have hg : ∀ z, z ∈ G.grow S ↔ z ∈ S := fun z => by
+        rw [mem_grow]
+        exact ⟨fun h => h.elim id fun ⟨x, hx, he⟩ => hc x hx z he, .inl⟩
+      show y ∈ G.coneN n (G.grow S) ↔ y ∈ S
+      rw [coneN_congr n hg y]
+      exact coneN_closed hc n y
+
+theorem mem_coneFrom {G : Graph} : ∀ (n : Nat) (seen fr S : List AtomId),
+    (∀ y, y ∈ seen ↔ y ∈ S) → (∀ f ∈ fr, f ∈ S) →
+    (∀ x ∈ S, ∀ y, G.edge x y = true → y ∈ S ∨ ∃ f ∈ fr, G.edge f y = true) →
+    ∀ y, y ∈ G.coneFrom n seen fr ↔ y ∈ G.coneN n S
+  | 0, seen, fr, S, hs, _, _, y => hs y
+  | n + 1, seen, fr, S, hs, hf, hi, y => by
+      simp only [coneFrom]
+      by_cases hn : (G.fresh seen fr).isEmpty
+      · rw [if_pos hn]
+        have he : G.fresh seen fr = [] := List.isEmpty_iff.1 hn
+        have hc : ∀ x ∈ S, ∀ z, G.edge x z = true → z ∈ S := by
+          intro x hx z hxz
+          rcases hi x hx z hxz with h | ⟨f, hfr, hfz⟩
+          · exact h
+          · apply Classical.byContradiction
+            intro hz
+            have : z ∈ G.fresh seen fr := mem_fresh.2 ⟨fun h => hz ((hs z).1 h), f, hfr, hfz⟩
+            rw [he] at this; cases this
+        show y ∈ seen ↔ y ∈ G.coneN n (G.grow S)
+        have hg : ∀ z, z ∈ G.grow S ↔ z ∈ S := fun z => by
+          rw [mem_grow]; exact ⟨fun h => h.elim id fun ⟨x, hx, he⟩ => hc x hx z he, .inl⟩
+        rw [coneN_congr n hg y, coneN_closed hc n y, hs y]
+      · rw [if_neg hn]
+        show y ∈ G.coneFrom n (seen ++ G.fresh seen fr) (G.fresh seen fr) ↔ y ∈ G.coneN n (G.grow S)
+        apply mem_coneFrom n _ _ (G.grow S)
+        · intro z
+          rw [List.mem_append, mem_fresh, mem_grow, hs]
+          constructor
+          · rintro (h | ⟨_, f, hfr, he⟩)
+            · exact .inl h
+            · exact .inr ⟨f, hf f hfr, he⟩
+          · rintro (h | ⟨x, hx, he⟩)
+            · exact .inl h
+            · rcases hi x hx z he with h | ⟨f, hfr, hfz⟩
+              · exact .inl h
+              · by_cases hz : z ∈ S
+                · exact .inl hz
+                · exact .inr ⟨hz, f, hfr, hfz⟩
+        · intro f hfr
+          obtain ⟨_, g, hg, he⟩ := mem_fresh.1 hfr
+          exact mem_grow.2 (.inr ⟨g, hf g hg, he⟩)
+        · intro x hx z hxz
+          by_cases hxS : x ∈ S
+          · exact .inl (mem_grow.2 (.inr ⟨x, hxS, hxz⟩))
+          · right
+            refine ⟨x, ?_, hxz⟩
+            rcases mem_grow.1 hx with h | ⟨s, hsS, hsx⟩
+            · exact absurd h hxS
+            · rcases hi s hsS x hsx with h | ⟨f, hfr, hfx⟩
+              · exact absurd h hxS
+              · exact mem_fresh.2 ⟨fun h => hxS ((hs x).1 h), f, hfr, hfx⟩
+
+/-- **The frontier's cone is the cone**: `beforeB` computed from the frontier. -/
+@[csimp] theorem beforeB_eq_fast : @beforeB = @beforeBFast := by
+  funext G a b
+  simp only [beforeB, beforeBFast, cone]
+  have := mem_coneFrom (G := G) G.edges.length (G.succs a) (G.succs a) (G.succs a)
+    (fun _ => Iff.rfl) (fun _ h => h) (fun x _ y he => .inr ⟨x, by assumption, he⟩) b
+  rw [Bool.eq_iff_iff, List.contains_iff_mem, List.contains_iff_mem, this]
+
 /-! ### Teeth: the decided order on a three-atom page with one fork -/
 
 /-- `1 → 2`, `1 → 3`: 2 and 3 both after 1, unordered. -/

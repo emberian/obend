@@ -12,10 +12,10 @@ set_option maxHeartbeats 4000000
 /-- Without validated environments, a rigid shareability premise can be discharged by a syntactically
 shareable variable whose transparent alias actually exposes custody. -/
 def template : Assumptions :=
-  ⟨[(1,.custody 7)],[0,1],[0]⟩
+  ⟨[(1,.custody 7)],[0,1],[0],[]⟩
 
 def instance_ : Assumptions :=
-  ⟨[(1,.custody 7)],[1],[]⟩
+  ⟨[(1,.custody 7)],[1],[],[]⟩
 
 def substitution (index : Nat) : Ty :=
   if index = 0 then .variable 1 else .variable index
@@ -58,6 +58,7 @@ theorem discharged : Discharges substitution template instance_ 0 where
   pure := by
     intro j
     by_cases zero : j = 0 <;> simp [substitution,zero,Ty.isComputation]
+  holes := by intro n decl found; simp [template] at found
 
 def actual : Ty := .field "a" .natural (.field "a" (.variable 0) .emptyRow)
 def expected : Ty := .field "a" .natural .emptyRow
@@ -103,8 +104,8 @@ theorem discharges_not_substitution_stable :
       Obend.Core.EquiRecursiveAgreement.agrees b (x.instantiate σ) (y.instantiate σ) = false :=
   ⟨substitution,template,instance_,actual,expected,discharged,template_agreement,instance_disagreement⟩
 
-def validTemplate : Assumptions := ⟨[(0,.natural),(1,.variable 1)],[0,1],[0]⟩
-def validInstance : Assumptions := ⟨[(1,.variable 1)],[1],[]⟩
+def validTemplate : Assumptions := ⟨[(0,.natural),(1,.variable 1)],[0,1],[0],[]⟩
+def validInstance : Assumptions := ⟨[(1,.variable 1)],[1],[],[]⟩
 
 theorem valid_discharged : Discharges substitution validTemplate validInstance 0 where
   fixed := by
@@ -153,6 +154,7 @@ theorem valid_discharged : Discharges substitution validTemplate validInstance 0
   pure := by
     intro j
     by_cases zero : j = 0 <;> simp [substitution,zero,Ty.isComputation]
+  holes := by intro n decl found; simp [validTemplate] at found
 
 theorem valid_environments : validTemplate.valid = true ∧ validInstance.valid = true := by decide
 

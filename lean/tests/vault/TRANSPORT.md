@@ -269,6 +269,7 @@ rendered ledger/alice.md
 rendered ledger/carol.md
 wrote ../pay.receipt
 work: performed 1, retained 51 of 51
+work: laws over the holed states: 2 kept from the capture, 1 checked now, re-checked 0
 ```
 
 ## 5. A revision after a published item

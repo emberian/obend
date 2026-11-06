@@ -1,6 +1,7 @@
 module
-/- Inert holes are traversable syntax, and are refused when demanded (the checker refuses one in any
-mode: `Bidirectional.elaborate_refuses_hole`). -/
+/- Inert holes are traversable syntax, and are refused when demanded. The checker types a declared
+hole (`PartialTyping.hole`) and refuses an undeclared one in any mode
+(`Bidirectional.elaborate_refuses_hole`); a program runs with none declared (`Assumptions.valid`). -/
 public import Obend.Core.Check
 public import Obend.Core.Invariant
 public import Obend.Tactic.Cases
