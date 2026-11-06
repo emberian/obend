@@ -1,0 +1,16 @@
+{
+  "graph": "adjoint-square-bilinear",
+  "numWires": 13,
+  "workgroupSize": 64,
+  "consts": ["5","5"],
+  "inputs": [0,1,6],
+  "outputs": [3,12,9],
+  "stages": [
+    {"file":"stage_0.wgsl","threads":1},
+    {"file":"stage_1.wgsl","threads":1},
+    {"file":"stage_2.wgsl","threads":2},
+    {"file":"stage_3.wgsl","threads":1},
+    {"file":"stage_4.wgsl","threads":3},
+    {"file":"stage_5.wgsl","threads":1}
+  ]
+}

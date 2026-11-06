@@ -1,0 +1,15 @@
+{
+  "graph": "allops",
+  "numWires": 11,
+  "workgroupSize": 64,
+  "consts": ["3","-7","-1099511627776"],
+  "inputs": [0,1,2],
+  "outputs": [8,9,10],
+  "stages": [
+    {"file":"stage_0.wgsl","threads":2},
+    {"file":"stage_1.wgsl","threads":2},
+    {"file":"stage_2.wgsl","threads":1},
+    {"file":"stage_3.wgsl","threads":2},
+    {"file":"stage_4.wgsl","threads":1}
+  ]
+}

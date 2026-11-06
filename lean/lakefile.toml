@@ -91,3 +91,11 @@ supportInterpreter = true
 name = "obend-emit-hvm"
 srcDir = "tools/emithvm"
 root = "EmitHvm"
+
+# GPU lane (2026-11-05, rung G1 of review/GPU-PROGRAM-20261105.md): lowers the graphs of `tools/emitgpu`
+# to WGSL compute shaders, one per wavefront stage (`Obend.Hardware.Gpu`), with the plan and expected
+# vectors `hardware/gpu/verify_gpu.sh` runs on the device. `lake build obend-emit-gpu`.
+[[lean_exe]]
+name = "obend-emit-gpu"
+srcDir = "tools/emitgpu"
+root = "EmitGpu"

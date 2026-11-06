@@ -1,0 +1,17 @@
+[package]
+name = "obend-gpu-run"
+version = "0.1.0"
+edition = "2021"
+description = "Runs an obend-emit-gpu plan on a GPU through wgpu and compares every vector with the Lean model's expected outputs (hardware/gpu/verify_gpu.sh)."
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Standalone: not a member of the repository's Cargo workspace, so wgpu is not a dependency of the
+# crates/ build.
+[workspace]
+
+[dependencies]
+wgpu = "27"
+pollster = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

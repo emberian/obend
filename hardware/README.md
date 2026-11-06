@@ -172,5 +172,33 @@ a sum.
 slots `evalBookAt` shows (each probe run on the demand machine) and against the model's own run, and
 requires each planted emitter rule (`--plant swapSwitch`, `--plant addAsSub`; `verify_hvm.sh --plant
 NAME` runs one alone) to make each book's comparison fail. Build `lake build obend-emit-hvm` in
-`lean/` first; HVM2 from `cargo install hvm` or `HVM_BIN`. `hvm run-cu` needs an NVIDIA GPU, which
-none of our machines has.
+`lean/` first; HVM2 from `cargo install hvm` or `HVM_BIN`. `hvm run-cu` needs an NVIDIA GPU; hbox's GPU is
+AMD and HVM2 has no HIP backend, so the CUDA runtime stays unrun here.
+
+## `gpu/`: open hypergraphs on a GPU (rung G1 of `review/GPU-PROGRAM-20261105.md`)
+
+`Obend.Hardware.Gpu` lowers a `StrictOpenHypergraph` to one WGSL compute shader per wavefront stage of
+`layerHypergraph`: thread `i` of stage `k` is hyperedge `i` of that stage, reading the wire buffer as it
+stood at dispatch entry and writing its one destination, with a constant buffer read by index.
+`lowerHypergraphToGpu_sound` says the program equals the 64-bit layered evaluation;
+`runProgram_eq_comb` that an arithmetic graph computes `evalHypergraphComb` modulo `2^64`;
+`runStagePar_eq_runStage` with `lowered_stage_dsts_nodup` that the order-free reading of a dispatch
+(each wire's value is the write of the one thread that owns it) equals the sequential one, which is the
+statement the device's scheduling freedom needs. Nothing a stage reads is written in that stage, so no
+claim about the device's memory model is made or needed; the stages are separate dispatches.
+
+`lean/tools/emitgpu` (`obend-emit-gpu`) writes `gpu/graphs/<graph>/`: `plan.json`, `stage_<k>.wgsl` and
+`expected.tsv` (the model's outputs per vector, signed 64-bit) for nine graphs: the golden diamond, three
+single-op optics, two whole-graph adjoints (`compileGraphAdjoint` of a two-op chain), one graph with
+every operation and wrap-around, a `mux` chain, and a 512-input addition tree whose first stage spans
+four workgroups. `gpu/runner` (`obend-gpu-run`: Rust, wgpu 27, a standalone crate outside the
+workspace) runs a plan on a chosen adapter and compares. `verify_gpu.sh` is the gate: bytes, every
+vector on the device, planted `addAsSub` and `swapMux` caught, and with Mesa's RADV the final ISA of
+every stage extracted to `gpu/isa/<graph>.txt` by `isa_extract.py` (one program per stage, its 64-bit
+stores counted; ACO merges cases, 201 stores for the 256-thread stage). Passed 2026-11-05 on hbox's
+RX 6750 XT under RADV (Mesa 24.2.8, the ISA artifact) and under AMDVLK 2025.Q2.1 (`GPU_ICD=any
+GPU_ADAPTER="AMD open-source"`), and on the Mac's M2 Max under Metal.
+
+Not here: a semantics of the ISA (rung G2 reads the dump against AMD's machine-readable RDNA2 spec), the
+memory model (G4), resource grading (G5), and any graph whose operations are outside `HypergraphOp`;
+the Goldilocks butterfly of `Apps/ZkNtt` needs comparison and shift operations first.

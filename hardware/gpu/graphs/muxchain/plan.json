@@ -1,0 +1,13 @@
+{
+  "graph": "muxchain",
+  "numWires": 8,
+  "workgroupSize": 64,
+  "consts": ["5"],
+  "inputs": [0,1,2,3],
+  "outputs": [4,7],
+  "stages": [
+    {"file":"stage_0.wgsl","threads":1},
+    {"file":"stage_1.wgsl","threads":2},
+    {"file":"stage_2.wgsl","threads":1}
+  ]
+}

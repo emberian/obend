@@ -1,0 +1,11 @@
+{
+  "graph": "optic-mul",
+  "numWires": 9,
+  "workgroupSize": 64,
+  "consts": [],
+  "inputs": [0,1,2],
+  "outputs": [3,4,5],
+  "stages": [
+    {"file":"stage_0.wgsl","threads":3}
+  ]
+}
