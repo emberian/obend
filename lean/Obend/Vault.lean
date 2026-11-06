@@ -36,7 +36,10 @@ its frontmatter lines), the members and their grants.
   `late_correction_refused`.
 * `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, `log`,
   the forms' `capture`, `abstract`, `form`, `fill`, `reshare`, `judge`, and their transport's `offer`,
-  `grant`, `revoke`, `grants`, `transport`, `obligations`, `confirm`, and `forget`, `fork`.
+  `grant`, `revoke`, `grants`, `transport`, `obligations`, `confirm`, and `forget`, `fork`, and the
+  vault's reasons (`Obend.Reasons`): `reasons observe`, `assume`, `withdraw`, `explain`, `defeat`,
+  `propose`, `admit`, `status`, `why`, and a fill's `--because`, which the judge admits only while it
+  is supported.
 * `Obend.Vault.Branch` — offline branches with a base, merged at the tip: the pushout of the two
   sides' disjoint writes (`merge_is_pushout`), clashes kept as conflict states, consent from every
   page in a write's cone (`landed_consents`), authority read where every revocation is visible

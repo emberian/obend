@@ -465,6 +465,7 @@ import Obend.Lower.Syntax
 import Obend.Lower.Transport
 import Obend.Lower.Typing
 import Obend.Main
+import Obend.Reasons
 import Obend.Receipt
 import Obend.Receipt.Cli
 import Obend.Receipt.Export
