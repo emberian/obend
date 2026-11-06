@@ -177,7 +177,7 @@ golden-silicon-kernel`, so the Verilated RTL is checked against Lean's numbers r
   AXI4-Stream the F2 shell does not have and a Tcl flow that cannot produce an AFI. An F2 custom logic is written
   against the HDK on an instance.
 - First physical target: the iCE40 HX1K on an iCEstick (`hardware/ice40/`), with the width-annotated emitted
-  `obend_ice40_mac8` through yosys/nextpnr-ice40/icestorm.
+  `module obend_ice40_mac8` through yosys/nextpnr-ice40/icestorm.
 
 ### 3.2 PDK, DRC, FabuBlox, TCAD, wafer.space, PnR, retiming: documentation until a bitstream exists
 `Obend.Hardware.{DRC,FabuBlox,TcadBridge,WaferSpace,PlaceRoute,Retiming,TapeoutPipeline}` and the `obend hardware
@@ -188,7 +188,7 @@ they quantify over. `obend tapeout` therefore writes no signoff receipt (it refu
 this document should be read as a claim about GF180MCU, Sky130 or SG13G2 signoff.
 
 ### 3.3 An eFPGA bitstream read back and checked against Lean (`hardware/fabulous/`, 2026-11-05)
-The one bitstream in this tree that a theorem is about. `obend_ice40_mac8` is built by FABulous's own flow on the
+The one bitstream in this tree that a theorem is about. `module obend_ice40_mac8` is built by FABulous's own flow on the
 fabric of `hardware/fabulous/fabric.csv` (25 × (`W_IO` + 3 `LUT4AB`)). `Obend.Hardware.Fabulous.Bitstream` decodes the
 `.bin` with FABulous's bitstream specification and routing graph and follows the configuration back to a `Net`
 (LUT4 gates, flops with enable and set/reset, output pins); `obend fabric check` refuses a bitstream that does not
