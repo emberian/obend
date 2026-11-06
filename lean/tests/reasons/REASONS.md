@@ -345,8 +345,8 @@ withdrew invoice-genuine
   invoice-genuine: unsupported (was supported)
   carol-owed: unsupported (was supported)
   judged anew: 3 of 3 atoms
-pay: refused by its reasons: its justification carol-owed is unsupported now: owed lacks invoice-genuine (unsupported, withdrawn)
 work: performed 0, retained 1 of 1
+pay: refused by its reasons: its justification carol-owed is unsupported now: owed lacks invoice-genuine (unsupported, withdrawn)
 ```
 
 Carol confirms invoice 17 by phone: a new observation, and a second explanation of the debt that does

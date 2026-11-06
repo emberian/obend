@@ -140,6 +140,7 @@ inductive Turn
   | captured (situation name : String) (g : Grant) (src dst : String) (amount : Nat) (field : String)
       (refs : List String)
   | abstracted (name value hole : String)
+  | briefed (page name : String) (g : Grant) (lits : List (String × String)) (holes : List (String × String))
   | judged (name digest : String) (hops : List Grant) (a : Assignment) (intent : Option String := none)
   | filled (name received sent : String)
   | issued (name : String)
@@ -342,7 +343,7 @@ def judgeEffect (w : World) (f : Form) (hops : List Grant) (a : Assignment) :
       unless K.offer.contains x do
         throw ("refused: " ++ K.hole ++ " = " ++ toString x ++ " is outside its offer (" ++
           Transport.runsText K.offer ++ ")")
-  match Form.judgeProposal H w.store (Transport.recapture live f) hops a with
+  match Form.judgeFill H w.store (Transport.recapture live f) hops a with
   | .error e => throw e
   | .ok (s, ad, t) => return (s, ad, t, (Transport.supportsFor w.grants f).map (·.id))
 
@@ -489,7 +490,7 @@ def judgeTurn (w : World) (name digest : String) (hops : List Grant) (a : Assign
       if digest != Form.formDigest H f then
         .error (name ++ ": refused: the form has changed since this proposal's copy was sent; send the form again")
       else
-        match Form.judgeProposal H w.store f hops a with
+        match Form.judgeFill H w.store f hops a with
         | .error e => .error (name ++ ": " ++ e)
         | .ok (s, ad, t) =>
           let r := Form.receiptFor H w.receipts.getLast? f a ad t
@@ -552,6 +553,11 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
   | .captured situation name g src dst amount field refs =>
     if w.forms.any (·.name == name) then .error ("refused: a form named " ++ name ++ " exists") else
     match Form.captureFrom w.store situation name g src dst amount field refs with
+    | .ok (f, culled) => .ok ({ w with forms := w.forms ++ [f] }, .form f culled)
+    | .error e => .error ("refused: " ++ e)
+  | .briefed page name g lits holes =>
+    if w.forms.any (·.name == name) then .error ("refused: a form named " ++ name ++ " exists") else
+    match Form.briefFrom w.store page name g lits (holes.map fun (h, t) => (h, Form.holeTyOf t)) with
     | .ok (f, culled) => .ok ({ w with forms := w.forms ++ [f] }, .form f culled)
     | .error e => .error ("refused: " ++ e)
   | .abstracted name value hole =>
@@ -784,6 +790,10 @@ def turnJson : Turn → Json
       ("situation", Json.str situation), ("name", Json.str name), ("grant", Form.grantJson g),
       ("src", Json.str src), ("dst", Json.str dst), ("amount", toJson amount), ("field", Json.str field),
       ("refs", strsJson refs)]
+  | .briefed page name g lits holes => Json.mkObj [("turn", "brief"), ("page", Json.str page),
+      ("name", Json.str name), ("grant", Form.grantJson g),
+      ("set", Json.arr (lits.map fun (f, v) => Json.mkObj [("field", Json.str f), ("value", Json.str v)]).toArray),
+      ("holes", Json.arr (holes.map fun (h, t) => Json.mkObj [("hole", Json.str h), ("type", Json.str t)]).toArray)]
   | .abstracted name value hole => Json.mkObj [("turn", "abstract"), ("name", Json.str name),
       ("value", Json.str value), ("hole", Json.str hole)]
   | .judged name digest hops a intent => Json.mkObj ([("turn", Json.str "judge"), ("name", Json.str name),
@@ -859,6 +869,15 @@ def turnOf (j : Json) : Except String Turn := do
     let amount ← j.getObjValAs? Nat "amount"
     let field ← j.getObjValAs? String "field"
     return .captured situation name g src dst amount field (← strsOf (← j.getObjVal? "refs"))
+  | "brief" =>
+    let page ← j.getObjValAs? String "page"
+    let name ← j.getObjValAs? String "name"
+    let g ← Form.grantOf (← j.getObjVal? "grant")
+    let lits ← (← j.getObjValAs? (Array Json) "set").toList.mapM fun x => do
+      return (← x.getObjValAs? String "field", ← x.getObjValAs? String "value")
+    let holes ← (← j.getObjValAs? (Array Json) "holes").toList.mapM fun x => do
+      return (← x.getObjValAs? String "hole", ← x.getObjValAs? String "type")
+    return .briefed page name g lits holes
   | "abstract" =>
     let name ← j.getObjValAs? String "name"
     let value ← j.getObjValAs? String "value"
@@ -937,6 +956,7 @@ def Turn.kind : Turn → String
   | .rows .. => "rows"
   | .captured .. => "capture"
   | .abstracted .. => "abstract"
+  | .briefed .. => "brief"
   | .judged .. => "judge"
   | .filled .. => "fill"
   | .issued .. => "issue"
