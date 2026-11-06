@@ -1,10 +1,11 @@
-# optic-bilinear: RADV's final ISA for each stage, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1
+# optic-bilinear: RADV's final ISA for each stage, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
 # Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders,shaderstats; do not edit.
 # Each instruction line ends in `; <dwords>`, the machine code as RADV printed it; labels and text are LLVM's.
 
-## stage 0 (stage_0.wgsl): 3 threads, 88 instructions, 3 64-bit stores; VGPRs: 16, SGPRs: 128, LDS: 0, scratch: 0, code: 556
+## stage 0 (stage_0.wgsl): 3 threads, 89 instructions, 3 64-bit stores; VGPRs: 16, SGPRs: 128, LDS: 0, scratch: 0, code: 564
 BB0:
 	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_lshl_add_u32 v0, s4, 6, v0	; d7460000 04010c04
 	v_cmpx_gt_u32_e32 1, v0	; 7da80081
 	s_cbranch_execz BB6	; bf880028
 BB1:
@@ -25,13 +26,13 @@ BB1:
 	s_waitcnt lgkmcnt(0)	; bf8cc07f
 	v_mul_hi_u32 v8, s0, v7	; d56a0008 00020e00
 	v_mul_lo_u32 v3, v3, v4	; d5690003 00020903
-	v_mul_lo_u32 v2, v2, v5	; d5690002 00020b02
-	v_add3_u32 v6, v6, v2, v3	; d76d0006 040e0506
-	v_mul_lo_u32 v2, s0, v7	; d5690002 00020e00
+	v_mul_lo_u32 v4, s0, v7	; d5690004 00020e00
 	v_mul_lo_u32 v7, s1, v7	; d5690007 00020e01
-	v_mul_lo_u32 v6, s0, v6	; d5690006 00020c00
-	v_add3_u32 v3, v8, v6, v7	; d76d0003 041e0d08
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:24	; e0741018 80010201
+	v_mul_lo_u32 v2, v2, v5	; d5690002 00020b02
+	v_add3_u32 v3, v3, v6, v2	; d76d0003 040a0d03
+	v_mul_lo_u32 v3, s0, v3	; d5690003 00020600
+	v_add3_u32 v5, v7, v8, v3	; d76d0005 040e1107
+	buffer_store_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:24	; e0741018 80010401
 BB6:
 	s_mov_b64 exec, -1	; befe04c1
 	v_cmp_le_u32_e32 vcc, 1, v0	; 7d860081
@@ -58,12 +59,12 @@ BB7:
 	v_mul_lo_u32 v3, s0, v3	; d5690003 00020600
 	s_waitcnt vmcnt(0)	; bf8c3f70
 	v_mul_hi_u32 v8, v7, v4	; d56a0008 00020907
-	v_add3_u32 v6, v6, v3, v2	; d76d0006 040a0706
-	v_mul_lo_u32 v2, v7, v4	; d5690002 00020907
+	v_mul_lo_u32 v10, v7, v4	; d569000a 00020907
 	v_mul_lo_u32 v7, v7, v5	; d5690007 00020b07
-	v_mul_lo_u32 v6, v6, v4	; d5690006 00020906
-	v_add3_u32 v3, v8, v7, v6	; d76d0003 041a0f08
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:24	; e0741018 80020201
+	v_add3_u32 v2, v2, v6, v3	; d76d0002 040e0d02
+	v_mul_lo_u32 v2, v2, v4	; d5690002 00020902
+	v_add3_u32 v11, v2, v8, v7	; d76d000b 041e1102
+	buffer_store_dwordx2 v[10:11], v1, s[8:11], 0 offen offset:24	; e0741018 80020a01
 BB12:
 	s_mov_b64 exec, -1	; befe04c1
 	v_cmp_le_u32_e32 vcc, 2, v0	; 7d860082
@@ -90,11 +91,11 @@ BB13:
 	v_mul_lo_u32 v3, s4, v3	; d5690003 00020604
 	s_waitcnt vmcnt(0)	; bf8c3f70
 	v_mul_hi_u32 v8, v7, v4	; d56a0008 00020907
-	v_add3_u32 v6, v6, v3, v2	; d76d0006 040a0706
-	v_mul_lo_u32 v2, v7, v4	; d5690002 00020907
+	v_mul_lo_u32 v10, v7, v4	; d569000a 00020907
 	v_mul_lo_u32 v7, v7, v5	; d5690007 00020b07
-	v_mul_lo_u32 v6, v6, v4	; d5690006 00020906
-	v_add3_u32 v3, v8, v7, v6	; d76d0003 041a0f08
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:24	; e0741018 80000200
+	v_add3_u32 v2, v2, v6, v3	; d76d0002 040e0d02
+	v_mul_lo_u32 v2, v2, v4	; d5690002 00020902
+	v_add3_u32 v11, v2, v8, v7	; d76d000b 041e1102
+	buffer_store_dwordx2 v[10:11], v0, s[0:3], 0 offen offset:24	; e0741018 80000a00
 BB18:
 	s_endpgm	; bf810000

@@ -1,34 +1,295 @@
-// obend-emit-gpu: ntt-64, stage 0 of 19: 6 kernels, 192 threads.
-// Generated from Obend.Hardware.Gpu.lowerArrayToGpu; do not edit (verify_gpu.sh compares bytes).
-@group(0) @binding(0) var<storage, read_write> w : array<i64>;
-@group(0) @binding(1) var<storage, read> c : array<i64>;
+// ntt-64: generated from ArrayKernel.Program; no transform-specific emission.
+@group(0) @binding(0) var<storage, read_write> w : array<vec2<u32>>;
+@group(0) @binding(1) var<storage, read> c : array<vec2<u32>>;
 @group(0) @binding(2) var<storage, read> ix : array<u32>;
+var<workgroup> shared_words : array<vec2<u32>, 128>;
+
+fn u32_mul_wide(a: u32, b: u32) -> vec2<u32> {
+  // Bounded u32 operands: the backend emits native low/high u32 products.
+  let product = u64(a) * u64(b);
+  return vec2<u32>(u32(product), u32(product >> 32u));
+}
+fn u64_add(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+  let lo = a.x + b.x;
+  return vec2<u32>(lo, a.y + b.y + select(0u, 1u, lo < a.x));
+}
+fn u64_sub(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+  return vec2<u32>(a.x - b.x, a.y - b.y - select(0u, 1u, a.x < b.x));
+}
+fn u64_lt(a: vec2<u32>, b: vec2<u32>) -> bool {
+  return a.y < b.y || (a.y == b.y && a.x < b.x);
+}
+fn u64_mul(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+  let p = u32_mul_wide(a.x, b.x);
+  return vec2<u32>(p.x, p.y + a.x * b.y + a.y * b.x);
+}
+fn u64_shr(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+  if (b.y != 0u || b.x >= 64u) { return vec2<u32>(0u); }
+  if (b.x == 0u) { return a; }
+  if (b.x >= 32u) { return vec2<u32>(a.y >> (b.x - 32u), 0u); }
+  return vec2<u32>((a.x >> b.x) | (a.y << (32u - b.x)), a.y >> b.x);
+}
+fn u64_shl(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+  if (b.y != 0u || b.x >= 64u) { return vec2<u32>(0u); }
+  if (b.x == 0u) { return a; }
+  if (b.x >= 32u) { return vec2<u32>(0u, a.x << (b.x - 32u)); }
+  return vec2<u32>(a.x << b.x, (a.y << b.x) | (a.x >> (32u - b.x)));
+}
 
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
-  let t : u32 = gid.x;
-  if (t < 32u) {
-    let e : u32 = t - 0u;
-    w[64u + e] = c[0u + e];
+fn main(@builtin(workgroup_id) wid : vec3<u32>, @builtin(local_invocation_id) lid : vec3<u32>) {
+  let group = wid.x + wid.y * 1u;
+  if (group >= 1u) { return; }
+  for (var lane = lid.x; lane < 16u; lane += 64u) {
+    let v0 = w[0u + (((group * 8u) + (lane / 2u)) + ((((((lane % 2u) / 2u) * 8u) + ((lane % 2u) % 2u)) + 0u) * 8u))];
+    let v1 = w[0u + (((group * 8u) + (lane / 2u)) + ((((((lane % 2u) / 2u) * 8u) + ((lane % 2u) % 2u)) + 2u) * 8u))];
+    let v2 = w[0u + (((group * 8u) + (lane / 2u)) + ((((((lane % 2u) / 2u) * 8u) + ((lane % 2u) % 2u)) + 4u) * 8u))];
+    let v3 = w[0u + (((group * 8u) + (lane / 2u)) + ((((((lane % 2u) / 2u) * 8u) + ((lane % 2u) % 2u)) + 6u) * 8u))];
+    let v29 = c[0u + ((((lane % 2u) % 2u) + 0u) * 8u)];
+    let v80 = c[0u + ((((lane % 2u) % 2u) + 2u) * 8u)];
+    let v131 = c[0u + ((((lane % 2u) % 2u) + 0u) * 16u)];
+    let v182 = c[0u + ((((lane % 2u) % 2u) + 0u) * 16u)];
+    let v4 = vec2<u32>(1u, 4294967295u);
+    let v5 = vec2<u32>(4294967295u, 0u);
+    let v6 = vec2<u32>(32u, 0u);
+    let v7 = vec2<u32>(select(0u, 1u, u64_lt(v0, v4)), 0u);
+    let v8 = u64_sub(v0, v4);
+    let v9 = select(v8, v0, any(v7 != vec2<u32>(0u)));
+    let v10 = vec2<u32>(select(0u, 1u, u64_lt(v1, v4)), 0u);
+    let v11 = u64_sub(v1, v4);
+    let v12 = select(v11, v1, any(v10 != vec2<u32>(0u)));
+    let v13 = vec2<u32>(select(0u, 1u, u64_lt(v2, v4)), 0u);
+    let v14 = u64_sub(v2, v4);
+    let v15 = select(v14, v2, any(v13 != vec2<u32>(0u)));
+    let v16 = vec2<u32>(select(0u, 1u, u64_lt(v3, v4)), 0u);
+    let v17 = u64_sub(v3, v4);
+    let v18 = select(v17, v3, any(v16 != vec2<u32>(0u)));
+    let v19 = u64_sub(v4, v15);
+    let v20 = vec2<u32>(select(0u, 1u, u64_lt(v9, v19)), 0u);
+    let v21 = u64_add(v9, v15);
+    let v22 = u64_sub(v9, v19);
+    let v23 = select(v22, v21, any(v20 != vec2<u32>(0u)));
+    let v24 = vec2<u32>(select(0u, 1u, u64_lt(v9, v15)), 0u);
+    let v25 = u64_sub(v4, v15);
+    let v26 = u64_add(v25, v9);
+    let v27 = u64_sub(v9, v15);
+    let v28 = select(v27, v26, any(v24 != vec2<u32>(0u)));
+    let v30 = v28 & v5;
+    let v31 = u64_shr(v28, v6);
+    let v32 = v29 & v5;
+    let v33 = u64_shr(v29, v6);
+    let v34 = u64_mul(v30, v32);
+    let v35 = u64_mul(v30, v33);
+    let v36 = u64_mul(v31, v32);
+    let v37 = u64_mul(v31, v33);
+    let v38 = u64_shr(v34, v6);
+    let v39 = v35 & v5;
+    let v40 = v36 & v5;
+    let v41 = u64_add(v38, v39);
+    let v42 = u64_add(v41, v40);
+    let v43 = v34 & v5;
+    let v44 = v42 & v5;
+    let v45 = u64_shl(v44, v6);
+    let v46 = v43 | v45;
+    let v47 = u64_shr(v35, v6);
+    let v48 = u64_shr(v36, v6);
+    let v49 = u64_shr(v42, v6);
+    let v50 = u64_add(v37, v47);
+    let v51 = u64_add(v50, v48);
+    let v52 = u64_add(v51, v49);
+    let v53 = v52 & v5;
+    let v54 = u64_shr(v52, v6);
+    let v55 = u64_shl(v53, v6);
+    let v56 = u64_sub(v55, v53);
+    let v57 = vec2<u32>(select(0u, 1u, u64_lt(v46, v4)), 0u);
+    let v58 = u64_sub(v46, v4);
+    let v59 = select(v58, v46, any(v57 != vec2<u32>(0u)));
+    let v60 = u64_sub(v4, v56);
+    let v61 = vec2<u32>(select(0u, 1u, u64_lt(v59, v60)), 0u);
+    let v62 = u64_add(v59, v56);
+    let v63 = u64_sub(v59, v60);
+    let v64 = select(v63, v62, any(v61 != vec2<u32>(0u)));
+    let v65 = vec2<u32>(select(0u, 1u, u64_lt(v64, v54)), 0u);
+    let v66 = u64_sub(v4, v54);
+    let v67 = u64_add(v66, v64);
+    let v68 = u64_sub(v64, v54);
+    let v69 = select(v68, v67, any(v65 != vec2<u32>(0u)));
+    let v70 = u64_sub(v4, v18);
+    let v71 = vec2<u32>(select(0u, 1u, u64_lt(v12, v70)), 0u);
+    let v72 = u64_add(v12, v18);
+    let v73 = u64_sub(v12, v70);
+    let v74 = select(v73, v72, any(v71 != vec2<u32>(0u)));
+    let v75 = vec2<u32>(select(0u, 1u, u64_lt(v12, v18)), 0u);
+    let v76 = u64_sub(v4, v18);
+    let v77 = u64_add(v76, v12);
+    let v78 = u64_sub(v12, v18);
+    let v79 = select(v78, v77, any(v75 != vec2<u32>(0u)));
+    let v81 = v79 & v5;
+    let v82 = u64_shr(v79, v6);
+    let v83 = v80 & v5;
+    let v84 = u64_shr(v80, v6);
+    let v85 = u64_mul(v81, v83);
+    let v86 = u64_mul(v81, v84);
+    let v87 = u64_mul(v82, v83);
+    let v88 = u64_mul(v82, v84);
+    let v89 = u64_shr(v85, v6);
+    let v90 = v86 & v5;
+    let v91 = v87 & v5;
+    let v92 = u64_add(v89, v90);
+    let v93 = u64_add(v92, v91);
+    let v94 = v85 & v5;
+    let v95 = v93 & v5;
+    let v96 = u64_shl(v95, v6);
+    let v97 = v94 | v96;
+    let v98 = u64_shr(v86, v6);
+    let v99 = u64_shr(v87, v6);
+    let v100 = u64_shr(v93, v6);
+    let v101 = u64_add(v88, v98);
+    let v102 = u64_add(v101, v99);
+    let v103 = u64_add(v102, v100);
+    let v104 = v103 & v5;
+    let v105 = u64_shr(v103, v6);
+    let v106 = u64_shl(v104, v6);
+    let v107 = u64_sub(v106, v104);
+    let v108 = vec2<u32>(select(0u, 1u, u64_lt(v97, v4)), 0u);
+    let v109 = u64_sub(v97, v4);
+    let v110 = select(v109, v97, any(v108 != vec2<u32>(0u)));
+    let v111 = u64_sub(v4, v107);
+    let v112 = vec2<u32>(select(0u, 1u, u64_lt(v110, v111)), 0u);
+    let v113 = u64_add(v110, v107);
+    let v114 = u64_sub(v110, v111);
+    let v115 = select(v114, v113, any(v112 != vec2<u32>(0u)));
+    let v116 = vec2<u32>(select(0u, 1u, u64_lt(v115, v105)), 0u);
+    let v117 = u64_sub(v4, v105);
+    let v118 = u64_add(v117, v115);
+    let v119 = u64_sub(v115, v105);
+    let v120 = select(v119, v118, any(v116 != vec2<u32>(0u)));
+    let v121 = u64_sub(v4, v74);
+    let v122 = vec2<u32>(select(0u, 1u, u64_lt(v23, v121)), 0u);
+    let v123 = u64_add(v23, v74);
+    let v124 = u64_sub(v23, v121);
+    let v125 = select(v124, v123, any(v122 != vec2<u32>(0u)));
+    let v126 = vec2<u32>(select(0u, 1u, u64_lt(v23, v74)), 0u);
+    let v127 = u64_sub(v4, v74);
+    let v128 = u64_add(v127, v23);
+    let v129 = u64_sub(v23, v74);
+    let v130 = select(v129, v128, any(v126 != vec2<u32>(0u)));
+    let v132 = v130 & v5;
+    let v133 = u64_shr(v130, v6);
+    let v134 = v131 & v5;
+    let v135 = u64_shr(v131, v6);
+    let v136 = u64_mul(v132, v134);
+    let v137 = u64_mul(v132, v135);
+    let v138 = u64_mul(v133, v134);
+    let v139 = u64_mul(v133, v135);
+    let v140 = u64_shr(v136, v6);
+    let v141 = v137 & v5;
+    let v142 = v138 & v5;
+    let v143 = u64_add(v140, v141);
+    let v144 = u64_add(v143, v142);
+    let v145 = v136 & v5;
+    let v146 = v144 & v5;
+    let v147 = u64_shl(v146, v6);
+    let v148 = v145 | v147;
+    let v149 = u64_shr(v137, v6);
+    let v150 = u64_shr(v138, v6);
+    let v151 = u64_shr(v144, v6);
+    let v152 = u64_add(v139, v149);
+    let v153 = u64_add(v152, v150);
+    let v154 = u64_add(v153, v151);
+    let v155 = v154 & v5;
+    let v156 = u64_shr(v154, v6);
+    let v157 = u64_shl(v155, v6);
+    let v158 = u64_sub(v157, v155);
+    let v159 = vec2<u32>(select(0u, 1u, u64_lt(v148, v4)), 0u);
+    let v160 = u64_sub(v148, v4);
+    let v161 = select(v160, v148, any(v159 != vec2<u32>(0u)));
+    let v162 = u64_sub(v4, v158);
+    let v163 = vec2<u32>(select(0u, 1u, u64_lt(v161, v162)), 0u);
+    let v164 = u64_add(v161, v158);
+    let v165 = u64_sub(v161, v162);
+    let v166 = select(v165, v164, any(v163 != vec2<u32>(0u)));
+    let v167 = vec2<u32>(select(0u, 1u, u64_lt(v166, v156)), 0u);
+    let v168 = u64_sub(v4, v156);
+    let v169 = u64_add(v168, v166);
+    let v170 = u64_sub(v166, v156);
+    let v171 = select(v170, v169, any(v167 != vec2<u32>(0u)));
+    let v172 = u64_sub(v4, v120);
+    let v173 = vec2<u32>(select(0u, 1u, u64_lt(v69, v172)), 0u);
+    let v174 = u64_add(v69, v120);
+    let v175 = u64_sub(v69, v172);
+    let v176 = select(v175, v174, any(v173 != vec2<u32>(0u)));
+    let v177 = vec2<u32>(select(0u, 1u, u64_lt(v69, v120)), 0u);
+    let v178 = u64_sub(v4, v120);
+    let v179 = u64_add(v178, v69);
+    let v180 = u64_sub(v69, v120);
+    let v181 = select(v180, v179, any(v177 != vec2<u32>(0u)));
+    let v183 = v181 & v5;
+    let v184 = u64_shr(v181, v6);
+    let v185 = v182 & v5;
+    let v186 = u64_shr(v182, v6);
+    let v187 = u64_mul(v183, v185);
+    let v188 = u64_mul(v183, v186);
+    let v189 = u64_mul(v184, v185);
+    let v190 = u64_mul(v184, v186);
+    let v191 = u64_shr(v187, v6);
+    let v192 = v188 & v5;
+    let v193 = v189 & v5;
+    let v194 = u64_add(v191, v192);
+    let v195 = u64_add(v194, v193);
+    let v196 = v187 & v5;
+    let v197 = v195 & v5;
+    let v198 = u64_shl(v197, v6);
+    let v199 = v196 | v198;
+    let v200 = u64_shr(v188, v6);
+    let v201 = u64_shr(v189, v6);
+    let v202 = u64_shr(v195, v6);
+    let v203 = u64_add(v190, v200);
+    let v204 = u64_add(v203, v201);
+    let v205 = u64_add(v204, v202);
+    let v206 = v205 & v5;
+    let v207 = u64_shr(v205, v6);
+    let v208 = u64_shl(v206, v6);
+    let v209 = u64_sub(v208, v206);
+    let v210 = vec2<u32>(select(0u, 1u, u64_lt(v199, v4)), 0u);
+    let v211 = u64_sub(v199, v4);
+    let v212 = select(v211, v199, any(v210 != vec2<u32>(0u)));
+    let v213 = u64_sub(v4, v209);
+    let v214 = vec2<u32>(select(0u, 1u, u64_lt(v212, v213)), 0u);
+    let v215 = u64_add(v212, v209);
+    let v216 = u64_sub(v212, v213);
+    let v217 = select(v216, v215, any(v214 != vec2<u32>(0u)));
+    let v218 = vec2<u32>(select(0u, 1u, u64_lt(v217, v207)), 0u);
+    let v219 = u64_sub(v4, v207);
+    let v220 = u64_add(v219, v217);
+    let v221 = u64_sub(v217, v207);
+    let v222 = select(v221, v220, any(v218 != vec2<u32>(0u)));
+    shared_words[0u + ((((((lane % 2u) / 2u) * 8u) + ((lane % 2u) % 2u)) + 0u) + ((lane / 2u) * 8u))] = v125;
+    shared_words[0u + ((((((lane % 2u) / 2u) * 8u) + ((lane % 2u) % 2u)) + 2u) + ((lane / 2u) * 8u))] = v171;
+    shared_words[0u + ((((((lane % 2u) / 2u) * 8u) + ((lane % 2u) % 2u)) + 4u) + ((lane / 2u) * 8u))] = v176;
+    shared_words[0u + ((((((lane % 2u) / 2u) * 8u) + ((lane % 2u) % 2u)) + 6u) + ((lane / 2u) * 8u))] = v222;
   }
-  if (t >= 32u && t < 64u) {
-    let e : u32 = t - 32u;
-    w[96u + e] = c[32u + e];
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 32u; lane += 64u) {
+    let v0 = shared_words[0u + ((((((lane % 4u) / 1u) * 2u) + ((lane % 4u) % 1u)) + 0u) + ((lane / 4u) * 8u))];
+    let v1 = shared_words[0u + ((((((lane % 4u) / 1u) * 2u) + ((lane % 4u) % 1u)) + 1u) + ((lane / 4u) * 8u))];
+    let v2 = vec2<u32>(1u, 4294967295u);
+    let v3 = vec2<u32>(4294967295u, 0u);
+    let v4 = vec2<u32>(32u, 0u);
+    let v5 = u64_sub(v2, v1);
+    let v6 = vec2<u32>(select(0u, 1u, u64_lt(v0, v5)), 0u);
+    let v7 = u64_add(v0, v1);
+    let v8 = u64_sub(v0, v5);
+    let v9 = select(v8, v7, any(v6 != vec2<u32>(0u)));
+    let v10 = vec2<u32>(select(0u, 1u, u64_lt(v0, v1)), 0u);
+    let v11 = u64_sub(v2, v1);
+    let v12 = u64_add(v11, v0);
+    let v13 = u64_sub(v0, v1);
+    let v14 = select(v13, v12, any(v10 != vec2<u32>(0u)));
+    w[64u + ((((((group * 8u) + (lane / 4u)) / 1u) * 8u) + (((group * 8u) + (lane / 4u)) % 1u)) + ((((0u + ((((((((lane % 4u) / 1u) * 2u) + ((lane % 4u) % 1u)) + 0u) / 1u) % 2u) * 4u)) + ((((((((lane % 4u) / 1u) * 2u) + ((lane % 4u) % 1u)) + 0u) / 2u) % 2u) * 2u)) + ((((((((lane % 4u) / 1u) * 2u) + ((lane % 4u) % 1u)) + 0u) / 4u) % 2u) * 1u)) * 1u))] = v9;
+    w[64u + ((((((group * 8u) + (lane / 4u)) / 1u) * 8u) + (((group * 8u) + (lane / 4u)) % 1u)) + ((((0u + ((((((((lane % 4u) / 1u) * 2u) + ((lane % 4u) % 1u)) + 1u) / 1u) % 2u) * 4u)) + ((((((((lane % 4u) / 1u) * 2u) + ((lane % 4u) % 1u)) + 1u) / 2u) % 2u) * 2u)) + ((((((((lane % 4u) / 1u) * 2u) + ((lane % 4u) % 1u)) + 1u) / 4u) % 2u) * 1u)) * 1u))] = v14;
   }
-  if (t >= 64u && t < 96u) {
-    let e : u32 = t - 64u;
-    w[128u + e] = c[64u + e];
-  }
-  if (t >= 96u && t < 128u) {
-    let e : u32 = t - 96u;
-    w[160u + e] = c[96u + e];
-  }
-  if (t >= 128u && t < 160u) {
-    let e : u32 = t - 128u;
-    w[192u + e] = w[0u + ix[0u + e]];
-  }
-  if (t >= 160u && t < 192u) {
-    let e : u32 = t - 160u;
-    w[224u + e] = w[0u + ix[32u + e]];
-  }
+  workgroupBarrier();
+  storageBarrier();
 }

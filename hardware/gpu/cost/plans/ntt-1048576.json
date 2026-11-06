@@ -1,0 +1,33 @@
+{
+  "graph": "ntt-1048576",
+  "words": 2097152,
+  "workgroupSize": 64,
+  "stages": [
+    {
+      "file": "stage_0.wgsl",
+      "threads": 524288,
+      "logicalReadBytes": 33554432,
+      "logicalWriteBytes": 8388608,
+      "logicalWorkgroupReadBytes": 25165824,
+      "logicalWorkgroupWriteBytes": 25165824
+    },
+    {
+      "file": "stage_1.wgsl",
+      "threads": 524288,
+      "logicalReadBytes": 41943040,
+      "logicalWriteBytes": 8388608,
+      "logicalWorkgroupReadBytes": 25165824,
+      "logicalWorkgroupWriteBytes": 25165824
+    },
+    {
+      "file": "stage_2.wgsl",
+      "threads": 262144,
+      "logicalReadBytes": 35651584,
+      "logicalWriteBytes": 8388608,
+      "logicalWorkgroupReadBytes": 16777216,
+      "logicalWorkgroupWriteBytes": 16777216
+    }
+  ],
+  "sourcePlanSha256": "f92ef266310fb4ce444e449cb24733a0254046170d867e70a45b1ab110a92b74",
+  "description": "Cost-relevant fields extracted verbatim from full final generated plan; constants and wire layout omitted."
+}

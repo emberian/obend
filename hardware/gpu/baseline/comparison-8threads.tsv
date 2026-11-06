@@ -1,0 +1,6 @@
+# CPU median / GPU device median is a compute-only ratio, not end-to-end speedup.
+# GPU host batch amortized time includes warmups, GPU resets and final readback; CPU excludes input clone.
+graph	n	cpu_median_us	gpu_device_median_us	gpu_host_batch_amortized_us	cpu_over_gpu_device
+ntt-1024	1024	23.848	13.360	77.897	1.785
+ntt-65536	65536	399.185	50.200	128.176	7.952
+ntt-1048576	1048576	13016.353	584.080	680.985	22.285
