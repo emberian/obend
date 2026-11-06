@@ -1,0 +1,14 @@
+{
+  "graph": "source-leaf-fixed-square",
+  "words": 22,
+  "workgroupSize": 64,
+  "wireBase": [0,11],
+  "wireLen": [11,11],
+  "consts": [],
+  "tables": [],
+  "inputs": [0],
+  "outputs": [1],
+  "stages": [
+    {"file":"stage_0.wgsl","threads":11}
+  ]
+}

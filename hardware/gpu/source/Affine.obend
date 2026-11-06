@@ -1,0 +1,22 @@
+edition ObjectiveBend 1
+# Word arithmetic is explicit: Core4 Nat arithmetic itself does not wrap.
+# This method is mapped over arrays by obend-emit-gpu's generic leaf command.
+
+record Affine:
+  run(x: Nat) -> Nat
+
+spec WordAffine for Affine:
+  def run(x: Nat) -> Nat:
+    (((x * 3n) % 18446744073709551616n) + 5n) % 18446744073709551616n
+
+def seed() -> Affine:
+  {run: fn(x: Nat) -> Nat: 0n}
+
+def affine() -> Affine:
+  fix(WordAffine, seed())
+
+def small() -> Nat:
+  affine().run(7n)
+
+def boundary() -> Nat:
+  affine().run(18446744073709551615n)

@@ -71,6 +71,18 @@ run_graph() {
   set -e
 }
 
+# A planted rule earns a failure only by producing a wrong value on the device.
+# Shader validation, driver errors and crashes are failures of the gate itself.
+require_value_mismatch() {
+  if ! grep -q 'vectors disagree' <<< "${RUN_OUT}" &&
+      ! grep -q 'vectors disagree' "${WORK}/run.err"; then
+    echo "[FAIL] planted shader failed before a value mismatch:" >&2
+    printf '%s\n' "${RUN_OUT}" >&2
+    cat "${WORK}/run.err" >&2
+    exit 1
+  fi
+}
+
 if [[ "${1:-}" == "--plant" ]]; then
   plant="${2:?--plant NAME}"
   "${EMIT}" all --out "${WORK}/plant" --plant "${plant}" >/dev/null
@@ -78,6 +90,7 @@ if [[ "${1:-}" == "--plant" ]]; then
   for g in "${GRAPHS[@]}"; do
     run_graph "${WORK}/plant/${g}"
     if (( RUN_RC != 0 )); then
+      require_value_mismatch
       echo "  ${g}: caught"; echo "${RUN_OUT}" | sed 's/^/    /' | head -4
       caught=$((caught + 1))
     fi
@@ -138,7 +151,10 @@ for plant in addAsSub swapMux; do
   caught=""
   for g in "${GRAPHS[@]}"; do
     run_graph "${WORK}/plant-${plant}/${g}"
-    if (( RUN_RC != 0 )); then caught="${caught} ${g}"; fi
+    if (( RUN_RC != 0 )); then
+      require_value_mismatch
+      caught="${caught} ${g}"
+    fi
   done
   if [[ -z "${caught}" ]]; then
     echo "[FAIL] planted ${plant} went unnoticed on every graph: the comparison has no teeth" >&2

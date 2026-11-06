@@ -15,8 +15,9 @@ rules planted in the shader text only, for `hardware/gpu/verify_gpu.sh`'s tooth.
 are always the unplanted model's.
 
 Expected values are `evalGraphArr`'s, which is `evalGraph` with the wires stored (`evalGraphArr_eq`).
-Before writing, the emitter refuses a graph that fails `ArrayGraph.wf` (the hypothesis of
-`lowerArrayToGpu_sound`, so the expected values are `evalGraph`'s and the device must show them) and an
+Before writing, the emitter requires a checked typed graph and retains its derivation through
+lowering. Array workloads are selected Core4 members compiled through `ArrayMember.checkMember`.
+It also refuses an
 NTT graph whose evaluation disagrees with a recursive radix-2 NTT over the Goldilocks field in `Nat`
 arithmetic (`nttFast`), which for the smaller sizes is itself checked against the naive DFT
 (`nttReference`). These are tests of the fixtures, run on every emission.
@@ -29,194 +30,17 @@ dozen edges over whole wires, and no bit reversal. The field operations are the 
 `Obend.Apps.ZkNtt.glMul`; after fusion each stage's sum and difference are one kernel each.
 -/
 import Obend.Hardware.Gpu
+import Obend.Hardware.ArrayTyping
+import Obend.Hardware.Gpu.ArrayPrograms
+import Obend.Hardware.Gpu.SourcePrograms
+import Obend.Hardware.Gpu.SoacPrograms
+import Obend.Hardware.Gpu.BookImport
+import Obend.Hardware.Gpu.CatgradImport
 
 open Obend.Hardware.OpenHypergraph
 open Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.Gpu
-
-/-! ## A builder for array graphs -/
-
-structure Build where
-  lengths : Array Nat := #[]
-  edges   : Array ArrayEdge := #[]
-
-abbrev BuildM := StateM Build
-
-def newWire (n : Nat) : BuildM Nat := do
-  let st ← get
-  set { st with lengths := st.lengths.push n }
-  pure st.lengths.size
-
-def emit (op : ArrayOp) (srcs : List Nat) (dst : Nat) : BuildM Unit :=
-  modify fun st => { st with edges := st.edges.push { opIdx := st.edges.size, op := op, srcWires := srcs, dstWire := dst } }
-
-/-- A fresh wire of length `n` written by `op`. -/
-def node (n : Nat) (op : ArrayOp) (srcs : List Nat) : BuildM Nat := do
-  let w ← newWire n
-  emit op srcs w
-  pure w
-
-/-- A fresh wire of length `n` holding `op` of `srcs` elementwise: the primitive one-instruction program. -/
-def mapN (n : Nat) (op : ElemOp) (srcs : List Nat) : BuildM Nat := do
-  let w ← newWire n
-  emit (.map n (ElemProg.single op srcs w)) srcs w
-  pure w
-
-def constWire (vals : List Word) : BuildM Nat := node vals.length (.const vals) []
-
-/-- `n` copies of one word. -/
-def broadcast (n : Nat) (v : Word) : BuildM Nat := constWire (List.replicate n v)
-
-def map2 (n : Nat) (op : ElemOp) (a b : Nat) : BuildM Nat := mapN n op [a, b]
-def map3 (n : Nat) (op : ElemOp) (a b c : Nat) : BuildM Nat := mapN n op [a, b, c]
-
-def runBuild (inputs : List Nat → BuildM (List Nat)) (inputLens : List Nat) : ArrayGraph :=
-  let ((ins, outs), st) := (do
-    let ins ← inputLens.mapM newWire
-    let outs ← inputs ins
-    pure (ins, outs)).run {}
-  { lengths := st.lengths.toList, inputs := ins, outputs := outs, edges := st.edges.toList }
-
-/-! ## The Goldilocks field, elementwise (the network of `Obend.Apps.ZkNtt.glMul`) -/
-
-def goldilocksP : Nat := 18446744069414584321
-
-/-- The field constants a vector of length `n` needs: `p`, the low mask and the shift. -/
-structure GlConsts where
-  p    : Nat
-  mask : Nat
-  s32  : Nat
-
-def glConsts (n : Nat) : BuildM GlConsts := do
-  let p ← broadcast n (BitVec.ofNat 64 goldilocksP)
-  let mask ← broadcast n 0xFFFFFFFF#64
-  let s32 ← broadcast n 32#64
-  pure ⟨p, mask, s32⟩
-
-/-- `x < p ? x : x - p`. -/
-def glCanon (n : Nat) (k : GlConsts) (x : Nat) : BuildM Nat := do
-  let lt ← map2 n .ult x k.p
-  let sub ← map2 n (.scalar .sub) x k.p
-  map3 n (.scalar .mux) lt x sub
-
-/-- `(a + b) mod p` for canonical `a b`, without a 65th bit. -/
-def glAdd (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
-  let remP ← map2 n (.scalar .sub) k.p b
-  let lt ← map2 n .ult a remP
-  let sum ← map2 n (.scalar .add) a b
-  let wrap ← map2 n (.scalar .sub) a remP
-  map3 n (.scalar .mux) lt sum wrap
-
-/-- `(a - b) mod p` for canonical `a b`. -/
-def glSub (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
-  let lt ← map2 n .ult a b
-  let pb ← map2 n (.scalar .sub) k.p b
-  let wrap ← map2 n (.scalar .add) pb a
-  let diff ← map2 n (.scalar .sub) a b
-  map3 n (.scalar .mux) lt wrap diff
-
-/-- `(a * b) mod p` for any 64-bit `a b`: four 32×32 limb products, the 128-bit product `(lo, hi)`, then
-the shift/mask reduction (`goldilocksReduce128Spec`). -/
-def glMul (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
-  let aLo ← map2 n .band a k.mask
-  let aHi ← map2 n .shr a k.s32
-  let bLo ← map2 n .band b k.mask
-  let bHi ← map2 n .shr b k.s32
-  let p00 ← map2 n (.scalar .mul) aLo bLo
-  let p01 ← map2 n (.scalar .mul) aLo bHi
-  let p10 ← map2 n (.scalar .mul) aHi bLo
-  let p11 ← map2 n (.scalar .mul) aHi bHi
-  let p00Hi ← map2 n .shr p00 k.s32
-  let p01Lo ← map2 n .band p01 k.mask
-  let p10Lo ← map2 n .band p10 k.mask
-  let mid32a ← map2 n (.scalar .add) p00Hi p01Lo
-  let mid32 ← map2 n (.scalar .add) mid32a p10Lo
-  let p00Lo ← map2 n .band p00 k.mask
-  let mid32Lo ← map2 n .band mid32 k.mask
-  let mid32LoSh ← map2 n .shl mid32Lo k.s32
-  let lo ← map2 n .bor p00Lo mid32LoSh
-  let p01Hi ← map2 n .shr p01 k.s32
-  let p10Hi ← map2 n .shr p10 k.s32
-  let mid32Hi ← map2 n .shr mid32 k.s32
-  let hi1 ← map2 n (.scalar .add) p11 p01Hi
-  let hi2 ← map2 n (.scalar .add) hi1 p10Hi
-  let hi ← map2 n (.scalar .add) hi2 mid32Hi
-  let hiLo ← map2 n .band hi k.mask
-  let hiHi ← map2 n .shr hi k.s32
-  let hiLoSh ← map2 n .shl hiLo k.s32
-  let mid ← map2 n (.scalar .sub) hiLoSh hiLo
-  let loC ← glCanon n k lo
-  let t1 ← glAdd n k loC mid
-  glSub n k t1 hiHi
-
-/-! ## The NTT -/
-
-def powMod (b e m : Nat) : Nat := Id.run do
-  let mut r := 1
-  let mut bb := b % m
-  let mut ee := e
-  while ee > 0 do
-    if ee % 2 == 1 then r := r * bb % m
-    bb := bb * bb % m
-    ee := ee / 2
-  return r
-
-/-- A primitive `2^32`-th root of unity in the Goldilocks field (`7^((p-1)/2^32)`). -/
-def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksP - 1) / 2 ^ 32) goldilocksP
-
-/-- A primitive `n`-th root, `n` a power of two dividing `2^32`. -/
-def rootOfUnity (n : Nat) : Nat := powMod rootOfUnity2to32 (2 ^ 32 / n) goldilocksP
-
-/-- The output permutation of a Stockham radix-2 stage with sub-transform size `ns` over `n` points, for
-the half of the output starting at `offset`: output `i` is `a[(i / 2ns)·ns + r]` when `r = i mod 2ns < ns`,
-else `b[(i / 2ns)·ns + (r - ns)]`, as an index into `a ++ b`. For the last stage it is the identity. -/
-def expandTable (n ns offset : Nat) : FiniteFunction :=
-  let half := n / 2
-  { source := half, target := n, table := (List.range half).map fun j =>
-      let i := offset + j
-      let group := i / (2 * ns)
-      let r := i % (2 * ns)
-      if r < ns then group * ns + r else half + group * ns + (r - ns) }
-
-/-- The identity on a half of a length-`n` wire. -/
-def halfTable (n offset : Nat) : FiniteFunction :=
-  { source := n / 2, target := n, table := (List.range (n / 2)).map (offset + ·) }
-
-/-- Stockham radix-2 NTT of `n = 2^L` points, inputs canonical (`< p`). The halves `lo`, `hi` of the
-current array travel as two wires; stage `s` (`ns = 2^s`) computes `t = hi · ω_{2ns}^{j mod ns}`,
-`a = lo + t`, `b = lo - t`, and gathers the next halves from `a ++ b` by `expandTable`; the last stage's
-`a ++ b` is the output in natural order. The twiddles are gathered from one table of the powers of
-`ω_n`, so the constants are `n/2` words and each stage's twiddle is an index table. -/
-def nttStockham (x n : Nat) : BuildM Nat := do
-  if n ≤ 1 then return x
-  let half := n / 2
-  let L := Nat.log2 n
-  let k ← glConsts half
-  let ω := rootOfUnity n
-  let powers ← constWire ((List.range half).map fun i => BitVec.ofNat 64 (powMod ω i goldilocksP))
-  let mut lo ← node half (.gather (halfTable n 0)) [x]
-  let mut hi ← node half (.gather (halfTable n half)) [x]
-  let mut out := x
-  for s in List.range L do
-    let ns := 2 ^ s
-    let twTable : FiniteFunction :=
-      { source := half, target := half, table := (List.range half).map fun j => (j % ns) * (half / ns) }
-    let tw ← node half (.gather twTable) [powers]
-    let t ← glMul half k hi tw
-    let a ← glAdd half k lo t
-    let b ← glSub half k lo t
-    let ab ← node n .concat [a, b]
-    if s + 1 < L then
-      lo ← node half (.gather (expandTable n ns 0)) [ab]
-      hi ← node half (.gather (expandTable n ns half)) [ab]
-    else
-      out := ab
-  pure out
-
-def nttGraph (n : Nat) : ArrayGraph :=
-  runBuild (fun ins => do
-    let y ← nttStockham (ins.getD 0 0) n
-    pure [y]) [n]
+open Obend.Hardware.Gpu.ArrayPrograms
 
 /-- The naive DFT over the Goldilocks field, `y_k = Σ_j x_j ω^{jk}`, with a table of the powers of `ω`. -/
 def nttReference (xs : List Nat) : List Nat :=
@@ -244,24 +68,6 @@ partial def nttFast (xs : Array Nat) (ω : Nat) : Array Nat :=
       (ev[j']! + goldilocksP - pw[j']! * od[j']! % goldilocksP) % goldilocksP
 
 /-! ## Array graphs besides the NTT -/
-
-/-- Elementwise `a * b + c` over length-`n` wires, then a gather that reverses it: the lowering's map,
-constant and gather kernels on one wire of several workgroups. -/
-def macReverseGraph (n : Nat) : ArrayGraph :=
-  runBuild (fun ins => do
-    let a := ins.getD 0 0
-    let b := ins.getD 1 0
-    let c ← broadcast n 7#64
-    let m ← map3 n (.scalar .mac) a b c
-    let r ← node n (.gather { source := n, target := n, table := (List.range n).reverse }) [m]
-    pure [m, r]) [n, n]
-
-/-- A field multiply alone, elementwise, for the arithmetic tooth on big words. -/
-def glMulGraph (n : Nat) : ArrayGraph :=
-  runBuild (fun ins => do
-    let k ← glConsts n
-    let y ← glMul n k (ins.getD 0 0) (ins.getD 1 0)
-    pure [y]) [n, n]
 
 /-! ## Scalar graphs, as their one-element instance -/
 
@@ -306,24 +112,38 @@ inductive Kind where
   | ntt
   deriving DecidableEq
 
-def graphs : List (String × ArrayGraph × Kind) :=
-  [ ("diamond",          ofScalar goldenDiamondHypergraph, .plain)
-  , ("optic-mul",        ofScalar (compileOpticToHypergraph .mul), .plain)
-  , ("optic-linearmac",  ofScalar (compileOpticToHypergraph (.linearMac 7)), .plain)
-  , ("optic-bilinear",   ofScalar (compileOpticToHypergraph (.bilinear (-3))), .plain)
-  , ("adjoint-mul-add",  ofScalar (compileGraphAdjoint (compileOpticChain2FwdHypergraph .mul .add)), .plain)
-  , ("adjoint-square-bilinear",
-      ofScalar (compileGraphAdjoint (compileOpticChain2FwdHypergraph .square (.bilinear 5))), .plain)
-  , ("allops",           ofScalar allOpsGraph, .plain)
-  , ("muxchain",         ofScalar muxChainGraph, .plain)
-  , ("tree512",          ofScalar (treeGraph 512), .plain)
-  , ("mac-reverse-1000", macReverseGraph 1000, .plain)
-  , ("glmul-256",        glMulGraph 256, .ntt)
-  , ("ntt-4",            nttGraph 4, .ntt)
-  , ("ntt-16",           nttGraph 16, .ntt)
-  , ("ntt-64",           nttGraph 64, .ntt)
-  , ("ntt-1024",         nttGraph 1024, .ntt)
-  , ("ntt-65536",        nttGraph 65536, .ntt) ]
+/-- Compilation is delayed until selection, so listing a workload or importing a
+book never constructs every NTT's Core4 syntax. The typed receipt is retained. -/
+structure GraphCase where
+  name : String
+  build : Unit → Except String Obend.Hardware.ArrayTyping.TypedGraph
+  kind : Kind
+
+def scalarCase (name : String) (graph : StrictOpenHypergraph) : GraphCase :=
+  ⟨name, fun _ => Obend.Hardware.ArrayTyping.checkTypedGraph
+    (Obend.Hardware.ArrayTyping.wordTypes (ofScalar graph)) (ofScalar graph), .plain⟩
+
+def sourceCase (name : String) (lengths : List Nat) (source : Unit → ArraySource.Program)
+    (kind : Kind := .plain) : GraphCase :=
+  ⟨name, fun _ => (compileSource name lengths (source ())).map (·.typed), kind⟩
+
+def graphs : List GraphCase :=
+  [ scalarCase "diamond" goldenDiamondHypergraph
+  , scalarCase "optic-mul" (compileOpticToHypergraph .mul)
+  , scalarCase "optic-linearmac" (compileOpticToHypergraph (.linearMac 7))
+  , scalarCase "optic-bilinear" (compileOpticToHypergraph (.bilinear (-3)))
+  , scalarCase "adjoint-mul-add" (compileGraphAdjoint (compileOpticChain2FwdHypergraph .mul .add))
+  , scalarCase "adjoint-square-bilinear"
+      (compileGraphAdjoint (compileOpticChain2FwdHypergraph .square (.bilinear 5)))
+  , scalarCase "allops" allOpsGraph
+  , scalarCase "muxchain" muxChainGraph
+  , scalarCase "tree512" (treeGraph 512)
+  , sourceCase "mac-reverse-1000" [1000, 1000] (fun _ => macReverseSource 1000)
+  , sourceCase "glmul-256" [256, 256] (fun _ => glMulSource 256) .ntt ] ++
+    [4, 16, 64, 1024, 65536].map (fun n =>
+      sourceCase s!"ntt-{n}" [n] (fun _ => nttSource n) .ntt) ++
+    Obend.Hardware.Gpu.SoacPrograms.cases.map (fun (name, ns) =>
+      sourceCase name [ns.sum] (fun _ => Obend.Hardware.Gpu.SoacPrograms.source ns))
 
 def pool : List Int :=
   [0, 1, -1, 2, 3, -3, 10, 255, -256, 65535, 2 ^ 31, -(2 ^ 31), 2 ^ 32 + 1, 2 ^ 62, -(2 ^ 62),
@@ -361,20 +181,36 @@ def wiresText (ws : List (List Int)) : String := String.intercalate ";" (ws.map 
 
 def toVec (xs : List Int) : Vec := xs.map (BitVec.ofInt 64)
 
-def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) : IO Unit := do
-  unless g.wf do
-    throw <| IO.userError s!"{name}: the graph is not well-formed (ArrayGraph.wf)"
-  let p := lowerArrayToGpu g
+def graphTypes (name : String) (g : ArrayGraph) : List Obend.Hardware.ArrayTyping.TensorType :=
+  if name == "source-leaf-fixed-square" then
+    g.lengths.zipIdx.map fun (n, w) => ⟨[n], .fixed (if w == 0 then 8 else 16)⟩
+  else Obend.Hardware.ArrayTyping.wordTypes g
+
+def writeGraph (name : String) (typed : Obend.Hardware.ArrayTyping.TypedGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) : IO Unit := do
+  let g := typed.graph
+  let p := typed.lower
   IO.FS.createDirAll dir
   IO.FS.writeFile (dir / "plan.json") (emitPlanJson name p)
   for (s, k) in p.stages.zipIdx do
     IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (emitStageWgsl plant name k p.stages.length s)
   let inLens := g.inputs.map (g.lengths.getD · 0)
   let mut lines : Array String := #[]
-  for v in List.range (vectorCount g) do
-    let vals := vectorFor kind inLens v
+  let vectors : List (List (List Int)) := match Obend.Hardware.Gpu.SourcePrograms.sourceVectors? name with
+    | some vs => vs.map fun (inputs : List Vec) => inputs.map fun (xs : Vec) => xs.map (fun (w : Word) => w.toInt)
+    | none => (List.range (vectorCount g)).map (vectorFor kind inLens)
+  for (vals, v) in vectors.zipIdx do
     let env := mkEnv g.lengths g.inputs (vals.map toVec)
     let model := evalGraphArr g ((List.range g.lengths.length).map fun w => (env w).toArray).toArray
+    unless Obend.Hardware.Gpu.SourcePrograms.checkSourceExpected name (vals.map toVec) model do
+      throw <| IO.userError s!"{name} vector {v}: graph disagrees with the independent source reference"
+    unless Obend.Hardware.Gpu.SoacPrograms.checkSoacExpected name (vals.map toVec) model do
+      throw <| IO.userError s!"{name} vector {v}: graph disagrees with the independent SOAC reference"
+    if name == "glmul-256" then
+      let left := (toVec (vals.getD 0 [])).map (·.toNat)
+      let right := (toVec (vals.getD 1 [])).map (·.toNat)
+      let fieldReference := List.zipWith (fun a b => a * b % goldilocksP) left right
+      unless (model.getD 0 []).map (·.toNat) == fieldReference do
+        throw <| IO.userError s!"{name} vector {v}: source field multiply disagrees with exact Nat arithmetic modulo p"
     if kind == .ntt && name.startsWith "ntt" then
       let input := (vals.getD 0 []).map Int.toNat
       let fast := (nttFast input.toArray (rootOfUnity input.length)).toList
@@ -390,19 +226,30 @@ def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.File
     {(fuseGraph g).edges.length} after fusion, {p.consts.length} constants, \
     {p.tables.length} indices, {p.stages.length} dispatches \
     ({String.intercalate "," (p.stages.map fun s => toString s.kernels.length)} kernels), \
-    {vectorCount g} vectors -> {dir}"
+    {vectors.length} vectors -> {dir}"
 
 /-! ## Main -/
 
 def usage : String :=
-  "usage: obend-emit-gpu list | <graph> --out DIR [--plant addAsSub|swapMux] | all --out DIR [--plant P]"
+  "usage: obend-emit-gpu list | <graph> --out DIR [--plant addAsSub|swapMux] | all --out DIR [--plant P] | catgrad FILE --out DIR [--plant P] | leaf BOOK MEMBER INPUTS --out DIR [--plant P] | leaf-example --out DIR"
 
 def main (args : List String) : IO UInt32 := do
+  match Obend.Hardware.Gpu.SourcePrograms.checkRefusals with
+  | .error reason => IO.eprintln reason; return 1
+  | .ok _ => pure ()
+  let graphs := graphs ++ Obend.Hardware.Gpu.SourcePrograms.cases.map (fun c =>
+    ⟨c.name, fun _ => do
+      let p ← c.compile
+      Obend.Hardware.ArrayTyping.checkTypedGraph (graphTypes c.name p.plan.graph) p.plan.graph,
+      .plain⟩)
   match args with
   | ["list"] =>
-    for (n, _, _) in graphs do IO.println n
+    for item in graphs do IO.println item.name
     return 0
-  | name :: rest =>
+  | name :: rawRest =>
+    let payload := if name == "catgrad" then 1 else if name == "leaf" then 3 else 0
+    let file := rawRest.head?
+    let rest := rawRest.drop payload
     let mut out : Option String := none
     let mut plant : Plant := .none
     let mut r := rest
@@ -416,10 +263,32 @@ def main (args : List String) : IO UInt32 := do
       | other :: _ => IO.eprintln s!"unexpected argument {other}\n{usage}"; return 2
       | [] => pure ()
     let some dir := out | IO.eprintln usage; return 2
-    if name == "all" then
-      for (n, g, kind) in graphs do writeGraph n g kind (dir / n) plant
+    if name == "catgrad" then
+      let some path := file | IO.eprintln "catgrad requires an input file"; return 2
+      Obend.Hardware.Gpu.CatgradImport.writeFile path dir plant
       return 0
-    match graphs.find? (·.1 == name) with
-    | some (_, g, kind) => writeGraph name g kind dir plant; return 0
+    if name == "leaf-example" then
+      Obend.Hardware.Gpu.BookImport.writeExample dir
+      return 0
+    if name == "leaf" then
+      let some path := file | IO.eprintln "leaf requires BOOK MEMBER INPUTS"; return 2
+      let some member := rawRest[1]? | IO.eprintln "leaf requires a member name"; return 2
+      let some inputs := (rawRest[2]? : Option String) | IO.eprintln "leaf requires an input vector file"; return 2
+      Obend.Hardware.Gpu.BookImport.writeFile path member inputs dir plant
+      return 0
+    if name == "all" then
+      for item in graphs do
+        let typed ← match item.build () with
+          | .ok typed => pure typed
+          | .error reason => throw <| IO.userError s!"{item.name}: {reason}"
+        writeGraph item.name typed item.kind (dir / item.name) plant
+      return 0
+    match graphs.find? (·.name == name) with
+    | some item =>
+      let typed ← match item.build () with
+        | .ok typed => pure typed
+        | .error reason => throw <| IO.userError s!"{name}: {reason}"
+      writeGraph name typed item.kind dir plant
+      return 0
     | none => IO.eprintln s!"unknown graph {name}; `obend-emit-gpu list`"; return 2
   | [] => IO.eprintln usage; return 2
