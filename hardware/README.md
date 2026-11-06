@@ -191,28 +191,52 @@ AMD and HVM2 has no HIP backend, so the CUDA runtime stays unrun here.
 
 ## `gpu/`: open hypergraphs on a GPU (rung G1 of `review/GPU-PROGRAM-20261105.md`)
 
-`Obend.Hardware.Gpu` lowers a `StrictOpenHypergraph` to one WGSL compute shader per wavefront stage of
-`layerHypergraph`: thread `i` of stage `k` is hyperedge `i` of that stage, reading the wire buffer as it
-stood at dispatch entry and writing its one destination, with a constant buffer read by index.
-`lowerHypergraphToGpu_sound` says the program equals the 64-bit layered evaluation;
-`runProgram_eq_comb` that an arithmetic graph computes `evalHypergraphComb` modulo `2^64`;
-`runStagePar_eq_runStage` with `lowered_stage_dsts_nodup` that the order-free reading of a dispatch
-(each wire's value is the write of the one thread that owns it) equals the sequential one, which is the
-statement the device's scheduling freedom needs. Nothing a stage reads is written in that stage, so no
-claim about the device's memory model is made or needed; the stages are separate dispatches.
+`Obend.Hardware.ArrayHypergraph` is the scalar `StrictOpenHypergraph` with wires carrying vectors of
+64-bit words: a hyperedge is an elementwise map of a scalar operation (the `HypergraphOp`s plus the bit
+operations a Goldilocks multiply needs), a gather along a `FiniteFunction` (Wilson–Zanasi's permutation
+datum), a concatenation or a constant array. The wavefront layering and its theorems are the scalar ones
+restated (`layerGraph_sound`), and the scalar graphs are the one-element instance: `ofScalar` lifts every
+hyperedge to a map over length-one wires and `ofScalar_layered_sound` says the array evaluation of the
+image is the scalar 64-bit evaluation, wire by wire. `evalGraphArr` is the same evaluation with the wires
+stored in an array (`evalGraphArr_eq`); the closure-based model, compiled, re-evaluated an edge on every
+read and took exponential time in dependency depth, so the emitter computes expected values with the
+array form.
+
+`Obend.Hardware.Gpu` lowers an `ArrayGraph` to one WGSL compute shader per wavefront stage: every wire
+has a base in one flat buffer `w` (`base`, a prefix sum; `base_disjoint`), every hyperedge of a stage is a
+kernel whose threads are its elements, a constant buffer `c` holds constants and an index buffer `ix` the
+gather tables, and thread `t` of a stage finds its kernel by the thread ranges laid end to end.
+`lowerArrayToGpu_sound`: for a graph whose edges pass `edgeOk` and whose outputs exist (`ArrayGraph.wf`
+checks both), from any flattening of an environment of the declared lengths, `runProgram` (the order-free
+reading of a dispatch: a word's value is the write of the one thread that owns it) shows `evalGraph` on
+every output wire; distinct destinations within a stage come from the layering's independence, disjoint
+word ranges from the layout. `lowerHypergraphToGpu_sound` is the scalar corollary. Nothing a stage reads
+is written in that stage and no two threads write one word, so no claim about the device's memory model
+is made or needed; the stages are separate dispatches.
 
 `lean/tools/emitgpu` (`obend-emit-gpu`) writes `gpu/graphs/<graph>/`: `plan.json`, `stage_<k>.wgsl` and
-`expected.tsv` (the model's outputs per vector, signed 64-bit) for nine graphs: the golden diamond, three
-single-op optics, two whole-graph adjoints (`compileGraphAdjoint` of a two-op chain), one graph with
-every operation and wrap-around, a `mux` chain, and a 512-input addition tree whose first stage spans
-four workgroups. `gpu/runner` (`obend-gpu-run`: Rust, wgpu 27, a standalone crate outside the
-workspace) runs a plan on a chosen adapter and compares. `verify_gpu.sh` is the gate: bytes, every
-vector on the device, planted `addAsSub` and `swapMux` caught, and with Mesa's RADV the final ISA of
-every stage extracted to `gpu/isa/<graph>.txt` by `isa_extract.py` (one program per stage, its 64-bit
-stores counted; ACO merges cases, 201 stores for the 256-thread stage). Passed 2026-11-05 on hbox's
-RX 6750 XT under RADV (Mesa 24.2.8, the ISA artifact) and under AMDVLK 2025.Q2.1 (`GPU_ICD=any
-GPU_ADAPTER="AMD open-source"`), and on the Mac's M2 Max under Metal.
+`expected.tsv` (the model's output wires per vector, signed 64-bit) for fourteen graphs: nine scalar ones
+through `ofScalar` (the golden diamond, three single-op optics, two whole-graph adjoints, every operation
+with wrap-around, a `mux` chain, a 512-input addition tree), an elementwise multiply-accumulate with a
+reversing gather over a thousand elements, the Goldilocks field multiply over 256 elements (the limb
+network of `Obend.Apps.ZkNtt.glMul`, elementwise), and radix-2 Goldilocks NTTs of 4, 16 and 64 points
+built from gathers, the field operations and concatenations. The emitter refuses a graph that fails
+`ArrayGraph.wf` and an NTT whose model disagrees with the naive DFT (`nttReference`). `gpu/runner`
+(`obend-gpu-run`: Rust, wgpu 27, a standalone crate outside the workspace) runs a plan on a chosen adapter
+and compares. `verify_gpu.sh` is the gate: bytes, every vector on the device, planted `addAsSub` and
+`swapMux` caught, and with Mesa's RADV the final ISA of every stage extracted to `gpu/isa/<graph>.txt` by
+`isa_extract.py` (one program per stage, its 64-bit stores counted; the compiler merges cases).
+
+Passed 2026-11-05 on hbox's RX 6750 XT under RADV (Mesa 24.2.8, the ISA artifact) and under AMDVLK
+2025.Q2.1 (`GPU_ICD=any GPU_ADAPTER="AMD open-source"`), and on the Mac's M2 Max under Metal. Four
+things the gate caught on the way, each a departure between a device and a model that reads correct:
+Metal's compiler refuses an `else if` chain 256 deep (the kernel tests are now a flat sequence of disjoint
+ranges); WGSL's `>>` on `i64` is arithmetic where the model's is logical (shifts and the unsigned
+comparison go through `u64`); AMDVLK runs out of memory with the 64-point NTT's 1670 dispatches in one
+command buffer where RADV and Metal do not (the runner submits in chunks of 128); and the closure-based
+evaluator above.
 
 Not here: a semantics of the ISA (rung G2 reads the dump against AMD's machine-readable RDNA2 spec), the
-memory model (G4), resource grading (G5), and any graph whose operations are outside `HypergraphOp`;
-the Goldilocks butterfly of `Apps/ZkNtt` needs comparison and shift operations first.
+memory model (G4), resource grading (G5), a layering better than the scalar module's greedy one (the
+64-point NTT lowers to 1670 dispatches where a few dozen would do), and the RTL path of the same array
+graphs (the commuting square with `compileHypergraphToRtl` is the next rung).

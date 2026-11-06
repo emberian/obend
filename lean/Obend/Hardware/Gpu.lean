@@ -41,9 +41,11 @@ assembly of each shader, the artifact rung G2 reads.
 
 ## Departures from the device, named
 
-WGSL `i64` arithmetic is modulo `2^64` by the WGSL specification, as `BitVec 64` is. A shift's amount is
-`u32(x)` on the device and `x.toNat` in the model; both shift out everything at `64` and above, and they
-agree for amounts below `2^32`, which is every amount a graph here produces. A missing operand reads as
+WGSL `i64` arithmetic is modulo `2^64` by the WGSL specification, as `BitVec 64` is. Shifts and the
+unsigned comparison go through `u64`, because WGSL's `>>` on `i64` is arithmetic (it sign-extends) while
+the model's is logical; the gate caught this on the field multiply. A shift's amount is `u32(x)` on the
+device and `x.toNat` in the model; they agree for amounts below `2^32`, which is every amount a graph here
+produces. A missing operand reads as
 `0`, as `evalHypergraphOpBv`'s `getD` does. Threads past a stage's last kernel do nothing. There is no
 claim about workgroups, caches or scopes.
 -/
@@ -688,8 +690,8 @@ def elemExpr (p : Plant) (op : ElemOp) (bases : List Nat) : String :=
   | .ult               => s!"select(i64(0), i64(1), u64({a 0}) < u64({a 1}))"
   | .band              => s!"{a 0} & {a 1}"
   | .bor               => s!"{a 0} | {a 1}"
-  | .shr               => s!"{a 0} >> u32({a 1})"
-  | .shl               => s!"{a 0} << u32({a 1})"
+  | .shr               => s!"i64(u64({a 0}) >> u32({a 1}))"
+  | .shl               => s!"i64(u64({a 0}) << u32({a 1}))"
 
 def kernelStatement (p : Plant) (k : Kernel) : String :=
   let rhs : String :=
@@ -703,11 +705,14 @@ def kernelStatement (p : Plant) (k : Kernel) : String :=
   s!"w[{k.dstBase}u + e] = {rhs};"
 
 /-- The shader of stage `k`: thread `gid.x` finds its kernel by the thread ranges laid end to end,
-becomes element `e` of it, and runs its statement; threads past the last kernel idle. -/
+becomes element `e` of it, and runs its statement; threads past the last kernel idle. The ranges are
+disjoint, so the tests are a flat sequence (an `else if` chain nests, and Metal's compiler stops at a
+depth of 256). -/
 def emitStageWgsl (p : Plant) (name : String) (k numStages : Nat) (s : GpuStage) : String :=
   let branches := (s.kernels.foldl (fun (acc : Nat × List String) kern =>
     let hi := acc.1 + kern.count
-    (hi, acc.2 ++ [s!"  {if acc.2.isEmpty then "if" else "else if"} (t < {hi}u) \{ let e : u32 = t - {acc.1}u; {kernelStatement p kern} }"]))
+    let test := if acc.1 == 0 then s!"t < {hi}u" else s!"t >= {acc.1}u && t < {hi}u"
+    (hi, acc.2 ++ [s!"  if ({test}) \{ let e : u32 = t - {acc.1}u; {kernelStatement p kern} }"]))
     (0, [])).2
   String.intercalate "\n"
     ([ s!"// obend-emit-gpu: {name}, stage {k} of {numStages}: {s.kernels.length} kernels, {s.threads} threads."

@@ -1,8 +1,11 @@
 {
   "graph": "optic-linearmac",
-  "numWires": 9,
+  "words": 9,
   "workgroupSize": 64,
+  "wireBase": [0,1,2,3,4,5,6,7,8],
+  "wireLen": [1,1,1,1,1,1,1,1,1],
   "consts": ["7","7","1"],
+  "tables": [],
   "inputs": [0,1,2],
   "outputs": [3,4,5],
   "stages": [

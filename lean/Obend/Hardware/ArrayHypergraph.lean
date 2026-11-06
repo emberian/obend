@@ -158,6 +158,55 @@ def evalComb (env : Nat → Vec) (es : List ArrayEdge) : Nat → Vec :=
 def evalGraph (g : ArrayGraph) (env : Nat → Vec) : List Vec :=
   g.outputs.map (evalComb env g.edges)
 
+/-! ### Running it: the environment as an array
+
+`evalComb` closes over the environment; compiled, every read of a wire re-evaluates its edge, which is
+exponential in dependency depth. `evalCombArr` stores the wires instead, and `evalCombArr_getD` says it
+is `evalComb` read through the array; `obend-emit-gpu` computes expected values with it. -/
+
+def stepEdgeArr (a : Array Vec) (e : ArrayEdge) : Array Vec :=
+  a.setIfInBounds e.dstWire (evalArrayOp e.op (e.srcWires.map fun w => a.getD w []))
+
+def evalCombArr (a : Array Vec) (es : List ArrayEdge) : Array Vec := es.foldl stepEdgeArr a
+
+def evalGraphArr (g : ArrayGraph) (a : Array Vec) : List Vec :=
+  g.outputs.map fun w => (evalCombArr a g.edges).getD w []
+
+theorem stepEdgeArr_getD (a : Array Vec) (e : ArrayEdge) (hdst : e.dstWire < a.size) (w : Nat) :
+    (stepEdgeArr a e).getD w [] = stepEdge (fun u => a.getD u []) e w := by
+  simp only [stepEdgeArr, stepEdge]
+  by_cases hw : w = e.dstWire
+  · subst hw
+    simp [Array.getD_eq_getD_getElem?, Array.getElem?_setIfInBounds_self_of_lt hdst]
+  · have h1 : (w == e.dstWire) = false := beq_eq_false_iff_ne.mpr hw
+    simp [Array.getD_eq_getD_getElem?, Array.getElem?_setIfInBounds_ne (Ne.symm hw), h1]
+
+theorem evalCombArr_getD (a : Array Vec) (es : List ArrayEdge) (h : ∀ e ∈ es, e.dstWire < a.size) (w : Nat) :
+    (evalCombArr a es).getD w [] = evalComb (fun u => a.getD u []) es w := by
+  induction es generalizing a with
+  | nil => rfl
+  | cons e rest ih =>
+    simp only [evalCombArr, evalComb, List.foldl_cons]
+    have hdst := h e List.mem_cons_self
+    have hsize : (stepEdgeArr a e).size = a.size := by simp [stepEdgeArr]
+    have hrest : ∀ e' ∈ rest, e'.dstWire < (stepEdgeArr a e).size := by
+      intro e' he'; rw [hsize]; exact h e' (List.mem_cons_of_mem e he')
+    have hfun : (fun u => (stepEdgeArr a e).getD u []) = stepEdge (fun u => a.getD u []) e := by
+      funext u; exact stepEdgeArr_getD a e hdst u
+    have := ih (stepEdgeArr a e) hrest
+    simp only [evalCombArr, evalComb] at this
+    rw [hfun] at this
+    exact this
+
+/-- **`evalGraphArr_eq`**: the array evaluation is the model's, on a graph whose destinations exist. -/
+theorem evalGraphArr_eq (g : ArrayGraph) (a : Array Vec) (hsize : a.size = g.lengths.length)
+    (h : ∀ e ∈ g.edges, e.dstWire < g.lengths.length) :
+    evalGraphArr g a = evalGraph g (fun u => a.getD u []) := by
+  simp only [evalGraphArr, evalGraph]
+  apply List.map_congr_left
+  intro w _
+  exact evalCombArr_getD a g.edges (fun e he => by rw [hsize]; exact h e he) w
+
 /-- Synchronous step: sources read from the stage-entry snapshot. -/
 def stepEdgeSync (entry cur : Nat → Vec) (e : ArrayEdge) : Nat → Vec :=
   let v := evalArrayOp e.op (e.srcWires.map entry)

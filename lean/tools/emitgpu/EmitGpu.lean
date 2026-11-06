@@ -14,6 +14,7 @@
 rules planted in the shader text only, for `hardware/gpu/verify_gpu.sh`'s tooth. The expected values
 are always the unplanted model's.
 
+Expected values are `evalGraphArr`'s, which is `evalGraph` with the wires stored (`evalGraphArr_eq`).
 Before writing, the emitter refuses a graph that fails `ArrayGraph.wf` (which is the hypothesis of
 `lowerArrayToGpu_sound`, so the expected values are `evalGraph`'s and the device must show them) and an
 NTT graph whose evaluation disagrees with the naive DFT over the Goldilocks field (`nttReference`).
@@ -262,6 +263,7 @@ def graphs : List (String × ArrayGraph × Kind) :=
   , ("tree512",          ofScalar (treeGraph 512), .plain)
   , ("mac-reverse-1000", macReverseGraph 1000, .plain)
   , ("glmul-256",        glMulGraph 256, .ntt)
+  , ("ntt-4",            nttGraph 4, .ntt)
   , ("ntt-16",           nttGraph 16, .ntt)
   , ("ntt-64",           nttGraph 64, .ntt) ]
 
@@ -313,12 +315,13 @@ def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.File
   for v in List.range (vectorCount g) do
     let vals := vectorFor kind inLens v
     let env := mkEnv g.lengths g.inputs (vals.map toVec)
-    let model := evalGraph g env
+    let model := evalGraphArr g ((List.range g.lengths.length).map env).toArray
     if kind == .ntt && name.startsWith "ntt" then
       let ref := nttReference ((vals.getD 0 []).map Int.toNat)
       unless (model.getD 0 []).map (·.toNat) == ref do
         throw <| IO.userError s!"{name} vector {v}: the NTT graph disagrees with the naive DFT"
-    lines := lines.push s!"{v}\t{wiresText vals}\t{wiresText (model.map fun ws => ws.map (·.toInt))}"
+    let signed64 (ws : List Int) : List Int := ws.map fun x => (BitVec.ofInt 64 x).toInt
+    lines := lines.push s!"{v}\t{wiresText (vals.map signed64)}\t{wiresText (model.map fun ws => ws.map (·.toInt))}"
   IO.FS.writeFile (dir / "expected.tsv") (String.intercalate "\n" lines.toList ++ "\n")
   IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {p.consts.length} constants, \
     {p.tables.length} indices, {p.stages.length} stages \

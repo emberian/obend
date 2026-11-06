@@ -1,139 +1,138 @@
-// obend-emit-gpu: tree512, stage 1 of 9: 128 threads, one hyperedge each.
-// Generated from Obend.Hardware.Gpu.lowerHypergraphToGpu; do not edit (verify_gpu.sh compares bytes).
+// obend-emit-gpu: tree512, stage 1 of 9: 128 kernels, 128 threads.
+// Generated from Obend.Hardware.Gpu.lowerArrayToGpu; do not edit (verify_gpu.sh compares bytes).
 @group(0) @binding(0) var<storage, read_write> w : array<i64>;
 @group(0) @binding(1) var<storage, read> c : array<i64>;
+@group(0) @binding(2) var<storage, read> ix : array<u32>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
-  switch gid.x {
-    case 0u: { w[768u] = w[512u] + w[513u]; }
-    case 1u: { w[769u] = w[514u] + w[515u]; }
-    case 2u: { w[770u] = w[516u] + w[517u]; }
-    case 3u: { w[771u] = w[518u] + w[519u]; }
-    case 4u: { w[772u] = w[520u] + w[521u]; }
-    case 5u: { w[773u] = w[522u] + w[523u]; }
-    case 6u: { w[774u] = w[524u] + w[525u]; }
-    case 7u: { w[775u] = w[526u] + w[527u]; }
-    case 8u: { w[776u] = w[528u] + w[529u]; }
-    case 9u: { w[777u] = w[530u] + w[531u]; }
-    case 10u: { w[778u] = w[532u] + w[533u]; }
-    case 11u: { w[779u] = w[534u] + w[535u]; }
-    case 12u: { w[780u] = w[536u] + w[537u]; }
-    case 13u: { w[781u] = w[538u] + w[539u]; }
-    case 14u: { w[782u] = w[540u] + w[541u]; }
-    case 15u: { w[783u] = w[542u] + w[543u]; }
-    case 16u: { w[784u] = w[544u] + w[545u]; }
-    case 17u: { w[785u] = w[546u] + w[547u]; }
-    case 18u: { w[786u] = w[548u] + w[549u]; }
-    case 19u: { w[787u] = w[550u] + w[551u]; }
-    case 20u: { w[788u] = w[552u] + w[553u]; }
-    case 21u: { w[789u] = w[554u] + w[555u]; }
-    case 22u: { w[790u] = w[556u] + w[557u]; }
-    case 23u: { w[791u] = w[558u] + w[559u]; }
-    case 24u: { w[792u] = w[560u] + w[561u]; }
-    case 25u: { w[793u] = w[562u] + w[563u]; }
-    case 26u: { w[794u] = w[564u] + w[565u]; }
-    case 27u: { w[795u] = w[566u] + w[567u]; }
-    case 28u: { w[796u] = w[568u] + w[569u]; }
-    case 29u: { w[797u] = w[570u] + w[571u]; }
-    case 30u: { w[798u] = w[572u] + w[573u]; }
-    case 31u: { w[799u] = w[574u] + w[575u]; }
-    case 32u: { w[800u] = w[576u] + w[577u]; }
-    case 33u: { w[801u] = w[578u] + w[579u]; }
-    case 34u: { w[802u] = w[580u] + w[581u]; }
-    case 35u: { w[803u] = w[582u] + w[583u]; }
-    case 36u: { w[804u] = w[584u] + w[585u]; }
-    case 37u: { w[805u] = w[586u] + w[587u]; }
-    case 38u: { w[806u] = w[588u] + w[589u]; }
-    case 39u: { w[807u] = w[590u] + w[591u]; }
-    case 40u: { w[808u] = w[592u] + w[593u]; }
-    case 41u: { w[809u] = w[594u] + w[595u]; }
-    case 42u: { w[810u] = w[596u] + w[597u]; }
-    case 43u: { w[811u] = w[598u] + w[599u]; }
-    case 44u: { w[812u] = w[600u] + w[601u]; }
-    case 45u: { w[813u] = w[602u] + w[603u]; }
-    case 46u: { w[814u] = w[604u] + w[605u]; }
-    case 47u: { w[815u] = w[606u] + w[607u]; }
-    case 48u: { w[816u] = w[608u] + w[609u]; }
-    case 49u: { w[817u] = w[610u] + w[611u]; }
-    case 50u: { w[818u] = w[612u] + w[613u]; }
-    case 51u: { w[819u] = w[614u] + w[615u]; }
-    case 52u: { w[820u] = w[616u] + w[617u]; }
-    case 53u: { w[821u] = w[618u] + w[619u]; }
-    case 54u: { w[822u] = w[620u] + w[621u]; }
-    case 55u: { w[823u] = w[622u] + w[623u]; }
-    case 56u: { w[824u] = w[624u] + w[625u]; }
-    case 57u: { w[825u] = w[626u] + w[627u]; }
-    case 58u: { w[826u] = w[628u] + w[629u]; }
-    case 59u: { w[827u] = w[630u] + w[631u]; }
-    case 60u: { w[828u] = w[632u] + w[633u]; }
-    case 61u: { w[829u] = w[634u] + w[635u]; }
-    case 62u: { w[830u] = w[636u] + w[637u]; }
-    case 63u: { w[831u] = w[638u] + w[639u]; }
-    case 64u: { w[832u] = w[640u] + w[641u]; }
-    case 65u: { w[833u] = w[642u] + w[643u]; }
-    case 66u: { w[834u] = w[644u] + w[645u]; }
-    case 67u: { w[835u] = w[646u] + w[647u]; }
-    case 68u: { w[836u] = w[648u] + w[649u]; }
-    case 69u: { w[837u] = w[650u] + w[651u]; }
-    case 70u: { w[838u] = w[652u] + w[653u]; }
-    case 71u: { w[839u] = w[654u] + w[655u]; }
-    case 72u: { w[840u] = w[656u] + w[657u]; }
-    case 73u: { w[841u] = w[658u] + w[659u]; }
-    case 74u: { w[842u] = w[660u] + w[661u]; }
-    case 75u: { w[843u] = w[662u] + w[663u]; }
-    case 76u: { w[844u] = w[664u] + w[665u]; }
-    case 77u: { w[845u] = w[666u] + w[667u]; }
-    case 78u: { w[846u] = w[668u] + w[669u]; }
-    case 79u: { w[847u] = w[670u] + w[671u]; }
-    case 80u: { w[848u] = w[672u] + w[673u]; }
-    case 81u: { w[849u] = w[674u] + w[675u]; }
-    case 82u: { w[850u] = w[676u] + w[677u]; }
-    case 83u: { w[851u] = w[678u] + w[679u]; }
-    case 84u: { w[852u] = w[680u] + w[681u]; }
-    case 85u: { w[853u] = w[682u] + w[683u]; }
-    case 86u: { w[854u] = w[684u] + w[685u]; }
-    case 87u: { w[855u] = w[686u] + w[687u]; }
-    case 88u: { w[856u] = w[688u] + w[689u]; }
-    case 89u: { w[857u] = w[690u] + w[691u]; }
-    case 90u: { w[858u] = w[692u] + w[693u]; }
-    case 91u: { w[859u] = w[694u] + w[695u]; }
-    case 92u: { w[860u] = w[696u] + w[697u]; }
-    case 93u: { w[861u] = w[698u] + w[699u]; }
-    case 94u: { w[862u] = w[700u] + w[701u]; }
-    case 95u: { w[863u] = w[702u] + w[703u]; }
-    case 96u: { w[864u] = w[704u] + w[705u]; }
-    case 97u: { w[865u] = w[706u] + w[707u]; }
-    case 98u: { w[866u] = w[708u] + w[709u]; }
-    case 99u: { w[867u] = w[710u] + w[711u]; }
-    case 100u: { w[868u] = w[712u] + w[713u]; }
-    case 101u: { w[869u] = w[714u] + w[715u]; }
-    case 102u: { w[870u] = w[716u] + w[717u]; }
-    case 103u: { w[871u] = w[718u] + w[719u]; }
-    case 104u: { w[872u] = w[720u] + w[721u]; }
-    case 105u: { w[873u] = w[722u] + w[723u]; }
-    case 106u: { w[874u] = w[724u] + w[725u]; }
-    case 107u: { w[875u] = w[726u] + w[727u]; }
-    case 108u: { w[876u] = w[728u] + w[729u]; }
-    case 109u: { w[877u] = w[730u] + w[731u]; }
-    case 110u: { w[878u] = w[732u] + w[733u]; }
-    case 111u: { w[879u] = w[734u] + w[735u]; }
-    case 112u: { w[880u] = w[736u] + w[737u]; }
-    case 113u: { w[881u] = w[738u] + w[739u]; }
-    case 114u: { w[882u] = w[740u] + w[741u]; }
-    case 115u: { w[883u] = w[742u] + w[743u]; }
-    case 116u: { w[884u] = w[744u] + w[745u]; }
-    case 117u: { w[885u] = w[746u] + w[747u]; }
-    case 118u: { w[886u] = w[748u] + w[749u]; }
-    case 119u: { w[887u] = w[750u] + w[751u]; }
-    case 120u: { w[888u] = w[752u] + w[753u]; }
-    case 121u: { w[889u] = w[754u] + w[755u]; }
-    case 122u: { w[890u] = w[756u] + w[757u]; }
-    case 123u: { w[891u] = w[758u] + w[759u]; }
-    case 124u: { w[892u] = w[760u] + w[761u]; }
-    case 125u: { w[893u] = w[762u] + w[763u]; }
-    case 126u: { w[894u] = w[764u] + w[765u]; }
-    case 127u: { w[895u] = w[766u] + w[767u]; }
-    default: { }
-  }
+  let t : u32 = gid.x;
+  if (t < 1u) { let e : u32 = t - 0u; w[768u + e] = w[512u + e] + w[513u + e]; }
+  if (t >= 1u && t < 2u) { let e : u32 = t - 1u; w[769u + e] = w[514u + e] + w[515u + e]; }
+  if (t >= 2u && t < 3u) { let e : u32 = t - 2u; w[770u + e] = w[516u + e] + w[517u + e]; }
+  if (t >= 3u && t < 4u) { let e : u32 = t - 3u; w[771u + e] = w[518u + e] + w[519u + e]; }
+  if (t >= 4u && t < 5u) { let e : u32 = t - 4u; w[772u + e] = w[520u + e] + w[521u + e]; }
+  if (t >= 5u && t < 6u) { let e : u32 = t - 5u; w[773u + e] = w[522u + e] + w[523u + e]; }
+  if (t >= 6u && t < 7u) { let e : u32 = t - 6u; w[774u + e] = w[524u + e] + w[525u + e]; }
+  if (t >= 7u && t < 8u) { let e : u32 = t - 7u; w[775u + e] = w[526u + e] + w[527u + e]; }
+  if (t >= 8u && t < 9u) { let e : u32 = t - 8u; w[776u + e] = w[528u + e] + w[529u + e]; }
+  if (t >= 9u && t < 10u) { let e : u32 = t - 9u; w[777u + e] = w[530u + e] + w[531u + e]; }
+  if (t >= 10u && t < 11u) { let e : u32 = t - 10u; w[778u + e] = w[532u + e] + w[533u + e]; }
+  if (t >= 11u && t < 12u) { let e : u32 = t - 11u; w[779u + e] = w[534u + e] + w[535u + e]; }
+  if (t >= 12u && t < 13u) { let e : u32 = t - 12u; w[780u + e] = w[536u + e] + w[537u + e]; }
+  if (t >= 13u && t < 14u) { let e : u32 = t - 13u; w[781u + e] = w[538u + e] + w[539u + e]; }
+  if (t >= 14u && t < 15u) { let e : u32 = t - 14u; w[782u + e] = w[540u + e] + w[541u + e]; }
+  if (t >= 15u && t < 16u) { let e : u32 = t - 15u; w[783u + e] = w[542u + e] + w[543u + e]; }
+  if (t >= 16u && t < 17u) { let e : u32 = t - 16u; w[784u + e] = w[544u + e] + w[545u + e]; }
+  if (t >= 17u && t < 18u) { let e : u32 = t - 17u; w[785u + e] = w[546u + e] + w[547u + e]; }
+  if (t >= 18u && t < 19u) { let e : u32 = t - 18u; w[786u + e] = w[548u + e] + w[549u + e]; }
+  if (t >= 19u && t < 20u) { let e : u32 = t - 19u; w[787u + e] = w[550u + e] + w[551u + e]; }
+  if (t >= 20u && t < 21u) { let e : u32 = t - 20u; w[788u + e] = w[552u + e] + w[553u + e]; }
+  if (t >= 21u && t < 22u) { let e : u32 = t - 21u; w[789u + e] = w[554u + e] + w[555u + e]; }
+  if (t >= 22u && t < 23u) { let e : u32 = t - 22u; w[790u + e] = w[556u + e] + w[557u + e]; }
+  if (t >= 23u && t < 24u) { let e : u32 = t - 23u; w[791u + e] = w[558u + e] + w[559u + e]; }
+  if (t >= 24u && t < 25u) { let e : u32 = t - 24u; w[792u + e] = w[560u + e] + w[561u + e]; }
+  if (t >= 25u && t < 26u) { let e : u32 = t - 25u; w[793u + e] = w[562u + e] + w[563u + e]; }
+  if (t >= 26u && t < 27u) { let e : u32 = t - 26u; w[794u + e] = w[564u + e] + w[565u + e]; }
+  if (t >= 27u && t < 28u) { let e : u32 = t - 27u; w[795u + e] = w[566u + e] + w[567u + e]; }
+  if (t >= 28u && t < 29u) { let e : u32 = t - 28u; w[796u + e] = w[568u + e] + w[569u + e]; }
+  if (t >= 29u && t < 30u) { let e : u32 = t - 29u; w[797u + e] = w[570u + e] + w[571u + e]; }
+  if (t >= 30u && t < 31u) { let e : u32 = t - 30u; w[798u + e] = w[572u + e] + w[573u + e]; }
+  if (t >= 31u && t < 32u) { let e : u32 = t - 31u; w[799u + e] = w[574u + e] + w[575u + e]; }
+  if (t >= 32u && t < 33u) { let e : u32 = t - 32u; w[800u + e] = w[576u + e] + w[577u + e]; }
+  if (t >= 33u && t < 34u) { let e : u32 = t - 33u; w[801u + e] = w[578u + e] + w[579u + e]; }
+  if (t >= 34u && t < 35u) { let e : u32 = t - 34u; w[802u + e] = w[580u + e] + w[581u + e]; }
+  if (t >= 35u && t < 36u) { let e : u32 = t - 35u; w[803u + e] = w[582u + e] + w[583u + e]; }
+  if (t >= 36u && t < 37u) { let e : u32 = t - 36u; w[804u + e] = w[584u + e] + w[585u + e]; }
+  if (t >= 37u && t < 38u) { let e : u32 = t - 37u; w[805u + e] = w[586u + e] + w[587u + e]; }
+  if (t >= 38u && t < 39u) { let e : u32 = t - 38u; w[806u + e] = w[588u + e] + w[589u + e]; }
+  if (t >= 39u && t < 40u) { let e : u32 = t - 39u; w[807u + e] = w[590u + e] + w[591u + e]; }
+  if (t >= 40u && t < 41u) { let e : u32 = t - 40u; w[808u + e] = w[592u + e] + w[593u + e]; }
+  if (t >= 41u && t < 42u) { let e : u32 = t - 41u; w[809u + e] = w[594u + e] + w[595u + e]; }
+  if (t >= 42u && t < 43u) { let e : u32 = t - 42u; w[810u + e] = w[596u + e] + w[597u + e]; }
+  if (t >= 43u && t < 44u) { let e : u32 = t - 43u; w[811u + e] = w[598u + e] + w[599u + e]; }
+  if (t >= 44u && t < 45u) { let e : u32 = t - 44u; w[812u + e] = w[600u + e] + w[601u + e]; }
+  if (t >= 45u && t < 46u) { let e : u32 = t - 45u; w[813u + e] = w[602u + e] + w[603u + e]; }
+  if (t >= 46u && t < 47u) { let e : u32 = t - 46u; w[814u + e] = w[604u + e] + w[605u + e]; }
+  if (t >= 47u && t < 48u) { let e : u32 = t - 47u; w[815u + e] = w[606u + e] + w[607u + e]; }
+  if (t >= 48u && t < 49u) { let e : u32 = t - 48u; w[816u + e] = w[608u + e] + w[609u + e]; }
+  if (t >= 49u && t < 50u) { let e : u32 = t - 49u; w[817u + e] = w[610u + e] + w[611u + e]; }
+  if (t >= 50u && t < 51u) { let e : u32 = t - 50u; w[818u + e] = w[612u + e] + w[613u + e]; }
+  if (t >= 51u && t < 52u) { let e : u32 = t - 51u; w[819u + e] = w[614u + e] + w[615u + e]; }
+  if (t >= 52u && t < 53u) { let e : u32 = t - 52u; w[820u + e] = w[616u + e] + w[617u + e]; }
+  if (t >= 53u && t < 54u) { let e : u32 = t - 53u; w[821u + e] = w[618u + e] + w[619u + e]; }
+  if (t >= 54u && t < 55u) { let e : u32 = t - 54u; w[822u + e] = w[620u + e] + w[621u + e]; }
+  if (t >= 55u && t < 56u) { let e : u32 = t - 55u; w[823u + e] = w[622u + e] + w[623u + e]; }
+  if (t >= 56u && t < 57u) { let e : u32 = t - 56u; w[824u + e] = w[624u + e] + w[625u + e]; }
+  if (t >= 57u && t < 58u) { let e : u32 = t - 57u; w[825u + e] = w[626u + e] + w[627u + e]; }
+  if (t >= 58u && t < 59u) { let e : u32 = t - 58u; w[826u + e] = w[628u + e] + w[629u + e]; }
+  if (t >= 59u && t < 60u) { let e : u32 = t - 59u; w[827u + e] = w[630u + e] + w[631u + e]; }
+  if (t >= 60u && t < 61u) { let e : u32 = t - 60u; w[828u + e] = w[632u + e] + w[633u + e]; }
+  if (t >= 61u && t < 62u) { let e : u32 = t - 61u; w[829u + e] = w[634u + e] + w[635u + e]; }
+  if (t >= 62u && t < 63u) { let e : u32 = t - 62u; w[830u + e] = w[636u + e] + w[637u + e]; }
+  if (t >= 63u && t < 64u) { let e : u32 = t - 63u; w[831u + e] = w[638u + e] + w[639u + e]; }
+  if (t >= 64u && t < 65u) { let e : u32 = t - 64u; w[832u + e] = w[640u + e] + w[641u + e]; }
+  if (t >= 65u && t < 66u) { let e : u32 = t - 65u; w[833u + e] = w[642u + e] + w[643u + e]; }
+  if (t >= 66u && t < 67u) { let e : u32 = t - 66u; w[834u + e] = w[644u + e] + w[645u + e]; }
+  if (t >= 67u && t < 68u) { let e : u32 = t - 67u; w[835u + e] = w[646u + e] + w[647u + e]; }
+  if (t >= 68u && t < 69u) { let e : u32 = t - 68u; w[836u + e] = w[648u + e] + w[649u + e]; }
+  if (t >= 69u && t < 70u) { let e : u32 = t - 69u; w[837u + e] = w[650u + e] + w[651u + e]; }
+  if (t >= 70u && t < 71u) { let e : u32 = t - 70u; w[838u + e] = w[652u + e] + w[653u + e]; }
+  if (t >= 71u && t < 72u) { let e : u32 = t - 71u; w[839u + e] = w[654u + e] + w[655u + e]; }
+  if (t >= 72u && t < 73u) { let e : u32 = t - 72u; w[840u + e] = w[656u + e] + w[657u + e]; }
+  if (t >= 73u && t < 74u) { let e : u32 = t - 73u; w[841u + e] = w[658u + e] + w[659u + e]; }
+  if (t >= 74u && t < 75u) { let e : u32 = t - 74u; w[842u + e] = w[660u + e] + w[661u + e]; }
+  if (t >= 75u && t < 76u) { let e : u32 = t - 75u; w[843u + e] = w[662u + e] + w[663u + e]; }
+  if (t >= 76u && t < 77u) { let e : u32 = t - 76u; w[844u + e] = w[664u + e] + w[665u + e]; }
+  if (t >= 77u && t < 78u) { let e : u32 = t - 77u; w[845u + e] = w[666u + e] + w[667u + e]; }
+  if (t >= 78u && t < 79u) { let e : u32 = t - 78u; w[846u + e] = w[668u + e] + w[669u + e]; }
+  if (t >= 79u && t < 80u) { let e : u32 = t - 79u; w[847u + e] = w[670u + e] + w[671u + e]; }
+  if (t >= 80u && t < 81u) { let e : u32 = t - 80u; w[848u + e] = w[672u + e] + w[673u + e]; }
+  if (t >= 81u && t < 82u) { let e : u32 = t - 81u; w[849u + e] = w[674u + e] + w[675u + e]; }
+  if (t >= 82u && t < 83u) { let e : u32 = t - 82u; w[850u + e] = w[676u + e] + w[677u + e]; }
+  if (t >= 83u && t < 84u) { let e : u32 = t - 83u; w[851u + e] = w[678u + e] + w[679u + e]; }
+  if (t >= 84u && t < 85u) { let e : u32 = t - 84u; w[852u + e] = w[680u + e] + w[681u + e]; }
+  if (t >= 85u && t < 86u) { let e : u32 = t - 85u; w[853u + e] = w[682u + e] + w[683u + e]; }
+  if (t >= 86u && t < 87u) { let e : u32 = t - 86u; w[854u + e] = w[684u + e] + w[685u + e]; }
+  if (t >= 87u && t < 88u) { let e : u32 = t - 87u; w[855u + e] = w[686u + e] + w[687u + e]; }
+  if (t >= 88u && t < 89u) { let e : u32 = t - 88u; w[856u + e] = w[688u + e] + w[689u + e]; }
+  if (t >= 89u && t < 90u) { let e : u32 = t - 89u; w[857u + e] = w[690u + e] + w[691u + e]; }
+  if (t >= 90u && t < 91u) { let e : u32 = t - 90u; w[858u + e] = w[692u + e] + w[693u + e]; }
+  if (t >= 91u && t < 92u) { let e : u32 = t - 91u; w[859u + e] = w[694u + e] + w[695u + e]; }
+  if (t >= 92u && t < 93u) { let e : u32 = t - 92u; w[860u + e] = w[696u + e] + w[697u + e]; }
+  if (t >= 93u && t < 94u) { let e : u32 = t - 93u; w[861u + e] = w[698u + e] + w[699u + e]; }
+  if (t >= 94u && t < 95u) { let e : u32 = t - 94u; w[862u + e] = w[700u + e] + w[701u + e]; }
+  if (t >= 95u && t < 96u) { let e : u32 = t - 95u; w[863u + e] = w[702u + e] + w[703u + e]; }
+  if (t >= 96u && t < 97u) { let e : u32 = t - 96u; w[864u + e] = w[704u + e] + w[705u + e]; }
+  if (t >= 97u && t < 98u) { let e : u32 = t - 97u; w[865u + e] = w[706u + e] + w[707u + e]; }
+  if (t >= 98u && t < 99u) { let e : u32 = t - 98u; w[866u + e] = w[708u + e] + w[709u + e]; }
+  if (t >= 99u && t < 100u) { let e : u32 = t - 99u; w[867u + e] = w[710u + e] + w[711u + e]; }
+  if (t >= 100u && t < 101u) { let e : u32 = t - 100u; w[868u + e] = w[712u + e] + w[713u + e]; }
+  if (t >= 101u && t < 102u) { let e : u32 = t - 101u; w[869u + e] = w[714u + e] + w[715u + e]; }
+  if (t >= 102u && t < 103u) { let e : u32 = t - 102u; w[870u + e] = w[716u + e] + w[717u + e]; }
+  if (t >= 103u && t < 104u) { let e : u32 = t - 103u; w[871u + e] = w[718u + e] + w[719u + e]; }
+  if (t >= 104u && t < 105u) { let e : u32 = t - 104u; w[872u + e] = w[720u + e] + w[721u + e]; }
+  if (t >= 105u && t < 106u) { let e : u32 = t - 105u; w[873u + e] = w[722u + e] + w[723u + e]; }
+  if (t >= 106u && t < 107u) { let e : u32 = t - 106u; w[874u + e] = w[724u + e] + w[725u + e]; }
+  if (t >= 107u && t < 108u) { let e : u32 = t - 107u; w[875u + e] = w[726u + e] + w[727u + e]; }
+  if (t >= 108u && t < 109u) { let e : u32 = t - 108u; w[876u + e] = w[728u + e] + w[729u + e]; }
+  if (t >= 109u && t < 110u) { let e : u32 = t - 109u; w[877u + e] = w[730u + e] + w[731u + e]; }
+  if (t >= 110u && t < 111u) { let e : u32 = t - 110u; w[878u + e] = w[732u + e] + w[733u + e]; }
+  if (t >= 111u && t < 112u) { let e : u32 = t - 111u; w[879u + e] = w[734u + e] + w[735u + e]; }
+  if (t >= 112u && t < 113u) { let e : u32 = t - 112u; w[880u + e] = w[736u + e] + w[737u + e]; }
+  if (t >= 113u && t < 114u) { let e : u32 = t - 113u; w[881u + e] = w[738u + e] + w[739u + e]; }
+  if (t >= 114u && t < 115u) { let e : u32 = t - 114u; w[882u + e] = w[740u + e] + w[741u + e]; }
+  if (t >= 115u && t < 116u) { let e : u32 = t - 115u; w[883u + e] = w[742u + e] + w[743u + e]; }
+  if (t >= 116u && t < 117u) { let e : u32 = t - 116u; w[884u + e] = w[744u + e] + w[745u + e]; }
+  if (t >= 117u && t < 118u) { let e : u32 = t - 117u; w[885u + e] = w[746u + e] + w[747u + e]; }
+  if (t >= 118u && t < 119u) { let e : u32 = t - 118u; w[886u + e] = w[748u + e] + w[749u + e]; }
+  if (t >= 119u && t < 120u) { let e : u32 = t - 119u; w[887u + e] = w[750u + e] + w[751u + e]; }
+  if (t >= 120u && t < 121u) { let e : u32 = t - 120u; w[888u + e] = w[752u + e] + w[753u + e]; }
+  if (t >= 121u && t < 122u) { let e : u32 = t - 121u; w[889u + e] = w[754u + e] + w[755u + e]; }
+  if (t >= 122u && t < 123u) { let e : u32 = t - 122u; w[890u + e] = w[756u + e] + w[757u + e]; }
+  if (t >= 123u && t < 124u) { let e : u32 = t - 123u; w[891u + e] = w[758u + e] + w[759u + e]; }
+  if (t >= 124u && t < 125u) { let e : u32 = t - 124u; w[892u + e] = w[760u + e] + w[761u + e]; }
+  if (t >= 125u && t < 126u) { let e : u32 = t - 125u; w[893u + e] = w[762u + e] + w[763u + e]; }
+  if (t >= 126u && t < 127u) { let e : u32 = t - 126u; w[894u + e] = w[764u + e] + w[765u + e]; }
+  if (t >= 127u && t < 128u) { let e : u32 = t - 127u; w[895u + e] = w[766u + e] + w[767u + e]; }
 }

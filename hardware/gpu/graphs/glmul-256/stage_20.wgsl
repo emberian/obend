@@ -1,0 +1,11 @@
+// obend-emit-gpu: glmul-256, stage 20 of 21: 1 kernels, 256 threads.
+// Generated from Obend.Hardware.Gpu.lowerArrayToGpu; do not edit (verify_gpu.sh compares bytes).
+@group(0) @binding(0) var<storage, read_write> w : array<i64>;
+@group(0) @binding(1) var<storage, read> c : array<i64>;
+@group(0) @binding(2) var<storage, read> ix : array<u32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
+  let t : u32 = gid.x;
+  if (t < 256u) { let e : u32 = t - 0u; w[11264u + e] = select(w[11008u + e], w[10752u + e], w[10240u + e] != i64(0)); }
+}

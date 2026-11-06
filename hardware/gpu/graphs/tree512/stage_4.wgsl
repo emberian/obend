@@ -1,27 +1,26 @@
-// obend-emit-gpu: tree512, stage 4 of 9: 16 threads, one hyperedge each.
-// Generated from Obend.Hardware.Gpu.lowerHypergraphToGpu; do not edit (verify_gpu.sh compares bytes).
+// obend-emit-gpu: tree512, stage 4 of 9: 16 kernels, 16 threads.
+// Generated from Obend.Hardware.Gpu.lowerArrayToGpu; do not edit (verify_gpu.sh compares bytes).
 @group(0) @binding(0) var<storage, read_write> w : array<i64>;
 @group(0) @binding(1) var<storage, read> c : array<i64>;
+@group(0) @binding(2) var<storage, read> ix : array<u32>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
-  switch gid.x {
-    case 0u: { w[992u] = w[960u] + w[961u]; }
-    case 1u: { w[993u] = w[962u] + w[963u]; }
-    case 2u: { w[994u] = w[964u] + w[965u]; }
-    case 3u: { w[995u] = w[966u] + w[967u]; }
-    case 4u: { w[996u] = w[968u] + w[969u]; }
-    case 5u: { w[997u] = w[970u] + w[971u]; }
-    case 6u: { w[998u] = w[972u] + w[973u]; }
-    case 7u: { w[999u] = w[974u] + w[975u]; }
-    case 8u: { w[1000u] = w[976u] + w[977u]; }
-    case 9u: { w[1001u] = w[978u] + w[979u]; }
-    case 10u: { w[1002u] = w[980u] + w[981u]; }
-    case 11u: { w[1003u] = w[982u] + w[983u]; }
-    case 12u: { w[1004u] = w[984u] + w[985u]; }
-    case 13u: { w[1005u] = w[986u] + w[987u]; }
-    case 14u: { w[1006u] = w[988u] + w[989u]; }
-    case 15u: { w[1007u] = w[990u] + w[991u]; }
-    default: { }
-  }
+  let t : u32 = gid.x;
+  if (t < 1u) { let e : u32 = t - 0u; w[992u + e] = w[960u + e] + w[961u + e]; }
+  if (t >= 1u && t < 2u) { let e : u32 = t - 1u; w[993u + e] = w[962u + e] + w[963u + e]; }
+  if (t >= 2u && t < 3u) { let e : u32 = t - 2u; w[994u + e] = w[964u + e] + w[965u + e]; }
+  if (t >= 3u && t < 4u) { let e : u32 = t - 3u; w[995u + e] = w[966u + e] + w[967u + e]; }
+  if (t >= 4u && t < 5u) { let e : u32 = t - 4u; w[996u + e] = w[968u + e] + w[969u + e]; }
+  if (t >= 5u && t < 6u) { let e : u32 = t - 5u; w[997u + e] = w[970u + e] + w[971u + e]; }
+  if (t >= 6u && t < 7u) { let e : u32 = t - 6u; w[998u + e] = w[972u + e] + w[973u + e]; }
+  if (t >= 7u && t < 8u) { let e : u32 = t - 7u; w[999u + e] = w[974u + e] + w[975u + e]; }
+  if (t >= 8u && t < 9u) { let e : u32 = t - 8u; w[1000u + e] = w[976u + e] + w[977u + e]; }
+  if (t >= 9u && t < 10u) { let e : u32 = t - 9u; w[1001u + e] = w[978u + e] + w[979u + e]; }
+  if (t >= 10u && t < 11u) { let e : u32 = t - 10u; w[1002u + e] = w[980u + e] + w[981u + e]; }
+  if (t >= 11u && t < 12u) { let e : u32 = t - 11u; w[1003u + e] = w[982u + e] + w[983u + e]; }
+  if (t >= 12u && t < 13u) { let e : u32 = t - 12u; w[1004u + e] = w[984u + e] + w[985u + e]; }
+  if (t >= 13u && t < 14u) { let e : u32 = t - 13u; w[1005u + e] = w[986u + e] + w[987u + e]; }
+  if (t >= 14u && t < 15u) { let e : u32 = t - 14u; w[1006u + e] = w[988u + e] + w[989u + e]; }
+  if (t >= 15u && t < 16u) { let e : u32 = t - 15u; w[1007u + e] = w[990u + e] + w[991u + e]; }
 }

@@ -1,13 +1,12 @@
-// obend-emit-gpu: tree512, stage 7 of 9: 2 threads, one hyperedge each.
-// Generated from Obend.Hardware.Gpu.lowerHypergraphToGpu; do not edit (verify_gpu.sh compares bytes).
+// obend-emit-gpu: tree512, stage 7 of 9: 2 kernels, 2 threads.
+// Generated from Obend.Hardware.Gpu.lowerArrayToGpu; do not edit (verify_gpu.sh compares bytes).
 @group(0) @binding(0) var<storage, read_write> w : array<i64>;
 @group(0) @binding(1) var<storage, read> c : array<i64>;
+@group(0) @binding(2) var<storage, read> ix : array<u32>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
-  switch gid.x {
-    case 0u: { w[1020u] = w[1016u] + w[1017u]; }
-    case 1u: { w[1021u] = w[1018u] + w[1019u]; }
-    default: { }
-  }
+  let t : u32 = gid.x;
+  if (t < 1u) { let e : u32 = t - 0u; w[1020u + e] = w[1016u + e] + w[1017u + e]; }
+  if (t >= 1u && t < 2u) { let e : u32 = t - 1u; w[1021u + e] = w[1018u + e] + w[1019u + e]; }
 }

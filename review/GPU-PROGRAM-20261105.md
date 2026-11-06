@@ -91,6 +91,12 @@ hbox's RX 6750 XT under both RADV and AMDVLK and on the Mac's M2 Max, and RADV's
 is under `hardware/gpu/isa/`. hbox's card was the missing device: the AMDVLK ICD is the loader's default
 there, `VK_ICD_FILENAMES` selects Mesa's RADV, whose `RADV_DEBUG=shaders` is the dump G2 reads.
 
+**Landed later the same day:** the array generalization. `Obend.Hardware.ArrayHypergraph` (wires carry
+vectors; map, gather, concat, const; the scalar graphs as the one-element instance) and the lowering
+restated over it with `lowerArrayToGpu_sound`; the Goldilocks NTT of 64 points, built from gathers and the
+`glMul` limb network, runs on both cards and the Mac and agrees with the naive DFT. The device as the site
+and the shape-indexed wires as presheaves on finite index sets are now the same code.
+
 **First workload:** the Goldilocks radix-2 butterfly from `Apps/ZkNtt.lean` as an open hypergraph. Exact
 arithmetic, so atomic and reduction order is irrelevant by associativity; the spec already exists; the
 RTL path is already Verilator-gated. One spec through two devices (Verilator/EQY and RDNA2) is the

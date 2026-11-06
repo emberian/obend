@@ -1,8 +1,11 @@
 {
   "graph": "adjoint-square-bilinear",
-  "numWires": 13,
+  "words": 13,
   "workgroupSize": 64,
+  "wireBase": [0,1,2,3,4,5,6,7,8,9,10,11,12],
+  "wireLen": [1,1,1,1,1,1,1,1,1,1,1,1,1],
   "consts": ["5","5"],
+  "tables": [],
   "inputs": [0,1,6],
   "outputs": [3,12,9],
   "stages": [

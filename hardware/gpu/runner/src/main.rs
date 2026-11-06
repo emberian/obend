@@ -251,13 +251,21 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
         let bytes: Vec<u8> = wires.iter().flat_map(|x| x.to_le_bytes()).collect();
         queue.write_buffer(&w, 0, &bytes);
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stages") });
-        for (pipeline, groups) in &pipelines {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(*groups, 1, 1);
+        // Dispatches are submitted in chunks: AMDVLK ran out of memory with the 64-point NTT's 1670
+        // dispatches in one command buffer, RADV and Metal did not. Submissions execute in order, so the
+        // stage order is kept.
+        const CHUNK: usize = 128;
+        for chunk in pipelines.chunks(CHUNK) {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stages") });
+            for (pipeline, groups) in chunk {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(*groups, 1, 1);
+            }
+            queue.submit([encoder.finish()]);
         }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
         encoder.copy_buffer_to_buffer(&w, 0, &staging, 0, wire_bytes);
         queue.submit([encoder.finish()]);
 

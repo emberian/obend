@@ -1,8 +1,11 @@
 {
   "graph": "adjoint-mul-add",
-  "numWires": 12,
+  "words": 12,
   "workgroupSize": 64,
+  "wireBase": [0,1,2,3,4,5,6,7,8,9,10,11],
+  "wireLen": [1,1,1,1,1,1,1,1,1,1,1,1],
   "consts": ["1","1"],
+  "tables": [],
   "inputs": [0,1,6],
   "outputs": [3,9,11],
   "stages": [
