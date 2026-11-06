@@ -231,6 +231,47 @@ def pageConflict : Conflict → Option PageConflict
     | _, _ => none
   | _ => none
 
+/-- **A refused write here outlives a merge that did not move its page.** A page whose last write here
+was refused keeps that write (its text, `seen`, and why, `note`) in the store the merge leaves when the
+merge left the page's history as long as it was here: the tip replayed the page's versions, not the
+write waiting in its file. (2026-11-06, found by the swarm vault: a merge of a fork declared before a
+lane page was born re-rendered the page from the store, the refused `merged` text in its file was
+lost, and no open said so again.) `skip`: the pages the merge itself left unsettled. -/
+def keepPending (here : Store) (skip : List String) (s : Store) : Store :=
+  here.pages.foldl (fun s p => match p.note with
+    | some why =>
+      if !skip.contains p.name && (s.page? p.name).map (·.history.length) == some p.history.length then
+        unsettle s p.name p.seen why
+      else s
+    | none => s) s
+
+theorem unsettle_histories (s : Store) (n : String) (seen : Option String) (why : String) :
+    (unsettle s n seen why).pages.map (·.history) = s.pages.map (·.history) := by
+  unfold unsettle
+  simp only [List.map_map]
+  congr 1
+  funext q
+  simp only [Function.comp]
+  split <;> rfl
+
+/-- Keeping the pending writes changes no page's history: what the merge landed is what it landed. -/
+theorem keepPending_histories (here : Store) (skip : List String) (s : Store) :
+    (keepPending here skip s).pages.map (·.history) = s.pages.map (·.history) := by
+  unfold keepPending
+  generalize here.pages = ps
+  induction ps generalizing s with
+  | nil => rfl
+  | cons p ps ih =>
+    simp only [List.foldl_cons]
+    rw [ih]
+    cases p.note with
+    | none => rfl
+    | some why =>
+      simp only
+      split
+      · exact unsettle_histories _ _ _ _
+      · rfl
+
 /-- How to resolve the `k`th conflict of a store, said. -/
 def resolveHint (k : Nat) : String :=
   "; keep one with: obend branch resolve " ++ toString k ++ " left|right"
@@ -259,7 +300,7 @@ def mergeVault (here other : Store) (label : String) (skip : String → Bool := 
         | none => "not settled at the merge with " ++ label
     let s0 := unsettled.foldl (fun s n => unsettle s n ((here.page? n).bind (·.seen)) (why n)) tip
     let kept := m.conflicts.filterMap pageConflict
-    let s1 := { s0 with conflicts := s0.conflicts ++ kept }
+    let s1 := keepPending here unsettled { s0 with conflicts := s0.conflicts ++ kept }
     let notes0 := unsettled.map fun n => n ++ ": here's write was " ++ why n
     let notes1 := (m.landed.filter fun x => x.1 != .left).filterMap fun x => (actPage x.2).map fun n =>
       let secs := ((s1.page? n).bind (·.current)).map (fun G => (sections G).length) |>.getD 0

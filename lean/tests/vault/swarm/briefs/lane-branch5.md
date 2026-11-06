@@ -1,0 +1,9 @@
+# Brief of lane-branch5
+
+Sent by the root (session 01a1ad7d, message 1113, 2026-11-06T02:18:56.996Z) to agent a9569ba7, verbatim:
+
+    lane-branch4 is merged (dev 67dd2cf; vault 44, ledger 24, forms 19 all green on dev). One judge with a tooth that rejects judging on states alone is exactly the shape wanted.
+    
+    On your consequence: yes, laws settle first in the vault too. Consent from the cone means the laws at the tip are known before any write is judged, and the JSON stores already do it; a vault must not differ from them in what "the tip" means. So `Branch.merge` replays the writes that change a page's law lines, from both sides, before all other writes (a law-changing write that also changes data is a law act for ordering and is judged as a whole), with two law-line edits of one page that differ becoming the laws conflict as in the JSON stores. Restore section 9's "a laptop law refuses a write made here" as the walkthrough shows it.
+    
+    Then collapse the disjunction: with one judge, `StoreLanded` is the store's judgment, which is consent by every law the store judged; restate `Consents` for a vault write in terms of `judgePrepared` so `landed_consents` and `admitWrite_consents` are single statements again (no `∨`), and state the "old-version gap" you named as a theorem: the store's page versions and the vault's agree after a merge. Keep pins (section 8 depends on them and the store re-judges anyway); say in the header why both exist. The replay lane is adding a receipt log to Store.lean; you added `PageWrite`, `PageConflict`, `Store.conflicts`, `writeText`; keep those seams narrow and name them in the report so the two can be reconciled. Work from dev: `git fetch /Users/ember/dev/obend dev && git checkout -B lane-branch5 FETCH_HEAD`. Same rules; commit named files unsigned if needed, do not merge; report the theorem statements verbatim, the section-9 diff, and what you left out.

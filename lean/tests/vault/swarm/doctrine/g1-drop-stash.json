@@ -1,0 +1,3 @@
+{"name": "rules-no-stash-rule", "formats": ["write@1", "revert@1"],
+ "floors": ["home 3", "machv <= 0", "addall <= 0", "killpat <= 0", "nopid <= 0"],
+ "methods": {"write@1": "kernel", "revert@1": "lemma"}, "basis": ["kernel"]}

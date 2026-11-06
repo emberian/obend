@@ -1,0 +1,5 @@
+# Brief of lane-belmiter
+
+Sent by the root (session 01a1ad7d, message 863, 2026-11-06T00:49:33.909Z) to agent aee107e1, verbatim:
+
+    lane-lecclose is merged (dev ef2f382). One last small quest, the parsimony item from your own list: delete the BEL miter as code, not only as a claim. `obend verilate --lec`, `obend hardware emit-lec-smt2` and `emitModuleLecSmt2` (Cli and VerilateRunner) compare the Lean AST with a renaming of itself; nothing runs them, and a command carrying "LEC" in its name that is not the LEC is exactly the kind of pointer that does not refer. Remove them and their flags, their mentions in `hardware/README.md`, `QUALIFICATION-AND-SILICON-LEAN.md` and any `--help` text, and the README's "Removed on 2026-11-04" list can become one sentence saying the BEL miters were removed and why. Keep `obend verilate` itself. Build `obend` and `obend-emit-sv` and run `verify_sim.sh` as the control. Work from dev (`git checkout -B lane-belmiter FETCH_HEAD` after fetching). Commit named files, unsigned if needed, do not merge, report the commit and the diffstat. After this, your lane is done; thank you.

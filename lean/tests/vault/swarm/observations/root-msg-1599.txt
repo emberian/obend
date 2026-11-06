@@ -1,0 +1,2 @@
+# root (session 01a1ad7d) message 1599, 2026-11-06T17:23:30.036Z, SendMessage to a95996c2746c648cc, verbatim:
+One addition: for whole-tree and tier-2 builds use bb2 (`ssh bb2` as user `build`; 32 dedicated cores, 122 GB; obend clone at `~/obend/repo` on branch dev, logs under `~/obend/logs`; `swarm-build` there with a 100 GB slice and a box-wide cap of 20 Lean compilers) rather than hbox, which three other lanes and another session share today. Read /Users/ember/swarm/MACHINES.md and RULES.md first; PID files for every detached job.
