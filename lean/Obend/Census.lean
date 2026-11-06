@@ -350,6 +350,7 @@ import Obend.Hardware.Hvm
 import Obend.Hardware.Hvm.Model
 import Obend.Hardware.Hvm.Net
 import Obend.Hardware.Hvm.Lower
+import Obend.Hardware.Hvm.Inet
 import Obend.Hardware.Judge
 import Obend.Hardware.Kinematics
 import Obend.Hardware.Magnetics
@@ -364,6 +365,7 @@ import Obend.Hardware.Process
 import Obend.Hardware.QuantumMatter
 import Obend.Hardware.RF
 import Obend.Hardware.ReductionMachine
+import Obend.Hardware.ReductionMachine.Arena
 import Obend.Hardware.Retiming
 import Obend.Hardware.Rules
 import Obend.Hardware.Silicon
