@@ -1,7 +1,8 @@
 # GPU kernels: lane integration, 2026-11-06
 
 Branch `lane-gpu-kernels`, recovered from uncommitted work based on `dev` at `0b90f5b`. Fresh recovery measurements use hbox's
-RX 6750 XT (gfx1031), RADV Mesa 24.2.8. This is an integration report, not a claim
+RX 6750 XT (gfx1031), RADV Mesa 24.2.8. Dev at `402378a` (including square integration `2af7cf7`) is integrated by hand.
+This is an integration report, not a claim
 that the ISA-model gate is green. The model lane must extend its instruction and
 wait-counter coverage before the new kernels can pass G2.
 
@@ -10,6 +11,9 @@ wait-counter coverage before the new kernels can pass G2.
 - `523aa7c`: shared Goldilocks specifications, limb refinements and builder.
 - `55b39ec`: live layout, general workgroup source, lowering and whole-dispatch race proof.
 - `81ab441`: regenerated kernels/ISA, batch runner, fresh CPU/GPU measurements and resource gate.
+- `9e2cd8b`: recovery evidence and precise proof boundaries.
+- `d6fa57b`: hand-resolved merge of dev `402378a`, shared square/kernel sources,
+  regenerated integration artifacts and final gate evidence.
 
 ## What changed
 
@@ -105,6 +109,48 @@ host uploads (G4 initializes locations to zero), enforce register instruction
 semantics by itself, or certify textual WGSL/compiler translation. Those interfaces
 must not be inferred from race freedom alone.
 
+## Integration with the RTL square
+
+Both emitters now share `SquareGraphs` and its vectors. The monadic builder and
+field construction come from `ArrayBuild` and `GoldilocksSource`; the block NTT
+constructor and mathematical reference implementations live in `Gpu.Ntt`.
+`EmitGpu` contains IO and admission/reference checks. The obsolete per-layer
+`nttGraph` is gone. The square uses `array-route` to retain constant, gather and
+concatenation coverage on the same source graph through both devices; its old
+NTT SystemVerilog artifacts are removed. The block NTT is not claimed to have
+an RTL commuting-square theorem.
+
+The square's array equality now composes with checked liveness allocation:
+
+```lean
+theorem rtl_eq_gpu_array (name : String) (g : ArrayGraph) (hwf : g.wf = true)
+    (hLayout : layoutOk g = true) (ins regs : Nat → Word)
+    (flat : Nat → Word) (hFlat : Flat g.lengths (gpuLayout g).base
+      (liveAt (layerGraph (fuseGraph g)) g.outputs) (inputEnvOf g ins) flat) :
+    (runProgram (lowerArrayToGpu g) flat).flatten =
+      (evalModuleOutputs (compileArrayGraphToRtl name g) ins regs).map Prod.snd
+```
+
+The corresponding scalar statement carries the same checked-layout/live-entry
+premises. The RTL soundness theorem itself still requires only graph well-formedness.
+
+Fresh merged square checks passed all byte/model stages, the complete `array-route`
+external gate (Yosys/z3, Verilator, device and planted faults), and `glmul-4`
+Verilator simulation. The logs contain:
+
+```text
+LEC sq_array_route: unsat, bit-precise
+mutation `out_w4_0 = 64'd1 ^ (w_16);`: sat
+[4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+[6] swapped `w_11 = (w_3 - w_7);`: Verilator mismatches=24, LEC z3 says sat
+[PASS] hardware/gpu/square (array-route)
+[PASS] hardware/gpu/square (stage 4) (glmul-4)
+```
+
+This is scoped integration validation, not a fresh full-square run over every
+external stage. EQY remains opt-in and was not run. The working hbox Verilator
+v5.024 build and shim are documented in `hardware/README.md`.
+
 ## Measurements against a named baseline
 
 Microseconds per transform. GPU device times use 3 warmups and 1,024 measured
@@ -162,18 +208,31 @@ checks, limb proofs and ZK application. Source admission regressions passed,
 including inactive invalid literals, zero divisors and overflowing address sums.
 Raw logs are in [`hardware/gpu/evidence`](../hardware/gpu/evidence/).
 The separately run `Obend.Teeth.Hardware.Rdna2Runs` target fails its old pinned
-ISA executions for the same missing instruction semantics (`resume-isa-fixtures.log`);
+ISA executions for the same missing instruction semantics (`resume-merged-isa-fixtures.log`);
 it is not included among the successful targets and was not weakened.
 
-The recovery `verify_gpu.sh` run is still generating its large oracle at this
-pre-merge checkpoint; its completed result will be recorded in `resume-verify.log`
-and the final integration update.
+The final merged `verify_gpu.sh` run passed and is recorded in
+`resume-merged-verify.log`:
+
+```text
+addAsSub: caught
+swapMux: caught
+mulHighZero: caught
+[PASS] hardware/gpu
+```
+
+The final NTT instruction streams and compiler resource statistics are identical
+to the freshly timed version (`resume-merged-ntt-isa-identity.log`); only the generated
+adapter header changed.
+The first recovery attempt overlapped synchronization of dev's changed scalar
+fixtures and was superseded by this clean merged run.
 It regenerates the million-point source evaluation, checks committed SHA manifests,
 runs exact device comparisons, plants add/sub, mux and high-product faults, then
 extracts ISA. Benchmark correctness is a separate exact-output check, not a
 replacement for this gate.
 
-All six ISA gate stages were run separately so a refusal did not hide later results:
+The full ISA gate ran stages 1–2; stages 3–6 were then run individually so the
+decoder refusal did not hide later results:
 
 | ISA stage | Result |
 |---|---|
