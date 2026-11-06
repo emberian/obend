@@ -1,0 +1,8 @@
+# Tests whose weak outcome the model allows and no device showed at the committed budget (seed obend-20261106,
+# fifty configurations of fifty iterations): the device is stronger than its model there. The gate holds this
+# record to the tables: a recorded test that a table shows fails, as does an allowed weak class neither shown nor recorded.
+test	devices	why the model allows it
+lb-barrier	m2max-metal,rx6750xt-radv,rx6750xt-amdvlk,uhd770-anv	storageBarrier has Workgroup scope; the two threads are in different workgroups, so nothing synchronizes them
+mp-workgroup	m2max-metal,rx6750xt-radv,rx6750xt-amdvlk,uhd770-anv	relaxed atomics in workgroup memory, no barrier
+sb-workgroup	m2max-metal,rx6750xt-radv,rx6750xt-amdvlk,uhd770-anv	relaxed atomics in workgroup memory, no barrier
+lb-workgroup	m2max-metal,rx6750xt-radv,rx6750xt-amdvlk,uhd770-anv	relaxed atomics in workgroup memory, no barrier

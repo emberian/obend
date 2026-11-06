@@ -1,0 +1,31 @@
+# The litmus suite: GPUHarbor's test shapes (github.com/reeselevine/webgpu-litmus), one line per test.
+# name	kernel	results kernel	scope of the thread pair	address space of the test locations	aliased (x and y the same location)
+# Device scope: the two threads of an instance are in different workgroups (stripe_workgroup); atomics in a storage buffer (WGSL: QueueFamily scope).
+mp	mp.wgsl	mp-results.wgsl	device	storage	0
+mp-barrier	mp-barrier.wgsl	mp-results.wgsl	device	storage	0
+sb	sb.wgsl	sb-results.wgsl	device	storage	0
+sb-rmw-barrier	sb-rmw-barrier.wgsl	sb-results.wgsl	device	storage	0
+lb	lb.wgsl	lb-results.wgsl	device	storage	0
+lb-barrier	lb-barrier.wgsl	lb-results.wgsl	device	storage	0
+iriw	iriw.wgsl	iriw-results.wgsl	device	storage	0
+2+2w	2+2w.wgsl	2+2w-results.wgsl	device	storage	0
+corr	corr.wgsl	corr-results.wgsl	device	storage	1
+coww	coww.wgsl	coww-results.wgsl	device	storage	1
+cowr	cowr.wgsl	cowr-results.wgsl	device	storage	1
+corw1	corw1.wgsl	corw1-results.wgsl	device	storage	1
+corw2	corw2.wgsl	corw2-results.wgsl	device	storage	1
+atomicity	atomicity.wgsl	atomicity-results.wgsl	device	storage	0
+# Workgroup scope: both threads in one workgroup (permute_id); test locations in workgroup memory (WGSL: Workgroup scope) or in the storage buffer.
+mp-workgroup	mp-workgroup.wgsl	mp-results.wgsl	workgroup	workgroup	0
+mp-workgroup-barrier	mp-workgroup-barrier.wgsl	mp-results.wgsl	workgroup	workgroup	0
+mp-storage-workgroup	mp-storage-workgroup.wgsl	mp-results.wgsl	workgroup	storage	0
+mp-storage-workgroup-barrier	mp-storage-workgroup-barrier.wgsl	mp-results.wgsl	workgroup	storage	0
+sb-workgroup	sb-workgroup.wgsl	sb-workgroup-results.wgsl	workgroup	workgroup	0
+sb-workgroup-rmw-barrier	sb-workgroup-rmw-barrier.wgsl	sb-workgroup-results.wgsl	workgroup	workgroup	0
+lb-workgroup	lb-workgroup.wgsl	lb-workgroup-results.wgsl	workgroup	workgroup	0
+lb-workgroup-barrier	lb-workgroup-barrier.wgsl	lb-workgroup-results.wgsl	workgroup	workgroup	0
+corr-workgroup	corr-workgroup.wgsl	corr-workgroup-results.wgsl	workgroup	workgroup	1
+coww-workgroup	coww-workgroup.wgsl	coww-workgroup-results.wgsl	workgroup	workgroup	1
+barrier-store-load	barrier-store-load.wgsl	barrier-store-load-results.wgsl	workgroup	workgroup	0
+barrier-load-store	barrier-load-store.wgsl	barrier-load-store-results.wgsl	workgroup	workgroup	0
+barrier-store-store	barrier-store-store.wgsl	barrier-store-store-results.wgsl	workgroup	workgroup	0
