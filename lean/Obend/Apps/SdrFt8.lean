@@ -77,6 +77,15 @@ verification for **Flagship App #3 (`apps/sdr-ft8/`)**:
 * `apps/sdr-ft8/SdrFt8Top.obend` — Top-level all-digital 40m FT8 SDR transceiver (`SdrFt8Transceiver`,
   `Nominal40mSdrFt8Transceiver` $\to$ `Calibrated40mFt8TransceiverOverride`) importing `TayloeQuadratureMixer`,
   `CicDecimatorFir`, and `CordicFt8Demod`.
+
+**Not established.** Four bound claims the designs used to carry are gone, because none of them holds
+as stated: each quantified over an unbounded natural with no `given` range, so no judge can certify
+it and `#import_obend` refused all four (2026-11-04). They were `lo_phasor_taylor_enclosure`
+(`thetaMrad <= 1000`), `cic_bitgrowth_interval_bound` (`16 + stages * 6 <= 64`),
+`ft8_tone_bin_interval_bound` (`125 + bin * 125 <= 1000`) and `rx_irr_interval_bound`
+(`60 + trimErr * 2 <= 90`). The LO phasor enclosure, the CIC register growth, the FT8 tone-bin
+range and the image-rejection margin are not established for this app; the judge formats below
+(`interval@1`, `taylor-model@1`) remain and are tested on their own queries.
 -/
 
 @[expose] public section

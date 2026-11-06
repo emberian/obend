@@ -33,7 +33,6 @@ spec BaseCicDecimatorFirSpec for CicDecimatorFirChain:
     combSample * self.firCenterTapWeight + self.cicStages
   claim cic_comb_open_recursion(intSample: Nat): self.alwaysFfCicComb3(intSample) == intSample * self.decimationRatio + 5n
   claim folded_fir_open_recursion(combSample: Nat): self.foldedSymmetricFirOut(combSample) == combSample * self.firCenterTapWeight + self.cicStages
-  claim cic_bitgrowth_interval_bound(stages: Nat) by judge("interval@1"): 16n + stages * 6n <= 64n
 
 spec HogenauerCompensatedCicFirOverride for CicDecimatorFirChain:
   requires alwaysFfCicInt3(inSample: Nat) -> Nat
