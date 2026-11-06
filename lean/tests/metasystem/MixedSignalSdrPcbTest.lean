@@ -286,7 +286,7 @@ def checkEyeOpeningIgnoreSkew (spec : EyeDiagramSpec) : Bool :=
   let ilMdB := evalChannelInsertionLossMdB spec.dielectric routedLenUm spec.freqMhz spec.skinCoeff
   decide (ilMdB ≤ spec.maxInsertionLossMdB)
 
-#tooth Obend.Hardware.PCB.eyeOpeningSignoff_poles by mutation
+#tooth Obend.Hardware.PCB.eyeOpeningSignoff_sound by mutation
   Obend.Hardware.PCB.checkEyeOpeningSignoff := checkEyeOpeningIgnoreSkew
 
 def checkAsicToPcbIgnoreUpf (spec : AsicToPcbChannelSpec) : Bool :=

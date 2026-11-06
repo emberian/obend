@@ -40,6 +40,7 @@ import Obend.Elab.Workbook
 import Obend.Stdlib
 import Obend.Tactic.DocsCensus
 import Obend.Tactic.Tooth
+import Obend.AssertAxioms
 
 open Obend.Core.Term (Primitive Term)
 open Obend.Judge (Verdict Format IntervalQuery)
@@ -627,13 +628,20 @@ elab "#verify_autocert_axioms" : command => do
     ``autoCertSuite_wave4_primitives_elaborated
   ]
   let allowedStandard : List Name := [``propext, ``Classical.choice, ``Quot.sound]
+  -- The compiled trust (`native_decide`'s `…._native…` axioms) is the repo's counted exception
+  -- (`Obend.AssertAxioms`, ember 2026-11-02: compiled trust is not a concern now): the importer
+  -- proves each imported claim's `_check` by `native_decide` and re-runs it by `#assert_compiled`
+  -- (`Obend.Elab.Workbook`, 2026-11-04). It is reported by name here, never passed silently.
+  let mut trusted : Array Name := #[]
   for t in targets do
     let axs ← liftCoreM <| collectAxioms t
     if axs.contains ``sorryAx then
       throwError m!"AXIOM AUDIT FAILED: {t} depends on sorryAx"
     for a in axs do
-      if !allowedStandard.contains a then
+      if Obend.AssertAxioms.isCompilerTrust a then
+        unless trusted.contains t do trusted := trusted.push t
+      else if !allowedStandard.contains a then
         throwError m!"AXIOM AUDIT FAILED: {t} depends on non-standard axiom {a}"
-  logInfo m!"[PASS] AutoCert axiom audit verified: {targets.length} theorems & obligations have 0 sorryAx and only standard Lean kernel axioms"
+  logInfo m!"[PASS] AutoCert axiom audit verified: {targets.length} theorems & obligations have 0 sorryAx and no axiom outside the standard three and the compiled trust; resting on compiled trust (an imported claim's `_check`, re-run by `#assert_compiled`): {trusted}"
 
 #verify_autocert_axioms

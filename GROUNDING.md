@@ -236,7 +236,7 @@ Where the earlier trees each held one piece of the elephant, `obend` unifies and
 
 1. **Closing the Faré Audit & C1/C2/Sound Gaps**:
    - First-class nominal `#kind` branding (`Obend/Core/Nominal.lean`) and `_kind.md` C4 Vault cells (`Obend/Vault/Store.lean`) answer Faré's `K-KIND-CELL` critique.
-   - `Term.split` (`Obend/Core/Proofs/Aggregate.lean`) and `step_conserves_linear` (`Obend/Core/Proofs/Linear.lean`) unite Taelin's `.one` resource linearity with dependent $\Sigma$-types and Faré's C4 modular layer composition (`Obend/Leaf/Flatten.lean`, `BendTT.lean`).
+   - `Term.split` (`Obend/Core/Proofs/Aggregate.lean`) and `step_conserves_linear` (`Obend/Core/Proofs/Conservation.lean`) unite Taelin's `.one` resource linearity with dependent $\Sigma$-types and Faré's C4 modular layer composition (`Obend/Leaf/Flatten.lean`, `BendTT.lean`).
    - Semantic `CellContract`s and `Narrows` forever-crowns (`Obend/Law/Contract.lean`) replace nanodregg's syntactic `keeps` shape check with true inductive invariant preservation and monotonic contract upgrades (`K-LAW-INHERIT`).
 2. **Absorbing Dregg2 (`breadstuffs/src/lib/dregg2`), DeOS (`deos-*`, `starbridge-v2`), and `minidregg` Consensus/Grains**:
    - **Dregg2 (`drex.ml`, `epistemic_consensus.ml`, `forever_crown.ml`)**: Reborn as proof-carrying multi-slot `VaultTurn` wide-pullback hyperedges, linear `Book` & ZoE `Seat` offer safety, $O(|E|+|V|)$ primal-dual LP clearing verification (`drex-clearing@1`), and trust-graph `EpistemicConsensus` (see [`DEOS-CONTRACTS-CONSENSUS.md`](DEOS-CONTRACTS-CONSENSUS.md)).

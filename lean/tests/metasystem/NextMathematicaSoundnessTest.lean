@@ -164,11 +164,15 @@ example {f : CanonicalRat → CanonicalRat} {tm : TaylorModel}
     f x ∈ evalTaylorModelRange tm :=
   evalTaylorModelRange_encloses h hx
 
-example (R : Type) [M : AnalyticModel R] (dom : Obend.Analysis.Interval) :
+-- The certified models hold on their valid domains (`trigValidDomain`, `expValidDomain`); since
+-- the domain hypotheses were added, nothing is claimed outside them.
+example (R : Type) [M : AnalyticModel R] (dom : Obend.Analysis.Interval)
+    (hT : Obend.Analysis.Interval.subset dom trigValidDomain = true)
+    (hE : Obend.Analysis.Interval.subset dom expValidDomain = true) :
     TaylorModel.Models M.sinFn (tmSinCertified dom) ∧
     TaylorModel.Models M.expFn (tmExpCertified dom) ∧
     TaylorModel.Models M.cosFn (tmCosCertified dom) :=
-  ⟨tmSinCertified_models R dom, tmExpCertified_models R dom, tmCosCertified_models R dom⟩
+  ⟨tmSinCertified_models R dom hT, tmExpCertified_models R dom hE, tmCosCertified_models R dom hT⟩
 
 -- Concrete instance check: `tmSinCertified singletonTenth` encloses `AnalyticModel.sinFn (1/10)` at `x = 1/10`.
 set_option maxRecDepth 2000 in
@@ -190,33 +194,21 @@ theorem test_lagrangeRemSin5_encloses_neg_residual :
     Obend.Analysis.Interval.mul (Obend.Analysis.Interval.ofPoint (CanonicalRat.mk 1 720))
       (Obend.Analysis.intervalPow dom 6)
 
--- Picard-Lindelöf a-priori enclosure & derived remainder soundness (`Flowpipe.lean`).
-#guard verifyPicardAPriori thermalCoolingOde ⟨30, 30⟩ ⟨25, 30⟩ (CanonicalRat.mk 1 2) == true
-#guard verifyPicardAPriori thermalCoolingOde ⟨30, 30⟩ ⟨28, 30⟩ (CanonicalRat.mk 1 2) == false
-#guard stepPicardValidated1D thermalCoolingOde ⟨30, 30⟩ ⟨25, 30⟩ ⟨-1, -1⟩ (CanonicalRat.mk 1 2) ==
-  ⟨CanonicalRat.mk 205 8, CanonicalRat.mk 105 4⟩
-#guard Obend.Analysis.Interval.containsRat
-  (stepPicardValidated1D thermalCoolingOde ⟨30, 30⟩ ⟨25, 30⟩ ⟨-1, -1⟩ (CanonicalRat.mk 1 2))
-  (CanonicalRat.mk 260653 10000) == true
+-- Picard-Lindelöf a-priori enclosure & derived remainder soundness (`Flowpipe.lean`), over boxes
+-- (`List (String × Interval)`) since the flowpipe left its 1D interface.
+#guard verifyPicardAPriori thermalCoolingOde [("T", ⟨30, 30⟩)] [("T", ⟨25, 30⟩)] (CanonicalRat.mk 1 2) == true
+#guard verifyPicardAPriori thermalCoolingOde [("T", ⟨30, 30⟩)] [("T", ⟨28, 30⟩)] (CanonicalRat.mk 1 2) == false
 
-example :
-    (∀ (f : OdeSystem) (x0 xTilde L : Obend.Analysis.Interval) (h x_init v0 df_xi f_xi t : CanonicalRat),
-      verifyPicardAPriori f x0 xTilde h = true →
-      x_init ∈ x0 →
-      v0 ∈ evalOdeField f x0 →
-      df_xi ∈ L →
-      f_xi ∈ evalOdeField f xTilde →
-      t ∈ Obend.Analysis.Interval.mk 0 h →
-      (x_init + t * f_xi) ∈ xTilde ∧
-      (x_init + h * v0 + ((h * h) / 2) * (df_xi * f_xi)) ∈
-        stepPicardValidated1D f x0 xTilde L h) :=
-  picard_step_encloses_trajectory.1
+-- The trajectory enclosure, for every field of every system, and its concrete poles (the
+-- zero-pad cooling step `[205/8, 105/4]` contains the exact trajectory `26.0653`).
+example := picard_step_encloses_trajectory.1
+example := picard_step_encloses_trajectory.2
 
 theorem test_picard_rejects_narrow_apriori :
-    verifyPicardAPriori thermalCoolingOde ⟨30, 30⟩ ⟨28, 30⟩ (CanonicalRat.mk 1 2) = false := by
+    verifyPicardAPriori thermalCoolingOde [("T", ⟨30, 30⟩)] [("T", ⟨28, 30⟩)] (CanonicalRat.mk 1 2) = false := by
   decide +kernel
 
-#tooth test_picard_rejects_narrow_apriori by mutation
+#tooth verifyPicardAPriori_encloses by mutation
   Obend.Analysis.verifyPicardAPriori := fun _ _ _ _ => true
 
 -- ============================================================================
@@ -302,9 +294,9 @@ theorem test_unit_circle_origin_infeasible
 -- 4. Accumulated Reverse-AD, Whole-Graph `compileGraphAdjoint` & Pipelined RTL
 -- ============================================================================
 
--- Verify that `gradReverseAccumulated` has linear size `1` on nested squares (fixing the `2^n` blowup)
--- and agrees with forward-mode `DualRat`.
-#guard (gradReverse (fun _ => 2) 1 (nestedSqrChain 4 (.var "x"))).length == 16
+-- `gradReverse` and `gradReverseAccumulated` both have linear size `1` on nested squares (the `2^n`
+-- blowup is fixed in `gradReverse` itself) and agree with forward-mode `DualRat`.
+#guard (gradReverse (fun _ => 2) 1 (nestedSqrChain 4 (.var "x"))).length == 1
 #guard (gradReverseAccumulated (fun _ => 2) 1 (nestedSqrChain 4 (.var "x"))).length == 1
 #guard accumulateGradStr (gradReverseAccumulated (fun _ => 2) 1 (nestedSqrChain 3 (.var "x"))) "x" == 1024
 #guard (evalDualRat (fun _ => 2) "x" (nestedSqrChain 3 (.var "x"))).der == 1024
@@ -325,7 +317,7 @@ example (symTab : List String) (rho : String → CanonicalRat) (bar : CanonicalR
   gradReverseAccumulatedIdx_agrees_with_dual symTab rho bar diffVar e hInj
 
 example (rho : String → CanonicalRat) (name : String) (n : Nat) (bar : CanonicalRat) :
-    (gradReverseSinglePass rho bar (nestedSqrChain n (.var name))).length = 1 ∧
+    (gradReverse rho bar (nestedSqrChain n (.var name))).length = 1 ∧
     (gradReverseAccumulated rho bar (nestedSqrChain n (.var name))).length = 1 :=
   gradReverseAccumulated_nestedSqr_linear rho name n bar
 

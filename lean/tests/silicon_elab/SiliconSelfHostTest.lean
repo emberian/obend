@@ -175,6 +175,9 @@ theorem test_silicon_flowpipe_universal_step_mem
     (x0 + dt * v0 + r) ∈ stepFlowpipe1D stateBox velBox dt remPad := by
   silicon_flowpipe
 
+/-- Cooling is certified safe for two steps. It was three until the flowpipe became validated
+Picard over boxes: the validated tube widens (after three steps `T ∈ [15.08, 28.5]`) and the third
+step's continuous-time rough enclosure leaves `[15, 35]`, so three steps are no longer certified. -/
 theorem test_silicon_flowpipe_euler_enclosure :
     let X0 : Interval := ⟨28, 30⟩
     let V0 : Interval := ⟨-10, -8⟩
@@ -187,7 +190,7 @@ theorem test_silicon_flowpipe_euler_enclosure :
     Interval.containsRat X1 (28 + dt * (-8) + CanonicalRat.mk (-1) 10) = true ∧
     Interval.containsRat X1 (29 + dt * (-9) + 0) = true ∧
     Interval.containsRat X1 (30 + dt * (-10) + CanonicalRat.mk 1 10) = true ∧
-    verifyTrajectorySafety thermalCoolingOde initBox 3 safeEnv = true ∧
+    verifyTrajectorySafety thermalCoolingOde initBox 2 safeEnv = true ∧
     verifyTrajectorySafety thermalRunawayOde initBox 2 safeEnv = false := by
   silicon_flowpipe
 

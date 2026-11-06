@@ -12,7 +12,7 @@ import Obend.Tactic.Tooth
 # `tests/VaultConsensusTest.lean` — End-to-End Sovereign Vault & Consensus Verification Suite (`WS-V`)
 
 Exercises all 5 concrete architectural deliverables for `WS-V`:
-1. In-place `Contract` (`checkContractCert`, `.byLrat` wired to `Obend.Judge.Lrat.check`,
+1. In-place `Contract` (`checkContractCert`, `.byLrat` refused outright since 2026-11-04,
    kernel-checked `checkDeciderReceipt`, `checkContractCert_refuses_swapped_goal`).
 2. In-place witness-bound `Hyperedge` (`ValidAt`, `ValidAt.witness_sound`, `no_toctou`).
 3. In-place metadata-bound `Projection` (`cellBlind`, `projectedCommit`, `cellBlind_binds`,
@@ -74,22 +74,21 @@ def certDeciderA : ContractCert :=
 #guard isValid (checkContractCert goalA certDeciderA) == true
 #guard isValid (checkContractCert goalB certDeciderA) == false
 
--- Tier 2b: Goal-bound `.byLrat` wired to `Obend.Judge.Lrat.check`
-def validLratCnfA : Obend.Judge.Lrat.Cnf :=
-  mkGoalBoundLratCnf goalA ⟨1, [[1], [-1]]⟩
+-- Tier 2b: `.byLrat` is withdrawn (2026-11-04): with no CNF encoding of the goal, any LRAT
+-- refutation of anything passed it, so the tier refuses every certificate
+-- (`checkContractCert_byLrat_refused`). The refutation of `[[1], [-1]]` that used to pass is refused.
+def validLratCnfA : Obend.Judge.Lrat.Cnf := ⟨1, [[1], [-1]]⟩
 def validLratProof : List Obend.Judge.Lrat.Step :=
   [.add 4 [] [1, 2]]
 def certLratA : ContractCert :=
   .byLrat validLratCnfA validLratProof
 
--- Positive pole: valid LRAT refutation for `goalA` returns `.valid`!
-#guard isValid (checkContractCert goalA certLratA) == true
--- Negative pole 1: swapped goal `goalB` is refused!
-#guard isValid (checkContractCert goalB certLratA) == false
--- Negative pole 2: empty LRAT proof is refused!
+#guard isValid (checkContractCert goalA certLratA) == false
 #guard isValid (checkContractCert goalA (.byLrat validLratCnfA [])) == false
--- Negative pole 3: broken LRAT hint is refused!
-#guard isValid (checkContractCert goalA (.byLrat validLratCnfA [.add 4 [1] [1]])) == false
+
+theorem test_lrat_tier_refused (cnf : Obend.Judge.Lrat.Cnf) (proof : List Obend.Judge.Lrat.Step) :
+    checkContractCert goalA (.byLrat cnf proof) ≠ .valid :=
+  checkContractCert_byLrat_refused goalA cnf proof
 
 theorem test_empty_lrat_refused (cnf : Obend.Judge.Lrat.Cnf) :
     isValid (checkContractCert goalA (.byLrat cnf [])) = false := rfl
@@ -102,9 +101,9 @@ theorem goalB_ne_goalA : goalB ≠ goalA := by
   injection h with _ h_inv
   cases h_inv
 
-example (h_valid : checkContractCert goalA certLratA = .valid) :
-    checkContractCert goalB certLratA ≠ .valid :=
-  checkContractCert_refuses_swapped_goal goalA goalB certLratA h_valid goalB_ne_goalA
+example (h_valid : checkContractCert goalA certDeciderA = .valid) :
+    checkContractCert goalB certDeciderA ≠ .valid :=
+  checkContractCert_refuses_swapped_goal goalA goalB certDeciderA h_valid goalB_ne_goalA
 
 -- ============================================================================
 -- 2. In-Place Witness-Bound `Hyperedge` (`ValidAt` & `no_toctou`)
@@ -170,8 +169,8 @@ example {H : Obend.Digest.HashBytes.Hash} (hb : Obend.Receipt.Merkle.Bounded H)
     verifyBlindedOpening H
       { mkBlindedOpening H v cells j with cell := projectCell H v c_tampered }
       (projectedMerkleRoot H v cells) = false :=
-  tampered_metadata_opening_refused hb h_no_coll v cells j c_tampered
-    hj hjs hid_orig hsalt_orig hid_tamp hsalt_tamp h_tampered
+  (tampered_metadata_opening_refused hb v cells j c_tampered
+    hj hjs hid_orig hsalt_orig hid_tamp hsalt_tamp h_tampered).resolve_right h_no_coll
 
 -- ============================================================================
 -- 4. Live World `K-CARRY` (`"world-carry@1"`) & 5 Keystone Theorems
