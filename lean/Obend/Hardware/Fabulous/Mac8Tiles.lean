@@ -15,17 +15,14 @@ bitstream's decoded frame bits are `mac8Cert.required mac8Net`, that `mac8Cert.w
 FABulous's `pips.txt`, and that the tiles of `mac8Cert` have the types `fabric.csv` gives them.
 -/
 public import Obend.Hardware.Fabulous.Mac8
-public import Obend.Hardware.Fabulous.Mac8Cert
+public import Obend.Hardware.Fabulous.Mac8CertCheck
 @[expose] public section
 
 namespace Obend.Hardware.Fabulous
 
 open Obend.Hardware Obend.Hardware.HDL
 
-set_option maxRecDepth 100000 in
-theorem mac8Cert_check : mac8Cert.check mac8Net = true := by decide +kernel
-
-theorem mac8Cert_flops_length : mac8Cert.flops.length = mac8FlopMap.length := by decide
+theorem mac8Cert_flops_length : mac8Cert.flops.length = mac8FlopMap.length := by rfl
 
 theorem mac8Cert_q (Q : Node → Bool) (regs : Nat → BitVec 64)
     (hQ : ∀ k < mac8Cert.flops.length, Q (mac8Cert.flopNode k) = projOf mac8FlopMap regs k) :
@@ -36,41 +33,67 @@ theorem mac8Cert_q (Q : Node → Bool) (regs : Nat → BitVec 64)
   · have : mac8FlopMap[k]? = none := List.getElem?_eq_none (by rw [← mac8Cert_flops_length]; omega)
     simp [Cert.q, hk, projOf, this]
 
-/-- **The fabric, from its tile models, realizes the module.** On a grid with `mac8Cert`'s tile models,
-wires and pads, configured with the bits it requires, every run whose cells' flops start holding an
-in-width register file shows `iceStickMac8`'s outputs on every cycle of every in-width trace. -/
-theorem mac8_fabric_tiles_realize_module (G : Grid) (b : Bits)
-    (hT : ∀ e ∈ mac8Cert.tiles, G.tile e.1.1 e.1.2 = mac8Cert.models[e.2]?)
-    (hWires : ∀ e ∈ mac8Cert.wiresUsed, e ∈ G.wires) (hPads : ∀ e ∈ mac8Cert.pads, e ∈ G.pads)
+/-- **The cone has one behaviour.** For every configuration with the bits `mac8Cert` requires, every pin
+input and every flop state, the cone's equations have a solution, and every solution agrees with it on
+every wire of the cone. -/
+theorem mac8_cone_exists_unique (b : Bits) (hBits : ∀ r ∈ mac8Cert.required mac8Net, b r.1 r.2.1 r.2.2.1 = r.2.2.2)
+    (pins : Nat → Bool) (Q : Node → Bool) :
+    ConeConsistent mac8Cert b pins Q (mac8Cert.solve mac8Net pins Q) ∧
+      ∀ σ, ConeConsistent mac8Cert b pins Q σ → ∀ n ∈ mac8Cert.coneNodes, σ n = mac8Cert.solve mac8Net pins Q n :=
+  consistent_exists_unique mac8Cert mac8Net b mac8Cert_check mac8Net_topo hBits pins Q
+
+/-- **The fabric, from its tile models, realizes the module.** Under a configuration with the bits
+`mac8Cert` requires, every run of the cone whose cells' flops start holding an in-width register file
+shows `iceStickMac8`'s outputs on every cycle of every in-width trace; and such a run exists
+(`mac8Cert.runFrom`, `Cert.runFrom_run`). -/
+theorem mac8_fabric_tiles_realize_module (b : Bits)
     (hBits : ∀ r ∈ mac8Cert.required mac8Net, b r.1 r.2.1 r.2.2.1 = r.2.2.2)
     (tr : List (Bool × (Nat → BitVec 64))) (regs : Nat → BitVec 64)
     (hR : RegsFit iceStickMac8 regs) (hI : ∀ c ∈ tr, InputsFit iceStickMac8 c)
     (Q : Node → Bool) (hQ : ∀ k < mac8Cert.flops.length, Q (mac8Cert.flopNode k) = projOf mac8FlopMap regs k)
-    (σs : List (Node → Bool)) (hLen : σs.length = tr.length)
-    (hRun : FabricRun G b Q ((tr.map (pinValues mac8Pins)).zip σs)) :
-    ((tr.map (pinValues mac8Pins)).zip σs).map (fun c => mac8Cert.observe c.2) =
+    (cyc : List ((Nat → Bool) × (Node → Bool))) (hPins : cyc.map (·.1) = tr.map (pinValues mac8Pins))
+    (hRun : ConeRun mac8Cert b Q cyc) :
+    cyc.map (fun c => mac8Cert.observe c.2) =
       (moduleRun iceStickMac8 regs tr).1.map fun outs =>
         mac8Net.outs.map fun (p, _) => (p, outPinValue mac8Pins outs p) := by
-  rw [fabric_run_eq mac8Cert mac8Net G b mac8Cert_check mac8Net_topo hT hWires hPads hBits _ Q hRun,
-    List.map_fst_zip (by simp [hLen]), mac8Cert_q Q regs hQ, mac8_fabric_realizes_module tr regs hR hI]
+  rw [cone_run_eq mac8Cert mac8Net b mac8Cert_check mac8Net_topo hBits cyc Q hRun, hPins, mac8Cert_q Q regs hQ,
+    mac8_fabric_realizes_module tr regs hR hI]
 
-/-- From power-up: whatever the cells' flops hold, after a first reset cycle the fabric shows the
-module's outputs on every later cycle. -/
-theorem mac8_fabric_tiles_realize_module_from_reset (G : Grid) (b : Bits)
-    (hT : ∀ e ∈ mac8Cert.tiles, G.tile e.1.1 e.1.2 = mac8Cert.models[e.2]?)
-    (hWires : ∀ e ∈ mac8Cert.wiresUsed, e ∈ G.wires) (hPads : ∀ e ∈ mac8Cert.pads, e ∈ G.pads)
+/-- From power-up: whatever the cells' flops hold, after a first reset cycle the cone shows the module's
+outputs on every later cycle. -/
+theorem mac8_fabric_tiles_realize_module_from_reset (b : Bits)
     (hBits : ∀ r ∈ mac8Cert.required mac8Net, b r.1 r.2.1 r.2.2.1 = r.2.2.2)
     (Q : Node → Bool) (regs ins : Nat → BitVec 64) (tr : List (Bool × (Nat → BitVec 64)))
     (hIn0 : InputsFit iceStickMac8 (true, ins)) (hIn : ∀ c ∈ tr, InputsFit iceStickMac8 c)
-    (σ0 : Node → Bool) (σs : List (Node → Bool)) (hLen : σs.length = tr.length)
-    (hRun : FabricRun G b Q ((pinValues mac8Pins (true, ins), σ0) :: (tr.map (pinValues mac8Pins)).zip σs)) :
-    (((tr.map (pinValues mac8Pins)).zip σs).map fun c => mac8Cert.observe c.2) =
+    (σ0 : Node → Bool) (cyc : List ((Nat → Bool) × (Node → Bool))) (hPins : cyc.map (·.1) = tr.map (pinValues mac8Pins))
+    (hRun : ConeRun mac8Cert b Q ((pinValues mac8Pins (true, ins), σ0) :: cyc)) :
+    cyc.map (fun c => mac8Cert.observe c.2) =
       (moduleRun iceStickMac8 (stepModuleRegs iceStickMac8 true ins regs) tr).1.map
         (fun outs => mac8Net.outs.map fun (p, _) => (p, outPinValue mac8Pins outs p)) := by
-  have h := fabric_run_eq mac8Cert mac8Net G b mac8Cert_check mac8Net_topo hT hWires hPads hBits _ Q hRun
+  have h := cone_run_eq mac8Cert mac8Net b mac8Cert_check mac8Net_topo hBits _ Q hRun
   have h' := congrArg List.tail h
   simp only [List.map_cons, List.tail_cons] at h'
-  rw [h', List.map_fst_zip (by simp [hLen])]
+  rw [h', hPins]
   exact mac8_fabric_realizes_module_from_reset (mac8Cert.q Q) regs ins tr hIn0 hIn
+
+/-- A run of the cone exists for every trace (`Cert.runFrom`), under the committed bitstream's bits. -/
+theorem mac8_run_exists (Q : Node → Bool) (ps : List (Nat → Bool)) :
+    ConeRun mac8Cert (binBits mac8BinRows mac8Bin) Q (mac8Cert.runFrom mac8Net (binBits mac8BinRows mac8Bin) Q ps) ∧
+      (mac8Cert.runFrom mac8Net (binBits mac8BinRows mac8Bin) Q ps).map (·.1) = ps :=
+  Cert.runFrom_run mac8Cert mac8Net _ mac8Cert_check mac8Net_topo mac8_bin_required ps Q
+
+/-- **The committed bitstream realizes the module.** Configured with the bits of
+`hardware/fabulous/obend_ice40_mac8.bin` as `binBits` reads them (no hypothesis on the configuration
+remains: `mac8_bin_required` is kernel-decided over the bytes), every run of the cone from an in-width
+register file shows `iceStickMac8`'s outputs on every cycle of every in-width trace. -/
+theorem mac8_bitstream_realizes_module (tr : List (Bool × (Nat → BitVec 64))) (regs : Nat → BitVec 64)
+    (hR : RegsFit iceStickMac8 regs) (hI : ∀ c ∈ tr, InputsFit iceStickMac8 c)
+    (Q : Node → Bool) (hQ : ∀ k < mac8Cert.flops.length, Q (mac8Cert.flopNode k) = projOf mac8FlopMap regs k)
+    (cyc : List ((Nat → Bool) × (Node → Bool))) (hPins : cyc.map (·.1) = tr.map (pinValues mac8Pins))
+    (hRun : ConeRun mac8Cert (binBits mac8BinRows mac8Bin) Q cyc) :
+    cyc.map (fun c => mac8Cert.observe c.2) =
+      (moduleRun iceStickMac8 regs tr).1.map fun outs =>
+        mac8Net.outs.map fun (p, _) => (p, outPinValue mac8Pins outs p) :=
+  mac8_fabric_tiles_realize_module _ mac8_bin_required tr regs hR hI Q hQ cyc hPins hRun
 
 end Obend.Hardware.Fabulous

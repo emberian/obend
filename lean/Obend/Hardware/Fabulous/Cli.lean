@@ -21,7 +21,7 @@ public import Obend.Hardware.Fabulous.Mac8
 public import Obend.Hardware.Fabulous.LUT4ABSwitchMatrix
 public import Obend.Hardware.YosysLec
 public import Obend.Hardware.Fabulous.CertGen
-public import Obend.Hardware.Fabulous.Mac8Tiles
+public import Obend.Hardware.Fabulous.Bin
 @[expose] public section
 
 namespace Obend.Hardware.Fabulous
@@ -50,6 +50,9 @@ def bitLocation (rows x y pos : Nat) : Nat × Nat :=
   let word := 20 + (x * 20 + f) * (4 + 4 * interior) + 4 + 4 * (rows - 2 - y)
   (word + (3 - j / 8), j % 8)
 
+/-- A bitstream's bytes as a little-endian number (the form of `Mac8Bin.lean`). -/
+def binNat (b : ByteArray) : Nat := b.toList.foldr (fun x acc => acc * 256 + x.toNat) 0
+
 /-- The hypotheses of `readback_sound` for certificate `C` and net `N` that a bitstream and a project
 discharge outside Lean: the bits `C.required N` are the bitstream's, the wires `C.wiresUsed` are fixed
 pips of FABulous's `pips.txt`, and the tiles of `C` have their `fabric.csv` types. -/
@@ -71,18 +74,23 @@ def certHyps (fab : Fabric) (cfg : HashMap String Nat) (types : HashMap (Nat × 
   return s!"{req.length} required configuration bits present, {ws.length} wires fixed in pips.txt, {C.tiles.length} tiles of their fabric.csv types"
 
 /-- The tile-level hypotheses of `mac8_fabric_tiles_realize_module` for this bitstream. -/
-def checkTiles (fab : Fabric) (cfg : HashMap String Nat) (dir : String) : IO UInt32 := do
+def checkTiles (fab : Fabric) (cfg : HashMap String Nat) (dir : String) (binPathT : String) : IO UInt32 := do
   let types := parseFabricCsv (← IO.FS.readFile s!"{dir}/fabric.csv")
   let C ← match extractS fab cfg mac8Pins with
     | .ok (_, s) => match buildCert fab cfg types mac8Pins s with
       | .ok C => pure C
       | .error e => IO.eprintln s!"refused: no readback certificate: {e}"; return 1
     | .error e => IO.eprintln s!"refused: {e}"; return 1
-  if C != mac8Cert then
-    IO.eprintln "refused: the readback certificate is not mac8Cert"; return 1
-  match certHyps fab cfg types mac8Cert mac8Net with
+  -- that `C` is `mac8Cert` is `Mac8Cert.lean` regenerating byte for byte (`verify_fabric.sh`)
+  -- the same bits through `binBits`, the frame layout `Mac8CertCheck.mac8_bin_required` uses
+  let bin := binNat (← IO.FS.readBinFile binPathT)
+  if !binFramed fab.cols fab.rows bin (← IO.FS.readBinFile binPathT).size then
+    IO.eprintln "refused: the bitstream is not laid out as binBits reads it"; return 1
+  if !(C.required mac8Net).all (fun r => binBits fab.rows bin r.1 r.2.1 r.2.2.1 == r.2.2.2) then
+    IO.eprintln "refused: binBits does not read the required bits"; return 1
+  match certHyps fab cfg types C mac8Net with
   | .ok msg =>
-    IO.println s!"fabric check: the readback certificate is mac8Cert; {msg}; mac8_fabric_tiles_realize_module applies"
+    IO.println s!"fabric check: readback certificate: {msg}; binBits reads them too"
     return 0
   | .error e => IO.eprintln s!"refused: {e}"; return 1
 
@@ -98,7 +106,7 @@ def cmdCheck (args : List String) : IO UInt32 := do
   | .ok (N, sup) =>
     if N == mac8Net then
       IO.println s!"fabric check: {binPath} reads back to mac8Net ({N.gates.length} LUT4 gates, {N.flops.length} flops, {N.outs.length} output pins, {sup.size} configuration bits read); mac8_fabric_realizes_module applies"
-      return ← checkTiles fab cfg (← need "--project" args)
+      return ← checkTiles fab cfg (← need "--project" args) binPath
   | .error _ => pure ()
   let why := match verdict with
     | .ok _ => "it reads back to a net other than mac8Net"
@@ -308,37 +316,36 @@ def cmdCert (args : List String) : IO UInt32 := do
   | .error e => IO.eprintln s!"refused: {binPath}: {e}"; return 1
   | .ok (N, C) =>
     if args.contains "--mutant" then
-      -- the planted fault: the first switch-matrix hop of the first routed gate input, its select changed
-      let flipHop : List Hop → List Hop × Bool
-        | hs => match hs.findIdx? (fun | .sm .. => true | _ => false) with
-          | some j => (hs.modify j (fun | .sm k i => .sm k (i ^^^ 1) | h => h), true)
-          | none => (hs, false)
-      let (gates, _) := C.gates.foldl (fun (acc, done) g =>
-        if done then (acc.push g, true) else
-          match g.ins.findIdx? (·.isSome) with
-          | some j => match g.ins[j]? with
-            | some (some hs) =>
-              let (hs', ok) := flipHop hs
-              (acc.push { g with ins := g.ins.set j (some hs') }, ok)
-            | _ => (acc.push g, false)
-          | none => (acc.push g, false)) (#[], false)
-      let C' := { C with gates := gates.toList }
-      let fab ← loadProject dir
-      let types := parseFabricCsv (← IO.FS.readFile s!"{dir}/fabric.csv")
-      let cfg ← IO.ofExcept (decodeBin fab.cols fab.rows (← IO.FS.readBinFile binPath))
-      if !C'.check N then
-        IO.println "mutant certificate (one switch-matrix select changed): Cert.check refuses it"; return 0
-      match certHyps fab cfg types C' N with
-      | .ok _ => IO.eprintln "[FAIL] a certificate with a switch-matrix select changed was accepted"; return 1
-      | .error e =>
-        IO.println s!"mutant certificate (one switch-matrix select changed): Cert.check passes, its hypotheses do not: {e}"
-        return 0
+      -- the planted fault: the first switch-matrix entry that reads another entry, its select changed
+      let ok (e : Entry) : Bool := e.next.isSome && match e.hop with | .sm .. => true | _ => false
+      let flip (e : Entry) : Entry := { e with hop := match e.hop with | .sm k i => .sm k (i ^^^ 1) | h => h }
+      let (chunks, done) := C.chunks.foldl (fun (acc, done) (k, es) =>
+        if done then (acc.push (k, es), true) else
+          match es.findIdx? ok with
+          | some j => (acc.push (k, es.modify j flip), true)
+          | none => (acc.push (k, es), false)) (#[], false)
+      if !done then
+        IO.eprintln "no switch-matrix entry"; return 1
+      let C' := { C with chunks := chunks.toList }
+      if C'.check N then
+        IO.eprintln "[FAIL] Cert.check accepted a certificate with a switch-matrix select changed"; return 1
+      IO.println "mutant certificate (one switch-matrix select changed): Cert.check refuses it"
+      return 0
     let out ← need "--out" args
     IO.FS.writeFile out (certLean C (flagVal "--source" args |>.getD binPath))
-    let hops := (C.gates.flatMap fun g => g.ins.filterMap id).foldl (· + ·.length) 0 +
-      C.flops.foldl (fun a f => a + f.en.length + f.sr.length) 0 + C.outs.foldl (fun a o => a + o.2.2.length) 0
-    IO.println s!"wrote {out}: {C.gates.length} gates, {C.flops.length} flops, {C.outs.length} outputs, {C.tiles.length} tiles, {hops} hops; check against the net: {C.check N}"
+    if let some chk := flagVal "--out-check" args then
+      IO.FS.writeFile chk (checkLean C N.gates.length N.flops.length N.outs.length)
+    IO.println s!"wrote {out}: {C.entries.length} wires in the cone, {C.gates.length} gates, {C.flops.length} flops, {C.outs.length} outputs, {C.tiles.length} tiles; check against the net: {C.check N}"
     return 0
+
+/-- `obend fabric binlit --project DIR --bin FILE --out FILE`: write `Mac8Bin.lean`, the bitstream as data. -/
+def cmdBinlit (args : List String) : IO UInt32 := do
+  let fab ← loadProject (← need "--project" args)
+  let binPath ← need "--bin" args
+  let out ← need "--out" args
+  IO.FS.writeFile out (binLean "mac8Bin" fab.cols fab.rows (← IO.FS.readBinFile binPath) (flagVal "--source" args |>.getD binPath))
+  IO.println s!"wrote {out}"
+  return 0
 
 def cmdFabric : List String → IO UInt32
   | "wrapper" :: args => do
@@ -351,6 +358,7 @@ def cmdFabric : List String → IO UInt32
   | "tile-mutant" :: args => cmdTileMutant args
   | "tile-agree" :: args => cmdTileAgree args
   | "cert" :: args => cmdCert args
-  | _ => do IO.eprintln "usage: obend fabric (wrapper|extract|check|flip|vectors|tile|tile-mutant|tile-agree|cert) ..."; return 2
+  | "binlit" :: args => cmdBinlit args
+  | _ => do IO.eprintln "usage: obend fabric (wrapper|extract|check|flip|vectors|tile|tile-mutant|tile-agree|cert|binlit) ..."; return 2
 
 end Obend.Hardware.Fabulous
