@@ -5,7 +5,7 @@ module
     obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json]
         if CELL moved to PIN, what goes blocked, stale or behind, what is restored, and which law
         rows must be re-judged; each line with the opening it rests on (the support naming CELL and
-        its value at PIN). PATH is a vault (a directory with `.obend/world.json`: CELL a page, PIN
+        its value at PIN). PATH is a vault (a directory with `.obend/log`: CELL a page, PIN
         `N`/`vN` a version of its history, `retired`, or a file the owner would write) or a workspace
         (a `workspace.json`, or a directory holding one: CELL a record line `NAME^MAJOR`, PIN
         `P:VERSION`, `P:retired`, or another workspace file whose line it takes; the dependents are
@@ -192,8 +192,8 @@ def impact (args : List String) : IO UInt32 := do
   match ← workspacePath? world with
   | some ws => impactWorkspace ws cell spec turn drop out
   | none =>
-    if !(← (System.FilePath.mk world / ".obend" / "world.json").pathExists) then
-      IO.eprintln (world ++ " is neither a vault (no .obend/world.json) nor a workspace"); return 2
+    if !(← Obend.Vault.Cli.isVault world) then
+      IO.eprintln (world ++ " is neither a vault (no .obend/log) nor a workspace"); return 2
     impactVault world cell spec drop out
 
 def verdictWords : Except String Unit → String
@@ -206,8 +206,8 @@ def replay (args : List String) : IO UInt32 := do
   let some world := world | IO.eprintln "obend analyze replay PAGE@FILE --world DIR"; return 64
   let [target] := args | IO.eprintln "obend analyze replay PAGE@FILE --world DIR"; return 64
   let some (page, file) := splitAt target | IO.eprintln "name the amendment as PAGE@FILE"; return 64
-  if !(← (System.FilePath.mk world / ".obend" / "world.json").pathExists) then
-    IO.eprintln (world ++ " is not a vault (no .obend/world.json)"); return 2
+  if !(← Obend.Vault.Cli.isVault world) then
+    IO.eprintln (world ++ " is not a vault (no .obend/log)"); return 2
   let s ← Obend.Vault.Cli.loadStore world
   let md ← IO.FS.readFile file
   match VaultWorld.replay s page md with

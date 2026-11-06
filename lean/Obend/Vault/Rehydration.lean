@@ -188,7 +188,7 @@ abbrev ReceiptChain := List WitnessReceipt
 
 /-- **`wellLinked H c`** — structural append-only link discipline: reading `c` newest-first,
     every receipt's `prevHash` equals `H` of its immediate predecessor, and genesis pins `genesisSentinel`. -/
-def wellLinked (H : WitnessReceipt → Nat) : ReceiptChain → Prop
+@[expose] def wellLinked (H : WitnessReceipt → Nat) : ReceiptChain → Prop
   | []             => True
   | [g]            => g.prevHash = genesisSentinel
   | r :: p :: rest => r.prevHash = H p ∧ wellLinked H (p :: rest)

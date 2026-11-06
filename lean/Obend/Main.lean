@@ -38,8 +38,9 @@ Vault commands (lane Vault, 2026-10-31; `Obend.Vault.Cli`):
 
     obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN…
           | member list | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME]
-          | recite PAGE [--as NAME] | create --from KIND PAGE   (`-C DIR` runs any of them in DIR)
-        a directory of markdown as pages, with the world kept beside it in `DIR/.obend/`.
+          | recite PAGE [--as NAME] | create --from KIND PAGE | log [records]   (`-C DIR` runs any of them in DIR)
+        a directory of markdown as pages, with the world kept beside it in `DIR/.obend/`: its log,
+        whose replay is the world (`Obend.Vault.Replay`), and a checkpoint, a cache of it.
 
 Branch commands (`Obend.Vault.BranchCli`):
 

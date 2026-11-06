@@ -15,12 +15,18 @@ its frontmatter lines), the members and their grants.
 * `Obend.Vault.Store` — the world beside the vault and each command: `openVault` (`open_idem`:
   twice is a no-op), `mergePage` (`mergePage_pushout`), `postAs`, `selectIn` (`select_keeps`,
   `select_needs_grant`), `reciteIn`.
-* `Obend.Vault.Json` — `.obend/world.json`.
+* `Obend.Vault.Json` — the world as JSON (`.obend/world.json` before the log; the log's turns and
+  checkpoint now).
+* `Obend.Vault.Log` — the log is truth: records, their bytes, `replay`, `state_eq_replay_log`,
+  `recover_eq_replay_prefix`, `checkpoint_is_cache`, the log as Pillar 1's well-linked chain.
+* `Obend.Vault.Replay` — the deployed entry's turns (opens, posts, merges, resolutions, forms, ledger
+  rows) and step, the instance of `Obend.Vault.Log`; forms, their receipts and the merges' conflicts
+  are part of the world it replays.
 * `Obend.Vault.Form` — a captured membrane as a form: holes for data, a residual, a fill as a
   proposal the kernel judges through `commit` (`admit_no_amplification`, `eval_fill_eq_subst_residual`,
   `admit_conserves_total`).
-* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, and the
-  forms' `capture`, `abstract`, `form`, `fill`, `reshare`, `judge`.
+* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, `log`, and
+  the forms' `capture`, `abstract`, `form`, `fill`, `reshare`, `judge`.
 * `Obend.Vault.Branch` — offline branches with a base, merged at the tip: the pushout of the two
   sides' disjoint writes (`merge_is_pushout`), clashes kept as conflict states, consent from every
   page in a write's cone (`landed_consents`), authority read where every revocation is visible
@@ -32,12 +38,15 @@ its frontmatter lines), the members and their grants.
 
 The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`;
 the forms' is `lean/tests/vault/FORMS.md`, executed by the same with `--doc`, and planted by
-`lean/tests/vault/forms_planted.py`.
+`lean/tests/vault/forms_planted.py`; `lean/tests/vault/CRASH.md` (`crash.py`) stops `obend` in the
+middle of a write and opens the vault again.
 -/
 public import Obend.Vault.Page
 public import Obend.Vault.Law
 public import Obend.Vault.Store
 public import Obend.Vault.Json
+public import Obend.Vault.Log
+public import Obend.Vault.Replay
 public import Obend.Vault.Hyperedge
 public import Obend.Vault.Escrow
 public import Obend.Vault.Affordance
