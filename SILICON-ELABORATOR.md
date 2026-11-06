@@ -23,9 +23,9 @@ On a conventional von Neumann CPU:
 
 Meanwhile, `Obend` already possesses **five mechanized bridges** (`0 sorryAx`) that almost nobody else has in one unified system:
 1. **`Obend/Lower/Fragment.lean`**: Lowers closed Lean 4 kernel `Expr`s (including structural and well-founded recursion via `f.eq_def` $\to$ `recConst` $\to$ `fix`) into `Core4` (`lower_sound`, `lower_checks`, `lean_to_book`).
-2. **`Obend/Leaf/Flatten.lean` & `Emit.lean` & `BendTT.lean`**: Partially evaluates layered compositions (`flatten_sound`, `vtable_clean`) and compiles them to flat supercombinator books (`book_sound`) and affine interaction/supercombinator nets (`book_to_bendtt_sound`, `zero_wires_erased`).
+2. **`Obend/Leaf/Flatten.lean` & `Emit.lean`**: Partially evaluates layered compositions (`flatten_sound`, `vtable_clean`) and compiles them to flat supercombinator books (`book_sound`). The translation of books into affine interaction nets (`BendTT.lean`, with its soundness and zero-wire erasure theorems) was deleted on 2026-11-04: it was a Core4 sub-syntax with an emitter nothing could run.
 3. **`Obend/Leaf/Specialize.lean`**: Mechanizes slot-guarded specialization (`specSlot`, `book_usable_sound`, `specialize_choice`, `moved_pin_blocks`), where a specialized `Candidate.book` is active as long as its pinned `Supports : List (SlotId × Hash)` match the live environment, and falls back in $O(1)$ to the unspecialized `.machine` the instant any pin moves.
-4. **`Obend/Lower/Proofs/Hardware.lean`**: Connects `Lean-lite` $\to$ `Core4` $\to$ `Leaf.Book` $\to$ `Obend/Hardware/RTL` (`lower_to_rtl_sat_sound`, `lean_small_to_book_to_rtl`).
+4. **`Obend/Lower/Proofs/Hardware.lean`**: Connects `Lean-lite` $\to$ `Core4` $\to$ `Leaf.Book` $\to$ `Obend/Hardware/RTL` (`lower_to_rtl_sat_sound`; the run of one small Lean term through all four stages is a closed check, kept as an `example` in `Obend/Teeth/Lower/Fixtures.lean`).
 5. **`Obend/Hardware/ReductionMachine.lean`**: Compiles `Leaf.Book` supercombinators into a spatial grid of hardware **`AutomatonTile`s** connected by a credit-controlled XY wormhole NoC (`automaton_simulates_book`), equipped with a **3-phase Glitch-Free Dynamic Partial Reconfiguration (`ICAP`) controller** governed by `Leaf/Specialize.specSlot` (`dpr_preserves_neighbor_tiles_and_packets`, `dpr_specialized_tile_executes_new_book`).
 
 When you snap these five pieces together—and add the three missing links detailed below—you get a **Self-Specializing Silicon Lean Kernel & Elaborator**.
@@ -49,7 +49,7 @@ flowchart TD
 
     subgraph FutamuraSpine["3. Obend/Leaf (1st, 2nd & 3rd Futamura Projections)"]
         FLAT["Obend/Leaf/Flatten.lean\n(Static Data-Pin Partial Evaluation against ENV)"]
-        BOOK["Obend/Leaf/Emit.lean (Leaf.Book)\n+ BendTT.lean (Affine Supercombinator Net)"]
+        BOOK["Obend/Leaf/Emit.lean (Leaf.Book)"]
         SPEC["Obend/Leaf/Specialize.lean\nspecSlot { machine := GenericElab, candidates := [SpecializedEnvBook] }"]
     end
 
@@ -67,7 +67,7 @@ flowchart TD
     CORE --> FLAT
     ENV -->|"Static Data Pins\n(Supports : List (SlotId × Hash))"| FLAT
     FLAT -->|"flatten_sound\nvtable_clean"| BOOK
-    BOOK -->|"book_to_bendtt_sound\nzero_wires_erased"| SPEC
+    BOOK -->|"bequiv_dataPinSpecialize\nstaticApply_slot_sound"| SPEC
     SPEC -->|"automaton_simulates_book"| NOC
     SPEC -->|"dpr_specialized_tile_executes_new_book"| ICAP
     ICAP --> TILES
@@ -98,7 +98,7 @@ Currently, `Obend/Lower/Fragment.lean` handles non-recursive inductives (`Bool`,
 **Engineering Design (`Obend/Lower/Inductive.lean` & `Obend/Lower/LCNF.lean`)**:
 1. **General Inductive Declaration Lowering**: Given any kernel `InductiveVal` (with constructors `ConstructorVal` and recursor `RecVal`), register a corresponding `Obend.Lower.Inductive.CtorIotaRule` table in `GlobalEnv`.
 2. **Recursor & Matcher Lowering**: Lower `Ind.rec` applications and compiler matcher applications (`match_1`, etc.) directly to `Term.matchE` + `Term.recConst` (bounded by explicit fuel derived from structural height or `Obend/Equiv/Demand.lean`).
-3. **Persistent `Array` / `ByteArray` / `String` Primitives**: Map Lean's `String` and `Array` either to functional finger-trees / radix-trees in `Core4` for pure proof mode, or to linear `.one`-quantity array handles (`Slot` / `BendTT` vector nodes) so zero-copy AST updates compile directly to hardware BRAM banks without reference-count thrashing.
+3. **Persistent `Array` / `ByteArray` / `String` Primitives**: Map Lean's `String` and `Array` either to functional finger-trees / radix-trees in `Core4` for pure proof mode, or to linear `.one`-quantity array handles (`Slot` vector nodes; the `BendTT` nodes this once named were deleted on 2026-11-04) so zero-copy AST updates compile directly to hardware BRAM banks without reference-count thrashing.
 4. **Fast Bulk Ingestion via `Lean.Compiler.LCNF`**: While `Fragment.read` lowers raw kernel `Expr`s for theorem-proving soundness (`lower_sound`), lowering the entire `Lean.Elab` subsystem (tens of thousands of lines of monadic Lean 4 code) is dramatically faster if we also tap **LCNF (Lean Compiler Normal Form, `Lean.Compiler.LCNF.Decl`)**, where type parameters are already `.zero`-erased, monadic `do`-blocks are ANF-flattened into `let`/`cases`/`jmp`, and closures are explicit. Lowering `LCNF.Code` into `Core4` is a direct 1-to-1 structural translation!
 
 ---
@@ -134,9 +134,9 @@ $$\mathsf{ElabCompiler} \;=\; \mathsf{mix}(\ulcorner \mathsf{mix} \urcorner, \ul
 How does a `Leaf.Book` / `BendTT` representation of the Lean kernel and elaborator actually execute on silicon, and why is our architecture uniquely suited to it?
 
 ### 5.1 Hash-Consed DAGs + `.one` Linear Wires (`BendTT`)
-In `Lean4Lean`, `Expr` is a DAG with maximal sharing. (This subsection described the `BendTT` module under `Obend/Leaf/`, deleted on 2026-11-04; nothing below is implemented.)
-- `.zero`-quantity proof witnesses and erased type indices are stripped at compile time (`zero_wires_erased` — zero silicon area or bandwidth spent on proof terms that aren't inspected at runtime!).
-- `.one`-quantity linear states (`MetavarContext`, `LocalContext`, mutable unification tables) flow through dedicated point-to-point linear wires without reference-counting locks or garbage collection pauses (`step_conserves_linear`, `book_to_bendtt_sound`).
+In `Lean4Lean`, `Expr` is a DAG with maximal sharing. (This subsection described the `BendTT` module under `Obend/Leaf/`, deleted on 2026-11-04; the hardware below is not implemented, and each bullet says what is proved now.)
+- `.zero`-quantity proof witnesses and erased type indices would be stripped at compile time, so no silicon area or bandwidth goes to proof terms nothing inspects at runtime. What is proved now is the LCNF bridge's half: a `.zero` argument compiles to `box` (`lcnf_zero_erasure_sound`).
+- `.one`-quantity linear states (`MetavarContext`, `LocalContext`, mutable unification tables) would flow through dedicated point-to-point linear wires without reference-counting locks or garbage collection pauses. What is proved now is that Core4's step conserves linear resources (`step_conserves_linear`), and, on one sample, that the LCNF bridge rejects a reused linear state token (`lcnf_linear_state_conserved`, a closed check).
 - `.many`-quantity shared subterms (`Expr` nodes) are stored in a **Hardware Hash-Consed CAM / BRAM Pool** where structural equality (`Expr.equal`) is a single 1-cycle 64-bit handle comparison, and $\alpha$-equivalence / `hasLooseBVars` metadata is packed directly into the 64-bit word header!
 
 ### 5.2 Spatial Tile Partitioning on `Obend/Hardware/ReductionMachine.lean`
@@ -189,6 +189,6 @@ Lean 4's elaborator (`src/Lean/Elab/`) combines pure symbolic algorithms with IO
 | **Stage 1** | **Recursive Inductives & `Lean.Expr` in `Obend/Lower`** | `Obend/Lower/Inductive.lean`, `Obend/Lower/Fragment.lean` | `lower_inductive_sound`: Recursive datatypes (`Name`, `Level`, `Expr`) lower to `Core4` and preserve multi-step reduction |
 | **Stage 2** | **Mini-`Lean4Lean` Kernel in `Core4` & `Leaf.Book`** | `Obend/Lower/LeanKernel.lean` | `silicon_kernel_whnf_sound`, `silicon_kernel_check_sound`: Lowered `whnf`/`isDefEq`/`check` agrees with Lean's kernel on closed declarations |
 | **Stage 3** | **Static folding in `Obend/Leaf`** | `Obend/Leaf/Static.lean`, `Obend/Leaf/Specialize.lean` | `bequiv_dataPinSpecialize`, `staticApply_slot_sound`: a term folded at a pinned argument is a slot candidate. No 2nd Futamura projection exists (deleted 2026-11-04) |
-| **Stage 4** | **eFPGA Simulation & Verilog Co-Simulation on `ReductionMachine`** | `Obend/Lower/Proofs/SiliconKernel.lean` (read-only over `Obend/Hardware/`) | `lean_kernel_tile_simulates_check`: End-to-end co-simulation of the lowered kernel checking a non-trivial theorem across `AutomatonTile`s + `ICAP` DPR |
-| **Stage 5** | **Pure `Lean.Elab` (`Macro`, `SynthInstance`, `Simp`) via LCNF Bridge** | `Obend/Lower/LCNF.lean`, `Obend/Lower/SiliconElabFabric.lean` | `lcnf_to_core4_sound`, `elab_simp_tile_sound`: Hardware-accelerated `simp` and typeclass synthesis producing kernel-checked `Core4` / Lean proof terms |
-| **Stage 6** | **FPGA Prototype & `wafer.space` ASIC Tapeout Signoff** | Read-only adapter over `Obend/Hardware/WaferSpace.lean` | Synthesizable SystemVerilog (`emit_verilog_eval_eq`) targeting Xilinx UltraScale+ / ECP5 eFPGA + Sky130/GF180 ASIC tile macro |
+| **Stage 4** | **eFPGA Simulation & Verilog Co-Simulation on `ReductionMachine`** | `Obend/Lower/Proofs/SiliconKernel.lean` (read-only over `Obend/Hardware/`) | Planned: the lowered kernel checking any declaration agrees with its run across `AutomatonTile`s + `ICAP` DPR. Stated now only as closed checks: `silicon_kernel_5stage_check_sound` (three valid and four invalid declarations agree across the five stages and the automaton network's output) |
+| **Stage 5** | **Pure `Lean.Elab` (`Macro`, `SynthInstance`, `Simp`) via LCNF Bridge** | `Obend/Lower/LCNF.lean`, `Obend/Lower/SiliconElabFabric.lean` | `lcnf_to_core4_sound`. Planned and not stated: hardware-accelerated `simp` and typeclass synthesis producing kernel-checked `Core4` / Lean proof terms (what exists is the admission of a `simp` theorem into a tile, `admitSimpTheoremDpr_glitch_free_and_sound`) |
+| **Stage 6** | **FPGA Prototype & `wafer.space` ASIC Tapeout Signoff** | Read-only adapter over `Obend/Hardware/WaferSpace.lean` | Synthesizable SystemVerilog targeting Xilinx UltraScale+ / ECP5 eFPGA + Sky130/GF180 ASIC tile macro. Planned and not stated: a theorem that the emitted SystemVerilog evaluates as the RTL does |
