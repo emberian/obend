@@ -13,8 +13,8 @@
                                        first and the check must refuse (isa_check.sh stage 6)
     obend-rdna2 gem5 VECTORS.tsv       every row of hardware/gpu/rdna2/gem5_vectors.tsv replayed through the
                                        model's step and compared register by register (isa_check.sh stage 5)
-    obend-rdna2 run GRAPH_DIR [--flip STAGE:INSTR:BIT]
-                                       the model: every stage's program from GRAPH_DIR/../../isa/<graph>.txt
+    obend-rdna2 run GRAPH_DIR [--isa ISA.txt] [--flip STAGE:INSTR:BIT]
+                                       the model: every stage's program from ISA.txt (default GRAPH_DIR/../../isa/<graph>.txt)
                                        run on every vector of expected.tsv (Obend.Hardware.Gpu.Rdna2.Check);
                                        with --flip, one bit of one instruction is flipped first and the
                                        comparison must fail (the gate's tooth)
@@ -26,7 +26,7 @@ import Obend.Hardware.Gpu.Rdna2.Waitcnt
 open Obend.Hardware.Gpu.Rdna2
 
 def usage : String :=
-  "obend-rdna2 decode ISA.txt | flip ISA.txt | waitcnt ISA.txt [--nop STAGE:INSTR] | gem5 VECTORS.tsv | run GRAPH_DIR [--flip STAGE:INSTR:BIT]"
+  "obend-rdna2 decode ISA.txt | flip ISA.txt | waitcnt ISA.txt [--nop STAGE:INSTR] | gem5 VECTORS.tsv | run GRAPH_DIR [--isa ISA.txt] [--flip STAGE:INSTR:BIT]"
 
 /-- `(text, words)` for every instruction line (`\t<text>\t; <hex>...`) of a dump, in order. -/
 def instructionLines (s : String) : List (String × List UInt32) :=
@@ -84,9 +84,11 @@ def cmdFlip (path : String) : IO UInt32 := do
   for b in bad.take 20 do IO.eprintln s!"[FAIL] {b}"
   return if bad.isEmpty then 0 else 1
 
-def cmdRun (dir : String) (flip : Option String) : IO UInt32 := do
+def cmdRun (dir : String) (isaArg : Option String) (flip : Option String) : IO UInt32 := do
   let graph := (System.FilePath.mk dir).fileName.getD dir
-  let isaPath := (System.FilePath.mk dir) / ".." / ".." / "isa" / (graph ++ ".txt")
+  let isaPath := match isaArg with
+    | some p => System.FilePath.mk p
+    | none => (System.FilePath.mk dir) / ".." / ".." / "isa" / (graph ++ ".txt")
   let isa ← IO.FS.readFile isaPath
   let plan ← IO.FS.readFile ((System.FilePath.mk dir) / "plan.json")
   let expected ← IO.FS.readFile ((System.FilePath.mk dir) / "expected.tsv")
@@ -136,6 +138,8 @@ def main (args : List String) : IO UInt32 := do
   | ["gem5", p] => cmdGem5 p
   | ["decode", p] => cmdDecode p
   | ["flip", p] => cmdFlip p
-  | ["run", d] => cmdRun d none
-  | ["run", d, "--flip", f] => cmdRun d (some f)
+  | ["run", d] => cmdRun d none none
+  | ["run", d, "--flip", f] => cmdRun d none (some f)
+  | ["run", d, "--isa", p] => cmdRun d (some p) none
+  | ["run", d, "--isa", p, "--flip", f] => cmdRun d (some p) (some f)
   | _ => IO.eprintln usage; return 2

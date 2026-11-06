@@ -91,12 +91,12 @@ if run_stage 4; then
 echo "=== [4/6] the model: every graph's programs on every vector; a planted store flip caught ==="
 for d in "${DUMPS[@]}"; do
   g="$(basename "${d}" .txt)"
-  "${RDNA2}" run "$(graph_dir "${g}")" | sed 's/^/  /' || exit 1
+  "${RDNA2}" run "$(graph_dir "${g}")" --isa "${d}" | sed 's/^/  /' || exit 1
 done
 for g in diamond optic-mul optic-bilinear optic-linearmac; do
   # the first buffer_store of stage 0: VDATA's low bit (bit 40 of the instruction) names another register
   idx=$(awk '/^## stage 0/{s=1; i=-1; next} /^## stage 1/{exit} s && /^\t/{i++; if ($0 ~ /buffer_store/) {print i; exit}}' "${SCRIPT_DIR}/isa/${g}.txt")
-  "${RDNA2}" run "${SCRIPT_DIR}/graphs/${g}" --flip "0:${idx}:40" | sed 's/^/  /' || { echo "[FAIL] ${g}: a flipped store went unnoticed" >&2; exit 1; }
+  "${RDNA2}" run "${SCRIPT_DIR}/graphs/${g}" --isa "${SCRIPT_DIR}/isa/${g}.txt" --flip "0:${idx}:40" | sed 's/^/  /' || { echo "[FAIL] ${g}: a flipped store went unnoticed" >&2; exit 1; }
 done
 fi
 if run_stage 5; then
