@@ -55,8 +55,8 @@ Forms (`Obend.Vault.Form`; the walkthrough is `lean/tests/vault/FORMS.md`):
         hand the form on to WHO, attenuated; a reshare that would amplify is refused.
     obend judge FILE
         judge a proposal for one of this vault's forms: the membrane, the form's resources, the pins,
-        then every page it writes through the laws as they stand; landed, a receipt in
-        .obend/forms/receipts.json.
+        then the one turn over every page it writes, each by its laws and the laws over links on the
+        turn's tip; all of it lands or none, with one receipt in .obend/forms/receipts.json.
 
 Every command but `member` opens the vault first (an edit on disk is the owner's write, judged by
 the page's laws), so no command overwrites a file the person changed. `-C DIR` before or after a
@@ -547,15 +547,17 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let a ← ofExcept file (Obend.Vault.Form.assignmentOf (← ofExcept file (j.getObjVal? "fill")))
     match Obend.Vault.Form.judgeProposal H s f hops a with
     | .error e => fail (name ++ ": " ++ e)
-    | .ok (s', ad) =>
+    | .ok (s', ad, t) =>
       let rs ← loadReceipts dir
-      let r := Obend.Vault.Form.receiptFor H rs.getLast? f a ad
+      let r := Obend.Vault.Form.receiptFor H rs.getLast? f a ad t
       writeJson (formsDir dir / "receipts.json") (Lean.Json.arr ((rs ++ [r]).map Obend.Vault.Form.receiptJson).toArray)
-      IO.println (name ++ ": landed as one turn by " ++ ad.holder ++ ", receipt " ++
-        Obend.Vault.Form.hex16 (Obend.Vault.Form.receiptDigest H r) ++ " (" ++ toString (rs.length + 1) ++ " in the chain)")
-      for p in ad.pairs do
-        IO.println ("  " ++ p.src ++ ": " ++ p.asset ++ " " ++ toString (natAt p.srcPre p.asset) ++ " → " ++ toString p.srcAfter)
-        IO.println ("  " ++ p.dst ++ ": " ++ p.asset ++ " " ++ toString (natAt p.dstPre p.asset) ++ " → " ++ toString p.dstAfter)
+      IO.println (name ++ ": landed as one turn over " ++ toString t.writeCells.length ++ " pages by " ++ ad.holder ++
+        ", receipt " ++ Obend.Vault.Form.hex16 (Obend.Vault.Form.receiptDigest H r) ++ " (" ++
+        toString (rs.length + 1) ++ " in the chain)")
+      for d in t.writeCells do
+        for A in f.assets do
+          IO.println ("  " ++ d.cell ++ ": " ++ A ++ " " ++ toString (natAt d.preState A) ++ " → " ++
+            toString (natAt d.postState A))
       finish dir s' V
       for l in problems s' do IO.println l
       return 0

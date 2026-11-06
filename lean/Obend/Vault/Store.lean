@@ -675,22 +675,37 @@ def staleText (pageName who : String) (moved : List Obend.Kind.KindVersion) : St
     ", ".intercalate (moved.map fun f => f.name ++ " at v" ++ toString (f.version + 1)) ++
     "); adopting their laws is the owner's (" ++ who ++ " has no relaw grant on " ++ pageName ++ ")"
 
-/-- **Commit a write**: judge the new version `G'` of page `p` by its laws, and on admission append
-it, pinning its kind at the vault's registry. A change of a law line or of the kind the page names
-is the owner's, or a member's granted `relaw`; it is judged as the adoption of the new laws over the
-page as written. So is a write to a page whose kind pin is stale (a kind it rests on was revised,
-`movedKinds`): the owner's write adopts the revised kinds' laws and renews the pin; anyone else's is
-refused, naming the kinds that moved. Otherwise the laws are kept (`lawsKept`), and the new laws are
-the old ones (`lawsFor_of_kept`). A birth is judged as a first write. The new state carries the
-write's own measures (`deletions`, `insertions`: how it changed the current version); the old state
-has none (0). The laws and the states a law over links reads are the store's (`es`); the cites of
-`G'` were resolved against `res` (at an open, the files as they are about to become), which names
-the pages they link to. -/
-def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
-    (turn : Nat) (poster : String := who.name) (res : List Entry := es) (env : Environment := #[]) :
-    Except String Change := do
+/-- A write as the judge takes it, before it is judged: the page, its new version, the laws and the
+occasion, the state type, the old and new states, the request. `commit` judges one; a turn over
+several pages (`commitTurn`) judges each of its writes at the tip of all of them. -/
+structure Prepared where
+  p : Page
+  G' : Graph
+  authors : List (AtomId × String)
+  laws : Laws
+  kinds : KindsOf
+  occ : Occ
+  S : Obend.Core.Ty.Ty
+  o : Obend.Core.Data.Data
+  n : Obend.Core.Data.Data
+  facts : Facts
+  rq : Obend.Core.Data.Data
+  lin : List (String × LawExpr)
+  poster : String
+  who : Actor
+  env : Environment
+
+/-- **The one landing rule**: an admitted write appends its version, renders it, and pins its kind. -/
+def Prepared.change (pr : Prepared) : Change :=
+  ⟨pr.p.history ++ [pr.G'], render pr.G' pr.p.name ({ pr.p with authors := pr.authors }).who, pr.authors,
+    none, pr.kinds.pin⟩
+
+/-- Prepare the write of `G'` to `p` (see `commit`): the refusals that come before the laws are
+asked (a change of a law line or of the kind by an actor without `relaw`, a stale kind), the laws,
+the states and the request. -/
+def prepareWrite (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
+    (turn : Nat) (poster : String := who.name) (env : Environment := #[]) : Except String Prepared := do
   let authors := p.authors ++ added
-  let p' := { p with authors := authors }
   let v := p.history.length
   let newLaws ← lawsFor es p.name G'
   let kinds ← kindsFor es p.name (settled G')
@@ -718,6 +733,25 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
   let o := if oldMs.isEmpty then n else stateOfWith keys labels oldMs oldLs
   let facts : Facts := ⟨some who.id, some who.id, v, turn⟩
   let rq := requestBy who.name poster occ facts
+  pure ⟨p, G', authors, laws, kinds, occ, S, o, n, facts, rq, lin, poster, who, env⟩
+
+/-- A store with some pages read at given states (the other writes of a turn, at their new states). -/
+def overlay (over : List (String × Obend.Core.Data.Data)) (store : VaultStore) : VaultStore := fun c =>
+  match over.lookup c with
+  | some d => some d
+  | none => store c
+
+/-- **Judge a prepared write**: its laws on its old and new states, its rows, and the laws over links
+(this page's at the pages it links to, every linking page's at this page), read on the store its
+write turn describes with the pages `over` at the states given (the tip of a turn over several
+pages; `[]` for a write alone). -/
+def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × Obend.Core.Data.Data)) :
+    Except String Unit := do
+  let p := pr.p
+  let G' := pr.G'
+  let v := p.history.length
+  let (laws, occ, S, o, n, facts, rq, lin, poster, who, env) :=
+    (pr.laws, pr.occ, pr.S, pr.o, pr.n, pr.facts, pr.rq, pr.lin, pr.poster, pr.who, pr.env)
   match judge S p.name lin o n rq with
   | .admitted =>
     -- the laws over rows (`law NAME per ##`): each row the marker begins, in the new version and in
@@ -752,7 +786,7 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
     -- the laws over links, judged through the write's turn: this page's at the pages it links to,
     -- and every linking page's at this page as written
     let wt := writeTurn p.name o n (pinsAt es (citedNames res G')) rq
-    let world := applyTurn wt.readPins.store wt
+    let world := overlay over (applyTurn wt.readPins.store wt)
     let mine := linkLaws laws
     if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq wt.readFootprint) then
       throw (linkRefusalText p.name laws r facts)
@@ -765,12 +799,38 @@ def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × St
             throw (backlinkRefusalText e.name p.name elaws r facts n
               ((scalarFields (settled G')).map (·.1)))
         | .error _ => pure ()
-    pure ⟨p.history ++ [G'], render G' p.name p'.who, authors, none, kinds.pin⟩
+    pure ()
   | .refused law reason =>
     throw (refusalText p.name laws law reason facts (occ.old o n) n
       ((scalarFields (settled G')).map (·.1)) ++
       lackingNote laws law (unresolvedNames env (settled G')) (unresolvedInsertedNames env p.current G'))
   | .undecided why => throw ("undecided: " ++ why)
+
+
+/-- **Commit a write**: judge the new version `G'` of page `p` by its laws, and on admission append
+it, pinning its kind at the vault's registry. A change of a law line or of the kind the page names
+is the owner's, or a member's granted `relaw`; it is judged as the adoption of the new laws over the
+page as written. So is a write to a page whose kind pin is stale (a kind it rests on was revised,
+`movedKinds`): the owner's write adopts the revised kinds' laws and renews the pin; anyone else's is
+refused, naming the kinds that moved. Otherwise the laws are kept (`lawsKept`), and the new laws are
+the old ones (`lawsFor_of_kept`). A birth is judged as a first write. The new state carries the
+write's own measures (`deletions`, `insertions`: how it changed the current version); the old state
+has none (0). The laws and the states a law over links reads are the store's (`es`); the cites of
+`G'` were resolved against `res` (at an open, the files as they are about to become), which names
+the pages they link to. -/
+def commit (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
+    (turn : Nat) (poster : String := who.name) (res : List Entry := es) (env : Environment := #[]) :
+    Except String Change := do
+  let pr ← prepareWrite es p G' added who turn poster env
+  judgePrepared es res pr []
+  pure pr.change
+
+/-- A refusal before the laws are asked is the commit's. -/
+theorem commit_of_prepare_error {es : List Entry} {p : Page} {G' : Graph} {added : List (AtomId × String)}
+    {who : Actor} {turn : Nat} {poster : String} {res : List Entry} {env : Environment} {m : String}
+    (h : prepareWrite es p G' added who turn poster env = .error m) :
+    commit es p G' added who turn poster res env = .error m := by
+  simp [commit, bind, Except.bind, h]
 
 /-- **Retargeting the kind needs the grant**: a write that changes the kind a page names, by an actor
 without `relaw` on the page, is refused, whatever its law lines. -/
@@ -780,7 +840,10 @@ theorem commit_kind_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (add
     ∃ msg, commit es p G' added who turn (env := env) = .error msg := by
   have hkept : lawsKept (settled G) (settled G') = false := by
     simp [lawsKept, hk]
-  unfold commit
+  suffices ∃ msg, prepareWrite es p G' added who turn who.name env = .error msg by
+    obtain ⟨m, hm⟩ := this
+    exact ⟨m, commit_of_prepare_error hm⟩
+  unfold prepareWrite
   cases lawsFor es p.name G' with
   | error m => exact ⟨m, rfl⟩
   | ok newLaws =>
@@ -797,7 +860,10 @@ theorem commit_stale_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (ad
     (hm : (movedKinds es old).isEmpty = false)
     (hw : who.may "relaw" p.name = false) {env : Environment} :
     ∃ msg, commit es p G' added who turn (env := env) = .error msg := by
-  unfold commit
+  suffices ∃ msg, prepareWrite es p G' added who turn who.name env = .error msg by
+    obtain ⟨m, hm⟩ := this
+    exact ⟨m, commit_of_prepare_error hm⟩
+  unfold prepareWrite
   cases lawsFor es p.name G' with
   | error m => exact ⟨m, rfl⟩
   | ok newLaws =>
@@ -806,6 +872,165 @@ theorem commit_stale_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (ad
     | ok kinds =>
       simp only [bind, Except.bind, hc, hp, hm, hw, Bool.and_false, Bool.false_eq_true, if_false]
       split <;> exact ⟨_, rfl⟩
+
+/-- What `prepareWrite` prepares is the write it was given: the page and the version. -/
+theorem prepareWrite_page {es : List Entry} {p : Page} {G' : Graph} {added : List (AtomId × String)}
+    {who : Actor} {turn : Nat} {poster : String} {env : Environment} {pr : Prepared}
+    (h : prepareWrite es p G' added who turn poster env = .ok pr) : pr.p = p ∧ pr.G' = G' := by
+  unfold prepareWrite at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first
+    | (cases h; exact ⟨rfl, rfl⟩)
+    | cases h
+    | skip
+  all_goals (simp only [Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩)
+
+/-! ## A turn over several pages
+
+A turn may write several pages at once (a form's proposal moves an amount from one page to another,
+`Obend.Vault.Form`). It is judged as one: every write prepared (`prepareWrite`, the refusals before
+the laws), then each judged by its own laws and rows and by the laws over links on the TIP, the store
+with every page of the turn at its new state (`judgePrepared` with `over`), and landed only when all
+are admitted, by the one landing rule (`Prepared.change`), all at once and one turn later
+(`Store.landAll`). -/
+
+/-- Prepare every write of a turn; the first refusal, said at its page. -/
+def prepareAll (es : List Entry) (who : Actor) (turn : Nat) (poster : String) (env : Environment) :
+    List (Page × Graph × List (AtomId × String)) → Except String (List Prepared)
+  | [] => .ok []
+  | (p, G', added) :: rest =>
+    match prepareWrite es p G' added who turn poster env with
+    | .error m => .error ("at " ++ p.name ++ ": " ++ m)
+    | .ok pr =>
+      match prepareAll es who turn poster env rest with
+      | .error m => .error m
+      | .ok prs => .ok (pr :: prs)
+
+/-- Judge every prepared write of a turn at the tip `over`; the first refusal, said at its page. -/
+def judgeAll (es res : List Entry) (over : List (String × Obend.Core.Data.Data)) :
+    List Prepared → Except String Unit
+  | [] => .ok ()
+  | pr :: rest =>
+    match judgePrepared es res pr over with
+    | .error m => .error ("at " ++ pr.p.name ++ ": " ++ m)
+    | .ok () => judgeAll es res over rest
+
+/-- The tip of a turn: each page it writes, at its new state. -/
+def tipOf (prs : List Prepared) : List (String × Obend.Core.Data.Data) := prs.map fun pr => (pr.p.name, pr.n)
+
+/-- **Commit a turn over several pages**: all prepared, all judged at the tip, or the refusal. -/
+def commitTurn (es res : List Entry) (writes : List (Page × Graph × List (AtomId × String))) (who : Actor)
+    (turn : Nat) (poster : String) (env : Environment) : Except String (List Prepared) :=
+  match prepareAll es who turn poster env writes with
+  | .error m => .error m
+  | .ok prs =>
+    match judgeAll es res (tipOf prs) prs with
+    | .error m => .error m
+    | .ok () => .ok prs
+
+/-- **Land a turn**: every prepared write's change at once (`Prepared.change`, the landing rule
+`commit` uses), one turn later. -/
+def Store.landAll (s : Store) (prs : List Prepared) : Store :=
+  { s with
+    pages := s.pages.map fun q => match prs.find? (·.p.name == q.name) with
+      | some pr => q.withChange pr.change
+      | none => q
+    turn := s.turn + 1 }
+
+theorem prepareAll_ok {es : List Entry} {who : Actor} {turn : Nat} {poster : String} {env : Environment} :
+    ∀ {ws : List (Page × Graph × List (AtomId × String))} {prs : List Prepared},
+      prepareAll es who turn poster env ws = .ok prs → prs.map (·.p) = ws.map (·.1)
+  | [], prs, h => by simp only [prepareAll, Except.ok.injEq] at h; subst h; rfl
+  | (p, G', added) :: rest, prs, h => by
+    simp only [prepareAll] at h
+    split at h
+    · cases h
+    · rename_i pr hpr
+      split at h
+      · cases h
+      · rename_i prs' hprs
+        simp only [Except.ok.injEq] at h
+        subst h
+        simp [(prepareWrite_page hpr).1, prepareAll_ok hprs]
+
+theorem judgeAll_ok {es res : List Entry} {over : List (String × Obend.Core.Data.Data)} :
+    ∀ {prs : List Prepared}, judgeAll es res over prs = .ok () → ∀ pr ∈ prs, judgePrepared es res pr over = .ok ()
+  | [], _, pr, hp => by cases hp
+  | q :: rest, h, pr, hp => by
+    simp only [judgeAll] at h
+    split at h
+    · cases h
+    · rename_i hq
+      rcases List.mem_cons.1 hp with rfl | hp
+      · exact hq
+      · exact judgeAll_ok h pr hp
+
+/-- **A committed turn judged every write at the tip**, and prepared exactly the pages it was given. -/
+theorem commitTurn_ok {es res : List Entry} {ws : List (Page × Graph × List (AtomId × String))} {who : Actor}
+    {turn : Nat} {poster : String} {env : Environment} {prs : List Prepared}
+    (h : commitTurn es res ws who turn poster env = .ok prs) :
+    prs.map (·.p) = ws.map (·.1) ∧ ∀ pr ∈ prs, judgePrepared es res pr (tipOf prs) = .ok () := by
+  unfold commitTurn at h
+  split at h
+  · cases h
+  · rename_i prs' hp
+    split at h
+    · cases h
+    · rename_i hj
+      simp only [Except.ok.injEq] at h
+      subst h
+      exact ⟨prepareAll_ok hp, judgeAll_ok hj⟩
+
+theorem find?_map_page (s : Store) (g : Page → Page) (hg : ∀ q, (g q).name = q.name) (n : String) :
+    (s.pages.map g).find? (·.name == n) = (s.pages.find? (·.name == n)).map g := by
+  rw [List.find?_map]
+  have : ((fun x : Page => x.name == n) ∘ g) = (fun x => x.name == n) := by
+    funext q; simp [Function.comp, hg]
+  rw [this]
+
+/-- **What a landing does not write, it leaves**: a page no prepared write names reads as before. -/
+theorem landAll_frame (s : Store) (prs : List Prepared) (n : String) (hn : ∀ pr ∈ prs, pr.p.name ≠ n) :
+    (s.landAll prs).page? n = s.page? n := by
+  unfold Store.page? Store.landAll
+  simp only
+  rw [find?_map_page s _ (fun q => by split <;> rfl) n]
+  cases hq : s.pages.find? (·.name == n) with
+  | none => rfl
+  | some q =>
+    have hqn : q.name = n := by simpa using (List.find?_some hq)
+    have : prs.find? (·.p.name == q.name) = none := by
+      rw [List.find?_eq_none]
+      intro pr hpr hc
+      simp only [beq_iff_eq] at hc
+      exact hn pr hpr (hc.trans hqn)
+    simp [this]
+
+/-- **What a landing writes, it writes once, by the landing rule**: the page a prepared write names
+(each named once) is that page with the write's change. -/
+theorem landAll_lands (s : Store) (prs : List Prepared) (hnd : (prs.map (·.p.name)).Nodup)
+    {pr : Prepared} (hpr : pr ∈ prs) {q : Page} (hq : s.page? pr.p.name = some q) :
+    (s.landAll prs).page? pr.p.name = some (q.withChange pr.change) := by
+  unfold Store.page? at hq ⊢
+  unfold Store.landAll
+  simp only
+  rw [find?_map_page s _ (fun q => by split <;> rfl), hq]
+  have hqn : q.name = pr.p.name := by simpa using (List.find?_some hq)
+  have hfind : prs.find? (·.p.name == q.name) = some pr := by
+    rw [hqn]
+    clear hq hqn
+    induction prs with
+    | nil => cases hpr
+    | cons x xs ih =>
+      simp only [List.map_cons, List.nodup_cons] at hnd
+      rcases List.mem_cons.1 hpr with rfl | hx
+      · simp
+      · have hne : (x.p.name == pr.p.name) = false := by
+          simp only [beq_eq_false_iff_ne]
+          intro he
+          exact hnd.1 (he ▸ List.mem_map_of_mem hx)
+        simp [hne, ih hnd.2 hx]
+  simp [hfind]
 
 /-! ## Open -/
 
