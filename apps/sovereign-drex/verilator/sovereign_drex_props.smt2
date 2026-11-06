@@ -2,7 +2,7 @@
 ; from the .sv beside it nor from the Lean RtlModule, so z3 `unsat` establishes properties of the
 ; formulas written here, not equivalence of the RTL with anything. It is kept as a worked property
 ; sheet (renamed from *_lec.smt2 on 2026-11-05). The logic-equivalence check of the emitted .sv is
-; hardware/lec/lec.sh with the generated sovereign_drex_batch_top_lec.smt2 (once Apps.SovereignDrex builds). See review/EXPERT-fpga-silicon-20261103.md §3.2.
+; hardware/lec/lec.sh with the generated sovereign_drex_batch_top_lec.smt2. See review/EXPERT-fpga-silicon-20261103.md §3.2.
 ; Objective Bend Flagship App #7 (`apps/sovereign-drex/verilator/sovereign_drex_lec.smt2`)
 ; Formal QF_BV Logic Equivalence Checking (LEC) & Conservation Miter:
 ; 1. Proves that `sovereign_drex_batch_top.sv` (`emitModuleSV sovereignDrexBatchTopRtlModule`)

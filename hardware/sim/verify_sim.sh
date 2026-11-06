@@ -33,6 +33,7 @@ LEC="${REPO_ROOT}/hardware/lec/lec.sh"
 "${LEC}" stator lc_drives_userspace_stator.sv lc_drives_userspace_stator_lec.smt2 --eqy
 "${LEC}" mac2 obend_retimed_mac2.sv obend_retimed_mac2_lec.smt2 --no-eqy \
   "a 64x64 variable multiply; gate-level SAT equivalence of it does not terminate"
+"${LEC}" width-probe obend_width_probe.sv obend_width_probe_lec.smt2 --eqy
 
 echo "=== [3/4] Verilator -Wall lint + harness ==="
 "${VERILATOR}" --lint-only -Wall -Wno-DECLFILENAME -Wno-UNUSED --top-module tb_top tb_top.sv
