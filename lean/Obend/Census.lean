@@ -385,6 +385,7 @@ import Obend.Law.Inherit
 import Obend.Law.Machine
 import Obend.Law.Proofs.Claim
 import Obend.Law.Proofs.Eval
+import Obend.Law.Proofs.Fill
 import Obend.Law.Proofs.Inherit
 import Obend.Law.Proofs.Machine
 import Obend.Law.Proofs.Run
