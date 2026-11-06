@@ -15,10 +15,18 @@ rules planted in the shader text only, for `hardware/gpu/verify_gpu.sh`'s tooth.
 are always the unplanted model's.
 
 Expected values are `evalGraphArr`'s, which is `evalGraph` with the wires stored (`evalGraphArr_eq`).
-Before writing, the emitter refuses a graph that fails `ArrayGraph.wf` (which is the hypothesis of
+Before writing, the emitter refuses a graph that fails `ArrayGraph.wf` (the hypothesis of
 `lowerArrayToGpu_sound`, so the expected values are `evalGraph`'s and the device must show them) and an
-NTT graph whose evaluation disagrees with the naive DFT over the Goldilocks field (`nttReference`).
-These are tests of the fixtures, run on every emission.
+NTT graph whose evaluation disagrees with a recursive radix-2 NTT over the Goldilocks field in `Nat`
+arithmetic (`nttFast`), which for the smaller sizes is itself checked against the naive DFT
+(`nttReference`). These are tests of the fixtures, run on every emission.
+
+The NTT graphs are Stockham radix-2 (Govindaraju et al. 2008; ec-gpu's `radix_fft` kernel with
+`deg = 1`, whose output index is `((j - k) << 1) + k`): every stage reads the two halves of the
+previous stage's output, multiplies the upper half by `ω_{2Ns}^{j mod Ns}`, and writes the sum and
+difference expanded by the sub-transform size, so an NTT of `n` points is `log₂ n` stages of a few
+dozen edges over whole wires, and no bit reversal. The field operations are the limb network of
+`Obend.Apps.ZkNtt.glMul`; after fusion each stage's sum and difference are one kernel each.
 -/
 import Obend.Hardware.Gpu
 
@@ -48,13 +56,19 @@ def node (n : Nat) (op : ArrayOp) (srcs : List Nat) : BuildM Nat := do
   emit op srcs w
   pure w
 
+/-- A fresh wire of length `n` holding `op` of `srcs` elementwise: the primitive one-instruction program. -/
+def mapN (n : Nat) (op : ElemOp) (srcs : List Nat) : BuildM Nat := do
+  let w ← newWire n
+  emit (.map n (ElemProg.single op srcs w)) srcs w
+  pure w
+
 def constWire (vals : List Word) : BuildM Nat := node vals.length (.const vals) []
 
 /-- `n` copies of one word. -/
 def broadcast (n : Nat) (v : Word) : BuildM Nat := constWire (List.replicate n v)
 
-def map2 (n : Nat) (op : ElemOp) (a b : Nat) : BuildM Nat := node n (.map n op) [a, b]
-def map3 (n : Nat) (op : ElemOp) (a b c : Nat) : BuildM Nat := node n (.map n op) [a, b, c]
+def map2 (n : Nat) (op : ElemOp) (a b : Nat) : BuildM Nat := mapN n op [a, b]
+def map3 (n : Nat) (op : ElemOp) (a b c : Nat) : BuildM Nat := mapN n op [a, b, c]
 
 def runBuild (inputs : List Nat → BuildM (List Nat)) (inputLens : List Nat) : ArrayGraph :=
   let ((ins, outs), st) := (do
@@ -153,39 +167,81 @@ def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksP - 1) / 2 ^ 32) goldilocksP
 /-- A primitive `n`-th root, `n` a power of two dividing `2^32`. -/
 def rootOfUnity (n : Nat) : Nat := powMod rootOfUnity2to32 (2 ^ 32 / n) goldilocksP
 
-/-- The even and odd positions of a length-`n` wire, as gather tables. -/
-def evens (n : Nat) : FiniteFunction := { source := n / 2, target := n, table := (List.range (n / 2)).map (2 * ·) }
-def odds (n : Nat) : FiniteFunction := { source := n / 2, target := n, table := (List.range (n / 2)).map (2 * · + 1) }
+/-- The output permutation of a Stockham radix-2 stage with sub-transform size `ns` over `n` points, for
+the half of the output starting at `offset`: output `i` is `a[(i / 2ns)·ns + r]` when `r = i mod 2ns < ns`,
+else `b[(i / 2ns)·ns + (r - ns)]`, as an index into `a ++ b`. For the last stage it is the identity. -/
+def expandTable (n ns offset : Nat) : FiniteFunction :=
+  let half := n / 2
+  { source := half, target := n, table := (List.range half).map fun j =>
+      let i := offset + j
+      let group := i / (2 * ns)
+      let r := i % (2 * ns)
+      if r < ns then group * ns + r else half + group * ns + (r - ns) }
 
-/-- Radix-2 Cooley–Tukey over a wire of length `n = 2^levels`: `y_k = E_k + ω^k O_k`,
-`y_{k + n/2} = E_k - ω^k O_k`, the halves concatenated. Inputs are assumed canonical (`< p`). -/
-partial def nttOf (x : Nat) (n : Nat) : BuildM Nat := do
-  if n ≤ 1 then pure x
-  else
-    let half := n / 2
-    let ev ← node half (.gather (evens n)) [x]
-    let od ← node half (.gather (odds n)) [x]
-    let e ← nttOf ev half
-    let o ← nttOf od half
-    let ω := rootOfUnity n
-    let twiddles ← constWire ((List.range half).map fun k => BitVec.ofNat 64 (powMod ω k goldilocksP))
-    let k ← glConsts half
-    let t ← glMul half k o twiddles
-    let lo ← glAdd half k e t
-    let hi ← glSub half k e t
-    node n .concat [lo, hi]
+/-- The identity on a half of a length-`n` wire. -/
+def halfTable (n offset : Nat) : FiniteFunction :=
+  { source := n / 2, target := n, table := (List.range (n / 2)).map (offset + ·) }
+
+/-- Stockham radix-2 NTT of `n = 2^L` points, inputs canonical (`< p`). The halves `lo`, `hi` of the
+current array travel as two wires; stage `s` (`ns = 2^s`) computes `t = hi · ω_{2ns}^{j mod ns}`,
+`a = lo + t`, `b = lo - t`, and gathers the next halves from `a ++ b` by `expandTable`; the last stage's
+`a ++ b` is the output in natural order. The twiddles are gathered from one table of the powers of
+`ω_n`, so the constants are `n/2` words and each stage's twiddle is an index table. -/
+def nttStockham (x n : Nat) : BuildM Nat := do
+  if n ≤ 1 then return x
+  let half := n / 2
+  let L := Nat.log2 n
+  let k ← glConsts half
+  let ω := rootOfUnity n
+  let powers ← constWire ((List.range half).map fun i => BitVec.ofNat 64 (powMod ω i goldilocksP))
+  let mut lo ← node half (.gather (halfTable n 0)) [x]
+  let mut hi ← node half (.gather (halfTable n half)) [x]
+  let mut out := x
+  for s in List.range L do
+    let ns := 2 ^ s
+    let twTable : FiniteFunction :=
+      { source := half, target := half, table := (List.range half).map fun j => (j % ns) * (half / ns) }
+    let tw ← node half (.gather twTable) [powers]
+    let t ← glMul half k hi tw
+    let a ← glAdd half k lo t
+    let b ← glSub half k lo t
+    let ab ← node n .concat [a, b]
+    if s + 1 < L then
+      lo ← node half (.gather (expandTable n ns 0)) [ab]
+      hi ← node half (.gather (expandTable n ns half)) [ab]
+    else
+      out := ab
+  pure out
 
 def nttGraph (n : Nat) : ArrayGraph :=
   runBuild (fun ins => do
-    let y ← nttOf (ins.getD 0 0) n
+    let y ← nttStockham (ins.getD 0 0) n
     pure [y]) [n]
 
-/-- The naive DFT, the reference the emitter checks the graph against. -/
+/-- The naive DFT over the Goldilocks field, `y_k = Σ_j x_j ω^{jk}`, with a table of the powers of `ω`. -/
 def nttReference (xs : List Nat) : List Nat :=
   let n := xs.length
+  if n == 0 then [] else
   let ω := rootOfUnity n
+  let pw : Array Nat := (Array.range n).map fun i => powMod ω i goldilocksP
+  let xa := xs.toArray
   (List.range n).map fun k =>
-    (xs.zipIdx.foldl (fun acc (xj, j) => (acc + xj * powMod ω (j * k) goldilocksP) % goldilocksP) 0)
+    (List.range n).foldl (fun acc j => (acc + xa[j]! * pw[(j * k) % n]!) % goldilocksP) 0
+
+/-- The recursive radix-2 NTT in `Nat` arithmetic: `y_k = E_k + ω^k O_k`, `y_{k+n/2} = E_k - ω^k O_k`. -/
+partial def nttFast (xs : Array Nat) (ω : Nat) : Array Nat :=
+  let n := xs.size
+  if n ≤ 1 then xs else
+  let half := n / 2
+  let ω2 := ω * ω % goldilocksP
+  let ev := nttFast ((Array.range half).map fun i => xs[2 * i]!) ω2
+  let od := nttFast ((Array.range half).map fun i => xs[2 * i + 1]!) ω2
+  let pw := (Array.range half).map fun j => powMod ω j goldilocksP
+  (Array.range n).map fun j =>
+    if j < half then (ev[j]! + pw[j]! * od[j]! % goldilocksP) % goldilocksP
+    else
+      let j' := j - half
+      (ev[j']! + goldilocksP - pw[j']! * od[j']! % goldilocksP) % goldilocksP
 
 /-! ## Array graphs besides the NTT -/
 
@@ -265,7 +321,9 @@ def graphs : List (String × ArrayGraph × Kind) :=
   , ("glmul-256",        glMulGraph 256, .ntt)
   , ("ntt-4",            nttGraph 4, .ntt)
   , ("ntt-16",           nttGraph 16, .ntt)
-  , ("ntt-64",           nttGraph 64, .ntt) ]
+  , ("ntt-64",           nttGraph 64, .ntt)
+  , ("ntt-1024",         nttGraph 1024, .ntt)
+  , ("ntt-65536",        nttGraph 65536, .ntt) ]
 
 def pool : List Int :=
   [0, 1, -1, 2, 3, -3, 10, 255, -256, 65535, 2 ^ 31, -(2 ^ 31), 2 ^ 32 + 1, 2 ^ 62, -(2 ^ 62),
@@ -291,7 +349,8 @@ def vectorFor (kind : Kind) (lens : List Nat) (v : Nat) : List (List Int) :=
         else signed (draw v w i)
 
 def vectorCount (g : ArrayGraph) : Nat :=
-  if sumNatList (g.inputs.map (g.lengths.getD · 0)) ≥ 64 then 6 else 12
+  let total := sumNatList (g.inputs.map (g.lengths.getD · 0))
+  if total ≥ 2 ^ 14 then 2 else if total ≥ 64 then 6 else 12
 
 /-! ## Expected values and the checks -/
 
@@ -315,17 +374,22 @@ def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.File
   for v in List.range (vectorCount g) do
     let vals := vectorFor kind inLens v
     let env := mkEnv g.lengths g.inputs (vals.map toVec)
-    let model := evalGraphArr g ((List.range g.lengths.length).map env).toArray
+    let model := evalGraphArr g ((List.range g.lengths.length).map fun w => (env w).toArray).toArray
     if kind == .ntt && name.startsWith "ntt" then
-      let ref := nttReference ((vals.getD 0 []).map Int.toNat)
-      unless (model.getD 0 []).map (·.toNat) == ref do
-        throw <| IO.userError s!"{name} vector {v}: the NTT graph disagrees with the naive DFT"
+      let input := (vals.getD 0 []).map Int.toNat
+      let fast := (nttFast input.toArray (rootOfUnity input.length)).toList
+      unless (model.getD 0 []).map (·.toNat) == fast do
+        throw <| IO.userError s!"{name} vector {v}: the NTT graph disagrees with the recursive NTT"
+      if input.length ≤ 4096 then
+        unless nttReference input == fast do
+          throw <| IO.userError s!"{name} vector {v}: the recursive NTT disagrees with the naive DFT"
     let signed64 (ws : List Int) : List Int := ws.map fun x => (BitVec.ofInt 64 x).toInt
     lines := lines.push s!"{v}\t{wiresText (vals.map signed64)}\t{wiresText (model.map fun ws => ws.map (·.toInt))}"
   IO.FS.writeFile (dir / "expected.tsv") (String.intercalate "\n" lines.toList ++ "\n")
-  IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {p.consts.length} constants, \
-    {p.tables.length} indices, {p.stages.length} stages \
-    ({String.intercalate "," (p.stages.map fun s => toString s.threads)} threads), \
+  IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {g.edges.length} edges, \
+    {(fuseGraph g).edges.length} after fusion, {p.consts.length} constants, \
+    {p.tables.length} indices, {p.stages.length} dispatches \
+    ({String.intercalate "," (p.stages.map fun s => toString s.kernels.length)} kernels), \
     {vectorCount g} vectors -> {dir}"
 
 /-! ## Main -/

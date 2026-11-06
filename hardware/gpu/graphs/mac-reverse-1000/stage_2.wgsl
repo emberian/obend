@@ -7,5 +7,8 @@
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
   let t : u32 = gid.x;
-  if (t < 1000u) { let e : u32 = t - 0u; w[4000u + e] = w[3000u + ix[0u + e]]; }
+  if (t < 1000u) {
+    let e : u32 = t - 0u;
+    w[4000u + e] = w[3000u + ix[0u + e]];
+  }
 }
