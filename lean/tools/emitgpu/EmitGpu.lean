@@ -3,8 +3,8 @@
 
     obend-emit-gpu list
     obend-emit-gpu <graph> --out DIR [--plant P]
-        DIR/plan.json (the flat wire buffer's size, every wire's base and length, the constant and index
-        buffers, the boundary wires, one shader per wavefront stage), DIR/stage_<k>.wgsl, and
+        DIR/plan.json (the allocated device buffer's size, every wire's base and length, the constant and index
+        buffers, the boundary wires, one shader per dispatch), DIR/stage_<k>.wgsl, and
         DIR/expected.tsv, one line per vector: index, the input wires, and the output wires
         `Obend.Hardware.Gpu.runProgram` shows (wires separated by `;`, elements by `,`, signed 64-bit)
     obend-emit-gpu all --out DIR [--plant P]
@@ -21,133 +21,29 @@ NTT graph whose evaluation disagrees with a recursive radix-2 NTT over the Goldi
 arithmetic (`nttFast`), which for the smaller sizes is itself checked against the naive DFT
 (`nttReference`). These are tests of the fixtures, run on every emission.
 
-The NTT graphs are Stockham radix-2 (Govindaraju et al. 2008; ec-gpu's `radix_fft` kernel with
-`deg = 1`, whose output index is `((j - k) << 1) + k`): every stage reads the two halves of the
-previous stage's output, multiplies the upper half by `ω_{2Ns}^{j mod Ns}`, and writes the sum and
-difference expanded by the sub-transform size, so an NTT of `n` points is `log₂ n` stages of a few
-dozen edges over whole wires, and no bit reversal. The field operations are the limb network of
-`Obend.Apps.ZkNtt.glMul`; after fusion each stage's sum and difference are one kernel each.
+NTTs use `ArrayKernel.Program`: indexed multi-output maps, radix-4 register networks, shared-memory
+phases, and balanced Stockham uploads derived from ec-gpu's `radix_fft` and Govindaraju et al. SC2008.
+The source contains every index and arithmetic operation; the generic emitter contains no NTT shader.
+`Program.check` admits bounds, SSA closure, initialization and ownership; `SourceProtocol.checkProgram`
+checks the actual physical-lane phase protocol against G4. Expected outputs are the executable source
+semantics, independently compared with `nttFast` and (at small sizes) the direct DFT. These comparisons
+are gates, not a universal theorem that the chosen NTT construction is the mathematical DFT.
+`--artifacts-only` omits expected-value evaluation so planted shader rules reuse the unplanted output
+oracle once per external gate run; plan equality is required before that reuse.
 -/
 import Obend.Hardware.Gpu
+import Obend.Hardware.ArrayKernel
+import Obend.Hardware.Gpu.BlockEmit
+import Obend.Hardware.Gpu.LayoutChecks
+import Obend.Hardware.Gpu.DispatchProtocol
+import Obend.Hardware.Gpu.GoldilocksSource
 
 open Obend.Hardware.OpenHypergraph
 open Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.Gpu
 
-/-! ## A builder for array graphs -/
-
-structure Build where
-  lengths : Array Nat := #[]
-  edges   : Array ArrayEdge := #[]
-
-abbrev BuildM := StateM Build
-
-def newWire (n : Nat) : BuildM Nat := do
-  let st ← get
-  set { st with lengths := st.lengths.push n }
-  pure st.lengths.size
-
-def emit (op : ArrayOp) (srcs : List Nat) (dst : Nat) : BuildM Unit :=
-  modify fun st => { st with edges := st.edges.push { opIdx := st.edges.size, op := op, srcWires := srcs, dstWire := dst } }
-
-/-- A fresh wire of length `n` written by `op`. -/
-def node (n : Nat) (op : ArrayOp) (srcs : List Nat) : BuildM Nat := do
-  let w ← newWire n
-  emit op srcs w
-  pure w
-
-/-- A fresh wire of length `n` holding `op` of `srcs` elementwise: the primitive one-instruction program. -/
-def mapN (n : Nat) (op : ElemOp) (srcs : List Nat) : BuildM Nat := do
-  let w ← newWire n
-  emit (.map n (ElemProg.single op srcs w)) srcs w
-  pure w
-
-def constWire (vals : List Word) : BuildM Nat := node vals.length (.const vals) []
-
-/-- `n` copies of one word. -/
-def broadcast (n : Nat) (v : Word) : BuildM Nat := constWire (List.replicate n v)
-
-def map2 (n : Nat) (op : ElemOp) (a b : Nat) : BuildM Nat := mapN n op [a, b]
-def map3 (n : Nat) (op : ElemOp) (a b c : Nat) : BuildM Nat := mapN n op [a, b, c]
-
-def runBuild (inputs : List Nat → BuildM (List Nat)) (inputLens : List Nat) : ArrayGraph :=
-  let ((ins, outs), st) := (do
-    let ins ← inputLens.mapM newWire
-    let outs ← inputs ins
-    pure (ins, outs)).run {}
-  { lengths := st.lengths.toList, inputs := ins, outputs := outs, edges := st.edges.toList }
-
-/-! ## The Goldilocks field, elementwise (the network of `Obend.Apps.ZkNtt.glMul`) -/
-
-def goldilocksP : Nat := 18446744069414584321
-
-/-- The field constants a vector of length `n` needs: `p`, the low mask and the shift. -/
-structure GlConsts where
-  p    : Nat
-  mask : Nat
-  s32  : Nat
-
-def glConsts (n : Nat) : BuildM GlConsts := do
-  let p ← broadcast n (BitVec.ofNat 64 goldilocksP)
-  let mask ← broadcast n 0xFFFFFFFF#64
-  let s32 ← broadcast n 32#64
-  pure ⟨p, mask, s32⟩
-
-/-- `x < p ? x : x - p`. -/
-def glCanon (n : Nat) (k : GlConsts) (x : Nat) : BuildM Nat := do
-  let lt ← map2 n .ult x k.p
-  let sub ← map2 n (.scalar .sub) x k.p
-  map3 n (.scalar .mux) lt x sub
-
-/-- `(a + b) mod p` for canonical `a b`, without a 65th bit. -/
-def glAdd (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
-  let remP ← map2 n (.scalar .sub) k.p b
-  let lt ← map2 n .ult a remP
-  let sum ← map2 n (.scalar .add) a b
-  let wrap ← map2 n (.scalar .sub) a remP
-  map3 n (.scalar .mux) lt sum wrap
-
-/-- `(a - b) mod p` for canonical `a b`. -/
-def glSub (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
-  let lt ← map2 n .ult a b
-  let pb ← map2 n (.scalar .sub) k.p b
-  let wrap ← map2 n (.scalar .add) pb a
-  let diff ← map2 n (.scalar .sub) a b
-  map3 n (.scalar .mux) lt wrap diff
-
-/-- `(a * b) mod p` for any 64-bit `a b`: four 32×32 limb products, the 128-bit product `(lo, hi)`, then
-the shift/mask reduction (`goldilocksReduce128Spec`). -/
-def glMul (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
-  let aLo ← map2 n .band a k.mask
-  let aHi ← map2 n .shr a k.s32
-  let bLo ← map2 n .band b k.mask
-  let bHi ← map2 n .shr b k.s32
-  let p00 ← map2 n (.scalar .mul) aLo bLo
-  let p01 ← map2 n (.scalar .mul) aLo bHi
-  let p10 ← map2 n (.scalar .mul) aHi bLo
-  let p11 ← map2 n (.scalar .mul) aHi bHi
-  let p00Hi ← map2 n .shr p00 k.s32
-  let p01Lo ← map2 n .band p01 k.mask
-  let p10Lo ← map2 n .band p10 k.mask
-  let mid32a ← map2 n (.scalar .add) p00Hi p01Lo
-  let mid32 ← map2 n (.scalar .add) mid32a p10Lo
-  let p00Lo ← map2 n .band p00 k.mask
-  let mid32Lo ← map2 n .band mid32 k.mask
-  let mid32LoSh ← map2 n .shl mid32Lo k.s32
-  let lo ← map2 n .bor p00Lo mid32LoSh
-  let p01Hi ← map2 n .shr p01 k.s32
-  let p10Hi ← map2 n .shr p10 k.s32
-  let mid32Hi ← map2 n .shr mid32 k.s32
-  let hi1 ← map2 n (.scalar .add) p11 p01Hi
-  let hi2 ← map2 n (.scalar .add) hi1 p10Hi
-  let hi ← map2 n (.scalar .add) hi2 mid32Hi
-  let hiLo ← map2 n .band hi k.mask
-  let hiHi ← map2 n .shr hi k.s32
-  let hiLoSh ← map2 n .shl hiLo k.s32
-  let mid ← map2 n (.scalar .sub) hiLoSh hiLo
-  let loC ← glCanon n k lo
-  let t1 ← glAdd n k loC mid
-  glSub n k t1 hiHi
+open Obend.Hardware.ArrayBuild
+open Obend.Hardware.Gpu.GoldilocksSource
 
 /-! ## The NTT -/
 
@@ -167,56 +63,173 @@ def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksP - 1) / 2 ^ 32) goldilocksP
 /-- A primitive `n`-th root, `n` a power of two dividing `2^32`. -/
 def rootOfUnity (n : Nat) : Nat := powMod rootOfUnity2to32 (2 ^ 32 / n) goldilocksP
 
-/-- The output permutation of a Stockham radix-2 stage with sub-transform size `ns` over `n` points, for
-the half of the output starting at `offset`: output `i` is `a[(i / 2ns)·ns + r]` when `r = i mod 2ns < ns`,
-else `b[(i / 2ns)·ns + (r - ns)]`, as an index into `a ++ b`. For the last stage it is the identity. -/
-def expandTable (n ns offset : Nat) : FiniteFunction :=
-  let half := n / 2
-  { source := half, target := n, table := (List.range half).map fun j =>
-      let i := offset + j
-      let group := i / (2 * ns)
-      let r := i % (2 * ns)
-      if r < ns then group * ns + r else half + group * ns + (r - ns) }
+/-! The NTT source uses the general index-parametric multi-output array language.
+Each upload is ec-gpu's Stockham map. A radix-8 (or radix-4) subnetwork stays in
+one invocation's registers; successive subnetworks exchange arrays in workgroup
+memory. Input/output layout expressions fuse Stockham's transpose into the loads
+and stores. No index tables, global gather intermediates, or NTT shader template.
+-/
 
-/-- The identity on a half of a length-`n` wire. -/
-def halfTable (n offset : Nat) : FiniteFunction :=
-  { source := n / 2, target := n, table := (List.range (n / 2)).map (offset + ·) }
+namespace BlockNtt
+open Obend.Hardware.ArrayKernel
 
-/-- Stockham radix-2 NTT of `n = 2^L` points, inputs canonical (`< p`). The halves `lo`, `hi` of the
-current array travel as two wires; stage `s` (`ns = 2^s`) computes `t = hi · ω_{2ns}^{j mod ns}`,
-`a = lo + t`, `b = lo - t`, and gathers the next halves from `a ++ b` by `expandTable`; the last stage's
-`a ++ b` is the output in natural order. The twiddles are gathered from one table of the powers of
-`ω_n`, so the constants are `n/2` words and each stage's twiddle is an index table. -/
-def nttStockham (x n : Nat) : BuildM Nat := do
-  if n ≤ 1 then return x
-  let half := n / 2
-  let L := Nat.log2 n
-  let k ← glConsts half
-  let ω := rootOfUnity n
-  let powers ← constWire ((List.range half).map fun i => BitVec.ofNat 64 (powMod ω i goldilocksP))
-  let mut lo ← node half (.gather (halfTable n 0)) [x]
-  let mut hi ← node half (.gather (halfTable n half)) [x]
-  let mut out := x
-  for s in List.range L do
-    let ns := 2 ^ s
-    let twTable : FiniteFunction :=
-      { source := half, target := half, table := (List.range half).map fun j => (j % ns) * (half / ns) }
-    let tw ← node half (.gather twTable) [powers]
-    let t ← glMul half k hi tw
-    let a ← glAdd half k lo t
-    let b ← glSub half k lo t
-    let ab ← node n .concat [a, b]
-    if s + 1 < L then
-      lo ← node half (.gather (expandTable n ns 0)) [ab]
-      hi ← node half (.gather (expandTable n ns half)) [ab]
-    else
-      out := ab
-  pure out
+def addI (a b : Ix) : Ix := .add a b
+def mulI (a : Ix) (b : Nat) : Ix := .mul a (.lit b)
 
-def nttGraph (n : Nat) : ArrayGraph :=
-  runBuild (fun ins => do
-    let y ← nttStockham (ins.getD 0 0) n
-    pure [y]) [n]
+/-- Bit reversal is an index expression, not an index buffer or a dispatch. -/
+def reverseBits (bits : Nat) (i : Ix) : Ix :=
+  (List.range bits).foldl (fun acc bit =>
+    addI acc (mulI (.mod (.div i (2^bit)) 2) (2^(bits-1-bit)))) (.lit 0)
+
+/-- One register tile of the DIF network. `done` preceding binary layers have
+already run; `degree` layers are fused now. All arithmetic is the shared source
+builder above, and both index permutations remain source expressions. -/
+def phase (n count logCount p done degree src dst : Nat)
+    (first last : Bool) : Phase := Id.run do
+  let radix := 2^degree
+  let stride := count / (2^done * radix)
+  let index (r : Nat) : Ix :=
+    addI (addI (mulI (.div .lane stride) (radix*stride)) (.mod .lane stride))
+      (.lit (r*stride))
+  let loadIndex (r : Nat) : Ix :=
+    if first then addI .group (mulI (index r) (n/count)) else index r
+  let saveIndex (r : Nat) : Ix :=
+    if last then
+      let k : Ix := .mod .group p
+      addI (addI (mulI (.div .group p) (p*count)) k)
+        (mulI (reverseBits logCount (index r)) p)
+    else index r
+  let action : BuildM (List Read × List Nat) := do
+    let mut reads : List Read := []
+    let mut regs : Array Nat := #[]
+    for r in List.range radix do
+      let a ← newWire 1
+      reads := reads ++ [⟨a, src, loadIndex r⟩]
+      regs := regs.push a
+    let k ← glConsts 1
+    if first && p == 1 then
+      for r in List.range radix do
+        let canonical ← glCanon 1 k regs[r]!
+        regs := regs.set! r canonical
+    if first && p > 1 then
+      for r in List.range radix do
+        let tw ← newWire 1
+        let exponent := .mod (.mul (index r) (mulI (.mod .group p) (n/count/p))) n
+        reads := reads ++ [⟨tw, 4, exponent⟩]
+        let v ← glMul 1 k regs[r]! tw
+        regs := regs.set! r v
+    for round in List.range degree do
+      let bit := radix / 2^(round+1)
+      for j in List.range (radix/2) do
+        let di := j % bit
+        let i0 := 2*j-di
+        let i1 := i0+bit
+        let a := regs[i0]!
+        let b := regs[i1]!
+        let sum ← glAdd 1 k a b
+        let diff ← glSub 1 k a b
+        -- Twiddle depends only on the within-butterfly coordinate; the segment
+        -- coordinate has been removed by lane modulo stride.
+        let exponent := mulI (addI (.mod .lane stride) (.lit (di*stride)))
+          (2^(done+round) * (n/count))
+        let v ← if stride == 1 && di == 0 then pure diff else do
+          let tw ← newWire 1
+          reads := reads ++ [⟨tw, 4, exponent⟩]
+          glMul 1 k diff tw
+        regs := (regs.set! i0 sum).set! i1 v
+    return (reads, regs.toList)
+  let ((reads, outputs), st) := action.run {}
+  return { lanes := count/radix, reads, code := registerCode st,
+           writes := outputs.zipIdx.map fun (value, r) => ⟨dst, saveIndex r, value⟩ }
+
+/-- A Stockham upload groups up to eight binary layers. Radix-4 register blocks
+keep 64 lanes active for a 256-element tile; barriers exchange successive pairs of layers. -/
+def dispatch (n logP degree src dst : Nat) : Dispatch := Id.run do
+  let count := 2^degree
+  let mut phases := []
+  let mut done := 0
+  let mut input := src
+  for _ in List.range degree do
+    if done < degree then
+      let chunk := min 2 (degree-done)
+      let last := done+chunk == degree
+      let output := if last then dst else if input == 2 then 3 else 2
+      phases := phases ++ [phase n count degree (2^logP) done chunk input output
+        (done == 0) last]
+      input := output
+      done := done+chunk
+  return { groups := n/count, phases }
+
+/-- Substitute source indices while batching independent tiles into a workgroup.
+This constructs the indexed source maps; admission checks the resulting accesses. -/
+def substitute (group lane : Ix) : Ix → Ix
+  | .lit n => .lit n
+  | .group => group
+  | .lane => lane
+  | .add a b => .add (substitute group lane a) (substitute group lane b)
+  | .mul a b => .mul (substitute group lane a) (substitute group lane b)
+  | .div a n => .div (substitute group lane a) n
+  | .mod a n => .mod (substitute group lane a) n
+
+def tileSize (d : Dispatch) : Nat :=
+  d.phases.foldl (fun n ph => max n (ph.lanes * ph.writes.length)) 1
+
+def packing (d : Dispatch) : Nat :=
+  let lanes := d.phases.foldl (fun n ph => max n ph.lanes) 1
+  let k := max 1 (min d.groups (64 / lanes))
+  if d.groups % k == 0 then k else 1
+
+/-- A batch is one simultaneous map over independent tile coordinates. Shared
+arrays acquire a tile coordinate too; all barriers stay uniform across the batch. -/
+def batchTiles (stride : Nat) (d : Dispatch) : Dispatch :=
+  let k := packing d
+  { groups := d.groups / k
+    phases := d.phases.map fun ph =>
+      let tile : Ix := .div .lane ph.lanes
+      let group : Ix := .add (.mul .group (.lit k)) tile
+      let lane : Ix := .mod .lane ph.lanes
+      let index (array : Nat) (i : Ix) :=
+        let i := substitute group lane i
+        if array == 2 || array == 3 then .add i (.mul tile (.lit stride)) else i
+      { ph with lanes := ph.lanes*k
+                reads := ph.reads.map fun r => { r with index := index r.array r.index }
+                writes := ph.writes.map fun w => { w with index := index w.array w.index } } }
+
+end BlockNtt
+
+/-- Stockham NTT as a composition of general array maps. `n` is a power of two
+with initial words canonicalized in registers. The emitter accepts sizes below 2^26. Three uploads suffice for 2^20; each has multiple register maps
+separated by workgroup exchanges. Two device arrays are reused between uploads. -/
+def nttBlockProgram (n : Nat) : Obend.Hardware.ArrayKernel.Program := Id.run do
+  let logN := Nat.log2 n
+  let mut dispatches := []
+  let mut done := 0
+  let mut input := 0
+  for _ in List.range logN do
+    if done < logN then
+      let remaining := logN-done
+      let maximumDegree := if n <= 1024 then 4 else 8
+      let uploads := (remaining + maximumDegree - 1) / maximumDegree
+      let degree := (remaining + uploads - 1) / uploads
+      let output := 1-input
+      dispatches := dispatches ++ [BlockNtt.dispatch n done degree input output]
+      input := output
+      done := done+degree
+  let omega := rootOfUnity n
+  -- Successive powers are linear-time to generate; exponentiation per entry
+  -- would dominate construction of the 2^20 source program.
+  let packedTile := dispatches.foldl (fun n d => max n (BlockNtt.tileSize d * BlockNtt.packing d)) 1
+  dispatches := dispatches.map fun d => BlockNtt.batchTiles (BlockNtt.tileSize d) d
+  let powers : Array Word := Id.run do
+    let mut xs := #[]
+    let mut v := 1
+    for _ in [:n] do
+      xs := xs.push (BitVec.ofNat 64 v)
+      v := v*omega%goldilocksP
+    return xs
+  return { buffers := [⟨n, .device, []⟩, ⟨n, .device, []⟩,
+      ⟨packedTile, .shared, []⟩, ⟨packedTile, .shared, []⟩, ⟨n, .constant, powers.toList⟩],
+           inputs := [0], outputs := [input], dispatches }
 
 /-- The naive DFT over the Goldilocks field, `y_k = Σ_j x_j ω^{jk}`, with a table of the powers of `ω`. -/
 def nttReference (xs : List Nat) : List Nat :=
@@ -319,11 +332,7 @@ def graphs : List (String × ArrayGraph × Kind) :=
   , ("tree512",          ofScalar (treeGraph 512), .plain)
   , ("mac-reverse-1000", macReverseGraph 1000, .plain)
   , ("glmul-256",        glMulGraph 256, .ntt)
-  , ("ntt-4",            nttGraph 4, .ntt)
-  , ("ntt-16",           nttGraph 16, .ntt)
-  , ("ntt-64",           nttGraph 64, .ntt)
-  , ("ntt-1024",         nttGraph 1024, .ntt)
-  , ("ntt-65536",        nttGraph 65536, .ntt) ]
+ ]
 
 def pool : List Int :=
   [0, 1, -1, 2, 3, -3, 10, 255, -256, 65535, 2 ^ 31, -(2 ^ 31), 2 ^ 32 + 1, 2 ^ 62, -(2 ^ 62),
@@ -361,18 +370,26 @@ def wiresText (ws : List (List Int)) : String := String.intercalate ";" (ws.map 
 
 def toVec (xs : List Int) : Vec := xs.map (BitVec.ofInt 64)
 
-def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) : IO Unit := do
+def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
   unless g.wf do
     throw <| IO.userError s!"{name}: the graph is not well-formed (ArrayGraph.wf)"
+  unless layoutOk g do
+    throw <| IO.userError s!"{name}: allocated layout fails live-range separation or dispatch race check"
   let p := lowerArrayToGpu g
   IO.FS.createDirAll dir
   IO.FS.writeFile (dir / "plan.json") (emitPlanJson name p)
   for (s, k) in p.stages.zipIdx do
     IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (emitStageWgsl plant name k p.stages.length s)
+  if artifactsOnly then return
   let inLens := g.inputs.map (g.lengths.getD · 0)
   let mut lines : Array String := #[]
   for v in List.range (vectorCount g) do
-    let vals := vectorFor kind inLens v
+    let vals := if name == "glmul-256" && v == 0 then
+      let corners : List Nat := [0, 1, 4294967295, 4294967296, goldilocksP-1, goldilocksP,
+        goldilocksP+1, 18446744073709551615]
+      inLens.zipIdx.map fun (n, w) => (List.range n).map fun i =>
+        (corners.getD ((i / (if w == 0 then 1 else corners.length)) % corners.length) 0 : Int)
+    else vectorFor kind inLens v
     let env := mkEnv g.lengths g.inputs (vals.map toVec)
     let model := evalGraphArr g ((List.range g.lengths.length).map fun w => (env w).toArray).toArray
     if kind == .ntt && name.startsWith "ntt" then
@@ -392,23 +409,66 @@ def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.File
     ({String.intercalate "," (p.stages.map fun s => toString s.kernels.length)} kernels), \
     {vectorCount g} vectors -> {dir}"
 
+/-- Block programs replace the earlier per-stage NTT graphs. -/
+def blockGraphs : List (String × Nat) :=
+  [4, 16, 64, 1024, 65536, 1048576].map fun n => (s!"ntt-{n}", n)
+
+def writeBlockGraph (name : String) (n : Nat) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
+  unless n >= 2 && n == 2^(Nat.log2 n) && n < 2^26 do
+    throw <| IO.userError s!"{name}: expected a supported power-of-two size below 2^26"
+  let p := nttBlockProgram n
+  if let .error reason := p.check then
+    throw <| IO.userError s!"{name}: block source rejected: {reason}"
+  unless SourceProtocol.checkProgram p workgroupSize do
+    throw <| IO.userError s!"{name}: source protocol fails G4 phase geometry or race certificate"
+  IO.FS.createDirAll dir
+  IO.FS.writeFile (dir / "plan.json") (BlockEmit.emitPlan name p)
+  for (d, k) in p.dispatches.zipIdx do
+    IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (BlockEmit.emitDispatch plant name p d)
+  if artifactsOnly then return
+  let mut lines := #[]
+  let count := if n > 4096 then 2 else if n >= 64 then 6 else 12
+  for v in [:count] do
+    let vals := vectorFor .ntt [n] v
+    let input := (vals.getD 0 []).map Int.toNat
+    let mem := Obend.Hardware.ArrayKernel.initialMemory p (vals.map fun xs => (toVec xs).toArray)
+    let result := Obend.Hardware.ArrayKernel.evalProgram p mem
+    let model := p.outputs.map fun i => (result.getD i #[]).toList
+    let fast := (nttFast input.toArray (rootOfUnity n)).toList
+    unless (model.getD 0 []).map (·.toNat) == fast do
+      throw <| IO.userError s!"{name} vector {v}: block array source disagrees with recursive NTT"
+    if n <= 1024 then
+      unless nttReference input == fast do
+        throw <| IO.userError s!"{name} vector {v}: recursive NTT disagrees with direct DFT"
+    let signed64 (xs : List Int) := xs.map fun x => (BitVec.ofInt 64 x).toInt
+    lines := lines.push s!"{v}\t{wiresText (vals.map signed64)}\t{wiresText (model.map fun xs => xs.map (·.toInt))}"
+  IO.FS.writeFile (dir / "expected.tsv") (String.intercalate "\n" lines.toList ++ "\n")
+  IO.println s!"  {name}: {BlockEmit.spaceSize p .device} device words, {BlockEmit.spaceSize p .shared} shared words, {p.dispatches.length} dispatches -> {dir}"
+
 /-! ## Main -/
 
 def usage : String :=
-  "usage: obend-emit-gpu list | <graph> --out DIR [--plant addAsSub|swapMux] | all --out DIR [--plant P]"
+  "usage: obend-emit-gpu list | <graph> --out DIR [--plant addAsSub|swapMux|mulHighZero] | all --out DIR [--plant P]"
 
 def main (args : List String) : IO UInt32 := do
   match args with
+  | ["check-layout"] =>
+    for (name, ok) in layoutCheckResults do
+      IO.println s!"{if ok then "PASS" else "FAIL"} {name}"
+    return if layoutCheckFixtures then 0 else 1
   | ["list"] =>
     for (n, _, _) in graphs do IO.println n
+    for (n, _) in blockGraphs do IO.println n
     return 0
   | name :: rest =>
     let mut out : Option String := none
     let mut plant : Plant := .none
+    let mut artifactsOnly := false
     let mut r := rest
     while !r.isEmpty do
       match r with
       | "--out" :: d :: r' => out := some d; r := r'
+      | "--artifacts-only" :: r' => artifactsOnly := true; r := r'
       | "--plant" :: p :: r' =>
         match Plant.ofString? p with
         | some pl => plant := pl; r := r'
@@ -417,9 +477,13 @@ def main (args : List String) : IO UInt32 := do
       | [] => pure ()
     let some dir := out | IO.eprintln usage; return 2
     if name == "all" then
-      for (n, g, kind) in graphs do writeGraph n g kind (dir / n) plant
+      for (n, g, kind) in graphs do writeGraph n g kind (dir / n) plant artifactsOnly
+      for (name, n) in blockGraphs do writeBlockGraph name n (dir / name) plant artifactsOnly
+      return 0
+    if let some (_, n) := blockGraphs.find? (·.1 == name) then
+      writeBlockGraph name n dir plant artifactsOnly
       return 0
     match graphs.find? (·.1 == name) with
-    | some (_, g, kind) => writeGraph name g kind dir plant; return 0
+    | some (_, g, kind) => writeGraph name g kind dir plant artifactsOnly; return 0
     | none => IO.eprintln s!"unknown graph {name}; `obend-emit-gpu list`"; return 2
   | [] => IO.eprintln usage; return 2
