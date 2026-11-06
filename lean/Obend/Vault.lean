@@ -15,15 +15,22 @@ its frontmatter lines), the members and their grants.
 * `Obend.Vault.Store` — the world beside the vault and each command: `openVault` (`open_idem`:
   twice is a no-op), `mergeFrom` (`mergePage_pushout`), `postAs`, `selectIn` (`select_keeps`,
   `select_needs_grant`), `reciteIn`.
-* `Obend.Vault.Json` — `.obend/world.json`.
-* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`.
+* `Obend.Vault.Json` — the world as JSON (`.obend/world.json` before the log; the log's turns and
+  checkpoint now).
+* `Obend.Vault.Log` — the log is truth: records, their bytes, `replay`, `state_eq_replay_log`,
+  `recover_eq_replay_prefix`, `checkpoint_is_cache`, the log as Pillar 1's well-linked chain.
+* `Obend.Vault.Replay` — the deployed entry's turns and step, the instance of `Obend.Vault.Log`.
+* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, `log`.
 
-The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`.
+The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`;
+`lean/tests/vault/CRASH.md` (`crash.py`) stops `obend` in the middle of a write and opens the vault again.
 -/
 public import Obend.Vault.Page
 public import Obend.Vault.Law
 public import Obend.Vault.Store
 public import Obend.Vault.Json
+public import Obend.Vault.Log
+public import Obend.Vault.Replay
 public import Obend.Vault.Hyperedge
 public import Obend.Vault.Escrow
 public import Obend.Vault.Affordance

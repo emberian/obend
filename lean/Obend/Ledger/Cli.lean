@@ -11,9 +11,10 @@ register's laws (`balanced: new.debits == new.credits`, …), judged on every po
     - credit [[accounts/Revenue]] amount
 
 each an account page and the document field whose value it moves. The register itself is the
-journal `.obend/ledger.json` (`Obend.Ledger.Json`); each posting it admits is written as a page
-`register/P-NNNN.md` that embeds the document it posted (so an edit of the document after posting
-leaves the posting behind, by name), and its receipt as `.obend/receipts/P-NNNN.json`.
+journal (`Obend.Ledger.Json`), part of the vault's world: rows are committed as turns of the vault's
+log (`Obend.Vault.Replay`, `rows`; it was `.obend/ledger.json`), and each posting a turn admits is
+written as a page `register/P-NNNN.md` that embeds the document it posted (so an edit of the document
+after posting leaves the posting behind, by name), and its receipt as `.obend/receipts/P-NNNN.json`.
 
     obend ledger post DOC [--period N]
         the document's posting, by its kind's template, into its `period` field's period (or N),
@@ -43,7 +44,7 @@ leaves the posting behind, by name), and its receipt as `.obend/receipts/P-NNNN.
         a posting receipt (`posting@1`: the row re-judged at the register before it, under the kind's
         law it carries) or a trial balance (`trial-balance@1`); with ROOT, the book's root must be it.
 -/
-public import Obend.Ledger.Report
+public import Obend.Ledger.Commit
 public import Obend.Vault.Cli
 public section
 
@@ -56,45 +57,12 @@ open Obend.Analysis.Coverage (Said)
 
 /-! ## Reading the vault -/
 
-def registerKind : String := "register/_kind"
-
 /-- A page the ledger writes and a merge leaves to the stitch: a posting page. -/
 def ledgerOwned (name : String) : Bool := name.startsWith "register/" && name != registerKind
 
-def ledgerPath (dir : System.FilePath) : System.FilePath := dir / ".obend" / "ledger.json"
-
-def loadJournal (dir : System.FilePath) : IO Journal := do
-  if !(← (ledgerPath dir).pathExists) then return Journal.empty
-  match Json.parse (← IO.FS.readFile (ledgerPath dir)) >>= journalOf with
-  | .ok j => return j
-  | .error e => throw (IO.userError ("cannot read " ++ (ledgerPath dir).toString ++ ": " ++ e))
-
-def saveJournal (dir : System.FilePath) (J : Journal) : IO Unit := do
-  IO.FS.createDirAll (dir / ".obend")
-  IO.FS.writeFile (ledgerPath dir) ((journalJson J).compress ++ "\n")
-
-/-- The register a journal holds: its rows accumulated (each was judged when it was committed). -/
-def stateOf (rows : List Row) : Nat × Reg :=
-  rows.foldl (fun (a : Nat × Reg) r => match r with
-    | .post p => (a.1, ⟨a.2.postings ++ [p]⟩)
-    | .close n => (max a.1 n, a.2)) (0, ⟨[]⟩)
-
-/-- The settled text of a page. -/
-def srcOf (s : Store) (name : String) : Option String := (s.page? name).bind fun p => p.current.map settled
-
-/-- The register's laws: the law lines of `register/_kind.md`. -/
-def registerLaws (s : Store) : Except String (List (String × LawExpr × String)) :=
-  match (s.page? registerKind).bind (·.current) with
-  | some G => lawsIn registerKind G
-  | none => .error "this vault has no ledger: write register/_kind.md, the register kind, with its laws"
-
-def lawsText (laws : List (String × LawExpr × String)) : Json :=
-  Json.arr (laws.map fun (n, _, t) => Json.arr #[toJson n, toJson t]).toArray
-
-def lawDigest (laws : List (String × LawExpr × String)) : String :=
-  Obend.Receipt.Negotiation.digestJson (lawsText laws)
-
-def lawOf (laws : List (String × LawExpr × String)) : Law := kindLaw (laws.map fun (n, e, _) => (n, e))
+/-- The register's journal: part of the vault's world, replayed from its log (it was
+`.obend/ledger.json`; a vault that has one adopts it into the log at its next command). -/
+def loadJournal (dir : System.FilePath) : IO Journal := return (← readWorld dir).journal
 
 /-- The text after a prefix. -/
 def after (pre s : String) : Option String :=
@@ -128,8 +96,6 @@ def templateFor (s : Store) (doc src : String) : Option (String × Template) :=
 
 /-! ## Saying a refusal -/
 
-def numberOf (g : Reg) (o : String) : String := ((g.find o).map (·.id)).getD o
-
 def clauseText (laws : List (String × LawExpr × String)) (g : Reg) (w : Nat) (page : String) (p : Posting) :
     Clause → String
   | .closedPeriod n => "refused (closed-period): period " ++ toString n ++ " is closed (the register is closed through " ++
@@ -149,25 +115,6 @@ where stateOf' (keys : List String) (vals : List (String × Nat)) := Obend.Vault
 
 /-! ## Writing a posting -/
 
-def linesText (p : Posting) : String :=
-  String.join (p.lines.map fun m =>
-    if m.debit != 0 || m.credit == 0 then "- debit [[" ++ m.account ++ "]] " ++ toString m.debit ++ "\n"
-    else "- credit [[" ++ m.account ++ "]] " ++ toString m.credit ++ "\n")
-
-/-- The page of a posting: its fields (what the register's laws read: its own, and the totals after it
-of the accounts it moves), the document it embeds, its lines. `g` is the register before it. -/
-def postingPage (g : Reg) (p : Posting) : String :=
-  let moved := (p.lines.map (·.account)).eraseDups
-  let after := (accountMeasures g p).filter fun (k, _) => moved.any fun a =>
-    k == shortName a ++ "_debits" || k == shortName a ++ "_credits"
-  "---\nperiod: " ++ toString p.period ++ "\ndebits: " ++ toString p.debits ++ "\ncredits: " ++ toString p.credits ++
-  "\nmovements: " ++ toString p.lines.length ++ String.join (after.map fun (k, v) => "\n" ++ k ++ ": " ++ toString v) ++
-  "\n---\n# " ++ p.id ++ "\n\n" ++
-  (match p.reverses with
-    | some o => "Reverses [[register/" ++ numberOf g o ++ "]], of " ++ p.doc ++ ", in period " ++ toString p.period ++ ".\n\n"
-    | none => "Posts " ++ p.doc ++ " in period " ++ toString p.period ++ ":\n\n![[" ++ p.doc ++ "]]\n\n") ++
-  linesText p
-
 def movementsText (p : Posting) : String :=
   ", ".intercalate (p.lines.map fun m =>
     if m.debit != 0 || m.credit == 0 then "debit " ++ m.account ++ " " ++ toString m.debit
@@ -175,31 +122,19 @@ def movementsText (p : Posting) : String :=
 
 def receiptsDir (dir : System.FilePath) : System.FilePath := dir / ".obend" / "receipts"
 
-/-- The receipt of a posting row, as JSON: the receipt (`postingReceipt`) and what a stranger needs
-to re-judge it: the register before, the row, the closed-through period, the kind's law lines. -/
-def receiptJson (laws : List (String × LawExpr × String)) (a : Nat × Reg) (r : Row) (prev : String) : Json :=
-  let R := postingReceipt (lawOf laws) (lawDigest laws) a r prev
-  Json.mkObj [("kind", toJson "posting"), ("format", toJson "posting@1"), ("pre", toJson R.pre), ("post", toJson R.post),
-    ("row", toJson R.row), ("law", toJson R.law), ("laws", lawsText laws), ("closed", toJson a.1),
-    ("before", postingsJson a.2.postings), ("posting", rowJson r),
-    ("openings", Json.arr (R.openings.map fun (f, b) => match f with
-      | .isOpen n => Json.arr #[toJson n, toJson b]).toArray),
-    ("verdict", toJson (if R.verdict.isOk then "ok" else "refused")), ("prev", toJson R.prev),
-    ("trust", toJson "register law: checked (obend-law@1, compiled)")]
-
-/-- Commit an admitted row to the journal: its receipt, the posting page. Returns the journal. -/
-def commitRow (dir : System.FilePath) (laws : List (String × LawExpr × String)) (J : Journal) (a b : Nat × Reg)
-    (r : Row) : IO Journal := do
-  match r, b.2.postings.getLast? with
-  | .post p0, some p =>
-    let rj := receiptJson laws a r J.head
+/-- Write what committing rows leaves: each posting's receipt and its page. -/
+def writeRowFiles (dir : System.FilePath) (fs : List RowFiles) : IO Unit :=
+  for rf in fs do
     IO.FS.createDirAll (receiptsDir dir)
-    IO.FS.writeFile (receiptsDir dir / (p.id ++ ".json")) (rj.pretty ++ "\n")
+    IO.FS.writeFile (receiptsDir dir / (rf.id ++ ".json")) rf.receipt
     IO.FS.createDirAll (dir / "register")
-    IO.FS.writeFile (dir / "register" / (p.id ++ ".md")) (postingPage a.2 p)
-    return { J with rows := J.rows ++ [.post p], head := Obend.Receipt.Negotiation.digestJson rj, last := p0.origin }
-  | .close n, _ => return { J with rows := J.rows ++ [.close n] }
-  | _, _ => return J
+    IO.FS.writeFile (dir / "register" / (rf.id ++ ".md")) rf.page
+
+/-- **Commit rows** as one turn of the vault's log (`Obend.Vault.Replay.Turn.rows`, all or none) and
+write their files. -/
+def commitRowsTurn (dir : System.FilePath) (rows : List Row) : IO (Except String Unit) :=
+  commitWith dir (.rows rows) fun _ o => do
+    if let .rows fs := o then writeRowFiles dir fs
 
 def fail (msg : String) : IO UInt32 := do IO.eprintln msg; return 3
 
@@ -207,12 +142,10 @@ def usage : String := "obend ledger post DOC [--period N] | reverse P-NNNN [--pe
 
 /-- The vault opened, its register's laws and journal and state. -/
 def openLedger (dir : System.FilePath) : IO (Except String (Store × List (String × LawExpr × String) × Journal × (Nat × Reg))) := do
-  let (s, _) ← openDir dir false
-  match registerLaws s with
+  let (w, _) ← openWorld dir false
+  match registerLaws w.store with
   | .error e => return .error e
-  | .ok laws =>
-    let J ← loadJournal dir
-    return .ok (s, laws, J, stateOf J.rows)
+  | .ok laws => return .ok (w.store, laws, w.journal, stateOf w.journal.rows)
 
 /-- Judge a posting and, if admitted, commit it. -/
 def postRow (dir : System.FilePath) (s : Store) (laws : List (String × LawExpr × String)) (J : Journal)
@@ -222,9 +155,9 @@ def postRow (dir : System.FilePath) (s : Store) (laws : List (String × LawExpr 
   match step (lawOf laws) a (.post p) with
   | .error c => fail (what ++ ": " ++ clauseText laws a.2 a.1 page (p.numbered a.2.number) c)
   | .ok b =>
-    let J' ← commitRow dir laws J a b (.post p)
-    saveJournal dir J'
+    if let .error e ← commitRowsTurn dir [.post p] then return ← fail (what ++ ": " ++ e)
     let _ ← openDir dir false
+    let _ := J
     let q := (b.2.postings.getLast?).getD p
     IO.println (what ++ ": posted as " ++ q.id ++ " (period " ++ toString q.period ++ "): " ++ movementsText q)
     IO.println ("receipt .obend/receipts/" ++ q.id ++ ".json")
@@ -270,8 +203,9 @@ def close (dir : System.FilePath) (n : Nat) : IO UInt32 := do
       return 0
     match step (lawOf laws) a (.close n) with
     | .error _ => fail "refused"
-    | .ok b =>
-      saveJournal dir (← commitRow dir laws J a b (.close n))
+    | .ok _ =>
+      if let .error e ← commitRowsTurn dir [.close n] then return ← fail e
+      let _ := J
       IO.println ("closed through period " ++ toString n ++ ": no posting into period " ++ toString n ++ " or before")
       return 0
 
@@ -364,12 +298,15 @@ def rowText : Row → String
 
 def merge (dir : System.FilePath) (other : String) (drop : List String) : IO UInt32 := do
   let label := (System.FilePath.mk other).fileName.getD other
-  let (s, V) ← openDir dir false
+  let (_, V) ← openDir dir false
   let (o, _) ← openDir other false
   let o' : Store := { o with pages := o.pages.filter fun p => !ledgerOwned p.name }
-  let (s', notes) := mergeFrom s o' label
-  for n in notes do IO.println n
-  finish dir s' V
+  match ← finishTurn dir (.merged label o') V with
+  | .ok (_, .merged _ notes, rendered) =>
+    for n in notes do IO.println n
+    for l in rendered do IO.println l
+  | .ok _ => return ← fail "the merge said what a merge does not"
+  | .error e => return ← fail e
   let (s2, _) ← openDir dir false
   let laws ← match registerLaws s2 with
     | .ok l => pure l
@@ -399,12 +336,11 @@ def merge (dir : System.FilePath) (other : String) (drop : List String) : IO UIn
   if rows.isEmpty then
     IO.println ("register: nothing new from " ++ label)
     return 0
+  if let .error e ← commitRowsTurn dir rows then return ← fail e
   let mut a := main
-  let mut J := J
   for r in rows do
     match rstep (lawOf laws) a r with
     | .ok b =>
-      J ← commitRow dir laws J a b r
       match r, b.2.postings.getLast? with
       | .post _, some q => IO.println ("register: " ++ label ++ "'s " ++ rowText r ++ " is " ++ q.id ++ " here")
       | .close n, _ => if n > a.1 then IO.println ("register: closed through period " ++ toString n ++ " (from " ++ label ++ ")")
@@ -412,7 +348,6 @@ def merge (dir : System.FilePath) (other : String) (drop : List String) : IO UIn
       a := b
     | .error _ => pure ()
   let _ := st
-  saveJournal dir J
   let _ ← openDir dir false
   IO.println ("register: stitched " ++ toString rows.length ++ " row(s) from " ++ label)
   return 0
@@ -494,7 +429,9 @@ def verifyOr (path : String) (rest : List String) (otherwise : IO UInt32) : IO U
 /-! ## Dispatch -/
 
 def hasLedger (dir : System.FilePath) : IO Bool := do
-  return (← (dir / "register" / "_kind.md").pathExists) || (← (ledgerPath dir).pathExists)
+  if ← (dir / "register" / "_kind.md").pathExists then return true
+  if !(← isVault dir) then return false
+  return !(← loadJournal dir).rows.isEmpty
 
 def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   let (period, args) := periodFlag args
