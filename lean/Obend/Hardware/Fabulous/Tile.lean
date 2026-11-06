@@ -121,6 +121,28 @@ def smModule (sm : SwitchMatrix) : RtlModule :=
     regs := []
     outputs := sm.prims.zipIdx.map fun ((o, _), k) => { name := o, expr := .wireRef k, width := 1 } }
 
+/-! ## A tile type -/
+
+/-- A tile type: its switch matrix, the frame position holding each of the tile's `ConfigBits`
+(`pos[i]`, from the configuration memory's Verilog), where the switch matrix's `ConfigBits` start, and
+its LUT4 cells by port prefix with where each cell's 19 `ConfigBits` start. -/
+structure TileModel where
+  sm : SwitchMatrix
+  pos : List Nat
+  smOff : Nat
+  cells : List (String × Nat)
+  deriving DecidableEq, Repr, Inhabited
+
+/-- `ConfigBits[i]` of a tile whose frame bits are `b`. -/
+def TileModel.bit (tm : TileModel) (b : Nat → Bool) (i : Nat) : Bool := b (tm.pos.getD i 0)
+
+/-- The switch matrix's configuration. -/
+def TileModel.smCfg (tm : TileModel) (b : Nat → Bool) : Nat → Bool := fun i => tm.bit b (tm.smOff + i)
+
+/-- A cell's 19 configuration bits, from `co`. -/
+def TileModel.cellCfg (tm : TileModel) (b : Nat → Bool) (co : Nat) : Nat → Bool := fun j => tm.bit b (co + j)
+
+
 /-! ## Reading the switch matrix from its Verilog -/
 
 def stripWs (s : String) : String := String.ofList (s.toList.filter (fun c => c != ' ' && c != '\t'))
@@ -375,5 +397,39 @@ def parseConfigMap (txt : String) : Std.HashMap Nat Nat := Id.run do
         | _, _ => pure ()
       | _ => pure ()
   return m
+
+/-- From a tile's top-level Verilog (`LUT4AB.v`): where its switch matrix's `ConfigBits` start, and its
+LUT4 cells by port prefix with where each cell's `ConfigBits` start (`.ConfigBits(ConfigBits[HI-1:LO])`
+of each instance). -/
+def parseTileLayout (txt : String) : Nat × List (String × Nat) := Id.run do
+  let mut cur : String × String := ("", "")
+  let mut smOff := 0
+  let mut cells : Array (String × Nat) := #[]
+  for l in txt.splitOn "\n" do
+    let ws := (l.trimAscii.toString.splitOn " ").filter (· != "")
+    match ws with
+    | [m, inst, "("] => if inst.startsWith "Inst_" then cur := (m, (inst.drop 5).toString)
+    | _ =>
+      let l := stripWs l
+      if l.startsWith ".ConfigBits(ConfigBits[" then
+        match ((l.drop 23).toString.splitOn ":").getD 1 "" |>.splitOn "]" with
+        | lo :: _ =>
+          if let some lo := lo.toNat? then
+            if cur.1.endsWith "_switch_matrix" then smOff := lo
+            else if cur.1 == "LUT4c_frame_config_dffesr" then
+              cells := cells.push (((cur.2.splitOn "LUT4c").headD ""), lo)
+        | [] => pure ()
+  return (smOff, cells.toList)
+
+/-- The frame position of each `ConfigBits` index, as a list. -/
+def configPosList (m : Std.HashMap Nat Nat) : List Nat :=
+  let n := m.fold (fun k i _ => max k (i + 1)) 0
+  (List.range n).map fun i => m.getD i 0
+
+/-- The Lean text of a tile model. -/
+def tileModelLean (defName smName : String) (pos : List Nat) (smOff : Nat) (cells : List (String × Nat)) : String :=
+  s!"def {defName} : TileModel where\n  sm := {smName}\n  smOff := {smOff}\n" ++
+  "  cells := [" ++ ", ".intercalate (cells.map fun (p, o) => s!"(\"{p}\", {o})") ++ "]\n" ++
+  "  pos := [" ++ ", ".intercalate (pos.map toString) ++ "]\n"
 
 end Obend.Hardware.Fabulous

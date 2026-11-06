@@ -156,6 +156,9 @@ structure ExState where
   flopOf : HashMap String Nat := {}
   /-- `(tile, position)` ↦ the value the extraction read there. -/
   support : HashMap (String × Nat) Bool := {}
+  /-- Every node the extraction traced ↦ the pips it followed, `(destination, source)` from the node
+  backwards, and the node it ended at (a BEL output, a pin or a constant). -/
+  paths : HashMap String (List (String × String) × String) := {}
 
 abbrev ExM := StateT ExState (Except String)
 
@@ -214,12 +217,13 @@ def usesInput (init i : Nat) : Bool :=
 
 mutual
 /-- The `Lit` a node carries: routing is followed to a LUT output, a pin, a flop or a constant. -/
-partial def traceNode (fab : Fabric) (cfg : HashMap String Nat) (pm : List Pin) (n : String) (hops : Nat := 0) :
-    ExM Lit := do
+partial def traceNode (fab : Fabric) (cfg : HashMap String Nat) (pm : List Pin) (n : String) (hops : Nat := 0)
+    (start : String := n) (acc : List (String × String) := []) : ExM Lit := do
   if hops > 4096 then throw s!"{n}: routing does not end (a loop through pips)"
   match ← driver fab cfg n with
-  | some src => traceNode fab cfg pm src (hops + 1)
+  | some src => traceNode fab cfg pm src (hops + 1) start ((n, src) :: acc)
   | none =>
+    modify fun s => { s with paths := s.paths.insert start (acc.reverse, n) }
     let (t, w) := splitNode n
     if w.startsWith "GND" then return .const false
     if w.startsWith "VCC" then return .const true
@@ -281,8 +285,8 @@ partial def flopLit (fab : Fabric) (cfg : HashMap String Nat) (pm : List Pin) (t
 end
 
 /-- The `Net` the configuration computes on the pins of `pm`, and the configuration bits it read. -/
-def extract (fab : Fabric) (cfg : HashMap String Nat) (pm : List Pin) :
-    Except String (Net × HashMap (String × Nat) Bool) := do
+def extractS (fab : Fabric) (cfg : HashMap String Nat) (pm : List Pin) :
+    Except String (Net × ExState) := do
   let act : ExM (List (Nat × Lit)) := do
     let mut outs := #[]
     for h : k in [0:pm.length] do
@@ -300,7 +304,12 @@ def extract (fab : Fabric) (cfg : HashMap String Nat) (pm : List Pin) :
   let flops ← s.flops.toList.mapM fun
     | some f => pure f
     | none => throw "a flop was left unfilled"
-  return ({ gates := s.gates.toList, flops, outs }, s.support)
+  return ({ gates := s.gates.toList, flops, outs }, s)
+
+def extract (fab : Fabric) (cfg : HashMap String Nat) (pm : List Pin) :
+    Except String (Net × HashMap (String × Nat) Bool) := do
+  let (N, s) ← extractS fab cfg pm
+  return (N, s.support)
 
 /-! ## 4. The pin map of `top_wrapper.v` -/
 

@@ -2,13 +2,15 @@
 # hardware/fabulous: the FABulous bitstream for iceStickMac8, read back and checked against Lean.
 #   [1/6] `obend fabric wrapper` regenerates top_wrapper.v byte for byte
 #   [2/6] FABulous's flow (flow.sh, pinned) rebuilds obend_ice40_mac8.bin byte for byte
-#   [3/6] `obend fabric extract` reads it back to Mac8Net.lean byte for byte, and
-#         `obend fabric check` accepts it: it is the mac8Net that mac8_fabric_realizes_module is about
+#   [3/6] `obend fabric extract` reads it back to Mac8Net.lean and `obend fabric cert` to Mac8Cert.lean,
+#         byte for byte; a certificate with one switch-matrix select changed fails Cert.check; and
+#         `obend fabric check` accepts the bitstream: it is the mac8Net that mac8_fabric_realizes_module
+#         is about, and it has the bits, wires and tile types mac8_fabric_tiles_realize_module assumes
 #   [4/6] a bitstream with one truth-table bit of a used LUT flipped, and one with a select bit of a
 #         switch-matrix multiplexer on a used route flipped, are refused, naming tile and bit
 #   [5/6] FABulous's fabric RTL, configured with the bitstream through its self-write port, simulated
 #         by Icarus, shows mac_out as `moduleRun iceStickMac8` computes it on every cycle after reset
-#   [6/6] the LUT4AB tile model is read from the regenerated RTL byte for byte and LEC'd against it
+#   [6/6] the LUT4AB and W_IO tile models are read from the regenerated RTL byte for byte and LEC'd against it
 #         (lec_tile.sh), with a planted change to the switch-matrix table refused; every switch-matrix
 #         pip and BEL feature of bitStreamSpec.csv agrees with the model (tile-agree, the hypothesis
 #         of pip_sound), and the planted change is refused there too
@@ -39,6 +41,11 @@ echo "=== [3/6] read back: Mac8Net.lean and obend fabric check ==="
   --source hardware/fabulous/obend_ice40_mac8.bin --out "${W}/Mac8Net.lean"
 cmp "${W}/Mac8Net.lean" "${ROOT}/lean/Obend/Hardware/Fabulous/Mac8Net.lean"
 echo "Mac8Net.lean identical"
+"${OBEND}" fabric cert --project "${P}" --bin "${HERE}/obend_ice40_mac8.bin" \
+  --source hardware/fabulous/obend_ice40_mac8.bin --out "${W}/Mac8Cert.lean"
+cmp "${W}/Mac8Cert.lean" "${ROOT}/lean/Obend/Hardware/Fabulous/Mac8Cert.lean"
+echo "Mac8Cert.lean identical"
+"${OBEND}" fabric cert --project "${P}" --bin "${HERE}/obend_ice40_mac8.bin" --mutant
 "${OBEND}" fabric check --project "${P}" --bin "${HERE}/obend_ice40_mac8.bin"
 
 echo "=== [4/6] a flipped bit is refused ==="
@@ -69,10 +76,13 @@ vvp -n "${W}/tb.vvp" +bitstream_hex="${W}/bit.hex" +bitbytes="$(wc -c < "${HERE}
 grep -q "mismatches=0" "${W}/sim.log" || { echo "[FAIL] fabric simulation"; exit 1; }
 
 echo "=== [6/6] the tile model against FABulous's tile RTL ==="
-"${OBEND}" fabric tile --project "${P}" --out-lean "${W}/LUT4ABSwitchMatrix.lean" --out-harness "${W}/LUT4AB_switch_matrix_lec.v"
-cmp "${W}/LUT4ABSwitchMatrix.lean" "${ROOT}/lean/Obend/Hardware/Fabulous/LUT4ABSwitchMatrix.lean"
-cmp "${W}/LUT4AB_switch_matrix_lec.v" "${HERE}/tile/LUT4AB_switch_matrix_lec.v"
-echo "LUT4ABSwitchMatrix.lean and the LEC harness identical"
+for T in LUT4AB W_IO; do
+  M="$(echo "${T}" | tr -d _)SwitchMatrix"
+  "${OBEND}" fabric tile --project "${P}" --tile "${T}" --out-lean "${W}/${M}.lean" --out-harness "${W}/${T}_switch_matrix_lec.v"
+  cmp "${W}/${M}.lean" "${ROOT}/lean/Obend/Hardware/Fabulous/${M}.lean"
+  cmp "${W}/${T}_switch_matrix_lec.v" "${HERE}/tile/${T}_switch_matrix_lec.v"
+  echo "${M}.lean and the LEC harness identical"
+done
 "${HERE}/lec_tile.sh" "${P}"
 "${OBEND}" fabric tile-agree --project "${P}"
 if "${OBEND}" fabric tile-agree --project "${P}" --mutant 2> "${W}/agree_mutant.txt"; then

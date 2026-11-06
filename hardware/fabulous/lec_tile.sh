@@ -2,7 +2,8 @@
 # hardware/fabulous/lec_tile.sh PROJECT_DIR
 #
 # The LUT4AB tile model (`Obend.Hardware.Fabulous.Tile`) against the RTL FABulous generated for it.
-# For each of the switch matrix (`lut4ab-sm`), the LUT4 cell (`lut4c`) and the MUX8LUT (`mux8lut`):
+# For each of the LUT4AB and W_IO switch matrices (`lut4ab-sm`, `wio-sm`), the LUT4 cell (`lut4c`) and the
+# MUX8LUT (`mux8lut`):
 #   1. `hardware/lec/lec.sh`: the emitted SV against Lean's model of the RtlModule, with its own
 #      planted output mutation (the standard LEC of every emitted module);
 #   2. Yosys reads FABulous's Verilog (`PROJECT/Tile/LUT4AB/*.v`, the primitives of
@@ -35,6 +36,7 @@ z3_on() {  # $1 = yosys smt2, $2 = lean half -> first line of z3's answer
 }
 
 for spec in "lut4ab-sm:LUT4AB_switch_matrix_lec:${HERE}/tile/LUT4AB_switch_matrix_lec.v ${T}/LUT4AB_switch_matrix.v" \
+            "wio-sm:W_IO_switch_matrix_lec:${HERE}/tile/W_IO_switch_matrix_lec.v ${PROJ}/Tile/W_IO/W_IO_switch_matrix.v" \
             "lut4c:LUT4c_frame_config_dffesr:${T}/LUT4c_frame_config_dffesr.v" \
             "mux8lut:MUX8LUT_frame_config_mux:${T}/MUX8LUT_frame_config_mux.v"; do
   target="${spec%%:*}"; rest="${spec#*:}"; top="${rest%%:*}"; files="${rest#*:}"

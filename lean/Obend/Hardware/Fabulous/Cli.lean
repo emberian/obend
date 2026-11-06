@@ -20,6 +20,8 @@ public import Obend.Hardware.Fabulous.Extract
 public import Obend.Hardware.Fabulous.Mac8
 public import Obend.Hardware.Fabulous.LUT4ABSwitchMatrix
 public import Obend.Hardware.YosysLec
+public import Obend.Hardware.Fabulous.CertGen
+public import Obend.Hardware.Fabulous.Mac8Tiles
 @[expose] public section
 
 namespace Obend.Hardware.Fabulous
@@ -48,6 +50,42 @@ def bitLocation (rows x y pos : Nat) : Nat × Nat :=
   let word := 20 + (x * 20 + f) * (4 + 4 * interior) + 4 + 4 * (rows - 2 - y)
   (word + (3 - j / 8), j % 8)
 
+/-- The hypotheses of `readback_sound` for certificate `C` and net `N` that a bitstream and a project
+discharge outside Lean: the bits `C.required N` are the bitstream's, the wires `C.wiresUsed` are fixed
+pips of FABulous's `pips.txt`, and the tiles of `C` have their `fabric.csv` types. -/
+def certHyps (fab : Fabric) (cfg : HashMap String Nat) (types : HashMap (Nat × Nat) String) (C : Cert) (N : Net) :
+    Except String String := do
+  let req := C.required N
+  for (x, y, p, v) in req do
+    if (cfg.getD (tileName x y) 0).testBit p != v then
+      throw s!"tile {tileName x y} bit {p} (frame {p / 32}, bit {p % 32}) is {!v}; the certificate requires {v}"
+  let ws := C.wiresUsed
+  for (src, dst) in ws do
+    let pips := fab.into.getD (tileName dst.x dst.y ++ "." ++ dst.w) #[]
+    let ok := pips.size == 1 && pips.toList.all fun (st, sw, f) =>
+      st == tileName src.x src.y && sw == src.w && (fab.spec.getD (st ++ "." ++ f) []).isEmpty
+    if !ok then throw s!"{tileName src.x src.y}.{src.w} -> {tileName dst.x dst.y}.{dst.w} is not a fixed wire of pips.txt"
+  for ((x, y), i) in C.tiles do
+    if types.get? (x, y) != (tileModels[i]?.map (·.1)) then
+      throw s!"tile {tileName x y} is not a {(tileModels[i]?.map (·.1)).getD "?"} in fabric.csv"
+  return s!"{req.length} required configuration bits present, {ws.length} wires fixed in pips.txt, {C.tiles.length} tiles of their fabric.csv types"
+
+/-- The tile-level hypotheses of `mac8_fabric_tiles_realize_module` for this bitstream. -/
+def checkTiles (fab : Fabric) (cfg : HashMap String Nat) (dir : String) : IO UInt32 := do
+  let types := parseFabricCsv (← IO.FS.readFile s!"{dir}/fabric.csv")
+  let C ← match extractS fab cfg mac8Pins with
+    | .ok (_, s) => match buildCert fab cfg types mac8Pins s with
+      | .ok C => pure C
+      | .error e => IO.eprintln s!"refused: no readback certificate: {e}"; return 1
+    | .error e => IO.eprintln s!"refused: {e}"; return 1
+  if C != mac8Cert then
+    IO.eprintln "refused: the readback certificate is not mac8Cert"; return 1
+  match certHyps fab cfg types mac8Cert mac8Net with
+  | .ok msg =>
+    IO.println s!"fabric check: the readback certificate is mac8Cert; {msg}; mac8_fabric_tiles_realize_module applies"
+    return 0
+  | .error e => IO.eprintln s!"refused: {e}"; return 1
+
 def cmdCheck (args : List String) : IO UInt32 := do
   let fab ← loadProject (← need "--project" args)
   let binPath ← need "--bin" args
@@ -60,7 +98,7 @@ def cmdCheck (args : List String) : IO UInt32 := do
   | .ok (N, sup) =>
     if N == mac8Net then
       IO.println s!"fabric check: {binPath} reads back to mac8Net ({N.gates.length} LUT4 gates, {N.flops.length} flops, {N.outs.length} output pins, {sup.size} configuration bits read); mac8_fabric_realizes_module applies"
-      return 0
+      return ← checkTiles fab cfg (← need "--project" args)
   | .error _ => pure ()
   let why := match verdict with
     | .ok _ => "it reads back to a net other than mac8Net"
@@ -153,22 +191,32 @@ def cmdVectors (args : List String) : IO UInt32 := do
   IO.println s!"wrote {n} cycles; mac8Net shows what iceStickMac8 computes on every cycle after the first reset"
   return 0
 
-/-- `obend fabric tile --project DIR --out-lean FILE --out-harness FILE`: read the LUT4AB switch
-matrix from the project's generated Verilog and write its Lean model and its LEC harness. -/
+/-- Lean names of a tile type's generated module: `LUT4AB` ↦ `LUT4ABSwitchMatrix`, `lut4ab`. -/
+def tileNames (t : String) : String × String :=
+  let base := t.replace "_" ""
+  (base ++ "SwitchMatrix", base.toLower)
+
+/-- `obend fabric tile --project DIR [--tile T] --out-lean FILE --out-harness FILE`: tile type `T`'s
+switch matrix and tile model, from `Tile/T/T_switch_matrix.v`, `T_ConfigMem.v` and `T.v`. -/
 def cmdTile (args : List String) : IO UInt32 := do
   let dir ← need "--project" args
-  let txt ← IO.FS.readFile s!"{dir}/Tile/LUT4AB/LUT4AB_switch_matrix.v"
+  let t := (flagVal "--tile" args).getD "LUT4AB"
+  let (modName, low) := tileNames t
+  let txt ← IO.FS.readFile s!"{dir}/Tile/{t}/{t}_switch_matrix.v"
+  let pos := configPosList (parseConfigMap (← IO.FS.readFile s!"{dir}/Tile/{t}/{t}_ConfigMem.v"))
+  let (smOff, cells) := parseTileLayout (← IO.FS.readFile s!"{dir}/Tile/{t}/{t}.v")
   match parseSwitchMatrix txt with
   | .error e => IO.eprintln s!"refused: {e}"; return 1
   | .ok sm =>
-    let hdr := "module\n/-\n# Obend.Hardware.Fabulous.LUT4ABSwitchMatrix — the LUT4AB switch matrix of `hardware/fabulous/fabric.csv`\n\n" ++
-      "Generated by `obend fabric tile` from FABulous's `Tile/LUT4AB/LUT4AB_switch_matrix.v`; do not edit.\n" ++
-      "`hardware/fabulous/lec_tile.sh` checks `smModule lut4abSwitchMatrix` against that Verilog.\n-/\n" ++
-      "public import Obend.Hardware.Fabulous.Tile\n@[expose] public section\n\nnamespace Obend.Hardware.Fabulous\n\n" ++
-      ""
-    IO.FS.writeFile (← need "--out-lean" args) (hdr ++ smLean "lut4abSwitchMatrix" sm ++ "\nend Obend.Hardware.Fabulous\n")
+    let hdr := s!"module\n/-\n# Obend.Hardware.Fabulous.{modName} — the {t} switch matrix and tile model of `hardware/fabulous/fabric.csv`\n\n" ++
+      s!"Generated by `obend fabric tile` from FABulous's `Tile/{t}/{t}_switch_matrix.v`, `{t}_ConfigMem.v` and `{t}.v`;\n" ++
+      s!"do not edit. `hardware/fabulous/lec_tile.sh` checks `smModule {low}SwitchMatrix` against that Verilog.\n-/\n" ++
+      "public import Obend.Hardware.Fabulous.Tile\n@[expose] public section\n\nnamespace Obend.Hardware.Fabulous\n\n"
+    IO.FS.writeFile (← need "--out-lean" args)
+      (hdr ++ smLean s!"{low}SwitchMatrix" sm ++ "\n" ++ tileModelLean s!"{low}Model" s!"{low}SwitchMatrix" pos smOff cells ++
+        "\nend Obend.Hardware.Fabulous\n")
     IO.FS.writeFile (← need "--out-harness" args) (smHarness sm)
-    IO.println s!"switch matrix {sm.name}: {sm.inputs.length} inputs, {sm.outputs.length} outputs, {sm.nCfg} configuration bits, {sm.prims.length} primitives"
+    IO.println s!"switch matrix {sm.name}: {sm.inputs.length} inputs, {sm.outputs.length} outputs, {sm.nCfg} configuration bits, {sm.prims.length} primitives; {cells.length} LUT4 cells, switch matrix at ConfigBits[{smOff}]"
     return 0
 
 /-- The planted fault of the tile LEC: the switch matrix with the first two inputs of its first
@@ -241,6 +289,57 @@ def cmdTileAgree (args : List String) : IO UInt32 := do
   IO.eprintln s!"refused: {bad.size} disagreements"
   return 1
 
+/-- The certificate of a bitstream on a project's fabric. -/
+def certOf (dir : String) (bin : ByteArray) : IO (Except String (Net × Cert)) := do
+  let fab ← loadProject dir
+  let types := parseFabricCsv (← IO.FS.readFile s!"{dir}/fabric.csv")
+  match decodeBin fab.cols fab.rows bin with
+  | .error e => return .error e
+  | .ok cfg =>
+    match extractS fab cfg mac8Pins with
+    | .error e => return .error e
+    | .ok (N, s) => return (buildCert fab cfg types mac8Pins s).map (N, ·)
+
+/-- `obend fabric cert --project DIR --bin FILE --out FILE`: write `Mac8Cert.lean`. -/
+def cmdCert (args : List String) : IO UInt32 := do
+  let dir ← need "--project" args
+  let binPath ← need "--bin" args
+  match ← certOf dir (← IO.FS.readBinFile binPath) with
+  | .error e => IO.eprintln s!"refused: {binPath}: {e}"; return 1
+  | .ok (N, C) =>
+    if args.contains "--mutant" then
+      -- the planted fault: the first switch-matrix hop of the first routed gate input, its select changed
+      let flipHop : List Hop → List Hop × Bool
+        | hs => match hs.findIdx? (fun | .sm .. => true | _ => false) with
+          | some j => (hs.modify j (fun | .sm k i => .sm k (i ^^^ 1) | h => h), true)
+          | none => (hs, false)
+      let (gates, _) := C.gates.foldl (fun (acc, done) g =>
+        if done then (acc.push g, true) else
+          match g.ins.findIdx? (·.isSome) with
+          | some j => match g.ins[j]? with
+            | some (some hs) =>
+              let (hs', ok) := flipHop hs
+              (acc.push { g with ins := g.ins.set j (some hs') }, ok)
+            | _ => (acc.push g, false)
+          | none => (acc.push g, false)) (#[], false)
+      let C' := { C with gates := gates.toList }
+      let fab ← loadProject dir
+      let types := parseFabricCsv (← IO.FS.readFile s!"{dir}/fabric.csv")
+      let cfg ← IO.ofExcept (decodeBin fab.cols fab.rows (← IO.FS.readBinFile binPath))
+      if !C'.check N then
+        IO.println "mutant certificate (one switch-matrix select changed): Cert.check refuses it"; return 0
+      match certHyps fab cfg types C' N with
+      | .ok _ => IO.eprintln "[FAIL] a certificate with a switch-matrix select changed was accepted"; return 1
+      | .error e =>
+        IO.println s!"mutant certificate (one switch-matrix select changed): Cert.check passes, its hypotheses do not: {e}"
+        return 0
+    let out ← need "--out" args
+    IO.FS.writeFile out (certLean C (flagVal "--source" args |>.getD binPath))
+    let hops := (C.gates.flatMap fun g => g.ins.filterMap id).foldl (· + ·.length) 0 +
+      C.flops.foldl (fun a f => a + f.en.length + f.sr.length) 0 + C.outs.foldl (fun a o => a + o.2.2.length) 0
+    IO.println s!"wrote {out}: {C.gates.length} gates, {C.flops.length} flops, {C.outs.length} outputs, {C.tiles.length} tiles, {hops} hops; check against the net: {C.check N}"
+    return 0
+
 def cmdFabric : List String → IO UInt32
   | "wrapper" :: args => do
     IO.FS.writeFile (← need "--out" args) (topWrapper iceStickMac8 mac8Pins); return 0
@@ -251,6 +350,7 @@ def cmdFabric : List String → IO UInt32
   | "tile" :: args => cmdTile args
   | "tile-mutant" :: args => cmdTileMutant args
   | "tile-agree" :: args => cmdTileAgree args
-  | _ => do IO.eprintln "usage: obend fabric (wrapper|extract|check|flip|vectors|tile|tile-mutant|tile-agree) ..."; return 2
+  | "cert" :: args => cmdCert args
+  | _ => do IO.eprintln "usage: obend fabric (wrapper|extract|check|flip|vectors|tile|tile-mutant|tile-agree|cert) ..."; return 2
 
 end Obend.Hardware.Fabulous
