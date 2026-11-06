@@ -1,0 +1,13 @@
+VULKAN coww-workgroup
+"obend-litmus-check: coww-workgroup, the shape of hardware/gpu/litmus/wgsl/coww-workgroup.wgsl"
+{
+x=0;
+P0:r0=0;
+}
+ P0@sg 0, wg 0, qf 0       ;
+ st.atom.wg.sc1 x, 1       ;
+ st.atom.wg.sc1 x, 2       ;
+ cbar.acq_rel.wg.semsc1 0  ;
+ ld.atom.wg.sc1 r0, x      ;
+
+exists (P0:r0 == 1 /\ x == 2)

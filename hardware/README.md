@@ -263,7 +263,7 @@ AMDVLK runs out of memory with 1670 dispatches in one command buffer where RADV 
 runner submits in chunks of 128; the greedy layering that made the 64-point NTT 1670 dispatches is
 replaced, and it is now 19); and the closure-based evaluator above.
 
-Not here: the memory model (G4), resource grading (G5), a layout that skips the wires fusion made dead (the buffer is
+Not here (G4 landed below): resource grading (G5), a layout that skips the wires fusion made dead (the buffer is
 still the source graph's prefix sum, 29M words for the 65536-point NTT), fusion of a gather into its
 elementwise consumer (TVM's injective rule; it would fold the Stockham gathers into the field kernels),
 radix-4 stages, and the RTL path of the same array graphs (the commuting square with
@@ -329,8 +329,33 @@ and requires a dump with the first `vmcnt` wait of stage 0 replaced by `s_nop 0`
 shader cache, for the measurement reported in `rdna2/README.md`.
 
 What the model does not do, named: it runs a dispatch's waves one after another, sound for G1's
-programs by `lowerArrayToGpu_sound`'s disjointness and not in general; the memory model (G4) is not
-here, nor the RTL path of the same array graphs. Since the fusion of 2026-11-06 RADV emits `v_and_or_b32`
-in the field kernels (glmul-256 and the five NTTs), which the model refuses by name; the decoder reads it
-and equals `llvm-mc` on all sixteen dumps, and those six graphs' runs on the model (`isa_check.sh` stage
-4, the pins `glmul_runs` and `ntt4_runs`) are open until the instruction has a semantics.
+programs by `lowerArrayToGpu_sound`'s disjointness and not in general; the memory model is rung G4's (below).
+
+### `gpu/litmus/`: the memory model, measured (rung G4)
+
+`Obend.Hardware.Gpu.Memory` is the memory model of WGSL as the Vulkan memory model specialized to the
+events WGSL emits (its header derives the specialization: relaxed atomics at QueueFamily or Workgroup scope
+by address space, barriers at Workgroup scope with the semantics of one address space, everything
+available and visible at workgroup scope, so `locord = loc ∩ hb` and happens-before never crosses a
+workgroup), presented as sections of a presheaf on the scope site: a section over a thread, a workgroup or
+the device is a witness (reads-from, coherence ranks, a total order every edge of `locord ∪ rf ∪ fr ∪ asmo`
+respects) of the shape restricted to that object, and an outcome is allowed when it is the restriction of
+a section over the device. `allowed_iff_glues` says the enumeration-based checker answers exactly that.
+The referent is not our reading: `lean/tools/litmuscheck` (`obend-litmus-check`) writes every shape and
+outcome as a Dartagnan Vulkan litmus test and the gate requires Dartagnan's verdict under `cat/vulkan.cat`
+to equal the checker's on each (it does, on every outcome of the suite).
+
+`gpu/litmus/` is GPUHarbor's suite (`wgsl/`, copied with attribution) run by `obend-gpu-litmus` (a port of
+its host side and of its tuned-stress parameter space, in `gpu/runner`) on hbox's RX 6750 XT under RADV
+and AMDVLK, hbox's UHD 770 under ANV and the Mac's M2 Max under Metal; the tables are under
+`gpu/litmus/results/` with their seed and budget, and `results/STRONGER.tsv` records the allowed weak
+behaviours no device showed. The relaxed weak behaviours at device scope appear on the AMD and Apple
+parts, IRIW's only on the M2 Max, none on the Intel part; a `storageBarrier` across workgroups
+leaves them in place on the M2 Max, as the model says it may; no device showed a coherence violation, a
+weak outcome of a workgroup-scope test with barriers, or a weak outcome of the non-atomic barrier tests.
+The shapes are each thread's whole program with every barrier of the kernel body in place (a thread plays
+both roles of GPUHarbor's pseudo-code), which forbids the `seq0` class of the workgroup barrier tests as
+well as their weak class; no device showed `seq0` either. `verify_litmus.sh` is the gate (`gpu/litmus/README.md`).
+
+Not here: resource grading (G5, whose grade the `shaderstats` line of each dump now carries), a layering
+better than the scalar module's greedy one and the RTL path of the same array graphs (both in lanes).

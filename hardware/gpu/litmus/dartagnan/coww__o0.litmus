@@ -1,0 +1,11 @@
+VULKAN coww
+"obend-litmus-check: coww, the shape of hardware/gpu/litmus/wgsl/coww.wgsl"
+{
+x=0;
+}
+ P0@sg 0, wg 0, qf 0       ;
+ st.atom.qf.sc0 x, 1       ;
+ st.atom.qf.sc0 x, 2       ;
+ cbar.acq_rel.wg.semsc1 0  ;
+
+exists (x == 1)
