@@ -580,8 +580,9 @@ def salvage (here other s : Store) (label n : String) : Store × List String × 
   | _, _, _ => (s, [], false)
 
 /-- **What a fork has not seen**: for each page both replicas moved since their base (the pages the
-fork worked on), the fields and law lines here's moves set that the other's page does not hold now. A
-fork that wrote a page to the tip's terms is not behind on it. -/
+fork worked on), the fields here's moves set that the other left as they were at the base, and the law
+lines here added that the other's page lacks. A fork that wrote a page to the tip's terms is not
+behind on it. -/
 def behindOn (here other : Store) : List (String × List String) :=
   here.pages.filterMap fun p =>
     let bp := Merge.sharedPrefix (Merge.historyIn here p.name) (Merge.historyIn other p.name)
@@ -591,8 +592,10 @@ def behindOn (here other : Store) : List (String × List String) :=
       let bt := render B p.name p.who
       let bf := frontFields bt
       let tf := frontFields theirs
+      -- a field here's moves set and the other left as it was at the base: the other has not seen it
+      -- (a field the other changed itself is its own; a merge may have brought it here already)
       let fields := ((frontFields cur).filter fun (k, v) => (lawKey k).isNone && bf.lookup k != some v &&
-        tf.lookup k != some v).map (·.1)
+        tf.lookup k != some v && tf.lookup k == bf.lookup k).map (·.1)
       let laws := ((lawLines cur).filter fun l => !(lawLines bt).contains l && !(lawLines theirs).contains l).map
         (fun (k, _) => "law " ++ k)
       if fields.isEmpty && laws.isEmpty then none else some (p.name, fields ++ laws)
