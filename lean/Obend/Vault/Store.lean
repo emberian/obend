@@ -17,10 +17,11 @@ and the files; `Obend.Vault.Cli` reads and writes them.
   its text differs (`writesFor`). **Opening twice is a no-op** (`open_idem`): the second open finds
   every file as the first left it and changes neither the store nor any file. This holds for every
   store and every vault the reader accepts (page names unique, as a directory's paths are).
-* `mergeFrom`: each page of another replica's store (an offline copy, another process) is merged
-  into this one by the pushout of the two current versions (`mergePage_pushout`); a page the other
-  has alone is imported. Two replicas that edited one place differently leave a section with two
-  candidates, rendered with the command that selects one.
+* `mergePage`: the merge of two versions of a page, the pushout of the two (`mergePage_pushout`).
+  Two replicas that edited one place differently leave a section with two candidates, rendered with
+  the command that selects one. Merging another replica's store (an offline copy) is
+  `Obend.Vault.Merge.mergeVault`: the two stores read as branches of their base and merged at the
+  tip (`Obend.Vault.Branch.merge`), with `mergePage` as the merge of a page both sides wrote.
 * `postAs`: a member's proposal for a page becomes candidates in sections (`postPatch`); it needs the
   member's `post` grant on the page.
 * `selectIn`: keep one candidate of a section (`selectPatch`); the owner, or a member with a `select`
@@ -1107,7 +1108,7 @@ def pinsOf (es res : List Entry) (name : String) (pid : PageId) (G' : Graph) : F
   pinsAt es (readsOf es res name pid G')
 
 /-- Whether a footprint's pins hold at a store, asked at the door a turn is admitted through
-(`admitFootprint`; the merge admits a replica's write through the same one). -/
+(`admitFootprint`). -/
 def pinsHold (store : VaultStore) (fp : Footprint) : Bool :=
   match admitFootprint store fp with
   | .ok _ => true
@@ -1917,11 +1918,6 @@ def Store.write (s : Store) (p : Page) (G' : Graph) (added : List (AtomId × Str
 
 /-! ### Merge -/
 
-/-- `B ⊑ A`, decided: every atom, tombstone and edge of `B` is in `A`. -/
-def leB (B A : Graph) : Bool :=
-  B.atoms.all (fun e => A.label e.1 == B.label e.1) && B.dead.all A.isDead &&
-    B.edges.all fun e => A.edge e.1 e.2
-
 /-- The merge of two versions of a page: their union where they agree on every atom both store. -/
 def mergePage (A B : Graph) : Option Graph := if compatB A B then some (Graph.merge A B) else none
 
@@ -1931,61 +1927,6 @@ theorem mergePage_pushout {A B M : Graph} (h : mergePage A B = some M) : IsPusho
   split at h
   · rename_i hc; cases h; exact merge_isPushout (compatible_of_compatB hc)
   · cases h
-
-/-- **A replica's write comes with its pins.** The write of a page with laws over links read the
-pages it links to at the replica's states; those are the write's read pins (`writeTurn`), and the
-merged write is admitted only where they hold (`admitFootprint`, `no_toctou`'s premise): by
-`judgeLinksIn_of_turn` the laws over links then say here what they said there. Where a linked page
-moved underneath the write, the merge refuses it by name, with what moved; the change is made again
-here, against that page as it is. A page without laws over links read nothing: no pins. -/
-def replicaPins (o : Store) (q : Page) (B : Graph) : Footprint :=
-  match lawsFor o.entries q.name B with
-  | .ok ls =>
-    if (linkLaws ls).isEmpty then []
-    else pinsAt o.entries (citedNames o.entries B)
-  | .error _ => []
-
-/-- Merge the pages of another replica's store (`label` names it in the authors of what it added). -/
-def mergeFrom (s o : Store) (label : String) : Store × List String := Id.run do
-  let mut st := s
-  let mut notes : Array String := #[]
-  for q in o.pages do
-    match st.page? q.name with
-    | none =>
-      if st.pages.any (·.id == q.id) then
-        notes := notes.push (q.name ++ ": not imported: its id is another page's here")
-      else if let some G := q.current then
-        let authors := q.authors.map fun (a, w) => (a, if w == "owner" then "owner@" ++ label else w)
-        let p : Page := { q with authors := authors, seen := some (render G q.name fun a => (authors.lookup a).getD ("owner@" ++ label)), note := none }
-        st := { st with pages := st.pages ++ [p] }
-        notes := notes.push (q.name ++ ": imported from " ++ label)
-    | some p =>
-      match p.current, q.current with
-      | some A, some B =>
-        if leB B A then pure ()
-        else match admitFootprint (stateStore st.entries) (replicaPins o q B) with
-          | .error (.footprintStale cell exp cur) =>
-            notes := notes.push (p.name ++ ": not merged: its write at " ++ label ++ " read " ++ cell ++
-              " as it was there (" ++ stateDiffText exp cur ++ "); make the change here, against " ++
-              cell ++ " as it is")
-          | .error _ => notes := notes.push (p.name ++ ": not merged: its pins do not hold here")
-          | .ok _ =>
-          match mergePage A B with
-          | none => notes := notes.push (p.name ++ ": not merged: the two versions name one atom differently (they share no base)")
-          | some M =>
-            let added := (B.atoms.map (·.1)).eraseDups.filter (fun a => !A.present a) |>.map fun a =>
-              (a, match q.authors.lookup a with
-                | some w => if w == "owner" then "owner@" ++ label else w
-                | none => "owner@" ++ label)
-            match st.write p M added .owner with
-            | .ok st' =>
-              let secs := (sections M).length
-              notes := notes.push (p.name ++ ": merged from " ++ label ++
-                (if secs = 0 then "" else ", " ++ toString secs ++ " section(s) to select"))
-              st := st'
-            | .error msg => notes := notes.push msg
-      | _, _ => pure ()
-  return (st, notes.toList)
 
 /-! ### Members, posts and selections -/
 

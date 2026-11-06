@@ -13,7 +13,7 @@ its frontmatter lines), the members and their grants.
 * `Obend.Vault.Law` — the judge: a page's laws and its kinds', compiled (`Obend.Spec.LawCompile`),
   combined (`Obend.Law.effective`), run; `judge_admits`, `judge_refuses`; what would pass.
 * `Obend.Vault.Store` — the world beside the vault and each command: `openVault` (`open_idem`:
-  twice is a no-op), `mergeFrom` (`mergePage_pushout`), `postAs`, `selectIn` (`select_keeps`,
+  twice is a no-op), `mergePage` (`mergePage_pushout`), `postAs`, `selectIn` (`select_keeps`,
   `select_needs_grant`), `reciteIn`.
 * `Obend.Vault.Json` — `.obend/world.json`.
 * `Obend.Vault.Form` — a captured membrane as a form: holes for data, a residual, a fill as a
@@ -25,6 +25,9 @@ its frontmatter lines), the members and their grants.
   sides' disjoint writes (`merge_is_pushout`), clashes kept as conflict states, consent from every
   page in a write's cone (`landed_consents`), authority read where every revocation is visible
   (`settled_at_tip`). Its walkthrough is `lean/tests/vault/Branch.lean`.
+* `Obend.Vault.Merge` — `obend merge`: two vault stores read as branches of their base and merged by
+  `Branch.merge`, a page both sides wrote merged by `mergePage`; what the tip landed lands through the
+  vault's own write.
 
 The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`;
 the forms' is `lean/tests/vault/FORMS.md`, executed by the same with `--doc`, and planted by
@@ -48,4 +51,5 @@ public import Obend.Vault.PhysicalProjection
 public import Obend.Vault.SovereignEngine
 public import Obend.Vault.Branch
 public import Obend.Vault.BranchCli
+public import Obend.Vault.Merge
 public import Obend.Vault.Cli

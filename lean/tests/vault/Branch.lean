@@ -206,6 +206,54 @@ def merged2 : Merged := ok? ⟨base2, [], [], []⟩ (merge base2 left2 right2)
 #guard natOf merged2.tip.store "Capped" "count" == some 1
 #guard merged2.refused.isEmpty
 
+/-! ## Laws over links that judge a merged page
+
+`Tally` and `Tally2` each declare `merge count: add` and have no laws of their own; the laws that
+judge them are other pages' laws over links. `Floor` lists `Tally` under a lower bound
+(`not (linked.count <= 0)`), I-confluent for `add`: both increments merge, and `Floor`'s law holds of
+the merged state (`mergeCell_links_lawful`). `Roof` lists `Tally2` under an upper bound
+(`linked.count <= 5`), not I-confluent for `add`: the two increments stay a conflict (each alone
+keeps the bound, their merge would not), both candidates kept. -/
+
+def linkLawsOf (page owner : String) (links : List String) (lines : List (String × String)) : PageLaws :=
+  ok? (noLaws owner links) (PageLaws.ofLines page owner links lines)
+
+def base4 : Config :=
+  { store := fun c => if c == "Tally" || c == "Tally2" then some (rec1 "count" 1)
+      else if c == "Floor" || c == "Roof" then some (rec1 "n" 0) else none,
+    book := [("Tally", { noLaws "alice" with merges := [("count", .add)] }),
+             ("Tally2", { noLaws "alice" with merges := [("count", .add)] }),
+             ("Floor", linkLawsOf "Floor" "carol" ["Tally"] [("floor", "not (linked.count <= 0)")]),
+             ("Roof", linkLawsOf "Roof" "carol" ["Tally2"] [("roof", "linked.count <= 5")])],
+    auth := { refs := [srWrite "sr:tally" "Tally", srWrite "sr:tally2" "Tally2"] },
+    history := [⟨0, "genesis", "open", []⟩] }
+
+def left4 : Branch :=
+  ((fork base4 "left").post (w1 "t-a" "alice" "Tally" (rec1 "count" 1) (rec1 "count" 3))).post
+    (w1 "t2-a" "alice" "Tally2" (rec1 "count" 1) (rec1 "count" 3))
+
+def right4 : Branch :=
+  ((fork base4 "right").post (w1 "t-b" "bob" "Tally" (rec1 "count" 1) (rec1 "count" 4) ["sr:tally"])).post
+    (w1 "t2-b" "bob" "Tally2" (rec1 "count" 1) (rec1 "count" 4) ["sr:tally2"])
+
+#guard (PageLaws.ofLines "Floor" "carol" ["Tally"] [("floor", "not (linked.count <= 0)")]).toBool
+#guard (PageLaws.ofLines "Roof" "carol" ["Tally2"] [("roof", "linked.count <= 5")]).toBool
+#guard (linkedLaws base4.book "Tally").map (·.1) == ["Floor: floor"]
+#guard (linkedLaws base4.book "Tally2").map (·.1) == ["Roof: roof"]
+
+def merged4 : Merged := ok? ⟨base4, [], [], []⟩ (merge base4 left4 right4)
+
+-- each side's own run admits both its writes (each alone keeps both bounds)
+#guard ((left4.run base4).refused.isEmpty) && ((right4.run base4).refused.isEmpty)
+-- Floor's lower bound is I-confluent: the increments merge, 1 + 2 + 3
+#guard natOf merged4.tip.store "Tally" "count" == some 6
+#guard merged4.tip.history.map (fun r => (r.origin, r.label)) == [("genesis", "open"), ("left+right", "t-a + t-b")]
+-- Roof's upper bound is not: a conflict, Tally2 at its base, nothing refused
+#guard merged4.tip.conflicts.map Conflict.text ==
+  ["conflict at Tally2: left's t2-a and right's t2-b (both kept as candidates; neither landed)"]
+#guard natOf merged4.tip.store "Tally2" "count" == some 1
+#guard merged4.refused.isEmpty
+
 /-! ## The authority reason is never hidden behind a stale pin
 
 alice's write of `board/Bob` read a state bob's page never had (`posts 9`), and relied on `sr:board`,
