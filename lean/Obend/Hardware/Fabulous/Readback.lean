@@ -15,7 +15,8 @@ entry per wire it followed (chunked by tile, no wire twice), the hop that drives
 `k` of the tile's switch matrix configured to select input `i`; `Hop.wire`) and the entry of the wire it
 reads, with a rank that decreases along every hop, so the table is acyclic; gates, flops and output pins
 index it. Its equations are the cone's semantics (`ConeConsistent`), implied by the whole grid's
-(`Consistent.cone`). `Cert.check` is the structural part, kernel-decided piece by piece (`Cert.check_of`);
+(`Consistent.cone`). `Cert.check` is the structural part; the kernel decides it through `Cert.checkF`, the same
+conditions over balanced trees and numeric names with a validated path-end witness (`Cert.checkF_sound`);
 `Cert.required` lists the configuration bits it rests on. `cone_sound`: in every cone assignment the output
 pins show `Net.outputs` and every flop loads `Net.step`. `consistent_exists_unique`: for every pin input
 and flop state the cone has exactly one assignment (`Cert.solve`), so routing loops outside the cone do not
@@ -105,8 +106,8 @@ abbrev BitReq := Nat × Nat × Nat × Bool
 
 /-! ## The certificate: the cone the extraction covers, as a table of drivers
 
-Every wire the extraction followed appears once (`Cert.entries`, strictly sorted by `Node.lt`, so no wire
-has two entries) with the hop that drives it and the entry of the wire it reads (`next`), or none when
+Every wire the extraction followed appears once (`Cert.entries`, chunked by tile in strictly increasing
+order with distinct names within a tile, so no wire has two entries) with the hop that drives it and the entry of the wire it reads (`next`), or none when
 that is a terminal: a LUT4 cell's `O`, an input pad, or a multiplexer's constant. `rank` strictly
 decreases along `next`, so the table is acyclic. Gates, flops and output pins point into the table. -/
 
@@ -294,8 +295,8 @@ def Cert.outAt (C : Cert) (N : Net) (k : Nat) : Bool :=
   | some (p, l), some (p', n, j) => p == p' && l.below N.gates.length && C.startOK j n l
   | _, _ => false
 
-/-- **The structural check**, decided by the kernel for a concrete certificate piece by piece
-(`Cert.check_of`): one chunk, or one block of gates, flops or outputs, at a time. -/
+/-- **The structural check.** For a concrete certificate the kernel decides `Cert.checkF`, block by block
+(`Cert.checkF_of`), and `Cert.checkF_sound` gives this. -/
 def Cert.check (C : Cert) (N : Net) : Bool :=
   C.models.all (·.sm.wf) && N.gates.length == C.gates.length && N.flops.length == C.flops.length &&
   N.outs.length == C.outs.length && chunksSorted C.chunks && C.chunks.all C.chunkOK &&
@@ -1472,5 +1473,663 @@ theorem Cert.required_of (C : Cert) (N : Net) (b : Bits)
     simpa using this
   · have := List.all_eq_true.mp (List.all_eq_true.mp hF k (List.mem_range.mpr hk)) r hr
     simpa using this
+
+/-! ## The check, in a form the kernel decides cheaply
+
+Decided as written, `Cert.check` makes the kernel walk `Cert.entries` from the front for every index it follows,
+follow every gate input's path hop by hop, compare names as `String`s (each a list of UTF-8 bytes built from the
+literal, and quadratically often within a tile in `distinctNames`), and walk a tile model's `prims` and `pos` for
+every hop and configuration bit. `Cert.checkF` reads the table, the switch matrices and the frame positions through
+balanced trees (`LTree`), compares names by an injective number (`nameKey`), takes distinct names within a tile
+from strictly increasing keys, and takes each entry's path end from a witness (`ends`: one code per entry, chunked
+like the table; `Cert.endCode`) that it validates one hop at a time. `Cert.checkF_sound`: it implies `Cert.check`.
+`Cert.required_ofF` does the same for the required bits. -/
+
+/-- A list as a balanced tree; `node n l r` holds the `n` elements of `l`, then those of `r`. -/
+inductive LTree (α : Type) where
+  | nil
+  | leaf (a : α)
+  | node (n : Nat) (l r : LTree α)
+
+def LTree.toList {α : Type} : LTree α → List α
+  | .nil => []
+  | .leaf a => [a]
+  | .node _ l r => l.toList ++ r.toList
+
+/-- Element `j`, in as many steps as the tree is deep. -/
+def LTree.get? {α : Type} : LTree α → Nat → Option α
+  | .nil, _ => none
+  | .leaf a, j => if j = 0 then some a else none
+  | .node n l r, j => if j < n then l.get? j else r.get? (j - n)
+
+/-- Every `node n l r` has `n` elements in `l`. -/
+def LTree.WF {α : Type} : LTree α → Prop
+  | .nil => True
+  | .leaf _ => True
+  | .node n l r => n = l.toList.length ∧ l.WF ∧ r.WF
+
+theorem LTree.get?_eq {α : Type} : ∀ (t : LTree α), t.WF → ∀ j, t.get? j = t.toList[j]?
+  | .nil, _, _ => rfl
+  | .leaf _, _, j => by cases j <;> simp [LTree.get?, LTree.toList]
+  | .node n l r, ⟨hn, hl, hr⟩, j => by
+    simp only [LTree.get?, LTree.toList]
+    split
+    · rename_i hj
+      rw [LTree.get?_eq l hl, List.getElem?_append_left (by omega)]
+    · rename_i hj
+      rw [LTree.get?_eq r hr, List.getElem?_append_right (by omega), hn]
+
+/-- The fallback when the depth bound runs out: a comb. -/
+def LTree.comb {α : Type} : List α → LTree α
+  | [] => .nil
+  | a :: l => .node 1 (.leaf a) (LTree.comb l)
+
+theorem LTree.comb_spec {α : Type} : ∀ l : List α, (LTree.comb l).toList = l ∧ (LTree.comb l).WF
+  | [] => ⟨rfl, trivial⟩
+  | a :: l => by
+    obtain ⟨h1, h2⟩ := LTree.comb_spec l
+    exact ⟨by simp [LTree.comb, LTree.toList, h1], rfl, trivial, h2⟩
+
+/-- The first `n` elements of `l` as a tree of depth at most `d` (then a comb), and the rest of `l`; each element
+is visited once. -/
+def LTree.ofPrefix {α : Type} : Nat → Nat → List α → LTree α × List α
+  | 0, n, l => (LTree.comb (l.take n), l.drop n)
+  | d + 1, n, l =>
+    match n, l with
+    | 0, l => (.nil, l)
+    | 1, a :: r => (.leaf a, r)
+    | 1, [] => (.nil, [])
+    | n + 2, l =>
+      (.node ((n + 2) / 2) (LTree.ofPrefix d ((n + 2) / 2) l).1
+        (LTree.ofPrefix d (n + 2 - (n + 2) / 2) (LTree.ofPrefix d ((n + 2) / 2) l).2).1,
+       (LTree.ofPrefix d (n + 2 - (n + 2) / 2) (LTree.ofPrefix d ((n + 2) / 2) l).2).2)
+
+theorem LTree.ofPrefix_spec {α : Type} : ∀ (d n : Nat) (l : List α), n ≤ l.length →
+    (LTree.ofPrefix d n l).1.toList = l.take n ∧ (LTree.ofPrefix d n l).2 = l.drop n ∧ (LTree.ofPrefix d n l).1.WF
+  | 0, n, l, _ => ⟨(LTree.comb_spec _).1, rfl, (LTree.comb_spec _).2⟩
+  | d + 1, 0, l, _ => ⟨rfl, rfl, trivial⟩
+  | d + 1, 1, a :: r, _ => ⟨rfl, rfl, trivial⟩
+  | d + 1, 1, [], h => by simp at h
+  | d + 1, n + 2, l, h => by
+    have hh : (n + 2) / 2 ≤ l.length := by omega
+    obtain ⟨p1, p2, p3⟩ := LTree.ofPrefix_spec d ((n + 2) / 2) l hh
+    have hq : n + 2 - (n + 2) / 2 ≤ (LTree.ofPrefix d ((n + 2) / 2) l).2.length := by
+      rw [p2, List.length_drop]; omega
+    obtain ⟨q1, q2, q3⟩ := LTree.ofPrefix_spec d (n + 2 - (n + 2) / 2) _ hq
+    refine ⟨?_, ?_, ?_, p3, q3⟩
+    · simp only [LTree.ofPrefix, LTree.toList]
+      rw [p1, q1, p2, ← List.take_add]; congr 1; omega
+    · simp only [LTree.ofPrefix]
+      rw [q2, p2, List.drop_drop]; congr 1; omega
+    · rw [p1, List.length_take]; omega
+
+def LTree.ofList {α : Type} (l : List α) : LTree α := (LTree.ofPrefix 64 l.length l).1
+
+theorem LTree.get?_ofList {α : Type} (l : List α) (j : Nat) : (LTree.ofList l).get? j = l[j]? := by
+  obtain ⟨h1, _, h3⟩ := LTree.ofPrefix_spec 64 l.length l (Nat.le_refl _)
+  rw [LTree.ofList, LTree.get?_eq _ h3, h1, List.take_length]
+
+/-! ### Names as numbers -/
+
+def nameKeyL : List Nat → Nat
+  | [] => 0
+  | b :: l => b + 1 + 257 * nameKeyL l
+
+theorem nameKeyL_inj : ∀ {a b : List Nat}, (∀ x ∈ a, x < 256) → (∀ x ∈ b, x < 256) → nameKeyL a = nameKeyL b → a = b
+  | [], [], _, _, _ => rfl
+  | [], _ :: _, _, _, h => by simp only [nameKeyL] at h; omega
+  | _ :: _, [], _, _, h => by simp only [nameKeyL] at h; omega
+  | x :: a, y :: b, ha, hb, h => by
+    simp only [nameKeyL] at h
+    have hx := ha x (List.mem_cons_self ..)
+    have hy := hb y (List.mem_cons_self ..)
+    have hxy : x = y := by omega
+    subst hxy
+    have : nameKeyL a = nameKeyL b := by omega
+    rw [nameKeyL_inj (fun z hz => ha z (List.mem_cons_of_mem _ hz)) (fun z hz => hb z (List.mem_cons_of_mem _ hz)) this]
+
+/-- A name as a number: its UTF-8 bytes, little-endian in base 257, digits from 1. -/
+def nameKey (s : String) : Nat := nameKeyL (s.toByteArray.data.toList.map UInt8.toNat)
+
+theorem nameKey_inj {a b : String} (h : nameKey a = nameKey b) : a = b := by
+  obtain ⟨⟨da⟩, ha⟩ := a
+  obtain ⟨⟨db⟩, hb⟩ := b
+  have hlt : ∀ (d : Array UInt8), ∀ x ∈ d.toList.map UInt8.toNat, x < 256 := by
+    intro d x hx
+    obtain ⟨u, _, rfl⟩ := List.mem_map.mp hx
+    exact u.toNat_lt
+  have h1 := nameKeyL_inj (hlt da) (hlt db) h
+  have h2 : da.toList = db.toList := (List.map_inj_right (fun x y hxy => UInt8.toNat_inj.mp hxy)).mp h1
+  have h3 : da = db := Array.toList_inj.mp h2
+  subst h3
+  rfl
+
+theorem nameKey_beq (a b : String) : (nameKey a == nameKey b) = decide (a = b) := by
+  by_cases h : a = b
+  · subst h; simp
+  · simp only [h, decide_false, beq_eq_false_iff_ne, ne_eq]
+    exact fun hk => h (nameKey_inj hk)
+
+/-- Node equality through `nameKey`. -/
+def nodeEqF (a b : Node) : Bool := a.x == b.x && a.y == b.y && nameKey a.w == nameKey b.w
+
+theorem nodeEqF_iff {a b : Node} : nodeEqF a b = true ↔ a = b := by
+  obtain ⟨ax, ay, aw⟩ := a
+  obtain ⟨bx, by_, bw⟩ := b
+  simp only [nodeEqF, nameKey_beq, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, Node.mk.injEq, and_assoc]
+
+theorem nodeEqF_eq (a b : Node) : nodeEqF a b = (a == b) := by
+  rw [Bool.eq_iff_iff, nodeEqF_iff, beq_iff_eq]
+
+/-- Strictly increasing. -/
+def keysAsc : List Nat → Bool
+  | a :: b :: rest => a < b && keysAsc (b :: rest)
+  | _ => true
+
+theorem keysAsc_pairwise : ∀ l : List Nat, keysAsc l = true → l.Pairwise (· < ·)
+  | [], _ => List.Pairwise.nil
+  | [_], _ => List.pairwise_singleton _ _
+  | a :: b :: rest, h => by
+    simp only [keysAsc, Bool.and_eq_true, decide_eq_true_eq] at h
+    have ih := keysAsc_pairwise (b :: rest) h.2
+    refine List.Pairwise.cons (fun c hc => ?_) ih
+    rcases List.mem_cons.mp hc with rfl | hc
+    · exact h.1
+    · exact Nat.lt_trans h.1 (List.rel_of_pairwise_cons ih hc)
+
+theorem distinctNames_of_pairwise : ∀ l : List String, l.Pairwise (· ≠ ·) → distinctNames l = true
+  | [], _ => rfl
+  | n :: ns, h => by
+    obtain ⟨h1, h2⟩ := List.pairwise_cons.mp h
+    simp only [distinctNames, Bool.and_eq_true, Bool.not_eq_true', distinctNames_of_pairwise ns h2, and_true]
+    rw [Bool.eq_false_iff]
+    intro hc
+    exact h1 n (List.contains_iff_mem.mp hc) rfl
+
+theorem distinctNames_of_keys {l : List String} (h : keysAsc (l.map nameKey) = true) : distinctNames l = true :=
+  distinctNames_of_pairwise l
+    ((List.pairwise_map.mp (keysAsc_pairwise _ h)).imp fun hlt heq => by rw [heq] at hlt; exact Nat.lt_irrefl _ hlt)
+
+/-! ### The tile models, the terminals and the path ends, through trees -/
+
+/-- `prims[k]`, through a tree. -/
+def TileModel.primAt (tm : TileModel) (k : Nat) : Option (String × SmPrim) := (LTree.ofList tm.sm.prims).get? k
+
+/-- `pos[i]`, through a tree. -/
+def TileModel.posAt (tm : TileModel) (i : Nat) : Nat := ((LTree.ofList tm.pos).get? i).getD 0
+
+theorem TileModel.posAt_eq (tm : TileModel) (i : Nat) : tm.posAt i = tm.pos.getD i 0 := by
+  simp [TileModel.posAt, LTree.get?_ofList, List.getD_eq_getElem?_getD]
+
+/-- `Cert.target`, with the entry's tile model given and names compared by key. -/
+def targetF (tm : Option TileModel) (e : Entry) : Option End :=
+  match e.hop with
+  | .wire s => some (.node s)
+  | .sm k i =>
+    match tm with
+    | none => none
+    | some tm =>
+      match tm.primAt k with
+      | none => none
+      | some (o, p) =>
+        if nameKey o == nameKey e.node.w then
+          match p.ins[i]? with
+          | some (.port m) => some (.node ⟨e.node.x, e.node.y, m⟩)
+          | some (.const c) => some (.const c)
+          | none => none
+        else none
+
+theorem targetF_tileOf (C : Cert) (e : Entry) : targetF (C.tileOf e.node.x e.node.y) e = C.target e := by
+  simp only [targetF, Cert.target, TileModel.primAt, LTree.get?_ofList, nameKey_beq, decide_eq_true_eq]
+
+/-- The table as a tree. -/
+def Cert.etree (C : Cert) : LTree Entry := LTree.ofList C.entries
+
+/-- The cone's terminals: the gates' cells' `O`, then the input pads. -/
+def Cert.terms (C : Cert) : List Node := C.gates.map (fun gc => cellNode gc.x gc.y gc.pre "O") ++ C.pads.map (·.2)
+
+/-- The terminals in tile `(x, y)`. -/
+def Cert.termsAt (C : Cert) (x y : Nat) : List Node := C.terms.filter fun m => m.x == x && m.y == y
+
+theorem Cert.knownTerm_eq (C : Cert) (m : Node) : C.knownTerm m = C.terms.contains m := by
+  rw [Bool.eq_iff_iff]
+  simp only [Cert.knownTerm, Cert.terms, Bool.or_eq_true, List.any_eq_true, beq_iff_eq, List.elem_iff,
+    List.mem_append, List.mem_map]
+
+theorem Cert.termsAt_any (C : Cert) {m : Node} {x y : Nat} (hx : m.x = x) (hy : m.y = y) :
+    (C.termsAt x y).any (nodeEqF m) = C.knownTerm m := by
+  rw [C.knownTerm_eq, Bool.eq_iff_iff]
+  simp only [Cert.termsAt, List.any_eq_true, nodeEqF_iff, List.mem_filter, List.contains_iff_mem]
+  constructor
+  · rintro ⟨n, ⟨hn, _⟩, rfl⟩; exact hn
+  · intro hm; exact ⟨m, ⟨hm, by simp [hx, hy]⟩, rfl⟩
+
+/-- A path end as a number: `0`, `1` the constants, `k + 2` terminal `k` (`Cert.terms`). -/
+def Cert.endCode (C : Cert) : Nat → Option End
+  | 0 => some (.const false)
+  | 1 => some (.const true)
+  | k + 2 => C.terms[k]?.map .node
+
+theorem Cert.endCode_node (C : Cert) {c : Nat} {m : Node} (h : C.endCode c = some (.node m)) :
+    C.knownTerm m = true := by
+  rw [C.knownTerm_eq]
+  match c, h with
+  | k + 2, h =>
+    simp only [Cert.endCode] at h
+    obtain ⟨_, hm', he⟩ := Option.map_eq_some_iff.mp h
+    cases he
+    exact List.contains_iff_mem.mpr (List.mem_of_getElem? hm')
+
+def Cert.endCodeF (C : Cert) : Nat → Option End
+  | 0 => some (.const false)
+  | 1 => some (.const true)
+  | k + 2 => ((LTree.ofList C.terms).get? k).map .node
+
+theorem Cert.endCodeF_eq (C : Cert) (c : Nat) : C.endCodeF c = C.endCode c := by
+  match c with
+  | 0 => rfl
+  | 1 => rfl
+  | k + 2 => simp only [Cert.endCodeF, Cert.endCode, LTree.get?_ofList]
+
+/-- The path-end witness as a tree, indexed like `Cert.entries`. -/
+def endsTree (ends : List (List Nat)) : LTree Nat := LTree.ofList ends.flatten
+
+/-! ### One entry, one chunk -/
+
+/-- `Cert.entryOK` for an entry with path-end code `c`, and that code one hop on: a constant's code, the code of
+the entry it reads, or the terminal it reads. -/
+def Cert.entryOKE (C : Cert) (ends : List (List Nat)) (tm : Option TileModel) (ts : List Node) (e : Entry) (c : Nat) :
+    Bool :=
+  !ts.any (nodeEqF e.node) && e.rank < C.entries.length &&
+  match targetF tm e with
+  | some (.const b) => e.next == none && c == (if b then 1 else 0)
+  | some (.node m) =>
+    match e.next with
+    | some j' =>
+      match C.etree.get? j', (endsTree ends).get? j' with
+      | some e', some c' => nodeEqF e'.node m && e'.rank < e.rank && c == c'
+      | _, _ => false
+    | none =>
+      match C.endCodeF c with
+      | some (.node m') => nodeEqF m' m
+      | _ => false
+  | none => false
+
+/-- `Cert.entryOKE` in the entry's own tile. -/
+def Cert.entryOKC (C : Cert) (ends : List (List Nat)) (e : Entry) (c : Nat) : Bool :=
+  C.entryOKE ends (C.tileOf e.node.x e.node.y) (C.termsAt e.node.x e.node.y) e c
+
+theorem Cert.entryOKC_entryOK {C : Cert} {ends : List (List Nat)} {e : Entry} {c : Nat}
+    (h : C.entryOKC ends e c = true) : C.entryOK e = true := by
+  simp only [Cert.entryOKC, Cert.entryOKE, C.termsAt_any rfl rfl, targetF_tileOf, Cert.etree, endsTree,
+    LTree.get?_ofList, Cert.endCodeF_eq, Bool.and_eq_true] at h
+  obtain ⟨⟨hk, hr⟩, h⟩ := h
+  simp only [Cert.entryOK, Bool.and_eq_true, hk, hr, true_and]
+  split at h
+  · rename_i b hb; simp only [Bool.and_eq_true] at h ⊢; exact h.1
+  · rename_i m hm
+    cases hn : e.next with
+    | some j' =>
+      simp only [hn] at h ⊢
+      cases he' : C.entries[j']? with
+      | none => simp [he'] at h
+      | some e' =>
+        cases hc' : ends.flatten[j']? with
+        | none => simp [he', hc'] at h
+        | some c' =>
+          simp only [he', hc', Bool.and_eq_true, nodeEqF_eq] at h ⊢; exact h.1
+    | none =>
+      simp only [hn] at h ⊢
+      cases hc : C.endCode c with
+      | none => simp [hc] at h
+      | some r =>
+        cases r with
+        | const _ => simp [hc] at h
+        | node m' =>
+          simp only [hc, nodeEqF_iff] at h
+          subst h
+          exact C.endCode_node hc
+  · simp at h
+
+/-- **The path ends are the codes.** If every entry is consistent with its code, following the table from any
+entry ends where its code says. -/
+theorem Cert.follow_code {C : Cert} {ends : List (List Nat)}
+    (hE : ∀ (j : Nat) (e : Entry) (c : Nat), C.entries[j]? = some e → ends.flatten[j]? = some c → C.entryOKC ends e c = true) :
+    ∀ (f j : Nat) (e : Entry) (c : Nat), C.entries[j]? = some e → ends.flatten[j]? = some c → e.rank < f → C.follow f j = C.endCode c
+  | 0, _, _, _, _, _, h => absurd h (by omega)
+  | f + 1, j, e, c, he, hc, hr => by
+    have h := hE j e c he hc
+    simp only [Cert.entryOKC, Cert.entryOKE, targetF_tileOf, Cert.etree, endsTree, LTree.get?_ofList,
+      Cert.endCodeF_eq, Bool.and_eq_true] at h
+    obtain ⟨_, h⟩ := h
+    simp only [Cert.follow, he]
+    split at h
+    · rename_i b hb
+      simp only [Bool.and_eq_true, beq_iff_eq] at h
+      obtain ⟨_, rfl⟩ := h
+      simp only [hb]
+      cases b <;> rfl
+    · rename_i m hm
+      split at h
+      · rename_i j' hn
+        split at h
+        · rename_i e' c' he' hc'
+          simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h
+          obtain ⟨⟨_, hlt⟩, rfl⟩ := h
+          simp only [hm, hn]
+          exact Cert.follow_code hE f j' e' c he' hc' (by omega)
+        · simp at h
+      · rename_i hn
+        simp only [hm, hn]
+        split at h
+        · rename_i m' hc'
+          rw [nodeEqF_iff] at h; subst h
+          exact hc'.symm
+        · simp at h
+    · simp at h
+
+/-- A chunk, each entry with its path-end code: as long as its codes, names strictly increasing by key, every
+entry in the chunk's tile and consistent with its code. -/
+def Cert.chunkOKE (C : Cert) (ends : List (List Nat)) (ch : (Nat × Nat) × List Entry) (cs : List Nat) : Bool :=
+  ch.2.length == cs.length && keysAsc (ch.2.map (nameKey ·.node.w)) &&
+  (ch.2.zip cs).all fun p => p.1.node.x == ch.1.1 && p.1.node.y == ch.1.2 &&
+    C.entryOKE ends (C.tileOf ch.1.1 ch.1.2) (C.termsAt ch.1.1 ch.1.2) p.1 p.2
+
+theorem Cert.chunkOKE_sound {C : Cert} {ends : List (List Nat)} {ch : (Nat × Nat) × List Entry} {cs : List Nat}
+    (h : C.chunkOKE ends ch cs = true) :
+    ch.2.length = cs.length ∧ C.chunkOK ch = true ∧ ∀ p ∈ ch.2.zip cs, C.entryOKC ends p.1 p.2 = true := by
+  simp only [Cert.chunkOKE, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at h
+  obtain ⟨⟨hl, hk⟩, hall⟩ := h
+  have hC : ∀ p ∈ ch.2.zip cs, C.entryOKC ends p.1 p.2 = true := by
+    intro p hp
+    obtain ⟨⟨hx, hy⟩, hok⟩ := hall p hp
+    simp only [Cert.entryOKC, hx, hy]; exact hok
+  have hmem : ∀ e ∈ ch.2, ∃ c, (e, c) ∈ ch.2.zip cs := by
+    intro e he
+    obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem he
+    refine ⟨cs[i]'(by omega), ?_⟩
+    have hz : i < (ch.2.zip cs).length := by simp; omega
+    have := List.getElem_mem hz
+    simpa using this
+  refine ⟨hl, ?_, hC⟩
+  simp only [Cert.chunkOK, Bool.and_eq_true, List.all_eq_true, beq_iff_eq]
+  refine ⟨⟨fun e he => ?_, ?_⟩, fun e he => ?_⟩
+  · obtain ⟨c, hc⟩ := hmem e he
+    exact (hall _ hc).1
+  · have := distinctNames_of_keys (l := ch.2.map (·.node.w)) (by rw [List.map_map]; exact hk)
+    exact this
+  · obtain ⟨c, hc⟩ := hmem e he
+    exact Cert.entryOKC_entryOK (hC _ hc)
+
+/-- Chunk `c` with its codes. -/
+def Cert.chunkAtE (C : Cert) (ends : List (List Nat)) (c : Nat) : Bool :=
+  match C.chunks[c]?, ends[c]? with
+  | some ch, some cs => C.chunkOKE ends ch cs
+  | _, _ => false
+
+theorem zip_flatten {α β : Type} : ∀ (A : List (List α)) (B : List (List β)), A.length = B.length →
+    (∀ (i : Nat) (a : List α) (b : List β), A[i]? = some a → B[i]? = some b → a.length = b.length) →
+    A.flatten.zip B.flatten = (A.zip B).flatMap (fun p => p.1.zip p.2)
+  | [], [], _, _ => rfl
+  | [], _ :: _, h, _ => by simp at h
+  | _ :: _, [], h, _ => by simp at h
+  | a :: A, b :: B, h, hl => by
+    simp only [List.flatten_cons, List.zip_cons_cons, List.flatMap_cons]
+    rw [List.zip_append (hl 0 a b rfl rfl), zip_flatten A B (by simpa using h) (fun i a b ha hb => hl (i + 1) a b ha hb)]
+
+/-- **Every chunk with its codes, read back per entry.** -/
+theorem Cert.chunks_codes {C : Cert} {ends : List (List Nat)} (hlen : C.chunks.length = ends.length)
+    (h : ∀ c < C.chunks.length, C.chunkAtE ends c = true) :
+    (∀ ch ∈ C.chunks, C.chunkOK ch = true) ∧ C.entries.length = ends.flatten.length ∧
+      ∀ (j : Nat) (e : Entry) (c : Nat), C.entries[j]? = some e → ends.flatten[j]? = some c → C.entryOKC ends e c = true := by
+  have hc : ∀ (i : Nat) (ch : (Nat × Nat) × List Entry) (cs : List Nat), C.chunks[i]? = some ch → ends[i]? = some cs →
+      ch.2.length = cs.length ∧ C.chunkOK ch = true ∧ ∀ p ∈ ch.2.zip cs, C.entryOKC ends p.1 p.2 = true := by
+    intro i ch cs h1 h2
+    have hi : i < C.chunks.length := (List.getElem?_eq_some_iff.mp h1).1
+    have := h i hi
+    simp only [Cert.chunkAtE, h1, h2] at this
+    exact Cert.chunkOKE_sound this
+  have hA : C.entries = (C.chunks.map (·.2)).flatten := by simp [Cert.entries, List.flatMap_def]
+  have hl : ∀ (i : Nat) (a : List Entry) (b : List Nat), (C.chunks.map (·.2))[i]? = some a → ends[i]? = some b →
+      a.length = b.length := by
+    intro i a b ha hb
+    simp only [List.getElem?_map, Option.map_eq_some_iff] at ha
+    obtain ⟨ch, hch, rfl⟩ := ha
+    exact (hc i ch b hch hb).1
+  have hZ := zip_flatten (C.chunks.map (·.2)) ends (by simpa using hlen) hl
+  refine ⟨fun ch hch => ?_, ?_, fun j e c he hcj => ?_⟩
+  · obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hch
+    have hi' : i < ends.length := by omega
+    exact (hc i _ ends[i] (List.getElem?_eq_getElem hi) (List.getElem?_eq_getElem hi')).2.1
+  · rw [hA, List.length_flatten, List.length_flatten]
+    congr 1
+    apply List.ext_getElem (by simpa using hlen)
+    intro i h1 h2
+    simp only [List.getElem_map]
+    exact (hc i _ _ (List.getElem?_eq_getElem (by simpa using h1)) (List.getElem?_eq_getElem (by simpa using h2))).1
+  · have hm : (e, c) ∈ C.entries.zip ends.flatten := by
+      have : (C.entries.zip ends.flatten)[j]? = some (e, c) := List.getElem?_zip_eq_some.mpr ⟨he, hcj⟩
+      exact List.mem_of_getElem? this
+    rw [hA, hZ] at hm
+    obtain ⟨p, hp, hpe⟩ := List.mem_flatMap.mp hm
+    obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hp
+    simp only [List.getElem_zip, List.getElem_map] at hpe
+    have hi1 : i < C.chunks.length := by simp at hi; omega
+    have hi2 : i < ends.length := by simp at hi; omega
+    exact (hc i _ _ (List.getElem?_eq_getElem hi1) (List.getElem?_eq_getElem hi2)).2.2 _ hpe
+
+/-! ### Gates, flops and outputs -/
+
+/-- `Cert.startOK`, the path end read from the codes. -/
+def Cert.startOKE (C : Cert) (ends : List (List Nat)) (j : Nat) (n : Node) (l : Lit) : Bool :=
+  match C.etree.get? j, (endsTree ends).get? j with
+  | some e, some c =>
+    nodeEqF e.node n &&
+    match C.endCodeF c with
+    | some r => C.litEnd l r
+    | none => false
+  | _, _ => false
+
+theorem Cert.startOKE_sound {C : Cert} {ends : List (List Nat)}
+    (hE : ∀ (j : Nat) (e : Entry) (c : Nat), C.entries[j]? = some e → ends.flatten[j]? = some c → C.entryOKC ends e c = true)
+    {j : Nat} {n : Node} {l : Lit} (h : C.startOKE ends j n l = true) : C.startOK j n l = true := by
+  simp only [Cert.startOKE, Cert.etree, endsTree, LTree.get?_ofList, Cert.endCodeF_eq] at h
+  split at h
+  · rename_i e c he hc
+    simp only [Bool.and_eq_true, nodeEqF_iff] at h
+    obtain ⟨rfl, h⟩ := h
+    have hr := (Cert.entryOK_spec (Cert.entryOKC_entryOK (hE j e c he hc))).2.1
+    simp only [Cert.startOK, he, Option.map_some, beq_self_eq_true, Bool.true_and, Cert.endOf,
+      Cert.follow_code hE _ j e c he hc hr]
+    exact h
+  · simp at h
+
+def Cert.inOKE (C : Cert) (ends : List (List Nat)) (gc : GateCert) (init : BitVec 16) (i : Nat) (port : String)
+    (l : Lit) : Option Nat → Bool
+  | some j => C.startOKE ends j (cellNode gc.x gc.y gc.pre port) l
+  | none => l == .const false && ignores init i
+
+def Cert.gateOKE (C : Cert) (ends : List (List Nat)) (g : Gate) (gc : GateCert) : Bool :=
+  (C.cellOff gc.x gc.y gc.pre).isSome &&
+  match gc.ins with
+  | [p0, p1, p2, p3] =>
+    C.inOKE ends gc g.init 0 "I0" g.i0 p0 && C.inOKE ends gc g.init 1 "I1" g.i1 p1 &&
+      C.inOKE ends gc g.init 2 "I2" g.i2 p2 && C.inOKE ends gc g.init 3 "I3" g.i3 p3
+  | _ => false
+
+def Cert.flopOKE (C : Cert) (ends : List (List Nat)) (nG : Nat) (f : Flop) (fc : FlopCert) : Bool :=
+  f.d == .gate fc.gate && fc.gate < nG &&
+  (match C.gates[fc.gate]? with
+    | some g => g.isFlop && g.x == fc.x && g.y == fc.y && g.pre == fc.pre
+    | none => false) &&
+  f.en.below nG && f.sr.below nG &&
+  C.startOKE ends fc.en (cellNode fc.x fc.y fc.pre "EN") f.en &&
+    C.startOKE ends fc.sr (cellNode fc.x fc.y fc.pre "SR") f.sr
+
+def Cert.gateAtE (C : Cert) (N : Net) (ends : List (List Nat)) (k : Nat) : Bool :=
+  match N.gates[k]?, C.gates[k]? with
+  | some g, some gc => C.gateOKE ends g gc
+  | _, _ => false
+
+def Cert.flopAtE (C : Cert) (N : Net) (ends : List (List Nat)) (k : Nat) : Bool :=
+  match N.flops[k]?, C.flops[k]? with
+  | some f, some fc => C.flopOKE ends N.gates.length f fc
+  | _, _ => false
+
+def Cert.outAtE (C : Cert) (N : Net) (ends : List (List Nat)) (k : Nat) : Bool :=
+  match N.outs[k]?, C.outs[k]? with
+  | some (p, l), some (p', n, j) => p == p' && l.below N.gates.length && C.startOKE ends j n l
+  | _, _ => false
+
+section
+variable {C : Cert} {N : Net} {ends : List (List Nat)}
+  (hE : ∀ (j : Nat) (e : Entry) (c : Nat), C.entries[j]? = some e → ends.flatten[j]? = some c → C.entryOKC ends e c = true)
+include hE
+
+theorem Cert.inOKE_sound {gc : GateCert} {init : BitVec 16} {i : Nat} {port : String} {l : Lit} {p : Option Nat}
+    (h : C.inOKE ends gc init i port l p = true) : C.inOK gc init i port l p = true := by
+  cases p with
+  | none => exact h
+  | some j => exact Cert.startOKE_sound hE h
+
+theorem Cert.gateAtE_sound {k : Nat} (h : C.gateAtE N ends k = true) : C.gateAt N k = true := by
+  unfold Cert.gateAtE at h
+  unfold Cert.gateAt
+  split at h
+  · rename_i g gc _ _
+    unfold Cert.gateOKE at h
+    unfold Cert.gateOK
+    simp only [Bool.and_eq_true] at h ⊢
+    refine ⟨h.1, ?_⟩
+    have h2 := h.2
+    split at h2
+    · rename_i p0 p1 p2 p3 hins
+      simp only [Bool.and_eq_true] at h2 ⊢
+      exact ⟨⟨⟨Cert.inOKE_sound hE h2.1.1.1, Cert.inOKE_sound hE h2.1.1.2⟩, Cert.inOKE_sound hE h2.1.2⟩,
+        Cert.inOKE_sound hE h2.2⟩
+    · simp at h2
+  · simp at h
+
+theorem Cert.flopAtE_sound {k : Nat} (h : C.flopAtE N ends k = true) : C.flopAt N k = true := by
+  unfold Cert.flopAtE at h
+  unfold Cert.flopAt
+  split at h
+  · unfold Cert.flopOKE at h
+    unfold Cert.flopOK
+    simp only [Bool.and_eq_true] at h ⊢
+    exact ⟨⟨h.1.1, Cert.startOKE_sound hE h.1.2⟩, Cert.startOKE_sound hE h.2⟩
+  · simp at h
+
+theorem Cert.outAtE_sound {k : Nat} (h : C.outAtE N ends k = true) : C.outAt N k = true := by
+  unfold Cert.outAtE at h
+  unfold Cert.outAt
+  split at h
+  · simp only [Bool.and_eq_true] at h ⊢
+    exact ⟨h.1, Cert.startOKE_sound hE h.2⟩
+  · simp at h
+
+end
+
+/-- **The check, kernel-cheap**, given the path-end codes `ends` (chunked like the table). -/
+def Cert.checkF (C : Cert) (N : Net) (ends : List (List Nat)) : Bool :=
+  C.models.all (·.sm.wf) && N.gates.length == C.gates.length && N.flops.length == C.flops.length &&
+  N.outs.length == C.outs.length && chunksSorted C.chunks && C.chunks.length == ends.length &&
+  (List.range C.chunks.length).all (C.chunkAtE ends) && distinctNodes C.terms &&
+  (List.range N.gates.length).all (C.gateAtE N ends) && (List.range N.flops.length).all (C.flopAtE N ends) &&
+  (List.range N.outs.length).all (C.outAtE N ends)
+
+/-- **`Cert.checkF` is sound for `Cert.check`**, whatever the codes. -/
+theorem Cert.checkF_sound {C : Cert} {N : Net} {ends : List (List Nat)} (h : C.checkF N ends = true) :
+    C.check N = true := by
+  simp only [Cert.checkF, Bool.and_eq_true, beq_iff_eq, List.all_eq_true, List.mem_range] at h
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hw, hg⟩, hf⟩, ho⟩, hs⟩, hlen⟩, hch⟩, hd⟩, hG⟩, hF⟩, hO⟩ := h
+  obtain ⟨hok, _, hE⟩ := Cert.chunks_codes hlen hch
+  simp only [Cert.terms] at hd
+  refine Cert.check_of C N (List.all_eq_true.mpr hw) (by simp [hg, hf, ho]) hs hok hd ?_ ?_ ?_
+  · exact List.all_eq_true.mpr fun k hk => Cert.gateAtE_sound hE (hG k (List.mem_range.mp hk))
+  · exact List.all_eq_true.mpr fun k hk => Cert.flopAtE_sound hE (hF k (List.mem_range.mp hk))
+  · exact List.all_eq_true.mpr fun k hk => Cert.outAtE_sound hE (hO k (List.mem_range.mp hk))
+
+/-- **`Cert.checkF`, from its pieces**: one block of chunks, gates, flops or outputs at a time. -/
+theorem Cert.checkF_of (C : Cert) (N : Net) (ends : List (List Nat)) (hw : C.models.all (·.sm.wf) = true)
+    (hl : N.gates.length == C.gates.length && N.flops.length == C.flops.length && N.outs.length == C.outs.length &&
+      C.chunks.length == ends.length)
+    (hs : chunksSorted C.chunks = true) (hch : (List.range C.chunks.length).all (C.chunkAtE ends) = true)
+    (hd : distinctNodes C.terms = true) (hg : (List.range N.gates.length).all (C.gateAtE N ends) = true)
+    (hf : (List.range N.flops.length).all (C.flopAtE N ends) = true)
+    (ho : (List.range N.outs.length).all (C.outAtE N ends) = true) : C.checkF N ends = true := by
+  simp only [Bool.and_eq_true] at hl
+  simp only [Cert.checkF, Bool.and_eq_true, hw, hl, hs, hch, hd, hg, hf, ho, and_self]
+
+/-! ### The required bits, through trees -/
+
+/-- `P` of chunk `c`, `false` past the end. -/
+def Cert.chunkAt (C : Cert) (P : (Nat × Nat) × List Entry → Bool) (c : Nat) : Bool := (C.chunks[c]?.map P).getD false
+
+theorem Cert.all_chunks_of {C : Cert} {P : (Nat × Nat) × List Entry → Bool}
+    (h : (List.range C.chunks.length).all (C.chunkAt P) = true) : ∀ ch ∈ C.chunks, P ch = true := by
+  intro ch hch
+  obtain ⟨c, hc, rfl⟩ := List.getElem_of_mem hch
+  have := List.all_eq_true.mp h c (List.mem_range.mpr hc)
+  simpa [Cert.chunkAt, hc] using this
+
+/-- `Cert.entryReqs`, with the entry's tile model given. -/
+def entryReqsAt (tm : Option TileModel) (e : Entry) : List BitReq :=
+  match e.hop with
+  | .wire _ => []
+  | .sm k i =>
+    match tm with
+    | none => []
+    | some tm =>
+      match tm.primAt k with
+      | none => []
+      | some (_, p) => (List.range p.selBits).map fun c =>
+          (e.node.x, e.node.y, tm.posAt (tm.smOff + (p.base + c)), i.testBit c)
+
+theorem entryReqsAt_tileOf (C : Cert) (e : Entry) : entryReqsAt (C.tileOf e.node.x e.node.y) e = C.entryReqs e := by
+  simp only [entryReqsAt, Cert.entryReqs, TileModel.primAt, LTree.get?_ofList, TileModel.posAt_eq]
+
+/-- The select bits of a chunk's entries, in the chunk's tile. -/
+def chunkReqsOK (C : Cert) (P : BitReq → Bool) (ch : (Nat × Nat) × List Entry) : Bool :=
+  ch.2.all fun e => e.node.x == ch.1.1 && e.node.y == ch.1.2 && (entryReqsAt (C.tileOf ch.1.1 ch.1.2) e).all P
+
+def Cert.cellReqsF (C : Cert) (x y : Nat) (pre : String) (init : BitVec 16) (ff : Bool) : List BitReq :=
+  match C.tileOf x y, C.cellOff x y pre with
+  | some tm, some co =>
+    (List.range 16).map (fun j => (x, y, tm.posAt (co + j), init.getLsbD j)) ++
+      [(x, y, tm.posAt (co + 16), ff), (x, y, tm.posAt (co + 17), false)]
+  | _, _ => []
+
+def Cert.rvReqF (C : Cert) (x y : Nat) (pre : String) (rv : Bool) : List BitReq :=
+  match C.tileOf x y, C.cellOff x y pre with
+  | some tm, some co => [(x, y, tm.posAt (co + 18), rv)]
+  | _, _ => []
+
+theorem Cert.cellReqsF_eq (C : Cert) : C.cellReqsF = C.cellReqs := by
+  funext x y pre init ff; simp only [Cert.cellReqsF, Cert.cellReqs, TileModel.posAt_eq]
+
+theorem Cert.rvReqF_eq (C : Cert) : C.rvReqF = C.rvReq := by
+  funext x y pre rv; simp only [Cert.rvReqF, Cert.rvReq, TileModel.posAt_eq]
+
+/-- The required bits, from per-block pieces over the trees. -/
+theorem Cert.required_ofF (C : Cert) (N : Net) (b : Bits)
+    (hE : (List.range C.chunks.length).all (C.chunkAt (chunkReqsOK C fun r => b r.1 r.2.1 r.2.2.1 == r.2.2.2)) = true)
+    (hG : (List.range N.gates.length).all (fun k => (match N.gates[k]?, C.gates[k]? with
+      | some g, some gc => C.cellReqsF gc.x gc.y gc.pre g.init gc.isFlop
+      | _, _ => []).all (fun r => b r.1 r.2.1 r.2.2.1 == r.2.2.2)) = true)
+    (hF : (List.range N.flops.length).all (fun k => (match N.flops[k]?, C.flops[k]? with
+      | some f, some fc => C.rvReqF fc.x fc.y fc.pre f.rv
+      | _, _ => []).all (fun r => b r.1 r.2.1 r.2.2.1 == r.2.2.2)) = true) :
+    ∀ r ∈ C.required N, b r.1 r.2.1 r.2.2.1 = r.2.2.2 := by
+  rw [Cert.cellReqsF_eq] at hG
+  rw [Cert.rvReqF_eq] at hF
+  refine C.required_of N b (fun ch hch => ?_) hG hF
+  have h := Cert.all_chunks_of hE ch hch
+  simp only [chunkReqsOK, List.all_eq_true, Bool.and_eq_true, beq_iff_eq] at h
+  refine List.all_eq_true.mpr fun r hr => ?_
+  obtain ⟨e, he, hr⟩ := List.mem_flatMap.mp hr
+  obtain ⟨⟨hx, hy⟩, hreq⟩ := h e he
+  rw [← hx, ← hy, entryReqsAt_tileOf] at hreq
+  simpa using hreq r hr
 
 end Obend.Hardware.Fabulous
