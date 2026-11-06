@@ -206,8 +206,10 @@ Accounts: v2 written
 ## 6. The proposals come back
 
 Each is judged against Alice's own copy of the form (the proposal names its digest), the membrane
-first, then the form's resources, then the pins (the captured pages must be as captured), then each
-page it writes as a write of that page under the laws as they stand now, laws over links included.
+first, then the form's resources, then the pins (the captured pages must be as captured), then the
+one turn over every page it writes: each page's write judged as any write of it is, under the laws as
+they stand now, the laws over links read on the turn's tip (every page of the turn at its new state),
+and all of it landed or none.
 
 The guessed page is refused by the membrane before anything is read, in the words it would use
 for a page that does not exist (`judgeProposal_gate_first`):
@@ -252,6 +254,17 @@ cd alice && obend judge ../over.json
 pay: at ledger/bob: refused by Accounts: cap (a law over Accounts's links, of which ledger/bob is one): `linked.balance <= 100` does not hold; the line `balance: 100` would pass (the page has `balance: 110`)
 ```
 
+The proposal is one turn: Alice's leg alone would have passed, and it did not land either.
+
+```sh
+cd alice && grep balance ledger/alice.md ledger/bob.md
+```
+
+```text
+ledger/alice.md:balance: 100
+ledger/bob.md:balance: 20
+```
+
 The large one takes more than Alice holds: the amount was a hole, and the resources are discharged
 at the fill.
 
@@ -273,15 +286,15 @@ cd alice && obend judge ../low.json
 pay: at ledger/alice: refused by Accounts: floor (a law over Accounts's links, of which ledger/alice is one): `not (linked.balance <= 4)` does not hold; the line `balance: 5` would pass (the page has `balance: 4`)
 ```
 
-The one Bob meant lands as one turn: both pages written, the total moved conserved, a receipt linked
-onto the chain.
+The one Bob meant lands as one turn: both pages written at once, each judged by its laws and the
+laws over links on the turn's tip, the total moved conserved, one receipt linked onto the chain.
 
 ```sh
 cd alice && obend judge ../pay.json && cat ledger/alice.md ledger/carol.md && obend status ledger/carol
 ```
 
 ```text
-pay: landed as one turn by bob, receipt e9f9ead2024462f9 (1 in the chain)
+pay: landed as one turn over 2 pages by bob, receipt 2f06af57e712e4d3 (1 in the chain)
   ledger/alice: balance 100 → 60
   ledger/carol: balance 5 → 45
 rendered ledger/alice.md

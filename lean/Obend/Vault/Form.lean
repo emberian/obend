@@ -7,8 +7,9 @@ situation into a MEMBRANE (the per-viewer, cap-bounded capture of `Obend.Vault.R
 viewer's grant shows, culled by name and by cap, the rest absent); substitutes variables for some of
 its data (`abstract`), so the capture becomes a FORM; hands the form to someone else, who fills it
 offline (`fill`) and sends back a PROPOSAL; and the proposal comes back to the vault, where the kernel
-judges it as it judges any write (`judgeProposal`: each page it writes through `commit`, the laws as
-they stand, laws over links included). The refusal names what refused: the membrane, the form's
+judges it as it judges any write, as one turn (`judgeProposal`: every page it writes prepared and
+judged by `commit`'s own steps, `Obend.Vault.prepareWrite` and `judgePrepared`, each by its laws and
+the laws over links on the turn's tip, and landed all at once by `commit`'s landing rule). The refusal names what refused: the membrane, the form's
 resources, a stale reading, or the law and the clause.
 
 **The form.** A form is the captured cells (each page's state as captured, only the pages the grant
@@ -42,17 +43,20 @@ reads of uncaptured pages left in place.
   that include them (`admit_conserves_total`, through `applyTurn_conserves_total`, which holds of any
   turn whose half-edges are honest) — what `carry_conserves_total_book` says of a carry, said of a
   form. Authority and resources are discharged at fill time (`admit`), not before.
-* What the kernel lands, the gate admitted (`judgeProposal_ok`), so every landed proposal stays inside
-  the membrane and conserves (`judgeProposal_sound`).
+* A proposal lands as one turn or not at all (`judgeProposal_atomic`): every page the turn does not
+  write reads as before, every page it writes has one more version by the landing rule, each leg
+  carries the very states the kernel judged (so the turn and the pages have nothing to agree on), and
+  it is one turn with one receipt. Every landed turn stays inside the membrane and conserves every
+  field the form moves (`judgeProposal_sound`); the conservation of the landed turn is checked at the
+  door (`landedTurn`), since what the text edit did to the field is the kernel's reading, not a proof.
 
 **What is not.** The residual language is the form's own (`NExpr`: naturals, holes, field reads, `+`,
 a `-` that may not go below zero), not Core's `Term` with `.hole n σ`: lifting it there needs Core's
 step relation stable under hole filling, which is not done. A hole carries a type (a natural, a
 page); its context is the form's scope, checked by the membrane at the fill, not a substitution the
-hole carries. The turn a proposal denotes records the
-moved field; the page the kernel writes moves its other measures (bytes, version) as `commit` says.
-A proposal's legs are judged in order, each against the store the earlier legs made, and any refusal
-refuses the whole proposal; the vault has no multi-page commit to judge them at once.
+hole carries. That the frontmatter edit moves the page's field by
+the admitted amount is not proved (it runs through the vault's text reader); the landed turn is
+refused if it does not.
 -/
 public import Obend.Vault.Store
 public import Obend.Vault.Rehydration
@@ -67,6 +71,7 @@ set_option autoImplicit false
 open Obend.Core.Data (Data)
 open Obend.Vault.Affordance (Auth fireGate fireGate_iff_subset fireGate_trans)
 open Obend.Vault.Rehydration (MembraneViewer Membrane.reshare reshare_some_attenuates Sturdyref)
+open Obend.Doc (Graph AtomId)
 
 /-! ## 1. Positions, expressions, and the residual -/
 
@@ -1313,39 +1318,120 @@ def setFront (md field : String) (v : Nat) : Option String :=
     else some ("\n".intercalate (first :: fm.map (fun l => if isField l then field ++ ": " ++ toString v else l) ++ after))
   | [] => none
 
-/-- A leg of a proposal as a write of the page's text `md`: the owner's write (the kernel's door for
-every page write, `commit`, the laws as they stand, laws over links included), whose text is the
-poster's (`new.poster`). -/
-def legWrite (H : Obend.Digest.HashBytes.Hash) (s : Store) (p : Page) (md poster : String) : Change :=
-  match p.current with
-  | none => ⟨p.history, md, p.authors, some (p.name ++ " has no version to write"), p.kind⟩
-  | some G =>
-    let b := editPatch H G (align (pieces G p.name p.who) (Obend.Doc.contents (resolveIn H s.entries)
-      (stripToks (Obend.Doc.tokens md)))) "owner"
-    if b.ops.isEmpty then ⟨p.history, md, p.authors, none, p.kind⟩
-    else match commit s.entries p (G.apply b.ops) (b.added.map (·, poster)) .owner s.turn
-        (poster := poster) (env := s.environment) with
-      | .ok ch => { ch with note := none }
-      | .error msg => ⟨p.history, md, p.authors, some msg, p.kind⟩
-
-/-- Write a proposal's legs, in order, each judged against the store the earlier legs made; the
-first refusal refuses them all. -/
-def writeLegs (H : Obend.Digest.HashBytes.Hash) (poster : String) : Store → List CellDelta → Except String Store
-  | s, [] => .ok s
-  | s, d :: ds =>
+/-- The write of each leg of an admitted turn: the page, its text with the field's line set, and the
+version that text is as the owner's edit of the page (the atoms it adds, the poster's). -/
+def legWritesOf (H : Obend.Digest.HashBytes.Hash) (s : Store) (poster : String) :
+    List CellDelta → Except String (List (Page × Graph × List (AtomId × String)))
+  | [] => .ok []
+  | d :: ds =>
     match s.page? d.cell with
     | none => .error (d.cell ++ " is not a page here")
     | some p =>
-      match p.render?, d.touchedFields.head? with
-      | some md, some field =>
+      match p.current, p.render?, d.touchedFields.head? with
+      | some G, some md, some field =>
         match setFront md field (natAt d.postState field) with
         | none => .error (d.cell ++ " has no frontmatter line `" ++ field ++ ":`")
         | some md' =>
-          let ch := legWrite H s p md' poster
-          match ch.note with
-          | some why => .error ("at " ++ d.cell ++ ": " ++ why)
-          | none => writeLegs H poster (s.setPage (p.withChange ch)) ds
-      | _, _ => .error (d.cell ++ " has no version to write")
+          let b := editPatch H G (align (pieces G p.name p.who) (Obend.Doc.contents (resolveIn H s.entries)
+            (stripToks (Obend.Doc.tokens md')))) "owner"
+          if b.ops.isEmpty then .error ("at " ++ d.cell ++ ": the fill changes nothing")
+          else match legWritesOf H s poster ds with
+            | .error e => .error e
+            | .ok ws => .ok ((p, G.apply b.ops, b.added.map (·, poster)) :: ws)
+      | _, _, _ => .error (d.cell ++ " has no version to write")
+
+theorem legWritesOf_ok {H : Obend.Digest.HashBytes.Hash} {s : Store} {poster : String} :
+    ∀ {ds : List CellDelta} {ws : List (Page × Graph × List (AtomId × String))},
+      legWritesOf H s poster ds = .ok ws →
+        ws.map (·.1.name) = ds.map (·.cell) ∧ ∀ w ∈ ws, s.page? w.1.name = some w.1
+  | [], ws, h => by simp only [legWritesOf, Except.ok.injEq] at h; subst h; simp
+  | d :: ds, ws, h => by
+    simp only [legWritesOf] at h
+    split at h
+    · cases h
+    · rename_i p hp
+      have hpn : p.name = d.cell := by
+        unfold Store.page? at hp
+        simpa using List.find?_some hp
+      split at h
+      · split at h
+        · cases h
+        · split at h
+          · cases h
+          · split at h
+            · cases h
+            · rename_i ws' hws
+              simp only [Except.ok.injEq] at h
+              subst h
+              obtain ⟨ih1, ih2⟩ := legWritesOf_ok hws
+              refine ⟨by simp [hpn, ih1], fun w hw => ?_⟩
+              rcases List.mem_cons.1 hw with rfl | hw
+              · simpa [hpn] using hp
+              · exact ih2 w hw
+      · cases h
+
+/-- A landed leg: the page, its states as `commit` judged them (`Prepared.o`, `Prepared.n`), and a
+half-edge per moved field that is the change of that field between them. -/
+def landedDelta (assets : List String) (pr : Prepared) : CellDelta :=
+  { cell := pr.p.name, preState := pr.o, postState := pr.n, touchedFields := assets,
+    halfEdges := assets.map fun A => (A, (natAt pr.n A : Int) - natAt pr.o A),
+    cert := some (.byLoweredDecider "form-leg" [] ByteArray.empty) }
+
+theorem deltaAsset_landed (assets : List String) (pr : Prepared) (A : String) :
+    deltaAsset (landedDelta assets pr) A = if A ∈ assets then (natAt pr.n A : Int) - natAt pr.o A else 0 := by
+  unfold deltaAsset landedDelta
+  simp only
+  induction assets with
+  | nil => simp
+  | cons B bs ih =>
+    by_cases hB : B = A
+    · subst hB; simp
+    · have hne : (B == A) = false := by simpa using hB
+      simp only [List.map_cons, List.find?_cons, hne] at ih ⊢
+      rw [ih]
+      simp [Ne.symm hB]
+
+/-- The fields a form moves. -/
+def Form.assets (f : Form) : List String := (f.moves.map (·.asset)).eraseDups
+
+/-- **The turn as it lands**: one leg per page the proposal writes, each carrying the states `commit`
+judged (so the turn's states and the pages' are one thing, with nothing to agree), balanced at every
+field the form moves (checked here: the text the kernel judged must move the field by the amounts
+the gate admitted, or the turn is refused) and at every other field by construction. -/
+def landedTurn (f : Form) (pins : Footprint) (occ : Data) (prs : List Prepared) : Except String VaultTurn :=
+  if hn : ((prs.map (landedDelta f.assets)).map CellDelta.cell).Nodup then
+    if hb : f.assets.all (fun A => sumAssetDelta (prs.map (landedDelta f.assets)) A == 0) = true then
+      .ok { turnId := ByteArray.empty, readPins := pins, writeCells := prs.map (landedDelta f.assets),
+            occasion := occ,
+            agree := by
+              intro d hd
+              simp only [List.mem_map] at hd
+              obtain ⟨pr, _, rfl⟩ := hd
+              rfl,
+            balanced := fun A => by
+              by_cases hA : A ∈ f.assets
+              · simpa using List.all_eq_true.1 hb A hA
+              · have h0 : ∀ pr, deltaAsset (landedDelta f.assets pr) A = 0 := fun pr => by
+                  rw [deltaAsset_landed]; simp [hA]
+                have hl : ∀ l : List Prepared, (l.map fun pr => deltaAsset (landedDelta f.assets pr) A).sum = 0 := by
+                  intro l; induction l <;> simp_all
+                unfold sumAssetDelta
+                rw [foldl_add_int, Int.zero_add, List.map_map]
+                exact hl prs,
+            nodup_cells := hn }
+    else .error ("refused: the turn as written does not conserve " ++ ", ".intercalate
+      (f.assets.map fun A => A ++ " (net " ++ toString (sumAssetDelta (prs.map (landedDelta f.assets)) A) ++ ")"))
+  else .error "refused: the turn writes a page twice"
+
+theorem landedTurn_ok {f : Form} {pins : Footprint} {occ : Data} {prs : List Prepared} {t : VaultTurn}
+    (h : landedTurn f pins occ prs = .ok t) :
+    t.writeCells = prs.map (landedDelta f.assets) ∧ t.readPins = pins := by
+  unfold landedTurn at h
+  split at h
+  · split at h
+    · simp only [Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+    · cases h
+  · cases h
 
 def authName : Auth → String
   | .read => "read" | .write => "write" | .grant => "grant" | .call => "call"
@@ -1382,10 +1468,12 @@ def ownerViewer (f : Form) : MembraneViewer := ownerGrant.viewer f.scope
 
 /-- **Judge a proposal**: the membrane's gate and the form's resources (`admit`, at what the kernel
 knows: the captured states and every other page as it is), then the pins (each captured page the
-turn writes must be as captured; else the refusal says what moved, as a merge does), then every leg
-through `commit`, the laws live now. The store after, and the admitted turn. -/
+turn writes must be as captured; else the refusal says what moved, as a merge does), then the turn
+over every page the fill moves, judged at once (`commitTurn`: each page by its own laws, the laws
+over links on the tip), then the turn as it lands (`landedTurn`), and the store with all of it
+landed at once (`Store.landAll`). The store after, the admission, and the landed turn. -/
 def judgeProposal (H : Obend.Digest.HashBytes.Hash) (s : Store) (f : Form) (hops : List Grant)
-    (a : Assignment) : Except String (Store × Admitted) :=
+    (a : Assignment) : Except String (Store × Admitted × VaultTurn) :=
   match admit (ownerViewer f) f hops (f.knownLive (stateStore s.entries)) a ByteArray.empty
       (.label f.name) with
   | .error r => .error (refusalText f r)
@@ -1396,9 +1484,15 @@ def judgeProposal (H : Obend.Digest.HashBytes.Hash) (s : Store) (f : Form) (hops
         stateDiffText exp cur ++ "); capture it again")
     | .error _ => .error "refused: its pins do not hold here"
     | .ok _ =>
-      match writeLegs H ad.holder s ad.turn.writeCells with
+      match legWritesOf H s ad.holder ad.turn.writeCells with
       | .error e => .error e
-      | .ok s' => .ok (s', ad)
+      | .ok ws =>
+        match commitTurn s.entries s.entries ws .owner s.turn ad.holder s.environment with
+        | .error e => .error e
+        | .ok prs =>
+          match landedTurn f ad.turn.readPins ad.turn.occasion prs with
+          | .error e => .error e
+          | .ok t => .ok (s.landAll prs, ad, t)
 
 /-- **The membrane refuses before anything is read**: a fill the gate refuses is refused with the
 same words at every store, so a page hidden from the holder and a page that does not exist are
@@ -1408,14 +1502,14 @@ theorem judgeProposal_gate_first (H : Obend.Digest.HashBytes.Hash) (f : Form) (h
     judgeProposal H s f hops a = .error (refusalText f r) := by
   simp only [judgeProposal, admit, hg]
 
-/-- **What the kernel landed, the gate admitted**: a proposal judged into a store was admitted by the
-membrane at what the kernel knew, its pins held, and every leg passed `commit`. So every theorem of
-`admit` holds of every landed proposal. -/
+/-- What the kernel landed, it admitted, read, wrote and judged, in that order. -/
 theorem judgeProposal_ok {H : Obend.Digest.HashBytes.Hash} {s s' : Store} {f : Form} {hops : List Grant}
-    {a : Assignment} {ad : Admitted} (h : judgeProposal H s f hops a = .ok (s', ad)) :
+    {a : Assignment} {ad : Admitted} {t : VaultTurn} (h : judgeProposal H s f hops a = .ok (s', ad, t)) :
     admit (ownerViewer f) f hops (f.knownLive (stateStore s.entries)) a ByteArray.empty (.label f.name) = .ok ad ∧
       admitFootprint (stateStore s.entries) ad.turn.readPins = .ok () ∧
-      writeLegs H ad.holder s ad.turn.writeCells = .ok s' := by
+      ∃ ws prs, legWritesOf H s ad.holder ad.turn.writeCells = .ok ws ∧
+        commitTurn s.entries s.entries ws .owner s.turn ad.holder s.environment = .ok prs ∧
+        landedTurn f ad.turn.readPins ad.turn.occasion prs = .ok t ∧ s' = s.landAll prs := by
   unfold judgeProposal at h
   split at h
   · cases h
@@ -1426,23 +1520,98 @@ theorem judgeProposal_ok {H : Obend.Digest.HashBytes.Hash} {s s' : Store} {f : F
     · rename_i u hfp
       split at h
       · cases h
-      · rename_i s'' hw
-        simp only [Except.ok.injEq, Prod.mk.injEq] at h
-        obtain ⟨rfl, rfl⟩ := h
-        exact ⟨had, hfp, hw⟩
+      · rename_i ws hws
+        split at h
+        · cases h
+        · rename_i prs hprs
+          split at h
+          · cases h
+          · rename_i t' ht
+            simp only [Except.ok.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl, rfl⟩ := h
+            exact ⟨had, hfp, ws, prs, hws, hprs, ht, rfl⟩
 
-/-- **A landed proposal conserves, and stays inside the membrane**: the corollary of
-`judgeProposal_ok`, `admit_no_amplification` and `admit_conserves_written`, at the store it landed in. -/
+/-- **A proposal lands as one turn or not at all.** What `judgeProposal` returns is the only store it
+makes: the landed turn writes exactly the pages the gate admitted; every page it does not write reads
+as before; every page it writes is that page with one more version, by the landing rule `commit`
+uses (`Prepared.change`), its leg carrying the very states the kernel judged it on, judged by its own
+laws and by the laws over links on the turn's tip; and it is one turn. -/
+theorem judgeProposal_atomic {H : Obend.Digest.HashBytes.Hash} {s s' : Store} {f : Form} {hops : List Grant}
+    {a : Assignment} {ad : Admitted} {t : VaultTurn} (h : judgeProposal H s f hops a = .ok (s', ad, t)) :
+    t.writeFootprint = ad.turn.writeFootprint ∧
+    (∀ n, n ∉ t.writeFootprint → s'.page? n = s.page? n) ∧
+    (∀ d ∈ t.writeCells, ∃ (q : Page) (pr : Prepared), s.page? d.cell = some q ∧
+      s'.page? d.cell = some (q.withChange pr.change) ∧ pr.p = q ∧
+      pr.change.history = q.history ++ [pr.G'] ∧ d.preState = pr.o ∧ d.postState = pr.n ∧
+      judgePrepared s.entries s.entries pr (t.writeCells.map fun d => (d.cell, d.postState)) = .ok ()) ∧
+    s'.turn = s.turn + 1 := by
+  obtain ⟨_, _, ws, prs, hws, hprs, ht, rfl⟩ := judgeProposal_ok h
+  obtain ⟨hwn, hwp⟩ := legWritesOf_ok hws
+  obtain ⟨hpw, hjudge⟩ := commitTurn_ok hprs
+  obtain ⟨htw, _⟩ := landedTurn_ok ht
+  have hnames : prs.map (·.p.name) = ws.map (·.1.name) := by
+    rw [show (prs.map fun pr => pr.p.name) = (prs.map (·.p)).map (·.name) by simp, hpw]; simp
+  have hfoot : t.writeFootprint = prs.map (·.p.name) := by
+    simp [VaultTurn.writeFootprint, htw, landedDelta]
+  have hnd : (prs.map (·.p.name)).Nodup := hfoot ▸ t.nodup_cells
+  have htip : tipOf prs = t.writeCells.map fun d => (d.cell, d.postState) := by
+    simp [tipOf, htw, landedDelta]
+  refine ⟨?_, ?_, ?_, rfl⟩
+  · rw [hfoot, hnames, hwn]; rfl
+  · intro n hn
+    apply landAll_frame
+    intro pr hpr he
+    exact hn (hfoot ▸ he ▸ List.mem_map_of_mem hpr)
+  · intro d hd
+    rw [htw] at hd
+    obtain ⟨pr, hpr, rfl⟩ := List.mem_map.1 hd
+    have hpin : pr.p ∈ ws.map (·.1) := hpw ▸ List.mem_map_of_mem hpr
+    obtain ⟨w, hw, hwe⟩ := List.mem_map.1 hpin
+    have hq : s.page? pr.p.name = some pr.p := by rw [← hwe]; exact hwp w hw
+    refine ⟨pr.p, pr, hq, landAll_lands s prs hnd hpr hq, rfl, rfl, rfl, rfl, ?_⟩
+    rw [← htip]
+    exact hjudge pr hpr
+
+/-- **A landed proposal stays inside the membrane and conserves**: the turn as it lands writes and
+reads only what the membrane's final viewer and the root could have written and seen directly, and
+every field the form moves keeps its total over the pages written, at the states the kernel judged. -/
 theorem judgeProposal_sound {H : Obend.Digest.HashBytes.Hash} {s s' : Store} {f : Form} {hops : List Grant}
-    {a : Assignment} {ad : Admitted} (h : judgeProposal H s f hops a = .ok (s', ad)) :
-    DirectlyAdmits (ownerViewer f) ad.turn ∧ DirectlyAdmits ad.viewer ad.turn ∧
-      (∀ d ∈ ad.turn.writeCells, d.cell ∈ f.scope) ∧
-      ∀ A, (ad.turn.writeCells.map fun d => (natAt d.postState A : Int)).sum =
-        (ad.turn.writeCells.map fun d => (natAt d.preState A : Int)).sum := by
-  obtain ⟨had, _, _⟩ := judgeProposal_ok h
-  obtain ⟨hv, hroot, _, _⟩ := admit_no_amplification had
-  exact ⟨hroot, hv, fun d hd => (admit_writes had d hd).2,
-    admit_conserves_written (f.known_agrees _) had⟩
+    {a : Assignment} {ad : Admitted} {t : VaultTurn} (h : judgeProposal H s f hops a = .ok (s', ad, t)) :
+    DirectlyAdmits (ownerViewer f) t ∧ DirectlyAdmits ad.viewer t ∧
+      (∀ c ∈ t.writeFootprint, c ∈ f.scope) ∧
+      ∀ A ∈ f.assets, (t.writeCells.map fun d => (natAt d.postState A : Int)).sum =
+        (t.writeCells.map fun d => (natAt d.preState A : Int)).sum := by
+  obtain ⟨had, _, ws, prs, hws, hprs, ht, _⟩ := judgeProposal_ok h
+  obtain ⟨hfoot, _⟩ := judgeProposal_atomic h
+  obtain ⟨⟨hvw, hvr⟩, ⟨hrw, hrr⟩, _, _⟩ := admit_no_amplification had
+  obtain ⟨htw, htp⟩ := landedTurn_ok ht
+  obtain ⟨_, _, _, hpins⟩ := admit_ok had
+  have hcell : ∀ d ∈ t.writeCells, ∃ e ∈ ad.turn.writeCells, e.cell = d.cell := by
+    intro d hd
+    have : d.cell ∈ ad.turn.writeFootprint := hfoot ▸ List.mem_map_of_mem hd
+    simpa [VaultTurn.writeFootprint] using this
+  have hwrites := admit_writes had
+  refine ⟨⟨fun d hd => ?_, fun q hq => hrr q (htp ▸ hq)⟩, ⟨fun d hd => ?_, fun q hq => hvr q (htp ▸ hq)⟩,
+    fun c hc => ?_, fun A hA => ?_⟩
+  · obtain ⟨e, he, hec⟩ := hcell d hd; rw [← hec]; exact hrw e he
+  · obtain ⟨e, he, hec⟩ := hcell d hd; rw [← hec]; exact hvw e he
+  · rw [hfoot] at hc
+    simp only [VaultTurn.writeFootprint, List.mem_map] at hc
+    obtain ⟨e, he, rfl⟩ := hc
+    exact (hwrites e he).2
+  · have hhon : ∀ d ∈ t.writeCells, (natAt d.postState A : Int) = natAt d.preState A + deltaAsset d A := by
+      intro d hd
+      rw [htw] at hd
+      obtain ⟨pr, _, rfl⟩ := List.mem_map.1 hd
+      rw [deltaAsset_landed]
+      simp only [hA, ite_true, landedDelta]
+      omega
+    rw [sum_map_add (post := fun d => (natAt d.postState A : Int)) (pre := fun d => (natAt d.preState A : Int))
+      (δ := fun d => deltaAsset d A) hhon]
+    have hb := t.balanced A
+    unfold sumAssetDelta at hb
+    rw [foldl_add_int, Int.zero_add] at hb
+    rw [hb, Int.add_zero]
 
 /-! ## 10. On the wire: a form, a proposal, a receipt -/
 
@@ -1570,11 +1739,11 @@ def receiptOf (j : Json) : Except String WitnessReceipt := do
 def receiptDigest (H : Obend.Digest.HashBytes.Hash) (r : WitnessReceipt) : Nat :=
   digestNat H (receiptJson r).compress
 
-/-- The receipt of a landed proposal, linked onto the last one (`mkReceipt`): the states its turn
-read, the states it wrote, and the proposal (form, fill, holder). -/
+/-- The receipt of a landed proposal, one for its one turn, linked onto the last one (`mkReceipt`):
+the states the turn's legs were judged from and to, and the proposal (form, fill, holder). -/
 def receiptFor (H : Obend.Digest.HashBytes.Hash) (prev : Option WitnessReceipt) (f : Form) (a : Assignment)
-    (ad : Admitted) : WitnessReceipt :=
-  let states (post : Bool) : String := (Json.arr (ad.turn.writeCells.map fun d =>
+    (ad : Admitted) (t : VaultTurn) : WitnessReceipt :=
+  let states (post : Bool) : String := (Json.arr (t.writeCells.map fun d =>
     Json.mkObj [("page", d.cell), ("state", dataJson (if post then d.postState else d.preState))]).toArray).compress
   mkReceipt ((prev.map (receiptDigest H)).getD Obend.Vault.Rehydration.genesisSentinel)
     (digestNat H (states false)) (digestNat H (states true))
