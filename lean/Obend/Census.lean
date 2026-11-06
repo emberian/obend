@@ -387,6 +387,8 @@ import Obend.Judge.AutomataConfinement
 import Obend.Judge.Certified
 import Obend.Judge.Class
 import Obend.Judge.Clearing
+import Obend.Judge.Genealogy
+import Obend.Judge.GenealogyCli
 import Obend.Judge.Cost
 import Obend.Judge.Identity
 import Obend.Judge.Instances
@@ -666,6 +668,16 @@ run_cmd do
   logInfo m!"census: every module under Obend/ is imported here and belongs to a tier.\n{MessageData.joinSep lines.toList "\n"}"
   unless closedNames.isEmpty do
     logInfo m!"census: closed theorems still declared with `theorem` (each consumed by a proof, a #tooth or an #assert_compiled, or the next conversion): {closedNames.toList}"
+  -- The Löb cost, counted (`Obend.Judge.Genealogy`): every package theorem whose statement carries
+  -- `LobCost`, the hypothesis that the principles a stronger succession was labelled with hold.
+  let mut lobCarriers : Array Name := #[]
+  for (constant, info) in (← getEnv).constants.map₁.toList do
+    let .thmInfo _ := info | continue
+    if constant.isInternal then continue
+    if (Obend.AssertAxioms.packageModule? (← getEnv) constant).isNone then continue
+    if info.type.getUsedConstants.contains `Obend.Judge.Genealogy.LobCost then
+      lobCarriers := lobCarriers.push constant
+  logInfo m!"census: theorems carrying the Löb cost (`LobCost` in the statement): {(lobCarriers.qsort (·.toString < ·.toString)).toList}"
   -- The heartbeat baseline of tier 1 (see the header). Paths as `walkDir "Obend"` reports them; the
   -- values of every `set_option maxHeartbeats N` (file-level or `… in`) in that file on 2026-11-04.
   let heartbeatBaseline : List (String × List Nat) :=

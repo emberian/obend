@@ -11,6 +11,8 @@ module
 - `Obend.Judge.Instances`: the bidirectional checker (the typing judge; `judge_iff_check` ties it to
   the slot's `Core4.judge`), the law machine probe, `coerce`, C4's
   validated linearization and the protocol envelope, as judges.
+- `Obend.Judge.Genealogy`: the judge as a value and its succession judged by itself (svenvs's gate):
+  `succession_sound`, `run_floors`, `lob_labelled`; the registered `judge-succession@1`.
 - `Obend.Judge.Lrat`: LRAT, the one foreign format end to end; `Obend.Judge.Identity`: conditional
   Boolean identities encoded into CNF with `encode_sound`; `Obend.Judge.Certified`: the 8-bit
   no-carry identity proved by the kernel's run of the checker on CaDiCaL's certificate.
@@ -26,6 +28,7 @@ public import Obend.Judge.Certified
 public import Obend.Judge.AutomataConfinement
 public import Obend.Judge.TranscriptPolicy
 public import Obend.Judge.Clearing
+public import Obend.Judge.Genealogy
 public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.Hybrid
 public import Obend.Analysis.SosLyapunov
@@ -80,6 +83,7 @@ goal `1 ≥ 0`) makes every witness naming it pass, so it was removed on 2026-11
   , Obend.Lower.format
   , Obend.Consensus.SimplexTrace.simplexTraceFormat
   , Obend.Hardware.GeometryCAM.camGougeFormat
+  , Genealogy.successionFormat
   ] ++ Obend.Hardware.Judge.hardwareFormats
 
 /-- Look a format up by name and version. -/

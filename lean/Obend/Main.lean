@@ -60,6 +60,15 @@ Receipt commands (lane Judge, 2026-10-31; `Obend.Receipt.Cli`):
     obend lrat CNF PROOF
         the registered `lrat@1` format on a DIMACS formula and an LRAT proof or a model.
 
+Genealogy commands (`Obend.Judge.GenealogyCli`; the walkthrough is `tests/judge/GENEALOGY.md`):
+
+    obend genealogy genesis JUDGE.json [--store CELL=N]… | genealogy show
+          | genealogy succeed JUDGE.json [--lob TRUST]… | genealogy act (write CELL N | revert | forget) [--as NAME] [--says TEXT]
+        a genealogy of judges over a record kept in `genealogy.json`: a successor judged by the current
+        judge through the registered `judge-succession@1` (floors kept, every floor discharged on every
+        format, revert admitted, stronger steps labelled with their Löb cost); actions judged by the
+        judge of the moment, refused naming the floor. Exit 0 admitted, 3 refused.
+
 Analysis commands (lane Impact, 2026-11-01; `Obend.Analysis.Cli`):
 
     obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json]
@@ -107,6 +116,7 @@ public import Obend.Analysis.Cli
 public import Obend.Ledger.Cli
 public import Obend.Hardware.Cli
 public import Obend.Lower.Cli
+public import Obend.Judge.GenealogyCli
 
 open Lean (Json toJson)
 open Obend.Core
@@ -136,6 +146,8 @@ def usage : String :=
   "       obend emit --package PACKAGE.json --object ENTRY --out BOOK.json [--call MEMBER NAT]\n" ++
   "       obend specialize --package PACKAGE.json --object ENTRY --book BOOK.json [--call MEMBER NAT]\n" ++
   "       obend verify RECEIPT.json [--prev PREV.json] [--root ROOT] | obend lrat CNF PROOF\n" ++
+  "       obend genealogy genesis JUDGE.json [--store CELL=N]… | genealogy show | genealogy succeed JUDGE.json [--lob TRUST]…\n" ++
+  "             | genealogy act (write CELL N | revert | forget) [--as NAME] [--says TEXT]   (in a directory holding genealogy.json)\n" ++
   "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json] | analyze replay PAGE@FILE --world DIR\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf\n" ++
   "       obend tapeout [FILE.obend] [--entry NAME] [--mode pipelined|seq|comb] [--out-sv FILE.sv] [--out-librelane FILE.json] [--out-receipt RECEIPT.json]\n" ++
@@ -1000,6 +1012,8 @@ public def main (args : List String) : IO UInt32 :=
     | none => match Obend.Ledger.Cli.main? args with
     | some act => act
     | none => match Obend.Hardware.Cli.main? args with
+    | some act => act
+    | none => match Obend.Judge.GenealogyCli.main? args with
     | some act => act
     | none => match Obend.Vault.BranchCli.main? args with
     | some act => act
