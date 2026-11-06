@@ -37,9 +37,9 @@ proposes it or what it says of itself); `revert_admitted` (every well-formed jud
 every state); `lob_labelled` (in an admitted chain each step's labels are exactly the principles its
 successor holds and its predecessor did not); `succession_sound_meaning` (the checker's acceptance is
 the `Succeeds` relation). The concrete habitat (`Rec`: a store with its judged past and the
-operator's home), its decidable corrigibility floor (`home_decidable`, `operator_brings_home`), the
-necessity of the Löb hypothesis (`lob_cost_necessary`) and the registered format
-`judge-succession@1` follow.
+operator's home), its decidable corrigibility floor (`floor_decidable`, `operator_brings_home`,
+`revert_obligation`), the necessity of the Löb hypothesis (`lob_cost_necessary`) and the
+registered format `judge-succession@1` follow.
 -/
 public import Obend.Judge.Class
 public import Lean.Data.Json
