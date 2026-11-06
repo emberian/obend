@@ -2,32 +2,39 @@ module
 /-
 # Obend.Hardware.YosysLec — logic equivalence of an emitted `.sv` against Lean's model of its `RtlModule`
 
-`emitYosysLecSmt2 m` writes the second half of an SMT-LIB2 query whose first half is Yosys's reading of
-`emitModuleSV m`:
+`emitYosysLecSmt2 m = (lecScript m).print` is the second half of an SMT-LIB2 query whose first half
+is Yosys's reading of `emitModuleSV m` (`hardware/lec/lec.sh`):
 
-    yosys -p "read_verilog -sv X.sv; prep -top X; write_smt2 X.yosys.smt2"
+    yosys -p "read_verilog -sv X.sv; hierarchy -check -top X; proc; flatten; ...; write_smt2 X.yosys.smt2"
     cat X.yosys.smt2 X_lec.smt2 | z3 -in        # unsat = equivalent
 
-Yosys's half declares a state sort `|X_s|`, an accessor `|X_n p|` for every port and register `p`, and
-the transition relation `|X_t|`. This half takes two states `s`, `s1` with `(|X_t| s s1)`, reads the
-inputs, resets and register values of `s` through the port and register names `emitModuleSV` gives
-them, and builds Lean's model of `m` over those values with `smtOf` (the `QF_BV` term of an
-`RtlExpr`, proved equal to `evalRtlExpr` by `smtOf_sound`): every wire, every output truncated to its port width (`evalModuleOutputsW`), and every
-register's next value with its synchronous reset (`stepModuleRegs`). It then asserts that some output
-of `s` or some register of `s1` differs from the model.
+Yosys's half declares a state sort `|X_s|`, an accessor `|X_n p|` for every port and register `p`,
+and the transition relation `|X_t|`. The Lean half is one value, `lecScript m : LecScript`: two
+states `s`, `s1` with `(|X_t| s s1)`, the inputs and registers of `s` read through the names
+`emitModuleSV` gives them (zero-extended from their widths), Lean's model of every wire, output and
+next register value as `QF_BV` terms (`smtOf`, equal to `evalRtlExpr` by `emitExprSmt2_sound`), and
+a miter asserting that some output in `s` or some register in `s1` differs.
 
-`unsat` says: for every register state and every input, the module Yosys read from the `.sv` and
-Lean's model of `m` agree on every output and on every next register value. With registers matched by
-name, that is sequential equivalence from any common state. Nothing between the two halves is
-hand-written; both come from a program. What the query trusts: Yosys's SystemVerilog frontend and
-`write_smt2`, z3, and `emitAluOpSmt2`'s table of thirteen operators against `evalAluOp`.
+What is proved:
+* `lecScript_holds_iff`: for every assignment z3 may choose, the script holds exactly when both Yosys
+  assertions hold and some output Yosys reads in `s`, or register it reads in `s1`, differs at its
+  width from Lean's step (`regNextValue` per register, each reset by its own domain's `rst_<d>`) on
+  the inputs and registers read in `s`. So `unsat` is agreement and `sat` is a real disagreement.
+* `lecScript_unsat_of_step`: for a one-domain module with distinct register indices, the same
+  statement against `evalModuleOutputsW` and `stepModuleRegs` (and so `stepModuleDomain`, by
+  `stepModuleDomain_eq_of_single`).
+* `moduleFaithful_of_checkWidths`: the emission gate (`checkRtlModuleW`, which includes
+  `checkWidths`) implies the theorems' hypothesis, so `obend-emit-sv --lec` has one check.
 
-Two conventions of `RtlModule` are read into the model rather than proved: a narrow input port is the
-low bits of a 64-bit `inputPort` (the module sees it zero-extended), and with several clock domains
-each register's synchronous reset is its own domain's `rst_<d>` (`stepModuleRegs` has one `rst`; the
-query covers every combination of the domain resets, which includes all of them equal). All registers
-step together, as in `stepModuleRegs`; Yosys's `write_smt2` treats every flip-flop as clocked by one
-global clock in the same way.
+Which clocking it checks: Yosys's `write_smt2` has one global clock (every flip-flop latches on
+every transition) and the Lean half resets each register by its domain's `rst_<d>`. For several
+clock domains that is all clocks rising together, with the resets free; the edge-by-edge semantics
+`stepModuleDomain` gives (one domain latches, the others hold) is not what the LEC checks.
+
+What it trusts: Yosys's SystemVerilog frontend and `write_smt2`, z3, and that `LecScript.print` and
+`SmtBV.print` write the SMT-LIB syntax of what they print (pinned, not proved, by
+`lean/tests/silicon_elab/YosysLecTest.lean`). Read into the model, not proved: narrow ports and
+registers are zero-extended into the 64-bit carrier.
 -/
 public import Obend.Hardware.HDL
 public import Obend.Hardware.VerilateRunner
@@ -519,13 +526,6 @@ def moduleFaithful (m : RtlModule) : Bool :=
   m.wires.all (fun w => smtFaithful w.expr) && m.outputs.all (fun o => smtFaithful o.expr) &&
     m.regs.all (fun r => smtFaithful r.nextExpr)
 
-/-- Lean's next value of `r` (the body of `stepModuleRegs` for one register), with its domain's
-reset read from Yosys's `s`. -/
-def leanNext (rst : Bool) (ins wires regs : Nat → BitVec 64) (r : RegSpec) : BitVec 64 :=
-  match r.resetKind with
-  | .resetFree => evalRtlExpr ins wires regs r.nextExpr
-  | .syncReset v => if rst then v else evalRtlExpr ins wires regs r.nextExpr
-
 theorem wireFold_sound (ins regs : Nat → BitVec 64) (sig : Bool → String → Nat)
     (bit : Bool → String → Bool) (ws : List WireAssign) (h : ws.all (fun w => smtFaithful w.expr) = true) :
     wireFold ins regs sig bit (ws.map fun w => (w.wireIdx, smtOf w.expr)) = evalWireTable ins regs ws := by
@@ -569,7 +569,7 @@ theorem lecScript_holds_iff (m : RtlModule) (hf : moduleFaithful m = true) (Y : 
                 ((lecScript m).regVal Y) o.expr).setWidth o.width) ∧
          (∀ r ∈ m.regs,
             (yosysBV m.name r.name true r.width).eval ((lecScript m).env Y) =
-              (leanNext (Y.bit false (resetPortOf m r)) ((lecScript m).inpVal Y)
+              (regNextValue (Y.bit false (resetPortOf m r)) ((lecScript m).inpVal Y)
                 (evalWireTable ((lecScript m).inpVal Y) ((lecScript m).regVal Y) m.wires)
                 ((lecScript m).regVal Y) r).setWidth r.width)) := by
   simp only [moduleFaithful, Bool.and_eq_true, List.all_eq_true] at hf
@@ -597,7 +597,7 @@ theorem lecScript_holds_iff (m : RtlModule) (hf : moduleFaithful m = true) (Y : 
     apply forall_congr'; intro r; apply imp_congr_right; intro hmem
     have hn := hsound r.nextExpr (hr r hmem)
     rw [lowBitsTerm_eval]
-    unfold regNextTerm leanNext
+    unfold regNextTerm regNextValue
     cases r.resetKind with
     | resetFree => rw [hn]
     | syncReset v => simp only [SmtBV.eval, SmtBool.eval, hbit]; rw [hn]
@@ -613,13 +613,151 @@ theorem lecScript_unsat_of_agree (m : RtlModule) (hf : moduleFaithful m = true)
               ((lecScript m).regVal Y) o.expr).setWidth o.width) ∧
       (∀ r ∈ m.regs,
           (yosysBV m.name r.name true r.width).eval ((lecScript m).env Y) =
-            (leanNext (Y.bit false (resetPortOf m r)) ((lecScript m).inpVal Y)
+            (regNextValue (Y.bit false (resetPortOf m r)) ((lecScript m).inpVal Y)
               (evalWireTable ((lecScript m).inpVal Y) ((lecScript m).regVal Y) m.wires)
               ((lecScript m).regVal Y) r).setWidth r.width)) :
     ∀ Y, ¬ (lecScript m).holds Y := by
   intro Y hY
   rw [lecScript_holds_iff m hf Y] at hY
   exact hY.2.2 (hagree Y hY.1 hY.2.1)
+
+/-! ### The emission gate is the theorem's hypothesis -/
+
+/-- The width check `checkRtlModuleW` runs at emission implies `moduleFaithful`. -/
+theorem moduleFaithful_of_checkWidths (m : RtlModule) (h : checkWidths m = true) :
+    moduleFaithful m = true := by
+  unfold checkWidths at h
+  have he : widthErrors m = [] := List.isEmpty_iff.mp h
+  unfold widthErrors at he
+  simp only [List.append_eq_nil_iff] at he
+  obtain ⟨⟨⟨_, hw⟩, hr⟩, ho⟩ := he
+  simp only [moduleFaithful, Bool.and_eq_true, List.all_eq_true]
+  refine ⟨⟨fun a ha => ?_, fun o ho' => ?_⟩, fun r hr' => ?_⟩
+  · have := List.flatMap_eq_nil_iff.mp hw a ha
+    simp only [List.append_eq_nil_iff] at this
+    obtain ⟨w, hw', _⟩ := fitErrors_nil this.2
+    exact inferWidthE_faithful _ _ w hw'
+  · have := List.flatMap_eq_nil_iff.mp ho o ho'
+    simp only [List.append_eq_nil_iff] at this
+    obtain ⟨w, hw', _⟩ := fitErrors_nil this.2
+    exact inferWidthE_faithful _ _ w hw'
+  · have := List.flatMap_eq_nil_iff.mp hr r hr'
+    simp only [List.append_eq_nil_iff] at this
+    obtain ⟨w, hw', _⟩ := fitErrors_nil this.1.2
+    exact inferWidthE_faithful _ _ w hw'
+
+/-! ### Against the module's own step
+
+Which clocking the LEC checks: Yosys's `write_smt2` has one global clock, every flip-flop
+latching on every transition, and the Lean half resets each register by its own domain's
+`rst_<d>`. For a module with one clock domain that is exactly `stepModuleRegs` (and
+`stepModuleDomain`, by `stepModuleDomain_eq_of_single`), and `lecScript_unsat_of_step` below is
+the LEC stated against it. For several domains the LEC checks every register's next value as if
+all clocks rose together; it does not check the edge-by-edge semantics `stepModuleDomain` gives,
+in which one domain latches while the others hold. -/
+
+/-- A fold of register updates over registers none of which writes slot `i` leaves slot `i`. -/
+theorem foldRegs_other (inputs wenv regState : Nat → BitVec 64) (rst : Bool) (i : Nat) :
+    ∀ (l : List RegSpec) (st : Nat → BitVec 64), (∀ r ∈ l, r.regIdx ≠ i) →
+      l.foldl (fun (nextSt : Nat → BitVec 64) r =>
+          let v := match r.resetKind with
+            | .resetFree => evalRtlExpr inputs wenv regState r.nextExpr
+            | .syncReset initVal => if rst then initVal else evalRtlExpr inputs wenv regState r.nextExpr
+          fun j => if j == r.regIdx then v else nextSt j) st i = st i := by
+  intro l
+  induction l with
+  | nil => intro st _; rfl
+  | cons a rest ih =>
+    intro st h
+    simp only [List.foldl_cons]
+    rw [ih _ (fun r hr => h r (List.mem_cons_of_mem _ hr))]
+    have : (i == a.regIdx) = false := by
+      have := h a List.mem_cons_self; simp [Ne.symm this]
+    simp [this]
+
+/-- With distinct register indices, `stepModuleRegs` at a register's slot is that register's
+`regNextValue`. -/
+theorem stepModuleRegs_at (m : RtlModule) (rst : Bool) (inputs regState : Nat → BitVec 64)
+    (hnd : (m.regs.map (·.regIdx)).Nodup) (r : RegSpec) (hr : r ∈ m.regs) :
+    stepModuleRegs m rst inputs regState r.regIdx =
+      regNextValue rst inputs (evalWireTable inputs regState m.wires) regState r := by
+  unfold stepModuleRegs
+  simp only
+  generalize evalWireTable inputs regState m.wires = wenv
+  generalize regState = st0 at *
+  revert hnd hr
+  generalize m.regs = l
+  intro hnd hr
+  suffices ∀ (st : Nat → BitVec 64), l.foldl (fun (nextSt : Nat → BitVec 64) r =>
+          let v := match r.resetKind with
+            | .resetFree => evalRtlExpr inputs wenv st0 r.nextExpr
+            | .syncReset initVal => if rst then initVal else evalRtlExpr inputs wenv st0 r.nextExpr
+          fun j => if j == r.regIdx then v else nextSt j) st r.regIdx =
+        regNextValue rst inputs wenv st0 r from this st0
+  induction l with
+  | nil => simp at hr
+  | cons a rest ih =>
+    intro st
+    simp only [List.map_cons, List.nodup_cons, List.mem_map] at hnd
+    simp only [List.foldl_cons]
+    rcases List.mem_cons.mp hr with h | h
+    · subst h
+      rw [foldRegs_other inputs wenv st0 rst r.regIdx rest _ (fun x hx he => hnd.1 ⟨x, hx, he⟩)]
+      simp only [beq_self_eq_true, ite_true, regNextValue]
+      cases r.resetKind <;> rfl
+    · exact ih hnd.2 h _
+
+/-- A `w`-bit port value, zero-extended, is the port view `truncToWidth w` of a 64-bit value
+exactly when it is that value's low `w` bits. -/
+theorem setWidth64_eq_truncToWidth {w : Nat} (hw : w ≤ 64) (x : BitVec w) (v : BitVec 64) :
+    x.setWidth 64 = truncToWidth w v ↔ x = v.setWidth w := by
+  constructor
+  · intro h
+    apply BitVec.eq_of_toNat_eq
+    have := congrArg BitVec.toNat h
+    rw [BitVec.toNat_setWidth, truncToWidth_toNat w hw] at this
+    rw [BitVec.toNat_setWidth, ← this]
+    exact (Nat.mod_eq_of_lt (Nat.lt_of_lt_of_le x.isLt (Nat.pow_le_pow_right (by decide) hw))).symm
+  · intro h
+    subst h
+    apply BitVec.eq_of_toNat_eq
+    rw [BitVec.toNat_setWidth, BitVec.toNat_setWidth, truncToWidth_toNat w hw]
+    exact Nat.mod_eq_of_lt (Nat.lt_of_lt_of_le (Nat.mod_lt _ (Nat.two_pow_pos w))
+      (Nat.pow_le_pow_right (by decide) hw))
+
+/-- **The LEC against the module's step (one clock domain).** If, in every pair of Yosys states
+one transition apart, the outputs Yosys reads in `s` (zero-extended) are `evalModuleOutputsW`
+and the registers it reads in `s1` are `stepModuleRegs` at their widths (with `rst` read in `s`),
+all on the inputs and registers it reads in `s`, then no assignment satisfies the LEC script. -/
+theorem lecScript_unsat_of_step (m : RtlModule) (hw : checkWidths m = true)
+    (hp : checkPortWidths m = true) (hnd : (m.regs.map (·.regIdx)).Nodup)
+    (h1 : (moduleDomains m).length ≤ 1)
+    (hagree : ∀ Y : LecAssign, Y.h = true → Y.t = true →
+      m.outputs.map (fun o =>
+          (o.name, ((yosysBV m.name o.name false o.width).eval ((lecScript m).env Y)).setWidth 64)) =
+        evalModuleOutputsW m ((lecScript m).inpVal Y) ((lecScript m).regVal Y) ∧
+      ∀ r ∈ m.regs, (yosysBV m.name r.name true r.width).eval ((lecScript m).env Y) =
+          (stepModuleRegs m (Y.bit false "rst") ((lecScript m).inpVal Y) ((lecScript m).regVal Y)
+            r.regIdx).setWidth r.width) :
+    ∀ Y, ¬ (lecScript m).holds Y := by
+  apply lecScript_unsat_of_agree m (moduleFaithful_of_checkWidths m hw)
+  intro Y hh ht
+  obtain ⟨hout, hreg⟩ := hagree Y hh ht
+  refine ⟨fun o ho => ?_, fun r hr => ?_⟩
+  · unfold evalModuleOutputsW at hout
+    simp only at hout
+    have hwo : o.width ≤ 64 := by
+      unfold checkPortWidths at hp
+      simp only [Bool.and_eq_true, List.all_eq_true] at hp
+      have := hp.2 o ho
+      simp only [validWidth, Bool.and_eq_true, decide_eq_true_eq] at this
+      exact this.2
+    have := (List.map_inj_left.mp hout) o ho
+    simp only [Prod.mk.injEq, true_and] at this
+    exact (setWidth64_eq_truncToWidth hwo _ _).mp this
+  · have hrst : resetPortOf m r = "rst" := by
+      unfold resetPortOf; simp [show ¬ (moduleDomains m).length > 1 by omega]
+    rw [hreg r hr, stepModuleRegs_at m _ _ _ hnd r hr, hrst]
 
 end Obend.Hardware.YosysLec
 end

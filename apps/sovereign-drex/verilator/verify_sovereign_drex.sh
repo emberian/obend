@@ -36,27 +36,18 @@ if [[ -x "$OBEND_BIN" ]]; then
 fi
 
 VERILATOR_BIN="${VERILATOR_BIN:-$(command -v verilator || echo /opt/homebrew/bin/verilator)}"
-Z3_BIN="${Z3_BIN:-$(command -v z3 || echo /opt/homebrew/bin/z3)}"
 
 rm -rf obj_dir sovereign_drex_trace.vcd
 
-echo "[1/3] Compiling sovereign_drex_batch_top.sv with $VERILATOR_BIN..."
+echo "[1/2] Compiling sovereign_drex_batch_top.sv with $VERILATOR_BIN..."
 "$VERILATOR_BIN" --cc --exe --build -j 0 \
   --trace -Wall -Wno-DECLFILENAME -Wno-UNUSED \
   sovereign_drex_batch_top.sv drex_batch_tb.cpp \
   -o Vsovereign_drex_batch_top
 
-echo "[2/3] Running Verilated 4-Validator Sovereign DReX + K-CARRY + WAL Simulation..."
+echo "[2/2] Running Verilated 4-Validator Sovereign DReX + K-CARRY + WAL Simulation..."
 ./obj_dir/Vsovereign_drex_batch_top
 
 test -s "sovereign_drex_trace.vcd"
 
-echo "[3/3] Running Z3 property sheet on sovereign_drex_props.smt2..."
-LEC_OUT="$("$Z3_BIN" -smt2 sovereign_drex_props.smt2)"
-echo "Z3 property sheet result: $LEC_OUT"
-if [[ "$LEC_OUT" != "unsat" ]]; then
-  echo "ERROR: Expected unsat from Z3 property sheet, got: $LEC_OUT" >&2
-  exit 1
-fi
-
-echo "[PASS] Flagship App #7 (apps/sovereign-drex) obend CLI + Verilator + K-CARRY + Z3 property sheet verified!"
+echo "[PASS] Flagship App #7 (apps/sovereign-drex) LEC + EQY + obend CLI + Verilator + K-CARRY verified!"

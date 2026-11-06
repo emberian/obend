@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Flagship App #8 (`apps/quantum-photonic-matter/verilator/verify_quantum_photonic.sh`):
 # byte equality with the Lean emitter, the LEC of the emitted .sv against Lean's model of its RtlModule
-# (`hardware/lec/lec.sh`), obend CLI package check/run, Verilator simulation, and the hand-written
-# z3 property sheet `quantum_photonic_props.smt2` (properties of its own formulas, not an LEC).
+# (`hardware/lec/lec.sh`), obend CLI package check/run, and Verilator simulation. The hand-typed
+# property sheet that stood here (a transcription of the datapath and invariants of that copy) was
+# removed on 2026-11-05: the LEC checks the emitted .sv itself.
 set -euo pipefail
 
 # --- byte equality with the Lean emitter (2026-11-04): the committed .sv must be exactly what
@@ -31,7 +32,6 @@ echo "=== LEC: the emitted .sv against Lean's model of quantumPhotonicCoprocTopR
 
 OBEND_BIN="${OBEND_BIN:-$REPO_ROOT/lean/.lake/build/bin/obend}"
 VERILATOR="${VERILATOR:-/opt/homebrew/bin/verilator}"
-Z3="${Z3:-/opt/homebrew/bin/z3}"
 
 if [[ -x "$OBEND_BIN" ]]; then
   echo "=== [0/3] Checking & running apps/quantum-photonic-matter/package.json + stdlib via obend CLI ==="
@@ -46,14 +46,14 @@ fi
 
 rm -rf obj_dir quantum_photonic_trace.vcd
 
-echo "=== [1/3] Compiling quantum_photonic_coproc_top.sv with Verilator ==="
+echo "=== [1/2] Compiling quantum_photonic_coproc_top.sv with Verilator ==="
 "$VERILATOR" -Wall -Wno-DECLFILENAME -Wno-UNUSED --cc --exe --build --trace \
   -O2 \
   quantum_photonic_coproc_top.sv \
   quantum_photonic_tb.cpp \
   -o Vquantum_photonic_coproc_top
 
-echo "=== [2/3] Running cycle-accurate Krawtchouk PST + Faddeev-LeVerrier + 3-Stage Majorana simulation ==="
+echo "=== [2/2] Running cycle-accurate Krawtchouk PST + Faddeev-LeVerrier + 3-Stage Majorana simulation ==="
 ./obj_dir/Vquantum_photonic_coproc_top
 
 if [[ ! -s "quantum_photonic_trace.vcd" ]]; then
@@ -62,12 +62,4 @@ if [[ ! -s "quantum_photonic_trace.vcd" ]]; then
 fi
 echo "Verified VCD trace: quantum_photonic_trace.vcd ($(wc -c < quantum_photonic_trace.vcd) bytes)"
 
-echo "=== [3/3] hand-written z3 property sheet (crosstalk, braiding; not an LEC) ==="
-Z3_OUT="$("$Z3" quantum_photonic_props.smt2)"
-echo "Z3 property sheet result: $Z3_OUT"
-if [[ "$Z3_OUT" != "unsat" ]]; then
-  echo "ERROR: Z3 property sheet failed (expected unsat, got '$Z3_OUT')" >&2
-  exit 1
-fi
-
-echo "=== SUCCESS: Flagship App #8 (quantum-photonic-matter) obend CLI + Verilator + Z3 property sheet verified ==="
+echo "=== SUCCESS: Flagship App #8 (quantum-photonic-matter) LEC + obend CLI + Verilator verified ==="
