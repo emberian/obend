@@ -29,6 +29,12 @@ replay of the log step the same bytes the same way. The turns:
   none of its landings whose grants were revoked here or whose intent landed here. Obligations and
   landings are world state: every turn but `confirmed` keeps the first (`outstanding_kept`), every
   turn keeps the second (`landed_kept`), and a crash keeps both (`obligations_survive_crash`);
+* `forget`, `compacted`, `forked`: retention (`Obend.Vault.Retention`): a forget declares a retention
+  contract (refused while anything needs the prefix, `forget_refused_when_needed`); the log is then
+  replaced by one `compacted` record carrying the world, the anchor the records after it follow and
+  the forgotten prefix's digest (`forget_sound`); a declared branch holds a forget back until it
+  merges; a proposal or merge resting on the forgotten prefix is refused naming the contract
+  (`late_correction_refused`);
 * `rows`: rows committed to the register, all or none (`Obend.Ledger.Cli.commitRows`): the journal is
   part of the world, and the log is its only record (it was `.obend/ledger.json`);
 * `base`: a world from before the log (`.obend/world.json` and `.obend/ledger.json` of a vault opened by
@@ -46,6 +52,7 @@ public import Obend.Vault.Json
 public import Obend.Ledger.Commit
 public import Obend.Vault.Form
 public import Obend.Vault.Transport
+public import Obend.Vault.Retention
 public import Obend.Vault.Merge
 public import Obend.Digest.Cshake256
 @[expose] public section
@@ -99,6 +106,10 @@ structure World where
   outstanding : List Obligation := []
   /-- how many proposals it has sent -/
   minted : Nat := 0
+  /-- the retention contracts its `forget` turns declared (`Obend.Vault.Retention`) -/
+  retention : List Retention.Contract := []
+  /-- the branches it declared (`obend fork`) -/
+  forks : List Retention.Fork := []
 deriving DecidableEq
 
 /-- One turn of the deployed entry. -/
@@ -111,7 +122,7 @@ inductive Turn
   | selected (who : Option String) (page : String) (k i : Nat)
   | recited (who : Option String) (page : String)
   | merged (label : String) (other : Store) (skipLedger : Bool) (otherGrants : Option Grants := none)
-      (otherLanded : List Landing := [])
+      (otherLanded : List Landing := []) (reaches : Option Bool := none)
   | resolved (k : Nat) (right : Bool)
   | rows (rs : List Row)
   | captured (situation name : String) (g : Grant) (src dst : String) (amount : Nat) (field : String)
@@ -126,6 +137,9 @@ inductive Turn
   | transported (name : String)
   | proposed (name received digest vault : String) (hops : List Grant) (a : Assignment) (holder : String)
   | confirmed (intent : String) (effects : Nat)
+  | forget (c : Retention.Contract)
+  | compacted (count digest anchor : Nat) (w : World)
+  | forked (name : String)
 
 /-- What a turn says beside the world it leaves (a command's store before `settle`, where it reports
 on it, as it always did). -/
@@ -259,10 +273,22 @@ def proposalJson (name digest vault : String) (hops : List Grant) (a : Assignmen
     ("hops", Json.arr (hops.map Form.grantJson).toArray), ("fill", Form.assignmentJson a), ("by", Json.str holder),
     ("intent", Json.str intent)]
 
+/-- The contract that retired a form, if one did. -/
+def retiredBy (w : World) (name : String) : Option Retention.Contract :=
+  w.retention.find? (·.retire.contains name)
+
+/-- A proposal for a retired form, refused: it rests on what the contract forgot. -/
+def lateText (name : String) (c : Retention.Contract) : String :=
+  name ++ ": refused: late: the form was retired by the retention contract " ++ c.name ++
+    "; a proposal for it rests on a forgotten prefix of the log"
+
 /-- **A proposal judged, its intent aside**: the form it names, as issued, then `judgeEffect`; the world
 with the proposal landed and its receipt on the chain, and its landing (the intent left blank). -/
 def judgeNew (w : World) (name digest : String) (hops : List Grant) (a : Assignment) :
     Except String (World × Outcome × Landing) :=
+  match retiredBy w name with
+  | some c => .error (lateText name c)
+  | none =>
   match w.forms.find? (·.name == name) with
   | none => .error ("refused: no form named " ++ name ++ " here")
   | some f =>
@@ -287,6 +313,63 @@ def sortLandings (w : World) (G : Grants) (theirs0 : List Landing) : List Landin
   let refused := fresh.filter fun l => !(l.supports.any fun id => G.live.any (·.id == id))
   let admitted := fresh.filter fun l => l.supports.any fun id => G.live.any (·.id == id)
   (admitted, refused, dups)
+
+/-- The merge of another replica's store (with its grants and landings, when the record carries them). -/
+def mergeStep (w : World) (label : String) (other : Store) (skipLedger : Bool) (og : Option Grants)
+    (theirs : List Landing) : Except String (World × Outcome) :=
+  match og, theirs with
+  | none, _ =>
+      let (s, notes) := Merge.mergeVault w.store other label
+        (skip := if skipLedger then Obend.Ledger.Cli.ledgerOwned else fun _ => false)
+      .ok ({ w with store := settle H s }, .merged s notes)
+  | some og, theirs =>
+      let G := w.grants.merge og
+      let (admitted, refused, dups) := sortLandings w G theirs
+      let held := (refused ++ dups).flatMap (·.pages)
+      let (s, notes) := Merge.mergeVault w.store other label
+        (skip := fun n => (skipLedger && Obend.Ledger.Cli.ledgerOwned n) || held.contains n)
+      let said := refused.map (fun l => ", ".intercalate l.pages ++ ": not merged from " ++ label ++ ": the landing of " ++
+          l.form ++ " (intent " ++ l.intent ++ ", by " ++ l.holder ++ ") rested on " ++ ", ".intercalate l.supports ++
+          ", revoked here") ++
+        dups.map (fun l => ", ".intercalate l.pages ++ ": not merged from " ++ label ++ ": the landing of " ++ l.form ++
+          " (intent " ++ l.intent ++ ") is the one landed here; not landed twice")
+      .ok ({ w with store := settle H s, grants := G,
+                    landed := w.landed ++ admitted.map fun l => { l with receipt := 0 } }, .merged s (said ++ notes))
+
+/-- A merge that rests on a forgotten prefix: from a branch the contract abandoned, or from a replica
+whose log does not reach the horizon (`reaches`: what the command read of the other log). -/
+def lateMerge (w : World) (label : String) (reaches : Option Bool) : Option String :=
+  match w.retention.find? (·.abandon.contains label), w.retention.getLast?, reaches with
+  | some c, _, _ => some ("not merged: late: " ++ label ++ " was abandoned by the retention contract " ++ c.name)
+  | none, some c, some false => some ("not merged: late: " ++ label ++ "'s log does not reach the horizon of the " ++
+      "retention contract " ++ c.name ++ " (it forked before the prefix forgotten here); its corrections " ++
+      "would arrive later than the contract allows")
+  | _, _, _ => none
+
+def markMerged (bs : List Retention.Fork) (label : String) : List Retention.Fork :=
+  bs.map fun b => if b.name == label then { b with merged := true } else b
+
+/-- **What still needs the prefix a `forget` would forget**, the first of it, said: a proposal sent
+from here with no receipt (an obligation), a form issued here that stands and that the contract does
+not retire, a retired form whose continuity contract promised what retiring it would break, a branch
+declared here that has not merged and that the contract does not abandon. -/
+def needs (w : World) (c : Retention.Contract) : Option String :=
+  match w.outstanding with
+  | o :: _ => some ("refused: the proposal " ++ o.intent ++ " of " ++ o.form ++ " sent from here awaits its " ++
+      "receipt: an obligation reaches into the prefix")
+  | [] =>
+  match w.forms.filter (fun f => (retiredBy w f.name).isNone && !c.retire.contains f.name) with
+  | f :: _ => some ("refused: the form " ++ f.name ++ " was issued against the prefix and stands; retire it " ++
+      "(--retire " ++ f.name ++ ") or keep the prefix")
+  | [] =>
+  match c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome) with
+  | n :: _ => some ("refused: the form " ++ n ++ " has a continuity contract: what it promised reaches past " ++
+      "the horizon, and retiring it would break it")
+  | [] =>
+  match w.forks.filter (fun b => !b.merged && !c.abandon.contains b.name) with
+  | b :: _ => some ("refused: the branch " ++ b.name ++ " forked from the prefix and has not merged; merge it " ++
+      "or abandon it (--abandon " ++ b.name ++ ")")
+  | [] => none
 
 /-- **The step of a turn**: the store function its command calls, or a refusal (a refused turn is
 never logged). -/
@@ -324,23 +407,13 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     match w.store.actor who >>= fun a => reciteIn H w.store a page with
     | .ok (s, n) => .ok ({ w with store := settle H s }, .recited s n)
     | .error e => .error e
-  | .merged label other skipLedger none _ =>
-    let (s, notes) := Merge.mergeVault w.store other label
-      (skip := if skipLedger then Obend.Ledger.Cli.ledgerOwned else fun _ => false)
-    .ok ({ w with store := settle H s }, .merged s notes)
-  | .merged label other skipLedger (some og) theirs =>
-    let G := w.grants.merge og
-    let (admitted, refused, dups) := sortLandings w G theirs
-    let held := (refused ++ dups).flatMap (·.pages)
-    let (s, notes) := Merge.mergeVault w.store other label
-      (skip := fun n => (skipLedger && Obend.Ledger.Cli.ledgerOwned n) || held.contains n)
-    let said := refused.map (fun l => ", ".intercalate l.pages ++ ": not merged from " ++ label ++ ": the landing of " ++
-        l.form ++ " (intent " ++ l.intent ++ ", by " ++ l.holder ++ ") rested on " ++ ", ".intercalate l.supports ++
-        ", revoked here") ++
-      dups.map (fun l => ", ".intercalate l.pages ++ ": not merged from " ++ label ++ ": the landing of " ++ l.form ++
-        " (intent " ++ l.intent ++ ") is the one landed here; not landed twice")
-    .ok ({ w with store := settle H s, grants := G,
-                  landed := w.landed ++ admitted.map fun l => { l with receipt := 0 } }, .merged s (said ++ notes))
+  | .merged label other skipLedger og theirs reaches =>
+    match lateMerge w label reaches with
+    | some e => .error e
+    | none =>
+      match mergeStep w label other skipLedger og theirs with
+      | .ok (w', o) => .ok ({ w' with forks := markMerged w'.forks label }, o)
+      | .error e => .error e
   | .resolved k right =>
     match Merge.resolveIn w.store k (if right then .right else .left) with
     | .ok (s, receipt) => .ok ({ w with store := settle H s }, .resolved s receipt)
@@ -365,6 +438,9 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
       | .error e => .error e
       | .ok (w', o, l) => .ok ({ w' with landed := w.landed ++ [{ l with intent := i }] }, o)
   | .judged name digest hops a none =>
+    match retiredBy w name with
+    | some c => .error (lateText name c)
+    | none =>
     match w.forms.find? (·.name == name) with
     | none => .error ("refused: no form named " ++ name ++ " here")
     | some f =>
@@ -447,6 +523,17 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
                   sent := (w.sent.filter (·.1 != name)) ++ [(name, text)],
                   outstanding := w.outstanding ++ [⟨i, name, digest, vault, holder, a⟩],
                   minted := w.minted + 1 }, .proposed i text)
+  | .forget c =>
+    match c.retire.find? (fun n => !w.forms.any (·.name == n)) with
+    | some n => .error ("refused: no form named " ++ n ++ " to retire")
+    | none =>
+    match needs w c with
+    | some e => .error e
+    | none => .ok ({ w with retention := w.retention ++ [c] }, .quiet)
+  | .compacted _ _ _ w' => .ok (w', .quiet)
+  | .forked name =>
+    if w.forks.any (fun b => b.name == name && !b.merged) then .error ("refused: the branch " ++ name ++ " is out already")
+    else .ok ({ w with forks := (w.forks.filter (·.name != name)) ++ [⟨name, false⟩] }, .quiet)
   | .confirmed i effects =>
     match w.outstanding.find? (·.intent == i) with
     | none => .error ("refused: no proposal sent from here awaits a receipt for intent " ++ i)
@@ -518,7 +605,9 @@ def worldJson (w : World) : Json :=
     (if w.landed.isEmpty then [] else [("landed", Json.arr (w.landed.map Transport.landingJson).toArray)]) ++
     (if w.outstanding.isEmpty then [] else
       [("outstanding", Json.arr (w.outstanding.map Transport.obligationJson).toArray)]) ++
-    (if w.minted == 0 then [] else [("minted", toJson w.minted)])))
+    (if w.minted == 0 then [] else [("minted", toJson w.minted)]) ++
+    (if w.retention.isEmpty then [] else [("retention", Json.arr (w.retention.map Retention.contractJson).toArray)]) ++
+    (if w.forks.isEmpty then [] else [("forks", Json.arr (w.forks.map Retention.forkJson).toArray)])))
 
 def worldOf (j : Json) : Except String World := do
   let store ← fullStoreOf (← j.getObjVal? "store")
@@ -536,7 +625,9 @@ def worldOf (j : Json) : Except String World := do
   let landed ← opt "landed" [] fun v => do (← v.getArr?).toList.mapM Transport.landingOf
   let outstanding ← opt "outstanding" [] fun v => do (← v.getArr?).toList.mapM Transport.obligationOf
   let minted ← opt "minted" 0 fun v => v.getNat?
-  return ⟨store, journal, forms, receipts, received, sent, issues, grants, landed, outstanding, minted⟩
+  let retention ← opt "retention" [] fun v => do (← v.getArr?).toList.mapM Retention.contractOf
+  let forks ← opt "forks" [] fun v => do (← v.getArr?).toList.mapM Retention.forkOf
+  return ⟨store, journal, forms, receipts, received, sent, issues, grants, landed, outstanding, minted, retention, forks⟩
 
 def turnJson : Turn → Json
   | .base w => Json.mkObj [("turn", "base"), ("world", worldJson w)]
@@ -550,12 +641,13 @@ def turnJson : Turn → Json
   | .selected who page k i => Json.mkObj [("turn", "select"), ("as", optStrJson who), ("page", Json.str page),
       ("section", toJson k), ("candidate", toJson i)]
   | .recited who page => Json.mkObj [("turn", "recite"), ("as", optStrJson who), ("page", Json.str page)]
-  | .merged label other skip og theirs => Json.mkObj ([("turn", Json.str "merge"), ("label", Json.str label),
+  | .merged label other skip og theirs reaches => Json.mkObj ([("turn", Json.str "merge"), ("label", Json.str label),
       ("other", storeJson other), ("skipLedger", toJson skip)] ++
       (match og with
         | some g => [("otherGrants", Transport.grantsJson g),
             ("otherLanded", Json.arr (theirs.map Transport.landingJson).toArray)]
-        | none => []))
+        | none => []) ++
+      (match reaches with | some b => [("reaches", toJson b)] | none => []))
   | .resolved k right => Json.mkObj [("turn", "resolve"), ("conflict", toJson k), ("right", toJson right)]
   | .rows rs => Json.mkObj [("turn", "rows"), ("rows", Json.arr (rs.map rowJson).toArray)]
   | .captured situation name g src dst amount field refs => Json.mkObj [("turn", "capture"),
@@ -578,6 +670,10 @@ def turnJson : Turn → Json
       ("received", Json.str received), ("digest", Json.str digest), ("vault", Json.str vault),
       ("hops", Json.arr (hops.map Form.grantJson).toArray), ("fill", Form.assignmentJson a), ("by", Json.str holder)]
   | .confirmed i effects => Json.mkObj [("turn", "confirm"), ("intent", Json.str i), ("effects", toJson effects)]
+  | .forget c => Json.mkObj [("turn", "forget"), ("contract", Retention.contractJson c)]
+  | .compacted count digest anchor w => Json.mkObj [("turn", "compacted"), ("count", toJson count),
+      ("digest", toJson digest), ("anchor", toJson anchor), ("world", worldJson w)]
+  | .forked name => Json.mkObj [("turn", "fork"), ("name", Json.str name)]
 
 def turnOf (j : Json) : Except String Turn := do
   match ← j.getObjValAs? String "turn" with
@@ -608,8 +704,9 @@ def turnOf (j : Json) : Except String Turn := do
     match j.getObjVal? "otherGrants" with
     | .ok g =>
       let theirs ← (← j.getObjValAs? (Array Json) "otherLanded").toList.mapM Transport.landingOf
-      return .merged label other skip (some (← Transport.grantsOf g)) theirs
-    | .error _ => return .merged label other skip
+      let reaches := (j.getObjValAs? Bool "reaches").toOption
+      return .merged label other skip (some (← Transport.grantsOf g)) theirs reaches
+    | .error _ => return .merged label other skip none [] (j.getObjValAs? Bool "reaches").toOption
   | "resolve" => return .resolved (← j.getObjValAs? Nat "conflict") (← j.getObjValAs? Bool "right")
   | "rows" => return .rows (← (← j.getObjValAs? (Array Json) "rows").toList.mapM rowOf)
   | "capture" =>
@@ -649,6 +746,13 @@ def turnOf (j : Json) : Except String Turn := do
     let a ← Form.assignmentOf (← j.getObjVal? "fill")
     return .proposed name received digest vault hops a (← j.getObjValAs? String "by")
   | "confirm" => return .confirmed (← j.getObjValAs? String "intent") (← j.getObjValAs? Nat "effects")
+  | "forget" => return .forget (← Retention.contractOf (← j.getObjVal? "contract"))
+  | "compacted" =>
+    let count ← j.getObjValAs? Nat "count"
+    let digest ← j.getObjValAs? Nat "digest"
+    let anchor ← j.getObjValAs? Nat "anchor"
+    return .compacted count digest anchor (← worldOf (← j.getObjVal? "world"))
+  | "fork" => return .forked (← j.getObjValAs? String "name")
   | t => throw ("not a turn: " ++ t)
 
 def textBytes (s : String) : Bytes := s.toUTF8.toList
@@ -692,6 +796,9 @@ def Turn.kind : Turn → String
   | .transported .. => "transport"
   | .proposed .. => "propose"
   | .confirmed .. => "confirm"
+  | .forget .. => "forget"
+  | .compacted .. => "compacted"
+  | .forked .. => "fork"
 
 /-! ## The deployed machine and its theorems -/
 
@@ -800,17 +907,43 @@ theorem judged_keeps {w w' : World} {o : Outcome} {name digest : String} {hops :
         have := judgeNew_keeps hj
         exact ⟨fun x hx => by simp [this.1, hx], fun x hx => by simp [hx]⟩
 
+theorem mergeStep_keeps {w w1 : World} {label : String} {other : Store} {skip : Bool} {og : Option Grants}
+    {theirs : List Landing} {o : Outcome} (h : mergeStep w label other skip og theirs = .ok (w1, o)) :
+    w1.outstanding = w.outstanding ∧ ∀ x ∈ w.landed, x ∈ w1.landed := by
+  unfold mergeStep at h
+  split at h <;> (simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h) <;>
+    exact ⟨rfl, fun x hx => by simp [hx]⟩
+
+theorem merged_keeps {w w' : World} {o : Outcome} {label : String} {other : Store} {skip : Bool}
+    {og : Option Grants} {theirs : List Landing} {reaches : Option Bool}
+    (h : stepTurn w (.merged label other skip og theirs reaches) = .ok (w', o)) :
+    (∀ x ∈ w.outstanding, x ∈ w'.outstanding) ∧ (∀ x ∈ w.landed, x ∈ w'.landed) := by
+  simp only [stepTurn] at h
+  split at h
+  · cases h
+  · split at h
+    · rename_i w1 o1 hm
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, -⟩ := h
+      have := mergeStep_keeps hm
+      exact ⟨fun x hx => by simp [this.1, hx], fun x hx => this.2 x hx⟩
+    · cases h
+
 /-- **An obligation outlives every turn but its confirmation**: a revision, a transport, a merge, a
 judgment or a crash's recovery (which replays turns) keeps every proposal sent and not yet confirmed;
-only `confirmed` takes one away, and `base` is the log's first record. -/
+only `confirmed` takes one away, and `base` and `compacted` stand only first in a log, for the world
+of what came before. -/
 theorem outstanding_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w t = .ok (w', o))
-    (hb : ∀ w0, t ≠ .base w0) (hc : ∀ i e, t ≠ .confirmed i e) : ∀ x ∈ w.outstanding, x ∈ w'.outstanding := by
+    (hb : ∀ w0, t ≠ .base w0) (hk : ∀ n d a w0, t ≠ .compacted n d a w0) (hc : ∀ i e, t ≠ .confirmed i e) :
+    ∀ x ∈ w.outstanding, x ∈ w'.outstanding := by
   intro x hx
   cases t
   all_goals first
     | exact (hb _ rfl).elim
+    | exact (hk _ _ _ _ rfl).elim
     | exact (hc _ _ rfl).elim
     | exact (judged_keeps h).1 x hx
+    | exact (merged_keeps h).1 x hx
     | skip
   all_goals
     simp only [stepTurn] at h
@@ -824,12 +957,14 @@ theorem outstanding_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w
 /-- **A landing is never forgotten**: every turn but `base` keeps every proposal landed, so a duplicate
 stays a duplicate. -/
 theorem landed_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w t = .ok (w', o))
-    (hb : ∀ w0, t ≠ .base w0) : ∀ x ∈ w.landed, x ∈ w'.landed := by
+    (hb : ∀ w0, t ≠ .base w0) (hk : ∀ n d a w0, t ≠ .compacted n d a w0) : ∀ x ∈ w.landed, x ∈ w'.landed := by
   intro x hx
   cases t
   all_goals first
     | exact (hb _ rfl).elim
+    | exact (hk _ _ _ _ rfl).elim
     | exact (judged_keeps h).2 x hx
+    | exact (merged_keeps h).2 x hx
     | skip
   all_goals
     simp only [stepTurn] at h
@@ -853,6 +988,149 @@ theorem obligations_survive_crash {S : Session} (h : Reachable S) (k : Nat) :
   simp only at this ⊢
   rw [this]
   exact ⟨rfl, rfl⟩
+
+/-! ## Retention, at the deployed machine (`Obend.Vault.Retention`) -/
+
+/-- The anchor a record's turn names: a checkpoint record's (`compacted`), standing for a forgotten
+prefix that ended at that receipt digest. -/
+def anchorOfTurn (b : Bytes) : Option Nat :=
+  match decodeTurn b with
+  | .ok (.compacted _ _ a _) => some a
+  | _ => none
+
+/-- **`forget_sound`**: a session's log compacted after its first `n` records (the checkpoint record,
+then the records after them) replays to the world the session serves, which is the replay of its
+whole log; and a crash at any byte of the compacted log recovers the replay of its longest prefix of
+whole records, a world the session served after the same records of its whole log, the rest dropped
+as a torn tail. -/
+theorem forget_sound {S : Session} (h : Reachable S) {n : Nat} {cp : Record}
+    (hc : Retention.Compacts logHash deployed anchorOfTurn genesis S n cp) (k : Nat) :
+    S.world = replay deployed genesis (cp :: S.log.drop n) ∧
+      let C := cp :: S.log.drop n
+      let m := whole logHash C k
+      let tail := ((encodeAll logHash C).take k).drop (encodeAll logHash (C.take m)).length
+      Retention.recoverLog logHash deployed anchorOfTurn genesis ((encodeAll logHash C).take k) =
+          ⟨replay deployed genesis (C.take m), m, tail, tornWhy tail⟩ ∧
+        replay deployed genesis (C.take m) = replay deployed genesis (S.log.take (if m = 0 then 0 else n + (m - 1))) ∧
+        Reachable ⟨replay deployed genesis (C.take m), S.log.take (if m = 0 then 0 else n + (m - 1))⟩ :=
+  ⟨Retention.state_eq_replay_compacted h hc, Retention.recover_eq_replay_prefix_compacted h hc k⟩
+
+/-- A log never compacted reads, through `Retention.recoverLog`, exactly as `recover` reads it
+(`recover_eq_replay_prefix` stands for it unchanged). -/
+theorem recover_plain {S : Session} (h : Reachable S) (hplain : ∀ r ∈ S.log, anchorOfTurn r.payload = none)
+    (k : Nat) :
+    Retention.recoverLog logHash deployed anchorOfTurn genesis ((encodeAll logHash S.log).take k) =
+      recover logHash deployed genesis ((encodeAll logHash S.log).take k) :=
+  Retention.recoverLog_plain h hplain k
+
+/-- **What a `forget` needs to be admitted**: nothing reaches into the prefix. No proposal sent from
+here awaits its receipt; every form issued here is retired already or by this contract; no form it
+retires has a continuity contract; every branch declared here has merged or is abandoned by it. -/
+theorem needs_none_iff (w : World) (c : Retention.Contract) :
+    needs w c = none ↔
+      w.outstanding = [] ∧ (∀ f ∈ w.forms, (retiredBy w f.name).isSome ∨ f.name ∈ c.retire) ∧
+        (∀ n ∈ c.retire, ((w.issues.find? (·.form == n)).bind (·.contract)) = none) ∧
+        (∀ b ∈ w.forks, b.merged = true ∨ b.name ∈ c.abandon) := by
+  unfold needs
+  split
+  · rename_i heq; simp [heq]
+  · rename_i hout
+    split
+    · rename_i f rest hf
+      simp only [reduceCtorEq, false_iff, not_and]
+      intro _ hall
+      have hm : f ∈ w.forms.filter (fun f => (retiredBy w f.name).isNone && !c.retire.contains f.name) := by
+        rw [hf]; simp
+      simp only [List.mem_filter, Bool.and_eq_true, Option.isNone_iff_eq_none, Bool.not_eq_true'] at hm
+      rcases hall f hm.1 with h1 | h1
+      · rw [hm.2.1] at h1; simp at h1
+      · exact absurd h1 (by simpa using hm.2.2)
+    · rename_i hnf
+      split
+      · rename_i n rest hn
+        simp only [reduceCtorEq, false_iff, not_and]
+        intro _ _ hall
+        have hm : n ∈ c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome) := by
+          rw [hn]; simp
+        simp only [List.mem_filter, Option.isSome_iff_ne_none] at hm
+        exact absurd (hall n hm.1) hm.2
+      · rename_i hnn
+        split
+        · rename_i b rest hb
+          simp only [reduceCtorEq, false_iff, not_and]
+          intro _ _ _ hall
+          have hm : b ∈ w.forks.filter (fun b => !b.merged && !c.abandon.contains b.name) := by
+            rw [hb]; simp
+          simp at hm
+          rcases hall b hm.1 with h1 | h1
+          · rw [hm.2.1] at h1; cases h1
+          · exact absurd h1 (by simpa using hm.2.2)
+        · rename_i hnb
+          simp only [true_iff]
+          refine ⟨by cases hout' : w.outstanding <;> simp_all, ?_, ?_, ?_⟩
+          · intro f hf
+            have : f ∉ w.forms.filter (fun f => (retiredBy w f.name).isNone && !c.retire.contains f.name) := by
+              rw [hnf]; simp
+            simp [hf] at this
+            by_cases hr : retiredBy w f.name = none
+            · exact .inr (by simpa using this hr)
+            · exact .inl (Option.isSome_iff_ne_none.2 hr)
+          · intro n hn
+            have : n ∉ c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome) := by
+              rw [hnn]; simp
+            simp only [List.mem_filter, hn, true_and, Option.isSome_iff_ne_none] at this
+            simpa using this
+          · intro b hb
+            have : b ∉ w.forks.filter (fun b => !b.merged && !c.abandon.contains b.name) := by
+              rw [hnb]; simp
+            simp [hb] at this
+            by_cases hm : b.merged = true
+            · exact .inl hm
+            · exact .inr (by simpa using this (by simpa using hm))
+
+/-- **`forget_refused_when_needed`**: a forget is refused, by name, while anything still reaches into
+the prefix it would forget (`needs`: an obligation, an issued form it does not retire, a retired form
+with a continuity contract, an unmerged branch it does not abandon); and a forget admitted needed
+nothing. -/
+theorem forget_refused_when_needed (w : World) (c : Retention.Contract) :
+    (∀ e, needs w c = some e → (∀ n ∈ c.retire, w.forms.any (·.name == n)) → stepTurn w (.forget c) = .error e) ∧
+      (∀ w' o, stepTurn w (.forget c) = .ok (w', o) → needs w c = none ∧ w'.retention = w.retention ++ [c]) := by
+  constructor
+  · intro e he hr
+    have hf : c.retire.find? (fun n => !w.forms.any (·.name == n)) = none := by
+      rw [List.find?_eq_none]; intro n hn; simp [hr n hn]
+    simp only [stepTurn, hf, he]
+  · intro w' o h
+    simp only [stepTurn] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · rename_i hn
+        simp only [Except.ok.injEq, Prod.mk.injEq] at h
+        exact ⟨hn, by rw [← h.1]⟩
+
+/-- **`late_correction_refused`**: after a retention contract, a proposal for a form it retired is
+refused naming the contract, by intent or without one; a merge from a branch it abandoned, or from a
+replica whose log does not reach its horizon, is refused naming it. Never landed, never dropped in
+silence: the turn is an error with the contract's name. -/
+theorem late_correction_refused (w : World) :
+    (∀ name digest hops a c, retiredBy w name = some c →
+      stepTurn w (.judged name digest hops a none) = .error (lateText name c) ∧
+      ∀ i, Transport.duplicateOf w.landed i = none →
+        stepTurn w (.judged name digest hops a (some i)) = .error (lateText name c)) ∧
+    (∀ label other skip og theirs reaches e, lateMerge w label reaches = some e →
+      stepTurn w (.merged label other skip og theirs reaches) = .error e) ∧
+    (∀ label c, w.retention.getLast? = some c → w.retention.find? (·.abandon.contains label) = none →
+      lateMerge w label (some false) = some ("not merged: late: " ++ label ++ "'s log does not reach the horizon of the " ++
+        "retention contract " ++ c.name ++ " (it forked before the prefix forgotten here); its corrections " ++
+        "would arrive later than the contract allows")) := by
+  refine ⟨fun name digest hops a c hc => ⟨?_, fun i hi => ?_⟩, fun label other skip og theirs reaches e he => ?_,
+    fun label c hc hab => ?_⟩
+  · simp only [stepTurn, hc]
+  · simp only [stepTurn, hi, judgeNew, hc]
+  · simp only [stepTurn, he]
+  · simp only [lateMerge, hab, hc]
 
 end Obend.Vault.Replay
 
