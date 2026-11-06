@@ -350,7 +350,7 @@ def appendRecord (dir : System.FilePath) (n : Nat) (bs : Bytes) : IO Unit := do
 
 /-- **Commit a turn**: admit its bytes at the head (`Obend.Vault.Log.admit` at the deployed machine)
 and append the record; the head after it and what the turn said, or the refusal (nothing appended). -/
-def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String (Head × Outcome)) := do
+def commitTurnRaw (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String (Head × Outcome × Bytes)) := do
   let b := encodeTurn t
   if b.length ≥ 256 ^ 4 then return .error "a turn is under 4 GiB"
   -- the step (`judge`), then the record (`land`): `admit_of_step` says this is `Log.admit`'s record,
@@ -367,14 +367,14 @@ def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String
       let r : Record := ⟨⟨h.prev, oldC, newC, dig logHash b⟩, b⟩
       let bs := encodeRecord logHash r
       appendRecord dir (h.count + 1) bs
-      return ({ h with
+      return (({ h with
         world := w'
         prev := Hr logHash r.receipt
         count := h.count + 1
         size := h.size + bs.length
         lastStart := h.size
-        known := some (wb, newC) } : Head)
-    return .ok (h', o)
+        known := some (wb, newC) } : Head), bs)
+    return .ok (h'.1, o, h'.2)
 
 /-- The receipt digest a chain of records read from `prev` ends at: a checkpoint record first in a
 log stands for a prefix that ended at its anchor, and the records after it follow the anchor. -/
@@ -395,8 +395,10 @@ structure Recovery where
   tail : Bytes
   why : Option Drop
   checkpoint : String
-  /-- the log's bytes as read (read once per command) -/
+  /-- the log's bytes as read (empty when the recovery is the head a turn of this process left) -/
   bytes : ByteArray := .empty
+  /-- the bytes of the log's last record -/
+  last : ByteArray := .empty
 
 def dropText : Drop → String
   | .torn => "torn: the bytes end inside a record"
@@ -409,7 +411,7 @@ def dropText : Drop → String
 (`Obend.Vault.Log.recoverWith`; `checkpoint_is_cache`), reading nothing past the longest prefix of
 whole, linked records (`recover_eq_replay_prefix`). The replayed world must commit to what the last
 record's receipt names; otherwise the command stops. -/
-def recoverLog (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.phase "read" do
+def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.phase "read" do
   let bs ← readArray (logPath dir)
   let ckb? ← readCheckpoint dir
   let ck? := ckb?.map (·.1)
@@ -466,7 +468,53 @@ def recoverLog (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.phase "
   if last?.isSome && known.isNone then
     throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
       " commits to: the log was written by another step (relinking is not done here)"))
-  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize, known⟩, base, qs, tail, why, note, bs⟩
+  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize, known⟩, base, qs, tail, why, note, bs, bs.extract lastStart size⟩
+
+/-- What this process last knew of each vault's log: the log's length then, and the recovery. A
+command recovers a vault's world once: a later recovery of the same vault, the log the same length,
+is the one known, and a turn this process appended leaves the head it made (`commitTurn`). A log
+another process appended to is longer, and is recovered again. -/
+initialize recoveries : IO.Ref (List (String × Nat × Recovery)) ← IO.mkRef []
+
+def logSize (dir : System.FilePath) : IO Nat := do
+  if !(← (logPath dir).pathExists) then return 0
+  return (← (logPath dir).metadata).byteSize.toNat
+
+def vaultKey (dir : System.FilePath) : IO String := do
+  if ← dir.pathExists then return (← IO.FS.realPath dir).toString else return dir.toString
+
+/-- **Recover a vault's world from its log** (`recoverLogRead`), once per process and log length. -/
+def recoverLog (dir : System.FilePath) : IO Recovery := do
+  let key ← vaultKey dir
+  let size ← logSize dir
+  match (← recoveries.get).find? (fun (k, n, _) => k == key && n == size) with
+  | some (_, _, r) => return r
+  | none =>
+    let r ← recoverLogRead dir
+    -- only a recovery that read the whole log as records is kept (a dropped tail is truncated next)
+    if r.tail.isEmpty then recoveries.modify fun c => (key, size, r) :: c.filter (·.1 != key)
+    return r
+
+/-- The log was rewritten (compacted, or a torn tail truncated): recover it again. -/
+def forgetRecovery (dir : System.FilePath) : IO Unit := do
+  let key ← vaultKey dir
+  recoveries.modify fun c => c.filter (·.1 != key)
+
+/-- The head a turn of this process left, as the recovery of the log it appended to. -/
+def rememberHead (dir : System.FilePath) (h : Head) (last : ByteArray) : IO Unit := do
+  let key ← vaultKey dir
+  let size ← logSize dir
+  if size != h.size then return
+  let r : Recovery := ⟨h, h.world, [], [], none, "the world after record " ++ toString h.count, .empty, last⟩
+  recoveries.modify fun c => (key, size, r) :: c.filter (·.1 != key)
+
+/-- **Commit a turn** (`commitTurnRaw`), and remember the head it leaves as the vault's recovery. -/
+def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String (Head × Outcome)) := do
+  match ← commitTurnRaw dir h t with
+  | .error e => return .error e
+  | .ok (h', o, bs) =>
+    rememberHead dir h' ⟨bs.toArray⟩
+    return .ok (h', o)
 
 /-- The world from the log, read only (nothing is truncated, rewritten or redone). -/
 def readWorld (dir : System.FilePath) : IO Replay.World := do
@@ -567,6 +615,7 @@ def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
       waitToBeStopped barrier
     | none => Obend.Vault.Cost.writeBinFile (newLogPath dir) ⟨rb.toArray⟩
     IO.FS.rename (newLogPath dir) (logPath dir)
+    forgetRecovery dir
     if ← (checkpointPath dir).pathExists then IO.FS.removeFile (checkpointPath dir)
     return { world := h.world, prev := h.prev, count := 1, size := rb.length, lastStart := 0, base := true,
              baseSize := rb.length }
@@ -591,6 +640,7 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
     IO.println ("recovered: dropped a tail of " ++ toString r.tail.length ++ " bytes after record " ++
       toString r.head.count ++ " (" ++ ((r.why.map dropText).getD "") ++ ")")
     writeAtomicallyArray (logPath dir) (r.bytes.extract 0 r.head.size)
+    forgetRecovery dir
   match r.suffix.getLast? with
   | none => pure ()
   | some last =>
@@ -611,8 +661,7 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
     IO.FS.removeFile (newLogPath dir)
     IO.println ("recovered: an interrupted forget's new log (" ++ toString n ++ " bytes) dropped; the log stands")
   -- the bytes recovery read: up to the head's size they are the log's (a dropped tail is past it)
-  let bs := r.bytes
-  match parseOneAt logHash none (bs.extract r.head.lastStart r.head.size) 0 with
+  match parseOneAt logHash none r.last 0 with
   | .ok (last, _) =>
     if let .ok (.forget _) := decodeTurn last.payload then
       let h ← compactLog dir r.head
