@@ -463,6 +463,6 @@ cd swarm && obend forget eod --abandon lane-sdr --retire report-cost && obend lo
 ```
 
 ```text
-forgot 45 records (1162882 bytes) under the retention contract eod, retiring report-cost, abandoning lane-sdr: the log is one checkpoint record of 518878 bytes
-log: 1 records, 518878 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 45
+forgot 45 records (1160823 bytes) under the retention contract eod, retiring report-cost, abandoning lane-sdr: the log is one checkpoint record of 547383 bytes
+log: 1 records, 547383 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 45
 ```
