@@ -35,6 +35,13 @@ replay of the log step the same bytes the same way. The turns:
   the forgotten prefix's digest (`forget_sound`); a declared branch holds a forget back until it
   merges; a proposal or merge resting on the forgotten prefix is refused naming the contract
   (`late_correction_refused`);
+* `reasoned`, `justified`: the vault's reasons (`Obend.Reasons`): an observation, an assumption, an
+  explanation, a defeater or a proposed action, stepped by `Obend.Reasons.State.step`, which keeps the
+  judgment the well-founded model of the current base (`Obend.Reasons.from_scratch_consistent`); and a
+  proposal whose fill carries a justification, judged as a `judged` turn (a landing with its intent,
+  refused as a duplicate or as late like any other) only while that justification is supported now
+  (`justified_needs_support`), and refused by its reasons, by name, otherwise. The reasons are world
+  state, so a `compacted` record carries them whole and a `forget` keeps them (`forget_keeps_reasons`);
 * `rows`: rows committed to the register, all or none (`Obend.Ledger.Cli.commitRows`): the journal is
   part of the world, and the log is its only record (it was `.obend/ledger.json`);
 * `base`: a world from before the log (`.obend/world.json` and `.obend/ledger.json` of a vault opened by
@@ -55,6 +62,7 @@ public import Obend.Vault.Transport
 public import Obend.Vault.Retention
 public import Obend.Vault.Merge
 public import Obend.Digest.Cshake256
+public import Obend.Reasons
 @[expose] public section
 
 namespace Obend.Vault.Replay
@@ -110,6 +118,8 @@ structure World where
   retention : List Retention.Contract := []
   /-- the branches it declared (`obend fork`) -/
   forks : List Retention.Fork := []
+  /-- its reasons: what it observed, assumed, explained, defeated and proposed, and the judgment -/
+  reasons : Obend.Reasons.State := {}
 deriving DecidableEq
 
 /-- One turn of the deployed entry. -/
@@ -136,10 +146,13 @@ inductive Turn
   | revoked (id : String)
   | transported (name : String)
   | proposed (name received digest vault : String) (hops : List Grant) (a : Assignment) (holder : String)
+      (because : Option String := none)
   | confirmed (intent : String) (effects : Nat)
   | forget (c : Retention.Contract)
   | compacted (count digest anchor : Nat) (w : World)
   | forked (name : String)
+  | reasoned (e : Obend.Reasons.Event)
+  | justified (name digest : String) (hops : List Grant) (a : Assignment) (intent : Option String) (because : String)
 
 /-- What a turn says beside the world it leaves (a command's store before `settle`, where it reports
 on it, as it always did). -/
@@ -268,10 +281,11 @@ def judgeEffect (w : World) (f : Form) (hops : List Grant) (a : Assignment) :
   | .ok (s, ad, t) => return (s, ad, t, (Transport.supportsFor w.grants f).map (·.id))
 
 /-- The proposal a fill sends, with the identity of its intent. -/
-def proposalJson (name digest vault : String) (hops : List Grant) (a : Assignment) (holder intent : String) : Json :=
-  Json.mkObj [("proposal", Json.str name), ("digest", Json.str digest), ("vault", Json.str vault),
+def proposalJson (name digest vault : String) (hops : List Grant) (a : Assignment) (holder intent : String)
+    (because : Option String := none) : Json :=
+  Json.mkObj ([("proposal", Json.str name), ("digest", Json.str digest), ("vault", Json.str vault),
     ("hops", Json.arr (hops.map Form.grantJson).toArray), ("fill", Form.assignmentJson a), ("by", Json.str holder),
-    ("intent", Json.str intent)]
+    ("intent", Json.str intent)] ++ (match because with | some c => [("because", Json.str c)] | none => []))
 
 /-- The contract that retired a form, if one did. -/
 def retiredBy (w : World) (name : String) : Option Retention.Contract :=
@@ -371,6 +385,35 @@ def needs (w : World) (c : Retention.Contract) : Option String :=
       "or abandon it (--abandon " ++ b.name ++ ")")
   | [] => none
 
+/-- **A proposal judged**: with an intent, refused as a duplicate when it landed here, else `judgeNew`
+and its landing kept under its intent; without one, refused as late when its form was retired, else
+the form's own judgment (`Form.judgeProposal`). -/
+def judgeTurn (w : World) (name digest : String) (hops : List Grant) (a : Assignment) :
+    Option String → Except String (World × Outcome)
+  | some i =>
+    match Transport.duplicateOf w.landed i with
+    | some l => .error (dupText w name l)
+    | none =>
+      match judgeNew w name digest hops a with
+      | .error e => .error e
+      | .ok (w', o, l) => .ok ({ w' with landed := w.landed ++ [{ l with intent := i }] }, o)
+  | none =>
+    match retiredBy w name with
+    | some c => .error (lateText name c)
+    | none =>
+    match w.forms.find? (·.name == name) with
+    | none => .error ("refused: no form named " ++ name ++ " here")
+    | some f =>
+      if digest != Form.formDigest H f then
+        .error (name ++ ": refused: the form has changed since this proposal's copy was sent; send the form again")
+      else
+        match Form.judgeProposal H w.store f hops a with
+        | .error e => .error (name ++ ": " ++ e)
+        | .ok (s, ad, t) =>
+          let r := Form.receiptFor H w.receipts.getLast? f a ad t
+          .ok ({ w with store := settle H s, receipts := w.receipts ++ [r] },
+            .judged s ad t r (w.receipts.length + 1))
+
 /-- **The step of a turn**: the store function its command calls, or a refusal (a refused turn is
 never logged). -/
 def stepTurn (w : World) : Turn → Except String (World × Outcome)
@@ -430,29 +473,7 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
       match f.abstract value hole with
       | .ok g => .ok ({ w with forms := w.forms.map fun x => if x.name == name then g else x }, .form g 0)
       | .error e => .error ("refused: " ++ e)
-  | .judged name digest hops a (some i) =>
-    match Transport.duplicateOf w.landed i with
-    | some l => .error (dupText w name l)
-    | none =>
-      match judgeNew w name digest hops a with
-      | .error e => .error e
-      | .ok (w', o, l) => .ok ({ w' with landed := w.landed ++ [{ l with intent := i }] }, o)
-  | .judged name digest hops a none =>
-    match retiredBy w name with
-    | some c => .error (lateText name c)
-    | none =>
-    match w.forms.find? (·.name == name) with
-    | none => .error ("refused: no form named " ++ name ++ " here")
-    | some f =>
-      if digest != Form.formDigest H f then
-        .error (name ++ ": refused: the form has changed since this proposal's copy was sent; send the form again")
-      else
-        match Form.judgeProposal H w.store f hops a with
-        | .error e => .error (name ++ ": " ++ e)
-        | .ok (s, ad, t) =>
-          let r := Form.receiptFor H w.receipts.getLast? f a ad t
-          .ok ({ w with store := settle H s, receipts := w.receipts ++ [r] },
-            .judged s ad t r (w.receipts.length + 1))
+  | .judged name digest hops a intent => judgeTurn w name digest hops a intent
   | .filled name received sent =>
     .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
                   sent := (w.sent.filter (·.1 != name)) ++ [(name, sent)] }, .quiet)
@@ -516,9 +537,9 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
             | (v, K') =>
               .ok (setIssue w { iss with contract := some K', basis := Transport.basisOf w.store f },
                 .transported v K.offer.length ls)
-  | .proposed name received digest vault hops a holder =>
+  | .proposed name received digest vault hops a holder because =>
     let i := Transport.mintIntent H digest holder a w.minted
-    let text := (proposalJson name digest vault hops a holder i).pretty ++ "\n"
+    let text := (proposalJson name digest vault hops a holder i because).pretty ++ "\n"
     .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
                   sent := (w.sent.filter (·.1 != name)) ++ [(name, text)],
                   outstanding := w.outstanding ++ [⟨i, name, digest, vault, holder, a⟩],
@@ -534,6 +555,14 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
   | .forked name =>
     if w.forks.any (fun b => b.name == name && !b.merged) then .error ("refused: the branch " ++ name ++ " is out already")
     else .ok ({ w with forks := (w.forks.filter (·.name != name)) ++ [⟨name, false⟩] }, .quiet)
+  | .reasoned e =>
+    match w.reasons.step e with
+    | .error err => .error err
+    | .ok r => .ok ({ w with reasons := r }, .quiet)
+  | .justified name digest hops a intent because =>
+    match w.reasons.justify because with
+    | .error e => .error (name ++ ": refused by its reasons: " ++ e)
+    | .ok () => judgeTurn w name digest hops a intent
   | .confirmed i effects =>
     match w.outstanding.find? (·.intent == i) with
     | none => .error ("refused: no proposal sent from here awaits a receipt for intent " ++ i)
@@ -607,7 +636,8 @@ def worldJson (w : World) : Json :=
       [("outstanding", Json.arr (w.outstanding.map Transport.obligationJson).toArray)]) ++
     (if w.minted == 0 then [] else [("minted", toJson w.minted)]) ++
     (if w.retention.isEmpty then [] else [("retention", Json.arr (w.retention.map Retention.contractJson).toArray)]) ++
-    (if w.forks.isEmpty then [] else [("forks", Json.arr (w.forks.map Retention.forkJson).toArray)])))
+    (if w.forks.isEmpty then [] else [("forks", Json.arr (w.forks.map Retention.forkJson).toArray)]) ++
+    (if w.reasons == {} then [] else [("reasons", Obend.Reasons.stateJson w.reasons)])))
 
 def worldOf (j : Json) : Except String World := do
   let store ← fullStoreOf (← j.getObjVal? "store")
@@ -627,7 +657,9 @@ def worldOf (j : Json) : Except String World := do
   let minted ← opt "minted" 0 fun v => v.getNat?
   let retention ← opt "retention" [] fun v => do (← v.getArr?).toList.mapM Retention.contractOf
   let forks ← opt "forks" [] fun v => do (← v.getArr?).toList.mapM Retention.forkOf
-  return ⟨store, journal, forms, receipts, received, sent, issues, grants, landed, outstanding, minted, retention, forks⟩
+  let reasons ← opt "reasons" {} Obend.Reasons.stateOf
+  return ⟨store, journal, forms, receipts, received, sent, issues, grants, landed, outstanding, minted, retention, forks,
+    reasons⟩
 
 def turnJson : Turn → Json
   | .base w => Json.mkObj [("turn", "base"), ("world", worldJson w)]
@@ -666,14 +698,20 @@ def turnJson : Turn → Json
   | .granted id g => Json.mkObj [("turn", "grant"), ("id", Json.str id), ("grant", Form.grantJson g)]
   | .revoked id => Json.mkObj [("turn", "revoke"), ("id", Json.str id)]
   | .transported name => Json.mkObj [("turn", "transport"), ("name", Json.str name)]
-  | .proposed name received digest vault hops a holder => Json.mkObj [("turn", "propose"), ("name", Json.str name),
-      ("received", Json.str received), ("digest", Json.str digest), ("vault", Json.str vault),
-      ("hops", Json.arr (hops.map Form.grantJson).toArray), ("fill", Form.assignmentJson a), ("by", Json.str holder)]
+  | .proposed name received digest vault hops a holder because => Json.mkObj ([("turn", Json.str "propose"),
+      ("name", Json.str name), ("received", Json.str received), ("digest", Json.str digest), ("vault", Json.str vault),
+      ("hops", Json.arr (hops.map Form.grantJson).toArray), ("fill", Form.assignmentJson a), ("by", Json.str holder)] ++
+      (match because with | some c => [("because", Json.str c)] | none => []))
   | .confirmed i effects => Json.mkObj [("turn", "confirm"), ("intent", Json.str i), ("effects", toJson effects)]
   | .forget c => Json.mkObj [("turn", "forget"), ("contract", Retention.contractJson c)]
   | .compacted count digest anchor w => Json.mkObj [("turn", "compacted"), ("count", toJson count),
       ("digest", toJson digest), ("anchor", toJson anchor), ("world", worldJson w)]
   | .forked name => Json.mkObj [("turn", "fork"), ("name", Json.str name)]
+  | .reasoned e => Json.mkObj [("turn", "reason"), ("event", Obend.Reasons.eventJson e)]
+  | .justified name digest hops a intent because => Json.mkObj ([("turn", Json.str "justified"), ("name", Json.str name),
+      ("digest", Json.str digest), ("hops", Json.arr (hops.map Form.grantJson).toArray),
+      ("fill", Form.assignmentJson a), ("because", Json.str because)] ++
+      (match intent with | some i => [("intent", Json.str i)] | none => []))
 
 def turnOf (j : Json) : Except String Turn := do
   match ← j.getObjValAs? String "turn" with
@@ -745,6 +783,7 @@ def turnOf (j : Json) : Except String Turn := do
     let hops ← (← j.getObjValAs? (Array Json) "hops").toList.mapM Form.grantOf
     let a ← Form.assignmentOf (← j.getObjVal? "fill")
     return .proposed name received digest vault hops a (← j.getObjValAs? String "by")
+      (j.getObjValAs? String "because").toOption
   | "confirm" => return .confirmed (← j.getObjValAs? String "intent") (← j.getObjValAs? Nat "effects")
   | "forget" => return .forget (← Retention.contractOf (← j.getObjVal? "contract"))
   | "compacted" =>
@@ -753,6 +792,13 @@ def turnOf (j : Json) : Except String Turn := do
     let anchor ← j.getObjValAs? Nat "anchor"
     return .compacted count digest anchor (← worldOf (← j.getObjVal? "world"))
   | "fork" => return .forked (← j.getObjValAs? String "name")
+  | "reason" => return .reasoned (← Obend.Reasons.eventOf (← j.getObjVal? "event"))
+  | "justified" =>
+    let name ← j.getObjValAs? String "name"
+    let digest ← j.getObjValAs? String "digest"
+    let hops ← (← j.getObjValAs? (Array Json) "hops").toList.mapM Form.grantOf
+    let a ← Form.assignmentOf (← j.getObjVal? "fill")
+    return .justified name digest hops a (j.getObjValAs? String "intent").toOption (← j.getObjValAs? String "because")
   | t => throw ("not a turn: " ++ t)
 
 def textBytes (s : String) : Bytes := s.toUTF8.toList
@@ -799,6 +845,8 @@ def Turn.kind : Turn → String
   | .forget .. => "forget"
   | .compacted .. => "compacted"
   | .forked .. => "fork"
+  | .reasoned .. => "reason"
+  | .justified .. => "justified"
 
 /-! ## The deployed machine and its theorems -/
 
@@ -854,7 +902,7 @@ is refused as a duplicate, whatever it says, and nothing lands twice. -/
 theorem judge_refuses_duplicate (w : World) (name digest : String) (hops : List Grant) (a : Assignment)
     {i : String} {l : Landing} (h : Transport.duplicateOf w.landed i = some l) :
     stepTurn w (.judged name digest hops a (some i)) = .error (dupText w name l) := by
-  simp only [stepTurn, h]
+  simp only [stepTurn, judgeTurn, h]
 
 /-- **By identity, not by content**: a proposal whose intent has not landed is judged on what it says
 (`judgeNew`, which does not read the intent), and its landing is recorded under its intent. Two
@@ -866,7 +914,7 @@ theorem judge_by_identity (w : World) (name digest : String) (hops : List Grant)
       match judgeNew w name digest hops a with
       | .error e => .error e
       | .ok (w', o, l) => .ok ({ w' with landed := w.landed ++ [{ l with intent := i }] }, o) := by
-  simp only [stepTurn, h]
+  simp only [stepTurn, judgeTurn, h]
 
 theorem judge_content_alike (w : World) (name digest : String) (hops : List Grant) (a : Assignment) {i j : String}
     (hi : Transport.duplicateOf w.landed i = none) (hj : Transport.duplicateOf w.landed j = none) :
@@ -883,12 +931,12 @@ theorem judgeNew_keeps {w w1 : World} {name digest : String} {hops : List Grant}
   repeat' split at h
   all_goals (cases h <;> exact ⟨rfl, rfl⟩)
 
-theorem judged_keeps {w w' : World} {o : Outcome} {name digest : String} {hops : List Grant} {a : Assignment}
-    {intent : Option String} (h : stepTurn w (.judged name digest hops a intent) = .ok (w', o)) :
+theorem judgeTurn_keeps {w w' : World} {o : Outcome} {name digest : String} {hops : List Grant} {a : Assignment}
+    {intent : Option String} (h : judgeTurn w name digest hops a intent = .ok (w', o)) :
     (∀ x ∈ w.outstanding, x ∈ w'.outstanding) ∧ (∀ x ∈ w.landed, x ∈ w'.landed) := by
   cases intent with
   | none =>
-    simp only [stepTurn] at h
+    simp only [judgeTurn] at h
     repeat' split at h
     all_goals first
       | contradiction
@@ -896,7 +944,7 @@ theorem judged_keeps {w w' : World} {o : Outcome} {name digest : String} {hops :
       | (simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h
          exact ⟨fun x hx => hx, fun x hx => hx⟩)
   | some i =>
-    simp only [stepTurn] at h
+    simp only [judgeTurn] at h
     split at h
     · cases h
     · split at h
@@ -906,6 +954,80 @@ theorem judged_keeps {w w' : World} {o : Outcome} {name digest : String} {hops :
         obtain ⟨rfl, -⟩ := h
         have := judgeNew_keeps hj
         exact ⟨fun x hx => by simp [this.1, hx], fun x hx => by simp [hx]⟩
+
+theorem judged_keeps {w w' : World} {o : Outcome} {name digest : String} {hops : List Grant} {a : Assignment}
+    {intent : Option String} (h : stepTurn w (.judged name digest hops a intent) = .ok (w', o)) :
+    (∀ x ∈ w.outstanding, x ∈ w'.outstanding) ∧ (∀ x ∈ w.landed, x ∈ w'.landed) :=
+  judgeTurn_keeps h
+
+/-- **A justified proposal is judged only while its justification is supported**: the vault's reasons,
+as it keeps them, say the justification is supported now, and then the proposal is judged as any
+other (`judgeTurn`: by its intent, refused as a duplicate or as late, landed with its intent). -/
+theorem justified_needs_support {w w' : World} {o : Outcome} {name digest because : String}
+    {hops : List Grant} {a : Assignment} {intent : Option String}
+    (h : stepTurn w (.justified name digest hops a intent because) = .ok (w', o)) :
+    w.reasons.status because = .supported ∧ judgeTurn w name digest hops a intent = .ok (w', o) := by
+  simp only [stepTurn] at h
+  split at h
+  · cases h
+  · rename_i hj
+    exact ⟨(Obend.Reasons.justify_ok_iff _ _).1 hj, h⟩
+
+/-- …and, where the reasons the vault keeps are consistent (every `reasoned` turn keeps them so,
+`reasoned_consistent`), supported in the well-founded model of its current observations and
+assumptions. -/
+theorem justified_supported_now {w w' : World} {o : Outcome} {name digest because : String}
+    {hops : List Grant} {a : Assignment} {intent : Option String} (hc : w.reasons.Consistent)
+    (h : stepTurn w (.justified name digest hops a intent because) = .ok (w', o)) :
+    Obend.Reasons.status w.reasons.base because = .supported := by
+  rw [← Obend.Reasons.State.status_eq hc]
+  exact (justified_needs_support h).1
+
+/-- **A refused justification refuses the proposal**: while the justification is not supported, the
+proposal is refused by its reasons, whatever the form would say. -/
+theorem justified_refused {w : World} {name digest because : String} {hops : List Grant} {a : Assignment}
+    {intent : Option String} (hn : w.reasons.status because ≠ .supported) :
+    ∃ e, stepTurn w (.justified name digest hops a intent because) = .error e := by
+  simp only [stepTurn]
+  split
+  · exact ⟨_, rfl⟩
+  · rename_i hj
+    exact absurd ((Obend.Reasons.justify_ok_iff _ _).1 hj) hn
+
+/-- **A justified proposal with an intent is a landing like any other**: refused as a duplicate once
+its intent landed here, and, when it lands, landed under its intent. -/
+theorem justified_by_identity {w w' : World} {o : Outcome} {name digest because i : String} {hops : List Grant}
+    {a : Assignment} (h : stepTurn w (.justified name digest hops a (some i) because) = .ok (w', o)) :
+    Transport.duplicateOf w.landed i = none ∧ ∃ l : Landing, w'.landed = w.landed ++ [{ l with intent := i }] := by
+  have h2 := (justified_needs_support h).2
+  simp only [judgeTurn] at h2
+  split at h2
+  · cases h2
+  · rename_i hd
+    split at h2
+    · cases h2
+    · rename_i w1 o1 l1 _
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h2
+      obtain ⟨rfl, -⟩ := h2
+      exact ⟨hd, l1, rfl⟩
+
+theorem justified_keeps {w w' : World} {o : Outcome} {name digest because : String} {hops : List Grant}
+    {a : Assignment} {intent : Option String}
+    (h : stepTurn w (.justified name digest hops a intent because) = .ok (w', o)) :
+    (∀ x ∈ w.outstanding, x ∈ w'.outstanding) ∧ (∀ x ∈ w.landed, x ∈ w'.landed) :=
+  judgeTurn_keeps (justified_needs_support h).2
+
+/-- **A `reasoned` turn keeps the vault's reasons consistent**: its kept judgment stays the
+well-founded model of its base (`Obend.Reasons.step_consistent`). -/
+theorem reasoned_consistent {w w' : World} {o : Outcome} {e : Obend.Reasons.Event} (hc : w.reasons.Consistent)
+    (h : stepTurn w (.reasoned e) = .ok (w', o)) : w'.reasons.Consistent := by
+  simp only [stepTurn] at h
+  split at h
+  · cases h
+  · rename_i r hr
+    simp only [Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, -⟩ := h
+    exact Obend.Reasons.step_consistent hc hr
 
 theorem mergeStep_keeps {w w1 : World} {label : String} {other : Store} {skip : Bool} {og : Option Grants}
     {theirs : List Landing} {o : Outcome} (h : mergeStep w label other skip og theirs = .ok (w1, o)) :
@@ -943,6 +1065,7 @@ theorem outstanding_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w
     | exact (hk _ _ _ _ rfl).elim
     | exact (hc _ _ rfl).elim
     | exact (judged_keeps h).1 x hx
+    | exact (justified_keeps h).1 x hx
     | exact (merged_keeps h).1 x hx
     | skip
   all_goals
@@ -964,6 +1087,7 @@ theorem landed_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w t = 
     | exact (hb _ rfl).elim
     | exact (hk _ _ _ _ rfl).elim
     | exact (judged_keeps h).2 x hx
+    | exact (justified_keeps h).2 x hx
     | exact (merged_keeps h).2 x hx
     | skip
   all_goals
@@ -1110,6 +1234,22 @@ theorem forget_refused_when_needed (w : World) (c : Retention.Contract) :
         simp only [Except.ok.injEq, Prod.mk.injEq] at h
         exact ⟨hn, by rw [← h.1]⟩
 
+/-- **A `forget` keeps the reasons**: they are world state, not a reading of the log, so a forget
+leaves them as they were (and the `compacted` record that follows carries the world whole, reasons
+and all). A proposed action admissible before a forget is admissible after it: no justification
+reaches into the forgotten prefix, so `needs` names none. -/
+theorem forget_keeps_reasons {w w' : World} {o : Outcome} {c : Retention.Contract}
+    (h : stepTurn w (.forget c) = .ok (w', o)) :
+    w'.reasons = w.reasons ∧ ∀ name, w'.reasons.admit name = w.reasons.admit name := by
+  simp only [stepTurn] at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · simp only [Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, -⟩ := h
+      exact ⟨rfl, fun _ => rfl⟩
+
 /-- **`late_correction_refused`**: after a retention contract, a proposal for a form it retired is
 refused naming the contract, by intent or without one; a merge from a branch it abandoned, or from a
 replica whose log does not reach its horizon, is refused naming it. Never landed, never dropped in
@@ -1127,8 +1267,8 @@ theorem late_correction_refused (w : World) :
         "would arrive later than the contract allows")) := by
   refine ⟨fun name digest hops a c hc => ⟨?_, fun i hi => ?_⟩, fun label other skip og theirs reaches e he => ?_,
     fun label c hc hab => ?_⟩
-  · simp only [stepTurn, hc]
-  · simp only [stepTurn, hi, judgeNew, hc]
+  · simp only [stepTurn, judgeTurn, hc]
+  · simp only [stepTurn, judgeTurn, hi, judgeNew, hc]
   · simp only [stepTurn, he]
   · simp only [lateMerge, hab, hc]
 

@@ -41,6 +41,12 @@ Vault commands (lane Vault, 2026-10-31; `Obend.Vault.Cli`):
           | recite PAGE [--as NAME] | create --from KIND PAGE | log [records]   (`-C DIR` runs any of them in DIR)
         a directory of markdown as pages, with the world kept beside it in `DIR/.obend/`: its log,
         whose replay is the world (`Obend.Vault.Replay`), and a checkpoint, a cache of it.
+    obend reasons observe NAME (--line FILE:N | TEXT) | assume NAME | withdraw NAME
+          | explain NAME CONCLUSION --if PREMISE… [--unless DEFEATER…] | defeat EXPLANATION --by ATOM
+          | propose ACTION --because CONCLUSION | admit ACTION | status | why ATOM
+        a directory's reasons (`Obend.Reasons`), each event a turn of its log: what changed status
+        (the well-founded model) and how much was judged anew; `admit` refuses an action whose
+        justification is not supported now. Walkthrough: lean/tests/reasons/REASONS.md.
 
 Branch commands (`Obend.Vault.BranchCli`):
 
@@ -138,6 +144,8 @@ def usage : String :=
   "       obend open [DIR] | status [PAGE] | merge OTHER_DIR | member add NAME --grant VERB:PATTERN… | member list\n" ++
   "             | post PAGE FILE --as NAME | select PAGE SECTION CANDIDATE [--as NAME] | recite PAGE [--as NAME]\n" ++
   "             | create --from KIND PAGE   [-C DIR]\n" ++
+  "       obend reasons observe NAME (--line FILE:N | TEXT) | assume NAME | withdraw NAME | explain NAME CONCL --if P… [--unless D…]\n" ++
+  "             | defeat EXPLANATION --by ATOM | propose ACTION --because CONCL | admit ACTION | status | why ATOM   [-C DIR]\n" ++
   "       obend ledger post DOC [--period N] | ledger reverse P-NNNN [--period N] | ledger close N | ledger status | ledger root\n" ++
   "             | report trial-balance P [--out FILE]   (a vault with register/_kind.md; merge stitches its register)\n" ++
   "       obend check --obligations --package PACKAGE.json --object ENTRY [--receipts DIR]\n" ++

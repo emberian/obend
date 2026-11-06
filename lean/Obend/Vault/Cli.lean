@@ -57,9 +57,11 @@ Forms (`Obend.Vault.Form`; the walkthrough is `lean/tests/vault/FORMS.md`):
         VALUE (a number, or a page) in FORM's moves becomes the hole HOLE.
     obend form FORM [--out FILE]
         FORM as its holder sees it: the pages, the holes, the residual; with --out, the form to send.
-    obend fill FILE HOLE=VALUE … --out FILE   (where the form was received)
+    obend fill FILE HOLE=VALUE … [--because CONCLUSION] --out FILE   (where the form was received)
         fill the holes of the form in FILE and write the proposal; what the fill makes of the
-        residual is shown, the pages the form did not capture left as reads.
+        residual is shown, the pages the form did not capture left as reads. With `--because`, the
+        proposal carries its justification, and the vault judges it only while that is supported in
+        its own reasons (`obend reasons`).
     obend reshare FILE --for WHO --grant PATTERN … [--held CAPS] --out FILE   (where it was received)
         hand the form on to WHO, attenuated; a reshare that would amplify is refused.
     obend judge FILE [--receipt FILE]
@@ -100,6 +102,16 @@ Transport (`Obend.Vault.Transport`; the walkthrough is `lean/tests/vault/TRANSPO
         the proposals sent from here that no receipt has confirmed.
     obend confirm FILE   (where forms were filled)
         confirm a receipt written by `obend judge --receipt`: it must name a proposal sent from here.
+    obend reasons observe NAME (--line FILE:N | TEXT) | assume NAME | withdraw NAME
+          | explain NAME CONCLUSION --if PREMISE… [--unless DEFEATER…] | defeat EXPLANATION --by ATOM
+          | propose ACTION --because CONCLUSION | admit ACTION | status | why ATOM
+        the directory's reasons (`Obend.Reasons`; no vault needed, each event a turn of its log):
+        observations (a line of a file, verbatim, with where it was read), assumptions, explanations
+        and their defeaters, proposed actions. Each event says what changed status (supported,
+        undefined, unsupported: the well-founded model) and how many atoms it judged anew; `admit`
+        refuses an action whose justification is not supported now, by name and with the reasons
+        (exit 1).
+
 
 Every command but `member` opens the vault first (an edit on disk is the owner's write, judged by
 the page's laws), so no command overwrites a file the person changed. Every change of the world is a
@@ -909,6 +921,84 @@ partial def copyTree (src dst : System.FilePath) : IO Unit := do
     if ← e.path.isDir then copyTree e.path (dst / e.fileName)
     else IO.FS.writeBinFile (dst / e.fileName) (← IO.FS.readBinFile e.path)
 
+/-- The line `N` (from 1) of a file, as read. -/
+def lineOf (spec : String) : IO (Except String (String × String)) := do
+  match spec.splitOn ":" with
+  | [file, n] =>
+    match n.toNat? with
+    | some k =>
+      if !(← (System.FilePath.mk file).pathExists) then return .error ("refused: no file " ++ file)
+      let ls := (← IO.FS.readFile file).splitOn "\n"
+      match ls[k - 1]? with
+      | some l => if k == 0 then return .error "refused: lines count from 1" else return .ok (l, spec)
+      | none => return .error ("refused: " ++ file ++ " has no line " ++ n)
+    | none => return .error "--line FILE:N"
+  | _ => return .error "--line FILE:N"
+
+/-- One event of the vault's reasons, committed as a turn of its log: what changed status, said, and
+how much was judged anew. -/
+def reasonTurn (dir : System.FilePath) (said : String) (e : Obend.Reasons.Event) : IO UInt32 := do
+  let w0 ← readWorld dir
+  match ← commitWith dir (.reasoned e) (fun h _ => pure h.world) with
+  | .error err => fail err
+  | .ok w =>
+    IO.println said
+    let cs := Obend.Reasons.changes w0.reasons w.reasons
+    if cs.isEmpty then IO.println "  no status changed" else for c in cs do IO.println ("  " ++ c)
+    let (n, t) := Obend.Reasons.workOf w.reasons.base e
+    IO.println ("  judged anew: " ++ toString n ++ " of " ++ toString t ++ " atoms")
+    return 0
+
+/-- `obend reasons …`: the vault's reasons (`Obend.Reasons`), each event a turn of its log. -/
+def reasonsRun (dir : System.FilePath) : List String → Option (IO UInt32)
+  | "observe" :: name :: rest => some do
+    let (line, rest) := flag "--line" rest
+    match line, rest with
+    | some spec, [] =>
+      match ← lineOf spec with
+      | .error e => fail e
+      | .ok (text, src) =>
+        reasonTurn dir ("observed " ++ name ++ ": " ++ text) (.observe ⟨name, text, src⟩)
+    | none, [text] => reasonTurn dir ("observed " ++ name ++ ": " ++ text) (.observe ⟨name, text, "said"⟩)
+    | _, _ => fail "reasons observe NAME (--line FILE:N | TEXT)"
+  | ["assume", a] => some (reasonTurn dir ("assumed " ++ a) (.assume a))
+  | ["withdraw", a] => some (reasonTurn dir ("withdrew " ++ a) (.withdraw a))
+  | "explain" :: name :: concl :: rest => some do
+    let (pos, rest) := allFlags "--if" rest
+    let (neg, rest) := allFlags "--unless" rest
+    unless rest.isEmpty do return ← fail "reasons explain NAME CONCLUSION --if PREMISE… [--unless DEFEATER…]"
+    let r : Obend.Reasons.Rule := ⟨name, concl, pos, neg⟩
+    reasonTurn dir ("explained " ++ name ++ ": " ++ Obend.Reasons.ruleText r) (.explain r)
+  | ["defeat", target, "--by", by'] => some
+      (reasonTurn dir (target ++ " is defeated while " ++ by' ++ " is supported") (.defeat ⟨target, by'⟩))
+  | ["propose", name, "--because", c] => some do
+    let r ← reasonTurn dir ("proposed " ++ name ++ " because " ++ c) (.propose ⟨name, c⟩)
+    if r != 0 then return r
+    let w ← readWorld dir
+    match w.reasons.admit name with
+    | .ok _ => IO.println ("  " ++ name ++ ": admissible now"); return 0
+    | .error e => IO.println ("  " ++ e); return 0
+  | ["admit", name] => some do
+    let w ← readWorld dir
+    match w.reasons.admit name with
+    | .ok a => IO.println (name ++ ": admitted (" ++ a.because ++ " is supported by " ++
+        ((w.reasons.standing a.because).getD "observation or assumption") ++ ")"); return 0
+    | .error e => IO.println e; return 1
+  | ["status"] => some do
+    let w ← readWorld dir
+    for x in w.reasons.atoms do IO.println (w.reasons.line x)
+    for a in w.reasons.base.actions do
+      IO.println (match w.reasons.admit a.name with
+        | .ok _ => "action " ++ a.name ++ ": admissible (because " ++ a.because ++ ")"
+        | .error _ => "action " ++ a.name ++ ": inadmissible (because " ++ a.because ++ ", " ++
+            (w.reasons.status a.because).text ++ ")")
+    return 0
+  | ["why", x] => some do
+    let w ← readWorld dir
+    IO.println (w.reasons.line x)
+    return 0
+  | _ => none
+
 /-- Run a vault command in `dir`. `none` when the arguments are not a vault command. -/
 def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   let (asName, args) := flag "--as" args
@@ -1109,6 +1199,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       IO.println (g.id ++ ": " ++ g.grant.holder ++ " (" ++ Obend.Vault.Form.showAuths g.grant.held ++ " on " ++
         ", ".intercalate g.grant.patterns ++ ")" ++ (if w.grants.revoked.contains g.id then ", revoked" else ""))
     return 0
+  | "reasons" :: rest => reasonsRun dir rest
   | ["obligations"] => some do
     let w ← readWorld dir
     if w.outstanding.isEmpty then IO.println "nothing outstanding"
@@ -1225,6 +1316,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     return 0
   | "fill" :: file :: rest => some do
     let (out, rest) := flag "--out" rest
+    let (because, rest) := flag "--because" rest
     let some o := out | fail "fill FILE HOLE=VALUE … --out FILE"
     let (f, digest, vault, hops, K) ← readReceived file
     match parseFill f rest with
@@ -1239,12 +1331,13 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       -- the form as received and the proposal as sent, with the identity of its intent, are a turn of
       -- this directory's log; the proposal is outstanding until a receipt for it is confirmed
       match ← commitWith dir (.proposed f.name ((receivedJson f digest vault hops K).pretty ++ "\n") digest vault hops a
-          holder) (fun _ o => pure o) with
+          holder because) (fun _ o => pure o) with
       | .error e => fail e
       | .ok (.proposed i text) =>
         IO.FS.writeFile o text
         IO.println (f.name ++ ": filled by " ++ holder ++ ": " ++ fillText a)
         for l in f.preview a do IO.println ("  " ++ l)
+        if let some c := because then IO.println ("  because " ++ c)
         IO.println ("wrote " ++ o ++ " (intent " ++ i ++ ")")
         return 0
       | .ok _ => fail "the fill said what a fill does not"
@@ -1277,6 +1370,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let hops ← ofExcept file ((← ofExcept file (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM Obend.Vault.Form.grantOf)
     let a ← ofExcept file (Obend.Vault.Form.assignmentOf (← ofExcept file (j.getObjVal? "fill")))
     let intent := (j.getObjValAs? String "intent").toOption
+    let because := (j.getObjValAs? String "because").toOption
     let w0 ← readWorld dir
     let writeReceipt (w : Replay.World) (l : Transport.Landing) : IO Unit := do
       if let some ro := receiptOut then
@@ -1306,7 +1400,10 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
             performed := p
             IO.println (verdictLine name ls v (issueOf w0 f).contract)
           | .ok _ => return ← fail "the transport said what a transport does not"
-    match ← finishTurn dir (.judged name digest hops a intent) V with
+    let turn : Turn := match because with
+      | some c => .justified name digest hops a intent c
+      | none => .judged name digest hops a intent
+    match ← finishTurn dir turn V with
     | .error e =>
       IO.println e
       let w ← readWorld dir

@@ -28,6 +28,7 @@ public import Obend.Intention
 public import Obend.Kind
 public import Obend.Judge
 public import Obend.Receipt
+public import Obend.Reasons
 public import Obend.Law
 public import Obend.Doc
 public import Obend.Elab
