@@ -242,8 +242,8 @@ cd alice && obend judge ../guess.json
 
 ```text
 pay: transported over the laws of ledger/alice, ledger/carol, ledger/bob: nothing was promised; it continues
-pay: refused by the membrane: private/salary is not a page of this form (bob may name ledger/alice, ledger/carol, ledger/bob)
 work: performed 0, retained 1 of 1
+pay: refused by the membrane: private/salary is not a page of this form (bob may name ledger/alice, ledger/carol, ledger/bob)
 ```
 
 Dave's grant reads and does not write:
@@ -253,8 +253,8 @@ cd alice && obend judge ../dave.json
 ```
 
 ```text
-pay: refused by the membrane: dave's grant does not let it write ledger/alice (it holds read)
 work: performed 0, retained 1 of 1
+pay: refused by the membrane: dave's grant does not let it write ledger/alice (it holds read)
 ```
 
 The forged hop is a reshare from Dave's grant that would amplify it; the kernel reads the chain from
@@ -265,8 +265,8 @@ cd alice && obend judge ../forged.json
 ```
 
 ```text
-pay: refused by the membrane: dave holds read; resharing read, write to dave would amplify it
 work: performed 0, retained 1 of 1
+pay: refused by the membrane: dave holds read; resharing read, write to dave would amplify it
 ```
 
 The payment to Bob is inside the membrane and inside Alice's balance, and `Accounts`' law over its
@@ -277,8 +277,8 @@ cd alice && obend judge ../over.json
 ```
 
 ```text
-pay: at ledger/bob: refused by Accounts: cap (a law over Accounts's links, of which ledger/bob is one): `linked.balance <= 100` does not hold; the line `balance: 100` would pass (the page has `balance: 110`)
 work: performed 0, retained 1 of 1
+pay: at ledger/bob: refused by Accounts: cap (a law over Accounts's links, of which ledger/bob is one): `linked.balance <= 100` does not hold; the line `balance: 100` would pass (the page has `balance: 110`)
 ```
 
 The proposal is one turn: Alice's leg alone would have passed, and it did not land either.
@@ -300,8 +300,8 @@ cd alice && obend judge ../much.json
 ```
 
 ```text
-pay: refused by the form's resources: ledger/alice holds balance 100; the fill moves 140
 work: performed 0, retained 1 of 1
+pay: refused by the form's resources: ledger/alice holds balance 100; the fill moves 140
 ```
 
 The one that would leave Alice at 4 is refused by the law she added after the form left:
@@ -311,8 +311,8 @@ cd alice && obend judge ../low.json
 ```
 
 ```text
-pay: at ledger/alice: refused by Accounts: floor (a law over Accounts's links, of which ledger/alice is one): `not (linked.balance <= 4)` does not hold; the line `balance: 5` would pass (the page has `balance: 4`)
 work: performed 0, retained 1 of 1
+pay: at ledger/alice: refused by Accounts: floor (a law over Accounts's links, of which ledger/alice is one): `not (linked.balance <= 4)` does not hold; the line `balance: 5` would pass (the page has `balance: 4`)
 ```
 
 The one Bob meant lands as one turn: both pages written at once, each judged by its laws and the
@@ -356,6 +356,6 @@ cd bob && obend fill ../pay.form amount=10 to=ledger/bob --out ../again.json >/d
 ```
 
 ```text
-pay: refused: stale (value): the form read ledger/alice balance 100 → 60, ledger/carol balance 5 → 45; capture it again
 work: performed 0, retained 0 of 1
+pay: refused: stale (value): the form read ledger/alice balance 100 → 60, ledger/carol balance 5 → 45; capture it again
 ```

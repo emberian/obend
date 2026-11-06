@@ -14,7 +14,9 @@
 rules planted in the shader text only, for `hardware/gpu/verify_gpu.sh`'s tooth. The expected values
 are always the unplanted model's.
 
-Expected values are `evalGraphArr`'s, which is `evalGraph` with the wires stored (`evalGraphArr_eq`).
+The graphs, their vectors and the `expected.tsv` printer are `Obend.Hardware.SquareGraphs`, shared with
+`obend-emit-sv`'s `square-<graph>` targets (the same graphs through the RTL lowering). Expected values
+are `evalGraphArr`'s, which is `evalGraph` with the wires stored (`evalGraphArr_eq`).
 Before writing, the emitter refuses a graph that fails `ArrayGraph.wf` (the hypothesis of
 `lowerArrayToGpu_sound`, so the expected values are `evalGraph`'s and the device must show them) and an
 NTT graph whose evaluation disagrees with a recursive radix-2 NTT over the Goldilocks field in `Nat`
@@ -28,48 +30,14 @@ difference expanded by the sub-transform size, so an NTT of `n` points is `log�
 dozen edges over whole wires, and no bit reversal. The field operations are the limb network of
 `Obend.Apps.ZkNtt.glMul`; after fusion each stage's sum and difference are one kernel each.
 -/
-import Obend.Hardware.GpuGraphs
+import Obend.Hardware.SquareGraphs
 
-open Obend.Hardware.GpuGraphs
 open Obend.Hardware.OpenHypergraph
 open Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.Gpu
-
-def pool : List Int :=
-  [0, 1, -1, 2, 3, -3, 10, 255, -256, 65535, 2 ^ 31, -(2 ^ 31), 2 ^ 32 + 1, 2 ^ 62, -(2 ^ 62),
-   2 ^ 63 - 1, -(2 ^ 63), 123456789, -987654321]
-
-def lcg (s : Nat) : Nat := (s * 6364136223846793005 + 1442695040888963407) % 2 ^ 64
-
-/-- A deterministic pseudo-random 64-bit word for element `i` of input `w` of vector `v`. -/
-def draw (v w i : Nat) : Nat :=
-  (List.range (i % 7 + 1)).foldl (fun acc _ => lcg acc) (lcg (v * 7919 + w * 104729 + i * 31 + 17))
-
-def signed (s : Nat) : Int := (s : Int) - (if s ≥ 2 ^ 63 then 2 ^ 64 else 0)
-
-/-- Vector `v` for a graph: field elements (`< p`) for the field graphs; otherwise the first vectors walk
-the pool and later ones are pseudo-random words. -/
-def vectorFor (kind : Kind) (lens : List Nat) (v : Nat) : List (List Int) :=
-  lens.zipIdx.map fun (n, w) =>
-    (List.range n).map fun i =>
-      match kind with
-      | .ntt => (draw v w i % goldilocksP : Int)
-      | .plain =>
-        if v < 6 then pool.getD ((i + w + 3 * v) % pool.length) 0
-        else signed (draw v w i)
-
-def vectorCount (g : ArrayGraph) : Nat :=
-  let total := sumNatList (g.inputs.map (g.lengths.getD · 0))
-  if total ≥ 2 ^ 14 then 2 else if total ≥ 64 then 6 else 12
+open Obend.Hardware.SquareGraphs
 
 /-! ## Expected values and the checks -/
-
-def wireText (xs : List Int) : String :=
-  if xs.isEmpty then "-" else String.intercalate "," (xs.map toString)
-
-def wiresText (ws : List (List Int)) : String := String.intercalate ";" (ws.map wireText)
-
-def toVec (xs : List Int) : Vec := xs.map (BitVec.ofInt 64)
 
 def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) : IO Unit := do
   unless g.wf do
@@ -79,23 +47,16 @@ def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.File
   IO.FS.writeFile (dir / "plan.json") (emitPlanJson name p)
   for (s, k) in p.stages.zipIdx do
     IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (emitStageWgsl plant name k p.stages.length s)
-  let inLens := g.inputs.map (g.lengths.getD · 0)
-  let mut lines : Array String := #[]
-  for v in List.range (vectorCount g) do
-    let vals := vectorFor kind inLens v
-    let env := mkEnv g.lengths g.inputs (vals.map toVec)
-    let model := evalGraphArr g ((List.range g.lengths.length).map fun w => (env w).toArray).toArray
-    if kind == .ntt && name.startsWith "ntt" then
+  if kind == .ntt && name.startsWith "ntt" then
+    for (vals, v) in (graphVectors g kind).zipIdx do
       let input := (vals.getD 0 []).map Int.toNat
       let fast := (nttFast input.toArray (rootOfUnity input.length)).toList
-      unless (model.getD 0 []).map (·.toNat) == fast do
+      unless ((arrayModel g vals).getD 0 []).map (·.toNat) == fast do
         throw <| IO.userError s!"{name} vector {v}: the NTT graph disagrees with the recursive NTT"
       if input.length ≤ 4096 then
         unless nttReference input == fast do
           throw <| IO.userError s!"{name} vector {v}: the recursive NTT disagrees with the naive DFT"
-    let signed64 (ws : List Int) : List Int := ws.map fun x => (BitVec.ofInt 64 x).toInt
-    lines := lines.push s!"{v}\t{wiresText (vals.map signed64)}\t{wiresText (model.map fun ws => ws.map (·.toInt))}"
-  IO.FS.writeFile (dir / "expected.tsv") (String.intercalate "\n" lines.toList ++ "\n")
+  IO.FS.writeFile (dir / "expected.tsv") (expectedTsv g kind (arrayModel g))
   IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {g.edges.length} edges, \
     {(fuseGraph g).edges.length} after fusion, {p.consts.length} constants, \
     {p.tables.length} indices, {p.stages.length} dispatches \

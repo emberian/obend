@@ -23,7 +23,7 @@ import Obend.Hardware.Gpu.Rdna2.Decode
 import Obend.Hardware.Gpu.Rdna2.Check
 import Obend.Hardware.Gpu.Rdna2.Waitcnt
 import Obend.Hardware.Gpu.Rdna2.Cert
-import Obend.Hardware.GpuGraphs
+import Obend.Hardware.SquareGraphs
 
 open Obend.Hardware.Gpu.Rdna2
 
@@ -208,7 +208,7 @@ def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
   let mut seen : Std.HashSet Tm.Residual := {}
   for pr in pairs do
     let [graph, isaPath] := pr.splitOn "=" | IO.eprintln s!"[FAIL] {pr}: want GRAPH=ISA"; return 1
-    let some (_, g, _) := Obend.Hardware.GpuGraphs.graphs.find? (·.1 == graph)
+    let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph)
       | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
     let p := Obend.Hardware.Gpu.lowerArrayToGpu g
     let progs := (parseDump (← IO.FS.readFile isaPath)).toList.filterMap fun ws => (decodeProgram (ws.flatMap id)).toOption
@@ -222,7 +222,7 @@ def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
   return 0
 
 def cmdResMod (graph : String) (isaPath : String) (modName tag : String) : IO UInt32 := do
-  let some (_, g, _) := Obend.Hardware.GpuGraphs.graphs.find? (·.1 == graph) | return 1
+  let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph) | return 1
   let p := Obend.Hardware.Gpu.lowerArrayToGpu g
   let progs := (parseDump (← IO.FS.readFile isaPath)).toList.filterMap fun ws => (decodeProgram (ws.flatMap id)).toOption
   match neededResiduals p progs with
@@ -230,7 +230,7 @@ def cmdResMod (graph : String) (isaPath : String) (modName tag : String) : IO UI
   | none => IO.eprintln s!"[FAIL] {graph}: not certified"; return 1
 
 def cmdCert (graph : String) (isaPath : String) : IO UInt32 := do
-  let some (_, g, _) := Obend.Hardware.GpuGraphs.graphs.find? (·.1 == graph)
+  let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph)
     | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
   let p := Obend.Hardware.Gpu.lowerArrayToGpu g
   let isa ← IO.FS.readFile isaPath
@@ -254,7 +254,7 @@ def cmdCert (graph : String) (isaPath : String) : IO UInt32 := do
 
 /-- Time the phases of the certificate check on one graph (a profile, not a check). -/
 def cmdCertProf (graph : String) (isaPath : String) : IO UInt32 := do
-  let some (_, g, _) := Obend.Hardware.GpuGraphs.graphs.find? (·.1 == graph) | return 1
+  let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph) | return 1
   let p := Obend.Hardware.Gpu.lowerArrayToGpu g
   let dumps := parseDump (← IO.FS.readFile isaPath)
   let progs := dumps.toList.filterMap fun ws => (decodeProgram (ws.flatMap id)).toOption

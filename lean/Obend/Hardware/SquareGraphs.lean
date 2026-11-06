@@ -1,21 +1,28 @@
-/-
-# Obend.Hardware.GpuGraphs — the array graphs the GPU rungs run
-
-The graphs `obend-emit-gpu` lowers to shaders (`hardware/gpu/graphs/`) and `obend-rdna2` certifies against
-RADV's machine code (rung G2): a builder for array graphs, the Goldilocks field operations elementwise
-(the limb network of `Obend.Apps.ZkNtt.glMul`), Stockham radix-2 NTTs, and the scalar graphs as their
-one-element instance. Moved out of the emitter so that the certificate's theorem can name the graph it
-is about. The emitter's description of the NTT (Stockham, ec-gpu's `radix_fft` indexing) is in
-`lean/tools/emitgpu/EmitGpu.lean`.
--/
 module
-public import Obend.Hardware.Gpu
+/-
+# Obend.Hardware.SquareGraphs — the graphs both gates run
+
+One list of graphs with their test vectors, shared by `obend-emit-gpu` (`lean/tools/emitgpu`: the
+shaders, plan and `expected.tsv` of `hardware/gpu/graphs/<graph>/`) and `obend-emit-sv`'s `square-<graph>`
+targets (`lean/tools/emitsv`: the SystemVerilog, the LEC half, the Verilator harness and the HDL model's
+expected values of `hardware/gpu/square/`). `squarePlan` names the ones the square runs through both
+devices and what each is for; `squareGraphs` pairs each with its `RtlModule`.
+
+The scalar fixtures (`treeGraph`, `muxChainGraph`, `allOpsGraph`), the Goldilocks field network
+(`glMul`, the limb network of `Obend.Apps.ZkNtt.glMul`, elementwise), the Stockham radix-2 NTT
+(`nttGraph`, with its references `nttFast` and `nttReference`) and the
+vectors (`vectorFor`) are here; `expectedTsv` prints `expected.tsv` from any model of the outputs, so the
+array model's file and the HDL model's can be compared byte for byte.
+-/
+public import Obend.Hardware.Square
 @[expose] public section
 
-namespace Obend.Hardware.GpuGraphs
+namespace Obend.Hardware.SquareGraphs
+open Obend.Hardware.HDL
 open Obend.Hardware.OpenHypergraph
 open Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.Gpu
+open Obend.Hardware.Square
 
 /-! ## A builder for array graphs -/
 
@@ -289,23 +296,154 @@ inductive Kind where
   | ntt
   deriving DecidableEq
 
-def graphs : List (String × ArrayGraph × Kind) :=
-  [ ("diamond",          ofScalar goldenDiamondHypergraph, .plain)
-  , ("optic-mul",        ofScalar (compileOpticToHypergraph .mul), .plain)
-  , ("optic-linearmac",  ofScalar (compileOpticToHypergraph (.linearMac 7)), .plain)
-  , ("optic-bilinear",   ofScalar (compileOpticToHypergraph (.bilinear (-3))), .plain)
-  , ("adjoint-mul-add",  ofScalar (compileGraphAdjoint (compileOpticChain2FwdHypergraph .mul .add)), .plain)
+/-- The scalar graphs: name, the Lean definition's name, the graph. -/
+def scalarGraphs : List (String × String × StrictOpenHypergraph) :=
+  [ ("diamond", "Obend.Hardware.OpenHypergraph.goldenDiamondHypergraph", goldenDiamondHypergraph)
+  , ("optic-mul", "Obend.Hardware.OpenHypergraph.compileOpticToHypergraph .mul", compileOpticToHypergraph .mul)
+  , ("optic-linearmac", "Obend.Hardware.OpenHypergraph.compileOpticToHypergraph (.linearMac 7)",
+      compileOpticToHypergraph (.linearMac 7))
+  , ("optic-bilinear", "Obend.Hardware.OpenHypergraph.compileOpticToHypergraph (.bilinear (-3))",
+      compileOpticToHypergraph (.bilinear (-3)))
+  , ("adjoint-mul-add",
+      "Obend.Hardware.OpenHypergraph.compileGraphAdjoint (compileOpticChain2FwdHypergraph .mul .add)",
+      compileGraphAdjoint (compileOpticChain2FwdHypergraph .mul .add))
   , ("adjoint-square-bilinear",
-      ofScalar (compileGraphAdjoint (compileOpticChain2FwdHypergraph .square (.bilinear 5))), .plain)
-  , ("allops",           ofScalar allOpsGraph, .plain)
-  , ("muxchain",         ofScalar muxChainGraph, .plain)
-  , ("tree512",          ofScalar (treeGraph 512), .plain)
-  , ("mac-reverse-1000", macReverseGraph 1000, .plain)
-  , ("glmul-256",        glMulGraph 256, .ntt)
-  , ("ntt-4",            nttGraph 4, .ntt)
-  , ("ntt-16",           nttGraph 16, .ntt)
-  , ("ntt-64",           nttGraph 64, .ntt)
-  , ("ntt-1024",         nttGraph 1024, .ntt)
-  , ("ntt-65536",        nttGraph 65536, .ntt) ]
+      "Obend.Hardware.OpenHypergraph.compileGraphAdjoint (compileOpticChain2FwdHypergraph .square (.bilinear 5))",
+      compileGraphAdjoint (compileOpticChain2FwdHypergraph .square (.bilinear 5)))
+  , ("allops", "Obend.Hardware.SquareGraphs.allOpsGraph", allOpsGraph)
+  , ("muxchain", "Obend.Hardware.SquareGraphs.muxChainGraph", muxChainGraph)
+  , ("tree512", "Obend.Hardware.SquareGraphs.treeGraph 512", treeGraph 512) ]
 
-end Obend.Hardware.GpuGraphs
+/-- The array graphs: name, the Lean definition's name, the graph, how its vectors are drawn. -/
+def arrayGraphs : List (String × String × ArrayGraph × Kind) :=
+  [ ("mac-reverse-1000", "Obend.Hardware.SquareGraphs.macReverseGraph 1000", macReverseGraph 1000, .plain)
+  , ("glmul-4",          "Obend.Hardware.SquareGraphs.glMulGraph 4", glMulGraph 4, .ntt)
+  , ("glmul-256",        "Obend.Hardware.SquareGraphs.glMulGraph 256", glMulGraph 256, .ntt)
+  , ("ntt-4",            "Obend.Hardware.SquareGraphs.nttGraph 4", nttGraph 4, .ntt)
+  , ("ntt-16",           "Obend.Hardware.SquareGraphs.nttGraph 16", nttGraph 16, .ntt)
+  , ("ntt-64",           "Obend.Hardware.SquareGraphs.nttGraph 64", nttGraph 64, .ntt)
+  , ("ntt-1024",         "Obend.Hardware.SquareGraphs.nttGraph 1024", nttGraph 1024, .ntt)
+  , ("ntt-65536",        "Obend.Hardware.SquareGraphs.nttGraph 65536", nttGraph 65536, .ntt) ]
+
+/-- Every graph the GPU gate runs: the scalar ones as their one-element instance, then the array ones. -/
+def graphs : List (String × ArrayGraph × Kind) :=
+  scalarGraphs.map (fun (n, _, g) => (n, ofScalar g, .plain)) ++
+  arrayGraphs.map (fun (n, _, g, k) => (n, g, k))
+
+def pool : List Int :=
+  [0, 1, -1, 2, 3, -3, 10, 255, -256, 65535, 2 ^ 31, -(2 ^ 31), 2 ^ 32 + 1, 2 ^ 62, -(2 ^ 62),
+   2 ^ 63 - 1, -(2 ^ 63), 123456789, -987654321]
+
+def lcg (s : Nat) : Nat := (s * 6364136223846793005 + 1442695040888963407) % 2 ^ 64
+
+/-- A deterministic pseudo-random 64-bit word for element `i` of input `w` of vector `v`. -/
+def draw (v w i : Nat) : Nat :=
+  (List.range (i % 7 + 1)).foldl (fun acc _ => lcg acc) (lcg (v * 7919 + w * 104729 + i * 31 + 17))
+
+def signed (s : Nat) : Int := (s : Int) - (if s ≥ 2 ^ 63 then 2 ^ 64 else 0)
+
+/-- Vector `v` for a graph: field elements (`< p`) for the field graphs; otherwise the first six vectors
+walk the pool, the next four are one-hot (one input wire holds `7`, every other `0`: an operator whose
+result reaches an output only through a test against zero, as `muxchain`'s multiply does, is seen only
+by a vector with a zero operand), and later ones are pseudo-random words. -/
+def vectorFor (kind : Kind) (lens : List Nat) (v : Nat) : List (List Int) :=
+  lens.zipIdx.map fun (n, w) =>
+    (List.range n).map fun i =>
+      match kind with
+      | .ntt => (draw v w i % goldilocksP : Int)
+      | .plain =>
+        if v < 6 then pool.getD ((i + w + 3 * v) % pool.length) 0
+        else if v < 10 then (if w == v - 6 then 7 else 0)
+        else signed (draw v w i)
+
+def vectorCount (g : ArrayGraph) : Nat :=
+  let total := sumNatList (g.inputs.map (g.lengths.getD · 0))
+  if total ≥ 2 ^ 14 then 2 else if total ≥ 64 then 6 else 12
+
+/-! ## Expected values and the checks -/
+
+def wireText (xs : List Int) : String :=
+  if xs.isEmpty then "-" else String.intercalate "," (xs.map toString)
+
+def wiresText (ws : List (List Int)) : String := String.intercalate ";" (ws.map wireText)
+
+def toVec (xs : List Int) : Vec := xs.map (BitVec.ofInt 64)
+
+/-- The vectors of a graph, as drawn: per vector, per input wire, the elements as integers. -/
+def graphVectors (g : ArrayGraph) (kind : Kind) : List (List (List Int)) :=
+  let inLens := g.inputs.map (g.lengths.getD · 0)
+  (List.range (vectorCount g)).map (vectorFor kind inLens)
+
+/-- `expected.tsv`: one line per vector, index, the input wires, and the output wires `model` gives
+(wires separated by `;`, elements by `,`, signed 64-bit). -/
+def expectedTsv (g : ArrayGraph) (kind : Kind) (model : List (List Int) → List Vec) : String :=
+  let signed64 (ws : List Int) : List Int := ws.map fun x => (BitVec.ofInt 64 x).toInt
+  let lines := (graphVectors g kind).zipIdx.map fun (vals, v) =>
+    s!"{v}\t{wiresText (vals.map signed64)}\t{wiresText ((model vals).map fun ws => ws.map (·.toInt))}"
+  String.intercalate "\n" lines ++ "\n"
+
+/-- The array model's outputs for one vector (`evalGraphArr`, which is `evalGraph`: `evalGraphArr_eq`). -/
+def arrayModel (g : ArrayGraph) (vals : List (List Int)) : List Vec :=
+  let env := mkEnv g.lengths g.inputs (vals.map toVec)
+  evalGraphArr g ((List.range g.lengths.length).map fun w => (env w).toArray).toArray
+
+/-! ## The square -/
+
+/-- A graph the square runs through both devices: its RTL module, the name of the Lean value the module
+is (for the SystemVerilog header) and what the graph is there to exercise. -/
+structure SquareGraph where
+  name    : String
+  graph   : ArrayGraph
+  kind    : Kind
+  rtl     : RtlModule
+  lean    : String
+  purpose : String
+
+/-- The SystemVerilog module name of a graph. -/
+def svName (n : String) : String := "sq_" ++ String.map (fun c => if c == '-' then '_' else c) n
+
+/-- The graphs the square runs and what each is for; each exercises something no other one does. -/
+def squarePlan : List (String × String) :=
+  [ ("allops", "every scalar operation: const (negative), add, sub, mul, scale (by -2^40), mac, mux, with wrap-around")
+  , ("muxchain", "a multiply that reaches an output only through a mux's test against zero; its operator swap is seen only by a vector with a zero operand")
+  , ("adjoint-square-bilinear", "a compileGraphAdjoint graph, whose wires are numbered out of definition order: the single-assignment lowering's reason")
+  , ("tree512", "size: 511 chained adders, where the LEC's time goes")
+  , ("glmul-4", "the bit operations of the Goldilocks multiply (ult, and, or, both shifts) as elementwise maps over arrays")
+  , ("ntt-16", "gathers, concatenation and constant arrays: the Stockham NTT") ]
+
+/-- The graphs of `squarePlan`, a scalar one as its one-element instance through `compileHypergraphToRtl`
+(`rtl_eq_gpu`), an array one through `compileArrayGraphToRtl` (`rtl_eq_gpu_array`). -/
+def squareGraphs : List SquareGraph :=
+  squarePlan.filterMap fun (n, purpose) =>
+    match scalarGraphs.find? (·.1 == n), arrayGraphs.find? (·.1 == n) with
+    | some (_, ln, g), _ =>
+      some { name := n, graph := ofScalar g, kind := .plain, purpose := purpose
+           , rtl := compileHypergraphToRtl (svName n) g
+           , lean := s!"Obend.Hardware.Square.compileHypergraphToRtl \"{svName n}\" ({ln})" }
+    | none, some (_, ln, g, k) =>
+      some { name := n, graph := g, kind := k, purpose := purpose
+           , rtl := compileArrayGraphToRtl (svName n) g
+           , lean := s!"Obend.Hardware.Square.compileArrayGraphToRtl \"{svName n}\" ({ln})" }
+    | none, none => none
+
+/-- The flat output ports of the RTL module, regrouped by the output wires' lengths. -/
+def regroup : List Nat → List Word → List Vec
+  | [], _ => []
+  | n :: rest, xs => xs.take n :: regroup rest (xs.drop n)
+
+/-- The input ports for one vector: the input wires' elements in order (`boundaryElems`), as
+`inputEnvOf` reads them. -/
+def squareInputs (vals : List (List Int)) : Nat → Word :=
+  let flat := (vals.map toVec).flatten
+  fun p => flat.getD p 0#64
+
+/-- The HDL model's outputs for one vector: `evalModuleOutputs` of the module, regrouped by output wire. -/
+def squareModel (sq : SquareGraph) (vals : List (List Int)) : List Vec :=
+  regroup (sq.graph.outputs.map (sq.graph.lengths.getD · 0))
+    ((evalModuleOutputs sq.rtl (squareInputs vals) (fun _ => 0#64)).map Prod.snd)
+
+/-- `expected.tsv` from the HDL model; the gate compares it byte for byte with the array model's. -/
+def squareExpectedTsv (sq : SquareGraph) : String :=
+  expectedTsv sq.graph sq.kind (squareModel sq)
+
+end Obend.Hardware.SquareGraphs

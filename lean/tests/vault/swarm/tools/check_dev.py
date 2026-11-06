@@ -25,11 +25,16 @@ for br, h in reversed(merged):
         page = os.path.join(V, 'lanes', br + '.md')
         state = re.search(r'^state: (\S+)', open(page).read(), re.M) if os.path.exists(page) else None
         print(f'{br}: merged on dev at {h}, not on DEV (its page says state {state.group(1) if state else "?"})')
+later = 0
 for br in listed:
     src = open(os.path.join(V, 'lanes', br + '.md')).read()
     d = re.search(r'^dev: "?(\w+)"?', src, re.M).group(1)
     if subprocess.run(['git', '-C', REPO, 'merge-base', '--is-ancestor', d, LAST]).returncode != 0:
+        # a lane that landed after the range is on dev, later: not a fault of DEV's
+        if subprocess.run(['git', '-C', REPO, 'merge-base', '--is-ancestor', LAST, d]).returncode == 0:
+            later += 1
+            continue
         print(f'{br}: DEV lists {d}, which is not an ancestor of {LAST}')
         bad += 1
-print(f'{len(listed)} lanes on DEV, {len(merged)} merges on dev between {FIRST} and {LAST}')
+print(f'{len(listed)} lanes on DEV ({later} landed after {LAST}), {len(merged)} merges on dev between {FIRST} and {LAST}')
 sys.exit(1 if bad else 0)
