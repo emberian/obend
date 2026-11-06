@@ -136,6 +136,7 @@ import Obend.Core.EquiRecursiveLookup
 import Obend.Core.EquiRecursiveSubstitutionTransport
 import Obend.Core.Extensions
 import Obend.Core.FieldCongruence
+import Obend.Core.Fill
 import Obend.Core.FilteredStream
 import Obend.Core.FilteredStreamCompleteness
 import Obend.Core.FilteredStreamSoundness
