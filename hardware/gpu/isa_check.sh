@@ -11,8 +11,11 @@
 #                             specification names; [4] every graph's dumped programs, run on the model from
 #                             each vector's inputs, give expected.tsv, and a planted bit flip in one store
 #                             is caught; [5] gem5's Vega execute() bodies (rdna2/gem5_ref.cpp), on random
-#                             register states, agree with the model's step on every twin instruction
-#   isa_check.sh --stage N    only stage N (1-5)
+#                             register states, agree with the model's step on every twin instruction;
+#                             [6] every stage's s_waitcnts are sufficient (Obend.Hardware.Gpu.Rdna2.Waitcnt:
+#                             no load destination touched before a wait that covers it), and a dump with
+#                             the first vmcnt wait of stage 0 replaced by s_nop 0 is refused
+#   isa_check.sh --stage N    only stage N (1-6)
 #
 # Needs llvm-mc (LLVM_MC, default /usr/lib/llvm-19/bin/llvm-mc; hbox) and `lake build obend-rdna2` in lean/.
 set -euo pipefail
@@ -29,7 +32,7 @@ run_stage() { [[ -z "${STAGE}" || "${STAGE}" == "$1" ]]; }
 mapfile -t DUMPS < <(ls "${SCRIPT_DIR}"/isa/*.txt)
 
 if run_stage 1; then
-echo "=== [1/5] the generated modules == gen_encodings.py on the committed XML ==="
+echo "=== [1/6] the generated modules == gen_encodings.py on the committed XML ==="
 mkdir -p "${WORK}/gen"
 python3 -I "${SCRIPT_DIR}/rdna2/gen_encodings.py" "${SCRIPT_DIR}/rdna2/amdgpu_isa_rdna2.xml" "${WORK}/gen" | sed 's/^/  /'
 for f in Encodings.lean Insts.lean; do
@@ -40,7 +43,7 @@ echo "  identical"
 fi
 
 if run_stage 2; then
-echo "=== [2/5] the decoder against llvm-mc on every instruction of every dump ==="
+echo "=== [2/6] the decoder against llvm-mc on every instruction of every dump ==="
 [[ -x "${LLVM_MC}" ]] || { echo "[FAIL] ${LLVM_MC} missing (LLVM 19 with the amdgcn target)" >&2; exit 1; }
 total=0
 for d in "${DUMPS[@]}"; do
@@ -64,7 +67,7 @@ echo "  every instruction of every dump agrees"
 fi
 
 if run_stage 3; then
-echo "=== [3/5] teeth: every bit of every instruction's machine code, flipped ==="
+echo "=== [3/6] teeth: every bit of every instruction's machine code, flipped ==="
 for d in "${DUMPS[@]}"; do
   g="$(basename "${d}" .txt)"
   printf '  %s: ' "${g}"
@@ -73,7 +76,7 @@ done
 fi
 
 if run_stage 4; then
-echo "=== [4/5] the model: every graph's programs on every vector; a planted store flip caught ==="
+echo "=== [4/6] the model: every graph's programs on every vector; a planted store flip caught ==="
 for d in "${DUMPS[@]}"; do
   g="$(basename "${d}" .txt)"
   "${RDNA2}" run "${SCRIPT_DIR}/graphs/${g}" | sed 's/^/  /' || exit 1
@@ -85,9 +88,21 @@ for g in diamond optic-mul optic-bilinear optic-linearmac; do
 done
 fi
 if run_stage 5; then
-echo "=== [5/5] the model against gem5's Vega bodies on random register states ==="
+echo "=== [5/6] the model against gem5's Vega bodies on random register states ==="
 python3 -I "${SCRIPT_DIR}/rdna2/gem5_ref.py" "${WORK}/gem5_vectors.tsv" --llvm-mc "${LLVM_MC}" | sed 's/^/  /'
 cmp "${WORK}/gem5_vectors.tsv" "${SCRIPT_DIR}/rdna2/gem5_vectors.tsv" || { echo "[FAIL] rdna2/gem5_vectors.tsv differs from gem5_ref.py's output (regenerate; do not hand-edit)" >&2; exit 1; }
 "${RDNA2}" gem5 "${SCRIPT_DIR}/rdna2/gem5_vectors.tsv" | sed 's/^/  /' || exit 1
+fi
+if run_stage 6; then
+echo "=== [6/6] the waits: every load awaited before its destination is touched; a removed wait refused ==="
+for d in "${DUMPS[@]}"; do
+  "${RDNA2}" waitcnt "${d}" | sed 's/^/  /' || exit 1
+done
+for d in "${DUMPS[@]}"; do
+  g="$(basename "${d}" .txt)"
+  idx=$(awk '/^## stage 0/{s=1; i=-1; next} /^## stage 1/{exit} s && /^\t/{i++; if ($0 ~ /s_waitcnt vmcnt/) {print i; exit}}' "${d}")
+  [[ -n "${idx}" ]] || { echo "[FAIL] ${g}: stage 0 has no s_waitcnt vmcnt" >&2; exit 1; }
+  "${RDNA2}" waitcnt "${d}" --nop "0:${idx}" | sed 's/^/  /' || { echo "[FAIL] ${g}: a removed wait went unnoticed" >&2; exit 1; }
+done
 fi
 echo "[PASS] hardware/gpu/isa_check.sh${STAGE:+ (stage ${STAGE})}"

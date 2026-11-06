@@ -32,3 +32,13 @@ random register states and writes `gem5_vectors.tsv`, the state before and after
 gem5` replays every row through `Obend.Hardware.Gpu.Rdna2.Semantics.step` and compares every register
 (`isa_check.sh` stage 5, pinned in `Obend.Teeth.Hardware.Rdna2Runs`). The row's last column names the
 registers in which RDNA2 is documented to differ from Vega (`V_CMPX` writes EXEC only, manual 12.9).
+
+`waitcnt_plant.py` is the device side of `Obend.Hardware.Gpu.Rdna2.Waitcnt`: it replaces one `s_waitcnt`
+by `s_nop 0` in the machine code RADV keeps in Mesa's multi-file shader cache (entry format and crc per
+`src/util/disk_cache_os.c`, `util_hash_crc32`), so that the next `obend-gpu-run` executes the planted
+program on the card. Measured 2026-11-06 on hbox's RX 6750 XT (RADV, Mesa 24.2.8): diamond, stage 0,
+instruction 11 (`s_waitcnt vmcnt(0)`, the wait between the two `buffer_load_dwordx2` and the
+`v_add_co_u32` that consumes them) planted; five runs, all 12 vectors disagree on each, with different
+values every run (the add read whatever the VGPRs held before the loads landed); the same graph
+recompiled into a fresh cache: 0 disagree. The static check refuses the planted dump at exactly that
+instruction (`V_ADD_CO_U32 reads v2 while a vector load to it is outstanding`).

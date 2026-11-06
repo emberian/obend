@@ -9,6 +9,7 @@ every graph, and with a planted bit flip that must fail, in `hardware/gpu/isa_ch
 `lake build Teeth`.
 -/
 import Obend.Hardware.Gpu.Rdna2.Check
+import Obend.Hardware.Gpu.Rdna2.Waitcnt
 import Obend.AssertCompiled
 
 namespace Obend.Teeth.Hardware.Rdna2Runs
@@ -62,6 +63,14 @@ def ntt4Expected : String := include_str "../../../../hardware/gpu/graphs/ntt-4/
 -- fixture kept: the 4-point Goldilocks NTT, 80 dumped programs on the model
 theorem ntt4_runs : checkGraph ntt4Isa ntt4Plan ntt4Expected = true := by native_decide
 #assert_compiled ntt4_runs
+
+-- fixture kept: the waits of every dumped program of these graphs cover every load before its destination is touched
+theorem diamond_waits : checkWaitcntDump diamondIsa = true := by native_decide
+#assert_compiled diamond_waits
+theorem glmul_waits : checkWaitcntDump glmulIsa = true := by native_decide
+#assert_compiled glmul_waits
+theorem ntt4_waits : checkWaitcntDump ntt4Isa = true := by native_decide
+#assert_compiled ntt4_waits
 
 /-- The gem5 differential vectors (`hardware/gpu/rdna2/gem5_vectors.tsv`): every twin instruction's step
 agrees with gem5's Vega body on random register states, register by register. -/

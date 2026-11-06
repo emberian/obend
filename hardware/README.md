@@ -285,9 +285,19 @@ decoding or fails it unless it lies in no field the specification names; every g
 model give `expected.tsv` and a planted bit flip in a store's register is caught; the gem5 vectors are
 the generator's bytes and replay. Passed 2026-11-06 on the fourteen dumps.
 
-What the model does not do, named: it completes memory accesses when they issue, so `s_waitcnt` is a
-no-op and a missing wait would read fresh registers here and stale ones on the device (the device run of
-`verify_gpu.sh` is what catches that); it runs a dispatch's waves one after another, sound for G1's
+`Obend.Hardware.Gpu.Rdna2.Waitcnt` closes the gap the model's immediate memory leaves: the model
+completes an access when it issues, so a program that read a load's destination before waiting for it
+would be right here and stale on the device. The module walks every dumped program as a dataflow over
+its blocks, tracking the outstanding vector and scalar loads with the manual's counter rules (4.4, 7.3:
+vector loads return in order, scalar loads out of order so only `lgkmcnt(0)` completes them) and the
+hazard rules of LLVM's `SIInsertWaitcnts` (every use and def against the counter that scores it; a
+vector load's write-after-write needs no wait on gfx10; store data needs no wait), and refuses a program
+that touches a load's destination before a covering wait. `isa_check.sh` stage 6 runs it on every dump
+and requires a dump with the first `vmcnt` wait of stage 0 replaced by `s_nop 0` to be refused;
+`rdna2/waitcnt_plant.py` plants the same `s_nop` in the machine code the card runs, through Mesa's
+shader cache, for the measurement reported in `rdna2/README.md`.
+
+What the model does not do, named: it runs a dispatch's waves one after another, sound for G1's
 programs by `lowerArrayToGpu_sound`'s disjointness and not in general; the memory model (G4) is not
 here, nor a layering better than the scalar module's greedy one (the 64-point NTT lowers to 1670
 dispatches where a few dozen would do), nor the RTL path of the same array graphs.
