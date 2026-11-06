@@ -722,7 +722,7 @@ where
 def refusalsOf (s s' : Store) : List String :=
   s'.pages.filterMap fun p' =>
     match s.page? p'.name with
-    | none => if p'.history.isEmpty then some (p'.name ++ ": not born: " ++ p'.note.getD "") else none
+    | none => if p'.history.isEmpty && p'.note.isSome then some (p'.name ++ ": not born: " ++ p'.note.getD "") else none
     | some p =>
       if p'.history.length > p.history.length then none
       else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then some (p'.name ++ ": " ++ p'.note.getD "")
@@ -1226,8 +1226,10 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches) V with
     | .ok (_, .merged s' notes, rendered) =>
       -- a write of the other side the tip did not land is a refused write of this merge
+      -- (here's own writes the merge left unsettled are refusals of their pages, said by `finishTurn`)
       let refused := notes.filter fun n => (n.splitOn ": not merged").length > 1
-      for n in notes do unless refused.contains n do IO.println n
+      let unsettled := notes.filter fun n => (n.splitOn "here's write was not settled").length > 1
+      for n in notes do unless refused.contains n || unsettled.contains n do IO.println n
       sayRefused refused
       for l in rendered do IO.println l
       for l in problems s' do IO.println l

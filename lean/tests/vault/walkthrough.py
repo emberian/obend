@@ -4,9 +4,9 @@
 Every ```sh block runs, in order, under bash in one work directory, with the built `obend`
 (lean/.lake/build/bin/obend) first on PATH. The ```text block that follows a ```sh block is its
 expected output (stdout and stderr together), compared exactly. A ```sh block marked `refused`
-must exit non-zero and say why on stderr (`obend` exits 1 when a command ran but a write of it was
-refused, 2 when the command itself was refused, and says the refusal on stderr either way); any other
-must exit 0.
+must exit non-zero; exiting 1 or 2 it must say why on stderr (`obend` exits 1 when a command ran but a
+write of it was refused, 2 when the command itself was refused, and says the refusal on stderr either
+way; other codes report a fault, as `obend log` does a torn tail); any other must exit 0.
 
     python3 tests/vault/walkthrough.py            # from lean/, after `lake build obend`
     python3 tests/vault/walkthrough.py --work DIR # run in DIR (must not exist) and keep it
@@ -149,7 +149,7 @@ def main():
             failures += 1
             print(f"FAIL step {steps} (line {start + 1}): exit {r.returncode}, expected "
                   f"{'non-zero' if want_fail else '0'}\n{got}")
-        elif want_fail and not r.stderr.strip():
+        elif want_fail and r.returncode in (1, 2) and not r.stderr.strip():
             failures += 1
             print(f"FAIL step {steps} (line {start + 1}): refused (exit {r.returncode}) without a word on stderr\n{got}")
         nxt = bs[k + 1] if k + 1 < len(bs) else None
