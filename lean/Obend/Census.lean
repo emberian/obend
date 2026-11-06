@@ -119,6 +119,7 @@ import Obend.Apps.FocHil
 import Obend.Apps.ObendRisc
 import Obend.Apps.QuantumPhotonicMatter
 import Obend.Apps.SdrFt8
+import Obend.Apps.SdrFt8Rx
 import Obend.Apps.SiliconKernelVerilator
 import Obend.Apps.SovereignDrex
 import Obend.Apps.ZkNtt
@@ -294,6 +295,7 @@ import Obend.Doc.Render
 import Obend.Doc.Section
 import Obend.Doc.Structured
 import Obend.Elab
+import Obend.Elab.AutoCertTaylorSound
 import Obend.Elab.Coerce
 import Obend.Elab.Gate
 import Obend.Elab.Prepare
@@ -326,6 +328,7 @@ import Obend.Hardware
 import Obend.Hardware.Accelerators
 import Obend.Hardware.AgenticEDA
 import Obend.Hardware.Analog
+import Obend.Hardware.Cic
 import Obend.Hardware.Circuits
 import Obend.Hardware.Cli
 import Obend.Hardware.Codec

@@ -28,6 +28,7 @@ public import Obend.Hardware.DSP
 public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.TaylorModel
 public import Obend.Analysis.SosLyapunov
+public import Obend.Apps.SdrFt8Rx
 public meta import Lean
 public meta import Obend.Core.Term
 public meta import Obend.Law
@@ -77,14 +78,30 @@ verification for **Flagship App #3 (`apps/sdr-ft8/`)**:
   `Nominal40mSdrFt8Transceiver` $\to$ `Calibrated40mFt8TransceiverOverride`) importing `TayloeQuadratureMixer`,
   `CicDecimatorFir`, and `CordicFt8Demod`.
 
-**Not established.** Four bound claims the designs used to carry are gone, because none of them holds
-as stated: each quantified over an unbounded natural with no `given` range, so no judge can certify
-it and `#import_obend` refused all four (2026-11-04). They were `lo_phasor_taylor_enclosure`
-(`thetaMrad <= 1000`), `cic_bitgrowth_interval_bound` (`16 + stages * 6 <= 64`),
-`ft8_tone_bin_interval_bound` (`125 + bin * 125 <= 1000`) and `rx_irr_interval_bound`
-(`60 + trimErr * 2 <= 90`). The LO phasor enclosure, the CIC register growth, the FT8 tone-bin
-range and the image-rejection margin are not established for this app; the judge formats below
-(`interval@1`, `taylor-model@1`) remain and are tested on their own queries.
+**Established (2026-11-06), replacing four unbounded claims refused on 2026-11-04.** The receive
+chain is three `RtlModule`s in `Obend.Apps.SdrFt8Rx`, emitted (`obend-emit-sv sdr-nco|sdr-cic|sdr-disc`)
+and LEC'd against Lean by `verilator/verify_sdr_ft8.sh`, which also runs a public FT8 recording through
+them: a WSJT-X sample (`recording/ft8_target.txt`) yields all 79 channel tones of its reference decode.
+* CIC register growth: `Obend.Hardware.Cic.cic_register_width` (Hogenauer, any `R`, `M`, `N`: with
+  `R·M = 2^k` and a `(b+1)`-bit input, registers of `N·k + b + 1` bits that wrap give the exact output) and
+  `SdrFt8Rx.sdrCic_output_exact` (the 34-bit `sdrCicModule`, `R = 64, M = 1, N = 3`, 16-bit input: after every
+  clock edge its output register, read signed, is the triple moving sum of length 64); the `.obend` claim
+  `cic_output_fits_34_bits`.
+* FT8 tone bins: `SdrFt8Rx.ft8_bin_of_tone` (an angle within 209438 µrad of tone `k`'s `k·2π/15` is decided
+  `k`, not out of band), `ft8_bin_range` (every angle lands in `0..7`; out of band is exactly `a < -209440`),
+  `binExpr_correct` (the slicer hardware computes it); the `.obend` claim `ft8_tone_regions_below_pi`.
+* LO phasor: `SdrFt8Rx.nco_phasor_error` (the tuning NCO's Q30 core is within the `taylor-model@1`
+  enclosure, `|cos error| ≤ 0.002491`, `|sin error| ≤ 0.000327`, plus 3 LSB, of `cos`, `sin` of its angle
+  over its whole range `[0, π_r/4]`, for any `AnalyticModel`), resting on
+  `Obend.Elab.AutoCert.taylorModelJudge_semantic`; the `.obend` claim `nco_mix_output_fits_16_bits`.
+* Image rejection: `SdrFt8Rx.sdr_irr_ge_63dB` (`interval@1` over the calibration's half-step box with
+  `taylor-model@1` for `cos φ`: image power × 1995263 ≤ wanted power, 63 dB, a 3 dB margin over 60 dB); the
+  `.obend` claim `rx_image_rejection_63db`.
+
+Not established: the CORDIC's angle error (the tone theorem takes the angle as given; the recording's worst
+symbol is 98 mrad off, the slicer allows 209), the Tayloe front end itself (the testbench's analytic signal
+stands in for it), and any relation between `sdrFt8SequentialRtlModule` below or the hand-written
+`verilator/sdr_ft8_top.sv` and the emitted chain.
 -/
 
 @[expose] public section

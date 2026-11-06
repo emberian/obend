@@ -38,6 +38,16 @@ spec Nominal40mSdrFt8Transceiver for SdrFt8Transceiver:
     snrDb * 10n + self.friisNoiseFactorMilli
   claim demod_ft8_open_recursion(rfMv: Nat): self.demodFt8SymbolStream(rfMv) == rfMv * self.imageRejectionDb + 1250n
   claim rx_sensitivity_open_recursion(snrDb: Nat): self.rxSensitivityMarginDb(snrDb) == snrDb * 10n + self.friisNoiseFactorMilli
+  # Image rejection after calibration. The I/Q gain trim steps 1/500 and the phase trim 2 mrad, so the
+  # residual gain error is at most 1000 ppm (a) and the residual phase error at most 1 mrad, for which
+  # 1 - cos(phi) <= 500001e-12 (w; the taylor-model@1 enclosure of cos over [-1/1000, 1/1000]). With
+  # u = g - 1 (|u| = a 1e-6) and v = 1 - cos(phi) (v = w 1e-12) the wanted sideband's power is
+  # (2+u)^2 - 2(1+u)v and the image's u^2 + 2(1+u)v (times the same constant); scaled by 1e18 and with
+  # each term at its worst sign, this claim is image * 1995263 <= wanted, i.e. an image rejection ratio
+  # above 10^6.3, 63 dB, 3 dB more than the 60 dB a signal 40 dB stronger on the image frequency needs
+  # to land 20 dB below the wanted one. Obend.Apps.SdrFt8Rx.sdr_irr_ge_63dB proves the same with the
+  # standard formula over the rationals (interval@1 for the ratio, taylor-model@1 for cos).
+  claim rx_image_rejection_63db(a: Nat, w: Nat) given a <= 1000n && w <= 500001n by judge("interval@1"): 1995263n * (a * a * 1000000n + 2n * (1000000n + a) * w) + 2n * (1000000n + a) * w + 4000000000000n * a <= 4000000000000000000n + a * a * 1000000n
 
 spec Calibrated40mFt8TransceiverOverride for SdrFt8Transceiver:
   requires ddcFilteredMag(rfMv: Nat) -> Nat

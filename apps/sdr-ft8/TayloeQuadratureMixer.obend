@@ -30,6 +30,14 @@ spec UncalibratedTayloeMixer for TayloeQuadratureMixer:
   def desiredUsbSignalMv(rfMv: Nat) -> Nat:
     rfMv * self.iqGainPermille + self.ncoFreqKhz
   claim image_cancel_open_recursion(rfMv: Nat): self.imageSidebandCancelMv(rfMv) == rfMv * self.iqGainPermille + 12n
+  # The tuning NCO's phasor (Obend.Apps.SdrFt8Rx.sdrNcoModule, emitted as verilator/sdr_nco_mix.sv)
+  # differs from (cos, sin) of its angle by at most 0.002491 and 0.000327 plus 3 LSB in Q30
+  # (nco_phasor_error: the taylor-model@1 judge's enclosure over the core's whole range [0, pi/4], and
+  # the fixed-point core checked at all 4097 inputs), so its gain is at most
+  # 1 + 0.002491 + 0.000327 + 6/2^30, which is 1076767691/2^30 rounded up. This claim is that an input
+  # phasor of magnitude at most 23171 LSB (the front end's per-component peak 16384, times sqrt 2)
+  # leaves the mixer inside its signed 16-bit output (32767 * 2^30 = 35183298347008).
+  claim nco_mix_output_fits_16_bits(m: Nat) given m <= 23171n by judge("interval@1"): m * 1076767691n <= 35183298347008n
 
 spec Calibrated4PhaseTayloeOverride for TayloeQuadratureMixer:
   requires quadratureSampleMv(rfMv: Nat) -> Nat

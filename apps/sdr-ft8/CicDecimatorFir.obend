@@ -33,6 +33,14 @@ spec BaseCicDecimatorFirSpec for CicDecimatorFirChain:
     combSample * self.firCenterTapWeight + self.cicStages
   claim cic_comb_open_recursion(intSample: Nat): self.alwaysFfCicComb3(intSample) == intSample * self.decimationRatio + 5n
   claim folded_fir_open_recursion(combSample: Nat): self.foldedSymmetricFirOut(combSample) == combSample * self.firCenterTapWeight + self.cicStages
+  # Hogenauer's register width for this CIC (R = 64, M = 1, N = 3, 16-bit two's-complement input):
+  # the gain is (R*M)^N = 64^3 = 262144 = 2^18, so an input of magnitude at most 2^15 = 32768 gives an
+  # output of magnitude at most 2^33, which is the most a 34-bit register holds (B = N*log2(R*M) + 16).
+  # The RTL that realises it is Obend.Apps.SdrFt8Rx.sdrCicModule (34-bit registers, emitted as
+  # verilator/sdr_cic3_r64.sv); Obend.Apps.SdrFt8Rx.sdrCic_output_exact proves that its output register,
+  # read as a signed 34-bit number, is the exact CIC output on every input stream, although the
+  # integrators wrap, and Obend.Hardware.Cic.cic_register_width is the general formula.
+  claim cic_output_fits_34_bits(x: Nat) given x <= 32768n by judge("interval@1"): x * 262144n <= 8589934592n
 
 spec HogenauerCompensatedCicFirOverride for CicDecimatorFirChain:
   requires alwaysFfCicInt3(inSample: Nat) -> Nat

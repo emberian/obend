@@ -1,0 +1,26 @@
+# The real-signal gate of verify_sdr_ft8.sh (read by verilator/sdr_ft8_rx_tb.cpp).
+# Recording: WSJT-X sample samples/FT8/210703_133430.wav (12000 Hz, mono, 16-bit, 15.000 s), from the WSJT-X
+# git repository https://git.code.sf.net/p/wsjt/wsjtx (master b4f9a431bcf6449df8f37b56de79d48b665b044c),
+# served at https://downloads.sourceforge.net/project/wsjt/samples/FT8/210703_133430.wav (the samples URL WSJT-X's
+# own downloader uses; byte-identical to the git copy). WSJT-X is GPLv3 (K1JT et al.); the samples README says
+# nothing separate about their license, so the file is not committed here: the verify script downloads it and
+# checks the sha256 below.
+# Reference decode: kgoba/ft8_lib 9fec6ca39886edbf96f4f5e71edc76da5074e871 (MIT), decode_ft8 on that file:
+#   000000 +13.5 +0.88 2572 ~  W1FC F5BZB -08
+#   000000 +13.0 +0.56 2159 ~  WM3PEN EA6VQ -09
+#   000000 +12.5 +0.80  722 ~  A92EE F5PSR -14
+#   000000 +12.0 -0.08 1197 ~  CQ F5RXL IN94
+#   000000 +11.5 +0.96  591 ~  K1JT HA0DU KN07
+#   000000 +08.5 +0.88  466 ~  N1PJT HB9CQK -10
+#   000000 +08.5 +0.88 2853 ~  XE2X HA2NP RR73
+#   000000 +08.0 +0.96  641 ~  N1JFU EA6EE R-07
+# Target: the 2159 Hz signal (second strongest; the spectrum below it is at the noise floor for 400 Hz, the
+# nearest strong signal is ~+350 Hz away). Its 79 channel tones are ft8_lib's encoding (ftx_message_encode,
+# ft8_encode) of the decoded message. f0 (tone 0) and s0 (first sample of symbol 0) were refined by maximising
+# the correlation of the recording with an 8-FSK synthesis of those tones (f0 to +-0.05 Hz, s0 to +-1 sample).
+sha256 9feb99c275770a6618538026da7decc6b09eb6cf63121e5168fa86dcdf00c2f5
+url https://downloads.sourceforge.net/project/wsjt/samples/FT8/210703_133430.wav
+message WM3PEN EA6VQ -09
+f0_hz 2157.68
+s0 5265
+tones 3140652733363401044634242717463525533140652071236767430424106143434170503140652

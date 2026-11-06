@@ -4,7 +4,7 @@
     obend-emit-sv <target> [--out FILE]      targets: risc golden-risc zk golden-zk fidget fidget-ngc
                                                       drex quantum silicon-elab mac2
                                                       ice40-mac8 tcad stator mill golden-silicon-kernel
-                                                      width-probe
+                                                      width-probe sdr-nco sdr-cic sdr-disc
     obend-emit-sv <target> --lec [--out FILE]  the Lean half of the LEC of an `RtlModule` target
                                              (`Obend.Hardware.YosysLec.emitYosysLecSmt2`), appended to
                                              Yosys `write_smt2` of the emitted .sv; `unsat` = equivalent
@@ -31,6 +31,7 @@ import Obend.Apps.FidgetCam
 import Obend.Apps.SovereignDrex
 import Obend.Apps.QuantumPhotonicMatter
 import Obend.Apps.SiliconKernelVerilator
+import Obend.Apps.SdrFt8Rx
 
 open Obend.Hardware.HDL
 
@@ -102,6 +103,9 @@ def targets : List (String × String) :=
   , ("stator", "hardware/sim/lc_drives_userspace_stator.sv")
   , ("mill", "hardware/sim/cnc_5axis_userspace_mill.sv")
   , ("width-probe", "hardware/sim/obend_width_probe.sv")
+  , ("sdr-nco", "apps/sdr-ft8/verilator/sdr_nco_mix.sv")
+  , ("sdr-cic", "apps/sdr-ft8/verilator/sdr_cic3_r64.sv")
+  , ("sdr-disc", "apps/sdr-ft8/verilator/sdr_ft8_disc.sv")
   , ("lut4ab-sm", "hardware/fabulous/tile/LUT4AB_switch_matrix_lec.sv")
   , ("wio-sm", "hardware/fabulous/tile/W_IO_switch_matrix_lec.sv")
   , ("lut4c", "hardware/fabulous/tile/LUT4c_frame_config_dffesr.sv")
@@ -121,6 +125,9 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
   | "mill"    => some (builtInModule "cnc_5axis_userspace_mill")
   | "drex"    => some (.ok ("Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule", Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule))
   | "width-probe" => some (.ok ("Obend.Hardware.VerilateRunner.goldenWidthProbeRtl", Obend.Hardware.VerilateRunner.goldenWidthProbeRtl))
+  | "sdr-nco" => some (.ok ("Obend.Apps.SdrFt8Rx.sdrNcoModule", Obend.Apps.SdrFt8Rx.sdrNcoModule))
+  | "sdr-cic" => some (.ok ("Obend.Apps.SdrFt8Rx.sdrCicModule", Obend.Apps.SdrFt8Rx.sdrCicModule))
+  | "sdr-disc" => some (.ok ("Obend.Apps.SdrFt8Rx.sdrFt8DiscModule", Obend.Apps.SdrFt8Rx.sdrFt8DiscModule))
   | "lut4ab-sm" => some (.ok ("Obend.Hardware.Fabulous.smModule lut4abSwitchMatrix", Obend.Hardware.Fabulous.smModule Obend.Hardware.Fabulous.lut4abSwitchMatrix))
   | "wio-sm" => some (.ok ("Obend.Hardware.Fabulous.smModule wioSwitchMatrix", Obend.Hardware.Fabulous.smModule Obend.Hardware.Fabulous.wioSwitchMatrix))
   | "lut4c"   => some (.ok ("Obend.Hardware.Fabulous.lut4cModule", Obend.Hardware.Fabulous.lut4cModule))
@@ -129,7 +136,7 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
 
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
 def moduleTargetNames : List String :=
-  ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"]
+  ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "sdr-nco", "sdr-cic", "sdr-disc", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"]
 
 /-- `--lec`: the Lean half of the LEC of a module target, behind the same emission gate as its `.sv`
 (`checkRtlModuleW` includes `checkWidths`, which implies the `moduleFaithful` hypothesis of
