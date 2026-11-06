@@ -23,6 +23,15 @@ the manual, and where RDNA2 departs from Vega the departure is named (V_CMPX wri
 12.9; Vega's also wrote VCC). Encodings and operand codes come from AMD's XML through `Decode`;
 operand code tables are manual 5.2 Table 10 and 6.2 Table 20.
 
+Two Lean GPU models of the same month set the shape this sits beside: Koska, Koska and Koska,
+"Formalizing PTX in Lean to Prove GPU Kernel Correctness" (arXiv 2611.04447) models the possible
+executions of a PTX kernel with its memory model, proxies and data-dependent control flow, and proves
+kernels against specifications; LARK (arXiv 2611.02028) formalizes a GPU machine model and operator
+semantics once per target language, human-verified, and derives every incoming kernel's semantics from
+them. This module is the RDNA2 point of that division: the instruction semantics are written and
+checked once, here, and each dumped kernel's meaning is derived by `step` and checked by `Check`; the
+NVIDIA point of the program is to adopt theirs rather than write its own.
+
 What the model does not do, named: it completes every memory access when the instruction executes, so
 `S_WAITCNT` and `S_CLAUSE` are no-ops (manual 4.4: the counters order completion; a program that
 forgot a wait would read stale registers on the device and fresh ones here; the device run of
