@@ -299,6 +299,14 @@ structure Head where
 def worldDigest (w : Replay.World) : String :=
   String.ofList ((hex (be 32 (dig logHash (encodeWorld w)))).toList.take 16)
 
+/-- The world's bytes as a record committed to them (`c`): in this binary's encoding, or in the one
+before histories were written as growth (a record an earlier binary wrote); none when neither. -/
+def committedAs (w : Replay.World) (c : Nat) : Option (Bytes × Nat) :=
+  let wb := encodeWorld w
+  if c == dig logHash wb then some (wb, c) else
+  let wl := encodeWorldFull w
+  if c == dig logHash wl then some (wl, c) else none
+
 /-- **Write a checkpoint** of the head's world, anchored to the log's last record, after checking that
 the world's bytes decode to the world (`checkpoint_is_cache`'s premise). -/
 def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := Obend.Vault.Cost.phase "write" do
@@ -459,12 +467,8 @@ def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.pha
   let known ← match last?, held with
     | some r, some (ck, _) =>
       if qs.isEmpty then pure (some (ck.world, r.receipt.newCommit))
-      else do
-        let wb := encodeWorld world
-        pure (if r.receipt.newCommit == dig logHash wb then some (wb, r.receipt.newCommit) else none)
-    | some r, none => do
-      let wb := encodeWorld world
-      pure (if r.receipt.newCommit == dig logHash wb then some (wb, r.receipt.newCommit) else none)
+      else pure (committedAs world r.receipt.newCommit)
+    | some r, none => pure (committedAs world r.receipt.newCommit)
     | none, _ => pure (some (encodeWorld world, dig logHash (encodeWorld world)))
   if last?.isSome && known.isNone then
     throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
@@ -950,8 +954,14 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
   IO.println ("world " ++ worldDigest fromGenesis ++ ": replayed from genesis")
   IO.println ("world " ++ worldDigest r.head.world ++ ": the checkpoint and the records after it")
   IO.println ("world " ++ committed ++ ": as record " ++ toString qs.length ++ " commits to it")
+  let legacy := match qs.getLast? with
+    | some last => (committedAs r.head.world last.receipt.newCommit).isSome &&
+        worldDigest fromGenesis == worldDigest r.head.world
+    | none => false
   if worldDigest fromGenesis == worldDigest r.head.world && worldDigest r.head.world == committed then
     IO.println "one world"; return 0
+  else if legacy then
+    IO.println "one world (its last record commits to it as written before histories were written as growth)"; return 0
   else
     IO.println "NOT ONE WORLD"; return 3
 
@@ -1113,6 +1123,20 @@ partial def copyTree (src dst : System.FilePath) : IO Unit := do
     if ← e.path.isDir then copyTree e.path (dst / e.fileName)
     else Obend.Vault.Cost.writeBinFile (dst / e.fileName) (← Obend.Vault.Cost.readBinFile e.path)
 
+/-- Copy what a vault is: its `.obend` (the lock aside) and every page it reads (each `.md` outside a
+dot directory, `readVault`), and nothing else beside them: a fork carries no binaries, logs or
+working files that happen to sit in the vault's directory. -/
+partial def copyVault (src dst : System.FilePath) : IO Unit := do
+  copyTree (src / ".obend") (dst / ".obend")
+  let pages ← System.FilePath.walkDir src fun p => pure !((p.fileName.getD "").startsWith ".")
+  let pre := src.toString ++ "/"
+  for f in pages do
+    if f.extension == some "md" && !(← f.isDir) && f.toString.startsWith pre then
+      let rel := String.ofList (f.toString.toList.drop pre.length)
+      let d := dst / rel
+      if let some parent := d.parent then IO.FS.createDirAll parent
+      Obend.Vault.Cost.writeBinFile d (← Obend.Vault.Cost.readBinFile f)
+
 /-- The line `N` (from 1) of a file, as read. -/
 def lineOf (spec : String) : IO (Except String (String × String)) := do
   match spec.splitOn ":" with
@@ -1253,13 +1277,18 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       let bp := Merge.sharedPrefix (Merge.historyIn w.store n) (Merge.historyIn me.store n)
       Merge.liveHistory me.store n != bp && !(Merge.liveHistory me.store n).isEmpty
     IO.println ("since " ++ label ++ " left " ++ tip ++ ":")
+    -- the pages this fork worked on, in full; every other page that moved at the tip, by name
     let mut moved := 0
+    let mut elsewhere : Array String := #[]
     for p in w.store.pages do
       let n := p.name
       let bp := Merge.sharedPrefix (Merge.historyIn w.store n) (Merge.historyIn me.store n)
       if Merge.liveHistory w.store n == bp || p.history.isEmpty then continue
       moved := moved + 1
-      let also := if mineMoved n then " (you wrote it too)" else ""
+      unless mineMoved n do
+        elsewhere := elsewhere.push (if bp.isEmpty then n ++ " (new)" else n)
+        continue
+      let also := ""
       match bp.getLast?, p.render? with
       | none, _ => IO.println ("  " ++ n ++ ": new at the tip" ++ also)
       | some B, some cur =>
@@ -1279,6 +1308,8 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         for l in lawsMoved do IO.println ("    " ++ l)
       | _, none => IO.println ("  " ++ n ++ ": gone at the tip" ++ also)
     if moved == 0 then IO.println "  no page moved at the tip"
+    unless elsewhere.isEmpty do
+      IO.println ("  elsewhere at the tip, on pages you did not write: " ++ ", ".intercalate elsewhere.toList)
     -- reasons: the tip's own, then this fork's as they would join there
     let behind := Replay.behindOn w.store me.store
     for (n, fs) in behind do IO.println ("  you have not seen at " ++ n ++ ": " ++ ", ".intercalate fs)
@@ -1567,7 +1598,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     match ← commitWith dir (.forked name) (fun _ _ => pure ()) with
     | .error e => fail e
     | .ok () =>
-      copyTree dir other
+      copyVault dir other
       IO.println ("forked " ++ name ++ ": a copy of this vault, declared here until it merges")
       return 0
   | ["transport", name] => some do

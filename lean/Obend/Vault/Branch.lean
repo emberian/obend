@@ -50,7 +50,7 @@ tip when it merges; the difference is only the configuration it is judged at.
   `unresolved`), and by nothing else: admitted at the tip exactly when the store's write lands, the
   tip keeping exactly the store it reaches, refused in the store's own words
   (`tip_lands_iff_store_lands`, `tip_refuses_iff_store_refuses`), its consent the store's
-  (`WriteConsents`, `StoreConsents` through `judgePrepared`). The page's laws are lines of its text, so
+  (`WriteConsents`, `TextConsents` through `judgePrepared`). The page's laws are lines of its text, so
   in a vault they are the store's, not the book's. The store of states and the vault agree on every
   page at its current version, at the base and so after the merge (`Agrees`, `merge_vault_agrees`).
 * **Laws settle first, in every store.** The tip applies relaws before any write, and the writes that
@@ -1041,23 +1041,48 @@ theorem coneRefusal_none {book : LawBook} {s' : VaultStore} {actor : String} {h 
           rw [ite_eq_left hcond] at hb
           exact linksRefusal_none hb d.cell (List.mem_singleton_self _) p hp
 
-/-- **A store's consent to a page write**: each version of it prepared (`prepareWrite`) and admitted
-by the store's judgment (`judgePrepared`: its own laws and its kinds', its laws over rows, the laws
-over links of the pages it links to and of every page linking to it) at the store as the versions
-before it left it. -/
-def StoreConsents (s : Store) (page : String) (poster : Option String) :
-    List (Graph × List (AtomId × String)) → Prop
-  | [] => True
-  | (G, a) :: rest => ∃ p pr, s.page? page = some p ∧
-      prepareWrite s.entries p G a .owner s.turn (poster.getD "owner") s.environment = .ok pr ∧
-      judgePrepared s.entries s.entries pr [] = .ok () ∧
-      StoreConsents (s.setPage (p.withChange pr.change)) page poster rest
+/-- **A store's consent to a page's text**: its last version prepared from the page's version as it
+is, the versions before it entering the history as written (`Store.writeSince`), and admitted by the
+store's judgment (`judgePrepared`). -/
+def TextConsents (s : Store) (page : String) (poster : Option String)
+    (vs : List (Graph × List (AtomId × String))) : Prop :=
+  match vs.getLast? with
+  | none => True
+  | some (G, a) => ∃ p pr, s.page? page = some p ∧
+      prepareFrom (p.current.map fun G0 => (G0, p.history.length - 1)) s.entries
+        { p with history := p.history ++ vs.dropLast.map (·.1), authors := p.authors ++ vs.dropLast.flatMap (·.2) }
+        G a .owner s.turn (poster.getD "owner") s.environment = .ok pr ∧
+      judgePrepared s.entries s.entries pr [] = .ok ()
+
+theorem writeText_consents {s s' : Store} {page : String} {w : PageWrite}
+    (h : s.writeText page w = .ok s') : TextConsents s page w.poster w.versions := by
+  unfold Store.writeText at h
+  unfold TextConsents
+  cases hl : w.versions.getLast? with
+  | none => trivial
+  | some x =>
+    obtain ⟨G, a⟩ := x
+    rw [hl] at h
+    simp only at h ⊢
+    unfold Store.writeSince at h
+    cases hp : s.page? page with
+    | none => rw [hp] at h; cases h
+    | some p =>
+      rw [hp] at h
+      simp only at h
+      split at h
+      · cases h
+      · rename_i pr hpr
+        split at h
+        · cases h
+        · rename_i hj
+          exact ⟨p, pr, rfl, hpr, hj⟩
 
 /-- **What consent to a write is**, at the configuration it is judged at: in a vault, the store's
-consent to its text (`StoreConsents`); otherwise the consent of every page of its cone (`Consents`). -/
+consent to its text (`TextConsents`); otherwise the consent of every page of its cone (`Consents`). -/
 def WriteConsents (c c' : Config) (t : BTurn) : Prop :=
   match c.vault with
-  | some s => ∃ w d, t.text = some w ∧ t.turn.writeCells = [d] ∧ StoreConsents s d.cell w.poster w.versions
+  | some s => ∃ w d, t.text = some w ∧ t.turn.writeCells = [d] ∧ TextConsents s d.cell w.poster w.versions
   | none => ∀ d ∈ t.turn.writeCells, Consents c.book c'.store (factsAt c.history.length) d
 
 theorem write_consents {s s' : Store} {p : Page} {G : Graph} {a : List (AtomId × String)} {po : Option String}
@@ -1078,21 +1103,6 @@ theorem write_consents {s s' : Store} {p : Page} {G : Graph} {a : List (AtomId �
       cases h
       exact ⟨pr, hp, hj, rfl⟩
 
-theorem writeVersions_consents {page : String} {po : Option String} :
-    ∀ {s s' : Store} {vs : List (Graph × List (AtomId × String))},
-      s.writeVersions page po vs = .ok s' → StoreConsents s page po vs
-  | _, _, [], _ => trivial
-  | s, s', (G, a) :: rest, h => by
-    simp only [Store.writeVersions] at h
-    split at h
-    · rename_i p hp
-      split at h
-      · rename_i s₁ h₁
-        obtain ⟨pr, hpr, hj, rfl⟩ := write_consents h₁
-        exact ⟨p, pr, hp, hpr, hj, writeVersions_consents h⟩
-      · cases h
-    · cases h
-
 /-- **An admitted write was consented to**, at the configuration it was admitted at: in a vault by
 the store's judgment of its text, otherwise by every page of its cone. -/
 theorem admitWrite_consents {c c' : Config} {o : String} {t : BTurn} (h : admitWrite c o t = .ok c') :
@@ -1104,7 +1114,7 @@ theorem admitWrite_consents {c c' : Config} {o : String} {t : BTurn} (h : admitW
   · rename_i s w d hv ht hw
     rw [hv]
     cases hs : s.writeText d.cell w with
-    | ok s' => exact ⟨w, d, ht, hw, writeVersions_consents hs⟩
+    | ok s' => exact ⟨w, d, ht, hw, writeText_consents hs⟩
     | error m => rw [hs] at hj; cases hj
   · cases hj
   · rename_i hv
@@ -2590,20 +2600,28 @@ theorem write_page?_ne {s s' : Store} {p : Page} {G : Graph} {a : List (AtomId �
   obtain ⟨pr, _, _, rfl⟩ := write_consents h
   exact page?_setPage_ne s _ (by simpa [Page.withChange] using hn)
 
-theorem writeVersions_page?_ne {page n : String} {po : Option String} (hn : page ≠ n) :
-    ∀ {s s' : Store} {vs : List (Graph × List (AtomId × String))},
-      s.writeVersions page po vs = .ok s' → s'.page? n = s.page? n
-  | _, _, [], h => by cases h; rfl
-  | s, s', (G, a) :: rest, h => by
-    simp only [Store.writeVersions] at h
-    split at h
-    · rename_i p hp
+theorem writeText_page?_ne {s s' : Store} {page n : String} {w : PageWrite} (hn : page ≠ n)
+    (h : s.writeText page w = .ok s') : s'.page? n = s.page? n := by
+  unfold Store.writeText at h
+  cases hl : w.versions.getLast? with
+  | none => rw [hl] at h; cases h; rfl
+  | some x =>
+    obtain ⟨G, a⟩ := x
+    rw [hl] at h
+    simp only at h
+    unfold Store.writeSince at h
+    cases hp : s.page? page with
+    | none => rw [hp] at h; cases h
+    | some p =>
+      rw [hp] at h
       have hpn : p.name = page := by simpa [Store.page?] using List.find?_some hp
+      simp only at h
       split at h
-      · rename_i s₁ h₁
-        rw [writeVersions_page?_ne hn h, write_page?_ne h₁ (hpn ▸ hn)]
       · cases h
-    · cases h
+      · split at h
+        · cases h
+        · cases h
+          exact page?_setPage_ne s _ (by simpa [Page.withChange] using hpn ▸ hn)
 
 /-- **A write keeps the agreement.** -/
 theorem admitWrite_agrees {c c' : Config} {o : String} {t : BTurn} (hc : Agrees c)
@@ -2638,7 +2656,7 @@ theorem admitWrite_agrees {c c' : Config} {o : String} {t : BTurn} (hc : Agrees 
             rw [applyTurn_frame_of_not_mem _ _ _ hnot]
             have hfr : vaultStates v' x = vaultStates s x := by
               unfold vaultStates
-              rw [writeVersions_page?_ne (Ne.symm hxd) hs]
+              rw [writeText_page?_ne (Ne.symm hxd) hs]
             rw [hfr]
             exact hc s hv x
         · cases hj

@@ -876,11 +876,11 @@ theorem adoptionOccasion_adopt {old new : String} (h : adoptionOccasion old new 
   · rename_i hc; simp only [Bool.and_eq_true, beq_iff_eq] at hc; exact hc
   · cases h
 
-/-- Prepare the write of `G'` to `p` (see `commit`): the refusals that come before the laws are
-asked (a change of a law line or of the kind by an actor without `relaw`, a stale kind), the laws,
-the states and the request. -/
-def prepareWrite (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
-    (turn : Nat) (poster : String := who.name) (env : Environment := #[]) : Except String Prepared := do
+/-- Prepare the write of `G'` to `p`, judged from the version `cur` (the old version and its index;
+none: a birth): the refusals that come before the laws are asked (a change of a law line or of the
+kind by an actor without `relaw`, a stale kind), the laws, the states and the request. -/
+def prepareFrom (cur : Option (Graph × Nat)) (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String))
+    (who : Actor) (turn : Nat) (poster : String := who.name) (env : Environment := #[]) : Except String Prepared := do
   let authors := p.authors ++ added
   let v := p.history.length
   let newLaws ← lawsFor es p.name G'
@@ -888,17 +888,17 @@ def prepareWrite (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId
   let moved := match p.kind with
     | some old => movedKinds es old
     | none => []
-  let (occ, laws, oldMs, oldLs) ← match p.current with
+  let (occ, laws, oldMs, oldLs) ← match cur with
     | none => pure (Occ.birth, newLaws, [], [])
-    | some G =>
+    | some (G, k) =>
       if lawsKept (settled G) (settled G') && moved.isEmpty then
-        pure (Occ.write, newLaws, measures G (v - 1) ++ unresolvedOf env G, labelsOf G)
+        pure (Occ.write, newLaws, measures G k ++ unresolvedOf env G, labelsOf G)
       else if who.may "relaw" p.name then
-        pure (adoptionOccasion (settled G) (settled G'), newLaws, measures G (v - 1) ++ unresolvedOf env G, labelsOf G)
+        pure (adoptionOccasion (settled G) (settled G'), newLaws, measures G k ++ unresolvedOf env G, labelsOf G)
       else if lawsKept (settled G) (settled G') then throw (staleText p.name who.name moved)
       else throw ("refused: changing a law line or the page's kind is the owner's (" ++ who.name ++
         " has no relaw grant on " ++ p.name ++ ")")
-  let newMs := measures G' v ++ unresolvedOf env G' ++ writeMeasures env p.current G'
+  let newMs := measures G' v ++ unresolvedOf env G' ++ writeMeasures env (cur.map (·.1)) G'
   -- the write's provenance is a label the laws read: `new.poster`, the member whose text this is
   let newLs := ("poster", poster) :: labelsOf G'
   let lin := (laws.filter fun l => isOwnLaw l.2.2 && (lawSubject l.1).isNone).map fun (n, e, _) => (n, e)
@@ -911,6 +911,11 @@ def prepareWrite (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId
   let facts : Facts := ⟨some who.id, some who.id, v, turn⟩
   let rq := requestBy who.name poster occ facts
   pure ⟨p, G', authors, laws, kinds, occ, S, o, n, facts, rq, lin, poster, who, env⟩
+
+/-- Prepare the write of `G'` to `p` (see `commit`), judged from the page's current version. -/
+def prepareWrite (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId × String)) (who : Actor)
+    (turn : Nat) (poster : String := who.name) (env : Environment := #[]) : Except String Prepared :=
+  prepareFrom (p.current.map fun G => (G, p.history.length - 1)) es p G' added who turn poster env
 
 /-- A store with some pages read at given states (the other writes of a turn, at their new states). -/
 def overlay (over : List (String × Obend.Core.Data.Data)) (store : VaultStore) : VaultStore := fun c =>
@@ -1041,14 +1046,14 @@ theorem commit_kind_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (add
   suffices ∃ msg, prepareWrite es p G' added who turn who.name env = .error msg by
     obtain ⟨m, hm⟩ := this
     exact ⟨m, commit_of_prepare_error hm⟩
-  unfold prepareWrite
+  unfold prepareWrite prepareFrom
   cases lawsFor es p.name G' with
   | error m => exact ⟨m, rfl⟩
   | ok newLaws =>
     cases kindsFor es p.name (settled G') with
     | error m => exact ⟨m, rfl⟩
     | ok kinds =>
-      simp only [bind, Except.bind, hc, hkept, hw, Bool.false_and, Bool.false_eq_true, if_false]
+      simp only [bind, Except.bind, hc, Option.map_some, hkept, hw, Bool.false_and, Bool.false_eq_true, if_false]
       exact ⟨_, rfl⟩
 
 /-- **A stale kind needs the grant**: a write to a page whose kind pin rests on a revised kind, by an
@@ -1061,21 +1066,21 @@ theorem commit_stale_needs_relaw (es : List Entry) (p : Page) (G G' : Graph) (ad
   suffices ∃ msg, prepareWrite es p G' added who turn who.name env = .error msg by
     obtain ⟨m, hm⟩ := this
     exact ⟨m, commit_of_prepare_error hm⟩
-  unfold prepareWrite
+  unfold prepareWrite prepareFrom
   cases lawsFor es p.name G' with
   | error m => exact ⟨m, rfl⟩
   | ok newLaws =>
     cases kindsFor es p.name (settled G') with
     | error m => exact ⟨m, rfl⟩
     | ok kinds =>
-      simp only [bind, Except.bind, hc, hp, hm, hw, Bool.and_false, Bool.false_eq_true, if_false]
+      simp only [bind, Except.bind, hc, Option.map_some, hp, hm, hw, Bool.and_false, Bool.false_eq_true, if_false]
       split <;> exact ⟨_, rfl⟩
 
 /-- What `prepareWrite` prepares is the write it was given: the page and the version. -/
 theorem prepareWrite_page {es : List Entry} {p : Page} {G' : Graph} {added : List (AtomId × String)}
     {who : Actor} {turn : Nat} {poster : String} {env : Environment} {pr : Prepared}
     (h : prepareWrite es p G' added who turn poster env = .ok pr) : pr.p = p ∧ pr.G' = G' := by
-  unfold prepareWrite at h
+  unfold prepareWrite prepareFrom at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
   all_goals first
@@ -2387,21 +2392,31 @@ def Store.write (s : Store) (p : Page) (G' : Graph) (added : List (AtomId × Str
   | .ok ch => return s.setPage (p.withChange ch)
   | .error msg => throw (p.name ++ ": " ++ msg)
 
-/-- **A page write lands**: each of its versions in turn, through `Store.write`, the one judgment and
-the one landing rule every write of the store goes through. -/
-def Store.writeVersions (s : Store) (page : String) (poster : Option String) :
-    List (Graph × List (AtomId × String)) → Except String Store
-  | [] => .ok s
-  | (G, added) :: rest =>
-    match s.page? page with
-    | some p =>
-      match s.write p G added .owner poster with
-      | .ok s' => s'.writeVersions page poster rest
-      | .error e => .error e
-    | none => .error (page ++ ": no such page")
+/-- **A side's write lands once**: the versions a side wrote since the base (`mids`, each already
+judged where it was written) enter the page's history as written, and the last, `G`, is prepared and
+judged by the store once, from the page's version at the base to `G`, numbered after the versions
+between. A merge judges one write per page, its state at the base to its state now; judging each
+version between again read the page's whole graph once per version, quadratic in a page's versions
+(2026-11-06: 1,000 updates over ten pages, 3.5 s). -/
+def Store.writeSince (s : Store) (page : String) (poster : Option String)
+    (mids : List (Graph × List (AtomId × String))) (G : Graph) (a : List (AtomId × String)) : Except String Store :=
+  match s.page? page with
+  | none => .error (page ++ ": no such page")
+  | some p =>
+    let p' := { p with history := p.history ++ mids.map (·.1), authors := p.authors ++ mids.flatMap (·.2) }
+    match prepareFrom (p.current.map fun G0 => (G0, p.history.length - 1)) s.entries p' G a .owner s.turn
+        (poster.getD "owner") s.environment with
+    | .error e => .error (page ++ ": " ++ e)
+    | .ok pr =>
+      match judgePrepared s.entries s.entries pr [] with
+      | .error e => .error (page ++ ": " ++ e)
+      | .ok () => .ok (s.setPage (p'.withChange pr.change))
 
+/-- A page write: its last version, landed by `writeSince` after the versions before it. -/
 def Store.writeText (s : Store) (page : String) (w : PageWrite) : Except String Store :=
-  s.writeVersions page w.poster w.versions
+  match w.versions.getLast? with
+  | none => .ok s
+  | some (G, a) => s.writeSince page w.poster w.versions.dropLast G a
 
 /-! ### Merge -/
 

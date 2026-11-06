@@ -195,20 +195,15 @@ cd rowan && obend since ../ws --proposal ../rowan-land.json
 
 ```text
 since rowan left ../ws:
-  jobs/harness: state offered → proposed, commit unset → "751b497", on unset → "ed1d477", assignee unset → sable, open 1 → 0, spent 0 → 2
-  jobs/relay: its laws moved; base "ed1d477" → "751b497" (you wrote it too)
+  jobs/relay: its laws moved; base "ed1d477" → "751b497"
     + law suite: new.state in ["proposed", "landed"] implies not (new.suite == "")
-  landed/harness: open 0 → 1
-  residents/sable: its text moved
-  evidence/harness/sable-1: new at the tip
-  evidence/harness/reviewer-1: new at the tip
-  tests/relay/suite: new at the tip
+  elsewhere at the tip, on pages you did not write: jobs/harness, landed/harness, residents/sable, evidence/harness/sable-1 (new), evidence/harness/reviewer-1 (new), tests/relay/suite (new)
   you have not seen at jobs/relay: base, law suite
   the tip observes harness-unit-pass-751b497f3fab: result: "pass"
   the tip observes relay-base-moved: _post keeps its signature, looked up per call; endpoints are kagi_url() and scry_url() (RESEARCH_KAGI_URL, RESEARCH_SCRY_URL)
   relay-proven: here supported by rowan; at the tip, with yours joined: unsupported: rowan is defeated by behind-rowan (supported)
 a merge of rowan now would land 4 page(s) and say:
-  jobs/relay + jobs/relay: not merged: refused by jobs/_kind: onbase (the kind of jobs/, an ancestor of jobs/relay): `new.state in ["proposed", "landed"] implies new.on == new.base` does not hold; the line `base: ed1d477` would pass (the page has `base: `)
+  jobs/relay + jobs/relay: not merged: refused by its law suite: `new.state in ["proposed", "landed"] implies not (new.suite == "")` does not hold; a line `suite: …` with a value would pass (the page has no `suite:` line it reads)
   jobs/relay: here's write stands (landed here before the merge)
   jobs/relay: kept from rowan: commit unset → "007f0e5401221dea20a481fafe3b90ce06bc973f", on unset → "ed1d477", assignee unset → rowan, spent 0 → 2
   jobs/relay: pending here, as rowan wrote it on this page as it is (state): refused by its law suite: `new.state in ["proposed", "landed"] implies not (new.suite == "")` does not hold; a line `suite: …` with a value would pass (the page has no `suite:` line it reads)
@@ -245,7 +240,7 @@ rowan's explanation rowan (relay-proven ⇐ relay-sandbox-pass-007f0e540122 unle
 work: performed 0, retained 0 of 1
 kagi: 1
 kagispent: 1
-jobs/relay + jobs/relay: not merged: refused by jobs/_kind: onbase (the kind of jobs/, an ancestor of jobs/relay): `new.state in ["proposed", "landed"] implies new.on == new.base` does not hold; the line `base: ed1d477` would pass (the page has `base: `)
+jobs/relay + jobs/relay: not merged: refused by its law suite: `new.state in ["proposed", "landed"] implies not (new.suite == "")` does not hold; a line `suite: …` with a value would pass (the page has no `suite:` line it reads)
 ```
 
 Its evidence came back with it, observed in its fork; the reviewer's explanation that the relay is
@@ -297,7 +292,9 @@ released intent 1fcef1ca77bea7b0: it awaits no receipt here; nothing outstanding
 rowan rebuilds the relay on 751b497 through the harness's seams (ad3a6dc, a merge that keeps 007f0e5
 reachable), writes its fork's job page to the tip's terms, runs both tests, explains in its fork why the
 job is proven, and proposes again; its second fill is a new intent. Its explanation comes back with the
-merge and is judged at the tip; it is no longer behind.
+merge and is judged at the tip; it is no longer behind. What it explained before it saw what moved (its
+first explanation, over 007f0e5 on the old base) does not hold again now that it has: it is defeated by
+`stale-rowan` (in the second run it supported `relay-proven` once more after this merge, FINDINGS 27).
 
 ```sh
 cd rowan && cp -R ../fx/rowan2/. . && cp -R ../fx/reviewer/tests/. tests/ && obend open | grep -v '^rendered'
@@ -319,24 +316,21 @@ observed relay-sandbox-pass-ad3a6dc965bd: result: "pass"
 observed relay-suite-pass-ad3a6dc965bd: result: "pass"
 explained rowan-ad3a6dc: relay-proven ⇐ relay-sandbox-pass-ad3a6dc965bd, relay-suite-pass-ad3a6dc965bd
 wrote ../rowan-land2.json (intent 8e3b23be52ac5367)
+jobs/relay: merged from rowan
 residents/rowan: merged from rowan
 evidence/relay/rowan-3: imported from rowan
 evidence/relay/rowan-4: imported from rowan
-jobs/relay: here's write stands (landed here before the merge)
-jobs/relay: kept from rowan: commit "007f0e5401221dea20a481fafe3b90ce06bc973f" → "ad3a6dc965bdeaa0a94148274f591bc90a68e7f4", on "ed1d477" → "751b497", suite unset → "evidence/relay/rowan-4", spent 2 → 4
-behind-rowan: withdrawn, rowan has seen what moved here
+behind-rowan: withdrawn, rowan has seen what moved here; what it explained before (rowan) is defeated by stale-rowan: explain it anew to count
 rowan's observation relay-sandbox-pass-ad3a6dc965bd: joined here
 rowan's observation relay-suite-pass-ad3a6dc965bd: joined here
 rowan's explanation rowan-ad3a6dc (relay-proven ⇐ relay-sandbox-pass-ad3a6dc965bd, relay-suite-pass-ad3a6dc965bd unless behind-rowan): joined here
-  judged here: relay-proven: supported by rowan
-work: performed 0, retained 0 of 1
+  judged here: relay-proven: supported by rowan-ad3a6dc
 state: proposed
 runs: 5
 spent: 4
 base: "751b497"
 on: "751b497"
 suite: "evidence/relay/rowan-4"
-jobs/relay + jobs/relay: not merged: refused by jobs/_kind: spent (the kind of jobs/, an ancestor of jobs/relay): `monotone(spent)` does not hold; spent = 2 would pass (this write has spent = 0)
 ```
 
 The reviewer's runs on ad3a6dc are paid from the job too: the sandbox run is the fifth of five, and the
@@ -352,12 +346,12 @@ cd ../rowan.store && obend fill ../topup.form runs=1 --out ../topup.json | tail 
 ```
 
 ```text
-jobs/relay: v13 written
+jobs/relay: v9 written
 evidence/relay/reviewer-1: new page (v1)
 nothing changed
 topup-relay: offers runs = 1..3, promises 1..2 (each value judged by the laws as they stand: 3 admitted)
-wrote ../topup.json (intent c1142d078234f5ba)
-topup-relay: landed as one turn over 2 pages by rowan, receipt 5d092c923777701b (4 in the chain)
+wrote ../topup.json (intent c326480c008c6831)
+topup-relay: landed as one turn over 2 pages by rowan, receipt 6c59a0a48abec70b (4 in the chain)
   resources/rowan: runs 3 → 2
   jobs/relay: runs 5 → 6
 jobs/relay: refused by jobs/_kind: budget (the kind of jobs/, an ancestor of jobs/relay): `new.spent <= new.runs` does not hold; the line `spent: 5` would pass (the page has `spent: 6`)
@@ -372,11 +366,11 @@ obend judge ../rowan-land2.json | head -4
 ```
 
 ```text
-jobs/relay: v15 written
+jobs/relay: v11 written
 evidence/relay/reviewer-2: new page (v1)
 explained R-relay-ad3a6dc: relay-proven ⇐ relay-sandbox-pass-ad3a6dc965bd, relay-suite-pass-ad3a6dc965bd
   no status changed
-land-relay: landed as one turn over 2 pages by rowan, receipt b56292261a412fab (5 in the chain)
+land-relay: landed as one turn over 2 pages by rowan, receipt e6cfed43caa7d5a8 (5 in the chain)
   jobs/relay: open 1 → 0
   landed/relay: open 0 → 1
 rendered jobs/relay.md
@@ -390,12 +384,15 @@ cd ws && obend judge ../rowan-land2.json
 
 ```text
 work: performed 0, retained 1 of 1
-land-relay: refused: a duplicate: intent 8e3b23be52ac5367 has landed here as receipt b56292261a412fab (5 in the chain); it is not landed again
+land-relay: refused: a duplicate: intent 8e3b23be52ac5367 has landed here as receipt e6cfed43caa7d5a8 (5 in the chain); it is not landed again
 ```
 
 A fork that comes back once more after its job landed, having never seen it land, does not take the
-job back to `proposed`: a field the tip moved stands unless the fork's history went through the tip's
-value (on 2026-11-06, in the second run, it did, `state landed → proposed`):
+job back to `proposed`: a field both changed stands where it is unless the other's history went through
+its line and moved on. The tip's history went through the fork's `proposed` (and its `spent`), so the
+frontmatter merges field by field to the tip's `landed` and the merge lands whole (in the second run the
+pair was refused and the page salvaged field by field; on 2026-11-06 a salvage before that took the job
+back, `state landed → proposed`):
 
 ```sh
 cd ws && sed -i.bak 's/^state: proposed$/state: landed\nreceipt: "721ba801"/' jobs/relay.md && rm jobs/relay.md.bak && obend open
@@ -404,13 +401,11 @@ cd ../ws && obend merge ../rowan | grep -e 'jobs/relay' -e behind | grep -v '^re
 ```
 
 ```text
-jobs/relay: v17 written
-jobs/relay: here's write stands (landed here before the merge)
-jobs/relay: here's stands where rowan did not see it move: state (here landed, rowan proposed), spent (here 6, rowan 4)
+jobs/relay: v13 written
+jobs/relay: merged from rowan
 behind-rowan: assumed here, rowan has not seen jobs/relay receipt, open, runs; its explanations hold here only without it
 state: landed
 open: 0
-jobs/relay + jobs/relay: not merged: refused by jobs/_kind: states (the kind of jobs/, an ancestor of jobs/relay): `new.state in ["offered", "accepted", "working", "blocked", "proposed", "landed", "declined", "refused"]` does not hold; the line `state: offered` would pass (the page has `state: `)
 ```
 
 ## 7. Retiring the finished jobs
@@ -425,7 +420,7 @@ cd ws && obend forget finished --retire accept-relay --retire land-relay --retir
 ```
 
 ```text
-forgot 66 records (346397 bytes) under the retention contract finished, retiring accept-relay, land-relay, accept-harness, land-harness, topup-relay: the log is one checkpoint record of 222057 bytes
+forgot 66 records (298587 bytes) under the retention contract finished, retiring accept-relay, land-relay, accept-harness, land-harness, topup-relay: the log is one checkpoint record of 165926 bytes
 ```
 
 ## 8. Defects the day exposed, fixed
@@ -479,4 +474,65 @@ cd ws && sed -i.bak 's/^artifact: "007f0e540122"$/artifact: "9abc"/' evidence/re
 
 ```text
 evidence/relay/rowan-2: refused by evidence/_kind: fixed (the kind of evidence/, an ancestor of evidence/relay/rowan-2): `writeOnce(result) and writeOnce(artifact) and writeOnce(test) and writeOnce(run)` does not hold; the line `artifact: "007f0e540122"` would pass (the page has `artifact: "9abc"`)
+```
+
+## 9. The third run: fields merge as fields, and a fork is the vault alone
+
+A fork copies the vault's state and its pages, and nothing else in its directory (the second run's
+forks each carried a 285 MB pinned binary):
+
+```sh
+mkdir -p fm/tip/j && cd fm/tip && printf -- '---\nstate: working\nopen: 1\nruns: 4\nspent: 0\nbase: "ed1d477"\n---\n# relay\n\nBody.\n' > j/relay.md && echo binary > obend.bin && obend open > /dev/null && obend fork ../fork > /dev/null && ls -a ../fork
+```
+
+```text
+.
+..
+.obend
+j
+```
+
+The tip moves the job's `base` while the fork moves the next line, `spent`, and adds its proposal's
+fields. Each side changed different fields, so the merge keeps every changed line (`mergeFront_keeps`);
+as text, the two adjacent edits were one section whose settled text held neither line, and the
+merged page read `base: ` (FINDINGS 35 of the second run):
+
+```sh
+cd fm/tip && sed -i.bak 's/^base: .*/base: "731579f"/' j/relay.md && rm j/relay.md.bak && obend open
+cd ../fork && sed -i.bak -e 's/^state: working$/state: proposed\ncommit: "2d5c95c"\non: "ed1d477"/' -e 's/^spent: 0$/spent: 2/' j/relay.md && rm j/relay.md.bak && obend open
+cd ../tip && obend merge ../fork | grep -v '^rendered' && sed -n 1,10p j/relay.md
+```
+
+```text
+j/relay: v2 written
+j/relay: v2 written
+j/relay: merged from fork
+---
+state: proposed
+open: 1
+runs: 4
+spent: 2
+base: "731579f"
+commit: "2d5c95c"
+on: "ed1d477"
+---
+# relay
+```
+
+A field both sides changed goes to the side whose history passed through the other's line and moved
+on: the fork saw the tip's `spent: 2` (it merged the tip) and moved to 3; the tip's `open` moved
+alone:
+
+```sh
+cd fm/fork && obend merge ../tip > /dev/null && sed -i.bak 's/^spent: 2$/spent: 3/' j/relay.md && rm j/relay.md.bak && obend open
+cd ../tip && sed -i.bak 's/^open: 1$/open: 0/' j/relay.md && rm j/relay.md.bak && obend open
+obend merge ../fork | grep -v '^rendered' && grep -E '^(spent|open):' j/relay.md
+```
+
+```text
+j/relay: v4 written
+j/relay: v4 written
+j/relay: merged from fork
+open: 0
+spent: 3
 ```
