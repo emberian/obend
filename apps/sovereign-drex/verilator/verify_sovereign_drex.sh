@@ -21,6 +21,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$SCRIPT_DIR"
 
+echo "=== LEC: the emitted .sv against Lean's model of sovereignDrexBatchTopRtlModule, and EQY against its netlist ==="
+"$REPO_ROOT/hardware/lec/lec.sh" drex sovereign_drex_batch_top.sv sovereign_drex_batch_top_lec.smt2 --eqy
+
 OBEND_BIN="${OBEND_BIN:-$REPO_ROOT/lean/.lake/build/bin/obend}"
 if [[ -x "$OBEND_BIN" ]]; then
   echo "[0/3] Checking & running apps/sovereign-drex/package.json via obend CLI..."

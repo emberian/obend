@@ -31,8 +31,6 @@ global clock in the same way.
 -/
 public import Obend.Hardware.HDL
 public import Obend.Hardware.VerilateRunner
-public meta import Obend.Hardware.HDL
-public meta import Obend.Hardware.VerilateRunner
 @[expose] public section
 
 namespace Obend.Hardware.YosysLec
@@ -47,9 +45,10 @@ The Lean half of the LEC is not trusted text. `SmtBV w` is the fragment of `QF_B
 by zero the dividend, as SMT-LIB defines them; `RtlAluOp` has neither), `smtOf` maps an `RtlExpr`
 to a term, and `emitExprSmt2_sound` (from `smtOf_sound` and `inferWidthE_faithful`) proves the
 term means `evalRtlExpr` for every expression `inferWidthE` accepts. `emitYosysLecSmt2` prints `smtOf`, so the file is the model's
-print. What remains trusted is that `SmtBV.print` writes the SMT-LIB syntax of the constructor it
-prints, Yosys's frontend, and z3. The `#guard`s at the end compare the print of `smtOf e` with
-`VerilateRunner.emitExprSmt2` (the BEL miter's printer) on every constructor and operator. -/
+print. The whole file is one value, `lecScript m`, whose meaning `lecScript_holds_iff` states.
+What remains trusted is that `LecScript.print` and `SmtBV.print` write the SMT-LIB syntax of what
+they print, Yosys's frontend, and z3; `lean/tests/silicon_elab/YosysLecTest.lean` pins the print
+against `VerilateRunner.emitExprSmt2` and against committed files. -/
 
 inductive SmtVar where
   | inp | wire | reg
@@ -70,17 +69,28 @@ inductive SmtBV : Nat → Type where
   | zeroExtend {w : Nat} (k : Nat) (a : SmtBV w) : SmtBV (w + k)
   | signExtend {w : Nat} (k : Nat) (a : SmtBV w) : SmtBV (w + k)
   | cast {w w' : Nat} (h : w = w') (a : SmtBV w) : SmtBV w'
+  /-- A literal of a width other than 64 (`#b...`); the file uses `#b1` and `#b0`. -/
+  | bits {w : Nat} (v : BitVec w) : SmtBV w
+  /-- Yosys's accessor `(|mod_n port| s)` (`next = false`) or `... s1)` (`next = true`) of a
+  `w`-bit signal, `w > 1` (Yosys gives 1-bit signals sort `Bool`: `SmtBool.yosys`). -/
+  | yosys (mod port : String) (next : Bool) (w : Nat) : SmtBV w
 inductive SmtBool : Type where
   | eq {w : Nat} (a b : SmtBV w) : SmtBool
   | distinct {w : Nat} (a b : SmtBV w) : SmtBool
   | ult {w : Nat} (a b : SmtBV w) : SmtBool
   | slt {w : Nat} (a b : SmtBV w) : SmtBool
+  /-- Yosys's accessor of a 1-bit signal, which has sort `Bool`. -/
+  | yosys (mod port : String) (next : Bool) : SmtBool
 end
 
+/-- What the terms read: the `in_i`, `spec_w_i` and `r_i` the file defines, and Yosys's signals in
+the two states (`sig next port` as a number, read at the signal's width; `bit` for 1-bit signals). -/
 structure SmtEnv where
   inp  : Nat → BitVec 64
   wire : Nat → BitVec 64
   reg  : Nat → BitVec 64
+  sig  : Bool → String → Nat := fun _ _ => 0
+  bit  : Bool → String → Bool := fun _ _ => false
 
 def SmtEnv.get (env : SmtEnv) : SmtVar → Nat → BitVec 64
   | .inp => env.inp | .wire => env.wire | .reg => env.reg
@@ -109,11 +119,14 @@ def SmtBV.eval (env : SmtEnv) : {w : Nat} → SmtBV w → BitVec w
   | _, .zeroExtend k a => (a.eval env).setWidth _
   | _, .signExtend k a => (a.eval env).signExtend _
   | _, .cast h a => (a.eval env).cast h
+  | _, .bits v => v
+  | _, .yosys _ port next w => BitVec.ofNat w (env.sig next port)
 def SmtBool.eval (env : SmtEnv) : SmtBool → Bool
   | .eq a b => a.eval env == b.eval env
   | .distinct a b => a.eval env != b.eval env
   | .ult a b => (a.eval env).ult (b.eval env)
   | .slt a b => (a.eval env).slt (b.eval env)
+  | .yosys _ port next => env.bit next port
 end
 
 
@@ -276,8 +289,8 @@ SMT-LIB semantics of the term the file contains is `evalRtlExpr` (with `in_i`, `
 read as `inputs i`, `wires i`, `regs i`). -/
 theorem emitExprSmt2_sound (inputs wires regs : Nat → BitVec 64) (wenv : WidthEnv) (e : RtlExpr)
     (w : Nat) (h : inferWidthE wenv e = .ok w) :
-    (smtOf e).eval ⟨inputs, wires, regs⟩ = evalRtlExpr inputs wires regs e :=
-  smtOf_sound ⟨inputs, wires, regs⟩ e (inferWidthE_faithful wenv e w h)
+    (smtOf e).eval { inp := inputs, wire := wires, reg := regs } = evalRtlExpr inputs wires regs e :=
+  smtOf_sound { inp := inputs, wire := wires, reg := regs } e (inferWidthE_faithful wenv e w h)
 
 /-! ### Printing: the SMT-LIB2 text of a term, which the LEC file is -/
 
@@ -300,89 +313,128 @@ def SmtBV.print (pfx : String) : {w : Nat} → SmtBV w → String
   | _, .zeroExtend k a => s!"((_ zero_extend {k}) {a.print pfx})"
   | _, .signExtend k a => s!"((_ sign_extend {k}) {a.print pfx})"
   | _, .cast _ a => a.print pfx
+  | w, .bits v => "#b" ++ String.ofList ((List.range w).reverse.map fun i => if v.getLsbD i then '1' else '0')
+  | _, .yosys mod port next _ => s!"(|{mod}_n {port}| {if next then "s1" else "s"})"
 def SmtBool.print (pfx : String) : SmtBool → String
   | .eq a b => s!"(= {a.print pfx} {b.print pfx})"
   | .distinct a b => s!"(distinct {a.print pfx} {b.print pfx})"
   | .ult a b => s!"(bvult {a.print pfx} {b.print pfx})"
   | .slt a b => s!"(bvslt {a.print pfx} {b.print pfx})"
+  | .yosys mod port next => s!"(|{mod}_n {port}| {if next then "s1" else "s"})"
 end
 
-/-- Yosys's accessor for port or register `p` of module `mod` at state `st`: `(|mod_n p| st)`. -/
-def yosysSig (mod p st : String) : String :=
-  s!"(|{mod}_n {p}| {st})"
+/-! ## The whole Lean half as one Lean value
 
-/-- A Yosys signal of width `w` as an `(_ BitVec w)` term: Yosys gives 1-bit signals sort `Bool`. -/
-def yosysBv (w : Nat) (sig : String) : String :=
-  if w == 1 then s!"(ite {sig} #b1 #b0)" else sig
+`LecScript` is the file: every definition and assertion is a field holding a term, `print` writes
+the file, and `holds` is what z3 is asked to satisfy. `lecScript m` builds it from the `RtlModule`;
+`emitYosysLecSmt2 m = (lecScript m).print`. The `get-value` block after `(check-sat)` and the
+comment lines are printed but carry no meaning. -/
 
-/-- Input `i` of `m` as the 64-bit word the module sees: the port, zero-extended when narrower. -/
-def inputWord (m : RtlModule) (i : Nat) : String :=
-  let w := inputWidth m i
-  let sig := yosysBv w (yosysSig m.name (m.inputNames.getD i s!"in_{i}") "s")
-  if w == 64 then sig else s!"((_ zero_extend {64 - w}) {sig})"
+/-- One output obligation: `rtl` is Yosys's port, `spec` Lean's value at the port's width. -/
+structure OutObl where
+  name : String
+  w    : Nat
+  rtl  : SmtBV w
+  spec : SmtBV w
 
-/-- The reset port that governs register `r` in `emitModuleSV m`. -/
-def resetPortOf (m : RtlModule) (r : RegSpec) : String :=
-  if (moduleDomains m).length > 1 then s!"rst_{r.domain.portSuffix}" else "rst"
+/-- One register obligation: Yosys's value in `s1` against Lean's next value, at the register's
+declared width. -/
+structure RegObl where
+  name : String
+  w    : Nat
+  rtl  : SmtBV w
+  spec : SmtBV w
 
-/-- The register that writes state slot `k` (the last one in `m.regs`, as in `stepModuleRegs`). -/
-def regOfSlot (m : RtlModule) (k : Nat) : Option RegSpec :=
-  m.regs.foldl (fun acc r => if r.regIdx == k then some r else acc) none
+structure LecScript where
+  mod     : String
+  header  : String
+  /-- `(define-fun in_i () (_ BitVec 64) t)`, over Yosys's accessors in `s`. -/
+  inputs  : List (Nat × SmtBV 64)
+  /-- `r_k`: `some t` is `(define-fun r_k () (_ BitVec 64) t)`, `none` a free `declare-const`. -/
+  slots   : List (Nat × Option (SmtBV 64))
+  /-- `(define-fun spec_w_i () (_ BitVec 64) t)`, in order. -/
+  wires   : List (Nat × SmtBV 64)
+  outputs : List OutObl
+  regs    : List RegObl
+  /-- The reset accessors listed in the counterexample query. -/
+  resets  : List SmtBool
 
-/-- Lean's next value of register `r`: `nextExpr`, or its reset value while its domain's reset is high. -/
-def regNextSmt2 (m : RtlModule) (r : RegSpec) : String :=
-  let next := (smtOf r.nextExpr).print "spec_"
-  match r.resetKind with
-  | .resetFree => next
-  | .syncReset v => s!"(ite {yosysSig m.name (resetPortOf m r) "s"} {bitVec64ToSmtHex v} {next})"
+/-- An assignment z3 may choose: Yosys's signals in `s` and `s1`, the truth of `|mod_h| s` and
+`|mod_t| s s1`, and the free `r_k`. -/
+structure LecAssign where
+  sig  : Bool → String → Nat
+  bit  : Bool → String → Bool
+  h    : Bool
+  t    : Bool
+  free : Nat → BitVec 64
 
-/-- The low `w` bits of a 64-bit term (`truncToWidth`, as seen at a `w`-bit port). -/
-def lowBits (w : Nat) (t : String) : String :=
-  if w == 64 then t else s!"((_ extract {w - 1} 0) {t})"
+/-- Yosys's signals alone, the environment of the `in_i` and `r_k` definitions. -/
+def LecAssign.base (Y : LecAssign) : SmtEnv :=
+  { inp := fun _ => 0, wire := fun _ => 0, reg := fun _ => 0, sig := Y.sig, bit := Y.bit }
 
-/-- The Lean half of the LEC query for `m` (see the module docstring). Appended to Yosys's
-`write_smt2` of `emitModuleSV m`, `z3` answers `unsat` exactly when the two agree. After
-`(check-sat)` comes a `get-value` block for the counterexample, which a caller sends only on `sat`. -/
-def emitYosysLecSmt2 (m : RtlModule) : String :=
-  let mod := m.name
-  let nSlots := m.regs.foldl (fun acc r => max acc (r.regIdx + 1)) m.regs.length
+def LecScript.inpVal (S : LecScript) (Y : LecAssign) (i : Nat) : BitVec 64 :=
+  match S.inputs.find? (·.1 == i) with
+  | some (_, t) => t.eval Y.base
+  | none => 0
+
+def LecScript.regVal (S : LecScript) (Y : LecAssign) (k : Nat) : BitVec 64 :=
+  match S.slots.find? (·.1 == k) with
+  | some (_, some t) => t.eval Y.base
+  | some (_, none) => Y.free k
+  | none => 0
+
+/-- The `spec_w_i` definitions in order, each over the ones before it (a later or missing wire is
+a name z3 rejects; here it reads `0#64`, as `evalWireTable` does). -/
+def wireFold (inp reg : Nat → BitVec 64) (sig : Bool → String → Nat) (bit : Bool → String → Bool)
+    (ws : List (Nat × SmtBV 64)) : Nat → BitVec 64 :=
+  ws.foldl (fun env (i, t) =>
+      let v := t.eval { inp := inp, wire := env, reg := reg, sig := sig, bit := bit }
+      fun j => if j == i then v else env j)
+    (fun _ => 0#64)
+
+/-- The environment every obligation term is evaluated in. -/
+def LecScript.env (S : LecScript) (Y : LecAssign) : SmtEnv :=
+  { inp := S.inpVal Y, reg := S.regVal Y,
+    wire := wireFold (S.inpVal Y) (S.regVal Y) Y.sig Y.bit S.wires, sig := Y.sig, bit := Y.bit }
+
+/-- What z3 is asked: both Yosys assertions hold and the miter `(not (and true lec_...))` holds,
+i.e. some obligation's two sides differ. -/
+def LecScript.holds (S : LecScript) (Y : LecAssign) : Prop :=
+  Y.h = true ∧ Y.t = true ∧
+  ¬ ((∀ o ∈ S.outputs, o.rtl.eval (S.env Y) = o.spec.eval (S.env Y)) ∧
+     (∀ r ∈ S.regs, r.rtl.eval (S.env Y) = r.spec.eval (S.env Y)))
+
+def LecScript.print (S : LecScript) : String :=
+  let mod := S.mod
   let states :=
     [ s!"(declare-const s |{mod}_s|)"
     , s!"(declare-const s1 |{mod}_s|)"
     , s!"(assert (|{mod}_h| s))"
     , s!"(assert (|{mod}_t| s s1))" ]
-  let inDefs := (List.range m.inputNames.length).map fun i =>
-    s!"(define-fun in_{i} () (_ BitVec 64) {inputWord m i})"
-  let regDefs := (List.range nSlots).map fun k =>
-    match regOfSlot m k with
-    | some r => s!"(define-fun r_{k} () (_ BitVec 64) {yosysSig mod r.name "s"})"
+  let inDefs := S.inputs.map fun (i, t) => s!"(define-fun in_{i} () (_ BitVec 64) {t.print "spec_"})"
+  let regDefs := S.slots.map fun (k, t?) =>
+    match t? with
+    | some t => s!"(define-fun r_{k} () (_ BitVec 64) {t.print "spec_"})"
     | none => s!"(declare-const r_{k} (_ BitVec 64))"
-  let wireDefs := m.wires.map fun w =>
-    s!"(define-fun spec_w_{w.wireIdx} () (_ BitVec 64) {(smtOf w.expr).print "spec_"})"
-  let outDefs := m.outputs.flatMap fun o =>
-    [ s!"(define-fun |rtl_out_{o.name}| () (_ BitVec {o.width}) {yosysBv o.width (yosysSig mod o.name "s")})"
-    , s!"(define-fun |spec_out_{o.name}| () (_ BitVec {o.width}) {lowBits o.width ((smtOf o.expr).print "spec_")})"
+  let wireDefs := S.wires.map fun (i, t) => s!"(define-fun spec_w_{i} () (_ BitVec 64) {t.print "spec_"})"
+  let outDefs := S.outputs.flatMap fun o =>
+    [ s!"(define-fun |rtl_out_{o.name}| () (_ BitVec {o.w}) {o.rtl.print "spec_"})"
+    , s!"(define-fun |spec_out_{o.name}| () (_ BitVec {o.w}) {o.spec.print "spec_"})"
     , s!"(define-fun |lec_out_{o.name}| () Bool (= |rtl_out_{o.name}| |spec_out_{o.name}|))" ]
-  let regObls := m.regs.flatMap fun r =>
-    [ s!"(define-fun |rtl_next_{r.name}| () (_ BitVec 64) {yosysSig mod r.name "s1"})"
-    , s!"(define-fun |spec_next_{r.name}| () (_ BitVec 64) {regNextSmt2 m r})"
+  let regObls := S.regs.flatMap fun r =>
+    [ s!"(define-fun |rtl_next_{r.name}| () (_ BitVec {r.w}) {r.rtl.print "spec_"})"
+    , s!"(define-fun |spec_next_{r.name}| () (_ BitVec {r.w}) {r.spec.print "spec_"})"
     , s!"(define-fun |lec_next_{r.name}| () Bool (= |rtl_next_{r.name}| |spec_next_{r.name}|))" ]
-  let obls := m.outputs.map (fun o => s!"|lec_out_{o.name}|") ++ m.regs.map (fun r => s!"|lec_next_{r.name}|")
+  let obls := S.outputs.map (fun o => s!"|lec_out_{o.name}|") ++ S.regs.map (fun r => s!"|lec_next_{r.name}|")
   let miter :=
     if obls.isEmpty then "(assert false)"
     else s!"(assert (not (and true {String.intercalate " " obls})))"
-  let domains := moduleDomains m
-  let resets :=
-    if domains.length > 1 then domains.map fun d => s!"rst_{d.portSuffix}" else ["rst"]
-  let resetVals := if m.regs.isEmpty then [] else resets.map fun p => yosysSig mod p "s"
   let cexTerms :=
-    (List.range m.inputNames.length).map (fun i => s!"in_{i}") ++ resetVals ++
-    (List.range nSlots).map (fun k => s!"r_{k}") ++
-    m.outputs.flatMap (fun o => [s!"|lec_out_{o.name}|", s!"|rtl_out_{o.name}|", s!"|spec_out_{o.name}|"]) ++
-    m.regs.flatMap (fun r => [s!"|lec_next_{r.name}|", s!"|rtl_next_{r.name}|", s!"|spec_next_{r.name}|"])
-  s!"; Lean half of the LEC of {mod}: Obend.Hardware.YosysLec.emitYosysLecSmt2 over the RtlModule that emitModuleSV printed.\n" ++
-  s!"; Append to Yosys `write_smt2` of the emitted .sv; unsat = every output and next register agrees with Lean's model.\n" ++
-  s!"; Module: {mod} (inputs={m.inputNames.length}, wires={m.wires.length}, regs={m.regs.length}, outputs={m.outputs.length})\n" ++
+    S.inputs.map (fun (i, _) => s!"in_{i}") ++ S.resets.map (·.print "spec_") ++
+    S.slots.map (fun (k, _) => s!"r_{k}") ++
+    S.outputs.flatMap (fun o => [s!"|lec_out_{o.name}|", s!"|rtl_out_{o.name}|", s!"|spec_out_{o.name}|"]) ++
+    S.regs.flatMap (fun r => [s!"|lec_next_{r.name}|", s!"|rtl_next_{r.name}|", s!"|spec_next_{r.name}|"])
+  S.header ++
   "\n; 1. Two states of Yosys's model, one transition apart\n" ++
   String.intercalate "\n" states ++ "\n" ++
   "\n; 2. Inputs and registers of state s, read through the emitted port and register names\n" ++
@@ -395,33 +447,179 @@ def emitYosysLecSmt2 (m : RtlModule) : String :=
   "; --- counterexample (sent only after sat) ---\n" ++
   s!"(get-value ({String.intercalate " " cexTerms}))\n"
 
+/-! ### The script of an `RtlModule` -/
 
-/-! ### Tests: the model's print against `emitExprSmt2`, constructor by constructor -/
+/-- A `w`-bit Yosys signal as an `(_ BitVec w)` term (1-bit signals are `Bool` in Yosys). -/
+def yosysBV (mod port : String) (next : Bool) (w : Nat) : SmtBV w :=
+  if h : w = 1 then .cast h.symm (SmtBV.ite (.yosys mod port next) (.bits 1#1) (.bits 0#1))
+  else .yosys mod port next w
 
-/-- One expression per `RtlExpr` constructor, `RtlAluOp` and `RtlWidthOp` (and the out-of-range
-`sext` the emitter prints as its operand). -/
-def printProbes : List RtlExpr :=
-  let a : RtlExpr := .inputPort 0
-  let b : RtlExpr := .regRead 2
-  let ops : List RtlAluOp :=
-    [.add, .sub, .mul, .bitAnd, .bitOr, .bitXor, .shl, .lshr, .ashr, .eq, .ult, .slt, .qmul32]
-  ops.map (fun op => .alu op a b) ++
-  [ .const 0xdeadbeef#64, .wireRef 7, .mux (.wireRef 1) a b, .bitNot (.alu .add a (.const 1#64)),
-    .resize (.slice 15 4) a, .resize (.zext 32) b, .resize (.sext 8 32) a, .resize (.sext 0 9) a,
-    .resize (.trunc 12) (.alu .mul a b),
-    .mux (.alu .ult a b) (.resize (.sext 16 64) (.alu .qmul32 a b)) (.bitNot (.resize (.slice 63 32) b)) ]
+/-- A `w`-bit Yosys signal in `s` as the 64-bit word the module sees: zero-extended when narrower. -/
+def wordTerm (mod port : String) (w : Nat) : SmtBV 64 :=
+  if h : w = 64 then .cast h (yosysBV mod port false w)
+  else if h' : w < 64 then .cast (by omega) (.zeroExtend (64 - w) (yosysBV mod port false w))
+  else .yosys mod port false 64
 
-#guard printProbes.all fun e => (smtOf e).print "spec_" == emitExprSmt2 "spec_" e
-#guard (smtOf (.alu .shl (.inputPort 0) (.regRead 1))).print "spec_" ==
-  "(bvshl in_0 (bvand r_1 #x000000000000003f))"
-#guard (smtOf (.resize (.sext 8 32) (.wireRef 3))).print "spec_" ==
-  "((_ zero_extend 32) ((_ sign_extend 24) ((_ extract 7 0) spec_w_3)))"
+/-- Input `i` as the 64-bit word the module sees: the port, zero-extended when narrower. -/
+def inputTerm (m : RtlModule) (i : Nat) : SmtBV 64 :=
+  wordTerm m.name (m.inputNames.getD i s!"in_{i}") (inputWidth m i)
 
-/-- SMT-LIB's division by zero, which the model follows: all-ones quotient, dividend remainder. -/
-example : (SmtBV.bin .udiv (.lit 5#64) (.lit 0#64)).eval ⟨fun _ => 0, fun _ => 0, fun _ => 0⟩ =
-    BitVec.allOnes 64 := by decide
-example : (SmtBV.bin .urem (.lit 5#64) (.lit 0#64)).eval ⟨fun _ => 0, fun _ => 0, fun _ => 0⟩ = 5#64 := by
-  decide
+/-- The reset port that governs register `r` in `emitModuleSV m`. -/
+def resetPortOf (m : RtlModule) (r : RegSpec) : String :=
+  if (moduleDomains m).length > 1 then s!"rst_{r.domain.portSuffix}" else "rst"
+
+/-- The register that writes state slot `k` (the last one in `m.regs`, as in `stepModuleRegs`). -/
+def regOfSlot (m : RtlModule) (k : Nat) : Option RegSpec :=
+  m.regs.foldl (fun acc r => if r.regIdx == k then some r else acc) none
+
+/-- Lean's next value of `r`: `nextExpr`, or its reset value while its domain's reset is high. -/
+def regNextTerm (m : RtlModule) (r : RegSpec) : SmtBV 64 :=
+  match r.resetKind with
+  | .resetFree => smtOf r.nextExpr
+  | .syncReset v => .ite (.yosys m.name (resetPortOf m r) false) (.lit v) (smtOf r.nextExpr)
+
+/-- The low `w` bits of a 64-bit term, as an `(_ BitVec w)` term (`w` in 1..64). -/
+def lowBitsTerm (w : Nat) (t : SmtBV 64) : SmtBV w :=
+  if h : w = 64 then .cast h.symm t
+  else if h' : 0 < w then .cast (by omega) (.extract (w - 1) 0 t)
+  else .bits 0#w
+
+def lecScript (m : RtlModule) : LecScript :=
+  let mod := m.name
+  let nSlots := m.regs.foldl (fun acc r => max acc (r.regIdx + 1)) m.regs.length
+  let domains := moduleDomains m
+  let resets := if domains.length > 1 then domains.map fun d => s!"rst_{d.portSuffix}" else ["rst"]
+  { mod := mod
+    header :=
+      s!"; Lean half of the LEC of {mod}: Obend.Hardware.YosysLec.emitYosysLecSmt2 over the RtlModule that emitModuleSV printed.\n" ++
+      s!"; Append to Yosys `write_smt2` of the emitted .sv; unsat = every output and next register agrees with Lean's model.\n" ++
+      s!"; Module: {mod} (inputs={m.inputNames.length}, wires={m.wires.length}, regs={m.regs.length}, outputs={m.outputs.length})\n"
+    inputs := (List.range m.inputNames.length).map fun i => (i, inputTerm m i)
+    slots := (List.range nSlots).map fun k => (k, (regOfSlot m k).map fun r => wordTerm mod r.name r.width)
+    wires := m.wires.map fun w => (w.wireIdx, smtOf w.expr)
+    outputs := m.outputs.map fun o =>
+      { name := o.name, w := o.width, rtl := yosysBV mod o.name false o.width,
+        spec := lowBitsTerm o.width (smtOf o.expr) }
+    regs := m.regs.map fun r =>
+      { name := r.name, w := r.width, rtl := yosysBV mod r.name true r.width,
+        spec := lowBitsTerm r.width (regNextTerm m r) }
+    resets := if m.regs.isEmpty then [] else resets.map fun p => SmtBool.yosys mod p false }
+
+/-- The Lean half of the LEC query for `m`: the print of `lecScript m`. Appended to Yosys's
+`write_smt2` of `emitModuleSV m`, z3 answers `unsat` exactly when no assignment makes
+`(lecScript m).holds` true. -/
+def emitYosysLecSmt2 (m : RtlModule) : String :=
+  (lecScript m).print
+
+/-! ### What the script means -/
+
+/-- Every expression of `m` has width parameters the SMT terms are faithful to (`inferWidthE`
+acceptance implies it; `obend-emit-sv --lec` refuses a module without it). -/
+def moduleFaithful (m : RtlModule) : Bool :=
+  m.wires.all (fun w => smtFaithful w.expr) && m.outputs.all (fun o => smtFaithful o.expr) &&
+    m.regs.all (fun r => smtFaithful r.nextExpr)
+
+/-- Lean's next value of `r` (the body of `stepModuleRegs` for one register), with its domain's
+reset read from Yosys's `s`. -/
+def leanNext (rst : Bool) (ins wires regs : Nat → BitVec 64) (r : RegSpec) : BitVec 64 :=
+  match r.resetKind with
+  | .resetFree => evalRtlExpr ins wires regs r.nextExpr
+  | .syncReset v => if rst then v else evalRtlExpr ins wires regs r.nextExpr
+
+theorem wireFold_sound (ins regs : Nat → BitVec 64) (sig : Bool → String → Nat)
+    (bit : Bool → String → Bool) (ws : List WireAssign) (h : ws.all (fun w => smtFaithful w.expr) = true) :
+    wireFold ins regs sig bit (ws.map fun w => (w.wireIdx, smtOf w.expr)) = evalWireTable ins regs ws := by
+  unfold wireFold evalWireTable
+  generalize (fun _ => 0#64 : Nat → BitVec 64) = acc
+  induction ws generalizing acc with
+  | nil => rfl
+  | cons a rest ih =>
+    simp only [List.all_cons, Bool.and_eq_true] at h
+    simp only [List.map_cons, List.foldl_cons]
+    rw [smtOf_sound _ a.expr h.1]
+    exact ih h.2 _
+
+theorem lowBitsTerm_eval (env : SmtEnv) (w : Nat) (t : SmtBV 64) :
+    (lowBitsTerm w t).eval env = (t.eval env).setWidth w := by
+  unfold lowBitsTerm
+  split
+  · next h => subst h; simp [SmtBV.eval]
+  · split
+    · next h h' =>
+      apply BitVec.eq_of_toNat_eq
+      simp only [SmtBV.eval, BitVec.toNat_cast, BitVec.extractLsb_toNat, BitVec.toNat_setWidth,
+        Nat.shiftRight_zero]
+      congr 2; omega
+    · next h h' =>
+      have : w = 0 := by omega
+      subst this; exact Subsingleton.elim _ _
+
+/-- **The LEC file means the LEC.** For every assignment z3 may choose, the script holds exactly
+when both Yosys assertions hold and some output Yosys reads in `s`, or some register it reads in
+`s1`, differs from Lean's step of the `RtlModule` on the inputs and registers it reads in `s`
+(each register reset by its domain's reset port). So if every one-step reading of the emitted
+module agrees with Lean's step, the query is unsat; and a `sat` answer is a real disagreement. -/
+theorem lecScript_holds_iff (m : RtlModule) (hf : moduleFaithful m = true) (Y : LecAssign) :
+    (lecScript m).holds Y ↔
+      Y.h = true ∧ Y.t = true ∧
+      ¬ ((∀ o ∈ m.outputs,
+            (yosysBV m.name o.name false o.width).eval ((lecScript m).env Y) =
+              (evalRtlExpr ((lecScript m).inpVal Y)
+                (evalWireTable ((lecScript m).inpVal Y) ((lecScript m).regVal Y) m.wires)
+                ((lecScript m).regVal Y) o.expr).setWidth o.width) ∧
+         (∀ r ∈ m.regs,
+            (yosysBV m.name r.name true r.width).eval ((lecScript m).env Y) =
+              (leanNext (Y.bit false (resetPortOf m r)) ((lecScript m).inpVal Y)
+                (evalWireTable ((lecScript m).inpVal Y) ((lecScript m).regVal Y) m.wires)
+                ((lecScript m).regVal Y) r).setWidth r.width)) := by
+  simp only [moduleFaithful, Bool.and_eq_true, List.all_eq_true] at hf
+  obtain ⟨⟨hw, ho⟩, hr⟩ := hf
+  have hwires : ((lecScript m).env Y).wire =
+      evalWireTable ((lecScript m).inpVal Y) ((lecScript m).regVal Y) m.wires := by
+    show wireFold _ _ _ _ (m.wires.map fun w => (w.wireIdx, smtOf w.expr)) = _
+    exact wireFold_sound _ _ _ _ m.wires (List.all_eq_true.mpr hw)
+  have hsound : ∀ e, smtFaithful e = true → (smtOf e).eval ((lecScript m).env Y) =
+      evalRtlExpr ((lecScript m).inpVal Y)
+        (evalWireTable ((lecScript m).inpVal Y) ((lecScript m).regVal Y) m.wires)
+        ((lecScript m).regVal Y) e := by
+    intro e he; rw [smtOf_sound _ e he, hwires]; rfl
+  have hbit : ((lecScript m).env Y).bit = Y.bit := rfl
+  unfold LecScript.holds
+  generalize (lecScript m).env Y = E at hsound hbit ⊢
+  generalize (lecScript m).inpVal Y = I at hsound ⊢
+  generalize (lecScript m).regVal Y = R at hsound ⊢
+  apply and_congr Iff.rfl; apply and_congr Iff.rfl; apply not_congr
+  apply and_congr
+  · simp only [lecScript, List.forall_mem_map]
+    apply forall_congr'; intro o; apply imp_congr_right; intro hmem
+    rw [lowBitsTerm_eval, hsound o.expr (ho o hmem)]
+  · simp only [lecScript, List.forall_mem_map]
+    apply forall_congr'; intro r; apply imp_congr_right; intro hmem
+    have hn := hsound r.nextExpr (hr r hmem)
+    rw [lowBitsTerm_eval]
+    unfold regNextTerm leanNext
+    cases r.resetKind with
+    | resetFree => rw [hn]
+    | syncReset v => simp only [SmtBV.eval, SmtBool.eval, hbit]; rw [hn]
+
+/-- The direction the LEC uses: if Lean's step and Yosys's reading agree on every assignment, no
+assignment satisfies the script (z3 must answer unsat). -/
+theorem lecScript_unsat_of_agree (m : RtlModule) (hf : moduleFaithful m = true)
+    (hagree : ∀ Y : LecAssign, Y.h = true → Y.t = true →
+      (∀ o ∈ m.outputs,
+          (yosysBV m.name o.name false o.width).eval ((lecScript m).env Y) =
+            (evalRtlExpr ((lecScript m).inpVal Y)
+              (evalWireTable ((lecScript m).inpVal Y) ((lecScript m).regVal Y) m.wires)
+              ((lecScript m).regVal Y) o.expr).setWidth o.width) ∧
+      (∀ r ∈ m.regs,
+          (yosysBV m.name r.name true r.width).eval ((lecScript m).env Y) =
+            (leanNext (Y.bit false (resetPortOf m r)) ((lecScript m).inpVal Y)
+              (evalWireTable ((lecScript m).inpVal Y) ((lecScript m).regVal Y) m.wires)
+              ((lecScript m).regVal Y) r).setWidth r.width)) :
+    ∀ Y, ¬ (lecScript m).holds Y := by
+  intro Y hY
+  rw [lecScript_holds_iff m hf Y] at hY
+  exact hY.2.2 (hagree Y hY.1 hY.2.1)
 
 end Obend.Hardware.YosysLec
 end

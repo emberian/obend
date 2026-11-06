@@ -53,20 +53,32 @@ Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
   holds for every interpretation of multiplication, so for the real one (the risc core needs this:
   bit-precise, its register-file writeback through two 64-bit multiplies did not finish in 20
   minutes; abstracted it is `unsat` within two minutes). A `sat` that appears only under the abstraction is
-  reported as undecided and fails the step. The Lean half is proved:
-  `Obend.Hardware.YosysLec.emitExprSmt2_sound` says the SMT-LIB semantics of `smtOf e`
-  (`SmtBV.eval`, over Lean's `BitVec`) is `evalRtlExpr` for every `e` that `inferWidthE` accepts,
-  and the file is `SmtBV.print` of those terms. Trusted: that
-  `SmtBV.print` writes each constructor's SMT-LIB syntax (a dozen one-line cases; `#guard`s compare
-  it with `emitExprSmt2` on every operator), Yosys's SystemVerilog frontend and `write_smt2`, and
-  z3. Read into the model,
-  not proved: narrow input ports are zero-extended into the 64-bit `inputPort`, and with several
-  clock domains each register resets on its own domain's `rst_<d>`.
+  reported as undecided and fails the step.
+
+  The whole Lean half is the print of one Lean value, `lecScript m : LecScript`: the two Yosys states
+  and their assertions, the `in_i` and `r_k` read through Yosys's accessors (zero-extended from the
+  port or register width; 1-bit signals are `Bool` in Yosys), the wires, every output and register
+  obligation at its declared width (the reset wrapper `(ite rst init next)` included), and the
+  miter. `LecScript.holds` is what z3 is asked to satisfy, and
+  `Obend.Hardware.YosysLec.lecScript_holds_iff` proves: for every assignment, the script holds exactly
+  when both Yosys assertions hold and some output Yosys reads in `s`, or some register it reads in
+  `s1`, differs (at its width) from Lean's step of the `RtlModule` on the inputs and registers it
+  reads in `s`. So `unsat` means every one-step reading agrees with Lean, and a `sat` is a real
+  disagreement (`lecScript_unsat_of_agree` is the first direction alone). The terms inside are
+  `smtOf`, proved equal to `evalRtlExpr` by `emitExprSmt2_sound`. Trusted: that `LecScript.print`
+  and `SmtBV.print` write the SMT-LIB syntax of what they print (`lean/tests/silicon_elab/
+  YosysLecTest.lean` pins every expression constructor against `emitExprSmt2`, the glue lines of
+  two committed files verbatim, and two whole committed files byte for byte), Yosys's SystemVerilog
+  frontend and `write_smt2`, and z3. Read into the model, not proved: narrow ports and registers are
+  zero-extended into the 64-bit carrier, all registers step together (as Yosys's global clock and
+  `stepModuleRegs` do), and with several clock domains each register resets on its own domain's
+  `rst_<d>`.
 - **The emitted SV against its own gate-level netlist (EQY, where it terminates).** `synth` makes
   `X.gl.v`; EQY proves gold `X.sv` equivalent to gate `X.gl.v`, matching ports and flip-flops.
   This says synthesis preserved what Yosys read; it says nothing about Lean by itself, but composed
   with the LEC it puts the gate netlist, not only the SV, equal to the `RtlModule`. It runs for
-  `cleanroom_tcad_stack`, `lc_drives_userspace_stator` and `cnc_5axis_userspace_mill`. It does not
+  `cleanroom_tcad_stack`, `lc_drives_userspace_stator`, `cnc_5axis_userspace_mill`,
+  `obend_width_probe` and `sovereign_drex_batch_top`. It does not
   run for modules with a 64-bit variable multiply (`obend_retimed_mac2`, risc, zk, fidget, quantum):
   SAT-based equivalence of a word-level multiply against a gate-level multiplier does not terminate
   (mac2's `a * b` partition ran for five minutes without an answer).
@@ -75,8 +87,7 @@ Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
 
 Not covered: `foc-hil` and `sdr-ft8` (hand-written `.sv`, no `RtlModule`; their `*_props.smt2` are
 property sheets of hand-typed formulas), `silicon-kernel-verilator` (its `.sv` is printed by a string
-emitter, not from an `RtlModule`), and `sovereign-drex` (`Obend.Apps.SovereignDrex` does not build,
-so `obend-emit-sv drex` refuses).
+emitter, not from an `RtlModule`).
 
 `rust-ffi/` is unrelated to the FPGA path (CBOR codec, FEMM/octree engines) and is owned by the
 physics lane.
