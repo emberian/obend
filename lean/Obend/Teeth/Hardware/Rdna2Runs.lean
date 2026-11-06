@@ -17,7 +17,7 @@ open Obend.Hardware.Gpu.Rdna2
 def diamondIsa : String := include_str "../../../../hardware/gpu/isa/diamond.txt"
 def diamondPlan : String := include_str "../../../../hardware/gpu/graphs/diamond/plan.json"
 def diamondExpected : String := include_str "../../../../hardware/gpu/graphs/diamond/expected.tsv"
--- fixture kept: the golden diamond's three dumped programs compute the plan on the model (rung G2)
+-- fixture kept: the golden diamond's dumped programs compute the plan on the model (rung G2)
 theorem diamond_runs : checkGraph diamondIsa diamondPlan diamondExpected = true := by native_decide
 #assert_compiled diamond_runs
 
@@ -52,14 +52,14 @@ theorem allops_runs : checkGraph allopsIsa allopsPlan allopsExpected = true := b
 def glmulIsa : String := include_str "../../../../hardware/gpu/isa/glmul-256.txt"
 def glmulPlan : String := include_str "../../../../hardware/gpu/graphs/glmul-256/plan.json"
 def glmulExpected : String := include_str "../../../../hardware/gpu/graphs/glmul-256/expected.tsv"
--- fixture kept: the Goldilocks multiply over 256 elements, 21 dumped programs on the model
+-- fixture kept: the Goldilocks multiply over 256 elements, its dumped programs on the model
 theorem glmul_runs : checkGraph glmulIsa glmulPlan glmulExpected = true := by native_decide
 #assert_compiled glmul_runs
 
 def ntt4Isa : String := include_str "../../../../hardware/gpu/isa/ntt-4.txt"
 def ntt4Plan : String := include_str "../../../../hardware/gpu/graphs/ntt-4/plan.json"
 def ntt4Expected : String := include_str "../../../../hardware/gpu/graphs/ntt-4/expected.tsv"
--- fixture kept: the 4-point Goldilocks NTT, 80 dumped programs on the model
+-- fixture kept: the 4-point Goldilocks NTT, its dumped programs on the model
 theorem ntt4_runs : checkGraph ntt4Isa ntt4Plan ntt4Expected = true := by native_decide
 #assert_compiled ntt4_runs
 

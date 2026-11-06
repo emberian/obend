@@ -320,4 +320,7 @@ What the model does not do, named: it completes memory accesses when they issue,
 no-op and a missing wait would read fresh registers here and stale ones on the device (the device run of
 `verify_gpu.sh` is what catches that); it runs a dispatch's waves one after another, sound for G1's
 programs by `lowerArrayToGpu_sound`'s disjointness and not in general; the memory model (G4) is not
-here, nor the RTL path of the same array graphs.
+here, nor the RTL path of the same array graphs. Since the fusion of 2026-11-06 RADV emits `v_and_or_b32`
+in the field kernels (glmul-256 and the five NTTs), which the model refuses by name; the decoder reads it
+and equals `llvm-mc` on all sixteen dumps, and those six graphs' runs on the model (`isa_check.sh` stage
+4, the pins `glmul_runs` and `ntt4_runs`) are open until the instruction has a semantics.
