@@ -525,25 +525,78 @@ structure ActivePair where
 /-- Single-cycle hardware rewrite outcome for an `ActivePair` in the tile arena. -/
 inductive INetRewriteOutcome where
   | annihilate (wire1 : PortRef × PortRef) (wire2 : PortRef × PortRef)
-  | commute    (spawned : List INetNode)
+  | commute    (spawned : List INetNode) (splices : List (PortRef × PortRef))
   | erase      (erasedAux : List PortRef)
   | betaNat64  (resultNode : INetNode)
   deriving DecidableEq, Repr
 
-/-- The 4 cross-wired nodes (`dupA`, `dupB`, `supA`, `supB`) spawned when `l` and `r` commute (`l.label ≠ r.label`). -/
+/-- Lafont's commutation (interaction combinators, 1997, the rule for two agents of different kinds):
+`l` and `r` pass through each other. Two copies of `r` (ids `n`, `n + 1`) take the places of `l`'s
+auxiliary ports, two copies of `l` (ids `n + 2`, `n + 3`) those of `r`'s, and auxiliary port `j` of
+the `k`-th copy of `r` is wired to auxiliary port `k` of the `j`-th copy of `l`. The copies keep
+kind, label and immediate. The principal ports are wired by `commuteSplices`. -/
 def commuteSpawnedNodes (l r : INetNode) (nextFreeId : Nat) : List INetNode :=
-  let dupAId := nextFreeId
-  let dupBId := nextFreeId + 1
-  let supAId := nextFreeId + 2
-  let supBId := nextFreeId + 3
-  [ { id := dupAId, kind := l.kind, label := l.label, immVal := 0
-    , aux1 := { nodeId := supAId, slot := 1 }, aux2 := { nodeId := supBId, slot := 1 } }
-  , { id := dupBId, kind := l.kind, label := l.label, immVal := 0
-    , aux1 := { nodeId := supAId, slot := 2 }, aux2 := { nodeId := supBId, slot := 2 } }
-  , { id := supAId, kind := r.kind, label := r.label, immVal := 0
-    , aux1 := l.aux1, aux2 := r.aux1 }
-  , { id := supBId, kind := r.kind, label := r.label, immVal := 0
-    , aux1 := l.aux2, aux2 := r.aux2 } ]
+  let n := nextFreeId
+  [ { r with id := n,     aux1 := ⟨n + 2, 1⟩, aux2 := ⟨n + 3, 1⟩ }
+  , { r with id := n + 1, aux1 := ⟨n + 2, 2⟩, aux2 := ⟨n + 3, 2⟩ }
+  , { l with id := n + 2, aux1 := ⟨n, 1⟩,     aux2 := ⟨n + 1, 1⟩ }
+  , { l with id := n + 3, aux1 := ⟨n, 2⟩,     aux2 := ⟨n + 1, 2⟩ } ]
+
+/-- The principal port of each copy faces the port across the wire from the auxiliary port it
+replaces: `l.aux1`, `l.aux2`, `r.aux1`, `r.aux2`. -/
+def commuteSplices (l r : INetNode) (nextFreeId : Nat) : List (PortRef × PortRef) :=
+  let n := nextFreeId
+  [(⟨n, 0⟩, l.aux1), (⟨n + 1, 0⟩, l.aux2), (⟨n + 2, 0⟩, r.aux1), (⟨n + 3, 0⟩, r.aux2)]
+
+/-- The three ports of a node. -/
+def portsOf (n : INetNode) : List PortRef := [⟨n.id, 0⟩, ⟨n.id, 1⟩, ⟨n.id, 2⟩]
+
+/-- The link table a rewrite writes: each new node's auxiliary ports to their fields, and each splice
+in both directions. -/
+def linkTable (spawned : List INetNode) (splices : List (PortRef × PortRef)) : List (PortRef × PortRef) :=
+  spawned.flatMap (fun n => [(⟨n.id, 1⟩, n.aux1), (⟨n.id, 2⟩, n.aux2)]) ++
+    splices.flatMap (fun w => [w, (w.2, w.1)])
+
+/-- **Commutation is a port graph** (`commute_wellformed`): when the four ports across the pair's
+auxiliary wires are distinct and older than the fresh ids, the link table of the commutation has as
+keys exactly the twelve ports of the four copies and the four outside ports, each once, and it is
+symmetric and without fixed points: every port of the result is on exactly one wire. -/
+theorem commute_wellformed (l r : INetNode) (n : Nat)
+    (hb : [l.aux1, l.aux2, r.aux1, r.aux2].Nodup)
+    (hfresh : ∀ p ∈ [l.aux1, l.aux2, r.aux1, r.aux2], p.nodeId < n) :
+    let T := linkTable (commuteSpawnedNodes l r n) (commuteSplices l r n)
+    (∀ p, p ∈ T.map Prod.fst ↔
+      p ∈ (commuteSpawnedNodes l r n).flatMap portsOf ∨ p ∈ [l.aux1, l.aux2, r.aux1, r.aux2]) ∧
+    (T.map Prod.fst).Nodup ∧
+    (∀ p q, (p, q) ∈ T → (q, p) ∈ T ∧ p ≠ q) := by
+  obtain ⟨li, lk, ll, lv, ⟨x1, s1⟩, ⟨x2, s2⟩⟩ := l
+  obtain ⟨ri, rk, rl, rv, ⟨y1, t1⟩, ⟨y2, t2⟩⟩ := r
+  simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq] at hfresh
+  simp only [List.nodup_cons, List.mem_cons, List.not_mem_nil, or_false, PortRef.mk.injEq,
+    not_or, not_and] at hb
+  obtain ⟨h1, h2, h3, h4⟩ := hfresh
+  refine ⟨fun p => ?_, ?_, fun p q h => ?_⟩
+  · simp only [linkTable, commuteSpawnedNodes, commuteSplices, portsOf, List.flatMap_cons,
+      List.flatMap_nil, List.map_cons, List.map_nil, List.append_nil,
+      List.cons_append, List.nil_append, List.mem_cons, List.not_mem_nil, or_false]
+    constructor <;> intro h <;> (repeat' rcases h with h | h) <;> simp
+  · simp only [linkTable, commuteSpawnedNodes, commuteSplices, List.flatMap_cons, List.flatMap_nil,
+      List.map_cons, List.map_nil, List.append_nil, List.cons_append,
+      List.nil_append, List.nodup_cons, List.mem_cons, List.not_mem_nil, or_false, PortRef.mk.injEq,
+      not_or, not_and, List.not_mem_nil, not_false_eq_true, List.nodup_nil, and_true]
+    obtain ⟨⟨e12, e13, e14⟩, ⟨e23, e24⟩, e34, -⟩ := hb
+    repeat' apply And.intro
+    all_goals first | omega | assumption | (intro h; omega) | (intro h _; omega) | simp
+  · simp only [linkTable, commuteSpawnedNodes, commuteSplices, List.flatMap_cons, List.flatMap_nil,
+      List.append_nil, List.cons_append, List.nil_append, List.mem_cons, List.not_mem_nil,
+      or_false, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ |
+      ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ |
+      ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;>
+      simp only [linkTable, commuteSpawnedNodes, commuteSplices, List.flatMap_cons,
+        List.flatMap_nil, List.append_nil, List.cons_append, List.nil_append, List.mem_cons,
+        List.not_mem_nil, or_false, Prod.mk.injEq, PortRef.mk.injEq, true_and, and_true,
+        true_or, or_true, ne_eq, not_and] <;> omega
 
 /-- Single-cycle hardware interaction-net rewrite rule engine (`reduceActivePair`):
 * **Erasure**: `era` interacting with any node propagates `era` to its auxiliary ports,
@@ -551,7 +604,8 @@ def commuteSpawnedNodes (l r : INetNode) (nextFreeId : Nat) : List INetNode :=
   reduces in 1 cycle to `nat64 (slope * x + offset)`,
 * **$\beta$-Application**: `lam` interacting with `app` annihilates and wires `(l.aux1, r.aux1)` and `(l.aux2, r.aux2)`,
 * **Annihilation vs. Commutation**: two combinators (`dup`, `sup`, `con`) with identical `label` annihilate;
-  distinct labels (`l.label ≠ r.label`) commute and spawn 4 cross-wired nodes. -/
+  distinct labels (`l.label ≠ r.label`) commute: four copies, Lafont's rule (`commuteSpawnedNodes`,
+  `commuteSplices`, `commute_wellformed`). -/
 def reduceActivePair (pair : ActivePair) (nextFreeId : Nat) : INetRewriteOutcome :=
   let l := pair.left
   let r := pair.right
@@ -583,7 +637,7 @@ def reduceActivePair (pair : ActivePair) (nextFreeId : Nat) : INetRewriteOutcome
     if l.label == r.label then
       .annihilate (l.aux1, r.aux1) (l.aux2, r.aux2)
     else
-      .commute (commuteSpawnedNodes l r nextFreeId)
+      .commute (commuteSpawnedNodes l r nextFreeId) (commuteSplices l r nextFreeId)
 
 /-- Theorem (`inet_annihilation_same_label`):
 Two `dup` (or `sup` or `con`) nodes with identical label `lbl` connected at their principal ports
@@ -600,14 +654,14 @@ theorem inet_annihilation_same_label
 
 /-- Theorem (`inet_commutation_distinct_labels_spawns_four`):
 When a `dup` node with label `l1` interacts with a `sup` node with label `l2` (`l1 ≠ l2`),
-`reduceActivePair` produces `.commute spawned` with `spawned.length = 4`. -/
+`reduceActivePair` produces `.commute spawned splices` with `spawned.length = 4`. -/
 theorem inet_commutation_distinct_labels_spawns_four
     (id1 id2 l1 l2 : Nat) (a1 a2 b1 b2 : PortRef) (nextId : Nat)
     (hNe : l1 ≠ l2) :
     let n1 : INetNode := { id := id1, kind := .dup, label := l1, immVal := 0, aux1 := a1, aux2 := a2 }
     let n2 : INetNode := { id := id2, kind := .sup, label := l2, immVal := 0, aux1 := b1, aux2 := b2 }
     let spawned := commuteSpawnedNodes n1 n2 nextId
-    reduceActivePair { left := n1, right := n2 } nextId = .commute spawned ∧
+    reduceActivePair { left := n1, right := n2 } nextId = .commute spawned (commuteSplices n1 n2 nextId) ∧
     spawned.length = 4 := by
   intro n1 n2 spawned
   refine ⟨?_, rfl⟩
@@ -971,11 +1025,9 @@ def mkDupNode (id label : Nat) (aux1 aux2 : PortRef) : INetNode where
 def externalBoundaryPorts (pair : ActivePair) : List PortRef :=
   [pair.left.aux1, pair.left.aux2, pair.right.aux1, pair.right.aux2]
 
-/-- Extract the external boundary ports preserved across the 4 nodes spawned by a `CON-DUP` commutation. -/
-def commutedBoundaryPorts (spawned : List INetNode) : List PortRef :=
-  match spawned with
-  | [_, _, supA, supB] => [supA.aux1, supB.aux1, supA.aux2, supB.aux2]
-  | _ => []
+/-- The outside ports a commutation's splices face, in splice order. -/
+def commutedBoundaryPorts (splices : List (PortRef × PortRef)) : List PortRef :=
+  splices.map Prod.snd
 
 /-- Look up a waiting node by `id` in `arenaNodes`. -/
 def findArenaNodeById (arena : List INetNode) (targetId : Nat) : Option INetNode :=
@@ -1004,6 +1056,38 @@ def resolveTwoWireSplices (arena : List INetNode) (w1 w2 : PortRef × PortRef) :
     let (arena1, pairs1) := resolveWireSplice arena w1
     let (arena2, pairs2) := resolveWireSplice arena1 w2
     (arena2, pairs1 ++ pairs2)
+
+/-- Resolve a list of wire splices in order (`resolveWireSplice` on each). -/
+def resolveWireSplices (arena : List INetNode) : List (PortRef × PortRef) → List INetNode × List ActivePair
+  | [] => (arena, [])
+  | w :: ws =>
+    let (arena1, pairs1) := resolveWireSplice arena w
+    let (arena2, pairs2) := resolveWireSplices arena1 ws
+    (arena2, pairs1 ++ pairs2)
+
+theorem resolveWireSplice_of_none (arena : List INetNode) (p q : PortRef)
+    (h : findArenaNodeById arena q.nodeId = none) : resolveWireSplice arena (p, q) = (arena, []) := by
+  unfold resolveWireSplice
+  dsimp only
+  split
+  · rw [h]; cases findArenaNodeById arena p.nodeId <;> rfl
+  · rfl
+
+/-- An id older than the fresh ones names none of the copies. -/
+theorem findArenaNodeById_commute_old (l r : INetNode) {n k : Nat} (hk : k < n) :
+    findArenaNodeById (commuteSpawnedNodes l r n) k = none := by
+  refine List.find?_eq_none.2 fun x hx => ?_
+  simp only [commuteSpawnedNodes, List.mem_cons, List.not_mem_nil, or_false] at hx
+  rcases hx with rfl | rfl | rfl | rfl <;> simp <;> omega
+
+/-- Splices whose far ends are on no arena node form no active pair and leave the arena as it is. -/
+theorem resolveWireSplices_of_none (arena : List INetNode) :
+    ∀ ws : List (PortRef × PortRef), (∀ w ∈ ws, findArenaNodeById arena w.2.nodeId = none) →
+      resolveWireSplices arena ws = (arena, [])
+  | [], _ => rfl
+  | (p, q) :: ws, h => by
+    simp only [resolveWireSplices, resolveWireSplice_of_none arena p q (h _ List.mem_cons_self),
+      resolveWireSplices_of_none arena ws (fun w hw => h w (List.mem_cons_of_mem _ hw)), List.nil_append]
 
 /-- Hardware BRAM Interaction-Net node kind (`InertNodeKind`):
 * `.era`: eraser combinator (`ERA`),
@@ -1096,10 +1180,12 @@ def stepInteractionNetPe (st : InteractionNetPeState) : InteractionNetPeState :=
         rewiredPorts  := st.rewiredPorts ++ [w1, w2]
         cycleCount    := st.cycleCount + 1
         annihilations := st.annihilations + 1 }
-    | .commute spawned =>
+    | .commute spawned splices =>
+      let (arena', newPairs) := resolveWireSplices (st.arenaNodes ++ spawned) splices
       { st with
-        activeQueue   := restQueue
-        arenaNodes    := st.arenaNodes ++ spawned
+        activeQueue   := restQueue ++ newPairs
+        arenaNodes    := arena'
+        rewiredPorts  := st.rewiredPorts ++ splices
         nextFreeId    := st.nextFreeId + 4
         cycleCount    := st.cycleCount + 1
         commutations  := st.commutations + 1 }
@@ -1153,13 +1239,14 @@ theorem inet_annihilation_exact
 /-- **Theorem (`inet_commutation_port_count_preserved`)**:
 When a `CON` node with label `l1` interacts with a `DUP` node with label `l2` (`l1 ≠ l2`),
 stepping `stepInteractionNetPe`:
-1. Executes a 1-cycle `CON-DUP` commutation spawning 4 cross-wired arena nodes (`arenaNodes.length = 4`),
+1. Executes a 1-cycle `CON-DUP` commutation spawning 4 arena nodes (`arenaNodes.length = 4`),
 2. Advances `nextFreeId` by `4` and increments `commutations` by `1`, and
-3. Strictly preserves all 4 external boundary auxiliary ports `[a1, a2, b1, b2]`
-   (`commutedBoundaryPorts st'.arenaNodes = externalBoundaryPorts pair` and length `= 4`). -/
+3. Splices the copies' principal ports to the 4 external boundary ports `[a1, a2, b1, b2]`
+   (`commutedBoundaryPorts st'.rewiredPorts = externalBoundaryPorts pair`), forming no new active pair
+   when those ports belong to older nodes. -/
 theorem inet_commutation_port_count_preserved
     (id1 id2 l1 l2 : Nat) (a1 a2 b1 b2 : PortRef) (startFreeId : Nat)
-    (hDiff : l1 ≠ l2) :
+    (hDiff : l1 ≠ l2) (hOld : ∀ p ∈ [a1, a2, b1, b2], p.nodeId < startFreeId) :
     let pair : ActivePair :=
       { left  := mkConNode id1 l1 a1 a2
       , right := mkDupNode id2 l2 b1 b2 }
@@ -1168,12 +1255,25 @@ theorem inet_commutation_port_count_preserved
     st'.arenaNodes.length = 4 ∧
     st'.nextFreeId = startFreeId + 4 ∧
     st'.commutations = 1 ∧
-    commutedBoundaryPorts st'.arenaNodes = externalBoundaryPorts pair ∧
-    (commutedBoundaryPorts st'.arenaNodes).length = (externalBoundaryPorts pair).length ∧
+    commutedBoundaryPorts st'.rewiredPorts = externalBoundaryPorts pair ∧
+    (commutedBoundaryPorts st'.rewiredPorts).length = (externalBoundaryPorts pair).length ∧
     (externalBoundaryPorts pair).length = 4 := by
   intro pair st'
+  simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq] at hOld
+  obtain ⟨h1, h2, h3, h4⟩ := hOld
+  have hres : ∀ l r : INetNode, resolveWireSplices ([] ++ commuteSpawnedNodes l r startFreeId)
+      (commuteSplices (mkConNode id1 l1 a1 a2) (mkDupNode id2 l2 b1 b2) startFreeId) =
+        (commuteSpawnedNodes l r startFreeId, []) := fun l r =>
+    resolveWireSplices_of_none _ _ (by
+      simp only [commuteSplices, mkConNode, mkDupNode, List.mem_cons, List.not_mem_nil, or_false,
+        forall_eq_or_imp, forall_eq, List.nil_append]
+      exact ⟨findArenaNodeById_commute_old l r h1, findArenaNodeById_commute_old l r h2,
+        findArenaNodeById_commute_old l r h3, findArenaNodeById_commute_old l r h4⟩)
   dsimp only [st', pair, stepInteractionNetPe, initInteractionNetPe, reduceActivePair, mkConNode, mkDupNode]
-  simp [hDiff, commuteSpawnedNodes, commutedBoundaryPorts, externalBoundaryPorts]
+  simp only [hDiff, beq_iff_eq, ite_false]
+  simp only [mkConNode, mkDupNode, List.nil_append] at hres
+  simp only [List.nil_append, hres]
+  simp [commuteSpawnedNodes, commuteSplices, commutedBoundaryPorts, externalBoundaryPorts]
 
 /-- **Theorem (`inet_dynamic_splice_cascading_reduction`)**:
 Verifies that when an outer `CON 0 - CON 0` active pair annihilates in Cycle 1 and splices two

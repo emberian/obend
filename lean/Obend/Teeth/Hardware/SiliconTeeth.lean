@@ -628,6 +628,18 @@ def resolveTwoWireSplicesDropPairs (arena : List INetNode) (_w1 _w2 : PortRef ×
 
 #tooth Obend.Hardware.ReductionMachine.inet_dynamic_splice_cascading_reduction by mutation Obend.Hardware.ReductionMachine.resolveTwoWireSplices := resolveTwoWireSplicesDropPairs
 
+/-- 51b. The commutation `commuteSpawnedNodes` had before 2026-11-05: the two copies of `r` take `l.aux1`,
+`r.aux1` (and `l.aux2`, `r.aux2`) as auxiliary fields while the copies of `l` already point at those
+slots, so a slot sits on two wires and no copy's principal port faces the outside. -/
+def commuteSpawnedNodesPortTwice (l r : INetNode) (nextFreeId : Nat) : List INetNode :=
+  let n := nextFreeId
+  [ { id := n, kind := l.kind, label := l.label, immVal := 0, aux1 := ⟨n + 2, 1⟩, aux2 := ⟨n + 3, 1⟩ }
+  , { id := n + 1, kind := l.kind, label := l.label, immVal := 0, aux1 := ⟨n + 2, 2⟩, aux2 := ⟨n + 3, 2⟩ }
+  , { id := n + 2, kind := r.kind, label := r.label, immVal := 0, aux1 := l.aux1, aux2 := r.aux1 }
+  , { id := n + 3, kind := r.kind, label := r.label, immVal := 0, aux1 := l.aux2, aux2 := r.aux2 } ]
+
+#tooth Obend.Hardware.ReductionMachine.commute_wellformed by mutation Obend.Hardware.ReductionMachine.commuteSpawnedNodes := commuteSpawnedNodesPortTwice
+
 /-- 52. Broken `ivMinChoice` in `Obend.Hardware.GeometryCAM` that returns `.right` when `a.hi ≤ b.lo` instead of `.left` (inverting `fidget` CSG union branch pruning). -/
 def ivMinChoiceInverted (a b : FloatInterval) : FidgetChoice :=
   if decide (a.hi ≤ b.lo) then .right

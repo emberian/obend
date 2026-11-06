@@ -562,8 +562,8 @@ Verifies the physical eFPGA transport invariants for the specialized elaborator 
 2. **Dimension-Ordered 2D XY Mesh Routing**: A `MeshXyPacket` carrying an elaborated declaration payload (`42`) from
    elaborator tile `(0, 0)` to kernel checker tile `(2, 1)` strictly decreases `manhattanDist` at every
    hop (`3 → 2 → 1 → 0`) under `stepMeshXy`, reaches `(2, 1)` as a fixed point (`stepMeshXy p3 = p3`), and preserves `payload`.
-3. **Interaction-Net `dup`/`sup` Commutation (`commuteSpawnedNodes`)**: Distinct-label `.dup` (`label = 1`)
-   and `.sup` (`label = 2`) nodes commute in 1 cycle into `.commute (commuteSpawnedNodes dupNode supNode 100)` (4 fresh cross-wired nodes). -/
+3. **Interaction-Net `dup`/`sup` Commutation (`commuteSpawnedNodes`, `commuteSplices`)**: Distinct-label `.dup`
+   (`label = 1`) and `.sup` (`label = 2`) nodes commute in 1 cycle into Lafont's four copies and their splices. -/
 -- fixture kept (2026-11-04): would delete (ICAP word counts and mesh coordinates of one literal tile) but cited by tests/silicon_elab/SiliconElabTest.lean:179, tests/silicon_elab/SiliconElabTest.lean:395
 theorem silicon_elab_mesh_xy_and_icap_codec_sound :
     let simpRuleTile := mkIcapRuleTile 0 .loweredLeanLite .addImm 10
@@ -585,7 +585,7 @@ theorem silicon_elab_mesh_xy_and_icap_codec_sound :
     (let dupNode : INetNode := { id := 10, kind := .dup, label := 1, immVal := 0, aux1 := ⟨0, 1⟩, aux2 := ⟨0, 2⟩ }
      let supNode : INetNode := { id := 11, kind := .sup, label := 2, immVal := 0, aux1 := ⟨1, 1⟩, aux2 := ⟨1, 2⟩ }
      reduceActivePair { left := dupNode, right := supNode } 100 =
-       .commute (commuteSpawnedNodes dupNode supNode 100)) := by
+       .commute (commuteSpawnedNodes dupNode supNode 100) (commuteSplices dupNode supNode 100)) := by
   decide +kernel
 
 /-! ## 6. Genuine Term-Level Lowered Kernel Node Reducer & Typechecker (`real_silicon_kernel_node_check_sound`) -/

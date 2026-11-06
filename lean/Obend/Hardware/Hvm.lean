@@ -83,82 +83,18 @@ record or a sum, `fix` not of the shape above, nested records, sums inside recor
   locations); `REF ~ DUP` copies a reference to a safe definition and is stuck otherwise (HVM2 exits);
   the `REF ~ ROOT` start is not modelled: a run starts from `@main`'s net.
 
-## The reduction machine's nets, and what a proved map needs
+## The reduction machine's nets
 
-`Obend.Hardware.ReductionMachine` represents an interaction net as an arena of `INetNode`s (kinds
-`era con dup sup app lam nat64`, a label, an immediate, two auxiliary `PortRef`s, the principal port
-implicit) and rewrites an `ActivePair` by `reduceActivePair` into an *outcome* (`annihilate`,
-`commute`, `erase`, `betaNat64`), not into a new arena. The two are **not** one model, and today they
-are related only node by node:
-
-* **Same combinators, on `CON`/`DUP`/`ERA`**: `inetOfHvm` sends `CON` to `con` (label 0), `DUP` to
-  `dup` (label 1), `ERA` to `era`. Annihilation agrees (`inetOfHvm_annihilate`: the outcome wires the
-  auxiliary ports pairwise, as ANNI does) and erasure agrees (`inetOfHvm_erase`: the outcome erases
-  both auxiliary ports, as ERAS does).
-* **Commutation disagrees.** `commuteSpawnedNodes` gives the third spawned node the auxiliary port
-  `l.aux1` while the first spawned node's `aux1` already points at that node's slot 1
-  (`inet_commute_ports_twice`): a slot is claimed by two wires, which no port graph has. HVM2's COMM
-  (Lafont's commutation) faces each spawned node's principal port with one original auxiliary port.
-* **No counterpart**: `NUM`, `REF`, `OPR`, `SWI` have none in `INetNodeKind`; a `nat64` meeting a
-  combinator falls through to the label test (annihilate or commute) where HVM2 copies or erases the
-  number; `lam`/`app`/`betaNat64` (an affine `slope * x + offset` step) are not interaction-combinator
-  rules; and annihilation there is decided by label alone, so a `con` and a `sup` of one label
-  annihilate.
-
-`inetOfHvm_sound` (an arena step simulating `Step`) is therefore not stated: it needs (1) an arena
-semantics, applying an outcome to an arena, which `ReductionMachine` does not define; (2) a
-flattening of an `HTree` configuration into an arena (trees to nodes, variables to wires); (3)
-Lafont's commutation in `commuteSpawnedNodes`; (4) node kinds for `NUM`, `REF`, `OPR`, `SWI` with
-OPER, SWIT and CALL (or a lowering of numbers and switches to pure combinators, which HVM2 does not
-use). With those, the statement would be: flattening commutes with one step, up to renaming.
+`Hvm.Inet` maps the model to `Obend.Hardware.ReductionMachine`'s arena (`ReductionMachine.Arena`:
+node memory and a link table, `Arena.Step` firing an active pair by `reduceActivePair`'s outcome) for
+the combinator fragment, `CON` (`con`, label 0), `DUP` (`dup`, label 1) and `ERA` (`era`).
+`Repr A ρ c` says the arena is the configuration; `inetOfHvm_sound`: every VOID, ERAS, ANNI and COMM
+step of a represented configuration is one `Arena.Step` to an arena representing the result (after
+HVM2's LINK of the bare wires ANNI leaves), when the fired pair's children share no variable. The
+machine's commutation is Lafont's (`commuteSpawnedNodes`, `commuteSplices`, `commute_wellformed`).
+`NUM`, `REF`, `OPR`, `SWI` are not mapped; `Hvm.Inet`'s header says what each would need.
 -/
 public import Obend.Hardware.Hvm.Model
 public import Obend.Hardware.Hvm.Net
 public import Obend.Hardware.Hvm.Lower
-public import Obend.Hardware.ReductionMachine
-@[expose] public section
-namespace Obend.Hardware.Hvm
-open Obend.Hardware.ReductionMachine
-set_option autoImplicit false
-
-/-- The reduction machine's kind and label for an HVM2 node, where it has one. -/
-def inetKindOf : HTree → Option (INetNodeKind × Nat)
-  | .con _ _ => some (.con, 0)
-  | .dup _ _ => some (.dup, 1)
-  | .era => some (.era, 0)
-  | _ => none
-
-/-- An HVM2 node as an `INetNode`, its auxiliary ports at the given references. -/
-def inetOfHvm (id : Nat) (t : HTree) (a1 a2 : PortRef) : Option INetNode :=
-  (inetKindOf t).map fun kl => ⟨id, kl.1, kl.2, 0, a1, a2⟩
-
-/-- **Annihilation agrees**: two `CON` (or two `DUP`) nodes annihilate in both models, the auxiliary
-ports wired pairwise. -/
-theorem inetOfHvm_annihilate (id1 id2 next : Nat) (a1 a2 b1 b2 : PortRef) (A1 A2 B1 B2 : HTree) :
-    (∀ l r, inetOfHvm id1 (.con A1 A2) a1 a2 = some l → inetOfHvm id2 (.con B1 B2) b1 b2 = some r →
-      reduceActivePair ⟨l, r⟩ next = .annihilate (a1, b1) (a2, b2)) ∧
-    localRule (.con A1 A2) (.con B1 B2) = some [(A1, B1), (A2, B2)] ∧
-    (∀ l r, inetOfHvm id1 (.dup A1 A2) a1 a2 = some l → inetOfHvm id2 (.dup B1 B2) b1 b2 = some r →
-      reduceActivePair ⟨l, r⟩ next = .annihilate (a1, b1) (a2, b2)) ∧
-    localRule (.dup A1 A2) (.dup B1 B2) = some [(A1, B1), (A2, B2)] := by
-  refine ⟨fun l r hl hr => ?_, rfl, fun l r hl hr => ?_, rfl⟩ <;>
-    simp only [inetOfHvm, inetKindOf, Option.map_some, Option.some.injEq] at hl hr <;>
-    subst hl hr <;> simp [reduceActivePair]
-
-/-- **Erasure agrees**: an eraser meeting `CON` or `DUP` erases both auxiliary ports. -/
-theorem inetOfHvm_erase (id1 id2 next : Nat) (a1 a2 b1 b2 : PortRef) (B1 B2 : HTree) :
-    (∀ l r, inetOfHvm id1 .era a1 a2 = some l → inetOfHvm id2 (.con B1 B2) b1 b2 = some r →
-      reduceActivePair ⟨l, r⟩ next = .erase [b1, b2]) ∧
-    localRule .era (.con B1 B2) = some [(.era, B1), (.era, B2)] := by
-  refine ⟨fun l r hl hr => ?_, rfl⟩
-  simp only [inetOfHvm, inetKindOf, Option.map_some, Option.some.injEq] at hl hr
-  subst hl hr; simp [reduceActivePair]
-
-/-- **Commutation disagrees**: the first node `commuteSpawnedNodes` spawns points its `aux1` at slot 1
-of the third, and the third's own `aux1` is the old node's `aux1`: slot 1 of the third node is on two
-wires. -/
-theorem inet_commute_ports_twice (l r : INetNode) (next : Nat) :
-    ((commuteSpawnedNodes l r next)[0]?).map (·.aux1) = some ⟨next + 2, 1⟩ ∧
-    ((commuteSpawnedNodes l r next)[2]?).map (·.id) = some (next + 2) ∧
-    ((commuteSpawnedNodes l r next)[2]?).map (·.aux1) = some l.aux1 := by
-  simp [commuteSpawnedNodes]
+public import Obend.Hardware.Hvm.Inet

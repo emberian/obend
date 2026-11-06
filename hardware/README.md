@@ -154,9 +154,17 @@ the emitter `emitHvm`, and `lowerBookToHvm_sound`: for an accepted book, a lower
 and a fuel at which every result slot evaluates exactly below `2^24`, the model reduces `@main` to
 the tuple of the slot values with an empty bag, and each observation the result's sort names (the
 scalar, a record's fields, a sum's tag and payload) holds of `evalBookAt`'s term under Core4's
-reference reduction. The module header names where the model departs from HVM2 and what relates
-these nets to `ReductionMachine`'s `INetNode` (annihilation and erasure agree; its commutation does
-not; a proved arena map is not yet possible and the header says why).
+reference reduction. The module header names where the model departs from HVM2.
+
+`Hvm.Inet` maps these nets to `ReductionMachine`'s arena for the combinator fragment (`CON`, `DUP`,
+`ERA`). `ReductionMachine.Arena` gives the machine an arena semantics: node memory and a link table,
+`Arena.Step` firing an active pair by the outcome `reduceActivePair` gives it. `Repr A ρ c` says the
+arena is the configuration, and `inetOfHvm_sound` that every VOID, ERAS, ANNI and COMM step of a
+represented configuration is one `Arena.Step` to an arena representing the result (after HVM2's LINK
+of the bare wires ANNI leaves), when the fired pair's children share no variable. The machine's
+commutation is Lafont's since 2026-11-05 (`commuteSpawnedNodes`, `commuteSplices`;
+`commute_wellformed`: every port of the result is on exactly one wire; the old shape, which put a
+slot on two wires, is kept as a `#tooth` mutation). `NUM`, `REF`, `OPR` and `SWI` are not mapped.
 
 The fragment: first-order bodies over naturals and Booleans, unboxed records of scalars (a `CON`
 tuple at a member's result), sums whose arms carry a scalar or a record (a tag and the widest
