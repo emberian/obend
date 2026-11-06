@@ -375,8 +375,10 @@ that the LEC sees on every input. The scalar graphs' vectors now include four on
 
 Lengths. The graphs are the nine scalar ones, the field multiply at length 4 and the 16-point NTT
 (`sq_ntt_16`: 3801 lines of SystemVerilog, 16 input and 16 output ports). Verilator takes the NTT in a
-few minutes of compilation; the LEC decides every module bit-precisely or with multiplication
-uninterpreted within its time limit. EQY, SAT against the gate-level netlist, terminated on none of them
+few minutes of compilation. The LEC answers unsat on every module; on `tree512` it took z3 about 55
+minutes on the M2 Max (511 chained 64-bit adders on each side of the miter; `LEC_SECS` bounds only the
+first query, and with no multiply to abstract the second is the same problem without a limit), on the
+others seconds to minutes. EQY, SAT against the gate-level netlist, terminated on none of them
 in the time given (measured on the M2 Max: 15 minutes on `diamond`, one 64-bit multiply, as
 `hardware/sim`'s `mac2` already showed; 55 minutes on `tree512`, which has no multiply but whose one
 output puts all 511 adders in one partition), so it is opt-in (`EQY_GRAPHS`) and the LEC is the
