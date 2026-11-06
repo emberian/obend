@@ -741,9 +741,10 @@ Index v2
 and merges them at the TIP (`Obend.Vault.Merge`, `Obend.Vault.Branch.merge`). The tip keeps the
 vault's store itself, and every write of either side is judged and landed there by the store's own
 write, the same judgment an open makes: landed at the tip and landed in the store are one event
-(`tip_lands_iff_store_lands`). The tip is a serial order, here's writes first. The laptop's Brief,
-whose law over its links lists Note, read Note as it was there; Note moved here, so Brief is refused
-by name. Made again here, Brief's own law refuses it, judged at Note as it is.
+(`tip_lands_iff_store_lands`). Laws settle first: a write that changes a page's law lines, of either
+side, lands before every other write, so the laws at the tip are known before any other write is
+judged. A law written on the laptop over its links judges a write made here, which neither replica
+saw together.
 
 ```sh
 cd vault && printf -- '# Note\n\nShort.\n' > Note.md && obend open > /dev/null
@@ -751,14 +752,20 @@ cd .. && rm -rf laptop3 && cp -R vault laptop3
 cd laptop3 && printf -- '---\nlaw brief: linked.words <= 6\n---\n# Brief\n\n- [[Note]]\n' > Brief.md && obend open > /dev/null
 cd ../vault && printf 'Here it grows by a sentence of ten words or so.\n' >> Note.md && obend open > /dev/null
 obend merge ../laptop3 | grep -e Note -e Brief
-cp ../laptop3/Brief.md . && obend open | grep Brief
+obend status Note | head -1 && obend open | head -1
 ```
 
 ```text
-Brief: not merged: its write at laptop3 read Note as it was there (bytes 15 → 63, lines 3 → 4, version 0 → 1, …); make the change here, against Note as it is
-Brief: refused by its law brief over its links, at Note: `linked.words <= 6` does not hold there; words = 6 would pass (this write has words = 14)
-Brief: still not born: refused by its law brief over its links, at Note: `linked.words <= 6` does not hold there; words = 6 would pass (this write has words = 14)
+Note: here's write was not settled at the merge with laptop3: refused by Brief: brief (a law over Brief's links, of which Note is one): `linked.words <= 6` does not hold; words = 6 would pass (this write has words = 14)
+Brief: imported from laptop3
+rendered Brief.md
+Note v1; its last write was not settled at the merge with laptop3: refused by Brief: brief (a law over Brief's links, of which Note is one): `linked.words <= 6` does not hold; words = 6 would pass (this write has words = 14)
+nothing changed
 ```
+
+Here's write of Note was not settled: the store holds Note at the version both replicas share, and
+`Note.md` keeps the text as a refused write, judged again when a page it read moves (the next open
+has nothing to do); the laptop's Brief, which lists Note, landed first.
 
 Two writes of one page that do not merge are a CONFLICT, and a conflict is a state of the store:
 both candidates kept (`.obend/world.json`), neither landed, here's text waiting in the file as a

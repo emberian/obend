@@ -254,6 +254,33 @@ def merged4 : Merged := ok? ⟨base4, [], [], []⟩ (merge base4 left4 right4)
 #guard natOf merged4.tip.store "Tally2" "count" == some 1
 #guard merged4.refused.isEmpty
 
+/-! ## Laws settle first
+
+A write that changes a page's law lines (`BTurn.lawKey`, a vault page's laws being lines of its
+text) lands before every write that does not, whichever side it is on: the right's law write of
+`Counter` lands before the left's write of `notes/Alpha`. Two law writes of one page that leave
+different law lines do not merge, even under a declared merge: a conflict, the base laws standing. -/
+
+def lawW (label actor page : String) (o n : Data) (key : String) (relies : List String := []) : Act :=
+  match w1 label actor page o n relies with
+  | .write t => .write { t with lawKey := some key }
+  | a => a
+
+def left5 : Branch := (fork base2 "left").post (w1 "data-a" "alice" "Same" (rec1 "v" 0) (rec1 "v" 1))
+def right5 : Branch :=
+  (fork base2 "right").post (lawW "laws-b" "bob" "Counter" (rec1 "count" 1) (rec1 "count" 2) "up: monotone(count)" ["sr:counter"])
+
+#guard ((ok? ⟨base2, [], [], []⟩ (merge base2 left5 right5)).tip.history.map (·.label)) == ["open", "laws-b", "data-a"]
+
+def left6 : Branch :=
+  (fork base2 "left").post (lawW "laws-a" "alice" "Counter" (rec1 "count" 1) (rec1 "count" 3) "up: monotone(count)")
+def right6 : Branch :=
+  (fork base2 "right").post (lawW "laws-b" "bob" "Counter" (rec1 "count" 1) (rec1 "count" 4) "pos: not (new.count <= 0)" ["sr:counter"])
+
+#guard (ok? ⟨base2, [], [], []⟩ (merge base2 left6 right6)).tip.conflicts.map Conflict.text ==
+  ["conflict at Counter: left's laws-a and right's laws-b (both kept as candidates; neither landed)"]
+-- the same two increments with no law change merge by the declared `add` (as `merged2` shows)
+
 /-! ## The authority reason is never hidden behind a stale pin
 
 alice's write of `board/Bob` read a state bob's page never had (`posts 9`), and relied on `sr:board`,
