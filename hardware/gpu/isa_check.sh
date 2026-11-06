@@ -10,8 +10,9 @@
 #                             changes the decoding or fails it, unless the bit lies in no field the
 #                             specification names; [4] every graph's dumped programs, run on the model from
 #                             each vector's inputs, give expected.tsv, and a planted bit flip in one store
-#                             is caught
-#   isa_check.sh --stage N    only stage N (1-4)
+#                             is caught; [5] gem5's Vega execute() bodies (rdna2/gem5_ref.cpp), on random
+#                             register states, agree with the model's step on every twin instruction
+#   isa_check.sh --stage N    only stage N (1-5)
 #
 # Needs llvm-mc (LLVM_MC, default /usr/lib/llvm-19/bin/llvm-mc; hbox) and `lake build obend-rdna2` in lean/.
 set -euo pipefail
@@ -28,7 +29,7 @@ run_stage() { [[ -z "${STAGE}" || "${STAGE}" == "$1" ]]; }
 mapfile -t DUMPS < <(ls "${SCRIPT_DIR}"/isa/*.txt)
 
 if run_stage 1; then
-echo "=== [1/4] the generated modules == gen_encodings.py on the committed XML ==="
+echo "=== [1/5] the generated modules == gen_encodings.py on the committed XML ==="
 mkdir -p "${WORK}/gen"
 python3 -I "${SCRIPT_DIR}/rdna2/gen_encodings.py" "${SCRIPT_DIR}/rdna2/amdgpu_isa_rdna2.xml" "${WORK}/gen" | sed 's/^/  /'
 for f in Encodings.lean Insts.lean; do
@@ -39,7 +40,7 @@ echo "  identical"
 fi
 
 if run_stage 2; then
-echo "=== [2/4] the decoder against llvm-mc on every instruction of every dump ==="
+echo "=== [2/5] the decoder against llvm-mc on every instruction of every dump ==="
 [[ -x "${LLVM_MC}" ]] || { echo "[FAIL] ${LLVM_MC} missing (LLVM 19 with the amdgcn target)" >&2; exit 1; }
 total=0
 for d in "${DUMPS[@]}"; do
@@ -63,7 +64,7 @@ echo "  every instruction of every dump agrees"
 fi
 
 if run_stage 3; then
-echo "=== [3/4] teeth: every bit of every instruction's machine code, flipped ==="
+echo "=== [3/5] teeth: every bit of every instruction's machine code, flipped ==="
 for d in "${DUMPS[@]}"; do
   g="$(basename "${d}" .txt)"
   printf '  %s: ' "${g}"
@@ -72,16 +73,21 @@ done
 fi
 
 if run_stage 4; then
-echo "=== [4/4] the model: every graph's programs on every vector; a planted store flip caught ==="
+echo "=== [4/5] the model: every graph's programs on every vector; a planted store flip caught ==="
 for d in "${DUMPS[@]}"; do
   g="$(basename "${d}" .txt)"
   "${RDNA2}" run "${SCRIPT_DIR}/graphs/${g}" | sed 's/^/  /' || exit 1
 done
 for g in diamond optic-mul optic-bilinear optic-linearmac; do
   # the first buffer_store of stage 0: VDATA's low bit (bit 40 of the instruction) names another register
-  k=$(grep -n "" "${SCRIPT_DIR}/isa/${g}.txt" | sed -n '/## stage 0/,/## stage 1/p' | grep -c $'^\t\|^[0-9]*:\t' || true)
   idx=$(awk '/^## stage 0/{s=1; i=-1; next} /^## stage 1/{exit} s && /^\t/{i++; if ($0 ~ /buffer_store/) {print i; exit}}' "${SCRIPT_DIR}/isa/${g}.txt")
   "${RDNA2}" run "${SCRIPT_DIR}/graphs/${g}" --flip "0:${idx}:40" | sed 's/^/  /' || { echo "[FAIL] ${g}: a flipped store went unnoticed" >&2; exit 1; }
 done
+fi
+if run_stage 5; then
+echo "=== [5/5] the model against gem5's Vega bodies on random register states ==="
+python3 -I "${SCRIPT_DIR}/rdna2/gem5_ref.py" "${WORK}/gem5_vectors.tsv" --llvm-mc "${LLVM_MC}" | sed 's/^/  /'
+cmp "${WORK}/gem5_vectors.tsv" "${SCRIPT_DIR}/rdna2/gem5_vectors.tsv" || { echo "[FAIL] rdna2/gem5_vectors.tsv differs from gem5_ref.py's output (regenerate; do not hand-edit)" >&2; exit 1; }
+"${RDNA2}" gem5 "${SCRIPT_DIR}/rdna2/gem5_vectors.tsv" | sed 's/^/  /' || exit 1
 fi
 echo "[PASS] hardware/gpu/isa_check.sh${STAGE:+ (stage ${STAGE})}"

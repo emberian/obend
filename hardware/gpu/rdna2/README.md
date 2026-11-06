@@ -23,3 +23,12 @@ predefined values (register runs kept as runs, which the generator verifies agai
 values one by one). Nothing in those modules is typed by hand; `isa_check.sh` regenerates them and
 compares bytes. `Obend.Hardware.Gpu.Rdna2.Decode` is the hand-written decoder over that data, and the
 gate `isa_check.sh` holds it to LLVM 19's disassembler on every instruction of `../isa/*.txt`.
+
+`gem5_ref.cpp` ports, case by case with file and line, the lane arithmetic of gem5's executable Vega
+model (github.com/gem5/gem5, `src/arch/amdgpu/vega/insts/*.cc`, revision
+9d368896ce119c17e1289dcbb18f33624724b843) for every instruction of the model's subset that exists in
+Vega; `gem5_ref.py` assembles each twin with llvm-mc in a fixed register assignment, runs the port on
+random register states and writes `gem5_vectors.tsv`, the state before and after each; `obend-rdna2
+gem5` replays every row through `Obend.Hardware.Gpu.Rdna2.Semantics.step` and compares every register
+(`isa_check.sh` stage 5, pinned in `Obend.Teeth.Hardware.Rdna2Runs`). The row's last column names the
+registers in which RDNA2 is documented to differ from Vega (`V_CMPX` writes EXEC only, manual 12.9).
