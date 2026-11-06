@@ -15,6 +15,8 @@ Provides CLI commands for hardware synthesis, Leiserson–Saxe retiming, physica
         check a `wafer.space` GF180MCU MPW shuttle signoff certificate by `waferspace-signoff@1`.
     obend fabublox check [--recipe damascene|post_cu_anneal|under_etch] [--out RECEIPT.json]
         check a FabuBlox cleanroom nanofabrication recipe by `fabublox-run@1`.
+    obend fabric (check|extract|flip|vectors|wrapper) --project DIR --bin FILE ...
+        read a FABulous bitstream back to the logic it configures (`Obend.Hardware.Fabulous.Cli`).
     obend verify RECEIPT.json
         re-checks any `"kind": "hardware"` receipt through its registered `Obend.Hardware.Judge` format.
     obend hardware emit-sv --top <module> [--out FILE.sv]
@@ -32,6 +34,7 @@ public import Obend.Hardware.Judge
 public import Obend.Hardware.TapeoutPipeline
 public import Obend.Hardware.VerilateRunner
 public import Obend.Lower.SiliconElabFabric
+public import Obend.Hardware.Fabulous.Cli
 @[expose] public section
 
 namespace Obend.Hardware.Cli
@@ -400,11 +403,7 @@ def cmdEmitSiliconSv (args : List String) : IO UInt32 := do
     IO.print siliconElabTopSvText
     return 0
 
-/-- Emit the Rung-2 `Synth.TechNetlist` SMT-LIB2 `QF_BV` equivalence miter (`obend hardware emit-lec-smt2`). -/
-def cmdEmitLecSmt2 (args : List String) : IO UInt32 :=
-  Obend.Hardware.VerilateRunner.cmdEmitLecSmt2 args
-
-/-- Run `obend verilate <input.obend> [--top <name>] [--vectors N] [--cycles C] [--vcd <out.vcd>] [--lec]`. -/
+/-- Run `obend verilate <input.obend> [--top <name>] [--vectors N] [--cycles C] [--vcd <out.vcd>]`. -/
 def cmdVerilate (args : List String) : IO UInt32 :=
   Obend.Hardware.VerilateRunner.cmdVerilate args
 
@@ -482,11 +481,10 @@ def cmdTapeout (args : List String) : IO UInt32 := do
     IO.println s!"verified tapeout ({art.moduleName}): slots={art.specializedBook.slots.length}, wires={art.rtlModule.wires.length}, regs={art.rtlModule.regs.length}, bels={art.belNetlist.cells.length}, tcad=[FF:{art.tcadEnvelope.fastCorner.tGateMaxPs}ps, TT:{art.tcadEnvelope.nomCorner.tGateMaxPs}ps, SS:{art.tcadEnvelope.slowCorner.tGateMaxPs}ps], verdict=ok"
     return 0
 
-/-- CLI entry point for `obend verilate ...`, `obend tapeout ...`, `obend hardware ...`, and `obend fabublox ...`. -/
+/-- CLI entry point for `obend verilate ...`, `obend tapeout ...`, `obend hardware ...`, `obend fabublox ...` and `obend fabric ...`. -/
 public def main? : List String → Option (IO UInt32)
   | "verilate" :: rest                         => some (cmdVerilate rest)
   | "hardware" :: "verilate" :: rest           => some (cmdVerilate rest)
-  | "hardware" :: "emit-lec-smt2" :: rest      => some (cmdEmitLecSmt2 rest)
   | "hardware" :: "emit-silicon-sv" :: rest    => some (cmdEmitSiliconSv rest)
   | "tapeout" :: rest                          => some (cmdTapeout rest)
   | "hardware" :: "tapeout" :: rest            => some (cmdTapeout rest)
@@ -502,6 +500,7 @@ public def main? : List String → Option (IO UInt32)
   | "hardware" :: "verify-tape-cbor" :: rest   => some (cmdVerifyCbor ("--mode" :: "tape" :: rest))
   | "hardware" :: "emit-sv" :: rest            => some (cmdEmitSv rest)
   | "fabublox" :: "check" :: rest              => some (cmdFabuBloxCheck rest)
+  | "fabric" :: rest                           => some (Obend.Hardware.Fabulous.cmdFabric rest)
   | _ => none
 
 end Obend.Hardware.Cli

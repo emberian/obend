@@ -195,7 +195,7 @@ def attestedRootHoldsIgnoreQuorum (ar : AttestedRoot) : Bool :=
   ar.v4Complete
 
 #tooth Obend.Vault.Rehydration.invalidAttestation_not_replayed_of_flags by mutation Obend.Vault.Rehydration.AttestedRoot.holds := attestedRootHoldsIgnoreQuorum
-#tooth Obend.Vault.Rehydration.rehydration_master_sound by mutation Obend.Vault.Rehydration.AttestedRoot.holds := attestedRootHoldsIgnoreQuorum
+#tooth Obend.Vault.Rehydration.attestedRoot_holds_iff by mutation Obend.Vault.Rehydration.AttestedRoot.holds := attestedRootHoldsIgnoreQuorum
 
 /-- 2a. Broken `Interaction.isWitnessed` that treats `.ambient` interactions as witnessed (`true`). -/
 def interactionIsWitnessedAlwaysTrue (_i : Interaction) : Bool :=
@@ -376,7 +376,6 @@ def stepContentCorruptGate {φ : Type} (f : φ → φ) (affs : List (CellAfforda
 #print axioms Obend.Vault.Rehydration.fireReactive_binds_attested_root
 
 -- Master Suite Theorems
-#print axioms Obend.Vault.Rehydration.rehydration_master_sound
 #print axioms Obend.Tests.Rehydration.pillar1_liveness_and_replay_suite
 #print axioms Obend.Tests.Rehydration.pillar2_membrane_reshare_and_sturdyref_suite
 #print axioms Obend.Tests.Rehydration.pillar3_rerender_square_and_snapshot_suite

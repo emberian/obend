@@ -12,7 +12,12 @@ replay of the log step the same bytes the same way. The turns:
   text the world last saw, else none; `open_replays`: the record replays as the open of exactly those
   files) and the environment it read, when that changed;
 * `member`, `wrote` (the owner's post), `posted` (a member's), `selected`, `recited`, `merged` (another
-  replica's world, as read); each is the store function its command always called, then `settle`;
+  replica's world, as read, merged by `Obend.Vault.Merge.mergeVault`), `resolved` (a merge conflict
+  the store keeps, `Store.conflicts`, resolved by `Merge.resolveIn`); each is the store function its
+  command always called, then `settle`;
+* `captured`, `abstracted`, `judged`, `filled`: the forms (`Obend.Vault.Form`). The forms a vault
+  issued, the receipt chain of the proposals it judged, and the forms it received and the proposals it
+  sent are fields of the world; `.obend/forms/*.json` are exports of them, written after the turn;
 * `rows`: rows committed to the register, all or none (`Obend.Ledger.Cli.commitRows`): the journal is
   part of the world, and the log is its only record (it was `.obend/ledger.json`);
 * `base`: a world from before the log (`.obend/world.json` and `.obend/ledger.json` of a vault opened by
@@ -28,6 +33,8 @@ the step that wrote it.
 public import Obend.Vault.Log
 public import Obend.Vault.Json
 public import Obend.Ledger.Commit
+public import Obend.Vault.Form
+public import Obend.Vault.Merge
 public import Obend.Digest.Cshake256
 @[expose] public section
 
@@ -49,13 +56,26 @@ def logHash (b : Bytes) : Bytes := Obend.Digest.Cshake256.cshake256Bytes "obend-
 /-! ## The world and its turns -/
 
 deriving instance DecidableEq for Page
+deriving instance DecidableEq for PageWrite
+deriving instance DecidableEq for PageConflict
 deriving instance DecidableEq for Store
 deriving instance DecidableEq for Journal
+deriving instance DecidableEq for Obend.Vault.Form.Cell
+deriving instance DecidableEq for Obend.Vault.Form.Form
 
-/-- The world beside a vault: the store of its pages and members, and the register's journal. -/
+open Obend.Vault.Form (Form Grant Assignment Admitted)
+open Obend.Vault.Rehydration (WitnessReceipt)
+
+/-- The world beside a vault: the store of its pages and members (with the merges' open conflicts),
+the register's journal, the forms it issued, the receipt chain of the proposals it judged, and the
+forms it received and the proposals it sent (each by form name, the text it exports). -/
 structure World where
   store : Store := {}
   journal : Journal := Journal.empty
+  forms : List Form := []
+  receipts : List WitnessReceipt := []
+  received : List (String × String) := []
+  sent : List (String × String) := []
 deriving DecidableEq
 
 /-- One turn of the deployed entry. -/
@@ -67,8 +87,14 @@ inductive Turn
   | posted (who page text : String)
   | selected (who : Option String) (page : String) (k i : Nat)
   | recited (who : Option String) (page : String)
-  | merged (label : String) (other : Store)
+  | merged (label : String) (other : Store) (skipLedger : Bool)
+  | resolved (k : Nat) (right : Bool)
   | rows (rs : List Row)
+  | captured (situation name : String) (g : Grant) (src dst : String) (amount : Nat) (field : String)
+      (refs : List String)
+  | abstracted (name value hole : String)
+  | judged (name digest : String) (hops : List Grant) (a : Assignment)
+  | filled (name received sent : String)
 
 /-- What a turn says beside the world it leaves (a command's store before `settle`, where it reports
 on it, as it always did). -/
@@ -79,7 +105,10 @@ inductive Outcome
   | changed (unsettled : Store)
   | recited (unsettled : Store) (n : Nat)
   | merged (unsettled : Store) (notes : List String)
+  | resolved (unsettled : Store) (receipt : String)
   | rows (files : List RowFiles)
+  | form (f : Form) (culled : Nat)
+  | judged (unsettled : Store) (ad : Admitted) (t : VaultTurn) (r : WitnessReceipt) (count : Nat)
 
 /-- The text the world last saw of a page's file. -/
 def seenOf (s : Store) (n : String) : Option String := (s.page? n).bind (·.seen)
@@ -152,9 +181,42 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     match w.store.actor who >>= fun a => reciteIn H w.store a page with
     | .ok (s, n) => .ok ({ w with store := settle H s }, .recited s n)
     | .error e => .error e
-  | .merged label other =>
-    let (s, notes) := mergeFrom w.store other label
+  | .merged label other skipLedger =>
+    let (s, notes) := Merge.mergeVault w.store other label
+      (skip := if skipLedger then Obend.Ledger.Cli.ledgerOwned else fun _ => false)
     .ok ({ w with store := settle H s }, .merged s notes)
+  | .resolved k right =>
+    match Merge.resolveIn w.store k (if right then .right else .left) with
+    | .ok (s, receipt) => .ok ({ w with store := settle H s }, .resolved s receipt)
+    | .error e => .error ("not resolved: " ++ e)
+  | .captured situation name g src dst amount field refs =>
+    if w.forms.any (·.name == name) then .error ("refused: a form named " ++ name ++ " exists") else
+    match Form.captureFrom w.store situation name g src dst amount field refs with
+    | .ok (f, culled) => .ok ({ w with forms := w.forms ++ [f] }, .form f culled)
+    | .error e => .error ("refused: " ++ e)
+  | .abstracted name value hole =>
+    match w.forms.find? (·.name == name) with
+    | none => .error ("refused: no form named " ++ name)
+    | some f =>
+      match f.abstract value hole with
+      | .ok g => .ok ({ w with forms := w.forms.map fun x => if x.name == name then g else x }, .form g 0)
+      | .error e => .error ("refused: " ++ e)
+  | .judged name digest hops a =>
+    match w.forms.find? (·.name == name) with
+    | none => .error ("refused: no form named " ++ name ++ " here")
+    | some f =>
+      if digest != Form.formDigest H f then
+        .error (name ++ ": refused: the form has changed since this proposal's copy was sent; send the form again")
+      else
+        match Form.judgeProposal H w.store f hops a with
+        | .error e => .error (name ++ ": " ++ e)
+        | .ok (s, ad, t) =>
+          let r := Form.receiptFor H w.receipts.getLast? f a ad t
+          .ok ({ w with store := settle H s, receipts := w.receipts ++ [r] },
+            .judged s ad t r (w.receipts.length + 1))
+  | .filled name received sent =>
+    .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
+                  sent := (w.sent.filter (·.1 != name)) ++ [(name, sent)] }, .quiet)
   | .rows rs =>
     match registerLaws w.store with
     | .error e => .error e
@@ -207,11 +269,22 @@ def fullStoreOf (j : Json) : Except String Store := do
     | .error _ => pure []
   return { s with environment := env.toArray }
 
+def namedTextsJson (xs : List (String × String)) : Json := pairsJson xs
+
 def worldJson (w : World) : Json :=
-  Json.mkObj [("store", fullStoreJson w.store), ("journal", journalJson w.journal)]
+  Json.mkObj [("store", fullStoreJson w.store), ("journal", journalJson w.journal),
+    ("forms", Json.arr (w.forms.map Form.formJson).toArray),
+    ("receipts", Json.arr (w.receipts.map Form.receiptJson).toArray),
+    ("received", pairsJson w.received), ("sent", pairsJson w.sent)]
 
 def worldOf (j : Json) : Except String World := do
-  return ⟨← fullStoreOf (← j.getObjVal? "store"), ← journalOf (← j.getObjVal? "journal")⟩
+  let store ← fullStoreOf (← j.getObjVal? "store")
+  let journal ← journalOf (← j.getObjVal? "journal")
+  let forms ← (← j.getObjValAs? (Array Json) "forms").toList.mapM Form.formOf
+  let receipts ← (← j.getObjValAs? (Array Json) "receipts").toList.mapM Form.receiptOf
+  let received ← pairsOf (← j.getObjVal? "received")
+  let sent ← pairsOf (← j.getObjVal? "sent")
+  return ⟨store, journal, forms, receipts, received, sent⟩
 
 def turnJson : Turn → Json
   | .base w => Json.mkObj [("turn", "base"), ("world", worldJson w)]
@@ -225,8 +298,21 @@ def turnJson : Turn → Json
   | .selected who page k i => Json.mkObj [("turn", "select"), ("as", optStrJson who), ("page", Json.str page),
       ("section", toJson k), ("candidate", toJson i)]
   | .recited who page => Json.mkObj [("turn", "recite"), ("as", optStrJson who), ("page", Json.str page)]
-  | .merged label other => Json.mkObj [("turn", "merge"), ("label", Json.str label), ("other", storeJson other)]
+  | .merged label other skip => Json.mkObj [("turn", "merge"), ("label", Json.str label), ("other", storeJson other),
+      ("skipLedger", toJson skip)]
+  | .resolved k right => Json.mkObj [("turn", "resolve"), ("conflict", toJson k), ("right", toJson right)]
   | .rows rs => Json.mkObj [("turn", "rows"), ("rows", Json.arr (rs.map rowJson).toArray)]
+  | .captured situation name g src dst amount field refs => Json.mkObj [("turn", "capture"),
+      ("situation", Json.str situation), ("name", Json.str name), ("grant", Form.grantJson g),
+      ("src", Json.str src), ("dst", Json.str dst), ("amount", toJson amount), ("field", Json.str field),
+      ("refs", strsJson refs)]
+  | .abstracted name value hole => Json.mkObj [("turn", "abstract"), ("name", Json.str name),
+      ("value", Json.str value), ("hole", Json.str hole)]
+  | .judged name digest hops a => Json.mkObj [("turn", "judge"), ("name", Json.str name),
+      ("digest", Json.str digest), ("hops", Json.arr (hops.map Form.grantJson).toArray),
+      ("fill", Form.assignmentJson a)]
+  | .filled name received sent => Json.mkObj [("turn", "fill"), ("name", Json.str name),
+      ("received", Json.str received), ("sent", Json.str sent)]
 
 def turnOf (j : Json) : Except String Turn := do
   match ← j.getObjValAs? String "turn" with
@@ -250,8 +336,34 @@ def turnOf (j : Json) : Except String Turn := do
     let k ← j.getObjValAs? Nat "section"
     return .selected who page k (← j.getObjValAs? Nat "candidate")
   | "recite" => return .recited (← optStrOf (← j.getObjVal? "as")) (← j.getObjValAs? String "page")
-  | "merge" => return .merged (← j.getObjValAs? String "label") (← storeOf (← j.getObjVal? "other"))
+  | "merge" =>
+    let label ← j.getObjValAs? String "label"
+    let other ← storeOf (← j.getObjVal? "other")
+    return .merged label other (← j.getObjValAs? Bool "skipLedger")
+  | "resolve" => return .resolved (← j.getObjValAs? Nat "conflict") (← j.getObjValAs? Bool "right")
   | "rows" => return .rows (← (← j.getObjValAs? (Array Json) "rows").toList.mapM rowOf)
+  | "capture" =>
+    let situation ← j.getObjValAs? String "situation"
+    let name ← j.getObjValAs? String "name"
+    let g ← Form.grantOf (← j.getObjVal? "grant")
+    let src ← j.getObjValAs? String "src"
+    let dst ← j.getObjValAs? String "dst"
+    let amount ← j.getObjValAs? Nat "amount"
+    let field ← j.getObjValAs? String "field"
+    return .captured situation name g src dst amount field (← strsOf (← j.getObjVal? "refs"))
+  | "abstract" =>
+    let name ← j.getObjValAs? String "name"
+    let value ← j.getObjValAs? String "value"
+    return .abstracted name value (← j.getObjValAs? String "hole")
+  | "judge" =>
+    let name ← j.getObjValAs? String "name"
+    let digest ← j.getObjValAs? String "digest"
+    let hops ← (← j.getObjValAs? (Array Json) "hops").toList.mapM Form.grantOf
+    return .judged name digest hops (← Form.assignmentOf (← j.getObjVal? "fill"))
+  | "fill" =>
+    let name ← j.getObjValAs? String "name"
+    let received ← j.getObjValAs? String "received"
+    return .filled name received (← j.getObjValAs? String "sent")
   | t => throw ("not a turn: " ++ t)
 
 def textBytes (s : String) : Bytes := s.toUTF8.toList
@@ -282,7 +394,12 @@ def Turn.kind : Turn → String
   | .selected .. => "select"
   | .recited .. => "recite"
   | .merged .. => "merge"
+  | .resolved .. => "resolve"
   | .rows .. => "rows"
+  | .captured .. => "capture"
+  | .abstracted .. => "abstract"
+  | .judged .. => "judge"
+  | .filled .. => "fill"
 
 /-! ## The deployed machine and its theorems -/
 

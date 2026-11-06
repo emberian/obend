@@ -171,7 +171,7 @@ theorem linearAt_skip {context : Context} {d j : Nat} (h : LinearAt (context.era
 
 /-- The substitution's data: `A` checks in the shrunk context, and either the binder at `d` is
 `linear` or `A` uses no `linear` hypothesis. -/
-structure Sub (a : Assumptions) (context : Context) (d : Nat) (σ : Nat → Term) (A : Term) (ua : Uses) : Prop where
+public structure Sub (a : Assumptions) (context : Context) (d : Nat) (σ : Nat → Term) (A : Term) (ua : Uses) : Prop where
   binding : ∃ b, context[d]? = some b ∧ (b.quantity = .linear ∨ linearFree (context.eraseIdx d) ua = true)
   subst : SubstAt σ d A
   arg : ∃ TA, PartialTyping a (context.eraseIdx d) A TA ua
@@ -261,7 +261,7 @@ theorem image_bound {a : Assumptions} {context : Context} {d : Nat} {σ : Nat �
       exact ind_eq (by unfold skipAt; constructor <;> intro h <;> split at * <;> omega)
 
 /-- **Counting through a substitution.** -/
-theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {u : Uses}
+public theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {u : Uses}
     (typed : PartialTyping a context t T u) :
     ∀ d σ A ua, Sub a context d σ A ua → ∀ j, LinearAt (context.eraseIdx d) j →
       (occurrences (context.eraseIdx d).length (t.substitute σ)).getD j 0 = Image d ua u j := by

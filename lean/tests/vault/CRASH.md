@@ -58,9 +58,9 @@ log: 7 records, 3983 bytes, each following the one before it from the genesis se
   record 7 (open): bytes 3249 to 3983
 last record: 7 (open), bytes 3249 to 3983
 checkpoint: the world after record 7
-world 4da43ce1128ea676: replayed from genesis
-world 4da43ce1128ea676: the checkpoint and the records after it
-world 4da43ce1128ea676: as record 7 commits to it
+world 30c543485a796b87: replayed from genesis
+world 30c543485a796b87: the checkpoint and the records after it
+world 30c543485a796b87: as record 7 commits to it
 one world
 ```
 
@@ -93,9 +93,9 @@ log: 8 records, 4502 bytes, each following the one before it from the genesis se
 last record: 8 (open), bytes 3983 to 4502
 torn tail: 100 bytes after record 8, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 8
-world b5326434b2cbd9c2: replayed from genesis
-world b5326434b2cbd9c2: the checkpoint and the records after it
-world b5326434b2cbd9c2: as record 8 commits to it
+world c10586f08cba41b3: replayed from genesis
+world c10586f08cba41b3: the checkpoint and the records after it
+world c10586f08cba41b3: as record 8 commits to it
 one world
 ```
 
@@ -132,9 +132,9 @@ wrote reports/TB-11.md
 log: 11 records, 6148 bytes, each following the one before it from the genesis sentinel
 last record: 11 (open), bytes 5424 to 6148
 checkpoint: the world after record 11
-world 5296fdb046dc9584: replayed from genesis
-world 5296fdb046dc9584: the checkpoint and the records after it
-world 5296fdb046dc9584: as record 11 commits to it
+world b5055f7b4289e044: replayed from genesis
+world b5055f7b4289e044: the checkpoint and the records after it
+world b5055f7b4289e044: as record 11 commits to it
 one world
 ```
 
@@ -150,9 +150,9 @@ receipt .obend/receipts/P-0003.json
 log: 14 records, 7898 bytes, each following the one before it from the genesis sentinel
 last record: 14 (open), bytes 7092 to 7898
 checkpoint: the world after record 14
-world 038a0276379fc232: replayed from genesis
-world 038a0276379fc232: the checkpoint and the records after it
-world 038a0276379fc232: as record 14 commits to it
+world 12cc447348db8da3: replayed from genesis
+world 12cc447348db8da3: the checkpoint and the records after it
+world 12cc447348db8da3: as record 14 commits to it
 one world
 ```
 
@@ -252,9 +252,9 @@ wrote reports/TB-11.md
 log: 20 records, 11425 bytes, each following the one before it from the genesis sentinel
 last record: 20 (open), bytes 10585 to 11425
 checkpoint: the world after record 20
-world 80c7ac454cdcf341: replayed from genesis
-world 80c7ac454cdcf341: the checkpoint and the records after it
-world 80c7ac454cdcf341: as record 20 commits to it
+world 0329e714cb13e55f: replayed from genesis
+world 0329e714cb13e55f: the checkpoint and the records after it
+world 0329e714cb13e55f: as record 20 commits to it
 one world
 ```
 
@@ -277,9 +277,9 @@ log: 2 records, 1208 bytes, each following the one before it from the genesis se
 last record: 2 (open), bytes 821 to 1208
 torn tail: 9757 bytes after record 2, dropped (link: it does not follow the record before it)
 checkpoint: dropped (it does not hold against the log); the world is replayed from genesis
-world cb112acfc0a27c4c: replayed from genesis
-world cb112acfc0a27c4c: the checkpoint and the records after it
-world cb112acfc0a27c4c: as record 2 commits to it
+world 2d9c173f134be93c: replayed from genesis
+world 2d9c173f134be93c: the checkpoint and the records after it
+world 2d9c173f134be93c: as record 2 commits to it
 one world
 ```
 
@@ -300,9 +300,9 @@ log: 2 records, 1208 bytes, each following the one before it from the genesis se
 last record: 2 (open), bytes 821 to 1208
 torn tail: 10217 bytes after record 2, dropped (digest: its turn is not the one its receipt names)
 checkpoint: the world after record 20
-world cb112acfc0a27c4c: replayed from genesis
-world 80c7ac454cdcf341: the checkpoint and the records after it
-world cb112acfc0a27c4c: as record 2 commits to it
+world 2d9c173f134be93c: replayed from genesis
+world 0329e714cb13e55f: the checkpoint and the records after it
+world 2d9c173f134be93c: as record 2 commits to it
 NOT ONE WORLD
 ```
 
@@ -315,12 +315,134 @@ cd books && obend log | tail -4 && rm .obend/checkpoint && obend log | tail -4 &
 ```
 
 ```text
-world 80c7ac454cdcf341: replayed from genesis
-world 80c7ac454cdcf341: the checkpoint and the records after it
-world 80c7ac454cdcf341: as record 20 commits to it
+world 0329e714cb13e55f: replayed from genesis
+world 0329e714cb13e55f: the checkpoint and the records after it
+world 0329e714cb13e55f: as record 20 commits to it
 one world
-world 80c7ac454cdcf341: replayed from genesis
-world 80c7ac454cdcf341: the checkpoint and the records after it
-world 80c7ac454cdcf341: as record 20 commits to it
+world 0329e714cb13e55f: replayed from genesis
+world 0329e714cb13e55f: the checkpoint and the records after it
+world 0329e714cb13e55f: as record 20 commits to it
+one world
+```
+
+## 7. Stopped in the middle of a merge's record
+
+A copy of the books goes away on a laptop and a note is added to the cash account there. `obend
+merge` here appends an open, the merge (the laptop's world as read, merged at the tip,
+`Obend.Vault.Merge`), and an open again; the process is stopped 400 bytes into the merge's record (its header, 136 bytes, and the start of
+the turn, which the block shows).
+
+```sh
+rm -rf laptop && cp -R books laptop && printf -- '---\ncode: 1000\n---\n# Cash\n\nThe till.\n' > laptop/accounts/Cash.md
+(cd laptop && obend open)
+cd books
+n=$(obend log | sed -n 's/^log: \([0-9]*\) records.*/\1/p')
+OBEND_TEST_TEAR=$((n + 2)):400:$PWD/../barrier nohup obend merge ../laptop > ../merge.out 2>&1 &
+echo $! > ../obend.pid
+for i in $(seq 200); do [ -e ../barrier ] && break; sleep 0.05; done
+kill "$(cat ../obend.pid)"; wait "$(cat ../obend.pid)" 2>/dev/null; rm ../barrier ../obend.pid ../merge.out
+echo "the torn turn: $(tail -c 264 .obend/log | head -c 16)…"; cat accounts/Cash.md; obend log | tail -7
+```
+
+```text
+accounts/Cash: v2 written
+the torn turn: {"label":"laptop…
+---
+code: 1000
+---
+# Cash
+last record: 21 (open), bytes 11425 to 11983
+torn tail: 400 bytes after record 21, dropped (torn: the bytes end inside a record)
+checkpoint: the world after record 21
+world 0329e714cb13e55f: replayed from genesis
+world 0329e714cb13e55f: the checkpoint and the records after it
+world 0329e714cb13e55f: as record 21 commits to it
+one world
+```
+
+Opening again drops the torn merge by name; the world is the replay of the records before it, the
+cash account as it was here and the books balanced. The merge then goes through.
+
+```sh
+cd books && obend report trial-balance 11 | sed -n '1p;$p' && obend log | tail -1
+obend merge ../laptop && cat accounts/Cash.md && obend log | tail -4
+```
+
+```text
+recovered: dropped a tail of 400 bytes after record 21 (torn: the bytes end inside a record)
+wrote reports/TB-11.md
+one world
+accounts/Cash: merged from laptop
+rendered accounts/Cash.md
+register: nothing new from laptop
+---
+code: 1000
+---
+# Cash
+
+The till.
+world 26df7d46c05736e3: replayed from genesis
+world 26df7d46c05736e3: the checkpoint and the records after it
+world 26df7d46c05736e3: as record 26 commits to it
+one world
+```
+
+## 8. Stopped in the middle of a form judge's record
+
+A vault of accounts with a form for Bob to pay Carol out of Alice's account (`Obend.Vault.Form`;
+`lean/tests/vault/FORMS.md` is its walkthrough). Bob fills it offline; `obend judge` here appends an
+open and the judgment (the one turn over every page the proposal writes, and the receipt it adds to
+the forms' chain); the process is stopped 200 bytes into the judgment's record (its header and the start of the turn).
+
+```sh
+mkdir -p alice/ledger && cd alice
+printf -- '---\nbalance: 100\n---\n# Alice\n' > ledger/alice.md
+printf -- '---\nbalance: 5\n---\n# Carol\n' > ledger/carol.md
+printf -- '# Budget\n\nThis month [[ledger/alice]] pays [[ledger/carol]] 30.\n' > Budget.md
+obend open > /dev/null
+obend capture Budget pay --for bob --grant 'ledger/*' --move ledger/alice ledger/carol 30 > /dev/null
+obend abstract pay 30 amount > /dev/null && obend form pay --out ../pay.form > /dev/null
+mkdir -p ../bob && cd ../bob && obend fill ../pay.form amount=40 --out ../pay.json > /dev/null
+cd ../alice
+n=$(obend log | sed -n 's/^log: \([0-9]*\) records.*/\1/p')
+OBEND_TEST_TEAR=$((n + 2)):200:$PWD/../barrier nohup obend judge ../pay.json > ../judge.out 2>&1 &
+echo $! > ../obend.pid
+for i in $(seq 200); do [ -e ../barrier ] && break; sleep 0.05; done
+kill "$(cat ../obend.pid)"; wait "$(cat ../obend.pid)" 2>/dev/null; rm ../barrier ../obend.pid ../judge.out
+echo "the torn turn: $(tail -c 64 .obend/log | head -c 16)…"; head -2 ledger/alice.md | tail -1; ls .obend/forms; obend log | tail -7
+```
+
+```text
+the torn turn: {"digest":"3036c…
+balance: 100
+pay.json
+last record: 5 (open), bytes 1273 to 1545
+torn tail: 200 bytes after record 5, dropped (torn: the bytes end inside a record)
+checkpoint: the world after record 5
+world bbf5e530ce67779e: replayed from genesis
+world bbf5e530ce67779e: the checkpoint and the records after it
+world bbf5e530ce67779e: as record 5 commits to it
+one world
+```
+
+Opening again drops the torn judgment by name: Alice's balance and the receipt chain are as they were.
+The proposal, judged again, lands as the first receipt of the chain.
+
+```sh
+cd alice && obend status ledger/alice | head -1 && obend judge ../pay.json && head -2 ledger/alice.md | tail -1
+obend log | tail -4
+```
+
+```text
+recovered: dropped a tail of 200 bytes after record 5 (torn: the bytes end inside a record)
+pay: landed as one turn over 2 pages by bob, receipt 298a0d1210aeee80 (1 in the chain)
+  ledger/alice: balance 100 → 60
+  ledger/carol: balance 5 → 45
+rendered ledger/alice.md
+rendered ledger/carol.md
+balance: 60
+world 23c92782dd070951: replayed from genesis
+world 23c92782dd070951: the checkpoint and the records after it
+world 23c92782dd070951: as record 8 commits to it
 one world
 ```

@@ -2,17 +2,13 @@ module
 /-
 # Obend.Hardware.VerilateRunner — `obend verilate`: Lean model vs Verilated emitted SystemVerilog
 
-Two checks, named for what they are:
-1. **Differential simulation** (`runVerilatePipeline`): emit an `RtlModule` with `emitModuleSV`, drive the
+One check, named for what it is:
+**Differential simulation** (`runVerilatePipeline`): emit an `RtlModule` with `emitModuleSV`, drive the
    Verilated module with `numVectors × numCycles` held-input cycles (vector words are small constants and
    a 16-bit LCG, `genVectorWord`), and compare every output against Lean's own `runModuleTrace` /
    `evalModuleOutputs` of the same module (and, for `.obend` compositions, against `MachineFast`). This is
    an emitter-correctness check; it is thin (64 cycles by default) and it is the thing to grow.
-2. **BEL-mapping miter** (`emitModuleLecSmt2`, `--lec`): a `QF_BV` miter between the word-level `RtlModule`
-   and `Synth.synthesizeModuleToBels` of the same module, where every "BEL" is still a 64-bit word
-   operation. `z3` `unsat` means the Lean-side mapping is consistent with the AST. It reads no
-   SystemVerilog and is **not** a logic-equivalence check of any netlist; the output file is named
-   `_belmiter.smt2` to say so. A real LEC needs Yosys `write_smt2` of the emitted `.sv` (not done here).
+The logic-equivalence check of the emitted `.sv` is `hardware/lec/lec.sh` with `Obend.Hardware.YosysLec`.
 -/
 public import Lean
 public import Std.Tactic.BVDecide
@@ -56,30 +52,6 @@ theorem evalFuelFast_eq_runBounded (fuel : Nat) (t : Term) (heapLimit stackLimit
 
 end Obend.Core.MachineFast
 
-namespace Obend.Hardware.Synth
-open Obend.Hardware.HDL
-set_option autoImplicit false
-
-/-- Technology-mapped gate/BEL netlist alias used by the Rung-2 `QF_BV` LEC pipeline. -/
-abbrev TechNetlist := BelNetlist
-
-/-- Gate/BEL primitive kind alias (`lut2`, `carry4`, `dsp48`, `fdre`). -/
-abbrev BelGate := BelKind
-
-/-- 2-input LUT BEL constructor (`LUT2`). -/
-def BelGate.lut2 (initMask : Nat) : BelKind := .lut2 initMask
-
-/-- Fast lookahead carry chain BEL constructor (`CARRY4` / `CARRY8`). -/
-def BelGate.carry4 : BelKind := .carry4
-
-/-- Hard DSP multiplier slice BEL constructor (`DSP48E2`). -/
-def BelGate.dsp48 : BelKind := .dspMul
-
-/-- Synchronous flip-flop BEL constructor (`FDRE`). -/
-def BelGate.fdre (rk : ResetKind) : BelKind := .ff rk
-
-end Obend.Hardware.Synth
-
 namespace Obend.Hardware.VerilateRunner
 open Lean (Json toJson)
 open Obend.Core.Term
@@ -97,16 +69,14 @@ set_option autoImplicit false
 
 /-! ## 1. Configuration, Trace Vectors & Verification Result Structures -/
 
-/-- Configuration for `obend verilate` and `obend hardware emit-lec-smt2`. -/
+/-- Configuration for `obend verilate`. -/
 structure VerilateConfig where
   inputPath   : String := ""
   topModule   : String := ""
   numVectors  : Nat := 16
   numCycles   : Nat := 4
   vcdOutPath  : Option String := none
-  smtOutPath  : Option String := none
   svOutPath   : Option String := none
-  runLec      : Bool := false
   workDir     : String := "hardware/sim/obj_dir"
   deriving DecidableEq, Repr
 
@@ -118,7 +88,7 @@ structure DifferentialVector where
   machineAgreed   : Bool
   deriving DecidableEq, Repr
 
-/-- Result summary of an `obend verilate` + `--lec` run. -/
+/-- Result summary of an `obend verilate` run. -/
 structure VerilateReport where
   moduleName        : String
   numWires          : Nat
@@ -130,10 +100,8 @@ structure VerilateReport where
   bitMismatches     : Nat
   machineFastAgreed : Bool
   traceAgreed       : Bool
-  lecVerdict        : Option String
   svPath            : String
   vcdPath           : Option String
-  smtPath           : Option String
   deriving DecidableEq, Repr
 
 /-! ## 2. Canonical Physical `.obend` Compositions for Built-In Modules -/
@@ -505,7 +473,7 @@ def emitVerilatorHarnessCpp
   "  return (mismatches == 0) ? 0 : 1;\n" ++
   "}\n"
 
-/-! ## 5. BEL-Mapping Consistency Miter (`emitModuleLecSmt2`): word-level `RtlModule` vs `Synth.synthesizeModuleToBels` -/
+/-! ## 5. SMT-LIB2 text of `RtlExpr` (`emitExprSmt2`; the LEC prints `YosysLec.smtOf`, and the tests compare the two) -/
 
 /-- Format a 64-bit `BitVec 64` constant as a 16-digit SMT-LIB2 hex literal `#x0123456789abcdef`. -/
 def bitVec64ToSmtHex (v : BitVec 64) : String :=
@@ -558,148 +526,6 @@ def emitExprSmt2 (wirePrefix : String) : RtlExpr → String
   | .bitNot a      => s!"(bvnot {emitExprSmt2 wirePrefix a})"
   | .resize op a   => emitWidthOpSmt2 op (emitExprSmt2 wirePrefix a)
 
-/-- Collect the exact `(dstName, RtlAluOp)` mapping corresponding to `Synth.synthesizeExprToBels`. -/
-def collectExprAluMap (dstName : String) : RtlExpr → List (String × RtlAluOp)
-  | .const _ | .inputPort _ | .wireRef _ | .regRead _ => []
-  | .bitNot a => collectExprAluMap (dstName ++ "_not_in") a
-  | .resize _ a => collectExprAluMap (dstName ++ "_route_in") a
-  | .mux c t f =>
-    collectExprAluMap (dstName ++ "_d0") f ++
-    collectExprAluMap (dstName ++ "_d1") t ++
-    collectExprAluMap (dstName ++ "_sel") c
-  | .alu op a b =>
-    collectExprAluMap (dstName ++ "_lhs") a ++
-    collectExprAluMap (dstName ++ "_rhs") b ++
-    [(dstName, op)]
-
-/-- Kernel-reducible decimal digit formatting helper. -/
-def natToDecCharsAux : Nat → Nat → List Char → List Char
-  | 0,     _, acc => acc
-  | _ + 1, 0, acc => acc
-  | k + 1, n, acc =>
-    let d := Char.ofNat (48 + (n % 10))
-    natToDecCharsAux k (n / 10) (d :: acc)
-
-/-- Kernel-reducible decimal `Nat → String` conversion (avoids `@[extern] Nat.reprFast`). -/
-def natToStrPure (n : Nat) : String :=
-  if n == 0 then "0" else String.ofList (natToDecCharsAux (n + 1) n [])
-
-/-- Kernel-reducible string lookup avoiding `@[extern] String.decEq` when needed in `decide +kernel`. -/
-def lookupAluOp (key : String) : List (String × RtlAluOp) → Option RtlAluOp
-  | [] => none
-  | (k, v) :: rest => if k.toList == key.toList then some v else lookupAluOp key rest
-
-/-- Collect the complete `(dstName, RtlAluOp)` table for all wires, registers, and outputs of `m`. -/
-def collectModuleAluMap (m : RtlModule) : List (String × RtlAluOp) :=
-  m.wires.flatMap (fun w => collectExprAluMap ("w_" ++ natToStrPure w.wireIdx) w.expr) ++
-  m.regs.flatMap (fun r => collectExprAluMap (r.name ++ "_din") r.nextExpr) ++
-  m.outputs.flatMap (fun o => collectExprAluMap o.name o.expr)
-
-/-- Render a synthesized `BelCell` from `Synth.TechNetlist` as a gate/BEL-level SMT-LIB2 `QF_BV` definition.
-    Uses `LUT1`/`LUT2`/`LUT3`, `CARRY4` two's-complement adder/subtractor/comparator chains,
-    `DSP48` multipliers (64-bit and `Q32.32` fixed-point), and `FDRE` flip-flops. -/
-def emitBelCellSmt2 (aluMap : List (String × RtlAluOp)) (c : BelCell) : String :=
-  let dst := s!"bel_{c.dstName}"
-  let in0 := match c.inputs[0]? with
-    | some n => s!"bel_{n}"
-    | none   => "#x0000000000000000"
-  let in1 := match c.inputs[1]? with
-    | some n => s!"bel_{n}"
-    | none   => "#x0000000000000000"
-  let in2 := match c.inputs[2]? with
-    | some n => s!"bel_{n}"
-    | none   => "#x0000000000000000"
-  let op? : Option RtlAluOp := lookupAluOp c.dstName aluMap
-  let body :=
-    match c.kind with
-    | .constBel v => bitVec64ToSmtHex v
-    | .portIn idx => s!"in_{idx}"
-    | .wireTap idx => s!"bel_w_{idx}"
-    | .lut1 mask =>
-      if mask == 0x2 then
-        -- `.regRead idx` buffer BEL (`inputs = [s!"r_{idx}"]`)
-        c.inputs.headD "#x0000000000000000"
-      else if mask == 0x1 then
-        if op? == some RtlAluOp.eq then
-          s!"(ite (= {in0} #x0000000000000000) #x0000000000000001 #x0000000000000000)"
-        else
-          s!"(bvnot {in0})"
-      else
-        in0
-    | .lut2 mask =>
-      if mask == 0x8 then
-        match op? with
-        | some RtlAluOp.shl  => s!"(bvshl {in0} (bvand {in1} #x000000000000003f))"
-        | some RtlAluOp.lshr => s!"(bvlshr {in0} (bvand {in1} #x000000000000003f))"
-        | some RtlAluOp.ashr => s!"(bvashr {in0} (bvand {in1} #x000000000000003f))"
-        | _                  => s!"(bvand {in0} {in1})"
-      else if mask == 0xE then s!"(bvor {in0} {in1})"
-      else s!"(bvxor {in0} {in1})"
-    | .lut3 _ =>
-      s!"(ite (distinct {in2} #x0000000000000000) {in1} {in0})"
-    | .carry4 =>
-      let raw1 := c.inputs.getD 1 ""
-      if c.inputs.length == 2 then
-        if op? == some RtlAluOp.slt then
-          s!"(ite (bvslt {in0} (bvnot {in1})) #x0000000000000001 #x0000000000000000)"
-        else
-          s!"(ite (bvult {in0} (bvnot {in1})) #x0000000000000001 #x0000000000000000)"
-      else if op? == some RtlAluOp.sub || raw1.endsWith "_binv" then
-        -- Two's complement CARRY4/CARRY8 subtractor: a + ~b + 1 (proved in Synth.carrySubBel_eq_fullSubStageSpec)
-        s!"(bvadd (bvadd {in0} {in1}) #x0000000000000001)"
-      else
-        -- Carry-lookahead adder from propagate (in2 = a ^ b) and generate (a & b): (a ^ b) + 2*(a & b) == a + b
-        s!"(bvadd {in2} (bvshl (bvand {in0} {in1}) #x0000000000000001))"
-    | .dspMul =>
-      if op? == some RtlAluOp.qmul32 then
-        s!"((_ extract 95 32) (bvmul ((_ sign_extend 64) {in0}) ((_ sign_extend 64) {in1})))"
-      else
-        s!"(bvmul {in0} {in1})"
-    | .ff _ =>
-      in0
-    | .route op => emitWidthOpSmt2 op in0
-  s!"(define-fun {dst} () (_ BitVec 64) {body})"
-
-/-- Emit an SMT-LIB2 `QF_BV` miter between the word-level `RtlModule` and `Synth.synthesizeModuleToBels m`.
-    Both sides are 64-bit word functions generated from the same AST; `unsat` under `z3 -smt2` says the
-    BEL mapping tables (`emitBelCellSmt2`) agree with `evalAluOp`. It does not read the emitted
-    SystemVerilog and is not an LEC of a synthesized netlist. -/
-def emitModuleLecSmt2 (m : RtlModule) : String :=
-  let nl : TechNetlist := synthesizeModuleToBels m
-  let aluMap := collectModuleAluMap m
-  let numRegDecls := m.regs.foldl (fun acc r => max acc (r.regIdx + 1)) m.regs.length
-  let inDecls := (List.range (max m.inputNames.length 1)).map fun i =>
-    s!"(declare-const in_{i} (_ BitVec 64))"
-  let regDecls := (List.range numRegDecls).map fun i =>
-    s!"(declare-const r_{i} (_ BitVec 64))"
-  let specWires := m.wires.map fun w =>
-    s!"(define-fun spec_w_{w.wireIdx} () (_ BitVec 64) {emitExprSmt2 "spec_" w.expr})"
-  let specOuts := m.outputs.map fun o =>
-    s!"(define-fun spec_out_{o.name} () (_ BitVec 64) {emitExprSmt2 "spec_" o.expr})"
-  let specRegs := m.regs.map fun r =>
-    s!"(define-fun spec_reg_{r.name} () (_ BitVec 64) {emitExprSmt2 "spec_" r.nextExpr})"
-  let belDefs := nl.cells.map (emitBelCellSmt2 aluMap)
-  let outDiffs := m.outputs.map fun o =>
-    s!"(distinct spec_out_{o.name} bel_{o.name})"
-  let regDiffs := m.regs.map fun r =>
-    s!"(distinct spec_reg_{r.name} bel_{r.name})"
-  let allDiffs := outDiffs ++ regDiffs
-  let miterAssert :=
-    if allDiffs.isEmpty then
-      "(assert false)"
-    else
-      "(assert (or " ++ String.intercalate " " allDiffs ++ "))"
-  "; Auto-generated by Obend.Hardware.VerilateRunner.emitModuleLecSmt2: BEL-mapping consistency miter\n; (word-level RtlModule vs synthesizeModuleToBels of the same AST; NOT an LEC of the emitted SystemVerilog)\n" ++
-  s!"; Module: {m.name} (wires={m.wires.length}, regs={m.regs.length}, bels={nl.cells.length})\n" ++
-  "(set-logic QF_BV)\n\n" ++
-  String.intercalate "\n" inDecls ++ "\n" ++
-  (if regDecls.isEmpty then "" else String.intercalate "\n" regDecls ++ "\n") ++ "\n" ++
-  "; 1. Word-Level RtlModule Specification\n" ++
-  String.intercalate "\n" (specWires ++ specOuts ++ specRegs) ++ "\n\n" ++
-  "; 2. Synthesized TechNetlist (BelGate.lut2 / carry4 / dsp48 / fdre) Implementation\n" ++
-  String.intercalate "\n" belDefs ++ "\n\n" ++
-  "; 3. Miter Assertion (unsat <=> 0 counterexamples across all 2^(64*k) states)\n" ++
-  miterAssert ++ "\n(check-sat)\n"
 
 /-- Multi-input sequential `RtlModule` exercising `.ashr`, `.slt`, `.qmul32`, `.shl`, `.lshr`,
     `.bitNot (.alu .bitXor ...)`, register `"r_0"`, and output `"in_ready"`. -/
@@ -778,7 +604,7 @@ theorem belMiter_unsat_iff_equiv (specOut implOut : BitVec 64) :
 deleted; the single emitter is `Obend.Lower.SiliconElabFabric.emitSiliconElabFabricSV`, reached through
 `obend hardware emit-silicon-sv` (`Obend.Hardware.Cli`). -/
 
-/-! ## 7. External `Verilator` & `Z3` Execution Pipeline (`runVerilatePipeline`, `runLecPipeline`) -/
+/-! ## 7. External `Verilator` Execution Pipeline (`runVerilatePipeline`) -/
 
 /-- Locate an executable binary by checking preferred paths first, then falling back to `name`. -/
 def resolveToolBin (preferred : String) (fallbackName : String) : IO String := do
@@ -985,22 +811,7 @@ def parseMismatchCount (stdout : String) : Option Nat :=
     let digits := String.ofList (rest.toList.takeWhile Char.isDigit)
     digits.toNat?
 
-/-- Run the BEL-mapping miter through `z3` (`--lec`); see `emitModuleLecSmt2` for what `unsat` means. -/
-def runLecOnModule (m : RtlModule) (smtOutPath : String) : IO (Except String String) := do
-  let smtText := emitModuleLecSmt2 m
-  if let some parentDir := (System.FilePath.mk smtOutPath).parent then
-    IO.FS.createDirAll parentDir
-  IO.FS.writeFile smtOutPath smtText
-  let z3Bin ← resolveToolBin "/opt/homebrew/bin/z3" "z3"
-  let out ← IO.Process.output { cmd := z3Bin, args := #["-smt2", smtOutPath] }
-  let verdict := out.stdout.trimAscii.toString
-  if out.exitCode == 0 && verdict == "unsat" then
-    return .ok "unsat"
-  else
-    return .error s!"z3 LEC failed (exit={out.exitCode}, stdout={verdict}, stderr={out.stderr.trimAscii.toString})"
-
-/-- Run Rung-1 (`Verilator` differential simulation with `Verilated::randReset(2)` + `.vcd`) and
-    optional Rung-2 (`--lec` `Z3` `QF_BV` equivalence checking). -/
+/-- Run the `Verilator` differential simulation (`Verilated::randReset(2)`, optional `.vcd`). -/
 def runVerilatePipeline (cfg : VerilateConfig) : IO (Except String VerilateReport) := do
   match ← resolveTargetRtlModule cfg with
   | .error err => return .error err
@@ -1039,14 +850,6 @@ def runVerilatePipeline (cfg : VerilateConfig) : IO (Except String VerilateRepor
     if simOut.exitCode != 0 || mismatches? != some 0 then
       return .error s!"verilator simulation mismatch (mismatches={mismatches?}):\n{simOut.stdout}\n{simOut.stderr}"
     let nl := synthesizeModuleToBels m
-    let (lecVerdict?, smtPath?) ←
-      if cfg.runLec then
-        let smtPath := cfg.smtOutPath.getD s!"{cfg.workDir}/{modName}_belmiter.smt2"
-        match ← runLecOnModule m smtPath with
-        | .ok v => pure (some v, some smtPath)
-        | .error e => return .error e
-      else
-        pure (none, cfg.smtOutPath)
     return .ok
       { moduleName        := m.name
       , numWires          := m.wires.length
@@ -1058,12 +861,11 @@ def runVerilatePipeline (cfg : VerilateConfig) : IO (Except String VerilateRepor
       , bitMismatches     := mismatches?.getD 0
       , machineFastAgreed := machineAllOk
       , traceAgreed       := mismatches? == some 0
-      , lecVerdict        := lecVerdict?
       , svPath            := svPath
       , vcdPath           := cfg.vcdOutPath
-      , smtPath           := smtPath? }
+    }
 
-/-! ## 8. CLI Flag Parsers & Command Entrypoints (`cmdVerilate`, `cmdEmitLecSmt2`, `cmdEmitSiliconSv`, `cmdEmitSv`) -/
+/-! ## 8. CLI Flag Parsers & Command Entrypoints (`cmdVerilate`, `cmdEmitSiliconSv`, `cmdEmitSv`) -/
 
 /-- Extract a `--flag <value>` pair from `args`, returning `(Option String, remainingArgs)`. -/
 def extractCliFlag (flag : String) : List String → Option String × List String
@@ -1111,70 +913,30 @@ def cmdEmitSv (args : List String) : IO UInt32 := do
           IO.print svText
           return 0
 
-/-- Emit the Rung-2 `Synth.TechNetlist` SMT-LIB2 `QF_BV` equivalence miter (`obend hardware emit-lec-smt2`). -/
-def cmdEmitLecSmt2 (args : List String) : IO UInt32 := do
-  let (topOpt, args1) := extractCliFlag "--top" args
-  let (modOpt, args2) := extractCliFlag "--module" args1
-  let (outOpt, args3) := extractCliFlag "--out" args2
-  let runZ3 := args3.contains "--verify" || args3.contains "--lec"
-  let posArgs := args3.filter (fun a => !a.startsWith "--")
-  let cfg : VerilateConfig :=
-    { inputPath  := posArgs.headD ""
-      topModule  := topOpt.getD (modOpt.getD "")
-      smtOutPath := outOpt
-      runLec     := runZ3 }
-  match ← resolveTargetRtlModule cfg with
-  | .error err =>
-    IO.eprintln s!"refused (emit-lec-smt2): {err}"
-    return 3
-  | .ok (_, _, m) =>
-    let smtText := emitModuleLecSmt2 m
-    if let some outPath := outOpt then
-      if runZ3 then
-        match ← runLecOnModule m outPath with
-        | .ok verdict =>
-          IO.println s!"verified LEC ({m.name}, z3={verdict}, smt2={outPath})"
-          return 0
-        | .error err =>
-          IO.eprintln s!"refused (emit-lec-smt2): {err}"
-          return 3
-      else
-        IO.FS.writeFile outPath smtText
-        IO.println s!"wrote QF_BV LEC miter for {m.name} to {outPath}"
-        return 0
-    else
-      IO.print smtText
-      return 0
-
-/-- Run `obend verilate <input.obend> [--top <name>] [--vectors N] [--cycles C] [--vcd <out.vcd>] [--lec]`. -/
+/-- Run `obend verilate <input.obend> [--top <name>] [--vectors N] [--cycles C] [--vcd <out.vcd>] [--out-sv FILE] [--work-dir DIR]`. -/
 def cmdVerilate (args : List String) : IO UInt32 := do
   let (topOpt, args1) := extractCliFlag "--top" args
   let (vecOpt, args2) := extractCliFlag "--vectors" args1
   let (cycOpt, args3) := extractCliFlag "--cycles" args2
   let (vcdOpt, args4) := extractCliFlag "--vcd" args3
-  let (smtOpt, args5) := extractCliFlag "--out-smt2" args4
-  let (svOpt, args6)  := extractCliFlag "--out-sv" args5
-  let (dirOpt, args7) := extractCliFlag "--work-dir" args6
-  let runLec := args7.contains "--lec"
-  let posArgs := args7.filter (fun a => !a.startsWith "--")
+  let (svOpt, args5)  := extractCliFlag "--out-sv" args4
+  let (dirOpt, args6) := extractCliFlag "--work-dir" args5
+  let posArgs := args6.filter (fun a => !a.startsWith "--")
   let cfg : VerilateConfig :=
     { inputPath  := posArgs.headD ""
       topModule  := topOpt.getD ""
       numVectors := (vecOpt.bind String.toNat?).getD 16
       numCycles  := (cycOpt.bind String.toNat?).getD 4
       vcdOutPath := vcdOpt
-      smtOutPath := smtOpt
       svOutPath  := svOpt
-      runLec     := runLec
       workDir    := dirOpt.getD "hardware/sim/obj_dir" }
   match ← runVerilatePipeline cfg with
   | .error err =>
     IO.eprintln s!"refused (verilate): {err}"
     return 3
   | .ok rep =>
-    let lecTag := match rep.lecVerdict with | some v => s!", lec={v}" | none => ""
     let vcdTag := match rep.vcdPath with | some p => s!", vcd={p}" | none => ""
-    IO.println s!"verified verilate ({rep.moduleName}): wires={rep.numWires}, regs={rep.numRegs}, bels={rep.numBels}, vectors={rep.vectorsChecked}, cycles={rep.totalCycles}, mismatches={rep.bitMismatches}, machineFastAgreed={rep.machineFastAgreed}{lecTag}{vcdTag}, verdict=ok"
+    IO.println s!"verified verilate ({rep.moduleName}): wires={rep.numWires}, regs={rep.numRegs}, bels={rep.numBels}, vectors={rep.vectorsChecked}, cycles={rep.totalCycles}, mismatches={rep.bitMismatches}, machineFastAgreed={rep.machineFastAgreed}{vcdTag}, verdict=ok"
     return 0
 
 end Obend.Hardware.VerilateRunner

@@ -18,6 +18,9 @@ byte-for-byte with the committed file: a `.sv` that is not reproducible from Lea
 a file this tool does not know is hand-written and says so in its header.
 -/
 import Obend.Hardware.HDL
+import Obend.Hardware.Mac8
+import Obend.Hardware.Fabulous.LUT4ABSwitchMatrix
+import Obend.Hardware.Fabulous.WIOSwitchMatrix
 import Obend.Hardware.Synth
 import Obend.Hardware.VerilateRunner
 import Obend.Hardware.Cli
@@ -61,23 +64,6 @@ def goldenSiliconKernel : String :=
   s!"tooth_mutant_refused={if t.toothMutantRefused then 1 else 0}\n" ++
   s!"sorry_refused={if t.sorryRefused then 1 else 0}\n"
 
-/-- The first physical target: an 8x8+16 multiply-accumulate with port widths, for the iCEstick
-(`hardware/ice40/`). Same shape as `Synth.goldenRetimedMacRtl`, with every signal at its width:
-the 16-bit product and addend registers, and the sum truncated to the 16-bit output register. -/
-def iceStickMac8 : RtlModule :=
-  { name       := "obend_ice40_mac8"
-    inputNames := ["a", "b", "c"]
-    inputWidths := [8, 8, 16]
-    wires      :=
-      [ { wireIdx := 0, name := "w_mul", width := 16, expr := .alu .mul (.inputPort 0) (.inputPort 1) }
-      , { wireIdx := 1, name := "w_add", width := 16,
-          expr := .resize (.trunc 16) (.alu .add (.regRead 0) (.regRead 1)) } ]
-    regs       :=
-      [ { regIdx := 0, name := "mulReg", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 16, nextExpr := .wireRef 0 }
-      , { regIdx := 1, name := "cReg",   domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 16, nextExpr := .inputPort 2 }
-      , { regIdx := 2, name := "outReg", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 16, nextExpr := .wireRef 1 } ]
-    outputs    := [ { name := "mac_out", expr := .regRead 2, width := 16 } ] }
-
 /-- `check-risc`: the gates on both RISC cores and the recorded end state of the firmware run
 (`Obend.Apps.ObendRisc.riscFirmwareExpected*`). -/
 def checkRisc : Except String String :=
@@ -115,7 +101,11 @@ def targets : List (String × String) :=
   , ("tcad", "hardware/sim/cleanroom_tcad_stack.sv")
   , ("stator", "hardware/sim/lc_drives_userspace_stator.sv")
   , ("mill", "hardware/sim/cnc_5axis_userspace_mill.sv")
-  , ("width-probe", "hardware/sim/obend_width_probe.sv") ]
+  , ("width-probe", "hardware/sim/obend_width_probe.sv")
+  , ("lut4ab-sm", "hardware/fabulous/tile/LUT4AB_switch_matrix_lec.sv")
+  , ("wio-sm", "hardware/fabulous/tile/W_IO_switch_matrix_lec.sv")
+  , ("lut4c", "hardware/fabulous/tile/LUT4c_frame_config_dffesr.sv")
+  , ("mux8lut", "hardware/fabulous/tile/MUX8LUT_frame_config_mux.sv") ]
 
 /-- The targets that are one `RtlModule` printed by `emitModuleSV`: the qualified name of the Lean
 definition and the module. `render` prints these with `emitWithHeader`; `--lec` prints their LEC half. -/
@@ -125,19 +115,25 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
   | "fidget"  => some (.ok ("Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule", Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule))
   | "quantum" => some (.ok ("Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule", Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule))
   | "mac2"    => some (.ok ("Obend.Hardware.Synth.goldenRetimedMacRtl", Obend.Hardware.Synth.goldenRetimedMacRtl))
-  | "ice40-mac8" => some (.ok ("EmitSv.iceStickMac8 (lean/tools/emitsv/EmitSv.lean)", iceStickMac8))
+  | "ice40-mac8" => some (.ok ("Obend.Hardware.iceStickMac8 (lean/Obend/Hardware/Mac8.lean)", Obend.Hardware.iceStickMac8))
   | "tcad"    => some (builtInModule "cleanroom_tcad_stack")
   | "stator"  => some (builtInModule "lc_drives_userspace_stator")
   | "mill"    => some (builtInModule "cnc_5axis_userspace_mill")
   | "drex"    => some (.ok ("Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule", Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule))
   | "width-probe" => some (.ok ("Obend.Hardware.VerilateRunner.goldenWidthProbeRtl", Obend.Hardware.VerilateRunner.goldenWidthProbeRtl))
+  | "lut4ab-sm" => some (.ok ("Obend.Hardware.Fabulous.smModule lut4abSwitchMatrix", Obend.Hardware.Fabulous.smModule Obend.Hardware.Fabulous.lut4abSwitchMatrix))
+  | "wio-sm" => some (.ok ("Obend.Hardware.Fabulous.smModule wioSwitchMatrix", Obend.Hardware.Fabulous.smModule Obend.Hardware.Fabulous.wioSwitchMatrix))
+  | "lut4c"   => some (.ok ("Obend.Hardware.Fabulous.lut4cModule", Obend.Hardware.Fabulous.lut4cModule))
+  | "mux8lut" => some (.ok ("Obend.Hardware.Fabulous.mux8lutModule", Obend.Hardware.Fabulous.mux8lutModule))
   | _ => none
 
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
 def moduleTargetNames : List String :=
-  ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe"]
+  ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"]
 
-/-- `--lec`: the Lean half of the LEC of a module target, behind the same emission gate as its `.sv`. -/
+/-- `--lec`: the Lean half of the LEC of a module target, behind the same emission gate as its `.sv`
+(`checkRtlModuleW` includes `checkWidths`, which implies the `moduleFaithful` hypothesis of
+`YosysLec.lecScript_holds_iff`: `moduleFaithful_of_checkWidths`). -/
 def renderLec (target : String) : Except String String :=
   match moduleTarget target with
   | none => .error s!"--lec: {target} is not an RtlModule target (`obend-emit-sv list` marks those)"
@@ -145,8 +141,6 @@ def renderLec (target : String) : Except String String :=
   | some (.ok (qualified, m)) =>
     if !checkRtlModuleW m then
       .error s!"{qualified} fails checkRtlModuleW (DAG/CDC/width/two-flop); not emitted"
-    else if !Obend.Hardware.YosysLec.moduleFaithful m then
-      .error s!"{qualified} has a width operator outside what YosysLec.lecScript_holds_iff covers; not emitted"
     else
       .ok (s!"; Generated by obend-emit-sv {target} --lec from {qualified}\n" ++
            Obend.Hardware.YosysLec.emitYosysLecSmt2 m)

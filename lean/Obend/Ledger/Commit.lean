@@ -21,6 +21,9 @@ open Obend.Spec.Law (LawExpr)
 
 def registerKind : String := "register/_kind"
 
+/-- A page the ledger writes and a merge leaves to the stitch: a posting page. -/
+def ledgerOwned (name : String) : Bool := name.startsWith "register/" && name != registerKind
+
 /-- The register a journal holds: its rows accumulated (each was judged when it was committed). -/
 def stateOf (rows : List Row) : Nat × Reg :=
   rows.foldl (fun (a : Nat × Reg) r => match r with

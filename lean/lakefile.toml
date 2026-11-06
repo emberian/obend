@@ -42,7 +42,7 @@ globs = ["Obend.Teeth.+", "Obend.Apps.+", "Obend.Stdlib", "Obend.Census"]
 [[lean_lib]]
 name = "Tests"
 srcDir = "tests"
-globs = ["metasystem.+", "silicon_elab.+", "rehydration.+"]
+globs = ["metasystem.+", "silicon_elab.+", "rehydration.+", "vault.+"]
 
 # Lane B (2026-10-30): the declaration-level obligation journal. `Journal.Export` walks the built
 # environment; `Journal.Journal` reads two exports as slots. The tool does not `needs` the `Obend`

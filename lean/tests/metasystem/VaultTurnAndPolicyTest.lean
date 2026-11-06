@@ -369,7 +369,6 @@ def sampleGate0 : QuorumBoundFinalityGate :=
 #print axioms checkContractCertGoalBound_refuses_swapped_goal
 #print axioms ContractGoal.ofTerm?_toTerm
 #print axioms turn_conserves_total_state_balance
-#print axioms no_toctou_with_witnesses
 #print axioms tampered_metadata_opening_refused
 #print axioms selective_disclosure_redaction_confinement
 #print axioms tlsnTranscriptFormat

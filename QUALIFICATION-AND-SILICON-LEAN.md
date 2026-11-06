@@ -93,11 +93,21 @@ This document is the authoritative, unscoped engineering specification for **Wav
   narrow signals, every width operator and a two-flop crossing.
   This checks the emitter against Lean's own semantics; it is thin and is the thing to grow (wider vectors, more cycles,
   random reset).
-- **`--lec` is a BEL-mapping consistency miter, not an LEC.** `emitModuleLecSmt2` compares the `RtlModule` with
-  `Synth.synthesizeModuleToBels` of the same AST; every "BEL" is still a 64-bit word operation and no SystemVerilog is
-  read. Output files are named `*_belmiter.smt2`. A logic-equivalence check of the emitted `.sv` would be Yosys
-  `write_smt2` against the Lean-emitted spec; that is not done anywhere in this tree, and the hand-written
-  `apps/*/verilator/*_lec.smt2` files are property sheets, labelled as such in their first lines.
+- **LEC (`hardware/lec/lec.sh`, `Obend.Hardware.YosysLec`).** Every `verify_*.sh` whose `.sv` comes from
+  an `RtlModule` (risc, zk, fidget, quantum, drex, and in `hardware/sim/` mac2, tcad, stator, mill and the width
+  probe) proves the emitted `.sv` equal to Lean's model of the same module: Yosys reads the `.sv` (frontend and
+  `proc`, `write_smt2`), `obend-emit-sv <target> --lec` writes the Lean half, and z3 must answer `unsat`; a planted
+  one-bit mutation of a copy must answer `sat` with a counterexample. The Lean half is the print of one Lean
+  value, `lecScript m`, and `lecScript_holds_iff` proves what z3 is asked: some output Yosys reads in state `s`, or
+  register it reads in `s1`, differs at its width from Lean's step on the inputs and registers it reads in `s`.
+  So `unsat` is agreement on every input and register state (sequential equivalence with registers matched by
+  name) and `sat` is a real disagreement. For one clock domain with distinct register indices,
+  `lecScript_unsat_of_step` states it against `evalModuleOutputsW` and `stepModuleRegs`. The clocking checked is
+  Yosys's single global clock with each register reset by its own domain's `rst_<d>`; for several domains that is
+  all clocks rising together, not the edge-by-edge `stepModuleDomain`. Trusted: Yosys's SystemVerilog frontend and
+  `write_smt2`, z3, and the two print functions (`LecScript.print`, `SmtBV.print`) writing SMT-LIB syntax, which
+  `lean/tests/silicon_elab/YosysLecTest.lean` pins against committed files. Where it terminates, EQY also proves
+  the `.sv` equal to its own gate-level netlist (tcad, stator, mill, width probe, drex); see `hardware/README.md`.
 
 ---
 
@@ -177,13 +187,35 @@ defaults in the pipeline). No layout, deck, extraction or tool run of any design
 they quantify over. `obend tapeout` therefore writes no signoff receipt (it refuses `--out-receipt`), and nothing in
 this document should be read as a claim about GF180MCU, Sky130 or SG13G2 signoff.
 
+### 3.3 An eFPGA bitstream read back and checked against Lean (`hardware/fabulous/`, 2026-11-05)
+The one bitstream in this tree that a theorem is about. `obend_ice40_mac8` is built by FABulous's own flow on the
+fabric of `hardware/fabulous/fabric.csv` (25 × (`W_IO` + 3 `LUT4AB`)). `Obend.Hardware.Fabulous.Bitstream` decodes the
+`.bin` with FABulous's bitstream specification and routing graph and follows the configuration back to a `Net`
+(LUT4 gates, flops with enable and set/reset, output pins); `obend fabric check` refuses a bitstream that does not
+read back to the committed `mac8Net`, and with `--golden` names every differing bit it reads. For that net,
+`Obend.Hardware.Fabulous.mac8_fabric_realizes_module` proves agreement with `iceStickMac8` on every cycle of every
+in-width trace, and `mac8_fabric_realizes_module_from_reset` from any power-up flop state after one reset cycle.
+Trusted: FABulous's metadata files, the decoder as compiled code (it is not proved to invert `bit_gen`; on this
+design it agrees with nextpnr's FASM bit for bit), and `bv_decide`'s compiled LRAT check. FABulous's simulation of its
+generated fabric RTL, configured through the self-write port with the same bitstream, agrees with the Lean model
+cycle by cycle (`verify_fabric.sh`). The carry chain, `MUX8LUT`, block RAM, DSP and register-file tiles are not modelled.
+The LUT4AB tile is modelled from FABulous's generated RTL (`Obend.Hardware.Fabulous.Tile`) and LEC'd against it by
+Yosys and z3 (`hardware/fabulous/lec_tile.sh`); every routing pip the decoder reads agrees with that model
+(`obend fabric tile-agree`, `pip_sound`). `smModule_eval_eq_SmPrim_eval` joins the LEC'd switch-matrix module to the
+data-level model, and `readback_sound` composes the tiles: the grid's semantics is a consistency relation over every
+wire (switch matrices through `smModule`, LUT4 cells through `lut4cModule`), the extraction emits a certificate of
+every hop it took (`Mac8Cert.lean`, kernel-checked by `mac8Cert_check`), and `mac8_fabric_tiles_realize_module` states
+the MAC result for every consistent run of a fabric with those tile models, wires and configuration bits, the decoder
+no longer in the statement. Taken as given: the tiles' top-level wiring (as FABulous's fixed pips), the configuration
+latches' index-to-frame map, the IO pad as pass-through, and that a consistent assignment exists.
+
 ---
 
 ## 4. North Star 4: All 8 Flagship Userspace Applications (`apps/`)
 
 | # | Application Directory & Lean Module | Full-Stack Architecture & Qualification Criteria |
 | :--- | :--- | :--- |
-| **1** | **`apps/obend-risc/`**<br>(`lean/Obend/Apps/ObendRisc.lean`) | **3-Layer Open-Recursive Sequential RISC Softcore CPU**:<br>• `BaseRiscCore.obend` $\gg$ `PrivilegeCsrOverride.obend` $\gg$ `CustomSimdZkExt.obend`.<br>• **In-core instruction bit-slice decoding** (`opcode`, `rd`, `funct3`, `rs1`, `rs2`, sign-extended `imm`) using `.obend` bitwise/shift ops (`&`, `|`, `^`, `<<`, `>>`, `>>>`, `slt`).<br>• **True `always_ff` architectural registers** (`pc`, `mstatus`, `mepc`, `mcause`, `x1..x15`) + `imem`/`dmem` bus outputs.<br>• Proves `risc_base_opcode_non_interference` via `by weave` + SMT2 LEC; boots `firmware/test_prog.hex` (Fibonacci + CSR trap/mret + SIMD/ZK MAC) in `Verilator` with `.vcd` waveform. |
+| **1** | **`apps/obend-risc/`**<br>(`lean/Obend/Apps/ObendRisc.lean`) | **3-Layer Open-Recursive Sequential RISC Softcore CPU**:<br>• `BaseRiscCore.obend` $\gg$ `PrivilegeCsrOverride.obend` $\gg$ `CustomSimdZkExt.obend`.<br>• **In-core instruction bit-slice decoding** (`opcode`, `rd`, `funct3`, `rs1`, `rs2`, sign-extended `imm`) using `.obend` bitwise/shift ops (`&`, `|`, `^`, `<<`, `>>`, `>>>`, `slt`).<br>• **True `always_ff` architectural registers** (`pc`, `mstatus`, `mepc`, `mcause`, `x1..x15`) + `imem`/`dmem` bus outputs.<br>• Proves `risc_base_opcode_non_interference` in Lean; the emitted `.sv` is checked against `obendRiscCpuRtlModule` by the LEC (`hardware/lec/lec.sh`); boots `firmware/test_prog.hex` (Fibonacci + CSR trap/mret + SIMD/ZK MAC) in `Verilator` with `.vcd` waveform. |
 | **2** | **`apps/foc-hil/`**<br>(`lean/Obend/Apps/FocHil.lean`) | **Closed-Loop 20 kHz Field-Oriented Motor Drive + 6-Level SiC FCML Inverter HIL**:<br>• Multi-argument struct-packed stateful `always_ff` `.obend` controller (`ClarkePark.obend` $\to$ `PiCurrentLoop.obend` with `int_d`/`int_q` accumulators $\to$ `SosCbfThermalBarrier.obend` + FCML Lyapunov capacitor balancer).<br>• **Compile-time `AutoCert` synthesis** of `by judge("sos-lyapunov-cbf@1")`, `by judge("taylor-model@1")`, and `by judge("interval@1")`.<br>• Closed-loop 20 kHz `Verilator` co-simulation against 500,000-step ($\Delta t = 100\text{ ns}$) continuous-time RK4 `LC Drives` IPM + `MS350` SiC plant, including **live mid-run ICAP DPR layer hot-swap** and over-temperature 1-cycle trip. |
 | **3** | **`apps/sdr-ft8/`**<br>(`lean/Obend/Apps/SdrFt8.lean`) | **All-Digital 40m Tayloe IQ SDR & 4-Stage CORDIC FT8 Demodulator**:<br>• Signed fixed-point (`Q16.16`/`Q32.32`) stateful `always_ff` `.obend` receiver chain (`QuadratureNcoMixer.obend` $\to$ `CicDecimator.obend` with 3-stage $z^{-1}$ integrator/comb registers $\to$ `PolyphaseFirImageReject.obend` $\to$ `CordicFt8ToneExtractor.obend` with $\Delta\phi[n] = \phi[n] - \phi[n-1]$ state).<br>• Processes 16,384-sample IQ stream in `Verilator`, suppressing a $+40\text{ dB}$ lower-sideband image interferer by $\ge 60\text{ dB}$ IRR and recovering 79/79 FT8 symbols. |
 | **4** | **`apps/zk-ntt/`**<br>(`lean/Obend/Apps/ZkNtt.lean`) | **Goldilocks ($p = 2^{64} - 2^{32} + 1$) 256-Point NTT & 8-Round Sumcheck Co-Processor (RTL + AMD `VOP64`)**:<br>• 128-to-64-bit Goldilocks reduction ($2^{64} \equiv 2^{32}-1 \pmod p$) using `.obend` shifts/masks, Cooley–Tukey radix-2 butterfly, and stateful `always_ff` Sumcheck round polynomial accumulators.<br>• Optimized via `EqSatHypergraph` ($\ge 30\%$ multiplier cost reduction), compiled to **both** 4-stage `resetFree` pipelined SystemVerilog (`Verilator`) **and** 64-bit AMD `VOP64` assembly (`SelfAccelerate.compileRtlExprToAmdGpu`), verified bit-exact on 256-point $\text{INTT}(\text{NTT}(x)) = x$ and 8-round Sumcheck. |

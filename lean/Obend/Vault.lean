@@ -13,17 +13,33 @@ its frontmatter lines), the members and their grants.
 * `Obend.Vault.Law` — the judge: a page's laws and its kinds', compiled (`Obend.Spec.LawCompile`),
   combined (`Obend.Law.effective`), run; `judge_admits`, `judge_refuses`; what would pass.
 * `Obend.Vault.Store` — the world beside the vault and each command: `openVault` (`open_idem`:
-  twice is a no-op), `mergeFrom` (`mergePage_pushout`), `postAs`, `selectIn` (`select_keeps`,
+  twice is a no-op), `mergePage` (`mergePage_pushout`), `postAs`, `selectIn` (`select_keeps`,
   `select_needs_grant`), `reciteIn`.
 * `Obend.Vault.Json` — the world as JSON (`.obend/world.json` before the log; the log's turns and
   checkpoint now).
 * `Obend.Vault.Log` — the log is truth: records, their bytes, `replay`, `state_eq_replay_log`,
   `recover_eq_replay_prefix`, `checkpoint_is_cache`, the log as Pillar 1's well-linked chain.
-* `Obend.Vault.Replay` — the deployed entry's turns and step, the instance of `Obend.Vault.Log`.
-* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, `log`.
+* `Obend.Vault.Replay` — the deployed entry's turns (opens, posts, merges, resolutions, forms, ledger
+  rows) and step, the instance of `Obend.Vault.Log`; forms, their receipts and the merges' conflicts
+  are part of the world it replays.
+* `Obend.Vault.Form` — a captured membrane as a form: holes for data, a residual, a fill as a
+  proposal the kernel judges through `commit` (`admit_no_amplification`, `eval_fill_eq_subst_residual`,
+  `admit_conserves_total`).
+* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, `log`, and
+  the forms' `capture`, `abstract`, `form`, `fill`, `reshare`, `judge`.
+* `Obend.Vault.Branch` — offline branches with a base, merged at the tip: the pushout of the two
+  sides' disjoint writes (`merge_is_pushout`), clashes kept as conflict states, consent from every
+  page in a write's cone (`landed_consents`), authority read where every revocation is visible
+  (`settled_at_tip`). Its walkthrough is `lean/tests/vault/Branch.lean`.
+* `Obend.Vault.Merge` — `obend merge`: two vault stores read as branches of their base and merged by
+  `Branch.merge`, a page both sides wrote merged by `mergePage`; the tip keeps the store and judges
+  every write by the store's own write (`tip_lands_iff_store_lands`); conflicts are kept in the store
+  and resolved by `obend branch resolve`.
 
 The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`;
-`lean/tests/vault/CRASH.md` (`crash.py`) stops `obend` in the middle of a write and opens the vault again.
+the forms' is `lean/tests/vault/FORMS.md`, executed by the same with `--doc`, and planted by
+`lean/tests/vault/forms_planted.py`; `lean/tests/vault/CRASH.md` (`crash.py`) stops `obend` in the
+middle of a write and opens the vault again.
 -/
 public import Obend.Vault.Page
 public import Obend.Vault.Law
@@ -37,9 +53,13 @@ public import Obend.Vault.Affordance
 public import Obend.Vault.Projection
 public import Obend.Vault.Mandate
 public import Obend.Vault.Rehydration
+public import Obend.Vault.Form
 public import Obend.Vault.Carry
 public import Obend.Vault.DragonsExchange
 public import Obend.Vault.HardwareProjection
 public import Obend.Vault.PhysicalProjection
 public import Obend.Vault.SovereignEngine
+public import Obend.Vault.Branch
+public import Obend.Vault.BranchCli
+public import Obend.Vault.Merge
 public import Obend.Vault.Cli

@@ -3,10 +3,10 @@
 ; formulas written here, not equivalence of the RTL with anything. It is kept as a worked property
 ; sheet (renamed from *_lec.smt2 on 2026-11-05). The .sv beside it is hand-written, so there is no
 ; RtlModule to check it against and no LEC. See review/EXPERT-fpga-silicon-20261103.md §3.2.
-; Z3 QF_BV Logic Equivalence & Safety Barrier Check (LEC) for Flagship App #2
+; Z3 QF_BV property sheet (hand-typed formulas) for Flagship App #2
 ; Closed-Loop 20 kHz FOC Motor Drive & 6-Level SiC FCML Inverter Controller
 ; Verifies:
-;   1. Equivalence between .obend lowered spec (Obend.Apps.FocHil) and RTL datapath
+;   1. A hand-typed spec formula against a hand-typed transcription of the datapath
 ;   2. 1-cycle 155 C over-temperature gate-kill safety barrier (fault_trip = 1, pwm_gate_en = 0)
 ;   3. Glitch-free mid-run ICAP DPR partial reconfiguration isolation hold
 (set-logic QF_BV)
@@ -60,7 +60,7 @@
 (define-fun spec_cap_err_next () (_ BitVec 64)
   (ite (= dpr_isolate_en #b1) fcml_cap_err (bvmul cap_err_mv (_ bv800 64))))
 
-; --- Synthesized RTL Gate-Level Netlist Model ---
+; --- Hand-typed transcription of the datapath (not read from the .sv) ---
 (define-fun rtl_kp_gain () (_ BitVec 64)
   (bvor (bvand (bvneg ((_ zero_extend 63) dpr_high_bw_sel)) (_ bv480 64))
         (bvand (bvnot (bvneg ((_ zero_extend 63) dpr_high_bw_sel))) (_ bv400 64))))

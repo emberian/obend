@@ -42,6 +42,14 @@ Vault commands (lane Vault, 2026-10-31; `Obend.Vault.Cli`):
         a directory of markdown as pages, with the world kept beside it in `DIR/.obend/`: its log,
         whose replay is the world (`Obend.Vault.Replay`), and a checkpoint, a cache of it.
 
+Branch commands (`Obend.Vault.BranchCli`):
+
+    obend branch fork STORE BRANCH NAME | write BRANCH LABEL PAGE FIELD=N… --as ACTOR [--relies URIS]
+          | relaw BRANCH LABEL PAGE --as ACTOR [--links PAGES] [--law NAME=TEXT]… [--merge FIELD=KIND]…
+          | grant BRANCH LABEL URI CELL --as ACTOR | revoke BRANCH LABEL URI --as ACTOR
+          | merge STORE LEFT RIGHT TIP | resolve TIP K left|right | show STORE PAGE
+        offline branches of a store file, each act judged on its branch, merged and judged at the tip.
+
 Receipt commands (lane Judge, 2026-10-31; `Obend.Receipt.Cli`):
 
     obend verify RECEIPT.json [--prev PREV.json] [--root ROOT]
@@ -90,6 +98,7 @@ public import Obend.Core.MachineFast
 public import Obend.Spec.Capture
 public import Obend.Spec.Preview
 public import Obend.Vault.Cli
+public import Obend.Vault.BranchCli
 public import Obend.Spec.Workspace
 public import Obend.Receipt.Cli
 public import Obend.Logic.Receipt
@@ -130,7 +139,7 @@ def usage : String :=
   "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json] | analyze replay PAGE@FILE --world DIR\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf\n" ++
   "       obend tapeout [FILE.obend] [--entry NAME] [--mode pipelined|seq|comb] [--out-sv FILE.sv] [--out-librelane FILE.json] [--out-receipt RECEIPT.json]\n" ++
-  "       obend verilate <FILE.obend> [--top NAME] [--vectors N] [--cycles C] [--vcd OUT.vcd] [--lec]"
+  "       obend verilate <FILE.obend> [--top NAME] [--vectors N] [--cycles C] [--vcd OUT.vcd]"
 
 /-! ## The typed-core packet path (lane A) -/
 
@@ -991,6 +1000,8 @@ public def main (args : List String) : IO UInt32 :=
     | none => match Obend.Ledger.Cli.main? args with
     | some act => act
     | none => match Obend.Hardware.Cli.main? args with
+    | some act => act
+    | none => match Obend.Vault.BranchCli.main? args with
     | some act => act
     | none => match Obend.Vault.Cli.main? args with
       | some act => act

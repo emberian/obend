@@ -98,7 +98,7 @@ theorem test_tier3_eda_swarm_epistemic_winner :
 #check @durable_expose_once_across_crashes
 #check @durable_recovered_converges_on_collapse_root
 #check @turnCommitCore_unproposed_tid_refused
-#check @verifyReceiptCore_unadmitted_self_opening_refused
+#check @verifyReceiptCore_empty_session_refused
 
 #tooth edaSwarm_conflicting_candidate_invalid by
   mutation checkEdaSwarmCandidate := fun _ => true

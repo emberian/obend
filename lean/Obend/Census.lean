@@ -94,6 +94,7 @@ The first command refuses a file under `Obend/` that this list does not import, 
 skip it unless something imports it). It runs when this file is rebuilt, that is, when anything it
 imports changes; a new leaf added alone is caught at the next such rebuild, not at its own.
 -/
+import Journal.Journal
 import Obend
 import Obend.Analysis.Cli
 import Obend.Analysis.Coverage
@@ -112,6 +113,15 @@ import Obend.Analysis.Setup
 import Obend.Analysis.SosLyapunov
 import Obend.Analysis.TaylorModel
 import Obend.Analysis.Worlds
+import Obend.Apps.FidgetCam
+import Obend.Apps.FidgetCamCert
+import Obend.Apps.FocHil
+import Obend.Apps.ObendRisc
+import Obend.Apps.QuantumPhotonicMatter
+import Obend.Apps.SdrFt8
+import Obend.Apps.SiliconKernelVerilator
+import Obend.Apps.SovereignDrex
+import Obend.Apps.ZkNtt
 import Obend.AssertAxioms
 import Obend.AssertCompiled
 import Obend.Consensus
@@ -136,6 +146,7 @@ import Obend.Core.EquiRecursiveLookup
 import Obend.Core.EquiRecursiveSubstitutionTransport
 import Obend.Core.Extensions
 import Obend.Core.FieldCongruence
+import Obend.Core.Fill
 import Obend.Core.FilteredStream
 import Obend.Core.FilteredStreamCompleteness
 import Obend.Core.FilteredStreamSoundness
@@ -319,6 +330,7 @@ import Obend.Hardware.Circuits
 import Obend.Hardware.Cli
 import Obend.Hardware.Codec
 import Obend.Hardware.Compiler
+import Obend.Hardware.CurrentLoop
 import Obend.Hardware.DRC
 import Obend.Hardware.DSP
 import Obend.Hardware.Datasheet
@@ -335,6 +347,9 @@ import Obend.Hardware.FluidThermal
 import Obend.Hardware.GeometryCAM
 import Obend.Hardware.HDL
 import Obend.Hardware.Hvm
+import Obend.Hardware.Hvm.Model
+import Obend.Hardware.Hvm.Net
+import Obend.Hardware.Hvm.Lower
 import Obend.Hardware.Judge
 import Obend.Hardware.Kinematics
 import Obend.Hardware.Magnetics
@@ -343,7 +358,6 @@ import Obend.Hardware.OpenHypergraph
 import Obend.Hardware.OpenUSD
 import Obend.Hardware.PCB
 import Obend.Hardware.Photonics
-import Obend.Hardware.ThermalPassivity
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.PowerElectronics
 import Obend.Hardware.Process
@@ -357,6 +371,7 @@ import Obend.Hardware.Synth
 import Obend.Hardware.TapeoutPipeline
 import Obend.Hardware.TcadBridge
 import Obend.Hardware.Thermal
+import Obend.Hardware.ThermalPassivity
 import Obend.Hardware.Types
 import Obend.Hardware.UserspacePhysical
 import Obend.Hardware.WaferSpace
@@ -384,6 +399,7 @@ import Obend.Law.Inherit
 import Obend.Law.Machine
 import Obend.Law.Proofs.Claim
 import Obend.Law.Proofs.Eval
+import Obend.Law.Proofs.Fill
 import Obend.Law.Proofs.Inherit
 import Obend.Law.Proofs.Machine
 import Obend.Law.Proofs.Run
@@ -517,6 +533,7 @@ import Obend.Stdlib
 import Obend.Tactic.Cases
 import Obend.Tactic.DocsCensus
 import Obend.Tactic.MonadicReduction
+import Obend.Tactic.SiliconElab
 import Obend.Tactic.Tooth
 import Obend.Tactic.Weave
 import Obend.Teeth.Analysis.Fixtures
@@ -538,6 +555,8 @@ import Obend.Teeth.Core.SpliceTeeth
 import Obend.Teeth.Core.SubstitutionTeeth
 import Obend.Teeth.Equiv.CostTeeth
 import Obend.Teeth.Hardware.CliffordKernel
+import Obend.Teeth.Hardware.DeviceCertificates
+import Obend.Teeth.Hardware.DeviceFixtures
 import Obend.Teeth.Hardware.Fixtures
 import Obend.Teeth.Hardware.SiliconTeeth
 import Obend.Teeth.Law.Fixtures
@@ -563,6 +582,7 @@ import Obend.Vault.Carry
 import Obend.Vault.Cli
 import Obend.Vault.DragonsExchange
 import Obend.Vault.Escrow
+import Obend.Vault.Form
 import Obend.Vault.HardwareProjection
 import Obend.Vault.Hyperedge
 import Obend.Vault.Json

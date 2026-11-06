@@ -206,7 +206,7 @@ example :
 
 -- `#tooth` probe: `verifyFlowpipe` rejects `badHybridCert`.
 theorem test_badHybridCert_rejected :
-    verifyFlowpipe demoHybridProblem badHybridCert = false := rfl
+    verifyFlowpipe demoHybridProblem badHybridCert = false := by decide +kernel
 
 #tooth test_badHybridCert_rejected by mutation
   verifyFlowpipe := fun _ _ => true

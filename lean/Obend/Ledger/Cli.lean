@@ -34,7 +34,7 @@ after posting leaves the posting behind, by name), and its receipt as `.obend/re
         links every posting it took) and, with `--out`, as a receipt an auditor re-checks with
         `obend verify FILE [--root ROOT]`.
     obend merge OTHER_DIR [--drop P-NNNN …]
-        the vault merge of the documents (`Obend.Vault.mergeFrom`), and the REGISTER's stitch: the
+        the vault merge of the documents (`Obend.Vault.Merge.mergeVault`), and the REGISTER's stitch: the
         other replica's rows this register does not have (by origin) are replayed in order through
         this register's step (`Obend.Run.Fork.stitch`), atomically: if any is refused, nothing of
         the other register is taken and every refusal is printed; otherwise each is renumbered here
@@ -57,8 +57,6 @@ open Obend.Analysis.Coverage (Said)
 
 /-! ## Reading the vault -/
 
-/-- A page the ledger writes and a merge leaves to the stitch: a posting page. -/
-def ledgerOwned (name : String) : Bool := name.startsWith "register/" && name != registerKind
 
 /-- The register's journal: part of the vault's world, replayed from its log (it was
 `.obend/ledger.json`; a vault that has one adopts it into the log at its next command). -/
@@ -300,8 +298,7 @@ def merge (dir : System.FilePath) (other : String) (drop : List String) : IO UIn
   let label := (System.FilePath.mk other).fileName.getD other
   let (_, V) ← openDir dir false
   let (o, _) ← openDir other false
-  let o' : Store := { o with pages := o.pages.filter fun p => !ledgerOwned p.name }
-  match ← finishTurn dir (.merged label o') V with
+  match ← finishTurn dir (.merged label o true) V with
   | .ok (_, .merged _ notes, rendered) =>
     for n in notes do IO.println n
     for l in rendered do IO.println l

@@ -15,6 +15,7 @@ Tests:
 -/
 import Obend.Elab.Workbook
 import Obend.Tactic.Tooth
+import Obend.AssertAxioms
 
 open Obend.Core.Term (Primitive Term Step Steps Evaluates)
 open Obend.Core.Ty (Ty)
@@ -309,35 +310,26 @@ def sampleTransportCert : TransportCert :=
 theorem sampleTransport_checks :
     workbookTransportCheck 0 sampleTransportObj sampleTransportCert = .ok := by decide +kernel
 
-/-- `verifyClaimWithExternalTransport` discharges a well-formed `ClaimObj` using `transport@1`
-    and `verifyClaimWithExternalTransport_sound` produces the semantic witness. -/
-theorem external_transport_discharges_claim :
+/-- An external judge's object must be the claim (2026-11-04): a `transport@1` certificate for an
+unrelated decider (`sampleDecideExpr`) does not discharge `peak_temp_open_recursion`. Until then
+this test asserted the opposite, which was the hole. -/
+theorem external_transport_unbound_refused :
     verifyClaimWithExternalTransport 4096
       LcDrives.claim_peak_temp_open_recursion_obj
-      sampleTransportObj sampleTransportCert = .ok := by decide +kernel
+      sampleTransportObj sampleTransportCert = .refused .illFormed [] := by decide +kernel
 
-theorem external_transport_discharges_claim_sound :
-    obligationMeaningWithJudges workbookFormats
-      LcDrives.claim_peak_temp_open_recursion_obj
-      (externalTransportJustification sampleTransportObj sampleTransportCert) :=
-  verifyClaimWithExternalTransport_sound external_transport_discharges_claim
-
-/-- External `lrat@1` (`Obend.Judge.Lrat.format`) discharges an obligation with a valid LRAT proof. -/
+/-- A valid LRAT refutation of `[[1], [-1]]`, which says nothing about the claim, is refused. -/
 def unsatCnfJson : String := "[[1],[-1]]"
 def validLratCertJson : String := "[{\"id\":3,\"clause\":[],\"hints\":[1,2]}]"
 
 def lratJustification : Justification :=
   .byExternalJudge "lrat@1" (mkExternalJudgePayload unsatCnfJson validLratCertJson)
 
-theorem external_lrat_discharges_obligation :
-    obligationCheck 100 LcDrives.claim_peak_temp_open_recursion_obj lratJustification = .ok := by decide +kernel
+theorem external_lrat_unbound_refused :
+    obligationCheck 100 LcDrives.claim_peak_temp_open_recursion_obj lratJustification =
+      .refused .illFormed [] := by decide +kernel
 
-theorem external_lrat_discharges_obligation_sound :
-    obligationMeaningWithJudges defaultExternalFormats
-      LcDrives.claim_peak_temp_open_recursion_obj lratJustification :=
-  obligationWithJudges_sound defaultExternalFormats external_lrat_discharges_obligation
-
-/-- External `clearing@1` (`clearingFormat`) discharges an obligation with a valid clearing certificate. -/
+/-- A valid `clearing@1` certificate for an empty market, which says nothing about the claim, is refused. -/
 def validClearingObjJson : String :=
   "{\"market\":{\"currency\":0,\"goods\":1,\"epsilon\":0},\"orders\":[],\"transfers\":[]}"
 def validClearingCertJson : String :=
@@ -346,26 +338,22 @@ def validClearingCertJson : String :=
 def clearingJustification : Justification :=
   .byExternalJudge "clearing@1" (mkExternalJudgePayload validClearingObjJson validClearingCertJson)
 
-theorem external_clearing_discharges_obligation :
-    obligationCheck 100 LcDrives.claim_peak_temp_open_recursion_obj clearingJustification = .ok := by decide +kernel
+theorem external_clearing_unbound_refused :
+    obligationCheck 100 LcDrives.claim_peak_temp_open_recursion_obj clearingJustification =
+      .refused .illFormed [] := by decide +kernel
 
-theorem external_clearing_discharges_obligation_sound :
-    obligationMeaningWithJudges defaultExternalFormats
-      LcDrives.claim_peak_temp_open_recursion_obj clearingJustification :=
-  obligationWithJudges_sound defaultExternalFormats external_clearing_discharges_obligation
-
-/-- Reverse bridge `verifyWorkbookObligationsWithLean` accepts `LcDrives.package` augmented with
-    an exported Lean `LawExpr` (`monotone("thermalResistance")`) and external justification. -/
+/-- Reverse bridge `verifyWorkbookObligationsWithLean` refuses `LcDrives.package` when a claim's
+    justification is replaced by the unbound `transport@1` certificate above. -/
 def exportedThermalLaw : LawExpr := .monotone "thermalResistance"
 
-theorem workbook_with_exported_lean_law_and_cert :
+theorem workbook_with_unbound_cert_refused :
     verifyWorkbookObligationsWithLean
       LcDrives.package
       [("peak_temp_open_recursion",
         externalTransportJustification sampleTransportObj sampleTransportCert)]
       []
       [("thermal_monotone", exportedThermalLaw)]
-      4096 = true := by decide +kernel
+      4096 = false := by decide +kernel
 
 /-! ## 5. Negative Tests & `#tooth` Mutation Proofs -/
 
@@ -446,13 +434,10 @@ elab "#verify_no_sorry_or_choice" : command => do
     ``deos_minus_exec,
     ``keeps_claim_bridge_sound,
     ``sampleTransport_checks,
-    ``external_transport_discharges_claim,
-    ``external_transport_discharges_claim_sound,
-    ``external_lrat_discharges_obligation,
-    ``external_lrat_discharges_obligation_sound,
-    ``external_clearing_discharges_obligation,
-    ``external_clearing_discharges_obligation_sound,
-    ``workbook_with_exported_lean_law_and_cert,
+    ``external_transport_unbound_refused,
+    ``external_lrat_unbound_refused,
+    ``external_clearing_unbound_refused,
+    ``workbook_with_unbound_cert_refused,
     ``negative_tampered_obligations_refused
   ]
   for t in choiceFreeTargets do
@@ -462,13 +447,20 @@ elab "#verify_no_sorry_or_choice" : command => do
     if axs.contains ``Classical.choice then
       throwError m!"AXIOM AUDIT FAILED: {t} depends on Classical.choice"
   let allowedStandard : List Name := [``propext, ``Classical.choice, ``Quot.sound]
+  -- The compiled trust (`native_decide`'s `…._native…` axioms) is the repo's counted exception
+  -- (`Obend.AssertAxioms`, ember 2026-11-02: compiled trust is not a concern now): the importer
+  -- proves each imported claim's `_check` by `native_decide` and re-runs it by `#assert_compiled`
+  -- (`Obend.Elab.Workbook`, 2026-11-04). It is reported by name here, never passed silently.
+  let mut trusted : Array Name := #[]
   for t in standardTargets do
     let axs ← liftCoreM <| collectAxioms t
     if axs.contains ``sorryAx then
       throwError m!"AXIOM AUDIT FAILED: {t} depends on sorryAx"
     for a in axs do
-      if !allowedStandard.contains a then
+      if Obend.AssertAxioms.isCompilerTrust a then
+        unless trusted.contains t do trusted := trusted.push t
+      else if !allowedStandard.contains a then
         throwError m!"AXIOM AUDIT FAILED: {t} depends on non-standard axiom {a}"
-  logInfo m!"[PASS] Axiom audit verified: {choiceFreeTargets.length} lowering/reflection declarations have 0 sorryAx and 0 Classical.choice; {standardTargets.length} judge/claim declarations have 0 sorryAx and 0 native-trust axioms"
+  logInfo m!"[PASS] Axiom audit verified: {choiceFreeTargets.length} lowering/reflection declarations have 0 sorryAx and 0 Classical.choice; {standardTargets.length} judge/claim declarations have 0 sorryAx and no axiom outside the standard three and the compiled trust; resting on compiled trust (an imported claim's `_check`, re-run by `#assert_compiled`): {trusted}"
 
 #verify_no_sorry_or_choice
