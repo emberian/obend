@@ -3,7 +3,7 @@
 ; formulas written here, not equivalence of the RTL with anything. It is kept as a worked property
 ; sheet (renamed from *_lec.smt2 on 2026-11-05). The .sv beside it is hand-written, so there is no
 ; RtlModule to check it against and no LEC. See review/EXPERT-fpga-silicon-20261103.md §3.2.
-; Z3 QF_BV Logic Equivalence & Datapath Signoff Check (LEC) for Flagship App #3
+; Z3 QF_BV property sheet (hand-typed formulas) for Flagship App #3
 ; All-Digital 40m (7.074 MHz) Tayloe IQ FT8 SDR Transceiver
 ; Verifies across all 5 pipeline stages:
 ;   1. Tayloe quadrature I/Q calibration & Hartley/Weaver combiner equivalence + exact opposite-sideband
@@ -141,7 +141,7 @@
        (bvsub spec_wrapped_delta_1 (_ bv6283 64))
        spec_wrapped_delta_1))
 
-; --- Synthesized RTL Datapath Model (sdr_ft8_top.sv) ---
+; --- Hand-typed transcription of the datapath (not read from sdr_ft8_top.sv) ---
 (define-fun mux64 ((m (_ BitVec 64)) (t (_ BitVec 64)) (f (_ BitVec 64))) (_ BitVec 64)
   (bvor (bvand m t) (bvand (bvnot m) f)))
 

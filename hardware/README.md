@@ -59,20 +59,28 @@ Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
   and their assertions, the `in_i` and `r_k` read through Yosys's accessors (zero-extended from the
   port or register width; 1-bit signals are `Bool` in Yosys), the wires, every output and register
   obligation at its declared width (the reset wrapper `(ite rst init next)` included), and the
-  miter. `LecScript.holds` is what z3 is asked to satisfy, and
-  `Obend.Hardware.YosysLec.lecScript_holds_iff` proves: for every assignment, the script holds exactly
-  when both Yosys assertions hold and some output Yosys reads in `s`, or some register it reads in
-  `s1`, differs (at its width) from Lean's step of the `RtlModule` on the inputs and registers it
-  reads in `s`. So `unsat` means every one-step reading agrees with Lean, and a `sat` is a real
-  disagreement (`lecScript_unsat_of_agree` is the first direction alone). The terms inside are
-  `smtOf`, proved equal to `evalRtlExpr` by `emitExprSmt2_sound`. Trusted: that `LecScript.print`
-  and `SmtBV.print` write the SMT-LIB syntax of what they print (`lean/tests/silicon_elab/
-  YosysLecTest.lean` pins every expression constructor against `emitExprSmt2`, the glue lines of
-  two committed files verbatim, and two whole committed files byte for byte), Yosys's SystemVerilog
-  frontend and `write_smt2`, and z3. Read into the model, not proved: narrow ports and registers are
-  zero-extended into the 64-bit carrier, all registers step together (as Yosys's global clock and
-  `stepModuleRegs` do), and with several clock domains each register resets on its own domain's
-  `rst_<d>`.
+  miter. What is proved (`lean/Obend/Hardware/YosysLec.lean`):
+  - `lecScript_holds_iff`: for every assignment z3 may choose, the script holds exactly when both
+    Yosys assertions hold and some output Yosys reads in `s`, or some register it reads in `s1`,
+    differs at its width from Lean's step on the inputs and registers it reads in `s`. So `unsat`
+    means every one-step reading agrees with Lean, and a `sat` is a real disagreement.
+  - `lecScript_unsat_of_step`: for a one-domain module with distinct register indices, that
+    agreement is stated against the module's own semantics, `evalModuleOutputsW` and
+    `stepModuleRegs` (equal to `stepModuleDomain` with one domain).
+  - `moduleFaithful_of_checkWidths`: the emission gate `checkRtlModuleW` implies the theorems'
+    hypothesis; `obend-emit-sv --lec` refuses exactly what the `.sv` emission refuses.
+
+  Which clocking it checks: Yosys's single global clock, every flip-flop latching on every
+  transition, with each register reset by its own domain's `rst_<d>`. For a module with several
+  clock domains (`obend_width_probe`) that is all clocks rising together; the edge-by-edge
+  semantics of `stepModuleDomain`, where one domain latches and the others hold, is not checked.
+
+  Trusted: Yosys's SystemVerilog frontend and `write_smt2`; z3; and that the two print functions,
+  `LecScript.print` and `SmtBV.print`, write the SMT-LIB syntax of what they print.
+  `lean/tests/silicon_elab/YosysLecTest.lean` pins them (every expression constructor against
+  `emitExprSmt2`, the glue lines of two committed files verbatim, two whole committed files byte
+  for byte); that is a test, not a proof. Read into the model, not proved: narrow ports and
+  registers are zero-extended into the 64-bit carrier.
 - **The emitted SV against its own gate-level netlist (EQY, where it terminates).** `synth` makes
   `X.gl.v`; EQY proves gold `X.sv` equivalent to gate `X.gl.v`, matching ports and flip-flops.
   This says synthesis preserved what Yosys read; it says nothing about Lean by itself, but composed
@@ -85,9 +93,16 @@ Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
 - **Gates.** Each run flips bit 0 of the first output in a copy of `X.sv` (never the committed file);
   the LEC must answer `sat` and prints the failing obligation with both values, and EQY must fail.
 
-Not covered: `foc-hil` and `sdr-ft8` (hand-written `.sv`, no `RtlModule`; their `*_props.smt2` are
-property sheets of hand-typed formulas), `silicon-kernel-verilator` (its `.sv` is printed by a string
-emitter, not from an `RtlModule`).
+Not covered: `foc-hil` and `sdr-ft8` (hand-written `.sv`, no `RtlModule`), and
+`silicon-kernel-verilator` (its `.sv` is printed by a string emitter, not from an `RtlModule`).
+
+Two hand-typed property sheets remain, `apps/foc-hil/verilator/foc_drive_props.smt2` and
+`apps/sdr-ft8/verilator/sdr_ft8_props.smt2`, each run by its app's `verify_*.sh`. They state
+properties of formulas typed into them (a transcription of the hand-written datapath, the
+over-temperature gate kill, image cancellation and the like), not of the `.sv` beside them; they stay
+because those two apps have no `RtlModule`, so nothing else checks them at all. The `quantum_photonic`
+and `sovereign_drex` sheets were removed on 2026-11-05: their modules are emitted from an
+`RtlModule`, and the LEC checks the `.sv` itself.
 
 `rust-ffi/` is unrelated to the FPGA path (CBOR codec, FEMM/octree engines) and is owned by the
 physics lane.
