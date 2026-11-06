@@ -99,3 +99,11 @@ root = "EmitHvm"
 name = "obend-emit-gpu"
 srcDir = "tools/emitgpu"
 root = "EmitGpu"
+
+# GPU lane, rung G2 (2026-11-06): the RDNA2 decoder generated from AMD's machine-readable ISA and the wave
+# model, on RADV's dumps under `hardware/gpu/isa/` (`Obend.Hardware.Gpu.Rdna2`); `hardware/gpu/isa_check.sh`
+# is the gate. `lake build obend-rdna2`.
+[[lean_exe]]
+name = "obend-rdna2"
+srcDir = "tools/rdna2"
+root = "Rdna2"
