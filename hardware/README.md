@@ -440,7 +440,16 @@ a 20 s limit. The shared LEC now first tries bounded exact witnesses with input/
 set to zero or one. Only SAT returns from this path; constrained UNSAT never proves equivalence.
 The original unconstrained exact and multiplication-abstraction checks remain. The bit-flip and
 root-operator faults then produced exact witnesses in 0.147 s and 0.129 s respectively. These are
-shared-host diagnostic measurements, not performance guarantees. EQY, SAT against the gate-level netlist, finished on none
+shared-host diagnostic measurements, not performance guarantees. The NTT exposed a separate parser bottleneck:
+parameterized and zero-argument SMT macros expanded before a query could run. The shared LEC
+now uses the installed Yosys `smtio.py` unroller, then retains each zero-argument definition as
+a variable with its defining equality. The full original miter is preserved in meaning, with
+sharing retained through parsing. `YOSYS_SMTIO` selects a nonstandard script location; otherwise
+it is found relative to the Yosys executable. Model-only definitions precede `check-sat`, and
+SMT errors cannot accompany an accepted proof or counterexample. The planted bit flip now
+requires exact SAT; the former waiver accepting an undecided result is removed. The registered
+`mac2` path and solver-error/timeout rejection checks are retained in
+[`lec/frontend-sharing-gate.log`](lec/frontend-sharing-gate.log). EQY, SAT against the gate-level netlist, finished on none
 of these in the time given (15 minutes on a graph with one 64-bit multiply, as `hardware/sim`'s `mac2`
 already showed; 55 minutes on `tree512`, whose one output puts all 511 adders in one partition), so it is
 opt-in (`EQY_GRAPHS`) and the LEC is this gate's equivalence step. `glmul-256`, `ntt-64` and larger are not
