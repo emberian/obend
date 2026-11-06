@@ -717,6 +717,27 @@ def changes (s s' : Store) : List String :=
 where
   typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
 
+/-- The refusals among what changed between two stores: a birth refused, or a write refused anew
+(as `changes` says them). -/
+def refusalsOf (s s' : Store) : List String :=
+  s'.pages.filterMap fun p' =>
+    match s.page? p'.name with
+    | none => if p'.history.isEmpty && p'.note.isSome then some (p'.name ++ ": not born: " ++ p'.note.getD "") else none
+    | some p =>
+      if p'.history.length > p.history.length then none
+      else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then some (p'.name ++ ": " ++ p'.note.getD "")
+      else none
+where
+  typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
+
+/-- The refusals a command has said, this run: each makes its exit status 1 (`main?`). -/
+initialize refusedRef : IO.Ref (List String) ← IO.mkRef []
+
+/-- Say refusals on stderr and remember them for the exit status. -/
+def sayRefused (ls : List String) : IO Unit := do
+  for l in ls do IO.eprintln l
+  refusedRef.modify (· ++ ls)
+
 /-- Cites that do not hold and sections waiting, over every page. -/
 def problems (s : Store) : List String :=
   s.pages.flatMap fun p =>
@@ -766,15 +787,21 @@ def openWorld (dir : System.FilePath) (verbose : Bool) : IO (Replay.World × Lis
       let back := f.kept.filterMap fun (n, _) => (o.store.page? n).bind fun p => p.seen.map (n, ·)
       writeFiles dir (o.writes ++ back)
       saveCheckpoint dir h'
+      -- changes are read against the store after deletions and renames: a renamed page is not new;
+      -- a refusal is said on stderr, by every command that opens, and makes its exit status 1
+      let cs := changes f.store o.store
+      let rs := refusalsOf f.store o.store
       if verbose then
-        -- changes are read against the store after deletions and renames: a renamed page is not new
-        let cs := changes f.store o.store
         let fl := forgottenLines f
-        let ul := unbornLines o.store cs
         if cs.isEmpty && fl.isEmpty then IO.println "nothing changed"
         for c in fl do IO.println c
-        for c in cs do IO.println c
-        for c in ul do IO.println c
+        for c in cs do unless rs.contains c do IO.println c
+      -- a refusal this command made; a page an earlier open left unborn is said again, as before,
+      -- and is not this command's refusal
+      sayRefused rs
+      if verbose then
+        for c in unbornLines o.store cs do IO.println c
+      if verbose then
         for (n, _) in o.writes ++ back do IO.println ("rendered " ++ n ++ ".md")
       return (h'.world, overwrite (V ++ back) o.writes)
     | .ok (_, _) => throw (IO.userError "the open said what an open does not")
@@ -793,6 +820,7 @@ def finishTurn (dir : System.FilePath) (t : Turn) (V : List (String × String)) 
     | .error e => return .error e
     | .ok (h', o) =>
       let s := h'.world.store
+      sayRefused (refusalsOf h.world.store s)
       let w := writesFor s V
       let missing := s.pages.filterMap fun p => if V.any (·.1 == p.name) then none else
         match p.seen, p.history with
@@ -974,18 +1002,24 @@ def parseFill (f : Form) : List String → Except String Obend.Vault.Form.Assign
   | [] => .ok ({} : Obend.Vault.Form.Assignment)
   | x :: rest => do
     let a ← parseFill f rest
-    match x.splitOn "=" with
-    | [h, v] =>
+    match (x.splitOn "=") with
+    | h :: v :: more =>
+      let v := "=".intercalate (v :: more)
       match f.holes.lookup h with
       | some .nat => match v.toNat? with
         | some n => return { a with nats := (h, n) :: a.nats }
         | none => throw ("the hole " ++ h ++ " is a natural; " ++ v ++ " is not")
       | some .page => return { a with pages := (h, v) :: a.pages }
+      | some .label =>
+        if v.isEmpty || v.any Char.isWhitespace then throw ("the hole " ++ h ++ " is a label (one word); " ++ v ++ " is not")
+        else return { a with labels := (h, v) :: a.labels }
+      | some .text => return { a with labels := (h, v) :: a.labels }
       | none => throw ("the form " ++ f.name ++ " has no hole " ++ h)
     | _ => throw ("a fill is HOLE=VALUE, not " ++ x)
 
 def fillText (a : Obend.Vault.Form.Assignment) : String :=
-  ", ".intercalate (a.nats.map (fun (h, n) => h ++ " = " ++ toString n) ++ a.pages.map fun (h, n) => h ++ " = " ++ n)
+  ", ".intercalate (a.nats.map (fun (h, n) => h ++ " = " ++ toString n) ++ a.pages.map (fun (h, n) => h ++ " = " ++ n) ++
+    a.labels.map fun (h, v) => h ++ " = \"" ++ v ++ "\"")
 
 /-- A received form: the form, its digest, the vault that issued it, the hops it was handed on by, and
 the continuity contract it was issued with, if any. -/
@@ -1141,7 +1175,7 @@ def reasonsRun (dir : System.FilePath) : List String → Option (IO UInt32)
     match w.reasons.admit name with
     | .ok a => IO.println (name ++ ": admitted (" ++ a.because ++ " is supported by " ++
         ((w.reasons.standing a.because).getD "observation or assumption") ++ ")"); return 0
-    | .error e => IO.println e; return 1
+    | .error e => IO.eprintln e; return 1
   | ["status"] => some do
     let w ← readWorld dir
     for x in w.reasons.atoms do IO.println (w.reasons.line x)
@@ -1189,9 +1223,14 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
           pure (some (ds.contains a))
         | none => pure none
       | .error _ => pure none
-    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches) V with
+    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches (some ow.reasons)) V with
     | .ok (_, .merged s' notes, rendered) =>
-      for n in notes do IO.println n
+      -- a write of the other side the tip did not land is a refused write of this merge
+      -- (here's own writes the merge left unsettled are refusals of their pages, said by `finishTurn`)
+      let refused := notes.filter fun n => (n.splitOn ": not merged").length > 1
+      let unsettled := notes.filter fun n => (n.splitOn "here's write was not settled").length > 1
+      for n in notes do unless refused.contains n || unsettled.contains n do IO.println n
+      sayRefused refused
       for l in rendered do IO.println l
       for l in problems s' do IO.println l
       -- of the other replica's landings, how many stand here (none is judged again)
@@ -1200,6 +1239,95 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       return 0
     | .ok _ => fail "the merge said what a merge does not"
     | .error e => fail e
+  | "since" :: tip :: rest => some do
+    -- From a fork: what moved at the tip since this fork's base, and what a merge of this fork and
+    -- the judgment of each proposal named would say there now. Nothing is landed and nothing is
+    -- written at the tip: the merge and the judgments are stepped on the tip's world in memory.
+    let (props, rest) := allFlags "--proposal" rest
+    unless rest.isEmpty do return ← fail "since TIP [--proposal FILE …]"
+    let _ ← openDir dir false
+    let me ← readWorld dir
+    let w ← readWorld tip
+    let label := ((← IO.FS.realPath dir).fileName).getD "fork"
+    let mineMoved : String → Bool := fun n =>
+      let bp := Merge.sharedPrefix (Merge.historyIn w.store n) (Merge.historyIn me.store n)
+      Merge.liveHistory me.store n != bp && !(Merge.liveHistory me.store n).isEmpty
+    IO.println ("since " ++ label ++ " left " ++ tip ++ ":")
+    let mut moved := 0
+    for p in w.store.pages do
+      let n := p.name
+      let bp := Merge.sharedPrefix (Merge.historyIn w.store n) (Merge.historyIn me.store n)
+      if Merge.liveHistory w.store n == bp || p.history.isEmpty then continue
+      moved := moved + 1
+      let also := if mineMoved n then " (you wrote it too)" else ""
+      match bp.getLast?, p.render? with
+      | none, _ => IO.println ("  " ++ n ++ ": new at the tip" ++ also)
+      | some B, some cur =>
+        let bt := render B n p.who
+        let bl := lawLines bt
+        let cl := lawLines cur
+        let lawsMoved := (cl.filter fun l => !bl.contains l).map (fun (k, t) => "+ law " ++ k ++ ": " ++ t) ++
+          (bl.filter fun l => !cl.contains l).map (fun (k, t) => "- law " ++ k ++ ": " ++ t)
+        let bf := frontFields bt
+        let fieldsMoved := (frontFields cur).filter fun (k, v) => (lawKey k).isNone && bf.lookup k != some v
+        let gone := bf.filter fun (k, _) => (lawKey k).isNone && ((frontFields cur).lookup k).isNone
+        let fs := fieldsMoved.map (fun (k, v) => k ++ " " ++ ((bf.lookup k).getD "unset") ++ " → " ++ v) ++
+          gone.map (fun (k, v) => k ++ " " ++ v ++ " → unset")
+        let what := (if lawsMoved.isEmpty then [] else ["its laws moved"]) ++ (if fs.isEmpty then [] else [", ".intercalate fs]) ++
+          (if lawsMoved.isEmpty && fs.isEmpty then ["its text moved"] else [])
+        IO.println ("  " ++ n ++ ": " ++ "; ".intercalate what ++ also)
+        for l in lawsMoved do IO.println ("    " ++ l)
+      | _, none => IO.println ("  " ++ n ++ ": gone at the tip" ++ also)
+    if moved == 0 then IO.println "  no page moved at the tip"
+    -- reasons: the tip's own, then this fork's as they would join there
+    let behind := Replay.behindOn w.store me.store
+    for (n, fs) in behind do IO.println ("  you have not seen at " ++ n ++ ": " ++ ", ".intercalate fs)
+    let (joined, _) := Replay.joinReasons label w.reasons me.reasons behind
+    let tipOnly := w.reasons.base.observations.filter fun o => !me.reasons.base.observations.any (·.name == o.name)
+    for o in tipOnly do IO.println ("  the tip observes " ++ o.name ++ ": " ++ o.text)
+    for x in me.reasons.atoms do
+      let here := me.reasons.line x
+      let there := joined.line x
+      if here != there then
+        IO.println ("  " ++ x ++ ": here " ++ (here.drop (x.length + 2)) ++ "; at the tip, with yours joined: " ++
+          (there.drop (x.length + 2)))
+    -- the merge, stepped in memory
+    let t : Replay.Turn := .merged label me.store false (some me.grants) me.landed none (some me.reasons)
+    match Replay.stepTurn w t with
+    | .error e => IO.println ("a merge of " ++ label ++ " would be refused: " ++ e)
+    | .ok (w1, o) =>
+      let notes := match o with | .merged _ ns => ns | _ => []
+      let interesting := notes.filter fun l => !(l.endsWith (": merged from " ++ label)) && !(l.endsWith (": imported from " ++ label))
+      IO.println ("a merge of " ++ label ++ " now would land " ++ toString (notes.length - interesting.length) ++
+        " page(s)" ++ (if interesting.isEmpty then "" else " and say:"))
+      for l in interesting do IO.println ("  " ++ l)
+      for f in props do
+        let j ← readJson f
+        let name ← ofExcept f (j.getObjValAs? String "proposal")
+        let digest ← ofExcept f (j.getObjValAs? String "digest")
+        let hops ← ofExcept f ((← ofExcept f (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM Obend.Vault.Form.grantOf)
+        let a ← ofExcept f (Obend.Vault.Form.assignmentOf (← ofExcept f (j.getObjVal? "fill")))
+        let intent := (j.getObjValAs? String "intent").toOption
+        let because := (j.getObjValAs? String "because").toOption
+        let w2 := match w1.forms.find? (·.name == name) with
+          | some fm =>
+            if !(Transport.lawMoves w1.store fm (issueOf w1 fm).basis).isEmpty then
+              match Replay.stepTurn w1 (.transported name) with
+              | .ok (w', _) => w'
+              | .error _ => w1
+            else w1
+          | none => w1
+        let turn : Replay.Turn := match because with
+          | some c => .justified name digest hops a intent c
+          | none => .judged name digest hops a intent
+        match Replay.stepTurn w2 turn with
+        | .ok _ => IO.println (f ++ ": would land, after that merge")
+        | .error e => IO.println (f ++ ": would be refused, after that merge: " ++ e)
+    if !me.outstanding.isEmpty then
+      for o in me.outstanding do
+        IO.println ("  outstanding here: " ++ o.form ++ " intent " ++ o.intent ++ " sent to " ++ o.vault)
+    IO.println "nothing landed; nothing written at the tip"
+    return 0
   | ["branch", "resolve", k, side] => some do
     let (_, V) ← openDir dir false
     let some k := k.toNat? | fail "branch resolve K left|right: K is a number"
@@ -1321,6 +1449,33 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
           return 0
         | .ok _ => fail "the capture said what a capture does not"
     | _, _, _, _ => fail "capture SITUATION FORM --for WHO --grant PATTERN … [--held CAPS] --move FROM TO AMOUNT [--field FIELD] [--ref PAGE …]"
+  | "brief" :: page :: name :: rest => some do
+    let (who, rest) := flag "--for" rest
+    let (held, rest) := flag "--held" rest
+    let (pats, rest) := allFlags "--grant" rest
+    let (sets, rest) := allFlags "--set" rest
+    let (holes, rest) := allFlags "--hole" rest
+    let lits := sets.filterMap fun x => match x.splitOn "=" with
+      | f :: v :: more => some (f, "=".intercalate (v :: more))
+      | _ => none
+    let hs := holes.filterMap fun x => match x.splitOn ":" with
+      | [h, t] => if ["label", "text", "natural", "page"].contains t then some (h, t) else none
+      | _ => none
+    match who, rest, parseCaps (held.getD "read,write") with
+    | some who, [], some caps =>
+      if lits.length != sets.length || hs.length != holes.length then
+        return ← fail "brief: a set is FIELD=VALUE, a hole FIELD:label or FIELD:text"
+      let _ ← openDir dir false
+      match ← commitWith dir (.briefed page name ⟨who, caps, pats⟩ lits hs) (fun _ o => pure o) with
+      | .error e => fail e
+      | .ok (.form f culled) =>
+        if let .error e ← commitWith dir (.issued name) (fun _ _ => pure ()) then return ← fail e
+        IO.println ("briefed " ++ name ++ " on " ++ page ++ " for " ++ who ++ ": " ++
+          toString f.cells.length ++ " page(s) shown, " ++ toString culled ++ " not shown to " ++ who)
+        for l in f.describe do IO.println l
+        return 0
+      | .ok _ => fail "the brief said what a brief does not"
+    | _, _, _ => fail "brief PAGE FORM --for WHO --grant PATTERN … [--held CAPS] [--set FIELD=VALUE …] [--hole FIELD:label|text …]"
   | "offer" :: name :: hole :: range :: rest => some do
     let (promise, rest) := flag "--promise" rest
     unless rest.isEmpty do return ← fail "offer FORM HOLE LO..HI [--promise LO..HI]"
@@ -1359,6 +1514,13 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         ", ".intercalate g.grant.patterns ++ ")" ++ (if w.grants.revoked.contains g.id then ", revoked" else ""))
     return 0
   | "reasons" :: rest => reasonsRun dir rest
+  | ["release", i] => some do
+    match ← commitWith dir (.released i) (fun h _ => pure h.world) with
+    | .error e => fail e
+    | .ok w =>
+      IO.println ("released intent " ++ i ++ ": it awaits no receipt here; " ++
+        (if w.outstanding.isEmpty then "nothing outstanding" else toString w.outstanding.length ++ " outstanding"))
+      return 0
   | ["obligations"] => some do
     let w ← readWorld dir
     if w.outstanding.isEmpty then IO.println "nothing outstanding"
@@ -1436,7 +1598,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     if !ls.isEmpty then
       match ← commitWith dir (.transported name) (fun _ o => pure o) with
       | .error e =>
-        IO.println (name ++ ": effect: stale (the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+        IO.eprintln (name ++ ": effect: stale (the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
           " moved); " ++ e)
         IO.println (workLine (((iss.contract.map (·.offer.length)).getD 0)) 0 T)
         return 1
@@ -1467,10 +1629,14 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let some f := w.forms.find? (·.name == name) | fail ("refused: no form named " ++ name)
     let kept ← readChecks dir name
     let apps := (f.lawApps w.store.entries).filter fun x => kept.contains x.key
-    IO.println (name ++ ": " ++ toString apps.length ++ " law(s) over its holed states, checked once with " ++
-      ", ".intercalate (f.holes.filterMap fun (h, t) => if t == .nat then some h else none) ++ " open:")
+    let open_ := f.holes.filterMap fun (h, t) => if t == .nat then some h else none
+    IO.println (name ++ ": " ++ toString apps.length ++ " law(s) over its holed states, checked once" ++
+      (if open_.isEmpty then " (no natural hole open):" else " with " ++ ", ".intercalate open_ ++ " open:"))
     for x in apps do
-      IO.println ("  " ++ x.pkg ++ ": " ++ x.law.drop (x.pkg.length + 2) ++ " at " ++ x.page ++
+      -- the law's name says the page or kind that wrote it (`jobs/_kind: budget`); a kind's law at a page
+      -- is not the page's (2026-11-06: `tests/relay/sandbox:  at tests/relay/sandbox`, its name cut by
+      -- the page's length)
+      IO.println ("  " ++ x.law ++ " at " ++ x.page ++
         (if x.src then " (debited)" else " (credited)"))
     return 0
   | "form" :: name :: rest => some do
@@ -1553,7 +1719,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     -- a proposal whose intent landed here: refused, and its receipt written again
     if let some i := intent then
       if let some l := Transport.duplicateOf w0.landed i then
-        IO.println (dupText w0 name l)
+        IO.eprintln (dupText w0 name l)
         writeReceipt w0 l
         if let some f := w0.forms.find? (·.name == name) then
           IO.println (workLine 0 (carried f (issueOf w0 f).contract) (carried f (issueOf w0 f).contract))
@@ -1566,7 +1732,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         let ls := Transport.lawMoves w0.store f (issueOf w0 f).basis
         if (valueMoves ms).isEmpty && (waiting ms).isEmpty && !ls.isEmpty then
           match ← commitWith dir (.transported name) (fun _ o => pure o) with
-          | .error e => IO.println (name ++ ": " ++ e); return 1
+          | .error e => IO.eprintln (name ++ ": " ++ e); return 1
           | .ok (.transported v p _) =>
             performed := p
             IO.println (verdictLine name ls v (issueOf w0 f).contract)
@@ -1579,7 +1745,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       | none => .judged name digest hops a intent
     match ← finishTurn dir turn V with
     | .error e =>
-      IO.println e
+      IO.eprintln e
       let w ← readWorld dir
       if let some f := w.forms.find? (·.name == name) then
         let T := carried f (issueOf w f).contract
@@ -1609,9 +1775,15 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
 /-- `obend` vault commands: `-C DIR` anywhere, `open DIR`. -/
 def main? (args : List String) : Option (IO UInt32) :=
   let (dirFlag, args) := flag "-C" args
-  match args with
-  | ["open", d] => run (System.FilePath.mk d) ["open"]
-  | _ => run (System.FilePath.mk (dirFlag.getD ".")) args
+  let act := match args with
+    | ["open", d] => run (System.FilePath.mk d) ["open"]
+    | _ => run (System.FilePath.mk (dirFlag.getD ".")) args
+  -- a command that ran but whose writes were refused (said on stderr) exits 1
+  act.map fun a => do
+    refusedRef.set []
+    let rc ← a
+    let rs ← refusedRef.get
+    return (if rc == 0 && !rs.isEmpty then 1 else rc)
 
 end Obend.Vault.Cli
 

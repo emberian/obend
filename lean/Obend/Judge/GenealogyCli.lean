@@ -135,10 +135,10 @@ def cmdGenesis (path : String) (rest : List String) : IO UInt32 := do
   let .ok st := parseStore rest | fail "usage: obend genealogy genesis JUDGE.json [--store CELL=N]…"
   let r : Rec := ⟨st, [], st⟩
   match wellFormed G with
-  | .error e => IO.println s!"refused: {e.text G G}"; return 3
+  | .error e => IO.eprintln s!"refused: {e.text G G}"; return 3
   | .ok () =>
     match G.floors.find? (fun φ => !decide (φ.holds r)) with
-    | some φ => IO.println s!"refused: the floor `{φ}` of {G.name} does not hold of the initial store"; return 3
+    | some φ => IO.eprintln s!"refused: the floor `{φ}` of {G.name} does not hold of the initial store"; return 3
     | none =>
       let c : Chain := ⟨G, [], r⟩
       save c
@@ -165,7 +165,7 @@ def cmdSucceed (path : String) (rest : List String) : IO UInt32 := do
     printChain c'
     return 0
   | _ =>
-    IO.println s!"refused: {successionFormat.explain 0 obj cert}"
+    IO.eprintln s!"refused: {successionFormat.explain 0 obj cert}"
     return 3
 
 def cmdAct (a : RecAct) (rest : List String) : IO UInt32 := do
@@ -180,7 +180,7 @@ def cmdAct (a : RecAct) (rest : List String) : IO UInt32 := do
   let sys : Sys record := ⟨c.judge, c.state, labels c.steps⟩
   let sys' := sys.step Exec.faithful p
   match actRefusal c.judge c.state a with
-  | some why => IO.println s!"refused by {c.judge.name}: {why}"; return 3
+  | some why => IO.eprintln s!"refused by {c.judge.name}: {why}"; return 3
   | none =>
     save { c with state := sys'.state }
     IO.println s!"admitted by {c.judge.name}: {actText a}"

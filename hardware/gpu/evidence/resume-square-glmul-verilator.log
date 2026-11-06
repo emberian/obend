@@ -1,0 +1,3 @@
+=== glmul-4 (sq_glmul_4) ===
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+[PASS] hardware/gpu/square (stage 4) (glmul-4)

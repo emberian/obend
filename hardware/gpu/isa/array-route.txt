@@ -1,0 +1,103 @@
+# array-route: RADV's final ISA for each stage, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1
+# Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders,shaderstats; do not edit.
+# Each instruction line ends in `; <dwords>`, the machine code as RADV printed it; labels and text are LLVM's.
+
+## stage 0 (stage_0.wgsl): 4 threads, 14 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 80
+BB0:
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_lshl_add_u32 v0, s4, 6, v0	; d7460000 04010c04
+	v_cmpx_gt_u32_e32 4, v0	; 7da80084
+	s_cbranch_execz BB6	; bf88000d
+BB1:
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[2:3], 0x10	; f4080101 fa000010
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v0, s[4:7], 0 offen	; e0341000 80010200
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:32	; e0741020 80000200
+BB6:
+	s_endpgm	; bf810000
+
+## stage 1 (stage_1.wgsl): 4 threads, 18 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 96
+BB0:
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_lshl_add_u32 v0, s4, 6, v0	; d7460000 04010c04
+	v_cmpx_gt_u32_e32 4, v0	; 7da80084
+	s_cbranch_execz BB6	; bf880011
+BB1:
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	s_clause 0x1	; bfa10001
+	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen	; e0341000 80000200
+	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:32	; e0341020 80000400
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_add_nc_u32_e32 v6, v2, v4	; 4a0c0902
+	v_add_nc_u32_e32 v3, v3, v5	; 4a060b03
+	v_cmp_lt_u32_e32 vcc, v6, v2	; 7d820506
+	v_add_co_ci_u32_e32 v7, vcc, 0, v3, vcc	; 500e0680
+	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen	; e0741000 80000600
+BB6:
+	s_endpgm	; bf810000
+
+## stage 2 (stage_2.wgsl): 4 threads, 18 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 100
+BB0:
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_lshl_add_u32 v0, s4, 6, v0	; d7460000 04010c04
+	v_cmpx_gt_u32_e32 4, v0	; 7da80084
+	s_cbranch_execz BB6	; bf880012
+BB1:
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[2:3], 0x20	; f4080101 fa000020
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v1, 2, v0	; 34020082
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dword v1, v1, s[4:7], 0 offen	; e0301000 80010101
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_lshlrev_b32_e32 v1, 3, v1	; 34020283
+	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen	; e0341000 80000201
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:32	; e0741020 80000200
+BB6:
+	s_endpgm	; bf810000
+
+## stage 3 (stage_3.wgsl): 8 threads, 26 instructions, 2 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 140
+BB0:
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_lshl_add_u32 v0, s4, 6, v0	; d7460000 04010c04
+	v_cmpx_gt_u32_e32 8, v0	; 7da80088
+	s_cbranch_execz BB7	; bf88001c
+BB1:
+	s_mov_b64 s[0:1], exec	; be80047e
+	v_cmpx_gt_u32_e32 4, v0	; 7da80084
+	s_cbranch_execz BB4	; bf88000b
+BB2:
+	s_mov_b32 s4, s2	; be840302
+	s_movk_i32 s5, 0x8000	; b0058000
+	s_load_dwordx4 s[4:7], s[4:5], null	; f4080102 fa000000
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v0, s[4:7], 0 offen offset:32	; e0341020 80010200
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v0, s[4:7], 0 offen offset:64	; e0741040 80010200
+BB4:
+	s_andn2_b64 exec, s[0:1], exec	; 8afe7e00
+	s_cbranch_execz BB7	; bf88000c
+BB5:
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_load_dwordx4 s[4:7], s[2:3], null	; f4080101 fa000000
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	v_add_nc_u32_e32 v1, 0xffffffe0, v0	; 4a0200ff ffffffe0
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen	; e0341000 80010201
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v0, s[4:7], 0 offen offset:64	; e0741040 80010200
+BB7:
+BB12:
+	s_endpgm	; bf810000

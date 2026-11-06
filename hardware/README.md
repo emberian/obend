@@ -235,7 +235,7 @@ pending writes and hash-map registers, rather than reevaluating a functional gra
 
 `Gpu.Workgroup` maps the actual accesses to the existing G4 Vulkan model. Mandatory
 `SourceProtocol.checkProgram` checks arithmetic-free synchronization protocols using HashSets.
-`checkProgram_not_racy` proves each accepted group's actual trace race-free for every input memory;
+`DispatchProtocol.checkProgram_not_racy` composes every accepted group into a race-free dispatch;
 `checkProgram_read_sequential` derives phase visibility in every well-formed consistent execution.
 These are universal theorems with executable admission hypotheses, not a fixture enumeration.
 G4's initial-zero convention does not model arbitrary host uploads; that remains an explicit boundary.
@@ -246,7 +246,7 @@ The bounded 32×32 widening primitive currently uses Naga/wgpu's SHADER_INT64 sy
 to native `v_mul_lo_u32`/`v_mul_hi_u32`. General emulated 64×64 shader multiplication is removed.
 See [the arithmetic proof boundary](../review/GPU-LIMBS-20261106.md).
 
-`lean/tools/emitgpu` builds Stockham NTTs in that general source language: radix-4 register butterflies,
+`Gpu.Ntt` builds Stockham NTTs in that general source language: radix-4 register butterflies,
 multiple shared-memory phases, balanced uploads, and packed small tiles. The 1,024 / 65,536 / 1,048,576
 point transforms use 3 / 2 / 3 dispatches. Each input vector is canonicalized in registers. The emitter
 checks source evaluation against an independent recursive NTT and, through 1,024 points, a direct DFT.
@@ -267,7 +267,7 @@ Current integration evidence and open ISA-model instructions are recorded in
 [GPU-KERNELS-20261106](../review/GPU-KERNELS-20261106.md). Earlier RADV/AMDVLK/Metal passes applied
 to the superseded shaders and do not certify this revision. The new workgroup shaders require the
 RDNA2 model lane to add lane-count and shared-memory instructions before the full G2 gate is green.
-The array-to-RTL commuting square also remains separate work.
+The array-to-RTL commuting square below covers ordinary array graphs; no block-NTT-to-RTL theorem is claimed.
 
 ### rung G2: the dumped ISA, read by Lean (`rdna2/`, `isa_check.sh`)
 
@@ -359,5 +359,75 @@ both roles of GPUHarbor's pseudo-code), which forbids the `seq0` class of the wo
 well as their weak class; no device showed `seq0` either. `verify_litmus.sh` is the gate (`gpu/litmus/README.md`).
 
 The kernel lane adds checked live layouts, workgroup source programs and an empirical resource model
-(`gpu/cost/`). The formal G5 grading and the array-to-RTL path remain open; current evidence is in
+(`gpu/cost/`). The formal G5 grading remains open; current evidence is in
 [GPU-KERNELS-20261106](../review/GPU-KERNELS-20261106.md).
+
+### `gpu/square/`: the same graph through two devices (rung G1s)
+
+`Obend.Hardware.Square` is the square the council asked for, done with external runs: one open hypergraph
+lowered to the GPU program above and to a combinational `RtlModule`, each leg run outside Lean on the
+same vectors, and theorems that the two lowerings denote one evaluation.
+
+One lowering. `compileArrayGraphToRtl` is single assignment: module wire `i` is the `i`-th element
+definition (the input wires' elements, then each edge's destination elements in edge order), and an array
+of slots (`LowerSt`) records, per array wire, where its current definition starts. A reader is lowered
+against the definition current at that point, which is what `stepEdge` reads, so the graph's own wire
+numbering, a wire defined twice and an edge reading its own destination all lower faithfully: the only
+hypothesis is `ArrayGraph.wf`. A map's `ElemProg` is run symbolically into one expression per element
+(`progExpr`; the shifts are exact for every amount, `evalRtlExpr_elemOpToRtl`), a gather is wiring, a
+concatenation renaming, a constant constants. The lowering takes the graph before fusion; the GPU lowering
+fuses (`fuseGraph`); the theorems meet at `evalGraph`. A scalar graph is the one-element instance,
+`compileHypergraphToRtl g = compileArrayGraphToRtl (ofScalar g)`, as `lowerHypergraphToGpu` is on the
+GPU side; the scalar lowering this replaced needed every wire defined once as a side condition and failed
+the emission check on the adjoint graphs, whose wires are numbered out of definition order. The three
+operation lowerings of `Obend.Hardware.OpenHypergraph` are one, `compileHypergraphOpExpr`, which the
+pipelined compiler and `elemOpToRtl` share.
+
+The theorems. `compileArrayGraphToRtl_sound`: for every well-formed array graph and every input, the
+module's output ports are `evalGraph` from the environment the input ports induce (`inputEnvOf`),
+flattened. `rtl_eq_gpu_array`: the GPU program, run from any buffer that holds that environment at its
+checked layout (`layoutOk`) with the live-entry representation (`Flat`), shows the same words. `compileHypergraphToRtl_sound` and `rtl_eq_gpu` are the scalar
+corollaries, against the scalar single pass `evalHyperEdgesCombBv`. `compileHypergraphToRtlPipelined_sound`
+is the pipelined compiler's whole module (one clock edge per wavefront stage with the inputs held shows the
+layered evaluation, from any register state), and `pipelined_eq_comb` puts it at a third corner. The
+diamond-specific pipelined theorems it replaces are gone; the diamond's `87` is a `#guard` in
+`tests/metasystem/NextMathematicaSoundnessTest.lean`.
+
+The graphs (`squarePlan` in `Obend.Hardware.SquareGraphs`, the one list both emitters share), each for
+what no other one exercises:
+
+| graph | for |
+|---|---|
+| `allops` | every scalar operation: a negative constant, add, sub, mul, scale by `-2^40`, mac, mux, with wrap-around |
+| `muxchain` | a multiply that reaches an output only through a mux's test against zero, so its planted swap is seen only by a vector with a zero operand (the scalar vectors include four one-hot ones for this) |
+| `adjoint-square-bilinear` | a `compileGraphAdjoint` graph, wires numbered out of definition order: the single-assignment lowering's reason |
+| `tree512` | size: 511 chained adders, where the LEC's time goes |
+| `glmul-4` | the bit operations of the Goldilocks multiply (ult, and, or, both shifts) as elementwise maps over arrays |
+| `array-route` | gathers, concatenation and constant arrays with a shared producer |
+
+The gate, `verify_square.sh`, per graph: the committed `sv/<top>.sv` regenerates byte for byte;
+`obend-emit-sv square-<graph> --expected`, the HDL model's `expected.tsv` from `evalModuleOutputs`, equals
+`../graphs/<graph>/expected.tsv`, the array model's, byte for byte; `hardware/lec/lec.sh` (the LEC of
+Yosys's reading against Lean's model and its planted bit flip; EQY against the synthesized netlist for the
+graphs in `EQY_GRAPHS`); the Verilator harness `obend-emit-sv square-<graph> --tb`
+(`emitVerilatorHarnessCpp`, the harness `obend verilate` uses, over the graph's vectors against
+`evalModuleOutputs`) reports no mismatch on the committed `.sv`; `obend-gpu-run` agrees with
+`expected.tsv` on the card; and a swapped operator in a copy of the `.sv` (`+` to `-`, else `*` to `+`,
+trying operators nearest the outputs first) makes the LEC answer sat and Verilator report mismatches. A
+swap the LEC proves equivalent, or cannot decide within its limits (`lec.sh`'s `LEC_ABS_SECS`, set by the
+tooth, bounds the query with multiplication uninterpreted, under which a sat reads only as undecided), is
+skipped and counted. Recovery checked all byte/model stages, the full replacement `array-route` fixture,
+and `glmul-4` Verilator simulation on hbox. Yosys and z3 use the distribution
+packages (`YOSYS_BIN=/usr/bin/yosys`). The packaged Verilator wrappers pointed to
+missing executables, so recovery built upstream v5.024 at commit
+`522bead374d6b7b2adb316304126e5361b18bcf1` under `swarm-build make -j2`.
+`VERILATOR_BIN=/home/hbox/obend/kernels-tools/bin/verilator` selects a shim that
+unsets that variable before calling the source-tree frontend; the upstream frontend
+otherwise interprets it as its internal binary. The binaries built successfully;
+the documentation target lacked `help2man`. Earlier square runs used the Mac.
+
+The recovery replaced the obsolete per-layer NTT fixture with `array-route`, retaining the
+array-operation coverage on exactly the same source graph for both devices. `glmul-256` and
+larger field arrays are not in the square; the LEC cost grows with their arithmetic.
+The workgroup NTT source is covered by its own lowering/refinement and device gates, not this
+array-RTL theorem. EQY remains opt-in; the LEC is the default equivalence step.

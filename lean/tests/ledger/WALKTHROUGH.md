@@ -228,10 +228,10 @@ obend open
 ```
 
 ```text
-register/P-0001: refused by register/_kind: sealed (the kind of register/, an ancestor of register/P-0001): `new.version == 0 or new.movements == 0` does not hold; version = 0 would pass (this write has version = 1)
 register/P-0001: ![[invoices/INV-1]] (embed) is behind: invoices/INV-1 moved on (v1 → v2) and the bytes it quotes changed
 nothing changed
 register/P-0001: ![[invoices/INV-1]] (embed) is behind: invoices/INV-1 moved on (v1 → v2) and the bytes it quotes changed
+register/P-0001: refused by register/_kind: sealed (the kind of register/, an ancestor of register/P-0001): `new.version == 0 or new.movements == 0` does not hold; version = 0 would pass (this write has version = 1)
 ```
 
 The correction is a reversing posting, then the document posted again:
