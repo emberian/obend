@@ -238,6 +238,32 @@ comparison go through `u64`); AMDVLK runs out of memory with the 64-point NTT's 
 command buffer where RADV and Metal do not (the runner submits in chunks of 128); and the closure-based
 evaluator above.
 
+### `gpu/litmus/`: the memory model, measured (rung G4)
+
+`Obend.Hardware.Gpu.Memory` is the memory model of WGSL as the Vulkan memory model specialized to the
+events WGSL emits (its header derives the specialization: relaxed atomics at QueueFamily or Workgroup scope
+by address space, barriers at Workgroup scope with the semantics of one address space, everything
+available and visible at workgroup scope, so `locord = loc ∩ hb` and happens-before never crosses a
+workgroup), presented as sections of a presheaf on the scope site: a section over a thread, a workgroup or
+the device is a witness (reads-from, coherence ranks, a total order every edge of `locord ∪ rf ∪ fr ∪ asmo`
+respects) of the shape restricted to that object, and an outcome is allowed when it is the restriction of
+a section over the device. `allowed_iff_glues` says the enumeration-based checker answers exactly that.
+The referent is not our reading: `lean/tools/litmuscheck` (`obend-litmus-check`) writes every shape and
+outcome as a Dartagnan Vulkan litmus test and the gate requires Dartagnan's verdict under `cat/vulkan.cat`
+to equal the checker's on each (it does, on every outcome of the suite).
+
+`gpu/litmus/` is GPUHarbor's suite (`wgsl/`, copied with attribution) run by `obend-gpu-litmus` (a port of
+its host side and of its tuned-stress parameter space, in `gpu/runner`) on hbox's RX 6750 XT under RADV
+and AMDVLK, hbox's UHD 770 under ANV and the Mac's M2 Max under Metal; the tables are under
+`gpu/litmus/results/` with their seed and budget, and `results/STRONGER.tsv` records the allowed weak
+behaviours no device showed. The relaxed weak behaviours at device scope appear on the AMD and Apple
+parts, IRIW's only on the M2 Max, none on the Intel part; a `storageBarrier` across workgroups
+leaves them in place on the M2 Max, as the model says it may; no device showed a coherence violation, a
+weak outcome of a workgroup-scope test with barriers, or a weak outcome of the non-atomic barrier tests.
+The shapes are each thread's whole program with every barrier of the kernel body in place (a thread plays
+both roles of GPUHarbor's pseudo-code), which forbids the `seq0` class of the workgroup barrier tests as
+well as their weak class; no device showed `seq0` either. `verify_litmus.sh` is the gate (`gpu/litmus/README.md`).
+
 Not here: a semantics of the ISA (rung G2 reads the dump against AMD's machine-readable RDNA2 spec), the
 memory model (G4), resource grading (G5), a layering better than the scalar module's greedy one (the
 64-point NTT lowers to 1670 dispatches where a few dozen would do), and the RTL path of the same array

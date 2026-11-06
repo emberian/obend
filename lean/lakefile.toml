@@ -99,3 +99,11 @@ root = "EmitHvm"
 name = "obend-emit-gpu"
 srcDir = "tools/emitgpu"
 root = "EmitGpu"
+
+# GPU lane, rung G4 (2026-11-06): the litmus shapes of `hardware/gpu/litmus/` under
+# `Obend.Hardware.Gpu.Memory`: the verdict table, the Dartagnan litmus files the gate cross-checks, and the
+# restriction check. `lake build obend-litmus-check`.
+[[lean_exe]]
+name = "obend-litmus-check"
+srcDir = "tools/litmuscheck"
+root = "LitmusCheck"

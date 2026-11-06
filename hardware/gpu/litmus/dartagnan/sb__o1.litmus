@@ -1,0 +1,13 @@
+VULKAN sb
+"obend-litmus-check: sb, the shape of hardware/gpu/litmus/wgsl/sb.wgsl"
+{
+x=0;
+y=0;
+P0:r0=0;
+P1:r0=0;
+}
+ P0@sg 0, wg 0, qf 0   | P1@sg 1, wg 1, qf 0   ;
+ st.atom.qf.sc0 x, 1   | st.atom.qf.sc0 y, 1   ;
+ ld.atom.qf.sc0 r0, y  | ld.atom.qf.sc0 r0, x  ;
+
+exists (P0:r0 == 0 /\ P1:r0 == 1 /\ x == 1 /\ y == 1)

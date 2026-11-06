@@ -1,0 +1,13 @@
+VULKAN barrier-store-store
+"obend-litmus-check: barrier-store-store, the shape of hardware/gpu/litmus/wgsl/barrier-store-store.wgsl"
+{
+x=0;
+P1:r0=0;
+}
+ P0@sg 0, wg 0, qf 0       | P1@sg 1, wg 0, qf 0       ;
+ st.av.wg.sc1 x, 1         | cbar.acq_rel.wg.semsc1 0  ;
+ cbar.acq_rel.wg.semsc1 0  | st.av.wg.sc1 x, 2         ;
+ cbar.acq_rel.wg.semsc1 1  | cbar.acq_rel.wg.semsc1 1  ;
+                           | ld.vis.wg.sc1 r0, x       ;
+
+exists (P1:r0 == 0)

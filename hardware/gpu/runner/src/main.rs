@@ -11,6 +11,8 @@
 //! The adapter is chosen by a case-insensitive substring of its name, driver or driver info (`--adapter radv`); without
 //! one, the first non-CPU adapter is taken. The device must offer 64-bit integers in shaders.
 
+mod device;
+use device::{adapter_line, list_adapters, pick_adapter};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -92,33 +94,6 @@ fn read_vectors(path: &Path) -> Result<Vec<Vector>, String> {
         });
     }
     Ok(out)
-}
-
-fn adapter_line(a: &wgpu::Adapter) -> String {
-    let i = a.get_info();
-    format!("{} [{:?}] driver={} {} type={:?}", i.name, i.backend, i.driver, i.driver_info, i.device_type)
-}
-
-fn pick_adapter(instance: &wgpu::Instance, want: Option<&str>) -> Result<wgpu::Adapter, String> {
-    let adapters = instance.enumerate_adapters(wgpu::Backends::all());
-    if adapters.is_empty() {
-        return Err("wgpu sees no adapter".into());
-    }
-    let chosen = match want {
-        Some(w) => {
-            let w = w.to_lowercase();
-            adapters.into_iter().find(|a| {
-                let i = a.get_info();
-                i.name.to_lowercase().contains(&w)
-                    || i.driver.to_lowercase().contains(&w)
-                    || i.driver_info.to_lowercase().contains(&w)
-            })
-        }
-        None => adapters
-            .into_iter()
-            .find(|a| a.get_info().device_type != wgpu::DeviceType::Cpu),
-    };
-    chosen.ok_or_else(|| format!("no adapter matches {want:?}; try --list-adapters"))
 }
 
 fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
@@ -312,11 +287,7 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--list-adapters") {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        for a in instance.enumerate_adapters(wgpu::Backends::all()) {
-            let int64 = a.features().contains(wgpu::Features::SHADER_INT64);
-            println!("{} int64={}", adapter_line(&a), int64);
-        }
+        list_adapters();
         return ExitCode::SUCCESS;
     }
     let mut dir: Option<PathBuf> = None;
