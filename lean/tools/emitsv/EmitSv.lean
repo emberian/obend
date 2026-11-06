@@ -18,6 +18,7 @@ byte-for-byte with the committed file: a `.sv` that is not reproducible from Lea
 a file this tool does not know is hand-written and says so in its header.
 -/
 import Obend.Hardware.HDL
+import Obend.Hardware.Mac8
 import Obend.Hardware.Synth
 import Obend.Hardware.VerilateRunner
 import Obend.Hardware.Cli
@@ -60,23 +61,6 @@ def goldenSiliconKernel : String :=
   s!"dpr_glitch_free_clamped={if t.dprGlitchFreeClamped then 1 else 0}\n" ++
   s!"tooth_mutant_refused={if t.toothMutantRefused then 1 else 0}\n" ++
   s!"sorry_refused={if t.sorryRefused then 1 else 0}\n"
-
-/-- The first physical target: an 8x8+16 multiply-accumulate with port widths, for the iCEstick
-(`hardware/ice40/`). Same shape as `Synth.goldenRetimedMacRtl`, with every signal at its width:
-the 16-bit product and addend registers, and the sum truncated to the 16-bit output register. -/
-def iceStickMac8 : RtlModule :=
-  { name       := "obend_ice40_mac8"
-    inputNames := ["a", "b", "c"]
-    inputWidths := [8, 8, 16]
-    wires      :=
-      [ { wireIdx := 0, name := "w_mul", width := 16, expr := .alu .mul (.inputPort 0) (.inputPort 1) }
-      , { wireIdx := 1, name := "w_add", width := 16,
-          expr := .resize (.trunc 16) (.alu .add (.regRead 0) (.regRead 1)) } ]
-    regs       :=
-      [ { regIdx := 0, name := "mulReg", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 16, nextExpr := .wireRef 0 }
-      , { regIdx := 1, name := "cReg",   domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 16, nextExpr := .inputPort 2 }
-      , { regIdx := 2, name := "outReg", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 16, nextExpr := .wireRef 1 } ]
-    outputs    := [ { name := "mac_out", expr := .regRead 2, width := 16 } ] }
 
 /-- `check-risc`: the gates on both RISC cores and the recorded end state of the firmware run
 (`Obend.Apps.ObendRisc.riscFirmwareExpected*`). -/
@@ -125,7 +109,7 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
   | "fidget"  => some (.ok ("Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule", Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule))
   | "quantum" => some (.ok ("Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule", Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule))
   | "mac2"    => some (.ok ("Obend.Hardware.Synth.goldenRetimedMacRtl", Obend.Hardware.Synth.goldenRetimedMacRtl))
-  | "ice40-mac8" => some (.ok ("EmitSv.iceStickMac8 (lean/tools/emitsv/EmitSv.lean)", iceStickMac8))
+  | "ice40-mac8" => some (.ok ("Obend.Hardware.iceStickMac8 (lean/Obend/Hardware/Mac8.lean)", Obend.Hardware.iceStickMac8))
   | "tcad"    => some (builtInModule "cleanroom_tcad_stack")
   | "stator"  => some (builtInModule "lc_drives_userspace_stator")
   | "mill"    => some (builtInModule "cnc_5axis_userspace_mill")
