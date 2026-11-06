@@ -347,7 +347,15 @@ its shareability even when hidden under that recursive row. -/
     | some bound => bound.shareableUnder assumptions.shareableVariables) &&
   -- No rigid variable names an activity, so a type agreement never turns an
   -- activity into a suspendable type or back (`Ty.isComputation` is invariant).
-  assumptions.bounds.all (fun bound => !bound.2.isComputation)
+  (assumptions.bounds.all (fun bound => !bound.2.isComputation) &&
+  -- A program runs with no hole open: holes are declared only to check a term before its fills
+  -- (`PartialTyping.hole`), and the machine has no step for one.
+  assumptions.holes.isEmpty)
+
+theorem Assumptions.valid_holes {assumptions : Assumptions} (valid : assumptions.valid = true) :
+    assumptions.holes = [] := by
+  simp only [Assumptions.valid, Bool.and_eq_true, List.isEmpty_iff] at valid
+  exact valid.2.2
 
 /-- Source positions address the annotation of each actual lambda. Missing
 annotations are refused, not guessed or silently replaced by Data types. An
@@ -664,6 +672,19 @@ inductive PartialTyping (assumptions : Assumptions) : Context → Term → Ty �
       SplitCovers row names = true →
       SplitSpine assumptions context tu row names functionType result →
       PartialTyping assumptions context (.split target names function) result (addUses tu fu)
+  /-- A declared hole `n : ⟨Δ, A⟩` is a term of type `A` over `Δ`, and `.hole n σ` is that term with
+`σ[i]` put for variable `i`: it checks as a call of an `n`-ary function whose parameters are the
+bindings of `Δ`. Each argument checks at its parameter's type and is passed as `argumentAllowed` lets
+an argument reach a parameter of that quantity; the uses are the arguments' uses summed. The filler,
+when it comes, discharges the rest (`Obend.Core.Proofs.FillTyping`). -/
+  | hole {context : Context} {n : Nat} {σ : List Term} {decl : HoleDecl} {args : List (Term × Binding × Uses)} :
+      assumptions.holes.lookup n = some decl →
+      σ = args.map (·.1) →
+      args.map (·.2.1) = decl.context →
+      (∀ arg ∈ args, PartialTyping assumptions context arg.1 arg.2.1.type arg.2.2) →
+      (∀ arg ∈ args, argumentAllowed assumptions arg.2.1.quantity context arg.2.1.type arg.2.2 = true) →
+      PartialTyping assumptions context (.hole n σ) decl.type
+        ((args.map (·.2.2)).foldr addUses (zeroUses context))
 inductive FieldsTyping (assumptions : Assumptions) : Context → List (String × Term) → Ty → Uses → Prop where
   | nil (context : Context) : FieldsTyping assumptions context [] .emptyRow (zeroUses context)
   | cons {context : Context} {name : String} {body : Term} {rest : List (String × Term)} {type row : Ty} {bu ru : Uses} :
@@ -685,6 +706,37 @@ inductive ArmsTyping (assumptions : Assumptions) : Context → Quantity → List
       (rest.isEmpty || branchesAgree context bu.tail ru) = true →
       ArmsTyping assumptions context q ((name,body) :: rest) (.field name payload row) result (joinUses bu.tail ru)
 end
+
+/-- A choice for every member of a list, as a list of pairs (how a hole's arguments are rebuilt). -/
+theorem exists_list_choice {α β : Type} {P : α → β → Prop} :
+    ∀ (l : List α), (∀ a ∈ l, ∃ b, P a b) → ∃ m : List (α × β), m.map Prod.fst = l ∧ ∀ p ∈ m, P p.1 p.2
+  | [], _ => ⟨[], rfl, by simp⟩
+  | a :: l, h => by
+    obtain ⟨b, hb⟩ := h a List.mem_cons_self
+    obtain ⟨m, hm, hp⟩ := exists_list_choice l (fun x hx => h x (List.mem_cons_of_mem _ hx))
+    refine ⟨(a, b) :: m, by simp [hm], fun p hp' => ?_⟩
+    rcases List.mem_cons.mp hp' with rfl | hp'
+    · exact hb
+    · exact hp p hp'
+
+/-- A relation between uses that addition and the zero vector respect holds of two hole sums
+(`PartialTyping.hole`) whose arguments it relates. -/
+theorem foldr_addUses_rel {R : Uses → Uses → Prop}
+    (hadd : ∀ {a a' b b' : Uses}, R a' a → R b' b → R (addUses a' b') (addUses a b))
+    {z z' : Uses} (hz : R z' z) {β : Type} (f g : β → Uses) :
+    ∀ (l : List β), (∀ x ∈ l, R (g x) (f x)) → R ((l.map g).foldr addUses z') ((l.map f).foldr addUses z)
+  | [], _ => hz
+  | x :: l, h => by
+    simp only [List.map_cons, List.foldr_cons]
+    exact hadd (h x List.mem_cons_self) (foldr_addUses_rel hadd hz f g l (fun y hy => h y (List.mem_cons_of_mem _ hy)))
+
+/-- The arguments' uses summed (`PartialTyping.hole`) account for every slot when each does. -/
+theorem length_foldr_addUses {n : Nat} : ∀ (us : List Uses) (z : Uses), z.length = n →
+    (∀ u ∈ us, u.length = n) → (us.foldr addUses z).length = n
+  | [], _, hz, _ => hz
+  | u :: us, z, hz, h => by
+    simp only [List.foldr_cons, addUses, List.length_zipWith, h u List.mem_cons_self,
+      length_foldr_addUses us z hz (fun v hv => h v (List.mem_cons_of_mem _ hv)), Nat.min_self]
 
 structure Inferred (assumptions : Assumptions) (context : Context) (term : Term) where
   type : Ty

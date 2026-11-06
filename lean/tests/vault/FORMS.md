@@ -90,6 +90,26 @@ pay: a form for bob (read, write on ledger/*)
   to.balance := to.balance + amount
 ```
 
+Every law the kernel will judge a page of the form by (the page's own laws and the laws over its
+links; here `Accounts`' `cap`) is applied, at capture, to that page's state with the hole still in
+it, and checked by the kernel's checker once: the state's `balance` is `100 - amount` at Alice's
+page, and at each page `to` may be, that page's balance plus `amount`. The hole is a declared
+variable of the kernel's own terms (`PartialTyping.hole`); a fill puts a natural for it, and the
+filled law is typed by the derivation this one check returned (`Obend.Vault.Form.checked_once`,
+through `Obend.Core.Proofs.FillTyping.fill_typed`), so no fill is checked again.
+
+```sh
+cd alice && obend checked pay
+```
+
+```text
+pay: 4 law(s) over its holed states, checked once with amount open:
+  Accounts: cap at ledger/alice (debited)
+  Accounts: cap at ledger/alice (credited)
+  Accounts: cap at ledger/carol (credited)
+  Accounts: cap at ledger/bob (credited)
+```
+
 The form goes to Bob as a file. Nothing of the private page is in it.
 
 ```sh
@@ -296,7 +316,10 @@ work: performed 0, retained 1 of 1
 ```
 
 The one Bob meant lands as one turn: both pages written at once, each judged by its laws and the
-laws over links on the turn's tip, the total moved conserved, one receipt linked onto the chain.
+laws over links on the turn's tip, the total moved conserved, one receipt linked onto the chain. Of
+the laws over the two pages it writes, `cap` at each was checked once at capture and is kept, its
+fill typed by that check; `floor`, added after the form left, is checked here; nothing is checked
+twice (the second `work:` line).
 
 ```sh
 cd alice && obend judge ../pay.json && cat ledger/alice.md ledger/carol.md && obend status ledger/carol
@@ -309,6 +332,7 @@ pay: landed as one turn over 2 pages by bob, receipt 2f06af57e712e4d3 (1 in the 
 rendered ledger/alice.md
 rendered ledger/carol.md
 work: performed 1, retained 1 of 1
+work: laws over the holed states: 2 kept from the capture, 2 checked now, re-checked 0
 ---
 balance: 60
 ---

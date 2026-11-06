@@ -21,6 +21,10 @@ public structure Discharges (σ : Nat → Ty) (template instance_ : Assumptions)
     ∀ fuel, bound.isRow template.bounds fuel = true → (σ k).isRow instance_.bounds (fuel + extra) = true
   shareable : ∀ j, (σ j).shareableUnder instance_.shareableVariables = template.shareableVariables.contains j
   pure : ∀ j, (σ j).isComputation = false
+  /-- A hole the template declares, the instance declares at the instantiated types. -/
+  holes : ∀ n decl, template.holes.lookup n = some decl →
+    instance_.holes.lookup n = some ⟨decl.context.map fun b => ⟨b.type.instantiate σ, b.quantity⟩,
+      decl.type.instantiate σ⟩
 
 
 end Obend.Core.Proofs.Templates

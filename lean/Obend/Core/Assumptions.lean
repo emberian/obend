@@ -5,6 +5,13 @@ namespace Obend.Core.Check
 open Obend.Core.Ty
 set_option autoImplicit false
 
+/-- What a hole stands for: a term of `type` over the variables of `context` (variable `i` is
+`context[i]`). The hole `.hole n σ` is that term under `σ`, which puts `σ[i]` for variable `i`. -/
+structure HoleDecl where
+  context : Context
+  type : Ty
+  deriving DecidableEq
+
 structure Assumptions where
   bounds : Bounds := []
   shareableVariables : List Nat := []
@@ -14,6 +21,8 @@ structure Assumptions where
   equates the variable with its bound row. Emitted programs have `rigid = []`, where
   `alias` is `bounds.lookup` and the checker is the alias checker. -/
   rigid : List Nat := []
+  /-- The declared holes: `.hole n σ` checks only when `n` is declared here (`PartialTyping.hole`). -/
+  holes : List (Nat × HoleDecl) := []
 
 /-- The declared head a variable unfolds to in a conversion: its bound unless it is rigid. -/
 def Assumptions.alias (assumptions : Assumptions) (index : Nat) : Option Ty :=

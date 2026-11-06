@@ -128,7 +128,7 @@ def seedRow : Ty := .field "x" .natural (.field "extra" .boolean .emptyRow)
   | .error (.reuseChanged .once .reusable) => true | _ => false)
 
 -- coercions into an alias whose unfolding differs are refused by name (no recursive wrappers)
-#guard (match coerce ⟨[(0, .variant (.field "a" .boolean .emptyRow))], [], []⟩
+#guard (match coerce ⟨[(0, .variant (.field "a" .boolean .emptyRow))], [], [], []⟩
     (.variant (.field "a" .natural .emptyRow)) (.variable 0) with
   | .error (.recursive _ _) => true | _ => false)
 

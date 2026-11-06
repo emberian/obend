@@ -136,7 +136,7 @@ or fixed C→V(C) is substituted into this independent source derivation. -/
       else if position = [0] then some ⟨.variable 1,.field "answer" .natural (.variable 1),.unrestricted,.reusable⟩
       else none,
     ⟨[(0,.field "combine" (.arrow .reusable .unrestricted (.variable 0) (.variable 0)) .emptyRow),
-       (1,.emptyRow)], [0,1], []⟩⟩
+       (1,.emptyRow)], [0,1], [], []⟩⟩
 
 theorem independently_checked_future_rows :
     (synth futureRowSource []).isSome = true := by check_reduce
@@ -241,11 +241,11 @@ theorem reusable_mix_capture_accepted :
         .arrow .reusable .unrestricted .emptyRow (.variable 0),.unrestricted,.reusable⟩
       else if position = [0,0,0] then some ⟨.emptyRow,.variable 0,.unrestricted,.reusable⟩
       else none,
-    ⟨[(0,.field "answer" .natural .emptyRow)],[0],[]⟩⟩
+    ⟨[(0,.field "answer" .natural .emptyRow)],[0],[], []⟩⟩
 theorem recursive_global_knot_accepted : (synth recursiveGlobalKnot []).isSome = true := by check_reduce
 
 @[local simp] def dishonestRecursiveCustody : AnnotatedTerm :=
-  ⟨.nat 7, fun _ => none, ⟨[(0,.field "authority" (.custody 17) (.variable 0))],[0],[]⟩⟩
+  ⟨.nat 7, fun _ => none, ⟨[(0,.field "authority" (.custody 17) (.variable 0))],[0],[], []⟩⟩
 theorem recursive_alias_does_not_hide_custody :
     (synth dishonestRecursiveCustody []).isNone = true := by check_reduce
 
@@ -386,7 +386,7 @@ W3.EVENTS 6b2616db; refused/accepted logs in the W25 evidence). -/
 
 @[local simp] def listRow : Ty :=
   .field "nil" .emptyRow (.field "cons" (.field "head" .natural (.field "tail" (.variable 0) .emptyRow)) .emptyRow)
-@[local simp] def listAssumptions : Assumptions := ⟨[(0, .variant listRow)], [0], []⟩
+@[local simp] def listAssumptions : Assumptions := ⟨[(0, .variant listRow)], [0], [], []⟩
 @[local simp] def listAnnotations : Annotations := fun position =>
   if position = [] then
     some ⟨.field "head" .natural (.field "tail" (.variable 0) .emptyRow), .variable 0, .unrestricted, .reusable⟩
@@ -541,7 +541,7 @@ theorem closure_response_refused :
 
 /-! ### Agreement is the equivalence closure of one-step agreement (2026-10-30) -/
 
-@[local simp] def siblingAliases : Assumptions := ⟨[(1, .natural), (2, .natural)], [], []⟩
+@[local simp] def siblingAliases : Assumptions := ⟨[(1, .natural), (2, .natural)], [], [], []⟩
 
 /-- Two aliases of the same type: no single step relates them, the closure does. -/
 theorem sibling_aliases_agree :
@@ -560,13 +560,13 @@ theorem agreement_descends_into_constructors :
 
 /-- A rigid variable is nominal: never its bound, never a sibling alias of that bound. -/
 theorem rigid_variable_nominal :
-    sameType ⟨[(1, .natural), (2, .natural)], [], [1]⟩ (.variable 1) .natural = false ∧
-    sameType ⟨[(1, .natural), (2, .natural)], [], [1]⟩ (.variable 1) (.variable 2) = false := by check_reduce
+    sameType ⟨[(1, .natural), (2, .natural)], [], [1], []⟩ (.variable 1) .natural = false ∧
+    sameType ⟨[(1, .natural), (2, .natural)], [], [1], []⟩ (.variable 1) (.variable 2) = false := by check_reduce
 
 /-- A cycle of bare aliases agrees within itself and with nothing else; the walk stops. -/
 theorem cyclic_aliases_close :
-    sameType ⟨[(1, .variable 2), (2, .variable 1)], [], []⟩ (.variable 1) (.variable 2) = true ∧
-    sameType ⟨[(1, .variable 2), (2, .variable 1)], [], []⟩ (.variable 1) .natural = false := by check_reduce
+    sameType ⟨[(1, .variable 2), (2, .variable 1)], [], [], []⟩ (.variable 1) (.variable 2) = true ∧
+    sameType ⟨[(1, .variable 2), (2, .variable 1)], [], [], []⟩ (.variable 1) .natural = false := by check_reduce
 
 /-- The visited-set walk refuses a cycle of bounds and finds what fuel finds elsewhere. -/
 theorem visited_walk_cycle :
