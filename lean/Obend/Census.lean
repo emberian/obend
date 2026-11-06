@@ -453,7 +453,6 @@ import Obend.Lower.Proofs.Book
 import Obend.Lower.Proofs.Checks
 import Obend.Lower.Proofs.Complete
 import Obend.Lower.Proofs.Hardware
-import Obend.Lower.Proofs.SelfAccelerate
 import Obend.Lower.Proofs.SiliconKernel
 import Obend.Lower.Proofs.Sound
 import Obend.Lower.Proofs.Subst

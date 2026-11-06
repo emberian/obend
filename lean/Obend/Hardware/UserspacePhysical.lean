@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Hardware.UserspacePhysical — Verified `.obend` Userspace Open-Recursive Physical Standard Library Lowered Through `#import_obend` & `Obend.Leaf` Into FPGA SystemVerilog RTL & AMD `CDNA3` 64-Bit VOP64 GPU ISA
+# Obend.Hardware.UserspacePhysical — Verified `.obend` Userspace Open-Recursive Physical Standard Library Lowered Through `#import_obend` & `Obend.Leaf` Into FPGA SystemVerilog RTL
 
 Elaborates the 4 canonical `.obend` physical standard library modules in `stdlib/physical/`
 at compile time via `#import_obend` (with zero manual de Bruijn `Layer` transcription):
@@ -13,7 +13,9 @@ Connects the `#import_obend`-elaborated `Composition`s and `Book`s directly to:
 - `Obend.Logic.Composition` & `Obend.Leaf.Flatten` (`flatten_sound`, `fix_mix_flatten_sound`),
 - `Obend.Leaf.Emit` (`book_sound`),
 - `Obend.Leaf.Static` (`specializeBook`, `evalBook_specializeBook_eq_evalBook`) & `Obend.Leaf.Specialize` (`extractReadMembers_mutation_invariant`),
-- `Obend.Hardware.Compiler` (`compileBookToRtl`) & `Obend.Lower.Proofs.SelfAccelerate` (64-bit `compileRtlExprToAmdGpu` + `runAmdGpuVop64Prog`).
+- `Obend.Hardware.Compiler` (`compileBookToRtl`). The closed RTL checks of the compiled parts are `example`s in
+  `Obend/Teeth/Hardware/Fixtures.lean`; a GPU claim that rode on an interpreter nobody ran was removed 2026-11-05
+  (the GPU path is `Obend.Hardware.Gpu`).
 -/
 public import Lean
 public import Obend.Spec.FrontEnd
@@ -24,7 +26,6 @@ public import Obend.Logic.Obligation
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
 public import Obend.Leaf.Static
-public import Obend.Lower.Proofs.SelfAccelerate
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.OpenUSD
 public import Obend.Hardware.FluidThermal
@@ -159,7 +160,7 @@ theorem cnc5AxisMill_book_sound (m : String) :
     .get (emit cnc5AxisMillComp).link m ≈b .get cnc5AxisMillComp.object m :=
   book_sound cnc5AxisMillComp cnc5AxisMillComp_closed m
 
-/-! ## 4. Whole-Book Synthesis of `stdlib/physical/*.obend` Parts to FPGA RTL & 64-Bit AMD `CDNA3` VOP64 GPU ISA -/
+/-! ## 4. Whole-Book Synthesis of `stdlib/physical/*.obend` Parts to FPGA RTL -/
 
 /-! ## 5. General Bridge from `Term.fix (Term.mix baseLayer.term overrideLayer.term) (.record seed)` to `Leaf.flatten_sound` -/
 
@@ -539,37 +540,6 @@ theorem ms350_support_and_specialize (env : String → Option Term) (newGate : O
     (extractReadMembers_mutation_invariant ms350LossBody env newGate (by decide +kernel)).1,
     optTermEq_sound (by decide +kernel)⟩
 
-/-- **End-to-End Userspace `stdlib/physical/Ms350FcmlPhaseLeg.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
--- fixture kept (2026-11-04): consumed by a proof in this file
-theorem userspace_ms350_phase_leg_to_fpga_and_amd_gpu_verified :
-    (match compileBookToRtl "ms350_fcml_userspace_phase_leg" (emit ms350PhaseLegComp) with
-     | some m =>
-       checkRtlModule m &&
-       (evalModuleOutputs m (fun _ => 100#64) (fun _ => 0#64) ==
-         [ ("out_deadtimeNs", 120#64)
-         , ("out_slewRateLimitVPerNs", 80#64)
-         , ("out_effectiveGateDelayNs", 137#64)
-         , ("out_shootThroughSafe", 0#64)
-         , ("out_switchingLossUj", 420#64)
-         ]) &&
-       (match m.wires[2]?, m.wires[3]?, m.wires[4]? with
-        | some wGate, some wSafe, some wLoss =>
-          let (rGate, _, codeGate) := compileRtlExprToAmdGpu 1 wGate.expr
-          let (rSafe, _, codeSafe) := compileRtlExprToAmdGpu 1 wSafe.expr
-          let (rLoss, _, codeLoss) := compileRtlExprToAmdGpu 1 wLoss.expr
-          let vgprsGate :=
-            runAmdGpuVop64Prog (fun _ => 10#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeGate
-          let vgprsSafe60 :=
-            runAmdGpuVop64Prog (fun _ => 60#64) (fun _ => 80#64) (fun _ => 0#64) (fun _ => 0#64) codeSafe
-          let vgprsLoss100 :=
-            runAmdGpuVop64Prog (fun _ => 100#64) (fun _ => 120#64) (fun _ => 0#64) (fun _ => 0#64) codeLoss
-          vgprsGate rGate == 47#64 &&
-          vgprsSafe60 rSafe == 1#64 &&
-          vgprsLoss100 rLoss == 420#64
-        | _, _, _ => false)
-     | none => false) = true := by
-  decide +kernel
-
 /-! ## 8. Domain Object 3: $Q_3$ Photonic Coupler Array (`stdlib/physical/CleanroomTcadStack.obend`) -/
 
 /-- Seed record for the $Q_3$ Photonic Coupler Array, elaborated from `stdlib/physical/CleanroomTcadStack.obend`. -/
@@ -826,40 +796,6 @@ theorem cleanroom_tcad_support_and_specialize (env : String → Option Term) (ne
   refine ⟨by decide +kernel,
     (extractReadMembers_mutation_invariant tcadDrainCurrentBody env newEot (by decide +kernel)).1,
     optTermEq_sound (by decide +kernel)⟩
-
-/-- **End-to-End Userspace `stdlib/physical/CleanroomTcadStack.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
--- fixture kept (2026-11-04): consumed by a proof in this file
-theorem userspace_cleanroom_tcad_and_q3_to_fpga_and_amd_gpu_verified :
-    (match compileBookToRtl "cleanroom_tcad_userspace_stack" (emit cleanroomTcadStackComp),
-           compileBookToRtl "q3_photonic_userspace_array" (emit q3PhotonicComp) with
-     | some mTcad, some mQ3 =>
-       checkRtlModule mTcad &&
-       checkRtlModule mQ3 &&
-       (evalModuleOutputs mTcad (fun _ => 200#64) (fun _ => 0#64) ==
-         [ ("out_oxideEotPicometers", 700#64)
-         , ("out_vthMilliV", 250#64)
-         , ("out_gateDelayPs", 1624#64)
-         , ("out_drainCurrentUa", 1250#64)
-         ]) &&
-       (evalModuleOutputs mQ3 (fun _ => 20#64) (fun _ => 0#64) ==
-         [ ("out_couplingWeight", 7#64)
-         , ("out_krawtchoukPhaseShiftMrad", 345#64)
-         , ("out_hypercubeDim", 3#64)
-         , ("out_transferredPowerMw", 143#64)
-         ]) &&
-       (match mTcad.wires[2]?, mQ3.wires[1]? with
-        | some wDelay, some wPhase =>
-          let (rDelay, _, codeDelay) := compileRtlExprToAmdGpu 1 wDelay.expr
-          let (rPhase, _, codePhase) := compileRtlExprToAmdGpu 1 wPhase.expr
-          let vgprsDelay :=
-            runAmdGpuVop64Prog (fun _ => 4#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeDelay
-          let vgprsPhase :=
-            runAmdGpuVop64Prog (fun _ => 3#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codePhase
-          vgprsDelay rDelay == 56#64 &&
-          vgprsPhase rPhase == 90#64
-        | _, _ => false)
-     | _, _ => false) = true := by
-  decide +kernel
 
 /-! ## 10. Full-Stack `.obend` Bitwise, Shift, Signed Order & `Q32.32` Fixed-Point Surface Lowering -/
 

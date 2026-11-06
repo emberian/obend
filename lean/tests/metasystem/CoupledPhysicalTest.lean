@@ -1,10 +1,12 @@
 /-
 # `tests/CoupledPhysicalTest.lean` — End-to-End Verification of WS-R:
-# 1. In-Place 64-Bit `AmdGpuVop64Inst` Self-Acceleration (`compileRtlExprToAmdGpu`)
-# 2. Multi-Limb ($K$-Limb) Ozaki Base-13 `FP4` Tensor-Core Arithmetic (`Obend.Hardware.Accelerators`)
-# 3. 6-Stage Coupled PDE (`libCEED`/`FEMM`), Reverse-Mode AD (`catgrad`), & Geometry (`Fidget`) Self-Acceleration
+# 1. The canonical OpenUSD model (audit fix 6)
+# 2. Multi-Limb ($K$-Limb) Ozaki Base-13 `FP4` integer identities (`Obend.Hardware.Accelerators`)
+# 3. Octree pruning regimes (`GeometryCAM.ivMinChoice`)
 # 4. Coupled Sampled-Data Cyber-Physical Powertrain `DigitalTwin` (`Obend.Hardware.DigitalTwin`)
 # 5. `stdlib/physical/*.obend` Elaborated via `#import_obend` in `Obend.Hardware.UserspacePhysical`
+# The VOP64 GPU interpreter and the six-stage self-acceleration tests went 2026-11-05 with the module that
+# held them; the GPU path is `Obend.Hardware.Gpu`.
 -/
 import Lean
 import Obend.Hardware.Accelerators
@@ -14,7 +16,6 @@ import Obend.Hardware.Magnetics
 import Obend.Hardware.OpenHypergraph
 import Obend.Hardware.DigitalTwin
 import Obend.Hardware.UserspacePhysical
-import Obend.Lower.Proofs.SelfAccelerate
 import Obend.Tactic.Tooth
 
 namespace Obend.Tests.CoupledPhysicalTest
@@ -44,44 +45,8 @@ set_option autoImplicit false
 set_option maxHeartbeats 800000
 
 -- ============================================================================
--- 1. In-Place Audit Fix 5 & Audit Fix 6 Verification
+-- 1. Audit Fix 6 Verification
 -- ============================================================================
-
-/-- Audit Fix 5: `compileRtlExprToAmdGpu` is the single canonical 64-bit `AmdGpuVop64Inst`
-compiler for `RtlExpr`, handling `.ult`, `.eq`, `.mux`, and `.bitNot` exactly across all
-64-bit `BitVec 64` inputs without 32-bit truncation or operator erasure. -/
-theorem test_audit_fix5_in_place_vop64_compiler :
-    (∀ (op : RtlAluOp) (inputs wires regs : Nat → BitVec 64) (a b : BitVec 64),
-      evalAmdGpuExpr inputs wires regs (.alu op (.const a) (.const b)) =
-        evalRtlExpr inputs wires regs (.alu op (.const a) (.const b))) ∧
-    (∀ (inputs wires regs : Nat → BitVec 64) (a : BitVec 64),
-      evalAmdGpuExpr inputs wires regs (.bitNot (.const a)) =
-        evalRtlExpr inputs wires regs (.bitNot (.const a))) ∧
-    (∀ (inputs wires regs : Nat → BitVec 64) (c t f : BitVec 64),
-      evalAmdGpuExpr inputs wires regs (.mux (.const c) (.const t) (.const f)) =
-        evalRtlExpr inputs wires regs (.mux (.const c) (.const t) (.const f))) :=
-  ⟨evalAmdGpuExpr_faithful_all_ops.1,
-   evalAmdGpuExpr_faithful_all_ops.2.2.1,
-   evalAmdGpuExpr_faithful_all_ops.2.2.2.2.1⟩
-
-/-- Concrete verification of `.bitNot`, `.alu .ult`, `.alu .eq`, and `.mux` in
-`compileRtlExprToAmdGpu` and `evalCompiledAmdGpuModule`. -/
-theorem test_vop64_bitNot_ult_eq_mux_concrete :
-    let expr : RtlExpr :=
-      .mux (.alu .ult (.inputPort 0) (.const 20#64))
-        (.alu .eq (.inputPort 0) (.const 12#64))
-        (.bitNot (.const 0#64))
-    let mod : RtlModule := {
-      name := "vop64_audit_probe"
-      inputNames := ["in_arg0"]
-      wires := [{ wireIdx := 0, name := "w0", expr := expr }]
-      regs := []
-      outputs := [{ name := "out_res", expr := .wireRef 0 }]
-    }
-    evalCompiledAmdGpuModule mod 12 = some 1 ∧
-    evalCompiledAmdGpuModule mod 15 = some 0 ∧
-    evalCompiledAmdGpuModule mod 25 = some (2 ^ 64 - 1) := by
-  decide +kernel
 
 /-- Audit Fix 6: `OpenUSD.lean` is the single canonical OpenUSD model, consuming `UsdArcKind`
 and `UsdArcKind.strength` from `GeometryCAM.lean`. -/
@@ -113,22 +78,6 @@ theorem test_ozaki_base13_klimb_universal
    ozaki_base13_klimb_mul_exact xs ys,
    ozaki_base13_klimb_dot_exact vecsA vecsB⟩
 
-/-- 4-limb Base-13 `FP4` (`E2M1`, doubled magnitudes in `[-12, 12]`) multiplication and
-AMD `CDNA3` `vMfmaDot4` diagonal partial-product bridge. -/
-theorem test_ozaki_base13_4limb_fp4_mfma_bridge
-    (a0 a1 a2 a3 b0 b1 b2 b3 acc : Int) :
-    evalBase13Limbs (mulBase13Limbs [a0, a1, a2, a3] [b0, b1, b2, b3]) =
-      (a0 + 13 * a1 + 169 * a2 + 2197 * a3) * (b0 + 13 * b1 + 169 * b2 + 2197 * b3) ∧
-    readVgpr
-      (execAmdGpuInst [a0, a1, a2, a3, 1, 13, 169, 2197, 0]
-        (.vMfmaDot4 9 0 4 8)) 9 =
-      evalBase13Limbs [a0, a1, a2, a3] ∧
-    readVgpr
-      (execAmdGpuInst [a0, a1, a2, a3, b0, b1, b2, b3, acc]
-        (.vMfmaDot4 9 0 4 8)) 9 =
-      acc + kulischDot [a0, a1, a2, a3] [b0, b1, b2, b3] :=
-  ozaki_base13_4limb_fp4_mfma_bridge a0 a1 a2 a3 b0 b1 b2 b3 acc
-
 /-- Concrete 4-limb and 5-limb Ozaki Base-13 `FP4` inner product verification with
 `allLimbsDoubledFp4 = true` (every limb lies in the exact doubled `FP4` (`E2M1`) grid `[-12, 12]`). -/
 theorem test_ozaki_klimb_fp4_concrete_4_and_5_limbs :
@@ -147,45 +96,11 @@ theorem test_ozaki_klimb_fp4_concrete_4_and_5_limbs :
   decide +kernel
 
 -- ============================================================================
--- 3. 6-Stage Coupled PDE (`libCEED`), AD (`catgrad`), & Geometry (`Fidget`) Self-Acceleration
+-- 3. Octree pruning regimes
 -- ============================================================================
 
-/-- Master 6-Stage Universal Self-Acceleration Theorem across:
-1. `libCeedFemmNodalOpLExpr` (`self_accelerate_libceed_femm_nodal_op_6stage`, matching `Magnetics.evalLibCeedElementOp`),
-2. `catgradOpticRevAdLExpr` (`self_accelerate_catgrad_optic_rev_ad_6stage`, matching `OpenHypergraph.evalOpticChain2Rev`),
-3. `fidgetChoiceOctreePruneLExpr` (`self_accelerate_fidget_choice_octree_6stage`, matching `GeometryCAM.ivMinChoice` across `.left`, `.right`, `.both`). -/
-theorem test_coupled_pde_ad_geometry_6stage_universal
-    (al bl : List Int) (xs ys : List (List Int)) :
-    evalBase13Limbs (mulBase13Limbs al bl) = evalBase13Limbs al * evalBase13Limbs bl ∧
-    evalOzakiBase13KLimbDot xs ys = kulischDot (xs.map evalBase13Limbs) (ys.map evalBase13Limbs) ∧
-    SSteps (.app libCeedFemmNodalOpLExpr (.lit 6)) (.lit 35) ∧
-    SSteps (.app catgradOpticRevAdLExpr (.lit 7)) (.lit 56) ∧
-    SSteps (.app fidgetChoiceOctreePruneLExpr (.lit 8)) (.lit 1) ∧
-    (Obend.Hardware.Magnetics.evalLibCeedElementOp selfAccelFemmTriangle 6 3 2).1 = 35 ∧
-    (Obend.Hardware.OpenHypergraph.evalOpticChain2Rev
-      (Obend.Hardware.OpenHypergraph.compileOpticAdjoint .mul)
-      (Obend.Hardware.OpenHypergraph.compileOpticAdjoint .mul)
-      (Obend.Hardware.OpenHypergraph.evalOpticChain2Fwd .mul .mul 4 7).2 1).2 = 56 ∧
-    Obend.Hardware.GeometryCAM.ivMinChoice { lo := 4, hi := 8 } { lo := 10, hi := 20 } = .left :=
-  coupled_pde_ad_geometry_6stage_universal_self_acceleration al bl xs ys
-
-theorem test_three_6stage_kernels_full_pipeline :
-    (let C := leanComposition "libCeedNodal" (lowerT libCeedFemmNodalOpLExpr)
-     let B := emit C
-     Halts (.app (.get B.link "libCeedNodal") (.nat 6)) (.natural 35)) ∧
-    (let C := leanComposition "catgradRevAd" (lowerT catgradOpticRevAdLExpr)
-     let B := emit C
-     Halts (.app (.get B.link "catgradRevAd") (.nat 7)) (.natural 56)) ∧
-    (let C := leanComposition "fidgetPrune" (lowerT fidgetChoiceOctreePruneLExpr)
-     let B := emit C
-     Halts (.app (.get B.link "fidgetPrune") (.nat 8)) (.natural 1)) :=
-  ⟨self_accelerate_libceed_femm_nodal_op_6stage.2.2.1,
-   self_accelerate_catgrad_optic_rev_ad_6stage.2.2.1,
-   self_accelerate_fidget_choice_octree_6stage.2.2.1⟩
-
 /-- Concrete verification of all 3 octree pruning regimes (`.left` = 1, `.right` = 2, `.both` = 3)
-in `self_accelerate_fidget_choice_octree_6stage` across `SSteps`, `Core4`, `Leaf.Book`, FPGA `DSP58`,
-AMD `CDNA3` `AmdGpuVop64Inst` (`v_cmp_lt_u64` + `v_cndmask_b64`), and $K$-limb Ozaki Base-13. -/
+of `GeometryCAM.ivMinChoice`. -/
 theorem test_fidget_octree_all_three_regimes :
     (Obend.Hardware.GeometryCAM.ivMinChoice { lo := 4, hi := 8 } { lo := 10, hi := 20 } = FidgetChoice.left) ∧
     (Obend.Hardware.GeometryCAM.ivMinChoice { lo := 26, hi := 30 } { lo := 10, hi := 20 } = FidgetChoice.right) ∧
@@ -303,11 +218,8 @@ theorem test_four_stdlib_physical_domain_objects_universal
    cleanroom_tcad_gate_delay_forall fanout⟩
 
 -- ============================================================================
--- 6. `#tooth` Mutation Proofs Across All WS-R Deliverables
+-- 6. `#tooth` Mutation Proofs
 -- ============================================================================
-
-#tooth test_vop64_bitNot_ult_eq_mux_concrete by
-  mutation compileRtlExprToAmdGpu := fun r _ => (r, r + 1, [AmdGpuVop64Inst.v_mov_b64 r 0#64])
 
 #tooth test_ozaki_klimb_fp4_concrete_4_and_5_limbs by
   mutation mulBase13Limbs := fun xs _ => xs
@@ -317,12 +229,6 @@ theorem test_four_stdlib_physical_domain_objects_universal
 
 #tooth test_golden_ms350_ipm_digital_twin by
   mutation evalFcmlHarmonicSteinmetzLossW := fun _ _ _ _ _ => 0
-
-#tooth userspace_ms350_phase_leg_to_fpga_and_amd_gpu_verified by
-  mutation ms350PhaseLegComp := statorInSlotComp
-
-#tooth userspace_cleanroom_tcad_and_q3_to_fpga_and_amd_gpu_verified by
-  mutation cleanroomTcadStackComp := q3PhotonicComp
 
 -- ============================================================================
 -- 7. Compile-Time Axiom Audit (`0 sorryAx`, `0 custom axioms`, `0 Classical.choice`)
@@ -335,10 +241,6 @@ elab "#verify_coupled_physical_axioms" : command => do
     ``Obend.Hardware.Accelerators.evalBase13Limbs_scale_exact,
     ``Obend.Hardware.Accelerators.ozaki_base13_klimb_mul_exact,
     ``Obend.Hardware.Accelerators.ozaki_base13_klimb_dot_exact,
-    ``Obend.Hardware.Accelerators.ozaki_base13_4limb_fp4_mfma_bridge,
-    ``Obend.Lower.libCeedFemmNodalOp_runs_6,
-    ``Obend.Lower.catgradOpticRevAd_runs_7,
-    ``Obend.Lower.fidgetChoiceOctreePrune_runs_8,
     ``Obend.Hardware.UserspacePhysical.stator_in_slot_peak_temp_forall,
     ``Obend.Hardware.UserspacePhysical.stator_in_slot_sdf_margin_forall,
     ``Obend.Hardware.UserspacePhysical.ms350_switching_loss_forall,
@@ -351,16 +253,9 @@ elab "#verify_coupled_physical_axioms" : command => do
     ``test_four_stdlib_physical_domain_objects_universal
   ]
   let standardTargets : List Name := [
-    ``Obend.Lower.evalAmdGpuExpr_faithful_all_ops,
-    ``Obend.Lower.self_accelerate_libceed_femm_nodal_op_6stage,
-    ``Obend.Lower.self_accelerate_catgrad_optic_rev_ad_6stage,
-    ``Obend.Lower.self_accelerate_fidget_choice_octree_6stage,
-    ``Obend.Lower.coupled_pde_ad_geometry_6stage_universal_self_acceleration,
     ``Obend.Hardware.DigitalTwin.sampled_data_current_loop_iss_contraction,
     ``Obend.Hardware.DigitalTwin.sampled_data_closed_loop_powertrain_safety_invariant,
-    ``Obend.Hardware.DigitalTwin.golden_ms350_ipm_digital_twin_trajectory_verified,
-    ``Obend.Hardware.UserspacePhysical.userspace_ms350_phase_leg_to_fpga_and_amd_gpu_verified,
-    ``Obend.Hardware.UserspacePhysical.userspace_cleanroom_tcad_and_q3_to_fpga_and_amd_gpu_verified
+    ``Obend.Hardware.DigitalTwin.golden_ms350_ipm_digital_twin_trajectory_verified
   ]
   for t in choiceFreeTargets do
     let axs ← liftCoreM <| collectAxioms t

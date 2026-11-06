@@ -26,24 +26,22 @@ bugs), and `#print axioms` verification (`0 sorryAx`):
    - Hardware DPR `Slot` (`dprTileSlot : Slot LeafPin TileBitstreamCandidate`) guarded by `LeafPin`,
      proving that upstream pin mutation immediately transitions `dprTileSlot.read` to `.blocked`
      and triggers 1-cycle fallback to `.baselineTile` (`dprTile_moved_pin_blocks`).
-4. **Upgrade 4 (`Obend.Hardware.Compiler` & `Obend.Lower.Proofs.SelfAccelerate`)**:
+4. **Upgrade 4 (`Obend.Hardware.Compiler`)**:
    - Structural 2-state linear recurrence extractor (`extractTwoStateLinearRec`) independent of
      method/module string names (`compileLinearRec2State_sound`), and inter-slot pipelined call
-     argument wiring (`compileTermPipelined_arg_wired_and_stage_correspondence`).
-   - Faithful 64-bit AMD GPU VOP ISA (`AmdGpuVop64Inst`, `compileRtlAluToVop`, `compileRtlExprToVop64`,
-     `evalAmdGpuExpr`) preserving all 10 `RtlAluOp`s and `.bitNot` (`evalAmdGpuExpr_faithful_all_ops`).
+     argument wiring (`compileTermPipelined_arg_wired_and_stage_correspondence`). A VOP64 GPU interpreter
+     and its faithfulness theorem were part of this upgrade until 2026-11-05, when they went with the
+     module that held them; the GPU path is `Obend.Hardware.Gpu`.
 -/
 public import Obend.Tactic.Tooth
 import all Obend.Lower.LeanKernel
 import all Obend.Lower.ExprCAM
 import all Obend.Lower.Proofs.SiliconKernel
-import all Obend.Lower.Proofs.SelfAccelerate
 import all Obend.Hardware.ReductionMachine
 import all Obend.Hardware.Compiler
 public import Obend.Lower.LeanKernel
 public import Obend.Lower.ExprCAM
 public import Obend.Lower.Proofs.SiliconKernel
-public import Obend.Lower.Proofs.SelfAccelerate
 public import Obend.Hardware.ReductionMachine
 public import Obend.Hardware.Compiler
 @[expose] public section
@@ -203,19 +201,16 @@ theorem silicon_realism_noc_and_dpr_slot_suite :
          fun {_v} {_name} {_C} specTile baseTile digest hj hdig {_p} hp hd =>
            dprTile_moved_pin_blocks specTile baseTile digest hj hdig hp hd⟩
 
-/-! ## 4. Upgrade 4: Structural 2-State Linear Recurrence, Pipelined Call Wiring & Faithful 64-Bit GPU VOP ISA -/
+/-! ## 4. Upgrade 4: Structural 2-State Linear Recurrence & Pipelined Call Wiring -/
 
-/-- **Theorem (`silicon_realism_compiler_and_gpu_vop64_suite`)**:
+/-- **Theorem (`silicon_realism_compiler_suite`)**:
 1. Structural 2-state linear recurrence extraction (`extractTwoStateLinearRec` / `extractTwoStateCombCoeffs`,
    including commuted operand orders `b * cCurr + a` and `a * cPrev + cCurr * b`) and universal
    bounded soundness (`compileLinearRec2State_sound`) for any `(nVal, init0, init1, cCurr, cPrev, k)`
    with `k ≤ nVal` independent of method/module string names,
 2. Universal pipelined stage correspondence (`compileTermPipelined_sound`) and non-trivial call
-   argument wiring (`compileTermPipelined_arg_wired_and_stage_correspondence`),
-3. Universal 64-bit AMD GPU VOP ISA faithfulness (`evalAmdGpuExpr_faithful_all_ops`) across every
-   `RtlAluOp` and `.bitNot` (`bitNot 0 = 0xFFFFFFFFFFFFFFFF#64`, `eq 0 0 = 1#64`,
-   `ult 3 5 = 1#64`, `ult 5 3 = 0#64`). -/
-theorem silicon_realism_compiler_and_gpu_vop64_suite :
+   argument wiring (`compileTermPipelined_arg_wired_and_stage_correspondence`). -/
+theorem silicon_realism_compiler_suite :
     (∀ (nVal init0 init1 cCurr cPrev k : Nat),
       k ≤ nVal →
       runLinearRec2StateLoop nVal init0 init1 cCurr cPrev k =
@@ -245,27 +240,13 @@ theorem silicon_realism_compiler_and_gpu_vop64_suite :
       compileTermPipelined ["scale3", "caller"] [] 1 [.inputPort 0] nonDirectCall = none ∧
       evalRtlExpr inputs wires regs expectedRtl = BitVec.ofNat 64 k * 3#64 ∧
       evalTermPipelinedHw ["scale3", "caller"] [calleeBody] inputs wires regs 1 [inputs 0] nonDirectCall =
-        some (BitVec.ofNat 64 k * 3#64)) ∧
-    (∀ (op : RtlAluOp) (inputs wires regs : Nat → BitVec 64) (a b : BitVec 64),
-      evalAmdGpuExpr inputs wires regs (.alu op (.const a) (.const b)) =
-        evalRtlExpr inputs wires regs (.alu op (.const a) (.const b))) ∧
-    (∀ (inputs wires regs : Nat → BitVec 64),
-      evalAmdGpuExpr inputs wires regs (.bitNot (.const 0#64)) = 0xFFFFFFFFFFFFFFFF#64 ∧
-      evalAmdGpuExpr inputs wires regs (.alu .eq (.const 0#64) (.const 0#64)) = 1#64 ∧
-      evalAmdGpuExpr inputs wires regs (.alu .ult (.const 3#64) (.const 5#64)) = 1#64 ∧
-      evalAmdGpuExpr inputs wires regs (.alu .ult (.const 5#64) (.const 3#64)) = 0#64) := by
-  refine ⟨compileLinearRec2State_sound.1,
-          fun _ _ => ⟨rfl, rfl⟩,
-          compileTermPipelined_sound,
-          compileTermPipelined_arg_wired_and_stage_correspondence,
-          evalAmdGpuExpr_faithful_all_ops.1,
-          fun inputs wires regs =>
-            ⟨evalAmdGpuExpr_faithful_all_ops.2.2.2.2.2.1 inputs wires regs,
-             (evalAmdGpuExpr_faithful_all_ops.2.2.2.2.2.2.1 inputs wires regs).1,
-             (evalAmdGpuExpr_faithful_all_ops.2.2.2.2.2.2.2 inputs wires regs).1,
-             (evalAmdGpuExpr_faithful_all_ops.2.2.2.2.2.2.2 inputs wires regs).2⟩⟩
+        some (BitVec.ofNat 64 k * 3#64)) :=
+  ⟨compileLinearRec2State_sound.1,
+   fun _ _ => ⟨rfl, rfl⟩,
+   compileTermPipelined_sound,
+   compileTermPipelined_arg_wired_and_stage_correspondence⟩
 
-/-! ## 5. Eight `#tooth` Kernel Mutation Probes Across All 4 Upgrades -/
+/-! ## 5. Seven `#tooth` Kernel Mutation Probes Across All 4 Upgrades -/
 
 /-- 1. Broken `kernelIsDefEqFull` in `Obend.Lower.LeanKernel` that reverts to syntactic/WHNF
 `kernelIsDefEq` without `Nat` literal ↔ `Nat.succ` bridging, lambda $\eta$-equivalence, or
@@ -371,25 +352,6 @@ def compileTermPipelinedDiscardArg
 
 #tooth Obend.Hardware.Compiler.compileTermPipelined_arg_wired_and_stage_correspondence by mutation Obend.Hardware.Compiler.compileTermPipelined := compileTermPipelinedDiscardArg
 
-/-- 8. Broken `compileRtlAluToVop` in `Obend.Lower` (`SelfAccelerate.lean`) that reproduces the
-original bug: mapping `.eq` to `.v_add_u64` and `.ult` to `.v_sub_u64`! -/
-def compileRtlAluToVopCorrupt (op : RtlAluOp) (dst src0 src1 : Nat) : AmdGpuVop64Inst :=
-  match op with
-  | .add    => .v_add_u64 dst src0 src1
-  | .sub    => .v_sub_u64 dst src0 src1
-  | .mul    => .v_mul_lo_u64 dst src0 src1
-  | .bitAnd => .v_and_b64 dst src0 src1
-  | .bitOr  => .v_or_b64 dst src0 src1
-  | .bitXor => .v_xor_b64 dst src0 src1
-  | .shl    => .v_lshl_b64 dst src0 src1
-  | .lshr   => .v_lshr_b64 dst src0 src1
-  | .ashr   => .v_ashr_i64 dst src0 src1
-  | .eq     => .v_add_u64 dst src0 src1
-  | .ult    => .v_sub_u64 dst src0 src1
-  | .slt    => .v_cmp_lt_i64 dst src0 src1
-  | .qmul32 => .v_qmul32_i64 dst src0 src1
-
-#tooth Obend.Lower.evalAmdGpuExpr_faithful_all_ops by mutation Obend.Lower.compileRtlAluToVop := compileRtlAluToVopCorrupt
 
 /-! ## 6. Axiom Hygiene Verification (`0 sorryAx`, `0` Custom Axioms) -/
 
@@ -411,11 +373,10 @@ def compileRtlAluToVopCorrupt (op : RtlAluOp) (dst src0 src1 : Nat) : AmdGpuVop6
 #print axioms Obend.Hardware.Compiler.compileLinearRec2State_sound
 #print axioms Obend.Hardware.Compiler.compileTermPipelined_sound
 #print axioms Obend.Hardware.Compiler.compileTermPipelined_arg_wired_and_stage_correspondence
-#print axioms Obend.Lower.evalAmdGpuExpr_faithful_all_ops
 #print axioms Obend.Tests.SiliconRealism.silicon_realism_defeq_and_lowered_kernel_suite
 #print axioms Obend.Tests.SiliconRealism.silicon_realism_hw_cam_image_roundtrip_suite
 #print axioms Obend.Tests.SiliconRealism.silicon_realism_noc_and_dpr_slot_suite
-#print axioms Obend.Tests.SiliconRealism.silicon_realism_compiler_and_gpu_vop64_suite
+#print axioms Obend.Tests.SiliconRealism.silicon_realism_compiler_suite
 
 end Obend.Tests.SiliconRealism
 end

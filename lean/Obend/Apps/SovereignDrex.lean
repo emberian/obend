@@ -21,7 +21,7 @@ directly to the mechanized sovereign vault, live `K-CARRY` upgrade, and 4-valida
   * 4-validator ($N = 4, f = 1$, quorum $2f + 1 = 3$) Tier 2 Simplex quorum promotion & accountable slashing (`tier2_simplex_quorum_and_accountable_safety`),
   * Durable BFT WAL crash-recovery anti-equivocation (`durable_recovery_prevents_equivocation`) and expose-once settlement externalization across crashes (`durable_expose_once_across_crashes`),
 - `Obend.Leaf.Static`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Synth`, `Obend.Hardware.Compiler`:
-  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`, `emitModuleSV`) + AMD `CDNA3` `VOP64` GPU synthesis.
+  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`, `emitModuleSV`).
 -/
 public import Lean
 public import Obend.Hardware.UserspacePhysical
@@ -133,12 +133,10 @@ theorem sovereignDrex_flatten_and_book_sound (m : String) :
          flatten_sound _ hc3 m, book_sound _ hc3 m,
          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
 
-/-- **`sovereignDrex_rtl_and_amd_gpu_verified`**:
-Compiles `SovereignDrexTop.carryUpgradedSovereignDrex_book` and
-`SovereignDrexClearing.sovereignCarryClearing_book` into verified `RtlModule`s
-(`checkRtlModule = true`) and 64-bit AMD `CDNA3` `VOP64` GPU instructions
-(`compileRtlExprToAmdGpu` + `runAmdGpuVop64Prog`). -/
-theorem sovereignDrex_rtl_and_amd_gpu_verified :
+/-- The compiled `SovereignDrexTop.carryUpgradedSovereignDrex_book` and
+`SovereignDrexClearing.sovereignCarryClearing_book`: `checkRtlModule` and one input's outputs (a closed check;
+a GPU co-execution claim on an interpreter nobody ran was removed 2026-11-05). -/
+example :
     (match compileBookToRtl "sovereign_drex_top" SovereignDrexTop.carryUpgradedSovereignDrex_book,
            compileBookToRtl "sovereign_drex_clearing" SovereignDrexClearing.sovereignCarryClearing_book with
      | some mTop, some mClear =>
@@ -157,15 +155,7 @@ theorem sovereignDrex_rtl_and_amd_gpu_verified :
          , ("out_quorumThreshold", 3#64)
          , ("out_welfareCrownFloor", 1000#64)
          , ("out_clearedCbdcAmount", 3500#64)
-         ]) &&
-       (match mTop.wires[4]? with
-        | some wSettle =>
-          let (rSettle, _, codeSettle) := compileRtlExprToAmdGpu 1 wSettle.expr
-          let wires := evalWireTable (fun _ => 8#64) (fun _ => 0#64) mTop.wires
-          let vgprs :=
-            runAmdGpuVop64Prog (fun _ => 8#64) wires (fun _ => 0#64) (fun _ => 0#64) codeSettle
-          vgprs rSettle == 5000#64
-        | none => false)
+         ])
      | _, _ => false) = true := by
   decide +kernel
 

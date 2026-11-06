@@ -132,7 +132,9 @@ theorem quantumPhotonicMatter_flatten_and_book_sound (m : String) :
          flatten_sound _ hc3 m, book_sound _ hc3 m,
          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
 
-theorem quantumPhotonicMatter_rtl_and_amd_gpu_verified :
+/-- The compiled co-processor and bus: `checkRtlModule` and one input's outputs (a closed check; a GPU
+co-execution claim on an interpreter nobody ran was removed 2026-11-05). -/
+example :
     (match compileBookToRtl "qpm_coproc_top" QPMCoProcTop.faultTolerantQuantumPhotonicCoProc_book,
            compileBookToRtl "qpm_krawtchouk_bus" QPMClements.calibratedKrawtchoukBus_book with
      | some mTop, some mBus =>
@@ -153,15 +155,7 @@ theorem quantumPhotonicMatter_rtl_and_amd_gpu_verified :
          , ("out_krawtchoukCouplingLength0Nm", 1571#64)
          , ("out_krawtchoukCouplingLength1Nm", 2721#64)
          , ("out_quotientAdjointMacs", 3206#64)
-         ]) &&
-       (match mTop.wires[4]? with
-        | some wAdj =>
-          let (rAdj, _, codeAdj) := compileRtlExprToAmdGpu 1 wAdj.expr
-          let wires := evalWireTable (fun _ => 25#64) (fun _ => 0#64) mTop.wires
-          let vgprs :=
-            runAmdGpuVop64Prog (fun _ => 25#64) wires (fun _ => 0#64) (fun _ => 0#64) codeAdj
-          vgprs rAdj == 8869#64
-        | none => false)
+         ])
      | _, _ => false) = true := by
   decide +kernel
 

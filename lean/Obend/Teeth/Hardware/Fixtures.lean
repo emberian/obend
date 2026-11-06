@@ -289,7 +289,7 @@ open Obend.Lower
 open Obend.Hardware.HDL
 open Obend.Hardware.Compiler
 open Obend.Hardware.Accelerators
-/-- **End-to-End Userspace `stdlib/physical/LcDrivesStator.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
+/-- **End-to-End Userspace `stdlib/physical/LcDrivesStator.obend` -> `Leaf.Book` -> FPGA RTL**: `checkRtlModule` and one input's outputs (a closed check). -/
 example :
     (match compileBookToRtl "lc_drives_userspace_stator" (emit lcDrivesStatorUsdComp) with
      | some m =>
@@ -300,14 +300,7 @@ example :
          , ("out_thermalResistance", 9#64)
          , ("out_sdfMargin", 24#64)
          , ("out_peakWindingTemp", 122#64)
-         ]) &&
-       (match m.wires[3]? with
-        | some wSdf =>
-          let (rSdf, _, codeSdf) := compileRtlExprToAmdGpu 1 wSdf.expr
-          let finalVgprs :=
-            runAmdGpuVop64Prog (fun _ => 8#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeSdf
-          finalVgprs rSdf == 24#64
-        | none => false)
+         ])
      | none => false) = true := by
   decide +kernel
 end Obend.Hardware.UserspacePhysical
@@ -325,7 +318,7 @@ open Obend.Lower
 open Obend.Hardware.HDL
 open Obend.Hardware.Compiler
 open Obend.Hardware.Accelerators
-/-- **End-to-End Userspace `stdlib/physical/Cnc5AxisMill.obend` -> `Leaf.Book` -> FPGA RTL -> AMD `CDNA3` VOP64 GPU Theorem**. -/
+/-- **End-to-End Userspace `stdlib/physical/Cnc5AxisMill.obend` -> `Leaf.Book` -> FPGA RTL**: `checkRtlModule` and one input's outputs (a closed check). -/
 example :
     (match compileBookToRtl "cnc_5axis_userspace_mill" (emit cnc5AxisMillComp) with
      | some m =>
@@ -336,18 +329,7 @@ example :
          , ("out_abbeAngularDriftUm", 6#64)
          , ("out_commandedAxisAt10mmUm", 10024#64)
          , ("out_totalVolumetricErrorUm", 26#64)
-         ]) &&
-       (match m.wires[3]?, m.wires[4]? with
-        | some wCmd, some wErr =>
-          let (rCmd, _, codeCmd) := compileRtlExprToAmdGpu 1 wCmd.expr
-          let (rErr, _, codeErr) := compileRtlExprToAmdGpu 1 wErr.expr
-          let vgprsCmd :=
-            runAmdGpuVop64Prog (fun _ => 6#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeCmd
-          let vgprsErr :=
-            runAmdGpuVop64Prog (fun _ => 6#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeErr
-          vgprsCmd rCmd == 10024#64 &&
-          vgprsErr rErr == 26#64
-        | _, _ => false)
+         ])
      | none => false) = true := by
   decide +kernel
 end Obend.Hardware.UserspacePhysical
@@ -367,25 +349,83 @@ open Obend.Hardware.Compiler
 open Obend.Hardware.Accelerators
 /-- **Theorem (`userspace_obend_bitwise_q32_surface_to_rtl_verified`)**:
 Elaborates `obendBitwiseQ32Source` through `Spec.Parse` + `Spec.Elaborate` + `FrontEnd.accept`,
-synthesizes a `Composition` -> `Leaf.Book` -> `RtlModule` + `AmdGpuVop64Inst`, and proves that:
+synthesizes a `Composition` -> `Leaf.Book` -> `RtlModule`, and checks that:
 1. `StdBitwiseQ32` elaborates (the `#obend_decl` command succeeded; `Obend.Core.Check` translation validation),
 2. `maskVal = (0xFF & 0x0F) | (1 << 4) = 15 | 16 = 31`,
-3. `q32Scaled(10) = q32ToInt(qmul32(10 << 32, 3 << 32)) ^ (31 >> 1) = 30 ^ 15 = 17` in both
-   the synchronous `RtlModule` (`evalModuleOutputs`) and the 64-bit AMD `CDNA3` VOP64 GPU kernel! -/
+3. `q32Scaled(10) = q32ToInt(qmul32(10 << 32, 3 << 32)) ^ (31 >> 1) = 30 ^ 15 = 17` in the
+   synchronous `RtlModule` (`evalModuleOutputs`). -/
 example :
     (match compileBookToRtl "bitwise_q32_rtl" StdBitwiseQ32.bitwiseQ32Inst_book with
      | some m =>
        checkRtlModule m &&
        (evalModuleOutputs m (fun _ => 10#64) (fun _ => 0#64) ==
          [ ("out_maskVal", 31#64)
-         , ("out_q32Scaled", 17#64) ]) &&
-       (match m.wires[1]? with
-        | some wScaled =>
-          let (rOut, _, code) := compileRtlExprToAmdGpu 1 wScaled.expr
-          let wireEnv := evalWireTable (fun _ => 10#64) (fun _ => 0#64) m.wires
-          let vgprs := runAmdGpuVop64Prog (fun _ => 10#64) wireEnv (fun _ => 0#64) (fun _ => 0#64) code
-          vgprs rOut == 17#64
-        | none => false)
+         , ("out_q32Scaled", 17#64) ])
      | none => false) = true := by
+  decide +kernel
+end Obend.Hardware.UserspacePhysical
+
+-- from Obend/Hardware/UserspacePhysical.lean (2026-11-05): the RTL half of a theorem whose other half claimed GPU
+-- co-execution on an interpreter nobody ran; worth a pre-push run
+namespace Obend.Hardware.UserspacePhysical
+open Lean (Json toJson Name Ident Syntax TSyntax Quote quote mkIdent)
+open Lean.Elab.Command (CommandElabM elabCommand)
+open Obend.Core.Term
+open Obend.Equiv
+open Obend.Logic
+open Obend.Leaf
+open Obend.Leaf.Static
+open Obend.Lower
+open Obend.Hardware.HDL
+open Obend.Hardware.Compiler
+/-- The compiled `stdlib/physical/Ms350FcmlPhaseLeg.obend` phase leg: `checkRtlModule` and one input's outputs (a closed check). -/
+example :
+    (match compileBookToRtl "ms350_fcml_userspace_phase_leg" (emit ms350PhaseLegComp) with
+     | some m =>
+       checkRtlModule m &&
+       (evalModuleOutputs m (fun _ => 100#64) (fun _ => 0#64) ==
+         [ ("out_deadtimeNs", 120#64)
+         , ("out_slewRateLimitVPerNs", 80#64)
+         , ("out_effectiveGateDelayNs", 137#64)
+         , ("out_shootThroughSafe", 0#64)
+         , ("out_switchingLossUj", 420#64)
+         ])
+     | none => false) = true := by
+  decide +kernel
+end Obend.Hardware.UserspacePhysical
+
+-- from Obend/Hardware/UserspacePhysical.lean (2026-11-05): the RTL half of a theorem whose other half claimed GPU
+-- co-execution on an interpreter nobody ran; worth a pre-push run
+namespace Obend.Hardware.UserspacePhysical
+open Lean (Json toJson Name Ident Syntax TSyntax Quote quote mkIdent)
+open Lean.Elab.Command (CommandElabM elabCommand)
+open Obend.Core.Term
+open Obend.Equiv
+open Obend.Logic
+open Obend.Leaf
+open Obend.Leaf.Static
+open Obend.Lower
+open Obend.Hardware.HDL
+open Obend.Hardware.Compiler
+/-- The compiled `stdlib/physical/CleanroomTcadStack.obend` stack and $Q_3$ array: `checkRtlModule` and one input's outputs (a closed check). -/
+example :
+    (match compileBookToRtl "cleanroom_tcad_userspace_stack" (emit cleanroomTcadStackComp),
+           compileBookToRtl "q3_photonic_userspace_array" (emit q3PhotonicComp) with
+     | some mTcad, some mQ3 =>
+       checkRtlModule mTcad &&
+       checkRtlModule mQ3 &&
+       (evalModuleOutputs mTcad (fun _ => 200#64) (fun _ => 0#64) ==
+         [ ("out_oxideEotPicometers", 700#64)
+         , ("out_vthMilliV", 250#64)
+         , ("out_gateDelayPs", 1624#64)
+         , ("out_drainCurrentUa", 1250#64)
+         ]) &&
+       (evalModuleOutputs mQ3 (fun _ => 20#64) (fun _ => 0#64) ==
+         [ ("out_couplingWeight", 7#64)
+         , ("out_krawtchoukPhaseShiftMrad", 345#64)
+         , ("out_hypercubeDim", 3#64)
+         , ("out_transferredPowerMw", 143#64)
+         ])
+     | _, _ => false) = true := by
   decide +kernel
 end Obend.Hardware.UserspacePhysical

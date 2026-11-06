@@ -78,8 +78,6 @@ inline std::vector<uint64_t> ntt_256_ref(const std::vector<uint64_t>& in, uint64
     return a;
 }
 
-// Reference 64-bit AMD VOP64 instruction sequence emulator matching Obend.Lower.compileRtlExprToAmdGpu
-// for zkNttButterflyFoldRtlExpr: (u + v * w) + r * ((u - v * w) - (u + v * w))
 // The Fiat-Shamir transcript step of SumcheckRoundPoly.obend / Obend.Apps.ZkNtt.transcriptAbsorbSpec:
 // (((t + g0) * 2^32 + g1) * 2^32 + g2 + 0x5A17)^7 in F_p. A fixed permutation binding the challenge
 // to the three round messages; not a cryptographic hash.

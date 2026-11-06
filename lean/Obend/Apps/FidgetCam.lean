@@ -715,7 +715,7 @@ example :
         (fun _ => 0#64)).lookup "out_no_gouge_ok" = some 0#64 := by
   decide +kernel
 
-/-! ## 8. The composed books through the generic RTL compiler and the GPU code generator -/
+/-! ## 8. The composed books through the generic RTL compiler -/
 
 example :
     (match compileBookToRtl "fidget_impeller_cam_top" FidgetImpellerTop.liverpsImpellerCamTop_book,
@@ -723,13 +723,7 @@ example :
      | some mTop, some mBoss =>
        checkRtlModule mTop && checkRtlModule mBoss &&
        ((evalModuleOutputs mTop (fun _ => 1#64) (fun _ => 0#64)).lookup "out_toolOffsetUm" == some 2400#64) &&
-       ((evalModuleOutputs mBoss (fun _ => 1#64) (fun _ => 0#64)).lookup "out_lugReachUm" == some 12500#64) &&
-       (match mTop.wires.find? (fun w => w.name == "toolOffsetUm") with
-        | some w =>
-          let (rOut, _, code) := compileRtlExprToAmdGpu 1 w.expr
-          let wires := evalWireTable (fun _ => 1#64) (fun _ => 0#64) mTop.wires
-          runAmdGpuVop64Prog (fun _ => 1#64) wires (fun _ => 0#64) (fun _ => 0#64) code rOut == 2400#64
-        | none => false)
+       ((evalModuleOutputs mBoss (fun _ => 1#64) (fun _ => 0#64)).lookup "out_lugReachUm" == some 12500#64)
      | _, _ => false) = true := by
   decide +kernel
 

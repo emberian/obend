@@ -28,7 +28,6 @@ public import Obend.Hardware.DSP
 public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.TaylorModel
 public import Obend.Analysis.SosLyapunov
-public import Obend.Lower.Proofs.SelfAccelerate
 public meta import Lean
 public meta import Obend.Core.Term
 public meta import Obend.Law
@@ -62,7 +61,7 @@ import all Obend.Logic.Obligation
 End-to-end formalization, multi-layer `.obend` elaboration, compile-time `AutoCert` external-judge
 synthesis (`"taylor-model@1"`, `"interval@1"`), RF/DSP signoff proofs, stateful `always_ff` 3-stage CIC + folded symmetric FIR + 4-stage
 CORDIC + $\Delta\phi[n] = \phi[n] - \phi[n-1]$ 8-FSK FT8 hardware synthesis (`compileStatefulTermsToRtl` /
-`compileStatefulStepToRtl`), 64-bit AMD `VOP64` GPU equivalence, and cross-package dependency cone
+`compileStatefulStepToRtl`), and cross-package dependency cone
 verification for **Flagship App #3 (`apps/sdr-ft8/`)**:
 
 * `apps/sdr-ft8/TayloeQuadratureMixer.obend` — 40m ($7.074\text{ MHz}$) 4-phase ($0^\circ, 90^\circ, 180^\circ, 270^\circ$)
@@ -588,7 +587,7 @@ theorem sdr_ft8_image_rejection_and_ddc_signoff_sound :
   have hDdc := sdrDdcChain_signoff_sound goldenSdrDdcChainSpec rfSigAmp xEarly xLate rfl
   exact ⟨hDdc.1, hDdc.2.2.1, hDdc.2.2.2.2.2.1⟩
 
-/-! ## 6. Hardware Synthesis: `.obend` Books, Stateful `always_ff` 3-Stage CIC + Folded FIR + CORDIC $\Delta\phi$ FT8 Demodulator & AMD `VOP64` GPU -/
+/-! ## 6. Hardware Synthesis: `.obend` Books, Stateful `always_ff` 3-Stage CIC + Folded FIR + CORDIC $\Delta\phi$ FT8 Demodulator -/
 
 /-- Compile all 4 `apps/sdr-ft8/` `.obend` `Book`s to `RtlModule`s via `compileBookToRtl`. -/
 def tayloeMixerRtl? : Option RtlModule :=
@@ -853,18 +852,9 @@ theorem sdr_ft8_sequential_cic_cordic_trace_verified :
     regsAfter4 5 = 1850#64 := by
   decide +kernel
 
-/-- **64-Bit AMD `VOP64` GPU Co-Execution Certificate for `SdrFt8Top.obend`**:
-    Compiles `SdrFt8Top`'s `ddcFilteredMag`, `demodFt8SymbolStream`, and `rxSensitivityMarginDb`
-    hardware wires via `compileRtlExprToAmdGpu` and verifies exact 64-bit `runAmdGpuVop64Prog`
-    equivalence with FPGA RTL evaluation, plus universal `evalAmdGpuExpr_nested_sound`. -/
-def sdrFt8DdcCordicGpuExpr : RtlExpr :=
-  .alu .add
-    (.alu .mul
-      (.alu .add (.alu .sub (.regRead 2) (.regRead 3)) (.regRead 4))
-      (.const 256#64))
-    (.alu .sub (.inputPort 2) (.regRead 5))
-
-theorem sdr_ft8_amdgpu_vop64_equivalence :
+/-- The compiled `SdrFt8Top.obend`: `checkRtlModule` and one input's outputs (a closed check; a GPU
+co-execution claim on an interpreter nobody ran was removed 2026-11-05, the GPU path is `Obend.Hardware.Gpu`). -/
+example :
     (match sdrFt8TopRtl? with
      | some m =>
        checkRtlModule m &&
@@ -875,27 +865,9 @@ theorem sdr_ft8_amdgpu_vop64_equivalence :
          , ("out_carrierFreqKhz", 7074#64)
          , ("out_demodFt8SymbolStream", 8050#64)
          , ("out_rxSensitivityMarginDb", 2410#64)
-         ]) &&
-       (match m.wires[2]?, m.wires[4]?, m.wires[5]? with
-        | some wDdc, some wDemod, some wSens =>
-          let (rDdc, _, codeDdc) := compileRtlExprToAmdGpu 1 wDdc.expr
-          let (rDemod, _, codeDemod) := compileRtlExprToAmdGpu 1 wDemod.expr
-          let (rSens, _, codeSens) := compileRtlExprToAmdGpu 1 wSens.expr
-          let vgprsDdc :=
-            runAmdGpuVop64Prog (fun _ => 100#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeDdc
-          let vgprsDemod :=
-            runAmdGpuVop64Prog (fun _ => 100#64) (fun _ => 68#64) (fun _ => 0#64) (fun _ => 0#64) codeDemod
-          let vgprsSens :=
-            runAmdGpuVop64Prog (fun _ => 100#64) (fun _ => 1410#64) (fun _ => 0#64) (fun _ => 0#64) codeSens
-          vgprsDdc rDdc == 828#64 &&
-          vgprsDemod rDemod == 8050#64 &&
-          vgprsSens rSens == 2410#64
-        | _, _, _ => false)
-     | none => false) = true ∧
-    (∀ (inputs wires regs : Nat → BitVec 64),
-      evalAmdGpuExpr inputs wires regs sdrFt8DdcCordicGpuExpr =
-        evalRtlExpr inputs wires regs sdrFt8DdcCordicGpuExpr) :=
-  ⟨by decide +kernel, fun inputs wires regs => evalAmdGpuExpr_nested_sound inputs wires regs sdrFt8DdcCordicGpuExpr⟩
+         ])
+     | none => false) = true := by
+  decide +kernel
 
 /-! ## 7. Cross-Package Dependency Cone Survival & Calibration Hot-Swap Guard (`sdr_ft8_crossPackage_cone_survives`) -/
 

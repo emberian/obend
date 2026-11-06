@@ -23,12 +23,11 @@ manufacturing in the real world**:
    Yusuf Altintas's regenerative chatter stability lobes, plasma-etch aspect-ratio-dependent bread-loafing,
    and thermal rotor growth—so that **the simulator predicts the physical cut or etch more faithfully
    than the machine controller executes its own G-code or recipe.**
-3. Because [`Obend/Lower`](lean/Obend/Lower/Proofs/SelfAccelerate.lean) lowers verified Lean 4 and
-   `Core4` multiphysics/geometry kernels directly into `Leaf.Book` supercombinators, synthesized FPGA
-   RTL (`DSP58` cascades), AMD `CDNA3`/`RDNA3` Wavefront + `v_mfma` Matrix-Core ISA, TPU systolic
-   arrays, and Ozaki Base-13 `FP4` Tensor Cores ([`Accelerators.lean`](lean/Obend/Hardware/Accelerators.lean)),
-   **we compile our physics and geometry solvers directly into the hardware substrate accelerating
-   our evolutionary design searches.**
+3. Because [`Obend/Lower`](lean/Obend/Lower/Proofs/Hardware.lean) lowers verified Lean 4 and `Core4`
+   kernels into `Leaf.Book` supercombinators and from there into synthesized FPGA RTL, and
+   [`Obend/Hardware/Gpu.lean`](lean/Obend/Hardware/Gpu.lean) lowers array hypergraphs into compute
+   shaders that run on the GPUs we own (`HARDWARE.md`), **the physics and geometry kernels can be run
+   on the substrate that accelerates the design searches, with the run itself as the gate.**
 
 ---
 
@@ -226,47 +225,30 @@ examples. Two things to hold on to while reading this section (the expert review
    - Physical assemblies are authored directly in idiomatic `.obend` userspace using `spec`, `def`,
      `super`, `self`, and `#law` contracts ([`LcDrivesStatorUsd.obend`](lean/tests/obend-source/world/physical/LcDrivesStatorUsd.obend),
      [`Cnc5AxisMill.obend`](lean/tests/obend-source/world/physical/Cnc5AxisMill.obend)).
-   - [`stator_userspace_book_fpga_gpu_equiv`](lean/Obend/Hardware/UserspacePhysical.lean#L195-L216) and
-     [`cnc5axis_userspace_book_fpga_gpu_equiv`](lean/Obend/Hardware/UserspacePhysical.lean#L345-L366) prove
-     that `.obend` physical models flatten via `Obend.Leaf.Flatten.flatten` into `Leaf.Book` interaction nets
-     and compile via `compileBookToRtlSat` and `compileRtlModuleToAmdGpu` into bit-exact FPGA SystemVerilog
-     and AMD `CDNA3` GPU wavefront kernels!
+   - The compiled parts' closed RTL checks are `example`s in `lean/Obend/Teeth/Hardware/Fixtures.lean`
+     (`checkRtlModule` and one input's outputs per part), run before a push, not on every build.
 
 ---
 
-## 5. Reflexive Self-Acceleration: Compiling Our Physics Into the Substrate Accelerating Us
+## 5. Accelerator Arithmetic, and the Device That Runs It
 
-Multiphysics FEA, 3D F-Rep interval octree evaluation, and evolutionary toolpath optimization are
-compute-intensive. Because `Obend` can lower Lean terms into `Core4` (`Obend/Lower`), flatten them to
-`Leaf.Book` (`Obend/Leaf`), and synthesize hardware (`Obend/Hardware`), **we do not rely on unverified
-external C++/CUDA solvers—we compile our verified Lean physics kernels directly into hardware
-accelerators** ([`Accelerators.lean`](lean/Obend/Hardware/Accelerators.lean),
-[`SelfAccelerate.lean`](lean/Obend/Lower/Proofs/SelfAccelerate.lean)):
+[`Accelerators.lean`](lean/Obend/Hardware/Accelerators.lean) holds integer identities that accelerator
+designs rest on, labelled as such: polynomial identities in Ozaki base-13 limbs
+(`ozaki_base13_2limb_product_exact`, `ozaki_base13_klimb_mul_exact`, `ozaki_base13_klimb_dot_exact`,
+`arXiv:2608.06812`), the Kulisch accumulator's fold identity (`kulisch_dot_append_exact`,
+`arXiv:2607.13898`), an interval enclosure for rounded addition (`interval_add_encloses_true_sum`), and
+three folds over `Int` lists being the same fold (`systolic_tpu_eq_dsp58_cascade_eq_kulisch_dot`). None
+of these is a model of a device.
 
-1. **Ozaki Scheme Base-13 `FP4 (E2M1)` Tensor-Core Exact Accumulation (`arXiv:2608.06812`)**:
-   - [`ozaki_fp4_base13_covers_all_25_digits`](lean/Obend/Hardware/Accelerators.lean#L85-L89) &
-     [`ozaki_base13_2limb_product_exact`](lean/Obend/Hardware/Accelerators.lean#L110-L125) prove that
-     decomposing integers/mantissas into base-13 limbs over doubled `FP4 (E2M1)` values
-     $S_{\text{E2M1}} = \{0, \pm 1, \pm 2, \pm 3, \pm 4, \pm 6, \pm 8, \pm 12\}$ allows ultra-dense 4-bit
-     AI Tensor Cores to compute **bit-exact** high-precision multiphysics inner products with zero
-     intermediate rounding error.
-2. **OCP Microscaling (`MXFP`) + Kulisch Exact Accumulators (`arXiv:2607.13898`), TPU Systolic Arrays & FPGA `DSP58` Cascades**:
-   - [`systolic_tpu_eq_dsp58_cascade_eq_kulisch_dot`](lean/Obend/Hardware/Accelerators.lean#L364-L375)
-     proves bit-exact equivalence across 2D TPU systolic PE chains, Xilinx UltraScale+/Versal `DSP58`
-     `PCIN -> PCOUT` dedicated silicon cascades, and Kulisch exact fixed-point accumulators.
-3. **AMD `CDNA3`/`RDNA3` GPU Wavefront ISA & Matrix Cores (`v_mfma`)**:
-   - [`compileRtlModuleToAmdGpu`](lean/Obend/Lower/Proofs/SelfAccelerate.lean#L97-L102) and
-     [`amd_gpu_mfma_dot4_exact`](lean/Obend/Hardware/Accelerators.lean#L304-L313) compile synthesized
-     `RtlModule` datapaths directly into AMD GPU vector/matrix instructions.
-4. **The 6-Stage Reflexive Self-Acceleration Theorems ([`SelfAccelerate.lean`](lean/Obend/Lower/Proofs/SelfAccelerate.lean))**:
-   - [`lc_drives_thermal_self_accelerates_6stage`](lean/Obend/Lower/Proofs/SelfAccelerate.lean#L156-L176),
-     [`ms350_mppt_self_accelerates_6stage`](lean/Obend/Lower/Proofs/SelfAccelerate.lean#L218-L237), and
-     [`femm_2d_energy_self_accelerates_6stage`](lean/Obend/Lower/Proofs/SelfAccelerate.lean#L297-L315)
-     prove in the Lean 4 kernel that a single physical specification evaluates identically across:
-     **(1)** `Lean-lite` `SSteps`, **(2)** `Obend.Core` `Core4.Evaluates`, **(3)** `Obend.Leaf.Book`
-     `Halts`, **(4)** synthesized saturating FPGA RTL (`compileBookToRtlSat`), **(5)** compiled AMD
-     `CDNA3` GPU Wavefront ISA (`evalCompiledAmdGpuModule`), and **(6)** TPU Systolic / FPGA `DSP58` /
-     Ozaki Base-13 `FP4` Tensor-Core execution!
+The device model is [`Obend/Hardware/Gpu.lean`](lean/Obend/Hardware/Gpu.lean) with
+[`ArrayHypergraph.lean`](lean/Obend/Hardware/ArrayHypergraph.lean): wires carrying vectors, one compute
+shader per wavefront stage, `lowerArrayToGpu_sound`, and a gate (`hardware/gpu/verify_gpu.sh`) that
+runs every graph, among them a 64-point Goldilocks NTT, on hbox's RDNA2 card under two drivers and on
+the Mac's GPU, with planted faults and the final ISA captured. Until 2026-11-05 this section described
+an AMD `CDNA3` instruction interpreter, "six-stage self-acceleration" theorems and GPU co-execution
+certificates in several apps; the council (`review/FABLE-COUNCIL-20261101.md` §2.4) found them to be
+evaluating one number several ways on a device nobody ran, and they were removed when the real path
+landed (`review/GPU-PROGRAM-20261105.md`).
 
 ---
 

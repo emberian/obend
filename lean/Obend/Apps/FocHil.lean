@@ -9,7 +9,6 @@ public import Obend.Logic.Obligation
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
 public import Obend.Leaf.Static
-public import Obend.Lower.Proofs.SelfAccelerate
 public import Obend.Hardware.HDL
 public import Obend.Hardware.Compiler
 public import Obend.Hardware.Synth
@@ -75,12 +74,12 @@ Formalizes and verifies **Flagship Application #2** (`apps/foc-hil/`) from
    - `Obend.Analysis.sos_lyapunov_cbf_dae_showcase_sound` (`"sos-lyapunov-cbf@1"`)
    in the master theorem `foc_hil_closed_loop_iss_and_thermal_safe`.
 
-4. **Sequential `always_ff` Hardware Synthesis, Live Mid-Run ICAP DPR Hot-Swap & 64-Bit AMD `VOP64` GPU**:
+4. **Sequential `always_ff` Hardware Synthesis & Live Mid-Run ICAP DPR Hot-Swap**:
    Synthesizes both 1-arg and multi-argument stateful `always_ff` `.obend` `Book`s
    (`compileStatefulTermsToRtl` / `compileStatefulStepToRtl`) and the full sequential
    `always_ff` FOC + FCML controller (`int_d`, `int_q`, `fcml_cap_err`, `thermal_trip_latch`,
-   `skid_vq_hold`, `skid_vd_hold`) to verified `RtlModule`s, FPGA `BelNetlist`s, and 64-bit
-   AMD `VOP64` GPU kernels, and proves cross-package dependency cone survival
+   `skid_vq_hold`, `skid_vd_hold`) to verified `RtlModule`s and FPGA `BelNetlist`s, and proves
+   cross-package dependency cone survival
    (`foc_hil_crossPackage_dpr_hotswap_and_cone_survives`).
 -/
 
@@ -580,7 +579,7 @@ theorem foc_hil_closed_loop_iss_and_thermal_safe :
     have h := statorCoupledLoss_adjoint_eqSat_sound currentA toothWidthUm channelAspect fcmlFreqKhz dOut
     exact ⟨h.2.2.2.1, h.2.2.2.2.2.2.2.2.2.2.1⟩
 
-/-! ## 7. Hardware Synthesis, Multi-Arg `compileStatefulStepToRtl`, ICAP DPR Hot-Swap & 64-Bit AMD `VOP64` GPU -/
+/-! ## 7. Hardware Synthesis, Multi-Arg `compileStatefulStepToRtl` & ICAP DPR Hot-Swap -/
 
 /-- Compile all 4 `apps/foc-hil/` `.obend` `Book`s to `RtlModule`s via `compileBookToRtl`. -/
 def clarkeParkRtl? : Option RtlModule :=
@@ -890,11 +889,9 @@ theorem foc_hil_sequential_4tick_trace_verified :
       , ("pwm_gate_en", 0#64) ] := by
   decide +kernel
 
-/-- **64-Bit AMD `VOP64` GPU Co-Execution Certificate for `FocDriveTop.obend`**:
-    Compiles `FocDriveTop`'s `activeFcmlBalanceMv`, `closedLoopVqMv`, and `statorWindingTempC`
-    hardware wires via `compileRtlExprToAmdGpu` and verifies exact 64-bit `runAmdGpuVop64Prog`
-    equivalence with FPGA RTL evaluation. -/
-theorem foc_hil_amdgpu_vop64_equivalence :
+/-- The compiled `FocDriveTop.obend`: `checkRtlModule` and one input's outputs (a closed check; a GPU
+co-execution claim on an interpreter nobody ran was removed 2026-11-05, the GPU path is `Obend.Hardware.Gpu`). -/
+example :
     (match focDriveTopRtl? with
      | some m =>
        checkRtlModule m &&
@@ -905,22 +902,7 @@ theorem foc_hil_amdgpu_vop64_equivalence :
          , ("out_controlFreqKhz", 20#64)
          , ("out_closedLoopVqMv", 120250#64)
          , ("out_statorWindingTempC", 1045#64)
-         ]) &&
-       (match m.wires[2]?, m.wires[4]?, m.wires[5]? with
-        | some wBal, some wVq, some wTemp =>
-          let (rBal, _, codeBal) := compileRtlExprToAmdGpu 1 wBal.expr
-          let (rVq, _, codeVq) := compileRtlExprToAmdGpu 1 wVq.expr
-          let (rTemp, _, codeTemp) := compileRtlExprToAmdGpu 1 wTemp.expr
-          let vgprsBal :=
-            runAmdGpuVop64Prog (fun _ => 250#64) (fun _ => 0#64) (fun _ => 0#64) (fun _ => 0#64) codeBal
-          let vgprsVq :=
-            runAmdGpuVop64Prog (fun _ => 250#64) (fun _ => 480#64) (fun _ => 0#64) (fun _ => 0#64) codeVq
-          let vgprsTemp :=
-            runAmdGpuVop64Prog (fun _ => 250#64) (fun _ => 4#64) (fun _ => 0#64) (fun _ => 0#64) codeTemp
-          vgprsBal rBal == 5025#64 &&
-          vgprsVq rVq == 120250#64 &&
-          vgprsTemp rTemp == 1045#64
-        | _, _, _ => false)
+         ])
      | none => false) = true := by
   decide +kernel
 
