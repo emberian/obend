@@ -33,7 +33,7 @@ leaves the posting behind, by name), and its receipt as `.obend/receipts/P-NNNN.
         links every posting it took) and, with `--out`, as a receipt an auditor re-checks with
         `obend verify FILE [--root ROOT]`.
     obend merge OTHER_DIR [--drop P-NNNN …]
-        the vault merge of the documents (`Obend.Vault.mergeFrom`), and the REGISTER's stitch: the
+        the vault merge of the documents (`Obend.Vault.Merge.mergeVault`), and the REGISTER's stitch: the
         other replica's rows this register does not have (by origin) are replayed in order through
         this register's step (`Obend.Run.Fork.stitch`), atomically: if any is refused, nothing of
         the other register is taken and every refusal is printed; otherwise each is renumbered here
@@ -366,8 +366,7 @@ def merge (dir : System.FilePath) (other : String) (drop : List String) : IO UIn
   let label := (System.FilePath.mk other).fileName.getD other
   let (s, V) ← openDir dir false
   let (o, _) ← openDir other false
-  let o' : Store := { o with pages := o.pages.filter fun p => !ledgerOwned p.name }
-  let (s', notes) := mergeFrom s o' label
+  let (s', notes) := Obend.Vault.Merge.mergeVault s o label (skip := ledgerOwned)
   for n in notes do IO.println n
   finish dir s' V
   let (s2, _) ← openDir dir false

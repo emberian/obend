@@ -17,8 +17,10 @@ module
         and, where a kind page names an `environment:`, the backticked names it cites that the
         environment lacks.
     obend merge OTHER_DIR
-        open both, then merge every page of OTHER_DIR's world into this one (the pushout of the two
-        current versions); a page OTHER_DIR has alone is imported.
+        open both, then merge OTHER_DIR's world into this one (`Obend.Vault.Merge`): the two read as
+        branches of the base they share, merged at the tip (`Obend.Vault.Branch.merge`); a page both
+        wrote merges by the pushout of the two versions; here's writes the tip does not land wait as
+        refused writes.
     obend member add NAME --grant VERB:PATTERN [--grant …]
         a member; VERB is post, select, write (re-cite) or relaw; PATTERN is a page, `folder/*` or `*`.
     obend member list
@@ -68,6 +70,7 @@ file that is not there stops the command.
 -/
 public import Obend.Vault.Json
 public import Obend.Vault.Form
+public import Obend.Vault.Merge
 public import Obend.Digest.Cshake256
 public section
 
@@ -374,7 +377,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let (s, V) ← openDir dir false
     let (o, _) ← openDir other false
     let label := (System.FilePath.mk other).fileName.getD other
-    let (s', notes) := mergeFrom s o label
+    let (s', notes) := Obend.Vault.Merge.mergeVault s o label
     for n in notes do IO.println n
     finish dir s' V
     for l in problems s' do IO.println l

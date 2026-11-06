@@ -735,6 +735,34 @@ Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) an
 Index v2
 ```
 
+## 9. A merge is settled at the tip
+
+`obend merge` reads the two worlds as two branches of what they share (each page's common history)
+and merges them at the TIP (`Obend.Vault.Merge`, `Obend.Vault.Branch.merge`): every write of either
+side is judged there by every law of every page in its cone, with both sides' laws in force. A law
+written on the laptop over its links judges a write made here, which neither replica saw together.
+
+```sh
+cd vault && printf -- '# Note\n\nShort.\n' > Note.md && obend open > /dev/null
+cd .. && rm -rf laptop3 && cp -R vault laptop3
+cd laptop3 && printf -- '---\nlaw brief: linked.words <= 6\n---\n# Brief\n\n- [[Note]]\n' > Brief.md && obend open > /dev/null
+cd ../vault && printf 'Here it grows by a sentence of ten words or so.\n' >> Note.md && obend open > /dev/null
+obend merge ../laptop3 | grep -e Note -e Brief
+obend status Note | head -1 && obend open | head -1
+```
+
+```text
+Note: here's write was not settled at the merge with laptop3: refused by Brief: brief (owner's law `linked.words <= 6`), judged at Note
+Brief: imported from laptop3
+rendered Brief.md
+Note v1; its last write was not settled at the merge with laptop3: refused by Brief: brief (owner's law `linked.words <= 6`), judged at Note
+nothing changed
+```
+
+Here's write of Note was not settled: the store holds Note at the version both replicas share, and
+`Note.md` keeps the text as a refused write, judged again when a page it read moves (the next open
+has nothing to do); the laptop's Brief, which lists Note, landed.
+
 ## Branches: two stores fork from one, post offline, and merge at the tip
 
 `obend branch` works on a store file (`Obend.Vault.BranchCli`): pages with owners, law lines, links,

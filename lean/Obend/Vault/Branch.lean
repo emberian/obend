@@ -18,9 +18,11 @@ page's laws (`relaw`, the owner's), the grant of a sturdyref (the owner of its c
 revocation (the same). Every act goes through `admitAct`, on a branch while it is offline and at the
 tip when it merges; the difference is only the configuration it is judged at.
 
-* **Merge is a pushout over the base, and a conflict is a state.** The writes of the two sides whose
-  footprints at the tip are disjoint (Bernstein: neither writes what the other reads or writes, the
-  pages its laws over links read included, `BTurn.access`) are replayed at the tip, left then right;
+* **Merge is a pushout over the base, and a conflict is a state.** The writes of the two sides that
+  write no cell in common (`clash`) are replayed at the tip, left then right. The tip is a serial
+  order: a write that read a cell the other side wrote is not a conflict but is checked when it
+  lands, refused by name if the cell moved under its pins (`Refusal.stale`), and every law over links
+  reading the cell is judged at the tip whichever lands first;
   the store the merge reaches agrees with the left's landed turns on the cells they write, with the
   right's on theirs, and with the base everywhere else, and the two write sets are disjoint
   (`merge_is_pushout`). A pair that clashes is kept as a `Conflict.writes` in the tip's state, both
@@ -28,8 +30,14 @@ tip when it merges; the difference is only the configuration it is judged at.
   candidate through the same judgment and names the one it drops.
 * **Their laws agree.** A clashing pair writing the same cells from the same base merges instead of
   conflicting when every differing field is one its page declares mergeable (`merge FIELD: add`,
-  `max`, `union`) and every own law of the page is I-confluent for that merge (`confluentLaw`); the
-  merged state keeps every law both sides kept (`iconfluent_merge_lawful`, `mergeCell_lawful`), and
+  `max`, `union`) and every law that judges the cell is I-confluent for that merge (`confluentLaw`):
+  the page's own laws, and the laws over links of every page linking to it (`linkedLaws`). The
+  merged state keeps every own law both sides kept (`iconfluent_merge_lawful`, `mergeCell_lawful`)
+  and every such law over links, on the identity occasion it is judged on at the cell
+  (`iconfluent_merge_links_lawful`, `mergeCell_links_lawful`); a linked law that is not I-confluent
+  leaves the pair a conflict, both candidates kept. A store that keeps texts merges a page both
+  sides wrote by its texts instead (`TextMerge`: the markdown vault's `mergePage` pushout,
+  `Obend.Vault.Merge`), and that merged write is judged at the tip like any other; and
   the merged write lands once, as one receipt from both sides (`Side.both`), each side's authority
   checked on its own and the merged write judged at the tip like any other. Identical writes merge
   with no declaration. The store theorem covers it (`merge_is_pushout`'s third part). Two relaws of one page that differ
@@ -68,7 +76,8 @@ tip when it merges; the difference is only the configuration it is judged at.
      so whether the left's write lands depends on a hidden state (the refusal channel of
      `Confinement`'s `refusal_leaks`); `lean/tests/vault/Branch.lean` exhibits it;
   3. a refusal for a revoked sturdyref names the uri and who revoked it, by design;
-  4. a conflict is reported exactly when the other side touched a cell this side accesses;
+  4. a conflict is reported exactly when the other side wrote a cell this side writes, and a stale
+     refusal when it wrote a cell this side's write read;
   5. the order the merge replays (left first) and its running time.
 -/
 public import Obend.Vault.Store
@@ -465,10 +474,11 @@ def tipConfig (base : Config) (ln rn : String) (lnw rnw : List Act) : Run :=
   runActs (sideName ln rn) base
     ((lnw.filter (!heldRelaw held ·)).map (.left, ·) ++ (rnw.filter (!heldRelaw held ·)).map (.right, ·))
 
-/-- The cells where two writes clash at a law book: one writes what the other touches. -/
-def clash (book : LawBook) (a b : BTurn) : List String :=
-  ((a.writes.filter fun c => (b.access book).contains c) ++
-    (b.writes.filter fun c => (a.access book).contains c)).eraseDups
+/-- The cells where two writes clash: both write them, so one would be a lost update. A cell one
+writes and the other only reads is not a clash: the tip is a serial order, so the reader's pins are
+checked when it lands and a pin the other side moved refuses it by name (`Refusal.stale`), and every
+law over links that reads the cell is judged at the tip whichever lands first. -/
+def clash (a b : BTurn) : List String := (a.writes.filter fun c => b.writes.contains c).eraseDups
 
 /-! ### Their laws agree: I-confluent merges
 
@@ -488,6 +498,21 @@ def confluentLaw (k : MergeKind) (f : String) : LawExpr → Bool
   | .leC (.field g) _ => g != f || k == .max
   | e => !(e.fields.contains f)
 
+/-- How a store merges the texts of a cell both sides wrote, when it keeps texts at all: `none`, the
+store keeps no text for the cell (its state merges by its page's declared merges); `some none`, the
+two texts do not merge (a conflict); `some (some m)`, the two texts merge into one whose state is
+`m` (for the markdown vault, `Obend.Vault.mergePage`'s pushout of the two versions, rendered as
+`Obend.Vault.pageState`). A text merge is judged at the tip like any other write. -/
+abbrev TextMerge := String → Option (Option Data)
+
+/-- A store of states only: no texts. -/
+def noText : TextMerge := fun _ => none
+
+/-- The laws over links judged at `c`: those of every other page that links to it, as
+`backlinkRefusal` judges them at `c` on the identity occasion. -/
+def linkedLaws (book : LawBook) (c : String) : List (String × LawExpr) :=
+  book.flatMap fun e => if e.1 != c && e.2.links.contains c then e.2.overLinks else []
+
 /-- Merge one declared field into `m` (which starts as the left's state) from the right's `r` over
 the base `pre`: equal readings stay; differing readings join by the kind, if it fits. -/
 def mergeStep (pre r m : Data) (fk : String × MergeKind) : Option Data :=
@@ -505,42 +530,49 @@ def mergeState (pre r : Data) : List (String × MergeKind) → Data → Option D
   | [], m => some m
   | fk :: rest, m => (mergeStep pre r m fk).bind (mergeState pre r rest)
 
-/-- The merged post-state of one cell both sides wrote from the same pre-state: the same write, or
-the merge its page declares, when every own law is I-confluent for it and the two directions agree
-(so every undeclared field is the same on both sides). -/
-def mergeCell (book : LawBook) (da db : CellDelta) : Option Data :=
+/-- The merged post-state of one cell both sides wrote from the same pre-state: the merge of their
+texts, where the store keeps texts; otherwise the same write, or the merge its page declares, when
+every law that judges the cell is I-confluent for it (the page's own laws, and the laws over links
+of every page linking to it, `linkedLaws`) and the two directions agree (so every undeclared field
+is the same on both sides). -/
+def mergeCell (text : TextMerge) (book : LawBook) (da db : CellDelta) : Option Data :=
   if !Obend.Law.termEq da.preState.term db.preState.term then none
-  else if Obend.Law.termEq da.postState.term db.postState.term then some da.postState
+  else match text da.cell with
+  | some r => r
+  | none =>
+  if Obend.Law.termEq da.postState.term db.postState.term then some da.postState
   else match book.lookup da.cell with
     | none => none
     | some pl =>
       if pl.merges.isEmpty then none
-      else if !(pl.own.all fun e => pl.merges.all fun fk => confluentLaw fk.2 fk.1 e.2) then none
+      else if !((pl.own ++ linkedLaws book da.cell).all fun e =>
+          pl.merges.all fun fk => confluentLaw fk.2 fk.1 e.2) then none
       else match mergeState da.preState db.postState pl.merges da.postState,
                  mergeState da.preState da.postState pl.merges db.postState with
         | some m, some m' => if Obend.Law.termEq m.term m'.term then some m else none
         | _, _ => none
 
 /-- The merged legs of two writes: every cell of the left's, with the right's write of it. -/
-def mergeLegs (book : LawBook) (bs : List CellDelta) : List CellDelta → Option (List WitnessLegSpec)
+def mergeLegs (text : TextMerge) (book : LawBook) (bs : List CellDelta) :
+    List CellDelta → Option (List WitnessLegSpec)
   | [] => some []
   | da :: rest =>
     match bs.find? (·.cell == da.cell) with
     | none => none
     | some db =>
-      match mergeCell book da db with
+      match mergeCell text book da db with
       | none => none
-      | some m => (mergeLegs book bs rest).map ((da.cell, da.preState, m) :: ·)
+      | some m => (mergeLegs text book bs rest).map ((da.cell, da.preState, m) :: ·)
 
 /-- **Two writes that merge**: they write the same cells, read nothing the other writes beyond them,
 each clashes with no other write of the other side, and every cell merges. The merged write relies
 on both sides' sturdyrefs; its actor is the two actors. -/
-def mergeFor (book : LawBook) (lw rw : List BTurn) (a b : BTurn) : Option BTurn :=
+def mergeFor (text : TextMerge) (book : LawBook) (lw rw : List BTurn) (a b : BTurn) : Option BTurn :=
   if !(b.writes.all a.writes.contains && a.writes.all b.writes.contains) then none
-  else if (rw.filter fun b' => !(clash book a b').isEmpty).length != 1 then none
-  else if (lw.filter fun a' => !(clash book a' b).isEmpty).length != 1 then none
+  else if (rw.filter fun b' => !(clash a b').isEmpty).length != 1 then none
+  else if (lw.filter fun a' => !(clash a' b).isEmpty).length != 1 then none
   else
-    match mergeLegs book b.turn.writeCells a.turn.writeCells with
+    match mergeLegs text book b.turn.writeCells a.turn.writeCells with
     | none => none
     | some legs =>
       (VaultTurn.ofWitnessLegs ByteArray.empty (a.turn.readPins ++ b.turn.readPins) legs a.turn.occasion []).map
@@ -549,22 +581,22 @@ def mergeFor (book : LawBook) (lw rw : List BTurn) (a b : BTurn) : Option BTurn 
                     turn := vt, relies := a.relies ++ b.relies }
 
 /-- The writes of the left that clash with no write of the right. -/
-def freeLeft (book : LawBook) (lw rw : List BTurn) : List BTurn :=
-  lw.filter fun a => rw.all fun b => (clash book a b).isEmpty
+def freeLeft (lw rw : List BTurn) : List BTurn :=
+  lw.filter fun a => rw.all fun b => (clash a b).isEmpty
 
-def freeRight (book : LawBook) (lw rw : List BTurn) : List BTurn :=
-  rw.filter fun b => lw.all fun a => (clash book a b).isEmpty
+def freeRight (lw rw : List BTurn) : List BTurn :=
+  rw.filter fun b => lw.all fun a => (clash a b).isEmpty
 
 /-- The clashing pairs that do not merge: conflicts. -/
-def writeConflicts (book : LawBook) (ln rn : String) (lw rw : List BTurn) : List Conflict :=
+def writeConflicts (text : TextMerge) (book : LawBook) (ln rn : String) (lw rw : List BTurn) : List Conflict :=
   lw.flatMap fun a => rw.filterMap fun b =>
-    let cs := clash book a b
-    if cs.isEmpty then none else if (mergeFor book lw rw a b).isSome then none else some (.writes cs (ln, a) (rn, b))
+    let cs := clash a b
+    if cs.isEmpty then none else if (mergeFor text book lw rw a b).isSome then none else some (.writes cs (ln, a) (rn, b))
 
 /-- The clashing pairs that merge by their pages' laws: each pair and its merged write. -/
-def mergedPairs (book : LawBook) (lw rw : List BTurn) : List (BTurn × BTurn × BTurn) :=
+def mergedPairs (text : TextMerge) (book : LawBook) (lw rw : List BTurn) : List (BTurn × BTurn × BTurn) :=
   lw.flatMap fun a => rw.filterMap fun b =>
-    if (clash book a b).isEmpty then none else (mergeFor book lw rw a b).map fun m => (a, b, m)
+    if (clash a b).isEmpty then none else (mergeFor text book lw rw a b).map fun m => (a, b, m)
 
 /-- A merged pair lands only when each of its two writes has its own authority at the tip. -/
 def pairAuthority (auth : Authority) (book : LawBook) (p : BTurn × BTurn × BTurn) : Option Refusal :=
@@ -583,7 +615,7 @@ structure Merged where
 /-- **Merge two branches of `base`**: settle their non-write acts into the tip, keep the clashing
 writes as conflicts, replay the others at the tip. A branch that did not fork from `base`'s history
 is not merged. -/
-def merge (base : Config) (L R : Branch) : Except String Merged :=
+def merge (base : Config) (L R : Branch) (text : TextMerge := noText) : Except String Merged :=
   if L.base ≠ base.history then .error (L.name ++ " did not fork from this history")
   else if R.base ≠ base.history then .error (R.name ++ " did not fork from this history")
   else
@@ -592,12 +624,12 @@ def merge (base : Config) (L R : Branch) : Except String Merged :=
     let lw := writesOf L.acts
     let rw := writesOf R.acts
     let cs := (lawClashes (nonWrites L.acts) (nonWrites R.acts)).map (fun p => Conflict.laws p L.name R.name) ++
-      writeConflicts book L.name R.name lw rw
-    let mp := mergedPairs book lw rw
+      writeConflicts text book L.name R.name lw rw
+    let mp := mergedPairs text book lw rw
     let pre : List (Side × String × Refusal) := mp.filterMap fun p =>
       (pairAuthority t.config.auth book p).map fun r => (.both, p.2.2.label, r)
     let w := runWrites (sideName L.name R.name) t.config
-      ((freeLeft book lw rw).map (.left, ·) ++ (freeRight book lw rw).map (.right, ·) ++
+      ((freeLeft lw rw).map (.left, ·) ++ (freeRight lw rw).map (.right, ·) ++
         ((mp.filter fun p => (pairAuthority t.config.auth book p).isNone).map fun p => (.both, p.2.2)))
     .ok ⟨{ w.config with conflicts := w.config.conflicts ++ cs }, t.landed ++ w.landed,
       t.refused ++ pre ++ w.refused, cs⟩
@@ -930,19 +962,19 @@ theorem runActs_revocation_visible {name : Side → String} :
 
 /-! ## The merge -/
 
-theorem merge_ok {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m) :
+theorem merge_ok {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m) :
     L.base = base.history ∧ R.base = base.history ∧
     let t := tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)
     let book := t.config.book
     let lw := writesOf L.acts
     let rw := writesOf R.acts
     let cs := (lawClashes (nonWrites L.acts) (nonWrites R.acts)).map (fun p => Conflict.laws p L.name R.name) ++
-      writeConflicts book L.name R.name lw rw
-    let mp := mergedPairs book lw rw
+      writeConflicts text book L.name R.name lw rw
+    let mp := mergedPairs text book lw rw
     let pre : List (Side × String × Refusal) := mp.filterMap fun p =>
       (pairAuthority t.config.auth book p).map fun r => (.both, p.2.2.label, r)
     let w := runWrites (sideName L.name R.name) t.config
-      ((freeLeft book lw rw).map (.left, ·) ++ (freeRight book lw rw).map (.right, ·) ++
+      ((freeLeft lw rw).map (.left, ·) ++ (freeRight lw rw).map (.right, ·) ++
         ((mp.filter fun p => (pairAuthority t.config.auth book p).isNone).map fun p => (.both, p.2.2)))
     m = ⟨{ w.config with conflicts := w.config.conflicts ++ cs }, t.landed ++ w.landed,
       t.refused ++ pre ++ w.refused, cs⟩ := by
@@ -981,7 +1013,7 @@ theorem nonWrites_isWrite {acts : List Act} : ∀ a ∈ nonWrites acts, a.isWrit
   simpa using (List.mem_filter.1 ha).2
 
 /-- A write landed by a merge was admitted at a configuration with the tip's law book and authority. -/
-theorem merge_landed_write {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m)
+theorem merge_landed_write {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m)
     {sd : Side} {t : BTurn} (ht : (sd, .write t) ∈ m.landed) :
     ∃ c₀ c₁, c₀.book = m.tip.book ∧ c₀.auth = m.tip.auth ∧
       admitWrite c₀ (sideName L.name R.name sd) t = .ok c₁ := by
@@ -996,7 +1028,7 @@ theorem merge_landed_write {base : Config} {L R : Branch} {m : Merged} (h : merg
 /-- **Settlement at the tip.** A write a merge landed relied only on sturdyrefs live at the tip, and
 every page it wrote is its actor's or granted to it by one of them, live at the tip: authority read
 where every revocation of both sides is visible, never on the write's own branch. -/
-theorem settled_at_tip {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m)
+theorem settled_at_tip {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m)
     {sd : Side} {t : BTurn} (ht : (sd, .write t) ∈ m.landed) :
     (∀ u ∈ t.relies, m.tip.auth.live u = true) ∧
     ∀ d ∈ t.turn.writeCells, ∃ pl, m.tip.book.lookup d.cell = some pl ∧
@@ -1008,7 +1040,7 @@ theorem settled_at_tip {base : Config} {L R : Branch} {m : Merged} (h : merge ba
   exact authRefusal_none hauth
 
 /-- **Every revocation either side landed is visible at the tip.** -/
-theorem tip_sees_every_revocation {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m)
+theorem tip_sees_every_revocation {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m)
     {sd : Side} {l w u : String} (hr : (sd, .revoke l w u) ∈ m.landed) : m.tip.auth.isRevoked u = true := by
   obtain ⟨_, _, hm⟩ := merge_ok h
   subst hm
@@ -1021,8 +1053,8 @@ theorem tip_sees_every_revocation {base : Config} {L R : Branch} {m : Merged} (h
 
 /-- **A sturdyref revoked on either side carries no write into the merge**: no write relying on it
 lands, whichever side wrote it and whatever its own branch said. -/
-theorem revoked_elsewhere_never_lands {base : Config} {L R : Branch} {m : Merged}
-    (h : merge base L R = .ok m) {sd sd' : Side} {l w u : String} (hr : (sd', .revoke l w u) ∈ m.landed)
+theorem revoked_elsewhere_never_lands {base : Config} {L R : Branch} {text : TextMerge} {m : Merged}
+    (h : merge base L R text = .ok m) {sd sd' : Side} {l w u : String} (hr : (sd', .revoke l w u) ∈ m.landed)
     {t : BTurn} (hu : u ∈ t.relies) : (sd, .write t) ∉ m.landed := by
   intro ht
   have hlive := (settled_at_tip h ht).1 u hu
@@ -1031,7 +1063,7 @@ theorem revoked_elsewhere_never_lands {base : Config} {L R : Branch} {m : Merged
 
 /-- **A landed write is consented to by its cone at the tip**: by every law of every page in the cone
 of every cell it writes, read from the tip's law book. -/
-theorem landed_consents {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m)
+theorem landed_consents {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m)
     {sd : Side} {t : BTurn} (ht : (sd, .write t) ∈ m.landed) :
     ∃ s' height, ∀ d ∈ t.turn.writeCells, Consents m.tip.book s' (factsAt height) d := by
   obtain ⟨c₀, c₁, hb, _, h0⟩ := merge_landed_write h ht
@@ -1171,33 +1203,27 @@ theorem writes_sub_access (book : LawBook) (t : BTurn) : ∀ c ∈ t.writes, c �
   rw [mem_accessFootprint]
   exact .inr hc
 
-theorem mem_clash {book : LawBook} {a b : BTurn} {c : String} :
-    c ∈ clash book a b ↔ (c ∈ a.writes ∧ c ∈ b.access book) ∨ (c ∈ b.writes ∧ c ∈ a.access book) := by
+theorem mem_clash {a b : BTurn} {c : String} : c ∈ clash a b ↔ c ∈ a.writes ∧ c ∈ b.writes := by
   unfold clash
   simp [List.mem_eraseDups, List.mem_filter]
 
-/-- Writes with no clash: neither writes a cell the other touches. -/
-theorem clash_nil_iff {book : LawBook} {a b : BTurn} :
-    (clash book a b).isEmpty = true ↔
-      (∀ c ∈ a.writes, c ∉ b.access book) ∧ (∀ c ∈ b.writes, c ∉ a.access book) := by
+/-- Writes with no clash: no cell written by both. -/
+theorem clash_nil_iff {a b : BTurn} : (clash a b).isEmpty = true ↔ ∀ c ∈ a.writes, c ∉ b.writes := by
   rw [List.isEmpty_iff, List.eq_nil_iff_forall_not_mem]
   constructor
-  · intro h
-    exact ⟨fun c ha hb => h c (mem_clash.2 (.inl ⟨ha, hb⟩)),
-      fun c hb ha => h c (mem_clash.2 (.inr ⟨hb, ha⟩))⟩
-  · rintro ⟨h1, h2⟩ c hc
-    rcases mem_clash.1 hc with ⟨ha, hb⟩ | ⟨hb, ha⟩
-    · exact h1 c ha hb
-    · exact h2 c hb ha
+  · intro h c ha hb
+    exact h c (mem_clash.2 ⟨ha, hb⟩)
+  · intro h c hc
+    exact h c (mem_clash.1 hc).1 (mem_clash.1 hc).2
 
-theorem freeLeft_sub {book : LawBook} {lw rw : List BTurn} {a : BTurn} (h : a ∈ freeLeft book lw rw) :
-    a ∈ lw ∧ ∀ b ∈ rw, (clash book a b).isEmpty = true := by
+theorem freeLeft_sub {lw rw : List BTurn} {a : BTurn} (h : a ∈ freeLeft lw rw) :
+    a ∈ lw ∧ ∀ b ∈ rw, (clash a b).isEmpty = true := by
   unfold freeLeft at h
   obtain ⟨ha, hall⟩ := List.mem_filter.1 h
   exact ⟨ha, fun b hb => List.all_eq_true.1 hall b hb⟩
 
-theorem freeRight_sub {book : LawBook} {lw rw : List BTurn} {b : BTurn} (h : b ∈ freeRight book lw rw) :
-    b ∈ rw ∧ ∀ a ∈ lw, (clash book a b).isEmpty = true := by
+theorem freeRight_sub {lw rw : List BTurn} {b : BTurn} (h : b ∈ freeRight lw rw) :
+    b ∈ rw ∧ ∀ a ∈ lw, (clash a b).isEmpty = true := by
   unfold freeRight at h
   obtain ⟨hb, hall⟩ := List.mem_filter.1 h
   exact ⟨hb, fun a ha => List.all_eq_true.1 hall a ha⟩
@@ -1263,8 +1289,8 @@ theorem tip_landed_nonwrites (base : Config) (ln rn : String) (lacts racts : Lis
     ∀ x ∈ (tipConfig base ln rn (nonWrites lacts) (nonWrites racts)).landed, x.2.isWrite = false :=
   fun x hx => tip_input_nonwrites _ _ nonWrites_isWrite nonWrites_isWrite _ x (runActs_landed_sub x hx)
 
-theorem mergeLegs_cells {book : LawBook} {bs : List CellDelta} :
-    ∀ {as : List CellDelta} {legs : List WitnessLegSpec}, mergeLegs book bs as = some legs →
+theorem mergeLegs_cells {text : TextMerge} {book : LawBook} {bs : List CellDelta} :
+    ∀ {as : List CellDelta} {legs : List WitnessLegSpec}, mergeLegs text book bs as = some legs →
       legs.map (·.1) = as.map (·.cell)
   | [], legs, h => by simp only [mergeLegs, Option.some.injEq] at h; subst h; rfl
   | da :: rest, legs, h => by
@@ -1273,7 +1299,7 @@ theorem mergeLegs_cells {book : LawBook} {bs : List CellDelta} :
     · cases h
     · split at h
       · cases h
-      · cases hr : mergeLegs book bs rest with
+      · cases hr : mergeLegs text book bs rest with
         | none => rw [hr] at h; cases h
         | some ls =>
           rw [hr] at h
@@ -1282,8 +1308,8 @@ theorem mergeLegs_cells {book : LawBook} {bs : List CellDelta} :
           simp [mergeLegs_cells hr]
 
 /-- A merged write writes exactly the left's cells, which the right's write writes too. -/
-theorem mergeFor_writes {book : LawBook} {lw rw : List BTurn} {a b m : BTurn}
-    (h : mergeFor book lw rw a b = some m) : m.writes = a.writes ∧ ∀ c ∈ a.writes, c ∈ b.writes := by
+theorem mergeFor_writes {text : TextMerge} {book : LawBook} {lw rw : List BTurn} {a b m : BTurn}
+    (h : mergeFor text book lw rw a b = some m) : m.writes = a.writes ∧ ∀ c ∈ a.writes, c ∈ b.writes := by
   unfold mergeFor at h
   split at h
   · cases h
@@ -1310,14 +1336,14 @@ theorem mergeFor_writes {book : LawBook} {lw rw : List BTurn} {a b m : BTurn}
             rw [← mergeLegs_cells hlegs]
             rfl
 
-theorem mem_mergedPairs {book : LawBook} {lw rw : List BTurn} {a b m : BTurn}
-    (h : (a, b, m) ∈ mergedPairs book lw rw) : a ∈ lw ∧ b ∈ rw ∧ mergeFor book lw rw a b = some m := by
+theorem mem_mergedPairs {text : TextMerge} {book : LawBook} {lw rw : List BTurn} {a b m : BTurn}
+    (h : (a, b, m) ∈ mergedPairs text book lw rw) : a ∈ lw ∧ b ∈ rw ∧ mergeFor text book lw rw a b = some m := by
   unfold mergedPairs at h
   obtain ⟨a', ha', hm⟩ := List.mem_flatMap.1 h
   obtain ⟨b', hb', he⟩ := List.mem_filterMap.1 hm
   split at he
   · cases he
-  · cases hf : mergeFor book lw rw a' b' with
+  · cases hf : mergeFor text book lw rw a' b' with
     | none => rw [hf] at he; cases he
     | some m' =>
       rw [hf] at he
@@ -1326,9 +1352,9 @@ theorem mem_mergedPairs {book : LawBook} {lw rw : List BTurn} {a b m : BTurn}
       exact ⟨ha', hb', hf⟩
 
 /-- The merged writes a merge replays, each with the pair it came from. -/
-theorem mem_mergedTurns {book : LawBook} {lw rw : List BTurn} {auth : Authority} {m : BTurn}
-    (h : m ∈ ((mergedPairs book lw rw).filter fun p => (pairAuthority auth book p).isNone).map (·.2.2)) :
-    ∃ a b, a ∈ lw ∧ b ∈ rw ∧ mergeFor book lw rw a b = some m := by
+theorem mem_mergedTurns {text : TextMerge} {book : LawBook} {lw rw : List BTurn} {auth : Authority} {m : BTurn}
+    (h : m ∈ ((mergedPairs text book lw rw).filter fun p => (pairAuthority auth book p).isNone).map (·.2.2)) :
+    ∃ a b, a ∈ lw ∧ b ∈ rw ∧ mergeFor text book lw rw a b = some m := by
   obtain ⟨⟨a, b, m'⟩, hp, rfl⟩ := List.mem_map.1 h
   obtain ⟨ha, hb, hm⟩ := mem_mergedPairs (List.mem_filter.1 hp).1
   exact ⟨a, b, ha, hb, hm⟩
@@ -1337,7 +1363,7 @@ theorem mem_mergedTurns {book : LawBook} {lw rw : List BTurn} {auth : Authority}
 merged writes (pairs merged by their pages' laws) write pairwise disjoint cells — the left's and
 the right's apart, the merged apart from both — and the tip's store is the merged writes on their
 cells, the left's on theirs, the right's on theirs, and the base everywhere else. -/
-theorem merge_is_pushout {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m) :
+theorem merge_is_pushout {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m) :
     (∀ c ∈ writesAll (landedOn .left m.landed), c ∉ writesAll (landedOn .right m.landed)) ∧
     (∀ c ∈ writesAll (landedOn .both m.landed),
       c ∉ writesAll (landedOn .left m.landed) ∧ c ∉ writesAll (landedOn .right m.landed)) ∧
@@ -1352,17 +1378,17 @@ theorem merge_is_pushout {base : Config} {L R : Branch} {m : Merged} (h : merge 
   have hts := tip_store base L.name R.name L.acts R.acts
   have htl := tip_landed_nonwrites base L.name R.name L.acts R.acts
   generalize tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts) = t at hts htl ⊢
-  generalize hlf : freeLeft t.config.book (writesOf L.acts) (writesOf R.acts) = lf
-  generalize hrf : freeRight t.config.book (writesOf L.acts) (writesOf R.acts) = rf
-  have hmf : ((mergedPairs t.config.book (writesOf L.acts) (writesOf R.acts)).filter
+  generalize hlf : freeLeft (writesOf L.acts) (writesOf R.acts) = lf
+  generalize hrf : freeRight (writesOf L.acts) (writesOf R.acts) = rf
+  have hmf : ((mergedPairs text t.config.book (writesOf L.acts) (writesOf R.acts)).filter
       fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (fun p => (Side.both, p.2.2)) =
-      (((mergedPairs t.config.book (writesOf L.acts) (writesOf R.acts)).filter
+      (((mergedPairs text t.config.book (writesOf L.acts) (writesOf R.acts)).filter
       fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (·.2.2)).map (Side.both, ·) := by
     rw [List.map_map]; rfl
   rw [hmf]
-  have hmem := fun (x : BTurn) (hx : x ∈ ((mergedPairs t.config.book (writesOf L.acts) (writesOf R.acts)).filter
+  have hmem := fun (x : BTurn) (hx : x ∈ ((mergedPairs text t.config.book (writesOf L.acts) (writesOf R.acts)).filter
       fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (·.2.2)) => mem_mergedTurns hx
-  generalize ((mergedPairs t.config.book (writesOf L.acts) (writesOf R.acts)).filter
+  generalize ((mergedPairs text t.config.book (writesOf L.acts) (writesOf R.acts)).filter
       fun p => (pairAuthority t.config.auth t.config.book p).isNone).map (·.2.2) = mf at hmem ⊢
   rw [runWrites_append, runWrites_append]
   simp only
@@ -1409,7 +1435,7 @@ theorem merge_is_pushout {base : Config} {L R : Branch} {m : Merged} (h : merge 
     rw [← hlf] at ha'
     rw [← hrf] at hb'
     have hcl := (freeLeft_sub ha').2 b (freeRight_sub hb').1
-    exact (clash_nil_iff.1 hcl).1 c hca (writes_sub_access _ b c hcb)
+    exact clash_nil_iff.1 hcl c hca hcb
   have hdisjM : ∀ c ∈ writesAll (turnsOf r3.landed),
       c ∉ writesAll (turnsOf r1.landed) ∧ c ∉ writesAll (turnsOf r2.landed) := by
     intro c hc
@@ -1424,13 +1450,13 @@ theorem merge_is_pushout {base : Config} {L R : Branch} {m : Merged} (h : merge 
       have ha'' := hsub hr1 a' ha'
       rw [← hlf] at ha''
       have hcl := (freeLeft_sub ha'').2 b hb
-      exact (clash_nil_iff.1 hcl).1 c hca' (writes_sub_access _ b c (hab' c hcx))
+      exact clash_nil_iff.1 hcl c hca' (hab' c hcx)
     · simp only [writesAll, List.mem_flatMap] at hc2
       obtain ⟨b', hb', hcb'⟩ := hc2
       have hb'' := hsub hr2 b' hb'
       rw [← hrf] at hb''
       have hcl := (freeRight_sub hb'').2 a ha
-      exact (clash_nil_iff.1 hcl).2 c hcb' (writes_sub_access _ a c hcx)
+      exact clash_nil_iff.1 hcl c hcx hcb'
   have hs1 : r1.config.store = applyAll base.store (turnsOf r1.landed) := by
     rw [← hr1, runWrites_store, hts]
   have hs2 : r2.config.store = applyAll r1.config.store (turnsOf r2.landed) := by
@@ -1457,12 +1483,12 @@ theorem merge_is_pushout {base : Config} {L R : Branch} {m : Merged} (h : merge 
 
 /-- **A clashing pair that does not merge is a conflict kept in the tip's state, and neither write
 lands.** -/
-theorem clash_is_conflict_state {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m)
+theorem clash_is_conflict_state {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m)
     {a b : BTurn} (ha : a ∈ writesOf L.acts) (hb : b ∈ writesOf R.acts)
-    (hc : (clash (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book a b).isEmpty = false)
-    (hn : mergeFor (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book
+    (hc : (clash a b).isEmpty = false)
+    (hn : mergeFor text (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book
       (writesOf L.acts) (writesOf R.acts) a b = none) :
-    Conflict.writes (clash (tipConfig base L.name R.name (nonWrites L.acts) (nonWrites R.acts)).config.book a b)
+    Conflict.writes (clash a b)
         (L.name, a) (R.name, b) ∈ m.tip.conflicts ∧
       (Side.left, Act.write a) ∉ m.landed ∧ (Side.right, Act.write b) ∉ m.landed := by
   obtain ⟨_, _, hm⟩ := merge_ok h
@@ -1761,25 +1787,109 @@ theorem iconfluent_merge_lawful {facts : Facts} {old : Option Data} {pre r : Dat
       · cases hs; exact hl
       · cases hs
 
-/-- **A merged cell keeps its page's laws.** The post-state `mergeCell` gives keeps every own law of
-the page that both sides' post-states kept: the same write trivially, a declared merge by
-`iconfluent_merge_lawful`. -/
-theorem mergeCell_lawful {book : LawBook} {da db : CellDelta} {m : Data} (h : mergeCell book da db = some m)
-    {pl : PageLaws} (hpl : book.lookup da.cell = some pl) {facts : Facts} {old : Option Data} :
-    ∀ p ∈ pl.own, p.2.denote facts old da.postState = true → p.2.denote facts old db.postState = true →
-      p.2.denote facts old m = true := by
-  intro p hp hl hr
+/-- A law that does not read a field says the same with that field set in its old state. -/
+theorem denote_old_setNat_of_not_mem {facts : Facts} {o : Data} {f : String} {n : Nat} {d : Data} :
+    ∀ {e : LawExpr}, f ∉ e.fields → e.denote facts (some (setNat o f n)) d = e.denote facts (some o) d
+  | .eqC _ _, _ => rfl
+  | .leC _ _, _ => rfl
+  | .inC _ _, _ => rfl
+  | .eqR _ _, _ => rfl
+  | .leR _ _, _ => rfl
+  | .leROff _ _ _, _ => rfl
+  | .monotone g, h => by
+    have : g ≠ f := fun he => h (by simp [LawExpr.fields, he])
+    simp only [LawExpr.denote, fieldOf_setNat_ne this]
+  | .writeOnce g, h => by
+    have : g ≠ f := fun he => h (by simp [LawExpr.fields, he])
+    simp only [LawExpr.denote, Option.bind_some, fieldOf_setNat_ne this, fieldLabel_setNat_ne this]
+  | .not a, h => by
+    simp only [LawExpr.fields] at h
+    simp only [LawExpr.denote, denote_old_setNat_of_not_mem h]
+  | .and a b, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, denote_old_setNat_of_not_mem h.1, denote_old_setNat_of_not_mem h.2]
+  | .or a b, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, denote_old_setNat_of_not_mem h.1, denote_old_setNat_of_not_mem h.2]
+  | .implies a b, h => by
+    simp only [LawExpr.fields, List.mem_append, not_or] at h
+    simp only [LawExpr.denote, denote_old_setNat_of_not_mem h.1, denote_old_setNat_of_not_mem h.2]
+
+/-- One field merged, on the occasion a law over links is judged at a page (the identity write: the
+page's state is both its old and its new state). -/
+theorem confluent_step_id {k : MergeKind} {f : String} {facts : Facts} {m r : Data}
+    {x y : Int} (b : Nat) (hx : fieldOf f m = some x) (hy : fieldOf f r = some y) :
+    ∀ {e : LawExpr}, confluentLaw k f e = true → e.denote facts (some m) m = true →
+      e.denote facts (some r) r = true →
+      e.denote facts (some (setNat m f (k.join b x.toNat y.toNat))) (setNat m f (k.join b x.toNat y.toNat)) = true
+  | e, hc, hm, hr => by
+    by_cases hf : f ∈ e.fields
+    · rcases confluentLaw_fallback hc hf with ⟨a, c, rfl⟩ | ⟨g, rfl⟩ | ⟨g, v, rfl⟩ | ⟨g, v, rfl⟩
+      · simp only [confluentLaw, Bool.and_eq_true] at hc
+        simp only [LawExpr.denote, Bool.and_eq_true] at hm hr ⊢
+        exact ⟨confluent_step_id b hx hy hc.1 hm.1 hr.1, confluent_step_id b hx hy hc.2 hm.2 hr.2⟩
+      · have hg : g = f := by simpa [LawExpr.fields, eq_comm] using hf
+        subst hg
+        simp [LawExpr.denote, fieldOf_setNat_self (n := k.join b x.toNat y.toNat) hx]
+      · have h := confluent_step (old := none) b hx hy hc (by simpa only [LawExpr.denote] using hm)
+          (by simpa only [LawExpr.denote] using hr)
+        simpa only [LawExpr.denote] using h
+      · have h := confluent_step (old := none) b hx hy hc (by simpa only [LawExpr.denote] using hm)
+          (by simpa only [LawExpr.denote] using hr)
+        simpa only [LawExpr.denote] using h
+    · rw [denote_old_setNat_of_not_mem hf, denote_setNat_of_not_mem hf]; exact hm
+
+/-- **I-confluent merge keeps the laws over links.** If every law over links judged at a page is
+I-confluent for every declared merge of the page, the state `mergeState` reaches keeps every such law
+both sides' states kept, on the occasion they are judged at the page (`judgeLinksIn`: the identity
+write). -/
+theorem iconfluent_merge_links_lawful {facts : Facts} {pre r : Data} :
+    ∀ {merges : List (String × MergeKind)} {l m : Data}, mergeState pre r merges l = some m →
+      ∀ {e : LawExpr}, (∀ fk ∈ merges, confluentLaw fk.2 fk.1 e = true) →
+        e.denote facts (some l) l = true → e.denote facts (some r) r = true →
+          e.denote facts (some m) m = true
+  | [], l, m, h, e, _, hl, _ => by simp only [mergeState, Option.some.injEq] at h; subst h; exact hl
+  | fk :: rest, l, m, h, e, hc, hl, hr => by
+    simp only [mergeState] at h
+    cases hs : mergeStep pre r l fk with
+    | none => rw [hs] at h; cases h
+    | some l' =>
+      rw [hs] at h
+      simp only [Option.bind_some] at h
+      refine iconfluent_merge_links_lawful h (fun fk' hfk' => hc fk' (List.mem_cons_of_mem _ hfk')) ?_ hr
+      unfold mergeStep at hs
+      dsimp only at hs
+      split at hs
+      · rename_i x y hx hy
+        split at hs
+        · cases hs; exact hl
+        · split at hs
+          · cases hs
+            exact confluent_step_id _ hx hy (hc fk (List.mem_cons_self ..)) hl hr
+          · cases hs
+      · cases hs; exact hl
+      · cases hs
+
+/-- The declared merge `mergeCell` reaches, when the store keeps no text for the cell: the same
+write, or both directions of `mergeState` agreeing, with every law of the cell's cone I-confluent. -/
+theorem mergeCell_declared {text : TextMerge} {book : LawBook} {da db : CellDelta} {m : Data}
+    (h : mergeCell text book da db = some m) (ht : text da.cell = none) {pl : PageLaws}
+    (hpl : book.lookup da.cell = some pl) :
+    m = da.postState ∨
+      (mergeState da.preState db.postState pl.merges da.postState = some m ∧
+        ∀ e ∈ pl.own ++ linkedLaws book da.cell, ∀ fk ∈ pl.merges, confluentLaw fk.2 fk.1 e.2 = true) := by
   unfold mergeCell at h
   split at h
   · cases h
-  · split at h
-    · cases h; exact hl
+  · rw [ht] at h
+    simp only at h
+    split at h
+    · cases h; exact .inl rfl
     · rw [hpl] at h
       simp only at h
       split at h
       · cases h
-      · rename_i hall
-        split at h
+      · split at h
         · cases h
         · rename_i hconf
           simp only [Bool.not_eq_true', Bool.not_eq_false, List.all_eq_true] at hconf
@@ -1787,9 +1897,36 @@ theorem mergeCell_lawful {book : LawBook} {da db : CellDelta} {m : Data} (h : me
           · rename_i m₁ m₂ h₁ h₂
             split at h
             · cases h
-              exact iconfluent_merge_lawful h₁ (fun fk hfk => hconf p hp fk hfk) hl hr
+              exact .inr ⟨h₁, hconf⟩
             · cases h
           · cases h
+
+/-- **A merged cell keeps its page's laws.** The post-state `mergeCell` gives, where the store keeps
+no text for the cell, keeps every own law of the page that both sides' post-states kept: the same
+write trivially, a declared merge by `iconfluent_merge_lawful`. -/
+theorem mergeCell_lawful {text : TextMerge} {book : LawBook} {da db : CellDelta} {m : Data}
+    (h : mergeCell text book da db = some m) (ht : text da.cell = none)
+    {pl : PageLaws} (hpl : book.lookup da.cell = some pl) {facts : Facts} {old : Option Data} :
+    ∀ p ∈ pl.own, p.2.denote facts old da.postState = true → p.2.denote facts old db.postState = true →
+      p.2.denote facts old m = true := by
+  intro p hp hl hr
+  rcases mergeCell_declared h ht hpl with rfl | ⟨h₁, hconf⟩
+  · exact hl
+  · exact iconfluent_merge_lawful h₁ (fun fk hfk => hconf p (List.mem_append_left _ hp) fk hfk) hl hr
+
+/-- **A merged cell keeps the laws over links that judge it.** Every law over links of a page linking
+to the cell (`linkedLaws`, what `backlinkRefusal` judges at the cell) that both sides' post-states
+kept, the merged state keeps, on the occasion it is judged there (`iconfluent_merge_links_lawful`):
+a declared merge whose linked laws are I-confluent merges, and is not refused by them at the tip. -/
+theorem mergeCell_links_lawful {text : TextMerge} {book : LawBook} {da db : CellDelta} {m : Data}
+    (h : mergeCell text book da db = some m) (ht : text da.cell = none)
+    {pl : PageLaws} (hpl : book.lookup da.cell = some pl) {facts : Facts} :
+    ∀ p ∈ linkedLaws book da.cell, p.2.denote facts (some da.postState) da.postState = true →
+      p.2.denote facts (some db.postState) db.postState = true → p.2.denote facts (some m) m = true := by
+  intro p hp hl hr
+  rcases mergeCell_declared h ht hpl with rfl | ⟨h₁, hconf⟩
+  · exact hl
+  · exact iconfluent_merge_links_lawful h₁ (fun fk hfk => hconf p (List.mem_append_right _ hp) fk hfk) hl hr
 
 end IConfluence
 
@@ -1810,33 +1947,31 @@ the tip's store depends only on which writes landed, not on the order they lande
 (`merge_swap_store`). Merged pairs are left out of `merge_swap_store`: the two orders compute the
 merged state from opposite sides and agree on it only up to `termEq`. -/
 
-theorem clash_comm (book : LawBook) (a b : BTurn) (c : String) : c ∈ clash book a b ↔ c ∈ clash book b a := by
-  rw [mem_clash, mem_clash]
-  constructor <;> rintro (h | h) <;> first | exact .inl h | exact .inr h
+theorem clash_comm (a b : BTurn) (c : String) : c ∈ clash a b ↔ c ∈ clash b a := by
+  rw [mem_clash, mem_clash, and_comm]
 
-theorem clash_isEmpty_comm (book : LawBook) (a b : BTurn) :
-    (clash book a b).isEmpty = (clash book b a).isEmpty := by
-  cases h1 : (clash book a b).isEmpty <;> cases h2 : (clash book b a).isEmpty <;> try rfl
+theorem clash_isEmpty_comm (a b : BTurn) : (clash a b).isEmpty = (clash b a).isEmpty := by
+  cases h1 : (clash a b).isEmpty <;> cases h2 : (clash b a).isEmpty <;> try rfl
   · rw [clash_nil_iff] at h2
-    have : (clash book a b).isEmpty = true := clash_nil_iff.2 ⟨h2.2, h2.1⟩
+    have : (clash a b).isEmpty = true := clash_nil_iff.2 fun c ha hb => h2 c hb ha
     rw [h1] at this; cases this
   · rw [clash_nil_iff] at h1
-    have : (clash book b a).isEmpty = true := clash_nil_iff.2 ⟨h1.2, h1.1⟩
+    have : (clash b a).isEmpty = true := clash_nil_iff.2 fun c hb ha => h1 c ha hb
     rw [h2] at this; cases this
 
 /-- **The free writes do not depend on which side is left.** -/
-theorem freeLeft_swap (book : LawBook) (lw rw : List BTurn) : freeLeft book lw rw = freeRight book rw lw := by
+theorem freeLeft_swap (lw rw : List BTurn) : freeLeft lw rw = freeRight rw lw := by
   unfold freeLeft freeRight
   congr 1
   funext a
   congr 1
   funext b
-  exact clash_isEmpty_comm book a b
+  exact clash_isEmpty_comm a b
 
 /-- **The store depends on what landed, not on the order it landed in.** When the two orders of a
 merge land the same writes of each side (and merge no pair), they reach the same store. -/
-theorem merge_swap_store {base : Config} {L R : Branch} {m₁ m₂ : Merged}
-    (h₁ : merge base L R = .ok m₁) (h₂ : merge base R L = .ok m₂)
+theorem merge_swap_store {base : Config} {L R : Branch} {text : TextMerge} {m₁ m₂ : Merged}
+    (h₁ : merge base L R text = .ok m₁) (h₂ : merge base R L text = .ok m₂)
     (hl : landedOn .left m₁.landed = landedOn .right m₂.landed)
     (hr : landedOn .right m₁.landed = landedOn .left m₂.landed)
     (hb₁ : landedOn .both m₁.landed = []) (hb₂ : landedOn .both m₂.landed = []) :
@@ -1904,7 +2039,7 @@ theorem runWrites_extends {name : Side → String} :
     · exact runWrites_extends
 
 /-- **The merged history extends the base's**: one receipted history, the base's receipts first. -/
-theorem merge_extends_history {base : Config} {L R : Branch} {m : Merged} (h : merge base L R = .ok m) :
+theorem merge_extends_history {base : Config} {L R : Branch} {text : TextMerge} {m : Merged} (h : merge base L R text = .ok m) :
     base.history <+: m.tip.history := by
   obtain ⟨_, _, hm⟩ := merge_ok h
   subst hm
@@ -1916,8 +2051,8 @@ theorem merge_extends_history {base : Config} {L R : Branch} {m : Merged} (h : m
 acts, every write of either accesses only cells of `H` (at the tip's law book), and no write of the
 left accesses a cell of `H`, then the left's landed writes are the same against both, and the tip
 agrees outside `H`. What the right wrote inside `H` does not reach the left's view of the store. -/
-theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {m₁ m₂ : Merged} {H : List String}
-    (h₁ : merge base L R₁ = .ok m₁) (h₂ : merge base L R₂ = .ok m₂)
+theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {text : TextMerge} {m₁ m₂ : Merged} {H : List String}
+    (h₁ : merge base L R₁ text = .ok m₁) (h₂ : merge base L R₂ text = .ok m₂)
     (hname : R₁.name = R₂.name) (hacts : nonWrites R₁.acts = nonWrites R₂.acts)
     (hR₁ : ∀ t ∈ writesOf R₁.acts, ∀ c ∈ t.access
       (tipConfig base L.name R₁.name (nonWrites L.acts) (nonWrites R₁.acts)).config.book, c ∈ H)
@@ -1935,26 +2070,24 @@ theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {m₁ m₂ 
   generalize tipConfig base L.name R₁.name (nonWrites L.acts) (nonWrites R₁.acts) = t at hR₁ hR₂ hL htl ⊢
   -- no write of the left clashes with any write of either right
   have hfree : ∀ (rw : List BTurn), (∀ b ∈ rw, ∀ c ∈ b.access t.config.book, c ∈ H) →
-      freeLeft t.config.book (writesOf L.acts) rw = writesOf L.acts := by
+      freeLeft (writesOf L.acts) rw = writesOf L.acts := by
     intro rw hrw
     unfold freeLeft
     rw [List.filter_eq_self]
     intro a ha
     rw [List.all_eq_true]
     intro b hb
-    exact clash_nil_iff.2 ⟨fun c hc hcb => hL a ha c (writes_sub_access _ a c hc) (hrw b hb c hcb),
-      fun c hc hca => hL a ha c hca (hrw b hb c (writes_sub_access _ b c hc))⟩
+    exact clash_nil_iff.2 fun c hc hcb => hL a ha c (writes_sub_access _ a c hc) (hrw b hb c (writes_sub_access _ b c hcb))
   have hnomerge : ∀ (rw : List BTurn), (∀ b ∈ rw, ∀ c ∈ b.access t.config.book, c ∈ H) →
-      mergedPairs t.config.book (writesOf L.acts) rw = [] := by
+      mergedPairs text t.config.book (writesOf L.acts) rw = [] := by
     intro rw hrw
     rw [List.eq_nil_iff_forall_not_mem]
     rintro ⟨a, b, m⟩ hp
     unfold mergedPairs at hp
     obtain ⟨a', ha', hm⟩ := List.mem_flatMap.1 hp
     obtain ⟨b', hb', he⟩ := List.mem_filterMap.1 hm
-    have hcl : (clash t.config.book a' b').isEmpty = true :=
-      clash_nil_iff.2 ⟨fun c hc hcb => hL a' ha' c (writes_sub_access _ a' c hc) (hrw b' hb' c hcb),
-        fun c hc hca => hL a' ha' c hca (hrw b' hb' c (writes_sub_access _ b' c hc))⟩
+    have hcl : (clash a' b').isEmpty = true :=
+      clash_nil_iff.2 fun c hc hcb => hL a' ha' c (writes_sub_access _ a' c hc) (hrw b' hb' c (writes_sub_access _ b' c hcb))
     rw [ite_eq_left hcl] at he
     cases he
   rw [hnomerge _ hR₁, hnomerge _ hR₂]
@@ -1990,9 +2123,9 @@ theorem merge_confines_hidden {base : Config} {L R₁ R₂ : Branch} {m₁ m₂ 
     cases he
     exact hc (hrf b hb' c (writes_sub_access _ b c hcb))
   refine ⟨by rw [hside, hside], fun c hc => ?_⟩
-  rw [hstore (freeRight t.config.book (writesOf L.acts) (writesOf R₁.acts))
+  rw [hstore (freeRight (writesOf L.acts) (writesOf R₁.acts))
       (fun b hb => hR₁ b (freeRight_sub hb).1) c hc,
-    hstore (freeRight t.config.book (writesOf L.acts) (writesOf R₂.acts))
+    hstore (freeRight (writesOf L.acts) (writesOf R₂.acts))
       (fun b hb => hR₂ b (freeRight_sub hb).1) c hc]
 
 /-! ## Teeth -/

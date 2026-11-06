@@ -17,8 +17,8 @@ judges them again at the tip.
     obend branch resolve TIP K left|right
     obend branch show STORE PAGE
 
-This is `Obend.Vault.Branch` over its own store file; the markdown vault's `obend merge`
-(`Obend.Vault.Store.mergeFrom`) is a separate command and is not routed through it.
+This is `Obend.Vault.Branch` over its own store file of page states. The markdown vault's
+`obend merge` is the same merge over two vault stores (`Obend.Vault.Merge`).
 -/
 public import Obend.Vault.Branch
 public import Lean.Data.Json

@@ -50,7 +50,7 @@ Members post without overwriting (`obend member add scout --grant post:Alpha`, `
 `obend select`); the owner's `obend post PAGE ROW.md --into "Heading"` adds a row to a section,
 judged like any write and leaving the file alone when refused (the project's own decisions ledger,
 `review/DECISIONS-20261031.md`, is kept this way under `review/ledger/_kind.md`,
-`lean/tests/decisions/LEDGER.md`); a copy edited offline merges back by pushout (`obend merge ../laptop`); a quote
+`lean/tests/decisions/LEDGER.md`); a copy edited offline merges back as a branch, settled at the tip, a page both sides edited by pushout (`obend merge ../laptop`); a quote
 whose source moved is marked `{behind}` in your file and re-grounded with `obend recite`; a file
 you delete is a page deleted, a file you rename is the page renamed. The whole of it, run and
 checked line by line: `lean/tests/vault/WALKTHROUGH.md`.
