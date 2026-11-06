@@ -38,6 +38,8 @@ the base they share:
   the store as it is, its receipt naming the candidate dropped (`resolveIn`).
 -/
 public import Obend.Vault.Branch
+public import Std.Data.HashMap
+public import Std.Data.HashSet
 @[expose] public section
 
 namespace Obend.Vault.Merge
@@ -82,8 +84,16 @@ def liveHistory (s : Store) (name : String) : List Graph := ((s.page? name).map 
 /-- The authors of what a version adds over the one before it, said as the replica's: the replica's
 owner is `owner@LABEL` (here's own: `owner`). -/
 def addedFrom (label : String) (q : Option Page) (A : Option Graph) (M : Graph) : List (AtomId × String) :=
-  (M.atoms.map (·.1)).eraseDups.filter (fun a => !(A.map (·.present a)).getD false) |>.map fun a =>
-    (a, match q.bind fun q => q.authors.lookup a with
+  -- the atoms `M` stores that `A` does not, first occurrences, in `M`'s order: a hash set of `A`'s, so
+  -- a page of many versions costs its versions' sizes, not their squares (`eraseDups` and a lookup in
+  -- every author were quadratic in a version's atoms, cubic over a page's versions)
+  let who : Std.HashMap AtomId String := ((q.map (·.authors)).getD []).foldl
+    (fun m (a, w) => if m.contains a then m else m.insert a w) {}
+  let seen0 : Std.HashSet AtomId := ((A.map (·.atoms)).getD []).foldl (fun st e => st.insert e.1) {}
+  let (_, xs) := M.atoms.foldl (fun (acc : Std.HashSet AtomId × Array AtomId) e =>
+    if acc.1.contains e.1 then acc else (acc.1.insert e.1, acc.2.push e.1)) (seen0, #[])
+  xs.toList.map fun a =>
+    (a, match who.get? a with
       | some w => if w == "owner" && label != "" then "owner@" ++ label else w
       | none => if label == "" then "owner" else "owner@" ++ label)
 
@@ -343,12 +353,14 @@ def plan (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
   let receipts := baseReceipts names baseOf
   let live := names.filter (!skip ·)
   let who : String → AtomId → String := fun c => ((here.page? c).map Page.who).getD fun _ => "owner"
-  let merged : String → Option Graph := fun c =>
+  -- each page both sides hold, merged once (its state and its write both read it)
+  let mergedAll : List (String × Option Graph) := names.filterMap fun c =>
     match (liveHistory here c).getLast?, (liveHistory other c).getLast? with
-    | some A, some B => (mergePage A B).map fun M0 =>
+    | some A, some B => some (c, (mergePage A B).map fun M0 =>
         frontFix H here.entries c (who c) (((baseOf c).getLast?.map settled).getD "") (settled A) (settled B)
-          ((liveHistory here c).drop (baseOf c).length) ((liveHistory other c).drop (baseOf c).length) M0
+          ((liveHistory here c).drop (baseOf c).length) ((liveHistory other c).drop (baseOf c).length) M0)
     | _, _ => none
+  let merged : String → Option Graph := fun c => (mergedAll.lookup c).join
   let text : TextMerge :=
     { state := fun c =>
         match (liveHistory here c).getLast?, (liveHistory other c).getLast? with
