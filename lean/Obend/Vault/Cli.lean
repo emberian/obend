@@ -70,6 +70,18 @@ Forms (`Obend.Vault.Form`; the walkthrough is `lean/tests/vault/FORMS.md`):
         and the laws over links on the turn's tip; all of it lands or none, with one receipt in the
         world's chain (exported as .obend/forms/receipts.json), written to --receipt for the filler.
 
+Retention (`Obend.Vault.Retention`; the walkthrough is `lean/tests/vault/RETAIN.md`):
+
+    obend forget NAME [--retire FORM …] [--abandon BRANCH …]
+        forget the log before this turn under the retention contract NAME: refused, by name, while a
+        proposal sent from here awaits its receipt, a form issued here stands (unless retired), a
+        retired form has a continuity contract, or a declared branch has not merged (unless
+        abandoned); admitted, the log becomes one checkpoint record. A proposal for a retired form, a
+        merge from an abandoned branch or from a copy whose log does not reach the forgotten prefix's
+        end, is refused afterwards, naming the contract.
+    obend fork DIR
+        copy this vault to DIR as a declared branch: it holds a forget back until it merges.
+
 Transport (`Obend.Vault.Transport`; the walkthrough is `lean/tests/vault/TRANSPORT.md`):
 
     obend offer FORM HOLE LO..HI [--promise LO..HI]
@@ -243,6 +255,10 @@ structure Head where
   count : Nat := 0
   size : Nat := 0
   lastStart : Nat := 0
+  /-- the log's first record is a checkpoint record (`Obend.Vault.Retention`): a forgotten prefix -/
+  base : Bool := false
+  /-- the checkpoint record's length, when the log starts with one -/
+  baseSize : Nat := 0
 
 /-- The digest of a world, as `obend log` says it: the first 16 hex digits of its commitment. -/
 def worldDigest (w : Replay.World) : String :=
@@ -252,6 +268,12 @@ def worldDigest (w : Replay.World) : String :=
 the world's bytes decode to the world (`checkpoint_is_cache`'s premise). -/
 def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := do
   if h.count == 0 then return
+  -- a log that is its checkpoint record alone needs no checkpoint (and the record's anchor is the
+  -- forgotten prefix's, not its own digest)
+  if h.base && h.count == 1 then return
+  -- after a forget the checkpoint record holds the world: a checkpoint is written again only once the
+  -- records after it outweigh it
+  if h.base && h.size < 2 * h.baseSize then return
   let wb := encodeWorld h.world
   if decodeWorld wb != some h.world then
     IO.eprintln "checkpoint not written: the world's bytes do not decode to the world (the log stays the truth)"
@@ -299,12 +321,23 @@ def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String
     let bs := encodeRecord logHash r
     appendRecord dir (h.count + 1) bs
     let h' : Head :=
-      { world := w'
+      { h with
+        world := w'
         prev := Hr logHash r.receipt
         count := h.count + 1
         size := h.size + bs.length
         lastStart := h.size }
     return .ok (h', o)
+
+/-- The receipt digest a chain of records read from `prev` ends at: a checkpoint record first in a
+log stands for a prefix that ended at its anchor, and the records after it follow the anchor. -/
+def chainEnd (prev : Nat) (qs : List Record) : Nat :=
+  match qs with
+  | r :: rest =>
+    match prev == Rehydration.genesisSentinel, anchorOfTurn r.payload with
+    | true, some a => lastHash logHash a rest
+    | _, _ => lastHash logHash prev qs
+  | [] => prev
 
 /-- What recovery read: the head, the records after the checkpoint (all of them without one) and the
 world before them, the dropped tail and why, and what became of the checkpoint. -/
@@ -336,7 +369,11 @@ def recoverLog (dir : System.FilePath) : IO Recovery := do
     | some _, none => (genesis, Rehydration.genesisSentinel, 0, 0,
         "dropped (it does not hold against the log); the world is replayed from genesis")
     | none, none => (genesis, Rehydration.genesisSentinel, 0, 0, "none; the world is replayed from genesis")
-  let (qs, tail, why) := parseFrom logHash anchor (bs.drop from_)
+  let (qs, tail, why) := if from_ == 0 then Retention.parseLog logHash anchorOfTurn bs
+    else parseFrom logHash anchor (bs.drop from_)
+  let (isBase, baseSize) := match parseOne logHash (some Rehydration.genesisSentinel) bs with
+    | .ok (r, _) => if (anchorOfTurn r.payload).isSome then (true, (encodeRecord logHash r).length) else (false, 0)
+    | .error _ => (false, 0)
   let world := replay deployed base qs
   let size := from_ + (encodeAll logHash qs).length
   let count := count0 + qs.length
@@ -357,7 +394,7 @@ def recoverLog (dir : System.FilePath) : IO Recovery := do
     if r.receipt.newCommit != dig logHash (encodeWorld world) then
       throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
         " commits to: the log was written by another step (relinking is not done here)"))
-  return ⟨⟨world, lastHash logHash anchor qs, count, size, lastStart⟩, base, qs, tail, why, note⟩
+  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize⟩, base, qs, tail, why, note⟩
 
 /-- The world from the log, read only (nothing is truncated, rewritten or redone). -/
 def readWorld (dir : System.FilePath) : IO Replay.World := do
@@ -421,6 +458,46 @@ def redoFiles (dir : System.FilePath) (before : Replay.World) (t : Turn) (after 
         done := done ++ ["register/" ++ rf.id ++ ".md"]
   return done
 
+/-- The test-only barrier of a compaction (`OBEND_TEST_COMPACT=K:PATH`): write the first `K` bytes of
+the new log, create `PATH` and wait to be stopped. -/
+def compactTear (dir : System.FilePath) : IO (Option (Nat × String)) := do
+  let some v ← IO.getEnv "OBEND_TEST_COMPACT" | return none
+  if (← IO.FS.realPath dir) != (← IO.FS.realPath ".") then return none
+  match v.splitOn ":" with
+  | kStr :: rest => return kStr.toNat?.map (·, ":".intercalate rest)
+  | _ => return none
+
+def newLogPath (dir : System.FilePath) : System.FilePath := dir / ".obend" / "log.new"
+
+/-- **Compact the log** (`Obend.Vault.Retention`): its records, all of them, are replaced by one
+checkpoint record, admitted at genesis, whose turn carries the world they leave, how many records of
+the vault's whole history they stand for, the digest of their bytes, and the receipt digest they end
+at (the anchor the records after it follow). Written beside the log and renamed over it, so a crash
+leaves the log as it was or compacted; the checkpoint file, whose offsets were the old log's, goes. -/
+def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
+  let bs := (← readBytes (logPath dir)).take h.size
+  let before := match parseOne logHash (some Rehydration.genesisSentinel) bs with
+    | .ok (r, _) => match decodeTurn r.payload with
+      | .ok (.compacted n _ _ _) => n - 1
+      | _ => 0
+    | .error _ => 0
+  let t := Turn.compacted (before + h.count) (dig logHash bs) h.prev h.world
+  match Log.admit logHash deployed genesis Rehydration.genesisSentinel (encodeTurn t) with
+  | .error e => throw (IO.userError ("not compacted: " ++ e))
+  | .ok (w', _, r) =>
+    if w' != h.world then
+      throw (IO.userError "not compacted: the world's bytes do not decode to the world (the log stays as it is)")
+    let rb := encodeRecord logHash r
+    match ← compactTear dir with
+    | some (k, barrier) =>
+      IO.FS.writeBinFile (newLogPath dir) ⟨(rb.take k).toArray⟩
+      waitToBeStopped barrier
+    | none => IO.FS.writeBinFile (newLogPath dir) ⟨rb.toArray⟩
+    IO.FS.rename (newLogPath dir) (logPath dir)
+    if ← (checkpointPath dir).pathExists then IO.FS.removeFile (checkpointPath dir)
+    return { world := h.world, prev := h.prev, count := 1, size := rb.length, lastStart := 0, base := true,
+             baseSize := rb.length }
+
 /-- **Open a vault's log for a command**: adopt a world from before the log as its first record; drop a
 torn tail by name; redo the files of a turn whose record is whole but whose files may not be; write
 the checkpoint. Says what it did only when it did something. -/
@@ -454,7 +531,22 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
           ") was whole and its files were not: wrote " ++ ", ".intercalate done)
     | _, _ => pure ()
     saveCheckpoint dir r.head
-  return r.head
+  -- a forget interrupted: its new log is dropped, and the log, whose last record is the forget, is
+  -- compacted again
+  if ← (newLogPath dir).pathExists then
+    let n := (← readBytes (newLogPath dir)).length
+    IO.FS.removeFile (newLogPath dir)
+    IO.println ("recovered: an interrupted forget's new log (" ++ toString n ++ " bytes) dropped; the log stands")
+  let bs ← readBytes (logPath dir)
+  match parseOne logHash none ((bs.drop r.head.lastStart).take (r.head.size - r.head.lastStart)) with
+  | .ok (last, _) =>
+    if let .ok (.forget _) := decodeTurn last.payload then
+      let h ← compactLog dir r.head
+      IO.println ("recovered: the forget at record " ++ toString r.head.count ++
+        " was whole and the log was not compacted: compacted to one checkpoint record")
+      return h
+    return r.head
+  | .error _ => return r.head
 
 /-- Run `k` holding the vault's lock, from the log as recovered. -/
 def withLog {α : Type} (dir : System.FilePath) (k : Head → IO α) : IO α := do
@@ -653,9 +745,18 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
   if !(← (logPath dir).pathExists) then
     IO.println "no log"; return 2
   let bs ← readBytes (logPath dir)
-  let (qs, tail, why) := parseFrom logHash Rehydration.genesisSentinel bs
+  let (qs, tail, why) := Retention.parseLog logHash anchorOfTurn bs
   IO.println ("log: " ++ toString qs.length ++ " records, " ++ toString (encodeAll logHash qs).length ++
-    " bytes, each following the one before it from the genesis sentinel")
+    " bytes, each following the one before it from the genesis sentinel" ++
+    (match qs.head? with
+      | some r => match decodeTurn r.payload with
+        | .ok (.compacted n d a _) => " through a checkpoint record: " ++ toString n ++
+            " forgotten records (prefix digest " ++ String.ofList ((hex (be 32 d)).toList.take 16) ++
+            "), ending at receipt " ++ String.ofList ((hex (be 32 a)).toList.take 16)
+        | _ => ""
+      | none => ""))
+  IO.println ("a command reads: the log, " ++ toString bs.length ++ " bytes, and the checkpoint, " ++
+    toString (← readBytes (checkpointPath dir)).length ++ " bytes")
   if records then
     let mut pos := 0
     let mut i := 0
@@ -678,7 +779,7 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
   unless tail.isEmpty do
     IO.println ("torn tail: " ++ toString tail.length ++ " bytes after record " ++ toString qs.length ++
       ", dropped (" ++ ((why.map dropText).getD "") ++ ")")
-  let fromGenesis := (recover logHash deployed genesis bs).world
+  let fromGenesis := (Retention.recoverLog logHash deployed anchorOfTurn genesis bs).world
   let r ← recoverLog dir
   IO.println ("checkpoint: " ++ r.checkpoint)
   let committed := match qs.getLast? with
@@ -800,6 +901,14 @@ def vaultName (dir : System.FilePath) : IO String := do
 
 end Forms
 
+/-- Copy a directory, the vault's lock aside. -/
+partial def copyTree (src dst : System.FilePath) : IO Unit := do
+  IO.FS.createDirAll dst
+  for e in ← src.readDir do
+    if e.fileName == "lock" then continue
+    if ← e.path.isDir then copyTree e.path (dst / e.fileName)
+    else IO.FS.writeBinFile (dst / e.fileName) (← IO.FS.readBinFile e.path)
+
 /-- Run a vault command in `dir`. `none` when the arguments are not a vault command. -/
 def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   let (asName, args) := flag "--as" args
@@ -821,7 +930,18 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let label := (System.FilePath.mk other).fileName.getD other
     let w0 ← readWorld dir
     let (admitted, refused, dups) := sortLandings w0 (w0.grants.merge ow.grants) ow.landed
-    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed) V with
+    -- after a forget, whether the other log reaches the horizon: holds, among its receipt digests (and
+    -- the anchors of its own checkpoint record), the receipt the forgotten prefix here ended at
+    let mine ← readBytes (logPath dir)
+    let reaches ← match parseOne logHash (some Rehydration.genesisSentinel) mine with
+      | .ok (r, _) => match anchorOfTurn r.payload with
+        | some a => do
+          let (qs, _, _) := Retention.parseLog logHash anchorOfTurn (← readBytes (logPath other))
+          let ds := qs.map (fun q => Hr logHash q.receipt) ++ qs.filterMap (fun q => anchorOfTurn q.payload)
+          pure (some (ds.contains a))
+        | none => pure none
+      | .error _ => pure none
+    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches) V with
     | .ok (_, .merged s' notes, rendered) =>
       for n in notes do IO.println n
       for l in rendered do IO.println l
@@ -1005,6 +1125,38 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     | .ok w =>
       IO.println ("confirmed intent " ++ i ++ ": its receipt names the proposal sent from here; " ++
         (if w.outstanding.isEmpty then "nothing outstanding" else toString w.outstanding.length ++ " outstanding"))
+      return 0
+  | "forget" :: name :: rest => some do
+    let (retire, rest) := allFlags "--retire" rest
+    let (abandon, rest) := allFlags "--abandon" rest
+    unless rest.isEmpty do return ← fail "forget NAME [--retire FORM …] [--abandon BRANCH …]"
+    let _ ← openDir dir false
+    let c : Retention.Contract := ⟨name, retire, abandon⟩
+    let r ← withLog dir fun h => do
+      match ← commitTurn dir h (.forget c) with
+      | .error e => return Except.error e
+      | .ok (h', _) =>
+        let bytes := h'.size
+        let records := h'.count
+        let h'' ← compactLog dir h'
+        return .ok (records, bytes, h''.size)
+    match r with
+    | .error e => fail e
+    | .ok (n, b, b') =>
+      IO.println ("forgot " ++ toString n ++ " records (" ++ toString b ++ " bytes) under the retention contract " ++
+        name ++ (if retire.isEmpty then "" else ", retiring " ++ ", ".intercalate retire) ++
+        (if abandon.isEmpty then "" else ", abandoning " ++ ", ".intercalate abandon) ++
+        ": the log is one checkpoint record of " ++ toString b' ++ " bytes")
+      return 0
+  | ["fork", other] => some do
+    let _ ← openDir dir false
+    let name := (System.FilePath.mk other).fileName.getD other
+    if ← (System.FilePath.mk other).pathExists then return ← fail ("refused: " ++ other ++ " exists")
+    match ← commitWith dir (.forked name) (fun _ _ => pure ()) with
+    | .error e => fail e
+    | .ok () =>
+      copyTree dir other
+      IO.println ("forked " ++ name ++ ": a copy of this vault, declared here until it merges")
       return 0
   | ["transport", name] => some do
     let _ ← openDir dir false

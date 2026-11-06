@@ -49,6 +49,7 @@ receipt .obend/receipts/P-0001.json
 invoices/INV-2: posted as P-0002 (period 11): debit accounts/Receivables 250, credit accounts/Revenue 250
 receipt .obend/receipts/P-0002.json
 log: 7 records, 3983 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 3983 bytes, and the checkpoint, 6698 bytes
   record 1 (open): bytes 0 to 821
   record 2 (open): bytes 821 to 1208
   record 3 (rows): bytes 1208 to 1668
@@ -90,6 +91,7 @@ P-0001.md
 P-0002.md
 _kind.md
 log: 8 records, 4502 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 4602 bytes, and the checkpoint, 7101 bytes
 last record: 8 (open), bytes 3983 to 4502
 torn tail: 100 bytes after record 8, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 8
@@ -130,6 +132,7 @@ postings: P-0001, P-0002
 checked (trial-balance@1, decidable, compiled): every posting of period 11 is in it
 wrote reports/TB-11.md
 log: 11 records, 6148 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 6148 bytes, and the checkpoint, 8159 bytes
 last record: 11 (open), bytes 5424 to 6148
 checkpoint: the world after record 11
 world b5055f7b4289e044: replayed from genesis
@@ -148,6 +151,7 @@ cd books && obend ledger post invoices/INV-3 && obend log
 invoices/INV-3: posted as P-0003 (period 11): debit accounts/Receivables 125, credit accounts/Revenue 125
 receipt .obend/receipts/P-0003.json
 log: 14 records, 7898 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 7898 bytes, and the checkpoint, 9927 bytes
 last record: 14 (open), bytes 7092 to 7898
 checkpoint: the world after record 14
 world 12cc447348db8da3: replayed from genesis
@@ -250,6 +254,7 @@ postings: P-0001, P-0002, P-0003, P-0004
 checked (trial-balance@1, decidable, compiled): every posting of period 11 is in it
 wrote reports/TB-11.md
 log: 20 records, 11425 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 11425 bytes, and the checkpoint, 14196 bytes
 last record: 20 (open), bytes 10585 to 11425
 checkpoint: the world after record 20
 world 0329e714cb13e55f: replayed from genesis
@@ -274,6 +279,7 @@ cd ../gap && obend log
 
 ```text
 log: 2 records, 1208 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 10965 bytes, and the checkpoint, 14196 bytes
 last record: 2 (open), bytes 821 to 1208
 torn tail: 9757 bytes after record 2, dropped (link: it does not follow the record before it)
 checkpoint: dropped (it does not hold against the log); the world is replayed from genesis
@@ -297,6 +303,7 @@ cd ../gap && obend log
 
 ```text
 log: 2 records, 1208 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 11425 bytes, and the checkpoint, 14196 bytes
 last record: 2 (open), bytes 821 to 1208
 torn tail: 10217 bytes after record 2, dropped (digest: its turn is not the one its receipt names)
 checkpoint: the world after record 20
