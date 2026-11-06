@@ -1346,10 +1346,14 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let some f := w.forms.find? (·.name == name) | fail ("refused: no form named " ++ name)
     let kept ← readChecks dir name
     let apps := (f.lawApps w.store.entries).filter fun x => kept.contains x.key
-    IO.println (name ++ ": " ++ toString apps.length ++ " law(s) over its holed states, checked once with " ++
-      ", ".intercalate (f.holes.filterMap fun (h, t) => if t == .nat then some h else none) ++ " open:")
+    let open_ := f.holes.filterMap fun (h, t) => if t == .nat then some h else none
+    IO.println (name ++ ": " ++ toString apps.length ++ " law(s) over its holed states, checked once" ++
+      (if open_.isEmpty then " (no natural hole open):" else " with " ++ ", ".intercalate open_ ++ " open:"))
     for x in apps do
-      IO.println ("  " ++ x.pkg ++ ": " ++ x.law.drop (x.pkg.length + 2) ++ " at " ++ x.page ++
+      -- the law's name says the page or kind that wrote it (`jobs/_kind: budget`); a kind's law at a page
+      -- is not the page's (2026-11-06: `tests/relay/sandbox:  at tests/relay/sandbox`, its name cut by
+      -- the page's length)
+      IO.println ("  " ++ x.law ++ " at " ++ x.page ++
         (if x.src then " (debited)" else " (credited)"))
     return 0
   | "form" :: name :: rest => some do

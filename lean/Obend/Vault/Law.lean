@@ -309,6 +309,15 @@ def suggestMultiField (e : LawExpr) (facts : Facts) (old : Option Data) (new : D
     if edits.isEmpty then none else some edits
   | none => none
 
+/-- A label as a frontmatter value that reads back as that label: a word as it is, anything else
+quoted (`Obend.Vault.labelFields`; 2026-11-06: "the line `artifact: 9abc` would pass", a value that
+reads as no label at all). -/
+def labelLine (v : String) : String :=
+  match v.toList with
+  | c :: _ => if c.isAlpha && v.toList.all (fun ch => ch.isAlphanum || ch == '_' || ch == '-') && v != "true" && v != "false"
+      then v else "\"" ++ v ++ "\""
+  | [] => v
+
 /-- **What would pass**: the change of one field the law reads that makes it hold, said as the line
 of frontmatter that would pass (for a field the page writes there) or as the measure that would
 pass; else a request from the owner, if that passes; else a multi-field change found by
@@ -334,10 +343,10 @@ def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (fron
     | none => none
   match labelFound with
   | some (f, cur, some v) =>
-    "the line `" ++ f ++ ": " ++ v ++ "` would pass (the page has `" ++ f ++ ": " ++ cur ++ "`)"
+    "the line `" ++ f ++ ": " ++ labelLine v ++ "` would pass (the page has `" ++ f ++ ": " ++ labelLine cur ++ "`)"
   | some (f, cur, none) =>
     if cur.isEmpty then "a line `" ++ f ++ ": …` with a value would pass (the page has no `" ++ f ++ ":` line it reads)"
-    else "another `" ++ f ++ ":` value would pass (the page has `" ++ f ++ ": " ++ cur ++ "`)"
+    else "another `" ++ f ++ ":` value would pass (the page has `" ++ f ++ ": " ++ labelLine cur ++ "`)"
   | none =>
   let found := fields.findSome? fun f =>
     let cur := natAt new f
