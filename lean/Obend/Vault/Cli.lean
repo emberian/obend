@@ -1223,7 +1223,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
           pure (some (ds.contains a))
         | none => pure none
       | .error _ => pure none
-    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches) V with
+    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches (some ow.reasons)) V with
     | .ok (_, .merged s' notes, rendered) =>
       -- a write of the other side the tip did not land is a refused write of this merge
       -- (here's own writes the merge left unsettled are refusals of their pages, said by `finishTurn`)
@@ -1239,6 +1239,95 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       return 0
     | .ok _ => fail "the merge said what a merge does not"
     | .error e => fail e
+  | "since" :: tip :: rest => some do
+    -- From a fork: what moved at the tip since this fork's base, and what a merge of this fork and
+    -- the judgment of each proposal named would say there now. Nothing is landed and nothing is
+    -- written at the tip: the merge and the judgments are stepped on the tip's world in memory.
+    let (props, rest) := allFlags "--proposal" rest
+    unless rest.isEmpty do return ← fail "since TIP [--proposal FILE …]"
+    let _ ← openDir dir false
+    let me ← readWorld dir
+    let w ← readWorld tip
+    let label := ((← IO.FS.realPath dir).fileName).getD "fork"
+    let mineMoved : String → Bool := fun n =>
+      let bp := Merge.sharedPrefix (Merge.historyIn w.store n) (Merge.historyIn me.store n)
+      Merge.liveHistory me.store n != bp && !(Merge.liveHistory me.store n).isEmpty
+    IO.println ("since " ++ label ++ " left " ++ tip ++ ":")
+    let mut moved := 0
+    for p in w.store.pages do
+      let n := p.name
+      let bp := Merge.sharedPrefix (Merge.historyIn w.store n) (Merge.historyIn me.store n)
+      if Merge.liveHistory w.store n == bp || p.history.isEmpty then continue
+      moved := moved + 1
+      let also := if mineMoved n then " (you wrote it too)" else ""
+      match bp.getLast?, p.render? with
+      | none, _ => IO.println ("  " ++ n ++ ": new at the tip" ++ also)
+      | some B, some cur =>
+        let bt := render B n p.who
+        let bl := lawLines bt
+        let cl := lawLines cur
+        let lawsMoved := (cl.filter fun l => !bl.contains l).map (fun (k, t) => "+ law " ++ k ++ ": " ++ t) ++
+          (bl.filter fun l => !cl.contains l).map (fun (k, t) => "- law " ++ k ++ ": " ++ t)
+        let bf := frontFields bt
+        let fieldsMoved := (frontFields cur).filter fun (k, v) => (lawKey k).isNone && bf.lookup k != some v
+        let gone := bf.filter fun (k, _) => (lawKey k).isNone && ((frontFields cur).lookup k).isNone
+        let fs := fieldsMoved.map (fun (k, v) => k ++ " " ++ ((bf.lookup k).getD "unset") ++ " → " ++ v) ++
+          gone.map (fun (k, v) => k ++ " " ++ v ++ " → unset")
+        let what := (if lawsMoved.isEmpty then [] else ["its laws moved"]) ++ (if fs.isEmpty then [] else [", ".intercalate fs]) ++
+          (if lawsMoved.isEmpty && fs.isEmpty then ["its text moved"] else [])
+        IO.println ("  " ++ n ++ ": " ++ "; ".intercalate what ++ also)
+        for l in lawsMoved do IO.println ("    " ++ l)
+      | _, none => IO.println ("  " ++ n ++ ": gone at the tip" ++ also)
+    if moved == 0 then IO.println "  no page moved at the tip"
+    -- reasons: the tip's own, then this fork's as they would join there
+    let behind := Replay.behindOn w.store me.store
+    for (n, fs) in behind do IO.println ("  you have not seen at " ++ n ++ ": " ++ ", ".intercalate fs)
+    let (joined, _) := Replay.joinReasons label w.reasons me.reasons behind
+    let tipOnly := w.reasons.base.observations.filter fun o => !me.reasons.base.observations.any (·.name == o.name)
+    for o in tipOnly do IO.println ("  the tip observes " ++ o.name ++ ": " ++ o.text)
+    for x in me.reasons.atoms do
+      let here := me.reasons.line x
+      let there := joined.line x
+      if here != there then
+        IO.println ("  " ++ x ++ ": here " ++ (here.drop (x.length + 2)) ++ "; at the tip, with yours joined: " ++
+          (there.drop (x.length + 2)))
+    -- the merge, stepped in memory
+    let t : Replay.Turn := .merged label me.store false (some me.grants) me.landed none (some me.reasons)
+    match Replay.stepTurn w t with
+    | .error e => IO.println ("a merge of " ++ label ++ " would be refused: " ++ e)
+    | .ok (w1, o) =>
+      let notes := match o with | .merged _ ns => ns | _ => []
+      let interesting := notes.filter fun l => !(l.endsWith (": merged from " ++ label)) && !(l.endsWith (": imported from " ++ label))
+      IO.println ("a merge of " ++ label ++ " now would land " ++ toString (notes.length - interesting.length) ++
+        " page(s)" ++ (if interesting.isEmpty then "" else " and say:"))
+      for l in interesting do IO.println ("  " ++ l)
+      for f in props do
+        let j ← readJson f
+        let name ← ofExcept f (j.getObjValAs? String "proposal")
+        let digest ← ofExcept f (j.getObjValAs? String "digest")
+        let hops ← ofExcept f ((← ofExcept f (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM Obend.Vault.Form.grantOf)
+        let a ← ofExcept f (Obend.Vault.Form.assignmentOf (← ofExcept f (j.getObjVal? "fill")))
+        let intent := (j.getObjValAs? String "intent").toOption
+        let because := (j.getObjValAs? String "because").toOption
+        let w2 := match w1.forms.find? (·.name == name) with
+          | some fm =>
+            if !(Transport.lawMoves w1.store fm (issueOf w1 fm).basis).isEmpty then
+              match Replay.stepTurn w1 (.transported name) with
+              | .ok (w', _) => w'
+              | .error _ => w1
+            else w1
+          | none => w1
+        let turn : Replay.Turn := match because with
+          | some c => .justified name digest hops a intent c
+          | none => .judged name digest hops a intent
+        match Replay.stepTurn w2 turn with
+        | .ok _ => IO.println (f ++ ": would land, after that merge")
+        | .error e => IO.println (f ++ ": would be refused, after that merge: " ++ e)
+    if !me.outstanding.isEmpty then
+      for o in me.outstanding do
+        IO.println ("  outstanding here: " ++ o.form ++ " intent " ++ o.intent ++ " sent to " ++ o.vault)
+    IO.println "nothing landed; nothing written at the tip"
+    return 0
   | ["branch", "resolve", k, side] => some do
     let (_, V) ← openDir dir false
     let some k := k.toNat? | fail "branch resolve K left|right: K is a number"
@@ -1425,6 +1514,13 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         ", ".intercalate g.grant.patterns ++ ")" ++ (if w.grants.revoked.contains g.id then ", revoked" else ""))
     return 0
   | "reasons" :: rest => reasonsRun dir rest
+  | ["release", i] => some do
+    match ← commitWith dir (.released i) (fun h _ => pure h.world) with
+    | .error e => fail e
+    | .ok w =>
+      IO.println ("released intent " ++ i ++ ": it awaits no receipt here; " ++
+        (if w.outstanding.isEmpty then "nothing outstanding" else toString w.outstanding.length ++ " outstanding"))
+      return 0
   | ["obligations"] => some do
     let w ← readWorld dir
     if w.outstanding.isEmpty then IO.println "nothing outstanding"

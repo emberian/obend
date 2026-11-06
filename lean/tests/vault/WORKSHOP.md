@@ -181,7 +181,42 @@ observed relay-base-moved: _post keeps its signature, looked up per call; endpoi
 
 ## 5. The return
 
-rowan comes back. Its fork's job page is refused at the tip by the job's law, by name (the suggestion
+Before it proposes, rowan asks the tip what moved since its fork left, and what a merge of its fork
+and a judgment of its landing would say there now (`obend since`): the tip's own law and base on its
+job page, which it has not seen; the harness's landing; the reasons; the refusals, by name. Nothing
+lands and nothing is written at the tip. (On 2026-11-06 rowan had no such look: its first word on the
+moved terms was the refusal, and the repair took a reviewer's message and a second session.)
+
+```sh
+cd rowan && obend since ../ws --proposal ../rowan-land.json
+```
+
+```text
+since rowan left ../ws:
+  jobs/harness: state offered → proposed, commit unset → "751b497", on unset → "ed1d477", assignee unset → sable, open 1 → 0, spent 0 → 2
+  jobs/relay: its laws moved; base "ed1d477" → "751b497" (you wrote it too)
+    + law suite: new.state in ["proposed", "landed"] implies not (new.suite == "")
+  landed/harness: open 0 → 1
+  residents/sable: its text moved
+  evidence/harness/sable-1: new at the tip
+  evidence/harness/reviewer-1: new at the tip
+  tests/relay/suite: new at the tip
+  you have not seen at jobs/relay: base, law suite
+  the tip observes harness-unit-pass-751b497f3fab: result: "pass"
+  the tip observes relay-base-moved: _post keeps its signature, looked up per call; endpoints are kagi_url() and scry_url() (RESEARCH_KAGI_URL, RESEARCH_SCRY_URL)
+a merge of rowan now would land 4 page(s) and say:
+  jobs/relay + jobs/relay: not merged: refused by jobs/_kind: onbase (the kind of jobs/, an ancestor of jobs/relay): `new.state in ["proposed", "landed"] implies new.on == new.base` does not hold; the line `base: ed1d477` would pass (the page has `base: `)
+  jobs/relay: here's write stands (landed here before the merge)
+  jobs/relay: kept from rowan: commit unset → "007f0e5401221dea20a481fafe3b90ce06bc973f", on unset → "ed1d477", assignee unset → rowan, spent 0 → 2
+  jobs/relay: pending here, as rowan wrote it on this page as it is (state): refused by its law suite: `new.state in ["proposed", "landed"] implies not (new.suite == "")` does not hold; a line `suite: …` with a value would pass (the page has no `suite:` line it reads)
+  behind-rowan: assumed here, rowan has not seen jobs/relay base, law suite; its explanations hold here only without it
+  rowan's observation relay-sandbox-pass-007f0e540122: joined here
+../rowan-land.json: would be refused, after that merge: land-relay: refused by its reasons: its justification relay-proven is unsupported now: nothing explains relay-proven
+  outstanding here: land-relay intent 1fcef1ca77bea7b0 sent to ws
+nothing landed; nothing written at the tip
+```
+
+rowan comes back as it was, to show what the tip does with it. Its fork's job page is refused at the tip by the job's law, by name (the suggestion
 names the line that would pass); what it spent of its share came in; its evidence came in, and is
 still evidence of what it was:
 
@@ -191,28 +226,31 @@ grep -E '^(kagi|kagispent):' resources/rowan.md
 ```
 
 ```text
-jobs/relay: here's write was not settled at the merge with rowan: refused by jobs/_kind: onbase (the kind of jobs/, an ancestor of jobs/relay): `new.state in ["proposed", "landed"] implies new.on == new.base` does not hold; the line `base: ed1d477` would pass (the page has `base: `)
 residents/rowan: merged from rowan
 resources/rowan: merged from rowan
 evidence/relay/rowan-1: imported from rowan
 evidence/relay/rowan-2: imported from rowan
 jobs/relay + jobs/relay: not merged: refused by jobs/_kind: onbase (the kind of jobs/, an ancestor of jobs/relay): `new.state in ["proposed", "landed"] implies new.on == new.base` does not hold; the line `base: ed1d477` would pass (the page has `base: `)
+jobs/relay: here's write stands (landed here before the merge)
+jobs/relay: kept from rowan: commit unset → "007f0e5401221dea20a481fafe3b90ce06bc973f", on unset → "ed1d477", assignee unset → rowan, spent 0 → 2
+jobs/relay: pending here, as rowan wrote it on this page as it is (state): refused by its law suite: `new.state in ["proposed", "landed"] implies not (new.suite == "")` does not hold; a line `suite: …` with a value would pass (the page has no `suite:` line it reads)
+behind-rowan: assumed here, rowan has not seen jobs/relay base, law suite; its explanations hold here only without it
+rowan's observation relay-sandbox-pass-007f0e540122: joined here
 kagi: 1
 kagispent: 1
 ```
 
-Its evidence is observed at the tip; the explanation that the relay is proven by it holds unless the
-base moved, and the base moved: the evidence expired. The landing is refused by its reasons, by name;
-its form was carried across the law change and still stands (nothing to re-offer):
+Its evidence came back with it, observed in its fork; the reviewer's explanation that the relay is
+proven by it holds unless the base moved, and the base moved: the evidence expired. The landing is
+refused by its reasons, by name; its form was carried across the law change and still stands
+(nothing to re-offer):
 
 ```sh
-cd ws && obend reasons observe relay-sandbox-pass-007f0e540122 --line evidence/relay/rowan-2.md:5 | head -1
-obend reasons explain R-relay-007f0e5 relay-proven --if relay-sandbox-pass-007f0e540122 --unless relay-base-moved | head -1
+cd ws && obend reasons explain R-relay-007f0e5 relay-proven --if relay-sandbox-pass-007f0e540122 --unless relay-base-moved | head -1
 obend reasons why relay-proven
 ```
 
 ```text
-observed relay-sandbox-pass-007f0e540122: result: "pass"
 explained R-relay-007f0e5: relay-proven ⇐ relay-sandbox-pass-007f0e540122 unless relay-base-moved
 relay-proven: unsupported: R-relay-007f0e5 is defeated by relay-base-moved (supported)
 ```
@@ -222,25 +260,28 @@ cd ws && obend judge ../rowan-land.json
 ```
 
 ```text
+land-relay: transported over the laws of jobs/relay: nothing was promised; it continues
 land-relay: refused by its reasons: its justification relay-proven is unsupported now: R-relay-007f0e5 is defeated by relay-base-moved (supported)
 work: performed 0, retained 1 of 1
 ```
 
-What already happened stays: the live Kagi search was paid (`kagispent: 1` at the tip), the landing
-intent is outstanding in rowan's fork, the evidence pages are kept. What did not come in with the
-refused page is the job's own count of spent runs (FINDINGS: a page that mixes an effect ledger with a
-proposal loses the ledger when the proposal is refused):
+What already happened stays: the live Kagi search was paid (`kagispent: 1` at the tip), the two runs
+rowan spent are on the job's page (kept from the refused page, field by field, each judged), the
+landing intent is outstanding in rowan's fork until rowan releases it by name, and the refused rest of
+rowan's page waits as the page's pending write, with why:
 
 ```sh
 cd ws && grep -E '^(state|on|spent):' jobs/relay.md; obend status jobs/relay | head -1 | cut -c1-90
-cd ../rowan && obend obligations
+cd ../rowan && obend obligations && obend release 1fcef1ca77bea7b0
 ```
 
 ```text
-state: offered
-spent: 0
-jobs/relay v2; its last write was not settled at the merge with rowan: refused by jobs/_ki
+state: proposed
+spent: 2
+on: "ed1d477"
+jobs/relay v7; its last write was refused by its law suite: `new.state in ["proposed", "la
 land-relay: intent 1fcef1ca77bea7b0 () sent to ws, awaiting its receipt
+released intent 1fcef1ca77bea7b0: it awaits no receipt here; nothing outstanding
 ```
 
 ## 6. The repair lands, once
@@ -262,16 +303,18 @@ evidence/relay/rowan-3: new page (v1)
 evidence/relay/rowan-4: new page (v1)
 tests/relay/suite: new page (v1)
 wrote ../rowan-land2.json (intent 8e3b23be52ac5367)
-jobs/relay: merged from rowan
 residents/rowan: merged from rowan
 evidence/relay/rowan-3: imported from rowan
 evidence/relay/rowan-4: imported from rowan
+jobs/relay + jobs/relay: not merged: refused by jobs/_kind: spent (the kind of jobs/, an ancestor of jobs/relay): `monotone(spent)` does not hold; spent = 2 would pass (this write has spent = 0)
+jobs/relay: here's write stands (landed here before the merge)
+jobs/relay: kept from rowan: commit "007f0e5401221dea20a481fafe3b90ce06bc973f" → "ad3a6dc965bdeaa0a94148274f591bc90a68e7f4", on "ed1d477" → "751b497", suite unset → "evidence/relay/rowan-4", spent 2 → 4
 state: proposed
-on: "751b497"
-suite: "evidence/relay/rowan-4"
 runs: 5
 spent: 4
 base: "751b497"
+on: "751b497"
+suite: "evidence/relay/rowan-4"
 ```
 
 The reviewer's runs on ad3a6dc are paid from the job too: the sandbox run is the fifth of five, and the
@@ -287,13 +330,13 @@ cd ../rowan.store && obend fill ../topup.form runs=1 --out ../topup.json | tail 
 ```
 
 ```text
-jobs/relay: v5 written
+jobs/relay: v13 written
 evidence/relay/reviewer-1: new page (v1)
 jobs/relay: refused by jobs/_kind: budget (the kind of jobs/, an ancestor of jobs/relay): `new.spent <= new.runs` does not hold; the line `spent: 5` would pass (the page has `spent: 6`)
 nothing changed
 topup-relay: offers runs = 1..3, promises 1..2 (each value judged by the laws as they stand: 3 admitted)
-wrote ../topup.json (intent 0493477f351b0a46)
-topup-relay: landed as one turn over 2 pages by rowan, receipt cd3f08f79e44c83c (4 in the chain)
+wrote ../topup.json (intent c1142d078234f5ba)
+topup-relay: landed as one turn over 2 pages by rowan, receipt 5d092c923777701b (4 in the chain)
   resources/rowan: runs 3 → 2
   jobs/relay: runs 5 → 6
 ```
@@ -307,16 +350,16 @@ obend judge ../rowan-land2.json | head -4
 ```
 
 ```text
-jobs/relay: v7 written
+jobs/relay: v15 written
 evidence/relay/reviewer-2: new page (v1)
 observed relay-sandbox-pass-ad3a6dc965bd: result: "pass"
 observed relay-suite-pass-ad3a6dc965bd: result: "pass"
 explained R-relay-ad3a6dc: relay-proven ⇐ relay-sandbox-pass-ad3a6dc965bd, relay-suite-pass-ad3a6dc965bd
   relay-proven: supported (was unsupported)
-land-relay: transported over the laws of jobs/relay: nothing was promised; it continues
-land-relay: landed as one turn over 2 pages by rowan, receipt 721ba801ccaad0d1 (5 in the chain)
+land-relay: landed as one turn over 2 pages by rowan, receipt b56292261a412fab (5 in the chain)
   jobs/relay: open 1 → 0
   landed/relay: open 0 → 1
+rendered jobs/relay.md
 ```
 
 ```sh refused
@@ -324,21 +367,23 @@ cd ws && obend judge ../rowan-land2.json
 ```
 
 ```text
-land-relay: refused: a duplicate: intent 8e3b23be52ac5367 has landed here as receipt 721ba801ccaad0d1 (5 in the chain); it is not landed again
+land-relay: refused: a duplicate: intent 8e3b23be52ac5367 has landed here as receipt b56292261a412fab (5 in the chain); it is not landed again
 work: performed 0, retained 1 of 1
 ```
 
 ## 7. Retiring the finished jobs
 
-Both jobs are landed and both forks merged; the forms that offered them have continuity contracts, and
-a contract's promise has no end, so the log cannot be forgotten (FINDINGS):
+Both jobs are landed and both forks merged. The forms that offered them have continuity contracts; a
+fill of each landed here, so each promise is discharged, and the finished jobs' forms retire: the log
+is compacted (on 2026-11-06 this was refused, "what it promised reaches past the horizon", and a vault
+that offered work with promises could never forget):
 
-```sh refused
+```sh
 cd ws && obend forget finished --retire accept-relay --retire land-relay --retire accept-harness --retire land-harness --retire topup-relay
 ```
 
 ```text
-refused: the form accept-relay has a continuity contract: what it promised reaches past the horizon, and retiring it would break it
+forgot 65 records (247180 bytes) under the retention contract finished, retiring accept-relay, land-relay, accept-harness, land-harness, topup-relay: the log is one checkpoint record of 206694 bytes
 ```
 
 ## 8. Defects the day exposed, fixed

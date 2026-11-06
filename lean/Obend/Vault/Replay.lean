@@ -135,6 +135,7 @@ inductive Turn
   | recited (who : Option String) (page : String)
   | merged (label : String) (other : Store) (skipLedger : Bool) (otherGrants : Option Grants := none)
       (otherLanded : List Landing := []) (reaches : Option Bool := none)
+      (otherReasons : Option Obend.Reasons.State := none)
   | resolved (k : Nat) (right : Bool)
   | rows (rs : List Row)
   | captured (situation name : String) (g : Grant) (src dst : String) (amount : Nat) (field : String)
@@ -151,6 +152,9 @@ inductive Turn
   | proposed (name received digest vault : String) (hops : List Grant) (a : Assignment) (holder : String)
       (because : Option String := none)
   | confirmed (intent : String) (effects : Nat)
+  /-- a proposal sent from here and refused where it was judged, released by its sender by name: it awaits
+  no receipt (2026-11-06: rowan's refused landing intent stayed outstanding in its fork for good) -/
+  | released (intent : String)
   | forget (c : Retention.Contract)
   | compacted (count digest anchor : Nat) (w : World)
   | forked (name : String)
@@ -448,7 +452,7 @@ def markMerged (bs : List Retention.Fork) (label : String) : List Retention.Fork
 
 /-- **What still needs the prefix a `forget` would forget**, the first of it, said: a proposal sent
 from here with no receipt (an obligation), a form issued here that stands and that the contract does
-not retire, a retired form whose continuity contract promised what retiring it would break, a branch
+not retire, a retired form whose continuity contract promised what retiring it would break (and no fill of it landed here), a branch
 declared here that has not merged and that the contract does not abandon. -/
 def needs (w : World) (c : Retention.Contract) : Option String :=
   match w.outstanding with
@@ -459,7 +463,10 @@ def needs (w : World) (c : Retention.Contract) : Option String :=
   | f :: _ => some ("refused: the form " ++ f.name ++ " was issued against the prefix and stands; retire it " ++
       "(--retire " ++ f.name ++ ") or keep the prefix")
   | [] =>
-  match c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome) with
+  -- a promise is discharged when a fill of its form landed here: the job it offered was taken
+  -- (2026-11-06: both jobs landed and both forks merged, and the workshop's log could never be forgotten)
+  match c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome &&
+      !w.landed.any (·.form == n)) with
   | n :: _ => some ("refused: the form " ++ n ++ " has a continuity contract: what it promised reaches past " ++
       "the horizon, and retiring it would break it")
   | [] =>
@@ -496,6 +503,174 @@ def judgeTurn (w : World) (name digest : String) (hops : List Grant) (a : Assign
           let r := Form.receiptFor H w.receipts.getLast? f a ad t
           .ok ({ w with store := settle H s, receipts := w.receipts ++ [r] },
             .judged s ad t r (w.receipts.length + 1))
+
+/-! ## What a merge keeps of a refused page, and the reasons that come with it -/
+
+/-- `src` with its frontmatter field `k` set to `v` (the line replaced, or added before the closing `---`). -/
+def setFrontField (src k v : String) : String :=
+  match src.splitOn "\n" with
+  | first :: rest =>
+    if trim first == "---" then
+      let fm := rest.takeWhile fun l => trim l != "---"
+      let after := rest.dropWhile fun l => trim l != "---"
+      let isK : String → Bool := fun l => ((splitColon l).map (·.1)) == some k
+      let fm' := if fm.any isK then fm.map (fun l => if isK l then k ++ ": " ++ v else l) else fm ++ [k ++ ": " ++ v]
+      "\n".intercalate (first :: fm' ++ after)
+    else src
+  | [] => src
+
+/-- The frontmatter fields (not law lines) the other replica changed on a page since the base. -/
+def fieldsMoved (base other : String) : List (String × String) :=
+  let b := frontFields base
+  (frontFields other).filter fun (k, v) => (lawKey k).isNone && b.lookup k != some v
+
+/-- **A refused page keeps what it can.** A page the other replica moved past the base, whose write did
+not land here (refused at the tip, alone or merged with here's): here's versions stand (a pair refused
+together must not undo what here had landed), then each field the other replica changed since the base
+is written here alone, judged by the page's laws as they stand, and kept when admitted (a spent count,
+an evidence field: what happened stays recorded); the whole of the other's change, set on here's text,
+stays the page's pending write with the refusal that names why. (2026-11-06: rowan's job page carried
+its proposal and its `spent: 2`; the proposal broke `onbase`, the page did not come in, and the tip said
+`spent: 0`; the tip's own law change on the page was rolled back to the base with it.) -/
+def salvage (here other s : Store) (label n : String) : Store × List String × Bool :=
+  match here.page? n, other.page? n, s.page? n with
+  | some hp, some op, some sp =>
+    let bp := Merge.sharedPrefix (Merge.historyIn here n) (Merge.historyIn other n)
+    if op.history == bp || sp.history.length > hp.history.length then (s, [], false) else
+    match hp.render?, op.render?, (bp.getLast?.map fun G => render G n op.who) with
+    | some hText, some oText, some bText =>
+      let moved := fieldsMoved bText oText
+      if moved.isEmpty then (s, [], false) else
+      let restored := sp.history.length < hp.history.length
+      let s0 := if restored then s.setPage hp else s
+      let step := fun (acc : Store × List (String × String) × List String) (kv : String × String) =>
+        let (st, kept, refused) := acc
+        match st.page? n with
+        | some p =>
+          match p.render? with
+          | some cur =>
+            let ch := ownerWrite H st.entries st.turn p (setFrontField cur kv.1 kv.2) (env := st.environment)
+            if ch.note.isNone && ch.history.length > p.history.length then
+              (st.setPage (p.withChange ch), kept ++ [kv], refused)
+            else (st, kept, refused ++ [kv.1])
+          | none => (st, kept, refused ++ [kv.1])
+        | none => (st, kept, refused ++ [kv.1])
+      let (s1, kept, refused) := moved.foldl step (s0, [], [])
+      let (s2, why) := match s1.page? n with
+        | some p =>
+          match p.render? with
+          | some cur =>
+            let whole := moved.foldl (fun t kv => setFrontField t kv.1 kv.2) cur
+            if whole == cur then (s1, none) else
+            let ch := ownerWrite H s1.entries s1.turn p whole (env := s1.environment)
+            if ch.note.isNone && ch.history.length > p.history.length then (s1.setPage (p.withChange ch), none)
+            else (s1.setPage (p.withChange ch), ch.note)
+          | none => (s1, none)
+        | none => (s1, none)
+      let keptText := ", ".intercalate (kept.map fun (k, v) =>
+        k ++ " " ++ ((hText |> frontFields |>.lookup k).getD "unset") ++ " → " ++ v)
+      let lines := (if restored then [n ++ ": here's write stands (landed here before the merge)"] else []) ++
+        (if kept.isEmpty then [] else [n ++ ": kept from " ++ label ++ ": " ++ keptText]) ++
+        (match why with
+          | some w => [n ++ ": pending here, as " ++ label ++ " wrote it on this page as it is (" ++
+              ", ".intercalate refused ++ "): " ++ w]
+          | none => [])
+      (s2, lines, restored)
+    | _, _, _ => (s, [], false)
+  | _, _, _ => (s, [], false)
+
+/-- **What a fork has not seen**: for each page both replicas moved since their base (the pages the
+fork worked on), the fields and law lines here's moves set that the other's page does not hold now. A
+fork that wrote a page to the tip's terms is not behind on it. -/
+def behindOn (here other : Store) : List (String × List String) :=
+  here.pages.filterMap fun p =>
+    let bp := Merge.sharedPrefix (Merge.historyIn here p.name) (Merge.historyIn other p.name)
+    match bp.getLast?, p.render?, (other.page? p.name).bind (·.render?) with
+    | some B, some cur, some theirs =>
+      if Merge.liveHistory here p.name == bp || Merge.liveHistory other p.name == bp then none else
+      let bt := render B p.name p.who
+      let bf := frontFields bt
+      let tf := frontFields theirs
+      let fields := ((frontFields cur).filter fun (k, v) => (lawKey k).isNone && bf.lookup k != some v &&
+        tf.lookup k != some v).map (·.1)
+      let laws := ((lawLines cur).filter fun l => !(lawLines bt).contains l && !(lawLines theirs).contains l).map
+        (fun (k, _) => "law " ++ k)
+      if fields.isEmpty && laws.isEmpty then none else some (p.name, fields ++ laws)
+    | _, _, _ => none
+
+/-- An event of the reasons, said. -/
+def eventText : Obend.Reasons.Event → String
+  | .observe o => "observation " ++ o.name
+  | .assume a => "assumption " ++ a
+  | .withdraw a => "withdrawal of " ++ a
+  | .explain r => "explanation " ++ r.name ++ " (" ++ Obend.Reasons.ruleText r ++ ")"
+  | .defeat d => "defeat of " ++ d.target ++ " by " ++ d.by'
+  | .propose a => "proposal " ++ a.name
+
+/-- **A fork's reasons come back with it**: what the other replica observed, assumed, explained,
+defeated and proposed that this one does not hold joins this one's reasons, each event stepped here,
+so the judgment is this vault's over the union (`Obend.Reasons.State.step`: consistent after each);
+an event this vault refuses (a name it uses for something else) is said and left out. -/
+def joinReasons (label : String) (r o : Obend.Reasons.State) (behind : List (String × List String) := []) :
+    Obend.Reasons.State × List String :=
+  let b := o.base
+  -- the other's explanations hold here only while it is not behind the tip: `behind-LABEL`, an
+  -- assumption this merge holds while some page moved here that the other has not seen
+  let flag := "behind-" ++ label
+  let (r, flagNotes) : Obend.Reasons.State × List String :=
+    if !behind.isEmpty && !r.base.held.contains flag then
+      match r.step (.assume flag) with
+      | .ok st => (st, [flag ++ ": assumed here, " ++ label ++ " has not seen " ++ "; ".intercalate (behind.map fun (n, fs) =>
+          n ++ " " ++ ", ".intercalate fs) ++ "; its explanations hold here only without it"])
+      | .error _ => (r, [])
+    else if behind.isEmpty && r.base.held.contains flag then
+      match r.step (.withdraw flag) with
+      | .ok st => (st, [flag ++ ": withdrawn, " ++ label ++ " has seen what moved here"])
+      | .error _ => (r, [])
+    else (r, [])
+  let mine := r.base
+  let clash := (b.observations.filter fun x => mine.observations.any fun y => y.name == x.name && y != x).map
+      (fun x => label ++ "'s observation " ++ x.name ++ ": not joined: observed here otherwise") ++
+    (b.explanations.filter fun x => mine.explanations.any fun y => y.name == x.name && y != x).map
+      (fun x => label ++ "'s explanation " ++ x.name ++ ": not joined: a different explanation has that name here")
+  let evs : List Obend.Reasons.Event :=
+    (b.observations.filter fun x => !mine.observations.any (·.name == x.name)).map .observe ++
+    (b.held.filter fun a => !mine.held.contains a).map .assume ++
+    (b.explanations.filter fun e => !mine.explanations.any (·.name == e.name)).map
+      (fun e => .explain { e with neg := e.neg ++ [flag] }) ++
+    (b.defeaters.filter fun d => !mine.defeaters.contains d).map .defeat ++
+    (b.actions.filter fun a => !mine.actions.any (·.name == a.name)).map .propose
+  let (r', notes) := evs.foldl (fun (acc : Obend.Reasons.State × List String) e =>
+    match acc.1.step e with
+    | .ok st => (st, acc.2 ++ [label ++ "'s " ++ eventText e ++ ": joined here"])
+    | .error err => (acc.1, acc.2 ++ [label ++ "'s " ++ eventText e ++ ": not joined: " ++ err])) (r, [])
+  let concls := (evs.filterMap fun e => match e with | .explain x => some x.concl | _ => none).eraseDups
+  (r', flagNotes ++ clash ++ notes ++ concls.map fun c => "  judged here: " ++ r'.line c)
+
+/-- After a merge: the pages it refused keep what they can (`salvage`), and the other's reasons join. -/
+def afterMerge (w0 w : World) (o : Outcome) (label : String) (other : Store)
+    (rs : Option Obend.Reasons.State) : World × Outcome :=
+  let moved := other.pages.map (·.name)
+  let (s, lines, restored) := moved.foldl (fun (acc : Store × List String × List String) n =>
+    let (st, ls, r) := salvage w0.store other acc.1 label n
+    (st, acc.2.1 ++ ls, if r then acc.2.2 ++ [n] else acc.2.2)) (w.store, [], [])
+  let (r, rlines) := match rs with
+    | some r => joinReasons label w.reasons r (behindOn w0.store other)
+    | none => (w.reasons, [])
+  let o' := match o with
+    | .merged _ notes =>
+      let notes' := notes.filter fun l => !restored.any fun n => l.startsWith (n ++ ": here's write was ")
+      Outcome.merged s (notes' ++ lines ++ rlines)
+    | x => x
+  ({ w with store := if lines.isEmpty then w.store else settle H s, reasons := r }, o')
+
+/-- After a merge, what is outstanding and what landed are as the merge left them. -/
+theorem afterMerge_keeps (w0 w : World) (o : Outcome) (label : String) (other : Store)
+    (rs : Option Obend.Reasons.State) :
+    (afterMerge w0 w o label other rs).1.outstanding = w.outstanding ∧
+      (afterMerge w0 w o label other rs).1.landed = w.landed := by
+  unfold afterMerge
+  constructor <;> rfl
 
 /-- **The step of a turn**: the store function its command calls, or a refusal (a refused turn is
 never logged). -/
@@ -539,12 +714,14 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     match w.store.actor who >>= fun a => reciteIn H w.store a page with
     | .ok (s, n) => .ok ({ w with store := settle H s }, .recited s n)
     | .error e => .error e
-  | .merged label other skipLedger og theirs reaches =>
+  | .merged label other skipLedger og theirs reaches rs =>
     match lateMerge w label reaches with
     | some e => .error e
     | none =>
       match mergeStep w label other skipLedger og theirs with
-      | .ok (w', o) => .ok ({ w' with forks := markMerged w'.forks label }, o)
+      | .ok (w', o) =>
+        let (w'', o') := afterMerge w w' o label other rs
+        .ok ({ w'' with forks := markMerged w''.forks label }, o')
       | .error e => .error e
   | .resolved k right =>
     match Merge.resolveIn w.store k (if right then .right else .left) with
@@ -664,6 +841,10 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
       if effects != Transport.effectsOf H o then
         .error ("refused: the receipt is not of the proposal " ++ i ++ " sent from here")
       else .ok ({ w with outstanding := w.outstanding.filter (·.intent != i) }, .quiet)
+  | .released i =>
+    if w.outstanding.any (·.intent == i) then
+      .ok ({ w with outstanding := w.outstanding.filter (·.intent != i) }, .quiet)
+    else .error ("refused: no proposal sent from here awaits a receipt for intent " ++ i)
   | .rows rs =>
     match registerLaws w.store with
     | .error e => .error e
@@ -777,8 +958,9 @@ def turnJson : Turn → Json
   | .selected who page k i => Json.mkObj [("turn", "select"), ("as", optStrJson who), ("page", Json.str page),
       ("section", toJson k), ("candidate", toJson i)]
   | .recited who page => Json.mkObj [("turn", "recite"), ("as", optStrJson who), ("page", Json.str page)]
-  | .merged label other skip og theirs reaches => Json.mkObj ([("turn", Json.str "merge"), ("label", Json.str label),
+  | .merged label other skip og theirs reaches rs => Json.mkObj ([("turn", Json.str "merge"), ("label", Json.str label),
       ("other", storeJson other), ("skipLedger", toJson skip)] ++
+      (match rs with | some r => [("otherReasons", Obend.Reasons.stateJson r)] | none => []) ++
       (match og with
         | some g => [("otherGrants", Transport.grantsJson g),
             ("otherLanded", Json.arr (theirs.map Transport.landingJson).toArray)]
@@ -811,6 +993,7 @@ def turnJson : Turn → Json
       ("hops", Json.arr (hops.map Form.grantJson).toArray), ("fill", Form.assignmentJson a), ("by", Json.str holder)] ++
       (match because with | some c => [("because", Json.str c)] | none => []))
   | .confirmed i effects => Json.mkObj [("turn", "confirm"), ("intent", Json.str i), ("effects", toJson effects)]
+  | .released i => Json.mkObj [("turn", "release"), ("intent", Json.str i)]
   | .forget c => Json.mkObj [("turn", "forget"), ("contract", Retention.contractJson c)]
   | .compacted count digest anchor w => Json.mkObj [("turn", "compacted"), ("count", toJson count),
       ("digest", toJson digest), ("anchor", toJson anchor), ("world", worldJson w)]
@@ -856,7 +1039,10 @@ def turnOf (j : Json) : Except String Turn := do
     | .ok g =>
       let theirs ← (← j.getObjValAs? (Array Json) "otherLanded").toList.mapM Transport.landingOf
       let reaches := (j.getObjValAs? Bool "reaches").toOption
-      return .merged label other skip (some (← Transport.grantsOf g)) theirs reaches
+      let rs ← match j.getObjVal? "otherReasons" with
+        | .ok r => some <$> Obend.Reasons.stateOf r
+        | .error _ => pure none
+      return .merged label other skip (some (← Transport.grantsOf g)) theirs reaches rs
     | .error _ => return .merged label other skip none [] (j.getObjValAs? Bool "reaches").toOption
   | "resolve" => return .resolved (← j.getObjValAs? Nat "conflict") (← j.getObjValAs? Bool "right")
   | "rows" => return .rows (← (← j.getObjValAs? (Array Json) "rows").toList.mapM rowOf)
@@ -907,6 +1093,7 @@ def turnOf (j : Json) : Except String Turn := do
     return .proposed name received digest vault hops a (← j.getObjValAs? String "by")
       (j.getObjValAs? String "because").toOption
   | "confirm" => return .confirmed (← j.getObjValAs? String "intent") (← j.getObjValAs? Nat "effects")
+  | "release" => return .released (← j.getObjValAs? String "intent")
   | "forget" => return .forget (← Retention.contractOf (← j.getObjVal? "contract"))
   | "compacted" =>
     let count ← j.getObjValAs? Nat "count"
@@ -966,6 +1153,7 @@ def Turn.kind : Turn → String
   | .transported .. => "transport"
   | .proposed .. => "propose"
   | .confirmed .. => "confirm"
+  | .released .. => "release"
   | .forget .. => "forget"
   | .compacted .. => "compacted"
   | .forked .. => "fork"
@@ -1161,8 +1349,8 @@ theorem mergeStep_keeps {w w1 : World} {label : String} {other : Store} {skip : 
     exact ⟨rfl, fun x hx => by simp [hx]⟩
 
 theorem merged_keeps {w w' : World} {o : Outcome} {label : String} {other : Store} {skip : Bool}
-    {og : Option Grants} {theirs : List Landing} {reaches : Option Bool}
-    (h : stepTurn w (.merged label other skip og theirs reaches) = .ok (w', o)) :
+    {og : Option Grants} {theirs : List Landing} {reaches : Option Bool} {rs : Option Obend.Reasons.State}
+    (h : stepTurn w (.merged label other skip og theirs reaches rs) = .ok (w', o)) :
     (∀ x ∈ w.outstanding, x ∈ w'.outstanding) ∧ (∀ x ∈ w.landed, x ∈ w'.landed) := by
   simp only [stepTurn] at h
   split at h
@@ -1172,15 +1360,17 @@ theorem merged_keeps {w w' : World} {o : Outcome} {label : String} {other : Stor
       simp only [Except.ok.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, -⟩ := h
       have := mergeStep_keeps hm
-      exact ⟨fun x hx => by simp [this.1, hx], fun x hx => this.2 x hx⟩
+      have ha := afterMerge_keeps w w1 o1 label other rs
+      exact ⟨fun x hx => by simp [ha.1, this.1, hx], fun x hx => by simp only [ha.2]; exact this.2 x hx⟩
     · cases h
 
 /-- **An obligation outlives every turn but its confirmation**: a revision, a transport, a merge, a
 judgment or a crash's recovery (which replays turns) keeps every proposal sent and not yet confirmed;
-only `confirmed` takes one away, and `base` and `compacted` stand only first in a log, for the world
+only `confirmed` takes one away, and `released`, its sender's release of it by name, and `base` and `compacted` stand only first in a log, for the world
 of what came before. -/
 theorem outstanding_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w t = .ok (w', o))
-    (hb : ∀ w0, t ≠ .base w0) (hk : ∀ n d a w0, t ≠ .compacted n d a w0) (hc : ∀ i e, t ≠ .confirmed i e) :
+    (hb : ∀ w0, t ≠ .base w0) (hk : ∀ n d a w0, t ≠ .compacted n d a w0) (hc : ∀ i e, t ≠ .confirmed i e)
+    (hr : ∀ i, t ≠ .released i) :
     ∀ x ∈ w.outstanding, x ∈ w'.outstanding := by
   intro x hx
   cases t
@@ -1188,6 +1378,7 @@ theorem outstanding_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w
     | exact (hb _ rfl).elim
     | exact (hk _ _ _ _ rfl).elim
     | exact (hc _ _ rfl).elim
+    | exact (hr _ rfl).elim
     | exact (judged_keeps h).1 x hx
     | exact (justified_keeps h).1 x hx
     | exact (merged_keeps h).1 x hx
@@ -1273,11 +1464,13 @@ theorem recover_plain {S : Session} (h : Reachable S) (hplain : ∀ r ∈ S.log,
 
 /-- **What a `forget` needs to be admitted**: nothing reaches into the prefix. No proposal sent from
 here awaits its receipt; every form issued here is retired already or by this contract; no form it
-retires has a continuity contract; every branch declared here has merged or is abandoned by it. -/
+retires has a continuity contract no fill of it discharged by landing here; every branch declared here
+has merged or is abandoned by it. -/
 theorem needs_none_iff (w : World) (c : Retention.Contract) :
     needs w c = none ↔
       w.outstanding = [] ∧ (∀ f ∈ w.forms, (retiredBy w f.name).isSome ∨ f.name ∈ c.retire) ∧
-        (∀ n ∈ c.retire, ((w.issues.find? (·.form == n)).bind (·.contract)) = none) ∧
+        (∀ n ∈ c.retire, ((w.issues.find? (·.form == n)).bind (·.contract)) = none ∨
+          w.landed.any (·.form == n) = true) ∧
         (∀ b ∈ w.forks, b.merged = true ∨ b.name ∈ c.abandon) := by
   unfold needs
   split
@@ -1298,10 +1491,13 @@ theorem needs_none_iff (w : World) (c : Retention.Contract) :
       · rename_i n rest hn
         simp only [reduceCtorEq, false_iff, not_and]
         intro _ _ hall
-        have hm : n ∈ c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome) := by
+        have hm : n ∈ c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome &&
+            !w.landed.any (·.form == n)) := by
           rw [hn]; simp
-        simp only [List.mem_filter, Option.isSome_iff_ne_none] at hm
-        exact absurd (hall n hm.1) hm.2
+        simp only [List.mem_filter, Bool.and_eq_true, Option.isSome_iff_ne_none, Bool.not_eq_true'] at hm
+        rcases hall n hm.1 with h1 | h1
+        · exact absurd h1 hm.2.1
+        · rw [hm.2.2] at h1; cases h1
       · rename_i hnn
         split
         · rename_i b rest hb
@@ -1324,10 +1520,14 @@ theorem needs_none_iff (w : World) (c : Retention.Contract) :
             · exact .inr (by simpa using this hr)
             · exact .inl (Option.isSome_iff_ne_none.2 hr)
           · intro n hn
-            have : n ∉ c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome) := by
+            have : n ∉ c.retire.filter (fun n => ((w.issues.find? (·.form == n)).bind (·.contract)).isSome &&
+                !w.landed.any (·.form == n)) := by
               rw [hnn]; simp
-            simp only [List.mem_filter, hn, true_and, Option.isSome_iff_ne_none] at this
-            simpa using this
+            simp only [List.mem_filter, hn, true_and, Bool.and_eq_true, Option.isSome_iff_ne_none,
+              Bool.not_eq_true', not_and] at this
+            by_cases h : ((w.issues.find? (·.form == n)).bind (·.contract)) = none
+            · exact .inl h
+            · exact .inr (by simpa using this h)
           · intro b hb
             have : b ∉ w.forks.filter (fun b => !b.merged && !c.abandon.contains b.name) := by
               rw [hnb]; simp
@@ -1383,13 +1583,13 @@ theorem late_correction_refused (w : World) :
       stepTurn w (.judged name digest hops a none) = .error (lateText name c) ∧
       ∀ i, Transport.duplicateOf w.landed i = none →
         stepTurn w (.judged name digest hops a (some i)) = .error (lateText name c)) ∧
-    (∀ label other skip og theirs reaches e, lateMerge w label reaches = some e →
-      stepTurn w (.merged label other skip og theirs reaches) = .error e) ∧
+    (∀ label other skip og theirs reaches rs e, lateMerge w label reaches = some e →
+      stepTurn w (.merged label other skip og theirs reaches rs) = .error e) ∧
     (∀ label c, w.retention.getLast? = some c → w.retention.find? (·.abandon.contains label) = none →
       lateMerge w label (some false) = some ("not merged: late: " ++ label ++ "'s log does not reach the horizon of the " ++
         "retention contract " ++ c.name ++ " (it forked before the prefix forgotten here); its corrections " ++
         "would arrive later than the contract allows")) := by
-  refine ⟨fun name digest hops a c hc => ⟨?_, fun i hi => ?_⟩, fun label other skip og theirs reaches e he => ?_,
+  refine ⟨fun name digest hops a c hc => ⟨?_, fun i hi => ?_⟩, fun label other skip og theirs reaches rs e he => ?_,
     fun label c hc hab => ?_⟩
   · simp only [stepTurn, judgeTurn, hc]
   · simp only [stepTurn, judgeTurn, hi, judgeNew, hc]
