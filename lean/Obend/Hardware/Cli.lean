@@ -400,11 +400,7 @@ def cmdEmitSiliconSv (args : List String) : IO UInt32 := do
     IO.print siliconElabTopSvText
     return 0
 
-/-- Emit the Rung-2 `Synth.TechNetlist` SMT-LIB2 `QF_BV` equivalence miter (`obend hardware emit-lec-smt2`). -/
-def cmdEmitLecSmt2 (args : List String) : IO UInt32 :=
-  Obend.Hardware.VerilateRunner.cmdEmitLecSmt2 args
-
-/-- Run `obend verilate <input.obend> [--top <name>] [--vectors N] [--cycles C] [--vcd <out.vcd>] [--lec]`. -/
+/-- Run `obend verilate <input.obend> [--top <name>] [--vectors N] [--cycles C] [--vcd <out.vcd>]`. -/
 def cmdVerilate (args : List String) : IO UInt32 :=
   Obend.Hardware.VerilateRunner.cmdVerilate args
 
@@ -486,7 +482,6 @@ def cmdTapeout (args : List String) : IO UInt32 := do
 public def main? : List String → Option (IO UInt32)
   | "verilate" :: rest                         => some (cmdVerilate rest)
   | "hardware" :: "verilate" :: rest           => some (cmdVerilate rest)
-  | "hardware" :: "emit-lec-smt2" :: rest      => some (cmdEmitLecSmt2 rest)
   | "hardware" :: "emit-silicon-sv" :: rest    => some (cmdEmitSiliconSv rest)
   | "tapeout" :: rest                          => some (cmdTapeout rest)
   | "hardware" :: "tapeout" :: rest            => some (cmdTapeout rest)

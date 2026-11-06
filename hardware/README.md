@@ -19,20 +19,11 @@ What is here, and what is not.
 - `hvm/` — rung 2: Leaf books lowered to HVM2 interaction nets (`Obend.Hardware.Hvm`), run by HVM2
   itself. See below.
 
-Removed on 2026-11-04 (`review/EXPERT-fpga-silicon-20261103.md` §3.3, §3.7):
-
-- `aws-f2/` (`cl_obend_shell_bridge.sv`, `synth_cl_obend.tcl`). The file declared a PCIS
-  AXI4-Stream (`sh_pcis_h2c_tvalid` ...) that the AWS F1/F2 shell does not expose (PCIS is a 512-bit
-  AXI4 memory-mapped slave; the CL port list is fixed by the HDK's `cl_ports.vh`), its AXI-Lite read
-  channel violated the protocol, and its Tcl was an out-of-context synthesis that cannot produce an
-  AFI. A real F2 custom logic is written against the HDK on an F2 instance, not guessed here.
-- `sim/silicon_elab_top.sv`. It was one of three different `silicon_elab_top` designs in the tree.
-  The single one is emitted by `Obend.Lower.SiliconElabFabric.emitSiliconElabFabricSV`
-  (`obend hardware emit-silicon-sv`) and checked in under `apps/silicon-kernel-verilator/verilator/`.
-- `sim/*_lec.smt2` (the stale ones) and, on 2026-11-05, `sim/*_belmiter.smt2` with the
-  `verify_sim.sh` step that ran them. A BEL miter compared the Lean AST with `synthesizeModuleToBels`
-  of the same AST, every "BEL" a 64-bit word operation; it read no SystemVerilog and no netlist,
-  and no artifact is produced from those BELs. The LEC below replaces it.
+Removed (`review/EXPERT-fpga-silicon-20261103.md` §3.2, §3.3, §3.7): `aws-f2/`, whose shell
+bridge declared ports the AWS F1/F2 shell does not expose; a second `sim/silicon_elab_top.sv` (the one
+design is `apps/silicon-kernel-verilator/verilator/silicon_elab_top.sv`); and the BEL miters
+(`*_lec.smt2`, `*_belmiter.smt2`, `obend verilate --lec`, `obend hardware emit-lec-smt2`), which
+compared the Lean AST with a renaming of itself and read no SystemVerilog; the LEC below replaced them.
 
 ## LEC
 

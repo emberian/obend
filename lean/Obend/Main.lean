@@ -129,7 +129,7 @@ def usage : String :=
   "       obend analyze impact CELL@PIN --world PATH [--turn TURN.json] [--out RECEIPT.json] | analyze replay PAGE@FILE --world DIR\n" ++
   "       obend receipt identity N CERT.lrat OUT.json [--prev PREV.json] | receipt negotiation OUT.json [--full] [--prev PREV.json] | receipt cnf N OUT.cnf\n" ++
   "       obend tapeout [FILE.obend] [--entry NAME] [--mode pipelined|seq|comb] [--out-sv FILE.sv] [--out-librelane FILE.json] [--out-receipt RECEIPT.json]\n" ++
-  "       obend verilate <FILE.obend> [--top NAME] [--vectors N] [--cycles C] [--vcd OUT.vcd] [--lec]"
+  "       obend verilate <FILE.obend> [--top NAME] [--vectors N] [--cycles C] [--vcd OUT.vcd]"
 
 /-! ## The typed-core packet path (lane A) -/
 

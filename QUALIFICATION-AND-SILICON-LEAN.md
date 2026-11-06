@@ -108,10 +108,6 @@ This document is the authoritative, unscoped engineering specification for **Wav
   `write_smt2`, z3, and the two print functions (`LecScript.print`, `SmtBV.print`) writing SMT-LIB syntax, which
   `lean/tests/silicon_elab/YosysLecTest.lean` pins against committed files. Where it terminates, EQY also proves
   the `.sv` equal to its own gate-level netlist (tcad, stator, mill, width probe, drex); see `hardware/README.md`.
-- **`--lec` on `obend verilate` / `obend hardware emit-lec-smt2`** still writes the BEL-mapping consistency miter
-  (`emitModuleLecSmt2`): the `RtlModule` against `Synth.synthesizeModuleToBels` of itself, every "BEL" a 64-bit word
-  operation. No verify script runs it and no file of it is checked in; it is not an equivalence check of anything
-  emitted.
 
 ---
 
