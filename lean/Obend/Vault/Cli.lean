@@ -395,6 +395,8 @@ structure Recovery where
   tail : Bytes
   why : Option Drop
   checkpoint : String
+  /-- the log's bytes as read (read once per command) -/
+  bytes : ByteArray := .empty
 
 def dropText : Drop → String
   | .torn => "torn: the bytes end inside a record"
@@ -464,7 +466,7 @@ def recoverLog (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.phase "
   if last?.isSome && known.isNone then
     throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
       " commits to: the log was written by another step (relinking is not done here)"))
-  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize, known⟩, base, qs, tail, why, note⟩
+  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize, known⟩, base, qs, tail, why, note, bs⟩
 
 /-- The world from the log, read only (nothing is truncated, rewritten or redone). -/
 def readWorld (dir : System.FilePath) : IO Replay.World := do
@@ -506,6 +508,7 @@ def redoFiles (dir : System.FilePath) (before : Replay.World) (t : Turn) (after 
     IO (List String) := do
   let found (n : String) : Option String := match t with
     | .opened files _ => (reconstruct before.store files).lookup n
+    | .reopened changed _ => (reconstructSeen before.store changed).lookup n
     | _ => seenOf before.store n
   let mut done : List String := []
   for p in after.store.pages do
@@ -587,7 +590,7 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
   if !r.tail.isEmpty then
     IO.println ("recovered: dropped a tail of " ++ toString r.tail.length ++ " bytes after record " ++
       toString r.head.count ++ " (" ++ ((r.why.map dropText).getD "") ++ ")")
-    writeAtomicallyArray (logPath dir) ((← readArray (logPath dir)).extract 0 r.head.size)
+    writeAtomicallyArray (logPath dir) (r.bytes.extract 0 r.head.size)
   match r.suffix.getLast? with
   | none => pure ()
   | some last =>
@@ -607,7 +610,8 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
     let n := (← readBytes (newLogPath dir)).length
     IO.FS.removeFile (newLogPath dir)
     IO.println ("recovered: an interrupted forget's new log (" ++ toString n ++ " bytes) dropped; the log stands")
-  let bs ← readArray (logPath dir)
+  -- the bytes recovery read: up to the head's size they are the log's (a dropped tail is past it)
+  let bs := r.bytes
   match parseOneAt logHash none (bs.extract r.head.lastStart r.head.size) 0 with
   | .ok (last, _) =>
     if let .ok (.forget _) := decodeTurn last.payload then
@@ -697,7 +701,15 @@ def openWorld (dir : System.FilePath) (verbose : Bool) : IO (Replay.World × Lis
   withLog dir fun h => do
     let V ← readVault dir
     let env ← loadEnvironment dir V
-    match ← commitTurn dir h (.opened (readingOf h.world.store V) (envOf h.world.store env)) with
+    -- the files the world has seen, by the same names: the record names only those that moved
+    -- (`reopen_replays`); otherwise every file (`open_replays`)
+    let names := V.map (·.1)
+    -- `seenNames` is sorted, so its names are distinct when no two neighbours are equal
+    let distinct := (names.zip (names.drop 1)).all fun (a, b) => a != b
+    let t := if names == seenNames h.world.store && distinct then
+        Turn.reopened (changedOf h.world.store V) (envOf h.world.store env)
+      else .opened (readingOf h.world.store V) (envOf h.world.store env)
+    match ← commitTurn dir h t with
     | .error e => throw (IO.userError ("the open was refused: " ++ e))
     | .ok (h', .opened f o) =>
       -- a page a kind's laws keep is written back from the text the store holds for it
