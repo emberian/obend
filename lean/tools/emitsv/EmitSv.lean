@@ -19,6 +19,7 @@ a file this tool does not know is hand-written and says so in its header.
 -/
 import Obend.Hardware.HDL
 import Obend.Hardware.Mac8
+import Obend.Hardware.Fabulous.LUT4ABSwitchMatrix
 import Obend.Hardware.Synth
 import Obend.Hardware.VerilateRunner
 import Obend.Hardware.Cli
@@ -99,7 +100,10 @@ def targets : List (String × String) :=
   , ("tcad", "hardware/sim/cleanroom_tcad_stack.sv")
   , ("stator", "hardware/sim/lc_drives_userspace_stator.sv")
   , ("mill", "hardware/sim/cnc_5axis_userspace_mill.sv")
-  , ("width-probe", "hardware/sim/obend_width_probe.sv") ]
+  , ("width-probe", "hardware/sim/obend_width_probe.sv")
+  , ("lut4ab-sm", "hardware/fabulous/tile/LUT4AB_switch_matrix_lec.sv")
+  , ("lut4c", "hardware/fabulous/tile/LUT4c_frame_config_dffesr.sv")
+  , ("mux8lut", "hardware/fabulous/tile/MUX8LUT_frame_config_mux.sv") ]
 
 /-- The targets that are one `RtlModule` printed by `emitModuleSV`: the qualified name of the Lean
 definition and the module. `render` prints these with `emitWithHeader`; `--lec` prints their LEC half. -/
@@ -115,11 +119,14 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
   | "mill"    => some (builtInModule "cnc_5axis_userspace_mill")
   | "drex"    => some (.ok ("Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule", Obend.Apps.SovereignDrex.sovereignDrexBatchTopRtlModule))
   | "width-probe" => some (.ok ("Obend.Hardware.VerilateRunner.goldenWidthProbeRtl", Obend.Hardware.VerilateRunner.goldenWidthProbeRtl))
+  | "lut4ab-sm" => some (.ok ("Obend.Hardware.Fabulous.smModule lut4abSwitchMatrix", Obend.Hardware.Fabulous.smModule Obend.Hardware.Fabulous.lut4abSwitchMatrix))
+  | "lut4c"   => some (.ok ("Obend.Hardware.Fabulous.lut4cModule", Obend.Hardware.Fabulous.lut4cModule))
+  | "mux8lut" => some (.ok ("Obend.Hardware.Fabulous.mux8lutModule", Obend.Hardware.Fabulous.mux8lutModule))
   | _ => none
 
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
 def moduleTargetNames : List String :=
-  ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe"]
+  ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "lut4ab-sm", "lut4c", "mux8lut"]
 
 /-- `--lec`: the Lean half of the LEC of a module target, behind the same emission gate as its `.sv`
 (`checkRtlModuleW` includes `checkWidths`, which implies the `moduleFaithful` hypothesis of

@@ -199,6 +199,9 @@ Trusted: FABulous's metadata files, the decoder as compiled code (it is not prov
 design it agrees with nextpnr's FASM bit for bit), and `bv_decide`'s compiled LRAT check. FABulous's simulation of its
 generated fabric RTL, configured through the self-write port with the same bitstream, agrees with the Lean model
 cycle by cycle (`verify_fabric.sh`). The carry chain, `MUX8LUT`, block RAM, DSP and register-file tiles are not modelled.
+The LUT4AB tile is modelled from FABulous's generated RTL (`Obend.Hardware.Fabulous.Tile`) and LEC'd against it by
+Yosys and z3 (`hardware/fabulous/lec_tile.sh`); every routing pip the decoder reads agrees with that model
+(`obend fabric tile-agree`, `pip_sound`). The composition of tiles into `readback_sound` is not yet a theorem.
 
 ---
 
