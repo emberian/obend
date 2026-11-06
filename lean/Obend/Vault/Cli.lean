@@ -36,6 +36,28 @@ module
         a new page born under KIND (a kind page `folder/_kind`, or the folder): it names KIND in its
         frontmatter, starts with KIND's fields, and its birth is judged by KIND's laws.
 
+Forms (`Obend.Vault.Form`; the walkthrough is `lean/tests/vault/FORMS.md`):
+
+    obend capture SITUATION FORM --for WHO --grant PATTERN [--grant …] [--held CAPS]
+                  --move FROM TO AMOUNT [--field FIELD] [--ref PAGE …]
+        capture the situation of the page SITUATION (it and the pages it links to) as the form FORM
+        for WHO: the pages WHO's grant (CAPS, default read,write, on the PATTERNs) shows, as they are
+        now; the live move of AMOUNT of FIELD (default balance) from FROM to TO. Kept in
+        .obend/forms/FORM.json.
+    obend abstract FORM VALUE HOLE
+        VALUE (a number, or a page) in FORM's moves becomes the hole HOLE.
+    obend form FORM [--out FILE]
+        FORM as its holder sees it: the pages, the holes, the residual; with --out, the form to send.
+    obend fill FILE HOLE=VALUE … --out FILE   (where the form was received)
+        fill the holes of the form in FILE and write the proposal; what the fill makes of the
+        residual is shown, the pages the form did not capture left as reads.
+    obend reshare FILE --for WHO --grant PATTERN … [--held CAPS] --out FILE   (where it was received)
+        hand the form on to WHO, attenuated; a reshare that would amplify is refused.
+    obend judge FILE
+        judge a proposal for one of this vault's forms: the membrane, the form's resources, the pins,
+        then every page it writes through the laws as they stand; landed, a receipt in
+        .obend/forms/receipts.json.
+
 Every command but `member` opens the vault first (an edit on disk is the owner's write, judged by
 the page's laws), so no command overwrites a file the person changed. `-C DIR` before or after a
 command runs it in DIR. A kind page's line `environment: PATH` (PATH relative to the vault) names
@@ -45,6 +67,7 @@ page's backticked names resolve against it (`new.unresolved`, `new.unresolvedIns
 file that is not there stops the command.
 -/
 public import Obend.Vault.Json
+public import Obend.Vault.Form
 public import Obend.Digest.Cshake256
 public section
 
@@ -245,6 +268,93 @@ def parseGrant (g : String) : Option (String × String) :=
   | [v, p] => if ["post", "select", "write", "relaw"].contains v then some (v, p) else none
   | _ => none
 
+
+/-! ## Forms -/
+
+section Forms
+open Obend.Vault.Form (Form Grant formOf formJson grantOf grantJson receiptOf authOf)
+open Obend.Vault.Affordance (Auth)
+
+def formsDir (dir : System.FilePath) : System.FilePath := dir / ".obend" / "forms"
+
+def readJson (f : System.FilePath) : IO Lean.Json := do
+  unless ← f.pathExists do throw (IO.userError ("no file " ++ f.toString))
+  match Lean.Json.parse (← IO.FS.readFile f) with
+  | .ok j => return j
+  | .error e => throw (IO.userError ("cannot read " ++ f.toString ++ ": " ++ e))
+
+def writeJson (f : System.FilePath) (j : Lean.Json) : IO Unit := do
+  if let some parent := f.parent then IO.FS.createDirAll parent
+  IO.FS.writeFile f (j.pretty ++ "\n")
+
+def ofExcept {α : Type} (what : String) : Except String α → IO α
+  | .ok a => return a
+  | .error e => throw (IO.userError (what ++ ": " ++ e))
+
+def loadForm? (dir : System.FilePath) (name : String) : IO (Option Form) := do
+  let f := formsDir dir / (name ++ ".json")
+  if !(← f.pathExists) then return none
+  return some (← ofExcept f.toString (formOf (← readJson f)))
+
+def saveForm (dir : System.FilePath) (f : Form) : IO Unit :=
+  writeJson (formsDir dir / (f.name ++ ".json")) (formJson f)
+
+/-- Every value of a repeated flag, and the rest. -/
+def allFlags (name : String) : List String → List String × List String
+  | f :: v :: rest =>
+    if f == name then let (vs, r) := allFlags name rest; (v :: vs, r)
+    else let (vs, r) := allFlags name (v :: rest); (vs, f :: r)
+  | rest => ([], rest)
+
+/-- `--move FROM TO AMOUNT`, and the rest. -/
+def moveFlag : List String → Option (String × String × String) × List String
+  | "--move" :: a :: b :: n :: rest => (some (a, b, n), rest)
+  | x :: rest => let (m, r) := moveFlag rest; (m, x :: r)
+  | [] => (none, [])
+
+def parseCaps (s : String) : Option (List Auth) := (s.splitOn ",").mapM authOf
+
+/-- `HOLE=VALUE` pairs against a form's holes. -/
+def parseFill (f : Form) : List String → Except String Obend.Vault.Form.Assignment
+  | [] => .ok ({} : Obend.Vault.Form.Assignment)
+  | x :: rest => do
+    let a ← parseFill f rest
+    match x.splitOn "=" with
+    | [h, v] =>
+      match f.holes.lookup h with
+      | some .nat => match v.toNat? with
+        | some n => return { a with nats := (h, n) :: a.nats }
+        | none => throw ("the hole " ++ h ++ " is a natural; " ++ v ++ " is not")
+      | some .page => return { a with pages := (h, v) :: a.pages }
+      | none => throw ("the form " ++ f.name ++ " has no hole " ++ h)
+    | _ => throw ("a fill is HOLE=VALUE, not " ++ x)
+
+def fillText (a : Obend.Vault.Form.Assignment) : String :=
+  ", ".intercalate (a.nats.map (fun (h, n) => h ++ " = " ++ toString n) ++ a.pages.map fun (h, n) => h ++ " = " ++ n)
+
+/-- A received form: the form, its digest, the vault that issued it, the hops it was handed on by. -/
+def readReceived (file : String) : IO (Form × String × String × List Grant) := do
+  let j ← readJson file
+  let f ← ofExcept file (formOf (← ofExcept file (j.getObjVal? "form")))
+  let d ← ofExcept file (j.getObjValAs? String "digest")
+  let v ← ofExcept file (j.getObjValAs? String "vault")
+  let hops ← ofExcept file ((← ofExcept file (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM grantOf)
+  return (f, d, v, hops)
+
+def receivedJson (f : Form) (digest vault : String) (hops : List Grant) : Lean.Json :=
+  Lean.Json.mkObj [("form", formJson f), ("digest", digest), ("vault", vault),
+    ("hops", Lean.Json.arr (hops.map grantJson).toArray)]
+
+def vaultName (dir : System.FilePath) : IO String := do
+  return ((← IO.FS.realPath dir).fileName).getD "vault"
+
+def loadReceipts (dir : System.FilePath) : IO (List Obend.Vault.Rehydration.WitnessReceipt) := do
+  let f := formsDir dir / "receipts.json"
+  if !(← f.pathExists) then return []
+  ofExcept f.toString ((← ofExcept f.toString ((← readJson f).getArr?)).toList.mapM receiptOf)
+
+end Forms
+
 /-- Run a vault command in `dir`. `none` when the arguments are not a vault command. -/
 def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   let (asName, args) := flag "--as" args
@@ -347,6 +457,108 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
           IO.println ("created " ++ page ++ " (kind " ++ kindName k ++ ")")
           return 0
       | none => fail (page ++ ": not born")
+  | "capture" :: situation :: name :: rest => some do
+    let (who, rest) := flag "--for" rest
+    let (held, rest) := flag "--held" rest
+    let (field, rest) := flag "--field" rest
+    let (pats, rest) := allFlags "--grant" rest
+    let (refs, rest) := allFlags "--ref" rest
+    let (mv, rest) := moveFlag rest
+    match who, mv, rest, parseCaps (held.getD "read,write") with
+    | some who, some (src, dst, n), [], some caps =>
+      match n.toNat? with
+      | none => fail ("capture: the amount " ++ n ++ " is not a number")
+      | some amount =>
+        let (s, _) ← openDir dir false
+        if (← loadForm? dir name).isSome then return ← fail ("refused: a form named " ++ name ++ " exists")
+        match Obend.Vault.Form.captureFrom s situation name ⟨who, caps, pats⟩ src dst amount (field.getD "balance") refs with
+        | .error e => fail ("refused: " ++ e)
+        | .ok (f, culled) =>
+          saveForm dir f
+          IO.println ("captured " ++ name ++ " from " ++ situation ++ " for " ++ who ++ ": " ++
+            toString f.cells.length ++ " page(s) shown, " ++ toString culled ++ " not shown to " ++ who)
+          for l in f.describe do IO.println l
+          return 0
+    | _, _, _, _ => fail "capture SITUATION FORM --for WHO --grant PATTERN … [--held CAPS] --move FROM TO AMOUNT [--field FIELD] [--ref PAGE …]"
+  | ["abstract", name, value, hole] => some do
+    let some f ← loadForm? dir name | fail ("refused: no form named " ++ name)
+    match f.abstract value hole with
+    | .error e => fail ("refused: " ++ e)
+    | .ok g =>
+      saveForm dir g
+      IO.println (name ++ ": " ++ value ++ " is now the hole " ++ hole)
+      for l in g.describe do IO.println l
+      return 0
+  | "form" :: name :: rest => some do
+    let (out, rest) := flag "--out" rest
+    unless rest.isEmpty do return ← fail "form FORM [--out FILE]"
+    let some f ← loadForm? dir name | fail ("refused: no form named " ++ name)
+    for l in f.describe do IO.println l
+    if let some o := out then
+      writeJson o (receivedJson f (Obend.Vault.Form.formDigest H f) (← vaultName dir) [])
+      IO.println ("wrote " ++ o)
+    return 0
+  | "fill" :: file :: rest => some do
+    let (out, rest) := flag "--out" rest
+    let some o := out | fail "fill FILE HOLE=VALUE … --out FILE"
+    let (f, digest, vault, hops) ← readReceived file
+    match parseFill f rest with
+    | .error e => fail ("refused: " ++ e)
+    | .ok a =>
+      let holder := (((f.grants ++ hops).getLast?).map (·.holder)).getD "owner"
+      writeJson (formsDir dir / "received" / (f.name ++ ".json")) (receivedJson f digest vault hops)
+      let prop := Lean.Json.mkObj [("proposal", f.name), ("digest", digest), ("vault", vault),
+        ("hops", Lean.Json.arr (hops.map Obend.Vault.Form.grantJson).toArray),
+        ("fill", Obend.Vault.Form.assignmentJson a), ("by", holder)]
+      writeJson (formsDir dir / "sent" / (f.name ++ ".json")) prop
+      writeJson o prop
+      IO.println (f.name ++ ": filled by " ++ holder ++ ": " ++ fillText a)
+      for l in f.preview a do IO.println ("  " ++ l)
+      IO.println ("wrote " ++ o)
+      return 0
+  | "reshare" :: file :: rest => some do
+    let (who, rest) := flag "--for" rest
+    let (held, rest) := flag "--held" rest
+    let (out, rest) := flag "--out" rest
+    let (pats, rest) := allFlags "--grant" rest
+    match who, out, rest, parseCaps (held.getD "read,write") with
+    | some who, some o, [], some caps =>
+      let (f, digest, vault, hops) ← readReceived file
+      let cur := ((f.grants ++ hops).getLast?).getD Obend.Vault.Form.ownerGrant
+      let g : Obend.Vault.Form.Grant := ⟨who, caps, pats⟩
+      match Obend.Vault.Rehydration.Membrane.reshare (cur.viewer f.scope) (g.viewer f.scope) with
+      | none => fail (f.name ++ ": " ++ Obend.Vault.Form.refusalText f (.amplifies cur.holder who cur.held caps))
+      | some _ =>
+        writeJson o (receivedJson f digest vault (hops ++ [g]))
+        IO.println (f.name ++ ": reshared by " ++ cur.holder ++ " to " ++ who ++ " (" ++
+          Obend.Vault.Form.showAuths caps ++ " on " ++ ", ".intercalate pats ++ ")")
+        IO.println ("wrote " ++ o)
+        return 0
+    | _, _, _, _ => fail "reshare FILE --for WHO --grant PATTERN … [--held CAPS] --out FILE"
+  | ["judge", file] => some do
+    let (s, V) ← openDir dir false
+    let j ← readJson file
+    let name ← ofExcept file (j.getObjValAs? String "proposal")
+    let some f ← loadForm? dir name | fail ("refused: no form named " ++ name ++ " here")
+    let digest ← ofExcept file (j.getObjValAs? String "digest")
+    if digest != Obend.Vault.Form.formDigest H f then
+      return ← fail (name ++ ": refused: the form has changed since this proposal's copy was sent; send the form again")
+    let hops ← ofExcept file ((← ofExcept file (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM Obend.Vault.Form.grantOf)
+    let a ← ofExcept file (Obend.Vault.Form.assignmentOf (← ofExcept file (j.getObjVal? "fill")))
+    match Obend.Vault.Form.judgeProposal H s f hops a with
+    | .error e => fail (name ++ ": " ++ e)
+    | .ok (s', ad) =>
+      let rs ← loadReceipts dir
+      let r := Obend.Vault.Form.receiptFor H rs.getLast? f a ad
+      writeJson (formsDir dir / "receipts.json") (Lean.Json.arr ((rs ++ [r]).map Obend.Vault.Form.receiptJson).toArray)
+      IO.println (name ++ ": landed as one turn by " ++ ad.holder ++ ", receipt " ++
+        Obend.Vault.Form.hex16 (Obend.Vault.Form.receiptDigest H r) ++ " (" ++ toString (rs.length + 1) ++ " in the chain)")
+      for p in ad.pairs do
+        IO.println ("  " ++ p.src ++ ": " ++ p.asset ++ " " ++ toString (natAt p.srcPre p.asset) ++ " → " ++ toString p.srcAfter)
+        IO.println ("  " ++ p.dst ++ ": " ++ p.asset ++ " " ++ toString (natAt p.dstPre p.asset) ++ " → " ++ toString p.dstAfter)
+      finish dir s' V
+      for l in problems s' do IO.println l
+      return 0
   | _ => none
 
 /-- `obend` vault commands: `-C DIR` anywhere, `open DIR`. -/
