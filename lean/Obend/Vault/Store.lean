@@ -538,6 +538,76 @@ def stateDiffText (expected current : Option Obend.Core.Data.Data) : String :=
   | _, none => "no page of that name here"
   | _, _ => "a different state here"
 
+/-! ## An unset label is `""`
+
+A law that compares a field with a label constant (`new.commit == "abc"`, `new.state in ["a", "b"]`)
+reads that field as a label. Where the page does not write the field at all, the field is an UNSET
+LABEL, `""`, not the natural 0: so `not (new.commit == "")` refuses a page with no `commit:` line, as
+it says. (2026-11-06, found by the swarm vault: before, the absent field was typed a natural, the
+comparison with `""` was false, and that law admitted a merged lane with no commit.) A field the page
+writes as a natural stays a natural. -/
+
+/-- The fields a law compares with a label constant. -/
+def labelCompared : LawExpr → List String
+  | .eqR (.field f) (.labelConst _) => [f]
+  | .eqR (.labelConst _) (.field f) => [f]
+  | .not e => labelCompared e
+  | .and l r | .or l r | .implies l r => labelCompared l ++ labelCompared r
+  | _ => []
+
+/-- The fields the laws `lin` compare with a label constant that none of `present` names: each is
+read as the unset label `""`. -/
+def unsetLabels (lin : List (String × LawExpr)) (present : List String) : List String :=
+  ((lin.flatMap fun l => labelCompared l.2).filter fun f => !present.contains f).eraseDups
+
+theorem firstField_map_self (f : String) (g : String → Obend.Core.Data.Data) :
+    ∀ ks : List String, f ∈ ks → Obend.Spec.Law.firstField f (ks.map fun k => (k, g k)) = some (g f)
+  | [], h => by cases h
+  | k :: ks, h => by
+    simp only [List.map_cons, Obend.Spec.Law.firstField]
+    by_cases hk : k = f
+    · subst hk; simp
+    · simp only [hk, ite_false]
+      exact firstField_map_self f g ks (by
+        rcases List.mem_cons.1 h with h | h
+        · exact absurd h.symm hk
+        · exact h)
+
+theorem firstScalarField_map_none (f : String) (g : String → Obend.Core.Data.Data)
+    (hg : Obend.Spec.Law.scalarOf (g f) = none) :
+    ∀ ks : List String, Obend.Spec.Law.firstScalarField f (ks.map fun k => (k, g k)) = none
+  | [] => rfl
+  | k :: ks => by
+    simp only [List.map_cons, Obend.Spec.Law.firstScalarField]
+    by_cases hk : k = f
+    · subst hk; simp [hg, firstScalarField_map_none k g hg ks]
+    · simp [hk, firstScalarField_map_none f g hg ks]
+
+/-- **An unset label reads `""`.** In a page state built with `f` among its keys and its labels and
+no label value for `f`, the field `f` is the label `""`. -/
+theorem unset_label_reads_empty {keys labels : List String} {vals : List (String × Nat)}
+    {lvals : List (String × String)} {f : String} (hk : f ∈ keys) (hl : f ∈ labels)
+    (hv : lvals.lookup f = none) :
+    Obend.Spec.Law.fieldLabel f (stateOfWith keys labels vals lvals) = some "" := by
+  have hm := firstField_map_self f (fun k => if labels.contains k then Obend.Core.Data.Data.label ((lvals.lookup k).getD "")
+    else Obend.Core.Data.Data.natural ((vals.lookup k).getD 0)) keys hk
+  unfold stateOfWith Obend.Spec.Law.fieldLabel
+  simp only [hm]
+  simp [hl, hv]
+
+/-- **So a law requiring a label refuses its absence.** On such a state, `not (new.f == "")` does not
+hold, whatever the facts and the old state: the law means what it says. -/
+theorem unset_label_refused {keys labels : List String} {vals : List (String × Nat)}
+    {lvals : List (String × String)} {f : String} (hk : f ∈ keys) (hl : f ∈ labels)
+    (hv : lvals.lookup f = none) (facts : Facts) (old : Option Obend.Core.Data.Data) :
+    (LawExpr.not (.eqR (.field f) (.labelConst ""))).denote facts old
+      (stateOfWith keys labels vals lvals) = false := by
+  have h := unset_label_reads_empty (vals := vals) hk hl hv
+  have hn : Obend.Spec.Law.fieldOf f (stateOfWith keys labels vals lvals) = none := by
+    unfold Obend.Spec.Law.fieldOf stateOfWith
+    exact firstScalarField_map_none f _ (by simp [hl, Obend.Spec.Law.scalarOf]) keys
+  simp [LawExpr.denote, Obend.Spec.Law.LawRef.read, Obend.Spec.Law.LawRef.readLabel, hn, h]
+
 /-- A state with the fields a law reads added, at 0 where the state has none (`stateOfWith`'s
 default): its type and itself. -/
 def rekey (lin : List (String × LawExpr)) : Obend.Core.Data.Data → Obend.Core.Ty.Ty × Obend.Core.Data.Data
@@ -545,7 +615,8 @@ def rekey (lin : List (String × LawExpr)) : Obend.Core.Data.Data → Obend.Core
     let vals := fs.filterMap fun (k, d) => match d with | .natural n => some (k, n) | _ => none
     let lvals := fs.filterMap fun (k, d) => match d with | .label s => some (k, s) | _ => none
     let keys := sortNames (fs.map (·.1) ++ lin.flatMap fun l => l.2.fields)
-    (stateTyWith keys (lvals.map (·.1)), stateOfWith keys (lvals.map (·.1)) vals lvals)
+    let labels := lvals.map (·.1) ++ unsetLabels lin (fs.map (·.1))
+    (stateTyWith keys labels, stateOfWith keys labels vals lvals)
   | d => (stateTy [], d)
 
 /-- Why a judgment over links refused: the page it was at, that page's state (none: it has no
@@ -745,7 +816,8 @@ def prepareWrite (es : List Entry) (p : Page) (G' : Graph) (added : List (AtomId
   -- the write's provenance is a label the laws read: `new.poster`, the member whose text this is
   let newLs := ("poster", poster) :: labelsOf G'
   let lin := (laws.filter fun l => !isLinkLaw l.2.2 && (lawSubject l.1).isNone).map fun (n, e, _) => (n, e)
-  let labels := (newLs.map (·.1) ++ oldLs.map (·.1)).eraseDups
+  let labels := (newLs.map (·.1) ++ oldLs.map (·.1) ++
+    unsetLabels lin (newLs.map (·.1) ++ oldLs.map (·.1) ++ newMs.map (·.1) ++ oldMs.map (·.1))).eraseDups
   let keys := sortNames (newMs.map (·.1) ++ oldMs.map (·.1) ++ labels ++ lin.flatMap fun l => l.2.fields)
   let S := stateTyWith keys labels
   let n := stateOfWith keys labels newMs newLs
