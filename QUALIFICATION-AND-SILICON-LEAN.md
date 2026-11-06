@@ -201,7 +201,13 @@ generated fabric RTL, configured through the self-write port with the same bitst
 cycle by cycle (`verify_fabric.sh`). The carry chain, `MUX8LUT`, block RAM, DSP and register-file tiles are not modelled.
 The LUT4AB tile is modelled from FABulous's generated RTL (`Obend.Hardware.Fabulous.Tile`) and LEC'd against it by
 Yosys and z3 (`hardware/fabulous/lec_tile.sh`); every routing pip the decoder reads agrees with that model
-(`obend fabric tile-agree`, `pip_sound`). The composition of tiles into `readback_sound` is not yet a theorem.
+(`obend fabric tile-agree`, `pip_sound`). `smModule_eval_eq_SmPrim_eval` joins the LEC'd switch-matrix module to the
+data-level model, and `readback_sound` composes the tiles: the grid's semantics is a consistency relation over every
+wire (switch matrices through `smModule`, LUT4 cells through `lut4cModule`), the extraction emits a certificate of
+every hop it took (`Mac8Cert.lean`, kernel-checked by `mac8Cert_check`), and `mac8_fabric_tiles_realize_module` states
+the MAC result for every consistent run of a fabric with those tile models, wires and configuration bits, the decoder
+no longer in the statement. Taken as given: the tiles' top-level wiring (as FABulous's fixed pips), the configuration
+latches' index-to-frame map, the IO pad as pass-through, and that a consistent assignment exists.
 
 ---
 

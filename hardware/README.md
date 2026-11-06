@@ -42,12 +42,24 @@ What is here, and what is not.
   `obend fabric tile-agree` checks every switch-matrix pip of every LUT4AB tile in `bitStreamSpec.csv`
   (99,675) against the model (`pipAgrees`) and every LUT4/MUX8LUT feature against the `ConfigBits`
   `LUT4AB.v` gives it (11,550); `Obend.Hardware.Fabulous.pip_sound` says an agreeing pip means the
-  model's output is the pip's source whenever the decoder says so. Not yet proved: that
-  `SmPrim.eval` is the semantics of `smModule` (the LEC'd module), and the grid-level `readback_sound`
-  composing tiles; the configuration latches are taken as holding the frame bits.
+  model's output is the pip's source whenever the decoder says so.
+  The tile models meet: `smModule_eval_eq_SmPrim_eval` (`Obend.Hardware.Fabulous.TileEval`) says the
+  LEC'd `smModule` computes `SmPrim.eval`, and `lut4c_O`/`lut4c_next` (`Cell`) read `lut4cModule` as
+  Booleans. `Obend.Hardware.Fabulous.Readback` gives the grid a semantics, a consistency relation over
+  every wire value (switch-matrix outputs through `smModule`, cells through `lut4cModule`, fixed wires
+  and input pads); `obend fabric cert` writes `Mac8Cert.lean`, the hops the extraction followed for
+  every gate, flop and output input (10,722); `readback_sound` and `fabric_run_eq` say a certificate
+  that passes `Cert.check` (kernel-decided, `mac8Cert_check`) makes every consistent run of the fabric
+  show `Net.run`. `Mac8Tiles.mac8_fabric_tiles_realize_module` is the MAC theorem stated over the tile
+  models, not the decoder; `obend fabric check` establishes its remaining hypotheses for the bitstream:
+  the 14,618 configuration bits `mac8Cert.required` names, the 5,714 fixed wires of `pips.txt`, and the
+  tile types of `fabric.csv`. Taken as given: the tiles' top-level wiring (`LUT4AB.v`'s jump and nested
+  wires, listed as fixed pips), the configuration latches' index-to-frame map (`*_ConfigMem.v`), the IO
+  pad as a pass-through, and that a consistent assignment exists (no combinational loop settles otherwise).
   Not modelled, and refused by name if a bitstream uses them: the carry chain, `MUX8LUT`, the IO's
   registered output, block RAM, DSP and register-file tiles. The link from `.bin` to `mac8Net` is
-  `obend fabric check` (compiled evaluation of the decoder), not a kernel proof.
+  `obend fabric check` (compiled evaluation of the decoder); `mac8_fabric_tiles_realize_module` needs
+  from that check only the frame bits, wires and tile types it lists.
 
 - `hvm/` — rung 2: Leaf books lowered to HVM2 interaction nets (`Obend.Hardware.Hvm`), run by HVM2
   itself. See below.
