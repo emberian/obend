@@ -198,7 +198,10 @@ theorem rtl_eq_gpu_array (name : String) (g : ArrayGraph) (hwf : g.wf = true) (i
 The fold circuit is linear size but sequential depth. The new `soac-boundaries` square passes
 artifact regeneration, HDL/array-model equality, bit-precise Yosys/Lean equivalence, Verilator,
 RADV, and both the output-bit-flip and swapped-operator negatives. The complete merged square
-run remains in progress.
+run also passes all stages, including the NTT and the original scalar/adjoint cases. Its retained
+output is [`frontend-gate.log`](../hardware/gpu/square/frontend-gate.log). Every positive LEC in
+this run is bit-precise UNSAT; every planted output bit flip and selected operator fault has an
+exact SAT counterexample, with the operator fault also caught by Verilator.
 
 The square gate's executable override collided with Verilator's internal `VERILATOR_BIN`:
 the launcher recursively invoked itself. The gate now removes that variable from the child
@@ -213,6 +216,20 @@ Only SAT is accepted from a constrained query; constrained UNSAT cannot establis
 This caught the planted output bit flip and root-operator swap while retaining the complete
 unconstrained equivalence obligation. Diagnostic runs are recorded in
 [`frontend-lec-probe.log`](../hardware/gpu/square/frontend-lec-probe.log).
+
+The NTT exposed exponential SMT macro expansion before solving. `hardware/lec/smt_share.py`
+uses the installed Yosys `SmtIo.unroll_stmt` implementation, followed by exact zero-argument
+variable definitions with all their defining equalities. It preserves the original output
+obligation and counterexample requests, while keeping expressions shared. Model-only terms
+are defined before solving. Unsupported scope/reset modes are refused, and solver errors
+cannot be accepted as proofs or usable counterexamples. This is an external solver-boundary
+transformation, not a new Lean theorem or an assumption equating the two circuits.
+The old negative-check waiver accepting an undecided result was removed: a planted defect must
+produce exact SAT. Counterexample queries are issued only after a satisfiable seed is found;
+undecided results are not rerun merely to request a nonexistent model. The registered `mac2`
+composition check, retained model values, multiplication-abstraction path, and injected
+SMT-error/timeout refusals are recorded in
+[`frontend-sharing-gate.log`](../hardware/lec/frontend-sharing-gate.log).
 
 Open engineering work: work-efficient parallel intra-segment schedules; a production ec-gpu
 throughput comparison; broader source syntax recovery; a proof for catgrad specialization/import;
@@ -231,3 +248,31 @@ or its RTL. Collective execution uses the proved array-backed cached-prefix impl
 the clean list reference remains only as a specification. RTL scan prefixes share accumulator
 wires rather than expanding repeated expression trees. Dev's scalar-to-array RTL delegation
 and one-hot mux vectors remain in place.
+
+
+## Commits
+
+- `5b0c34c` — segmented reduce/scan semantics, array-backed execution, GPU invocation lowering and shift correction.
+- `0892f93` — shape/element typing, checked Core4 source admission and composed theorem, source programs, catgrad importer/oracle and external gates.
+- `14cd5d6` — RDNA2 loop/constant-pool replay, gem5 cross-checks and ISA mutation coverage.
+- `84dff67` — recovered gate evidence, arithmetic boundaries and measured baseline limits.
+- `5a8b25c` — hand-resolved merge of dev `402378a` (including GPU-square `2af7cf7`), shared source registry, proved RTL folds, regenerated square artifacts and initial gate-tool repairs.
+- `18e98ed` — shared SMT definitions, preserved counterexamples, registered-circuit/UF checks, and rejection of SMT errors or undecided negative checks.
+
+
+## Final gate output
+
+```text
+[PASS] hardware/gpu
+[PASS] hardware/gpu/isa_check.sh
+PASS source book GPU gate
+[PASS] SOAC arrays: artifacts, independent expected values, device, wrong-answer tooth
+PASS catgrad MLP gate
+[PASS] hardware/gpu/square
+```
+
+The source and catgrad lines omit their temporary artifact-directory suffixes. GPU, ISA,
+source, SOAC and square evidence was rerun after the dev integration; the retained catgrad
+recovery run checks the unchanged importer/oracle and exact artifact digests. The final
+square uses the repaired shared LEC path. The Lean builds pass, including the rebuilt emitters.
+EQY was not run. No GPU-kernels worktree was modified.
