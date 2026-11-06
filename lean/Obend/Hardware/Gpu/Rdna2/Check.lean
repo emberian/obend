@@ -98,6 +98,37 @@ def parseDump (s : String) : Array (Array (Array UInt32)) := Id.run do
   if inStage then stages := stages.push cur
   return stages
 
+/-- Read-only constant data embedded in a stage's code image. Offsets are absolute byte
+addresses relative to its relocated instruction zero, supplied by the extractor from Mesa's
+post-code marker padding and printed pool offsets. Data is never decoded as instructions. -/
+abbrev StageData := Array (Nat × Array UInt32)
+
+def parseDumpData (s : String) : Except String (Array StageData) := do
+  let mut stages : Array StageData := #[]
+  let mut cur : StageData := #[]
+  let mut inStage := false
+  let mut lastEnd := 0
+  for ln in s.splitOn "\n" do
+    if ln.startsWith "## stage" then
+      if inStage then stages := stages.push cur
+      cur := #[]; inStage := true; lastEnd := 0
+    else if ln.startsWith ".data" then
+      if !inStage then throw "constant data before any stage"
+      match (ln.splitOn " ").filter (· != "") with
+      | ".data" :: off :: hexes =>
+        let some addr := off.toNat? | throw s!"bad constant-data offset: {off}"
+        if addr % 4 != 0 || addr < lastEnd then throw "unaligned or overlapping constant data"
+        if hexes.isEmpty then throw "empty constant-data record"
+        let ws ← hexes.toArray.mapM fun h => do
+          if h.length != 8 || !h.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')) then
+            throw s!"bad constant-data dword: {h}"
+          pure (UInt32.ofNat (hexToNat h))
+        cur := cur.push (addr, ws)
+        lastEnd := addr + 4 * ws.size
+      | _ => throw s!"bad constant-data record: {ln}"
+  if inStage then stages := stages.push cur
+  return stages
+
 /-! ## 2. The memory as RADV binds it -/
 
 def descSetHi : UInt64 := 0xffff8000
@@ -155,19 +186,32 @@ def readWord64 (m : Memory) (addr : UInt64) : Option Int := do
   pure (if u ≥ ((1 : UInt64) <<< 63) then (u.toNat : Int) - 2 ^ 64 else (u.toNat : Int))
 
 /-- Every stage of the dump on every workgroup of its dispatch, then the output wires. -/
-def runVector (p : Plan) (progs : Array Program) (v : Vector) : Except String (Nat × Array (Array Int)) := do
+def runVector (p : Plan) (progs : Array Program) (data : Array StageData) (v : Vector) : Except String (Nat × Array (Array Int)) := do
   let mut mem := initialMemory p v
   let mut steps := 0
   for (prog, k) in progs.zipIdx do
     let threads := p.stageThreads.getD k 0
     let groups := (threads + lanes - 1) / lanes
-    let fuel := 16 * prog.size + 64
+    -- A compiler may keep a serial fold as a backward branch rather than unroll it.
+    -- Budget by both instruction size and the plan's stored words; this is a bounded
+    -- execution allowance, not a termination theorem. Exhaustion remains a refusal.
+    let fuel := 16 * prog.size + 64 * p.words + 64
+    let pool := data.getD k #[]
+    for (addr, ws) in pool do
+      mem := writeDwords mem (UInt64.ofNat addr) ws
     for g in [0:groups] do
-      let s := run prog fuel (initialWave mem g)
+      let init := initialWave mem g
+      let init := { init with readOnly := pool.map fun (addr, ws) =>
+        (UInt64.ofNat addr, UInt64.ofNat (addr + 4 * ws.size)) }
+      let s := run prog fuel init
       if let some e := s.err then throw s!"vector {v.index}, stage {k}, workgroup {g}: {e}"
       if !s.halted then throw s!"vector {v.index}, stage {k}, workgroup {g}: did not halt"
       steps := steps + fuel
       mem := s.mem
+    -- Do not let a later stage accidentally read this stage's pool if its dump lost data.
+    for (addr, ws) in pool do
+      for j in [0:ws.size] do
+        mem := mem.erase (UInt64.ofNat (addr / 4 + j))
   let outs ← p.outputs.mapM fun wire => do
     let base := p.wireBase.getD wire 0
     (Array.range (p.wireLen.getD wire 0)).mapM fun e =>
@@ -196,12 +240,23 @@ def checkGraphReport (isa plan expected : String) (flip : Option (Nat × Nat × 
     match decodeProgram (ws.flatMap id) with
     | .ok prog => pure prog
     | .error e => throw s!"stage {k}: {e}"
+  let data ← parseDumpData isa
+  if data.size != progs.size then throw "constant-data stage count differs from code"
+  for (pool, k) in data.zipIdx do
+    for (addr, ws) in pool do
+      if addr < 4 * (progs.getD k #[]).size then throw s!"stage {k}: constant data overlaps code"
+      if addr + 4 * ws.size > wAddr.toNat then throw s!"stage {k}: constant data overlaps host buffers"
   let mut steps := 0
   for v in vecs do
-    let (st, outs) ← runVector p progs v
+    let (st, outs) ← runVector p progs data v
     steps := steps + st
-    if outs != v.outputs then
-      throw s!"vector {v.index}: the model gives {outs} where expected.tsv has {v.outputs}"
+    if outs.size != v.outputs.size then throw s!"vector {v.index}: output count differs from expected.tsv"
+    for (actual, k) in outs.zipIdx do
+      let expected := v.outputs.getD k #[]
+      if actual.size != expected.size then throw s!"vector {v.index}, output {k}: length differs from expected.tsv"
+      for e in [0:actual.size] do
+        if actual.getD e 0 != expected.getD e 0 then
+          throw s!"vector {v.index}, output {k} (wire {p.outputs.getD k 0}), element {e}: the model gives {actual.getD e 0} where expected.tsv has {expected.getD e 0}"
   pure s!"{progs.size} stages, {vecs.size} vectors: the dumped programs on the model give expected.tsv"
 
 /-- The closed Boolean the teeth pin. -/

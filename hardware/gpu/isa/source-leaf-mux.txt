@@ -1,0 +1,39 @@
+# source-leaf-mux: RADV's final ISA for each stage, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1
+# Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders,shaderstats; do not edit.
+# Each instruction line ends in `; <dwords>`, the machine code as RADV printed it; labels and text are LLVM's.
+
+## stage 0 (stage_0.wgsl): 11 threads, 31 instructions, 1 64-bit stores; VGPRs: 16, SGPRs: 128, LDS: 0, scratch: 0, code: 188
+BB0:
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_cmpx_gt_u32_e32 11, v0	; 7da8008b
+	s_cbranch_execz BB6	; bf88002a
+BB1:
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[2:3], 0x10	; f4080101 fa000010
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen	; e0341000 80000200
+	s_clause 0x1	; bfa10001
+	s_buffer_load_dwordx4 s[8:11], s[4:7], null	; f4280202 fa000000
+	s_buffer_load_dwordx4 s[4:7], s[4:7], 0x10	; f4280102 fa000010
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	v_mov_b32_e32 v9, s5	; 7e120205
+	v_mov_b32_e32 v10, s7	; 7e140207
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_mul_hi_u32 v1, v2, s10	; d56a0001 00001502
+	v_mul_lo_u32 v6, v2, s10	; d5690006 00001502
+	v_mul_lo_u32 v8, v2, s11	; d5690008 00001702
+	v_mul_lo_u32 v7, v3, s10	; d5690007 00001503
+	v_cmp_gt_u64_e32 vcc, s[8:9], v[2:3]	; 7dc80408
+	v_add_co_u32 v6, s[8:9], s4, v6	; d70f0806 00020c04
+	v_add3_u32 v1, v1, v8, v7	; d76d0001 041e1101
+	v_add_co_ci_u32_e64 v1, s[4:5], v1, v9, s[8:9]	; d5280401 00221301
+	v_subrev_co_u32 v4, s[4:5], s6, v2	; d7190404 00020406
+	v_sub_co_ci_u32_e64 v5, s[4:5], v3, v10, s[4:5]	; d5290405 00121503
+	v_cndmask_b32_e32 v2, v4, v6, vcc	; 02040d04
+	v_cndmask_b32_e32 v3, v5, v1, vcc	; 02060305
+	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:792	; e0741318 80000200
+BB6:
+	s_endpgm	; bf810000

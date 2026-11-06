@@ -72,6 +72,8 @@ structure WaveState where
   mem : Memory
   halted : Bool
   err : Option String
+  /-- Half-open byte ranges mapped read-only by the host (embedded shader constant pools). -/
+  readOnly : Array (UInt64 × UInt64) := #[]
 
 def WaveState.init (mem : Memory) : WaveState :=
   { sgpr := Array.replicate sgprCount 0, vcc := 0, exec := 0xFFFFFFFFFFFFFFFF, scc := false, m0 := 0,
@@ -89,7 +91,9 @@ def writeVgpr (s : WaveState) (r lane : Nat) (v : UInt32) : WaveState :=
 def execBit (s : WaveState) (lane : Nat) : Bool := (s.exec >>> lane.toUInt64) &&& 1 == 1
 def readMem32 (s : WaveState) (byteAddr : UInt64) : Option UInt32 := s.mem.get? (byteAddr >>> 2)
 def writeMem32 (s : WaveState) (byteAddr : UInt64) (v : UInt32) : WaveState :=
-  { s with mem := s.mem.insert (byteAddr >>> 2) v }
+  if s.readOnly.any (fun (lo, hi) => lo ≤ byteAddr && byteAddr < hi) then
+    s.fail "store to a read-only code-data range"
+  else { s with mem := s.mem.insert (byteAddr >>> 2) v }
 
 theorem readSgpr_writeSgpr_same (s : WaveState) (n : Nat) (v : UInt32) (h : n < sgprCount)
     (hs : s.sgpr.size = sgprCount) : readSgpr (writeSgpr s n v) n = v := by
@@ -492,9 +496,61 @@ def execInst (i : Inst) (s : WaveState) : WaveState :=
     -- manual 12.1: D = S0 & S1; SCC = (D != 0)
     | some a, some b => let d := a &&& b; { writeScalarDst64 s (i.field "SDST") d with scc := d != 0 }
     | _, _ => s.fail "S_AND_B64: source code not modelled"
+  -- SOAC scalar loops: manual 12.1 SOP2, 12.3 SOP1, 12.4 SOPC; gem5 twins cited
+  -- in hardware/gpu/rdna2/gem5_ref.cpp, including SCC and saved EXEC effects.
+  | "S_ADD_U32" | "S_ADDC_U32" => match ssrc i s 0, ssrc i s 1 with
+    | some a, some b =>
+      let (d, c) := addCi a b (name == "S_ADDC_U32" && s.scc)
+      { writeScalarDst s (i.field "SDST") d with scc := c }
+    | _, _ => s.fail s!"{name}: source code not modelled"
+  -- Manual 12.1 S_LSHL3_ADD_U32: widened shifted sum, SCC unsigned overflow.
+  -- No instruction by this name in the pinned gem5 Vega model.
+  | "S_LSHL3_ADD_U32" => match ssrc i s 0, ssrc i s 1 with
+    | some a, some b =>
+      let d := (a.toUInt64 <<< 3) + b.toUInt64
+      { writeScalarDst s (i.field "SDST") d.toUInt32 with scc := d ≥ 0x100000000 }
+    | _, _ => s.fail "S_LSHL3_ADD_U32: source code not modelled"
+  | "S_SUB_I32" | "S_MAX_U32" | "S_XOR_B32" | "S_OR_B32" | "S_MUL_I32" | "S_MUL_HI_U32" =>
+    match ssrc i s 0, ssrc i s 1 with
+    | some a, some b =>
+      let d := if name == "S_SUB_I32" then a - b else if name == "S_MAX_U32" then max a b
+        else if name == "S_XOR_B32" then a ^^^ b else if name == "S_OR_B32" then a ||| b else if name == "S_MUL_I32" then mulLo a b else mulHi a b
+      let c := if name == "S_SUB_I32" then (a >>> 31 != b >>> 31) && (a >>> 31 != d >>> 31)
+        else if name == "S_MAX_U32" then a > b else if name == "S_XOR_B32" || name == "S_OR_B32" then d != 0 else s.scc
+      { writeScalarDst s (i.field "SDST") d with scc := c }
+    | _, _ => s.fail s!"{name}: source code not modelled"
+  | "S_OR_B64" | "S_ANDN2_B64" | "S_CSELECT_B64" => match ssrc64 i s 0, ssrc64 i s 1 with
+    | some a, some b =>
+      let d := if name == "S_OR_B64" then a ||| b else if name == "S_ANDN2_B64" then a &&& (~~~b)
+        else if s.scc then a else b
+      { writeScalarDst64 s (i.field "SDST") d with scc := if name == "S_CSELECT_B64" then s.scc else d != 0 }
+    | _, _ => s.fail s!"{name}: source code not modelled"
+  | "S_BFM_B64" => match ssrc i s 0, ssrc i s 1 with
+    | some a, some b => writeScalarDst64 s (i.field "SDST")
+        ((((1 : UInt64) <<< (a.toUInt64 &&& 63)) - 1) <<< (b.toUInt64 &&& 63))
+    | _, _ => s.fail "S_BFM_B64: source code not modelled"
+  | "S_AND_SAVEEXEC_B64" => match ssrc64 i s 0 with
+    | some a =>
+      let e := a &&& s.exec
+      { writeScalarDst64 s (i.field "SDST") s.exec with exec := e, scc := e != 0 }
+    | none => s.fail "S_AND_SAVEEXEC_B64: source code not modelled"
+  | "S_CMP_EQ_I32" | "S_CMP_LG_I32" | "S_CMP_GE_U32" => match ssrc i s 0, ssrc i s 1 with
+    | some a, some b => { s with scc := if name == "S_CMP_EQ_I32" then a == b else if name == "S_CMP_LG_I32" then a != b else a ≥ b }
+    | _, _ => s.fail s!"{name}: source code not modelled"
+  -- Manual 12.3 / gem5 sop1.cc Inst_SOP1__S_GETPC_B64::execute: byte address of next instruction.
+  -- Check relocates each stage's code image to byte address zero, disjoint from buffers.
+  | "S_GETPC_B64" => writeScalarDst64 s (i.field "SDST") (UInt64.ofNat (4 * s.pc))
   -- Program flow (manual 12.5 SOPP); gem5 twins sopp.cc S_CBRANCH_EXECZ, S_ENDPGM, S_WAITCNT
   | "S_CBRANCH_EXECZ" =>
     if s.exec == 0 then { s with pc := (Int.ofNat s.pc + signed16 (i.field "SIMM16")).toNat } else s
+  | "S_BRANCH" | "S_CBRANCH_SCC0" | "S_CBRANCH_SCC1" =>
+    if name == "S_BRANCH" || (name == "S_CBRANCH_SCC0" && !s.scc) || (name == "S_CBRANCH_SCC1" && s.scc) then { s with pc := (Int.ofNat s.pc + signed16 (i.field "SIMM16")).toNat } else s
+  -- Manual 12.5: NOP only delays; INST_PREFETCH changes instruction-cache prefetch
+  -- distance. Neither changes this functional model's registers, memory or control flow.
+  | "S_NOP" => s
+  | "S_INST_PREFETCH" =>
+    if 1 ≤ i.field "SIMM16" && i.field "SIMM16" ≤ 3 then s
+    else s.fail "S_INST_PREFETCH: reserved prefetch mode"
   | "S_ENDPGM" => { s with halted := true }
   | "S_WAITCNT" => s
   | "S_CLAUSE" => s
@@ -505,6 +561,16 @@ def execInst (i : Inst) (s : WaveState) : WaveState :=
   | "BUFFER_LOAD_DWORD" | "BUFFER_LOAD_DWORDX2" | "BUFFER_LOAD_DWORDX4" => execMubuf i s false
   | "BUFFER_STORE_DWORD" | "BUFFER_STORE_DWORDX2" | "BUFFER_STORE_DWORDX4" => execMubuf i s true
   -- Vector ALU, 32-bit (manual 12.7 VOP2, 12.8 VOP1, 12.11 VOP3); gem5 twins vop1.cc/vop2.cc/vop3.cc
+  -- Manual 12.8, gem5 vop1.cc V_READFIRSTLANE_B32: lane 0 if EXEC=0;
+  -- otherwise the least set EXEC bit. This scalar write ignores the execution mask.
+  | "V_READFIRSTLANE_B32" =>
+    let code := srcCode i 0
+    if code < 256 || code > 511 then s.fail "V_READFIRSTLANE_B32: only VGPR sources modelled" else
+    let lane := ((List.range lanes).find? (execBit s)).getD 0
+    writeScalarDst s (i.field "VDST") (readVgpr s (code - 256) lane)
+  | "V_MIN_U32" => valuLanes i s 2 fun src _ => min (src.getD 0 0) (src.getD 1 0)
+  | "V_LSHRREV_B32" => valuLanes i s 2 fun src _ => src.getD 1 0 >>> (src.getD 0 0 &&& 31)
+  | "V_ADD_LSHL_U32" => valuLanes i s 3 fun src _ => (src.getD 0 0 + src.getD 1 0) <<< (src.getD 2 0 &&& 31)
   | "V_MOV_B32" => valuLanes i s 1 fun src _ => src.getD 0 0
   | "V_ADD_NC_U32" => valuLanes i s 2 fun src _ => src.getD 0 0 + src.getD 1 0   -- gem5 twin V_ADD_U32
   | "V_AND_B32" => valuLanes i s 2 fun src _ => src.getD 0 0 &&& src.getD 1 0
@@ -520,6 +586,8 @@ def execInst (i : Inst) (s : WaveState) : WaveState :=
     | none => s.fail "V_CNDMASK_B32: mask code not modelled"
   | "V_ADD_CO_U32" => valuLanesCarry i s none fun a b _ => addCo a b
   | "V_SUB_CO_U32" => valuLanesCarry i s none fun a b _ => subCo a b
+  -- Manual 12.11 V_SUBREV_CO_U32; gem5 vop3.cc V_SUBREV_CO_U32.
+  | "V_SUBREV_CO_U32" => valuLanesCarry i s none fun a b _ => subCo b a
   | "V_ADD_CO_CI_U32" => match maskSource s (maskSrcCode i) with      -- gem5 twin V_ADDC_CO_U32
     | some m => valuLanesCarry i s (some m) fun a b ci => addCi a b ci
     | none => s.fail "V_ADD_CO_CI_U32: carry-in code not modelled"
@@ -529,9 +597,11 @@ def execInst (i : Inst) (s : WaveState) : WaveState :=
   | "V_LSHLREV_B64" => valuShift64 i s lshlrev64
   | "V_LSHRREV_B64" => valuShift64 i s lshrrev64
   -- Compares (manual 12.9 VOPC, in VOP3 12.11); gem5 twins vopc.cc / vop3_cmp.cc; V_CMPX writes EXEC only here
+  | "V_CMP_GE_U32" => valuCompare i s 32 fun a b => a ≥ b
   | "V_CMP_LE_U32" => valuCompare i s 32 fun a b => a ≤ b
   | "V_CMP_GT_U32" => valuCompare i s 32 fun a b => a > b
   | "V_CMPX_GT_U32" => valuCompare i s 32 fun a b => a > b
+  | "V_CMP_GT_U64" => valuCompare i s 64 fun a b => a > b  -- manual 12.9; gem5 vopc.cc Inst_VOPC__V_CMP_GT_U64::execute
   | "V_CMP_LT_U64" => valuCompare i s 64 fun a b => a < b
   | "V_CMP_NE_I64" => valuCompare i s 64 fun a b => a != b
   | _ => s.fail s!"{name}: no semantics (refused, not guessed)"
