@@ -566,6 +566,7 @@ import Obend.Teeth.Hardware.CliffordKernel
 import Obend.Teeth.Hardware.DeviceCertificates
 import Obend.Teeth.Hardware.DeviceFixtures
 import Obend.Teeth.Hardware.Fixtures
+import Obend.Teeth.Hardware.Rdna2Runs
 import Obend.Teeth.Hardware.SiliconTeeth
 import Obend.Teeth.Law.Fixtures
 import Obend.Teeth.Law.LawJudgeTeeth
