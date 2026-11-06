@@ -127,6 +127,7 @@ tests/decisions/Environment.lean`): the open reads it and the page's backticked 
 it (`new.unresolved`, `new.unresolvedInserted`); a named file that is not there stops the command.
 -/
 public import Obend.Vault.Replay
+public import Obend.Vault.Cost
 public section
 
 namespace Obend.Vault.Cli
@@ -145,7 +146,7 @@ def readVault (dir : System.FilePath) : IO (List (String × String)) := do
     if f.extension == some "md" && !(← f.isDir) then
       let rel := if f.toString.startsWith pre then String.ofList (f.toString.toList.drop pre.length) else f.toString
       let name := String.ofList (rel.toList.take (rel.length - 3))
-      out := out.push (name, ← IO.FS.readFile f)
+      out := out.push (name, ← Obend.Vault.Cost.readFile f)
   return (out.toList.mergeSort fun a b => decide (a.1 ≤ b.1))
 
 /-- The world from before the log (an earlier `obend`'s whole-world file); adopted as the log's first
@@ -176,7 +177,7 @@ def loadEnvironment (dir : System.FilePath) (V : List (String × String)) : IO E
         unless ← f.pathExists do
           throw (IO.userError (n ++ ": its environment " ++ path ++ " is not there; write it with " ++
             "`lake build Obend.Census` (tier 2) or `cd lean && lake env lean tests/decisions/Environment.lean`"))
-        let txt ← IO.FS.readFile f
+        let txt ← Obend.Vault.Cost.readFile f
         names := names ++ (txt.splitOn "\n").filter fun l => !l.isEmpty && !l.startsWith "#"
   return environmentOf names
 
@@ -186,7 +187,7 @@ def jsonFiles (d : System.FilePath) : IO (List (String × String)) := do
   let mut out : Array (String × String) := #[]
   for e in ← d.readDir do
     if e.path.extension == some "json" && !(← e.path.isDir) then
-      out := out.push ((e.path.fileStem.getD ""), ← IO.FS.readFile e.path)
+      out := out.push ((e.path.fileStem.getD ""), ← Obend.Vault.Cost.readFile e.path)
   return out.toList.mergeSort fun a b => decide (a.1 ≤ b.1)
 
 /-- The world from before the log, if the vault has one: `world.json`, `ledger.json`, and the forms
@@ -199,12 +200,12 @@ def legacyWorld (dir : System.FilePath) : IO (Option Replay.World) := do
   if !hasW && !hasL && !hasF then return none
   let bad (f : System.FilePath) (e : String) : IO.Error := IO.userError ("cannot read " ++ f.toString ++ ": " ++ e)
   let s ← if hasW then
-      match Lean.Json.parse (← IO.FS.readFile (worldPath dir)) >>= storeOf with
+      match Lean.Json.parse (← Obend.Vault.Cost.readFile (worldPath dir)) >>= storeOf with
       | .ok s => pure s
       | .error e => throw (bad (worldPath dir) e)
     else pure {}
   let J ← if hasL then
-      match Lean.Json.parse (← IO.FS.readFile (legacyLedgerPath dir)) >>= Obend.Ledger.Json.journalOf with
+      match Lean.Json.parse (← Obend.Vault.Cost.readFile (legacyLedgerPath dir)) >>= Obend.Ledger.Json.journalOf with
       | .ok j => pure j
       | .error e => throw (bad (legacyLedgerPath dir) e)
     else pure Obend.Ledger.Json.Journal.empty
@@ -234,7 +235,7 @@ def legacyWorld (dir : System.FilePath) : IO (Option Replay.World) := do
 
 def readBytes (f : System.FilePath) : IO Bytes := do
   if !(← f.pathExists) then return []
-  return (← IO.FS.readBinFile f).toList
+  return (← Obend.Vault.Cost.readBinFile f).toList
 
 /-- A checkpoint's file: `obend-checkpoint 1 COUNT START STOP ANCHOR`, a newline, the world's bytes. -/
 def checkpointBytes (ck : Checkpoint) : Bytes :=
@@ -244,6 +245,7 @@ def checkpointBytes (ck : Checkpoint) : Bytes :=
 def readCheckpoint (dir : System.FilePath) : IO (Option Checkpoint) := do
   let bs ← readBytes (checkpointPath dir)
   if bs.isEmpty then return none
+  Obend.Vault.Cost.addCheckpoint bs.length
   let line := bs.takeWhile (· != 10)
   let some txt := bytesText line | return none
   match txt.splitOn " " with
@@ -256,7 +258,7 @@ def readCheckpoint (dir : System.FilePath) : IO (Option Checkpoint) := do
 /-- Write a file whole or not at all: beside it, then renamed over it. -/
 def writeAtomically (f : System.FilePath) (bs : Bytes) : IO Unit := do
   let tmp := f.withExtension "tmp"
-  IO.FS.writeBinFile tmp ⟨bs.toArray⟩
+  Obend.Vault.Cost.writeBinFile tmp ⟨bs.toArray⟩
   IO.FS.rename tmp f
 
 /-- What a process holds of a vault's log: the world (the replay of the log), the receipt digest of
@@ -307,7 +309,7 @@ def tearAt (dir : System.FilePath) (n : Nat) : IO (Option (Option Nat × String)
   | _ => return none
 
 def waitToBeStopped (barrier : String) : IO Unit := do
-  IO.FS.writeFile barrier "stopped here\n"
+  Obend.Vault.Cost.writeFile barrier "stopped here\n"
   repeat IO.sleep 1000
 
 /-- Append a record's bytes to the log (the barrier aside). -/
@@ -316,11 +318,11 @@ def appendRecord (dir : System.FilePath) (n : Nat) (bs : Bytes) : IO Unit := do
   let h ← IO.FS.Handle.mk (logPath dir) .append
   match tear with
   | some (some k, barrier) =>
-    h.write ⟨(bs.take k).toArray⟩
+    Obend.Vault.Cost.write h ⟨(bs.take k).toArray⟩
     h.flush
     waitToBeStopped barrier
   | _ =>
-    h.write ⟨bs.toArray⟩
+    Obend.Vault.Cost.write h ⟨bs.toArray⟩
     h.flush
   if let some (none, barrier) := tear then waitToBeStopped barrier
 
@@ -386,6 +388,7 @@ def recoverLog (dir : System.FilePath) : IO Recovery := do
   let (isBase, baseSize) := match parseOne logHash (some Rehydration.genesisSentinel) bs with
     | .ok (r, _) => if (anchorOfTurn r.payload).isSome then (true, (encodeRecord logHash r).length) else (false, 0)
     | .error _ => (false, 0)
+  Obend.Vault.Cost.addReplayed qs.length
   let world := replay deployed base qs
   let size := from_ + (encodeAll logHash qs).length
   let count := count0 + qs.length
@@ -418,13 +421,13 @@ def loadStore (dir : System.FilePath) : IO Store := return (← readWorld dir).s
 
 /-- A file's text, if it is there. -/
 def readText? (f : System.FilePath) : IO (Option String) := do
-  if ← f.pathExists then return some (← IO.FS.readFile f) else return none
+  if ← f.pathExists then return some (← Obend.Vault.Cost.readFile f) else return none
 
 /-- Write a file when its text is not already that. -/
 def writeIfChanged (f : System.FilePath) (t : String) : IO Unit := do
   if (← readText? f) != some t then
     if let some parent := f.parent then IO.FS.createDirAll parent
-    IO.FS.writeFile f t
+    Obend.Vault.Cost.writeFile f t
 
 /-- **The forms' exports**: each form the world holds as `.obend/forms/NAME.json` (the wire format a
 form is sent in), the receipt chain as `.obend/forms/receipts.json`, the forms received and the
@@ -456,17 +459,17 @@ def redoFiles (dir : System.FilePath) (before : Replay.World) (t : Turn) (after 
       let cur ← readText? f
       if cur != some txt && cur == found p.name then
         if let some parent := f.parent then IO.FS.createDirAll parent
-        IO.FS.writeFile f txt
+        Obend.Vault.Cost.writeFile f txt
         done := done ++ [p.name ++ ".md"]
   if let .rows fs := o then
     for rf in fs do
       IO.FS.createDirAll (dir / ".obend" / "receipts")
-      IO.FS.writeFile (dir / ".obend" / "receipts" / (rf.id ++ ".json")) rf.receipt
+      Obend.Vault.Cost.writeFile (dir / ".obend" / "receipts" / (rf.id ++ ".json")) rf.receipt
       done := done ++ [".obend/receipts/" ++ rf.id ++ ".json"]
       let pf := dir / "register" / (rf.id ++ ".md")
       unless ← pf.pathExists do
         IO.FS.createDirAll (dir / "register")
-        IO.FS.writeFile pf rf.page
+        Obend.Vault.Cost.writeFile pf rf.page
         done := done ++ ["register/" ++ rf.id ++ ".md"]
   return done
 
@@ -502,9 +505,9 @@ def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
     let rb := encodeRecord logHash r
     match ← compactTear dir with
     | some (k, barrier) =>
-      IO.FS.writeBinFile (newLogPath dir) ⟨(rb.take k).toArray⟩
+      Obend.Vault.Cost.writeBinFile (newLogPath dir) ⟨(rb.take k).toArray⟩
       waitToBeStopped barrier
-    | none => IO.FS.writeBinFile (newLogPath dir) ⟨rb.toArray⟩
+    | none => Obend.Vault.Cost.writeBinFile (newLogPath dir) ⟨rb.toArray⟩
     IO.FS.rename (newLogPath dir) (logPath dir)
     if ← (checkpointPath dir).pathExists then IO.FS.removeFile (checkpointPath dir)
     return { world := h.world, prev := h.prev, count := 1, size := rb.length, lastStart := 0, base := true,
@@ -586,7 +589,7 @@ def writeFiles (dir : System.FilePath) (w : List (String × String)) : IO Unit :
   for (n, t) in w do
     let f := dir / (n ++ ".md")
     if let some parent := f.parent then IO.FS.createDirAll parent
-    IO.FS.writeFile f t
+    Obend.Vault.Cost.writeFile f t
 
 /-- What changed between two stores, page by page. -/
 def changes (s s' : Store) : List String :=
@@ -791,6 +794,7 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
   unless tail.isEmpty do
     IO.println ("torn tail: " ++ toString tail.length ++ " bytes after record " ++ toString qs.length ++
       ", dropped (" ++ ((why.map dropText).getD "") ++ ")")
+  Obend.Vault.Cost.addReplayed qs.length
   let fromGenesis := (Retention.recoverLog logHash deployed anchorOfTurn genesis bs).world
   let r ← recoverLog dir
   IO.println ("checkpoint: " ++ r.checkpoint)
@@ -816,13 +820,13 @@ def formsDir (dir : System.FilePath) : System.FilePath := dir / ".obend" / "form
 
 def readJson (f : System.FilePath) : IO Lean.Json := do
   unless ← f.pathExists do throw (IO.userError ("no file " ++ f.toString))
-  match Lean.Json.parse (← IO.FS.readFile f) with
+  match Lean.Json.parse (← Obend.Vault.Cost.readFile f) with
   | .ok j => return j
   | .error e => throw (IO.userError ("cannot read " ++ f.toString ++ ": " ++ e))
 
 def writeJson (f : System.FilePath) (j : Lean.Json) : IO Unit := do
   if let some parent := f.parent then IO.FS.createDirAll parent
-  IO.FS.writeFile f (j.pretty ++ "\n")
+  Obend.Vault.Cost.writeFile f (j.pretty ++ "\n")
 
 def ofExcept {α : Type} (what : String) : Except String α → IO α
   | .ok a => return a
@@ -919,7 +923,7 @@ partial def copyTree (src dst : System.FilePath) : IO Unit := do
   for e in ← src.readDir do
     if e.fileName == "lock" then continue
     if ← e.path.isDir then copyTree e.path (dst / e.fileName)
-    else IO.FS.writeBinFile (dst / e.fileName) (← IO.FS.readBinFile e.path)
+    else Obend.Vault.Cost.writeBinFile (dst / e.fileName) (← Obend.Vault.Cost.readBinFile e.path)
 
 /-- The line `N` (from 1) of a file, as read. -/
 def lineOf (spec : String) : IO (Except String (String × String)) := do
@@ -928,7 +932,7 @@ def lineOf (spec : String) : IO (Except String (String × String)) := do
     match n.toNat? with
     | some k =>
       if !(← (System.FilePath.mk file).pathExists) then return .error ("refused: no file " ++ file)
-      let ls := (← IO.FS.readFile file).splitOn "\n"
+      let ls := (← Obend.Vault.Cost.readFile file).splitOn "\n"
       match ls[k - 1]? with
       | some l => if k == 0 then return .error "refused: lines count from 1" else return .ok (l, spec)
       | none => return .error ("refused: " ++ file ++ " has no line " ++ n)
@@ -1069,7 +1073,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     return 0
   | ["post", page, file] => some do
     let (s, V) ← openDir dir false
-    let addition ← if file == "-" then (do let stdin ← IO.getStdin; stdin.readToEnd) else IO.FS.readFile file
+    let addition ← if file == "-" then (do let stdin ← IO.getStdin; stdin.readToEnd) else Obend.Vault.Cost.readFile file
     let some cur := V.lookup page | fail ("refused: no page named " ++ page)
     let text? : Except String String :=
       if append then .ok (appendText cur addition)
@@ -1334,7 +1338,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
           holder because) (fun _ o => pure o) with
       | .error e => fail e
       | .ok (.proposed i text) =>
-        IO.FS.writeFile o text
+        Obend.Vault.Cost.writeFile o text
         IO.println (f.name ++ ": filled by " ++ holder ++ ": " ++ fillText a)
         for l in f.preview a do IO.println ("  " ++ l)
         if let some c := because then IO.println ("  because " ++ c)

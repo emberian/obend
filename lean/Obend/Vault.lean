@@ -34,6 +34,7 @@ its frontmatter lines), the members and their grants.
   compacted log and its reading (`state_eq_replay_compacted`, `recover_eq_replay_prefix_compacted`,
   `recoverLog_plain`); at the deployed machine, `forget_sound`, `forget_refused_when_needed`,
   `late_correction_refused`.
+* `Obend.Vault.Cost` — what a command cost, counted by the binary and said with `OBEND_COST`.
 * `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, `log`,
   the forms' `capture`, `abstract`, `form`, `fill`, `reshare`, `judge`, and their transport's `offer`,
   `grant`, `revoke`, `grants`, `transport`, `obligations`, `confirm`, and `forget`, `fork`, and the
@@ -63,6 +64,7 @@ public import Obend.Vault.Log
 public import Obend.Vault.Replay
 public import Obend.Vault.Transport
 public import Obend.Vault.Retention
+public import Obend.Vault.Cost
 public import Obend.Vault.Hyperedge
 public import Obend.Vault.Escrow
 public import Obend.Vault.Affordance
