@@ -361,9 +361,11 @@ graphs in `EQY_GRAPHS`); the Verilator harness `obend-emit-sv square-<graph> --t
 (`emitVerilatorHarnessCpp`, the one harness `obend verilate` uses, over the graph's vectors against
 `evalModuleOutputs`) reports no mismatch on the committed `.sv`; `obend-gpu-run` agrees with
 `expected.tsv` on the card; and a swapped operator in a copy of the `.sv` (`+` to `-`, else `*` to `+`)
-makes the LEC answer sat and Verilator report mismatches. A swap the LEC proves equivalent is an
-equivalent mutant and is skipped, counted: `ntt-16`'s first `+` adds two words that are `0` on every input
-(a limb product with the twiddle `1`), so no run could see it; the gate moves to the next operator. Three parties agree on every vector,
+makes the LEC answer sat and Verilator report mismatches. A swap the LEC proves equivalent (an
+equivalent mutant), or cannot decide within its limits (`lec.sh`'s `LEC_ABS_SECS`, set by the tooth, bounds
+the query with multiplication uninterpreted), is skipped and counted: `ntt-16`'s first `+` adds two words
+that are `0` on every input only through a multiply, so no run could see it and z3 did not decide it in
+twenty minutes; the gate moves to the next operator. Three parties agree on every vector,
 Verilator, the card and the model, and the theorem says the two models are one. It runs on the Mac
 (Verilator, Yosys, EQY, z3 and Metal are there; hbox has the card and no Verilator or Yosys). The
 first run of the tooth found the vectors thin: `muxchain`'s only binary operator reaches an output

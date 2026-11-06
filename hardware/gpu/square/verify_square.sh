@@ -140,12 +140,15 @@ for g in "${GRAPHS[@]}"; do
   fi
 
   if run_stage 6; then
-    # Candidate faults: the always_comb lines with a binary operator, in order; each swaps that line's
+    # Candidate faults: the always_comb lines with a binary operator, last first (a fault near the
+    # outputs is one z3 can refute bit-precisely; under the multiplication abstraction a sat only ever
+    # reads as undecided); each swaps that line's
     # first operator (`+` to `-`, else `*` to `+`, else `-` to `+`) on a copy, never the committed file.
-    # A swap the LEC proves equivalent (unsat) is an equivalent mutant (ntt-16's first `+` adds two words
-    # that are 0 on every input, inside a multiply by the twiddle 1) and is skipped, counted; the first
+    # A swap the LEC proves equivalent (unsat) is an equivalent mutant and is skipped, counted; so is one
+    # it cannot decide within LEC_SECS bit-precise and TOOTH_ABS_SECS with multiplication uninterpreted
+    # (ntt-16's first `+` adds two words that are 0 on every input only through a multiply). The first
     # swap the LEC answers sat is the planted fault, and Verilator must report mismatches on it.
-    mapfile -t CAND < <(grep -n '^    w_[0-9]* = .*\( + \| \* \| - \)' "${sv}" | cut -d: -f1 | head -8)
+    mapfile -t CAND < <(grep -n '^    w_[0-9]* = .*\( + \| \* \| - \)' "${sv}" | cut -d: -f1 | sort -rn | head -8)
     (( ${#CAND[@]} > 0 )) || { echo "[FAIL] ${g}: no operator to swap in ${sv}" >&2; exit 1; }
     skipped=0; caught=""
     for ln in "${CAND[@]}"; do
@@ -154,26 +157,24 @@ for g in "${GRAPHS[@]}"; do
       swapped="$(diff "${sv}" "${mut}" | sed -n 's/^> *//p' | head -1 || true)"
       [[ -n "${swapped}" ]] || continue
       set +e
-      LEC_OUT="$("${LEC}" "square-${g}" "${mut}" "${lec}" --no-eqy "tooth" 2>&1)"
+      LEC_OUT="$(LEC_ABS_SECS="${TOOTH_ABS_SECS:-120}" "${LEC}" "square-${g}" "${mut}" "${lec}" --no-eqy "tooth" 2>&1)"
       LEC_RC=$?
       set -e
       verdict="$(grep -o 'z3 says [a-z]*' <<< "${LEC_OUT}" | head -1 | sed 's/z3 says //')"
       if (( LEC_RC == 0 )); then skipped=$((skipped + 1)); continue; fi
-      [[ "${verdict}" == sat || "${verdict}" == undecided ]] || {
+      if [[ "${verdict}" == undecided ]]; then skipped=$((skipped + 1)); continue; fi
+      [[ "${verdict}" == sat ]] || {
         echo "[FAIL] ${g}: the LEC of the swapped \`${swapped}\` failed for another reason:" >&2; echo "${LEC_OUT}" | tail -5 >&2; exit 1; }
       verilate "${top}" "${mut}" "${WORK}/${g}/tb.cpp" "${WORK}/${g}/obj_swap${ln}"
       if [[ "${MISMATCHES}" == 0 ]]; then
-        if [[ "${verdict}" == sat ]]; then
-          echo "[FAIL] ${g}: the swapped operator \`${swapped}\` (LEC sat) went unnoticed by the Verilator harness" >&2
-          exit 1
-        fi
-        skipped=$((skipped + 1)); continue
+        echo "[FAIL] ${g}: the swapped operator \`${swapped}\` (LEC sat) went unnoticed by the Verilator harness" >&2
+        exit 1
       fi
       caught="${swapped}"
-      echo "  [6] swapped \`${swapped}\`: Verilator mismatches=${MISMATCHES}, LEC z3 says ${verdict}, as they must${skipped:+ (${skipped} equivalent swaps skipped, each LEC unsat)}"
+      echo "  [6] swapped \`${swapped}\`: Verilator mismatches=${MISMATCHES}, LEC z3 says ${verdict}, as they must${skipped:+ (${skipped} earlier swaps skipped: LEC unsat or undecided)}"
       break
     done
-    [[ -n "${caught}" ]] || { echo "[FAIL] ${g}: no catchable operator swap among the first ${#CAND[@]} operators (${skipped} equivalent)" >&2; exit 1; }
+    [[ -n "${caught}" ]] || { echo "[FAIL] ${g}: no catchable operator swap among the first ${#CAND[@]} operators (${skipped} unsat or undecided)" >&2; exit 1; }
   fi
 done
 echo "[PASS] hardware/gpu/square${STAGE:+ (stage ${STAGE})}${ONLY:+ (${ONLY})}"
