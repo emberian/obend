@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
-# Rung 5 groundwork: generate FABulous's standard demo fabric and take one user design through its
-# own flow (Yosys synth_fabulous, nextpnr-generic, bit_gen) to a bitstream. Pinned to the commit
-# below; the Lean model of the fabric (Obend.Hardware.Fabulous) and verify_fabric.sh are not here yet.
-#   hardware/fabulous/flow.sh [DESIGN.v] [WORKDIR]
+# Build iceStickMac8 (hardware/ice40/obend_ice40_mac8.sv) on the fabric of hardware/fabulous/fabric.csv
+# with FABulous's own flow: `run_fab` generates the fabric and its metadata (.FABulous/), and
+# `compile_design` runs Yosys synth_fabulous, nextpnr-generic and bit_gen. The pin map is
+# top_wrapper.v (`obend fabric wrapper`). Pinned to the FABulous commit below.
+#   hardware/fabulous/flow.sh [WORKDIR]     -> WORKDIR/mac8/user_design/obend_ice40_mac8.bin
 set -euo pipefail
 FAB_COMMIT=ba85d81            # FABulous v2.2.0-57 (CLI 2.2.1), github.com/FPGA-Research/FABulous
 FAB_HOME="${FAB_HOME:-/Users/ember/tools/FABulous}"
 OSS="${OSS_CAD_SUITE:-/Users/ember/tools/oss-cad-suite/bin}"
-WORK="${2:-${TMPDIR:-/tmp}/obend-fabulous}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "${HERE}/../.." && pwd)"
+WORK="${1:-$(mktemp -d "${TMPDIR:-/tmp}/obend-fabulous.XXXXXX")}"
 export PATH="${FAB_HOME}/.venv/bin:${OSS}:${PATH}"
 
 have="$(git -C "${FAB_HOME}" rev-parse --short=7 HEAD)"
 [[ "${have}" == "${FAB_COMMIT}" ]] || { echo "[FAIL] ${FAB_HOME} is at ${have}, expected ${FAB_COMMIT}" >&2; exit 2; }
 
+P="${WORK}/mac8"
+rm -rf "${P}"
 mkdir -p "${WORK}"
-if [[ ! -d "${WORK}/demo" ]]; then
-  (cd "${WORK}" && FABulous create-project demo >/dev/null)
-fi
-DESIGN="${1:-${WORK}/demo/user_design/sequential_16bit_en.v}"
-[[ "$(dirname "${DESIGN}")" -ef "${WORK}/demo/user_design" ]] || cp "${DESIGN}" "${WORK}/demo/user_design/"
-base="$(basename "${DESIGN}")"
-FABulous -p "${WORK}/demo" run "run_fab; compile_design user_design/${base}"
-ls -la "${WORK}/demo/user_design/${base%.v}.bin" "${WORK}/demo/.FABulous/bitStreamSpec.csv"
+(cd "${WORK}" && FABulous create-project mac8 >/dev/null)
+cp "${HERE}/fabric.csv" "${P}/fabric.csv"
+cp "${HERE}/top_wrapper.v" "${P}/user_design/top_wrapper.v"
+cp "${ROOT}/hardware/ice40/obend_ice40_mac8.sv" "${P}/user_design/"
+FABulous -p "${P}" run "run_fab; compile_design user_design/obend_ice40_mac8.sv" > "${WORK}/flow.log" 2>&1 \
+  || { tail -30 "${WORK}/flow.log" >&2; echo "[FAIL] FABulous flow" >&2; exit 1; }
+grep -A3 "Device utilisation" "${P}/user_design/obend_ice40_mac8_npnr_log.txt" | sed -n 2,3p
+echo "${P}/user_design/obend_ice40_mac8.bin"

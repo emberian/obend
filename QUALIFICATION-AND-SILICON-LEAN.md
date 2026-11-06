@@ -177,6 +177,19 @@ defaults in the pipeline). No layout, deck, extraction or tool run of any design
 they quantify over. `obend tapeout` therefore writes no signoff receipt (it refuses `--out-receipt`), and nothing in
 this document should be read as a claim about GF180MCU, Sky130 or SG13G2 signoff.
 
+### 3.3 An eFPGA bitstream read back and checked against Lean (`hardware/fabulous/`, 2026-11-05)
+The one bitstream in this tree that a theorem is about. `obend_ice40_mac8` is built by FABulous's own flow on the
+fabric of `hardware/fabulous/fabric.csv` (25 × (`W_IO` + 3 `LUT4AB`)). `Obend.Hardware.Fabulous.Bitstream` decodes the
+`.bin` with FABulous's bitstream specification and routing graph and follows the configuration back to a `Net`
+(LUT4 gates, flops with enable and set/reset, output pins); `obend fabric check` refuses a bitstream that does not
+read back to the committed `mac8Net`, and with `--golden` names every differing bit it reads. For that net,
+`Obend.Hardware.Fabulous.mac8_fabric_realizes_module` proves agreement with `iceStickMac8` on every cycle of every
+in-width trace, and `mac8_fabric_realizes_module_from_reset` from any power-up flop state after one reset cycle.
+Trusted: FABulous's metadata files, the decoder as compiled code (it is not proved to invert `bit_gen`; on this
+design it agrees with nextpnr's FASM bit for bit), and `bv_decide`'s compiled LRAT check. FABulous's simulation of its
+generated fabric RTL, configured through the self-write port with the same bitstream, agrees with the Lean model
+cycle by cycle (`verify_fabric.sh`). The carry chain, `MUX8LUT`, block RAM, DSP and register-file tiles are not modelled.
+
 ---
 
 ## 4. North Star 4: All 8 Flagship Userspace Applications (`apps/`)
