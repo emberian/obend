@@ -186,14 +186,17 @@ examples. Two things to hold on to while reading this section (the expert review
      slot liner and laminated iron tooth/yoke thermal barrier) achieves a $224^\circ\text{C}$ lower
      winding temperature at $8\,\text{kW}$ stator copper loss than a conventional outer water jacket
      *in a one-node series thermal network whose five resistances are inputs* ($224 = 8000 \cdot (12 + 18 - 2)$ mK/W;
-     the identity is `lc_drives_in_slot_temp_drop_identity`, the numbers are a fixture)
-     ([`lc_drives_in_slot_temp_drop_identity`](lean/Obend/Hardware/FluidThermal.lean#L291-L298),
-     [`lc_drives_in_slot_cooler_than_outer_jacket`](lean/Obend/Hardware/FluidThermal.lean#L305-L314),
-     [`lc_drives_potsdam_dyno_comparison_verified`](lean/Obend/Hardware/FluidThermal.lean#L321-L329)).
+     the identity is `lc_drives_in_slot_temp_drop_identity`, the numbers are inputs)
+     ([`lc_drives_in_slot_temp_drop_identity`](lean/Obend/Hardware/FluidThermal.lean#L274-L281),
+     [`lc_drives_in_slot_cooler_than_outer_jacket`](lean/Obend/Hardware/FluidThermal.lean#L288-L298));
+     the fixture that checked the $346^\circ\text{C}$ / $122^\circ\text{C}$ dyno numbers by kernel evaluation was
+     deleted in the fixture triage of 2026-11-04, so those two temperatures are checked nowhere.
 3. **Mission Power / Mission Sun `MS350` 350 kW Flying-Capacitor Multilevel (`FCML`) Solar Inverter ([`PowerElectronics.lean`](lean/Obend/Hardware/PowerElectronics.lean))**:
-   - Mechanizes the 7-level ($M = 6$ cell) wide-bandgap SiC/GaN `FCML` phase leg, proving its $6\times$
+   - Mechanizes the 7-level ($M = 6$ cell) wide-bandgap SiC/GaN `FCML` phase leg. Its $6\times$
      switch voltage stress reduction ($1500\,\text{V} \to 250\,\text{V}$) and $M^2 = 36\times$ output
-     filter inductance volume reduction ([`ms350_7level_fcml_36x_inductance_and_6x_voltage_reduction`](lean/Obend/Hardware/PowerElectronics.lean#L300-L309)),
+     filter inductance reduction are a closed check on those numbers, kept as an `example` in
+     [`Fixtures.lean`](lean/Obend/Teeth/Hardware/Fixtures.lean) and run before a push; the universal
+     statement is that the $M^2$ factor is at least 1 and grows with $M$ ([`fcml_level_sq_divisor_mono`](lean/Obend/Hardware/PowerElectronics.lean#L324-L340)),
      Phase-Shifted PWM natural flying-capacitor charge balance ([`fcml_pspwm_natural_balance`](lean/Obend/Hardware/PowerElectronics.lean#L334-L339)),
      active balancing quadratic Lyapunov contraction ([`fcml_active_balancing_lyapunov_contraction`](lean/Obend/Hardware/PowerElectronics.lean#L367-L382)),
      incremental-conductance MPPT global optimality ([`mppt_incremental_conductance_global_max`](lean/Obend/Hardware/PowerElectronics.lean#L73-L98)),
@@ -205,22 +208,25 @@ examples. Two things to hold on to while reading this section (the expert review
      clearance under combined thermal + centrifugal radial growth ([`hot_air_gap_no_rub_sound`](lean/Obend/Hardware/Mechanics.lean#L156-L163)),
      and self-reproducing robotic factory cell closure ([`von_neumann_reflexive_closure_sound`](lean/Obend/Hardware/Mechanics.lean#L219-L234)).
 5. **Featherstone 6D Spatial Vector Algebra ($se(3)/se^*(3)$) & Ruckig Jerk-Limited Trajectory Profiles ([`Kinematics.lean`](lean/Obend/Hardware/Kinematics.lean))**:
-   - Mechanizes Featherstone's 6D Spatial Vector Algebra (`SpatialTwist` $\in se(3)$, `SpatialWrench` $\in se^*(3)$,
-     `spatialDualProduct`, `transformTwist`, `transformWrench`) with machine-checked proofs of the
-     **Spatial Power Invariance / D'Alembert Virtual Work Duality Theorem** ([`featherstone_joint_power_duality`](lean/Obend/Hardware/Kinematics.lean#L168-L185):
-     $\langle X_f^*(w), v \rangle = \langle w, X_v(v) \rangle$) and Recursive Newton-Euler (`RNEA`) dynamic link
-     balance ([`rnea_joint_torque_projection_identity`](lean/Obend/Hardware/Kinematics.lean#L214-L221)).
+   - Mechanizes Featherstone's 6D spatial vectors over integers (`SpatialTwist6D` $\in se(3)$,
+     `SpatialWrench6D` $\in se^*(3)$, the pairing `spatialPower`, the cross products `spatialCrossMotion`
+     and `spatialCrossForce`; there are no frame transforms) with machine-checked proofs of the
+     adjoint identity of the two cross products ([`featherstone_spatial_adjoint_duality`](lean/Obend/Hardware/Kinematics.lean#L194-L201):
+     $\langle f, u \times_m v \rangle + \langle u \times_f f, v \rangle = 0$) and of the `RNEA` fact that the
+     Coriolis wrench does no work along the link's own twist ([`rnea_gyroscopic_coriolis_power_zero`](lean/Obend/Hardware/Kinematics.lean#L210-L218)).
    - Mechanizes **Ruckig (`arXiv:2105.04830`) third-order jerk-limited ($C^2$) trajectory segments**
-     (`evalJerkSegment`) and proves that symmetric jerk-pulse (`+j`, `-j`) S-curve transitions return
+     (`stepRuckigSegment`) and proves that symmetric jerk-pulse (`+j`, `-j`) S-curve transitions return
      acceleration to zero while advancing velocity by $j \cdot \Delta t^2$, eliminating step-acceleration
-     excitation of machine-tool structural modes ([`ruckig_symmetric_pulse_exact`](lean/Obend/Hardware/Kinematics.lean#L266-L287)).
+     excitation of machine-tool structural modes ([`ruckig_symmetric_pulse_exact`](lean/Obend/Hardware/Kinematics.lean#L242-L252)).
 6. **Persistent OpenUSD Assemblies, `timeSamples`, & Affine Arithmetic CSG Tape Pruning ([`OpenUSD.lean`](lean/Obend/Hardware/OpenUSD.lean))**:
-   - Mechanizes temporally persistent OpenUSD attributes (`UsdTimeTrack`) with proved time-monotonicity
-     ([`usd_time_track_insert_preserves_sorted`](lean/Obend/Hardware/OpenUSD.lean#L61-L82)) and
-     1st-order **Affine Arithmetic** (`AffineForm`: $x_0 + x_1 \epsilon_1 + x_2 \epsilon_2 + r_{\text{err}} \epsilon_e$,
-     $\epsilon_i \in [-1, 1]$) that tracks correlated spatial variations across CSG trees and cancels
-     first-order self-subtraction $a - a = 0$ (`affine_sub_self_cancels_first_order`), unlike naive
-     interval arithmetic (`(a - a).width = 2 * a.width`).
+   - Mechanizes OpenUSD `timeSamples` chains of a part's physical state, proving that a lifecycle
+     invariant checked at the first sample and at every checked transition holds at the last
+     ([`usd_lifecycle_invariant_preserved`](lean/Obend/Hardware/OpenUSD.lean#L723-L741)); nothing orders or
+     inserts time samples. 1st-order **Affine Arithmetic** (`AffineForm1D`: $c_0 + c_1 \epsilon_1 + c_2 \epsilon_2$;
+     `AffineForm3D` adds an error term $r_{\text{err}} \epsilon_e$; $\epsilon_i \in [-1, 1]$) tracks correlated
+     spatial variations across CSG trees and cancels self-subtraction: a 1D form minus itself encloses
+     exactly $[0, 0]$ (`affine_sub_self_exact_zero`), and a 3D form does when its error term is zero
+     (`affine3d_sub_self_zero_linear`), unlike naive interval arithmetic, where $a - a$ has twice $a$'s width.
 7. **Idiomatic `.obend` Userspace Physical Engineering & Hardware Lowering ([`UserspacePhysical.lean`](lean/Obend/Hardware/UserspacePhysical.lean))**:
    - Physical assemblies are authored directly in idiomatic `.obend` userspace using `spec`, `def`,
      `super`, `self`, and `#law` contracts ([`LcDrivesStatorUsd.obend`](lean/tests/obend-source/world/physical/LcDrivesStatorUsd.obend),
@@ -299,10 +305,10 @@ Wave 6 unifies the hardware, geometric, kinematic, multiphysics, and quantum sub
    - Proves global 2D FEMM nodal residual equilibrium (`femm_global_residual_sum_zero`), Maxwell Stress Tensor air-gap torque bilinearity (`maxwell_stress_torque_bilinear_scale`), and coupled temperature-dependent copper resistivity $I^2 R(T)$ thermal-runaway prevention (`electro_thermal_contraction_identity`, `lc_drives_in_slot_prevents_thermal_runaway`).
 5. **Variable-Length RFC 8949 Binary CBOR (`0x9A`), Real Rust Solvers & Live Verilator 5.050 Co-Simulation ([`Codec.lean`](lean/Obend/Hardware/Codec.lean), [`Judge.lean`](lean/Obend/Hardware/Judge.lean), [`hardware/rust-ffi`](hardware/rust-ffi/src/lib.rs), [`run-hardware.py`](lean/tests/run-hardware.py))**:
    - Proves universal round-trip soundness for variable-length CBOR `UInt32` arrays/tapes (`cborDecodeU32List_encode_exact`, `decode_encode_binaryTapeCert`) with kernel replay of evolutionary candidates (`evalEvolutionCandidatePeakTemp`).
-   - Implements iterative 2D FEMM Newton-Raphson (`solve_femm_mesh`), 3D octree `Choice` tape pruning (`eval_octree_frep_pruned`), and 80-candidate Pareto optimization (`evolve_physical_design`) in Rust, plus live `obend hardware emit-sv` + Verilator `-Wall` C++ co-simulation in `run-hardware.py`.
+   - Implements, in Rust (not Lean, so none of it is a theorem here), 2D FEMM Newton-Raphson on a 6-element stator slot mesh (`obend_hw_ffi::solve_femm_mesh`), 3D octree `Choice` tape pruning (`obend_hw_ffi::eval_octree_frep_pruned`), and 80-candidate Pareto optimization (`obend_hw_ffi::evolve_physical_design`), plus live `obend hardware emit-sv` + Verilator `-Wall` C++ co-simulation in `run-hardware.py`.
 6. **Hybrid Symbolic-Numeric Quantum Walks & The Physical Matter Compiler ([`Equitable.lean`](lean/Obend/Analysis/Equitable.lean), [`QuantumWalk.lean`](lean/Obend/Analysis/QuantumWalk.lean), [`QuantumMatter.lean`](lean/Obend/Hardware/QuantumMatter.lean))**:
    - Mechanizes 100% computable equitable partitions, 1-WL color refinement, the integer handshake identity $|C_i| Q_{i,j} = |C_j| Q_{j,i}$ (`equitable_handshake_identity`), and universal $k$-step walk intertwining $H^k \Pi = \Pi Q^k$ (`equitable_intertwining_power`).
-   - Unifies Godsil spectral projectors and Buchberger Gröbner normal forms (`Groebner.lean`) for exact algebraic $P_3$ Perfect State Transfer (`ctqw_p3_end_to_end_pst_algebraic`) and Bachman–Tamon quotient PST (`bachman_tamon_quotient_pst_iff`) with interval-flowpipe fixtures over $\mathbb{Q}$ (`ctqw_validated_flowpipe_and_taylor_unitarity`, a concrete `decide`).
+   - Unifies Godsil spectral projectors and Buchberger Gröbner normal forms (`Groebner.lean`) for Bachman–Tamon quotient PST (`bachman_tamon_quotient_pst_iff`). Exact algebraic $P_3$ Perfect State Transfer and the interval-flowpipe and Taylor-unitarity checks over $\mathbb{Q}$ are closed checks on fixed data, kept as `example`s in [`Fixtures.lean`](lean/Obend/Teeth/Analysis/Fixtures.lean) and run before a push.
      The integrator (`Flowpipe.lean`) is a second-order interval Taylor step, not a symplectic method; its
      universal theorems are the interval-arithmetic half of a validated step (`picard_step_encloses_trajectory`),
      and the analytic half, existence of the ODE solution and its membership in the a-priori box, is not
