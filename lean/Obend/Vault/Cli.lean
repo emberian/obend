@@ -62,10 +62,32 @@ Forms (`Obend.Vault.Form`; the walkthrough is `lean/tests/vault/FORMS.md`):
         residual is shown, the pages the form did not capture left as reads.
     obend reshare FILE --for WHO --grant PATTERN … [--held CAPS] --out FILE   (where it was received)
         hand the form on to WHO, attenuated; a reshare that would amplify is refused.
-    obend judge FILE
-        judge a proposal for one of this vault's forms: the membrane, the form's resources, the pins,
-        then the one turn over every page it writes, each by its laws and the laws over links on the
-        turn's tip; all of it lands or none, with one receipt in the world's chain (exported as .obend/forms/receipts.json).
+    obend judge FILE [--receipt FILE]
+        judge a proposal for one of this vault's forms: transported first when the laws over its
+        pages moved; a duplicate of an intent landed here is refused (and its receipt written
+        again); then its values, the membrane, the authority of a standing grant, its contract's
+        offer, the form's resources, then the one turn over every page it writes, each by its laws
+        and the laws over links on the turn's tip; all of it lands or none, with one receipt in the
+        world's chain (exported as .obend/forms/receipts.json), written to --receipt for the filler.
+
+Transport (`Obend.Vault.Transport`; the walkthrough is `lean/tests/vault/TRANSPORT.md`):
+
+    obend offer FORM HOLE LO..HI [--promise LO..HI]
+        FORM's continuity contract: the values of its one natural hole it offers (each judged now
+        by the laws as they stand) and those it promises whatever becomes of the laws.
+    obend grant ID --for WHO --grant PATTERN … [--held CAPS]
+    obend revoke ID
+    obend grants
+        the grants this vault issued to holders of its forms, standing until revoked; a capture's
+        own grant is issued under the form's name.
+    obend transport FORM
+        what FORM is now for a display and for an effect (what moved: values, support, laws,
+        authority), and, when the laws over its pages moved, FORM carried across the change by its
+        contract: continued, repaired (the offer narrowed), or refused.
+    obend obligations   (where forms were filled)
+        the proposals sent from here that no receipt has confirmed.
+    obend confirm FILE   (where forms were filled)
+        confirm a receipt written by `obend judge --receipt`: it must name a proposal sent from here.
 
 Every command but `member` opens the vault first (an edit on disk is the owner's write, judged by
 the page's laws), so no command overwrites a file the person changed. Every change of the world is a
@@ -730,18 +752,48 @@ def parseFill (f : Form) : List String → Except String Obend.Vault.Form.Assign
 def fillText (a : Obend.Vault.Form.Assignment) : String :=
   ", ".intercalate (a.nats.map (fun (h, n) => h ++ " = " ++ toString n) ++ a.pages.map fun (h, n) => h ++ " = " ++ n)
 
-/-- A received form: the form, its digest, the vault that issued it, the hops it was handed on by. -/
-def readReceived (file : String) : IO (Form × String × String × List Grant) := do
+/-- A received form: the form, its digest, the vault that issued it, the hops it was handed on by, and
+the continuity contract it was issued with, if any. -/
+def readReceived (file : String) : IO (Form × String × String × List Grant × Option Transport.Contract) := do
   let j ← readJson file
   let f ← ofExcept file (formOf (← ofExcept file (j.getObjVal? "form")))
   let d ← ofExcept file (j.getObjValAs? String "digest")
   let v ← ofExcept file (j.getObjValAs? String "vault")
   let hops ← ofExcept file ((← ofExcept file (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM grantOf)
-  return (f, d, v, hops)
+  let K ← match j.getObjVal? "contract" with
+    | .ok c => some <$> ofExcept file (Transport.contractOf c)
+    | .error _ => pure none
+  return (f, d, v, hops, K)
 
-def receivedJson (f : Form) (digest vault : String) (hops : List Grant) : Lean.Json :=
-  Lean.Json.mkObj [("form", formJson f), ("digest", digest), ("vault", vault),
-    ("hops", Lean.Json.arr (hops.map grantJson).toArray)]
+def receivedJson (f : Form) (digest vault : String) (hops : List Grant) (K : Option Transport.Contract := none) :
+    Lean.Json :=
+  Lean.Json.mkObj ([("form", formJson f), ("digest", digest), ("vault", vault),
+    ("hops", Lean.Json.arr (hops.map grantJson).toArray)] ++
+    (match K with | some K => [("contract", Transport.contractJson K)] | none => []))
+
+/-- A contract, said. -/
+def contractLine (K : Transport.Contract) : String :=
+  "  offer " ++ K.hole ++ ": " ++ Transport.runsText K.offer ++ " (promised " ++ Transport.runsText K.promise ++ ")"
+
+/-- `work: performed P, retained R of T`: of what a form carries (each move of its residual, each
+value its contract offers), how much the step judged anew, and how much is still good without being
+redone. -/
+def workLine (p r t : Nat) : String :=
+  "work: performed " ++ toString p ++ ", retained " ++ toString r ++ " of " ++ toString t
+
+def carried (f : Form) (K : Option Transport.Contract) : Nat :=
+  f.moves.length + ((K.map (·.offer.length)).getD 0)
+
+def verdictLine (name : String) (ls : List Transport.Moved) : Transport.Verdict → Option Transport.Contract → String
+  | .continues, none => name ++ ": transported over the laws of " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+      ": nothing was promised; it continues"
+  | .continues, some K => name ++ ": transported over the laws of " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+      ": they admit every value it offers (" ++ Transport.runsText K.offer ++ "); it continues"
+  | .repaired b a, some K => name ++ ": transported over the laws of " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+      ": they admit " ++ K.hole ++ " = " ++ Transport.runsText a ++ " of " ++ Transport.runsText b ++
+      "; the offer narrows to them, the residual kept"
+  | .repaired b a, none => name ++ ": transported: " ++ Transport.runsText b ++ " → " ++ Transport.runsText a
+  | .refused x, _ => name ++ ": refused at " ++ toString x
 
 def vaultName (dir : System.FilePath) : IO String := do
   return ((← IO.FS.realPath dir).fileName).getD "vault"
@@ -765,13 +817,18 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     return (if ls.any (·.endsWith ": no such page") then 2 else 0)
   | ["merge", other] => some do
     let (_, V) ← openDir dir false
-    let (o, _) ← openDir other false
+    let (ow, _) ← openWorld other false
     let label := (System.FilePath.mk other).fileName.getD other
-    match ← finishTurn dir (.merged label o false) V with
+    let w0 ← readWorld dir
+    let (admitted, refused, dups) := sortLandings w0 (w0.grants.merge ow.grants) ow.landed
+    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed) V with
     | .ok (_, .merged s' notes, rendered) =>
       for n in notes do IO.println n
       for l in rendered do IO.println l
       for l in problems s' do IO.println l
+      -- of the other replica's landings, how many stand here (none is judged again)
+      let n := admitted.length + refused.length + dups.length
+      if n > 0 then IO.println (workLine 0 admitted.length n)
       return 0
     | .ok _ => fail "the merge said what a merge does not"
     | .error e => fail e
@@ -888,12 +945,112 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
             (fun _ o => pure o) with
         | .error e => fail e
         | .ok (.form f culled) =>
+          if let .error e ← commitWith dir (.issued name) (fun _ _ => pure ()) then return ← fail e
           IO.println ("captured " ++ name ++ " from " ++ situation ++ " for " ++ who ++ ": " ++
             toString f.cells.length ++ " page(s) shown, " ++ toString culled ++ " not shown to " ++ who)
           for l in f.describe do IO.println l
           return 0
         | .ok _ => fail "the capture said what a capture does not"
     | _, _, _, _ => fail "capture SITUATION FORM --for WHO --grant PATTERN … [--held CAPS] --move FROM TO AMOUNT [--field FIELD] [--ref PAGE …]"
+  | "offer" :: name :: hole :: range :: rest => some do
+    let (promise, rest) := flag "--promise" rest
+    unless rest.isEmpty do return ← fail "offer FORM HOLE LO..HI [--promise LO..HI]"
+    let some offer := Transport.parseRange range | fail ("offer: " ++ range ++ " is not LO..HI")
+    let some prom := (promise.map Transport.parseRange).getD (some []) | fail "offer: --promise LO..HI"
+    let _ ← openDir dir false
+    let K : Transport.Contract := ⟨hole, offer, prom⟩
+    match ← commitWith dir (.offered name K) (fun _ o => pure o) with
+    | .error e => fail (name ++ ": " ++ e)
+    | .ok (.offered n) =>
+      IO.println (name ++ ": offers " ++ hole ++ " = " ++ Transport.runsText offer ++ ", promises " ++
+        Transport.runsText prom ++ " (each value judged by the laws as they stand: " ++ toString n ++ " admitted)")
+      return 0
+    | .ok _ => fail "the offer said what an offer does not"
+  | "grant" :: id :: rest => some do
+    let (who, rest) := flag "--for" rest
+    let (held, rest) := flag "--held" rest
+    let (pats, rest) := allFlags "--grant" rest
+    match who, rest, parseCaps (held.getD "read,write") with
+    | some who, [], some caps =>
+      match ← commitWith dir (.granted id ⟨who, caps, pats⟩) (fun _ _ => pure ()) with
+      | .error e => fail e
+      | .ok () =>
+        IO.println ("granted " ++ id ++ " to " ++ who ++ " (" ++ Obend.Vault.Form.showAuths caps ++ " on " ++
+          ", ".intercalate pats ++ ")")
+        return 0
+    | _, _, _ => fail "grant ID --for WHO --grant PATTERN … [--held CAPS]"
+  | ["revoke", id] => some do
+    match ← commitWith dir (.revoked id) (fun _ _ => pure ()) with
+    | .error e => fail e
+    | .ok () => IO.println ("revoked " ++ id); return 0
+  | ["grants"] => some do
+    let w ← readWorld dir
+    for g in w.grants.standing do
+      IO.println (g.id ++ ": " ++ g.grant.holder ++ " (" ++ Obend.Vault.Form.showAuths g.grant.held ++ " on " ++
+        ", ".intercalate g.grant.patterns ++ ")" ++ (if w.grants.revoked.contains g.id then ", revoked" else ""))
+    return 0
+  | ["obligations"] => some do
+    let w ← readWorld dir
+    if w.outstanding.isEmpty then IO.println "nothing outstanding"
+    for o in w.outstanding do
+      IO.println (o.form ++ ": intent " ++ o.intent ++ " (" ++ fillText o.fill ++ ") sent to " ++ o.vault ++
+        ", awaiting its receipt")
+    return 0
+  | ["confirm", file] => some do
+    let j ← readJson file
+    let i ← ofExcept file (j.getObjValAs? String "intent")
+    let r ← ofExcept file (Obend.Vault.Form.receiptOf (← ofExcept file (j.getObjVal? "receipt")))
+    match ← commitWith dir (.confirmed i r.effectsHash) (fun h _ => pure h.world) with
+    | .error e => fail e
+    | .ok w =>
+      IO.println ("confirmed intent " ++ i ++ ": its receipt names the proposal sent from here; " ++
+        (if w.outstanding.isEmpty then "nothing outstanding" else toString w.outstanding.length ++ " outstanding"))
+      return 0
+  | ["transport", name] => some do
+    let _ ← openDir dir false
+    let w ← readWorld dir
+    let some f := w.forms.find? (·.name == name) | fail ("refused: no form named " ++ name)
+    let ms := Transport.cellMoves w.store f
+    let iss := issueOf w f
+    let ls := Transport.lawMoves w.store f iss.basis
+    let am := Transport.authorityMoves w.grants f (Transport.formPages f)
+    let vs := valueMoves ms
+    let ws := waiting ms
+    let T := carried f iss.contract
+    IO.println (name ++ ": display: " ++
+      (if !vs.isEmpty then "stale (value: " ++ ", ".intercalate (vs.map Transport.Moved.text) ++ ")"
+       else if !ws.isEmpty then "waits (" ++ ", ".intercalate (ws.map Transport.Moved.text) ++ ")"
+       else "as it was"))
+    for m in ms do
+      if let .support p d := m then
+        IO.println (name ++ ": support moved under " ++ p ++ " (" ++ d ++ "); the values it read are as captured")
+    IO.println (name ++ ": authority: " ++ supportsText w f)
+    if !vs.isEmpty then
+      IO.println (name ++ ": effect: stale (value)"); IO.println (workLine 0 0 T); return 0
+    if !ws.isEmpty then
+      IO.println (name ++ ": effect: waits"); IO.println (workLine 0 T T); return 0
+    let mut performed := 0
+    let mut K := iss.contract
+    if !ls.isEmpty then
+      match ← commitWith dir (.transported name) (fun _ o => pure o) with
+      | .error e =>
+        IO.println (name ++ ": effect: stale (the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+          " moved); " ++ e)
+        IO.println (workLine (((iss.contract.map (·.offer.length)).getD 0)) 0 T)
+        return 1
+      | .ok (.transported v p _) =>
+        performed := p
+        K := match v, iss.contract with
+          | .repaired _ a, some K0 => some { K0 with offer := a }
+          | _, k => k
+        IO.println (verdictLine name ls v iss.contract)
+      | .ok _ => return ← fail "the transport said what a transport does not"
+    IO.println (name ++ ": effect: " ++
+      (if !am.isEmpty then "stale (authority: no grant that stands lets " ++ Transport.holderOf f ++ " write " ++
+          ", ".intercalate (am.map Transport.Moved.text) ++ ")"
+       else if ls.isEmpty then "as it was" else "as transported"))
+    IO.println (workLine performed (carried f K) T)
+    return 0
   | ["abstract", name, value, hole] => some do
     match ← commitWith dir (.abstracted name value hole) (fun _ o => pure o) with
     | .error e => fail e
@@ -905,31 +1062,40 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   | "form" :: name :: rest => some do
     let (out, rest) := flag "--out" rest
     unless rest.isEmpty do return ← fail "form FORM [--out FILE]"
-    let some f ← loadForm? dir name | fail ("refused: no form named " ++ name)
+    let w ← readWorld dir
+    let some f := w.forms.find? (·.name == name) | fail ("refused: no form named " ++ name)
+    let K := (issueOf w f).contract
     for l in f.describe do IO.println l
+    if let some K := K then IO.println (contractLine K)
     if let some o := out then
-      writeJson o (receivedJson f (Obend.Vault.Form.formDigest H f) (← vaultName dir) [])
+      writeJson o (receivedJson f (Obend.Vault.Form.formDigest H f) (← vaultName dir) [] K)
       IO.println ("wrote " ++ o)
     return 0
   | "fill" :: file :: rest => some do
     let (out, rest) := flag "--out" rest
     let some o := out | fail "fill FILE HOLE=VALUE … --out FILE"
-    let (f, digest, vault, hops) ← readReceived file
+    let (f, digest, vault, hops, K) ← readReceived file
     match parseFill f rest with
     | .error e => fail ("refused: " ++ e)
     | .ok a =>
+      if let some K := K then
+        if let some x := a.nats.lookup K.hole then
+          unless K.offer.contains x do
+            return ← fail (f.name ++ ": refused: " ++ K.hole ++ " = " ++ toString x ++ " is outside its offer (" ++
+              Transport.runsText K.offer ++ ")")
       let holder := (((f.grants ++ hops).getLast?).map (·.holder)).getD "owner"
-      let prop := Lean.Json.mkObj [("proposal", f.name), ("digest", digest), ("vault", vault),
-        ("hops", Lean.Json.arr (hops.map Obend.Vault.Form.grantJson).toArray),
-        ("fill", Obend.Vault.Form.assignmentJson a), ("by", holder)]
-      -- the form as received and the proposal as sent are a turn of this directory's log
-      if let .error e ← commitWith dir (.filled f.name ((receivedJson f digest vault hops).pretty ++ "\n")
-          (prop.pretty ++ "\n")) (fun _ _ => pure ()) then return ← fail e
-      writeJson o prop
-      IO.println (f.name ++ ": filled by " ++ holder ++ ": " ++ fillText a)
-      for l in f.preview a do IO.println ("  " ++ l)
-      IO.println ("wrote " ++ o)
-      return 0
+      -- the form as received and the proposal as sent, with the identity of its intent, are a turn of
+      -- this directory's log; the proposal is outstanding until a receipt for it is confirmed
+      match ← commitWith dir (.proposed f.name ((receivedJson f digest vault hops K).pretty ++ "\n") digest vault hops a
+          holder) (fun _ o => pure o) with
+      | .error e => fail e
+      | .ok (.proposed i text) =>
+        IO.FS.writeFile o text
+        IO.println (f.name ++ ": filled by " ++ holder ++ ": " ++ fillText a)
+        for l in f.preview a do IO.println ("  " ++ l)
+        IO.println ("wrote " ++ o ++ " (intent " ++ i ++ ")")
+        return 0
+      | .ok _ => fail "the fill said what a fill does not"
   | "reshare" :: file :: rest => some do
     let (who, rest) := flag "--for" rest
     let (held, rest) := flag "--held" rest
@@ -937,27 +1103,65 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let (pats, rest) := allFlags "--grant" rest
     match who, out, rest, parseCaps (held.getD "read,write") with
     | some who, some o, [], some caps =>
-      let (f, digest, vault, hops) ← readReceived file
+      let (f, digest, vault, hops, K) ← readReceived file
       let cur := ((f.grants ++ hops).getLast?).getD Obend.Vault.Form.ownerGrant
       let g : Obend.Vault.Form.Grant := ⟨who, caps, pats⟩
       match Obend.Vault.Rehydration.Membrane.reshare (cur.viewer f.scope) (g.viewer f.scope) with
       | none => fail (f.name ++ ": " ++ Obend.Vault.Form.refusalText f (.amplifies cur.holder who cur.held caps))
       | some _ =>
-        writeJson o (receivedJson f digest vault (hops ++ [g]))
+        writeJson o (receivedJson f digest vault (hops ++ [g]) K)
         IO.println (f.name ++ ": reshared by " ++ cur.holder ++ " to " ++ who ++ " (" ++
           Obend.Vault.Form.showAuths caps ++ " on " ++ ", ".intercalate pats ++ ")")
         IO.println ("wrote " ++ o)
         return 0
     | _, _, _, _ => fail "reshare FILE --for WHO --grant PATTERN … [--held CAPS] --out FILE"
-  | ["judge", file] => some do
+  | "judge" :: file :: rest => some do
+    let (receiptOut, rest) := flag "--receipt" rest
+    unless rest.isEmpty do return ← fail "judge FILE [--receipt FILE]"
     let (_, V) ← openDir dir false
     let j ← readJson file
     let name ← ofExcept file (j.getObjValAs? String "proposal")
     let digest ← ofExcept file (j.getObjValAs? String "digest")
     let hops ← ofExcept file ((← ofExcept file (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM Obend.Vault.Form.grantOf)
     let a ← ofExcept file (Obend.Vault.Form.assignmentOf (← ofExcept file (j.getObjVal? "fill")))
-    match ← finishTurn dir (.judged name digest hops a) V with
-    | .error e => fail e
+    let intent := (j.getObjValAs? String "intent").toOption
+    let w0 ← readWorld dir
+    let writeReceipt (w : Replay.World) (l : Transport.Landing) : IO Unit := do
+      if let some ro := receiptOut then
+        if let some r := w.receipts[l.receipt - 1]? then
+          writeJson ro (Lean.Json.mkObj [("proposal", name), ("intent", l.intent), ("digest", digest),
+            ("fill", Obend.Vault.Form.assignmentJson a), ("by", l.holder),
+            ("receipt", Obend.Vault.Form.receiptJson r), ("chain", Lean.toJson l.receipt)])
+          IO.println ("wrote " ++ ro)
+    -- a proposal whose intent landed here: refused, and its receipt written again
+    if let some i := intent then
+      if let some l := Transport.duplicateOf w0.landed i then
+        IO.println (dupText w0 name l)
+        writeReceipt w0 l
+        if let some f := w0.forms.find? (·.name == name) then
+          IO.println (workLine 0 (carried f (issueOf w0 f).contract) (carried f (issueOf w0 f).contract))
+        return 1
+    -- the laws over its pages moved since it was issued: transport it first
+    let mut performed := 0
+    if intent.isSome then
+      if let some f := w0.forms.find? (·.name == name) then
+        let ms := Transport.cellMoves w0.store f
+        let ls := Transport.lawMoves w0.store f (issueOf w0 f).basis
+        if (valueMoves ms).isEmpty && (waiting ms).isEmpty && !ls.isEmpty then
+          match ← commitWith dir (.transported name) (fun _ o => pure o) with
+          | .error e => IO.println (name ++ ": " ++ e); return 1
+          | .ok (.transported v p _) =>
+            performed := p
+            IO.println (verdictLine name ls v (issueOf w0 f).contract)
+          | .ok _ => return ← fail "the transport said what a transport does not"
+    match ← finishTurn dir (.judged name digest hops a intent) V with
+    | .error e =>
+      IO.println e
+      let w ← readWorld dir
+      if let some f := w.forms.find? (·.name == name) then
+        let T := carried f (issueOf w f).contract
+        IO.println (workLine performed (if (e.splitOn "stale (value)").length > 1 then 0 else T) T)
+      return 2
     | .ok (w', .judged s' ad t r count, rendered) =>
       let some f := w'.forms.find? (·.name == name) | fail ("refused: no form named " ++ name ++ " here")
       IO.println (name ++ ": landed as one turn over " ++ toString t.writeCells.length ++ " pages by " ++ ad.holder ++
@@ -969,6 +1173,11 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
             toString (natAt d.postState A))
       for l in rendered do IO.println l
       for l in problems s' do IO.println l
+      if let some l := w'.landed.getLast? then
+        if intent == some l.intent then writeReceipt w' l
+      if intent.isSome then
+        let T := carried f (issueOf w' f).contract
+        IO.println (workLine (performed + 1) T T)
       return 0
     | .ok _ => fail "the judgment said what a judgment does not"
   | _ => none

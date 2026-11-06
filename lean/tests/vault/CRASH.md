@@ -416,12 +416,12 @@ echo "the torn turn: $(tail -c 64 .obend/log | head -c 16)…"; head -2 ledger/a
 the torn turn: {"digest":"3036c…
 balance: 100
 pay.json
-last record: 5 (open), bytes 1273 to 1545
-torn tail: 200 bytes after record 5, dropped (torn: the bytes end inside a record)
-checkpoint: the world after record 5
-world bbf5e530ce67779e: replayed from genesis
-world bbf5e530ce67779e: the checkpoint and the records after it
-world bbf5e530ce67779e: as record 5 commits to it
+last record: 6 (open), bytes 1470 to 1742
+torn tail: 200 bytes after record 6, dropped (torn: the bytes end inside a record)
+checkpoint: the world after record 6
+world 548a2745384f373f: replayed from genesis
+world 548a2745384f373f: the checkpoint and the records after it
+world 548a2745384f373f: as record 6 commits to it
 one world
 ```
 
@@ -434,15 +434,16 @@ obend log | tail -4
 ```
 
 ```text
-recovered: dropped a tail of 200 bytes after record 5 (torn: the bytes end inside a record)
+recovered: dropped a tail of 200 bytes after record 6 (torn: the bytes end inside a record)
 pay: landed as one turn over 2 pages by bob, receipt 298a0d1210aeee80 (1 in the chain)
   ledger/alice: balance 100 → 60
   ledger/carol: balance 5 → 45
 rendered ledger/alice.md
 rendered ledger/carol.md
+work: performed 1, retained 1 of 1
 balance: 60
-world 23c92782dd070951: replayed from genesis
-world 23c92782dd070951: the checkpoint and the records after it
-world 23c92782dd070951: as record 8 commits to it
+world 3ab9ebdee27d1080: replayed from genesis
+world 3ab9ebdee27d1080: the checkpoint and the records after it
+world 3ab9ebdee27d1080: as record 9 commits to it
 one world
 ```

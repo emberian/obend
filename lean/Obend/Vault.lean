@@ -25,8 +25,14 @@ its frontmatter lines), the members and their grants.
 * `Obend.Vault.Form` — a captured membrane as a form: holes for data, a residual, a fill as a
   proposal the kernel judges through `commit` (`admit_no_amplification`, `eval_fill_eq_subst_residual`,
   `admit_conserves_total`).
-* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, `log`, and
-  the forms' `capture`, `abstract`, `form`, `fill`, `reshare`, `judge`.
+* `Obend.Vault.Transport` — a form out in the world, carried across changes of its context:
+  consumer-relative equality (value, support, authority; `effect_fresh_display_fresh`), the fresh
+  capture and what it admits (`admitsAt_recapture`, `judge_recapture_iff`), a continuity contract and
+  `transport_sound`, standing grants with revocation winning the merge (`merge_revocation_wins`,
+  `handoff_no_absence`), and the identity of a proposal's intent.
+* `Obend.Vault.Cli` — `obend open`, `status`, `merge`, `member`, `post`, `select`, `recite`, `log`,
+  the forms' `capture`, `abstract`, `form`, `fill`, `reshare`, `judge`, and their transport's `offer`,
+  `grant`, `revoke`, `grants`, `transport`, `obligations`, `confirm`.
 * `Obend.Vault.Branch` — offline branches with a base, merged at the tip: the pushout of the two
   sides' disjoint writes (`merge_is_pushout`), clashes kept as conflict states, consent from every
   page in a write's cone (`landed_consents`), authority read where every revocation is visible
@@ -39,7 +45,8 @@ its frontmatter lines), the members and their grants.
 The acceptance test is `lean/tests/vault/WALKTHROUGH.md`, executed by `lean/tests/vault/walkthrough.py`;
 the forms' is `lean/tests/vault/FORMS.md`, executed by the same with `--doc`, and planted by
 `lean/tests/vault/forms_planted.py`; `lean/tests/vault/CRASH.md` (`crash.py`) stops `obend` in the
-middle of a write and opens the vault again.
+middle of a write and opens the vault again; `lean/tests/vault/TRANSPORT.md` carries a form across
+seven perturbations of its context.
 -/
 public import Obend.Vault.Page
 public import Obend.Vault.Law
@@ -47,6 +54,7 @@ public import Obend.Vault.Store
 public import Obend.Vault.Json
 public import Obend.Vault.Log
 public import Obend.Vault.Replay
+public import Obend.Vault.Transport
 public import Obend.Vault.Hyperedge
 public import Obend.Vault.Escrow
 public import Obend.Vault.Affordance

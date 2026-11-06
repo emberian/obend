@@ -18,6 +18,17 @@ replay of the log step the same bytes the same way. The turns:
 * `captured`, `abstracted`, `judged`, `filled`: the forms (`Obend.Vault.Form`). The forms a vault
   issued, the receipt chain of the proposals it judged, and the forms it received and the proposals it
   sent are fields of the world; `.obend/forms/*.json` are exports of them, written after the turn;
+* `issued`, `offered`, `granted`, `revoked`, `transported`, `proposed`, `confirmed`: the transport of
+  forms (`Obend.Vault.Transport`): the basis a form is issued under and its continuity contract, the
+  vault's standing grants, a form carried across a change of its laws, a fill sent with the identity
+  of its intent (an outstanding obligation of the store that sent it), and a receipt for it confirmed.
+  A `judged` turn with an intent is judged by the effect consumer (`judgeEffect`: values, laws,
+  membrane, authority, contract, then the store's judge of the fresh capture) and refused as a
+  duplicate when its intent has landed (`judge_refuses_duplicate`, `judge_by_identity`); a `merged`
+  turn carrying the other replica's grants and landings joins the grants (revocation wins) and lands
+  none of its landings whose grants were revoked here or whose intent landed here. Obligations and
+  landings are world state: every turn but `confirmed` keeps the first (`outstanding_kept`), every
+  turn keeps the second (`landed_kept`), and a crash keeps both (`obligations_survive_crash`);
 * `rows`: rows committed to the register, all or none (`Obend.Ledger.Cli.commitRows`): the journal is
   part of the world, and the log is its only record (it was `.obend/ledger.json`);
 * `base`: a world from before the log (`.obend/world.json` and `.obend/ledger.json` of a vault opened by
@@ -34,6 +45,7 @@ public import Obend.Vault.Log
 public import Obend.Vault.Json
 public import Obend.Ledger.Commit
 public import Obend.Vault.Form
+public import Obend.Vault.Transport
 public import Obend.Vault.Merge
 public import Obend.Digest.Cshake256
 @[expose] public section
@@ -65,6 +77,7 @@ deriving instance DecidableEq for Obend.Vault.Form.Form
 
 open Obend.Vault.Form (Form Grant Assignment Admitted)
 open Obend.Vault.Rehydration (WitnessReceipt)
+open Obend.Vault.Transport (Issue Grants Standing Landing Obligation Contract)
 
 /-- The world beside a vault: the store of its pages and members (with the merges' open conflicts),
 the register's journal, the forms it issued, the receipt chain of the proposals it judged, and the
@@ -76,6 +89,16 @@ structure World where
   receipts : List WitnessReceipt := []
   received : List (String × String) := []
   sent : List (String × String) := []
+  /-- what the vault keeps of each form it issued: its contract and its basis (`Obend.Vault.Transport`) -/
+  issues : List Issue := []
+  /-- the grants it issued and revoked -/
+  grants : Grants := {}
+  /-- the proposals it landed, by the identity of their intent -/
+  landed : List Landing := []
+  /-- the proposals it sent and has no receipt for -/
+  outstanding : List Obligation := []
+  /-- how many proposals it has sent -/
+  minted : Nat := 0
 deriving DecidableEq
 
 /-- One turn of the deployed entry. -/
@@ -87,14 +110,22 @@ inductive Turn
   | posted (who page text : String)
   | selected (who : Option String) (page : String) (k i : Nat)
   | recited (who : Option String) (page : String)
-  | merged (label : String) (other : Store) (skipLedger : Bool)
+  | merged (label : String) (other : Store) (skipLedger : Bool) (otherGrants : Option Grants := none)
+      (otherLanded : List Landing := [])
   | resolved (k : Nat) (right : Bool)
   | rows (rs : List Row)
   | captured (situation name : String) (g : Grant) (src dst : String) (amount : Nat) (field : String)
       (refs : List String)
   | abstracted (name value hole : String)
-  | judged (name digest : String) (hops : List Grant) (a : Assignment)
+  | judged (name digest : String) (hops : List Grant) (a : Assignment) (intent : Option String := none)
   | filled (name received sent : String)
+  | issued (name : String)
+  | offered (name : String) (K : Contract)
+  | granted (id : String) (g : Grant)
+  | revoked (id : String)
+  | transported (name : String)
+  | proposed (name received digest vault : String) (hops : List Grant) (a : Assignment) (holder : String)
+  | confirmed (intent : String) (effects : Nat)
 
 /-- What a turn says beside the world it leaves (a command's store before `settle`, where it reports
 on it, as it always did). -/
@@ -109,6 +140,9 @@ inductive Outcome
   | rows (files : List RowFiles)
   | form (f : Form) (culled : Nat)
   | judged (unsettled : Store) (ad : Admitted) (t : VaultTurn) (r : WitnessReceipt) (count : Nat)
+  | offered (performed : Nat)
+  | transported (v : Transport.Verdict) (performed : Nat) (moved : List Transport.Moved)
+  | proposed (intent text : String)
 
 /-- The text the world last saw of a page's file. -/
 def seenOf (s : Store) (n : String) : Option String := (s.page? n).bind (·.seen)
@@ -144,6 +178,115 @@ theorem envOf_read (s : Store) (env : Environment) :
   by_cases h : env = s.environment
   · simp [h]
   · simp [h]
+
+/-- The issue a vault keeps of a form; a form issued before issues were kept is read as issued under
+the laws as they stand. -/
+def issueOf (w : World) (f : Form) : Issue :=
+  (w.issues.find? (·.form == f.name)).getD { form := f.name, basis := Transport.basisOf w.store f }
+
+def setIssue (w : World) (i : Issue) : World :=
+  { w with issues := (w.issues.filter (·.form != i.form)) ++ [i] }
+
+/-- A duplicate, said: the intent and where it landed. -/
+def dupText (w : World) (name : String) (l : Landing) : String :=
+  name ++ ": refused: a duplicate: intent " ++ l.intent ++ " has landed " ++
+    (match w.receipts[l.receipt - 1]? with
+      | some r => if l.receipt == 0 then "on another replica" else
+          "here as receipt " ++ Form.hex16 (Form.receiptDigest H r) ++ " (" ++ toString l.receipt ++ " in the chain)"
+      | none => "on another replica") ++ "; it is not landed again"
+
+/-- The grants that stand behind a form, said. -/
+def supportsText (w : World) (f : Form) : String :=
+  let sups := Transport.supportsFor w.grants f
+  let gone := w.grants.revoked.filter fun r => w.grants.standing.any fun s => s.id == r && s.grant.holder == Transport.holderOf f
+  (if sups.isEmpty then "no grant stands for " ++ Transport.holderOf f
+   else ", ".intercalate (sups.map fun s => s.id ++ " (" ++ Form.showAuths s.grant.held ++ " on " ++
+     ", ".intercalate s.grant.patterns ++ ")") ++ " " ++ (if sups.length == 1 then "stands" else "stand")) ++
+  (if gone.isEmpty then "" else "; " ++ ", ".intercalate gone ++ " revoked")
+
+/-- The value moves among what moved: a field the form reads, or a page gone for good. -/
+def valueMoves (ms : List Transport.Moved) : List Transport.Moved :=
+  ms.filter fun | .value .. | .gone _ false => true | _ => false
+
+/-- A captured page gone with its history kept: it may come back. -/
+def waiting (ms : List Transport.Moved) : List Transport.Moved :=
+  ms.filter fun | .gone _ true => true | _ => false
+
+/-- **The effect consumer's judgment of a proposal**: the form's values (a value that moved makes it
+stale; a captured page gone with its history kept makes it wait), the laws it was issued or
+transported under, the membrane's gate, the pages the fill writes (one gone with its history kept
+waits), the authority of
+a grant that stands behind it, its contract's offer, then the store's judge of the fresh capture
+(`Obend.Vault.Transport.judge_recapture_iff`: the form's own admission at the vault's context). It
+does not read the proposal's intent: the intent decides only whether the proposal is a duplicate. -/
+def judgeEffect (w : World) (f : Form) (hops : List Grant) (a : Assignment) :
+    Except String (Store × Admitted × VaultTurn × List String) := do
+  let ms := Transport.cellMoves w.store f
+  if let m :: _ := waiting ms then
+    throw ("waits: " ++ m.text ++ "; nothing landed, and the proposal may be judged again when it returns")
+  let vs := valueMoves ms
+  unless vs.isEmpty do
+    throw ("refused: stale (value): the form read " ++ ", ".intercalate (vs.map Transport.Moved.text) ++ "; capture it again")
+  let iss := issueOf w f
+  let ls := Transport.lawMoves w.store f iss.basis
+  unless ls.isEmpty do
+    throw ("refused: the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+      " moved since it was issued; transport it first")
+  -- the membrane first, as the store's judge has it (`judgeProposal_gate_first`)
+  if let .error r := Form.gate (Form.ownerViewer f) f hops (f.fill a) then throw (Form.refusalText f r)
+  let pages := Transport.fillPages f a
+  let live := stateStore w.store.entries
+  for p in pages do
+    if (live p).isNone && w.store.tombs.any (·.name == p) then
+      throw ("waits: " ++ p ++ " is not here now: its file is gone, its history kept; nothing landed, and " ++
+        "the proposal may be judged again when it returns")
+  let am := Transport.authorityMoves w.grants f pages
+  unless am.isEmpty do
+    throw ("refused: stale (authority): no grant that stands lets " ++ Transport.holderOf f ++ " write " ++
+      ", ".intercalate (am.map Transport.Moved.text) ++ " (" ++ supportsText w f ++ ")")
+  if let some K := iss.contract then
+    if let some x := a.nats.lookup K.hole then
+      unless K.offer.contains x do
+        throw ("refused: " ++ K.hole ++ " = " ++ toString x ++ " is outside its offer (" ++
+          Transport.runsText K.offer ++ ")")
+  match Form.judgeProposal H w.store (Transport.recapture live f) hops a with
+  | .error e => throw e
+  | .ok (s, ad, t) => return (s, ad, t, (Transport.supportsFor w.grants f).map (·.id))
+
+/-- The proposal a fill sends, with the identity of its intent. -/
+def proposalJson (name digest vault : String) (hops : List Grant) (a : Assignment) (holder intent : String) : Json :=
+  Json.mkObj [("proposal", Json.str name), ("digest", Json.str digest), ("vault", Json.str vault),
+    ("hops", Json.arr (hops.map Form.grantJson).toArray), ("fill", Form.assignmentJson a), ("by", Json.str holder),
+    ("intent", Json.str intent)]
+
+/-- **A proposal judged, its intent aside**: the form it names, as issued, then `judgeEffect`; the world
+with the proposal landed and its receipt on the chain, and its landing (the intent left blank). -/
+def judgeNew (w : World) (name digest : String) (hops : List Grant) (a : Assignment) :
+    Except String (World × Outcome × Landing) :=
+  match w.forms.find? (·.name == name) with
+  | none => .error ("refused: no form named " ++ name ++ " here")
+  | some f =>
+    if digest != Form.formDigest H f then
+      .error (name ++ ": refused: the form has changed since this proposal's copy was sent; send the form again")
+    else
+      match judgeEffect w f hops a with
+      | .error e => .error (name ++ ": " ++ e)
+      | .ok (s, ad, t, sups) =>
+        let r := Form.receiptFor H w.receipts.getLast? f a ad t
+        .ok ({ w with store := settle H s, receipts := w.receipts ++ [r] }, .judged s ad t r (w.receipts.length + 1),
+          ⟨"", name, ad.holder, Transport.fillPages f a, sups, w.receipts.length + 1⟩)
+
+/-- What a merge does with the other replica's landings (those this replica does not hold already):
+each whose intent landed here is a duplicate; each none of whose grants stands after the merge (revocation wins,
+`Obend.Vault.Transport.merge_revocation_wins`) is refused; the rest are admitted. -/
+def sortLandings (w : World) (G : Grants) (theirs0 : List Landing) : List Landing × List Landing × List Landing :=
+  -- a landing both replicas hold (from before they parted, or merged since) is no act of the other's
+  let theirs := theirs0.filter fun l => !w.landed.contains l
+  let fresh := theirs.filter fun l => (Transport.duplicateOf w.landed l.intent).isNone
+  let dups := theirs.filter fun l => (Transport.duplicateOf w.landed l.intent).isSome
+  let refused := fresh.filter fun l => !(l.supports.any fun id => G.live.any (·.id == id))
+  let admitted := fresh.filter fun l => l.supports.any fun id => G.live.any (·.id == id)
+  (admitted, refused, dups)
 
 /-- **The step of a turn**: the store function its command calls, or a refusal (a refused turn is
 never logged). -/
@@ -181,10 +324,23 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     match w.store.actor who >>= fun a => reciteIn H w.store a page with
     | .ok (s, n) => .ok ({ w with store := settle H s }, .recited s n)
     | .error e => .error e
-  | .merged label other skipLedger =>
+  | .merged label other skipLedger none _ =>
     let (s, notes) := Merge.mergeVault w.store other label
       (skip := if skipLedger then Obend.Ledger.Cli.ledgerOwned else fun _ => false)
     .ok ({ w with store := settle H s }, .merged s notes)
+  | .merged label other skipLedger (some og) theirs =>
+    let G := w.grants.merge og
+    let (admitted, refused, dups) := sortLandings w G theirs
+    let held := (refused ++ dups).flatMap (·.pages)
+    let (s, notes) := Merge.mergeVault w.store other label
+      (skip := fun n => (skipLedger && Obend.Ledger.Cli.ledgerOwned n) || held.contains n)
+    let said := refused.map (fun l => ", ".intercalate l.pages ++ ": not merged from " ++ label ++ ": the landing of " ++
+        l.form ++ " (intent " ++ l.intent ++ ", by " ++ l.holder ++ ") rested on " ++ ", ".intercalate l.supports ++
+        ", revoked here") ++
+      dups.map (fun l => ", ".intercalate l.pages ++ ": not merged from " ++ label ++ ": the landing of " ++ l.form ++
+        " (intent " ++ l.intent ++ ") is the one landed here; not landed twice")
+    .ok ({ w with store := settle H s, grants := G,
+                  landed := w.landed ++ admitted.map fun l => { l with receipt := 0 } }, .merged s (said ++ notes))
   | .resolved k right =>
     match Merge.resolveIn w.store k (if right then .right else .left) with
     | .ok (s, receipt) => .ok ({ w with store := settle H s }, .resolved s receipt)
@@ -201,7 +357,14 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
       match f.abstract value hole with
       | .ok g => .ok ({ w with forms := w.forms.map fun x => if x.name == name then g else x }, .form g 0)
       | .error e => .error ("refused: " ++ e)
-  | .judged name digest hops a =>
+  | .judged name digest hops a (some i) =>
+    match Transport.duplicateOf w.landed i with
+    | some l => .error (dupText w name l)
+    | none =>
+      match judgeNew w name digest hops a with
+      | .error e => .error e
+      | .ok (w', o, l) => .ok ({ w' with landed := w.landed ++ [{ l with intent := i }] }, o)
+  | .judged name digest hops a none =>
     match w.forms.find? (·.name == name) with
     | none => .error ("refused: no form named " ++ name ++ " here")
     | some f =>
@@ -217,6 +380,80 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
   | .filled name received sent =>
     .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
                   sent := (w.sent.filter (·.1 != name)) ++ [(name, sent)] }, .quiet)
+  | .issued name =>
+    match w.forms.find? (·.name == name) with
+    | none => .error ("refused: no form named " ++ name)
+    | some f =>
+      if w.issues.any (·.form == name) then .error ("refused: " ++ name ++ " was issued already") else
+      let G := match f.grants.head? with
+        | some g => if w.grants.standing.any (·.id == name) then w.grants else w.grants.issue ⟨name, g⟩
+        | none => w.grants
+      .ok ({ setIssue w { form := name, basis := Transport.basisOf w.store f } with grants := G }, .quiet)
+  | .offered name K =>
+    match w.forms.find? (·.name == name) with
+    | none => .error ("refused: no form named " ++ name)
+    | some f =>
+      if f.holes != [(K.hole, .nat)] then
+        .error ("refused: a contract is declared on a form whose one hole is a natural; " ++ name ++ " has " ++
+          toString f.holes.length ++ " hole(s)")
+      else if K.offer.isEmpty then .error "refused: the offer is empty"
+      else if !(K.promise.all K.offer.contains) then .error "refused: it promises what it does not offer"
+      else if !Transport.valuesHoldB (stateStore w.store.entries) f then
+        .error ("refused: stale (value): " ++ ", ".intercalate ((valueMoves (Transport.cellMoves w.store f)).map Transport.Moved.text) ++
+          "; capture it again")
+      else
+        let Γ := Transport.kernelCtx H w.store f
+        match K.offer.find? (fun x => !Transport.admitsAt Γ f [] (K.fill x)) with
+        | some x => .error ("refused: the laws now refuse " ++ K.hole ++ " = " ++ toString x ++
+            "; a form offers what the vault admits")
+        | none =>
+          .ok (setIssue w { form := name, contract := some K, basis := Transport.basisOf w.store f },
+            .offered K.offer.length)
+  | .granted id g =>
+    if w.grants.standing.any (·.id == id) || w.grants.revoked.contains id then
+      .error ("refused: a grant named " ++ id ++ " was issued already")
+    else .ok ({ w with grants := w.grants.issue ⟨id, g⟩ }, .quiet)
+  | .revoked id =>
+    if !(w.grants.live.any (·.id == id)) then .error ("refused: no grant named " ++ id ++ " stands")
+    else .ok ({ w with grants := w.grants.revoke id }, .quiet)
+  | .transported name =>
+    match w.forms.find? (·.name == name) with
+    | none => .error ("refused: no form named " ++ name)
+    | some f =>
+      let ms := Transport.cellMoves w.store f
+      if let m :: _ := waiting ms then .error ("waits: " ++ m.text) else
+      let vs := valueMoves ms
+      if !vs.isEmpty then
+        .error ("refused: stale (value): the form read " ++ ", ".intercalate (vs.map Transport.Moved.text) ++ "; capture it again")
+      else
+        let iss := issueOf w f
+        let ls := Transport.lawMoves w.store f iss.basis
+        if ls.isEmpty then .error ("nothing to transport: the laws over its pages are those it was issued under")
+        else match iss.contract with
+          | none => .ok (setIssue w { iss with basis := Transport.basisOf w.store f }, .transported Transport.Verdict.continues 0 ls)
+          | some K =>
+            match Transport.transport (Transport.kernelCtx H w.store f) K f with
+            | (.refused x, _) =>
+              .error ("refused by its contract: the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+                " no longer admit " ++ K.hole ++ " = " ++ toString x ++ ", which it promised (" ++
+                Transport.runsText K.promise ++ ")")
+            | (v, K') =>
+              .ok (setIssue w { iss with contract := some K', basis := Transport.basisOf w.store f },
+                .transported v K.offer.length ls)
+  | .proposed name received digest vault hops a holder =>
+    let i := Transport.mintIntent H digest holder a w.minted
+    let text := (proposalJson name digest vault hops a holder i).pretty ++ "\n"
+    .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
+                  sent := (w.sent.filter (·.1 != name)) ++ [(name, text)],
+                  outstanding := w.outstanding ++ [⟨i, name, digest, vault, holder, a⟩],
+                  minted := w.minted + 1 }, .proposed i text)
+  | .confirmed i effects =>
+    match w.outstanding.find? (·.intent == i) with
+    | none => .error ("refused: no proposal sent from here awaits a receipt for intent " ++ i)
+    | some o =>
+      if effects != Transport.effectsOf H o then
+        .error ("refused: the receipt is not of the proposal " ++ i ++ " sent from here")
+      else .ok ({ w with outstanding := w.outstanding.filter (·.intent != i) }, .quiet)
   | .rows rs =>
     match registerLaws w.store with
     | .error e => .error e
@@ -275,7 +512,13 @@ def worldJson (w : World) : Json :=
   Json.mkObj [("store", fullStoreJson w.store), ("journal", journalJson w.journal),
     ("forms", Json.arr (w.forms.map Form.formJson).toArray),
     ("receipts", Json.arr (w.receipts.map Form.receiptJson).toArray),
-    ("received", pairsJson w.received), ("sent", pairsJson w.sent)]
+    ("received", pairsJson w.received), ("sent", pairsJson w.sent)] |>.mergeObj (Json.mkObj (
+    (if w.issues.isEmpty then [] else [("issues", Json.arr (w.issues.map Transport.issueJson).toArray)]) ++
+    (if w.grants == {} then [] else [("grants", Transport.grantsJson w.grants)]) ++
+    (if w.landed.isEmpty then [] else [("landed", Json.arr (w.landed.map Transport.landingJson).toArray)]) ++
+    (if w.outstanding.isEmpty then [] else
+      [("outstanding", Json.arr (w.outstanding.map Transport.obligationJson).toArray)]) ++
+    (if w.minted == 0 then [] else [("minted", toJson w.minted)])))
 
 def worldOf (j : Json) : Except String World := do
   let store ← fullStoreOf (← j.getObjVal? "store")
@@ -284,7 +527,16 @@ def worldOf (j : Json) : Except String World := do
   let receipts ← (← j.getObjValAs? (Array Json) "receipts").toList.mapM Form.receiptOf
   let received ← pairsOf (← j.getObjVal? "received")
   let sent ← pairsOf (← j.getObjVal? "sent")
-  return ⟨store, journal, forms, receipts, received, sent⟩
+  let opt {α : Type} (k : String) (d : α) (g : Json → Except String α) : Except String α :=
+    match j.getObjVal? k with
+    | .ok v => g v
+    | .error _ => pure d
+  let issues ← opt "issues" [] fun v => do (← v.getArr?).toList.mapM Transport.issueOf
+  let grants ← opt "grants" {} Transport.grantsOf
+  let landed ← opt "landed" [] fun v => do (← v.getArr?).toList.mapM Transport.landingOf
+  let outstanding ← opt "outstanding" [] fun v => do (← v.getArr?).toList.mapM Transport.obligationOf
+  let minted ← opt "minted" 0 fun v => v.getNat?
+  return ⟨store, journal, forms, receipts, received, sent, issues, grants, landed, outstanding, minted⟩
 
 def turnJson : Turn → Json
   | .base w => Json.mkObj [("turn", "base"), ("world", worldJson w)]
@@ -298,8 +550,12 @@ def turnJson : Turn → Json
   | .selected who page k i => Json.mkObj [("turn", "select"), ("as", optStrJson who), ("page", Json.str page),
       ("section", toJson k), ("candidate", toJson i)]
   | .recited who page => Json.mkObj [("turn", "recite"), ("as", optStrJson who), ("page", Json.str page)]
-  | .merged label other skip => Json.mkObj [("turn", "merge"), ("label", Json.str label), ("other", storeJson other),
-      ("skipLedger", toJson skip)]
+  | .merged label other skip og theirs => Json.mkObj ([("turn", Json.str "merge"), ("label", Json.str label),
+      ("other", storeJson other), ("skipLedger", toJson skip)] ++
+      (match og with
+        | some g => [("otherGrants", Transport.grantsJson g),
+            ("otherLanded", Json.arr (theirs.map Transport.landingJson).toArray)]
+        | none => []))
   | .resolved k right => Json.mkObj [("turn", "resolve"), ("conflict", toJson k), ("right", toJson right)]
   | .rows rs => Json.mkObj [("turn", "rows"), ("rows", Json.arr (rs.map rowJson).toArray)]
   | .captured situation name g src dst amount field refs => Json.mkObj [("turn", "capture"),
@@ -308,11 +564,20 @@ def turnJson : Turn → Json
       ("refs", strsJson refs)]
   | .abstracted name value hole => Json.mkObj [("turn", "abstract"), ("name", Json.str name),
       ("value", Json.str value), ("hole", Json.str hole)]
-  | .judged name digest hops a => Json.mkObj [("turn", "judge"), ("name", Json.str name),
+  | .judged name digest hops a intent => Json.mkObj ([("turn", Json.str "judge"), ("name", Json.str name),
       ("digest", Json.str digest), ("hops", Json.arr (hops.map Form.grantJson).toArray),
-      ("fill", Form.assignmentJson a)]
+      ("fill", Form.assignmentJson a)] ++ (match intent with | some i => [("intent", Json.str i)] | none => []))
   | .filled name received sent => Json.mkObj [("turn", "fill"), ("name", Json.str name),
       ("received", Json.str received), ("sent", Json.str sent)]
+  | .issued name => Json.mkObj [("turn", "issue"), ("name", Json.str name)]
+  | .offered name K => Json.mkObj [("turn", "offer"), ("name", Json.str name), ("contract", Transport.contractJson K)]
+  | .granted id g => Json.mkObj [("turn", "grant"), ("id", Json.str id), ("grant", Form.grantJson g)]
+  | .revoked id => Json.mkObj [("turn", "revoke"), ("id", Json.str id)]
+  | .transported name => Json.mkObj [("turn", "transport"), ("name", Json.str name)]
+  | .proposed name received digest vault hops a holder => Json.mkObj [("turn", "propose"), ("name", Json.str name),
+      ("received", Json.str received), ("digest", Json.str digest), ("vault", Json.str vault),
+      ("hops", Json.arr (hops.map Form.grantJson).toArray), ("fill", Form.assignmentJson a), ("by", Json.str holder)]
+  | .confirmed i effects => Json.mkObj [("turn", "confirm"), ("intent", Json.str i), ("effects", toJson effects)]
 
 def turnOf (j : Json) : Except String Turn := do
   match ← j.getObjValAs? String "turn" with
@@ -339,7 +604,12 @@ def turnOf (j : Json) : Except String Turn := do
   | "merge" =>
     let label ← j.getObjValAs? String "label"
     let other ← storeOf (← j.getObjVal? "other")
-    return .merged label other (← j.getObjValAs? Bool "skipLedger")
+    let skip ← j.getObjValAs? Bool "skipLedger"
+    match j.getObjVal? "otherGrants" with
+    | .ok g =>
+      let theirs ← (← j.getObjValAs? (Array Json) "otherLanded").toList.mapM Transport.landingOf
+      return .merged label other skip (some (← Transport.grantsOf g)) theirs
+    | .error _ => return .merged label other skip
   | "resolve" => return .resolved (← j.getObjValAs? Nat "conflict") (← j.getObjValAs? Bool "right")
   | "rows" => return .rows (← (← j.getObjValAs? (Array Json) "rows").toList.mapM rowOf)
   | "capture" =>
@@ -359,11 +629,26 @@ def turnOf (j : Json) : Except String Turn := do
     let name ← j.getObjValAs? String "name"
     let digest ← j.getObjValAs? String "digest"
     let hops ← (← j.getObjValAs? (Array Json) "hops").toList.mapM Form.grantOf
-    return .judged name digest hops (← Form.assignmentOf (← j.getObjVal? "fill"))
+    let a ← Form.assignmentOf (← j.getObjVal? "fill")
+    return .judged name digest hops a (j.getObjValAs? String "intent").toOption
   | "fill" =>
     let name ← j.getObjValAs? String "name"
     let received ← j.getObjValAs? String "received"
     return .filled name received (← j.getObjValAs? String "sent")
+  | "issue" => return .issued (← j.getObjValAs? String "name")
+  | "offer" => return .offered (← j.getObjValAs? String "name") (← Transport.contractOf (← j.getObjVal? "contract"))
+  | "grant" => return .granted (← j.getObjValAs? String "id") (← Form.grantOf (← j.getObjVal? "grant"))
+  | "revoke" => return .revoked (← j.getObjValAs? String "id")
+  | "transport" => return .transported (← j.getObjValAs? String "name")
+  | "propose" =>
+    let name ← j.getObjValAs? String "name"
+    let received ← j.getObjValAs? String "received"
+    let digest ← j.getObjValAs? String "digest"
+    let vault ← j.getObjValAs? String "vault"
+    let hops ← (← j.getObjValAs? (Array Json) "hops").toList.mapM Form.grantOf
+    let a ← Form.assignmentOf (← j.getObjVal? "fill")
+    return .proposed name received digest vault hops a (← j.getObjValAs? String "by")
+  | "confirm" => return .confirmed (← j.getObjValAs? String "intent") (← j.getObjValAs? Nat "effects")
   | t => throw ("not a turn: " ++ t)
 
 def textBytes (s : String) : Bytes := s.toUTF8.toList
@@ -400,6 +685,13 @@ def Turn.kind : Turn → String
   | .abstracted .. => "abstract"
   | .judged .. => "judge"
   | .filled .. => "fill"
+  | .issued .. => "issue"
+  | .offered .. => "offer"
+  | .granted .. => "grant"
+  | .revoked .. => "revoke"
+  | .transported .. => "transport"
+  | .proposed .. => "propose"
+  | .confirmed .. => "confirm"
 
 /-! ## The deployed machine and its theorems -/
 
@@ -447,6 +739,120 @@ theorem checkpoint_is_cache {S : Session} (h : Reachable S) {n : Nat} (hn0 : 0 <
         ((encodeAll logHash S.log).take k) =
       recover logHash deployed genesis ((encodeAll logHash S.log).take k) :=
   Log.checkpoint_is_cache h hn0 hn hcache k
+
+/-! ## Obligations and the identity of an intent, at the deployed machine -/
+
+/-- **A proposal judged again is refused by its intent**: once an intent has landed, the same proposal
+is refused as a duplicate, whatever it says, and nothing lands twice. -/
+theorem judge_refuses_duplicate (w : World) (name digest : String) (hops : List Grant) (a : Assignment)
+    {i : String} {l : Landing} (h : Transport.duplicateOf w.landed i = some l) :
+    stepTurn w (.judged name digest hops a (some i)) = .error (dupText w name l) := by
+  simp only [stepTurn, h]
+
+/-- **By identity, not by content**: a proposal whose intent has not landed is judged on what it says
+(`judgeNew`, which does not read the intent), and its landing is recorded under its intent. Two
+proposals alike in content and different in intent are judged alike: both land, or both are refused
+with the same words. -/
+theorem judge_by_identity (w : World) (name digest : String) (hops : List Grant) (a : Assignment) {i : String}
+    (h : Transport.duplicateOf w.landed i = none) :
+    stepTurn w (.judged name digest hops a (some i)) =
+      match judgeNew w name digest hops a with
+      | .error e => .error e
+      | .ok (w', o, l) => .ok ({ w' with landed := w.landed ++ [{ l with intent := i }] }, o) := by
+  simp only [stepTurn, h]
+
+theorem judge_content_alike (w : World) (name digest : String) (hops : List Grant) (a : Assignment) {i j : String}
+    (hi : Transport.duplicateOf w.landed i = none) (hj : Transport.duplicateOf w.landed j = none) :
+    (∀ e, stepTurn w (.judged name digest hops a (some i)) = .error e ↔
+      stepTurn w (.judged name digest hops a (some j)) = .error e) := by
+  intro e
+  rw [judge_by_identity w name digest hops a hi, judge_by_identity w name digest hops a hj]
+  cases judgeNew w name digest hops a <;> simp
+
+theorem judgeNew_keeps {w w1 : World} {name digest : String} {hops : List Grant} {a : Assignment} {o : Outcome}
+    {l : Landing} (h : judgeNew w name digest hops a = .ok (w1, o, l)) :
+    w1.outstanding = w.outstanding ∧ w1.landed = w.landed := by
+  unfold judgeNew at h
+  repeat' split at h
+  all_goals (cases h <;> exact ⟨rfl, rfl⟩)
+
+theorem judged_keeps {w w' : World} {o : Outcome} {name digest : String} {hops : List Grant} {a : Assignment}
+    {intent : Option String} (h : stepTurn w (.judged name digest hops a intent) = .ok (w', o)) :
+    (∀ x ∈ w.outstanding, x ∈ w'.outstanding) ∧ (∀ x ∈ w.landed, x ∈ w'.landed) := by
+  cases intent with
+  | none =>
+    simp only [stepTurn] at h
+    repeat' split at h
+    all_goals first
+      | contradiction
+      | (cases h; done)
+      | (simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h
+         exact ⟨fun x hx => hx, fun x hx => hx⟩)
+  | some i =>
+    simp only [stepTurn] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · rename_i w1 o1 l1 hj
+        simp only [Except.ok.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, -⟩ := h
+        have := judgeNew_keeps hj
+        exact ⟨fun x hx => by simp [this.1, hx], fun x hx => by simp [hx]⟩
+
+/-- **An obligation outlives every turn but its confirmation**: a revision, a transport, a merge, a
+judgment or a crash's recovery (which replays turns) keeps every proposal sent and not yet confirmed;
+only `confirmed` takes one away, and `base` is the log's first record. -/
+theorem outstanding_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w t = .ok (w', o))
+    (hb : ∀ w0, t ≠ .base w0) (hc : ∀ i e, t ≠ .confirmed i e) : ∀ x ∈ w.outstanding, x ∈ w'.outstanding := by
+  intro x hx
+  cases t
+  all_goals first
+    | exact (hb _ rfl).elim
+    | exact (hc _ _ rfl).elim
+    | exact (judged_keeps h).1 x hx
+    | skip
+  all_goals
+    simp only [stepTurn] at h
+    repeat' split at h
+    all_goals first
+      | contradiction
+      | (cases h; done)
+      | (simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h; first | exact hx | simp [hx])
+      | (cases h <;> first | exact hx | simp [hx])
+
+/-- **A landing is never forgotten**: every turn but `base` keeps every proposal landed, so a duplicate
+stays a duplicate. -/
+theorem landed_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w t = .ok (w', o))
+    (hb : ∀ w0, t ≠ .base w0) : ∀ x ∈ w.landed, x ∈ w'.landed := by
+  intro x hx
+  cases t
+  all_goals first
+    | exact (hb _ rfl).elim
+    | exact (judged_keeps h).2 x hx
+    | skip
+  all_goals
+    simp only [stepTurn] at h
+    repeat' split at h
+    all_goals first
+      | contradiction
+      | (cases h; done)
+      | (simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h; first | exact hx | simp [hx])
+      | (cases h <;> first | exact hx | simp [hx])
+
+/-- **A crash keeps what was sent and what landed**: the world recovered from any truncation of the log
+is the replay of its longest prefix of whole records, so its obligations and landings are that
+replay's. -/
+theorem obligations_survive_crash {S : Session} (h : Reachable S) (k : Nat) :
+    let m := whole logHash S.log k
+    (recover logHash deployed genesis ((encodeAll logHash S.log).take k)).world.outstanding =
+        (replay deployed genesis (S.log.take m)).outstanding ∧
+      (recover logHash deployed genesis ((encodeAll logHash S.log).take k)).world.landed =
+        (replay deployed genesis (S.log.take m)).landed := by
+  have := (recover_eq_replay_prefix h k).1
+  simp only at this ⊢
+  rw [this]
+  exact ⟨rfl, rfl⟩
 
 end Obend.Vault.Replay
 
