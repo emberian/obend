@@ -347,6 +347,9 @@ import Obend.Hardware.FluidThermal
 import Obend.Hardware.GeometryCAM
 import Obend.Hardware.HDL
 import Obend.Hardware.Hvm
+import Obend.Hardware.Hvm.Model
+import Obend.Hardware.Hvm.Net
+import Obend.Hardware.Hvm.Lower
 import Obend.Hardware.Judge
 import Obend.Hardware.Kinematics
 import Obend.Hardware.Magnetics

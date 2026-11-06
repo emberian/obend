@@ -62,7 +62,7 @@ What is here, and what is not.
   from that check only the frame bits, wires and tile types it lists.
 
 - `hvm/` — rung 2: Leaf books lowered to HVM2 interaction nets (`Obend.Hardware.Hvm`), run by HVM2
-  itself. See below.
+  itself (first-order bodies, records, sums, recursion). See below.
 
 Removed (`review/EXPERT-fpga-silicon-20261103.md` §3.2, §3.3, §3.7): `aws-f2/`, whose shell
 bridge declared ports the AWS F1/F2 shell does not expose; a second `sim/silicon_elab_top.sv` (the one
@@ -148,26 +148,29 @@ physics lane.
 HVM2 (HigherOrderCO, crate `hvm` 2.0.22, paper `paper/HVM2.typst` in its repository) is the target,
 not HVM3: HVM3 is a work-in-progress Haskell runtime for the Interaction Calculus (a term language)
 with no paper, no net IR and no GPU backend, while HVM2 runs a documented net language on Rust, C and
-CUDA runtimes. `Obend.Hardware.Hvm` holds a model of that language (nodes, `operate`, the ten
-interaction rules as a relation `Step`), the lowering `lowerBookToHvm` and the emitter `emitHvm`.
+CUDA runtimes. `Obend.Hardware.Hvm` (and `Hvm.Model`, `Hvm.Net`, `Hvm.Lower`) holds a model of that
+language (nodes, `operate`, the interaction rules as a relation `Step`), the lowering `lowerBookToHvm`,
+the emitter `emitHvm`, and `lowerBookToHvm_sound`: for an accepted book, a lowered member, arguments,
+and a fuel at which every result slot evaluates exactly below `2^24`, the model reduces `@main` to
+the tuple of the slot values with an empty bag, and each observation the result's sort names (the
+scalar, a record's fields, a sum's tag and payload) holds of `evalBookAt`'s term under Core4's
+reference reduction. The module header names where the model departs from HVM2 and what relates
+these nets to `ReductionMachine`'s `INetNode` (annihilation and erasure agree; its commutation does
+not; a proved arena map is not yet possible and the header says why).
 
-What is proved, `lowerBookToHvm_sound`: for a book the lowering accepts, a member it lowered and an
-argument on which the lowered expression's exact evaluation stays below `2^24`, the model reduces
-`@main = r & @m ~ (#x r)` to the normal form whose root is the number `w` and whose bag is empty, and
-`evalBookAt B m (.nat x)` halts under Core4's reference reduction with the observation `w` decodes to
-(a natural, or a Boolean as `0`/`1`). The model's departures from HVM2 are named in the module header:
-LINK is the paper's global substitution, the theorem exhibits one schedule (HVM2's strong confluence
-carries it to the others; not proved), U24 only, the C runtime's answer for a zero divisor.
+The fragment: first-order bodies over naturals and Booleans, unboxed records of scalars (a `CON`
+tuple at a member's result), sums whose arms carry a scalar or a record (a tag and the widest
+payload), `case`, recursion through `fix (λrec. λsup. λx. body)` applied to one argument (one HVM2
+definition per fixpoint, recursive calls as `REF`s, branches that call lifted to definitions so the
+untaken one is voided before it expands; `Nat.rec` as Lean's lowering emits it is of this shape), and
+λ only as a method's curried result. Refused by name: labels, the object forms, activities, `split`,
+the bitwise and fixed-point primitives, λ as a value anywhere else, recursion returning a record or
+a sum.
 
-The fragment: first-order methods over naturals and Booleans: literals, the argument, `let`
-(`app (lam b) a`), `ifZero`, `ifBool`, and `add multiply subtract divide modulo equal less lessEqual
-conjunction`; `self` reads only as `evalBook`'s pins resolve them. Refused by name: `fix`, λ as a
-value, records and `get`, sums, labels, the object forms, activities, the bitwise and fixed-point
-primitives.
-
-`verify_hvm.sh` regenerates `arith.hvm` and compares bytes, checks the book `refused` is refused,
-runs every vector under `hvm run` and `hvm run-c` against `evalBookAt` (as a literal and on the
-demand machine) and against the model's own run, and requires each planted emitter rule
-(`--plant swapSwitch`, `--plant addAsSub`; `verify_hvm.sh --plant NAME` runs one alone) to make the
-comparison fail. Build `lake build obend-emit-hvm` in `lean/` first; HVM2 from `cargo install hvm`
-or `HVM_BIN`. `hvm run-cu` needs an NVIDIA GPU, which none of our machines has.
+`verify_hvm.sh` regenerates `arith.hvm`, `rec.hvm` and `data.hvm` and compares bytes, checks the book
+`refused` is refused, runs every vector of every book under `hvm run` and `hvm run-c` against the
+slots `evalBookAt` shows (each probe run on the demand machine) and against the model's own run, and
+requires each planted emitter rule (`--plant swapSwitch`, `--plant addAsSub`; `verify_hvm.sh --plant
+NAME` runs one alone) to make each book's comparison fail. Build `lake build obend-emit-hvm` in
+`lean/` first; HVM2 from `cargo install hvm` or `HVM_BIN`. `hvm run-cu` needs an NVIDIA GPU, which
+none of our machines has.
