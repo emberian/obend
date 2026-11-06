@@ -373,7 +373,7 @@ as an adoption at its new state, and `monotone` held vacuously: a spent run coul
 ```sh
 cd rt && sed -i.bak 's/^law spent: monotone(spent)$//' jobs/_kind.md && rm jobs/_kind.md.bak && obend open
 sed -i.bak 's/^spent: .*$/spent: 2/' jobs/relay.md && rm jobs/relay.md.bak && obend open
-printf '%s\n' '/^law budget:/a' 'law spent: monotone(spent)' '.' 'w' 'q' | ed -s jobs/_kind.md && obend open
+python3 -c "p='jobs/_kind.md'; s=open(p).read(); open(p,'w').write(s.replace('law budget: new.spent <= new.runs', 'law budget: new.spent <= new.runs\\nlaw spent: monotone(spent)', 1))" && obend open
 sed -i.bak 's/^spent: 2$/spent: 0/' jobs/relay.md && rm jobs/relay.md.bak && obend open
 ```
 
