@@ -1,0 +1,26 @@
+ntt-1024: 6 vectors, 3 dispatches, 0 disagree, 0.472 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+BENCH	ntt-1024	1024	3	gpu_us_median=13.360	gpu_us_p10=12.120	gpu_us_p90=51.440	host_batch_amortized_us=77.897	warmups=3	batch_repetitions=1027	final_output=exact
+
+    stage 0: 256 threads -> 874 instructions, 4 stores; VGPRs 64, LDS 4096
+    stage 1: 512 threads -> 916 instructions, 2 stores; VGPRs 64, LDS 4096
+    stage 2: 512 threads -> 915 instructions, 2 stores; VGPRs 64, LDS 4096
+PASS ntt-1024: committed ISA and resource values reproduced
+ntt-65536: 2 vectors, 2 dispatches, 0 disagree, 1.818 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+BENCH	ntt-65536	1024	2	gpu_us_median=50.200	gpu_us_p10=48.800	gpu_us_p90=68.760	host_batch_amortized_us=128.176	warmups=3	batch_repetitions=1027	final_output=exact
+
+    stage 0: 16384 threads -> 1903 instructions, 4 stores; VGPRs 64, LDS 4096
+    stage 1: 16384 threads -> 2161 instructions, 4 stores; VGPRs 64, LDS 4096
+PASS ntt-65536: committed ISA and resource values reproduced
+ntt-1048576: 2 vectors, 3 dispatches, 0 disagree, 6.963 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+BENCH	ntt-1048576	1024	3	gpu_us_median=584.080	gpu_us_p10=582.240	gpu_us_p90=586.160	host_batch_amortized_us=680.985	warmups=3	batch_repetitions=1027	final_output=exact
+
+    stage 0: 524288 threads -> 1667 instructions, 2 stores; VGPRs 64, LDS 4096
+    stage 1: 524288 threads -> 1925 instructions, 2 stores; VGPRs 64, LDS 4096
+    stage 2: 262144 threads -> 1651 instructions, 4 stores; VGPRs 64, LDS 4096
+PASS ntt-1048576: committed ISA and resource values reproduced
+    stage 0: 64 threads -> 11 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 0: 64 threads -> 66 instructions, 1 stores; VGPRs 8, LDS 32768
+PASS: real shader LDS 0 -> 32768 bytes; Mesa waves/SIMD 16 -> 1; both exact vectors passed
+batch-reset-check: 1 vectors, 1 dispatches, 0 disagree, 1.669 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+BENCH	batch-reset-check	129	1	gpu_us_median=1.320	gpu_us_p10=1.240	gpu_us_p90=1.760	host_batch_amortized_us=227.932	warmups=3	batch_repetitions=132	final_output=exact
+PASS: reset-sensitive batch and sample/stage/dispatch/memory limits

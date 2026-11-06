@@ -1,0 +1,17 @@
+PASS parallel copy
+PASS initialized shared exchange
+PASS duplicate output address: scatter ownership or read/write separation failed
+PASS read/write alias: scatter ownership or read/write separation failed
+PASS uninitialized shared read: shared read has no preceding write in this group
+PASS cross-workgroup collision: scatter ownership or read/write separation failed
+PASS out of bounds: index bounds or u32 arithmetic failed
+PASS overflow hidden by modulo: index bounds or u32 arithmetic failed
+PASS division by zero: index bounds or u32 arithmetic failed
+PASS undefined register: register program is not closed SSA
+PASS flat address overflow: storage allocation or dispatch geometry exceeds u32 limits
+PASS dispatch thread count overflow: storage allocation or dispatch geometry exceeds u32 limits
+PASS lane induction overflow: storage allocation or dispatch geometry exceeds u32 limits
+PASS inactive read literal overflow: read index has invalid shader syntax
+PASS inactive write literal overflow: write index has invalid shader syntax
+PASS zero-group division by zero: read index has invalid shader syntax
+PASS inactive divisor literal overflow: read index has invalid shader syntax

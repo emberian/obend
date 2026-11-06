@@ -1,0 +1,45 @@
+✖ [24/24] Building Obend.Teeth.Hardware.Rdna2Runs (3.8s)
+trace: .> LEAN_PATH=/home/hbox/obend/kernels/lean/.lake/build/lib/lean /home/hbox/.elan/toolchains/leanprover--lean4---v4.35.0/bin/lean /home/hbox/obend/kernels/lean/Obend/Teeth/Hardware/Rdna2Runs.lean -o /home/hbox/obend/kernels/lean/.lake/build/lib/lean/Obend/Teeth/Hardware/Rdna2Runs.olean -i /home/hbox/obend/kernels/lean/.lake/build/lib/lean/Obend/Teeth/Hardware/Rdna2Runs.ilean -c /home/hbox/obend/kernels/lean/.lake/build/ir/Obend/Teeth/Hardware/Rdna2Runs.c --setup /home/hbox/obend/kernels/lean/.lake/build/ir/Obend/Teeth/Hardware/Rdna2Runs.setup.json --json
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:22:86: Tactic `native_decide` evaluated that the proposition
+  checkGraph diamondIsa diamondPlan diamondExpected = true
+is false
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:23:0: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.diamond_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:43:114: Tactic `native_decide` evaluated that the proposition
+  checkGraph opticLinearmacIsa opticLinearmacPlan opticLinearmacExpected = true
+is false
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:44:0: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.opticLinearmac_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:50:82: Tactic `native_decide` evaluated that the proposition
+  checkGraph allopsIsa allopsPlan allopsExpected = true
+is false
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:51:0: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.allops_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:57:78: Tactic `native_decide` evaluated that the proposition
+  checkGraph glmulIsa glmulPlan glmulExpected = true
+is false
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:58:0: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.glmul_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:64:74: Tactic `native_decide` evaluated that the proposition
+  checkGraph ntt4Isa ntt4Plan ntt4Expected = true
+is false
+error: Obend/Teeth/Hardware/Rdna2Runs.lean:65:0: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.ntt4_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+Some required targets logged failures:
+- Obend.Teeth.Hardware.Rdna2Runs
+error: build failed

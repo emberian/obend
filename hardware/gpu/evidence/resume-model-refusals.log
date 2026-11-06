@@ -1,0 +1,17 @@
+[FAIL] diamond: vector 0, stage 0, workgroup 0: pc 32: V_CMP_LT_U32: no semantics (refused, not guessed)
+optic-mul: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+[FAIL] optic-linearmac: vector 0, stage 0, workgroup 0: pc 36: V_CMP_LT_U32: no semantics (refused, not guessed)
+optic-bilinear: 1 stages, 12 vectors: the dumped programs on the model give expected.tsv
+[FAIL] adjoint-mul-add: vector 0, stage 0, workgroup 0: pc 24: V_CMP_LT_U32: no semantics (refused, not guessed)
+[FAIL] adjoint-square-bilinear: vector 0, stage 0, workgroup 0: pc 172: V_CMP_LT_U32: no semantics (refused, not guessed)
+[FAIL] allops: vector 0, stage 0, workgroup 0: pc 40: V_CMP_LT_U32: no semantics (refused, not guessed)
+[FAIL] muxchain: vector 0, stage 0, workgroup 0: pc 21: V_MAX_U32: no semantics (refused, not guessed)
+[FAIL] tree512: vector 0, stage 0, workgroup 0: pc 47: V_CMP_LT_U32: no semantics (refused, not guessed)
+[FAIL] mac-reverse-1000: vector 0, stage 1, workgroup 0: pc 37: V_CMP_LT_U32: no semantics (refused, not guessed)
+[FAIL] glmul-256: vector 0, stage 0, workgroup 0: pc 3: S_MULK_I32: no semantics (refused, not guessed)
+[FAIL] ntt-4: vector 0, stage 0, workgroup 0: pc 1: S_ADD_U32: no semantics (refused, not guessed)
+[FAIL] ntt-16: vector 0, stage 0, workgroup 0: pc 2: V_MBCNT_LO_U32_B32: no semantics (refused, not guessed)
+[FAIL] ntt-64: vector 0, stage 0, workgroup 0: pc 2: V_MBCNT_LO_U32_B32: no semantics (refused, not guessed)
+[FAIL] ntt-1024: vector 0, stage 0, workgroup 0: pc 2: V_MBCNT_LO_U32_B32: no semantics (refused, not guessed)
+[FAIL] ntt-65536: vector 0, stage 0, workgroup 0: pc 2: V_MBCNT_LO_U32_B32: no semantics (refused, not guessed)
+[FAIL] ntt-1048576: vector 0, stage 0, workgroup 0: pc 2: V_MBCNT_LO_U32_B32: no semantics (refused, not guessed)
