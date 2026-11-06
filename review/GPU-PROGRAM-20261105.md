@@ -97,6 +97,13 @@ restated over it with `lowerArrayToGpu_sound`; the Goldilocks NTT of 64 points, 
 `glMul` limb network, runs on both cards and the Mac and agrees with the naive DFT. The device as the site
 and the shape-indexed wires as presheaves on finite index sets are now the same code.
 
+**Landed 2026-11-06:** the lowering's structure. `fuseGraph` (Halide/TVM elementwise inlining with a
+soundness theorem at the graph level, since a wavefront level never contains a chain) and the frontier
+layering of Wilson–Zanasi's `kahn` replace the greedy layering; the NTT is Stockham radix-2 over whole
+wires as ec-gpu's `radix_fft` kernel. The 64-point NTT went from 1670 dispatches to 19, and NTTs of 1024
+and 65536 points (31 and 49 dispatches, `3 log₂ n + 1`) run on both cards and the Mac. The 65536-point
+plan is kept as a digest. Dispatch times are printed by the runner and not gated.
+
 **First workload:** the Goldilocks radix-2 butterfly from `Apps/ZkNtt.lean` as an open hypergraph. Exact
 arithmetic, so atomic and reduction order is irrelevant by associativity; the spec already exists; the
 RTL path is already Verilator-gated. One spec through two devices (Verilator/EQY and RDNA2) is the

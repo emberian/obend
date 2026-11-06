@@ -213,6 +213,9 @@ def lshlAdd (a sh c : UInt32) : UInt32 := (a <<< (sh &&& 31)) + c
 /-- V_ADD3_U32 (manual 12.11): `D.u = S0.u + S1.u + S2.u`. -/
 def add3 (a b c : UInt32) : UInt32 := a + b + c
 
+/-- V_AND_OR_B32 (manual 12.11): `D.u = (S0.u & S1.u) | S2.u`. -/
+def andOr (a b c : UInt32) : UInt32 := (a &&& b) ||| c
+
 /-- V_CNDMASK_B32 (manual 12.7): `D.u32 = VCC ? S1.u32 : S0.u32`, VCC's bit for the lane. -/
 def cndmask (sel : Bool) (s0 s1 : UInt32) : UInt32 := if sel then s1 else s0
 
@@ -295,27 +298,26 @@ def modifiersClear (i : Inst) : Bool :=
   i.fam != "VOP3" || (i.field "NEG" == 0 && i.field "ABS" == 0 && i.field "CLAMP" == 0 && i.field "OMOD" == 0 && i.field "OP_SEL" == 0)
 
 /-- A per-lane 32-bit VALU operation over active lanes (manual 6.2.2: a thread writes only if its EXEC
-bit is set). `f` sees the lane's sources; `none` from a source is a refused operand code. -/
+bit is set). `f` sees the lane's sources; `none` from a source is a refused operand code. The results
+are computed from `s` first and then written into `s`, so the register file is updated in place. -/
 def valuLanes (i : Inst) (s : WaveState) (nSrc : Nat) (f : List UInt32 → Nat → UInt32) : WaveState := Id.run do
-  let mut st := s
   let dst := i.field "VDST"
+  let mut results : Array (Nat × UInt32) := #[]
   for lane in [0:lanes] do
     if execBit s lane then
       let mut srcs : List UInt32 := []
-      let mut bad := false
       for k in [0:nSrc] do
         match vectorSource s (srcCode i k) i.literal lane with
         | some v => srcs := srcs ++ [v]
-        | none => bad := true
-      if bad then return s.fail s!"{i.name}: an operand code is not modelled"
-      st := writeVgpr st dst lane (f srcs lane)
-  return st
+        | none => return s.fail s!"{i.name}: an operand code is not modelled"
+      results := results.push (lane, f srcs lane)
+  return results.foldl (fun st (lane, v) => writeVgpr st dst lane v) s
 
 /-- A VALU operation producing a per-lane result and a mask bit (carry): the result to `VDST` for active
 lanes, the mask fully written with inactive lanes zero (manual 3.9: "VCC is fully written"). -/
 def valuLanesCarry (i : Inst) (s : WaveState) (ci : Option UInt64) (f : UInt32 → UInt32 → Bool → UInt32 × Bool) : WaveState := Id.run do
-  let mut st := s
   let dst := i.field "VDST"
+  let mut results : Array (Nat × UInt32) := #[]
   let mut mask : UInt64 := 0
   for lane in [0:lanes] do
     if execBit s lane then
@@ -323,9 +325,10 @@ def valuLanesCarry (i : Inst) (s : WaveState) (ci : Option UInt64) (f : UInt32 �
       | some a, some b =>
         let cin := match ci with | some m => (m >>> lane.toUInt64) &&& 1 == 1 | none => false
         let (r, c) := f a b cin
-        st := writeVgpr st dst lane r
+        results := results.push (lane, r)
         if c then mask := mask ||| (1 <<< lane.toUInt64)
       | _, _ => return s.fail s!"{i.name}: an operand code is not modelled"
+  let st := results.foldl (fun st (lane, v) => writeVgpr st dst lane v) s
   return writeScalarDst64 st (maskDst i) mask
 
 /-- A compare: the mask of active lanes passing, written whole to VCC / an SGPR pair, or to EXEC for
@@ -345,16 +348,15 @@ def valuCompare (i : Inst) (s : WaveState) (width : Nat) (test : UInt64 → UInt
 
 /-- A 64-bit shift per lane: `VDST` is a VGPR pair. -/
 def valuShift64 (i : Inst) (s : WaveState) (f : UInt32 → UInt64 → UInt64) : WaveState := Id.run do
-  let mut st := s
   let dst := i.field "VDST"
+  let mut results : Array (Nat × UInt64) := #[]
   for lane in [0:lanes] do
     if execBit s lane then
       match vectorSource s (srcCode i 0) i.literal lane, source64 s (srcCode i 1) lane with
-      | some c, some v =>
-        let r := f c v
-        st := writeVgpr (writeVgpr st dst lane r.toUInt32) (dst + 1) lane (r >>> 32).toUInt32
+      | some c, some v => results := results.push (lane, f c v)
       | _, _ => return s.fail s!"{i.name}: an operand code is not modelled"
-  return st
+  return results.foldl (fun st (lane, r) =>
+    writeVgpr (writeVgpr st dst lane r.toUInt32) (dst + 1) lane (r >>> 32).toUInt32) s
 
 /-- The buffer resource constant (manual 8.1.8 Table 37) in four SGPRs: base address (47:0), stride
 (61:48), swizzle enable (63), num_records (95:64), add-tid (119), OOB_SELECT (125:124). -/
@@ -399,7 +401,9 @@ def execMubuf (i : Inst) (s : WaveState) (isStore : Bool) : WaveState := Id.run 
     return s.fail s!"{i.name}: swizzled, indexed, tid-added, LDS or TFE buffer access is not modelled"
   let some soff := scalarSource s (i.field "SOFFSET") none | return s.fail s!"{i.name}: SOFFSET code not modelled"
   let vd := i.field "VDATA"
-  let mut st := s
+  -- The effects are read from `s` first and applied afterwards, so memory and registers update in place.
+  let mut memWrites : Array (UInt64 × UInt32) := #[]
+  let mut regWrites : Array (Nat × Nat × UInt32) := #[]
   for lane in [0:lanes] do
     if execBit s lane then
       let voff := if i.field "OFFEN" == 1 then (readVgpr s (i.field "VADDR") lane).toNat else 0
@@ -408,14 +412,15 @@ def execMubuf (i : Inst) (s : WaveState) (isStore : Bool) : WaveState := Id.run 
         let addr := (r.base + soff.toUInt64 + UInt64.ofNat off) &&& 0xFFFFFFFFFFFFFFFC
         if inRange r off then
           if isStore then
-            st := writeMem32 st addr (readVgpr s (vd + k) lane)
+            memWrites := memWrites.push (addr, readVgpr s (vd + k) lane)
           else
             match readMem32 s addr with
-            | some v => st := writeVgpr st (vd + k) lane v
+            | some v => regWrites := regWrites.push (vd + k, lane, v)
             | none => return s.fail s!"{i.name}: load from address 0x{String.ofList (Nat.toDigits 16 addr.toNat)} outside the memory"
         else if !isStore then
-          st := writeVgpr st (vd + k) lane 0
-  return st
+          regWrites := regWrites.push (vd + k, lane, 0)
+  let st := memWrites.foldl (fun st (a, v) => writeMem32 st a v) s
+  return regWrites.foldl (fun st (reg, lane, v) => writeVgpr st reg lane v) st
 
 /-- SMEM loads (manual 7.2.1): `ADDR = SGPR[base] + inst_offset + {M0 or SGPR[offset] or zero}`, the two
 LSBs ignored, `N` dwords to `SDATA..`; `S_BUFFER_LOAD` reads base and num_records from the V# at
@@ -507,6 +512,7 @@ def execInst (i : Inst) (s : WaveState) : WaveState :=
   | "V_LSHLREV_B32" => valuLanes i s 2 fun src _ => lshlrev32 (src.getD 0 0) (src.getD 1 0)
   | "V_LSHL_ADD_U32" => valuLanes i s 3 fun src _ => lshlAdd (src.getD 0 0) (src.getD 1 0) (src.getD 2 0)
   | "V_ADD3_U32" => valuLanes i s 3 fun src _ => add3 (src.getD 0 0) (src.getD 1 0) (src.getD 2 0)
+  | "V_AND_OR_B32" => valuLanes i s 3 fun src _ => andOr (src.getD 0 0) (src.getD 1 0) (src.getD 2 0)
   | "V_MUL_LO_U32" => valuLanes i s 2 fun src _ => mulLo (src.getD 0 0) (src.getD 1 0)
   | "V_MUL_HI_U32" => valuLanes i s 2 fun src _ => mulHi (src.getD 0 0) (src.getD 1 0)
   | "V_CNDMASK_B32" => match maskSource s (maskSrcCode i) with

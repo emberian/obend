@@ -211,6 +211,7 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
     }
 
     let mut mismatches = 0usize;
+    let mut dispatch_secs = 0f64;
     for v in &vectors {
         if v.inputs.len() != plan.inputs.len() {
             return Err(format!("vector {}: {} inputs, plan has {}", v.index, v.inputs.len(), plan.inputs.len()));
@@ -229,7 +230,9 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
         // Dispatches are submitted in chunks: AMDVLK ran out of memory with the 64-point NTT's 1670
         // dispatches in one command buffer, RADV and Metal did not. Submissions execute in order, so the
         // stage order is kept.
+        // Timed from the first submission to the device reporting every dispatch done; printed, not gated.
         const CHUNK: usize = 128;
+        let started = std::time::Instant::now();
         for chunk in pipelines.chunks(CHUNK) {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stages") });
             for (pipeline, groups) in chunk {
@@ -240,6 +243,8 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
             }
             queue.submit([encoder.finish()]);
         }
+        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll: {e}"))?;
+        dispatch_secs += started.elapsed().as_secs_f64();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
         encoder.copy_buffer_to_buffer(&w, 0, &staging, 0, wire_bytes);
         queue.submit([encoder.finish()]);
@@ -271,11 +276,12 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
         }
     }
     println!(
-        "{}: {} vectors, {} stages, {} disagree, on {}",
+        "{}: {} vectors, {} dispatches, {} disagree, {:.3} ms per vector, on {}",
         plan.graph,
         vectors.len(),
         plan.stages.len(),
         mismatches,
+        dispatch_secs * 1e3 / vectors.len().max(1) as f64,
         info_line
     );
     if mismatches > 0 {

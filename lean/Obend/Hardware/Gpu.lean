@@ -8,36 +8,45 @@ Rung G1 of `review/GPU-PROGRAM-20261105.md`: the first rung of the hardware tier
 The source is an `ArrayGraph` (`Obend.Hardware.ArrayHypergraph`): wires carry vectors of 64-bit words,
 a hyperedge is one array operation. The artifact is a `GpuProgram`: one flat wire buffer `w` holding
 every wire at its base offset, a constant buffer `c`, an index buffer `ix` for gathers, and one compute
-shader per wavefront stage of `layerGraph`. A stage's hyperedges become kernels; thread `t` of the stage
-belongs to the kernel whose thread range holds it and is element `e` of that kernel: it reads its
-operands from `w` as they stood when the dispatch began and writes `w[dstBase + e]`. Stages are separate
-dispatches; the host orders them. Nothing a stage reads is written in that stage
-(`layerEdges_all_stages_independent`), and two threads never write the same word (distinct destination
-wires, disjoint wire ranges), so the program never depends on the device's memory model: it lives in the
-apex fibre of the GPU fibration, sequential and exact modulo `2^64`. The memory model is rung G4's.
+shader per wavefront stage of `layerGraph` applied to `fuseGraph` of the source. Fusion first: every
+map edge recomputes its elementwise producers, so a chain of elementwise edges is one kernel whose
+thread runs the chain as local `let`s, and the producers nobody else reads are gone. Then the level
+layering: a stage is a frontier of edges whose predecessors were all dispatched. A stage's hyperedges
+become kernels; thread `t` of the stage belongs to the kernel whose thread range holds it and is
+element `e` of that kernel: it reads its operands from `w` as they stood when the dispatch began and
+writes `w[dstBase + e]`. Stages are separate dispatches; the host orders them. Nothing a stage reads is
+written in that stage (`layerEdges_all_stages_independent`), and two threads never write the same word
+(distinct destination wires, disjoint wire ranges), so the program never depends on the device's memory
+model: it lives in the apex fibre of the GPU fibration, sequential and exact modulo `2^64`. The memory
+model is rung G4's.
 
 The scalar graphs of `Obend.Hardware.OpenHypergraph` run through the same lowering as their one-element
 instance (`ofScalar`): `lowerHypergraphToGpu g = lowerArrayToGpu (ofScalar g)`.
 
 ## What is proved
 
-* `lowerArrayToGpu_sound`: for a graph whose edges pass `edgeOk` (declared lengths consistent, every
-  wire named exists; `ArrayGraph.wf` checks it, `wf_edgeOk`) and whose outputs exist, and for any wire environment of the declared lengths
-  flattened into the buffer at the program's bases, `runProgram` (the order-free reading of every
-  dispatch: a word's value is the write of the one thread that owns it) shows on every output wire the
-  single-pass combinational evaluation `evalGraph`. The proof goes through the layering theorem and a
-  per-stage flattening invariant; distinct destinations within a stage come from the layering's
-  independence, disjoint ranges from the prefix-sum layout (`base_disjoint`).
+* `lowerArrayToGpu_sound`: for a well-formed graph (`ArrayGraph.wf`: every edge passes `edgeOk`,
+  destinations are written once and after every read of them, map edges are primitive) and for any wire
+  environment of the declared lengths flattened into the buffer at the program's bases, `runProgram`
+  (the order-free reading of every dispatch: a word's value is the write of the one thread that owns it)
+  shows on every output wire the single-pass combinational evaluation `evalGraph`. The proof composes
+  `fuseGraph_sound` (same outputs, edges still `edgeOk`), `layerGraph_sound` (independent stages that
+  flatten to a permutation of the edges, evaluating as the single pass) and a per-stage flattening
+  invariant (`runStages_sound`); distinct destinations within a stage come from the layering's
+  independence, disjoint ranges from the prefix-sum layout (`base_disjoint`). A program kernel is
+  simulated instruction by instruction (`runKCode_sim`): a source wire's name reads the buffer at its
+  base, a constant comes from `c`, every other name is a local.
 * `lowerHypergraphToGpu_sound`: the scalar corollary, against `evalLayeredStagesSyncBv` of the scalar
   layering, through `ofScalar_layered_sound`.
 
 ## What is the gate
 
 `emitStageWgsl` is text, like `emitModuleSV`; its faithfulness to `runProgram` is checked by running
-it: `verify_gpu.sh` regenerates every committed shader and plan byte for byte, runs every vector of every
-graph on the device against `runProgram`'s expected values, and requires each planted emitter rule
-(`addAsSub`, `swapMux`) to make a comparison fail. With Mesa's RADV it also captures the final gfx1031
-assembly of each shader, the artifact rung G2 reads.
+it: `verify_gpu.sh` regenerates every committed shader and plan byte for byte (or its digest, for the
+graph whose plan is too large to commit), runs every vector of every graph on the device against
+`runProgram`'s expected values, and requires each planted emitter rule (`addAsSub`, `swapMux`) to make a
+comparison fail. With Mesa's RADV it also captures the final gfx1031 assembly of each shader, the
+artifact rung G2 reads.
 
 ## Departures from the device, named
 
@@ -45,9 +54,12 @@ WGSL `i64` arithmetic is modulo `2^64` by the WGSL specification, as `BitVec 64`
 unsigned comparison go through `u64`, because WGSL's `>>` on `i64` is arithmetic (it sign-extends) while
 the model's is logical; the gate caught this on the field multiply. A shift's amount is `u32(x)` on the
 device and `x.toNat` in the model; they agree for amounts below `2^32`, which is every amount a graph here
-produces. A missing operand reads as
-`0`, as `evalHypergraphOpBv`'s `getD` does. Threads past a stage's last kernel do nothing. There is no
-claim about workgroups, caches or scopes.
+produces. A missing operand reads as `0`, as `evalHypergraphOpBv`'s `getD` does. A scalar constant is
+`c[i] + 0` and a scale `c[i] * x`, so that the constant buffer, not the shader text, carries the number.
+Threads past a stage's last kernel do nothing. There is no claim about workgroups, caches or scopes.
+
+Expected values: a closure-based evaluator recomputed every wire on every read and was exponential in
+dependency depth; `obend-emit-gpu` uses `evalGraphArr` (wires as arrays, local names in a hash map).
 -/
 public import Obend.Hardware.ArrayHypergraph
 @[expose] public section
@@ -59,14 +71,26 @@ set_option autoImplicit false
 
 /-! ## 1. The program -/
 
+/-- An operand of a kernel instruction at element `e`. -/
+inductive KOperand where
+  /-- `w[base + e]`. -/
+  | read (base : Nat)
+  /-- `c[i]`. -/
+  | cst (i : Nat)
+  /-- the local `w`. -/
+  | tmp (w : Nat)
+  deriving DecidableEq, Repr
+
+structure KInstr where
+  op   : ElemOp
+  args : List KOperand
+  dst  : Nat
+  deriving DecidableEq, Repr
+
 /-- What one kernel's threads compute; element `e` writes `w[dstBase + e]`. -/
 inductive KernelBody where
-  /-- `op` of the operands `w[srcBase_i + e]`. -/
-  | map (op : ElemOp) (srcBases : List Nat)
-  /-- `c[cIdx]` for every element. -/
-  | fill (cIdx : Nat)
-  /-- `c[cIdx]` times the first operand `w[srcBase_0 + e]` (`0` with no operand). -/
-  | scaleBy (cIdx : Nat) (srcBases : List Nat)
+  /-- the instructions in order over locals that start at `0`; the local `out`. -/
+  | prog (code : List KInstr) (out : Nat)
   /-- `w[srcBase + ix[ixBase + e]]`. -/
   | gather (ixBase srcBase : Nat)
   /-- `w[src0Base + e]` for `e < len0`, else `w[src1Base + (e - len0)]`. -/
@@ -142,17 +166,37 @@ structure LowerState where
   ix : List Nat
   deriving Repr
 
+/-- A name in a program: a source wire reads the buffer at its base, anything else is a local. -/
+def operandOf (ls : List Nat) (srcWires : List Nat) (a : Nat) : KOperand :=
+  if srcWires.contains a then .read (base ls a) else .tmp a
+
+/-- One instruction: a scalar constant becomes `c[i] + 0`, a scale `c[i] * x`, with the constant appended
+to the buffer; every other operation keeps its operands by name. -/
+def lowerInstr (ls : List Nat) (srcWires : List Nat) (i : Instr) (st : LowerState) : KInstr × LowerState :=
+  match i.op with
+  | .scalar (.const v) =>
+    (⟨.scalar .add, [.cst st.c.length], i.dst⟩, { st with c := st.c ++ [BitVec.ofInt 64 v] })
+  | .scalar (.scale k) =>
+    (⟨.scalar .mul, .cst st.c.length :: i.args.map (operandOf ls srcWires), i.dst⟩,
+      { st with c := st.c ++ [BitVec.ofInt 64 k] })
+  | op => (⟨op, i.args.map (operandOf ls srcWires), i.dst⟩, st)
+
+def lowerCode (ls : List Nat) (srcWires : List Nat) : List Instr → LowerState → List KInstr × LowerState
+  | [], st => ([], st)
+  | i :: is, st =>
+    let r := lowerInstr ls srcWires i st
+    let rs := lowerCode ls srcWires is r.2
+    (r.1 :: rs.1, rs.2)
+
 def lowerEdge (ls : List Nat) (e : ArrayEdge) (st : LowerState) : Kernel × LowerState :=
   let len (w : Nat) := ls.getD w 0
   let b (w : Nat) := base ls w
   let dst := b e.dstWire
   let count := len e.dstWire
   match e.op with
-  | .map _ (.scalar (.const v)) =>
-    (⟨dst, count, .fill st.c.length⟩, { st with c := st.c ++ [BitVec.ofInt 64 v] })
-  | .map _ (.scalar (.scale k)) =>
-    (⟨dst, count, .scaleBy st.c.length (e.srcWires.map b)⟩, { st with c := st.c ++ [BitVec.ofInt 64 k] })
-  | .map _ op => (⟨dst, count, .map op (e.srcWires.map b)⟩, st)
+  | .map _ p =>
+    let r := lowerCode ls e.srcWires p.code st
+    (⟨dst, count, .prog r.1 p.out⟩, r.2)
   | .gather f =>
     (⟨dst, count, .gather st.ix.length (b (e.srcWires.getD 0 0))⟩, { st with ix := st.ix ++ f.table })
   | .concat =>
@@ -173,8 +217,9 @@ def lowerStages (ls : List Nat) : List (List ArrayEdge) → LowerState → List 
     let rs := lowerStages ls ss r.2
     (⟨r.1⟩ :: rs.1, rs.2)
 
+/-- Fuse, layer, lower. -/
 def lowerArrayToGpu (g : ArrayGraph) : GpuProgram :=
-  let r := lowerStages g.lengths (layerGraph g) ⟨[], []⟩
+  let r := lowerStages g.lengths (layerGraph (fuseGraph g)) ⟨[], []⟩
   { words    := sumNatList g.lengths
   , wireBase := (List.range g.lengths.length).map (base g.lengths)
   , wireLen  := g.lengths
@@ -192,11 +237,21 @@ def lowerHypergraphToGpu (g : StrictOpenHypergraph) : GpuProgram :=
 
 def Kernel.owns (k : Kernel) (a : Nat) : Bool := decide (k.dstBase ≤ a ∧ a < k.dstBase + k.count)
 
+def readOperand (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) : KOperand → Word
+  | .read b => entry (b + e)
+  | .cst i  => c.getD i 0#64
+  | .tmp w  => loc w
+
+def stepKInstr (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) (i : KInstr) : Nat → Word :=
+  let v := evalElemOp i.op (i.args.map (readOperand c entry e loc))
+  fun w => if w == i.dst then v else loc w
+
+def runKCode (c : List Word) (entry : Nat → Word) (e : Nat) (loc : Nat → Word) (code : List KInstr) : Nat → Word :=
+  code.foldl (stepKInstr c entry e) loc
+
 def kernelValue (c : List Word) (ix : List Nat) (entry : Nat → Word) (k : Kernel) (e : Nat) : Word :=
   match k.body with
-  | .map op bases     => evalElemOp op (bases.map fun b => entry (b + e))
-  | .fill i           => c.getD i 0#64
-  | .scaleBy i bases  => c.getD i 0#64 * (bases.map fun b => entry (b + e)).getD 0 0#64
+  | .prog code out    => runKCode c entry e (fun _ => 0#64) code out
   | .gather ixb b     => entry (b + ix.getD (ixb + e) 0)
   | .concat b0 l0 b1  => if e < l0 then entry (b0 + e) else entry (b1 + (e - l0))
   | .const cb         => c.getD (cb + e) 0#64
@@ -231,7 +286,7 @@ def KernelFor (ls : List Nat) (c : List Word) (ix : List Nat) (d : ArrayEdge) (k
   k.dstBase = base ls d.dstWire ∧ k.count = ls.getD d.dstWire 0 ∧
   ∀ (env : Nat → Vec) (flat : Nat → Word), Good ls env → Flat ls env flat →
     ∀ e, e < k.count →
-      kernelValue c ix flat k e = (evalArrayOp d.op (d.srcWires.map env)).getD e 0#64
+      kernelValue c ix flat k e = (edgeValue env d).getD e 0#64
 
 /-- Kernels realize edges one for one. -/
 def KernelsFor (ls : List Nat) (c : List Word) (ix : List Nat) : List ArrayEdge → List Kernel → Prop
@@ -239,28 +294,126 @@ def KernelsFor (ls : List Nat) (c : List Word) (ix : List Nat) : List ArrayEdge 
   | d :: ds, k :: ks => KernelFor ls c ix d k ∧ KernelsFor ls c ix ds ks
   | _, _ => False
 
-theorem getD_append_of_lt {α : Type} (c d : List α) (k : Nat) (z : α) (hk : k < c.length) :
-    (c ++ d).getD k z = c.getD k z := by
-  simp [List.getD_eq_getElem?_getD, List.getElem?_append_left hk]
-
-theorem getD_append_right {α : Type} (c d : List α) (k : Nat) (z : α) :
-    (c ++ d).getD (c.length + k) z = d.getD k z := by
-  simp [List.getD_eq_getElem?_getD, List.getElem?_append_right (Nat.le_add_right _ _)]
-
-theorem getD_range_map {α : Type} (n : Nat) (f : Nat → α) (z : α) (e : Nat) (he : e < n) :
-    ((List.range n).map f).getD e z = f e := by
-  simp [List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_range he]
-
 theorem lowerEdge_dst_count (ls : List Nat) (d : ArrayEdge) (st : LowerState) :
     (lowerEdge ls d st).1.dstBase = base ls d.dstWire ∧ (lowerEdge ls d st).1.count = ls.getD d.dstWire 0 := by
-  cases hop : d.op with
-  | map n op =>
-    cases op with
-    | scalar o => cases o <;> simp [lowerEdge, hop]
-    | ult | band | bor | shr | shl => simp [lowerEdge, hop]
-  | gather f => simp [lowerEdge, hop]
-  | concat => simp [lowerEdge, hop]
-  | const vs => simp [lowerEdge, hop]
+  cases hop : d.op <;> simp [lowerEdge, hop]
+
+/-! ### Programs, simulated instruction by instruction -/
+
+theorem lowerInstr_extends (ls : List Nat) (srcWires : List Nat) (i : Instr) (st : LowerState) :
+    ∃ dc, (lowerInstr ls srcWires i st).2.c = st.c ++ dc ∧ (lowerInstr ls srcWires i st).2.ix = st.ix := by
+  cases hop : i.op with
+  | scalar o => cases o <;> simp [lowerInstr, hop]
+  | ult | band | bor | shr | shl => simp [lowerInstr, hop]
+
+theorem lowerCode_extends (ls : List Nat) (srcWires : List Nat) (code : List Instr) (st : LowerState) :
+    ∃ dc, (lowerCode ls srcWires code st).2.c = st.c ++ dc ∧ (lowerCode ls srcWires code st).2.ix = st.ix := by
+  induction code generalizing st with
+  | nil => exact ⟨[], by simp [lowerCode]⟩
+  | cons i is ih =>
+    obtain ⟨c1, hc1, hi1⟩ := lowerInstr_extends ls srcWires i st
+    obtain ⟨c2, hc2, hi2⟩ := ih (lowerInstr ls srcWires i st).2
+    refine ⟨c1 ++ c2, ?_, ?_⟩
+    · simp only [lowerCode]; rw [hc2, hc1, List.append_assoc]
+    · simp only [lowerCode]; rw [hi2, hi1]
+
+theorem getD_append_length {α : Type} (c : List α) (x : α) (d : List α) (z : α) :
+    (c ++ x :: d).getD c.length z = x := by
+  have := getD_append_right c (x :: d) 0 z
+  simpa using this
+
+/-- The simulation relation between a program's local environment and the kernel's: every non-source
+name agrees, every source name holds the buffer's word at its base. -/
+def Sim (ls : List Nat) (srcWires : List Nat) (flat : Nat → Word) (el : Nat) (loc kloc : Nat → Word) : Prop :=
+  (∀ w, srcWires.contains w = false → kloc w = loc w) ∧
+  (∀ w, srcWires.contains w = true → loc w = flat (base ls w + el))
+
+theorem operands_sim (ls : List Nat) (srcWires : List Nat) (c : List Word) (flat : Nat → Word) (el : Nat)
+    (loc kloc : Nat → Word) (hS : Sim ls srcWires flat el loc kloc) (args : List Nat) :
+    (args.map (operandOf ls srcWires)).map (readOperand c flat el kloc) = args.map loc := by
+  rw [List.map_map]
+  apply List.map_congr_left
+  intro a _
+  simp only [Function.comp_def, operandOf]
+  cases hc : srcWires.contains a with
+  | false => simp only [Bool.false_eq_true, ↓reduceIte, readOperand]; exact hS.1 a hc
+  | true => simp only [↓reduceIte, readOperand]; exact (hS.2 a hc).symm
+
+theorem sim_step (ls : List Nat) (srcWires : List Nat) (flat : Nat → Word) (el : Nat) (loc kloc : Nat → Word)
+    (hS : Sim ls srcWires flat el loc kloc) (dst : Nat) (hdst : srcWires.contains dst = false) (v : Word) :
+    Sim ls srcWires flat el (fun w => if w == dst then v else loc w) (fun w => if w == dst then v else kloc w) := by
+  refine ⟨?_, ?_⟩
+  · intro w hw
+    by_cases h : w = dst
+    · simp [h]
+    · simp only [beq_eq_false_iff_ne.mpr h, Bool.false_eq_true, ↓reduceIte]; exact hS.1 w hw
+  · intro w hw
+    have h : w ≠ dst := fun h => by rw [h, hdst] at hw; exact Bool.noConfusion hw
+    simp only [beq_eq_false_iff_ne.mpr h, Bool.false_eq_true, ↓reduceIte]; exact hS.2 w hw
+
+/-- One instruction, simulated. -/
+theorem lowerInstr_sim (ls : List Nat) (srcWires : List Nat) (i : Instr) (st : LowerState)
+    (hdst : srcWires.contains i.dst = false) (dc : List Word) (flat : Nat → Word) (el : Nat)
+    (loc kloc : Nat → Word) (hS : Sim ls srcWires flat el loc kloc) :
+    Sim ls srcWires flat el (stepInstr loc i)
+      (stepKInstr ((lowerInstr ls srcWires i st).2.c ++ dc) flat el kloc (lowerInstr ls srcWires i st).1) := by
+  have hv : ∀ (c : List Word), evalElemOp i.op (i.args.map loc) =
+      evalElemOp (lowerInstr ls srcWires i st).1.op
+        ((lowerInstr ls srcWires i st).1.args.map (readOperand ((lowerInstr ls srcWires i st).2.c ++ dc) flat el kloc)) := by
+    intro _
+    cases hop : i.op with
+    | scalar o =>
+      cases o with
+      | const v =>
+        simp only [lowerInstr, hop, evalElemOp, evalHypergraphOpBv, List.map_cons, List.map_nil, readOperand,
+          List.getD_cons_zero, List.getD_cons_succ, List.getD_nil]
+        rw [List.append_assoc, List.singleton_append, getD_append_length, BitVec.add_zero]
+      | scale k =>
+        simp only [lowerInstr, hop, evalElemOp, evalHypergraphOpBv, List.map_cons, readOperand,
+          List.getD_cons_zero, List.getD_cons_succ]
+        rw [List.append_assoc, List.singleton_append, getD_append_length,
+          operands_sim ls srcWires _ flat el loc kloc hS i.args]
+      | add | sub | mul | mac | mux =>
+        simp only [lowerInstr, hop]
+        rw [operands_sim ls srcWires _ flat el loc kloc hS i.args]
+    | ult | band | bor | shr | shl =>
+      simp only [lowerInstr, hop]
+      rw [operands_sim ls srcWires _ flat el loc kloc hS i.args]
+  have hd : (lowerInstr ls srcWires i st).1.dst = i.dst := by
+    cases hop : i.op with
+    | scalar o => cases o <;> simp [lowerInstr, hop]
+    | ult | band | bor | shr | shl => simp [lowerInstr, hop]
+  simp only [stepInstr, stepKInstr, hd]
+  rw [← hv []]
+  exact sim_step ls srcWires flat el loc kloc hS i.dst hdst _
+
+/-- **`runKCode_sim`**: a lowered program, run on the kernel's locals, simulates the program on its own,
+given that no instruction writes a source name. -/
+theorem runKCode_sim (ls : List Nat) (srcWires : List Nat) (code : List Instr) (st : LowerState)
+    (hdst : ∀ i ∈ code, srcWires.contains i.dst = false) (dc : List Word) (flat : Nat → Word) (el : Nat)
+    (loc kloc : Nat → Word) (hS : Sim ls srcWires flat el loc kloc) :
+    Sim ls srcWires flat el (runCode loc code)
+      (runKCode ((lowerCode ls srcWires code st).2.c ++ dc) flat el kloc (lowerCode ls srcWires code st).1) := by
+  induction code generalizing st loc kloc with
+  | nil => exact hS
+  | cons i is ih =>
+    obtain ⟨c2, hc2, _⟩ := lowerCode_extends ls srcWires is (lowerInstr ls srcWires i st).2
+    simp only [lowerCode, runCode, runKCode, List.foldl_cons] at ih ⊢
+    have h1 := lowerInstr_sim ls srcWires i st (hdst i List.mem_cons_self) (c2 ++ dc) flat el loc kloc hS
+    have h2 := ih (lowerInstr ls srcWires i st).2 (fun j hj => hdst j (List.mem_cons_of_mem _ hj)) _ _ h1
+    rw [hc2, List.append_assoc] at h2 ⊢
+    exact h2
+
+theorem srcLookup_map_not_mem (f : Nat → Vec) (ws : List Nat) (u : Nat) (hu : ws.contains u = false) :
+    srcLookup (ws.map fun w => (w, f w)) u = [] := by
+  simp only [srcLookup]
+  rw [List.find?_eq_none.mpr]
+  intro p hp
+  obtain ⟨w, hw, rfl⟩ := List.mem_map.mp hp
+  intro h
+  have hwu : w = u := beq_iff_eq.mp h
+  rw [← hwu, List.contains_iff_mem.mpr hw] at hu
+  exact Bool.noConfusion hu
 
 /-- The edge's value at `e`, read from the flat buffer, for each operation. -/
 theorem lowerEdge_kernelFor (ls : List Nat) (d : ArrayEdge) (st : LowerState) (hOk : edgeOk ls d = true)
@@ -275,37 +428,29 @@ theorem lowerEdge_kernelFor (ls : List Nat) (d : ArrayEdge) (st : LowerState) (h
   have hRead : ∀ s, s ∈ d.srcWires → ∀ i, i < ls.getD s 0 → flat (base ls s + i) = (env s).getD i 0#64 :=
     fun s hs i hi => hFlat s i (hSrcs s hs) hi
   cases hop : d.op with
-  | map n op =>
-    simp only [hop, ArrayOp.outLen, List.all_eq_true, beq_iff_eq] at hLen hOp
-    have hElem : ∀ s ∈ d.srcWires, flat (base ls s + e) = (env s).getD e 0#64 :=
-      fun s hs => hRead s hs e (by rw [hOp s hs]; exact he)
-    have hArr : (evalArrayOp (.map n op) (d.srcWires.map env)).getD e 0#64 =
-        evalElemOp op (d.srcWires.map fun s => (env s).getD e 0#64) := by
-      simp only [evalArrayOp]
-      rw [getD_range_map n _ _ e (by rw [hLen]; exact he)]
-      simp [List.map_map, Function.comp_def]
-    have hOps : (d.srcWires.map (base ls)).map (fun b => flat (b + e)) =
-        d.srcWires.map fun s => (env s).getD e 0#64 := by
-      rw [List.map_map]
-      exact List.map_congr_left fun s hs => by simp [Function.comp_def, hElem s hs]
+  | map n p =>
+    simp only [hop, ArrayOp.outLen, List.all_eq_true, beq_iff_eq, Bool.and_eq_true, Bool.not_eq_true'] at hLen hOp
+    obtain ⟨⟨hSame, hNoDst⟩, hOut⟩ := hOp
+    have hArr : (edgeValue env d).getD e 0#64 =
+        evalProg p fun w => (srcLookup (edgeSrcs env d) w).getD e 0#64 := by
+      simp only [edgeValue, hop, evalArrayOp]
+      rw [getD_range_map n _ _ e (by omega)]
     rw [hArr]
-    cases op with
-    | scalar o =>
-      cases o with
-      | const v =>
-        simp only [lowerEdge, hop, kernelValue]
-        rw [getD_append_of_lt _ _ _ _ (by simp)]
-        simp [evalElemOp, evalHypergraphOpBv, List.getD_eq_getElem?_getD, List.getElem?_concat_length]
-      | scale k =>
-        simp only [lowerEdge, hop, kernelValue]
-        rw [getD_append_of_lt _ _ _ _ (by simp), hOps]
-        simp [evalElemOp, evalHypergraphOpBv, List.getD_eq_getElem?_getD, List.getElem?_concat_length]
-      | add | sub | mul | mac | mux =>
-        simp only [lowerEdge, hop, kernelValue]
-        rw [hOps]
-    | ult | band | bor | shr | shl =>
-      simp only [lowerEdge, hop, kernelValue]
-      rw [hOps]
+    simp only [lowerEdge, hop, kernelValue, evalProg]
+    obtain ⟨c2, hc2, hi2⟩ := lowerCode_extends ls d.srcWires p.code st
+    have hS0 : Sim ls d.srcWires flat e (fun w => (srcLookup (edgeSrcs env d) w).getD e 0#64) (fun _ => 0#64) := by
+      refine ⟨?_, ?_⟩
+      · intro w hw
+        simp only [edgeSrcs]
+        rw [srcLookup_map_not_mem env d.srcWires w hw]
+        rfl
+      · intro w hw
+        have hmem := List.contains_iff_mem.mp hw
+        simp only [edgeSrcs]
+        rw [srcLookup_map env d.srcWires w hmem]
+        exact (hRead w hmem e (by rw [hSame w hmem]; exact he)).symm
+    have hSim := runKCode_sim ls d.srcWires p.code st hNoDst dc flat e _ _ hS0
+    exact (hSim.1 p.out hOut).symm ▸ rfl
   | gather f =>
     simp only [hop, ArrayOp.outLen, Bool.and_eq_true, beq_iff_eq] at hLen hOp
     obtain ⟨⟨hfwf, hOne⟩, hTarget⟩ := hOp
@@ -331,8 +476,8 @@ theorem lowerEdge_kernelFor (ls : List Nat) (d : ArrayEdge) (st : LowerState) (h
         (lowerEdge ls d st).1 e = flat (base ls s + f.table.getD e 0) := by
       simp only [lowerEdge, hop, kernelValue, hs, List.getD_cons_zero]
       rw [List.append_assoc, getD_append_right st.ix (f.table ++ dix) e 0, getD_append_of_lt f.table dix e 0 heTab]
-    have hav : (evalArrayOp (.gather f) (d.srcWires.map env)).getD e 0#64 = (env s).getD (f.table.getD e 0) 0#64 := by
-      simp only [evalArrayOp, hs, List.map_cons, List.map_nil, List.getD_cons_zero]
+    have hav : (edgeValue env d).getD e 0#64 = (env s).getD (f.table.getD e 0) 0#64 := by
+      simp only [edgeValue, edgeSrcs, evalArrayOp, hop, hs, List.map_cons, List.map_nil, List.getD_cons_zero]
       rw [List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_eq_getElem heTab, hIdx]
       rfl
     rw [hkv, hav]
@@ -353,29 +498,28 @@ theorem lowerEdge_kernelFor (ls : List Nat) (d : ArrayEdge) (st : LowerState) (h
       rw [← hLen, hs] at he
       simpa using he
     have hLen0 := hGood s0 (hSrcs s0 h0)
-    simp only [lowerEdge, hop, kernelValue, evalArrayOp, hs, List.map_cons, List.map_nil,
+    simp only [lowerEdge, hop, kernelValue, edgeValue, edgeSrcs, evalArrayOp, hs, List.map_cons, List.map_nil,
       List.getD_cons_zero, List.getD_cons_succ]
     by_cases hlt : e < ls.getD s0 0
-    · rw [if_pos hlt, hRead s0 h0 e hlt]
+    · rw [ite_eq_left hlt, hRead s0 h0 e hlt]
       exact (getD_append_of_lt (env s0) (env s1) e 0#64 (by rw [hLen0]; exact hlt)).symm
-    · rw [if_neg hlt, hRead s1 h1 (e - ls.getD s0 0) (by omega)]
+    · rw [ite_eq_right hlt, hRead s1 h1 (e - ls.getD s0 0) (by omega)]
       have h' := getD_append_right (env s0) (env s1) (e - ls.getD s0 0) 0#64
       rw [hLen0, show ls.getD s0 0 + (e - ls.getD s0 0) = e by omega] at h'
       exact h'.symm
   | const vs =>
     simp only [hop, ArrayOp.outLen] at hLen
     rw [← hLen] at he
-    simp only [lowerEdge, hop, kernelValue, evalArrayOp]
+    simp only [lowerEdge, hop, kernelValue, edgeValue, evalArrayOp]
     rw [List.append_assoc, getD_append_right st.c (vs ++ dc) e 0#64, getD_append_of_lt vs dc e 0#64 he]
 
 /-- Lowering only appends to the constant and index buffers. -/
 theorem lowerEdge_extends (ls : List Nat) (d : ArrayEdge) (st : LowerState) :
     ∃ dc dix, (lowerEdge ls d st).2.c = st.c ++ dc ∧ (lowerEdge ls d st).2.ix = st.ix ++ dix := by
   cases hop : d.op with
-  | map n op =>
-    cases op with
-    | scalar o => cases o <;> simp [lowerEdge, hop]
-    | ult | band | bor | shr | shl => simp [lowerEdge, hop]
+  | map n p =>
+    obtain ⟨dc, hc, hi⟩ := lowerCode_extends ls d.srcWires p.code st
+    exact ⟨dc, [], by simp [lowerEdge, hop, hc, hi]⟩
   | gather f => exact ⟨[], f.table, by simp [lowerEdge, hop]⟩
   | concat => simp [lowerEdge, hop]
   | const vs => exact ⟨vs, [], by simp [lowerEdge, hop]⟩
@@ -423,7 +567,7 @@ theorem evalStageAux_find (entry cur : Nat → Vec) (stage : List ArrayEdge)
     (hNodup : (stage.map (·.dstWire)).Nodup) (w : Nat) :
     evalStageAux entry cur stage w =
       match stage.find? (fun d => d.dstWire == w) with
-      | some d => evalArrayOp d.op (d.srcWires.map entry)
+      | some d => edgeValue entry d
       | none   => cur w := by
   induction stage generalizing cur with
   | nil => rfl
@@ -508,8 +652,7 @@ theorem runStage_sound (ls : List Nat) (c : List Word) (ix : List Nat)
     exact hFlat w e hw he
   · obtain ⟨d, hd, hdk, hBase, hdw⟩ := hFind.2 k hk
     rw [hk, hd]
-    show kernelValue c ix flat k (base ls w + e - k.dstBase) =
-      List.getD (evalArrayOp d.op (d.srcWires.map env)) e 0#64
+    show kernelValue c ix flat k (base ls w + e - k.dstBase) = List.getD (edgeValue env d) e 0#64
     rw [hBase, Nat.add_sub_cancel_left]
     exact hdk.2.2 env flat hGood hFlat e (by rw [hdk.2.1, hdw]; exact he)
 
@@ -529,7 +672,7 @@ theorem evalStageSync_good (ls : List Nat) (stage : List ArrayEdge)
     intro u hu
     simp only [stepEdgeSync]
     by_cases hud : u == d.dstWire
-    · rw [if_pos hud]
+    · rw [ite_eq_left hud]
       have hOkd := hOk d List.mem_cons_self
       simp only [edgeOk, Bool.and_eq_true, beq_iff_eq, List.all_eq_true, decide_eq_true_eq] at hOkd
       have hfw : ∀ f, d.op = .gather f → f.wf = true := by
@@ -537,12 +680,13 @@ theorem evalStageSync_good (ls : List Nat) (stage : List ArrayEdge)
         have := hOkd.2
         simp only [hf, Bool.and_eq_true] at this
         exact this.1.1
+      simp only [edgeValue]
       rw [evalArrayOp_length d.op _ hfw]
-      have hLens : (d.srcWires.map env).map List.length = d.srcWires.map (ls.getD · 0) := by
-        rw [List.map_map]
+      have hLens : ((edgeSrcs env d).map (·.2)).map List.length = d.srcWires.map (ls.getD · 0) := by
+        simp only [edgeSrcs, List.map_map]
         exact List.map_congr_left fun s hs => hGood s (hOkd.1.1.2 s hs)
       rw [hLens, hOkd.1.2, beq_iff_eq.mp hud]
-    · rw [if_neg (by simpa using hud)]
+    · rw [ite_eq_right (by simpa using hud)]
       exact hcur u hu
 
 /-! ## 7. The program -/
@@ -580,24 +724,26 @@ theorem runStages_sound (ls : List Nat) (c : List Word) (ix : List Nat)
     exact ih (lowerEdges ls s st).2 hOkSS hInd.2 hc hix (evalStageSync env s)
       (runStage c ix flat ⟨(lowerEdges ls s st).1⟩) hGood' hFlat'
 
-/-- **`lowerArrayToGpu_sound`**: on a graph whose edges and outputs are well-formed, the lowered program
-run from any flattening of a good wire environment shows `evalGraph g env` on its output wires. -/
-theorem lowerArrayToGpu_sound (g : ArrayGraph)
-    (hOk : ∀ d ∈ g.edges, edgeOk g.lengths d = true)
-    (hOut : ∀ w ∈ g.outputs, w < g.lengths.length)
+/-- **`lowerArrayToGpu_sound`**: on a well-formed graph, the lowered program run from any flattening of
+a good wire environment shows `evalGraph g env` on its output wires. -/
+theorem lowerArrayToGpu_sound (g : ArrayGraph) (hWf : g.wf = true)
     (env : Nat → Vec) (flat : Nat → Word) (hGood : Good g.lengths env) (hFlat : Flat g.lengths env flat) :
     runProgram (lowerArrayToGpu g) flat = evalGraph g env := by
-  have hLayer := layerGraph_sound g env
-  have hOkS : ∀ s ∈ layerGraph g, ∀ d ∈ s, edgeOk g.lengths d = true := by
+  obtain ⟨hFuse, hOkF⟩ := fuseGraph_sound g hWf env
+  have hOut := wf_outputs g hWf
+  have hLayer := layerGraph_sound (fuseGraph g) env
+  have hOkS : ∀ s ∈ layerGraph (fuseGraph g), ∀ d ∈ s, edgeOk g.lengths d = true := by
     intro s hs d hd
-    apply hOk
-    rw [← hLayer.2.1]
+    apply hOkF
+    rw [← hLayer.2.1.mem_iff]
     exact List.mem_flatten.mpr ⟨s, hs, hd⟩
   obtain ⟨hFlat', hGood'⟩ := runStages_sound g.lengths
-    (lowerStages g.lengths (layerGraph g) ⟨[], []⟩).2.c (lowerStages g.lengths (layerGraph g) ⟨[], []⟩).2.ix
-    (layerGraph g) ⟨[], []⟩ hOkS hLayer.1 [] [] (List.append_nil _).symm (List.append_nil _).symm
+    (lowerStages g.lengths (layerGraph (fuseGraph g)) ⟨[], []⟩).2.c
+    (lowerStages g.lengths (layerGraph (fuseGraph g)) ⟨[], []⟩).2.ix
+    (layerGraph (fuseGraph g)) ⟨[], []⟩ hOkS hLayer.1 [] [] (List.append_nil _).symm (List.append_nil _).symm
     env flat hGood hFlat
-  simp only [runProgram, lowerArrayToGpu, evalGraph]
+  rw [← hFuse]
+  simp only [runProgram, lowerArrayToGpu, evalGraph, fuseGraph_outputs]
   rw [← hLayer.2.2]
   apply List.map_congr_left
   intro w hw
@@ -621,11 +767,11 @@ theorem base_replicate_one (n w : Nat) (hw : w ≤ n) : base (List.replicate n 1
     | zero => rfl
     | succ k => simp only [List.replicate_succ, base]; rw [ih k (by omega)]; omega
 
-/-- **`lowerHypergraphToGpu_sound`**: a scalar graph, run as its one-element instance from the scalar
-environment laid out one word per wire, shows the scalar 64-bit layered evaluation on every output. -/
+/-- **`lowerHypergraphToGpu_sound`**: a scalar graph whose one-element instance is well-formed, run from
+the scalar environment laid out one word per wire, shows the scalar 64-bit layered evaluation on every
+output. -/
 theorem lowerHypergraphToGpu_sound (g : StrictOpenHypergraph)
-    (hOk : ∀ d ∈ (ofScalar g).edges, edgeOk (ofScalar g).lengths d = true)
-    (hOut : ∀ w ∈ g.boundaryOut.table, w < g.nodeTypes.length)
+    (hWf : (ofScalar g).wf = true)
     (env : Nat → Word) :
     runProgram (lowerHypergraphToGpu g) env =
       g.boundaryOut.table.map fun w => [evalLayeredStagesSyncBv env (layerHypergraph g) w] := by
@@ -646,11 +792,7 @@ theorem lowerHypergraphToGpu_sound (g : StrictOpenHypergraph)
     subst he0
     rw [base_replicate_one g.nodeTypes.length w (Nat.le_of_lt hw)]
     rfl
-  have hOut' : ∀ w ∈ (ofScalar g).outputs, w < (ofScalar g).lengths.length := by
-    intro w hw
-    rw [hn]
-    exact hOut w hw
-  rw [lowerHypergraphToGpu, lowerArrayToGpu_sound (ofScalar g) hOk hOut' _ env hGood hFlat]
+  rw [lowerHypergraphToGpu, lowerArrayToGpu_sound (ofScalar g) hWf _ env hGood hFlat]
   simp only [evalGraph]
   rw [← (layerGraph_sound (ofScalar g) (singletonEnv env)).2.2, ofScalar_layered_sound]
   rfl
@@ -669,14 +811,14 @@ def Plant.ofString? : String → Option Plant
   | "swapMux"  => some .swapMux
   | _          => Option.none
 
-/-- Operand `i` of a map kernel at element `e`: its word, or `0` when the edge has no such source. -/
-def operand (bases : List Nat) (i : Nat) : String :=
-  match bases[i]? with
-  | some b => s!"w[{b}u + e]"
-  | Option.none => "i64(0)"
+def operandText : KOperand → String
+  | .read b => s!"w[{b}u + e]"
+  | .cst i  => s!"c[{i}u]"
+  | .tmp w  => s!"v{w}"
 
-def elemExpr (p : Plant) (op : ElemOp) (bases : List Nat) : String :=
-  let a (i : Nat) := operand bases i
+/-- The expression of one instruction; a missing operand is `i64(0)`. -/
+def elemExpr (p : Plant) (op : ElemOp) (args : List String) : String :=
+  let a (i : Nat) := args.getD i "i64(0)"
   match op with
   | .scalar .add       => if p == .addAsSub then s!"{a 0} - {a 1}" else s!"{a 0} + {a 1}"
   | .scalar .sub       => s!"{a 0} - {a 1}"
@@ -685,34 +827,35 @@ def elemExpr (p : Plant) (op : ElemOp) (bases : List Nat) : String :=
   | .scalar .mux       =>
     if p == .swapMux then s!"select({a 1}, {a 2}, {a 0} != i64(0))"
     else s!"select({a 2}, {a 1}, {a 0} != i64(0))"
-  | .scalar (.const _) => "i64(0) /* unreachable: lowered to fill */"
-  | .scalar (.scale _) => "i64(0) /* unreachable: lowered to scaleBy */"
+  | .scalar (.const _) => "i64(0) /* unreachable: lowered to a constant read */"
+  | .scalar (.scale _) => "i64(0) /* unreachable: lowered to a constant multiply */"
   | .ult               => s!"select(i64(0), i64(1), u64({a 0}) < u64({a 1}))"
   | .band              => s!"{a 0} & {a 1}"
   | .bor               => s!"{a 0} | {a 1}"
   | .shr               => s!"i64(u64({a 0}) >> u32({a 1}))"
   | .shl               => s!"i64(u64({a 0}) << u32({a 1}))"
 
-def kernelStatement (p : Plant) (k : Kernel) : String :=
-  let rhs : String :=
-    match k.body with
-    | .map op bases      => elemExpr p op bases
-    | .fill i            => s!"c[{i}u]"
-    | .scaleBy i bases   => s!"c[{i}u] * {operand bases 0}"
-    | .gather ixb b      => s!"w[{b}u + ix[{ixb}u + e]]"
-    | .concat b0 l0 b1   => s!"select(w[{b1}u + (e - {l0}u)], w[{b0}u + e], e < {l0}u)"
-    | .const cb          => s!"c[{cb}u + e]"
-  s!"w[{k.dstBase}u + e] = {rhs};"
+/-- The statements of one kernel at element `e`: a program is one `let` per instruction and the store of
+its value; the others are one store. -/
+def kernelStatements (p : Plant) (k : Kernel) : List String :=
+  match k.body with
+  | .prog code out =>
+    (code.map fun i => s!"let v{i.dst} : i64 = {elemExpr p i.op (i.args.map operandText)};") ++
+      [s!"w[{k.dstBase}u + e] = v{out};"]
+  | .gather ixb b      => [s!"w[{k.dstBase}u + e] = w[{b}u + ix[{ixb}u + e]];"]
+  | .concat b0 l0 b1   => [s!"w[{k.dstBase}u + e] = select(w[{b1}u + (e - {l0}u)], w[{b0}u + e], e < {l0}u);"]
+  | .const cb          => [s!"w[{k.dstBase}u + e] = c[{cb}u + e];"]
 
 /-- The shader of stage `k`: thread `gid.x` finds its kernel by the thread ranges laid end to end,
-becomes element `e` of it, and runs its statement; threads past the last kernel idle. The ranges are
+becomes element `e` of it, and runs its statements; threads past the last kernel idle. The ranges are
 disjoint, so the tests are a flat sequence (an `else if` chain nests, and Metal's compiler stops at a
 depth of 256). -/
 def emitStageWgsl (p : Plant) (name : String) (k numStages : Nat) (s : GpuStage) : String :=
   let branches := (s.kernels.foldl (fun (acc : Nat × List String) kern =>
     let hi := acc.1 + kern.count
     let test := if acc.1 == 0 then s!"t < {hi}u" else s!"t >= {acc.1}u && t < {hi}u"
-    (hi, acc.2 ++ [s!"  if ({test}) \{ let e : u32 = t - {acc.1}u; {kernelStatement p kern} }"]))
+    let body := (kernelStatements p kern).map (s!"    " ++ ·)
+    (hi, acc.2 ++ [s!"  if ({test}) \{", s!"    let e : u32 = t - {acc.1}u;"] ++ body ++ ["  }"]))
     (0, [])).2
   String.intercalate "\n"
     ([ s!"// obend-emit-gpu: {name}, stage {k} of {numStages}: {s.kernels.length} kernels, {s.threads} threads."
