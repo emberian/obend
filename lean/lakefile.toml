@@ -99,3 +99,19 @@ root = "EmitHvm"
 name = "obend-emit-gpu"
 srcDir = "tools/emitgpu"
 root = "EmitGpu"
+
+# GPU lane, rung G2 (2026-11-06): the RDNA2 decoder generated from AMD's machine-readable ISA and the wave
+# model, on RADV's dumps under `hardware/gpu/isa/` (`Obend.Hardware.Gpu.Rdna2`); `hardware/gpu/isa_check.sh`
+# is the gate. `lake build obend-rdna2`.
+[[lean_exe]]
+name = "obend-rdna2"
+srcDir = "tools/rdna2"
+root = "Rdna2"
+
+# GPU lane, rung G4 (2026-11-06): the litmus shapes of `hardware/gpu/litmus/` under
+# `Obend.Hardware.Gpu.Memory`: the verdict table, the Dartagnan litmus files the gate cross-checks, and the
+# restriction check. `lake build obend-litmus-check`.
+[[lean_exe]]
+name = "obend-litmus-check"
+srcDir = "tools/litmuscheck"
+root = "LitmusCheck"

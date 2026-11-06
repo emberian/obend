@@ -44,6 +44,7 @@ def CheckRefusal.path : CheckRefusal → List Nat
   | .capturesNotShareable p | .notShareable p _ | .activityMisplaced p _ | .fieldDropped p _
   | .invalidContext p => p
   | .invalidAssumptions => []
+  | .undeclaredHole p _ | .holeArity p _ _ _ => p
 
 /-- The checker's answer as a verdict: refusals keep the checker's clause and path. -/
 def ofExcept {α : Type} : Except CheckRefusal α → Verdict CheckRefusal

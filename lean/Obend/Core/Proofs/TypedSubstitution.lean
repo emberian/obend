@@ -30,7 +30,7 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
       (∀ arm ∈ arms, Scoped (Δ.length + 1) arm.2) →
       ∃ a : Uses, a.length = Δ.length ∧ uses = a ++ zeroUses Ψ ∧
         ArmsTyping asm (Δ ++ Ψ') q arms row result (a ++ zeroUses Ψ'))
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · rintro Γ i b found Δ rfl hs
     have hi : i < Δ.length := (scoped_bound_iff _ _).mp hs
     have hf : (Δ ++ Ψ')[i]? = some b := by
@@ -213,6 +213,30 @@ public theorem partialTyping_transport {asm : Assumptions} {Γ : Context} {term 
     · rw [hu, hv, split_add Ψ hab]
     · rw [← split_add Ψ' hab]
       exact .split d₁ d₂ nodup covers (spine.transport fun q allowed => caseAllowed_append_zero ha (hu ▸ allowed))
+  · rintro Γ n σ decl args found hσ hctx _ allowed ih Δ rfl hs
+    subst hσ
+    rw [scoped_hole_iff] at hs
+    obtain ⟨m, hm, hp⟩ := exists_list_choice args (P := fun arg a => a.length = Δ.length ∧
+        arg.2.2 = a ++ zeroUses Ψ ∧ PartialTyping asm (Δ ++ Ψ') arg.1 arg.2.1.type (a ++ zeroUses Ψ'))
+      (fun arg ha => ih arg ha Δ rfl (hs _ (List.mem_map_of_mem ha)))
+    subst hm
+    have lens : ∀ a ∈ m.map (·.2), a.length = Δ.length := by
+      intro a ha; obtain ⟨p, hp', rfl⟩ := List.mem_map.mp ha; exact (hp p hp').1
+    refine ⟨(m.map (·.2)).foldr addUses (zeroUses Δ), length_foldr_addUses _ _ (length_zeroUses _) lens, ?_, ?_⟩
+    · rw [← foldr_split_zero Δ Ψ _ lens, List.map_map, List.map_map]
+      congr 1; apply List.map_congr_left; intro p hp'; exact (hp p hp').2.1
+    · have typed := PartialTyping.hole (assumptions := asm) (context := Δ ++ Ψ')
+        (σ := (m.map Prod.fst).map (·.1))
+        (args := m.map fun p => (p.1.1, p.1.2.1, p.2 ++ zeroUses Ψ')) found
+        (by simp [Function.comp_def]) (by rw [← hctx]; simp [Function.comp_def])
+        (fun a ha => by obtain ⟨p, hp', rfl⟩ := List.mem_map.mp ha; exact (hp p hp').2.2)
+        (fun a ha => by
+          obtain ⟨p, hp', rfl⟩ := List.mem_map.mp ha
+          have h := allowed p.1 (List.mem_map_of_mem hp')
+          rw [(hp p hp').2.1] at h
+          exact argumentAllowed_append_zero (hp p hp').1 h)
+      rw [← foldr_split_zero Δ Ψ' _ lens]
+      simpa [List.map_map, Function.comp_def] using typed
   · rintro Γ Δ rfl hs
     refine ⟨zeroUses Δ, length_zeroUses _, zeroUses_append Δ Ψ, ?_⟩
     rw [← zeroUses_append]
@@ -286,7 +310,7 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
       validContext asm.shareableVariables Γ = true →
       ∃ u : Uses, ArmsTyping asm Γ q
         (arms.map fun arm => (arm.1, arm.2.substitute (fillTerm σ (Δ.length + 1)))) row result u ∧ UsesMasked σ Δ.length u uses)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · rintro Γ i b found Δ rfl validΓ
     simp only [Term.substitute]
     by_cases isLocal : i < Δ.length
@@ -423,6 +447,25 @@ public theorem partialTyping_msubst {asm : Assumptions} {Γ : Context} {term : T
     simp only [Term.substitute]
     exact ⟨_, .split d₁ d₂ nodup covers (spine.transport fun q allowed => caseAllowed_of_le hu.le allowed),
       UsesMasked.add hu hv⟩
+  · rintro Γ n σ' decl args found hσ hctx _ allowed ih Δ rfl validΓ
+    subst hσ
+    obtain ⟨m, hm, hp⟩ := exists_list_choice args (P := fun arg u' =>
+        PartialTyping asm (Δ ++ Ψ) (arg.1.substitute (fillTerm σ Δ.length)) arg.2.1.type u' ∧
+          UsesMasked σ Δ.length u' arg.2.2)
+      (fun arg ha => ih arg ha Δ rfl validΓ)
+    subst hm
+    have typed := PartialTyping.hole (assumptions := asm) (context := Δ ++ Ψ)
+      (σ := ((m.map Prod.fst).map (·.1)).map fun t => t.substitute (fillTerm σ Δ.length))
+      (args := m.map fun p => (p.1.1.substitute (fillTerm σ Δ.length), p.1.2.1, p.2)) found
+      (by simp [Function.comp_def]) (by rw [← hctx]; simp [Function.comp_def])
+      (fun a ha => by obtain ⟨p, hp', rfl⟩ := List.mem_map.mp ha; exact (hp p hp').1)
+      (fun a ha => by
+        obtain ⟨p, hp', rfl⟩ := List.mem_map.mp ha
+        exact argumentAllowed_of_le (hp p hp').2.le (allowed p.1 (List.mem_map_of_mem hp')))
+    simp only [Term.substitute]; refine ⟨_, typed, ?_⟩
+    simp only [List.map_map, Function.comp_def]
+    exact foldr_addUses_rel (R := UsesMasked σ Δ.length) UsesMasked.add (UsesMasked.zero _ _ _)
+      (fun p => p.1.2.2) (fun p => p.2) m (fun p hp' => (hp p hp').2)
   · rintro Γ Δ rfl validΓ
     exact ⟨_, .nil _, UsesMasked.zero _ _ _⟩
   · rintro Γ name body rest type row bu ru db dr pure ih₁ ih₂ Δ rfl validΓ

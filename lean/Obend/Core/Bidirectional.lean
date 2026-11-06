@@ -72,6 +72,10 @@ inductive CheckRefusal where
   | activityMisplaced (path : List Nat) (type : Ty)
   | invalidContext (path : List Nat)
   | invalidAssumptions
+  /-- The hole `hole` at `path` is not declared (`Assumptions.holes`). -/
+  | undeclaredHole (path : List Nat) (hole : Nat)
+  /-- The hole `hole` at `path` is declared over `declared` variables and given `supplied` arguments. -/
+  | holeArity (path : List Nat) (hole : Nat) (declared supplied : Nat)
   deriving Repr, DecidableEq
 
 /-- A Boolean premise as evidence, or the named refusal. -/
@@ -284,6 +288,15 @@ structure FieldsAgainst (assumptions : Assumptions) (context : Context) (fields 
   uses : Uses
   derivation : FieldsTyping assumptions context fields row uses
 
+/-- A hole's arguments checked against its declared context, entry by entry: what
+`PartialTyping.hole` asks of them. -/
+structure ArgsAgainst (assumptions : Assumptions) (context : Context) (σ : List Term) (Δ : Context) where
+  args : List (Term × Binding × Uses)
+  terms : σ = args.map (·.1)
+  bindings : args.map (·.2.1) = Δ
+  typed : ∀ arg ∈ args, PartialTyping assumptions context arg.1 arg.2.1.type arg.2.2
+  allowed : ∀ arg ∈ args, argumentAllowed assumptions arg.2.1.quantity context arg.2.1.type arg.2.2 = true
+
 /-- What a call is asked: synthesize, or check against a type. -/
 inductive Mode where
   | synth
@@ -343,7 +356,13 @@ mutual
 /-- Synthesis and checking, by the term's shape. -/
 def elaborate (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat) :
     (term : Term) → (mode : Mode) → Except CheckRefusal (Result assumptions context term mode)
-  | .hole _ _, _ => throw (.shapeMismatch path "term" .emptyRow)
+  | .hole n σ, mode =>
+    match found : assumptions.holes.lookup n with
+    | none => throw (.undeclaredHole path n)
+    | some decl => do
+      let checked ← checkArgs assumptions annotations context path n 0 σ decl.context
+      finish assumptions annotations path ⟨decl.type, (checked.args.map (·.2.2)).foldr addUses (zeroUses context),
+        .hole found checked.terms checked.bindings checked.typed checked.allowed⟩ mode
   | .bound index, mode =>
     match found : context[index]? with
     | some binding => finish assumptions annotations path ⟨binding.type, variableUses context index, .bound found⟩ mode
@@ -842,6 +861,27 @@ def checkFieldsByLabel (assumptions : Assumptions) (annotations : Annotations) (
         .cons first.derivation later.derivation (by simpa using hc)⟩
     | none => throw (.unknownLabel (path ++ [index]) name row)
 
+/-- A hole's arguments, each checked at its parameter's type and passed as `argumentAllowed`
+allows; positions `path ++ [index]`, `path ++ [index + 1]`, …. -/
+def checkArgs (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
+    (hole index : Nat) : (σ : List Term) → (Δ : Context) → Except CheckRefusal (ArgsAgainst assumptions context σ Δ)
+  | [], [] => pure ⟨[], rfl, rfl, by simp, by simp⟩
+  | t :: σ, b :: Δ => do
+    let first ← elaborate assumptions annotations context (path ++ [index]) t (.check b.type)
+    let ⟨ha⟩ ← need (argumentAllowed assumptions b.quantity context b.type first.uses)
+      (argumentRefusal assumptions (path ++ [index]) b.quantity context b.type first.uses)
+    let later ← checkArgs assumptions annotations context path hole (index + 1) σ Δ
+    pure ⟨(t, b, first.uses) :: later.args, by simp [later.terms], by simp [later.bindings],
+      by
+        intro arg h; rcases List.mem_cons.mp h with rfl | h
+        · exact first.derivation
+        · exact later.typed arg h,
+      by
+        intro arg h; rcases List.mem_cons.mp h with rfl | h
+        · exact ha
+        · exact later.allowed arg h⟩
+  | σ, Δ => throw (.holeArity path hole (index + Δ.length) (index + σ.length))
+
 /-- Arms checked against one result type, each under its label's payload in `row`. -/
 def checkArms (assumptions : Assumptions) (annotations : Annotations) (context : Context) (q : Quantity)
     (path : List Nat) (index : Nat) (row result : Ty) :
@@ -912,13 +952,18 @@ theorem checkAgainst_sound {source : AnnotatedTerm} {context : Context} {expecte
       simp [h1, h2, h3, pure, Except.pure] at accepted
     cases accepted; rfl
 
-/-- The checker refuses a hole in any mode. Proved through `elaborate.eq_def`, so the unfolding
-equation is generated here once, not again in each of the modules that unfold `elaborate`. -/
+/-- The checker refuses an undeclared hole in any mode. Proved through `elaborate.eq_def`, so the
+unfolding equation is generated here once, not again in each of the modules that unfold `elaborate`. -/
 theorem elaborate_refuses_hole (assumptions : Assumptions) (annotations : Annotations)
-    (context : Context) (path : List Nat) (n : Nat) (payload : List Term) (mode : Mode) :
+    (context : Context) (path : List Nat) (n : Nat) (payload : List Term) (mode : Mode)
+    (undeclared : assumptions.holes.lookup n = none) :
     elaborate assumptions annotations context path (.hole n payload) mode =
-      throw (.shapeMismatch path "term" .emptyRow) := by
+      throw (.undeclaredHole path n) := by
   rw [elaborate.eq_def]
+  simp only
+  split
+  · rfl
+  · rename_i h; rw [undeclared] at h; cases h
 
 end Obend.Core.Bidirectional
 

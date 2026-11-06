@@ -362,6 +362,19 @@ theorem bound_subst {a : Assumptions} {Γ : Context} {d : Nat} {σ : Nat → Ter
   · rw [getD_of_length_le (by rw [occurrences_length]; omega)]; exact Nat.zero_le _
 
 
+/-- Each argument of a hole uses at most what the hole does (`PartialTyping.hole` sums them). -/
+theorem le_foldr_addUses {n : Nat} : ∀ (l : List Uses) (z : Uses), z.length = n → (∀ u ∈ l, u.length = n) →
+    ∀ u ∈ l, ∀ i, u.getD i 0 ≤ (l.foldr addUses z).getD i 0
+  | [], _, _, _, _, h, _ => by simp at h
+  | v :: l, z, hz, hl, u, hu, i => by
+    have lv := hl v List.mem_cons_self
+    have lr := length_foldr_addUses l z hz (fun w hw => hl w (List.mem_cons_of_mem _ hw))
+    simp only [List.foldr_cons]
+    rcases List.mem_cons.mp hu with rfl | hu
+    · exact add_le_left (lv.trans lr.symm) i
+    · exact Nat.le_trans (le_foldr_addUses l z hz (fun w hw => hl w (List.mem_cons_of_mem _ hw)) u hu i)
+        (add_le_right (lv.trans lr.symm) i)
+
 /-- **Typed open substitution.** -/
 theorem subst_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Uses}
     (typed : PartialTyping a Γ t T u) :
@@ -382,6 +395,37 @@ theorem subst_typed {a : Assumptions} {Γ : Context} {t : Term} {T : Ty} {u : Us
     intro Γ index binding found d σ A ua S budget
     simp only [Term.substitute]
     exact bound_subst S found
+  case hole =>
+    intro Γ n σ' decl args found hσ hctx typedArgs allowed ih d σ A ua S budget
+    subst hσ
+    have lens : ∀ u ∈ args.map (·.2.2), u.length = Γ.length := by
+      intro u hu; obtain ⟨arg, h, rfl⟩ := List.mem_map.mp hu; exact source_uses_length (typedArgs arg h)
+    have below : ∀ arg ∈ args, ∀ i, arg.2.2.getD i 0 ≤ ((args.map (·.2.2)).foldr addUses (zeroUses Γ)).getD i 0 :=
+      fun arg h => le_foldr_addUses _ _ (by simp [zeroUses]) lens _ (List.mem_map_of_mem h)
+    obtain ⟨m, hm, hp⟩ := exists_list_choice args (P := fun arg u' =>
+        PartialTyping a (Γ.eraseIdx d) (arg.1.substitute σ) arg.2.1.type u' ∧ ∀ j, u'.getD j 0 ≤ Image d ua arg.2.2 j)
+      (fun arg h => ih arg h d σ A ua S (budget_mono (below arg h) budget))
+    subst hm
+    have typed := PartialTyping.hole (assumptions := a) (context := Γ.eraseIdx d)
+      (σ := ((m.map Prod.fst).map (·.1)).map fun t => t.substitute σ)
+      (args := m.map fun p => (p.1.1.substitute σ, p.1.2.1, p.2)) found
+      (by simp [Function.comp_def]) (by rw [← hctx]; simp [Function.comp_def])
+      (fun x hx => by obtain ⟨p, hp', rfl⟩ := List.mem_map.mp hx; exact (hp p hp').1)
+      (fun x hx => by
+        obtain ⟨p, hp', rfl⟩ := List.mem_map.mp hx
+        exact argumentAllowed_transport S (source_uses_length (typedArgs p.1 (List.mem_map_of_mem hp')))
+          (source_uses_length (hp p hp').1) (hp p hp').2 (allowed p.1 (List.mem_map_of_mem hp')))
+    simp only [Term.substitute]
+    refine ⟨_, typed, ?_⟩
+    simp only [List.map_map, Function.comp_def]
+    exact (foldr_addUses_rel (R := fun x' x => (∀ j, x'.getD j 0 ≤ Image d ua x j) ∧
+        x'.length = (Γ.eraseIdx d).length ∧ x.length = Γ.length) (z := zeroUses Γ) (z' := zeroUses (Γ.eraseIdx d))
+      (fun ⟨h1, l1, k1⟩ ⟨h2, l2, k2⟩ => ⟨add_image_le (k1.trans k2.symm) (l1.trans l2.symm) h1 h2,
+        by simp [addUses, l1, l2], by simp [addUses, k1, k2]⟩)
+      ⟨fun j => by rw [getD_zeroUses]; exact Nat.zero_le _, by simp [zeroUses], by simp [zeroUses]⟩
+      (fun p => p.1.2.2) (fun p => p.2) m
+      (fun p hp' => ⟨(hp p hp').2, source_uses_length (hp p hp').1,
+        source_uses_length (typedArgs p.1 (List.mem_map_of_mem hp'))⟩)).1
   case natural =>
     intro Γ value d σ A ua S budget
     simp only [Term.substitute]

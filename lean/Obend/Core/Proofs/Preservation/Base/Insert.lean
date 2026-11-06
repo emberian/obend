@@ -436,6 +436,29 @@ public theorem source_insert_binding {assumptions : Assumptions} {context : Cont
     simpa only [Term.rename,counts] using
       (PartialTyping.split (ihTarget depth binding bound bindingValid) (ihFunction depth binding bound bindingValid) nodup covers
         (spine.transport fun q allowed => case_allowed_insert assumptions q context tu depth binding allowed bound))
+  case hole =>
+    intro context n σ decl args found hσ hctx typedArgs allowed ih depth binding bound bindingValid
+    subst hσ
+    have counts : (args.map fun arg => arg.2.2.insertIdx depth 0).foldr addUses
+        (zeroUses (context.insertIdx depth binding)) =
+        ((args.map (·.2.2)).foldr addUses (zeroUses context)).insertIdx depth 0 :=
+      (foldr_addUses_rel (R := fun x' x => x' = x.insertIdx depth 0 ∧ x.length = context.length)
+        (fun ⟨h1, l1⟩ ⟨h2, l2⟩ => ⟨by rw [h1, h2, add_uses_insert _ _ depth (l1.trans l2.symm) (l1 ▸ bound)],
+          by simp [addUses, List.length_zipWith, l1, l2]⟩)
+        ⟨zero_uses_insert context binding depth bound, by simp [zeroUses]⟩ (fun arg => arg.2.2)
+        (fun arg => arg.2.2.insertIdx depth 0) args
+        (fun arg h => ⟨rfl, source_uses_length (typedArgs arg h)⟩)).1
+    have typed := PartialTyping.hole (assumptions := assumptions) (context := context.insertIdx depth binding)
+      (σ := (args.map (·.1)).map fun t => t.rename (shiftIndex depth))
+      (args := args.map fun arg => (arg.1.rename (shiftIndex depth), arg.2.1, arg.2.2.insertIdx depth 0))
+      found (by simp [Function.comp_def]) (by rw [← hctx]; simp [Function.comp_def])
+      (fun a ha => by obtain ⟨arg, h, rfl⟩ := List.mem_map.mp ha; exact ih arg h depth binding bound bindingValid)
+      (fun a ha => by
+        obtain ⟨arg, h, rfl⟩ := List.mem_map.mp ha
+        exact argument_allowed_insert assumptions _ context _ _ depth binding (allowed arg h) bound)
+    simp only [List.map_map, Function.comp_def] at typed
+    rw [counts] at typed
+    simpa only [Term.rename, List.map_map, Function.comp_def] using typed
   case nil =>
     intro context depth binding bound bindingValid
     simpa only [List.map_nil,← zero_uses_insert context binding depth bound] using (FieldsTyping.nil (context.insertIdx depth binding) : FieldsTyping assumptions _ [] .emptyRow _)

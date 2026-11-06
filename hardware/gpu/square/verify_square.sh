@@ -15,7 +15,8 @@
 #         graph's vectors against evalModuleOutputs) built on the committed .sv, mismatches=0
 #     [5] the card: obend-gpu-run ../graphs/<graph> (every vector against expected.tsv)
 #     [6] teeth: an operator swapped in a copy of the .sv (`+` to `-`, else `*` to `+`) must make the
-#         Verilator harness report mismatches and the LEC answer sat (lec.sh fails)
+#         LEC answer sat and the Verilator harness report mismatches; a swap the LEC proves equivalent
+#         (an equivalent mutant) is skipped and counted
 #   verify_square.sh --graph NAME    one graph
 #   verify_square.sh --stage N       one stage (1-6) of every graph
 #
@@ -34,9 +35,11 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/verify_square.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 RADEON_ICD=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
 
-# The graphs whose gate-level equivalence (EQY, SAT against the synthesized netlist) terminates: those
-# without a 64-bit variable multiply. The rest run the LEC only, as hardware/sim does for mac2.
-EQY_GRAPHS="${EQY_GRAPHS:-tree512}"
+# EQY (SAT equivalence of the .sv against the netlist `synth` makes of it) is opt-in, EQY_GRAPHS="a b":
+# measured 2026-11-06 on the M2 Max, it did not finish in 15 minutes on diamond (one 64-bit multiply)
+# nor in 55 minutes on tree512 (no multiply, but its one output puts all 511 adders in one partition).
+# Every graph runs the LEC, which decides each module within its time limit, as hardware/sim does for mac2.
+EQY_GRAPHS="${EQY_GRAPHS:-}"
 
 for t in "${EMIT}" "${RUN}" "${VERILATOR}"; do
   [[ -x "${t}" ]] || { echo "[FAIL] ${t} missing" >&2; exit 1; }
@@ -137,31 +140,40 @@ for g in "${GRAPHS[@]}"; do
   fi
 
   if run_stage 6; then
-    # the first binary operator of the always_comb block, swapped, on a copy (never the committed file)
-    perl -pe 'if (!$d && / = .*\S.* [+] / && s/ \+ / - /) { $d = 1 }' "${sv}" > "${WORK}/${g}/${top}.swap.sv"
-    if cmp -s "${sv}" "${WORK}/${g}/${top}.swap.sv"; then
-      perl -pe 'if (!$d && s/ \* / + /) { $d = 1 }' "${sv}" > "${WORK}/${g}/${top}.swap.sv"
-    fi
-    if cmp -s "${sv}" "${WORK}/${g}/${top}.swap.sv"; then
-      perl -pe 'if (!$d && s/ - / + /) { $d = 1 }' "${sv}" > "${WORK}/${g}/${top}.swap.sv"
-    fi
-    swapped="$(diff "${sv}" "${WORK}/${g}/${top}.swap.sv" | sed -n 's/^> *//p' | head -1 || true)"
-    [[ -n "${swapped}" ]] || { echo "[FAIL] ${g}: no operator to swap in ${sv}" >&2; exit 1; }
-    verilate "${top}" "${WORK}/${g}/${top}.swap.sv" "${WORK}/${g}/tb.cpp" "${WORK}/${g}/obj_swap"
-    if [[ "${MISMATCHES}" == 0 ]]; then
-      echo "[FAIL] ${g}: the swapped operator \`${swapped}\` went unnoticed by the Verilator harness" >&2
-      exit 1
-    fi
-    set +e
-    LEC_OUT="$("${LEC}" "square-${g}" "${WORK}/${g}/${top}.swap.sv" "${lec}" --no-eqy "tooth" 2>&1)"
-    LEC_RC=$?
-    set -e
-    if (( LEC_RC == 0 )) || ! grep -q "z3 says" <<< "${LEC_OUT}"; then
-      echo "[FAIL] ${g}: the swapped operator \`${swapped}\` was not caught by the LEC:" >&2
-      echo "${LEC_OUT}" | tail -5 >&2
-      exit 1
-    fi
-    echo "  [6] swapped \`${swapped}\`: Verilator mismatches=${MISMATCHES}, LEC $(grep -o 'z3 says [a-z]*' <<< "${LEC_OUT}" | head -1), as they must"
+    # Candidate faults: the always_comb lines with a binary operator, in order; each swaps that line's
+    # first operator (`+` to `-`, else `*` to `+`, else `-` to `+`) on a copy, never the committed file.
+    # A swap the LEC proves equivalent (unsat) is an equivalent mutant (ntt-16's first `+` adds two words
+    # that are 0 on every input, inside a multiply by the twiddle 1) and is skipped, counted; the first
+    # swap the LEC answers sat is the planted fault, and Verilator must report mismatches on it.
+    mapfile -t CAND < <(grep -n '^    w_[0-9]* = .*\( + \| \* \| - \)' "${sv}" | cut -d: -f1 | head -8)
+    (( ${#CAND[@]} > 0 )) || { echo "[FAIL] ${g}: no operator to swap in ${sv}" >&2; exit 1; }
+    skipped=0; caught=""
+    for ln in "${CAND[@]}"; do
+      mut="${WORK}/${g}/${top}.swap${ln}.sv"
+      perl -pe "if (\$. == ${ln}) { s/ \\+ / - / or s/ \\* / + / or s/ - / + / }" "${sv}" > "${mut}"
+      swapped="$(diff "${sv}" "${mut}" | sed -n 's/^> *//p' | head -1 || true)"
+      [[ -n "${swapped}" ]] || continue
+      set +e
+      LEC_OUT="$("${LEC}" "square-${g}" "${mut}" "${lec}" --no-eqy "tooth" 2>&1)"
+      LEC_RC=$?
+      set -e
+      verdict="$(grep -o 'z3 says [a-z]*' <<< "${LEC_OUT}" | head -1 | sed 's/z3 says //')"
+      if (( LEC_RC == 0 )); then skipped=$((skipped + 1)); continue; fi
+      [[ "${verdict}" == sat || "${verdict}" == undecided ]] || {
+        echo "[FAIL] ${g}: the LEC of the swapped \`${swapped}\` failed for another reason:" >&2; echo "${LEC_OUT}" | tail -5 >&2; exit 1; }
+      verilate "${top}" "${mut}" "${WORK}/${g}/tb.cpp" "${WORK}/${g}/obj_swap${ln}"
+      if [[ "${MISMATCHES}" == 0 ]]; then
+        if [[ "${verdict}" == sat ]]; then
+          echo "[FAIL] ${g}: the swapped operator \`${swapped}\` (LEC sat) went unnoticed by the Verilator harness" >&2
+          exit 1
+        fi
+        skipped=$((skipped + 1)); continue
+      fi
+      caught="${swapped}"
+      echo "  [6] swapped \`${swapped}\`: Verilator mismatches=${MISMATCHES}, LEC z3 says ${verdict}, as they must${skipped:+ (${skipped} equivalent swaps skipped, each LEC unsat)}"
+      break
+    done
+    [[ -n "${caught}" ]] || { echo "[FAIL] ${g}: no catchable operator swap among the first ${#CAND[@]} operators (${skipped} equivalent)" >&2; exit 1; }
   fi
 done
 echo "[PASS] hardware/gpu/square${STAGE:+ (stage ${STAGE})}${ONLY:+ (${ONLY})}"

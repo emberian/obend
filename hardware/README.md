@@ -238,9 +238,87 @@ comparison go through `u64`); AMDVLK runs out of memory with the 64-point NTT's 
 command buffer where RADV and Metal do not (the runner submits in chunks of 128); and the closure-based
 evaluator above.
 
-Not here: a semantics of the ISA (rung G2 reads the dump against AMD's machine-readable RDNA2 spec), the
-memory model (G4), resource grading (G5), and a layering better than the scalar module's greedy one (the
-64-point NTT lowers to 1670 dispatches where a few dozen would do).
+### rung G2: the dumped ISA, read by Lean (`rdna2/`, `isa_check.sh`)
+
+`rdna2/amdgpu_isa_rdna2.xml` is AMD's machine-readable RDNA 2 specification (GPUOpen, bundle of 2026-08-06;
+`rdna2/README.md` has the URL, date and hashes). `rdna2/gen_encodings.py` writes
+`Obend.Hardware.Gpu.Rdna2.Encodings` and `Insts.*` from it: every encoding with its identifier mask,
+identifiers, condition expressions and bit fields, every instruction with every encoding entry and
+operand, every operand type with its predefined values; nothing in them is typed. `Obend.Hardware.Gpu.Rdna2.Decode`
+reads a dword stream as GPUOpen's `IsaDecoder` does (mask and identifiers in `Order`, the opcode, then
+the XML's condition picks the literal/DPP/SDWA variant and its width) and renders the instruction in
+LLVM's syntax. `isa_extract.py` now keeps the machine code RADV prints after each instruction and, with
+`RADV_DEBUG=shaderstats`, the resource line per stage (VGPRs, SGPRs, LDS, scratch, code size: every stage
+of every graph needs few VGPRs and no LDS, the grade rung G5 will read).
+
+`Obend.Hardware.Gpu.Rdna2.Semantics` is the wave64 model of the instructions RADV emits for our kernels:
+SGPRs, VCC, EXEC, SCC, M0, the VGPRs per lane, a dword program counter, dword memory and an error field,
+after LNSym's `ArmState` (accessors, a `step` that decodes and executes, a `run`), with the stores as
+arrays so the compiled check runs the largest dump in seconds. Each instruction follows the
+pseudo-code of the RDNA 2 ISA reference guide (chapter 12, cited per instruction) and, where the
+instruction exists in gem5's executable Vega model, was checked against gem5's `execute` body:
+`rdna2/gem5_ref.cpp` ports those bodies line by line, `rdna2/gem5_ref.py` assembles each twin with
+llvm-mc and writes `rdna2/gem5_vectors.tsv` (random register states before and after), and the model's
+`step` must reproduce every register of every row. The subset: `s_mov_b32/b64`, `s_movk_i32`,
+`s_and_b64`, `s_cbranch_execz`, `s_endpgm`, `s_waitcnt`, `s_clause`, `s_load_dword*`,
+`s_buffer_load_dword*`, `buffer_load/store_dword{,x2,x4}`, `v_mov_b32`, `v_add_nc_u32`, `v_and/or_b32`,
+`v_lshlrev_b32`, `v_lshl_add_u32`, `v_add3_u32`, `v_mul_lo/hi_u32`, `v_cndmask_b32`, `v_add/sub_co_u32`,
+`v_add/sub_co_ci_u32`, `v_lshlrev/lshrrev_b64`, `v_cmp_le/gt_u32`, `v_cmpx_gt_u32`, `v_cmp_lt_u64`,
+`v_cmp_ne_i64`; everything else, every operand code outside the integer and register codes, VOP3
+modifiers on integer operations and swizzled or indexed buffers are refused by the model, not guessed.
+`S_CLAUSE` and the `v_*_co_ci` and `v_add_nc` names have no Vega twin and rest on the manual; `V_CMPX`
+writes EXEC only here where Vega's also wrote VCC (the vectors exclude VCC for it). The universal
+statements are at the instruction level: `mulHi_mulLo` (the two halves of the 64-bit product, which
+`glmul-256` and the NTTs chain), `addCo_spec`, `addCi_spec`, `subCo_spec` (the carries are exactly the
+dropped bits).
+
+`Obend.Hardware.Gpu.Rdna2.Check` is the correspondence as a decidable check per graph: the plan's three
+buffers laid out as RADV binds them (`ac_build_raw_buffer_descriptor`, Mesa 24.2.8; the set's address in
+`s2`, the workgroup id in `s3`, the thread id in `v0`, per `radv_shader_args.c` and the manual's 3.12),
+every stage's dumped program run once per workgroup on the model from each vector's inputs, the output
+wires read back against `expected.tsv`. `Obend.Teeth.Hardware.Rdna2Runs` pins diamond, the three optics,
+`allops`, `glmul-256`, `ntt-4` and the gem5 vectors with `native_decide` and `#assert_compiled` (checks,
+not theorems). `isa_check.sh` is the gate, on hbox: the generated modules are byte-identical to the
+generator's output; the Lean decoder's text equals `llvm-mc --disassemble` (LLVM 19, gfx1031, wave64)
+on every instruction of every dump; every bit of every instruction's machine code, flipped, changes the
+decoding or fails it unless it lies in no field the specification names; every graph's programs on the
+model give `expected.tsv` and a planted bit flip in a store's register is caught; the gem5 vectors are
+the generator's bytes and replay. Passed 2026-11-06 on the fourteen dumps.
+
+What the model does not do, named: it completes memory accesses when they issue, so `s_waitcnt` is a
+no-op and a missing wait would read fresh registers here and stale ones on the device (the device run of
+`verify_gpu.sh` is what catches that); it runs a dispatch's waves one after another, sound for G1's
+programs by `lowerArrayToGpu_sound`'s disjointness and not in general; the memory model is rung G4's (below).
+
+### `gpu/litmus/`: the memory model, measured (rung G4)
+
+`Obend.Hardware.Gpu.Memory` is the memory model of WGSL as the Vulkan memory model specialized to the
+events WGSL emits (its header derives the specialization: relaxed atomics at QueueFamily or Workgroup scope
+by address space, barriers at Workgroup scope with the semantics of one address space, everything
+available and visible at workgroup scope, so `locord = loc ∩ hb` and happens-before never crosses a
+workgroup), presented as sections of a presheaf on the scope site: a section over a thread, a workgroup or
+the device is a witness (reads-from, coherence ranks, a total order every edge of `locord ∪ rf ∪ fr ∪ asmo`
+respects) of the shape restricted to that object, and an outcome is allowed when it is the restriction of
+a section over the device. `allowed_iff_glues` says the enumeration-based checker answers exactly that.
+The referent is not our reading: `lean/tools/litmuscheck` (`obend-litmus-check`) writes every shape and
+outcome as a Dartagnan Vulkan litmus test and the gate requires Dartagnan's verdict under `cat/vulkan.cat`
+to equal the checker's on each (it does, on every outcome of the suite).
+
+`gpu/litmus/` is GPUHarbor's suite (`wgsl/`, copied with attribution) run by `obend-gpu-litmus` (a port of
+its host side and of its tuned-stress parameter space, in `gpu/runner`) on hbox's RX 6750 XT under RADV
+and AMDVLK, hbox's UHD 770 under ANV and the Mac's M2 Max under Metal; the tables are under
+`gpu/litmus/results/` with their seed and budget, and `results/STRONGER.tsv` records the allowed weak
+behaviours no device showed. The relaxed weak behaviours at device scope appear on the AMD and Apple
+parts, IRIW's only on the M2 Max, none on the Intel part; a `storageBarrier` across workgroups
+leaves them in place on the M2 Max, as the model says it may; no device showed a coherence violation, a
+weak outcome of a workgroup-scope test with barriers, or a weak outcome of the non-atomic barrier tests.
+The shapes are each thread's whole program with every barrier of the kernel body in place (a thread plays
+both roles of GPUHarbor's pseudo-code), which forbids the `seq0` class of the workgroup barrier tests as
+well as their weak class; no device showed `seq0` either. `verify_litmus.sh` is the gate (`gpu/litmus/README.md`).
+
+Not here: resource grading (G5, whose grade the `shaderstats` line of each dump now carries), a layering
+better than the scalar module's greedy one (in a lane), and a static check that every `s_waitcnt` the
+compiler placed suffices (the wave model completes memory at issue).
 
 ### `gpu/square/`: the same graph through two devices (rung G1s)
 
@@ -283,7 +361,9 @@ graphs in `EQY_GRAPHS`); the Verilator harness `obend-emit-sv square-<graph> --t
 (`emitVerilatorHarnessCpp`, the one harness `obend verilate` uses, over the graph's vectors against
 `evalModuleOutputs`) reports no mismatch on the committed `.sv`; `obend-gpu-run` agrees with
 `expected.tsv` on the card; and a swapped operator in a copy of the `.sv` (`+` to `-`, else `*` to `+`)
-makes Verilator report mismatches and the LEC answer sat. Three parties agree on every vector,
+makes the LEC answer sat and Verilator report mismatches. A swap the LEC proves equivalent is an
+equivalent mutant and is skipped, counted: `ntt-16`'s first `+` adds two words that are `0` on every input
+(a limb product with the twiddle `1`), so no run could see it; the gate moves to the next operator. Three parties agree on every vector,
 Verilator, the card and the model, and the theorem says the two models are one. It runs on the Mac
 (Verilator, Yosys, EQY, z3 and Metal are there; hbox has the card and no Verilator or Yosys). The
 first run of the tooth found the vectors thin: `muxchain`'s only binary operator reaches an output
@@ -294,7 +374,9 @@ that the LEC sees on every input. The scalar graphs' vectors now include four on
 Lengths. The graphs are the nine scalar ones, the field multiply at length 4 and the 16-point NTT
 (`sq_ntt_16`: 3801 lines of SystemVerilog, 16 input and 16 output ports). Verilator takes the NTT in a
 few minutes of compilation; the LEC decides every module bit-precisely or with multiplication
-uninterpreted within its time limit. EQY, SAT against the gate-level netlist, terminates on `tree512`
-(511 adders, no multiply) and on nothing with a 64-bit multiply, as `hardware/sim`'s `mac2` already
-showed, so the field graphs run the LEC only; `glmul-256`, `ntt-64` and `mac-reverse-1000` are not in
-the square (tens of thousands of wires; Verilator would take them, the LEC would not).
+uninterpreted within its time limit. EQY, SAT against the gate-level netlist, terminated on none of them
+in the time given (measured on the M2 Max: 15 minutes on `diamond`, one 64-bit multiply, as
+`hardware/sim`'s `mac2` already showed; 55 minutes on `tree512`, which has no multiply but whose one
+output puts all 511 adders in one partition), so it is opt-in (`EQY_GRAPHS`) and the LEC is the
+equivalence step of this gate; `glmul-256`, `ntt-64` and `mac-reverse-1000` are not in the square (tens
+of thousands of wires; Verilator would take them, the LEC would not).
