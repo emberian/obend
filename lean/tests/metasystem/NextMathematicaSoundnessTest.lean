@@ -29,7 +29,7 @@ Comprehensive verification of the WS-C deliverables:
    (`accumulateGrad`, `gradReverseAccumulated`, `gradReverseAccumulated_agrees_with_dual`,
    `gradReverseAccumulated_nestedSqr_linear`), whole-graph functorial reverse-AD (`compileGraphAdjoint`,
    `compileGraphAdjoint_multiEdge_sound`), and pipelined wavefront RTL compilation
-   (`compileHypergraphToRtlPipelined`, `compileHypergraphToRtlPipelined_latency_sound`).
+   (`compileHypergraphToRtlPipelined`, `compileHypergraphToRtlPipelined_sound`).
 -/
 
 namespace Obend.Tests.NextMathematicaSoundnessTest
@@ -370,44 +370,24 @@ theorem test_compileGraphAdjoint_diamond_eval :
 #tooth test_compileGraphAdjoint_diamond_eval by mutation
   Obend.Hardware.OpenHypergraph.compileGraphAdjoint := fun g => g
 
--- Pipelined Wavefront RTL Compilation (`compileHypergraphToRtlPipelined`, `compileHypergraphToRtlPipelined_latency_sound`).
+-- Pipelined Wavefront RTL Compilation (`compileHypergraphToRtlPipelined`, `compileHypergraphToRtlPipelined_sound`).
 #guard (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph).regs.length == 27
 
-example
-    (numWires stageIdx : Nat) (stage : List HyperEdge)
-    (inputs wireEnv regState : Nat → BitVec 64) (w : Nat) :
-    let entryEnv := if stageIdx == 0 then inputs else fun u => regState ((stageIdx - 1) * numWires + u)
-    let mPipe := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph
-    let initEnvInt : Nat → Int := fun u =>
-      match u with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | _ => 0
-    let insBv : Nat → BitVec 64 := fun u => BitVec.ofInt 64 (initEnvInt u)
-    let initRegs : Nat → BitVec 64 := fun _ => 0#64
-    let trace3 : List (Bool × (Nat → BitVec 64)) :=
-      [(false, insBv), (false, insBv), (false, insBv)]
-    let regsAfter3 := runModuleTrace mPipe initRegs trace3
-    (evalRtlExpr inputs wireEnv regState (compileWavefrontStageExpr numWires stageIdx stage w) =
-      evalWavefrontStageSyncBv entryEnv stage w) ∧
-    checkRtlModule mPipe = true ∧
-    mPipe.regs.length = (layerHypergraph goldenDiamondHypergraph).length * goldenDiamondHypergraph.nodeTypes.length ∧
-    mPipe.regs.length = 27 ∧
-    (evalModuleOutputs mPipe insBv regsAfter3).map Prod.snd = [87#64] ∧
-    (evalHypergraphLayeredSync goldenDiamondHypergraph initEnvInt).map (BitVec.ofInt 64) = [87#64] :=
-  compileHypergraphToRtlPipelined_latency_sound numWires stageIdx stage inputs wireEnv regState w
-
-example
-    (insBv initRegs : Nat → BitVec 64) (initEnv : Nat → Int) :
-    let mPipe := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph
-    let trace3Bv : List (Bool × (Nat → BitVec 64)) :=
-      [(false, insBv), (false, insBv), (false, insBv)]
-    let insOfInt : Nat → BitVec 64 := fun u => BitVec.ofInt 64 (initEnv u)
-    let trace3Int : List (Bool × (Nat → BitVec 64)) :=
-      [(false, insOfInt), (false, insOfInt), (false, insOfInt)]
-    (evalModuleOutputs mPipe insBv (runModuleTrace mPipe initRegs trace3Bv)).map Prod.snd =
+-- The whole-module theorem, instantiated: its two side conditions are decided on the diamond.
+example (ins initRegs : Nat → BitVec 64) :
+    (evalModuleOutputs (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph) ins
+        (runModuleTrace (compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph) initRegs
+          (List.replicate (layerHypergraph goldenDiamondHypergraph).length (false, ins)))).map Prod.snd =
       goldenDiamondHypergraph.boundaryOut.table.map
-        (evalLayeredStagesSyncBv insBv (layerHypergraph goldenDiamondHypergraph)) ∧
-    (evalModuleOutputs mPipe insOfInt (runModuleTrace mPipe initRegs trace3Int)).map Prod.snd =
-      (evalHypergraphLayeredSync goldenDiamondHypergraph initEnv).map (BitVec.ofInt 64) :=
-  compileHypergraphToRtlPipelined_diamond_symbolic_latency insBv initRegs initEnv
+        (evalLayeredStagesSyncBv ins (layerHypergraph goldenDiamondHypergraph)) :=
+  compileHypergraphToRtlPipelined_sound "diamond_pipe" goldenDiamondHypergraph (by decide) (by decide) ins initRegs
+
+-- A known answer: inputs 3, 4, 5, 6 give (3 + 4) * (5 + 6) + 10 = 87 after one edge per stage.
+#guard
+  let m := compileHypergraphToRtlPipelined "diamond_pipe" goldenDiamondHypergraph
+  let ins : Nat → BitVec 64 := fun u => match u with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | _ => 0
+  (evalModuleOutputs m ins (runModuleTrace m (fun _ => 0#64) (List.replicate 3 (false, ins)))).map Prod.snd
+    == [87#64]
 
 example
     (initEnv : Nat → Int) (stages : List (List HyperEdge))
@@ -424,7 +404,7 @@ theorem test_pipelined_rtl_has_stage_regs :
 
 #tooth test_pipelined_rtl_has_stage_regs by mutation
   Obend.Hardware.OpenHypergraph.compileHypergraphToRtlPipelined :=
-    Obend.Hardware.OpenHypergraph.compileHypergraphToRtl
+    fun name _ => { name := name, inputNames := [], wires := [], regs := [], outputs := [] }
 
 -- ============================================================================
 -- 5. Axiom Audit (`0 sorryAx`)
@@ -462,8 +442,7 @@ theorem test_pipelined_rtl_has_stage_regs :
 #print axioms Obend.Analysis.gradReverseAccumulated_nestedSqr_linear
 #print axioms Obend.Hardware.OpenHypergraph.compileGraphAdjoint_multiEdge_sound
 #print axioms Obend.Hardware.OpenHypergraph.compileGraphAdjoint_diamond_symbolic_sound
-#print axioms Obend.Hardware.OpenHypergraph.compileHypergraphToRtlPipelined_latency_sound
-#print axioms Obend.Hardware.OpenHypergraph.compileHypergraphToRtlPipelined_diamond_symbolic_latency
+#print axioms Obend.Hardware.OpenHypergraph.compileHypergraphToRtlPipelined_sound
 
 end Obend.Tests.NextMathematicaSoundnessTest
 
