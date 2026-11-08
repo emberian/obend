@@ -133,6 +133,35 @@ def op : Tm → TOp | mk _ o _ => o
 def args : Tm → List Tm | mk _ _ a => a
 def hsh : Tm → UInt64 | mk h _ _ => h
 
+/-! Structural equality (the decision procedure `Equiv`'s `DecidableEq` uses; here for the smart
+constructors' rules that need two subterms equal). -/
+
+mutual
+def eqbS : Tm → Tm → Bool
+  | mk h1 o1 as1, mk h2 o2 as2 => h1 == h2 && o1 == o2 && eqbL as1 as2
+def eqbL : List Tm → List Tm → Bool
+  | [], [] => true
+  | a :: as, b :: bs => eqbS a b && eqbL as bs
+  | _, _ => false
+end
+
+mutual
+theorem eqbS_iff : ∀ a b : Tm, eqbS a b = true ↔ a = b
+  | mk h1 o1 as1, mk h2 o2 as2 => by
+    simp only [eqbS, Bool.and_eq_true, beq_iff_eq, mk.injEq, eqbL_iff as1 as2, and_assoc]
+theorem eqbL_iff : ∀ as bs : List Tm, eqbL as bs = true ↔ as = bs
+  | [], [] => by simp [eqbL]
+  | a :: as, b :: bs => by simp only [eqbL, Bool.and_eq_true, eqbS_iff a b, eqbL_iff as bs, List.cons.injEq]
+  | [], _ :: _ => by simp [eqbL]
+  | _ :: _, [] => by simp [eqbL]
+end
+
+/-- Equality that answers at once for one object (a symbolic run passes one object along, and `shareCommon'` makes equal terms one object),
+and structurally otherwise. -/
+instance : DecidableEq Tm := fun a b =>
+  withPtrEqDecEq a b (fun _ => decidable_of_iff (eqbS a b = true) (eqbS_iff a b))
+
+
 def eval (env : UInt64 → UInt32) : Tm → UInt32
   | mk _ o as => o.sem env (as.attach.map fun ⟨t, _⟩ => t.eval env)
 
@@ -348,20 +377,6 @@ def mkIte (c a b : Tm) : Tm :=
   match c.litVal? with
   | some v => if v != 0 then a else b
   | none => fold .ite [c, a, b]
-def mkCarry (a b : Tm) : Tm :=
-  let (x, y) := ord a b
-  if isLit x 0 || isLit y 0 then lit 0 else fold .carry [x, y]
-def mkBorrow (a b : Tm) : Tm := if isLit b 0 then lit 0 else fold .borrow [a, b]
-def mkAddc (a b c : Tm) : Tm :=
-  match c.litVal? with
-  | some v => if v != 0 then mkSum [a, b, lit 1] else mkSum [a, b]
-  | none => let (x, y) := ord a b; fold .addc [x, y, c]
-def mkCarryc (a b c : Tm) : Tm :=
-  if isLit c 0 then mkCarry a b else let (x, y) := ord a b; fold .carryc [x, y, c]
-def mkSubc (a b c : Tm) : Tm := if isLit c 0 then mkSub a b else fold .subc [a, b, c]
-def mkBorrowc (a b c : Tm) : Tm := if isLit c 0 then mkBorrow a b else fold .borrowc [a, b, c]
-
-/-- Terms whose value is `0` or `1`. -/
 def isBool0 (t : Tm) : Bool :=
   match t.op with
   | .carry | .borrow | .carryc | .borrowc | .ule | .ugt | .ult64 | .ne64 | .bit _ | .nez64 => true
@@ -380,6 +395,47 @@ theorem b2w_le (b : Bool) : b2w b = 0 ∨ b2w b = 1 := by cases b <;> simp [b2w]
 
 theorem and1_cases (z : UInt32) : z &&& 1 = 0 ∨ z &&& 1 = 1 := by bv_decide
 
+def mkCarry (a b : Tm) : Tm :=
+  let (x, y) := ord a b
+  if isLit x 0 || isLit y 0 then lit 0 else fold .carry [x, y]
+/-- `ys` without `xs` when `xs` is a subsequence of it (structurally equal terms). A sum's addends are
+ordered by hash, so the addends of a sub-sum appear in order; where they do not, the rule just does not
+fire. -/
+def removeSub : List Tm → List Tm → Option (List Tm)
+  | [], ys => some ys
+  | _ :: _, [] => none
+  | x :: xs, y :: ys => if x = y then removeSub xs ys else (removeSub (x :: xs) ys).map (y :: ·)
+
+/-- `a > b`. When `b` is a sum with the addends of `a` among its own, `b = a + r` and `a > a + r` is the
+carry of `a + r` (`carryBV a r = a + r < a`): the form a compiler gives `lo < a` for the low half of a
+64-bit add, whatever `a` is a sum of. -/
+def mkUgt (a b : Tm) : Tm :=
+  if b.op == .sum then
+    match removeSub (addends a) b.args with
+    | some rest => mkCarry a (mkSum rest)
+    | none => fold .ugt [a, b]
+  else fold .ugt [a, b]
+
+/-- The borrow of `a - b` is `b > a` (`borrowBV a b = a < b`): one form for it and for a compare. -/
+def mkBorrow (a b : Tm) : Tm := if isLit b 0 then lit 0 else mkUgt b a
+/-- `0 + t + c` with `t` a two-term sum `p + q` as `addc p q c`, otherwise `addc 0 t c`. -/
+def addcSplit (t c : Tm) : Tm :=
+  match t.op, t.args with
+  | .sum, [p, q] => fold .addc [p, q, c]
+  | _, _ => let (x, y) := ord (lit 0) t; fold .addc [x, y, c]
+
+def mkAddc (a b c : Tm) : Tm :=
+  match c.litVal? with
+  | some v => if v != 0 then mkSum [a, b, lit 1] else mkSum [a, b]
+  | none =>
+    -- `0 + (p + q) + c` is `addc p q c`: the form a compiler's `a.y + b.y + carry` takes against the spec's
+    if isLit a 0 then addcSplit b c else if isLit b 0 then addcSplit a c else let (x, y) := ord a b; fold .addc [x, y, c]
+def mkCarryc (a b c : Tm) : Tm :=
+  if isLit c 0 then mkCarry a b else let (x, y) := ord a b; fold .carryc [x, y, c]
+def mkSubc (a b c : Tm) : Tm := if isLit c 0 then mkSub a b else fold .subc [a, b, c]
+def mkBorrowc (a b c : Tm) : Tm := if isLit c 0 then mkBorrow a b else fold .borrowc [a, b, c]
+
+/-- Terms whose value is `0` or `1`. -/
 theorem eval_isBool0 (env : UInt64 → UInt32) (t : Tm) (h : isBool0 t = true) : eval env t = 0 ∨ eval env t = 1 := by
   match t with
   | mk _ o as =>
@@ -456,7 +512,6 @@ def mkBitF : Nat → Tm → Nat → Tm
     | _, _ => mkBit x k
 
 def mkUle (a b : Tm) : Tm := fold .ule [a, b]
-def mkUgt (a b : Tm) : Tm := fold .ugt [a, b]
 def mkUlt64 (a0 a1 b0 b1 : Tm) : Tm := fold .ult64 [a0, a1, b0, b1]
 def mkNe64 (a0 a1 b0 b1 : Tm) : Tm := fold .ne64 [a0, a1, b0, b1]
 def mkNez64 (a b : Tm) : Tm := fold .nez64 [a, b]
@@ -624,11 +679,48 @@ theorem eval_carry (a b : Tm) : eval env (Dom.carry a b) = Dom.carry (eval env a
     rcases h with h | h <;> simp [eval_of_isLit env _ 0 h, carryBV, b2w]
   · simp [TOp.sem]
 
+theorem removeSub_sum : ∀ (xs ys r : List Tm), removeSub xs ys = some r →
+    (ys.map (eval env)).foldr (· + ·) 0 =
+      (xs.map (eval env)).foldr (· + ·) 0 + (r.map (eval env)).foldr (· + ·) 0
+  | [], ys, r, h => by simp only [removeSub, Option.some.injEq] at h; subst h; simp
+  | _ :: _, [], r, h => by simp [removeSub] at h
+  | x :: xs, y :: ys, r, h => by
+    unfold removeSub at h
+    split at h
+    · rename_i he
+      subst he
+      simp only [List.map_cons, List.foldr_cons]
+      rw [removeSub_sum xs ys r h, UInt32.add_assoc]
+    · obtain ⟨r', hr', rfl⟩ := Option.map_eq_some_iff.mp h
+      have := removeSub_sum (x :: xs) ys r' hr'
+      simp only [List.map_cons, List.foldr_cons] at this ⊢
+      rw [this]
+      generalize eval env x = a; generalize eval env y = b
+      generalize List.foldr (fun x1 x2 => x1 + x2) 0 (List.map (eval env) xs) = c
+      generalize List.foldr (fun x1 x2 => x1 + x2) 0 (List.map (eval env) r') = d
+      bv_decide
+
+theorem eval_mkUgt (a b : Tm) : eval env (mkUgt a b) = b2w (eval env a > eval env b) := by
+  unfold mkUgt
+  split
+  · rename_i hs
+    split
+    · rename_i rest hr
+      have hc := eval_carry env a (mkSum rest)
+      simp only [Dom.carry] at hc
+      rw [hc, carry_eq, eval_mkSum]
+      have hb : eval env b = (b.args.map (eval env)).foldr (· + ·) 0 := by
+        rw [← sum_addends env b]; simp [addends, hs]
+      rw [hb, removeSub_sum env _ _ _ hr, sum_addends]
+      simp only [carryBV, gt_iff_lt]
+    · simp [TOp.sem]
+  · simp [TOp.sem]
+
 theorem eval_borrow (a b : Tm) : eval env (Dom.borrow a b) = Dom.borrow (eval env a) (eval env b) := by
   show eval env (mkBorrow a b) = b2w (subCo (eval env a) (eval env b)).2
   rw [borrow_eq]; unfold mkBorrow; split
   · rename_i h; simp [eval_of_isLit env _ 0 h, borrowBV, b2w]
-  · simp [TOp.sem]
+  · rw [eval_mkUgt]; simp [borrowBV]
 
 theorem eval_addc (a b c : Tm) : eval env (Dom.addc a b c) = Dom.addc (eval env a) (eval env b) (eval env c) := by
   show eval env (mkAddc a b c) = (addCi (eval env a) (eval env b) (w2b (eval env c))).1
@@ -638,7 +730,27 @@ theorem eval_addc (a b c : Tm) : eval env (Dom.addc a b c) = Dom.addc (eval env 
     split
     · rename_i h; simp [eval_mkSum, addCi, w2b, h, UInt32.add_assoc]
     · rename_i h; simp at h; subst h; simp [eval_mkSum, addCi, w2b]
-  · have hc := ord_comm (fun x y => x + y + (if eval env c != 0 then (1 : UInt32) else 0)) (fun x y => by rw [UInt32.add_comm x]) env a b
+  · have hsplit : ∀ t, eval env (addcSplit t c) = (addCi 0 (eval env t) (w2b (eval env c))).1 := by
+      intro t
+      obtain ⟨ht, o, as⟩ := t
+      unfold addcSplit; simp only [op, args]
+      split
+      · rename_i p q
+        simp only [eval_fold, eval_mk, List.map_cons, List.map_nil, TOp.sem, List.getD_cons_zero, List.getD_cons_succ,
+          List.foldr_cons, List.foldr_nil, addCi, w2b, UInt32.add_zero, UInt32.zero_add]
+        split <;> simp_all
+      · have hc := ord_comm (fun x y => x + y + (if eval env c != 0 then (1 : UInt32) else 0))
+          (fun x y => by rw [UInt32.add_comm x]) env (lit 0) (mk ht o as)
+        try simp only at hc
+        generalize ord (lit 0) (mk ht o as) = p at hc; obtain ⟨x, y⟩ := p
+        simp only [eval_fold, List.map_cons, List.map_nil, TOp.sem] at hc ⊢
+        simp only [List.getD_cons_zero, List.getD_cons_succ, hc, addCi, w2b, eval_lit]
+        split <;> simp_all
+    split
+    · rename_i ha; rw [hsplit, eval_of_isLit env _ _ ha]
+    split
+    · rename_i hb; rw [hsplit, eval_of_isLit env _ _ hb]; simp only [addCi, UInt32.add_zero, UInt32.zero_add]
+    have hc := ord_comm (fun x y => x + y + (if eval env c != 0 then (1 : UInt32) else 0)) (fun x y => by rw [UInt32.add_comm x]) env a b
     try simp only at hc
     generalize hp : ord a b = p at hc; obtain ⟨x, y⟩ := p
     simp only [eval_fold, List.map_cons, List.map_nil, TOp.sem] at hc ⊢
@@ -687,7 +799,7 @@ theorem eval_borrowc (a b c : Tm) : eval env (Dom.borrowc a b c) = Dom.borrowc (
 theorem eval_ule (a b : Tm) : eval env (Dom.ule a b) = Dom.ule (eval env a) (eval env b) := by
   show eval env (mkUle a b) = b2w (eval env a ≤ eval env b); simp [mkUle, TOp.sem]
 theorem eval_ugt (a b : Tm) : eval env (Dom.ugt a b) = Dom.ugt (eval env a) (eval env b) := by
-  show eval env (mkUgt a b) = b2w (eval env a > eval env b); simp [mkUgt, TOp.sem]
+  exact eval_mkUgt env a b
 theorem eval_ult64 (a0 a1 b0 b1 : Tm) :
     eval env (Dom.ult64 a0 a1 b0 b1) = Dom.ult64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
   show eval env (mkUlt64 a0 a1 b0 b1) = _; simp [mkUlt64, TOp.sem, Dom.ult64]

@@ -53,40 +53,40 @@ namespace Obend.Hardware.Gpu.Rdna2
 
 /-! ## 1. The arithmetic, as pure functions on words, with the manual's pseudo-code -/
 
-/-- V_ADD_CO_U32 (manual 12.11): `D.u32 = S0.u32 + S1.u32; VCC = S0.u + S1.u >= 0x100000000 ? 1 : 0`. -/
+/-- V_ADD_CO_U32 (manual 12.12): `D.u32 = S0.u32 + S1.u32; VCC = S0.u + S1.u >= 0x100000000 ? 1 : 0`. -/
 def addCo (a b : UInt32) : UInt32 × Bool := (a + b, decide (2 ^ 32 ≤ a.toNat + b.toNat))
 
 /-- V_ADD_CO_CI_U32 (manual 12.7): `D = S0 + S1 + VCC; VCC = S0 + S1 + VCC >= 0x100000000`. -/
 def addCi (a b : UInt32) (ci : Bool) : UInt32 × Bool :=
   (a + b + (if ci then 1 else 0), decide (2 ^ 32 ≤ a.toNat + b.toNat + (if ci then 1 else 0)))
 
-/-- V_SUB_CO_U32 (manual 12.11): `D.u = S0.u - S1.u; VCC = S1.u > S0.u`. -/
+/-- V_SUB_CO_U32 (manual 12.12): `D.u = S0.u - S1.u; VCC = S1.u > S0.u`. -/
 def subCo (a b : UInt32) : UInt32 × Bool := (a - b, decide (a.toNat < b.toNat))
 
 /-- V_SUB_CO_CI_U32 (manual 12.7): `D = S0 - S1 - VCC; VCC = S1 + VCC > S0`. -/
 def subCi (a b : UInt32) (ci : Bool) : UInt32 × Bool :=
   (a - b - (if ci then 1 else 0), decide (a.toNat < b.toNat + (if ci then 1 else 0)))
 
-/-- V_MUL_LO_U32 (manual 12.11): `D.u = S0.u * S1.u`. -/
+/-- V_MUL_LO_U32 (manual 12.12): `D.u = S0.u * S1.u`. -/
 def mulLo (a b : UInt32) : UInt32 := a * b
 
-/-- V_MUL_HI_U32 (manual 12.11): `D.u = (S0.u * S1.u) >> 32`. -/
+/-- V_MUL_HI_U32 (manual 12.12): `D.u = (S0.u * S1.u) >> 32`. -/
 def mulHi (a b : UInt32) : UInt32 := UInt32.ofNat ((a.toNat * b.toNat) >>> 32)
 
 /-- V_LSHLREV_B32 (manual 12.7): `D.u32 = S1.u32 << S0[4:0]`. -/
 def lshlrev32 (count val : UInt32) : UInt32 := val <<< (count &&& 31)
 
-/-- V_LSHLREV_B64 / V_LSHRREV_B64 (manual 12.11): `D.u64 = S1.u64 << S0.u[5:0]`, `>>` logical. -/
+/-- V_LSHLREV_B64 / V_LSHRREV_B64 (manual 12.12): `D.u64 = S1.u64 << S0.u[5:0]`, `>>` logical. -/
 def lshlrev64 (count : UInt32) (val : UInt64) : UInt64 := val <<< (count.toUInt64 &&& 63)
 def lshrrev64 (count : UInt32) (val : UInt64) : UInt64 := val >>> (count.toUInt64 &&& 63)
 
-/-- V_LSHL_ADD_U32 (manual 12.11): `D.u = (S0.u << S1.u[4:0]) + S2.u`. -/
+/-- V_LSHL_ADD_U32 (manual 12.12): `D.u = (S0.u << S1.u[4:0]) + S2.u`. -/
 def lshlAdd (a sh c : UInt32) : UInt32 := (a <<< (sh &&& 31)) + c
 
-/-- V_ADD3_U32 (manual 12.11): `D.u = S0.u + S1.u + S2.u`. -/
+/-- V_ADD3_U32 (manual 12.12): `D.u = S0.u + S1.u + S2.u`. -/
 def add3 (a b c : UInt32) : UInt32 := a + b + c
 
-/-- V_AND_OR_B32 (manual 12.11): `D.u = (S0.u & S1.u) | S2.u`. -/
+/-- V_AND_OR_B32 (manual 12.12): `D.u = (S0.u & S1.u) | S2.u`. -/
 def andOr (a b c : UInt32) : UInt32 := (a &&& b) ||| c
 
 /-- V_CNDMASK_B32 (manual 12.7): `D.u32 = VCC ? S1.u32 : S0.u32`, VCC's bit for the lane. -/
@@ -259,6 +259,11 @@ structure GWave (V M : Type) where
   mem : M
   halted : Bool
   err : Option String
+  /-- The work-group's LDS as a region of `mem`: LDS dword `k` is `mem` dword `ldsBase + k`, `k < ldsDwords`
+  (manual 10.4: "At the time of wavefront creation, LDS_BASE is assigned to the physical LDS region owned
+  by this wavefront or work-group"). A wave given no region refuses every LDS access. -/
+  ldsBase : UInt64 := 0
+  ldsDwords : Nat := 0
 
 variable {V M : Type} [Dom V] [MemDom M V]
 
@@ -411,12 +416,26 @@ where
 
 def Inst.fam (i : Inst) : String := family i.enc.name
 
+/-- An SDWA form (manual 6.8: `SRC0` is the SDWA marker, the sources and selects are in the second dword). -/
+def isSdwa (i : Inst) : Bool := (i.enc.name.splitOn "SDWA").length > 1
+
+/-- An SDWA source (manual 13.3 Table 88): `VSRCk` is a VGPR unless the `Sk` bit makes it a scalar code. -/
+def sdwaCode (i : Inst) (src sbit : String) : Nat := if i.field sbit == 1 then i.field src else 256 + i.field src
+
+/-- The SDWA fields the model reads are the selects (Table 88: 0..3 a byte, 4 and 5 a word, 6 the dword)
+and `DST_UNUSED = 0` (pad with zeros); sign extension, negation, absolute value, clamp, output modifiers
+and the reserved select are refused rather than interpreted. -/
+def sdwaClear (i : Inst) : Bool :=
+  i.field "SRC0_SEXT" + i.field "SRC0_NEG" + i.field "SRC0_ABS" + i.field "SRC1_SEXT" + i.field "SRC1_NEG"
+    + i.field "SRC1_ABS" + i.field "CLAMP" + i.field "OMOD" + i.field "DST_UNUSED" == 0 &&
+  i.field "SRC0_SEL" ≤ 6 && i.field "SRC1_SEL" ≤ 6 && i.field "DST_SEL" ≤ 6
+
 /-- The source codes of a VALU instruction as the encoding carries them: VOP2's and VOPC's `VSRC1` is a
 VGPR number, made a 256+ code here so that every family reads through `vectorSource`. -/
 def srcCode (i : Inst) (k : Nat) : Nat :=
   match k with
-  | 0 => i.field "SRC0"
-  | 1 => if i.fam == "VOP3" then i.field "SRC1" else 256 + i.field "VSRC1"
+  | 0 => if isSdwa i then sdwaCode i "VSRC0" "S0" else i.field "SRC0"
+  | 1 => if isSdwa i then sdwaCode i "VSRC1" "S1" else if i.fam == "VOP3" then i.field "SRC1" else 256 + i.field "VSRC1"
   | _ => i.field "SRC2"
 
 /-- Where a VALU writes its mask (carry-out or compare): VCC in the 32-bit forms, the SGPR pair of
@@ -445,11 +464,37 @@ def laneSources (i : Inst) (s : GWave V M) (n : Nat) (lane : Nat) : Option (List
 def writeLanes (s : GWave V M) (dst : Nat) (rs : List (Nat × V)) : GWave V M :=
   rs.foldl (fun st (lane, v) => writeVgpr st dst lane v) s
 
+/-- `x >> k`, logical: the low half of `lshr64 k (x, 0)` (manual 12.12 V_LSHRREV_B64 on a zero high half). -/
+def lshrV (x k : V) : V := (Dom.lshr64 k x (Dom.lit 0)).1
+
+/-- An SDWA source select (Table 88): byte `sel` (0..3), the low (4) or high (5) word, zero extended, or
+the dword (6). -/
+def sdwaSelV (x : V) (sel : Nat) : V :=
+  if sel < 4 then Dom.band (lshrV x (Dom.lit (UInt32.ofNat (8 * sel)))) (Dom.lit 0xFF)
+  else if sel == 4 then Dom.band x (Dom.lit 0xFFFF)
+  else if sel == 5 then lshrV x (Dom.lit 16)
+  else x
+
+/-- An SDWA destination select with `DST_UNUSED = 0` (Table 88: the selected bits of `D` take the result's
+low bits, the rest are zero). -/
+def sdwaDst (r : V) (sel : Nat) : V :=
+  if sel < 4 then Dom.shl (Dom.band r (Dom.lit 0xFF)) (Dom.lit (UInt32.ofNat (8 * sel)))
+  else if sel == 4 then Dom.band r (Dom.lit 0xFFFF)
+  else if sel == 5 then Dom.shl (Dom.band r (Dom.lit 0xFFFF)) (Dom.lit 16)
+  else r
+
+/-- A lane operation seen through SDWA's selects. -/
+def sdwaLift (i : Inst) (f : List V → Nat → V) (src : List V) (lane : Nat) : V :=
+  sdwaDst (f [sdwaSelV (src.getD 0 (Dom.lit 0)) (i.field "SRC0_SEL"), sdwaSelV (src.getD 1 (Dom.lit 0)) (i.field "SRC1_SEL")] lane)
+    (i.field "DST_SEL")
+
 /-- A per-lane 32-bit VALU operation over active lanes (manual 6.2.2: a thread writes only if its EXEC
 bit is set). `f` sees the lane's sources; a source the model does not carry refuses the instruction.
 The results are computed from `s` first and then written, so the register file updates in place. -/
 def valuLanes (i : Inst) (s : GWave V M) (nSrc : Nat) (f : List V → Nat → V) : GWave V M :=
-  s.withSome ((activeLanes s).mapM (fun lane => (laneSources i s nSrc lane).map fun src => (lane, f src lane)))
+  if isSdwa i && !sdwaClear i then s.fail s!"{i.name}: an SDWA modifier other than the selects is not modelled" else
+  let g : List V → Nat → V := if isSdwa i then sdwaLift i f else f
+  s.withSome ((activeLanes s).mapM (fun lane => (laneSources i s nSrc lane).map fun src => (lane, g src lane)))
     s!"{i.name}: an operand code is not modelled" fun rs => writeLanes s (i.field "VDST") rs
 
 /-- The mask a lane-wise bit computation leaves: inactive lanes `0`. -/
@@ -460,6 +505,7 @@ def maskOf (s : GWave V M) (bits : Nat → V) : V × V :=
 /-- A VALU operation producing a per-lane result and a mask bit (carry): the result to `VDST` for active
 lanes, the mask fully written with inactive lanes zero (manual 3.9: "VCC is fully written"). -/
 def valuLanesCarry (i : Inst) (s : GWave V M) (f : V → V → Nat → V × V) : GWave V M :=
+  if isSdwa i then s.fail s!"{i.name}: SDWA on a carry-out is not modelled" else
   s.withSome ((activeLanes s).mapM (fun lane => (laneSources i s 2 lane).map fun src =>
       (lane, f (src.getD 0 (Dom.lit 0)) (src.getD 1 (Dom.lit 0)) lane)))
     s!"{i.name}: an operand code is not modelled" fun rs =>
@@ -470,6 +516,7 @@ def valuLanesCarry (i : Inst) (s : GWave V M) (f : V → V → Nat → V × V) :
 V_CMPX (manual 12.9: `D[threadId] = test`, `EXEC[threadId] = test` for CMPX; 3.9: `VCC[n] = EXEC[n] &
 test`). `wide` selects 64-bit sources. -/
 def valuCompare (i : Inst) (s : GWave V M) (wide : Bool) (test : List V → V) : GWave V M :=
+  if isSdwa i then s.fail s!"{i.name}: SDWA on a compare is not modelled" else
   let srcs (lane : Nat) : Option (List V) :=
     if wide then
       (source64 s (srcCode i 0) lane).bind fun a => (source64 s (srcCode i 1) lane).map fun b => [a.1, a.2, b.1, b.2]
@@ -567,6 +614,33 @@ def execMubuf (i : Inst) (s : GWave V M) (isStore : Bool) : GWave V M :=
           | none => some (reg, lane, Dom.lit 0)))
       s!"{i.name}: a load outside the memory" fun ws => writeRegs s ws
 
+/-- LDS addressing, single-address forms (manual 10.4): `LDS_Addr = LDS_BASE + VGPR[ADDR] +
+{OFFSET1, OFFSET0}`, in bytes; the `n` dwords from there at a lane, as `mem` dwords of the work-group's
+region. Refused unless the address is known, dword aligned and the `n` dwords lie inside the region
+(the hardware's out-of-range rules, 12.13.2, are not modelled). -/
+def dsLaneAddrs (i : Inst) (s : GWave V M) (n : Nat) (lane : Nat) : Option (List UInt64) :=
+  (Dom.conc (readVgpr s (i.field "ADDR") lane)).bind fun a =>
+    let b := a.toNat + i.field "OFFSET0" + 256 * i.field "OFFSET1"
+    if b % 4 == 0 && b / 4 + n ≤ s.ldsDwords then
+      some ((List.range n).map fun k => s.ldsBase + UInt64.ofNat (b / 4 + k))
+    else none
+
+/-- DS_READ_B64 (`RETURN_DATA = MEM[ADDR]`, 2 dwords to `VDST..`), DS_WRITE_B64 / DS_WRITE_B128
+(`MEM[ADDR] = DATA`, 2 or 4 dwords from `DATA0..`), manual 12.13, active lanes only (10.4). Two lanes
+writing one dword in one instruction, a read of a dword this work-group has not written and GDS are
+refused. -/
+def execDs (i : Inst) (s : GWave V M) (n : Nat) (isStore : Bool) : GWave V M :=
+  if i.field "GDS" != 0 then s.fail s!"{i.name}: GDS is not modelled" else
+  s.withSome ((activeLanes s).mapM fun lane => (dsLaneAddrs i s n lane).map fun as => (lane, as))
+    s!"{i.name}: an LDS address is not known, not dword aligned or outside the work-group's LDS" fun las =>
+  if isStore then
+    if !(las.flatMap (·.2)).Nodup then s.fail s!"{i.name}: two lanes write one LDS dword" else
+    storeAll s (las.flatMap fun (lane, as) => as.zipIdx.map fun (a, k) => (a, readVgpr s (i.field "DATA0" + k) lane))
+  else
+    s.withSome ((las.flatMap fun (lane, as) => as.zipIdx.map fun (a, k) => (i.field "VDST" + k, lane, a)).mapM
+        fun (reg, lane, a) => (MemDom.load s.mem a).map fun v => (reg, lane, v))
+      s!"{i.name}: a read of an LDS dword the work-group has not written" fun ws => writeRegs s ws
+
 def writeSgprs (s : GWave V M) (ws : List (Nat × V)) : GWave V M :=
   ws.foldl (fun st (n, v) => writeSgpr st n v) s
 
@@ -627,6 +701,18 @@ def saveexecB64 (s : GWave V M) (code : Nat) (a : V × V) : GWave V M :=
 /-- S_MOVK_I32 (manual 12.2): `D.i32 = signext(SIMM16[15:0])`. -/
 def movkValue (simm : Nat) : UInt32 := if simm ≥ 32768 then UInt32.ofNat (simm + 0xFFFF0000) else UInt32.ofNat simm
 
+/-- `a ^ b` as `(a | b) - (a & b)` (identity xor_spec). -/
+def xorV (a b : V) : V := Dom.sub (Dom.bor a b) (Dom.band a b)
+
+/-- A 32-bit scalar result and the SCC it sets. -/
+def sop32 (s : GWave V M) (code : Nat) (d c : V) : GWave V M :=
+  let s' := writeScalarDst s code d
+  if s'.err.isSome then s' else { s' with scc := c }
+
+/-- V_MBCNT (manual 12.12): `ThreadMask = (1 << ThreadPosition) - 1; D = S1 + Σ MaskedValue[i]` over the
+mask's half: bits `0 .. n-1` of S0 count, `n = min(lane, 32)` for the low form, `lane - 32` for the high. -/
+def mbcntV (s0 s1 : V) (n : Nat) : V := (List.range n).foldl (fun acc k => Dom.add acc (Dom.bit s0 k)) s1
+
 def src0 (src : List V) : V := src.getD 0 (Dom.lit 0)
 def src1 (src : List V) : V := src.getD 1 (Dom.lit 0)
 def src2 (src : List V) : V := src.getD 2 (Dom.lit 0)
@@ -642,6 +728,9 @@ inductive InstOp where
   | v_cmp_lt_u32 | v_cmp_eq_i32 | v_cmp_ne_i32 | v_max_u32 | v_min_u32 | v_sub_nc_u32 | v_lshrrev_b32
   | v_subrev_co_ci_u32 | v_cmpx_ne_i32 | v_lshl_or_b32 | v_add_lshl_u32 | v_mul_u32_u24
   | v_cmpx_eq_i32 | v_cmpx_le_u32
+  | s_add_u32 | s_sub_i32 | s_xor_b32 | s_max_u32 | s_lshl_b32 | s_lshl2_add_u32 | s_lshl3_add_u32 | s_bfm_b32
+  | s_cselect_b64 | s_cmp_eq_i32 | s_cmp_lt_u32 | s_cmpk_lt_u32 | s_branch | s_cbranch_scc0 | s_nop
+  | s_waitcnt_vscnt | v_mbcnt_lo_u32_b32 | v_mbcnt_hi_u32_b32 | ds_read_b64 | ds_write_b64 | ds_write_b128
   | unknown
   deriving DecidableEq, Repr
 
@@ -669,6 +758,13 @@ def instOp (name : String) : InstOp :=
   | "V_LSHRREV_B32" => .v_lshrrev_b32 | "V_SUBREV_CO_CI_U32" => .v_subrev_co_ci_u32
   | "V_CMPX_NE_I32" => .v_cmpx_ne_i32 | "V_LSHL_OR_B32" => .v_lshl_or_b32 | "V_ADD_LSHL_U32" => .v_add_lshl_u32
   | "V_MUL_U32_U24" => .v_mul_u32_u24 | "V_CMPX_EQ_I32" => .v_cmpx_eq_i32 | "V_CMPX_LE_U32" => .v_cmpx_le_u32
+  | "S_ADD_U32" => .s_add_u32 | "S_SUB_I32" => .s_sub_i32 | "S_XOR_B32" => .s_xor_b32 | "S_MAX_U32" => .s_max_u32
+  | "S_LSHL_B32" => .s_lshl_b32 | "S_LSHL2_ADD_U32" => .s_lshl2_add_u32 | "S_LSHL3_ADD_U32" => .s_lshl3_add_u32
+  | "S_BFM_B32" => .s_bfm_b32 | "S_CSELECT_B64" => .s_cselect_b64 | "S_CMP_EQ_I32" => .s_cmp_eq_i32
+  | "S_CMP_LT_U32" => .s_cmp_lt_u32 | "S_CMPK_LT_U32" => .s_cmpk_lt_u32 | "S_BRANCH" => .s_branch
+  | "S_CBRANCH_SCC0" => .s_cbranch_scc0 | "S_NOP" => .s_nop | "S_WAITCNT_VSCNT" => .s_waitcnt_vscnt
+  | "V_MBCNT_LO_U32_B32" => .v_mbcnt_lo_u32_b32 | "V_MBCNT_HI_U32_B32" => .v_mbcnt_hi_u32_b32
+  | "DS_READ_B64" => .ds_read_b64 | "DS_WRITE_B64" => .ds_write_b64 | "DS_WRITE_B128" => .ds_write_b128
   | _ => .unknown
 
 /-- One instruction. `s.pc` already points past it (branches add their offset to that, manual 12.5:
@@ -697,7 +793,7 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   -- Vector memory (manual 12.14 MUBUF); gem5 twins mubuf.cc BUFFER_LOAD_DWORD/DWORDX2, BUFFER_STORE_DWORDX2
   | .mubuf_load => execMubuf i s false
   | .mubuf_store => execMubuf i s true
-  -- Vector ALU, 32-bit (manual 12.7 VOP2, 12.8 VOP1, 12.11 VOP3); gem5 twins vop1.cc/vop2.cc/vop3.cc
+  -- Vector ALU, 32-bit (manual 12.7 VOP2, 12.8 VOP1, 12.12 VOP3A/VOP3B); gem5 twins vop1.cc/vop2.cc/vop3.cc
   | .v_mov_b32 => valuLanes i s 1 fun src _ => src0 src
   | .v_add_nc_u32 => valuLanes i s 2 fun src _ => Dom.add (src0 src) (src1 src)   -- gem5 twin V_ADD_U32
   | .v_and_b32 => valuLanes i s 2 fun src _ => Dom.band (src0 src) (src1 src)
@@ -720,13 +816,13 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
     valuLanesCarry i s fun a b lane => (Dom.subc a b (maskBit m lane), Dom.borrowc a b (maskBit m lane))
   | .v_lshlrev_b64 => valuShift64 i s Dom.shl64
   | .v_lshrrev_b64 => valuShift64 i s Dom.lshr64
-  -- Compares (manual 12.9 VOPC, in VOP3 12.11); gem5 twins vopc.cc / vop3_cmp.cc; V_CMPX writes EXEC only here
+  -- Compares (manual 12.9 VOPC, in VOP3A 12.9.1); gem5 twins vopc.cc / vop3_cmp.cc; V_CMPX writes EXEC only here
   | .v_cmp_le_u32 => valuCompare i s false fun src => Dom.ule (src0 src) (src1 src)
   | .v_cmp_gt_u32 => valuCompare i s false fun src => Dom.ugt (src0 src) (src1 src)
   | .v_cmpx_gt_u32 => valuCompare i s false fun src => Dom.ugt (src0 src) (src1 src)
   | .v_cmp_lt_u64 => valuCompare i s true fun src => Dom.ult64 (src0 src) (src1 src) (src2 src) (src.getD 3 (Dom.lit 0))
   | .v_cmp_ne_i64 => valuCompare i s true fun src => Dom.ne64 (src0 src) (src1 src) (src2 src) (src.getD 3 (Dom.lit 0))
-  -- Manual 12.2 SOP1/12.3 SOP2: S_OR_B64 `D = S0 | S1`, S_ANDN2_B64 `D = S0 & ~S1`, S_NOR_B64
+  -- Manual 12.1 SOP2: S_OR_B64 `D = S0 | S1`, S_ANDN2_B64 `D = S0 & ~S1`, S_NOR_B64
   -- `D = ~(S0 | S1)`, each `SCC = D != 0`; ~x is `0xFFFFFFFF - x` by the identity not_spec
   | .s_or_b64 => s.withSome ((ssrc64 i s 0).bind fun a => (ssrc64 i s 1).map fun b => (a, b))
       "S_OR_B64: an operand code is not modelled" fun ab =>
@@ -739,11 +835,11 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
       "S_NOR_B64: an operand code is not modelled" fun ab =>
     andB64 s (i.field "SDST") (Dom.sub (Dom.lit 0xFFFFFFFF) (Dom.bor ab.1.1 ab.2.1))
       (Dom.sub (Dom.lit 0xFFFFFFFF) (Dom.bor ab.1.2 ab.2.2))
-  -- Manual 12.2 SOP1 S_AND_SAVEEXEC_B64: `D = EXEC; EXEC = S0 & EXEC; SCC = EXEC != 0`; a mask the
+  -- Manual 12.3 SOP1 S_AND_SAVEEXEC_B64: `D = EXEC; EXEC = S0 & EXEC; SCC = EXEC != 0`; a mask the
   -- model does not know is refused by writeExec
   | .s_and_saveexec_b64 => s.withSome (ssrc64 i s 0) "S_AND_SAVEEXEC_B64: an operand code is not modelled" fun a =>
     saveexecB64 s (i.field "SDST") a
-  -- Manual 12.4 SOPK S_MULK_I32: `D = D * signext(SIMM16)`, SCC unchanged
+  -- Manual 12.2 SOPK S_MULK_I32: `D = D * signext(SIMM16)`, SCC unchanged
   | .s_mulk_i32 =>
     writeScalarDst s (i.field "SDST") (Dom.mul (readSgpr s (i.field "SDST")) (Dom.lit (movkValue (i.field "SIMM16"))))
   -- Manual 12.9 VOPC: V_CMP_LT_U32 `S0 < S1`, V_CMP_EQ_I32 `S0 == S1`, V_CMP_NE_I32 `S0 <> S1`
@@ -765,15 +861,80 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   | .v_sub_nc_u32 => valuLanes i s 2 fun src _ => Dom.sub (src0 src) (src1 src)
   | .v_lshrrev_b32 => valuLanes i s 2 fun src _ =>      -- the low half of a 64-bit shift of (S1, 0) by S0[4:0]
     (Dom.lshr64 (Dom.band (src0 src) (Dom.lit 31)) (src1 src) (Dom.lit 0)).1
-  -- Manual 12.11 VOP3: V_LSHL_OR_B32 `D = (S0 << S1[4:0]) | S2`, V_ADD_LSHL_U32 `D = (S0 + S1) << S2[4:0]`;
+  -- Manual 12.12 VOP3A: V_LSHL_OR_B32 `D = (S0 << S1[4:0]) | S2`, V_ADD_LSHL_U32 `D = (S0 + S1) << S2[4:0]`;
   -- 12.7 VOP2 V_MUL_U32_U24 `D = S0[23:0] * S1[23:0]` (the low 32 bits)
   | .v_lshl_or_b32 => valuLanes i s 3 fun src _ => Dom.bor (Dom.shl (src0 src) (src1 src)) (src2 src)
   | .v_add_lshl_u32 => valuLanes i s 3 fun src _ => Dom.shl (Dom.add (src0 src) (src1 src)) (src2 src)
   | .v_mul_u32_u24 => valuLanes i s 2 fun src _ =>
     Dom.mul (Dom.band (src0 src) (Dom.lit 0xFFFFFF)) (Dom.band (src1 src) (Dom.lit 0xFFFFFF))
+  -- Manual 12.1 SOP2; gem5 twins sop2.cc S_ADD_U32 (55), S_SUB_I32 (163), S_XOR_B32 (571), S_MAX_U32 (358),
+  -- S_LSHL_B32 (943), S_BFM_B32 (1132), S_CSELECT_B64 (417). S_ADD_U32 `D = S0 + S1; SCC = carry`;
+  -- S_SUB_I32 `D = S0 - S1; SCC = S0[31] != S1[31] && S0[31] != D[31]`; S_XOR_B32 `D = S0 ^ S1; SCC = D != 0`;
+  -- S_MAX_U32 `D = S0 > S1 ? S0 : S1; SCC = S0 > S1`; S_LSHL_B32 `D = S0 << S1[4:0]; SCC = D != 0`;
+  -- S_BFM_B32 `D = ((1 << S0[4:0]) - 1) << S1[4:0]`, SCC unchanged; S_CSELECT_B64 `D = SCC ? S0 : S1`.
+  | .s_add_u32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_ADD_U32: an operand code is not modelled" fun ab =>
+    sop32 s (i.field "SDST") (Dom.add ab.1 ab.2) (Dom.carry ab.1 ab.2)
+  | .s_sub_i32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_SUB_I32: an operand code is not modelled" fun ab =>
+    let d := Dom.sub ab.1 ab.2
+    sop32 s (i.field "SDST") d
+      (Dom.band (xorV (Dom.bit ab.1 31) (Dom.bit ab.2 31)) (xorV (Dom.bit ab.1 31) (Dom.bit d 31)))
+  | .s_xor_b32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_XOR_B32: an operand code is not modelled" fun ab =>
+    sop32 s (i.field "SDST") (xorV ab.1 ab.2) (Dom.nez64 (xorV ab.1 ab.2) (Dom.lit 0))
+  | .s_max_u32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_MAX_U32: an operand code is not modelled" fun ab =>
+    sop32 s (i.field "SDST") (Dom.ite (Dom.ugt ab.1 ab.2) ab.1 ab.2) (Dom.ugt ab.1 ab.2)
+  | .s_lshl_b32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_LSHL_B32: an operand code is not modelled" fun ab =>
+    sop32 s (i.field "SDST") (Dom.shl ab.1 ab.2) (Dom.nez64 (Dom.shl ab.1 ab.2) (Dom.lit 0))
+  -- Manual 12.1 SOP2 S_LSHL{2,3}_ADD_U32: `D = (S0 << N) + S1; SCC = ((S0 << N) + S1) >= 0x100000000ULL`,
+  -- read as the pseudo-code's 64-bit comparison: a bit shifted out of S0, or the add's carry. No Vega twin;
+  -- no dump reads this SCC.
+  | .s_lshl2_add_u32 | .s_lshl3_add_u32 =>
+    let n : UInt32 := if instOp i.name == .s_lshl2_add_u32 then 2 else 3
+    s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      s!"{i.name}: an operand code is not modelled" fun ab =>
+    let sh := Dom.shl ab.1 (Dom.lit n)
+    sop32 s (i.field "SDST") (Dom.add sh ab.2)
+      (Dom.bor (Dom.nez64 (lshrV ab.1 (Dom.lit (32 - n))) (Dom.lit 0)) (Dom.carry sh ab.2))
+  | .s_bfm_b32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_BFM_B32: an operand code is not modelled" fun ab =>
+    writeScalarDst s (i.field "SDST") (Dom.shl (Dom.sub (Dom.shl (Dom.lit 1) ab.1) (Dom.lit 1)) ab.2)
+  | .s_cselect_b64 => s.withSome ((ssrc64 i s 0).bind fun a => (ssrc64 i s 1).map fun b => (a, b))
+      "S_CSELECT_B64: an operand code is not modelled" fun ab =>
+    writeScalarDst64 s (i.field "SDST") (Dom.ite s.scc ab.1.1 ab.2.1, Dom.ite s.scc ab.1.2 ab.2.2)
+  -- Manual 12.4 SOPC, 12.2 SOPK; gem5 twins sopc.cc S_CMP_EQ_I32 (53), S_CMP_LT_U32 (323), sopk.cc
+  -- S_CMPK_LT_U32 (367): `SCC = (S0 == S1)`, `SCC = (S0.u < S1.u)`, `SCC = (S0.u32 < SIMM16[15:0])`.
+  | .s_cmp_eq_i32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_CMP_EQ_I32: an operand code is not modelled" fun ab =>
+    { s with scc := Dom.sub (Dom.lit 1) (Dom.ne64 ab.1 (Dom.lit 0) ab.2 (Dom.lit 0)) }
+  | .s_cmp_lt_u32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_CMP_LT_U32: an operand code is not modelled" fun ab =>
+    { s with scc := Dom.ugt ab.2 ab.1 }
+  | .s_cmpk_lt_u32 => s.withSome (scalarSource s (i.field "SDST") none)
+      "S_CMPK_LT_U32: an operand code is not modelled" fun a =>
+    { s with scc := Dom.ugt (Dom.lit (UInt32.ofNat (i.field "SIMM16"))) a }
+  -- Manual 12.5 SOPP, 12.2 SOPK; gem5 twins sopp.cc S_BRANCH (225), S_CBRANCH_SCC0 (276), S_NOP (58):
+  -- `PC = PC + signext(SIMM16 * 4) + 4` (the PC here is already past the instruction); S_NOP and
+  -- S_WAITCNT_VSCNT (stores complete when they issue in this model, as S_WAITCNT's loads do) do nothing.
+  | .s_branch => { s with pc := (Int.ofNat s.pc + signed16 (i.field "SIMM16")).toNat }
+  | .s_cbranch_scc0 => s.withSome (Dom.conc s.scc) "S_CBRANCH_SCC0: SCC is not known" fun c =>
+    if c == 0 then { s with pc := (Int.ofNat s.pc + signed16 (i.field "SIMM16")).toNat } else s
+  | .s_nop => s
+  | .s_waitcnt_vscnt => s
+  -- Manual 12.12 VOP3A V_MBCNT_LO/HI_U32_B32; gem5 twins vop3.cc V_MBCNT_LO_U32_B32 (8975), _HI_ (9023)
+  | .v_mbcnt_lo_u32_b32 => valuLanes i s 2 fun src lane => mbcntV (src0 src) (src1 src) (min lane 32)
+  | .v_mbcnt_hi_u32_b32 => valuLanes i s 2 fun src lane => mbcntV (src0 src) (src1 src) (lane - 32)
+  -- LDS (manual 12.13, 10.4); no gem5 twin is replayed (gem5's DS bodies issue to its LDS pipeline)
+  | .ds_read_b64 => execDs i s 2 false
+  | .ds_write_b64 => execDs i s 2 true
+  | .ds_write_b128 => execDs i s 4 true
   | .unknown => s.fail s!"{i.name}: no semantics (refused, not guessed)"
 
 /-- The identities the bitwise complements above are written with, on the concrete domain. -/
+theorem xor_spec (a b : UInt32) : (a ||| b) - (a &&& b) = a ^^^ b := by bv_decide
 theorem not_spec (a : UInt32) : 0xFFFFFFFF - a = ~~~a := by bv_decide
 theorem lshr32_spec (c x : UInt32) : (lshrrev64 (c &&& 31) (join64 x 0)).toUInt32 = x >>> (c &&& 31) := by
   unfold lshrrev64 join64; bv_decide

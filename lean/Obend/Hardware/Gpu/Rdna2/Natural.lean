@@ -62,7 +62,8 @@ def Reflects : Prop :=
 
 def mapW (s : GWave V₁ M₁) : GWave V₂ M₂ :=
   { sgpr := s.sgpr.map h.f, exec := s.exec, scc := h.f s.scc, m0 := h.f s.m0, vgpr := s.vgpr.map h.f,
-    pc := s.pc, mem := hm.g s.mem, halted := s.halted, err := s.err }
+    pc := s.pc, mem := hm.g s.mem, halted := s.halted, err := s.err, ldsBase := s.ldsBase,
+    ldsDwords := s.ldsDwords }
 
 /-! ## 1. Options related by a map -/
 
@@ -282,14 +283,61 @@ theorem f_src (src : List V₁) (k : Nat) : h.f (src.getD k (Dom.lit 0)) = (src.
   rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_map]
   cases src[k]? <;> simp [h.lit]
 
+theorem lshrV_hom (x k : V₁) : h.f (lshrV x k) = lshrV (h.f x) (h.f k) := by
+  unfold lshrV
+  rw [show h.f (Dom.lshr64 k x (Dom.lit 0)).1 = (Prod.map h.f h.f (Dom.lshr64 k x (Dom.lit 0))).1 from rfl, h.lshr64, h.lit]
+
+theorem sdwaSelV_hom (x : V₁) (sel : Nat) : h.f (sdwaSelV x sel) = sdwaSelV (h.f x) sel := by
+  unfold sdwaSelV
+  simp only [apply_ite h.f]
+  by_cases a : sel < 4
+  · rw [if_pos a, if_pos a, h.band, lshrV_hom, h.lit, h.lit]
+  · rw [if_neg a, if_neg a]
+    by_cases b : (sel == 4) = true
+    · rw [if_pos b, if_pos b, h.band, h.lit]
+    · rw [if_neg b, if_neg b]
+      by_cases c : (sel == 5) = true
+      · rw [if_pos c, if_pos c, lshrV_hom, h.lit]
+      · rw [if_neg c, if_neg c]
+
+theorem sdwaDst_hom (r : V₁) (sel : Nat) : h.f (sdwaDst r sel) = sdwaDst (h.f r) sel := by
+  unfold sdwaDst
+  simp only [apply_ite h.f]
+  by_cases a : sel < 4
+  · rw [if_pos a, if_pos a, h.shl, h.band, h.lit, h.lit]
+  · rw [if_neg a, if_neg a]
+    by_cases b : (sel == 4) = true
+    · rw [if_pos b, if_pos b, h.band, h.lit]
+    · rw [if_neg b, if_neg b]
+      by_cases c : (sel == 5) = true
+      · rw [if_pos c, if_pos c, h.shl, h.band, h.lit, h.lit]
+      · rw [if_neg c, if_neg c]
+
+theorem sdwaLift_hom (i : Inst) (f₁ : List V₁ → Nat → V₁) (f₂ : List V₂ → Nat → V₂)
+    (hf : ∀ src lane, h.f (f₁ src lane) = f₂ (src.map h.f) lane) (src : List V₁) (lane : Nat) :
+    h.f (sdwaLift i f₁ src lane) = sdwaLift i f₂ (src.map h.f) lane := by
+  unfold sdwaLift
+  rw [sdwaDst_hom, hf]
+  simp only [List.map, sdwaSelV_hom, f_src]
+
 theorem valuLanes_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (n : Nat)
     (f₁ : List V₁ → Nat → V₁) (f₂ : List V₂ → Nat → V₂) (hf : ∀ src lane, h.f (f₁ src lane) = f₂ (src.map h.f) lane)
     (hres : (valuLanes i s n f₁).err = none ∨ R) :
     valuLanes i (mapW h hm s) n f₂ = mapW h hm (valuLanes i s n f₁) := by
   unfold valuLanes at hres ⊢
+  by_cases hc : (isSdwa i && !sdwaClear i) = true
+  · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
+  rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
+  dsimp only at hres ⊢
+  have hg : ∀ src lane, h.f ((if isSdwa i = true then sdwaLift i f₁ else f₁) src lane) =
+      (if isSdwa i = true then sdwaLift i f₂ else f₂) (src.map h.f) lane := by
+    intro src lane
+    by_cases hs : isSdwa i = true
+    · rw [if_pos hs, if_pos hs]; exact sdwaLift_hom h i f₁ f₂ hf src lane
+    · rw [if_neg hs, if_neg hs]; exact hf src lane
   rw [activeLanes_hom]
   refine withSome_hom h hm (φ := List.map fun p => (p.1, h.f p.2)) ?_ s _ _ _ (fun rs _ => writeLanes_hom h hm s _ rs) hres
-  exact ORel.mapM _ fun lane => ORel.map (laneSources_rel h hm R hR i s n lane) fun src => by simp [hf]
+  exact ORel.mapM _ fun lane => ORel.map (laneSources_rel h hm R hR i s n lane) fun src => by simp only [hg]
 
 theorem maskOf_hom (s : GWave V₁ M₁) (bits : Nat → V₁) :
     pmap h (maskOf s bits) = maskOf (mapW h hm s) (fun l => h.f (bits l)) := by
@@ -318,6 +366,9 @@ theorem valuLanesCarry_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s :
     (hres : (valuLanesCarry i s f₁).err = none ∨ R) :
     valuLanesCarry i (mapW h hm s) f₂ = mapW h hm (valuLanesCarry i s f₁) := by
   unfold valuLanesCarry at hres ⊢
+  by_cases hc : isSdwa i = true
+  · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
+  rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
   rw [activeLanes_hom]
   refine withSome_hom h hm (φ := List.map fun p => (p.1, pmap h p.2)) ?_ s _ _ _ ?_ hres
   · exact ORel.mapM _ fun lane => ORel.map (laneSources_rel h hm R hR i s 2 lane) fun src => by
@@ -343,6 +394,9 @@ theorem valuCompare_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GW
     (hres : (valuCompare i s wide t₁).err = none ∨ R) :
     valuCompare i (mapW h hm s) wide t₂ = mapW h hm (valuCompare i s wide t₁) := by
   unfold valuCompare at hres ⊢
+  by_cases hc : isSdwa i = true
+  · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
+  rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
   rw [activeLanes_hom]
   refine withSome_hom h hm (φ := List.map fun p => (p.1, h.f p.2)) ?_ s _ _ _ ?_ hres
   · refine ORel.mapM _ fun lane => ?_
@@ -581,6 +635,71 @@ theorem saveexecB64_hom (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M�
     · rw [ite_eq_right he2, ite_eq_right (show ¬ (mapW h hm s2).err.isSome = true from he2)]
       simp [mapW, h.lit]
 
+theorem sop32_hom (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁) (code : Nat) (d c : V₁)
+    (hres : (sop32 s code d c).err = none ∨ R) :
+    sop32 (mapW h hm s) code (h.f d) (h.f c) = mapW h hm (sop32 s code d c) := by
+  unfold sop32 at hres ⊢
+  dsimp only at hres ⊢
+  have hw := writeScalarDst_hom h hm R hR s code d
+    (by by_cases he : (writeScalarDst s code d).err.isSome = true
+        · rw [ite_eq_left he] at hres; exact hres
+        · rw [ite_eq_right he] at hres; exact hres)
+  rw [hw]
+  by_cases he : (writeScalarDst s code d).err.isSome = true
+  · rw [ite_eq_left he, ite_eq_left (show (mapW h hm (writeScalarDst s code d)).err.isSome = true from he)]
+  · rw [ite_eq_right he, ite_eq_right (show ¬ (mapW h hm (writeScalarDst s code d)).err.isSome = true from he)]
+    rfl
+
+theorem xorV_hom (a b : V₁) : h.f (xorV a b) = xorV (h.f a) (h.f b) := by
+  unfold xorV; rw [h.sub, h.bor, h.band]
+
+theorem mbcntV_hom (a b : V₁) (n : Nat) : h.f (mbcntV a b n) = mbcntV (h.f a) (h.f b) n := by
+  unfold mbcntV
+  generalize List.range n = l
+  induction l generalizing b with
+  | nil => rfl
+  | cons k l ih => simp only [List.foldl]; rw [ih, h.add, h.bit]
+
+theorem dsLaneAddrs_rel (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (n lane : Nat) :
+    ORel R id (dsLaneAddrs i s n lane) (dsLaneAddrs i (mapW h hm s) n lane) := by
+  unfold dsLaneAddrs
+  rw [← readVgpr_hom h hm]
+  exact ORel.bind (conc_rel h hm R hR _) fun a => ORel.refl R _
+
+theorem execDs_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (n : Nat) (isStore : Bool)
+    (hres : (execDs i s n isStore).err = none ∨ R) :
+    execDs i (mapW h hm s) n isStore = mapW h hm (execDs i s n isStore) := by
+  unfold execDs at hres ⊢
+  by_cases hg : (i.field "GDS" != 0) = true
+  · rw [if_pos hg, if_pos hg]; exact (fail_hom h hm s _).symm
+  rw [if_neg hg] at hres; rw [if_neg hg, if_neg hg]
+  rw [activeLanes_hom]
+  have hrel : ORel R id ((activeLanes s).mapM fun lane => (dsLaneAddrs i s n lane).map fun as => (lane, as))
+      ((activeLanes s).mapM fun lane => (dsLaneAddrs i (mapW h hm s) n lane).map fun as => (lane, as)) := by
+    have := ORel.mapM (R := R) (ψ := id) (activeLanes s)
+      (g₁ := fun lane => (dsLaneAddrs i s n lane).map fun as => (lane, as))
+      (g₂ := fun lane => (dsLaneAddrs i (mapW h hm s) n lane).map fun as => (lane, as))
+      (fun lane => ORel.map (dsLaneAddrs_rel h hm R hR i s n lane) fun _ => rfl)
+    simpa using this
+  refine withSome_hom h hm hrel s _ _ _ ?_ hres
+  intro las hlas
+  simp only [id] at hlas ⊢
+  cases isStore
+  · simp only [Bool.false_eq_true, ↓reduceIte] at hlas ⊢
+    refine withSome_hom h hm (φ := List.map fun p => (p.1, p.2.1, h.f p.2.2)) ?_ s _ _ _
+      (fun ws _ => writeRegs_hom h hm s ws) hlas
+    refine ORel.mapM _ fun ⟨reg, lane, a⟩ => ?_
+    exact ORel.map (load_rel h hm R hR s.mem a) fun v => rfl
+  · simp only [↓reduceIte] at hlas ⊢
+    by_cases hd : (!decide (las.flatMap (·.2)).Nodup) = true
+    · rw [if_pos hd, if_pos hd]; exact (fail_hom h hm s _).symm
+    · rw [if_neg hd, if_neg hd, ← storeAll_hom h hm]
+      congr 1
+      simp only [List.map_flatMap, List.map_map]
+      congr 1; funext p
+      congr 1; funext q
+      simp [readVgpr_hom h hm]
+
 theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁)
     (hres : (execInst i s).err = none ∨ R) :
     execInst i (mapW h hm s) = mapW h hm (execInst i s) := by
@@ -717,6 +836,48 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
     exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by
       rw [show ∀ p : V₁ × V₁, h.f p.1 = (Prod.map h.f h.f p).1 from fun _ => rfl, h.lshr64, h.band, h.lit, h.lit,
         (hs src).1, (hs src).2.1]) hres
+  case s_add_u32 | s_sub_i32 | s_xor_b32 | s_max_u32 | s_lshl_b32 | s_lshl2_add_u32 | s_lshl3_add_u32 =>
+    refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
+    · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
+    · intro ab hab
+      dsimp only at hab ⊢
+      have := sop32_hom h hm R hR s _ _ _ hab
+      simp only [h.add, h.sub, h.band, h.bor, h.shl, h.ite, h.ugt, h.carry, h.nez64, h.bit, h.lit, xorV_hom,
+        lshrV_hom] at this
+      exact this
+  case s_bfm_b32 =>
+    refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
+    · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
+    · intro ab hab
+      have := writeScalarDst_hom h hm R hR s _ _ hab
+      simp only [h.shl, h.sub, h.lit] at this
+      exact this
+  case s_cselect_b64 =>
+    refine withSome_hom h hm (φ := fun ab => (pmap h ab.1, pmap h ab.2)) ?_ s _ _ _ ?_ hres
+    · exact ORel.bind (ssrc64_rel h hm R i s 0) fun a => ORel.map (ssrc64_rel h hm R i s 1) fun b => rfl
+    · intro ab hab
+      have := writeScalarDst64_hom h hm R hR s _ _ hab
+      simp only [pmap, h.ite] at this
+      exact this
+  case s_cmp_eq_i32 | s_cmp_lt_u32 =>
+    refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
+    · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
+    · intro ab _
+      simp only [mapW, h.sub, h.ne64, h.ugt, h.lit]
+  case s_cmpk_lt_u32 =>
+    refine withSome_hom h hm (scalarSource_rel h hm R hR s _ _) s _ _ _ ?_ hres
+    intro a _
+    simp only [mapW, h.ugt, h.lit]
+  case s_cbranch_scc0 =>
+    refine withSome_hom h hm (conc_rel h hm R hR s.scc) s _ _ _ ?_ hres
+    intro c _
+    simp only [id]
+    split <;> rfl
+  case v_mbcnt_lo_u32_b32 | v_mbcnt_hi_u32_b32 =>
+    exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [mbcntV_hom, (hs src).1, (hs src).2.1]) hres
+  case ds_read_b64 => exact execDs_hom h hm R hR i s 2 false hres
+  case ds_write_b64 => exact execDs_hom h hm R hR i s 2 true hres
+  case ds_write_b128 => exact execDs_hom h hm R hR i s 4 true hres
   case unknown => exact (fail_hom h hm s _).symm
   all_goals rfl
 

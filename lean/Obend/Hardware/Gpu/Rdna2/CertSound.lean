@@ -659,8 +659,10 @@ theorem certify_sound (p : GpuProgram) (progs : List Program) (rs : List Residua
 wire's words lie below `words` (checked, so the composition needs nothing of the allocator's proof). -/
 def boundsOk (g : ArrayGraph) : Bool :=
   let p := lowerArrayToGpu g
+  let lay := gpuLayout g
+  let ls := g.lengths
   (liveAt (layerGraph (fuseGraph g)) g.outputs).all (fun w =>
-      decide (w < g.lengths.length → (gpuLayout g).base w + g.lengths.getD w 0 ≤ p.words)) &&
+      decide (w < ls.length → lay.base w + ls.getD w 0 ≤ p.words)) &&
     p.outputs.all (fun w => decide (p.wireBase.getD w 0 + p.wireLen.getD w 0 ≤ p.words))
 
 /-- The certificate composed with rung G1: for a well-formed graph with a checked layout whose lowering

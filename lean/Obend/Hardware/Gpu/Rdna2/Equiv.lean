@@ -22,32 +22,8 @@ import all Init.ShareCommon
 namespace Obend.Hardware.Gpu.Rdna2
 namespace Tm
 
-/-! ## 1. Structural equality, fast on shared objects -/
+/-! ## 1. Structural equality, fast on shared objects (`eqbS`, `eqbS_iff` are in `Term`) -/
 
-mutual
-def eqbS : Tm → Tm → Bool
-  | mk h1 o1 as1, mk h2 o2 as2 => h1 == h2 && o1 == o2 && eqbL as1 as2
-def eqbL : List Tm → List Tm → Bool
-  | [], [] => true
-  | a :: as, b :: bs => eqbS a b && eqbL as bs
-  | _, _ => false
-end
-
-mutual
-theorem eqbS_iff : ∀ a b : Tm, eqbS a b = true ↔ a = b
-  | mk h1 o1 as1, mk h2 o2 as2 => by
-    simp only [eqbS, Bool.and_eq_true, beq_iff_eq, mk.injEq, eqbL_iff as1 as2, and_assoc]
-theorem eqbL_iff : ∀ as bs : List Tm, eqbL as bs = true ↔ as = bs
-  | [], [] => by simp [eqbL]
-  | a :: as, b :: bs => by simp only [eqbL, Bool.and_eq_true, eqbS_iff a b, eqbL_iff as bs, List.cons.injEq]
-  | [], _ :: _ => by simp [eqbL]
-  | _ :: _, [] => by simp [eqbL]
-end
-
-/-- Equality that answers at once for one object (after `shareCommon'`, equal terms are one object),
-and structurally otherwise. -/
-instance : DecidableEq Tm := fun a b =>
-  withPtrEqDecEq a b (fun _ => decidable_of_iff (eqbS a b = true) (eqbS_iff a b))
 
 instance : Hashable Tm := ⟨hsh⟩
 
