@@ -1,0 +1,17 @@
+# probes from the Mac, 2026-11-06T17:49:24Z
+hbox: hbox
+bb2: dregg-build2
+persvati-remote: Connection to UNKNOWN port 65535 timed out
+persvati-lan: ssh: connect to host 192.168.50.120 port 22: Operation timed out
+dregg-forge: dregg-forge
+dregg-workhorse: dregg-workhorse
+# probes from hbox, the second box
+persvati-lan: ssh: Could not resolve hostname persvati-lan: Temporary failure in name resolution
+persvati: ssh: connect to host 192.168.50.120 port 22: No route to host
+persvati-remote: ssh: Could not resolve hostname persvati-remote: Temporary failure in name resolution
+Host persvati
+	HostName 192.168.50.120
+	User ember
+	IdentityFile ~/.ssh/id_boxlocal
+# bb2 repo
+/home/build/obend/repo           8c3aba8 [lane-m5]

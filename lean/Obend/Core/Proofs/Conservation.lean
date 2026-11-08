@@ -11,7 +11,8 @@ import all Obend.Core.Check
 
 namespace Obend.Core.Proofs.Conservation
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.MachineTyping
-open Obend.Core.Proofs.BidirectionalCompleteness (occurrences fieldOccurrences armOccurrences uses_determined)
+open Obend.Core.Proofs.BidirectionalCompleteness (occurrences fieldOccurrences armOccurrences holeOccurrences
+  uses_determined)
 set_option autoImplicit false
 
 /-- Position `j` of the context holds a `linear` hypothesis. -/
@@ -81,7 +82,8 @@ theorem branchesAgree_getD : ∀ {context : Context} {x y : Uses}, branchesAgree
 mutual
 theorem occurrences_length (n : Nat) : (t : Term) → (occurrences n t).length = n
   | .bound _ => by simp [occurrences]
-  | .nat _ | .boolean _ | .label _ | .hole _ _ => by simp [occurrences]
+  | .nat _ | .boolean _ | .label _ => by simp [occurrences]
+  | .hole _ σ => by simp only [occurrences]; exact holeOccurrences_length n σ
   | .lam body => by simp [occurrences, occurrences_length (n + 1) body]
   | .app a b | .binary _ a b | .specification a b | .prototype a b | .mix a b | .fix a b => by
     simp [occurrences, addUses, occurrences_length n a, occurrences_length n b]
@@ -107,6 +109,9 @@ theorem armOccurrences_length (n : Nat) : (arms : List (String × Term)) → (ar
   | [] => by simp [armOccurrences]
   | (_, body) :: rest => by
     simp [armOccurrences, joinUses, occurrences_length (n + 1) body, armOccurrences_length n rest]
+theorem holeOccurrences_length (n : Nat) : (σ : List Term) → (holeOccurrences n σ).length = n
+  | [] => by simp [holeOccurrences]
+  | t :: σ => by simp [holeOccurrences, addUses, occurrences_length n t, holeOccurrences_length n σ]
 end
 
 theorem getD_indicator (n k i : Nat) :
@@ -260,6 +265,22 @@ theorem image_bound {a : Assumptions} {context : Context} {d : Nat} {σ : Nat �
       rw [if_neg lt, if_neg eq, getD_occurrences_bound, if_neg z, Nat.zero_mul, Nat.add_zero]
       exact ind_eq (by unfold skipAt; constructor <;> intro h <;> split at * <;> omega)
 
+/-- A hole counts its arguments summed, so through a substitution it counts their images summed. -/
+theorem holeOccurrences_image {context : Context} {d m j : Nat} {σ : Nat → Term} {ua : Uses} :
+    ∀ (args : List (Term × Binding × Uses)), (∀ arg ∈ args, arg.2.2.length = context.length) →
+      (∀ arg ∈ args, (occurrences m (arg.1.substitute σ)).getD j 0 = Image d ua arg.2.2 j) →
+      (holeOccurrences m (args.map fun arg => arg.1.substitute σ)).getD j 0 =
+        Image d ua ((args.map (·.2.2)).foldr addUses (zeroUses context)) j
+  | [], _, _ => by simp only [List.map_nil, List.foldr_nil, holeOccurrences, image_zero]; exact getD_replicate_zero _ _
+  | arg :: args, lens, counts => by
+    have rest := holeOccurrences_image args (fun a h => lens a (List.mem_cons_of_mem _ h))
+      (fun a h => counts a (List.mem_cons_of_mem _ h))
+    simp only [List.map_cons, List.foldr_cons, holeOccurrences]
+    rw [getD_addUses ((occurrences_length m _).trans (holeOccurrences_length m _).symm),
+      image_add ((lens arg List.mem_cons_self).trans (length_foldr_addUses _ _ (by simp [zeroUses])
+        (fun u hu => by obtain ⟨a, ha, rfl⟩ := List.mem_map.mp hu; exact lens a (List.mem_cons_of_mem _ ha))).symm),
+      counts arg List.mem_cons_self, rest]
+
 /-- **Counting through a substitution.** -/
 public theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T : Ty} {u : Uses}
     (typed : PartialTyping a context t T u) :
@@ -279,6 +300,12 @@ public theorem subst_counts {a : Assumptions} {context : Context} {t : Term} {T 
     intro context index binding found d σ A ua S j lin
     simp only [Term.substitute]
     exact image_bound S (List.getElem?_eq_some_iff.mp found).1 lin
+  case hole =>
+    intro context n σ' decl args found hσ hctx typedArgs allowed ih d σ A ua S j lin
+    subst hσ
+    simp only [Term.substitute, occurrences, List.map_map, Function.comp_def]
+    exact holeOccurrences_image args (fun arg h => source_uses_length (typedArgs arg h))
+      (fun arg h => ih arg h d σ A ua S j lin)
   case natural =>
     intro context value d σ A ua S j lin
     simp only [Term.substitute, image_zero]; exact getD_replicate_zero _ _

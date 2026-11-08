@@ -1,0 +1,16 @@
+VULKAN mp-workgroup-barrier
+"obend-litmus-check: mp-workgroup-barrier, the shape of hardware/gpu/litmus/wgsl/mp-workgroup-barrier.wgsl"
+{
+x=0;
+y=0;
+P1:r0=0;
+P1:r1=0;
+}
+ P0@sg 0, wg 0, qf 0       | P1@sg 1, wg 0, qf 0       ;
+ st.atom.wg.sc1 x, 1       | cbar.acq_rel.wg.semsc1 0  ;
+ cbar.acq_rel.wg.semsc1 0  | ld.atom.wg.sc1 r0, y      ;
+ st.atom.wg.sc1 y, 1       | cbar.acq_rel.wg.semsc1 1  ;
+ cbar.acq_rel.wg.semsc1 1  | ld.atom.wg.sc1 r1, x      ;
+ cbar.acq_rel.wg.semsc1 2  | cbar.acq_rel.wg.semsc1 2  ;
+
+exists (P1:r0 == 1 /\ P1:r1 == 1 /\ x == 1 /\ y == 1)

@@ -13,7 +13,7 @@ open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional
 set_option autoImplicit false
 
 /-- Every syntax constructor is covered by the annotated completeness theorem.
-The independent typing premise excludes holes and invalid programs. -/
+The independent typing premise excludes undeclared holes and invalid programs. -/
 @[expose] public def checkCovered (_term : Term) : Bool := true
 
 @[expose] public def synthCovered (_term : Term) : Bool := true
@@ -1331,6 +1331,64 @@ public theorem completes_split {assumptions : Assumptions} {context : Context} {
   · change addUses value.uses fn.uses = addUses tu fu
     rw [targetUses, functionUses]
 
+/-- A hole's arguments, each complete at its parameter's type and allowed as `PartialTyping.hole`
+asks, are checked by `checkArgs` with exactly their uses. -/
+theorem args_complete {assumptions : Assumptions} {context : Context} (n : Nat) :
+    ∀ (args : List (Term × Binding × Uses)),
+      (∀ arg ∈ args, argumentAllowed assumptions arg.2.1.quantity context arg.2.1.type arg.2.2 = true) →
+      (∀ arg ∈ args, ∃ tree, Completes assumptions context arg.1 arg.2.1.type arg.2.2 tree) →
+      ∃ trees, ∀ annotations path index, ForestRealizes annotations path index trees →
+        Yields (checkArgs assumptions annotations context path n index (args.map (·.1)) (args.map (·.2.1)))
+          (fun result => result.args.map (·.2.2) = args.map (·.2.2))
+  | [], _, _ => ⟨[], fun _ _ _ _ => by
+      show Yields (checkArgs _ _ _ _ _ _ [] []) _
+      rw [checkArgs.eq_1]; rfl⟩
+  | arg :: args, hallowed, hcomplete => by
+    obtain ⟨tree, completeArg⟩ := hcomplete arg List.mem_cons_self
+    obtain ⟨trees, completeRest⟩ := args_complete n args (fun a h => hallowed a (List.mem_cons_of_mem _ h))
+      (fun a h => hcomplete a (List.mem_cons_of_mem _ h))
+    refine ⟨tree :: trees, fun annotations path index realizes => ?_⟩
+    obtain ⟨first, checkedFirst, firstUses⟩ :=
+      ((completeArg annotations (path ++ [index]) realizes.head).2 arg.2.1.type (sameType_refl _ _)).elim
+    obtain ⟨later, checkedLater, laterUses⟩ := (completeRest annotations path (index + 1) realizes.tail).elim
+    have allowed' : argumentAllowed assumptions arg.2.1.quantity context arg.2.1.type first.uses = true := by
+      rw [firstUses]; exact hallowed arg List.mem_cons_self
+    show Yields (checkArgs _ _ _ _ _ _ (arg.1 :: args.map (·.1)) (arg.2.1 :: args.map (·.2.1))) _
+    rw [checkArgs.eq_2]
+    simp only [checkedFirst, checkedLater, bind, Except.bind, need_ok allowed', pure, Except.pure, Yields,
+      List.map_cons]
+    rw [firstUses, laterUses]
+
+public theorem completes_hole {assumptions : Assumptions} {context : Context} {n : Nat} {σ : List Term}
+    {decl : HoleDecl} {args : List (Term × Binding × Uses)}
+    (found : assumptions.holes.lookup n = some decl) (terms : σ = args.map (·.1))
+    (bindings : args.map (·.2.1) = decl.context)
+    (allowed : ∀ arg ∈ args, argumentAllowed assumptions arg.2.1.quantity context arg.2.1.type arg.2.2 = true)
+    (ih : ∀ arg ∈ args, ∃ tree, Completes assumptions context arg.1 arg.2.1.type arg.2.2 tree) :
+    ∃ tree, Completes assumptions context (.hole n σ) decl.type
+      ((args.map (·.2.2)).foldr addUses (zeroUses context)) tree := by
+  subst terms
+  cases decl with
+  | mk Δ A =>
+  simp only at bindings
+  subst bindings
+  obtain ⟨trees, completeArgs⟩ := args_complete n args allowed ih
+  refine ⟨.node none trees, ?_⟩
+  intro annotations path realizes
+  obtain ⟨result, accepted, sameUses⟩ := (completeArgs annotations path 0 realizes.forest).elim
+  apply finish_complete ⟨A, (result.args.map (·.2.2)).foldr addUses (zeroUses context),
+    .hole found result.terms result.bindings result.typed result.allowed⟩
+  · intro mode
+    rw [elaborate]
+    split
+    · rename_i h; rw [found] at h; cases h
+    · rename_i decl' h
+      rw [found] at h; cases h
+      simp only [accepted, bind, Except.bind]
+  · exact sameType_refl _ _
+  · show List.foldr addUses (zeroUses context) (result.args.map (·.2.2)) = _
+    rw [sameUses]
+
 /-- The simultaneous induction covers every declarative constructor. Its
 existential result stays in Prop throughout, despite containing a data witness. -/
 public theorem complete {assumptions : Assumptions} {context : Context} {term : Term}
@@ -1342,10 +1400,13 @@ public theorem complete {assumptions : Assumptions} {context : Context} {term : 
     (motive_3 := fun context q arms row result uses _ => ∃ trees, ArmsComplete assumptions context q arms row result uses trees)
     ?bound ?natural ?boolean ?label ?lambda ?conversion ?application ?record ?get ?extend ?specification
     ?prototype ?reflect ?metadata ?project ?mix ?fix ?binary ?ifZero ?inject ?case ?ifBool ?perform ?done
-    ?effectCase ?split ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
+    ?effectCase ?split ?hole ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
   case bound =>
     intro Γ index binding found
     exact completes_bound found
+  case hole =>
+    intro Γ n σ decl args found terms bindings _ allowed ih
+    exact completes_hole found terms bindings allowed ih
   case natural => exact completes_natural assumptions
   case boolean => exact completes_boolean assumptions
   case label => exact completes_label assumptions
@@ -1477,7 +1538,7 @@ the agreement relation is strengthened to structural congruence. -/
   | _ => none
 
 @[expose] public def shadowAssumptions : Assumptions :=
-  ⟨[(0, .arrow .reusable .unrestricted .natural .natural)], [0], []⟩
+  ⟨[(0, .arrow .reusable .unrestricted .natural .natural)], [0], [], []⟩
 
 @[expose] public def shadowSource : AnnotatedTerm :=
   ⟨.record [("a", .lam (.bound 0)), ("a", .nat 0)], shadowAnnotations, shadowAssumptions⟩
@@ -1557,7 +1618,8 @@ mutual
 context of the given length. -/
 @[expose] public def occurrences (n : Nat) : Term → Uses
   | .bound index => (List.range n).map fun position => if position = index then 1 else 0
-  | .nat _ | .boolean _ | .label _ | .hole _ _ => List.replicate n 0
+  | .nat _ | .boolean _ | .label _ => List.replicate n 0
+  | .hole _ σ => holeOccurrences n σ
   | .lam body => (occurrences (n + 1) body).tail
   | .app a b | .binary _ a b | .specification a b | .prototype a b | .mix a b | .fix a b =>
     addUses (occurrences n a) (occurrences n b)
@@ -1574,7 +1636,17 @@ context of the given length. -/
 @[expose] public def armOccurrences (n : Nat) : List (String × Term) → Uses
   | [] => List.replicate n 0
   | (_, body) :: rest => joinUses (occurrences (n + 1) body).tail (armOccurrences n rest)
+/-- A hole's arguments are each used where the hole is: their counts summed. -/
+@[expose] public def holeOccurrences (n : Nat) : List Term → Uses
+  | [] => List.replicate n 0
+  | t :: σ => addUses (occurrences n t) (holeOccurrences n σ)
 end
+
+public theorem holeOccurrences_eq (n : Nat) (σ : List Term) :
+    holeOccurrences n σ = (σ.map (occurrences n)).foldr addUses (List.replicate n 0) := by
+  induction σ with
+  | nil => rfl
+  | cons t σ ih => simp [holeOccurrences, ih]
 
 /-- Every derivation of a term computes the same usage vector. -/
 public theorem uses_determined {assumptions : Assumptions} {context : Context} {term : Term} {type : Ty}
@@ -1584,7 +1656,14 @@ public theorem uses_determined {assumptions : Assumptions} {context : Context} {
     (motive_1 := fun context term _ uses _ => uses = occurrences context.length term)
     (motive_2 := fun context fields _ uses _ => uses = fieldOccurrences context.length fields)
     (motive_3 := fun context _ arms _ _ uses _ => uses = armOccurrences context.length arms)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?h ?_ ?_ ?_ ?_ typed
+  case h =>
+    intro Γ n σ decl args found hσ hctx typedArgs allowed ih
+    subst hσ
+    rw [occurrences, holeOccurrences_eq, List.map_map]
+    simp only [zeroUses]
+    congr 1
+    apply List.map_congr_left; intro arg h; exact ih arg h
   all_goals intros
   all_goals simp_all [occurrences, fieldOccurrences, armOccurrences, variableUses, zeroUses]
 

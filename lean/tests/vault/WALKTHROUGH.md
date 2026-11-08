@@ -152,7 +152,7 @@ Step 5 comes back to the embed.
 Now an edit that breaks the law. The file keeps what you typed; the world does not take it, and says
 which law refused and what would pass.
 
-```sh
+```sh refused
 cd vault
 cat >> Beta.md <<'EOF'
 And here is a long digression that goes on and on about nothing in particular at all.
@@ -161,8 +161,8 @@ obend open
 ```
 
 ```text
-Beta: refused by its law short: `new.words <= 20` does not hold; words = 20 would pass (this write has words = 27)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v2) and the bytes it quotes changed
+Beta: refused by its law short: `new.words <= 20` does not hold; words = 20 would pass (this write has words = 27)
 ```
 
 ```sh
@@ -189,7 +189,7 @@ Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it q
 
 A folder is a kind: the laws of its `_kind.md` are laws of every page in it.
 
-```sh
+```sh refused
 cd vault && mkdir journal
 printf -- '---\nlaw brief: new.words <= 8\n---\nA journal: one short line a day.\n' > journal/_kind.md
 printf 'Rain all day.\n' > journal/Monday.md
@@ -199,9 +199,9 @@ obend open
 
 ```text
 journal/Monday: new page (v1)
-journal/Tuesday: not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
 journal/_kind: new page (v1)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
+journal/Tuesday: not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
 ```
 
 A kind is a page of its own, with its own laws and the fields a page starts with, and a page born
@@ -228,16 +228,16 @@ servings: 2
 A page outside the folder that names the kind is its instance too; one that serves nobody is refused
 by the kind's law, by name:
 
-```sh
+```sh refused
 cd vault
 printf -- '---\nkind: recipes\nservings: 0\n---\nToast.\n' > Toast.md
 obend open
 ```
 
 ```text
-Toast: not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v1 → v3) and the bytes it quotes changed
+Toast: not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 ```
 
 ## 3. A member
@@ -633,7 +633,7 @@ _kind.md
 A law may be `monotone(FIELD)` or `writeOnce(FIELD)`; both hold at a page's birth (there is nothing
 for the first reading to fall below), and bite from the second write on:
 
-```sh
+```sh refused
 cd vault && printf -- '---\nlaw growing: monotone(words)\n---\nOne two three.\n' > Kappa.md && obend open
 printf -- '---\nlaw growing: monotone(words)\n---\nOne.\n' > Kappa.md && obend open
 ```
@@ -645,27 +645,29 @@ Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, a
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
 Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
-Kappa: refused by its law growing: `monotone(words)` does not hold; words = 3 would pass (this write has words = 1)
 journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
 Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
 Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+Kappa: refused by its law growing: `monotone(words)` does not hold; words = 3 would pass (this write has words = 1)
 ```
 
-A page whose birth a law refused says so at every open, not only the first:
+A page whose birth a law refused says so at every open, not only the first; the open that refused it
+exits 1, the next says it again and exits 0 (it refused nothing):
 
 ```sh
-cd vault && printf -- '---\nlaw tiny: new.words <= 1\n---\nTwo words.\n' > Lambda.md && obend open && obend open
+cd vault && printf -- '---\nlaw tiny: new.words <= 1\n---\nTwo words.\n' > Lambda.md && obend open; echo "exit $?"
+obend open; echo "exit $?"
 ```
 
 ```text
-Lambda: not born: refused by its law tiny: `new.words <= 1` does not hold; words = 1 would pass (this write has words = 2)
 journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
 Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
 Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+exit 1
 nothing changed
 journal/Tuesday: still not born: refused by journal/_kind: brief (the kind of journal/, an ancestor of journal/Tuesday): `new.words <= 8` does not hold; words = 8 would pass (this write has words = 14)
 Toast: still not born: refused by recipes/_kind: serves (the kind of recipes/, an ancestor of Toast): `not (new.servings == 0)` does not hold; the line `servings: 1` would pass (the page has `servings: 0`)
@@ -673,6 +675,8 @@ Lambda: still not born: refused by its law tiny: `new.words <= 1` does not hold;
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
 Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+exit 0
+Lambda: not born: refused by its law tiny: `new.words <= 1` does not hold; words = 1 would pass (this write has words = 2)
 ```
 
 ## 8. A merge is judged by what its write read
@@ -683,7 +687,7 @@ listed page to be settled (no open section), edited on the laptop while Gamma ch
 laptop's write of the index read Gamma as it was there, and is refused here with what moved; the
 change is made here instead.
 
-```sh
+```sh refused
 cd vault
 printf -- '---\nlaw settled: linked.sections == 0\n---\n# Index\n\n- [[Gamma]]\n' > Index.md && obend open
 cd .. && rm -rf laptop2 && cp -R vault laptop2
@@ -714,10 +718,11 @@ Lambda: still not born: refused by its law tiny: `new.words <= 1` does not hold;
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
 Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
-Index: not merged: its write at laptop2 read Gamma as it was there (bytes 143 → 193, lines 5 → 6, version 7 → 8, …); make the change here, against Gamma as it is
 Alpha: ![[Beta]] (embed) is behind: Beta moved on (v3 → v7) and the bytes it quotes changed
 Alpha: [[Beta#^answer]] (block quote) is behind: Beta moved on (v1 → v7) and the bytes it quotes changed
 Epsilon: ![[Beta#Results]] (block quote) is behind: Beta moved on (v6 → v7) and the bytes it quotes changed
+work: performed 0, retained 0 of 1
+Index: not merged: its write at laptop2 read Gamma as it was there (bytes 143 → 193, lines 5 → 6, version 7 → 8, …); make the change here, against Gamma as it is
 ```
 
 ```sh
@@ -756,11 +761,11 @@ obend status Note | head -1 && obend open | head -1
 ```
 
 ```text
-Note: here's write was not settled at the merge with laptop3: refused by Brief: brief (a law over Brief's links, of which Note is one): `linked.words <= 6` does not hold; words = 6 would pass (this write has words = 14)
 Brief: imported from laptop3
 rendered Brief.md
 Note v1; its last write was not settled at the merge with laptop3: refused by Brief: brief (a law over Brief's links, of which Note is one): `linked.words <= 6` does not hold; words = 6 would pass (this write has words = 14)
 nothing changed
+Note: not settled at the merge with laptop3: refused by Brief: brief (a law over Brief's links, of which Note is one): `linked.words <= 6` does not hold; words = 6 would pass (this write has words = 14)
 ```
 
 Here's write of Note was not settled: the store holds Note at the version both replicas share, and
@@ -781,11 +786,11 @@ obend open | grep Pair; obend status Pair
 ```
 
 ```text
-Pair: here's write was not settled at the merge with laptop4: conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed)
 conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed); keep one with: obend branch resolve 0 left|right
 Pair: still not born: not settled at the merge with laptop4: conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed)
 Pair v0; its last write was not settled at the merge with laptop4: conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed)
 conflict 0 at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed); keep one with: obend branch resolve 0 left|right
+Pair: not settled at the merge with laptop4: conflict at Pair: here's Pair and laptop4's Pair (both kept as candidates; neither landed)
 ```
 
 Resolve it by landing one candidate: the store's own write of it, judged as any write, and the

@@ -148,6 +148,7 @@ import Obend.Core.EquiRecursiveSubstitutionTransport
 import Obend.Core.Extensions
 import Obend.Core.FieldCongruence
 import Obend.Core.Fill
+import Obend.Core.Proofs.FillTyping
 import Obend.Core.FilteredStream
 import Obend.Core.FilteredStreamCompleteness
 import Obend.Core.FilteredStreamSoundness
@@ -569,6 +570,7 @@ import Obend.Teeth.Hardware.CliffordKernel
 import Obend.Teeth.Hardware.DeviceCertificates
 import Obend.Teeth.Hardware.DeviceFixtures
 import Obend.Teeth.Hardware.Fixtures
+import Obend.Teeth.Hardware.Rdna2Runs
 import Obend.Teeth.Hardware.SiliconTeeth
 import Obend.Teeth.Law.Fixtures
 import Obend.Teeth.Law.LawJudgeTeeth
@@ -594,6 +596,7 @@ import Obend.Vault.Cli
 import Obend.Vault.DragonsExchange
 import Obend.Vault.Escrow
 import Obend.Vault.Form
+import Obend.Vault.FormCheck
 import Obend.Vault.HardwareProjection
 import Obend.Vault.Hyperedge
 import Obend.Vault.Json

@@ -196,7 +196,7 @@ def decodePacketParts (value : Json) (table : Array (Ty × Nat)) : Except String
     | .ok fuel => jsonNat fuel
   if fuel > 1048576 then throw "checker work grant capacity"
   return ⟨fun path => (annotations.find? (fun entry => entry.1 == path)).map Prod.snd,
-      ⟨bounds,shareable,[]⟩,context,fuel⟩
+      ⟨bounds,shareable,[], []⟩,context,fuel⟩
 
 /-- Schema, type table, term, then the rest (`decodePacketParts`), in that order. -/
 def decodePacket (value : Json) : Except String DecodedPacket := do

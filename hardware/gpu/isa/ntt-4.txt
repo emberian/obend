@@ -1,3486 +1,773 @@
 # ntt-4: RADV's final ISA for each stage, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1
-# Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders; do not edit.
+# Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders,shaderstats; do not edit.
+# Each instruction line ends in `; <dwords>`, the machine code as RADV printed it; labels and text are LLVM's.
 
-## stage 0 (stage_0.wgsl): 2 threads, 17 instructions, 1 64-bit stores
+## stage 0 (stage_0.wgsl): 12 threads, 101 instructions, 6 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 548
 BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_cmpx_gt_u32_e32 2, v0	; 7da80082
+	s_cbranch_execz BB6	; bf88000e
 BB1:
-	s_movk_i32 s3, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[2:3], 0x20
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v1, 2, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dword v1, v1, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b32_e32 v1, 3, v1
-	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:32
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[0:1], 0x10	; f4080100 fa000010
+	s_load_dwordx4 s[8:11], s[0:1], null	; f4080200 fa000000
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen	; e0341000 80010201
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:32	; e0741020 80020201
 BB6:
-	s_endpgm
-
-## stage 1 (stage_1.wgsl): 8 threads, 125 instructions, 7 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x20
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 2, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dword v1, v1, s[4:7], 0 offen offset:8
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b32_e32 v1, 3, v1
-	buffer_load_dwordx2 v[2:3], v1, s[8:11], 0 offen
-	v_lshlrev_b32_e32 v4, 3, v0
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v4, s[8:11], 0 offen offset:48
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 2, v0	; 7d860082
+	v_cmp_gt_u32_e64 s[0:1], 4, v0	; d4c40000 00020084
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB12	; bf88000e
 BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x20
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 2, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dword v1, v1, s[4:7], 0 offen offset:8
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b32_e32 v1, 3, v1
-	buffer_load_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:32
-	v_lshlrev_b32_e32 v4, 3, v0
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v4, s[8:11], 0 offen offset:48
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[0:1], 0x10	; f4080100 fa000010
+	s_load_dwordx4 s[8:11], s[0:1], null	; f4080200 fa000000
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen	; e0341000 80010201
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:32	; e0741020 80020201
 BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 3, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 4, v0	; 7d860084
+	v_cmp_gt_u32_e64 s[0:1], 6, v0	; d4c40000 00020086
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB18	; bf88000e
 BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x20
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 2, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dword v1, v1, s[4:7], 0 offen offset:8
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b32_e32 v1, 3, v1
-	buffer_load_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:32
-	v_lshlrev_b32_e32 v4, 3, v0
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v4, s[8:11], 0 offen offset:48
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[0:1], 0x10	; f4080100 fa000010
+	s_load_dwordx4 s[8:11], s[0:1], null	; f4080200 fa000000
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen	; e0341000 80010201
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:32	; e0741020 80020201
 BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 5, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 6, v0	; 7d860086
+	v_cmp_gt_u32_e64 s[0:1], 8, v0	; d4c40000 00020088
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB24	; bf88000e
 BB19:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	v_add_nc_u32_e32 v2, 0xffffffe0, v1
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v2, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:48
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[0:1], 0x10	; f4080100 fa000010
+	s_load_dwordx4 s[8:11], s[0:1], null	; f4080200 fa000000
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen	; e0341000 80010201
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:32	; e0741020 80020201
 BB24:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 5, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB30
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 8, v0	; 7d860088
+	v_cmp_gt_u32_e64 s[0:1], 10, v0	; d4c40000 0002008a
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB30	; bf880015
 BB25:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	v_add_nc_u32_e32 v2, 0xffffffe0, v1
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v2, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:48
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[0:1], 0x20	; f4080100 fa000020
+	s_load_dwordx4 s[8:11], s[0:1], null	; f4080200 fa000000
+	v_lshl_add_u32 v1, v0, 2, 0xffffffe0	; d7460001 03fd0500 ffffffe0
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dword v1, v1, s[4:7], 0 offen	; e0301000 80010101
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_lshlrev_b32_e32 v1, 3, v1	; 34020283
+	buffer_load_dwordx2 v[2:3], v1, s[8:11], 0 offen	; e0341000 80020201
+	v_lshlrev_b32_e32 v4, 3, v0	; 34080083
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v4, s[8:11], 0 offen offset:32	; e0741020 80020204
 BB30:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 6, v0
-	v_cmp_gt_u32_e64 s[0:1], 7, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB36
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 10, v0	; 7d86008a
+	v_cmp_gt_u32_e64 s[0:1], 12, v0	; d4c40000 0002008c
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB36	; bf880014
 BB31:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	v_add_nc_u32_e32 v2, 0xffffffe0, v1
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v2, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:48
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[2:3], 0x20	; f4080101 fa000020
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshl_add_u32 v1, v0, 2, 0xffffffe0	; d7460001 03fd0500 ffffffe0
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dword v1, v1, s[4:7], 0 offen	; e0301000 80010101
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_lshlrev_b32_e32 v1, 3, v1	; 34020283
+	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen	; e0341000 80000201
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:32	; e0741020 80000200
 BB36:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 7, v0
-	v_cmp_gt_u32_e64 s[0:1], 8, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB42
-BB37:
-	s_movk_i32 s3, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[2:3], 0x10
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	v_add_nc_u32_e32 v1, 0xffffffe0, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:48
-BB42:
-	s_endpgm
+	s_endpgm	; bf810000
 
-## stage 2 (stage_2.wgsl): 4 threads, 67 instructions, 4 64-bit stores
+## stage 1 (stage_1.wgsl): 4 threads, 37 instructions, 2 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 196
 BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_cmpx_gt_u32_e32 2, v0	; 7da80082
+	s_cbranch_execz BB6	; bf880013
 BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:72
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:96
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:112
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[0:1], 0x20	; f4080100 fa000020
+	s_load_dwordx4 s[8:11], s[0:1], null	; f4080200 fa000000
+	v_lshlrev_b32_e32 v1, 2, v0	; 34020082
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dword v1, v1, s[4:7], 0 offen offset:16	; e0301010 80010101
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_lshlrev_b32_e32 v1, 3, v1	; 34020283
+	buffer_load_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:80	; e0341050 80020201
+	v_lshlrev_b32_e32 v4, 3, v0	; 34080083
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v4, s[8:11], 0 offen offset:128	; e0741080 80020204
 BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 2, v0	; 7d860082
+	v_cmp_gt_u32_e64 s[0:1], 4, v0	; d4c40000 00020084
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB12	; bf880012
 BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:64
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:96
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:112
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[2:3], 0x20	; f4080101 fa000020
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v1, 2, v0	; 34020082
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dword v1, v1, s[4:7], 0 offen offset:16	; e0301010 80010101
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_lshlrev_b32_e32 v1, 3, v1	; 34020283
+	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen offset:80	; e0341050 80000201
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:992	; e07413e0 80000200
 BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:64
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:80
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:112
-BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 3, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
-BB19:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:56
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:80
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:112
-BB24:
-	s_endpgm
+	s_endpgm	; bf810000
 
-## stage 3 (stage_3.wgsl): 2 threads, 39 instructions, 2 64-bit stores
+## stage 2 (stage_2.wgsl): 4 threads, 255 instructions, 2 64-bit stores; VGPRs: 32, SGPRs: 128, LDS: 0, scratch: 0, code: 1516
 BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_cmpx_gt_u32_e32 2, v0	; 7da80082
+	s_cbranch_execz BB6	; bf8800b8
 BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:112
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:128
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:144
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_load_dwordx4 s[4:7], s[0:1], null	; f4080100 fa000000
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	s_clause 0x5	; bfa10005
+	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:112	; e0341070 80010201
+	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:48	; e0341030 80010401
+	buffer_load_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:128	; e0341080 80010601
+	buffer_load_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:64	; e0341040 80010801
+	buffer_load_dwordx2 v[10:11], v1, s[4:7], 0 offen offset:32	; e0341020 80010a01
+	buffer_load_dwordx2 v[12:13], v1, s[4:7], 0 offen offset:96	; e0341060 80010c01
+	s_waitcnt vmcnt(4)	; bf8c3f74
+	v_and_b32_e32 v14, v2, v4	; 361c0902
+	v_and_b32_e32 v15, v3, v5	; 361e0b03
+	s_waitcnt vmcnt(3)	; bf8c3f73
+	v_and_b32_e32 v16, v6, v4	; 36200906
+	v_and_b32_e32 v17, v7, v5	; 36220b07
+	v_mul_hi_u32 v18, v14, v16	; d56a0012 0002210e
+	v_mul_lo_u32 v19, v14, v16	; d5690013 0002210e
+	v_mul_lo_u32 v20, v15, v16	; d5690014 0002210f
+	v_mul_lo_u32 v21, v14, v17	; d5690015 0002230e
+	v_add3_u32 v18, v18, v21, v20	; d76d0012 04522b12
+	v_mov_b32_e32 v20, v19	; 7e280313
+	v_mov_b32_e32 v21, v18	; 7e2a0312
+	s_waitcnt vmcnt(2)	; bf8c3f72
+	v_lshrrev_b64 v[20:21], v8, v[20:21]	; d7000014 00022908
+	v_lshrrev_b64 v[6:7], v8, v[6:7]	; d7000006 00020d08
+	v_mul_hi_u32 v22, v14, v6	; d56a0016 00020d0e
+	v_mul_lo_u32 v23, v14, v6	; d5690017 00020d0e
+	v_mul_lo_u32 v15, v15, v6	; d569000f 00020d0f
+	v_mul_lo_u32 v14, v14, v7	; d569000e 00020f0e
+	v_lshrrev_b64 v[2:3], v8, v[2:3]	; d7000002 00020508
+	v_add3_u32 v22, v22, v14, v15	; d76d0016 043e1d16
+	v_mov_b32_e32 v14, v23	; 7e1c0317
+	v_and_b32_e32 v23, v23, v4	; 362e0917
+	v_mul_hi_u32 v24, v2, v16	; d56a0018 00022102
+	v_mul_lo_u32 v25, v2, v16	; d5690019 00022102
+	v_mul_lo_u32 v17, v2, v17	; d5690011 00022302
+	v_mul_lo_u32 v16, v3, v16	; d5690010 00022103
+	v_mov_b32_e32 v15, v22	; 7e1e0316
+	v_and_b32_e32 v22, v22, v5	; 362c0b16
+	v_add3_u32 v24, v24, v17, v16	; d76d0018 04422318
+	v_mov_b32_e32 v16, v25	; 7e200319
+	v_and_b32_e32 v25, v25, v4	; 36320919
+	v_mov_b32_e32 v17, v24	; 7e220318
+	v_and_b32_e32 v24, v24, v5	; 36300b18
+	v_mul_hi_u32 v26, v2, v6	; d56a001a 00020d02
+	v_mul_lo_u32 v27, v2, v6	; d569001b 00020d02
+	v_mul_lo_u32 v3, v3, v6	; d5690003 00020d03
+	v_mul_lo_u32 v2, v2, v7	; d5690002 00020f02
+	v_add3_u32 v26, v26, v2, v3	; d76d001a 040e051a
+	v_lshrrev_b64 v[2:3], v8, v[14:15]	; d7000002 00021d08
+	v_add_co_u32 v20, vcc, v20, v23	; d70f6a14 00022f14
+	v_add_co_ci_u32_e32 v21, vcc, v21, v22, vcc	; 502a2d15
+	v_add_co_u32 v20, vcc, v20, v25	; d70f6a14 00023314
+	v_add_co_ci_u32_e32 v21, vcc, v21, v24, vcc	; 502a3115
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_lshrrev_b64 v[2:3], v8, v[16:17]	; d7000002 00022108
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_lshrrev_b64 v[22:23], 0, v[20:21]	; d7000016 00022880
+	v_and_b32_e32 v24, v20, v4	; 36300914
+	v_and_b32_e32 v25, v21, v5	; 36320b15
+	v_lshlrev_b64 v[20:21], v8, v[24:25]	; d6ff0014 00023108
+	v_and_or_b32 v19, v19, v4, v20	; d7710013 04520913
+	v_and_or_b32 v18, v18, v5, v21	; d7710012 04560b12
+	v_mov_b32_e32 v21, v18	; 7e2a0312
+	v_mov_b32_e32 v20, v19	; 7e280313
+	v_lshrrev_b64 v[2:3], v8, v[22:23]	; d7000002 00022d08
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_mov_b32_e32 v2, v27	; 7e04031b
+	v_and_b32_e32 v27, v27, v4	; 3636091b
+	v_mov_b32_e32 v4, v27	; 7e08031b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_mov_b32_e32 v3, v26	; 7e06031a
+	v_and_b32_e32 v26, v26, v5	; 36340b1a
+	v_mov_b32_e32 v5, v26	; 7e0a031a
+	v_lshlrev_b64 v[4:5], v8, v[4:5]	; d6ff0004 00020908
+	v_sub_co_u32 v4, vcc, v4, v27	; d7106a04 00023704
+	v_sub_co_ci_u32_e32 v5, vcc, v5, v26, vcc	; 520a3505
+	v_lshrrev_b64 v[2:3], v8, v[2:3]	; d7000002 00020508
+	s_waitcnt vmcnt(1)	; bf8c3f71
+	v_lshrrev_b64 v[8:9], 0, v[10:11]	; d7000008 00021480
+	v_sub_co_u32 v28, vcc, v19, v10	; d7106a1c 00021513
+	v_sub_co_ci_u32_e32 v29, vcc, v18, v11, vcc	; 523a1712
+	v_cmp_lt_u64_e32 vcc, v[20:21], v[10:11]	; 7dc21514
+	v_cndmask_b32_e32 v28, v28, v19, vcc	; 0238271c
+	v_cndmask_b32_e32 v29, v29, v18, vcc	; 023a251d
+	v_lshrrev_b64 v[10:11], 0, v[28:29]	; d700000a 00023880
+	v_sub_co_u32 v30, vcc, v8, v4	; d7106a1e 00020908
+	v_sub_co_ci_u32_e32 v31, vcc, v9, v5, vcc	; 523e0b09
+	v_lshrrev_b64 v[14:15], 0, v[30:31]	; d700000e 00023c80
+	v_sub_co_u32 v30, vcc, 0, v30	; d7106a1e 00023c80
+	v_sub_co_ci_u32_e32 v31, vcc, 0, v31, vcc	; 523e3e80
+	v_cmp_lt_u64_e32 vcc, v[10:11], v[14:15]	; 7dc21d0a
+	v_cndmask_b32_e32 v30, v30, v4, vcc	; 023c091e
+	v_cndmask_b32_e32 v31, v31, v5, vcc	; 023e0b1f
+	v_add_co_u32 v28, vcc, v28, v30	; d70f6a1c 00023d1c
+	v_add_co_ci_u32_e32 v29, vcc, v29, v31, vcc	; 503a3f1d
+	v_sub_co_u32 v31, vcc, v8, v2	; d7106a1f 00020508
+	v_sub_co_ci_u32_e32 v10, vcc, v9, v3, vcc	; 52140709
+	v_sub_co_u32 v6, vcc, 0, v2	; d7106a06 00020480
+	v_sub_co_ci_u32_e32 v7, vcc, 0, v3, vcc	; 520e0680
+	v_lshrrev_b64 v[4:5], 0, v[28:29]	; d7000004 00023880
+	v_cmp_lt_u64_e32 vcc, v[4:5], v[2:3]	; 7dc20504
+	v_cndmask_b32_e32 v6, v6, v31, vcc	; 020c3f06
+	v_cndmask_b32_e32 v7, v7, v10, vcc	; 020e1507
+	v_add_co_u32 v28, vcc, v28, v6	; d70f6a1c 00020d1c
+	v_add_co_ci_u32_e32 v29, vcc, v29, v7, vcc	; 503a0f1d
+	v_sub_co_u32 v8, vcc, v8, v28	; d7106a08 00023908
+	v_sub_co_ci_u32_e32 v9, vcc, v9, v29, vcc	; 52123b09
+	v_lshrrev_b64 v[2:3], 0, v[8:9]	; d7000002 00021080
+	v_sub_co_u32 v8, vcc, 0, v8	; d7106a08 00021080
+	v_sub_co_ci_u32_e32 v9, vcc, 0, v9, vcc	; 52121280
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_cmp_lt_u64_e32 vcc, v[12:13], v[2:3]	; 7dc2050c
+	v_cndmask_b32_e32 v8, v8, v28, vcc	; 02103908
+	v_cndmask_b32_e32 v9, v9, v29, vcc	; 02123b09
+	v_add_co_u32 v2, vcc, v12, v8	; d70f6a02 0002110c
+	v_add_co_ci_u32_e32 v3, vcc, v13, v9, vcc	; 5006130d
+	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:848	; e0741350 80010201
 BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 2, v0	; 7d860082
+	v_cmp_gt_u32_e64 s[0:1], 4, v0	; d4c40000 00020084
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB12	; bf8800b7
 BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:104
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:128
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v1, v2, v4
-	v_mul_lo_u32 v6, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v7, v1, v2, v3
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:144
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	s_clause 0x5	; bfa10005
+	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:96	; e0341060 80000200
+	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:32	; e0341020 80000400
+	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:112	; e0341070 80000600
+	buffer_load_dwordx2 v[8:9], v0, s[0:3], 0 offen offset:48	; e0341030 80000800
+	buffer_load_dwordx2 v[10:11], v0, s[0:3], 0 offen offset:16	; e0341010 80000a00
+	buffer_load_dwordx2 v[12:13], v0, s[0:3], 0 offen offset:80	; e0341050 80000c00
+	s_waitcnt vmcnt(4)	; bf8c3f74
+	v_and_b32_e32 v14, v2, v4	; 361c0902
+	v_and_b32_e32 v15, v3, v5	; 361e0b03
+	s_waitcnt vmcnt(3)	; bf8c3f73
+	v_and_b32_e32 v16, v6, v4	; 36200906
+	v_and_b32_e32 v17, v7, v5	; 36220b07
+	v_mul_hi_u32 v1, v14, v16	; d56a0001 0002210e
+	v_mul_lo_u32 v18, v14, v16	; d5690012 0002210e
+	v_mul_lo_u32 v19, v15, v16	; d5690013 0002210f
+	v_mul_lo_u32 v20, v14, v17	; d5690014 0002230e
+	v_add3_u32 v1, v1, v20, v19	; d76d0001 044e2901
+	v_mov_b32_e32 v20, v18	; 7e280312
+	v_mov_b32_e32 v21, v1	; 7e2a0301
+	s_waitcnt vmcnt(2)	; bf8c3f72
+	v_lshrrev_b64 v[20:21], v8, v[20:21]	; d7000014 00022908
+	v_lshrrev_b64 v[6:7], v8, v[6:7]	; d7000006 00020d08
+	v_mul_hi_u32 v22, v14, v6	; d56a0016 00020d0e
+	v_mul_lo_u32 v23, v14, v6	; d5690017 00020d0e
+	v_mul_lo_u32 v15, v15, v6	; d569000f 00020d0f
+	v_mul_lo_u32 v14, v14, v7	; d569000e 00020f0e
+	v_lshrrev_b64 v[2:3], v8, v[2:3]	; d7000002 00020508
+	v_add3_u32 v22, v22, v14, v15	; d76d0016 043e1d16
+	v_mov_b32_e32 v14, v23	; 7e1c0317
+	v_and_b32_e32 v23, v23, v4	; 362e0917
+	v_mul_hi_u32 v24, v2, v16	; d56a0018 00022102
+	v_mul_lo_u32 v25, v2, v16	; d5690019 00022102
+	v_mul_lo_u32 v17, v2, v17	; d5690011 00022302
+	v_mul_lo_u32 v16, v3, v16	; d5690010 00022103
+	v_mov_b32_e32 v15, v22	; 7e1e0316
+	v_and_b32_e32 v22, v22, v5	; 362c0b16
+	v_add3_u32 v24, v24, v17, v16	; d76d0018 04422318
+	v_mov_b32_e32 v16, v25	; 7e200319
+	v_and_b32_e32 v25, v25, v4	; 36320919
+	v_mov_b32_e32 v17, v24	; 7e220318
+	v_and_b32_e32 v24, v24, v5	; 36300b18
+	v_mul_hi_u32 v26, v2, v6	; d56a001a 00020d02
+	v_mul_lo_u32 v27, v2, v6	; d569001b 00020d02
+	v_mul_lo_u32 v3, v3, v6	; d5690003 00020d03
+	v_mul_lo_u32 v2, v2, v7	; d5690002 00020f02
+	v_add3_u32 v26, v26, v2, v3	; d76d001a 040e051a
+	v_lshrrev_b64 v[2:3], v8, v[14:15]	; d7000002 00021d08
+	v_add_co_u32 v20, vcc, v20, v23	; d70f6a14 00022f14
+	v_add_co_ci_u32_e32 v21, vcc, v21, v22, vcc	; 502a2d15
+	v_add_co_u32 v20, vcc, v20, v25	; d70f6a14 00023314
+	v_add_co_ci_u32_e32 v21, vcc, v21, v24, vcc	; 502a3115
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_lshrrev_b64 v[2:3], v8, v[16:17]	; d7000002 00022108
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_lshrrev_b64 v[22:23], 0, v[20:21]	; d7000016 00022880
+	v_and_b32_e32 v24, v20, v4	; 36300914
+	v_and_b32_e32 v25, v21, v5	; 36320b15
+	v_lshlrev_b64 v[20:21], v8, v[24:25]	; d6ff0014 00023108
+	v_and_or_b32 v18, v18, v4, v20	; d7710012 04520912
+	v_and_or_b32 v1, v1, v5, v21	; d7710001 04560b01
+	v_mov_b32_e32 v21, v1	; 7e2a0301
+	v_mov_b32_e32 v20, v18	; 7e280312
+	v_lshrrev_b64 v[2:3], v8, v[22:23]	; d7000002 00022d08
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_mov_b32_e32 v2, v27	; 7e04031b
+	v_and_b32_e32 v27, v27, v4	; 3636091b
+	v_mov_b32_e32 v4, v27	; 7e08031b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_mov_b32_e32 v3, v26	; 7e06031a
+	v_and_b32_e32 v26, v26, v5	; 36340b1a
+	v_mov_b32_e32 v5, v26	; 7e0a031a
+	v_lshlrev_b64 v[4:5], v8, v[4:5]	; d6ff0004 00020908
+	v_sub_co_u32 v4, vcc, v4, v27	; d7106a04 00023704
+	v_sub_co_ci_u32_e32 v5, vcc, v5, v26, vcc	; 520a3505
+	v_lshrrev_b64 v[2:3], v8, v[2:3]	; d7000002 00020508
+	s_waitcnt vmcnt(1)	; bf8c3f71
+	v_lshrrev_b64 v[8:9], 0, v[10:11]	; d7000008 00021480
+	v_sub_co_u32 v28, vcc, v18, v10	; d7106a1c 00021512
+	v_sub_co_ci_u32_e32 v29, vcc, v1, v11, vcc	; 523a1701
+	v_cmp_lt_u64_e32 vcc, v[20:21], v[10:11]	; 7dc21514
+	v_cndmask_b32_e32 v28, v28, v18, vcc	; 0238251c
+	v_cndmask_b32_e32 v29, v29, v1, vcc	; 023a031d
+	v_lshrrev_b64 v[10:11], 0, v[28:29]	; d700000a 00023880
+	v_sub_co_u32 v30, vcc, v8, v4	; d7106a1e 00020908
+	v_sub_co_ci_u32_e32 v31, vcc, v9, v5, vcc	; 523e0b09
+	v_lshrrev_b64 v[14:15], 0, v[30:31]	; d700000e 00023c80
+	v_sub_co_u32 v30, vcc, 0, v30	; d7106a1e 00023c80
+	v_sub_co_ci_u32_e32 v31, vcc, 0, v31, vcc	; 523e3e80
+	v_cmp_lt_u64_e32 vcc, v[10:11], v[14:15]	; 7dc21d0a
+	v_cndmask_b32_e32 v30, v30, v4, vcc	; 023c091e
+	v_cndmask_b32_e32 v31, v31, v5, vcc	; 023e0b1f
+	v_add_co_u32 v28, vcc, v28, v30	; d70f6a1c 00023d1c
+	v_add_co_ci_u32_e32 v29, vcc, v29, v31, vcc	; 503a3f1d
+	v_sub_co_u32 v31, vcc, v8, v2	; d7106a1f 00020508
+	v_sub_co_ci_u32_e32 v1, vcc, v9, v3, vcc	; 52020709
+	v_sub_co_u32 v6, vcc, 0, v2	; d7106a06 00020480
+	v_sub_co_ci_u32_e32 v7, vcc, 0, v3, vcc	; 520e0680
+	v_lshrrev_b64 v[4:5], 0, v[28:29]	; d7000004 00023880
+	v_cmp_lt_u64_e32 vcc, v[4:5], v[2:3]	; 7dc20504
+	v_cndmask_b32_e32 v6, v6, v31, vcc	; 020c3f06
+	v_cndmask_b32_e32 v7, v7, v1, vcc	; 020e0307
+	v_add_co_u32 v28, vcc, v28, v6	; d70f6a1c 00020d1c
+	v_add_co_ci_u32_e32 v29, vcc, v29, v7, vcc	; 503a0f1d
+	v_lshrrev_b64 v[2:3], 0, v[28:29]	; d7000002 00023880
+	v_sub_co_u32 v8, vcc, v8, v28	; d7106a08 00023908
+	v_sub_co_ci_u32_e32 v9, vcc, v9, v29, vcc	; 52123b09
+	v_sub_co_u32 v28, vcc, 0, v28	; d7106a1c 00023880
+	v_sub_co_ci_u32_e32 v29, vcc, 0, v29, vcc	; 523a3a80
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_cmp_lt_u64_e32 vcc, v[12:13], v[2:3]	; 7dc2050c
+	v_cndmask_b32_e32 v28, v28, v8, vcc	; 0238111c
+	v_cndmask_b32_e32 v29, v29, v9, vcc	; 023a131d
+	v_add_co_u32 v2, vcc, v12, v28	; d70f6a02 0002390c
+	v_add_co_ci_u32_e32 v3, vcc, v13, v29, vcc	; 50063b0d
+	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:912	; e0741390 80000200
 BB12:
-	s_endpgm
+	s_endpgm	; bf810000
 
-## stage 4 (stage_4.wgsl): 4 threads, 74 instructions, 4 64-bit stores
+## stage 3 (stage_3.wgsl): 4 threads, 16 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 84
 BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_cmpx_gt_u32_e32 4, v0	; 7da80084
+	s_cbranch_execz BB6	; bf880010
 BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:120
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:128
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:160
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	s_clause 0x1	; bfa10001
+	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen offset:912	; e0341390 80000201
+	buffer_load_dwordx2 v[4:5], v1, s[0:3], 0 offen offset:848	; e0341350 80000401
+	v_cmp_gt_u32_e32 vcc, 2, v0	; 7d880082
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_cndmask_b32_e32 v6, v2, v4, vcc	; 020c0902
+	v_cndmask_b32_e32 v7, v3, v5, vcc	; 020e0b03
+	buffer_store_dwordx2 v[6:7], v1, s[0:3], 0 offen offset:944	; e07413b0 80000601
 BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
+	s_endpgm	; bf810000
+
+## stage 4 (stage_4.wgsl): 4 threads, 37 instructions, 2 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 196
+BB0:
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_cmpx_gt_u32_e32 2, v0	; 7da80082
+	s_cbranch_execz BB6	; bf880013
+BB1:
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[0:1], 0x20	; f4080100 fa000020
+	s_load_dwordx4 s[8:11], s[0:1], null	; f4080200 fa000000
+	v_lshlrev_b32_e32 v1, 2, v0	; 34020082
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dword v1, v1, s[4:7], 0 offen offset:32	; e0301020 80010101
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_lshlrev_b32_e32 v1, 3, v1	; 34020283
+	buffer_load_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:944	; e03413b0 80020201
+	v_lshlrev_b32_e32 v4, 3, v0	; 34080083
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v4, s[8:11], 0 offen offset:976	; e07413d0 80020204
+BB6:
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 2, v0	; 7d860082
+	v_cmp_gt_u32_e64 s[0:1], 4, v0	; d4c40000 00020084
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB12	; bf880012
 BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:112
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:128
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:160
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_clause 0x1	; bfa10001
+	s_load_dwordx4 s[4:7], s[2:3], 0x20	; f4080101 fa000020
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v1, 2, v0	; 34020082
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dword v1, v1, s[4:7], 0 offen offset:32	; e0301020 80010101
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_lshlrev_b32_e32 v1, 3, v1	; 34020283
+	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen offset:944	; e03413b0 80000201
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:976	; e07413d0 80000200
 BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:128
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:88
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:160
-BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 3, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
-BB19:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:128
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:72
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:160
-BB24:
-	s_endpgm
+	s_endpgm	; bf810000
 
-## stage 5 (stage_5.wgsl): 2 threads, 33 instructions, 2 64-bit stores
+## stage 5 (stage_5.wgsl): 4 threads, 255 instructions, 2 64-bit stores; VGPRs: 32, SGPRs: 128, LDS: 0, scratch: 0, code: 1516
 BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_cmpx_gt_u32_e32 2, v0	; 7da80082
+	s_cbranch_execz BB6	; bf8800b8
 BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:160
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:96
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:192
+	s_mov_b32 s0, s2	; be800302
+	s_movk_i32 s1, 0x8000	; b0018000
+	s_load_dwordx4 s[4:7], s[0:1], null	; f4080100 fa000000
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	s_clause 0x5	; bfa10005
+	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:992	; e03413e0 80010201
+	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:48	; e0341030 80010401
+	buffer_load_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1008	; e03413f0 80010601
+	buffer_load_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:64	; e0341040 80010801
+	buffer_load_dwordx2 v[10:11], v1, s[4:7], 0 offen offset:32	; e0341020 80010a01
+	buffer_load_dwordx2 v[12:13], v1, s[4:7], 0 offen offset:976	; e03413d0 80010c01
+	s_waitcnt vmcnt(4)	; bf8c3f74
+	v_and_b32_e32 v14, v2, v4	; 361c0902
+	v_and_b32_e32 v15, v3, v5	; 361e0b03
+	s_waitcnt vmcnt(3)	; bf8c3f73
+	v_and_b32_e32 v16, v6, v4	; 36200906
+	v_and_b32_e32 v17, v7, v5	; 36220b07
+	v_mul_hi_u32 v18, v14, v16	; d56a0012 0002210e
+	v_mul_lo_u32 v19, v14, v16	; d5690013 0002210e
+	v_mul_lo_u32 v20, v15, v16	; d5690014 0002210f
+	v_mul_lo_u32 v21, v14, v17	; d5690015 0002230e
+	v_add3_u32 v18, v18, v21, v20	; d76d0012 04522b12
+	v_mov_b32_e32 v20, v19	; 7e280313
+	v_mov_b32_e32 v21, v18	; 7e2a0312
+	s_waitcnt vmcnt(2)	; bf8c3f72
+	v_lshrrev_b64 v[20:21], v8, v[20:21]	; d7000014 00022908
+	v_lshrrev_b64 v[6:7], v8, v[6:7]	; d7000006 00020d08
+	v_mul_hi_u32 v22, v14, v6	; d56a0016 00020d0e
+	v_mul_lo_u32 v23, v14, v6	; d5690017 00020d0e
+	v_mul_lo_u32 v15, v15, v6	; d569000f 00020d0f
+	v_mul_lo_u32 v14, v14, v7	; d569000e 00020f0e
+	v_lshrrev_b64 v[2:3], v8, v[2:3]	; d7000002 00020508
+	v_add3_u32 v22, v22, v14, v15	; d76d0016 043e1d16
+	v_mov_b32_e32 v14, v23	; 7e1c0317
+	v_and_b32_e32 v23, v23, v4	; 362e0917
+	v_mul_hi_u32 v24, v2, v16	; d56a0018 00022102
+	v_mul_lo_u32 v25, v2, v16	; d5690019 00022102
+	v_mul_lo_u32 v17, v2, v17	; d5690011 00022302
+	v_mul_lo_u32 v16, v3, v16	; d5690010 00022103
+	v_mov_b32_e32 v15, v22	; 7e1e0316
+	v_and_b32_e32 v22, v22, v5	; 362c0b16
+	v_add3_u32 v24, v24, v17, v16	; d76d0018 04422318
+	v_mov_b32_e32 v16, v25	; 7e200319
+	v_and_b32_e32 v25, v25, v4	; 36320919
+	v_mov_b32_e32 v17, v24	; 7e220318
+	v_and_b32_e32 v24, v24, v5	; 36300b18
+	v_mul_hi_u32 v26, v2, v6	; d56a001a 00020d02
+	v_mul_lo_u32 v27, v2, v6	; d569001b 00020d02
+	v_mul_lo_u32 v3, v3, v6	; d5690003 00020d03
+	v_mul_lo_u32 v2, v2, v7	; d5690002 00020f02
+	v_add3_u32 v26, v26, v2, v3	; d76d001a 040e051a
+	v_lshrrev_b64 v[2:3], v8, v[14:15]	; d7000002 00021d08
+	v_add_co_u32 v20, vcc, v20, v23	; d70f6a14 00022f14
+	v_add_co_ci_u32_e32 v21, vcc, v21, v22, vcc	; 502a2d15
+	v_add_co_u32 v20, vcc, v20, v25	; d70f6a14 00023314
+	v_add_co_ci_u32_e32 v21, vcc, v21, v24, vcc	; 502a3115
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_lshrrev_b64 v[2:3], v8, v[16:17]	; d7000002 00022108
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_lshrrev_b64 v[22:23], 0, v[20:21]	; d7000016 00022880
+	v_and_b32_e32 v24, v20, v4	; 36300914
+	v_and_b32_e32 v25, v21, v5	; 36320b15
+	v_lshlrev_b64 v[20:21], v8, v[24:25]	; d6ff0014 00023108
+	v_and_or_b32 v19, v19, v4, v20	; d7710013 04520913
+	v_and_or_b32 v18, v18, v5, v21	; d7710012 04560b12
+	v_mov_b32_e32 v21, v18	; 7e2a0312
+	v_mov_b32_e32 v20, v19	; 7e280313
+	v_lshrrev_b64 v[2:3], v8, v[22:23]	; d7000002 00022d08
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_mov_b32_e32 v2, v27	; 7e04031b
+	v_and_b32_e32 v27, v27, v4	; 3636091b
+	v_mov_b32_e32 v4, v27	; 7e08031b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_mov_b32_e32 v3, v26	; 7e06031a
+	v_and_b32_e32 v26, v26, v5	; 36340b1a
+	v_mov_b32_e32 v5, v26	; 7e0a031a
+	v_lshlrev_b64 v[4:5], v8, v[4:5]	; d6ff0004 00020908
+	v_sub_co_u32 v4, vcc, v4, v27	; d7106a04 00023704
+	v_sub_co_ci_u32_e32 v5, vcc, v5, v26, vcc	; 520a3505
+	v_lshrrev_b64 v[2:3], v8, v[2:3]	; d7000002 00020508
+	s_waitcnt vmcnt(1)	; bf8c3f71
+	v_lshrrev_b64 v[8:9], 0, v[10:11]	; d7000008 00021480
+	v_sub_co_u32 v28, vcc, v19, v10	; d7106a1c 00021513
+	v_sub_co_ci_u32_e32 v29, vcc, v18, v11, vcc	; 523a1712
+	v_cmp_lt_u64_e32 vcc, v[20:21], v[10:11]	; 7dc21514
+	v_cndmask_b32_e32 v28, v28, v19, vcc	; 0238271c
+	v_cndmask_b32_e32 v29, v29, v18, vcc	; 023a251d
+	v_lshrrev_b64 v[10:11], 0, v[28:29]	; d700000a 00023880
+	v_sub_co_u32 v30, vcc, v8, v4	; d7106a1e 00020908
+	v_sub_co_ci_u32_e32 v31, vcc, v9, v5, vcc	; 523e0b09
+	v_lshrrev_b64 v[14:15], 0, v[30:31]	; d700000e 00023c80
+	v_sub_co_u32 v30, vcc, 0, v30	; d7106a1e 00023c80
+	v_sub_co_ci_u32_e32 v31, vcc, 0, v31, vcc	; 523e3e80
+	v_cmp_lt_u64_e32 vcc, v[10:11], v[14:15]	; 7dc21d0a
+	v_cndmask_b32_e32 v30, v30, v4, vcc	; 023c091e
+	v_cndmask_b32_e32 v31, v31, v5, vcc	; 023e0b1f
+	v_add_co_u32 v28, vcc, v28, v30	; d70f6a1c 00023d1c
+	v_add_co_ci_u32_e32 v29, vcc, v29, v31, vcc	; 503a3f1d
+	v_sub_co_u32 v31, vcc, v8, v2	; d7106a1f 00020508
+	v_sub_co_ci_u32_e32 v10, vcc, v9, v3, vcc	; 52140709
+	v_sub_co_u32 v6, vcc, 0, v2	; d7106a06 00020480
+	v_sub_co_ci_u32_e32 v7, vcc, 0, v3, vcc	; 520e0680
+	v_lshrrev_b64 v[4:5], 0, v[28:29]	; d7000004 00023880
+	v_cmp_lt_u64_e32 vcc, v[4:5], v[2:3]	; 7dc20504
+	v_cndmask_b32_e32 v6, v6, v31, vcc	; 020c3f06
+	v_cndmask_b32_e32 v7, v7, v10, vcc	; 020e1507
+	v_add_co_u32 v28, vcc, v28, v6	; d70f6a1c 00020d1c
+	v_add_co_ci_u32_e32 v29, vcc, v29, v7, vcc	; 503a0f1d
+	v_sub_co_u32 v8, vcc, v8, v28	; d7106a08 00023908
+	v_sub_co_ci_u32_e32 v9, vcc, v9, v29, vcc	; 52123b09
+	v_lshrrev_b64 v[2:3], 0, v[8:9]	; d7000002 00021080
+	v_sub_co_u32 v8, vcc, 0, v8	; d7106a08 00021080
+	v_sub_co_ci_u32_e32 v9, vcc, 0, v9, vcc	; 52121280
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_cmp_lt_u64_e32 vcc, v[12:13], v[2:3]	; 7dc2050c
+	v_cndmask_b32_e32 v8, v8, v28, vcc	; 02103908
+	v_cndmask_b32_e32 v9, v9, v29, vcc	; 02123b09
+	v_add_co_u32 v2, vcc, v12, v8	; d70f6a02 0002110c
+	v_add_co_ci_u32_e32 v3, vcc, v13, v9, vcc	; 5006130d
+	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1728	; e07416c0 80010201
 BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
+	s_mov_b64 exec, -1	; befe04c1
+	v_cmp_le_u32_e32 vcc, 2, v0	; 7d860082
+	v_cmp_gt_u32_e64 s[0:1], 4, v0	; d4c40000 00020084
+	s_and_b64 s[0:1], vcc, s[0:1]	; 8780006a
+	s_mov_b64 exec, s[0:1]	; befe0400
+	s_cbranch_execz BB12	; bf8800b7
 BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:168
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:176
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:192
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	s_clause 0x5	; bfa10005
+	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:976	; e03413d0 80000200
+	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:32	; e0341020 80000400
+	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:992	; e03413e0 80000600
+	buffer_load_dwordx2 v[8:9], v0, s[0:3], 0 offen offset:48	; e0341030 80000800
+	buffer_load_dwordx2 v[10:11], v0, s[0:3], 0 offen offset:16	; e0341010 80000a00
+	buffer_load_dwordx2 v[12:13], v0, s[0:3], 0 offen offset:960	; e03413c0 80000c00
+	s_waitcnt vmcnt(4)	; bf8c3f74
+	v_and_b32_e32 v14, v2, v4	; 361c0902
+	v_and_b32_e32 v15, v3, v5	; 361e0b03
+	s_waitcnt vmcnt(3)	; bf8c3f73
+	v_and_b32_e32 v16, v6, v4	; 36200906
+	v_and_b32_e32 v17, v7, v5	; 36220b07
+	v_mul_hi_u32 v1, v14, v16	; d56a0001 0002210e
+	v_mul_lo_u32 v18, v14, v16	; d5690012 0002210e
+	v_mul_lo_u32 v19, v15, v16	; d5690013 0002210f
+	v_mul_lo_u32 v20, v14, v17	; d5690014 0002230e
+	v_add3_u32 v1, v1, v20, v19	; d76d0001 044e2901
+	v_mov_b32_e32 v20, v18	; 7e280312
+	v_mov_b32_e32 v21, v1	; 7e2a0301
+	s_waitcnt vmcnt(2)	; bf8c3f72
+	v_lshrrev_b64 v[20:21], v8, v[20:21]	; d7000014 00022908
+	v_lshrrev_b64 v[6:7], v8, v[6:7]	; d7000006 00020d08
+	v_mul_hi_u32 v22, v14, v6	; d56a0016 00020d0e
+	v_mul_lo_u32 v23, v14, v6	; d5690017 00020d0e
+	v_mul_lo_u32 v15, v15, v6	; d569000f 00020d0f
+	v_mul_lo_u32 v14, v14, v7	; d569000e 00020f0e
+	v_lshrrev_b64 v[2:3], v8, v[2:3]	; d7000002 00020508
+	v_add3_u32 v22, v22, v14, v15	; d76d0016 043e1d16
+	v_mov_b32_e32 v14, v23	; 7e1c0317
+	v_and_b32_e32 v23, v23, v4	; 362e0917
+	v_mul_hi_u32 v24, v2, v16	; d56a0018 00022102
+	v_mul_lo_u32 v25, v2, v16	; d5690019 00022102
+	v_mul_lo_u32 v17, v2, v17	; d5690011 00022302
+	v_mul_lo_u32 v16, v3, v16	; d5690010 00022103
+	v_mov_b32_e32 v15, v22	; 7e1e0316
+	v_and_b32_e32 v22, v22, v5	; 362c0b16
+	v_add3_u32 v24, v24, v17, v16	; d76d0018 04422318
+	v_mov_b32_e32 v16, v25	; 7e200319
+	v_and_b32_e32 v25, v25, v4	; 36320919
+	v_mov_b32_e32 v17, v24	; 7e220318
+	v_and_b32_e32 v24, v24, v5	; 36300b18
+	v_mul_hi_u32 v26, v2, v6	; d56a001a 00020d02
+	v_mul_lo_u32 v27, v2, v6	; d569001b 00020d02
+	v_mul_lo_u32 v3, v3, v6	; d5690003 00020d03
+	v_mul_lo_u32 v2, v2, v7	; d5690002 00020f02
+	v_add3_u32 v26, v26, v2, v3	; d76d001a 040e051a
+	v_lshrrev_b64 v[2:3], v8, v[14:15]	; d7000002 00021d08
+	v_add_co_u32 v20, vcc, v20, v23	; d70f6a14 00022f14
+	v_add_co_ci_u32_e32 v21, vcc, v21, v22, vcc	; 502a2d15
+	v_add_co_u32 v20, vcc, v20, v25	; d70f6a14 00023314
+	v_add_co_ci_u32_e32 v21, vcc, v21, v24, vcc	; 502a3115
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_lshrrev_b64 v[2:3], v8, v[16:17]	; d7000002 00022108
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_lshrrev_b64 v[22:23], 0, v[20:21]	; d7000016 00022880
+	v_and_b32_e32 v24, v20, v4	; 36300914
+	v_and_b32_e32 v25, v21, v5	; 36320b15
+	v_lshlrev_b64 v[20:21], v8, v[24:25]	; d6ff0014 00023108
+	v_and_or_b32 v18, v18, v4, v20	; d7710012 04520912
+	v_and_or_b32 v1, v1, v5, v21	; d7710001 04560b01
+	v_mov_b32_e32 v21, v1	; 7e2a0301
+	v_mov_b32_e32 v20, v18	; 7e280312
+	v_lshrrev_b64 v[2:3], v8, v[22:23]	; d7000002 00022d08
+	v_add_co_u32 v27, vcc, v27, v2	; d70f6a1b 0002051b
+	v_mov_b32_e32 v2, v27	; 7e04031b
+	v_and_b32_e32 v27, v27, v4	; 3636091b
+	v_mov_b32_e32 v4, v27	; 7e08031b
+	v_add_co_ci_u32_e32 v26, vcc, v26, v3, vcc	; 5034071a
+	v_mov_b32_e32 v3, v26	; 7e06031a
+	v_and_b32_e32 v26, v26, v5	; 36340b1a
+	v_mov_b32_e32 v5, v26	; 7e0a031a
+	v_lshlrev_b64 v[4:5], v8, v[4:5]	; d6ff0004 00020908
+	v_sub_co_u32 v4, vcc, v4, v27	; d7106a04 00023704
+	v_sub_co_ci_u32_e32 v5, vcc, v5, v26, vcc	; 520a3505
+	v_lshrrev_b64 v[2:3], v8, v[2:3]	; d7000002 00020508
+	s_waitcnt vmcnt(1)	; bf8c3f71
+	v_lshrrev_b64 v[8:9], 0, v[10:11]	; d7000008 00021480
+	v_sub_co_u32 v28, vcc, v18, v10	; d7106a1c 00021512
+	v_sub_co_ci_u32_e32 v29, vcc, v1, v11, vcc	; 523a1701
+	v_cmp_lt_u64_e32 vcc, v[20:21], v[10:11]	; 7dc21514
+	v_cndmask_b32_e32 v28, v28, v18, vcc	; 0238251c
+	v_cndmask_b32_e32 v29, v29, v1, vcc	; 023a031d
+	v_lshrrev_b64 v[10:11], 0, v[28:29]	; d700000a 00023880
+	v_sub_co_u32 v30, vcc, v8, v4	; d7106a1e 00020908
+	v_sub_co_ci_u32_e32 v31, vcc, v9, v5, vcc	; 523e0b09
+	v_lshrrev_b64 v[14:15], 0, v[30:31]	; d700000e 00023c80
+	v_sub_co_u32 v30, vcc, 0, v30	; d7106a1e 00023c80
+	v_sub_co_ci_u32_e32 v31, vcc, 0, v31, vcc	; 523e3e80
+	v_cmp_lt_u64_e32 vcc, v[10:11], v[14:15]	; 7dc21d0a
+	v_cndmask_b32_e32 v30, v30, v4, vcc	; 023c091e
+	v_cndmask_b32_e32 v31, v31, v5, vcc	; 023e0b1f
+	v_add_co_u32 v28, vcc, v28, v30	; d70f6a1c 00023d1c
+	v_add_co_ci_u32_e32 v29, vcc, v29, v31, vcc	; 503a3f1d
+	v_sub_co_u32 v31, vcc, v8, v2	; d7106a1f 00020508
+	v_sub_co_ci_u32_e32 v1, vcc, v9, v3, vcc	; 52020709
+	v_sub_co_u32 v6, vcc, 0, v2	; d7106a06 00020480
+	v_sub_co_ci_u32_e32 v7, vcc, 0, v3, vcc	; 520e0680
+	v_lshrrev_b64 v[4:5], 0, v[28:29]	; d7000004 00023880
+	v_cmp_lt_u64_e32 vcc, v[4:5], v[2:3]	; 7dc20504
+	v_cndmask_b32_e32 v6, v6, v31, vcc	; 020c3f06
+	v_cndmask_b32_e32 v7, v7, v1, vcc	; 020e0307
+	v_add_co_u32 v28, vcc, v28, v6	; d70f6a1c 00020d1c
+	v_add_co_ci_u32_e32 v29, vcc, v29, v7, vcc	; 503a0f1d
+	v_lshrrev_b64 v[2:3], 0, v[28:29]	; d7000002 00023880
+	v_sub_co_u32 v8, vcc, v8, v28	; d7106a08 00023908
+	v_sub_co_ci_u32_e32 v9, vcc, v9, v29, vcc	; 52123b09
+	v_sub_co_u32 v28, vcc, 0, v28	; d7106a1c 00023880
+	v_sub_co_ci_u32_e32 v29, vcc, 0, v29, vcc	; 523a3a80
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_cmp_lt_u64_e32 vcc, v[12:13], v[2:3]	; 7dc2050c
+	v_cndmask_b32_e32 v28, v28, v8, vcc	; 0238111c
+	v_cndmask_b32_e32 v29, v29, v9, vcc	; 023a131d
+	v_add_co_u32 v2, vcc, v12, v28	; d70f6a02 0002390c
+	v_add_co_ci_u32_e32 v3, vcc, v13, v29, vcc	; 50063b0d
+	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1792	; e0741700 80000200
 BB12:
-	s_endpgm
-
-## stage 6 (stage_6.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:200
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:192
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:208
-BB6:
-	s_endpgm
-
-## stage 7 (stage_7.wgsl): 2 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:144
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:96
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:216
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:200
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:88
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:216
-BB12:
-	s_endpgm
-
-## stage 8 (stage_8.wgsl): 1 threads, 14 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:224
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:104
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:232
-BB6:
-	s_endpgm
-
-## stage 9 (stage_9.wgsl): 2 threads, 32 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:216
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:232
-	s_waitcnt vmcnt(0)
-	v_or_b32_e32 v6, v2, v4
-	v_or_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:240
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:144
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:96
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:240
-BB12:
-	s_endpgm
-
-## stage 10 (stage_10.wgsl): 3 threads, 49 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:160
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:104
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:256
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:200
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:96
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:256
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:152
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:232
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:256
-BB18:
-	s_endpgm
-
-## stage 11 (stage_11.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:272
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:256
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:280
-BB6:
-	s_endpgm
-
-## stage 12 (stage_12.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:280
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:264
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:288
-BB6:
-	s_endpgm
-
-## stage 13 (stage_13.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:288
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:96
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:296
-BB6:
-	s_endpgm
-
-## stage 14 (stage_14.wgsl): 2 threads, 31 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:288
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:104
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:304
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:288
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:96
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:304
-BB12:
-	s_endpgm
-
-## stage 15 (stage_15.wgsl): 3 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:312
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:296
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:320
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:232
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:80
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:320
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:224
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:72
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:320
-BB18:
-	s_endpgm
-
-## stage 16 (stage_16.wgsl): 2 threads, 36 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:336
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:240
-	buffer_load_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:328
-	s_mov_b64 s[0:1], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[0:1], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:344
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:80
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:312
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:344
-BB12:
-	s_endpgm
-
-## stage 17 (stage_17.wgsl): 3 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:344
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:352
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:360
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:336
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:312
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:360
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:328
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:336
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:360
-BB18:
-	s_endpgm
-
-## stage 18 (stage_18.wgsl): 1 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:376
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:368
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:360
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:384
-BB6:
-	s_endpgm
-
-## stage 19 (stage_19.wgsl): 2 threads, 34 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:384
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:304
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:392
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:80
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:296
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:392
-BB12:
-	s_endpgm
-
-## stage 20 (stage_20.wgsl): 2 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:400
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:384
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:408
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:376
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:296
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:408
-BB12:
-	s_endpgm
-
-## stage 21 (stage_21.wgsl): 1 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:416
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:408
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:392
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:424
-BB6:
-	s_endpgm
-
-## stage 22 (stage_22.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:88
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:424
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:432
-BB6:
-	s_endpgm
-
-## stage 23 (stage_23.wgsl): 3 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:64
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:432
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:440
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:56
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:416
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:440
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:48
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:416
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:440
-BB18:
-	s_endpgm
-
-## stage 24 (stage_24.wgsl): 3 threads, 55 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:456
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:448
-	buffer_load_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:440
-	s_mov_b64 s[0:1], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[0:1], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:464
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:56
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:416
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:464
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:72
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:408
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:464
-BB18:
-	s_endpgm
-
-## stage 25 (stage_25.wgsl): 2 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:480
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:64
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:488
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:56
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:416
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:488
-BB12:
-	s_endpgm
-
-## stage 26 (stage_26.wgsl): 1 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:496
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:488
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:472
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:504
-BB6:
-	s_endpgm
-
-## stage 27 (stage_27.wgsl): 8 threads, 120 instructions, 7 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:496
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:464
-	v_cmp_gt_u32_e32 vcc, 1, v0
-	s_waitcnt vmcnt(0)
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:512
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x20
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 2, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dword v1, v1, s[4:7], 0 offen offset:16
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b32_e32 v1, 3, v1
-	buffer_load_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:48
-	v_lshlrev_b32_e32 v4, 3, v0
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v4, s[8:11], 0 offen offset:512
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 3, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x20
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 2, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dword v1, v1, s[4:7], 0 offen offset:16
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b32_e32 v1, 3, v1
-	buffer_load_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:48
-	v_lshlrev_b32_e32 v4, 3, v0
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v4, s[8:11], 0 offen offset:512
-BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 5, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
-BB19:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:512
-BB24:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 5, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB30
-BB25:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:512
-BB30:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 6, v0
-	v_cmp_gt_u32_e64 s[0:1], 7, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB36
-BB31:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:512
-BB36:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 7, v0
-	v_cmp_gt_u32_e64 s[0:1], 8, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB42
-BB37:
-	s_movk_i32 s3, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[2:3], 0x10
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v0, s[4:7], 0 offen
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:512
-BB42:
-	s_endpgm
-
-## stage 28 (stage_28.wgsl): 4 threads, 67 instructions, 4 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:536
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:560
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:576
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:528
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:560
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:576
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:528
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:544
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:576
-BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 3, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
-BB19:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:520
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:544
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:576
-BB24:
-	s_endpgm
-
-## stage 29 (stage_29.wgsl): 2 threads, 39 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:576
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:592
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:608
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:568
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:592
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v1, v2, v4
-	v_mul_lo_u32 v6, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v7, v1, v2, v3
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:608
-BB12:
-	s_endpgm
-
-## stage 30 (stage_30.wgsl): 4 threads, 74 instructions, 4 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:584
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:592
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:624
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:576
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:592
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:624
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:592
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:552
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:624
-BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 3, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
-BB19:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:592
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:536
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:624
-BB24:
-	s_endpgm
-
-## stage 31 (stage_31.wgsl): 2 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:624
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:560
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:656
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:632
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:640
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:656
-BB12:
-	s_endpgm
-
-## stage 32 (stage_32.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:664
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:656
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:672
-BB6:
-	s_endpgm
-
-## stage 33 (stage_33.wgsl): 2 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:608
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:560
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:680
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:664
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:552
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:680
-BB12:
-	s_endpgm
-
-## stage 34 (stage_34.wgsl): 1 threads, 14 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:688
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:568
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:696
-BB6:
-	s_endpgm
-
-## stage 35 (stage_35.wgsl): 2 threads, 32 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:680
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:696
-	s_waitcnt vmcnt(0)
-	v_or_b32_e32 v6, v2, v4
-	v_or_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:704
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:608
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:560
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:704
-BB12:
-	s_endpgm
-
-## stage 36 (stage_36.wgsl): 3 threads, 49 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:624
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:568
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:720
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:664
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:560
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:720
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:616
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:696
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:720
-BB18:
-	s_endpgm
-
-## stage 37 (stage_37.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:736
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:720
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:744
-BB6:
-	s_endpgm
-
-## stage 38 (stage_38.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:744
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:728
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:752
-BB6:
-	s_endpgm
-
-## stage 39 (stage_39.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:752
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:560
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:760
-BB6:
-	s_endpgm
-
-## stage 40 (stage_40.wgsl): 2 threads, 31 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:752
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:568
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:768
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:752
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:560
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:768
-BB12:
-	s_endpgm
-
-## stage 41 (stage_41.wgsl): 3 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:776
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:760
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:784
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:696
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:544
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:784
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:688
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:536
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:784
-BB18:
-	s_endpgm
-
-## stage 42 (stage_42.wgsl): 2 threads, 36 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:800
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:704
-	buffer_load_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:792
-	s_mov_b64 s[0:1], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[0:1], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:808
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:544
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:776
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:808
-BB12:
-	s_endpgm
-
-## stage 43 (stage_43.wgsl): 3 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:808
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:816
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:824
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:800
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:776
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:824
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:792
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:800
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:824
-BB18:
-	s_endpgm
-
-## stage 44 (stage_44.wgsl): 1 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:840
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:832
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:824
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:848
-BB6:
-	s_endpgm
-
-## stage 45 (stage_45.wgsl): 2 threads, 34 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:848
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:768
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:856
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:544
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:760
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:856
-BB12:
-	s_endpgm
-
-## stage 46 (stage_46.wgsl): 2 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:864
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:848
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:872
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:840
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:760
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:872
-BB12:
-	s_endpgm
-
-## stage 47 (stage_47.wgsl): 1 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:880
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:872
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:856
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:888
-BB6:
-	s_endpgm
-
-## stage 48 (stage_48.wgsl): 1 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:552
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:888
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:896
-BB6:
-	s_endpgm
-
-## stage 49 (stage_49.wgsl): 3 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:528
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:896
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:904
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:520
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:880
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:904
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:512
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:880
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:904
-BB18:
-	s_endpgm
-
-## stage 50 (stage_50.wgsl): 3 threads, 55 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:920
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:912
-	buffer_load_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:904
-	s_mov_b64 s[0:1], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[0:1], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:928
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:520
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:880
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:928
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 3, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:536
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:872
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:928
-BB18:
-	s_endpgm
-
-## stage 51 (stage_51.wgsl): 2 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:944
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:528
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:952
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 1, v0
-	v_cmp_gt_u32_e64 s[0:1], 2, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:520
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:880
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:952
-BB12:
-	s_endpgm
-
-## stage 52 (stage_52.wgsl): 1 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 1, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:960
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:952
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:936
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:968
-BB6:
-	s_endpgm
-
-## stage 53 (stage_53.wgsl): 10 threads, 80 instructions, 5 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:960
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:928
-	v_cmp_gt_u32_e32 vcc, 1, v0
-	s_waitcnt vmcnt(0)
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:976
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:48
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:976
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:48
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:976
-BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 6, v0
-	v_cmp_gt_u32_e64 s[0:1], 8, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
-BB19:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[0:1], 0x10
-	s_load_dwordx4 s[8:11], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:48
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen offset:976
-BB24:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 8, v0
-	v_cmp_gt_u32_e64 s[0:1], 10, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB30
-BB25:
-	s_movk_i32 s3, 0x8000
-	s_clause 0x1
-	s_load_dwordx4 s[4:7], s[2:3], 0x10
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	buffer_load_dwordx2 v[2:3], v0, s[4:7], 0 offen offset:48
-	s_waitcnt vmcnt(0)
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:976
-BB30:
-	s_endpgm
-
-## stage 54 (stage_54.wgsl): 8 threads, 67 instructions, 4 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:976
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1024
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1056
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:960
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1024
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1056
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:960
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:992
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1056
-BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 6, v0
-	v_cmp_gt_u32_e64 s[0:1], 8, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
-BB19:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:944
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:992
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1056
-BB24:
-	s_endpgm
-
-## stage 55 (stage_55.wgsl): 4 threads, 39 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1056
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1088
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:1120
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1040
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1088
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v1, v2, v4
-	v_mul_lo_u32 v6, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v7, v1, v2, v3
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1120
-BB12:
-	s_endpgm
-
-## stage 56 (stage_56.wgsl): 8 threads, 74 instructions, 4 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1072
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1088
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:1152
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1056
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1088
-	s_waitcnt vmcnt(0)
-	v_mul_hi_u32 v6, v2, v4
-	v_mul_lo_u32 v8, v2, v4
-	v_mul_lo_u32 v3, v3, v4
-	v_mul_lo_u32 v2, v2, v5
-	v_add3_u32 v9, v6, v2, v3
-	buffer_store_dwordx2 v[8:9], v1, s[4:7], 0 offen offset:1152
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1088
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1008
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1152
-BB18:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 6, v0
-	v_cmp_gt_u32_e64 s[0:1], 8, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB24
-BB19:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1088
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:976
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1152
-BB24:
-	s_endpgm
-
-## stage 57 (stage_57.wgsl): 4 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1152
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1024
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1216
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1168
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1184
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1216
-BB12:
-	s_endpgm
-
-## stage 58 (stage_58.wgsl): 2 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1232
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1216
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1248
-BB6:
-	s_endpgm
-
-## stage 59 (stage_59.wgsl): 4 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1120
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1024
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1264
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1232
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1008
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1264
-BB12:
-	s_endpgm
-
-## stage 60 (stage_60.wgsl): 2 threads, 14 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1280
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1040
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1296
-BB6:
-	s_endpgm
-
-## stage 61 (stage_61.wgsl): 4 threads, 32 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1264
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1296
-	s_waitcnt vmcnt(0)
-	v_or_b32_e32 v6, v2, v4
-	v_or_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1312
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1120
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1024
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1312
-BB12:
-	s_endpgm
-
-## stage 62 (stage_62.wgsl): 6 threads, 49 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1152
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1040
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1344
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1232
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1024
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1344
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1136
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1296
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1344
-BB18:
-	s_endpgm
-
-## stage 63 (stage_63.wgsl): 2 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1376
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1344
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1392
-BB6:
-	s_endpgm
-
-## stage 64 (stage_64.wgsl): 2 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1392
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1360
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1408
-BB6:
-	s_endpgm
-
-## stage 65 (stage_65.wgsl): 2 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1408
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1024
-	s_waitcnt vmcnt(0)
-	v_and_b32_e32 v6, v2, v4
-	v_and_b32_e32 v7, v3, v5
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1424
-BB6:
-	s_endpgm
-
-## stage 66 (stage_66.wgsl): 4 threads, 31 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1408
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1040
-	s_waitcnt vmcnt(0)
-	v_lshrrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1440
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1408
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1024
-	s_waitcnt vmcnt(0)
-	v_lshlrev_b64 v[2:3], v4, v[2:3]
-	buffer_store_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1440
-BB12:
-	s_endpgm
-
-## stage 67 (stage_67.wgsl): 6 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1456
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1424
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1472
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1296
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:992
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1472
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1280
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:976
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1472
-BB18:
-	s_endpgm
-
-## stage 68 (stage_68.wgsl): 4 threads, 36 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1504
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1312
-	buffer_load_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1488
-	s_mov_b64 s[0:1], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[0:1], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1520
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:992
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1456
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1520
-BB12:
-	s_endpgm
-
-## stage 69 (stage_69.wgsl): 6 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1520
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1536
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1552
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1504
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1456
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1552
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1488
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1504
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1552
-BB18:
-	s_endpgm
-
-## stage 70 (stage_70.wgsl): 2 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1584
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1568
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1552
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1600
-BB6:
-	s_endpgm
-
-## stage 71 (stage_71.wgsl): 4 threads, 34 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1600
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1440
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1616
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:992
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1424
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1616
-BB12:
-	s_endpgm
-
-## stage 72 (stage_72.wgsl): 4 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1632
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1600
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1648
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1584
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1424
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1648
-BB12:
-	s_endpgm
-
-## stage 73 (stage_73.wgsl): 2 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1664
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1648
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1616
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1680
-BB6:
-	s_endpgm
-
-## stage 74 (stage_74.wgsl): 2 threads, 15 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1008
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1680
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1696
-BB6:
-	s_endpgm
-
-## stage 75 (stage_75.wgsl): 6 threads, 52 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:512
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1696
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1712
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:496
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1664
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1712
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:480
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1664
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1712
-BB18:
-	s_endpgm
-
-## stage 76 (stage_76.wgsl): 6 threads, 55 instructions, 3 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1744
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1728
-	buffer_load_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1712
-	s_mov_b64 s[0:1], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[0:1], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1760
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:496
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:1664
-	s_waitcnt vmcnt(0)
-	v_cmp_lt_u64_e32 vcc, v[2:3], v[4:5]
-	v_mov_b32_e32 v3, 0
-	v_cndmask_b32_e64 v2, 0, 1, vcc
-	buffer_store_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1760
-BB12:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 4, v0
-	v_cmp_gt_u32_e64 s[0:1], 6, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB18
-BB13:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:976
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1648
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1760
-BB18:
-	s_endpgm
-
-## stage 77 (stage_77.wgsl): 4 threads, 33 instructions, 2 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_mov_b32 s0, s2
-	s_movk_i32 s1, 0x8000
-	s_load_dwordx4 s[4:7], s[0:1], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[4:7], 0 offen offset:1792
-	buffer_load_dwordx2 v[4:5], v1, s[4:7], 0 offen offset:512
-	s_waitcnt vmcnt(0)
-	v_add_co_u32 v6, vcc, v2, v4
-	v_add_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[4:7], 0 offen offset:1808
-BB6:
-	s_mov_b64 exec, -1
-	v_cmp_le_u32_e32 vcc, 2, v0
-	v_cmp_gt_u32_e64 s[0:1], 4, v0
-	s_and_b64 s[0:1], vcc, s[0:1]
-	s_mov_b64 exec, s[0:1]
-	s_cbranch_execz BB12
-BB7:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:496
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1664
-	s_waitcnt vmcnt(0)
-	v_sub_co_u32 v6, vcc, v2, v4
-	v_sub_co_ci_u32_e32 v7, vcc, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1808
-BB12:
-	s_endpgm
-
-## stage 78 (stage_78.wgsl): 2 threads, 18 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 2, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v0, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x2
-	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen offset:1824
-	buffer_load_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:1808
-	buffer_load_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1776
-	s_mov_b64 s[4:5], 0
-	s_waitcnt vmcnt(0)
-	v_cmp_ne_i64_e32 vcc, s[4:5], v[6:7]
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v0, s[0:3], 0 offen offset:1840
-BB6:
-	s_endpgm
-
-## stage 79 (stage_79.wgsl): 4 threads, 16 instructions, 1 64-bit stores
-BB0:
-	v_lshl_add_u32 v0, s3, 6, v0
-	v_cmpx_gt_u32_e32 4, v0
-	s_cbranch_execz BB6
-BB1:
-	s_movk_i32 s3, 0x8000
-	s_load_dwordx4 s[0:3], s[2:3], null
-	v_lshlrev_b32_e32 v1, 3, v0
-	s_waitcnt lgkmcnt(0)
-	s_clause 0x1
-	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen offset:1824
-	buffer_load_dwordx2 v[4:5], v1, s[0:3], 0 offen offset:1760
-	v_cmp_gt_u32_e32 vcc, 2, v0
-	s_waitcnt vmcnt(0)
-	v_cndmask_b32_e32 v6, v2, v4, vcc
-	v_cndmask_b32_e32 v7, v3, v5, vcc
-	buffer_store_dwordx2 v[6:7], v1, s[0:3], 0 offen offset:1856
-BB6:
-	s_endpgm
+	s_endpgm	; bf810000
+
+## stage 6 (stage_6.wgsl): 4 threads, 16 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 84
+BB0:
+	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_cmpx_gt_u32_e32 4, v0	; 7da80084
+	s_cbranch_execz BB6	; bf880010
+BB1:
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	s_clause 0x1	; bfa10001
+	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen offset:1792	; e0341700 80000201
+	buffer_load_dwordx2 v[4:5], v1, s[0:3], 0 offen offset:1728	; e03416c0 80000401
+	v_cmp_gt_u32_e32 vcc, 2, v0	; 7d880082
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_cndmask_b32_e32 v6, v2, v4, vcc	; 020c0902
+	v_cndmask_b32_e32 v7, v3, v5, vcc	; 020e0b03
+	buffer_store_dwordx2 v[6:7], v1, s[0:3], 0 offen offset:1824	; e0741720 80000601
+BB6:
+	s_endpgm	; bf810000

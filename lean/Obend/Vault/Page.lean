@@ -109,12 +109,26 @@ def scalarFields (src : String) : List (String × Nat) :=
     else if v == "false" then some (k, 0)
     else v.toNat?.map fun n => (k, n)
 
+/-- A quoted value, `"…"` with no quote inside: its text. -/
+def quotedValue (v : String) : Option String :=
+  match v.toList with
+  | '"' :: rest =>
+    match rest.reverse with
+    | '"' :: inner => if inner.isEmpty || inner.contains '"' then none else some (String.ofList inner.reverse)
+    | _ => none
+  | _ => none
+
 /-- The label fields of a page's frontmatter: a value that is one word (a letter, then letters,
-digits, `_` or `-`) and not `true`/`false`; a law reads it as a label (`new.decider == "ember"`). -/
+digits, `_` or `-`) and not `true`/`false`, or any quoted value `"…"` (a commit `"9177beb"`, a
+command `"python3 tests/vault/walkthrough.py"`), read without its quotes; a law reads it as a label
+(`new.decider == "ember"`). -/
 def labelFields (src : String) : List (String × String) :=
   (frontFields src).filterMap fun (k, v) =>
     if (lawKey k).isSome || k.isEmpty || k.contains ' ' || v == "true" || v == "false" then none
-    else match v.toList with
+    else match quotedValue v with
+    | some q => some (k, q)
+    | none =>
+    match v.toList with
       | c :: _ => if c.isAlpha && v.toList.all (fun ch => ch.isAlphanum || ch == '_' || ch == '-') then some (k, v) else none
       | [] => none
 

@@ -39,7 +39,7 @@ set_option autoImplicit false
   { unannotatedConstant with annotations := fun _ => some naturalAnnotation }
 
 @[expose] public def naturalAliasAssumptions : Assumptions :=
-  ⟨[(0, .natural)], [0], []⟩
+  ⟨[(0, .natural)], [0], [], []⟩
 
 @[expose] public def aliasBranchAnnotation : LambdaAnnotation :=
   ⟨.variable 0, .natural, .unrestricted, .reusable⟩
@@ -51,11 +51,11 @@ set_option autoImplicit false
 /-- The concrete alias equation, by the certified extension rule, not reduction of the finite
 graph decision. -/
 @[simp] public theorem naturalAlias_agrees :
-    sameType (⟨[(0, .natural)], [0], []⟩ : Assumptions) (.variable 0) .natural = true :=
+    sameType (⟨[(0, .natural)], [0], [], []⟩ : Assumptions) (.variable 0) .natural = true :=
   sameType_extends (by decide)
 
 @[simp] public theorem naturalAlias_agrees_reverse :
-    sameType (⟨[(0, .natural)], [0], []⟩ : Assumptions) .natural (.variable 0) = true :=
+    sameType (⟨[(0, .natural)], [0], [], []⟩ : Assumptions) .natural (.variable 0) = true :=
   sameType_symm naturalAlias_agrees
 
 @[expose] public def aliasBranchChecked : Checked aliasBranch [] where
@@ -127,7 +127,7 @@ public theorem case_labels_distinct {assumptions : Assumptions} {context : Conte
   refine (PartialTyping.rec
     (motive_1 := fun _ term _ _ _ => ∀ s a, term = Term.case s a → labelsDistinct a = true)
     (motive_2 := fun _ _ _ _ _ => True) (motive_3 := fun _ _ _ _ _ _ _ => True)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed) _ _ rfl
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed) _ _ rfl
   all_goals intros
   -- A constructor other than `case` or a conversion meets `term = .case s a` as a constructor
   -- clash: `cases` closes it at once (`trivial`'s `contradiction` took 150 ms a goal here).

@@ -127,6 +127,9 @@ tests/decisions/Environment.lean`): the open reads it and the page's backticked 
 it (`new.unresolved`, `new.unresolvedInserted`); a named file that is not there stops the command.
 -/
 public import Obend.Vault.Replay
+public import Obend.Vault.FormCheck
+public import Obend.Vault.Cost
+public import Obend.Vault.LogBytes
 public section
 
 namespace Obend.Vault.Cli
@@ -137,7 +140,7 @@ open Obend.Doc Obend.Vault Obend.Vault.Json Obend.Vault.Log Obend.Vault.Replay
 def H : Obend.Digest.HashBytes.Hash := Obend.Vault.Replay.H
 
 /-- Every `.md` under `dir`, by name (its path from `dir` without `.md`), sorted. -/
-def readVault (dir : System.FilePath) : IO (List (String × String)) := do
+def readVault (dir : System.FilePath) : IO (List (String × String)) := Obend.Vault.Cost.phase "read" do
   let files ← System.FilePath.walkDir dir fun p => pure !((p.fileName.getD "").startsWith ".")
   let mut out : Array (String × String) := #[]
   let pre := dir.toString ++ "/"
@@ -145,7 +148,7 @@ def readVault (dir : System.FilePath) : IO (List (String × String)) := do
     if f.extension == some "md" && !(← f.isDir) then
       let rel := if f.toString.startsWith pre then String.ofList (f.toString.toList.drop pre.length) else f.toString
       let name := String.ofList (rel.toList.take (rel.length - 3))
-      out := out.push (name, ← IO.FS.readFile f)
+      out := out.push (name, ← Obend.Vault.Cost.readFile f)
   return (out.toList.mergeSort fun a b => decide (a.1 ≤ b.1))
 
 /-- The world from before the log (an earlier `obend`'s whole-world file); adopted as the log's first
@@ -176,7 +179,7 @@ def loadEnvironment (dir : System.FilePath) (V : List (String × String)) : IO E
         unless ← f.pathExists do
           throw (IO.userError (n ++ ": its environment " ++ path ++ " is not there; write it with " ++
             "`lake build Obend.Census` (tier 2) or `cd lean && lake env lean tests/decisions/Environment.lean`"))
-        let txt ← IO.FS.readFile f
+        let txt ← Obend.Vault.Cost.readFile f
         names := names ++ (txt.splitOn "\n").filter fun l => !l.isEmpty && !l.startsWith "#"
   return environmentOf names
 
@@ -186,7 +189,7 @@ def jsonFiles (d : System.FilePath) : IO (List (String × String)) := do
   let mut out : Array (String × String) := #[]
   for e in ← d.readDir do
     if e.path.extension == some "json" && !(← e.path.isDir) then
-      out := out.push ((e.path.fileStem.getD ""), ← IO.FS.readFile e.path)
+      out := out.push ((e.path.fileStem.getD ""), ← Obend.Vault.Cost.readFile e.path)
   return out.toList.mergeSort fun a b => decide (a.1 ≤ b.1)
 
 /-- The world from before the log, if the vault has one: `world.json`, `ledger.json`, and the forms
@@ -199,12 +202,12 @@ def legacyWorld (dir : System.FilePath) : IO (Option Replay.World) := do
   if !hasW && !hasL && !hasF then return none
   let bad (f : System.FilePath) (e : String) : IO.Error := IO.userError ("cannot read " ++ f.toString ++ ": " ++ e)
   let s ← if hasW then
-      match Lean.Json.parse (← IO.FS.readFile (worldPath dir)) >>= storeOf with
+      match Lean.Json.parse (← Obend.Vault.Cost.readFile (worldPath dir)) >>= storeOf with
       | .ok s => pure s
       | .error e => throw (bad (worldPath dir) e)
     else pure {}
   let J ← if hasL then
-      match Lean.Json.parse (← IO.FS.readFile (legacyLedgerPath dir)) >>= Obend.Ledger.Json.journalOf with
+      match Lean.Json.parse (← Obend.Vault.Cost.readFile (legacyLedgerPath dir)) >>= Obend.Ledger.Json.journalOf with
       | .ok j => pure j
       | .error e => throw (bad (legacyLedgerPath dir) e)
     else pure Obend.Ledger.Json.Journal.empty
@@ -234,29 +237,46 @@ def legacyWorld (dir : System.FilePath) : IO (Option Replay.World) := do
 
 def readBytes (f : System.FilePath) : IO Bytes := do
   if !(← f.pathExists) then return []
-  return (← IO.FS.readBinFile f).toList
+  return (← Obend.Vault.Cost.readBinFile f).toList
 
-/-- A checkpoint's file: `obend-checkpoint 1 COUNT START STOP ANCHOR`, a newline, the world's bytes. -/
-def checkpointBytes (ck : Checkpoint) : Bytes :=
+/-- A file's bytes as they are (`Obend.Vault.LogBytes` reads records at offsets into them). -/
+def readArray (f : System.FilePath) : IO ByteArray := do
+  if !(← f.pathExists) then return .empty
+  Obend.Vault.Cost.readBinFile f
+
+open Obend.Vault.LogBytes (parseOneAt parseFromAt parseLogAt holdsAt encodeRecordBytes)
+
+/-- A checkpoint's file: `obend-checkpoint 1 COUNT START STOP ANCHOR BASE`, a newline, the world's bytes.
+`BASE` is the length of the log's checkpoint record when it starts with one, else 0 (a checkpoint
+without it, from before, is read as not saying). -/
+def checkpointBytes (ck : Checkpoint) (base : Nat) : Bytes :=
   textBytes ("obend-checkpoint 1 " ++ toString ck.count ++ " " ++ toString ck.start ++ " " ++
-    toString ck.stop ++ " " ++ toString ck.anchor ++ "\n") ++ ck.world
+    toString ck.stop ++ " " ++ toString ck.anchor ++ " " ++ toString base ++ "\n") ++ ck.world
 
-def readCheckpoint (dir : System.FilePath) : IO (Option Checkpoint) := do
-  let bs ← readBytes (checkpointPath dir)
+def readCheckpoint (dir : System.FilePath) : IO (Option (Checkpoint × Option Nat)) := do
+  let bs ← readArray (checkpointPath dir)
   if bs.isEmpty then return none
-  let line := bs.takeWhile (· != 10)
-  let some txt := bytesText line | return none
-  match txt.splitOn " " with
-  | ["obend-checkpoint", "1", c, a, b, h] =>
-    match c.toNat?, a.toNat?, b.toNat?, h.toNat? with
-    | some c, some a, some b, some h => return some ⟨c, a, b, h, bs.drop (line.length + 1)⟩
-    | _, _, _, _ => return none
-  | _ => return none
+  Obend.Vault.Cost.addCheckpoint bs.size
+  let some nl := (List.range (min bs.size 200)).find? (fun i => bs.get! i == 10) | return none
+  let some txt := bytesText (bs.extract 0 nl).data.toList | return none
+  let (fields, base) := match txt.splitOn " " with
+    | ["obend-checkpoint", "1", c, a, b, h] => (some (c, a, b, h), none)
+    | ["obend-checkpoint", "1", c, a, b, h, k] => (some (c, a, b, h), k.toNat?)
+    | _ => (none, none)
+  let some (c, a, b, h) := fields | return none
+  match c.toNat?, a.toNat?, b.toNat?, h.toNat? with
+  | some c, some a, some b, some h => return some (⟨c, a, b, h, (bs.extract (nl + 1) bs.size).data.toList⟩, base)
+  | _, _, _, _ => return none
 
 /-- Write a file whole or not at all: beside it, then renamed over it. -/
 def writeAtomically (f : System.FilePath) (bs : Bytes) : IO Unit := do
   let tmp := f.withExtension "tmp"
-  IO.FS.writeBinFile tmp ⟨bs.toArray⟩
+  Obend.Vault.Cost.writeBinFile tmp ⟨bs.toArray⟩
+  IO.FS.rename tmp f
+
+def writeAtomicallyArray (f : System.FilePath) (bs : ByteArray) : IO Unit := do
+  let tmp := f.withExtension "tmp"
+  Obend.Vault.Cost.writeBinFile tmp bs
   IO.FS.rename tmp f
 
 /-- What a process holds of a vault's log: the world (the replay of the log), the receipt digest of
@@ -271,14 +291,25 @@ structure Head where
   base : Bool := false
   /-- the checkpoint record's length, when the log starts with one -/
   baseSize : Nat := 0
+  /-- the world's bytes and their commitment, when known (the last record's `newCommit`): a turn
+  needs the commitment of the world it steps from, and a checkpoint the bytes -/
+  known : Option (Bytes × Nat) := none
 
 /-- The digest of a world, as `obend log` says it: the first 16 hex digits of its commitment. -/
 def worldDigest (w : Replay.World) : String :=
   String.ofList ((hex (be 32 (dig logHash (encodeWorld w)))).toList.take 16)
 
+/-- The world's bytes as a record committed to them (`c`): in this binary's encoding, or in the one
+before histories were written as growth (a record an earlier binary wrote); none when neither. -/
+def committedAs (w : Replay.World) (c : Nat) : Option (Bytes × Nat) :=
+  let wb := encodeWorld w
+  if c == dig logHash wb then some (wb, c) else
+  let wl := encodeWorldFull w
+  if c == dig logHash wl then some (wl, c) else none
+
 /-- **Write a checkpoint** of the head's world, anchored to the log's last record, after checking that
 the world's bytes decode to the world (`checkpoint_is_cache`'s premise). -/
-def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := do
+def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := Obend.Vault.Cost.phase "write" do
   if h.count == 0 then return
   -- a log that is its checkpoint record alone needs no checkpoint (and the record's anchor is the
   -- forgotten prefix's, not its own digest)
@@ -286,11 +317,13 @@ def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := do
   -- after a forget the checkpoint record holds the world: a checkpoint is written again only once the
   -- records after it outweigh it
   if h.base && h.size < 2 * h.baseSize then return
-  let wb := encodeWorld h.world
+  let wb := match h.known with
+    | some (wb, _) => wb
+    | none => encodeWorld h.world
   if decodeWorld wb != some h.world then
     IO.eprintln "checkpoint not written: the world's bytes do not decode to the world (the log stays the truth)"
     return
-  writeAtomically (checkpointPath dir) (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, wb⟩)
+  writeAtomically (checkpointPath dir) (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, wb⟩ (if h.base then h.baseSize else 0))
 
 /-- The test-only write barrier (`OBEND_TEST_TEAR=N:K:PATH`): appending record `N`, write its first `K`
 bytes (`all`: the whole record, and stop before its files are written), create `PATH` and wait to be
@@ -307,7 +340,7 @@ def tearAt (dir : System.FilePath) (n : Nat) : IO (Option (Option Nat × String)
   | _ => return none
 
 def waitToBeStopped (barrier : String) : IO Unit := do
-  IO.FS.writeFile barrier "stopped here\n"
+  Obend.Vault.Cost.writeFile barrier "stopped here\n"
   repeat IO.sleep 1000
 
 /-- Append a record's bytes to the log (the barrier aside). -/
@@ -316,30 +349,41 @@ def appendRecord (dir : System.FilePath) (n : Nat) (bs : Bytes) : IO Unit := do
   let h ← IO.FS.Handle.mk (logPath dir) .append
   match tear with
   | some (some k, barrier) =>
-    h.write ⟨(bs.take k).toArray⟩
+    Obend.Vault.Cost.write h ⟨(bs.take k).toArray⟩
     h.flush
     waitToBeStopped barrier
   | _ =>
-    h.write ⟨bs.toArray⟩
+    Obend.Vault.Cost.write h ⟨bs.toArray⟩
     h.flush
   if let some (none, barrier) := tear then waitToBeStopped barrier
 
 /-- **Commit a turn**: admit its bytes at the head (`Obend.Vault.Log.admit` at the deployed machine)
 and append the record; the head after it and what the turn said, or the refusal (nothing appended). -/
-def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String (Head × Outcome)) := do
-  match Log.admit logHash deployed h.world h.prev (encodeTurn t) with
+def commitTurnRaw (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String (Head × Outcome × Bytes)) := do
+  let b := encodeTurn t
+  if b.length ≥ 256 ^ 4 then return .error "a turn is under 4 GiB"
+  -- the step (`judge`), then the record (`land`): `admit_of_step` says this is `Log.admit`'s record,
+  -- the commitment of the world stepped from being the one the head knows
+  let step ← Obend.Vault.Cost.phase "judge" (Obend.Vault.Cost.compute fun _ => deployed.step h.world b)
+  match step with
   | .error e => return .error e
-  | .ok (w', o, r) =>
-    let bs := encodeRecord logHash r
-    appendRecord dir (h.count + 1) bs
-    let h' : Head :=
-      { h with
+  | .ok (w', o) =>
+    let h' ← Obend.Vault.Cost.phase "land" do
+      let oldC ← match h.known with
+        | some (_, c) => pure c
+        | none => pure (dig logHash (encodeWorld h.world))
+      let (wb, newC) ← Obend.Vault.Cost.compute fun _ => let wb := encodeWorld w'; (wb, dig logHash wb)
+      let r : Record := ⟨⟨h.prev, oldC, newC, dig logHash b⟩, b⟩
+      let bs := encodeRecord logHash r
+      appendRecord dir (h.count + 1) bs
+      return (({ h with
         world := w'
         prev := Hr logHash r.receipt
         count := h.count + 1
         size := h.size + bs.length
-        lastStart := h.size }
-    return .ok (h', o)
+        lastStart := h.size
+        known := some (wb, newC) } : Head), bs)
+    return .ok (h'.1, o, h'.2)
 
 /-- The receipt digest a chain of records read from `prev` ends at: a checkpoint record first in a
 log stands for a prefix that ended at its anchor, and the records after it follow the anchor. -/
@@ -360,6 +404,10 @@ structure Recovery where
   tail : Bytes
   why : Option Drop
   checkpoint : String
+  /-- the log's bytes as read (empty when the recovery is the head a turn of this process left) -/
+  bytes : ByteArray := .empty
+  /-- the bytes of the log's last record -/
+  last : ByteArray := .empty
 
 def dropText : Drop → String
   | .torn => "torn: the bytes end inside a record"
@@ -372,22 +420,33 @@ def dropText : Drop → String
 (`Obend.Vault.Log.recoverWith`; `checkpoint_is_cache`), reading nothing past the longest prefix of
 whole, linked records (`recover_eq_replay_prefix`). The replayed world must commit to what the last
 record's receipt names; otherwise the command stops. -/
-def recoverLog (dir : System.FilePath) : IO Recovery := do
-  let bs ← readBytes (logPath dir)
-  let ck? ← readCheckpoint dir
-  let held := ck?.bind fun ck => (ck.holds logHash decodeWorld bs).map (ck, ·)
+def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.phase "read" do
+  let bs ← readArray (logPath dir)
+  let ckb? ← readCheckpoint dir
+  let ck? := ckb?.map (·.1)
+  -- `holdsAt_eq`, `parseLogAt_eq`, `parseFromAt_eq`: these read what `Checkpoint.holds`,
+  -- `Retention.parseLog` and `parseFrom` read of the log's list, at offsets into its bytes
+  let held := ck?.bind fun ck => (holdsAt logHash decodeWorld ck bs).map (ck, ·)
   let (base, anchor, from_, count0, note) := match ck?, held with
     | _, some (ck, w) => (w, ck.anchor, ck.stop, ck.count, "the world after record " ++ toString ck.count)
     | some _, none => (genesis, Rehydration.genesisSentinel, 0, 0,
         "dropped (it does not hold against the log); the world is replayed from genesis")
     | none, none => (genesis, Rehydration.genesisSentinel, 0, 0, "none; the world is replayed from genesis")
-  let (qs, tail, why) := if from_ == 0 then Retention.parseLog logHash anchorOfTurn bs
-    else parseFrom logHash anchor (bs.drop from_)
-  let (isBase, baseSize) := match parseOne logHash (some Rehydration.genesisSentinel) bs with
-    | .ok (r, _) => if (anchorOfTurn r.payload).isSome then (true, (encodeRecord logHash r).length) else (false, 0)
-    | .error _ => (false, 0)
+  let (qs, stop, why) := if from_ == 0 then parseLogAt logHash anchorOfTurn bs
+    else parseFromAt logHash anchor bs from_
+  let tail := (bs.extract stop bs.size).data.toList
+  let (isBase, baseSize) ← if from_ == 0 then
+      pure (match qs.head? with
+        | some r => if (anchorOfTurn r.payload).isSome then (true, (encodeRecord logHash r).length) else (false, 0)
+        | none => (false, 0))
+    else match ckb?.bind (·.2) with
+      | some k => pure (k != 0, k)
+      | none => pure (match parseOneAt logHash (some Rehydration.genesisSentinel) bs 0 with
+        | .ok (r, o) => if (anchorOfTurn r.payload).isSome then (true, o) else (false, 0)
+        | .error _ => (false, 0))
+  Obend.Vault.Cost.addReplayed qs.length
   let world := replay deployed base qs
-  let size := from_ + (encodeAll logHash qs).length
+  let size := stop
   let count := count0 + qs.length
   let lastStart := match qs.getLast? with
     | some r => size - (encodeRecord logHash r).length
@@ -398,15 +457,69 @@ def recoverLog (dir : System.FilePath) : IO Recovery := do
   let last? : Option Record := match qs.getLast? with
     | some r => some r
     | none => match held with
-      | some (ck, _) => match parseOne logHash none ((bs.drop ck.start).take (ck.stop - ck.start)) with
+      | some (ck, _) => match parseOneAt logHash none bs ck.start with
         | .ok (r, _) => some r
         | .error _ => none
       | none => none
-  if let some r := last? then
-    if r.receipt.newCommit != dig logHash (encodeWorld world) then
-      throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
-        " commits to: the log was written by another step (relinking is not done here)"))
-  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize⟩, base, qs, tail, why, note⟩
+  -- the replayed world commits to what the last record's receipt names (with no record after the
+  -- checkpoint, `holdsAt` checked that the record commits to the checkpoint's bytes, which the writer
+  -- checked decode to the world)
+  let known ← match last?, held with
+    | some r, some (ck, _) =>
+      if qs.isEmpty then pure (some (ck.world, r.receipt.newCommit))
+      else pure (committedAs world r.receipt.newCommit)
+    | some r, none => pure (committedAs world r.receipt.newCommit)
+    | none, _ => pure (some (encodeWorld world, dig logHash (encodeWorld world)))
+  if last?.isSome && known.isNone then
+    throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
+      " commits to: the log was written by another step (relinking is not done here)"))
+  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize, known⟩, base, qs, tail, why, note, bs, bs.extract lastStart size⟩
+
+/-- What this process last knew of each vault's log: the log's length then, and the recovery. A
+command recovers a vault's world once: a later recovery of the same vault, the log the same length,
+is the one known, and a turn this process appended leaves the head it made (`commitTurn`). A log
+another process appended to is longer, and is recovered again. -/
+initialize recoveries : IO.Ref (List (String × Nat × Recovery)) ← IO.mkRef []
+
+def logSize (dir : System.FilePath) : IO Nat := do
+  if !(← (logPath dir).pathExists) then return 0
+  return (← (logPath dir).metadata).byteSize.toNat
+
+def vaultKey (dir : System.FilePath) : IO String := do
+  if ← dir.pathExists then return (← IO.FS.realPath dir).toString else return dir.toString
+
+/-- **Recover a vault's world from its log** (`recoverLogRead`), once per process and log length. -/
+def recoverLog (dir : System.FilePath) : IO Recovery := do
+  let key ← vaultKey dir
+  let size ← logSize dir
+  match (← recoveries.get).find? (fun (k, n, _) => k == key && n == size) with
+  | some (_, _, r) => return r
+  | none =>
+    let r ← recoverLogRead dir
+    -- only a recovery that read the whole log as records is kept (a dropped tail is truncated next)
+    if r.tail.isEmpty then recoveries.modify fun c => (key, size, r) :: c.filter (·.1 != key)
+    return r
+
+/-- The log was rewritten (compacted, or a torn tail truncated): recover it again. -/
+def forgetRecovery (dir : System.FilePath) : IO Unit := do
+  let key ← vaultKey dir
+  recoveries.modify fun c => c.filter (·.1 != key)
+
+/-- The head a turn of this process left, as the recovery of the log it appended to. -/
+def rememberHead (dir : System.FilePath) (h : Head) (last : ByteArray) : IO Unit := do
+  let key ← vaultKey dir
+  let size ← logSize dir
+  if size != h.size then return
+  let r : Recovery := ⟨h, h.world, [], [], none, "the world after record " ++ toString h.count, .empty, last⟩
+  recoveries.modify fun c => (key, size, r) :: c.filter (·.1 != key)
+
+/-- **Commit a turn** (`commitTurnRaw`), and remember the head it leaves as the vault's recovery. -/
+def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String (Head × Outcome)) := do
+  match ← commitTurnRaw dir h t with
+  | .error e => return .error e
+  | .ok (h', o, bs) =>
+    rememberHead dir h' ⟨bs.toArray⟩
+    return .ok (h', o)
 
 /-- The world from the log, read only (nothing is truncated, rewritten or redone). -/
 def readWorld (dir : System.FilePath) : IO Replay.World := do
@@ -418,19 +531,19 @@ def loadStore (dir : System.FilePath) : IO Store := return (← readWorld dir).s
 
 /-- A file's text, if it is there. -/
 def readText? (f : System.FilePath) : IO (Option String) := do
-  if ← f.pathExists then return some (← IO.FS.readFile f) else return none
+  if ← f.pathExists then return some (← Obend.Vault.Cost.readFile f) else return none
 
 /-- Write a file when its text is not already that. -/
 def writeIfChanged (f : System.FilePath) (t : String) : IO Unit := do
   if (← readText? f) != some t then
     if let some parent := f.parent then IO.FS.createDirAll parent
-    IO.FS.writeFile f t
+    Obend.Vault.Cost.writeFile f t
 
 /-- **The forms' exports**: each form the world holds as `.obend/forms/NAME.json` (the wire format a
 form is sent in), the receipt chain as `.obend/forms/receipts.json`, the forms received and the
 proposals sent under `.obend/forms/received/` and `sent/`. Derived from the world after every turn
 and at recovery; the truth is the log's records. -/
-def writeExports (dir : System.FilePath) (w : Replay.World) : IO Unit := do
+def writeExports (dir : System.FilePath) (w : Replay.World) : IO Unit := Obend.Vault.Cost.phase "write" do
   let fd := dir / ".obend" / "forms"
   for f in w.forms do
     writeIfChanged (fd / (f.name ++ ".json")) ((Obend.Vault.Form.formJson f).pretty ++ "\n")
@@ -448,6 +561,7 @@ def redoFiles (dir : System.FilePath) (before : Replay.World) (t : Turn) (after 
     IO (List String) := do
   let found (n : String) : Option String := match t with
     | .opened files _ => (reconstruct before.store files).lookup n
+    | .reopened changed _ => (reconstructSeen before.store changed).lookup n
     | _ => seenOf before.store n
   let mut done : List String := []
   for p in after.store.pages do
@@ -456,17 +570,17 @@ def redoFiles (dir : System.FilePath) (before : Replay.World) (t : Turn) (after 
       let cur ← readText? f
       if cur != some txt && cur == found p.name then
         if let some parent := f.parent then IO.FS.createDirAll parent
-        IO.FS.writeFile f txt
+        Obend.Vault.Cost.writeFile f txt
         done := done ++ [p.name ++ ".md"]
   if let .rows fs := o then
     for rf in fs do
       IO.FS.createDirAll (dir / ".obend" / "receipts")
-      IO.FS.writeFile (dir / ".obend" / "receipts" / (rf.id ++ ".json")) rf.receipt
+      Obend.Vault.Cost.writeFile (dir / ".obend" / "receipts" / (rf.id ++ ".json")) rf.receipt
       done := done ++ [".obend/receipts/" ++ rf.id ++ ".json"]
       let pf := dir / "register" / (rf.id ++ ".md")
       unless ← pf.pathExists do
         IO.FS.createDirAll (dir / "register")
-        IO.FS.writeFile pf rf.page
+        Obend.Vault.Cost.writeFile pf rf.page
         done := done ++ ["register/" ++ rf.id ++ ".md"]
   return done
 
@@ -502,10 +616,11 @@ def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
     let rb := encodeRecord logHash r
     match ← compactTear dir with
     | some (k, barrier) =>
-      IO.FS.writeBinFile (newLogPath dir) ⟨(rb.take k).toArray⟩
+      Obend.Vault.Cost.writeBinFile (newLogPath dir) ⟨(rb.take k).toArray⟩
       waitToBeStopped barrier
-    | none => IO.FS.writeBinFile (newLogPath dir) ⟨rb.toArray⟩
+    | none => Obend.Vault.Cost.writeBinFile (newLogPath dir) ⟨rb.toArray⟩
     IO.FS.rename (newLogPath dir) (logPath dir)
+    forgetRecovery dir
     if ← (checkpointPath dir).pathExists then IO.FS.removeFile (checkpointPath dir)
     return { world := h.world, prev := h.prev, count := 1, size := rb.length, lastStart := 0, base := true,
              baseSize := rb.length }
@@ -529,7 +644,8 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
   if !r.tail.isEmpty then
     IO.println ("recovered: dropped a tail of " ++ toString r.tail.length ++ " bytes after record " ++
       toString r.head.count ++ " (" ++ ((r.why.map dropText).getD "") ++ ")")
-    writeAtomically (logPath dir) ((← readBytes (logPath dir)).take r.head.size)
+    writeAtomicallyArray (logPath dir) (r.bytes.extract 0 r.head.size)
+    forgetRecovery dir
   match r.suffix.getLast? with
   | none => pure ()
   | some last =>
@@ -549,8 +665,8 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
     let n := (← readBytes (newLogPath dir)).length
     IO.FS.removeFile (newLogPath dir)
     IO.println ("recovered: an interrupted forget's new log (" ++ toString n ++ " bytes) dropped; the log stands")
-  let bs ← readBytes (logPath dir)
-  match parseOne logHash none ((bs.drop r.head.lastStart).take (r.head.size - r.head.lastStart)) with
+  -- the bytes recovery read: up to the head's size they are the log's (a dropped tail is past it)
+  match parseOneAt logHash none r.last 0 with
   | .ok (last, _) =>
     if let .ok (.forget _) := decodeTurn last.payload then
       let h ← compactLog dir r.head
@@ -582,11 +698,11 @@ def commitWith {α : Type} (dir : System.FilePath) (t : Turn) (files : Head → 
       saveCheckpoint dir h'
       return .ok a
 
-def writeFiles (dir : System.FilePath) (w : List (String × String)) : IO Unit :=
+def writeFiles (dir : System.FilePath) (w : List (String × String)) : IO Unit := Obend.Vault.Cost.phase "write" do
   for (n, t) in w do
     let f := dir / (n ++ ".md")
     if let some parent := f.parent then IO.FS.createDirAll parent
-    IO.FS.writeFile f t
+    Obend.Vault.Cost.writeFile f t
 
 /-- What changed between two stores, page by page. -/
 def changes (s s' : Store) : List String :=
@@ -604,6 +720,27 @@ def changes (s s' : Store) : List String :=
       else none
 where
   typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
+
+/-- The refusals among what changed between two stores: a birth refused, or a write refused anew
+(as `changes` says them). -/
+def refusalsOf (s s' : Store) : List String :=
+  s'.pages.filterMap fun p' =>
+    match s.page? p'.name with
+    | none => if p'.history.isEmpty && p'.note.isSome then some (p'.name ++ ": not born: " ++ p'.note.getD "") else none
+    | some p =>
+      if p'.history.length > p.history.length then none
+      else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then some (p'.name ++ ": " ++ p'.note.getD "")
+      else none
+where
+  typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
+
+/-- The refusals a command has said, this run: each makes its exit status 1 (`main?`). -/
+initialize refusedRef : IO.Ref (List String) ← IO.mkRef []
+
+/-- Say refusals on stderr and remember them for the exit status. -/
+def sayRefused (ls : List String) : IO Unit := do
+  for l in ls do IO.eprintln l
+  refusedRef.modify (· ++ ls)
 
 /-- Cites that do not hold and sections waiting, over every page. -/
 def problems (s : Store) : List String :=
@@ -639,22 +776,36 @@ def openWorld (dir : System.FilePath) (verbose : Bool) : IO (Replay.World × Lis
   withLog dir fun h => do
     let V ← readVault dir
     let env ← loadEnvironment dir V
-    match ← commitTurn dir h (.opened (readingOf h.world.store V) (envOf h.world.store env)) with
+    -- the files the world has seen, by the same names: the record names only those that moved
+    -- (`reopen_replays`); otherwise every file (`open_replays`)
+    let names := V.map (·.1)
+    -- `seenNames` is sorted, so its names are distinct when no two neighbours are equal
+    let distinct := (names.zip (names.drop 1)).all fun (a, b) => a != b
+    let t := if names == seenNames h.world.store && distinct then
+        Turn.reopened (changedOf h.world.store V) (envOf h.world.store env)
+      else .opened (readingOf h.world.store V) (envOf h.world.store env)
+    match ← commitTurn dir h t with
     | .error e => throw (IO.userError ("the open was refused: " ++ e))
     | .ok (h', .opened f o) =>
       -- a page a kind's laws keep is written back from the text the store holds for it
       let back := f.kept.filterMap fun (n, _) => (o.store.page? n).bind fun p => p.seen.map (n, ·)
       writeFiles dir (o.writes ++ back)
       saveCheckpoint dir h'
+      -- changes are read against the store after deletions and renames: a renamed page is not new;
+      -- a refusal is said on stderr, by every command that opens, and makes its exit status 1
+      let cs := changes f.store o.store
+      let rs := refusalsOf f.store o.store
       if verbose then
-        -- changes are read against the store after deletions and renames: a renamed page is not new
-        let cs := changes f.store o.store
         let fl := forgottenLines f
-        let ul := unbornLines o.store cs
         if cs.isEmpty && fl.isEmpty then IO.println "nothing changed"
         for c in fl do IO.println c
-        for c in cs do IO.println c
-        for c in ul do IO.println c
+        for c in cs do unless rs.contains c do IO.println c
+      -- a refusal this command made; a page an earlier open left unborn is said again, as before,
+      -- and is not this command's refusal
+      sayRefused rs
+      if verbose then
+        for c in unbornLines o.store cs do IO.println c
+      if verbose then
         for (n, _) in o.writes ++ back do IO.println ("rendered " ++ n ++ ".md")
       return (h'.world, overwrite (V ++ back) o.writes)
     | .ok (_, _) => throw (IO.userError "the open said what an open does not")
@@ -673,6 +824,7 @@ def finishTurn (dir : System.FilePath) (t : Turn) (V : List (String × String)) 
     | .error e => return .error e
     | .ok (h', o) =>
       let s := h'.world.store
+      sayRefused (refusalsOf h.world.store s)
       let w := writesFor s V
       let missing := s.pages.filterMap fun p => if V.any (·.1 == p.name) then none else
         match p.seen, p.history with
@@ -756,9 +908,10 @@ receipt commits to it), which must be one world. -/
 def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
   if !(← (logPath dir).pathExists) then
     IO.println "no log"; return 2
-  let bs ← readBytes (logPath dir)
-  let (qs, tail, why) := Retention.parseLog logHash anchorOfTurn bs
-  IO.println ("log: " ++ toString qs.length ++ " records, " ++ toString (encodeAll logHash qs).length ++
+  let bs ← readArray (logPath dir)
+  let (qs, stop, why) := parseLogAt logHash anchorOfTurn bs
+  let tail := (bs.extract stop bs.size).data.toList
+  IO.println ("log: " ++ toString qs.length ++ " records, " ++ toString stop ++
     " bytes, each following the one before it from the genesis sentinel" ++
     (match qs.head? with
       | some r => match decodeTurn r.payload with
@@ -767,8 +920,8 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
             "), ending at receipt " ++ String.ofList ((hex (be 32 a)).toList.take 16)
         | _ => ""
       | none => ""))
-  IO.println ("a command reads: the log, " ++ toString bs.length ++ " bytes, and the checkpoint, " ++
-    toString (← readBytes (checkpointPath dir)).length ++ " bytes")
+  IO.println ("a command reads: the log, " ++ toString bs.size ++ " bytes, and the checkpoint, " ++
+    toString (← readArray (checkpointPath dir)).size ++ " bytes")
   if records then
     let mut pos := 0
     let mut i := 0
@@ -781,7 +934,6 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
       IO.println ("  record " ++ toString i ++ " (" ++ kind ++ "): bytes " ++ toString pos ++ " to " ++ toString (pos + len))
       pos := pos + len
   if let some last := qs.getLast? then
-    let stop := (encodeAll logHash qs).length
     let start := stop - (encodeRecord logHash last).length
     let kind := match decodeTurn last.payload with
       | .ok t => t.kind
@@ -791,7 +943,9 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
   unless tail.isEmpty do
     IO.println ("torn tail: " ++ toString tail.length ++ " bytes after record " ++ toString qs.length ++
       ", dropped (" ++ ((why.map dropText).getD "") ++ ")")
-  let fromGenesis := (Retention.recoverLog logHash deployed anchorOfTurn genesis bs).world
+  Obend.Vault.Cost.addReplayed qs.length
+  -- `Retention.recoverLog` of the log's list, through `parseLogAt_eq`
+  let fromGenesis := replay deployed genesis qs
   let r ← recoverLog dir
   IO.println ("checkpoint: " ++ r.checkpoint)
   let committed := match qs.getLast? with
@@ -800,8 +954,14 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
   IO.println ("world " ++ worldDigest fromGenesis ++ ": replayed from genesis")
   IO.println ("world " ++ worldDigest r.head.world ++ ": the checkpoint and the records after it")
   IO.println ("world " ++ committed ++ ": as record " ++ toString qs.length ++ " commits to it")
+  let legacy := match qs.getLast? with
+    | some last => (committedAs r.head.world last.receipt.newCommit).isSome &&
+        worldDigest fromGenesis == worldDigest r.head.world
+    | none => false
   if worldDigest fromGenesis == worldDigest r.head.world && worldDigest r.head.world == committed then
     IO.println "one world"; return 0
+  else if legacy then
+    IO.println "one world (its last record commits to it as written before histories were written as growth)"; return 0
   else
     IO.println "NOT ONE WORLD"; return 3
 
@@ -816,13 +976,13 @@ def formsDir (dir : System.FilePath) : System.FilePath := dir / ".obend" / "form
 
 def readJson (f : System.FilePath) : IO Lean.Json := do
   unless ← f.pathExists do throw (IO.userError ("no file " ++ f.toString))
-  match Lean.Json.parse (← IO.FS.readFile f) with
+  match Lean.Json.parse (← Obend.Vault.Cost.readFile f) with
   | .ok j => return j
   | .error e => throw (IO.userError ("cannot read " ++ f.toString ++ ": " ++ e))
 
 def writeJson (f : System.FilePath) (j : Lean.Json) : IO Unit := do
   if let some parent := f.parent then IO.FS.createDirAll parent
-  IO.FS.writeFile f (j.pretty ++ "\n")
+  Obend.Vault.Cost.writeFile f (j.pretty ++ "\n")
 
 def ofExcept {α : Type} (what : String) : Except String α → IO α
   | .ok a => return a
@@ -852,18 +1012,24 @@ def parseFill (f : Form) : List String → Except String Obend.Vault.Form.Assign
   | [] => .ok ({} : Obend.Vault.Form.Assignment)
   | x :: rest => do
     let a ← parseFill f rest
-    match x.splitOn "=" with
-    | [h, v] =>
+    match (x.splitOn "=") with
+    | h :: v :: more =>
+      let v := "=".intercalate (v :: more)
       match f.holes.lookup h with
       | some .nat => match v.toNat? with
         | some n => return { a with nats := (h, n) :: a.nats }
         | none => throw ("the hole " ++ h ++ " is a natural; " ++ v ++ " is not")
       | some .page => return { a with pages := (h, v) :: a.pages }
+      | some .label =>
+        if v.isEmpty || v.any Char.isWhitespace then throw ("the hole " ++ h ++ " is a label (one word); " ++ v ++ " is not")
+        else return { a with labels := (h, v) :: a.labels }
+      | some .text => return { a with labels := (h, v) :: a.labels }
       | none => throw ("the form " ++ f.name ++ " has no hole " ++ h)
     | _ => throw ("a fill is HOLE=VALUE, not " ++ x)
 
 def fillText (a : Obend.Vault.Form.Assignment) : String :=
-  ", ".intercalate (a.nats.map (fun (h, n) => h ++ " = " ++ toString n) ++ a.pages.map fun (h, n) => h ++ " = " ++ n)
+  ", ".intercalate (a.nats.map (fun (h, n) => h ++ " = " ++ toString n) ++ a.pages.map (fun (h, n) => h ++ " = " ++ n) ++
+    a.labels.map fun (h, v) => h ++ " = \"" ++ v ++ "\"")
 
 /-- A received form: the form, its digest, the vault that issued it, the hops it was handed on by, and
 the continuity contract it was issued with, if any. -/
@@ -887,6 +1053,42 @@ def receivedJson (f : Form) (digest vault : String) (hops : List Grant) (K : Opt
 /-- A contract, said. -/
 def contractLine (K : Transport.Contract) : String :=
   "  offer " ++ K.hole ++ ": " ++ Transport.runsText K.offer ++ " (promised " ++ Transport.runsText K.promise ++ ")"
+
+/-- Where a vault keeps the laws over a form's holed states it checked once
+(`Obend.Vault.Form.checkedOnce`): what it checked of its own form, so a judgment reuses it. -/
+def checkedPath (dir : System.FilePath) (name : String) : System.FilePath :=
+  dir / ".obend" / "checked" / (name ++ ".json")
+
+/-- Check, once, every law over every leg the form `name` may write (`Form.checkedOnce`), and keep
+the ones the checker accepted. -/
+def recordChecks (dir : System.FilePath) (name : String) : IO Unit := do
+  let w ← readWorld dir
+  if let some f := w.forms.find? (·.name == name) then
+    writeJson (checkedPath dir name) (Lean.toJson (f.checkedOnce w.store.entries))
+
+/-- The laws over a form's holed states it checked once. -/
+def readChecks (dir : System.FilePath) (name : String) : IO (List String) := do
+  if !(← (checkedPath dir name).pathExists) then return []
+  match (← readJson (checkedPath dir name)).getArr? with
+  | .ok xs => return xs.toList.filterMap fun x => x.getStr?.toOption
+  | .error _ => return []
+
+/-- `work: laws over the holed states: K kept from the capture, N checked now, re-checked 0`: of the
+laws the judgment applies to the pages a fill writes, how many the capture checked once (their fill
+typed by `Obend.Vault.Form.checked_once`, not checked again) and how many it did not (a law added
+since, or a page the capture could not read), checked here. -/
+def checkWorkLine (dir : System.FilePath) (f : Obend.Vault.Form.Form) (es : List Entry)
+    (a : Obend.Vault.Form.Assignment) : IO String := do
+  let kept ← readChecks dir f.name
+  let apps := f.lawAppsOf es a
+  let reused := apps.filter fun x => kept.contains x.key
+  let fresh := apps.filter fun x => !kept.contains x.key
+  let refused := fresh.filter fun x => !(f.checkOver x.S x.term).toBool
+  if apps.isEmpty then return ""
+  return "work: laws over the holed states: " ++ toString reused.length ++ " kept from the capture, " ++
+    toString fresh.length ++ " checked now" ++
+    (if refused.isEmpty then "" else " (" ++ toString refused.length ++ " refused by the checker)") ++
+    ", re-checked 0"
 
 /-- `work: performed P, retained R of T`: of what a form carries (each move of its residual, each
 value its contract offers), how much the step judged anew, and how much is still good without being
@@ -919,7 +1121,21 @@ partial def copyTree (src dst : System.FilePath) : IO Unit := do
   for e in ← src.readDir do
     if e.fileName == "lock" then continue
     if ← e.path.isDir then copyTree e.path (dst / e.fileName)
-    else IO.FS.writeBinFile (dst / e.fileName) (← IO.FS.readBinFile e.path)
+    else Obend.Vault.Cost.writeBinFile (dst / e.fileName) (← Obend.Vault.Cost.readBinFile e.path)
+
+/-- Copy what a vault is: its `.obend` (the lock aside) and every page it reads (each `.md` outside a
+dot directory, `readVault`), and nothing else beside them: a fork carries no binaries, logs or
+working files that happen to sit in the vault's directory. -/
+partial def copyVault (src dst : System.FilePath) : IO Unit := do
+  copyTree (src / ".obend") (dst / ".obend")
+  let pages ← System.FilePath.walkDir src fun p => pure !((p.fileName.getD "").startsWith ".")
+  let pre := src.toString ++ "/"
+  for f in pages do
+    if f.extension == some "md" && !(← f.isDir) && f.toString.startsWith pre then
+      let rel := String.ofList (f.toString.toList.drop pre.length)
+      let d := dst / rel
+      if let some parent := d.parent then IO.FS.createDirAll parent
+      Obend.Vault.Cost.writeBinFile d (← Obend.Vault.Cost.readBinFile f)
 
 /-- The line `N` (from 1) of a file, as read. -/
 def lineOf (spec : String) : IO (Except String (String × String)) := do
@@ -928,7 +1144,7 @@ def lineOf (spec : String) : IO (Except String (String × String)) := do
     match n.toNat? with
     | some k =>
       if !(← (System.FilePath.mk file).pathExists) then return .error ("refused: no file " ++ file)
-      let ls := (← IO.FS.readFile file).splitOn "\n"
+      let ls := (← Obend.Vault.Cost.readFile file).splitOn "\n"
       match ls[k - 1]? with
       | some l => if k == 0 then return .error "refused: lines count from 1" else return .ok (l, spec)
       | none => return .error ("refused: " ++ file ++ " has no line " ++ n)
@@ -983,7 +1199,7 @@ def reasonsRun (dir : System.FilePath) : List String → Option (IO UInt32)
     match w.reasons.admit name with
     | .ok a => IO.println (name ++ ": admitted (" ++ a.because ++ " is supported by " ++
         ((w.reasons.standing a.because).getD "observation or assumption") ++ ")"); return 0
-    | .error e => IO.println e; return 1
+    | .error e => IO.eprintln e; return 1
   | ["status"] => some do
     let w ← readWorld dir
     for x in w.reasons.atoms do IO.println (w.reasons.line x)
@@ -1015,25 +1231,30 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     for l in ls do IO.println l
     return (if ls.any (·.endsWith ": no such page") then 2 else 0)
   | ["merge", other] => some do
-    let (_, V) ← openDir dir false
-    let (ow, _) ← openWorld other false
+    let (_, V) ← Obend.Vault.Cost.phase "read" (openDir dir false)
+    let (ow, _) ← Obend.Vault.Cost.phase "read" (openWorld other false)
     let label := (System.FilePath.mk other).fileName.getD other
-    let w0 ← readWorld dir
+    let w0 ← Obend.Vault.Cost.phase "read" (readWorld dir)
     let (admitted, refused, dups) := sortLandings w0 (w0.grants.merge ow.grants) ow.landed
     -- after a forget, whether the other log reaches the horizon: holds, among its receipt digests (and
     -- the anchors of its own checkpoint record), the receipt the forgotten prefix here ended at
-    let mine ← readBytes (logPath dir)
-    let reaches ← match parseOne logHash (some Rehydration.genesisSentinel) mine with
+    let mine ← readArray (logPath dir)
+    let reaches ← match parseOneAt logHash (some Rehydration.genesisSentinel) mine 0 with
       | .ok (r, _) => match anchorOfTurn r.payload with
         | some a => do
-          let (qs, _, _) := Retention.parseLog logHash anchorOfTurn (← readBytes (logPath other))
+          let (qs, _, _) := parseLogAt logHash anchorOfTurn (← readArray (logPath other))
           let ds := qs.map (fun q => Hr logHash q.receipt) ++ qs.filterMap (fun q => anchorOfTurn q.payload)
           pure (some (ds.contains a))
         | none => pure none
       | .error _ => pure none
-    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches) V with
+    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches (some ow.reasons)) V with
     | .ok (_, .merged s' notes, rendered) =>
-      for n in notes do IO.println n
+      -- a write of the other side the tip did not land is a refused write of this merge
+      -- (here's own writes the merge left unsettled are refusals of their pages, said by `finishTurn`)
+      let refused := notes.filter fun n => (n.splitOn ": not merged").length > 1
+      let unsettled := notes.filter fun n => (n.splitOn "here's write was not settled").length > 1
+      for n in notes do unless refused.contains n || unsettled.contains n do IO.println n
+      sayRefused refused
       for l in rendered do IO.println l
       for l in problems s' do IO.println l
       -- of the other replica's landings, how many stand here (none is judged again)
@@ -1042,6 +1263,102 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       return 0
     | .ok _ => fail "the merge said what a merge does not"
     | .error e => fail e
+  | "since" :: tip :: rest => some do
+    -- From a fork: what moved at the tip since this fork's base, and what a merge of this fork and
+    -- the judgment of each proposal named would say there now. Nothing is landed and nothing is
+    -- written at the tip: the merge and the judgments are stepped on the tip's world in memory.
+    let (props, rest) := allFlags "--proposal" rest
+    unless rest.isEmpty do return ← fail "since TIP [--proposal FILE …]"
+    let _ ← openDir dir false
+    let me ← readWorld dir
+    let w ← readWorld tip
+    let label := ((← IO.FS.realPath dir).fileName).getD "fork"
+    let mineMoved : String → Bool := fun n =>
+      let bp := Merge.sharedPrefix (Merge.historyIn w.store n) (Merge.historyIn me.store n)
+      Merge.liveHistory me.store n != bp && !(Merge.liveHistory me.store n).isEmpty
+    IO.println ("since " ++ label ++ " left " ++ tip ++ ":")
+    -- the pages this fork worked on, in full; every other page that moved at the tip, by name
+    let mut moved := 0
+    let mut elsewhere : Array String := #[]
+    for p in w.store.pages do
+      let n := p.name
+      let bp := Merge.sharedPrefix (Merge.historyIn w.store n) (Merge.historyIn me.store n)
+      if Merge.liveHistory w.store n == bp || p.history.isEmpty then continue
+      moved := moved + 1
+      unless mineMoved n do
+        elsewhere := elsewhere.push (if bp.isEmpty then n ++ " (new)" else n)
+        continue
+      let also := ""
+      match bp.getLast?, p.render? with
+      | none, _ => IO.println ("  " ++ n ++ ": new at the tip" ++ also)
+      | some B, some cur =>
+        let bt := render B n p.who
+        let bl := lawLines bt
+        let cl := lawLines cur
+        let lawsMoved := (cl.filter fun l => !bl.contains l).map (fun (k, t) => "+ law " ++ k ++ ": " ++ t) ++
+          (bl.filter fun l => !cl.contains l).map (fun (k, t) => "- law " ++ k ++ ": " ++ t)
+        let bf := frontFields bt
+        let fieldsMoved := (frontFields cur).filter fun (k, v) => (lawKey k).isNone && bf.lookup k != some v
+        let gone := bf.filter fun (k, _) => (lawKey k).isNone && ((frontFields cur).lookup k).isNone
+        let fs := fieldsMoved.map (fun (k, v) => k ++ " " ++ ((bf.lookup k).getD "unset") ++ " → " ++ v) ++
+          gone.map (fun (k, v) => k ++ " " ++ v ++ " → unset")
+        let what := (if lawsMoved.isEmpty then [] else ["its laws moved"]) ++ (if fs.isEmpty then [] else [", ".intercalate fs]) ++
+          (if lawsMoved.isEmpty && fs.isEmpty then ["its text moved"] else [])
+        IO.println ("  " ++ n ++ ": " ++ "; ".intercalate what ++ also)
+        for l in lawsMoved do IO.println ("    " ++ l)
+      | _, none => IO.println ("  " ++ n ++ ": gone at the tip" ++ also)
+    if moved == 0 then IO.println "  no page moved at the tip"
+    unless elsewhere.isEmpty do
+      IO.println ("  elsewhere at the tip, on pages you did not write: " ++ ", ".intercalate elsewhere.toList)
+    -- reasons: the tip's own, then this fork's as they would join there
+    let behind := Replay.behindOn w.store me.store
+    for (n, fs) in behind do IO.println ("  you have not seen at " ++ n ++ ": " ++ ", ".intercalate fs)
+    let (joined, _) := Replay.joinReasons label w.reasons me.reasons behind
+    let tipOnly := w.reasons.base.observations.filter fun o => !me.reasons.base.observations.any (·.name == o.name)
+    for o in tipOnly do IO.println ("  the tip observes " ++ o.name ++ ": " ++ o.text)
+    for x in me.reasons.atoms do
+      let here := me.reasons.line x
+      let there := joined.line x
+      if here != there then
+        IO.println ("  " ++ x ++ ": here " ++ (here.drop (x.length + 2)) ++ "; at the tip, with yours joined: " ++
+          (there.drop (x.length + 2)))
+    -- the merge, stepped in memory
+    let t : Replay.Turn := .merged label me.store false (some me.grants) me.landed none (some me.reasons)
+    match Replay.stepTurn w t with
+    | .error e => IO.println ("a merge of " ++ label ++ " would be refused: " ++ e)
+    | .ok (w1, o) =>
+      let notes := match o with | .merged _ ns => ns | _ => []
+      let interesting := notes.filter fun l => !(l.endsWith (": merged from " ++ label)) && !(l.endsWith (": imported from " ++ label))
+      IO.println ("a merge of " ++ label ++ " now would land " ++ toString (notes.length - interesting.length) ++
+        " page(s)" ++ (if interesting.isEmpty then "" else " and say:"))
+      for l in interesting do IO.println ("  " ++ l)
+      for f in props do
+        let j ← readJson f
+        let name ← ofExcept f (j.getObjValAs? String "proposal")
+        let digest ← ofExcept f (j.getObjValAs? String "digest")
+        let hops ← ofExcept f ((← ofExcept f (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM Obend.Vault.Form.grantOf)
+        let a ← ofExcept f (Obend.Vault.Form.assignmentOf (← ofExcept f (j.getObjVal? "fill")))
+        let intent := (j.getObjValAs? String "intent").toOption
+        let because := (j.getObjValAs? String "because").toOption
+        let w2 := match w1.forms.find? (·.name == name) with
+          | some fm =>
+            if !(Transport.lawMoves w1.store fm (issueOf w1 fm).basis).isEmpty then
+              match Replay.stepTurn w1 (.transported name) with
+              | .ok (w', _) => w'
+              | .error _ => w1
+            else w1
+          | none => w1
+        let turn : Replay.Turn := match because with
+          | some c => .justified name digest hops a intent c
+          | none => .judged name digest hops a intent
+        match Replay.stepTurn w2 turn with
+        | .ok _ => IO.println (f ++ ": would land, after that merge")
+        | .error e => IO.println (f ++ ": would be refused, after that merge: " ++ e)
+    if !me.outstanding.isEmpty then
+      for o in me.outstanding do
+        IO.println ("  outstanding here: " ++ o.form ++ " intent " ++ o.intent ++ " sent to " ++ o.vault)
+    IO.println "nothing landed; nothing written at the tip"
+    return 0
   | ["branch", "resolve", k, side] => some do
     let (_, V) ← openDir dir false
     let some k := k.toNat? | fail "branch resolve K left|right: K is a number"
@@ -1069,7 +1386,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     return 0
   | ["post", page, file] => some do
     let (s, V) ← openDir dir false
-    let addition ← if file == "-" then (do let stdin ← IO.getStdin; stdin.readToEnd) else IO.FS.readFile file
+    let addition ← if file == "-" then (do let stdin ← IO.getStdin; stdin.readToEnd) else Obend.Vault.Cost.readFile file
     let some cur := V.lookup page | fail ("refused: no page named " ++ page)
     let text? : Except String String :=
       if append then .ok (appendText cur addition)
@@ -1156,12 +1473,40 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         | .error e => fail e
         | .ok (.form f culled) =>
           if let .error e ← commitWith dir (.issued name) (fun _ _ => pure ()) then return ← fail e
+          recordChecks dir name
           IO.println ("captured " ++ name ++ " from " ++ situation ++ " for " ++ who ++ ": " ++
             toString f.cells.length ++ " page(s) shown, " ++ toString culled ++ " not shown to " ++ who)
           for l in f.describe do IO.println l
           return 0
         | .ok _ => fail "the capture said what a capture does not"
     | _, _, _, _ => fail "capture SITUATION FORM --for WHO --grant PATTERN … [--held CAPS] --move FROM TO AMOUNT [--field FIELD] [--ref PAGE …]"
+  | "brief" :: page :: name :: rest => some do
+    let (who, rest) := flag "--for" rest
+    let (held, rest) := flag "--held" rest
+    let (pats, rest) := allFlags "--grant" rest
+    let (sets, rest) := allFlags "--set" rest
+    let (holes, rest) := allFlags "--hole" rest
+    let lits := sets.filterMap fun x => match x.splitOn "=" with
+      | f :: v :: more => some (f, "=".intercalate (v :: more))
+      | _ => none
+    let hs := holes.filterMap fun x => match x.splitOn ":" with
+      | [h, t] => if ["label", "text", "natural", "page"].contains t then some (h, t) else none
+      | _ => none
+    match who, rest, parseCaps (held.getD "read,write") with
+    | some who, [], some caps =>
+      if lits.length != sets.length || hs.length != holes.length then
+        return ← fail "brief: a set is FIELD=VALUE, a hole FIELD:label or FIELD:text"
+      let _ ← openDir dir false
+      match ← commitWith dir (.briefed page name ⟨who, caps, pats⟩ lits hs) (fun _ o => pure o) with
+      | .error e => fail e
+      | .ok (.form f culled) =>
+        if let .error e ← commitWith dir (.issued name) (fun _ _ => pure ()) then return ← fail e
+        IO.println ("briefed " ++ name ++ " on " ++ page ++ " for " ++ who ++ ": " ++
+          toString f.cells.length ++ " page(s) shown, " ++ toString culled ++ " not shown to " ++ who)
+        for l in f.describe do IO.println l
+        return 0
+      | .ok _ => fail "the brief said what a brief does not"
+    | _, _, _ => fail "brief PAGE FORM --for WHO --grant PATTERN … [--held CAPS] [--set FIELD=VALUE …] [--hole FIELD:label|text …]"
   | "offer" :: name :: hole :: range :: rest => some do
     let (promise, rest) := flag "--promise" rest
     unless rest.isEmpty do return ← fail "offer FORM HOLE LO..HI [--promise LO..HI]"
@@ -1200,6 +1545,13 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         ", ".intercalate g.grant.patterns ++ ")" ++ (if w.grants.revoked.contains g.id then ", revoked" else ""))
     return 0
   | "reasons" :: rest => reasonsRun dir rest
+  | ["release", i] => some do
+    match ← commitWith dir (.released i) (fun h _ => pure h.world) with
+    | .error e => fail e
+    | .ok w =>
+      IO.println ("released intent " ++ i ++ ": it awaits no receipt here; " ++
+        (if w.outstanding.isEmpty then "nothing outstanding" else toString w.outstanding.length ++ " outstanding"))
+      return 0
   | ["obligations"] => some do
     let w ← readWorld dir
     if w.outstanding.isEmpty then IO.println "nothing outstanding"
@@ -1246,7 +1598,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     match ← commitWith dir (.forked name) (fun _ _ => pure ()) with
     | .error e => fail e
     | .ok () =>
-      copyTree dir other
+      copyVault dir other
       IO.println ("forked " ++ name ++ ": a copy of this vault, declared here until it merges")
       return 0
   | ["transport", name] => some do
@@ -1277,7 +1629,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     if !ls.isEmpty then
       match ← commitWith dir (.transported name) (fun _ o => pure o) with
       | .error e =>
-        IO.println (name ++ ": effect: stale (the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
+        IO.eprintln (name ++ ": effect: stale (the laws over " ++ ", ".intercalate (ls.map Transport.Moved.text) ++
           " moved); " ++ e)
         IO.println (workLine (((iss.contract.map (·.offer.length)).getD 0)) 0 T)
         return 1
@@ -1298,10 +1650,26 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     match ← commitWith dir (.abstracted name value hole) (fun _ o => pure o) with
     | .error e => fail e
     | .ok (.form g _) =>
+      recordChecks dir name
       IO.println (name ++ ": " ++ value ++ " is now the hole " ++ hole)
       for l in g.describe do IO.println l
       return 0
     | .ok _ => fail "the abstraction said what an abstraction does not"
+  | ["checked", name] => some do
+    let w ← readWorld dir
+    let some f := w.forms.find? (·.name == name) | fail ("refused: no form named " ++ name)
+    let kept ← readChecks dir name
+    let apps := (f.lawApps w.store.entries).filter fun x => kept.contains x.key
+    let open_ := f.holes.filterMap fun (h, t) => if t == .nat then some h else none
+    IO.println (name ++ ": " ++ toString apps.length ++ " law(s) over its holed states, checked once" ++
+      (if open_.isEmpty then " (no natural hole open):" else " with " ++ ", ".intercalate open_ ++ " open:"))
+    for x in apps do
+      -- the law's name says the page or kind that wrote it (`jobs/_kind: budget`); a kind's law at a page
+      -- is not the page's (2026-11-06: `tests/relay/sandbox:  at tests/relay/sandbox`, its name cut by
+      -- the page's length)
+      IO.println ("  " ++ x.law ++ " at " ++ x.page ++
+        (if x.src then " (debited)" else " (credited)"))
+    return 0
   | "form" :: name :: rest => some do
     let (out, rest) := flag "--out" rest
     unless rest.isEmpty do return ← fail "form FORM [--out FILE]"
@@ -1334,7 +1702,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
           holder because) (fun _ o => pure o) with
       | .error e => fail e
       | .ok (.proposed i text) =>
-        IO.FS.writeFile o text
+        Obend.Vault.Cost.writeFile o text
         IO.println (f.name ++ ": filled by " ++ holder ++ ": " ++ fillText a)
         for l in f.preview a do IO.println ("  " ++ l)
         if let some c := because then IO.println ("  because " ++ c)
@@ -1382,7 +1750,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     -- a proposal whose intent landed here: refused, and its receipt written again
     if let some i := intent then
       if let some l := Transport.duplicateOf w0.landed i then
-        IO.println (dupText w0 name l)
+        IO.eprintln (dupText w0 name l)
         writeReceipt w0 l
         if let some f := w0.forms.find? (·.name == name) then
           IO.println (workLine 0 (carried f (issueOf w0 f).contract) (carried f (issueOf w0 f).contract))
@@ -1395,17 +1763,20 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         let ls := Transport.lawMoves w0.store f (issueOf w0 f).basis
         if (valueMoves ms).isEmpty && (waiting ms).isEmpty && !ls.isEmpty then
           match ← commitWith dir (.transported name) (fun _ o => pure o) with
-          | .error e => IO.println (name ++ ": " ++ e); return 1
+          | .error e => IO.eprintln (name ++ ": " ++ e); return 1
           | .ok (.transported v p _) =>
             performed := p
             IO.println (verdictLine name ls v (issueOf w0 f).contract)
           | .ok _ => return ← fail "the transport said what a transport does not"
+    let checkWork ← match w0.forms.find? (·.name == name) with
+      | some f => checkWorkLine dir f w0.store.entries a
+      | none => pure ""
     let turn : Turn := match because with
       | some c => .justified name digest hops a intent c
       | none => .judged name digest hops a intent
     match ← finishTurn dir turn V with
     | .error e =>
-      IO.println e
+      IO.eprintln e
       let w ← readWorld dir
       if let some f := w.forms.find? (·.name == name) then
         let T := carried f (issueOf w f).contract
@@ -1427,6 +1798,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
       if intent.isSome then
         let T := carried f (issueOf w' f).contract
         IO.println (workLine (performed + 1) T T)
+      unless checkWork.isEmpty do IO.println checkWork
       return 0
     | .ok _ => fail "the judgment said what a judgment does not"
   | _ => none
@@ -1434,9 +1806,15 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
 /-- `obend` vault commands: `-C DIR` anywhere, `open DIR`. -/
 def main? (args : List String) : Option (IO UInt32) :=
   let (dirFlag, args) := flag "-C" args
-  match args with
-  | ["open", d] => run (System.FilePath.mk d) ["open"]
-  | _ => run (System.FilePath.mk (dirFlag.getD ".")) args
+  let act := match args with
+    | ["open", d] => run (System.FilePath.mk d) ["open"]
+    | _ => run (System.FilePath.mk (dirFlag.getD ".")) args
+  -- a command that ran but whose writes were refused (said on stderr) exits 1
+  act.map fun a => do
+    refusedRef.set []
+    let rc ← a
+    let rs ← refusedRef.get
+    return (if rc == 0 && !rs.isEmpty then 1 else rc)
 
 end Obend.Vault.Cli
 

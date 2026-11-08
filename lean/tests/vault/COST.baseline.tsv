@@ -1,0 +1,197 @@
+walkthrough	step	line	commands	read	wrote	ms	replayed	checkpoint
+vault/WALKTHROUGH	1	18	open	305	3046	3	0	0
+vault/WALKTHROUGH	2	54	open,status	9179	6902	12	0	5641
+vault/WALKTHROUGH	3	68	open	5776	3439	9	0	3168
+vault/WALKTHROUGH	4	83	status	6318	3439	6	0	3168
+vault/WALKTHROUGH	5	110	open	6895	4304	7	0	3168
+vault/WALKTHROUGH	6	134	open,status	17363	8399	14	0	7533
+vault/WALKTHROUGH	7	155	open	9746	4423	8	0	3767
+vault/WALKTHROUGH	8	168	status	10865	4232	6	0	3960
+vault/WALKTHROUGH	9	179	open	11337	4741	10	0	3961
+vault/WALKTHROUGH	10	192	open	12662	5729	11	0	4349
+vault/WALKTHROUGH	11	211	open,create	47203	18475	19	0	16473
+vault/WALKTHROUGH	12	231	open	17908	6703	11	0	5949
+vault/WALKTHROUGH	13	249	member,member	31016	6535	9	0	12563
+vault/WALKTHROUGH	14	260	post	39507	15481	56	0	12614
+vault/WALKTHROUGH	15	288	select	46125	8380	7	0	15954
+vault/WALKTHROUGH	16	296	post	47853	8381	10	0	15955
+vault/WALKTHROUGH	17	306	select	49350	17884	37	0	15955
+vault/WALKTHROUGH	18	328	open	26927	10613	16	0	9096
+vault/WALKTHROUGH	19	340	open	26925	10607	19	0	9096
+vault/WALKTHROUGH	20	354	merge	154246	43790	90	0	60650
+vault/WALKTHROUGH	21	374	select,open	159471	41391	57	0	38686
+vault/WALKTHROUGH	22	393	open,open,merge,open,open	525592	131067	291	0	150819
+vault/WALKTHROUGH	23	432	recite,status	271570	69846	92	0	67126
+vault/WALKTHROUGH	24	451	open,status	188129	49261	50	0	47471
+vault/WALKTHROUGH	25	470	open	95749	25515	33	0	24069
+vault/WALKTHROUGH	26	491	open,open	195933	50393	50	0	49587
+vault/WALKTHROUGH	27	514	open,status	200949	53540	57	0	51077
+vault/WALKTHROUGH	28	536	open,status	207118	55442	102	0	53512
+vault/WALKTHROUGH	29	557	open,status	211583	55327	40	0	54461
+vault/WALKTHROUGH	30	576	open,status,open	323607	82935	91	0	81711
+vault/WALKTHROUGH	31	598	open,status	220111	55716	109	0	54665
+vault/WALKTHROUGH	32	616	open	111420	27835	18	0	27425
+vault/WALKTHROUGH	33	636	open,open	225824	56514	52	0	55150
+vault/WALKTHROUGH	34	658	open,open	230514	57054	37	0	55874
+vault/WALKTHROUGH	35	686	open,open,open,merge	992606	213111	227	0	269477
+vault/WALKTHROUGH	36	723	open,status	365340	65326	82	0	63716
+vault/WALKTHROUGH	37	749	open,open,open,merge,status,open	2032270	299320	255	0	359478
+vault/WALKTHROUGH	38	775	open,open,merge,open,status	2484689	272448	228	0	335334
+vault/WALKTHROUGH	39	794	branch resolve,status	984531	102336	98	0	101560
+vault/WALKTHROUGH	40	818	branch fork,branch fork	0	0	2	0	0
+vault/WALKTHROUGH	41	845	branch write,branch write,branch write,branch write,branch relaw	0	0	7	0	0
+vault/WALKTHROUGH	42	864	branch write,branch write,branch write,branch revoke,branch write	0	0	6	0	0
+vault/WALKTHROUGH	43	886	branch merge,branch show,branch show	0	0	5	0	0
+vault/WALKTHROUGH	44	906	branch resolve,branch show	0	0	2	0	0
+vault/FORMS	1	22	open	328	3749	6	0	0
+vault/FORMS	2	49	capture	20489	17431	25	0	11384
+vault/FORMS	3	69	abstract,abstract	23301	17102	20	0	11209
+vault/FORMS	4	95	form	7691	2826	3	0	5644
+vault/FORMS	5	110	fill	2826	11489	5	0	0
+vault/FORMS	6	124	fill,fill,fill,fill	118309	36534	38	0	18668
+vault/FORMS	7	159	reshare	2826	0	0	0	0
+vault/FORMS	8	167	reshare,fill	5714	14826	5	0	0
+vault/FORMS	9	184	-	0	0	0	0	0
+vault/FORMS	10	198	open	10103	6893	11	0	5644
+vault/FORMS	11	219	judge	58469	13488	25	0	32315
+vault/FORMS	12	231	judge	46573	6879	15	0	26179
+vault/FORMS	13	243	judge	48638	6878	15	0	26177
+vault/FORMS	14	255	judge	50518	6879	22	0	26179
+vault/FORMS	15	266	-	0	0	0	0	0
+vault/FORMS	16	278	judge	52529	6880	15	0	26183
+vault/FORMS	17	289	judge	54527	6878	19	0	26178
+vault/FORMS	18	301	judge,status	66050	22172	30	0	26854
+vault/FORMS	19	330	fill,judge	114454	17157	24	0	34029
+vault/CRASH	1	21	open,ledger post,ledger post,log	73580	38278	66	7	31508
+vault/CRASH	2	78	log,log	44768	0	27	15	13799
+vault/CRASH	3	111	ledger status,report trial-balance,log	87711	28739	48	11	29462
+vault/CRASH	4	146	ledger post,log	102941	30128	54	14	34677
+vault/CRASH	5	170	member,log	61943	10212	33	15	19908
+vault/CRASH	6	179	log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log,ledger status,log	17106717	6530882	14534	6730	4628690
+vault/CRASH	7	211	log,ledger status,verify,report trial-balance,log	190824	53815	189	36	58837
+vault/CRASH	8	273	log,log	101564	0	79	24	28392
+vault/CRASH	9	297	log,log	102484	0	82	22	28392
+vault/CRASH	10	320	log,log	74092	0	171	60	14196
+vault/CRASH	11	342	open,log,log	102702	29280	324	81	14197
+vault/CRASH	12	373	report trial-balance,log,merge,log	497822	114412	279	49	143443
+vault/CRASH	13	404	open,capture,abstract,form,fill,log,log	46068	27904	43	11	18695
+vault/CRASH	14	438	status,judge,log	44731	13112	46	9	16783
+vault/TRANSPORT	1	29	open,capture,abstract,offer,grant,form	63369	40854	88	0	31563
+vault/TRANSPORT	2	58	fill,fill,obligations	31364	19215	17	0	8446
+vault/TRANSPORT	3	75	fill	2745	0	1	0	0
+vault/TRANSPORT	4	87	transport	18567	5094	9	0	9569
+vault/TRANSPORT	5	103	revoke,transport	33013	10086	16	0	14364
+vault/TRANSPORT	6	122	revoke,grant,transport	50918	15364	27	0	19370
+vault/TRANSPORT	7	136	judge	47727	5202	17	0	19568
+vault/TRANSPORT	8	145	grant,transport	41708	10531	14	0	14846
+vault/TRANSPORT	9	163	open,transport	63124	16715	69	0	20760
+vault/TRANSPORT	10	181	open,transport	70847	17822	67	0	22267
+vault/TRANSPORT	11	198	open,transport	76746	12829	61	0	23839
+vault/TRANSPORT	12	214	open,transport	60125	13921	18	0	19305
+vault/TRANSPORT	13	233	open,transport	63783	13830	16	0	19871
+vault/TRANSPORT	14	248	judge	82259	6915	13	0	26508
+vault/TRANSPORT	15	259	open,judge	96943	22385	31	0	26476
+vault/TRANSPORT	16	282	open,transport	77439	16996	23	0	24004
+vault/TRANSPORT	17	294	confirm,obligations	33664	4391	8	0	8449
+vault/TRANSPORT	18	309	capture,abstract,form,fill	183548	56848	45	0	50140
+vault/TRANSPORT	19	320	log,obligations	61427	0	127	39	17012
+vault/TRANSPORT	20	341	judge	64577	23851	24	1	21453
+vault/TRANSPORT	21	352	confirm,fill	67954	17242	14	0	13836
+vault/TRANSPORT	22	364	judge	125572	11747	20	0	45748
+vault/TRANSPORT	23	378	open,judge,grants	54479	16922	30	0	25562
+vault/TRANSPORT	24	395	merge,grants	196534	32991	40	0	68891
+vault/RETAIN	1	23	open,open,open,open,open,open,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,status,capture,abstract,form,fork,fill	981339	228776	377	0	178556
+vault/RETAIN	2	45	log	39188	0	37	52	5213
+vault/RETAIN	3	58	forget	18066	3502	18	0	6576
+vault/RETAIN	4	68	forget	68621	5483	18	0	10424
+vault/RETAIN	5	76	forget	69708	5484	15	0	10423
+vault/RETAIN	6	90	log	41314	0	33	57	5212
+vault/RETAIN	7	108	open,log	65634	11098	32	5	5212
+vault/RETAIN	8	134	open,log	26091	322	18	8	0
+vault/RETAIN	9	157	judge	42330	272	27	15	0
+vault/RETAIN	10	168	merge	118532	5755	54	18	10426
+vault/RETAIN	11	178	merge	120436	5755	117	22	10426
+vault/RETAIN	12	189	fork,open,merge,log	189835	21242	128	83	6179
+ledger/WALKTHROUGH	1	24	open,ledger status	13186	16368	51	0	7014
+ledger/WALKTHROUGH	2	108	open,ledger post	59513	35788	130	0	29703
+ledger/WALKTHROUGH	3	141	verify	1101	0	1	0	0
+ledger/WALKTHROUGH	4	152	open,ledger post	89653	45009	47	0	38533
+ledger/WALKTHROUGH	5	170	open,ledger post	58552	25166	28	0	23338
+ledger/WALKTHROUGH	6	183	open,ledger post	136224	59036	119	0	50821
+ledger/WALKTHROUGH	7	199	ledger post	40981	15646	15	0	14990
+ledger/WALKTHROUGH	8	210	open	42293	16346	22	0	14990
+ledger/WALKTHROUGH	9	223	open,open	90333	32750	76	0	30829
+ledger/WALKTHROUGH	10	239	ledger reverse,ledger post,ledger status	370929	130453	222	0	116680
+ledger/WALKTHROUGH	11	270	ledger close,ledger close	186603	58245	38	0	56615
+ledger/WALKTHROUGH	12	279	open,ledger post	132934	40172	36	0	38198
+ledger/WALKTHROUGH	13	291	ledger post	208152	65270	58	0	58226
+ledger/WALKTHROUGH	14	306	open,ledger post,ledger post,ledger post	851919	264839	184	0	238831
+ledger/WALKTHROUGH	15	328	open,ledger post,ledger post	567550	175328	176	0	158239
+ledger/WALKTHROUGH	16	351	merge	573446	134135	104	0	159459
+ledger/WALKTHROUGH	17	370	merge	1163606	196590	230	0	216006
+ledger/WALKTHROUGH	18	381	open,ledger post,ledger status	1044325	156053	153	0	145195
+ledger/WALKTHROUGH	19	420	report trial-balance	435960	68942	53	0	60863
+ledger/WALKTHROUGH	20	456	ledger root,verify	227221	33085	29	0	32113
+ledger/WALKTHROUGH	21	472	ledger root,verify	228764	33086	43	0	32113
+ledger/WALKTHROUGH	22	488	verify	3707	0	1	0	0
+ledger/WALKTHROUGH	23	500	report trial-balance	457089	68927	77	0	64227
+ledger/WALKTHROUGH	24	524	analyze	131477	0	18	0	33981
+reasons/REASONS	1	30	reasons	581	1018	2	0	0
+reasons/REASONS	2	67	reasons,reasons,reasons	7426	2130	14	0	3687
+reasons/REASONS	3	93	reasons,reasons,reasons,reasons	22668	5135	23	0	7392
+reasons/REASONS	4	125	reasons,reasons,reasons	29486	5356	27	0	7860
+reasons/REASONS	5	149	reasons	17008	1910	12	0	4857
+reasons/REASONS	6	166	reasons,reasons,reasons	23152	1845	17	0	6510
+reasons/REASONS	7	186	reasons,reasons	28394	3983	11	0	6608
+reasons/REASONS	8	207	reasons,reasons	33100	4601	15	0	7238
+reasons/REASONS	9	228	reasons	6738	0	1	0	2029
+reasons/REASONS	10	238	reasons,reasons	32291	2344	14	0	8220
+reasons/REASONS	11	270	forget,reasons	32312	4945	9	1	4162
+reasons/REASONS	12	290	open,capture,abstract,form,reasons,reasons,reasons	66137	30890	47	0	32645
+reasons/REASONS	13	320	fill	2003	8551	8	0	0
+reasons/REASONS	14	337	reasons,judge	47055	7664	18	0	21549
+reasons/REASONS	15	355	reasons,reasons,judge	67590	17131	52	0	25905
+decisions/WALKTHROUGH	1	29	open,status	9312400	6774446	3113	0	2259340
+decisions/WALKTHROUGH	2	110	open,status	16089002	4524673	2197	0	4520946
+decisions/WALKTHROUGH	3	138	open,status	16096641	4525050	1898	0	4523683
+decisions/WALKTHROUGH	4	159	open	8049849	2263386	882	0	2262080
+decisions/WALKTHROUGH	5	177	open	8051708	2263594	877	0	2262833
+decisions/WALKTHROUGH	6	192	open,status	16106460	4526679	1825	0	4525958
+decisions/WALKTHROUGH	7	206	open,open,open	24166402	6790461	2435	0	6788801
+decisions/WALKTHROUGH	8	222	open,status	16117115	4527176	1652	0	4525951
+decisions/WALKTHROUGH	9	239	open,open	16123733	4530987	1949	0	4527703
+decisions/WALKTHROUGH	10	261	create	16129618	4530753	1531	0	4529570
+decisions/WALKTHROUGH	11	269	open,status	16134178	4531547	1477	0	4530444
+decisions/WALKTHROUGH	12	293	open	8068510	2268213	776	0	2265327
+decisions/WALKTHROUGH	13	306	open,status	16147176	4536948	1620	0	4535082
+decisions/WALKTHROUGH	14	323	open,open	16154454	4541199	1444	0	4537835
+decisions/WALKTHROUGH	15	346	create,open,member,post	45951848	11355450	3711	0	13623491
+decisions/WALKTHROUGH	16	363	post,select,status	37891973	11359937	3241	0	11356520
+decisions/WALKTHROUGH	17	389	open	9359747	2274597	1009	0	2271764
+decisions/WALKTHROUGH	18	425	open	9363661	2274552	971	0	2273540
+decisions/WALKTHROUGH	19	439	open,open	18733324	4550789	2257	0	4548140
+decisions/LEDGER	1	19	open	1850942	6433941	3126	0	0
+decisions/LEDGER	2	38	open,status	22336027	7265292	48318	0	7210191
+decisions/LEDGER	3	57	post	20569857	7318741	35001	0	7239172
+decisions/LEDGER	4	76	open,open	22632195	7349111	75010	0	7298116
+decisions/LEDGER	5	93	post	20935593	3649796	32816	0	7297918
+decisions/LEDGER	6	103	-	0	0	0	0	0
+vault/WORKSHOP	1	22	open,capture,abstract,offer,capture,capture,abstract,offer,capture,form,form,form,form	705518	1472674	532	0	429108
+vault/WORKSHOP	2	46	checked,checked	368033	0	29	0	80200
+vault/WORKSHOP	3	64	fill,fill,judge,judge,fork,fork,confirm,confirm	1806342	1583745	249	0	182732
+vault/WORKSHOP	4	93	open,fill,open,fill,reasons	477556	372305	179	0	296952
+vault/WORKSHOP	5	122	open,open,open,open	489978	303162	151	0	294035
+vault/WORKSHOP	6	141	merge,open,open,reasons,reasons,judge	1137910	699764	405	0	477593
+vault/WORKSHOP	7	167	open,reasons	344006	171350	70	0	163943
+vault/WORKSHOP	8	188	merge	396563	333879	495	0	157726
+vault/WORKSHOP	9	208	reasons,reasons,reasons	761167	221115	70	0	330448
+vault/WORKSHOP	10	220	judge	393566	110505	83	0	110288
+vault/WORKSHOP	11	234	status,obligations	385590	110505	48	0	183690
+vault/WORKSHOP	12	251	open,fill,merge	916202	694812	632	0	394485
+vault/WORKSHOP	13	280	open,open,open,capture,abstract,offer,form,fill,judge	3617274	2142513	1989	0	1295122
+vault/WORKSHOP	14	301	open,reasons,reasons,reasons,judge	2396846	1308731	1577	0	908397
+vault/WORKSHOP	15	322	judge	477440	190500	47	0	190282
+vault/WORKSHOP	16	336	forget	477460	190501	48	0	190283
+vault/WORKSHOP	17	349	open,capture,form,fork,fill,judge,merge,open,merge	905300	912482	353	0	293132
+vault/WORKSHOP	18	373	open,open,open,open	386454	169623	102	0	157718
+vault/WORKSHOP	19	389	open	477670	193618	104	0	190284

@@ -47,8 +47,8 @@ cd alice && obend log | head -2
 ```
 
 ```text
-log: 52 records, 14381 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 14381 bytes, and the checkpoint, 5213 bytes
+log: 52 records, 11901 bytes, each following the one before it from the genesis sentinel
+a command reads: the log, 11901 bytes, and the checkpoint, 3960 bytes
 ```
 
 ## 2. Refused while something needs the prefix
@@ -98,7 +98,7 @@ ls -l .obend/log.new | awk '{print $5}'; obend log | tail -2
 
 ```text
 300
-world d85febf7826ed1ce: as record 56 commits to it
+world d4c73969f0d645b9: as record 56 commits to it
 one world
 ```
 
@@ -113,13 +113,13 @@ cd alice && obend open && obend log
 recovered: an interrupted forget's new log (300 bytes) dropped; the log stands
 recovered: the forget at record 56 was whole and the log was not compacted: compacted to one checkpoint record
 nothing changed
-log: 2 records, 5820 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest 7a36c466805daf8e), ending at receipt 3228e57856a97ce4
-a command reads: the log, 5820 bytes, and the checkpoint, 0 bytes
-last record: 2 (open), bytes 5548 to 5820
+log: 2 records, 4511 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest d17eb0c332fd7b08), ending at receipt 2bddb961b3bb2975
+a command reads: the log, 4511 bytes, and the checkpoint, 0 bytes
+last record: 2 (open), bytes 4294 to 4511
 checkpoint: none; the world is replayed from genesis
-world d85febf7826ed1ce: replayed from genesis
-world d85febf7826ed1ce: the checkpoint and the records after it
-world d85febf7826ed1ce: as record 2 commits to it
+world d4c73969f0d645b9: replayed from genesis
+world d4c73969f0d645b9: the checkpoint and the records after it
+world d4c73969f0d645b9: as record 2 commits to it
 one world
 ```
 
@@ -137,16 +137,16 @@ cd alice && printf -- "---\nbalance: 5\n---\n# Carol\n\nAfter the forget.\n" > l
 
 ```text
 ledger/carol: v7 written
-log: 3 records, 6142 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest 7a36c466805daf8e), ending at receipt 3228e57856a97ce4
-a command reads: the log, 6142 bytes, and the checkpoint, 0 bytes
-  record 1 (compacted): bytes 0 to 5548
-  record 2 (open): bytes 5548 to 5820
-  record 3 (open): bytes 5820 to 6142
-last record: 3 (open), bytes 5820 to 6142
+log: 3 records, 4799 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest d17eb0c332fd7b08), ending at receipt 2bddb961b3bb2975
+a command reads: the log, 4799 bytes, and the checkpoint, 0 bytes
+  record 1 (compacted): bytes 0 to 4294
+  record 2 (open): bytes 4294 to 4511
+  record 3 (open): bytes 4511 to 4799
+last record: 3 (open), bytes 4511 to 4799
 checkpoint: none; the world is replayed from genesis
-world 4515703e2d4113e6: replayed from genesis
-world 4515703e2d4113e6: the checkpoint and the records after it
-world 4515703e2d4113e6: as record 3 commits to it
+world f86bab377a0458dc: replayed from genesis
+world f86bab377a0458dc: the checkpoint and the records after it
+world f86bab377a0458dc: as record 3 commits to it
 one world
 ```
 
@@ -159,8 +159,8 @@ cd alice && obend judge ../pay.json
 ```
 
 ```text
-pay: refused: late: the form was retired by the retention contract q4; a proposal for it rests on a forgotten prefix of the log
 work: performed 0, retained 1 of 1
+pay: refused: late: the form was retired by the retention contract q4; a proposal for it rests on a forgotten prefix of the log
 ```
 
 The laptop is a branch the contract abandoned:

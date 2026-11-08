@@ -11,6 +11,8 @@
 //! The adapter is chosen by a case-insensitive substring of its name, driver or driver info (`--adapter radv`); without
 //! one, the first non-CPU adapter is taken. The device must offer 64-bit integers in shaders.
 
+mod device;
+use device::{adapter_line, list_adapters, pick_adapter};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -92,33 +94,6 @@ fn read_vectors(path: &Path) -> Result<Vec<Vector>, String> {
         });
     }
     Ok(out)
-}
-
-fn adapter_line(a: &wgpu::Adapter) -> String {
-    let i = a.get_info();
-    format!("{} [{:?}] driver={} {} type={:?}", i.name, i.backend, i.driver, i.driver_info, i.device_type)
-}
-
-fn pick_adapter(instance: &wgpu::Instance, want: Option<&str>) -> Result<wgpu::Adapter, String> {
-    let adapters = instance.enumerate_adapters(wgpu::Backends::all());
-    if adapters.is_empty() {
-        return Err("wgpu sees no adapter".into());
-    }
-    let chosen = match want {
-        Some(w) => {
-            let w = w.to_lowercase();
-            adapters.into_iter().find(|a| {
-                let i = a.get_info();
-                i.name.to_lowercase().contains(&w)
-                    || i.driver.to_lowercase().contains(&w)
-                    || i.driver_info.to_lowercase().contains(&w)
-            })
-        }
-        None => adapters
-            .into_iter()
-            .find(|a| a.get_info().device_type != wgpu::DeviceType::Cpu),
-    };
-    chosen.ok_or_else(|| format!("no adapter matches {want:?}; try --list-adapters"))
 }
 
 fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
@@ -236,6 +211,7 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
     }
 
     let mut mismatches = 0usize;
+    let mut dispatch_secs = 0f64;
     for v in &vectors {
         if v.inputs.len() != plan.inputs.len() {
             return Err(format!("vector {}: {} inputs, plan has {}", v.index, v.inputs.len(), plan.inputs.len()));
@@ -254,7 +230,9 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
         // Dispatches are submitted in chunks: AMDVLK ran out of memory with the 64-point NTT's 1670
         // dispatches in one command buffer, RADV and Metal did not. Submissions execute in order, so the
         // stage order is kept.
+        // Timed from the first submission to the device reporting every dispatch done; printed, not gated.
         const CHUNK: usize = 128;
+        let started = std::time::Instant::now();
         for chunk in pipelines.chunks(CHUNK) {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stages") });
             for (pipeline, groups) in chunk {
@@ -265,6 +243,8 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
             }
             queue.submit([encoder.finish()]);
         }
+        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll: {e}"))?;
+        dispatch_secs += started.elapsed().as_secs_f64();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
         encoder.copy_buffer_to_buffer(&w, 0, &staging, 0, wire_bytes);
         queue.submit([encoder.finish()]);
@@ -296,11 +276,12 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
         }
     }
     println!(
-        "{}: {} vectors, {} stages, {} disagree, on {}",
+        "{}: {} vectors, {} dispatches, {} disagree, {:.3} ms per vector, on {}",
         plan.graph,
         vectors.len(),
         plan.stages.len(),
         mismatches,
+        dispatch_secs * 1e3 / vectors.len().max(1) as f64,
         info_line
     );
     if mismatches > 0 {
@@ -312,11 +293,7 @@ fn run(dir: &Path, want: Option<&str>) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--list-adapters") {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        for a in instance.enumerate_adapters(wgpu::Backends::all()) {
-            let int64 = a.features().contains(wgpu::Features::SHADER_INT64);
-            println!("{} int64={}", adapter_line(&a), int64);
-        }
+        list_adapters();
         return ExitCode::SUCCESS;
     }
     let mut dir: Option<PathBuf> = None;

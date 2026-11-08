@@ -408,7 +408,7 @@ public theorem typed_scoped {asm : Assumptions} {context : Context} {term : Term
     (motive_1 := fun context term _ _ _ => Scoped context.length term)
     (motive_2 := fun context fields _ _ _ => ∀ f ∈ fields, Scoped context.length f.2)
     (motive_3 := fun context _ arms _ _ _ _ => ∀ arm ∈ arms, Scoped (context.length + 1) arm.2)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ typed
   · intros; rename_i found; exact .bound (List.getElem?_eq_some_iff.mp found).1
   · intros; exact .natural _
   · intros; exact .boolean _
@@ -435,6 +435,9 @@ public theorem typed_scoped {asm : Assumptions} {context : Context} {term : Term
   · intros; rename_i ih; exact .done ih
   · intros; rename_i ih₁ ih₂; exact .case ih₁ ih₂
   · intros; rename_i ih₁ ih₂; exact .split ih₁ ih₂
+  · intro context n σ decl args _ hσ _ _ _ ih
+    subst hσ
+    exact .hole (fun t ht => by obtain ⟨arg, ha, rfl⟩ := List.mem_map.mp ht; exact ih arg ha)
   · intros; rename_i hf; simp at hf
   · intros; rename_i ih₁ ih₂ f hf
     rcases List.mem_cons.mp hf with rfl | hf
@@ -461,6 +464,16 @@ public theorem shift_here {ann ann' : Annotations} {pos pos' : List Nat}
 public theorem split_add {a₁ a₂ : Uses} (Ψ : Context) (h : a₁.length = a₂.length) :
     addUses (a₁ ++ zeroUses Ψ) (a₂ ++ zeroUses Ψ) = addUses a₁ a₂ ++ zeroUses Ψ := by
   rw [addUses_append h, addUses_zeroUses]
+
+/-- A hole's summed uses (`PartialTyping.hole`) split as its arguments' do. -/
+public theorem foldr_split_zero (Δ Ψ : Context) : ∀ (ps : List Uses), (∀ a ∈ ps, a.length = Δ.length) →
+    (ps.map (· ++ zeroUses Ψ)).foldr addUses (zeroUses (Δ ++ Ψ)) = ps.foldr addUses (zeroUses Δ) ++ zeroUses Ψ
+  | [], _ => zeroUses_append Δ Ψ
+  | a :: ps, h => by
+    simp only [List.map_cons, List.foldr_cons]
+    rw [foldr_split_zero Δ Ψ ps (fun b hb => h b (List.mem_cons_of_mem _ hb))]
+    exact split_add Ψ ((h a List.mem_cons_self).trans (length_foldr_addUses ps _ (length_zeroUses Δ)
+      (fun b hb => h b (List.mem_cons_of_mem _ hb))).symm)
 
 public theorem split_tail {a : Uses} (Ψ : Context) (h : a ≠ []) :
     (a ++ zeroUses Ψ).tail = a.tail ++ zeroUses Ψ :=

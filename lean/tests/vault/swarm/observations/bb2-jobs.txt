@@ -1,0 +1,4 @@
+# bb2: ~/obend/logs PID files with a live process, 2026-11-06T18:39:09Z
+LIVE /home/build/obend/logs/holetyping-t2.pid 726907 sh tools/build.sh tier2 
+LIVE /home/build/obend/logs/large1.pid 713912 python3 -u tests/vault/large.py --work /home/build/obend/logs/large1 --pages 2000 --records 10000 --bursts 10,100,1000,5000 --every 500 
+LIVE /home/build/obend/logs/large2.pid 723749 python3 -u tests/vault/large.py --work /home/build/obend/logs/large2 --pages 2000 --records 600 --bursts 10,100,1000,5000 --every 100 

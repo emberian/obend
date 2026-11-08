@@ -205,20 +205,20 @@ def labels (assumptions : Assumptions) (row : Ty) : List String :=
 
 theorem labels_alias_tail_sorted_unique :
     labels ⟨[(0, .field "a" .natural (.field "z" .boolean .emptyRow)),
-      (1, .field "unused" .natural .emptyRow)], [], []⟩
+      (1, .field "unused" .natural .emptyRow)], [], [], []⟩
       (.field "z" .natural (.variable 0)) = ["a", "z"] := by
   simp [labels, scanLabels, insertLabel, support, subterms, expose, exposeWalk,
     Assumptions.alias, constructorHead, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem labels_productive_cycle_finite :
-    labels ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩ (.variable 0) = ["a"] := by
+    labels ⟨[(0, .field "a" .natural (.variable 0))], [], [], []⟩ (.variable 0) = ["a"] := by
   simp [labels, scanLabels, insertLabel, support, subterms, expose, exposeWalk,
     Assumptions.alias, constructorHead, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem shadow_natural_alias_discarded :
-    streamStep ⟨[(0, .natural)], [], []⟩
+    streamStep ⟨[(0, .natural)], [], [], []⟩
       (.field "a" (.variable 0) .emptyRow) "a" false = .end .closed := by
-  have aliasShare : shareable ⟨[(0, .natural)], [], []⟩ (.variable 0) = true := by
+  have aliasShare : shareable ⟨[(0, .natural)], [], [], []⟩ (.variable 0) = true := by
     apply shareable_terminal
     simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,
       constructorHead,Ty.isComputation,List.lookup]
@@ -227,9 +227,9 @@ theorem shadow_natural_alias_discarded :
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem shadow_custody_alias_retained :
-    streamStep ⟨[(0, .custody 7)], [], []⟩
+    streamStep ⟨[(0, .custody 7)], [], [], []⟩
       (.field "a" (.variable 0) .emptyRow) "a" false = .emit (.variable 0) .emptyRow := by
-  have aliasShare : shareable ⟨[(0, .custody 7)], [], []⟩ (.variable 0) = false := by
+  have aliasShare : shareable ⟨[(0, .custody 7)], [], [], []⟩ (.variable 0) = false := by
     apply shareable_terminal
     simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,
       constructorHead,Ty.isComputation,List.lookup]
@@ -238,35 +238,35 @@ theorem shadow_custody_alias_retained :
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem alias_tail_field_exposed :
-    streamStep ⟨[(0, .field "b" .natural .emptyRow)], [], []⟩
+    streamStep ⟨[(0, .field "b" .natural .emptyRow)], [], [], []⟩
       (.field "a" .boolean (.variable 0)) "b" true = .emit .natural .emptyRow := by
   simp [streamStep, scanStream, residual, scanResidual, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem cyclic_shareable_shadow_stream_finite :
-    streamStep ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩
+    streamStep ⟨[(0, .field "a" .natural (.variable 0))], [], [], []⟩
       (.variable 0) "a" false = .end .closed := by
   simp [streamStep, scanStream, residual, scanResidual, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem cyclic_resourceful_shadow_stream_recursive :
-    streamStep ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩
+    streamStep ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], [], []⟩
       (.variable 0) "a" false = .emit (.custody 7) (.variable 0) := by
   simp [streamStep, scanStream, residual, scanResidual, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem cyclic_row_residual_productive :
-    residual ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩ (.variable 0) = .productiveCycle := by
+    residual ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], [], []⟩ (.variable 0) = .productiveCycle := by
   simp [streamStep, scanStream, residual, scanResidual, shareable_natural, shareable_custody,
     support, subterms, expose, exposeWalk, Assumptions.alias, constructorHead,
     cycleRepresentative, Ty.isComputation, List.lookup, List.erase, Bool.beq_eq_decide_eq]
 
 theorem productive_recursive_row_shareable :
-    shareable ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩ (.variable 0) = true := by
-  let assumptions : Assumptions := ⟨[(0, .field "a" .natural (.variable 0))], [], []⟩
+    shareable ⟨[(0, .field "a" .natural (.variable 0))], [], [], []⟩ (.variable 0) = true := by
+  let assumptions : Assumptions := ⟨[(0, .field "a" .natural (.variable 0))], [], [], []⟩
   have exposedHead : Obend.Core.ResourceSemantics.head assumptions (.variable 0) =
       (true,[.natural,.variable 0]) := by
     simp [Obend.Core.ResourceSemantics.head,assumptions,expose,exposeWalk,
@@ -288,14 +288,14 @@ theorem productive_recursive_row_shareable :
     simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,constructorHead]
 
 theorem unproductive_alias_shareable :
-    shareable ⟨[(0, .variable 0)], [0], []⟩ (.variable 0) = true := by
+    shareable ⟨[(0, .variable 0)], [0], [], []⟩ (.variable 0) = true := by
   apply shareable_terminal
   simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,
     constructorHead,cycleRepresentative,Ty.isComputation,List.lookup,List.erase,
     Bool.beq_eq_decide_eq]
 
 theorem custody_recursive_row_not_shareable :
-    shareable ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], []⟩ (.variable 0) = false := by
+    shareable ⟨[(0, .field "a" (.custody 7) (.variable 0))], [], [], []⟩ (.variable 0) = false := by
   apply Obend.Core.FiniteSafety.bool_ext
   rw [shareable_unfold]
   simp [Obend.Core.ResourceSemantics.head,expose,exposeWalk,Assumptions.alias,

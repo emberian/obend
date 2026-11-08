@@ -41,6 +41,12 @@ public import Obend.Hardware.OpenUSD
 public import Obend.Hardware.UserspacePhysical
 public import Obend.Hardware.OpenHypergraph
 public import Obend.Hardware.Gpu
+public import Obend.Hardware.Square
+public import Obend.Hardware.SquareGraphs
+public import Obend.Hardware.Gpu.Rdna2.Check
+public import Obend.Hardware.Gpu.Rdna2.Waitcnt
+public import Obend.Hardware.Gpu.Rdna2.Certified
+public import Obend.Hardware.Gpu.Memory
 public import Obend.Hardware.QuantumMatter
 public import Obend.Hardware.DigitalTwin
 public import Obend.Hardware.TcadBridge

@@ -480,7 +480,7 @@ public theorem Discharges.partialTyping_instantiate (instanceValid : instance_.v
       ArmsTyping instance_ (instantiateContext σ context) q arms (row.instantiate σ) (result.instantiate σ) uses)
     ?bound ?natural ?boolean ?label ?lambda ?conversion ?application ?record ?get ?extend ?specification
     ?prototype ?reflect ?metadata ?project ?mix ?fix ?binary ?ifZero ?inject ?case ?ifBool ?perform ?done
-    ?effectCase ?split ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
+    ?effectCase ?split ?hole ?fieldsNil ?fieldsCons ?armsNil ?armsCons typed
   case bound =>
     intro Γ index binding found
     rw [← variableUses_instantiate (σ := σ)]
@@ -586,6 +586,17 @@ public theorem Discharges.partialTyping_instantiate (instanceValid : instance_.v
   case split =>
     intro Γ target function names row functionType result tu fu _ _ nodup covers spine ihT ihF
     exact .split ihT ihF nodup (D.splitCovers_instantiate covers) (D.splitSpine_instantiate instanceValid spine)
+  case hole =>
+    intro Γ n σ' decl args found hσ hctx _ allowed ih
+    subst hσ
+    have typed := PartialTyping.hole (assumptions := instance_) (context := instantiateContext σ Γ)
+      (σ := args.map (·.1)) (args := args.map fun a => (a.1, (⟨a.2.1.type.instantiate σ, a.2.1.quantity⟩ : Binding), a.2.2))
+      (D.holes n decl found) (by simp [Function.comp_def]) (by rw [← hctx]; simp [Function.comp_def])
+      (fun a ha => by obtain ⟨b, hb, rfl⟩ := List.mem_map.mp ha; exact ih b hb)
+      (fun a ha => by
+        obtain ⟨b, hb, rfl⟩ := List.mem_map.mp ha
+        rw [D.argumentAllowed_instantiate]; exact allowed b hb)
+    simpa [zeroUses_instantiate, Function.comp_def] using typed
   case fieldsNil =>
     intro Γ; rw [← zeroUses_instantiate (σ := σ)]; exact .nil _
   case fieldsCons =>
@@ -612,7 +623,7 @@ rigid (`CheckerTransport.self_as_bound_row_*`). -/
 
 @[expose] public def weightBound : Ty := .field "weight" .natural .emptyRow
 @[expose] public def colouredRow : Ty := .field "colour" .label (.field "weight" .natural .emptyRow)
-@[expose] public def templateAssumptions : Assumptions := ⟨[(5, weightBound)], [5], [5]⟩
+@[expose] public def templateAssumptions : Assumptions := ⟨[(5, weightBound)], [5], [5], []⟩
 @[expose] public def colouredSelf : Nat → Ty := fun j => if j = 5 then colouredRow else .variable j
 
 @[expose] public def weightTemplate : AnnotatedTerm :=
@@ -666,13 +677,14 @@ public theorem coloured_discharges : Discharges colouredSelf templateAssumptions
     by_cases e : j = 5
     · subst e; simp [colouredSelf, colouredRow, Ty.isComputation]
     · simp [colouredSelf, e, Ty.isComputation]
+  holes n decl found := by simp [templateAssumptions] at found
 
 /-- D2's fixture: `self` returned where the bound row is declared, with `Self` rigid when `rigid`
 names it. -/
 @[expose] public def selfAsBoundRow (rigid : List Nat) : AnnotatedTerm :=
   ⟨.lam (.bound 0),
     fun position => if position = [] then some ⟨.variable 5, weightBound, .unrestricted, .reusable⟩ else none,
-    ⟨[(5, weightBound)], [5], rigid⟩⟩
+    ⟨[(5, weightBound)], [5], rigid, []⟩⟩
 
 end Obend.Core.Proofs.Templates
 

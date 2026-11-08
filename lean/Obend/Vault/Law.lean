@@ -270,6 +270,22 @@ def lawLabels : LawExpr → List String
   | .and l r | .or l r | .implies l r => lawLabels l ++ lawLabels r
   | _ => []
 
+/-- The label constants a law compares the field `f` with (`new.f == "x"`, `new.f in ["x", …]`). -/
+def fieldLabelConsts (f : String) : LawExpr → List String
+  | .eqR (.field g) (.labelConst v) | .eqR (.labelConst v) (.field g) => if g == f then [v] else []
+  | .not e => fieldLabelConsts f e
+  | .and l r | .or l r | .implies l r => fieldLabelConsts f l ++ fieldLabelConsts f r
+  | _ => []
+
+/-- The fields a law compares the field `f` with (`new.on == new.base`): their labels are values to try
+for `f` (2026-11-06: a proposal on the wrong base was told "another `state:` value would pass", the
+premise, not "the line `on: "751b497"` would pass"). -/
+def fieldLabelPeers (f : String) : LawExpr → List String
+  | .eqR (.field g) (.field h) => if g == f then [h] else if h == f then [g] else []
+  | .not e => fieldLabelPeers f e
+  | .and l r | .or l r | .implies l r => fieldLabelPeers f l ++ fieldLabelPeers f r
+  | _ => []
+
 /-- The constants a law mentions. -/
 def lawConsts : LawExpr → List Int
   | .eqC _ v | .leC _ v => [v]
@@ -302,23 +318,46 @@ def suggestMultiField (e : LawExpr) (facts : Facts) (old : Option Data) (new : D
     if edits.isEmpty then none else some edits
   | none => none
 
+/-- A label as a frontmatter value that reads back as that label: a word as it is, anything else
+quoted (`Obend.Vault.labelFields`; 2026-11-06: "the line `artifact: 9abc` would pass", a value that
+reads as no label at all). -/
+def labelLine (v : String) : String :=
+  match v.toList with
+  | c :: _ => if c.isAlpha && v.toList.all (fun ch => ch.isAlphanum || ch == '_' || ch == '-') && v != "true" && v != "false"
+      then v else "\"" ++ v ++ "\""
+  | [] => v
+
 /-- **What would pass**: the change of one field the law reads that makes it hold, said as the line
 of frontmatter that would pass (for a field the page writes there) or as the measure that would
 pass; else a request from the owner, if that passes; else a multi-field change found by
 `suggestMultiField` (`Obend.Spec.LawDial.solveLawWitness`); else that nothing near does. -/
 def suggest (e : LawExpr) (facts : Facts) (old : Option Data) (new : Data) (front : List String) : String :=
-  let fields := e.fields.eraseDups
-  -- a label field: the label constants the law names, and the labels the state holds
+  -- for `P implies C`, change what the law asks for (C's fields) before what it is conditional on (P's):
+  -- unsetting the premise passes too, and says nothing (2026-11-06: "the line `state: ` would pass")
+  let fields := (match e with
+    | .implies p c => c.fields ++ p.fields
+    | _ => e.fields).eraseDups
+  -- a label field: the label constants the law compares that field with and its own old label, never
+  -- another field's label or constant (2026-11-06: `commit: owner` and `gate: reported` were offered)
   let labelFound := fields.findSome? fun f =>
     match labelAt new f with
     | some cur =>
-      ((labelsIn new ++ (old.map labelsIn).getD [] ++ lawLabels e).eraseDups.find? fun v =>
-          v != cur && e.denote facts old (setLabel new f v)).map
-        fun v => (f, cur, v)
+      match (fieldLabelConsts f e ++ (fieldLabelPeers f e).filterMap (labelAt new ·) ++
+          ((old.bind (labelAt · f)).toList)).eraseDups.find? fun v =>
+          -- never the unset label: "the line `on: ` would pass" unsets the field, it names no value
+          v != cur && v != "" && e.denote facts old (setLabel new f v) with
+      | some v => some (f, cur, some v)
+      | none =>
+        -- no named label passes, but some value would: the law asks for the line, not for a value
+        let fresh := "x" ++ String.join (lawLabels e)
+        if e.denote facts old (setLabel new f fresh) then some (f, cur, (none : Option String)) else none
     | none => none
   match labelFound with
-  | some (f, cur, v) =>
-    "the line `" ++ f ++ ": " ++ v ++ "` would pass (the page has `" ++ f ++ ": " ++ cur ++ "`)"
+  | some (f, cur, some v) =>
+    "the line `" ++ f ++ ": " ++ labelLine v ++ "` would pass (the page has `" ++ f ++ ": " ++ labelLine cur ++ "`)"
+  | some (f, cur, none) =>
+    if cur.isEmpty then "a line `" ++ f ++ ": …` with a value would pass (the page has no `" ++ f ++ ":` line it reads)"
+    else "another `" ++ f ++ ":` value would pass (the page has `" ++ f ++ ": " ++ labelLine cur ++ "`)"
   | none =>
   let found := fields.findSome? fun f =>
     let cur := natAt new f
