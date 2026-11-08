@@ -382,21 +382,6 @@ def mkMul (a b : Tm) : Tm :=
 def mkMulHi (a b : Tm) : Tm :=
   let (x, y) := ord a b
   if isLit x 0 || isLit y 0 then lit 0 else fold .mulHi [x, y]
-def mkAnd (a b : Tm) : Tm :=
-  let (x, y) := ord a b
-  if isLit x 0 || isLit y 0 then lit 0 else if isLit x 0xFFFFFFFF then y else if isLit y 0xFFFFFFFF then x
-  else fold .band [x, y]
-def mkOr (a b : Tm) : Tm :=
-  let (x, y) := ord a b
-  if isLit x 0 then y else if isLit y 0 then x else fold .bor [x, y]
-def mkShl (x a : Tm) : Tm :=
-  match a.litVal? with
-  | some v => if v &&& 31 == 0 then x else fold .shl [x, a]
-  | none => fold .shl [x, a]
-def mkLshr (x a : Tm) : Tm :=
-  match a.litVal? with
-  | some v => if v &&& 31 == 0 then x else fold .lshr [x, a]
-  | none => fold .lshr [x, a]
 def isBool0 (t : Tm) : Bool :=
   match t.op with
   | .carry | .borrow | .carryc | .borrowc | .ule | .ugt | .ult64 | .ne64 | .bit _ | .nez64 => true
@@ -418,6 +403,36 @@ def isBool2 (t : Tm) : Bool :=
   | .ite, [_, a, b] | .band, [a, b] | .bor, [a, b] => isBool a && isBool b
   | _, _ => false
 
+def mkAnd0 (a b : Tm) : Tm :=
+  let (x, y) := ord a b
+  if isLit x 0 || isLit y 0 then lit 0 else if isLit x 0xFFFFFFFF then y else if isLit y 0xFFFFFFFF then x
+  else fold .band [x, y]
+def mkOr0 (a b : Tm) : Tm :=
+  let (x, y) := ord a b
+  if isLit x 0 then y else if isLit y 0 then x else fold .bor [x, y]
+
+/-- `1 & b` of a 0/1 term is `b` (a compare masked to its low bit). -/
+def mkAnd (a b : Tm) : Tm :=
+  if isLit a 1 && isBool2 b then b else if isLit b 1 && isBool2 a then a else mkAnd0 a b
+
+/-- `y` is `ite y' 0 1` of a 0/1 term `y'` equal to `x`: the two are complements. -/
+def isNotOf (y x : Tm) : Bool :=
+  match y with
+  | .mk _ .ite [y', z, o] => isLit z 0 && isLit o 1 && y' == x && isBool2 x
+  | _ => false
+
+/-- `x | ¬x` of a 0/1 term is `1` (a `≤` the compiler wrote as `= ∨ <`, met by `<` as `≠`). -/
+def mkOr (a b : Tm) : Tm :=
+  if isNotOf a b || isNotOf b a then lit 1 else mkOr0 a b
+
+def mkShl (x a : Tm) : Tm :=
+  match a.litVal? with
+  | some v => if v &&& 31 == 0 then x else fold .shl [x, a]
+  | none => fold .shl [x, a]
+def mkLshr (x a : Tm) : Tm :=
+  match a.litVal? with
+  | some v => if v &&& 31 == 0 then x else fold .lshr [x, a]
+  | none => fold .lshr [x, a]
 /-- A condition with its `≠ 0` wrappers removed: `ite` tests `c ≠ 0`, and `(x, 0) ≠ (0, 0)` or a select
 `ite c k 0` with `k ≠ 0` is nonzero exactly when `x` or `c` is (the compare a source's `select` puts on a
 boolean the compiler keeps as a lane mask); a disjunction of conditions, or the maximum of two words, is
@@ -465,6 +480,18 @@ theorem b2w_le (b : Bool) : b2w b = 0 ∨ b2w b = 1 := by cases b <;> simp [b2w]
 
 theorem and1_cases (z : UInt32) : z &&& 1 = 0 ∨ z &&& 1 = 1 := by bv_decide
 
+def mkNe64' (a0 a1 b0 b1 : Tm) : Tm := fold .ne64 [a0, a1, b0, b1]
+/-- `x != 0` of a 0/1 select `ite c 1 0` is `c`: the compare of a `select` the compiler removes. -/
+def mkNe64Z (a0 a1 b0 b1 : Tm) : Tm :=
+  if isLit a1 0 && isLit b0 0 && isLit b1 0 then
+    match a0 with
+    | .mk _ .ite [c, t, e] => if isLit t 1 && isLit e 0 && isBool2 c then c else mkNe64' a0 a1 b0 b1
+    | _ => mkNe64' a0 a1 b0 b1
+  else mkNe64' a0 a1 b0 b1
+/-- `a ≠ b` of two pairs is symmetric: a literal zero pair second, else the pairs ordered by hash. -/
+def mkNe64 (a0 a1 b0 b1 : Tm) : Tm :=
+  if (isLit a0 0 && isLit a1 0) || (!(isLit b0 0 && isLit b1 0) && mixHash b0.hsh b1.hsh < mixHash a0.hsh a1.hsh)
+  then mkNe64Z b0 b1 a0 a1 else mkNe64Z a0 a1 b0 b1
 def mkCarry (a b : Tm) : Tm :=
   let (x, y) := ord a b
   if isLit x 0 || isLit y 0 then lit 0 else fold .carry [x, y]
@@ -482,6 +509,9 @@ carry of `a + r` (`carryBV a r = a + r < a`): the form a compiler gives `lo < a`
 def mkUgt' (a b : Tm) : Tm :=
   -- `0 > b` and `a > 0xFFFFFFFF` never hold
   if isLit a 0 || isLit b 0xFFFFFFFF then lit 0 else
+  -- `0xFFFFFFFF > b` is `b ≠ 0xFFFFFFFF`, `a > 0` is `a ≠ 0`: one form for the compiler's compares
+  if isLit a 0xFFFFFFFF then mkNe64 b (lit 0) (lit 0xFFFFFFFF) (lit 0) else
+  if isLit b 0 then mkNe64 a (lit 0) (lit 0) (lit 0) else
   if b.op == .sum then
     match removeSub (addends a) b.args with
     | some rest => mkCarry a (mkSum rest)
@@ -610,18 +640,6 @@ def mkBitF : Nat → Tm → Nat → Tm
 
 def mkUle (a b : Tm) : Tm := fold .ule [a, b]
 def mkUlt64 (a0 a1 b0 b1 : Tm) : Tm := fold .ult64 [a0, a1, b0, b1]
-def mkNe64' (a0 a1 b0 b1 : Tm) : Tm := fold .ne64 [a0, a1, b0, b1]
-/-- `x != 0` of a 0/1 select `ite c 1 0` is `c`: the compare of a `select` the compiler removes. -/
-def mkNe64Z (a0 a1 b0 b1 : Tm) : Tm :=
-  if isLit a1 0 && isLit b0 0 && isLit b1 0 then
-    match a0 with
-    | .mk _ .ite [c, t, e] => if isLit t 1 && isLit e 0 && isBool2 c then c else mkNe64' a0 a1 b0 b1
-    | _ => mkNe64' a0 a1 b0 b1
-  else mkNe64' a0 a1 b0 b1
-/-- `a ≠ b` of two pairs is symmetric: a literal zero pair second, else the pairs ordered by hash. -/
-def mkNe64 (a0 a1 b0 b1 : Tm) : Tm :=
-  if (isLit a0 0 && isLit a1 0) || (!(isLit b0 0 && isLit b1 0) && mixHash b0.hsh b1.hsh < mixHash a0.hsh a1.hsh)
-  then mkNe64Z b0 b1 a0 a1 else mkNe64Z a0 a1 b0 b1
 def mkNez64 (a b : Tm) : Tm := fold .nez64 [a, b]
 
 /-- A 64-bit shift of a pair by a known count `w < 64`, in 32-bit pieces. -/
@@ -735,12 +753,11 @@ theorem eval_mulHi (a b : Tm) : eval env (Dom.mulHi a b) = Dom.mulHi (eval env a
     rcases h with h | h <;> simp [eval_of_isLit env _ 0 h, mulHiBV]
   · simp [TOp.sem]
 
-theorem eval_and (a b : Tm) : eval env (Dom.band a b) = Dom.band (eval env a) (eval env b) := by
-  show eval env (mkAnd a b) = eval env a &&& eval env b
+theorem eval_and0 (a b : Tm) : eval env (mkAnd0 a b) = eval env a &&& eval env b := by
   have hc := ord_comm (fun x y => x &&& y) (fun x y => UInt32.and_comm x y) env a b
   try simp only at hc
   rw [← hc]
-  unfold mkAnd; generalize ord a b = p; obtain ⟨x, y⟩ := p; simp only
+  unfold mkAnd0; generalize ord a b = p; obtain ⟨x, y⟩ := p; simp only
   split
   · rename_i h; simp only [Bool.or_eq_true] at h
     rcases h with h | h <;> simp [eval_of_isLit env _ 0 h]
@@ -750,17 +767,53 @@ theorem eval_and (a b : Tm) : eval env (Dom.band a b) = Dom.band (eval env a) (e
       · rename_i _ _ h; rw [eval_of_isLit env _ _ h]; generalize eval env x = z; bv_decide
       · simp [TOp.sem]
 
-theorem eval_or (a b : Tm) : eval env (Dom.bor a b) = Dom.bor (eval env a) (eval env b) := by
-  show eval env (mkOr a b) = eval env a ||| eval env b
+theorem eval_or0 (a b : Tm) : eval env (mkOr0 a b) = eval env a ||| eval env b := by
   have hc := ord_comm (fun x y => x ||| y) (fun x y => UInt32.or_comm x y) env a b
   try simp only at hc
   rw [← hc]
-  unfold mkOr; generalize ord a b = p; obtain ⟨x, y⟩ := p; simp only
+  unfold mkOr0; generalize ord a b = p; obtain ⟨x, y⟩ := p; simp only
   split
   · rename_i h; simp [eval_of_isLit env _ 0 h]
   · split
     · rename_i _ h; simp [eval_of_isLit env _ 0 h]
     · simp [TOp.sem]
+
+theorem eval_and (a b : Tm) : eval env (Dom.band a b) = Dom.band (eval env a) (eval env b) := by
+  show eval env (mkAnd a b) = eval env a &&& eval env b
+  unfold mkAnd
+  split
+  · rename_i h; simp only [Bool.and_eq_true] at h
+    rw [eval_of_isLit env _ _ h.1]
+    rcases eval_isBool2 env b h.2 with e | e <;> rw [e] <;> decide
+  · split
+    · rename_i _ h; simp only [Bool.and_eq_true] at h
+      rw [eval_of_isLit env _ _ h.1]
+      rcases eval_isBool2 env a h.2 with e | e <;> rw [e] <;> decide
+    · exact eval_and0 env a b
+
+theorem isNotOf_or (y x : Tm) (h : isNotOf y x = true) : eval env y ||| eval env x = 1 := by
+  unfold isNotOf at h
+  split at h
+  · rename_i y' z o
+    simp only [Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨⟨⟨hz, ho⟩, he⟩, hb⟩ := h
+    subst he
+    rw [eval_mk]
+    simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, eval_of_isLit env _ _ hz,
+      eval_of_isLit env _ _ ho]
+    rcases eval_isBool2 env y' hb with e | e <;> rw [e] <;> decide
+  · simp at h
+
+theorem eval_or (a b : Tm) : eval env (Dom.bor a b) = Dom.bor (eval env a) (eval env b) := by
+  show eval env (mkOr a b) = eval env a ||| eval env b
+  unfold mkOr
+  split
+  · rename_i h
+    rw [eval_lit]
+    rcases Bool.or_eq_true_iff.mp h with h | h
+    · exact (isNotOf_or env a b h).symm
+    · rw [UInt32.or_comm]; exact (isNotOf_or env b a h).symm
+  · exact eval_or0 env a b
 
 theorem eval_shl (x a : Tm) : eval env (Dom.shl x a) = Dom.shl (eval env x) (eval env a) := by
   show eval env (mkShl x a) = eval env x <<< (eval env a &&& 31)
@@ -954,6 +1007,40 @@ theorem removeSub_sum : ∀ (xs ys r : List Tm), removeSub xs ys = some r →
       generalize List.foldr (fun x1 x2 => x1 + x2) 0 (List.map (eval env) r') = d
       bv_decide
 
+theorem eval_mkNe64' (a0 a1 b0 b1 : Tm) :
+    eval env (mkNe64' a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
+  simp [mkNe64', TOp.sem, Dom.ne64]
+theorem ne64_sel (c : UInt32) (h : c = 0 ∨ c = 1) :
+    c = Dom.ne64 (if c != 0 then (1 : UInt32) else 0) 0 0 0 := by
+  rcases h with rfl | rfl <;> decide
+theorem eval_mkNe64Z (a0 a1 b0 b1 : Tm) :
+    eval env (mkNe64Z a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
+  unfold mkNe64Z
+  split
+  · rename_i hz
+    simp only [Bool.and_eq_true] at hz
+    obtain ⟨⟨h1, h2⟩, h3⟩ := hz
+    split
+    · rename_i h c t e
+      split
+      · rename_i hb
+        simp only [Bool.and_eq_true] at hb
+        obtain ⟨⟨ht, he⟩, hc⟩ := hb
+        rw [eval_of_isLit env _ _ h1, eval_of_isLit env _ _ h2, eval_of_isLit env _ _ h3, eval_mk]
+        simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ]
+        rw [eval_of_isLit env _ _ ht, eval_of_isLit env _ _ he]
+        exact ne64_sel _ (eval_isBool2 env c hc)
+      · exact eval_mkNe64' env _ _ _ _
+    · exact eval_mkNe64' env _ _ _ _
+  · exact eval_mkNe64' env _ _ _ _
+theorem ne64_symm (a0 a1 b0 b1 : UInt32) : Dom.ne64 b0 b1 a0 a1 = Dom.ne64 a0 a1 b0 b1 := by
+  simp [Dom.ne64, bne_comm]
+theorem eval_ne64 (a0 a1 b0 b1 : Tm) :
+    eval env (Dom.ne64 a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
+  show eval env (mkNe64 a0 a1 b0 b1) = _
+  unfold mkNe64; split
+  · rw [eval_mkNe64Z, ne64_symm]
+  · exact eval_mkNe64Z env _ _ _ _
 theorem eval_mkUgt' (a b : Tm) : eval env (mkUgt' a b) = b2w (eval env a > eval env b) := by
   unfold mkUgt'
   split
@@ -966,6 +1053,30 @@ theorem eval_mkUgt' (a b : Tm) : eval env (mkUgt' a b) = b2w (eval env a > eval 
           have := (eval env a).toNat_lt; simp at this ⊢; omega)
         exact absurd hc (UInt32.not_lt.mpr this)
       simp [b2w, this]
+  split
+  · rename_i h
+    have e := eval_ne64 env b (lit 0) (lit 0xFFFFFFFF) (lit 0)
+    simp only [Dom.ne64] at e
+    show eval env (mkNe64 b (lit 0) (lit 0xFFFFFFFF) (lit 0)) = _
+    rw [e, eval_of_isLit env _ _ h]
+    simp only [eval_lit, join64, b2w]
+    generalize eval env b = v
+    have hj : (v.toUInt64 ||| (0 : UInt32).toUInt64 <<< 32 != (0xFFFFFFFF : UInt32).toUInt64 ||| (0 : UInt32).toUInt64 <<< 32)
+        = decide ((0xFFFFFFFF : UInt32) > v) := by
+      rw [Bool.eq_iff_iff]; simp only [bne_iff_ne, ne_eq, decide_eq_true_eq]; bv_decide
+    rw [hj]
+  split
+  · rename_i h
+    have e := eval_ne64 env a (lit 0) (lit 0) (lit 0)
+    simp only [Dom.ne64] at e
+    show eval env (mkNe64 a (lit 0) (lit 0) (lit 0)) = _
+    rw [e, eval_of_isLit env _ _ h]
+    simp only [eval_lit, join64, b2w]
+    generalize eval env a = v
+    have hj : (v.toUInt64 ||| (0 : UInt32).toUInt64 <<< 32 != (0 : UInt32).toUInt64 ||| (0 : UInt32).toUInt64 <<< 32)
+        = decide (v > (0 : UInt32)) := by
+      rw [Bool.eq_iff_iff]; simp only [bne_iff_ne, ne_eq, decide_eq_true_eq]; bv_decide
+    rw [hj]
   split
   · rename_i hs
     split
@@ -1069,40 +1180,6 @@ theorem eval_ugt (a b : Tm) : eval env (Dom.ugt a b) = Dom.ugt (eval env a) (eva
 theorem eval_ult64 (a0 a1 b0 b1 : Tm) :
     eval env (Dom.ult64 a0 a1 b0 b1) = Dom.ult64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
   show eval env (mkUlt64 a0 a1 b0 b1) = _; simp [mkUlt64, TOp.sem, Dom.ult64]
-theorem eval_mkNe64' (a0 a1 b0 b1 : Tm) :
-    eval env (mkNe64' a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
-  simp [mkNe64', TOp.sem, Dom.ne64]
-theorem ne64_sel (c : UInt32) (h : c = 0 ∨ c = 1) :
-    c = Dom.ne64 (if c != 0 then (1 : UInt32) else 0) 0 0 0 := by
-  rcases h with rfl | rfl <;> decide
-theorem eval_mkNe64Z (a0 a1 b0 b1 : Tm) :
-    eval env (mkNe64Z a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
-  unfold mkNe64Z
-  split
-  · rename_i hz
-    simp only [Bool.and_eq_true] at hz
-    obtain ⟨⟨h1, h2⟩, h3⟩ := hz
-    split
-    · rename_i h c t e
-      split
-      · rename_i hb
-        simp only [Bool.and_eq_true] at hb
-        obtain ⟨⟨ht, he⟩, hc⟩ := hb
-        rw [eval_of_isLit env _ _ h1, eval_of_isLit env _ _ h2, eval_of_isLit env _ _ h3, eval_mk]
-        simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ]
-        rw [eval_of_isLit env _ _ ht, eval_of_isLit env _ _ he]
-        exact ne64_sel _ (eval_isBool2 env c hc)
-      · exact eval_mkNe64' env _ _ _ _
-    · exact eval_mkNe64' env _ _ _ _
-  · exact eval_mkNe64' env _ _ _ _
-theorem ne64_symm (a0 a1 b0 b1 : UInt32) : Dom.ne64 b0 b1 a0 a1 = Dom.ne64 a0 a1 b0 b1 := by
-  simp [Dom.ne64, bne_comm]
-theorem eval_ne64 (a0 a1 b0 b1 : Tm) :
-    eval env (Dom.ne64 a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
-  show eval env (mkNe64 a0 a1 b0 b1) = _
-  unfold mkNe64; split
-  · rw [eval_mkNe64Z, ne64_symm]
-  · exact eval_mkNe64Z env _ _ _ _
 theorem eval_nez64 (a b : Tm) : eval env (Dom.nez64 a b) = Dom.nez64 (eval env a) (eval env b) := by
   show eval env (mkNez64 a b) = _; simp [mkNez64, TOp.sem, Dom.nez64]
 theorem eval_pack (bs : List Tm) : eval env (Dom.pack bs) = Dom.pack (bs.map (eval env)) := by
