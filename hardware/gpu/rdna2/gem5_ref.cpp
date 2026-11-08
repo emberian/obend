@@ -2,7 +2,7 @@
 // for Obend.Hardware.Gpu.Rdna2.Semantics (hardware/gpu/rdna2/gem5_ref.py drives it; the vectors land in
 // gem5_vectors.tsv). Each case copies the expression of the named body from
 // github.com/gem5/gem5 stable (9d368896ce119c17e1289dcbb18f33624724b843) src/arch/amdgpu/vega/insts/*.cc,
-// line numbers of that revision; the operand model is gem5's: a destination ScalarOperand starts zeroed
+// line numbers and instruction symbols refer to that revision; the operand model is gem5's: a destination ScalarOperand starts zeroed
 // (operand.hh:401, std::memset) and setBit writes one lane's bit, so lanes with EXEC clear leave 0 in a
 // mask result; VecOperand writes only lanes with execMask set. Registers follow the fixed assignment of
 // gem5_ref.py (sources v0, v1 / v[0:1], v[2:3], s[0:1], s[2:3]; destinations v4 / v[4:5], s[4:5]).
@@ -139,6 +139,68 @@ static std::string execute(const std::string &name, State &st, int nwords) {
         if (in.exec == 0) st.pc = in.pc + 1 + 5;
     } else if (name == "S_ENDPGM") {                            // sopp.cc Inst_SOPP__S_ENDPGM: the wave ends; no register effect
     } else if (name == "S_WAITCNT") {                           // sopp.cc Inst_SOPP__S_WAITCNT: no architectural effect in gem5's model either
+    } else if (name == "V_READFIRSTLANE_B32") {              // vop1.cc Inst_VOP1__V_READFIRSTLANE_B32::execute
+        int lane = 0;
+        if (execm) { while (!bits(execm, lane)) ++lane; }
+        st.s[4] = src0(lane);
+    } else if (name == "V_MIN_U32") {                         // vop2.cc Inst_VOP2__V_MIN_U32::execute
+        LANES { vdst(lane, std::min(src0(lane), src1(lane))); }
+    } else if (name == "V_LSHRREV_B32") {                     // vop3.cc Inst_VOP3__V_LSHRREV_B32::execute
+        LANES { vdst(lane, src1(lane) >> bits(src0(lane), 4, 0)); }
+    } else if (name == "V_ADD_LSHL_U32") {                    // vop3.cc Inst_VOP3__V_ADD_LSHL_U32::execute
+        LANES { vdst(lane, (src0(lane) + src1(lane)) << bits(src2(lane), 4, 0)); }
+    } else if (name == "V_CMP_GE_U32") {                      // vopc.cc Inst_VOPC__V_CMP_GE_U32::execute
+        LANES { setBit(sdst, lane, src0(lane) >= src1(lane)); }
+        st.vcc = sdst;
+    } else if (name == "S_ADD_U32" || name == "S_ADDC_U32") { // sop2.cc Inst_SOP2__S_ADD_U32::execute and Inst_SOP2__S_ADDC_U32::execute
+        uint64_t ci = name == "S_ADDC_U32" ? in.scc : 0;
+        st.s[4] = in.s[0] + in.s[1] + ci;
+        st.scc = ((uint64_t)in.s[0] + (uint64_t)in.s[1] + ci) >= 0x100000000ULL;
+    } else if (name == "S_SUB_I32") {                         // sop2.cc Inst_SOP2__S_SUB_I32::execute; unsigned storage preserves bit-pattern without C++ signed-overflow UB
+        st.s[4] = in.s[0] - in.s[1];
+        st.scc = bits(in.s[0],31) != bits(in.s[1],31) && bits(in.s[0],31) != bits(st.s[4],31);
+    } else if (name == "S_MAX_U32") {                         // sop2.cc Inst_SOP2__S_MAX_U32::execute
+        st.s[4] = std::max(in.s[0], in.s[1]); st.scc = in.s[0] > in.s[1];
+    } else if (name == "S_XOR_B32") {                         // sop2.cc Inst_SOP2__S_XOR_B32::execute
+        st.s[4] = in.s[0] ^ in.s[1]; st.scc = st.s[4] != 0;
+    } else if (name == "S_MUL_I32") {                         // sop2.cc Inst_SOP2__S_MUL_I32::execute; widen before multiplying to avoid the upstream expression's C++ signed-overflow UB
+        int64_t product = (int64_t)(int32_t)in.s[0] * (int64_t)(int32_t)in.s[1];
+        st.s[4] = (uint64_t)product & 0xffffffffULL;
+    } else if (name == "S_MUL_HI_U32") {                      // sop2.cc Inst_SOP2__S_MUL_HI_U32::execute
+        st.s[4] = ((uint64_t)in.s[0] * (uint64_t)in.s[1]) >> 32;
+    } else if (name == "S_OR_B64") {                          // sop2.cc Inst_SOP2__S_OR_B64::execute
+        uint64_t d = s01 | s23; writeS45(d); st.scc = d != 0;
+    } else if (name == "S_ANDN2_B64") {                       // sop2.cc Inst_SOP2__S_ANDN2_B64::execute
+        uint64_t d = s01 & ~s23; writeS45(d); st.scc = d != 0;
+    } else if (name == "S_CSELECT_B64") {                     // sop2.cc Inst_SOP2__S_CSELECT_B64::execute
+        writeS45(in.scc ? s01 : s23);
+    } else if (name == "S_BFM_B64") {                         // sop2.cc Inst_SOP2__S_BFM_B64::execute
+        writeS45(((1ULL << bits(in.s[0],5,0)) - 1) << bits(in.s[1],5,0));
+    } else if (name == "S_AND_SAVEEXEC_B64") {                 // sop1.cc Inst_SOP1__S_AND_SAVEEXEC_B64::execute
+        writeS45(in.exec); st.exec = s01 & in.exec; st.scc = st.exec != 0;
+    } else if (name == "S_CMP_EQ_I32") {                      // sopc.cc Inst_SOPC__S_CMP_EQ_I32::execute
+        st.scc = in.s[0] == in.s[1];
+    } else if (name == "S_BRANCH") {                          // sopp.cc Inst_SOPP__S_BRANCH::execute
+        st.pc = in.pc + 1 + 5;
+    } else if (name == "S_CBRANCH_SCC0") {                    // sopp.cc Inst_SOPP__S_CBRANCH_SCC0::execute
+        if (!in.scc) st.pc = in.pc + 1 + 5;
+    } else if (name == "S_OR_B32") {                           // sop2.cc Inst_SOP2__S_OR_B32::execute
+        st.s[4] = in.s[0] | in.s[1]; st.scc = st.s[4] != 0;
+    } else if (name == "S_CMP_LG_I32") {                      // sopc.cc Inst_SOPC__S_CMP_LG_I32::execute
+        st.scc = in.s[0] != in.s[1];
+    } else if (name == "S_CMP_GE_U32") {                      // sopc.cc Inst_SOPC__S_CMP_GE_U32::execute
+        st.scc = in.s[0] >= in.s[1];
+    } else if (name == "S_GETPC_B64") {                       // sop1.cc Inst_SOP1__S_GETPC_B64::execute: gem5 PC is bytes, this harness PC is dwords
+        writeS45(4 * in.pc + 4);
+    } else if (name == "S_CBRANCH_SCC1") {                    // sopp.cc Inst_SOPP__S_CBRANCH_SCC1::execute
+        if (in.scc) st.pc = in.pc + 1 + 5;
+    } else if (name == "V_CMP_GT_U64") {                      // vopc.cc Inst_VOPC__V_CMP_GT_U64::execute
+        LANES { setBit(sdst, lane, src0_64(lane) > src1_64(lane)); }
+        st.vcc = sdst;
+    } else if (name == "V_SUBREV_CO_U32") {                   // vop3.cc Inst_VOP3__V_SUBREV_CO_U32::execute
+        LANES { vdst(lane, src1(lane) - src0(lane)); setBit(sdst, lane, src0(lane) > src1(lane)); }
+        writeS45(sdst);
+    } else if (name == "S_NOP") {                             // sopp.cc Inst_SOPP__S_NOP::execute: delay only
     } else {
         std::cerr << "no reference for " << name << "\n"; exit(2);
     }
@@ -162,6 +224,13 @@ int main(int argc, char **argv) {
             st.vcc = rnd(); st.scc = rnd() & 1; st.pc = 0;
             for (int i = 0; i < 8; ++i) st.s[i] = rnd32();
             for (int r = 0; r < 6; ++r) for (int l = 0; l < 64; ++l) st.v[r][l] = rnd32();
+            // Explicit high-lane and scalar carry/overflow boundaries supplement random states.
+            if (name == "V_READFIRSTLANE_B32" && t == 2) st.exec = 1ULL << 32;
+            if (name == "V_READFIRSTLANE_B32" && t == 3) st.exec = 1ULL << 63;
+            if ((name == "S_ADD_U32" || name == "S_ADDC_U32") && t == 2) { st.s[0] = 0xffffffff; st.s[1] = 0; st.scc = true; }
+            if ((name == "S_ADD_U32" || name == "S_ADDC_U32") && t == 3) { st.s[0] = 0xffffffff; st.s[1] = 1; st.scc = false; }
+            if (name == "S_SUB_I32" && t == 2) { st.s[0] = 0x80000000; st.s[1] = 1; }
+            if (name == "S_SUB_I32" && t == 3) { st.s[0] = 0x7fffffff; st.s[1] = 0xffffffff; }
             State in = st;
             std::string skip = execute(name, st, (int)words.size());
             std::ostringstream o;

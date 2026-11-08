@@ -58,15 +58,26 @@ def readWord (p : GpuProgram) (lay : Memory) (known : Known) (j : Nat) : TP :=
 
 instance : Hashable Residual := ⟨fun r => mixHash r.lhs.hsh r.rhs.hsh⟩
 
+/-- A kernel's value at an element: a fold kernel's from the stage's cache `kc` (computed once per
+dispatch, `foldValues`), any other's from `pKernel`. -/
+def kvOf (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (kc : List (Kernel × Array TP)) (k : Kernel) (e : Nat) : Option TP :=
+  match kc.find? (·.1 == k) with
+  | some (_, arr) => arr[e]?
+  | none => pKernel cs ix rd k e
+
+/-- The fold kernels of a stage with their values. -/
+def foldCache (rd : Nat → TP) (stage : GpuStage) : List (Kernel × Array TP) :=
+  stage.kernels.filterMap fun k => (foldValues rd k).map (k, ·)
+
 /-- One stored dword: in the wire buffer, owned, and specified; its residual, `none` if trivial. -/
-def storeOk (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (known : Known) (a : UInt64) (t : Tm) : Option (Option Residual) :=
+def storeOk (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (known : Known) (kc : List (Kernel × Array TP)) (a : UInt64) (t : Tm) : Option (Option Residual) :=
   if !inW p.words a then none else
   let off := (a - wDw).toNat
   let i := off / 2
   match stage.kernels.find? (·.owns i) with
   | none => none
   | some k =>
-    (pKernel cs ix (readWord p lay known) k (i - k.dstBase)).bind fun sp =>
+    (kvOf cs ix (readWord p lay known) kc k (i - k.dstBase)).bind fun sp =>
       -- one object for each common subterm, then: the same term, or its residual
       let q := ShareCommon.shareCommon' (t, if off % 2 == 0 then sp.1 else sp.2)
       if q.1 == q.2 then some none
@@ -77,24 +88,24 @@ structure Acc where
   updates : List (UInt64 × Option UInt32)
   needed : Std.HashSet Residual
 
-def checkStores (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (known : Known) : List (UInt64 × Tm) → Acc → Option Acc
+def checkStores (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (known : Known) (kc : List (Kernel × Array TP)) : List (UInt64 × Tm) → Acc → Option Acc
   | [], acc => some acc
   | (a, t) :: rest, acc =>
     if acc.stored.contains a then none else
-    (storeOk p lay cs ix stage known a t).bind fun r? =>
-      checkStores p lay cs ix stage known rest
+    (storeOk p lay cs ix stage known kc a t).bind fun r? =>
+      checkStores p lay cs ix stage known kc rest
         { stored := acc.stored.insert a, updates := (a, t.litVal?) :: acc.updates,
           needed := match r? with | some r => acc.needed.insert r | none => acc.needed }
 
 def symWave (p : GpuProgram) (lay : Memory) (prog : Program) (known : Known) (stored : Std.HashSet UInt64) (g : Nat) : SymWave :=
   run prog (fuelOf prog) (initWave (⟨{}, baseView p lay known stored⟩ : SymMem) descSetLo g)
 
-def checkWaves (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (prog : Program) (known : Known) : List Nat → Acc → Option Acc
+def checkWaves (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (prog : Program) (known : Known) (kc : List (Kernel × Array TP)) : List Nat → Acc → Option Acc
   | [], acc => some acc
   | g :: gs, acc =>
     let st := symWave p lay prog known acc.stored g
     if st.err.isNone && st.halted then
-      (checkStores p lay cs ix stage known st.mem.stores.toList acc).bind (checkWaves p lay cs ix stage prog known gs)
+      (checkStores p lay cs ix stage known kc st.mem.stores.toList acc).bind (checkWaves p lay cs ix stage prog known kc gs)
     else none
 
 def ownedDwords (stage : GpuStage) : List UInt64 :=
@@ -106,7 +117,7 @@ def applyUpdates (known : Known) (us : List (UInt64 × Option UInt32)) : Known :
 /-- One dispatch: the known constants after it and the residuals it needs. -/
 def checkStage (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (prog : Program) (known : Known) :
     Option (Known × Std.HashSet Residual) :=
-  (checkWaves p lay cs ix stage prog known (List.range (groupsOf stage.threads)) ⟨{}, [], {}⟩).bind fun acc =>
+  (checkWaves p lay cs ix stage prog known (foldCache (readWord p lay known) stage) (List.range (groupsOf stage.threads)) ⟨{}, [], {}⟩).bind fun acc =>
     if (ownedDwords stage).all acc.stored.contains then some (applyUpdates known acc.updates, acc.needed) else none
 
 /-- Every dispatch; the residuals they need. -/

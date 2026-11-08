@@ -878,6 +878,64 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
   case ds_read_b64 => exact execDs_hom h hm R hR i s 2 false hres
   case ds_write_b64 => exact execDs_hom h hm R hR i s 2 true hres
   case ds_write_b128 => exact execDs_hom h hm R hR i s 4 true hres
+  case s_addc_u32 | s_or_b32 =>
+    refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
+    · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
+    · intro ab hab
+      have := sop32_hom h hm R hR s _ _ _ hab
+      simp only [h.addc, h.carryc, h.bor, h.nez64, h.lit] at this
+      exact this
+  case s_mul_i32 | s_mul_hi_u32 =>
+    refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
+    · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
+    · intro ab hab
+      have := writeScalarDst_hom h hm R hR s _ _ hab
+      simp only [h.mul, h.mulHi] at this
+      exact this
+  case s_bfm_b64 =>
+    refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
+    · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
+    · intro ab hab
+      dsimp only at hab ⊢
+      have := writeScalarDst64_hom h hm R hR s _ _ hab
+      have e := h.shl64 ab.1 (Dom.lit 1) (Dom.lit 0)
+      simp only [Prod.map, h.lit] at e
+      have e2 := h.shl64 ab.2 (Dom.sub (Dom.shl64 ab.1 (Dom.lit 1) (Dom.lit 0)).1 (Dom.lit 1))
+        (Dom.subc (Dom.shl64 ab.1 (Dom.lit 1) (Dom.lit 0)).2 (Dom.lit 0) (Dom.borrow (Dom.shl64 ab.1 (Dom.lit 1) (Dom.lit 0)).1 (Dom.lit 1)))
+      simp only [Prod.map, h.sub, h.subc, h.borrow, h.lit] at e2
+      rw [← e, ← e2]
+      simpa [pmap] using this
+  case s_cmp_lg_i32 | s_cmp_ge_u32 =>
+    refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
+    · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
+    · intro ab _
+      simp only [mapW, h.ne64, h.ule, h.lit]
+  case s_getpc_b64 =>
+    have := writeScalarDst64_hom h hm R hR s _ _ hres
+    simp only [pmap, h.lit] at this
+    exact this
+  case s_cbranch_scc1 =>
+    refine withSome_hom h hm (conc_rel h hm R hR s.scc) s _ _ _ ?_ hres
+    intro c _
+    simp only [id]
+    split <;> rfl
+  case s_inst_prefetch =>
+    split
+    · rfl
+    · exact (fail_hom h hm s _).symm
+  case v_readfirstlane_b32 =>
+    try dsimp only at hres ⊢
+    by_cases hc : (isSdwa i || srcCode i 0 < 256 || srcCode i 0 > 511) = true
+    · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
+    · rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
+      rw [← readVgpr_hom h hm]
+      exact writeScalarDst_hom h hm R hR s _ _ hres
+  case v_subrev_co_u32 =>
+    exact valuLanesCarry_hom h hm R hR i s _ _ (fun a b _ => by simp [pmap, h.sub, h.borrow]) hres
+  case v_cmp_ge_u32 => exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ule, (hs src).1, (hs src).2.1]) hres
+  case v_cmp_gt_u64 =>
+    exact valuCompare_hom h hm R hR i s true _ _
+      (fun src => by rw [h.ult64, (hs src).1, (hs src).2.1, (hs src).2.2.1, (hs src).2.2.2]) hres
   case unknown => exact (fail_hom h hm s _).symm
   all_goals rfl
 

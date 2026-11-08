@@ -1,0 +1,40 @@
+Obend/Teeth/Hardware/Rdna2Runs.lean:22:86: error: Tactic `native_decide` evaluated that the proposition
+  checkGraph diamondIsa diamondPlan diamondExpected = true
+is false
+Obend/Teeth/Hardware/Rdna2Runs.lean:23:0: error: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.diamond_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+Obend/Teeth/Hardware/Rdna2Runs.lean:43:114: error: Tactic `native_decide` evaluated that the proposition
+  checkGraph opticLinearmacIsa opticLinearmacPlan opticLinearmacExpected = true
+is false
+Obend/Teeth/Hardware/Rdna2Runs.lean:44:0: error: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.opticLinearmac_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+Obend/Teeth/Hardware/Rdna2Runs.lean:50:82: error: Tactic `native_decide` evaluated that the proposition
+  checkGraph allopsIsa allopsPlan allopsExpected = true
+is false
+Obend/Teeth/Hardware/Rdna2Runs.lean:51:0: error: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.allops_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+Obend/Teeth/Hardware/Rdna2Runs.lean:57:78: error: Tactic `native_decide` evaluated that the proposition
+  checkGraph glmulIsa glmulPlan glmulExpected = true
+is false
+Obend/Teeth/Hardware/Rdna2Runs.lean:58:0: error: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.glmul_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.
+Obend/Teeth/Hardware/Rdna2Runs.lean:64:74: error: Tactic `native_decide` evaluated that the proposition
+  checkGraph ntt4Isa ntt4Plan ntt4Expected = true
+is false
+Obend/Teeth/Hardware/Rdna2Runs.lean:65:0: error: compiled-pin FAIL: Obend.Teeth.Hardware.Rdna2Runs.ntt4_runs rests on 1 axiom(s) this command REFUSES to certify as compiled evaluation:
+  sorryAx : (α : Sort u) →
+    Bool →
+      α — NOT a compiled-evaluation claim. A `native_decide`/`bv_decide` oracle has type `<closed Bool expr> = true`; this axiom asserts something else, so there is nothing to re-run and nothing here is checkable by compiled evaluation
+A compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name.

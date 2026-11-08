@@ -1,0 +1,247 @@
+=== [1/4] byte equality: committed plan, shaders and expected.tsv == obend-emit-gpu ===
+    diamond: 9 wires (9 words), 5 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/diamond
+    optic-mul: 9 wires (9 words), 3 edges, 3 after fusion, 0 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/optic-mul
+    optic-linearmac: 9 wires (9 words), 4 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/optic-linearmac
+    optic-bilinear: 9 wires (9 words), 6 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/optic-bilinear
+    adjoint-mul-add: 12 wires (12 words), 7 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/adjoint-mul-add
+    adjoint-square-bilinear: 13 wires (13 words), 9 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/adjoint-square-bilinear
+    allops: 11 wires (11 words), 8 edges, 3 after fusion, 6 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/allops
+    muxchain: 8 wires (8 words), 4 edges, 2 after fusion, 1 constants, 0 indices, 1 dispatches (2 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/muxchain
+    tree512: 1023 wires (1023 words), 511 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/tree512
+    mac-reverse-1000: 5 wires (5000 words), 3 edges, 3 after fusion, 1000 constants, 1000 indices, 3 dispatches (1,1,1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/mac-reverse-1000
+    glmul-4: 45 wires (180 words), 43 edges, 4 after fusion, 12 constants, 0 indices, 2 dispatches (3,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/glmul-4
+    glmul-256: 45 wires (11520 words), 43 edges, 4 after fusion, 768 constants, 0 indices, 2 dispatches (3,1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/glmul-256
+    ntt-4: 113 wires (232 words), 112 edges, 16 after fusion, 8 constants, 12 indices, 7 dispatches (6,2,2,1,2,2,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-4
+    ntt-16: 221 wires (1808 words), 220 edges, 28 after fusion, 32 constants, 96 indices, 13 dispatches (6,4,2,1,2,2,1,2,2,1,2,2,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-16
+    ntt-64: 329 wires (10752 words), 328 edges, 40 after fusion, 128 constants, 576 indices, 19 dispatches (6,6,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-64
+    ntt-1024: 545 wires (284672 words), 544 edges, 64 after fusion, 2048 constants, 15360 indices, 31 dispatches (6,10,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 6 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-1024
+    ntt-65536: 869 wires (29032448 words), 868 edges, 100 after fusion, 131072 constants, 1572864 indices, 49 dispatches (6,16,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1,2,2,1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/ntt-65536
+    soac-boundaries: 27 wires (184 words), 26 edges, 26 after fusion, 0 constants, 8 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-boundaries
+    soac-empty: 27 wires (16 words), 26 edges, 26 after fusion, 0 constants, 0 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-empty
+    soac-no-segments: 27 wires (4 words), 26 edges, 26 after fusion, 0 constants, 0 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-no-segments
+    soac-single-65536: 27 wires (1245192 words), 26 edges, 26 after fusion, 0 constants, 65536 indices, 3 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-single-65536
+    soac-segments-64x1024: 27 wires (1245444 words), 26 edges, 26 after fusion, 0 constants, 65536 indices, 3 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/soac-segments-64x1024
+    source-leaf-affine: 5 wires (55 words), 4 edges, 1 after fusion, 2 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-affine
+    source-leaf-mux: 10 wires (110 words), 9 edges, 1 after fusion, 4 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-mux
+    source-leaf-shl: 3 wires (30 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-shl
+    source-leaf-shr: 3 wires (30 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-shr
+    source-leaf-fixed-square: 2 wires (22 words), 1 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.Np6VNK/emit/source-leaf-fixed-square
+  ntt-65536: digests identical (kept as graphs/ntt-65536.sha256)
+  soac-single-65536: digests identical (kept as graphs/soac-single-65536.sha256)
+  soac-segments-64x1024: digests identical (kept as graphs/soac-segments-64x1024.sha256)
+  27 graphs identical
+=== [2/4] the device against runProgram ===
+  diamond: 12 vectors, 1 dispatches, 0 disagree, 0.263 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-mul: 12 vectors, 1 dispatches, 0 disagree, 0.264 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-linearmac: 12 vectors, 1 dispatches, 0 disagree, 0.268 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.249 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  adjoint-mul-add: 12 vectors, 1 dispatches, 0 disagree, 0.289 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  adjoint-square-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.291 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  allops: 12 vectors, 1 dispatches, 0 disagree, 0.266 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  muxchain: 12 vectors, 1 dispatches, 0 disagree, 0.264 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  tree512: 6 vectors, 1 dispatches, 0 disagree, 0.482 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  mac-reverse-1000: 6 vectors, 3 dispatches, 0 disagree, 0.495 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  glmul-4: 12 vectors, 2 dispatches, 0 disagree, 0.284 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  glmul-256: 6 vectors, 2 dispatches, 0 disagree, 0.488 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-4: 12 vectors, 7 dispatches, 0 disagree, 0.440 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-16: 12 vectors, 13 dispatches, 0 disagree, 0.582 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-64: 6 vectors, 19 dispatches, 0 disagree, 1.250 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-1024: 6 vectors, 31 dispatches, 0 disagree, 1.917 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-65536: 2 vectors, 49 dispatches, 0 disagree, 49.943 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-boundaries: 12 vectors, 3 dispatches, 0 disagree, 0.330 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-empty: 12 vectors, 3 dispatches, 0 disagree, 0.311 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-no-segments: 12 vectors, 3 dispatches, 0 disagree, 0.299 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-single-65536: 2 vectors, 3 dispatches, 0 disagree, 94.633 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-segments-64x1024: 2 vectors, 3 dispatches, 0 disagree, 19.648 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-affine: 2 vectors, 1 dispatches, 0 disagree, 1.116 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-mux: 2 vectors, 1 dispatches, 0 disagree, 1.182 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-shl: 2 vectors, 1 dispatches, 0 disagree, 1.090 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-shr: 2 vectors, 1 dispatches, 0 disagree, 1.143 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-fixed-square: 2 vectors, 1 dispatches, 0 disagree, 1.072 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+=== [3/4] teeth: each planted rule must make some graph's comparison fail ===
+  addAsSub: caught on diamond optic-linearmac adjoint-mul-add adjoint-square-bilinear allops tree512 glmul-4 glmul-256 ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 soac-boundaries soac-single-65536 soac-segments-64x1024 source-leaf-affine source-leaf-mux
+  swapMux: caught on allops muxchain glmul-4 glmul-256 ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 source-leaf-mux
+=== [4/4] the ISA: RADV's final assembly and resource usage of every stage, under isa/ ===
+  diamond:
+    stage 0: 1 threads -> 32 instructions, 1 stores; VGPRs 16, LDS 0
+  optic-mul:
+    stage 0: 3 threads -> 61 instructions, 3 stores; VGPRs 16, LDS 0
+  optic-linearmac:
+    stage 0: 3 threads -> 68 instructions, 3 stores; VGPRs 8, LDS 0
+  optic-bilinear:
+    stage 0: 3 threads -> 88 instructions, 3 stores; VGPRs 16, LDS 0
+  adjoint-mul-add:
+    stage 0: 3 threads -> 88 instructions, 3 stores; VGPRs 16, LDS 0
+  adjoint-square-bilinear:
+    stage 0: 3 threads -> 110 instructions, 3 stores; VGPRs 16, LDS 0
+  allops:
+    stage 0: 3 threads -> 131 instructions, 3 stores; VGPRs 24, LDS 0
+  muxchain:
+    stage 0: 2 threads -> 54 instructions, 2 stores; VGPRs 16, LDS 0
+  tree512:
+    stage 0: 1 threads -> 1890 instructions, 1 stores; VGPRs 32, LDS 0
+  mac-reverse-1000:
+    stage 0: 1000 threads -> 14 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 1000 threads -> 25 instructions, 1 stores; VGPRs 16, LDS 0
+    stage 2: 1000 threads -> 17 instructions, 1 stores; VGPRs 8, LDS 0
+  glmul-4:
+    stage 0: 12 threads -> 45 instructions, 3 stores; VGPRs 8, LDS 0
+    stage 1: 4 threads -> 136 instructions, 1 stores; VGPRs 32, LDS 0
+  glmul-256:
+    stage 0: 768 threads -> 48 instructions, 3 stores; VGPRs 8, LDS 0
+    stage 1: 256 threads -> 140 instructions, 1 stores; VGPRs 32, LDS 0
+  ntt-4:
+    stage 0: 12 threads -> 101 instructions, 6 stores; VGPRs 8, LDS 0
+    stage 1: 4 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 2: 4 threads -> 300 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 3: 4 threads -> 16 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 4: 4 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 5: 4 threads -> 300 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 6: 4 threads -> 16 instructions, 1 stores; VGPRs 8, LDS 0
+  ntt-16:
+    stage 0: 48 threads -> 101 instructions, 6 stores; VGPRs 8, LDS 0
+    stage 1: 32 threads -> 77 instructions, 4 stores; VGPRs 8, LDS 0
+    stage 2: 16 threads -> 300 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 3: 16 threads -> 16 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 4: 16 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 5: 16 threads -> 302 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 6: 16 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 7: 16 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 8: 16 threads -> 308 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 9: 16 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 10: 16 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 11: 16 threads -> 308 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 12: 16 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+  ntt-64:
+    stage 0: 192 threads -> 101 instructions, 6 stores; VGPRs 8, LDS 0
+    stage 1: 192 threads -> 117 instructions, 6 stores; VGPRs 8, LDS 0
+    stage 2: 64 threads -> 302 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 3: 64 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 4: 64 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 5: 64 threads -> 308 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 6: 64 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 7: 64 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 8: 64 threads -> 308 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 9: 64 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 10: 64 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 11: 64 threads -> 308 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 12: 64 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 13: 64 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 14: 64 threads -> 308 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 15: 64 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 16: 64 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 17: 64 threads -> 308 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 18: 64 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+  ntt-1024:
+    stage 0: 3072 threads -> 105 instructions, 6 stores; VGPRs 8, LDS 0
+    stage 1: 5120 threads -> 197 instructions, 10 stores; VGPRs 8, LDS 0
+    stage 2: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 3: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 4: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 5: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 6: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 7: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 8: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 9: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 10: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 11: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 12: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 13: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 14: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 15: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 16: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 17: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 18: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 19: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 20: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 21: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 22: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 23: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 24: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 25: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 26: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 27: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 28: 1024 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 29: 1024 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 30: 1024 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+  ntt-65536:
+    stage 0: 196608 threads -> 105 instructions, 6 stores; VGPRs 8, LDS 0
+    stage 1: 524288 threads -> 317 instructions, 16 stores; VGPRs 8, LDS 0
+    stage 2: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 3: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 4: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 5: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 6: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 7: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 8: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 9: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 10: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 11: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 12: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 13: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 14: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 15: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 16: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 17: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 18: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 19: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 20: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 21: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 22: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 23: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 24: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 25: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 26: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 27: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 28: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 29: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 30: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 31: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 32: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 33: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 34: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 35: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 36: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 37: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 38: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 39: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 40: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 41: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 42: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 43: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 44: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 45: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 46: 65536 threads -> 37 instructions, 2 stores; VGPRs 8, LDS 0
+    stage 47: 65536 threads -> 314 instructions, 2 stores; VGPRs 32, LDS 0
+    stage 48: 65536 threads -> 19 instructions, 1 stores; VGPRs 8, LDS 0
+  soac-boundaries:
+    stage 0: 8 threads -> 13 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 96 threads -> 1371 instructions, 16 stores; VGPRs 24, LDS 0
+    stage 2: 8 threads -> 17 instructions, 1 stores; VGPRs 8, LDS 0
+  soac-empty:
+    stage 0: 0 threads -> 1 instructions, 0 stores; VGPRs 8, LDS 0
+    stage 1: 48 threads -> 101 instructions, 8 stores; VGPRs 8, LDS 0
+    stage 2: 0 threads -> 1 instructions, 0 stores; VGPRs 8, LDS 0
+  soac-no-segments:
+    stage 0: 0 threads -> 1 instructions, 0 stores; VGPRs 8, LDS 0
+    stage 1: 12 threads -> 49 instructions, 4 stores; VGPRs 8, LDS 0
+    stage 2: 0 threads -> 1 instructions, 0 stores; VGPRs 8, LDS 0
+  soac-single-65536:
+    stage 0: 65536 threads -> 14 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 24 threads -> 1019 instructions, 24 stores; VGPRs 8, LDS 0
+    stage 2: 65536 threads -> 17 instructions, 1 stores; VGPRs 8, LDS 0
+  soac-segments-64x1024:
+    stage 0: 65536 threads -> 14 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 780 threads -> 1210 instructions, 24 stores; VGPRs 16, LDS 0
+    stage 2: 65536 threads -> 17 instructions, 1 stores; VGPRs 8, LDS 0
+  source-leaf-affine:
+    stage 0: 11 threads -> 23 instructions, 1 stores; VGPRs 8, LDS 0
+  source-leaf-mux:
+    stage 0: 11 threads -> 31 instructions, 1 stores; VGPRs 16, LDS 0
+  source-leaf-shl:
+    stage 0: 10 threads -> 20 instructions, 1 stores; VGPRs 8, LDS 0
+  source-leaf-shr:
+    stage 0: 10 threads -> 20 instructions, 1 stores; VGPRs 8, LDS 0
+  source-leaf-fixed-square:
+    stage 0: 11 threads -> 16 instructions, 1 stores; VGPRs 8, LDS 0
+[PASS] hardware/gpu

@@ -8,13 +8,13 @@
 #                             dump, the Lean decoder's text equals `llvm-mc --disassemble` (LLVM 19,
 #                             gfx1031, wave64); [3] every bit of every instruction's machine code, flipped,
 #                             changes the decoding or fails it, unless the bit lies in no field the
-#                             specification names; [4] smoke test of the concrete model: diamond's dumped
-#                             programs, run from each vector's inputs, give expected.tsv, and a planted bit
-#                             flip in one store is caught; [5] gem5's Vega execute() bodies (rdna2/gem5_ref.cpp), on random
+#                             specification names; [4] every graph's dumped programs, run on the model from
+#                             each vector's inputs, give expected.tsv, and a planted bit flip in one store
+#                             is caught; [5] gem5's Vega execute() bodies (rdna2/gem5_ref.cpp), on random
 #                             register states, agree with the model's step on every twin instruction;
 #                             [6] every stage's s_waitcnts are sufficient (Obend.Hardware.Gpu.Rdna2.Waitcnt:
 #                             no load destination touched before a wait that covers it), and a dump with
-#                             the first vmcnt wait of stage 0 replaced by s_nop 0 is refused; [7] the
+#                             a vector (or scalar-only) load wait replaced by s_nop 0 is refused; [7] the
 #                             certificate (Obend.Hardware.Gpu.Rdna2.Certified): the residual library
 #                             Residuals.lean is byte-identical to `obend-rdna2 reslib` over every dump, every
 #                             graph's dump is certified for every input (certifyNamed, the pinned check, with
@@ -34,6 +34,25 @@ if [[ "${1:-}" == "--stage" ]]; then STAGE="${2:?--stage N}"; fi
 run_stage() { [[ -z "${STAGE}" || "${STAGE}" == "$1" ]]; }
 [[ -x "${RDNA2}" ]] || { echo "[FAIL] ${RDNA2} missing: run \`lake build obend-rdna2\` in lean/" >&2; exit 1; }
 mapfile -t DUMPS < <(ls "${SCRIPT_DIR}"/isa/*.txt)
+EMIT="${OBEND_EMIT_GPU:-${REPO_ROOT}/lean/.lake/build/bin/obend-emit-gpu}"
+
+# graph_dir NAME : committed directory, or a graph kept as a digest. OBEND_GPU_ARTIFACTS
+# may name a read-only emission cache; every cached use checks the committed digest.
+# Unset it to emit digest-backed graphs freshly under WORK.
+graph_dir() {
+  if [[ -d "${SCRIPT_DIR}/graphs/$1" ]]; then
+    echo "${SCRIPT_DIR}/graphs/$1"
+  elif [[ -n "${OBEND_GPU_ARTIFACTS:-}" ]]; then
+    if ! (cd "${OBEND_GPU_ARTIFACTS}/$1" && sha256sum -c "${SCRIPT_DIR}/graphs/$1.sha256" >/dev/null); then
+      echo "[FAIL] $1: cached artifacts do not match graphs/$1.sha256" >&2
+      return 1
+    fi
+    echo "${OBEND_GPU_ARTIFACTS}/$1"
+  else
+    [[ -d "${WORK}/emit/$1" ]] || "${EMIT}" "$1" --out "${WORK}/emit/$1" >/dev/null || return 1
+    echo "${WORK}/emit/$1"
+  fi
+}
 
 if run_stage 1; then
 echo "=== [1/7] the generated modules == gen_encodings.py on the committed XML ==="
@@ -80,13 +99,107 @@ done
 fi
 
 if run_stage 4; then
-echo "=== [4/7] smoke: diamond's programs on the model from every vector; a planted store flip caught ==="
-"${RDNA2}" run "${SCRIPT_DIR}/graphs/diamond" --isa "${SCRIPT_DIR}/isa/diamond.txt" | sed 's/^/  /' || exit 1
-for g in diamond; do
-  # the first buffer_store of stage 0: VDATA's low bit (bit 40 of the instruction) names another register
-  idx=$(awk '/^## stage 0/{s=1; i=-1; next} /^## stage 1/{exit} s && /^\t/{i++; if ($0 ~ /buffer_store/) {print i; exit}}' "${SCRIPT_DIR}/isa/${g}.txt")
-  "${RDNA2}" run "${SCRIPT_DIR}/graphs/${g}" --isa "${SCRIPT_DIR}/isa/${g}.txt" --flip "0:${idx}:40" | sed 's/^/  /' || { echo "[FAIL] ${g}: a flipped store went unnoticed" >&2; exit 1; }
+echo "=== [4/7] the model: every graph's programs on every vector; a planted store flip caught ==="
+for d in "${DUMPS[@]}"; do
+  g="$(basename "${d}" .txt)"
+  dir="$(graph_dir "${g}")" || exit 1
+  "${RDNA2}" run "${dir}" --isa "${d}" | sed 's/^/  /' || exit 1
 done
+# Keep the original store teeth and exercise each emitted SOAC's fold stage as well.
+for d in "${DUMPS[@]}"; do
+  g="$(basename "${d}" .txt)"
+  case "${g}" in diamond|optic-mul|optic-bilinear|optic-linearmac|soac-*) ;; *) continue ;; esac
+  # Prefer a store after stage 0 for SOACs, so this changes a fold result rather than its input map.
+  specs=$(awk -v graph="${g}" '
+    /^## stage / {stage=$3; i=-1; next}
+    /^\t/ {i++; if ($0 ~ /buffer_store/) {
+      here=stage ":" i ":40";
+      if (graph ~ /^soac-/ && stage > 0) fold=fold here "\n";
+      else other=other here "\n";
+    }}
+    END {printf "%s%s", fold, other}' "${d}")
+  if [[ -z "${specs}" ]]; then
+    echo "  ${g}: no buffer store in the dump; no store mutation applies"
+    continue
+  fi
+  dir="$(graph_dir "${g}")" || exit 1
+  caught=""
+  # A zero identity can make a register substitution observationally identical. Try the
+  # remaining stores, still requiring one changed result for every graph with stores.
+  while IFS= read -r spec; do
+    if "${RDNA2}" run "${dir}" --isa "${d}" --flip "${spec}" >"${WORK}/store-plant.log" 2>&1; then
+      sed 's/^/  /' "${WORK}/store-plant.log"
+      caught=1
+      break
+    fi
+  done <<< "${specs}"
+  [[ -n "${caught}" ]] || { echo "[FAIL] ${g}: all store mutations went unnoticed" >&2; exit 1; }
+done
+# Embedded descriptors are executable data. An empty segment can leave a particular
+# word unobserved, so try each word until a changed value or checked address is observed.
+for d in "${DUMPS[@]}"; do
+  if ! grep -q '^\.data ' "${d}"; then continue; fi
+  g="$(basename "${d}" .txt)"
+  dir="$(graph_dir "${g}")" || exit 1
+  planted="${WORK}/${g}.pool-flip.txt"
+  python3 -I - "${d}" >"${WORK}/pool-words" <<'PYPOOLWORDS'
+import pathlib, sys
+stage = None
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if line.startswith("## stage "):
+        stage = int(line.split()[2])
+    elif line.startswith(".data "):
+        words = line.split()
+        for index in range(len(words) - 2):
+            print(f"{stage}:{int(words[1]) + 4 * index}")
+PYPOOLWORDS
+  caught=""
+  while IFS= read -r spec; do
+    python3 -I - "${d}" "${planted}" "${spec}" <<'PYPOOL'
+import pathlib, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+target_stage, target_offset = map(int, sys.argv[3].split(":"))
+stage = None
+for i, line in enumerate(lines):
+    if line.startswith("## stage "):
+        stage = int(line.split()[2])
+    elif stage == target_stage and line.startswith(".data "):
+        words = line.split()
+        offset = target_offset - int(words[1])
+        if 0 <= offset < 4 * (len(words) - 2) and offset % 4 == 0:
+            index = 2 + offset // 4
+            words[index] = f"{int(words[index], 16) ^ 1:08x}"
+            lines[i] = " ".join(words)
+            break
+else:
+    raise SystemExit("no constant-data word at " + sys.argv[3])
+pathlib.Path(sys.argv[2]).write_text("\n".join(lines) + "\n")
+PYPOOL
+    if "${RDNA2}" run "${dir}" --isa "${planted}" >"${WORK}/pool-plant.log" 2>&1; then
+      continue
+    fi
+    # A parser error is not evidence that the pool's contents reach execution.
+    if ! grep -Eq 'the model gives|load .*outside the memory' "${WORK}/pool-plant.log"; then
+      cat "${WORK}/pool-plant.log" >&2
+      echo "[FAIL] ${g}: pool corruption did not reach a value or address comparison" >&2; exit 1
+    fi
+    echo "  ${g}: corrupted embedded descriptor caught at stage ${spec%%:*}, byte offset ${spec#*:}"
+    sed 's/^/    /' "${WORK}/pool-plant.log"
+    caught=1
+    break
+  done <"${WORK}/pool-words"
+  if [[ -z "${caught}" ]]; then
+    # Mesa may retain a wholly unused pool after unrolling. Removing all data must
+    # still replay correctly before classifying the pool as unread on these vectors.
+    sed '/^\.data /d' "${d}" >"${WORK}/${g}.no-pool.txt"
+    if ! "${RDNA2}" run "${dir}" --isa "${WORK}/${g}.no-pool.txt" >"${WORK}/pool-removed.log" 2>&1; then
+      cat "${WORK}/pool-removed.log" >&2
+      echo "[FAIL] ${g}: pool is read but all descriptor mutations went unnoticed" >&2; exit 1
+    fi
+    echo "  ${g}: retained pool unread on this vector suite (complete removal still replays); no pool negative applies"
+  fi
+done
+
 fi
 if run_stage 5; then
 echo "=== [5/7] the model against gem5's Vega bodies on random register states ==="
@@ -101,9 +214,24 @@ for d in "${DUMPS[@]}"; do
 done
 for d in "${DUMPS[@]}"; do
   g="$(basename "${d}" .txt)"
-  idx=$(awk '/^## stage 0/{s=1; i=-1; next} /^## stage 1/{exit} s && /^\t/{i++; if ($0 ~ /s_waitcnt vmcnt/) {print i; exit}}' "${d}")
-  [[ -n "${idx}" ]] || { echo "[FAIL] ${g}: stage 0 has no s_waitcnt vmcnt" >&2; exit 1; }
-  "${RDNA2}" waitcnt "${d}" --nop "0:${idx}" | sed 's/^/  /' || { echo "[FAIL] ${g}: a removed wait went unnoticed" >&2; exit 1; }
+  # Empty folds may have no loads at all, or only scalar descriptor loads. Search every
+  # stage, preferring the vector-load wait, and retain a scalar-wait negative when needed.
+  spec=$(awk '
+    /^## stage / {stage=$3; i=-1; next}
+    /^\t/ {i++;
+      if ($0 ~ /s_waitcnt vmcnt/ && vm == "") vm=stage ":" i;
+      if ($0 ~ /s_waitcnt.*lgkmcnt/ && sm == "") sm=stage ":" i;
+    }
+    END {if (vm != "") print vm; else if (sm != "") print sm}' "${d}")
+  if [[ -z "${spec}" ]]; then
+    if grep -Eq '^[[:space:]]+(buffer_load|global_load|flat_load|ds_read|s_load|s_buffer_load)' "${d}"; then
+      echo "[FAIL] ${g}: loads exist but there is no wait to mutate" >&2; exit 1
+    fi
+    echo "  ${g}: no loads in the dump; no load-wait mutation applies"
+    continue
+  fi
+  "${RDNA2}" waitcnt "${d}" --nop "${spec}" | sed 's/^/  /' || {
+    echo "[FAIL] ${g}: a removed wait went unnoticed" >&2; exit 1; }
 done
 fi
 if run_stage 7; then

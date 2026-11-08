@@ -1,0 +1,16 @@
+[package]
+name = "obend-catgrad-oracle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+catgrad = { path = "@CATGRAD@/catgrad", features = ["serde", "ndarray-backend"] }
+serde_json = "1.0"
+open-hypergraphs = { path = "@OPEN_HYPERGRAPHS@" }
+
+[patch.crates-io]
+open-hypergraphs = { path = "@OPEN_HYPERGRAPHS@" }
+
+[[bin]]
+name = "obend-catgrad-oracle"
+path = "@SOURCE@/main.rs"

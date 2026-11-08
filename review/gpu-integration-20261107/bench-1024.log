@@ -1,0 +1,2 @@
+ntt-1024: 6 vectors, 3 dispatches, 0 disagree, 0.521 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+BENCH	ntt-1024	1024	3	gpu_us_median=13.360	gpu_us_p10=12.160	gpu_us_p90=15.400	host_batch_amortized_us=76.962	warmups=3	batch_repetitions=1027	final_output=exact

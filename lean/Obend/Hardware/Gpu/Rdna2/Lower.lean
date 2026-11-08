@@ -274,6 +274,14 @@ def pCode (cs : Array Word) (rd : Nat → TP) (e : Nat) : (Nat → TP) → List 
   | loc, [] => some loc
   | loc, i :: is => (pStep cs rd e loc i).bind fun loc' => pCode cs rd e loc' is
 
+/-- A fold's combining operation on pairs (`ReduceOp.combine`). -/
+def pCombine : ReduceOp → TP → TP → TP
+  | .add => pAdd | .mul => pMul | .band => pAnd | .bor => pOr
+
+/-- `foldRange` on pairs: the left fold of `start .. start + len - 1` from `init`. -/
+def pFoldRange (op : ReduceOp) (rd : Nat → TP) (start len : Nat) (init : TP) : TP :=
+  (List.range' start len).foldl (fun acc i => pCombine op acc (rd i)) init
+
 /-- `kernelValue` as a pair of 32-bit terms, reading word `a` of the wire buffer as `rd a`. -/
 def pKernel (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k : Kernel) (e : Nat) : Option TP :=
   match k.body with
@@ -281,6 +289,24 @@ def pKernel (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k : Kernel) (e
   | .gather ixb b => some (rd (b + ix.getD (ixb + e) 0))
   | .concat b0 l0 b1 => some (if e < l0 then rd (b0 + e) else rd (b1 + (e - l0)))
   | .const cb => some (pLit (cs.getD (cb + e) 0#64))
+  | .fold op shape b =>
+    if e < shape.ranges.length then
+      let r := shape.ranges.getD e (0, 0)
+      some (pFoldRange op (fun i => rd (b + i)) r.1 r.2 (pLit op.identity))
+    else some (pLit 0#64)
+
+/-- A fold kernel's values for every element at once, each prefix extended by one combine when the next
+range extends the previous one (a scan), so a stage's fold costs its input once (`foldRangesCached`). -/
+def foldCachedGo (op : ReduceOp) (rd : Nat → TP) : List (Nat × Nat) → Nat → Nat → TP → Array TP → Array TP
+  | [], _, _, _, acc => acc
+  | (st, l) :: rs, ps, pl, prev, acc =>
+    let v := if st == ps && l == pl + 1 then pCombine op prev (rd (st + pl)) else pFoldRange op rd st l (pLit op.identity)
+    foldCachedGo op rd rs st l v (acc.push v)
+
+def foldValues (rd : Nat → TP) (k : Kernel) : Option (Array TP) :=
+  match k.body with
+  | .fold op shape b => some (foldCachedGo op (fun i => rd (b + i)) shape.ranges 0 0 (pLit op.identity) #[])
+  | _ => none
 
 section
 variable (env : UInt64 → UInt32)
@@ -333,6 +359,17 @@ theorem pCode_sound (cs : Array Word) (rd : Nat → TP) (e : Nat) :
       exact pOperand_sound env cs rd e loc locC hloc o
     · exact hloc w
 
+theorem ev_combine (op : ReduceOp) (a b : TP) : (pCombine op a b).ev env = op.combine (a.ev env) (b.ev env) := by
+  cases op <;> simp [pCombine, ReduceOp.combine, ev_add, ev_mul, ev_and, ev_or]
+
+theorem ev_foldRange (op : ReduceOp) (rd : Nat → TP) (st len : Nat) (init : TP) :
+    (pFoldRange op rd st len init).ev env = foldRange op (fun i => (rd i).ev env) st len (init.ev env) := by
+  unfold pFoldRange foldRange
+  generalize List.range' st len = xs
+  induction xs generalizing init with
+  | nil => rfl
+  | cons x xs ih => simp only [List.foldl_cons]; rw [ih, ev_combine]
+
 theorem pKernel_sound (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k : Kernel) (e : Nat) (r : TP)
     (h : pKernel cs ix rd k e = some r) :
     r.ev env = kernelValue cs.toList ix.toList (fun a => (rd a).ev env) k e := by
@@ -349,6 +386,70 @@ theorem pKernel_sound (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k : 
     by_cases he : e < l0 <;> simp [he]
   · rename_i cb hb; rw [hb]; simp only [Option.some.injEq] at h; subst h
     rw [ev_lit, array_getD_toList]
+  · rename_i op shape b hb; rw [hb]; dsimp only
+    unfold evalFold
+    split at h
+    · rename_i he
+      simp only [Option.some.injEq] at h; subst h
+      rw [ev_foldRange, ev_lit]
+      simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem he]
+    · rename_i he
+      simp only [Option.some.injEq] at h; subst h
+      rw [ev_lit, List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_eq_none (by omega)]
+      rfl
+
+theorem pFoldRange_succ (op : ReduceOp) (rd : Nat → TP) (st l : Nat) (init : TP) :
+    pFoldRange op rd st (l + 1) init = pCombine op (pFoldRange op rd st l init) (rd (st + l)) := by
+  unfold pFoldRange; rw [List.range'_concat, List.foldl_append]; simp
+
+theorem foldCachedGo_get (op : ReduceOp) (rd : Nat → TP) :
+    ∀ (rs : List (Nat × Nat)) (ps pl : Nat) (prev : TP) (acc : Array TP),
+      prev = pFoldRange op rd ps pl (pLit op.identity) →
+      ∀ e, (foldCachedGo op rd rs ps pl prev acc)[e]? =
+        if e < acc.size then acc[e]? else (rs.map fun r => pFoldRange op rd r.1 r.2 (pLit op.identity))[e - acc.size]?
+  | [], _, _, _, acc, _, e => by
+    simp only [foldCachedGo, List.map_nil, List.getElem?_nil]
+    split
+    · rfl
+    · rename_i he; exact Array.getElem?_eq_none (by omega)
+  | (st, l) :: rs, ps, pl, prev, acc, hp, e => by
+    have hv : (if st == ps && l == pl + 1 then pCombine op prev (rd (st + pl)) else pFoldRange op rd st l (pLit op.identity)) =
+        pFoldRange op rd st l (pLit op.identity) := by
+      split
+      · rename_i hc; simp only [Bool.and_eq_true, beq_iff_eq] at hc; obtain ⟨rfl, rfl⟩ := hc
+        rw [hp, pFoldRange_succ]
+      · rfl
+    simp only [foldCachedGo]
+    rw [foldCachedGo_get op rd rs st l _ _ hv e, hv]
+    simp only [Array.size_push, List.map_cons]
+    by_cases h1 : e < acc.size
+    · rw [if_pos (by omega), if_pos h1, Array.getElem?_push_lt h1, Array.getElem?_eq_getElem h1]
+    · rw [if_neg h1]
+      by_cases h2 : e = acc.size
+      · subst h2; rw [if_pos (by omega), Array.getElem?_push_eq]; simp
+      · rw [if_neg (by omega), show e - acc.size = (e - (acc.size + 1)) + 1 by omega]; simp
+
+/-- A cached fold value is the kernel's value term at that element. -/
+theorem foldValues_get (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k : Kernel) (arr : Array TP)
+    (h : foldValues rd k = some arr) (e : Nat) (r : TP) (he : arr[e]? = some r) : pKernel cs ix rd k e = some r := by
+  unfold foldValues at h
+  split at h
+  · rename_i op shape b hb
+    simp only [Option.some.injEq] at h; subst h
+    rw [foldCachedGo_get op _ shape.ranges 0 0 _ #[] (by simp [pFoldRange]) e] at he
+    simp only [List.size_toArray, List.length_nil, Nat.not_lt_zero, ↓reduceIte, Nat.sub_zero,
+      List.getElem?_map, Array.size_empty] at he
+    unfold pKernel; rw [hb]
+    cases hr : shape.ranges[e]? with
+    | none => rw [hr] at he; simp at he
+    | some rg =>
+      rw [hr] at he; simp only [Option.map_some, Option.some.injEq] at he; subst he
+      have hlt : e < shape.ranges.length := by
+        rcases List.getElem?_eq_some_iff.mp hr with ⟨hl, _⟩; exact hl
+      dsimp only
+      rw [if_pos hlt]
+      simp [List.getD_eq_getElem?_getD, hr]
+  · simp at h
 
 end
 end Obend.Hardware.Gpu.Rdna2

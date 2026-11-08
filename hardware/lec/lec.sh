@@ -54,7 +54,33 @@ yosys_smt2() {  # $1 = .sv, $2 = out .smt2
   "${YOSYS}" -q -p "read_verilog -sv $1; hierarchy -check -top ${top}; proc; flatten; setattr -set keep 1 t:\$dff %co w:* %i; opt_clean; write_smt2 $2"
 }
 
-# One query, decided twice if need be. First as written, with a time limit (LEC_SECS, default 60).
+# Keep expressions shared at the solver boundary, after any multiplication abstraction.
+# Yosys's installed smtio.py memoizes state applications; fresh constants constrained by
+# every original defining equation replace zero-argument macros. This is an exact
+# definitional extension, not an abstraction or a weakened miter. Locate smtio.py beside
+# the real Yosys binary, or set YOSYS_SMTIO for a nonstandard installation.
+run_query() {
+  cat > "${work}/query.raw.smt2"
+  if ! python3 "${SCRIPT_DIR}/smt_share.py" "${work}/query.raw.smt2" "${work}/query.shared.smt2" \
+      --yosys "${YOSYS}" >"${work}/query.prepare.log" 2>&1; then
+    cat "${work}/query.prepare.log" >&2
+    return 1
+  fi
+  "${Z3}" "$@" -in < "${work}/query.shared.smt2"
+}
+
+# An SMT error after SAT (for example, get-value without a current model) is
+# not a usable counterexample. Nor may an error elsewhere accompany a proof.
+solver_verdict() {
+  if grep -q '(error' <<< "$1"; then echo error; else head -1 <<< "$1"; fi
+}
+
+# First look for exact counterexamples with all input/register carriers set to zero, then one.
+# Each seeded query adds constraints to the unchanged bit-vector miter, so SAT is a real witness;
+# UNSAT only excludes that seed and must never prove equivalence. This avoids bit-blasting a large
+# arithmetic cone merely to discover a simple counterexample to a planted fault. Each probe has a
+# short time limit (LEC_SEED_SECS, default 2), including when no get-value output is requested.
+# Then decide the original query as written, with a time limit (LEC_SECS, default 60).
 # If z3 does not answer in time, again with every multiplication uninterpreted: each `bvmul` of
 # width W, in both halves, becomes the same free function |lec_mul_W|. An `unsat` there is a proof
 # for every interpretation of multiplication, so for the real one; z3 then needs only to see that the
@@ -65,15 +91,43 @@ yosys_smt2() {  # $1 = .sv, $2 = out .smt2
 decide() {  # $1 = yosys .smt2, $2 = lean half, $3 = with get-value (0/1)
   local lean="${work}/lean.smt2"
   if [[ "$3" == 1 ]]; then cp "$2" "${lean}"; else sed '/^; --- counterexample/,$d' "$2" > "${lean}"; fi
-  answer="$(cat "$1" "${lean}" | "${Z3}" -T:"${LEC_SECS:-60}" -in 2>&1 || true)"
-  how="bit-precise"; verdict="$(head -1 <<< "${answer}")"
-  if [[ "${verdict}" == "unsat" || "${verdict}" == "sat" ]]; then return; fi
+  local seed seed_answer seed_verdict
+  for seed in 0 1; do
+    awk -v seed="${seed}" '
+      /^\(define-fun (in|r)_[0-9]+ \(\) \(_ BitVec 64\) / { names[++n] = $2 }
+      /^\(declare-const r_[0-9]+ \(_ BitVec 64\)\)$/ { names[++n] = $2 }
+      /^\(check-sat\)$/ {
+        for (i = 1; i <= n; i++) printf "(assert (= %s (_ bv%s 64)))\n", names[i], seed
+      }
+      { print }
+    ' "${lean}" > "${work}/seed.lean.smt2"
+    # Probe without get-value: an UNSAT seed has no model and must fall through
+    # to the next seed. Request values only after that fixed seed proved SAT.
+    sed '/^; --- counterexample/,$d' "${work}/seed.lean.smt2" > "${work}/seed.probe.smt2"
+    seed_answer="$(cat "$1" "${work}/seed.probe.smt2" | run_query -T:"${LEC_SEED_SECS:-2}" 2>&1 || true)"
+    seed_verdict="$(solver_verdict "${seed_answer}")"
+    if [[ "${seed_verdict}" == error ]]; then
+      answer="${seed_answer}"; verdict=error; how="bit-precise seed query"
+      return
+    fi
+    if [[ "${seed_verdict}" == sat ]]; then
+      if [[ "$3" == 1 ]]; then
+        seed_answer="$(cat "$1" "${work}/seed.lean.smt2" | run_query -T:"${LEC_SEED_SECS:-2}" 2>&1 || true)"
+        seed_verdict="$(solver_verdict "${seed_answer}")"
+      fi
+      answer="${seed_answer}"; verdict="${seed_verdict}"; how="bit-precise, uniform carrier witness ${seed}"
+      return
+    fi
+  done
+  answer="$(cat "$1" "${lean}" | run_query -T:"${LEC_SECS:-60}" 2>&1 || true)"
+  how="bit-precise"; verdict="$(solver_verdict "${answer}")"
+  if [[ "${verdict}" == "unsat" || "${verdict}" == "sat" || "${verdict}" == error ]]; then return; fi
   perl -pe 's/^(\(define-fun \S+ \(\(state \S+\)\) \(_ BitVec (\d+)\) )\(bvmul /$1(|lec_mul_$2| /' "$1" > "${work}/abs.yosys.smt2"
   perl -pe 's/\(bvmul \(\(_ sign_extend 64\)/(|lec_mul_128| ((_ sign_extend 64)/g; s/\(bvmul /(|lec_mul_64| /g' "${lean}" > "${work}/abs.lean.smt2"
   answer="$( { grep -ohE 'lec_mul_[0-9]+' "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2" | sort -u \
                | sed -E 's/lec_mul_([0-9]+)/(declare-fun |&| ((_ BitVec \1) (_ BitVec \1)) (_ BitVec \1))/'
-             cat "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2"; } | "${Z3}" ${LEC_ABS_SECS:+-T:"${LEC_ABS_SECS}"} -in 2>&1 || true)"
-  how="multiplication uninterpreted"; verdict="$(head -1 <<< "${answer}")"
+             cat "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2"; } | run_query ${LEC_ABS_SECS:+-T:"${LEC_ABS_SECS}"} 2>&1 || true)"
+  how="multiplication uninterpreted"; verdict="$(solver_verdict "${answer}")"
   if [[ "${verdict}" == "sat" || "${verdict}" == "timeout" || "${verdict}" == "unknown" ]]; then verdict="undecided"; fi
 }
 
@@ -82,8 +136,14 @@ yosys_smt2 "${sv}" "${work}/${top}.yosys.smt2"
 decide "${work}/${top}.yosys.smt2" "${lec}" 0
 if [[ "${verdict}" != "unsat" ]]; then
   echo "[FAIL] LEC ${top}: z3 says ${verdict} (${how}); Yosys's reading of $(basename "${sv}") is not shown equal to Lean's model" >&2
-  decide "${work}/${top}.yosys.smt2" "${lec}" 1
-  tail -n +2 <<< "${answer}" >&2
+  # Only a SAT result has a counterexample to request. Repeating an undecided query
+  # with get-value merely spends its entire search budget again and has no model to print.
+  if [[ "${verdict}" == sat ]]; then
+    decide "${work}/${top}.yosys.smt2" "${lec}" 1
+    tail -n +2 <<< "${answer}" >&2
+  else
+    printf '%s\n' "${answer}" >&2
+  fi
   exit 1
 fi
 echo "  LEC ${top}: unsat, ${how} (Yosys's reading of $(basename "${sv}") == Lean's model of the RtlModule)"
@@ -98,7 +158,7 @@ mutline="$(diff "${sv}" "${work}/${top}.mut.sv" | sed -n 's/^> *//p' | head -1 |
 [[ -n "${mutline}" ]] || { echo "[FAIL] lec: no line of ${sv} to mutate" >&2; exit 1; }
 yosys_smt2 "${work}/${top}.mut.sv" "${work}/${top}.mut.yosys.smt2"
 decide "${work}/${top}.mut.yosys.smt2" "${lec}" 1
-if [[ "${verdict}" != "sat" && "${verdict}" != "undecided" ]]; then
+if [[ "${verdict}" != "sat" ]]; then
   echo "[FAIL] LEC ${top}: the planted mutation \`${mutline}\` was not caught (z3: ${verdict}, ${how})" >&2
   exit 1
 fi

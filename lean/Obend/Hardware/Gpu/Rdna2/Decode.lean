@@ -185,7 +185,10 @@ def mnemonic (i : Inst) : String :=
   let isVop32 (f : String) := f == "VOP1" || f == "VOP2" || f == "VOPC"
   let isVop3 (f : String) := f == "VOP3"
   let base := i.inst.name.toLower
-  if isVop32 fam && has isVop3 then base ++ "_e32"
+  -- LLVM 19 VOP1Instructions.td declares READFIRSTLANE as VOP1Only; AMD's XML
+  -- also contains VOP3. Its supported 32-bit spelling therefore has no suffix.
+  if i.inst.name == "V_READFIRSTLANE_B32" && fam == "VOP1" then base
+  else if isVop32 fam && has isVop3 then base ++ "_e32"
   else if isVop3 fam && has isVop32 then base ++ "_e64"
   else base
 
@@ -231,10 +234,11 @@ def renderAluOperand (i : Inst) (op : Operand) (k : Nat) : Option String :=
   | "LITERAL" => (i.literal.map fun l => hex l.toNat).map (withMods i k)
   | "SIMM16" =>
     let v := i.field "SIMM16"
-    -- LLVM 19 prints a branch's SIMM16 as the unsigned field (`s_branch 65521` for -15)
+    -- LLVM 19 disassembly prints the encoded unsigned immediate, including backward
+    -- branches. Execution and Waitcnt.branchTarget separately sign-extend it.
     if op.type == "OPR_LABEL" then some (toString v)
     else if op.type == "OPR_WAITCNT" then some (waitcntText v)
-    else if fam == "SOPK" || op.type == "OPR_CLAUSE" then some (hex v)
+    else if fam == "SOPK" || op.type == "OPR_CLAUSE" || i.inst.name == "S_INST_PREFETCH" then some (hex v)
     else some (toString v)
   | f =>
     let v := i.field f

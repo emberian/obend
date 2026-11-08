@@ -146,10 +146,37 @@ theorem dwHalf_ev (env : UInt64 → UInt32) (sp : TP) (r : Nat) :
 
 /-- A dword the check accepts: in the buffer, in a word a kernel of the dispatch owns, and holding that
 word's half of what the dispatch computes, read in the start memory. -/
+theorem kvOf_sound {cs : Array Word} {ix : Array Nat} {rd : Nat → TP} {kc : List (Kernel × Array TP)}
+    (hkc : ∀ k arr, (k, arr) ∈ kc → foldValues rd k = some arr) (k : Kernel) (e : Nat) (r : TP)
+    (h : kvOf cs ix rd kc k e = some r) : pKernel cs ix rd k e = some r := by
+  unfold kvOf at h
+  split at h
+  · rename_i k' arr hf
+    have hm := List.mem_of_find?_eq_some hf
+    have heq := List.find?_some hf
+    simp only [beq_iff_eq] at heq
+    subst heq
+    exact foldValues_get cs ix rd _ arr (hkc _ _ hm) e r h
+  · exact h
+
+theorem foldCache_mem (rd : Nat → TP) (s : GpuStage) :
+    ∀ k arr, (k, arr) ∈ foldCache rd s → foldValues rd k = some arr := by
+  intro k arr h
+  unfold foldCache at h
+  rw [List.mem_filterMap] at h
+  obtain ⟨k', _, h'⟩ := h
+  cases hf : foldValues rd k' with
+  | none => rw [hf] at h'; simp at h'
+  | some arr' =>
+    rw [hf] at h'; simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h'
+    obtain ⟨rfl, rfl⟩ := h'; exact hf
+
 theorem storeOk_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix : Array Nat} {known : Known}
+    {kc : List (Kernel × Array TP)}
     {m : Memory} {E : Nat → Word} (h : StartOk p lay known m E) (hw : p.words < 2 ^ 29)
-    (hcs : cs.toList = p.consts) (hix : ix.toList = p.tables) (s : GpuStage) (a : UInt64) (t : Tm)
-    (r? : Option Residual) (hs : storeOk p lay cs ix s known a t = some r?) (hr : ∀ r, r? = some r → r.Holds) :
+    (hcs : cs.toList = p.consts) (hix : ix.toList = p.tables)
+    (hkc : ∀ k arr, (k, arr) ∈ kc → foldValues (readWord p lay known) k = some arr) (s : GpuStage) (a : UInt64) (t : Tm)
+    (r? : Option Residual) (hs : storeOk p lay cs ix s known kc a t = some r?) (hr : ∀ r, r? = some r → r.Holds) :
     inW p.words a = true ∧ (∃ k, s.kernels.find? (·.owns ((a - wDw).toNat / 2)) = some k) ∧
       t.eval (menv m) = dwHalf ((a - wDw).toNat % 2) (runStage p.consts p.tables E s ((a - wDw).toNat / 2)) := by
   unfold storeOk at hs
@@ -164,7 +191,7 @@ theorem storeOk_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix : Ar
       simp only [Option.bind_eq_some_iff] at hs
       obtain ⟨sp, hsp, hq⟩ := hs
       refine ⟨hin', ⟨k, hk⟩, ?_⟩
-      have hkv := pKernel_sound (menv m) _ _ _ k _ sp hsp
+      have hkv := pKernel_sound (menv m) _ _ _ k _ sp (kvOf_sound hkc _ _ _ hsp)
       rw [hcs, hix] at hkv
       have hrd : (fun j => (readWord p lay known j).ev (menv m)) = E := funext (readWord_ev h hw)
       rw [hrd] at hkv
@@ -199,10 +226,11 @@ theorem contains_insertR (s : Std.HashSet Residual) (k a : Residual) :
 /-- What `checkStores` establishes about a list of stores: each was free and accepted (its residual kept),
 the stored set grows by exactly their addresses, every update is an old one or one of theirs, and the
 residuals only grow. -/
-theorem checkStores_spec (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (s : GpuStage) (known : Known) :
-    ∀ (L : List (UInt64 × Tm)) (acc acc' : Acc), checkStores p lay cs ix s known L acc = some acc' →
+theorem checkStores_spec (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (s : GpuStage) (known : Known)
+    (kc : List (Kernel × Array TP)) :
+    ∀ (L : List (UInt64 × Tm)) (acc acc' : Acc), checkStores p lay cs ix s known kc L acc = some acc' →
       (∀ a, acc'.stored.contains a = true ↔ acc.stored.contains a = true ∨ a ∈ L.map Prod.fst) ∧
-      (∀ a t, (a, t) ∈ L → acc.stored.contains a = false ∧ ∃ r?, storeOk p lay cs ix s known a t = some r? ∧
+      (∀ a t, (a, t) ∈ L → acc.stored.contains a = false ∧ ∃ r?, storeOk p lay cs ix s known kc a t = some r? ∧
         ∀ r, r? = some r → acc'.needed.contains r = true) ∧
       (∀ x ∈ acc'.updates, x ∈ acc.updates ∨ ∃ t, (x.1, t) ∈ L ∧ x.2 = t.litVal?) ∧
       (∀ r, acc.needed.contains r = true → acc'.needed.contains r = true) ∧
@@ -218,7 +246,7 @@ theorem checkStores_spec (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix :
     · rename_i hfree
       simp only [Option.bind_eq_some_iff] at h
       obtain ⟨r?, hok, hrest⟩ := h
-      obtain ⟨h1, h2, h3, h4, h5, h6⟩ := checkStores_spec p lay cs ix s known rest _ acc' hrest
+      obtain ⟨h1, h2, h3, h4, h5, h6⟩ := checkStores_spec p lay cs ix s known kc rest _ acc' hrest
       have hfree' : acc.stored.contains a = false := by simpa using hfree
       have hneed : ∀ r, r? = some r → acc'.needed.contains r = true := by
         intro r hr; apply h4; subst hr; simp only; rw [contains_insertR]; exact Or.inl rfl
@@ -271,8 +299,9 @@ structure WInv (p : GpuProgram) (m0 : Memory) (E : Nat → Word) (s : GpuStage) 
   upd : ∀ x ∈ acc.updates, acc.stored.contains x.1 = true ∧ ∀ v, x.2 = some v → m.get? x.1 = some v
   upd_of : ∀ a, acc.stored.contains a = true → ∃ x ∈ acc.updates, x.1 = a
 
-theorem checkWaves_mono (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (s : GpuStage) (prog : Program) (known : Known) :
-    ∀ (gs : List Nat) (acc acc' : Acc), checkWaves p lay cs ix s prog known gs acc = some acc' →
+theorem checkWaves_mono (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (s : GpuStage) (prog : Program) (known : Known)
+    (kc : List (Kernel × Array TP)) :
+    ∀ (gs : List Nat) (acc acc' : Acc), checkWaves p lay cs ix s prog known kc gs acc = some acc' →
       ∀ r, acc.needed.contains r = true → acc'.needed.contains r = true
   | [], acc, acc', h => by simp only [checkWaves, Option.some.injEq] at h; subst h; exact fun _ h => h
   | g :: gs, acc, acc', h => by
@@ -282,13 +311,14 @@ theorem checkWaves_mono (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : 
     · simp only [Option.bind_eq_some_iff] at h
       obtain ⟨acc1, h1, h2⟩ := h
       intro r hr
-      exact checkWaves_mono p lay cs ix s prog known gs acc1 acc' h2 r ((checkStores_spec p lay cs ix s known _ acc acc1 h1).2.2.2.1 r hr)
+      exact checkWaves_mono p lay cs ix s prog known kc gs acc1 acc' h2 r ((checkStores_spec p lay cs ix s known kc _ acc acc1 h1).2.2.2.1 r hr)
     · simp at h
 
 theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix : Array Nat} {known : Known}
     {m0 : Memory} {E : Nat → Word} (h0 : StartOk p lay known m0 E) (hw : p.words < 2 ^ 29)
-    (hcs : cs.toList = p.consts) (hix : ix.toList = p.tables) (s : GpuStage) (prog : Program) :
-    ∀ (gs : List Nat) (acc acc' : Acc), checkWaves p lay cs ix s prog known gs acc = some acc' →
+    (hcs : cs.toList = p.consts) (hix : ix.toList = p.tables) (s : GpuStage) (prog : Program)
+    (kc : List (Kernel × Array TP)) (hkc : ∀ k arr, (k, arr) ∈ kc → foldValues (readWord p lay known) k = some arr) :
+    ∀ (gs : List Nat) (acc acc' : Acc), checkWaves p lay cs ix s prog known kc gs acc = some acc' →
       (∀ r, acc'.needed.contains r = true → r.Holds) →
       ∀ m, WInv p m0 E s m acc → ∃ m', runWaves prog gs m = some m' ∧ WInv p m0 E s m' acc'
   | [], acc, acc', h, _, m, hm => by
@@ -303,9 +333,9 @@ theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix :
       obtain ⟨herr, hhalt⟩ := hok
       simp only [Option.bind_eq_some_iff] at h
       obtain ⟨acc1, h1, h2⟩ := h
-      obtain ⟨c1, c2, c3, c4, c5, c6⟩ := checkStores_spec p lay cs ix s known _ acc acc1 h1
+      obtain ⟨c1, c2, c3, c4, c5, c6⟩ := checkStores_spec p lay cs ix s known kc _ acc acc1 h1
       have hneed1 : ∀ r, acc1.needed.contains r = true → r.Holds :=
-        fun r hr => hneed r (checkWaves_mono p lay cs ix s prog known gs acc1 acc' h2 r hr)
+        fun r hr => hneed r (checkWaves_mono p lay cs ix s prog known kc gs acc1 acc' h2 r hr)
       have hbase : ∀ a u, baseView p lay known acc.stored a = some u → m.get? a = some (u.eval (menv m0)) := by
         intro a u hu
         unfold baseView at hu
@@ -354,7 +384,7 @@ theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix :
             have hmem : (a, t) ∈ st.mem.stores.toList := by
               rw [Std.HashMap.mem_toList_iff_getElem?_eq_some, ← Std.HashMap.get?_eq_getElem?]; exact ht
             obtain ⟨-, r?, hok', hr?⟩ := c2 a t hmem
-            obtain ⟨i1, i2, i3⟩ := storeOk_sound h0 hw hcs hix s a t r? hok' (fun r hr => hneed1 r (hr? r hr))
+            obtain ⟨i1, i2, i3⟩ := storeOk_sound h0 hw hcs hix hkc s a t r? hok' (fun r hr => hneed1 r (hr? r hr))
             exact ⟨i1, i2, by rw [hst a t ht, i3]⟩
         · intro x hx
           rcases c3 x hx with ho | ⟨t, hmem, hx2⟩
@@ -373,7 +403,7 @@ theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix :
           · obtain ⟨t, ht⟩ := (hkey a).mp hn
             exact ⟨(a, t.litVal?), c6 a t (by
               rw [Std.HashMap.mem_toList_iff_getElem?_eq_some, ← Std.HashMap.get?_eq_getElem?]; exact ht), rfl⟩
-      obtain ⟨m', hrun, hinv'⟩ := checkWaves_sound h0 hw hcs hix s prog gs acc1 acc' h2 hneed sc.mem hinv1
+      obtain ⟨m', hrun, hinv'⟩ := checkWaves_sound h0 hw hcs hix s prog kc hkc gs acc1 acc' h2 hneed sc.mem hinv1
       refine ⟨m', ?_, hinv'⟩
       rw [serr, shalt, hhalt]
       simpa using hrun
@@ -442,7 +472,7 @@ theorem checkStage_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix :
     obtain ⟨rfl, rfl⟩ := hall
     have hinit : WInv p m0 E s m0 ⟨{}, [], {}⟩ :=
       ⟨fun _ _ => rfl, fun a ha => by simp at ha, fun x hx => by simp at hx, fun a ha => by simp at ha⟩
-    obtain ⟨m', hrun, hi⟩ := checkWaves_sound h0 hw hcs hix s prog _ _ acc hw' hn m0 hinit
+    obtain ⟨m', hrun, hi⟩ := checkWaves_sound h0 hw hcs hix s prog _ (foldCache_mem _ s) _ _ acc hw' hn m0 hinit
     refine ⟨m', hrun, ?_⟩
     have hstored : ∀ a, a ∈ ownedDwords s → acc.stored.contains a = true :=
       fun a ha => (List.all_eq_true.mp hown) a ha

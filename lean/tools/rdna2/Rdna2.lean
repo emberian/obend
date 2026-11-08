@@ -150,7 +150,7 @@ def explainCert (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : Str
       unless st.halted do return s!"stage {k}, workgroup {g}: the symbolic run did not halt"
       for (a, t) in st.mem.stores.toList do
         if acc.stored.contains a then return s!"stage {k}: dword 0x{String.ofList (Nat.toDigits 16 a.toNat)} stored twice"
-        match storeOk p lay cs ix stage known a t with
+        match storeOk p lay cs ix stage known (foldCache (readWord p lay known) stage) a t with
         | none =>
           let off := (a - wDw).toNat
           return s!"stage {k}, workgroup {g}: the store to word {off / 2} (dword {off % 2}) is refused: " ++
@@ -277,8 +277,11 @@ def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
   let mut seen : Std.HashSet Tm.Residual := {}
   for pr in pairs do
     let [graph, isaPath] := pr.splitOn "=" | IO.eprintln s!"[FAIL] {pr}: want GRAPH=ISA"; return 1
-    let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph)
+    let some c := Obend.Hardware.SquareGraphs.graphs.find? (·.name == graph)
       | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
+    let .ok tg := c.build ()
+      | IO.eprintln s!"[FAIL] {graph}: its source does not type"; return 1
+    let g := tg.graph
     let p := Obend.Hardware.Gpu.lowerArrayToGpu g
     let progs := (parseDump (← IO.FS.readFile isaPath)).toList.filterMap fun ws => (decodeProgram (ws.flatMap id)).toOption
     match neededResiduals p progs with
@@ -303,8 +306,11 @@ def whyRefused (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : Stri
 /-- The gate's certificate stage: `certifyNamed`, the function every pin runs, on one dump; with `--flip`,
 one bit of one instruction flipped first, which the certificate must refuse. -/
 def cmdCert (graph : String) (isaPath : String) (flip : Option String) : IO UInt32 := do
-  let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph)
+  let some c := Obend.Hardware.SquareGraphs.graphs.find? (·.name == graph)
     | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
+  let .ok tg := c.build ()
+    | IO.eprintln s!"[FAIL] {graph}: its source does not type"; return 1
+  let g := tg.graph
   let p := Obend.Hardware.Gpu.lowerArrayToGpu g
   let isa ← IO.FS.readFile isaPath
   match flip with

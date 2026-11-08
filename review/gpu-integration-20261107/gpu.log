@@ -1,0 +1,161 @@
+PASS sole final map consumer reuses source
+PASS dead logical wire has no allocation
+PASS gather cannot overwrite source
+PASS same-stage reader prevents takeover
+PASS concat cannot overwrite either source
+PASS dead buffer reused by later gather
+PASS poisoned gather overlap refused
+PASS poisoned shared reader overlap refused
+PASS poisoned undersized allocation refused
+=== [1/4] byte equality: committed plan, shaders and expected.tsv == obend-emit-gpu ===
+    diamond: 9 wires (4 words), 5 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/diamond
+    optic-mul: 9 wires (6 words), 3 edges, 3 after fusion, 0 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/optic-mul
+    optic-linearmac: 9 wires (5 words), 4 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/optic-linearmac
+    optic-bilinear: 9 wires (6 words), 6 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/optic-bilinear
+    adjoint-mul-add: 12 wires (6 words), 7 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/adjoint-mul-add
+    adjoint-square-bilinear: 13 wires (6 words), 9 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/adjoint-square-bilinear
+    allops: 11 wires (6 words), 8 edges, 3 after fusion, 6 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/allops
+    muxchain: 8 wires (5 words), 4 edges, 2 after fusion, 1 constants, 0 indices, 1 dispatches (2 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/muxchain
+    tree512: 1023 wires (512 words), 511 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 6 vectors -> /tmp/verify_gpu.2Q7qz2/emit/tree512
+    mac-reverse-1000: 5 wires (3000 words), 3 edges, 3 after fusion, 1000 constants, 1000 indices, 3 dispatches (1,1,1 kernels), 6 vectors -> /tmp/verify_gpu.2Q7qz2/emit/mac-reverse-1000
+    glmul-4: 45 wires (20 words), 43 edges, 4 after fusion, 12 constants, 0 indices, 2 dispatches (3,1 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/glmul-4
+    glmul-256: 45 wires (1280 words), 43 edges, 4 after fusion, 768 constants, 0 indices, 2 dispatches (3,1 kernels), 6 vectors -> /tmp/verify_gpu.2Q7qz2/emit/glmul-256
+    array-route: 5 wires (16 words), 4 edges, 4 after fusion, 4 constants, 4 indices, 4 dispatches (1,1,1,1 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/array-route
+    soac-boundaries: 27 wires (168 words), 26 edges, 26 after fusion, 0 constants, 8 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/soac-boundaries
+    soac-empty: 27 wires (16 words), 26 edges, 26 after fusion, 0 constants, 0 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/soac-empty
+    soac-no-segments: 27 wires (4 words), 26 edges, 26 after fusion, 0 constants, 0 indices, 3 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.2Q7qz2/emit/soac-no-segments
+    soac-single-65536: 27 wires (1114120 words), 26 edges, 26 after fusion, 0 constants, 65536 indices, 3 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.2Q7qz2/emit/soac-single-65536
+    soac-segments-64x1024: 27 wires (1114372 words), 26 edges, 26 after fusion, 0 constants, 65536 indices, 3 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.2Q7qz2/emit/soac-segments-64x1024
+    source-leaf-affine: 5 wires (11 words), 4 edges, 1 after fusion, 2 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.2Q7qz2/emit/source-leaf-affine
+    source-leaf-mux: 10 wires (11 words), 9 edges, 1 after fusion, 4 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.2Q7qz2/emit/source-leaf-mux
+    source-leaf-shl: 3 wires (10 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.2Q7qz2/emit/source-leaf-shl
+    source-leaf-shr: 3 wires (10 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.2Q7qz2/emit/source-leaf-shr
+    source-leaf-fixed-square: 2 wires (11 words), 1 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.2Q7qz2/emit/source-leaf-fixed-square
+    ntt-4: 8 device words, 8 shared words, 1 dispatches -> /tmp/verify_gpu.2Q7qz2/emit/ntt-4
+    ntt-16: 32 device words, 32 shared words, 1 dispatches -> /tmp/verify_gpu.2Q7qz2/emit/ntt-16
+    ntt-64: 128 device words, 128 shared words, 2 dispatches -> /tmp/verify_gpu.2Q7qz2/emit/ntt-64
+    ntt-1024: 2048 device words, 512 shared words, 3 dispatches -> /tmp/verify_gpu.2Q7qz2/emit/ntt-1024
+    ntt-65536: 131072 device words, 512 shared words, 2 dispatches -> /tmp/verify_gpu.2Q7qz2/emit/ntt-65536
+    ntt-1048576: 2097152 device words, 512 shared words, 3 dispatches -> /tmp/verify_gpu.2Q7qz2/emit/ntt-1048576
+  soac-single-65536: digests identical (kept as graphs/soac-single-65536.sha256)
+  soac-segments-64x1024: digests identical (kept as graphs/soac-segments-64x1024.sha256)
+  ntt-65536: digests identical (kept as graphs/ntt-65536.sha256)
+  ntt-1048576: digests identical (kept as graphs/ntt-1048576.sha256)
+  29 graphs identical
+=== [2/4] the device against runProgram ===
+  diamond: 12 vectors, 1 dispatches, 0 disagree, 0.251 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-mul: 12 vectors, 1 dispatches, 0 disagree, 0.244 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-linearmac: 12 vectors, 1 dispatches, 0 disagree, 0.269 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  optic-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.267 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  adjoint-mul-add: 12 vectors, 1 dispatches, 0 disagree, 0.271 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  adjoint-square-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.250 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  allops: 12 vectors, 1 dispatches, 0 disagree, 0.263 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  muxchain: 12 vectors, 1 dispatches, 0 disagree, 0.271 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  tree512: 6 vectors, 1 dispatches, 0 disagree, 0.479 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  mac-reverse-1000: 6 vectors, 3 dispatches, 0 disagree, 0.462 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  glmul-4: 12 vectors, 2 dispatches, 0 disagree, 0.265 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  glmul-256: 6 vectors, 2 dispatches, 0 disagree, 0.442 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  array-route: 12 vectors, 4 dispatches, 0 disagree, 0.317 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-boundaries: 12 vectors, 3 dispatches, 0 disagree, 0.329 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-empty: 12 vectors, 3 dispatches, 0 disagree, 0.299 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-no-segments: 12 vectors, 3 dispatches, 0 disagree, 0.299 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-single-65536: 2 vectors, 3 dispatches, 0 disagree, 92.861 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-segments-64x1024: 2 vectors, 3 dispatches, 0 disagree, 19.112 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-affine: 2 vectors, 1 dispatches, 0 disagree, 1.331 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-mux: 2 vectors, 1 dispatches, 0 disagree, 1.322 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-shl: 2 vectors, 1 dispatches, 0 disagree, 1.321 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-shr: 2 vectors, 1 dispatches, 0 disagree, 1.517 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  source-leaf-fixed-square: 2 vectors, 1 dispatches, 0 disagree, 1.349 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-4: 12 vectors, 1 dispatches, 0 disagree, 0.287 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-16: 12 vectors, 1 dispatches, 0 disagree, 0.267 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-64: 6 vectors, 2 dispatches, 0 disagree, 0.464 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-1024: 6 vectors, 3 dispatches, 0 disagree, 0.511 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-65536: 2 vectors, 2 dispatches, 0 disagree, 1.560 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  ntt-1048576: 2 vectors, 3 dispatches, 0 disagree, 7.137 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+=== [3/4] teeth: each planted rule must make some graph's comparison fail ===
+  addAsSub: caught on diamond optic-linearmac adjoint-mul-add adjoint-square-bilinear allops tree512 glmul-4 glmul-256 array-route soac-boundaries soac-single-65536 soac-segments-64x1024 source-leaf-affine source-leaf-mux ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 ntt-1048576
+  swapMux: caught on allops muxchain glmul-4 glmul-256 source-leaf-mux ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 ntt-1048576
+  mulHighZero: caught on diamond optic-mul optic-linearmac optic-bilinear adjoint-mul-add adjoint-square-bilinear allops mac-reverse-1000 glmul-4 glmul-256 soac-boundaries soac-single-65536 soac-segments-64x1024 source-leaf-affine source-leaf-fixed-square ntt-4 ntt-16 ntt-64 ntt-1024 ntt-65536 ntt-1048576
+=== [4/4] the ISA: RADV's final assembly and resource usage of every stage, under isa/ ===
+  diamond:
+    stage 0: 1 threads -> 38 instructions, 1 stores; VGPRs 16, LDS 0
+  optic-mul:
+    stage 0: 3 threads -> 62 instructions, 3 stores; VGPRs 16, LDS 0
+  optic-linearmac:
+    stage 0: 3 threads -> 71 instructions, 3 stores; VGPRs 16, LDS 0
+  optic-bilinear:
+    stage 0: 3 threads -> 89 instructions, 3 stores; VGPRs 16, LDS 0
+  adjoint-mul-add:
+    stage 0: 3 threads -> 93 instructions, 3 stores; VGPRs 16, LDS 0
+  adjoint-square-bilinear:
+    stage 0: 3 threads -> 114 instructions, 3 stores; VGPRs 16, LDS 0
+  allops:
+    stage 0: 3 threads -> 144 instructions, 3 stores; VGPRs 24, LDS 0
+  muxchain:
+    stage 0: 2 threads -> 56 instructions, 2 stores; VGPRs 16, LDS 0
+  tree512:
+    stage 0: 1 threads -> 3045 instructions, 1 stores; VGPRs 32, LDS 0
+  mac-reverse-1000:
+    stage 0: 1000 threads -> 15 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 1000 threads -> 27 instructions, 1 stores; VGPRs 16, LDS 0
+    stage 2: 1000 threads -> 18 instructions, 1 stores; VGPRs 8, LDS 0
+  glmul-4:
+    stage 0: 12 threads -> 46 instructions, 3 stores; VGPRs 8, LDS 0
+    stage 1: 4 threads -> 296 instructions, 1 stores; VGPRs 24, LDS 0
+  glmul-256:
+    stage 0: 768 threads -> 50 instructions, 3 stores; VGPRs 8, LDS 0
+    stage 1: 256 threads -> 297 instructions, 1 stores; VGPRs 24, LDS 0
+  array-route:
+    stage 0: 4 threads -> 14 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 4 threads -> 18 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 2: 4 threads -> 18 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 3: 8 threads -> 26 instructions, 2 stores; VGPRs 8, LDS 0
+  soac-boundaries:
+    stage 0: 8 threads -> 16 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 96 threads -> 1501 instructions, 48 stores; VGPRs 24, LDS 0
+    stage 2: 8 threads -> 18 instructions, 1 stores; VGPRs 8, LDS 0
+  soac-empty:
+    stage 0: 0 threads -> 1 instructions, 0 stores; VGPRs 8, LDS 0
+    stage 1: 48 threads -> 102 instructions, 8 stores; VGPRs 8, LDS 0
+    stage 2: 0 threads -> 1 instructions, 0 stores; VGPRs 8, LDS 0
+  soac-no-segments:
+    stage 0: 0 threads -> 1 instructions, 0 stores; VGPRs 8, LDS 0
+    stage 1: 12 threads -> 50 instructions, 4 stores; VGPRs 8, LDS 0
+    stage 2: 0 threads -> 1 instructions, 0 stores; VGPRs 8, LDS 0
+  soac-single-65536:
+    stage 0: 65536 threads -> 16 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 24 threads -> 1062 instructions, 24 stores; VGPRs 8, LDS 0
+    stage 2: 65536 threads -> 18 instructions, 1 stores; VGPRs 8, LDS 0
+  soac-segments-64x1024:
+    stage 0: 65536 threads -> 16 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 1: 780 threads -> 1257 instructions, 24 stores; VGPRs 16, LDS 0
+    stage 2: 65536 threads -> 18 instructions, 1 stores; VGPRs 8, LDS 0
+  source-leaf-affine:
+    stage 0: 11 threads -> 24 instructions, 1 stores; VGPRs 8, LDS 0
+  source-leaf-mux:
+    stage 0: 11 threads -> 37 instructions, 1 stores; VGPRs 16, LDS 0
+  source-leaf-shl:
+    stage 0: 10 threads -> 39 instructions, 1 stores; VGPRs 8, LDS 0
+  source-leaf-shr:
+    stage 0: 10 threads -> 39 instructions, 1 stores; VGPRs 8, LDS 0
+  source-leaf-fixed-square:
+    stage 0: 11 threads -> 16 instructions, 1 stores; VGPRs 8, LDS 0
+  ntt-4:
+    stage 0: 64 threads -> 292 instructions, 2 stores; VGPRs 32, LDS 0
+  ntt-16:
+    stage 0: 64 threads -> 869 instructions, 4 stores; VGPRs 32, LDS 512
+  ntt-64:
+    stage 0: 64 threads -> 647 instructions, 2 stores; VGPRs 32, LDS 1024
+    stage 1: 64 threads -> 909 instructions, 2 stores; VGPRs 40, LDS 1024
+  ntt-1024:
+    stage 0: 256 threads -> 874 instructions, 4 stores; VGPRs 64, LDS 4096
+    stage 1: 512 threads -> 916 instructions, 2 stores; VGPRs 64, LDS 4096
+    stage 2: 512 threads -> 915 instructions, 2 stores; VGPRs 64, LDS 4096
+  ntt-65536:
+    stage 0: 16384 threads -> 1903 instructions, 4 stores; VGPRs 64, LDS 4096
+    stage 1: 16384 threads -> 2161 instructions, 4 stores; VGPRs 64, LDS 4096
+  ntt-1048576:
+    stage 0: 524288 threads -> 1667 instructions, 2 stores; VGPRs 64, LDS 4096
+    stage 1: 524288 threads -> 1925 instructions, 2 stores; VGPRs 64, LDS 4096
+    stage 2: 262144 threads -> 1651 instructions, 4 stores; VGPRs 64, LDS 4096
+[PASS] hardware/gpu

@@ -731,6 +731,8 @@ inductive InstOp where
   | s_add_u32 | s_sub_i32 | s_xor_b32 | s_max_u32 | s_lshl_b32 | s_lshl2_add_u32 | s_lshl3_add_u32 | s_bfm_b32
   | s_cselect_b64 | s_cmp_eq_i32 | s_cmp_lt_u32 | s_cmpk_lt_u32 | s_branch | s_cbranch_scc0 | s_nop
   | s_waitcnt_vscnt | v_mbcnt_lo_u32_b32 | v_mbcnt_hi_u32_b32 | ds_read_b64 | ds_write_b64 | ds_write_b128
+  | s_addc_u32 | s_or_b32 | s_mul_i32 | s_mul_hi_u32 | s_bfm_b64 | s_cmp_lg_i32 | s_cmp_ge_u32 | s_getpc_b64
+  | s_cbranch_scc1 | s_inst_prefetch | v_readfirstlane_b32 | v_subrev_co_u32 | v_cmp_ge_u32 | v_cmp_gt_u64
   | unknown
   deriving DecidableEq, Repr
 
@@ -765,6 +767,11 @@ def instOp (name : String) : InstOp :=
   | "S_CBRANCH_SCC0" => .s_cbranch_scc0 | "S_NOP" => .s_nop | "S_WAITCNT_VSCNT" => .s_waitcnt_vscnt
   | "V_MBCNT_LO_U32_B32" => .v_mbcnt_lo_u32_b32 | "V_MBCNT_HI_U32_B32" => .v_mbcnt_hi_u32_b32
   | "DS_READ_B64" => .ds_read_b64 | "DS_WRITE_B64" => .ds_write_b64 | "DS_WRITE_B128" => .ds_write_b128
+  | "S_ADDC_U32" => .s_addc_u32 | "S_OR_B32" => .s_or_b32 | "S_MUL_I32" => .s_mul_i32 | "S_MUL_HI_U32" => .s_mul_hi_u32
+  | "S_BFM_B64" => .s_bfm_b64 | "S_CMP_LG_I32" => .s_cmp_lg_i32 | "S_CMP_GE_U32" => .s_cmp_ge_u32
+  | "S_GETPC_B64" => .s_getpc_b64 | "S_CBRANCH_SCC1" => .s_cbranch_scc1 | "S_INST_PREFETCH" => .s_inst_prefetch
+  | "V_READFIRSTLANE_B32" => .v_readfirstlane_b32 | "V_SUBREV_CO_U32" => .v_subrev_co_u32
+  | "V_CMP_GE_U32" => .v_cmp_ge_u32 | "V_CMP_GT_U64" => .v_cmp_gt_u64
   | _ => .unknown
 
 /-- One instruction. `s.pc` already points past it (branches add their offset to that, manual 12.5:
@@ -931,6 +938,57 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   | .ds_read_b64 => execDs i s 2 false
   | .ds_write_b64 => execDs i s 2 true
   | .ds_write_b128 => execDs i s 4 true
+  -- The SOAC kernels' scalar loops (manual 12.1 SOP2, 12.3 SOP1, 12.4 SOPC, 12.5 SOPP); gem5 twins
+  -- sop2.cc S_ADDC_U32, S_OR_B32, S_MUL_I32, S_MUL_HI_U32, S_BFM_B64, sopc.cc S_CMP_LG_I32, S_CMP_GE_U32,
+  -- sop1.cc S_GETPC_B64, sopp.cc S_CBRANCH_SCC1 (hardware/gpu/rdna2/gem5_ref.cpp cites the lines).
+  -- S_ADDC_U32 `D = S0 + S1 + SCC; SCC = carry`; S_OR_B32 `D = S0 | S1; SCC = D != 0`; S_MUL_I32 `D = S0 * S1`
+  -- and S_MUL_HI_U32 `D = (S0 * S1) >> 32`, SCC unchanged; S_BFM_B64 `D.u64 = ((1 << S0[5:0]) - 1) << S1[5:0]`.
+  | .s_addc_u32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_ADDC_U32: an operand code is not modelled" fun ab =>
+    sop32 s (i.field "SDST") (Dom.addc ab.1 ab.2 s.scc) (Dom.carryc ab.1 ab.2 s.scc)
+  | .s_or_b32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_OR_B32: an operand code is not modelled" fun ab =>
+    sop32 s (i.field "SDST") (Dom.bor ab.1 ab.2) (Dom.nez64 (Dom.bor ab.1 ab.2) (Dom.lit 0))
+  | .s_mul_i32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_MUL_I32: an operand code is not modelled" fun ab =>
+    writeScalarDst s (i.field "SDST") (Dom.mul ab.1 ab.2)
+  | .s_mul_hi_u32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_MUL_HI_U32: an operand code is not modelled" fun ab =>
+    writeScalarDst s (i.field "SDST") (Dom.mulHi ab.1 ab.2)
+  | .s_bfm_b64 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_BFM_B64: an operand code is not modelled" fun ab =>
+    let x := Dom.shl64 ab.1 (Dom.lit 1) (Dom.lit 0)
+    let lo := Dom.sub x.1 (Dom.lit 1)
+    let hi := Dom.subc x.2 (Dom.lit 0) (Dom.borrow x.1 (Dom.lit 1))
+    writeScalarDst64 s (i.field "SDST") (Dom.shl64 ab.2 lo hi)
+  -- S_CMP_LG_I32 `SCC = (S0 <> S1)`, S_CMP_GE_U32 `SCC = (S0.u >= S1.u)`
+  | .s_cmp_lg_i32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_CMP_LG_I32: an operand code is not modelled" fun ab =>
+    { s with scc := Dom.ne64 ab.1 (Dom.lit 0) ab.2 (Dom.lit 0) }
+  | .s_cmp_ge_u32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_CMP_GE_U32: an operand code is not modelled" fun ab =>
+    { s with scc := Dom.ule ab.2 ab.1 }
+  -- S_GETPC_B64 `D.u64 = PC + 4`: the byte address of the next instruction, the code image at byte 0 (the
+  -- host places a stage's code there, below every buffer; Host, Check)
+  | .s_getpc_b64 =>
+    writeScalarDst64 s (i.field "SDST") (Dom.lit (UInt32.ofNat (4 * s.pc)), Dom.lit (UInt32.ofNat (4 * s.pc / 4294967296)))
+  | .s_cbranch_scc1 => s.withSome (Dom.conc s.scc) "S_CBRANCH_SCC1: SCC is not known" fun c =>
+    if c != 0 then { s with pc := (Int.ofNat s.pc + signed16 (i.field "SIMM16")).toNat } else s
+  -- Manual 12.5 S_INST_PREFETCH: the instruction-cache prefetch distance (1..3); no architectural effect
+  | .s_inst_prefetch =>
+    if 1 ≤ i.field "SIMM16" && i.field "SIMM16" ≤ 3 then s else s.fail "S_INST_PREFETCH: reserved prefetch mode"
+  -- Manual 12.8 VOP1 V_READFIRSTLANE_B32: the first active lane's VGPR (lane 0 when EXEC is zero) to an
+  -- SGPR, regardless of EXEC; gem5 twin vop1.cc V_READFIRSTLANE_B32. A source other than a VGPR is refused.
+  | .v_readfirstlane_b32 =>
+    let code := srcCode i 0
+    if isSdwa i || code < 256 || code > 511 then s.fail "V_READFIRSTLANE_B32: only a VGPR source is modelled" else
+    let lane := ((List.range lanes).find? (execBit s)).getD 0
+    writeScalarDst s (i.field "VDST") (readVgpr s (code - 256) lane)
+  -- Manual 12.12 V_SUBREV_CO_U32 `D = S1 - S0; VCC = S0 > S1`; gem5 twin vop3.cc V_SUBREV_CO_U32
+  | .v_subrev_co_u32 => valuLanesCarry i s fun a b _ => (Dom.sub b a, Dom.borrow b a)
+  -- Manual 12.9 VOPC V_CMP_GE_U32 `S0 >= S1`, V_CMP_GT_U64 `S0 > S1`; gem5 twins vopc.cc
+  | .v_cmp_ge_u32 => valuCompare i s false fun src => Dom.ule (src1 src) (src0 src)
+  | .v_cmp_gt_u64 => valuCompare i s true fun src => Dom.ult64 (src2 src) (src.getD 3 (Dom.lit 0)) (src0 src) (src1 src)
   | .unknown => s.fail s!"{i.name}: no semantics (refused, not guessed)"
 
 /-- The identities the bitwise complements above are written with, on the concrete domain. -/

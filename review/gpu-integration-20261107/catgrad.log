@@ -1,0 +1,26 @@
+catgrad source: 7629a506680fdd9380706bd31b43017d1bf153fc
+open-hypergraphs source: d746affdc347b9a6137f34feeaf4bd97c4a8334b
+   Compiling obend-catgrad-oracle v0.1.0 (/home/hbox/obend/frontend-external/oracle-build)
+    Finished `release` profile [optimized] target(s) in 0.79s
+     Running `/home/hbox/obend/frontend-external/oracle-build/target/release/obend-catgrad-oracle /home/hbox/obend/frontend-integration/catgrad/mlp.json`
+catgrad upstream hidden.rs adapted U32 ndarray interpreter: 4 vectors, 0.166220 ms per forward pass (source clone, lang-to-core lowering, shape evaluation, loads, term scheduling and evaluation; input tensor construction excluded)
+catgrad scalar boundary oracle: wrapping Add/Sub/Mul, LT-to-Add and nonzero U32 Where
+catgrad-hidden-u32-2x784x100x10: 22 edges, 10 dispatches, 4 catgrad interpreter vectors agree with Lean model
+shader/plan/vector artifact digests match
+catgrad-hidden-u32-2x784x100x10: 4 vectors, 10 dispatches, 0 disagree, 2.145 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+catgrad-hidden-u32-2x784x100x10: 22 edges, 10 dispatches, 4 catgrad interpreter vectors agree with Lean model
+caught planted addAsSub
+catgrad-hidden-u32-2x784x100x10: 22 edges, 10 dispatches, 4 catgrad interpreter vectors agree with Lean model
+caught planted swapMux
+catgrad-u32-scalar-boundaries: 22 edges, 3 dispatches, 1 catgrad interpreter vectors agree with Lean model
+catgrad-u32-scalar-boundaries: 1 vectors, 3 dispatches, 0 disagree, 1.799 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+catgrad-u32-scalar-boundaries: 22 edges, 3 dispatches, 1 catgrad interpreter vectors agree with Lean model
+caught scalar boundary planted addAsSub
+catgrad-u32-scalar-boundaries: 22 edges, 3 dispatches, 1 catgrad interpreter vectors agree with Lean model
+caught scalar boundary planted swapMux
+refused unsupported by name
+refused float by name
+refused oracle_fault by name
+refused shape by name
+refused linear by name
+PASS catgrad MLP gate; artifacts and timing logs in /home/hbox/obend/frontend-integration/catgrad

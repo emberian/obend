@@ -10,13 +10,14 @@ graph is its one-element instance, `compileHypergraphToRtl g = compileArrayGraph
 LEC of `hardware/lec/lec.sh` (Yosys's reading of the `.sv` against Lean's model of the `RtlModule`); the
 GPU leg by the card. The theorems here say the two lowerings denote one evaluation.
 
-The lowering is single assignment: module wire `i` is the `i`-th element definition (the input wires'
-elements, then each edge's destination elements in edge order), and an array of slots records, per array
-wire, where its current definition starts (`LowerSt`). A reader reads the definition current when it is
+The lowering is single assignment: module wire `i` is the `i`-th SSA definition (input elements,
+then each edge's accumulator temporaries and destination elements in edge order), and an array of
+slots records, per array wire, where its current definition starts (`LowerSt`). A reader reads the definition current when it is
 lowered, which is what `stepEdge` reads; so the graph's own wire numbering, a wire defined twice and an
 edge reading its own destination all lower faithfully, and `ArrayGraph.wf` is the only hypothesis. A map's
 `ElemProg` is run symbolically into one expression per element (`progExpr`); a gather is wiring, a
-concatenation renaming, a constant constants. The state is arrays; the closure folds below
+concatenation renaming, a constant constants. Folds append shared accumulator wires through
+`RtlFold.compile`: scans reuse prior prefixes, so their circuits have linear size. The state is arrays; the closure folds below
 (`inputEnvOf`, `evalComb`) are specifications and are not run.
 
 * `compileArrayGraphToRtl_sound`: for every well-formed array graph and every input, the module's output
@@ -30,6 +31,7 @@ concatenation renaming, a constant constants. The state is arrays; the closure f
   (`compileHypergraphToRtlPipelined_sound`), a third corner of the same square.
 -/
 public import Obend.Hardware.Gpu
+public import Obend.Hardware.RtlFold
 @[expose] public section
 
 namespace Obend.Hardware.Square
@@ -83,10 +85,10 @@ theorem evalRtlExpr_elemOpToRtl (op : ElemOp) (args : List RtlExpr) (inputs wire
     simp only [elemOpToRtl, evalRtlExpr, evalAluOp, evalElemOp, evalRtlExpr_getD_const]
   | shr =>
     simp only [elemOpToRtl, evalRtlExpr, evalAluOp, evalElemOp, evalRtlExpr_getD_const]
-    exact ushiftRight_guard _ _
+    simpa only [wordShr_eq] using ushiftRight_guard _ _
   | shl =>
     simp only [elemOpToRtl, evalRtlExpr, evalAluOp, evalElemOp, evalRtlExpr_getD_const]
-    exact shiftLeft_guard _ _
+    simpa only [wordShl_eq] using shiftLeft_guard _ _
 
 /-! ## 2. The lowering -/
 
@@ -125,7 +127,8 @@ def instrStepExpr (loc : Nat → RtlExpr) (i : Instr) : Nat → RtlExpr :=
 def progExpr (st : LowerSt) (srcs : List Nat) (e : Nat) (p : ElemProg) : RtlExpr :=
   (p.code.foldl instrStepExpr (srcElemExpr st srcs e)) p.out
 
-/-- The expression driving element `e` of the destination of `d`. -/
+/-- The expression driving an ordinary edge element. Folds bypass this helper in
+`defineEdge`: each shared accumulator needs its own SSA wire. -/
 def edgeElemExpr (st : LowerSt) (ls : List Nat) (d : ArrayEdge) (e : Nat) : RtlExpr :=
   match d.op with
   | .map _ p => progExpr st d.srcWires e p
@@ -135,13 +138,24 @@ def edgeElemExpr (st : LowerSt) (ls : List Nat) (d : ArrayEdge) (e : Nat) : RtlE
     if e < ls.getD s0 0 then st.read s0 e
     else st.read (d.srcWires.getD 1 0) (e - ls.getD s0 0)
   | .const vs => .const (vs.getD e 0#64)
+  | .fold _ _ => .const 0#64 -- handled by shared accumulator wires in defineEdge
 
 /-- Input wire `w` at ports `p, p + 1, …`, then the port after it. -/
 def defineInput (ls : List Nat) (acc : LowerSt × Nat) (w : Nat) : LowerSt × Nat :=
   (acc.1.define w (ls.getD w 0) (fun e => .inputPort (acc.2 + e)), acc.2 + ls.getD w 0)
 
+/-- Total source reads for the circuit builder; padding outside the declared source
+shape is zero, as in the array reference semantics. -/
+def foldRead (st : LowerSt) (ls : List Nat) (source i : Nat) : RtlExpr :=
+  if i < ls.getD source 0 then st.read source i else .const 0#64
+
 def defineEdge (ls : List Nat) (st : LowerSt) (d : ArrayEdge) : LowerSt :=
-  st.define d.dstWire (ls.getD d.dstWire 0) (edgeElemExpr st ls d)
+  match d.op with
+  | .fold op shape =>
+      let result := RtlFold.compile op shape (foldRead st ls (d.srcWires.getD 0 0)) st.defs
+      let extended : LowerSt := { st with defs := result.1 }
+      extended.define d.dstWire (ls.getD d.dstWire 0) (fun i => result.2.getD i (.const 0#64))
+  | _ => st.define d.dstWire (ls.getD d.dstWire 0) (edgeElemExpr st ls d)
 
 /-- The state after every definition: inputs, then edges. -/
 def lowerSt (g : ArrayGraph) : LowerSt :=
@@ -152,8 +166,8 @@ def lowerSt (g : ArrayGraph) : LowerSt :=
 def boundaryElems (ls : List Nat) (ws : List Nat) : List (Nat × Nat) :=
   ws.flatMap fun w => (List.range (ls.getD w 0)).map fun e => (w, e)
 
-/-- An `ArrayGraph` as a combinational `RtlModule`: a port per input element, a wire per element
-definition, a port per output element reading its wire's last definition. -/
+/-- An `ArrayGraph` as a combinational `RtlModule`: a port per input element, SSA
+wires for element definitions and fold accumulators, and one port per output element. -/
 def compileArrayGraphToRtl (name : String) (g : ArrayGraph) : RtlModule :=
   let st := lowerSt g
   { name       := name
@@ -213,6 +227,7 @@ theorem srcLookup_not_mem (f : Nat → Vec) (ws : List Nat) (u : Nat) (hu : u �
 /-- What an edge's element expression reads: the current definitions of its sources' elements. If they
 hold `env` there, the expression is the edge's value at `e`. -/
 theorem edgeElemExpr_eval (st : LowerSt) (ls : List Nat) (d : ArrayEdge) (hOk : edgeOk ls d = true)
+    (hOrdinary : ∀ op shape, d.op ≠ .fold op shape)
     (env : Nat → Vec) (hGood : Good ls env) (W ins regs : Nat → Word)
     (hRead : ∀ s ∈ d.srcWires, ∀ i, i < ls.getD s 0 → evalRtlExpr ins W regs (st.read s i) = (env s).getD i 0#64)
     (e : Nat) (he : e < ls.getD d.dstWire 0) :
@@ -294,6 +309,7 @@ theorem edgeElemExpr_eval (st : LowerSt) (ls : List Nat) (d : ArrayEdge) (hOk : 
       exact h'.symm
   | const vs =>
     simp only [edgeElemExpr, edgeValue, hop, evalRtlExpr, evalArrayOp]
+  | fold op shape => exact False.elim (hOrdinary op shape hop)
 
 /-- `stepEdge` keeps the declared lengths. -/
 theorem stepEdge_good (ls : List Nat) (d : ArrayEdge) (hOk : edgeOk ls d = true)
@@ -445,9 +461,73 @@ theorem map_range_getD {α : Type} (l : List α) (z : α) (m : Nat) (h : l.lengt
   · intro i h1 h2
     simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem h2]
 
-/-- One edge: the invariant moves from `env` to `stepEdge env d`. -/
-theorem Rep_defineEdge (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) (env : Nat → Vec)
-    (hR : Rep ls ins regs st env) (d : ArrayEdge) (hOk : edgeOk ls d = true) :
+/-- Appending internal SSA temporaries preserves the meanings of all array slots. -/
+theorem Rep_extend (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) (env : Nat → Vec)
+    (hR : Rep ls ins regs st env) (defs : RtlFold.Defs)
+    (he : RtlFold.Extends ins regs st.defs defs) :
+    Rep ls ins regs { st with defs := defs } env := by
+  refine ⟨hR.1, ?_, ?_, hR.2.2.2⟩
+  · intro w b hw hb
+    exact Nat.le_trans (hR.2.1 w b hw hb) he.size
+  · intro wires hw w i hwi hi
+    exact hR.2.2.1 wires (he.agrees wires hw) w i hwi hi
+
+theorem foldRead_denotes (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) (env : Nat → Vec)
+    (hR : Rep ls ins regs st env) (source : Nat) (hs : source < ls.length) (i : Nat) :
+    RtlFold.Denotes ins regs st.defs (foldRead st ls source i) ((env source).getD i 0#64) := by
+  intro wires hw
+  unfold foldRead
+  split
+  · rename_i hi
+    exact hR.2.2.1 wires hw source i hs hi
+  · rename_i hi
+    have hLen := hR.2.2.2 source hs
+    simp only [evalRtlExpr]
+    symm
+    exact getD_of_le_length (env source) i 0#64 (by omega)
+
+/-- One fold edge: accumulator wires are shared across scan prefixes, then the
+array destination aliases their result wires. The old source slots remain intact. -/
+theorem Rep_defineEdge_fold (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) (env : Nat → Vec)
+    (hR : Rep ls ins regs st env) (d : ArrayEdge) (hOk : edgeOk ls d = true)
+    (op : ReduceOp) (shape : FoldShape) (hop : d.op = .fold op shape) :
+    Rep ls ins regs (defineEdge ls st d) (stepEdge env d) := by
+  have hOk' := hOk
+  simp only [edgeOk, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq, List.all_eq_true, hop,
+    ArrayOp.outLen] at hOk'
+  obtain ⟨⟨⟨hDst,hSrcs⟩,hLen⟩,hOne,hInput⟩ := hOk'
+  obtain ⟨source, hs⟩ : ∃ source, d.srcWires = [source] := by
+    cases h : d.srcWires with
+    | nil => simp [h] at hOne
+    | cons source rest => cases rest with
+      | nil => exact ⟨source,rfl⟩
+      | cons _ _ => simp [h] at hOne
+  have hSource : source < ls.length := hSrcs source (by simp [hs])
+  let result := RtlFold.compile op shape (foldRead st ls source) st.defs
+  have hc := RtlFold.compile_sound op shape (foldRead st ls source)
+    (fun i => (env source).getD i 0#64) ins regs st.defs
+    (foldRead_denotes ls ins regs st env hR source hSource)
+  let extended : LowerSt := { st with defs := result.1 }
+  have hr : Rep ls ins regs extended env := Rep_extend ls ins regs st env hR result.1 hc.1
+  have hav : edgeValue env d = evalFold op shape (fun i => (env source).getD i 0#64) := by
+    simp [edgeValue, edgeSrcs, hop, hs, evalArrayOp]
+  have hd := Rep_define ls ins regs extended env hr d.dstWire hDst
+    (fun i => result.2.getD i (.const 0#64)) (fun i => (edgeValue env d).getD i 0#64)
+    (by
+      intro wires hw i _
+      rw [hav]
+      exact hc.2.2 i wires hw)
+  have he : (List.range (ls.getD d.dstWire 0)).map (fun i => (edgeValue env d).getD i 0#64) =
+      edgeValue env d := by
+    apply map_range_getD
+    rw [hav]
+    simpa only [evalFold, List.length_map, FoldShape.outLen] using hLen
+  simpa only [defineEdge, hop, hs, List.getD_cons_zero, stepEdge, he] using hd
+
+/-- One ordinary edge uses the existing independent element-expression lowering. -/
+theorem Rep_defineEdge_ordinary (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) (env : Nat → Vec)
+    (hR : Rep ls ins regs st env) (d : ArrayEdge) (hOk : edgeOk ls d = true)
+    (hOrdinary : ∀ op shape, d.op ≠ .fold op shape) :
     Rep ls ins regs (defineEdge ls st d) (stepEdge env d) := by
   have hOk' := hOk
   simp only [edgeOk, Bool.and_eq_true, decide_eq_true_eq] at hOk'
@@ -457,7 +537,7 @@ theorem Rep_defineEdge (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) 
     simpa [List.all_eq_true] using this
   have hStep := Rep_define ls ins regs st env hR d.dstWire hDst (edgeElemExpr st ls d)
     (fun e => (edgeValue env d).getD e 0#64) (fun W' hW' e he =>
-      edgeElemExpr_eval st ls d hOk env hR.2.2.2 W' ins regs
+      edgeElemExpr_eval st ls d hOk hOrdinary env hR.2.2.2 W' ins regs
         (fun s hs i hi => hR.2.2.1 W' hW' s i (hSrcs s hs) hi) e he)
   have hLen : (edgeValue env d).length = ls.getD d.dstWire 0 := by
     have := stepEdge_good ls d hOk env hR.2.2.2 d.dstWire hDst
@@ -472,7 +552,20 @@ theorem Rep_defineEdge (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) 
       exact map_range_getD _ _ _ hLen
     · simp only [h, Bool.false_eq_true, if_false]
   rw [← hEnv]
+  have hd : defineEdge ls st d = st.define d.dstWire (ls.getD d.dstWire 0) (edgeElemExpr st ls d) := by
+    cases hop : d.op <;> simp [defineEdge, hop]
+    exact False.elim (hOrdinary _ _ hop)
+  rw [hd]
   exact hStep
+
+/-- One edge preserves the representation invariant, including shared fold circuits. -/
+theorem Rep_defineEdge (ls : List Nat) (ins regs : Nat → Word) (st : LowerSt) (env : Nat → Vec)
+    (hR : Rep ls ins regs st env) (d : ArrayEdge) (hOk : edgeOk ls d = true) :
+    Rep ls ins regs (defineEdge ls st d) (stepEdge env d) := by
+  cases hop : d.op with
+  | fold op shape => exact Rep_defineEdge_fold ls ins regs st env hR d hOk op shape hop
+  | map | gather | concat | const =>
+    exact Rep_defineEdge_ordinary ls ins regs st env hR d hOk (by intros; simp [hop])
 
 theorem Rep_edges (ls : List Nat) (ins regs : Nat → Word) (es : List ArrayEdge)
     (hOk : ∀ d ∈ es, edgeOk ls d = true) :

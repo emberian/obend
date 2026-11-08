@@ -113,17 +113,13 @@ def targets : List (String × String) :=
   , ("wio-sm", "hardware/fabulous/tile/W_IO_switch_matrix_lec.sv")
   , ("lut4c", "hardware/fabulous/tile/LUT4c_frame_config_dffesr.sv")
   , ("mux8lut", "hardware/fabulous/tile/MUX8LUT_frame_config_mux.sv") ] ++
-  squareGraphs.map fun sq => (s!"square-{sq.name}", s!"hardware/gpu/square/sv/{svName sq.name}.sv")
+  squarePlan.map fun (name, _) => (s!"square-{name}", s!"hardware/gpu/square/sv/{svName name}.sv")
 
-/-- `square-<graph>`: a graph of `squareGraphs`. The theorems' one hypothesis, `ArrayGraph.wf`, is checked
-here, so a module this prints is one `rtl_eq_gpu`/`rtl_eq_gpu_array` is about. -/
+/-- `square-<graph>` selects the shared checked source/typing receipt. Its derivation
+implies `ArrayGraph.wf`, the premise of `rtl_eq_gpu`/`rtl_eq_gpu_array`. -/
 def squareTarget (t : String) : Option (Except String SquareGraph) :=
   if t.startsWith "square-" then
-    match squareGraphs.find? (fun sq => s!"square-{sq.name}" == t) with
-    | some sq =>
-      if !sq.graph.wf then some (.error s!"{t}: the graph fails ArrayGraph.wf")
-      else some (.ok sq)
-    | none => some (.error s!"unknown square graph {t}; `obend-emit-sv list`")
+    some (squareGraph (t.drop 7).toString)
   else none
 
 /-- The targets that are one `RtlModule` printed by `emitModuleSV`: the qualified name of the Lean
@@ -153,7 +149,7 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
 def moduleTargetNames : List String :=
   ["risc", "zk", "fidget", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"] ++
-  squareGraphs.map fun sq => s!"square-{sq.name}"
+  squarePlan.map fun (name, _) => s!"square-{name}"
 
 /-- `--tb`: the Verilator harness of a square target: every vector of the graph on the module's input
 ports, each output port against `evalModuleOutputs` (the HDL semantics, the side `rtl_eq_gpu` is about).
@@ -165,7 +161,7 @@ def renderSquareTb (target : String) : Except String String :=
   | some (.ok sq) =>
     if !checkRtlModuleW sq.rtl then .error s!"{sq.lean} fails checkRtlModuleW; not emitted" else
     let vecs : List Obend.Hardware.VerilateRunner.DifferentialVector :=
-      (graphVectors sq.name sq.graph sq.kind).zipIdx.map fun (vals, v) =>
+      (graphVectors sq.graph sq.kind sq.name).zipIdx.map fun (vals, v) =>
         let ins := squareInputs vals
         { vecIdx := v
         , portInputs := sq.rtl.inputNames.zipIdx.map fun (n, p) => (n, ins p)

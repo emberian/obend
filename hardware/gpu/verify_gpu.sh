@@ -5,13 +5,13 @@
 #
 #   verify_gpu.sh                 the gate: [1] byte equality of every committed plan, shader and
 #                                 expected.tsv with obend-emit-gpu (a graph committed as graphs/<g>.sha256
-#                                 instead of a directory is regenerated and its digests compared; the
-#                                 65536-point NTT's plan is too large to commit), [2] every vector of every
+#                                 instead of a directory is regenerated and its digests compared; large
+#                                 NTT and SOAC plans are kept by digest), [2] every vector of every
 #                                 graph agrees on the device, with the dispatch time per vector printed and
 #                                 not gated, [3] each planted shader rule makes at least one graph's
 #                                 comparison fail, [4] with Mesa's RADV, the final ISA of every stage is
 #                                 extracted under isa/ with its machine code and resource usage
-#                                 (isa_extract.py: one program per stage, at least one 64-bit store)
+#                                 (isa_extract.py: one program per stage, buffer stores unless empty)
 #   verify_gpu.sh --plant NAME    only the comparison, on shaders emitted with the planted rule NAME
 #                                 (addAsSub, swapMux, mulHighZero); it fails, and says where
 #   verify_gpu.sh --stage N       only stage N of the gate (1-4)
@@ -42,7 +42,9 @@ fi
 ADAPTER_ARGS=()
 [[ -n "${GPU_ADAPTER:-}" ]] && ADAPTER_ARGS=(--adapter "${GPU_ADAPTER}")
 
-mapfile -t GRAPHS < <("${EMIT}" list)
+GRAPH_LIST="$("${EMIT}" list)"
+[[ -n "${GRAPH_LIST}" ]] || { echo "[FAIL] emitter returned no workloads" >&2; exit 1; }
+mapfile -t GRAPHS <<< "${GRAPH_LIST}"
 if command -v sha256sum >/dev/null 2>&1; then SHA=(sha256sum); else SHA=(shasum -a 256); fi
 
 # graph_dir NAME : the committed directory, or a fresh emission under WORK for a graph kept as a digest
@@ -50,7 +52,7 @@ graph_dir() {
   if [[ -d "${SCRIPT_DIR}/graphs/$1" ]]; then
     echo "${SCRIPT_DIR}/graphs/$1"
   else
-    [[ -d "${WORK}/emit/$1" ]] || "${EMIT}" "$1" --out "${WORK}/emit/$1" >/dev/null
+    [[ -d "${WORK}/emit/$1" ]] || "${EMIT}" "$1" --out "${WORK}/emit/$1" >/dev/null || return 1
     echo "${WORK}/emit/$1"
   fi
 }
@@ -71,6 +73,17 @@ run_graph() {
   set -e
 }
 
+# A planted rule earns a failure only by producing a wrong value on the device.
+# Shader validation, driver errors and crashes are failures of the gate itself.
+require_value_mismatch() {
+  if ! grep -q 'vectors disagree' <<< "${RUN_OUT}" &&
+      ! grep -q 'vectors disagree' "${WORK}/run.err"; then
+    echo "[FAIL] planted shader failed before a value mismatch:" >&2
+    printf '%s\n' "${RUN_OUT}" >&2
+    cat "${WORK}/run.err" >&2
+    exit 1
+  fi
+}
 # Plant emission reuses the unplanted model outputs generated once by this run.
 # It still regenerates the plan and shaders through the admitted source language.
 prepare_expected() {
@@ -94,7 +107,9 @@ if [[ "${1:-}" == "--plant" ]]; then
   for g in "${GRAPHS[@]}"; do
     run_graph "${WORK}/plant/${g}"
     if (( RUN_RC != 0 )); then
-      echo "  ${g}: caught"; echo "${RUN_OUT}" | sed 's/^/    /' | head -4
+      require_value_mismatch
+      echo "  ${g}: caught"
+      sed -n '1,4{s/^/    /;p;}' <<< "${RUN_OUT}"
       caught=$((caught + 1))
     fi
   done
@@ -157,7 +172,10 @@ for plant in addAsSub swapMux mulHighZero; do
   caught=""
   for g in "${GRAPHS[@]}"; do
     run_graph "${WORK}/plant-${plant}/${g}"
-    if (( RUN_RC != 0 )); then caught="${caught} ${g}"; fi
+    if (( RUN_RC != 0 )); then
+      require_value_mismatch
+      caught="${caught} ${g}"
+    fi
   done
   if [[ -z "${caught}" ]]; then
     echo "[FAIL] planted ${plant} went unnoticed on every graph: the comparison has no teeth" >&2

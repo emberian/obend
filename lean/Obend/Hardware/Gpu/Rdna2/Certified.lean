@@ -51,21 +51,24 @@ theorem certifyDump_sound (g : ArrayGraph) (isa : String) (h : certifyDump g isa
       certified_outputs g hwf hlay hbd progs _ hc Residuals.all_hold env flat hGood hFlat⟩
   · simp at hc
 
-/-- The check of a graph of `SquareGraphs.graphs` by name (what the pins and the gate run). -/
+/-- The check of a graph of `SquareGraphs.graphs` by name (what the pins and the gate run): its typed
+graph, built as the emitter builds it, certified against the dump. -/
 def certifyNamed (name : String) (isa : String) : Bool :=
-  match Obend.Hardware.SquareGraphs.graphs.find? (·.1 == name) with
-  | some (_, g, _) => certifyDump g isa
+  match Obend.Hardware.SquareGraphs.graphs.find? (·.name == name) with
+  | some c => match c.build () with
+    | .ok tg => certifyDump tg.graph isa
+    | .error _ => false
   | none => false
 
 theorem certifyNamed_sound (name isa : String) (h : certifyNamed name isa = true) :
-    ∃ g k, Obend.Hardware.SquareGraphs.graphs.find? (·.1 == name) = some (name, g, k) ∧ certifyDump g isa = true := by
+    ∃ c tg, Obend.Hardware.SquareGraphs.graphs.find? (·.name == name) = some c ∧ c.build () = .ok tg ∧
+      certifyDump tg.graph isa = true := by
   unfold certifyNamed at h
   split at h
-  · rename_i n g k hf
-    have := List.find?_some hf
-    simp only [beq_iff_eq] at this
-    subst this
-    exact ⟨g, k, hf, h⟩
+  · rename_i c hf
+    split at h
+    · rename_i tg hb; exact ⟨c, tg, hf, hb, h⟩
+    · simp at h
   · simp at h
 
 end Obend.Hardware.Gpu.Rdna2

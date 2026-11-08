@@ -1,0 +1,14 @@
+{
+  "graph": "source-leaf-shl",
+  "words": 10,
+  "workgroupSize": 64,
+  "wireBase": [0,0,0],
+  "wireLen": [10,10,10],
+  "consts": ["1"],
+  "tables": [],
+  "inputs": [0],
+  "outputs": [2],
+  "stages": [
+    {"file":"stage_0.wgsl","threads":10}
+  ]
+}

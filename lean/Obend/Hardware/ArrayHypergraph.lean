@@ -47,14 +47,13 @@ is modulo `2^64`, as `BitVec 64` and WGSL `i64` are.
 -/
 public import Obend.Hardware.OpenHypergraph
 public import Std.Data.HashMap
+public import Obend.Hardware.ArrayFold
 @[expose] public section
 
 namespace Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.OpenHypergraph
 set_option autoImplicit false
 
-abbrev Word := BitVec 64
-abbrev Vec := List Word
 
 theorem beq_symm_nat (a b : Nat) : (a == b) = (b == a) := by
   cases h : a == b
@@ -96,8 +95,8 @@ def evalElemOp (op : ElemOp) (args : List Word) : Word :=
   | .ult      => if BitVec.ult a0 a1 then 1#64 else 0#64
   | .band     => a0 &&& a1
   | .bor      => a0 ||| a1
-  | .shr      => a0 >>> a1.toNat
-  | .shl      => a0 <<< a1.toNat
+  | .shr      => wordShr a0 a1
+  | .shl      => wordShl a0 a1
 
 /-- One instruction of an elementwise program: `dst := op args`, every name a wire. -/
 structure Instr where
@@ -138,7 +137,17 @@ inductive ArrayOp where
   | concat
   /-- a constant array. -/
   | const (vals : Vec)
+  /-- Associative reduction or scan, optionally segmented. -/
+  | fold (op : ReduceOp) (shape : FoldShape)
   deriving DecidableEq, Repr
+
+/-- Reduce a wire, producing a singleton (the identity when `n = 0`). -/
+def ArrayOp.reduce (op : ReduceOp) (n : Nat) : ArrayOp := .fold op (.reduce n)
+/-- Length-preserving scan with an explicit inclusive/exclusive convention. -/
+def ArrayOp.scan (op : ReduceOp) (n : Nat) (mode : ScanMode) : ArrayOp := .fold op (.scan n mode)
+def ArrayOp.segReduce (op : ReduceOp) (lengths : List Nat) : ArrayOp := .fold op (.segReduce lengths)
+def ArrayOp.segScan (op : ReduceOp) (lengths : List Nat) (mode : ScanMode) : ArrayOp :=
+  .fold op (.segScan lengths mode)
 
 /-- The sources of an edge are named: a program reads them by wire. The first pair of a name wins. -/
 def srcLookup (srcs : List (Nat × Vec)) (w : Nat) : Vec :=
@@ -169,6 +178,7 @@ def evalArrayOp (op : ArrayOp) (srcs : List (Nat × Vec)) : Vec :=
   | .gather f  => f.table.map fun i => (args.getD 0 []).getD i 0#64
   | .concat    => args.getD 0 [] ++ args.getD 1 []
   | .const vs  => vs
+  | .fold op shape => evalFold op shape (fun i => (args.getD 0 []).getD i 0#64)
 
 /-- The length an operation's result has, from the operation alone or its sources' lengths. -/
 def ArrayOp.outLen (op : ArrayOp) (srcLens : List Nat) : Nat :=
@@ -177,6 +187,7 @@ def ArrayOp.outLen (op : ArrayOp) (srcLens : List Nat) : Nat :=
   | .gather f => f.source
   | .concat   => srcLens.getD 0 0 + srcLens.getD 1 0
   | .const vs => vs.length
+  | .fold _ shape => shape.outLen
 
 theorem evalArrayOp_length (op : ArrayOp) (srcs : List (Nat × Vec)) (hf : ∀ f, op = .gather f → f.wf = true) :
     (evalArrayOp op srcs).length = op.outLen ((srcs.map (·.2)).map List.length) := by
@@ -192,6 +203,7 @@ theorem evalArrayOp_length (op : ArrayOp) (srcs : List (Nat × Vec)) (hf : ∀ f
     | nil => rfl
     | cons a rest => cases rest <;> simp
   | const vs => simp [evalArrayOp, ArrayOp.outLen]
+  | fold op shape => simp [evalArrayOp, ArrayOp.outLen, evalFold, FoldShape.outLen]
 
 /-! ## 2. Graphs -/
 
@@ -240,7 +252,8 @@ def edgeOk (ls : List Nat) (e : ArrayEdge) : Bool :=
      p.code.all (fun i => !(e.srcWires.contains i.dst)) && !(e.srcWires.contains p.out)
    | .gather f => f.wf && e.srcWires.length == 1 && (f.target == len (e.srcWires.getD 0 0))
    | .concat   => e.srcWires.length == 2
-   | .const _  => e.srcWires.isEmpty)
+   | .const _  => e.srcWires.isEmpty
+   | .fold _ shape => e.srcWires.length == 1 && shape.inputLen == len (e.srcWires.getD 0 0))
 
 /-- No edge writes a wire that it or an earlier edge reads. -/
 def noWriteAfterRead : List ArrayEdge → Bool
@@ -400,6 +413,7 @@ def evalArrayOpExec (op : ArrayOp) (srcs : List (Nat × AVec)) : AVec :=
   | .gather f  => f.table.toArray.map fun i => (args.getD 0 #[]).getD i 0#64
   | .concat    => args.getD 0 #[] ++ args.getD 1 #[]
   | .const vs  => vs.toArray
+  | .fold op shape => evalFoldExec op shape (fun i => (args.getD 0 #[]).getD i 0#64)
 
 theorem getD_map_toList (xs : List AVec) (i : Nat) : (xs.map Array.toList).getD i [] = (xs.getD i #[]).toList := by
   induction xs generalizing i with
@@ -426,6 +440,8 @@ theorem evalArrayOpExec_toList (op : ArrayOp) (srcs : List (Nat × AVec)) :
   | concat =>
     simp only [evalArrayOpExec, evalArrayOp, Array.toList_append, hargs, getD_map_toList]
   | const vs => simp [evalArrayOpExec, evalArrayOp]
+  | fold op shape =>
+    simp only [evalArrayOpExec, evalArrayOp, evalFoldExec_toList, hargs, getD_map_toList, getD_toList]
 
 def stepEdgeArr (a : Array AVec) (e : ArrayEdge) : Array AVec :=
   a.setIfInBounds e.dstWire (evalArrayOpExec e.op (e.srcWires.map fun w => (w, a.getD w #[])))
@@ -1234,6 +1250,7 @@ theorem fuseEdge_value (ls : List Nat) (all pre : List ArrayEdge) (defs : List D
   | gather f => simp [fuseEdge, hop]
   | concat => simp [fuseEdge, hop]
   | const vs => simp [fuseEdge, hop]
+  | fold op shape => simp [fuseEdge, hop]
 
 theorem fuseEdge_dst (defs : List Def) (e : ArrayEdge) : (fuseEdge defs e).1.dstWire = e.dstWire := by
   cases h : e.op <;> simp [fuseEdge, h]
@@ -1468,6 +1485,22 @@ theorem fuseEdges_main (ls : List Nat) (all : List ArrayEdge) (hH : Hyps ls all)
         · subst h; exact ⟨hOk, fun hm => by simp [ArrayEdge.isMap, hop] at hm⟩
         · exact ihOk e' h
     | concat =>
+      simp only [fuseEdges, fuseEdge, hop]
+      have hInv' : FuseInv ls all (pre ++ [e]) defs (stepEdge env e) :=
+        { cons := hCons'
+        , defsOk := fun df hdf => DefOk.mono ls all pre e df (hInv.defsOk df hdf)
+        , found := fun d hd hdm => by
+            rcases List.mem_append.mp hd with h | h
+            · exact hInv.found d h hdm
+            · simp only [List.mem_singleton] at h; subst h; simp [ArrayEdge.isMap, hop] at hdm }
+      obtain ⟨ihEval, ihOk⟩ := ih (pre ++ [e]) defs (stepEdge env e) hAll' hInv'
+      refine ⟨?_, ?_⟩
+      · simp only [evalComb, List.foldl_cons] at ihEval ⊢; exact ihEval
+      · intro e' he'
+        rcases List.mem_cons.mp he' with h | h
+        · subst h; exact ⟨hOk, fun hm => by simp [ArrayEdge.isMap, hop] at hm⟩
+        · exact ihOk e' h
+    | fold op shape =>
       simp only [fuseEdges, fuseEdge, hop]
       have hInv' : FuseInv ls all (pre ++ [e]) defs (stepEdge env e) :=
         { cons := hCons'

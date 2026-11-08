@@ -240,6 +240,21 @@ pending writes and hash-map registers, rather than reevaluating a functional gra
 These are universal theorems with executable admission hypotheses, not a fixture enumeration.
 G4's initial-zero convention does not model arbitrary host uploads; that remains an explicit boundary.
 
+Ordinary array programs retain the lexical Leaf/Core4 front. `ArrayMember.checkMember` checks
+member syntax and scope, and `ArrayTyping.checkTypedGraph` returns typing and live-layout receipts.
+`Plan.source_to_gpu_encoded` composes `book_sound`, source compilation and general GPU lowering.
+Field programs structurally reify the shared `ArrayBuild`/`GoldilocksSource` builder, rather than
+maintaining another field arithmetic implementation. Reductions and scans retain segment-owned
+linear invocation loops, now emitted using the same limb representation as maps.
+
+The frontend accepts exported scalar book files and serialized integer catgrad models.
+[`gpu/SOURCE.md`](gpu/SOURCE.md) describes the book workflow;
+[`gpu/catgrad/README.md`](gpu/catgrad/README.md) describes the upstream MLP and explicit integer adaptation;
+[`gpu/SOAC.md`](gpu/SOAC.md) describes segmented folds and their current sequential schedule.
+The lexical fragment does not express workgroup-indexed register networks, shared-memory phases or
+barriers. The sole NTT builder is `Gpu.Ntt`, in the block language described below; the lexical
+encoded-source theorem does not claim to cover it.
+
 The emitted scalar representation is `vec2<u32>`. `Gpu.Limbs`, `LimbsShift` and
 `LimbsGoldilocks` prove carry, product, shift and Goldilocks reduction refinements for arbitrary limbs.
 The bounded 32×32 widening primitive currently uses Naga/wgpu's SHADER_INT64 syntax; RADV lowers it
@@ -392,14 +407,17 @@ The kernel lane adds checked live layouts, workgroup source programs and an empi
 lowered to the GPU program above and to a combinational `RtlModule`, each leg run outside Lean on the
 same vectors, and theorems that the two lowerings denote one evaluation.
 
-One lowering. `compileArrayGraphToRtl` is single assignment: module wire `i` is the `i`-th element
-definition (the input wires' elements, then each edge's destination elements in edge order), and an array
+One lowering. `compileArrayGraphToRtl` is single assignment: module wire `i` is the `i`-th SSA
+definition (input elements, then accumulator temporaries and destination elements), and an array
 of slots (`LowerSt`) records, per array wire, where its current definition starts. A reader is lowered
 against the definition current at that point, which is what `stepEdge` reads, so the graph's own wire
 numbering, a wire defined twice and an edge reading its own destination all lower faithfully: the only
 hypothesis is `ArrayGraph.wf`. A map's `ElemProg` is run symbolically into one expression per element
 (`progExpr`; the shifts are exact for every amount, `evalRtlExpr_elemOpToRtl`), a gather is wiring, a
-concatenation renaming, a constant constants. The lowering takes the graph before fusion; the GPU lowering
+concatenation renaming, a constant constants. `RtlFold.compile` gives folds shared accumulator
+wires; scan outputs reuse prefixes, so circuit size is linear, with sequential depth.
+`RtlFold.compile_sound` proves equality with `evalFold`, including empty segments.
+The lowering takes the graph before fusion; the GPU lowering
 fuses (`fuseGraph`); the theorems meet at `evalGraph`. A scalar graph is the one-element instance,
 `compileHypergraphToRtl g = compileArrayGraphToRtl (ofScalar g)`, as `lowerHypergraphToGpu` is on the
 GPU side; the scalar lowering this replaced needed every wire defined once as a side condition and failed
@@ -428,6 +446,7 @@ what no other one exercises:
 | `tree512` | size: 511 chained adders, where the LEC's time goes |
 | `glmul-4` | the bit operations of the Goldilocks multiply (ult, and, or, both shifts) as elementwise maps over arrays |
 | `array-route` | gathers, concatenation and constant arrays with a shared producer |
+| `soac-boundaries` | segmented reductions/scans, empty segments, modular monoids and producer/consumer composition |
 
 The gate, `verify_square.sh`, per graph: the committed `sv/<top>.sv` regenerates byte for byte;
 `obend-emit-sv square-<graph> --expected`, the HDL model's `expected.tsv` from `evalModuleOutputs`, equals
@@ -440,18 +459,13 @@ graphs in `EQY_GRAPHS`); the Verilator harness `obend-emit-sv square-<graph> --t
 trying operators nearest the outputs first) makes the LEC answer sat and Verilator report mismatches. A
 swap the LEC proves equivalent, or cannot decide within its limits (`lec.sh`'s `LEC_ABS_SECS`, set by the
 tooth, bounds the query with multiplication uninterpreted, under which a sat reads only as undecided), is
-skipped and counted. Recovery checked all byte/model stages, the full replacement `array-route` fixture,
-and `glmul-4` Verilator simulation on hbox. Yosys and z3 use the distribution
-packages (`YOSYS_BIN=/usr/bin/yosys`). The packaged Verilator wrappers pointed to
-missing executables, so recovery built upstream v5.024 at commit
-`522bead374d6b7b2adb316304126e5361b18bcf1` under `swarm-build make -j2`.
-`VERILATOR_BIN=/home/hbox/obend/kernels-tools/bin/verilator` selects a shim that
-unsets that variable before calling the source-tree frontend; the upstream frontend
-otherwise interprets it as its internal binary. The binaries built successfully;
-the documentation target lacked `help2man`. Earlier square runs used the Mac.
+skipped and counted. `YOSYS_BIN` and `VERILATOR_BIN` select the executables. The gate removes
+`VERILATOR_BIN` from the child environment because Verilator reserves it for its internal binary.
 
-The recovery replaced the obsolete per-layer NTT fixture with `array-route`, retaining the
-array-operation coverage on exactly the same source graph for both devices. `glmul-256` and
-larger field arrays are not in the square; the LEC cost grows with their arithmetic.
-The workgroup NTT source is covered by its own lowering/refinement and device gates, not this
-array-RTL theorem. EQY remains opt-in; the LEC is the default equivalence step.
+The shared LEC retains SMT expression sharing through the installed Yosys `smtio.py` unroller
+and defining equalities. Model definitions precede `check-sat`; solver errors are rejected.
+Exact bounded SAT witnesses speed the negative checks without letting constrained UNSAT prove
+equivalence. A planted bit flip requires exact SAT. `YOSYS_SMTIO` selects a nonstandard unroller.
+The obsolete per-layer NTT square fixture is replaced by `array-route`; `soac-boundaries` remains.
+The block NTT is covered by its own lowering and device gates, not the array-RTL theorem.
+EQY remains opt-in; LEC is the default equivalence step.

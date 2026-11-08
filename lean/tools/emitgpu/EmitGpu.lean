@@ -1,74 +1,72 @@
 /-
-# `obend-emit-gpu` — array hypergraphs lowered to compute shaders (`Obend.Hardware.Gpu`)
+# `obend-emit-gpu` — checked array sources and block programs to compute shaders
 
-    obend-emit-gpu list
-    obend-emit-gpu <graph> --out DIR [--plant P]
-        DIR/plan.json (the allocated device buffer's size, every wire's base and length, the constant and index
-        buffers, the boundary wires, one shader per dispatch), DIR/stage_<k>.wgsl, and
-        DIR/expected.tsv, one line per vector: index, the input wires, and the output wires
-        `Obend.Hardware.Gpu.runProgram` shows (wires separated by `;`, elements by `,`, signed 64-bit)
-    obend-emit-gpu all --out DIR [--plant P]
-        every graph, each under DIR/<graph>/
+`list` names workloads; `<name> --out DIR` emits a plan, shaders and expected.tsv;
+`all --out DIR` emits every registered workload. `leaf`, `leaf-example` and `catgrad`
+retain the checked source-import routes. `--plant` changes shader rules only.
+`--artifacts-only` skips expected-value evaluation for registered workloads; the
+external gate may reuse its unplanted oracle only after checking plan equality.
 
-`--plant addAsSub` emits every `+` as `-`; `--plant swapMux` exchanges the arms of every `select`:
-rules planted in the shader text only, for `hardware/gpu/verify_gpu.sh`'s tooth. The expected values
-are always the unplanted model's.
+Ordinary workloads share the typed source registry and vectors in SquareGraphs.
+Their checked typing/live-layout receipt reaches the ordinary Plan lowering;
+expected outputs use evalGraphArr and independent source/SOAC/field references.
 
-Expected values are `evalGraphArr`'s, which is `evalGraph` with the wires stored (`evalGraphArr_eq`).
-Before writing, the emitter refuses a graph that fails `ArrayGraph.wf` (the hypothesis of
-`lowerArrayToGpu_sound`, so the expected values are `evalGraph`'s and the device must show them) and an
-NTT graph whose evaluation disagrees with a recursive radix-2 NTT over the Goldilocks field in `Nat`
-arithmetic (`nttFast`), which for the smaller sizes is itself checked against the naive DFT
-(`nttReference`). These are tests of the fixtures, run on every emission.
-
-NTTs use `ArrayKernel.Program`: indexed multi-output maps, radix-4 register networks, shared-memory
-phases, and balanced Stockham uploads derived from ec-gpu's `radix_fft` and Govindaraju et al. SC2008.
-The source contains every index and arithmetic operation; the generic emitter contains no NTT shader.
-`Program.check` admits bounds, SSA closure, initialization and ownership; `SourceProtocol.checkProgram`
-checks the actual physical-lane phase protocol against G4. Expected outputs are the executable source
-semantics, independently compared with `nttFast` and (at small sizes) the direct DFT. These comparisons
-are gates, not a universal theorem that the chosen NTT construction is the mathematical DFT.
-`--artifacts-only` omits expected-value evaluation so planted shader rules reuse the unplanted output
-oracle once per external gate run; plan equality is required before that reuse.
+Gpu.Ntt.nttBlockProgram is the sole NTT construction. It uses ArrayKernel.Program
+for indexed multi-output maps, register networks and shared-memory phases, derived
+from ec-gpu radix_fft and Govindaraju et al. SC2008. Program.check admits bounds,
+SSA closure, initialization and ownership; SourceProtocol.checkProgram checks the
+physical-lane phase protocol against G4. Block NTTs are outside the ordinary Plan
+source theorem: its fragment lacks workgroup memory and phase barriers. Executable
+block outputs are checked against the independent recursive NTT and small direct
+DFT; these gates are not a universal theorem that this construction is the DFT.
 -/
 import Obend.Hardware.SquareGraphs
+import Obend.Hardware.Gpu.BookImport
+import Obend.Hardware.Gpu.CatgradImport
 import Obend.Hardware.Gpu.Ntt
 import Obend.Hardware.ArrayKernel
 import Obend.Hardware.Gpu.BlockEmit
 import Obend.Hardware.Gpu.LayoutChecks
 import Obend.Hardware.Gpu.DispatchProtocol
-import Obend.Hardware.Gpu.GoldilocksSource
 
 open Obend.Hardware.OpenHypergraph
 open Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.Gpu
 open Obend.Hardware.SquareGraphs
 open Obend.Hardware.Gpu.Ntt
-
-open Obend.Hardware.ArrayBuild
 open Obend.Hardware.Gpu.GoldilocksSource
 
-def writeGraph (name : String) (g : ArrayGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
-  unless g.wf do
-    throw <| IO.userError s!"{name}: the graph is not well-formed (ArrayGraph.wf)"
-  unless layoutOk g do
-    throw <| IO.userError s!"{name}: allocated layout fails live-range separation or dispatch race check"
-  let p := lowerArrayToGpu g
+/-! ## Expected values and external reference checks -/
+
+def writeGraph (name : String) (typed : Obend.Hardware.ArrayTyping.TypedGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
+  let g := typed.graph
+  let p := typed.lower
   IO.FS.createDirAll dir
   IO.FS.writeFile (dir / "plan.json") (emitPlanJson name p)
   for (s, k) in p.stages.zipIdx do
     IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (emitStageWgsl plant name k p.stages.length s)
   if artifactsOnly then return
-  IO.FS.writeFile (dir / "expected.tsv") (expectedTsv name g kind (arrayModel g))
+  let vectors := graphVectors g kind name
+  let mut outputs : Array (List Vec) := #[]
+  for (vals, v) in vectors.zipIdx do
+    let model := arrayModel g vals
+    unless Obend.Hardware.Gpu.SourcePrograms.checkSourceExpected name (vals.map toVec) model do
+      throw <| IO.userError s!"{name} vector {v}: graph disagrees with the independent source reference"
+    unless Obend.Hardware.Gpu.SoacPrograms.checkSoacExpected name (vals.map toVec) model do
+      throw <| IO.userError s!"{name} vector {v}: graph disagrees with the independent SOAC reference"
+    if name.startsWith "glmul-" then
+      let left := (toVec (vals.getD 0 [])).map (·.toNat)
+      let right := (toVec (vals.getD 1 [])).map (·.toNat)
+      let fieldReference := List.zipWith (fun a b => a * b % goldilocksP) left right
+      unless (model.getD 0 []).map (·.toNat) == fieldReference do
+        throw <| IO.userError s!"{name} vector {v}: source field multiply disagrees with exact Nat arithmetic modulo p"
+    outputs := outputs.push model
+  IO.FS.writeFile (dir / "expected.tsv") (expectedTsvValues vectors outputs.toList)
   IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {g.edges.length} edges, \
     {(fuseGraph g).edges.length} after fusion, {p.consts.length} constants, \
     {p.tables.length} indices, {p.stages.length} dispatches \
     ({String.intercalate "," (p.stages.map fun s => toString s.kernels.length)} kernels), \
-    {vectorCount g} vectors -> {dir}"
-
-/-- Block programs replace the earlier per-stage NTT graphs. -/
-def blockGraphs : List (String × Nat) :=
-  [4, 16, 64, 1024, 65536, 1048576].map fun n => (s!"ntt-{n}", n)
+    {vectors.length} vectors -> {dir}"
 
 def writeBlockGraph (name : String) (n : Nat) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
   unless n >= 2 && n == 2^(Nat.log2 n) && n < 2^26 do
@@ -84,9 +82,9 @@ def writeBlockGraph (name : String) (n : Nat) (dir : System.FilePath) (plant : P
     IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (BlockEmit.emitDispatch plant name p d)
   if artifactsOnly then return
   let mut lines := #[]
-  let count := if n > 4096 then 2 else if n >= 64 then 6 else 12
+  let count := vectorCountFor [n]
   for v in [:count] do
-    let vals := vectorFor .ntt [n] v
+    let vals := vectorFor .field [n] v
     let input := (vals.getD 0 []).map Int.toNat
     let mem := Obend.Hardware.ArrayKernel.initialMemory p (vals.map fun xs => (toVec xs).toArray)
     let result := Obend.Hardware.ArrayKernel.evalProgram p mem
@@ -97,27 +95,32 @@ def writeBlockGraph (name : String) (n : Nat) (dir : System.FilePath) (plant : P
     if n <= 1024 then
       unless nttReference input == fast do
         throw <| IO.userError s!"{name} vector {v}: recursive NTT disagrees with direct DFT"
-    let signed64 (xs : List Int) := xs.map fun x => (BitVec.ofInt 64 x).toInt
-    lines := lines.push s!"{v}\t{wiresText (vals.map signed64)}\t{wiresText (model.map fun xs => xs.map (·.toInt))}"
+    lines := lines.push (expectedTsvLine v vals model)
   IO.FS.writeFile (dir / "expected.tsv") (String.intercalate "\n" lines.toList ++ "\n")
   IO.println s!"  {name}: {BlockEmit.spaceSize p .device} device words, {BlockEmit.spaceSize p .shared} shared words, {p.dispatches.length} dispatches -> {dir}"
 
 /-! ## Main -/
 
 def usage : String :=
-  "usage: obend-emit-gpu list | <graph> --out DIR [--plant addAsSub|swapMux|mulHighZero] | all --out DIR [--plant P]"
+  "usage: obend-emit-gpu list | <graph> --out DIR [--plant addAsSub|swapMux|mulHighZero] | all --out DIR [--plant P] | catgrad FILE --out DIR [--plant P] | leaf BOOK MEMBER INPUTS --out DIR [--plant P] | leaf-example --out DIR"
 
 def main (args : List String) : IO UInt32 := do
+  match Obend.Hardware.Gpu.SourcePrograms.checkRefusals with
+  | .error reason => IO.eprintln reason; return 1
+  | .ok _ => pure ()
   match args with
   | ["check-layout"] =>
     for (name, ok) in layoutCheckResults do
       IO.println s!"{if ok then "PASS" else "FAIL"} {name}"
     return if layoutCheckFixtures then 0 else 1
   | ["list"] =>
-    for (n, _, _) in graphs do IO.println n
-    for (n, _) in blockGraphs do IO.println n
+    for item in graphs do IO.println item.name
+    for (name, _) in blockGraphs do IO.println name
     return 0
-  | name :: rest =>
+  | name :: rawRest =>
+    let payload := if name == "catgrad" then 1 else if name == "leaf" then 3 else 0
+    let file := rawRest.head?
+    let rest := rawRest.drop payload
     let mut out : Option String := none
     let mut plant : Plant := .none
     let mut artifactsOnly := false
@@ -133,14 +136,37 @@ def main (args : List String) : IO UInt32 := do
       | other :: _ => IO.eprintln s!"unexpected argument {other}\n{usage}"; return 2
       | [] => pure ()
     let some dir := out | IO.eprintln usage; return 2
+    if name == "catgrad" then
+      let some path := file | IO.eprintln "catgrad requires an input file"; return 2
+      Obend.Hardware.Gpu.CatgradImport.writeFile path dir plant
+      return 0
+    if name == "leaf-example" then
+      Obend.Hardware.Gpu.BookImport.writeExample dir
+      return 0
+    if name == "leaf" then
+      let some path := file | IO.eprintln "leaf requires BOOK MEMBER INPUTS"; return 2
+      let some member := rawRest[1]? | IO.eprintln "leaf requires a member name"; return 2
+      let some inputs := (rawRest[2]? : Option String) | IO.eprintln "leaf requires an input vector file"; return 2
+      Obend.Hardware.Gpu.BookImport.writeFile path member inputs dir plant
+      return 0
     if name == "all" then
-      for (n, g, kind) in graphs do writeGraph n g kind (dir / n) plant artifactsOnly
-      for (name, n) in blockGraphs do writeBlockGraph name n (dir / name) plant artifactsOnly
+      for item in graphs do
+        let typed ← match item.build () with
+          | .ok typed => pure typed
+          | .error reason => throw <| IO.userError s!"{item.name}: {reason}"
+        writeGraph item.name typed item.kind (dir / item.name) plant artifactsOnly
+      for (blockName, n) in blockGraphs do
+        writeBlockGraph blockName n (dir / blockName) plant artifactsOnly
       return 0
     if let some (_, n) := blockGraphs.find? (·.1 == name) then
       writeBlockGraph name n dir plant artifactsOnly
       return 0
-    match graphs.find? (·.1 == name) with
-    | some (_, g, kind) => writeGraph name g kind dir plant artifactsOnly; return 0
+    match graphs.find? (·.name == name) with
+    | some item =>
+      let typed ← match item.build () with
+        | .ok typed => pure typed
+        | .error reason => throw <| IO.userError s!"{name}: {reason}"
+      writeGraph name typed item.kind dir plant artifactsOnly
+      return 0
     | none => IO.eprintln s!"unknown graph {name}; `obend-emit-gpu list`"; return 2
   | [] => IO.eprintln usage; return 2

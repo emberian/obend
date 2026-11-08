@@ -1,0 +1,14 @@
+{
+  "graph": "source-leaf-affine",
+  "words": 11,
+  "workgroupSize": 64,
+  "wireBase": [0,0,0,0,0],
+  "wireLen": [11,11,11,11,11],
+  "consts": ["3","5"],
+  "tables": [],
+  "inputs": [0],
+  "outputs": [4],
+  "stages": [
+    {"file":"stage_0.wgsl","threads":11}
+  ]
+}

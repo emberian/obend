@@ -1,0 +1,78 @@
+=== allops (sq_allops) ===
+  [1] sv/sq_allops.sv: identical to obend-emit-sv square-allops
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+  [3]  sq_allops_lec.smt2: identical to obend-emit-sv square-allops --lec
+  [3]  LEC sq_allops: unsat, bit-precise (Yosys's reading of sq_allops.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w8_0 = 64'd1 ^ (w_8);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w8_0| false) (|rtl_out_out_w8_0| #x0000000000000001) (|spec_out_out_w8_0| #x0000000000000000)
+  [3]  EQY sq_allops: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+  [5] the card: allops: 12 vectors, 1 dispatches, 0 disagree, 0.268 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_9 = (64'd18446742974197923840 + w_4);`: Verilator mismatches=16, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+=== muxchain (sq_muxchain) ===
+  [1] sv/sq_muxchain.sv: identical to obend-emit-sv square-muxchain
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+  [3]  sq_muxchain_lec.smt2: identical to obend-emit-sv square-muxchain --lec
+  [3]  LEC sq_muxchain: unsat, bit-precise (Yosys's reading of sq_muxchain.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w4_0 = 64'd1 ^ (w_4);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w4_0| false) (|rtl_out_out_w4_0| #x0000000000000001) (|spec_out_out_w4_0| #x0000000000000000)
+  [3]  EQY sq_muxchain: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+  [5] the card: muxchain: 12 vectors, 1 dispatches, 0 disagree, 0.295 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_5 = (w_4 + w_3);`: Verilator mismatches=2, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+=== adjoint-square-bilinear (sq_adjoint_square_bilinear) ===
+  [1] sv/sq_adjoint_square_bilinear.sv: identical to obend-emit-sv square-adjoint-square-bilinear
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+  [3]  sq_adjoint_square_bilinear_lec.smt2: identical to obend-emit-sv square-adjoint-square-bilinear --lec
+  [3]  LEC sq_adjoint_square_bilinear: unsat, bit-precise (Yosys's reading of sq_adjoint_square_bilinear.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w3_0 = 64'd1 ^ (w_5);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w3_0| false) (|rtl_out_out_w3_0| #x0000000000000001) (|spec_out_out_w3_0| #x0000000000000000)
+  [3]  EQY sq_adjoint_square_bilinear: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+  [5] the card: adjoint-square-bilinear: 12 vectors, 1 dispatches, 0 disagree, 0.290 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_11 = (w_9 - w_10);`: Verilator mismatches=5, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+=== tree512 (sq_tree512) ===
+  [1] sv/sq_tree512.sv: identical to obend-emit-sv square-tree512
+  [2] HDL model == array model on 6 vectors (expected.tsv byte for byte)
+  [3]  sq_tree512_lec.smt2: identical to obend-emit-sv square-tree512 --lec
+  [3]  LEC sq_tree512: unsat, bit-precise (Yosys's reading of sq_tree512.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w1022_0 = 64'd1 ^ (w_1022);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w1022_0| false) (|rtl_out_out_w1022_0| #x0000000000000001) (|spec_out_out_w1022_0| #x0000000000000000)
+  [3]  EQY sq_tree512: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=6, mismatches=0 against evalModuleOutputs
+  [5] the card: tree512: 6 vectors, 1 dispatches, 0 disagree, 0.492 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_1022 = (w_1020 - w_1021);`: Verilator mismatches=6, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+=== glmul-4 (sq_glmul_4) ===
+  [1] sv/sq_glmul_4.sv: identical to obend-emit-sv square-glmul-4
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+  [3]  sq_glmul_4_lec.smt2: identical to obend-emit-sv square-glmul-4 --lec
+  [3]  LEC sq_glmul_4: unsat, bit-precise (Yosys's reading of sq_glmul_4.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w44_0 = 64'd1 ^ (w_176);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w44_0| false) (|rtl_out_out_w44_0| #x0000000000000001) (|spec_out_out_w44_0| #x0000000000000000)
+  [3]  EQY sq_glmul_4: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+  [5] the card: glmul-4: 12 vectors, 2 dispatches, 0 disagree, 0.293 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_175 = (w_159 + w_119);`: Verilator mismatches=12, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+=== array-route (sq_array_route) ===
+  [1] sv/sq_array_route.sv: identical to obend-emit-sv square-array-route
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+  [3]  sq_array_route_lec.smt2: identical to obend-emit-sv square-array-route --lec
+  [3]  LEC sq_array_route: unsat, bit-precise (Yosys's reading of sq_array_route.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w4_0 = 64'd1 ^ (w_16);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w4_0| false) (|rtl_out_out_w4_0| #x0000000000000006) (|spec_out_out_w4_0| #x0000000000000007)
+  [3]  EQY sq_array_route: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+  [5] the card: array-route: 12 vectors, 4 dispatches, 0 disagree, 0.317 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_11 = (w_3 - w_7);`: Verilator mismatches=24, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+=== soac-boundaries (sq_soac_boundaries) ===
+  [1] sv/sq_soac_boundaries.sv: identical to obend-emit-sv square-soac-boundaries
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+  [3]  sq_soac_boundaries_lec.smt2: identical to obend-emit-sv square-soac-boundaries --lec
+  [3]  LEC sq_soac_boundaries: unsat, bit-precise (Yosys's reading of sq_soac_boundaries.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w2_0 = 64'd1 ^ (w_24);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w2_0| false) (|rtl_out_out_w2_0| #x0000000000000001) (|spec_out_out_w2_0| #x0000000000000000)
+  [3]  EQY sq_soac_boundaries: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+  [5] the card: soac-boundaries: 12 vectors, 3 dispatches, 0 disagree, 0.296 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_173 = (64'd1 + w_14);`: Verilator mismatches=12, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+[PASS] hardware/gpu/square

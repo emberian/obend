@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # hardware/gpu/square: one hypergraph through two devices (Obend.Hardware.Square). Every graph of
-# `squareGraphs` (Obend.Hardware.SquareGraphs) is lowered twice, to a combinational RtlModule and to
+# `squarePlan` (Obend.Hardware.SquareGraphs) is lowered twice, to a combinational RtlModule and to
 # the GPU program of ../graphs/<graph>/; `rtl_eq_gpu` (scalar graphs) and `rtl_eq_gpu_array` (array
 # graphs) say the two denote one evaluation. This gate runs both legs outside Lean on the same vectors
 # and requires three parties to agree: Verilator on the emitted SystemVerilog, the card, and the model.
@@ -66,7 +66,9 @@ if [[ -n "${ONLY}" ]]; then GRAPHS=("${ONLY}"); fi
 # verilate TOP SV TB MDIR : build and run the harness; sets MISMATCHES (or fails the build)
 verilate() {
   local top="$1" sv="$2" tb="$3" mdir="$4"
-  "${VERILATOR}" --cc --exe --build --top-module "${top}" -sv \
+  # Our executable override names the launcher; Verilator reserves VERILATOR_BIN
+  # for its internal compiled binary. Forwarding it makes the launcher recurse.
+  env -u VERILATOR_BIN "${VERILATOR}" --cc --exe --build --top-module "${top}" -sv \
     -Wno-UNUSED -Wno-DECLFILENAME -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND \
     --x-assign unique --x-initial unique --Mdir "${mdir}" -o "sim_${top}" "${sv}" "${tb}" \
     > "${mdir}.build.log" 2>&1 || { echo "[FAIL] verilator build of ${sv}:" >&2; tail -20 "${mdir}.build.log" >&2; exit 1; }
