@@ -1,9 +1,8 @@
-// obend-emit-gpu: soac-boundaries, stage 2 of 3: 1 kernels, 8 threads.
-// Generated from Obend.Hardware.Gpu.lowerArrayToGpu; do not edit (verify_gpu.sh compares bytes).
+// soac-boundaries: generated from ArrayKernel.Program; no transform-specific emission.
 @group(0) @binding(0) var<storage, read_write> w : array<vec2<u32>>;
 @group(0) @binding(1) var<storage, read> c : array<vec2<u32>>;
 @group(0) @binding(2) var<storage, read> ix : array<u32>;
-
+var<workgroup> shared_words : array<vec2<u32>, 1022>;
 
 fn u32_mul_wide(a: u32, b: u32) -> vec2<u32> {
   // Bounded u32 operands: the backend emits native low/high u32 products.
@@ -38,10 +37,78 @@ fn u64_shl(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
 }
 
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
-  let t : u32 = gid.x + gid.y * 64u;
-  if (t < 8u) {
-    let e : u32 = t - 0u;
-    w[0u + e] = w[9u + ix[0u + e]];
+fn main(@builtin(workgroup_id) wid : vec3<u32>, @builtin(local_invocation_id) lid : vec3<u32>) {
+  let group = wid.x + wid.y * 1u;
+  if (group >= 1u) { return; }
+  for (var lane = lid.x; lane < 8u; lane += 64u) {
+    let v0 = w[0u + (ix[9u + group] + lane)];
+    shared_words[0u + lane] = v0;
   }
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 4u; lane += 64u) {
+    let v0 = shared_words[0u + (2u * lane)];
+    let v1 = shared_words[0u + ((2u * lane) + 1u)];
+    let v2 = u64_add(v0, v1);
+    shared_words[256u + lane] = v2;
+  }
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 2u; lane += 64u) {
+    let v0 = shared_words[256u + (2u * lane)];
+    let v1 = shared_words[256u + ((2u * lane) + 1u)];
+    let v2 = u64_add(v0, v1);
+    shared_words[384u + lane] = v2;
+  }
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 1u; lane += 64u) {
+    let v0 = shared_words[384u + (2u * lane)];
+    let v1 = shared_words[384u + ((2u * lane) + 1u)];
+    let v2 = u64_add(v0, v1);
+    shared_words[448u + lane] = v2;
+  }
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 1u; lane += 64u) {
+    let v0 = vec2<u32>(0u, 0u);
+    shared_words[959u + (0u + lane)] = v0;
+  }
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 1u; lane += 64u) {
+    let v0 = shared_words[959u + lane];
+    let v1 = shared_words[384u + (2u * lane)];
+    let v2 = u64_add(v0, v1);
+    shared_words[895u + (2u * lane)] = v0;
+    shared_words[895u + ((2u * lane) + 1u)] = v2;
+  }
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 2u; lane += 64u) {
+    let v0 = shared_words[895u + lane];
+    let v1 = shared_words[256u + (2u * lane)];
+    let v2 = u64_add(v0, v1);
+    shared_words[767u + (2u * lane)] = v0;
+    shared_words[767u + ((2u * lane) + 1u)] = v2;
+  }
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 4u; lane += 64u) {
+    let v0 = shared_words[767u + lane];
+    let v1 = shared_words[0u + (2u * lane)];
+    let v2 = u64_add(v0, v1);
+    shared_words[511u + (2u * lane)] = v0;
+    shared_words[511u + ((2u * lane) + 1u)] = v2;
+  }
+  workgroupBarrier();
+  storageBarrier();
+  for (var lane = lid.x; lane < 8u; lane += 64u) {
+    let v0 = shared_words[511u + lane];
+    let v1 = shared_words[0u + lane];
+    let v2 = u64_add(v0, v1);
+    w[9u + (ix[9u + group] + lane)] = v2;
+  }
+  workgroupBarrier();
+  storageBarrier();
 }

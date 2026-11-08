@@ -10,7 +10,9 @@ The default timing matrix covers addition at 2^16, 2^20 and 2^24 words, both one
 long segment and many segments of length 32, for inclusive/exclusive/reduction.
 All four monoids get correctness checks at 2^16 and on small fixtures. Before
 timing, an irregular fixture crosses tile boundaries and includes empty
-segments; all-empty and no-segment fixtures check boundary behavior. Small cases
+segments; all-empty and no-segment fixtures check boundary behavior. A mixed
+fixture combines 257 singleton segments with a 65,536-word segment and tails to
+exercise early completion and output preservation across hierarchy levels. Small cases
 have two input patterns, including high bits and arithmetic overflow. Large
 multiply inputs stay odd; AND/OR events span the input instead of saturating in
 its first few words. A standalone handwritten `vec2<u32>` copy shader measures

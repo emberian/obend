@@ -22,6 +22,8 @@ DFT; these gates are not a universal theorem that this construction is the DFT.
 -/
 import Obend.Hardware.SquareGraphs
 import Obend.Hardware.Gpu.BookImport
+import Obend.Hardware.Gpu.CollectiveImport
+import Obend.Hardware.Gpu.ArrayEmit
 import Obend.Hardware.Gpu.CatgradImport
 import Obend.Hardware.Gpu.Ntt
 import Obend.Hardware.ArrayKernel
@@ -41,10 +43,7 @@ open Obend.Hardware.Gpu.GoldilocksSource
 def writeGraph (name : String) (typed : Obend.Hardware.ArrayTyping.TypedGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
   let g := typed.graph
   let p := typed.lower
-  IO.FS.createDirAll dir
-  IO.FS.writeFile (dir / "plan.json") (emitPlanJson name p)
-  for (s, k) in p.stages.zipIdx do
-    IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (emitStageWgsl plant name k p.stages.length s)
+  let artifact ← ArrayEmit.write name p dir plant
   if artifactsOnly then return
   let vectors := graphVectors g kind name
   let mut outputs : Array (List Vec) := #[]
@@ -64,7 +63,7 @@ def writeGraph (name : String) (typed : Obend.Hardware.ArrayTyping.TypedGraph) (
   IO.FS.writeFile (dir / "expected.tsv") (expectedTsvValues vectors outputs.toList)
   IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {g.edges.length} edges, \
     {(fuseGraph g).edges.length} after fusion, {p.consts.length} constants, \
-    {p.tables.length} indices, {p.stages.length} dispatches \
+    {artifact.tables.length} indices, {artifact.shaders.size} dispatches \
     ({String.intercalate "," (p.stages.map fun s => toString s.kernels.length)} kernels), \
     {vectors.length} vectors -> {dir}"
 
@@ -118,7 +117,7 @@ def main (args : List String) : IO UInt32 := do
     for (name, _) in blockGraphs do IO.println name
     return 0
   | name :: rawRest =>
-    let payload := if name == "catgrad" then 1 else if name == "leaf" then 3 else 0
+    let payload := if name == "catgrad" || name == "collective" then 1 else if name == "leaf" then 3 else 0
     let file := rawRest.head?
     let rest := rawRest.drop payload
     let mut out : Option String := none
@@ -136,6 +135,13 @@ def main (args : List String) : IO UInt32 := do
       | other :: _ => IO.eprintln s!"unexpected argument {other}\n{usage}"; return 2
       | [] => pure ()
     let some dir := out | IO.eprintln usage; return 2
+    if name == "collective" then
+      let some path := file | IO.eprintln "collective requires a source specification"; return 2
+      unless artifactsOnly do
+        IO.eprintln "collective requires --artifacts-only; supply independent TSV or binary fixture vectors to the runner"
+        return 2
+      CollectiveImport.writeFile path dir plant
+      return 0
     if name == "catgrad" then
       let some path := file | IO.eprintln "catgrad requires an input file"; return 2
       Obend.Hardware.Gpu.CatgradImport.writeFile path dir plant

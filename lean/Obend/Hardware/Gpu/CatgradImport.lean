@@ -1,4 +1,5 @@
 import Obend.Hardware.ArrayTyping
+import Obend.Hardware.Gpu.ArrayEmit
 import Lean.Data.Json
 
 /-!
@@ -213,11 +214,8 @@ def writeFile (source dir : System.FilePath) (plant : Plant := .none) : IO Unit 
       throw <| IO.userError s!"catgrad interpreter/model disagreement at vector {i}"
     lines := lines ++ [s!"{i}\t{wiresText v.inputs}\t{wiresText v.outputs}"]
   let p := imported.typed.lower
-  IO.FS.createDirAll dir
-  IO.FS.writeFile (dir / "plan.json") (emitPlanJson imported.name p)
-  for (s,k) in p.stages.zipIdx do
-    IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (emitStageWgsl plant imported.name k p.stages.length s)
+  let artifact ← ArrayEmit.write imported.name p dir plant
   IO.FS.writeFile (dir / "expected.tsv") (String.intercalate "\n" lines ++ "\n")
-  IO.println s!"{imported.name}: {g.edges.length} edges, {p.stages.length} dispatches, {imported.vectors.length} catgrad interpreter vectors agree with Lean model"
+  IO.println s!"{imported.name}: {g.edges.length} edges, {artifact.shaders.size} dispatches, {imported.vectors.length} catgrad interpreter vectors agree with Lean model"
 
 end Obend.Hardware.Gpu.CatgradImport

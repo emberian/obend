@@ -274,7 +274,8 @@ def main():
     todo = []
     if args.suite in ("all", "correctness"):
         small = [("irregular", [0, 1, 3, 0, 31, 32, 33, 255, 256, 257, 0]),
-                 ("empty", [0, 0, 0]), ("no-segments", [])]
+                 ("empty", [0, 0, 0]), ("no-segments", []),
+                 ("pruned-mixed", [0] + [1]*257 + [65536, 0, 257, 2, 0])]
         for name, lengths in small:
             for op in args.correctness_ops:
                 for mode in args.modes:
