@@ -165,7 +165,7 @@ def renderSquareTb (target : String) : Except String String :=
   | some (.ok sq) =>
     if !checkRtlModuleW sq.rtl then .error s!"{sq.lean} fails checkRtlModuleW; not emitted" else
     let vecs : List Obend.Hardware.VerilateRunner.DifferentialVector :=
-      (graphVectors sq.graph sq.kind).zipIdx.map fun (vals, v) =>
+      (graphVectors sq.name sq.graph sq.kind).zipIdx.map fun (vals, v) =>
         let ins := squareInputs vals
         { vecIdx := v
         , portInputs := sq.rtl.inputNames.zipIdx.map fun (n, p) => (n, ins p)

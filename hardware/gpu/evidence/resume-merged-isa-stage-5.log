@@ -1,0 +1,4 @@
+=== [5/6] the model against gem5's Vega bodies on random register states ===
+  34 instructions x 6 trials -> /tmp/isa_check.7D0Lrf/gem5_vectors.tsv
+  204 gem5 vectors over 34 instructions agree with the model
+[PASS] hardware/gpu/isa_check.sh (stage 5)

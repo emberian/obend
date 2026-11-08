@@ -2,11 +2,12 @@
 # Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders,shaderstats; do not edit.
 # Each instruction line ends in `; <dwords>`, the machine code as RADV printed it; labels and text are LLVM's.
 
-## stage 0 (stage_0.wgsl): 1 threads, 32 instructions, 1 64-bit stores; VGPRs: 16, SGPRs: 128, LDS: 0, scratch: 0, code: 196
+## stage 0 (stage_0.wgsl): 1 threads, 38 instructions, 1 64-bit stores; VGPRs: 16, SGPRs: 128, LDS: 0, scratch: 0, code: 212
 BB0:
 	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_lshl_add_u32 v0, s4, 6, v0	; d7460000 04010c04
 	v_cmpx_gt_u32_e32 1, v0	; 7da80081
-	s_cbranch_execz BB6	; bf88002c
+	s_cbranch_execz BB6	; bf88002e
 BB1:
 	s_movk_i32 s3, 0x8000	; b0038000
 	s_clause 0x1	; bfa10001
@@ -21,20 +22,25 @@ BB1:
 	buffer_load_dwordx2 v[8:9], v0, s[4:7], 0 offen offset:24	; e0341018 80010800
 	s_buffer_load_dwordx2 s[0:1], s[0:3], null	; f4240000 fa000000
 	s_waitcnt vmcnt(2)	; bf8c3f72
-	v_add_co_u32 v2, vcc, v2, v4	; d70f6a02 00020902
-	v_add_co_ci_u32_e32 v3, vcc, v3, v5, vcc	; 50060b03
-	s_waitcnt lgkmcnt(0)	; bf8cc07f
-	v_mov_b32_e32 v5, s1	; 7e0a0201
+	v_add_nc_u32_e32 v4, v2, v4	; 4a080902
+	v_add_nc_u32_e32 v3, v3, v5	; 4a060b03
 	s_waitcnt vmcnt(0)	; bf8c3f70
-	v_add_co_u32 v6, vcc, v6, v8	; d70f6a06 00021106
-	v_add_co_ci_u32_e32 v7, vcc, v7, v9, vcc	; 500e1307
-	v_mul_hi_u32 v1, v2, v6	; d56a0001 00020d02
-	v_mul_lo_u32 v4, v2, v6	; d5690004 00020d02
-	v_mul_lo_u32 v3, v3, v6	; d5690003 00020d03
-	v_mul_lo_u32 v2, v2, v7	; d5690002 00020f02
-	v_add3_u32 v1, v1, v2, v3	; d76d0001 040e0501
-	v_add_co_u32 v2, vcc, s0, v4	; d70f6a02 00020800
-	v_add_co_ci_u32_e32 v3, vcc, v1, v5, vcc	; 50060b01
-	buffer_store_dwordx2 v[2:3], v0, s[4:7], 0 offen offset:64	; e0741040 80010200
+	v_add_nc_u32_e32 v8, v6, v8	; 4a101106
+	v_add_nc_u32_e32 v7, v7, v9	; 4a0e1307
+	v_cmp_lt_u32_e32 vcc, v4, v2	; 7d820504
+	v_add_co_ci_u32_e32 v3, vcc, 0, v3, vcc	; 50060680
+	v_cmp_lt_u32_e32 vcc, v8, v6	; 7d820d08
+	v_mul_hi_u32 v1, v4, v8	; d56a0001 00021104
+	v_mul_lo_u32 v2, v4, v8	; d5690002 00021104
+	v_add_co_ci_u32_e32 v7, vcc, 0, v7, vcc	; 500e0e80
+	v_mul_lo_u32 v3, v3, v8	; d5690003 00021103
+	v_mul_lo_u32 v4, v4, v7	; d5690004 00020f04
+	v_add3_u32 v3, v3, v1, v4	; d76d0003 04120303
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	v_add_nc_u32_e32 v4, s0, v2	; 4a080400
+	v_cmp_lt_u32_e32 vcc, v4, v2	; 7d820504
+	v_add_nc_u32_e32 v3, s1, v3	; 4a060601
+	v_add_co_ci_u32_e32 v5, vcc, 0, v3, vcc	; 500a0680
+	buffer_store_dwordx2 v[4:5], v0, s[4:7], 0 offen	; e0741000 80010400
 BB6:
 	s_endpgm	; bf810000

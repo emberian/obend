@@ -21,8 +21,8 @@ concatenation renaming, a constant constants. The state is arrays; the closure f
 
 * `compileArrayGraphToRtl_sound`: for every well-formed array graph and every input, the module's output
   ports are `evalGraph` from the environment its input ports induce (`inputEnvOf`), flattened.
-* `rtl_eq_gpu_array`: the GPU program, run from any buffer holding that environment at its layout
-  (`Flat`), shows the same words, flattened.
+* `rtl_eq_gpu_array`: when the executable `layoutOk` check accepts the allocation, the GPU program,
+  run from any buffer representing the initially live values (`Flat`), shows the same words, flattened.
 * `compileHypergraphToRtl_sound`, `rtl_eq_gpu`: the scalar corollaries, against the scalar single pass
   `evalHyperEdgesCombBv`.
 * `pipelined_eq_comb`: the pipelined module (`compileHypergraphToRtlPipelined`, one register bank per
@@ -575,14 +575,17 @@ theorem compileArrayGraphToRtl_sound (name : String) (g : ArrayGraph) (hwf : g.w
   exact map_boundaryElems g.lengths g.outputs (wf_outputs g hwf) _ hGood _
     (fun w e hw he => hVal _ (fun _ _ => rfl) w e hw he)
 
-/-- **`rtl_eq_gpu_array`**: the GPU program, run from any buffer holding the input ports' environment at
-its layout, shows on its output wires, flattened, the RTL module's output ports. -/
-theorem rtl_eq_gpu_array (name : String) (g : ArrayGraph) (hwf : g.wf = true) (ins regs : Nat → Word)
-    (flat : Nat → Word) (hFlat : Flat g.lengths (inputEnvOf g ins) flat) :
+/-- **`rtl_eq_gpu_array`**: an allocation admitted by the executable checker gives the same output
+words as RTL when the initial buffer represents the live part of the input ports' environment. Dead
+logical wires need no storage or entry representation. -/
+theorem rtl_eq_gpu_array (name : String) (g : ArrayGraph) (hwf : g.wf = true)
+    (hLayout : layoutOk g = true) (ins regs : Nat → Word)
+    (flat : Nat → Word) (hFlat : Flat g.lengths (gpuLayout g).base
+      (liveAt (layerGraph (fuseGraph g)) g.outputs) (inputEnvOf g ins) flat) :
     (runProgram (lowerArrayToGpu g) flat).flatten =
       (evalModuleOutputs (compileArrayGraphToRtl name g) ins regs).map Prod.snd := by
   rw [compileArrayGraphToRtl_sound name g hwf ins regs,
-    lowerArrayToGpu_sound g hwf _ flat (inputEnvOf_good g hwf ins) hFlat]
+    lowerArrayToGpu_sound g hwf hLayout _ flat (inputEnvOf_good g hwf ins) hFlat]
 
 /-! ## 5. Scalar graphs, the one-element instance -/
 
@@ -674,14 +677,16 @@ theorem compileHypergraphToRtl_sound (name : String) (g : StrictOpenHypergraph)
   rw [compileHypergraphToRtl, compileArrayGraphToRtl_sound name _ hwf, evalGraph_ofScalar g hwf,
     flatten_map_singleton]
 
-/-- **`rtl_eq_gpu`**: the scalar square. The GPU program, run from any buffer holding the input ports'
-environment, shows on each output wire, as a singleton, the RTL module's output port. -/
+/-- **`rtl_eq_gpu`**: the scalar square with a checked allocation. A buffer representing the
+initially live scalar values shows each RTL output port as a singleton GPU output wire. -/
 theorem rtl_eq_gpu (name : String) (g : StrictOpenHypergraph) (hwf : (ofScalar g).wf = true)
-    (ins regs : Nat → Word) (flat : Nat → Word)
-    (hFlat : Flat (ofScalar g).lengths (inputEnvOf (ofScalar g) ins) flat) :
+    (hLayout : layoutOk (ofScalar g) = true) (ins regs : Nat → Word) (flat : Nat → Word)
+    (hFlat : Flat (ofScalar g).lengths (gpuLayout (ofScalar g)).base
+      (liveAt (layerGraph (fuseGraph (ofScalar g))) (ofScalar g).outputs)
+      (inputEnvOf (ofScalar g) ins) flat) :
     runProgram (lowerHypergraphToGpu g) flat =
       (evalModuleOutputs (compileHypergraphToRtl name g) ins regs).map (fun o => [o.2]) := by
-  rw [lowerHypergraphToGpu, lowerArrayToGpu_sound (ofScalar g) hwf _ flat (inputEnvOf_good _ hwf ins) hFlat,
+  rw [lowerHypergraphToGpu, lowerArrayToGpu_sound (ofScalar g) hwf hLayout _ flat (inputEnvOf_good _ hwf ins) hFlat,
     evalGraph_ofScalar g hwf]
   rw [show (evalModuleOutputs (compileHypergraphToRtl name g) ins regs).map (fun o => [o.2]) =
         ((evalModuleOutputs (compileHypergraphToRtl name g) ins regs).map Prod.snd).map (fun v => [v]) by

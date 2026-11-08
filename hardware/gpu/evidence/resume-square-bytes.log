@@ -1,0 +1,13 @@
+=== allops (sq_allops) ===
+  [1] sv/sq_allops.sv: identical to obend-emit-sv square-allops
+=== muxchain (sq_muxchain) ===
+  [1] sv/sq_muxchain.sv: identical to obend-emit-sv square-muxchain
+=== adjoint-square-bilinear (sq_adjoint_square_bilinear) ===
+  [1] sv/sq_adjoint_square_bilinear.sv: identical to obend-emit-sv square-adjoint-square-bilinear
+=== tree512 (sq_tree512) ===
+  [1] sv/sq_tree512.sv: identical to obend-emit-sv square-tree512
+=== glmul-4 (sq_glmul_4) ===
+  [1] sv/sq_glmul_4.sv: identical to obend-emit-sv square-glmul-4
+=== array-route (sq_array_route) ===
+  [1] sv/sq_array_route.sv: identical to obend-emit-sv square-array-route
+[PASS] hardware/gpu/square (stage 1)

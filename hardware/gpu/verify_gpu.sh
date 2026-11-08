@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hardware/gpu: rung G1 of review/GPU-PROGRAM-20261105.md. StrictOpenHypergraphs lowered to compute
-# shaders, one dispatch per wavefront stage (Obend.Hardware.Gpu), run on a GPU through wgpu against
-# Obend.Hardware.Gpu.runProgram.
+# shaders with checked live buffer reuse and barrier-separated workgroup phases, run through wgpu
+# against the ArrayGraph or ArrayKernel executable source semantics.
 #
 #   verify_gpu.sh                 the gate: [1] byte equality of every committed plan, shader and
 #                                 expected.tsv with obend-emit-gpu (a graph committed as graphs/<g>.sha256
@@ -13,17 +13,17 @@
 #                                 extracted under isa/ with its machine code and resource usage
 #                                 (isa_extract.py: one program per stage, at least one 64-bit store)
 #   verify_gpu.sh --plant NAME    only the comparison, on shaders emitted with the planted rule NAME
-#                                 (addAsSub, swapMux); it fails, and says where
+#                                 (addAsSub, swapMux, mulHighZero); it fails, and says where
 #   verify_gpu.sh --stage N       only stage N of the gate (1-4)
 #   verify_gpu.sh --digest NAME   write graphs/NAME.sha256 from a fresh emission (for a graph kept as a digest)
 #
 # The device: GPU_ADAPTER (a substring of the adapter's name or driver, e.g. radv, "6750", Apple) picks
 # it; unset, the first non-CPU adapter wgpu finds. On Linux, if Mesa's radeon ICD is installed it is
 # selected (VK_ICD_FILENAMES) unless GPU_ICD=any, so that stage 4 can read RADV's shader dump; the
-# AMDVLK driver on the same card runs the same shaders but dumps nothing. The device must offer 64-bit
-# integers in shaders (wgpu SHADER_INT64); hbox's RX 6750 XT and Apple silicon do.
+# AMDVLK driver on the same card runs the same shaders but dumps nothing. Words are u32 pairs. The bounded u32×u32 widening primitive uses wgpu SHADER_INT64
+# and is checked against native low/high u32 multiplication in RADV ISA.
 #
-# Build: `lake build obend-emit-gpu` in lean/; `cargo build --release` in hardware/gpu/runner/.
+# Build on the designated build host: `swarm-build lake build obend-emit-gpu` in lean/; `cargo build --release` in hardware/gpu/runner/.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -71,9 +71,25 @@ run_graph() {
   set -e
 }
 
+# Plant emission reuses the unplanted model outputs generated once by this run.
+# It still regenerates the plan and shaders through the admitted source language.
+prepare_expected() {
+  if [[ ! -d "${WORK}/emit" ]]; then
+    "${EMIT}" all --out "${WORK}/emit" >/dev/null
+  fi
+}
+copy_expected() {
+  for g in "${GRAPHS[@]}"; do
+    cmp "${WORK}/emit/${g}/plan.json" "$1/${g}/plan.json"
+    cp "${WORK}/emit/${g}/expected.tsv" "$1/${g}/expected.tsv"
+  done
+}
+
 if [[ "${1:-}" == "--plant" ]]; then
   plant="${2:?--plant NAME}"
-  "${EMIT}" all --out "${WORK}/plant" --plant "${plant}" >/dev/null
+  prepare_expected
+  "${EMIT}" all --out "${WORK}/plant" --plant "${plant}" --artifacts-only >/dev/null
+  copy_expected "${WORK}/plant"
   caught=0
   for g in "${GRAPHS[@]}"; do
     run_graph "${WORK}/plant/${g}"
@@ -95,6 +111,7 @@ if [[ "${1:-}" == "--stage" ]]; then STAGE="${2:?--stage N}"; fi
 run_stage() { [[ -z "${STAGE}" || "${STAGE}" == "$1" ]]; }
 
 if run_stage 1; then
+"${EMIT}" check-layout
 echo "=== [1/4] byte equality: committed plan, shaders and expected.tsv == obend-emit-gpu ==="
 "${EMIT}" all --out "${WORK}/emit" | sed 's/^/  /'
 for g in "${GRAPHS[@]}"; do
@@ -133,8 +150,10 @@ fi
 
 if run_stage 3; then
 echo "=== [3/4] teeth: each planted rule must make some graph's comparison fail ==="
-for plant in addAsSub swapMux; do
-  "${EMIT}" all --out "${WORK}/plant-${plant}" --plant "${plant}" >/dev/null
+prepare_expected
+for plant in addAsSub swapMux mulHighZero; do
+  "${EMIT}" all --out "${WORK}/plant-${plant}" --plant "${plant}" --artifacts-only >/dev/null
+  copy_expected "${WORK}/plant-${plant}"
   caught=""
   for g in "${GRAPHS[@]}"; do
     run_graph "${WORK}/plant-${plant}/${g}"

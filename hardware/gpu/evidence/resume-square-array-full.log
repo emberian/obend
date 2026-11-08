@@ -1,0 +1,12 @@
+=== array-route (sq_array_route) ===
+  [1] sv/sq_array_route.sv: identical to obend-emit-sv square-array-route
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+  [3]  sq_array_route_lec.smt2: identical to obend-emit-sv square-array-route --lec
+  [3]  LEC sq_array_route: unsat, bit-precise (Yosys's reading of sq_array_route.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w4_0 = 64'd1 ^ (w_16);`: sat, as it must be (bit-precise); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w4_0| false) (|rtl_out_out_w4_0| #x0000000000000006) (|spec_out_out_w4_0| #x0000000000000007)
+  [3]  EQY sq_array_route: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+  [5] the card: array-route: 12 vectors, 4 dispatches, 0 disagree, 0.314 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_11 = (w_3 - w_7);`: Verilator mismatches=24, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+[PASS] hardware/gpu/square (array-route)

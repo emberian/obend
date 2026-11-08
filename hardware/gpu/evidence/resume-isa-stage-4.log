@@ -1,0 +1,2 @@
+=== [4/6] the model: every graph's programs on every vector; a planted store flip caught ===
+[FAIL] adjoint-mul-add: vector 0, stage 0, workgroup 0: pc 24: V_CMP_LT_U32: no semantics (refused, not guessed)

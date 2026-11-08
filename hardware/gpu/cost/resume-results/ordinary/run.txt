@@ -1,0 +1,1 @@
+cost-ordinary: 2 vectors, 1 dispatches, 0 disagree, 1.284 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu

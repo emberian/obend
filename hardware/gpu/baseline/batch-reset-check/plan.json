@@ -1,0 +1,1 @@
+{"graph": "batch-reset-check", "words": 64, "workgroupSize": 64, "wireBase": [0], "wireLen": [64], "consts": [], "tables": [], "inputs": [0], "outputs": [0], "stages": [{"file": "stage_0.wgsl", "threads": 64}]}

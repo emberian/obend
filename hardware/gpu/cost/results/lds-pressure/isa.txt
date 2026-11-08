@@ -1,0 +1,79 @@
+# cost-lds-pressure: RADV's final ISA for each stage, on cost-lds-pressure: 2 vectors, 1 dispatches, 0 disagree, 1.126 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+# Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders,shaderstats; do not edit.
+# Each instruction line ends in `; <dwords>`, the machine code as RADV printed it; labels and text are LLVM's.
+
+## stage 0 (stage_0.wgsl): 64 threads, 66 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 32768, scratch: 0, code: 332
+BB0:
+	v_mbcnt_lo_u32_b32 v1, -1, 0	; d7650001 000100c1
+	v_mbcnt_hi_u32_b32 v1, -1, v1	; d7660001 000202c1
+	v_lshlrev_b32_e32 v1, 4, v1	; 34020284
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+	s_nop 0	; bf800000
+BB1:
+	s_mov_b64 s[0:1], exec	; be80047e
+	v_cmpx_le_u32_e32 0x8000, v1	; 7da602ff 00008000
+BB2:
+	s_andn2_b64 s[0:1], s[0:1], exec	; 8a807e00
+	s_cbranch_scc0 BB10	; bf84000a
+BB9:
+	s_mov_b64 exec, s[0:1]	; befe0400
+	v_lshrrev_b64 v[4:5], 0, 0	; d7000004 00010080
+	v_lshrrev_b64 v[6:7], 0, 0	; d7000006 00010080
+	ds_write_b128 v1, v[4:7]	; db7c0000 00000401
+	v_add_nc_u32_e32 v1, 0x400, v1	; 4a0202ff 00000400
+	s_branch BB1	; bf82fff1
+BB10:
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	s_mov_b64 exec, -1	; befe04c1
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v1, s[0:3], 0 offen	; e0341000 80000201
+	s_bfm_b64 s[4:5], 31, 33	; 9284a19f
+	s_mov_b32 s6, -1	; be8603c1
+	s_inst_prefetch 0x2	; bfa00002
+BB11:
+	v_lshl_add_u32 v1, s4, 6, v0	; d7460001 04010c04
+	v_min_u32_e32 v1, 0xfff, v1	; 260202ff 00000fff
+	v_lshlrev_b32_e32 v1, 3, v1	; 34020283
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	ds_write_b64 v1, v[2:3]	; d9340000 00000201
+	s_max_u32 s7, s5, s6	; 84870605
+	s_cmp_eq_i32 s5, 0	; bf008005
+	s_sub_i32 s6, s6, src_scc	; 8186fd06
+	s_add_u32 s4, s4, 1	; 80048104
+	s_cmp_eq_i32 s7, 0	; bf008007
+	s_mov_b32 s8, src_scc	; be8803fd
+	s_cmp_ge_u32 s4, 64	; bf09c004
+	s_or_b32 s8, src_scc, s8	; 880808fd
+	s_cbranch_scc1 BB15	; bf850002
+BB14:
+	s_add_u32 s5, s5, -1	; 8005c105
+	s_branch BB11	; bf82ffed
+BB15:
+	s_inst_prefetch 0x3	; bfa00003
+	v_add_nc_u32_e32 v0, 1, v0	; 4a000081
+	v_and_b32_e32 v0, 63, v0	; 360000bf
+	v_lshlrev_b32_e32 v1, 3, v0	; 34020083
+	buffer_load_dword v2, v1, s[0:3], 0 offen	; e0301000 80000201
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_and_b32_e32 v2, 63, v2	; 360404bf
+	v_lshl_add_u32 v2, v2, 6, v0	; d7460002 04010d02
+	v_min_u32_e32 v2, 0xfff, v2	; 260404ff 00000fff
+	v_lshlrev_b32_e32 v2, 3, v2	; 34040483
+	ds_read_b64 v[2:3], v2	; d9d80000 02000002
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	v_cmp_eq_i32_e32 vcc, -1, v2	; 7d0404c1
+	v_add_nc_u32_e32 v4, 1, v2	; 4a080481
+	v_add_co_ci_u32_e32 v5, vcc, 0, v3, vcc	; 500a0680
+	buffer_store_dwordx2 v[4:5], v1, s[0:3], 0 offen offset:512	; e0741200 80000401
+	s_endpgm	; bf810000

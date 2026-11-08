@@ -1,0 +1,6 @@
+PASS ntt-1024.txt: instructions and resource statistics identical to the freshly timed version; generated adapter header alone differs
+PASS ntt-1048576.txt: instructions and resource statistics identical to the freshly timed version; generated adapter header alone differs
+PASS ntt-16.txt: instructions and resource statistics identical to the freshly timed version; generated adapter header alone differs
+PASS ntt-4.txt: instructions and resource statistics identical to the freshly timed version; generated adapter header alone differs
+PASS ntt-64.txt: instructions and resource statistics identical to the freshly timed version; generated adapter header alone differs
+PASS ntt-65536.txt: instructions and resource statistics identical to the freshly timed version; generated adapter header alone differs

@@ -1,0 +1,38 @@
+{
+  "schema": "obend-radv-resource-grade-v1",
+  "device": "gfx1031/RADV Mesa 24.2.8",
+  "graph": "cost-ordinary",
+  "wave_size": 64,
+  "dispatches": 1,
+  "wire_buffer_bytes": 1024,
+  "code_bytes": 56,
+  "requested_bytes_upper": 1024,
+  "logical_bytes": null,
+  "isa_sha256": "8fd36d65c7f5cce924ac65dc6dd3c235680e9d43c04c4ebe475f7013f81afae6",
+  "stages": [
+    {
+      "stage": 0,
+      "file": "stage_0.wgsl",
+      "threads": 64,
+      "workgroups": 1,
+      "vgprs": 8,
+      "sgprs": 128,
+      "lds_bytes": 0,
+      "scratch_bytes_per_wave": 0,
+      "code_bytes": 56,
+      "allocated_vgprs": 8,
+      "vgpr_wave_limit": 64,
+      "lds_wave_limit": 16,
+      "mesa_waves_per_simd": 16,
+      "mesa_max_waves": 32,
+      "requested_read_bytes_upper": 512,
+      "requested_write_bytes_upper": 512,
+      "requested_bytes_upper": 1024,
+      "traffic_reason": "acyclic vector buffer instructions \u00d7 active invocations; paths overcount; excludes descriptors/LDS/scratch; not DRAM bytes"
+    }
+  ],
+  "limitations": "Compiler-reported allocations are observations. Occupancy is Mesa static estimate, not measured residency or timing. SGPRs do not limit occupancy on gfx10+. Scratch/code size are recorded, not converted into fabricated runtime penalties.",
+  "radv_subgroups_per_simd": 32,
+  "wave_size_evidence": "ACO VCC allocation register class s2",
+  "shader_sha256": "58b583ea50abbb1f4cc76540a80f34056f54dd5159d3b98cb78bd0b350c16e56"
+}
