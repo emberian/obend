@@ -67,7 +67,10 @@ def memOf (words : Nat) (consts : List Word) (tables : List Nat) (flat : Nat →
 def wordAt (m : Memory) (i : Nat) : Word :=
   (join64 ((m.get? (wDw + UInt64.ofNat (2 * i))).getD 0) ((m.get? (wDw + UInt64.ofNat (2 * i) + 1)).getD 0)).toBitVec
 
-def fuelOf (prog : Program) : Nat := 16 * prog.size + 64
+/-- The steps a wave may take: the program's straight-line length many times over, and room for the
+loops a compiler keeps for a fold (a 65536-element reduce iterates in one invocation). A wave that has not
+halted within it is refused; the bound is an allowance, not a termination argument. -/
+def fuelOf (prog : Program) : Nat := 16 * prog.size + 2 ^ 28
 def groupsOf (threads : Nat) : Nat := (threads + lanes - 1) / lanes
 
 /-- The waves of one dispatch, in workgroup order; `none` if one fails or does not halt. -/

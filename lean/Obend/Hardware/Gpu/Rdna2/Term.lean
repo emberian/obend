@@ -318,7 +318,10 @@ theorem eval_finishSum (env : UInt64 → UInt32) (c : UInt32) (rest : List Tm) :
 
 /-- A sum of terms: nested sums flattened, constants added up, the rest ordered by hash. -/
 def mkSum (ts : List Tm) : Tm :=
-  let acc := (ts.flatMap addends).foldl sumStep (0, [])
+  let fl := ts.flatMap addends
+  -- flattened up to 64 addends; a longer sum keeps its operands (a loop's running sum stays a chain, the
+  -- same chain a left fold builds, instead of a list rebuilt at every step)
+  let acc := (if fl.length ≤ 64 then fl else ts).foldl sumStep (0, [])
   finishSum acc.1 acc.2
 
 theorem sumStep_inv (env : UInt64 → UInt32) (xs : List Tm) (acc : UInt32 × List Tm) :
@@ -347,9 +350,15 @@ theorem foldr_flatMap_addends (env : UInt64 → UInt32) (ts : List Tm) :
 
 theorem eval_mkSum (env : UInt64 → UInt32) (ts : List Tm) :
     eval env (mkSum ts) = (ts.map (eval env)).foldr (· + ·) 0 := by
-  have key := sumStep_inv env (ts.flatMap addends) (0, [])
-  simp only [List.map_nil, List.foldr_nil, UInt32.zero_add, UInt32.add_zero, foldr_flatMap_addends] at key
-  simp only [mkSum, eval_finishSum, key]
+  unfold mkSum
+  dsimp only
+  split
+  · have key := sumStep_inv env (ts.flatMap addends) (0, [])
+    simp only [List.map_nil, List.foldr_nil, UInt32.zero_add, UInt32.add_zero, foldr_flatMap_addends] at key
+    simp only [eval_finishSum, key]
+  · have key := sumStep_inv env ts (0, [])
+    simp only [List.map_nil, List.foldr_nil, UInt32.zero_add, UInt32.add_zero] at key
+    simp only [eval_finishSum, key]
 
 def mkSub (a b : Tm) : Tm := if isLit b 0 then a else fold .sub [a, b]
 def mkMul (a b : Tm) : Tm :=
@@ -410,10 +419,16 @@ def removeSub : List Tm → List Tm → Option (List Tm)
 carry of `a + r` (`carryBV a r = a + r < a`): the form a compiler gives `lo < a` for the low half of a
 64-bit add, whatever `a` is a sum of. -/
 def mkUgt (a b : Tm) : Tm :=
+  -- `0 > b` and `a > 0xFFFFFFFF` never hold
+  if isLit a 0 || isLit b 0xFFFFFFFF then lit 0 else
   if b.op == .sum then
     match removeSub (addends a) b.args with
     | some rest => mkCarry a (mkSum rest)
-    | none => fold .ugt [a, b]
+    | none =>
+      -- a long sum keeps `a` whole among its operands
+      match removeSub [a] b.args with
+      | some rest => mkCarry a (mkSum rest)
+      | none => fold .ugt [a, b]
   else fold .ugt [a, b]
 
 /-- The borrow of `a - b` is `b > a` (`borrowBV a b = a < b`): one form for it and for a compare. -/
@@ -423,7 +438,8 @@ def mkAddc (a b c : Tm) : Tm :=
   | some v => if v != 0 then mkSum [a, b, lit 1] else mkSum [a, b]
   | none =>
     -- one form for `a + b + c` however the compiler grouped `a + b`: `0 + (a + b) + c`, the sum normalised
-    fold .addc [lit 0, mkSum [a, b], c]
+    -- (a 0/1 carry is an addend: the form a compiler's `hi + hi' + scc` takes)
+    if isBool c then mkSum [a, b, c] else fold .addc [lit 0, mkSum [a, b], c]
 def mkCarryc (a b c : Tm) : Tm :=
   if isLit c 0 then mkCarry a b else let (x, y) := ord a b; fold .carryc [x, y, c]
 def mkSubc (a b c : Tm) : Tm := if isLit c 0 then mkSub a b else fold .subc [a, b, c]
@@ -697,6 +713,16 @@ theorem removeSub_sum : ∀ (xs ys r : List Tm), removeSub xs ys = some r →
 theorem eval_mkUgt (a b : Tm) : eval env (mkUgt a b) = b2w (eval env a > eval env b) := by
   unfold mkUgt
   split
+  · rename_i hl
+    rcases Bool.or_eq_true_iff.mp hl with h | h
+    · rw [eval_of_isLit env _ _ h]; simp [b2w]
+    · rw [eval_of_isLit env _ _ h]
+      have : ¬ (eval env a > 0xFFFFFFFF) := by
+        intro hc; have := UInt32.le_iff_toNat_le.mpr (show (eval env a).toNat ≤ (0xFFFFFFFF : UInt32).toNat by
+          have := (eval env a).toNat_lt; simp at this ⊢; omega)
+        exact absurd hc (UInt32.not_lt.mpr this)
+      simp [b2w, this]
+  split
   · rename_i hs
     split
     · rename_i rest hr
@@ -707,7 +733,16 @@ theorem eval_mkUgt (a b : Tm) : eval env (mkUgt a b) = b2w (eval env a > eval en
         rw [← sum_addends env b]; simp [addends, hs]
       rw [hb, removeSub_sum env _ _ _ hr, sum_addends]
       simp only [carryBV, gt_iff_lt]
-    · simp [TOp.sem]
+    · split
+      · rename_i rest hr
+        have hc := eval_carry env a (mkSum rest)
+        simp only [Dom.carry] at hc
+        rw [hc, carry_eq, eval_mkSum]
+        have hb : eval env b = (b.args.map (eval env)).foldr (· + ·) 0 := by
+          rw [← sum_addends env b]; simp [addends, hs]
+        rw [hb, removeSub_sum env _ _ _ hr]
+        simp only [List.map_cons, List.map_nil, List.foldr_cons, List.foldr_nil, UInt32.add_zero, carryBV, gt_iff_lt]
+      · simp [TOp.sem]
   · simp [TOp.sem]
 
 theorem eval_borrow (a b : Tm) : eval env (Dom.borrow a b) = Dom.borrow (eval env a) (eval env b) := by
@@ -724,9 +759,12 @@ theorem eval_addc (a b c : Tm) : eval env (Dom.addc a b c) = Dom.addc (eval env 
     split
     · rename_i h; simp [eval_mkSum, addCi, w2b, h, UInt32.add_assoc]
     · rename_i h; simp at h; subst h; simp [eval_mkSum, addCi, w2b]
-  · simp only [eval_fold, List.map_cons, List.map_nil, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, eval_lit,
-      eval_mkSum, List.foldr_cons, List.foldr_nil, UInt32.add_zero, UInt32.zero_add, addCi, w2b]
-    split <;> simp_all
+  · split
+    · rename_i hb
+      rcases eval_isBool env c hb with h | h <;> simp [eval_mkSum, addCi, w2b, h, UInt32.add_assoc]
+    · simp only [eval_fold, List.map_cons, List.map_nil, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, eval_lit,
+        eval_mkSum, List.foldr_cons, List.foldr_nil, UInt32.add_zero, UInt32.zero_add, addCi, w2b]
+      split <;> simp_all
 
 theorem eval_carryc (a b c : Tm) : eval env (Dom.carryc a b c) = Dom.carryc (eval env a) (eval env b) (eval env c) := by
   show eval env (mkCarryc a b c) = b2w (addCi (eval env a) (eval env b) (w2b (eval env c))).2

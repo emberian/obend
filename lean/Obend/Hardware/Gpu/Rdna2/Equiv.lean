@@ -34,14 +34,16 @@ partial def collect (t : Tm) (seen : Std.HashSet Tm) : Std.HashSet Tm :=
   if seen.contains t then seen else t.args.foldl (fun s a => collect a s) (seen.insert t)
 
 /-- The leaves both sides are cut at, in first-occurrence order: memory words, and the maximal subterms
-of one side that occur in the other, never a literal. An unverified search: soundness never depends on it. -/
+of one side that occur in the other, never a literal or a 0/1 term. An unverified search: soundness never depends on it. -/
 partial def findLeaves (other : Std.HashSet Tm) (t : Tm) (acc : Array Tm × Std.HashSet Tm) : Array Tm × Std.HashSet Tm :=
   if acc.2.contains t then acc
   else
     let acc := (acc.1, acc.2.insert t)
     -- a literal is never cut: its value is what the residual needs
     if (match t.op with | .lit _ => true | _ => false) then acc
-    else if other.contains t || (match t.op with | .var _ => true | _ => false) then
+    -- nor a 0/1 term (a carry, a compare): as a free 32-bit leaf it would take values it never has, so
+    -- the cut descends to its operands
+    else if (other.contains t && !isBool t) || (match t.op with | .var _ => true | _ => false) then
       if acc.1.contains t then acc else (acc.1.push t, acc.2)
     else t.args.foldl (fun a c => findLeaves other c a) acc
 
