@@ -15,8 +15,9 @@ Gpu.Ntt.nttBlockProgram is the sole NTT construction. It uses ArrayKernel.Progra
 for indexed multi-output maps, register networks and shared-memory phases, derived
 from ec-gpu radix_fft and Govindaraju et al. SC2008. Program.check admits bounds,
 SSA closure, initialization and ownership; SourceProtocol.checkProgram checks the
-physical-lane phase protocol against G4. Block NTTs are outside the ordinary Plan
-source theorem: its fragment lacks workgroup memory and phase barriers. Executable
+physical-lane phase protocol against G4. NttSource.compile admits this program through the block-level Core4 source
+fragment. NttSource.source_to_gpu_encoded covers its retained group/lane loops,
+lexical register networks and shared phases via the general lowering. Executable
 block outputs are checked against the independent recursive NTT and small direct
 DFT; these gates are not a universal theorem that this construction is the DFT.
 -/
@@ -26,6 +27,7 @@ import Obend.Hardware.Gpu.CollectiveImport
 import Obend.Hardware.Gpu.ArrayEmit
 import Obend.Hardware.Gpu.CatgradImport
 import Obend.Hardware.Gpu.Ntt
+import Obend.Hardware.Gpu.NttSource
 import Obend.Hardware.ArrayKernel
 import Obend.Hardware.Gpu.BlockEmit
 import Obend.Hardware.Gpu.LayoutChecks
@@ -68,13 +70,8 @@ def writeGraph (name : String) (typed : Obend.Hardware.ArrayTyping.TypedGraph) (
     {vectors.length} vectors -> {dir}"
 
 def writeBlockGraph (name : String) (n : Nat) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
-  unless n >= 2 && n == 2^(Nat.log2 n) && n < 2^26 do
-    throw <| IO.userError s!"{name}: expected a supported power-of-two size below 2^26"
-  let p := nttBlockProgram n
-  if let .error reason := p.check then
-    throw <| IO.userError s!"{name}: block source rejected: {reason}"
-  unless SourceProtocol.checkProgram p workgroupSize do
-    throw <| IO.userError s!"{name}: source protocol fails G4 phase geometry or race certificate"
+  let sourcePlan ← IO.ofExcept (NttSource.compile n)
+  let p := sourcePlan.source
   IO.FS.createDirAll dir
   IO.FS.writeFile (dir / "plan.json") (BlockEmit.emitPlan name p)
   for (d, k) in p.dispatches.zipIdx do

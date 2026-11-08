@@ -49,12 +49,9 @@ has landed.
 The G1 frontend now includes checked Leaf/Core4 array members, shape/element typing, and
 reduce/scan with segmented forms. `ArrayMember.Plan.source_to_gpu_encoded` composes `book_sound`
 with source compilation and GPU lowering; `ArrayTyping.GraphTyping.wf` derives graph validity.
-Field and SOAC fixtures use that source path; field programs reuse `GoldilocksSource` through checked structural reification. The sole NTT construction is `Gpu.Ntt` in the block source language. The lexical fragment lacks indexed workgroup lanes, shared-memory phases and barriers; its encoded-source theorem does not cover the block NTT. An actual catgrad MLP with an explicit integer adaptation
-is compared against catgrad's interpreter on the GPU. The proof boundary, external gates, measured
-NumPy/catgrad baselines and open performance work are recorded in
-[`review/GPU-INTEGRATION-20261107.md`](review/GPU-INTEGRATION-20261107.md). Fold invocations own segments,
-and a scan invocation can write several elements; the invocation schedule has its own soundness
-lemma. New frontend device coverage is RADV, not an extension of the older cross-driver claim.
+Field and SOAC fixtures use that source path; field programs reuse `GoldilocksSource` through checked structural reification. All array folds now compile to admitted `ArrayKernel` collectives: compact shared trees within workgroups and a pruned reduce-then-scan hierarchy across workgroups. `CollectiveBuildCorrect.build_correct` proves their segmented fold values, `ArrayEmitCorrect.compile_runProgram` composes the scheduled actions, and `CollectiveWorkBuild.build_work` bounds the actual emitted work linearly.
+
+The sole NTT construction is `Gpu.Ntt` in the block source fragment. `BlockCoreProgram` elaborates indexed workgroup maps, lexical register tiles and shared phases into Core4 bounded loops; `BlockPlan.Plan.source_to_gpu_encoded` composes this source interpretation with the general block lowering. `NttSource.compile` uses that same checked plan. This closes the source-to-GPU coverage gap; equality of the NTT network with the DFT is a distinct value theorem. An actual catgrad MLP with an explicit integer adaptation is compared against catgrad's interpreter on the GPU. The preceding integration evidence remains in [`review/GPU-INTEGRATION-20261107.md`](review/GPU-INTEGRATION-20261107.md); the collective measurements are retained under [`hardware/gpu/collectives/results`](hardware/gpu/collectives/results). New frontend device coverage is RADV, not an extension of the older cross-driver claim.
 
 ## Standing on
 
