@@ -15,15 +15,22 @@ Gpu.Ntt.nttBlockProgram is the sole NTT construction. It uses ArrayKernel.Progra
 for indexed multi-output maps, register networks and shared-memory phases, derived
 from ec-gpu radix_fft and Govindaraju et al. SC2008. Program.check admits bounds,
 SSA closure, initialization and ownership; SourceProtocol.checkProgram checks the
-physical-lane phase protocol against G4. Block NTTs are outside the ordinary Plan
-source theorem: its fragment lacks workgroup memory and phase barriers. Executable
-block outputs are checked against the independent recursive NTT and small direct
-DFT; these gates are not a universal theorem that this construction is the DFT.
+physical-lane phase protocol against G4. NttSource.compile admits this program through the block-level Core4 source
+fragment. NttSource.source_to_gpu_encoded covers its retained group/lane loops,
+lexical register networks and shared phases via the general lowering.
+NttCorrect proves the actual source is the DFT for every supported size and input;
+NttSource.source_to_gpu_dft_encoded composes that value theorem with Core4 and the
+admitted GPU lowering. Executable block outputs retain the independent recursive
+NTT regression oracle; the former finite direct-DFT checks have been replaced
+by the universal theorem imported below.
 -/
 import Obend.Hardware.SquareGraphs
 import Obend.Hardware.Gpu.BookImport
+import Obend.Hardware.Gpu.CollectiveImport
+import Obend.Hardware.Gpu.ArrayEmit
 import Obend.Hardware.Gpu.CatgradImport
 import Obend.Hardware.Gpu.Ntt
+import Obend.Hardware.Gpu.NttCorrect
 import Obend.Hardware.ArrayKernel
 import Obend.Hardware.Gpu.BlockEmit
 import Obend.Hardware.Gpu.LayoutChecks
@@ -41,10 +48,7 @@ open Obend.Hardware.Gpu.GoldilocksSource
 def writeGraph (name : String) (typed : Obend.Hardware.ArrayTyping.TypedGraph) (kind : Kind) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
   let g := typed.graph
   let p := typed.lower
-  IO.FS.createDirAll dir
-  IO.FS.writeFile (dir / "plan.json") (emitPlanJson name p)
-  for (s, k) in p.stages.zipIdx do
-    IO.FS.writeFile (dir / s!"stage_{k}.wgsl") (emitStageWgsl plant name k p.stages.length s)
+  let artifact ← ArrayEmit.write name p dir plant
   if artifactsOnly then return
   let vectors := graphVectors g kind name
   let mut outputs : Array (List Vec) := #[]
@@ -64,18 +68,13 @@ def writeGraph (name : String) (typed : Obend.Hardware.ArrayTyping.TypedGraph) (
   IO.FS.writeFile (dir / "expected.tsv") (expectedTsvValues vectors outputs.toList)
   IO.println s!"  {name}: {g.lengths.length} wires ({p.words} words), {g.edges.length} edges, \
     {(fuseGraph g).edges.length} after fusion, {p.consts.length} constants, \
-    {p.tables.length} indices, {p.stages.length} dispatches \
+    {artifact.tables.length} indices, {artifact.shaders.size} dispatches \
     ({String.intercalate "," (p.stages.map fun s => toString s.kernels.length)} kernels), \
     {vectors.length} vectors -> {dir}"
 
 def writeBlockGraph (name : String) (n : Nat) (dir : System.FilePath) (plant : Plant) (artifactsOnly : Bool := false) : IO Unit := do
-  unless n >= 2 && n == 2^(Nat.log2 n) && n < 2^26 do
-    throw <| IO.userError s!"{name}: expected a supported power-of-two size below 2^26"
-  let p := nttBlockProgram n
-  if let .error reason := p.check then
-    throw <| IO.userError s!"{name}: block source rejected: {reason}"
-  unless SourceProtocol.checkProgram p workgroupSize do
-    throw <| IO.userError s!"{name}: source protocol fails G4 phase geometry or race certificate"
+  let sourcePlan ← IO.ofExcept (NttSource.compile n)
+  let p := sourcePlan.source
   IO.FS.createDirAll dir
   IO.FS.writeFile (dir / "plan.json") (BlockEmit.emitPlan name p)
   for (d, k) in p.dispatches.zipIdx do
@@ -92,9 +91,6 @@ def writeBlockGraph (name : String) (n : Nat) (dir : System.FilePath) (plant : P
     let fast := (nttFast input.toArray (rootOfUnity n)).toList
     unless (model.getD 0 []).map (·.toNat) == fast do
       throw <| IO.userError s!"{name} vector {v}: block array source disagrees with recursive NTT"
-    if n <= 1024 then
-      unless nttReference input == fast do
-        throw <| IO.userError s!"{name} vector {v}: recursive NTT disagrees with direct DFT"
     lines := lines.push (expectedTsvLine v vals model)
   IO.FS.writeFile (dir / "expected.tsv") (String.intercalate "\n" lines.toList ++ "\n")
   IO.println s!"  {name}: {BlockEmit.spaceSize p .device} device words, {BlockEmit.spaceSize p .shared} shared words, {p.dispatches.length} dispatches -> {dir}"
@@ -118,7 +114,7 @@ def main (args : List String) : IO UInt32 := do
     for (name, _) in blockGraphs do IO.println name
     return 0
   | name :: rawRest =>
-    let payload := if name == "catgrad" then 1 else if name == "leaf" then 3 else 0
+    let payload := if name == "catgrad" || name == "collective" then 1 else if name == "leaf" then 3 else 0
     let file := rawRest.head?
     let rest := rawRest.drop payload
     let mut out : Option String := none
@@ -136,6 +132,13 @@ def main (args : List String) : IO UInt32 := do
       | other :: _ => IO.eprintln s!"unexpected argument {other}\n{usage}"; return 2
       | [] => pure ()
     let some dir := out | IO.eprintln usage; return 2
+    if name == "collective" then
+      let some path := file | IO.eprintln "collective requires a source specification"; return 2
+      unless artifactsOnly do
+        IO.eprintln "collective requires --artifacts-only; supply independent TSV or binary fixture vectors to the runner"
+        return 2
+      CollectiveImport.writeFile path dir plant
+      return 0
     if name == "catgrad" then
       let some path := file | IO.eprintln "catgrad requires an input file"; return 2
       Obend.Hardware.Gpu.CatgradImport.writeFile path dir plant

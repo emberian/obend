@@ -5,6 +5,7 @@ book definitions are not a second authority. The selected member must pass the
 Core4 scalar fragment recognizer. Input vectors are JSON signed integer arrays. -/
 public import Obend.Hardware.Gpu.Source
 public import Obend.Hardware.ArrayTyping
+public import Obend.Hardware.Gpu.ArrayEmit
 public import Obend.Logic.Obligation
 @[expose] public section
 namespace Obend.Hardware.Gpu.BookImport
@@ -51,10 +52,7 @@ def writeFile (book : System.FilePath) (member : String) (inputs out : System.Fi
       throw <| IO.userError s!"source/graph disagreement for member {member}, vector {i}"
     lines := lines.push s!"{i}\t{textVec xs}\t{textVec expected}"
   let p := typed.lower
-  IO.FS.createDirAll out
-  IO.FS.writeFile (out / "plan.json") (emitPlanJson member p)
-  for (stage, i) in p.stages.zipIdx do
-    IO.FS.writeFile (out / s!"stage_{i}.wgsl") (emitStageWgsl plant member i p.stages.length stage)
+  let _ ← ArrayEmit.write member p out plant
   IO.FS.writeFile (out / "expected.tsv") (String.intercalate "\n" lines.toList ++ "\n")
   IO.println s!"compiled Leaf member {member} for arrays of length {size}"
 

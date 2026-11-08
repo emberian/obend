@@ -9,15 +9,15 @@ open Obend.Hardware.ArrayBuild Obend.Hardware.Gpu.GoldilocksSource
 
 /-! ## The NTT -/
 
-def powMod (b e m : Nat) : Nat := Id.run do
-  let mut r := 1
-  let mut bb := b % m
-  let mut ee := e
-  while ee > 0 do
-    if ee % 2 == 1 then r := r * bb % m
-    bb := bb * bb % m
-    ee := ee / 2
-  return r
+/-- Binary modular exponentiation. The exponent decreases by a factor of two;
+the zero case preserves the previous implementation's value even at modulus one. -/
+def powMod (b e m : Nat) : Nat :=
+  if h : e = 0 then 1 else
+    let r := powMod b (e / 2) m
+    let square := r * r % m
+    if e % 2 = 0 then square else square * b % m
+termination_by e
+decreasing_by exact Nat.div_lt_self (Nat.pos_of_ne_zero h) (by decide)
 
 /-- A primitive `2^32`-th root of unity in the Goldilocks field (`7^((p-1)/2^32)`). -/
 def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksP - 1) / 2 ^ 32) goldilocksP
@@ -26,7 +26,7 @@ def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksP - 1) / 2 ^ 32) goldilocksP
 def rootOfUnity (n : Nat) : Nat := powMod rootOfUnity2to32 (2 ^ 32 / n) goldilocksP
 
 /-! The NTT source uses the general index-parametric multi-output array language.
-Each upload is ec-gpu's Stockham map. A radix-8 (or radix-4) subnetwork stays in
+Each upload is ec-gpu's Stockham map. A radix-4 (or final radix-2) subnetwork stays in
 one invocation's registers; successive subnetworks exchange arrays in workgroup
 memory. Input/output layout expressions fuse Stockham's transpose into the loads
 and stores. No index tables, global gather intermediates, or NTT shader template.
@@ -43,6 +43,85 @@ def reverseBits (bits : Nat) (i : Ix) : Ix :=
   (List.range bits).foldl (fun acc bit =>
     addI acc (mulI (.mod (.div i (2^bit)) 2) (2^(bits-1-bit)))) (.lit 0)
 
+/-- Register position within the whole upload tile, with lane/register
+coordinates transposed so a register butterfly follows the global DIF layer. -/
+def phaseIndex (radix stride r : Nat) : Ix :=
+  addI (addI (mulI (.div .lane stride) (radix*stride)) (.mod .lane stride))
+    (.lit (r*stride))
+
+def phaseLoadIndex (n count radix stride : Nat) (first : Bool) (r : Nat) : Ix :=
+  if first then addI .group (mulI (phaseIndex radix stride r) (n/count))
+  else phaseIndex radix stride r
+
+def phaseSaveIndex (count logCount p radix stride : Nat) (last : Bool) (r : Nat) : Ix :=
+  if last then
+    let k : Ix := .mod .group p
+    addI (addI (mulI (.div .group p) (p*count)) k)
+      (mulI (reverseBits logCount (phaseIndex radix stride r)) p)
+  else phaseIndex radix stride r
+
+/-- One butterfly uses the same shared field source construction as every
+other consumer. A missing twiddle is precisely the source's unit-twiddle case. -/
+structure Butterfly where
+  sum : Nat
+  high : Nat
+  read : Option Read
+
+def butterfly (k : GlConsts) (a b : Nat) (twiddle : Option Ix) : BuildM Butterfly := do
+  let sum ← glAdd 1 k a b
+  let diff ← glSub 1 k a b
+  match twiddle with
+  | none => pure ⟨sum,diff,none⟩
+  | some exponent =>
+    let tw ← newWire 1
+    let high ← glMul 1 k diff tw
+    pure ⟨sum,high,some ⟨tw,4,exponent⟩⟩
+
+/-- The register construction interpreted by `phase`; separating it from the
+index-to-write packaging exposes the actual source builder to semantic proofs. -/
+def phaseAction (n count p done degree src : Nat) (first : Bool) : BuildM (List Read × List Nat) := do
+  let radix := 2^degree
+  let stride := count / (2^done * radix)
+  let index := phaseIndex radix stride
+  let loadIndex := phaseLoadIndex n count radix stride first
+  let mut reads : List Read := []
+  let mut regs : Array Nat := #[]
+  for r in List.range radix do
+    let a ← newWire 1
+    reads := reads ++ [⟨a, src, loadIndex r⟩]
+    regs := regs.push a
+  let k ← glConsts 1
+  if first && p == 1 then
+    for r in List.range radix do
+      let canonical ← glCanon 1 k regs[r]!
+      regs := regs.set! r canonical
+  if first && p > 1 then
+    for r in List.range radix do
+      let tw ← newWire 1
+      let exponent := .mod (.mul (index r) (mulI (.mod .group p) (n/count/p))) n
+      reads := reads ++ [⟨tw, 4, exponent⟩]
+      let v ← glMul 1 k regs[r]! tw
+      regs := regs.set! r v
+  for round in List.range degree do
+    let bit := radix / 2^(round+1)
+    for j in List.range (radix/2) do
+      let di := j % bit
+      let i0 := 2*j-di
+      let i1 := i0+bit
+      let a := regs[i0]!
+      let b := regs[i1]!
+      -- Twiddle depends only on the within-butterfly coordinate; the segment
+      -- coordinate has been removed by lane modulo stride.
+      let exponent := mulI (addI (.mod .lane stride) (.lit (di*stride)))
+        (2^(done+round) * (n/count))
+      let result ← butterfly k a b
+        (if stride == 1 && di == 0 then none else some exponent)
+      match result.read with
+      | none => pure ()
+      | some read => reads := reads ++ [read]
+      regs := (regs.set! i0 result.sum).set! i1 result.high
+  return (reads, regs.toList)
+
 /-- One register tile of the DIF network. `done` preceding binary layers have
 already run; `degree` layers are fused now. All arithmetic is the shared source
 builder above, and both index permutations remain source expressions. -/
@@ -50,77 +129,30 @@ def phase (n count logCount p done degree src dst : Nat)
     (first last : Bool) : Phase := Id.run do
   let radix := 2^degree
   let stride := count / (2^done * radix)
-  let index (r : Nat) : Ix :=
-    addI (addI (mulI (.div .lane stride) (radix*stride)) (.mod .lane stride))
-      (.lit (r*stride))
-  let loadIndex (r : Nat) : Ix :=
-    if first then addI .group (mulI (index r) (n/count)) else index r
-  let saveIndex (r : Nat) : Ix :=
-    if last then
-      let k : Ix := .mod .group p
-      addI (addI (mulI (.div .group p) (p*count)) k)
-        (mulI (reverseBits logCount (index r)) p)
-    else index r
-  let action : BuildM (List Read × List Nat) := do
-    let mut reads : List Read := []
-    let mut regs : Array Nat := #[]
-    for r in List.range radix do
-      let a ← newWire 1
-      reads := reads ++ [⟨a, src, loadIndex r⟩]
-      regs := regs.push a
-    let k ← glConsts 1
-    if first && p == 1 then
-      for r in List.range radix do
-        let canonical ← glCanon 1 k regs[r]!
-        regs := regs.set! r canonical
-    if first && p > 1 then
-      for r in List.range radix do
-        let tw ← newWire 1
-        let exponent := .mod (.mul (index r) (mulI (.mod .group p) (n/count/p))) n
-        reads := reads ++ [⟨tw, 4, exponent⟩]
-        let v ← glMul 1 k regs[r]! tw
-        regs := regs.set! r v
-    for round in List.range degree do
-      let bit := radix / 2^(round+1)
-      for j in List.range (radix/2) do
-        let di := j % bit
-        let i0 := 2*j-di
-        let i1 := i0+bit
-        let a := regs[i0]!
-        let b := regs[i1]!
-        let sum ← glAdd 1 k a b
-        let diff ← glSub 1 k a b
-        -- Twiddle depends only on the within-butterfly coordinate; the segment
-        -- coordinate has been removed by lane modulo stride.
-        let exponent := mulI (addI (.mod .lane stride) (.lit (di*stride)))
-          (2^(done+round) * (n/count))
-        let v ← if stride == 1 && di == 0 then pure diff else do
-          let tw ← newWire 1
-          reads := reads ++ [⟨tw, 4, exponent⟩]
-          glMul 1 k diff tw
-        regs := (regs.set! i0 sum).set! i1 v
-    return (reads, regs.toList)
-  let ((reads, outputs), st) := action.run {}
+  let saveIndex := phaseSaveIndex count logCount p radix stride last
+  let ((reads, outputs), st) := (phaseAction n count p done degree src first).run {}
   return { lanes := count/radix, reads, code := registerCode st,
            writes := outputs.zipIdx.map fun (value, r) => ⟨dst, saveIndex r, value⟩ }
 
+/-- Consecutive radix-4 register blocks, with one final radix-2 block when odd. -/
+def phaseDegrees (degree : Nat) : List Nat :=
+  List.replicate (degree/2) 2 ++ if degree%2 == 0 then [] else [1]
+
+/-- The exact barrier-separated phase list, carrying the completed layer count
+and alternating shared source row explicitly. -/
+def buildPhases (n logCount p dst : Nat) : Nat → Nat → List Nat → List Phase
+  | _, _, [] => []
+  | done, input, chunk::rest =>
+    let last := done+chunk == logCount
+    let output := if last then dst else if input == 2 then 3 else 2
+    phase n (2^logCount) logCount p done chunk input output (done == 0) last ::
+      buildPhases n logCount p dst (done+chunk) output rest
+
 /-- A Stockham upload groups up to eight binary layers. Radix-4 register blocks
 keep 64 lanes active for a 256-element tile; barriers exchange successive pairs of layers. -/
-def dispatch (n logP degree src dst : Nat) : Dispatch := Id.run do
-  let count := 2^degree
-  let mut phases := []
-  let mut done := 0
-  let mut input := src
-  for _ in List.range degree do
-    if done < degree then
-      let chunk := min 2 (degree-done)
-      let last := done+chunk == degree
-      let output := if last then dst else if input == 2 then 3 else 2
-      phases := phases ++ [phase n count degree (2^logP) done chunk input output
-        (done == 0) last]
-      input := output
-      done := done+chunk
-  return { groups := n/count, phases }
+def dispatch (n logP degree src dst : Nat) : Dispatch :=
+  { groups := n/(2^degree)
+    phases := buildPhases n degree (2^logP) dst 0 src (phaseDegrees degree) }
 
 /-- Substitute source indices while batching independent tiles into a workgroup.
 This constructs the indexed source maps; admission checks the resulting accesses. -/
@@ -132,6 +164,7 @@ def substitute (group lane : Ix) : Ix → Ix
   | .mul a b => .mul (substitute group lane a) (substitute group lane b)
   | .div a n => .div (substitute group lane a) n
   | .mod a n => .mod (substitute group lane a) n
+  | .lookup values i => .lookup values (substitute group lane i)
 
 def tileSize (d : Dispatch) : Nat :=
   d.phases.foldl (fun n ph => max n (ph.lanes * ph.writes.length)) 1
@@ -159,49 +192,57 @@ def batchTiles (stride : Nat) (d : Dispatch) : Dispatch :=
 
 end BlockNtt
 
+/-- Balanced upload size: the same policy is used by construction and proofs. -/
+def uploadDegree (maximum remaining : Nat) : Nat :=
+  let uploads := (remaining + maximum - 1) / maximum
+  (remaining + uploads - 1) / uploads
+
+/-- Static upload schedule. Fuel is the remaining number of binary layers,
+so construction is total without an unchecked termination assertion. -/
+def uploadDegrees (maximum : Nat) : Nat → Nat → List Nat
+  | 0, _ => []
+  | fuel+1, remaining =>
+      if remaining = 0 then [] else
+        let degree := uploadDegree maximum remaining
+        degree :: uploadDegrees maximum fuel (remaining-degree)
+
+/-- The one construction of upload dispatches. Source registers and shared
+phases are supplied by `BlockNtt.dispatch`; the schedule only chooses tile sizes. -/
+def buildUploads (n : Nat) : List Nat → Nat → Nat → List Obend.Hardware.ArrayKernel.Dispatch × Nat
+  | [], _, input => ([], input)
+  | degree :: rest, done, input =>
+      let output := 1-input
+      let tail := buildUploads n rest (done+degree) output
+      (BlockNtt.dispatch n done degree input output :: tail.1, tail.2)
+
+/-- Tail-recursive linear-time twiddle generation. Each entry is computed by one
+field multiplication, with no per-entry modular exponentiation. -/
+def powersLoop (ω : Nat) : Nat → Array Word → Nat → Array Word
+  | 0, xs, _ => xs
+  | count+1, xs, v => powersLoop ω count (xs.push (BitVec.ofNat 64 v)) (v*ω%goldilocksP)
+
+def twiddlePowers (n ω : Nat) : Array Word := powersLoop ω n #[] 1
+
+def uploadSchedule (n : Nat) : List Nat :=
+  let logN := Nat.log2 n
+  uploadDegrees (if n ≤ 1024 then 4 else 8) logN logN
+
+def sourceUploads (n : Nat) : List Obend.Hardware.ArrayKernel.Dispatch × Nat :=
+  buildUploads n (uploadSchedule n) 0 0
+
+def sharedWords (n : Nat) : Nat :=
+  (sourceUploads n).1.foldl
+    (fun size d => max size (BlockNtt.tileSize d * BlockNtt.packing d)) 1
+
 /-- Stockham NTT as a composition of general array maps. `n` is a power of two
 with initial words canonicalized in registers. The emitter accepts sizes below 2^26. Three uploads suffice for 2^20; each has multiple register maps
 separated by workgroup exchanges. Two device arrays are reused between uploads. -/
-def nttBlockProgram (n : Nat) : Obend.Hardware.ArrayKernel.Program := Id.run do
-  let logN := Nat.log2 n
-  let mut dispatches := []
-  let mut done := 0
-  let mut input := 0
-  for _ in List.range logN do
-    if done < logN then
-      let remaining := logN-done
-      let maximumDegree := if n <= 1024 then 4 else 8
-      let uploads := (remaining + maximumDegree - 1) / maximumDegree
-      let degree := (remaining + uploads - 1) / uploads
-      let output := 1-input
-      dispatches := dispatches ++ [BlockNtt.dispatch n done degree input output]
-      input := output
-      done := done+degree
-  let omega := rootOfUnity n
-  -- Successive powers are linear-time to generate; exponentiation per entry
-  -- would dominate construction of the 2^20 source program.
-  let packedTile := dispatches.foldl (fun n d => max n (BlockNtt.tileSize d * BlockNtt.packing d)) 1
-  dispatches := dispatches.map fun d => BlockNtt.batchTiles (BlockNtt.tileSize d) d
-  let powers : Array Word := Id.run do
-    let mut xs := #[]
-    let mut v := 1
-    for _ in [:n] do
-      xs := xs.push (BitVec.ofNat 64 v)
-      v := v*omega%goldilocksP
-    return xs
-  return { buffers := [⟨n, .device, []⟩, ⟨n, .device, []⟩,
-      ⟨packedTile, .shared, []⟩, ⟨packedTile, .shared, []⟩, ⟨n, .constant, powers.toList⟩],
-           inputs := [0], outputs := [input], dispatches }
-
-/-- The naive DFT over the Goldilocks field, `y_k = Σ_j x_j ω^{jk}`, with a table of the powers of `ω`. -/
-def nttReference (xs : List Nat) : List Nat :=
-  let n := xs.length
-  if n == 0 then [] else
-  let ω := rootOfUnity n
-  let pw : Array Nat := (Array.range n).map fun i => powMod ω i goldilocksP
-  let xa := xs.toArray
-  (List.range n).map fun k =>
-    (List.range n).foldl (fun acc j => (acc + xa[j]! * pw[(j * k) % n]!) % goldilocksP) 0
+def nttBlockProgram (n : Nat) : Obend.Hardware.ArrayKernel.Program :=
+  { buffers := [⟨n, .device, []⟩, ⟨n, .device, []⟩,
+      ⟨sharedWords n, .shared, []⟩, ⟨sharedWords n, .shared, []⟩,
+      ⟨n, .constant, (twiddlePowers n (rootOfUnity n)).toList⟩],
+    inputs := [0], outputs := [(sourceUploads n).2],
+    dispatches := (sourceUploads n).1.map fun d => BlockNtt.batchTiles (BlockNtt.tileSize d) d }
 
 /-- The recursive radix-2 NTT in `Nat` arithmetic: `y_k = E_k + ω^k O_k`, `y_{k+n/2} = E_k - ω^k O_k`. -/
 partial def nttFast (xs : Array Nat) (ω : Nat) : Array Nat :=

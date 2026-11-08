@@ -12,10 +12,10 @@ shader per wavefront stage of `layerGraph` applied to `fuseGraph` of the source.
 map edge recomputes its elementwise producers, so a chain of elementwise edges is one kernel whose
 thread runs the chain as local `let`s, and the producers nobody else reads are gone. Then the level
 layering: a stage is a frontier of edges whose predecessors were all dispatched. A stage's hyperedges
-become kernels; invocation `t` belongs to a kernel. A map invocation writes one element; a fold
-invocation owns a segment and runs a linear accumulator loop. `kernelInvocationValues_flatten`
-connects those loops to the output-address semantics. Every invocation it reads its operands from `w` as they stood when the dispatch began and
-writes `w[dstBase + e]`. Stages are separate dispatches; the host orders them. `allocateLayout` recycles
+become kernels. A map invocation writes one element; folds retain their ordered monoid
+denotation here and are expanded by `Gpu.ArrayEmit` into admitted parallel block schedules.
+`runStage` reads a frontier snapshot; ArrayEmit serializes independent collective dispatches
+within that frontier. The host orders successive dispatches. `allocateLayout` recycles
 buffers after their final read, and permits in-place reuse only by the sole elementwise consumer of a
 source on that final read. `layoutOk` independently checks live-value preservation, bounds, and absence
 of cross-thread aliases. `stageRaceFree_alias` proves any read/write overlap belongs to the same map
@@ -97,7 +97,7 @@ inductive KernelBody where
   | concat (src0Base len0 src1Base : Nat)
   /-- `c[cBase + e]`. -/
   | const (cBase : Nat)
-  /-- One invocation per segment; scans write every element of their segment. -/
+  /-- Ordered segmented fold denotation; ArrayEmit supplies its parallel block schedule. -/
   | fold (op : ReduceOp) (shape : FoldShape) (srcBase : Nat)
   deriving DecidableEq, Repr
 
@@ -125,7 +125,8 @@ structure GpuProgram where
 
 def workgroupSize : Nat := 64
 
-/-- Invocation count differs from output count for sequential-segment scans. -/
+/-- Elementwise thread count. The fold case is metadata only: ArrayEmit expands
+folds before this count is consumed by shader emission. -/
 def Kernel.threads (k : Kernel) : Nat :=
   match k.body with
   | .fold _ shape _ => shape.segments.length
@@ -395,35 +396,6 @@ def kernelValue (c : List Word) (ix : List Nat) (entry : Nat → Word) (k : Kern
   | .concat b0 l0 b1  => if e < l0 then entry (b0 + e) else entry (b1 + (e - l0))
   | .const cb         => c.getD (cb + e) 0#64
   | .fold op shape b  => (evalFold op shape (fun i => entry (b + i))).getD e 0#64
-
-/-- The values written by each actual invocation, in its contiguous output interval.
-Ordinary kernels write one value; a fold invocation writes one entire segment. -/
-def kernelInvocationValues (c : List Word) (ix : List Nat) (entry : Nat → Word) (k : Kernel) : List Vec :=
-  match k.body with
-  | .fold op shape b => foldThreadValues op shape (fun i => entry (b + i))
-  | _ => (List.range k.count).map (fun e => [kernelValue c ix entry k e])
-
-/-- The invocation schedule and the output-address model agree. Their contiguous ranges
-partition the outputs; scan invocations may write many values, and empty segments none. -/
-theorem kernelInvocationValues_flatten (c : List Word) (ix : List Nat) (entry : Nat → Word) (k : Kernel)
-    (hShape : ∀ op shape b, k.body = .fold op shape b → k.count = shape.outLen) :
-    (kernelInvocationValues c ix entry k).flatten =
-      (List.range k.count).map (kernelValue c ix entry k) := by
-  cases hb : k.body with
-  | prog code out => simp [kernelInvocationValues, hb, flatten_map_singletons]
-  | gather i b => simp [kernelInvocationValues, hb, flatten_map_singletons]
-  | concat a n b => simp [kernelInvocationValues, hb, flatten_map_singletons]
-  | const b => simp [kernelInvocationValues, hb, flatten_map_singletons]
-  | fold op shape b =>
-    simp only [kernelInvocationValues, hb, foldThreadValues_flatten]
-    have hv : kernelValue c ix entry k = fun e =>
-        (evalFold op shape (fun i => entry (b + i))).getD e 0#64 := by
-      funext e
-      simp only [kernelValue, hb]
-    rw [hv]
-    symm
-    apply map_range_getD
-    simpa [evalFold, FoldShape.outLen] using hShape op shape b hb
 
 def runStage (c : List Word) (ix : List Nat) (entry : Nat → Word) (s : GpuStage) : Nat → Word :=
   fun a =>
@@ -718,21 +690,6 @@ theorem lowerEdge_foldShape (ls : List Nat) (bases : Nat → Nat) (d : ArrayEdge
     simp only [lowerEdge, hop, KernelBody.fold.injEq] at hb
     obtain ⟨rfl, rfl, _⟩ := hb
     simpa [lowerEdge, hop, ArrayOp.outLen] using hLen.symm
-
-/-- Lowered invocations themselves realize every output element. This includes the actual
-linear scan loops and empty segments, not only the abstract output-address evaluator. -/
-theorem lowerEdge_invocations_sound (ls : List Nat) (bases : Nat → Nat) (d : ArrayEdge) (st : LowerState)
-    (hOk : edgeOk ls d = true) (dc : List Word) (dix : List Nat)
-    (env : Nat → Vec) (flat : Nat → Word) (hGood : Good ls env) (hFlat : Flat ls bases d.srcWires env flat) :
-    (kernelInvocationValues ((lowerEdge ls bases d st).2.c ++ dc) ((lowerEdge ls bases d st).2.ix ++ dix)
-      flat (lowerEdge ls bases d st).1).flatten =
-      (List.range (ls.getD d.dstWire 0)).map (fun i => (edgeValue env d).getD i 0#64) := by
-  rw [kernelInvocationValues_flatten _ _ _ _ (lowerEdge_foldShape ls bases d st hOk)]
-  have hRel := lowerEdge_kernelFor ls bases d st hOk dc dix
-  rw [hRel.2.1]
-  apply List.map_congr_left
-  intro i hi
-  exact hRel.2.2 env flat hGood hFlat i (by rw [hRel.2.1]; exact List.mem_range.mp hi)
 
 /-- Lowering only appends to the constant and index buffers. -/
 theorem lowerEdge_extends (ls : List Nat) (b : Nat → Nat) (d : ArrayEdge) (st : LowerState) :
@@ -1089,38 +1046,8 @@ def elemExpr (p : Plant) (op : ElemOp) (args : List String) : String :=
   | .shr               => s!"u64_shr({a 0}, {a 1})"
   | .shl               => s!"u64_shl({a 0}, {a 1})"
 
-/-- Text of the lawful word monoid, including the existing planted add fault. -/
-def reduceExpr (p : Plant) (op : ReduceOp) (a b : String) : String :=
-  match op with
-  | .add => elemExpr p (.scalar .add) [a, b]
-  | .mul => elemExpr p (.scalar .mul) [a, b]
-  | .band => s!"{a} & {b}"
-  | .bor => s!"{a} | {b}"
-
-/-- Linear sequential-segment schedule: invocation `e` owns segment `e`, including
-its entire output interval. Empty reductions store the identity; empty scans store nothing.
-The schedule's model is `foldThreadValues`, with `foldThreadValues_flatten` proving its
-output-address view used by `kernelValue`. No invocation reads another's writes. -/
-def foldStatements (p : Plant) (op : ReduceOp) (shape : FoldShape) (src dst : Nat) : List String :=
-  let ns := shape.segments
-  if ns.isEmpty then [] else
-  let starts := ((ns.foldl (fun (acc : Nat × List Nat) n => (acc.1 + n, acc.1 :: acc.2)) (0, [])).2).reverse
-  let nums (xs : List Nat) := String.intercalate ", " (xs.map fun n => s!"{n}u")
-  let pre := [s!"let starts = array<u32, {ns.length}>({nums starts});",
-    s!"let lengths = array<u32, {ns.length}>({nums ns});",
-    "let start = starts[e];", "let n = lengths[e];",
-    s!"var acc : vec2<u32> = {wordText op.identity.toInt};"]
-  let combine := s!"acc = {reduceExpr p op "acc" s!"w[{src}u + start + j]"};"
-  match shape.mode with
-  | none => pre ++ ["for (var j = 0u; j < n; j = j + 1u) {", s!"  {combine}", "}",
-      s!"w[{dst}u + e] = acc;"]
-  | some .inclusive => pre ++ ["for (var j = 0u; j < n; j = j + 1u) {", s!"  {combine}",
-      s!"  w[{dst}u + start + j] = acc;", "}"]
-  | some .exclusive => pre ++ ["for (var j = 0u; j < n; j = j + 1u) {",
-      s!"  w[{dst}u + start + j] = acc;", s!"  {combine}", "}"]
-
-/-- Statements of invocation `e`: an ordinary kernel writes one element; a fold kernel
-runs the accumulator loop for one segment and may write multiple outputs. -/
+/-- Statements for elementwise and routing kernels. Folds must first be expanded
+by ArrayEmit into checked ArrayKernel collective dispatches. -/
 def kernelStatements (p : Plant) (k : Kernel) : List String :=
   match k.body with
   | .prog code out =>
@@ -1130,7 +1057,7 @@ def kernelStatements (p : Plant) (k : Kernel) : List String :=
   | .concat b0 l0 b1   =>
     [s!"if (e < {l0}u) \{ w[{k.dstBase}u + e] = w[{b0}u + e]; } else \{ w[{k.dstBase}u + e] = w[{b1}u + (e - {l0}u)]; }"]
   | .const cb          => [s!"w[{k.dstBase}u + e] = c[{cb}u + e];"]
-  | .fold op shape b   => foldStatements p op shape b k.dstBase
+  | .fold _ _ _ => panic! "fold reached elementwise emitter: use ArrayEmit.schedule"
 
 /-- The shader of stage `k`: thread `gid.x` finds its kernel by the thread ranges laid end to end,
 becomes invocation `e` of it, and runs its statements; threads past the last kernel idle. The ranges are

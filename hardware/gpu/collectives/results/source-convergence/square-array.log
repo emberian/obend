@@ -1,0 +1,12 @@
+=== soac-boundaries (sq_soac_boundaries) ===
+  [1] sv/sq_soac_boundaries.sv: identical to obend-emit-sv square-soac-boundaries
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+  [3]  sq_soac_boundaries_lec.smt2: identical to obend-emit-sv square-soac-boundaries --lec
+  [3]  LEC sq_soac_boundaries: unsat, bit-precise (Yosys's reading of sq_soac_boundaries.sv == Lean's model of the RtlModule)
+  [3]  mutation `out_w2_0 = 64'd1 ^ (w_24);`: sat, as it must be (bit-precise, uniform carrier witness 0); counterexample (false = the obligation that fails):
+  [3]    (|lec_out_out_w2_0| false) (|rtl_out_out_w2_0| #x0000000000000001) (|spec_out_out_w2_0| #x0000000000000000)
+  [3]  EQY sq_soac_boundaries: not run (opt-in (EQY_GRAPHS); it finished on none of the square's graphs within an hour)
+  [4] Verilator: vectors=12, mismatches=0 against evalModuleOutputs
+  [5] the card: soac-boundaries: 12 vectors, 54 dispatches, 0 disagree, 1.845 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  [6] swapped `w_173 = (64'd1 + w_14);`: Verilator mismatches=12, LEC z3 says sat, as they must (0 earlier swaps skipped: LEC unsat or undecided)
+[PASS] hardware/gpu/square (soac-boundaries)

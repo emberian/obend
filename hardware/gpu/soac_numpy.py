@@ -98,8 +98,8 @@ def main():
     report = {"recorded_at": datetime.now(timezone.utc).isoformat(), "cpu": cpu, "numpy": np.__version__, "python": platform.python_version(), "host": platform.node(),
               "machine": platform.machine(), "platform": platform.platform(), "repeats": args.repeats,
               "cpu_timing_scope": "median compute including allocations and Python dispatch; warm inputs",
-              "gpu_timing_scope": "runner submission to completion; excludes shader compilation and transfers",
-              "schedule": "one sequential accumulator per segment; no intra-segment parallelism",
+              "gpu_timing_scope": "runner wall-clock mean per fixture vector: command encoding, submission and completion; queued GPU input copy may be included; shader compilation and output readback excluded",
+              "schedule": "emitted GPU plan; dispatch counts recorded per case",
               "cases": {}}
     for name, lengths in CASES.items():
         vectors = []

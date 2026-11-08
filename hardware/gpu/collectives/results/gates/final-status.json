@@ -1,0 +1,147 @@
+[
+  {
+    "gate": "gpu",
+    "command": [
+      "bash",
+      "hardware/gpu/verify_gpu.sh"
+    ],
+    "exit": 0,
+    "seconds": 1030.2844383716583,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/gpu.log"
+  },
+  {
+    "gate": "source",
+    "command": [
+      "bash",
+      "hardware/gpu/verify_source.sh",
+      "--adapter",
+      "radv"
+    ],
+    "exit": 0,
+    "seconds": 3.6461868286132812,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/source.log"
+  },
+  {
+    "gate": "soac",
+    "command": [
+      "bash",
+      "hardware/gpu/verify_soac.sh"
+    ],
+    "exit": 0,
+    "seconds": 101.12344932556152,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/soac.log"
+  },
+  {
+    "gate": "catgrad",
+    "command": [
+      "bash",
+      "hardware/gpu/catgrad/verify_catgrad.sh",
+      "--adapter",
+      "radv"
+    ],
+    "exit": 1,
+    "seconds": 3.11157488822937,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/catgrad.log"
+  },
+  {
+    "gate": "square-array",
+    "command": [
+      "bash",
+      "hardware/gpu/square/verify_square.sh",
+      "--graph",
+      "soac-boundaries"
+    ],
+    "exit": 0,
+    "seconds": 13.990115404129028,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/square-array.log"
+  },
+  {
+    "gate": "isa-1",
+    "command": [
+      "bash",
+      "hardware/gpu/isa_check.sh",
+      "--stage",
+      "1"
+    ],
+    "exit": 0,
+    "seconds": 0.18453121185302734,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/isa-1.log"
+  },
+  {
+    "gate": "isa-2",
+    "command": [
+      "bash",
+      "hardware/gpu/isa_check.sh",
+      "--stage",
+      "2"
+    ],
+    "exit": 1,
+    "seconds": 0.6458463668823242,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/isa-2.log"
+  },
+  {
+    "gate": "isa-3",
+    "command": [
+      "bash",
+      "hardware/gpu/isa_check.sh",
+      "--stage",
+      "3"
+    ],
+    "exit": 0,
+    "seconds": 10.2778639793396,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/isa-3.log"
+  },
+  {
+    "gate": "isa-4",
+    "command": [
+      "bash",
+      "hardware/gpu/isa_check.sh",
+      "--stage",
+      "4"
+    ],
+    "exit": 1,
+    "seconds": 0.03777766227722168,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/isa-4.log"
+  },
+  {
+    "gate": "isa-5",
+    "command": [
+      "bash",
+      "hardware/gpu/isa_check.sh",
+      "--stage",
+      "5"
+    ],
+    "exit": 0,
+    "seconds": 1.1067543029785156,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/isa-5.log"
+  },
+  {
+    "gate": "isa-6",
+    "command": [
+      "bash",
+      "hardware/gpu/isa_check.sh",
+      "--stage",
+      "6"
+    ],
+    "exit": 1,
+    "seconds": 0.2944018840789795,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/isa-6.log"
+  },
+  {
+    "gate": "catgrad-final",
+    "exit": 0,
+    "log": "/home/hbox/obend/frontend-collectives/task1-final-gates/catgrad-final.log",
+    "note": "Official full gate passed after digest regeneration; earlier independent-oracle outputs unchanged."
+  },
+  {
+    "gate": "square-array-route",
+    "command": [
+      "bash",
+      "hardware/gpu/square/verify_square.sh",
+      "--graph",
+      "array-route"
+    ],
+    "exit": 0,
+    "seconds": 11.223551750183105
+  }
+]

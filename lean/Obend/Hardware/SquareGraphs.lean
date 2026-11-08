@@ -131,7 +131,8 @@ def graphTypes (name : String) (g : ArrayGraph) : List Obend.Hardware.ArrayTypin
 
 /-- Ordinary workloads shared by GPU and RTL emission. Field/array/SOAC entries
 are checked source members; scalar book entries use the checked Core4 recognizer.
-Block NTT programs have their separate source language and admission checks. -/
+Block NTT programs use the indexed block source fragment and its general Core4
+interpretation/admission through `NttSource.compile`. -/
 def graphs : List GraphCase :=
   scalarGraphs.map (fun (name, definition, g) => scalarCase name definition g) ++
   [sourceCase "mac-reverse-1000" "Obend.Hardware.SquareGraphs.macReverseGraph 1000" [1000, 1000]

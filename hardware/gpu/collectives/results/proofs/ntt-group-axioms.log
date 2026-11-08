@@ -1,0 +1,5 @@
+'Obend.Hardware.Gpu.NttGroupValue.group_value' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.NttPackedValue.packed_phase_value' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.NttDispatchGeometry.packed_phase_inBounds' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]

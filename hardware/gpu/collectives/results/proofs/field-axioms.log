@@ -1,0 +1,4 @@
+'Obend.Hardware.Gpu.GoldilocksSourceCorrect.glMul_sound' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.GoldilocksSourceCorrect.glCanon_sound' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.GoldilocksSourceCorrect.glAdd_sound' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.GoldilocksSourceCorrect.glSub_sound' depends on axioms: [propext, Classical.choice, Quot.sound]

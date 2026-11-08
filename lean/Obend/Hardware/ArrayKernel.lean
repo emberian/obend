@@ -22,6 +22,8 @@ inductive Ix where
   | mul (a b : Ix)
   | div (a : Ix) (n : Nat)
   | mod (a : Ix) (n : Nat)
+  /-- Immutable compact segment/tile descriptors, uploaded in the index buffer. -/
+  | lookup (values : Array Nat) (index : Ix)
   deriving DecidableEq, Repr
 
 def Ix.eval (g l : Nat) : Ix → Nat
@@ -32,6 +34,7 @@ def Ix.eval (g l : Nat) : Ix → Nat
   | .mul a b => a.eval g l * b.eval g l
   | .div a n => a.eval g l / n
   | .mod a n => a.eval g l % n
+  | .lookup values i => values[i.eval g l]?.getD 0
 
 /-- WGSL indices are u32. Check every intermediate, including expressions whose
 final modulo would hide an overflowing multiplication. -/
@@ -43,6 +46,8 @@ def Ix.u32Safe (g l : Nat) : Ix → Bool
   | .mul a b => a.u32Safe g l && b.u32Safe g l && a.eval g l * b.eval g l < 2^32
   | .div a n => a.u32Safe g l && 0 < n && n < 2^32
   | .mod a n => a.u32Safe g l && 0 < n && n < 2^32
+  | .lookup values i => i.u32Safe g l && i.eval g l < values.size &&
+      values[i.eval g l]?.getD 0 < 2^32
 
 /-- Even unreachable shader expressions must have valid u32 literals and
 nonzero divisors. This check is independent of the invocation domain. -/
@@ -51,6 +56,7 @@ def Ix.syntaxSafe : Ix → Bool
   | .group | .lane => true
   | .add a b | .mul a b => a.syntaxSafe && b.syntaxSafe
   | .div a n | .mod a n => a.syntaxSafe && 0 < n && n < 2^32
+  | .lookup values i => i.syntaxSafe && values.size < 2^32 && values.all (· < 2^32)
 
 inductive Storage where
   | device | shared | constant

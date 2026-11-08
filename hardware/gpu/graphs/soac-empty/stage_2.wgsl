@@ -1,9 +1,8 @@
-// obend-emit-gpu: soac-empty, stage 2 of 3: 1 kernels, 0 threads.
-// Generated from Obend.Hardware.Gpu.lowerArrayToGpu; do not edit (verify_gpu.sh compares bytes).
+// soac-empty: generated from ArrayKernel.Program; no transform-specific emission.
 @group(0) @binding(0) var<storage, read_write> w : array<vec2<u32>>;
 @group(0) @binding(1) var<storage, read> c : array<vec2<u32>>;
 @group(0) @binding(2) var<storage, read> ix : array<u32>;
-
+var<workgroup> shared_words : array<vec2<u32>, 1022>;
 
 fn u32_mul_wide(a: u32, b: u32) -> vec2<u32> {
   // Bounded u32 operands: the backend emits native low/high u32 products.
@@ -38,10 +37,13 @@ fn u64_shl(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
 }
 
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
-  let t : u32 = gid.x + gid.y * 64u;
-  if (t < 0u) {
-    let e : u32 = t - 0u;
-    w[0u + e] = w[1u + ix[0u + e]];
+fn main(@builtin(workgroup_id) wid : vec3<u32>, @builtin(local_invocation_id) lid : vec3<u32>) {
+  let group = wid.x + wid.y * 3u;
+  if (group >= 3u) { return; }
+  for (var lane = lid.x; lane < 1u; lane += 64u) {
+    let v0 = vec2<u32>(0u, 0u);
+    w[1u + ix[1u + group]] = v0;
   }
+  workgroupBarrier();
+  storageBarrier();
 }

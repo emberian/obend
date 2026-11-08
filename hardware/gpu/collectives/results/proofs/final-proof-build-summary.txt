@@ -1,0 +1,44 @@
+Excerpt from /home/hbox/obend/frontend-collectives/final-proof-build.log
+Full-log SHA256: 1d3aa5d0894954cbd5313942cb2521e7360893fd36c8fbe41cc70d5686d55202
+Full log retained on hbox; final 40 lines follow.
+
+Hint: Replace the deprecated name:
+  i̵f̵_̵n̵e̵g̵i̲t̲e̲_̲e̲q̲_̲r̲i̲g̲h̲t̲
+warning: Obend/Hardware/Gpu/NttGroupValue.lean:116:23: `if_neg` has been deprecated: Use `ite_eq_right` instead
+
+Hint: Replace the deprecated name:
+  i̵f̵_̵n̵e̵g̵i̲t̲e̲_̲e̲q̲_̲r̲i̲g̲h̲t̲
+warning: Obend/Hardware/Gpu/NttGroupValue.lean:140:69: `if_neg` has been deprecated: Use `ite_eq_right` instead
+
+Hint: Replace the deprecated name:
+  i̵f̵_̵n̵e̵g̵i̲t̲e̲_̲e̲q̲_̲r̲i̲g̲h̲t̲
+warning: Obend/Hardware/Gpu/NttGroupValue.lean:140:17: This simp argument is unused:
+  preparedInput
+
+Hint: Omit it from the simp argument list.
+  [apply] simp only [hh, Bool.false_eq_true, ite_false, entry, if_neg hz]
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+warning: Obend/Hardware/Gpu/NttGroupValue.lean:140:34: This simp argument is unused:
+  Bool.false_eq_true
+
+Hint: Omit it from the simp argument list.
+  [apply] simp only [preparedInput, hh, ite_false, entry, if_neg hz]
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+warning: Obend/Hardware/Gpu/NttGroupValue.lean:140:53: This simp argument is unused:
+  ite_false
+
+Hint: Omit it from the simp argument list.
+  [apply] simp only [preparedInput, hh, Bool.false_eq_true, entry, if_neg hz]
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+✔ [807/814] Built Obend.Hardware.Gpu.NttGroupValue:c.o (56ms)
+✔ [808/814] Built Obend.Hardware.Gpu.NttDispatchValue (369ms)
+✔ [809/814] Built Obend.Hardware.Gpu.NttDispatchValue:c.o (47ms)
+✔ [810/814] Built Obend.Hardware.Gpu.NttCorrect (346ms)
+✔ [811/814] Built Obend.Hardware.Gpu.NttCorrect:c.o (37ms)
+✔ [812/814] Built EmitGpu (712ms)
+✔ [813/814] Built EmitGpu:c.o (308ms)
+✔ [814/814] Built «obend-emit-gpu»:exe (384ms)
+Build completed successfully (814 jobs).

@@ -8,6 +8,9 @@
 //! index, the input wires, the expected output wires; wires separated by `;`, elements by `,`, signed
 //! decimal). Each stage is one compute dispatch over the wire buffer `w`, the constant buffer `c` and the
 //! index buffer `ix`; the dispatches are queued in order.
+//! An optional `vectors.json` replaces TSV with raw little-endian 64-bit word files:
+//! {"format":"u64le","vectors":[{"index":"case","inputs":["in.bin"],"expected":["out.bin"]}]}.
+//! Every boundary wire must have one file of exactly its declared byte length, including empty wires.
 //! The adapter is chosen by a case-insensitive substring of its name, driver or driver info (`--adapter radv`); without
 //! one, the first non-CPU adapter is taken. Words use two u32 limbs; multiplication widening requires shader-int64.
 //! --bench N records a batch of device-timestamped transforms, with reset copies outside each interval.
@@ -90,6 +93,87 @@ fn read_vectors(path: &Path) -> Result<Vec<Vector>, String> {
     Ok(out)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BinaryVectors {
+    format: String,
+    vectors: Vec<BinaryVector>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BinaryVector {
+    index: String,
+    inputs: Vec<PathBuf>,
+    expected: Vec<PathBuf>,
+}
+
+fn validate_boundaries(plan: &Plan) -> Result<(), String> {
+    if plan.wire_base.len() != plan.wire_len.len() {
+        return Err("plan wireBase/wireLen lengths differ".into());
+    }
+    for &wire in plan.inputs.iter().chain(&plan.outputs) {
+        let len = *plan.wire_len.get(wire).ok_or("boundary names an invalid wire")?;
+        let base = plan.wire_base[wire];
+        if base.checked_add(len).is_none_or(|end| end > plan.words) {
+            return Err(format!("boundary wire {wire} exceeds plan word buffer"));
+        }
+    }
+    Ok(())
+}
+
+fn read_binary_wires(dir: &Path, files: &[PathBuf], ids: &[usize], plan: &Plan) -> Result<Vec<Vec<i64>>, String> {
+    if files.len() != ids.len() {
+        return Err(format!("binary boundary has {} files, plan requires {}", files.len(), ids.len()));
+    }
+    files.iter().zip(ids).map(|(file, &wire)| {
+        let path = dir.join(file);
+        let want = plan.wire_len[wire].checked_mul(8).ok_or("binary wire byte count overflow")?;
+        let size = fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+        if size != want as u64 {
+            return Err(format!("{}: wire {wire} requires {want} bytes, got {size}", path.display()));
+        }
+        let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if bytes.len() != want {
+            return Err(format!("{}: size changed while reading", path.display()));
+        }
+        // i64 is only the legacy runner's storage type: preserve all u64 bit patterns.
+        Ok(bytes.chunks_exact(8).map(|b| i64::from_le_bytes(b.try_into().unwrap())).collect())
+    }).collect()
+}
+
+fn load_vectors(dir: &Path, plan: &Plan) -> Result<Vec<Vector>, String> {
+    validate_boundaries(plan)?;
+    let json = dir.join("vectors.json");
+    let vectors = if json.exists() {
+        let manifest: BinaryVectors = serde_json::from_str(
+            &fs::read_to_string(&json).map_err(|e| format!("{}: {e}", json.display()))?
+        ).map_err(|e| format!("{}: {e}", json.display()))?;
+        if manifest.format != "u64le" { return Err("vectors.json format must be u64le".into()); }
+        manifest.vectors.into_iter().map(|v| Ok(Vector {
+            index: v.index,
+            inputs: read_binary_wires(dir, &v.inputs, &plan.inputs, plan)?,
+            expected: read_binary_wires(dir, &v.expected, &plan.outputs, plan)?,
+        })).collect::<Result<Vec<_>, String>>()?
+    } else {
+        read_vectors(&dir.join("expected.tsv"))?
+    };
+    if vectors.is_empty() { return Err("fixture contains no vectors".into()); }
+    for v in &vectors {
+        for (kind, wires, ids) in [("input", &v.inputs, &plan.inputs), ("output", &v.expected, &plan.outputs)] {
+            if wires.len() != ids.len() {
+                return Err(format!("vector {}: {} {kind} wires, plan requires {}", v.index, wires.len(), ids.len()));
+            }
+            for (data, &wire) in wires.iter().zip(ids) {
+                if data.len() != plan.wire_len[wire] {
+                    return Err(format!("vector {}: {kind} wire {wire} has {} words, plan requires {}", v.index, data.len(), plan.wire_len[wire]));
+                }
+            }
+        }
+    }
+    Ok(vectors)
+}
+
 const BENCH_WARMUPS: usize = 3;
 const MAX_BENCH_SAMPLES: usize = 1024;
 const MAX_BATCH_DISPATCHES: usize = 65536;
@@ -99,16 +183,18 @@ fn input_bytes(plan: &Plan, v: &Vector) -> Result<Vec<u8>, String> {
     if v.inputs.len() != plan.inputs.len() {
         return Err(format!("vector {}: {} inputs, plan has {}", v.index, v.inputs.len(), plan.inputs.len()));
     }
-    let mut wires = vec![0i64; plan.words.max(1)];
+    let mut bytes = vec![0u8; plan.words.max(1).checked_mul(8).ok_or("wire byte count overflow")?];
     for (wire, vals) in plan.inputs.iter().zip(&v.inputs) {
         let len = *plan.wire_len.get(*wire).ok_or("invalid input wire")?;
         let base = *plan.wire_base.get(*wire).ok_or("invalid input wire base")?;
-        if vals.len() != len || base.checked_add(len).is_none_or(|end| end > wires.len()) {
+        if vals.len() != len || base.checked_add(len).is_none_or(|end| end > plan.words) {
             return Err(format!("vector {}: wire {} has invalid length or bounds", v.index, wire));
         }
-        wires[base..base + len].copy_from_slice(vals);
+        for (chunk, value) in bytes[base * 8..(base + len) * 8].chunks_exact_mut(8).zip(vals) {
+            chunk.copy_from_slice(&value.to_le_bytes());
+        }
     }
-    Ok(wires.iter().flat_map(|x| x.to_le_bytes()).collect())
+    Ok(bytes)
 }
 
 fn decode_outputs(data: &[u8], plan: &Plan) -> Vec<Vec<i64>> {
@@ -242,7 +328,7 @@ fn run(dir: &Path, want: Option<&str>, bench: usize) -> Result<(), String> {
         &fs::read_to_string(dir.join("plan.json")).map_err(|e| format!("plan.json: {e}"))?,
     )
     .map_err(|e| format!("plan.json: {e}"))?;
-    let vectors = read_vectors(&dir.join("expected.tsv"))?;
+    let vectors = load_vectors(dir, &plan)?;
     if plan.workgroup_size == 0 { return Err("workgroupSize must be positive".into()); }
     let wire_bytes = plan.words.max(1).checked_mul(8).ok_or("wire byte count overflow")? as u64;
     if bench > 0 {
@@ -263,6 +349,14 @@ fn run(dir: &Path, want: Option<&str>, bench: usize) -> Result<(), String> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = pick_adapter(&instance, want)?;
     let info_line = adapter_line(&adapter);
+    let const_bytes = consts.len().max(1).checked_mul(8).ok_or("constant byte count overflow")? as u64;
+    let table_bytes = plan.tables.len().max(1).checked_mul(4).ok_or("table byte count overflow")? as u64;
+    let limits = adapter.limits();
+    for (name, bytes) in [("w", wire_bytes), ("c", const_bytes), ("ix", table_bytes)] {
+        if bytes > limits.max_buffer_size || bytes > u64::from(limits.max_storage_buffer_binding_size) {
+            return Err(format!("{info_line}: {name} needs {bytes} bytes; max_buffer_size={}, max_storage_buffer_binding_size={}", limits.max_buffer_size, limits.max_storage_buffer_binding_size));
+        }
+    }
     let timestamps = bench > 0;
     if timestamps && !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
         return Err(format!("{info_line}: benchmark requires TIMESTAMP_QUERY"));
@@ -278,8 +372,6 @@ fn run(dir: &Path, want: Option<&str>, bench: usize) -> Result<(), String> {
         eprintln!("[wgpu error] {e}");
     }));
 
-    let const_bytes = (consts.len().max(1) * 8) as u64;
-    let table_bytes = (plan.tables.len().max(1) * 4) as u64;
     let w = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("w"),
         size: wire_bytes,
@@ -469,5 +561,75 @@ fn main() -> ExitCode {
             eprintln!("[FAIL] {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod binary_fixture_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!("obend-binary-fixture-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn write(&self, name: &str, data: impl AsRef<[u8]>) {
+            fs::write(self.0.join(name), data).unwrap();
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) { fs::remove_dir_all(&self.0).unwrap(); }
+    }
+    fn plan() -> Plan {
+        serde_json::from_str(r#"{"graph":"binary-test","words":4,"workgroupSize":64,"wireBase":[0,2,4],"wireLen":[2,2,0],"consts":[],"tables":[],"inputs":[0],"outputs":[1,2],"stages":[]}"#).unwrap()
+    }
+    fn files(f: &Fixture) {
+        f.write("input.bin", [0xff; 16]);
+        f.write("output.bin", [0x80; 16]);
+        f.write("empty.bin", []);
+        f.write("vectors.json", r#"{"format":"u64le","vectors":[{"index":"bits","inputs":["input.bin"],"expected":["output.bin","empty.bin"]}]}"#);
+    }
+    #[test]
+    fn binary_preserves_high_bits_and_empty_output() {
+        let f = Fixture::new(); files(&f);
+        let v = load_vectors(&f.0, &plan()).unwrap();
+        assert_eq!(v[0].inputs[0], vec![-1, -1]);
+        assert_eq!(v[0].expected[0], vec![i64::from_le_bytes([0x80; 8]); 2]);
+        assert!(v[0].expected[1].is_empty());
+        assert_eq!(&input_bytes(&plan(), &v[0]).unwrap()[..16], &[0xff; 16]);
+    }
+    #[test]
+    fn binary_rejects_truncated_extra_or_missing_outputs() {
+        let f = Fixture::new(); files(&f);
+        f.write("output.bin", [0; 15]);
+        assert!(load_vectors(&f.0, &plan()).err().unwrap().contains("requires 16 bytes, got 15"));
+        f.write("output.bin", [0; 17]);
+        assert!(load_vectors(&f.0, &plan()).err().unwrap().contains("requires 16 bytes, got 17"));
+        f.write("vectors.json", r#"{"format":"u64le","vectors":[{"index":"missing","inputs":["input.bin"],"expected":[]}]}"#);
+        assert!(load_vectors(&f.0, &plan()).err().unwrap().contains("plan requires 2"));
+    }
+    #[test]
+    fn binary_rejects_wrong_format_empty_fixture_and_bad_bounds() {
+        let f = Fixture::new();
+        f.write("vectors.json", r#"{"format":"u64be","vectors":[]}"#);
+        assert!(load_vectors(&f.0, &plan()).err().unwrap().contains("format must be u64le"));
+        f.write("vectors.json", r#"{"format":"u64le","vectors":[]}"#);
+        assert!(load_vectors(&f.0, &plan()).err().unwrap().contains("no vectors"));
+        let mut p = plan(); p.wire_base[1] = usize::MAX;
+        assert!(validate_boundaries(&p).is_err());
+    }
+    #[test]
+    fn tsv_fallback_validates_every_output_shape() {
+        let f = Fixture::new();
+        f.write("expected.tsv", "0\t-1,-1\t2,3;-\n");
+        assert!(load_vectors(&f.0, &plan()).is_ok());
+        f.write("expected.tsv", "0\t-1,-1\t2,3\n");
+        assert!(load_vectors(&f.0, &plan()).err().unwrap().contains("output wires"));
+        f.write("expected.tsv", "0\t-1,-1\t2;-\n");
+        assert!(load_vectors(&f.0, &plan()).err().unwrap().contains("output wire 1"));
     }
 }

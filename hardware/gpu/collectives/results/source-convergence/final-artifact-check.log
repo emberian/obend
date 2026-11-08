@@ -1,0 +1,45 @@
+PASS sole final map consumer reuses source
+PASS dead logical wire has no allocation
+PASS gather cannot overwrite source
+PASS same-stage reader prevents takeover
+PASS concat cannot overwrite either source
+PASS dead buffer reused by later gather
+PASS poisoned gather overlap refused
+PASS poisoned shared reader overlap refused
+PASS poisoned undersized allocation refused
+=== [1/4] byte equality: committed plan, shaders and expected.tsv == obend-emit-gpu ===
+    diamond: 9 wires (4 words), 5 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/diamond
+    optic-mul: 9 wires (6 words), 3 edges, 3 after fusion, 0 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/optic-mul
+    optic-linearmac: 9 wires (5 words), 4 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/optic-linearmac
+    optic-bilinear: 9 wires (6 words), 6 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/optic-bilinear
+    adjoint-mul-add: 12 wires (6 words), 7 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/adjoint-mul-add
+    adjoint-square-bilinear: 13 wires (6 words), 9 edges, 3 after fusion, 3 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/adjoint-square-bilinear
+    allops: 11 wires (6 words), 8 edges, 3 after fusion, 6 constants, 0 indices, 1 dispatches (3 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/allops
+    muxchain: 8 wires (5 words), 4 edges, 2 after fusion, 1 constants, 0 indices, 1 dispatches (2 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/muxchain
+    tree512: 1023 wires (512 words), 511 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 6 vectors -> /tmp/verify_gpu.qkfYcn/emit/tree512
+    mac-reverse-1000: 5 wires (3000 words), 3 edges, 3 after fusion, 1000 constants, 1000 indices, 3 dispatches (1,1,1 kernels), 6 vectors -> /tmp/verify_gpu.qkfYcn/emit/mac-reverse-1000
+    glmul-4: 45 wires (20 words), 43 edges, 4 after fusion, 12 constants, 0 indices, 2 dispatches (3,1 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/glmul-4
+    glmul-256: 45 wires (1280 words), 43 edges, 4 after fusion, 768 constants, 0 indices, 2 dispatches (3,1 kernels), 6 vectors -> /tmp/verify_gpu.qkfYcn/emit/glmul-256
+    array-route: 5 wires (16 words), 4 edges, 4 after fusion, 4 constants, 4 indices, 4 dispatches (1,1,1,1 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/array-route
+    soac-boundaries: 27 wires (168 words), 26 edges, 26 after fusion, 0 constants, 92 indices, 54 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/soac-boundaries
+    soac-empty: 27 wires (16 words), 26 edges, 26 after fusion, 0 constants, 16 indices, 10 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/soac-empty
+    soac-no-segments: 27 wires (4 words), 26 edges, 26 after fusion, 0 constants, 4 indices, 6 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_gpu.qkfYcn/emit/soac-no-segments
+    soac-single-65536: 27 wires (1114120 words), 26 edges, 26 after fusion, 0 constants, 77848 indices, 66 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.qkfYcn/emit/soac-single-65536
+    soac-segments-64x1024: 27 wires (1114372 words), 26 edges, 26 after fusion, 0 constants, 78860 indices, 66 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_gpu.qkfYcn/emit/soac-segments-64x1024
+    source-leaf-affine: 5 wires (11 words), 4 edges, 1 after fusion, 2 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.qkfYcn/emit/source-leaf-affine
+    source-leaf-mux: 10 wires (11 words), 9 edges, 1 after fusion, 4 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.qkfYcn/emit/source-leaf-mux
+    source-leaf-shl: 3 wires (10 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.qkfYcn/emit/source-leaf-shl
+    source-leaf-shr: 3 wires (10 words), 2 edges, 1 after fusion, 1 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.qkfYcn/emit/source-leaf-shr
+    source-leaf-fixed-square: 2 wires (11 words), 1 edges, 1 after fusion, 0 constants, 0 indices, 1 dispatches (1 kernels), 2 vectors -> /tmp/verify_gpu.qkfYcn/emit/source-leaf-fixed-square
+    ntt-4: 8 device words, 8 shared words, 1 dispatches -> /tmp/verify_gpu.qkfYcn/emit/ntt-4
+    ntt-16: 32 device words, 32 shared words, 1 dispatches -> /tmp/verify_gpu.qkfYcn/emit/ntt-16
+    ntt-64: 128 device words, 128 shared words, 2 dispatches -> /tmp/verify_gpu.qkfYcn/emit/ntt-64
+    ntt-1024: 2048 device words, 512 shared words, 3 dispatches -> /tmp/verify_gpu.qkfYcn/emit/ntt-1024
+    ntt-65536: 131072 device words, 512 shared words, 2 dispatches -> /tmp/verify_gpu.qkfYcn/emit/ntt-65536
+    ntt-1048576: 2097152 device words, 512 shared words, 3 dispatches -> /tmp/verify_gpu.qkfYcn/emit/ntt-1048576
+  soac-single-65536: digests identical (kept as graphs/soac-single-65536.sha256)
+  soac-segments-64x1024: digests identical (kept as graphs/soac-segments-64x1024.sha256)
+  ntt-65536: digests identical (kept as graphs/ntt-65536.sha256)
+  ntt-1048576: digests identical (kept as graphs/ntt-1048576.sha256)
+  29 graphs identical
+[PASS] hardware/gpu (stage 1)

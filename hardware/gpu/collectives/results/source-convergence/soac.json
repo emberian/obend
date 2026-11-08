@@ -1,0 +1,75 @@
+{
+  "recorded_at": "2026-11-08T08:35:12.967719+00:00",
+  "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+  "numpy": "2.5.4",
+  "python": "3.12.7",
+  "host": "hbox",
+  "machine": "x86_64",
+  "platform": "Linux-6.11.0-29-generic-x86_64-with-glibc2.40",
+  "repeats": 101,
+  "cpu_timing_scope": "median compute including allocations and Python dispatch; warm inputs",
+  "gpu_timing_scope": "runner wall-clock mean per fixture vector: command encoding, submission and completion; queued GPU input copy may be included; shader compilation and output readback excluded",
+  "schedule": "emitted GPU plan; dispatch counts recorded per case",
+  "cases": {
+    "soac-boundaries": {
+      "elements": 8,
+      "segments": 7,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 227.606,
+      "numpy_sum_cumsum_us": 3.605,
+      "gpu_full_pipeline_ms": 1.954,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 54,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-empty": {
+      "elements": 0,
+      "segments": 3,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 66.291,
+      "numpy_sum_cumsum_us": 2.347,
+      "gpu_full_pipeline_ms": 0.463,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 10,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-no-segments": {
+      "elements": 0,
+      "segments": 0,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 16.861,
+      "numpy_sum_cumsum_us": 2.308,
+      "gpu_full_pipeline_ms": 0.344,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 6,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-single-65536": {
+      "elements": 65536,
+      "segments": 1,
+      "vectors_checked": 2,
+      "numpy_full_pipeline_us": 2218.559,
+      "numpy_sum_cumsum_us": 106.009,
+      "gpu_full_pipeline_ms": 9.566,
+      "gpu_vectors": 2,
+      "gpu_dispatches": 66,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-segments-64x1024": {
+      "elements": 65536,
+      "segments": 64,
+      "vectors_checked": 2,
+      "numpy_full_pipeline_us": 2135.112,
+      "numpy_sum_cumsum_us": 109.09,
+      "gpu_full_pipeline_ms": 9.719,
+      "gpu_vectors": 2,
+      "gpu_dispatches": 66,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    }
+  },
+  "timing_scope_correction": {
+    "corrected_at": "2026-11-08",
+    "previous_gpu_timing_scope": "runner submission to completion; excludes shader compilation and transfers",
+    "reason": "Runner main.rs starts the normal-path wall timer before command encoding and submission. queue.write_buffer is called before the timer, but its queued GPU copy can execute on the timed submission. Output readback follows the timer. Numerical measurements are unchanged."
+  }
+}

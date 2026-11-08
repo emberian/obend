@@ -1,0 +1,2406 @@
+{
+  "recorded_at": "2026-11-08T07:45:12.598123+00:00",
+  "host": "hbox",
+  "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+  "numpy": "2.5.4",
+  "python": "3.12.7",
+  "platform": "Linux-6.11.0-29-generic-x86_64-with-glibc2.40",
+  "gpu_environment": {
+    "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
+  },
+  "seed": 3222400113,
+  "gpu_samples": 31,
+  "cpu_samples": 31,
+  "warmups": 3,
+  "timed_ops": [
+    "add"
+  ],
+  "correctness_ops": [
+    "add",
+    "mul",
+    "band",
+    "bor"
+  ],
+  "gpu_scope": "device timestamps first pass begin to last pass end; all dispatches/barriers; reset copies before every interval; compilation/upload/readback excluded",
+  "cpu_scope": "perf_counter_ns around same NumPy uint64 operation with preallocated output and warm input; Python dispatch included; allocation and fixture IO excluded",
+  "host_batch_scope": "GPU submission through final query/output mapping, including warmups and reset copies, divided by all repetitions; command recording/initial upload excluded",
+  "copy_scope": "handwritten WGSL vec2<u32> copy through same runner; NumPy copyto preallocated array; not a source compiler correctness claim",
+  "cases": [
+    {
+      "name": "irregular-add-inclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "inclusive",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 12,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "7baf44100d3ad7957f6cdaf638ff840d5cb89a5161c5632caff5475819dc432b",
+          "expected_sha256": "76f33eeb3ac20323ec58ff644dbff170f18419b31953bf17e8be2cf8537c3d41"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "80457c0ddaec7861c83792a9cb181d9d2ea849578140cd9272a0ae6aff1a71ac"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 13920,
+      "shader_bytes": 55791,
+      "plan_bytes": 2230,
+      "logical_device_read_bytes": 9032,
+      "logical_device_write_bytes": 6976
+    },
+    {
+      "name": "irregular-add-exclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "exclusive",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 12,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "7baf44100d3ad7957f6cdaf638ff840d5cb89a5161c5632caff5475819dc432b",
+          "expected_sha256": "2973d5a2760f05e60e900807ca42ade95dca8f82ebf1f4f338597dfe0611c0a6"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "4c8010c1fb951648769479504fd2d092362c50350bd1a560289795ce10f7f756"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 13920,
+      "shader_bytes": 55179,
+      "plan_bytes": 2228,
+      "logical_device_read_bytes": 9032,
+      "logical_device_write_bytes": 6976
+    },
+    {
+      "name": "irregular-add-reduce",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "reduce",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 11,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "7baf44100d3ad7957f6cdaf638ff840d5cb89a5161c5632caff5475819dc432b",
+          "expected_sha256": "e254c75033c52a39a6389bc8b11ec585a2ad61962d6ebe8847166f1a2633ea92"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "f2e7f2e04b9fec799ddf78279b2bd9326c2d556ac66b9d33c0fef07a9c137eb3"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 7048,
+      "shader_bytes": 35605,
+      "plan_bytes": 2051,
+      "logical_device_read_bytes": 6960,
+      "logical_device_write_bytes": 104
+    },
+    {
+      "name": "irregular-mul-inclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "inclusive",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 12,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "242f24846cc61932b041b6534fe7ba4bcbed851b46c1b57b140820f02931a954",
+          "expected_sha256": "d8406db0e05f5138b22226067badca268283700f4fe4b3d68757448df29d26b8"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "bea34c7a08317a3bbd935633ca3f512eb858865df30ffe8f644bab5e57ab622a",
+          "expected_sha256": "4070c696098a650c3ce94bbea62f9fad4930b3338e4c046665f64f31faac40f7"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 13920,
+      "shader_bytes": 55791,
+      "plan_bytes": 2230,
+      "logical_device_read_bytes": 9032,
+      "logical_device_write_bytes": 6976
+    },
+    {
+      "name": "irregular-mul-exclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "exclusive",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 12,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "242f24846cc61932b041b6534fe7ba4bcbed851b46c1b57b140820f02931a954",
+          "expected_sha256": "a3f40a510f9deb14e9e8afe0a6a9ec0d3406af35a41a467a02c906211a69558d"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "bea34c7a08317a3bbd935633ca3f512eb858865df30ffe8f644bab5e57ab622a",
+          "expected_sha256": "62ee91716ae1deab7ad40210f1c8ba3b9821c641c7251a8bebb05975dbb472aa"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 13920,
+      "shader_bytes": 55179,
+      "plan_bytes": 2228,
+      "logical_device_read_bytes": 9032,
+      "logical_device_write_bytes": 6976
+    },
+    {
+      "name": "irregular-mul-reduce",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "reduce",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 11,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "242f24846cc61932b041b6534fe7ba4bcbed851b46c1b57b140820f02931a954",
+          "expected_sha256": "7c62a548ba88d3cb3b18796b9a546992ec6554d781c0d627c3fa4d36b1f0add9"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "bea34c7a08317a3bbd935633ca3f512eb858865df30ffe8f644bab5e57ab622a",
+          "expected_sha256": "cbc7c3f905d4fdf67443e290bb3e263b8e7f190e781fdb0f2ad43d69fe03d1d7"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 7048,
+      "shader_bytes": 35605,
+      "plan_bytes": 2051,
+      "logical_device_read_bytes": 6960,
+      "logical_device_write_bytes": 104
+    },
+    {
+      "name": "irregular-band-inclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "inclusive",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 12,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "9bb34a750df46867a79ad7577745f5f4d9b4c7f10aecda1ea216112172cba545",
+          "expected_sha256": "ecc3b1b672a36f129f34ff038e93598e454174c85692c6cc79a9c35906673ccf"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "2fbfd1ba202689fbbb8a8fb990ce92e1297b7a1975790000934e2636eaaaa5f7"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 13920,
+      "shader_bytes": 55195,
+      "plan_bytes": 2231,
+      "logical_device_read_bytes": 9032,
+      "logical_device_write_bytes": 6976
+    },
+    {
+      "name": "irregular-band-exclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "exclusive",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 12,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "9bb34a750df46867a79ad7577745f5f4d9b4c7f10aecda1ea216112172cba545",
+          "expected_sha256": "a5140a4403260f586d99cb8a04254948637f08fe5b9fa1702cd57870b7a91687"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "33dfa048c3bc0d6337efd43bc72c6970ee16400247d245073f999425fedff293"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 13920,
+      "shader_bytes": 54655,
+      "plan_bytes": 2229,
+      "logical_device_read_bytes": 9032,
+      "logical_device_write_bytes": 6976
+    },
+    {
+      "name": "irregular-band-reduce",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "reduce",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 11,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "9bb34a750df46867a79ad7577745f5f4d9b4c7f10aecda1ea216112172cba545",
+          "expected_sha256": "c7ff49d8c9879d8f8994aeb992da901ebbcae893a0875b71c30adc7e772e83a5"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "6ef8ca1536fbdaa6c11085520870bda58ba0e8470f7d305be0a52c4a8820e3aa"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 7048,
+      "shader_bytes": 35362,
+      "plan_bytes": 2052,
+      "logical_device_read_bytes": 6960,
+      "logical_device_write_bytes": 104
+    },
+    {
+      "name": "irregular-bor-inclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "inclusive",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 12,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "4ac9c011d4eaf2c5d23ca784cdbd66037f294bcf16fa20f1d8198882f41f50a1",
+          "expected_sha256": "d743fa312d28bcecb28f995feaab293271a5abaaacd2253a195bacf6c807f6b0"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "92c5478ca7d5ef1b445da056f96775f14777ca7527e7588eb1339a96a1afefbf"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 13920,
+      "shader_bytes": 54967,
+      "plan_bytes": 2230,
+      "logical_device_read_bytes": 9032,
+      "logical_device_write_bytes": 6976
+    },
+    {
+      "name": "irregular-bor-exclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "exclusive",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 12,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "4ac9c011d4eaf2c5d23ca784cdbd66037f294bcf16fa20f1d8198882f41f50a1",
+          "expected_sha256": "b5c1b861ac33d2ffeefc493fecc8667eafe138a8f7120e45c9cc38e6068c5b89"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "f1e07877537379d6eb4ccdc9f92f1836f279bc11152a6f22ca9b51aa2e54ecae"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 13920,
+      "shader_bytes": 54427,
+      "plan_bytes": 2228,
+      "logical_device_read_bytes": 9032,
+      "logical_device_write_bytes": 6976
+    },
+    {
+      "name": "irregular-bor-reduce",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "reduce",
+      "elements": 868,
+      "segments": 11,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 11,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "4ac9c011d4eaf2c5d23ca784cdbd66037f294bcf16fa20f1d8198882f41f50a1",
+          "expected_sha256": "e15334037cb48e4a4e4963f2c435749f5ca977c10a30d7a70cdafdbba6efbddb"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "729d1993614463b21ac3e68260c2c8ba93c37b6c3f274da526850a062c99e3be",
+          "expected_sha256": "c76c13f7c74ef4e13b8815724d80ada77d1b07d44cd017e609986467d5e6f578"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 7048,
+      "shader_bytes": 35261,
+      "plan_bytes": 2051,
+      "logical_device_read_bytes": 6960,
+      "logical_device_write_bytes": 104
+    },
+    {
+      "name": "empty-add-inclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "inclusive",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "empty-add-exclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "exclusive",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "empty-add-reduce",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "reduce",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "9d908ecfb6b256def8b49a7c504e6c889c4b0e41fe6ce3e01863dd7b61a20aa0"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "9d908ecfb6b256def8b49a7c504e6c889c4b0e41fe6ce3e01863dd7b61a20aa0"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 24,
+      "shader_bytes": 1972,
+      "plan_bytes": 481,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 24
+    },
+    {
+      "name": "empty-mul-inclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "inclusive",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "empty-mul-exclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "exclusive",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "empty-mul-reduce",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "reduce",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "605390e5a369ee568b19ead1733af824c7c1d286d7d24b86283238fc44a99334"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "605390e5a369ee568b19ead1733af824c7c1d286d7d24b86283238fc44a99334"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 24,
+      "shader_bytes": 1972,
+      "plan_bytes": 481,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 24
+    },
+    {
+      "name": "empty-band-inclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "inclusive",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 338,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "empty-band-exclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "exclusive",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 338,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "empty-band-reduce",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "reduce",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "44a5f7891570e5631e8c91c85186e6633f4ab5364f644040b2a00126a07985b6"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "44a5f7891570e5631e8c91c85186e6633f4ab5364f644040b2a00126a07985b6"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 24,
+      "shader_bytes": 1991,
+      "plan_bytes": 482,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 24
+    },
+    {
+      "name": "empty-bor-inclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "inclusive",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "empty-bor-exclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "exclusive",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "empty-bor-reduce",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "reduce",
+      "elements": 0,
+      "segments": 3,
+      "segment_length": 0,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "9d908ecfb6b256def8b49a7c504e6c889c4b0e41fe6ce3e01863dd7b61a20aa0"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "9d908ecfb6b256def8b49a7c504e6c889c4b0e41fe6ce3e01863dd7b61a20aa0"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 24,
+      "shader_bytes": 1972,
+      "plan_bytes": 481,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 24
+    },
+    {
+      "name": "no-segments-add-inclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "inclusive",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-add-exclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "exclusive",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-add-reduce",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "reduce",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 334,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-mul-inclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "inclusive",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-mul-exclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "exclusive",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-mul-reduce",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "reduce",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 334,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-band-inclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "inclusive",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 338,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-band-exclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "exclusive",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 338,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-band-reduce",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "reduce",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 335,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-bor-inclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "inclusive",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-bor-exclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "exclusive",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 337,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "no-segments-bor-reduce",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "reduce",
+      "elements": 0,
+      "segments": 0,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 0,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 0,
+      "shader_bytes": 0,
+      "plan_bytes": 334,
+      "logical_device_read_bytes": 0,
+      "logical_device_write_bytes": 0
+    },
+    {
+      "name": "pruned-mixed-add-inclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "inclusive",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 8,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "ee2fbe42d0f7eec3bd146c1db0e4cab24f0409f6c3ec221e941102e46a2fee5d",
+          "expected_sha256": "1d0c780236c9e5fe6692a9c97d33d99be78231ddceddcce447e88a10512f5c7b"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "f6b619737db8b52284fdfd7a98a46f08fe1cfa9f14bb169c0c462eef2a30f1db"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1060960,
+      "shader_bytes": 31171,
+      "plan_bytes": 4068,
+      "logical_device_read_bytes": 1058888,
+      "logical_device_write_bytes": 532544
+    },
+    {
+      "name": "pruned-mixed-add-exclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "exclusive",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 8,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "ee2fbe42d0f7eec3bd146c1db0e4cab24f0409f6c3ec221e941102e46a2fee5d",
+          "expected_sha256": "fe5e617a7053b4703ca5bb91d0d43c8f9bec6fd1c231f881134e09c159408880"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "55463f70a6d5036f7aa841268d77caf621115c17f7df71cd799a9a33ffc010c6"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1060960,
+      "shader_bytes": 30899,
+      "plan_bytes": 4067,
+      "logical_device_read_bytes": 1058888,
+      "logical_device_write_bytes": 532544
+    },
+    {
+      "name": "pruned-mixed-add-reduce",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "reduce",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 7,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "ee2fbe42d0f7eec3bd146c1db0e4cab24f0409f6c3ec221e941102e46a2fee5d",
+          "expected_sha256": "eb2c1a068d321da98c1cb193800dec1888f3157e4912ddac2247fce336256c55"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "a32c81d3633833a2115619cebf8c9ba4dbedef75d113de12d2f8e768294b998a"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 532584,
+      "shader_bytes": 19740,
+      "plan_bytes": 4814,
+      "logical_device_read_bytes": 530480,
+      "logical_device_write_bytes": 4168
+    },
+    {
+      "name": "pruned-mixed-mul-inclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "inclusive",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 8,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "d49bba78ec56265de55ecf352de17ba43350c6510978c923297960aed76af9ab",
+          "expected_sha256": "304df3dca594362373a5f3f9a5db3ead2f64b47617b5256017d2c632ccc742e4"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "daddbae9fe55eb0977ed0ab437449b2ded823eae1ee2d5b338fa13242712c2a4",
+          "expected_sha256": "5986200c47f58d50f95b8713532b1a8100640e11200be5ef4785eb3a1d0370dd"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1060960,
+      "shader_bytes": 31171,
+      "plan_bytes": 4068,
+      "logical_device_read_bytes": 1058888,
+      "logical_device_write_bytes": 532544
+    },
+    {
+      "name": "pruned-mixed-mul-exclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "exclusive",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 8,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "d49bba78ec56265de55ecf352de17ba43350c6510978c923297960aed76af9ab",
+          "expected_sha256": "bd9f0fdd6347103edd753f4f3080fbceeaca4fc9fce022c795d5e95976f8b005"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "daddbae9fe55eb0977ed0ab437449b2ded823eae1ee2d5b338fa13242712c2a4",
+          "expected_sha256": "d64d1501ac12d4047d92e521a068f17ccb99a7e8aadd75c60ef670d459b20834"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1060960,
+      "shader_bytes": 30899,
+      "plan_bytes": 4067,
+      "logical_device_read_bytes": 1058888,
+      "logical_device_write_bytes": 532544
+    },
+    {
+      "name": "pruned-mixed-mul-reduce",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "reduce",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 7,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "d49bba78ec56265de55ecf352de17ba43350c6510978c923297960aed76af9ab",
+          "expected_sha256": "1ff9e2598791b41b15a7896b88222759600c74058fc422dfd9ade09d2e9deeff"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "daddbae9fe55eb0977ed0ab437449b2ded823eae1ee2d5b338fa13242712c2a4",
+          "expected_sha256": "da623e49ab649d84056111e6be2b1cfe9252ff783fd225c2652536d1f9b426ae"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 532584,
+      "shader_bytes": 19740,
+      "plan_bytes": 4814,
+      "logical_device_read_bytes": 530480,
+      "logical_device_write_bytes": 4168
+    },
+    {
+      "name": "pruned-mixed-band-inclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "inclusive",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 8,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "c13da6ccedaffea5d9c62d0ed2948f608316c1947279562bcfbdae38e1ec3e34",
+          "expected_sha256": "2cd7e0960de740e63ba0d977038c3c4ae1cf86d7e7d0cc8ab9fe712cd5a5a949"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "932873f43257c79c288b573585b4a7198b96a5864159ba1ffb4ab7d394b1bb05"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1060960,
+      "shader_bytes": 30867,
+      "plan_bytes": 4069,
+      "logical_device_read_bytes": 1058888,
+      "logical_device_write_bytes": 532544
+    },
+    {
+      "name": "pruned-mixed-band-exclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "exclusive",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 8,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "c13da6ccedaffea5d9c62d0ed2948f608316c1947279562bcfbdae38e1ec3e34",
+          "expected_sha256": "359fafe0552f81e0209312a52c8e07679571d57518943dfc7de5397c5647f2fc"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "8daca2f312d76c3c644c44a9eb81440816703e0db476ef605ffedb12a48f8d6d"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1060960,
+      "shader_bytes": 30627,
+      "plan_bytes": 4068,
+      "logical_device_read_bytes": 1058888,
+      "logical_device_write_bytes": 532544
+    },
+    {
+      "name": "pruned-mixed-band-reduce",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "reduce",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 7,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "c13da6ccedaffea5d9c62d0ed2948f608316c1947279562bcfbdae38e1ec3e34",
+          "expected_sha256": "620f6cdd4bbddc632ee68b40d6ab40ed7d65d51c342617ddf8047740a2a8e8c9"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "976db1d3d1ee4ed04102d7c74900cc0e9e00f5523f33860c3ffe004eca0b8407"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 532584,
+      "shader_bytes": 19621,
+      "plan_bytes": 4815,
+      "logical_device_read_bytes": 530480,
+      "logical_device_write_bytes": 4168
+    },
+    {
+      "name": "pruned-mixed-bor-inclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "inclusive",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 8,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a5ebd4dd66274b5c85bc8728b58f4333c6e51952209bfba55239572a178c2812",
+          "expected_sha256": "1bf4e5e20cc22533963f34783fd3638997728cccf2496bcdfcb9a1b6b803780a"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "19a3b309cb1d3c7aca3c6e78b62e894ac55b364b815b45460e24403bfdf7b489"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1060960,
+      "shader_bytes": 30787,
+      "plan_bytes": 4068,
+      "logical_device_read_bytes": 1058888,
+      "logical_device_write_bytes": 532544
+    },
+    {
+      "name": "pruned-mixed-bor-exclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "exclusive",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 8,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a5ebd4dd66274b5c85bc8728b58f4333c6e51952209bfba55239572a178c2812",
+          "expected_sha256": "9caa78b9c9196a9ac3d38e47a82506dfca0b0d45e7f91f4f64ebf2978f000b96"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "6f739de748e8d35f5268e2b92e8b9680c97629061fd1af95934f6b4f096f6386"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1060960,
+      "shader_bytes": 30547,
+      "plan_bytes": 4067,
+      "logical_device_read_bytes": 1058888,
+      "logical_device_write_bytes": 532544
+    },
+    {
+      "name": "pruned-mixed-bor-reduce",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "reduce",
+      "elements": 66052,
+      "segments": 263,
+      "segment_length": null,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 7,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a5ebd4dd66274b5c85bc8728b58f4333c6e51952209bfba55239572a178c2812",
+          "expected_sha256": "2228164affb02624d239f3878dfb1081f10d3c3a1f68f78899d76478ea239827"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "671375150baaa2e088d44af9062a7f9a0f67e8645fd4e91bf7add5d1cb7e4d37",
+          "expected_sha256": "543ca4a96248ebf1606028d3a6b8e8a934f10635f19ec48e51e148a2b65925ba"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 532584,
+      "shader_bytes": 19596,
+      "plan_bytes": 4814,
+      "logical_device_read_bytes": 530480,
+      "logical_device_write_bytes": 4168
+    },
+    {
+      "name": "check-single-16-add-inclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "inclusive",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 3,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "8f6e442110fdb7cf8bfbca69c319c408e4e11dc57a02a5e5846e6fe4b4350dd0",
+          "expected_sha256": "e039c2ba5e54642aa67aaef0331a8ee90a785bf140615f3c64f7bf0bf35e762a"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "d6ce0df757203e1bdcaef93413b58fd49c87b8c12b7a012b0c2343c2bbd758a8"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1052672,
+      "shader_bytes": 18245,
+      "plan_bytes": 3278,
+      "logical_device_read_bytes": 1052672,
+      "logical_device_write_bytes": 528384
+    },
+    {
+      "name": "check-single-16-add-exclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "exclusive",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 3,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "8f6e442110fdb7cf8bfbca69c319c408e4e11dc57a02a5e5846e6fe4b4350dd0",
+          "expected_sha256": "53b8d4db2b94a43bf126cc4c16e9bb16ebec6cfd00f6e2837e8ce94075526aa6"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "cd36e6959060f4eb34aea16b4c487f267d565560f6f9fd550c88cc8ec6f98338"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1052672,
+      "shader_bytes": 18177,
+      "plan_bytes": 3278,
+      "logical_device_read_bytes": 1052672,
+      "logical_device_write_bytes": 528384
+    },
+    {
+      "name": "check-single-16-add-reduce",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "reduce",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 2,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "8f6e442110fdb7cf8bfbca69c319c408e4e11dc57a02a5e5846e6fe4b4350dd0",
+          "expected_sha256": "9774d1164151fb0fe1e00ea81e5327b654b3118fd101af4eb44b3db72e083769"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "8198f568ee06313eddeda578af3bb55d663c8b8ea9346d41d8456cc1f08cb59f"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 526344,
+      "shader_bytes": 8570,
+      "plan_bytes": 3083,
+      "logical_device_read_bytes": 526336,
+      "logical_device_write_bytes": 2056
+    },
+    {
+      "name": "check-single-16-mul-inclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "inclusive",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 3,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "141d52ab386b65e1e9d5c1996cbfc8d2013444ebca3cc74ae228f0a106f1b973",
+          "expected_sha256": "41d01e755001ec291d928c38d0941b06145cca39de6b4e0e9f305f8f16a33c5c"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "55434e4c62a18ec8869f1f85281cbca733114ade1c4ff8d8ae571b6b2268cd4f",
+          "expected_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1052672,
+      "shader_bytes": 18245,
+      "plan_bytes": 3278,
+      "logical_device_read_bytes": 1052672,
+      "logical_device_write_bytes": 528384
+    },
+    {
+      "name": "check-single-16-mul-exclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "exclusive",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 3,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "141d52ab386b65e1e9d5c1996cbfc8d2013444ebca3cc74ae228f0a106f1b973",
+          "expected_sha256": "d48a4c3c1d49510271c5d70d28233e4637ef7a9f3cbf666795718da62b53ec4c"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "55434e4c62a18ec8869f1f85281cbca733114ade1c4ff8d8ae571b6b2268cd4f",
+          "expected_sha256": "a163d8bbd4ff1f712a316472134c1423230f0ca47e8fd42a9c6707c26bc67575"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1052672,
+      "shader_bytes": 18177,
+      "plan_bytes": 3278,
+      "logical_device_read_bytes": 1052672,
+      "logical_device_write_bytes": 528384
+    },
+    {
+      "name": "check-single-16-mul-reduce",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "reduce",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 2,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "141d52ab386b65e1e9d5c1996cbfc8d2013444ebca3cc74ae228f0a106f1b973",
+          "expected_sha256": "9708ec7d7b56c7b4a291e33ce3f2790f40c179b1ab0edfa8e9b02866fc443c1a"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "55434e4c62a18ec8869f1f85281cbca733114ade1c4ff8d8ae571b6b2268cd4f",
+          "expected_sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 526344,
+      "shader_bytes": 8570,
+      "plan_bytes": 3083,
+      "logical_device_read_bytes": 526336,
+      "logical_device_write_bytes": 2056
+    },
+    {
+      "name": "check-single-16-band-inclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "inclusive",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 3,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "2bbfa43aefdf2eee39938a6b60ccaf24371a155e33f6597ba6d01d67bf23c468",
+          "expected_sha256": "384e39d257c39e6167267024128cfe7eaab2bc3dcd02415962562b9ae23bc63d"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1052672,
+      "shader_bytes": 17938,
+      "plan_bytes": 3279,
+      "logical_device_read_bytes": 1052672,
+      "logical_device_write_bytes": 528384
+    },
+    {
+      "name": "check-single-16-band-exclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "exclusive",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 3,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "2bbfa43aefdf2eee39938a6b60ccaf24371a155e33f6597ba6d01d67bf23c468",
+          "expected_sha256": "fde48d667fd2d11298ec793c4a2d95795f83af6269dfba43522ddc9ff12c0541"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "32e1e9b918784eb087205f08ebaf5bc35fd18b19d4bfe06807fe4ec1237b3020"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1052672,
+      "shader_bytes": 17878,
+      "plan_bytes": 3279,
+      "logical_device_read_bytes": 1052672,
+      "logical_device_write_bytes": 528384
+    },
+    {
+      "name": "check-single-16-band-reduce",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "reduce",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 2,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "2bbfa43aefdf2eee39938a6b60ccaf24371a155e33f6597ba6d01d67bf23c468",
+          "expected_sha256": "bf45a5704bcdd9214a05bc0d23f5c85f93758db65ec1d788d92f1807e75fa46f"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 526344,
+      "shader_bytes": 8444,
+      "plan_bytes": 3084,
+      "logical_device_read_bytes": 526336,
+      "logical_device_write_bytes": 2056
+    },
+    {
+      "name": "check-single-16-bor-inclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "inclusive",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 3,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a17897dfc41526c15f6305c53564269fd84388d425a5cc98f2ef727a46d292c0",
+          "expected_sha256": "9e69f75359128faa8e04a1781620b9dfb4dd69f034d9c709a760fdaac4db9886"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "2652ee60e679853ad1e4930bd8ff41b89e3a466bf869f2fb71dea8c785324fc0"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1052672,
+      "shader_bytes": 17917,
+      "plan_bytes": 3278,
+      "logical_device_read_bytes": 1052672,
+      "logical_device_write_bytes": 528384
+    },
+    {
+      "name": "check-single-16-bor-exclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "exclusive",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 3,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a17897dfc41526c15f6305c53564269fd84388d425a5cc98f2ef727a46d292c0",
+          "expected_sha256": "d3b8b75881c5aad7a09de02d0cce321b70f14b566931ba2e3f18dcedf5c196df"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "91efd375f50f626d8b60e3e21cf9129d2ca82f14c46d01253fdfcec5a75e7df4"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1052672,
+      "shader_bytes": 17857,
+      "plan_bytes": 3278,
+      "logical_device_read_bytes": 1052672,
+      "logical_device_write_bytes": 528384
+    },
+    {
+      "name": "check-single-16-bor-reduce",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "reduce",
+      "elements": 65536,
+      "segments": 1,
+      "segment_length": 65536,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 2,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a17897dfc41526c15f6305c53564269fd84388d425a5cc98f2ef727a46d292c0",
+          "expected_sha256": "a3f485d9ce818a64fbf24519e58422a27dcfc7bb0e86ace54efbc10981e601ff"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "12a3ae445661ce5dee78d0650d33362dec29c4f82af05e7e57fb595bbbacf0ca"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 526344,
+      "shader_bytes": 8442,
+      "plan_bytes": 3083,
+      "logical_device_read_bytes": 526336,
+      "logical_device_write_bytes": 2056
+    },
+    {
+      "name": "check-short32-16-add-inclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "inclusive",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "8f6e442110fdb7cf8bfbca69c319c408e4e11dc57a02a5e5846e6fe4b4350dd0",
+          "expected_sha256": "7835f51e7f4e12b3c76cd6771af2a0a804757a0264cf5acab382c3009d0450ae"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "25d605e32729b29b0815802b2a8cf632405a9a6ef51662916e7d9cd04cb8343d"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1048576,
+      "shader_bytes": 5278,
+      "plan_bytes": 12461,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 524288
+    },
+    {
+      "name": "check-short32-16-add-exclusive",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "exclusive",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "8f6e442110fdb7cf8bfbca69c319c408e4e11dc57a02a5e5846e6fe4b4350dd0",
+          "expected_sha256": "2df51a7df91f7fa583e632d6e685bb1acbd06149117e423a56174f098c7fb3d9"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "575ee97b3054124f703b30d1cbd49deff87a4a75ff024321d29282ecdaae30f5"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1048576,
+      "shader_bytes": 5210,
+      "plan_bytes": 12461,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 524288
+    },
+    {
+      "name": "check-short32-16-add-reduce",
+      "kind": "source-collective",
+      "op": "add",
+      "mode": "reduce",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "8f6e442110fdb7cf8bfbca69c319c408e4e11dc57a02a5e5846e6fe4b4350dd0",
+          "expected_sha256": "1606e421132f2ac8a87dafd27ff2aced35b7d49702bdf24092c38463e6399211"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "8d87d45398023bdb3e52f68c021b993907ecabf5e6955683576b161bfaa5ab03"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 540672,
+      "shader_bytes": 3490,
+      "plan_bytes": 21585,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 16384
+    },
+    {
+      "name": "check-short32-16-mul-inclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "inclusive",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "141d52ab386b65e1e9d5c1996cbfc8d2013444ebca3cc74ae228f0a106f1b973",
+          "expected_sha256": "e29244da3cb4b158e13d475286e4cb5466a696984d054e355bc0a06dc1d06deb"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "55434e4c62a18ec8869f1f85281cbca733114ade1c4ff8d8ae571b6b2268cd4f",
+          "expected_sha256": "07a4a86abfbbca2d39004f5cab4f448cc6ce214ecaac8b1d5208449178e63b4c"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1048576,
+      "shader_bytes": 5278,
+      "plan_bytes": 12461,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 524288
+    },
+    {
+      "name": "check-short32-16-mul-exclusive",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "exclusive",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "141d52ab386b65e1e9d5c1996cbfc8d2013444ebca3cc74ae228f0a106f1b973",
+          "expected_sha256": "7b95b65e79b61aa2690c067b76a226152dbd2136288a872be929b14b2b1010c3"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "55434e4c62a18ec8869f1f85281cbca733114ade1c4ff8d8ae571b6b2268cd4f",
+          "expected_sha256": "001c3574eea46f917239e81b06567dd4e931ad5a096a4255542aaa8b8f53764e"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1048576,
+      "shader_bytes": 5210,
+      "plan_bytes": 12461,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 524288
+    },
+    {
+      "name": "check-short32-16-mul-reduce",
+      "kind": "source-collective",
+      "op": "mul",
+      "mode": "reduce",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "141d52ab386b65e1e9d5c1996cbfc8d2013444ebca3cc74ae228f0a106f1b973",
+          "expected_sha256": "bcff68e6f05dff75344f03ac729ef88b0742751fc44647963131c33879b19930"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "55434e4c62a18ec8869f1f85281cbca733114ade1c4ff8d8ae571b6b2268cd4f",
+          "expected_sha256": "11ec8283a4df6caa8fd3e38f950e8bfa022bf2eabe02ca54a9b76e636b22b4b9"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 540672,
+      "shader_bytes": 3490,
+      "plan_bytes": 21585,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 16384
+    },
+    {
+      "name": "check-short32-16-band-inclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "inclusive",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "2bbfa43aefdf2eee39938a6b60ccaf24371a155e33f6597ba6d01d67bf23c468",
+          "expected_sha256": "f9bf2c308792f988981ac9087701b61be1156d612d6671497cbdcc8815bfb6e5"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "11da1993da6bcea339dfa5d126397b92efb14c1402c379c061708b398823c020"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1048576,
+      "shader_bytes": 5209,
+      "plan_bytes": 12462,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 524288
+    },
+    {
+      "name": "check-short32-16-band-exclusive",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "exclusive",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "2bbfa43aefdf2eee39938a6b60ccaf24371a155e33f6597ba6d01d67bf23c468",
+          "expected_sha256": "5b735c0d7bf71dbd02263c7902de37e7e2d0011bc2bd1f88ef1929df8b226ceb"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "7b54ac77e2de829dc4aaed33302618704ac1610813132121ddd9e5fe5c7f0f5e"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1048576,
+      "shader_bytes": 5149,
+      "plan_bytes": 12462,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 524288
+    },
+    {
+      "name": "check-short32-16-band-reduce",
+      "kind": "source-collective",
+      "op": "band",
+      "mode": "reduce",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "2bbfa43aefdf2eee39938a6b60ccaf24371a155e33f6597ba6d01d67bf23c468",
+          "expected_sha256": "591d115b84f364ac3763294c34929611e2409a2fc61c01dd490566ee357d60e1"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "4fe7b59af6de3b665b67788cc2f99892ab827efae3a467342b3bb4e3bc8e5bfe"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 540672,
+      "shader_bytes": 3451,
+      "plan_bytes": 21586,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 16384
+    },
+    {
+      "name": "check-short32-16-bor-inclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "inclusive",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a17897dfc41526c15f6305c53564269fd84388d425a5cc98f2ef727a46d292c0",
+          "expected_sha256": "b78f4b0fce52f7f9425d762446c50aebe8e8391e396bd4d8aac93a1dec6d29c4"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "87fb31a141efaca80135e92d9575f389ae74de4536f9bca7d818010faa7b194e"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1048576,
+      "shader_bytes": 5190,
+      "plan_bytes": 12461,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 524288
+    },
+    {
+      "name": "check-short32-16-bor-exclusive",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "exclusive",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a17897dfc41526c15f6305c53564269fd84388d425a5cc98f2ef727a46d292c0",
+          "expected_sha256": "43ac4bbe0338b508092c6c313095cca06b1fd67ca51211f860443cc7a8d955f8"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "6df936a16b957667a8735efddd8574968ac14450aeaa856ea18c7980805530fe"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 1048576,
+      "shader_bytes": 5130,
+      "plan_bytes": 12461,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 524288
+    },
+    {
+      "name": "check-short32-16-bor-reduce",
+      "kind": "source-collective",
+      "op": "bor",
+      "mode": "reduce",
+      "elements": 65536,
+      "segments": 2048,
+      "segment_length": 32,
+      "tile_log": 8,
+      "gpu": {
+        "vectors_checked": 2,
+        "dispatches": 1,
+        "adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+      },
+      "fixture_hashes": [
+        {
+          "variant": 0,
+          "input_sha256": "a17897dfc41526c15f6305c53564269fd84388d425a5cc98f2ef727a46d292c0",
+          "expected_sha256": "3e5f6ea58204f3101a562e24d594e7317f549bb9177fd9dd24f938408318f27d"
+        },
+        {
+          "variant": 1,
+          "input_sha256": "7399ec5a94bcfc098f1fa5b247b5802b3e393ed8014fd43966b002e0fa21b14b",
+          "expected_sha256": "0fbba07a833d4dcfc7024eaf313661a0ba8f80a05c6d29b8801c612e10e60dee"
+        }
+      ],
+      "binary_fixtures_retained": false,
+      "device_word_bytes": 540672,
+      "shader_bytes": 3450,
+      "plan_bytes": 21585,
+      "logical_device_read_bytes": 524288,
+      "logical_device_write_bytes": 16384
+    }
+  ]
+}

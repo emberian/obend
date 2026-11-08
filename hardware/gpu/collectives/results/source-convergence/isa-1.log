@@ -1,0 +1,4 @@
+=== [1/6] the generated modules == gen_encodings.py on the committed XML ===
+  42 encodings, 35 operand types, 1153 instructions in 13 chunks -> /tmp/isa_check.MgswWO/gen
+  identical
+[PASS] hardware/gpu/isa_check.sh (stage 1)

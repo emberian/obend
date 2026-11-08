@@ -15,6 +15,7 @@ def evalIndex32 (g l : Nat) : Ix → BitVec 32
   | .mul a b => evalIndex32 g l a * evalIndex32 g l b
   | .div a n => evalIndex32 g l a / BitVec.ofNat 32 n
   | .mod a n => evalIndex32 g l a % BitVec.ofNat 32 n
+  | .lookup values i => BitVec.ofNat 32 (values[(evalIndex32 g l i).toNat]?.getD 0)
 
 /-- The admission check prevents intermediate overflow, not only out-of-bounds
 final addresses. Accepted source indices equal actual u32 expressions exactly. -/
@@ -42,6 +43,9 @@ theorem checkedIndex_sound (g l : Nat) (i : Ix) (h : i.u32Safe g l = true) :
   | mod a n ia =>
     simp only [Ix.u32Safe, Bool.and_eq_true, decide_eq_true_eq] at h
     simp [evalIndex32, Ix.eval, BitVec.toNat_umod, ia h.1.1, Nat.mod_eq_of_lt h.2]
+  | lookup values i ih =>
+    simp only [Ix.u32Safe, Bool.and_eq_true, decide_eq_true_eq] at h
+    simp [evalIndex32, Ix.eval, ih h.1.1, Nat.mod_eq_of_lt h.2]
 
 def wirePrefix : List Nat → Nat → Nat
   | [], _ => 0
