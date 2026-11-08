@@ -231,7 +231,8 @@ def renderAluOperand (i : Inst) (op : Operand) (k : Nat) : Option String :=
   | "LITERAL" => (i.literal.map fun l => hex l.toNat).map (withMods i k)
   | "SIMM16" =>
     let v := i.field "SIMM16"
-    if op.type == "OPR_LABEL" then some (toString (signed16 v))
+    -- LLVM 19 prints a branch's SIMM16 as the unsigned field (`s_branch 65521` for -15)
+    if op.type == "OPR_LABEL" then some (toString v)
     else if op.type == "OPR_WAITCNT" then some (waitcntText v)
     else if fam == "SOPK" || op.type == "OPR_CLAUSE" then some (hex v)
     else some (toString v)
@@ -299,6 +300,46 @@ def renderMubuf (i : Inst) : Option String := do
     ++ (if i.field "TFE" == 1 then " tfe" else "")
   pure s!"{mnemonic i} {vdataS}, {vaddrS}, {srsrcS}, {soffS}{flags}"
 
+/-- DS (manual 9.3, the LDS instructions): the operands in the XML's order (`vdst`, `addr`, `data0`,
+`data1`) as VGPR runs, then `offset:N` for the 16-bit `OFFSET1:OFFSET0` of the single-address forms
+(or `offset0:`/`offset1:` for the `2addr` forms) and `gds`. -/
+def renderDs (i : Inst) : Option String := do
+  let mut parts : List String := []
+  for op in i.ie.operands do
+    if op.field == "VDST" || op.field == "ADDR" || op.field == "DATA0" || op.field == "DATA1" then
+      parts := parts ++ [regName "v" (i.field op.field) ((op.size + 31) / 32)]
+  let two := (i.inst.name.splitOn "2ST64").length > 1 || (i.inst.name.splitOn "WRITE2").length > 1 ||
+    (i.inst.name.splitOn "READ2").length > 1
+  let o0 := i.field "OFFSET0"
+  let o1 := i.field "OFFSET1"
+  let offS :=
+    if two then (if o0 != 0 then s!" offset0:{o0}" else "") ++ (if o1 != 0 then s!" offset1:{o1}" else "")
+    else if o1 * 256 + o0 != 0 then s!" offset:{o1 * 256 + o0}" else ""
+  let gds := if i.field "GDS" == 1 then " gds" else ""
+  pure s!"{i.inst.name.toLower} {", ".intercalate parts}{offS}{gds}"
+
+/-- An SDWA select's name (manual 6.4, Table "SDWA Fields"). -/
+def sdwaSel (v : Nat) : Option String :=
+  match v with
+  | 0 => "BYTE_0" | 1 => "BYTE_1" | 2 => "BYTE_2" | 3 => "BYTE_3" | 4 => "WORD_0" | 5 => "WORD_1"
+  | 6 => "DWORD" | _ => none
+
+/-- VOP2 with SDWA (manual 6.4): `vdst, src0, src1` (a source is scalar or a constant when its `S` bit
+is set, a VGPR otherwise) and the four selects, as LLVM prints them; a modifier other than the selects
+(sign extension, negation, absolute value, clamp, output modifier) is not written here, so the gate
+reports it rather than this guessing its syntax. -/
+def renderSdwa (i : Inst) : Option String := do
+  if i.field "SRC0_SEXT" + i.field "SRC0_NEG" + i.field "SRC0_ABS" + i.field "SRC1_SEXT" + i.field "SRC1_NEG"
+      + i.field "SRC1_ABS" + i.field "CLAMP" + i.field "OMOD" != 0 then none
+  let src (code s : Nat) : Option String := if s == 1 then srcName code 32 none else some (regName "v" code 1)
+  let s0 ← src (i.field "VSRC0") (i.field "S0")
+  let s1 ← src (i.field "VSRC1") (i.field "S1")
+  let dsel ← sdwaSel (i.field "DST_SEL")
+  let du ← match i.field "DST_UNUSED" with | 0 => some "UNUSED_PAD" | 1 => some "UNUSED_SEXT" | 2 => some "UNUSED_PRESERVE" | _ => none
+  let s0sel ← sdwaSel (i.field "SRC0_SEL")
+  let s1sel ← sdwaSel (i.field "SRC1_SEL")
+  pure s!"{i.inst.name.toLower}_sdwa {regName "v" (i.field "VDST") 1}, {s0}, {s1} dst_sel:{dsel} dst_unused:{du} src0_sel:{s0sel} src1_sel:{s1sel}"
+
 /-- The instruction in LLVM's syntax, or `none` for a family this renderer does not write. -/
 def Inst.render (i : Inst) : Option String :=
   match i.enc.name with
@@ -308,6 +349,8 @@ def Inst.render (i : Inst) : Option String :=
   | "VOP3_INST_LITERAL" | "VOP3_SDST_ENC_INST_LITERAL" => renderAlu i
   | "ENC_SMEM" => renderSmem i
   | "ENC_MUBUF" => renderMubuf i
+  | "ENC_DS" => renderDs i
+  | "VOP2_VOP_SDWA" => renderSdwa i
   | _ => none
 
 end Obend.Hardware.Gpu.Rdna2
