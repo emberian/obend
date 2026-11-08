@@ -1,0 +1,11 @@
+# measured_utc=2026-11-06T21:06:29Z
+Model name:                           12th Gen Intel(R) Core(TM) i9-12900
+rustc 1.100.0-nightly (0dfb098f3 2026-08-31)
+# RUSTFLAGS=-C target-cpu=native
+# Plonky3 p3-dft 0.8.0 Radix2DitParallel<Goldilocks>; natural-order forward DFT; width=1
+# CPU wall time; warm twiddles; clone outside timer; includes dft API natural-order output conversion; no allocation/input construction outside API timed
+# rayon_threads=8; RUSTFLAGS=-C target-cpu=native
+log2_n	n	samples	min_us	median_us	p90_us	checksum
+10	1024	31	125.769	207.894	305.168	17613383551202196864
+16	65536	31	1970.737	3052.498	4212.397	11955446166718287635
+20	1048576	31	20818.518	33042.811	39875.964	6626185068688898282

@@ -56,13 +56,14 @@ structure Plan (C : Obend.Logic.Composition) (m : String) where
   scope : program.Scoped inputLengths.length
   types : List TensorType
   typing : GraphTyping types (compile inputLengths program)
+  layout : layoutOk (compile inputLengths program) = true
   member : C.vtable.find? (·.1 == m) = some (m, .lam (body program inputLengths))
 
 def Plan.graph {C : Obend.Logic.Composition} {m : String} (p : Plan C m) : ArrayGraph :=
   compile p.inputLengths p.program
 
 def Plan.typed {C : Obend.Logic.Composition} {m : String} (p : Plan C m) : TypedGraph :=
-  ⟨p.graph, p.types, p.typing⟩
+  ⟨p.graph, p.types, p.typing, p.layout⟩
 
 def Plan.lower {C : Obend.Logic.Composition} {m : String} (p : Plan C m) : GpuProgram :=
   p.typed.lower
@@ -82,7 +83,7 @@ def checkMember (C : Obend.Logic.Composition) (m : String) (p : Program) (ls : L
             | .error e => throw e
             | .ok typed =>
               pure ⟨p, ls, hc, p.scopedB_sound ls.length hs, wordTypes (compile ls p),
-                checkTypedGraph_typing _ _ _ hg,
+                checkTypedGraph_typing _ _ _ hg, checkTypedGraph_layout _ _ _ hg,
                 by rw [hm, hn, Obend.Law.termEq_sound ht]⟩
           else throw s!"member {m} differs from the candidate array source syntax"
         else throw "selected array member name differs"
@@ -108,7 +109,9 @@ theorem Plan.source_to_gpu {C : Obend.Logic.Composition} {m : String} (p : Plan 
     (shape : ∀ i, lexicalLens p.inputLengths i = (source i).length)
     (hinput : ∀ i, ArrayDenotes (inputProjection p.inputLengths.length input i) (source i))
     (boundary : Represents p.inputLengths.length source target)
-    (good : Good p.graph.lengths target) (hflat : Flat p.graph.lengths target flat) :
+    (good : Good p.graph.lengths target)
+    (hflat : Flat p.graph.lengths (gpuLayout p.graph).base
+      (liveAt (layerGraph (fuseGraph p.graph)) p.graph.outputs) target flat) :
     runProgram p.lower flat = p.program.eval source ∧
     ∀ output, output < (p.program.eval source).length → ∀ index,
       Halts (.app (nth (.app (.get C.object m) input) output) (.nat index))
@@ -170,7 +173,9 @@ theorem Plan.source_to_gpu_encoded {C : Obend.Logic.Composition} {m : String} (p
     (count : p.inputLengths.length = inputs.length)
     (shape : ∀ i, lexicalLens p.inputLengths i = (inputValues inputs i).length)
     (boundary : Represents p.inputLengths.length (inputValues inputs) target)
-    (good : Good p.graph.lengths target) (hflat : Flat p.graph.lengths target flat) :
+    (good : Good p.graph.lengths target)
+    (hflat : Flat p.graph.lengths (gpuLayout p.graph).base
+      (liveAt (layerGraph (fuseGraph p.graph)) p.graph.outputs) target flat) :
     runProgram p.lower flat = p.program.eval (inputValues inputs) ∧
     ∀ output, output < (p.program.eval (inputValues inputs)).length → ∀ index,
       Halts (.app (nth (.app (.get C.object m) (encodeInputs inputs)) output) (.nat index))

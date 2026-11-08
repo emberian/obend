@@ -230,10 +230,13 @@ theorem MapPlan.eval_sound (p : MapPlan) (xs : Nat → Vec) :
 
 /-- Universal source-to-dispatch equality. Well-formedness is independently decidable; the
 frontend's symbolic check does not assume or test this equation. -/
-theorem MapPlan.gpu_sound (p : MapPlan) (hwf : p.graph.wf = true) (xs : Nat → Vec)
-    (flat : Nat → Word) (hflat : Flat p.graph.lengths (p.env xs) flat) :
+theorem MapPlan.gpu_sound (p : MapPlan) (hwf : p.graph.wf = true)
+    (hlayout : layoutOk p.graph = true) (xs : Nat → Vec)
+    (flat : Nat → Word)
+    (hflat : Flat p.graph.lengths (gpuLayout p.graph).base
+      (liveAt (layerGraph (fuseGraph p.graph)) p.graph.outputs) (p.env xs) flat) :
     runProgram (lowerArrayToGpu p.graph) flat = [denote p.size xs p.scalar] := by
-  rw [lowerArrayToGpu_sound p.graph hwf (p.env xs) flat ?_ hflat, p.eval_sound]
+  rw [lowerArrayToGpu_sound p.graph hwf hlayout (p.env xs) flat ?_ hflat, p.eval_sound]
   intro w hw
   simp only [MapPlan.graph, List.length_replicate] at hw
   simp [MapPlan.env, denote, MapPlan.graph, List.getD_eq_getElem?_getD, List.getElem?_replicate_of_lt hw]
@@ -320,6 +323,7 @@ theorem composition_member_halts (C : Obend.Logic.Composition) (hc : C.closedB =
 structure MemberPlan (C : Obend.Logic.Composition) (m : String) where
   plan : MapPlan
   unary : plan.scalar.unary = true
+  layout : layoutOk plan.graph = true
   member : C.vtable.find? (·.1 == m) = some (m, .lam plan.scalar.term)
 
 /-- Parse a selected method of the emitted composition. Diagnostics distinguish missing members,
@@ -341,7 +345,9 @@ def compileMember (C : Obend.Logic.Composition) (m : String) (n : Nat) :
           if hn : name = m then
             if ht : Obend.Law.termEq body (.lam p.scalar.term) = true then
               if hup : p.scalar.unary = true then
-                pure ⟨p, hup, by rw [hm, hn, Obend.Law.termEq_sound ht]⟩
+                if hl : layoutOk p.graph = true then
+                  pure ⟨p, hup, hl, by rw [hm, hn, Obend.Law.termEq_sound ht]⟩
+                else throw "scalar source live-buffer layout failed validation"
               else throw "compiled member has a free argument"
             else throw "compiled member syntax differs from source"
           else throw "selected member name differs from source"
@@ -354,12 +360,14 @@ Core4 observation of the original composition's selected member on that input el
 theorem MemberPlan.source_to_gpu (C : Obend.Logic.Composition) (m : String)
     (p : MemberPlan C m) (hc : C.closedB = true) (hwf : p.plan.graph.wf = true)
     (xs : Vec) (flat : Nat → Word)
-    (hflat : Flat p.plan.graph.lengths (p.plan.env (fun _ => xs)) flat) :
+    (hflat : Flat p.plan.graph.lengths (gpuLayout p.plan.graph).base
+      (liveAt (layerGraph (fuseGraph p.plan.graph)) p.plan.graph.outputs)
+      (p.plan.env (fun _ => xs)) flat) :
     runProgram (lowerArrayToGpu p.plan.graph) flat = [denote p.plan.size (fun _ => xs) p.plan.scalar] ∧
     ∀ i, i < p.plan.size →
       Halts (.app (.get C.object m) (.nat (xs.getD i 0#64).toNat))
         (.natural ((denote p.plan.size (fun _ => xs) p.plan.scalar).getD i 0#64).toNat) := by
-  refine ⟨p.plan.gpu_sound hwf (fun _ => xs) flat hflat, ?_⟩
+  refine ⟨p.plan.gpu_sound hwf p.layout (fun _ => xs) flat hflat, ?_⟩
   intro i hi
   rw [denote_get _ _ _ i hi]
   exact composition_member_halts C hc m p.plan.scalar p.unary p.member _

@@ -1,0 +1,4 @@
+Linux-6.11.0-29-generic-x86_64-with-glibc2.40
+clGetPlatformIDs_status -1001
+platform_count 0
+ICD_files []

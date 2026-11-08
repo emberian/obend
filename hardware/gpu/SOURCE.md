@@ -62,11 +62,20 @@ syntax, verifies lexical scope, and returns a `Plan` containing a shape/type der
 This is translation validation with a source syntax witness. There is not yet a parser
 that recovers arbitrary array SOAC syntax from an exported Core4 book file.
 
-`ArrayPrograms` constructs field multiplication and NTT source programs. Its builder
-binds source expressions; only the general compiler allocates graph wires. These programs
-become actual composition members and pass `checkMember` before emission. `SoacPrograms`
-uses the same route. The old hand-built field/NTT graph builders in `EmitGpu.lean` have
-been removed. The new source programs and the scalar file CLI share the typed GPU backend.
+`ArrayPrograms` constructs lexical array programs. Field multiplication reuses the sole
+`GoldilocksSource`/`ArrayBuild` construction: `ArrayReify.reify` recovers source bindings and
+checks exact structural round-trip equality (ignoring diagnostic operation labels).
+`Reified.eval_sound` proves accepted reification preserves that builder's semantics.
+These programs become actual composition members and pass `checkMember` before emission;
+there is no graph fallback. `SoacPrograms` uses the same checked source route. The typed
+receipt also retains `layoutOk`, the executable check of live-buffer reuse and aliasing.
+
+The sole NTT construction is `Gpu.Ntt.nttBlockProgram` in `ArrayKernel`. The lexical
+fragment lacks indexed workgroup lanes, shared-memory phases and barriers. It therefore
+does not produce this block NTT, and the theorem below does not cover the NTT. Block
+programs have separate admission, lowering and phase-protocol theorems and device gates.
+The shared limb arithmetic is proved; a full theorem connecting the monadic `glMul`
+builder to field multiplication and a universal NTT-to-DFT theorem remain open.
 
 The universal result is `ArrayMember.Plan.source_to_gpu_encoded`. For every accepted
 plan and ordinary input arrays, under the stated shape and input-buffer relations,

@@ -1,8 +1,8 @@
 {
   "graph": "muxchain",
-  "words": 8,
+  "words": 5,
   "workgroupSize": 64,
-  "wireBase": [0,1,2,3,4,5,6,7],
+  "wireBase": [0,1,2,3,4,0,0,3],
   "wireLen": [1,1,1,1,1,1,1,1],
   "consts": ["5"],
   "tables": [],

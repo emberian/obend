@@ -1,0 +1,26 @@
+=== [1/6] the generated modules == gen_encodings.py on the committed XML ===
+  42 encodings, 35 operand types, 1153 instructions in 13 chunks -> /tmp/isa_check.UZTIM5/gen
+  identical
+=== [2/6] the decoder against llvm-mc on every instruction of every dump ===
+  adjoint-mul-add: 93 instructions agree
+  adjoint-square-bilinear: 114 instructions agree
+  allops: 144 instructions agree
+  array-route: 76 instructions agree
+  diamond: 38 instructions agree
+  glmul-256: 347 instructions agree
+  glmul-4: 342 instructions agree
+  mac-reverse-1000: 60 instructions agree
+  muxchain: 56 instructions agree
+[FAIL] ntt-1024: the Lean decoder and llvm-mc disagree (llvm <, lean >):
+22c22
+< ds_write_b128 v1, v[4:7]
+---
+> <unrendered DS_WRITE_B128 in ENC_DS>
+24c24
+< s_branch 65521
+---
+> s_branch -15
+233c233
+< ds_write_b64 v20, v[4:5]
+---
+> <unrendered DS_WRITE_B64 in ENC_DS>

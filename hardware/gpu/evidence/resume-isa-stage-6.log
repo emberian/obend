@@ -1,0 +1,9 @@
+=== [6/6] the waits: every load awaited before its destination is touched; a removed wait refused ===
+  adjoint-mul-add: 1 stages: every load is waited for before its destination is touched
+  adjoint-square-bilinear: 1 stages: every load is waited for before its destination is touched
+  allops: 1 stages: every load is waited for before its destination is touched
+  diamond: 1 stages: every load is waited for before its destination is touched
+  glmul-256: 2 stages: every load is waited for before its destination is touched
+  mac-reverse-1000: 3 stages: every load is waited for before its destination is touched
+  muxchain: 1 stages: every load is waited for before its destination is touched
+[FAIL] ntt-1024: stage 0: dword 26: DS_WRITE_B128: counters of this family are not modelled

@@ -6,13 +6,14 @@
 The dump holds one record per shader RADV compiled while obend-gpu-run ran a graph: wgpu's own internal
 shaders, created with the device, then ours, one per stage in dispatch order. A candidate record is not
 internal and has the plan's workgroup size; the last `stages` candidates are ours. The script requires at
-least that many candidates, each of ours ending in `s_endpgm` with at least one 64-bit buffer store
+least that many candidates, each of ours ending in `s_endpgm` with at least one buffer store
 unless the plan assigns zero threads to that stage, and
 records the store count per stage (the emitter writes one kernel per hyperedge and one store per element
-path; the compiler is free to merge). It writes OUT with each stage's disassembly, every instruction line
+path; the compiler is free to merge or split widths). It writes OUT with each stage's disassembly, every instruction line
 keeping the machine-code dwords RADV printed after `;` (rung G2 decodes them: `isa_check.sh`,
 `Obend.Hardware.Gpu.Rdna2`), and the resource line RADV reports with `shaderstats` (VGPRs, SGPRs, LDS,
-scratch, code size: rung G5's grade). It exits 1 if anything does not match.
+scratch, code size: rung G5's grade). Repeated-instruction shorthand is expanded,
+and the decoded dword byte count must equal RADV's Code size. It exits 1 on mismatch.
 Constant pools are retained as non-instruction `.data BYTE_OFFSET HEX...` records;
 their offsets include ACO's unprinted end-of-code markers.
 """
@@ -22,6 +23,7 @@ import sys
 
 STATS = (("VGPRs", "VGPRs"), ("SGPRs", "SGPRs"), ("LDS size", "LDS"), ("Scratch size", "scratch"), ("Code size", "code"))
 REPEATED = re.compile(r"^\t\(then repeated ([0-9]+) times\)$")
+STORE = re.compile(r"^\tbuffer_store_dword(?:x([234]))?\b")
 HEX_LINE = re.compile(r"^\t(.*?)\s*;\s*((?:[0-9a-f]{8}\s*)+)$")
 DATA_LINE = re.compile(r"^\[([0-9]+)\] ((?:[0-9a-f]{8}(?: |$))+)\s*$")
 
@@ -83,22 +85,23 @@ def main() -> int:
                 lines.append(f"\t{m.group(1)}\t; {' '.join(m.group(2).split())}")
             else:
                 lines.append(ln)
-        stores = sum(1 for ln in lines if "buffer_store_dwordx2" in ln)
+        store_widths = [4 * int(m.group(1) or 1) for ln in lines if (m := STORE.match(ln))]
+        stores = len(store_widths)
         if "s_endpgm" not in dis:
             print(f"[FAIL] {plan['graph']} stage {k}: no s_endpgm", file=sys.stderr)
             return 1
         if stores == 0 and stage["threads"] != 0:
-            print(f"[FAIL] {plan['graph']} stage {k}: no 64-bit store in the final ISA", file=sys.stderr)
+            print(f"[FAIL] {plan['graph']} stage {k}: no buffer store in the final ISA", file=sys.stderr)
             return 1
         missing = [label for _, label in STATS if label not in stats]
         if missing:
             print(f"[FAIL] {plan['graph']} stage {k}: shaderstats missing {missing} (run with RADV_DEBUG=shaders,shaderstats)", file=sys.stderr)
             return 1
         code_bytes = sum(4 * len(m.group(2).split()) for ln in lines if (m := HEX_LINE.match(ln)))
+        if code_bytes != stats["code"]:
+            print(f"[FAIL] {plan['graph']} stage {k}: extracted {code_bytes} machine-code bytes, RADV reports {stats['code']}", file=sys.stderr)
+            return 1
         if data:
-            if code_bytes != stats["code"]:
-                print(f"[FAIL] {plan['graph']} stage {k}: constant pool needs exact executable size: {code_bytes} != {stats['code']}", file=sys.stderr)
-                return 1
             # Mesa ACO's emit_program appends five UMR end-of-code marker dwords
             # after exec_size, then fixes PC-relative addresses and appends constant_data.
             # They are omitted by print_asm. This is RADV's compute-shader layout;
@@ -108,7 +111,8 @@ def main() -> int:
                 lines.append(f".data {code_bytes + 20 + offset} {' '.join(words)}")
         insns = sum(1 for ln in lines if ln.startswith("\t"))
         res = ", ".join(f"{label}: {stats[label]}" for _, label in STATS)
-        out.append(f"## stage {k} ({stage['file']}): {stage['threads']} threads, {insns} instructions, {stores} 64-bit stores; {res}")
+        store_label = f"{stores} 64-bit stores" if all(w == 8 for w in store_widths) else f"{stores} buffer stores ({sum(store_widths)} static bytes)"
+        out.append(f"## stage {k} ({stage['file']}): {stage['threads']} threads, {insns} instructions, {store_label}; {res}")
         out.extend(lines)
         out.append("")
         print(f"    stage {k}: {stage['threads']} threads -> {insns} instructions, {stores} stores; VGPRs {stats['VGPRs']}, LDS {stats['LDS']}")

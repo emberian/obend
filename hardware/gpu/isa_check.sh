@@ -220,7 +220,7 @@ for d in "${DUMPS[@]}"; do
     }
     END {if (vm != "") print vm; else if (sm != "") print sm}' "${d}")
   if [[ -z "${spec}" ]]; then
-    if grep -Eq '^[[:space:]]+(buffer_load|s_load|s_buffer_load)' "${d}"; then
+    if grep -Eq '^[[:space:]]+(buffer_load|global_load|flat_load|ds_read|s_load|s_buffer_load)' "${d}"; then
       echo "[FAIL] ${g}: loads exist but there is no wait to mutate" >&2; exit 1
     fi
     echo "  ${g}: no loads in the dump; no load-wait mutation applies"

@@ -35,7 +35,7 @@ if grep -Eq '\[wgpu error\]|Validation Error|panicked' "${WORK}/plant.err"; then
   echo '[FAIL] planted run reported an infrastructure failure' >&2
   exit 1
 fi
-if ! grep -Eq 'vector [0-9]+: gpu=.* expected=' "${WORK}/plant.out"; then
+if ! grep -Eq 'vector [0-9]+: first mismatch Some\(' "${WORK}/plant.out"; then
   cat "${WORK}/plant.err" >&2
   echo '[FAIL] planted run failed without an output mismatch' >&2
   exit 1

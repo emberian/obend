@@ -167,11 +167,15 @@ structure TypedGraph where
   graph : ArrayGraph
   types : List TensorType
   typing : GraphTyping types graph
+  layout : Gpu.layoutOk graph = true
 
 /-- The boundary checker constructs a proof once. The returned object is consumed by all later
-passes, and failure names whether shape representation, edge typing, or graph scope failed. -/
+passes. It also retains the live-buffer layout certificate; failure names shape,
+edge typing, graph scope, or layout preservation/race checks. -/
 def checkTypedGraph (types : List TensorType) (g : ArrayGraph) : Except String TypedGraph :=
-  if h : GraphTyping types g then .ok ⟨g, types, h⟩
+  if h : GraphTyping types g then
+    if hl : Gpu.layoutOk g = true then .ok ⟨g, types, h, hl⟩
+    else .error "GPU live-buffer layout failed preservation, bounds, or race checks"
   else if types.map TensorType.size != g.lengths then .error "tensor shapes do not match wire storage lengths"
   else match g.edges.find? (fun e => !decide (EdgeTyping types g.lengths e)) with
     | some e => .error s!"array operation {e.opIdx} at wire {e.dstWire}: invalid shape, element signature, or wire scope"
@@ -182,7 +186,9 @@ theorem checkTypedGraph_result (types : List TensorType) (g : ArrayGraph) (t : T
     (h : checkTypedGraph types g = .ok t) : t.graph = g ∧ t.types = types := by
   unfold checkTypedGraph at h
   split at h
-  · cases h; exact ⟨rfl, rfl⟩
+  · split at h
+    · cases h; exact ⟨rfl, rfl⟩
+    · cases h
   · split at h
     · cases h
     · split at h <;> cases h
@@ -196,14 +202,21 @@ theorem checkTypedGraph_typing (types : List TensorType) (g : ArrayGraph) (t : T
   obtain ⟨hg, ht⟩ := checkTypedGraph_result types g t h
   simpa [hg, ht] using t.typing
 
+theorem checkTypedGraph_layout (types : List TensorType) (g : ArrayGraph) (t : TypedGraph)
+    (h : checkTypedGraph types g = .ok t) : Gpu.layoutOk g = true := by
+  have hg := checkTypedGraph_graph types g t h
+  simpa [hg] using t.layout
+
 /-- Explicit word-vector annotation for frontends whose source type is a flat word array. -/
 def wordTypes (g : ArrayGraph) : List TensorType := g.lengths.map (fun n => ⟨[n], .word⟩)
 
 def TypedGraph.lower (g : TypedGraph) : Gpu.GpuProgram := Gpu.lowerArrayToGpu g.graph
 
 theorem TypedGraph.lower_sound (g : TypedGraph) (env : Nat → Vec) (flat : Nat → Word)
-    (hGood : Gpu.Good g.graph.lengths env) (hFlat : Gpu.Flat g.graph.lengths env flat) :
+    (hGood : Gpu.Good g.graph.lengths env)
+    (hFlat : Gpu.Flat g.graph.lengths (Gpu.gpuLayout g.graph).base
+      (Gpu.liveAt (layerGraph (fuseGraph g.graph)) g.graph.outputs) env flat) :
     Gpu.runProgram g.lower flat = evalGraph g.graph env :=
-  Gpu.lowerArrayToGpu_sound g.graph g.typing.wf env flat hGood hFlat
+  Gpu.lowerArrayToGpu_sound g.graph g.typing.wf g.layout env flat hGood hFlat
 
 end Obend.Hardware.ArrayTyping

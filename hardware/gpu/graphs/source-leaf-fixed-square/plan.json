@@ -1,8 +1,8 @@
 {
   "graph": "source-leaf-fixed-square",
-  "words": 22,
+  "words": 11,
   "workgroupSize": 64,
-  "wireBase": [0,11],
+  "wireBase": [0,0],
   "wireLen": [11,11],
   "consts": [],
   "tables": [],

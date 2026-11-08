@@ -1,0 +1,17 @@
+# cost-ordinary: RADV's final ISA for each stage, on cost-ordinary: 2 vectors, 1 dispatches, 0 disagree, 2.307 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+# Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders,shaderstats; do not edit.
+# Each instruction line ends in `; <dwords>`, the machine code as RADV printed it; labels and text are LLVM's.
+
+## stage 0 (stage_0.wgsl): 64 threads, 11 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 56
+BB0:
+	s_movk_i32 s3, 0x8000	; b0038000
+	s_load_dwordx4 s[0:3], s[2:3], null	; f4080001 fa000000
+	v_lshlrev_b32_e32 v0, 3, v0	; 34000083
+	s_waitcnt lgkmcnt(0)	; bf8cc07f
+	buffer_load_dwordx2 v[2:3], v0, s[0:3], 0 offen	; e0341000 80000200
+	s_waitcnt vmcnt(0)	; bf8c3f70
+	v_cmp_eq_i32_e32 vcc, -1, v2	; 7d0404c1
+	v_add_nc_u32_e32 v4, 1, v2	; 4a080481
+	v_add_co_ci_u32_e32 v5, vcc, 0, v3, vcc	; 500a0680
+	buffer_store_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:512	; e0741200 80000400
+	s_endpgm	; bf810000

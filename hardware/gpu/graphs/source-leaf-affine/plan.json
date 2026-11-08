@@ -1,8 +1,8 @@
 {
   "graph": "source-leaf-affine",
-  "words": 55,
+  "words": 11,
   "workgroupSize": 64,
-  "wireBase": [0,11,22,33,44],
+  "wireBase": [0,0,0,0,0],
   "wireLen": [11,11,11,11,11],
   "consts": ["3","5"],
   "tables": [],

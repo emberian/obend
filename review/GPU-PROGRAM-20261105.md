@@ -1,5 +1,7 @@
 # GPU as a theory, device as a model: a program (2026-11-05)
 
+> 2026-11-06 kernel-lane update: The live layout, general workgroup source, limb arithmetic, Stockham uploads, measured resource model and named CPU comparison are implemented in the lane. See [GPU-KERNELS-20261106](GPU-KERNELS-20261106.md) for universal theorem statements, final gate results and remaining boundaries. This dated design document is not evidence that the new ISA model gate passes.
+
 Prompted by Noah Chrein's question ("is categorical semantics on a GPU as easy as replacing the topos
 Set by a category GPU, then GPU by GTX5060Ti?") and by the council's finding that our previous GPU
 work (`Hardware/Accelerators.lean`'s nine-instruction interpreter, the six-stage self-acceleration

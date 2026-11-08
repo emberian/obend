@@ -8,8 +8,7 @@ targets (`lean/tools/emitsv`: the SystemVerilog, the LEC half, the Verilator har
 expected values of `hardware/gpu/square/`). `squarePlan` names the ones the square runs through both
 devices and what each is for; `squareGraph` checks a selected entry and pairs it with its `RtlModule`.
 
-The scalar fixtures (`treeGraph`, `muxChainGraph`, `allOpsGraph`), aliases compiling the field and
-Stockham NTT source programs, the independent NTT references (`nttFast` and `nttReference`), and the
+The scalar fixtures (`treeGraph`, `muxChainGraph`, `allOpsGraph`), checked lexical array sources, and the
 vectors (`vectorFor`) are here; `expectedTsv` prints `expected.tsv` from any model of the outputs, so the
 array model's file and the HDL model's can be compared byte for byte.
 -/
@@ -17,6 +16,7 @@ public import Obend.Hardware.Square
 public import Obend.Hardware.Gpu.ArrayPrograms
 public import Obend.Hardware.Gpu.SoacPrograms
 public import Obend.Hardware.Gpu.SourcePrograms
+public import Obend.Hardware.Gpu.GoldilocksSource
 @[expose] public section
 
 namespace Obend.Hardware.SquareGraphs
@@ -32,43 +32,14 @@ The source builder lives in ArrayPrograms. Both devices consume its general comp
 there is no parallel graph-wire builder here. GPU admission also checks the actual
 Core4 composition member and retains the shape/element derivation.
 -/
-export Obend.Hardware.Gpu.ArrayPrograms (goldilocksP powMod rootOfUnity2to32 rootOfUnity)
+open Obend.Hardware.Gpu.GoldilocksSource
 
-def nttGraph (n : Nat) : ArrayGraph :=
-  ArraySource.compile [n] (ArrayPrograms.nttSource n)
-
-/-- The naive DFT over the Goldilocks field, `y_k = Σ_j x_j ω^{jk}`, with a table of the powers of `ω`. -/
-def nttReference (xs : List Nat) : List Nat :=
-  let n := xs.length
-  if n == 0 then [] else
-  let ω := rootOfUnity n
-  let pw : Array Nat := (Array.range n).map fun i => powMod ω i goldilocksP
-  let xa := xs.toArray
-  (List.range n).map fun k =>
-    (List.range n).foldl (fun acc j => (acc + xa[j]! * pw[(j * k) % n]!) % goldilocksP) 0
-
-/-- The recursive radix-2 NTT in `Nat` arithmetic: `y_k = E_k + ω^k O_k`, `y_{k+n/2} = E_k - ω^k O_k`. -/
-partial def nttFast (xs : Array Nat) (ω : Nat) : Array Nat :=
-  let n := xs.size
-  if n ≤ 1 then xs else
-  let half := n / 2
-  let ω2 := ω * ω % goldilocksP
-  let ev := nttFast ((Array.range half).map fun i => xs[2 * i]!) ω2
-  let od := nttFast ((Array.range half).map fun i => xs[2 * i + 1]!) ω2
-  let pw := (Array.range half).map fun j => powMod ω j goldilocksP
-  (Array.range n).map fun j =>
-    if j < half then (ev[j]! + pw[j]! * od[j]! % goldilocksP) % goldilocksP
-    else
-      let j' := j - half
-      (ev[j']! + goldilocksP - pw[j']! * od[j']! % goldilocksP) % goldilocksP
-
-/-! ## Array graphs besides the NTT -/
+/-- Ordinary array routing uses the lexical source compiler shared with the SOACs. -/
+def arrayRouteGraph : ArrayGraph :=
+  ArraySource.compile [4] ArrayPrograms.arrayRouteSource
 
 def macReverseGraph (n : Nat) : ArrayGraph :=
   ArraySource.compile [n, n] (ArrayPrograms.macReverseSource n)
-
-def glMulGraph (n : Nat) : ArrayGraph :=
-  ArraySource.compile [n, n] (ArrayPrograms.glMulSource n)
 
 /-! ## Scalar graphs, as their one-element instance -/
 
@@ -110,7 +81,7 @@ def allOpsGraph : StrictOpenHypergraph :=
 
 inductive Kind where
   | plain
-  | ntt
+  | field
   deriving DecidableEq
 
 /-- The scalar graphs: name, the Lean definition's name, the graph. -/
@@ -142,25 +113,34 @@ def scalarCase (name definition : String) (graph : StrictOpenHypergraph) : Graph
   ⟨name, definition, fun _ => Obend.Hardware.ArrayTyping.checkTypedGraph
     (Obend.Hardware.ArrayTyping.wordTypes (ofScalar graph)) (ofScalar graph), .plain⟩
 
+def checkedSourceCase (name definition : String) (lengths : List Nat)
+    (source : Unit → Except String ArraySource.Program) (kind : Kind := .plain) : GraphCase :=
+  ⟨name, definition, fun _ => do
+    let program ← source ()
+    let member ← ArrayPrograms.compileSource name lengths program
+    pure member.typed, kind⟩
+
 def sourceCase (name definition : String) (lengths : List Nat)
     (source : Unit → ArraySource.Program) (kind : Kind := .plain) : GraphCase :=
-  ⟨name, definition, fun _ => (ArrayPrograms.compileSource name lengths (source ())).map (·.typed), kind⟩
+  checkedSourceCase name definition lengths (fun _ => .ok (source ())) kind
 
 def graphTypes (name : String) (g : ArrayGraph) : List Obend.Hardware.ArrayTyping.TensorType :=
   if name == "source-leaf-fixed-square" then
     g.lengths.zipIdx.map fun (n, w) => ⟨[n], .fixed (if w == 0 then 8 else 16)⟩
   else Obend.Hardware.ArrayTyping.wordTypes g
 
-/-- One shared workload registry for GPU and RTL emission; field/NTT/SOAC entries
-are source members, and scalar book entries use the checked Core4 recognizer. -/
+/-- Ordinary workloads shared by GPU and RTL emission. Field/array/SOAC entries
+are checked source members; scalar book entries use the checked Core4 recognizer.
+Block NTT programs have their separate source language and admission checks. -/
 def graphs : List GraphCase :=
   scalarGraphs.map (fun (name, definition, g) => scalarCase name definition g) ++
   [sourceCase "mac-reverse-1000" "Obend.Hardware.SquareGraphs.macReverseGraph 1000" [1000, 1000]
       (fun _ => ArrayPrograms.macReverseSource 1000)] ++
-  [4, 256].map (fun n => sourceCase s!"glmul-{n}" s!"Obend.Hardware.SquareGraphs.glMulGraph {n}"
-      [n, n] (fun _ => ArrayPrograms.glMulSource n) .ntt) ++
-  [4, 16, 64, 1024, 65536].map (fun n => sourceCase s!"ntt-{n}" s!"Obend.Hardware.SquareGraphs.nttGraph {n}"
-      [n] (fun _ => ArrayPrograms.nttSource n) .ntt) ++
+  [4, 256].map (fun n => checkedSourceCase s!"glmul-{n}"
+      s!"checked lexical source Obend.Hardware.Gpu.ArrayPrograms.glMulSource {n}"
+      [n, n] (fun _ => ArrayPrograms.glMulSource n) .field) ++
+  [sourceCase "array-route" "Obend.Hardware.SquareGraphs.arrayRouteGraph" [4]
+      (fun _ => ArrayPrograms.arrayRouteSource)] ++
   SoacPrograms.cases.map (fun (name, ns) =>
     sourceCase name s!"Obend.Hardware.Gpu.SoacPrograms.graph {repr ns}" [ns.sum]
       (fun _ => SoacPrograms.source ns)) ++
@@ -169,6 +149,12 @@ def graphs : List GraphCase :=
       let p ← c.compile
       Obend.Hardware.ArrayTyping.checkTypedGraph (graphTypes c.name p.plan.graph) p.plan.graph,
       .plain⟩)
+
+/-- Block workloads are metadata only here: Ntt.nttBlockProgram is their sole
+constructor, called lazily by GPU emission. They are outside the ordinary Plan
+and RTL square because that language has no workgroup memory or phase barriers. -/
+def blockGraphs : List (String × Nat) :=
+  [4, 16, 64, 1024, 65536, 1048576].map fun n => (s!"ntt-{n}", n)
 
 def pool : List Int :=
   [0, 1, -1, 2, 3, -3, 10, 255, -256, 65535, 2 ^ 31, -(2 ^ 31), 2 ^ 32 + 1, 2 ^ 62, -(2 ^ 62),
@@ -190,15 +176,18 @@ def vectorFor (kind : Kind) (lens : List Nat) (v : Nat) : List (List Int) :=
   lens.zipIdx.map fun (n, w) =>
     (List.range n).map fun i =>
       match kind with
-      | .ntt => (draw v w i % goldilocksP : Int)
+      | .field => (draw v w i % goldilocksP : Int)
       | .plain =>
         if v < 6 then pool.getD ((i + w + 3 * v) % pool.length) 0
         else if v < 10 then (if w == v - 6 then 7 else 0)
         else signed (draw v w i)
 
-def vectorCount (g : ArrayGraph) : Nat :=
-  let total := sumNatList (g.inputs.map (g.lengths.getD · 0))
+def vectorCountFor (lens : List Nat) : Nat :=
+  let total := sumNatList lens
   if total ≥ 2 ^ 14 then 2 else if total ≥ 64 then 6 else 12
+
+def vectorCount (g : ArrayGraph) : Nat :=
+  vectorCountFor (g.inputs.map (g.lengths.getD · 0))
 
 /-! ## Expected values and the checks -/
 
@@ -215,14 +204,23 @@ def graphVectors (g : ArrayGraph) (kind : Kind) (name : String := "") : List (Li
   | some vs => vs.map fun inputs => inputs.map fun xs => xs.map (·.toInt)
   | none =>
     let inLens := g.inputs.map (g.lengths.getD · 0)
-    (List.range (vectorCount g)).map (vectorFor kind inLens)
+    (List.range (vectorCount g)).map fun v =>
+      if name == "glmul-256" && v == 0 then
+        let corners : List Nat := [0, 1, 4294967295, 4294967296, goldilocksP-1, goldilocksP,
+          goldilocksP+1, 18446744073709551615]
+        inLens.zipIdx.map fun (n, w) => (List.range n).map fun i =>
+          (corners.getD ((i / (if w == 0 then 1 else corners.length)) % corners.length) 0 : Int)
+      else vectorFor kind inLens v
 
 /-- `expected.tsv`: one line per vector, index, the input wires, and the output wires `model` gives
 (wires separated by `;`, elements by `,`, signed 64-bit). -/
-def expectedTsvValues (vectors : List (List (List Int))) (outputs : List (List Vec)) : String :=
+def expectedTsvLine (v : Nat) (vals : List (List Int)) (result : List Vec) : String :=
   let signed64 (ws : List Int) : List Int := ws.map fun x => (BitVec.ofInt 64 x).toInt
+  s!"{v}\t{wiresText (vals.map signed64)}\t{wiresText (result.map fun ws => ws.map (·.toInt))}"
+
+def expectedTsvValues (vectors : List (List (List Int))) (outputs : List (List Vec)) : String :=
   let lines := (vectors.zip outputs).zipIdx.map fun ((vals, result), v) =>
-    s!"{v}\t{wiresText (vals.map signed64)}\t{wiresText (result.map fun ws => ws.map (·.toInt))}"
+    expectedTsvLine v vals result
   String.intercalate "\n" lines ++ "\n"
 
 def expectedTsv (g : ArrayGraph) (kind : Kind) (model : List (List Int) → List Vec)
@@ -259,11 +257,11 @@ def squarePlan : List (String × String) :=
   , ("adjoint-square-bilinear", "a compileGraphAdjoint graph, whose wires are numbered out of definition order: the single-assignment lowering's reason")
   , ("tree512", "size: 511 chained adders, where the LEC's time goes")
   , ("glmul-4", "the bit operations of the Goldilocks multiply (ult, and, or, both shifts) as elementwise maps over arrays")
-  , ("ntt-16", "gathers, concatenation and constant arrays: the Stockham NTT")
+  , ("array-route", "gathers, concatenation and constant arrays with a shared producer")
   , ("soac-boundaries", "segmented reductions/scans, empty segments, modular monoids, producer/consumer composition") ]
 
 /-- Select and check the same source/typing receipt used by GPU emission before
-lowering to RTL. Listing names never builds the circuits or the large NTT. -/
+lowering to RTL. Listing names never builds the circuits or the block NTT. -/
 def squareGraph (name : String) : Except String SquareGraph := do
   let some (_, purpose) := squarePlan.find? (·.1 == name)
     | throw s!"unknown square graph {name}"
