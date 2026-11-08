@@ -418,18 +418,12 @@ def mkUgt (a b : Tm) : Tm :=
 
 /-- The borrow of `a - b` is `b > a` (`borrowBV a b = a < b`): one form for it and for a compare. -/
 def mkBorrow (a b : Tm) : Tm := if isLit b 0 then lit 0 else mkUgt b a
-/-- `0 + t + c` with `t` a two-term sum `p + q` as `addc p q c`, otherwise `addc 0 t c`. -/
-def addcSplit (t c : Tm) : Tm :=
-  match t.op, t.args with
-  | .sum, [p, q] => fold .addc [p, q, c]
-  | _, _ => let (x, y) := ord (lit 0) t; fold .addc [x, y, c]
-
 def mkAddc (a b c : Tm) : Tm :=
   match c.litVal? with
   | some v => if v != 0 then mkSum [a, b, lit 1] else mkSum [a, b]
   | none =>
-    -- `0 + (p + q) + c` is `addc p q c`: the form a compiler's `a.y + b.y + carry` takes against the spec's
-    if isLit a 0 then addcSplit b c else if isLit b 0 then addcSplit a c else let (x, y) := ord a b; fold .addc [x, y, c]
+    -- one form for `a + b + c` however the compiler grouped `a + b`: `0 + (a + b) + c`, the sum normalised
+    fold .addc [lit 0, mkSum [a, b], c]
 def mkCarryc (a b c : Tm) : Tm :=
   if isLit c 0 then mkCarry a b else let (x, y) := ord a b; fold .carryc [x, y, c]
 def mkSubc (a b c : Tm) : Tm := if isLit c 0 then mkSub a b else fold .subc [a, b, c]
@@ -730,31 +724,8 @@ theorem eval_addc (a b c : Tm) : eval env (Dom.addc a b c) = Dom.addc (eval env 
     split
     · rename_i h; simp [eval_mkSum, addCi, w2b, h, UInt32.add_assoc]
     · rename_i h; simp at h; subst h; simp [eval_mkSum, addCi, w2b]
-  · have hsplit : ∀ t, eval env (addcSplit t c) = (addCi 0 (eval env t) (w2b (eval env c))).1 := by
-      intro t
-      obtain ⟨ht, o, as⟩ := t
-      unfold addcSplit; simp only [op, args]
-      split
-      · rename_i p q
-        simp only [eval_fold, eval_mk, List.map_cons, List.map_nil, TOp.sem, List.getD_cons_zero, List.getD_cons_succ,
-          List.foldr_cons, List.foldr_nil, addCi, w2b, UInt32.add_zero, UInt32.zero_add]
-        split <;> simp_all
-      · have hc := ord_comm (fun x y => x + y + (if eval env c != 0 then (1 : UInt32) else 0))
-          (fun x y => by rw [UInt32.add_comm x]) env (lit 0) (mk ht o as)
-        try simp only at hc
-        generalize ord (lit 0) (mk ht o as) = p at hc; obtain ⟨x, y⟩ := p
-        simp only [eval_fold, List.map_cons, List.map_nil, TOp.sem] at hc ⊢
-        simp only [List.getD_cons_zero, List.getD_cons_succ, hc, addCi, w2b, eval_lit]
-        split <;> simp_all
-    split
-    · rename_i ha; rw [hsplit, eval_of_isLit env _ _ ha]
-    split
-    · rename_i hb; rw [hsplit, eval_of_isLit env _ _ hb]; simp only [addCi, UInt32.add_zero, UInt32.zero_add]
-    have hc := ord_comm (fun x y => x + y + (if eval env c != 0 then (1 : UInt32) else 0)) (fun x y => by rw [UInt32.add_comm x]) env a b
-    try simp only at hc
-    generalize hp : ord a b = p at hc; obtain ⟨x, y⟩ := p
-    simp only [eval_fold, List.map_cons, List.map_nil, TOp.sem] at hc ⊢
-    simp only [List.getD_cons_zero, List.getD_cons_succ, hc, addCi, w2b]
+  · simp only [eval_fold, List.map_cons, List.map_nil, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, eval_lit,
+      eval_mkSum, List.foldr_cons, List.foldr_nil, UInt32.add_zero, UInt32.zero_add, addCi, w2b]
     split <;> simp_all
 
 theorem eval_carryc (a b c : Tm) : eval env (Dom.carryc a b c) = Dom.carryc (eval env a) (eval env b) (eval env c) := by

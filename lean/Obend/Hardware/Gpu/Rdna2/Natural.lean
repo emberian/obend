@@ -878,12 +878,12 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
   case ds_read_b64 => exact execDs_hom h hm R hR i s 2 false hres
   case ds_write_b64 => exact execDs_hom h hm R hR i s 2 true hres
   case ds_write_b128 => exact execDs_hom h hm R hR i s 4 true hres
-  case s_addc_u32 | s_or_b32 =>
+  case s_and_b32 | s_addc_u32 | s_or_b32 =>
     refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
     · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
     · intro ab hab
       have := sop32_hom h hm R hR s _ _ _ hab
-      simp only [h.addc, h.carryc, h.bor, h.nez64, h.lit] at this
+      simp only [h.addc, h.carryc, h.bor, h.band, h.nez64, h.lit] at this
       exact this
   case s_mul_i32 | s_mul_hi_u32 =>
     refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
@@ -932,6 +932,7 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
       exact writeScalarDst_hom h hm R hR s _ _ hres
   case v_subrev_co_u32 =>
     exact valuLanesCarry_hom h hm R hR i s _ _ (fun a b _ => by simp [pmap, h.sub, h.borrow]) hres
+  case v_subrev_nc_u32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.sub, (hs src).1, (hs src).2.1]) hres
   case v_cmp_ge_u32 => exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ule, (hs src).1, (hs src).2.1]) hres
   case v_cmp_gt_u64 =>
     exact valuCompare_hom h hm R hR i s true _ _

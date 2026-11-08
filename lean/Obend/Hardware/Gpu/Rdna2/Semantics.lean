@@ -733,6 +733,7 @@ inductive InstOp where
   | s_waitcnt_vscnt | v_mbcnt_lo_u32_b32 | v_mbcnt_hi_u32_b32 | ds_read_b64 | ds_write_b64 | ds_write_b128
   | s_addc_u32 | s_or_b32 | s_mul_i32 | s_mul_hi_u32 | s_bfm_b64 | s_cmp_lg_i32 | s_cmp_ge_u32 | s_getpc_b64
   | s_cbranch_scc1 | s_inst_prefetch | v_readfirstlane_b32 | v_subrev_co_u32 | v_cmp_ge_u32 | v_cmp_gt_u64
+  | s_and_b32 | v_subrev_nc_u32
   | unknown
   deriving DecidableEq, Repr
 
@@ -772,6 +773,7 @@ def instOp (name : String) : InstOp :=
   | "S_GETPC_B64" => .s_getpc_b64 | "S_CBRANCH_SCC1" => .s_cbranch_scc1 | "S_INST_PREFETCH" => .s_inst_prefetch
   | "V_READFIRSTLANE_B32" => .v_readfirstlane_b32 | "V_SUBREV_CO_U32" => .v_subrev_co_u32
   | "V_CMP_GE_U32" => .v_cmp_ge_u32 | "V_CMP_GT_U64" => .v_cmp_gt_u64
+  | "S_AND_B32" => .s_and_b32 | "V_SUBREV_NC_U32" => .v_subrev_nc_u32
   | _ => .unknown
 
 /-- One instruction. `s.pc` already points past it (branches add their offset to that, manual 12.5:
@@ -989,6 +991,12 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   -- Manual 12.9 VOPC V_CMP_GE_U32 `S0 >= S1`, V_CMP_GT_U64 `S0 > S1`; gem5 twins vopc.cc
   | .v_cmp_ge_u32 => valuCompare i s false fun src => Dom.ule (src1 src) (src0 src)
   | .v_cmp_gt_u64 => valuCompare i s true fun src => Dom.ult64 (src2 src) (src.getD 3 (Dom.lit 0)) (src0 src) (src1 src)
+  -- Manual 12.1 SOP2 S_AND_B32 `D = S0 & S1; SCC = D != 0` (gem5 twin sop2.cc S_AND_B32); 12.7 VOP2
+  -- V_SUBREV_NC_U32 `D = S1 - S0` (gem5 twin vop2.cc V_SUBREV_U32, Vega's name)
+  | .s_and_b32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
+      "S_AND_B32: an operand code is not modelled" fun ab =>
+    sop32 s (i.field "SDST") (Dom.band ab.1 ab.2) (Dom.nez64 (Dom.band ab.1 ab.2) (Dom.lit 0))
+  | .v_subrev_nc_u32 => valuLanes i s 2 fun src _ => Dom.sub (src1 src) (src0 src)
   | .unknown => s.fail s!"{i.name}: no semantics (refused, not guessed)"
 
 /-- The identities the bitwise complements above are written with, on the concrete domain. -/
