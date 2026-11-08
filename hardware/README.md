@@ -303,18 +303,42 @@ statements are at the instruction level: `mulHi_mulLo` (the two halves of the 64
 `glmul-256` and the NTTs chain), `addCo_spec`, `addCi_spec`, `subCo_spec` (the carries are exactly the
 dropped bits).
 
-`Obend.Hardware.Gpu.Rdna2.Check` is the correspondence as a decidable check per graph: the plan's three
-buffers laid out as RADV binds them (`ac_build_raw_buffer_descriptor`, Mesa 24.2.8; the set's address in
-`s2`, the workgroup id in `s3`, the thread id in `v0`, per `radv_shader_args.c` and the manual's 3.12),
-every stage's dumped program run once per workgroup on the model from each vector's inputs, the output
-wires read back against `expected.tsv`. `Obend.Teeth.Hardware.Rdna2Runs` pins diamond, the three optics,
-`allops`, `glmul-256`, `ntt-4` and the gem5 vectors with `native_decide` and `#assert_compiled` (checks,
-not theorems). `isa_check.sh` is the gate, on hbox: the generated modules are byte-identical to the
-generator's output; the Lean decoder's text equals `llvm-mc --disassemble` (LLVM 19, gfx1031, wave64)
-on every instruction of every dump; every bit of every instruction's machine code, flipped, changes the
-decoding or fails it unless it lies in no field the specification names; every graph's programs on the
-model give `expected.tsv` and a planted bit flip in a store's register is caught; the gem5 vectors are
-the generator's bytes and replay. Passed 2026-11-06 on the sixteen dumps.
+The correspondence is a certificate, checked once per dump, that RADV's machine code computes the
+graph for every input (translation validation: Necula, PLDI 2000; Alive2, PLDI 2021; the symbolic
+simulation is LNSym's approach on our own model). The model is generic over its value and memory domains
+and every instruction commutes with domain homomorphisms (`Natural.run_hom`), so one `step` runs both
+concretely and over terms (`Term`: hash-consed 32-bit terms with folding constructors and their
+evaluation laws), and `Sym.wave_sound` relates a symbolic wave to every concrete wave it describes.
+`Host` is the memory RADV binds (`ac_build_raw_buffer_descriptor`, Mesa 24.2.8; the set's address in
+`s2`, the workgroup id in `s3`, the thread id in `v0`, per `radv_shader_args.c` and the manual's 3.12).
+`Cert.certify` runs every wave of every dispatch symbolically from a start memory whose wire buffer is a
+variable per dword (constants an earlier dispatch stored are kept as literals) and checks each stored
+dword: in the buffer, in a word the dispatch owns, stored once, and equal to the kernel's value
+(`Lower.pKernel`, the plan's `KernelBody` in 32-bit limbs, `pKernel_sound`) up to a residual. `Equiv`
+cuts the two terms at memory words and their maximal common subterms (cutpoints, as in combinational
+equivalence checking), never at literals; what is left is a small `Residual` over leaf variables, and
+the residuals every dump needs are one generated module, `Residuals`, each proved for every memory by
+`bv_decide`, by `grind` where it multiplies, or, for a 64-bit product the compiler regrouped
+(`hi(a·(y+y))` against `hi(a·y + a·y)`), by lifting to 64-bit words (`Lift`: the limb lowering's
+evaluation law, then `grind`'s ring solver). `CertSound.certify_sound`: if `certify` accepts and the
+residuals hold, then for every content of the wire buffer the decoded programs, run on the model as the
+host dispatches them, leave in every word what `runStages` computes; `certified_outputs` composes it with
+`lowerArrayToGpu_sound`, so the output wires are `evalGraph`'s. It rests on the standard axioms and the
+compiled `bv_decide` lemmas. `Certified.certifyDump` is the check of one dump: the graph well formed,
+every stage decoded, the waits sufficient (`Waitcnt`, below: the hypothesis that makes the model's
+immediate memory the device's), and `certify` with the library; `certifyDump_sound` is what it means.
+`Obend.Teeth.Hardware.Rdna2Runs` pins it on every graph but the 65536-point NTT with `native_decide`
+and `#assert_compiled`, with the gem5 vectors. `Check` keeps the concrete run from `expected.tsv`'s
+vectors as a smoke test of the model and the layout.
+
+`isa_check.sh` is the gate, on hbox: the generated modules are byte-identical to the generator's output;
+the Lean decoder's text equals `llvm-mc --disassemble` (LLVM 19, gfx1031, wave64) on every instruction of
+every dump; every bit of every instruction's machine code, flipped, changes the decoding or fails it
+unless it lies in no field the specification names; diamond's programs give `expected.tsv` on the model
+and a planted flip in a store's register is caught; the gem5 vectors are the generator's bytes and
+replay; the waits are sufficient and a removed wait is refused; `Residuals.lean` is the generator's
+bytes, every dump is certified (each with the check's time and peak memory) and a planted flip in a
+store's register is refused. Passed on hbox 2026-11-06, the Census and `Teeth` built.
 
 `Obend.Hardware.Gpu.Rdna2.Waitcnt` closes the gap the model's immediate memory leaves: the model
 completes an access when it issues, so a program that read a load's destination before waiting for it
