@@ -85,6 +85,7 @@ def Inst.access (i : Inst) : Access := Id.run do
                   else regsOfCode (i.field "VDST") k
       | "VSRC1" | "VSRC0" => vregs (i.field op.field) k
       | "VDATA" => vregs (i.field "VDATA") k
+      | "ADDR" | "DATA0" | "DATA1" => vregs (i.field op.field) k
       | "VADDR" => vregs (i.field "VADDR") ((if i.field "IDXEN" == 1 then 1 else 0) + (if i.field "OFFEN" == 1 then 1 else 0))
       | "SRSRC" => sregs (4 * i.field "SRSRC") 4
       | "SBASE" => sregs (2 * i.field "SBASE") k
@@ -104,22 +105,27 @@ abbrev Events := List (List Reg)
 structure Pending where
   /-- vector memory loads (VM_CNT), returning in order -/
   vm : Events
-  /-- scalar memory loads (LGKM_CNT), returning out of order -/
+  /-- scalar memory loads and LDS reads (LGKM_CNT) -/
   lgkm : Events
+  /-- an SMEM load is among them: the counter is then out of order (manual 4.4; SIInsertWaitcnts
+  `counterOutOfOrder`), and only `lgkmcnt(0)` completes anything -/
+  smem : Bool
   deriving Repr, DecidableEq
 
-def Pending.empty : Pending := { vm := [], lgkm := [] }
+def Pending.empty : Pending := { vm := [], lgkm := [], smem := false }
 
 /-- `s_waitcnt` SIMM16 (manual 12.5): vmcnt `{[15:14],[3:0]}`, expcnt `[6:4]`, lgkmcnt `[13:8]`. -/
 def waitVm (simm : Nat) : Nat := (simm % 16) ||| (((simm >>> 14) % 4) <<< 4)
 def waitLgkm (simm : Nat) : Nat := (simm >>> 8) % 64
 
-/-- A wait: all but the last `k` vector loads complete; scalar loads complete only for `lgkmcnt(0)`. -/
+/-- A wait: all but the last `k` vector loads complete; of LGKM, all but the last `k` when only LDS reads
+are outstanding (they return in order), and only at `lgkmcnt(0)` when a scalar load is among them. -/
 def Pending.wait (p : Pending) (simm : Nat) : Pending :=
   let k := waitVm simm
   let vm := if k < p.vm.length then p.vm.drop (p.vm.length - k) else p.vm
-  let lgkm := if waitLgkm simm == 0 then [] else p.lgkm
-  { vm := vm, lgkm := lgkm }
+  let kl := waitLgkm simm
+  let lgkm := if kl == 0 then [] else if !p.smem && kl < p.lgkm.length then p.lgkm.drop (p.lgkm.length - kl) else p.lgkm
+  { vm := vm, lgkm := lgkm, smem := p.smem && kl != 0 }
 
 /-- Join at a control-flow merge: events aligned from the most recent, registers unioned. -/
 def joinEvents (a b : Events) : Events :=
@@ -127,7 +133,8 @@ def joinEvents (a b : Events) : Events :=
   let pad (e : Events) : Events := List.replicate (n - e.length) [] ++ e
   (pad a).zipWith (fun x y => x ++ y.filter (fun r => !x.contains r)) (pad b)
 
-def Pending.join (a b : Pending) : Pending := { vm := joinEvents a.vm b.vm, lgkm := joinEvents a.lgkm b.lgkm }
+def Pending.join (a b : Pending) : Pending :=
+  { vm := joinEvents a.vm b.vm, lgkm := joinEvents a.lgkm b.lgkm, smem := a.smem || b.smem }
 
 /-- A register still awaited by some event. -/
 def Events.hits (es : Events) (r : Reg) : Bool := es.any (·.contains r)
@@ -137,13 +144,15 @@ def Events.hits (es : Events) (r : Reg) : Bool := es.any (·.contains r)
 def isVmemLoad (i : Inst) : Bool := i.enc.name == "ENC_MUBUF" && i.name.startsWith "BUFFER_LOAD"
 def isVmemStore (i : Inst) : Bool := i.enc.name == "ENC_MUBUF" && i.name.startsWith "BUFFER_STORE"
 def isSmemLoad (i : Inst) : Bool := i.enc.name == "ENC_SMEM" && (i.name.startsWith "S_LOAD" || i.name.startsWith "S_BUFFER_LOAD")
+def isDsLoad (i : Inst) : Bool := i.enc.name == "ENC_DS" && i.name.startsWith "DS_READ"
+def isDsStore (i : Inst) : Bool := i.enc.name == "ENC_DS" && i.name.startsWith "DS_WRITE"
 
 /-- The families whose counters this module knows: scalar and vector ALU, SMEM loads, MUBUF loads and
 stores. Anything else (LDS, GDS, exports, images, flat, messages) is refused. -/
 def knownFamily (i : Inst) : Bool :=
   let fam := family i.enc.name
   fam == "SOP1" || fam == "SOP2" || fam == "SOPC" || fam == "SOPP" || fam == "SOPK" || fam == "VOP1" || fam == "VOP2"
-    || fam == "VOPC" || fam == "VOP3" || isVmemLoad i || isVmemStore i || isSmemLoad i
+    || fam == "VOPC" || fam == "VOP3" || isVmemLoad i || isVmemStore i || isSmemLoad i || isDsLoad i || isDsStore i
 
 /-- Check one instruction against the pending loads, then issue it. -/
 def stepPending (p : Pending) (i : Inst) : Except String Pending := do
@@ -152,14 +161,19 @@ def stepPending (p : Pending) (i : Inst) : Except String Pending := do
   let a := i.access
   for r in a.reads do
     match r with
-    | .v _ => if p.vm.hits r then throw s!"{i.name} reads {r} while a vector load to it is outstanding"
+    | .v _ =>
+      if p.vm.hits r then throw s!"{i.name} reads {r} while a vector load to it is outstanding"
+      if p.lgkm.hits r then throw s!"{i.name} reads {r} while an LDS read to it is outstanding"
     | .s _ => if p.lgkm.hits r then throw s!"{i.name} reads {r} while a scalar load to it is outstanding"
   for r in a.writes do
     match r with
-    | .v _ => if p.vm.hits r && !isVmemLoad i then throw s!"{i.name} writes {r} while a vector load to it is outstanding"
+    | .v _ =>
+      if p.vm.hits r && !isVmemLoad i then throw s!"{i.name} writes {r} while a vector load to it is outstanding"
+      if p.lgkm.hits r && !isDsLoad i then throw s!"{i.name} writes {r} while an LDS read to it is outstanding"
     | .s _ => if p.lgkm.hits r then throw s!"{i.name} writes {r} while a scalar load to it is outstanding"
   if isVmemLoad i then return { p with vm := p.vm ++ [a.writes] }
-  if isSmemLoad i then return { p with lgkm := p.lgkm ++ [a.writes] }
+  if isSmemLoad i then return { p with lgkm := p.lgkm ++ [a.writes], smem := true }
+  if isDsLoad i then return { p with lgkm := p.lgkm ++ [a.writes] }
   return p
 
 /-! ## 4. The program, as a dataflow over its basic blocks -/

@@ -233,6 +233,20 @@ for d in "${DUMPS[@]}"; do
   "${RDNA2}" waitcnt "${d}" --nop "${spec}" | sed 's/^/  /' || {
     echo "[FAIL] ${g}: a removed wait went unnoticed" >&2; exit 1; }
 done
+# LDS reads (DS_READ) count on LGKM with the scalar loads: a removed wait after one is refused, and where a
+# wait covers only LDS reads, refused for the LDS read.
+for d in "${DUMPS[@]}"; do
+  g="$(basename "${d}" .txt)"
+  grep -q $'^\tds_read' "${d}" || continue
+  first=""; lds=""
+  for spec in $(awk '/^## stage /{stage=$3; i=-1; ds=0; next} /^\t/{i++; if ($0 ~ /ds_read/) ds=1; else if (ds && $0 ~ /s_waitcnt.*lgkmcnt/) print stage ":" i}' "${d}" | head -40); do
+    out=$("${RDNA2}" waitcnt "${d}" --nop "${spec}" 2>&1) || { echo "${out}" >&2; echo "[FAIL] ${g}: a removed LDS wait went unnoticed" >&2; exit 1; }
+    [[ -n "${first}" ]] || first="${out}"
+    if grep -q "LDS read" <<< "${out}"; then lds="${out}"; break; fi
+  done
+  [[ -n "${first}" ]] || { echo "[FAIL] ${g}: LDS reads but no wait after one" >&2; exit 1; }
+  echo "  ${lds:-${first}}"
+done
 fi
 if run_stage 7; then
 echo "=== [7/7] the certificate: every graph's machine code computes the graph for every input ==="

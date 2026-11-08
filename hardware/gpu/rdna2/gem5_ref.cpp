@@ -200,6 +200,53 @@ static std::string execute(const std::string &name, State &st, int nwords) {
     } else if (name == "V_SUBREV_CO_U32") {                   // vop3.cc Inst_VOP3__V_SUBREV_CO_U32::execute
         LANES { vdst(lane, src1(lane) - src0(lane)); setBit(sdst, lane, src0(lane) > src1(lane)); }
         writeS45(sdst);
+    } else if (name == "S_AND_B32") {                          // sop2.cc:447
+        st.s[4] = in.s[0] & in.s[1]; st.scc = st.s[4] != 0;
+    } else if (name == "S_LSHL_B32") {                         // sop2.cc:943
+        st.s[4] = in.s[0] << bits(in.s[1], 4, 0); st.scc = st.s[4] != 0;
+    } else if (name == "S_BFM_B32") {                          // sop2.cc:1132: SCC unchanged
+        st.s[4] = ((1u << bits(in.s[0], 4, 0)) - 1) << bits(in.s[1], 4, 0);
+    } else if (name == "S_NOR_B64") {                          // sop2.cc:850
+        uint64_t d = ~(s01 | s23); writeS45(d); st.scc = d != 0;
+    } else if (name == "S_CMP_LT_U32") {                       // sopc.cc:323
+        st.scc = in.s[0] < in.s[1];
+    } else if (name == "S_CMPK_LT_U32") {                      // sopk.cc:367: SIMM16 zero-extended; the text carries 0x8123
+        st.scc = in.s[0] < 0x8123u;
+    } else if (name == "S_MULK_I32") {                         // sopk.cc:452: sdst = sdst * sext<16>(SIMM16)
+        st.s[4] = (uint32_t)((int32_t)in.s[4] * (int32_t)sext16(0x8123));
+    } else if (name == "V_CMP_LT_U32") {                       // vopc.cc:4987
+        LANES { setBit(sdst, lane, src0(lane) < src1(lane)); }
+        st.vcc = sdst;
+    } else if (name == "V_CMP_EQ_I32") {                       // vopc.cc:4758
+        LANES { setBit(sdst, lane, src0(lane) == src1(lane)); }
+        st.vcc = sdst;
+    } else if (name == "V_CMP_NE_I32") {                       // vopc.cc:4863
+        LANES { setBit(sdst, lane, src0(lane) != src1(lane)); }
+        st.vcc = sdst;
+    } else if (name == "V_CMPX_EQ_I32" || name == "V_CMPX_NE_I32" || name == "V_CMPX_LE_U32") {
+        // vopc.cc:5296, 5407, 5613: Vega writes VCC and EXEC; RDNA2 writes EXEC only (manual 12.9) -> VCC skipped
+        LANES { setBit(sdst, lane, name == "V_CMPX_EQ_I32" ? src0(lane) == src1(lane)
+                                  : name == "V_CMPX_NE_I32" ? src0(lane) != src1(lane) : src0(lane) <= src1(lane)); }
+        st.exec = sdst; st.vcc = sdst;
+        return "vcc";
+    } else if (name == "V_MAX_U32") {                          // vop2.cc:658
+        LANES { vdst(lane, std::max(src0(lane), src1(lane))); }
+    } else if (name == "V_SUB_NC_U32") {                       // vop2.cc:2152 Inst_VOP2__V_SUB_U32 (Vega's name)
+        LANES { vdst(lane, src0(lane) - src1(lane)); }
+    } else if (name == "V_SUBREV_NC_U32") {                    // vop2.cc:2187 Inst_VOP2__V_SUBREV_U32 (Vega's name)
+        LANES { vdst(lane, src1(lane) - src0(lane)); }
+    } else if (name == "V_SUBREV_CO_CI_U32_E32") {             // vop2.cc:1440 Inst_VOP2__V_SUBBREV_CO_U32: VCC in and out
+        uint64_t vcc = in.vcc;
+        LANES { vdst(lane, src1(lane) - src0(lane) - bits(vcc, lane)); setBit(sdst, lane, (src0(lane) + bits(vcc, lane)) > src1(lane) ? 1 : 0); }
+        st.vcc = sdst;
+    } else if (name == "V_MUL_U32_U24") {                      // vop2.cc:417
+        LANES { vdst(lane, (uint32_t)(bits(src0(lane), 23, 0) * bits(src1(lane), 23, 0))); }
+    } else if (name == "V_LSHL_OR_B32") {                      // vop3.cc:7412
+        LANES { vdst(lane, (src0(lane) << bits(src1(lane), 4, 0)) | src2(lane)); }
+    } else if (name == "V_MBCNT_LO_U32_B32" || name == "V_MBCNT_HI_U32_B32") {  // vop3.cc:8975, 9023
+        LANES { uint64_t tm = (1ULL << lane) - 1ULL;
+                uint32_t m = name == "V_MBCNT_LO_U32_B32" ? (uint32_t)bits(tm, 31, 0) : (uint32_t)bits(tm, 63, 32);
+                vdst(lane, (uint32_t)__builtin_popcount(src0(lane) & m) + src1(lane)); }
     } else if (name == "S_NOP") {                             // sopp.cc Inst_SOPP__S_NOP::execute: delay only
     } else {
         std::cerr << "no reference for " << name << "\n"; exit(2);
