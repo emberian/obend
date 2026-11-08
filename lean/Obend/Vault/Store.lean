@@ -46,6 +46,7 @@ whether the page links back, so "every lane marked merged is listed on DEV" is D
 public import Obend.Vault.Law
 public import Obend.Kind.Proofs
 public import Obend.Vault.Hyperedge
+public import Obend.Vault.Index
 @[expose] public section
 
 namespace Obend.Vault
@@ -547,6 +548,38 @@ theorem citesPage_and_contains (G : Graph) (id : PageId) :
   · simp
   · simp [linkTargets_contains_cites h]
 
+/-- Candidate targets read directly from atoms, without walking the version's graph. -/
+def citeTargets (G : Graph) : List PageId :=
+  (G.atoms.filterMap fun (_, c) => match c with
+    | .cite _ c => some c.page
+    | _ => none).eraseDups
+
+theorem citeTargets_contains (G : Graph) (id : PageId) :
+    (citeTargets G).contains id = citesPage G id := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [citeTargets, List.contains_iff_mem, List.mem_eraseDups, List.mem_filterMap,
+    citesPage, List.any_eq_true]
+  constructor
+  · rintro ⟨⟨a, c⟩, ha, hc⟩
+    cases c <;> simp only at hc
+    all_goals first | cases hc | skip
+    exact ⟨_, ha, by simp⟩
+  · rintro ⟨⟨a, c⟩, ha, hc⟩
+    cases c <;> simp only at hc
+    all_goals first | cases hc | skip
+    exact ⟨_, ha, by simpa using hc⟩
+
+/-- A turn's reverse-cite index. Buckets preserve entry order; the judge retains its exact
+live-link test, and only candidate graphs are walked. -/
+def entryLinkIndex (es : List Entry) : Index.Buckets PageId Entry :=
+  Index.ofKeys (fun e => citeTargets e.graph) es
+
+theorem entryLinkIndex_eq_scan (es : List Entry) (id : PageId) :
+    Index.bucket (entryLinkIndex es) id = es.filter (fun e => citesPage e.graph id) := by
+  have hn : ∀ e ∈ es, (citeTargets e.graph).Nodup := fun e _ => Index.eraseDups_nodup _
+  rw [entryLinkIndex, Index.bucket_ofKeys _ _ _ hn]
+  simp only [citeTargets_contains]
+
 /-- The laws over links among a page's laws, as the judge takes them. -/
 def linkLaws (laws : Laws) : List (String × LawExpr) :=
   (laws.filter fun l => isLinkLaw l.2.2).map fun (n, e, _) => (n, e)
@@ -963,6 +996,15 @@ def Prepared.call (pr : Prepared) : JudgeCall := ⟨pr.S, pr.p.name, pr.lin, pr.
 def Prepared.linkers (pr : Prepared) (es : List Entry) : List String :=
   (es.filter fun e => e.name != pr.p.name && (linkTargets e.graph).contains pr.p.id).map (·.name)
 
+theorem Prepared.linkers_filter (pr : Prepared) (es : List Entry) :
+    pr.linkers (es.filter (fun e => citesPage e.graph pr.p.id)) = pr.linkers es := by
+  simp only [Prepared.linkers, List.filter_filter]
+  congr 2
+  funext e
+  cases hc : citesPage e.graph pr.p.id <;> cases ht : (linkTargets e.graph).contains pr.p.id
+  all_goals simp only [hc, ht, Bool.false_and, Bool.true_and, Bool.and_false, Bool.and_true]
+  exact False.elim (by have := linkTargets_contains_cites ht; simp [hc] at this)
+
 /-- The turn a prepared write is: its page from the old state to the new, pinned at the pages it
 cites (as the entries `res` name them) and, where it has laws over backlinks, at the pages linking
 to it, at the states the entries hold. -/
@@ -994,11 +1036,38 @@ def Prepared.theirCalls (pr : Prepared) (es res : List Entry) (over : List (Stri
       | .error _ => []
     else []
 
+/-- The linking pages' laws, in their original order, stopping at the first refusal. -/
+def judgeOtherLinks (es res : List Entry) (pr : Prepared)
+    (over : List (String × Obend.Core.Data.Data)) (candidates : List Entry) : Except String Unit := do
+  let p := pr.p
+  let world := pr.worldAt es res over
+  for e in candidates do
+    if e.name != p.name && (citesPage e.graph p.id && (linkTargets e.graph).contains p.id) then
+      match lawsFor es e.name e.graph with
+      | .ok elaws =>
+        let theirs := linkLaws elaws
+        if let some r := (if theirs.isEmpty then none else judgeLinksIn world e.name theirs pr.rq [p.name]) then
+          throw (backlinkRefusalText e.name p.name elaws r pr.facts pr.n
+            ((scalarFields (settled pr.G')).map (·.1)))
+      | .error _ => pure ()
+
+theorem judgeOtherLinks_filter (es res : List Entry) (pr : Prepared)
+    (over : List (String × Obend.Core.Data.Data)) :
+    judgeOtherLinks es res pr over (es.filter (fun e => citesPage e.graph pr.p.id)) =
+      judgeOtherLinks es res pr over es := by
+  unfold judgeOtherLinks
+  dsimp only
+  congr 1
+  apply Index.forIn_filter_skip
+  intro e _ he b
+  simp only [he, Bool.false_and, Bool.and_false, Bool.false_eq_true, ite_false]
+
 /-- **Judge a prepared write**: its laws on its old and new states, its rows, and the laws over links
 (this page's at the pages it links to, every linking page's at this page), read on the store its
 write turn describes with the pages `over` at the states given (the tip of a turn over several
 pages; `[]` for a write alone). -/
-def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × Obend.Core.Data.Data)) :
+def judgePreparedFrom (es res : List Entry) (pr : Prepared) (over : List (String × Obend.Core.Data.Data))
+    (candidates : List Entry) :
     Except String Unit := do
   let p := pr.p
   let G' := pr.G'
@@ -1039,22 +1108,13 @@ def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × 
     -- the laws over links, judged through the write's turn: this page's at the pages it links to,
     -- and every linking page's at this page as written
     let mineBy := byLaws laws
-    let linkers := pr.linkers es
+    let linkers := pr.linkers candidates
     let wt := pr.writeTurnAt es res
     let world := pr.worldAt es res over
     let mine := linkLaws laws
     if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq (citedNames res G')) then
       throw (linkRefusalText p.name laws r facts)
-    for e in es do
-      -- `citesPage_and_contains`: the scan first, the walk only for a page that cites this one
-      if e.name != p.name && (citesPage e.graph p.id && (linkTargets e.graph).contains p.id) then
-        match lawsFor es e.name e.graph with
-        | .ok elaws =>
-          let theirs := linkLaws elaws
-          if let some r := (if theirs.isEmpty then none else judgeLinksIn world e.name theirs rq [p.name]) then
-            throw (backlinkRefusalText e.name p.name elaws r facts n
-              ((scalarFields (settled G')).map (·.1)))
-        | .error _ => pure ()
+    judgeOtherLinks es res pr over candidates
     -- the laws over backlinks: this page's at every page linking to it, and the laws over backlinks
     -- of every page it links to, at it as written; each linking page read with `listed`
     let listed := ((linkTargets G').filterMap fun q => (es.find? (·.id == q)).map (·.name))
@@ -1080,6 +1140,27 @@ def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × 
       lackingNote laws law (unresolvedNames env (settled G')) (unresolvedInsertedNames env p.current G'))
   | .undecided why => throw ("undecided: " ++ why)
 
+
+/-- The scan semantics of a judgment. The indexed implementation below changes only its
+candidate enumeration; the laws, states, and first-refusal order are shared. -/
+def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × Obend.Core.Data.Data)) :
+    Except String Unit := judgePreparedFrom es res pr over es
+
+/-- Restricting to the reverse-link bucket gives exactly the original judgment. -/
+theorem judgePreparedFrom_filter (es res : List Entry) (pr : Prepared)
+    (over : List (String × Obend.Core.Data.Data)) :
+    judgePreparedFrom es res pr over (es.filter (fun e => citesPage e.graph pr.p.id)) =
+      judgePrepared es res pr over := by
+  simp only [judgePrepared, judgePreparedFrom, Prepared.linkers_filter, judgeOtherLinks_filter]
+
+/-- A single write scans raw cite atoms once and walks only candidate backlink pages. -/
+def judgePreparedFiltered (es res : List Entry) (pr : Prepared)
+    (over : List (String × Obend.Core.Data.Data)) : Except String Unit :=
+  judgePreparedFrom es res pr over (es.filter (fun e => citesPage e.graph pr.p.id))
+
+@[csimp] theorem judgePrepared_eq_filtered : @judgePrepared = @judgePreparedFiltered := by
+  funext es res pr over
+  exact (judgePreparedFrom_filter es res pr over).symm
 
 /-- **Commit a write**: judge the new version `G'` of page `p` by its laws, and on admission append
 it, pinning its kind at the vault's registry. A change of a law line or of the kind the page names
@@ -1189,6 +1270,35 @@ def judgeAll (es res : List Entry) (over : List (String × Obend.Core.Data.Data)
     match judgePrepared es res pr over with
     | .error m => .error ("at " ++ pr.p.name ++ ": " ++ m)
     | .ok () => judgeAll es res over rest
+
+/-- Judge a turn using one reverse index shared by all its writes. -/
+def judgeAllWithIndex (index : Index.Buckets PageId Entry) (es res : List Entry)
+    (over : List (String × Obend.Core.Data.Data)) : List Prepared → Except String Unit
+  | [] => .ok ()
+  | pr :: rest =>
+    match judgePreparedFrom es res pr over (Index.bucket index pr.p.id) with
+    | .error m => .error ("at " ++ pr.p.name ++ ": " ++ m)
+    | .ok () => judgeAllWithIndex index es res over rest
+
+theorem judgeAllWithIndex_eq (es res : List Entry) (over : List (String × Obend.Core.Data.Data))
+    (prs : List Prepared) :
+    judgeAllWithIndex (entryLinkIndex es) es res over prs = judgeAll es res over prs := by
+  induction prs with
+  | nil => rfl
+  | cons pr prs ih =>
+    simp only [judgeAllWithIndex, judgeAll, entryLinkIndex_eq_scan, judgePreparedFrom_filter, ih]
+
+def judgeAllIndexed (es res : List Entry) (over : List (String × Obend.Core.Data.Data))
+    (prs : List Prepared) : Except String Unit :=
+  match prs with
+  | [] => .ok ()
+  | _ :: _ => judgeAllWithIndex (entryLinkIndex es) es res over prs
+
+@[csimp] theorem judgeAll_eq_indexed : @judgeAll = @judgeAllIndexed := by
+  funext es res over prs
+  cases prs with
+  | nil => rfl
+  | cons pr prs => exact (judgeAllWithIndex_eq es res over (pr :: prs)).symm
 
 /-- The tip of a turn: each page it writes, at its new state. -/
 def tipOf (prs : List Prepared) : List (String × Obend.Core.Data.Data) := prs.map fun pr => (pr.p.name, pr.n)
@@ -1624,6 +1734,43 @@ def writeOf (V : List (String × String)) (p : Page) : Option String :=
 def writesFor (s : Store) (V : List (String × String)) : List (String × String) :=
   s.pages.filterMap fun p => (writeOf V p).map fun t => (p.name, t)
 
+/-- Batch lookup contexts preserve first-match semantics while sharing the index across every page. -/
+def quietIndexed (s : Store) (V : List (String × String)) : Bool :=
+  let files := Index.ofList Prod.fst V
+  let pages := Index.ofList Page.name s.pages
+  s.pages.all (fun p => match (Index.first files p.name).map Prod.snd with
+    | none => true
+    | some md => some md == p.seen) &&
+  V.all fun e => (Index.first pages e.1).isSome
+
+@[csimp] theorem quiet_eq_indexed : @quiet = @quietIndexed := by
+  funext s V
+  simp only [quiet, quietIndexed, Index.first_pairs_lookup]
+  simp only [Index.first_ofList, List.isSome_find?] <;> rfl
+
+def pendingAtIndexed (s : Store) (V : List (String × String)) : List Write :=
+  let files := Index.ofList Prod.fst V
+  let ws := s.pages.filterMap fun p => ((Index.first files p.name).map Prod.snd).bind fun md =>
+    if some md == p.seen then none else some (p.name, md)
+  (ws.filter fun w => isKind w.1).mergeSort (fun a b => depthOf a.1 ≤ depthOf b.1) ++
+    ws.filter fun w => !isKind w.1
+
+@[csimp] theorem pendingAt_eq_indexed : @pendingAt = @pendingAtIndexed := by
+  funext s V
+  simp only [pendingAt, pendingAtIndexed, Index.first_pairs_lookup]
+
+def writesForIndexed (s : Store) (V : List (String × String)) : List (String × String) :=
+  let files := Index.ofList Prod.fst V
+  s.pages.filterMap fun p =>
+    (match (Index.first files p.name).map Prod.snd, p.seen with
+      | some md, some t => if md == t then none else some t
+      | _, _ => none).map fun t => (p.name, t)
+
+@[csimp] theorem writesFor_eq_indexed : @writesFor = @writesForIndexed := by
+  funext s V
+  simp only [writesFor, writeOf, writesForIndexed, Index.first_pairs_lookup] <;> rfl
+
+
 /-- The vault after the writes. -/
 def overwrite (V w : List (String × String)) : List (String × String) :=
   V.map fun e => (e.1, (w.lookup e.1).getD e.2)
@@ -1681,6 +1828,89 @@ def fixDangling (H : Hash) (s : Store) (p : Page) : Page :=
     match commit s.entries p G' (added.map (·, "owner")) .owner s.turn (env := s.environment) with
     | .ok ch => p.withChange ch
     | .error _ => p
+
+/-- A stored atom that could be an unresolved link. This is independent of the vault's names. -/
+def danglingCandidate : Content → Bool
+  | .text t => match tokens t with
+    | [.link _] | [.embed _] => true
+    | _ => false
+  | _ => false
+
+theorem danglingOf_none_of_not_candidate (H : Hash) (es : List Entry) (c : Content)
+    (h : danglingCandidate c = false) : danglingOf H es c = none := by
+  cases c with
+  | text t =>
+    unfold danglingCandidate at h
+    simp only [danglingOf]
+    split <;> simp_all
+  | cite | field | cell => rfl
+
+theorem replaceAll_inert (H : Hash) (G : Graph) (ps : List Piece)
+    (sel : Content → Option Content) (who : String)
+    (h : ∀ a, (G.label a).bind sel = none) :
+    replaceAll H G ps sel who = (G, [], 0) := by
+  unfold replaceAll
+  suffices ∀ acc : Graph × List AtomId × Nat,
+      ps.foldl (fun acc pc => match pc with
+        | .atom a _ => match (G.label a).bind sel with
+          | some c => let b := replacePatch H acc.1 a (atomAfter ps a) c who
+            (acc.1.apply b.ops, acc.2.1 ++ b.added, acc.2.2 + 1)
+          | none => acc
+        | _ => acc) acc = acc from this _
+  intro acc
+  have step : ∀ (acc : Graph × List AtomId × Nat) (pc : Piece),
+      (match pc with
+        | .atom a _ => match (G.label a).bind sel with
+          | some c => let b := replacePatch H acc.1 a (atomAfter ps a) c who
+            (acc.1.apply b.ops, acc.2.1 ++ b.added, acc.2.2 + 1)
+          | none => acc
+        | _ => acc) = acc := by
+    intro acc pc
+    cases pc <;> simp [h]
+  have fold {α β : Type} (f : α → β → α) (hf : ∀ a b, f a b = a)
+      (xs : List β) (a : α) : xs.foldl f a = a := by
+    induction xs with
+    | nil => rfl
+    | cons x xs ih => simpa only [List.foldl_cons, hf] using ih
+  exact fold _ step ps acc
+
+def fixDanglingFast (H : Hash) (s : Store) (p : Page) : Page :=
+  if p.note.isSome then p else
+  match p.current with
+  | none => p
+  | some G =>
+    if G.atoms.any (fun a => danglingCandidate a.2) then
+      let (G', added, n) := replaceAll H G (pieces G p.name p.who) (danglingOf H s.entries) "owner"
+      if n = 0 then p else
+      match commit s.entries p G' (added.map (·, "owner")) .owner s.turn (env := s.environment) with
+      | .ok ch => p.withChange ch
+      | .error _ => p
+    else p
+
+@[csimp] theorem fixDangling_eq_fast : @fixDangling = @fixDanglingFast := by
+  funext H s p
+  by_cases hn : p.note.isSome = true
+  · simp only [fixDangling, fixDanglingFast, hn, ite_true]
+  · cases hg : p.current with
+    | none => simp only [fixDangling, fixDanglingFast, hn, hg]
+    | some G =>
+      by_cases hc : G.atoms.any (fun a => danglingCandidate a.2) = true
+      · simp only [fixDangling, fixDanglingFast, hn, hg, hc, ite_true] <;> rfl
+      · have hinert : ∀ a, (G.label a).bind (danglingOf H s.entries) = none := by
+          intro a
+          cases hl : G.label a with
+          | none => rfl
+          | some c =>
+            simp only [Option.bind_some]
+            apply danglingOf_none_of_not_candidate
+            obtain ⟨l₁, l₂, heq, _⟩ := List.lookup_eq_some_iff.mp hl
+            have hm : (a, c) ∈ G.atoms := by rw [heq]; simp
+            have hall : ∀ x ∈ G.atoms, danglingCandidate x.2 = false := by
+              simpa only [Bool.not_eq_true, List.any_eq_false] using hc
+            exact hall (a, c) hm
+        simp only [fixDangling, fixDanglingFast, hn, hg, hc]
+        rw [replaceAll_inert H G _ _ _ hinert]
+        rfl
 
 /-- The page's text at the current view: its current version, each cite whose facts fail marked
 with their names (`Obend.Doc.viewAtom`: `![[Beta]]{behind}`). -/
