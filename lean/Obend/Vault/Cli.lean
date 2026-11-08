@@ -791,6 +791,43 @@ def refusalsOf (s s' : Store) : List String :=
 where
   typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
 
+def changesIndexed (s s' : Store) : List String :=
+  let pages := Index.ofList Page.name s.pages
+  s'.pages.filterMap fun p' =>
+    match Index.first pages p'.name with
+    | none =>
+      if p'.history.isEmpty then some (p'.name ++ ": not born: " ++ p'.note.getD "")
+      else some (p'.name ++ ": new page (v1)")
+    | some p =>
+      if p'.history.length > p.history.length then
+        some (p'.name ++ ": v" ++ toString p'.history.length ++ " written")
+      -- a refused write is said when it is a new write: a different text (as the reader reads it,
+      -- the view's marks stripped) or a different refusal
+      else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then some (p'.name ++ ": " ++ p'.note.getD "")
+      else none
+where
+  typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
+
+@[csimp] theorem changes_eq_indexed : @changes = @changesIndexed := by
+  funext s s'
+  simp only [changes, changesIndexed, Index.first_ofList, Store.page?] <;> rfl
+
+def refusalsOfIndexed (s s' : Store) : List String :=
+  let pages := Index.ofList Page.name s.pages
+  s'.pages.filterMap fun p' =>
+    match Index.first pages p'.name with
+    | none => if p'.history.isEmpty && p'.note.isSome then some (p'.name ++ ": not born: " ++ p'.note.getD "") else none
+    | some p =>
+      if p'.history.length > p.history.length then none
+      else if p'.note.isSome && (p'.note != p.note || typed p' != typed p) then some (p'.name ++ ": " ++ p'.note.getD "")
+      else none
+where
+  typed (q : Page) : Option (List Tok) := q.seen.map fun t => stripToks (tokens t)
+
+@[csimp] theorem refusalsOf_eq_indexed : @refusalsOf = @refusalsOfIndexed := by
+  funext s s'
+  simp only [refusalsOf, refusalsOfIndexed, Index.first_ofList, Store.page?] <;> rfl
+
 /-- The refusals a command has said, this run: each makes its exit status 1 (`main?`). -/
 initialize refusedRef : IO.Ref (List String) ← IO.mkRef []
 
@@ -804,6 +841,16 @@ def problems (s : Store) : List String :=
   s.pages.flatMap fun p =>
     ((citeReport H s p).filterMap fun (c, ok, why) => if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)) ++
       (sectionReport p).map (p.name ++ ": " ++ ·)
+
+def problemsIndexed (s : Store) : List String :=
+  let pages := Index.ofList Page.id s.pages
+  s.pages.flatMap fun p =>
+    ((citeReportIndexed H pages p).filterMap fun (c, ok, why) => if ok then none else some (p.name ++ ": " ++ c ++ " is " ++ why)) ++
+      (sectionReport p).map (p.name ++ ": " ++ ·)
+
+@[csimp] theorem problems_eq_indexed : @problems = @problemsIndexed := by
+  funext s
+  simp only [problems, problemsIndexed, citeReportIndexed_eq]
 
 /-- What `forgetMissing` did, as lines: a page renamed is not also reported deleted. -/
 def forgottenLines (f : Forgotten) : List String :=
@@ -912,6 +959,31 @@ def statusOf (s : Store) (only : Option String) : List String :=
     | none => [])
 
 def fail (msg : String) : IO UInt32 := do IO.eprintln msg; return 2
+
+/-- Report citations using one shared world index. -/
+def statusOfIndexed (s : Store) (only : Option String) : List String :=
+  let pages := Index.ofList Page.id s.pages
+  ((s.pages.filter fun p => only.all (· == p.name)).flatMap fun p =>
+    [p.name ++ " v" ++ toString p.history.length ++ (match p.note with | some n => "; its last write was " ++ n | none => "")] ++
+      (if s.environment.isEmpty then [] else match p.current with
+        | some G =>
+          let ns := unresolvedNames s.environment (settled G)
+          if ns.isEmpty then [] else ["  names the environment lacks: " ++ ", ".intercalate ns]
+        | none => []) ++
+      (citeReportIndexed H pages p).map (fun (c, ok, why) => "  " ++ c ++ (if ok then " ✓ " else " ✗ ") ++ why) ++
+      (sectionReport p).map ("  " ++ ·)) ++
+  ((s.tombs.filter fun p => only.all (· == p.name)).map tombLine) ++
+  ((s.conflicts.zipIdx.filter fun (c, _) => only.all (· == c.page)).map fun (c, k) =>
+    "conflict " ++ toString k ++ " at " ++ c.page ++ ": " ++ c.left.1 ++ "'s " ++ c.left.2.1 ++ " and " ++
+      c.right.1 ++ "'s " ++ c.right.2.1 ++ " (both kept as candidates; neither landed); keep one with: " ++
+      "obend branch resolve " ++ toString k ++ " left|right") ++
+  (match only with
+    | some n => if s.pages.any (·.name == n) || s.tombs.any (·.name == n) then [] else [n ++ ": no such page"]
+    | none => [])
+
+@[csimp] theorem statusOf_eq_indexed : @statusOf = @statusOfIndexed := by
+  funext s only
+  simp only [statusOf, statusOfIndexed, citeReportIndexed_eq]
 
 /-- `--as NAME` and `--grant G` flags, and the rest. -/
 def flag (name : String) : List String → Option String × List String
