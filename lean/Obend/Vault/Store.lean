@@ -847,6 +847,55 @@ def citedNames (res : List Entry) (G : Graph) : List String :=
 def pinsAt (es : List Entry) (cells : List String) : Footprint :=
   cells.map fun c => ⟨c, stateStore es c⟩
 
+/-- Reading the observation for one cell does not require evaluating the other observations. -/
+theorem pinsAt_store (es : List Entry) (cells : List String) (c : String) :
+    (pinsAt es cells).store c = if cells.contains c then stateStore es c else none := by
+  induction cells with
+  | nil => rfl
+  | cons k cells ih =>
+    by_cases h : k = c
+    · subst k
+      simp [pinsAt, Footprint.store]
+    · have hk : (k == c) = false := by simpa using h
+      have hc : (c == k) = false := by simpa using Ne.symm h
+      simp only [pinsAt, List.map_cons, Footprint.store, List.find?_cons, hk]
+      simpa only [pinsAt, Footprint.store, List.contains_cons, hc, Bool.false_or] using ih
+
+/-- Collect requested names in one scan, preserving the first matching entry. -/
+theorem find_filter_wanted (es : List Entry) (cells : List String) (c : String)
+    (hc : c ∈ cells) :
+    (es.filter (fun e => (Index.first (Index.ofList id cells) e.name).isSome)).find?
+        (·.name == c) = es.find? (·.name == c) := by
+  induction es with
+  | nil => rfl
+  | cons e es ih =>
+    by_cases h : e.name = c
+    · have hw : (Index.first (Index.ofList id cells) e.name).isSome = true := by
+        simp only [Index.first_ofList, List.isSome_find?, List.any_eq_true]
+        exact ⟨c, hc, by simp [h]⟩
+      rw [List.filter_cons, hw]
+      simp [h]
+    · have hn : (e.name == c) = false := by simpa using h
+      cases hw : (Index.first (Index.ofList id cells) e.name).isSome <;>
+        simp [hw, hn, ih]
+
+def pinsAtIndexed (es : List Entry) (cells : List String) : Footprint :=
+  if cells.isEmpty then [] else
+    let wanted := Index.ofList id cells
+    let selected := es.filter (fun e => (Index.first wanted e.name).isSome)
+    let entries := Index.ofList Entry.name selected
+    cells.map fun c => ⟨c, (Index.first entries c).map fun e => pageState e.graph e.version⟩
+
+@[csimp] theorem pinsAt_eq_indexed : @pinsAt = @pinsAtIndexed := by
+  funext es cells
+  by_cases hc : cells = []
+  · subst cells; rfl
+  · simp only [pinsAtIndexed, List.isEmpty_iff, hc, ↓reduceIte, pinsAt]
+    apply List.map_congr_left
+    intro c hmem
+    rw [Index.first_ofList, find_filter_wanted es cells c hmem]
+    rfl
+
 /-- The write of `page` as a turn: its one write cell is the page (its state before and after), its
 read pins the pages its laws over links read, at the states read. -/
 def writeTurn (page : String) (o n : Obend.Core.Data.Data) (pins : Footprint)
@@ -1018,6 +1067,47 @@ def Prepared.worldAt (pr : Prepared) (es res : List Entry) (over : List (String 
     VaultStore :=
   overlay over (applyTurn (pr.writeTurnAt es res).readPins.store (pr.writeTurnAt es res))
 
+/-- Query the turn's tip before materializing its read footprint. A judgment at the page being
+written (or another page in `over`) needs no unrelated page states or cite resolution. -/
+structure Prepared.QueryContext where
+  over : List (String × Obend.Core.Data.Data)
+  page : String
+  written : Obend.Core.Data.Data
+  /-- A data thunk, rather than a function thunk: forcing it computes and retains the footprint. -/
+  pins : Thunk Footprint
+
+def Prepared.queryContext (pr : Prepared) (es res : List Entry)
+    (over : List (String × Obend.Core.Data.Data)) : Prepared.QueryContext :=
+  ⟨over, pr.p.name, pr.n, Thunk.mk fun _ => (pr.writeTurnAt es res).readPins⟩
+
+def Prepared.QueryContext.store (ctx : Prepared.QueryContext) : VaultStore := fun c =>
+  match ctx.over.lookup c with
+  | some d => some d
+  | none => if ctx.page == c then some ctx.written else ctx.pins.get.store c
+
+/-- The context is extensionally the turn's store, on every cell, including absent cells. -/
+theorem Prepared.queryContext_store (pr : Prepared) (es res : List Entry)
+    (over : List (String × Obend.Core.Data.Data)) :
+    (pr.queryContext es res over).store = pr.worldAt es res over := by
+  funext c
+  simp only [Prepared.queryContext, Prepared.QueryContext.store, Prepared.worldAt, overlay,
+    applyTurn, Prepared.writeTurnAt, writeTurn, List.find?_cons, List.find?_nil, Thunk.get]
+  cases ho : over.lookup c with
+  | some d => rfl
+  | none =>
+    by_cases hn : pr.p.name = c
+    · simp [hn]
+    · have hb : (pr.p.name == c) = false := by simpa using hn
+      simp only [hb, Bool.false_eq_true, ite_false]
+
+def Prepared.worldAtDemand (pr : Prepared) (es res : List Entry)
+    (over : List (String × Obend.Core.Data.Data)) : VaultStore :=
+  (pr.queryContext es res over).store
+
+@[csimp] theorem Prepared.worldAt_eq_demand : @Prepared.worldAt = @Prepared.worldAtDemand := by
+  funext pr es res over
+  exact (pr.queryContext_store es res over).symm
+
 /-- **The judgments of laws over links at a prepared write's page**: each page of `es` linking to it
 with laws over links, those laws at the page's state on the store the write is judged on. These are
 the judgments `judgePrepared` makes of every linking page's laws over links, page by page and in
@@ -1037,10 +1127,9 @@ def Prepared.theirCalls (pr : Prepared) (es res : List Entry) (over : List (Stri
     else []
 
 /-- The linking pages' laws, in their original order, stopping at the first refusal. -/
-def judgeOtherLinks (es res : List Entry) (pr : Prepared)
-    (over : List (String × Obend.Core.Data.Data)) (candidates : List Entry) : Except String Unit := do
+def judgeOtherLinks (es : List Entry) (world : VaultStore) (pr : Prepared)
+    (candidates : List Entry) : Except String Unit := do
   let p := pr.p
-  let world := pr.worldAt es res over
   for e in candidates do
     if e.name != p.name && (citesPage e.graph p.id && (linkTargets e.graph).contains p.id) then
       match lawsFor es e.name e.graph with
@@ -1051,10 +1140,9 @@ def judgeOtherLinks (es res : List Entry) (pr : Prepared)
             ((scalarFields (settled pr.G')).map (·.1)))
       | .error _ => pure ()
 
-theorem judgeOtherLinks_filter (es res : List Entry) (pr : Prepared)
-    (over : List (String × Obend.Core.Data.Data)) :
-    judgeOtherLinks es res pr over (es.filter (fun e => citesPage e.graph pr.p.id)) =
-      judgeOtherLinks es res pr over es := by
+theorem judgeOtherLinks_filter (es : List Entry) (world : VaultStore) (pr : Prepared) :
+    judgeOtherLinks es world pr (es.filter (fun e => citesPage e.graph pr.p.id)) =
+      judgeOtherLinks es world pr es := by
   unfold judgeOtherLinks
   dsimp only
   congr 1
@@ -1108,17 +1196,18 @@ def judgePreparedFrom (es res : List Entry) (pr : Prepared) (over : List (String
     -- the laws over links, judged through the write's turn: this page's at the pages it links to,
     -- and every linking page's at this page as written
     let mineBy := byLaws laws
-    let linkers := pr.linkers candidates
-    let wt := pr.writeTurnAt es res
-    let world := pr.worldAt es res over
+    let context := pr.queryContext es res over
+    let world := context.store
     let mine := linkLaws laws
     if let some r := (if mine.isEmpty then none else judgeLinksIn world p.name mine rq (citedNames res G')) then
       throw (linkRefusalText p.name laws r facts)
-    judgeOtherLinks es res pr over candidates
+    judgeOtherLinks es world pr candidates
     -- the laws over backlinks: this page's at every page linking to it, and the laws over backlinks
     -- of every page it links to, at it as written; each linking page read with `listed`
-    let listed := ((linkTargets G').filterMap fun q => (es.find? (·.id == q)).map (·.name))
-    if let some r := (if mineBy.isEmpty then none else judgeLinksIn (listedStore world listed) p.name mineBy rq linkers) then
+    if let some r := (if mineBy.isEmpty then none else
+        let linkers := pr.linkers candidates
+        let listed := ((linkTargets G').filterMap fun q => (es.find? (·.id == q)).map (·.name))
+        judgeLinksIn (listedStore world listed) p.name mineBy rq linkers) then
       throw (byRefusalText p.name p.name laws r facts)
     for x in citedNames res G' do
       if x != p.name then
@@ -1961,6 +2050,41 @@ def remarkPage (H : Hash) (s : Store) (p : Page) : Page :=
 def settle (H : Hash) (s : Store) : Store :=
   let s1 : Store := { s with pages := s.pages.map (fixDangling H s) }
   { s1 with pages := s1.pages.map (remarkPage H s1) }
+
+/-- Histories read through a shared id index, including the first duplicate id. -/
+def indexedWorld (pages : Index.Buckets PageId Page) : World := fun q =>
+  match Index.first pages q with
+  | some p => p.history
+  | none => []
+
+theorem indexedWorld_pages (s : Store) :
+    indexedWorld (Index.ofList Page.id s.pages) = s.world := by
+  funext q
+  simp only [indexedWorld, Index.first_ofList, Store.world] <;> rfl
+
+def remarkInWorld (H : Hash) (W : World) (p : Page) : Page :=
+  if p.note.isSome then p else
+  match p.current.map (fun G => renderWith (viewAtom H W G) G p.name p.who) with
+  | some t => { p with seen := some t }
+  | none => p
+
+theorem remarkInWorld_store (H : Hash) (s : Store) (p : Page) :
+    remarkInWorld H s.world p = remarkPage H s p := rfl
+
+/-- All page views share one id index; a cite no longer scans every page for its history. -/
+def settleIndexed (H : Hash) (s : Store) : Store :=
+  let s1 : Store := { s with pages := s.pages.map (fixDangling H s) }
+  let world := indexedWorld (Index.ofList Page.id s1.pages)
+  { s1 with pages := s1.pages.map (remarkInWorld H world) }
+
+@[csimp] theorem settle_eq_indexed : @settle = @settleIndexed := by
+  funext H s
+  let s1 : Store := { s with pages := s.pages.map (fixDangling H s) }
+  change { s1 with pages := s1.pages.map (remarkPage H s1) } =
+    { s1 with pages := s1.pages.map (remarkInWorld H (indexedWorld (Index.ofList Page.id s1.pages))) }
+  rw [indexedWorld_pages s1]
+  rfl
+
 
 theorem fixDangling_name (H : Hash) (s : Store) (p : Page) : (fixDangling H s p).name = p.name := by
   unfold fixDangling
@@ -3062,6 +3186,45 @@ def citeReport (H : Hash) (s : Store) (p : Page) : List (String × Bool × Strin
             some (t ++ " (link)", false, "dangling: no page of that name") else none
         | _ => none
       | _ => none
+
+/-- A report's failures, supplied the shared world of the report. -/
+def factWordsIn (W : World) (name : String) : Fact → String
+  | .current c =>
+    "behind: " ++ name ++ " moved on (v" ++ toString (c.version + 1) ++ " → v" ++
+      toString (W c.page).length ++ ") and the bytes it quotes changed"
+  | .verifies _ => "unverified: the bytes it quotes no longer match its commitment"
+  | .present _ => "missing: " ++ name ++ " has no version"
+  | _ => "dead"
+
+def citeReportIndexed (H : Hash) (pages : Index.Buckets PageId Page) (p : Page) :
+    List (String × Bool × String) :=
+  let world := indexedWorld pages
+  match p.current with
+  | none => []
+  | some G =>
+    (pieces G p.name p.who).filterMap fun pc => match pc with
+      | .atom a txt => match G.label a with
+        | some (.cite n c) =>
+          let target := ((Index.first pages c.page).map (·.name)).getD n
+          let fails := (citeFacts c).filter fun f => !holds H world f
+          let kind := match c.span with
+            | .identity => "link" | .page => "embed" | .block _ => "block quote" | .bytes _ => "byte quote"
+          some (txt ++ " (" ++ kind ++ ")", fails.isEmpty,
+            if fails.isEmpty then (if c.span == .identity then "current: " ++ target ++ " exists"
+              else "current: the bytes it quotes are " ++ target ++ "'s now")
+            else ", ".intercalate (fails.map (factWordsIn world target)))
+        | some (.text t) => if (t.startsWith "[[" || t.startsWith "![[") && t.endsWith "]]" then
+            some (t ++ " (link)", false, "dangling: no page of that name") else none
+        | _ => none
+      | _ => none
+
+theorem citeReportIndexed_eq (H : Hash) (s : Store) (p : Page) :
+    citeReportIndexed H (Index.ofList Page.id s.pages) p = citeReport H s p := by
+  simp only [citeReportIndexed, indexedWorld_pages, Index.first_ofList, citeReport]
+  have hf : factWordsIn s.world = factWords s := by
+    funext name f
+    cases f <;> rfl
+  rw [hf] <;> rfl
 
 /-- The open sections of a page, with their candidates' authors. -/
 def sectionReport (p : Page) : List String :=
