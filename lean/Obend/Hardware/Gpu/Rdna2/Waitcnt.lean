@@ -8,9 +8,10 @@ refuses it if any instruction reads or writes a register that an outstanding loa
 
 The counters are the manual's (RDNA 2 ISA, 4.4 "Data Dependency Resolution"): `VM_CNT` counts vector
 memory loads, which return in issue order, so `s_waitcnt vmcnt(k)` guarantees all but the last `k`
-have completed; `LGKM_CNT` counts scalar memory loads, which "can return out-of-order (in which case
-only S_WAITCNT 0 is the only legitimate value)" (4.4, 7.3), so only `lgkmcnt(0)` completes anything
-here; `VS_CNT` counts stores, whose completion no register depends on; `EXP_CNT` counts exports, of
+have completed; `LGKM_CNT` counts LDS reads and writes, which return in issue order, and scalar memory
+loads, which "can return out-of-order (in which case only S_WAITCNT 0 is the only legitimate value)"
+(4.4, 7.3), so `lgkmcnt(k)` retires all but the last `k` LDS events while no scalar load is outstanding
+and only `lgkmcnt(0)` completes anything otherwise; `VS_CNT` counts stores, whose completion no register depends on; `EXP_CNT` counts exports, of
 which these programs have none. The hazard rules are those of LLVM's `SIInsertWaitcnts` pass
 (llvm/lib/Target/AMDGPU/SIInsertWaitcnts.cpp, release 19.x, the pass that inserted the waits RADV's
 dumps carry, since ACO follows the same hardware rules): every use and every def of an instruction is
@@ -105,7 +106,7 @@ abbrev Events := List (List Reg)
 structure Pending where
   /-- vector memory loads (VM_CNT), returning in order -/
   vm : Events
-  /-- scalar memory loads and LDS reads (LGKM_CNT) -/
+  /-- scalar memory loads and LDS accesses (LGKM_CNT) -/
   lgkm : Events
   /-- an SMEM load is among them: the counter is then out of order (manual 4.4; SIInsertWaitcnts
   `counterOutOfOrder`), and only `lgkmcnt(0)` completes anything -/
@@ -118,6 +119,11 @@ def Pending.empty : Pending := { vm := [], lgkm := [], smem := false }
 def waitVm (simm : Nat) : Nat := (simm % 16) ||| (((simm >>> 14) % 4) <<< 4)
 def waitLgkm (simm : Nat) : Nat := (simm >>> 8) % 64
 
+/-- The oldest events that await no register (LDS writes) are dropped: a wait of `k` retires the oldest
+`n - k` events, and which of the register-carrying ones it retires does not depend on how many
+register-less events precede them all. This keeps a loop's pending state finite. -/
+def Events.trim (es : Events) : Events := es.dropWhile (·.isEmpty)
+
 /-- A wait: all but the last `k` vector loads complete; of LGKM, all but the last `k` when only LDS reads
 are outstanding (they return in order), and only at `lgkmcnt(0)` when a scalar load is among them. -/
 def Pending.wait (p : Pending) (simm : Nat) : Pending :=
@@ -125,7 +131,7 @@ def Pending.wait (p : Pending) (simm : Nat) : Pending :=
   let vm := if k < p.vm.length then p.vm.drop (p.vm.length - k) else p.vm
   let kl := waitLgkm simm
   let lgkm := if kl == 0 then [] else if !p.smem && kl < p.lgkm.length then p.lgkm.drop (p.lgkm.length - kl) else p.lgkm
-  { vm := vm, lgkm := lgkm, smem := p.smem && kl != 0 }
+  { vm := vm, lgkm := Events.trim lgkm, smem := p.smem && kl != 0 }
 
 /-- Join at a control-flow merge: events aligned from the most recent, registers unioned. -/
 def joinEvents (a b : Events) : Events :=
@@ -134,7 +140,7 @@ def joinEvents (a b : Events) : Events :=
   (pad a).zipWith (fun x y => x ++ y.filter (fun r => !x.contains r)) (pad b)
 
 def Pending.join (a b : Pending) : Pending :=
-  { vm := joinEvents a.vm b.vm, lgkm := joinEvents a.lgkm b.lgkm, smem := a.smem || b.smem }
+  { vm := joinEvents a.vm b.vm, lgkm := Events.trim (joinEvents a.lgkm b.lgkm), smem := a.smem || b.smem }
 
 /-- A register still awaited by some event. -/
 def Events.hits (es : Events) (r : Reg) : Bool := es.any (·.contains r)
@@ -174,6 +180,9 @@ def stepPending (p : Pending) (i : Inst) : Except String Pending := do
   if isVmemLoad i then return { p with vm := p.vm ++ [a.writes] }
   if isSmemLoad i then return { p with lgkm := p.lgkm ++ [a.writes], smem := true }
   if isDsLoad i then return { p with lgkm := p.lgkm ++ [a.writes] }
+  -- an LDS write is an LGKM event too (manual 4.4: decremented "when data is written"; LLVM scores every
+  -- DS access as `LDS_ACCESS`): it awaits no register, but a later `lgkmcnt(k)` counts it
+  if isDsStore i then return { p with lgkm := Events.trim (p.lgkm ++ [[]]) }
   return p
 
 /-! ## 4. The program, as a dataflow over its basic blocks -/

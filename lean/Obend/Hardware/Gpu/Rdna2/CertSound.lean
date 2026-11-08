@@ -1,12 +1,13 @@
 /-
 # Obend.Hardware.Gpu.Rdna2.CertSound — what an accepted certificate means
 
-`certify_sound`: if `certify p progs rs` accepts and every residual in `rs` holds, then for every content
-of the wire buffer, running the decoded programs on the wave model as the host dispatches them succeeds
-and leaves in every word of the buffer what `runStages` says the plan computes. The proof follows the
-check: a stage's start memory is the environment every symbolic term is read in (`viewStart` describes
-it), each wave of the dispatch is related to its symbolic run by `wave_sound`, and each stored dword is
-the plan's by `storeOk_sound` (`pKernel_sound`, `residual_sound`).
+`checkProgram_sound`: if `checkProgram` accepts a list of stages each keeping its promise (`Spec.Sound`) and
+every residual it names holds, then from every start memory holding the wire buffer, running the decoded
+programs on the wave model as the host dispatches them succeeds and leaves in every word of the buffer what
+the stages' meanings compose to. The proof follows the check: a stage's start memory is the environment
+every symbolic term is read in (`viewStart` describes it), each wave of the dispatch is related to its
+symbolic run by `wave_sound`, and each stored dword is the table's by `storeOk_sound` (`residual_sound`).
+`memOf_start` is the host's memory as such a start.
 -/
 module
 public import Obend.Hardware.Gpu.Rdna2.Cert
@@ -659,32 +660,6 @@ theorem gpuTableUpTo_spec (cs : Array Word) (ix : Array Nat) (stage : GpuStage) 
         refine ⟨fun t ht => ?_, fun hn hi => (ih i).2 hn (by omega)⟩
         obtain ⟨a, b⟩ := (ih i).1 t ht; exact ⟨by omega, b⟩
 
-/-- A plan's stage keeps its promise: its table is `runStage`, read from the start's words. -/
-theorem gpuSpec_sound (p : GpuProgram) (stage : GpuStage) (hks : ∀ k ∈ stage.kernels, k.dstBase + k.count ≤ p.words) :
-    (gpuSpec p p.consts.toArray p.tables.toArray stage).Sound p.words (fun E => E)
-      (fun E => ∀ j, p.words ≤ j → E j = 0) := by
-  intro rd env E T hE hrd hT
-  have hrd' : (fun j => (rd j).ev env) = E := funext hrd
-  have spec := gpuTableUpTo_spec _ _ stage rd _ p.words T hT
-  have hnone : ∀ j, p.words ≤ j → stage.kernels.find? (·.owns j) = none := by
-    intro j hj; rw [List.find?_eq_none]; intro k hk
-    have := hks k hk; simp only [Kernel.owns, decide_eq_true_eq]; omega
-  have hden : ∀ j, stage.kernels.find? (·.owns j) = none → runStage p.consts p.tables E stage j = E j := by
-    intro j hj; unfold runStage; rw [hj]
-  refine ⟨fun j hj => ?_, fun i t ht => ?_, fun i hi => ?_⟩
-  · show runStage p.consts p.tables E stage j = 0
-    rw [hden j (hnone j hj)]; exact hE j hj
-  · obtain ⟨hi, k, hf, hkv⟩ := (spec i).1 t ht
-    refine ⟨hi, ?_⟩
-    have hk := pKernel_sound env _ _ _ k _ t (kvOf_sound (foldCache_mem rd stage) _ _ _ hkv)
-    rw [List.toList_toArray, List.toList_toArray, hrd'] at hk
-    show t.ev env = runStage p.consts p.tables E stage i
-    unfold runStage; rw [hf]; exact hk
-  · show runStage p.consts p.tables E stage i = E i
-    by_cases h : i < p.words
-    · exact hden i ((spec i).2 hi h)
-    · exact hden i (hnone i (by omega))
-
 /-! ## 9. The memory the host starts from -/
 
 theorem shift_wAddr (i : Nat) (hi : i < 2 ^ 29) : (wAddr + UInt64.ofNat (8 * i)) >>> 2 = dwLo i := by
@@ -751,93 +726,5 @@ theorem memOf_start (words : Nat) (consts : List Word) (tables : List Nat) (hw :
     exact ⟨fun e => by rw [e, i0] at ha; exact Bool.false_ne_true ha.symm,
       fun e => by rw [e, i1] at ha; exact Bool.false_ne_true ha.symm⟩
   · simp at hk
-
-/-! ## 10. The certificate -/
-
-/-- If the certificate is accepted and every residual it names holds, then for every content `flat` of the
-wire buffer, the decoded programs, run on the model as the host dispatches them, succeed and leave in
-every word of the buffer what the plan's stages compute from `flat`. -/
-theorem certify_sound (p : GpuProgram) (progs : List Program) (rs : List Residual)
-    (hc : certify p progs rs = true) (hrs : ∀ r ∈ rs, r.Holds) (flat : Nat → Word) :
-    ∃ m, runDispatch (progs.zip (p.stages.map fun s => (s.threads, 0))) (memOf p.words p.consts p.tables flat) = some m ∧
-      ∀ i, i < p.words →
-        wordAt m i = runStages p.consts p.tables (fun j => if j < p.words then flat j else 0) p.stages i := by
-  unfold certify at hc
-  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hc
-  obtain ⟨⟨hw, hks⟩, hcp⟩ := hc
-  split at hcp
-  · rename_i need hneed
-    have hfin : ∀ r, need.contains r = true → r.Holds := by
-      intro r hr
-      apply hrs
-      have := List.all_eq_true.mp hcp r (by rw [Std.HashSet.mem_toList, Std.HashSet.mem_iff_contains]; exact hr)
-      simpa using this
-    have hss : ∀ s ∈ p.stages.map (gpuSpec p p.consts.toArray p.tables.toArray),
-        s.Sound p.words (fun E => E) (fun E => ∀ j, p.words ≤ j → E j = 0) := by
-      intro s hs
-      obtain ⟨st, hst, rfl⟩ := List.mem_map.mp hs
-      exact gpuSpec_sound p st (hks st hst)
-    obtain ⟨m, known', hrun, hend, -⟩ := checkProgram_sound hw _ progs {} {} need _ _ hss hneed hfin
-      (memOf_start p.words p.consts p.tables hw flat) (fun j hj => by simp [show ¬ j < p.words by omega])
-    have hd : dispatchesOf (p.stages.map (gpuSpec p p.consts.toArray p.tables.toArray)) progs
-        = progs.zip (p.stages.map fun s => (s.threads, 0)) := by
-      simp only [dispatchesOf, List.map_map]; rfl
-    rw [hd] at hrun
-    refine ⟨m, hrun, fun i hi => ?_⟩
-    obtain ⟨lo, hi', e0, e1, e⟩ := hend.word i hi
-    have a0 : wDw + UInt64.ofNat (2 * i) = dwLo i := rfl
-    unfold wordAt
-    rw [a0, e0, e1]
-    simp only [Option.getD_some]
-    rw [e, List.foldl_map]
-    rfl
-  · simp at hcp
-
-/-! ## 11. The graph's outputs -/
-
-/-- The buffer holds every wire the lowering reads or writes: each live wire's words and each output
-wire's words lie below `words` (checked, so the composition needs nothing of the allocator's proof). -/
-def boundsOk (g : ArrayGraph) : Bool :=
-  let p := lowerArrayToGpu g
-  let lay := gpuLayout g
-  let ls := g.lengths
-  (liveAt (layerGraph (fuseGraph g)) g.outputs).all (fun w =>
-      decide (w < ls.length → lay.base w + ls.getD w 0 ≤ p.words)) &&
-    p.outputs.all (fun w => decide (p.wireBase.getD w 0 + p.wireLen.getD w 0 ≤ p.words))
-
-/-- The certificate composed with rung G1: for a well-formed graph with a checked layout whose lowering
-the certificate accepts, for every input `env` and every buffer `flat` that lays its live wires out, the
-decoded programs run on the model succeed, and the output wires read from the final memory are
-`evalGraph`'s. -/
-theorem certified_outputs (g : ArrayGraph) (hWf : g.wf = true) (hLayout : layoutOk g = true)
-    (hb : boundsOk g = true) (progs : List Program) (rs : List Residual)
-    (hc : certify (lowerArrayToGpu g) progs rs = true) (hrs : ∀ r ∈ rs, r.Holds)
-    (env : Nat → Vec) (flat : Nat → Word) (hGood : Good g.lengths env)
-    (hFlat : Flat g.lengths (gpuLayout g).base (liveAt (layerGraph (fuseGraph g)) g.outputs) env flat) :
-    let p := lowerArrayToGpu g
-    ∃ m, runDispatch (progs.zip (p.stages.map fun s => (s.threads, 0))) (memOf p.words p.consts p.tables flat) = some m ∧
-      p.outputs.map (fun w => (List.range (p.wireLen.getD w 0)).map fun e => wordAt m (p.wireBase.getD w 0 + e))
-        = evalGraph g env := by
-  dsimp only
-  obtain ⟨m, hrun, hw⟩ := certify_sound (lowerArrayToGpu g) progs rs hc hrs flat
-  refine ⟨m, hrun, ?_⟩
-  unfold boundsOk at hb
-  simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hb
-  obtain ⟨hlive, hout⟩ := hb
-  let flatW : Nat → Word := fun j => if j < (lowerArrayToGpu g).words then flat j else 0
-  have hFlatW : Flat g.lengths (gpuLayout g).base (liveAt (layerGraph (fuseGraph g)) g.outputs) env flatW := by
-    intro w e hl hw' he
-    have hlt : (gpuLayout g).base w + e < (lowerArrayToGpu g).words := by have := hlive w hl hw'; omega
-    simp only [flatW, hlt, ite_true]
-    exact hFlat w e hl hw' he
-  rw [← lowerArrayToGpu_sound g hWf hLayout env flatW hGood hFlatW]
-  unfold runProgram
-  apply List.map_congr_left
-  intro w hwo
-  apply List.map_congr_left
-  intro e he
-  rw [List.mem_range] at he
-  have := hout w hwo
-  exact hw _ (by omega)
 
 end Obend.Hardware.Gpu.Rdna2

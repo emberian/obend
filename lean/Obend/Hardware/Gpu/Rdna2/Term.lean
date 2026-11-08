@@ -360,7 +360,18 @@ theorem eval_mkSum (env : UInt64 → UInt32) (ts : List Tm) :
     simp only [List.map_nil, List.foldr_nil, UInt32.zero_add, UInt32.add_zero] at key
     simp only [eval_finishSum, key]
 
-def mkSub (a b : Tm) : Tm := if isLit b 0 then a else fold .sub [a, b]
+/-- `0 - b`: a literal folded, a negation undone. -/
+def mkNeg (b : Tm) : Tm :=
+  match b.litVal? with
+  | some c => lit (0 - c)
+  | none =>
+    match b with
+    | .mk _ .sub [z, x] => if isLit z 0 then x else fold .sub [lit 0, b]
+    | _ => fold .sub [lit 0, b]
+
+/-- `a - b` is the sum `a + (0 - b)`: one form for a compiler's `a + 0xFFFFFFFF` and `a - 1`, and for a
+difference however its terms were grouped. -/
+def mkSub (a b : Tm) : Tm := if isLit b 0 then a else mkSum [a, mkNeg b]
 def mkMul (a b : Tm) : Tm :=
   let (x, y) := ord a b
   if isLit x 0 || isLit y 0 then lit 0 else if isLit x 1 then y else if isLit y 1 then x else fold .mul [x, y]
@@ -382,10 +393,41 @@ def mkLshr (x a : Tm) : Tm :=
   match a.litVal? with
   | some v => if v &&& 31 == 0 then x else fold .lshr [x, a]
   | none => fold .lshr [x, a]
-def mkIte (c a b : Tm) : Tm :=
+/-- A condition with its `≠ 0` wrappers removed: `ite` tests `c ≠ 0`, and `(x, 0) ≠ (0, 0)` or a select
+`ite c k 0` with `k ≠ 0` is nonzero exactly when `x` or `c` is (the compare a source's `select` puts on a
+boolean the compiler keeps as a lane mask). -/
+def condOf : Nat → Tm → Tm
+  | 0, c => c
+  | n + 1, c =>
+    match c with
+    | .mk _ .ne64 [x, z1, z2, z3] => if isLit z1 0 && isLit z2 0 && isLit z3 0 then condOf n x else c
+    | .mk _ .ite [c0, t, e] => if (t.litVal?.any (· != 0)) && isLit e 0 then condOf n c0 else c
+    | _ => c
+
+/-- `x` out of `ys`, its first structurally equal occurrence. -/
+def removeOne (x : Tm) : List Tm → Option (List Tm)
+  | [] => none
+  | y :: ys => if x = y then some ys else (removeOne x ys).map (y :: ·)
+
+/-- The addends two sums share (as multisets), and what remains of each. -/
+def splitCommon : List Tm → List Tm → List Tm × List Tm × List Tm
+  | [], ys => ([], [], ys)
+  | x :: xs, ys =>
+    match removeOne x ys with
+    | some ys' => let r := splitCommon xs ys'; (x :: r.1, r.2.1, r.2.2)
+    | none => let r := splitCommon xs ys; (r.1, x :: r.2.1, r.2.2)
+
+/-- A select of two values: `c ≠ 0` with its wrappers removed (`condOf`), equal branches one value, and
+the addends both branches share moved out of the select (`ite c (x + z) (y + z)` is `ite c x y + z`, the
+form a compiler gives an add hoisted past a `select`). -/
+def mkIte (c0 a b : Tm) : Tm :=
+  let c := condOf 8 c0
   match c.litVal? with
   | some v => if v != 0 then a else b
-  | none => fold .ite [c, a, b]
+  | none =>
+    if a = b then a else
+    let r := splitCommon (addends a) (addends b)
+    if r.1.isEmpty then fold .ite [c, a, b] else mkSum (fold .ite [c, mkSum r.2.1, mkSum r.2.2] :: r.1)
 def isBool0 (t : Tm) : Bool :=
   match t.op with
   | .carry | .borrow | .carryc | .borrowc | .ule | .ugt | .ult64 | .ne64 | .bit _ | .nez64 => true
@@ -444,7 +486,10 @@ def mkAddc (a b c : Tm) : Tm :=
     if isBool c then mkSum [a, b, c] else fold .addc [lit 0, mkSum [a, b], c]
 def mkCarryc (a b c : Tm) : Tm :=
   if isLit c 0 then mkCarry a b else let (x, y) := ord a b; fold .carryc [x, y, c]
-def mkSubc (a b c : Tm) : Tm := if isLit c 0 then mkSub a b else fold .subc [a, b, c]
+/-- `a - b - c` subtracts the borrow from the difference `a - b`: the form a compiler gives the high half
+of a 64-bit subtract (`(a - b) - borrow`). -/
+def mkSubc (a b c : Tm) : Tm :=
+  if isLit c 0 then mkSub a b else if isLit b 0 then fold .subc [a, b, c] else fold .subc [mkSub a b, lit 0, c]
 def mkBorrowc (a b c : Tm) : Tm := if isLit c 0 then mkBorrow a b else fold .borrowc [a, b, c]
 
 /-- Terms whose value is `0` or `1`. -/
@@ -555,12 +600,16 @@ def mkUle (a b : Tm) : Tm := fold .ule [a, b]
 def mkUlt64 (a0 a1 b0 b1 : Tm) : Tm := fold .ult64 [a0, a1, b0, b1]
 def mkNe64' (a0 a1 b0 b1 : Tm) : Tm := fold .ne64 [a0, a1, b0, b1]
 /-- `x != 0` of a 0/1 select `ite c 1 0` is `c`: the compare of a `select` the compiler removes. -/
-def mkNe64 (a0 a1 b0 b1 : Tm) : Tm :=
+def mkNe64Z (a0 a1 b0 b1 : Tm) : Tm :=
   if isLit a1 0 && isLit b0 0 && isLit b1 0 then
     match a0 with
     | .mk _ .ite [c, t, e] => if isLit t 1 && isLit e 0 && isBool2 c then c else mkNe64' a0 a1 b0 b1
     | _ => mkNe64' a0 a1 b0 b1
   else mkNe64' a0 a1 b0 b1
+/-- `a ≠ b` of two pairs is symmetric: a literal zero pair second, else the pairs ordered by hash. -/
+def mkNe64 (a0 a1 b0 b1 : Tm) : Tm :=
+  if (isLit a0 0 && isLit a1 0) || (!(isLit b0 0 && isLit b1 0) && mixHash b0.hsh b1.hsh < mixHash a0.hsh a1.hsh)
+  then mkNe64Z b0 b1 a0 a1 else mkNe64Z a0 a1 b0 b1
 def mkNez64 (a b : Tm) : Tm := fold .nez64 [a, b]
 
 /-- A 64-bit shift of a pair by a known count `w < 64`, in 32-bit pieces. -/
@@ -627,11 +676,25 @@ theorem eval_add (a b : Tm) : eval env (Dom.add a b) = Dom.add (eval env a) (eva
   show eval env (mkSum [a, b]) = eval env a + eval env b
   simp [eval_mkSum]
 
+theorem eval_mkNeg (b : Tm) : eval env (mkNeg b) = 0 - eval env b := by
+  unfold mkNeg
+  split
+  · rename_i c hc; rw [eval_of_litVal env b c hc, eval_lit]
+  · split
+    · split
+      · rename_i hz
+        simp only [eval_mk, List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, eval_of_isLit env _ _ hz]
+        bv_decide
+      · simp [TOp.sem]
+    · simp [TOp.sem]
+
 theorem eval_sub (a b : Tm) : eval env (Dom.sub a b) = Dom.sub (eval env a) (eval env b) := by
   show eval env (mkSub a b) = eval env a - eval env b
   unfold mkSub; split
   · rename_i h; simp [eval_of_isLit env b 0 h]
-  · simp [TOp.sem]
+  · rw [eval_mkSum]
+    simp only [List.map, List.foldr, eval_mkNeg, UInt32.add_zero]
+    generalize eval env a = x; generalize eval env b = y; bv_decide
 
 theorem eval_mul (a b : Tm) : eval env (Dom.mul a b) = Dom.mul (eval env a) (eval env b) := by
   show eval env (mkMul a b) = mulLo (eval env a) (eval env b)
@@ -708,11 +771,105 @@ theorem eval_lshr (x a : Tm) : eval env (mkLshr x a) = eval env x >>> (eval env 
     · simp [TOp.sem, eval_of_litVal env a v hv]
   · simp [TOp.sem]
 
+theorem condOf_nz : ∀ (n : Nat) (c : Tm), (eval env (condOf n c) != 0) = (eval env c != 0)
+  | 0, c => rfl
+  | n + 1, c => by
+    unfold condOf
+    split
+    · rename_i h x z1 z2 z3
+      split
+      · rename_i hz
+        simp only [Bool.and_eq_true] at hz
+        obtain ⟨⟨h1, h2⟩, h3⟩ := hz
+        rw [condOf_nz n x, eval_mk]
+        simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, eval_of_isLit env _ _ h1,
+          eval_of_isLit env _ _ h2, eval_of_isLit env _ _ h3]
+        generalize eval env x = v
+        have hj : join64 v 0 = join64 0 0 ↔ v = 0 := by unfold join64; bv_decide
+        by_cases hv : v = 0
+        · subst hv; decide
+        · have h1 : (join64 v 0 != join64 0 0) = true := by simpa [bne_iff_ne] using fun h => hv (hj.mp h)
+          have h2 : (v != 0) = true := by simpa using hv
+          rw [h1, h2]; decide
+      · rfl
+    · rename_i h c0 t e
+      split
+      · rename_i hz
+        simp only [Bool.and_eq_true, Option.any_eq_true] at hz
+        obtain ⟨⟨k, hk, hk0⟩, he⟩ := hz
+        rw [condOf_nz n c0, eval_mk]
+        simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, eval_of_litVal env t k hk,
+          eval_of_isLit env _ _ he]
+        by_cases hc : eval env c0 = 0
+        · simp [hc]
+        · have : (eval env c0 != 0) = true := by simpa using hc
+          simp only [this, ite_true]; simpa using hk0
+      · rfl
+    · rfl
+
+theorem removeOne_sum (x : Tm) : ∀ (ys r : List Tm), removeOne x ys = some r →
+    (ys.map (eval env)).foldr (· + ·) 0 = eval env x + (r.map (eval env)).foldr (· + ·) 0
+  | [], r, h => by simp [removeOne] at h
+  | y :: ys, r, h => by
+    unfold removeOne at h
+    split at h
+    · rename_i hx; subst hx; simp only [Option.some.injEq] at h; subst h; simp
+    · simp only [Option.map_eq_some_iff] at h
+      obtain ⟨r', h', rfl⟩ := h
+      rw [List.map_cons, List.foldr_cons, removeOne_sum x ys r' h', List.map_cons, List.foldr_cons]
+      generalize eval env x = a; generalize eval env y = b; generalize List.foldr _ _ _ = c
+      bv_decide
+
+theorem splitCommon_sum : ∀ (xs ys : List Tm),
+    (xs.map (eval env)).foldr (· + ·) 0 = ((splitCommon xs ys).1.map (eval env)).foldr (· + ·) 0
+        + ((splitCommon xs ys).2.1.map (eval env)).foldr (· + ·) 0 ∧
+    (ys.map (eval env)).foldr (· + ·) 0 = ((splitCommon xs ys).1.map (eval env)).foldr (· + ·) 0
+        + ((splitCommon xs ys).2.2.map (eval env)).foldr (· + ·) 0
+  | [], ys => by simp [splitCommon]
+  | x :: xs, ys => by
+    unfold splitCommon
+    split
+    · rename_i ys' h
+      obtain ⟨h1, h2⟩ := splitCommon_sum xs ys'
+      simp only [List.map_cons, List.foldr_cons]
+      rw [removeOne_sum env x ys ys' h, h1, h2]
+      refine ⟨?_, ?_⟩ <;>
+      · generalize eval env x = a; generalize List.foldr _ _ _ = b; generalize List.foldr _ _ _ = c
+        try generalize List.foldr _ _ _ = d
+        bv_decide
+    · obtain ⟨h1, h2⟩ := splitCommon_sum xs ys
+      simp only [List.map_cons, List.foldr_cons]
+      rw [h1, h2]
+      refine ⟨?_, rfl⟩
+      generalize eval env x = a; generalize List.foldr _ _ _ = b; generalize List.foldr _ _ _ = c
+      bv_decide
+
 theorem eval_ite (c a b : Tm) : eval env (Dom.ite c a b) = Dom.ite (eval env c) (eval env a) (eval env b) := by
   show eval env (mkIte c a b) = if w2b (eval env c) then eval env a else eval env b
-  unfold mkIte; split
-  · rename_i v hv; rw [eval_of_litVal env c v hv]; by_cases h : v = 0 <;> simp [h, w2b]
-  · simp [TOp.sem, w2b]
+  have hw : w2b (eval env c) = (eval env (condOf 8 c) != 0) := by rw [condOf_nz]; rfl
+  rw [hw]; unfold mkIte
+  generalize condOf 8 c = d
+  cases hv : d.litVal? with
+  | some v => simp only [hv]; rw [eval_of_litVal env d v hv]; by_cases h : v = 0 <;> simp [h]
+  | none =>
+    simp only [hv]
+    by_cases hab : a = b
+    · subst hab; simp
+    · simp only [hab, ite_false]
+      split
+      · simp [TOp.sem]
+      · obtain ⟨h1, h2⟩ := splitCommon_sum env (addends a) (addends b)
+        rw [sum_addends] at h1 h2
+        rw [eval_mkSum]
+        simp only [List.map, eval_fold, TOp.sem, List.getD_cons_zero, List.getD_cons_succ,
+          eval_mkSum]
+        rw [h1, h2]
+        generalize (eval env d != 0) = q
+        rw [List.foldr_cons]
+        generalize List.foldr (fun x1 x2 => x1 + x2) 0 (List.map (eval env) (splitCommon a.addends b.addends).fst) = cs
+        generalize List.foldr (fun x1 x2 => x1 + x2) 0 (List.map (eval env) (splitCommon a.addends b.addends).snd.fst) = x
+        generalize List.foldr (fun x1 x2 => x1 + x2) 0 (List.map (eval env) (splitCommon a.addends b.addends).snd.snd) = y
+        cases q <;> simp [UInt32.add_comm]
 
 theorem eval_carry (a b : Tm) : eval env (Dom.carry a b) = Dom.carry (eval env a) (eval env b) := by
   show eval env (mkCarry a b) = b2w (addCo (eval env a) (eval env b)).2
@@ -834,7 +991,14 @@ theorem eval_subc (a b c : Tm) : eval env (Dom.subc a b c) = Dom.subc (eval env 
     simp only [Dom.sub] at this
     show eval env (mkSub a b) = _
     rw [this, h0]; simp [subCi, w2b]
-  · simp [TOp.sem, subCi, w2b]
+  · split
+    · simp [TOp.sem, subCi, w2b]
+    · have := eval_sub env a b
+      simp only [Dom.sub] at this
+      rw [eval_fold]
+      simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, eval_lit, subCi, w2b]
+      show (eval env (mkSub a b)) - 0 - _ = _
+      rw [this]; simp
 
 theorem eval_borrowc (a b c : Tm) : eval env (Dom.borrowc a b c) = Dom.borrowc (eval env a) (eval env b) (eval env c) := by
   show eval env (mkBorrowc a b c) = b2w (subCi (eval env a) (eval env b) (w2b (eval env c))).2
@@ -861,10 +1025,9 @@ theorem eval_mkNe64' (a0 a1 b0 b1 : Tm) :
 theorem ne64_sel (c : UInt32) (h : c = 0 ∨ c = 1) :
     c = Dom.ne64 (if c != 0 then (1 : UInt32) else 0) 0 0 0 := by
   rcases h with rfl | rfl <;> decide
-theorem eval_ne64 (a0 a1 b0 b1 : Tm) :
-    eval env (Dom.ne64 a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
-  show eval env (mkNe64 a0 a1 b0 b1) = _
-  unfold mkNe64
+theorem eval_mkNe64Z (a0 a1 b0 b1 : Tm) :
+    eval env (mkNe64Z a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
+  unfold mkNe64Z
   split
   · rename_i hz
     simp only [Bool.and_eq_true] at hz
@@ -882,6 +1045,14 @@ theorem eval_ne64 (a0 a1 b0 b1 : Tm) :
       · exact eval_mkNe64' env _ _ _ _
     · exact eval_mkNe64' env _ _ _ _
   · exact eval_mkNe64' env _ _ _ _
+theorem ne64_symm (a0 a1 b0 b1 : UInt32) : Dom.ne64 b0 b1 a0 a1 = Dom.ne64 a0 a1 b0 b1 := by
+  simp [Dom.ne64, bne_comm]
+theorem eval_ne64 (a0 a1 b0 b1 : Tm) :
+    eval env (Dom.ne64 a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
+  show eval env (mkNe64 a0 a1 b0 b1) = _
+  unfold mkNe64; split
+  · rw [eval_mkNe64Z, ne64_symm]
+  · exact eval_mkNe64Z env _ _ _ _
 theorem eval_nez64 (a b : Tm) : eval env (Dom.nez64 a b) = Dom.nez64 (eval env a) (eval env b) := by
   show eval env (mkNez64 a b) = _; simp [mkNez64, TOp.sem, Dom.nez64]
 theorem eval_pack (bs : List Tm) : eval env (Dom.pack bs) = Dom.pack (bs.map (eval env)) := by

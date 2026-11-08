@@ -276,8 +276,6 @@ def residualModule (modName : String) (tag : String) (graphsNote : String) (rs :
 def blockOf (graph : String) : Option Obend.Hardware.ArrayKernel.Program :=
   (Obend.Hardware.SquareGraphs.blockGraphs.find? (·.1 == graph)).map fun x => Obend.Hardware.Gpu.Ntt.nttBlockProgram x.2
 
-def ldssOf (isa : String) : List Nat := (parseDumpLds isa).toList.map (· / 4)
-
 def blockNeeded (p : Obend.Hardware.ArrayKernel.Program) (isa : String) (progs : List Program) : Option (List Tm.Residual) :=
   (checkProgram (Block.blockWords p) (layoutMem (Block.blockWords p) (Obend.Hardware.Gpu.BlockEmit.constWords p) [])
     (Block.blockSpecs p (ldssOf isa)) progs {} {}).map (·.toList)
@@ -307,7 +305,10 @@ def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
           | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
         let .ok tg := c.build ()
           | IO.eprintln s!"[FAIL] {graph}: its source does not type"; return 1
-        pure (neededResiduals (Obend.Hardware.Gpu.lowerArrayToGpu tg.graph) progs)
+        let p := Obend.Hardware.Gpu.lowerArrayToGpu tg.graph
+        let .ok sched := Obend.Hardware.Gpu.ArrayEmit.compile p
+          | IO.eprintln s!"[FAIL] {graph}: the schedule does not compile"; return 1
+        pure (Schedule.neededSchedule p sched (ldssOf isa) progs)
     match needed with
     | some rs =>
       let fresh := rs.filter (!seen.contains ·)
@@ -318,10 +319,13 @@ def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
   IO.print (residualModule modName tag (", ".intercalate names) all.toList)
   return 0
 
-/-- Why the certificate refuses decoded programs (diagnostic; the check itself is `certify`). -/
-def whyRefused (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : String :=
-  match neededResiduals p progs with
-  | none => explainCert p.words (layoutOf p) (p.stages.map (gpuSpec p p.consts.toArray p.tables.toArray)) progs
+/-- Why the certificate refuses decoded programs (diagnostic; the check itself is `certifySchedule`). -/
+def whyRefused (p : Obend.Hardware.Gpu.GpuProgram) (sched : Obend.Hardware.Gpu.ArrayEmit.Schedule) (isa : String)
+    (progs : List Program) : String :=
+  let acts := sched.actions.toList
+  match Schedule.neededSchedule p sched (ldssOf isa) progs with
+  | none => explainCert sched.words (layoutMem sched.words p.consts (Obend.Hardware.Gpu.ArrayEmit.scheduleTables p acts))
+      (Schedule.scheduleSpecs p sched.words acts (ldssOf isa)) progs
   | some rs => missingWhy rs
 
 /-- The gate's certificate stage: `certifyNamed`, the function every pin runs, on one dump; with `--flip`,
@@ -375,19 +379,21 @@ def cmdCert (graph : String) (isaPath : String) (flip : Option String) : IO UInt
   let g := tg.graph
   let p := Obend.Hardware.Gpu.lowerArrayToGpu g
   let isa ← IO.FS.readFile isaPath
+  let .ok sched := Obend.Hardware.Gpu.ArrayEmit.compile p
+    | IO.eprintln s!"[FAIL] {graph}: the schedule does not compile"; return 1
   match flip with
   | none =>
     let t0 ← IO.monoMsNow
     let ok := certifyNamed graph isa
     let t1 ← IO.monoMsNow
     if ok then
-      IO.println s!"{graph}: certified, {p.stages.length} dispatches, check {t1 - t0} ms"
+      IO.println s!"{graph}: certified, {sched.actions.size} actions, {(ldssOf isa).length} dispatches, check {t1 - t0} ms"
       return 0
     let why := if !g.wf then "the graph is not well formed"
       else if !checkWaitcntDump isa then "a load is not waited for (obend-rdna2 waitcnt)"
       else match progsOf isa with
         | none => "a stage does not decode"
-        | some progs => whyRefused p progs
+        | some progs => whyRefused p sched isa progs
     IO.eprintln s!"[FAIL] {graph}: refused: {why}"
     return 1
   | some f =>
@@ -401,9 +407,9 @@ def cmdCert (graph : String) (isaPath : String) (flip : Option String) : IO UInt
       match dumps.toList.mapM (fun ws => (decodeProgram (ws.flatMap id)).toOption) with
       | none => IO.println s!"{graph}: planted flip {f} refused: a stage no longer decodes"; return 0
       | some progs =>
-        if certify p progs Residuals.all then
+        if Schedule.certifySchedule p sched (ldssOf isa) progs Residuals.all then
           IO.eprintln s!"[FAIL] {graph}: planted flip {f} certified"; return 1
-        IO.println s!"{graph}: planted flip {f} refused: {whyRefused p progs}"
+        IO.println s!"{graph}: planted flip {f} refused: {whyRefused p sched isa progs}"
         return 0
 
 def main (args : List String) : IO UInt32 := do

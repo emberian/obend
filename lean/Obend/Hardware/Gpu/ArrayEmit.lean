@@ -134,6 +134,16 @@ def compile (p : GpuProgram) : Except String Schedule := do
   let actions ← compileStages p p.stages.zipIdx
   return ⟨requiredWords p actions,actions.toArray⟩
 
+/-- The index buffer after an action: a collective's descriptor tables are appended after
+everything before it (its `indexBase` is the length before). -/
+def actionTables (tables : List Nat) : Action → List Nat
+  | .elementwise _ _ => tables
+  | .collective block => tables ++ (BlockEmit.indexTables block).flatMap (·.toList)
+
+/-- The index buffer the host uploads for a schedule. -/
+def scheduleTables (p : GpuProgram) (actions : List Action) : List Nat :=
+  actions.foldl actionTables p.tables
+
 /-- Text generation consumes precisely the expanded semantic action list. -/
 def schedule (name : String) (p : GpuProgram) (plant : Plant := .none) : Except String Artifact := do
   let compiled ← compile p
@@ -145,11 +155,11 @@ def schedule (name : String) (p : GpuProgram) (plant : Plant := .none) : Except 
       shaders := shaders.push ⟨s.threads,emitStageWgsl plant name k p.stages.length s⟩
     | .collective block =>
       let indexBase := tables.length
-      tables := tables ++ (BlockEmit.indexTables block).flatMap (·.toList)
+      tables := actionTables tables action
       for d in block.dispatches do
         shaders := shaders.push ⟨d.groups*workgroupSize,
           BlockEmit.emitDispatch plant name block d indexBase⟩
-  return ⟨compiled.words,tables,shaders⟩
+  return ⟨compiled.words,scheduleTables p compiled.actions.toList,shaders⟩
 
 def planJson (name : String) (p : GpuProgram) (a : Artifact) : String :=
   let nums (xs : List Nat) := String.intercalate "," (xs.map toString)

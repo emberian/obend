@@ -4,16 +4,17 @@
 The certificate of rung G2, for any stage that says what it computes (`Spec`): its thread count, its LDS,
 the table of the words it writes as terms over the dispatch's start (`Spec.table`) and its meaning on the
 whole state (`Spec.den`); `Spec.Sound` (in `CertSound`) is the promise that the table is the meaning. A
-plan's stage (`gpuSpec`) and a block dispatch (`Block.blockSpec`) are the two instances. `certify p progs rs` runs every wave of every dispatch of the decoded dumps
-`progs` symbolically (`Sym`): memory at the start of a dispatch is a variable per dword of the wire
-buffer, except dwords an earlier dispatch is known to have written as a constant (the constants the
-fused kernels read), and the layout's constants elsewhere (`Host`). Every dword a wave stores must lie
-in the wire buffer, in a word some kernel of the dispatch owns, be stored once, and equal that kernel's
-value (`Lower.pKernel`) at that element up to a residual (`Equiv.residual`), which must be one of `rs`; every word a kernel owns must be stored. `certify_sound` then says: if
-`certify` accepts and every residual in `rs` holds, then for every wire buffer the dumped programs, run
-on the model as the host dispatches them, end with exactly what `runStages` (`Obend.Hardware.Gpu`)
-says the plan computes, every word of the buffer. `certified_outputs` composes that with
-`lowerArrayToGpu_sound`: the model's outputs from the machine code are `evalGraph`'s, with no vectors.
+plan's elementwise stage (`Schedule.actionSpecs`, its table `gpuTableUpTo`) and a block dispatch
+(`Block.blockSpec`) are the two instances. `checkProgram` runs every wave of every dispatch of the decoded
+dumps symbolically (`Sym`): memory at the start of a dispatch is a variable per dword of the wire buffer,
+except dwords an earlier dispatch is known to have written as a constant, and the layout's constants
+elsewhere (`Host`). Every dword a wave stores must lie in the wire buffer, in a word the stage's table
+specifies, be stored once, and equal the table's term up to a residual (`Equiv.residual`), which the caller
+requires to be in its proved library; every word of the table must be stored. `checkProgram_sound` then
+says the model run of the dumps succeeds and leaves the wire buffer as the stages' meanings compose.
+`Schedule.certifySchedule_sound` is that for a graph's emitted schedule and `Certified.certifyDump_sound`
+composes it with the emitter's correctness and `lowerArrayToGpu_sound`: the model's outputs from the
+machine code are `evalGraph`'s, with no vectors.
 
 The certificate is checked by running `certify` (compiled, `native_decide`) and by proving each residual
 with `bv_decide` in a generated module: compiled trust, counted by the census, checked once per artifact.
@@ -42,7 +43,6 @@ abbrev Known := Std.HashMap UInt64 UInt32
 
 def inW (words : Nat) (a : UInt64) : Bool := wDw ≤ a && a < wDw + UInt64.ofNat (2 * words)
 
-def layoutOf (p : GpuProgram) : Memory := layoutMem p.words p.consts p.tables
 
 /-- Memory at the start of a dispatch: the wire buffer's dwords (a variable, or the constant an earlier
 dispatch stored), nothing in the LDS regions, and the layout `lay` elsewhere. -/
@@ -165,24 +165,5 @@ def gpuTableUpTo (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (rd : Nat
     match stage.kernels.find? (·.owns n) with
     | none => some T
     | some k => (kvOf cs ix rd kc k (n - k.dstBase)).map (T.insert n)
-
-def gpuSpec (p : GpuProgram) (cs : Array Word) (ix : Array Nat) (stage : GpuStage) : Spec (Nat → Word) where
-  threads := stage.threads
-  lds := 0
-  table rd := gpuTableUpTo cs ix stage rd (foldCache rd stage) p.words
-  den E := runStage p.consts p.tables E stage
-
-/-- The certificate: every dispatch checks, and every residual it needs is one of `rs`. -/
-def certify (p : GpuProgram) (progs : List Program) (rs : List Residual) : Bool :=
-  -- the wire buffer is small enough that no dword address wraps, and every kernel writes inside it
-  p.words < 2 ^ 29 &&
-  p.stages.all (·.kernels.all fun k => k.dstBase + k.count ≤ p.words) &&
-  match checkProgram p.words (layoutOf p) (p.stages.map (gpuSpec p p.consts.toArray p.tables.toArray)) progs {} {} with
-  | some need => need.toList.all rs.contains
-  | none => false
-
-/-- The residuals a program needs (for the generator of the module that proves them). -/
-def neededResiduals (p : GpuProgram) (progs : List Program) : Option (List Residual) :=
-  (checkProgram p.words (layoutOf p) (p.stages.map (gpuSpec p p.consts.toArray p.tables.toArray)) progs {} {}).map (·.toList)
 
 end Obend.Hardware.Gpu.Rdna2

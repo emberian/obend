@@ -728,7 +728,7 @@ inductive InstOp where
   | v_cmp_lt_u32 | v_cmp_eq_i32 | v_cmp_ne_i32 | v_max_u32 | v_min_u32 | v_sub_nc_u32 | v_lshrrev_b32
   | v_subrev_co_ci_u32 | v_cmpx_ne_i32 | v_lshl_or_b32 | v_add_lshl_u32 | v_mul_u32_u24
   | v_cmpx_eq_i32 | v_cmpx_le_u32
-  | s_add_u32 | s_sub_i32 | s_xor_b32 | s_max_u32 | s_lshl_b32 | s_lshl2_add_u32 | s_lshl3_add_u32 | s_bfm_b32
+  | s_add_u32 | s_sub_i32 | s_xor_b32 | s_max_u32 | s_lshl_b32 | s_lshl1_add_u32 | s_lshl2_add_u32 | s_lshl3_add_u32 | s_bfm_b32
   | s_cselect_b64 | s_cmp_eq_i32 | s_cmp_lt_u32 | s_cmpk_lt_u32 | s_branch | s_cbranch_scc0 | s_nop
   | s_waitcnt_vscnt | v_mbcnt_lo_u32_b32 | v_mbcnt_hi_u32_b32 | ds_read_b64 | ds_write_b64 | ds_write_b128
   | s_addc_u32 | s_or_b32 | s_mul_i32 | s_mul_hi_u32 | s_bfm_b64 | s_cmp_lg_i32 | s_cmp_ge_u32 | s_getpc_b64
@@ -762,7 +762,7 @@ def instOp (name : String) : InstOp :=
   | "V_CMPX_NE_I32" => .v_cmpx_ne_i32 | "V_LSHL_OR_B32" => .v_lshl_or_b32 | "V_ADD_LSHL_U32" => .v_add_lshl_u32
   | "V_MUL_U32_U24" => .v_mul_u32_u24 | "V_CMPX_EQ_I32" => .v_cmpx_eq_i32 | "V_CMPX_LE_U32" => .v_cmpx_le_u32
   | "S_ADD_U32" => .s_add_u32 | "S_SUB_I32" => .s_sub_i32 | "S_XOR_B32" => .s_xor_b32 | "S_MAX_U32" => .s_max_u32
-  | "S_LSHL_B32" => .s_lshl_b32 | "S_LSHL2_ADD_U32" => .s_lshl2_add_u32 | "S_LSHL3_ADD_U32" => .s_lshl3_add_u32
+  | "S_LSHL_B32" => .s_lshl_b32 | "S_LSHL1_ADD_U32" => .s_lshl1_add_u32 | "S_LSHL2_ADD_U32" => .s_lshl2_add_u32 | "S_LSHL3_ADD_U32" => .s_lshl3_add_u32
   | "S_BFM_B32" => .s_bfm_b32 | "S_CSELECT_B64" => .s_cselect_b64 | "S_CMP_EQ_I32" => .s_cmp_eq_i32
   | "S_CMP_LT_U32" => .s_cmp_lt_u32 | "S_CMPK_LT_U32" => .s_cmpk_lt_u32 | "S_BRANCH" => .s_branch
   | "S_CBRANCH_SCC0" => .s_cbranch_scc0 | "S_NOP" => .s_nop | "S_WAITCNT_VSCNT" => .s_waitcnt_vscnt
@@ -898,11 +898,11 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   | .s_lshl_b32 => s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
       "S_LSHL_B32: an operand code is not modelled" fun ab =>
     sop32 s (i.field "SDST") (Dom.shl ab.1 ab.2) (Dom.nez64 (Dom.shl ab.1 ab.2) (Dom.lit 0))
-  -- Manual 12.1 SOP2 S_LSHL{2,3}_ADD_U32: `D = (S0 << N) + S1; SCC = ((S0 << N) + S1) >= 0x100000000ULL`,
+  -- Manual 12.1 SOP2 S_LSHL{1,2,3}_ADD_U32: `D = (S0 << N) + S1; SCC = ((S0 << N) + S1) >= 0x100000000ULL`,
   -- read as the pseudo-code's 64-bit comparison: a bit shifted out of S0, or the add's carry. No Vega twin;
   -- no dump reads this SCC.
-  | .s_lshl2_add_u32 | .s_lshl3_add_u32 =>
-    let n : UInt32 := if instOp i.name == .s_lshl2_add_u32 then 2 else 3
+  | .s_lshl1_add_u32 | .s_lshl2_add_u32 | .s_lshl3_add_u32 =>
+    let n : UInt32 := if instOp i.name == .s_lshl1_add_u32 then 1 else if instOp i.name == .s_lshl2_add_u32 then 2 else 3
     s.withSome ((ssrc i s 0).bind fun a => (ssrc i s 1).map fun b => (a, b))
       s!"{i.name}: an operand code is not modelled" fun ab =>
     let sh := Dom.shl ab.1 (Dom.lit n)

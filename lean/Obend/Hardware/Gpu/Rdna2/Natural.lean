@@ -836,7 +836,7 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
     exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by
       rw [show ∀ p : V₁ × V₁, h.f p.1 = (Prod.map h.f h.f p).1 from fun _ => rfl, h.lshr64, h.band, h.lit, h.lit,
         (hs src).1, (hs src).2.1]) hres
-  case s_add_u32 | s_sub_i32 | s_xor_b32 | s_max_u32 | s_lshl_b32 | s_lshl2_add_u32 | s_lshl3_add_u32 =>
+  case s_add_u32 | s_sub_i32 | s_xor_b32 | s_max_u32 | s_lshl_b32 | s_lshl1_add_u32 | s_lshl2_add_u32 | s_lshl3_add_u32 =>
     refine withSome_hom h hm (φ := fun ab => (h.f ab.1, h.f ab.2)) ?_ s _ _ _ ?_ hres
     · exact ORel.bind (ssrc_rel h hm R hR i s 0) fun a => ORel.map (ssrc_rel h hm R hR i s 1) fun b => rfl
     · intro ab hab
