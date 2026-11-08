@@ -58,7 +58,7 @@ public import Obend.Vault.Log
 public import Obend.Vault.Json
 public import Obend.Ledger.Commit
 public import Obend.Vault.Form
-public import Obend.Vault.FormCheck
+public import Obend.Vault.FormCheckCache
 public import Obend.Vault.Transport
 public import Obend.Vault.Retention
 public import Obend.Vault.Merge
