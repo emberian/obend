@@ -267,10 +267,10 @@ structure GWave (V M : Type) where
 
 variable {V M : Type} [Dom V] [MemDom M V]
 
-def GWave.init (mem : M) : GWave V M :=
+def GWave.init (mem : M) (ldsBase : UInt64) (ldsDwords : Nat) : GWave V M :=
   { sgpr := Array.replicate sgprCount (Dom.lit 0), exec := 0xFFFFFFFFFFFFFFFF, scc := Dom.lit 0,
     m0 := Dom.lit 0, vgpr := Array.replicate (vgprCount * lanes) (Dom.lit 0), pc := 0, mem := mem,
-    halted := false, err := none }
+    halted := false, err := none, ldsBase := ldsBase, ldsDwords := ldsDwords }
 
 def GWave.fail (s : GWave V M) (msg : String) : GWave V M :=
   if s.err.isSome then s else { s with err := some s!"pc {s.pc}: {msg}" }
@@ -1024,9 +1024,10 @@ def run (prog : Program) : Nat → GWave V M → GWave V M
 
 /-- A wave as RADV launches one of our compute dispatches (manual 3.12; `Obend.Hardware.Gpu.Rdna2.Check`
 cites the host side): `s2` the descriptor set's low address `setLo`, `s3` the workgroup id, `v0` the
-lane, EXEC all ones, everything else zero. -/
-def initWave (mem : M) (setLo : UInt32) (g : Nat) : GWave V M :=
-  let s := writeSgpr (writeSgpr (GWave.init mem) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g))
+lane, EXEC all ones, everything else zero; the workgroup's LDS is the `ldsDwords` dwords of memory from
+`ldsBase` on (`Host.ldsBaseOf`). -/
+def initWave (mem : M) (setLo : UInt32) (g : Nat) (ldsBase : UInt64) (ldsDwords : Nat) : GWave V M :=
+  let s := writeSgpr (writeSgpr (GWave.init mem ldsBase ldsDwords) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g))
   (List.range lanes).foldl (fun st lane => writeVgpr st 0 lane (Dom.lit (UInt32.ofNat lane))) s
 
 /-- The concrete wave: the model. -/

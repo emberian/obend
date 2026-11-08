@@ -157,8 +157,6 @@ def flatOf (p : Plan) (v : Vector) (i : Nat) : BitVec 64 := Id.run do
 def initialMemory (p : Plan) (v : Vector) : Memory :=
   memOf p.words (p.consts.toList.map (BitVec.ofInt 64)) p.tables.toList (flatOf p v)
 
-/-- The wave of workgroup `g`: `s2` the set's low address, `s3` the group id, `v0` the lane. -/
-def initialWave (mem : Memory) (g : Nat) : WaveState := initWave mem descSetLo g
 
 /-! ## 3. Running -/
 
@@ -178,7 +176,7 @@ def runVector (p : Plan) (progs : Array Program) (data : Array StageData) (lds :
       mem := writeDwords mem (UInt64.ofNat addr) ws
     for g in [0:groups] do
       let ldsDw := lds.getD k 0 / 4
-      let s := run prog fuel { initialWave mem g with ldsBase := ldsBaseOf g, ldsDwords := ldsDw }
+      let s := run prog fuel (initWave mem descSetLo g (ldsBaseOf g) ldsDw : WaveState)
       if let some e := s.err then throw s!"vector {v.index}, stage {k}, workgroup {g}: {e}"
       -- The pool is read-only: a store into it is a fault, refused like any other.
       for (addr, ws) in pool do
@@ -255,7 +253,7 @@ def stateOfRow (regs sgprs vgprs : String) (mem : Memory) : Except String (WaveS
   let some vc := r[1]? | throw "row: no vcc"
   let some sc := r[2]? | throw "row: no scc"
   let pc := match r[3]? with | some p => p.toNat?.getD 0 | none => 0
-  let mut s : WaveState := GWave.init mem
+  let mut s : WaveState := GWave.init mem 0 0
   let vcc := parseHex64 vc
   s := { s with exec := parseHex64 ex, scc := if sc == "1" then 1 else 0, pc := pc }
   s := writeSgpr (writeSgpr s 106 vcc.toUInt32) 107 (vcc >>> 32).toUInt32

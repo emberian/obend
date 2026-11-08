@@ -219,10 +219,10 @@ theorem snd_reflects : Reflects (sndHom (env := env)) (sndMem (env := env) (m0 :
 halts when the symbolic one does, holds `eval env u` wherever the symbolic run's memory holds `u`, and
 holds what `m0` held on every dword the symbolic run did not store. -/
 theorem wave_sound (prog : Program) (n : Nat) (m0 : Memory) (base : UInt64 → Option Tm)
-    (hbase : ∀ a u, base a = some u → m0.get? a = some (u.eval env)) (setLo : UInt32) (g : Nat)
-    (hsym : (run prog n (initWave (⟨{}, base⟩ : SymMem) setLo g : SymWave)).err = none) :
-    let sc := run prog n (initWave m0 setLo g : WaveState)
-    let st := run prog n (initWave (⟨{}, base⟩ : SymMem) setLo g : SymWave)
+    (hbase : ∀ a u, base a = some u → m0.get? a = some (u.eval env)) (setLo : UInt32) (g : Nat) (lb : UInt64) (ln : Nat)
+    (hsym : (run prog n (initWave (⟨{}, base⟩ : SymMem) setLo g lb ln : SymWave)).err = none) :
+    let sc := run prog n (initWave m0 setLo g lb ln : WaveState)
+    let st := run prog n (initWave (⟨{}, base⟩ : SymMem) setLo g lb ln : SymWave)
     sc.err = none ∧ sc.halted = st.halted ∧
       (∀ a u, st.mem.load a = some u → sc.mem.get? a = some (u.eval env)) ∧
       (∀ a, st.mem.stores.get? a = none → sc.mem.get? a = m0.get? a) := by
@@ -230,11 +230,11 @@ theorem wave_sound (prog : Program) (n : Nat) (m0 : Memory) (base : UInt64 → O
     intro a u hu
     simp only [SymMem.load, Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_empty] at hu
     exact hbase a u hu, fun _ _ => rfl⟩
-  let sr : GWave (RV env) (RM env m0) := initWave rm setLo g
+  let sr : GWave (RV env) (RM env m0) := initWave rm setLo g lb ln
   have h2 := run_hom (sndHom (env := env)) (sndMem (env := env) (m0 := m0)) True (fun _ => snd_reflects) prog n sr
     (Or.inr trivial)
-  have hsnd : mapW sndHom sndMem sr = (initWave (⟨{}, base⟩ : SymMem) setLo g : SymWave) := initWave_hom _ _ rm setLo g
-  have hfst : mapW fstHom fstMem sr = (initWave m0 setLo g : WaveState) := initWave_hom _ _ rm setLo g
+  have hsnd : mapW sndHom sndMem sr = (initWave (⟨{}, base⟩ : SymMem) setLo g lb ln : SymWave) := initWave_hom _ _ rm setLo g lb ln
+  have hfst : mapW fstHom fstMem sr = (initWave m0 setLo g lb ln : WaveState) := initWave_hom _ _ rm setLo g lb ln
   rw [hsnd] at h2
   have herr : (run prog n sr).err = none := by
     have := congrArg GWave.err h2; simp only [mapW_err] at this; rw [← this]; exact hsym

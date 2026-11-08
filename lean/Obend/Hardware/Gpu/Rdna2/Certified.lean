@@ -38,7 +38,7 @@ theorem certifyDump_sound (g : ArrayGraph) (isa : String) (h : certifyDump g isa
       ∀ (env : Nat → Vec) (flat : Nat → Word), Good g.lengths env →
         Flat g.lengths (gpuLayout g).base (liveAt (layerGraph (fuseGraph g)) g.outputs) env flat →
         let p := lowerArrayToGpu g
-        ∃ m, runDispatch (progs.zip (p.stages.map GpuStage.threads)) (memOf p.words p.consts p.tables flat) = some m ∧
+        ∃ m, runDispatch (progs.zip (p.stages.map fun s => (s.threads, 0))) (memOf p.words p.consts p.tables flat) = some m ∧
           p.outputs.map (fun w => (List.range (p.wireLen.getD w 0)).map fun e => wordAt m (p.wireBase.getD w 0 + e))
             = evalGraph g env := by
   unfold certifyDump at h

@@ -977,20 +977,21 @@ theorem step_err_none (prog : Program) (s : GWave V₁ M₁) (h0 : (step prog s)
     | none => rfl
     | some e => simp [hs] at hl
 
-theorem init_hom (m : M₁) : mapW h hm (GWave.init m : GWave V₁ M₁) = GWave.init (hm.g m) := by
+theorem init_hom (m : M₁) (lb : UInt64) (ln : Nat) :
+    mapW h hm (GWave.init m lb ln : GWave V₁ M₁) = GWave.init (hm.g m) lb ln := by
   simp [mapW, GWave.init, Array.map_replicate, h.lit]
 
-theorem initWave_hom (m : M₁) (setLo : UInt32) (g : Nat) :
-    mapW h hm (initWave m setLo g : GWave V₁ M₁) = initWave (hm.g m) setLo g := by
+theorem initWave_hom (m : M₁) (setLo : UInt32) (g : Nat) (lb : UInt64) (ln : Nat) :
+    mapW h hm (initWave m setLo g lb ln : GWave V₁ M₁) = initWave (hm.g m) setLo g lb ln := by
   unfold initWave
   simp only
   generalize List.range lanes = ls
-  have base : mapW h hm (writeSgpr (writeSgpr (GWave.init m : GWave V₁ M₁) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g))) =
-      writeSgpr (writeSgpr (GWave.init (hm.g m)) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g)) := by
+  have base : mapW h hm (writeSgpr (writeSgpr (GWave.init m lb ln : GWave V₁ M₁) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g))) =
+      writeSgpr (writeSgpr (GWave.init (hm.g m) lb ln) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g)) := by
     rw [writeSgpr_hom, writeSgpr_hom, init_hom, h.lit, h.lit]
   revert base
-  generalize writeSgpr (writeSgpr (GWave.init m : GWave V₁ M₁) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g)) = s₁
-  generalize writeSgpr (writeSgpr (GWave.init (hm.g m) : GWave V₂ M₂) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g)) = s₂
+  generalize writeSgpr (writeSgpr (GWave.init m lb ln : GWave V₁ M₁) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g)) = s₁
+  generalize writeSgpr (writeSgpr (GWave.init (hm.g m) lb ln : GWave V₂ M₂) 2 (Dom.lit setLo)) 3 (Dom.lit (UInt32.ofNat g)) = s₂
   intro base
   induction ls generalizing s₁ s₂ with
   | nil => simpa using base

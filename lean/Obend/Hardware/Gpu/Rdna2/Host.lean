@@ -77,16 +77,22 @@ def groupsOf (threads : Nat) : Nat := (threads + lanes - 1) / lanes
 binds (an RDNA2 workgroup has at most 64 KiB of LDS, 2^14 dwords). -/
 def ldsBaseOf (g : Nat) : UInt64 := 0x10000000000 + UInt64.ofNat (g * 65536)
 
-/-- The waves of one dispatch, in workgroup order; `none` if one fails or does not halt. -/
-def runWaves (prog : Program) : List Nat → Memory → Option Memory
+/-- The dwords where workgroups' LDS regions lie (`ldsBaseOf g` for `g < 2^24`): no buffer, constant or
+descriptor the host lays out is there. -/
+def inLds (a : UInt64) : Bool := 0x10000000000 ≤ a && a < 0x20000000000
+
+/-- The waves of one dispatch, in workgroup order, each with its workgroup's `lds` dwords of LDS; `none` if
+one fails or does not halt. -/
+def runWaves (prog : Program) (lds : Nat) : List Nat → Memory → Option Memory
   | [], m => some m
   | g :: gs, m =>
-    let s := run prog (fuelOf prog) (initWave m descSetLo g : WaveState)
-    if s.err.isNone && s.halted then runWaves prog gs s.mem else none
+    let s := run prog (fuelOf prog) (initWave m descSetLo g (ldsBaseOf g) lds : WaveState)
+    if s.err.isNone && s.halted then runWaves prog lds gs s.mem else none
 
-/-- The dispatches of a program in order: each stage's program and thread count. -/
-def runDispatch : List (Program × Nat) → Memory → Option Memory
+/-- The dispatches of a program in order: each stage's program, thread count and LDS dwords. -/
+def runDispatch : List (Program × Nat × Nat) → Memory → Option Memory
   | [], m => some m
-  | (prog, threads) :: rest, m => (runWaves prog (List.range (groupsOf threads)) m).bind (runDispatch rest)
+  | (prog, threads, lds) :: rest, m =>
+    (runWaves prog lds (List.range (groupsOf threads)) m).bind (runDispatch rest)
 
 end Obend.Hardware.Gpu.Rdna2

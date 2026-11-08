@@ -136,35 +136,34 @@ def cmdWaitcnt (path : String) (nop : Option String) : IO UInt32 := do
     return 1
 
 /-- Where the certificate check refuses, said in words (a diagnostic run of the same steps). -/
-def explainCert (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : String := Id.run do
-  let lay := layoutOf p
-  let cs := p.consts.toArray
-  let ix := p.tables.toArray
+def explainCert {σ : Type} (words : Nat) (lay : Memory) (specs : List (Spec σ)) (progs : List Program) : String := Id.run do
   let mut known : Known := {}
-  for (stage, k) in p.stages.zipIdx do
+  for (spec, k) in specs.zipIdx do
     let some prog := progs[k]? | return s!"stage {k}: no program"
+    let some T := spec.table (readWord words lay known)
+      | return s!"stage {k}: the specification's table is refused (a value the lowering does not know)"
     let mut acc : Acc := ⟨{}, [], {}⟩
-    for g in List.range (groupsOf stage.threads) do
-      let st := symWave p lay prog known acc.stored g
+    for g in List.range (groupsOf spec.threads) do
+      let st := symWave words lay prog spec.lds known acc.stored g
       if let some e := st.err then return s!"stage {k}, workgroup {g}: the symbolic run refused: {e}"
       unless st.halted do return s!"stage {k}, workgroup {g}: the symbolic run did not halt"
       for (a, t) in st.mem.stores.toList do
+        if inLds a then continue
         if acc.stored.contains a then return s!"stage {k}: dword 0x{String.ofList (Nat.toDigits 16 a.toNat)} stored twice"
-        match storeOk p lay cs ix stage known (foldCache (readWord p lay known) stage) a t with
+        match storeOk words T a t with
         | none =>
           let off := (a - wDw).toNat
           return s!"stage {k}, workgroup {g}: the store to word {off / 2} (dword {off % 2}) is refused: " ++
-            (if !inW p.words a then "outside the wire buffer" else
-             match stage.kernels.find? (·.owns (off / 2)) with
-             | none => "no kernel of the dispatch owns it"
-             | some kk => match pKernel cs ix (readWord p lay known) kk (off / 2 - kk.dstBase) with
-               | none => "the specification shifts by an amount it does not know"
-               | some _ => "the residual exceeds the abstraction budget")
+            (if !inW words a then "outside the wire buffer" else
+             match T[off / 2]? with
+             | none => "the stage does not write that word"
+             | some _ => "the residual exceeds the abstraction budget")
         | some r? =>
           acc := { stored := acc.stored.insert a, updates := (a, t.litVal?) :: acc.updates,
                    needed := match r? with | some r => acc.needed.insert r | none => acc.needed }
-    for a in ownedDwords stage do
-      unless acc.stored.contains a do return s!"stage {k}: owned dword 0x{String.ofList (Nat.toDigits 16 a.toNat)} never stored"
+    for (i, _) in T.toList do
+      unless acc.stored.contains (dwLo i) && acc.stored.contains (dwLo i + 1) do
+        return s!"stage {k}: word {i} of the table never stored"
     known := applyUpdates known acc.updates
   return "accepted"
 
@@ -297,7 +296,7 @@ def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
 /-- Why the certificate refuses decoded programs (diagnostic; the check itself is `certify`). -/
 def whyRefused (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : String :=
   match neededResiduals p progs with
-  | none => explainCert p progs
+  | none => explainCert p.words (layoutOf p) (p.stages.map (gpuSpec p p.consts.toArray p.tables.toArray)) progs
   | some rs =>
     let missing := rs.filter (!Residuals.all.contains ·)
     if missing.isEmpty then "the program bounds (words, kernel ranges)"
