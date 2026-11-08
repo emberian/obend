@@ -118,8 +118,8 @@ the page's laws), so no command overwrites a file the person changed. Every chan
 turn appended to `DIR/.obend/log` before any file is written (`commitTurn`); the world a command
 starts from is the replay of the log, through `DIR/.obend/checkpoint` where it holds (`recoverLog`); a
 torn tail is dropped by name and a turn whose files did not land is redone (`recoverForWrite`). The
-log is appended with a flush and no fsync (Lean's `IO` has none): a stopped process loses nothing it
-appended, a power loss can lose the records the kernel had not written, never more than a tail.
+log is appended with a flush and no fsync (Lean's `IO` has none). Recovery covers process interruption;
+power loss may reorder persisted blocks and selector updates, and is outside this durability guarantee.
 `-C DIR` before or after a command runs it in DIR. A kind page's line `environment: PATH` (PATH
 relative to the vault) names the census's list of the library's names,
 `.lake/build/census/environment.txt` (`lake build Obend.Census`, or `lake env lean
