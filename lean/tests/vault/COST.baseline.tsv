@@ -180,7 +180,7 @@ decisions/LEDGER	3	57	post	20569857	7318741	35001	0	7239172
 decisions/LEDGER	4	76	open,open	22632195	7349111	75010	0	7298116
 decisions/LEDGER	5	93	post	20935593	3649796	32816	0	7297918
 decisions/LEDGER	6	103	-	0	0	0	0	0
-vault/WORKSHOP	1	22	open,capture,abstract,offer,capture,capture,abstract,offer,capture,form,form,form,form	705518	1472674	532	0	429108
+vault/WORKSHOP	1	22	open,capture,abstract,offer,capture,capture,abstract,offer,capture,form,form,form,form	776722	777542	1184	0	500312
 vault/WORKSHOP	2	46	checked,checked	368033	0	29	0	80200
 vault/WORKSHOP	3	64	fill,fill,judge,judge,fork,fork,confirm,confirm	1806342	1583745	249	0	182732
 vault/WORKSHOP	4	93	open,fill,open,fill,reasons	477556	372305	179	0	296952
