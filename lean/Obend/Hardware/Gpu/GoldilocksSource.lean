@@ -46,9 +46,8 @@ def glSub (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
   let diff ← map2 n (.scalar .sub) a b
   map3 n (.scalar .mux) lt wrap diff
 
-/-- `(a * b) mod p` for any 64-bit `a b`: four 32×32 limb products, the 128-bit product `(lo, hi)`, then
-the shift/mask reduction (`goldilocksReduce128Spec`). -/
-def glMul (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
+/-- Four 32×32 limb products and the unchanged 128-bit product assembly. -/
+def glMulWide (n : Nat) (k : GlConsts) (a b : Nat) : BuildM (Nat × Nat) := do
   let aLo ← map2 n .band a k.mask
   let aHi ← map2 n .shr a k.s32
   let bLo ← map2 n .band b k.mask
@@ -72,6 +71,10 @@ def glMul (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
   let hi1 ← map2 n (.scalar .add) p11 p01Hi
   let hi2 ← map2 n (.scalar .add) hi1 p10Hi
   let hi ← map2 n (.scalar .add) hi2 mid32Hi
+  pure (lo,hi)
+
+/-- The unchanged shift/mask special-prime reduction of the assembled product. -/
+def glReduceWide (n : Nat) (k : GlConsts) (lo hi : Nat) : BuildM Nat := do
   let hiLo ← map2 n .band hi k.mask
   let hiHi ← map2 n .shr hi k.s32
   let hiLoSh ← map2 n .shl hiLo k.s32
@@ -79,6 +82,48 @@ def glMul (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
   let loC ← glCanon n k lo
   let t1 ← glAdd n k loC mid
   glSub n k t1 hiHi
+
+/-- The source multiplication is the same instruction sequence, factored at
+its existing wide-product/reduction boundary for compositional proofs. -/
+def glMul (n : Nat) (k : GlConsts) (a b : Nat) : BuildM Nat := do
+  let (lo,hi) ← glMulWide n k a b
+  glReduceWide n k lo hi
+
+/-- Factoring introduces no new instruction, arithmetic, or wire allocation. -/
+theorem glMul_expansion (n : Nat) (k : GlConsts) (a b : Nat) :
+    glMul n k a b = (do
+    let aLo ← map2 n .band a k.mask
+    let aHi ← map2 n .shr a k.s32
+    let bLo ← map2 n .band b k.mask
+    let bHi ← map2 n .shr b k.s32
+    let p00 ← map2 n (.scalar .mul) aLo bLo
+    let p01 ← map2 n (.scalar .mul) aLo bHi
+    let p10 ← map2 n (.scalar .mul) aHi bLo
+    let p11 ← map2 n (.scalar .mul) aHi bHi
+    let p00Hi ← map2 n .shr p00 k.s32
+    let p01Lo ← map2 n .band p01 k.mask
+    let p10Lo ← map2 n .band p10 k.mask
+    let mid32a ← map2 n (.scalar .add) p00Hi p01Lo
+    let mid32 ← map2 n (.scalar .add) mid32a p10Lo
+    let p00Lo ← map2 n .band p00 k.mask
+    let mid32Lo ← map2 n .band mid32 k.mask
+    let mid32LoSh ← map2 n .shl mid32Lo k.s32
+    let lo ← map2 n .bor p00Lo mid32LoSh
+    let p01Hi ← map2 n .shr p01 k.s32
+    let p10Hi ← map2 n .shr p10 k.s32
+    let mid32Hi ← map2 n .shr mid32 k.s32
+    let hi1 ← map2 n (.scalar .add) p11 p01Hi
+    let hi2 ← map2 n (.scalar .add) hi1 p10Hi
+    let hi ← map2 n (.scalar .add) hi2 mid32Hi
+    let hiLo ← map2 n .band hi k.mask
+    let hiHi ← map2 n .shr hi k.s32
+    let hiLoSh ← map2 n .shl hiLo k.s32
+    let mid ← map2 n (.scalar .sub) hiLoSh hiLo
+    let loC ← glCanon n k lo
+    let t1 ← glAdd n k loC mid
+    glSub n k t1 hiHi
+) := by
+  rfl
 
 theorem glCanon_run (st : Build) (env : Nat → Word) (n : Nat) (k : GlConsts) (a : Nat)
     (ha : a < st.lengths.size) (hp : k.p < st.lengths.size) :
