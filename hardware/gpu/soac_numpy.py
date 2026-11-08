@@ -99,7 +99,7 @@ def main():
               "machine": platform.machine(), "platform": platform.platform(), "repeats": args.repeats,
               "cpu_timing_scope": "median compute including allocations and Python dispatch; warm inputs",
               "gpu_timing_scope": "runner submission to completion; excludes shader compilation and transfers",
-              "schedule": "one sequential accumulator per segment; no intra-segment parallelism",
+              "schedule": "emitted GPU plan; dispatch counts recorded per case",
               "cases": {}}
     for name, lengths in CASES.items():
         vectors = []

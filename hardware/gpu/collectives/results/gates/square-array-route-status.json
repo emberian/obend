@@ -1,0 +1,11 @@
+{
+  "gate": "square-array-route",
+  "command": [
+    "bash",
+    "hardware/gpu/square/verify_square.sh",
+    "--graph",
+    "array-route"
+  ],
+  "exit": 0,
+  "seconds": 11.223551750183105
+}

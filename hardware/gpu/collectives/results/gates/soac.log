@@ -1,0 +1,219 @@
+  soac-boundaries: 27 wires (168 words), 26 edges, 26 after fusion, 0 constants, 92 indices, 54 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_soac.ooUjr9/soac-boundaries
+soac-boundaries: 12 vectors, 54 dispatches, 0 disagree, 1.816 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-empty: 27 wires (16 words), 26 edges, 26 after fusion, 0 constants, 16 indices, 10 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_soac.ooUjr9/soac-empty
+soac-empty: 12 vectors, 10 dispatches, 0 disagree, 0.497 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-no-segments: 27 wires (4 words), 26 edges, 26 after fusion, 0 constants, 4 indices, 6 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_soac.ooUjr9/soac-no-segments
+soac-no-segments: 12 vectors, 6 dispatches, 0 disagree, 0.360 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-single-65536: 27 wires (1114120 words), 26 edges, 26 after fusion, 0 constants, 77848 indices, 66 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_soac.ooUjr9/soac-single-65536
+expected.tsv: OK
+plan.json: OK
+stage_0.wgsl: OK
+stage_1.wgsl: OK
+stage_10.wgsl: OK
+stage_11.wgsl: OK
+stage_12.wgsl: OK
+stage_13.wgsl: OK
+stage_14.wgsl: OK
+stage_15.wgsl: OK
+stage_16.wgsl: OK
+stage_17.wgsl: OK
+stage_18.wgsl: OK
+stage_19.wgsl: OK
+stage_2.wgsl: OK
+stage_20.wgsl: OK
+stage_21.wgsl: OK
+stage_22.wgsl: OK
+stage_23.wgsl: OK
+stage_24.wgsl: OK
+stage_25.wgsl: OK
+stage_26.wgsl: OK
+stage_27.wgsl: OK
+stage_28.wgsl: OK
+stage_29.wgsl: OK
+stage_3.wgsl: OK
+stage_30.wgsl: OK
+stage_31.wgsl: OK
+stage_32.wgsl: OK
+stage_33.wgsl: OK
+stage_34.wgsl: OK
+stage_35.wgsl: OK
+stage_36.wgsl: OK
+stage_37.wgsl: OK
+stage_38.wgsl: OK
+stage_39.wgsl: OK
+stage_4.wgsl: OK
+stage_40.wgsl: OK
+stage_41.wgsl: OK
+stage_42.wgsl: OK
+stage_43.wgsl: OK
+stage_44.wgsl: OK
+stage_45.wgsl: OK
+stage_46.wgsl: OK
+stage_47.wgsl: OK
+stage_48.wgsl: OK
+stage_49.wgsl: OK
+stage_5.wgsl: OK
+stage_50.wgsl: OK
+stage_51.wgsl: OK
+stage_52.wgsl: OK
+stage_53.wgsl: OK
+stage_54.wgsl: OK
+stage_55.wgsl: OK
+stage_56.wgsl: OK
+stage_57.wgsl: OK
+stage_58.wgsl: OK
+stage_59.wgsl: OK
+stage_6.wgsl: OK
+stage_60.wgsl: OK
+stage_61.wgsl: OK
+stage_62.wgsl: OK
+stage_63.wgsl: OK
+stage_64.wgsl: OK
+stage_65.wgsl: OK
+stage_7.wgsl: OK
+stage_8.wgsl: OK
+stage_9.wgsl: OK
+soac-single-65536: 2 vectors, 66 dispatches, 0 disagree, 9.506 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-segments-64x1024: 27 wires (1114372 words), 26 edges, 26 after fusion, 0 constants, 78860 indices, 66 dispatches (1,24,1 kernels), 2 vectors -> /tmp/verify_soac.ooUjr9/soac-segments-64x1024
+expected.tsv: OK
+plan.json: OK
+stage_0.wgsl: OK
+stage_1.wgsl: OK
+stage_10.wgsl: OK
+stage_11.wgsl: OK
+stage_12.wgsl: OK
+stage_13.wgsl: OK
+stage_14.wgsl: OK
+stage_15.wgsl: OK
+stage_16.wgsl: OK
+stage_17.wgsl: OK
+stage_18.wgsl: OK
+stage_19.wgsl: OK
+stage_2.wgsl: OK
+stage_20.wgsl: OK
+stage_21.wgsl: OK
+stage_22.wgsl: OK
+stage_23.wgsl: OK
+stage_24.wgsl: OK
+stage_25.wgsl: OK
+stage_26.wgsl: OK
+stage_27.wgsl: OK
+stage_28.wgsl: OK
+stage_29.wgsl: OK
+stage_3.wgsl: OK
+stage_30.wgsl: OK
+stage_31.wgsl: OK
+stage_32.wgsl: OK
+stage_33.wgsl: OK
+stage_34.wgsl: OK
+stage_35.wgsl: OK
+stage_36.wgsl: OK
+stage_37.wgsl: OK
+stage_38.wgsl: OK
+stage_39.wgsl: OK
+stage_4.wgsl: OK
+stage_40.wgsl: OK
+stage_41.wgsl: OK
+stage_42.wgsl: OK
+stage_43.wgsl: OK
+stage_44.wgsl: OK
+stage_45.wgsl: OK
+stage_46.wgsl: OK
+stage_47.wgsl: OK
+stage_48.wgsl: OK
+stage_49.wgsl: OK
+stage_5.wgsl: OK
+stage_50.wgsl: OK
+stage_51.wgsl: OK
+stage_52.wgsl: OK
+stage_53.wgsl: OK
+stage_54.wgsl: OK
+stage_55.wgsl: OK
+stage_56.wgsl: OK
+stage_57.wgsl: OK
+stage_58.wgsl: OK
+stage_59.wgsl: OK
+stage_6.wgsl: OK
+stage_60.wgsl: OK
+stage_61.wgsl: OK
+stage_62.wgsl: OK
+stage_63.wgsl: OK
+stage_64.wgsl: OK
+stage_65.wgsl: OK
+stage_7.wgsl: OK
+stage_8.wgsl: OK
+stage_9.wgsl: OK
+soac-segments-64x1024: 2 vectors, 66 dispatches, 0 disagree, 9.245 ms per vector, on AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu
+  soac-boundaries: 27 wires (168 words), 26 edges, 26 after fusion, 0 constants, 92 indices, 54 dispatches (1,24,1 kernels), 12 vectors -> /tmp/verify_soac.ooUjr9/planted
+[PASS] planted reduction/scan addAsSub produced an output mismatch
+{
+  "recorded_at": "2026-11-08T08:05:21.329928+00:00",
+  "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+  "numpy": "2.5.4",
+  "python": "3.12.7",
+  "host": "hbox",
+  "machine": "x86_64",
+  "platform": "Linux-6.11.0-29-generic-x86_64-with-glibc2.40",
+  "repeats": 101,
+  "cpu_timing_scope": "median compute including allocations and Python dispatch; warm inputs",
+  "gpu_timing_scope": "runner submission to completion; excludes shader compilation and transfers",
+  "schedule": "one sequential accumulator per segment; no intra-segment parallelism",
+  "cases": {
+    "soac-boundaries": {
+      "elements": 8,
+      "segments": 7,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 136.171,
+      "numpy_sum_cumsum_us": 2.082,
+      "gpu_full_pipeline_ms": 1.816,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 54,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-empty": {
+      "elements": 0,
+      "segments": 3,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 37.393,
+      "numpy_sum_cumsum_us": 2.205,
+      "gpu_full_pipeline_ms": 0.497,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 10,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-no-segments": {
+      "elements": 0,
+      "segments": 0,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 16.32,
+      "numpy_sum_cumsum_us": 2.277,
+      "gpu_full_pipeline_ms": 0.36,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 6,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-single-65536": {
+      "elements": 65536,
+      "segments": 1,
+      "vectors_checked": 2,
+      "numpy_full_pipeline_us": 2152.034,
+      "numpy_sum_cumsum_us": 107.914,
+      "gpu_full_pipeline_ms": 9.506,
+      "gpu_vectors": 2,
+      "gpu_dispatches": 66,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-segments-64x1024": {
+      "elements": 65536,
+      "segments": 64,
+      "vectors_checked": 2,
+      "numpy_full_pipeline_us": 2164.87,
+      "numpy_sum_cumsum_us": 113.318,
+      "gpu_full_pipeline_ms": 9.245,
+      "gpu_vectors": 2,
+      "gpu_dispatches": 66,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    }
+  }
+}
+[PASS] SOAC arrays: artifacts, independent expected values, device, wrong-answer tooth
