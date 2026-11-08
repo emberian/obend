@@ -1,0 +1,37 @@
+{
+  "schema": "obend-radv-resource-grade-v1",
+  "device": "gfx1031/RADV Mesa 24.2.8",
+  "graph": "cost-lds-pressure",
+  "wave_size": 64,
+  "dispatches": 1,
+  "wire_buffer_bytes": 1024,
+  "code_bytes": 332,
+  "requested_bytes_upper": null,
+  "logical_bytes": null,
+  "isa_sha256": "4429da73a11cad9f7e2dd15e38964c94bf17850af9b6d5de0f96bc1256445805",
+  "stages": [
+    {
+      "stage": 0,
+      "file": "stage_0.wgsl",
+      "threads": 64,
+      "workgroups": 1,
+      "vgprs": 8,
+      "sgprs": 128,
+      "lds_bytes": 32768,
+      "scratch_bytes_per_wave": 0,
+      "code_bytes": 332,
+      "allocated_vgprs": 8,
+      "vgpr_wave_limit": 64,
+      "lds_wave_limit": 1,
+      "mesa_waves_per_simd": 1,
+      "mesa_max_waves": 2,
+      "requested_bytes_upper": null,
+      "traffic_reason": "backward/unknown branch; dynamic loop count required"
+    }
+  ],
+  "limitations": "Compiler-reported allocations are observations. Occupancy is Mesa static estimate, not measured residency or timing. SGPRs do not limit occupancy on gfx10+. Scratch/code size are recorded, not converted into fabricated runtime penalties.",
+  "radv_subgroups_per_simd": 2,
+  "wave_size_evidence": "ACO VCC allocation register class s2",
+  "shader_sha256": "ea6b581d2907379af63addbd8b47442338ed385d9c0fc937d898cbcf4397c5ee",
+  "machine_code_sha256": "6bb4e55b1ad5842ccf0d76bbaf1ab7c865d5aa74fa9f668046a25604ff7ce791"
+}

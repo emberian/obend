@@ -655,63 +655,47 @@ theorem certify_sound (p : GpuProgram) (progs : List Program) (rs : List Residua
 
 /-! ## 10. The graph's outputs -/
 
-open Obend.Hardware.OpenHypergraph in
-theorem foldl_add_init : ∀ (ls : List Nat) (a : Nat), ls.foldl (· + ·) a = a + ls.foldl (· + ·) 0
-  | [], a => by simp
-  | l :: ls, a => by
-    simp only [List.foldl_cons]
-    rw [foldl_add_init ls (a + l), foldl_add_init ls (0 + l)]; omega
+/-- The buffer holds every wire the lowering reads or writes: each live wire's words and each output
+wire's words lie below `words` (checked, so the composition needs nothing of the allocator's proof). -/
+def boundsOk (g : ArrayGraph) : Bool :=
+  let p := lowerArrayToGpu g
+  (liveAt (layerGraph (fuseGraph g)) g.outputs).all (fun w =>
+      decide (w < g.lengths.length → (gpuLayout g).base w + g.lengths.getD w 0 ≤ p.words)) &&
+    p.outputs.all (fun w => decide (p.wireBase.getD w 0 + p.wireLen.getD w 0 ≤ p.words))
 
-open Obend.Hardware.OpenHypergraph in
-theorem sumNatList_cons (l : Nat) (ls : List Nat) : sumNatList (l :: ls) = l + sumNatList ls := by
-  simp only [sumNatList, List.foldl_cons]; rw [foldl_add_init]; omega
-
-open Obend.Hardware.OpenHypergraph in
-theorem base_add_lt : ∀ (ls : List Nat) (w e : Nat), w < ls.length → e < ls.getD w 0 → base ls w + e < sumNatList ls
-  | [], _, _, h, _ => by simp at h
-  | l :: ls, 0, e, _, he => by
-    simp only [base, List.getD_cons_zero] at he ⊢; rw [sumNatList_cons]; omega
-  | l :: ls, w + 1, e, hw, he => by
-    simp only [base, List.getD_cons_succ, List.length_cons] at he hw ⊢
-    have := base_add_lt ls w e (by omega) he
-    rw [sumNatList_cons]; omega
-
-/-- The certificate composed with rung G1: for a well-formed graph whose lowering the certificate accepts,
-for every input `env` and every buffer `flat` that lays it out, the decoded programs run on the model
-succeed, and the output wires read from the final memory are `evalGraph`'s. -/
-theorem certified_outputs (g : ArrayGraph) (hWf : g.wf = true) (progs : List Program) (rs : List Residual)
+/-- The certificate composed with rung G1: for a well-formed graph with a checked layout whose lowering
+the certificate accepts, for every input `env` and every buffer `flat` that lays its live wires out, the
+decoded programs run on the model succeed, and the output wires read from the final memory are
+`evalGraph`'s. -/
+theorem certified_outputs (g : ArrayGraph) (hWf : g.wf = true) (hLayout : layoutOk g = true)
+    (hb : boundsOk g = true) (progs : List Program) (rs : List Residual)
     (hc : certify (lowerArrayToGpu g) progs rs = true) (hrs : ∀ r ∈ rs, r.Holds)
-    (env : Nat → Vec) (flat : Nat → Word) (hGood : Good g.lengths env) (hFlat : Flat g.lengths env flat) :
+    (env : Nat → Vec) (flat : Nat → Word) (hGood : Good g.lengths env)
+    (hFlat : Flat g.lengths (gpuLayout g).base (liveAt (layerGraph (fuseGraph g)) g.outputs) env flat) :
     let p := lowerArrayToGpu g
     ∃ m, runDispatch (progs.zip (p.stages.map GpuStage.threads)) (memOf p.words p.consts p.tables flat) = some m ∧
       p.outputs.map (fun w => (List.range (p.wireLen.getD w 0)).map fun e => wordAt m (p.wireBase.getD w 0 + e))
         = evalGraph g env := by
-  intro p
-  obtain ⟨m, hrun, hw⟩ := certify_sound p progs rs hc hrs flat
+  dsimp only
+  obtain ⟨m, hrun, hw⟩ := certify_sound (lowerArrayToGpu g) progs rs hc hrs flat
   refine ⟨m, hrun, ?_⟩
-  let flatW : Nat → Word := fun j => if j < p.words then flat j else 0
-  have hFlatW : Flat g.lengths env flatW := by
-    intro w e hw' he
-    have hlt := base_add_lt g.lengths w e hw' he
-    simp only [flatW, p, lowerArrayToGpu, hlt, ite_true]
-    exact hFlat w e hw' he
-  rw [← lowerArrayToGpu_sound g hWf env flatW hGood hFlatW]
+  unfold boundsOk at hb
+  simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hb
+  obtain ⟨hlive, hout⟩ := hb
+  let flatW : Nat → Word := fun j => if j < (lowerArrayToGpu g).words then flat j else 0
+  have hFlatW : Flat g.lengths (gpuLayout g).base (liveAt (layerGraph (fuseGraph g)) g.outputs) env flatW := by
+    intro w e hl hw' he
+    have hlt : (gpuLayout g).base w + e < (lowerArrayToGpu g).words := by have := hlive w hl hw'; omega
+    simp only [flatW, hlt, ite_true]
+    exact hFlat w e hl hw' he
+  rw [← lowerArrayToGpu_sound g hWf hLayout env flatW hGood hFlatW]
   unfold runProgram
   apply List.map_congr_left
-  intro w _
+  intro w hwo
   apply List.map_congr_left
   intro e he
   rw [List.mem_range] at he
-  have hwl : w < g.lengths.length := by
-    apply Nat.lt_of_not_le; intro hn
-    simp only [p, lowerArrayToGpu, List.getD_eq_getElem?_getD, List.getElem?_eq_none (by omega : g.lengths.length ≤ w),
-      Option.getD_none] at he
-    omega
-  have hb : p.wireBase.getD w 0 = base g.lengths w := by
-    simp [p, lowerArrayToGpu, List.getD_eq_getElem?_getD, hwl]
-  have hl : p.wireLen.getD w 0 = g.lengths.getD w 0 := rfl
-  rw [hl] at he
-  rw [hb]
-  exact hw _ (base_add_lt g.lengths w e hwl he)
+  have := hout w hwo
+  exact hw _ (by omega)
 
 end Obend.Hardware.Gpu.Rdna2

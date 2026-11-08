@@ -216,58 +216,58 @@ independent, the stages flatten to a permutation of the edges, and the synchrono
 evaluation is the single-pass one (independent edges commute, `stepEdge_comm`). The scalar module's
 greedy `layerHyperEdges` stays there as its own.
 
-`Obend.Hardware.Gpu` lowers the fused, layered graph to one WGSL compute shader per stage: every wire
-has a base in one flat buffer `w` (`base`, a prefix sum; `base_disjoint`), every hyperedge of a stage is a
-kernel whose threads are its elements, a constant buffer `c` holds constants and an index buffer `ix` the
-gather tables, and thread `t` of a stage finds its kernel by the thread ranges laid end to end. A map
-kernel is its program as one `let` per instruction (a source name reads `w` at its base, a scalar constant
-is `c[i] + 0`, a scale `c[i] * x`, every other name a local) and the store of its value.
-`lowerArrayToGpu_sound`: for a well-formed graph, from any flattening of an environment of the declared
-lengths, `runProgram` (the order-free reading of a dispatch: a word's value is the write of the one
-thread that owns it) shows `evalGraph` on every output wire; it composes `fuseGraph_sound`,
-`layerGraph_sound` (membership through the permutation), the per-stage flattening invariant, and an
-instruction-by-instruction simulation of each program kernel (`runKCode_sim`); distinct destinations
-within a stage come from the layering's independence, disjoint word ranges from the layout.
-`lowerHypergraphToGpu_sound` is the scalar corollary. Nothing a stage reads is written in that stage and
-no two threads write one word, so no claim about the device's memory model is made or needed; the
-stages are separate dispatches.
+`Obend.Hardware.Gpu` lowers fused, layered graphs using an Array-backed last-use allocator.
+Dead fused wires receive no storage; disjoint live intervals reuse storage, and an eligible final-use
+map may overwrite its input. `layoutOk` checks the actual allocation, including per-stage read/write
+aliasing. `lowerArrayToGpu_sound` is universal over well-formed graphs with that check accepted and an
+initial representation of live values; its invariant follows liveness through every stage.
+`lowerArrayToGpu_raceFree` includes safe in-place maps. A concatenation uses conditional loads rather
+than eager `select`, so inactive branches cannot race with an in-place writer.
 
-`lean/tools/emitgpu` (`obend-emit-gpu`) writes `gpu/graphs/<graph>/`: `plan.json`, `stage_<k>.wgsl` and
-`expected.tsv` (the model's output wires per vector, signed 64-bit) for sixteen graphs: nine scalar ones
-through `ofScalar` (the golden diamond, three single-op optics, two whole-graph adjoints, every operation
-with wrap-around, a `mux` chain, a 512-input addition tree), an elementwise multiply-accumulate with a
-reversing gather over a thousand elements, the Goldilocks field multiply over 256 elements (the limb
-network of `Obend.Apps.ZkNtt.glMul`, elementwise), and Stockham radix-2 Goldilocks NTTs of 4, 16, 64,
-1024 and 65536 points. The NTT is ec-gpu's `radix_fft` kernel with `deg = 1` (Govindaraju et al. 2008):
-each of the `log₂ n` stages reads the two halves of the previous output as wires of `n/2`, multiplies the
-upper half by `ω_{2Ns}^{j mod Ns}` gathered from one table of the powers of `ω_n`, and gathers the next
-halves from the sum and difference by the Stockham expansion, so there is no bit reversal and the edges
-are a few dozen per stage over whole wires; after fusion each stage is the two field kernels (sum and
-difference, each one thread running the limb network as `let`s), the concatenation and the two gathers,
-and an NTT of `n` points is `3 log₂ n + 1` dispatches. The emitter refuses a graph that fails
-`ArrayGraph.wf` and an NTT whose model disagrees with a recursive radix-2 NTT in `Nat` arithmetic
-(`nttFast`), itself checked against the naive DFT (`nttReference`) up to 4096 points. `gpu/runner`
-(`obend-gpu-run`: Rust, wgpu 27, a standalone crate outside the workspace) runs a plan on a chosen
-adapter, compares, and prints the dispatch time per vector (not gated). `verify_gpu.sh` is the gate:
-bytes (the 65536-point NTT's plan is tens of megabytes, so it is kept as `graphs/ntt-65536.sha256` and
-regenerated, `verify_gpu.sh --digest`), every vector on the device, planted `addAsSub` and `swapMux`
-caught, and with Mesa's RADV the final ISA of every stage extracted to `gpu/isa/<graph>.txt` by
-`isa_extract.py` (one program per stage, its 64-bit stores counted; the compiler merges cases).
+`Obend.Hardware.ArrayKernel` extends the source vocabulary with indexed multi-output maps, device,
+constant and workgroup buffers, register programs, and barrier-separated phases. A phase runs a
+strided loop over logical lanes; every physical lane reaches the uniform workgroup and storage
+barriers. There is no NTT primitive. `Program.check` checks bounds (including u32 intermediate
+arithmetic), initialization, register SSA, unique scatters and device read/write ownership.
+`BlockLower.checkedProgram_sound` proves its separately defined flat-memory target represents the
+source evaluation for every accepted program. Expected values use Array-backed storage, compact
+pending writes and hash-map registers, rather than reevaluating a functional graph on each read.
 
-Passed 2026-11-06 on hbox's RX 6750 XT under RADV (Mesa 24.2.8, the ISA artifact) and under AMDVLK
-2025.Q2.1 (`GPU_ICD=any GPU_ADAPTER="AMD open-source"`), and on the Mac's M2 Max under Metal. Things the
-gates have caught, each a departure between a device and a model that reads correct: Metal's compiler
-refuses an `else if` chain 256 deep (the kernel tests are a flat sequence of disjoint ranges); WGSL's `>>`
-on `i64` is arithmetic where the model's is logical (shifts and the unsigned comparison go through `u64`);
-AMDVLK runs out of memory with 1670 dispatches in one command buffer where RADV and Metal do not (the
-runner submits in chunks of 128; the greedy layering that made the 64-point NTT 1670 dispatches is
-replaced, and it is now 19); and the closure-based evaluator above.
+`Gpu.Workgroup` maps the actual accesses to the existing G4 Vulkan model. Mandatory
+`SourceProtocol.checkProgram` checks arithmetic-free synchronization protocols using HashSets.
+`DispatchProtocol.checkProgram_not_racy` composes every accepted group into a race-free dispatch;
+`checkProgram_read_sequential` derives phase visibility in every well-formed consistent execution.
+These are universal theorems with executable admission hypotheses, not a fixture enumeration.
+G4's initial-zero convention does not model arbitrary host uploads; that remains an explicit boundary.
 
-Not here (G2 and G4 landed below; the RTL path of the same graphs is `gpu/square/`, below): resource
-grading (G5, whose grade the `shaderstats` line of each dump now carries), a layout that skips the wires
-fusion made dead (the buffer is still the source graph's prefix sum, 29M words for the 65536-point NTT),
-fusion of a gather into its elementwise consumer (TVM's injective rule; it would fold the Stockham gathers
-into the field kernels), and radix-4 stages.
+The emitted scalar representation is `vec2<u32>`. `Gpu.Limbs`, `LimbsShift` and
+`LimbsGoldilocks` prove carry, product, shift and Goldilocks reduction refinements for arbitrary limbs.
+The bounded 32×32 widening primitive currently uses Naga/wgpu's SHADER_INT64 syntax; RADV lowers it
+to native `v_mul_lo_u32`/`v_mul_hi_u32`. General emulated 64×64 shader multiplication is removed.
+See [the arithmetic proof boundary](../review/GPU-LIMBS-20261106.md).
+
+`Gpu.Ntt` builds Stockham NTTs in that general source language: radix-4 register butterflies,
+multiple shared-memory phases, balanced uploads, and packed small tiles. The 1,024 / 65,536 / 1,048,576
+point transforms use 3 / 2 / 3 dispatches. Each input vector is canonicalized in registers. The emitter
+checks source evaluation against an independent recursive NTT and, through 1,024 points, a direct DFT.
+That is a mathematical algorithm check, not a universal NTT-construction theorem.
+The old per-layer NTT graph builder and its superseded shader stages are removed.
+
+`verify_gpu.sh` checks regenerated bytes, exact device outputs, planted `addAsSub`, `swapMux` and
+`mulHighZero` faults, then extracts real RADV machine code with resource statistics. The two largest
+NTTs use committed SHA-256 manifests instead of large plans/oracles. `gpu/runner --bench 1024`
+pre-records a timestamped batch, resets input outside each timestamp interval, and checks the final
+output. The [named Plonky3 baseline](gpu/baseline/README.md) reports all three requested sizes,
+CPU thread configurations, device distributions and separate amortized host batch time.
+The [resource model](gpu/cost/README.md) predicts Mesa static occupancy from observed allocations;
+a real LDS-pressure shader changes both reported resources and that prediction. It does not yet
+constitute the full formal G5 grading.
+
+Current integration evidence and open ISA-model instructions are recorded in
+[GPU-KERNELS-20261106](../review/GPU-KERNELS-20261106.md). Earlier RADV/AMDVLK/Metal passes applied
+to the superseded shaders and do not certify this revision. The new workgroup shaders require the
+RDNA2 model lane to add lane-count and shared-memory instructions before the full G2 gate is green.
+The array-to-RTL commuting square below covers ordinary array graphs; no block-NTT-to-RTL theorem is claimed.
 
 ### rung G2: the dumped ISA, read by Lean (`rdna2/`, `isa_check.sh`)
 
@@ -280,7 +280,7 @@ reads a dword stream as GPUOpen's `IsaDecoder` does (mask and identifiers in `Or
 the XML's condition picks the literal/DPP/SDWA variant and its width) and renders the instruction in
 LLVM's syntax. `isa_extract.py` now keeps the machine code RADV prints after each instruction and, with
 `RADV_DEBUG=shaderstats`, the resource line per stage (VGPRs, SGPRs, LDS, scratch, code size: every stage
-of every graph needs few VGPRs and no LDS, the grade rung G5 will read).
+carries VGPR, SGPR and LDS allocations consumed by the empirical cost model).
 
 `Obend.Hardware.Gpu.Rdna2.Semantics` is the wave64 model of the instructions RADV emits for our kernels:
 SGPRs, VCC, EXEC, SCC, M0, the VGPRs per lane, a dword program counter, dword memory and an error field,
@@ -352,8 +352,9 @@ and requires a dump with the first `vmcnt` wait of stage 0 replaced by `s_nop 0`
 `rdna2/waitcnt_plant.py` plants the same `s_nop` in the machine code the card runs, through Mesa's
 shader cache, for the measurement reported in `rdna2/README.md`.
 
-What the model does not do, named: it runs a dispatch's waves one after another, sound for G1's
-programs by `lowerArrayToGpu_sound`'s disjointness and not in general; the memory model is rung G4's (below).
+What the model does not yet do: execute the new shared-memory workgroup kernels. Its sequential-wave
+execution covered the earlier disjoint stage kernels; the workgroup extension must preserve G4's
+scoped communication rules and add the instructions recorded in the current lane report.
 
 ### `gpu/litmus/`: the memory model, measured (rung G4)
 
@@ -381,6 +382,10 @@ The shapes are each thread's whole program with every barrier of the kernel body
 both roles of GPUHarbor's pseudo-code), which forbids the `seq0` class of the workgroup barrier tests as
 well as their weak class; no device showed `seq0` either. `verify_litmus.sh` is the gate (`gpu/litmus/README.md`).
 
+The kernel lane adds checked live layouts, workgroup source programs and an empirical resource model
+(`gpu/cost/`). The formal G5 grading remains open; current evidence is in
+[GPU-KERNELS-20261106](../review/GPU-KERNELS-20261106.md).
+
 ### `gpu/square/`: the same graph through two devices (rung G1s)
 
 `Obend.Hardware.Square` is the square the council asked for, done with external runs: one open hypergraph
@@ -405,7 +410,7 @@ pipelined compiler and `elemOpToRtl` share.
 The theorems. `compileArrayGraphToRtl_sound`: for every well-formed array graph and every input, the
 module's output ports are `evalGraph` from the environment the input ports induce (`inputEnvOf`),
 flattened. `rtl_eq_gpu_array`: the GPU program, run from any buffer that holds that environment at its
-layout (`Flat`), shows the same words. `compileHypergraphToRtl_sound` and `rtl_eq_gpu` are the scalar
+checked layout (`layoutOk`) with the live-entry representation (`Flat`), shows the same words. `compileHypergraphToRtl_sound` and `rtl_eq_gpu` are the scalar
 corollaries, against the scalar single pass `evalHyperEdgesCombBv`. `compileHypergraphToRtlPipelined_sound`
 is the pipelined compiler's whole module (one clock edge per wavefront stage with the inputs held shows the
 layered evaluation, from any register state), and `pipelined_eq_comb` puts it at a third corner. The
@@ -422,7 +427,7 @@ what no other one exercises:
 | `adjoint-square-bilinear` | a `compileGraphAdjoint` graph, wires numbered out of definition order: the single-assignment lowering's reason |
 | `tree512` | size: 511 chained adders, where the LEC's time goes |
 | `glmul-4` | the bit operations of the Goldilocks multiply (ult, and, or, both shifts) as elementwise maps over arrays |
-| `ntt-16` | gathers, concatenation and constant arrays: the Stockham NTT |
+| `array-route` | gathers, concatenation and constant arrays with a shared producer |
 
 The gate, `verify_square.sh`, per graph: the committed `sv/<top>.sv` regenerates byte for byte;
 `obend-emit-sv square-<graph> --expected`, the HDL model's `expected.tsv` from `evalModuleOutputs`, equals
@@ -435,15 +440,18 @@ graphs in `EQY_GRAPHS`); the Verilator harness `obend-emit-sv square-<graph> --t
 trying operators nearest the outputs first) makes the LEC answer sat and Verilator report mismatches. A
 swap the LEC proves equivalent, or cannot decide within its limits (`lec.sh`'s `LEC_ABS_SECS`, set by the
 tooth, bounds the query with multiplication uninterpreted, under which a sat reads only as undecided), is
-skipped and counted. It runs on the Mac (Verilator, Yosys, EQY, z3 and Metal are there; hbox has the card
-and no Verilator or Yosys).
+skipped and counted. Recovery checked all byte/model stages, the full replacement `array-route` fixture,
+and `glmul-4` Verilator simulation on hbox. Yosys and z3 use the distribution
+packages (`YOSYS_BIN=/usr/bin/yosys`). The packaged Verilator wrappers pointed to
+missing executables, so recovery built upstream v5.024 at commit
+`522bead374d6b7b2adb316304126e5361b18bcf1` under `swarm-build make -j2`.
+`VERILATOR_BIN=/home/hbox/obend/kernels-tools/bin/verilator` selects a shim that
+unsets that variable before calling the source-tree frontend; the upstream frontend
+otherwise interprets it as its internal binary. The binaries built successfully;
+the documentation target lacked `help2man`. Earlier square runs used the Mac.
 
-Lengths. The SystemVerilog runs from 33 lines (`muxchain`) to 3673 (`ntt-16`, 16 input and 16 output
-ports); Verilator takes the NTT in a few minutes of compilation. The LEC answers unsat on every module;
-`tree512` takes z3 about an hour on the M2 Max (511 chained 64-bit adders on each side of the miter;
-`LEC_SECS` bounds only the first query, and with no multiply to abstract the second is the same problem
-without a limit), the others seconds to minutes. EQY, SAT against the gate-level netlist, finished on none
-of these in the time given (15 minutes on a graph with one 64-bit multiply, as `hardware/sim`'s `mac2`
-already showed; 55 minutes on `tree512`, whose one output puts all 511 adders in one partition), so it is
-opt-in (`EQY_GRAPHS`) and the LEC is this gate's equivalence step. `glmul-256`, `ntt-64` and larger are not
-in the square: Verilator would take them, the LEC would not.
+The recovery replaced the obsolete per-layer NTT fixture with `array-route`, retaining the
+array-operation coverage on exactly the same source graph for both devices. `glmul-256` and
+larger field arrays are not in the square; the LEC cost grows with their arithmetic.
+The workgroup NTT source is covered by its own lowering/refinement and device gates, not this
+array-RTL theorem. EQY remains opt-in; the LEC is the default equivalence step.

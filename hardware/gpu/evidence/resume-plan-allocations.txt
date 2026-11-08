@@ -1,0 +1,3 @@
+1024 device_words 2048 wireLen [1024, 1024, 256, 256, 1024] constants 1024 dispatches 3
+65536 device_words 131072 wireLen [65536, 65536, 256, 256, 65536] constants 65536 dispatches 2
+1048576 device_words 2097152 wireLen [1048576, 1048576, 256, 256, 1048576] constants 1048576 dispatches 3

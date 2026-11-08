@@ -1,0 +1,3 @@
+    stage 0: 64 threads -> 11 instructions, 1 stores; VGPRs 8, LDS 0
+    stage 0: 64 threads -> 66 instructions, 1 stores; VGPRs 8, LDS 32768
+PASS: real shader LDS 0 -> 32768 bytes; Mesa waves/SIMD 16 -> 1; both exact vectors passed

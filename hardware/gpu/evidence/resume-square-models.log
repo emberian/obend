@@ -1,0 +1,13 @@
+=== allops (sq_allops) ===
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+=== muxchain (sq_muxchain) ===
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+=== adjoint-square-bilinear (sq_adjoint_square_bilinear) ===
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+=== tree512 (sq_tree512) ===
+  [2] HDL model == array model on 6 vectors (expected.tsv byte for byte)
+=== glmul-4 (sq_glmul_4) ===
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+=== array-route (sq_array_route) ===
+  [2] HDL model == array model on 12 vectors (expected.tsv byte for byte)
+[PASS] hardware/gpu/square (stage 2)

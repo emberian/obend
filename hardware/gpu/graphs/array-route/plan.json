@@ -1,0 +1,17 @@
+{
+  "graph": "array-route",
+  "words": 16,
+  "workgroupSize": 64,
+  "wireBase": [0,4,0,4,8],
+  "wireLen": [4,4,4,4,8],
+  "consts": ["11","-3","4294967297","7"],
+  "tables": [3,2,1,0],
+  "inputs": [0],
+  "outputs": [4],
+  "stages": [
+    {"file":"stage_0.wgsl","threads":4},
+    {"file":"stage_1.wgsl","threads":4},
+    {"file":"stage_2.wgsl","threads":4},
+    {"file":"stage_3.wgsl","threads":8}
+  ]
+}

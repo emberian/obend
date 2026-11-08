@@ -1,0 +1,17 @@
+[package]
+name = "obend-p3-baseline"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+p3-dft = { version = "=0.8.0", features = ["parallel"] }
+p3-goldilocks = "=0.8.0"
+p3-field = "=0.8.0"
+rayon = "1.11"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[workspace]

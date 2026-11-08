@@ -1,0 +1,1 @@
+{"graph": "cost-ordinary", "words": 128, "workgroupSize": 64, "wireBase": [0, 64], "wireLen": [64, 64], "consts": [], "tables": [], "inputs": [0], "outputs": [1], "stages": [{"file": "stage_0.wgsl", "threads": 64}]}

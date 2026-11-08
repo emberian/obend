@@ -28,26 +28,27 @@ def progsOf (isa : String) : Option (List Program) :=
 
 /-- The check of one dumped graph. -/
 def certifyDump (g : ArrayGraph) (isa : String) : Bool :=
-  g.wf && checkWaitcntDump isa &&
+  g.wf && layoutOk g && boundsOk g && checkWaitcntDump isa &&
     match progsOf isa with
     | some progs => certify (lowerArrayToGpu g) progs Residuals.all
     | none => false
 
 theorem certifyDump_sound (g : ArrayGraph) (isa : String) (h : certifyDump g isa = true) :
     checkWaitcntDump isa = true ∧ ∃ progs, progsOf isa = some progs ∧
-      ∀ (env : Nat → Vec) (flat : Nat → Word), Good g.lengths env → Flat g.lengths env flat →
+      ∀ (env : Nat → Vec) (flat : Nat → Word), Good g.lengths env →
+        Flat g.lengths (gpuLayout g).base (liveAt (layerGraph (fuseGraph g)) g.outputs) env flat →
         let p := lowerArrayToGpu g
         ∃ m, runDispatch (progs.zip (p.stages.map GpuStage.threads)) (memOf p.words p.consts p.tables flat) = some m ∧
           p.outputs.map (fun w => (List.range (p.wireLen.getD w 0)).map fun e => wordAt m (p.wireBase.getD w 0 + e))
             = evalGraph g env := by
   unfold certifyDump at h
   simp only [Bool.and_eq_true] at h
-  obtain ⟨⟨hwf, hwait⟩, hc⟩ := h
+  obtain ⟨⟨⟨⟨hwf, hlay⟩, hbd⟩, hwait⟩, hc⟩ := h
   refine ⟨hwait, ?_⟩
   split at hc
   · rename_i progs hp
     exact ⟨progs, hp, fun env flat hGood hFlat =>
-      certified_outputs g hwf progs _ hc Residuals.all_hold env flat hGood hFlat⟩
+      certified_outputs g hwf hlay hbd progs _ hc Residuals.all_hold env flat hGood hFlat⟩
   · simp at hc
 
 /-- The check of a graph of `SquareGraphs.graphs` by name (what the pins and the gate run). -/
