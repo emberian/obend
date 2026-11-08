@@ -12,6 +12,15 @@ theorem uploadSchedule_sum (n : Nat) : (uploadSchedule n).sum = Nat.log2 n := by
   unfold uploadSchedule
   exact uploadDegrees_sum _ _ _ (by split <;> decide) (Nat.le_refl _)
 
+theorem uploadSchedule_bounds (n degree : Nat) (hd : degree ∈ uploadSchedule n) :
+    0 < degree ∧ degree ≤ 8 := by
+  unfold uploadSchedule at hd
+  have hm : 0 < (if n ≤ 1024 then 4 else 8) := by split <;> decide
+  have hp := uploadDegrees_positive _ _ _ hm degree hd
+  have hb := uploadDegrees_bounded _ _ _ hm degree hd
+  have hmax : (if n ≤ 1024 then 4 else 8) ≤ 8 := by split <;> decide
+  exact ⟨hp,Nat.le_trans hb hmax⟩
+
 theorem sourceUploads_output (n : Nat) : (sourceUploads n).2 ≤ 1 :=
   buildUploads_output n (uploadSchedule n) 0 0 (by decide)
 
@@ -78,5 +87,11 @@ theorem dispatch_good (p : Program) (d : Dispatch) (mem : Memory)
   induction List.range d.groups generalizing mem with
   | nil => exact hg
   | cons g gs ih => exact ih _ (evalGroup_good p d g mem hg)
+
+theorem output_valid (n i : Nat) (hi : i < n) :
+    Valid (nttBlockProgram n) (sourceUploads n).2 i := by
+  have h := sourceUploads_output n
+  have cases : (sourceUploads n).2 = 0 ∨ (sourceUploads n).2 = 1 := by omega
+  rcases cases with hz | hz <;> simp [Valid,buffer,nttBlockProgram,hz,hi]
 
 end Obend.Hardware.Gpu.Ntt

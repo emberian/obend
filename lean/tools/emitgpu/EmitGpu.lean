@@ -17,9 +17,12 @@ from ec-gpu radix_fft and Govindaraju et al. SC2008. Program.check admits bounds
 SSA closure, initialization and ownership; SourceProtocol.checkProgram checks the
 physical-lane phase protocol against G4. NttSource.compile admits this program through the block-level Core4 source
 fragment. NttSource.source_to_gpu_encoded covers its retained group/lane loops,
-lexical register networks and shared phases via the general lowering. Executable
-block outputs are checked against the independent recursive NTT and small direct
-DFT; these gates are not a universal theorem that this construction is the DFT.
+lexical register networks and shared phases via the general lowering.
+NttCorrect proves the actual source is the DFT for every supported size and input;
+NttSource.source_to_gpu_dft_encoded composes that value theorem with Core4 and the
+admitted GPU lowering. Executable block outputs retain the independent recursive
+NTT regression oracle; the former finite direct-DFT checks have been replaced
+by the universal theorem imported below.
 -/
 import Obend.Hardware.SquareGraphs
 import Obend.Hardware.Gpu.BookImport
@@ -27,7 +30,7 @@ import Obend.Hardware.Gpu.CollectiveImport
 import Obend.Hardware.Gpu.ArrayEmit
 import Obend.Hardware.Gpu.CatgradImport
 import Obend.Hardware.Gpu.Ntt
-import Obend.Hardware.Gpu.NttSource
+import Obend.Hardware.Gpu.NttCorrect
 import Obend.Hardware.ArrayKernel
 import Obend.Hardware.Gpu.BlockEmit
 import Obend.Hardware.Gpu.LayoutChecks
@@ -88,9 +91,6 @@ def writeBlockGraph (name : String) (n : Nat) (dir : System.FilePath) (plant : P
     let fast := (nttFast input.toArray (rootOfUnity n)).toList
     unless (model.getD 0 []).map (·.toNat) == fast do
       throw <| IO.userError s!"{name} vector {v}: block array source disagrees with recursive NTT"
-    if n <= 1024 then
-      unless nttReference input == fast do
-        throw <| IO.userError s!"{name} vector {v}: recursive NTT disagrees with direct DFT"
     lines := lines.push (expectedTsvLine v vals model)
   IO.FS.writeFile (dir / "expected.tsv") (String.intercalate "\n" lines.toList ++ "\n")
   IO.println s!"  {name}: {BlockEmit.spaceSize p .device} device words, {BlockEmit.spaceSize p .shared} shared words, {p.dispatches.length} dispatches -> {dir}"

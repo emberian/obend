@@ -26,7 +26,7 @@ def rootOfUnity2to32 : Nat := powMod 7 ((goldilocksP - 1) / 2 ^ 32) goldilocksP
 def rootOfUnity (n : Nat) : Nat := powMod rootOfUnity2to32 (2 ^ 32 / n) goldilocksP
 
 /-! The NTT source uses the general index-parametric multi-output array language.
-Each upload is ec-gpu's Stockham map. A radix-8 (or radix-4) subnetwork stays in
+Each upload is ec-gpu's Stockham map. A radix-4 (or final radix-2) subnetwork stays in
 one invocation's registers; successive subnetworks exchange arrays in workgroup
 memory. Input/output layout expressions fuse Stockham's transpose into the loads
 and stores. No index tables, global gather intermediates, or NTT shader template.
@@ -243,16 +243,6 @@ def nttBlockProgram (n : Nat) : Obend.Hardware.ArrayKernel.Program :=
       ⟨n, .constant, (twiddlePowers n (rootOfUnity n)).toList⟩],
     inputs := [0], outputs := [(sourceUploads n).2],
     dispatches := (sourceUploads n).1.map fun d => BlockNtt.batchTiles (BlockNtt.tileSize d) d }
-
-/-- The naive DFT over the Goldilocks field, `y_k = Σ_j x_j ω^{jk}`, with a table of the powers of `ω`. -/
-def nttReference (xs : List Nat) : List Nat :=
-  let n := xs.length
-  if n == 0 then [] else
-  let ω := rootOfUnity n
-  let pw : Array Nat := (Array.range n).map fun i => powMod ω i goldilocksP
-  let xa := xs.toArray
-  (List.range n).map fun k =>
-    (List.range n).foldl (fun acc j => (acc + xa[j]! * pw[(j * k) % n]!) % goldilocksP) 0
 
 /-- The recursive radix-2 NTT in `Nat` arithmetic: `y_k = E_k + ω^k O_k`, `y_{k+n/2} = E_k - ω^k O_k`. -/
 partial def nttFast (xs : Array Nat) (ω : Nat) : Array Nat :=
