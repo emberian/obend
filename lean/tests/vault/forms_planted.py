@@ -9,11 +9,14 @@ time; this test asks the walkthrough to catch it at run time too). The mutant's 
 the walkthrough run with it; a mutant whose walkthrough passes is a failure of this test.
 
     python3 tests/vault/forms_planted.py      # from lean/, after `lake build obend`
+    python3 tests/vault/forms_planted.py kept-any   # one mutant
 
 Mutants:
   page-gate   `checkPage` admits every page: the fill may name a page outside the form, or one the
               final viewer may not write (the guessed hidden page lands; so does Dave's read-only fill)
   chain-gate  `resolveChain` takes an amplifying hop as granted (the forged hop lands)
+  kept-any    `classify` (Obend/Vault/FormCheck.lean) keeps every judgment as checked at capture: a
+              judgment under a law changed since is counted kept, never checked now
 """
 import os
 import re
@@ -31,6 +34,11 @@ PAGE_DEF = """  | .page n =>
     else .ok ()"""
 
 CHAIN_DEF = """    | none => .error (.amplifies who g.holder cur.held g.held)"""
+
+KEPT_DEF = """    ⟨x.1, x.2, u, checked.any fun c => c.form == form && c.unit == u⟩"""
+
+# the file each mutant edits
+FILE = {"page-gate": "Form.lean", "chain-gate": "Form.lean", "kept-any": "FormCheck.lean"}
 
 
 def sorry_theorem(src, name):
@@ -57,6 +65,11 @@ def mutate(src, which):
             sys.exit("planted: resolveChain's refusal not found")
         src = src.replace(CHAIN_DEF, "    | none => resolveChain scope (g.viewer scope) g.holder rest")
         return sorry_theorem(src, "resolveChain_attenuates")
+    if which == "kept-any":
+        if KEPT_DEF not in src:
+            sys.exit("planted: classify's membership not found")
+        src = src.replace(KEPT_DEF, "    ⟨x.1, x.2, u, true⟩")
+        return sorry_theorem(src, "kept_typed")
     raise ValueError(which)
 
 
@@ -67,12 +80,12 @@ def clone(dst):
 
 def main():
     failures = 0
-    for which in ["page-gate", "chain-gate"]:
+    for which in sys.argv[1:] or ["page-gate", "chain-gate", "kept-any"]:
         tmp = tempfile.mkdtemp(prefix="obend-forms-planted-")
         lean = os.path.join(tmp, "lean")
         try:
             clone(lean)
-            form = os.path.join(lean, "Obend", "Vault", "Form.lean")
+            form = os.path.join(lean, "Obend", "Vault", FILE[which])
             src = open(form, encoding="utf-8").read()
             open(form, "w", encoding="utf-8").write(mutate(src, which))
             b = subprocess.run(["lake", "build", "obend"], cwd=lean, capture_output=True, text=True)
