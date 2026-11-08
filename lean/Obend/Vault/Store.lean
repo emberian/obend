@@ -1771,9 +1771,29 @@ def writesForIndexed (s : Store) (V : List (String × String)) : List (String ×
   simp only [writesFor, writeOf, writesForIndexed, Index.first_pairs_lookup] <;> rfl
 
 
+def refusedAtIndexed (H : Hash) (res : List Entry) (s : Store) (V : List (String × String)) :
+    List RefusedWrite :=
+  let files := Index.ofList Prod.fst V
+  s.pages.filterMap fun p => ((Index.first files p.name).map Prod.snd).bind fun md =>
+    if some md == p.seen && p.note.isSome then
+      some ⟨p.name, md, pinsOf s.entries res p.name p.id (readAs H res md)⟩
+    else none
+
+@[csimp] theorem refusedAt_eq_indexed : @refusedAt = @refusedAtIndexed := by
+  funext H res s V
+  simp only [refusedAt, refusedAtIndexed, Index.first_pairs_lookup]
+
 /-- The vault after the writes. -/
 def overwrite (V w : List (String × String)) : List (String × String) :=
   V.map fun e => (e.1, (w.lookup e.1).getD e.2)
+
+def overwriteIndexed (V w : List (String × String)) : List (String × String) :=
+  let writes := Index.ofList Prod.fst w
+  V.map fun e => (e.1, ((Index.first writes e.1).map Prod.snd).getD e.2)
+
+@[csimp] theorem overwrite_eq_indexed : @overwrite = @overwriteIndexed := by
+  funext V w
+  simp only [overwrite, overwriteIndexed, Index.first_pairs_lookup]
 
 /-- New pages for the files the store does not have, each with a fresh id. -/
 def freshPages (H : Hash) (s : Store) (names : List String) : List Page :=
@@ -1789,6 +1809,18 @@ def openEntries (pages : List Page) (V : List (String × String)) : List Entry :
     | some md => if some md == p.seen then p.current.map fun G => ⟨p.name, p.id, G, p.history.length - 1⟩
       else some ⟨p.name, p.id, draft md, p.history.length⟩
     | none => p.current.map fun G => ⟨p.name, p.id, G, p.history.length - 1⟩
+
+def openEntriesIndexed (pages : List Page) (V : List (String × String)) : List Entry :=
+  let files := Index.ofList Prod.fst V
+  pages.filterMap fun p =>
+    match (Index.first files p.name).map Prod.snd with
+    | some md => if some md == p.seen then p.current.map fun G => ⟨p.name, p.id, G, p.history.length - 1⟩
+      else some ⟨p.name, p.id, draft md, p.history.length⟩
+    | none => p.current.map fun G => ⟨p.name, p.id, G, p.history.length - 1⟩
+
+@[csimp] theorem openEntries_eq_indexed : @openEntries = @openEntriesIndexed := by
+  funext pages V
+  simp only [openEntries, openEntriesIndexed, Index.first_pairs_lookup]
 
 /-! ### Settling: links that resolve now, and the view redrawn -/
 
@@ -1970,6 +2002,14 @@ structure Opened where
 def freshNames (s : Store) (V : List (String × String)) : List String :=
   (V.filter fun e => !s.pages.any (·.name == e.1)).map (·.1)
 
+def freshNamesIndexed (s : Store) (V : List (String × String)) : List String :=
+  let pages := Index.ofList Page.name s.pages
+  (V.filter fun e => !(Index.first pages e.1).isSome).map Prod.fst
+
+@[csimp] theorem freshNames_eq_indexed : @freshNames = @freshNamesIndexed := by
+  funext s V
+  simp only [freshNames, freshNamesIndexed, Index.first_ofList, List.isSome_find?]
+
 /-- The store an open starts from: a fresh page for every file it has none for. -/
 def withFresh (H : Hash) (s : Store) (V : List (String × String)) : Store :=
   { s with pages := s.pages ++ freshPages H s (freshNames s V) }
@@ -2085,7 +2125,7 @@ carries a tomb's last text REVIVES that tomb under the new name (a rename: same 
 cites of it by other pages still hold); a file returning under a tomb's own name revives it there.
 Pages the store has not written yet (never `seen`) are never deleted here: a page born this open has
 no file to lose. -/
-def forgetMissing (s : Store) (V : List (String × String)) : Forgotten := Id.run do
+def forgetMissingCore (s : Store) (V : List (String × String)) : Forgotten := Id.run do
   let gone := s.pages.filter fun p => p.seen.isSome && (V.lookup p.name).isNone
   let mut kept : List (String × String) := []
   let mut deleted : List Page := []
@@ -2114,6 +2154,56 @@ def forgetMissing (s : Store) (V : List (String × String)) : Forgotten := Id.ru
         renamed := renamed ++ [(t.name, n)]
       | none => pure ()
   return ⟨{ s with pages := pages, tombs := tombs }, deleted.map (·.name), renamed, revived, kept⟩
+
+/-- The deletion, revival and rename semantics. -/
+def forgetMissing (s : Store) (V : List (String × String)) : Forgotten := forgetMissingCore s V
+
+theorem forgetMissing_unchanged (s : Store) (V : List (String × String))
+    (hp : ∀ p ∈ s.pages, (V.lookup p.name).isSome = true)
+    (hv : ∀ e ∈ V, s.pages.any (·.name == e.1) = true) :
+    forgetMissing s V = { store := s } := by
+  have hg : (s.pages.filter fun p => p.seen.isSome && (V.lookup p.name).isNone) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro p hmem
+    have := hp p hmem
+    cases he : V.lookup p.name <;> simp_all
+  have hfilter : s.pages.filter (fun _ => true) = s.pages := by simp
+  simp only [forgetMissing, forgetMissingCore, hg, List.forIn_nil, pure_bind, List.any_nil, Bool.not_false,
+    hfilter, List.append_nil, List.map_nil]
+  rw [Index.forIn_unchanged]
+  · rfl
+  · intro e he
+    simp only [hv e he, ite_true]
+
+theorem forgetMissing_of_names (s : Store) (V : List (String × String))
+    (hn : V.map Prod.fst = s.pages.map Page.name) :
+    forgetMissing s V = { store := s } := by
+  apply forgetMissing_unchanged
+  · intro p hp
+    have hm : p.name ∈ V.map Prod.fst := by
+      rw [hn]
+      exact List.mem_map.mpr ⟨p, hp, rfl⟩
+    rcases List.mem_map.mp hm with ⟨e, he, hn⟩
+    exact List.lookup_isSome_iff.mpr ⟨e, he, by simp [hn]⟩
+  · intro e he
+    have hm : e.1 ∈ s.pages.map Page.name := by
+      rw [← hn]
+      exact List.mem_map.mpr ⟨e, he, rfl⟩
+    rcases List.mem_map.mp hm with ⟨p, hp, hn⟩
+    exact List.any_eq_true.mpr ⟨p, hp, by simp [hn]⟩
+
+/-- A normal open or edit preserves the page names in file order. In that case there is no
+missing-page work; the general deletion/rename algorithm is needed only when names moved. -/
+def forgetMissingFast (s : Store) (V : List (String × String)) : Forgotten :=
+  if V.map Prod.fst == s.pages.map Page.name then { store := s } else forgetMissingCore s V
+
+@[csimp] theorem forgetMissing_eq_fast : @forgetMissing = @forgetMissingFast := by
+  funext s V
+  unfold forgetMissingFast
+  split
+  · rename_i hn
+    exact forgetMissing_of_names s V (by simpa using hn)
+  · rfl
 
 /-- A tomb's line in a status: its name and the version it was at. -/
 def tombLine (p : Page) : String :=

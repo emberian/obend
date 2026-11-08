@@ -89,6 +89,16 @@ theorem forIn_filter_skip {m : Type → Type} [Monad m] [LawfulMonad m] {β : Ty
       | done b => rfl
       | yield b => exact ih hr b
 
+/-- A monadic traversal whose iterations keep their state leaves exactly that state. -/
+theorem forIn_unchanged {α β : Type} {m : Type → Type} [Monad m] [LawfulMonad m]
+    (xs : List α) (b : β) (f : α → β → m (ForInStep β))
+    (h : ∀ x ∈ xs, f x b = pure (.yield b)) : forIn xs b f = pure b := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+    simp only [List.forIn_cons, h x (by simp), pure_bind]
+    exact ih (fun y hy => h y (by simp [hy]))
+
 theorem eraseDups_nodup {β : Type} [BEq β] [LawfulBEq β] (xs : List β) :
     xs.eraseDups.Nodup := by
   match xs with
