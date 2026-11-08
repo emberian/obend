@@ -148,4 +148,78 @@ theorem bucket_ofKeys (keys : α → List κ) (xs : List α) (q : κ)
     rw [ih (fun y hy => h y (by simp [hy]))]
     rw [List.filter_cons]
 
+/-! ## Certified indices maintained by keyed replacements -/
+
+def replaceKey (key : α → κ) (value : α) (xs : List α) : List α :=
+  xs.map fun x => if key x == key value then value else x
+
+theorem find_replaceKey (key : α → κ) (value : α) (xs : List α) (q : κ) :
+    (replaceKey key value xs).find? (fun x => key x == q) =
+      if key value == q then (xs.find? (fun x => key x == q)).map (fun _ => value)
+      else xs.find? (fun x => key x == q) := by
+  let f := fun x => if key x == key value then value else x
+  have hf : ∀ x, key (f x) = key x := by
+    intro x
+    simp only [f]
+    split
+    · rename_i h; exact (beq_iff_eq.mp h).symm
+    · rfl
+  change (xs.map f).find? (fun x => key x == q) = _
+  rw [List.find?_map]
+  have hp : ((fun x => key x == q) ∘ f) = (fun x => key x == q) := by
+    funext x; simp only [Function.comp_apply, hf]
+  rw [hp]
+  cases hx : xs.find? (fun x => key x == q) with
+  | none => simp
+  | some x =>
+    have hq : key x = q := by simpa using (List.find?_some hx)
+    by_cases hv : key value = q
+    · simp [f, hq, hv]
+    · have hv' : (key value == q) = false := by simpa using hv
+      have hv'' : (q == key value) = false := by simpa using Ne.symm hv
+      simp [f, hq, hv', hv'']
+
+def replaceFirst (index : Buckets κ α) (key : κ) (value : α) : Buckets κ α :=
+  index.insert key ((first index key).toList.map fun _ => value)
+
+theorem first_replaceFirst (index : Buckets κ α) (key : κ) (value : α) (q : κ) :
+    first (replaceFirst index key value) q =
+      if key == q then (first index q).map (fun _ => value) else first index q := by
+  by_cases h : key = q
+  · subst q
+    simp only [replaceFirst, first, bucket, TreeMap.getElem?_insert_self, Option.getD_some]
+    cases index[key]? <;> simp
+  · have hn : compare key q ≠ .eq := by simpa using h
+    have hb : (key == q) = false := by simpa using h
+    simp only [replaceFirst, first, bucket, TreeMap.getElem?_insert, hn, ↓reduceIte, hb, Bool.false_eq_true]
+
+/-- A query index certified against its source sequence. The sequence occurs only in the type;
+updates retain the tree and an erased correctness proof, not a second runtime copy of the source. -/
+structure First (key : α → κ) (xs : List α) where
+  data : Buckets κ α
+  correct : ∀ q, first data q = xs.find? (fun x => key x == q)
+
+def First.build (key : α → κ) (xs : List α) : First key xs :=
+  ⟨ofList key xs, first_ofList key xs⟩
+
+def First.find {key : α → κ} {xs : List α} (ctx : First key xs) (q : κ) : Option α :=
+  first ctx.data q
+
+omit [TransOrd κ] [LawfulEqOrd κ] [LawfulBEq κ] in
+theorem First.find_eq {key : α → κ} {xs : List α} (ctx : First key xs) (q : κ) :
+    ctx.find q = xs.find? (fun x => key x == q) := ctx.correct q
+
+/-- Update one tree key for the source operation that replaces every value of that key.
+Only first-match observations are represented, including duplicate and absent source keys. -/
+def First.replace {key : α → κ} {xs : List α} (ctx : First key xs) (value : α) :
+    First key (replaceKey key value xs) :=
+  ⟨replaceFirst ctx.data (key value) value, by
+    intro q
+    rw [first_replaceFirst, ctx.correct, find_replaceKey]⟩
+
+/-- A maintained index answers exactly as rebuilding from the updated source, at every key. -/
+theorem First.replace_eq_rebuild {key : α → κ} {xs : List α} (ctx : First key xs) (value : α) (q : κ) :
+    (ctx.replace value).find q = (First.build key (replaceKey key value xs)).find q := by
+  rw [First.find_eq, First.find_eq]
+
 end Obend.Vault.Index

@@ -1750,21 +1750,24 @@ theorem admitWrites_ind (H : Hash) (res : List Entry)
   intro s pending refused
   exact key _ _ s pending refused (Nat.le_refl _) (Nat.le_refl _)
 
-/-- `admitWrites` with each write judged once: the change judged, then the store after it, named
-once and shared by the three places the store after it is read. -/
-def admitWritesShared (H : Hash) (res : List Entry) (s : Store) (pending : List Write)
+/-- An admission carries its page-name index across every accepted or refused turn. The proof
+parameter relates the maintained tree to the current store; no index is rebuilt at each write. -/
+def admitWritesWithIndex (H : Hash) (res : List Entry) (s : Store)
+    (index : Index.First Page.name s.pages) (pending : List Write)
     (refused : List RefusedWrite) : Store × List RefusedWrite :=
   match pending with
   | [] => (s, refused)
   | (n, md) :: rest =>
-    match s.page? n with
-    | none => admitWritesShared H res s rest refused
+    match index.find n with
+    | none => admitWritesWithIndex H res s index rest refused
     | some p =>
       let c := judgeAt H res s p md
       let s' := s.setPage (p.withChange c)
+      let index' : Index.First Page.name s'.pages := index.replace (p.withChange c)
       match c.note with
-      | none => admitWritesShared H res s' (rest ++ woken p.name s' refused) (held p.name s' refused)
-      | some _ => admitWritesShared H res s' rest (refused ++ [⟨n, md, pinsOf s'.entries res n p.id (readAs H res md)⟩])
+      | none => admitWritesWithIndex H res s' index' (rest ++ woken p.name s' refused) (held p.name s' refused)
+      | some _ => admitWritesWithIndex H res s' index' rest
+          (refused ++ [⟨n, md, pinsOf s'.entries res n p.id (readAs H res md)⟩])
 termination_by (pending.length + refused.length, pending.length)
 decreasing_by
   all_goals simp only [Prod.lex_def, List.length_cons, List.length_append, List.length_nil]
@@ -1773,15 +1776,74 @@ decreasing_by
     omega
   · omega
 
-/-- **Each write judged once is the admission**: `admitWrites` is compiled as `admitWritesShared`. -/
-@[csimp] theorem admitWrites_eq_shared : @admitWrites = @admitWritesShared := by
+/-- Every maintained index, not only a freshly built one, executes the original admission. -/
+theorem admitWritesWithIndex_eq (H : Hash) (res : List Entry) (s : Store)
+    (pending : List Write) (refused : List RefusedWrite) (index : Index.First Page.name s.pages) :
+    admitWritesWithIndex H res s index pending refused = admitWrites H res s pending refused := by
+  refine admitWrites_ind H res (fun s pending refused out =>
+      ∀ index : Index.First Page.name s.pages, admitWritesWithIndex H res s index pending refused = out)
+    ?_ ?_ ?_ ?_ s pending refused index
+  · intro s refused index
+    rw [admitWritesWithIndex]
+  · intro s n md rest refused hp ih index
+    rw [admitWritesWithIndex, index.find_eq]
+    change (match s.page? n with | none => _ | some _ => _) = _
+    rw [hp]
+    exact ih index
+  · intro s n md rest refused p hp hnote ih index
+    rw [admitWritesWithIndex, index.find_eq]
+    change (match s.page? n with | none => _ | some _ => _) = _
+    rw [hp]
+    simp only [hnote]
+    exact ih (index.replace (p.withChange (judgeAt H res s p md)))
+  · intro s n md rest refused p m hp hnote ih index
+    rw [admitWritesWithIndex, index.find_eq]
+    change (match s.page? n with | none => _ | some _ => _) = _
+    rw [hp]
+    simp only [hnote]
+    exact ih (index.replace (p.withChange (judgeAt H res s p md)))
+
+/-- One pending write with no older refusals cannot wake another write. Avoid building a
+batch index for this one-query case. -/
+def admitOne (H : Hash) (res : List Entry) (s : Store) (n md : String) : Store × List RefusedWrite :=
+  match s.page? n with
+  | none => (s, [])
+  | some p =>
+    let c := judgeAt H res s p md
+    let s' := s.setPage (p.withChange c)
+    match c.note with
+    | none => (s', [])
+    | some _ => (s', [⟨n, md, pinsOf s'.entries res n p.id (readAs H res md)⟩])
+
+theorem admitOne_eq (H : Hash) (res : List Entry) (s : Store) (n md : String) :
+    admitOne H res s n md = admitWrites H res s [(n, md)] [] := by
+  simp only [admitOne, admitWrites]
+  cases hp : s.page? n with
+  | none => simp only [admitWrites]
+  | some p =>
+    cases hn : (judgeAt H res s p md).note <;>
+      simp [afterAdmit, woken, held, admitWrites]
+
+/-- Build once for a multi-write admission or one with older refused writes, retaining the tree
+through every recursive turn. Empty and isolated singleton admissions need no batch index. -/
+def admitWritesIndexed (H : Hash) (res : List Entry) (s : Store) (pending : List Write)
+    (refused : List RefusedWrite) : Store × List RefusedWrite :=
+  match pending, refused with
+  | [], _ => (s, refused)
+  | [(n, md)], [] => admitOne H res s n md
+  | _, _ => admitWritesWithIndex H res s (Index.First.build Page.name s.pages) pending refused
+
+@[csimp] theorem admitWrites_eq_indexed : @admitWrites = @admitWritesIndexed := by
   funext H res s pending refused
-  refine (admitWrites_ind H res (fun s pending refused out => admitWritesShared H res s pending refused = out)
-    ?_ ?_ ?_ ?_ s pending refused).symm
-  · intro s refused; rw [admitWritesShared]
-  · intro s n md rest refused hp ih; rw [admitWritesShared]; simp only [hp]; exact ih
-  · intro s n md rest refused p hp hnote ih; rw [admitWritesShared]; simp only [hp, hnote]; exact ih
-  · intro s n md rest refused p m hp hnote ih; rw [admitWritesShared]; simp only [hp, hnote]; exact ih
+  cases pending with
+  | nil => simp only [admitWrites, admitWritesIndexed]
+  | cons w rest =>
+    cases rest with
+    | nil =>
+      cases refused with
+      | nil => exact (admitOne_eq H res s w.1 w.2).symm
+      | cons r refused => exact (admitWritesWithIndex_eq H res s [w] (r :: refused) _).symm
+    | cons w' rest => exact (admitWritesWithIndex_eq H res s (w :: w' :: rest) refused _).symm
 
 
 /-- The folders enclosing a page name, counted. -/
