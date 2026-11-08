@@ -49,11 +49,11 @@ cd ws && obend checked accept-relay | head -4 && obend checked land-relay | head
 
 ```text
 accept-relay: 11 law(s) over its holed states, checked once with runs open:
-  resources/_kind: kagi at resources/rowan (debited)
-  resources/_kind: kagimono at resources/rowan (debited)
-  jobs/_kind: states at jobs/relay (credited)
+  resources/_kind: kagi at resources/rowan
+  resources/_kind: kagimono at resources/rowan
+  jobs/_kind: states at jobs/relay
 land-relay: 9 law(s) over its holed states, checked once (no natural hole open):
-  jobs/_kind: states at jobs/relay (debited)
+  jobs/_kind: states at jobs/relay
 ```
 
 ## 2. The residents take their jobs
@@ -420,7 +420,7 @@ cd ws && obend forget finished --retire accept-relay --retire land-relay --retir
 ```
 
 ```text
-forgot 66 records (298587 bytes) under the retention contract finished, retiring accept-relay, land-relay, accept-harness, land-harness, topup-relay: the log is one checkpoint record of 165926 bytes
+forgot 66 records (298587 bytes) under the retention contract finished, retiring accept-relay, land-relay, accept-harness, land-harness, topup-relay: the log is one checkpoint record of 178077 bytes
 ```
 
 ## 8. Defects the day exposed, fixed

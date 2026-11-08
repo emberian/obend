@@ -1054,41 +1054,29 @@ def receivedJson (f : Form) (digest vault : String) (hops : List Grant) (K : Opt
 def contractLine (K : Transport.Contract) : String :=
   "  offer " ++ K.hole ++ ": " ++ Transport.runsText K.offer ++ " (promised " ++ Transport.runsText K.promise ++ ")"
 
-/-- Where a vault keeps the laws over a form's holed states it checked once
-(`Obend.Vault.Form.checkedOnce`): what it checked of its own form, so a judgment reuses it. -/
-def checkedPath (dir : System.FilePath) (name : String) : System.FilePath :=
-  dir / ".obend" / "checked" / (name ++ ".json")
-
-/-- Check, once, every law over every leg the form `name` may write (`Form.checkedOnce`), and keep
-the ones the checker accepted. -/
-def recordChecks (dir : System.FilePath) (name : String) : IO Unit := do
-  let w ← readWorld dir
-  if let some f := w.forms.find? (·.name == name) then
-    writeJson (checkedPath dir name) (Lean.toJson (f.checkedOnce w.store.entries))
-
-/-- The laws over a form's holed states it checked once. -/
-def readChecks (dir : System.FilePath) (name : String) : IO (List String) := do
-  if !(← (checkedPath dir name).pathExists) then return []
-  match (← readJson (checkedPath dir name)).getArr? with
-  | .ok xs => return xs.toList.filterMap fun x => x.getStr?.toOption
-  | .error _ => return []
-
-/-- `work: laws over the holed states: K kept from the capture, N checked now, re-checked 0`: of the
-laws the judgment applies to the pages a fill writes, how many the capture checked once (their fill
-typed by `Obend.Vault.Form.checked_once`, not checked again) and how many it did not (a law added
-since, or a page the capture could not read), checked here. -/
-def checkWorkLine (dir : System.FilePath) (f : Obend.Vault.Form.Form) (es : List Entry)
-    (a : Obend.Vault.Form.Assignment) : IO String := do
-  let kept ← readChecks dir f.name
-  let apps := f.lawAppsOf es a
-  let reused := apps.filter fun x => kept.contains x.key
-  let fresh := apps.filter fun x => !kept.contains x.key
-  let refused := fresh.filter fun x => !(f.checkOver x.S x.term).toBool
-  if apps.isEmpty then return ""
-  return "work: laws over the holed states: " ++ toString reused.length ++ " kept from the capture, " ++
-    toString fresh.length ++ " checked now" ++
-    (if refused.isEmpty then "" else " (" ++ toString refused.length ++ " refused by the checker)") ++
-    ", re-checked 0"
+/-- `work: laws over the holed states: K kept from the capture, N checked now, re-checked R`: of the
+judgments a proposal's writes make (`Form.callsOf` of `Form.preparedOf`, what `judgeProposal`
+judges), the laws of those whose check the capture made (the judgment is that check filled,
+`Form.judge_runs_checked`, and typed by its derivation, `Form.kept_typed`) and of those it did not (a
+law added or changed since, or a page the capture did not reach), checked here; and how many the
+capture checked that are checked again (`Form.rechecked`, 0 by `Form.rechecked_zero`). -/
+def checkWorkLine (w : Replay.World) (f : Obend.Vault.Form.Form) (hops : List Obend.Vault.Form.Grant)
+    (a : Obend.Vault.Form.Assignment) (recap : Bool) : String :=
+  let g := if recap then Transport.recapture (stateStore w.store.entries) f else f
+  match Obend.Vault.Form.preparedOf H w.store g hops a with
+  | .error _ => ""
+  | .ok (_, prs) =>
+    let cs := Obend.Vault.Form.checksOf w.checked f.name
+    let xs := Obend.Vault.Form.classify cs f.name f.assets (Obend.Vault.Form.callsOf w.store.entries prs)
+    let laws (l : List Obend.Vault.Form.Judged) : Nat := (l.map (·.call.lin.length)).sum
+    let kept := xs.filter (·.kept)
+    let now := xs.filter (!·.kept)
+    let refused := now.filter fun x => x.checkNow == some false
+    if xs.isEmpty then "" else
+    "work: laws over the holed states: " ++ toString (laws kept) ++ " kept from the capture, " ++
+      toString (laws now) ++ " checked now" ++
+      (if refused.isEmpty then "" else " (" ++ toString (laws refused) ++ " refused by the checker)") ++
+      ", re-checked " ++ toString (Obend.Vault.Form.rechecked cs f.name xs)
 
 /-- `work: performed P, retained R of T`: of what a form carries (each move of its residual, each
 value its contract offers), how much the step judged anew, and how much is still good without being
@@ -1473,7 +1461,6 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         | .error e => fail e
         | .ok (.form f culled) =>
           if let .error e ← commitWith dir (.issued name) (fun _ _ => pure ()) then return ← fail e
-          recordChecks dir name
           IO.println ("captured " ++ name ++ " from " ++ situation ++ " for " ++ who ++ ": " ++
             toString f.cells.length ++ " page(s) shown, " ++ toString culled ++ " not shown to " ++ who)
           for l in f.describe do IO.println l
@@ -1650,7 +1637,6 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     match ← commitWith dir (.abstracted name value hole) (fun _ o => pure o) with
     | .error e => fail e
     | .ok (.form g _) =>
-      recordChecks dir name
       IO.println (name ++ ": " ++ value ++ " is now the hole " ++ hole)
       for l in g.describe do IO.println l
       return 0
@@ -1658,17 +1644,29 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
   | ["checked", name] => some do
     let w ← readWorld dir
     let some f := w.forms.find? (·.name == name) | fail ("refused: no form named " ++ name)
-    let kept ← readChecks dir name
-    let apps := (f.lawApps w.store.entries).filter fun x => kept.contains x.key
+    -- the checks the world keeps for the form (`Replay.World.checked`, made at capture and at each
+    -- abstraction), each law of each by its full name: the page or kind that wrote it
+    -- (`jobs/_kind: budget`), at the page it judges
+    let cs := Obend.Vault.Form.checksOf w.checked name
     let open_ := f.holes.filterMap fun (h, t) => if t == .nat then some h else none
-    IO.println (name ++ ": " ++ toString apps.length ++ " law(s) over its holed states, checked once" ++
+    IO.println (name ++ ": " ++ toString ((cs.map (·.unit.laws.length)).sum) ++
+      " law(s) over its holed states, checked once" ++
       (if open_.isEmpty then " (no natural hole open):" else " with " ++ ", ".intercalate open_ ++ " open:"))
-    for x in apps do
-      -- the law's name says the page or kind that wrote it (`jobs/_kind: budget`); a kind's law at a page
-      -- is not the page's (2026-11-06: `tests/relay/sandbox:  at tests/relay/sandbox`, its name cut by
-      -- the page's length)
-      IO.println ("  " ++ x.law ++ " at " ++ x.page ++
-        (if x.src then " (debited)" else " (credited)"))
+    for c in cs do
+      for l in c.unit.laws do
+        IO.println ("  " ++ l ++ " at " ++ c.unit.page)
+    return 0
+  | ["checked", name, file] => some do
+    -- what a judgment of the proposal `file` would keep from the capture and check now, at the vault
+    -- as it is; nothing is judged or landed
+    let w ← readWorld dir
+    let some f := w.forms.find? (·.name == name) | fail ("refused: no form named " ++ name)
+    let j ← readJson file
+    let hops ← ofExcept file ((← ofExcept file (j.getObjValAs? (Array Lean.Json) "hops")).toList.mapM Obend.Vault.Form.grantOf)
+    let a ← ofExcept file (Obend.Vault.Form.assignmentOf (← ofExcept file (j.getObjVal? "fill")))
+    let intent := (j.getObjValAs? String "intent").toOption
+    let line := checkWorkLine w f hops a intent.isSome
+    IO.println (if line.isEmpty then name ++ ": no law over its holed states judges this fill" else line)
     return 0
   | "form" :: name :: rest => some do
     let (out, rest) := flag "--out" rest
@@ -1768,9 +1766,10 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
             performed := p
             IO.println (verdictLine name ls v (issueOf w0 f).contract)
           | .ok _ => return ← fail "the transport said what a transport does not"
-    let checkWork ← match w0.forms.find? (·.name == name) with
-      | some f => checkWorkLine dir f w0.store.entries a
-      | none => pure ""
+    let w1 ← readWorld dir
+    let checkWork := match w1.forms.find? (·.name == name) with
+      | some f => checkWorkLine w1 f hops a intent.isSome
+      | none => ""
     let turn : Turn := match because with
       | some c => .justified name digest hops a intent c
       | none => .judged name digest hops a intent
