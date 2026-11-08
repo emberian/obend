@@ -68,10 +68,12 @@ def traffic (p : Program) (d : Dispatch) (space : Storage) (write : Bool) : Nat 
       (ph.writes.filter fun w => ((p.buffers.drop w.array).headD ⟨0, .device, []⟩).storage == space).length
     else (ph.reads.filter fun r => ((p.buffers.drop r.array).headD ⟨0, .device, []⟩).storage == space).length)) 0)
 
+/-- The constant buffers' values in order: what the host binds as `c`. -/
+def constWords (p : Program) : List ArrayHypergraph.Word :=
+  (p.buffers.filterMap fun b => if b.storage == .constant then some b.values else none).flatten
+
 def emitPlan (name : String) (p : Program) : String :=
-  let consts := p.buffers.filterMap fun b =>
-    if b.storage == .constant then some b.values else none
-  let consts := consts.flatten
+  let consts := constWords p
   let stages := String.intercalate ",\n    " <| p.dispatches.zipIdx.map fun (d, i) =>
     s!"\{\"file\":\"stage_{i}.wgsl\",\"threads\":{d.groups * workgroupSize},\"logicalReadBytes\":{traffic p d .device false + traffic p d .constant false},\"logicalWriteBytes\":{traffic p d .device true},\"logicalWorkgroupReadBytes\":{traffic p d .shared false},\"logicalWorkgroupWriteBytes\":{traffic p d .shared true}}"
   String.intercalate "\n"

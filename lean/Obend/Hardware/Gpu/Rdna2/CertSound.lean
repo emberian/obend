@@ -116,7 +116,7 @@ theorem viewStart_ok {words : Nat} {lay : Memory} {known : Known} {m : Memory} {
       subst hv; rw [eval_lit]; exact h.known a v' hk ha
     · subst hv; rw [eval_var, menv, hmv]; rfl
   · rename_i ha
-    rw [if_neg (by simp [hl])] at hv
+    rw [ite_eq_right (by simp [hl])] at hv
     simp only [Option.map_eq_some_iff] at hv
     obtain ⟨v, hl', rfl⟩ := hv
     rw [eval_lit, h.out a (by simpa using ha) hl, hl']
@@ -132,9 +132,9 @@ theorem readWord_ev {words : Nat} {lay : Memory} {known : Known} {m : Memory} {E
     obtain ⟨lo, hi, hlo, hhi, he⟩ := h.word j hj
     obtain ⟨i0, i1⟩ := inW_dwLo words j hw hj
     have v0 : ∃ u, viewStart words lay known (dwLo j) = some u := by
-      unfold viewStart; rw [if_pos i0]; exact ⟨_, rfl⟩
+      unfold viewStart; rw [ite_eq_left i0]; exact ⟨_, rfl⟩
     have v1 : ∃ u, viewStart words lay known (dwLo j + 1) = some u := by
-      unfold viewStart; rw [if_pos i1]; exact ⟨_, rfl⟩
+      unfold viewStart; rw [ite_eq_left i1]; exact ⟨_, rfl⟩
     obtain ⟨u0, hu0⟩ := v0
     obtain ⟨u1, hu1⟩ := v1
     have e0 := viewStart_ok h hw _ u0 hu0
@@ -187,7 +187,7 @@ theorem storeOk_sound {words : Nat} {T : Std.HashMap Nat TP} {env : UInt64 → U
       generalize (if (a - wDw).toNat % 2 = 0 then sp.1 else sp.2) = x at hs ⊢
       by_cases heq : (t == x) = true
       · rw [eq_of_beq heq]
-      · rw [if_neg heq, Option.map_eq_some_iff] at hs
+      · rw [ite_eq_right heq, Option.map_eq_some_iff] at hs
         obtain ⟨r, hres, hr?⟩ := hs
         apply residual_sound _ _ _ r hres
         by_cases e : r.lhs = r.rhs
@@ -738,15 +738,16 @@ theorem memOf_prefix (words : Nat) (consts : List Word) (tables : List Nat) (fla
       simp only [Ne.symm a1, Ne.symm a2, ite_false]
       exact ih2 a (fun i hi => ha i (by omega))
 
-theorem memOf_start (p : GpuProgram) (hw : p.words < 2 ^ 29) (flat : Nat → Word) :
-    StartOk p.words (layoutOf p) {} (memOf p.words p.consts p.tables flat) (fun j => if j < p.words then flat j else 0) := by
-  obtain ⟨h1, h2⟩ := memOf_prefix p.words p.consts p.tables flat p.words hw
+theorem memOf_start (words : Nat) (consts : List Word) (tables : List Nat) (hw : words < 2 ^ 29) (flat : Nat → Word) :
+    StartOk words (layoutMem words consts tables) {} (memOf words consts tables flat)
+      (fun j => if j < words then flat j else 0) := by
+  obtain ⟨h1, h2⟩ := memOf_prefix words consts tables flat words hw
   refine ⟨fun j hj => ⟨_, _, h1 j hj |>.1, h1 j hj |>.2, ?_⟩, fun j hj => ?_, fun a ha _ => ?_, fun a v hk _ => ?_⟩
   · simp only [hj, ite_true]; exact dwHalf_join _
-  · simp only [show ¬ j < p.words by omega, ite_false]
+  · simp only [show ¬ j < words by omega, ite_false]
   · apply h2
     intro i hi
-    obtain ⟨i0, i1⟩ := inW_dwLo p.words i hw hi
+    obtain ⟨i0, i1⟩ := inW_dwLo words i hw hi
     exact ⟨fun e => by rw [e, i0] at ha; exact Bool.false_ne_true ha.symm,
       fun e => by rw [e, i1] at ha; exact Bool.false_ne_true ha.symm⟩
   · simp at hk
@@ -777,7 +778,7 @@ theorem certify_sound (p : GpuProgram) (progs : List Program) (rs : List Residua
       obtain ⟨st, hst, rfl⟩ := List.mem_map.mp hs
       exact gpuSpec_sound p st (hks st hst)
     obtain ⟨m, known', hrun, hend, -⟩ := checkProgram_sound hw _ progs {} {} need _ _ hss hneed hfin
-      (memOf_start p hw flat) (fun j hj => by simp [show ¬ j < p.words by omega])
+      (memOf_start p.words p.consts p.tables hw flat) (fun j hj => by simp [show ¬ j < p.words by omega])
     have hd : dispatchesOf (p.stages.map (gpuSpec p p.consts.toArray p.tables.toArray)) progs
         = progs.zip (p.stages.map fun s => (s.threads, 0)) := by
       simp only [dispatchesOf, List.map_map]; rfl

@@ -418,7 +418,7 @@ def removeSub : List Tm → List Tm → Option (List Tm)
 /-- `a > b`. When `b` is a sum with the addends of `a` among its own, `b = a + r` and `a > a + r` is the
 carry of `a + r` (`carryBV a r = a + r < a`): the form a compiler gives `lo < a` for the low half of a
 64-bit add, whatever `a` is a sum of. -/
-def mkUgt (a b : Tm) : Tm :=
+def mkUgt' (a b : Tm) : Tm :=
   -- `0 > b` and `a > 0xFFFFFFFF` never hold
   if isLit a 0 || isLit b 0xFFFFFFFF then lit 0 else
   if b.op == .sum then
@@ -431,6 +431,8 @@ def mkUgt (a b : Tm) : Tm :=
       | none => fold .ugt [a, b]
   else fold .ugt [a, b]
 
+/-- `a > a` never holds (a compiler's compare of a value with itself). -/
+def mkUgt (a b : Tm) : Tm := if a == b then lit 0 else mkUgt' a b
 /-- The borrow of `a - b` is `b > a` (`borrowBV a b = a < b`): one form for it and for a compare. -/
 def mkBorrow (a b : Tm) : Tm := if isLit b 0 then lit 0 else mkUgt b a
 def mkAddc (a b c : Tm) : Tm :=
@@ -478,6 +480,34 @@ theorem eval_isBool (env : UInt64 → UInt32) (t : Tm) (h : isBool t = true) : e
          rcases eval_isBool0 env _ ha with h | h <;> rcases eval_isBool0 env _ hb with h' | h' <;>
            simp [h, h'])
 
+/-- Two levels of `ite`, `&` and `|` over 0/1 terms (a 64-bit compare built from dword compares). -/
+def isBool2 (t : Tm) : Bool :=
+  isBool t ||
+  match t.op, t.args with
+  | .ite, [_, a, b] | .band, [a, b] | .bor, [a, b] => isBool a && isBool b
+  | _, _ => false
+
+theorem eval_isBool2 (env : UInt64 → UInt32) (t : Tm) (h : isBool2 t = true) : eval env t = 0 ∨ eval env t = 1 := by
+  unfold isBool2 at h
+  rcases Bool.or_eq_true_iff.mp h with h0 | h1
+  · exact eval_isBool env t h0
+  · obtain ⟨hx, o, as⟩ := t
+    simp only [op, args] at h1
+    split at h1
+    · simp only [Bool.and_eq_true] at h1
+      obtain ⟨ha, hb⟩ := h1
+      simp only [eval_mk, List.map, TOp.sem]
+      split
+      · exact eval_isBool env _ ha
+      · exact eval_isBool env _ hb
+    all_goals first
+      | (simp at h1; done)
+      | (simp only [Bool.and_eq_true] at h1
+         obtain ⟨ha, hb⟩ := h1
+         simp only [eval_mk, List.map, TOp.sem]
+         rcases eval_isBool env _ ha with h | h <;> rcases eval_isBool env _ hb with h' | h' <;>
+           simp [h, h'])
+
 theorem succ_toUInt32 (k : Nat) (_hk : k < 31) : (k + 1).toUInt32 = k.toUInt32 + 1 := by
   apply UInt32.toNat.inj; simp [Nat.toUInt32, UInt32.toNat_add]
 
@@ -523,7 +553,14 @@ def mkBitF : Nat → Tm → Nat → Tm
 
 def mkUle (a b : Tm) : Tm := fold .ule [a, b]
 def mkUlt64 (a0 a1 b0 b1 : Tm) : Tm := fold .ult64 [a0, a1, b0, b1]
-def mkNe64 (a0 a1 b0 b1 : Tm) : Tm := fold .ne64 [a0, a1, b0, b1]
+def mkNe64' (a0 a1 b0 b1 : Tm) : Tm := fold .ne64 [a0, a1, b0, b1]
+/-- `x != 0` of a 0/1 select `ite c 1 0` is `c`: the compare of a `select` the compiler removes. -/
+def mkNe64 (a0 a1 b0 b1 : Tm) : Tm :=
+  if isLit a1 0 && isLit b0 0 && isLit b1 0 then
+    match a0 with
+    | .mk _ .ite [c, t, e] => if isLit t 1 && isLit e 0 && isBool2 c then c else mkNe64' a0 a1 b0 b1
+    | _ => mkNe64' a0 a1 b0 b1
+  else mkNe64' a0 a1 b0 b1
 def mkNez64 (a b : Tm) : Tm := fold .nez64 [a, b]
 
 /-- A 64-bit shift of a pair by a known count `w < 64`, in 32-bit pieces. -/
@@ -710,8 +747,8 @@ theorem removeSub_sum : ∀ (xs ys r : List Tm), removeSub xs ys = some r →
       generalize List.foldr (fun x1 x2 => x1 + x2) 0 (List.map (eval env) r') = d
       bv_decide
 
-theorem eval_mkUgt (a b : Tm) : eval env (mkUgt a b) = b2w (eval env a > eval env b) := by
-  unfold mkUgt
+theorem eval_mkUgt' (a b : Tm) : eval env (mkUgt' a b) = b2w (eval env a > eval env b) := by
+  unfold mkUgt'
   split
   · rename_i hl
     rcases Bool.or_eq_true_iff.mp hl with h | h
@@ -744,6 +781,12 @@ theorem eval_mkUgt (a b : Tm) : eval env (mkUgt a b) = b2w (eval env a > eval en
         simp only [List.map_cons, List.map_nil, List.foldr_cons, List.foldr_nil, UInt32.add_zero, carryBV, gt_iff_lt]
       · simp [TOp.sem]
   · simp [TOp.sem]
+
+theorem eval_mkUgt (a b : Tm) : eval env (mkUgt a b) = b2w (eval env a > eval env b) := by
+  unfold mkUgt
+  split
+  · rename_i h; rw [eq_of_beq h]; simp [b2w]
+  · exact eval_mkUgt' env a b
 
 theorem eval_borrow (a b : Tm) : eval env (Dom.borrow a b) = Dom.borrow (eval env a) (eval env b) := by
   show eval env (mkBorrow a b) = b2w (subCo (eval env a) (eval env b)).2
@@ -812,9 +855,33 @@ theorem eval_ugt (a b : Tm) : eval env (Dom.ugt a b) = Dom.ugt (eval env a) (eva
 theorem eval_ult64 (a0 a1 b0 b1 : Tm) :
     eval env (Dom.ult64 a0 a1 b0 b1) = Dom.ult64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
   show eval env (mkUlt64 a0 a1 b0 b1) = _; simp [mkUlt64, TOp.sem, Dom.ult64]
+theorem eval_mkNe64' (a0 a1 b0 b1 : Tm) :
+    eval env (mkNe64' a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
+  simp [mkNe64', TOp.sem, Dom.ne64]
+theorem ne64_sel (c : UInt32) (h : c = 0 ∨ c = 1) :
+    c = Dom.ne64 (if c != 0 then (1 : UInt32) else 0) 0 0 0 := by
+  rcases h with rfl | rfl <;> decide
 theorem eval_ne64 (a0 a1 b0 b1 : Tm) :
     eval env (Dom.ne64 a0 a1 b0 b1) = Dom.ne64 (eval env a0) (eval env a1) (eval env b0) (eval env b1) := by
-  show eval env (mkNe64 a0 a1 b0 b1) = _; simp [mkNe64, TOp.sem, Dom.ne64]
+  show eval env (mkNe64 a0 a1 b0 b1) = _
+  unfold mkNe64
+  split
+  · rename_i hz
+    simp only [Bool.and_eq_true] at hz
+    obtain ⟨⟨h1, h2⟩, h3⟩ := hz
+    split
+    · rename_i h c t e
+      split
+      · rename_i hb
+        simp only [Bool.and_eq_true] at hb
+        obtain ⟨⟨ht, he⟩, hc⟩ := hb
+        rw [eval_of_isLit env _ _ h1, eval_of_isLit env _ _ h2, eval_of_isLit env _ _ h3, eval_mk]
+        simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ]
+        rw [eval_of_isLit env _ _ ht, eval_of_isLit env _ _ he]
+        exact ne64_sel _ (eval_isBool2 env c hc)
+      · exact eval_mkNe64' env _ _ _ _
+    · exact eval_mkNe64' env _ _ _ _
+  · exact eval_mkNe64' env _ _ _ _
 theorem eval_nez64 (a b : Tm) : eval env (Dom.nez64 a b) = Dom.nez64 (eval env a) (eval env b) := by
   show eval env (mkNez64 a b) = _; simp [mkNez64, TOp.sem, Dom.nez64]
 theorem eval_pack (bs : List Tm) : eval env (Dom.pack bs) = Dom.pack (bs.map (eval env)) := by

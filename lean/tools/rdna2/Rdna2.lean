@@ -26,6 +26,7 @@ import Obend.Hardware.Gpu.Rdna2.Cert
 import Obend.Hardware.SquareGraphs
 import Obend.Hardware.Gpu.Rdna2.Lift
 import Obend.Hardware.Gpu.Rdna2.Certified
+import Obend.Hardware.Gpu.Ntt
 
 open Obend.Hardware.Gpu.Rdna2
 
@@ -270,20 +271,44 @@ def residualModule (modName : String) (tag : String) (graphsNote : String) (rs :
   out := out ++ s!"/-- Every residual above. -/\ndef all : List Tm.Residual := [{", ".intercalate names.toList}]\n\ntheorem all_hold : ∀ r ∈ all, r.Holds := by\n  simp only [all, List.mem_cons, List.not_mem_nil, or_false]\n  rintro r ({" | ".intercalate (names.toList.map fun _ => "rfl")}){String.join (names.toList.map fun n => s!"\n  · exact {n}_holds")}\n\nend {modName}\n"
   return out
 
+/-! ### Block programs (the NTT) -/
+
+def blockOf (graph : String) : Option Obend.Hardware.ArrayKernel.Program :=
+  (Obend.Hardware.SquareGraphs.blockGraphs.find? (·.1 == graph)).map fun x => Obend.Hardware.Gpu.Ntt.nttBlockProgram x.2
+
+def ldssOf (isa : String) : List Nat := (parseDumpLds isa).toList.map (· / 4)
+
+def blockNeeded (p : Obend.Hardware.ArrayKernel.Program) (isa : String) (progs : List Program) : Option (List Tm.Residual) :=
+  (checkProgram (Block.blockWords p) (layoutMem (Block.blockWords p) (Obend.Hardware.Gpu.BlockEmit.constWords p) [])
+    (Block.blockSpecs p (ldssOf isa)) progs {} {}).map (·.toList)
+
+/-- A term's head, `depth` levels deep (a residual is a DAG; its tree can be exponentially larger). -/
+def brief : Nat → Tm → String
+  | 0, _ => "…"
+  | d + 1, .mk _ o as => s!"({Tm.opLean o}{String.join (as.take 4 |>.map fun a => " " ++ brief d a)}{if as.length > 4 then " …" else ""})"
+
+def missingWhy (rs : List Tm.Residual) : String :=
+  let missing := rs.filter (!Residuals.all.contains ·)
+  if missing.isEmpty then "the program bounds (words, array ranges)"
+  else s!"needs {missing.length} residual(s) the library does not prove, e.g. {brief 4 missing.head!.lhs} = {brief 4 missing.head!.rhs}"
+
 /-- One residual library over several graphs: `GRAPH=ISA` pairs, residuals deduplicated. -/
 def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
   let mut all : Array Tm.Residual := #[]
   let mut seen : Std.HashSet Tm.Residual := {}
   for pr in pairs do
     let [graph, isaPath] := pr.splitOn "=" | IO.eprintln s!"[FAIL] {pr}: want GRAPH=ISA"; return 1
-    let some c := Obend.Hardware.SquareGraphs.graphs.find? (·.name == graph)
-      | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
-    let .ok tg := c.build ()
-      | IO.eprintln s!"[FAIL] {graph}: its source does not type"; return 1
-    let g := tg.graph
-    let p := Obend.Hardware.Gpu.lowerArrayToGpu g
-    let progs := (parseDump (← IO.FS.readFile isaPath)).toList.filterMap fun ws => (decodeProgram (ws.flatMap id)).toOption
-    match neededResiduals p progs with
+    let isa ← IO.FS.readFile isaPath
+    let progs := (parseDump isa).toList.filterMap fun ws => (decodeProgram (ws.flatMap id)).toOption
+    let needed ← match blockOf graph with
+      | some bp => pure (blockNeeded bp isa progs)
+      | none =>
+        let some c := Obend.Hardware.SquareGraphs.graphs.find? (·.name == graph)
+          | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
+        let .ok tg := c.build ()
+          | IO.eprintln s!"[FAIL] {graph}: its source does not type"; return 1
+        pure (neededResiduals (Obend.Hardware.Gpu.lowerArrayToGpu tg.graph) progs)
+    match needed with
     | some rs =>
       let fresh := rs.filter (!seen.contains ·)
       IO.eprintln s!"{graph}: {rs.length} residuals, {fresh.length} new"
@@ -297,14 +322,52 @@ def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
 def whyRefused (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : String :=
   match neededResiduals p progs with
   | none => explainCert p.words (layoutOf p) (p.stages.map (gpuSpec p p.consts.toArray p.tables.toArray)) progs
-  | some rs =>
-    let missing := rs.filter (!Residuals.all.contains ·)
-    if missing.isEmpty then "the program bounds (words, kernel ranges)"
-    else s!"needs {missing.length} residual(s) the library does not prove, e.g. {(missing.head!.lhs.toLean.take 120).toString} …"
+  | some rs => missingWhy rs
 
 /-- The gate's certificate stage: `certifyNamed`, the function every pin runs, on one dump; with `--flip`,
 one bit of one instruction flipped first, which the certificate must refuse. -/
+def blockWhy (p : Obend.Hardware.ArrayKernel.Program) (isa : String) (progs : List Program) : String :=
+  match blockNeeded p isa progs with
+  | none => explainCert (Block.blockWords p) (layoutMem (Block.blockWords p) (Obend.Hardware.Gpu.BlockEmit.constWords p) [])
+      (Block.blockSpecs p (ldssOf isa)) progs
+  | some rs => missingWhy rs
+
+def cmdCertBlock (graph : String) (p : Obend.Hardware.ArrayKernel.Program) (isa : String) (flip : Option String) : IO UInt32 := do
+  match flip with
+  | none =>
+    let t0 ← IO.monoMsNow
+    let ok := certifyBlockNamed graph isa
+    let t1 ← IO.monoMsNow
+    if ok then
+      IO.println s!"{graph}: certified, {p.dispatches.length} dispatches, check {t1 - t0} ms"
+      return 0
+    let why := match p.check with
+      | .error e => s!"the block source is not admitted: {e}"
+      | .ok () => if !checkWaitcntDump isa then "a load is not waited for (obend-rdna2 waitcnt)"
+        else match progsOf isa with
+          | none => "a stage does not decode"
+          | some progs => blockWhy p isa progs
+    IO.eprintln s!"[FAIL] {graph}: refused: {why}"
+    return 1
+  | some f =>
+    let spec := match f.splitOn ":" with
+      | [a, b, c] => (a.toNat?.bind fun a => b.toNat?.bind fun b => c.toNat?.map fun c => (a, b, c))
+      | _ => none
+    let some (st, ins, bit) := spec | IO.eprintln s!"[FAIL] --flip {f}: want STAGE:INSTR:BIT"; return 1
+    match flipBit (parseDump isa) st ins bit with
+    | .error e => IO.eprintln s!"[FAIL] {graph}: {e}"; return 1
+    | .ok dumps =>
+      match dumps.toList.mapM (fun ws => (decodeProgram (ws.flatMap id)).toOption) with
+      | none => IO.println s!"{graph}: planted flip {f} refused: a stage no longer decodes"; return 0
+      | some progs =>
+        if Block.certifyBlock p (ldssOf isa) progs Residuals.all then
+          IO.eprintln s!"[FAIL] {graph}: planted flip {f} certified"; return 1
+        IO.println s!"{graph}: planted flip {f} refused: {blockWhy p isa progs}"
+        return 0
+
 def cmdCert (graph : String) (isaPath : String) (flip : Option String) : IO UInt32 := do
+  if let some bp := blockOf graph then
+    return ← cmdCertBlock graph bp (← IO.FS.readFile isaPath) flip
   let some c := Obend.Hardware.SquareGraphs.graphs.find? (·.name == graph)
     | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
   let .ok tg := c.build ()

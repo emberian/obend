@@ -73,15 +73,16 @@ theorem or_limbs (a0 a1 b0 b1 : UInt32) : join64 (a0 ||| b0) (a1 ||| b1) = join6
   unfold join64; bv_decide
 
 theorem ult_limbs (a0 a1 b0 b1 : UInt32) :
-    (join64 (if decide (join64 a0 a1 < join64 b0 b1) = true then 1 else 0) 0).toBitVec =
+    (join64 (if (b2w (b1 > a1) ||| ((if b2w (join64 a1 0 != join64 b1 0) != 0 then 0 else 1) &&& b2w (b0 > a0))) != 0
+      then 1 else 0) 0).toBitVec =
       if (join64 a0 a1).toBitVec.ult (join64 b0 b1).toBitVec = true then 1#64 else 0#64 := by
-  unfold join64; bv_decide
+  unfold join64 b2w; simp only [bne]; bv_decide
 
 theorem mux_limbs (c0 c1 a0 a1 b0 b1 : UInt32) :
-    (join64 (if decide (join64 c0 c1 ≠ join64 0 0) = true then a0 else b0)
-            (if decide (join64 c0 c1 ≠ join64 0 0) = true then a1 else b1)).toBitVec =
+    (join64 (if (b2w (join64 c0 0 != join64 0 0) ||| b2w (join64 c1 0 != join64 0 0)) != 0 then a0 else b0)
+            (if (b2w (join64 c0 0 != join64 0 0) ||| b2w (join64 c1 0 != join64 0 0)) != 0 then a1 else b1)).toBitVec =
       if ((join64 c0 c1).toBitVec != 0#64) = true then (join64 a0 a1).toBitVec else (join64 b0 b1).toBitVec := by
-  unfold join64; bv_decide
+  unfold join64 b2w; simp only [bne]; bv_decide
 
 theorem shr_big (x : BitVec 64) (n : Nat) (h : 64 ≤ n) : x >>> n = 0#64 := by
   apply BitVec.eq_of_toNat_eq
@@ -131,9 +132,16 @@ def pSub (a b : TP) : TP := (Dom.sub a.1 b.1, Dom.subc a.2 b.2 (Dom.borrow a.1 b
 def pMul (a b : TP) : TP := (Dom.mul a.1 b.1, Dom.add (Dom.add (Dom.mulHi a.1 b.1) (Dom.mul a.2 b.1)) (Dom.mul a.1 b.2))
 def pAnd (a b : TP) : TP := (Dom.band a.1 b.1, Dom.band a.2 b.2)
 def pOr (a b : TP) : TP := (Dom.bor a.1 b.1, Dom.bor a.2 b.2)
-def pUlt (a b : TP) : TP := (Dom.ite (Dom.ult64 a.1 a.2 b.1 b.2) (Dom.lit 1) (Dom.lit 0), Dom.lit 0)
+/-- `x == y` on dwords, as the model writes `v_cmp_eq_u32`. -/
+def pEq32 (x y : Tm) : Tm := Dom.ite (Dom.ne64 x (Dom.lit 0) y (Dom.lit 0)) (Dom.lit 0) (Dom.lit 1)
+/-- `x != 0` on a dword, as the model writes `v_cmp_ne_u32 x, 0`. -/
+def pNz (x : Tm) : Tm := Dom.ne64 x (Dom.lit 0) (Dom.lit 0) (Dom.lit 0)
+/-- The plant's `u64_lt` (`Limbs.lt`, `Limbs.wgslPrelude`): `a.y < b.y || (a.y == b.y && a.x < b.x)`. -/
+def pUlt (a b : TP) : TP :=
+  (Dom.ite (Dom.bor (Dom.ugt b.2 a.2) (Dom.band (pEq32 a.2 b.2) (Dom.ugt b.1 a.1))) (Dom.lit 1) (Dom.lit 0), Dom.lit 0)
+/-- The plant's `select(b, a, any(c != vec2<u32>(0u)))`. -/
 def pMux (c a b : TP) : TP :=
-  let z := Dom.ne64 c.1 c.2 (Dom.lit 0) (Dom.lit 0)
+  let z := Dom.bor (pNz c.1) (pNz c.2)
   (Dom.ite z a.1 b.1, Dom.ite z a.2 b.2)
 
 /-- A shift by an amount the specification knows (a constant word); `none` otherwise. -/
@@ -181,17 +189,13 @@ theorem ev_or (a b : TP) : (pOr a b).ev env = a.ev env ||| b.ev env := by
   rw [← UInt64.toBitVec_or, ← or_limbs]
 
 theorem ev_ult (a b : TP) : (pUlt a b).ev env = if BitVec.ult (a.ev env) (b.ev env) then 1#64 else 0#64 := by
-  simp only [TP.ev, pUlt]
-  rw [Tm.eval_ite, Tm.eval_ult64]
-  simp only [Dom.ite, Dom.ult64, w2b_b2w]
-  rw [show (Dom.lit 1 : Tm) = Tm.lit 1 from rfl, show (Dom.lit 0 : Tm) = Tm.lit 0 from rfl, Tm.eval_lit, Tm.eval_lit]
+  simp only [TP.ev, pUlt, pEq32, Tm.eval_ite, Tm.eval_ne64, Tm.eval_ugt, Tm.eval_and, Tm.eval_or, Tm.eval_lit']
+  simp only [Dom.ite, Dom.ne64, Dom.ugt, Dom.band, Dom.bor, Dom.lit, w2b]
   exact ult_limbs _ _ _ _
 
 theorem ev_mux (c a b : TP) : (pMux c a b).ev env = if c.ev env != 0#64 then a.ev env else b.ev env := by
-  simp only [TP.ev, pMux]
-  rw [Tm.eval_ite, Tm.eval_ite, Tm.eval_ne64]
-  simp only [Dom.ite, Dom.ne64, w2b_b2w]
-  rw [show (Dom.lit 0 : Tm) = Tm.lit 0 from rfl, Tm.eval_lit]
+  simp only [TP.ev, pMux, pNz, Tm.eval_ite, Tm.eval_ne64, Tm.eval_or, Tm.eval_lit']
+  simp only [Dom.ite, Dom.ne64, Dom.bor, Dom.lit, w2b]
   exact mux_limbs _ _ _ _ _ _
 
 theorem ev_shift (left : Bool) (a amt r : TP) (h : pShift left a amt = some r) :
