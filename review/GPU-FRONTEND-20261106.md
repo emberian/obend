@@ -1,5 +1,10 @@
 # GPU frontend, 2026-11-06
 
+> Historical report for the pre-integration frontend at `d4ddd55`. Its theorem quotations,
+> NTT source route, square registry and gate outcomes describe that revision. The current
+> live-layout hypotheses, shared arithmetic, sole block NTT and fresh validation are in
+> [GPU-INTEGRATION-20261107.md](GPU-INTEGRATION-20261107.md).
+
 This lane connects source programs and serialized catgrad models to the array GPU backend.
 The source frontend, typing derivation, collective operations and catgrad importer are implemented.
 The validation section distinguishes the proved compiler path, external checks and measured limits.

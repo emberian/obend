@@ -1,0 +1,18 @@
+info: Obend/Teeth/Hardware/GpuArrayEncoding.lean:16:0: Balanced 65536-element Core4 literal: closure and structural equality passed
+ℹ [832/847] Replayed Obend.Teeth.Hardware.GpuSourcePrograms
+info: Obend/Teeth/Hardware/GpuSourcePrograms.lean:23:0: Source member admission/refusal and independent outputs: passed
+✔ [833/847] Built Obend.Hardware.Gpu.ArrayReify (618ms)
+✔ [834/847] Built Obend.Hardware.Gpu.ArrayReify:c.o (125ms)
+✔ [835/847] Built Obend.Hardware.Gpu.ArrayPrograms (577ms)
+✔ [836/847] Built Obend.Hardware.Gpu.ArrayPrograms:c.o (125ms)
+✔ [837/847] Built Obend.Hardware.Gpu.SoacPrograms (736ms)
+ℹ [839/847] Built Obend.Teeth.Hardware.GpuArrayMember (774ms)
+info: Obend/Teeth/Hardware/GpuArrayMember.lean:49:0: Array source member admission, syntax/scope/shape refusals and outputs: passed
+✔ [840/847] Built Obend.Hardware.SquareGraphs (813ms)
+✔ [841/847] Built Obend.Hardware.SquareGraphs:c.o (482ms)
+✔ [842/847] Built EmitGpu (1.1s)
+✔ [843/847] Built EmitGpu:c.o (359ms)
+✔ [844/847] Built EmitSv (1.7s)
+✔ [846/847] Built «obend-emit-gpu»:exe (743ms)
+✔ [847/847] Built «obend-emit-sv»:exe (1.5s)
+Build completed successfully (847 jobs).

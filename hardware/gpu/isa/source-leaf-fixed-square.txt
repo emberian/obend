@@ -2,9 +2,10 @@
 # Extracted by hardware/gpu/isa_extract.py from RADV_DEBUG=shaders,shaderstats; do not edit.
 # Each instruction line ends in `; <dwords>`, the machine code as RADV printed it; labels and text are LLVM's.
 
-## stage 0 (stage_0.wgsl): 11 threads, 16 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 92
+## stage 0 (stage_0.wgsl): 11 threads, 16 instructions, 1 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 100
 BB0:
 	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_lshl_add_u32 v0, s4, 6, v0	; d7460000 04010c04
 	v_cmpx_gt_u32_e32 11, v0	; 7da8008b
 	s_cbranch_execz BB6	; bf880012
 BB1:
@@ -16,9 +17,8 @@ BB1:
 	s_waitcnt vmcnt(0)	; bf8c3f70
 	v_mul_hi_u32 v1, v2, v2	; d56a0001 00020502
 	v_mul_lo_u32 v4, v2, v2	; d5690004 00020502
-	v_add_nc_u32_e32 v2, v2, v2	; 4a040502
-	v_mul_lo_u32 v3, v3, v2	; d5690003 00020503
-	v_add_nc_u32_e32 v5, v1, v3	; 4a0a0701
-	buffer_store_dwordx2 v[4:5], v0, s[0:3], 0 offen offset:88	; e0741058 80000400
+	v_mul_lo_u32 v2, v2, v3	; d5690002 00020702
+	v_add3_u32 v5, v2, v1, v2	; d76d0005 040a0302
+	buffer_store_dwordx2 v[4:5], v0, s[0:3], 0 offen	; e0741000 80000400
 BB6:
 	s_endpgm	; bf810000

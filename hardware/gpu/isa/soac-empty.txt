@@ -6,9 +6,10 @@
 BB0:
 	s_endpgm	; bf810000
 
-## stage 1 (stage_1.wgsl): 48 threads, 101 instructions, 8 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 584
+## stage 1 (stage_1.wgsl): 48 threads, 102 instructions, 8 64-bit stores; VGPRs: 8, SGPRs: 128, LDS: 0, scratch: 0, code: 592
 BB0:
 	v_lshl_add_u32 v0, s3, 6, v0	; d7460000 04010c03
+	v_lshl_add_u32 v0, s4, 6, v0	; d7460000 04010c04
 	v_cmpx_gt_u32_e32 1, v0	; 7da80081
 	s_cbranch_execz BB6	; bf88000a
 BB1:

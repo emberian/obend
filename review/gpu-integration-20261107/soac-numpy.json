@@ -1,0 +1,70 @@
+{
+  "recorded_at": "2026-11-08T06:09:55.683830+00:00",
+  "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+  "numpy": "2.5.4",
+  "python": "3.12.7",
+  "host": "hbox",
+  "machine": "x86_64",
+  "platform": "Linux-6.11.0-29-generic-x86_64-with-glibc2.40",
+  "repeats": 101,
+  "cpu_timing_scope": "median compute including allocations and Python dispatch; warm inputs",
+  "gpu_timing_scope": "runner submission to completion; excludes shader compilation and transfers",
+  "schedule": "one sequential accumulator per segment; no intra-segment parallelism",
+  "cases": {
+    "soac-boundaries": {
+      "elements": 8,
+      "segments": 7,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 139.661,
+      "numpy_sum_cumsum_us": 2.085,
+      "gpu_full_pipeline_ms": 0.316,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 3,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-empty": {
+      "elements": 0,
+      "segments": 3,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 39.268,
+      "numpy_sum_cumsum_us": 2.346,
+      "gpu_full_pipeline_ms": 0.3,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 3,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-no-segments": {
+      "elements": 0,
+      "segments": 0,
+      "vectors_checked": 12,
+      "numpy_full_pipeline_us": 16.875,
+      "numpy_sum_cumsum_us": 2.326,
+      "gpu_full_pipeline_ms": 0.313,
+      "gpu_vectors": 12,
+      "gpu_dispatches": 3,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-single-65536": {
+      "elements": 65536,
+      "segments": 1,
+      "vectors_checked": 2,
+      "numpy_full_pipeline_us": 2412.848,
+      "numpy_sum_cumsum_us": 112.316,
+      "gpu_full_pipeline_ms": 93.031,
+      "gpu_vectors": 2,
+      "gpu_dispatches": 3,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    },
+    "soac-segments-64x1024": {
+      "elements": 65536,
+      "segments": 64,
+      "vectors_checked": 2,
+      "numpy_full_pipeline_us": 2168.296,
+      "numpy_sum_cumsum_us": 110.621,
+      "gpu_full_pipeline_ms": 19.025,
+      "gpu_vectors": 2,
+      "gpu_dispatches": 3,
+      "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
+    }
+  }
+}
