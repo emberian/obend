@@ -130,6 +130,8 @@ public import Obend.Vault.Replay
 public import Obend.Vault.FormCheck
 public import Obend.Vault.Cost
 public import Obend.Vault.LogBytes
+public import Obend.Vault.DecodeCache
+public import Obend.Vault.SegmentLog
 public section
 
 namespace Obend.Vault.Cli
@@ -162,6 +164,14 @@ def logPath (dir : System.FilePath) : System.FilePath := dir / ".obend" / "log"
 def checkpointPath (dir : System.FilePath) : System.FilePath := dir / ".obend" / "checkpoint"
 /-- The lock a command holds while it reads, appends to and checkpoints the log. -/
 def lockPath (dir : System.FilePath) : System.FilePath := dir / ".obend" / "lock"
+
+/-- Hold the vault's lock while observing or changing its selected log generation. Readers must
+not race compaction's removal of the previous generation. This helper does not recover or write. -/
+def withVaultLock {α : Type} (dir : System.FilePath) (act : IO α) : IO α := do
+  IO.FS.createDirAll (dir / ".obend")
+  let lk ← IO.FS.Handle.mk (lockPath dir) .append
+  lk.lock
+  try act finally lk.unlock
 
 /-- A vault: a directory with a log, a checkpoint or a world from before the log. -/
 def isVault (dir : System.FilePath) : IO Bool := do
@@ -246,6 +256,24 @@ def readArray (f : System.FilePath) : IO ByteArray := do
 
 open Obend.Vault.LogBytes (parseOneAt parseFromAt parseLogAt holdsAt encodeRecordBytes)
 
+/-- One in-process decoder result, retained across recovery and checkpoint validation. This is
+bounded to one snapshot, never persisted, and is reused only for exactly equal bytes. -/
+initialize decodedWorld : IO.Ref (Option (DecodeCache.Entry decodeWorld)) ← IO.mkRef none
+
+/-- The actual decoder on these bytes (`DecodeCache.read_eq`), with an exact-input memo. -/
+def decodeWorldOnce (bs : Bytes) : IO (Option Replay.World) := do
+  let cached ← decodedWorld.get
+  let entry ← Obend.Vault.Cost.compute fun _ => DecodeCache.read decodeWorld cached bs
+  decodedWorld.set (some entry)
+  return entry.result
+
+/-- Authenticate a checkpoint's bytes against the log before decoding them. `holdsAt_bind` says
+this is exactly `holdsAt logHash decodeWorld`, with its decoder result retained for the writer. -/
+def holdCheckpoint (ck : Checkpoint) (bs : ByteArray) : IO (Option Replay.World) := do
+  match holdsAt logHash some ck bs with
+  | none => return none
+  | some wb => decodeWorldOnce wb
+
 /-- A checkpoint's file: `obend-checkpoint 1 COUNT START STOP ANCHOR BASE`, a newline, the world's bytes.
 `BASE` is the length of the log's checkpoint record when it starts with one, else 0 (a checkpoint
 without it, from before, is read as not saying). -/
@@ -320,7 +348,7 @@ def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := Obend.Vault.C
   let wb := match h.known with
     | some (wb, _) => wb
     | none => encodeWorld h.world
-  if decodeWorld wb != some h.world then
+  if (← decodeWorldOnce wb) != some h.world then
     IO.eprintln "checkpoint not written: the world's bytes do not decode to the world (the log stays the truth)"
     return
   writeAtomically (checkpointPath dir) (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, wb⟩ (if h.base then h.baseSize else 0))
@@ -346,15 +374,12 @@ def waitToBeStopped (barrier : String) : IO Unit := do
 /-- Append a record's bytes to the log (the barrier aside). -/
 def appendRecord (dir : System.FilePath) (n : Nat) (bs : Bytes) : IO Unit := do
   let tear ← tearAt dir n
-  let h ← IO.FS.Handle.mk (logPath dir) .append
   match tear with
   | some (some k, barrier) =>
-    Obend.Vault.Cost.write h ⟨(bs.take k).toArray⟩
-    h.flush
+    SegmentLog.append logHash dir ⟨(bs.take k).toArray⟩
     waitToBeStopped barrier
   | _ =>
-    Obend.Vault.Cost.write h ⟨bs.toArray⟩
-    h.flush
+    SegmentLog.append logHash dir ⟨bs.toArray⟩
   if let some (none, barrier) := tear then waitToBeStopped barrier
 
 /-- **Commit a turn**: admit its bytes at the head (`Obend.Vault.Log.admit` at the deployed machine)
@@ -404,7 +429,7 @@ structure Recovery where
   tail : Bytes
   why : Option Drop
   checkpoint : String
-  /-- the log's bytes as read (empty when the recovery is the head a turn of this process left) -/
+  /-- the loaded suffix of the log (empty when this process already has its head) -/
   bytes : ByteArray := .empty
   /-- the bytes of the log's last record -/
   last : ByteArray := .empty
@@ -416,24 +441,51 @@ def dropText : Drop → String
   | .seal => "seal: its receipt is not the one its seal names"
   | .link => "link: it does not follow the record before it"
 
+/-- Read only the first record's blocks (the retention horizon), not the whole history. -/
+def readFirstLogRecord (dir : System.FilePath) : IO ByteArray := do
+  let total ← SegmentLog.size logHash dir
+  let header ← SegmentLog.readRange logHash dir 0 (min total 136)
+  if header.size < 136 then return header
+  let len := unbe (LogBytes.slice header 4 4)
+  SegmentLog.readRange logHash dir 0 (min total (136 + len + 32))
+
 /-- **Recover a vault's world from its log**, through the checkpoint where it holds
 (`Obend.Vault.Log.recoverWith`; `checkpoint_is_cache`), reading nothing past the longest prefix of
 whole, linked records (`recover_eq_replay_prefix`). The replayed world must commit to what the last
 record's receipt names; otherwise the command stops. -/
 def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.phase "read" do
-  let bs ← readArray (logPath dir)
   let ckb? ← readCheckpoint dir
   let ck? := ckb?.map (·.1)
+  let total ← SegmentLog.size logHash dir
+  -- A valid checkpoint needs only its own last record and the following bytes. The segment index
+  -- finds those blocks directly; `SegmentLog.holds_window` preserves the full-log check.
+  let offset := match ck? with
+    | some ck => if ck.start ≤ ck.stop && ck.stop ≤ total then ck.start else 0
+    | none => 0
+  let window ← SegmentLog.readRange logHash dir offset total
+  let held ← match ck? with
+    | none => pure none
+    | some ck => do
+      let w ← holdCheckpoint (SegmentLog.localCheckpoint ck offset) window
+      pure (w.map (ck, ·))
+  let (offset, bs, held) ← if held.isNone && offset != 0 then do
+      let all ← SegmentLog.readAll logHash dir
+      let held ← match ck? with
+        | none => pure none
+        | some ck => do
+          let w ← holdCheckpoint ck all
+          pure (w.map (ck, ·))
+      pure (0, all, held)
+    else pure (offset, window, held)
   -- `holdsAt_eq`, `parseLogAt_eq`, `parseFromAt_eq`: these read what `Checkpoint.holds`,
   -- `Retention.parseLog` and `parseFrom` read of the log's list, at offsets into its bytes
-  let held := ck?.bind fun ck => (holdsAt logHash decodeWorld ck bs).map (ck, ·)
   let (base, anchor, from_, count0, note) := match ck?, held with
     | _, some (ck, w) => (w, ck.anchor, ck.stop, ck.count, "the world after record " ++ toString ck.count)
     | some _, none => (genesis, Rehydration.genesisSentinel, 0, 0,
         "dropped (it does not hold against the log); the world is replayed from genesis")
     | none, none => (genesis, Rehydration.genesisSentinel, 0, 0, "none; the world is replayed from genesis")
   let (qs, stop, why) := if from_ == 0 then parseLogAt logHash anchorOfTurn bs
-    else parseFromAt logHash anchor bs from_
+    else parseFromAt logHash anchor bs (from_ - offset)
   let tail := (bs.extract stop bs.size).data.toList
   let (isBase, baseSize) ← if from_ == 0 then
       pure (match qs.head? with
@@ -441,12 +493,14 @@ def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.pha
         | none => (false, 0))
     else match ckb?.bind (·.2) with
       | some k => pure (k != 0, k)
-      | none => pure (match parseOneAt logHash (some Rehydration.genesisSentinel) bs 0 with
-        | .ok (r, o) => if (anchorOfTurn r.payload).isSome then (true, o) else (false, 0)
-        | .error _ => (false, 0))
+      | none => do
+        let first ← readFirstLogRecord dir
+        pure (match parseOneAt logHash (some Rehydration.genesisSentinel) first 0 with
+          | .ok (r, o) => if (anchorOfTurn r.payload).isSome then (true, o) else (false, 0)
+          | .error _ => (false, 0))
   Obend.Vault.Cost.addReplayed qs.length
   let world := replay deployed base qs
-  let size := stop
+  let size := offset + stop
   let count := count0 + qs.length
   let lastStart := match qs.getLast? with
     | some r => size - (encodeRecord logHash r).length
@@ -457,7 +511,7 @@ def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.pha
   let last? : Option Record := match qs.getLast? with
     | some r => some r
     | none => match held with
-      | some (ck, _) => match parseOneAt logHash none bs ck.start with
+      | some (ck, _) => match parseOneAt logHash none bs (ck.start - offset) with
         | .ok (r, _) => some r
         | .error _ => none
       | none => none
@@ -473,31 +527,39 @@ def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.pha
   if last?.isSome && known.isNone then
     throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
       " commits to: the log was written by another step (relinking is not done here)"))
-  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize, known⟩, base, qs, tail, why, note, bs, bs.extract lastStart size⟩
+  return ⟨⟨world, chainEnd anchor qs, count, size, lastStart, isBase, baseSize, known⟩, base, qs, tail, why, note, bs, bs.extract (lastStart - offset) (size - offset)⟩
 
 /-- What this process last knew of each vault's log: the log's length then, and the recovery. A
 command recovers a vault's world once: a later recovery of the same vault, the log the same length,
 is the one known, and a turn this process appended leaves the head it made (`commitTurn`). A log
 another process appended to is longer, and is recovered again. -/
-initialize recoveries : IO.Ref (List (String × Nat × Recovery)) ← IO.mkRef []
+initialize recoveries : IO.Ref (List (String × (Option Nat × Nat) × Recovery)) ← IO.mkRef []
 
-def logSize (dir : System.FilePath) : IO Nat := do
-  if !(← (logPath dir).pathExists) then return 0
-  return (← (logPath dir).metadata).byteSize.toNat
+def logSize (dir : System.FilePath) : IO Nat := SegmentLog.size logHash dir
 
 def vaultKey (dir : System.FilePath) : IO String := do
   if ← dir.pathExists then return (← IO.FS.realPath dir).toString else return dir.toString
 
-/-- **Recover a vault's world from its log** (`recoverLogRead`), once per process and log length. -/
+/-- Generation and logical length, read under the vault lock. A same-sized compaction is a
+new generation and cannot reuse the previous world's in-process recovery. -/
+def logStamp (dir : System.FilePath) : IO (Option Nat × Nat) := do
+  match ← SegmentLog.index logHash dir with
+  | some idx => return (some idx.generation, ← SegmentLog.sizeOf dir idx)
+  | none =>
+    let size ← if ← (logPath dir).pathExists then
+      pure (← (logPath dir).metadata).byteSize.toNat else pure 0
+    return (none, size)
+
+/-- **Recover a vault's world from its log** (`recoverLogRead`), once per process, generation and log length. -/
 def recoverLog (dir : System.FilePath) : IO Recovery := do
   let key ← vaultKey dir
-  let size ← logSize dir
-  match (← recoveries.get).find? (fun (k, n, _) => k == key && n == size) with
+  let stamp ← logStamp dir
+  match (← recoveries.get).find? (fun (k, n, _) => k == key && n == stamp) with
   | some (_, _, r) => return r
   | none =>
     let r ← recoverLogRead dir
     -- only a recovery that read the whole log as records is kept (a dropped tail is truncated next)
-    if r.tail.isEmpty then recoveries.modify fun c => (key, size, r) :: c.filter (·.1 != key)
+    if r.tail.isEmpty then recoveries.modify fun c => (key, stamp, r) :: c.filter (·.1 != key)
     return r
 
 /-- The log was rewritten (compacted, or a torn tail truncated): recover it again. -/
@@ -508,10 +570,10 @@ def forgetRecovery (dir : System.FilePath) : IO Unit := do
 /-- The head a turn of this process left, as the recovery of the log it appended to. -/
 def rememberHead (dir : System.FilePath) (h : Head) (last : ByteArray) : IO Unit := do
   let key ← vaultKey dir
-  let size ← logSize dir
-  if size != h.size then return
+  let stamp ← logStamp dir
+  if stamp.2 != h.size then return
   let r : Recovery := ⟨h, h.world, [], [], none, "the world after record " ++ toString h.count, .empty, last⟩
-  recoveries.modify fun c => (key, size, r) :: c.filter (·.1 != key)
+  recoveries.modify fun c => (key, stamp, r) :: c.filter (·.1 != key)
 
 /-- **Commit a turn** (`commitTurnRaw`), and remember the head it leaves as the vault's recovery. -/
 def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String (Head × Outcome)) := do
@@ -522,7 +584,7 @@ def commitTurn (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except String
     return .ok (h', o)
 
 /-- The world from the log, read only (nothing is truncated, rewritten or redone). -/
-def readWorld (dir : System.FilePath) : IO Replay.World := do
+def readWorld (dir : System.FilePath) : IO Replay.World := withVaultLock dir do
   if !(← (logPath dir).pathExists) then
     if let some w ← legacyWorld dir then return w
   return (← recoverLog dir).head.world
@@ -601,7 +663,7 @@ the vault's whole history they stand for, the digest of their bytes, and the rec
 at (the anchor the records after it follow). Written beside the log and renamed over it, so a crash
 leaves the log as it was or compacted; the checkpoint file, whose offsets were the old log's, goes. -/
 def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
-  let bs := (← readBytes (logPath dir)).take h.size
+  let bs := (← SegmentLog.readRange logHash dir 0 h.size).data.toList
   let before := match parseOne logHash (some Rehydration.genesisSentinel) bs with
     | .ok (r, _) => match decodeTurn r.payload with
       | .ok (.compacted n _ _ _) => n - 1
@@ -618,8 +680,9 @@ def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
     | some (k, barrier) =>
       Obend.Vault.Cost.writeBinFile (newLogPath dir) ⟨(rb.take k).toArray⟩
       waitToBeStopped barrier
-    | none => Obend.Vault.Cost.writeBinFile (newLogPath dir) ⟨rb.toArray⟩
-    IO.FS.rename (newLogPath dir) (logPath dir)
+    | none => pure ()
+    SegmentLog.replace logHash dir ⟨rb.toArray⟩
+    if ← (newLogPath dir).pathExists then IO.FS.removeFile (newLogPath dir)
     forgetRecovery dir
     if ← (checkpointPath dir).pathExists then IO.FS.removeFile (checkpointPath dir)
     return { world := h.world, prev := h.prev, count := 1, size := rb.length, lastStart := 0, base := true,
@@ -644,7 +707,7 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
   if !r.tail.isEmpty then
     IO.println ("recovered: dropped a tail of " ++ toString r.tail.length ++ " bytes after record " ++
       toString r.head.count ++ " (" ++ ((r.why.map dropText).getD "") ++ ")")
-    writeAtomicallyArray (logPath dir) (r.bytes.extract 0 r.head.size)
+    SegmentLog.truncate logHash dir r.head.size
     forgetRecovery dir
   match r.suffix.getLast? with
   | none => pure ()
@@ -677,14 +740,8 @@ def recoverForWrite (dir : System.FilePath) : IO Head := do
   | .error _ => return r.head
 
 /-- Run `k` holding the vault's lock, from the log as recovered. -/
-def withLog {α : Type} (dir : System.FilePath) (k : Head → IO α) : IO α := do
-  IO.FS.createDirAll (dir / ".obend")
-  let lk ← IO.FS.Handle.mk (lockPath dir) .append
-  lk.lock
-  try
-    k (← recoverForWrite dir)
-  finally
-    lk.unlock
+def withLog {α : Type} (dir : System.FilePath) (k : Head → IO α) : IO α :=
+  withVaultLock dir do k (← recoverForWrite dir)
 
 /-- Commit one turn under the lock and write the checkpoint after `files` has written its files. -/
 def commitWith {α : Type} (dir : System.FilePath) (t : Turn) (files : Head → Outcome → IO α) :
@@ -905,10 +962,10 @@ def parseGrant (g : String) : Option (String × String) :=
 /-- `obend log`: the log, read only: its records, a dropped tail, the checkpoint, and the world three
 ways (replayed from genesis, from the checkpoint and the records after it, and as the last record's
 receipt commits to it), which must be one world. -/
-def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
+def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := withVaultLock dir do
   if !(← (logPath dir).pathExists) then
     IO.println "no log"; return 2
-  let bs ← readArray (logPath dir)
+  let bs ← SegmentLog.readAll logHash dir
   let (qs, stop, why) := parseLogAt logHash anchorOfTurn bs
   let tail := (bs.extract stop bs.size).data.toList
   IO.println ("log: " ++ toString qs.length ++ " records, " ++ toString stop ++
@@ -920,7 +977,7 @@ def logReport (dir : System.FilePath) (records : Bool) : IO UInt32 := do
             "), ending at receipt " ++ String.ofList ((hex (be 32 a)).toList.take 16)
         | _ => ""
       | none => ""))
-  IO.println ("a command reads: the log, " ++ toString bs.size ++ " bytes, and the checkpoint, " ++
+  IO.println ("logical log: " ++ toString bs.size ++ " bytes; checkpoint: " ++
     toString (← readArray (checkpointPath dir)).size ++ " bytes")
   if records then
     let mut pos := 0
@@ -1067,7 +1124,8 @@ def checkWorkLine (w : Replay.World) (f : Obend.Vault.Form.Form) (hops : List Ob
   | .error _ => ""
   | .ok (_, prs) =>
     let cs := Obend.Vault.Form.checksOf w.checked f.name
-    let xs := Obend.Vault.Form.classify cs f.name f.assets (Obend.Vault.Form.callsOf w.store.entries prs)
+    let calls := Obend.Vault.Form.callsOf w.store.entries prs
+    let xs := Obend.Vault.Form.classify cs f.name f.assets calls
     let laws (l : List Obend.Vault.Form.Judged) : Nat := (l.map (·.call.lin.length)).sum
     let kept := xs.filter (·.kept)
     let now := xs.filter (!·.kept)
@@ -1076,7 +1134,7 @@ def checkWorkLine (w : Replay.World) (f : Obend.Vault.Form.Form) (hops : List Ob
     "work: laws over the holed states: " ++ toString (laws kept) ++ " kept from the capture, " ++
       toString (laws now) ++ " checked now" ++
       (if refused.isEmpty then "" else " (" ++ toString (laws refused) ++ " refused by the checker)") ++
-      ", re-checked " ++ toString (Obend.Vault.Form.rechecked cs f.name xs)
+      ", re-checked " ++ toString (Obend.Vault.Form.recheckedClassified cs f.name f.assets calls)
 
 /-- `work: performed P, retained R of T`: of what a form carries (each move of its residual, each
 value its contract offers), how much the step judged anew, and how much is still good without being
@@ -1226,11 +1284,11 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let (admitted, refused, dups) := sortLandings w0 (w0.grants.merge ow.grants) ow.landed
     -- after a forget, whether the other log reaches the horizon: holds, among its receipt digests (and
     -- the anchors of its own checkpoint record), the receipt the forgotten prefix here ended at
-    let mine ← readArray (logPath dir)
+    let mine ← withVaultLock dir (readFirstLogRecord dir)
     let reaches ← match parseOneAt logHash (some Rehydration.genesisSentinel) mine 0 with
       | .ok (r, _) => match anchorOfTurn r.payload with
         | some a => do
-          let (qs, _, _) := parseLogAt logHash anchorOfTurn (← readArray (logPath other))
+          let (qs, _, _) := parseLogAt logHash anchorOfTurn (← withVaultLock other (SegmentLog.readAll logHash other))
           let ds := qs.map (fun q => Hr logHash q.receipt) ++ qs.filterMap (fun q => anchorOfTurn q.payload)
           pure (some (ds.contains a))
         | none => pure none
@@ -1582,12 +1640,16 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     let _ ← openDir dir false
     let name := (System.FilePath.mk other).fileName.getD other
     if ← (System.FilePath.mk other).pathExists then return ← fail ("refused: " ++ other ++ " exists")
-    match ← commitWith dir (.forked name) (fun _ _ => pure ()) with
-    | .error e => fail e
-    | .ok () =>
-      copyVault dir other
-      IO.println ("forked " ++ name ++ ": a copy of this vault, declared here until it merges")
-      return 0
+    -- A selector and its segment generation must be copied from one locked snapshot.
+    withLog dir fun h => do
+      match ← commitTurn dir h (.forked name) with
+      | .error e => fail e
+      | .ok (h', _) =>
+        writeExports dir h'.world
+        saveCheckpoint dir h'
+        copyVault dir other
+        IO.println ("forked " ++ name ++ ": a copy of this vault, declared here until it merges")
+        return 0
   | ["transport", name] => some do
     let _ ← openDir dir false
     let w ← readWorld dir
