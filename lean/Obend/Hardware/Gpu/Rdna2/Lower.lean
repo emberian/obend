@@ -144,14 +144,42 @@ def pMux (c a b : TP) : TP :=
   let z := Dom.bor (pNz c.1) (pNz c.2)
   (Dom.ite z a.1 b.1, Dom.ite z a.2 b.2)
 
-/-- A shift by an amount the specification knows (a constant word); `none` otherwise. -/
+/-- A shift by an amount only the data knows, written as the plant's own `u64_shl`/`u64_shr`
+(`Limbs.wgslPrelude`): `0` when the high dword is set or the low one is at least 64, the word itself for
+`0`, one dword's shift from 32 on, else the two dwords' pieces; WGSL's `<<`/`>>` on `u32` use the count's
+low five bits (WGSL 8.9, "Bit Expressions"). Written once over a domain: over words it is proved the
+64-bit shift (`shiftV_spec`), over terms it is the specification. -/
+def shiftV {V : Type} [Dom V] (left : Bool) (a b : V × V) : V × V :=
+  let sh (x k : V) : V := Dom.shl x k
+  let shr (x k : V) : V := (Dom.lshr64 (Dom.band k (Dom.lit 31)) x (Dom.lit 0)).1
+  let big := Dom.bor (Dom.ne64 b.2 (Dom.lit 0) (Dom.lit 0) (Dom.lit 0)) (Dom.ule (Dom.lit 64) b.1)
+  let zero := Dom.ite (Dom.ne64 b.1 (Dom.lit 0) (Dom.lit 0) (Dom.lit 0)) (Dom.lit 0) (Dom.lit 1)
+  let ge32 := Dom.ule (Dom.lit 32) b.1
+  let m32 := Dom.sub b.1 (Dom.lit 32)
+  let inv := Dom.sub (Dom.lit 32) b.1
+  let g : V × V := if left then (Dom.lit 0, sh a.1 m32) else (shr a.2 m32, Dom.lit 0)
+  let w : V × V := if left then (sh a.1 b.1, Dom.bor (sh a.2 b.1) (shr a.1 inv))
+    else (Dom.bor (shr a.1 b.1) (sh a.2 inv), shr a.2 b.1)
+  let pick (x y u : V) : V := Dom.ite big (Dom.lit 0) (Dom.ite zero x (Dom.ite ge32 y u))
+  (pick a.1 g.1 w.1, pick a.2 g.2 w.2)
+
+theorem shiftV_spec (left : Bool) (a0 a1 b0 b1 : UInt32) :
+    (join64 (shiftV left (a0, a1) (b0, b1)).1 (shiftV left (a0, a1) (b0, b1)).2).toBitVec =
+      if left then (join64 a0 a1).toBitVec <<< (join64 b0 b1).toBitVec
+      else (join64 a0 a1).toBitVec >>> (join64 b0 b1).toBitVec := by
+  cases left <;>
+  simp only [shiftV, Dom.ite, Dom.bor, Dom.band, Dom.ne64, Dom.ule, Dom.lit, Dom.sub, Dom.shl, Dom.lshr64,
+    lshrrev64, w2b, b2w, join64, bne, Bool.false_eq_true, ↓reduceIte] <;> bv_decide
+
+/-- A shift: by a constant amount the specification knows, its 32-bit pieces; otherwise the plant's
+case split (`shiftV`). -/
 def pShift (left : Bool) (a amt : TP) : Option TP :=
   match amt.1.litVal?, amt.2.litVal? with
   | some lo, some hi =>
     let n := join64 lo hi
     if 64 ≤ n then some (Dom.lit 0, Dom.lit 0)
     else some (if left then Dom.shl64 (Dom.lit n.toUInt32) a.1 a.2 else Dom.lshr64 (Dom.lit n.toUInt32) a.1 a.2)
-  | _, _ => none
+  | _, _ => some (shiftV left a amt)
 
 section
 variable (env : UInt64 → UInt32)
@@ -198,6 +226,15 @@ theorem ev_mux (c a b : TP) : (pMux c a b).ev env = if c.ev env != 0#64 then a.e
   simp only [Dom.ite, Dom.ne64, Dom.bor, Dom.lit, w2b]
   exact mux_limbs _ _ _ _ _ _
 
+theorem shiftV_eval (left : Bool) (a b : TP) :
+    Tm.eval env (shiftV left a b).1 = (shiftV left (Tm.eval env a.1, Tm.eval env a.2) (Tm.eval env b.1, Tm.eval env b.2)).1 ∧
+    Tm.eval env (shiftV left a b).2 = (shiftV left (Tm.eval env a.1, Tm.eval env a.2) (Tm.eval env b.1, Tm.eval env b.2)).2 := by
+  have l1 : ∀ c lo hi : Tm, Tm.eval env (Dom.lshr64 c lo hi).1 = (Dom.lshr64 (Tm.eval env c) (Tm.eval env lo) (Tm.eval env hi)).1 :=
+    fun c lo hi => congrArg Prod.fst (Tm.eval_lshr64 env c lo hi)
+  cases left <;>
+  simp only [shiftV, Bool.false_eq_true, ↓reduceIte, Tm.eval_ite, Tm.eval_or, Tm.eval_and, Tm.eval_ne64, Tm.eval_ule,
+    Tm.eval_sub, Tm.eval_shl, Tm.eval_lit', l1, and_self]
+
 theorem ev_shift (left : Bool) (a amt r : TP) (h : pShift left a amt = some r) :
     r.ev env = if left then a.ev env <<< (amt.ev env).toNat else a.ev env >>> (amt.ev env).toNat := by
   unfold pShift at h
@@ -238,7 +275,12 @@ theorem ev_shift (left : Bool) (a amt r : TP) (h : pShift left a amt = some r) :
         rw [e1, e2, Tm.eval_lit']
         simp only [Dom.lshr64, Dom.lit, lshrrev64, split_join]
         exact shr_amt _ n hn'
-  · simp at h
+  · simp only [Option.some.injEq] at h
+    subst h
+    have e := shiftV_eval env left a amt
+    simp only [TP.ev]
+    rw [e.1, e.2, shiftV_spec]
+    rfl
 
 end
 

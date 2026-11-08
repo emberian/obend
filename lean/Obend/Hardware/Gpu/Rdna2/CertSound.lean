@@ -351,10 +351,10 @@ theorem checkWaves_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.H
         · rename_i hc
           rw [hm.free a (by simpa using hc) (viewStart_lds hw a u hu)]
           exact viewStart_ok h0 hw a u hu
-      have hw' := wave_sound (env := menv m0) prog (fuelOf prog) m _ hbase descSetLo g (ldsBaseOf g) lds herr
+      have hw' := swave_sound (menv m0) prog (fuelOf prog) m _ hbase descSetLo g (ldsBaseOf g) lds herr
       dsimp only at hw'
       obtain ⟨serr, shalt, sload, sframe⟩ := hw'
-      generalize (run prog (fuelOf prog) (initWave (⟨{}, baseView words lay known acc.stored⟩ : SymMem) descSetLo g
+      generalize (srun prog (fuelOf prog) (initWave (⟨{}, baseView words lay known acc.stored⟩ : SymMem) descSetLo g
           (ldsBaseOf g) lds) : SymWave) = st
         at herr hhalt h1 h2 c1 c2 c3 c4 c5 c6 shalt sload sframe
       generalize run prog (fuelOf prog) (initWave m descSetLo g (ldsBaseOf g) lds : WaveState) = sc

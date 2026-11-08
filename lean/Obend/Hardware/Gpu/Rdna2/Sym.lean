@@ -214,6 +214,21 @@ theorem snd_reflects : Reflects (sndHom (env := env)) (sndMem (env := env) (m0 :
 
 /-! ## 4. A symbolic wave, sound for every concrete one it describes -/
 
+theorem u32_iteLawful : IteLawful UInt32 := by
+  intro x v a b hx
+  simp only [Dom.conc, Option.some.injEq] at hx; subst hx; rfl
+
+theorem tm_iteLawful : IteLawful Tm := by
+  intro x v a b hx
+  have hc : Tm.condOf 8 x = x := by
+    match x, hx with
+    | .mk _ (.lit _) _, _ => simp [Tm.condOf]
+  show Tm.mkIte x a b = _
+  unfold Tm.mkIte
+  rw [hc]
+  simp only [Dom.conc] at hx
+  simp only [hx]
+
 /-- If the symbolic run of a wave from the base view `base` succeeds, then from every concrete memory
 `m0` that `base` describes (`m0` holds `eval env u` wherever `base` gives `u`), the concrete run succeeds,
 halts when the symbolic one does, holds `eval env u` wherever the symbolic run's memory holds `u`, and
@@ -231,14 +246,14 @@ theorem wave_sound (prog : Program) (n : Nat) (m0 : Memory) (base : UInt64 → O
     simp only [SymMem.load, Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_empty] at hu
     exact hbase a u hu, fun _ _ => rfl⟩
   let sr : GWave (RV env) (RM env m0) := initWave rm setLo g lb ln
-  have h2 := run_hom (sndHom (env := env)) (sndMem (env := env) (m0 := m0)) True (fun _ => snd_reflects) prog n sr
+  have h2 := run_hom (sndHom (env := env)) (sndMem (env := env) (m0 := m0)) tm_iteLawful True (fun _ => snd_reflects) prog n sr
     (Or.inr trivial)
   have hsnd : mapW sndHom sndMem sr = (initWave (⟨{}, base⟩ : SymMem) setLo g lb ln : SymWave) := initWave_hom _ _ rm setLo g lb ln
   have hfst : mapW fstHom fstMem sr = (initWave m0 setLo g lb ln : WaveState) := initWave_hom _ _ rm setLo g lb ln
   rw [hsnd] at h2
   have herr : (run prog n sr).err = none := by
     have := congrArg GWave.err h2; simp only [mapW_err] at this; rw [← this]; exact hsym
-  have h1 := run_hom (fstHom (env := env)) (fstMem (env := env) (m0 := m0)) False (fun h => h.elim) prog n sr
+  have h1 := run_hom (fstHom (env := env)) (fstMem (env := env) (m0 := m0)) u32_iteLawful False (fun h => h.elim) prog n sr
     (Or.inl herr)
   rw [hfst] at h1
   simp only []

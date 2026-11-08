@@ -246,9 +246,11 @@ def vgprCount : Nat := 256
 
 structure GWave (V M : Type) where
   sgpr : Array V
-  /-- EXEC is always known: it is written only from known values, and every write from an unknown
-  value is refused (a data-dependent EXEC is outside what the model claims). -/
-  exec : UInt64
+  /-- EXEC as its two dwords (manual 3.3), values of the domain like every other register: a mask a
+  compare computed from data is a mask of terms in a symbolic run, and a lane whose bit is not known
+  writes the select of its new and old value on that bit (manual 6.2.2: a thread writes only if its EXEC
+  bit is set). -/
+  exec : V × V
   scc : V
   m0 : V
   /-- `vgpr[r * 64 + lane]`. -/
@@ -268,7 +270,7 @@ structure GWave (V M : Type) where
 variable {V M : Type} [Dom V] [MemDom M V]
 
 def GWave.init (mem : M) (ldsBase : UInt64) (ldsDwords : Nat) : GWave V M :=
-  { sgpr := Array.replicate sgprCount (Dom.lit 0), exec := 0xFFFFFFFFFFFFFFFF, scc := Dom.lit 0,
+  { sgpr := Array.replicate sgprCount (Dom.lit 0), exec := (Dom.lit 0xFFFFFFFF, Dom.lit 0xFFFFFFFF), scc := Dom.lit 0,
     m0 := Dom.lit 0, vgpr := Array.replicate (vgprCount * lanes) (Dom.lit 0), pc := 0, mem := mem,
     halted := false, err := none, ldsBase := ldsBase, ldsDwords := ldsDwords }
 
@@ -288,7 +290,23 @@ def writeSgpr (s : GWave V M) (n : Nat) (v : V) : GWave V M :=
 def readVgpr (s : GWave V M) (r lane : Nat) : V := s.vgpr.getD (r * lanes + lane) (Dom.lit 0)
 def writeVgpr (s : GWave V M) (r lane : Nat) (v : V) : GWave V M :=
   if r < vgprCount then { s with vgpr := s.vgpr.set! (r * lanes + lane) v } else s
-def execBit (s : GWave V M) (lane : Nat) : Bool := (s.exec >>> lane.toUInt64) &&& 1 == 1
+/-- A lane's bit of a mask pair. -/
+def maskBit (m : V × V) (lane : Nat) : V := if lane < 32 then Dom.bit m.1 lane else Dom.bit m.2 (lane - 32)
+
+/-- A lane's EXEC bit, `0` or `1`. -/
+def execBit (s : GWave V M) (lane : Nat) : V := maskBit s.exec lane
+
+/-- The lane is known to be off (its EXEC bit is known and `0`). -/
+def laneOff (s : GWave V M) (lane : Nat) : Bool := Dom.conc (execBit s lane) == some 0
+
+/-- The active lanes in order, if every EXEC bit is known (memory accesses and `V_READFIRSTLANE` need
+them; a lane of unknown activity there is refused). -/
+def activeLanes? (s : GWave V M) : Option (List Nat) :=
+  ((List.range lanes).mapM fun l => (Dom.conc (execBit s l)).map fun v => (l, v != 0)).map
+    fun ps => (ps.filter (·.2)).map (·.1)
+
+/-- EXECZ (manual 3.3, 5.2 Table 10 code 252): `1` when EXEC is zero. -/
+def execzV (s : GWave V M) : V := Dom.ite (Dom.nez64 s.exec.1 s.exec.2) (Dom.lit 0) (Dom.lit 1)
 
 /-! ## 4. Operand codes (manual 5.2 Table 10, 6.2 Table 20) -/
 
@@ -322,10 +340,10 @@ def scalarSource (s : GWave V M) (code : Nat) (lit : Option UInt32) : Option V :
   | .sgpr n => some (readSgpr s n)
   | .m0 => some s.m0
   | .lit v => some (Dom.lit v)
-  | .execLo => some (Dom.lit s.exec.toUInt32)
-  | .execHi => some (Dom.lit (s.exec >>> 32).toUInt32)
+  | .execLo => some s.exec.1
+  | .execHi => some s.exec.2
   | .vccz => (Dom.conc (readSgpr s 106)).bind fun lo => (Dom.conc (readSgpr s 107)).map fun hi => Dom.lit (b2w (lo == 0 && hi == 0))
-  | .execz => some (Dom.lit (b2w (s.exec == 0)))
+  | .execz => some (execzV s)
   | .scc => some s.scc
   | .literal => lit.map Dom.lit
   | .none => none
@@ -362,7 +380,7 @@ def maskKind (code : Nat) : Src64Kind :=
 def resolve64 (s : GWave V M) (k : Src64Kind) (lane : Nat) : Option (V × V) :=
   match k with
   | .sgprPair n => some (readSgpr s n, readSgpr s (n + 1))
-  | .exec => some (Dom.lit s.exec.toUInt32, Dom.lit (s.exec >>> 32).toUInt32)
+  | .exec => some s.exec
   | .lit lo hi => some (Dom.lit lo, Dom.lit hi)
   | .vgprPair r => some (readVgpr s r lane, readVgpr s (r + 1) lane)
   | .none => none
@@ -371,13 +389,8 @@ def source64 (s : GWave V M) (code : Nat) (lane : Nat) : Option (V × V) := reso
 
 def maskSource (s : GWave V M) (code : Nat) : Option (V × V) := resolve64 s (maskKind code) 0
 
-/-- A lane's bit of a mask pair. -/
-def maskBit (m : V × V) (lane : Nat) : V := if lane < 32 then Dom.bit m.1 lane else Dom.bit m.2 (lane - 32)
-
-/-- EXEC from a known pair; a pair not known is refused. -/
-def writeExec (s : GWave V M) (lo hi : V) : GWave V M :=
-  s.withSome ((Dom.conc lo).bind fun l => (Dom.conc hi).map fun h => join64 l h)
-    "EXEC written from a value the model does not know" fun e => { s with exec := e }
+/-- EXEC written, known or not. -/
+def writeExec (s : GWave V M) (lo hi : V) : GWave V M := { s with exec := (lo, hi) }
 
 /-- What a scalar destination code (7 bits) names: SGPR or VCC half, M0, NULL (discarded), EXEC halves. -/
 inductive DstKind where
@@ -397,8 +410,8 @@ def writeScalarDst (s : GWave V M) (code : Nat) (v : V) : GWave V M :=
   | .sgpr n => writeSgpr s n v
   | .m0 => { s with m0 := v }
   | .null => s
-  | .execLo => writeExec s v (Dom.lit (s.exec >>> 32).toUInt32)
-  | .execHi => writeExec s (Dom.lit s.exec.toUInt32) v
+  | .execLo => writeExec s v s.exec.2
+  | .execHi => writeExec s s.exec.1 v
   | .none => s.fail s!"scalar destination code {code} is not modelled"
 
 /-- A 64-bit scalar destination: an SGPR pair (VCC at 106), NULL, EXEC. -/
@@ -453,12 +466,13 @@ refused rather than interpreted. -/
 def modifiersClear (i : Inst) : Bool :=
   i.fam != "VOP3" || (i.field "NEG" == 0 && i.field "ABS" == 0 && i.field "CLAMP" == 0 && i.field "OMOD" == 0 && i.field "OP_SEL" == 0)
 
-/-- The active lanes, in order. -/
-def activeLanes (s : GWave V M) : List Nat := (List.range lanes).filter (execBit s)
-
 /-- The first `n` sources of a VALU instruction at a lane. -/
 def laneSources (i : Inst) (s : GWave V M) (n : Nat) (lane : Nat) : Option (List V) :=
   (List.range n).mapM fun k => vectorSource s (srcCode i k) i.literal lane
+
+def src0 (src : List V) : V := src.getD 0 (Dom.lit 0)
+def src1 (src : List V) : V := src.getD 1 (Dom.lit 0)
+def src2 (src : List V) : V := src.getD 2 (Dom.lit 0)
 
 /-- Write `(lane, value)` results to VGPR `dst`. -/
 def writeLanes (s : GWave V M) (dst : Nat) (rs : List (Nat × V)) : GWave V M :=
@@ -488,29 +502,41 @@ def sdwaLift (i : Inst) (f : List V → Nat → V) (src : List V) (lane : Nat) :
   sdwaDst (f [sdwaSelV (src.getD 0 (Dom.lit 0)) (i.field "SRC0_SEL"), sdwaSelV (src.getD 1 (Dom.lit 0)) (i.field "SRC1_SEL")] lane)
     (i.field "DST_SEL")
 
-/-- A per-lane 32-bit VALU operation over active lanes (manual 6.2.2: a thread writes only if its EXEC
-bit is set). `f` sees the lane's sources; a source the model does not carry refuses the instruction.
-The results are computed from `s` first and then written, so the register file updates in place. -/
+/-- One lane of a VALU operation (manual 6.2.2: a thread writes only if its EXEC bit is set): a lane known
+to be off is not computed and keeps `off`; any other lane computes `k` from its sources, and its result
+is the select on its EXEC bit of that and `off` (the result itself when the bit is known to be set). A
+source the model does not carry refuses the instruction. -/
+def laneStep {α : Type} (s : GWave V M) (lane : Nat) (srcs : Option (List V)) (off : α) (k : List V → α)
+    (sel : V → α → α → α) : Option (Nat × α) :=
+  if laneOff s lane then some (lane, off) else
+  srcs.map fun src => (lane, sel (execBit s lane) (k src) off)
+
+/-- A per-lane 32-bit VALU operation. The results are computed from `s` first and then written, so the
+register file updates in place. -/
 def valuLanes (i : Inst) (s : GWave V M) (nSrc : Nat) (f : List V → Nat → V) : GWave V M :=
   if isSdwa i && !sdwaClear i then s.fail s!"{i.name}: an SDWA modifier other than the selects is not modelled" else
   let g : List V → Nat → V := if isSdwa i then sdwaLift i f else f
-  s.withSome ((activeLanes s).mapM (fun lane => (laneSources i s nSrc lane).map fun src => (lane, g src lane)))
-    s!"{i.name}: an operand code is not modelled" fun rs => writeLanes s (i.field "VDST") rs
+  let dst := i.field "VDST"
+  s.withSome ((List.range lanes).mapM fun lane =>
+      laneStep s lane (laneSources i s nSrc lane) (readVgpr s dst lane) (fun src => g src lane) Dom.ite)
+    s!"{i.name}: an operand code is not modelled" fun rs => writeLanes s dst rs
 
-/-- The mask a lane-wise bit computation leaves: inactive lanes `0`. -/
-def maskOf (s : GWave V M) (bits : Nat → V) : V × V :=
-  ((List.range 32).map (fun l => if execBit s l then bits l else Dom.lit 0) |> Dom.pack,
-   (List.range 32).map (fun l => if execBit s (l + 32) then bits (l + 32) else Dom.lit 0) |> Dom.pack)
+/-- A mask from its 64 lane bits, lane 0 first. -/
+def maskOfBits (bs : List V) : V × V := (Dom.pack (bs.take 32), Dom.pack (bs.drop 32))
+
+/-- The select of a pair on a bit. -/
+def ite2 (c : V) (a b : V × V) : V × V := (Dom.ite c a.1 b.1, Dom.ite c a.2 b.2)
 
 /-- A VALU operation producing a per-lane result and a mask bit (carry): the result to `VDST` for active
 lanes, the mask fully written with inactive lanes zero (manual 3.9: "VCC is fully written"). -/
 def valuLanesCarry (i : Inst) (s : GWave V M) (f : V → V → Nat → V × V) : GWave V M :=
   if isSdwa i then s.fail s!"{i.name}: SDWA on a carry-out is not modelled" else
-  s.withSome ((activeLanes s).mapM (fun lane => (laneSources i s 2 lane).map fun src =>
-      (lane, f (src.getD 0 (Dom.lit 0)) (src.getD 1 (Dom.lit 0)) lane)))
+  let dst := i.field "VDST"
+  s.withSome ((List.range lanes).mapM fun lane =>
+      laneStep s lane (laneSources i s 2 lane) (readVgpr s dst lane, Dom.lit 0)
+        (fun src => f (src.getD 0 (Dom.lit 0)) (src.getD 1 (Dom.lit 0)) lane) ite2)
     s!"{i.name}: an operand code is not modelled" fun rs =>
-    let carries : Nat → V := fun lane => ((rs.find? (·.1 == lane)).map (·.2.2)).getD (Dom.lit 0)
-    writeScalarDst64 (writeLanes s (i.field "VDST") (rs.map fun (l, r) => (l, r.1))) (maskDst i) (maskOf s carries)
+    writeScalarDst64 (writeLanes s dst (rs.map fun (l, r) => (l, r.1))) (maskDst i) (maskOfBits (rs.map (·.2.2)))
 
 /-- A compare: the mask of active lanes passing, written whole to VCC / an SGPR pair, or to EXEC for
 V_CMPX (manual 12.9: `D[threadId] = test`, `EXEC[threadId] = test` for CMPX; 3.9: `VCC[n] = EXEC[n] &
@@ -521,19 +547,19 @@ def valuCompare (i : Inst) (s : GWave V M) (wide : Bool) (test : List V → V) :
     if wide then
       (source64 s (srcCode i 0) lane).bind fun a => (source64 s (srcCode i 1) lane).map fun b => [a.1, a.2, b.1, b.2]
     else laneSources i s 2 lane
-  s.withSome ((activeLanes s).mapM (fun lane => (srcs lane).map fun src => (lane, test src)))
+  s.withSome ((List.range lanes).mapM fun lane => laneStep s lane (srcs lane) (Dom.lit 0) test Dom.ite)
     s!"{i.name}: an operand code is not modelled" fun rs =>
-    let bits : Nat → V := fun lane => ((rs.find? (·.1 == lane)).map (·.2)).getD (Dom.lit 0)
-    let m := maskOf s bits
+    let m := maskOfBits (rs.map (·.2))
     if i.name.startsWith "V_CMPX" then writeExec s m.1 m.2 else writeScalarDst64 s (maskDst i) m
 
 /-- A 64-bit shift per lane: `VDST` is a VGPR pair. -/
 def valuShift64 (i : Inst) (s : GWave V M) (f : V → V → V → V × V) : GWave V M :=
-  s.withSome ((activeLanes s).mapM (fun lane =>
-      (vectorSource s (srcCode i 0) i.literal lane).bind fun c =>
-        (source64 s (srcCode i 1) lane).map fun p => (lane, f c p.1 p.2)))
+  let dst := i.field "VDST"
+  s.withSome ((List.range lanes).mapM fun lane =>
+      laneStep s lane ((vectorSource s (srcCode i 0) i.literal lane).bind fun c =>
+          (source64 s (srcCode i 1) lane).map fun p => [c, p.1, p.2])
+        (readVgpr s dst lane, readVgpr s (dst + 1) lane) (fun src => f (src0 src) (src1 src) (src2 src)) ite2)
     s!"{i.name}: an operand code is not modelled" fun rs =>
-    let dst := i.field "VDST"
     writeLanes (writeLanes s dst (rs.map fun (l, r) => (l, r.1))) (dst + 1) (rs.map fun (l, r) => (l, r.2))
 
 /-- The buffer resource constant (manual 8.1.8 Table 37) in four SGPRs: base address (47:0), stride
@@ -577,9 +603,9 @@ def mubufAddrs (i : Inst) (r : BufferResource) (soff : UInt32) (voff : Nat) (n :
     if inRange r off then some (((r.base + soff.toUInt64 + UInt64.ofNat off) &&& 0xFFFFFFFFFFFFFFFC) >>> 2) else none
 
 /-- The per-lane address lists of a MUBUF instruction, if every address is known. -/
-def mubufLaneAddrs (i : Inst) (s : GWave V M) (r : BufferResource) (soff : UInt32) (n : Nat) :
+def mubufLaneAddrs (i : Inst) (s : GWave V M) (act : List Nat) (r : BufferResource) (soff : UInt32) (n : Nat) :
     Option (List (Nat × List (Option UInt64))) :=
-  (activeLanes s).mapM fun lane =>
+  act.mapM fun lane =>
     if i.field "OFFEN" == 1 then
       (Dom.conc (readVgpr s (i.field "VADDR") lane)).map fun v => (lane, mubufAddrs i r soff v.toNat n)
     else some (lane, mubufAddrs i r soff 0 n)
@@ -601,7 +627,8 @@ def execMubuf (i : Inst) (s : GWave V M) (isStore : Bool) : GWave V M :=
   if r.swizzle || r.addTid || i.field "IDXEN" == 1 || i.field "LDS" == 1 || i.field "TFE" == 1 then
     s.fail s!"{i.name}: swizzled, indexed, tid-added, LDS or TFE buffer access is not modelled" else
   s.withSome ((scalarSource s (i.field "SOFFSET") none).bind Dom.conc) s!"{i.name}: SOFFSET is not known" fun soff =>
-  s.withSome (mubufLaneAddrs i s r soff n) s!"{i.name}: an address is not known" fun las =>
+  s.withSome (activeLanes? s) s!"{i.name}: an EXEC bit is not known" fun act =>
+  s.withSome (mubufLaneAddrs i s act r soff n) s!"{i.name}: an address is not known" fun las =>
   let vd := i.field "VDATA"
   -- The effects are read from `s` first and applied afterwards, so memory and registers update in place.
   if isStore then
@@ -631,7 +658,8 @@ writing one dword in one instruction, a read of a dword this work-group has not 
 refused. -/
 def execDs (i : Inst) (s : GWave V M) (n : Nat) (isStore : Bool) : GWave V M :=
   if i.field "GDS" != 0 then s.fail s!"{i.name}: GDS is not modelled" else
-  s.withSome ((activeLanes s).mapM fun lane => (dsLaneAddrs i s n lane).map fun as => (lane, as))
+  s.withSome (activeLanes? s) s!"{i.name}: an EXEC bit is not known" fun act =>
+  s.withSome (act.mapM fun lane => (dsLaneAddrs i s n lane).map fun as => (lane, as))
     s!"{i.name}: an LDS address is not known, not dword aligned or outside the work-group's LDS" fun las =>
   if isStore then
     if !(las.flatMap (·.2)).Nodup then s.fail s!"{i.name}: two lanes write one LDS dword" else
@@ -692,11 +720,10 @@ def andB64 (s : GWave V M) (code : Nat) (d0 d1 : V) : GWave V M :=
 
 /-- `D = EXEC; EXEC = S0 & EXEC; SCC = EXEC != 0` (manual 12.2, S_AND_SAVEEXEC_B64). -/
 def saveexecB64 (s : GWave V M) (code : Nat) (a : V × V) : GWave V M :=
-  let old : V × V := (Dom.lit s.exec.toUInt32, Dom.lit (s.exec >>> 32).toUInt32)
+  let old : V × V := s.exec
   let s1 := writeExec s (Dom.band a.1 old.1) (Dom.band a.2 old.2)
-  if s1.err.isSome then s1 else
   let s2 := writeScalarDst64 s1 code old
-  if s2.err.isSome then s2 else { s2 with scc := Dom.lit (if s2.exec != 0 then 1 else 0) }
+  if s2.err.isSome then s2 else { s2 with scc := Dom.nez64 s2.exec.1 s2.exec.2 }
 
 /-- S_MOVK_I32 (manual 12.2): `D.i32 = signext(SIMM16[15:0])`. -/
 def movkValue (simm : Nat) : UInt32 := if simm ≥ 32768 then UInt32.ofNat (simm + 0xFFFF0000) else UInt32.ofNat simm
@@ -713,9 +740,6 @@ def sop32 (s : GWave V M) (code : Nat) (d c : V) : GWave V M :=
 mask's half: bits `0 .. n-1` of S0 count, `n = min(lane, 32)` for the low form, `lane - 32` for the high. -/
 def mbcntV (s0 s1 : V) (n : Nat) : V := (List.range n).foldl (fun acc k => Dom.add acc (Dom.bit s0 k)) s1
 
-def src0 (src : List V) : V := src.getD 0 (Dom.lit 0)
-def src1 (src : List V) : V := src.getD 1 (Dom.lit 0)
-def src2 (src : List V) : V := src.getD 2 (Dom.lit 0)
 
 /-- The instructions the model gives a semantics to; everything else is `unknown` and refused. -/
 inductive InstOp where
@@ -792,8 +816,8 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
       "S_AND_B64: source code not modelled" fun ab =>
     andB64 s (i.field "SDST") (Dom.band ab.1.1 ab.2.1) (Dom.band ab.1.2 ab.2.2)
   -- Program flow (manual 12.5 SOPP); gem5 twins sopp.cc S_CBRANCH_EXECZ, S_ENDPGM, S_WAITCNT
-  | .s_cbranch_execz =>
-    if s.exec == 0 then { s with pc := (Int.ofNat s.pc + signed16 (i.field "SIMM16")).toNat } else s
+  | .s_cbranch_execz => s.withSome (Dom.conc (execzV s)) "S_CBRANCH_EXECZ: EXEC is not known" fun z =>
+    if z != 0 then { s with pc := (Int.ofNat s.pc + signed16 (i.field "SIMM16")).toNat } else s
   | .s_endpgm => { s with halted := true }
   | .s_waitcnt => s
   | .s_clause => s
@@ -844,8 +868,7 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
       "S_NOR_B64: an operand code is not modelled" fun ab =>
     andB64 s (i.field "SDST") (Dom.sub (Dom.lit 0xFFFFFFFF) (Dom.bor ab.1.1 ab.2.1))
       (Dom.sub (Dom.lit 0xFFFFFFFF) (Dom.bor ab.1.2 ab.2.2))
-  -- Manual 12.3 SOP1 S_AND_SAVEEXEC_B64: `D = EXEC; EXEC = S0 & EXEC; SCC = EXEC != 0`; a mask the
-  -- model does not know is refused by writeExec
+  -- Manual 12.3 SOP1 S_AND_SAVEEXEC_B64: `D = EXEC; EXEC = S0 & EXEC; SCC = EXEC != 0`
   | .s_and_saveexec_b64 => s.withSome (ssrc64 i s 0) "S_AND_SAVEEXEC_B64: an operand code is not modelled" fun a =>
     saveexecB64 s (i.field "SDST") a
   -- Manual 12.2 SOPK S_MULK_I32: `D = D * signext(SIMM16)`, SCC unchanged
@@ -984,8 +1007,8 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   | .v_readfirstlane_b32 =>
     let code := srcCode i 0
     if isSdwa i || code < 256 || code > 511 then s.fail "V_READFIRSTLANE_B32: only a VGPR source is modelled" else
-    let lane := ((List.range lanes).find? (execBit s)).getD 0
-    writeScalarDst s (i.field "VDST") (readVgpr s (code - 256) lane)
+    s.withSome (activeLanes? s) "V_READFIRSTLANE_B32: an EXEC bit is not known" fun act =>
+    writeScalarDst s (i.field "VDST") (readVgpr s (code - 256) (act.headD 0))
   -- Manual 12.12 V_SUBREV_CO_U32 `D = S1 - S0; VCC = S0 > S1`; gem5 twin vop3.cc V_SUBREV_CO_U32
   | .v_subrev_co_u32 => valuLanesCarry i s fun a b _ => (Dom.sub b a, Dom.borrow b a)
   -- Manual 12.9 VOPC V_CMP_GE_U32 `S0 >= S1`, V_CMP_GT_U64 `S0 > S1`; gem5 twins vopc.cc

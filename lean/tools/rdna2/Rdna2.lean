@@ -231,7 +231,7 @@ def liftHi (r : Tm.Residual) : Option (W × W) :=
 /-- An operation in Lean syntax. -/
 def opLean : TOp → String
   | .lit v => s!"(.lit {v})" | .var a => s!"(.var {a})" | .bit k => s!"(.bit {k})"
-  | .sum => ".sum" | .sub => ".sub" | .mul => ".mul" | .mulHi => ".mulHi" | .band => ".band"
+  | .sum => ".sum" | .tsum => ".tsum" | .sub => ".sub" | .mul => ".mul" | .mulHi => ".mulHi" | .band => ".band"
   | .bor => ".bor" | .shl => ".shl" | .lshr => ".lshr" | .ite => ".ite" | .carry => ".carry"
   | .borrow => ".borrow" | .addc => ".addc" | .carryc => ".carryc" | .subc => ".subc"
   | .borrowc => ".borrowc" | .ule => ".ule" | .ugt => ".ugt" | .ult64 => ".ult64" | .ne64 => ".ne64"

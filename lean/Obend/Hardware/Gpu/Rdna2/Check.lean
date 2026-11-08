@@ -255,7 +255,8 @@ def stateOfRow (regs sgprs vgprs : String) (mem : Memory) : Except String (WaveS
   let pc := match r[3]? with | some p => p.toNat?.getD 0 | none => 0
   let mut s : WaveState := GWave.init mem 0 0
   let vcc := parseHex64 vc
-  s := { s with exec := parseHex64 ex, scc := if sc == "1" then 1 else 0, pc := pc }
+  let e := parseHex64 ex
+  s := { s with exec := (e.toUInt32, (e >>> 32).toUInt32), scc := if sc == "1" then 1 else 0, pc := pc }
   s := writeSgpr (writeSgpr s 106 vcc.toUInt32) 107 (vcc >>> 32).toUInt32
   for (h, k) in ((sgprs.splitOn " ").filter (· != "")).zipIdx do
     s := writeSgpr s k (parseHex32 h)

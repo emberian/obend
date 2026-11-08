@@ -158,6 +158,7 @@ def smartNode (o : TOp) (as : List Tm) : Tm :=
   | .lit v => lit v
   | .var a => var a
   | .sum => mkSum as
+  | .tsum => mkSum as
   | .sub => mkSub (argT as 0) (argT as 1)
   | .mul => mkMul (argT as 0) (argT as 1)
   | .mulHi => mkMulHi (argT as 0) (argT as 1)
@@ -196,6 +197,7 @@ theorem eval_smartNode (env : UInt64 → UInt32) (o : TOp) (as : List Tm) :
   have hr := eval_lshr64 env (argT as 0) (argT as 1) (argT as 2)
   cases o <;> simp only [smartNode, TOp.sem, eval_lit, eval_var]
   case sum => rw [eval_mkSum]
+  case tsum => rw [eval_mkSum]
   case sub => exact eval_sub env _ _ |>.trans (by simp [Dom.sub, eval_argT])
   case mul => exact (eval_mul env _ _).trans (by simp [Dom.mul, mulLo, eval_argT])
   case mulHi => exact (eval_mulHi env _ _).trans (by simp [Dom.mulHi, mulHi_eq, eval_argT])
@@ -306,7 +308,7 @@ def canonLeaves (impl spec : Tm) (leaves : Array Tm) : Nat → Array Tm
 /-! ## 4. Residuals and the check -/
 
 def opLean : TOp → String
-  | .lit v => s!"(.lit {v})" | .var a => s!"(.var {a})" | .sum => ".sum" | .sub => ".sub" | .mul => ".mul"
+  | .lit v => s!"(.lit {v})" | .var a => s!"(.var {a})" | .sum => ".sum" | .tsum => ".tsum" | .sub => ".sub" | .mul => ".mul"
   | .mulHi => ".mulHi" | .band => ".band" | .bor => ".bor" | .shl => ".shl" | .lshr => ".lshr" | .ite => ".ite"
   | .carry => ".carry" | .borrow => ".borrow" | .addc => ".addc" | .carryc => ".carryc" | .subc => ".subc"
   | .borrowc => ".borrowc" | .ule => ".ule" | .ugt => ".ugt" | .ult64 => ".ult64" | .ne64 => ".ne64"

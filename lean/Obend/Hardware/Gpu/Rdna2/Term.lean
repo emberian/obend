@@ -72,6 +72,8 @@ inductive TOp where
   | lit (v : UInt32)
   | var (a : UInt64)
   | sum
+  /-- A node of a long sum's treap (`Tm.tnode`): its value is the sum of its operands, like `sum`. -/
+  | tsum
   | sub | mul | mulHi | band | bor | shl | lshr | ite
   | carry | borrow | addc | carryc | subc | borrowc
   | ule | ugt | ult64 | ne64
@@ -88,6 +90,7 @@ def TOp.sem (env : UInt64 → UInt32) (op : TOp) (xs : List UInt32) : UInt32 :=
   | .lit v => v
   | .var addr => env addr
   | .sum => xs.foldr (· + ·) 0
+  | .tsum => xs.foldr (· + ·) 0
   | .sub => a 0 - a 1
   | .mul => a 0 * a 1
   | .mulHi => mulHiBV (a 0) (a 1)
@@ -320,13 +323,122 @@ theorem eval_finishSum (env : UInt64 → UInt32) (c : UInt32) (rest : List Tm) :
   | [x] => simp
   | x :: y :: zs => simp [TOp.sem]
 
-/-- A sum of terms: nested sums flattened, constants added up, the rest ordered by hash. -/
+/-! ### Long sums: a treap of addends
+
+A sum of more than 64 non-constant addends is a treap (Aragon and Seidel, "Randomized Search Trees",
+FOCS 1989) keyed by an addend's hash, its priority a mix of the key. A treap whose priorities are a
+function of its keys is uniquely represented (Seidel and Aragon, Algorithmica 1996; Sundar and Tarjan,
+"Unique binary search tree representations and equality-testing of sets and sequences", STOC 1990): one
+multiset of addends is one term however a compiler or the specification grouped the sum, and adding an
+addend builds O(log n) nodes and shares the rest, so a loop's running sum costs what a chain costs. A
+node is `tsum [l, x, .., x, r]`, the addend `x` with its multiplicity and `lit 0` an empty side; its value
+is the sum of its operands. Every operation below is sound for any term it is handed; the treap
+invariants matter only for completeness (meeting the other side as one term), so they are not proved. -/
+
+namespace T
+
+def empty : Tm := lit 0
+def mk (l : Tm) (xs : List Tm) (r : Tm) : Tm := node .tsum (l :: (xs ++ [r]))
+def view : Tm → Option (Tm × List Tm × Tm)
+  | .mk _ .tsum (l :: rest) =>
+    match rest.getLast? with
+    | some r => some (l, rest.dropLast, r)
+    | none => none
+  | _ => none
+def key (xs : List Tm) : UInt64 := (xs.headD (lit 0)).hsh
+def prio (k : UInt64) : UInt64 := mixHash k 0x2545F4914F6CDD1D
+
+/-- Insert an addend (a running sum's next term). -/
+def ins : Nat → Tm → Tm → Tm
+  | 0, t, x => node .sum [t, x]
+  | f + 1, t, x =>
+    match view t with
+    | none => if isLit t 0 then mk empty [x] empty else node .sum [t, x]
+    | some (l, xs, r) =>
+      let k := key xs
+      if x.hsh == k then mk l (x :: xs) r
+      else if x.hsh < k then
+        let l' := ins f l x
+        match view l' with
+        | some (ll, ys, lr) => if prio k < prio (key ys) then mk ll ys (mk lr xs r) else mk l' xs r
+        | none => mk l' xs r
+      else
+        let r' := ins f r x
+        match view r' with
+        | some (rl, ys, rr) => if prio k < prio (key ys) then mk (mk l xs rl) ys rr else mk l xs r'
+        | none => mk l xs r'
+
+/-- The addends below, at and above a key. -/
+def split : Nat → Tm → UInt64 → Tm × List Tm × Tm
+  | 0, t, _ => (t, [], empty)
+  | f + 1, t, k =>
+    match view t with
+    | none => (t, [], empty)
+    | some (l, xs, r) =>
+      let kt := key xs
+      if k == kt then (l, xs, r)
+      else if k < kt then let p := split f l k; (p.1, p.2.1, mk p.2.2 xs r)
+      else let p := split f r k; (mk l xs p.1, p.2.1, p.2.2)
+
+/-- The sum of two treaps (the union of their multisets). -/
+def union : Nat → Tm → Tm → Tm
+  | 0, a, b => node .sum [a, b]
+  | f + 1, a, b =>
+    if isLit a 0 then b else if isLit b 0 then a else
+    match view a, view b with
+    | some (la, xa, ra), some (lb, xb, rb) =>
+      if prio (key xb) ≤ prio (key xa) then
+        let p := split f b (key xa)
+        mk (union f la p.1) (xa ++ p.2.1) (union f ra p.2.2)
+      else
+        let p := split f a (key xb)
+        mk (union f p.1 lb) (p.2.1 ++ xb) (union f p.2.2 rb)
+    | _, _ => node .sum [a, b]
+
+/-- The addends, in key order. -/
+def elems : Nat → Tm → List Tm
+  | 0, t => [t]
+  | f + 1, t =>
+    match view t with
+    | some (l, xs, r) => elems f l ++ xs ++ elems f r
+    | none => if isLit t 0 then [] else [t]
+
+/-- The number of addends, or `b` if there are at least `b`. -/
+def cnt : Nat → Tm → Nat → Nat
+  | 0, _, b => b
+  | f + 1, t, b =>
+    match view t with
+    | some (l, xs, r) =>
+      let c1 := cnt f l b
+      if b ≤ c1 + xs.length then b else min b (c1 + xs.length + cnt f r (b - (c1 + xs.length)))
+    | none => if isLit t 0 then 0 else min b 1
+
+/-- The depth allowance: a treap of a million addends is some 60 deep; past it the operations still
+add correctly, only no longer canonically. -/
+def depth : Nat := 512
+
+def step (acc : UInt32 × Tm) (x : Tm) : UInt32 × Tm :=
+  match x.litVal? with
+  | some v => (acc.1 + v, acc.2)
+  | none => if x.op == .tsum then (acc.1, union depth acc.2 x) else (acc.1, ins depth acc.2 x)
+
+end T
+
+def nonLits (fl : List Tm) : Nat := (fl.filter fun t => t.litVal?.isNone).length
+
+/-- A sum of terms: nested sums flattened and constants added up; up to 64 other addends in one node
+ordered by hash, more as a treap (with the constant beside it). -/
 def mkSum (ts : List Tm) : Tm :=
   let fl := ts.flatMap addends
-  -- flattened up to 64 addends; a longer sum keeps its operands (a loop's running sum stays a chain, the
-  -- same chain a left fold builds, instead of a list rebuilt at every step)
-  let acc := (if fl.length ≤ 64 then fl else ts).foldl sumStep (0, [])
-  finishSum acc.1 acc.2
+  if fl.all (fun t => t.op != .tsum) && nonLits fl ≤ 64 then
+    let acc := fl.foldl sumStep (0, [])
+    finishSum acc.1 acc.2
+  else
+    let acc := fl.foldl T.step (0, T.empty)
+    if T.cnt T.depth acc.2 65 ≤ 64 then
+      let acc' := (T.elems T.depth acc.2).foldl sumStep (acc.1, [])
+      finishSum acc'.1 acc'.2
+    else if acc.1 == 0 then acc.2 else node .sum [acc.2, lit acc.1]
 
 theorem sumStep_inv (env : UInt64 → UInt32) (xs : List Tm) (acc : UInt32 × List Tm) :
     (xs.foldl sumStep acc).1 + ((xs.foldl sumStep acc).2.map (eval env)).foldr (· + ·) 0 =
@@ -352,17 +464,152 @@ theorem foldr_flatMap_addends (env : UInt64 → UInt32) (ts : List Tm) :
   | cons t ts ih =>
     simp only [List.flatMap_cons, List.map_append, foldr_append32, ih, sum_addends, List.map_cons, List.foldr_cons]
 
+section TLaws
+variable (env : UInt64 → UInt32)
+
+theorem T.eval_mk (l : Tm) (xs : List Tm) (r : Tm) : eval env (T.mk l xs r) = eval env l + ((List.map (eval env) xs).foldr (· + ·) 0) + eval env r := by
+  simp only [T.mk, eval_node, TOp.sem, List.map_cons, List.foldr_cons, List.map_append, foldr_append32,
+    List.map_nil, List.foldr_nil, UInt32.add_zero, UInt32.add_assoc]
+
+theorem T.eval_view (t l r : Tm) (xs : List Tm) (h : T.view t = some (l, xs, r)) :
+    eval env t = eval env l + ((List.map (eval env) xs).foldr (· + ·) 0) + eval env r := by
+  match t, h with
+  | .mk _ .tsum (l' :: rest), h =>
+    simp only [T.view] at h
+    split at h
+    · rename_i r' hr
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      obtain ⟨ys, rfl⟩ := List.getLast?_eq_some_iff.mp hr
+      simp only [Tm.eval_mk, TOp.sem, List.map_cons, List.foldr_cons, List.dropLast_concat, List.map_append, foldr_append32,
+        List.map_nil, List.foldr_nil, UInt32.add_zero, UInt32.add_assoc]
+    · simp at h
+
+theorem T.eval_ins : ∀ (f : Nat) (t x : Tm), eval env (T.ins f t x) = eval env t + eval env x
+  | 0, t, x => by simp [T.ins, TOp.sem]
+  | f + 1, t, x => by
+    unfold T.ins
+    split
+    · split
+      · rename_i h; rw [T.eval_mk, eval_of_isLit env t 0 h]; simp [T.empty]
+      · simp [TOp.sem]
+    · rename_i l xs r hv
+      rw [T.eval_view env t l r xs hv]
+      dsimp only
+      split
+      · simp only [T.eval_mk, List.map_cons, List.foldr_cons]; ac_rfl
+      split
+      · have ih := T.eval_ins f l x
+        split
+        · rename_i ll ys lr hv'
+          have e := T.eval_view env _ _ _ _ hv'
+          split
+          · simp only [T.eval_mk]; rw [ih] at e
+            calc _ = (eval env ll + ((List.map (eval env) ys).foldr (· + ·) 0) + eval env lr) + ((List.map (eval env) xs).foldr (· + ·) 0) + eval env r := by ac_rfl
+              _ = (eval env l + eval env x) + ((List.map (eval env) xs).foldr (· + ·) 0) + eval env r := by rw [e]
+              _ = _ := by ac_rfl
+          · simp only [T.eval_mk, ih]; ac_rfl
+        · simp only [T.eval_mk, ih]; ac_rfl
+      · have ih := T.eval_ins f r x
+        split
+        · rename_i rl ys rr hv'
+          have e := T.eval_view env _ _ _ _ hv'
+          split
+          · simp only [T.eval_mk]; rw [ih] at e
+            calc _ = eval env l + ((List.map (eval env) xs).foldr (· + ·) 0) + (eval env rl + ((List.map (eval env) ys).foldr (· + ·) 0) + eval env rr) := by ac_rfl
+              _ = eval env l + ((List.map (eval env) xs).foldr (· + ·) 0) + (eval env r + eval env x) := by rw [e]
+              _ = _ := by ac_rfl
+          · simp only [T.eval_mk, ih]; ac_rfl
+        · simp only [T.eval_mk, ih]; ac_rfl
+
+theorem T.eval_split : ∀ (f : Nat) (t : Tm) (k : UInt64),
+    eval env t = eval env (T.split f t k).1 + ((List.map (eval env) (T.split f t k).2.1).foldr (· + ·) 0) + eval env (T.split f t k).2.2
+  | 0, t, k => by simp [T.split, T.empty]
+  | f + 1, t, k => by
+    unfold T.split
+    split
+    · simp [T.empty]
+    · rename_i l xs r hv
+      rw [T.eval_view env t l r xs hv]
+      dsimp only
+      split
+      · rfl
+      split
+      · have ih := T.eval_split f l k
+        simp only [T.eval_mk]; rw [ih]; ac_rfl
+      · have ih := T.eval_split f r k
+        simp only [T.eval_mk]; rw [ih]; ac_rfl
+
+theorem T.eval_union : ∀ (f : Nat) (a b : Tm), eval env (T.union f a b) = eval env a + eval env b
+  | 0, a, b => by simp [T.union, TOp.sem]
+  | f + 1, a, b => by
+    unfold T.union
+    split
+    · rename_i h; rw [eval_of_isLit env a 0 h]; simp
+    split
+    · rename_i h; rw [eval_of_isLit env b 0 h]; simp
+    split
+    · rename_i la xa ra lb xb rb ha hb
+      rw [T.eval_view env a la ra xa ha, T.eval_view env b lb rb xb hb]
+      split
+      · have hs := T.eval_split env f b (T.key xa)
+        rw [T.eval_view env b lb rb xb hb] at hs
+        simp only [T.eval_mk, T.eval_union f, List.map_append, foldr_append32]; rw [hs]; ac_rfl
+      · have hs := T.eval_split env f a (T.key xb)
+        rw [T.eval_view env a la ra xa ha] at hs
+        simp only [T.eval_mk, T.eval_union f, List.map_append, foldr_append32]; rw [hs]; ac_rfl
+    · simp [TOp.sem]
+
+theorem T.sum_elems : ∀ (f : Nat) (t : Tm), ((List.map (eval env) (T.elems f t)).foldr (· + ·) 0) = eval env t
+  | 0, t => by simp [T.elems]
+  | f + 1, t => by
+    unfold T.elems
+    split
+    · rename_i l xs r hv
+      rw [T.eval_view env t l r xs hv]
+      simp only [List.map_append, foldr_append32, T.sum_elems f]
+    · split
+      · rename_i h; rw [eval_of_isLit env t 0 h]; simp
+      · simp
+
+theorem T.step_inv (xs : List Tm) (acc : UInt32 × Tm) :
+    (xs.foldl T.step acc).1 + eval env (xs.foldl T.step acc).2 = acc.1 + eval env acc.2 + ((List.map (eval env) xs).foldr (· + ·) 0) := by
+  induction xs generalizing acc with
+  | nil => simp
+  | cons x xs ih =>
+    simp only [List.foldl_cons, List.map_cons, List.foldr_cons]
+    rw [ih (T.step acc x)]
+    unfold T.step
+    split
+    · rename_i v hv; rw [eval_of_litVal env x v hv]; dsimp only; ac_rfl
+    · split
+      · dsimp only; rw [T.eval_union]; ac_rfl
+      · dsimp only; rw [T.eval_ins]; ac_rfl
+
+end TLaws
+
 theorem eval_mkSum (env : UInt64 → UInt32) (ts : List Tm) :
     eval env (mkSum ts) = (ts.map (eval env)).foldr (· + ·) 0 := by
   unfold mkSum
   dsimp only
+  rw [← foldr_flatMap_addends env ts]
+  generalize ts.flatMap addends = fl
   split
-  · have key := sumStep_inv env (ts.flatMap addends) (0, [])
-    simp only [List.map_nil, List.foldr_nil, UInt32.zero_add, UInt32.add_zero, foldr_flatMap_addends] at key
-    simp only [eval_finishSum, key]
-  · have key := sumStep_inv env ts (0, [])
+  · have key := sumStep_inv env fl (0, [])
     simp only [List.map_nil, List.foldr_nil, UInt32.zero_add, UInt32.add_zero] at key
     simp only [eval_finishSum, key]
+  · have key := T.step_inv env fl (0, T.empty)
+    have he : eval env T.empty = 0 := by simp [T.empty]
+    simp only [he, UInt32.zero_add, UInt32.add_zero] at key
+    split
+    · have k2 := sumStep_inv env (T.elems T.depth (fl.foldl T.step (0, T.empty)).2) ((fl.foldl T.step (0, T.empty)).1, [])
+      simp only [List.map_nil, List.foldr_nil, UInt32.add_zero, T.sum_elems] at k2
+      simp only [eval_finishSum, k2, key]
+    · split
+      · rename_i hc; rw [← key, eq_of_beq hc]; simp
+      · simp only [eval_node, TOp.sem, List.map_cons, List.map_nil, List.foldr_cons, List.foldr_nil, eval_lit,
+          UInt32.add_zero]
+        rw [← key, UInt32.add_comm]
 
 /-- `0 - b`: a literal folded, a negation undone. -/
 def mkNeg (b : Tm) : Tm :=
@@ -503,6 +750,85 @@ def removeSub : List Tm → List Tm → Option (List Tm)
   | _ :: _, [] => none
   | x :: xs, y :: ys => if x = y then removeSub xs ys else (removeSub (x :: xs) ys).map (y :: ·)
 
+namespace T
+
+/-- `a` and `b` (all of `a`'s keys below `b`'s) as one treap. -/
+def merge : Nat → Tm → Tm → Tm
+  | 0, a, b => node .sum [a, b]
+  | f + 1, a, b =>
+    if isLit a 0 then b else if isLit b 0 then a else
+    match view a, view b with
+    | some (la, xa, ra), some (lb, xb, rb) =>
+      if prio (key xb) ≤ prio (key xa) then mk la xa (merge f ra b) else mk (merge f a lb) xb rb
+    | _, _ => node .sum [a, b]
+
+/-- One occurrence of `x` taken out. -/
+def del : Nat → Tm → Tm → Option Tm
+  | 0, _, _ => none
+  | f + 1, t, x =>
+    match view t with
+    | none => none
+    | some (l, xs, r) =>
+      let k := key xs
+      if x.hsh == k then
+        match removeOne x xs with
+        | some [] => some (merge f l r)
+        | some xs' => some (mk l xs' r)
+        | none => none
+      else if x.hsh < k then (del f l x).map fun l' => mk l' xs r
+      else (del f r x).map fun r' => mk l xs r'
+
+/-- `t` without the addends of `a`, for `a` a sub-multiset of `t`: where the two share a subtree (a running
+sum and its next value share all but one path) the subtree goes at once. -/
+def diff : Nat → Tm → Tm → Tm
+  | 0, t, _ => t
+  | f + 1, t, a =>
+    if isLit a 0 then t else if t = a then empty else
+    match view t, view a with
+    | some (lt, xt, rt), some (la, xa, ra) =>
+      if key xt == key xa then
+        let l' := diff f lt la
+        let r' := diff f rt ra
+        match xt.drop xa.length with
+        | [] => merge f l' r'
+        | xs => mk l' xs r'
+      else
+        let p := split f a (key xt)
+        mk (diff f lt p.1) xt (diff f rt p.2.2)
+    | _, _ => t
+
+/-- A sum's constant, its addends outside a treap, and its treap. -/
+def parts (t : Tm) : UInt32 × List Tm × Tm :=
+  (addends t).foldl (fun (acc : UInt32 × List Tm × Tm) x =>
+    match x.litVal? with
+    | some v => (acc.1 + v, acc.2)
+    | none => if x.op == .tsum then (acc.1, acc.2.1, union depth acc.2.2 x) else (acc.1, x :: acc.2.1, acc.2.2))
+    (0, [], empty)
+
+end T
+
+/-- `b - a` when `b` is a sum with the addends of `a` among its own: found by an unverified search over
+the treaps (`T.diff`, `T.del`) and kept only if `a + r` rebuilds `b`. -/
+def bigCand (a b : Tm) : Tm :=
+  let (cb, lb, tb) := T.parts b
+  let (ca, la, ta) := T.parts a
+  let t1 := T.diff T.depth tb ta
+  let (lb', t2) := la.foldl (fun (acc : List Tm × Tm) x =>
+    match removeOne x acc.1 with
+    | some l' => (l', acc.2)
+    | none => (acc.1, (T.del T.depth acc.2 x).getD acc.2)) (lb, t1)
+  mkSum (lit (cb - ca) :: t2 :: lb')
+
+def bigRest (a b : Tm) : Option Tm :=
+  let r := bigCand a b
+  if mkSum [a, r] = b then some r else none
+
+/-- `a > b` for a long sum `b`: the carry of `a + r` when `b` is `a + r`. -/
+def ugtSum (a b : Tm) : Tm :=
+  match bigRest a b with
+  | some r => mkCarry a r
+  | none => fold .ugt [a, b]
+
 /-- `a > b`. When `b` is a sum with the addends of `a` among its own, `b = a + r` and `a > a + r` is the
 carry of `a + r` (`carryBV a r = a + r < a`): the form a compiler gives `lo < a` for the low half of a
 64-bit add, whatever `a` is a sum of. -/
@@ -519,7 +845,8 @@ def mkUgt' (a b : Tm) : Tm :=
       -- a long sum keeps `a` whole among its operands
       match removeSub [a] b.args with
       | some rest => mkCarry a (mkSum rest)
-      | none => fold .ugt [a, b]
+      | none => ugtSum a b
+  else if b.op == .tsum then ugtSum a b
   else fold .ugt [a, b]
 
 /-- `a > a` never holds (a compiler's compare of a value with itself). -/
@@ -636,6 +963,11 @@ def mkBitF : Nat → Tm → Nat → Tm
     | .band, [a, b] => mkAnd (mkBitF f a k) (mkBitF f b k)
     | .bor, [a, b] => mkOr (mkBitF f a k) (mkBitF f b k)
     | .sub, [a, c] => if isLit a 0xFFFFFFFF then mkSub (lit 1) (mkBitF f c k) else mkBit x k
+    -- `0xFFFFFFFF - c` as the sum normal form writes it, `(0 - c) + 0xFFFFFFFF`
+    | .sum, [n, l] =>
+      match n with
+      | .mk _ .sub [z, c] => if isLit l 0xFFFFFFFF && isLit z 0 then mkSub (lit 1) (mkBitF f c k) else mkBit x k
+      | _ => mkBit x k
     | _, _ => mkBit x k
 
 def mkUle (a b : Tm) : Tm := fold .ule [a, b]
@@ -1041,6 +1373,25 @@ theorem eval_ne64 (a0 a1 b0 b1 : Tm) :
   unfold mkNe64; split
   · rw [eval_mkNe64Z, ne64_symm]
   · exact eval_mkNe64Z env _ _ _ _
+theorem eval_ugtSum (a b : Tm) : eval env (ugtSum a b) = b2w (eval env a > eval env b) := by
+  unfold ugtSum
+  split
+  · rename_i r hr
+    unfold bigRest at hr
+    simp only at hr
+    split at hr
+    · rename_i he
+      simp only [Option.some.injEq] at hr
+      subst hr
+      have hc := eval_carry env a (bigCand a b)
+      simp only [Dom.carry] at hc
+      rw [hc, carry_eq]
+      conv => rhs; rw [← he]
+      rw [eval_mkSum]
+      simp only [List.map_cons, List.map_nil, List.foldr_cons, List.foldr_nil, UInt32.add_zero, carryBV, gt_iff_lt]
+    · simp at hr
+  · simp [TOp.sem]
+
 theorem eval_mkUgt' (a b : Tm) : eval env (mkUgt' a b) = b2w (eval env a > eval env b) := by
   unfold mkUgt'
   split
@@ -1097,7 +1448,9 @@ theorem eval_mkUgt' (a b : Tm) : eval env (mkUgt' a b) = b2w (eval env a > eval 
           rw [← sum_addends env b]; simp [addends, hs]
         rw [hb, removeSub_sum env _ _ _ hr]
         simp only [List.map_cons, List.map_nil, List.foldr_cons, List.foldr_nil, UInt32.add_zero, carryBV, gt_iff_lt]
-      · simp [TOp.sem]
+      · exact eval_ugtSum env a b
+  split
+  · exact eval_ugtSum env a b
   · simp [TOp.sem]
 
 theorem eval_mkUgt (a b : Tm) : eval env (mkUgt a b) = b2w (eval env a > eval env b) := by
@@ -1216,6 +1569,8 @@ theorem bit_bor_bv (a b j : UInt32) : ((a ||| b) >>> j) &&& 1 = ((a >>> j) &&& 1
   bv_decide
 theorem bit_not_bv (c j : UInt32) : ((0xFFFFFFFF - c) >>> j) &&& 1 = 1 - ((c >>> j) &&& 1) := by
   bv_decide
+theorem bit_not_sum_bv (c j : UInt32) : (((0 - c) + (0xFFFFFFFF + 0)) >>> j) &&& 1 = 1 - ((c >>> j) &&& 1) := by
+  bv_decide
 
 theorem eval_mkAnd (a b : Tm) : eval env (mkAnd a b) = eval env a &&& eval env b := eval_and env a b
 theorem eval_mkSub (a b : Tm) : eval env (mkSub a b) = eval env a - eval env b := eval_sub env a b
@@ -1238,6 +1593,16 @@ theorem eval_mkBitF (f : Nat) (x : Tm) (k : Nat) :
       · rename_i hl
         rw [eval_mkSub, eval_lit, ih, eval_mk]; simp only [TOp.sem, List.map]
         rw [eval_of_isLit env a _ hl]; exact (bit_not_bv _ _).symm
+      · exact eval_mkBit env _ k
+    · rename_i n l
+      split
+      · rename_i z c
+        split
+        · rename_i hl
+          simp only [Bool.and_eq_true] at hl
+          rw [eval_mkSub, eval_lit, ih, eval_mk]; simp only [TOp.sem, List.map, List.foldr, eval_mk]
+          rw [eval_of_isLit env l _ hl.1, eval_of_isLit env z _ hl.2]; exact (bit_not_sum_bv _ _).symm
+        · exact eval_mkBit env _ k
       · exact eval_mkBit env _ k
     · exact eval_mkBit env _ k
 

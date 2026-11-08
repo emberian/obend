@@ -60,8 +60,12 @@ def Reflects : Prop :=
   (∀ x : V₁, Dom.conc x = none → Dom.conc (h.f x) = none) ∧
     (∀ (m : M₁) (a : UInt64), (MemDom.load m a : Option V₁) = none → (MemDom.load (hm.g m) a : Option V₂) = none)
 
+/-- A domain whose select on a known condition is that branch (every domain here: words, terms, pairs). -/
+def IteLawful (V : Type) [Dom V] : Prop :=
+  ∀ (x : V) (v : UInt32) (a b : V), Dom.conc x = some v → Dom.ite x a b = if v != 0 then a else b
+
 def mapW (s : GWave V₁ M₁) : GWave V₂ M₂ :=
-  { sgpr := s.sgpr.map h.f, exec := s.exec, scc := h.f s.scc, m0 := h.f s.m0, vgpr := s.vgpr.map h.f,
+  { sgpr := s.sgpr.map h.f, exec := (h.f s.exec.1, h.f s.exec.2), scc := h.f s.scc, m0 := h.f s.m0, vgpr := s.vgpr.map h.f,
     pc := s.pc, mem := hm.g s.mem, halted := s.halted, err := s.err, ldsBase := s.ldsBase,
     ldsDwords := s.ldsDwords }
 
@@ -141,13 +145,16 @@ theorem writeVgpr_hom (s : GWave V₁ M₁) (r l : Nat) (v : V₁) :
     mapW h hm (writeVgpr s r l v) = writeVgpr (mapW h hm s) r l (h.f v) := by
   unfold writeVgpr; split <;> simp [mapW, Array.set!, Array.map_setIfInBounds]
 
-@[simp] theorem mapW_exec (s : GWave V₁ M₁) : (mapW h hm s).exec = s.exec := rfl
+@[simp] theorem mapW_exec (s : GWave V₁ M₁) : (mapW h hm s).exec = (h.f s.exec.1, h.f s.exec.2) := rfl
 @[simp] theorem mapW_err (s : GWave V₁ M₁) : (mapW h hm s).err = s.err := rfl
 @[simp] theorem mapW_pc (s : GWave V₁ M₁) : (mapW h hm s).pc = s.pc := rfl
 @[simp] theorem mapW_halted (s : GWave V₁ M₁) : (mapW h hm s).halted = s.halted := rfl
 
-theorem execBit_hom (s : GWave V₁ M₁) (l : Nat) : execBit (mapW h hm s) l = execBit s l := rfl
-theorem activeLanes_hom (s : GWave V₁ M₁) : activeLanes (mapW h hm s) = activeLanes s := rfl
+theorem execBit_hom (s : GWave V₁ M₁) (l : Nat) : h.f (execBit s l) = execBit (mapW h hm s) l := by
+  unfold execBit maskBit; split <;> simp [h.bit]
+
+theorem execzV_hom (s : GWave V₁ M₁) : h.f (execzV s) = execzV (mapW h hm s) := by
+  unfold execzV; rw [h.ite, h.nez64, h.lit, h.lit]; rfl
 
 theorem fail_hom (s : GWave V₁ M₁) (msg : String) : mapW h hm (s.fail msg) = (mapW h hm s).fail msg := by
   unfold GWave.fail; split <;> simp_all [mapW]
@@ -191,15 +198,15 @@ theorem scalarSource_rel (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M
   | sgpr n => dsimp only; rw [← readSgpr_hom h hm]; exact ORel.some' R h.f _
   | m0 => dsimp only; exact ORel.some' R h.f _
   | lit v => dsimp only; rw [← h.lit]; exact ORel.some' R h.f _
-  | execLo => dsimp only; rw [mapW_exec, ← h.lit]; exact ORel.some' R h.f _
-  | execHi => dsimp only; rw [mapW_exec, ← h.lit]; exact ORel.some' R h.f _
+  | execLo => dsimp only; exact ORel.some' R h.f _
+  | execHi => dsimp only; exact ORel.some' R h.f _
   | vccz =>
     dsimp only
     rw [← readSgpr_hom h hm, ← readSgpr_hom h hm]
     refine ORel.bind (conc_rel h hm R hR _) fun lo => ?_
     refine ORel.map (conc_rel h hm R hR _) fun hi => ?_
     simp [h.lit]
-  | execz => dsimp only; rw [mapW_exec, ← h.lit]; exact ORel.some' R h.f _
+  | execz => dsimp only; rw [← execzV_hom]; exact ORel.some' R h.f _
   | scc => dsimp only; exact ORel.some' R h.f _
   | literal => dsimp only; rw [← lit_map h]; exact ORel.of_map R h.f _
   | none => dsimp only; exact ORel.none' R h.f
@@ -216,7 +223,7 @@ theorem resolve64_rel (R : Prop) (s : GWave V₁ M₁) (k : Src64Kind) (lane : N
     ORel R (pmap h) (resolve64 s k lane) (resolve64 (mapW h hm s) k lane) := by
   cases k with
   | sgprPair n => simp only [resolve64, ← readSgpr_hom h hm]; exact ORel.some' R (pmap h) _
-  | exec => simp only [resolve64, mapW_exec, ← h.lit]; exact ORel.some' R (pmap h) _
+  | exec => simp only [resolve64]; exact ORel.some' R (pmap h) _
   | lit lo hi => simp only [resolve64, ← h.lit]; exact ORel.some' R (pmap h) _
   | vgprPair r => simp only [resolve64, ← readVgpr_hom h hm]; exact ORel.some' R (pmap h) _
   | none => exact ORel.none' R (pmap h)
@@ -229,14 +236,9 @@ theorem maskSource_rel (R : Prop) (s : GWave V₁ M₁) (code : Nat) :
 
 /-! ## 4. Writes -/
 
-theorem writeExec_hom (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁) (lo hi : V₁)
-    (hres : (writeExec s lo hi).err = none ∨ R) :
-    writeExec (mapW h hm s) (h.f lo) (h.f hi) = mapW h hm (writeExec s lo hi) := by
-  unfold writeExec at hres ⊢
-  refine withSome_hom h hm (φ := id) ?_ s _ (fun e => { s with exec := e }) (fun e => { mapW h hm s with exec := e })
-    (fun e _ => rfl) hres
-  refine ORel.bind (conc_rel h hm R hR lo) fun l => ?_
-  exact ORel.map (conc_rel h hm R hR hi) fun _ => rfl
+theorem writeExec_hom (R : Prop) (_hR : R → Reflects h hm) (s : GWave V₁ M₁) (lo hi : V₁)
+    (_hres : (writeExec s lo hi).err = none ∨ R) :
+    writeExec (mapW h hm s) (h.f lo) (h.f hi) = mapW h hm (writeExec s lo hi) := rfl
 
 theorem writeScalarDst_hom (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁) (code : Nat) (v : V₁)
     (hres : (writeScalarDst s code v).err = none ∨ R) :
@@ -248,12 +250,10 @@ theorem writeScalarDst_hom (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁
   | null => simp only
   | execLo =>
     simp only [hk] at hres ⊢
-    have := writeExec_hom h hm R hR s v (Dom.lit (s.exec >>> 32).toUInt32) hres
-    rw [h.lit] at this; exact this
+    exact writeExec_hom h hm R hR s v s.exec.2 hres
   | execHi =>
     simp only [hk] at hres ⊢
-    have := writeExec_hom h hm R hR s (Dom.lit s.exec.toUInt32) v hres
-    rw [h.lit] at this; exact this
+    exact writeExec_hom h hm R hR s s.exec.1 v hres
   | none => simp only; exact (fail_hom h hm s _).symm
 
 theorem writeScalarDst64_hom (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁) (code : Nat) (v : V₁ × V₁)
@@ -320,7 +320,56 @@ theorem sdwaLift_hom (i : Inst) (f₁ : List V₁ → Nat → V₁) (f₂ : List
   rw [sdwaDst_hom, hf]
   simp only [List.map, sdwaSelV_hom, f_src]
 
-theorem valuLanes_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (n : Nat)
+/-- One lane: a lane the source knows to be off is off in the target; a lane the target alone knows to be
+off keeps its old value in both (the source's select on a bit that the target knows is `0`). -/
+theorem laneStep_rel {α β : Type} (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁)
+    (lane : Nat) (srcs₁ : Option (List V₁)) (srcs₂ : Option (List V₂)) (hsrc : ORel R (List.map h.f) srcs₁ srcs₂)
+    (φ : α → β) (off₁ : α) (off₂ : β) (hoff : off₂ = φ off₁) (k₁ : List V₁ → α) (k₂ : List V₂ → β)
+    (hk : ∀ src, k₂ (src.map h.f) = φ (k₁ src)) (sel₁ : V₁ → α → α → α) (sel₂ : V₂ → β → β → β)
+    (hsel : ∀ c a b, φ (sel₁ c a b) = sel₂ (h.f c) (φ a) (φ b))
+    (hlaw : ∀ c v a b, Dom.conc c = some v → sel₂ c a b = if v != 0 then a else b) :
+    ORel R (fun p => (p.1, φ p.2)) (laneStep s lane srcs₁ off₁ k₁ sel₁) (laneStep (mapW h hm s) lane srcs₂ off₂ k₂ sel₂) := by
+  unfold laneStep laneOff
+  have hb := execBit_hom h hm s lane
+  by_cases ho : (Dom.conc (execBit s lane) == some 0) = true
+  · have ho2 : (Dom.conc (execBit (mapW h hm s) lane) == some 0) = true := by
+      rw [← hb]; have := h.conc _ 0 (by simpa using ho); simp [this]
+    rw [if_pos ho, if_pos ho2, hoff]; exact ORel.some' R _ _
+  rw [if_neg ho]
+  by_cases ho2 : (Dom.conc (execBit (mapW h hm s) lane) == some 0) = true
+  · rw [if_pos ho2]
+    have hc2 : Dom.conc (execBit (mapW h hm s) lane) = some 0 := by simpa using ho2
+    constructor
+    · intro w hw
+      obtain ⟨src, _, rfl⟩ := Option.map_eq_some_iff.mp hw
+      simp only [Option.some.injEq, Prod.mk.injEq, true_and]
+      rw [hsel, hb, hlaw _ 0 _ _ hc2, hoff]; rfl
+    · intro hr _
+      exfalso
+      cases hc : Dom.conc (execBit s lane) with
+      | none => have := (hR hr).1 _ hc; rw [hb] at this; rw [this] at hc2; cases hc2
+      | some v =>
+        have := h.conc _ v hc; rw [hb, hc2] at this
+        simp only [Option.some.injEq] at this; subst this; simp [hc] at ho
+  · rw [if_neg ho2]
+    exact ORel.map hsrc fun src => by simp only [Prod.mk.injEq, true_and]; rw [hsel, hk, hb, hoff]
+
+theorem ite_law (hL : IteLawful V₂) (c : V₂) (v : UInt32) (a b : V₂) (hc : Dom.conc c = some v) :
+    Dom.ite c a b = if v != 0 then a else b := hL c v a b hc
+
+theorem ite2_law (hL : IteLawful V₂) (c : V₂) (v : UInt32) (a b : V₂ × V₂) (hc : Dom.conc c = some v) :
+    ite2 c a b = if v != 0 then a else b := by
+  unfold ite2; rw [hL c v _ _ hc, hL c v _ _ hc]; split <;> rfl
+
+theorem ite2_hom (c : V₁) (a b : V₁ × V₁) : pmap h (ite2 c a b) = ite2 (h.f c) (pmap h a) (pmap h b) := by
+  simp [ite2, pmap, h.ite]
+
+theorem lanes_rel {α β : Type} (R : Prop) (φ : α → β) (g₁ : Nat → Option (Nat × α)) (g₂ : Nat → Option (Nat × β))
+    (hg : ∀ lane, ORel R (fun p => (p.1, φ p.2)) (g₁ lane) (g₂ lane)) :
+    ORel R (List.map fun p => (p.1, φ p.2)) ((List.range lanes).mapM g₁) ((List.range lanes).mapM g₂) :=
+  ORel.mapM _ hg
+
+theorem valuLanes_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (n : Nat)
     (f₁ : List V₁ → Nat → V₁) (f₂ : List V₂ → Nat → V₂) (hf : ∀ src lane, h.f (f₁ src lane) = f₂ (src.map h.f) lane)
     (hres : (valuLanes i s n f₁).err = none ∨ R) :
     valuLanes i (mapW h hm s) n f₂ = mapW h hm (valuLanes i s n f₁) := by
@@ -335,33 +384,14 @@ theorem valuLanes_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWav
     by_cases hs : isSdwa i = true
     · rw [if_pos hs, if_pos hs]; exact sdwaLift_hom h i f₁ f₂ hf src lane
     · rw [if_neg hs, if_neg hs]; exact hf src lane
-  rw [activeLanes_hom]
   refine withSome_hom h hm (φ := List.map fun p => (p.1, h.f p.2)) ?_ s _ _ _ (fun rs _ => writeLanes_hom h hm s _ rs) hres
-  exact ORel.mapM _ fun lane => ORel.map (laneSources_rel h hm R hR i s n lane) fun src => by simp only [hg]
+  exact lanes_rel R h.f _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ (laneSources_rel h hm R hR i s n lane)
+    h.f _ _ (readVgpr_hom h hm s _ lane).symm _ _ (fun src => (hg src lane).symm) _ _ h.ite (ite_law hL)
 
-theorem maskOf_hom (s : GWave V₁ M₁) (bits : Nat → V₁) :
-    pmap h (maskOf s bits) = maskOf (mapW h hm s) (fun l => h.f (bits l)) := by
-  have key : ∀ l, h.f (if execBit s l = true then bits l else Dom.lit 0) =
-      (if execBit (mapW h hm s) l = true then h.f (bits l) else Dom.lit 0) := by
-    intro l; by_cases hb : execBit s l = true
-    · rw [ite_eq_left hb, ite_eq_left (show execBit (mapW h hm s) l = true from hb)]
-    · rw [ite_eq_right hb, ite_eq_right (show ¬ execBit (mapW h hm s) l = true from hb), h.lit]
-  simp only [maskOf, pmap, h.pack, List.map_map, Prod.mk.injEq]
-  constructor <;> congr 1 <;> apply List.map_congr_left <;> intro l _ <;> exact key _
+theorem maskOfBits_hom (bs : List V₁) : pmap h (maskOfBits bs) = maskOfBits (bs.map h.f) := by
+  simp [maskOfBits, pmap, h.pack, List.map_take, List.map_drop]
 
-theorem find_map_fst {α β : Type} (rs : List (Nat × α)) (g : α → β) (lane : Nat) :
-    (rs.map fun p => (p.1, g p.2)).find? (·.1 == lane) = (rs.find? (·.1 == lane)).map fun p => (p.1, g p.2) := by
-  rw [List.find?_map]; rfl
-
-theorem pick_hom {α β : Type} (rs : List (Nat × α)) (sel : α → V₁) (g : α → β) (sel' : β → V₂)
-    (hsel : ∀ a, sel' (g a) = h.f (sel a)) (lane : Nat) :
-    (((rs.map fun p => (p.1, g p.2)).find? (·.1 == lane)).map fun p => sel' p.2).getD (Dom.lit 0) =
-      h.f (((rs.find? (·.1 == lane)).map fun p => sel p.2).getD (Dom.lit 0)) := by
-  induction rs with
-  | nil => simp [h.lit]
-  | cons p ps ih => simp only [List.map_cons, List.find?_cons]; split <;> simp_all
-
-theorem valuLanesCarry_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁)
+theorem valuLanesCarry_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁)
     (f₁ : V₁ → V₁ → Nat → V₁ × V₁) (f₂ : V₂ → V₂ → Nat → V₂ × V₂) (hf : ∀ a b lane, pmap h (f₁ a b lane) = f₂ (h.f a) (h.f b) lane)
     (hres : (valuLanesCarry i s f₁).err = none ∨ R) :
     valuLanesCarry i (mapW h hm s) f₂ = mapW h hm (valuLanesCarry i s f₁) := by
@@ -369,27 +399,21 @@ theorem valuLanesCarry_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s :
   by_cases hc : isSdwa i = true
   · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
   rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
-  rw [activeLanes_hom]
+  dsimp only at hres ⊢
   refine withSome_hom h hm (φ := List.map fun p => (p.1, pmap h p.2)) ?_ s _ _ _ ?_ hres
-  · exact ORel.mapM _ fun lane => ORel.map (laneSources_rel h hm R hR i s 2 lane) fun src => by
-      rw [← f_src h src 0, ← f_src h src 1, ← hf]
+  · exact lanes_rel R (pmap h) _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ (laneSources_rel h hm R hR i s 2 lane)
+      (pmap h) _ _ (by simp [pmap, readVgpr_hom h hm, h.lit]) _ _
+      (fun src => by rw [← f_src h src 0, ← f_src h src 1, ← hf]) _ _ (ite2_hom h) (ite2_law hL)
   · intro rs hrs
-    have hw : (rs.map fun p => (p.1, pmap h p.2)).map (fun x => (x.1, x.2.1)) =
-        (rs.map fun x => (x.1, x.2.1)).map fun p => (p.1, h.f p.2) := by
-      simp [List.map_map, pmap]
-    have hmask : maskOf (mapW h hm s) (fun lane =>
-          (((rs.map fun p => (p.1, pmap h p.2)).find? (·.1 == lane)).map fun p => p.2.2).getD (Dom.lit 0)) =
-        pmap h (maskOf s fun lane => ((rs.find? (·.1 == lane)).map fun p => p.2.2).getD (Dom.lit 0)) := by
-      rw [maskOf_hom h hm]; congr 1; funext lane
-      exact pick_hom h rs (fun p => p.2) (pmap h) (fun p => p.2) (fun a => rfl) lane
-    simp only [] at hrs ⊢
+    try simp only [] at hrs ⊢
     rw [show (List.map (fun x => match x with | (l, r) => (l, r.1)) (List.map (fun p => (p.1, pmap h p.2)) rs)) =
         (rs.map fun x => (x.1, x.2.1)).map fun p => (p.1, h.f p.2) from by simp [List.map_map, pmap]]
-    rw [writeLanes_hom, hmask]
+    rw [writeLanes_hom, show (List.map (·.2.2) (List.map (fun p => (p.1, pmap h p.2)) rs)) = (rs.map (·.2.2)).map h.f
+        from by simp [List.map_map, pmap], ← maskOfBits_hom]
     refine writeScalarDst64_hom h hm R hR _ _ _ ?_
     simpa using hrs
 
-theorem valuCompare_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (wide : Bool)
+theorem valuCompare_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (wide : Bool)
     (t₁ : List V₁ → V₁) (t₂ : List V₂ → V₂) (ht : ∀ src, h.f (t₁ src) = t₂ (src.map h.f))
     (hres : (valuCompare i s wide t₁).err = none ∨ R) :
     valuCompare i (mapW h hm s) wide t₂ = mapW h hm (valuCompare i s wide t₁) := by
@@ -397,39 +421,38 @@ theorem valuCompare_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GW
   by_cases hc : isSdwa i = true
   · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
   rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
-  rw [activeLanes_hom]
+  dsimp only at hres ⊢
   refine withSome_hom h hm (φ := List.map fun p => (p.1, h.f p.2)) ?_ s _ _ _ ?_ hres
-  · refine ORel.mapM _ fun lane => ?_
-    refine ORel.map (φ := List.map h.f) ?_ fun src => by simp [ht]
+  · refine lanes_rel R h.f _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ ?_ h.f _ _ (h.lit 0).symm _ _
+      (fun src => (ht src).symm) _ _ h.ite (ite_law hL)
     split
     · refine ORel.bind (source64_rel h hm R s _ lane) fun a => ?_
       exact ORel.map (source64_rel h hm R s _ lane) fun b => by simp [pmap]
     · exact laneSources_rel h hm R hR i s 2 lane
   · intro rs hrs
-    have hmask : maskOf (mapW h hm s) (fun lane =>
-          (((rs.map fun p => (p.1, h.f p.2)).find? (·.1 == lane)).map fun p => p.2).getD (Dom.lit 0)) =
-        pmap h (maskOf s fun lane => ((rs.find? (·.1 == lane)).map fun p => p.2).getD (Dom.lit 0)) := by
-      rw [maskOf_hom h hm]; congr 1; funext lane
-      exact pick_hom h rs (fun p => p) h.f (fun p => p) (fun a => rfl) lane
-    simp only [] at hrs ⊢
-    rw [hmask]
+    try simp only [] at hrs ⊢
+    rw [show (List.map (·.2) (List.map (fun p => (p.1, h.f p.2)) rs)) = (rs.map (·.2)).map h.f
+        from by simp [List.map_map], ← maskOfBits_hom]
     split
     · exact writeExec_hom h hm R hR s _ _ (by simpa [*] using hrs)
     · exact writeScalarDst64_hom h hm R hR s _ _ (by simpa [*] using hrs)
 
-theorem valuShift64_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁)
+theorem valuShift64_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁)
     (f₁ : V₁ → V₁ → V₁ → V₁ × V₁) (f₂ : V₂ → V₂ → V₂ → V₂ × V₂)
     (hf : ∀ c a b, pmap h (f₁ c a b) = f₂ (h.f c) (h.f a) (h.f b))
     (hres : (valuShift64 i s f₁).err = none ∨ R) :
     valuShift64 i (mapW h hm s) f₂ = mapW h hm (valuShift64 i s f₁) := by
   unfold valuShift64 at hres ⊢
-  rw [activeLanes_hom]
+  dsimp only at hres ⊢
   refine withSome_hom h hm (φ := List.map fun p => (p.1, pmap h p.2)) ?_ s _ _ _ ?_ hres
-  · refine ORel.mapM _ fun lane => ?_
+  · refine lanes_rel R (pmap h) _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ ?_
+      (pmap h) _ _ (by simp [pmap, readVgpr_hom h hm]) _ _
+      (fun src => by simp only [← f_src h src 0, ← f_src h src 1, ← f_src h src 2, src0, src1, src2, hf]) _ _
+      (ite2_hom h) (ite2_law hL)
     refine ORel.bind (vectorSource_rel h hm R hR s _ _ lane) fun c => ?_
-    exact ORel.map (source64_rel h hm R s _ lane) fun p => by simp [← hf, pmap]
+    exact ORel.map (source64_rel h hm R s _ lane) fun p => by simp [pmap]
   · intro rs _
-    simp only []
+    try simp only []
     rw [show (List.map (fun x => match x with | (l, r) => (l, r.1)) (List.map (fun p => (p.1, pmap h p.2)) rs)) =
         (rs.map fun x => (x.1, x.2.1)).map fun p => (p.1, h.f p.2) from by simp [List.map_map, pmap]]
     rw [show (List.map (fun x => match x with | (l, r) => (l, r.2)) (List.map (fun p => (p.1, pmap h p.2)) rs)) =
@@ -451,12 +474,21 @@ theorem load_rel (R : Prop) (hR : R → Reflects h hm) (m : M₁) (a : UInt64) :
     ORel R h.f (MemDom.load m a : Option V₁) (MemDom.load (hm.g m) a : Option V₂) :=
   ⟨fun v hv => hm.load m a v hv, fun hr hn => (hR hr).2 m a hn⟩
 
-theorem mubufLaneAddrs_rel (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (r : BufferResource)
-    (soff : UInt32) (n : Nat) :
-    ORel R id (mubufLaneAddrs i s r soff n) (mubufLaneAddrs i (mapW h hm s) r soff n) := by
+theorem activeLanes_rel (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁) :
+    ORel R id (activeLanes? s) (activeLanes? (mapW h hm s)) := by
+  unfold activeLanes?
+  refine ORel.map (φ := id) ?_ fun _ => rfl
+  have := ORel.mapM (R := R) (ψ := id) (List.range lanes)
+    (g₁ := fun l => (Dom.conc (execBit s l)).map fun v => (l, v != 0))
+    (g₂ := fun l => (Dom.conc (execBit (mapW h hm s) l)).map fun v => (l, v != 0))
+    (fun l => by rw [← execBit_hom]; exact ORel.map (conc_rel h hm R hR _) fun _ => rfl)
+  simpa using this
+
+theorem mubufLaneAddrs_rel (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁) (act : List Nat)
+    (r : BufferResource) (soff : UInt32) (n : Nat) :
+    ORel R id (mubufLaneAddrs i s act r soff n) (mubufLaneAddrs i (mapW h hm s) act r soff n) := by
   unfold mubufLaneAddrs
-  rw [activeLanes_hom]
-  have := ORel.mapM (R := R) (ψ := id) (activeLanes s)
+  have := ORel.mapM (R := R) (ψ := id) act
     (g₁ := fun lane => if i.field "OFFEN" == 1 then
       (Dom.conc (readVgpr s (i.field "VADDR") lane)).map fun v => (lane, mubufAddrs i r soff v.toNat n)
       else some (lane, mubufAddrs i r soff 0 n))
@@ -509,7 +541,10 @@ theorem execMubuf_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWav
   · exact (fail_hom h hm s _).symm
   refine withSome_hom h hm (soff_rel h hm R hR s _) s _ _ _ ?_ (by simpa [*] using hr)
   intro soff hsoff
-  refine withSome_hom h hm (mubufLaneAddrs_rel h hm R hR i s r soff _) s _ _ _ ?_ hsoff
+  refine withSome_hom h hm (activeLanes_rel h hm R hR s) s _ _ _ ?_ hsoff
+  intro act hact
+  simp only [id] at hact ⊢
+  refine withSome_hom h hm (mubufLaneAddrs_rel h hm R hR i s act r soff _) s _ _ _ ?_ hact
   intro las hlas
   simp only [id] at hlas ⊢
   split
@@ -602,38 +637,23 @@ theorem saveexecB64_hom (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M�
     (hres : (saveexecB64 s code a).err = none ∨ R) :
     saveexecB64 (mapW h hm s) code (pmap h a) = mapW h hm (saveexecB64 s code a) := by
   unfold saveexecB64 at hres ⊢
-  try dsimp only at hres ⊢
-  generalize hs1 : writeExec s (Dom.band a.1 (Dom.lit s.exec.toUInt32)) (Dom.band a.2 (Dom.lit (s.exec >>> 32).toUInt32)) = s1 at hres
-  have e1 : writeExec (mapW h hm s) (Dom.band (pmap h a).1 (Dom.lit (mapW h hm s).exec.toUInt32))
-      (Dom.band (pmap h a).2 (Dom.lit ((mapW h hm s).exec >>> 32).toUInt32)) = mapW h hm s1 := by
-    rw [← hs1, mapW_exec]
-    have := writeExec_hom h hm R hR s (Dom.band a.1 (Dom.lit s.exec.toUInt32)) (Dom.band a.2 (Dom.lit (s.exec >>> 32).toUInt32))
-      (by rw [hs1]; by_cases he : s1.err.isSome = true
-          · rw [ite_eq_left he] at hres; exact hres
-          · left; simpa using he)
-    rw [h.band, h.band, h.lit, h.lit] at this
+  dsimp only at hres ⊢
+  have e1 : writeExec (mapW h hm s) (Dom.band (pmap h a).1 (mapW h hm s).exec.1) (Dom.band (pmap h a).2 (mapW h hm s).exec.2) =
+      mapW h hm (writeExec s (Dom.band a.1 s.exec.1) (Dom.band a.2 s.exec.2)) := by
+    simp [writeExec, mapW, pmap, h.band]
+  rw [e1]
+  generalize hs1 : writeExec s (Dom.band a.1 s.exec.1) (Dom.band a.2 s.exec.2) = s1 at hres
+  have e2 : writeScalarDst64 (mapW h hm s1) code (mapW h hm s).exec = mapW h hm (writeScalarDst64 s1 code s.exec) := by
+    have := writeScalarDst64_hom h hm R hR s1 code s.exec
+      (by by_cases he2 : (writeScalarDst64 s1 code s.exec).err.isSome = true
+          · rw [ite_eq_left he2] at hres; exact hres
+          · left; simpa using he2)
     exact this
-  rw [e1, mapW_exec]
-  by_cases he : s1.err.isSome = true
-  · rw [ite_eq_left he, ite_eq_left (show (mapW h hm s1).err.isSome = true from he)]
-  · rw [ite_eq_right he, ite_eq_right (show ¬ (mapW h hm s1).err.isSome = true from he)]
-    rw [ite_eq_right he] at hres
-    try dsimp only at hres
-    generalize hs2 : writeScalarDst64 s1 code (Dom.lit s.exec.toUInt32, Dom.lit (s.exec >>> 32).toUInt32) = s2 at hres
-    have e2 : writeScalarDst64 (mapW h hm s1) code (Dom.lit s.exec.toUInt32, Dom.lit (s.exec >>> 32).toUInt32)
-        = mapW h hm s2 := by
-      rw [← hs2]
-      have := writeScalarDst64_hom h hm R hR s1 code (Dom.lit s.exec.toUInt32, Dom.lit (s.exec >>> 32).toUInt32)
-        (by rw [hs2]; by_cases he2 : s2.err.isSome = true
-            · rw [ite_eq_left he2] at hres; exact hres
-            · left; simpa using he2)
-      simp only [pmap, h.lit] at this
-      exact this
-    rw [e2]
-    by_cases he2 : s2.err.isSome = true
-    · rw [ite_eq_left he2, ite_eq_left (show (mapW h hm s2).err.isSome = true from he2)]
-    · rw [ite_eq_right he2, ite_eq_right (show ¬ (mapW h hm s2).err.isSome = true from he2)]
-      simp [mapW, h.lit]
+  rw [e2]
+  by_cases he2 : (writeScalarDst64 s1 code s.exec).err.isSome = true
+  · rw [ite_eq_left he2, ite_eq_left (show (mapW h hm (writeScalarDst64 s1 code s.exec)).err.isSome = true from he2)]
+  · rw [ite_eq_right he2, ite_eq_right (show ¬ (mapW h hm (writeScalarDst64 s1 code s.exec)).err.isSome = true from he2)]
+    simp [mapW, h.nez64]
 
 theorem sop32_hom (R : Prop) (hR : R → Reflects h hm) (s : GWave V₁ M₁) (code : Nat) (d c : V₁)
     (hres : (sop32 s code d c).err = none ∨ R) :
@@ -673,15 +693,17 @@ theorem execDs_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V
   by_cases hg : (i.field "GDS" != 0) = true
   · rw [if_pos hg, if_pos hg]; exact (fail_hom h hm s _).symm
   rw [if_neg hg] at hres; rw [if_neg hg, if_neg hg]
-  rw [activeLanes_hom]
-  have hrel : ORel R id ((activeLanes s).mapM fun lane => (dsLaneAddrs i s n lane).map fun as => (lane, as))
-      ((activeLanes s).mapM fun lane => (dsLaneAddrs i (mapW h hm s) n lane).map fun as => (lane, as)) := by
-    have := ORel.mapM (R := R) (ψ := id) (activeLanes s)
+  refine withSome_hom h hm (activeLanes_rel h hm R hR s) s _ _ _ ?_ hres
+  intro act hact
+  simp only [id] at hact ⊢
+  have hrel : ORel R id (act.mapM fun lane => (dsLaneAddrs i s n lane).map fun as => (lane, as))
+      (act.mapM fun lane => (dsLaneAddrs i (mapW h hm s) n lane).map fun as => (lane, as)) := by
+    have := ORel.mapM (R := R) (ψ := id) act
       (g₁ := fun lane => (dsLaneAddrs i s n lane).map fun as => (lane, as))
       (g₂ := fun lane => (dsLaneAddrs i (mapW h hm s) n lane).map fun as => (lane, as))
       (fun lane => ORel.map (dsLaneAddrs_rel h hm R hR i s n lane) fun _ => rfl)
     simpa using this
-  refine withSome_hom h hm hrel s _ _ _ ?_ hres
+  refine withSome_hom h hm hrel s _ _ _ ?_ hact
   intro las hlas
   simp only [id] at hlas ⊢
   cases isStore
@@ -700,7 +722,7 @@ theorem execDs_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V
       congr 1; funext q
       simp [readVgpr_hom h hm]
 
-theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁)
+theorem execInst_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V₁ M₁)
     (hres : (execInst i s).err = none ∨ R) :
     execInst i (mapW h hm s) = mapW h hm (execInst i s) := by
   unfold execInst at hres ⊢
@@ -728,51 +750,52 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
       rw [← h.band, ← h.band]
       exact andB64_hom h hm R hR s _ _ _ hab
   case s_cbranch_execz =>
-    by_cases he : (s.exec == 0) = true
-    · rw [ite_eq_left (show ((mapW h hm s).exec == 0) = true from he), ite_eq_left he]; rfl
-    · rw [ite_eq_right (show ¬ ((mapW h hm s).exec == 0) = true from he), ite_eq_right he]
+    rw [← execzV_hom]
+    refine withSome_hom h hm (conc_rel h hm R hR _) s _ _ _ (fun z _ => ?_) hres
+    simp only [id]
+    split <;> rfl
   case smem => exact execSmem_hom h hm R hR i s hres
   case mubuf_load => exact execMubuf_hom h hm R hR i s false hres
   case mubuf_store => exact execMubuf_hom h hm R hR i s true hres
-  case v_mov_b32 => exact valuLanes_hom h hm R hR i s 1 _ _ (fun src _ => (hs src).1) hres
-  case v_add_nc_u32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.add, (hs src).1, (hs src).2.1]) hres
-  case v_and_b32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.band, (hs src).1, (hs src).2.1]) hres
-  case v_or_b32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.bor, (hs src).1, (hs src).2.1]) hres
-  case v_lshlrev_b32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.shl, (hs src).1, (hs src).2.1]) hres
+  case v_mov_b32 => exact valuLanes_hom h hm hL R hR i s 1 _ _ (fun src _ => (hs src).1) hres
+  case v_add_nc_u32 => exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.add, (hs src).1, (hs src).2.1]) hres
+  case v_and_b32 => exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.band, (hs src).1, (hs src).2.1]) hres
+  case v_or_b32 => exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.bor, (hs src).1, (hs src).2.1]) hres
+  case v_lshlrev_b32 => exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.shl, (hs src).1, (hs src).2.1]) hres
   case v_lshl_add_u32 =>
-    exact valuLanes_hom h hm R hR i s 3 _ _ (fun src _ => by rw [h.add, h.shl, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 3 _ _ (fun src _ => by rw [h.add, h.shl, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
   case v_add3_u32 =>
-    exact valuLanes_hom h hm R hR i s 3 _ _ (fun src _ => by rw [h.add, h.add, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 3 _ _ (fun src _ => by rw [h.add, h.add, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
   case v_and_or_b32 =>
-    exact valuLanes_hom h hm R hR i s 3 _ _ (fun src _ => by rw [h.bor, h.band, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
-  case v_mul_lo_u32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.mul, (hs src).1, (hs src).2.1]) hres
-  case v_mul_hi_u32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.mulHi, (hs src).1, (hs src).2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 3 _ _ (fun src _ => by rw [h.bor, h.band, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
+  case v_mul_lo_u32 => exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.mul, (hs src).1, (hs src).2.1]) hres
+  case v_mul_hi_u32 => exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.mulHi, (hs src).1, (hs src).2.1]) hres
   case v_cndmask_b32 =>
     exact withSome_hom h hm (maskSource_rel h hm R s _) s _ _ _
-      (fun m hmk => valuLanes_hom h hm R hR i s 2 _ _
+      (fun m hmk => valuLanes_hom h hm hL R hR i s 2 _ _
         (fun src lane => by rw [h.ite, maskBit_hom, (hs src).1, (hs src).2.1]) hmk) hres
   case v_add_co_u32 =>
-    exact valuLanesCarry_hom h hm R hR i s _ _ (fun a b _ => by simp [pmap, h.add, h.carry]) hres
+    exact valuLanesCarry_hom h hm hL R hR i s _ _ (fun a b _ => by simp [pmap, h.add, h.carry]) hres
   case v_sub_co_u32 =>
-    exact valuLanesCarry_hom h hm R hR i s _ _ (fun a b _ => by simp [pmap, h.sub, h.borrow]) hres
+    exact valuLanesCarry_hom h hm hL R hR i s _ _ (fun a b _ => by simp [pmap, h.sub, h.borrow]) hres
   case v_add_co_ci_u32 =>
     exact withSome_hom h hm (maskSource_rel h hm R s _) s _ _ _
-      (fun m hmk => valuLanesCarry_hom h hm R hR i s _ _
+      (fun m hmk => valuLanesCarry_hom h hm hL R hR i s _ _
         (fun a b lane => by simp [pmap, h.addc, h.carryc, maskBit_hom]) hmk) hres
   case v_sub_co_ci_u32 =>
     exact withSome_hom h hm (maskSource_rel h hm R s _) s _ _ _
-      (fun m hmk => valuLanesCarry_hom h hm R hR i s _ _
+      (fun m hmk => valuLanesCarry_hom h hm hL R hR i s _ _
         (fun a b lane => by simp [pmap, h.subc, h.borrowc, maskBit_hom]) hmk) hres
-  case v_lshlrev_b64 => exact valuShift64_hom h hm R hR i s _ _ (fun c a b => h.shl64 c a b) hres
-  case v_lshrrev_b64 => exact valuShift64_hom h hm R hR i s _ _ (fun c a b => h.lshr64 c a b) hres
-  case v_cmp_le_u32 => exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ule, (hs src).1, (hs src).2.1]) hres
-  case v_cmp_gt_u32 => exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ugt, (hs src).1, (hs src).2.1]) hres
-  case v_cmpx_gt_u32 => exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ugt, (hs src).1, (hs src).2.1]) hres
+  case v_lshlrev_b64 => exact valuShift64_hom h hm hL R hR i s _ _ (fun c a b => h.shl64 c a b) hres
+  case v_lshrrev_b64 => exact valuShift64_hom h hm hL R hR i s _ _ (fun c a b => h.lshr64 c a b) hres
+  case v_cmp_le_u32 => exact valuCompare_hom h hm hL R hR i s false _ _ (fun src => by rw [h.ule, (hs src).1, (hs src).2.1]) hres
+  case v_cmp_gt_u32 => exact valuCompare_hom h hm hL R hR i s false _ _ (fun src => by rw [h.ugt, (hs src).1, (hs src).2.1]) hres
+  case v_cmpx_gt_u32 => exact valuCompare_hom h hm hL R hR i s false _ _ (fun src => by rw [h.ugt, (hs src).1, (hs src).2.1]) hres
   case v_cmp_lt_u64 =>
-    exact valuCompare_hom h hm R hR i s true _ _
+    exact valuCompare_hom h hm hL R hR i s true _ _
       (fun src => by rw [h.ult64, (hs src).1, (hs src).2.1, (hs src).2.2.1, (hs src).2.2.2]) hres
   case v_cmp_ne_i64 =>
-    exact valuCompare_hom h hm R hR i s true _ _
+    exact valuCompare_hom h hm hL R hR i s true _ _
       (fun src => by rw [h.ne64, (hs src).1, (hs src).2.1, (hs src).2.2.1, (hs src).2.2.2]) hres
   case s_or_b64 =>
     refine withSome_hom h hm (φ := fun ab => (pmap h ab.1, pmap h ab.2)) ?_ s _ _ _ ?_ hres
@@ -805,35 +828,35 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
     have := writeScalarDst_hom h hm R hR s (i.field "SDST")
       (Dom.mul (readSgpr s (i.field "SDST")) (Dom.lit (movkValue (i.field "SIMM16")))) hres
     rw [h.mul, h.lit, readSgpr_hom h hm] at this; exact this
-  case v_cmp_lt_u32 => exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ugt, (hs src).1, (hs src).2.1]) hres
+  case v_cmp_lt_u32 => exact valuCompare_hom h hm hL R hR i s false _ _ (fun src => by rw [h.ugt, (hs src).1, (hs src).2.1]) hres
   case v_cmp_eq_i32 =>
-    exact valuCompare_hom h hm R hR i s false _ _
+    exact valuCompare_hom h hm hL R hR i s false _ _
       (fun src => by rw [h.ite, h.ne64, h.lit, h.lit, (hs src).1, (hs src).2.1]) hres
   case v_cmp_ne_i32 =>
-    exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ne64, h.lit, (hs src).1, (hs src).2.1]) hres
+    exact valuCompare_hom h hm hL R hR i s false _ _ (fun src => by rw [h.ne64, h.lit, (hs src).1, (hs src).2.1]) hres
   case v_cmpx_eq_i32 =>
-    exact valuCompare_hom h hm R hR i s false _ _
+    exact valuCompare_hom h hm hL R hR i s false _ _
       (fun src => by rw [h.ite, h.ne64, h.lit, h.lit, (hs src).1, (hs src).2.1]) hres
-  case v_cmpx_le_u32 => exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ule, (hs src).1, (hs src).2.1]) hres
+  case v_cmpx_le_u32 => exact valuCompare_hom h hm hL R hR i s false _ _ (fun src => by rw [h.ule, (hs src).1, (hs src).2.1]) hres
   case v_cmpx_ne_i32 =>
-    exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ne64, h.lit, (hs src).1, (hs src).2.1]) hres
+    exact valuCompare_hom h hm hL R hR i s false _ _ (fun src => by rw [h.ne64, h.lit, (hs src).1, (hs src).2.1]) hres
   case v_lshl_or_b32 =>
-    exact valuLanes_hom h hm R hR i s 3 _ _ (fun src _ => by rw [h.bor, h.shl, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 3 _ _ (fun src _ => by rw [h.bor, h.shl, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
   case v_add_lshl_u32 =>
-    exact valuLanes_hom h hm R hR i s 3 _ _ (fun src _ => by rw [h.shl, h.add, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 3 _ _ (fun src _ => by rw [h.shl, h.add, (hs src).1, (hs src).2.1, (hs src).2.2.1]) hres
   case v_mul_u32_u24 =>
-    exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.mul, h.band, h.band, h.lit, (hs src).1, (hs src).2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.mul, h.band, h.band, h.lit, (hs src).1, (hs src).2.1]) hres
   case v_subrev_co_ci_u32 =>
     exact withSome_hom h hm (maskSource_rel h hm R s _) s _ _ _
-      (fun m hmk => valuLanesCarry_hom h hm R hR i s _ _
+      (fun m hmk => valuLanesCarry_hom h hm hL R hR i s _ _
         (fun a b lane => by simp [pmap, h.subc, h.borrowc, maskBit_hom]) hmk) hres
   case v_max_u32 =>
-    exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.ite, h.ugt, (hs src).1, (hs src).2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.ite, h.ugt, (hs src).1, (hs src).2.1]) hres
   case v_min_u32 =>
-    exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.ite, h.ugt, (hs src).1, (hs src).2.1]) hres
-  case v_sub_nc_u32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.sub, (hs src).1, (hs src).2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.ite, h.ugt, (hs src).1, (hs src).2.1]) hres
+  case v_sub_nc_u32 => exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.sub, (hs src).1, (hs src).2.1]) hres
   case v_lshrrev_b32 =>
-    exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by
+    exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by
       rw [show ∀ p : V₁ × V₁, h.f p.1 = (Prod.map h.f h.f p).1 from fun _ => rfl, h.lshr64, h.band, h.lit, h.lit,
         (hs src).1, (hs src).2.1]) hres
   case s_add_u32 | s_sub_i32 | s_xor_b32 | s_max_u32 | s_lshl_b32 | s_lshl1_add_u32 | s_lshl2_add_u32 | s_lshl3_add_u32 =>
@@ -874,7 +897,7 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
     simp only [id]
     split <;> rfl
   case v_mbcnt_lo_u32_b32 | v_mbcnt_hi_u32_b32 =>
-    exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [mbcntV_hom, (hs src).1, (hs src).2.1]) hres
+    exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [mbcntV_hom, (hs src).1, (hs src).2.1]) hres
   case ds_read_b64 => exact execDs_hom h hm R hR i s 2 false hres
   case ds_write_b64 => exact execDs_hom h hm R hR i s 2 true hres
   case ds_write_b128 => exact execDs_hom h hm R hR i s 4 true hres
@@ -928,19 +951,21 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
     by_cases hc : (isSdwa i || srcCode i 0 < 256 || srcCode i 0 > 511) = true
     · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
     · rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
+      refine withSome_hom h hm (activeLanes_rel h hm R hR s) s _ _ _ (fun act hact => ?_) hres
+      simp only [id]
       rw [← readVgpr_hom h hm]
-      exact writeScalarDst_hom h hm R hR s _ _ hres
+      exact writeScalarDst_hom h hm R hR s _ _ hact
   case v_subrev_co_u32 =>
-    exact valuLanesCarry_hom h hm R hR i s _ _ (fun a b _ => by simp [pmap, h.sub, h.borrow]) hres
-  case v_subrev_nc_u32 => exact valuLanes_hom h hm R hR i s 2 _ _ (fun src _ => by rw [h.sub, (hs src).1, (hs src).2.1]) hres
-  case v_cmp_ge_u32 => exact valuCompare_hom h hm R hR i s false _ _ (fun src => by rw [h.ule, (hs src).1, (hs src).2.1]) hres
+    exact valuLanesCarry_hom h hm hL R hR i s _ _ (fun a b _ => by simp [pmap, h.sub, h.borrow]) hres
+  case v_subrev_nc_u32 => exact valuLanes_hom h hm hL R hR i s 2 _ _ (fun src _ => by rw [h.sub, (hs src).1, (hs src).2.1]) hres
+  case v_cmp_ge_u32 => exact valuCompare_hom h hm hL R hR i s false _ _ (fun src => by rw [h.ule, (hs src).1, (hs src).2.1]) hres
   case v_cmp_gt_u64 =>
-    exact valuCompare_hom h hm R hR i s true _ _
+    exact valuCompare_hom h hm hL R hR i s true _ _
       (fun src => by rw [h.ult64, (hs src).1, (hs src).2.1, (hs src).2.2.1, (hs src).2.2.2]) hres
   case unknown => exact (fail_hom h hm s _).symm
   all_goals rfl
 
-theorem step_hom (R : Prop) (hR : R → Reflects h hm) (prog : Program) (s : GWave V₁ M₁)
+theorem step_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (prog : Program) (s : GWave V₁ M₁)
     (hres : (step prog s).err = none ∨ R) :
     step prog (mapW h hm s) = mapW h hm (step prog s) := by
   unfold step at hres ⊢
@@ -954,7 +979,7 @@ theorem step_hom (R : Prop) (hR : R → Reflects h hm) (prog : Program) (s : GWa
     · exact (fail_hom h hm s _).symm
     · rename_i i hi
       simp only [hi] at hres
-      exact execInst_hom h hm R hR i { s with pc := s.pc + i.words.length } hres
+      exact execInst_hom h hm hL R hR i { s with pc := s.pc + i.words.length } hres
 
 theorem run_err_none (prog : Program) : ∀ (n : Nat) (s : GWave V₁ M₁), (run prog n s).err = none → s.err = none
   | 0, s, h0 => by
@@ -1002,7 +1027,7 @@ theorem initWave_hom (m : M₁) (setLo : UInt32) (g : Nat) (lb : UInt64) (ln : N
 
 /-- The theorem: running the model commutes with the homomorphism, whenever the source run did not fail,
 or always when the homomorphism reflects unknown values and missing words. -/
-theorem run_hom (R : Prop) (hR : R → Reflects h hm) (prog : Program) :
+theorem run_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (prog : Program) :
     ∀ (n : Nat) (s : GWave V₁ M₁), (run prog n s).err = none ∨ R →
       run prog n (mapW h hm s) = mapW h hm (run prog n s)
   | 0, s, _ => by
@@ -1018,8 +1043,8 @@ theorem run_hom (R : Prop) (hR : R → Reflects h hm) (prog : Program) :
     · rw [ite_eq_right hl] at hres
       rw [ite_eq_right hl, ite_eq_right (show ¬ ((mapW h hm s).halted || (mapW h hm s).err.isSome) = true from hl)]
       have hstep : (step prog s).err = none ∨ R := hres.imp_left (run_err_none prog n _)
-      rw [step_hom h hm R hR prog s hstep]
-      exact run_hom R hR prog n _ hres
+      rw [step_hom h hm hL R hR prog s hstep]
+      exact run_hom hL R hR prog n _ hres
 
 end
 end Obend.Hardware.Gpu.Rdna2

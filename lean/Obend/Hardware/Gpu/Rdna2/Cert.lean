@@ -26,7 +26,7 @@ The waits are checked alongside (`Waitcnt`): the model completes a load when it 
 module
 
 public import Obend.Hardware.Gpu.Rdna2.Host
-public import Obend.Hardware.Gpu.Rdna2.Sym
+public import Obend.Hardware.Gpu.Rdna2.Join
 public import Obend.Hardware.Gpu.Rdna2.Lower
 public import Obend.Hardware.Gpu.Rdna2.Equiv
 
@@ -108,7 +108,7 @@ def checkStores (words : Nat) (T : Std.HashMap Nat TP) : List (UInt64 × Tm) →
           needed := match r? with | some r => acc.needed.insert r | none => acc.needed }
 
 def symWave (words : Nat) (lay : Memory) (prog : Program) (lds : Nat) (known : Known) (stored : Std.HashSet UInt64) (g : Nat) : SymWave :=
-  run prog (fuelOf prog) (initWave (⟨{}, baseView words lay known stored⟩ : SymMem) descSetLo g (ldsBaseOf g) lds)
+  srun prog (fuelOf prog) (initWave (⟨{}, baseView words lay known stored⟩ : SymMem) descSetLo g (ldsBaseOf g) lds)
 
 def checkWaves (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (prog : Program) (lds : Nat) (known : Known) : List Nat → Acc → Option Acc
   | [], acc => some acc
