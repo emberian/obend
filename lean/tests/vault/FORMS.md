@@ -108,23 +108,23 @@ cd alice && obend checked pay
 ```
 
 ```text
-pay: 3 law(s) over its holed states, checked once with amount, the request open:
+pay: 3 law(s) over its holed states, checked once with amount open:
   Accounts: cap at ledger/alice
   Accounts: cap at ledger/carol
   Accounts: cap at ledger/bob
 ```
 
 No file stands for a check. A vault that kept them in `.obend/checked/` (as this one once did) would
-take a planted file for the checker's word; here a planted one is never read, and a world read back
-from bytes (a checkpoint, a compacted log) keeps a check only where the checker accepts it again
-(`Obend.Vault.Form.checkedOf`):
+take a planted file for the checker's word; here a planted one is never read. The world keeps each
+check's record, and a command that uses a form's checks makes them again from those records with the
+checker (`Obend.Vault.Form.checksOf`; made again they are the capture's, `checksOf_records`):
 
 ```sh
 cd alice && mkdir -p .obend/checked && echo '[]' > .obend/checked/pay.json && obend checked pay | head -1
 ```
 
 ```text
-pay: 3 law(s) over its holed states, checked once with amount, the request open:
+pay: 3 law(s) over its holed states, checked once with amount open:
 ```
 
 The form goes to Bob as a file. Nothing of the private page is in it.

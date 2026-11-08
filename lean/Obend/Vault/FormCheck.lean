@@ -22,9 +22,10 @@ judgment (`unitOf`, a `CheckUnit`) is that term with those parts declared holes
 * **What a capture checks** (`Form.checksAt`): every judgment a fill makes at the capture's store, for
   fills that put 1 for each natural hole and each captured page for each page hole (the check does not
   depend on the amount: the moved field is a hole of it), those the checker accepts. They are world
-  state (`Replay.World.checked`), made by the turn that captured or abstracted the form, so by every
-  replay of its log; a world read from bytes keeps only what the checker accepts there
-  (`checkedOf`).
+  state, kept as records (`CheckRecord`, `Replay.World.checked`) made by the turn that captured or
+  abstracted the form, so by every replay of its log. A command that uses a form's checks makes them
+  again from the records (`checksOf`): a record is not the checker's word, and made again the checks
+  are the capture's (`checksOf_records`). A fill's judgment is never checked.
 * **Kept or checked now** (`classify`): a judgment of a proposal is kept when its check is one the
   capture made; else it is checked now. None is checked twice (`rechecked_zero`).
 -/
@@ -786,6 +787,37 @@ def Form.checksAt (H : Obend.Digest.HashBytes.Hash) (s : Store) (f : Form) : Lis
   let once := keys.foldl (fun acc k => if acc.any (·.unit == k.unit) then acc else acc ++ [k]) []
   once.filterMap (Checked.of f.name)
 
+/-- What the world keeps of a check: the form and the key (`Replay.World.checked`). A record is not
+the checker's word: where a command uses the checks of a form, it makes them again from their keys
+(`checksOf`), and a record whose check the checker refuses is not a check. -/
+structure CheckRecord where
+  form : String
+  key : CheckKey
+deriving DecidableEq
+
+def Checked.record (c : Checked) : CheckRecord := ⟨c.form, c.key⟩
+
+/-- **The checks of a form, made from the world's records**: each record of the form whose check the
+checker accepts. -/
+def checksOf (rs : List CheckRecord) (form : String) : List Checked :=
+  rs.filterMap fun r => if r.form == form then Checked.of r.form r.key else none
+
+theorem Checked.of_record (c : Checked) : Checked.of c.form c.key = some c := by
+  cases c with
+  | mk form key ok => simp [Checked.of, ok]
+
+/-- **The checks made again are the capture's**: from the records of the checks a capture made, the
+checks of a form are made again exactly (the checker is a function, `CheckUnit.check`). -/
+theorem checksOf_records (cs : List Checked) (form : String) :
+    checksOf (cs.map Checked.record) form = cs.filter (·.form == form) := by
+  induction cs with
+  | nil => rfl
+  | cons c cs ih =>
+    simp only [checksOf, List.map_cons, List.filterMap_cons, List.filter_cons, Checked.record] at ih ⊢
+    by_cases h : c.form == form
+    · simp only [h, ite_true, Checked.of_record, ↓reduceIte]; exact congrArg _ ih
+    · simp only [h, Bool.false_eq_true, ite_false, ↓reduceIte]; exact ih
+
 /-! ## A proposal's judgments: kept from the capture, or checked now -/
 
 /-- A judgment of a proposal, its check, and whether the capture made that check (`kept`). -/
@@ -877,7 +909,7 @@ def stateTyOf : Data → Ty
 /-- A check as JSON: what it is made from (`CheckKey`), small: each law by its text, the states as
 pairs, the old state only where it is not the new, the state type only where it is not the state's
 own (`stateTyOf`). -/
-def checkedJson (c : Checked) : Json :=
+def checkedJson (c : CheckRecord) : Json :=
   Json.mkObj ([("form", Json.str c.form), ("page", Json.str c.key.page),
     ("moved", Json.arr (c.key.moved.map Json.str).toArray), ("pkg", Json.str c.key.pkg),
     ("laws", Json.arr (c.key.lin.map fun (n, e) => Json.arr #[Json.str n, Json.str e.render]).toArray),
@@ -885,9 +917,9 @@ def checkedJson (c : Checked) : Json :=
     (if c.key.linked then [] else [("old", stateJson c.key.o)]) ++
     (if c.key.S == stateTyOf c.key.n then [] else [("S", dataJson (Obend.Core.Code.tyData c.key.S))]))
 
-/-- **A check read back is made again** (a world read from bytes: a checkpoint, a compacted log): it is
-kept only where the checker accepts it here, so no bytes stand in for the checker. -/
-def checkedOf (j : Json) : Except String (Option Checked) := do
+/-- A check's record read back (a world read from bytes: a checkpoint, a compacted log); its check is
+made again where it is used (`checksOf`), so no bytes stand in for the checker. -/
+def checkedOf (j : Json) : Except String CheckRecord := do
   let lin ← (← j.getObjValAs? (Array Json) "laws").toList.mapM fun x => do
     let n ← (← x.getArrVal? 0).getStr?
     match Obend.Spec.Law.parse (← (← x.getArrVal? 1).getStr?) with
@@ -903,7 +935,7 @@ def checkedOf (j : Json) : Except String (Option Checked) := do
     | .error _ => pure (stateTyOf n)
   let moved ← (← j.getObjValAs? (Array Json) "moved").toList.mapM fun x => x.getStr?
   let k : CheckKey := ⟨← j.getObjValAs? String "page", moved, S, ← j.getObjValAs? String "pkg", lin, o, n, linked⟩
-  return Checked.of (← j.getObjValAs? String "form") k
+  return ⟨← j.getObjValAs? String "form", k⟩
 
 end Obend.Vault.Form
 

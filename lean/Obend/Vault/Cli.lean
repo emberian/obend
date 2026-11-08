@@ -1066,7 +1066,8 @@ def checkWorkLine (w : Replay.World) (f : Obend.Vault.Form.Form) (hops : List Ob
   match Obend.Vault.Form.preparedOf H w.store g hops a with
   | .error _ => ""
   | .ok (_, prs) =>
-    let xs := Obend.Vault.Form.classify w.checked f.name f.assets (Obend.Vault.Form.callsOf w.store.entries prs)
+    let cs := Obend.Vault.Form.checksOf w.checked f.name
+    let xs := Obend.Vault.Form.classify cs f.name f.assets (Obend.Vault.Form.callsOf w.store.entries prs)
     let laws (l : List Obend.Vault.Form.Judged) : Nat := (l.map (·.call.lin.length)).sum
     let kept := xs.filter (·.kept)
     let now := xs.filter (!·.kept)
@@ -1075,7 +1076,7 @@ def checkWorkLine (w : Replay.World) (f : Obend.Vault.Form.Form) (hops : List Ob
     "work: laws over the holed states: " ++ toString (laws kept) ++ " kept from the capture, " ++
       toString (laws now) ++ " checked now" ++
       (if refused.isEmpty then "" else " (" ++ toString (laws refused) ++ " refused by the checker)") ++
-      ", re-checked " ++ toString (Obend.Vault.Form.rechecked w.checked f.name xs)
+      ", re-checked " ++ toString (Obend.Vault.Form.rechecked cs f.name xs)
 
 /-- `work: performed P, retained R of T`: of what a form carries (each move of its residual, each
 value its contract offers), how much the step judged anew, and how much is still good without being
@@ -1646,7 +1647,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     -- the checks the world keeps for the form (`Replay.World.checked`, made at capture and at each
     -- abstraction), each law of each by its full name: the page or kind that wrote it
     -- (`jobs/_kind: budget`), at the page it judges
-    let cs := w.checked.filter (·.form == name)
+    let cs := Obend.Vault.Form.checksOf w.checked name
     let open_ := f.holes.filterMap fun (h, t) => if t == .nat then some h else none
     IO.println (name ++ ": " ++ toString ((cs.map (·.unit.laws.length)).sum) ++
       " law(s) over its holed states, checked once" ++

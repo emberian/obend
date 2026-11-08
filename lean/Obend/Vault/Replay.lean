@@ -122,8 +122,10 @@ structure World where
   /-- its reasons: what it observed, assumed, explained, defeated and proposed, and the judgment -/
   reasons : Obend.Reasons.State := {}
   /-- the checks it made, at capture and at each abstraction, of the judgments a fill of each of its
-  forms makes (`Obend.Vault.Form.Form.checksAt`): each the checker accepted, by construction -/
-  checked : List Form.Checked := []
+  forms makes (`Obend.Vault.Form.Form.checksAt`), each the checker accepted, kept as its record
+  (`Form.CheckRecord`); a command that uses a form's checks makes them again from these
+  (`Form.checksOf`) -/
+  checked : List Form.CheckRecord := []
 deriving DecidableEq
 
 /-- One turn of the deployed entry. -/
@@ -780,7 +782,7 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     match Form.captureFrom w.store situation name g src dst amount field refs with
     | .ok (f, culled) =>
       .ok ({ w with forms := w.forms ++ [f],
-                    checked := w.checked.filter (·.form != name) ++ f.checksAt H w.store }, .form f culled)
+                    checked := w.checked.filter (·.form != name) ++ (f.checksAt H w.store).map (·.record) }, .form f culled)
     | .error e => .error ("refused: " ++ e)
   | .briefed page name g lits holes =>
     if w.forms.any (·.name == name) then .error ("refused: a form named " ++ name ++ " exists") else
@@ -794,7 +796,7 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
       match f.abstract value hole with
       | .ok g =>
         .ok ({ w with forms := w.forms.map fun x => if x.name == name then g else x,
-                      checked := w.checked.filter (·.form != name) ++ g.checksAt H w.store }, .form g 0)
+                      checked := w.checked.filter (·.form != name) ++ (g.checksAt H w.store).map (·.record) }, .form g 0)
       | .error e => .error ("refused: " ++ e)
   | .judged name digest hops a intent => judgeTurn w name digest hops a intent
   | .filled name received sent =>
@@ -996,7 +998,7 @@ def worldOf (j : Json) : Except String World := do
   let reasons ← opt "reasons" {} Obend.Reasons.stateOf
   -- a check read back is checked again: only what the checker accepts here is kept
   let checked ← opt "checked" [] fun v => do
-    return (← (← v.getArr?).toList.mapM Form.checkedOf).filterMap id
+    (← v.getArr?).toList.mapM Form.checkedOf
   return ⟨store, journal, forms, receipts, received, sent, issues, grants, landed, outstanding, minted, retention, forks,
     reasons, checked⟩
 
@@ -1245,21 +1247,22 @@ is the replay of its log. -/
 theorem state_eq_replay_log {S : Session} (h : Reachable S) : S.world = replay deployed genesis S.log :=
   Log.state_eq_replay_log h
 
-/-- **A check a session keeps is the log's, and the checker's**: every check of a form's judgments the
-world a session serves holds is one the replay of its log makes (`state_eq_replay_log`), and the
-checker accepts it (`Form.Checked.ok`); no file the vault reads stands for one. -/
+/-- **A check a session keeps is the log's**: every check record the world a session serves holds is
+one the replay of its log makes (`state_eq_replay_log`), and the checks a command uses are made again
+from those records by the checker (`Form.checksOf`); no file the vault reads stands for one. -/
 theorem checks_replayed {S : Session} (h : Reachable S) :
-    ∀ c ∈ S.world.checked, c ∈ (replay deployed genesis S.log).checked ∧ c.unit.accepted = true :=
-  fun c hc => ⟨state_eq_replay_log h ▸ hc, c.ok⟩
+    ∀ r ∈ S.world.checked, r ∈ (replay deployed genesis S.log).checked :=
+  fun r hr => state_eq_replay_log h ▸ hr
 
-/-- **A capture's checks are the capture's**: the turn that captures a form keeps the checks of the
-judgments a fill of it makes at the store it was captured from (`Form.checksAt`), in place of any it
-kept under that name before. -/
+/-- **A capture's checks are the capture's**: the turn that captures a form keeps the records of the
+checks of the judgments a fill of it makes at the store it was captured from (`Form.checksAt`), in
+place of any it kept under that name before; made again, they are those checks
+(`Form.checksOf_records`). -/
 theorem captured_checks {w w' : World} {o : Outcome} {situation name : String} {g : Form.Grant} {src dst : String}
     {amount : Nat} {field : String} {refs : List String}
     (h : stepTurn w (.captured situation name g src dst amount field refs) = .ok (w', o)) :
     ∃ f culled, Form.captureFrom w.store situation name g src dst amount field refs = .ok (f, culled) ∧
-      w'.checked = w.checked.filter (·.form != name) ++ f.checksAt H w.store := by
+      w'.checked = w.checked.filter (·.form != name) ++ (f.checksAt H w.store).map (·.record) := by
   simp only [stepTurn] at h
   split at h
   · cases h
