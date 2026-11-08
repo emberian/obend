@@ -387,7 +387,9 @@ unless it lies in no field the specification names; diamond's programs give `exp
 and a planted flip in a store's register is caught; the gem5 vectors are the generator's bytes and
 replay; the waits are sufficient and a removed wait is refused; `Residuals.lean` is the generator's
 bytes, every dump is certified (each with the check's time and peak memory) and a planted flip in a
-store's register is refused. Passed on hbox 2026-11-06, the Census and `Teeth` built.
+store's register is refused. Passed on hbox 2026-11-08 on all 29 dumps (stages 1-7; stage 7 in 3391 s with
+four certificates at a time, the 2^20-point NTT in 1467-3072 s and 1.6 GB, the 65536-element SOACs in
+273-590 s), `Rdna2Runs` built.
 
 `Obend.Hardware.Gpu.Rdna2.Waitcnt` closes the gap the model's immediate memory leaves: the model
 completes an access when it issues, so a program that read a load's destination before waiting for it
