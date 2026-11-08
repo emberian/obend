@@ -47,6 +47,17 @@ public import Obend.Hardware.Gpu.Rdna2.Check
 public import Obend.Hardware.Gpu.Rdna2.Waitcnt
 public import Obend.Hardware.Gpu.Rdna2.Certified
 public import Obend.Hardware.Gpu.Memory
+public import Obend.Hardware.ArrayKernel
+public import Obend.Hardware.ArrayKernelUnique
+public import Obend.Hardware.ArrayKernelOwnership
+public import Obend.Hardware.Gpu.LayoutChecks
+public import Obend.Hardware.Gpu.Workgroup
+public import Obend.Hardware.Gpu.Ntt
+public import Obend.Hardware.Gpu.BlockLower
+public import Obend.Hardware.Gpu.BlockEmit
+public import Obend.Hardware.Gpu.BookImport
+public import Obend.Hardware.Gpu.DispatchProtocol
+public import Obend.Hardware.Gpu.SourceProtocol
 public import Obend.Hardware.QuantumMatter
 public import Obend.Hardware.DigitalTwin
 public import Obend.Hardware.TcadBridge

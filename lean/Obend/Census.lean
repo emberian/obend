@@ -567,7 +567,14 @@ import Obend.Teeth.Hardware.CliffordKernel
 import Obend.Teeth.Hardware.DeviceCertificates
 import Obend.Teeth.Hardware.DeviceFixtures
 import Obend.Teeth.Hardware.Fixtures
+import Obend.Hardware.Gpu.CatgradImport
 import Obend.Teeth.Hardware.Rdna2Runs
+import Obend.Teeth.Hardware.ArrayTyping
+import Obend.Teeth.Hardware.GpuArrayEncoding
+import Obend.Teeth.Hardware.GpuArrayMember
+import Obend.Teeth.Hardware.GpuLayout
+import Obend.Teeth.Hardware.GpuSourcePrograms
+import Obend.Teeth.Hardware.Workgroup
 import Obend.Teeth.Hardware.SiliconTeeth
 import Obend.Teeth.Law.Fixtures
 import Obend.Teeth.Law.LawJudgeTeeth
