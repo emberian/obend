@@ -37,3 +37,8 @@ artifacts remain identical, and the same three ISA model stages remain red.
 NTT, Core4/GPU, field, collective and race-freedom axiom audit. Build summaries
 include hashes and paths for the full hbox logs. Fresh source-admission checks
 pass; the fresh Rdna2 compiled pins remain red with the model gaps above.
+
+`source-convergence/final-artifact-check.log` records a final stage-1 regeneration
+after importing the closed universal NTT theorem and removing finite direct-DFT
+checks: all 29 registered graph artifacts remain byte-identical. The full
+source-convergence device gate above exercised those same artifacts.
