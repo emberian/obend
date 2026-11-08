@@ -145,7 +145,7 @@ def explainCert {σ : Type} (words : Nat) (lay : Memory) (specs : List (Spec σ)
       | return s!"stage {k}: the specification's table is refused (a value the lowering does not know)"
     let mut acc : Acc := ⟨{}, [], {}⟩
     for g in List.range (groupsOf spec.threads) do
-      let st := symWave words lay prog spec.lds known acc.stored g
+      let st := symWave words lay prog spec.lds known acc.stored.contains g
       if let some e := st.err then return s!"stage {k}, workgroup {g}: the symbolic run refused: {e}"
       unless st.halted do return s!"stage {k}, workgroup {g}: the symbolic run did not halt"
       for (a, t) in st.mem.stores.toList do

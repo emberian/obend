@@ -252,16 +252,25 @@ if run_stage 7; then
 echo "=== [7/7] the certificate: every graph's machine code computes the graph for every input ==="
 pairs=()
 for d in "${DUMPS[@]}"; do pairs+=("$(basename "${d}" .txt)=${d}"); done
-"${RDNA2}" reslib Obend.Hardware.Gpu.Rdna2.Residuals r "${pairs[@]}" > "${WORK}/Residuals.lean" 2> "${WORK}/reslib.log" \
-  || { cat "${WORK}/reslib.log" >&2; exit 1; }
+# the library and every dump's certificate run side by side, ISA_JOBS certificates at a time, largest
+# dump first; each certificate is one process (time and peak memory its own)
+"${RDNA2}" reslib Obend.Hardware.Gpu.Rdna2.Residuals r "${pairs[@]}" > "${WORK}/Residuals.lean" 2> "${WORK}/reslib.log" &
+reslib_pid=$!
+cert_one() {
+  /usr/bin/time -f "%e %M" -o "${WORK}/time-$1" "${RDNA2}" cert "$1" "$2" > "${WORK}/cert-$1" 2>&1
+}
+export -f cert_one; export RDNA2 WORK
+ls -S "${SCRIPT_DIR}"/isa/*.txt | while read -r d; do printf '%s %s\n' "$(basename "${d}" .txt)" "${d}"; done \
+  | xargs -P "${ISA_JOBS:-4}" -n 2 bash -c 'cert_one "$0" "$1" || touch "${WORK}/failed-$0"'
+wait "${reslib_pid}" || { cat "${WORK}/reslib.log" >&2; exit 1; }
 cmp "${WORK}/Residuals.lean" "${REPO_ROOT}/lean/Obend/Hardware/Gpu/Rdna2/Residuals.lean" \
   || { echo "[FAIL] Residuals.lean differs from obend-rdna2 reslib over the dumps (regenerate; do not hand-edit)" >&2; exit 1; }
 echo "  Residuals.lean == obend-rdna2 reslib over every dump"
 for d in "${DUMPS[@]}"; do
   g="$(basename "${d}" .txt)"
-  /usr/bin/time -f "%e %M" -o "${WORK}/time" "${RDNA2}" cert "${g}" "${d}" > "${WORK}/cert.out" || { cat "${WORK}/cert.out"; exit 1; }
-  read -r secs kb < "${WORK}/time"
-  echo "  $(cat "${WORK}/cert.out"); ${secs} s, $((kb / 1024)) MB peak"
+  if [[ -e "${WORK}/failed-${g}" ]]; then cat "${WORK}/cert-${g}"; echo "[FAIL] ${g}: not certified" >&2; exit 1; fi
+  read -r secs kb < "${WORK}/time-${g}"
+  echo "  $(cat "${WORK}/cert-${g}"); ${secs} s, $((kb / 1024)) MB peak"
 done
 for g in diamond glmul-4 ntt-16 adjoint-square-bilinear; do
   # the first buffer_store of stage 0: VDATA's low bit (bit 40 of the instruction) names another register

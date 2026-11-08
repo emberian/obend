@@ -325,6 +325,93 @@ theorem checkWaves_mono (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (p
       exact checkWaves_mono words lay T prog lds known gs acc1 acc' h2 r ((checkStores_spec words T _ acc acc1 h1).2.2.2.1 r hr)
     · simp at h
 
+/-- One wave from memory `m` (`WInv`), its symbolic run reading the start except the dwords `ex` names
+(every dword stored so far among them), its stores accepted against `T`: the model runs it, and `WInv`
+holds after it. -/
+theorem waveStep_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.HashMap Nat TP} {V : Nat → Word}
+    {m0 : Memory} {E : Nat → Word} (h0 : StartOk words lay known m0 E) (hw : words < 2 ^ 29)
+    (hT : ∀ i t, T[i]? = some t → t.ev (menv m0) = V i) (prog : Program) (lds g : Nat) (ex : UInt64 → Bool)
+    (acc acc1 : Acc) (m : Memory) (hm : WInv words m0 T V m acc)
+    (hex : ∀ a, acc.stored.contains a = true → ex a = true)
+    (herr : (symWave words lay prog lds known ex g).err = none)
+    (hhalt : (symWave words lay prog lds known ex g).halted = true)
+    (h1 : checkStores words T (symWave words lay prog lds known ex g).mem.stores.toList acc = some acc1)
+    (hneed1 : ∀ r, acc1.needed.contains r = true → r.Holds) :
+    (run prog (fuelOf prog) (initWave m descSetLo g (ldsBaseOf g) lds : WaveState)).err = none ∧
+      (run prog (fuelOf prog) (initWave m descSetLo g (ldsBaseOf g) lds : WaveState)).halted = true ∧
+      WInv words m0 T V (run prog (fuelOf prog) (initWave m descSetLo g (ldsBaseOf g) lds : WaveState)).mem acc1 := by
+  obtain ⟨c1, c2, c3, c4, c5, c6⟩ := checkStores_spec words T _ acc acc1 h1
+  have hbase : ∀ a u, baseView words lay known ex a = some u → m.get? a = some (u.eval (menv m0)) := by
+    intro a u hu
+    unfold baseView at hu
+    split at hu
+    · simp at hu
+    · rename_i hc
+      have hs : acc.stored.contains a = false := by
+        cases e : acc.stored.contains a
+        · rfl
+        · exact absurd (hex a e) hc
+      rw [hm.free a hs (viewStart_lds hw a u hu)]
+      exact viewStart_ok h0 hw a u hu
+  unfold symWave at herr hhalt c1 c2 c3 c6
+  have hw' := swave_sound (menv m0) prog (fuelOf prog) m _ hbase descSetLo g (ldsBaseOf g) lds herr
+  dsimp only at hw'
+  obtain ⟨serr, shalt, sload, sframe⟩ := hw'
+  generalize (srun prog (fuelOf prog) (initWave (⟨{}, baseView words lay known ex⟩ : SymMem) descSetLo g
+      (ldsBaseOf g) lds) : SymWave) = st at herr hhalt c1 c2 c3 c6 shalt sload sframe
+  generalize run prog (fuelOf prog) (initWave m descSetLo g (ldsBaseOf g) lds : WaveState) = sc
+    at serr shalt sload sframe ⊢
+  have hmem : ∀ a t, (a, t) ∈ st.mem.stores.toList ↔ st.mem.stores.get? a = some t := by
+    intro a t
+    rw [Std.HashMap.mem_toList_iff_getElem?_eq_some, ← Std.HashMap.get?_eq_getElem?]
+  have hst : ∀ a t, st.mem.stores.get? a = some t → sc.mem.get? a = some (t.eval (menv m0)) := by
+    intro a t ht; apply sload; simp only [SymMem.load, ht]
+  have hnot : ∀ a, (¬ ∃ t, st.mem.stores.get? a = some t) → sc.mem.get? a = m.get? a := by
+    intro a ha; apply sframe
+    cases e : st.mem.stores.get? a with
+    | none => rfl
+    | some t => exact absurd ⟨t, e⟩ ha
+  -- the wave's own stores outside its LDS were free before it
+  have hown : ∀ a t, st.mem.stores.get? a = some t → inLds a = false → acc.stored.contains a = false := by
+    intro a t ht hl
+    exact (c2 a t ((hmem a t).mpr ht) hl).1
+  have hold : ∀ a, acc.stored.contains a = true → ¬ ∃ t, st.mem.stores.get? a = some t := by
+    rintro a ha ⟨t, ht⟩
+    have := hown a t ht (inW_lds words hw a (hm.stored a ha).1)
+    rw [ha] at this; exact Bool.noConfusion this
+  have hinv1 : WInv words m0 T V sc.mem acc1 := by
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · intro a ha hl
+      have hc := c1 a; rw [ha] at hc
+      have h1' : acc.stored.contains a = false := by
+        cases e : acc.stored.contains a
+        · rfl
+        · exact absurd (hc.mpr (Or.inl e)) Bool.false_ne_true
+      have h2' : ¬ ∃ t, st.mem.stores.get? a = some t := by
+        rintro ⟨t, ht⟩; exact Bool.false_ne_true (hc.mpr (Or.inr ⟨t, (hmem a t).mpr ht, hl⟩))
+      rw [hnot a h2']; exact hm.free a h1' hl
+    · intro a ha
+      rcases (c1 a).mp ha with ho | ⟨t, hmt, hl⟩
+      · obtain ⟨i1, i2, i3⟩ := hm.stored a ho
+        exact ⟨i1, i2, by rw [hnot a (hold a ho)]; exact i3⟩
+      · have ht := (hmem a t).mp hmt
+        obtain ⟨-, r?, hok', hr?⟩ := c2 a t hmt hl
+        obtain ⟨i1, i2, i3⟩ := storeOk_sound hT a t r? hok' (fun r hr => hneed1 r (hr? r hr))
+        exact ⟨i1, i2, by rw [hst a t ht, i3]⟩
+    · intro x hx
+      rcases c3 x hx with ho | ⟨t, hmt, hl, hx2⟩
+      · obtain ⟨u1, u2⟩ := hm.upd x ho
+        exact ⟨(c1 x.1).mpr (Or.inl u1), fun v hv => by rw [hnot x.1 (hold x.1 u1)]; exact u2 v hv⟩
+      · have ht := (hmem x.1 t).mp hmt
+        refine ⟨(c1 x.1).mpr (Or.inr ⟨t, hmt, hl⟩), fun v hv => ?_⟩
+        rw [hst x.1 t ht, eval_of_litVal _ t v (hx2 ▸ hv)]
+    · intro a ha
+      rcases (c1 a).mp ha with ho | ⟨t, hmt, hl⟩
+      · obtain ⟨x, hx, hx1⟩ := hm.upd_of a ho
+        exact ⟨x, c5 x hx, hx1⟩
+      · exact ⟨(a, t.litVal?), c6 a t hmt hl, rfl⟩
+  exact ⟨serr, by rw [shalt, hhalt], hinv1⟩
+
 theorem checkWaves_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.HashMap Nat TP} {V : Nat → Word}
     {m0 : Memory} {E : Nat → Word} (h0 : StartOk words lay known m0 E) (hw : words < 2 ^ 29)
     (hT : ∀ i t, T[i]? = some t → t.ev (menv m0) = V i) (prog : Program) (lds : Nat) :
@@ -335,126 +422,85 @@ theorem checkWaves_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.H
     simp only [checkWaves, Option.some.injEq] at h; subst h; exact ⟨m, rfl, hm⟩
   | g :: gs, acc, acc', h, hneed, m, hm => by
     unfold checkWaves at h
-    dsimp only [symWave] at h
-    simp only [runWaves]
+    dsimp only at h
     split at h
     · rename_i hok
       simp only [Bool.and_eq_true, Option.isNone_iff_eq_none] at hok
       obtain ⟨herr, hhalt⟩ := hok
       simp only [sharedStores, shareCommon_eq, checkStoresX_eq, Option.bind_eq_some_iff] at h
       obtain ⟨acc1, h1, h2⟩ := h
-      obtain ⟨c1, c2, c3, c4, c5, c6⟩ := checkStores_spec words T _ acc acc1 h1
       have hneed1 : ∀ r, acc1.needed.contains r = true → r.Holds :=
         fun r hr => hneed r (checkWaves_mono words lay T prog lds known gs acc1 acc' h2 r hr)
-      have hbase : ∀ a u, baseView words lay known acc.stored a = some u → m.get? a = some (u.eval (menv m0)) := by
-        intro a u hu
-        unfold baseView at hu
-        split at hu
-        · simp at hu
-        · rename_i hc
-          rw [hm.free a (by simpa using hc) (viewStart_lds hw a u hu)]
-          exact viewStart_ok h0 hw a u hu
-      have hw' := swave_sound (menv m0) prog (fuelOf prog) m _ hbase descSetLo g (ldsBaseOf g) lds herr
-      dsimp only at hw'
-      obtain ⟨serr, shalt, sload, sframe⟩ := hw'
-      generalize (srun prog (fuelOf prog) (initWave (⟨{}, baseView words lay known acc.stored⟩ : SymMem) descSetLo g
-          (ldsBaseOf g) lds) : SymWave) = st
-        at herr hhalt h1 h2 c1 c2 c3 c4 c5 c6 shalt sload sframe
-      generalize run prog (fuelOf prog) (initWave m descSetLo g (ldsBaseOf g) lds : WaveState) = sc
-        at serr shalt sload sframe ⊢
-      have hmem : ∀ a t, (a, t) ∈ st.mem.stores.toList ↔ st.mem.stores.get? a = some t := by
-        intro a t
-        rw [Std.HashMap.mem_toList_iff_getElem?_eq_some, ← Std.HashMap.get?_eq_getElem?]
-      have hst : ∀ a t, st.mem.stores.get? a = some t → sc.mem.get? a = some (t.eval (menv m0)) := by
-        intro a t ht; apply sload; simp only [SymMem.load, ht]
-      have hnot : ∀ a, (¬ ∃ t, st.mem.stores.get? a = some t) → sc.mem.get? a = m.get? a := by
-        intro a ha; apply sframe
-        cases e : st.mem.stores.get? a with
-        | none => rfl
-        | some t => exact absurd ⟨t, e⟩ ha
-      -- the wave's own stores outside its LDS were free before it
-      have hown : ∀ a t, st.mem.stores.get? a = some t → inLds a = false → acc.stored.contains a = false := by
-        intro a t ht hl
-        exact (c2 a t ((hmem a t).mpr ht) hl).1
-      have hold : ∀ a, acc.stored.contains a = true → ¬ ∃ t, st.mem.stores.get? a = some t := by
-        rintro a ha ⟨t, ht⟩
-        have := hown a t ht (inW_lds words hw a (hm.stored a ha).1)
-        rw [ha] at this; exact Bool.noConfusion this
-      have hinv1 : WInv words m0 T V sc.mem acc1 := by
-        refine ⟨?_, ?_, ?_, ?_⟩
-        · intro a ha hl
-          have hc := c1 a; rw [ha] at hc
-          have h1' : acc.stored.contains a = false := by
-            cases e : acc.stored.contains a
-            · rfl
-            · exact absurd (hc.mpr (Or.inl e)) Bool.false_ne_true
-          have h2' : ¬ ∃ t, st.mem.stores.get? a = some t := by
-            rintro ⟨t, ht⟩; exact Bool.false_ne_true (hc.mpr (Or.inr ⟨t, (hmem a t).mpr ht, hl⟩))
-          rw [hnot a h2']; exact hm.free a h1' hl
-        · intro a ha
-          rcases (c1 a).mp ha with ho | ⟨t, hmt, hl⟩
-          · obtain ⟨i1, i2, i3⟩ := hm.stored a ho
-            exact ⟨i1, i2, by rw [hnot a (hold a ho)]; exact i3⟩
-          · have ht := (hmem a t).mp hmt
-            obtain ⟨-, r?, hok', hr?⟩ := c2 a t hmt hl
-            obtain ⟨i1, i2, i3⟩ := storeOk_sound hT a t r? hok' (fun r hr => hneed1 r (hr? r hr))
-            exact ⟨i1, i2, by rw [hst a t ht, i3]⟩
-        · intro x hx
-          rcases c3 x hx with ho | ⟨t, hmt, hl, hx2⟩
-          · obtain ⟨u1, u2⟩ := hm.upd x ho
-            exact ⟨(c1 x.1).mpr (Or.inl u1), fun v hv => by rw [hnot x.1 (hold x.1 u1)]; exact u2 v hv⟩
-          · have ht := (hmem x.1 t).mp hmt
-            refine ⟨(c1 x.1).mpr (Or.inr ⟨t, hmt, hl⟩), fun v hv => ?_⟩
-            rw [hst x.1 t ht, eval_of_litVal _ t v (hx2 ▸ hv)]
-        · intro a ha
-          rcases (c1 a).mp ha with ho | ⟨t, hmt, hl⟩
-          · obtain ⟨x, hx, hx1⟩ := hm.upd_of a ho
-            exact ⟨x, c5 x hx, hx1⟩
-          · exact ⟨(a, t.litVal?), c6 a t hmt hl, rfl⟩
-      obtain ⟨m', hrun, hinv'⟩ := checkWaves_sound h0 hw hT prog lds gs acc1 acc' h2 hneed sc.mem hinv1
+      obtain ⟨serr, shalt, hinv1⟩ :=
+        waveStep_sound h0 hw hT prog lds g _ acc acc1 m hm (fun _ h => h) herr hhalt h1 hneed1
+      obtain ⟨m', hrun, hinv'⟩ := checkWaves_sound h0 hw hT prog lds gs acc1 acc' h2 hneed _ hinv1
       refine ⟨m', ?_, hinv'⟩
-      rw [serr, shalt, hhalt]
-      simpa using hrun
+      simp only [runWaves, serr, shalt, Option.isNone_none, Bool.and_self, ite_true]
+      exact hrun
     · simp at h
 
 /-! ## 6. One dispatch -/
 
-/-- The parts of a stage's table over the waves `gs`, each given the words of the parts before it. -/
-def partsRun (part : Std.HashSet Nat → Nat → Option (Std.HashMap Nat TP)) :
-    Std.HashSet Nat → List Nat → Option (List (Std.HashMap Nat TP))
-  | _, [] => some []
-  | K, g :: gs => (part K g).bind fun P => (partsRun part (addKeys K P) gs).map (P :: ·)
+/-- The owners `O` of a stage's parts over the waves `gs`: each wave's part, rebuilt from `O`, holds exactly
+the words `O` gives it, and `O` gives words only to those waves. -/
+def OwnersOk (part : (Nat → Bool) → Nat → Option (Std.HashMap Nat TP)) (gs : List Nat) (O : Std.HashMap Nat Nat) :
+    Prop :=
+  (∀ g ∈ gs, ∃ P, part (hasOf O g) g = some P ∧ ∀ j, P.contains j = true ↔ O[j]? = some g) ∧
+    (∀ (j h : Nat), O[j]? = some h → h ∈ gs)
 
-/-- A stage's parts are its table: when every wave's part is built, the table is built, it holds every
-entry of every part, and each of its words is in some part. -/
+/-- A stage's parts are its table: for owners as the first pass leaves them (`OwnersOk`), the table is
+built, it holds every entry of every wave's part, and each of its words has an owner. -/
 def Spec.PartsOk {σ : Type} (s : Spec σ) : Prop :=
-  ∀ part, s.part = some part → ∀ (rd : Nat → TP) (Ps : List (Std.HashMap Nat TP)),
-    partsRun (part rd) {} (List.range (groupsOf s.threads)) = some Ps →
-      ∃ T, s.table rd = some T ∧ (∀ P ∈ Ps, ∀ (i : Nat) (t : TP), P[i]? = some t → T[i]? = some t) ∧
-        (∀ (i : Nat) (t : TP), T[i]? = some t → ∃ P ∈ Ps, P.contains i = true)
+  ∀ part, s.part = some part → ∀ (rd : Nat → TP) (O : Std.HashMap Nat Nat),
+    OwnersOk (part rd) (List.range (groupsOf s.threads)) O →
+      ∃ T, s.table rd = some T ∧
+        (∀ g ∈ List.range (groupsOf s.threads), ∀ P, part rd (hasOf O g) g = some P →
+          ∀ (i : Nat) (t : TP), P[i]? = some t → T[i]? = some t) ∧
+        (∀ (i : Nat) (t : TP), T[i]? = some t → O.contains i = true)
 
-theorem addKeys_contains (K : Std.HashSet Nat) (P : Std.HashMap Nat TP) (i : Nat) :
-    (addKeys K P).contains i = true ↔ K.contains i = true ∨ P.contains i = true := by
-  have hl : ∀ (L : List (Nat × TP)) (K : Std.HashSet Nat),
-      (L.foldl (fun K x => K.insert x.1) K).contains i = true ↔ K.contains i = true ∨ ∃ x ∈ L, x.1 = i := by
-    intro L
-    induction L with
-    | nil => intro K; simp
-    | cons x L ih =>
-      intro K
-      rw [List.foldl_cons, ih, Std.HashSet.contains_insert]
-      simp only [Bool.or_eq_true, beq_iff_eq, List.mem_cons, exists_eq_or_imp]
-      grind
-  unfold addKeys
-  rw [hl]
-  apply or_congr Iff.rfl
+theorem mem_toList_key (P : Std.HashMap Nat TP) (j : Nat) : (∃ x ∈ P.toList, x.1 = j) ↔ P.contains j = true := by
   rw [Std.HashMap.contains_eq_isSome_getElem?]
   constructor
   · rintro ⟨⟨k, t⟩, hm, rfl⟩
     rw [Std.HashMap.mem_toList_iff_getElem?_eq_some.mp hm]; rfl
   · intro h
     obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp h
-    exact ⟨(i, t), Std.HashMap.mem_toList_iff_getElem?_eq_some.mpr ht, rfl⟩
+    exact ⟨(j, t), Std.HashMap.mem_toList_iff_getElem?_eq_some.mpr ht, rfl⟩
+
+theorem hasOf_mono (O : Std.HashMap Nat Nat) (g j : Nat) (h : hasOf O g j = true) : hasOf O (g + 1) j = true := by
+  unfold hasOf at h ⊢
+  cases e : O[j]? with
+  | none => simp only [e] at h; exact absurd h (by simp)
+  | some h' => simp only [e, decide_eq_true_eq] at h ⊢; omega
+
+theorem ownedBy_mem (O : Std.HashMap Nat Nat) (j g : Nat) (h : O[j]? = some g) : j ∈ (ownedBy O).getD g [] := by
+  have step : ∀ (I : Std.HashMap Nat (List Nat)) (x : Nat × Nat), (j ∈ I.getD g [] ∨ x = (j, g)) →
+      j ∈ (I.insert x.2 (x.1 :: I.getD x.2 [])).getD g [] := by
+    intro I x h
+    rw [Std.HashMap.getD_insert]
+    by_cases e : x.2 = g
+    · rw [ite_eq_left (by simp [e])]
+      rcases h with h | h
+      · rw [e]; exact List.mem_cons_of_mem _ h
+      · rw [h]; exact List.mem_cons_self
+    · rw [ite_eq_right (by simp [e])]
+      rcases h with h | h
+      · exact h
+      · rw [h] at e; exact absurd rfl e
+  have hl : ∀ (L : List (Nat × Nat)) (I : Std.HashMap Nat (List Nat)),
+      (j ∈ I.getD g [] ∨ (j, g) ∈ L) → j ∈ (L.foldl (fun I x => I.insert x.2 (x.1 :: I.getD x.2 [])) I).getD g [] := by
+    intro L
+    induction L with
+    | nil => intro I h; simpa using h
+    | cons x L ih =>
+      intro I h
+      rw [List.foldl_cons]
+      rcases h with h | h
+      · exact ih _ (Or.inl (step I x (Or.inl h)))
+      · rcases List.mem_cons.mp h with e | e
+        · exact ih _ (Or.inl (step I x (Or.inr e.symm)))
+        · exact ih _ (Or.inr e)
+  exact hl _ {} (Or.inr (Std.HashMap.mem_toList_iff_getElem?_eq_some.mpr h))
 
 theorem specAt_sub {words : Nat} {P T : Std.HashMap Nat TP} (hsub : ∀ (i : Nat) (t : TP), P[i]? = some t → T[i]? = some t)
     (a : UInt64) (x : Tm) (h : specAt words P a = some x) : specAt words T a = some x := by
@@ -487,70 +533,166 @@ theorem checkStores_sub (words : Nat) {P T : Std.HashMap Nat TP} (hsub : ∀ (i 
         | none => rw [hx] at hok; simp [storeOkX] at hok
         | some x => rw [hx] at hok; rw [specAt_sub hsub a x hx]; exact hok
 
-/-- The waves checked part by part: the parts are built in order, the words they hold are the words
-collected, and the same waves are accepted, with the same result, against any table holding every part. -/
-theorem checkWavesP_whole (words : Nat) (lay : Memory) (part : Std.HashSet Nat → Nat → Option (Std.HashMap Nat TP))
-    (prog : Program) (lds : Nat) (known : Known) :
-    ∀ (gs : List Nat) (K K' : Std.HashSet Nat) (acc acc' : Acc),
-      checkWavesP words lay part prog lds known gs K acc = some (K', acc') →
-      ∃ Ps, partsRun part K gs = some Ps ∧
-        (∀ i, K'.contains i = true ↔ K.contains i = true ∨ ∃ P ∈ Ps, P.contains i = true) ∧
-        ∀ T : Std.HashMap Nat TP, (∀ P ∈ Ps, ∀ (i : Nat) (t : TP), P[i]? = some t → T[i]? = some t) →
-          checkWaves words lay T prog lds known gs acc = some acc'
-  | [], K, K', acc, acc', h => by
-    simp only [checkWavesP, Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    exact ⟨[], rfl, by simp, fun _ _ => rfl⟩
-  | g :: gs, K, K', acc, acc', h => by
-    simp only [checkWavesP, Option.bind_eq_some_iff] at h
-    obtain ⟨P, hP, h⟩ := h
+theorem checkStoresX_mono : ∀ (L : List (UInt64 × Tm × Option Tm)) (acc acc' : Acc), checkStoresX L acc = some acc' →
+    ∀ r, acc.needed.contains r = true → acc'.needed.contains r = true
+  | [], acc, acc', h => by simp only [checkStoresX, Option.some.injEq] at h; subst h; exact fun _ h => h
+  | (a, t, x) :: rest, acc, acc', h => by
+    unfold checkStoresX at h
     split at h
+    · exact checkStoresX_mono rest acc acc' h
+    · split at h
+      · simp at h
+      · simp only [Option.bind_eq_some_iff] at h
+        obtain ⟨r?, -, h⟩ := h
+        intro r hr
+        apply checkStoresX_mono rest _ acc' h
+        split
+        · rw [contains_insertR]; exact Or.inr hr
+        · exact hr
+
+theorem checkStoresY_eq : ∀ (L : List (UInt64 × Tm × Option Tm)) (acc : Acc),
+    checkStoresY (L.map storePre) acc = checkStoresX L acc
+  | [], _ => rfl
+  | (a, t, x) :: rest, acc => by
+    simp only [List.map_cons, storePre, checkStoresY, checkStoresX]
+    split
+    · exact checkStoresY_eq rest acc
+    · split
+      · rfl
+      · cases storeOkX t x with
+        | none => rfl
+        | some r? => exact checkStoresY_eq rest _
+
+theorem checkStoresY_mono : ∀ (L : List (UInt64 × Option UInt32 × Option (Option Residual))) (acc acc' : Acc),
+    checkStoresY L acc = some acc' → ∀ r, acc.needed.contains r = true → acc'.needed.contains r = true
+  | [], acc, acc', h => by simp only [checkStoresY, Option.some.injEq] at h; subst h; exact fun _ h => h
+  | (a, v, o) :: rest, acc, acc', h => by
+    unfold checkStoresY at h
+    split at h
+    · exact checkStoresY_mono rest acc acc' h
+    · split at h
+      · simp at h
+      · simp only [Option.bind_eq_some_iff] at h
+        obtain ⟨r?, -, h⟩ := h
+        intro r hr
+        apply checkStoresY_mono rest _ acc' h
+        split
+        · rw [contains_insertR]; exact Or.inr hr
+        · exact hr
+
+theorem mergeWaves_mono : ∀ (os : List (Option (List (UInt64 × Option UInt32 × Option (Option Residual))))) (acc acc' : Acc),
+    mergeWaves os acc = some acc' → ∀ r, acc.needed.contains r = true → acc'.needed.contains r = true
+  | [], acc, acc', h => by simp only [mergeWaves, Option.some.injEq] at h; subst h; exact fun _ h => h
+  | o :: os, acc, acc', h => by
+    simp only [mergeWaves, Option.bind_eq_some_iff] at h
+    obtain ⟨L, -, acc1, h1, h2⟩ := h
+    exact fun r hr => mergeWaves_mono os acc1 acc' h2 r (checkStoresY_mono L acc acc1 h1 r hr)
+
+theorem mergeWaves_some {f : Nat → Option (List (UInt64 × Option UInt32 × Option (Option Residual)))} :
+    ∀ (gs : List Nat) (acc acc' : Acc), mergeWaves (gs.map f) acc = some acc' → ∀ g ∈ gs, ∃ L, f g = some L
+  | [], _, _, _ => by simp
+  | g :: gs, acc, acc', h => by
+    simp only [List.map_cons, mergeWaves, Option.bind_eq_some_iff] at h
+    obtain ⟨L, hL, acc1, -, h2⟩ := h
+    intro g' hg'
+    rcases List.mem_cons.mp hg' with e | e
+    · subst e; exact ⟨L, hL⟩
+    · exact mergeWaves_some gs acc1 acc' h2 g' e
+
+/-- A wave the second pass accepts has the part the owners give it. -/
+theorem waveOut_owners {words : Nat} {lay : Memory} {part : (Nat → Bool) → Nat → Option (Std.HashMap Nat TP)}
+    {prog : Program} {lds : Nat} {known : Known} {O : Std.HashMap Nat Nat} {g : Nat}
+    {L : List (UInt64 × Option UInt32 × Option (Option Residual))}
+    (h : waveOut words lay part prog lds known O (ownedBy O) g = some L) :
+    ∃ P, part (hasOf O g) g = some P ∧ ∀ j, P.contains j = true ↔ O[j]? = some g := by
+  unfold waveOut at h
+  simp only [Option.bind_eq_some_iff] at h
+  obtain ⟨P, hP, h⟩ := h
+  refine ⟨P, hP, fun j => ⟨fun hj => ?_, fun hj => ?_⟩⟩
+  · split at h
+    · rename_i hc
+      simp only [Bool.and_eq_true] at hc
+      obtain ⟨x, hx, e⟩ := (mem_toList_key P j).mpr hj
+      have := List.all_eq_true.mp hc.1 x hx
+      rw [← e]; simpa using this
+    · simp at h
+  · split at h
+    · rename_i hc
+      simp only [Bool.and_eq_true] at hc
+      exact List.all_eq_true.mp hc.2 j (ownedBy_mem O j g hj)
+    · simp at h
+
+theorem storeOk_word {words : Nat} {P : Std.HashMap Nat TP} {a : UInt64} {t : Tm} {r? : Option Residual}
+    (h : storeOk words P a t = some r?) : inW words a = true ∧ P.contains (wordOf a) = true := by
+  have hx : ∃ x, specAt words P a = some x := by
+    unfold storeOk at h
+    cases e : specAt words P a with
+    | none => rw [e] at h; simp [storeOkX] at h
+    | some x => exact ⟨x, rfl⟩
+  obtain ⟨x, hx⟩ := hx
+  unfold specAt at hx
+  by_cases hw : (!inW words a) = true
+  · rw [ite_eq_left hw] at hx; simp at hx
+  · rw [ite_eq_right hw] at hx
+    refine ⟨by simpa using hw, ?_⟩
+    simp only [Option.map_eq_some_iff] at hx
+    obtain ⟨sp, hsp, -⟩ := hx
+    rw [Std.HashMap.contains_eq_isSome_getElem?]; unfold wordOf; rw [hsp]; rfl
+
+/-- The second pass: the waves `s, …, s + k - 1` merged in order, each run on its own with every dword
+of an earlier part's word unreadable (the stores so far all lie there), each part inside the table. -/
+theorem mergeWaves_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.HashMap Nat TP} {V : Nat → Word}
+    {m0 : Memory} {E : Nat → Word} (h0 : StartOk words lay known m0 E) (hw : words < 2 ^ 29)
+    (hT : ∀ i t, T[i]? = some t → t.ev (menv m0) = V i) (prog : Program) (lds : Nat)
+    (part : (Nat → Bool) → Nat → Option (Std.HashMap Nat TP)) (O : Std.HashMap Nat Nat) (n : Nat)
+    (hsub : ∀ g < n, ∀ P, part (hasOf O g) g = some P → ∀ (i : Nat) (t : TP), P[i]? = some t → T[i]? = some t) :
+    ∀ (k s : Nat) (acc acc' : Acc), s + k ≤ n →
+      mergeWaves ((List.range' s k).map (waveOut words lay part prog lds known O (ownedBy O))) acc = some acc' →
+      (∀ r, acc'.needed.contains r = true → r.Holds) →
+      ∀ m, WInv words m0 T V m acc → (∀ a, acc.stored.contains a = true → inW words a = true ∧ hasOf O s (wordOf a) = true) →
+      ∃ m', runWaves prog lds (List.range' s k) m = some m' ∧ WInv words m0 T V m' acc'
+  | 0, s, acc, acc', _, h, _, m, hm, _ => by
+    simp only [List.range'_zero, List.map_nil, mergeWaves, Option.some.injEq] at h; subst h
+    exact ⟨m, rfl, hm⟩
+  | k + 1, s, acc, acc', hk, h, hneed, m, hm, hst => by
+    simp only [List.range'_succ, List.map_cons, mergeWaves, Option.bind_eq_some_iff] at h
+    obtain ⟨L, hL, acc1, h1, h2⟩ := h
+    obtain ⟨P', hP', hPc⟩ := waveOut_owners hL
+    unfold waveOut at hL
+    simp only [Option.bind_eq_some_iff] at hL
+    obtain ⟨P, hP, hL⟩ := hL
+    rw [hP] at hP'; simp only [Option.some.injEq] at hP'; subst hP'
+    have hown : ∀ j, P.contains j = true → O[j]? = some s := fun j hj => (hPc j).mp hj
+    split at hL
+    rotate_left
+    · simp at hL
+    split at hL
     · rename_i hok
-      simp only [Option.bind_eq_some_iff] at h
-      obtain ⟨acc1, h1, h2⟩ := h
-      obtain ⟨Ps, hPs, hK, hT⟩ := checkWavesP_whole words lay part prog lds known gs _ K' acc1 acc' h2
-      refine ⟨P :: Ps, by simp [partsRun, hP, hPs], fun i => ?_, fun T hsub => ?_⟩
-      · rw [hK, addKeys_contains]
-        simp only [List.mem_cons, exists_eq_or_imp]
-        grind
-      · unfold checkWaves
-        rw [ite_eq_left hok]
-        simp only [sharedStores, shareCommon_eq, checkStoresX_eq] at h1 ⊢
-        rw [checkStores_sub words (hsub P List.mem_cons_self) _ acc acc1 h1]
-        exact hT T fun Q hQ => hsub Q (List.mem_cons_of_mem _ hQ)
-    · simp at h
-
-/-- A stage with parts accepts only what the check against its whole table accepts. -/
-theorem checkStage_whole {σ : Type} {words : Nat} {lay : Memory} {known : Known} {s : Spec σ} (hs : s.PartsOk)
-    (prog : Program) (r : Known × Std.HashSet Residual) (h : checkStage words lay s prog known = some r) :
-    checkStageW words lay s prog known = some r := by
-  unfold checkStage at h
-  split at h
-  · exact h
-  · rename_i part hpart
-    simp only [Option.bind_eq_some_iff] at h
-    obtain ⟨⟨K, acc⟩, hw, h⟩ := h
-    obtain ⟨Ps, hPs, hK, hT⟩ := checkWavesP_whole words lay _ prog s.lds known _ {} K _ acc hw
-    obtain ⟨T, hTab, hsub, hcov⟩ := hs part hpart _ Ps hPs
-    split at h
-    · rename_i hks
-      unfold checkStageW
-      rw [hTab]
-      simp only [Option.bind_some]
-      rw [hT T hsub]
-      simp only [Option.bind_some]
-      have hts : tableStored T acc.stored = true := by
-        unfold tableStored
-        apply List.all_eq_true.mpr
-        rintro ⟨i, sp⟩ hm
-        have hi := Std.HashMap.mem_toList_iff_getElem?_eq_some.mp hm
-        obtain ⟨Q, hQ, hc⟩ := hcov i sp hi
-        have hk : K.contains i = true := (hK i).mpr (Or.inr ⟨Q, hQ, hc⟩)
-        have := List.all_eq_true.mp hks i (Std.HashSet.mem_toList.mpr (Std.HashSet.mem_iff_contains.mpr hk))
-        exact this
-      rw [ite_eq_left hts]; exact h
-    · simp at h
-
+      simp only [Option.some.injEq] at hL; subst hL
+      simp only [Bool.and_eq_true, Option.isNone_iff_eq_none] at hok
+      obtain ⟨herr, hhalt⟩ := hok
+      rw [checkStoresY_eq] at h1
+      simp only [sharedStores, shareCommon_eq, checkStoresX_eq] at h1
+      have h1T := checkStores_sub words (hsub s (by omega) P hP) _ acc acc1 h1
+      have hneed1 : ∀ r, acc1.needed.contains r = true → r.Holds :=
+        fun r hr => hneed r (mergeWaves_mono _ acc1 acc' h2 r hr)
+      obtain ⟨serr, shalt, hinv1⟩ := waveStep_sound h0 hw hT prog lds s _ acc acc1 m hm
+        (fun a ha => by obtain ⟨e1, e2⟩ := hst a ha; simp [e1, e2]) herr hhalt h1T hneed1
+      have hst1 : ∀ a, acc1.stored.contains a = true → inW words a = true ∧ hasOf O (s + 1) (wordOf a) = true := by
+        obtain ⟨c1, c2, -⟩ := checkStores_spec words P _ acc acc1 h1
+        intro a ha
+        rcases (c1 a).mp ha with ho | ⟨t, hmt, hl⟩
+        · obtain ⟨e1, e2⟩ := hst a ho; exact ⟨e1, hasOf_mono O s _ e2⟩
+        · obtain ⟨-, r?, hok', -⟩ := c2 a t hmt hl
+          obtain ⟨e1, e2⟩ := storeOk_word hok'
+          refine ⟨e1, ?_⟩
+          unfold hasOf; rw [hown _ e2]; simp
+      obtain ⟨m', hrun, hinv'⟩ := mergeWaves_sound h0 hw hT prog lds part O n hsub k (s + 1) acc1 acc'
+        (by omega) h2 hneed _ hinv1 hst1
+      refine ⟨m', ?_, hinv'⟩
+      simp only [List.range'_succ, runWaves, serr, shalt, Option.isNone_none, Bool.and_self, ite_true]
+      exact hrun
+    · simp at hL
 
 /-- A stage's promise: for any state `x` (satisfying `Inv`) whose wire buffer `proj x` the start's words
 `rd` describe in `env`, an accepted table lists words inside the buffer, each meaning what the stage
@@ -598,6 +740,70 @@ theorem applyUpdates_get (known : Known) (a : UInt64) (v : UInt32) :
           · rw [e]; exact hb
           · exact hn y e
 
+/-- The end of a dispatch whose waves left `WInv` against its table `T` (the meaning `V` of the stage,
+`E` the start) and stored every word of it: memory is a start for the next dispatch. -/
+theorem stageEnd_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.HashMap Nat TP} {V E : Nat → Word}
+    {m0 m' : Memory} {acc : Acc} (h0 : StartOk words lay known m0 E) (hw : words < 2 ^ 29)
+    (hTv : ∀ i t, T[i]? = some t → i < words ∧ t.ev (menv m0) = V i)
+    (hTn : ∀ i, T[i]? = none → V i = E i)
+    (hi : WInv words m0 T V m' acc) (hown : tableStored T acc.stored = true) :
+    StartOk words lay (applyUpdates known acc.updates) m' V := by
+  have hstored : ∀ i sp, T[i]? = some sp →
+      acc.stored.contains (dwLo i) = true ∧ acc.stored.contains (dwLo i + 1) = true := by
+    intro i sp h
+    unfold tableStored at hown
+    have := List.all_eq_true.mp hown (i, sp) (Std.HashMap.mem_toList_iff_getElem?_eq_some.mpr h)
+    simpa using this
+  -- a dword of a word outside the table was never stored
+  have hfree : ∀ j, j < words → T[j]? = none →
+      acc.stored.contains (dwLo j) = false ∧ acc.stored.contains (dwLo j + 1) = false := by
+    intro j hj hnone
+    constructor <;>
+    · rw [Bool.eq_false_iff]; intro hc
+      obtain ⟨-, ⟨sp, hk⟩, -⟩ := hi.stored _ hc
+      first
+        | rw [off_dwLo j (by omega), Nat.mul_div_cancel_left _ (by decide)] at hk
+        | rw [off_dwLo1 j (by omega), show (2 * j + 1) / 2 = j by omega] at hk
+      rw [hnone] at hk; simp at hk
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · intro j hj
+    cases hf : T[j]? with
+    | some sp =>
+      obtain ⟨d0, d1⟩ := hstored j sp hf
+      obtain ⟨-, -, v0⟩ := hi.stored _ d0
+      obtain ⟨-, -, v1⟩ := hi.stored _ d1
+      rw [off_dwLo j (by omega)] at v0
+      rw [off_dwLo1 j (by omega)] at v1
+      refine ⟨_, _, v0, v1, ?_⟩
+      rw [show 2 * j % 2 = 0 by omega, show 2 * j / 2 = j by omega,
+        show (2 * j + 1) % 2 = 1 by omega, show (2 * j + 1) / 2 = j by omega]
+      exact dwHalf_join _
+    | none =>
+      obtain ⟨f0, f1⟩ := hfree j hj hf
+      obtain ⟨lo, hi', e0, e1, e⟩ := h0.word j hj
+      obtain ⟨i0, i1⟩ := inW_dwLo words j hw hj
+      refine ⟨lo, hi', by rw [hi.free _ f0 (inW_lds words hw _ i0)]; exact e0,
+        by rw [hi.free _ f1 (inW_lds words hw _ i1)]; exact e1, ?_⟩
+      rw [hTn j hf]; exact e
+  · intro j hj
+    have hnone : T[j]? = none := by
+      cases hf : T[j]? with
+      | none => rfl
+      | some t => have := (hTv j t hf).1; omega
+    rw [hTn j hnone]; exact h0.past j hj
+  · intro a ha hl
+    have hc : acc.stored.contains a = false := by
+      rw [Bool.eq_false_iff]; intro hc; have := (hi.stored a hc).1; rw [ha] at this; exact Bool.false_ne_true this
+    rw [hi.free a hc hl]; exact h0.out a ha hl
+  · intro a v hk ha
+    rcases applyUpdates_get known a v _ hk with ⟨x, hx, hx1, hx2⟩ | ⟨hn', hk'⟩
+    · rw [← hx1]; exact (hi.upd x hx).2 v hx2
+    · have hc : acc.stored.contains a = false := by
+        rw [Bool.eq_false_iff]; intro hc
+        obtain ⟨x, hx, hx1⟩ := hi.upd_of a hc
+        exact hn' x hx hx1
+      rw [hi.free a hc (inW_lds words hw a ha)]; exact h0.known a v hk' ha
+
 theorem checkStageW_sound {σ : Type} {words : Nat} {lay : Memory} {known : Known} {proj : σ → Nat → Word}
     {Inv : σ → Prop} {s : Spec σ} (hs : s.Sound words proj Inv)
     {m0 : Memory} {x : σ} (h0 : StartOk words lay known m0 (proj x)) (hx : Inv x) (hw : words < 2 ^ 29)
@@ -616,62 +822,7 @@ theorem checkStageW_sound {σ : Type} {words : Nat} {lay : Memory} {known : Know
     have hinit : WInv words m0 T (proj (s.den x)) m0 ⟨{}, [], {}⟩ :=
       ⟨fun _ _ _ => rfl, fun a ha => by simp at ha, fun x hx => by simp at hx, fun a ha => by simp at ha⟩
     obtain ⟨m', hrun, hi⟩ := checkWaves_sound h0 hw (fun i t h => (hTv i t h).2) prog s.lds _ _ acc hw' hn m0 hinit
-    refine ⟨m', hrun, ?_, hInv⟩
-    have hstored : ∀ i sp, T[i]? = some sp →
-        acc.stored.contains (dwLo i) = true ∧ acc.stored.contains (dwLo i + 1) = true := by
-      intro i sp h
-      unfold tableStored at hown
-      have := List.all_eq_true.mp hown (i, sp) (Std.HashMap.mem_toList_iff_getElem?_eq_some.mpr h)
-      simpa using this
-    -- a dword of a word outside the table was never stored
-    have hfree : ∀ j, j < words → T[j]? = none →
-        acc.stored.contains (dwLo j) = false ∧ acc.stored.contains (dwLo j + 1) = false := by
-      intro j hj hnone
-      constructor <;>
-      · rw [Bool.eq_false_iff]; intro hc
-        obtain ⟨-, ⟨sp, hk⟩, -⟩ := hi.stored _ hc
-        first
-          | rw [off_dwLo j (by omega), Nat.mul_div_cancel_left _ (by decide)] at hk
-          | rw [off_dwLo1 j (by omega), show (2 * j + 1) / 2 = j by omega] at hk
-        rw [hnone] at hk; simp at hk
-    refine ⟨?_, ?_, ?_, ?_⟩
-    · intro j hj
-      cases hf : T[j]? with
-      | some sp =>
-        obtain ⟨d0, d1⟩ := hstored j sp hf
-        obtain ⟨-, -, v0⟩ := hi.stored _ d0
-        obtain ⟨-, -, v1⟩ := hi.stored _ d1
-        rw [off_dwLo j (by omega)] at v0
-        rw [off_dwLo1 j (by omega)] at v1
-        refine ⟨_, _, v0, v1, ?_⟩
-        rw [show 2 * j % 2 = 0 by omega, show 2 * j / 2 = j by omega,
-          show (2 * j + 1) % 2 = 1 by omega, show (2 * j + 1) / 2 = j by omega]
-        exact dwHalf_join _
-      | none =>
-        obtain ⟨f0, f1⟩ := hfree j hj hf
-        obtain ⟨lo, hi', e0, e1, e⟩ := h0.word j hj
-        obtain ⟨i0, i1⟩ := inW_dwLo words j hw hj
-        refine ⟨lo, hi', by rw [hi.free _ f0 (inW_lds words hw _ i0)]; exact e0,
-          by rw [hi.free _ f1 (inW_lds words hw _ i1)]; exact e1, ?_⟩
-        rw [hTn j hf]; exact e
-    · intro j hj
-      have hnone : T[j]? = none := by
-        cases hf : T[j]? with
-        | none => rfl
-        | some t => have := (hTv j t hf).1; omega
-      rw [hTn j hnone]; exact h0.past j hj
-    · intro a ha hl
-      have hc : acc.stored.contains a = false := by
-        rw [Bool.eq_false_iff]; intro hc; have := (hi.stored a hc).1; rw [ha] at this; exact Bool.false_ne_true this
-      rw [hi.free a hc hl]; exact h0.out a ha hl
-    · intro a v hk ha
-      rcases applyUpdates_get known a v _ hk with ⟨x, hx, hx1, hx2⟩ | ⟨hn', hk'⟩
-      · rw [← hx1]; exact (hi.upd x hx).2 v hx2
-      · have hc : acc.stored.contains a = false := by
-          rw [Bool.eq_false_iff]; intro hc
-          obtain ⟨x, hx, hx1⟩ := hi.upd_of a hc
-          exact hn' x hx hx1
-        rw [hi.free a hc (inW_lds words hw a ha)]; exact h0.known a v hk' ha
+    exact ⟨m', hrun, stageEnd_sound h0 hw hTv hTn hi hown, hInv⟩
   · simp at hall
 
 theorem checkStage_sound {σ : Type} {words : Nat} {lay : Memory} {known : Known} {proj : σ → Nat → Word}
@@ -680,8 +831,49 @@ theorem checkStage_sound {σ : Type} {words : Nat} {lay : Memory} {known : Known
     (prog : Program) (known' : Known) (n : Std.HashSet Residual)
     (hc : checkStage words lay s prog known = some (known', n)) (hn : ∀ r, n.contains r = true → r.Holds) :
     ∃ m', runWaves prog s.lds (List.range (groupsOf s.threads)) m0 = some m' ∧
-      StartOk words lay known' m' (proj (s.den x)) ∧ Inv (s.den x) :=
-  checkStageW_sound hs h0 hx hw prog known' n (checkStage_whole hs.2 prog _ hc) hn
+      StartOk words lay known' m' (proj (s.den x)) ∧ Inv (s.den x) := by
+  unfold checkStage at hc
+  split at hc
+  · exact checkStageW_sound hs h0 hx hw prog known' n hc hn
+  · rename_i part hpart
+    dsimp only at hc
+    split at hc
+    rotate_left
+    · simp at hc
+    rename_i hrange
+    simp only [Option.bind_eq_some_iff] at hc
+    obtain ⟨acc, hq, hfin⟩ := hc
+    rw [parMap_eq] at hq
+    generalize ownersGuess (part (readWord words lay known)) (List.range (groupsOf s.threads)) = O at hrange hq hfin
+    split at hfin
+    · rename_i hown
+      simp only [Option.some.injEq, Prod.mk.injEq] at hfin
+      obtain ⟨rfl, rfl⟩ := hfin
+      have hOk : OwnersOk (part (readWord words lay known)) (List.range (groupsOf s.threads)) O := by
+        refine ⟨fun g hg => ?_, fun j h e => ?_⟩
+        · obtain ⟨L, hL⟩ := mergeWaves_some _ _ acc hq g hg
+          exact waveOut_owners hL
+        · have := List.all_eq_true.mp hrange (j, h) (Std.HashMap.mem_toList_iff_getElem?_eq_some.mpr e)
+          exact List.mem_range.mpr (by simpa using this)
+      obtain ⟨T, hTab, hsub, hcov⟩ := hs.2 part hpart (readWord words lay known) O hOk
+      obtain ⟨hInv, hTv, hTn⟩ := hs.1 _ (menv m0) x T hx (readWord_ev h0 hw) hTab
+      rw [List.range_eq_range'] at hq
+      have hinit : WInv words m0 T (proj (s.den x)) m0 ⟨{}, [], {}⟩ :=
+        ⟨fun _ _ _ => rfl, fun a ha => by simp at ha, fun x hx => by simp at hx, fun a ha => by simp at ha⟩
+      obtain ⟨m', hrun, hi⟩ := mergeWaves_sound h0 hw (fun i t h => (hTv i t h).2) prog s.lds _ O _
+        (fun g hg P hP => hsub g (List.mem_range.mpr hg) P hP)
+        _ 0 _ acc (by omega) hq hn m0 hinit (fun a ha => by simp at ha)
+      have hts : tableStored T acc.stored = true := by
+        unfold tableStored
+        apply List.all_eq_true.mpr
+        rintro ⟨i, sp⟩ hm
+        have hc := hcov i sp (Std.HashMap.mem_toList_iff_getElem?_eq_some.mp hm)
+        rw [Std.HashMap.contains_eq_isSome_getElem?] at hc
+        obtain ⟨h, hh⟩ := Option.isSome_iff_exists.mp hc
+        exact List.all_eq_true.mp hown (i, h) (Std.HashMap.mem_toList_iff_getElem?_eq_some.mpr hh)
+      refine ⟨m', ?_, stageEnd_sound h0 hw hTv hTn hi hts, hInv⟩
+      rw [List.range_eq_range']; exact hrun
+    · simp at hfin
 
 /-! ## 7. Every dispatch -/
 

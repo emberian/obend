@@ -51,8 +51,9 @@ def viewStart (words : Nat) (lay : Memory) (known : Known) (a : UInt64) : Option
   else if inLds a then none
   else (lay.get? a).map lit
 
-def baseView (words : Nat) (lay : Memory) (known : Known) (stored : Std.HashSet UInt64) (a : UInt64) : Option Tm :=
-  if stored.contains a then none else viewStart words lay known a
+/-- The start's view with the dwords `ex` names unreadable (at least those an earlier wave stored). -/
+def baseView (words : Nat) (lay : Memory) (known : Known) (ex : UInt64 → Bool) (a : UInt64) : Option Tm :=
+  if ex a then none else viewStart words lay known a
 
 def dwLo (j : Nat) : UInt64 := wDw + UInt64.ofNat (2 * j)
 
@@ -73,10 +74,10 @@ structure Spec (σ : Type) where
   lds : Nat
   table : (Nat → TP) → Option (Std.HashMap Nat TP)
   den : σ → σ
-  /-- The table in parts, wave by wave: `part rd K g` is the words wave `g` writes, given the words `K` the
-  earlier waves' parts hold (`Spec.PartsOk`: the parts are the table). A stage with parts never holds its
-  whole table: each part is built when its wave is checked and dropped after. -/
-  part : Option ((Nat → TP) → Std.HashSet Nat → Nat → Option (Std.HashMap Nat TP)) := none
+  /-- The table in parts, wave by wave: `part rd has g` is the words wave `g` writes, given which words
+  `has` the earlier waves' parts hold (`Spec.PartsOk`: the parts are the table). A stage with parts never
+  holds its whole table: each part is built when its wave is checked and dropped after. -/
+  part : Option ((Nat → TP) → (Nat → Bool) → Nat → Option (Std.HashMap Nat TP)) := none
 
 /-! ## 3. The check -/
 
@@ -140,13 +141,13 @@ wave: sharing each dword with its term alone visited the shared part of the wave
 def sharedStores (words : Nat) (T : Std.HashMap Nat TP) (L : List (UInt64 × Tm)) : List (UInt64 × Tm × Option Tm) :=
   ShareCommon.shareCommon' (L.map fun p => (p.1, p.2, specAt words T p.1))
 
-def symWave (words : Nat) (lay : Memory) (prog : Program) (lds : Nat) (known : Known) (stored : Std.HashSet UInt64) (g : Nat) : SymWave :=
-  srun prog (fuelOf prog) (initWave (⟨{}, baseView words lay known stored⟩ : SymMem) descSetLo g (ldsBaseOf g) lds)
+def symWave (words : Nat) (lay : Memory) (prog : Program) (lds : Nat) (known : Known) (ex : UInt64 → Bool) (g : Nat) : SymWave :=
+  srun prog (fuelOf prog) (initWave (⟨{}, baseView words lay known ex⟩ : SymMem) descSetLo g (ldsBaseOf g) lds)
 
 def checkWaves (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (prog : Program) (lds : Nat) (known : Known) : List Nat → Acc → Option Acc
   | [], acc => some acc
   | g :: gs, acc =>
-    let st := symWave words lay prog lds known acc.stored g
+    let st := symWave words lay prog lds known acc.stored.contains g
     if st.err.isNone && st.halted then
       (checkStoresX (sharedStores words T st.mem.stores.toList) acc).bind (checkWaves words lay T prog lds known gs)
     else none
@@ -165,36 +166,90 @@ def checkStageW {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : P
   (checkWaves words lay T prog s.lds known (List.range (groupsOf s.threads)) ⟨{}, [], {}⟩).bind fun acc =>
     if tableStored T acc.stored then some (applyUpdates known acc.updates, acc.needed) else none
 
-/-- The words of a part added to the words so far. -/
-def addKeys (K : Std.HashSet Nat) (P : Std.HashMap Nat TP) : Std.HashSet Nat :=
-  P.toList.foldl (fun K x => K.insert x.1) K
+/-! ## 4. A stage in parts: two passes, the waves in parallel -/
 
-/-- The waves of a dispatch with parts: wave `g`'s stores against its own part, built for it. -/
-def checkWavesP (words : Nat) (lay : Memory) (part : Std.HashSet Nat → Nat → Option (Std.HashMap Nat TP))
-    (prog : Program) (lds : Nat) (known : Known) : List Nat → Std.HashSet Nat → Acc → Option (Std.HashSet Nat × Acc)
-  | [], K, acc => some (K, acc)
-  | g :: gs, K, acc => (part K g).bind fun P =>
-    let st := symWave words lay prog lds known acc.stored g
-    if st.err.isNone && st.halted then
-      (checkStoresX (sharedStores words P st.mem.stores.toList) acc).bind fun acc' =>
-        checkWavesP words lay part prog lds known gs (addKeys K P) acc'
-    else none
+/-- Word `j` lies in the part of a wave before `g`, read from the owners `O` (each word of a part with the
+wave whose part it is). -/
+def hasOf (O : Std.HashMap Nat Nat) (g j : Nat) : Bool :=
+  match O[j]? with
+  | some h => decide (h < g)
+  | none => false
+
+/-- The dword's word in the wire buffer. -/
+def wordOf (a : UInt64) : Nat := (a - wDw).toNat / 2
+
+/-- `f` on every element, each in its own task; it is `List.map f` (`parMap_eq`). -/
+def parMap {α β : Type} (f : α → β) (xs : List α) : List β :=
+  (xs.map fun x => Task.spawn fun _ => f x).map Task.get
+
+theorem parMap_eq {α β : Type} (f : α → β) (xs : List α) : parMap f xs = xs.map f := by
+  simp only [parMap, List.map_map]; rfl
+
+/-- The first pass, a guess at the owners: every wave's part built, in parallel, as if no earlier part held
+a word, and its words given to it. Only a guess: each wave checks it against the part it really has
+(`waveOut`), so nothing rests on it. -/
+def ownersGuess (part : (Nat → Bool) → Nat → Option (Std.HashMap Nat TP)) (gs : List Nat) : Std.HashMap Nat Nat :=
+  (gs.zip (parMap (fun g => (part (fun _ => false) g).map fun P => P.keys) gs)).foldl
+    (fun O x => match x.2 with
+      | some ks => ks.foldl (fun O j => O.insert j x.1) O
+      | none => O) {}
+
+/-- The words each wave owns. -/
+def ownedBy (O : Std.HashMap Nat Nat) : Std.HashMap Nat (List Nat) :=
+  O.toList.foldl (fun I x => I.insert x.2 (x.1 :: I.getD x.2 [])) {}
+
+/-- A stored dword, checked on its own: its address, its value if a literal, and its term against the
+table's (`storeOkX`). -/
+def storePre (x : UInt64 × Tm × Option Tm) : UInt64 × Option UInt32 × Option (Option Residual) :=
+  (x.1, x.2.1.litVal?, storeOkX x.2.1 x.2.2)
+
+/-- `checkStoresX` on stores checked on their own: only the bookkeeping is left. -/
+def checkStoresY : List (UInt64 × Option UInt32 × Option (Option Residual)) → Acc → Option Acc
+  | [], acc => some acc
+  | (a, v, r) :: rest, acc =>
+    if inLds a then checkStoresY rest acc else
+    if acc.stored.contains a then none else
+    r.bind fun r? =>
+      checkStoresY rest
+        { stored := acc.stored.insert a, updates := (a, v) :: acc.updates,
+          needed := match r? with | some r => acc.needed.insert r | none => acc.needed }
+
+/-- The second pass, one wave, on its own: its part rebuilt from the owners and checked to hold exactly
+the words they give it, its symbolic run with every dword of an earlier part's word unreadable (the
+earlier waves' stores can only lie there), and its stores checked against the part's terms. -/
+def waveOut (words : Nat) (lay : Memory) (part : (Nat → Bool) → Nat → Option (Std.HashMap Nat TP))
+    (prog : Program) (lds : Nat) (known : Known) (O : Std.HashMap Nat Nat) (I : Std.HashMap Nat (List Nat))
+    (g : Nat) : Option (List (UInt64 × Option UInt32 × Option (Option Residual))) :=
+  (part (hasOf O g) g).bind fun P =>
+  if P.toList.all (fun x => O[x.1]? == some g) && (I.getD g []).all P.contains then
+    let st := symWave words lay prog lds known (fun a => inW words a && hasOf O g (wordOf a)) g
+    if st.err.isNone && st.halted then some ((sharedStores words P st.mem.stores.toList).map storePre) else none
+  else none
+
+/-- The waves' results in order, every dword stored once. -/
+def mergeWaves : List (Option (List (UInt64 × Option UInt32 × Option (Option Residual)))) → Acc → Option Acc
+  | [], acc => some acc
+  | o :: os, acc => o.bind fun L => (checkStoresY L acc).bind (mergeWaves os)
 
 /-- Every word of the parts stored, both dwords. -/
-def keysStored (K : Std.HashSet Nat) (stored : Std.HashSet UInt64) : Bool :=
-  K.toList.all fun i => stored.contains (dwLo i) && stored.contains (dwLo i + 1)
+def ownedStored (O : Std.HashMap Nat Nat) (stored : Std.HashSet UInt64) : Bool :=
+  O.toList.all fun (i, _) => stored.contains (dwLo i) && stored.contains (dwLo i + 1)
 
 /-- One dispatch: the known constants after it and the residuals it needs. A stage with parts is checked
-part by part (`checkWavesP`), which accepts only what the check against the whole table accepts
-(`checkStage_whole`). -/
+in two passes, each wave on its own task: a guess at each word's owner (`ownersGuess`), then every wave
+against its part (`waveOut`), merged in order. -/
 def checkStage {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
     Option (Known × Std.HashSet Residual) :=
   match s.part with
   | none => checkStageW words lay s prog known
   | some part =>
-    (checkWavesP words lay (part (readWord words lay known)) prog s.lds known (List.range (groupsOf s.threads))
-      {} ⟨{}, [], {}⟩).bind fun (K, acc) =>
-    if keysStored K acc.stored then some (applyUpdates known acc.updates, acc.needed) else none
+    let pt := part (readWord words lay known)
+    let gs := List.range (groupsOf s.threads)
+    let O := ownersGuess pt gs
+    if O.toList.all (fun x => decide (x.2 < groupsOf s.threads)) then
+      (mergeWaves (parMap (waveOut words lay pt prog s.lds known O (ownedBy O)) gs) ⟨{}, [], {}⟩).bind fun acc =>
+      if ownedStored O acc.stored then some (applyUpdates known acc.updates, acc.needed) else none
+    else none
 
 /-- Every dispatch; the residuals they need. -/
 def checkProgram {σ : Type} (words : Nat) (lay : Memory) : List (Spec σ) → List Program → Known → Std.HashSet Residual →
@@ -208,7 +263,7 @@ def checkProgram {σ : Type} (words : Nat) (lay : Memory) : List (Spec σ) → L
 def dispatchesOf {σ : Type} (specs : List (Spec σ)) (progs : List Program) : List (Program × Nat × Nat) :=
   progs.zip (specs.map fun s => (s.threads, s.lds))
 
-/-! ## 4. A stage of a plan -/
+/-! ## 5. A stage of a plan -/
 
 /-- A kernel's value at an element: a fold kernel's from the stage's cache `kc` (computed once per
 dispatch, `foldValues`), any other's from `pKernel`. -/
