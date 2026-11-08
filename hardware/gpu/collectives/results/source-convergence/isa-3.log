@@ -1,0 +1,31 @@
+=== [3/6] teeth: every bit of every instruction's machine code, flipped ===
+  adjoint-mul-add: flip: 3888 bit flips changed the decoding, 621 made it fail, 67 lay in no field of their encoding
+  adjoint-square-bilinear: flip: 4975 bit flips changed the decoding, 798 made it fail, 83 lay in no field of their encoding
+  allops: flip: 5878 bit flips changed the decoding, 908 made it fail, 94 lay in no field of their encoding
+  array-route: flip: 2831 bit flips changed the decoding, 424 made it fail, 73 lay in no field of their encoding
+  diamond: flip: 1445 bit flips changed the decoding, 220 made it fail, 31 lay in no field of their encoding
+  glmul-256: flip: 12687 bit flips changed the decoding, 1640 made it fail, 73 lay in no field of their encoding
+  glmul-4: flip: 12115 bit flips changed the decoding, 1636 made it fail, 73 lay in no field of their encoding
+  mac-reverse-1000: flip: 2566 bit flips changed the decoding, 357 made it fail, 53 lay in no field of their encoding
+  muxchain: flip: 2160 bit flips changed the decoding, 322 made it fail, 46 lay in no field of their encoding
+  ntt-1024: flip: 99465 bit flips changed the decoding, 11273 made it fail, 174 lay in no field of their encoding
+  ntt-1048576: flip: 193366 bit flips changed the decoding, 21651 made it fail, 279 lay in no field of their encoding
+  ntt-16: flip: 32939 bit flips changed the decoding, 3667 made it fail, 66 lay in no field of their encoding
+  ntt-4: flip: 10395 bit flips changed the decoding, 1188 made it fail, 33 lay in no field of their encoding
+  ntt-64: flip: 58400 bit flips changed the decoding, 6620 made it fail, 100 lay in no field of their encoding
+  ntt-65536: flip: 149846 bit flips changed the decoding, 16638 made it fail, 236 lay in no field of their encoding
+  optic-bilinear: flip: 3804 bit flips changed the decoding, 627 made it fail, 81 lay in no field of their encoding
+  optic-linearmac: flip: 2849 bit flips changed the decoding, 466 made it fail, 77 lay in no field of their encoding
+  optic-mul: flip: 2530 bit flips changed the decoding, 407 made it fail, 39 lay in no field of their encoding
+  soac-boundaries: flip: 402119 bit flips changed the decoding, 57850 made it fail, 2943 lay in no field of their encoding
+  soac-empty: flip: 9474 bit flips changed the decoding, 1638 made it fail, 184 lay in no field of their encoding
+  soac-no-segments: flip: 4651 bit flips changed the decoding, 825 made it fail, 92 lay in no field of their encoding
+  soac-segments-64x1024: flip: 1267842 bit flips changed the decoding, 160863 made it fail, 5727 lay in no field of their encoding
+  soac-single-65536: flip: 1457794 bit flips changed the decoding, 183047 made it fail, 6135 lay in no field of their encoding
+  source-leaf-affine: flip: 979 bit flips changed the decoding, 148 made it fail, 25 lay in no field of their encoding
+  source-leaf-fixed-square: flip: 688 bit flips changed the decoding, 101 made it fail, 11 lay in no field of their encoding
+  source-leaf-mux: flip: 1518 bit flips changed the decoding, 210 made it fail, 32 lay in no field of their encoding
+  source-leaf-shl: flip: 1519 bit flips changed the decoding, 216 made it fail, 25 lay in no field of their encoding
+  source-leaf-shr: flip: 1517 bit flips changed the decoding, 218 made it fail, 25 lay in no field of their encoding
+  tree512: flip: 98649 bit flips changed the decoding, 14270 made it fail, 1033 lay in no field of their encoding
+[PASS] hardware/gpu/isa_check.sh (stage 3)

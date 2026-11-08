@@ -1,0 +1,16 @@
+[
+  {
+    "remote_log": "/home/hbox/obend/frontend-collectives/convergence-build.log",
+    "sha256": "b579d3d0243c1eb766763d6608980eefb8849826f1dc9a280e4a53d08cdca4a8",
+    "bytes": 1422578,
+    "lines": 21409,
+    "result": "Build completed successfully (902 jobs)."
+  },
+  {
+    "remote_log": "/home/hbox/obend/frontend-collectives/final-proof-build.log",
+    "sha256": "1d3aa5d0894954cbd5313942cb2521e7360893fd36c8fbe41cc70d5686d55202",
+    "bytes": 1310917,
+    "lines": 19548,
+    "result": "Build completed successfully (814 jobs)."
+  }
+]

@@ -1,0 +1,2 @@
+'Obend.Hardware.Gpu.NttGroupFrame.dispatch_output_at_group' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.NttDispatchValue.upload_dft' depends on axioms: [propext, Classical.choice, Quot.sound]

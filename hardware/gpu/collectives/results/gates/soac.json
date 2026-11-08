@@ -8,7 +8,7 @@
   "platform": "Linux-6.11.0-29-generic-x86_64-with-glibc2.40",
   "repeats": 101,
   "cpu_timing_scope": "median compute including allocations and Python dispatch; warm inputs",
-  "gpu_timing_scope": "runner submission to completion; excludes shader compilation and transfers",
+  "gpu_timing_scope": "runner wall-clock mean per fixture vector: command encoding, submission and completion; queued GPU input copy may be included; shader compilation and output readback excluded",
   "schedule": "emitted GPU plan; dispatch counts recorded per case",
   "cases": {
     "soac-boundaries": {
@@ -67,5 +67,10 @@
       "gpu_adapter": "AMD Radeon RX 6750 XT (RADV NAVI22) [Vulkan] driver=radv Mesa 24.2.8-1ubuntu1~24.10.1 type=DiscreteGpu"
     }
   },
-  "metadata_correction": "Obsolete sequential-schedule label corrected after this run; numerical measurements unchanged."
+  "metadata_correction": "Obsolete sequential-schedule label corrected after this run; numerical measurements unchanged.",
+  "timing_scope_correction": {
+    "corrected_at": "2026-11-08",
+    "previous_gpu_timing_scope": "runner submission to completion; excludes shader compilation and transfers",
+    "reason": "Runner main.rs starts the normal-path wall timer before command encoding and submission. queue.write_buffer is called before the timer, but its queued GPU copy can execute on the timed submission. Output readback follows the timer. Numerical measurements are unchanged."
+  }
 }

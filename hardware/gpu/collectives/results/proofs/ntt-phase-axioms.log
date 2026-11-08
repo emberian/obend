@@ -1,0 +1,3 @@
+'Obend.Hardware.Gpu.NttFieldCorrect.butterfly_some' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.Ntt.PhaseArithmetic.rounds_values' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.Ntt.PhaseInit.phaseAction_values' depends on axioms: [propext, Classical.choice, Quot.sound]

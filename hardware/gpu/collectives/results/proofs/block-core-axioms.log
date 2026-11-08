@@ -1,0 +1,4 @@
+'Obend.Hardware.Gpu.BlockCoreProgram.source_sound' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.BlockPlan.Plan.source_to_gpu_encoded' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.BlockPlan.Plan.not_racy' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Obend.Hardware.Gpu.NttSource.source_to_gpu_encoded' depends on axioms: [propext, Classical.choice, Quot.sound]

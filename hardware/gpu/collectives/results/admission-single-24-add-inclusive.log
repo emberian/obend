@@ -1,0 +1,4 @@
+collective add/inclusive: 16777216 inputs, 1 segments, 5 dispatches; admitting source
+source admission: 73767 ms
+source and G4 admission: 524478 ms
+emitted 5 dispatches, 33686016 device words, 1022 shared words
