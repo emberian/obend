@@ -132,6 +132,7 @@ def substitute (group lane : Ix) : Ix → Ix
   | .mul a b => .mul (substitute group lane a) (substitute group lane b)
   | .div a n => .div (substitute group lane a) n
   | .mod a n => .mod (substitute group lane a) n
+  | .lookup values i => .lookup values (substitute group lane i)
 
 def tileSize (d : Dispatch) : Nat :=
   d.phases.foldl (fun n ph => max n (ph.lanes * ph.writes.length)) 1

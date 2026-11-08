@@ -18,14 +18,30 @@ open Obend.Hardware.ArrayKernel
 
 def numbers (xs : List Nat) : String := String.intercalate "," (xs.map toString)
 
-def ixText : Ix → String
+/-- Immutable descriptors are pooled in the uploaded u32 index buffer. -/
+def ixTables : Ix → List (Array Nat)
+  | .lit _ | .group | .lane => []
+  | .add a b | .mul a b => ixTables a ++ ixTables b
+  | .div a _ | .mod a _ => ixTables a
+  | .lookup values i => values :: ixTables i
+
+def indexTables (p : Program) : List (Array Nat) :=
+  (p.dispatches.flatMap fun d => d.phases.flatMap fun ph =>
+    (ph.reads.flatMap fun r => ixTables r.index) ++
+    (ph.writes.flatMap fun w => ixTables w.index)).eraseDups
+
+def tableBase (tables : List (Array Nat)) (values : Array Nat) : Nat :=
+  ((tables.takeWhile (· != values)).map (·.size)).sum
+
+def ixText (tables : List (Array Nat)) (indexBase : Nat) : Ix → String
   | .lit n => s!"{n}u"
   | .group => "group"
   | .lane => "lane"
-  | .add a b => s!"({ixText a} + {ixText b})"
-  | .mul a b => s!"({ixText a} * {ixText b})"
-  | .div a n => s!"({ixText a} / {n}u)"
-  | .mod a n => s!"({ixText a} % {n}u)"
+  | .add a b => s!"({ixText tables indexBase a} + {ixText tables indexBase b})"
+  | .mul a b => s!"({ixText tables indexBase a} * {ixText tables indexBase b})"
+  | .div a n => s!"({ixText tables indexBase a} / {n}u)"
+  | .mod a n => s!"({ixText tables indexBase a} % {n}u)"
+  | .lookup values i => s!"ix[{indexBase + tableBase tables values}u + {ixText tables indexBase i}]"
 
 /-- Prefix offsets only among buffers in the same address space. Shared buffers are
 per-workgroup allocations, never part of the host's device allocation. -/
@@ -34,21 +50,21 @@ def bufferBases (p : Program) : List Nat := BlockLower.bufferBases p
 def spaceSize (p : Program) (s : Storage) : Nat :=
   (p.buffers.filter fun b => b.storage == s).foldl (fun n b => n + b.size) 0
 
-def accessText (p : Program) (a : Nat) (i : Ix) : String :=
+def accessText (p : Program) (indexBase a : Nat) (i : Ix) : String :=
   let space := match ((p.buffers.drop a).headD ⟨0, .device, []⟩).storage with
     | .device => "w"
     | .shared => "shared_words"
     | .constant => "c"
-  s!"{space}[{(bufferBases p).getD a 0}u + {ixText i}]"
+  s!"{space}[{(bufferBases p).getD a 0}u + {ixText (indexTables p) indexBase i}]"
 
-def phaseText (plant : Plant) (p : Program) (ph : Phase) : List String :=
+def phaseText (plant : Plant) (p : Program) (indexBase : Nat) (ph : Phase) : List String :=
   [s!"  for (var lane = lid.x; lane < {ph.lanes}u; lane += {workgroupSize}u) \{"] ++
-  (ph.reads.map fun r => s!"    let v{r.dst} = {accessText p r.array r.index};") ++
+  (ph.reads.map fun r => s!"    let v{r.dst} = {accessText p indexBase r.array r.index};") ++
   (ph.code.map fun i => s!"    let v{i.dst} = {elemExpr plant i.op (i.args.map fun a => s!"v{a}")};") ++
-  (ph.writes.map fun w => s!"    {accessText p w.array w.index} = v{w.value};") ++
+  (ph.writes.map fun w => s!"    {accessText p indexBase w.array w.index} = v{w.value};") ++
   ["  }", "  workgroupBarrier();", "  storageBarrier();"]
 
-def emitDispatch (plant : Plant) (name : String) (p : Program) (d : Dispatch) : String :=
+def emitDispatch (plant : Plant) (name : String) (p : Program) (d : Dispatch) (indexBase : Nat := 0) : String :=
   String.intercalate "\n" <|
     [s!"// {name}: generated from ArrayKernel.Program; no transform-specific emission."
     , "@group(0) @binding(0) var<storage, read_write> w : array<vec2<u32>>;"
@@ -60,7 +76,7 @@ def emitDispatch (plant : Plant) (name : String) (p : Program) (d : Dispatch) : 
     , "fn main(@builtin(workgroup_id) wid : vec3<u32>, @builtin(local_invocation_id) lid : vec3<u32>) {"
     , s!"  let group = wid.x + wid.y * {if d.groups > 65535 then 32768 else max 1 d.groups}u;"
     , s!"  if (group >= {d.groups}u) \{ return; }"] ++
-    d.phases.flatMap (phaseText plant p) ++ ["}", ""]
+    d.phases.flatMap (phaseText plant p indexBase) ++ ["}", ""]
 
 def traffic (p : Program) (d : Dispatch) (space : Storage) (write : Bool) : Nat :=
   d.groups * (d.phases.foldl (fun n ph => n + ph.lanes * 8 *
@@ -82,7 +98,7 @@ def emitPlan (name : String) (p : Program) : String :=
     , s!"  \"wireBase\": [{numbers (bufferBases p)}],"
     , s!"  \"wireLen\": [{numbers (p.buffers.map (·.size))}],"
     , s!"  \"consts\": [{String.intercalate "," (consts.map fun v => s!"\"{v.toInt}\"")}],"
-    , "  \"tables\": [],"
+    , s!"  \"tables\": [{numbers ((indexTables p).flatMap (·.toList))}],"
     , s!"  \"inputs\": [{numbers p.inputs}],"
     , s!"  \"outputs\": [{numbers p.outputs}],"
     , s!"  \"stages\": [\n    {stages}\n  ]"
