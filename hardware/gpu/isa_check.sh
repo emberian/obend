@@ -253,7 +253,9 @@ echo "=== [7/7] the certificate: every graph's machine code computes the graph f
 pairs=()
 for d in "${DUMPS[@]}"; do pairs+=("$(basename "${d}" .txt)=${d}"); done
 # the library and every dump's certificate run side by side, ISA_JOBS certificates at a time, largest
-# dump first; each certificate is one process (time and peak memory its own)
+# dump first; each certificate is one process (time and peak memory its own) checking its waves on
+# ISA_THREADS threads (the Lean runtime's LEAN_NUM_THREADS)
+export LEAN_NUM_THREADS="${ISA_THREADS:-8}"
 "${RDNA2}" reslib Obend.Hardware.Gpu.Rdna2.Residuals r "${pairs[@]}" > "${WORK}/Residuals.lean" 2> "${WORK}/reslib.log" &
 reslib_pid=$!
 cert_one() {

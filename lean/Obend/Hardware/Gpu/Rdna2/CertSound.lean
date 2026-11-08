@@ -740,6 +740,44 @@ theorem applyUpdates_get (known : Known) (a : UInt64) (v : UInt32) :
           · rw [e]; exact hb
           · exact hn y e
 
+/-- The waves of a stage without parts, each run on its own with every dword of a word of the table
+unreadable (the stores so far all lie there, `WInv`), merged in order. -/
+theorem mergeWavesT_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.HashMap Nat TP} {V : Nat → Word}
+    {m0 : Memory} {E : Nat → Word} (h0 : StartOk words lay known m0 E) (hw : words < 2 ^ 29)
+    (hT : ∀ i t, T[i]? = some t → t.ev (menv m0) = V i) (prog : Program) (lds : Nat) :
+    ∀ (gs : List Nat) (acc acc' : Acc),
+      mergeWaves (gs.map (waveOutT words lay T prog lds known)) acc = some acc' →
+      (∀ r, acc'.needed.contains r = true → r.Holds) →
+      ∀ m, WInv words m0 T V m acc → ∃ m', runWaves prog lds gs m = some m' ∧ WInv words m0 T V m' acc'
+  | [], acc, acc', h, _, m, hm => by
+    simp only [List.map_nil, mergeWaves, Option.some.injEq] at h; subst h
+    exact ⟨m, rfl, hm⟩
+  | g :: gs, acc, acc', h, hneed, m, hm => by
+    simp only [List.map_cons, mergeWaves, Option.bind_eq_some_iff] at h
+    obtain ⟨L, hL, acc1, h1, h2⟩ := h
+    unfold waveOutT at hL
+    dsimp only at hL
+    split at hL
+    · rename_i hok
+      simp only [Option.some.injEq] at hL; subst hL
+      simp only [Bool.and_eq_true, Option.isNone_iff_eq_none] at hok
+      obtain ⟨herr, hhalt⟩ := hok
+      rw [checkStoresY_eq] at h1
+      simp only [sharedStores, shareCommon_eq, checkStoresX_eq] at h1
+      have hneed1 : ∀ r, acc1.needed.contains r = true → r.Holds :=
+        fun r hr => hneed r (mergeWaves_mono _ acc1 acc' h2 r hr)
+      obtain ⟨serr, shalt, hinv1⟩ := waveStep_sound h0 hw hT prog lds g _ acc acc1 m hm
+        (fun a ha => by
+          obtain ⟨e1, ⟨sp, e2⟩, -⟩ := hm.stored a ha
+          have : T.contains (wordOf a) = true := by
+            rw [Std.HashMap.contains_eq_isSome_getElem?]; unfold wordOf; rw [e2]; rfl
+          simp [e1, this]) herr hhalt h1 hneed1
+      obtain ⟨m', hrun, hinv'⟩ := mergeWavesT_sound h0 hw hT prog lds gs acc1 acc' h2 hneed _ hinv1
+      refine ⟨m', ?_, hinv'⟩
+      simp only [runWaves, serr, shalt, Option.isNone_none, Bool.and_self, ite_true]
+      exact hrun
+    · simp at hL
+
 /-- The end of a dispatch whose waves left `WInv` against its table `T` (the meaning `V` of the stage,
 `E` the start) and stored every word of it: memory is a start for the next dispatch. -/
 theorem stageEnd_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.HashMap Nat TP} {V E : Nat → Word}
@@ -821,8 +859,19 @@ theorem checkStageW_sound {σ : Type} {words : Nat} {lay : Memory} {known : Know
     obtain ⟨rfl, rfl⟩ := hall
     have hinit : WInv words m0 T (proj (s.den x)) m0 ⟨{}, [], {}⟩ :=
       ⟨fun _ _ _ => rfl, fun a ha => by simp at ha, fun x hx => by simp at hx, fun a ha => by simp at ha⟩
-    obtain ⟨m', hrun, hi⟩ := checkWaves_sound h0 hw (fun i t h => (hTv i t h).2) prog s.lds _ _ acc hw' hn m0 hinit
-    exact ⟨m', hrun, stageEnd_sound h0 hw hTv hTn hi hown, hInv⟩
+    rw [parMap_eq] at hw'
+    cases hp : mergeWaves ((List.range (groupsOf s.threads)).map (waveOutT words lay T prog s.lds known)) ⟨{}, [], {}⟩ with
+    | some acc1 =>
+      rw [hp] at hw'
+      simp only [Option.orElse_some, Option.some.injEq] at hw'
+      subst hw'
+      obtain ⟨m', hrun, hi⟩ := mergeWavesT_sound h0 hw (fun i t h => (hTv i t h).2) prog s.lds _ _ _ hp hn m0 hinit
+      exact ⟨m', hrun, stageEnd_sound h0 hw hTv hTn hi hown, hInv⟩
+    | none =>
+      rw [hp] at hw'
+      simp only [Option.orElse_none] at hw'
+      obtain ⟨m', hrun, hi⟩ := checkWaves_sound h0 hw (fun i t h => (hTv i t h).2) prog s.lds _ _ acc hw' hn m0 hinit
+      exact ⟨m', hrun, stageEnd_sound h0 hw hTv hTn hi hown, hInv⟩
   · simp at hall
 
 theorem checkStage_sound {σ : Type} {words : Nat} {lay : Memory} {known : Known} {proj : σ → Nat → Word}

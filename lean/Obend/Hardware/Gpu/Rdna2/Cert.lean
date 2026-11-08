@@ -159,13 +159,6 @@ def applyUpdates (known : Known) (us : List (UInt64 × Option UInt32)) : Known :
 def tableStored (T : Std.HashMap Nat TP) (stored : Std.HashSet UInt64) : Bool :=
   T.toList.all fun (i, _) => stored.contains (dwLo i) && stored.contains (dwLo i + 1)
 
-/-- One dispatch against its whole table: the known constants after it and the residuals it needs. -/
-def checkStageW {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
-    Option (Known × Std.HashSet Residual) :=
-  (s.table (readWord words lay known)).bind fun T =>
-  (checkWaves words lay T prog s.lds known (List.range (groupsOf s.threads)) ⟨{}, [], {}⟩).bind fun acc =>
-    if tableStored T acc.stored then some (applyUpdates known acc.updates, acc.needed) else none
-
 /-! ## 4. A stage in parts: two passes, the waves in parallel -/
 
 /-- Word `j` lies in the part of a wave before `g`, read from the owners `O` (each word of a part with the
@@ -230,6 +223,24 @@ def waveOut (words : Nat) (lay : Memory) (part : (Nat → Bool) → Nat → Opti
 def mergeWaves : List (Option (List (UInt64 × Option UInt32 × Option (Option Residual)))) → Acc → Option Acc
   | [], acc => some acc
   | o :: os, acc => o.bind fun L => (checkStoresY L acc).bind (mergeWaves os)
+
+/-- A wave of a stage without parts, on its own: its symbolic run with every dword of a word of the table
+unreadable (the stores so far lie only there), its stores checked against the table. A wave that reads
+a word the stage writes is refused here, and the check in order (`checkWaves`) decides. -/
+def waveOutT (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (prog : Program) (lds : Nat) (known : Known)
+    (g : Nat) : Option (List (UInt64 × Option UInt32 × Option (Option Residual))) :=
+  let st := symWave words lay prog lds known (fun a => inW words a && T.contains (wordOf a)) g
+  if st.err.isNone && st.halted then some ((sharedStores words T st.mem.stores.toList).map storePre) else none
+
+/-- One dispatch against its whole table: the known constants after it and the residuals it needs. Every
+wave on its own task (`waveOutT`), merged in order; if one is refused there, the waves in order. -/
+def checkStageW {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
+    Option (Known × Std.HashSet Residual) :=
+  (s.table (readWord words lay known)).bind fun T =>
+  let gs := List.range (groupsOf s.threads)
+  ((mergeWaves (parMap (waveOutT words lay T prog s.lds known) gs) ⟨{}, [], {}⟩).orElse fun _ =>
+    checkWaves words lay T prog s.lds known gs ⟨{}, [], {}⟩).bind fun acc =>
+  if tableStored T acc.stored then some (applyUpdates known acc.updates, acc.needed) else none
 
 /-- Every word of the parts stored, both dwords. -/
 def ownedStored (O : Std.HashMap Nat Nat) (stored : Std.HashSet UInt64) : Bool :=
