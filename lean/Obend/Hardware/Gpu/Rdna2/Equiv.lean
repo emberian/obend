@@ -336,11 +336,30 @@ def leavesOf (impl spec : Tm) : Array Tm :=
   let implNodes := collect impl {}
   (findLeaves implNodes spec ((findLeaves specNodes impl (#[], {})).1, {})).1
 
-/-- The residual of an implementation term against a specification term. -/
+/-- The memory words of a pair: its leaves when nothing else is cut. -/
+def wordLeaves (impl spec : Tm) : Array Tm :=
+  (findLeaves {} spec ((findLeaves {} impl (#[], {})).1, {})).1
+
+/-- Environments a residual is tried on before it is kept. -/
+def sampleEnvs : List (UInt64 → UInt32) :=
+  [1, 2, 3, 4, 5, 6, 7, 8].map fun s => fun a => (mixHash (hash a) s).toUInt32
+
+/-- Some sample environment tells the two sides apart: the residual is false. -/
+def refuted (l r : Tm) : Bool := sampleEnvs.any fun env => l.eval env != r.eval env
+
+/-- The residual of an implementation term against a specification term: cut at the maximal common
+subterms; when a sample refutes that, a cut hid a relation the two sides need (a compiler's `2y`
+computed apart from `y`, cut at `y`), and the pair is cut at its memory words alone (counterexample-guided
+refinement of the cutpoints, as in combinational equivalence checking). -/
 def residual (impl spec : Tm) : Option Residual :=
   let p := ShareCommon.shareCommon' (impl, spec)
   let leaves := canonLeaves p.1 p.2 (leavesOf p.1 p.2) 1
-  (abstractPair leaves p.1 p.2).map fun (l, r) => ⟨l, r⟩
+  match abstractPair leaves p.1 p.2 with
+  | some (l, r) =>
+    if refuted l r then
+      (abstractPair (canonLeaves p.1 p.2 (wordLeaves p.1 p.2) 1) p.1 p.2).map fun (l, r) => ⟨l, r⟩
+    else some ⟨l, r⟩
+  | none => none
 
 private theorem shareCommon_eq' {α : Type} (a : α) : ShareCommon.shareCommon' a = a := by
   unfold ShareCommon.shareCommon'; rfl
@@ -364,14 +383,24 @@ theorem abstractPair_sound (env : UInt64 → UInt32) (leaves : Array Tm) (impl s
 /-- A residual that is trivial or holds makes the two terms evaluate equally, in every memory. -/
 theorem residual_sound (env : UInt64 → UInt32) (impl spec : Tm) (r : Residual)
     (h : residual impl spec = some r) (hr : r.lhs = r.rhs ∨ r.Holds) : impl.eval env = spec.eval env := by
-  simp only [residual, shareCommon_eq, Option.map_eq_some_iff] at h
-  obtain ⟨⟨l, r'⟩, hp, rfl⟩ := h
-  obtain ⟨e1, e2⟩ := abstractPair_sound env _ impl spec l r' hp
-  rw [← e1, ← e2]
-  rcases hr with h | h
-  · have h' : l = r' := h
-    rw [h']
-  · exact h _
+  have hab : ∀ (leaves : Array Tm) (l r' : Tm), abstractPair leaves impl spec = some (l, r') →
+      (l = r' ∨ ∀ env, l.eval env = r'.eval env) → impl.eval env = spec.eval env := by
+    intro leaves l r' hp hr
+    obtain ⟨e1, e2⟩ := abstractPair_sound env _ impl spec l r' hp
+    rw [← e1, ← e2]
+    rcases hr with h | h
+    · rw [h]
+    · exact h _
+  simp only [residual, shareCommon_eq] at h
+  split at h
+  · rename_i l r' hp
+    split at h
+    · simp only [Option.map_eq_some_iff] at h
+      obtain ⟨⟨l2, r2⟩, hp2, rfl⟩ := h
+      exact hab _ l2 r2 hp2 hr
+    · simp only [Option.some.injEq] at h; subst h
+      exact hab _ l r' hp hr
+  · simp at h
 
 end Tm
 end Obend.Hardware.Gpu.Rdna2

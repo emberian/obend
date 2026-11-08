@@ -372,23 +372,25 @@ def cmdCertBlock (graph : String) (p : Obend.Hardware.ArrayKernel.Program) (isa 
 def cmdCert (graph : String) (isaPath : String) (flip : Option String) : IO UInt32 := do
   if let some bp := blockOf graph then
     return ← cmdCertBlock graph bp (← IO.FS.readFile isaPath) flip
+  let isa ← IO.FS.readFile isaPath
+  if flip.isNone then
+    -- the pinned check alone: it builds the graph, its lowering and its schedule itself
+    let t0 ← IO.monoMsNow
+    let ok := certifyNamed graph isa
+    let t1 ← IO.monoMsNow
+    if ok then
+      IO.println s!"{graph}: certified, {(ldssOf isa).length} dispatches, check {t1 - t0} ms"
+      return 0
   let some c := Obend.Hardware.SquareGraphs.graphs.find? (·.name == graph)
     | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
   let .ok tg := c.build ()
     | IO.eprintln s!"[FAIL] {graph}: its source does not type"; return 1
   let g := tg.graph
   let p := Obend.Hardware.Gpu.lowerArrayToGpu g
-  let isa ← IO.FS.readFile isaPath
   let .ok sched := Obend.Hardware.Gpu.ArrayEmit.compile p
     | IO.eprintln s!"[FAIL] {graph}: the schedule does not compile"; return 1
   match flip with
   | none =>
-    let t0 ← IO.monoMsNow
-    let ok := certifyNamed graph isa
-    let t1 ← IO.monoMsNow
-    if ok then
-      IO.println s!"{graph}: certified, {sched.actions.size} actions, {(ldssOf isa).length} dispatches, check {t1 - t0} ms"
-      return 0
     let why := if !g.wf then "the graph is not well formed"
       else if !checkWaitcntDump isa then "a load is not waited for (obend-rdna2 waitcnt)"
       else match progsOf isa with
