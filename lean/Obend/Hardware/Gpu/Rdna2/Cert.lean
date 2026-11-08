@@ -73,6 +73,10 @@ structure Spec (σ : Type) where
   lds : Nat
   table : (Nat → TP) → Option (Std.HashMap Nat TP)
   den : σ → σ
+  /-- The table in parts, wave by wave: `part rd K g` is the words wave `g` writes, given the words `K` the
+  earlier waves' parts hold (`Spec.PartsOk`: the parts are the table). A stage with parts never holds its
+  whole table: each part is built when its wave is checked and dropped after. -/
+  part : Option ((Nat → TP) → Std.HashSet Nat → Nat → Option (Std.HashMap Nat TP)) := none
 
 /-! ## 3. The check -/
 
@@ -154,12 +158,43 @@ def applyUpdates (known : Known) (us : List (UInt64 × Option UInt32)) : Known :
 def tableStored (T : Std.HashMap Nat TP) (stored : Std.HashSet UInt64) : Bool :=
   T.toList.all fun (i, _) => stored.contains (dwLo i) && stored.contains (dwLo i + 1)
 
-/-- One dispatch: the known constants after it and the residuals it needs. -/
-def checkStage {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
+/-- One dispatch against its whole table: the known constants after it and the residuals it needs. -/
+def checkStageW {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
     Option (Known × Std.HashSet Residual) :=
   (s.table (readWord words lay known)).bind fun T =>
   (checkWaves words lay T prog s.lds known (List.range (groupsOf s.threads)) ⟨{}, [], {}⟩).bind fun acc =>
     if tableStored T acc.stored then some (applyUpdates known acc.updates, acc.needed) else none
+
+/-- The words of a part added to the words so far. -/
+def addKeys (K : Std.HashSet Nat) (P : Std.HashMap Nat TP) : Std.HashSet Nat :=
+  P.toList.foldl (fun K x => K.insert x.1) K
+
+/-- The waves of a dispatch with parts: wave `g`'s stores against its own part, built for it. -/
+def checkWavesP (words : Nat) (lay : Memory) (part : Std.HashSet Nat → Nat → Option (Std.HashMap Nat TP))
+    (prog : Program) (lds : Nat) (known : Known) : List Nat → Std.HashSet Nat → Acc → Option (Std.HashSet Nat × Acc)
+  | [], K, acc => some (K, acc)
+  | g :: gs, K, acc => (part K g).bind fun P =>
+    let st := symWave words lay prog lds known acc.stored g
+    if st.err.isNone && st.halted then
+      (checkStoresX (sharedStores words P st.mem.stores.toList) acc).bind fun acc' =>
+        checkWavesP words lay part prog lds known gs (addKeys K P) acc'
+    else none
+
+/-- Every word of the parts stored, both dwords. -/
+def keysStored (K : Std.HashSet Nat) (stored : Std.HashSet UInt64) : Bool :=
+  K.toList.all fun i => stored.contains (dwLo i) && stored.contains (dwLo i + 1)
+
+/-- One dispatch: the known constants after it and the residuals it needs. A stage with parts is checked
+part by part (`checkWavesP`), which accepts only what the check against the whole table accepts
+(`checkStage_whole`). -/
+def checkStage {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
+    Option (Known × Std.HashSet Residual) :=
+  match s.part with
+  | none => checkStageW words lay s prog known
+  | some part =>
+    (checkWavesP words lay (part (readWord words lay known)) prog s.lds known (List.range (groupsOf s.threads))
+      {} ⟨{}, [], {}⟩).bind fun (K, acc) =>
+    if keysStored K acc.stored then some (applyUpdates known acc.updates, acc.needed) else none
 
 /-- Every dispatch; the residuals they need. -/
 def checkProgram {σ : Type} (words : Nat) (lay : Memory) : List (Spec σ) → List Program → Known → Std.HashSet Residual →

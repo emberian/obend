@@ -78,6 +78,7 @@ theorem elem_sound (p : GpuProgram) (words : Nat) (k : Nat) (stage : GpuStage) (
        table := fun rd => gpuTableUpTo p.consts.toArray p.tables.toArray stage rd (foldCache rd stage) words,
        den := (Action.elementwise k stage).eval p.consts p.tables } : Spec FlatMemory).Sound words
       (projB words) (ConstsOk #[]) := by
+  refine ⟨?_, fun part h => nomatch h⟩
   intro rd env x T _ hrd hT
   let E := projB words x
   have hrd' : (fun j => (rd j).ev env) = E := funext hrd

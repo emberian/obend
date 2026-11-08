@@ -384,6 +384,126 @@ def projB (words : Nat) (f : FlatMemory) (j : Nat) : Word := if j < words then f
 /-- The host binds the constants `cv` as the constant space. -/
 def ConstsOk (cv : Array Word) (f : FlatMemory) : Prop := ∀ j (h : j < cv.size), f (.constant, j) = cv[j]
 
+/-! ### The dispatch's table in parts -/
+
+/-- The dispatch's start for a group, given only which words the earlier groups wrote (`K`): `base`
+without their terms. -/
+def baseK (words : Nat) (cv : Array Word) (rd : Nat → TP) (K : Std.HashSet Nat) (a : Address) : Option TP :=
+  match a.1 with
+  | .device => if a.2 < words && !K.contains a.2 then some (rd a.2) else none
+  | .constant => cv[a.2]?.map pLit
+  | .shared => none
+
+/-- Group `g`'s part of the dispatch's table: its device writes, none of a word an earlier group wrote
+(`K`). The certificate checks wave `g` against it and drops it, so the dispatch's whole table is never
+held (`blockSpec`'s parts). -/
+def blockPart (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (cv : Array Word) (rd : Nat → TP)
+    (K : Std.HashSet Nat) (g : Nat) : Option (Std.HashMap Nat TP) :=
+  (sGroup p (baseK words cv rd K) g d.phases {}).bind fun wr =>
+  (merge words wr.toList {}).bind fun P =>
+    if P.toList.all (fun x => !K.contains x.1) then some P else none
+
+theorem base_eq_baseK (words : Nat) (cv : Array Word) (rd : Nat → TP) (D : Std.HashMap Nat TP) (K : Std.HashSet Nat)
+    (h : ∀ j, D.contains j = K.contains j) : base words cv rd D = baseK words cv rd K := by
+  funext a; unfold base baseK; rw [h]
+
+/-- A group's writes merged into the words so far `D` are its part merged alone, beside `D`. -/
+theorem merge_union (words : Nat) (D : Std.HashMap Nat TP) :
+    ∀ (L : List ((Nat × Nat) × TP)) (A B P : Std.HashMap Nat TP), merge words L A = some P →
+      (∀ j, P.contains j = true → D.contains j = false) →
+      (∀ (i : Nat) (t : TP), B[i]? = some t ↔ D[i]? = some t ∨ A[i]? = some t) →
+      ∃ B', merge words L B = some B' ∧ ∀ (i : Nat) (t : TP), B'[i]? = some t ↔ D[i]? = some t ∨ P[i]? = some t
+  | [], A, B, P, h, _, hB => by
+    simp only [merge, Option.some.injEq] at h; subst h
+    exact ⟨B, rfl, hB⟩
+  | ((c, j), t) :: rest, A, B, P, h, hD, hB => by
+    unfold merge at h ⊢
+    split
+    · split at h
+      · exact merge_union words D rest A B P h hD hB
+      · contradiction
+    · rename_i hc
+      split at h
+      · contradiction
+      · split at h
+        · rename_i hA
+          obtain ⟨h0, hj, hfree⟩ := hA
+          have hPj : P.contains j = true := by
+            have := (merge_spec words rest _ P h).2.2.2 j t (by simp)
+            rw [Std.HashMap.contains_eq_isSome_getElem?, this]; rfl
+          have hDj : D[j]? = none := by
+            have := hD j hPj
+            rw [Std.HashMap.contains_eq_isSome_getElem?] at this
+            simpa using this
+          have hAj : A[j]? = none := by
+            rw [Std.HashMap.contains_eq_isSome_getElem?] at hfree
+            simpa using hfree
+          have hBj : B.contains j = false := by
+            rw [Std.HashMap.contains_eq_isSome_getElem?]
+            cases e : B[j]? with
+            | none => rfl
+            | some u => rcases (hB j u).mp e with e' | e' <;> simp_all
+          rw [if_pos ⟨h0, hj, hBj⟩]
+          apply merge_union words D rest (A.insert j t) (B.insert j t) P h hD
+          intro i u
+          simp only [Std.HashMap.getElem?_insert, beq_iff_eq]
+          split
+          · rename_i e; subst e; simp [hDj]
+          · exact hB i u
+        · contradiction
+
+/-- The parts, group after group, are the dispatch's table: built whenever the parts are, it holds what
+the parts hold and nothing else beside the words it started with. -/
+theorem sDispatch_parts (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (cv : Array Word) (rd : Nat → TP) :
+    ∀ (gs : List Nat) (D : Std.HashMap Nat TP) (K : Std.HashSet Nat) (Ps : List (Std.HashMap Nat TP)),
+      (∀ j, D.contains j = K.contains j) → partsRun (blockPart p d words cv rd) K gs = some Ps →
+      ∃ D', sDispatch p d.phases words cv rd gs D = some D' ∧
+        ∀ (i : Nat) (t : TP), D'[i]? = some t ↔ D[i]? = some t ∨ ∃ P ∈ Ps, P[i]? = some t
+  | [], D, K, Ps, _, h => by
+    simp only [partsRun, Option.some.injEq] at h; subst h
+    exact ⟨D, rfl, by simp⟩
+  | g :: gs, D, K, Ps, hDK, h => by
+    simp only [partsRun, Option.bind_eq_some_iff, Option.map_eq_some_iff] at h
+    obtain ⟨P, hP, Ps', hPs', rfl⟩ := h
+    simp only [blockPart, Option.bind_eq_some_iff] at hP
+    obtain ⟨wr, hwr, P0, hm, hk⟩ := hP
+    split at hk
+    · rename_i hall
+      simp only [Option.some.injEq] at hk; subst hk
+      have hdisj : ∀ j, P0.contains j = true → D.contains j = false := by
+        intro j hj
+        rw [hDK]
+        rw [Std.HashMap.contains_eq_isSome_getElem?] at hj
+        obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp hj
+        have := List.all_eq_true.mp hall (j, t) (Std.HashMap.mem_toList_iff_getElem?_eq_some.mpr ht)
+        simpa using this
+      obtain ⟨D1, hD1, hrel⟩ := merge_union words D wr.toList {} D P0 hm hdisj (by simp)
+      have hDK1 : ∀ j, D1.contains j = (addKeys K P0).contains j := by
+        intro j
+        apply Bool.eq_iff_iff.mpr
+        rw [addKeys_contains, ← hDK, Std.HashMap.contains_eq_isSome_getElem?, Std.HashMap.contains_eq_isSome_getElem?,
+          Std.HashMap.contains_eq_isSome_getElem?]
+        simp only [Option.isSome_iff_exists]
+        constructor
+        · rintro ⟨t, ht⟩
+          rcases (hrel j t).mp ht with e | e
+          · exact Or.inl ⟨t, e⟩
+          · exact Or.inr ⟨t, e⟩
+        · rintro (⟨t, e⟩ | ⟨t, e⟩)
+          · exact ⟨t, (hrel j t).mpr (Or.inl e)⟩
+          · exact ⟨t, (hrel j t).mpr (Or.inr e)⟩
+      obtain ⟨D', hD', hrel'⟩ := sDispatch_parts p d words cv rd gs D1 _ Ps' hDK1 hPs'
+      refine ⟨D', ?_, fun i t => ?_⟩
+      · simp only [sDispatch, Option.bind_eq_some_iff]
+        exact ⟨wr, by rw [base_eq_baseK words cv rd D K hDK]; exact hwr, D1, hD1, hD'⟩
+      · rw [hrel', hrel]
+        simp only [List.mem_cons, exists_eq_or_imp]
+        grind
+    · simp at hk
+
+theorem groupsOf_mul (n : Nat) : groupsOf (n * lanes) = n := by
+  unfold groupsOf lanes; omega
+
 def blockTable (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (cv : Array Word) (rd : Nat → TP) :
     Option (Std.HashMap Nat TP) :=
   sDispatch p d.phases words cv rd (List.range d.groups) {}
@@ -394,9 +514,19 @@ def blockSpec (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (cv : Array
   lds := lds
   table := blockTable p d words cv
   den := lowerDispatch p d
+  part := some (blockPart p d words cv)
 
 theorem blockSpec_sound (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (cv : Array Word) (lds : Nat) :
     (blockSpec p d words cv lds).Sound words (projB words) (ConstsOk cv) := by
+  refine ⟨?_, fun part hpart rd Ps hPs => ?_⟩
+  rotate_left
+  · simp only [blockSpec, Option.some.injEq] at hpart; subst hpart
+    rw [show (blockSpec p d words cv lds).threads = d.groups * lanes from rfl, groupsOf_mul] at hPs
+    obtain ⟨D', hD', hrel⟩ := sDispatch_parts p d words cv rd _ {} {} Ps (by simp) hPs
+    refine ⟨D', hD', fun P hP i t hi => (hrel i t).mpr (Or.inr ⟨P, hP, hi⟩), fun i t hi => ?_⟩
+    rcases (hrel i t).mp hi with e | ⟨P, hP, e⟩
+    · simp at e
+    · exact ⟨P, hP, by rw [Std.HashMap.contains_eq_isSome_getElem?, e]; rfl⟩
   intro rd env x T hx hrd hT
   have hrd' : ∀ j, j < words → (rd j).ev env = x (.device, j) := by
     intro j hj; rw [hrd j]; simp [projB, hj]
