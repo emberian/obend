@@ -78,17 +78,20 @@ structure Spec (σ : Type) where
 
 instance : Hashable Residual := ⟨fun r => mixHash r.lhs.hsh r.rhs.hsh⟩
 
-/-- One stored dword: in the wire buffer, in a word the table specifies; its residual, `none` if trivial. -/
-def storeOk (words : Nat) (T : Std.HashMap Nat TP) (a : UInt64) (t : Tm) : Option (Option Residual) :=
+/-- The table's term for a stored dword: the half of its word the dword's address names. -/
+def specAt (words : Nat) (T : Std.HashMap Nat TP) (a : UInt64) : Option Tm :=
   if !inW words a then none else
   let off := (a - wDw).toNat
-  match T[off / 2]? with
+  (T[off / 2]?).map fun sp => if off % 2 == 0 then sp.1 else sp.2
+
+/-- A stored term against its table term: the same term, or its residual. -/
+def storeOkX (t : Tm) : Option Tm → Option (Option Residual)
   | none => none
-  | some sp =>
-      -- one object for each common subterm, then: the same term, or its residual
-      let q := ShareCommon.shareCommon' (t, if off % 2 == 0 then sp.1 else sp.2)
-      if q.1 == q.2 then some none
-      else (residual q.1 q.2).map fun r => if r.lhs == r.rhs then none else some r
+  | some x => if t == x then some none else (residual t x).map fun r => if r.lhs == r.rhs then none else some r
+
+/-- A stored dword: in a word of the table, and its term the table's up to a residual. -/
+def storeOk (words : Nat) (T : Std.HashMap Nat TP) (a : UInt64) (t : Tm) : Option (Option Residual) :=
+  storeOkX t (specAt words T a)
 
 structure Acc where
   stored : Std.HashSet UInt64
@@ -107,6 +110,32 @@ def checkStores (words : Nat) (T : Std.HashMap Nat TP) : List (UInt64 × Tm) →
         { stored := acc.stored.insert a, updates := (a, t.litVal?) :: acc.updates,
           needed := match r? with | some r => acc.needed.insert r | none => acc.needed }
 
+def checkStoresX : List (UInt64 × Tm × Option Tm) → Acc → Option Acc
+  | [], acc => some acc
+  | (a, t, x) :: rest, acc =>
+    if inLds a then checkStoresX rest acc else
+    if acc.stored.contains a then none else
+    (storeOkX t x).bind fun r? =>
+      checkStoresX rest
+        { stored := acc.stored.insert a, updates := (a, t.litVal?) :: acc.updates,
+          needed := match r? with | some r => acc.needed.insert r | none => acc.needed }
+
+theorem checkStoresX_eq (words : Nat) (T : Std.HashMap Nat TP) : ∀ (L : List (UInt64 × Tm)) (acc : Acc),
+    checkStoresX (L.map fun p => (p.1, p.2, specAt words T p.1)) acc = checkStores words T L acc
+  | [], _ => rfl
+  | (a, t) :: rest, acc => by
+    simp only [List.map_cons, checkStoresX, checkStores, storeOk]
+    split
+    · exact checkStoresX_eq words T rest acc
+    · split
+      · rfl
+      · congr 1; funext r?; exact checkStoresX_eq words T rest _
+
+/-- A wave's stores with their table terms, one object for each common subterm (one sharing pass per
+wave: sharing each dword with its term alone visited the shared part of the wave's terms every time). -/
+def sharedStores (words : Nat) (T : Std.HashMap Nat TP) (L : List (UInt64 × Tm)) : List (UInt64 × Tm × Option Tm) :=
+  ShareCommon.shareCommon' (L.map fun p => (p.1, p.2, specAt words T p.1))
+
 def symWave (words : Nat) (lay : Memory) (prog : Program) (lds : Nat) (known : Known) (stored : Std.HashSet UInt64) (g : Nat) : SymWave :=
   srun prog (fuelOf prog) (initWave (⟨{}, baseView words lay known stored⟩ : SymMem) descSetLo g (ldsBaseOf g) lds)
 
@@ -115,7 +144,7 @@ def checkWaves (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (prog : Pro
   | g :: gs, acc =>
     let st := symWave words lay prog lds known acc.stored g
     if st.err.isNone && st.halted then
-      (checkStores words T st.mem.stores.toList acc).bind (checkWaves words lay T prog lds known gs)
+      (checkStoresX (sharedStores words T st.mem.stores.toList) acc).bind (checkWaves words lay T prog lds known gs)
     else none
 
 def applyUpdates (known : Known) (us : List (UInt64 × Option UInt32)) : Known :=

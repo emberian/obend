@@ -170,22 +170,25 @@ theorem storeOk_sound {words : Nat} {T : Std.HashMap Nat TP} {env : UInt64 → U
     (r? : Option Residual) (hs : storeOk words T a t = some r?) (hr : ∀ r, r? = some r → r.Holds) :
     inW words a = true ∧ (∃ sp, T[(a - wDw).toNat / 2]? = some sp) ∧
       t.eval env = dwHalf ((a - wDw).toNat % 2) (V ((a - wDw).toNat / 2)) := by
-  unfold storeOk at hs
+  unfold storeOk specAt at hs
   split at hs
-  · simp at hs
+  · simp [storeOkX] at hs
   · rename_i hin
     have hin' : inW words a = true := by simpa using hin
     simp only at hs
-    split at hs
-    · simp at hs
-    · rename_i sp hk
-      refine ⟨hin', ⟨sp, hk⟩, ?_⟩
+    cases hk : T[(a - wDw).toNat / 2]? with
+    | none => rw [hk] at hs; simp [storeOkX] at hs
+    | some sp =>
+      rw [hk] at hs
+      simp only [Option.map_some] at hs
+      refine ⟨hin', ⟨sp, rfl⟩, ?_⟩
       rw [← hT _ _ hk, dwHalf_ev _ _ _]
       have hsel : (if (a - wDw).toNat % 2 == 0 then sp.1 else sp.2)
           = (if (a - wDw).toNat % 2 = 0 then sp.1 else sp.2) := by
         by_cases e : (a - wDw).toNat % 2 = 0 <;> simp [e]
-      rw [shareCommon_eq, hsel] at hs
+      rw [hsel] at hs
       generalize (if (a - wDw).toNat % 2 = 0 then sp.1 else sp.2) = x at hs ⊢
+      simp only [storeOkX] at hs
       by_cases heq : (t == x) = true
       · rw [eq_of_beq heq]
       · rw [ite_eq_right heq, Option.map_eq_some_iff] at hs
@@ -316,7 +319,7 @@ theorem checkWaves_mono (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (p
     unfold checkWaves at h
     dsimp only at h
     split at h
-    · simp only [Option.bind_eq_some_iff] at h
+    · simp only [sharedStores, shareCommon_eq, checkStoresX_eq, Option.bind_eq_some_iff] at h
       obtain ⟨acc1, h1, h2⟩ := h
       intro r hr
       exact checkWaves_mono words lay T prog lds known gs acc1 acc' h2 r ((checkStores_spec words T _ acc acc1 h1).2.2.2.1 r hr)
@@ -338,7 +341,7 @@ theorem checkWaves_sound {words : Nat} {lay : Memory} {known : Known} {T : Std.H
     · rename_i hok
       simp only [Bool.and_eq_true, Option.isNone_iff_eq_none] at hok
       obtain ⟨herr, hhalt⟩ := hok
-      simp only [Option.bind_eq_some_iff] at h
+      simp only [sharedStores, shareCommon_eq, checkStoresX_eq, Option.bind_eq_some_iff] at h
       obtain ⟨acc1, h1, h2⟩ := h
       obtain ⟨c1, c2, c3, c4, c5, c6⟩ := checkStores_spec words T _ acc acc1 h1
       have hneed1 : ∀ r, acc1.needed.contains r = true → r.Holds :=

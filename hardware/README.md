@@ -335,8 +335,17 @@ dispatch run symbolically group by group and phase by phase as `BlockLower` runs
 `Cert.checkProgram` runs every wave of every dispatch symbolically from a start memory whose wire buffer
 is a variable per dword (constants an earlier dispatch stored are kept as literals; the LDS is per
 workgroup scratch the start view never reads) and checks each stored dword: in the buffer, in a word the
-dispatch's table names, stored once, and equal to the table's term up to a residual. The terms meet by
-normal forms (`Term`: sums flattened and ordered, `a - b` as `a + (0 - b)`, a select's condition with its
+dispatch's table names, stored once, and equal to the table's term up to a residual. EXEC is a pair of
+values like any register: a lane whose bit a compare computed from data writes the select, on that bit,
+of its new and old value (manual 6.2.2), and an `S_CBRANCH_EXECZ` on such a mask is a join
+(`Join.srun`): the region is run once symbolically and once with EXEC zero, and when the second leaves
+every VGPR and stored dword as it was, the join keeps the first's vector state and selects each changed
+scalar on EXECZ, the reading by which LLVM drops or keeps the branch (`mustRetainExeczBranch`), with the
+state merge of symbolic execution; `srun_sound`: the concrete run, which branches by its own EXEC, ends
+where the merged run says. The terms meet by normal forms (`Term`: sums flattened and ordered, more than
+64 addends as a treap keyed by hash with hash-derived priorities, which is uniquely represented, so one
+multiset of addends is one term however it was grouped and a running sum's next value shares all but
+one path with it; `a - b` as `a + (0 - b)`, a select's condition with its
 `≠ 0` wrappers removed and shared addends moved out of it, symmetric compares ordered). `Equiv`
 cuts the two terms at memory words and their maximal common subterms (cutpoints, as in combinational
 equivalence checking), never at literals; what is left is a small `Residual` over leaf variables, and
