@@ -344,8 +344,19 @@ def wordLeaves (impl spec : Tm) : Array Tm :=
 def sampleEnvs : List (UInt64 → UInt32) :=
   [1, 2, 3, 4, 5, 6, 7, 8].map fun s => fun a => (mixHash (hash a) s).toUInt32
 
+/-- A term's value with each shared node evaluated once (a residual is a DAG; `eval` unfolds its tree). -/
+partial def evalMemo (env : UInt64 → UInt32) (t : Tm) (m : Std.HashMap Tm UInt32) : UInt32 × Std.HashMap Tm UInt32 :=
+  match m[t]? with
+  | some v => (v, m)
+  | none =>
+    let (vs, m) := t.args.foldl (fun (acc : Array UInt32 × Std.HashMap Tm UInt32) a =>
+      let (v, m) := evalMemo env a acc.2; (acc.1.push v, m)) (#[], m)
+    let v := t.op.sem env vs.toList
+    (v, m.insert t v)
+
 /-- Some sample environment tells the two sides apart: the residual is false. -/
-def refuted (l r : Tm) : Bool := sampleEnvs.any fun env => l.eval env != r.eval env
+def refuted (l r : Tm) : Bool :=
+  sampleEnvs.any fun env => let (a, m) := evalMemo env l {}; a != (evalMemo env r m).1
 
 /-- The residual of an implementation term against a specification term: cut at the maximal common
 subterms; when a sample refutes that, a cut hid a relation the two sides need (a compiler's `2y`
