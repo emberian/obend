@@ -727,13 +727,14 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   | .v_cmp_lt_u64 => valuCompare i s true fun src => Dom.ult64 (src0 src) (src1 src) (src2 src) (src.getD 3 (Dom.lit 0))
   | .v_cmp_ne_i64 => valuCompare i s true fun src => Dom.ne64 (src0 src) (src1 src) (src2 src) (src.getD 3 (Dom.lit 0))
   -- Manual 12.2 SOP1/12.3 SOP2: S_OR_B64 `D = S0 | S1`, S_ANDN2_B64 `D = S0 & ~S1`, S_NOR_B64
-  -- `D = ~(S0 | S1)`, each `SCC = D != 0`; ~ and & ~ by the identities andn2_spec and not_spec
+  -- `D = ~(S0 | S1)`, each `SCC = D != 0`; ~x is `0xFFFFFFFF - x` by the identity not_spec
   | .s_or_b64 => s.withSome ((ssrc64 i s 0).bind fun a => (ssrc64 i s 1).map fun b => (a, b))
       "S_OR_B64: an operand code is not modelled" fun ab =>
     andB64 s (i.field "SDST") (Dom.bor ab.1.1 ab.2.1) (Dom.bor ab.1.2 ab.2.2)
   | .s_andn2_b64 => s.withSome ((ssrc64 i s 0).bind fun a => (ssrc64 i s 1).map fun b => (a, b))
       "S_ANDN2_B64: an operand code is not modelled" fun ab =>
-    andB64 s (i.field "SDST") (Dom.sub ab.1.1 (Dom.band ab.1.1 ab.2.1)) (Dom.sub ab.1.2 (Dom.band ab.1.2 ab.2.2))
+    andB64 s (i.field "SDST") (Dom.band ab.1.1 (Dom.sub (Dom.lit 0xFFFFFFFF) ab.2.1))
+      (Dom.band ab.1.2 (Dom.sub (Dom.lit 0xFFFFFFFF) ab.2.2))
   | .s_nor_b64 => s.withSome ((ssrc64 i s 0).bind fun a => (ssrc64 i s 1).map fun b => (a, b))
       "S_NOR_B64: an operand code is not modelled" fun ab =>
     andB64 s (i.field "SDST") (Dom.sub (Dom.lit 0xFFFFFFFF) (Dom.bor ab.1.1 ab.2.1))
@@ -773,7 +774,6 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   | .unknown => s.fail s!"{i.name}: no semantics (refused, not guessed)"
 
 /-- The identities the bitwise complements above are written with, on the concrete domain. -/
-theorem andn2_spec (a b : UInt32) : a - (a &&& b) = a &&& ~~~b := by bv_decide
 theorem not_spec (a : UInt32) : 0xFFFFFFFF - a = ~~~a := by bv_decide
 theorem lshr32_spec (c x : UInt32) : (lshrrev64 (c &&& 31) (join64 x 0)).toUInt32 = x >>> (c &&& 31) := by
   unfold lshrrev64 join64; bv_decide

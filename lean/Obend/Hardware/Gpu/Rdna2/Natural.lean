@@ -669,7 +669,7 @@ theorem execInst_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave
       exact ORel.map (ssrc64_rel h hm R i s 1) fun b => rfl
     · intro ab hab
       simp only [pmap]
-      rw [← h.band, ← h.band, ← h.sub, ← h.sub]
+      rw [← h.lit, ← h.sub, ← h.sub, ← h.band, ← h.band]
       exact andB64_hom h hm R hR s _ _ _ hab
   case s_nor_b64 =>
     refine withSome_hom h hm (φ := fun ab => (pmap h ab.1, pmap h ab.2)) ?_ s _ _ _ ?_ hres

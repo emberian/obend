@@ -362,26 +362,55 @@ def mkSubc (a b c : Tm) : Tm := if isLit c 0 then mkSub a b else fold .subc [a, 
 def mkBorrowc (a b c : Tm) : Tm := if isLit c 0 then mkBorrow a b else fold .borrowc [a, b, c]
 
 /-- Terms whose value is `0` or `1`. -/
-def isBool (t : Tm) : Bool :=
+def isBool0 (t : Tm) : Bool :=
   match t.op with
   | .carry | .borrow | .carryc | .borrowc | .ule | .ugt | .ult64 | .ne64 | .bit _ | .nez64 => true
   | .lit v => v == 0 || v == 1
   | _ => false
 
+/-- A term whose value is `0` or `1`: a comparison or carry, a bit, `0`/`1`, or one level of `ite`, `&`
+or `|` over those (a lane's bit of a combined mask, `select` of a compare). -/
+def isBool (t : Tm) : Bool :=
+  isBool0 t ||
+  match t.op, t.args with
+  | .ite, [_, a, b] | .band, [a, b] | .bor, [a, b] => isBool0 a && isBool0 b
+  | _, _ => false
+
 theorem b2w_le (b : Bool) : b2w b = 0 ∨ b2w b = 1 := by cases b <;> simp [b2w]
 
 theorem and1_cases (z : UInt32) : z &&& 1 = 0 ∨ z &&& 1 = 1 := by bv_decide
 
-theorem eval_isBool (env : UInt64 → UInt32) (t : Tm) (h : isBool t = true) : eval env t = 0 ∨ eval env t = 1 := by
+theorem eval_isBool0 (env : UInt64 → UInt32) (t : Tm) (h : isBool0 t = true) : eval env t = 0 ∨ eval env t = 1 := by
   match t with
   | mk _ o as =>
-    simp only [isBool, op] at h
+    simp only [isBool0, op] at h
     simp only [eval_mk]
     cases o with
     | lit v => simpa [TOp.sem] using h
     | bit k => exact and1_cases _
     | carry | borrow | carryc | borrowc | ule | ugt | ult64 | ne64 | nez64 => exact b2w_le _
     | _ => simp at h
+
+theorem eval_isBool (env : UInt64 → UInt32) (t : Tm) (h : isBool t = true) : eval env t = 0 ∨ eval env t = 1 := by
+  unfold isBool at h
+  rcases Bool.or_eq_true_iff.mp h with h0 | h1
+  · exact eval_isBool0 env t h0
+  · obtain ⟨hx, o, as⟩ := t
+    simp only [op, args] at h1
+    split at h1
+    · simp only [Bool.and_eq_true] at h1
+      obtain ⟨ha, hb⟩ := h1
+      simp only [eval_mk, List.map, TOp.sem]
+      split
+      · exact eval_isBool0 env _ ha
+      · exact eval_isBool0 env _ hb
+    all_goals first
+      | (simp at h1; done)
+      | (simp only [Bool.and_eq_true] at h1
+         obtain ⟨ha, hb⟩ := h1
+         simp only [eval_mk, List.map, TOp.sem]
+         rcases eval_isBool0 env _ ha with h | h <;> rcases eval_isBool0 env _ hb with h' | h' <;>
+           simp [h, h'])
 
 theorem succ_toUInt32 (k : Nat) (_hk : k < 31) : (k + 1).toUInt32 = k.toUInt32 + 1 := by
   apply UInt32.toNat.inj; simp [Nat.toUInt32, UInt32.toNat_add]
@@ -414,6 +443,17 @@ def mkBit (x : Tm) (k : Nat) : Tm :=
     let b := x.args.getD k (lit 0)
     if isBool b then b else fold (.bit k) [x]
   else fold (.bit k) [x]
+
+/-- Bit `k` of a mask, pushed through `&`, `|` and `0xFFFFFFFF - x` (bitwise not) to the packed lane
+bits, so a lane's bit of a mask combined by scalar mask instructions is that lane's own term. -/
+def mkBitF : Nat → Tm → Nat → Tm
+  | 0, x, k => mkBit x k
+  | f + 1, x, k =>
+    match x.op, x.args with
+    | .band, [a, b] => mkAnd (mkBitF f a k) (mkBitF f b k)
+    | .bor, [a, b] => mkOr (mkBitF f a k) (mkBitF f b k)
+    | .sub, [a, c] => if isLit a 0xFFFFFFFF then mkSub (lit 1) (mkBitF f c k) else mkBit x k
+    | _, _ => mkBit x k
 
 def mkUle (a b : Tm) : Tm := fold .ule [a, b]
 def mkUgt (a b : Tm) : Tm := fold .ugt [a, b]
@@ -465,7 +505,7 @@ instance : Dom Tm where
   ugt := mkUgt
   ult64 := mkUlt64
   ne64 := mkNe64
-  bit := mkBit
+  bit x k := mkBitF 8 x k
   pack := mkPack
   shl64 := mkShl64
   lshr64 := mkLshr64
@@ -662,8 +702,7 @@ theorem eval_pack (bs : List Tm) : eval env (Dom.pack bs) = Dom.pack (bs.map (ev
 theorem b2w_w2b_of_bool (v : UInt32) (h : v = 0 ∨ v = 1) : b2w (w2b v) = v := by
   rcases h with rfl | rfl <;> rfl
 
-theorem eval_bit (x : Tm) (k : Nat) : eval env (Dom.bit x k) = Dom.bit (eval env x) k := by
-  show eval env (mkBit x k) = (eval env x >>> k.toUInt32) &&& 1
+theorem eval_mkBit (x : Tm) (k : Nat) : eval env (mkBit x k) = (eval env x >>> k.toUInt32) &&& 1 := by
   unfold mkBit; split
   · rename_i h
     simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h
@@ -684,6 +723,40 @@ theorem eval_bit (x : Tm) (k : Nat) : eval env (Dom.bit x k) = Dom.bit (eval env
       · simp [TOp.sem]
   · simp [TOp.sem]
 
+
+theorem bit_band_bv (a b j : UInt32) : ((a &&& b) >>> j) &&& 1 = ((a >>> j) &&& 1) &&& ((b >>> j) &&& 1) := by
+  bv_decide
+theorem bit_bor_bv (a b j : UInt32) : ((a ||| b) >>> j) &&& 1 = ((a >>> j) &&& 1) ||| ((b >>> j) &&& 1) := by
+  bv_decide
+theorem bit_not_bv (c j : UInt32) : ((0xFFFFFFFF - c) >>> j) &&& 1 = 1 - ((c >>> j) &&& 1) := by
+  bv_decide
+
+theorem eval_mkAnd (a b : Tm) : eval env (mkAnd a b) = eval env a &&& eval env b := eval_and env a b
+theorem eval_mkSub (a b : Tm) : eval env (mkSub a b) = eval env a - eval env b := eval_sub env a b
+theorem eval_mkOr (a b : Tm) : eval env (mkOr a b) = eval env a ||| eval env b := eval_or env a b
+
+theorem eval_mkBitF (f : Nat) (x : Tm) (k : Nat) :
+    eval env (mkBitF f x k) = (eval env x >>> k.toUInt32) &&& 1 := by
+  induction f generalizing x with
+  | zero => exact eval_mkBit env x k
+  | succ f ih =>
+    obtain ⟨hx, o, as⟩ := x
+    simp only [mkBitF, op, args]
+    split
+    · rename_i a b
+      rw [eval_mkAnd, ih, ih, eval_mk]; simp only [TOp.sem, List.map]; exact (bit_band_bv _ _ _).symm
+    · rename_i a b
+      rw [eval_mkOr, ih, ih, eval_mk]; simp only [TOp.sem, List.map]; exact (bit_bor_bv _ _ _).symm
+    · rename_i a c
+      split
+      · rename_i hl
+        rw [eval_mkSub, eval_lit, ih, eval_mk]; simp only [TOp.sem, List.map]
+        rw [eval_of_isLit env a _ hl]; exact (bit_not_bv _ _).symm
+      · exact eval_mkBit env _ k
+    · exact eval_mkBit env _ k
+
+theorem eval_bit (x : Tm) (k : Nat) : eval env (Dom.bit x k) = Dom.bit (eval env x) k :=
+  eval_mkBitF env 8 x k
 
 theorem shr_pieces_bv (v l h : UInt32) :
     let w := v &&& 63
