@@ -82,6 +82,16 @@ def parseExpected (s : String) : Except String (Array Vector) :=
 def hexToNat (h : String) : Nat :=
   h.foldl (fun acc c => acc * 16 + (if c.isDigit then c.toNat - '0'.toNat else c.toLower.toNat - 'a'.toNat + 10)) 0
 
+/-- Each stage's LDS allocation in bytes, from the resource line RADV prints (`LDS: N`). -/
+def parseDumpLds (s : String) : Array Nat := Id.run do
+  let mut out : Array Nat := #[]
+  for ln in s.splitOn "\n" do
+    if ln.startsWith "## stage" then
+      match ln.splitOn "LDS: " with
+      | [_, rest] => out := out.push (((rest.splitOn ",").headD "0").trimAscii.toString.toNat?.getD 0)
+      | _ => out := out.push 0
+  return out
+
 /-- The dumped programs, one per `## stage` block: each instruction's dwords. -/
 def parseDump (s : String) : Array (Array (Array UInt32)) := Id.run do
   let mut stages : Array (Array (Array UInt32)) := #[]
@@ -153,7 +163,7 @@ def initialWave (mem : Memory) (g : Nat) : WaveState := initWave mem descSetLo g
 /-! ## 3. Running -/
 
 /-- Every stage of the dump on every workgroup of its dispatch, then the output wires. -/
-def runVector (p : Plan) (progs : Array Program) (data : Array StageData) (v : Vector) : Except String (Nat × Array (Array Int)) := do
+def runVector (p : Plan) (progs : Array Program) (data : Array StageData) (lds : Array Nat) (v : Vector) : Except String (Nat × Array (Array Int)) := do
   let mut mem := initialMemory p v
   let mut steps := 0
   for (prog, k) in progs.zipIdx do
@@ -167,7 +177,8 @@ def runVector (p : Plan) (progs : Array Program) (data : Array StageData) (v : V
     for (addr, ws) in pool do
       mem := writeDwords mem (UInt64.ofNat addr) ws
     for g in [0:groups] do
-      let s := run prog fuel (initialWave mem g)
+      let ldsDw := lds.getD k 0 / 4
+      let s := run prog fuel { initialWave mem g with ldsBase := ldsBaseOf g, ldsDwords := ldsDw }
       if let some e := s.err then throw s!"vector {v.index}, stage {k}, workgroup {g}: {e}"
       -- The pool is read-only: a store into it is a fault, refused like any other.
       for (addr, ws) in pool do
@@ -177,6 +188,9 @@ def runVector (p : Plan) (progs : Array Program) (data : Array StageData) (v : V
       if !s.halted then throw s!"vector {v.index}, stage {k}, workgroup {g}: did not halt"
       steps := steps + fuel
       mem := s.mem
+      -- the workgroup's LDS ends with it: a later workgroup's reads of it are of dwords it has not written
+      for j in [0:ldsDw] do
+        mem := mem.erase (ldsBaseOf g + UInt64.ofNat j)
     -- Do not let a later stage accidentally read this stage's pool if its dump lost data.
     for (addr, ws) in pool do
       for j in [0:ws.size] do
@@ -215,7 +229,7 @@ def checkGraphReport (isa plan expected : String) (flip : Option (Nat × Nat × 
       if addr + 4 * ws.size > wAddr.toNat then throw s!"stage {k}: constant data overlaps host buffers"
   let mut steps := 0
   for v in vecs do
-    let (st, outs) ← runVector p progs data v
+    let (st, outs) ← runVector p progs data (parseDumpLds isa) v
     steps := steps + st
     if outs.size != v.outputs.size then throw s!"vector {v.index}: output count differs from expected.tsv"
     for (actual, k) in outs.zipIdx do

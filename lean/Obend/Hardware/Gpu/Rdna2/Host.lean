@@ -73,6 +73,10 @@ halted within it is refused; the bound is an allowance, not a termination argume
 def fuelOf (prog : Program) : Nat := 16 * prog.size + 2 ^ 28
 def groupsOf (threads : Nat) : Nat := (threads + lanes - 1) / lanes
 
+/-- Workgroup `g`'s LDS as a region of memory: dword `2^40 + g * 2^16` on, above every buffer the host
+binds (an RDNA2 workgroup has at most 64 KiB of LDS, 2^14 dwords). -/
+def ldsBaseOf (g : Nat) : UInt64 := 0x10000000000 + UInt64.ofNat (g * 65536)
+
 /-- The waves of one dispatch, in workgroup order; `none` if one fails or does not halt. -/
 def runWaves (prog : Program) : List Nat → Memory → Option Memory
   | [], m => some m
