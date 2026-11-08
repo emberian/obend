@@ -29,6 +29,11 @@ class Coverage(unittest.TestCase):
 
 
 class GitBaseline(unittest.TestCase):
+    def test_tightening_preserves_body_and_already_valid_balance(self):
+        text = "---\nbalance: 100\n---\n# Account\nbalance: 100\nCandidate A → Candidate B\n"
+        self.assertEqual(large.clamp_balance(text, 95), text.replace("balance: 100", "balance: 95", 1))
+        self.assertEqual(large.clamp_balance(text, 100), text)
+
     def test_same_markdown_tree_and_noop(self):
         with tempfile.TemporaryDirectory(prefix="obend-cost-git-") as work:
             os.mkdir(os.path.join(work, "acct"))
