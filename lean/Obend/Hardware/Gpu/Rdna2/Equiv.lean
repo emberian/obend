@@ -22,7 +22,7 @@ import all Init.ShareCommon
 namespace Obend.Hardware.Gpu.Rdna2
 namespace Tm
 
-/-! ## 1. Structural equality, fast on shared objects (`eqbS`, `eqbS_iff` are in `Term`) -/
+/-! ## 1. Structural equality, fast on shared objects (`decEqT`, in `Term`) -/
 
 
 instance : Hashable Tm := ⟨hsh⟩

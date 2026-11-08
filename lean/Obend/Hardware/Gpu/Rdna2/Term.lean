@@ -133,33 +133,37 @@ def op : Tm → TOp | mk _ o _ => o
 def args : Tm → List Tm | mk _ _ a => a
 def hsh : Tm → UInt64 | mk h _ _ => h
 
-/-! Structural equality (the decision procedure `Equiv`'s `DecidableEq` uses; here for the smart
-constructors' rules that need two subterms equal). -/
+/-! Structural equality that answers at once for one object at every level: a symbolic run passes one
+object along and `shareCommon'` makes equal terms one object, so comparing two equal DAGs costs their
+distinct nodes, not their unfolded trees (a hash mismatch answers at once too). -/
 
 mutual
-def eqbS : Tm → Tm → Bool
-  | mk h1 o1 as1, mk h2 o2 as2 => h1 == h2 && o1 == o2 && eqbL as1 as2
-def eqbL : List Tm → List Tm → Bool
-  | [], [] => true
-  | a :: as, b :: bs => eqbS a b && eqbL as bs
-  | _, _ => false
+def decEqT (a b : Tm) : Decidable (a = b) :=
+  withPtrEqDecEq a b fun _ =>
+    match a, b with
+    | mk h1 o1 as1, mk h2 o2 as2 =>
+      if hh : h1 = h2 then
+        if ho : o1 = o2 then
+          match decEqTL as1 as2 with
+          | isTrue hl => isTrue (by rw [hh, ho, hl])
+          | isFalse hl => isFalse (fun e => by injection e with _ _ e3; exact hl e3)
+        else isFalse (fun e => by injection e with _ e2; exact ho e2)
+      else isFalse (fun e => by injection e with e1; exact hh e1)
+def decEqTL (as bs : List Tm) : Decidable (as = bs) :=
+  match as, bs with
+  | [], [] => isTrue rfl
+  | a :: as, b :: bs =>
+    match decEqT a b with
+    | isTrue h =>
+      match decEqTL as bs with
+      | isTrue h' => isTrue (by rw [h, h'])
+      | isFalse h' => isFalse (fun e => by injection e with _ e2; exact h' e2)
+    | isFalse h => isFalse (fun e => by injection e with e1; exact h e1)
+  | [], _ :: _ => isFalse (by simp)
+  | _ :: _, [] => isFalse (by simp)
 end
 
-mutual
-theorem eqbS_iff : ∀ a b : Tm, eqbS a b = true ↔ a = b
-  | mk h1 o1 as1, mk h2 o2 as2 => by
-    simp only [eqbS, Bool.and_eq_true, beq_iff_eq, mk.injEq, eqbL_iff as1 as2, and_assoc]
-theorem eqbL_iff : ∀ as bs : List Tm, eqbL as bs = true ↔ as = bs
-  | [], [] => by simp [eqbL]
-  | a :: as, b :: bs => by simp only [eqbL, Bool.and_eq_true, eqbS_iff a b, eqbL_iff as bs, List.cons.injEq]
-  | [], _ :: _ => by simp [eqbL]
-  | _ :: _, [] => by simp [eqbL]
-end
-
-/-- Equality that answers at once for one object (a symbolic run passes one object along, and `shareCommon'` makes equal terms one object),
-and structurally otherwise. -/
-instance : DecidableEq Tm := fun a b =>
-  withPtrEqDecEq a b (fun _ => decidable_of_iff (eqbS a b = true) (eqbS_iff a b))
+instance : DecidableEq Tm := decEqT
 
 
 def eval (env : UInt64 → UInt32) : Tm → UInt32
@@ -393,15 +397,42 @@ def mkLshr (x a : Tm) : Tm :=
   match a.litVal? with
   | some v => if v &&& 31 == 0 then x else fold .lshr [x, a]
   | none => fold .lshr [x, a]
+def isBool0 (t : Tm) : Bool :=
+  match t.op with
+  | .carry | .borrow | .carryc | .borrowc | .ule | .ugt | .ult64 | .ne64 | .bit _ | .nez64 => true
+  | .lit v => v == 0 || v == 1
+  | _ => false
+
+/-- A term whose value is `0` or `1`: a comparison or carry, a bit, `0`/`1`, or one level of `ite`, `&`
+or `|` over those (a lane's bit of a combined mask, `select` of a compare). -/
+def isBool (t : Tm) : Bool :=
+  isBool0 t ||
+  match t.op, t.args with
+  | .ite, [_, a, b] | .band, [a, b] | .bor, [a, b] => isBool0 a && isBool0 b
+  | _, _ => false
+
+/-- Two levels of `ite`, `&` and `|` over 0/1 terms (a 64-bit compare built from dword compares). -/
+def isBool2 (t : Tm) : Bool :=
+  isBool t ||
+  match t.op, t.args with
+  | .ite, [_, a, b] | .band, [a, b] | .bor, [a, b] => isBool a && isBool b
+  | _, _ => false
+
 /-- A condition with its `≠ 0` wrappers removed: `ite` tests `c ≠ 0`, and `(x, 0) ≠ (0, 0)` or a select
 `ite c k 0` with `k ≠ 0` is nonzero exactly when `x` or `c` is (the compare a source's `select` puts on a
-boolean the compiler keeps as a lane mask). -/
+boolean the compiler keeps as a lane mask); a disjunction of conditions, or the maximum of two words, is
+nonzero exactly when the `|` of its parts is. -/
 def condOf : Nat → Tm → Tm
   | 0, c => c
   | n + 1, c =>
     match c with
     | .mk _ .ne64 [x, z1, z2, z3] => if isLit z1 0 && isLit z2 0 && isLit z3 0 then condOf n x else c
-    | .mk _ .ite [c0, t, e] => if (t.litVal?.any (· != 0)) && isLit e 0 then condOf n c0 else c
+    | .mk _ .ite [c0, t, e] =>
+      if (t.litVal?.any (· != 0)) && isLit e 0 then condOf n c0
+      -- `max(t, e) ≠ 0` is `t ≠ 0 ∨ e ≠ 0` (a 64-bit `≠ 0` a compiler tests on the max of its halves)
+      else if c0.op == .ugt && c0.args == [t, e] then mkOr (condOf n t) (condOf n e)
+      else c
+    | .mk _ .bor [p, q] => mkOr (condOf n p) (condOf n q)
     | _ => c
 
 /-- `x` out of `ys`, its first structurally equal occurrence. -/
@@ -426,22 +457,10 @@ def mkIte (c0 a b : Tm) : Tm :=
   | some v => if v != 0 then a else b
   | none =>
     if a = b then a else
+    -- a select of `1`/`0` on a 0/1 condition is the condition (a carry the compiler materialised)
+    if isLit a 1 && isLit b 0 && isBool2 c then c else
     let r := splitCommon (addends a) (addends b)
     if r.1.isEmpty then fold .ite [c, a, b] else mkSum (fold .ite [c, mkSum r.2.1, mkSum r.2.2] :: r.1)
-def isBool0 (t : Tm) : Bool :=
-  match t.op with
-  | .carry | .borrow | .carryc | .borrowc | .ule | .ugt | .ult64 | .ne64 | .bit _ | .nez64 => true
-  | .lit v => v == 0 || v == 1
-  | _ => false
-
-/-- A term whose value is `0` or `1`: a comparison or carry, a bit, `0`/`1`, or one level of `ite`, `&`
-or `|` over those (a lane's bit of a combined mask, `select` of a compare). -/
-def isBool (t : Tm) : Bool :=
-  isBool0 t ||
-  match t.op, t.args with
-  | .ite, [_, a, b] | .band, [a, b] | .bor, [a, b] => isBool0 a && isBool0 b
-  | _, _ => false
-
 theorem b2w_le (b : Bool) : b2w b = 0 ∨ b2w b = 1 := by cases b <;> simp [b2w]
 
 theorem and1_cases (z : UInt32) : z &&& 1 = 0 ∨ z &&& 1 = 1 := by bv_decide
@@ -524,13 +543,6 @@ theorem eval_isBool (env : UInt64 → UInt32) (t : Tm) (h : isBool t = true) : e
          simp only [eval_mk, List.map, TOp.sem]
          rcases eval_isBool0 env _ ha with h | h <;> rcases eval_isBool0 env _ hb with h' | h' <;>
            simp [h, h'])
-
-/-- Two levels of `ite`, `&` and `|` over 0/1 terms (a 64-bit compare built from dword compares). -/
-def isBool2 (t : Tm) : Bool :=
-  isBool t ||
-  match t.op, t.args with
-  | .ite, [_, a, b] | .band, [a, b] | .bor, [a, b] => isBool a && isBool b
-  | _, _ => false
 
 theorem eval_isBool2 (env : UInt64 → UInt32) (t : Tm) (h : isBool2 t = true) : eval env t = 0 ∨ eval env t = 1 := by
   unfold isBool2 at h
@@ -771,6 +783,8 @@ theorem eval_lshr (x a : Tm) : eval env (mkLshr x a) = eval env x >>> (eval env 
     · simp [TOp.sem, eval_of_litVal env a v hv]
   · simp [TOp.sem]
 
+theorem eval_mkOr0 (x y : Tm) : eval env (mkOr x y) = eval env x ||| eval env y := eval_or env x y
+
 theorem condOf_nz : ∀ (n : Nat) (c : Tm), (eval env (condOf n c) != 0) = (eval env c != 0)
   | 0, c => rfl
   | n + 1, c => by
@@ -804,7 +818,37 @@ theorem condOf_nz : ∀ (n : Nat) (c : Tm), (eval env (condOf n c) != 0) = (eval
         · simp [hc]
         · have : (eval env c0 != 0) = true := by simpa using hc
           simp only [this, ite_true]; simpa using hk0
-      · rfl
+      · split
+        · rename_i hu
+          rw [eval_mkOr0, eval_mk]
+          have hp := condOf_nz n t; have hq := condOf_nz n e
+          have hc : eval env c0 = b2w (eval env t > eval env e) := by
+            simp only [Bool.and_eq_true, beq_iff_eq] at hu
+            obtain ⟨ho, ha⟩ := hu
+            match c0, ho, ha with
+            | .mk _ .ugt [x, y], _, ha =>
+              simp only [args, List.cons.injEq, and_true] at ha; obtain ⟨rfl, rfl⟩ := ha
+              simp [TOp.sem]
+          simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ, hc]
+          revert hp hq
+          generalize eval env (condOf n t) = x
+          generalize eval env (condOf n e) = y
+          generalize eval env t = a
+          generalize eval env e = b
+          simp only [bne, b2w]
+          bv_decide
+        · rfl
+    · rename_i h p q
+      rw [eval_mkOr0, eval_mk]
+      have hp := condOf_nz n p; have hq := condOf_nz n q
+      simp only [List.map, TOp.sem, List.getD_cons_zero, List.getD_cons_succ]
+      revert hp hq
+      generalize eval env (condOf n p) = x
+      generalize eval env (condOf n q) = y
+      generalize eval env p = a
+      generalize eval env q = b
+      simp only [bne]
+      bv_decide
     · rfl
 
 theorem removeOne_sum (x : Tm) : ∀ (ys r : List Tm), removeOne x ys = some r →
@@ -856,6 +900,12 @@ theorem eval_ite (c a b : Tm) : eval env (Dom.ite c a b) = Dom.ite (eval env c) 
     by_cases hab : a = b
     · subst hab; simp
     · simp only [hab, ite_false]
+      split
+      · rename_i hb
+        simp only [Bool.and_eq_true] at hb
+        obtain ⟨⟨h1, h0⟩, hc⟩ := hb
+        rw [eval_of_isLit env _ _ h1, eval_of_isLit env _ _ h0]
+        rcases eval_isBool2 env d hc with e | e <;> simp [e]
       split
       · simp [TOp.sem]
       · obtain ⟨h1, h2⟩ := splitCommon_sum env (addends a) (addends b)

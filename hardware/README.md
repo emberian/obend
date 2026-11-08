@@ -326,22 +326,37 @@ concretely and over terms (`Term`: hash-consed 32-bit terms with folding constru
 evaluation laws), and `Sym.wave_sound` relates a symbolic wave to every concrete wave it describes.
 `Host` is the memory RADV binds (`ac_build_raw_buffer_descriptor`, Mesa 24.2.8; the set's address in
 `s2`, the workgroup id in `s3`, the thread id in `v0`, per `radv_shader_args.c` and the manual's 3.12).
-`Cert.certify` runs every wave of every dispatch symbolically from a start memory whose wire buffer is a
-variable per dword (constants an earlier dispatch stored are kept as literals) and checks each stored
-dword: in the buffer, in a word the dispatch owns, stored once, and equal to the kernel's value
-(`Lower.pKernel`, the plan's `KernelBody` in 32-bit limbs, `pKernel_sound`) up to a residual. `Equiv`
+What is certified is the schedule the emitter dispatches (`ArrayEmit.compile` of the lowering): an
+elementwise stage of the plan, or a collective, an admitted block program whose dispatches run LDS
+phases between barriers. Each dispatch is a certificate stage (`Cert.Spec`: its threads, its LDS, a
+table of the words it writes as terms over the dispatch's start, its meaning), an elementwise stage's
+table the plan's kernels in 32-bit limbs (`Lower.pKernel`, `pKernel_sound`) and a block dispatch's the
+dispatch run symbolically group by group and phase by phase as `BlockLower` runs it (`Block.blockSpec`).
+`Cert.checkProgram` runs every wave of every dispatch symbolically from a start memory whose wire buffer
+is a variable per dword (constants an earlier dispatch stored are kept as literals; the LDS is per
+workgroup scratch the start view never reads) and checks each stored dword: in the buffer, in a word the
+dispatch's table names, stored once, and equal to the table's term up to a residual. The terms meet by
+normal forms (`Term`: sums flattened and ordered, `a - b` as `a + (0 - b)`, a select's condition with its
+`≠ 0` wrappers removed and shared addends moved out of it, symmetric compares ordered). `Equiv`
 cuts the two terms at memory words and their maximal common subterms (cutpoints, as in combinational
 equivalence checking), never at literals; what is left is a small `Residual` over leaf variables, and
 the residuals every dump needs are one generated module, `Residuals`, each proved for every memory by
 `bv_decide`, by `grind` where it multiplies, or, for a 64-bit product the compiler regrouped
 (`hi(a·(y+y))` against `hi(a·y + a·y)`), by lifting to 64-bit words (`Lift`: the limb lowering's
-evaluation law, then `grind`'s ring solver). `CertSound.certify_sound`: if `certify` accepts and the
-residuals hold, then for every content of the wire buffer the decoded programs, run on the model as the
-host dispatches them, leave in every word what `runStages` computes; `certified_outputs` composes it with
-`lowerArrayToGpu_sound`, so the output wires are `evalGraph`'s. It rests on the standard axioms and the
-compiled `bv_decide` lemmas. `Certified.certifyDump` is the check of one dump: the graph well formed,
-every stage decoded, the waits sufficient (`Waitcnt`, below: the hypothesis that makes the model's
-immediate memory the device's), and `certify` with the library; `certifyDump_sound` is what it means.
+evaluation law, then `grind`'s ring solver). `Schedule.certifySchedule_sound`: if the certificate
+accepts and the residuals hold, then for every content of the wire buffer the decoded programs, run on
+the model as the host dispatches the schedule (the index buffer `ArrayEmit.scheduleTables`, the function
+the plan's tables are written from), leave in every word what the schedule's actions compute
+(`ArrayEmit.evalActions`). `Certified.certifyDump` is the check of one dump: the graph well formed with a
+checked layout, the waits sufficient (`Waitcnt`, below: the hypothesis that makes the model's immediate
+memory the device's), every stage decoded, and the schedule certified with the library;
+`certifyDump_sound` composes it with `ArrayEmitCorrect.compile_runProgram` and `lowerArrayToGpu_sound`,
+so the output wires are `evalGraph`'s, for every input. The NTT, a block program alone, is certified the
+same way by `certifyBlockDump` (`certifyBlock_eval`: every device element is `evalProgram`'s). Both rest
+on the standard axioms and the compiled `bv_decide` lemmas. Workgroups of a dispatch are run in order;
+that is sound because a block dispatch's table refuses a word two groups write and a group's read of a
+word another group of the dispatch wrote (the race freedom `DispatchProtocol.checkProgram_not_racy`
+states for admitted sources, checked here on the machine code's own terms).
 `Obend.Teeth.Hardware.Rdna2Runs` pins it on every graph but the 65536-point NTT with `native_decide`
 and `#assert_compiled`, with the gem5 vectors. `Check` keeps the concrete run from `expected.tsv`'s
 vectors as a smoke test of the model and the layout.
