@@ -146,9 +146,10 @@ theorem dwHalf_ev (env : UInt64 → UInt32) (sp : TP) (r : Nat) :
 
 /-- A dword the check accepts: in the buffer, in a word a kernel of the dispatch owns, and holding that
 word's half of what the dispatch computes, read in the start memory. -/
-theorem storeOk_sound {p : GpuProgram} {lay : Memory} {known : Known} {m : Memory} {E : Nat → Word}
-    (h : StartOk p lay known m E) (hw : p.words < 2 ^ 29) (s : GpuStage) (a : UInt64) (t : Tm)
-    (r? : Option Residual) (hs : storeOk p lay s known a t = some r?) (hr : ∀ r, r? = some r → r.Holds) :
+theorem storeOk_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix : Array Nat} {known : Known}
+    {m : Memory} {E : Nat → Word} (h : StartOk p lay known m E) (hw : p.words < 2 ^ 29)
+    (hcs : cs.toList = p.consts) (hix : ix.toList = p.tables) (s : GpuStage) (a : UInt64) (t : Tm)
+    (r? : Option Residual) (hs : storeOk p lay cs ix s known a t = some r?) (hr : ∀ r, r? = some r → r.Holds) :
     inW p.words a = true ∧ (∃ k, s.kernels.find? (·.owns ((a - wDw).toNat / 2)) = some k) ∧
       t.eval (menv m) = dwHalf ((a - wDw).toNat % 2) (runStage p.consts p.tables E s ((a - wDw).toNat / 2)) := by
   unfold storeOk at hs
@@ -164,6 +165,7 @@ theorem storeOk_sound {p : GpuProgram} {lay : Memory} {known : Known} {m : Memor
       obtain ⟨sp, hsp, hq⟩ := hs
       refine ⟨hin', ⟨k, hk⟩, ?_⟩
       have hkv := pKernel_sound (menv m) _ _ _ k _ sp hsp
+      rw [hcs, hix] at hkv
       have hrd : (fun j => (readWord p lay known j).ev (menv m)) = E := funext (readWord_ev h hw)
       rw [hrd] at hkv
       have hrun : runStage p.consts p.tables E s ((a - wDw).toNat / 2)
@@ -197,10 +199,10 @@ theorem contains_insertR (s : Std.HashSet Residual) (k a : Residual) :
 /-- What `checkStores` establishes about a list of stores: each was free and accepted (its residual kept),
 the stored set grows by exactly their addresses, every update is an old one or one of theirs, and the
 residuals only grow. -/
-theorem checkStores_spec (p : GpuProgram) (lay : Memory) (s : GpuStage) (known : Known) :
-    ∀ (L : List (UInt64 × Tm)) (acc acc' : Acc), checkStores p lay s known L acc = some acc' →
+theorem checkStores_spec (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (s : GpuStage) (known : Known) :
+    ∀ (L : List (UInt64 × Tm)) (acc acc' : Acc), checkStores p lay cs ix s known L acc = some acc' →
       (∀ a, acc'.stored.contains a = true ↔ acc.stored.contains a = true ∨ a ∈ L.map Prod.fst) ∧
-      (∀ a t, (a, t) ∈ L → acc.stored.contains a = false ∧ ∃ r?, storeOk p lay s known a t = some r? ∧
+      (∀ a t, (a, t) ∈ L → acc.stored.contains a = false ∧ ∃ r?, storeOk p lay cs ix s known a t = some r? ∧
         ∀ r, r? = some r → acc'.needed.contains r = true) ∧
       (∀ x ∈ acc'.updates, x ∈ acc.updates ∨ ∃ t, (x.1, t) ∈ L ∧ x.2 = t.litVal?) ∧
       (∀ r, acc.needed.contains r = true → acc'.needed.contains r = true) ∧
@@ -216,7 +218,7 @@ theorem checkStores_spec (p : GpuProgram) (lay : Memory) (s : GpuStage) (known :
     · rename_i hfree
       simp only [Option.bind_eq_some_iff] at h
       obtain ⟨r?, hok, hrest⟩ := h
-      obtain ⟨h1, h2, h3, h4, h5, h6⟩ := checkStores_spec p lay s known rest _ acc' hrest
+      obtain ⟨h1, h2, h3, h4, h5, h6⟩ := checkStores_spec p lay cs ix s known rest _ acc' hrest
       have hfree' : acc.stored.contains a = false := by simpa using hfree
       have hneed : ∀ r, r? = some r → acc'.needed.contains r = true := by
         intro r hr; apply h4; subst hr; simp only; rw [contains_insertR]; exact Or.inl rfl
@@ -269,8 +271,8 @@ structure WInv (p : GpuProgram) (m0 : Memory) (E : Nat → Word) (s : GpuStage) 
   upd : ∀ x ∈ acc.updates, acc.stored.contains x.1 = true ∧ ∀ v, x.2 = some v → m.get? x.1 = some v
   upd_of : ∀ a, acc.stored.contains a = true → ∃ x ∈ acc.updates, x.1 = a
 
-theorem checkWaves_mono (p : GpuProgram) (lay : Memory) (s : GpuStage) (prog : Program) (known : Known) :
-    ∀ (gs : List Nat) (acc acc' : Acc), checkWaves p lay s prog known gs acc = some acc' →
+theorem checkWaves_mono (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) (s : GpuStage) (prog : Program) (known : Known) :
+    ∀ (gs : List Nat) (acc acc' : Acc), checkWaves p lay cs ix s prog known gs acc = some acc' →
       ∀ r, acc.needed.contains r = true → acc'.needed.contains r = true
   | [], acc, acc', h => by simp only [checkWaves, Option.some.injEq] at h; subst h; exact fun _ h => h
   | g :: gs, acc, acc', h => by
@@ -280,12 +282,13 @@ theorem checkWaves_mono (p : GpuProgram) (lay : Memory) (s : GpuStage) (prog : P
     · simp only [Option.bind_eq_some_iff] at h
       obtain ⟨acc1, h1, h2⟩ := h
       intro r hr
-      exact checkWaves_mono p lay s prog known gs acc1 acc' h2 r ((checkStores_spec p lay s known _ acc acc1 h1).2.2.2.1 r hr)
+      exact checkWaves_mono p lay cs ix s prog known gs acc1 acc' h2 r ((checkStores_spec p lay cs ix s known _ acc acc1 h1).2.2.2.1 r hr)
     · simp at h
 
-theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {known : Known} {m0 : Memory} {E : Nat → Word}
-    (h0 : StartOk p lay known m0 E) (hw : p.words < 2 ^ 29) (s : GpuStage) (prog : Program) :
-    ∀ (gs : List Nat) (acc acc' : Acc), checkWaves p lay s prog known gs acc = some acc' →
+theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix : Array Nat} {known : Known}
+    {m0 : Memory} {E : Nat → Word} (h0 : StartOk p lay known m0 E) (hw : p.words < 2 ^ 29)
+    (hcs : cs.toList = p.consts) (hix : ix.toList = p.tables) (s : GpuStage) (prog : Program) :
+    ∀ (gs : List Nat) (acc acc' : Acc), checkWaves p lay cs ix s prog known gs acc = some acc' →
       (∀ r, acc'.needed.contains r = true → r.Holds) →
       ∀ m, WInv p m0 E s m acc → ∃ m', runWaves prog gs m = some m' ∧ WInv p m0 E s m' acc'
   | [], acc, acc', h, _, m, hm => by
@@ -300,9 +303,9 @@ theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {known : Known} {m0 : M
       obtain ⟨herr, hhalt⟩ := hok
       simp only [Option.bind_eq_some_iff] at h
       obtain ⟨acc1, h1, h2⟩ := h
-      obtain ⟨c1, c2, c3, c4, c5, c6⟩ := checkStores_spec p lay s known _ acc acc1 h1
+      obtain ⟨c1, c2, c3, c4, c5, c6⟩ := checkStores_spec p lay cs ix s known _ acc acc1 h1
       have hneed1 : ∀ r, acc1.needed.contains r = true → r.Holds :=
-        fun r hr => hneed r (checkWaves_mono p lay s prog known gs acc1 acc' h2 r hr)
+        fun r hr => hneed r (checkWaves_mono p lay cs ix s prog known gs acc1 acc' h2 r hr)
       have hbase : ∀ a u, baseView p lay known acc.stored a = some u → m.get? a = some (u.eval (menv m0)) := by
         intro a u hu
         unfold baseView at hu
@@ -351,7 +354,7 @@ theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {known : Known} {m0 : M
             have hmem : (a, t) ∈ st.mem.stores.toList := by
               rw [Std.HashMap.mem_toList_iff_getElem?_eq_some, ← Std.HashMap.get?_eq_getElem?]; exact ht
             obtain ⟨-, r?, hok', hr?⟩ := c2 a t hmem
-            obtain ⟨i1, i2, i3⟩ := storeOk_sound h0 hw s a t r? hok' (fun r hr => hneed1 r (hr? r hr))
+            obtain ⟨i1, i2, i3⟩ := storeOk_sound h0 hw hcs hix s a t r? hok' (fun r hr => hneed1 r (hr? r hr))
             exact ⟨i1, i2, by rw [hst a t ht, i3]⟩
         · intro x hx
           rcases c3 x hx with ho | ⟨t, hmem, hx2⟩
@@ -370,7 +373,7 @@ theorem checkWaves_sound {p : GpuProgram} {lay : Memory} {known : Known} {m0 : M
           · obtain ⟨t, ht⟩ := (hkey a).mp hn
             exact ⟨(a, t.litVal?), c6 a t (by
               rw [Std.HashMap.mem_toList_iff_getElem?_eq_some, ← Std.HashMap.get?_eq_getElem?]; exact ht), rfl⟩
-      obtain ⟨m', hrun, hinv'⟩ := checkWaves_sound h0 hw s prog gs acc1 acc' h2 hneed sc.mem hinv1
+      obtain ⟨m', hrun, hinv'⟩ := checkWaves_sound h0 hw hcs hix s prog gs acc1 acc' h2 hneed sc.mem hinv1
       refine ⟨m', ?_, hinv'⟩
       rw [serr, shalt, hhalt]
       simpa using hrun
@@ -422,10 +425,11 @@ theorem mem_ownedDwords (s : GpuStage) (k : Kernel) (hk : k ∈ s.kernels) (j : 
   · simp only [ownedDwords, List.mem_flatMap, List.mem_range, List.mem_cons, List.not_mem_nil, or_false]
     exact ⟨k, hk, j - k.dstBase, by omega, by rw [← he]; simp⟩
 
-theorem checkStage_sound {p : GpuProgram} {lay : Memory} {known : Known} {m0 : Memory} {E : Nat → Word}
-    (h0 : StartOk p lay known m0 E) (hw : p.words < 2 ^ 29) (s : GpuStage)
+theorem checkStage_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix : Array Nat} {known : Known}
+    {m0 : Memory} {E : Nat → Word} (h0 : StartOk p lay known m0 E) (hw : p.words < 2 ^ 29)
+    (hcs : cs.toList = p.consts) (hix : ix.toList = p.tables) (s : GpuStage)
     (hks : ∀ k ∈ s.kernels, k.dstBase + k.count ≤ p.words) (prog : Program)
-    (known' : Known) (n : Std.HashSet Residual) (hc : checkStage p lay s prog known = some (known', n))
+    (known' : Known) (n : Std.HashSet Residual) (hc : checkStage p lay cs ix s prog known = some (known', n))
     (hn : ∀ r, n.contains r = true → r.Holds) :
     ∃ m', runWaves prog (List.range (groupsOf s.threads)) m0 = some m' ∧
       StartOk p lay known' m' (runStage p.consts p.tables E s) := by
@@ -438,7 +442,7 @@ theorem checkStage_sound {p : GpuProgram} {lay : Memory} {known : Known} {m0 : M
     obtain ⟨rfl, rfl⟩ := hall
     have hinit : WInv p m0 E s m0 ⟨{}, [], {}⟩ :=
       ⟨fun _ _ => rfl, fun a ha => by simp at ha, fun x hx => by simp at hx, fun a ha => by simp at ha⟩
-    obtain ⟨m', hrun, hi⟩ := checkWaves_sound h0 hw s prog _ _ acc hw' hn m0 hinit
+    obtain ⟨m', hrun, hi⟩ := checkWaves_sound h0 hw hcs hix s prog _ _ acc hw' hn m0 hinit
     refine ⟨m', hrun, ?_⟩
     have hstored : ∀ a, a ∈ ownedDwords s → acc.stored.contains a = true :=
       fun a ha => (List.all_eq_true.mp hown) a ha
@@ -518,23 +522,24 @@ theorem fold_insert_contains (n acc : Std.HashSet Residual) (r : Residual) :
     (n.fold (·.insert ·) acc).contains r = true ↔ acc.contains r = true ∨ n.contains r = true := by
   rw [Std.HashSet.fold_eq_foldl_toList, foldl_insert_contains, Std.HashSet.mem_toList, Std.HashSet.mem_iff_contains]
 
-theorem checkProgram_mono (p : GpuProgram) (lay : Memory) :
+theorem checkProgram_mono (p : GpuProgram) (lay : Memory) (cs : Array Word) (ix : Array Nat) :
     ∀ (ss : List GpuStage) (progs : List Program) (known : Known) (need fin : Std.HashSet Residual),
-      checkProgram p lay ss progs known need = some fin → ∀ r, need.contains r = true → fin.contains r = true
+      checkProgram p lay cs ix ss progs known need = some fin → ∀ r, need.contains r = true → fin.contains r = true
   | [], [], _, need, fin, h => by simp only [checkProgram, Option.some.injEq] at h; subst h; exact fun _ h => h
   | s :: ss, prog :: progs, known, need, fin, h => by
     simp only [checkProgram, Option.bind_eq_some_iff] at h
     obtain ⟨⟨known', n⟩, _, h2⟩ := h
     intro r hr
-    exact checkProgram_mono p lay ss progs known' _ fin h2 r ((fold_insert_contains n need r).mpr (Or.inl hr))
+    exact checkProgram_mono p lay cs ix ss progs known' _ fin h2 r ((fold_insert_contains n need r).mpr (Or.inl hr))
   | [], _ :: _, _, _, _, h => by simp [checkProgram] at h
   | _ :: _, [], _, _, _, h => by simp [checkProgram] at h
 
-theorem checkProgram_sound {p : GpuProgram} {lay : Memory} (hw : p.words < 2 ^ 29) :
+theorem checkProgram_sound {p : GpuProgram} {lay : Memory} {cs : Array Word} {ix : Array Nat}
+    (hw : p.words < 2 ^ 29) (hcs : cs.toList = p.consts) (hix : ix.toList = p.tables) :
     ∀ (ss : List GpuStage) (progs : List Program) (known : Known) (need fin : Std.HashSet Residual)
       (m : Memory) (E : Nat → Word),
       (∀ s ∈ ss, ∀ k ∈ s.kernels, k.dstBase + k.count ≤ p.words) →
-      checkProgram p lay ss progs known need = some fin → (∀ r, fin.contains r = true → r.Holds) →
+      checkProgram p lay cs ix ss progs known need = some fin → (∀ r, fin.contains r = true → r.Holds) →
       StartOk p lay known m E →
       ∃ m' known', runDispatch (progs.zip (ss.map GpuStage.threads)) m = some m' ∧
         StartOk p lay known' m' (ss.foldl (runStage p.consts p.tables) E)
@@ -543,9 +548,9 @@ theorem checkProgram_sound {p : GpuProgram} {lay : Memory} (hw : p.words < 2 ^ 2
     simp only [checkProgram, Option.bind_eq_some_iff] at h
     obtain ⟨⟨known', n⟩, h1, h2⟩ := h
     have hn : ∀ r, n.contains r = true → r.Holds := fun r hr =>
-      hfin r (checkProgram_mono p lay ss progs known' _ fin h2 r ((fold_insert_contains n need r).mpr (Or.inr hr)))
-    obtain ⟨m1, hrun, h1'⟩ := checkStage_sound h0 hw s (hks s List.mem_cons_self) prog known' n h1 hn
-    obtain ⟨m', known'', hrest, hend⟩ := checkProgram_sound hw ss progs known' _ fin m1 _
+      hfin r (checkProgram_mono p lay cs ix ss progs known' _ fin h2 r ((fold_insert_contains n need r).mpr (Or.inr hr)))
+    obtain ⟨m1, hrun, h1'⟩ := checkStage_sound h0 hw hcs hix s (hks s List.mem_cons_self) prog known' n h1 hn
+    obtain ⟨m', known'', hrest, hend⟩ := checkProgram_sound hw hcs hix ss progs known' _ fin m1 _
       (fun s' hs' => hks s' (List.mem_cons_of_mem _ hs')) h2 hfin h1'
     refine ⟨m', known'', ?_, hend⟩
     simp only [List.map_cons, List.zip_cons_cons, runDispatch, hrun, Option.bind_some, hrest]
@@ -638,7 +643,7 @@ theorem certify_sound (p : GpuProgram) (progs : List Program) (rs : List Residua
       apply hrs
       have := List.all_eq_true.mp hcp r (by rw [Std.HashSet.mem_toList, Std.HashSet.mem_iff_contains]; exact hr)
       simpa using this
-    obtain ⟨m, known', hrun, hend⟩ := checkProgram_sound (lay := layoutOf p) hw p.stages progs {} {} need _ _
+    obtain ⟨m, known', hrun, hend⟩ := checkProgram_sound (lay := layoutOf p) hw List.toList_toArray List.toList_toArray p.stages progs {} {} need _ _
       (fun s hs k hk => hks s hs k hk) hneed hfin (memOf_start p hw flat)
     refine ⟨m, hrun, fun i hi => ?_⟩
     obtain ⟨lo, hi', e0, e1, e⟩ := hend.word i hi
@@ -647,5 +652,66 @@ theorem certify_sound (p : GpuProgram) (progs : List Program) (rs : List Residua
     rw [a0, e0, e1]
     exact e
   · simp at hcp
+
+/-! ## 10. The graph's outputs -/
+
+open Obend.Hardware.OpenHypergraph in
+theorem foldl_add_init : ∀ (ls : List Nat) (a : Nat), ls.foldl (· + ·) a = a + ls.foldl (· + ·) 0
+  | [], a => by simp
+  | l :: ls, a => by
+    simp only [List.foldl_cons]
+    rw [foldl_add_init ls (a + l), foldl_add_init ls (0 + l)]; omega
+
+open Obend.Hardware.OpenHypergraph in
+theorem sumNatList_cons (l : Nat) (ls : List Nat) : sumNatList (l :: ls) = l + sumNatList ls := by
+  simp only [sumNatList, List.foldl_cons]; rw [foldl_add_init]; omega
+
+open Obend.Hardware.OpenHypergraph in
+theorem base_add_lt : ∀ (ls : List Nat) (w e : Nat), w < ls.length → e < ls.getD w 0 → base ls w + e < sumNatList ls
+  | [], _, _, h, _ => by simp at h
+  | l :: ls, 0, e, _, he => by
+    simp only [base, List.getD_cons_zero] at he ⊢; rw [sumNatList_cons]; omega
+  | l :: ls, w + 1, e, hw, he => by
+    simp only [base, List.getD_cons_succ, List.length_cons] at he hw ⊢
+    have := base_add_lt ls w e (by omega) he
+    rw [sumNatList_cons]; omega
+
+/-- The certificate composed with rung G1: for a well-formed graph whose lowering the certificate accepts,
+for every input `env` and every buffer `flat` that lays it out, the decoded programs run on the model
+succeed, and the output wires read from the final memory are `evalGraph`'s. -/
+theorem certified_outputs (g : ArrayGraph) (hWf : g.wf = true) (progs : List Program) (rs : List Residual)
+    (hc : certify (lowerArrayToGpu g) progs rs = true) (hrs : ∀ r ∈ rs, r.Holds)
+    (env : Nat → Vec) (flat : Nat → Word) (hGood : Good g.lengths env) (hFlat : Flat g.lengths env flat) :
+    let p := lowerArrayToGpu g
+    ∃ m, runDispatch (progs.zip (p.stages.map GpuStage.threads)) (memOf p.words p.consts p.tables flat) = some m ∧
+      p.outputs.map (fun w => (List.range (p.wireLen.getD w 0)).map fun e => wordAt m (p.wireBase.getD w 0 + e))
+        = evalGraph g env := by
+  intro p
+  obtain ⟨m, hrun, hw⟩ := certify_sound p progs rs hc hrs flat
+  refine ⟨m, hrun, ?_⟩
+  let flatW : Nat → Word := fun j => if j < p.words then flat j else 0
+  have hFlatW : Flat g.lengths env flatW := by
+    intro w e hw' he
+    have hlt := base_add_lt g.lengths w e hw' he
+    simp only [flatW, p, lowerArrayToGpu, hlt, ite_true]
+    exact hFlat w e hw' he
+  rw [← lowerArrayToGpu_sound g hWf env flatW hGood hFlatW]
+  unfold runProgram
+  apply List.map_congr_left
+  intro w _
+  apply List.map_congr_left
+  intro e he
+  rw [List.mem_range] at he
+  have hwl : w < g.lengths.length := by
+    apply Nat.lt_of_not_le; intro hn
+    simp only [p, lowerArrayToGpu, List.getD_eq_getElem?_getD, List.getElem?_eq_none (by omega : g.lengths.length ≤ w),
+      Option.getD_none] at he
+    omega
+  have hb : p.wireBase.getD w 0 = base g.lengths w := by
+    simp [p, lowerArrayToGpu, List.getD_eq_getElem?_getD, hwl]
+  have hl : p.wireLen.getD w 0 = g.lengths.getD w 0 := rfl
+  rw [hl] at he
+  rw [hb]
+  exact hw _ (base_add_lt g.lengths w e hwl he)
 
 end Obend.Hardware.Gpu.Rdna2

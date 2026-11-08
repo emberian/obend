@@ -258,20 +258,24 @@ def pElem (op : ElemOp) (args : List TP) : Option TP :=
   | .shr => pShift false (argP args 0) (argP args 1)
   | .shl => pShift true (argP args 0) (argP args 1)
 
-def pOperand (cs : List Word) (rd : Nat → TP) (e : Nat) (loc : Nat → TP) : KOperand → TP
+/-- An array lookup is the lookup in its list (the check reads arrays, the plan lists). -/
+theorem array_getD_toList {α : Type} (a : Array α) (i : Nat) (d : α) : a.getD i d = a.toList.getD i d := by
+  simp [Array.getD_eq_getD_getElem?, List.getD_eq_getElem?_getD]
+
+def pOperand (cs : Array Word) (rd : Nat → TP) (e : Nat) (loc : Nat → TP) : KOperand → TP
   | .read b => rd (b + e)
   | .cst i => pLit (cs.getD i 0#64)
   | .tmp w => loc w
 
-def pStep (cs : List Word) (rd : Nat → TP) (e : Nat) (loc : Nat → TP) (i : KInstr) : Option (Nat → TP) :=
+def pStep (cs : Array Word) (rd : Nat → TP) (e : Nat) (loc : Nat → TP) (i : KInstr) : Option (Nat → TP) :=
   (pElem i.op (i.args.map (pOperand cs rd e loc))).map fun v => fun w => if w == i.dst then v else loc w
 
-def pCode (cs : List Word) (rd : Nat → TP) (e : Nat) : (Nat → TP) → List KInstr → Option (Nat → TP)
+def pCode (cs : Array Word) (rd : Nat → TP) (e : Nat) : (Nat → TP) → List KInstr → Option (Nat → TP)
   | loc, [] => some loc
   | loc, i :: is => (pStep cs rd e loc i).bind fun loc' => pCode cs rd e loc' is
 
 /-- `kernelValue` as a pair of 32-bit terms, reading word `a` of the wire buffer as `rd a`. -/
-def pKernel (cs : List Word) (ix : List Nat) (rd : Nat → TP) (k : Kernel) (e : Nat) : Option TP :=
+def pKernel (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k : Kernel) (e : Nat) : Option TP :=
   match k.body with
   | .prog code out => (pCode cs rd e (fun _ => pLit 0#64) code).map (· out)
   | .gather ixb b => some (rd (b + ix.getD (ixb + e) 0))
@@ -302,15 +306,15 @@ theorem pElem_sound (op : ElemOp) (args : List TP) (r : TP) (h : pElem op args =
     simp only [pElem] at h
     rw [ev_shift env true _ _ r h]; simp [evalElemOp, ev_argP]
 
-theorem pOperand_sound (cs : List Word) (rd : Nat → TP) (e : Nat) (loc : Nat → TP) (locC : Nat → Word)
+theorem pOperand_sound (cs : Array Word) (rd : Nat → TP) (e : Nat) (loc : Nat → TP) (locC : Nat → Word)
     (hloc : ∀ w, (loc w).ev env = locC w) (o : KOperand) :
-    (pOperand cs rd e loc o).ev env = readOperand cs (fun a => (rd a).ev env) e locC o := by
-  cases o <;> simp [pOperand, readOperand, ev_lit, hloc]
+    (pOperand cs rd e loc o).ev env = readOperand cs.toList (fun a => (rd a).ev env) e locC o := by
+  cases o <;> simp [pOperand, readOperand, ev_lit, hloc, array_getD_toList]
 
-theorem pCode_sound (cs : List Word) (rd : Nat → TP) (e : Nat) :
+theorem pCode_sound (cs : Array Word) (rd : Nat → TP) (e : Nat) :
     ∀ (code : List KInstr) (loc : Nat → TP) (locC : Nat → Word) (loc' : Nat → TP),
       (∀ w, (loc w).ev env = locC w) → pCode cs rd e loc code = some loc' →
-      ∀ w, (loc' w).ev env = runKCode cs (fun a => (rd a).ev env) e locC code w
+      ∀ w, (loc' w).ev env = runKCode cs.toList (fun a => (rd a).ev env) e locC code w
   | [], loc, locC, loc', hloc, h => by
     simp only [pCode, Option.some.injEq] at h; subst h; exact hloc
   | i :: is, loc, locC, loc', hloc, h => by
@@ -329,9 +333,9 @@ theorem pCode_sound (cs : List Word) (rd : Nat → TP) (e : Nat) :
       exact pOperand_sound env cs rd e loc locC hloc o
     · exact hloc w
 
-theorem pKernel_sound (cs : List Word) (ix : List Nat) (rd : Nat → TP) (k : Kernel) (e : Nat) (r : TP)
+theorem pKernel_sound (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k : Kernel) (e : Nat) (r : TP)
     (h : pKernel cs ix rd k e = some r) :
-    r.ev env = kernelValue cs ix (fun a => (rd a).ev env) k e := by
+    r.ev env = kernelValue cs.toList ix.toList (fun a => (rd a).ev env) k e := by
   unfold pKernel at h
   unfold kernelValue
   split at h
@@ -340,10 +344,11 @@ theorem pKernel_sound (cs : List Word) (ix : List Nat) (rd : Nat → TP) (k : Ke
     simp only [Option.map_eq_some_iff] at h
     obtain ⟨loc', hc, rfl⟩ := h
     exact pCode_sound env cs rd e code _ (fun _ => 0#64) loc' (fun w => ev_lit env 0#64) hc out
-  · rename_i ixb b hb; rw [hb]; simp only [Option.some.injEq] at h; subst h; rfl
+  · rename_i ixb b hb; rw [hb]; simp only [Option.some.injEq] at h; subst h; simp only [array_getD_toList]
   · rename_i b0 l0 b1 hb; rw [hb]; simp only [Option.some.injEq] at h; subst h
     by_cases he : e < l0 <;> simp [he]
-  · rename_i cb hb; rw [hb]; simp only [Option.some.injEq] at h; subst h; exact ev_lit env _
+  · rename_i cb hb; rw [hb]; simp only [Option.some.injEq] at h; subst h
+    rw [ev_lit, array_getD_toList]
 
 end
 end Obend.Hardware.Gpu.Rdna2

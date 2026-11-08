@@ -45,7 +45,7 @@ public import Obend.Hardware.Square
 public import Obend.Hardware.SquareGraphs
 public import Obend.Hardware.Gpu.Rdna2.Check
 public import Obend.Hardware.Gpu.Rdna2.Waitcnt
-public import Obend.Hardware.Gpu.Rdna2.CertSound
+public import Obend.Hardware.Gpu.Rdna2.Certified
 public import Obend.Hardware.Gpu.Memory
 public import Obend.Hardware.QuantumMatter
 public import Obend.Hardware.DigitalTwin

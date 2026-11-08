@@ -24,6 +24,8 @@ import Obend.Hardware.Gpu.Rdna2.Check
 import Obend.Hardware.Gpu.Rdna2.Waitcnt
 import Obend.Hardware.Gpu.Rdna2.Cert
 import Obend.Hardware.SquareGraphs
+import Obend.Hardware.Gpu.Rdna2.Lift
+import Obend.Hardware.Gpu.Rdna2.Certified
 
 open Obend.Hardware.Gpu.Rdna2
 
@@ -136,6 +138,8 @@ def cmdWaitcnt (path : String) (nop : Option String) : IO UInt32 := do
 /-- Where the certificate check refuses, said in words (a diagnostic run of the same steps). -/
 def explainCert (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : String := Id.run do
   let lay := layoutOf p
+  let cs := p.consts.toArray
+  let ix := p.tables.toArray
   let mut known : Known := {}
   for (stage, k) in p.stages.zipIdx do
     let some prog := progs[k]? | return s!"stage {k}: no program"
@@ -146,14 +150,14 @@ def explainCert (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : Str
       unless st.halted do return s!"stage {k}, workgroup {g}: the symbolic run did not halt"
       for (a, t) in st.mem.stores.toList do
         if acc.stored.contains a then return s!"stage {k}: dword 0x{String.ofList (Nat.toDigits 16 a.toNat)} stored twice"
-        match storeOk p lay stage known a t with
+        match storeOk p lay cs ix stage known a t with
         | none =>
           let off := (a - wDw).toNat
           return s!"stage {k}, workgroup {g}: the store to word {off / 2} (dword {off % 2}) is refused: " ++
             (if !inW p.words a then "outside the wire buffer" else
              match stage.kernels.find? (·.owns (off / 2)) with
              | none => "no kernel of the dispatch owns it"
-             | some kk => match pKernel p.consts p.tables (readWord p lay known) kk (off / 2 - kk.dstBase) with
+             | some kk => match pKernel cs ix (readWord p lay known) kk (off / 2 - kk.dstBase) with
                | none => "the specification shifts by an amount it does not know"
                | some _ => "the residual exceeds the abstraction budget")
         | some r? =>
@@ -163,6 +167,66 @@ def explainCert (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : Str
       unless acc.stored.contains a do return s!"stage {k}: owned dword 0x{String.ofList (Nat.toDigits 16 a.toNat)} never stored"
     known := applyUpdates known acc.updates
   return "accepted"
+
+/-! ### Residuals that are 64-bit ring identities (`Rdna2.Lift`) -/
+
+def isVar (t : Tm) : Option UInt64 := match t.op with | .var a => some a | _ => none
+
+/-- The 64-bit expressions whose limb lowering could have the high dword `hi` and low dword `lo`
+(candidates; the generator keeps one only if its lowering is the residual's side, term for term). -/
+partial def pairParse (lo hi : Tm) (fuel : Nat) : List W :=
+  if fuel = 0 then [] else
+  match isVar lo, isVar hi with
+  | some a, some b => [.leaf a b]
+  | _, _ => hiParse hi (fuel - 1)
+where
+  hiParse (hi : Tm) (fuel : Nat) : List W :=
+    match hi.op, hi.args with
+    | .addc, [x, y, c] =>
+      match c.op, c.args with
+      | .carry, [p, q] =>
+        [(p, x, q, y), (p, y, q, x)].flatMap fun (pl, ph, ql, qh) =>
+          (pairParse pl ph fuel).flatMap fun a => (pairParse ql qh fuel).map fun b => W.add a b
+      | _, _ => []
+    | .subc, [x, y, c] =>
+      match c.op, c.args with
+      | .borrow, [p, q] =>
+        (pairParse p x fuel).flatMap fun a => (pairParse q y fuel).map fun b => W.sub a b
+      | _, _ => []
+    | .sum, args =>
+      match args.find? (·.op == .mulHi) with
+      | some m =>
+        match m.args with
+        | [u, v] =>
+          let muls := args.filter (fun t => t.op == .mul)
+          let other (t f : Tm) : Option Tm :=
+            match t.args with
+            | [x, y] => if x == f then some y else if y == f then some x else none
+            | _ => none
+          if args.length != 3 || muls.length != 2 then [] else
+          [(u, v), (v, u)].flatMap fun (a0, b0) =>
+            [(muls[0]!, muls[1]!), (muls[1]!, muls[0]!)].flatMap fun (t1, t2) =>
+              match other t1 b0, other t2 a0 with
+              | some a1, some b1 =>
+                (pairParse a0 a1 fuel).flatMap fun a => (pairParse b0 b1 fuel).map fun b => W.mul a b
+              | _, _ => []
+        | _ => []
+      | none => []
+    | _, _ => []
+
+partial def wLean : W → String
+  | .leaf a b => s!"(.leaf {a} {b})"
+  | .add a b => s!"(.add {wLean a} {wLean b})"
+  | .sub a b => s!"(.sub {wLean a} {wLean b})"
+  | .mul a b => s!"(.mul {wLean a} {wLean b})"
+
+/-- The two sides as the high dwords of 64-bit expressions, if they are. -/
+def liftHi (r : Tm.Residual) : Option (W × W) :=
+  let c1 := (pairParse.hiParse r.lhs 8).filter fun w => w.lower.2 == r.lhs
+  let c2 := (pairParse.hiParse r.rhs 8).filter fun w => w.lower.2 == r.rhs
+  match c1, c2 with
+  | w1 :: _, w2 :: _ => some (w1, w2)
+  | _, _ => none
 
 /-- An operation in Lean syntax. -/
 def opLean : TOp → String
@@ -187,10 +251,15 @@ partial def letLines (t : Tm) (st : Std.HashMap Tm String × Array String) : Str
 
 /-- The Lean module proving `rs` with `bv_decide`: a `Residual` per entry, built by `node` exactly as the
 check builds it, and its `Holds` theorem. -/
-def residualModule (modName : String) (tag : String) (rs : List Tm.Residual) : String := Id.run do
-  let mut out := s!"/-\n# {modName}: the residuals of {tag}'s certificate, each proved by `bv_decide`\n\nGenerated by `obend-rdna2 resmod`; do not edit.\n-/\nmodule\npublic import Obend.Hardware.Gpu.Rdna2.Equiv\nmeta import Std.Tactic.BVDecide\n@[expose] public section\n\nnamespace Obend.Hardware.Gpu.Rdna2.Residuals\nopen Obend.Hardware.Gpu.Rdna2 Obend.Hardware.Gpu.Rdna2.Tm\n\n"
+def residualModule (modName : String) (tag : String) (graphsNote : String) (rs : List Tm.Residual) : String := Id.run do
+  let mut out := s!"/-\n# {modName} — the residuals the certificates need, each proved\n\nGenerated by `obend-rdna2 reslib` over every dumped graph ({graphsNote}); do not edit:\n`hardware/gpu/isa_check.sh` regenerates it and compares bytes. Each residual is the pair of terms the\ncheck leaves for a stored dword after cutting (`Equiv`), over leaf variables, built here by `node` exactly\nas the check builds it, so that `certify`'s membership test finds it. Each is proved for every memory:\nby `bv_decide`, by `grind` where it multiplies, or, where it is a 64-bit ring identity written in limbs,\nby `W.holds_hi` and `grind` on the 64-bit words (`Lift`).\n-/\nmodule\npublic import Obend.Hardware.Gpu.Rdna2.Lift\nmeta import Std.Tactic.BVDecide\n@[expose] public section\n\nnamespace {modName}\nopen Obend.Hardware.Gpu.Rdna2 Obend.Hardware.Gpu.Rdna2.Tm\n\n"
   let mut names : Array String := #[]
   for (r, k) in rs.zipIdx do
+    if let some (w1, w2) := liftHi r then
+      let nm := s!"{tag}_{k}"
+      names := names.push nm
+      out := out ++ s!"/-- A 64-bit ring identity in limbs (`Lift`). -/\ndef {nm} : Tm.Residual := ⟨(W.lower {wLean w1}).2, (W.lower {wLean w2}).2⟩\n\ntheorem {nm}_holds : {nm}.Holds :=\n  W.holds_hi _ _ fun env => by simp only [W.eval]; grind\n\n"
+      continue
     let (l, st) := letLines r.lhs ({}, #[])
     let (rr, st) := letLines r.rhs st
     let nm := s!"{tag}_{k}"
@@ -198,8 +267,8 @@ def residualModule (modName : String) (tag : String) (rs : List Tm.Residual) : S
     let tac := if st.2.any (fun l => (l.splitOn "node .mul").length > 1) then "first | grind | bv_decide (config := { timeout := 120 })" else "bv_decide (config := { timeout := 120 })"
     names := names.push nm
     out := out ++ s!"def {nm} : Tm.Residual :=\n{"\n".intercalate st.2.toList}\n  ⟨{l}, {rr}⟩\n\n"
-    out := out ++ s!"theorem {nm}_holds : {nm}.Holds := by\n  intro env\n  simp only [{nm}, eval_node, TOp.sem, List.map, List.getD_cons_zero, List.getD_cons_succ, List.foldr, b2w, join64, carryBV, carrycBV, borrowBV, borrowcBV, mulHiBV, lshlrev64, lshrrev64, packWord, bne]\n  {tac}\n\n"
-  out := out ++ s!"def {tag} : List Tm.Residual := [{", ".intercalate names.toList}]\n\ntheorem {tag}_hold : ∀ r ∈ {tag}, r.Holds := by\n  simp only [{tag}, List.mem_cons, List.not_mem_nil, or_false]\n  rintro r ({" | ".intercalate (names.toList.map fun _ => "rfl")}){String.join (names.toList.map fun n => s!"\n  · exact {n}_holds")}\n\nend Obend.Hardware.Gpu.Rdna2.Residuals\n"
+    out := out ++ s!"set_option linter.unusedSimpArgs false in\ntheorem {nm}_holds : {nm}.Holds := by\n  intro env\n  simp only [{nm}, eval_node, TOp.sem, List.map, List.getD_cons_zero, List.getD_cons_succ, List.foldr, b2w, join64, carryBV, carrycBV, borrowBV, borrowcBV, mulHiBV, lshlrev64, lshrrev64, packWord, bne]\n  {tac}\n\n"
+  out := out ++ s!"/-- Every residual above. -/\ndef all : List Tm.Residual := [{", ".intercalate names.toList}]\n\ntheorem all_hold : ∀ r ∈ all, r.Holds := by\n  simp only [all, List.mem_cons, List.not_mem_nil, or_false]\n  rintro r ({" | ".intercalate (names.toList.map fun _ => "rfl")}){String.join (names.toList.map fun n => s!"\n  · exact {n}_holds")}\n\nend {modName}\n"
   return out
 
 /-- One residual library over several graphs: `GRAPH=ISA` pairs, residuals deduplicated. -/
@@ -218,86 +287,61 @@ def cmdResLib (modName tag : String) (pairs : List String) : IO UInt32 := do
       IO.eprintln s!"{graph}: {rs.length} residuals, {fresh.length} new"
       for r in fresh do seen := seen.insert r; all := all.push r
     | none => IO.eprintln s!"[FAIL] {graph}: not certified"; return 1
-  IO.print (residualModule modName tag all.toList)
+  let names := pairs.filterMap fun pr => (pr.splitOn "=").head?
+  IO.print (residualModule modName tag (", ".intercalate names) all.toList)
   return 0
 
-def cmdResMod (graph : String) (isaPath : String) (modName tag : String) : IO UInt32 := do
-  let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph) | return 1
-  let p := Obend.Hardware.Gpu.lowerArrayToGpu g
-  let progs := (parseDump (← IO.FS.readFile isaPath)).toList.filterMap fun ws => (decodeProgram (ws.flatMap id)).toOption
+/-- Why the certificate refuses decoded programs (diagnostic; the check itself is `certify`). -/
+def whyRefused (p : Obend.Hardware.Gpu.GpuProgram) (progs : List Program) : String :=
   match neededResiduals p progs with
-  | some rs => IO.print (residualModule modName tag rs); return 0
-  | none => IO.eprintln s!"[FAIL] {graph}: not certified"; return 1
+  | none => explainCert p progs
+  | some rs =>
+    let missing := rs.filter (!Residuals.all.contains ·)
+    if missing.isEmpty then "the program bounds (words, kernel ranges)"
+    else s!"needs {missing.length} residual(s) the library does not prove, e.g. {(missing.head!.lhs.toLean.take 120).toString} …"
 
-def cmdCert (graph : String) (isaPath : String) : IO UInt32 := do
+/-- The gate's certificate stage: `certifyNamed`, the function every pin runs, on one dump; with `--flip`,
+one bit of one instruction flipped first, which the certificate must refuse. -/
+def cmdCert (graph : String) (isaPath : String) (flip : Option String) : IO UInt32 := do
   let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph)
     | IO.eprintln s!"[FAIL] no graph {graph}"; return 1
   let p := Obend.Hardware.Gpu.lowerArrayToGpu g
   let isa ← IO.FS.readFile isaPath
-  let dumps := parseDump isa
-  let mut progs : List Program := []
-  for (ws, k) in dumps.zipIdx do
-    match decodeProgram (ws.flatMap id) with
-    | .ok prog => progs := progs ++ [prog]
-    | .error e => IO.eprintln s!"[FAIL] {graph} stage {k}: {e}"; return 1
-  let t0 ← IO.monoMsNow
-  match neededResiduals p progs with
-  | some rs =>
-    let t1 ← IO.monoMsNow
-    IO.println s!"{graph}: {p.stages.length} stages certified symbolically in {t1 - t0} ms; {rs.length} distinct residuals"
-    for (r, k) in rs.zipIdx do
-      IO.println s!"  residual {k}: {r.lhs.toLean} = {r.rhs.toLean}"
-    return 0
+  match flip with
   | none =>
-    IO.eprintln s!"[FAIL] {graph}: {explainCert p progs}"
+    let t0 ← IO.monoMsNow
+    let ok := certifyNamed graph isa
+    let t1 ← IO.monoMsNow
+    if ok then
+      IO.println s!"{graph}: certified, {p.stages.length} dispatches, check {t1 - t0} ms"
+      return 0
+    let why := if !g.wf then "the graph is not well formed"
+      else if !checkWaitcntDump isa then "a load is not waited for (obend-rdna2 waitcnt)"
+      else match progsOf isa with
+        | none => "a stage does not decode"
+        | some progs => whyRefused p progs
+    IO.eprintln s!"[FAIL] {graph}: refused: {why}"
     return 1
-
-/-- Time the phases of the certificate check on one graph (a profile, not a check). -/
-def cmdCertProf (graph : String) (isaPath : String) : IO UInt32 := do
-  let some (_, g, _) := Obend.Hardware.SquareGraphs.graphs.find? (·.1 == graph) | return 1
-  let p := Obend.Hardware.Gpu.lowerArrayToGpu g
-  let dumps := parseDump (← IO.FS.readFile isaPath)
-  let progs := dumps.toList.filterMap fun ws => (decodeProgram (ws.flatMap id)).toOption
-  let lay := layoutOf p
-  let mut tRun := 0
-  let mut tSpec := 0
-  let mut tRes := 0
-  let mut nStores := 0
-  let mut nEq := 0
-  let mut known : Known := {}
-  for (stage, k) in p.stages.zipIdx do
-    let prog := progs[k]!
-    let mut acc : Acc := ⟨{}, [], {}⟩
-    for g in List.range (groupsOf stage.threads) do
-      let t0 ← IO.monoNanosNow
-      let st := symWave p lay prog known acc.stored g
-      let _ := st.err
-      let n := st.mem.stores.size
-      let t1 ← IO.monoNanosNow
-      tRun := tRun + (t1 - t0) + (if n == 0 then 0 else 0)
-      for (a, t) in st.mem.stores.toList do
-        nStores := nStores + 1
-        let off := (a - wDw).toNat
-        let t2 ← IO.monoNanosNow
-        let sp := (stage.kernels.find? (·.owns (off / 2))).bind fun kk =>
-          pKernel p.consts p.tables (readWord p lay known) kk (off / 2 - kk.dstBase)
-        let spt := match sp with | some sp => if off % 2 == 0 then sp.1 else sp.2 | none => Tm.lit 0
-        let _ := spt.hsh
-        let t3 ← IO.monoNanosNow
-        let r := Tm.residual t spt
-        if let some r := r then if r.lhs == r.rhs then nEq := nEq + 1
-        let t4 ← IO.monoNanosNow
-        tSpec := tSpec + (t3 - t2); tRes := tRes + (t4 - t3)
-        acc := { acc with stored := acc.stored.insert a, updates := (a, t.litVal?) :: acc.updates }
-    known := applyUpdates known acc.updates
-  IO.println s!"{graph}: symbolic runs {tRun / 1000000} ms, spec {tSpec / 1000000} ms, residuals {tRes / 1000000} ms; {nStores} stores, {nEq} equal"
-  return 0
+  | some f =>
+    let spec := match f.splitOn ":" with
+      | [a, b, c] => (a.toNat?.bind fun a => b.toNat?.bind fun b => c.toNat?.map fun c => (a, b, c))
+      | _ => none
+    let some (st, ins, bit) := spec | IO.eprintln s!"[FAIL] --flip {f}: want STAGE:INSTR:BIT"; return 1
+    match flipBit (parseDump isa) st ins bit with
+    | .error e => IO.eprintln s!"[FAIL] {graph}: {e}"; return 1
+    | .ok dumps =>
+      match dumps.toList.mapM (fun ws => (decodeProgram (ws.flatMap id)).toOption) with
+      | none => IO.println s!"{graph}: planted flip {f} refused: a stage no longer decodes"; return 0
+      | some progs =>
+        if certify p progs Residuals.all then
+          IO.eprintln s!"[FAIL] {graph}: planted flip {f} certified"; return 1
+        IO.println s!"{graph}: planted flip {f} refused: {whyRefused p progs}"
+        return 0
 
 def main (args : List String) : IO UInt32 := do
   match args with
-  | ["certprof", g, isa] => cmdCertProf g isa
-  | ["cert", g, isa] => cmdCert g isa
-  | ["resmod", g, isa, m, tag] => cmdResMod g isa m tag
+  | ["cert", g, isa] => cmdCert g isa none
+  | ["cert", g, isa, "--flip", f] => cmdCert g isa (some f)
   | "reslib" :: m :: tag :: pairs => cmdResLib m tag pairs
   | ["waitcnt", p] => cmdWaitcnt p none
   | ["waitcnt", p, "--nop", f] => cmdWaitcnt p (some f)
