@@ -683,7 +683,7 @@ theorem prepareWrite_rq {es : List Entry} {p : Page} {G' : Graph} {added : List 
     {who : Actor} {turn : Nat} {poster : String} {env : Environment} {pr : Prepared}
     (h : prepareWrite es p G' added who turn poster env = .ok pr) :
     pr.rq = requestBy pr.who.name pr.poster pr.occ pr.facts := by
-  unfold prepareWrite at h
+  unfold prepareWrite prepareFrom at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
   all_goals first
