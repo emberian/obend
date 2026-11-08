@@ -45,6 +45,8 @@ an address the memory does not hold.
 module
 public import Obend.Hardware.Gpu.Rdna2.Decode
 public import Std.Data.HashMap
+public import Std.Tactic.BVDecide
+public meta import Std.Tactic.BVDecide.Reflect
 @[expose] public section
 
 namespace Obend.Hardware.Gpu.Rdna2
@@ -614,6 +616,14 @@ def andB64 (s : GWave V M) (code : Nat) (d0 d1 : V) : GWave V M :=
   let s' := writeScalarDst64 s code (d0, d1)
   if s'.err.isSome then s' else { s' with scc := Dom.nez64 d0 d1 }
 
+/-- `D = EXEC; EXEC = S0 & EXEC; SCC = EXEC != 0` (manual 12.2, S_AND_SAVEEXEC_B64). -/
+def saveexecB64 (s : GWave V M) (code : Nat) (a : V × V) : GWave V M :=
+  let old : V × V := (Dom.lit s.exec.toUInt32, Dom.lit (s.exec >>> 32).toUInt32)
+  let s1 := writeExec s (Dom.band a.1 old.1) (Dom.band a.2 old.2)
+  if s1.err.isSome then s1 else
+  let s2 := writeScalarDst64 s1 code old
+  if s2.err.isSome then s2 else { s2 with scc := Dom.lit (if s2.exec != 0 then 1 else 0) }
+
 /-- S_MOVK_I32 (manual 12.2): `D.i32 = signext(SIMM16[15:0])`. -/
 def movkValue (simm : Nat) : UInt32 := if simm ≥ 32768 then UInt32.ofNat (simm + 0xFFFF0000) else UInt32.ofNat simm
 
@@ -628,6 +638,10 @@ inductive InstOp where
   | v_mov_b32 | v_add_nc_u32 | v_and_b32 | v_or_b32 | v_lshlrev_b32 | v_lshl_add_u32 | v_add3_u32 | v_and_or_b32
   | v_mul_lo_u32 | v_mul_hi_u32 | v_cndmask_b32 | v_add_co_u32 | v_sub_co_u32 | v_add_co_ci_u32 | v_sub_co_ci_u32
   | v_lshlrev_b64 | v_lshrrev_b64 | v_cmp_le_u32 | v_cmp_gt_u32 | v_cmpx_gt_u32 | v_cmp_lt_u64 | v_cmp_ne_i64
+  | s_or_b64 | s_andn2_b64 | s_nor_b64 | s_and_saveexec_b64 | s_mulk_i32
+  | v_cmp_lt_u32 | v_cmp_eq_i32 | v_cmp_ne_i32 | v_max_u32 | v_min_u32 | v_sub_nc_u32 | v_lshrrev_b32
+  | v_subrev_co_ci_u32 | v_cmpx_ne_i32 | v_lshl_or_b32 | v_add_lshl_u32 | v_mul_u32_u24
+  | v_cmpx_eq_i32 | v_cmpx_le_u32
   | unknown
   deriving DecidableEq, Repr
 
@@ -648,6 +662,13 @@ def instOp (name : String) : InstOp :=
   | "V_LSHLREV_B64" => .v_lshlrev_b64 | "V_LSHRREV_B64" => .v_lshrrev_b64 | "V_CMP_LE_U32" => .v_cmp_le_u32
   | "V_CMP_GT_U32" => .v_cmp_gt_u32 | "V_CMPX_GT_U32" => .v_cmpx_gt_u32 | "V_CMP_LT_U64" => .v_cmp_lt_u64
   | "V_CMP_NE_I64" => .v_cmp_ne_i64
+  | "S_OR_B64" => .s_or_b64 | "S_ANDN2_B64" => .s_andn2_b64 | "S_NOR_B64" => .s_nor_b64
+  | "S_AND_SAVEEXEC_B64" => .s_and_saveexec_b64 | "S_MULK_I32" => .s_mulk_i32
+  | "V_CMP_LT_U32" => .v_cmp_lt_u32 | "V_CMP_EQ_I32" => .v_cmp_eq_i32 | "V_CMP_NE_I32" => .v_cmp_ne_i32
+  | "V_MAX_U32" => .v_max_u32 | "V_MIN_U32" => .v_min_u32 | "V_SUB_NC_U32" => .v_sub_nc_u32
+  | "V_LSHRREV_B32" => .v_lshrrev_b32 | "V_SUBREV_CO_CI_U32" => .v_subrev_co_ci_u32
+  | "V_CMPX_NE_I32" => .v_cmpx_ne_i32 | "V_LSHL_OR_B32" => .v_lshl_or_b32 | "V_ADD_LSHL_U32" => .v_add_lshl_u32
+  | "V_MUL_U32_U24" => .v_mul_u32_u24 | "V_CMPX_EQ_I32" => .v_cmpx_eq_i32 | "V_CMPX_LE_U32" => .v_cmpx_le_u32
   | _ => .unknown
 
 /-- One instruction. `s.pc` already points past it (branches add their offset to that, manual 12.5:
@@ -705,7 +726,57 @@ def execInst (i : Inst) (s : GWave V M) : GWave V M :=
   | .v_cmpx_gt_u32 => valuCompare i s false fun src => Dom.ugt (src0 src) (src1 src)
   | .v_cmp_lt_u64 => valuCompare i s true fun src => Dom.ult64 (src0 src) (src1 src) (src2 src) (src.getD 3 (Dom.lit 0))
   | .v_cmp_ne_i64 => valuCompare i s true fun src => Dom.ne64 (src0 src) (src1 src) (src2 src) (src.getD 3 (Dom.lit 0))
+  -- Manual 12.2 SOP1/12.3 SOP2: S_OR_B64 `D = S0 | S1`, S_ANDN2_B64 `D = S0 & ~S1`, S_NOR_B64
+  -- `D = ~(S0 | S1)`, each `SCC = D != 0`; ~ and & ~ by the identities andn2_spec and not_spec
+  | .s_or_b64 => s.withSome ((ssrc64 i s 0).bind fun a => (ssrc64 i s 1).map fun b => (a, b))
+      "S_OR_B64: an operand code is not modelled" fun ab =>
+    andB64 s (i.field "SDST") (Dom.bor ab.1.1 ab.2.1) (Dom.bor ab.1.2 ab.2.2)
+  | .s_andn2_b64 => s.withSome ((ssrc64 i s 0).bind fun a => (ssrc64 i s 1).map fun b => (a, b))
+      "S_ANDN2_B64: an operand code is not modelled" fun ab =>
+    andB64 s (i.field "SDST") (Dom.sub ab.1.1 (Dom.band ab.1.1 ab.2.1)) (Dom.sub ab.1.2 (Dom.band ab.1.2 ab.2.2))
+  | .s_nor_b64 => s.withSome ((ssrc64 i s 0).bind fun a => (ssrc64 i s 1).map fun b => (a, b))
+      "S_NOR_B64: an operand code is not modelled" fun ab =>
+    andB64 s (i.field "SDST") (Dom.sub (Dom.lit 0xFFFFFFFF) (Dom.bor ab.1.1 ab.2.1))
+      (Dom.sub (Dom.lit 0xFFFFFFFF) (Dom.bor ab.1.2 ab.2.2))
+  -- Manual 12.2 SOP1 S_AND_SAVEEXEC_B64: `D = EXEC; EXEC = S0 & EXEC; SCC = EXEC != 0`; a mask the
+  -- model does not know is refused by writeExec
+  | .s_and_saveexec_b64 => s.withSome (ssrc64 i s 0) "S_AND_SAVEEXEC_B64: an operand code is not modelled" fun a =>
+    saveexecB64 s (i.field "SDST") a
+  -- Manual 12.4 SOPK S_MULK_I32: `D = D * signext(SIMM16)`, SCC unchanged
+  | .s_mulk_i32 =>
+    writeScalarDst s (i.field "SDST") (Dom.mul (readSgpr s (i.field "SDST")) (Dom.lit (movkValue (i.field "SIMM16"))))
+  -- Manual 12.9 VOPC: V_CMP_LT_U32 `S0 < S1`, V_CMP_EQ_I32 `S0 == S1`, V_CMP_NE_I32 `S0 <> S1`
+  | .v_cmp_lt_u32 => valuCompare i s false fun src => Dom.ugt (src1 src) (src0 src)
+  | .v_cmp_eq_i32 => valuCompare i s false fun src =>
+    Dom.ite (Dom.ne64 (src0 src) (Dom.lit 0) (src1 src) (Dom.lit 0)) (Dom.lit 0) (Dom.lit 1)
+  | .v_cmp_ne_i32 => valuCompare i s false fun src => Dom.ne64 (src0 src) (Dom.lit 0) (src1 src) (Dom.lit 0)
+  | .v_cmpx_eq_i32 => valuCompare i s false fun src =>
+    Dom.ite (Dom.ne64 (src0 src) (Dom.lit 0) (src1 src) (Dom.lit 0)) (Dom.lit 0) (Dom.lit 1)
+  | .v_cmpx_le_u32 => valuCompare i s false fun src => Dom.ule (src0 src) (src1 src)
+  | .v_cmpx_ne_i32 => valuCompare i s false fun src => Dom.ne64 (src0 src) (Dom.lit 0) (src1 src) (Dom.lit 0)
+  -- Manual 12.7 VOP2 V_SUBREV_CO_CI_U32: `D = S1 - S0 - VCC; VCC = borrow` (gem5 twin V_SUBBREV_CO_U32)
+  | .v_subrev_co_ci_u32 =>
+    s.withSome (maskSource s (maskSrcCode i)) "V_SUBREV_CO_CI_U32: carry-in code not modelled" fun m =>
+    valuLanesCarry i s fun a b lane => (Dom.subc b a (maskBit m lane), Dom.borrowc b a (maskBit m lane))
+  -- Manual 12.7 VOP2: V_MAX_U32, V_MIN_U32, V_SUB_NC_U32 `D = S0 - S1`, V_LSHRREV_B32 `D = S1 >> S0[4:0]`
+  | .v_max_u32 => valuLanes i s 2 fun src _ => Dom.ite (Dom.ugt (src0 src) (src1 src)) (src0 src) (src1 src)
+  | .v_min_u32 => valuLanes i s 2 fun src _ => Dom.ite (Dom.ugt (src0 src) (src1 src)) (src1 src) (src0 src)
+  | .v_sub_nc_u32 => valuLanes i s 2 fun src _ => Dom.sub (src0 src) (src1 src)
+  | .v_lshrrev_b32 => valuLanes i s 2 fun src _ =>      -- the low half of a 64-bit shift of (S1, 0) by S0[4:0]
+    (Dom.lshr64 (Dom.band (src0 src) (Dom.lit 31)) (src1 src) (Dom.lit 0)).1
+  -- Manual 12.11 VOP3: V_LSHL_OR_B32 `D = (S0 << S1[4:0]) | S2`, V_ADD_LSHL_U32 `D = (S0 + S1) << S2[4:0]`;
+  -- 12.7 VOP2 V_MUL_U32_U24 `D = S0[23:0] * S1[23:0]` (the low 32 bits)
+  | .v_lshl_or_b32 => valuLanes i s 3 fun src _ => Dom.bor (Dom.shl (src0 src) (src1 src)) (src2 src)
+  | .v_add_lshl_u32 => valuLanes i s 3 fun src _ => Dom.shl (Dom.add (src0 src) (src1 src)) (src2 src)
+  | .v_mul_u32_u24 => valuLanes i s 2 fun src _ =>
+    Dom.mul (Dom.band (src0 src) (Dom.lit 0xFFFFFF)) (Dom.band (src1 src) (Dom.lit 0xFFFFFF))
   | .unknown => s.fail s!"{i.name}: no semantics (refused, not guessed)"
+
+/-- The identities the bitwise complements above are written with, on the concrete domain. -/
+theorem andn2_spec (a b : UInt32) : a - (a &&& b) = a &&& ~~~b := by bv_decide
+theorem not_spec (a : UInt32) : 0xFFFFFFFF - a = ~~~a := by bv_decide
+theorem lshr32_spec (c x : UInt32) : (lshrrev64 (c &&& 31) (join64 x 0)).toUInt32 = x >>> (c &&& 31) := by
+  unfold lshrrev64 join64; bv_decide
 
 /-! ## 6. Stepping -/
 
