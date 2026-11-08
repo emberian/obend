@@ -469,11 +469,11 @@ theorem foldCachedGo_get (op : ReduceOp) (rd : Nat → TP) :
     rw [foldCachedGo_get op rd rs st l _ _ hv e, hv]
     simp only [Array.size_push, List.map_cons]
     by_cases h1 : e < acc.size
-    · rw [if_pos (by omega), if_pos h1, Array.getElem?_push_lt h1, Array.getElem?_eq_getElem h1]
-    · rw [if_neg h1]
+    · rw [ite_eq_left (by omega), ite_eq_left h1, Array.getElem?_push_lt h1, Array.getElem?_eq_getElem h1]
+    · rw [ite_eq_right h1]
       by_cases h2 : e = acc.size
-      · subst h2; rw [if_pos (by omega), Array.getElem?_push_eq]; simp
-      · rw [if_neg (by omega), show e - acc.size = (e - (acc.size + 1)) + 1 by omega]; simp
+      · subst h2; rw [ite_eq_left (by omega), Array.getElem?_push_size]; simp
+      · rw [ite_eq_right (by omega), show e - acc.size = (e - (acc.size + 1)) + 1 by omega]; simp
 
 /-- A cached fold value is the kernel's value term at that element. -/
 theorem foldValues_get (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k : Kernel) (arr : Array TP)
@@ -493,7 +493,7 @@ theorem foldValues_get (cs : Array Word) (ix : Array Nat) (rd : Nat → TP) (k :
       have hlt : e < shape.ranges.length := by
         rcases List.getElem?_eq_some_iff.mp hr with ⟨hl, _⟩; exact hl
       dsimp only
-      rw [if_pos hlt]
+      rw [ite_eq_left hlt]
       simp [List.getD_eq_getElem?_getD, hr]
   · simp at h
 

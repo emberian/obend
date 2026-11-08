@@ -291,27 +291,27 @@ theorem sdwaSelV_hom (x : V₁) (sel : Nat) : h.f (sdwaSelV x sel) = sdwaSelV (h
   unfold sdwaSelV
   simp only [apply_ite h.f]
   by_cases a : sel < 4
-  · rw [if_pos a, if_pos a, h.band, lshrV_hom, h.lit, h.lit]
-  · rw [if_neg a, if_neg a]
+  · rw [ite_eq_left a, ite_eq_left a, h.band, lshrV_hom, h.lit, h.lit]
+  · rw [ite_eq_right a, ite_eq_right a]
     by_cases b : (sel == 4) = true
-    · rw [if_pos b, if_pos b, h.band, h.lit]
-    · rw [if_neg b, if_neg b]
+    · rw [ite_eq_left b, ite_eq_left b, h.band, h.lit]
+    · rw [ite_eq_right b, ite_eq_right b]
       by_cases c : (sel == 5) = true
-      · rw [if_pos c, if_pos c, lshrV_hom, h.lit]
-      · rw [if_neg c, if_neg c]
+      · rw [ite_eq_left c, ite_eq_left c, lshrV_hom, h.lit]
+      · rw [ite_eq_right c, ite_eq_right c]
 
 theorem sdwaDst_hom (r : V₁) (sel : Nat) : h.f (sdwaDst r sel) = sdwaDst (h.f r) sel := by
   unfold sdwaDst
   simp only [apply_ite h.f]
   by_cases a : sel < 4
-  · rw [if_pos a, if_pos a, h.shl, h.band, h.lit, h.lit]
-  · rw [if_neg a, if_neg a]
+  · rw [ite_eq_left a, ite_eq_left a, h.shl, h.band, h.lit, h.lit]
+  · rw [ite_eq_right a, ite_eq_right a]
     by_cases b : (sel == 4) = true
-    · rw [if_pos b, if_pos b, h.band, h.lit]
-    · rw [if_neg b, if_neg b]
+    · rw [ite_eq_left b, ite_eq_left b, h.band, h.lit]
+    · rw [ite_eq_right b, ite_eq_right b]
       by_cases c : (sel == 5) = true
-      · rw [if_pos c, if_pos c, h.shl, h.band, h.lit, h.lit]
-      · rw [if_neg c, if_neg c]
+      · rw [ite_eq_left c, ite_eq_left c, h.shl, h.band, h.lit, h.lit]
+      · rw [ite_eq_right c, ite_eq_right c]
 
 theorem sdwaLift_hom (i : Inst) (f₁ : List V₁ → Nat → V₁) (f₂ : List V₂ → Nat → V₂)
     (hf : ∀ src lane, h.f (f₁ src lane) = f₂ (src.map h.f) lane) (src : List V₁) (lane : Nat) :
@@ -334,10 +334,10 @@ theorem laneStep_rel {α β : Type} (hL : IteLawful V₂) (R : Prop) (hR : R →
   by_cases ho : (Dom.conc (execBit s lane) == some 0) = true
   · have ho2 : (Dom.conc (execBit (mapW h hm s) lane) == some 0) = true := by
       rw [← hb]; have := h.conc _ 0 (by simpa using ho); simp [this]
-    rw [if_pos ho, if_pos ho2, hoff]; exact ORel.some' R _ _
-  rw [if_neg ho]
+    rw [ite_eq_left ho, ite_eq_left ho2, hoff]; exact ORel.some' R _ _
+  rw [ite_eq_right ho]
   by_cases ho2 : (Dom.conc (execBit (mapW h hm s) lane) == some 0) = true
-  · rw [if_pos ho2]
+  · rw [ite_eq_left ho2]
     have hc2 : Dom.conc (execBit (mapW h hm s) lane) = some 0 := by simpa using ho2
     constructor
     · intro w hw
@@ -351,7 +351,7 @@ theorem laneStep_rel {α β : Type} (hL : IteLawful V₂) (R : Prop) (hR : R →
       | some v =>
         have := h.conc _ v hc; rw [hb, hc2] at this
         simp only [Option.some.injEq] at this; subst this; simp [hc] at ho
-  · rw [if_neg ho2]
+  · rw [ite_eq_right ho2]
     exact ORel.map hsrc fun src => by simp only [Prod.mk.injEq, true_and]; rw [hsel, hk, hb, hoff]
 
 theorem ite_law (hL : IteLawful V₂) (c : V₂) (v : UInt32) (a b : V₂) (hc : Dom.conc c = some v) :
@@ -375,15 +375,15 @@ theorem valuLanes_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm
     valuLanes i (mapW h hm s) n f₂ = mapW h hm (valuLanes i s n f₁) := by
   unfold valuLanes at hres ⊢
   by_cases hc : (isSdwa i && !sdwaClear i) = true
-  · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
-  rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
+  · rw [ite_eq_left hc, ite_eq_left hc]; exact (fail_hom h hm s _).symm
+  rw [ite_eq_right hc] at hres; rw [ite_eq_right hc, ite_eq_right hc]
   dsimp only at hres ⊢
   have hg : ∀ src lane, h.f ((if isSdwa i = true then sdwaLift i f₁ else f₁) src lane) =
       (if isSdwa i = true then sdwaLift i f₂ else f₂) (src.map h.f) lane := by
     intro src lane
     by_cases hs : isSdwa i = true
-    · rw [if_pos hs, if_pos hs]; exact sdwaLift_hom h i f₁ f₂ hf src lane
-    · rw [if_neg hs, if_neg hs]; exact hf src lane
+    · rw [ite_eq_left hs, ite_eq_left hs]; exact sdwaLift_hom h i f₁ f₂ hf src lane
+    · rw [ite_eq_right hs, ite_eq_right hs]; exact hf src lane
   refine withSome_hom h hm (φ := List.map fun p => (p.1, h.f p.2)) ?_ s _ _ _ (fun rs _ => writeLanes_hom h hm s _ rs) hres
   exact lanes_rel R h.f _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ (laneSources_rel h hm R hR i s n lane)
     h.f _ _ (readVgpr_hom h hm s _ lane).symm _ _ (fun src => (hg src lane).symm) _ _ h.ite (ite_law hL)
@@ -397,8 +397,8 @@ theorem valuLanesCarry_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects
     valuLanesCarry i (mapW h hm s) f₂ = mapW h hm (valuLanesCarry i s f₁) := by
   unfold valuLanesCarry at hres ⊢
   by_cases hc : isSdwa i = true
-  · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
-  rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
+  · rw [ite_eq_left hc, ite_eq_left hc]; exact (fail_hom h hm s _).symm
+  rw [ite_eq_right hc] at hres; rw [ite_eq_right hc, ite_eq_right hc]
   dsimp only at hres ⊢
   refine withSome_hom h hm (φ := List.map fun p => (p.1, pmap h p.2)) ?_ s _ _ _ ?_ hres
   · exact lanes_rel R (pmap h) _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ (laneSources_rel h hm R hR i s 2 lane)
@@ -419,8 +419,8 @@ theorem valuCompare_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h 
     valuCompare i (mapW h hm s) wide t₂ = mapW h hm (valuCompare i s wide t₁) := by
   unfold valuCompare at hres ⊢
   by_cases hc : isSdwa i = true
-  · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
-  rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
+  · rw [ite_eq_left hc, ite_eq_left hc]; exact (fail_hom h hm s _).symm
+  rw [ite_eq_right hc] at hres; rw [ite_eq_right hc, ite_eq_right hc]
   dsimp only at hres ⊢
   refine withSome_hom h hm (φ := List.map fun p => (p.1, h.f p.2)) ?_ s _ _ _ ?_ hres
   · refine lanes_rel R h.f _ _ fun lane => laneStep_rel h hm hL R hR s lane _ _ ?_ h.f _ _ (h.lit 0).symm _ _
@@ -691,8 +691,8 @@ theorem execDs_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V
     execDs i (mapW h hm s) n isStore = mapW h hm (execDs i s n isStore) := by
   unfold execDs at hres ⊢
   by_cases hg : (i.field "GDS" != 0) = true
-  · rw [if_pos hg, if_pos hg]; exact (fail_hom h hm s _).symm
-  rw [if_neg hg] at hres; rw [if_neg hg, if_neg hg]
+  · rw [ite_eq_left hg, ite_eq_left hg]; exact (fail_hom h hm s _).symm
+  rw [ite_eq_right hg] at hres; rw [ite_eq_right hg, ite_eq_right hg]
   refine withSome_hom h hm (activeLanes_rel h hm R hR s) s _ _ _ ?_ hres
   intro act hact
   simp only [id] at hact ⊢
@@ -714,8 +714,8 @@ theorem execDs_hom (R : Prop) (hR : R → Reflects h hm) (i : Inst) (s : GWave V
     exact ORel.map (load_rel h hm R hR s.mem a) fun v => rfl
   · simp only [↓reduceIte] at hlas ⊢
     by_cases hd : (!decide (las.flatMap (·.2)).Nodup) = true
-    · rw [if_pos hd, if_pos hd]; exact (fail_hom h hm s _).symm
-    · rw [if_neg hd, if_neg hd, ← storeAll_hom h hm]
+    · rw [ite_eq_left hd, ite_eq_left hd]; exact (fail_hom h hm s _).symm
+    · rw [ite_eq_right hd, ite_eq_right hd, ← storeAll_hom h hm]
       congr 1
       simp only [List.map_flatMap, List.map_map]
       congr 1; funext p
@@ -949,8 +949,8 @@ theorem execInst_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm)
   case v_readfirstlane_b32 =>
     try dsimp only at hres ⊢
     by_cases hc : (isSdwa i || srcCode i 0 < 256 || srcCode i 0 > 511) = true
-    · rw [if_pos hc, if_pos hc]; exact (fail_hom h hm s _).symm
-    · rw [if_neg hc] at hres; rw [if_neg hc, if_neg hc]
+    · rw [ite_eq_left hc, ite_eq_left hc]; exact (fail_hom h hm s _).symm
+    · rw [ite_eq_right hc] at hres; rw [ite_eq_right hc, ite_eq_right hc]
       refine withSome_hom h hm (activeLanes_rel h hm R hR s) s _ _ _ (fun act hact => ?_) hres
       simp only [id]
       rw [← readVgpr_hom h hm]

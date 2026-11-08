@@ -68,7 +68,7 @@ theorem run_runTo (prog : Program) (T : Nat) : ∀ (n : Nat) (s : GWave V M),
       have hs : (s.halted || s.err.isSome) = false := by
         simp only [Bool.or_eq_true, not_or] at hc
         simp [hc.1.1, hc.1.2]
-      rw [run, if_neg (by simp [hs]), run_runTo prog T n _ hh he]
+      rw [run, ite_eq_right (by simp [hs]), run_runTo prog T n _ hh he]
       congr 1; omega
 
 /-- More fuel changes nothing for a run that ended without failing. -/
@@ -80,7 +80,7 @@ theorem run_mono (prog : Program) : ∀ (m d : Nat) (s : GWave V M), (run prog m
     · cases d with
       | zero => rfl
       | succ d => simp only [Nat.zero_add, run, hl, ↓reduceIte]
-    · rw [if_neg hl] at h; exact absurd h (fail_err s _)
+    · rw [ite_eq_right hl] at h; exact absurd h (fail_err s _)
   | m + 1, d, s, h => by
     rw [show m + 1 + d = (m + d) + 1 by omega]
     unfold run at h ⊢
@@ -103,9 +103,9 @@ theorem runTo_hom (hL : IteLawful V₂) (R : Prop) (hR : R → Reflects h hm) (p
     unfold runTo at hres ⊢
     by_cases hc : (s.halted || s.err.isSome || s.pc == T) = true
     · simp only [hc, ↓reduceIte]
-      rw [if_pos (show ((mapW h hm s).halted || (mapW h hm s).err.isSome || (mapW h hm s).pc == T) = true from hc)]
+      rw [ite_eq_left (show ((mapW h hm s).halted || (mapW h hm s).err.isSome || (mapW h hm s).pc == T) = true from hc)]
     · simp only [hc, Bool.false_eq_true, ↓reduceIte] at hres ⊢
-      rw [if_neg (show ¬ ((mapW h hm s).halted || (mapW h hm s).err.isSome || (mapW h hm s).pc == T) = true from hc)]
+      rw [ite_eq_right (show ¬ ((mapW h hm s).halted || (mapW h hm s).err.isSome || (mapW h hm s).pc == T) = true from hc)]
       have hstep : (step prog s).err = none ∨ R := hres.imp_left (runTo_err prog T n _)
       rw [step_hom h hm hL R hR prog s hstep, runTo_hom hL R hR prog T n _ hres]
 
@@ -158,7 +158,7 @@ def funMem : MemHom Memory FMem idHom where
     by_cases ha : a' = a
     · subst ha; simp
     · have : (a == a') = false := beq_false_of_ne (Ne.symm ha)
-      simp only [this, Bool.false_eq_true, ↓reduceIte, if_neg ha]
+      simp only [this, Bool.false_eq_true, ↓reduceIte, ite_eq_right ha]
 
 theorem id_reflects : Reflects idHom funMem := ⟨fun _ h => h, fun _ _ h => h⟩
 
@@ -402,10 +402,10 @@ theorem srun_sound (prog : Program) : ∀ (n : Nat) (r : RW) (c : WaveState), Ag
     · simp only [hl, ↓reduceIte] at herr ⊢
       refine ⟨r, rfl, ?_⟩
       have hl' : (c.halted || c.err.isSome) = true := by rw [hcf.2.2.2.2.2.2.2.1, hcf.2.2.2.2.2.2.2.2.1]; exact hl
-      rw [run, if_pos hl']; exact hc
+      rw [run, ite_eq_left hl']; exact hc
     simp only [hl, Bool.false_eq_true, ↓reduceIte] at herr ⊢
     have hl' : ¬ (c.halted || c.err.isSome) = true := by rw [hcf.2.2.2.2.2.2.2.1, hcf.2.2.2.2.2.2.2.2.1]; exact hl
-    have hrun : run prog (n + 1) c = run prog n (step prog c) := by rw [run, if_neg hl']
+    have hrun : run prog (n + 1) c = run prog n (step prog c) := by rw [run, ite_eq_right hl']
     rw [hrun]
     cases hj : joinTarget prog (SND r) with
     | none =>
@@ -451,8 +451,8 @@ theorem srun_sound (prog : Program) : ∀ (n : Nat) (r : RW) (c : WaveState), Ag
       generalize hfr : runTo prog T n r1 = fr at herr ⊢
       generalize hzr : runTo prog T n r1z = zr at herr ⊢
       by_cases hok : joinOk T (SND r) (SND fr.1) (SND zr.1) = true
-      case neg => rw [if_neg hok] at herr; exact absurd herr (fail_err _ _)
-      rw [if_pos hok] at herr ⊢
+      case neg => rw [ite_eq_right hok] at herr; exact absurd herr (fail_err _ _)
+      rw [ite_eq_left hok] at herr ⊢
       rw [← merge_snd] at herr ⊢
       unfold joinOk at hok
       simp only [Bool.and_eq_true, beq_iff_eq, Option.isNone_iff_eq_none, Bool.not_eq_true'] at hok
@@ -476,11 +476,11 @@ theorem srun_sound (prog : Program) : ∀ (n : Nat) (r : RW) (c : WaveState), Ag
       have hstep : step prog c = if execzV c != 0 then { c1 with pc := T } else c1 := by
         have hpc' : prog[c.pc]? = some (some i) := by rw [hcpc]; exact hpc
         unfold step
-        rw [if_neg hl', hpc']
+        rw [ite_eq_right hl', hpc']
         simp only []
         rw [hw]
         unfold execInst
-        rw [if_neg (by simp [hmod]), hop]
+        rw [ite_eq_right (by simp [hmod]), hop]
         simp only [GWave.withSome, Dom.conc]
         rw [← hj, ← hcpc]
         rfl
@@ -496,8 +496,8 @@ theorem srun_sound (prog : Program) : ∀ (n : Nat) (r : RW) (c : WaveState), Ag
       obtain ⟨m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11⟩ := hmf
       by_cases hzv0 : ((execzV r).c != 0) = true
       · -- EXEC is zero: the branch is taken, and the region left the vector state alone
-        rw [if_pos hzv0]
-        rw [if_pos hzv0] at m1 m2 m3 m4
+        rw [ite_eq_left hzv0]
+        rw [ite_eq_left hzv0] at m1 m2 m3 m4
         have hc0 : c.exec = (0, 0) := execz_zero c (by rw [hzc]; simpa using hzv0)
         have hr1z : FST r1z = FST r1 := by
           show { FST r1 with exec := ((Dom.lit 0 : RV env).c, (Dom.lit 0 : RV env).c) } = FST r1
@@ -535,8 +535,8 @@ theorem srun_sound (prog : Program) : ∀ (n : Nat) (r : RW) (c : WaveState), Ag
         rw [show n - fr.2 + fr.2 = n by omega] at this
         rw [this]; exact h2
       · -- EXEC is not zero: the region runs
-        rw [if_neg hzv0]
-        rw [if_neg hzv0] at m1 m2 m3 m4
+        rw [ite_eq_right hzv0]
+        rw [ite_eq_right hzv0] at m1 m2 m3 m4
         obtain ⟨ha, hk2⟩ := runTo_agree prog T n hagree1
         rw [hFf] at ha hk2
         simp only [] at ha hk2

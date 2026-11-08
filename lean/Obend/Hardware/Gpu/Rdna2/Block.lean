@@ -443,7 +443,7 @@ theorem merge_union (words : Nat) (D : Std.HashMap Nat TP) :
             cases e : B[j]? with
             | none => rfl
             | some u => rcases (hB j u).mp e with e' | e' <;> simp_all
-          rw [if_pos ⟨h0, hj, hBj⟩]
+          rw [ite_eq_left ⟨h0, hj, hBj⟩]
           apply merge_union words D rest (A.insert j t) (B.insert j t) P h hD
           intro i u
           simp only [Std.HashMap.getElem?_insert, beq_iff_eq]

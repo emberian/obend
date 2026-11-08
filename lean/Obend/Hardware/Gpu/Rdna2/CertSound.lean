@@ -460,8 +460,8 @@ theorem specAt_sub {words : Nat} {P T : Std.HashMap Nat TP} (hsub : ∀ (i : Nat
     (a : UInt64) (x : Tm) (h : specAt words P a = some x) : specAt words T a = some x := by
   unfold specAt at h ⊢
   by_cases hw : (!inW words a) = true
-  · rw [if_pos hw] at h; simp at h
-  · rw [if_neg hw] at h ⊢
+  · rw [ite_eq_left hw] at h; simp at h
+  · rw [ite_eq_right hw] at h ⊢
     simp only [Option.map_eq_some_iff] at h ⊢
     obtain ⟨sp, hsp, e⟩ := h
     exact ⟨sp, hsub _ _ hsp, e⟩
@@ -474,11 +474,11 @@ theorem checkStores_sub (words : Nat) {P T : Std.HashMap Nat TP} (hsub : ∀ (i 
   | (a, t) :: rest, acc, acc', h => by
     unfold checkStores at h ⊢
     by_cases hl : inLds a = true
-    · rw [if_pos hl] at h ⊢; exact checkStores_sub words hsub rest acc acc' h
-    · rw [if_neg hl] at h ⊢
+    · rw [ite_eq_left hl] at h ⊢; exact checkStores_sub words hsub rest acc acc' h
+    · rw [ite_eq_right hl] at h ⊢
       by_cases hs : acc.stored.contains a = true
-      · rw [if_pos hs] at h; contradiction
-      · rw [if_neg hs] at h ⊢
+      · rw [ite_eq_left hs] at h; contradiction
+      · rw [ite_eq_right hs] at h ⊢
         simp only [Option.bind_eq_some_iff] at h ⊢
         obtain ⟨r?, hok, hrest⟩ := h
         refine ⟨r?, ?_, checkStores_sub words hsub rest _ acc' hrest⟩
@@ -514,7 +514,7 @@ theorem checkWavesP_whole (words : Nat) (lay : Memory) (part : Std.HashSet Nat �
         simp only [List.mem_cons, exists_eq_or_imp]
         grind
       · unfold checkWaves
-        rw [if_pos hok]
+        rw [ite_eq_left hok]
         simp only [sharedStores, shareCommon_eq, checkStoresX_eq] at h1 ⊢
         rw [checkStores_sub words (hsub P List.mem_cons_self) _ acc acc1 h1]
         exact hT T fun Q hQ => hsub Q (List.mem_cons_of_mem _ hQ)
@@ -548,7 +548,7 @@ theorem checkStage_whole {σ : Type} {words : Nat} {lay : Memory} {known : Known
         have hk : K.contains i = true := (hK i).mpr (Or.inr ⟨Q, hQ, hc⟩)
         have := List.all_eq_true.mp hks i (Std.HashSet.mem_toList.mpr (Std.HashSet.mem_iff_contains.mpr hk))
         exact this
-      rw [if_pos hts]; exact h
+      rw [ite_eq_left hts]; exact h
     · simp at h
 
 
