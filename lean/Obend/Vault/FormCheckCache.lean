@@ -81,6 +81,33 @@ theorem uniqueUnits_keys (ks : List CheckKey) (seen : Std.HashSet CheckUnit)
         exact Bool.or_comm _ _
       simpa only [List.append_assoc, List.singleton_append] using ih (seen.insert k.unit) (acc ++ [k]) hs
 
+/-- Tail worker: append distinct constructed units to an unshared array. -/
+def uniqueUnitsGo : List CheckKey → Std.HashSet CheckUnit → Array KeyUnit → List KeyUnit
+  | [], _, out => out.toList
+  | k :: ks, seen, out =>
+    let u := k.unit
+    if seen.contains u then uniqueUnitsGo ks seen out
+    else uniqueUnitsGo ks (seen.insert u) (out.push ⟨k, u, rfl⟩)
+
+theorem uniqueUnitsGo_eq (ks : List CheckKey) (seen : Std.HashSet CheckUnit) (out : Array KeyUnit) :
+    uniqueUnitsGo ks seen out = out.toList ++ uniqueUnits ks seen := by
+  induction ks generalizing seen out with
+  | nil => simp [uniqueUnitsGo, uniqueUnits]
+  | cons k ks ih =>
+    simp only [uniqueUnitsGo, uniqueUnits]
+    split
+    · exact ih seen out
+    · rw [ih]
+      simp only [Array.toList_push, List.append_assoc, List.singleton_append]
+
+def uniqueUnitsArray (ks : List CheckKey) (seen : Std.HashSet CheckUnit) : List KeyUnit :=
+  uniqueUnitsGo ks seen #[]
+
+/-- Captures need no stack frame per distinct check; the array worker is the ordered deduplicator. -/
+@[csimp] theorem uniqueUnits_eq_array : @uniqueUnits = @uniqueUnitsArray := by
+  funext ks seen
+  simp only [uniqueUnitsArray, uniqueUnitsGo_eq, Array.toList_empty, List.nil_append]
+
 /-- Capture's checks with unit construction shared by deduplication and checking. -/
 def Form.checksAtCached (H : Obend.Digest.HashBytes.Hash) (s : Store) (f : Form) : List Checked :=
   let keys := f.witnesses.flatMap fun a =>
