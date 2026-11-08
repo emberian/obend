@@ -348,7 +348,9 @@ multiset of addends is one term however it was grouped and a running sum's next 
 one path with it; `a - b` as `a + (0 - b)`, a select's condition with its
 `≠ 0` wrappers removed and shared addends moved out of it, symmetric compares ordered). `Equiv`
 cuts the two terms at memory words and their maximal common subterms (cutpoints, as in combinational
-equivalence checking), never at literals; what is left is a small `Residual` over leaf variables, and
+equivalence checking), never at literals, and when a sample environment refutes the cut residual (a cut
+hid a relation the sides need) at the memory words alone; what is left is a small `Residual` over leaf
+variables, and
 the residuals every dump needs are one generated module, `Residuals`, each proved for every memory by
 `bv_decide`, by `grind` where it multiplies, or, for a 64-bit product the compiler regrouped
 (`hi(a·(y+y))` against `hi(a·y + a·y)`), by lifting to 64-bit words (`Lift`: the limb lowering's
@@ -365,9 +367,17 @@ same way by `certifyBlockDump` (`certifyBlock_eval`: every device element is `ev
 on the standard axioms and the compiled `bv_decide` lemmas. Workgroups of a dispatch are run in order;
 that is sound because a block dispatch's table refuses a word two groups write and a group's read of a
 word another group of the dispatch wrote (the race freedom `DispatchProtocol.checkProgram_not_racy`
-states for admitted sources, checked here on the machine code's own terms).
-`Obend.Teeth.Hardware.Rdna2Runs` pins it on every graph but the 65536-point NTT with `native_decide`
-and `#assert_compiled`, with the gem5 vectors. `Check` keeps the concrete run from `expected.tsv`'s
+states for admitted sources, checked here on the machine code's own terms). The check itself runs the
+waves of a dispatch on their own tasks: a block dispatch gives its table in parts, one group's words
+each (`Spec.part`), never held whole (the 2^20-point NTT's dispatch table alone held 46 GB); a first pass
+guesses each word's owner, and every wave rebuilds its part from the owners, checks that it holds
+exactly the words they give it, and runs with every dword of an earlier part's word unreadable, which
+covers every store before it (`mergeWaves_sound`); a stage without parts runs each wave with every word
+of its table unreadable (`mergeWavesT_sound`) and falls back to the waves in order. The merge in wave
+order is the dispatch's bookkeeping, so the result is the sequential check's.
+`Obend.Teeth.Hardware.Rdna2Runs` pins it with `native_decide` and `#assert_compiled` on every graph but
+the 65536- and 2^20-point NTTs and the two 65536-element SOACs (the gate certifies those), with the gem5
+vectors. `Check` keeps the concrete run from `expected.tsv`'s
 vectors as a smoke test of the model and the layout.
 
 `isa_check.sh` is the gate, on hbox: the generated modules are byte-identical to the generator's output;
