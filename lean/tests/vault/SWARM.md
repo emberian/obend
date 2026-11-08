@@ -166,22 +166,37 @@ refused: lanes/lane-sdr: refused by lanes/_kind: states (the kind of lanes/, an 
 A merge keeps a refused write. In the real day, lane-hvm2's fork was declared before lane-fabric3's
 page was born; lane-fabric3's `merged` write was refused (no gate); when lane-hvm2's fork merged back,
 the merge re-rendered lane-fabric3's page from the store, the refused text in its file was lost, and no
-open said so again. The same order, replayed on the lanes alone: the file keeps the refused write after
-the merge, and `obend status` still names the refusal.
+open said so again. The same order, replayed with this lane’s kind, brief and build machine: the file
+keeps the refused write byte for byte after the merge, and `obend status` still names the refusal at
+the admitted version. The unrelated lane-lecscript refusal cannot prevent this fork from being made.
 
 ```sh
-mkdir replay && cp -R swarm/lanes swarm/machines swarm/briefs replay/ && cp replay/lanes/lane-fabric3.md fabric3.md && rm replay/lanes/lane-fabric3.md
-cd replay && obend open > /dev/null && obend fork ../forks/lane-hvm2 && cp ../fabric3.md lanes/lane-fabric3.md && obend open | grep fabric3
-sed -i.bak 's/^state: briefed$/state: merged\ncommit: "0380418"\ndev: "889a09d"/' lanes/lane-fabric3.md && rm lanes/lane-fabric3.md.bak && obend open | grep fabric3 | cut -c1-120
-obend merge ../forks/lane-hvm2 | grep -c fabric3; grep '^state' lanes/lane-fabric3.md; obend status lanes/lane-fabric3 | head -1 | cut -c1-120
+set -e
+mkdir -p replay/lanes replay/machines replay/briefs
+cp swarm/lanes/_kind.md replay/lanes/
+cp swarm/machines/mac.md replay/machines/
+cp swarm/briefs/lane-fabric3.md replay/briefs/
+cp swarm/lanes/lane-fabric3.md fabric3.md
+cd replay && obend open > /dev/null && obend fork ../forks/lane-hvm2
+cp ../fabric3.md lanes/lane-fabric3.md && obend open | grep fabric3
+sed -i.bak 's/^state: briefed$/state: merged\ncommit: "0380418"\ndev: "889a09d"/' lanes/lane-fabric3.md && rm lanes/lane-fabric3.md.bak
+if obend open > ../fabric3-open.txt 2> ../fabric3-refused.txt; then exit 1; else test "$?" -eq 1; fi
+cat ../fabric3-refused.txt
+cp lanes/lane-fabric3.md ../fabric3-pending.md
+obend merge ../forks/lane-hvm2 > ../fabric3-merge.txt
+cmp ../fabric3-pending.md lanes/lane-fabric3.md && echo 'refused text retained after merge'
+grep '^state:' lanes/lane-fabric3.md
+obend status lanes/lane-fabric3 > ../fabric3-status.txt
+head -1 ../fabric3-status.txt
 ```
 
 ```text
-0
-lanes/lane-fabric3: no such page
-lanes/lane-lecscript: not born: refused by lanes/_kind: gate (the kind of lanes/, an ancestor of lanes/lane-lecscript): `new.state in ["reported", "merged"] implies not (new.gate == "")` does not hold; a line `gate: …` with a value would pass (the page has no `gate:` line it reads)
-sed: lanes/lane-fabric3.md: No such file or directory
-grep: lanes/lane-fabric3.md: No such file or directory
+forked lane-hvm2: a copy of this vault, declared here until it merges
+lanes/lane-fabric3: new page (v1)
+lanes/lane-fabric3: refused by lanes/_kind: gate (the kind of lanes/, an ancestor of lanes/lane-fabric3): `new.state in ["reported", "merged"] implies not (new.gate == "")` does not hold; a line `gate: …` with a value would pass (the page has no `gate:` line it reads)
+refused text retained after merge
+state: merged
+lanes/lane-fabric3 v1; its last write was refused by lanes/_kind: gate (the kind of lanes/, an ancestor of lanes/lane-fabric3): `new.state in ["reported", "merged"] implies not (new.gate == "")` does not hold; a line `gate: …` with a value would pass (the page has no `gate:` line it reads)
 ```
 
 ## 3. DEV reads the lanes that link to it
@@ -264,7 +279,7 @@ read there, and refuses every one of them, each waiting on another:
 
 ```sh refused
 cd swarm && obend fork ../forks/gates > /dev/null && cd ../forks/gates && sh "$OBEND_ROOT/lean/tests/vault/swarm/tools/gates.sh" && obend open | grep -c ' written\| new page'
-cd ../../swarm && obend merge ../forks/gates > /dev/null 2> ../gates.err; e=$?; cut -c1-110 ../gates.err >&2; exit $e
+cd ../../swarm && obend merge ../forks/gates > /dev/null 2> ../gates.err; e=$?; python3 "$OBEND_ROOT/lean/tests/vault/swarm/tools/prefix.py" 110 ../gates.err >&2; exit $e
 ```
 
 ```text
@@ -329,7 +344,7 @@ says so is refused, because lanes build there:
 
 ```sh
 cd swarm && cp machines/hbox.md ../hbox.md && sed -i.bak 's/^memcap: 48$/memcap: 48\nunreachable: true/' machines/hbox.md && rm machines/hbox.md.bak
-obend open | grep 'machines/hbox' | cut -c1-200; cp ../hbox.md machines/hbox.md && obend open > /dev/null
+obend open | grep 'machines/hbox' | python3 "$OBEND_ROOT/lean/tests/vault/swarm/tools/prefix.py" 200; cp ../hbox.md machines/hbox.md && obend open > /dev/null
 ```
 
 ```text
@@ -349,7 +364,7 @@ cp -R "$OBEND_ROOT/lean/tests/vault/swarm" jobs && cd jobs && cp lanes/lane-cost
 sed 's/^state: running$/state: running\njob: running\npidfile: "bb2:\/home\/build\/obend\/logs\/large1.pid"/; s/^\(Brief: .*\)\.$/\1, [[machines\/bb2]]./' ../cost.md > lanes/lane-cost.md
 sed 's/^state: running$/state: running\njob: running\npidfile: "bb2:\/home\/build\/obend\/logs\/holetyping-t2.pid"/; s/^\(Brief: .*\)\.$/\1, [[machines\/bb2]]./' ../holetyping.md > lanes/lane-holetyping.md
 printf -- '- [[lanes/lane-holetyping]]\n- [[lanes/lane-cost]]\n' >> machines/bb2.md
-obend open > ../jobs.txt 2>&1; echo "exit $?"; grep -e bb2 -e 'lane-cost' -e 'lane-holetyping' -e 'not born' ../jobs.txt | cut -c1-150
+obend open > ../jobs.txt 2>&1; echo "exit $?"; grep -e bb2 -e 'lane-cost' -e 'lane-holetyping' -e 'not born' ../jobs.txt | python3 "$OBEND_ROOT/lean/tests/vault/swarm/tools/prefix.py" 150
 ```
 
 ```text
@@ -459,7 +474,7 @@ refused: the form report-cost was issued against the prefix and stands; retire i
 lane-cost's report has landed, so its brief is retired with the forget; lane-sdr's fork is abandoned:
 
 ```sh
-cd swarm && obend forget eod --abandon lane-sdr --retire report-cost && obend log | head -1 | cut -c1-120
+cd swarm && obend forget eod --abandon lane-sdr --retire report-cost && obend log | head -1 | python3 "$OBEND_ROOT/lean/tests/vault/swarm/tools/prefix.py" 120
 ```
 
 ```text

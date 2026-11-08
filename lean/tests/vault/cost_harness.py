@@ -72,6 +72,9 @@ class GitBaseline(unittest.TestCase):
                     with open(path, "wb") as f:
                         f.write(data)
                 self.assertEqual(large.log_bytes(work), 15)
+                with open(os.path.join(work, ".obend", "checkpoint"), "wb") as f:
+                    f.write(b"obend-checkpoint 1 17 130 200 99 0\n{world}")
+                self.assertEqual(large.records(work), (17, 200))
             finally:
                 large.WORK = old
 

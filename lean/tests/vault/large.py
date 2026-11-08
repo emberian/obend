@@ -3,7 +3,7 @@
 
     python3 tests/vault/large.py --work DIR [--pages 2000] [--records 10000] [--bursts 10,100,1000,5000]
                                  [--every 500] [--batch 10]
-                                 [--binary PATH] [--no-git]
+                                 [--binary PATH] [--no-git] [--from-vault SNAPSHOT]
 
 From lean/, after `lake build obend`. DIR must not exist; it is kept.
 
@@ -26,6 +26,10 @@ measures `git status --porcelain --untracked-files=all -- '*.md'`, `git add -- '
 after every command that changed markdown. This is a persistence baseline, not equivalent judging:
 Git does not enforce the laws, keep refused writes, or explain a merge. An unchanged tree costs status
 alone. Forks start with a seeded Git snapshot; seeding is excluded from both command timings.
+`--from-vault` copies an already initialized, quiescent fixture and skips genesis. This allows paired
+recovery and rejoin measurements from one identical snapshot; it is not an initial-open measurement.
+Record counts come from the checkpoint header after a successful command. The benchmark does not
+insert a full `obend log` replay merely to count records; log replay is a separate acceptance gate.
 """
 import csv
 import hashlib
@@ -34,6 +38,7 @@ import os
 import platform
 import random
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -59,6 +64,7 @@ RECORDS = int(arg("--records", "10000"))
 BURSTS = [int(x) for x in arg("--bursts", "10,100,1000,5000").split(",") if x]
 EVERY = int(arg("--every", "500"))
 BATCH = int(arg("--batch", "10"))
+SOURCE = arg("--from-vault", "")
 COSTLOG = os.path.join(WORK, "cost.log")
 ENV = dict(os.environ, OBEND_COST=COSTLOG, LC_ALL="C.UTF-8")
 rng = random.Random(7)
@@ -104,9 +110,10 @@ def git_measure(cwd):
     return times
 
 
-def record_measurement(cwd, args, elapsed, returncode, lines, git_cost):
+def record_measurement(cwd, args, elapsed, returncode, lines, git_cost, stdout="", stderr=""):
     row = dict(phase=PHASE, vault=os.path.relpath(cwd, WORK), command=" ".join(args),
-               wall_ms=elapsed, exit=returncode, read=0, wrote=0, ms=0, replayed=0, checkpoint=0,
+               wall_ms=elapsed, exit=returncode, stdout_bytes=len(stdout.encode("utf-8")),
+               stderr_bytes=len(stderr.encode("utf-8")), read=0, wrote=0, ms=0, replayed=0, checkpoint=0,
                read_ms=0, judge_ms=0, land_ms=0, write_ms=0, other_ms=0,
                git_status_ms="", git_add_ms="", git_commit_ms="", git_changed_files="")
     for line in lines:
@@ -142,12 +149,14 @@ def obend(cwd, *args, check=True):
     os.remove(pidfile)
     LAST_LINES = read_costs()
     git_cost = git_measure(cwd)
-    record_measurement(cwd, args, elapsed, p.returncode, LAST_LINES, git_cost)
+    record_measurement(cwd, args, elapsed, p.returncode, LAST_LINES, git_cost, out, err)
     LAST_GIT = ("git: status {git_status_ms:.3f} ms, add {git_add_ms:.3f} ms, "
                 "commit {git_commit_ms:.3f} ms, {git_changed_files} changed files").format(**git_cost) if GIT else ""
     r = subprocess.CompletedProcess(p.args, p.returncode, out, err)
     if check and r.returncode != 0:
         sys.exit(f"obend {' '.join(args)} in {cwd}: exit {r.returncode}\n{r.stdout}\n{r.stderr}")
+    if r.returncode in (0, 1) and not any(COST_LINE.match(line) for line in LAST_LINES):
+        sys.exit(f"obend {' '.join(args)} produced no cost record; cannot measure this binary")
     return r
 
 
@@ -177,10 +186,12 @@ def index(k, cap):
 
 
 def records(vault):
-    r = obend(vault, "log")
-    m = re.search(r"^log: (\d+) records, (\d+) bytes", r.stdout, re.M)
-    last_costs()
-    return int(m.group(1)), int(m.group(2))
+    """The successful command's checkpoint count and logical log length (not a replay)."""
+    with open(os.path.join(vault, ".obend", "checkpoint"), "rb") as f:
+        header = f.readline(200).decode("ascii").split()
+    if len(header) not in (6, 7) or header[:2] != ["obend-checkpoint", "1"]:
+        raise ValueError(f"unrecognized checkpoint header in {vault}: {header}")
+    return int(header[2]), int(header[4])
 
 
 def log_bytes(vault):
@@ -201,25 +212,32 @@ def main():
     if not os.path.isfile(BIN):
         sys.exit(f"binary not found: {BIN}")
     vault = os.path.join(WORK, "vault")
-    os.makedirs(os.path.join(vault, "acct"))
+    if SOURCE:
+        shutil.copytree(SOURCE, vault, ignore=shutil.ignore_patterns(".git", "lock"))
+        git_init(vault, seed=True)
+    else:
+        os.makedirs(os.path.join(vault, "acct"))
     with open(BIN, "rb") as f:
         digest = hashlib.file_digest(f, "sha256").hexdigest()
     with open(os.path.join(WORK, "run.json"), "w", encoding="utf-8") as f:
         json.dump(dict(binary=BIN, binary_sha256=digest, machine=platform.uname()._asdict(),
                        git_version=git(vault, "--version").stdout.strip() if GIT else None,
                        pages=PAGES, records=RECORDS, bursts=BURSTS, every=EVERY, batch=BATCH,
-                       seed=7, argv=sys.argv), f, indent=2)
+                       seed=7, source_vault=os.path.abspath(SOURCE) if SOURCE else None, argv=sys.argv), f, indent=2)
     balances = [rng.randint(0, 60) for _ in range(PAGES)]
-    for i in range(PAGES):
-        open(os.path.join(vault, "acct", f"P{i:04d}.md"), "w").write(page(i, balances[i]))
-    for k in range(0, PAGES, 100):
-        open(os.path.join(vault, f"Index{k // 100:02d}.md"), "w").write(index(k, 100))
     print(f"binary: {BIN}; seed: 7; pages: {PAGES}; target records: {RECORDS}; bursts: {BURSTS}", flush=True)
-    obend(vault, "open")
-    print(f"pages: {PAGES} accounts, {(PAGES + 99) // 100} indexes; open in {LAST_WALL_MS / 1000:.2f} s")
-    for l in last_costs():
-        print("  " + l)
-    sys.stdout.flush()
+    if SOURCE:
+        print(f"copied initialized fixture: {os.path.abspath(SOURCE)} (genesis excluded)", flush=True)
+    else:
+        for i in range(PAGES):
+            open(os.path.join(vault, "acct", f"P{i:04d}.md"), "w").write(page(i, balances[i]))
+        for k in range(0, PAGES, 100):
+            open(os.path.join(vault, f"Index{k // 100:02d}.md"), "w").write(index(k, 100))
+        obend(vault, "open")
+        print(f"pages: {PAGES} accounts, {(PAGES + 99) // 100} indexes; open in {LAST_WALL_MS / 1000:.2f} s")
+        for l in last_costs():
+            print("  " + l)
+        sys.stdout.flush()
 
     PHASE = "unchanged"
     obend(vault, "open")
