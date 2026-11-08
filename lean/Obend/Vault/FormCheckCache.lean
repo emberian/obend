@@ -20,9 +20,16 @@ namespace Obend.Vault.Form
 
 set_option autoImplicit false
 
-/-- A cheap bucket key. Distinct checks in one bucket are compared in full. -/
-instance : Hashable CheckUnit where
-  hash u := hash (u.page, u.pkg, u.laws, u.req)
+/- Hash every part of a check, including its types and terms. Equality, never the hash alone,
+decides reuse. These structural instances do not change the equality of any source type. -/
+deriving instance Hashable for Obend.Core.Ty.Quantity
+deriving instance Hashable for Obend.Core.Ty.Reuse
+deriving instance Hashable for Obend.Core.Ty.Ty
+deriving instance Hashable for Obend.Core.Ty.Binding
+deriving instance Hashable for Obend.Core.Check.HoleDecl
+deriving instance Hashable for Obend.Core.Term.Primitive
+deriving instance Hashable for Obend.Core.Term.Term
+deriving instance Hashable for CheckUnit
 
 /-- A key together with the unit already constructed from it. The proof is erased at runtime. -/
 structure KeyUnit where
@@ -129,5 +136,19 @@ def classifyCached (checked : List Checked) (form : String) (moved : List String
 @[csimp] theorem classify_eq_cached : @classify = @classifyCached := by
   funext checked form moved calls
   simp only [classify, classifyCached, capturedUnits_contains]
+
+/-- The overlap count for the classifier's own result. -/
+def recheckedClassified (checked : List Checked) (form : String) (moved : List String)
+    (calls : List (String × JudgeCall)) : Nat :=
+  rechecked checked form (classify checked form moved calls)
+
+/-- A classifier never checks a kept unit again (`rechecked_zero`). -/
+def recheckedClassifiedZero (_ : List Checked) (_ : String) (_ : List String)
+    (_ : List (String × JudgeCall)) : Nat := 0
+
+/-- Computing this diagnostic needs neither a second membership scan nor another checker call. -/
+@[csimp] theorem recheckedClassified_eq_zero : @recheckedClassified = @recheckedClassifiedZero := by
+  funext checked form moved calls
+  exact rechecked_zero checked form moved calls
 
 end Obend.Vault.Form
