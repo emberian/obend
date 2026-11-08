@@ -268,6 +268,7 @@ def main():
         else:
             os.makedirs(os.path.join(vault, "acct"))
         manifest = dict(binary=BIN, binary_sha256=digest, machine=platform.uname()._asdict(),
+                        cpu_affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
                         git_version=git(vault, "--version").stdout.strip() if GIT else None,
                         pages=PAGES, records=RECORDS, bursts=BURSTS, every=EVERY, batch=BATCH,
                         seed=7, source_vault=os.path.abspath(SOURCE) if SOURCE else None, argv=sys.argv,
