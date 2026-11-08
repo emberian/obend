@@ -18,7 +18,9 @@ Every command says what it cost (`OBEND_COST`, `Obend.Vault.Cost`): the bytes it
 time, the records it replayed and the checkpoint it read. The runner sums them per step into
 tests/vault/COST.tsv (the rows of this walkthrough replaced) and compares each step with
 tests/vault/COST.baseline.tsv: a step whose bytes, records or time more than double (beyond a floor:
-4096 bytes, 16 records, 250 ms) is a failure, with the numbers.
+4096 bytes, 16 records, 250 ms) is a failure, with the numbers. Missing baseline rows or changed
+command sequences also fail: a changed walkthrough must be deliberately re-baselined, never silently
+excluded from the performance gate. A failing functional walkthrough cannot replace its baseline.
 """
 import os
 import re
@@ -76,12 +78,17 @@ def step_cost(path, name, step, line):
 
 
 def compare(rows, base):
-    """The steps that more than doubled a measure against the baseline, as messages."""
+    """Require complete baseline coverage, then compare each step's measurements."""
     bad = []
     by = {(b["walkthrough"], b["step"]): b for b in base}
     for r in rows:
         b = by.get((r["walkthrough"], str(r["step"])))
-        if b is None or b["commands"] != r["commands"]:
+        if b is None:
+            bad.append(f"COST step {r['step']} (line {r['line']}): missing baseline; run --cost-baseline")
+            continue
+        if b["commands"] != r["commands"]:
+            bad.append(f"COST step {r['step']} (line {r['line']}): commands changed "
+                       f"{b['commands']} -> {r['commands']}; run --cost-baseline")
             continue
         for m in MEASURES:
             was, now = int(b[m]), int(r[m])
@@ -170,18 +177,19 @@ def main():
         print(f"recorded {len(edits)} outputs into {DOC}")
     write_tsv(COST, name, costs)
     if "--cost-baseline" in args:
-        write_tsv(BASELINE, name, costs)
-        print(f"cost baseline: {len(costs)} steps of {name} into {BASELINE}")
+        if failures:
+            print("cost baseline unchanged: functional checks failed")
+        else:
+            write_tsv(BASELINE, name, costs)
+            print(f"cost baseline: {len(costs)} steps of {name} into {BASELINE}")
     else:
         base = [b for b in read_tsv(BASELINE) if b["walkthrough"] == name]
-        if not base:
-            print(f"cost: no baseline for {name} (--cost-baseline makes one)")
-        stale = sum(1 for r in costs for b in base if str(r["step"]) == b["step"] and r["commands"] != b["commands"])
-        if stale:
-            print(f"cost: {stale} step(s) of {name} run other commands than the baseline (not compared)")
-        for msg in compare(costs, base):
+        cost_failures = compare(costs, base)
+        for msg in cost_failures:
             failures += 1
             print(msg)
+        if not cost_failures:
+            print(f"cost: all {len(costs)} steps compared against {BASELINE}")
     if failures:
         print(f"{failures} failure(s); work directory kept: {work}")
         sys.exit(1)
