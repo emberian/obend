@@ -211,7 +211,7 @@ def compileLiteMethodToTile (memberName : String) (body : LExpr) : Option Automa
 * `tileId`: unique linear tile address on the ICAP configuration bus,
 * `tileX`, `tileY`: 2D mesh coordinates $(x, y)$ on the silicon die,
 * `activeTile`: currently loaded `AutomatonTile` datapath configuration,
-* `frameDigest`: 64-bit cryptographic / CRC digest of the currently active configuration frame,
+* `frameCrc64`: 64-bit hardware CRC-64 checksum of the currently active configuration frame,
 * `isolated`: when `true`, the PR isolation fence decouples the tile's combinational output from
   the surrounding fabric and holds the last quiescent value `skidHeldOutput`,
 * `skidHeldOutput`: safe latched output value driven while `isolated = true`. -/
@@ -220,7 +220,7 @@ structure ReconfigTileState where
   tileX          : Nat
   tileY          : Nat
   activeTile     : AutomatonTile
-  frameDigest    : BitVec 64
+  frameCrc64     : BitVec 64
   isolated       : Bool
   skidHeldOutput : BitVec 64
   deriving DecidableEq, Repr
@@ -280,7 +280,7 @@ mid-cycle (`evalReconfigTile` jumps from `11#64` to `40#64` on `argVal = 10#64`)
 theorem unisolated_dpr_glitch_possible :
     let unisolatedTile : ReconfigTileState :=
       { tileId := 0, tileX := 0, tileY := 0
-      , activeTile := incAutomatonTile, frameDigest := 0xA001#64
+      , activeTile := incAutomatonTile, frameCrc64 := 0xA001#64
       , isolated := false, skidHeldOutput := 11#64 }
     let wireEnv : Nat → BitVec 64 := fun _ => 0#64
     let regEnv  : Nat → BitVec 64 := fun _ => 0#64
@@ -297,20 +297,20 @@ theorem unisolated_dpr_glitch_possible :
 /-- Configuration frame packet streamed into the Internal Configuration Access Port (`ICAP`):
 * `targetTileId`: tile ID to reconfigure,
 * `newTile`: new `AutomatonTile` datapath to load into the tile,
-* `expectedDigest`: expected 64-bit frame CRC / Merkle digest from the signed bitstream header,
-* `computedDigest`: hardware CRC / digest computed over the received configuration words. -/
+* `expectedCrc64`: expected 64-bit frame CRC-64 from the bitstream frame header,
+* `computedCrc64`: hardware CRC-64 computed over the received configuration words. -/
 structure IcapBitstreamFrame where
   targetTileId   : Nat
   newTile        : AutomatonTile
-  expectedDigest : BitVec 64
-  computedDigest : BitVec 64
+  expectedCrc64  : BitVec 64
+  computedCrc64  : BitVec 64
   deriving DecidableEq, Repr
 
 /-- Multi-tile eFPGA Dynamic Partial Reconfiguration (DPR) array state:
 * `tiles`: list of reconfigurable tiles on the die,
 * `skidBufferPkts`: elastic skid-buffer queue holding in-flight `ReductionPacket`s during DPR,
 * `icapBusy`: status flag indicating whether an ICAP transaction is in progress,
-* `crcErrorCount`: count of rejected corrupt bitstream frames (`computedDigest ≠ expectedDigest`). -/
+* `crcErrorCount`: count of rejected corrupt bitstream frames (`computedCrc64 ≠ expectedCrc64`). -/
 structure EfpgaDprArray where
   tiles          : List ReconfigTileState
   skidBufferPkts : List ReductionPacket
@@ -330,25 +330,25 @@ def dprPhase1Isolate (targetTileId : Nat) (t : ReconfigTileState) : ReconfigTile
 /-- **DPR Phase 2 (`dprPhase2LoadFrame`)**:
 Write `frame.newTile` via the `ICAP` port ONLY if `t.tileId == frame.targetTileId`, the tile is
 currently isolated (`t.isolated = true`), and the bitstream frame CRC matches
-(`frame.computedDigest == frame.expectedDigest`). -/
+(`frame.computedCrc64 == frame.expectedCrc64`). -/
 def dprPhase2LoadFrame (frame : IcapBitstreamFrame) (t : ReconfigTileState) : ReconfigTileState :=
   if t.tileId == frame.targetTileId then
-    if t.isolated && (frame.computedDigest == frame.expectedDigest) then
+    if t.isolated && (frame.computedCrc64 == frame.expectedCrc64) then
       { t with
-        activeTile  := frame.newTile
-        frameDigest := frame.computedDigest }
+        activeTile := frame.newTile
+        frameCrc64 := frame.computedCrc64 }
     else
       t
   else
     t
 
 /-- **DPR Phase 3 (`dprPhase3ReleaseFence`)**:
-After verifying that the loaded frame digest matches `frame.expectedDigest`, release the Region
+After verifying that the loaded frame CRC matches `frame.expectedCrc64`, release the Region
 Isolation Fence (`isolated := false`) so the newly specialized tile goes live on the next clock edge.
 If the CRC check failed, the tile remains safely isolated (`isolated := true`). -/
 def dprPhase3ReleaseFence (frame : IcapBitstreamFrame) (t : ReconfigTileState) : ReconfigTileState :=
   if t.tileId == frame.targetTileId then
-    if frame.computedDigest == frame.expectedDigest then
+    if frame.computedCrc64 == frame.expectedCrc64 then
       { t with isolated := false }
     else
       { t with isolated := true }
@@ -362,7 +362,7 @@ def runTileGlitchFreeDpr (frame : IcapBitstreamFrame) (t : ReconfigTileState) : 
 
 /-- Execute the 3-phase Glitch-Free DPR transaction across an entire `EfpgaDprArray`. -/
 def runGlitchFreeDpr (arr : EfpgaDprArray) (frame : IcapBitstreamFrame) : EfpgaDprArray :=
-  let crcOk := frame.computedDigest == frame.expectedDigest
+  let crcOk := frame.computedCrc64 == frame.expectedCrc64
   { tiles          := arr.tiles.map (runTileGlitchFreeDpr frame)
   , skidBufferPkts := arr.skidBufferPkts
   , icapBusy       := false
@@ -396,13 +396,13 @@ theorem dpr_preserves_neighbor_tiles_and_packets
     cases hContra
 
 /-- Theorem (`dpr_corrupt_crc_keeps_tile_isolated`):
-If a bitstream frame suffers a bit-flip in transit (`(frame.computedDigest == frame.expectedDigest) = false`),
+If a bitstream frame suffers a bit-flip in transit (`(frame.computedCrc64 == frame.expectedCrc64) = false`),
 `runTileGlitchFreeDpr` refuses to load `frame.newTile` (`activeTile = t.activeTile`) and keeps the
 target tile safely isolated (`isolated = true`) so corrupt logic can never drive the chip! -/
 theorem dpr_corrupt_crc_keeps_tile_isolated
     (frame : IcapBitstreamFrame) (t : ReconfigTileState)
     (hTarget : (t.tileId == frame.targetTileId) = true)
-    (hCorrupt : (frame.computedDigest == frame.expectedDigest) = false) :
+    (hCorrupt : (frame.computedCrc64 == frame.expectedCrc64) = false) :
     (runTileGlitchFreeDpr frame t).activeTile = t.activeTile ∧
     (runTileGlitchFreeDpr frame t).isolated = true := by
   have h1 : dprPhase1Isolate frame.targetTileId t = { t with isolated := true } := by
@@ -440,7 +440,7 @@ def affine3xPlus7Tile : AutomatonTile :=
 
 /-- Theorem (`dpr_specialized_tile_executes_new_book`):
 1. For any tile `t` with `(t.tileId == frame.targetTileId) = true` and valid frame CRC
-   `(frame.computedDigest == frame.expectedDigest) = true`, running the 3-phase Glitch-Free DPR
+   `(frame.computedCrc64 == frame.expectedCrc64) = true`, running the 3-phase Glitch-Free DPR
    protocol (`runTileGlitchFreeDpr frame t`) installs `frame.newTile`, releases `isolated = false`,
    and evaluates `frame.newTile.datapath` on every subsequent input `argVal`, and
 2. Specifically, lowering the `Lean-lite` function `leanLiteAffine3xPlus7` ($x \mapsto 3x + 7$)
@@ -451,7 +451,7 @@ theorem dpr_specialized_tile_executes_new_book
     (frame : IcapBitstreamFrame) (t : ReconfigTileState)
     (wireEnv regEnv : Nat → BitVec 64) (argVal : BitVec 64)
     (hTarget : (t.tileId == frame.targetTileId) = true)
-    (hCrcOk  : (frame.computedDigest == frame.expectedDigest) = true) :
+    (hCrcOk  : (frame.computedCrc64 == frame.expectedCrc64) = true) :
     (runTileGlitchFreeDpr frame t).activeTile = frame.newTile ∧
     (runTileGlitchFreeDpr frame t).isolated = false ∧
     evalReconfigTile (runTileGlitchFreeDpr frame t) wireEnv regEnv argVal =
@@ -459,25 +459,25 @@ theorem dpr_specialized_tile_executes_new_book
     compileLiteMethodToTile "affine3xPlus7" leanLiteAffine3xPlus7 = some affine3xPlus7Tile ∧
     (let initTile : ReconfigTileState :=
        { tileId := 0, tileX := 0, tileY := 0
-       , activeTile := incAutomatonTile, frameDigest := 0x1000#64
+       , activeTile := incAutomatonTile, frameCrc64 := 0x1000#64
        , isolated := false, skidHeldOutput := 11#64 }
      let icapFrame : IcapBitstreamFrame :=
        { targetTileId := 0, newTile := affine3xPlus7Tile
-       , expectedDigest := 0x3007#64, computedDigest := 0x3007#64 }
+       , expectedCrc64 := 0x3007#64, computedCrc64 := 0x3007#64 }
      let reconfigured := runTileGlitchFreeDpr icapFrame initTile
      evalReconfigTile initTile (fun _ => 0#64) (fun _ => 0#64) 10#64 = 11#64 ∧
      evalReconfigTile reconfigured (fun _ => 0#64) (fun _ => 0#64) 10#64 = 37#64) := by
   have h1 : dprPhase1Isolate frame.targetTileId t = { t with isolated := true } := by
     simp [dprPhase1Isolate, hTarget]
   have h2 : dprPhase2LoadFrame frame { t with isolated := true } =
-      { t with activeTile := frame.newTile, frameDigest := frame.computedDigest, isolated := true } := by
+      { t with activeTile := frame.newTile, frameCrc64 := frame.computedCrc64, isolated := true } := by
     simp [dprPhase2LoadFrame, hTarget, hCrcOk]
   have h3 : dprPhase3ReleaseFence frame
-      { t with activeTile := frame.newTile, frameDigest := frame.computedDigest, isolated := true } =
-      { t with activeTile := frame.newTile, frameDigest := frame.computedDigest, isolated := false } := by
+      { t with activeTile := frame.newTile, frameCrc64 := frame.computedCrc64, isolated := true } =
+      { t with activeTile := frame.newTile, frameCrc64 := frame.computedCrc64, isolated := false } := by
     simp [dprPhase3ReleaseFence, hTarget, hCrcOk]
   have hAll : runTileGlitchFreeDpr frame t =
-      { t with activeTile := frame.newTile, frameDigest := frame.computedDigest, isolated := false } := by
+      { t with activeTile := frame.newTile, frameCrc64 := frame.computedCrc64, isolated := false } := by
     simp [runTileGlitchFreeDpr, h1, h2, h3]
   rw [hAll]
   exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
@@ -1756,16 +1756,16 @@ theorem noc_multi_hop_delivery_and_eval_sound
 
 /-- Hardware Dynamic Partial Reconfiguration (DPR) Bitstream Candidate (`TileBitstreamCandidate`)
 for an eFPGA `AutomatonTile` managed by `Obend.Slot`:
-* `specializedTile`: a specialized hardware bitstream (`tile : AutomatonTile`, `frameDigest : BitVec 64`)
+* `specializedTile`: a specialized hardware bitstream (`tile : AutomatonTile`, `frameCrc64 : BitVec 64`)
   synthesized from an `Obend.Leaf.Composition` `comp` under object `name`, guarded by `LeafPin`s
   `(.book name comp).supports`,
 * `baselineTile`: the always-usable resident fallback `AutomatonTile` (`supports = []`, `judge = true`). -/
 inductive TileBitstreamCandidate where
-  | specializedTile (name : String) (comp : Composition) (tile : AutomatonTile) (frameDigest : BitVec 64)
+  | specializedTile (name : String) (comp : Composition) (tile : AutomatonTile) (frameCrc64 : BitVec 64)
   | baselineTile    (tile : AutomatonTile)
 
 /-- The `LeafPin` supports assumed by a `TileBitstreamCandidate`:
-* A `specializedTile name C tile digest` assumes the exact pins of `Candidate.book name C`
+* A `specializedTile name C tile crc` assumes the exact pins of `Candidate.book name C`
   (`⟨.object name, C.code⟩ :: C.layers.map fun L => ⟨.layer L.name, L.code⟩`),
 * A `baselineTile` assumes no pins (`[]`) and is always usable. -/
 def TileBitstreamCandidate.supports : TileBitstreamCandidate → List LeafPin
@@ -1773,11 +1773,11 @@ def TileBitstreamCandidate.supports : TileBitstreamCandidate → List LeafPin
   | .baselineTile _             => []
 
 /-- Admission judge for a `TileBitstreamCandidate`:
-* A `specializedTile name C tile digest` is admitted when `C.closedB = true` and `frameDigest != 0#64`,
+* A `specializedTile name C tile crc` is admitted when `C.closedB = true` and `crc != 0#64`,
 * A `baselineTile` is always admitted (`true`). -/
 def TileBitstreamCandidate.judge : TileBitstreamCandidate → Bool
-  | .specializedTile _ C _ digest => C.closedB && (digest != 0#64)
-  | .baselineTile _               => true
+  | .specializedTile _ C _ crc => C.closedB && (crc != 0#64)
+  | .baselineTile _            => true
 
 /-- Extract the active hardware `AutomatonTile` from a `TileBitstreamCandidate`. -/
 def TileBitstreamCandidate.hwTile : TileBitstreamCandidate → AutomatonTile

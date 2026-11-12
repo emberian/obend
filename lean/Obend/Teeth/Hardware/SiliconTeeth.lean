@@ -377,10 +377,10 @@ def fxSqrtZero (_a : Nat) : Nat := 0
 
 #tooth Obend.Hardware.PCB.fxSqrt_enclosure by mutation Obend.Hardware.PCB.fxSqrt := fxSqrtZero
 
-/-- 29. Broken `dprPhase2LoadFrame` in `Obend.Hardware.ReductionMachine` that loads `frame.newTile` without checking `frame.computedDigest == frame.expectedDigest`. -/
+/-- 29. Broken `dprPhase2LoadFrame` in `Obend.Hardware.ReductionMachine` that loads `frame.newTile` without checking `frame.computedCrc64 == frame.expectedCrc64`. -/
 def dprPhase2IgnoreCrc (frame : IcapBitstreamFrame) (t : ReconfigTileState) : ReconfigTileState :=
   if t.tileId == frame.targetTileId then
-    { t with activeTile := frame.newTile, frameDigest := frame.computedDigest }
+    { t with activeTile := frame.newTile, frameCrc64 := frame.computedCrc64 }
   else
     t
 

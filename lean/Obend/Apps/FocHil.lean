@@ -19,7 +19,7 @@ public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.TaylorModel
 public import Obend.Analysis.SosLyapunov
 public import Obend.Analysis.EqSatHypergraph
-public meta import Lean
+meta import Lean
 public meta import Obend.Core.Term
 public meta import Obend.Law
 public meta import Obend.Spec.Syntax

@@ -26,7 +26,7 @@ devices: it pins the current to 0.3 % at −0.7 V, 15 % at −0.6 V, and says no
 public import Obend.Hardware.Device.Sky130Diode
 public import Obend.Teeth.Hardware.DeviceCertificates
 public import Lean
-public meta import Lean
+meta import Lean
 public meta import Obend.Analysis.RealAnalysis
 public meta import Obend.Judge.Class
 public meta import Obend.Hardware.Device.Enclosure

@@ -80,11 +80,11 @@ public import Obend.Vault.Mandate
 public import Obend.Vault.Rehydration
 public import Obend.Vault.Form
 public import Obend.Vault.FormCheck
-public import Obend.Vault.Carry
-public import Obend.Vault.DragonsExchange
+public import Obend.Vault.CheckedCarry
+public import Obend.Vault.ChunkedWorld
 public import Obend.Vault.HardwareProjection
 public import Obend.Vault.PhysicalProjection
-public import Obend.Vault.SovereignEngine
+public import Obend.Vault.UnifiedDeos
 public import Obend.Vault.Branch
 public import Obend.Vault.BranchCli
 public import Obend.Vault.Merge

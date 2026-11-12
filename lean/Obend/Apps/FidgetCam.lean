@@ -23,7 +23,7 @@ public import Obend.Leaf.Emit
 public import Obend.Leaf.Flatten
 public import Obend.Tactic.Tooth
 public import Obend.Elab.Workbook
-public meta import Lean
+meta import Lean
 public meta import Obend.Hardware.UserspacePhysical
 public meta import Obend.Elab.Workbook
 public import Obend.Hardware.Kinematics

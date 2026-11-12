@@ -65,3 +65,11 @@ public import Obend.Analysis.SosLyapunov
 public import Obend.Analysis.Equitable
 public import Obend.Analysis.QuantumWalk
 public import Obend.Analysis.EqSatHypergraph
+public import Obend.Analysis.Hybrid
+public import Obend.Category
+public import Obend.Repair
+public import Obend.Tactic.Compositional
+public import Obend.Crypto
+public import Obend.Trailblaze.Obligations
+public import Obend.Trailblaze.Polis
+public import Obend.Trailblaze.LeanFpga

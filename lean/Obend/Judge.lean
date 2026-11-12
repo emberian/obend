@@ -28,8 +28,10 @@ public import Obend.Judge.Certified
 public import Obend.Judge.AutomataConfinement
 public import Obend.Judge.TranscriptPolicy
 public import Obend.Judge.Clearing
+public import Obend.Judge.Netting
 public import Obend.Judge.Genealogy
 public import Obend.Judge.RealAnalysis
+public import Obend.Run.HyperLaw
 public import Obend.Analysis.Hybrid
 public import Obend.Analysis.SosLyapunov
 public import Obend.Analysis.Format
@@ -65,6 +67,8 @@ goal `1 ≥ 0`) makes every witness naming it pass, so it was removed on 2026-11
   [ Lrat.format
   , drexClearingFormat
   , Obend.Logic.clearingFormat
+  , nettingFormat
+  , Obend.Run.HyperLaw.glEquilibriumFormat
   , intervalBoundFormat
   , Obend.Elab.AutoCert.intervalFormat
   , Obend.Elab.AutoCert.taylorModelFormat

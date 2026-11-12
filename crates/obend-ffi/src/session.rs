@@ -3,11 +3,14 @@ use crate::pool::ensure_lean_thread_initialized;
 use crate::sys;
 use std::ptr;
 
+/// Opaque handle to a Lean-backed Obend evaluation session (`lean/c/obend_bridge.c`).
+///
+/// Intentionally `!Send + !Sync`: Lean's runtime uses single-threaded reference counting
+/// (`m_rc > 0` heap affinity in `lean/c/obend_bridge.c:114`), so a session must stay pinned
+/// to the OS thread that initialized and allocated it.
 pub struct ObendSession {
     handle: *mut sys::Session,
 }
-
-unsafe impl Send for ObendSession {}
 
 impl ObendSession {
     pub fn new() -> Result<Self, ObendError> {

@@ -45,8 +45,8 @@ accepted history across replanning, revocation and lost replies.
 - `Obend.Run.Negotiation`: the stranger's example (revocation, a slot's replan, a lost reply), the
   fixture `interpret` delivers and the runner refuses, and the durable-spending ticket.
 - `Obend.Run.HyperLaw`: `G5` Effect Laws Designs C and D: `k=2` relational safety hyperproperties
-  and observational non-interference (`checkHyperLaw2NonInterference_sound`), and the `Oracle7`
-  Gelfond-Lifschitz modal `□` epistemic equilibrium judge (`oracle7Judge`, `checkOracle7Equilibrium_sound`).
+  and observational non-interference (`checkHyperLaw2NonInterference_sound`), and the
+  Gelfond–Lifschitz modal `□` epistemic equilibrium judge (`glEquilibriumJudge`, `checkGLEquilibrium_sound`).
 -/
 public import Obend.Run.Runner
 public import Obend.Run.Spec

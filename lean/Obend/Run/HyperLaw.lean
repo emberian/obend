@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Run.HyperLaw — G5 Effect Laws: Design C (2-Trace HyperLaws) & Design D (Oracle7 Modal Equilibrium)
+# Obend.Run.HyperLaw — G5 Effect Laws: Design C (2-Trace HyperLaws) & Design D (GL Modal Equilibrium)
 
 Implements `G5` Effect Laws Designs C and D from `review/DECISIONS-LEDGER.md` and
 `ASTRA-EFFECT-LAWS-20261031.md` (§4–§5):
@@ -14,20 +14,25 @@ Implements `G5` Effect Laws Designs C and D from `review/DECISIONS-LEDGER.md` an
      universal 2-trace relational safety via `checkHyperLaw2NonInterference` with proved soundness
      `checkHyperLaw2NonInterference_sound` and a `#tooth` mutation witness refusing a leaking trace pair.
 
-2. **Design D (`Oracle7` — Gelfond-Lifschitz Reduct Modal `□` Epistemic Equilibrium Judge)**:
+2. **Design D (`glEquilibriumJudge` — Gelfond–Lifschitz Reduct Modal `□` Epistemic Equilibrium Judge)**:
    - Stratified negation (`Law.Stratified`) forbids recursive cycles through negation (`¬`).
      Unstratified epistemic rules (`head ← posBody ∧ ¬□negBody`, e.g., default/justification rules
-     in policy and epistemic equilibrium semantics) are judged via the Gelfond-Lifschitz (GL) reduct:
-     given a candidate epistemic belief set `candidate : FactSet`, `glReduct prog candidate`
-     evaluates all modal negative literals `¬□b` against `candidate`, yielding a positive Horn
-     program whose least Herbrand model (`leastModelFuel`) must equal `candidate` up to set
-     equivalence (`checkOracle7Equilibrium`).
-   - Instantiates `oracle7Judge : Obend.Judge ModalProgram FactSet` (and registered format
-     `oracle7Format : Obend.Judge.Format`) with proved `sound`, `mono`, `complete`, and a `#tooth`
-     refusing the unstable self-defeating modal rule `p ← ¬□p` under both `[]` and `["p"]`.
+     in policy and epistemic equilibrium semantics) are judged via the Gelfond–Lifschitz (1988) reduct
+     routed directly through `Obend.Reasons.gamma`:
+     given a candidate epistemic belief set `candidate : FactSet`, `IsStableEquilibrium prog candidate`
+     states declaratively that `candidate` is closed under `Obend.Reasons.T` of its reduct and minimal
+     among all Herbrand pre-fixpoints (`∀ I, Sub (T P candidate I) I → Sub candidate I`), proved
+     equivalent (`gamma_same_iff_stableEquilibrium`) to `Obend.Reasons.Same (gamma P candidate) candidate`
+     via `Obend.Reasons.gamma_fix` and `Obend.Reasons.gamma_least`.
+   - Instantiates `glEquilibriumJudge : Obend.Judge ModalProgram FactSet` (and registered JSON format
+     `glEquilibriumFormat : Obend.Judge.Format` for `"gl-equilibrium@1"`) with proved `sound`, `mono`,
+     `complete`, and a `#tooth` refusing the unstable self-defeating modal rule `p ← ¬□p` under both
+     `[]` and `["p"]`.
 -/
+public import Lean.Data.Json
 public import Obend.Run.Shared
 public import Obend.Judge.Class
+public import Obend.Reasons
 public import Obend.Tactic.Tooth
 public section
 
@@ -146,7 +151,8 @@ structure SecWorld where
   [(⟨10, 0⟩, ⟨10, 1⟩), (⟨0, 0⟩, ⟨1, 1⟩)]
 
 example :
-    checkHyperLaw2NonInterference secLowView safeTracePair = true := rfl
+    checkLowEquiv secLowView ⟨10, 0⟩ ⟨10, 1⟩ = true ∧
+    checkHyperLaw2NonInterference secLowView safeTracePair = true := ⟨rfl, rfl⟩
 
 theorem leaking_trace_refused :
     checkHyperLaw2NonInterference secLowView leakingTracePair = false := rfl
@@ -156,7 +162,7 @@ theorem leaking_trace_refused :
   fun {_ _} [_] _ _ => true
 
 
-/-! ## Part II — Design D (`Oracle7`): Gelfond-Lifschitz Modal `□` Epistemic Equilibrium Judge -/
+/-! ## Part II — Design D (`glEquilibriumJudge`): Gelfond–Lifschitz Modal `□` Epistemic Equilibrium Judge -/
 
 /-- A ground epistemic atom name. -/
 abbrev Atom := String
@@ -177,143 +183,131 @@ structure ModalRule where
 /-- A finite modal epistemic logic program. -/
 abbrev ModalProgram := List ModalRule
 
-/-- A positive Horn rule produced after eliminating modal negative literals via the
-    Gelfond-Lifschitz reduct. -/
-structure PosRule where
-  head : Atom
-  posBody : List Atom
-  deriving DecidableEq, Repr
+/-- Lower a `ModalRule` to an `Obend.Reasons.Rule` (`concl ← pos, not neg`). -/
+@[expose] def ModalRule.toReasonsRule (r : ModalRule) : Obend.Reasons.Rule :=
+  { name := r.head, concl := r.head, pos := r.posBody, neg := r.negBody }
 
-/-- Whether all atoms in `xs` belong to `facts`. -/
-@[expose] def allIn (xs : List Atom) (facts : FactSet) : Bool :=
-  xs.all (fun a => facts.contains a)
-
-/-- Whether no atom in `xs` belongs to `facts` (used for modal `¬□` preconditions). -/
-@[expose] def noneIn (xs : List Atom) (facts : FactSet) : Bool :=
-  xs.all (fun a => !facts.contains a)
+/-- Lower a `ModalProgram` to an `Obend.Reasons.Program` (`facts := []`). -/
+@[expose] def ModalProgram.toReasonsProgram (prog : ModalProgram) : Obend.Reasons.Program :=
+  { facts := [], rules := prog.map ModalRule.toReasonsRule }
 
 /-- Set inclusion `xs ⊆ ys` on `FactSet`. -/
 @[expose] def factSetSubset (xs ys : FactSet) : Bool :=
-  allIn xs ys
+  xs.all (fun a => ys.contains a)
 
 /-- Extensional set equivalence on `FactSet` (a `#tooth` mutation target):
     every derived atom is in the candidate and every candidate atom is derived. -/
 @[expose] def checkFactSetEquiv (derived candidate : FactSet) : Bool :=
   factSetSubset derived candidate && factSetSubset candidate derived
 
-/-- **Gelfond-Lifschitz Reduct** (`glReduct`): given a modal program `prog` and a candidate
-    epistemic belief set `candidate`, drop every rule whose `negBody` intersects `candidate`
-    and strip `negBody` from the remaining rules to obtain a positive Horn program. -/
-@[expose] def glReduct (prog : ModalProgram) (candidate : FactSet) : List PosRule :=
-  prog.filterMap fun r =>
-    if noneIn r.negBody candidate then
-      some ⟨r.head, r.posBody⟩
-    else
-      none
+theorem factSetSubset_iff_sub (xs ys : FactSet) :
+    factSetSubset xs ys = true ↔ Obend.Reasons.Sub xs ys := by
+  simp [factSetSubset, Obend.Reasons.Sub, List.all_eq_true, List.contains_iff_mem]
 
-/-- One monotone immediate-consequence step `T_P` of a positive Horn program `reduct` over `acc`. -/
-@[expose] def stepPosReduct (reduct : List PosRule) (acc : FactSet) : FactSet :=
-  reduct.foldl (fun cur r =>
-    if allIn r.posBody acc && !cur.contains r.head then
-      cur ++ [r.head]
-    else
-      cur) acc
+theorem checkFactSetEquiv_iff_same (xs ys : FactSet) :
+    checkFactSetEquiv xs ys = true ↔ Obend.Reasons.Same xs ys := by
+  simp only [checkFactSetEquiv, Bool.and_eq_true, factSetSubset_iff_sub, Obend.Reasons.Same]
+  exact ⟨fun ⟨h1, h2⟩ x => ⟨h1 x, h2 x⟩, fun h => ⟨fun x hx => (h x).mp hx, fun x hx => (h x).mpr hx⟩⟩
 
-/-- Fuel-bounded least Herbrand model computation for a positive Horn reduct. -/
-@[expose] def leastModelFuel : Nat → List PosRule → FactSet → FactSet
-  | 0, _, acc => acc
-  | fuel + 1, reduct, acc =>
-    let next := stepPosReduct reduct acc
-    if factSetSubset next acc then
-      acc
-    else
-      leastModelFuel fuel reduct next
-
-/-- Canonical fuel bound (`prog.length + 1`) sufficient to saturate any positive reduct of `prog`. -/
-@[expose] def canonicalFuel (prog : ModalProgram) : Nat :=
-  prog.length + 1
-
-/-- Declarative stable epistemic equilibrium (`IsStableEquilibrium`): a candidate `FactSet` equals
-    (up to extensional set equivalence) the least Herbrand model of its Gelfond-Lifschitz reduct
-    `glReduct prog candidate`, and that least model is closed under the reduct's rules. -/
+/-- **Declarative Gelfond–Lifschitz (1988) Stable Epistemic Equilibrium (`IsStableEquilibrium`)**:
+    A candidate `FactSet` is a stable epistemic equilibrium of `prog` iff, in the Gelfond–Lifschitz
+    reduct induced by `candidate` (`Obend.Reasons.T prog.toReasonsProgram candidate`):
+    1. `candidate` is closed under immediate consequence (`Sub (T P candidate candidate) candidate`), and
+    2. `candidate` is minimal among all Herbrand pre-fixpoints of that reduct
+       (`∀ I, Sub (T P candidate I) I → Sub candidate I`). -/
 def IsStableEquilibrium (prog : ModalProgram) (candidate : FactSet) : Prop :=
-  let reduct := glReduct prog candidate
-  let least := leastModelFuel (canonicalFuel prog) reduct []
-  checkFactSetEquiv least candidate = true ∧
-    factSetSubset (stepPosReduct reduct least) least = true
+  let P := prog.toReasonsProgram
+  Obend.Reasons.Sub (Obend.Reasons.T P candidate candidate) candidate ∧
+    ∀ I : FactSet, Obend.Reasons.Sub (Obend.Reasons.T P candidate I) I →
+      Obend.Reasons.Sub candidate I
 
-/-- Refusal clauses for the `Oracle7` modal equilibrium judge. -/
-inductive Oracle7Clause where
-  /-- The candidate fact set does not match the least model of its Gelfond-Lifschitz reduct. -/
+/-- `Obend.Reasons.gamma` characterizes `IsStableEquilibrium` up to extensional membership (`Same`). -/
+theorem gamma_same_iff_stableEquilibrium (prog : ModalProgram) (candidate : FactSet) :
+    Obend.Reasons.Same (Obend.Reasons.gamma prog.toReasonsProgram candidate) candidate ↔
+      IsStableEquilibrium prog candidate := by
+  let P := prog.toReasonsProgram
+  constructor
+  · intro hSame
+    refine ⟨?_, ?_⟩
+    · intro x hx
+      have hT : Obend.Reasons.T P candidate candidate =
+          Obend.Reasons.T P candidate (Obend.Reasons.gamma P candidate) :=
+        Obend.Reasons.T_congr P (Obend.Reasons.Same.refl candidate) hSame.symm
+      rw [hT] at hx
+      exact (hSame x).mp ((Obend.Reasons.gamma_fix P candidate x).mp hx)
+    · intro I hPre x hx
+      exact Obend.Reasons.gamma_least P candidate I hPre x ((hSame x).mpr hx)
+  · rintro ⟨hClosed, hMin⟩ x
+    constructor
+    · intro hx
+      exact Obend.Reasons.gamma_least P candidate candidate hClosed x hx
+    · intro hx
+      have hGammaClosed : Obend.Reasons.Sub
+          (Obend.Reasons.T P candidate (Obend.Reasons.gamma P candidate))
+          (Obend.Reasons.gamma P candidate) :=
+        fun y hy => (Obend.Reasons.gamma_fix P candidate y).mp hy
+      exact hMin (Obend.Reasons.gamma P candidate) hGammaClosed x hx
+
+/-- Refusal clauses for the Gelfond–Lifschitz modal equilibrium judge. -/
+inductive GLEquilibriumClause where
+  /-- The candidate fact set does not match `Γ(candidate)` (the least model of its GL reduct). -/
   | unstableEquilibrium (leastModel : FactSet) (candidate : FactSet)
-  /-- The positive reduct did not close within the canonical fuel bound. -/
-  | reductNotClosed (leastModel : FactSet)
   deriving DecidableEq, Repr
 
-/-- Total deterministic checker for `Oracle7` modal epistemic equilibrium (`G5` Design D). -/
-@[expose] def checkOracle7Equilibrium (_r : Nat) (prog : ModalProgram) (candidate : FactSet) :
-    Judge.Verdict Oracle7Clause :=
-  let reduct := glReduct prog candidate
-  let least := leastModelFuel (canonicalFuel prog) reduct []
-  if _hEq : checkFactSetEquiv least candidate = true then
-    if _hClosed : factSetSubset (stepPosReduct reduct least) least = true then
-      .ok
-    else
-      .refused (.reductNotClosed least) []
+/-- Total deterministic checker for Gelfond–Lifschitz modal `□` epistemic equilibrium (`G5` Design D),
+    computed via `Obend.Reasons.gamma`. -/
+@[expose] def checkGLEquilibrium (prog : ModalProgram) (candidate : FactSet) :
+    Judge.Verdict GLEquilibriumClause :=
+  let least := Obend.Reasons.gamma prog.toReasonsProgram candidate
+  if checkFactSetEquiv least candidate then
+    .ok
   else
     .refused (.unstableEquilibrium least candidate) []
 
-/-- Soundness of `checkOracle7Equilibrium`: `.ok` establishes `IsStableEquilibrium prog candidate`. -/
-theorem checkOracle7Equilibrium_sound {r : Nat} {prog : ModalProgram} {candidate : FactSet}
-    (hok : checkOracle7Equilibrium r prog candidate = .ok) :
+/-- Soundness of `checkGLEquilibrium`: `.ok` establishes declarative `IsStableEquilibrium prog candidate`. -/
+theorem checkGLEquilibrium_sound {prog : ModalProgram} {candidate : FactSet}
+    (hok : checkGLEquilibrium prog candidate = .ok) :
     IsStableEquilibrium prog candidate := by
-  unfold checkOracle7Equilibrium at hok
+  unfold checkGLEquilibrium at hok
   dsimp only at hok
-  split at hok
-  · rename_i hEq
-    split at hok
-    · rename_i hClosed
-      exact ⟨hEq, hClosed⟩
-    · cases hok
-  · cases hok
+  by_cases hEq : checkFactSetEquiv (Obend.Reasons.gamma prog.toReasonsProgram candidate) candidate = true
+  · exact (gamma_same_iff_stableEquilibrium prog candidate).mp
+      ((checkFactSetEquiv_iff_same _ _).mp hEq)
+  · simp [hEq] at hok
 
-/-- Completeness of `checkOracle7Equilibrium`: any `candidate` satisfying `IsStableEquilibrium`
-    is accepted at grade `0` (and every higher grade). -/
-theorem checkOracle7Equilibrium_complete {prog : ModalProgram} {candidate : FactSet}
+/-- Completeness of `checkGLEquilibrium`: any `candidate` satisfying `IsStableEquilibrium`
+    is accepted. -/
+theorem checkGLEquilibrium_complete {prog : ModalProgram} {candidate : FactSet}
     (hEqm : IsStableEquilibrium prog candidate) :
-    checkOracle7Equilibrium 0 prog candidate = .ok := by
-  rcases hEqm with ⟨hEq, hClosed⟩
-  unfold checkOracle7Equilibrium
+    checkGLEquilibrium prog candidate = .ok := by
+  have hSame := (gamma_same_iff_stableEquilibrium prog candidate).mpr hEqm
+  have hEq : checkFactSetEquiv (Obend.Reasons.gamma prog.toReasonsProgram candidate) candidate = true :=
+    (checkFactSetEquiv_iff_same _ _).mpr hSame
+  unfold checkGLEquilibrium
   dsimp only
-  simp only [hEq, hClosed, dite_true]
+  simp [hEq]
 
-/-- Monotonicity of `checkOracle7Equilibrium` across grades. -/
-theorem checkOracle7Equilibrium_mono {r r' : Nat} {prog : ModalProgram} {candidate : FactSet}
-    (_hle : r ≤ r') (_hdec : checkOracle7Equilibrium r prog candidate ≠ .uncovered) :
-    checkOracle7Equilibrium r' prog candidate = checkOracle7Equilibrium r prog candidate :=
-  rfl
-
-/-- **`oracle7Judge`**: `Obend.Judge` instance for Gelfond-Lifschitz modal `□` epistemic equilibrium. -/
-@[expose, instance_reducible] def oracle7Judge : Obend.Judge ModalProgram FactSet where
-  Clause := Oracle7Clause
+/-- **`glEquilibriumJudge`**: `Obend.Judge` instance for Gelfond–Lifschitz modal `□` epistemic equilibrium. -/
+@[expose, instance_reducible] def glEquilibriumJudge : Obend.Judge ModalProgram FactSet where
+  Clause := GLEquilibriumClause
   Meaning := IsStableEquilibrium
-  check := checkOracle7Equilibrium
-  sound := checkOracle7Equilibrium_sound
+  check := fun _ prog cand => checkGLEquilibrium prog cand
+  sound := checkGLEquilibrium_sound
   refutes _ := false
   refuted _ h := by cases h
   Fragment _ := True
   complete _ := by
     rintro ⟨cand, hEqm⟩
-    exact ⟨cand, 0, checkOracle7Equilibrium_complete hEqm⟩
-  mono := checkOracle7Equilibrium_mono
+    exact ⟨cand, 0, checkGLEquilibrium_complete hEqm⟩
+  mono := fun _ _ => rfl
 
-instance : Obend.Judge ModalProgram FactSet := oracle7Judge
+instance : Obend.Judge ModalProgram FactSet := glEquilibriumJudge
 
 /-! ### Self-Defeating Modal Fixture (`p ← ¬□p`), Stratified Default Fixture & `#tooth` Witness -/
 
 /-- The classic self-defeating unstratified modal program `p ← ¬□p`:
-    - If `candidate = []`, `¬□p` holds so the GL reduct is `p ← ⊤` with least model `["p"] ≠ []`.
-    - If `candidate = ["p"]`, `¬□p` fails so the GL reduct is empty with least model `[] ≠ ["p"]`.
+    - If `candidate = []`, `¬□p` holds so `Γ([]) = ["p"] ≠ []`.
+    - If `candidate = ["p"]`, `¬□p` fails so `Γ(["p"]) = [] ≠ ["p"]`.
     Hence `selfDefeatingModalProg` has no stable equilibrium and must be refused on both candidates. -/
 @[expose] def selfDefeatingModalProg : ModalProgram :=
   [⟨"p", [], ["p"]⟩]
@@ -324,14 +318,14 @@ instance : Obend.Judge ModalProgram FactSet := oracle7Judge
   [⟨"bird", [], []⟩, ⟨"fly", ["bird"], ["abnormal"]⟩]
 
 example :
-    checkOracle7Equilibrium 1 defaultBirdProg ["bird", "fly"] = .ok := rfl
+    checkGLEquilibrium defaultBirdProg ["bird", "fly"] = .ok := rfl
 
 theorem self_defeating_modal_refused_on_p :
-    checkOracle7Equilibrium 1 selfDefeatingModalProg ["p"] =
+    checkGLEquilibrium selfDefeatingModalProg ["p"] =
       .refused (.unstableEquilibrium [] ["p"]) [] := rfl
 
 theorem self_defeating_modal_refused_on_empty :
-    checkOracle7Equilibrium 1 selfDefeatingModalProg [] =
+    checkGLEquilibrium selfDefeatingModalProg [] =
       .refused (.unstableEquilibrium ["p"] []) [] := rfl
 
 -- Mutating the fixed-point equivalence check to `true` causes the unstable self-defeating
@@ -339,25 +333,58 @@ theorem self_defeating_modal_refused_on_empty :
 #tooth self_defeating_modal_refused_on_p by mutation checkFactSetEquiv :=
   fun _ _ => true
 
-/-- Registered `Obend.Judge.Format` for `oracle7-gl-equilibrium` v`1`. -/
-@[expose] def oracle7Format : Obend.Judge.Format where
-  name := "oracle7-gl-equilibrium"
+/-! ### Structural JSON Wire Codecs & Registered `glEquilibriumFormat` (`gl-equilibrium@1`) -/
+
+open Lean (Json) in
+private def modalRuleToJson (r : ModalRule) : Json :=
+  Json.mkObj
+    [ ("head", Json.str r.head)
+    , ("pos", Json.arr (r.posBody.map Json.str).toArray)
+    , ("neg", Json.arr (r.negBody.map Json.str).toArray) ]
+
+open Lean (Json) in
+private def modalRuleOfJson (j : Json) : Except String ModalRule := do
+  let head ← (j.getObjVal? "head") >>= Json.getStr?
+  let posArr ← (j.getObjVal? "pos") >>= Json.getArr?
+  let negArr ← (j.getObjVal? "neg") >>= Json.getArr?
+  let posBody ← posArr.toList.mapM Json.getStr?
+  let negBody ← negArr.toList.mapM Json.getStr?
+  return { head, posBody, negBody }
+
+open Lean (Json) in
+@[expose] def encodeModalProgram (prog : ModalProgram) : String :=
+  (Json.mkObj [("rules", Json.arr (prog.map modalRuleToJson).toArray)]).compress
+
+open Lean (Json) in
+@[expose] def decodeModalProgram (s : String) : Except String ModalProgram := do
+  let j ← Json.parse s
+  let arr ← (j.getObjVal? "rules") >>= Json.getArr?
+  arr.toList.mapM modalRuleOfJson
+
+open Lean (Json) in
+@[expose] def encodeFactSet (facts : FactSet) : String :=
+  (Json.mkObj [("facts", Json.arr (facts.map Json.str).toArray)]).compress
+
+open Lean (Json) in
+@[expose] def decodeFactSet (s : String) : Except String FactSet := do
+  let j ← Json.parse s
+  let arr ← (j.getObjVal? "facts") >>= Json.getArr?
+  arr.toList.mapM Json.getStr?
+
+/-- Registered `Obend.Judge.Format` for `gl-equilibrium` v`1`. -/
+@[expose] def glEquilibriumFormat : Obend.Judge.Format where
+  name := "gl-equilibrium"
   version := "1"
   Obj := ModalProgram
   Cert := FactSet
-  judge := oracle7Judge
-  decodeObj s :=
-    if s == "self-defeating" then .ok selfDefeatingModalProg
-    else if s == "default-bird" then .ok defaultBirdProg
-    else .error s!"unknown modal program wire id: {s}"
-  decodeCert s :=
-    if s == "" then .ok []
-    else .ok (s.splitOn "," |>.map (·.trimAscii.toString))
+  judge := glEquilibriumJudge
+  decodeObj := decodeModalProgram
+  decodeCert := decodeFactSet
   trust := .kernel
   regime := .decidable
   bad := (selfDefeatingModalProg, ["p"])
-  badGrade := 1
-  bad_refused := ⟨Oracle7Clause.unstableEquilibrium [] ["p"], [], rfl⟩
+  badGrade := 0
+  bad_refused := ⟨GLEquilibriumClause.unstableEquilibrium [] ["p"], [], rfl⟩
 
 end Obend.Run.HyperLaw
 end

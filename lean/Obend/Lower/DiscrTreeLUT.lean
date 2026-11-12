@@ -771,7 +771,7 @@ def evalSlotGuardedDiscrTile
   let activeTile := if pinOk then guard.specializedTile else guard.fallbackTile
   let rstate : ReconfigTileState :=
     { tileId := 0, tileX := 0, tileY := 0
-    , activeTile := activeTile, frameDigest := 0x1000#64
+    , activeTile := activeTile, frameCrc64 := 0x1000#64
     , isolated := false, skidHeldOutput := 0#64 }
   (pinOk, evalReconfigTile rstate (fun _ => 0#64) (fun _ => 0#64) argVal)
 

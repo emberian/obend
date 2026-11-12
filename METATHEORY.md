@@ -1,6 +1,6 @@
 # Metatheory
 
-Obend's metatheory connects surface elaboration, graded/linear row typing, contextual equivalence, open-recursive specialization, non-monotonic justification, durable vault replay, and hardware lowering inside Lean 4 (`lean/Obend`).
+Obend's metatheory connects surface elaboration, graded/linear row typing, contextual equivalence, open-recursive specialization, categorical refinement and representation repair, dual-track post-quantum commitments, non-monotonic justification, durable vault replay, and hardware lowering inside Lean 4 (`lean/Obend`).
 
 ---
 
@@ -31,29 +31,49 @@ Obend's metatheory connects surface elaboration, graded/linear row typing, conte
 - **Behavioral Equivalence (`lean/Obend/Equiv/Behaviour.lean`)**: Contextual equivalence `≈b` (`BEquiv`) and `≈r` (`REquiv`) form congruences preserving terminating observations (`BEquiv.sameRuns`). Prototype composition `Term.mix` is proved associative up to `≈b` (`mix_assoc`) even though it is not weak-head associative (`mix_assoc_not_weak_head`).
 - **Cost Improvement (`lean/Obend/Equiv/Improvement.lean`)**: `Sim`, `EvalImproves`, and `SandsImproves` formalize Sands' improvement preorder: call-by-value beta-reduction on settled arguments strictly improves step counts (`beta_value_improves_cost`, `beta_demanded_evalImproves`).
 
-### 2.2 Prototype Flattening and Futamura Book Specialization (`lean/Obend/Leaf`)
+### 2.2 Prototype Flattening and Book Specialization (`lean/Obend/Leaf`)
 
 - **Flattening (`lean/Obend/Leaf/Flatten.lean`, `lean/Obend/Leaf/Residual.lean`)**: `flatten_object` and `flatten_sound` establish behavioral equivalence (`≈b`) between flattened vtables and dynamic prototype objects for every closed `Composition`, while `vtable_clean` and `no_residual_super` eliminate all dynamic super-chain traversals.
-- **Book Emission & Pin Specialization (`lean/Obend/Leaf/Emit.lean`, `lean/Obend/Leaf/Static.lean`, `lean/Obend/Leaf/Specialize.lean`)**: `emit_sound` and `book_sound` prove behavioral equivalence between emitted `Book` definitions and flattened compositions. Cross-package pin specialization (`specializeBook_eq_foldBook_bindBookPins`, `link_bequiv_specializeBook`, `specializeBook_member_sound`) is guarded by `specSlot`, which blocks stale books whenever an upstream pin changes (`moved_pin_blocks`, `specialized_moved_pin_blocks`).
+- **Book Emission & Pin Specialization (`lean/Obend/Leaf/Emit.lean`, `lean/Obend/Leaf/Static.lean`, `lean/Obend/Leaf/Specialize.lean`)**: `emit_sound` and `book_sound` prove behavioral equivalence between emitted `Book` definitions and flattened compositions. Cross-package pin specialization (`specializeBook_eq_foldBook_bindBookPins`, `link_bequiv_specializeBook`, `specializeBook_member_sound`, `staticApply_slot_sound`) is guarded by `specSlot`, which blocks stale books whenever an upstream pin changes (`moved_pin_blocks`, `specialized_moved_pin_blocks`).
 
 ---
 
-## 3. Non-Monotonic Justification, Vault Durability, and Genealogy
+## 3. Categorical Refinement, Representation Repair, and Dual-Track Cryptography
 
-### 3.1 Van Gelder Alternating Fixpoint (`lean/Obend/Reasons.lean`)
+### 3.1 Open Dissipative Systems, Galois Refinement, and Graded Logic (`lean/Obend/Category`)
+
+- **Dissipative & Port-Hamiltonian Interconnections (`lean/Obend/Category/OpenSystem.lean`)**: `OpenDissipativeSys` and `StatePortHamiltonianSys` prove discrete supply-rate energy bounds (`energy_bounded_along_trajectory`, `autonomous_lyapunov_nonincreasing`) and power-conserving skew-symmetric gyrator feedback (`skew_gyrator_power_cancels`).
+- **Quantitative Simulation & Galois Refinement (`lean/Obend/Category/Refines.lean`)**: `Simulates`, `StutterSimulates`, and `GaloisRefinement` compose slack-graded simulation steps horizontally and vertically (`trace_safety`, `sim_preserves_galois`).
+- **Multi-Axis Graded Hoare Logic (`lean/Obend/Category/GradedLogic.lean`, `lean/Obend/Tactic/Compositional.lean`)**: `GradedM` and `GradedTriple` track 5-dimensional `CompositeGrade` budgets (linear uses, rational error, FHE noise, clock cycles, exergy) across lens-zoomed sub-states (`frame_triple`, `loop_triple`, `gradedTriple_of_symExec`).
+
+### 3.2 Initial-Algebra / Final-Coalgebra Repair and Effective Quotients (`lean/Obend/Repair`)
+
+- **Algebraic & Coalgebraic Data Refinement (`lean/Obend/Repair/AlgConfig.lean`, `lean/Obend/Repair/CoalgConfig.lean`)**: `AlgConfig` transports structural induction and operations coherently across concrete representations (`repair_by_instantiation`, `unary_bin_add_coherence`), while `PCoalg` and Hur-style parameterized coinduction (`paco_coind`, `gpaco_unfold`) discharge stream/automaton bisimulations (`seqSimd2StreamConfig`).
+- **Realizability Assemblies (`lean/Obend/Repair/QuotAssembly.lean`)**: `Assembly` and `EffectiveQuotient` (`quotAssembly`, `liftHom_spec_mk`) separate abstract mathematical quotients from low-level machine trackers.
+
+### 3.3 Dual-Track Cryptographic Commitments (`lean/Obend/Crypto`)
+
+- **Hash + Module-SIS Dual PCS (`lean/Obend/Crypto/DualSpine.lean`, `lean/Obend/Crypto/PCS.lean`, `lean/Obend/Crypto/Sumcheck.lean`, `lean/Obend/Crypto/Transcript.lean`)**: `DualPCS` (`canopyAjtaiDualPCS`) binds multilinear polynomial openings simultaneously to Merkle/code proximity and short-norm Ajtai lattice commitments (`dualPCS_sound_of_either`, `canopyAjtaiDualPCS_sound_of_hash_or_sis`, `verifyDualSumcheckPIOP_completeness`).
+- **Smudged Same-Opening Auction Clearing (`lean/Obend/Crypto/SameOpening.lean`)**: `verifySameOpening_sound` and `smudgeSafe_refuses_unsmudged` certify zero KKT primal-dual gap over dual-committed private orders while rejecting unsmudged threshold-decryption noise parameters.
+
+---
+
+## 4. Non-Monotonic Justification, HyperLaws, Vault Durability, and Genealogy
+
+### 4.1 Van Gelder Fixpoint and Gelfond–Lifschitz Equilibria (`lean/Obend/Reasons.lean`, `lean/Obend/Run/HyperLaw.lean`)
 
 `Obend.Reasons` models stratified and unstratified defeasible rules via Van Gelder's alternating operator `rounds` (`gamma` composed twice):
 - `gamma_least` and `rounds_least` establish least-fixpoint existence (`wf`), yielding a three-valued `Status` (`supported`, `undefined`, `unsupported`).
-- `no_conclusion_from_cycles` ensures positive self-referential loops never manufacture `supported` status.
-- `survives_one_support`, `defeat_only_by_evidence`, and `action_needs_support` guarantee that justified conclusions persist under redundant support removal and can only be defeated by concrete counter-evidence.
+- `no_conclusion_from_cycles`, `survives_one_support`, `defeat_only_by_evidence`, and `action_needs_support` guarantee cycle-free, counter-evidence-driven defeat.
+- `Obend.Run.HyperLaw` (`lean/Obend/Run/HyperLaw.lean`) pairs `k=2` relational non-interference (`checkHyperLaw2NonInterference_sound`) with `glEquilibriumJudge` (`checkGLEquilibrium_sound`, `gamma_same_iff_stableEquilibrium`), proving that `Obend.Reasons.gamma` characterizes minimal Herbrand models of Gelfond–Lifschitz modal `□` reducts (`IsStableEquilibrium`).
 
-### 3.2 Vault Replay, Membranes, Transport, and Retention (`lean/Obend/Vault`)
+### 4.2 Vault Replay, Sharded Worlds, Membranes, and Netting (`lean/Obend/Vault`, `lean/Obend/Judge/Netting.lean`)
 
-- **Replay & Crash Recovery (`lean/Obend/Vault/Replay.lean`)**: `state_eq_replay_log`, `recover_eq_replay_prefix`, `checkpoint_is_cache`, and `obligations_survive_crash` tie live state and open obligations to deterministic log folding.
-- **Membrane Non-Amplification (`lean/Obend/Vault/Form.lean`, `lean/Obend/Vault/FormCheck.lean`)**: `eval_fill_eq_subst_residual`, `residual_reads_nothing_known`, `admit_no_amplification`, `admit_conserves_total`, and `rechecked_zero` prove privacy, conservation, and single-pass check reuse.
-- **Capability Handoff & Compaction (`lean/Obend/Vault/Transport.lean`, `lean/Obend/Vault/Retention.lean`, `lean/Obend/Vault/Merge.lean`)**: `handoff_no_absence` and `merge_revocation_wins` eliminate custody gaps and stale authority during cross-vault transport; `state_eq_replay_compacted` preserves replay semantics across right-to-forget log compaction; `mergeVault_agrees` reconciles divergent vault prefixes.
+- **Replay, Sharded Snapshots & Crash Recovery (`lean/Obend/Vault/Replay.lean`, `lean/Obend/Vault/ChunkedWorld.lean`)**: `state_eq_replay_log`, `recover_eq_replay_prefix`, `checkpoint_is_cache`, `obligations_survive_crash`, and `dig_eq_unbe_logHashArray` tie live state, sharded binary buckets, and open obligations to deterministic log folding.
+- **Membrane Non-Amplification & Rerooting (`lean/Obend/Vault/Form.lean`, `lean/Obend/Vault/FormCheck.lean`, `lean/Obend/Vault/CheckedCarry.lean`)**: `eval_fill_eq_subst_residual`, `residual_reads_nothing_known`, `admit_no_amplification`, `admit_conserves_total`, `rechecked_zero`, and `live_capability_survives_rerooting` prove privacy, conservation, single-pass check reuse, and safe capability carry.
+- **Capability Handoff, Compaction & Unified DEOS Settlement (`lean/Obend/Vault/Transport.lean`, `lean/Obend/Vault/Retention.lean`, `lean/Obend/Vault/Merge.lean`, `lean/Obend/Vault/UnifiedDeos.lean`, `lean/Obend/Judge/Netting.lean`)**: `handoff_no_absence` and `merge_revocation_wins` eliminate custody gaps; `state_eq_replay_compacted` preserves replay across right-to-forget compaction; `unifiedDeos_ledger_and_turn_sound` and `settleNetting_agrees_with_gross` conserve multi-asset balances across batch clearing and multilateral netting.
 
-### 3.3 Judge Succession and Löb Floor Accounting (`lean/Obend/Judge/Genealogy.lean`)
+### 4.3 Judge Succession and Löb Floor Accounting (`lean/Obend/Judge/Genealogy.lean`)
 
 `Obend.Judge.Genealogy` formalizes how a node upgrades its own active judges (`Habitat`, `Gate`, `Method`, `LobCost`):
 - `succession_sound` and `succession_sound_meaning` ensure every admitted successor judge preserves the floor invariants of its habitat (`run_floors`, `run_noninterference`).
@@ -61,7 +81,7 @@ Obend's metatheory connects surface elaboration, graded/linear row typing, conte
 
 ---
 
-## 4. Falsifiability: `#tooth` Mutation Gates and Axiom Auditing
+## 5. Falsifiability: `#tooth` Mutation Gates and Axiom Auditing
 
 Soundness theorems over vacuously false preconditions or trivialized checkers provide no assurance unless tested against adversarial mutations:
 - **`#tooth` (`lean/Obend/Tactic/Tooth.lean`)**: Re-elaborates a target theorem after substituting a mutated definition (such as replacing a checker with `fun _ _ => Verdict.ok` or swapping wire operand order) inside an isolated temporary environment, succeeding only if the kernel **rejects** the proof under the mutation. Suites across `lean/Obend/Teeth/` exercise `#tooth` across `Core`, `Leaf`, `Law`, `Lower`, `Hardware`, and `Vault`.

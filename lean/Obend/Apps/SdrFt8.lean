@@ -28,7 +28,7 @@ public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.TaylorModel
 public import Obend.Analysis.SosLyapunov
 public import Obend.Apps.SdrFt8Rx
-public meta import Lean
+meta import Lean
 public meta import Obend.Core.Term
 public meta import Obend.Law
 public meta import Obend.Spec.Syntax

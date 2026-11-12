@@ -32,7 +32,7 @@ public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.Silicon
 public import Obend.Hardware.Types
 public import Obend.Elab.Workbook
-public meta import Lean
+meta import Lean
 public meta import Obend.Core.Term
 public meta import Obend.Law
 public meta import Obend.Spec.Syntax

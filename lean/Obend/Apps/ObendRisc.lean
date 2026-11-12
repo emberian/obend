@@ -47,7 +47,7 @@ public import Obend.Hardware.Compiler
 public import Obend.Hardware.Synth
 public import Obend.Tactic.Weave
 public import Obend.Elab.Workbook
-public meta import Lean
+meta import Lean
 public meta import Obend.Core.Term
 public meta import Obend.Law
 public meta import Obend.Spec.Syntax

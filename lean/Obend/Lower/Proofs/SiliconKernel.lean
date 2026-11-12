@@ -262,11 +262,11 @@ theorem silicon_elab_residual_dpr_specialize_sound
     (inflightPkt : ReductionPacket := { targetSlot := 1, argVal := 1#64, tag := 99 }) :
     let initTile0 : ReconfigTileState :=
       { tileId := 0, tileX := 0, tileY := 0
-      , activeTile := incAutomatonTile, frameDigest := 0x1001#64
+      , activeTile := incAutomatonTile, frameCrc64 := 0x1001#64
       , isolated := false, skidHeldOutput := skidVal }
     let residentTile1 : ReconfigTileState :=
       { tileId := 1, tileX := 1, tileY := 0
-      , activeTile := kernelGateTile, frameDigest := 0xCAFE#64
+      , activeTile := kernelGateTile, frameCrc64 := 0xCAFE#64
       , isolated := false, skidHeldOutput := 1#64 }
     let initArray : EfpgaDprArray :=
       { tiles := [initTile0, residentTile1]
@@ -276,8 +276,8 @@ theorem silicon_elab_residual_dpr_specialize_sound
     let icapFrame : IcapBitstreamFrame :=
       { targetTileId := 0
       , newTile := specializedSimpTile
-      , expectedDigest := 0x4002#64
-      , computedDigest := 0x4002#64 }
+      , expectedCrc64 := 0x4002#64
+      , computedCrc64 := 0x4002#64 }
     let afterArray := runGlitchFreeDpr initArray icapFrame
     let afterTile0 := runTileGlitchFreeDpr icapFrame initTile0
     let afterTile1 := runTileGlitchFreeDpr icapFrame residentTile1
@@ -315,7 +315,7 @@ corrupt digest `badDigest : BitVec 64` satisfying `(badDigest == 0x4002#64) = fa
 1. **Stale Environment Pin Refusal**: When the Lean `Environment` mutates from Epoch 1 (`pinnedSimpView`)
    to Epoch 2 (`mutatedSimpView`), `specSlot.usable (holdsAt mutatedSimpView) specializedSimpCand = false`,
    and `slotAdvance` immediately deoptimizes in 1 step to `.ok Candidate.machine` (`machine_usable = true`).
-2. **Corrupt / Unauthenticated Bitstream Refusal**: Streaming a frame with `computedDigest = badDigest`
+2. **Corrupt / Unauthenticated Bitstream Refusal**: Streaming a frame with `computedCrc64 = badDigest`
    into `ICAP` refuses to overwrite `activeTile` and keeps the tile isolated (`isolated = true`)
    clamped at `skidVal` on every `argVal`! -/
 theorem silicon_elab_env_mutation_fallback_sound
@@ -325,13 +325,13 @@ theorem silicon_elab_env_mutation_fallback_sound
     (hCorrupt : (badDigest == 0x4002#64) = false := by decide) :
     let tile0 : ReconfigTileState :=
       { tileId := 0, tileX := 0, tileY := 0
-      , activeTile := specializedSimpTile, frameDigest := 0x4002#64
+      , activeTile := specializedSimpTile, frameCrc64 := 0x4002#64
       , isolated := false, skidHeldOutput := skidVal }
     let corruptFrame : IcapBitstreamFrame :=
       { targetTileId := 0
       , newTile := incAutomatonTile
-      , expectedDigest := 0x4002#64
-      , computedDigest := badDigest }
+      , expectedCrc64 := 0x4002#64
+      , computedCrc64 := badDigest }
     let afterCorrupt := runTileGlitchFreeDpr corruptFrame tile0
     specSlot.usable (holdsAt mutatedSimpView) specializedSimpCand = false ∧
     specSlot.usable (holdsAt mutatedSimpView) .machine = true ∧

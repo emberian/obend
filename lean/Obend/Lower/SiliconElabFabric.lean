@@ -40,7 +40,7 @@ verified by `checkRtlModule` and `checkRtlModuleW` and emitted via `emitModuleSV
      (`runSiliconKernelCamFsm_sound`, `siliconElabFabric_four_zone_sound`).
 -/
 public import Lean
-public meta import Lean
+meta import Lean
 public import Obend.Tactic.Tooth
 public import Obend.Lower.ExprCAM
 public import Obend.Lower.MetaUnify
@@ -686,7 +686,7 @@ def admitSimpTheoremDpr
     (thmDecl : KConstInfo)
     (slotName : String)
     (newEpoch gain offset : Nat)
-    (frameDigest : BitVec 64)
+    (frameCrc64 : BitVec 64)
     (tileState : ReconfigTileState) : Option (SlotGuardReg × ReconfigTileState) :=
   if !kernelCheckDecl env fuel thmDecl then
     none
@@ -695,8 +695,8 @@ def admitSimpTheoremDpr
     let frame : IcapBitstreamFrame :=
       { targetTileId   := tileState.tileId
       , newTile        := newGuard.specializedTile
-      , expectedDigest := frameDigest
-      , computedDigest := frameDigest }
+      , expectedCrc64  := frameCrc64
+      , computedCrc64  := frameCrc64 }
     let tileAfter := runTileGlitchFreeDpr frame tileState
     some (newGuard, tileAfter)
 
@@ -708,10 +708,10 @@ def admitSimpTheoremDpr
    `evalReconfigTile` is strictly clamped to `tileState.skidHeldOutput`. -/
 theorem admitSimpTheoremDpr_glitch_free_sound
     (env : KEnv) (fuel : Nat) (thmDecl : KConstInfo) (slotName : String)
-    (newEpoch gain offset : Nat) (frameDigest : BitVec 64)
+    (newEpoch gain offset : Nat) (frameCrc64 : BitVec 64)
     (tileState tileAfter : ReconfigTileState) (guard' : SlotGuardReg)
     (transientTile : AutomatonTile) (wireEnv regEnv : Nat → BitVec 64) (argVal : BitVec 64)
-    (hAdmit : admitSimpTheoremDpr env fuel thmDecl slotName newEpoch gain offset frameDigest tileState =
+    (hAdmit : admitSimpTheoremDpr env fuel thmDecl slotName newEpoch gain offset frameCrc64 tileState =
       some (guard', tileAfter)) :
     kernelCheckDecl env fuel thmDecl = true ∧
     tileAfter.isolated = false ∧

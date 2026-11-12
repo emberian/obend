@@ -984,7 +984,8 @@ meta def metaBareIdentAllowlist : List String :=
   [ "obend_law", "obend_unfold", "obend_split", "obend_tooth", "native_decide", "bv_decide",
     "norm_num", "eq_def", "f.eq_def", "decide_kernel", "import_obend", "obend_decl",
     "assert_axioms_tree", "assert_compiled", "docs_census", "check_docs_census",
-    "census_environment", "always_ff", "always_comb", "no_sorry_ax" ]
+    "census_environment", "always_ff", "always_comb", "no_sorry_ax",
+    "silicon_simp", "silicon_check" ]
 
 /-- Non-Obend stdlib namespace roots excluded from `Upper.member` qualified-identifier checks. -/
 meta def metaStdlibPrefixes : List String :=
@@ -1373,8 +1374,8 @@ theorem extractObendDottedRoots_sample :
 
 set_option maxRecDepth 20000 in
 example :
-    extractBacktickObendConsts "Check `Obend.Run.HyperLaw.oracle7Judge` and `Obend.Core.Nominal.kinded_refuses`." =
-      ["Obend.Run.HyperLaw.oracle7Judge", "Obend.Core.Nominal.kinded_refuses"] := rfl
+    extractBacktickObendConsts "Check `Obend.Run.HyperLaw.glEquilibriumJudge` and `Obend.Core.Nominal.kinded_refuses`." =
+      ["Obend.Run.HyperLaw.glEquilibriumJudge", "Obend.Core.Nominal.kinded_refuses"] := rfl
 
 end Obend.Tactic.DocsCensus
 

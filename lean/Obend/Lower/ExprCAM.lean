@@ -4322,8 +4322,8 @@ def encodeWireIcapFrame (f : IcapBitstreamFrame) : List UInt8 :=
   encodeWireTileOpKind f.newTile.opKind ++
   encodeWireRtlExpr f.newTile.datapath ++
   encodeWireList natToVarBytes f.newTile.readsSlots ++
-  encodeWireBitVec64 f.expectedDigest ++
-  encodeWireBitVec64 f.computedDigest
+  encodeWireBitVec64 f.expectedCrc64 ++
+  encodeWireBitVec64 f.computedCrc64
 
 /-- Decode a Section-7 `IcapBitstreamFrame`. -/
 def decodeWireIcapFrame (bs : List UInt8) : Option (IcapBitstreamFrame × List UInt8) := do
@@ -4333,8 +4333,8 @@ def decodeWireIcapFrame (bs : List UInt8) : Option (IcapBitstreamFrame × List U
   let (opKind, bs4)         ← decodeWireTileOpKind bs3
   let (datapath, bs5)       ← decodeWireRtlExpr bs4
   let (readsSlots, bs6)     ← decodeWireList decodeVarBytes bs5
-  let (expectedDigest, bs7) ← decodeWireBitVec64 bs6
-  let (computedDigest, bs8) ← decodeWireBitVec64 bs7
+  let (expectedCrc64, bs7)  ← decodeWireBitVec64 bs6
+  let (computedCrc64, bs8)  ← decodeWireBitVec64 bs7
   pure ({ targetTileId := targetTileId
         , newTile :=
             { slotIdx    := slotIdx
@@ -4342,12 +4342,12 @@ def decodeWireIcapFrame (bs : List UInt8) : Option (IcapBitstreamFrame × List U
             , opKind     := opKind
             , datapath   := datapath
             , readsSlots := readsSlots }
-        , expectedDigest := expectedDigest
-        , computedDigest := computedDigest }, bs8)
+        , expectedCrc64 := expectedCrc64
+        , computedCrc64 := computedCrc64 }, bs8)
 
 @[simp] theorem decodeWireIcapFrame_encodeWireIcapFrame (f : IcapBitstreamFrame) (rest : List UInt8) :
     decodeWireIcapFrame (encodeWireIcapFrame f ++ rest) = some (f, rest) := by
-  rcases f with ⟨targetTileId, ⟨slotIdx, memberName, opKind, datapath, readsSlots⟩, expectedDigest, computedDigest⟩
+  rcases f with ⟨targetTileId, ⟨slotIdx, memberName, opKind, datapath, readsSlots⟩, expectedCrc64, computedCrc64⟩
   unfold encodeWireIcapFrame decodeWireIcapFrame
   simp only [List.append_assoc, decodeVarBytes_natToVarBytes, decodeWireString_encodeWireString,
     decodeWireTileOpKind_encodeWireTileOpKind, decodeWireRtlExpr_encodeWireRtlExpr,

@@ -1,6 +1,6 @@
 # Hardware, FPGA, and GPU Architecture
 
-Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`) compiles functional specifications, open hypergraphs, and array kernels to synthesizable RTL, interaction nets, FABulous FPGA bitstreams, WGSL compute shaders, and validated AMD RDNA2 machine code.
+Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`, `lean/Obend/Trailblaze/LeanFpga.lean`) compiles functional specifications, open hypergraphs, and array kernels to synthesizable RTL, interaction nets, FABulous FPGA bitstreams, WGSL compute shaders, and validated AMD RDNA2 machine code.
 
 ---
 
@@ -20,17 +20,18 @@ Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`) compiles funct
 
 For graph-reduction workloads, `lean/Obend/Hardware/Hvm.lean` lowers `Obend.Leaf.Book` definitions to interaction combinator nets (`lean/Obend/Hardware/Hvm/Inet.lean`, `lean/Obend/Hardware/Hvm/Model.lean`, `lean/Obend/Hardware/Hvm/Net.lean`, `lean/Obend/Hardware/Hvm/Lower.lean`):
 - `comp_reduces` and `main_reduces` (`lean/Obend/Hardware/Hvm/Net.lean`) prove fuel-indexed reduction soundness from functional intermediate definitions (`FExp`, `FDef`) to active redex nets (`Cfg`, `HTree`).
-- `lowerBookToHvm_sound` (`lean/Obend/Hardware/Hvm/Lower.lean`) proves that compiling an `Obend.Leaf.Book` into an `HvmBook` preserves evaluation over scalar arguments.
+- `lowerBookToHvm_sound` (`lean/Obend/Hardware/Hvm/Lower.lean`) proves that compiling an `Obend.Leaf.Book` into an `HvmBook` preserves evaluation over scalar arguments, complemented by `CofibLUT16` / linear delta-net FPGA synthesis in `lean/Obend/Trailblaze/LeanFpga.lean` (`apex_lean_fpga_rung2_to_rung5`).
 
 ---
 
-## 3. FABulous FPGA Bitstream and Readback Verification (`lean/Obend/Hardware/Fabulous`)
+## 3. FABulous FPGA Bitstream, Readback, and Glitch-Free DPR (`lean/Obend/Hardware/Fabulous`, `lean/Obend/Hardware/ReductionMachine.lean`)
 
 Rather than trusting place-and-route and bitstream packing tools blindly, `lean/Obend/Hardware/Fabulous` verifies configured FPGA fabric behavior directly from configuration bit patterns:
 
 - **Switch-Matrix & Tile Semantics (`lean/Obend/Hardware/Fabulous/Tile.lean`, `lean/Obend/Hardware/Fabulous/LUT4ABSwitchMatrix.lean`, `lean/Obend/Hardware/Fabulous/WIOSwitchMatrix.lean`)**: Parses tile configuration maps (`SwitchMatrix`, `TileModel`) and proves programmable interconnect multiplexer soundness (`pip_sound`).
 - **Bitstream Readback Certificates (`lean/Obend/Hardware/Fabulous/Readback.lean`, `lean/Obend/Hardware/Fabulous/Bitstream.lean`)**: `Cert` (`GateCert`, `FlopCert`, `Entry`) checks routing hops and LUT4/FF configuration bits against a physical bitstream `Bits`; `Cert.required_ofF` establishes netlist realization on the tile `Grid`.
 - **End-to-End iCEstick MAC8 Proof (`lean/Obend/Hardware/Fabulous/Mac8.lean`, `lean/Obend/Hardware/Fabulous/Mac8Cert.lean`)**: Verifies the complete 8-bit multiply-accumulate (`iceStickMac8`) bitstream (`mac8Cert`) from reset through arbitrary clock cycles (`mac8_reset_realizes`, `mac8_step_realizes`, `mac8_fabric_realizes_module`, `mac8_fabric_realizes_module_from_reset`).
+- **Three-Phase Glitch-Free `ICAP` Reconfiguration (`lean/Obend/Hardware/ReductionMachine.lean`)**: `ReconfigTileState` (`frameCrc64`) and `IcapBitstreamFrame` (`expectedCrc64`, `computedCrc64`) enforce fence isolation (`isolated_fence_clamps_output_during_write`) and corrupt-CRC quarantine (`dpr_corrupt_crc_keeps_tile_isolated`).
 
 ---
 
@@ -69,6 +70,8 @@ To eliminate shader-compiler bugs between WGSL/kernel IR and GPU silicon, `lean/
 ## 6. Verified Silicon Applications (`lean/Obend/Apps`, `crates/obend-gui`)
 
 - **`Obend.Apps.ObendRisc` (`lean/Obend/Apps/ObendRisc.lean`)**: 64-bit RISC processor RTL (`obendRiscCpuRtlModule`) with proved decode/wire non-interference and privilege-trap preemption (`risc_base_opcode_non_interference`, `risc_privilege_trap_preempts_base_and_ext`).
+- **`Obend.Apps.FocHil` (`lean/Obend/Apps/FocHil.lean`)**: Closed-loop 20 kHz salient IPM field-oriented motor drive and 6-level SiC flying-capacitor multilevel inverter (`focHilSequentialRtlModule`, `foc_hil_flatten_and_book_sound`), emitted via `obend-emit-sv foc-hil` with 1-cycle overtemperature fault dominance and Yosys SMT-LIB2 LEC verification.
 - **`Obend.Apps.ZkNtt` (`lean/Obend/Apps/ZkNtt.lean`, `lean/Obend/Apps/ZkNtt/Goldilocks.lean`)**: Hardware Goldilocks NTT butterfly and Fiat–Shamir sumcheck transcript coprocessor (`zkNttCoprocRtlModule`).
+- **`Obend.Apps.SovereignDrex` (`lean/Obend/Apps/SovereignDrex.lean`)**: Hardware batch-auction clearing datapath (`sovereignDrexBatchTopRtlModule`) paired with `Obend.Vault.UnifiedDeos`.
 - **`Obend.Apps.SdrFt8Rx` (`lean/Obend/Apps/SdrFt8.lean`, `lean/Obend/Apps/SdrFt8Rx.lean`)**: Numerically controlled oscillator and quadrature FT8 receiver pipeline with proved phasor error and $\ge 63\,\text{dB}$ image-rejection ratio (`nco_phasor_error`, `sdr_irr_ge_63dB`).
 - **Waveform & Geometry Inspection (`crates/obend-gui`)**: Streaming `.vcd` value-change-dump parser (`VcdWaveform`), binary/ASCII `.stl` mesh parser (`StlMesh`), and `.ngc` RS-274 G-code parser (`NgcToolpath`) in `crates/obend-gui/src/apps.rs`.

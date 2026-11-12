@@ -27,5 +27,6 @@ public import Obend.Ledger.Json
 public import Obend.Ledger.Report
 public import Obend.Ledger.Commit
 public import Obend.Ledger.Cli
+public import Obend.Ledger.Floors
 public import Obend.Ledger.Book
 public import Obend.Ledger.Seat

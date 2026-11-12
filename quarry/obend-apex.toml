@@ -1,0 +1,523 @@
+# Obend Whole-System Compositional Assurance & Anti-Leaf-Island Manifest
+# Audited by `obb apex {status, check}`.
+#
+# Every `[[apex]]` entry names a real, kernel-checked (`0 sorry`, `0` custom `axiom`) end-to-end
+# composition theorem at the top of a subsystem vertical spine. `obb apex` computes the transitive
+# reverse module + declaration cone reachable from these Apex theorems + executable entry points,
+# reporting per-subsystem Compositional Coverage % and exposing unwired leaf-island modules.
+
+version = 1
+target_name = "obend"
+default_target_repo = "/Users/ember/dev/obend"
+
+subsystems = [
+  "Core",
+  "Leaf",
+  "Vault",
+  "Judge",
+  "Hardware",
+  "Analysis",
+  "Lower",
+  "Consensus",
+  "Category",
+  "Repair",
+  "Crypto",
+  "Trailblaze",
+]
+
+entry_points = [
+  "lean/Obend/Main.lean",
+  "lean/Obend/FFI.lean",
+  "lean/Obend/FFI/Bridge.lean",
+  "lean/tools/emitsv/EmitSv.lean",
+  "lean/tools/emitcam/EmitCam.lean",
+  "lean/tools/emithvm/EmitHvm.lean",
+  "lean/tools/emitgpu/EmitGpu.lean",
+  "lean/tools/rdna2/Rdna2.lean",
+  "lean/tools/litmuscheck/LitmusCheck.lean",
+  "lean/tools/journal/Main.lean",
+]
+
+# ==============================================================================
+# 1. `Core` — Demand Machine Adequacy, Preservation, Linear Conservation & GC
+# ==============================================================================
+
+[[apex]]
+id = "core-adequacy-observation-sound"
+subsystem = "Core"
+module = "Obend.Core.Proofs.Adequacy.Sound"
+theorem = "runBounded_observation_sound"
+description = "Finite-resource demand machine `runBounded` observation soundness against independent source `Evaluates` semantics across heap graph realization."
+
+[[apex]]
+id = "core-preservation-no-refusal"
+subsystem = "Core"
+module = "Obend.Core.Proofs.Preservation"
+theorem = "checked_runBounded_no_refusal"
+description = "Bidirectionally checked `Core4` programs never encounter runtime typing refusals along `runBounded` execution."
+
+[[apex]]
+id = "core-linear-conservation"
+subsystem = "Core"
+module = "Obend.Core.Proofs.Conservation"
+theorem = "steps_conserve_linear"
+description = "Multi-step demand machine evaluation strictly conserves linear resource obligations across heap and stack frames."
+
+[[apex]]
+id = "core-collect-resume-sound"
+subsystem = "Core"
+module = "Obend.Core.Proofs.Collect.Statements"
+theorem = "collect_resume_runBounded"
+description = "Garbage-collected heap compaction at yield points preserves lockstep `runBounded` continuation semantics."
+
+[[apex]]
+id = "core-checkpoint-roundtrip"
+subsystem = "Core"
+module = "Obend.Core.Proofs.CheckpointRoundTrip"
+theorem = "state_roundTrip"
+description = "Machine state wire serialization and rehydration roundtrip identity across heap, stack, and control frames."
+
+[[apex]]
+id = "core-machine-fast-equivalence"
+subsystem = "Core"
+module = "Obend.Core.MachineFast"
+theorem = "runFrom_eq_runBounded"
+description = "Unboxed `@[csimp]` fast-path executor `runFrom` agrees identically with specification `runBounded`."
+
+# ==============================================================================
+# 2. `Leaf` — Book Emission, Specialization, Static Folding & Served Pin Linking
+# ==============================================================================
+
+[[apex]]
+id = "leaf-emit-book-sound"
+subsystem = "Leaf"
+module = "Obend.Leaf.Emit"
+theorem = "book_sound"
+description = "Whole-book `Leaf` emission preserves observational simulation from flattened source definitions to linked `Book` items."
+
+[[apex]]
+id = "leaf-static-specialize-book"
+subsystem = "Leaf"
+module = "Obend.Leaf.Static"
+theorem = "link_bequiv_specializeBook"
+description = "Data-pin static book specialization (`specializeBook`) is behaviorally equivalent (`bequiv`) to unspecialized book linking."
+
+[[apex]]
+id = "leaf-served-pin-binding"
+subsystem = "Leaf"
+module = "Obend.Leaf.Served"
+theorem = "link_bequiv_bindBookPins_of_judgeB"
+description = "Judged served-book pin binding preserves behavioral equivalence across dynamically resolved slot members."
+
+[[apex]]
+id = "leaf-specialize-integrity"
+subsystem = "Leaf"
+module = "Obend.Leaf.Specialize"
+theorem = "specialize_integrity"
+description = "Moved or invalidated upstream slot pins deterministically block stale specialized `Leaf` candidates."
+
+# ==============================================================================
+# 3. `Vault` — Log Replay, Segmented/Chunked Windows, UnifiedDeos & Rehydration
+# ==============================================================================
+
+[[apex]]
+id = "vault-replay-reading-reconstruction"
+subsystem = "Vault"
+module = "Obend.Vault.Replay"
+theorem = "reconstruct_readingOf"
+description = "Append-only `Vault` event-log replay reconstructs exact world readings, outstanding obligations, and forget-sound retention."
+
+[[apex]]
+id = "vault-log-checkpoint-cache"
+subsystem = "Vault"
+module = "Obend.Vault.Log"
+theorem = "checkpoint_is_cache"
+description = "Vault world checkpoint + suffix log recovery equals full genesis log replay (`recover_eq_replay_prefix`)."
+
+[[apex]]
+id = "vault-segment-log-window"
+subsystem = "Vault"
+module = "Obend.Vault.SegmentLog"
+theorem = "holds_window"
+description = "Segmented/chunked world log assembly preserves invariant validity across window splits and byte-framed log segments."
+
+[[apex]]
+id = "vault-chunked-world-manifest"
+subsystem = "Vault"
+module = "Obend.Vault.ChunkedWorld"
+theorem = "dig_eq_unbe_logHashArray"
+description = "256-bucket chunked world storage and incremental manifest updates match monolithic world digest commitment."
+
+[[apex]]
+id = "vault-unified-deos-conservation"
+subsystem = "Vault"
+module = "Obend.Vault.UnifiedDeos"
+theorem = "unifiedDeos_ledger_and_turn_sound"
+description = "End-to-end `UnifiedDeos` turn step conserves multi-asset balances while enforcing ZoE seat floors, mandates, and stale-pin refusal."
+
+[[apex]]
+id = "vault-rehydration-confinement"
+subsystem = "Vault"
+module = "Obend.Vault.Rehydration"
+theorem = "replayedDeterministic_iff_confined"
+description = "Attested vault rehydration classifies deterministic replay iff the execution trace is strictly confined."
+
+[[apex]]
+id = "vault-transport-cell-moves"
+subsystem = "Vault"
+module = "Obend.Vault.Transport"
+theorem = "valuesHold_of_cellMoves"
+description = "Offline vault branch transport and handoff preserve cell invariants without duplicate or dropped effects."
+
+# ==============================================================================
+# 4. `Judge` — Genealogy Non-Regression, LRAT, Clearing, Netting, Confinement & Receipts
+# ==============================================================================
+
+[[apex]]
+id = "judge-genealogy-lob-and-home"
+subsystem = "Judge"
+module = "Obend.Judge.Genealogy"
+theorem = "lob_cost_necessary"
+description = "Self-verifying Judge succession enforces `home` revert corrigibility, floor non-regression, and explicit `LobCost` accounting."
+
+[[apex]]
+id = "judge-lrat-unsat-sound"
+subsystem = "Judge"
+module = "Obend.Judge.Lrat"
+theorem = "checkText_sound"
+description = "Compiled `lrat@1` DIMACS + LRAT certificate verifier implies semantic Boolean unsatisfiability."
+
+[[apex]]
+id = "judge-clearing-epsilon-optimal"
+subsystem = "Judge"
+module = "Obend.Judge.Clearing"
+theorem = "judge_certifies_epsilon_optimal"
+description = "Primal-dual market clearing certificate checker implies weak-duality feasibility and epsilon-optimality."
+
+[[apex]]
+id = "judge-netting-gross-agreement"
+subsystem = "Judge"
+module = "Obend.Judge.Netting"
+theorem = "settleNetting_agrees_with_gross"
+description = "Certified multilateral netting cycle elimination conserves net positions and agrees with gross obligation settlement."
+
+[[apex]]
+id = "judge-automata-confinement-sound"
+subsystem = "Judge"
+module = "Obend.Judge.AutomataConfinement"
+theorem = "verifyDclutchHoardClearing_sound"
+description = "CFG × DFA regular confinement and hoard-clearing certificate checker implies language inclusion and conservation."
+
+[[apex]]
+id = "judge-tlsn-transcript-policy"
+subsystem = "Judge"
+module = "Obend.Judge.TranscriptPolicy"
+theorem = "tlsnTranscriptPolicy_sound"
+description = "Selective-disclosure `tlsn` transcript redaction preserves multi-slot DFA policy verdicts without leaking secret spans."
+
+[[apex]]
+id = "judge-gl-equilibrium-sound"
+subsystem = "Judge"
+module = "Obend.Run.HyperLaw"
+theorem = "checkGLEquilibrium_sound"
+description = "Modal Gelfond-Lifschitz equilibrium verifier certifies stable `Obend.Reasons.gamma` fixed-point minimality."
+
+[[apex]]
+id = "receipt-merkle-batch-sound"
+subsystem = "Judge"
+module = "Obend.Receipt.Merkle"
+theorem = "verifyMerkleBatchProof_binds"
+description = "Domain-separated batch Merkle opening verification cryptographically binds leaf payloads to the committed root."
+
+[[apex]]
+id = "receipt-negotiation-minimal"
+subsystem = "Judge"
+module = "Obend.Receipt.Negotiation"
+theorem = "selectMinCostCommonJudge_minimal"
+description = "Cross-peer receipt format negotiation selects a minimal-cost common Judge supported by both endpoints."
+
+# ==============================================================================
+# 5. `Hardware` — Square RTL=GPU, FABulous Bitstreams, RDNA2 ISA, Litmus & HVM
+# ==============================================================================
+
+[[apex]]
+id = "hardware-square-rtl-eq-gpu"
+subsystem = "Hardware"
+module = "Obend.Hardware.Square"
+theorem = "rtl_eq_gpu"
+description = "Unified hypergraph compilation commutes across combinational/pipelined SystemVerilog RTL and WGSL GPU wavefront lowering."
+
+[[apex]]
+id = "hardware-fabulous-mac8-bitstream"
+subsystem = "Hardware"
+module = "Obend.Hardware.Fabulous.Mac8"
+theorem = "mac8_fabric_realizes_module_from_reset"
+description = "Decoded FABulous FPGA tile/switch-matrix configuration realizes the multi-cycle RTL module specification from reset."
+
+[[apex]]
+id = "hardware-rdna2-certified-dump"
+subsystem = "Hardware"
+module = "Obend.Hardware.Gpu.Rdna2.Certified"
+theorem = "certifyBlockDump_sound"
+description = "AMD RDNA2 machine-code binary decoder + wave/LDS store-ownership verifier certifies end-to-end GPU kernel semantics."
+
+[[apex]]
+id = "hardware-gpu-array-emit-correct"
+subsystem = "Hardware"
+module = "Obend.Hardware.Gpu.ArrayEmitCorrect"
+theorem = "compile_runProgram"
+description = "Multi-stage array hypergraph scheduling and WGSL compute kernel emission simulate sequential array program execution."
+
+[[apex]]
+id = "hardware-gpu-memory-litmus"
+subsystem = "Hardware"
+module = "Obend.Hardware.Gpu.Memory"
+theorem = "allowed_iff_glues"
+description = "Scoped GPU workgroup/device memory-model litmus visibility holds iff per-scope observations glue consistently."
+
+[[apex]]
+id = "hardware-hvm-lower-and-inet"
+subsystem = "Hardware"
+module = "Obend.Hardware.Hvm.Lower"
+theorem = "lowerBookToHvm_sound"
+description = "Lowering `Leaf` books to HVM2 interaction nets preserves evaluation to ground values."
+
+[[apex]]
+id = "hardware-open-hypergraph-csr"
+subsystem = "Hardware"
+module = "Obend.Hardware.OpenHypergraph"
+theorem = "layerHypergraphCsr_sound_and_agrees"
+description = "CSR wavefront topological peeling produces data-independent parallel hardware layers agreeing with reference hypergraph semantics."
+
+# ==============================================================================
+# 6. `Analysis` — Taylor Models, Picard ODE Flowpipes, Hybrid & SOS Certificates
+# ==============================================================================
+
+[[apex]]
+id = "analysis-flowpipe-contract-safety"
+subsystem = "Analysis"
+module = "Obend.Analysis.Flowpipe"
+theorem = "flowpipe_safety_admits_contract"
+description = "Verified Picard–Lie remainder Taylor flowpipe enclosure discharges continuous-time cyber-physical safety contracts."
+
+[[apex]]
+id = "analysis-taylor-model-picard"
+subsystem = "Analysis"
+module = "Obend.Analysis.TaylorModel"
+theorem = "taylorModel_picard_sound"
+description = "Validated polynomial + interval remainder TaylorModel arithmetic encloses transcendental and Picard operator trajectories."
+
+[[apex]]
+id = "analysis-hybrid-flowpipe-sound"
+subsystem = "Analysis"
+module = "Obend.Analysis.Hybrid"
+theorem = "verifyFlowpipe_sound"
+description = "Hybrid automaton mode-switch guard intersection and Taylor flowpipe tube verifier certifies multi-mode trajectory safety."
+
+# ==============================================================================
+# 7. `Lower` — Lean Kernel/LCNF -> Core4 -> Book -> SiliconKernel & RTL Bridge
+# ==============================================================================
+
+[[apex]]
+id = "lower-hardware-bridge-sound"
+subsystem = "Lower"
+module = "Obend.Lower.Proofs.Hardware"
+theorem = "multiCtorIota_hardware_bridge_sound"
+description = "End-to-end Lean lowering through `Core4` and saturating arithmetic/multi-constructor iota refinement to RTL hardware."
+
+[[apex]]
+id = "lower-lean-to-book"
+subsystem = "Lower"
+module = "Obend.Lower.Proofs.Book"
+theorem = "lean_to_book"
+description = "Elaborated Lean declarations in the verified fragment lower into typed `Leaf` books with preserved evaluation."
+
+[[apex]]
+id = "lower-silicon-kernel-5stage-check"
+subsystem = "Lower"
+module = "Obend.Lower.Proofs.SiliconKernel"
+theorem = "silicon_kernel_5stage_check_sound"
+description = "64-bit 6-bit-typecode `ExprCAM` + 5-stage `SiliconElabFabric` hardware kernel gate agrees with `LeanKernel` typing and `lowerT`."
+
+[[apex]]
+id = "lower-silicon-elab-dpr-specialize"
+subsystem = "Lower"
+module = "Obend.Lower.Proofs.SiliconKernel"
+theorem = "silicon_elab_residual_dpr_specialize_sound"
+description = "Dynamic partial reconfiguration (`silicon_simp`) residual hardware specialization preserves `Core4` evaluation semantics with verified fallback."
+
+[[apex]]
+id = "lower-typed-completeness"
+subsystem = "Lower"
+module = "Obend.Lower.Proofs.Complete"
+theorem = "ltyped_iff_checkL"
+description = "Executable Lean-fragment checker `checkL` is both sound and complete with respect to inductive typing `ltyped`."
+
+# ==============================================================================
+# 8. `Consensus` — Multi-Tier Finality, Simplex BFT & Unified DeOS Settlement
+# ==============================================================================
+
+[[apex]]
+id = "consensus-unified-deos-finality"
+subsystem = "Consensus"
+module = "Obend.Vault.UnifiedDeos"
+theorem = "unifiedDeos_fastpath_and_simplex_finality_sound"
+description = "Multi-tier Unified DeOS finality composes disjoint fast-path commutativity, `cSHAKE256`-bound Simplex BFT QCs, and crash-safe durable recovery."
+
+[[apex]]
+id = "consensus-quorum-bound-gate"
+subsystem = "Consensus"
+module = "Obend.Consensus.Finality"
+theorem = "advanceQuorumBoundGate_formQC_sound"
+description = "Quorum-bound finality gate enforces deduplicated validator weight thresholds, `cSHAKE256` domain binding, and per-height uniqueness."
+
+[[apex]]
+id = "consensus-simplex-trace-sound"
+subsystem = "Consensus"
+module = "Obend.Consensus.SimplexTrace"
+theorem = "checkTrace_sound"
+description = "Executable `Simplex` quorum-certificate and equivocation trace verifier implies protocol safety invariants."
+
+# ==============================================================================
+# 9. `Category` — Open Systems, Simulation Refinement & Graded Hoare Logic
+# ==============================================================================
+
+[[apex]]
+id = "category-open-system-gyrator"
+subsystem = "Category"
+module = "Obend.Category.OpenSystem"
+theorem = "skew_gyrator_power_cancels"
+description = "Port-Hamiltonian skew-symmetric interconnection and gyrator composition strictly conserve energy bounds along trajectories."
+
+[[apex]]
+id = "category-refines-galois"
+subsystem = "Category"
+module = "Obend.Category.Refines"
+theorem = "sim_preserves_galois"
+description = "Step-indexed lax/oplax simulation refinement composes vertically and transports across Galois abstraction/concretization pairs."
+
+[[apex]]
+id = "category-graded-logic-frame"
+subsystem = "Category"
+module = "Obend.Category.GradedLogic"
+theorem = "frame_triple"
+description = "Ordered-monoid graded Hoare triples satisfy frame preservation and syntax-directed verification condition generation."
+
+# ==============================================================================
+# 10. `Repair` — Ornamented Polynomial Algebras, Paco Coinduction & QuotAssembly
+# ==============================================================================
+
+[[apex]]
+id = "repair-alg-config-coherence"
+subsystem = "Repair"
+module = "Obend.Repair.AlgConfig"
+theorem = "unary_bin_add_coherence"
+description = "Ornamented polynomial initial-algebra equivalences transport unary Peano proofs across binary representation changes."
+
+[[apex]]
+id = "repair-coalg-paco-coinduction"
+subsystem = "Repair"
+module = "Obend.Repair.CoalgConfig"
+theorem = "coind_ok"
+description = "Parameterized coinduction (`paco`/`gpaco`) up-to closure establishes coalgebraic bisimulation without raw guardedness fragility."
+
+[[apex]]
+id = "repair-quot-assembly-lift"
+subsystem = "Repair"
+module = "Obend.Repair.QuotAssembly"
+theorem = "doubleModQuotHom_tracker_reduces_rfl"
+description = "Choice-free, `Quot.sound`-free realizability `EffectiveQuotient.liftHom` reduces computational trackers judgmentally (`rfl`)."
+
+# ==============================================================================
+# 11. `Crypto` — Dual-Track PCS Spine (Hash + Lattice/SIS) & SameOpening Judge
+# ==============================================================================
+
+[[apex]]
+id = "crypto-dual-spine-pcs"
+subsystem = "Crypto"
+module = "Obend.Crypto.DualSpine"
+theorem = "canopyAjtaiDualPCS_sound_of_hash_or_sis"
+description = "Dual-track Canopy Merkle + Ajtai MSIS polynomial commitment scheme retains soundness if either hash collision resistance or SIS holds."
+
+[[apex]]
+id = "crypto-same-opening-sound"
+subsystem = "Crypto"
+module = "Obend.Crypto.SameOpening"
+theorem = "verifySameOpening_sound"
+description = "Cross-domain `SameOpening` verifier binds quantized inference witnesses, smudged threshold transcripts, and KKT zero-duality-gap clearing."
+
+# ==============================================================================
+# 12. `Trailblaze` — Compositional Polis DeOS Turn & Lean->FPGA Rung 2..5 Spine
+# ==============================================================================
+
+[[apex]]
+id = "trailblaze-polis-deos-turn"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.Polis"
+theorem = "apex_polis_deos_turn_safe"
+description = "End-to-end Polis DeOS turn composes Blum offline memory checking, seL4 Microkit SPSC copy-before-verify isolation, and `SameOpening` clearing."
+
+[[apex]]
+id = "trailblaze-lean-fpga-spine"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.LeanFpga"
+theorem = "apex_lean_fpga_rung2_to_rung5"
+description = "End-to-end Lean-to-FPGA Rung 2..5 spine composes multi-valued cube evaluation, linear port wiring, FABulous bitstream roundtrip, and DPR isolation."
+
+# ==============================================================================
+# Planned Wave 4+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
+# ==============================================================================
+
+[[planned_apex]]
+id = "pillar1-core5-r2ltt-super-refines"
+pillar = "Pillar 1: Obend.Core5"
+subsystem = "Core"
+target_module = "Obend.Core5.Proofs.Adequacy"
+target_theorem = "core5_r2ltt_intention_renew_sound"
+wave = "Wave 4B"
+description = "Realizability 2-Level Type Theory (`CofibLUT16`) + Clarke `DeltaLens` `Intention.renew` frame-preserving adequacy."
+
+[[planned_apex]]
+id = "pillar2-hdlv2-ospc-4tile-dpi"
+pillar = "Pillar 2: Obend.Hardware.HdlV2"
+subsystem = "Hardware"
+target_module = "Obend.Hardware.HdlV2.OspcProver"
+target_theorem = "ospc_4tile_fabulous_ecp5_refines_spec"
+wave = "Wave 4B"
+description = "Clock-domain-indexed `RtlSignal dom iv w` + OSPC 4-Tile prover refined through `FABulous`/ECP5 bitstream decoder and isolated `obend-hw-dpi`."
+
+[[planned_apex]]
+id = "pillar3-zkvm-dual-spine-umem-verkle"
+pillar = "Pillar 3: Obend.ZkVm"
+subsystem = "Vault"
+target_module = "Obend.ZkVm.DualSpine"
+target_theorem = "zkvm_leaf_book_umem_expverkle_sound"
+wave = "Wave 4C"
+description = "`Leaf.Book` × `UMem` Exponential Verkle (`ChunkedWorld` O(1) mmap snapshots) proved over Fenzi-safe `FenziTranscript` + `Magnetar`/`PikkuFold`."
+
+[[planned_apex]]
+id = "pillar4-darkbazaar-zkml-bolt-tulva-clearing"
+pillar = "Pillar 4: Obend.DarkBazaar"
+subsystem = "Analysis"
+target_module = "Obend.DarkBazaar.Settlement"
+target_theorem = "darkBazaar_sable_tulva_bitz_clearing_conserves"
+wave = "Wave 4C"
+description = "End-to-end `LeanCert` `TaylorModel` -> `Sable` 31-bit zkML -> `BOLT-FHE` -> `Tulva` smudged threshold decryption -> `BitZ` `MintSafeQuantization` clearing."
+
+[[planned_apex]]
+id = "pillar5-governance-zkstripe-automata-cluster"
+pillar = "Pillar 5: Obend.Governance"
+subsystem = "Consensus"
+target_module = "Obend.Governance.ClusterStack"
+target_theorem = "governance_zkstripe_13automata_ozaki_corrigibility_sound"
+wave = "Wave 4D"
+description = "`Tower256` `zkStripe` + 13-family CBOR `AutomataCert` + 4-hop `tlsn` `CallTree` + Ozaki base-13 GPU cluster + `svenvs` demonic corrigibility."
+
+[[planned_apex]]
+id = "pillar6-firmament-sel4-microkit-outbox"
+pillar = "Pillar 6: Obend.Firmament"
+subsystem = "Vault"
+target_module = "Obend.Firmament.MicrokitOutbox"
+target_theorem = "firmament_sel4_copy_before_verify_and_irreversible_outbox_safe"
+wave = "Wave 5"
+description = "`seL4` Microkit PDs mandatory copy-before-verify SPSC ring isolation + 3-class `IrreversibleEffectSettlement` gated on `Simplex` finalized QCs."
