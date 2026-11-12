@@ -19,7 +19,7 @@ Verifies all 5 pillars in a single end-to-end test suite (`0 sorry`, `0 sorryAx`
      `envelope_timing_signoff_implies_all_intermediate_corners_safe`.
 4. **Netlist-Bound `.obend` Silicon Tapeout Pipeline & Real cSHAKE256 SV Digest (`Obend.Hardware.TapeoutPipeline`)**:
    - Verifies `compileCompositionToSiliconTapeout_sound`, `compileObendModuleToSiliconTapeout_sound`,
-     `tapeout_sv_digest_binds_or_collides`, and `golden_obend_module_silicon_tapeout_verified`.
+     `tapeout_sv_digest_binds_or_collides`, and `reference_obend_module_silicon_tapeout_verified`.
 5. **`#tooth` Mutation Probes**:
    - Exercises `#tooth` mutation falsification on `substRtlInputPort0` and `checkEnvelopeTimingSignoff`.
 -/

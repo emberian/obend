@@ -1598,6 +1598,38 @@ theorem = "mlweBlindedCommit_hiding_le_two_mlweAdv"
 description = "Hybrid game-hopping MLWE blinded-commitment hiding bound (`mlweBlindedCommit_hiding_le_two_mlweAdv`) bounding distinguishing advantage by twice the Module-LWE game advantage."
 
 # ==============================================================================
+# 25. Seam 4A / 4B & Silicon Elaboration Hardening (`YosysLec`, `DarkBazaar`, `SafePhysicalShield`, `PhysicalEnvelope`)
+# ==============================================================================
+
+[[apex]]
+id = "hardware-yosys-lec-mem-script-unsat-of-step"
+subsystem = "Hardware"
+module = "Obend.Hardware.YosysLec"
+theorem = "lecMemScript_unsat_of_step"
+description = "End-to-end synchronous RAM SMT-LIB2 bitvector-array miter equivalence (`lecMemScript_unsat_of_step`) proving unsatisfiability implies exact `stepMemModule` register, read-port, and memory-array transition agreement."
+
+[[apex]]
+id = "crypto-darkbazaar-epoch-auth-refuses-order-replay"
+subsystem = "Crypto"
+module = "Obend.Crypto.DarkBazaar"
+theorem = "stepDarkBazaarEpochAuth_refuses_order_replay"
+description = "Stateful epoch-authenticated private market clearing (`stepDarkBazaarEpochAuth_refuses_order_replay`) refusing duplicate order commitments across multi-epoch execution."
+
+[[apex]]
+id = "hardware-safe-physical-shield-raw-bus-sound"
+subsystem = "Hardware"
+module = "Obend.Hardware.SafePhysicalShield"
+theorem = "adminStepRawBus_sound"
+description = "Raw ADC/DAC bus physical safety shield (`adminStepRawBus_sound`) enforcing sampled plant forward invariance and fail-closed fallback across uncalibrated sensor frames."
+
+[[apex]]
+id = "clustergov-compute-meter-dedup-sound"
+subsystem = "ClusterGov"
+module = "Obend.ClusterGov.PhysicalEnvelope"
+theorem = "auditSwarmComputeMeterDedup_sound"
+description = "Deduplicated physical compute-energy receipt metering (`auditSwarmComputeMeterDedup_sound`) rejecting duplicate receipt rows and undermetered energy claims across multi-node logs."
+
+# ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
 
