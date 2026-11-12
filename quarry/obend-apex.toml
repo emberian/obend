@@ -1416,6 +1416,34 @@ module = "Obend.Metatheory.LiveEvolutionAndLink"
 theorem = "schemaMorphism_blocks_confused_deputy_caveat_drop"
 description = "Cambria `SchemaMorphism` live evolution safety (`schemaMorphism_blocks_confused_deputy_caveat_drop`) preventing contravariant caveat drops and confused-deputy escalation across live upgrades."
 
+[[apex]]
+id = "polis-vc-dual-sumcheck-piop-compliance-sound"
+subsystem = "Polis"
+module = "Obend.Polis.VerifiableCredentials"
+theorem = "verifyDualSumcheckPIOP_compliance_sound"
+description = "Dual-sumcheck PIOP verifiable credential presentation soundness (`verifyDualSumcheckPIOP_compliance_sound`) binding selective attribute disclosure, non-revocation status policy, and unlinkable presentation nonces."
+
+[[apex]]
+id = "polis-houyhnhnm-turn-stored-ancestry-no-bypass"
+subsystem = "Polis"
+module = "Obend.Polis.HouyhnhnmTurn"
+theorem = "validHouyhnhnmTrace_stored_ancestry_no_bypass"
+description = "Multi-turn `IngressMmr` stored-capability ancestry confinement (`validHouyhnhnmTrace_stored_ancestry_no_bypass`) closing ambient stored-entry bypasses across `HouyhnhnmTurn` traces."
+
+[[apex]]
+id = "law-amendcli-trace-receipt-accounting-sound"
+subsystem = "Law"
+module = "Obend.Law.AmendCli"
+theorem = "executeTraceWithReceipts_accounting_sound"
+description = "Multi-turn live constitutional amendment trace receipt accounting soundness (`executeTraceWithReceipts_accounting_sound`) preserving quorum, epoch monotonicity, and receipt conservation."
+
+[[apex]]
+id = "hardware-pcb-electro-thermal-passivity-sound"
+subsystem = "Hardware"
+module = "Obend.Hardware.PCB"
+theorem = "traceElectroThermal_sound"
+description = "Coupled PCB trace electro-thermal & PDN target-impedance soundness (`traceElectroThermal_sound`) paired with thermal runaway impossibility (`traceThermalRunaway_impossible`)."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
