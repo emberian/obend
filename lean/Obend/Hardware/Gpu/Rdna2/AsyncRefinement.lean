@@ -1288,6 +1288,7 @@ def verifyAsyncTraceWords (vgprCount : Nat) (ws : List UInt32) : Bool :=
   | some is => checkVgprFootprint vgprCount is && checkAsyncBlock is
   | none => false
 
+example : decodeKernelWords 0 [] = some [] := rfl
 example : verifyAsyncTraceWords 0 [] = true := by decide
 
 /-- **Soundness of the word-level check.** Accepted words are a decoded kernel whose dwords are exactly the input

@@ -712,6 +712,20 @@ def emitCheckedPallasTpuKernel (hbmTiles vmemTiles scalarRegs vregCount : Nat) (
     some (emitPallasKernelBody p)
   else none
 
+/-- The checked emitter emits exactly when the bounds check, the DMA/semaphore analysis and the semaphore-kind
+check all accept, and then emits the kernel body. -/
+theorem emitCheckedPallasTpuKernel_iff (hbmTiles vmemTiles scalarRegs vregCount : Nat) (p : TpuProg) (src : String) :
+    emitCheckedPallasTpuKernel hbmTiles vmemTiles scalarRegs vregCount p = some src ↔
+      (checkProgramBounds hbmTiles vmemTiles scalarRegs vregCount (programSemaphoreCount p) p = true ∧
+        checkDmaSemaphores (programSemaphoreCount p) p = true ∧ checkPallasSemaphores p = true) ∧
+      src = emitPallasKernelBody p := by
+  unfold emitCheckedPallasTpuKernel
+  split
+  · rename_i h; simp only [Bool.and_eq_true] at h
+    exact ⟨fun e => ⟨⟨h.1.1, h.1.2, h.2⟩, (Option.some.inj e).symm⟩, fun e => by rw [e.2]⟩
+  · rename_i h; simp only [Bool.and_eq_true] at h
+    exact ⟨fun e => (by cases e), fun e => absurd ⟨⟨e.1.1, e.1.2.1⟩, e.1.2.2⟩ h⟩
+
 theorem emitCheckedPallasTpuKernel_sound (hbmTiles vmemTiles scalarRegs vregCount : Nat) (p : TpuProg) (src : String)
     (h : emitCheckedPallasTpuKernel hbmTiles vmemTiles scalarRegs vregCount p = some src) :
     src = emitPallasKernelBody p ∧
@@ -876,6 +890,8 @@ theorem validateGemmTileLayout_sound (hbmSize vmemTiles smemSize vregCount semSi
     intro t ht; rcases ht with rfl | ht <;> simp <;> omega)
   have ⟨hb, hf⟩ := layoutProgramOk_sound hbmSize vmemTiles smemSize vregCount semSize [lhs, rhs] _ ok
   exact ⟨hb, fun s => ⟨hf lhs (by simp) s, hf rhs (by simp) s⟩⟩
+
+example : (goldilocksGemmChecked 7 7 2 0 1 3).isSome = true := by decide
 
 theorem goldilocksGemmChecked_sound (hbmSize vmemTiles smemSize vregCount semSize dst lhs rhs scratch : Nat)
     (p : TpuProg) (h : goldilocksGemmChecked vmemTiles vregCount dst lhs rhs scratch = some p) :
