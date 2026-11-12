@@ -384,7 +384,7 @@ end Pins
 
 section Dated
 open Obend.Receipt.Merkle
-open Obend.Digest.HashBytes (Hash Collision)
+open Obend.Digest.HashBytes (Hash Collision CollisionAmong)
 variable {W Rest Row Fact Clause Cell Pin Key : Type}
 
 /-- **What a stranger checks of the dated root**: every opening proof opens against it. -/
@@ -410,31 +410,62 @@ size, a value that reads as the opening. -/
     D.C.keys.idxOf? (D.key op.1.1) == some op.2.index && op.2.size == D.C.keys.length &&
       D.bit op.1.1 op.2.value == op.1.2
 
-/-- **The openings are the dated view's**: when `dated` is the root of world `w`'s view and the
-stranger's two checks pass, every opening is what `w` says of its fact, or the hash collides. -/
+/-- Finite list of preimages hashed across all opening proofs of `R` against world `w`'s committed view. -/
+def receiptPreimages (H : Hash) (D : Reading W Fact Key) (w : W) (R : Receipt Cell Pin Fact Clause) :
+    List (List UInt8) :=
+  R.proofs.flatMap fun p => openingPreimages H p ++ openingPreimages H (mapOpening H (D.C.values w) p.index)
+
+private theorem exists_ne_of_all_beq_false {α : Type} (p q : α → Bool) :
+    ∀ (xs : List α), (xs.all fun x => p x == q x) = false → ∃ x ∈ xs, p x ≠ q x
+  | [], h => by simp at h
+  | x :: xs, h => by
+    simp only [List.all_cons, Bool.and_eq_false_imp] at h
+    by_cases hxq : p x = q x
+    · obtain ⟨y, hy, hne⟩ := exists_ne_of_all_beq_false p q xs (h (beq_iff_eq.2 hxq))
+      exact ⟨y, List.mem_cons_of_mem _ hy, hne⟩
+    · exact ⟨x, List.mem_cons_self, hxq⟩
+
+/-- **The openings are the dated view's** (constructive, `0 Classical.choice`, finite-scope `CollisionAmong`):
+when `dated` is the root of world `w`'s view and the stranger's two checks pass, every opening is
+what `w` says of its fact, or `H` collides among `receiptPreimages H D w R`. -/
 theorem openings_checked [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded H) (D : Reading W Fact Key)
     {look : W → Fact → Bool} (hco : D.Coherent look) (w : W) (R : Receipt Cell Pin Fact Clause)
     (hd : R.dated = D.C.dated H w) (hc : datedOpens H R = true) (hm : D.matched R = true) :
-    (∀ o ∈ R.openings, look w o.1 = o.2) ∨ Collision H := by
-  by_cases hcol : Collision H
-  · exact .inr hcol
-  left
-  intro o ho
-  simp only [Reading.matched, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at hm
-  obtain ⟨hlen, hall⟩ := hm
-  obtain ⟨k, hk, rfl⟩ := List.getElem_of_mem ho
-  have hk' : k < R.proofs.length := hlen ▸ hk
-  have hz : (R.openings[k], R.proofs[k]) ∈ R.openings.zip R.proofs := by
-    have := List.getElem_mem (l := R.openings.zip R.proofs) (n := k) (by simp; omega)
-    simpa using this
-  obtain ⟨⟨hidx, hsize⟩, hbit⟩ := hall _ hz
-  have hp : opens H R.proofs[k] R.dated = true := by
-    simp only [datedOpens, List.all_eq_true] at hc; exact hc _ (List.getElem_mem hk')
-  obtain ⟨hlt, hkey, _⟩ := List.idxOf?_eq_some_iff.1 hidx
-  rw [hd] at hp
-  rcases Commit.opens_val hb D.C w hp hsize hlt with hv | c
-  · rw [← hbit, hv, hkey, hco]
-  · exact absurd c hcol
+    (∀ o ∈ R.openings, look w o.1 = o.2) ∨
+      CollisionAmong H (fun m => m ∈ receiptPreimages H D w R) := by
+  cases hAll : (R.openings.all fun o => look w o.1 == o.2)
+  · obtain ⟨o, ho, hne⟩ := exists_ne_of_all_beq_false (fun o => look w o.1) Prod.snd R.openings hAll
+    simp only [Reading.matched, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at hm
+    obtain ⟨hlen, hall⟩ := hm
+    obtain ⟨k, hk, rfl⟩ := List.getElem_of_mem ho
+    have hk' : k < R.proofs.length := hlen ▸ hk
+    have hz : (R.openings[k], R.proofs[k]) ∈ R.openings.zip R.proofs := by
+      have := List.getElem_mem (l := R.openings.zip R.proofs) (n := k) (by simp; omega)
+      simpa using this
+    obtain ⟨⟨hidx, hsize⟩, hbit⟩ := hall _ hz
+    have hp : opens H R.proofs[k] R.dated = true := by
+      simp only [datedOpens, List.all_eq_true] at hc; exact hc _ (List.getElem_mem hk')
+    obtain ⟨hlt, hkey, _⟩ := List.idxOf?_eq_some_iff.1 hidx
+    rw [hd] at hp
+    rcases Commit.opens_val hb D.C w hp hsize hlt with hv | c
+    · exfalso; apply hne
+      rw [← hbit, hv, hkey, hco]
+    · exact .inr (c.mono fun m hmIn =>
+        List.mem_flatMap.2 ⟨R.proofs[k], List.getElem_mem hk', hmIn⟩)
+  · exact .inl fun o ho => beq_iff_eq.1 (List.all_eq_true.1 hAll o ho)
+
+theorem dated_verdict_scoped [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded H)
+    (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (D : Reading W Fact Key)
+    (hco : D.Coherent A.look) (a : W × Rest) (r : Row) (hm : A.moves r = false)
+    {q : Shape} {t : List (String × Trust)} {p : Digest} (w : W)
+    (hd : (issue A N a r q t p).dated = D.C.dated H w) (hc : datedOpens H (issue A N a r q t p) = true)
+    (hmt : D.matched (issue A N a r q t p) = true) :
+    (Outcome.ofExcept (A.step (w, a.2) r) = (issue A N a r q t p).verdict ∧
+      postOf A N (w, a.2) r = (issue A N a r q t p).post) ∨
+      CollisionAmong H (fun m => m ∈ receiptPreimages H D w (issue A N a r q t p)) := by
+  rcases openings_checked hb D hco w _ hd hc hmt with ho | c
+  · exact .inl (receipt_sufficient A N a r hm w ho)
+  · exact .inr c
 
 /-- **The receipt's verdict is the dated view's**: a receipt issued for a row, whose dated root is
 the root of world `w`'s view and whose openings pass the stranger's checks, has the verdict and the
@@ -446,22 +477,21 @@ theorem dated_verdict [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded H)
     (hd : (issue A N a r q t p).dated = D.C.dated H w) (hc : datedOpens H (issue A N a r q t p) = true)
     (hmt : D.matched (issue A N a r q t p) = true) :
     (Outcome.ofExcept (A.step (w, a.2) r) = (issue A N a r q t p).verdict ∧
-      postOf A N (w, a.2) r = (issue A N a r q t p).post) ∨ Collision H := by
-  rcases openings_checked hb D hco w _ hd hc hmt with ho | c
-  · exact .inl (receipt_sufficient A N a r hm w ho)
-  · exact .inr c
+      postOf A N (w, a.2) r = (issue A N a r q t p).post) ∨ Collision H :=
+  (dated_verdict_scoped hb A N D hco a r hm w hd hc hmt).imp_right CollisionAmong.global
 
 /-- **A receipt the stranger accepts has the dated view's verdict**, for ANY receipt, not only an
 honestly issued one: when `recheck` passes at the stranger's view `w'` (which computes that the
 openings cover the row's reads there) and the dated checks pass against a root that is the root of
 world `w`'s view, the row judged at `w` has the receipt's verdict and post root, or the hash
-collides. The coverage that `dated_verdict` gets from `issue` is here computed by `recheck`. -/
+collides among `receiptPreimages H D w R`. -/
 theorem dated_sound [DecidableEq Clause] [DecidableEq Fact] [BEq Key] [LawfulBEq Key] {H : Hash}
     (hb : Bounded H) (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin)
     (D : Reading W Fact Key) (hco : D.Coherent A.look) (rest : Rest) (r : Row) (hm : A.moves r = false)
     (w' w : W) (R : Receipt Cell Pin Fact Clause) (hr : recheck A N rest r w' R = true)
     (hd : R.dated = D.C.dated H w) (hc : datedOpens H R = true) (hmt : D.matched R = true) :
-    (Outcome.ofExcept (A.step (w, rest) r) = R.verdict ∧ postOf A N (w, rest) r = R.post) ∨ Collision H := by
+    (Outcome.ofExcept (A.step (w, rest) r) = R.verdict ∧ postOf A N (w, rest) r = R.post) ∨
+      CollisionAmong H (fun m => m ∈ receiptPreimages H D w R) := by
   rcases openings_checked hb D hco w R hd hc hmt with ho | c
   · left
     obtain ⟨_, _, hv, hp⟩ := recheck_sound hr
@@ -650,7 +680,7 @@ theorem accepts_cited_sound [DecidableEq Clause] [DecidableEq Fact] {Key : Type}
     (w : W) (hd : R.dated = S.D.C.dated S.H w) :
     ∃ a, A.run a₀ pre = .ok a ∧
       ((Outcome.ofExcept (A.step (w, a.2) r) = .ok ∧ postOf A S.N (w, a.2) r = R.post) ∨
-        Obend.Digest.HashBytes.Collision S.H) := by
+        Obend.Digest.HashBytes.CollisionAmong S.H (fun m => m ∈ receiptPreimages S.H S.D w R)) := by
   simp only [accepts] at h
   split at h
   · rename_i a hrun

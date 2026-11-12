@@ -29,6 +29,8 @@ identity receipt's statement holds.
 -/
 public import Obend.Receipt.Negotiation
 public import Obend.Judge.Identity
+public import Obend.Reasons.DialecticalBlame
+import all Obend.Slot.Protocol
 
 public section
 namespace Obend.Receipt.Export
@@ -153,10 +155,18 @@ def refusalName : Judge.Lrat.Refusal → String
 def verifyIdentityCore (d : Identity) (cert : Judge.Lrat.Cert) (grade : Nat) : Bool :=
   Judge.Lrat.check grade (encode d) cert == .ok
 
+/-- Non-vacuity / satisfiability witness for `verifyIdentityCore`. -/
+theorem verifyIdentityCore_inhabited :
+    verifyIdentityCore ⟨"empty", 0, .const true, [], []⟩ (.refutation [.add 7 [] [6, 4, 2]]) 1 = true := by
+  unfold verifyIdentityCore; decide
+
 /-- **An accepted identity receipt's statement holds.** -/
 theorem verifyIdentityCore_sound {d : Identity} {cert : Judge.Lrat.Cert} {grade : Nat}
-    (h : verifyIdentityCore d cert grade = true) : d.Holds :=
-  encode_sound d (Judge.Lrat.check_sound (by simpa [verifyIdentityCore] using h))
+    (h : verifyIdentityCore d cert grade = true) :
+    Judge.Lrat.check grade (encode d) cert = .ok ∧ d.Holds := by
+  have hok : Judge.Lrat.check grade (encode d) cert = .ok := by
+    simpa [verifyIdentityCore] using h
+  exact ⟨hok, encode_sound d (Judge.Lrat.check_sound hok)⟩
 
 def certGrade : Judge.Lrat.Cert → Nat
   | .refutation steps => steps.length

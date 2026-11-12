@@ -8,7 +8,7 @@ The relation is closed under substitution and is a simulation in both directions
 reduction, so related terms have the same completed runs (`Obend.Equiv.Behaviour`). -/
 public import Obend.Equiv.Reduction
 public import Obend.Equiv.Fields
-@[expose] public section
+public section
 namespace Obend.Equiv
 open Obend.Core.Term
 set_option autoImplicit false
@@ -261,7 +261,7 @@ theorem Ahead.ofStepsCount {t t' : Term} {k : Nat} (h : StepsCount t t' k) : Ahe
   Ahead.ofStepsRefl h.toSteps
 
 /-- Duplicated-variable function `λ x => x + x`. -/
-def dupAdd : Term := .lam (.binary .add (.bound 0) (.bound 0))
+@[expose] def dupAdd : Term := .lam (.binary .add (.bound 0) (.bound 0))
 
 theorem instantiate_dupAdd_body (a : Term) :
     instantiate (.binary .add (.bound 0) (.bound 0)) a = .binary .add a a := by
@@ -309,6 +309,28 @@ theorem ahead_sharing_saves_duplicate_cost {a : Term} {n k : Nat} (ha : StepsCou
       (0 < k → k + 2 < 2 * k + 2) :=
   ⟨ha, dupAdd_shared_value_steps n, dupAdd_unshared_steps ha,
    (ahead_dupAdd_sharing ha).1, by omega, fun hk => by omega⟩
+
+/-! ## Compositional Context & Slot-Contract `Ahead` Combinators -/
+
+/-- Prepending multi-step weak-head reduction on the left preserves `Ahead`. -/
+theorem Ahead.prepend_steps {t₁ t₂ t₃ : Term} (hs : Steps t₁ t₂) (ha : Ahead t₂ t₃) :
+    Ahead t₁ t₃ :=
+  .run hs ha
+
+/-- Placing two `Ahead`-related slot implementations inside any common open context `C`
+under closing substitution `ρ` preserves `Ahead`. -/
+theorem Ahead.context_congr (C : Term) (ρ : Nat → Term) {impl spec : Term}
+    (h : Ahead impl spec) :
+    Ahead (instantiate C (impl.substitute ρ)) (instantiate C (spec.substitute ρ)) :=
+  ahead_instantiate (Ahead.refl C) (ahead_substitute h (fun n => Ahead.refl (ρ n)))
+
+/-- Compositional `Ahead` across synchronized record fields (used for multi-slot record assembly). -/
+theorem Ahead.record_of_fields :
+    ∀ {fs fs' : List (String × Term)},
+      fs.map Prod.fst = fs'.map Prod.fst →
+      (∀ p ∈ fs.zip fs', Ahead p.1.2 p.2.2) →
+      Ahead (.record fs) (.record fs') :=
+  fun hnames hrel => .record hnames hrel
 
 end Obend.Equiv
 end

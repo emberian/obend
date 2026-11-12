@@ -154,6 +154,214 @@ theorem stays {r : Ref} {p : Pin} (hr : I.ref p = r) {w w' : W}
   rw [current_iff] at hu ⊢
   exact fun f hf => keep f hf (hu f hf)
 
+/-! ## Compositional Intention Algebra & Deduplicated Support Subadditivity -/
+
+omit [DecidableEq Ref] in
+/-- Structural support deduplication: shared world facts cited across coupled intentions or slots
+are checked once rather than redundantly per consumer. -/
+@[expose] def dedupSupports [DecidableEq Fact] : List Fact → List Fact
+  | [] => []
+  | f :: fs =>
+    let rest := dedupSupports fs
+    if f ∈ rest then rest else f :: rest
+
+omit [DecidableEq Ref] in
+theorem mem_dedupSupports_iff [DecidableEq Fact] (fs : List Fact) (x : Fact) :
+    x ∈ dedupSupports fs ↔ x ∈ fs := by
+  induction fs generalizing x with
+  | nil => simp [dedupSupports]
+  | cons f fs ih =>
+    simp only [dedupSupports]
+    by_cases hmem : f ∈ dedupSupports fs
+    · simp only [hmem, ↓reduceIte, ih x, List.mem_cons]
+      exact ⟨Or.inr, fun h => h.elim (fun hx => hx ▸ (ih f).1 hmem) id⟩
+    · simp only [hmem, ↓reduceIte, List.mem_cons, ih x]
+
+omit [DecidableEq Ref] in
+theorem dedupSupports_nodup [DecidableEq Fact] (fs : List Fact) :
+    (dedupSupports fs).Nodup := by
+  induction fs with
+  | nil => simp [dedupSupports]
+  | cons f fs ih =>
+    simp only [dedupSupports]
+    by_cases hmem : f ∈ dedupSupports fs
+    · simp [hmem, ih]
+    · simp [hmem, List.nodup_cons, ih]
+
+omit [DecidableEq Ref] in
+theorem dedupSupports_length_le [DecidableEq Fact] (fs : List Fact) :
+    (dedupSupports fs).length ≤ fs.length := by
+  induction fs with
+  | nil => simp [dedupSupports]
+  | cons f fs ih =>
+    simp only [dedupSupports]
+    by_cases hmem : f ∈ dedupSupports fs <;> simp [hmem] <;> omega
+
+omit [DecidableEq Ref] in
+theorem dedupSupports_append_subadditive [DecidableEq Fact] (xs ys : List Fact) :
+    (dedupSupports (xs ++ ys)).length ≤ xs.length + ys.length := by
+  have hle := dedupSupports_length_le (xs ++ ys)
+  rw [List.length_append] at hle
+  exact hle
+
+omit [DecidableEq Ref] in
+/-- **Strict Support Subadditivity (`dedupSupports_append_lt_of_shared`)**:
+when two pinned intentions cite at least one common world support `f₀`, deduplicated support
+verification strictly saves work over naive independent verification. -/
+theorem dedupSupports_append_lt_of_shared [DecidableEq Fact] {xs ys : List Fact} {f₀ : Fact}
+    (hx : f₀ ∈ xs) (hy : f₀ ∈ ys) :
+    (dedupSupports (xs ++ ys)).length < xs.length + ys.length := by
+  induction xs with
+  | nil => cases hx
+  | cons x xs ih =>
+    simp only [List.cons_append, dedupSupports, List.length_cons]
+    by_cases heq : x = f₀
+    · subst heq
+      have hInRest : x ∈ dedupSupports (xs ++ ys) :=
+        (mem_dedupSupports_iff (xs ++ ys) x).2 (List.mem_append_right xs hy)
+      simp only [hInRest, ↓reduceIte]
+      have hSub := dedupSupports_append_subadditive xs ys
+      omega
+    · have hx' : f₀ ∈ xs := by
+        rcases List.mem_cons.1 hx with rfl | hmem
+        · exact absurd rfl heq
+        · exact hmem
+      have hLt := ih hx'
+      by_cases hInRest : x ∈ dedupSupports (xs ++ ys) <;> simp [hInRest] <;> omega
+
+omit [DecidableEq Ref] in
+/-- Product of two Author intentions over a shared world valuation (`hHolds`), deduplicating
+overlapping world supports on combined pins `(p₁, p₂)`. -/
+def product {Ref₂ Pin₂ : Type} [DecidableEq Fact]
+    (I₁ : Intention W Ref Pin Fact Err) (I₂ : Intention W Ref₂ Pin₂ Fact Err)
+    (hHolds : ∀ w f, I₂.holds w f = I₁.holds w f) :
+    Intention W (Ref × Ref₂) (Pin × Pin₂) Fact Err where
+  ref p := (I₁.ref p.1, I₂.ref p.2)
+  supports p := dedupSupports (I₁.supports p.1 ++ I₂.supports p.2)
+  holds := I₁.holds
+  resolve w r :=
+    match I₁.resolve w r.1 with
+    | .error e => .error e
+    | .ok p₁ =>
+      match I₂.resolve w r.2 with
+      | .error e => .error e
+      | .ok p₂ => .ok (p₁, p₂)
+  resolve_ref w r p h := by
+    cases h₁ : I₁.resolve w r.1 <;> rw [h₁] at h
+    · cases h
+    · rename_i p₁
+      cases h₂ : I₂.resolve w r.2 <;> rw [h₂] at h
+      · cases h
+      · rename_i p₂
+        cases h
+        exact Prod.ext (I₁.resolve_ref w r.1 p₁ h₁) (I₂.resolve_ref w r.2 p₂ h₂)
+  resolve_holds w r p h f hf := by
+    cases h₁ : I₁.resolve w r.1 <;> rw [h₁] at h
+    · cases h
+    · rename_i p₁
+      cases h₂ : I₂.resolve w r.2 <;> rw [h₂] at h
+      · cases h
+      · rename_i p₂
+        cases h
+        have hf' := (mem_dedupSupports_iff _ f).1 hf
+        rcases List.mem_append.1 hf' with hf₁ | hf₂
+        · exact I₁.resolve_holds w r.1 p₁ h₁ f hf₁
+        · rw [← hHolds w f]
+          exact I₂.resolve_holds w r.2 p₂ h₂ f hf₂
+
+omit [DecidableEq Ref] in
+theorem product_current_eq {Ref₂ Pin₂ : Type} [DecidableEq Fact]
+    (I₁ : Intention W Ref Pin Fact Err) (I₂ : Intention W Ref₂ Pin₂ Fact Err)
+    (hHolds : ∀ w f, I₂.holds w f = I₁.holds w f)
+    (w : W) (p : Pin × Pin₂) :
+    (product I₁ I₂ hHolds).current w p = (I₁.current w p.1 && I₂.current w p.2) := by
+  apply Bool.eq_iff_iff.2
+  rw [current_iff, Bool.and_eq_true, current_iff, current_iff]
+  constructor
+  · intro hall
+    refine ⟨fun f hf => hall f ((mem_dedupSupports_iff _ f).2 (List.mem_append_left _ hf)),
+      fun f hf => ?_⟩
+    rw [hHolds w f]
+    exact hall f ((mem_dedupSupports_iff _ f).2 (List.mem_append_right _ hf))
+  · rintro ⟨h₁, h₂⟩ f hf
+    have hf' := (mem_dedupSupports_iff _ f).1 hf
+    show I₁.holds w f = true
+    rcases List.mem_append.1 hf' with hf₁ | hf₂
+    · exact h₁ f hf₁
+    · rw [← hHolds w f]
+      exact h₂ f hf₂
+
+omit [DecidableEq Ref] in
+/-- Batch resolution of a finite list of Author references at world `w`, returning either an aligned
+list of current pins or the first failing `(ref, err)` pair. -/
+def resolveBatch (w : W) : List Ref → Except (Ref × Err) (List Pin)
+  | [] => .ok []
+  | r :: rs =>
+    match I.resolve w r with
+    | .error e => .error (r, e)
+    | .ok p =>
+      match resolveBatch w rs with
+      | .error re => .error re
+      | .ok ps => .ok (p :: ps)
+
+theorem resolveBatch_inhabited :
+    let I₀ : Intention Unit Nat Nat Unit Unit :=
+      { ref := id
+        supports := fun _ => [()]
+        holds := fun _ _ => true
+        resolve := fun _ r => .ok r
+        resolve_ref := fun _ _ _ h => by cases h; rfl
+        resolve_holds := fun _ _ _ _ _ _ => rfl }
+    I₀.resolveBatch () [1, 2] = .ok [1, 2] := by
+  unfold resolveBatch
+  rfl
+
+/-- Soundness of `resolveBatch`: every returned pin resolves its corresponding reference, is
+current at `w`, and is usable in its reference's `Slot`. -/
+theorem resolveBatch_sound {w : W} {refs : List Ref} {pins : List Pin}
+    (h : I.resolveBatch w refs = .ok pins) :
+    pins.map I.ref = refs ∧
+    ∀ p ∈ pins, I.current w p = true ∧ (I.slot (I.ref p)).usable (I.holds w) p = true := by
+  induction refs generalizing pins with
+  | nil =>
+    cases h
+    simp
+  | cons r rs ih =>
+    simp only [resolveBatch] at h
+    cases hr : I.resolve w r <;> rw [hr] at h
+    · cases h
+    · rename_i p
+      cases hrs : I.resolveBatch w rs <;> rw [hrs] at h
+      · cases h
+      · rename_i ps
+        cases h
+        obtain ⟨hmap, hall⟩ := ih hrs
+        obtain ⟨href, husable, hcur⟩ := I.resolve_fill hr
+        refine ⟨by simp [href, hmap], ?_⟩
+        intro q hq
+        rcases List.mem_cons.1 hq with rfl | hq'
+        · exact ⟨hcur, href.symm ▸ husable⟩
+        · exact hall q hq'
+
+omit [DecidableEq Ref] in
+/-- Exact blame on `resolveBatch` refusal: a batch refusal names a reference from `refs` together
+with the exact error returned by `I.resolve w`. -/
+theorem resolveBatch_refuses_exact {w : W} {refs : List Ref} {badRef : Ref} {err : Err}
+    (h : I.resolveBatch w refs = .error (badRef, err)) :
+    badRef ∈ refs ∧ I.resolve w badRef = .error err := by
+  induction refs with
+  | nil => cases h
+  | cons r rs ih =>
+    simp only [resolveBatch] at h
+    cases hr : I.resolve w r <;> rw [hr] at h
+    · cases h
+      exact ⟨List.mem_cons_self, hr⟩
+    · cases hrs : I.resolveBatch w rs <;> rw [hrs] at h
+      · cases h
+        obtain ⟨hmem, herr⟩ := ih hrs
+        exact ⟨List.mem_cons_of_mem _ hmem, herr⟩
+      · cases h
+
 end Intention
 
 end Obend

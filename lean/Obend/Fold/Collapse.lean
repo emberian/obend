@@ -16,19 +16,26 @@ Metatheorems proved:
 -/
 
 public import Obend.Receipt.Merkle
+import all Obend.Receipt.Merkle
 public import Obend.Vault.Hyperedge
 public import Obend.Fold
 public import Obend.Core.Digest
 public import Obend.Digest.HashBytes
 public import Obend.Equiv.Improvement
 
-@[expose] public section
+public section
 
 namespace Obend.Fold.Collapse
 
 open Obend.Core.Digest (digestWith deployed)
-open Obend.Digest.HashBytes (Hash Collision)
-open Obend.Receipt.Merkle (Bounded root leaf leaves mapRoot Opening opens mapOpening Commit)
+open Obend.Digest.HashBytes (Hash Collision CollisionAmong)
+open Obend.Receipt.Merkle (Bounded root leaf leaves mapRoot Opening opens mapOpening Commit
+  Digest256 SaltedLeaf256 defaultSaltedLeaf256 saltedTreeRoot256 BlindedMultiproof256
+  strictlyAscendingInBounds buildBlindedMultiproof256 verifyBlindedMultiproof256
+  verifyBlindedMultiproof256_complete ScopedCollision256 multiproofScopePreimages
+  extractMultiproofCollision evalBlindedNode256 simulateBlindedNode256
+  saltedSubtreeRoot256 blindedMultiproof_redaction_nonleakage
+  cshakeMultiproofHash cshakeMultiproofHash_length_32)
 open Obend.Vault (VaultStore emptyStore updateStore VaultTurn applyTurn)
 
 set_option autoImplicit false
@@ -48,13 +55,13 @@ structure CommittedBlock where
 abbrev Trace := List CommittedBlock
 
 /-- Single-step store transition induced by a committed block. -/
-def stepBlock (s : VaultStore) (b : CommittedBlock) : VaultStore :=
+@[expose] def stepBlock (s : VaultStore) (b : CommittedBlock) : VaultStore :=
   match b.turn with
   | some t => applyTurn s t
   | none   => s
 
 /-- State transition rollup: fold a sequence of committed blocks over an initial store. -/
-def foldTrace (s : VaultStore) (trace : Trace) : VaultStore :=
+@[expose] def foldTrace (s : VaultStore) (trace : Trace) : VaultStore :=
   trace.foldl stepBlock s
 
 /-- Direct turn sequence fold over a vault store. -/
@@ -67,15 +74,15 @@ def foldTurns (s : VaultStore) (turns : List VaultTurn) : VaultStore :=
 abbrev StoreValuation := VaultStore → String → Nat
 
 /-- Extract the schema values in canonical order. -/
-def storeValues (schema : List String) (val : StoreValuation) (s : VaultStore) : List Nat :=
+@[expose] def storeValues (schema : List String) (val : StoreValuation) (s : VaultStore) : List Nat :=
   schema.map (val s)
 
 /-- Compute the collapsed Merkle root commitment over a folded vault store. -/
-def collapseRoot (H : Hash) (schema : List String) (val : StoreValuation) (s : VaultStore) : Nat :=
+@[expose] def collapseRoot (H : Hash) (schema : List String) (val : StoreValuation) (s : VaultStore) : Nat :=
   mapRoot H (storeValues schema val s)
 
 /-- Roll up a consensus trace from an initial store into a collapsed canonical Merkle root. -/
-def collapseTrace (H : Hash) (schema : List String) (val : StoreValuation)
+@[expose] def collapseTrace (H : Hash) (schema : List String) (val : StoreValuation)
     (s₀ : VaultStore) (trace : Trace) : Nat :=
   collapseRoot H schema val (foldTrace s₀ trace)
 
@@ -173,6 +180,24 @@ def openCell (H : Hash) (schema : List String) (val : StoreValuation) (s : Vault
     Option Opening :=
   (Commit.mk schema (fun st key => val st key)).opening H s k
 
+theorem collapseRoot_binds_scoped {H : Hash} (hb : Bounded H) (schema : List String) (val : StoreValuation)
+    (s : VaultStore) (o : Opening) (k : String)
+    (h_open : opens H o (collapseRoot H schema val s) = true)
+    (h_sz : o.size = schema.length) (h_idx : o.index < schema.length)
+    (h_key : schema[o.index] = k) :
+    o.value = val s k ∨
+      Obend.Digest.HashBytes.CollisionAmong H (fun m =>
+        m ∈ Obend.Receipt.Merkle.openingPreimages H o ++
+            Obend.Receipt.Merkle.openingPreimages H
+              (mapOpening H ((Commit.mk schema (fun st key => val st key)).values s) o.index)) := by
+  let hc : Commit VaultStore String := ⟨schema, fun st key => val st key⟩
+  have h_root : collapseRoot H schema val s = hc.dated H s := rfl
+  rw [h_root] at h_open
+  have hop := Commit.opens_val hb hc s h_open (by dsimp [hc]; exact h_sz) (by dsimp [hc]; exact h_idx)
+  rcases hop with he | hcol
+  · left; dsimp [hc] at he; rw [he, h_key]
+  · exact .inr hcol
+
 /-- **Stranger-Checkable Collapsed Merkle Binding**: An opening that verifies against
     `collapseRoot` carries the folded store's true value, or the hash collides. -/
 theorem collapseRoot_binds {H : Hash} (hb : Bounded H) (schema : List String) (val : StoreValuation)
@@ -180,17 +205,9 @@ theorem collapseRoot_binds {H : Hash} (hb : Bounded H) (schema : List String) (v
     (h_open : opens H o (collapseRoot H schema val s) = true)
     (h_sz : o.size = schema.length) (h_idx : o.index < schema.length)
     (h_key : schema[o.index] = k) :
-    o.value = val s k ∨ Collision H := by
-  let hc : Commit VaultStore String := ⟨schema, fun st key => val st key⟩
-  have h_root : collapseRoot H schema val s = hc.dated H s := rfl
-  rw [h_root] at h_open
-  have hop := Commit.opens_val hb hc s h_open (by dsimp [hc]; exact h_sz) (by dsimp [hc]; exact h_idx)
-  rcases hop with he | hcol
-  · left
-    dsimp [hc] at he
-    rw [he, h_key]
-  · right
-    exact hcol
+    o.value = val s k ∨ Collision H :=
+  (collapseRoot_binds_scoped hb schema val s o k h_open h_sz h_idx h_key).imp_right
+    Obend.Digest.HashBytes.CollisionAmong.global
 
 /-! ## 7. Integration with Obend.Fold.Admission -/
 
@@ -253,7 +270,7 @@ open Obend.Core.Term (Term extendFields)
 open Obend.Equiv (CValue Settled Run CV EvalImproves StrictEvalImproves cv_of_value)
 
 /-- Fold a tower of static record extension layers over a base field list. -/
-def foldExtendTower (base : List (String × Term)) (layers : List (List (String × Term))) :
+@[expose] def foldExtendTower (base : List (String × Term)) (layers : List (List (String × Term))) :
     List (String × Term) :=
   layers.foldl extendFields base
 
@@ -264,7 +281,7 @@ theorem foldExtendTower_append (base : List (String × Term))
 
 /-- Construct the uncollapsed syntax tree `.extend (... (.extend (.record base) l₁) ...) lₙ`
 for a tower of static extension layers. -/
-def termExtendTower (base : List (String × Term)) (layers : List (List (String × Term))) : Term :=
+@[expose] def termExtendTower (base : List (String × Term)) (layers : List (List (String × Term))) : Term :=
   layers.foldl (fun acc fs => .extend acc fs) (.record base)
 
 /-- Recursively extract and collapse a static `.record` / `.extend` tower of arbitrary depth. -/
@@ -299,7 +316,7 @@ theorem collapseExtendTerm_termExtendTower (base : List (String × Term))
 
 /-- Statically collapse a known record or multi-layer extension projection by resolving
 the target field directly when present. -/
-def collapseProjection : Term → Term
+@[expose] def collapseProjection : Term → Term
   | .get g name =>
     match collapseExtendTerm g with
     | some fs =>
@@ -416,4 +433,234 @@ theorem collapse_extend_reduces_ticks {inh fs : List (String × Term)} {name : S
   refine ⟨hcol, ?_, hget, by omega⟩
   rwa [hcol]
 
+/-! ## 9. Horizon-Compressed 256-Bit Salted Blinded Multiproofs (`collapseSaltedTraceRoot256`)
+
+Welds `Obend.Fold.Collapse` consensus horizon rollups to `Obend.Receipt.Merkle` 256-bit
+domain-separated salted blinded multiproofs (`BlindedMultiproof256`). Empty/timeout blocks prune
+away bit-identically while unqueried vault cells remain strictly redacted behind salted 32-byte
+commitments, with `Type`-valued `PSum` collision extraction (`0 Classical.choice`). -/
+
+/-- Full-width 256-bit salted cell valuation mapping each schema key in a `VaultStore` to its
+salted byte-framed leaf (`SaltedLeaf256`). -/
+abbrev SaltedCellValuation256 := VaultStore → String → SaltedLeaf256
+
+/-- Materialize the canonical list of 256-bit salted leaves over `schema` for store `s`. -/
+def collapseSaltedEntries256 (schema : List String) (val256 : SaltedCellValuation256)
+    (s : VaultStore) : List SaltedLeaf256 :=
+  schema.map (val256 s)
+
+/-- Compute the 256-bit salted Merkle commitment over a folded `VaultStore`. -/
+def collapseSaltedRoot256 (H : Hash) (schema : List String) (val256 : SaltedCellValuation256)
+    (s : VaultStore) : Digest256 :=
+  saltedTreeRoot256 H (collapseSaltedEntries256 schema val256 s)
+
+/-- Roll up consensus trace `trace` from `s₀` into a canonical 256-bit salted Merkle root. -/
+@[expose] def collapseSaltedTraceRoot256 (H : Hash) (schema : List String)
+    (val256 : SaltedCellValuation256) (s₀ : VaultStore) (trace : Trace) : Digest256 :=
+  collapseSaltedRoot256 H schema val256 (foldTrace s₀ trace)
+
+theorem collapseSaltedRoot256_congr {H : Hash} {schema : List String}
+    {val256 : SaltedCellValuation256} {s₁ s₂ : VaultStore}
+    (h_agree : ∀ k ∈ schema, val256 s₁ k = val256 s₂ k) :
+    collapseSaltedRoot256 H schema val256 s₁ = collapseSaltedRoot256 H schema val256 s₂ := by
+  unfold collapseSaltedRoot256 collapseSaltedEntries256
+  rw [List.map_congr_left h_agree]
+
+/-- **256-Bit Horizon Compression Invariance (`collapseSaltedTraceRoot256_prune_empty`)**:
+Pruning empty/timeout consensus blocks (`filterActive trace`) leaves the 256-bit salted horizon
+root commitment bit-for-bit identical. -/
+theorem collapseSaltedTraceRoot256_prune_empty (H : Hash) (schema : List String)
+    (val256 : SaltedCellValuation256) (s₀ : VaultStore) (trace : Trace) :
+    collapseSaltedTraceRoot256 H schema val256 s₀ trace =
+      collapseSaltedTraceRoot256 H schema val256 s₀ (filterActive trace) := by
+  unfold collapseSaltedTraceRoot256
+  rw [foldTrace_filter_empty]
+
+/-- Build a salted blinded 256-bit multiproof opening `queriedIndices` over the horizon-collapsed
+consensus trace `foldTrace s₀ trace`, redacting all unqueried sibling subtrees into 32-byte
+commitments. -/
+def buildCollapsedHorizonMultiproof256 (H : Hash) (schema : List String)
+    (val256 : SaltedCellValuation256) (s₀ : VaultStore) (trace : Trace)
+    (queriedIndices : List Nat) : BlindedMultiproof256 :=
+  buildBlindedMultiproof256 H
+    (collapseSaltedEntries256 schema val256 (foldTrace s₀ trace))
+    queriedIndices
+
+/-- Verify a salted blinded 256-bit multiproof against a collapsed horizon root `horizonRoot` and
+expected schema cardinality `schemaLen`. -/
+@[expose] def verifyCollapsedHorizonMultiproof256 (H : Hash) (schemaLen : Nat)
+    (proof : BlindedMultiproof256) (horizonRoot : Digest256) : Bool :=
+  (proof.treeSize == schemaLen) && verifyBlindedMultiproof256 H proof horizonRoot
+
+/-- Inhabitedness witness for `verifyCollapsedHorizonMultiproof256` over `emptyStore` and an empty
+timeout block trace `[⟨0, 0, none, 0⟩]`, valid for every `H : Hash` (including `cshakeMultiproofHash`). -/
+theorem verifyCollapsedHorizonMultiproof256_inhabited (H : Hash) :
+    let schema := ["vault/root"]
+    let val256 : SaltedCellValuation256 := fun _ _ => ⟨0#256, [0x01]⟩
+    let trace : Trace := [⟨0, 0, none, 0⟩]
+    verifyCollapsedHorizonMultiproof256 H schema.length
+      (buildCollapsedHorizonMultiproof256 H schema val256 emptyStore trace [0])
+      (collapseSaltedTraceRoot256 H schema val256 emptyStore trace) = true := by
+  have hComp := verifyBlindedMultiproof256_complete H [⟨0#256, [0x01]⟩] [0] (by decide)
+  simpa [verifyCollapsedHorizonMultiproof256, buildCollapsedHorizonMultiproof256,
+    collapseSaltedTraceRoot256, collapseSaltedRoot256, collapseSaltedEntries256,
+    foldTrace, stepBlock, buildBlindedMultiproof256] using hComp
+
+/-- **Completeness under Horizon Compression (`verifyCollapsedHorizonMultiproof256_complete`)**:
+A multiproof built on the pruned active trace `filterActive trace` verifies directly against the
+unpruned consensus trace root `collapseSaltedTraceRoot256 H schema val256 s₀ trace`. -/
+theorem verifyCollapsedHorizonMultiproof256_complete (H : Hash) (schema : List String)
+    (val256 : SaltedCellValuation256) (s₀ : VaultStore) (trace : Trace)
+    (queriedIndices : List Nat)
+    (hValid : strictlyAscendingInBounds schema.length queriedIndices = true) :
+    verifyCollapsedHorizonMultiproof256 H schema.length
+      (buildCollapsedHorizonMultiproof256 H schema val256 s₀ (filterActive trace) queriedIndices)
+      (collapseSaltedTraceRoot256 H schema val256 s₀ trace) = true := by
+  rw [collapseSaltedTraceRoot256_prune_empty]
+  unfold verifyCollapsedHorizonMultiproof256 buildCollapsedHorizonMultiproof256
+    collapseSaltedTraceRoot256 collapseSaltedRoot256
+  have hLen : (collapseSaltedEntries256 schema val256 (foldTrace s₀ (filterActive trace))).length =
+      schema.length := by simp [collapseSaltedEntries256]
+  have hTreeSz : (buildBlindedMultiproof256 H
+      (collapseSaltedEntries256 schema val256 (foldTrace s₀ (filterActive trace)))
+      queriedIndices).treeSize == schema.length := by
+    simp [buildBlindedMultiproof256, hLen]
+  rw [hTreeSz, Bool.true_and]
+  have hValidEntries :
+      strictlyAscendingInBounds
+        (collapseSaltedEntries256 schema val256 (foldTrace s₀ (filterActive trace))).length
+        queriedIndices = true := by
+    rw [hLen]
+    exact hValid
+  exact verifyBlindedMultiproof256_complete H _ queriedIndices hValidEntries
+
+/-- **Constructive `Type`-Valued Horizon Collision Extractor (`extractCollapsedHorizonCollision`)**:
+With **`0 Classical.choice`**, any accepted horizon multiproof constructively yields either exact
+cell agreement `val256 (foldTrace s₀ trace) k = leaf` on every opened schema cell `(idx, k)`, or an
+explicit `ScopedCollision256` pair of distinct preimages under `H`. -/
+def extractCollapsedHorizonCollision (H : Hash) (schema : List String)
+    (val256 : SaltedCellValuation256) (s₀ : VaultStore) (trace : Trace)
+    (proof : BlindedMultiproof256)
+    (hVer : verifyCollapsedHorizonMultiproof256 H schema.length proof
+      (collapseSaltedTraceRoot256 H schema val256 s₀ trace) = true) :
+    let entries := collapseSaltedEntries256 schema val256 (foldTrace s₀ trace)
+    PSum
+      (∃ opened,
+        evalBlindedNode256 H proof.tree schema.length 0 =
+          some (collapseSaltedTraceRoot256 H schema val256 s₀ trace, opened) ∧
+        opened.map Prod.fst = proof.queriedIndices ∧
+        ∀ idx leaf k, (idx, leaf) ∈ opened → schema[idx]? = some k →
+          val256 (foldTrace s₀ trace) k = leaf)
+      (ScopedCollision256 H (multiproofScopePreimages H entries proof)) :=
+  let entries := collapseSaltedEntries256 schema val256 (foldTrace s₀ trace)
+  have hConj : proof.treeSize = schema.length ∧
+      verifyBlindedMultiproof256 H proof (saltedTreeRoot256 H entries) = true := by
+    unfold verifyCollapsedHorizonMultiproof256 collapseSaltedTraceRoot256 collapseSaltedRoot256 at hVer
+    have hBoth := (Bool.and_eq_true _ _).mp hVer
+    exact ⟨beq_iff_eq.mp hBoth.1, hBoth.2⟩
+  have hLen : entries.length = schema.length := List.length_map _
+  have hSize : proof.treeSize = entries.length := hConj.1.trans hLen.symm
+  match extractMultiproofCollision H entries proof hSize hConj.2 with
+  | .inl ok =>
+    PSum.inl (by
+      obtain ⟨opened, hEv, hIdxs, hAgree⟩ := ok
+      rw [hLen] at hEv
+      refine ⟨opened, hEv, hIdxs, fun idx leaf k hm hk => ?_⟩
+      have hEnt := hAgree idx leaf hm
+      dsimp only [entries, collapseSaltedEntries256] at hEnt
+      rw [List.getElem?_map, hk] at hEnt
+      exact Option.some.inj hEnt)
+  | .inr col => PSum.inr col
+
+/-- **Horizon Redaction Non-Leakage (`collapsedHorizon_redaction_nonleakage`)**:
+Across a folded consensus trace `foldTrace s₀ trace`, unqueried schema cells are completely absent
+from `.openedLeaf` nodes and simulated bit-for-bit identically using **only** 32-byte salted
+subtree commitments. -/
+theorem collapsedHorizon_redaction_nonleakage (H : Hash) (schema : List String)
+    (val256 : SaltedCellValuation256) (s₀ : VaultStore) (trace : Trace)
+    (queriedIndices : List Nat)
+    (hValid : strictlyAscendingInBounds schema.length queriedIndices = true) :
+    let entries := collapseSaltedEntries256 schema val256 (foldTrace s₀ trace)
+    (buildCollapsedHorizonMultiproof256 H schema val256 s₀ trace queriedIndices).tree =
+      simulateBlindedNode256
+        (fun i => if i ∈ queriedIndices then entries.getD i defaultSaltedLeaf256 else defaultSaltedLeaf256)
+        (fun st sz => saltedSubtreeRoot256 H st ((entries.drop st).take sz))
+        0 schema.length queriedIndices := by
+  have hLen : (collapseSaltedEntries256 schema val256 (foldTrace s₀ trace)).length = schema.length := by
+    simp [collapseSaltedEntries256]
+  have hSim := blindedMultiproof_redaction_nonleakage H
+    (collapseSaltedEntries256 schema val256 (foldTrace s₀ trace))
+    queriedIndices (by rwa [hLen])
+  simpa [buildCollapsedHorizonMultiproof256, hLen] using hSim
+
+/-- **Full 32-Byte `cSHAKE256` Collision Binding (`cshakeCollapsedHorizon_collision_binds`)**:
+Discharges the 32-byte digest-width invariant for `cshakeMultiproofHash`, proving that any
+`ScopedCollision256` extracted from a forged horizon multiproof is a genuine `CollisionAmong`
+`cshakeMultiproofHash` over the finite preimage scope. -/
+theorem cshakeCollapsedHorizon_collision_binds (schema : List String)
+    (val256 : SaltedCellValuation256) (s₀ : VaultStore) (trace : Trace)
+    (proof : BlindedMultiproof256)
+    (col : ScopedCollision256 cshakeMultiproofHash
+      (multiproofScopePreimages cshakeMultiproofHash
+        (collapseSaltedEntries256 schema val256 (foldTrace s₀ trace)) proof)) :
+    CollisionAmong cshakeMultiproofHash
+      (fun x => x ∈ multiproofScopePreimages cshakeMultiproofHash
+        (collapseSaltedEntries256 schema val256 (foldTrace s₀ trace)) proof) :=
+  col.toCollisionAmong (fun m _ => cshakeMultiproofHash_length_32 m)
+
+/-- **Two-Table Redaction Indistinguishability (`blindedMultiproof_two_table_indistinguishable`)**:
+Any two salted leaf tables `entries₁` and `entries₂` of equal length that agree on `queriedIndices`
+and induce equal 32-byte salted commitments on redacted spans produce bit-for-bit **identical**
+`BlindedMultiproof256` values — proving redacted leaf payloads/salts cannot influence the proof
+beyond their 32-byte `.blinded` subtree commitments. -/
+theorem blindedMultiproof_two_table_indistinguishable (H : Hash)
+    (entries₁ entries₂ : List SaltedLeaf256) (queriedIndices : List Nat)
+    (hLen : entries₁.length = entries₂.length)
+    (hValid : strictlyAscendingInBounds entries₁.length queriedIndices = true)
+    (hAgreeQueried : ∀ i ∈ queriedIndices,
+      entries₁.getD i defaultSaltedLeaf256 = entries₂.getD i defaultSaltedLeaf256)
+    (hAgreeRedacted : ∀ st sz,
+      saltedSubtreeRoot256 H st ((entries₁.drop st).take sz) =
+      saltedSubtreeRoot256 H st ((entries₂.drop st).take sz)) :
+    buildBlindedMultiproof256 H entries₁ queriedIndices =
+      buildBlindedMultiproof256 H entries₂ queriedIndices := by
+  have hValid₂ : strictlyAscendingInBounds entries₂.length queriedIndices = true := by
+    rwa [← hLen]
+  have hTree₁ := blindedMultiproof_redaction_nonleakage H entries₁ queriedIndices hValid
+  have hTree₂ := blindedMultiproof_redaction_nonleakage H entries₂ queriedIndices hValid₂
+  have hOracle₁ :
+      (fun i => if i ∈ queriedIndices then entries₁.getD i defaultSaltedLeaf256 else defaultSaltedLeaf256) =
+      (fun i => if i ∈ queriedIndices then entries₂.getD i defaultSaltedLeaf256 else defaultSaltedLeaf256) := by
+    funext i
+    by_cases hi : i ∈ queriedIndices
+    · simp only [hi, ↓reduceIte]
+      exact hAgreeQueried i hi
+    · simp only [hi, ↓reduceIte]
+  have hOracle₂ :
+      (fun st sz => saltedSubtreeRoot256 H st ((entries₁.drop st).take sz)) =
+      (fun st sz => saltedSubtreeRoot256 H st ((entries₂.drop st).take sz)) := by
+    funext st sz
+    exact hAgreeRedacted st sz
+  have hTreeEq :
+      (buildBlindedMultiproof256 H entries₁ queriedIndices).tree =
+      (buildBlindedMultiproof256 H entries₂ queriedIndices).tree := by
+    rw [hTree₁, hTree₂, hOracle₁, hOracle₂, hLen]
+  cases hmk₁ : buildBlindedMultiproof256 H entries₁ queriedIndices with
+  | mk sz₁ q₁ t₁ =>
+    cases hmk₂ : buildBlindedMultiproof256 H entries₂ queriedIndices with
+    | mk sz₂ q₂ t₂ =>
+      have hsz₁ : sz₁ = entries₁.length := by
+        simpa [buildBlindedMultiproof256] using congrArg BlindedMultiproof256.treeSize hmk₁.symm
+      have hsz₂ : sz₂ = entries₂.length := by
+        simpa [buildBlindedMultiproof256] using congrArg BlindedMultiproof256.treeSize hmk₂.symm
+      have hq₁ : q₁ = queriedIndices := by
+        simpa [buildBlindedMultiproof256] using congrArg BlindedMultiproof256.queriedIndices hmk₁.symm
+      have hq₂ : q₂ = queriedIndices := by
+        simpa [buildBlindedMultiproof256] using congrArg BlindedMultiproof256.queriedIndices hmk₂.symm
+      rw [hmk₁, hmk₂] at hTreeEq
+      dsimp only at hTreeEq
+      subst hsz₁ hsz₂ hq₁ hq₂ hTreeEq
+      rw [hLen]
+
 end Obend.Fold.Collapse
+end

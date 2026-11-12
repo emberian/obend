@@ -72,7 +72,7 @@ structure Kinds (Law : Type := Term) where
 section
 variable {Law : Type}
 
-def Kinds.find (ks : Kinds Law) (k : String) : Option (KindCell Law) := ks.cells.find? (·.name == k)
+@[expose] def Kinds.find (ks : Kinds Law) (k : String) : Option (KindCell Law) := ks.cells.find? (·.name == k)
 
 /-- One kind at one version: what a pin cites of each kind it rests on. -/
 structure KindVersion where
@@ -115,7 +115,7 @@ inductive Refusal where
 /-! ## Kind precedence -/
 
 /-- Kind `k`'s C4 precedence list over its parent kinds, `n` bounding the depth of the hierarchy. -/
-def kindPrecedence (ks : Kinds Law) : Nat → String → Except Refusal (List String)
+@[expose] def kindPrecedence (ks : Kinds Law) : Nat → String → Except Refusal (List String)
   | 0, k => .error (.cycle k)
   | n + 1, k =>
     match ks.find k with
@@ -130,7 +130,7 @@ def kindPrecedence (ks : Kinds Law) : Nat → String → Except Refusal (List St
         | .error e => .error (.c4 k e)
 
 /-- The depth bound: no acyclic hierarchy is deeper than the registry. -/
-def Kinds.depth (ks : Kinds Law) : Nat := ks.cells.length + 1
+@[expose] def Kinds.depth (ks : Kinds Law) : Nat := ks.cells.length + 1
 
 /-- The kinds on a precedence list at their registry versions. -/
 def versionsOf (ks : Kinds Law) (l : List String) : List KindVersion :=
@@ -169,7 +169,7 @@ theorem resolve_ok {ks : Kinds Law} {k : String} {p : KindPin} (h : resolve ks k
 
 /-- **The kind reference** (`Obend.Intention`): an instance's kind, resolved at the registry. Its
 supports are the pin's lineage: the kind's version and every ancestor's. -/
-def kindRefs : Obend.Intention (Kinds Law) String KindPin KindVersion Refusal where
+@[expose] def kindRefs : Obend.Intention (Kinds Law) String KindPin KindVersion Refusal where
   ref := KindPin.name
   supports := KindPin.lineage
   holds := holds

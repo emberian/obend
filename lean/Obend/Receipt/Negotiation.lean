@@ -33,6 +33,7 @@ import all Obend.Run.Runner
 import all Obend.Run.Control
 import all Obend.Run.Fold
 import all Obend.Run.Negotiation
+import all Obend.Slot.Protocol
 
 public section
 namespace Obend.Receipt.Negotiation
@@ -415,12 +416,14 @@ theorem receipt4_checks (prev : Digest) :
     _ _ _
 
 /-- **The receipt's verdict is the dated view's**: at any world whose committed view has the
-receipt's dated root, row 4 has the receipt's verdict and post root, or cSHAKE256 collides. -/
+receipt's dated root, row 4 has the receipt's verdict and post root, or cSHAKE256 collides among
+the finite preimages of `receipt4 prev` at `w`. -/
 theorem receipt4_dated_verdict (prev : Digest) (w : Wv) (hd : (receipt4 prev).dated = nreading.C.dated Obend.Core.Digest.deployed w) :
     (Outcome.ofExcept (admission.step (w, acc4.2) row4) = (receipt4 prev).verdict ∧
       postOf admission naming (w, acc4.2) row4 = (receipt4 prev).post) ∨
-      Obend.Digest.HashBytes.Collision Obend.Core.Digest.deployed :=
-  dated_verdict Obend.Receipt.Merkle.deployed_bounded admission naming nreading nreading_coherent acc4 row4 rfl w hd
+      Obend.Digest.HashBytes.CollisionAmong Obend.Core.Digest.deployed
+        (fun m => m ∈ receiptPreimages Obend.Core.Digest.deployed nreading w (receipt4 prev)) :=
+  dated_verdict_scoped Obend.Receipt.Merkle.deployed_bounded admission naming nreading nreading_coherent acc4 row4 rfl w hd
     (receipt4_checks prev).1 (receipt4_checks prev).2
 
 /-! ## Astra's outcomes, where they apply -/

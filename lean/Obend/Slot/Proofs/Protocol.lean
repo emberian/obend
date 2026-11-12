@@ -26,6 +26,7 @@ matchers and the private Negotiation `World` went with PROT-6, replaced by Std.o
 (`Hosting.Resident.Prog`, filled by `Obend.Slot`).
 -/
 public import Obend.Slot.Proofs.ProtocolTyping
+import all Obend.Slot.Protocol
 
 namespace Obend.Slot.Protocol
 
@@ -544,7 +545,7 @@ theorem commit_once [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {v v' : View Tok
   · simp only [ht, Option.some.injEq] at h
     subst h
     unfold commit admitOp
-    simp [ht', View.spend]
+    simp [ht']
   · cases h
 
 /-! ## Selective repair -/

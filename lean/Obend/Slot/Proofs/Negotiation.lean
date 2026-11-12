@@ -21,6 +21,7 @@ shared-parameter theorems) went with PROT-6, replaced by Std.offer's deployed fu
 `lost_reply_policy`).
 -/
 public import Obend.Slot.Proofs.Protocol
+import all Obend.Slot.Protocol
 
 namespace Obend.Slot.Protocol.Negotiation
 
@@ -78,7 +79,7 @@ theorem holes_instance :
       (∀ p, holes finite (fill Ω (choose (plan p)) template) = []) ∧
       holes finite (fill Ω (choose cancelPlan) template) = [] := by
   refine ⟨rfl, (mem_holes_iff finite template .reserved ()).mp
-      (by simp [holes, template, finite]; exact ⟨(), List.mem_cons_self, rfl⟩),
+      (by simp [holes, finite]),
     fun p => ?_, rfl⟩
   cases p <;> rfl
 
@@ -160,10 +161,10 @@ public theorem lost_reply_blocks_replan :
   refine ⟨fun g => ?_, fun hw => lost_reply_not_started.1 hw.started,
     fun g => ?_, fun hw => lost_reply_not_started.2 hw.started⟩
   · have := g .reserved () (dispatched_lost .p1)
-    simp [obj, Subst.mine, Ω, iface, choose, plan] at this
+    dsimp [Subst.mine, Ω, iface, choose, plan, cancelPlan] at this
     cases this
   · have := g .reserved () (dispatched_lost .p1)
-    simp [obj, Subst.mine, Ω, iface, choose, plan, cancelPlan] at this
+    dsimp [Subst.mine, Ω, iface, choose, plan, cancelPlan] at this
     cases this
 
 /-- The provider hole counts as entered once the commitment is ANSWERED too. -/
@@ -184,7 +185,7 @@ public theorem answered_blocks_replan (b : Bool) :
         (A := Res) (i := Phase.done) ok) b (Reach.here _)
     exact Started.settled (reach_append (reach_reserved (plan .p1)) h2)
   · have := g .reserved () (dispatched_answered .p1 b)
-    simp [obj, Subst.mine, Ω, iface, choose, plan] at this
+    dsimp [Subst.mine, Ω, iface, choose, plan] at this
     cases this
   · have h := hw.started
     change Started (Prot.call (S := sig) Op.reserve fun _ => plan .p2) (answeredH .p1 b) at h
@@ -194,10 +195,10 @@ public theorem answered_blocks_replan (b : Bool) :
       | call r hr => cases hr
 
 theorem planFlip_fills (p : Provider) : Fills spec Ω iface (planFlip p) := by
-  refine ⟨.spend (S := sig) (Op.commit p) _ .cap rfl (by simp [iface]) ?_ ?_
+  refine ⟨.spend (S := sig) (Op.commit p) _ .cap rfl (by simp) ?_ ?_
     fun _ => .ret _ trivial, trivial⟩
-  · cases p <;> simp [spec, iface]
-  · cases p <;> simp [spec, iface]
+  · cases p <;> simp
+  · cases p <;> simp
 
 /-- **The guard is stricter than well-formedness**: re-planning the in-flight `p1` commitment to
 `planFlip p1` (the SAME first call, a different continuation) yields a well-formed object (the
@@ -210,10 +211,16 @@ public theorem guard_stricter_than_wf :
     Started.uncertain (S := sig) (k := fun ok => .ret (!ok)) (reach_reserved (planFlip .p1))⟩,
     fun g => ?_⟩
   have := g .reserved () (dispatched_lost .p1)
-  simp [obj, Subst.mine, Ω, iface, choose, plan, planFlip] at this
-  injection this with _ _ k
-  have := congrFun k true
-  simp at this
+  dsimp [Subst.mine, Ω, iface, choose, plan, planFlip] at this
+  have hcall := Option.some.inj this
+  have htrue := congrArg (fun (p : P .reserved) =>
+    match p with
+    | .call (.commit _) k =>
+      match k true with
+      | .ret b => b
+      | _ => false
+    | _ => false) hcall
+  cases htrue
 
 /-- So every GUARDED re-plan after the dispatch leaves the current protocol exactly as it was. -/
 theorem guarded_replan_after_dispatch_is_noop (p : Provider) (σ' : Subst sig HoleN Res)

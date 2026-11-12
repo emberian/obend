@@ -85,7 +85,7 @@ bookkeeping. Hennix: the 1979 *17 Points on Intensional Logics for Intransitive 
 located in a bibliography and not read; nothing here is attributed to it.
 -/
 public import Lean.Data.Json
-@[expose] public section
+public section
 
 namespace Obend.Reasons
 
@@ -108,34 +108,34 @@ structure Program where
   rules : List Rule
 
 /-- A rule fires at `I` against `J`: every premise is in `I`, no defeater is in `J`. -/
-def fires (J I : List String) (r : Rule) : Bool :=
+@[expose] def fires (J I : List String) (r : Rule) : Bool :=
   r.pos.all (fun p => I.contains p) && r.neg.all (fun d => !J.contains d)
 
 /-- The immediate consequence of the program with the rules `J` defeats removed. -/
-def T (P : Program) (J I : List String) : List String :=
+@[expose] def T (P : Program) (J I : List String) : List String :=
   P.facts ++ (P.rules.filter (fires J I)).map (·.concl)
 
 /-- Its stages, from nothing. -/
-def stage (P : Program) (J : List String) : Nat → List String
+@[expose] def stage (P : Program) (J : List String) : Nat → List String
   | 0 => []
   | n + 1 => T P J (stage P J n)
 
 /-- The atoms a program can name as true: its facts and its rules' conclusions. -/
-def atomsOf (P : Program) : List String := P.facts ++ P.rules.map (·.concl)
+abbrev atomsOf (P : Program) : List String := P.facts ++ P.rules.map (·.concl)
 
 /-- Enough stages and rounds: one more than the universe is long. -/
-def bound (P : Program) : Nat := (atomsOf P).length + 1
+abbrev bound (P : Program) : Nat := (atomsOf P).length + 1
 
 /-- **`Γ J`**: the least model of the program with the rules defeated by `J` removed. -/
-def gamma (P : Program) (J : List String) : List String := stage P J (bound P)
+abbrev gamma (P : Program) (J : List String) : List String := stage P J (bound P)
 
 /-- **The alternating fixpoint**: `t₀ = ∅`, `tₖ₊₁ = Γ (Γ tₖ)`. -/
-def rounds (P : Program) : Nat → List String
+@[expose] def rounds (P : Program) : Nat → List String
   | 0 => []
   | k + 1 => gamma P (gamma P (rounds P k))
 
 /-- **The well-founded model**: the supported atoms, and the possible ones (supported or undefined). -/
-def wf (P : Program) : List String × List String :=
+@[expose] def wf (P : Program) : List String × List String :=
   let t := rounds P (bound P)
   (t, gamma P t)
 
@@ -145,22 +145,22 @@ inductive Status where
   | unsupported
 deriving DecidableEq, Repr
 
-def Status.text : Status → String
+@[expose] def Status.text : Status → String
   | .supported => "supported"
   | .undefined => "undefined"
   | .unsupported => "unsupported"
 
 /-- A status read off a judgment (supported atoms, possible atoms). -/
-def statusIn (j : List String × List String) (x : String) : Status :=
+@[expose] def statusIn (j : List String × List String) (x : String) : Status :=
   if j.1.contains x then .supported else if j.2.contains x then .undefined else .unsupported
 
 /-! ## 2. Sets as lists, read by membership -/
 
 /-- Two lists with the same members. -/
-def Same (I I' : List String) : Prop := ∀ x, x ∈ I ↔ x ∈ I'
+abbrev Same (I I' : List String) : Prop := ∀ x, x ∈ I ↔ x ∈ I'
 
 /-- `I ⊆ I'` by members. -/
-def Sub (I I' : List String) : Prop := ∀ x, x ∈ I → x ∈ I'
+abbrev Sub (I I' : List String) : Prop := ∀ x, x ∈ I → x ∈ I'
 
 theorem Same.refl (I : List String) : Same I I := fun _ => Iff.rfl
 theorem Same.symm {I I' : List String} (h : Same I I') : Same I' I := fun x => (h x).symm
@@ -442,21 +442,21 @@ structure Base where
 deriving DecidableEq, Repr
 
 /-- The assumptions held now. -/
-def Base.held (b : Base) : List String := b.assumptions.filter fun a => !b.withdrawn.contains a
+abbrev Base.held (b : Base) : List String := b.assumptions.filter fun a => !b.withdrawn.contains a
 
 /-- An explanation with the defeaters declared against it. -/
-def Base.rule (b : Base) (e : Rule) : Rule :=
+abbrev Base.rule (b : Base) (e : Rule) : Rule :=
   { e with neg := e.neg ++ (b.defeaters.filter (·.target == e.name)).map (·.by') }
 
 /-- **The program a base denotes**: the observations and the assumptions held are its facts; the
 explanations, each with its defeaters, its rules. The actions are not in it. -/
-def Base.program (b : Base) : Program :=
+abbrev Base.program (b : Base) : Program :=
   { facts := b.observations.map (·.name) ++ b.held, rules := b.explanations.map b.rule }
 
 /-- **The judgment of a base, from scratch.** -/
-def judge (b : Base) : List String × List String := wf b.program
+abbrev judge (b : Base) : List String × List String := wf b.program
 
-def status (b : Base) (x : String) : Status := statusIn (judge b) x
+@[expose] def status (b : Base) (x : String) : Status := statusIn (judge b) x
 
 /-- A base changes by an event. -/
 inductive Event where
@@ -473,7 +473,7 @@ def Base.atoms (b : Base) : List String :=
   (b.observations.map (·.name) ++ b.assumptions ++ b.explanations.flatMap (fun e => e.concl :: e.pos ++ e.neg) ++
     b.defeaters.map (·.by')).eraseDups
 
-def Base.step (b : Base) : Event → Except String Base
+@[expose] def Base.step (b : Base) : Event → Except String Base
   | .observe o =>
     if b.observations.any (·.name == o.name) then .error ("refused: " ++ o.name ++ " is observed already")
     else if b.assumptions.contains o.name then .error ("refused: " ++ o.name ++ " is an assumption, not an observation")
@@ -682,7 +682,7 @@ theorem evidence_step {b b' : Base} {e : Event} {a : String} (he : e.evidence = 
     split at h; · cases h
     cases h
     refine ⟨rfl, fun x hx => ?_⟩
-    simp only [Base.program, Base.held, List.map_append, List.mem_append, List.mem_map, List.mem_cons,
+    simp only [Base.held, List.map_append, List.mem_append, List.mem_map, List.mem_cons,
       List.not_mem_nil, or_false]
     constructor
     · rintro (h | h)
@@ -700,7 +700,7 @@ theorem evidence_step {b b' : Base} {e : Event} {a : String} (he : e.evidence = 
     split at h; · cases h
     cases h
     refine ⟨rfl, fun x hx => ?_⟩
-    simp only [Base.program, Base.held, List.mem_append, List.mem_filter, List.contains_iff_mem]
+    simp only [Base.held, List.mem_append, List.mem_filter, List.contains_iff_mem]
     constructor
     · rintro (h | ⟨h1, h2⟩)
       · exact Or.inl h
@@ -719,7 +719,6 @@ theorem evidence_step {b b' : Base} {e : Event} {a : String} (he : e.evidence = 
     split at h; · cases h
     cases h
     refine ⟨rfl, fun x hx => ?_⟩
-    simp only [Base.program, Base.held, List.mem_append, List.mem_filter]
     simp_all
   | explain _ => simp [Event.evidence] at he
   | defeat _ => simp [Event.evidence] at he
@@ -817,10 +816,10 @@ structure State where
 deriving DecidableEq, Repr
 
 /-- A status as the state keeps it. -/
-def State.status (s : State) (x : String) : Status := statusIn s.kept x
+@[expose] def State.status (s : State) (x : String) : Status := statusIn s.kept x
 
 /-- The kept judgment is the base's, from scratch. -/
-def State.Consistent (s : State) : Prop := Same s.kept.1 (judge s.base).1 ∧ Same s.kept.2 (judge s.base).2
+abbrev State.Consistent (s : State) : Prop := Same s.kept.1 (judge s.base).1 ∧ Same s.kept.2 (judge s.base).2
 
 def State.update (s : State) (e : Event) (b' : Base) : List String × List String :=
   match e with
@@ -832,7 +831,7 @@ def State.update (s : State) (e : Event) (b' : Base) : List String × List Strin
   | .defeat _ => judge b'
 
 /-- **A step**: the base by the event, and the judgment updated (not recomputed, where it need not be). -/
-def State.step (s : State) (e : Event) : Except String State :=
+@[expose] def State.step (s : State) (e : Event) : Except String State :=
   match s.base.step e with
   | .error err => .error err
   | .ok b' => .ok { base := b', kept := s.update e b' }
@@ -992,12 +991,12 @@ theorem survives_one_support {s s' : State} {a x : String} {r : Rule} (hs : s.Co
 /-! ## 10. Actions need support now -/
 
 /-- The explanations of `x`, with their defeaters. -/
-def Base.rulesFor (b : Base) (x : String) : List Rule := b.program.rules.filter (·.concl == x)
+abbrev Base.rulesFor (b : Base) (x : String) : List Rule := b.program.rules.filter (·.concl == x)
 
 /-- **Why `x` is not supported now**, said by name: withdrawn, never supported, or, for each of its
 explanations, the premise that is not supported (and the cycle it rests on, if it rests on `x`) or
 the defeater that is not unsupported. -/
-def whyNot (s : State) (x : String) : List String :=
+@[expose] def whyNot (s : State) (x : String) : List String :=
   let st := s.status
   let b := s.base
   if b.withdrawn.contains x && !b.held.contains x then [x ++ " was withdrawn"]
@@ -1143,4 +1142,114 @@ def changes (s s' : State) : List String :=
     let c := s'.status x
     if a == c then none else some (x ++ ": " ++ c.text ++ " (was " ++ a.text ++ ")")
 
+/-! ## 13. Cycle-Safe Dialectical Defeat & Blocker Chains -/
+
+/-- Structured multi-hop blocker certificate explaining why a target atom is not `.supported` in `State`,
+terminating cleanly on arbitrary cyclic positive/negative defeat graphs via explicit visited-path cycle
+detection. -/
+inductive BlockerChain where
+  | alreadySupported
+  | withdrawnAssumption (atom : String)
+  | unexplained (atom : String)
+  | cyclicDependency (cycleAtom : String) (visitedPath : List String)
+  | defeatedByEvidence (ruleName : String) (defeaterAtom : String)
+  | contestedByUndefined (ruleName : String) (defeaterAtom : String) (next : BlockerChain)
+  | missingPremise (ruleName : String) (premiseAtom : String) (next : BlockerChain)
+  | fuelExhausted (atom : String)
+deriving DecidableEq, Repr
+
+/-- Fuel-and-visited-set bounded dialectical blocker walker. -/
+def traceBlockerAux (s : State) : Nat → List String → String → BlockerChain
+  | 0, _, x =>
+    if s.status x == .supported then .alreadySupported else .fuelExhausted x
+  | fuel + 1, visited, x =>
+    if s.status x == .supported then
+      .alreadySupported
+    else if visited.contains x then
+      .cyclicDependency x visited
+    else if s.base.withdrawn.contains x && !s.base.held.contains x then
+      .withdrawnAssumption x
+    else
+      match (s.base.rulesFor x).head? with
+      | none => .unexplained x
+      | some r =>
+        match r.pos.find? (fun p => s.status p != .supported) with
+        | some p =>
+          if (x :: visited).contains p then
+            .cyclicDependency p (x :: visited)
+          else
+            .missingPremise r.name p (traceBlockerAux s fuel (x :: visited) p)
+        | none =>
+          match r.neg.find? (fun q => s.status q != .unsupported) with
+          | some q =>
+            if s.status q == .supported then
+              .defeatedByEvidence r.name q
+            else if (x :: visited).contains q then
+              .cyclicDependency q (x :: visited)
+            else
+              .contestedByUndefined r.name q (traceBlockerAux s fuel (x :: visited) q)
+          | none => .unexplained x
+
+/-- Compute a cycle-safe multi-hop dialectical blocker certificate for `x` at state `s`. -/
+def traceUnsupportedRoot (s : State) (x : String) : BlockerChain :=
+  traceBlockerAux s (s.atoms.length + 2) [] x
+
+theorem traceBlockerAux_eq_alreadySupported_iff (s : State) :
+    ∀ (fuel : Nat) (visited : List String) (x : String),
+      traceBlockerAux s fuel visited x = .alreadySupported ↔ s.status x = .supported
+  | 0, _, x => by
+    unfold traceBlockerAux
+    by_cases h : s.status x = .supported <;> simp [h]
+  | fuel + 1, visited, x => by
+    unfold traceBlockerAux
+    by_cases h : s.status x = .supported
+    · simp [h]
+    · have hne : (s.status x == .supported) = false := beq_false_of_ne h
+      simp only [hne, Bool.false_eq_true, ↓reduceIte]
+      constructor
+      · intro heq
+        split at heq
+        · cases heq
+        · split at heq
+          · cases heq
+          · split at heq
+            · cases heq
+            · split at heq
+              · split at heq <;> cases heq
+              · split at heq
+                · split at heq
+                  · cases heq
+                  · split at heq <;> cases heq
+                · cases heq
+      · intro hs
+        exact absurd hs h
+
+theorem traceUnsupportedRoot_eq_alreadySupported_iff (s : State) (x : String) :
+    traceUnsupportedRoot s x = .alreadySupported ↔ s.status x = .supported :=
+  traceBlockerAux_eq_alreadySupported_iff s (s.atoms.length + 2) [] x
+
+/-- Soundness of `traceUnsupportedRoot`: whenever `s` is consistent and `traceUnsupportedRoot s x`
+returns any non-`.alreadySupported` blocker certificate, `x` is genuinely not `.supported` in `s.base`. -/
+theorem traceUnsupportedRoot_sound {s : State} {x : String} {chain : BlockerChain}
+    (hc : s.Consistent) (h : traceUnsupportedRoot s x = chain) (hne : chain ≠ .alreadySupported) :
+    status s.base x ≠ .supported := by
+  rw [← State.status_eq hc x]
+  intro hsup
+  have heq : traceUnsupportedRoot s x = .alreadySupported :=
+    (traceUnsupportedRoot_eq_alreadySupported_iff s x).2 hsup
+  exact hne (h.symm.trans heq)
+
+/-- Non-trivial inhabitedness witness for `traceUnsupportedRoot`: on an odd self-defeating base
+(`p ← not p`), `traceUnsupportedRoot` terminates without looping and pinpoints the exact cyclic
+dependency `.cyclicDependency "p" ["p"]`. -/
+theorem traceUnsupportedRoot_inhabited :
+    let bOdd : Base := { explanations := [{ name := "self_defeat", concl := "p", pos := [], neg := ["p"] }] }
+    let sOdd : State := { base := bOdd, kept := judge bOdd }
+    sOdd.Consistent ∧
+    traceUnsupportedRoot sOdd "p" = .cyclicDependency "p" ["p"] := by
+  refine ⟨⟨Same.refl _, Same.refl _⟩, ?_⟩
+  decide
+
 end Obend.Reasons
+
+end

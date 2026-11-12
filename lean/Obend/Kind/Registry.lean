@@ -17,7 +17,7 @@ public import Obend.Kind.Proofs
 public import Obend.Spec.Proofs.C4
 import all Obend.Spec.C4
 import all Obend.Kind
-@[expose] public section
+public section
 
 namespace Obend.Spec.C4
 set_option autoImplicit false

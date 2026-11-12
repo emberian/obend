@@ -120,14 +120,14 @@ abbrev Subst (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) :=
     | none => .hole h
 
 /-- `σ` restricted to the holes `Ω` declares chosen by `.me`: an `.other` hole is never filled. -/
-@[expose] def Subst.mine {Tok Fact Ob : Type} (Ω : Ctx S Hole A Tok Fact Ob) (σ : Subst S Hole A) :
+abbrev Subst.mine {Tok Fact Ob : Type} (Ω : Ctx S Hole A Tok Fact Ob) (σ : Subst S Hole A) :
     Subst S Hole A := fun i h =>
   match Ω i h with
   | some I => if I.chooser = .me then σ i h else none
   | none => none
 
 /-- `P[σ]` under `Ω`: fill the `.me` holes `σ` names. -/
-@[expose] def fill {Tok Fact Ob : Type} (Ω : Ctx S Hole A Tok Fact Ob) (σ : Subst S Hole A)
+abbrev fill {Tok Fact Ob : Type} (Ω : Ctx S Hole A Tok Fact Ob) (σ : Subst S Hole A)
     {i : Ix} (P : Prot S Hole A i) : Prot S Hole A i :=
   subst (σ.mine Ω) P
 
@@ -166,7 +166,7 @@ structure Algebra (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (C : Ix �
   | _, .hole h => alg.hole h
 
 /-- Substitution as an algebra into protocols. -/
-@[expose] def substAlg (σ : Subst S Hole A) : Algebra S Hole A (Prot S Hole A) where
+def substAlg (σ : Subst S Hole A) : Algebra S Hole A (Prot S Hole A) where
   ret := .ret
   call := .call
   hole := fun {i} h => match σ i h with
@@ -175,7 +175,7 @@ structure Algebra (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (C : Ix �
 
 /-- Read a template under an environment: a filled hole is read as its filling's reading, an
 unfilled one as the algebra's hole. -/
-@[expose] def underAlg {C : Ix → Type} (alg : Algebra S Hole A C) (σ : Subst S Hole A) :
+def underAlg {C : Ix → Type} (alg : Algebra S Hole A C) (σ : Subst S Hole A) :
     Algebra S Hole A C where
   ret := alg.ret
   call := alg.call
@@ -209,7 +209,7 @@ inductive Result (Hole : Ix → Type) (A : Ix → Type) (St : Ix → Type) where
   fold (execAlgebra H) P
 
 /-- Run a template with its holes bound by `σ` in the environment rather than in the syntax. -/
-@[expose] def interpretUnder {St : Ix → Type} (H : Handler S St) (σ : Subst S Hole A) {i : Ix}
+def interpretUnder {St : Ix → Type} (H : Handler S St) (σ : Subst S Hole A) {i : Ix}
     (P : Prot S Hole A i) : St i → Result Hole A St :=
   fold (underAlg (execAlgebra H) σ) P
 
@@ -246,7 +246,7 @@ structure Hist (S : Sig Ix) where
 
 /-- The obligations a history established: the answered calls' and the in-flight call's (its
 obligation stands from dispatch, whatever happened to the reply). -/
-@[expose] def Hist.established {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) (H : Hist S) : List Ob :=
+abbrev Hist.established {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) (H : Hist S) : List Ob :=
   Protocol.established sp H.answered ++
     match H.inflight with
     | some ⟨_, op⟩ => sp.establishes op
@@ -268,7 +268,7 @@ structure Open (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact Ob 
   hist : Hist S
 
 /-- The object's current protocol `P[σ]`. -/
-@[expose] def Open.current {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) :
+abbrev Open.current {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) :
     Prot S Hole A i :=
   fill O.Ω O.σ O.template
 
@@ -303,7 +303,7 @@ def admits {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) (v : View Tok Fact) {i
   | .hole _ => false
 
 /-- Durable consumption: mark a token spent. -/
-@[expose] def View.spend {Tok Fact : Type} [DecidableEq Tok] (v : View Tok Fact) (t : Tok) : View Tok Fact :=
+abbrev View.spend {Tok Fact : Type} [DecidableEq Tok] (v : View Tok Fact) (t : Tok) : View Tok Fact :=
   { v with live := fun t' => if t' = t then false else v.live t' }
 
 /-- Commit one effect: refused unless admissible now; on success its token is spent durably. -/
@@ -316,7 +316,7 @@ def admits {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) (v : View Tok Fact) {i
   else none
 
 /-- The keys an effect's admission reads: its facts and its token. -/
-@[expose] def opSupport {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) {i : Ix} (op : S.Op i) :
+def opSupport {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) {i : Ix} (op : S.Op i) :
     List (Fact ⊕ Tok) :=
   (sp.requires op).map Sum.inl ++ (match sp.consumes op with
     | some t => [Sum.inr t]
@@ -324,23 +324,23 @@ def admits {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) (v : View Tok Fact) {i
 
 /-- A change of token REPRESENTATION (an authenticated representation of an unchanged semantic
 token, e.g. an opening refreshed because a root moved): the spec with every token renamed. -/
-@[expose] def Spec.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') (sp : Spec S Tok Fact Ob) :
+def Spec.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') (sp : Spec S Tok Fact Ob) :
     Spec S Tok' Fact Ob where
   consumes := fun op => (sp.consumes op).map e
   requires := sp.requires
   establishes := sp.establishes
 
 /-- An interface with its tokens renamed. -/
-@[expose] def Iface.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') {i : Ix}
+def Iface.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') {i : Ix}
     (I : Iface S Hole A Tok Fact Ob i) : Iface S Hole A Tok' Fact Ob i :=
   { I with need := I.need.map e }
 
 /-- A context with its tokens renamed. -/
-@[expose] def Ctx.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') (Ω : Ctx S Hole A Tok Fact Ob) :
+def Ctx.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') (Ω : Ctx S Hole A Tok Fact Ob) :
     Ctx S Hole A Tok' Fact Ob := fun i h => (Ω i h).map (Iface.mapTok e)
 
 /-- A view as a store of keys. -/
-@[expose] def View.ofStore {Tok Fact : Type} (w : Fact ⊕ Tok → Bool) : View Tok Fact :=
+def View.ofStore {Tok Fact : Type} (w : Fact ⊕ Tok → Bool) : View Tok Fact :=
   ⟨fun f => w (.inl f), fun t => w (.inr t)⟩
 
 end
@@ -354,16 +354,16 @@ structure Frag (Name Key V : Type) where
   check : (Key → V) → Bool
 
 /-- Is the fragment affected by a change of `changed`? -/
-@[expose] def Frag.affected {Name Key V : Type} [DecidableEq Key] (f : Frag Name Key V)
+def Frag.affected {Name Key V : Type} [DecidableEq Key] (f : Frag Name Key V)
     (changed : List Key) : Bool :=
   f.support.any fun k => decide (k ∈ changed)
 
 /-- Check everything again. -/
-@[expose] def fromScratch {Name Key V : Type} (fs : List (Frag Name Key V)) (w : Key → V) : List Bool :=
+def fromScratch {Name Key V : Type} (fs : List (Frag Name Key V)) (w : Key → V) : List Bool :=
   fs.map fun f => f.check w
 
 /-- Selective repair: re-check the affected fragments, reuse every other cached verdict. -/
-@[expose] def repair {Name Key V : Type} [DecidableEq Key] :
+def repair {Name Key V : Type} [DecidableEq Key] :
     List (Frag Name Key V) → List Bool → List Key → (Key → V) → List Bool
   | [], _, _, _ => []
   | f :: fs, [], ch, w => f.check w :: repair fs [] ch w
@@ -377,7 +377,7 @@ def residual {Name Key V : Type} : List (Frag Name Key V) → List Bool → List
   | f :: fs, b :: bs => (if b then [] else [f.name]) ++ residual fs bs
 
 /-- One effect's admission as a checked fragment over the store of keys. -/
-@[expose] def admitFrag {Ix : Type} {S : Sig Ix} {Name Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob)
+def admitFrag {Ix : Type} {S : Sig Ix} {Name Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob)
     (name : Name) {i : Ix} (op : S.Op i) : Frag Name (Fact ⊕ Tok) Bool where
   name := name
   support := opSupport sp op
@@ -397,13 +397,13 @@ deriving DecidableEq, Repr
 inductive Op : Phase → Type
   | recv : Op .waiting
 
-@[expose] def sig : Sig Phase where
+abbrev sig : Sig Phase where
   Op := Op
   Resp := fun | .recv => Bool
   next := fun | .recv, _ => .revealed
 
 /-- One hole name, at `revealed`: our answer, planned before the reveal. -/
-@[expose] def HoleN : Phase → Type
+abbrev HoleN : Phase → Type
   | .waiting => Empty
   | .revealed => Unit
 
@@ -412,29 +412,29 @@ abbrev Res : Phase → Type := fun _ => Bool
 abbrev P := Prot sig HoleN Res
 
 /-- The peer answers `b`. -/
-@[expose] def env (b : Bool) : Handler sig (fun _ => Unit) where
+abbrev env (b : Bool) : Handler sig (fun _ => Unit) where
   handle := fun | .recv, () => ⟨b, ()⟩
 
 /-- We win against `b` when the run ends with result `b`; a run stuck at a hole loses. The hole
 names `Hn` are a parameter so that templates with different naming disciplines can be compared. -/
-@[expose] def wins {Hn : Phase → Type} {i : Phase} (b : Bool) (p : Prot sig Hn Res i) (s : Unit) : Bool :=
+abbrev wins {Hn : Phase → Type} {i : Phase} (b : Bool) (p : Prot sig Hn Res i) (s : Unit) : Bool :=
   match interpret (env b) p s with
   | .done _ a _ => a == b
   | .stuck _ _ _ => false
 
 /-- The OPEN plan: receive, then do whatever our hole says. Its filling is chosen once. -/
-@[expose] def planHole : P .waiting := .call (S := sig) Op.recv fun _ => .hole (i := Phase.revealed) ()
+abbrev planHole : P .waiting := .call (S := sig) Op.recv fun _ => .hole (i := Phase.revealed) ()
 
 /-- The RESPONSE-DEPENDENT plan: the continuation is a family over the response. -/
-@[expose] def planCall : P .waiting := .call (S := sig) Op.recv fun b => .ret b
+abbrev planCall : P .waiting := .call (S := sig) Op.recv fun b => .ret b
 
 /-- A template whose hole name may depend on the peer's bit: `name b` is the hole in branch `b`.
 Response-free naming is the case `name true = name false`. -/
-@[expose] def planNamed {Hn : Phase → Type} (name : Bool → Hn .revealed) : Prot sig Hn Res .waiting :=
+def planNamed {Hn : Phase → Type} (name : Bool → Hn .revealed) : Prot sig Hn Res .waiting :=
   .call (S := sig) Op.recv fun b => .hole (i := Phase.revealed) (name b)
 
 /-- One hole name per possible bit at `revealed`. -/
-@[expose] def HoleB : Phase → Type
+abbrev HoleB : Phase → Type
   | .waiting => Empty
   | .revealed => Bool
 
@@ -444,7 +444,7 @@ Response-free naming is the case `name true = name false`. -/
   | .revealed, () => some (.ret c)
 
 /-- The hole's interface, chosen by `p` (no facts, tokens or obligations in this game). -/
-@[expose] def iface (p : Chooser) : Iface sig HoleN Res Unit Unit Unit .revealed where
+def iface (p : Chooser) : Iface sig HoleN Res Unit Unit Unit .revealed where
   chooser := p
   ctx := []
   need := []
@@ -453,7 +453,7 @@ Response-free naming is the case `name true = name false`. -/
   accepts := fun _ => True
 
 /-- `Ω` declaring the answer hole chosen by `p`. -/
-@[expose] def ctxOf (p : Chooser) : Ctx sig HoleN Res Unit Unit Unit := fun
+def ctxOf (p : Chooser) : Ctx sig HoleN Res Unit Unit Unit := fun
   | .waiting, h => nomatch h
   | .revealed, () => some (iface p)
 
@@ -486,12 +486,12 @@ inductive Op : Phase → Type
   | commit (p : Provider) : Op .reserved
   | cancel : Op .reserved
 
-@[expose] def respOf : {i : Phase} → Op i → Type
+abbrev respOf : {i : Phase} → Op i → Type
   | _, .reserve => Unit
   | _, .commit _ => Bool
   | _, .cancel => Unit
 
-@[expose] def sig : Sig Phase where
+abbrev sig : Sig Phase where
   Op := Op
   Resp := respOf
   next := fun
@@ -502,22 +502,22 @@ inductive Op : Phase → Type
 /-- The single linear token: the capability. -/
 inductive Tok
   | cap
-deriving @[expose] DecidableEq, Repr
+deriving DecidableEq, Repr
 
 /-- Reusable facts: a provider's authority; the deadline has not passed. -/
 inductive Fact
   | auth (p : Provider)
   | beforeDeadline
-deriving @[expose] DecidableEq, Repr
+deriving DecidableEq, Repr
 
 /-- Obligations: the deposit is held; pay provider `p`; refund the deposit. -/
 inductive Ob
   | holdDeposit
   | pay (p : Provider)
   | refund
-deriving @[expose] DecidableEq, Repr
+deriving DecidableEq, Repr
 
-@[expose] def spec : Spec sig Tok Fact Ob where
+abbrev spec : Spec sig Tok Fact Ob where
   consumes := fun
     | .commit _ => some .cap
     | _ => none
@@ -530,7 +530,7 @@ deriving @[expose] DecidableEq, Repr
     | .cancel => [.refund]
 
 /-- One hole: which provider, chosen by us, after the reservation. -/
-@[expose] def HoleN : Phase → Type
+abbrev HoleN : Phase → Type
   | .reserved => Unit
   | _ => Empty
 
@@ -545,17 +545,17 @@ instance : ∀ i, DecidableEq (HoleN i)
   | .done => fun a => nomatch a
 
 /-- The open protocol: reserve, then the provider hole. -/
-@[expose] def template : P .idle := .call (S := sig) Op.reserve fun _ => .hole (i := Phase.reserved) ()
+abbrev template : P .idle := .call (S := sig) Op.reserve fun _ => .hole (i := Phase.reserved) ()
 
 /-- A candidate: commit the capability on `p`; deliver its reply. -/
-@[expose] def plan (p : Provider) : P .reserved := .call (S := sig) (Op.commit p) fun ok => .ret ok
+abbrev plan (p : Provider) : P .reserved := .call (S := sig) (Op.commit p) fun ok => .ret ok
 
 /-- The cancellation path. -/
-@[expose] def cancelPlan : P .reserved := .call (S := sig) Op.cancel fun _ => .ret false
+abbrev cancelPlan : P .reserved := .call (S := sig) Op.cancel fun _ => .ret false
 
 /-- The hole's interface: chosen by `.me` (the buyer), accepted by the buyer, may use both providers' authority and the
 deadline, may spend the capability, may owe payment to either provider or the refund. -/
-@[expose] def iface : Iface sig HoleN Res Tok Fact Ob .reserved where
+abbrev iface : Iface sig HoleN Res Tok Fact Ob .reserved where
   chooser := .me
   ctx := [.auth .p1, .auth .p2, .beforeDeadline]
   need := [.cap]
@@ -563,19 +563,19 @@ deadline, may spend the capability, may owe payment to either provider or the re
   owes := [.pay .p1, .pay .p2, .refund]
   accepts := fun _ => True
 
-@[expose] def Ω : Ctx sig HoleN Res Tok Fact Ob := fun
+abbrev Ω : Ctx sig HoleN Res Tok Fact Ob := fun
   | .reserved, () => some iface
   | .idle, h => nomatch h
   | .done, h => nomatch h
 
 /-- Choose `f` for the provider hole. -/
-@[expose] def choose (f : P .reserved) : Subst sig HoleN Res := fun
+abbrev choose (f : P .reserved) : Subst sig HoleN Res := fun
   | .reserved, () => some f
   | .idle, h => nomatch h
   | .done, h => nomatch h
 
 /-- The negotiation's responses, listed. -/
-@[expose] def finite : Finite sig where
+def finite : Finite sig where
   resps := fun
     | .reserve => [()]
     | .commit _ => [true, false]
@@ -590,12 +590,12 @@ deadline, may spend the capability, may owe payment to either provider or the re
     | cancel => cases r; exact List.mem_cons_self
 
 /-- The negotiation's hypotheses, tokens and obligation bound. -/
-@[expose] def Γ₀ : List Fact := [.auth .p1, .auth .p2, .beforeDeadline]
-@[expose] def Δ₀ : List Tok := [.cap]
-@[expose] def Φ₀ : List Ob := [.holdDeposit, .pay .p1, .pay .p2, .refund]
+abbrev Γ₀ : List Fact := [.auth .p1, .auth .p2, .beforeDeadline]
+abbrev Δ₀ : List Tok := [.cap]
+abbrev Φ₀ : List Ob := [.holdDeposit, .pay .p1, .pay .p2, .refund]
 
 /-- The open object: the template with `f` chosen for the provider hole, history `H`. -/
-@[expose] def obj (f : P .reserved) (H : Hist sig) : Open sig HoleN Res Tok Fact Ob .idle where
+abbrev obj (f : P .reserved) (H : Hist sig) : Open sig HoleN Res Tok Fact Ob .idle where
   template := template
   Ω := Ω
   σ := choose f
@@ -606,27 +606,27 @@ deadline, may spend the capability, may owe payment to either provider or the re
   hist := H
 
 /-- The reservation answered. -/
-@[expose] def reserved : Entry sig := ⟨.idle, Op.reserve, ()⟩
+abbrev reserved : Entry sig := ⟨.idle, Op.reserve, ()⟩
 
 /-- Reserved; nothing dispatched yet. -/
-@[expose] def H₀ : Hist sig := ⟨[reserved], none⟩
+def H₀ : Hist sig := ⟨[reserved], none⟩
 
 /-- Reserved; the commitment to `p` dispatched and its reply LOST. -/
-@[expose] def lost (p : Provider) : Hist sig := ⟨[reserved], some ⟨.reserved, Op.commit p⟩⟩
+abbrev lost (p : Provider) : Hist sig := ⟨[reserved], some ⟨.reserved, Op.commit p⟩⟩
 
 /-- An environment: providers deliver iff `deliver`; the state counts calls. -/
-@[expose] def env (deliver : Bool) : Handler sig (fun _ => Nat) where
+abbrev env (deliver : Bool) : Handler sig (fun _ => Nat) where
   handle := fun op n => match op with
     | .reserve => ⟨(), n + 1⟩
     | .commit _ => ⟨deliver, n + 1⟩
     | .cancel => ⟨(), n + 1⟩
 
 /-- Reserved, then the commitment to `p` answered with `b`. -/
-@[expose] def answeredH (p : Provider) (b : Bool) : Hist sig :=
+def answeredH (p : Provider) (b : Bool) : Hist sig :=
   ⟨[reserved, ⟨.reserved, Op.commit p, b⟩], none⟩
 
 /-- A filling with the same first call as `plan p` but a different continuation. -/
-@[expose] def planFlip (p : Provider) : P .reserved := .call (S := sig) (Op.commit p) fun ok => .ret (!ok)
+abbrev planFlip (p : Provider) : P .reserved := .call (S := sig) (Op.commit p) fun ok => .ret (!ok)
 
 end Negotiation
 

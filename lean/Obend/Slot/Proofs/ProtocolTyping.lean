@@ -12,6 +12,7 @@ The completion space `Conds.space`, the matcher assignments `Assigns`, the scala
 private `World` went with PROT-6, replaced by Std.offer's deployed fuse (`Lang/StdOffer.lean`).
 -/
 public import Obend.Slot.Protocol
+import all Obend.Slot.Protocol
 public section
 
 namespace Obend.Slot.Protocol

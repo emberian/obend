@@ -15,6 +15,8 @@ both directions. `mix_assoc_cost`: the two associations of `mix` are within a fa
 other in every context. The factor is a constant, not an additive bound: a context that applies
 the association `n` times pays the per-application difference `n` times. -/
 public import Obend.Equiv.Improvement
+import all Obend.Equiv.Behaviour
+import all Obend.Equiv.Clairvoyant
 public section
 namespace Obend.Equiv
 open Obend.Core.Term
@@ -730,6 +732,155 @@ theorem cv_skip_vs_cbv_unused_arg {a va : Term} {ka fuel : Nat}
     unfold evalCBV
     simp [hncv, hlam, hnsa, hcbv, hinst, hnat]
   exact ⟨hclair, hcbv_app, by omega, fun hpos => by omega⟩
+
+/-! ## Compositional Cost-Improvement Category, `≈c` Equivalence Algebra & Slot Cost Contracts -/
+
+/-- Identity cost improvement (`CostWithin 1 t t`). -/
+theorem CostWithin.refl (t : Term) : CostWithin 1 t t := by
+  intro ρ C v k hcv
+  exact ⟨v, k, hcv, by omega, fun _ => rfl⟩
+
+/-- Factor weakening: `CostWithin A t t'` lifts to `CostWithin B t t'` whenever `A ≤ B`. -/
+theorem CostWithin.mono {A B : Nat} (hAB : A ≤ B) {t t' : Term}
+    (h : CostWithin A t t') : CostWithin B t t' := by
+  intro ρ C v k hcv
+  obtain ⟨v', k', r, hle, hlit⟩ := h ρ C v k hcv
+  refine ⟨v', k', r, Nat.le_trans hle (Nat.mul_le_mul_right k hAB), hlit⟩
+
+/-- Multiplicative composition of constant-factor cost simulations across pipeline stages. -/
+theorem CostWithin.trans {A B : Nat} {t₁ t₂ t₃ : Term}
+    (h₁₂ : CostWithin A t₁ t₂) (h₂₃ : CostWithin B t₂ t₃) :
+    CostWithin (B * A) t₁ t₃ := by
+  intro ρ C v k hcv
+  obtain ⟨v₂, k₂, r₂, hle₁₂, hlit₁₂⟩ := h₁₂ ρ C v k hcv
+  obtain ⟨v₃, k₃, r₃, hle₂₃, hlit₂₃⟩ := h₂₃ ρ C v₂ k₂ r₂
+  have hmul : k₃ ≤ (B * A) * k := by
+    calc
+      k₃ ≤ B * k₂ := hle₂₃
+      _ ≤ B * (A * k) := Nat.mul_le_mul_left B hle₁₂
+      _ = (B * A) * k := (Nat.mul_assoc B A k).symm
+  refine ⟨v₃, k₃, r₃, hmul, fun hlit => ?_⟩
+  have hv₂ := hlit₁₂ hlit
+  subst hv₂
+  exact hlit₂₃ hlit
+
+/-- `≈c` is reflexive (`factor = 1`). -/
+theorem CEquiv.refl (t : Term) : t ≈c t :=
+  ⟨1, CostWithin.refl t, CostWithin.refl t⟩
+
+/-- `≈c` is symmetric. -/
+theorem CEquiv.symm {t t' : Term} (h : t ≈c t') : t' ≈c t := by
+  obtain ⟨A, h1, h2⟩ := h
+  exact ⟨A, h2, h1⟩
+
+/-- `≈c` is transitive (`factor = B * A`, symmetric via `Nat.mul_comm`). -/
+theorem CEquiv.trans {t₁ t₂ t₃ : Term} (h₁₂ : t₁ ≈c t₂) (h₂₃ : t₂ ≈c t₃) : t₁ ≈c t₃ := by
+  obtain ⟨A, f₁₂, b₂₁⟩ := h₁₂
+  obtain ⟨B, f₂₃, b₃₂⟩ := h₂₃
+  refine ⟨B * A, CostWithin.trans f₁₂ f₂₃, ?_⟩
+  have hb : CostWithin (A * B) t₃ t₁ := CostWithin.trans b₃₂ b₂₁
+  rwa [Nat.mul_comm A B] at hb
+
+/-- Specializing `CostWithin A t t'` to the empty context `C = .bound 0` and identity
+substitution `Term.bound` transports any `CostAtMost t bound` budget directly to
+`CostAtMost t' (A * bound)`. -/
+theorem CostWithin.costAtMost_closed {A : Nat} {t t' : Term}
+    (h : CostWithin A t t') {bound : Nat} (hb : CostAtMost t bound) :
+    CostAtMost t' (A * bound) := by
+  obtain ⟨v, k, hcv, hkle⟩ := hb
+  have hid_t : instantiate (.bound 0) (t.substitute Term.bound) = t := by
+    simp [instantiate, Term.substitute, substitute_bound]
+  have hid_t' : instantiate (.bound 0) (t'.substitute Term.bound) = t' := by
+    simp [instantiate, Term.substitute, substitute_bound]
+  have hcv' : CV (instantiate (.bound 0) (t.substitute Term.bound)) v k := by
+    rwa [hid_t]
+  obtain ⟨v', k', r', hk', _⟩ := h Term.bound (.bound 0) v k hcv'
+  rw [hid_t'] at r'
+  exact ⟨v', k', r', Nat.le_trans hk' (Nat.mul_le_mul_left A hkle)⟩
+
+/-- Ground literal preservation under `CostWithin A t t'`: if `t` evaluates to literal `v`
+at cost `k`, then `t'` evaluates to the exact same literal `v` at cost `k' ≤ A * k`. -/
+theorem CostWithin.sameLiteral {A : Nat} {t t' v : Term} {k : Nat}
+    (h : CostWithin A t t') (hlit : Literal v) (hcv : CV t v k) :
+    ∃ k', CV t' v k' ∧ k' ≤ A * k := by
+  have hid_t : instantiate (.bound 0) (t.substitute Term.bound) = t := by
+    simp [instantiate, Term.substitute, substitute_bound]
+  have hid_t' : instantiate (.bound 0) (t'.substitute Term.bound) = t' := by
+    simp [instantiate, Term.substitute, substitute_bound]
+  have hcv0 : CV (instantiate (.bound 0) (t.substitute Term.bound)) v k := by
+    rwa [hid_t]
+  obtain ⟨v', k', r', hk', hveq⟩ := h Term.bound (.bound 0) v k hcv0
+  rw [hid_t', hveq hlit] at r'
+  exact ⟨k', r', hk'⟩
+
+/-- Decidable equality check on observed literal results (`.nat`, `.boolean`, `.label`). -/
+@[expose] def sameObservedLiteral : Term → Term → Bool
+  | .nat n, .nat m => n == m
+  | .boolean b, .boolean c => b == c
+  | .label s, .label t => s == t
+  | _, _ => false
+
+theorem sameObservedLiteral_inhabited :
+    sameObservedLiteral (.nat 7) (.nat 7) = true := by
+  unfold sameObservedLiteral
+  rfl
+
+theorem sameObservedLiteral_sound {v₁ v₂ : Term} (h : sameObservedLiteral v₁ v₂ = true) :
+    v₁ = v₂ ∧ Literal v₁ := by
+  cases v₁ <;> cases v₂ <;> simp [sameObservedLiteral] at h <;> subst h
+  · exact ⟨rfl, .nat _⟩
+  · exact ⟨rfl, .boolean _⟩
+  · exact ⟨rfl, .label _⟩
+
+/-- Executable Clairvoyant slot-binding cost & observation contract checker:
+verifies that `impl` evaluates under `evalClairvoyantMinCost fuel` within `budget` ticks
+to the exact same observed literal value produced by `spec`. -/
+@[expose] def checkSlotCostContract (fuel budget : Nat) (impl spec : Term) : Bool :=
+  match evalClairvoyantMinCost fuel impl, evalClairvoyantMinCost fuel spec with
+  | some (vi, ki), some (vs, _) => decide (ki ≤ budget) && sameObservedLiteral vi vs
+  | _, _ => false
+
+theorem checkSlotCostContract_inhabited :
+    checkSlotCostContract 1 2 (.nat 7) (.nat 7) = true := by
+  unfold checkSlotCostContract evalClairvoyantMinCost evalClairvoyantWithHint sameObservedLiteral
+  decide
+
+/-- Soundness of `checkSlotCostContract`: acceptance certifies a genuine Clairvoyant
+derivation of `impl` within `budget` (`CostAtMost impl budget`) agreeing in value with `spec`. -/
+theorem checkSlotCostContract_sound {fuel budget : Nat} {impl spec : Term}
+    (h : checkSlotCostContract fuel budget impl spec = true) :
+    ∃ v ki ks, CV impl v ki ∧ CV spec v ks ∧ ki ≤ budget ∧ CostAtMost impl budget := by
+  unfold checkSlotCostContract at h
+  split at h
+  · rename_i vi ki vs ks hi hs
+    rw [Bool.and_eq_true, decide_eq_true_eq] at h
+    obtain ⟨hle, heq_lit⟩ := h
+    obtain ⟨heq, _⟩ := sameObservedLiteral_sound heq_lit
+    subst heq
+    have hcvi := evalClairvoyantMinCost_sound fuel impl vi ki hi
+    have hcvs := evalClairvoyantMinCost_sound fuel spec vi ks hs
+    exact ⟨vi, ki, ks, hcvi, hcvs, hle, vi, ki, hcvi, hle⟩
+  · cases h
+
+/-- Transport of a certified `checkSlotCostContract` across any `CostWithin A impl impl'`
+improvement pass: `impl'` evaluates to the exact same literal `v` as `spec` at cost `≤ A * budget`. -/
+theorem checkSlotCostContract_costWithin_transport {fuel budget A : Nat} {impl impl' spec : Term}
+    (hContract : checkSlotCostContract fuel budget impl spec = true)
+    (hImp : CostWithin A impl impl') :
+    ∃ v ks k', Literal v ∧ CV spec v ks ∧ CV impl' v k' ∧ k' ≤ A * budget ∧
+      CostAtMost impl' (A * budget) := by
+  unfold checkSlotCostContract at hContract
+  split at hContract
+  · rename_i vi ki vs ks hi hs
+    rw [Bool.and_eq_true, decide_eq_true_eq] at hContract
+    obtain ⟨hle, heq_lit⟩ := hContract
+    obtain ⟨rfl, hlit⟩ := sameObservedLiteral_sound heq_lit
+    have hcvi := evalClairvoyantMinCost_sound fuel impl vi ki hi
+    have hcvs := evalClairvoyantMinCost_sound fuel spec vi ks hs
+    obtain ⟨k', hcv', hk'⟩ := hImp.sameLiteral hlit hcvi
+    have hbound : k' ≤ A * budget := Nat.le_trans hk' (Nat.mul_le_mul_left A hle)
+    exact ⟨vi, ks, k', hlit, hcvs, hcv', hbound, vi, k', hcv', hbound⟩
+  · cases hContract
 
 end Obend.Equiv
 end
