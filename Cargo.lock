@@ -115,6 +115,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "obend-pq-mpc"
+version = "0.1.0"
+dependencies = [
+ "obend-crypto-exec",
+]
+
+[[package]]
 name = "obend-sandbox"
 version = "0.1.0"
 dependencies = [

@@ -1444,6 +1444,62 @@ module = "Obend.Hardware.PCB"
 theorem = "traceElectroThermal_sound"
 description = "Coupled PCB trace electro-thermal & PDN target-impedance soundness (`traceElectroThermal_sound`) paired with thermal runaway impossibility (`traceThermalRunaway_impossible`)."
 
+[[apex]]
+id = "crypto-pq-mpc-uc-composition"
+subsystem = "Crypto"
+module = "Obend.Crypto.ThresholdMpcUcGames"
+theorem = "uc_composition_theorem"
+description = "Universal composition theorem (`uc_composition_theorem`) with explicit multi-session hybrid telescope (`multi_session_uc_realizes`) and lazy random-oracle birthday/hiding bounds."
+
+[[apex]]
+id = "crypto-pq-hash-sig-completeness"
+subsystem = "Crypto"
+module = "Obend.Crypto.PqHashSignatures"
+theorem = "verifyPqHashSig_evalSingleSign"
+description = "Post-quantum tweakable hash-tree signature completeness (`verifyPqHashSig_evalSingleSign`) paired with constructive `0 Classical` `PSum` forgery extraction (`extractPqHashForgery`)."
+
+[[apex]]
+id = "crypto-pq-hybrid-pinned-uc-security"
+subsystem = "Crypto"
+module = "Obend.Crypto.PqHashSignatures"
+theorem = "hybrid_ucRealizes_if_either_secure"
+description = "Committed-identity hybrid signature security (`hybrid_ucRealizes_if_either_secure`) realizing ideal signing whenever either constituent scheme holds, with key-substitution refusal."
+
+[[apex]]
+id = "crypto-pq-threshold-sign-eq-single"
+subsystem = "Crypto"
+module = "Obend.Crypto.ThresholdHashMpc"
+theorem = "thresholdSign_eq_singleSign"
+description = "Bit-identical threshold-vs-single post-quantum hash signature indistinguishability (`thresholdSign_eq_singleSign`) across RSS Keccak-f[1600] and degree-7 Poseidon2 MPC gates."
+
+[[apex]]
+id = "crypto-pq-mpc-identifiable-abort-mac"
+subsystem = "Crypto"
+module = "Obend.Crypto.ThresholdHashMpc"
+theorem = "batchTowerMac2Lane_sound_roots_bound"
+description = "2-lane split-custody `Tower128` batch MAC soundness (`batchTowerMac2Lane_sound_roots_bound`) backing constructive `0 Classical` cheater identification (`bdoz_cheater_identified_or_mac_forged`)."
+
+[[apex]]
+id = "crypto-pq-dkg-reed-solomon-consistency"
+subsystem = "Crypto"
+module = "Obend.Crypto.ThresholdHashMpc"
+theorem = "dkg_reed_solomon_consistency_sound"
+description = "2-round dealerless post-quantum DKG Reed-Solomon degree-consistency soundness (`dkg_reed_solomon_consistency_sound`)."
+
+[[apex]]
+id = "crypto-pq-proactive-refresh-pk-invariance"
+subsystem = "Crypto"
+module = "Obend.Crypto.ThresholdHashMpc"
+theorem = "proactive_refresh_preserves_secret_and_pk"
+description = "Zero-constant polynomial proactive share refresh (`proactive_refresh_preserves_secret_and_pk`) preserving the logical secret key and derived public key across epochs."
+
+[[apex]]
+id = "crypto-pq-threshold-custody-multi-turn-safe"
+subsystem = "Crypto"
+module = "Obend.Crypto.ThresholdHashMpc"
+theorem = "pq_threshold_custody_multi_turn_safe"
+description = "Multi-turn post-quantum threshold custody safety (`pq_threshold_custody_multi_turn_safe`) enforcing one-time epoch latch uniqueness, quorum non-double-signing, and revoked-membrane blocking."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

@@ -148,6 +148,9 @@ public import Obend.Crypto.DarkBazaar
 public import Obend.Crypto.BinaryTower256
 public import Obend.Crypto.BinarySpartanAndShout
 public import Obend.Crypto.ThresholdFheAndLatticeVrf
+public import Obend.Crypto.ThresholdMpcUcGames
+public import Obend.Crypto.PqHashSignatures
+public import Obend.Crypto.ThresholdHashMpc
 public import Obend.Polis.EvidencedOcap
 public import Obend.Polis.ZkBiscuit
 public import Obend.Polis.VerkleUmem

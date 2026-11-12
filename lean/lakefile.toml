@@ -48,7 +48,7 @@ globs = [
 [[lean_lib]]
 name = "Tests"
 srcDir = "tests"
-globs = ["metasystem.+", "silicon_elab.+", "rehydration.+", "vault.+", "Run.+"]
+globs = ["metasystem.+", "silicon_elab.+", "rehydration.+", "vault.+", "Run.+", "Crypto.+"]
 
 # Lane B (2026-10-30): the declaration-level obligation journal. `Journal.Export` walks the built
 # environment; `Journal.Journal` reads two exports as slots. The tool does not `needs` the `Obend`

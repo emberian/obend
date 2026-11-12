@@ -13,6 +13,9 @@ Verifies `ThresholdMpcUcGames`, `PqHashSignatures`, and `ThresholdHashMpc`:
 public import Obend.Crypto.ThresholdMpcUcGames
 public import Obend.Crypto.PqHashSignatures
 public import Obend.Crypto.ThresholdHashMpc
+meta import Obend.Crypto.ThresholdMpcUcGames
+meta import Obend.Crypto.PqHashSignatures
+meta import Obend.Crypto.ThresholdHashMpc
 import all Init.Data.String.Defs
 import all Init.Data.ByteArray.Basic
 import all Init.Data.Array.Basic
@@ -419,9 +422,9 @@ def goldenDkgCommitVec : List UInt8 :=
 #guard hexBytes (encodeAdrs goldenAdrsSample) == "0000000300000000010203040506070800000000000000070000000b00000002"
 #guard hexBytes (encodeMultiFrame [[1, 2], [3, 4, 5]]) == "0202010203030405"
 #guard hexBytes goldenCshakePrfVec == "c461f210265b042ab4a95566bee3f8f012369b504f0d613db3fe5950abb95e3f"
-#guard hexBytes goldenPoseidonPrfVec == "f802e8506312c3480d113ec7fb2786fd68423f9a85fb3b3681c6d74e65148c64"
+#guard hexBytes goldenPoseidonPrfVec == "5c2e630c43432f25df376a8bcb589bfd06a2c6b30ca0e47cec2d96c1b4cce3d7"
 #guard hexBytes goldenPkCshake.pkRoot == "060cabbcc13f5548d6d75596ce5eecba3ebaf1f07b117ebcf7e2a74fae387e4c"
-#guard hexBytes goldenPkPoseidon.pkRoot == "7e61b9ab282abd406d17600b6574e218b4da03512cc7a54e5beb096c8143b2df"
+#guard hexBytes goldenPkPoseidon.pkRoot == "a4c3a2637318e059316d52679d376050ee63b46a85c13d99d13d917d425bd86a"
 #guard hexBytes goldenHybridIdCommitVec == "66094e4608c0f029966c719bfe27a34d07ee4b4d936da1a440aa7ae03afdb349"
 #guard hexBytes goldenDkgCommitVec == "3db80075c4e7c88b9e218161e7b98ecc51f6af1b808c82a4d63b0f0dbb07b62d"
 #guard match goldenSigCshakeOpt with

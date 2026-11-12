@@ -8,185 +8,77 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use obend_crypto_exec::goldilocks::{GOLDILOCKS_PRIME, Goldilocks, GoldilocksExt2};
+use obend_crypto_exec::goldilocks::{
+    GOLDILOCKS_PRIME, POSEIDON2_INIT_STATE, Goldilocks, GoldilocksExt2,
+    bytes_to_limbs56 as exec_bytes_to_limbs56,
+    poseidon2_apply_me, poseidon2_apply_mi,
+    poseidon2_const_at as exec_poseidon2_const_at,
+    poseidon2_hash32 as exec_poseidon2_hash32,
+    poseidon2_pad as exec_poseidon2_pad,
+    poseidon2_perm12 as exec_poseidon2_perm12,
+    poseidon2_sbox7,
+};
 
 use crate::keccak_mpc::SlashingReceipt;
 
 // ============================================================================
 // 1. Exact Width-12 `Poseidon2Goldilocks` Permutation & 256-Bit Sponge (`poseidon2_hash32`)
+//    Delegated directly to `obend_crypto_exec::goldilocks` (`[HIGH-05]` SplitMix64 constants).
 // ============================================================================
 
-/// Domain-separated SplitMix64-derived round constant matching `Obend.Crypto.poseidon2ConstAt`!
-///
-/// In `Poseidon2Goldilocks.lean`:
-/// `seed := (0x9E3779B97F4A7C15 * (tag + 1) + 0xBF58476D1CE4E5B9 * (round + 1) +`
-/// `         0x94D049BB133111EB * (lane + 1) + 0x517CC1B727220A95) % (2 ^ 64)`
-/// `Goldilocks.ofNat (seed + 1)`
+/// Domain-separated SplitMix64-derived round constant matching `Obend.Crypto.poseidon2ConstAt`.
 #[inline]
 pub const fn poseidon2_const_at(tag: u64, round: u64, lane: u64) -> Goldilocks {
-    let seed = 0x9E37_79B9_7F4A_7C15u64
-        .wrapping_mul(tag.wrapping_add(1))
-        .wrapping_add(0xBF58_476D_1CE4_E5B9u64.wrapping_mul(round.wrapping_add(1)))
-        .wrapping_add(0x94D0_49BB_1331_11EBu64.wrapping_mul(lane.wrapping_add(1)))
-        .wrapping_add(0x517C_C1B7_2722_0A95u64);
-    Goldilocks::reduce128((seed as u128) + 1)
+    exec_poseidon2_const_at(tag, round, lane)
 }
 
 #[inline]
 pub const fn sbox7(x: Goldilocks) -> Goldilocks {
-    let x2 = x.square();
-    let x3 = x2.const_mul(x);
-    let x4 = x2.square();
-    x3.const_mul(x4)
-}
-
-#[inline]
-fn apply_m4(b: &[Goldilocks; 4]) -> [Goldilocks; 4] {
-    let s = b[0]
-        .const_add(b[1])
-        .const_add(b[2].const_add(b[3]));
-    let c2 = Goldilocks::TWO;
-    [
-        s.const_add(b[0].const_add(c2.const_mul(b[1]))),
-        s.const_add(b[1].const_add(c2.const_mul(b[2]))),
-        s.const_add(b[2].const_add(c2.const_mul(b[3]))),
-        s.const_add(b[3].const_add(c2.const_mul(b[0]))),
-    ]
+    poseidon2_sbox7(x)
 }
 
 /// External $12 \times 12$ block-circulant MDS layer $M_E = \text{circ}(2 M_4, M_4, M_4)$.
 #[inline]
 pub fn apply_me(state: &mut [Goldilocks; 12]) {
-    let y0 = apply_m4(&[state[0], state[1], state[2], state[3]]);
-    let y1 = apply_m4(&[state[4], state[5], state[6], state[7]]);
-    let y2 = apply_m4(&[state[8], state[9], state[10], state[11]]);
-    for k in 0..4 {
-        let s = y0[k].const_add(y1[k]).const_add(y2[k]);
-        state[k] = y0[k].const_add(s);
-        state[4 + k] = y1[k].const_add(s);
-        state[8 + k] = y2[k].const_add(s);
-    }
+    poseidon2_apply_me(state);
 }
 
 /// Internal diagonal-plus-ones linear layer $M_I = \mathbf{1}\mathbf{1}^T + \text{diag}(-2, 1, 2, 4, \dots, 1024)$.
 #[inline]
 pub fn apply_mi(state: &mut [Goldilocks; 12]) {
-    let mut sum = Goldilocks::ZERO;
-    for &x in state.iter() {
-        sum = sum.const_add(x);
-    }
-    let neg2 = Goldilocks::from_u64_reduced(GOLDILOCKS_PRIME - 2);
-    state[0] = neg2.const_mul(state[0]).const_add(sum);
-    state[1] = state[1].const_add(sum);
-    let mut coeff = 2u64;
-    for lane in state.iter_mut().skip(2) {
-        *lane = Goldilocks::from_u64_reduced(coeff)
-            .const_mul(*lane)
-            .const_add(sum);
-        coeff <<= 1;
-    }
+    poseidon2_apply_mi(state);
 }
 
 /// Exact Width-12 `Poseidon2` permutation ($R_F = 8, R_P = 22$) matching `Obend.Crypto.poseidon2Perm12`.
+#[inline]
 pub fn poseidon2_perm12(state: &mut [Goldilocks; 12]) {
-    apply_me(state);
-    // 4 initial external rounds (tag = 0)
-    for r in 0..4u64 {
-        for lane in 0..12 {
-            state[lane] = sbox7(state[lane].const_add(poseidon2_const_at(0, r, lane as u64)));
-        }
-        apply_me(state);
-    }
-    // 22 internal rounds (tag = 1, lane 0 only)
-    for r in 0..22u64 {
-        state[0] = sbox7(state[0].const_add(poseidon2_const_at(1, r, 0)));
-        apply_mi(state);
-    }
-    // 4 terminal external rounds (tag = 2)
-    for r in 0..4u64 {
-        for lane in 0..12 {
-            state[lane] = sbox7(state[lane].const_add(poseidon2_const_at(2, r, lane as u64)));
-        }
-        apply_me(state);
-    }
+    exec_poseidon2_perm12(state);
 }
 
 /// Pack arbitrary byte slice into `< 2^56` Goldilocks limbs (`0x01` delimiter + zero pad to 7-byte boundary),
 /// matching `Obend.Crypto.bytesToLimbs56`.
+#[inline]
 pub fn bytes_to_limbs56(msg: &[u8]) -> Vec<Goldilocks> {
-    let marked_len = msg.len() + 1;
-    let pad_len = (7 - (marked_len % 7)) % 7;
-    let total_len = marked_len + pad_len;
-    let num_limbs = total_len / 7;
-    let mut limbs = Vec::with_capacity(num_limbs);
-    for chunk_idx in 0..num_limbs {
-        let base = 7 * chunk_idx;
-        let mut val = 0u64;
-        for j in 0..7 {
-            let pos = base + j;
-            let byte = if pos < msg.len() {
-                msg[pos]
-            } else if pos == msg.len() {
-                0x01
-            } else {
-                0x00
-            };
-            val = (val << 8) | (byte as u64);
-        }
-        limbs.push(Goldilocks::from_u64_reduced(val));
-    }
-    limbs
+    exec_bytes_to_limbs56(msg)
 }
 
 /// Multi-rate `10*1` sponge padding (`rate = 8`), matching `Obend.Crypto.poseidon2Pad`.
+#[inline]
 pub fn poseidon2_pad(mut limbs: Vec<Goldilocks>) -> Vec<Goldilocks> {
-    let z = (8 - ((limbs.len() + 1) % 8)) % 8;
-    if z == 0 {
-        limbs.push(Goldilocks::from_u64_reduced((1u64 << 56) + 1));
-    } else {
-        limbs.push(Goldilocks::ONE);
-        for _ in 0..(z - 1) {
-            limbs.push(Goldilocks::ZERO);
-        }
-        limbs.push(Goldilocks::from_u64_reduced(1u64 << 56));
-    }
+    exec_poseidon2_pad(&mut limbs);
     limbs
 }
 
 /// Domain-separated initial Width-12 sponge state matching `Obend.Crypto.poseidon2InitState`.
 #[inline]
 pub const fn poseidon2_init_state() -> [Goldilocks; 12] {
-    [
-        Goldilocks::ZERO,
-        Goldilocks::ZERO,
-        Goldilocks::ZERO,
-        Goldilocks::ZERO,
-        Goldilocks::ZERO,
-        Goldilocks::ZERO,
-        Goldilocks::ZERO,
-        Goldilocks::ZERO,
-        Goldilocks::from_u64_reduced(8),
-        Goldilocks::from_u64_reduced(4),
-        Goldilocks::from_u64_reduced(32),
-        Goldilocks::from_u64_reduced(0x504F_5332_5F47_4C31),
-    ]
+    POSEIDON2_INIT_STATE
 }
 
 /// Exact 256-bit algebraic Goldilocks `Poseidon2` sponge hash matching `Obend.Crypto.poseidon2Hash32`.
+#[inline]
 pub fn poseidon2_hash32(msg: &[u8]) -> [u8; 32] {
-    let padded = poseidon2_pad(bytes_to_limbs56(msg));
-    let mut st = poseidon2_init_state();
-    for blk in padded.chunks_exact(8) {
-        for r in 0..8 {
-            st[r] = st[r].const_add(blk[r]);
-        }
-        poseidon2_perm12(&mut st);
-    }
-    let mut out = [0u8; 32];
-    for lane in 0..4 {
-        out[8 * lane..8 * (lane + 1)].copy_from_slice(&st[lane].to_be_bytes());
-    }
-    out
+    exec_poseidon2_hash32(msg)
 }
 
 // ============================================================================
