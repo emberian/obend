@@ -25,6 +25,9 @@ import all Obend.Polis.EpistemicVouchMarket
 import all Obend.Logic.SeparationFrame
 import all Obend.Judge.Class
 import all Obend.Core.Term
+import all Obend.Digest.HashBytes
+import all Obend.Digest.Cshake256.Spec
+import all Obend.Digest.Cshake256.Fast
 import all Obend.Tactic.Tooth
 import all Obend.AssertAxioms
 
@@ -33,6 +36,7 @@ public section
 namespace Obend.Tests.Metasystem.EpistemicVouchMarketTest
 
 open Obend.Polis.EpistemicVouchMarket
+open Obend.Digest.Cshake256 Obend.Digest.Cshake256.Fast
 
 set_option autoImplicit false
 
@@ -130,6 +134,43 @@ example : effectiveTrustCapacity (honestSubnet ringNet inRegion) root auditClaim
 def falseTally : TallyClaim := ⟨[1, 2], 4⟩
 def trueTally : TallyClaim := ⟨[1, 2], 3⟩
 
+/-- The names of the two tallies: their 256-bit cSHAKE256 digests, written out. -/
+def dFalse : BitVec 256 :=
+  99635097148724356540876780139096429128779588225662102920914122052658556233110#256
+def dTrue : BitVec 256 :=
+  85129985987097226307383239575096434211580788714387248367922977873613978370122#256
+
+-- The kernel runs cSHAKE256 once per tally, through the proved fast path (about 3 s each). Every
+-- run below reads the two names from this table, so no other proof pays for a hash.
+theorem dFalse_eq : tallyDigest falseTally = dFalse := by
+  unfold tallyDigest; rw [← cshake256Fast_eq]; decide +kernel
+theorem dTrue_eq : tallyDigest trueTally = dTrue := by
+  unfold tallyDigest; rw [← cshake256Fast_eq]; decide +kernel
+
+/-- `tallyMarket`, with the names of the two fixtures looked up instead of recomputed. -/
+def tableMarket : MarketParams TallyClaim :=
+  ⟨fun o => if o = falseTally then dFalse else if o = trueTally then dTrue else tallyDigest o,
+    2, 3, 1, 2500, 1, by decide⟩
+
+/-- It is `tallyMarket`: what holds of one below holds of the other. -/
+theorem tableMarket_eq : tableMarket = tallyMarket := by
+  unfold tableMarket tallyMarket
+  congr 1
+  funext o
+  show (if o = falseTally then dFalse else if o = trueTally then dTrue else tallyDigest o) = _
+  split
+  · next h => rw [h, dFalse_eq]
+  · split
+    · next h => rw [h, dTrue_eq]
+    · rfl
+
+-- The names bind: the two tallies are framed, and equal names would make them equal or collide.
+theorem tallies_framed : TallyFramed falseTally ∧ TallyFramed trueTally := by
+  unfold TallyFramed; decide +kernel
+example (h : tallyDigest falseTally = tallyDigest trueTally) :
+    Obend.Digest.HashBytes.Collision (cshake256Bytes tallyDomain) :=
+  (tallyDigest_binding tallies_framed.1 tallies_framed.2 h).resolve_left (by decide +kernel)
+
 -- The judge: accepts the true tally, refutes the false one, and decides neither below the grade.
 example : tallyJudge.check 2 trueTally () = .ok := rfl
 example : refutationHolds trueTally 2 () = false := by decide +kernel
@@ -137,72 +178,79 @@ example : refutationHolds falseTally 2 () = true := by decide +kernel
 example : refutationHolds falseTally 1 () = false := by decide +kernel
 example : ¬ tallyJudge.Meaning falseTally () := refutationHolds_sound (grade := 2) (cert := ())
   (by decide +kernel) ()
-example : tallyDigest falseTally ≠ tallyDigest trueTally := by decide +kernel
+example : tallyDigest falseTally ≠ tallyDigest trueTally := by
+  rw [dFalse_eq, dTrue_eq]; decide +kernel
 
 /-- Principal 0 is the hunter; 1 stakes on the false tally; 2 stakes on principal 1; 3 stakes on
 the true tally. The book is treasury, then free and bonded per principal. -/
 def genesis : MarketState := ⟨0, [0, 10, 0, 100, 0, 100, 0, 100, 0], [], [], []⟩
 
-def onFalse : VouchEdge := ⟨1, .claim (tallyDigest falseTally), 60, 5000, 4⟩
+def onFalse : VouchEdge := ⟨1, .claim (dFalse), 60, 5000, 4⟩
 def onVoucher : VouchEdge := ⟨2, .principal 1, 40, 2500, 4⟩
-def onTrue : VouchEdge := ⟨3, .claim (tallyDigest trueTally), 50, 10000, 4⟩
+def onTrue : VouchEdge := ⟨3, .claim (dTrue), 50, 10000, 4⟩
 
 def opening : List (MarketTurn TallyClaim Unit) :=
   [.depositBond 1 80, .depositBond 2 50, .depositBond 3 70, .addVouch onFalse, .addVouch onVoucher,
-    .addVouch onTrue, .advanceEpoch, .challengeClaim 0 (tallyDigest falseTally)]
+    .addVouch onTrue, .advanceEpoch, .challengeClaim 0 (dFalse)]
 
 /-- After the opening: the fee is paid, the challenge is open until epoch 3. -/
 def preSlash : MarketState :=
   ⟨1, [1, 9, 0, 20, 80, 50, 50, 30, 70], [onTrue, onVoucher, onFalse],
-    [⟨tallyDigest falseTally, 0, 3⟩], []⟩
+    [⟨dFalse, 0, 3⟩], []⟩
 
 /-- After the slash: 30 seized from principal 1 and 10 from principal 2; 7 + 2 to the hunter,
 23 + 8 to the treasury; principal 3 and its vouch as they were. -/
 def postSlash : MarketState := ⟨1, [32, 18, 0, 20, 50, 50, 40, 30, 70], [onTrue], [], []⟩
 
-example : runMarket tallyMarket genesis opening = some preSlash := by decide +kernel
+example : runMarket tableMarket genesis opening = some preSlash := by decide +kernel
 
-example : slashRefutedClaim tallyMarket preSlash 0 falseTally 2 () = some postSlash := by
+example : slashRefutedClaim tableMarket preSlash 0 falseTally 2 () = some postSlash := by
   decide +kernel
+-- The same run and slash, stated of `tallyMarket` and its cSHAKE256 names.
+example : runMarket tallyMarket genesis opening = some preSlash ∧
+    slashRefutedClaim tallyMarket preSlash 0 falseTally 2 () = some postSlash :=
+  tableMarket_eq ▸ (by decide +kernel :
+    runMarket tableMarket genesis opening = some preSlash ∧
+      slashRefutedClaim tableMarket preSlash 0 falseTally 2 () = some postSlash)
 
 -- The trust the false tally had before the slash: 30 from its voucher's bond.
 example : effectiveTrustCapacity (trustNetwork preSlash) (.principal 1)
-    (.claim (tallyDigest falseTally)) = 30 := by decide +kernel
+    (.claim (dFalse)) = 30 := by decide +kernel
 -- From principal 2 it is the bottleneck of the two vouches, and the cap of principal 2's bond holds.
 example : effectiveTrustCapacity (trustNetwork preSlash) (.principal 2)
-    (.claim (tallyDigest falseTally)) = 10 := by decide +kernel
+    (.claim (dFalse)) = 10 := by decide +kernel
 example : effectiveTrustCapacity (trustNetwork preSlash) (.principal 2)
-    (.claim (tallyDigest falseTally)) ≤ bonded preSlash 2 :=
-  trust_bounded_by_bond (trace_preserves_inv ((validTrace_iff_run tallyMarket).2
-    (by decide +kernel : runMarket tallyMarket genesis opening = some preSlash))
+    (.claim (dFalse)) ≤ bonded preSlash 2 :=
+  trust_bounded_by_bond (trace_preserves_inv ((validTrace_iff_run tableMarket).2
+    (by decide +kernel : runMarket tableMarket genesis opening = some preSlash))
     (marketInv_genesis _ _)) 2 (by decide +kernel)
 -- After it, none.
 example : effectiveTrustCapacity (trustNetwork postSlash) (.principal 1)
-    (.claim (tallyDigest falseTally)) = 0 := by decide +kernel
+    (.claim (dFalse)) = 0 := by decide +kernel
 
 -- Value is conserved over the whole trace, and the books differ by a conserved value.
 example : totalValue postSlash = totalValue genesis ∧ BookDelta genesis.book postSlash.book :=
-  validMarketTrace_conserves_total_value (P := tallyMarket)
+  validMarketTrace_conserves_total_value (P := tableMarket)
     (turns := opening ++ [.slashRefuted 0 falseTally 2 ()])
-    ((validTrace_iff_run tallyMarket).2 (by decide +kernel))
+    ((validTrace_iff_run tableMarket).2 (by decide +kernel))
 example : totalValue postSlash = 310 := by decide +kernel
 
 -- The claim was false, and the hunter held an open challenge on its digest.
 example : (∀ c : Unit, ¬ tallyJudge.Meaning falseTally c) ∧ ∃ ch ∈ preSlash.challenges,
-    ch.claim = tallyDigest falseTally ∧ ch.challenger = 0 ∧ preSlash.epoch < ch.deadline :=
-  slash_only_refuted (P := tallyMarket) (st' := postSlash) (hunter := 0) (claim := falseTally)
+    ch.claim = dFalse ∧ ch.challenger = 0 ∧ preSlash.epoch < ch.deadline :=
+  slash_only_refuted (P := tableMarket) (st' := postSlash) (hunter := 0) (claim := falseTally)
     (grade := 2) (cert := ()) (by decide +kernel)
 
 -- Principal 3 is in no genealogy of the false tally: bond, free balance and vouch are untouched.
 example : bonded postSlash 3 = bonded preSlash 3 ∧
     (3 ≠ 0 → freeBal postSlash 3 = freeBal preSlash 3) ∧
     ∀ e ∈ preSlash.edges, e.voucher = 3 → e ∈ postSlash.edges :=
-  honest_uninvolved_vouchers_untouched (P := tallyMarket) (hunter := 0) (claim := falseTally)
+  honest_uninvolved_vouchers_untouched (P := tableMarket) (hunter := 0) (claim := falseTally)
     (grade := 2) (cert := ()) (by decide +kernel) 3 fun e he hv hb => by
       have hall : (preSlash.edges.all fun e => !(decide (e.voucher = 3) &&
-          slashHit tallyMarket.horizon preSlash (tallyDigest falseTally) e)) = true := by
+          slashHit tableMarket.horizon preSlash (dFalse) e)) = true := by
         decide +kernel
-      have hhit : slashHit tallyMarket.horizon preSlash (tallyDigest falseTally) e = true :=
+      have hhit : slashHit tableMarket.horizon preSlash (dFalse) e = true :=
         slashHit_iff.2 hb
       have := List.all_eq_true.1 hall e he
       simp [hv, hhit] at this
@@ -212,26 +260,26 @@ example : bal postSlash.book treasuryAcct + freeBal postSlash 0 =
     bal preSlash.book treasuryAcct + freeBal preSlash 0 + 40 := by decide +kernel
 
 -- The voucher for the voucher is in the genealogy at depth 1 and not at depth 0.
-example : inGenealogy preSlash.edges (tallyDigest falseTally) 1 onVoucher = true ∧
-    inGenealogy preSlash.edges (tallyDigest falseTally) 0 onVoucher = false ∧
-    inGenealogy preSlash.edges (tallyDigest falseTally) 1 onTrue = false := by decide +kernel
+example : inGenealogy preSlash.edges (dFalse) 1 onVoucher = true ∧
+    inGenealogy preSlash.edges (dFalse) 0 onVoucher = false ∧
+    inGenealogy preSlash.edges (dFalse) 1 onTrue = false := by decide +kernel
 
 -- What cannot be slashed: a true tally under challenge, a false one with no challenge, a false
 -- one by someone who did not open the challenge, and a false one at a grade that does not cover it.
-example : runMarket tallyMarket preSlash
-    [.challengeClaim 0 (tallyDigest trueTally), .slashRefuted 0 trueTally 2 ()] = none := by
+example : runMarket tableMarket preSlash
+    [.challengeClaim 0 (dTrue), .slashRefuted 0 trueTally 2 ()] = none := by
   decide +kernel
-example : slashRefutedClaim tallyMarket { preSlash with challenges := [] } 0 falseTally 2 () =
+example : slashRefutedClaim tableMarket { preSlash with challenges := [] } 0 falseTally 2 () =
     none := by decide +kernel
-example : slashRefutedClaim tallyMarket preSlash 3 falseTally 2 () = none := by decide +kernel
-example : slashRefutedClaim tallyMarket preSlash 0 falseTally 1 () = none := by decide +kernel
+example : slashRefutedClaim tableMarket preSlash 3 falseTally 2 () = none := by decide +kernel
+example : slashRefutedClaim tableMarket preSlash 0 falseTally 1 () = none := by decide +kernel
 -- A challenge that has lapsed slashes nothing either.
-example : runMarket tallyMarket preSlash
+example : runMarket tableMarket preSlash
     [.advanceEpoch, .advanceEpoch, .slashRefuted 0 falseTally 2 ()] = none := by decide +kernel
 
 -- Each refusal is a named violation.
-example : MarketViolation tallyMarket preSlash (.slashRefuted 0 falseTally 1 ()) :=
-  (marketStep_skip_implies_violation tallyMarket preSlash _).1 (by decide +kernel)
+example : MarketViolation tableMarket preSlash (.slashRefuted 0 falseTally 1 ()) :=
+  (marketStep_skip_implies_violation tableMarket preSlash _).1 (by decide +kernel)
 
 /-! ## 3. Hit and run -/
 
@@ -239,7 +287,7 @@ def soloGenesis : MarketState := ⟨0, [0, 10, 0, 100, 0], [], [], []⟩
 def staked : List (MarketTurn TallyClaim Unit) := [.depositBond 1 80, .addVouch onFalse]
 
 def after (turns : List (MarketTurn TallyClaim Unit)) : Option MarketState :=
-  runMarket tallyMarket soloGenesis (staked ++ turns)
+  runMarket tableMarket soloGenesis (staked ++ turns)
 
 -- 60 of the 80 bonded are locked until epoch 4: only the other 20 can be asked for.
 example : after [.requestUnbond 1 60] = none := by decide +kernel
@@ -267,7 +315,7 @@ example : after [.requestUnbond 1 20, .advanceEpoch, .advanceEpoch, .advanceEpoc
 /-- Three quiet epochs, then a challenge at epoch 3: the stake that would have unlocked at 4 is
 held to the challenge's deadline, 5. -/
 def challengedAtThree : List (MarketTurn TallyClaim Unit) :=
-  [.advanceEpoch, .advanceEpoch, .advanceEpoch, .challengeClaim 0 (tallyDigest falseTally)]
+  [.advanceEpoch, .advanceEpoch, .advanceEpoch, .challengeClaim 0 (dFalse)]
 
 example : (after challengedAtThree).map (fun st => st.edges.map (·.unlockEpoch)) = some [5] := by
   decide +kernel
@@ -290,18 +338,18 @@ example : (after honestExit).map (fun st => (st.epoch, freeBal st 1, bonded st 1
 -- The universal theorem on this trace: every reachable state keeps the four guarantees.
 example (st' : MarketState) (h : after honestExit = some st') (p : Nat)
     (hcool : ∀ r ∈ st'.unbonds, r.principal = p → st'.epoch < r.cooldownExpiry) :
-    stepEpistemicMarket tallyMarket st' (.finalizeUnbond p : MarketTurn TallyClaim Unit) = none :=
-  (cooldown_prevents_hit_and_run (marketInv_genesis tallyMarket _)
-    ((validTrace_iff_run tallyMarket).2 h)).2.2.2 p hcool
+    stepEpistemicMarket tableMarket st' (.finalizeUnbond p : MarketTurn TallyClaim Unit) = none :=
+  (cooldown_prevents_hit_and_run (marketInv_genesis tableMarket _)
+    ((validTrace_iff_run tableMarket).2 h)).2.2.2 p hcool
 
 -- And its converse: a matured request in a reachable state is always paid.
 example (st : MarketState) (turns : List (MarketTurn TallyClaim Unit))
-    (h : ValidEpistemicMarketTrace tallyMarket soloGenesis turns st) (r : UnbondRequest)
+    (h : ValidEpistemicMarketTrace tableMarket soloGenesis turns st) (r : UnbondRequest)
     (hr : r ∈ st.unbonds) (hexp : r.cooldownExpiry ≤ st.epoch) :
-    (stepEpistemicMarket tallyMarket st
+    (stepEpistemicMarket tableMarket st
       (.finalizeUnbond r.principal : MarketTurn TallyClaim Unit)).isSome = true := by
   obtain ⟨st', _, hs, _⟩ := post_cooldown_unbond_succeeds (Cert := Unit)
-    (trace_preserves_inv h (marketInv_genesis tallyMarket _)) hr hexp
+    (trace_preserves_inv h (marketInv_genesis tableMarket _)) hr hexp
   rw [hs]; rfl
 
 /-! ## 4. Teeth -/

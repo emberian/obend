@@ -1,24 +1,19 @@
 module
 /-
-# SimplexLivenessAndOutboxTest — Wave-5 Lane C6 End-to-End Metasystem Suite
+# SimplexLivenessAndOutboxTest — the signed wire, the timed network and the outbox, unit by unit
 
-Exercises:
-1. Post-GST honest-leader single-view finalization (`N = 4, f = 1` and `N = 7, f = 2`) and
-   pre-GST / faulty-leader view-timeout progress (`Obend.Consensus.SimplexLiveness`).
-2. Domain-framed sender signature authentication (`SignedSimplexMsg`, `verifySignedSent`),
-   choice-free `PSum` forgery extraction (`extractForgedVoteSignature`), and constructive
-   reduction to `Obend.Judge.Computational` (`forgedVoteSignature_reduces_to_hashCollision`,
-   `signedSimplexCompJudge`).
-3. Pillar-6 `seL4` Copy-Before-Verify SPSC isolation + 3-class external effect settlement
-   (`Obend.Vault.IrreversibleOutbox`):
-   - TOCTOU shared-ring post-copy DMA mutation immunity & pre-copy tamper refusal,
-   - Unfinalized-block irreversible actuation refusals,
-   - Duplicate / stale monotonic outbox nullifier refusals,
-   - Optimistic `.compensatableEscrow` rollback compensation on orphaned branches,
-   - Multi-turn / multi-view `ValidOutboxTrace` instantiation of
-     `firmament_sel4_copy_before_verify_and_irreversible_outbox_safe` and
-     `irreversible_at_most_once_and_never_rolled_back`.
-4. Seven `#tooth` mutation-sensitivity witnesses and `#assert_axioms_tree` (`0 sorry`, `0` custom axioms).
+1. `Obend.Consensus.SimplexLiveness`, timed network: runs of `N = 4, f = 1` and `N = 7, f = 2`
+   committees under two delivery schedules with a Byzantine equivocation, finalizing a block whose
+   payload needs 256 bits; a timed-out view that notarizes its dummy; the events the network
+   refuses; `gst_honest_leader_finalizes` instantiated on a launched `N = 7` view.
+2. Slot-key signatures: a derived directory for four validators (three honest) accepts their
+   signed trace and refuses a forged and a replayed signature; under a constant hash the forgery
+   is accepted, `extractForgedVoteSignature` returns it, and
+   `forgedSignature_reduces_to_hashCollision` turns it into a collision of that hash.
+3. `Obend.Vault.IrreversibleOutbox`: a real cSHAKE256 commitment at the tip of a finalized chain;
+   each named refusal; escrow rollback on an orphaned branch; a multi-turn `ValidOutboxTrace` with
+   the apex theorem, the finalized-commitment binding and the replay refusal applied to it.
+4. `#tooth` witnesses and `#assert_axioms_tree`.
 -/
 
 public import Obend.Consensus.SimplexLiveness
@@ -186,321 +181,304 @@ import all Obend.Vault.Hyperedge
 public section
 namespace Obend.Tests.SimplexLivenessAndOutbox
 
-open Obend.Consensus.SimplexProtocol
 open Obend.Consensus.Simplex (NodeId)
 open Obend.Consensus.SimplexProtocol
 open Obend.Consensus.SimplexLiveness
 open Obend.Vault.IrreversibleOutbox
 open Obend.Trailblaze.Polis (sampleValidPartition checkMicrokitIsolation)
 open Obend.Digest
-open Obend.Digest.Cshake256.Native (bytesOfList)
+open Obend.Digest.Cshake256.Native (bytesOfList bytesOfList_toList)
+open Obend.Judge.Computational (HashCollisionWitness ComputationalJudge)
 
 set_option autoImplicit false
-set_option maxRecDepth 16384
-set_option maxHeartbeats 2000000
+set_option maxRecDepth 100000
 
-/-! ## 1. Post-GST Finalization Runs (`N = 4, f = 1` and `N = 7, f = 2`) & Pre-GST Timeout Progress -/
+/-! ## 1. The adversarial timed network -/
 
-/-- `N = 4, f = 1` committee (`quorum = 3`); validator `3` is Byzantine faulty. -/
-def proto4 : Protocol :=
-  ⟨[0, 1, 2, 3], 1, (· == 3), by decide, by decide, by decide⟩
+/-- `N = 4, f = 1`: validator `3` is Byzantine. -/
+def proto4 : Protocol := ⟨[0, 1, 2, 3], 1, (· == 3), by decide, by decide, by decide⟩
 
-/-- `N = 7, f = 2` committee (`quorum = 5`); validators `5` and `6` are Byzantine faulty. -/
+/-- `N = 7, f = 2`: validators `5` and `6` are Byzantine. -/
 def proto7 : Protocol :=
   ⟨[0, 1, 2, 3, 4, 5, 6], 2, (fun n => n == 5 || n == 6), by decide, by decide, by decide⟩
 
-def cfg4 : PartialSyncConfig := ⟨100, 10, 25, 4⟩
-def sched4_v1 : ViewExecutionSchedule := ⟨100, 0, (fun _ => 102), (fun _ => 111), (fun _ => 119)⟩
+def cfg : NetConfig := ⟨0, 1, 5⟩
 
-/-- View 1 post-GST finalization on `N = 4, f = 1` (`leader 1 = 0` honest, `Δ_timer = 25 > 20 = 2 Δ_net`). -/
-def sent4_v1 : Sent :=
-  runPostGstHonestLeaderView proto4 cfg4 sched4_v1 [] 1 401 []
+def netEmpty : NetState where
+  time := 0
+  log := []
+  delivered := fun _ _ => false
+  viewEntry := fun _ _ => none
 
-example : proto4.quorum = 3 := rfl
-example : (honestMembers proto4).length = 3 := rfl
-example : effectiveDeltaTimer cfg4 sched4_v1 = 25 := rfl
-example : (extractFinCert? proto4 sent4_v1 1 [.block 1 401]).isSome = true := by decide
-example : [0, 1, 2].all (fun n => !voted sent4_v1 n 1 (.dummy 1)) = true := by decide
-example : [0, 1, 2].all (fun n => voted sent4_v1 n 1 (.block [.block 1 401])) = true := by decide
-example : [0, 1, 2].all (fun n => finalizeVoted sent4_v1 n 1 [.block 1 401]) = true := by decide
+/-- A block whose payload does not fit 64 bits. -/
+def wide (v x : Nat) : Entry := .block v (2 ^ 200 + x)
 
-theorem proto4_v1_sync : PostGstHonestViewSync proto4 cfg4 sched4_v1 1 where
-  postGst := by decide
-  honestLeader := ⟨by decide, by decide⟩
-  honestEnterBound := fun _ _ => ⟨by dsimp [sched4_v1]; omega, by dsimp [sched4_v1, cfg4]; omega⟩
-  proposalDelivery := fun _ _ => by dsimp [sched4_v1, cfg4]; omega
-  notarDelivery := fun _ _ => by dsimp [sched4_v1, cfg4]; omega
-  timerMargin := by decide
+def prop (P : Protocol) (v : Nat) (c : Chain) : Msg := ⟨P.leader v, v, .propose, .block c⟩
+def votesOf (hs : List NodeId) (v : Nat) (c : Chain) : List Msg :=
+  hs.map fun n => ⟨n, v, .vote, .block c⟩
+def finsOf (hs : List NodeId) (v : Nat) (c : Chain) : List Msg :=
+  hs.map fun n => ⟨n, v, .finalize, .block c⟩
+def deliverTo (hs : List NodeId) (ms : List Msg) : List NetEvent :=
+  ms.flatMap fun m => hs.map fun n => NetEvent.deliver n m
 
-/-- End-to-end instantiation of `gst_honest_leader_finalizes_in_view` on `N = 4, f = 1`. -/
+/-- One view under an honest leader, every delivery at its deadline, `byz` injected mid-vote. -/
+def viewLate (P : Protocol) (hs : List NodeId) (v : Nat) (parent c : Chain) (byz : List Msg) :
+    List NetEvent :=
+  hs.map (fun n => NetEvent.enter n v parent) ++ [.send (prop P v c)] ++
+  deliverTo hs [prop P v c] ++ (votesOf hs v c).map NetEvent.send ++ byz.map NetEvent.inject ++
+  [.tick] ++ deliverTo hs (votesOf hs v c ++ byz) ++ (finsOf hs v c).map NetEvent.send ++ [.tick] ++
+  deliverTo hs (finsOf hs v c) ++ [.tick]
+
+/-- The same view with every delivery at once: all of it happens before the first tick. -/
+def viewEager (P : Protocol) (hs : List NodeId) (v : Nat) (parent c : Chain) (byz : List Msg) :
+    List NetEvent :=
+  hs.map (fun n => NetEvent.enter n v parent) ++ byz.map NetEvent.inject ++ [.send (prop P v c)] ++
+  deliverTo hs (prop P v c :: byz) ++ (votesOf hs v c).map NetEvent.send ++
+  deliverTo hs (votesOf hs v c) ++ (finsOf hs v c).map NetEvent.send ++
+  deliverTo hs (finsOf hs v c) ++ [.tick, .tick, .tick]
+
+/-- What a run leaves: its clock, and whether the block has a checking finalization certificate. -/
+def outcome (P : Protocol) (evs : List NetEvent) (v : Nat) (c : Chain) : Option (Nat × Bool) :=
+  (runNet P cfg netEmpty evs).map fun s =>
+    (s.time, match extractFinCert? P s.sent v c with
+             | some cert => cert.checks P s.sent
+             | none => false)
+
+def byz4 : List Msg := [⟨3, 1, .vote, .block [wide 1 666]⟩, ⟨3, 1, .vote, .dummy 1⟩]
+
+example : outcome proto4 (viewLate proto4 [0, 1, 2] 1 [] [wide 1 401] byz4) 1 [wide 1 401] =
+    some (3, true) := by decide +kernel
+example : outcome proto4 (viewEager proto4 [0, 1, 2] 1 [] [wide 1 401] byz4) 1 [wide 1 401] =
+    some (3, true) := by decide +kernel
+
+/-- Two views in a row: view 2 (leader `1`) extends the block view 1 finalized. -/
 example :
-    Finalized proto4 sent4_v1 1 [.block 1 401] ∧
-    ∃ cert : FinCert,
-      cert.view = 1 ∧
-      cert.chain = [.block 1 401] ∧
-      cert.checks proto4 sent4_v1 = true := by
-  have hEmptyNot : ChainNotarized proto4 ([] : Sent) [] := fun _ hk => by simp at hk
-  have hFresh : ∀ n, proto4.honest n → votedAny ([] : Sent) n 1 = false := fun _ _ => rfl
-  have hFast : ∀ n, proto4.honest n → sched4_v1.notarizationArrival n ≤ sched4_v1.viewStart + 2 * cfg4.deltaNet :=
-    fun _ _ => by dsimp [sched4_v1, cfg4]; omega
-  have hOut := @gst_honest_leader_finalizes_in_view proto4 cfg4 sched4_v1 [] 1 401 []
-    Reach.nil (by decide) rfl hEmptyNot hFresh proto4_v1_sync hFast
-  obtain ⟨_, hFin, cert, hcv, hcc, hchk, _⟩ := hOut
-  exact ⟨hFin, cert, hcv, hcc, hchk⟩
+    outcome proto4
+      (viewLate proto4 [0, 1, 2] 1 [] [wide 1 401] byz4 ++
+       viewEager proto4 [0, 1, 2] 2 [wide 1 401] [wide 1 401, wide 2 402] [])
+      2 [wide 1 401, wide 2 402] = some (6, true) := by decide +kernel
 
-/-- Pre-GST / silent-leader view-timeout advance on `proto4` in view 2 (`[.block 1 401, .dummy 2]`). -/
-example :
-    ∃ (sent2 : Sent) (e : Entry),
-      Reach proto4 sent2 ∧
-      e.view = 2 ∧
-      ([Entry.block 1 401] ++ [e]).length = 2 ∧
-      ChainNotarized proto4 sent2 ([Entry.block 1 401] ++ [e]) := by
-  have hEmptyNot : ChainNotarized proto4 ([] : Sent) [] := fun _ hk => by simp at hk
-  have hFresh1 : ∀ n, proto4.honest n → votedAny ([] : Sent) n 1 = false := fun _ _ => rfl
-  have hV1 := @gst_honest_leader_finalizes proto4 cfg4 sched4_v1 [] 1 401 []
-    Reach.nil (by decide) rfl hEmptyNot hFresh1 proto4_v1_sync
-  have hFresh2 : ∀ n, proto4.honest n → votedAny sent4_v1 n 2 = false ∨ voted sent4_v1 n 2 (.dummy 2) = true := by
-    intro n ⟨hmem, hnf⟩
-    left
-    simp [proto4] at hmem hnf
-    rcases hmem with rfl | rfl | rfl | rfl
-    · decide
-    · decide
-    · decide
-    · contradiction
-  exact pre_gst_or_faulty_leader_advances_view hV1.1 (by decide) rfl hV1.2.2.2.2.2.2.2.1 (.inr hFresh2)
+def byz7 : List Msg := [⟨5, 1, .vote, .block [wide 1 9]⟩, ⟨6, 1, .vote, .block [wide 1 9]⟩]
 
-/-- `N = 7, f = 2` two-view consecutive post-GST finalization (`quorum = 5`, views 1 and 2). -/
-def cfg7 : PartialSyncConfig := ⟨500, 15, 40, 4⟩
-def sched7_v1 : ViewExecutionSchedule := ⟨500, 0, (fun _ => 505), (fun _ => 518), (fun _ => 529)⟩
-def sched7_v2 : ViewExecutionSchedule := ⟨550, 0, (fun _ => 554), (fun _ => 567), (fun _ => 578)⟩
+example : outcome proto7 (viewLate proto7 [0, 1, 2, 3, 4] 1 [] [wide 1 1001] byz7) 1 [wide 1 1001] =
+    some (3, true) := by decide +kernel
 
-def sent7_v1 : Sent :=
-  runPostGstHonestLeaderView proto7 cfg7 sched7_v1 [] 1 1001 []
-
-def sent7_v2 : Sent :=
-  runPostGstHonestLeaderView proto7 cfg7 sched7_v2 sent7_v1 2 2002 [.block 1 1001]
-
-example : proto7.quorum = 5 := rfl
-example : (honestMembers proto7).length = 5 := rfl
-example : (extractFinCert? proto7 sent7_v1 1 [.block 1 1001]).isSome = true := by decide
-example : (extractFinCert? proto7 sent7_v2 2 [.block 1 1001, .block 2 2002]).isSome = true := by decide
-example : [0, 1, 2, 3, 4].all (fun n => !voted sent7_v1 n 1 (.dummy 1)) = true := by decide
-example : [0, 1, 2, 3, 4].all (fun n => !voted sent7_v2 n 2 (.dummy 2)) = true := by decide
-example : [0, 1, 2, 3, 4].all (fun n => finalizeVoted sent7_v2 n 2 [.block 1 1001, .block 2 2002]) = true := by decide
-
-theorem proto7_v1_sync : PostGstHonestViewSync proto7 cfg7 sched7_v1 1 where
-  postGst := by decide
-  honestLeader := ⟨by decide, by decide⟩
-  honestEnterBound := fun _ _ => ⟨by dsimp [sched7_v1]; omega, by dsimp [sched7_v1, cfg7]; omega⟩
-  proposalDelivery := fun _ _ => by dsimp [sched7_v1, cfg7]; omega
-  notarDelivery := fun _ _ => by dsimp [sched7_v1, cfg7]; omega
-  timerMargin := by decide
-
-example : Finalized proto7 sent7_v1 1 [.block 1 1001] :=
-  (@gst_honest_leader_finalizes proto7 cfg7 sched7_v1 [] 1 1001 []
-    Reach.nil (by decide) rfl (fun _ hk => by simp at hk)
-    (fun _ _ => rfl) proto7_v1_sync).2.2.2.2.2.2.1
-
-/-! ## 2. Authenticated `SignedSimplexMsg` & Constructive EUF-CMA / Collision Extraction -/
-
-/-- Constant 32-byte collision-exhibiting test hash (used strictly to trigger the constructive
-    `.inr` collision-extraction branch of `forgedVoteSignature_reduces_to_hashCollision`). -/
-def collidingSlotHash : HashBytes.Hash :=
-  fun _ => List.replicate 32 0x5A
-
-def saltHonest : ByteArray := bytesOfList (List.replicate 32 0x11)
-def saltForged : ByteArray := bytesOfList (List.replicate 32 0x22)
-
-/-- `proto4.leader 1 = 0` (`committee[(1 - 1) % 4] = 0`). -/
-def honestLeaderProposal : Msg := ⟨0, 1, .propose, .block [.block 1 777]⟩
-def forgedHonestVote : Msg := ⟨0, 1, .vote, .block [.block 1 999]⟩
-def faultyEquivocation : Msg := ⟨3, 1, .vote, .block [.block 1 888]⟩
-
-def slotKeys4 : KeyDirectory where
-  pubKey n :=
-    if n == 3 then
-      deriveSlotPubKey collidingSlotHash (signableByteArray 0#256 faultyEquivocation) saltHonest
-    else
-      deriveSlotPubKey collidingSlotHash (signableByteArray 0#256 honestLeaderProposal) saltHonest
-
-def signedHonestProp : SignedSimplexMsg where
-  msg := honestLeaderProposal
-  signerPk := slotKeys4.pubKey 0
-  signature := saltHonest
-
-def signedFaultyEquiv : SignedSimplexMsg where
-  msg := faultyEquivocation
-  signerPk := slotKeys4.pubKey 3
-  signature := saltHonest
-
-def signedForgedHonestVote : SignedSimplexMsg where
-  msg := forgedHonestVote
-  signerPk := slotKeys4.pubKey 0
-  signature := saltForged
-
-/-- Valid authenticated trace containing an honest proposal + a faulty node's equivocation under its own key. -/
-def authValidTrace : SignedSent := [signedHonestProp, signedFaultyEquiv]
-
-/-- Adversarially forged trace injecting an unauthorized honest vote (`sender = 0`) without oracle query. -/
-def authForgedTrace : SignedSent := [signedForgedHonestVote]
-
-example : verifySignedSent (commitSlotSigScheme collidingSlotHash 512) slotKeys4
-            proto4.committee authValidTrace = true := by decide
-
-example : verifySignedSent (commitSlotSigScheme collidingSlotHash 512) slotKeys4
-            proto4.committee authForgedTrace = true := by decide
-
-def isExtractedReach {α β} : PSum α β → Bool
-  | .inl _ => true
-  | .inr _ => false
-
-theorem authValidTrace_ver :
-    verifySignedSent (commitSlotSigScheme collidingSlotHash 512) slotKeys4
-      proto4.committee authValidTrace = true := by decide
-
-theorem authValidTrace_oracle :
-    HonestSigningOracle proto4 [] [honestLeaderProposal] authValidTrace := by
-  intro pre sm suf hEq hHon _
-  cases pre with
-  | nil =>
-    simp [authValidTrace] at hEq
-    rcases hEq with ⟨rfl, _⟩
-    decide
-  | cons p ps =>
-    cases ps with
-    | nil =>
-      simp [authValidTrace] at hEq
-      rcases hEq with ⟨_, rfl, _⟩
-      have hF : proto4.faulty signedFaultyEquiv.msg.sender = true := rfl
-      exact False.elim (Bool.false_ne_true (hHon.2.symm.trans hF))
-    | cons q qs =>
-      simp [authValidTrace] at hEq
-
-/-- Constructive `.inl` branch: `extractForgedVoteSignature` certifies `Reach` on `authValidTrace`! -/
-example :
-    isExtractedReach
-      (extractForgedVoteSignature (commitSlotSigScheme collidingSlotHash 512) slotKeys4
-        proto4 [honestLeaderProposal] authValidTrace
-        authValidTrace_ver authValidTrace_oracle) = true := by
-  decide
-
-/-- Constructive `.inr` branch + `forgedVoteSignature_reduces_to_hashCollision`:
-    deterministically extracts a genuine `HashCollisionWitness` (`msgA ≠ msgB` with identical digest)! -/
-def singleHonestProto : Protocol :=
-  ⟨[0], 0, (fun _ => false), by decide, by decide, by decide⟩
-
-def singleHonestKeys : KeyDirectory where
-  pubKey _ :=
-    let dummyPk := BitVec.ofNat 256 (HashBytes.ofBE (List.replicate 32 0x5A))
-    deriveSlotPubKey collidingSlotHash (signableByteArray dummyPk honestLeaderProposal) saltHonest
-
-def singleSignedForged : SignedSimplexMsg where
-  msg := forgedHonestVote
-  signerPk := singleHonestKeys.pubKey 0
-  signature := saltForged
+/-- A view whose leader stays silent: once the timers expire the honest validators vote for the
+    dummy and it is notarized; before the timer such a vote is refused. -/
+def silentView : List NetEvent :=
+  [0, 1, 2].map (fun n => NetEvent.enter n 1 []) ++ List.replicate 5 NetEvent.tick ++
+  [0, 1, 2].map (fun n => NetEvent.send ⟨n, 1, .vote, .dummy 1⟩)
 
 example :
-    let hVer : verifySignedSent (commitSlotSigScheme collidingSlotHash 512) singleHonestKeys
-                 singleHonestProto.committee [singleSignedForged] = true := by decide
-    have hOracle : HonestSigningOracle singleHonestProto [] [honestLeaderProposal] [singleSignedForged] := by
-      intro _ sm _ hEq _ hIn
-      have hMem : sm ∈ [singleSignedForged] := by rw [hEq]; simp
-      simp [singleSignedForged] at hMem
-      subst hMem
-      simp [forgedHonestVote, honestLeaderProposal] at hIn
-    match extractForgedVoteSignature (commitSlotSigScheme collidingSlotHash 512) singleHonestKeys
-            singleHonestProto [honestLeaderProposal] [singleSignedForged] hVer hOracle with
-    | .inl _ => False
-    | .inr w =>
-      let col := forgedVoteSignature_reduces_to_hashCollision collidingSlotHash 512
-        singleHonestKeys singleHonestProto honestLeaderProposal saltHonest
-        (by decide) (by decide) (by decide) (by decide)
-        (fun n hn => by
-          rcases hn with ⟨hmem, _⟩
-          simp [singleHonestProto] at hmem
-          subst hmem
-          exact ⟨rfl, rfl⟩)
-        w
-      col.msgA ≠ col.msgB ∧
-      HashBytes.ofBE (collidingSlotHash col.msgA) = HashBytes.ofBE (collidingSlotHash col.msgB) := by
-  dsimp only
-  split
-  · rename_i w _
-    exfalso
-    have hRuleFalse : checkHonestProtocolRule singleHonestProto [] singleSignedForged.msg = false := by decide
-    have hFault := w.down.2.2.faultyOnlyInject [] singleSignedForged [] rfl hRuleFalse
-    exact Bool.false_ne_true hFault.1
-  · rename_i forgery _
-    exact ⟨(forgedVoteSignature_reduces_to_hashCollision collidingSlotHash 512
-              singleHonestKeys singleHonestProto honestLeaderProposal saltHonest
-              (by decide) (by decide) (by decide) (by decide)
-              (fun n hn => by
-                rcases hn with ⟨hmem, _⟩
-                simp [singleHonestProto] at hmem
-                subst hmem
-                exact ⟨rfl, rfl⟩)
-              forgery).distinct,
-           (forgedVoteSignature_reduces_to_hashCollision collidingSlotHash 512
-              singleHonestKeys singleHonestProto honestLeaderProposal saltHonest
-              (by decide) (by decide) (by decide) (by decide)
-              (fun n hn => by
-                rcases hn with ⟨hmem, _⟩
-                simp [singleHonestProto] at hmem
-                subst hmem
-                exact ⟨rfl, rfl⟩)
-              forgery).sameDigest⟩
+    (runNet proto4 cfg netEmpty silentView).map
+      (fun s => decide (NotarizedDummy proto4 s.sent 1)) = some true ∧
+    (runNet proto4 cfg netEmpty
+      [.enter 0 1 [], .tick, .send ⟨0, 1, .vote, .dummy 1⟩]).isNone = true := by
+  decide +kernel
 
-/-! ## 3. Pillar-6 `IrreversibleOutbox` Settlement, TOCTOU Immunity & Refusal Suite -/
+/-- Refused events: a tick while a due message is undelivered; a tick while an honest node sits
+    on a vote its deliveries enable; a second honest vote; a second proposal by the honest leader;
+    an injection under an honest name; a finalize before the node's deliveries notarize. -/
+example :
+    (runNet proto4 cfg netEmpty
+      [.enter 0 1 [], .send (prop proto4 1 [wide 1 1]), .tick, .tick]).isNone = true ∧
+    (runNet proto4 cfg netEmpty
+      [.enter 0 1 [], .send (prop proto4 1 [wide 1 1]), .deliver 0 (prop proto4 1 [wide 1 1]),
+       .tick]).isNone = true ∧
+    (runNet proto4 cfg netEmpty
+      [.enter 0 1 [], .send (prop proto4 1 [wide 1 1]), .deliver 0 (prop proto4 1 [wide 1 1]),
+       .send ⟨0, 1, .vote, .block [wide 1 1]⟩, .send ⟨0, 1, .vote, .block [wide 1 1]⟩]).isNone
+      = true ∧
+    (runNet proto4 cfg netEmpty
+      [.enter 0 1 [], .send (prop proto4 1 [wide 1 1]), .send (prop proto4 1 [wide 1 2])]).isNone
+      = true ∧
+    (runNet proto4 cfg netEmpty [.inject ⟨0, 1, .vote, .block [wide 1 666]⟩]).isNone = true ∧
+    (runNet proto4 cfg netEmpty
+      [.enter 0 1 [], .send (prop proto4 1 [wide 1 1]), .deliver 0 (prop proto4 1 [wide 1 1]),
+       .send ⟨0, 1, .vote, .block [wide 1 1]⟩, .send ⟨0, 1, .finalize, .block [wide 1 1]⟩]).isNone
+      = true := by
+  decide +kernel
+
+/-- A launched view of the seven-validator committee. -/
+def launched7 : NetState where
+  time := 0
+  log := [(prop proto7 1 [wide 1 1001], 0)]
+  delivered := fun _ _ => false
+  viewEntry := fun _ v => if v = 1 then some 0 else none
+
+theorem launched7_ok : ViewLaunched proto7 cfg launched7 1 [] (2 ^ 200 + 1001) where
+  reach := Reach.step Reach.nil
+    (Step.propose [] (proto7.leader 1) 1 [wide 1 1001] ⟨by decide, by decide⟩ rfl)
+  postGst := Nat.le_refl _
+  deltaPos := by decide
+  stamped := by decide
+  viewPos := Nat.le_refl _
+  parentLen := rfl
+  leaderHonest := ⟨by decide, by decide⟩
+  proposed := List.Mem.head _
+  oneProposal := by
+    intro m hm _ _ _
+    have hm' : m ∈ [prop proto7 1 [wide 1 1001]] := hm
+    rw [List.mem_singleton] at hm'
+    rw [hm']
+    rfl
+  entered := fun _ _ => ⟨0, rfl, by decide⟩
+  parentKnown := fun _ _ k hk => absurd hk (Nat.not_lt_zero k)
+  fresh := fun n _ => by simp [votedAny, launched7, NetState.sent, prop]
+
+/-- Every trace of the seven-validator view finalizes: no delivery order and no injection by
+    validators `5` and `6` prevents it. -/
+theorem launched7_finalizes (evs : List NetEvent) (s : NetState)
+    (h : runNet proto7 cfg launched7 evs = some s) (ht : 2 < s.time) :
+    Finalized proto7 s.sent 1 [wide 1 1001] ∧
+    ∀ n, proto7.honest n → voted s.sent n 1 (.dummy 1) = false :=
+  have r := gst_honest_leader_finalizes launched7_ok h (show 0 + 2 * 1 < s.time by omega)
+  ⟨r.2.2.1, fun n hn => (r.2.1 n hn).2⟩
+
+/-! ## 2. Slot-key signatures -/
+
+def toyHash : HashBytes.Hash :=
+  fun bs => HashBytes.be 32 (bs.foldl (fun acc b => (acc * 131 + b.toNat + 1) % 65537) 1)
+
+/-- A hash with one output: every opening of every slot key is accepted under it. -/
+def constHash : HashBytes.Hash := fun _ => HashBytes.be 32 7
+
+def saltOf : NodeId → Nat → Kind → ByteArray :=
+  fun n v _ => bytesOfList (List.replicate 32 (UInt8.ofNat (16 * n + v)))
+
+def blockA : Chain := [wide 1 401]
+
+/-- Signed in view 1, oldest first: the proposal, three honest votes, the Byzantine vote. -/
+def signLog : List Msg :=
+  prop proto4 1 blockA :: (votesOf [0, 1, 2] 1 blockA ++ [⟨3, 1, .vote, .block [wide 1 666]⟩])
+
+def sign (m : Msg) : SignedSimplexMsg := ⟨m, saltOf m.sender m.view m.kind⟩
+
+def forgedVote : SignedSimplexMsg := ⟨⟨0, 1, .vote, .block [wide 1 666]⟩, saltOf 3 1 .vote⟩
+def replayedSig : SignedSimplexMsg := ⟨⟨0, 1, .vote, .block [wide 1 666]⟩, saltOf 0 1 .vote⟩
+
+theorem honestKeys (H : HashBytes.Hash) (hH : ∀ bs, (H bs).length = 32) :
+    HonestSlotKeys H 4096 (KeyDirectory.derive H signLog saltOf) proto4 signLog saltOf :=
+  KeyDirectory.derive_honestSlotKeys H 4096 200 proto4 signLog saltOf hH (by decide +kernel)
+    (fun n v k => by simp [saltOf, bytesOfList_toList]) (by decide +kernel) (by decide)
+
+/-- Under `toyHash` the honest trace verifies; the forged and the replayed signature do not. -/
+example :
+    verifySignedSent (commitSlotSigScheme toyHash 4096) (KeyDirectory.derive toyHash signLog saltOf)
+      proto4.committee (signLog.map sign) = true ∧
+    verifySignedMsg (commitSlotSigScheme toyHash 4096) (KeyDirectory.derive toyHash signLog saltOf)
+      proto4.committee forgedVote = false ∧
+    verifySignedMsg (commitSlotSigScheme toyHash 4096) (KeyDirectory.derive toyHash signLog saltOf)
+      proto4.committee replayedSig = false := by
+  decide +kernel
+
+/-- The judge accepts the honest trace. -/
+example :
+    (match (signedSimplexCompJudge toyHash 4096).verify 0
+        ⟨proto4, KeyDirectory.derive toyHash signLog saltOf, signLog, saltOf, signLog.map sign⟩ ()
+      with
+     | .ok => true
+     | _ => false) = true := by
+  decide +kernel
+
+def isForgery {α : Sort _} {β : Sort _} : PSum α β → Bool
+  | .inl _ => false
+  | .inr _ => true
+
+theorem forged_ver :
+    verifySignedSent (commitSlotSigScheme constHash 4096)
+      (KeyDirectory.derive constHash signLog saltOf) proto4.committee [forgedVote] = true := by
+  decide +kernel
+
+theorem forged_oracle : HonestSigningOracle proto4 [] signLog [forgedVote] := by
+  intro pre sm suf hEq _ hIn
+  have hmem : sm ∈ [forgedVote] := by rw [hEq]; simp
+  rw [List.mem_singleton] at hmem
+  subst hmem
+  exact absurd hIn (by decide +kernel)
+
+/-- Under the constant hash the forged vote is accepted and the extractor returns it. -/
+theorem forged_extracted :
+    isForgery (extractForgedVoteSignature (commitSlotSigScheme constHash 4096)
+      (KeyDirectory.derive constHash signLog saltOf) proto4 signLog [forgedVote]
+      forged_ver forged_oracle) = true := by
+  decide +kernel
+
+/-- **The reduction, run.** The accepted forgery becomes a collision of the hash that let it in. -/
+theorem constHash_collides : HashBytes.Collision constHash := by
+  cases h : extractForgedVoteSignature (commitSlotSigScheme constHash 4096)
+      (KeyDirectory.derive constHash signLog saltOf) proto4 signLog [forgedVote]
+      forged_ver forged_oracle with
+  | inl _ =>
+    have hf := forged_extracted
+    rw [h] at hf
+    cases hf
+  | inr w =>
+    exact HashCollisionWitness.toCollision (H := constHash) (maxBytes := 4096)
+      (forgedSignature_reduces_to_hashCollision constHash 4096 _ proto4 signLog saltOf
+        (honestKeys constHash (fun _ => by simp [constHash, HashBytes.length_be])) w)
+
+/-! ## 3. The irreversible outbox -/
 
 def checkOutboxErr (res : Except OutboxRefusal OutboxState) (expected : OutboxRefusal) : Bool :=
   match res with
   | .error r => r == expected
   | .ok _ => false
 
-def checkOutboxOk (res : Except OutboxRefusal OutboxState) (p : OutboxState → Bool) : Bool :=
-  match res with
-  | .ok st => p st
-  | .error _ => false
+def payloadA : ByteArray := bytesOfList [0xDE, 0xAD, 0xBE, 0xEF]
+def tampered : ByteArray := bytesOfList [0xFF, 0x00, 0xFF, 0x00]
 
-def actPayloadV1 : ByteArray := bytesOfList [0xDE, 0xAD, 0xBE, 0xEF]
-def actPayloadV3 : ByteArray := bytesOfList [0xCA, 0xFE, 0x01, 0x02]
-def dmaTamperedBytes : ByteArray := bytesOfList [0xFF, 0x00, 0xFF, 0x00]
-def escrowPayloadV2 : ByteArray := bytesOfList [0x77, 0x88]
+/-- `effectCommitNat 10 .irreversibleActuation payloadA`, written out. -/
+def commitA : Nat := 79817041280646677348372407200226764119291410642631118685939725383524999737416
 
-def commitV1 : Nat := effectCommitNat 10 .irreversibleActuation actPayloadV1
-def commitV3 : Nat := effectCommitNat 30 .irreversibleActuation actPayloadV3
+theorem commitA_eq : effectCommitNat 10 .irreversibleActuation payloadA = commitA := by
+  decide +kernel
 
-/-- View-1 post-GST finalized consensus trace committing to `(10, .irreversibleActuation, actPayloadV1)`. -/
-def sentOutboxV1 : Sent :=
-  runPostGstHonestLeaderView proto4 cfg4 sched4_v1 [] 1 commitV1 []
+def chainA : Chain := [.block 1 commitA]
 
-/-- View-2 timeout dummy extension `[.block 1 commitV1, .dummy 2]` (orphaning competing branch `.block 2 999999`). -/
-def sentOutboxV2Dummy : Sent :=
-  scheduleHonestVotes proto4 2 (.dummy 2) proto4.committee sentOutboxV1
+/-- View 1 finalized on `chainA`, newest message first. -/
+def sentA : Sent :=
+  (finsOf [0, 1, 2] 1 chainA).reverse ++ (votesOf [0, 1, 2] 1 chainA).reverse ++
+    [prop proto4 1 chainA]
 
-/-- View-3 post-GST finalized consensus trace committing to `(30, .irreversibleActuation, actPayloadV3)`
-    on canonical chain `[.block 1 commitV1, .dummy 2, .block 3 commitV3]`
-    (`proto4.leader 3 = committee[(3 - 1) % 4] = 2`, honest!). -/
-def chainOutboxV1 : Chain := [.block 1 commitV1]
-def chainOutboxV3 : Chain := [.block 1 commitV1, .dummy 2, .block 3 commitV3]
+/-- The same view with the votes but no finalize vote. -/
+def sentVotesOnly : Sent := (votesOf [0, 1, 2] 1 chainA).reverse ++ [prop proto4 1 chainA]
 
-def sched4_v3 : ViewExecutionSchedule := ⟨200, 0, (fun _ => 201), (fun _ => 210), (fun _ => 218)⟩
+theorem sentA_reach : Reach proto4 sentA ∧ SentSteps proto4 [] sentA := by
+  have hrun : (runNet proto4 cfg netEmpty (viewLate proto4 [0, 1, 2] 1 [] chainA [])).map
+      (fun s => s.sent) = some sentA := by decide +kernel
+  cases h : runNet proto4 cfg netEmpty (viewLate proto4 [0, 1, 2] 1 [] chainA []) with
+  | none => rw [h] at hrun; cases hrun
+  | some s =>
+    rw [h] at hrun
+    simp only [Option.map_some] at hrun
+    injection hrun with hs
+    have hr := runNet_reach _ h Reach.nil
+    have hsteps : ∀ (evs : List NetEvent) {a b : NetState},
+        runNet proto4 cfg a evs = some b → SentSteps proto4 a.sent b.sent := by
+      intro evs
+      induction evs with
+      | nil =>
+        intro a b hab
+        have hab' : some a = some b := hab
+        injection hab' with hab'
+        subst hab'
+        exact SentSteps.refl _
+      | cons e es ih =>
+        intro a b hab
+        obtain ⟨m, h1, h2⟩ := runNet_cons.1 hab
+        rcases netStep_sent h1 with hs' | hs'
+        · have := ih h2
+          rw [hs'] at this
+          exact this
+        · exact sentSteps_trans (SentSteps.step (SentSteps.refl _) hs') (ih h2)
+    have hst : SentSteps proto4 [] s.sent := hsteps _ h
+    rw [hs] at hr hst
+    exact ⟨hr, hst⟩
 
-def sentOutboxV3 : Sent :=
-  runPostGstHonestLeaderView proto4 cfg4 sched4_v3 sentOutboxV2Dummy 3 commitV3
-    [.block 1 commitV1, .dummy 2]
+def certA : FinCert := ⟨1, chainA, [0, 1, 2]⟩
 
-def finCertV1 : FinCert :=
-  (extractFinCert? proto4 sentOutboxV1 1 chainOutboxV1).getD ⟨1, [], []⟩
-
-def finCertV3 : FinCert :=
-  (extractFinCert? proto4 sentOutboxV3 3 chainOutboxV3).getD ⟨3, [], []⟩
-
-example : finCertV1.checks proto4 sentOutboxV1 = true := by decide
-example : finCertV3.checks proto4 sentOutboxV3 = true := by decide
-
-def initOutboxSt : OutboxState where
+def initOutbox : OutboxState where
   gatekeeperPd         := 3
   highWaterNullifier   := 0
   escrowVaultBalance   := 500
@@ -509,245 +487,125 @@ def initOutboxSt : OutboxState where
   settledEscrowTotal   := 0
   dispatchedActuations := []
 
-/-- Turn 1: Pre-finality `.idempotentRead` admitted on empty `sent = []`. -/
-def reqTurn1Read : OutboxEffectReq where
+def reqRead : OutboxEffectReq where
   nullifierId   := 1
   effectClass   := .idempotentRead
   targetView    := 1
   proposedChain := []
   finCert?      := none
   escrowBond?   := none
-  spsc          := ⟨0, bytesOfList [0x01], bytesOfList [0x02]⟩
+  spsc          := ⟨0, bytesOfList [0x01]⟩
 
-/-- Turn 2: `.irreversibleActuation` (`nullifierId = 10`) WITH concurrent post-copy shared-ring
-    DMA TOCTOU overwrite (`sharedRingAfterVerify = dmaTamperedBytes ≠ actPayloadV1`). -/
-def reqTurn2ActToctou : OutboxEffectReq where
+def reqAct : OutboxEffectReq where
   nullifierId   := 10
   effectClass   := .irreversibleActuation
   targetView    := 1
-  proposedChain := chainOutboxV1
-  finCert?      := some finCertV1
+  proposedChain := chainA
+  finCert?      := some certA
   escrowBond?   := none
-  spsc          := ⟨0, actPayloadV1, dmaTamperedBytes⟩
+  spsc          := ⟨0, payloadA⟩
 
-/-- Turn 3: Optimistic `.compensatableEscrow` (`nullifierId = 20`, deposit `100`, rollbackCost `25`)
-    placed on an unfinalized view-2 branch `[.block 1 commitV1, .block 2 999999]` that will be orphaned! -/
-def reqTurn3EscrowOrphan : OutboxEffectReq where
-  nullifierId   := 20
+/-- An optimistic escrow on a branch `[.block 1 999999]` that view 1 does not finalize. -/
+def reqEscrow : OutboxEffectReq where
+  nullifierId   := 5
   effectClass   := .compensatableEscrow
-  targetView    := 2
-  proposedChain := [.block 1 commitV1, .block 2 999999]
+  targetView    := 1
+  proposedChain := [.block 1 999999]
   finCert?      := none
   escrowBond?   := some ⟨100, 25⟩
-  spsc          := ⟨0, escrowPayloadV2, dmaTamperedBytes⟩
+  spsc          := ⟨0, bytesOfList [0x77, 0x88]⟩
 
-/-- Turn 4: `.irreversibleActuation` (`nullifierId = 30`) on view-3 canonical finalized chain
-    after view-2 timeout skip, paired with escrow rollback reconciliation! -/
-def reqTurn4ActV3 : OutboxEffectReq where
-  nullifierId   := 30
-  effectClass   := .irreversibleActuation
-  targetView    := 3
-  proposedChain := chainOutboxV3
-  finCert?      := some finCertV3
-  escrowBond?   := none
-  spsc          := ⟨0, actPayloadV3, dmaTamperedBytes⟩
+def audit (sent : Sent) (st : OutboxState) (req : OutboxEffectReq) :=
+  auditOutboxStep proto4 sampleValidPartition sent st req
 
-/-- **TOCTOU Immunity Verification**: post-copy DMA mutation `dmaTamperedBytes` is completely ignored;
-    dispatched payload equals `actPayloadV1`! -/
+/-- Each refusal by its name: the snapshot is not the committed bytes; no certificate; a
+    certificate that does not check (votes without finalize votes); a channel that is not the
+    gatekeeper's; an underfunded bond. -/
 example :
-    checkOutboxOk
-      (auditOutboxStep proto4 sampleValidPartition sentOutboxV1 initOutboxSt reqTurn2ActToctou)
-      (fun st' =>
-        st'.dispatchedActuations.map DispatchedActuation.dispatchedPayload == [actPayloadV1] &&
-        st'.dispatchedActuations.map DispatchedActuation.dispatchedPayload != [dmaTamperedBytes]) = true := by
-  decide
+    checkOutboxErr (audit sentA initOutbox { reqAct with spsc := ⟨0, tampered⟩ })
+      (.unfinalizedOrMismatchedBlockCommit 10 1) = true ∧
+    checkOutboxErr (audit sentA initOutbox { reqAct with finCert? := none })
+      (.missingFinalityCert 10) = true ∧
+    checkOutboxErr (audit sentVotesOnly initOutbox reqAct) (.invalidFinalityCert 10 1) = true ∧
+    checkOutboxErr (audit sentA initOutbox { reqAct with spsc := ⟨7, payloadA⟩ })
+      (.invalidSpscChannel 7) = true ∧
+    checkOutboxErr (audit [] initOutbox { reqEscrow with escrowBond? := some ⟨900, 25⟩ })
+      (.underfundedEscrowBond 900 25 500) = true := by
+  decide +kernel
 
-/-- **TOCTOU Pre-Copy Tamper Refusal**: if shared ring was corrupted *before* copy so `privateCopy = dmaTamperedBytes`,
-    the 256-bit cSHAKE256 block commitment check refuses with `.unfinalizedOrMismatchedBlockCommit 10 1`! -/
-def reqPreCopyTampered : OutboxEffectReq :=
-  { reqTurn2ActToctou with spsc := ⟨0, dmaTamperedBytes, dmaTamperedBytes⟩ }
+def st1 : OutboxState := (stepOutbox proto4 sampleValidPartition [] initOutbox reqRead).getD initOutbox
+def st2 : OutboxState := (stepOutbox proto4 sampleValidPartition [] st1 reqEscrow).getD initOutbox
+def st3Mid : OutboxState := (stepOutbox proto4 sampleValidPartition sentA st2 reqAct).getD initOutbox
+def st3 : OutboxState := (reconcileEscrowsWithCert proto4 sentA certA st3Mid).getD initOutbox
 
+theorem step1 : stepOutbox proto4 sampleValidPartition [] initOutbox reqRead = some st1 := by
+  decide +kernel
+theorem step2 : stepOutbox proto4 sampleValidPartition [] st1 reqEscrow = some st2 := by
+  decide +kernel
+theorem step3 : stepOutbox proto4 sampleValidPartition sentA st2 reqAct = some st3Mid := by
+  decide +kernel
+theorem rec3 : reconcileEscrowsWithCert proto4 sentA certA st3Mid = some st3 := by
+  decide +kernel
+
+/-- The orphaned escrow is rolled back (75 refunded, 25 compensation kept, total 500 conserved),
+    the actuation went out once with the committed bytes, and its nullifier is spent. -/
 example :
-    checkOutboxErr
-      (auditOutboxStep proto4 sampleValidPartition sentOutboxV1 initOutboxSt reqPreCopyTampered)
-      (.unfinalizedOrMismatchedBlockCommit 10 1) = true := by
-  decide
+    st3.escrowVaultBalance = 475 ∧ st3.settledEscrowTotal = 25 ∧ st3.activeEscrows = [] ∧
+    st3.dispatchedActuations.map
+      (fun a => (a.nullifierId, a.dispatchedPayload.data.toList)) = [(10, [0xDE, 0xAD, 0xBE, 0xEF])] ∧
+    checkOutboxErr (audit sentA st3 reqAct) (.staleOrDuplicateNullifier 10 10) = true := by
+  decide +kernel
 
-/-- **Unfinalized-Block Irreversible Actuation Refusal 1**: missing `FinCert` refused! -/
-example :
-    checkOutboxErr
-      (auditOutboxStep proto4 sampleValidPartition sentOutboxV1 initOutboxSt
-        { reqTurn2ActToctou with finCert? := none })
-      (.missingFinalityCert 10) = true := by
-  decide
+-- Compare states by the kernel's evaluation above, not the elaborator's.
+attribute [irreducible] st1 st2 st3Mid st3
 
-/-- **Unfinalized-Block Irreversible Actuation Refusal 2**: notarized-only / proposal-only trace
-    lacking `2f + 1` `.finalize` votes refused with `.invalidFinalityCert 10 1`! -/
-def sentUnfinalizedOnlyVotes : Sent :=
-  scheduleHonestVotes proto4 1 (.block chainOutboxV1) proto4.committee
-    [⟨0, 1, .propose, .block chainOutboxV1⟩]
+def turns : List OutboxTurn :=
+  [⟨[], reqRead, none⟩, ⟨[], reqEscrow, none⟩, ⟨sentA, reqAct, some certA⟩]
 
-example :
-    checkOutboxErr
-      (auditOutboxStep proto4 sampleValidPartition sentUnfinalizedOnlyVotes initOutboxSt reqTurn2ActToctou)
-      (.invalidFinalityCert 10 1) = true := by
-  decide
+theorem turns_valid :
+    ValidOutboxTrace proto4 sampleValidPartition [] initOutbox turns sentA st3 := by
+  have hIso : checkMicrokitIsolation sampleValidPartition = true := by decide +kernel
+  exact ⟨Reach.nil, SentSteps.refl [], st1, st1, step1, rfl,
+    ⟨Reach.nil, SentSteps.refl [], st2, st2, step2, rfl,
+      ⟨Reach.nil, sentA_reach.2, st3Mid, st3, step3, rec3,
+        ⟨rfl, rfl, sentA_reach.1, hIso⟩⟩⟩⟩
 
-/-- **Duplicate & Stale Outbox Nullifier Refusals**: replaying `nullifierId = 10` or stale `5`
-    after `highWaterNullifier = 10` is deterministically refused! -/
-example :
-    (match stepOutbox proto4 sampleValidPartition sentOutboxV1 initOutboxSt reqTurn2ActToctou with
-     | none => false
-     | some stAfter10 =>
-       checkOutboxErr
-         (auditOutboxStep proto4 sampleValidPartition sentOutboxV1 stAfter10 reqTurn2ActToctou)
-         (.staleOrDuplicateNullifier 10 10) &&
-       checkOutboxErr
-         (auditOutboxStep proto4 sampleValidPartition sentOutboxV3 stAfter10
-           { reqTurn4ActV3 with nullifierId := 5 })
-         (.staleOrDuplicateNullifier 5 10)) = true := by
-  decide
+/-- The library theorems on this trace: capDL non-interference, at-most-once, conservation; no
+    other bytes fit the finalized commitment; the spent nullifier is refused whatever comes. -/
+theorem turns_safe :
+    (st3.dispatchedActuations.map DispatchedActuation.nullifierId).Nodup ∧
+    st3.escrowVaultBalance + lockedEscrowDeposits st3.activeEscrows + st3.settledEscrowTotal =
+      initOutbox.escrowVaultBalance + lockedEscrowDeposits initOutbox.activeEscrows +
+        initOutbox.settledEscrowTotal ∧
+    (∀ a ∈ st3.dispatchedActuations, ∀ other : ByteArray,
+      other.data.toList.length < OutboxBound64 →
+      a.chain.getLast? = some (.block a.view
+        (effectCommitNat a.nullifierId .irreversibleActuation other)) →
+      other = a.dispatchedPayload ∨
+        HashBytes.Collision (Cshake256.cshake256Bytes outboxEffectDomain.data.toList)) ∧
+    (∀ a ∈ st3.dispatchedActuations, ∀ (P' : Protocol) (sent : Sent) (req : OutboxEffectReq),
+      req.effectClass ≠ .idempotentRead → req.nullifierId = a.nullifierId →
+      stepOutbox P' sampleValidPartition sent st3 req = none) := by
+  have hApex := firmament_sel4_copy_before_verify_and_irreversible_outbox_safe rfl turns_valid
+  exact ⟨hApex.2.2.1, hApex.2.2.2.1,
+    dispatched_payload_bound_to_finalized_commit rfl turns_valid,
+    dispatched_nullifier_never_replays rfl turns_valid⟩
 
-/-! ### Multi-Turn / Multi-View `ValidOutboxTrace` & Pillar-6 Apex Theorem Instantiation -/
+/-! ## 4. Teeth and the axiom audit -/
 
-private theorem step_to_sentSteps {P : Protocol} {s₁ s₂ : Sent} (h : Step P s₁ s₂) :
-    SentSteps P s₁ s₂ :=
-  SentSteps.step (SentSteps.refl s₁) h
-
-private theorem scheduleVotes_sentSteps {P : Protocol} {v : Nat} {t : Target} :
-    ∀ (nodes : List NodeId) {sent : Sent},
-      SentSteps P sent (scheduleHonestVotes P v t nodes sent)
-  | [], _ => SentSteps.refl _
-  | n :: ns, sent => by
-    unfold scheduleHonestVotes
-    split
-    · rename_i hCond
-      simp only [Bool.and_eq_true, List.contains_iff_mem] at hCond
-      have hNf : P.faulty n = false := by cases hf : P.faulty n <;> simp_all
-      have hAv : votedAny sent n v = false := by cases hv : votedAny sent n v <;> simp_all
-      have hStep := Step.vote sent n v t ⟨hCond.1.1.2, hNf⟩ hAv
-        (Obend.Consensus.SimplexTrace.voteRuleB_sound hCond.2)
-      exact sentSteps_trans (step_to_sentSteps hStep) (scheduleVotes_sentSteps ns)
-    · exact scheduleVotes_sentSteps ns
-
-private theorem scheduleFinalizes_sentSteps {P : Protocol} {v : Nat} {c : Chain} :
-    ∀ (nodes : List NodeId) {sent : Sent},
-      SentSteps P sent (scheduleHonestFinalizes P v c nodes sent)
-  | [], _ => SentSteps.refl _
-  | n :: ns, sent => by
-    unfold scheduleHonestFinalizes
-    split
-    · rename_i hCond
-      simp only [Bool.and_eq_true, List.contains_iff_mem, decide_eq_true_eq] at hCond
-      have hNf : P.faulty n = false := by cases hf : P.faulty n <;> simp_all
-      have hStep := Step.finalize sent n v c ⟨hCond.1.1.1.2, hNf⟩ hCond.1.2 hCond.2
-      exact sentSteps_trans (step_to_sentSteps hStep) (scheduleFinalizes_sentSteps ns)
-    · exact scheduleFinalizes_sentSteps ns
-
-private theorem postGstView_sentSteps {P : Protocol} (cfg : PartialSyncConfig)
-    (sched : ViewExecutionSchedule) (sent₀ : Sent) (v payload : Nat) (p : Chain)
-    (hHonLeader : P.honest (P.leader v)) :
-    SentSteps P sent₀ (runPostGstHonestLeaderView P cfg sched sent₀ v payload p) := by
-  unfold runPostGstHonestLeaderView
-  have hProp : Step P sent₀ (⟨P.leader v, v, .propose, .block (p ++ [.block v payload])⟩ :: sent₀) :=
-    Step.propose sent₀ (P.leader v) v (p ++ [.block v payload]) hHonLeader rfl
-  exact sentSteps_trans (step_to_sentSteps hProp)
-    (sentSteps_trans (scheduleVotes_sentSteps P.committee) (scheduleFinalizes_sentSteps P.committee))
-
-def st1 : OutboxState :=
-  (stepOutbox proto4 sampleValidPartition [] initOutboxSt reqTurn1Read).getD initOutboxSt
-
-def st2 : OutboxState :=
-  (stepOutbox proto4 sampleValidPartition sentOutboxV1 st1 reqTurn2ActToctou).getD initOutboxSt
-
-def st3 : OutboxState :=
-  (stepOutbox proto4 sampleValidPartition sentOutboxV1 st2 reqTurn3EscrowOrphan).getD initOutboxSt
-
-def st4Mid : OutboxState :=
-  (stepOutbox proto4 sampleValidPartition sentOutboxV3 st3 reqTurn4ActV3).getD initOutboxSt
-
-def st4Final : OutboxState :=
-  (reconcileEscrowsWithCert proto4 sentOutboxV3 finCertV3 st4Mid).getD initOutboxSt
-
-/-- Verify multi-turn state outcomes:
-    - Both irreversible actuations `[30, 10]` dispatched with exact pre-TOCTOU private snapshots,
-    - Orphaned view-2 optimistic escrow rolled back (`escrowVaultBalance = 475`, `settledEscrowTotal = 25`,
-      `activeEscrows = []`, total `475 + 0 + 25 = 500` conserved!). -/
-example : st4Final.dispatchedActuations.map DispatchedActuation.nullifierId = [30, 10] := by decide
-example : st4Final.dispatchedActuations.map DispatchedActuation.dispatchedPayload =
-            [actPayloadV3, actPayloadV1] := by decide
-example : st4Final.escrowVaultBalance = 475 := by decide
-example : st4Final.settledEscrowTotal = 25 := by decide
-example : st4Final.activeEscrows = [] := by decide
-
-def multiTurnTrace : List OutboxTurn :=
-  [ ⟨[], reqTurn1Read, none⟩
-  , ⟨sentOutboxV1, reqTurn2ActToctou, none⟩
-  , ⟨sentOutboxV1, reqTurn3EscrowOrphan, none⟩
-  , ⟨sentOutboxV3, reqTurn4ActV3, some finCertV3⟩ ]
-
-theorem multiTurnTrace_valid :
-    ValidOutboxTrace proto4 sampleValidPartition [] initOutboxSt multiTurnTrace sentOutboxV3 st4Final := by
-  have hStep1 : stepOutbox proto4 sampleValidPartition [] initOutboxSt reqTurn1Read = some st1 := by decide
-  have hStep2 : stepOutbox proto4 sampleValidPartition sentOutboxV1 st1 reqTurn2ActToctou = some st2 := by decide
-  have hStep3 : stepOutbox proto4 sampleValidPartition sentOutboxV1 st2 reqTurn3EscrowOrphan = some st3 := by decide
-  have hStep4 : stepOutbox proto4 sampleValidPartition sentOutboxV3 st3 reqTurn4ActV3 = some st4Mid := by decide
-  have hRec4  : reconcileEscrowsWithCert proto4 sentOutboxV3 finCertV3 st4Mid = some st4Final := by decide
-  have hIso   : checkMicrokitIsolation sampleValidPartition = true := by decide
-  have hHon0  : proto4.honest (proto4.leader 1) := ⟨by decide, by decide⟩
-  have hHon2  : proto4.honest (proto4.leader 3) := ⟨by decide, by decide⟩
-  have hNet01 : SentSteps proto4 [] sentOutboxV1 :=
-    postGstView_sentSteps cfg4 sched4_v1 [] 1 commitV1 [] hHon0
-  have hNet13 : SentSteps proto4 sentOutboxV1 sentOutboxV3 :=
-    sentSteps_trans (scheduleVotes_sentSteps proto4.committee)
-      (postGstView_sentSteps cfg4 sched4_v3 sentOutboxV2Dummy 3 commitV3
-        [.block 1 commitV1, .dummy 2] hHon2)
-  have hReachV1 : Reach proto4 sentOutboxV1 := sentSteps_reach Reach.nil hNet01
-  have hReachV3 : Reach proto4 sentOutboxV3 := sentSteps_reach hReachV1 hNet13
-  exact ⟨Reach.nil, SentSteps.refl [], st1, st1, hStep1, rfl,
-    ⟨Reach.nil, hNet01, st2, st2, hStep2, rfl,
-      ⟨hReachV1, SentSteps.refl sentOutboxV1, st3, st3, hStep3, rfl,
-        ⟨hReachV1, hNet13, st4Mid, st4Final, hStep4, hRec4,
-          ⟨rfl, rfl, hReachV3, hIso⟩⟩⟩⟩⟩
-
-/-- Concrete instantiation of Pillar-6 apex theorem `firmament_sel4_copy_before_verify_and_irreversible_outbox_safe`
-    and `irreversible_at_most_once_and_never_rolled_back` on `multiTurnTrace`! -/
-example :
-    (st4Final.dispatchedActuations.map DispatchedActuation.nullifierId).Nodup ∧
-    st4Final.escrowVaultBalance + lockedEscrowDeposits st4Final.activeEscrows + st4Final.settledEscrowTotal = 500 ∧
-    (∀ a₁ ∈ st4Final.dispatchedActuations, ∀ a₂ ∈ st4Final.dispatchedActuations,
-      a₁.chain <+: a₂.chain ∨ a₂.chain <+: a₁.chain) := by
-  have hApex := firmament_sel4_copy_before_verify_and_irreversible_outbox_safe rfl multiTurnTrace_valid
-  have hOnce := irreversible_at_most_once_and_never_rolled_back rfl multiTurnTrace_valid
-  exact ⟨hApex.2.2.1, hApex.2.2.2.1, hOnce.2.1⟩
-
-/-! ## 4. Mutation-Sensitivity Witnesses (`#tooth`, 7 Kills) & Kernel Axiom Audit -/
-
--- Kill 1: Bypassing sender signature verification breaks `verifySignedSent_projects_to_reach`
-#tooth Obend.Consensus.SimplexLiveness.verifySignedSent_projects_to_reach by mutation
-  Obend.Consensus.SimplexLiveness.verifySignedMsg := fun _ _ _ _ => true
-
--- Kill 2: Voting `.dummy v` unconditionally even before view timeout breaks post-GST finalization
+-- An honest rule that lets a node send anything (a dummy vote before its timer, say).
 #tooth Obend.Consensus.SimplexLiveness.gst_honest_leader_finalizes by mutation
-  Obend.Consensus.SimplexLiveness.selectTimedVoteTarget := fun _ _ v _ _ => .dummy v
+  Obend.Consensus.SimplexLiveness.honestSendOk := fun _ _ _ _ => true
 
--- Kill 3: Suppressing `.finalize` votes breaks single-view `FinCert` formation
-#tooth Obend.Consensus.SimplexLiveness.gst_honest_leader_finalizes by mutation
-  Obend.Consensus.SimplexLiveness.scheduleHonestFinalizes := fun _ _ _ _ sent => sent
+-- Without the width check two messages share signed bytes.
+#tooth Obend.Consensus.SimplexLiveness.signableByteArray_injective by mutation
+  Obend.Consensus.SimplexLiveness.msgCanonical := fun _ => true
 
--- Kill 4: Suppressing honest timeout `.dummy` votes breaks `pre_gst_or_faulty_leader_advances_view`
-#tooth Obend.Consensus.SimplexLiveness.pre_gst_or_faulty_leader_advances_view by mutation
-  Obend.Consensus.SimplexLiveness.scheduleHonestVotes := fun _ _ _ _ sent => sent
+-- A channel check without the length bound: the commitment no longer binds the payload.
+#tooth Obend.Vault.IrreversibleOutbox.dispatched_payload_bound_to_finalized_commit by mutation
+  Obend.Vault.IrreversibleOutbox.checkSpscChannelToGatekeeper := fun _ _ _ _ => .ok ()
 
--- Kill 5: Double-fetch SPSC TOCTOU bug (reading `sharedRingAfterVerify` instead of `privateSnapshot`!)
-#tooth Obend.Vault.IrreversibleOutbox.firmament_sel4_copy_before_verify_and_irreversible_outbox_safe by mutation
-  Obend.Vault.IrreversibleOutbox.selectActuationSource := fun _priv sharedAfter => sharedAfter
-
--- Kill 6: Accepting mismatched / unverified block payload commitments breaks Pillar-6 apex safety
-#tooth Obend.Vault.IrreversibleOutbox.firmament_sel4_copy_before_verify_and_irreversible_outbox_safe by mutation
-  Obend.Vault.IrreversibleOutbox.checkChainTipCommit := fun _ _ _ => true
-
--- Kill 7: Minting unbacked escrow refunds during branch rollback breaks vault conservation
+-- Minting refunds on rollback breaks vault conservation.
 #tooth Obend.Vault.IrreversibleOutbox.reconcileEscrowsWithCert_conserves by mutation
   Obend.Vault.IrreversibleOutbox.reconcileEscrowList := fun _ _ _ => ([], 999, 0)
 

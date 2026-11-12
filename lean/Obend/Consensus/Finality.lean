@@ -25,6 +25,8 @@ Binds Obend's 4-tier finality ladder directly to `SimplexProtocol` (`Protocol`, 
   same finalized block sequence (`cert₁.chain.blocks = cert₂.chain.blocks`).
 - `advanceSimplexGate_collapsed_binds_cshake`: `.collapsed` promotion deterministically binds
   the SP 800-185 `cshake256Bytes` fold of the finalized chain digest and vault state root.
+- `chainDigest_binds`: the chain digest serializes each block by `Entry.encode` (8-byte view,
+  32-byte payload), so equal digests mean equal blocks or a cSHAKE256 collision.
 -/
 
 public import Obend.Core.Data
@@ -32,13 +34,14 @@ public import Obend.Vault.Hyperedge
 public import Obend.Consensus.SimplexProtocol
 public import Obend.Digest.Cshake256.Seam
 
-@[expose] public section
+public section
 namespace Obend.Consensus.Finality
 
 open Obend.Core.Data
 open Obend.Vault
 open Obend.Consensus.Simplex (NodeId)
-open Obend.Consensus.SimplexProtocol (Protocol Sent Entry Chain Msg FinCert Finalized Reach)
+open Obend.Consensus.SimplexProtocol (Protocol Sent Entry Chain Msg FinCert Finalized Reach
+  encodeEntries_injective)
 open Obend.Digest.Cshake256 (cshake256Bytes)
 open Obend.Digest.Cshake256.Fast (cshake256Fast_eq)
 open Obend.Digest.Cshake256.Native (bytesOfList bytesOfList_toList cshake256Kernel)
@@ -53,12 +56,14 @@ inductive FinalityTier where
   | attested      -- Tier 1: Leader / peer attested, execute read-only preview
   | quorum_final  -- Tier 2: Quorum certificate (FinCert) formed, state-write committed
   | collapsed     -- Tier 3: cSHAKE256 / Merkle folded into root, immutable archive
-  deriving DecidableEq, Repr, Inhabited
+  deriving Repr, Inhabited
+
+deriving instance @[expose] DecidableEq for FinalityTier
 
 namespace FinalityTier
 
 /-- Ordinal rank of each tier on the ladder. -/
-def rank : FinalityTier → Nat
+@[expose] def rank : FinalityTier → Nat
   | .speculative  => 0
   | .attested     => 1
   | .quorum_final => 2
@@ -129,17 +134,19 @@ inductive Operation where
   | executeReadOnly   -- Deterministic preview / dry run without state mutation
   | stateWrite        -- Mutate cell state / commit deltas to VaultStore
   | immutableArchive  -- Fold into cSHAKE256 Merkle root / historical archive
-  deriving DecidableEq, Repr
+  deriving Repr
+
+deriving instance @[expose] DecidableEq for Operation
 
 /-- The minimum tier required to permit an operation. -/
-def minTier : Operation → FinalityTier
+@[expose] def minTier : Operation → FinalityTier
   | .readUncommitted  => .speculative
   | .executeReadOnly  => .attested
   | .stateWrite       => .quorum_final
   | .immutableArchive => .collapsed
 
 /-- Check if an operation is permitted at a given finality tier. -/
-def admitsOp (t : FinalityTier) (op : Operation) : Bool :=
+@[expose] def admitsOp (t : FinalityTier) (op : Operation) : Bool :=
   decide (minTier op ≤ t)
 
 theorem admitsOp_mono {t₁ t₂ : FinalityTier} {op : Operation}
@@ -294,30 +301,35 @@ def simplexChainDomain : Digest :=
 def collapseRootDomain : Digest :=
   "OBEND-COLLAPSE-ROOT-V1".toUTF8
 
-/-- Encode a `Nat` in 8 little-endian bytes for deterministic cSHAKE256 preimages. -/
-def natLe8Bytes (n : Nat) : List UInt8 :=
-  [ UInt8.ofNat (n % 256)
-  , UInt8.ofNat ((n / 256) % 256)
-  , UInt8.ofNat ((n / 65536) % 256)
-  , UInt8.ofNat ((n / 16777216) % 256)
-  , UInt8.ofNat ((n / 4294967296) % 256)
-  , UInt8.ofNat ((n / 1099511627776) % 256)
-  , UInt8.ofNat ((n / 281474976710656) % 256)
-  , UInt8.ofNat ((n / 72057594037927936) % 256) ]
-
-/-- Canonical byte serialization of a `SimplexProtocol.Entry`. -/
-def encodeChainEntry : Entry → List UInt8
-  | .block v payload => (0x01 : UInt8) :: (natLe8Bytes v ++ natLe8Bytes payload)
-  | .dummy v         => (0x00 : UInt8) :: natLe8Bytes v
-
-/-- Canonical byte serialization of `c.blocks` (ignoring view dummies so equal-height
-    finalized chains produce identical digests!). -/
+/-- Canonical byte serialization of `c.blocks` (view dummies are left out, so finalized chains of
+    equal height have one digest): each block is its 41-byte `Entry.encode`, the payload at its
+    full 256 bits. -/
 def encodeFinalizedBlocks (c : Chain) : ByteArray :=
-  bytesOfList (c.blocks.flatMap encodeChainEntry)
+  bytesOfList (c.blocks.flatMap Entry.encode)
 
 /-- cSHAKE256 digest of a finalized chain's block sequence. -/
 def chainDigest (c : Chain) : Digest :=
   cshake256Kernel simplexChainDomain (encodeFinalizedBlocks c)
+
+theorem chainDigest_eq_spec (c : Chain) :
+    (chainDigest c).data.toList =
+      cshake256Bytes simplexChainDomain.data.toList (c.blocks.flatMap Entry.encode) := by
+  unfold chainDigest encodeFinalizedBlocks cshake256Kernel
+  rw [bytesOfList_toList, bytesOfList_toList, cshake256Fast_eq]
+
+/-- **The chain digest binds the finalized blocks at their full width**: two chains whose blocks
+    are canonical (8-byte views, 256-bit payloads) and whose digests agree carry the same blocks,
+    or the two serializations are a cSHAKE256 collision. -/
+theorem chainDigest_binds {c₁ c₂ : Chain}
+    (h₁ : c₁.blocks.all Entry.canonical = true) (h₂ : c₂.blocks.all Entry.canonical = true)
+    (hEq : chainDigest c₁ = chainDigest c₂) :
+    c₁.blocks = c₂.blocks ∨
+      Obend.Digest.HashBytes.Collision (cshake256Bytes simplexChainDomain.data.toList) := by
+  if hPre : c₁.blocks.flatMap Entry.encode = c₂.blocks.flatMap Entry.encode then
+    exact .inl (encodeEntries_injective h₁ h₂ hPre)
+  else
+    refine .inr ⟨_, _, hPre, ?_⟩
+    rw [← chainDigest_eq_spec, ← chainDigest_eq_spec, hEq]
 
 /-- Domain-separated cSHAKE256 fold of `(chainDigest || vaultStateRoot)` for `.collapsed`. -/
 def foldCollapsedRoot (cDigest vaultRoot : Digest) : Digest :=
@@ -335,7 +347,8 @@ inductive SimplexPromotionEvent where
   | attestProposal (leader : NodeId) (view : Nat) (chain : Chain) (vaultRoot : Digest)
   | finalizeWithCert (cert : FinCert) (vaultRoot : Digest)
   | collapseArchive (vaultRoot : Digest)
-  deriving DecidableEq
+
+deriving instance @[expose] DecidableEq for SimplexPromotionEvent
 
 /-- Finality gate bound to `SimplexProtocol.FinCert` and cSHAKE256 `Digest` roots. -/
 structure SimplexFinalityGate where
@@ -345,7 +358,8 @@ structure SimplexFinalityGate where
   finCert       : Option FinCert := none
   vaultRoot     : Option Digest := none
   collapsedRoot : Option Digest := none
-  deriving DecidableEq
+
+deriving instance @[expose] DecidableEq for SimplexFinalityGate
 
 /-- Initialize a speculative `SimplexFinalityGate` for `turnId`. -/
 def SimplexFinalityGate.init (turnId : Digest) : SimplexFinalityGate :=
@@ -480,7 +494,9 @@ inductive QuorumBoundPromotionEvent where
   | attestTurn (signer : Nat) (stateRoot : Nat)
   | formQC (qcDigest : Nat) (signers : List Nat) (stateRoot : Nat)
   | collapseRoot (merkleRoot : Nat) (signers : List Nat)
-  deriving DecidableEq, BEq, Repr, Inhabited
+  deriving Repr, Inhabited
+
+deriving instance @[expose] DecidableEq, BEq for QuorumBoundPromotionEvent
 
 structure QuorumBoundFinalityGate where
   turnId        : Nat
@@ -492,9 +508,11 @@ structure QuorumBoundFinalityGate where
   qcDigest      : Option Nat
   merkleRoot    : Option Nat
   committee     : List Nat := [0, 1, 2, 3]
-  deriving DecidableEq, Inhabited
+  deriving Inhabited
 
-def advanceQuorumBoundGate
+deriving instance @[expose] DecidableEq for QuorumBoundFinalityGate
+
+@[expose] def advanceQuorumBoundGate
     (gate : QuorumBoundFinalityGate)
     (ev : QuorumBoundPromotionEvent) : Option QuorumBoundFinalityGate :=
   match gate.currentTier, ev with
@@ -559,6 +577,27 @@ theorem advanceQuorumBoundGate_refuses_mismatched_root
     (h_mismatch : root ≠ gate.stateRoot) :
     advanceQuorumBoundGate gate (.formQC qcDigest signers root) = none := by
   cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier, h_mismatch]
+
+/-! ## §8. The promotions above are inhabited -/
+
+example : promoteStep .speculative (.attestTurn ByteArray.empty) = some .attested := rfl
+
+example :
+    (advanceSimplexGate ⟨[0, 1, 2, 3], 1, (· == 3), by decide, by decide, by decide⟩
+      [⟨0, 1, .finalize, .block [.block 1 7]⟩, ⟨1, 1, .finalize, .block [.block 1 7]⟩,
+       ⟨2, 1, .finalize, .block [.block 1 7]⟩]
+      { turnId := ByteArray.empty, currentTier := .attested,
+        vaultRoot := some (bytesOfList (List.replicate 32 0)) }
+      (.finalizeWithCert ⟨1, [.block 1 7], [0, 1, 2]⟩ (bytesOfList (List.replicate 32 0)))).isSome
+      = true := by
+  decide
+
+example :
+    (advanceQuorumBoundGate
+      { turnId := 1, currentTier := .attested, faults := 1, stateRoot := 9, attestSigners := [0],
+        qcSigners := [], qcDigest := none, merkleRoot := none }
+      (.formQC 5 [0, 1, 2] 9)).isSome = true := by
+  decide
 
 end Obend.Consensus.Finality
 end

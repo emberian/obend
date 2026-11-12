@@ -29,6 +29,10 @@ What is proved, all from `Simplex.honest_quorum_intersection`:
   two votes in the message list, which `SlashingReceipt.checks` re-reads; none of them kept the
   vote-once rule, and under the fault bound each is faulty (`signers_faulty`).
 
+`Entry.encode` is the one wire form of an entry (tag, 8-byte view, 32-byte payload): a block's
+payload is a 256-bit digest, and `Entry.encode_injective` reads every canonical entry back. The
+finality digest (`Finality.chainDigest`) and the signed wire (`SimplexLiveness`) both use it.
+
 What is not here: liveness, timers, signatures (a message's sender is taken as its signer), and
 the executable node. `Obend.Consensus.SimplexTrace` decides whether a recorded run was a sequence
 of these steps (`checkTrace_sound`), and `crates/obend-node/src/net.rs` records its run as that
@@ -40,13 +44,15 @@ message list.
 -/
 
 public import Obend.Consensus.Simplex
+public import Obend.Digest.HashBytes
 
-@[expose] public section
+public section
 
 namespace Obend.Consensus.SimplexProtocol
 
 open Obend.Consensus.Simplex (NodeId honest_quorum_intersection list_filter_add_card
   list_filter_length_le nodup_filter_simplex)
+open Obend.Digest
 
 set_option autoImplicit false
 
@@ -57,13 +63,13 @@ view's dummy. -/
 inductive Entry where
   | block (view : Nat) (payload : Nat)
   | dummy (view : Nat)
-  deriving DecidableEq, Repr
+  deriving Repr
 
-def Entry.view : Entry → Nat
+@[expose] def Entry.view : Entry → Nat
   | .block v _ => v
   | .dummy v => v
 
-def Entry.isBlock : Entry → Bool
+@[expose] def Entry.isBlock : Entry → Bool
   | .block _ _ => true
   | .dummy _ => false
 
@@ -71,29 +77,31 @@ def Entry.isBlock : Entry → Bool
 abbrev Chain := List Entry
 
 /-- The height of a chain: its number of blocks (dummies do not count). -/
-def Chain.height (c : Chain) : Nat := (c.filter Entry.isBlock).length
+abbrev Chain.height (c : Chain) : Nat := (c.filter Entry.isBlock).length
 
 /-- The blocks of a chain, in order. -/
-def Chain.blocks (c : Chain) : Chain := c.filter Entry.isBlock
+abbrev Chain.blocks (c : Chain) : Chain := c.filter Entry.isBlock
 
 /-- What a vote is for: a block, named by the whole chain it ends, or a view's dummy. -/
 inductive Target where
   | block (c : Chain)
   | dummy (v : Nat)
-  deriving DecidableEq, Repr
+  deriving Repr
 
 inductive Kind where
   | propose
   | vote
   | finalize
-  deriving DecidableEq, Repr
+  deriving Repr
 
 structure Msg where
   sender : NodeId
   view : Nat
   kind : Kind
   target : Target
-  deriving DecidableEq, Repr
+  deriving Repr
+
+deriving instance @[expose] DecidableEq for Entry, Target, Kind, Msg
 
 /-- Every message ever sent, newest first. -/
 abbrev Sent := List Msg
@@ -112,26 +120,26 @@ structure Protocol where
   size : committee.length = 3 * f + 1
   faultBound : (committee.filter faulty).length ≤ f
 
-def Protocol.quorum (P : Protocol) : Nat := 2 * P.f + 1
+abbrev Protocol.quorum (P : Protocol) : Nat := 2 * P.f + 1
 
-def Protocol.honest (P : Protocol) (n : NodeId) : Prop := n ∈ P.committee ∧ P.faulty n = false
+abbrev Protocol.honest (P : Protocol) (n : NodeId) : Prop := n ∈ P.committee ∧ P.faulty n = false
 
 /-- The leader of a view: round-robin over the committee. -/
-def Protocol.leader (P : Protocol) (v : Nat) : NodeId :=
+abbrev Protocol.leader (P : Protocol) (v : Nat) : NodeId :=
   P.committee.getD ((v - 1) % P.committee.length) 0
 
 /-! ## 3. What the message list says -/
 
 /-- `n` voted for `t` in view `v`. -/
-def voted (sent : Sent) (n : NodeId) (v : Nat) (t : Target) : Bool :=
+abbrev voted (sent : Sent) (n : NodeId) (v : Nat) (t : Target) : Bool :=
   sent.contains ⟨n, v, .vote, t⟩
 
 /-- `n` cast some vote in view `v`. -/
-def votedAny (sent : Sent) (n : NodeId) (v : Nat) : Bool :=
+@[expose] def votedAny (sent : Sent) (n : NodeId) (v : Nat) : Bool :=
   sent.any fun m => m.sender == n && m.view == v && m.kind == .vote
 
 /-- `n` cast a finalize vote for the block `c` in view `v`. -/
-def finalizeVoted (sent : Sent) (n : NodeId) (v : Nat) (c : Chain) : Bool :=
+@[expose] def finalizeVoted (sent : Sent) (n : NodeId) (v : Nat) (c : Chain) : Bool :=
   sent.contains ⟨n, v, .finalize, .block c⟩
 
 theorem voted_iff (sent : Sent) (n : NodeId) (v : Nat) (t : Target) :
@@ -149,32 +157,32 @@ theorem votedAny_of_mem {sent : Sent} {m : Msg} (hm : m ∈ sent) (hk : m.kind =
   exact ⟨m, hm, by simp [hk]⟩
 
 /-- The committee members who voted for `t` in `v`. -/
-def voters (P : Protocol) (sent : Sent) (v : Nat) (t : Target) : List NodeId :=
+abbrev voters (P : Protocol) (sent : Sent) (v : Nat) (t : Target) : List NodeId :=
   P.committee.filter fun n => voted sent n v t
 
-def votesFor (P : Protocol) (sent : Sent) (v : Nat) (t : Target) : Nat :=
+abbrev votesFor (P : Protocol) (sent : Sent) (v : Nat) (t : Target) : Nat :=
   (voters P sent v t).length
 
 /-- A block is notarized in its view by a quorum of votes for the chain it ends. -/
-def NotarizedBlock (P : Protocol) (sent : Sent) (v : Nat) (c : Chain) : Prop :=
+abbrev NotarizedBlock (P : Protocol) (sent : Sent) (v : Nat) (c : Chain) : Prop :=
   P.quorum ≤ votesFor P sent v (.block c)
 
 /-- A view's dummy is notarized by a quorum of votes for it. -/
-def NotarizedDummy (P : Protocol) (sent : Sent) (v : Nat) : Prop :=
+abbrev NotarizedDummy (P : Protocol) (sent : Sent) (v : Nat) : Prop :=
   P.quorum ≤ votesFor P sent v (.dummy v)
 
 /-- A block is finalized in its view by a quorum of finalize votes. -/
-def Finalized (P : Protocol) (sent : Sent) (v : Nat) (c : Chain) : Prop :=
+abbrev Finalized (P : Protocol) (sent : Sent) (v : Nat) (c : Chain) : Prop :=
   P.quorum ≤ (P.committee.filter fun n => finalizeVoted sent n v c).length
 
 /-- The entry at index `k` of a chain is notarized: a dummy by its view's dummy notarization, a
 block by a notarization of the chain up to it (`upto = c.take (k+1)`); and it is view `k+1`'s. -/
-def EntryNotarized (P : Protocol) (sent : Sent) (k : Nat) (upto : Chain) : Entry → Prop
+@[expose] def EntryNotarized (P : Protocol) (sent : Sent) (k : Nat) (upto : Chain) : Entry → Prop
   | .dummy v => v = k + 1 ∧ NotarizedDummy P sent (k + 1)
   | .block v _ => v = k + 1 ∧ NotarizedBlock P sent (k + 1) upto
 
 /-- Every entry of the chain is notarized in its view. -/
-def ChainNotarized (P : Protocol) (sent : Sent) (c : Chain) : Prop :=
+abbrev ChainNotarized (P : Protocol) (sent : Sent) (c : Chain) : Prop :=
   ∀ k (hk : k < c.length), EntryNotarized P sent k (c.take (k + 1)) c[k]
 
 /-! ## 4. The honest rules and the steps -/
@@ -182,7 +190,7 @@ def ChainNotarized (P : Protocol) (sent : Sent) (c : Chain) : Prop :=
 /-- The honest vote rule in view `v` (`1 ≤ v`): a dummy vote is for this view's dummy; a block
 vote is for a chain that ends in a block of this view, extends a chain of `v-1` entries each of
 which is notarized, and was proposed by the view's leader. -/
-def VoteRule (P : Protocol) (sent : Sent) (v : Nat) : Target → Prop
+@[expose] def VoteRule (P : Protocol) (sent : Sent) (v : Nat) : Target → Prop
   | .block c => 1 ≤ v ∧ ∃ p x, c = p ++ [.block v x] ∧ p.length = v - 1 ∧ ChainNotarized P sent p ∧
       (⟨P.leader v, v, .propose, .block c⟩ : Msg) ∈ sent
   | .dummy w => 1 ≤ v ∧ w = v
@@ -251,6 +259,46 @@ theorem entryNotarized_cons {P : Protocol} {sent : Sent} (m : Msg) {k : Nat} {up
 theorem chainNotarized_cons {P : Protocol} {sent : Sent} (m : Msg) {c : Chain}
     (h : ChainNotarized P sent c) : ChainNotarized P (m :: sent) c :=
   fun k hk => entryNotarized_cons m (h k hk)
+
+/-! Every notion above is monotone in the message list, not only under `cons`: a node that reads
+a sub-list of the messages (its own deliveries) concludes nothing the whole list does not. -/
+
+theorem voted_mono {s₁ s₂ : Sent} (h : ∀ m ∈ s₁, m ∈ s₂) {n : NodeId} {v : Nat} {t : Target}
+    (hv : voted s₁ n v t = true) : voted s₂ n v t = true :=
+  (voted_iff s₂ n v t).2 (h _ ((voted_iff s₁ n v t).1 hv))
+
+theorem votesFor_mono (P : Protocol) {s₁ s₂ : Sent} (h : ∀ m ∈ s₁, m ∈ s₂) (v : Nat) (t : Target) :
+    votesFor P s₁ v t ≤ votesFor P s₂ v t :=
+  filter_length_mono _ _ P.committee fun _ hn => voted_mono h hn
+
+theorem notarizedBlock_mono {P : Protocol} {s₁ s₂ : Sent} (h : ∀ m ∈ s₁, m ∈ s₂) {v : Nat}
+    {c : Chain} (hn : NotarizedBlock P s₁ v c) : NotarizedBlock P s₂ v c :=
+  Nat.le_trans hn (votesFor_mono P h v (.block c))
+
+theorem notarizedDummy_mono {P : Protocol} {s₁ s₂ : Sent} (h : ∀ m ∈ s₁, m ∈ s₂) {v : Nat}
+    (hn : NotarizedDummy P s₁ v) : NotarizedDummy P s₂ v :=
+  Nat.le_trans hn (votesFor_mono P h v (.dummy v))
+
+theorem chainNotarized_mono {P : Protocol} {s₁ s₂ : Sent} (h : ∀ m ∈ s₁, m ∈ s₂) {c : Chain}
+    (hc : ChainNotarized P s₁ c) : ChainNotarized P s₂ c := by
+  intro k hk
+  have he := hc k hk
+  cases hck : c[k] with
+  | dummy v => rw [hck] at he; exact ⟨he.1, notarizedDummy_mono h he.2⟩
+  | block v x => rw [hck] at he; exact ⟨he.1, notarizedBlock_mono h he.2⟩
+
+theorem voteRule_mono {P : Protocol} {s₁ s₂ : Sent} (h : ∀ m ∈ s₁, m ∈ s₂) {v : Nat} {t : Target}
+    (hr : VoteRule P s₁ v t) : VoteRule P s₂ v t := by
+  cases t with
+  | dummy w => exact hr
+  | block c =>
+    obtain ⟨h1, p, x, hc, hl, hn, hp⟩ := hr
+    exact ⟨h1, p, x, hc, hl, chainNotarized_mono h hn, h _ hp⟩
+
+theorem finalized_mono {P : Protocol} {s₁ s₂ : Sent} (h : ∀ m ∈ s₁, m ∈ s₂) {v : Nat} {c : Chain}
+    (hf : Finalized P s₁ v c) : Finalized P s₂ v c :=
+  Nat.le_trans hf (filter_length_mono _ _ P.committee fun n hn =>
+    (finalizeVoted_iff s₂ n v c).2 (h _ ((finalizeVoted_iff s₁ n v c).1 hn)))
 
 theorem take_append_left {α : Type} :
     ∀ (l₁ l₂ : List α) (n : Nat), n ≤ l₁.length → (l₁ ++ l₂).take n = l₁.take n
@@ -528,15 +576,15 @@ structure SlashingReceipt where
   a : Target
   b : Target
   signers : List NodeId
-  deriving DecidableEq, Repr
+  deriving Repr
 
 /-- The receipt checks against a message list: the targets differ and every signer's two votes
 are in it. -/
-def SlashingReceipt.checks (r : SlashingReceipt) (sent : Sent) : Bool :=
+@[expose] def SlashingReceipt.checks (r : SlashingReceipt) (sent : Sent) : Bool :=
   decide (r.a ≠ r.b) && r.signers.all fun n => voted sent n r.view r.a && voted sent n r.view r.b
 
 /-- A node kept the vote-once rule in a view. -/
-def VoteOnce (sent : Sent) (n : NodeId) (v : Nat) : Prop :=
+abbrev VoteOnce (sent : Sent) (n : NodeId) (v : Nat) : Prop :=
   ∀ t t', voted sent n v t = true → voted sent n v t' = true → t = t'
 
 /-- **What a checking receipt establishes**: each signer cast both votes, so none kept the
@@ -651,12 +699,14 @@ structure FinCert where
   view : Nat
   chain : Chain
   signers : List NodeId
-  deriving DecidableEq, Repr
+  deriving Repr
+
+deriving instance @[expose] DecidableEq for SlashingReceipt, FinCert
 
 /-- Verify a `FinCert` against committee `P` and message history `sent`:
     `signers` are duplicate-free, meet `P.quorum` (`2f + 1`), belong to `P.committee`,
     and each cast a `finalize` vote for `chain` in `view`. -/
-def FinCert.checks (c : FinCert) (P : Protocol) (sent : Sent) : Bool :=
+@[expose] def FinCert.checks (c : FinCert) (P : Protocol) (sent : Sent) : Bool :=
   decide c.signers.Nodup &&
   decide (P.quorum ≤ c.signers.length) &&
   c.signers.all (fun n => P.committee.contains n && finalizeVoted sent n c.view c.chain)
@@ -717,6 +767,79 @@ theorem FinCert.unique_per_height_reach {P : Protocol} {sent : Sent} (hr : Reach
     (hh : c₁.chain.height = c₂.chain.height) :
     c₁.chain.blocks = c₂.chain.blocks :=
   FinCert.unique_per_height (reach_inv hr) h₁ h₂ hh
+
+/-! ## 10. The wire form of an entry -/
+
+/-- An entry fits the wire: its view in 8 bytes, and a block's payload in 32 (a 256-bit digest). -/
+@[expose] def Entry.canonical : Entry → Bool
+  | .block v payload => decide (v < 256 ^ 8) && decide (payload < 256 ^ 32)
+  | .dummy v => decide (v < 256 ^ 8)
+
+theorem Entry.canonical_block {v payload : Nat} :
+    (Entry.block v payload).canonical = true ↔ v < 256 ^ 8 ∧ payload < 256 ^ 32 := by
+  simp [Entry.canonical]
+
+theorem Entry.canonical_dummy {v : Nat} : (Entry.dummy v).canonical = true ↔ v < 256 ^ 8 := by
+  simp [Entry.canonical]
+
+/-- The 41 bytes of an entry: a tag, the view big-endian in 8 bytes, the payload big-endian in 32
+(zero for a dummy). -/
+@[expose] def Entry.encode : Entry → List UInt8
+  | .block v payload => (0x01 : UInt8) :: (HashBytes.be 8 v ++ HashBytes.be 32 payload)
+  | .dummy v => (0x00 : UInt8) :: (HashBytes.be 8 v ++ HashBytes.be 32 0)
+
+theorem Entry.encode_block (v payload : Nat) :
+    (Entry.block v payload).encode = (0x01 : UInt8) :: (HashBytes.be 8 v ++ HashBytes.be 32 payload) := by
+  simp only [Entry.encode]
+
+theorem Entry.encode_length (e : Entry) : e.encode.length = 41 := by
+  cases e <;> simp [Entry.encode, HashBytes.length_be]
+
+/-- **The wire form loses nothing**: two canonical entries with the same 41 bytes are the same
+entry, payload included at its full 256 bits. -/
+theorem Entry.encode_injective {e₁ e₂ : Entry} (hc₁ : e₁.canonical = true)
+    (hc₂ : e₂.canonical = true) (hEq : e₁.encode = e₂.encode) : e₁ = e₂ := by
+  cases e₁ with
+  | block v₁ p₁ =>
+    cases e₂ with
+    | dummy v₂ => simp [Entry.encode] at hEq
+    | block v₂ p₂ =>
+      have b₁ := Entry.canonical_block.1 hc₁
+      have b₂ := Entry.canonical_block.1 hc₂
+      simp only [Entry.encode, List.cons.injEq, true_and] at hEq
+      obtain ⟨hv, hp⟩ := List.append_inj hEq (by simp [HashBytes.length_be])
+      rw [HashBytes.be_injective b₁.1 b₂.1 hv, HashBytes.be_injective b₁.2 b₂.2 hp]
+  | dummy v₁ =>
+    cases e₂ with
+    | block v₂ p₂ => simp [Entry.encode] at hEq
+    | dummy v₂ =>
+      have b₁ := Entry.canonical_dummy.1 hc₁
+      have b₂ := Entry.canonical_dummy.1 hc₂
+      simp only [Entry.encode, List.cons.injEq, true_and] at hEq
+      obtain ⟨hv, _⟩ := List.append_inj hEq (by simp [HashBytes.length_be])
+      rw [HashBytes.be_injective b₁ b₂ hv]
+
+/-- The concatenated wire forms of a list of canonical entries determine the list (each entry is
+41 bytes). -/
+theorem encodeEntries_injective :
+    ∀ {c₁ c₂ : Chain}, c₁.all Entry.canonical = true → c₂.all Entry.canonical = true →
+      c₁.flatMap Entry.encode = c₂.flatMap Entry.encode → c₁ = c₂
+  | [], [], _, _, _ => rfl
+  | [], e :: es, _, _, h => by
+    have := congrArg List.length h
+    rw [List.flatMap_nil, List.flatMap_cons, List.length_nil, List.length_append,
+      Entry.encode_length] at this
+    omega
+  | e :: es, [], _, _, h => by
+    have := congrArg List.length h
+    rw [List.flatMap_nil, List.flatMap_cons, List.length_nil, List.length_append,
+      Entry.encode_length] at this
+    omega
+  | e₁ :: es₁, e₂ :: es₂, h₁, h₂, h => by
+    simp only [List.all_cons, Bool.and_eq_true] at h₁ h₂
+    simp only [List.flatMap_cons] at h
+    obtain ⟨he, hes⟩ := List.append_inj h (by rw [Entry.encode_length, Entry.encode_length])
+    rw [Entry.encode_injective h₁.1 h₂.1 he, encodeEntries_injective h₁.2 h₂.2 hes]
 
 end Obend.Consensus.SimplexProtocol
 end

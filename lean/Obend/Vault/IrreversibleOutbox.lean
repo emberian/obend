@@ -13,20 +13,24 @@ Implements Obend Pillar 6 (`Firmament` microkernel irreversible outbox settlemen
      **strictly gated** on:
      (a) `seL4` Microkit partition isolation (`checkMicrokitIsolation part = true`) and bounded SPSC
          IPC channel confinement,
-     (b) **Mandatory Copy-Before-Verify SPSC Isolation (`copyRingToPrivateSlot`, `selectActuationSource`)**:
-         copies the untrusted shared SPSC ring slot into PD-private memory *before* verification and
-         decodes/dispatches *exclusively* from `privateCopy`, neutralizing concurrent shared-ring
-         DMA / producer TOCTOU overwrites (`sharedRingAfterVerify`),
+     (b) **Copy-Before-Verify SPSC Isolation (`copyRingToPrivateSlot`)**: the untrusted shared
+         ring slot is copied into PD-private memory before verification, and the copy is what is
+         verified and dispatched. What the shared ring holds afterwards is not an input; the
+         guarantee is stated over the finalized state (`dispatched_payload_bound_to_finalized_commit`):
+         any bytes whose commitment is the finalized block's payload are the dispatched bytes, or a
+         cSHAKE256 collision,
      (c) Verified `SimplexProtocol.FinCert` (`cert.checks P sent = true`) whose finalized block at
-         `cert.view` commits via 256-bit SP 800-185 cSHAKE256 (`effectCommitNat`) to the exact
-         `(nullifierId, .irreversibleActuation, privateCopy)` preimage,
+         `cert.view` commits via 256-bit SP 800-185 cSHAKE256 (`effectCommitNat`, below `2 ^ 256`
+         by `effectCommitNat_lt`, so the block is wire-canonical: `outboxBlock_canonical`) to the
+         exact `(nullifierId, .irreversibleActuation, privateCopy)` preimage,
      (d) Strictly monotonic outbox nullifier (`st.highWaterNullifier < req.nullifierId`).
 2. **Multi-Turn / Multi-View Outbox Safety (`firmament_sel4_copy_before_verify_and_irreversible_outbox_safe`)**:
    - Proves across arbitrary multi-turn `ValidOutboxTrace` runs interleaved with open-world
      Byzantine `SimplexProtocol.Step` transitions (`Step.inject`, `.dummy` view skips, competing
      unfinalized branches) and arbitrary shared-ring DMA TOCTOU mutations:
      - `Sel4CapDlNonInterfering` Microkit isolation,
-     - Complete immunity of dispatched actuation payloads to post-copy shared-ring TOCTOU writes,
+     - Dispatched payloads bound to the finalized 256-bit commitment (no TOCTOU), and spent
+       nullifiers refused for good (`dispatched_nullifier_never_replays`),
      - Canonical finality (`Finalized P sentF`), prefix consistency (`finalized_consistent`),
        per-height block uniqueness (`fin_cert_unique_per_height`), and zero rollback / zero orphan
        actuations (`irreversible_at_most_once_and_never_rolled_back`),
@@ -131,6 +135,29 @@ def deriveOutboxNullifier256 (gatekeeperPd : Nat) (nullifierId : Nat) : BitVec 2
     (bytesOfList (HashBytes.be 8 gatekeeperPd ++ HashBytes.be 8 nullifierId))
   BitVec.ofNat 256 (HashBytes.ofBE raw.data.toList)
 
+theorem effectCommitBytes_eq_spec (nullifierId : Nat) (cls : EffectClass) (payload : ByteArray) :
+    (effectCommitBytes nullifierId cls payload).data.toList =
+      cshake256Bytes outboxEffectDomain.data.toList (encodeEffectPreimage nullifierId cls payload) := by
+  unfold effectCommitBytes cshake256Kernel
+  rw [bytesOfList_toList, bytesOfList_toList, Cshake256.Fast.cshake256Fast_eq]
+
+/-- The commitment is a 256-bit number: it fits a block payload's 32 wire bytes with nothing cut. -/
+theorem effectCommitNat_lt (nullifierId : Nat) (cls : EffectClass) (payload : ByteArray) :
+    effectCommitNat nullifierId cls payload < 256 ^ 32 := by
+  unfold effectCommitNat
+  rw [effectCommitBytes_eq_spec]
+  have h := HashBytes.ofBE_lt
+    (cshake256Bytes outboxEffectDomain.data.toList (encodeEffectPreimage nullifierId cls payload))
+  rw [Cshake256.cshake256Bytes_length] at h
+  exact h
+
+/-- A block carrying an outbox commitment is canonical on the Simplex wire (`Entry.encode`), at
+    any view that fits 8 bytes. -/
+theorem outboxBlock_canonical {view : Nat} (hv : view < 256 ^ 8) (nullifierId : Nat)
+    (cls : EffectClass) (payload : ByteArray) :
+    (Entry.block view (effectCommitNat nullifierId cls payload)).canonical = true :=
+  Entry.canonical_block.2 ⟨hv, effectCommitNat_lt nullifierId cls payload⟩
+
 /-- Constructive 256-bit cSHAKE256 commitment binding (`0 Classical.choice`):
     equal `effectCommitNat` values either come from identical `(nullifierId, cls, payload)` triples
     or exhibit an explicit SP 800-185 cSHAKE256 `HashBytes.Collision`! -/
@@ -142,48 +169,31 @@ theorem effectCommitNat_binding
     (hCommitEq : effectCommitNat id₁ cls₁ p₁ = effectCommitNat id₂ cls₂ p₂) :
     (id₁ = id₂ ∧ cls₁ = cls₂ ∧ p₁ = p₂) ∨
       HashBytes.Collision (cshake256Bytes outboxEffectDomain.data.toList) := by
-  let pre₁ := encodeEffectPreimage id₁ cls₁ p₁
-  let pre₂ := encodeEffectPreimage id₂ cls₂ p₂
-  if hPre : pre₁ = pre₂ then
+  if hPre : encodeEffectPreimage id₁ cls₁ p₁ = encodeEffectPreimage id₂ cls₂ p₂ then
     exact .inl (encodeEffectPreimage_injective hid₁ hid₂ hp₁ hp₂ hPre)
   else
-    right
-    refine ⟨pre₁, pre₂, hPre, ?_⟩
-    unfold effectCommitNat effectCommitBytes at hCommitEq
-    have hSpec₁ := Cshake256.Native.cshake256Native_eq outboxEffectDomain.data.toList pre₁
-    have hSpec₂ := Cshake256.Native.cshake256Native_eq outboxEffectDomain.data.toList pre₂
-    unfold Cshake256.Native.cshake256Native at hSpec₁ hSpec₂
-    have hDom : bytesOfList outboxEffectDomain.data.toList = outboxEffectDomain := by
-      cases outboxEffectDomain with | mk arr =>
-      have hl := bytesOfList_toList arr.toList
-      cases hB : bytesOfList arr.toList with | mk arr' =>
-      rw [hB] at hl
-      exact congrArg ByteArray.mk (Array.ext' hl)
-    rw [hDom] at hSpec₁ hSpec₂
-    rw [← hSpec₁, ← hSpec₂]
+    refine .inr ⟨_, _, hPre, ?_⟩
+    unfold effectCommitNat at hCommitEq
+    rw [effectCommitBytes_eq_spec, effectCommitBytes_eq_spec] at hCommitEq
     exact hCommitEq
 
 /-! ## 2. `seL4` Microkit SPSC Copy-Before-Verify Ring & Escrow Compensation Carriers -/
 
-/-- Models an untrusted SPSC shared-memory ring transfer into the `seL4` outbox gatekeeper PD:
-    - `sharedRingBeforeCopy`: bytes in the shared ring slot at the instant the gatekeeper copies into private RAM,
-    - `sharedRingAfterVerify`: bytes in the shared ring slot *after* verification (modeling arbitrary
-      concurrent producer/DMA TOCTOU overwrite attempts!). -/
+/-- An untrusted SPSC shared-memory ring transfer into the `seL4` outbox gatekeeper PD:
+    `sharedRingBeforeCopy` is the shared ring slot at the instant the gatekeeper copies it into
+    private RAM. Later contents of the ring are no part of a request: the gatekeeper never reads
+    them, and `dispatched_payload_bound_to_finalized_commit` says what any other bytes would have
+    to satisfy to stand in for the dispatched ones. -/
 structure SpscRingTransfer where
   channelId             : Nat
   sharedRingBeforeCopy  : ByteArray
-  sharedRingAfterVerify : ByteArray
   deriving DecidableEq
 
-/-- Step 1 of Copy-Before-Verify: snapshot `sharedRingBeforeCopy` into PD-private memory unmapped
-    from untrusted producer PDs and peripheral DMA. -/
+/-- Copy-Before-Verify: snapshot `sharedRingBeforeCopy` into PD-private memory unmapped from
+    untrusted producer PDs and peripheral DMA. The snapshot is verified and the snapshot is
+    dispatched. -/
 def copyRingToPrivateSlot (spsc : SpscRingTransfer) : ByteArray :=
   spsc.sharedRingBeforeCopy
-
-/-- Step 2 of Copy-Before-Verify: select the byte buffer dispatched to physical hardware/actuators.
-    Reads **exclusively** `privateSnapshot`, never re-fetching `sharedRingAfterVerify`! -/
-def selectActuationSource (privateSnapshot : ByteArray) (_sharedAfterVerify : ByteArray) : ByteArray :=
-  privateSnapshot
 
 /-- Compensatable escrow bond backing an optimistic pre-finality `.compensatableEscrow` effect. -/
 structure EscrowCompensationBond where
@@ -252,16 +262,30 @@ inductive OutboxRefusal where
   deriving DecidableEq, Repr
 
 /-- Verify that `channelId` is a valid SPSC channel in `part` terminating at `gatekeeperPd`
-    whose `maxPayloadBytes` accommodates `payloadSize`. -/
+    whose `maxPayloadBytes` accommodates `payloadSize`, and that the payload length fits the 8-byte
+    length frame of `encodeEffectPreimage` (so its commitment binds it). -/
 def checkSpscChannelToGatekeeper (part : SeL4MicrokitPartition) (gatekeeperPd : Nat)
     (channelId : Nat) (payloadSize : Nat) : Except OutboxRefusal Unit :=
   match part.channels.find? (fun ch => ch.channelId == channelId && ch.dstPd == gatekeeperPd) with
   | none => .error (.invalidSpscChannel channelId)
   | some ch =>
-    if payloadSize ≤ ch.maxPayloadBytes then
+    if payloadSize ≤ ch.maxPayloadBytes && decide (payloadSize < OutboxBound64) then
       .ok ()
     else
       .error (.payloadExceedsChannelSlot payloadSize ch.maxPayloadBytes)
+
+theorem checkSpscChannelToGatekeeper_bound {part : SeL4MicrokitPartition} {gatekeeperPd : Nat}
+    {channelId payloadSize : Nat}
+    (h : checkSpscChannelToGatekeeper part gatekeeperPd channelId payloadSize = .ok ()) :
+    payloadSize < OutboxBound64 := by
+  unfold checkSpscChannelToGatekeeper at h
+  split at h
+  · cases h
+  · split at h
+    · rename_i hc
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+      exact hc.2
+    · cases h
 
 /-- Check whether `chain` ends with `.block view expectedPayload`. -/
 def checkChainTipCommit (chain : Chain) (view : Nat) (expectedPayload : Nat) : Bool :=
@@ -340,14 +364,13 @@ def auditOutboxStep (P : Protocol) (part : SeL4MicrokitPartition) (sent : Sent)
                 if !checkChainTipCommit cert.chain cert.view expectedCommit then
                   .error (.unfinalizedOrMismatchedBlockCommit req.nullifierId cert.view)
                 else
-                  let dispatchedBytes := selectActuationSource privateCopy req.spsc.sharedRingAfterVerify
                   let act : DispatchedActuation :=
                     { nullifierId       := req.nullifierId
                       nullifierDigest   := deriveOutboxNullifier256 st.gatekeeperPd req.nullifierId
                       view              := cert.view
                       chain             := cert.chain
                       finCert           := cert
-                      dispatchedPayload := dispatchedBytes }
+                      dispatchedPayload := privateCopy }
                   .ok
                     { st with
                       highWaterNullifier   := req.nullifierId
@@ -614,12 +637,8 @@ theorem sentSteps_preserves_mem {P : Protocol} {s₁ s₂ : Sent} (hSteps : Sent
 /-- Monotonicity of `SimplexProtocol.Finalized` across arbitrary `SentSteps`. -/
 theorem finalized_mono_sentSteps {P : Protocol} {s₁ s₂ : Sent}
     (hSteps : SentSteps P s₁ s₂) {v : Nat} {c : Chain}
-    (hf : Finalized P s₁ v c) : Finalized P s₂ v c := by
-  refine Nat.le_trans hf ?_
-  apply filter_length_mono _ _ P.committee
-  intro n hn
-  rw [finalizeVoted_iff] at hn ⊢
-  exact sentSteps_preserves_mem hSteps _ hn
+    (hf : Finalized P s₁ v c) : Finalized P s₂ v c :=
+  finalized_mono (sentSteps_preserves_mem hSteps) hf
 
 /-- One turn of a multi-view outbox execution: consensus advances from the previous `Sent` to
     `nextSent` via `SentSteps`, and the outbox processes `req` (optionally followed by escrow
@@ -650,11 +669,30 @@ def ValidOutboxTrace (P : Protocol) (part : SeL4MicrokitPartition) :
        | some cert => reconcileEscrowsWithCert P turn.nextSent cert stMid = some st₁) ∧
       ValidOutboxTrace P part turn.nextSent st₁ rest sentF stF
 
+theorem validOutboxTrace_nil {P : Protocol} {part : SeL4MicrokitPartition} {sent₀ sentF : Sent}
+    {st₀ stF : OutboxState} :
+    ValidOutboxTrace P part sent₀ st₀ [] sentF stF ↔
+      sentF = sent₀ ∧ stF = st₀ ∧ Reach P sent₀ ∧ checkMicrokitIsolation part = true :=
+  ⟨fun h => h, fun h => h⟩
+
+theorem validOutboxTrace_cons {P : Protocol} {part : SeL4MicrokitPartition} {sent₀ sentF : Sent}
+    {st₀ stF : OutboxState} {turn : OutboxTurn} {rest : List OutboxTurn} :
+    ValidOutboxTrace P part sent₀ st₀ (turn :: rest) sentF stF ↔
+      Reach P sent₀ ∧ SentSteps P sent₀ turn.nextSent ∧
+      ∃ (stMid st₁ : OutboxState),
+        stepOutbox P part turn.nextSent st₀ turn.req = some stMid ∧
+        (match turn.reconcileCert? with
+         | none => st₁ = stMid
+         | some cert => reconcileEscrowsWithCert P turn.nextSent cert stMid = some st₁) ∧
+        ValidOutboxTrace P part turn.nextSent st₁ rest sentF stF :=
+  ⟨fun h => h, fun h => h⟩
+
 private theorem stepOutbox_invariants
     {P : Protocol} {part : SeL4MicrokitPartition} {sent : Sent}
     {st st' : OutboxState} {req : OutboxEffectReq}
     (hStep : stepOutbox P part sent st req = some st') :
-    checkMicrokitIsolation part = true ∧
+    (checkMicrokitIsolation part = true ∧
+      (req.effectClass ≠ .idempotentRead → st.highWaterNullifier < req.nullifierId)) ∧
     st.highWaterNullifier ≤ st'.highWaterNullifier ∧
     st'.escrowVaultBalance + lockedEscrowDeposits st'.activeEscrows + st'.settledEscrowTotal =
       st.escrowVaultBalance + lockedEscrowDeposits st.activeEscrows + st.settledEscrowTotal ∧
@@ -670,7 +708,8 @@ private theorem stepOutbox_invariants
        st.highWaterNullifier < act.nullifierId ∧
        st'.highWaterNullifier = act.nullifierId ∧
        act.nullifierId = req.nullifierId ∧
-       act.nullifierId < OutboxBound64 ∧
+       (act.nullifierId < OutboxBound64 ∧
+         act.dispatchedPayload.data.toList.length < OutboxBound64) ∧
        act.dispatchedPayload = req.spsc.sharedRingBeforeCopy ∧
        act.finCert.checks P sent = true ∧
        Finalized P sent act.view act.chain ∧
@@ -710,7 +749,7 @@ private theorem stepOutbox_invariants
             rw [hCls] at hAud
             injection hAud with hSt
             subst hSt
-            exact ⟨rfl, Nat.le_refl _, rfl, fun _ h => .inl h, .inl rfl⟩
+            exact ⟨⟨rfl, fun h => absurd rfl h⟩, Nat.le_refl _, rfl, fun _ h => .inl h, .inl rfl⟩
           | compensatableEscrow =>
             rw [hCls] at hAud; dsimp only at hAud
             split at hAud
@@ -729,7 +768,7 @@ private theorem stepOutbox_invariants
                   have hBondOk := of_decide_eq_true hBondOkDec
                   injection hAud with hSt
                   subst hSt
-                  refine ⟨rfl, by dsimp; omega, ?_, ?_, .inl rfl⟩
+                  refine ⟨⟨rfl, fun _ => hMono⟩, by dsimp; omega, ?_, ?_, .inl rfl⟩
                   · dsimp [lockedEscrowDeposits]; omega
                   · intro e he
                     rcases List.mem_cons.1 he with rfl | hOld
@@ -776,8 +815,9 @@ private theorem stepOutbox_invariants
                       | true => rfl
                     injection hAud with hSt
                     subst hSt
-                    refine ⟨rfl, by dsimp; omega, rfl, fun _ h => .inl h, .inr ?_⟩
-                    refine ⟨_, rfl, rfl, hMono, rfl, rfl, hWidth, rfl, hCertOk.1,
+                    refine ⟨⟨rfl, fun _ => hMono⟩, by dsimp; omega, rfl, fun _ h => .inl h, .inr ?_⟩
+                    refine ⟨_, rfl, rfl, hMono, rfl, rfl,
+                      ⟨hWidth, checkSpscChannelToGatekeeper_bound hCh⟩, rfl, hCertOk.1,
                       FinCert.checks_implies_finalized hCertOk.1, rfl, rfl, ?_⟩
                     exact checkChainTipCommit_sound hTipOk
 
@@ -853,7 +893,8 @@ private theorem validOutboxTrace_core
         Finalized P sentF a.view a.chain ∧
         (a ∈ st₀.dispatchedActuations ∨
          (st₀.highWaterNullifier < a.nullifierId ∧
-          a.nullifierId < OutboxBound64 ∧
+          (a.nullifierId < OutboxBound64 ∧
+            a.dispatchedPayload.data.toList.length < OutboxBound64) ∧
           a.chain.getLast? = some (.block a.view
             (effectCommitNat a.nullifierId .irreversibleActuation a.dispatchedPayload)) ∧
           ∃ t ∈ turns,
@@ -899,7 +940,7 @@ private theorem validOutboxTrace_core
     obtain ⟨hReachF, hNetRest, _, hHwRest, hEscRest, hNodupF, hActsF⟩ :=
       validOutboxTrace_core rest hRest hMidBounded hMidNodup
     have hNetFull : SentSteps P sent₀ sentF := sentSteps_trans hNet hNetRest
-    refine ⟨hReachF, hNetFull, hIso, ?_, ?_, hNodupF, ?_⟩
+    refine ⟨hReachF, hNetFull, hIso.1, ?_, ?_, hNodupF, ?_⟩
     · omega
     · omega
     · intro a haF
@@ -954,17 +995,83 @@ theorem irreversible_at_most_once_and_never_rolled_back
     have hNotCanon : ChainNotarized P sentF cCanon := finalized_chainNotarized hInvF hFinCanon
     exact finalized_prefix_of_notarized hInvF (hActsF a ha).2.1 hNotCanon (by omega)
 
+/-- A request that is not a read and whose nullifier is at or below the high-water mark is
+    refused, against any message list. -/
+theorem stepOutbox_refuses_spent_nullifier (P : Protocol) (part : SeL4MicrokitPartition)
+    (sent : Sent) (st : OutboxState) (req : OutboxEffectReq)
+    (hCls : req.effectClass ≠ .idempotentRead)
+    (hSpent : req.nullifierId ≤ st.highWaterNullifier) :
+    stepOutbox P part sent st req = none := by
+  cases h : stepOutbox P part sent st req with
+  | none => rfl
+  | some st' => exact absurd ((stepOutbox_invariants h).1.2 hCls) (by omega)
+
+/-- **A dispatched nullifier never fires again.** After any `ValidOutboxTrace` from a clean
+    outbox, a further non-read request under the nullifier of any dispatched actuation is refused,
+    whatever message list and certificate it brings. The outbox state is the whole of what this
+    rests on, so it holds across anything that preserves that state (a crash and recovery of a
+    host that journals it: `UnifiedDeos.durable_outbox_dispatch_once_across_crashes`). -/
+theorem dispatched_nullifier_never_replays
+    {P : Protocol} {part : SeL4MicrokitPartition}
+    {sent₀ sentF : Sent} {st₀ stF : OutboxState} {turns : List OutboxTurn}
+    (hClean : st₀.dispatchedActuations = [])
+    (hTrace : ValidOutboxTrace P part sent₀ st₀ turns sentF stF) :
+    ∀ a ∈ stF.dispatchedActuations, ∀ (P' : Protocol) (sent : Sent) (req : OutboxEffectReq),
+      req.effectClass ≠ .idempotentRead → req.nullifierId = a.nullifierId →
+      stepOutbox P' part sent stF req = none := by
+  have hInitB : ∀ a ∈ st₀.dispatchedActuations,
+      a.nullifierId ≤ st₀.highWaterNullifier ∧ Finalized P sent₀ a.view a.chain := by
+    rw [hClean]; intro _ h; cases h
+  have hInitNd : (st₀.dispatchedActuations.map DispatchedActuation.nullifierId).Nodup := by
+    rw [hClean]; exact List.Pairwise.nil
+  obtain ⟨_, _, _, _, _, _, hActsF⟩ := validOutboxTrace_core turns hTrace hInitB hInitNd
+  intro a ha P' sent req hCls hId
+  exact stepOutbox_refuses_spent_nullifier P' part sent stF req hCls (hId ▸ (hActsF a ha).1)
+
+/-- **No TOCTOU, stated over the finalized state.** After any `ValidOutboxTrace` from a clean
+    outbox, take a dispatched actuation `a` and any other byte string of framed length (what a
+    producer or DMA wrote to the shared ring after verification, for one). If that string's
+    commitment under `a`'s nullifier is the payload of `a`'s finalized block, it is the dispatched
+    payload, or the two are an explicit cSHAKE256 collision. No bytes but the dispatched ones are
+    consistent with what consensus finalized. -/
+theorem dispatched_payload_bound_to_finalized_commit
+    {P : Protocol} {part : SeL4MicrokitPartition}
+    {sent₀ sentF : Sent} {st₀ stF : OutboxState} {turns : List OutboxTurn}
+    (hClean : st₀.dispatchedActuations = [])
+    (hTrace : ValidOutboxTrace P part sent₀ st₀ turns sentF stF) :
+    ∀ a ∈ stF.dispatchedActuations, ∀ other : ByteArray,
+      other.data.toList.length < OutboxBound64 →
+      a.chain.getLast? = some (.block a.view
+        (effectCommitNat a.nullifierId .irreversibleActuation other)) →
+      other = a.dispatchedPayload ∨
+        HashBytes.Collision (cshake256Bytes outboxEffectDomain.data.toList) := by
+  have hInitB : ∀ a ∈ st₀.dispatchedActuations,
+      a.nullifierId ≤ st₀.highWaterNullifier ∧ Finalized P sent₀ a.view a.chain := by
+    rw [hClean]; intro _ h; cases h
+  have hInitNd : (st₀.dispatchedActuations.map DispatchedActuation.nullifierId).Nodup := by
+    rw [hClean]; exact List.Pairwise.nil
+  obtain ⟨_, _, _, _, _, _, hActsF⟩ := validOutboxTrace_core turns hTrace hInitB hInitNd
+  intro a ha other hLen hTipOther
+  rcases (hActsF a ha).2.2 with haOld | ⟨_, hW, hTip, _⟩
+  · rw [hClean] at haOld; cases haOld
+  · rw [hTip] at hTipOther
+    injection hTipOther with hEntry
+    injection hEntry with _ hCommit
+    rcases effectCommitNat_binding hW.1 hW.1 hW.2 hLen hCommit with ⟨_, _, hEq⟩ | hCol
+    · exact .inl hEq.symm
+    · exact .inr hCol
+
 /-- **Pillar 6 Apex Theorem (`firmament_sel4_copy_before_verify_and_irreversible_outbox_safe`)**:
     End-to-end multi-turn / multi-view safety of `seL4` Microkit Copy-Before-Verify SPSC isolation
     and 3-class irreversible outbox settlement over `SimplexProtocol`:
     1. **`seL4` Microkit capDL Non-Interference**: `Sel4CapDlNonInterfering part` holds (disjoint
        writable MMIO, exclusive hardware watchdog confinement, bounded SPSC channels);
-    2. **SPSC Copy-Before-Verify TOCTOU Immunity**: even under arbitrary concurrent DMA / producer
-       mutations `t.req.spsc.sharedRingAfterVerify` on the shared ring buffer, every dispatched
-       `.irreversibleActuation` `a ∈ stF.dispatchedActuations` dispatches **exact private-snapshot
-       bytes** `a.dispatchedPayload = t.req.spsc.sharedRingBeforeCopy` whose 256-bit cSHAKE256
+    2. **SPSC Copy-Before-Verify**: every dispatched `.irreversibleActuation`
+       `a ∈ stF.dispatchedActuations` dispatches the private-snapshot bytes
+       `a.dispatchedPayload = t.req.spsc.sharedRingBeforeCopy`, whose 256-bit cSHAKE256
        `effectCommitNat` is the committed payload of the finalized non-dummy block tip
-       `a.chain.getLast? = some (.block a.view (...))`;
+       `a.chain.getLast? = some (.block a.view (...))` (and by
+       `dispatched_payload_bound_to_finalized_commit` no other bytes fit that commitment);
     3. **Canonical `SimplexProtocol` Finality, Uniqueness & Zero Orphan/Replay**:
        - `(stF.dispatchedActuations.map DispatchedActuation.nullifierId).Nodup`,
        - Every `a ∈ stF.dispatchedActuations` satisfies `Finalized P sentF a.view a.chain`,
@@ -1059,7 +1166,7 @@ private def sampleReadReq : OutboxEffectReq where
   proposedChain := []
   finCert?      := none
   escrowBond?   := none
-  spsc          := ⟨0, bytesOfList [0xAA, 0xBB], bytesOfList [0xFF, 0xEE]⟩
+  spsc          := ⟨0, bytesOfList [0xAA, 0xBB]⟩
 
 private def sampleEscrowReq : OutboxEffectReq where
   nullifierId   := 2
@@ -1068,7 +1175,7 @@ private def sampleEscrowReq : OutboxEffectReq where
   proposedChain := [.block 1 42]
   finCert?      := none
   escrowBond?   := some ⟨100, 25⟩
-  spsc          := ⟨0, bytesOfList [0x10, 0x20], bytesOfList [0x99, 0x99]⟩
+  spsc          := ⟨0, bytesOfList [0x10, 0x20]⟩
 
 private def sampleOutboxProto : Protocol :=
   ⟨[0, 1, 2, 3], 1, (· == 3), by decide, by decide, by decide⟩

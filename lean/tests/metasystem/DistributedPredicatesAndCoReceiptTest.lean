@@ -1,17 +1,23 @@
 module
 public import Obend.Polis.PrivatePredicate
 public import Obend.Polis.JointCoReceipt
+public import Obend.Ledger.Floors
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms
 import all Obend.Polis.PrivatePredicate
 import all Obend.Polis.JointCoReceipt
 meta import all Obend.Polis.PrivatePredicate
 meta import all Obend.Polis.JointCoReceipt
+meta import all Obend.Ledger.Floors
 -- The census reads every body in the import closure.
 import all Obend.Apps.ZkNtt.Goldilocks
 import all Obend.AssertAxioms
+import all Obend.Core.Data
 import all Obend.Core.Digest
+import all Obend.Core.Machine
+import all Obend.Core.MachineFast
 import all Obend.Core.Term
+import all Obend.Core.Ty
 import all Obend.Crypto.Multilinear
 import all Obend.Crypto.Transcript
 import all Obend.Digest.Cshake256
@@ -19,12 +25,35 @@ import all Obend.Digest.Cshake256.Fast
 import all Obend.Digest.Cshake256.Seam
 import all Obend.Digest.Cshake256.Spec
 import all Obend.Digest.HashBytes
+import all Obend.Fold
 import all Obend.Judge.Class
 import all Obend.Judge.Computational
+import all Obend.Law.Syntax
+import all Obend.Ledger.Floors
+import all Obend.Ledger.Register
 import all Obend.Polis.CapTP
 import all Obend.Polis.EvidencedOcap
 import all Obend.Polis.VerkleUmem
 import all Obend.Polis.ZkBiscuit
+import all Obend.Receipt
+import all Obend.Receipt.Merkle
+import all Obend.Run.Control
+import all Obend.Run.Fold
+import all Obend.Run.Fork
+import all Obend.Run.Proofs.Control
+import all Obend.Run.Proofs.Invariant
+import all Obend.Run.Proofs.Shared
+import all Obend.Run.Runner
+import all Obend.Run.Shared
+import all Obend.Run.Spec
+import all Obend.Slot
+import all Obend.Slot.Integrity
+import all Obend.Slot.Proofs.Protocol
+import all Obend.Slot.Proofs.ProtocolTyping
+import all Obend.Slot.Protocol
+import all Obend.Slot.Selection
+import all Obend.Slot.World
+import all Obend.Tactic.Cases
 import all Obend.Tactic.Tooth
 import all Obend.Vault.Mandate
 
@@ -46,6 +75,7 @@ namespace Obend.Tests.Metasystem.DistributedPredicatesAndCoReceiptTest
 open Obend.Polis
 open Obend.Polis.PrivatePredicate
 open Obend.Polis.JointCoReceipt
+open Obend.Ledger (FloorBook FloorsHold floorsHold_empty)
 
 -- ============================================================================
 -- 1. `DistPred`: evaluation, both polarities of `witnessed`, residuals
@@ -290,18 +320,121 @@ def legs0 : List LocalTurn := demoDiagram.map (·.turn)
 #guard !checkJoint demoShared
   [demoLeg 0 (-2) demoShared, demoLeg 1 1 demoShared, demoLeg 2 1 demoShared]
 
-def ledger0 : LedgerState := ⟨fun _ => 10, RevokedSet.empty⟩
+/-- Receipts over one forest: every leg names the forest's digest. -/
+def sealTurn (raw : List LocalTurn) : ByteArray × List LocalTurn :=
+  (turnDigest raw, raw.map fun t => { t with turnId := turnDigest raw })
+
+/-- Vats 0 and 1 each hold ten units of asset 0, issued from its well. -/
+def book0 : FloorBook :=
+  (FloorBook.empty.applyRaw ⟨.issuerWell 0, .user 0, 0, 10⟩).applyRaw ⟨.issuerWell 0, .user 1, 0, 10⟩
+
+def ledger0 : LedgerState := ⟨book0, 0, RevokedSet.empty⟩
+
+theorem floorsHold_book0 : FloorsHold book0 :=
+  (FloorBook.admitBatch_preserves_floors (fb := .empty) (fb' := book0)
+    [⟨.issuerWell 0, .user 0, 0, 10⟩, ⟨.issuerWell 0, .user 1, 0, 10⟩] floorsHold_empty
+    (by decide)).1
+
+/-- A second turn, on the ledger the first one leaves: vat 1 pays four back. -/
+def turn2 : ByteArray × List LocalTurn :=
+  sealTurn [⟨0, .empty, .empty, 9, 4, 13⟩, ⟨1, .empty, .empty, 11, -4, 7⟩]
 
 #guard ((runTrace 2 ledger0 [(demoShared, legs0)]).map fun s =>
   (s.balances 0, s.balances 1, total (List.range 2) s.balances)) == some (9, 11, 20)
--- The same turn twice; a vat outside the ledger.
+#guard ((runTrace 2 ledger0 [(demoShared, legs0), turn2]).map fun s =>
+  (s.balances 0, s.balances 1, s.book.assetSum 0)) == some (13, 7, 0)
+-- The same turn twice; a vat outside the ledger; a turn whose `pre` the ledger does not hold yet.
 #guard (runTrace 2 ledger0 [(demoShared, legs0), (demoShared, legs0)]).isNone
 #guard (runTrace 1 ledger0 [(demoShared, legs0)]).isNone
+#guard (runTrace 2 ledger0 [turn2]).isNone
+#guard (runTrace 2 ledger0 [(demoShared, legs0), turn2, turn2]).isNone
 
+/-- Vat 0 named twice. Each leg is valid, each `pre` is the ledger's, the half-edges sum to zero. -/
+def dupVatRaw : List LocalTurn :=
+  [⟨0, .empty, .empty, 10, -1, 9⟩, ⟨0, .empty, .empty, 10, -1, 9⟩, ⟨1, .empty, .empty, 10, 2, 12⟩]
+/-- Vat 0 says it held a thousand. A joint turn on its own; only the ledger knows better. -/
+def unboundPreRaw : List LocalTurn :=
+  [⟨0, .empty, .empty, 1000, -900, 100⟩, ⟨1, .empty, .empty, 10, 900, 910⟩]
+/-- Vat 0 pays eleven of its ten. -/
+def overdraftRaw : List LocalTurn :=
+  [⟨0, .empty, .empty, 10, -11, -1⟩, ⟨1, .empty, .empty, 10, 11, 21⟩]
+
+def stepSealed (raw : List LocalTurn) : Option LedgerState :=
+  stepJoint 2 ledger0 (sealTurn raw).1 (sealTurn raw).2
+
+-- The honest neighbour of each exploit is applied; the exploit is refused, by the check it breaks.
+#guard ((stepSealed [⟨0, .empty, .empty, 10, -2, 8⟩, ⟨1, .empty, .empty, 10, 2, 12⟩]).map fun s =>
+  (s.balances 0, s.balances 1)) == some (8, 12)
+#guard (stepSealed dupVatRaw).isNone
+#guard !vatsDistinct (sealTurn dupVatRaw).2
+#guard (stepSealed unboundPreRaw).isNone
+#guard checkJoint (sealTurn unboundPreRaw).1 (sealTurn unboundPreRaw).2
+#guard !stepOk 2 ledger0 (sealTurn unboundPreRaw).1 (sealTurn unboundPreRaw).2
+#guard (stepSealed overdraftRaw).isNone
+#guard !(sealTurn overdraftRaw).2.all (·.valid)
+
+-- The digests read `pre`, `post` and the turn: none can be restated under the same digest.
+#guard turnDigest [⟨0, .empty, .empty, 10, -1, 9⟩] != turnDigest [⟨0, .empty, .empty, 11, -1, 9⟩]
+#guard turnDigest [⟨0, .empty, .empty, 10, -1, 9⟩] != turnDigest [⟨0, .empty, .empty, 10, -1, 8⟩]
+#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9⟩ != coReceiptDigest ⟨0, .empty, .empty, 11, -1, 9⟩
+#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9⟩ != coReceiptDigest ⟨0, .empty, .empty, 10, -1, 8⟩
+#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9⟩ != coReceiptDigest ⟨0, tailA, .empty, 10, -1, 9⟩
+#guard (coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9⟩).size == 32
+
+-- The three refusals, for every digest and every ledger.
+example (n : Nat) (s : LedgerState) (shared : ByteArray) (a b : LocalTurn) (h : a.vat = b.vat) :
+    stepJoint n s shared [a, b] = none :=
+  duplicate_vat_refused n s shared [a, b] (by simp [h])
+
+example (shared : ByteArray) (legs : List LocalTurn) (t : LocalTurn) (ht : t ∈ legs)
+    (hv : t.vat = 0) (hp : t.pre ≠ 10) : stepJoint 2 ledger0 shared legs = none := by
+  have h10 : ledger0.balances 0 = 10 := by decide
+  exact unbound_pre_refused 2 ledger0 shared legs t ht (by rw [hv, h10]; exact hp)
+
+example (n : Nat) (s : LedgerState) (shared : ByteArray) (t u : LocalTurn) (h : t.post < 0) :
+    stepJoint n s shared [t, u] = none :=
+  overdraft_refused n s shared [t, u] t (by simp) h
+
+/-- The demo turn is applied to `ledger0`, in the kernel: the guard holds and the step is complete. -/
+theorem demo_step_applies : ∃ s', stepJoint 2 ledger0 demoShared legs0 = some s' := by
+  have hj : checkJoint demoShared legs0 = true := by
+    obtain ⟨c, hc, ho, hd, _⟩ := composeCoReceipts_closed_inhabited
+    exact (checkJoint_iff _ _).2
+      (composeCoReceipts_closed_sound demoEnv demoShared demoDiagram c hc ho hd).1
+  have hnew : ledger0.seen.contains (turnKey demoShared) = false :=
+    Bool.eq_false_iff.2 fun h => by
+      simpa [ledger0, RevokedSet.empty] using (RevokedSet.contains_iff _ _).1 h
+  have hpre : legs0.all
+      (fun t => decide (t.vat < 2) && decide (t.pre = ledger0.balances t.vat)) = true := by decide
+  refine stepJoint_complete (s := ledger0) floorsHold_book0
+    (by simp only [stepOk, hj, hnew, hpre, Bool.not_false, Bool.and_self]) ?_
+  intro t ht f hf
+  simp only [legs0, demoDiagram, List.map_cons, List.map_nil, List.mem_cons, List.not_mem_nil,
+    or_false] at ht
+  rcases ht with rfl | rfl
+  · have hf' : some (0 : Int) = some f := hf
+    cases hf'
+    decide
+  · have hf' : some (0 : Int) = some f := hf
+    cases hf'
+    decide
+
+-- Every trace from `ledger0`: the total, the floors, the asset's sum, and no vat below zero.
 example (trace : List (ByteArray × List LocalTurn)) (s : LedgerState)
-    (h : runTrace 2 ledger0 trace = some s) : total (List.range 2) s.balances = 20 := by
-  rw [(jointTrace_conserves_total_balance 2 trace ledger0 s h).1]
-  decide
+    (h : runTrace 2 ledger0 trace = some s) :
+    total (List.range 2) s.balances = 20 ∧ (∀ v, 0 ≤ s.balances v) ∧ FloorsHold s.book ∧
+      s.book.assetSum 0 = 0 := by
+  have hv := (runTrace_eq_some_iff 2 trace ledger0 s).1 h
+  obtain ⟨hf, hsum, hnn⟩ := jointTrace_preserves_floors 2 trace ledger0 s floorsHold_book0 hv
+  refine ⟨?_, hnn, hf, ?_⟩
+  · rw [(jointTrace_conserves_total_balance 2 trace ledger0 s hv).1]
+    decide
+  · rw [hsum]
+    decide
+
+example (trace : List (ByteArray × List LocalTurn)) (s s' : LedgerState)
+    (h : ValidJointTrace 2 s trace s') (v : VatId) (hv : 0 ≤ s.balances v) : 0 ≤ s'.balances v :=
+  jointTrace_no_overdraft 2 trace s s' h v hv
 
 -- Commitments instead of cleartext half-edges.
 def cLeg (vat : VatId) (credit : Bool) (tid : ByteArray) : CommittedLeg :=
@@ -421,10 +554,37 @@ example (env : WireEnv) (shared : ByteArray) (a b : CoReceipt) (f g : FulfillPor
 
 -- A ledger that applies a turn it has already seen.
 #tooth Obend.Polis.JointCoReceipt.jointTrace_no_replay by mutation
-  Obend.Polis.JointCoReceipt.stepJoint := fun n s shared legs =>
-    if checkJoint shared legs && legs.all (fun t => decide (t.vat < n)) then
-      some ⟨applyLegs s.balances legs, s.seen.insert (turnKey shared)⟩
-    else none
+  Obend.Polis.JointCoReceipt.stepOk := fun n s shared legs =>
+    checkJoint shared legs &&
+      legs.all (fun t => decide (t.vat < n) && decide (t.pre = s.balances t.vat))
+
+-- A joint checker that lets one vat sign twice.
+#tooth Obend.Polis.JointCoReceipt.duplicate_vat_refused by mutation
+  Obend.Polis.JointCoReceipt.vatsDistinct := fun _ => true
+
+-- With one vat signing twice the ledger's total is not conserved.
+#tooth Obend.Polis.JointCoReceipt.jointTrace_conserves_total_balance by mutation
+  Obend.Polis.JointCoReceipt.vatsDistinct := fun _ => true
+
+-- A step that takes a receipt's word for the balance before.
+#tooth Obend.Polis.JointCoReceipt.unbound_pre_refused by mutation
+  Obend.Polis.JointCoReceipt.stepOk := fun n s shared legs =>
+    checkJoint shared legs && !s.seen.contains (turnKey shared) &&
+      legs.all (fun t => decide (t.vat < n))
+
+-- A receipt allowed to end below zero.
+#tooth Obend.Polis.JointCoReceipt.overdraft_refused by mutation
+  Obend.Polis.JointCoReceipt.LocalTurn.valid := fun t =>
+    decide (t.post = t.pre + t.half) && decide (0 ≤ t.pre)
+
+-- The same receipt, across a trace.
+#tooth Obend.Polis.JointCoReceipt.jointTrace_no_overdraft by mutation
+  Obend.Polis.JointCoReceipt.LocalTurn.valid := fun t =>
+    decide (t.post = t.pre + t.half) && decide (0 ≤ t.pre)
+
+-- A receipt digest that forgets which turn the receipt belongs to.
+#tooth Obend.Polis.JointCoReceipt.coReceiptDigest_binds by mutation
+  Obend.Polis.JointCoReceipt.LocalTurn.receiptBytes := fun t => encodeFields [t.legBytes]
 
 -- Port tables that are never checked for a repeated id.
 #tooth Obend.Polis.JointCoReceipt.promise_hole_no_double_fill by mutation
@@ -453,7 +613,12 @@ example (env : WireEnv) (shared : ByteArray) (a b : CoReceipt) (f g : FulfillPor
 #print axioms Obend.Polis.PrivatePredicate.verifyDischarge_iff
 #print axioms Obend.Polis.PrivatePredicate.unbound_or_wrong_parent_refused
 #print axioms Obend.Polis.JointCoReceipt.tensor_not_final
+#print axioms Obend.Polis.JointCoReceipt.coReceiptDigest_binds
+#print axioms Obend.Polis.JointCoReceipt.stepJoint_refines_floorBook
+#print axioms Obend.Polis.JointCoReceipt.stepJoint_complete
 #print axioms Obend.Polis.JointCoReceipt.jointTrace_conserves_total_balance
+#print axioms Obend.Polis.JointCoReceipt.jointTrace_no_overdraft
+#print axioms Obend.Polis.JointCoReceipt.jointTrace_preserves_floors
 #print axioms Obend.Polis.JointCoReceipt.composeCoReceipts_closed_sound
 
 #assert_axioms_tree

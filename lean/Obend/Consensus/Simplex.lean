@@ -17,7 +17,7 @@ and vote-carrying accountable slashing receipts (`SlashingReceipt.checks`) live 
 `Obend.Consensus.SimplexProtocol`.
 -/
 
-@[expose] public section
+public section
 
 namespace Obend.Consensus.Simplex
 
@@ -35,18 +35,20 @@ structure Config where
   timeout : Nat
   pumpBudget : Nat := 64
   backoffCap : Nat := 0
-  deriving DecidableEq, BEq, Repr, Inhabited
+  deriving Repr, Inhabited
 
-def Config.wellFormed (c : Config) : Bool :=
+deriving instance @[expose] DecidableEq, BEq for Config
+
+@[expose] def Config.wellFormed (c : Config) : Bool :=
   c.parties == 3 * c.faults + 1 && c.timeout > 0 && c.pumpBudget > 0
 
-def Config.quorum (c : Config) : Nat := 2 * c.faults + 1
+@[expose] def Config.quorum (c : Config) : Nat := 2 * c.faults + 1
 
-def Config.leader (c : Config) (view : View) : NodeId :=
+@[expose] def Config.leader (c : Config) (view : View) : NodeId :=
   (view - 1) % c.parties
 
 /-- Exponential view timeout: doubles with each view entered without commit, capped by `backoffCap`. -/
-def viewTimeout (baseTimeout : Nat) (viewsSinceCommit : Nat) (backoffCap : Nat) : Nat :=
+@[expose] def viewTimeout (baseTimeout : Nat) (viewsSinceCommit : Nat) (backoffCap : Nat) : Nat :=
   baseTimeout * (2 ^ (min viewsSinceCommit backoffCap))
 
 /-! ## 2. Quorum Intersection & Safety Combinatorics -/

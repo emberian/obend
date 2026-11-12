@@ -1,37 +1,47 @@
 module
 /-
-# Obend.Consensus.SimplexLiveness — Authenticated Sender Signatures, View Timers & GST Liveness
+# Obend.Consensus.SimplexLiveness — signed senders, slot keys, and the timed network
 
-Closes the three protocol assumptions noted in `Obend.Consensus.SimplexProtocol` (`line 32`):
-1. **Cryptographic Sender Authentication (`SignedSimplexMsg`, `verifySignedSent`, `extractForgedVoteSignature`)**:
-   - Binds `(signerPk, sender, view, kind, target)` into an injective, domain-framed byte preimage
-     (`encodeSignablePreimage`, `signableByteArray_injective`) verified by 32-byte signatures
-     (`SignatureScheme`, `KeyDirectory`) without inspecting the ghost `Protocol.faulty` predicate.
-   - Constructively extracts (`0 Classical.choice`) `PSum` between:
-     (a) `AuthenticatedReachWitness`: a valid `SimplexProtocol.Reach` trace where faulty behavior
-         (`Step.inject`) is confined exclusively to messages signed under faulty committee keys, OR
-     (b) `EufCmaForgeryWitness`: an existential signature forgery on a fresh byte preimage against
-         an honest committee validator's public key.
-   - Connects directly to `Obend.Judge.Computational` (`commitSlotSigScheme`,
-     `forgedVoteSignature_reduces_to_hashCollision`, `signedSimplexCompJudge`), reducing any slot
-     forgery to `BreakWitness (.hashCollision256 H maxBytes)`.
-2. **Explicit View Timers & Pre-GST / Faulty-Leader View-Advance Progress
-   (`pre_gst_or_faulty_leader_advances_view`)**:
-   - Proves `honestMembers_length_ge_quorum` (`2f + 1 ≤ |honestMembers P|`) and `chainNotarized_snoc_dummy`.
-   - Proves that in any view `v ≥ 1` extending a notarized `v - 1` prefix `p`, whenever honest
-     nodes either reach block notarization or reach timeout without honest block votes (including
-     any view with a silent or invalid faulty leader), constructive honest step scheduling reaches a
-     valid view-`v` entry (`ChainNotarized P sent' (p ++ [e])` of length `v`), preventing deadlock.
-3. **Post-GST Partial Synchrony One-View Finalization
-   (`gst_honest_leader_finalizes`, `gst_honest_leader_finalizes_in_view`)**:
-   - Models `GST`, post-GST network delay bound `deltaNet`, and exponential view timers
-     (`Simplex.viewTimeout`, `2 * deltaNet < deltaTimer`).
-   - Proves that in any view `v ≥ 1` entered at `t₀ ≥ GST` with an honest leader `L = P.leader v`
-     where honest nodes enter view `v` within `deltaNet` and `2 * deltaNet < deltaTimer`, every
-     honest node receives `L`'s proposal strictly before its view timer expires, zero honest nodes
-     cast `.dummy v`, all `≥ 2f + 1` honest nodes vote for `L`'s block `b`, `NotarizedBlock` forms,
-     all `≥ 2f + 1` honest nodes cast `.finalize`, and a checking `FinCert` (`Finalized P sent' v b`)
-     is guaranteed in that single view `v`.
+`Obend.Consensus.SimplexProtocol` takes a message's sender as its signer and has no clock. This
+module supplies both.
+
+1. **The signed wire.** `encodeSignablePreimage` frames `(sender, view, kind, target)` under a
+   domain tag, each chain entry by `Entry.encode` (8-byte view, 32-byte payload), so a block
+   payload is a full 256-bit digest on the wire and `signableByteArray_injective` reads every
+   canonical message back. `verifySignedSent` checks a trace against a committee roster and a
+   `KeyDirectory` without reading the ghost `Protocol.faulty`.
+2. **The extractor.** `extractForgedVoteSignature` turns an accepted signed trace into either a
+   `SimplexProtocol.Reach` run in which only faulty senders break the honest rule, or an
+   `EufCmaForgeryWitness`: an accepted signature, under an honest validator's key, on a message
+   that validator never signed.
+3. **Slot keys for a whole committee.** A `KeyDirectory` holds one key per validator and slot
+   `(view, kind)`. `commitSlotSigScheme` is a one-time commitment scheme over a byte hash `H`: an
+   honest slot key is `H` of the framed content of that slot (the one message its owner signs
+   there, or the empty slot) and a salt; a signature opens it. The key does not occur in what is
+   signed and no validator's key depends on another's, so `HonestSlotKeys` holds for any number of
+   honest validators (`KeyDirectory.derive_honestSlotKeys`; witnessed below with four validators,
+   three honest). A forgery against
+   any honest validator is a second opening of its slot key:
+   `forgedSignature_reduces_to_hashCollision` returns the two preimages. What the scheme asks of
+   its setting: a slot key is published with knowledge of the slot's message (commit, then
+   reveal), so the directory is an authenticated registry, not a long-lived key.
+4. **The timed network.** `NetState` is a clock, the timestamped message log, per-node
+   deliveries and view-entry times. `netStep` runs one `NetEvent`: the adversary delivers any sent
+   message to any node in any order, injects any message from a faulty sender at any time, and
+   decides when the clock ticks; an honest node sends by the protocol rule judged on its own
+   deliveries (`honestSendOk`). The clock may tick only from a `settledB` state: every message
+   whose deadline `max sendTime gst + deltaNet` has come is delivered to every honest node, and no
+   honest node is sitting on a block vote or a finalize vote its deliveries enable. Every run
+   projects to `SimplexProtocol.Reach` (`runNet_reach`).
+   `gst_honest_leader_finalizes`: once a view with an honest leader is launched after GST
+   (`ViewLaunched`), every event list whatever, once its clock has passed `2 * deltaNet`, has the
+   leader's block finalized, with no honest dummy vote.
+
+Not proved here: progress through a view whose leader is faulty. `SimplexProtocol.Step.vote` lets
+a node vote once per view, for a block or for the dummy; a faulty leader that shows its proposal
+to some honest nodes only can split the honest votes so that neither is notarized. The Simplex of
+Chan and Pass lets a node vote for the dummy after a block vote and forbids finalizing after a
+dummy vote; that rule change belongs to `SimplexProtocol`'s invariant.
 -/
 
 public import Obend.Consensus.Simplex
@@ -44,7 +54,7 @@ public import Obend.Digest.HashBytes
 public section
 namespace Obend.Consensus.SimplexLiveness
 
-open Obend.Consensus.Simplex (NodeId list_filter_sub nodup_filter_simplex viewTimeout)
+open Obend.Consensus.Simplex (NodeId list_filter_sub)
 open Obend.Consensus.SimplexProtocol
 open Obend.Consensus.SimplexTrace (entryNotarizedB chainNotarizedB voteRuleB voteRuleB_sound)
 open Obend.Digest
@@ -53,24 +63,19 @@ open Obend.Judge.Computational (AssumptionSet BreakWitness HashCollisionWitness 
 
 set_option autoImplicit false
 
-/-! ## 1. Domain-Framed Canonical Preimages & Constructive Injectivity -/
+/-! ## 1. Domain-framed canonical preimages -/
 
 /-- Domain separator tag for authenticated Simplex protocol messages (21 ASCII bytes). -/
 def simplexAuthDomainBytes : List UInt8 :=
   [0x4F, 0x42, 0x45, 0x4E, 0x44, 0x2D, 0x53, 0x49, 0x4D, 0x50, 0x4C,
    0x45, 0x58, 0x2D, 0x41, 0x55, 0x54, 0x48, 0x2D, 0x56, 0x31]
 
-/-- 64-bit canonical scalar bound (`256 ^ 8 = 2 ^ 64`) for 8-byte big-endian framing. -/
+/-- 64-bit scalar bound (`256 ^ 8`) for 8-byte big-endian framing of senders, views and lengths. -/
 @[expose] def FieldBound64 : Nat := 256 ^ 8
 
-/-- Canonical width check for a `SimplexProtocol.Entry`. -/
-def entryCanonical : Entry → Bool
-  | .block v payload => decide (v < FieldBound64) && decide (payload < FieldBound64)
-  | .dummy v         => decide (v < FieldBound64)
-
-/-- Canonical width check for a `SimplexProtocol.Target`. -/
+/-- Canonical width check for a `SimplexProtocol.Target`: every entry fits `Entry.encode`. -/
 def targetCanonical : Target → Bool
-  | .block c => c.all entryCanonical
+  | .block c => c.all Entry.canonical
   | .dummy v => decide (v < FieldBound64)
 
 /-- Canonical width check for a `SimplexProtocol.Msg`. -/
@@ -79,50 +84,15 @@ def msgCanonical (m : Msg) : Bool :=
   decide (m.view < FieldBound64) &&
   targetCanonical m.target
 
-/-- Fixed 17-byte canonical encoding of a `SimplexProtocol.Entry`. -/
-def encodeEntry17 : Entry → List UInt8
-  | .block v payload => (0x01 : UInt8) :: (HashBytes.be 8 v ++ HashBytes.be 8 payload)
-  | .dummy v         => (0x00 : UInt8) :: (HashBytes.be 8 v ++ HashBytes.be 8 0)
-
-theorem encodeEntry17_length (e : Entry) : (encodeEntry17 e).length = 17 := by
-  cases e <;> simp [encodeEntry17, HashBytes.length_be]
-
-theorem encodeEntry17_injective {e₁ e₂ : Entry}
-    (hc₁ : entryCanonical e₁ = true)
-    (hc₂ : entryCanonical e₂ = true)
-    (hEq : encodeEntry17 e₁ = encodeEntry17 e₂) :
-    e₁ = e₂ := by
-  cases e₁ with
-  | block v₁ p₁ =>
-    cases e₂ with
-    | dummy v₂ =>
-      simp [encodeEntry17] at hEq
-    | block v₂ p₂ =>
-      simp only [entryCanonical, Bool.and_eq_true, decide_eq_true_eq] at hc₁ hc₂
-      simp only [encodeEntry17, List.cons.injEq, true_and] at hEq
-      obtain ⟨hv, hp⟩ := List.append_inj hEq (by simp [HashBytes.length_be])
-      have hvEq := HashBytes.be_injective hc₁.1 hc₂.1 hv
-      have hpEq := HashBytes.be_injective hc₁.2 hc₂.2 hp
-      rw [hvEq, hpEq]
-  | dummy v₁ =>
-    cases e₂ with
-    | block v₂ p₂ =>
-      simp [encodeEntry17] at hEq
-    | dummy v₂ =>
-      simp only [entryCanonical, decide_eq_true_eq] at hc₁ hc₂
-      simp only [encodeEntry17, List.cons.injEq, true_and] at hEq
-      obtain ⟨hv, _⟩ := List.append_inj hEq (by simp [HashBytes.length_be])
-      rw [HashBytes.be_injective hc₁ hc₂ hv]
-
-/-- Prefix-free recursive byte encoding of a `SimplexProtocol.Chain`. -/
+/-- Prefix-free recursive byte encoding of a `SimplexProtocol.Chain`, 41 bytes per entry. -/
 def encodeChainBytes : Chain → List UInt8
   | []      => [0x00]
-  | e :: es => (0x01 : UInt8) :: (encodeEntry17 e ++ encodeChainBytes es)
+  | e :: es => (0x01 : UInt8) :: (e.encode ++ encodeChainBytes es)
 
 theorem encodeChainBytes_append_injective :
     ∀ {c₁ c₂ : Chain} {rest₁ rest₂ : List UInt8},
-      c₁.all entryCanonical = true →
-      c₂.all entryCanonical = true →
+      c₁.all Entry.canonical = true →
+      c₂.all Entry.canonical = true →
       encodeChainBytes c₁ ++ rest₁ = encodeChainBytes c₂ ++ rest₂ →
       c₁ = c₂ ∧ rest₁ = rest₂
   | [], [], rest₁, rest₂, _, _, hEq => by
@@ -136,10 +106,10 @@ theorem encodeChainBytes_append_injective :
     simp only [List.all_cons, Bool.and_eq_true] at hc₁ hc₂
     simp only [encodeChainBytes, List.cons_append, List.cons.injEq, true_and,
       List.append_assoc] at hEq
-    have hLen : (encodeEntry17 e₁).length = (encodeEntry17 e₂).length := by
-      rw [encodeEntry17_length, encodeEntry17_length]
+    have hLen : e₁.encode.length = e₂.encode.length := by
+      rw [Entry.encode_length, Entry.encode_length]
     obtain ⟨hE, hTail⟩ := List.append_inj hEq hLen
-    have heEq := encodeEntry17_injective hc₁.1 hc₂.1 hE
+    have heEq := Entry.encode_injective hc₁.1 hc₂.1 hE
     obtain ⟨hesEq, hRestEq⟩ := encodeChainBytes_append_injective hc₁.2 hc₂.2 hTail
     exact ⟨by rw [heEq, hesEq], hRestEq⟩
 
@@ -196,77 +166,73 @@ theorem frameBytes64_append_injective {a₁ a₂ b₁ b₂ : List UInt8}
   have hLenEq : a₁.length = a₂.length := HashBytes.be_injective ha₁ ha₂ hLenBe
   exact List.append_inj hRest hLenEq
 
-/-- Complete domain-separated, length-framed signable preimage binding
-    `(simplexAuthDomainBytes, signerPk, sender, view, kind, target)`. -/
-def encodeSignablePreimage (signerPk : BitVec 256) (m : Msg) : List UInt8 :=
+/-- The signed bytes of a message: `(simplexAuthDomainBytes, sender, view, kind, target)`, the
+    domain length-framed and every field at a fixed width or prefix-free. No key occurs in them. -/
+def encodeSignablePreimage (m : Msg) : List UInt8 :=
   frameBytes64 simplexAuthDomainBytes ++
-    (HashBytes.be 32 signerPk.toNat ++
-      (HashBytes.be 8 m.sender ++
-        (HashBytes.be 8 m.view ++
-          ([encodeKindByte m.kind] ++ encodeTargetBytes m.target))))
+    (HashBytes.be 8 m.sender ++
+      (HashBytes.be 8 m.view ++
+        ([encodeKindByte m.kind] ++ encodeTargetBytes m.target)))
 
-/-- Canonical `ByteArray` signable payload passed to 32-byte signature verifiers. -/
-def signableByteArray (signerPk : BitVec 256) (m : Msg) : ByteArray :=
-  bytesOfList (encodeSignablePreimage signerPk m)
+/-- The signed bytes as the `ByteArray` a signature verifier reads. -/
+def signableByteArray (m : Msg) : ByteArray :=
+  bytesOfList (encodeSignablePreimage m)
 
 private theorem pow_256_32_eq_pow_2_256 : (256 : Nat) ^ 32 = 2 ^ 256 := by decide
 
-/-- **Constructive Preimage Bijection (`encodeSignablePreimage_injective`)**:
-    Every field `(signerPk, sender, view, kind, target)` is recovered uniquely from
-    `encodeSignablePreimage`, preventing cross-view, cross-kind, or cross-target signature replay. -/
-theorem encodeSignablePreimage_injective
-    {pk₁ pk₂ : BitVec 256} {m₁ m₂ : Msg}
+/-- **The signed bytes determine the message**: sender, view, kind and target (every block payload
+    at its full 256 bits) are read back, so a signature does not carry over to another view, kind
+    or target. -/
+theorem encodeSignablePreimage_injective {m₁ m₂ : Msg}
     (hc₁ : msgCanonical m₁ = true)
     (hc₂ : msgCanonical m₂ = true)
-    (hEq : encodeSignablePreimage pk₁ m₁ = encodeSignablePreimage pk₂ m₂) :
-    pk₁ = pk₂ ∧ m₁ = m₂ := by
+    (hEq : encodeSignablePreimage m₁ = encodeSignablePreimage m₂) :
+    m₁ = m₂ := by
   unfold encodeSignablePreimage at hEq
   have hDomLen : simplexAuthDomainBytes.length < FieldBound64 := by decide
-  obtain ⟨_, h1⟩ := frameBytes64_append_injective hDomLen hDomLen hEq
-  obtain ⟨hPkBe, h2⟩ := List.append_inj h1 (by simp [HashBytes.length_be])
+  obtain ⟨_, h2⟩ := frameBytes64_append_injective hDomLen hDomLen hEq
   obtain ⟨hSenderBe, h3⟩ := List.append_inj h2 (by simp [HashBytes.length_be])
   obtain ⟨hViewBe, h4⟩ := List.append_inj h3 (by simp [HashBytes.length_be])
   simp only [List.singleton_append, List.cons.injEq] at h4
   obtain ⟨hKindByte, hTargetBytes⟩ := h4
   simp only [msgCanonical, Bool.and_eq_true, decide_eq_true_eq] at hc₁ hc₂
-  have hPk₁ : pk₁.toNat < 256 ^ 32 := pow_256_32_eq_pow_2_256 ▸ pk₁.isLt
-  have hPk₂ : pk₂.toNat < 256 ^ 32 := pow_256_32_eq_pow_2_256 ▸ pk₂.isLt
-  have hPkEq : pk₁ = pk₂ := BitVec.eq_of_toNat_eq (HashBytes.be_injective hPk₁ hPk₂ hPkBe)
   have hSenderEq : m₁.sender = m₂.sender := HashBytes.be_injective hc₁.1.1 hc₂.1.1 hSenderBe
   have hViewEq : m₁.view = m₂.view := HashBytes.be_injective hc₁.1.2 hc₂.1.2 hViewBe
   have hKindEq : m₁.kind = m₂.kind := encodeKindByte_injective hKindByte
   have hTargetEq : m₁.target = m₂.target := encodeTargetBytes_injective hc₁.2 hc₂.2 hTargetBytes
-  refine ⟨hPkEq, ?_⟩
   cases m₁; cases m₂
   simp only at hSenderEq hViewEq hKindEq hTargetEq
   rw [hSenderEq, hViewEq, hKindEq, hTargetEq]
 
-theorem signableByteArray_injective
-    {pk₁ pk₂ : BitVec 256} {m₁ m₂ : Msg}
+theorem signableByteArray_injective {m₁ m₂ : Msg}
     (hc₁ : msgCanonical m₁ = true)
     (hc₂ : msgCanonical m₂ = true)
-    (hEq : signableByteArray pk₁ m₁ = signableByteArray pk₂ m₂) :
-    pk₁ = pk₂ ∧ m₁ = m₂ := by
-  have hList : (signableByteArray pk₁ m₁).data.toList = (signableByteArray pk₂ m₂).data.toList :=
+    (hEq : signableByteArray m₁ = signableByteArray m₂) :
+    m₁ = m₂ := by
+  have hList : (signableByteArray m₁).data.toList = (signableByteArray m₂).data.toList :=
     congrArg (fun b => b.data.toList) hEq
   unfold signableByteArray at hList
   rw [bytesOfList_toList, bytesOfList_toList] at hList
   exact encodeSignablePreimage_injective hc₁ hc₂ hList
 
-/-! ## 2. Cryptographic Sender Authentication (`SignedSimplexMsg`, `verifySignedSent`, `extractForgedVoteSignature`) -/
+/-! ## 2. Signed traces and the forgery extractor -/
 
-/-- Committee public-key directory mapping each validator `NodeId` to its 256-bit verification key. -/
+/-- The committee's key directory: one 256-bit verification key per validator and slot
+    `(view, kind)`. -/
 structure KeyDirectory where
-  pubKey : NodeId → BitVec 256
+  pubKey : NodeId → Nat → Kind → BitVec 256
 
-/-- 256-bit / 32-byte digital signature verifier interface over `ByteArray` payloads. -/
+/-- The key a message is verified under: its sender's key for its `(view, kind)` slot. -/
+def KeyDirectory.slotKey (K : KeyDirectory) (m : Msg) : BitVec 256 :=
+  K.pubKey m.sender m.view m.kind
+
+/-- A signature verifier: key, signed bytes, signature. -/
 structure SignatureScheme where
   verifySig : BitVec 256 → ByteArray → ByteArray → Bool
 
-/-- Authenticated Simplex wire message carrying `msg : Msg`, 256-bit `signerPk`, and 32-byte `signature`. -/
+/-- A message on the authenticated wire, with its 32-byte signature. -/
 structure SignedSimplexMsg where
   msg       : Msg
-  signerPk  : BitVec 256
   signature : ByteArray
   deriving DecidableEq
 
@@ -277,15 +243,15 @@ abbrev SignedSent := List SignedSimplexMsg
 def projectSignedSent (tr : SignedSent) : Sent :=
   (tr.map SignedSimplexMsg.msg).reverse
 
-/-- Verify a single `SignedSimplexMsg` against committee roster and `KeyDirectory` (without
-    consulting the ghost `Protocol.faulty` predicate!). -/
+/-- Verify one signed message against the committee roster and the `KeyDirectory`: a committee
+    sender, canonical widths (a block payload below `2 ^ 256`), a 32-byte signature, and the
+    signature accepted under the sender's slot key. `Protocol.faulty` is not consulted. -/
 def verifySignedMsg (S : SignatureScheme) (K : KeyDirectory)
     (committee : List NodeId) (sm : SignedSimplexMsg) : Bool :=
   committee.contains sm.msg.sender &&
   msgCanonical sm.msg &&
-  decide (sm.signerPk = K.pubKey sm.msg.sender) &&
   decide (sm.signature.size = 32) &&
-  S.verifySig sm.signerPk (signableByteArray sm.signerPk sm.msg) sm.signature
+  S.verifySig (K.slotKey sm.msg) (signableByteArray sm.msg) sm.signature
 
 /-- Streaming verifier over `SignedSent`: enforces non-replay (`!seen.contains sm.msg`) and
     32-byte cryptographic signature authentication on every message. -/
@@ -343,40 +309,36 @@ theorem checkHonestProtocolRule_step {P : Protocol} {sent : Sent} {m : Msg}
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hk
       exact Step.finalize sent sender view c hn hk.1 hk.2
 
-/-- Constructive EUF-CMA signature forgery witness extracted whenever a verified `SignedSent`
-    contains a protocol-violating message attributed to an uncorrupted honest validator. -/
+
+/-- A forgery: a signature accepted under an honest validator's slot key on a canonical message
+    that validator's signing log does not contain. -/
 structure EufCmaForgeryWitness (S : SignatureScheme) (K : KeyDirectory)
     (P : Protocol) (honestOracleLog : List Msg) where
   forgedMsg      : SignedSimplexMsg
   honestTarget   : P.honest forgedMsg.msg.sender
-  pkBound        : forgedMsg.signerPk = K.pubKey forgedMsg.msg.sender
+  canonical      : msgCanonical forgedMsg.msg = true
   sigWidth32     : forgedMsg.signature.size = 32
-  sigAccepted    : S.verifySig forgedMsg.signerPk
-                     (signableByteArray forgedMsg.signerPk forgedMsg.msg)
-                     forgedMsg.signature = true
+  sigAccepted    : S.verifySig (K.slotKey forgedMsg.msg)
+                     (signableByteArray forgedMsg.msg) forgedMsg.signature = true
   unqueriedMsg   : forgedMsg.msg ∉ honestOracleLog
-  freshPreimage  : ∀ q ∈ honestOracleLog, msgCanonical q = true →
-                     signableByteArray forgedMsg.signerPk forgedMsg.msg ≠
-                       signableByteArray (K.pubKey q.sender) q
 
-/-- Certified projection of a verified `SignedSent` into `SimplexProtocol.Reach` + `Inv`,
-    proving that every non-honest-rule message injection carries a valid 32-byte signature
-    under a faulty committee member's own key! -/
+/-- A verified `SignedSent` read as a `SimplexProtocol.Reach` run: every message carries an
+    accepted 32-byte signature under its sender's slot key, and a message that breaks the honest
+    rule comes from a faulty sender. -/
 structure AuthenticatedReachWitness (P : Protocol) (S : SignatureScheme)
     (K : KeyDirectory) (seen : Sent) (tr : SignedSent) : Prop where
   reach : Reach P ((tr.map SignedSimplexMsg.msg).reverse ++ seen)
   allAuthenticated : ∀ sm ∈ tr,
     sm.msg.sender ∈ P.committee ∧
-    sm.signerPk = K.pubKey sm.msg.sender ∧
     sm.signature.size = 32 ∧
-    S.verifySig sm.signerPk (signableByteArray sm.signerPk sm.msg) sm.signature = true
+    S.verifySig (K.slotKey sm.msg) (signableByteArray sm.msg) sm.signature = true
   faultyOnlyInject : ∀ (pre : SignedSent) (sm : SignedSimplexMsg) (suf : SignedSent),
     tr = pre ++ sm :: suf →
     checkHonestProtocolRule P ((pre.map SignedSimplexMsg.msg).reverse ++ seen) sm.msg = false →
-    P.faulty sm.msg.sender = true ∧ sm.signerPk = K.pubKey sm.msg.sender
+    P.faulty sm.msg.sender = true
 
-/-- Honest signing-oracle discipline: honest nodes sign only messages obeying `checkHonestProtocolRule`
-    when causally delivered in `tr`. -/
+/-- Honest signing-oracle discipline: an honest node signs only messages that obey
+    `checkHonestProtocolRule` at the point they appear in `tr`. -/
 def HonestSigningOracle (P : Protocol) (seen : Sent)
     (honestOracleLog : List Msg) (tr : SignedSent) : Prop :=
   ∀ (pre : SignedSent) (sm : SignedSimplexMsg) (suf : SignedSent),
@@ -390,14 +352,39 @@ private theorem verifySignedMsg_dest {S : SignatureScheme} {K : KeyDirectory}
     (h : verifySignedMsg S K committee sm = true) :
     sm.msg.sender ∈ committee ∧
     msgCanonical sm.msg = true ∧
-    sm.signerPk = K.pubKey sm.msg.sender ∧
     sm.signature.size = 32 ∧
-    S.verifySig sm.signerPk (signableByteArray sm.signerPk sm.msg) sm.signature = true := by
+    S.verifySig (K.slotKey sm.msg) (signableByteArray sm.msg) sm.signature = true := by
   unfold verifySignedMsg at h
   simp only [Bool.and_eq_true, List.contains_iff_mem, decide_eq_true_eq] at h
-  exact ⟨h.1.1.1.1, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩
+  exact ⟨h.1.1.1, h.1.1.2, h.1.2, h.2⟩
 
-/-- Auxiliary constructive extractor walking `SignedSent` oldest-to-newest (`0 Classical.choice`). -/
+/-- One verified message, classified without `Classical.choice`: a step of the protocol (one that
+    breaks the honest rule only if its sender is faulty), or a forgery. -/
+def classifySignedMsg (S : SignatureScheme) (K : KeyDirectory) (P : Protocol)
+    (honestOracleLog : List Msg) (seen : Sent) (sm : SignedSimplexMsg) (rest : SignedSent)
+    (hVer : verifySignedMsg S K P.committee sm = true)
+    (hOracle : HonestSigningOracle P seen honestOracleLog (sm :: rest)) :
+    PSum (PLift (Step P seen (sm.msg :: seen) ∧
+                 (checkHonestProtocolRule P seen sm.msg = false → P.faulty sm.msg.sender = true)))
+         (EufCmaForgeryWitness S K P honestOracleLog) :=
+  have hMsg := verifySignedMsg_dest hVer
+  if hFaulty : P.faulty sm.msg.sender = true then
+    .inl ⟨⟨Step.inject seen sm.msg hFaulty, fun _ => hFaulty⟩⟩
+  else
+    have hHonest : P.honest sm.msg.sender := ⟨hMsg.1, Bool.eq_false_iff.2 hFaulty⟩
+    if hRule : checkHonestProtocolRule P seen sm.msg = true then
+      .inl ⟨⟨checkHonestProtocolRule_step hHonest hRule, fun hF => by rw [hRule] at hF; cases hF⟩⟩
+    else
+      .inr
+        { forgedMsg := sm
+          honestTarget := hHonest
+          canonical := hMsg.2.1
+          sigWidth32 := hMsg.2.2.1
+          sigAccepted := hMsg.2.2.2
+          unqueriedMsg := fun hIn =>
+            hRule (by simpa using hOracle [] sm rest rfl hHonest hIn) }
+
+/-- The extractor's walk over `SignedSent`, oldest message first (`0 Classical.choice`). -/
 def extractForgedVoteSignatureAux
     (S : SignatureScheme) (K : KeyDirectory) (P : Protocol)
     (honestOracleLog : List Msg) :
@@ -419,9 +406,9 @@ def extractForgedVoteSignatureAux
       unfold verifySignedSentAux at hVer
       simp only [Bool.and_eq_true] at hVer
       exact ⟨hVer.1.2, hVer.2⟩
-    let hMsg := verifySignedMsg_dest hVerParts.1
-    if hFaulty : P.faulty sm.msg.sender = true then
-      have hStep : Step P seen (sm.msg :: seen) := Step.inject seen sm.msg hFaulty
+    match classifySignedMsg S K P honestOracleLog seen sm rest hVerParts.1 hOracle with
+    | .inr forgery => .inr forgery
+    | .inl ⟨⟨hStep, hInj⟩⟩ =>
       have hOracleRest : HonestSigningOracle P (sm.msg :: seen) honestOracleLog rest := by
         intro pre sm' suf hEqRest hHon' hIn'
         have hEqFull : sm :: rest = (sm :: pre) ++ sm' :: suf := by simp [hEqRest]
@@ -431,12 +418,13 @@ def extractForgedVoteSignatureAux
               (sm.msg :: seen) rest (Reach.step hReach hStep) hVerParts.2 hOracleRest with
       | .inr forgery => .inr forgery
       | .inl wRest =>
+        have hMsg := verifySignedMsg_dest hVerParts.1
         .inl
           { reach := by simpa [List.reverse_cons, List.append_assoc] using wRest.reach
             allAuthenticated := by
               intro x hx
               rcases List.mem_cons.1 hx with rfl | hxRest
-              · exact ⟨hMsg.1, hMsg.2.2.1, hMsg.2.2.2.1, hMsg.2.2.2.2⟩
+              · exact ⟨hMsg.1, hMsg.2.2.1, hMsg.2.2.2⟩
               · exact wRest.allAuthenticated x hxRest
             faultyOnlyInject := by
               intro pre x suf hSplit hRuleFalse
@@ -444,77 +432,16 @@ def extractForgedVoteSignatureAux
               | nil =>
                 simp only [List.nil_append, List.cons.injEq] at hSplit
                 rcases hSplit with ⟨rfl, _⟩
-                exact ⟨hFaulty, hMsg.2.2.1⟩
+                exact hInj (by simpa using hRuleFalse)
               | cons p ps =>
                 simp only [List.cons_append, List.cons.injEq] at hSplit
                 rcases hSplit with ⟨rfl, hRestSplit⟩
-                have hRuleRest :
-                    checkHonestProtocolRule P
-                      ((ps.map SignedSimplexMsg.msg).reverse ++ (sm.msg :: seen)) x.msg = false := by
-                  simpa [List.reverse_cons, List.append_assoc] using hRuleFalse
-                exact wRest.faultyOnlyInject ps x suf hRestSplit hRuleRest }
-    else
-      have hFaultyFalse : P.faulty sm.msg.sender = false :=
-        Bool.eq_false_iff.2 hFaulty
-      have hHonest : P.honest sm.msg.sender := ⟨hMsg.1, hFaultyFalse⟩
-      if hRule : checkHonestProtocolRule P seen sm.msg = true then
-        have hStep : Step P seen (sm.msg :: seen) :=
-          checkHonestProtocolRule_step hHonest hRule
-        have hOracleRest : HonestSigningOracle P (sm.msg :: seen) honestOracleLog rest := by
-          intro pre sm' suf hEqRest hHon' hIn'
-          have hEqFull : sm :: rest = (sm :: pre) ++ sm' :: suf := by simp [hEqRest]
-          have hRes := hOracle (sm :: pre) sm' suf hEqFull hHon' hIn'
-          simpa [List.reverse_cons, List.append_assoc] using hRes
-        match extractForgedVoteSignatureAux S K P honestOracleLog
-                (sm.msg :: seen) rest (Reach.step hReach hStep) hVerParts.2 hOracleRest with
-        | .inr forgery => .inr forgery
-        | .inl wRest =>
-          .inl
-            { reach := by simpa [List.reverse_cons, List.append_assoc] using wRest.reach
-              allAuthenticated := by
-                intro x hx
-                rcases List.mem_cons.1 hx with rfl | hxRest
-                · exact ⟨hMsg.1, hMsg.2.2.1, hMsg.2.2.2.1, hMsg.2.2.2.2⟩
-                · exact wRest.allAuthenticated x hxRest
-              faultyOnlyInject := by
-                intro pre x suf hSplit hRuleFalse
-                cases pre with
-                | nil =>
-                  simp only [List.nil_append, List.cons.injEq] at hSplit
-                  rcases hSplit with ⟨rfl, _⟩
-                  simp [hRule] at hRuleFalse
-                | cons p ps =>
-                  simp only [List.cons_append, List.cons.injEq] at hSplit
-                  rcases hSplit with ⟨rfl, hRestSplit⟩
-                  have hRuleRest :
-                      checkHonestProtocolRule P
-                        ((ps.map SignedSimplexMsg.msg).reverse ++ (sm.msg :: seen)) x.msg = false := by
-                    simpa [List.reverse_cons, List.append_assoc] using hRuleFalse
-                  exact wRest.faultyOnlyInject ps x suf hRestSplit hRuleRest }
-      else
-        have hNotQueried : sm.msg ∉ honestOracleLog := by
-          intro hIn
-          have hOk := hOracle [] sm rest rfl hHonest hIn
-          exact hRule (by simpa using hOk)
-        .inr
-          { forgedMsg := sm
-            honestTarget := hHonest
-            pkBound := hMsg.2.2.1
-            sigWidth32 := hMsg.2.2.2.1
-            sigAccepted := hMsg.2.2.2.2
-            unqueriedMsg := hNotQueried
-            freshPreimage := by
-              intro q hq hqCan hEqBytes
-              have hInj := signableByteArray_injective hMsg.2.1 hqCan hEqBytes
-              exact hNotQueried (hInj.2 ▸ hq) }
+                exact wRest.faultyOnlyInject ps x suf hRestSplit
+                  (by simpa [List.reverse_cons, List.append_assoc] using hRuleFalse) }
 
-/-- **Constructive EUF-CMA Signature Extractor (`extractForgedVoteSignature`)**:
-    Given any `SignedSent` accepted by `verifySignedSent S K P.committee tr = true`,
-    deterministically computes in `Type` (`0 Classical.choice`) either:
-    - a certified `SimplexProtocol.Reach P (projectSignedSent tr)` witness proving faulty
-      injections occur exclusively under faulty committee keys, OR
-    - an explicit `EufCmaForgeryWitness` on a fresh domain-framed byte preimage against an
-      honest validator's public key! -/
+/-- **The forgery extractor.** A trace accepted by `verifySignedSent` is, constructively, either a
+    `SimplexProtocol.Reach` run in which only faulty senders break the honest rule, or a forgery
+    against an honest validator's slot key. -/
 def extractForgedVoteSignature
     (S : SignatureScheme) (K : KeyDirectory) (P : Protocol)
     (honestOracleLog : List Msg) (tr : SignedSent)
@@ -531,16 +458,13 @@ def extractForgedVoteSignature
       simpa [projectSignedSent] using w.reach
     .inl ⟨⟨hReachProj, reach_inv hReachProj, w⟩⟩
 
-/-- Unforgeable `SignatureScheme` assumption predicate relative to an honest signing oracle log:
-    no adversary produces a valid `EufCmaForgeryWitness`. -/
+/-- No forgery exists against the honest signing log. -/
 def SignatureUnforgeable (S : SignatureScheme) (K : KeyDirectory)
     (P : Protocol) (honestOracleLog : List Msg) : Prop :=
   ¬ Nonempty (EufCmaForgeryWitness S K P honestOracleLog)
 
-/-- **Authenticated Simplex Safety Projection (`verifySignedSent_projects_to_reach`)**:
-    Under `SignatureUnforgeable`, every network trace accepted by `verifySignedSent` projects to
-    a valid `SimplexProtocol.Reach` trace satisfying `Inv P` and `FinCert` height uniqueness, where
-    faulty nodes can ONLY inject messages signed under their own faulty keys! -/
+/-- Under `SignatureUnforgeable`, every trace accepted by `verifySignedSent` projects to a
+    `SimplexProtocol.Reach` run satisfying `Inv`, in which only faulty senders inject. -/
 theorem verifySignedSent_projects_to_reach
     (S : SignatureScheme) (K : KeyDirectory) (P : Protocol)
     (honestOracleLog : List Msg) (tr : SignedSent)
@@ -554,7 +478,7 @@ theorem verifySignedSent_projects_to_reach
   | inl w => exact w.down
   | inr forgery => exact False.elim (hUnforge ⟨forgery⟩)
 
-/-! ### 2B. Concrete `ComputationalJudge` Bridge (`commitSlotSigScheme`, `signedSimplexCompJudge`) -/
+/-! ## 3. Slot keys: a one-time commitment scheme for the whole committee -/
 
 private theorem ofBE_lt_two_pow_256_of_length_32 {bs : List UInt8} (h : bs.length = 32) :
     HashBytes.ofBE bs < 2 ^ 256 := by
@@ -562,172 +486,190 @@ private theorem ofBE_lt_two_pow_256_of_length_32 {bs : List UInt8} (h : bs.lengt
   rw [h, pow_256_32_eq_pow_2_256] at hlt
   exact hlt
 
-private theorem byteArray_eq_of_toList_eq {x y : ByteArray}
-    (h : x.data.toList = y.data.toList) : x = y := by
-  cases x with | mk dx =>
-  cases y with | mk dy =>
-  exact congrArg ByteArray.mk (Array.ext' h)
+/-- What a slot key commits to: the one message its owner signs in the slot, or the empty slot.
+    The tag byte keeps the two apart. -/
+def slotContent : Option Msg → List UInt8
+  | some m => (0x01 : UInt8) :: encodeSignablePreimage m
+  | none => [0x00]
 
-/-- Salted 256-bit hash-commitment slot signature scheme backed by `HashBytes.Hash`:
-    public key commits to `H (frameBytes64 signableBytes ++ salt32)`, so verifying a distinct
-    message under the same slot public key constructively exhibits a 256-bit hash collision! -/
-def slotSigPreimage (msgBytes : ByteArray) (sigSalt32 : ByteArray) : List UInt8 :=
-  frameBytes64 msgBytes.data.toList ++ sigSalt32.data.toList
+/-- The hashed preimage of a slot key: the length-framed slot content, then the salt. -/
+def slotSigPreimage (content : List UInt8) (salt32 : ByteArray) : List UInt8 :=
+  frameBytes64 content ++ salt32.data.toList
 
-def deriveSlotPubKey (H : HashBytes.Hash) (authorizedMsgBytes : ByteArray)
-    (secretSalt32 : ByteArray) : BitVec 256 :=
-  BitVec.ofNat 256 (HashBytes.ofBE (H (slotSigPreimage authorizedMsgBytes secretSalt32)))
+/-- The message an honest validator signs in slot `(n, v, k)`: the first one in its signing log. -/
+def honestSlotMsg (log : List Msg) (n : NodeId) (v : Nat) (k : Kind) : Option Msg :=
+  log.find? (fun q => q.sender == n && q.view == v && q.kind == k)
 
+/-- A slot key: the 256-bit hash of the slot's framed content and a salt. -/
+def deriveSlotPubKey (H : HashBytes.Hash) (content : Option Msg) (salt32 : ByteArray) : BitVec 256 :=
+  BitVec.ofNat 256 (HashBytes.ofBE (H (slotSigPreimage (slotContent content) salt32)))
+
+/-- The slot commitment scheme: a signature on `msgBytes` is a 32-byte salt that opens the slot
+    key to `msgBytes` as the slot's (non-empty) content. -/
 def commitSlotSigScheme (H : HashBytes.Hash) (maxPreimageBytes : Nat) : SignatureScheme where
   verifySig pk msgBytes sigSalt32 :=
-    decide (msgBytes.data.toList.length < FieldBound64) &&
-    decide ((slotSigPreimage msgBytes sigSalt32).length ≤ maxPreimageBytes) &&
+    decide (msgBytes.data.toList.length + 1 < FieldBound64) &&
+    decide ((slotSigPreimage ((0x01 : UInt8) :: msgBytes.data.toList) sigSalt32).length
+      ≤ maxPreimageBytes) &&
     decide (sigSalt32.size = 32) &&
-    decide ((H (slotSigPreimage msgBytes sigSalt32)).length = 32) &&
-    decide (BitVec.ofNat 256 (HashBytes.ofBE (H (slotSigPreimage msgBytes sigSalt32))) = pk)
+    decide ((H (slotSigPreimage ((0x01 : UInt8) :: msgBytes.data.toList) sigSalt32)).length = 32) &&
+    decide (BitVec.ofNat 256
+      (HashBytes.ofBE (H (slotSigPreimage ((0x01 : UInt8) :: msgBytes.data.toList) sigSalt32))) = pk)
 
-private def slotSigCollision_of_verifySig
-    (H : HashBytes.Hash) (maxBytes : Nat)
-    (forgedBytes honBytes sigSalt32 honestSalt32 : ByteArray)
-    (hSig : (commitSlotSigScheme H maxBytes).verifySig
-              (deriveSlotPubKey H honBytes honestSalt32) forgedBytes sigSalt32 = true)
-    (hHonLen : honBytes.data.toList.length < FieldBound64)
-    (hHonBound : (slotSigPreimage honBytes honestSalt32).length ≤ maxBytes)
-    (hHonHashLen : (H (slotSigPreimage honBytes honestSalt32)).length = 32)
-    (hNeBytes : forgedBytes ≠ honBytes) :
+/-- The honest validators' slot keys are commitments: every message in the signing log is
+    canonical, and for every honest validator and every slot, used or not, the directory's key is
+    the slot key of that slot's content under the validator's salt, on a preimage `H` hashes to 32
+    bytes within `maxBytes`. Each validator's keys depend on its own slots only. -/
+def HonestSlotKeys (H : HashBytes.Hash) (maxBytes : Nat) (K : KeyDirectory) (P : Protocol)
+    (log : List Msg) (salt : NodeId → Nat → Kind → ByteArray) : Prop :=
+  (∀ q ∈ log, msgCanonical q = true) ∧
+  ∀ n, P.honest n → ∀ (v : Nat) (k : Kind),
+    K.pubKey n v k = deriveSlotPubKey H (honestSlotMsg log n v k) (salt n v k) ∧
+    (slotContent (honestSlotMsg log n v k)).length < FieldBound64 ∧
+    (slotSigPreimage (slotContent (honestSlotMsg log n v k)) (salt n v k)).length ≤ maxBytes ∧
+    (H (slotSigPreimage (slotContent (honestSlotMsg log n v k)) (salt n v k))).length = 32
+
+/-- Key generation for a whole committee: every slot key derived from the signing log and the
+    validators' salts. -/
+def KeyDirectory.derive (H : HashBytes.Hash) (log : List Msg)
+    (salt : NodeId → Nat → Kind → ByteArray) : KeyDirectory where
+  pubKey n v k := deriveSlotPubKey H (honestSlotMsg log n v k) (salt n v k)
+
+theorem slotSigPreimage_length (content : List UInt8) (salt32 : ByteArray) :
+    (slotSigPreimage content salt32).length = 8 + content.length + salt32.data.toList.length := by
+  simp [slotSigPreimage, frameBytes64, HashBytes.length_be]
+  omega
+
+/-- **Derived directories satisfy `HonestSlotKeys`**, for every committee and every set of honest
+    validators: given a 32-byte hash, a canonical signing log whose slot contents are at most `L`
+    bytes, and 32-byte salts. -/
+theorem KeyDirectory.derive_honestSlotKeys (H : HashBytes.Hash) (maxBytes L : Nat) (P : Protocol)
+    (log : List Msg) (salt : NodeId → Nat → Kind → ByteArray)
+    (hH : ∀ bs, (H bs).length = 32)
+    (hCanon : ∀ q ∈ log, msgCanonical q = true)
+    (hSalt : ∀ n v k, (salt n v k).data.toList.length = 32)
+    (hLen : ∀ q ∈ log, (slotContent (some q)).length ≤ L)
+    (hL : 1 ≤ L ∧ L < FieldBound64 ∧ 8 + L + 32 ≤ maxBytes) :
+    HonestSlotKeys H maxBytes (KeyDirectory.derive H log salt) P log salt := by
+  refine ⟨hCanon, fun n _ v k => ⟨rfl, ?_⟩⟩
+  have hc : (slotContent (honestSlotMsg log n v k)).length ≤ L := by
+    cases hq : honestSlotMsg log n v k with
+    | none => exact hL.1
+    | some q => exact hLen q (List.mem_of_find?_eq_some hq)
+  refine ⟨Nat.lt_of_le_of_lt hc hL.2.1, ?_, hH _⟩
+  rw [slotSigPreimage_length, hSalt]
+  omega
+
+/-- **A forgery against any honest validator is a hash collision.** The forged signature opens
+    the validator's slot key to a message outside its signing log; the key was made from the
+    slot's own content (another message, or the empty slot). The two preimages differ and hash
+    alike: a `HashCollisionWitness`, computed without `Classical.choice`. -/
+def forgedSignature_reduces_to_hashCollision
+    (H : HashBytes.Hash) (maxBytes : Nat) (K : KeyDirectory) (P : Protocol) (log : List Msg)
+    (salt : NodeId → Nat → Kind → ByteArray)
+    (hKeys : HonestSlotKeys H maxBytes K P log salt)
+    (w : EufCmaForgeryWitness (commitSlotSigScheme H maxBytes) K P log) :
     BreakWitness (.hashCollision256 H maxBytes) :=
+  let m := w.forgedMsg.msg
+  let forgedPre :=
+    slotSigPreimage ((0x01 : UInt8) :: (signableByteArray m).data.toList) w.forgedMsg.signature
+  let honestPre :=
+    slotSigPreimage (slotContent (honestSlotMsg log m.sender m.view m.kind))
+      (salt m.sender m.view m.kind)
+  have hSlot := hKeys.2 m.sender w.honestTarget m.view m.kind
   have hAcc :
-      forgedBytes.data.toList.length < FieldBound64 ∧
-      (slotSigPreimage forgedBytes sigSalt32).length ≤ maxBytes ∧
-      (H (slotSigPreimage forgedBytes sigSalt32)).length = 32 ∧
-      BitVec.ofNat 256 (HashBytes.ofBE (H (slotSigPreimage forgedBytes sigSalt32))) =
-        deriveSlotPubKey H honBytes honestSalt32 := by
+      (signableByteArray m).data.toList.length + 1 < FieldBound64 ∧
+      forgedPre.length ≤ maxBytes ∧
+      (H forgedPre).length = 32 ∧
+      BitVec.ofNat 256 (HashBytes.ofBE (H forgedPre)) = K.pubKey m.sender m.view m.kind := by
+    have hSig := w.sigAccepted
     unfold commitSlotSigScheme at hSig
     simp only [Bool.and_eq_true, decide_eq_true_eq] at hSig
     exact ⟨hSig.1.1.1.1, hSig.1.1.1.2, hSig.1.2, hSig.2⟩
-  have hForgedHashLt :
-      HashBytes.ofBE (H (slotSigPreimage forgedBytes sigSalt32)) < 2 ^ 256 :=
-    ofBE_lt_two_pow_256_of_length_32 hAcc.2.2.1
-  have hHonHashLt :
-      HashBytes.ofBE (H (slotSigPreimage honBytes honestSalt32)) < 2 ^ 256 :=
-    ofBE_lt_two_pow_256_of_length_32 hHonHashLen
-  have hSameOfBE :
-      HashBytes.ofBE (H (slotSigPreimage forgedBytes sigSalt32)) =
-      HashBytes.ofBE (H (slotSigPreimage honBytes honestSalt32)) := by
-    have hToNat := congrArg BitVec.toNat hAcc.2.2.2
+  have hSame : HashBytes.ofBE (H forgedPre) = HashBytes.ofBE (H honestPre) := by
+    have hToNat := congrArg BitVec.toNat (hAcc.2.2.2.trans hSlot.1)
     unfold deriveSlotPubKey at hToNat
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat,
-        Nat.mod_eq_of_lt hForgedHashLt, Nat.mod_eq_of_lt hHonHashLt] at hToNat
+        Nat.mod_eq_of_lt (ofBE_lt_two_pow_256_of_length_32 hAcc.2.2.1),
+        Nat.mod_eq_of_lt (ofBE_lt_two_pow_256_of_length_32 hSlot.2.2.2)] at hToNat
     exact hToNat
-  have hDistinctPre :
-      slotSigPreimage forgedBytes sigSalt32 ≠
-      slotSigPreimage honBytes honestSalt32 := by
+  have hDistinct : forgedPre ≠ honestPre := by
     intro hPreEq
-    obtain ⟨hPayEq, _⟩ := frameBytes64_append_injective hAcc.1 hHonLen hPreEq
-    exact hNeBytes (byteArray_eq_of_toList_eq hPayEq)
-  ({ msgA := slotSigPreimage forgedBytes sigSalt32
-     msgB := slotSigPreimage honBytes honestSalt32
+    obtain ⟨hContent, _⟩ := frameBytes64_append_injective
+      (a₁ := (0x01 : UInt8) :: (signableByteArray m).data.toList)
+      (a₂ := slotContent (honestSlotMsg log m.sender m.view m.kind)) hAcc.1 hSlot.2.1 hPreEq
+    cases hq : honestSlotMsg log m.sender m.view m.kind with
+    | none =>
+      rw [hq] at hContent
+      simp only [slotContent] at hContent
+      injection hContent with hTag _
+      exact absurd hTag (by decide)
+    | some q =>
+      rw [hq] at hContent
+      simp only [slotContent] at hContent
+      injection hContent with _ hBytes
+      have hBytes' : encodeSignablePreimage m = encodeSignablePreimage q := by
+        rw [← hBytes]
+        unfold signableByteArray
+        rw [bytesOfList_toList]
+      have hmq := encodeSignablePreimage_injective w.canonical
+        (hKeys.1 q (List.mem_of_find?_eq_some hq)) hBytes'
+      exact w.unqueriedMsg (hmq ▸ List.mem_of_find?_eq_some hq)
+  ({ msgA := forgedPre
+     msgB := honestPre
      lenA := hAcc.2.1
-     lenB := hHonBound
-     distinct := hDistinctPre
-     sameDigest := hSameOfBE } : HashCollisionWitness H maxBytes)
+     lenB := hSlot.2.2.1
+     distinct := hDistinct
+     sameDigest := hSame } : HashCollisionWitness H maxBytes)
 
-/-- **Constructive Reduction to `Obend.Judge.Computational` (`forgedVoteSignature_reduces_to_hashCollision`)**:
-    Any `EufCmaForgeryWitness` against a validator whose slot key `K.pubKey n` commits via `H` to
-    its honest message `q` constructively produces `BreakWitness (.hashCollision256 H maxBytes)`
-    (`HashCollisionWitness H maxBytes`, `0` axioms, `0 Classical.choice`)! -/
-def forgedVoteSignature_reduces_to_hashCollision
-    (H : HashBytes.Hash) (maxBytes : Nat) (K : KeyDirectory) (P : Protocol)
-    (honestMsg : Msg) (honestSalt32 : ByteArray)
-    (hHonCan : msgCanonical honestMsg = true)
-    (hHonLen : (signableByteArray (K.pubKey honestMsg.sender) honestMsg).data.toList.length < FieldBound64)
-    (hHonBound : (slotSigPreimage (signableByteArray (K.pubKey honestMsg.sender) honestMsg) honestSalt32).length ≤ maxBytes)
-    (hHonHashLen : (H (slotSigPreimage (signableByteArray (K.pubKey honestMsg.sender) honestMsg) honestSalt32)).length = 32)
-    (hPkCommit : ∀ n, P.honest n →
-      n = honestMsg.sender ∧
-      K.pubKey n = deriveSlotPubKey H (signableByteArray (K.pubKey honestMsg.sender) honestMsg) honestSalt32)
-    (w : EufCmaForgeryWitness (commitSlotSigScheme H maxBytes) K P [honestMsg]) :
-    BreakWitness (.hashCollision256 H maxBytes) :=
-  have hPkEq :
-      w.forgedMsg.signerPk =
-        deriveSlotPubKey H (signableByteArray (K.pubKey honestMsg.sender) honestMsg) honestSalt32 := by
-    rw [w.pkBound]
-    exact (hPkCommit w.forgedMsg.msg.sender w.honestTarget).2
-  have hSig :
-      (commitSlotSigScheme H maxBytes).verifySig
-        (deriveSlotPubKey H (signableByteArray (K.pubKey honestMsg.sender) honestMsg) honestSalt32)
-        (signableByteArray w.forgedMsg.signerPk w.forgedMsg.msg)
-        w.forgedMsg.signature = true := by
-    rw [← hPkEq]
-    exact w.sigAccepted
-  have hNeBytes :
-      signableByteArray w.forgedMsg.signerPk w.forgedMsg.msg ≠
-        signableByteArray (K.pubKey honestMsg.sender) honestMsg :=
-    fun hBaEq => w.freshPreimage honestMsg (List.Mem.head []) hHonCan hBaEq
-  slotSigCollision_of_verifySig H maxBytes
-    (signableByteArray w.forgedMsg.signerPk w.forgedMsg.msg)
-    (signableByteArray (K.pubKey honestMsg.sender) honestMsg)
-    w.forgedMsg.signature honestSalt32
-    hSig hHonLen hHonBound hHonHashLen hNeBytes
-
-/-- Statement object for `signedSimplexCompJudge`: committee protocol, key directory, and slot-committed honest message. -/
+/-- Statement object for `signedSimplexCompJudge`: the committee, its key directory, the honest
+    validators' signing log and salts, and the signed trace under judgment. -/
 structure SignedSlotTraceObj where
-  proto      : Protocol
-  keys       : KeyDirectory
-  honestMsg  : Msg
-  honestSalt : ByteArray
+  proto     : Protocol
+  keys      : KeyDirectory
+  honestLog : List Msg
+  salt      : NodeId → Nat → Kind → ByteArray
+  trace     : SignedSent
 
-/-- **`ComputationalJudge` Instance (`signedSimplexCompJudge`)**:
-    Verifies `verifySignedSent` on `(o : SignedSlotTraceObj)` and `(tr : SignedSent)`, constructively
-    extracting either `Reach o.proto (projectSignedSent tr)` OR `BreakWitness (.hashCollision256 H maxBytes)`. -/
+/-- **`ComputationalJudge` for signed Simplex traces.** `verify` is `verifySignedSent` under the
+    slot commitment scheme. When the honest validators sign by the rule and their slot keys are
+    commitments (`rewindValid`), an accepted trace is a `Reach` run in which only faulty senders
+    inject, or `H` is broken by an explicit collision. -/
 @[instance_reducible] def signedSimplexCompJudge (H : HashBytes.Hash) (maxBytes : Nat) :
-    ComputationalJudge SignedSlotTraceObj SignedSent where
+    ComputationalJudge SignedSlotTraceObj Unit where
   Clause := Unit
-  Meaning o := ∃ tr : SignedSent, Reach o.proto (projectSignedSent tr)
-  Witness o := { tr : SignedSent // Reach o.proto (projectSignedSent tr) }
-  witnessSound w := ⟨w.1, w.2⟩
+  Meaning o :=
+    Reach o.proto (projectSignedSent o.trace) ∧ Inv o.proto (projectSignedSent o.trace) ∧
+      AuthenticatedReachWitness o.proto (commitSlotSigScheme H maxBytes) o.keys [] o.trace
+  Witness o :=
+    PLift (Reach o.proto (projectSignedSent o.trace) ∧ Inv o.proto (projectSignedSent o.trace) ∧
+      AuthenticatedReachWitness o.proto (commitSlotSigScheme H maxBytes) o.keys [] o.trace)
+  witnessSound w := w.down
   assumptions := .hashCollision256 H maxBytes
   soundnessErr := (0, 1)
   den_pos := by decide
-  verify _ o tr :=
-    if verifySignedSent (commitSlotSigScheme H maxBytes) o.keys o.proto.committee tr &&
-       msgCanonical o.honestMsg &&
-       decide ((signableByteArray (o.keys.pubKey o.honestMsg.sender) o.honestMsg).data.toList.length < FieldBound64) &&
-       decide ((slotSigPreimage (signableByteArray (o.keys.pubKey o.honestMsg.sender) o.honestMsg) o.honestSalt).length ≤ maxBytes) &&
-       decide ((H (slotSigPreimage (signableByteArray (o.keys.pubKey o.honestMsg.sender) o.honestMsg) o.honestSalt)).length = 32)
+  verify _ o _ :=
+    if verifySignedSent (commitSlotSigScheme H maxBytes) o.keys o.proto.committee o.trace
     then .ok else .refused () []
   mono _ _ := rfl
   RewindBundle _ _ := PUnit
-  rewindValid _ o tr _ :=
-    HonestSigningOracle o.proto [] [o.honestMsg] tr ∧
-    (∀ n, o.proto.honest n →
-      n = o.honestMsg.sender ∧
-      o.keys.pubKey n =
-        deriveSlotPubKey H (signableByteArray (o.keys.pubKey o.honestMsg.sender) o.honestMsg) o.honestSalt)
-  extractOrBreak {_ o tr} _ hOk hRew :=
-    have hChecks :
-        verifySignedSent (commitSlotSigScheme H maxBytes) o.keys o.proto.committee tr = true ∧
-        msgCanonical o.honestMsg = true ∧
-        (signableByteArray (o.keys.pubKey o.honestMsg.sender) o.honestMsg).data.toList.length < FieldBound64 ∧
-        (slotSigPreimage (signableByteArray (o.keys.pubKey o.honestMsg.sender) o.honestMsg) o.honestSalt).length ≤ maxBytes ∧
-        (H (slotSigPreimage (signableByteArray (o.keys.pubKey o.honestMsg.sender) o.honestMsg) o.honestSalt)).length = 32 := by
+  rewindValid _ o _ _ :=
+    HonestSigningOracle o.proto [] o.honestLog o.trace ∧
+    HonestSlotKeys H maxBytes o.keys o.proto o.honestLog o.salt
+  extractOrBreak {_ o _} _ hOk hRew :=
+    have hVer :
+        verifySignedSent (commitSlotSigScheme H maxBytes) o.keys o.proto.committee o.trace = true := by
       split at hOk
-      · rename_i hCond
-        have h1234 := (Bool.and_eq_true _ _).mp hCond
-        have h123 := (Bool.and_eq_true _ _).mp h1234.1
-        have h12 := (Bool.and_eq_true _ _).mp h123.1
-        have h1 := (Bool.and_eq_true _ _).mp h12.1
-        exact ⟨h1.1, h1.2, of_decide_eq_true h12.2, of_decide_eq_true h123.2, of_decide_eq_true h1234.2⟩
+      · assumption
       · cases hOk
     match extractForgedVoteSignature (commitSlotSigScheme H maxBytes) o.keys o.proto
-            [o.honestMsg] tr hChecks.1 hRew.1 with
-    | .inl w => .inl ⟨tr, w.down.1⟩
+            o.honestLog o.trace hVer hRew.1 with
+    | .inl w => .inl w
     | .inr forgery =>
-      .inr (forgedVoteSignature_reduces_to_hashCollision H maxBytes o.keys o.proto
-              o.honestMsg o.honestSalt hChecks.2.1 hChecks.2.2.1 hChecks.2.2.2.1 hChecks.2.2.2.2
-              hRew.2 forgery)
+      .inr (forgedSignature_reduces_to_hashCollision H maxBytes o.keys o.proto
+              o.honestLog o.salt hRew.2 forgery)
 
-/-! ## 3. Honest Quorum Cardinality, Dummy Chain Extension & Step Schedulers -/
+/-! ## 4. Honest quorum cardinality -/
 
 /-- The duplicate-free list of honest validators in `P.committee`. -/
 def honestMembers (P : Protocol) : List NodeId :=
@@ -756,54 +698,30 @@ theorem honestMembers_length_ge_quorum (P : Protocol) :
   unfold Protocol.quorum
   omega
 
-/-- Extending a notarized chain of `v - 1` entries by a notarized `.dummy v` produces a
-    notarized chain of length `v` (complementing `SimplexProtocol.chainNotarized_snoc`). -/
-theorem chainNotarized_snoc_dummy {P : Protocol} {sent : Sent} {p : Chain} {v : Nat}
-    (hp : ChainNotarized P sent p) (hlen : p.length = v - 1) (hv : 1 ≤ v)
-    (hd : NotarizedDummy P sent v) :
-    ChainNotarized P sent (p ++ [.dummy v]) := by
-  intro k hk
-  simp only [List.length_append, List.length_singleton] at hk
-  by_cases hkp : k < p.length
-  · have hget : (p ++ [Entry.dummy v])[k] = p[k] := List.getElem_append_left hkp
-    have htake : (p ++ [Entry.dummy v]).take (k + 1) = p.take (k + 1) :=
-      take_append_left p [Entry.dummy v] (k + 1) (by omega)
-    rw [hget, htake]
-    exact hp k hkp
-  · have hkeq : k = p.length := by omega
-    have hget : (p ++ [Entry.dummy v])[k] = Entry.dummy v := by
-      rw [List.getElem_append_right (by omega)]
-      simp [hkeq]
-    rw [hget]
-    have hvk : v = k + 1 := by omega
-    refine ⟨hvk, ?_⟩
-    rw [← hvk]
-    exact hd
+private theorem filter_length_mono_mem (p q : NodeId → Bool) :
+    ∀ (xs : List NodeId),
+      (∀ n ∈ xs, p n = true → q n = true) →
+      (xs.filter p).length ≤ (xs.filter q).length
+  | [], _ => Nat.le_refl _
+  | x :: xs, h => by
+    have ih := filter_length_mono_mem p q xs (fun n hn hp => h n (List.mem_cons_of_mem x hn) hp)
+    simp only [List.filter_cons]
+    cases hpx : p x with
+    | false =>
+      cases q x <;> simp <;> omega
+    | true =>
+      have hqx := h x List.mem_cons_self hpx
+      simp [hqx]
+      omega
 
-private theorem entryNotarizedB_cons {P : Protocol} {sent : Sent} (m : Msg)
-    {k : Nat} {upto : Chain} {e : Entry}
-    (h : entryNotarizedB P sent k upto e = true) :
-    entryNotarizedB P (m :: sent) k upto e = true := by
-  cases e with
-  | dummy v =>
-    simp only [entryNotarizedB, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h ⊢
-    exact ⟨h.1, notarizedDummy_cons m h.2⟩
-  | block v x =>
-    simp only [entryNotarizedB, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h ⊢
-    exact ⟨h.1, notarizedBlock_cons m h.2⟩
-
-private theorem chainNotarizedB_cons {P : Protocol} {sent : Sent} (m : Msg) {c : Chain}
-    (h : chainNotarizedB P sent c = true) :
-    chainNotarizedB P (m :: sent) c = true := by
-  unfold chainNotarizedB at h ⊢
-  rw [List.all_eq_true] at h ⊢
-  intro k hk
-  have hk0 := h k hk
-  cases hget : c[k]? with
-  | none => rw [hget] at hk0; cases hk0
-  | some e =>
-    rw [hget] at hk0
-    exact entryNotarizedB_cons m hk0
+/-- A property every honest committee member has is held by a quorum. -/
+theorem quorum_of_all_honest (P : Protocol) (q : NodeId → Bool)
+    (h : ∀ n, P.honest n → q n = true) : P.quorum ≤ (P.committee.filter q).length := by
+  refine Nat.le_trans (honestMembers_length_ge_quorum P) ?_
+  unfold honestMembers
+  refine filter_length_mono_mem (fun n => !P.faulty n) q P.committee ?_
+  intro n hmem hnf
+  exact h n ⟨hmem, by cases hf : P.faulty n <;> simp_all⟩
 
 theorem chainNotarizedB_of_chainNotarized {P : Protocol} {sent : Sent} {c : Chain}
     (h : ChainNotarized P sent c) :
@@ -822,24 +740,6 @@ theorem chainNotarizedB_of_chainNotarized {P : Protocol} {sent : Sent} {c : Chai
     rw [hc] at he
     simp [entryNotarizedB, he.1, he.2]
 
-theorem voteRuleB_cons {P : Protocol} {sent : Sent} (m : Msg) {v : Nat} {t : Target}
-    (h : voteRuleB P sent v t = true) :
-    voteRuleB P (m :: sent) v t = true := by
-  cases t with
-  | dummy w => exact h
-  | block c =>
-    unfold voteRuleB at h ⊢
-    cases hlast : c.getLast? with
-    | none => simp [hlast] at h
-    | some e =>
-      cases e with
-      | dummy _ => simp [hlast] at h
-      | block w x =>
-        simp only [hlast, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq,
-          List.contains_iff_mem] at h ⊢
-        refine ⟨h.1, ⟨⟨⟨h.2.1.1.1, h.2.1.1.2⟩, chainNotarizedB_cons m h.2.1.2⟩, ?_⟩⟩
-        exact List.mem_cons_of_mem m h.2.2
-
 theorem voteRuleB_of_proposal {P : Protocol} {sent : Sent} {v : Nat} {p : Chain} {x : Nat}
     (hv : 1 ≤ v) (hlen : p.length = v - 1) (hp : ChainNotarized P sent p)
     (hprop : (⟨P.leader v, v, .propose, .block (p ++ [.block v x])⟩ : Msg) ∈ sent) :
@@ -853,573 +753,715 @@ theorem voteRuleB_of_proposal {P : Protocol} {sent : Sent} {v : Nat} {p : Chain}
   simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq, List.contains_iff_mem]
   exact ⟨hv, ⟨⟨⟨trivial, hlen⟩, chainNotarizedB_of_chainNotarized hp⟩, hprop⟩⟩
 
-/-- Schedule honest `.vote` steps across `nodes` for target `t` in view `v` whenever unvoted. -/
-def scheduleHonestVotes (P : Protocol) (v : Nat) (t : Target) : List NodeId → Sent → Sent
-  | [], sent => sent
-  | n :: ns, sent =>
-    let sent' :=
-      if !P.faulty n && P.committee.contains n && !votedAny sent n v && voteRuleB P sent v t then
-        ⟨n, v, .vote, t⟩ :: sent
-      else
-        sent
-    scheduleHonestVotes P v t ns sent'
+/-! ## 5. The adversarial Δ-delivery timed network -/
 
-theorem scheduleHonestVotes_reach {P : Protocol} {v : Nat} {t : Target} :
-    ∀ (nodes : List NodeId) {sent : Sent},
-      Reach P sent → Reach P (scheduleHonestVotes P v t nodes sent)
-  | [], _, hr => hr
-  | n :: ns, sent, hr => by
-    unfold scheduleHonestVotes
-    split
-    · rename_i hCond
-      simp only [Bool.and_eq_true, Bool.not_eq_true', List.contains_iff_mem] at hCond
-      have hStep := Step.vote sent n v t ⟨hCond.1.1.2, hCond.1.1.1⟩ hCond.1.2 (voteRuleB_sound hCond.2)
-      exact scheduleHonestVotes_reach ns (Reach.step hr hStep)
-    · exact scheduleHonestVotes_reach ns hr
+/-- Partial-synchrony parameters: the global stabilisation time, the delivery bound that holds
+    after it, and the view timer. -/
+structure NetConfig where
+  gst      : Nat
+  deltaNet : Nat
+  timeout  : Nat
 
-theorem scheduleHonestVotes_sub {P : Protocol} {v : Nat} {t : Target} :
-    ∀ (nodes : List NodeId) (sent : Sent) {m : Msg},
-      m ∈ sent → m ∈ scheduleHonestVotes P v t nodes sent
-  | [], _, _, hm => hm
-  | n :: ns, sent, m, hm => by
-    unfold scheduleHonestVotes
-    split
-    · exact scheduleHonestVotes_sub ns _ (List.mem_cons_of_mem _ hm)
-    · exact scheduleHonestVotes_sub ns sent hm
+/-- The network: the clock, every message ever sent with its send time (newest first), which
+    node has been delivered which message, and when each node entered each view. -/
+structure NetState where
+  time      : Nat
+  log       : List (Msg × Nat)
+  delivered : NodeId → Msg → Bool
+  viewEntry : NodeId → Nat → Option Nat
 
-theorem scheduleHonestVotes_only_target_votes {P : Protocol} {v : Nat} {t : Target} :
-    ∀ (nodes : List NodeId) (sent : Sent) {m : Msg},
-      m ∈ scheduleHonestVotes P v t nodes sent →
-      m ∈ sent ∨ (P.honest m.sender ∧ m.view = v ∧ m.kind = .vote ∧ m.target = t)
-  | [], sent, m, hm => .inl hm
-  | n :: ns, sent, m, hm => by
-    unfold scheduleHonestVotes at hm
-    split at hm
-    · rename_i hCond
-      simp only [Bool.and_eq_true, Bool.not_eq_true', List.contains_iff_mem] at hCond
-      rcases scheduleHonestVotes_only_target_votes ns _ hm with hIn | hNew
-      · rcases List.mem_cons.1 hIn with rfl | hOld
-        · exact .inr ⟨⟨hCond.1.1.2, hCond.1.1.1⟩, rfl, rfl, rfl⟩
-        · exact .inl hOld
-      · exact .inr hNew
-    · exact scheduleHonestVotes_only_target_votes ns sent hm
+/-- Every message ever sent: the `SimplexProtocol.Sent` this network projects to. -/
+def NetState.sent (s : NetState) : Sent := s.log.map Prod.fst
 
-private theorem votedAny_or_voted_step {sent : Sent} {k n : NodeId} {v : Nat} {t : Target}
-    (h : votedAny sent n v = false ∨ voted sent n v t = true) :
-    votedAny (⟨k, v, .vote, t⟩ :: sent) n v = false ∨
-      voted (⟨k, v, .vote, t⟩ :: sent) n v t = true := by
-  by_cases hkn : k = n
-  · subst hkn
-    right
-    rw [voted_iff]
-    exact List.mem_cons_self
-  · rcases h with hFresh | hVoted
-    · left
-      unfold votedAny at hFresh ⊢
-      simp only [List.any_cons, Bool.or_eq_false_iff]
-      refine ⟨?_, hFresh⟩
-      simp [beq_eq_false_iff_ne.2 hkn]
-    · right
-      exact voted_cons sent _ n v t hVoted
+/-- What node `n` has been delivered: all it may act on. -/
+def NetState.localView (s : NetState) (n : NodeId) : Sent := s.sent.filter (s.delivered n)
 
-private theorem scheduleHonestVotes_achieves_vote {P : Protocol} {v : Nat} {t : Target} :
-    ∀ (nodes : List NodeId) (sent : Sent) {u : NodeId},
-      voteRuleB P sent v t = true →
-      P.honest u →
-      u ∈ nodes →
-      (votedAny sent u v = false ∨ voted sent u v t = true) →
-      voted (scheduleHonestVotes P v t nodes sent) u v t = true
-  | [], _, _, _, _, hMem, _ => False.elim (List.not_mem_nil hMem)
-  | n :: ns, sent, u, hRule, hHonU, hMem, hState => by
-    unfold scheduleHonestVotes
-    rcases List.mem_cons.1 hMem with hEq | hInNs
-    · subst hEq
-      rcases hState with hFresh | hAlready
-      · have hCond : (!P.faulty u && P.committee.contains u && !votedAny sent u v && voteRuleB P sent v t) = true := by
-          simp only [Bool.and_eq_true, Bool.not_eq_true', List.contains_iff_mem]
-          exact ⟨⟨⟨hHonU.2, hHonU.1⟩, hFresh⟩, hRule⟩
-        simp only [hCond, ↓reduceIte]
-        rw [voted_iff]
-        exact scheduleHonestVotes_sub ns _ List.mem_cons_self
-      · split
-        · rw [voted_iff]
-          exact scheduleHonestVotes_sub ns _ (List.mem_cons_of_mem _ ((voted_iff _ _ _ _).1 hAlready))
-        · rw [voted_iff]
-          exact scheduleHonestVotes_sub ns sent ((voted_iff _ _ _ _).1 hAlready)
-    · split
-      · exact scheduleHonestVotes_achieves_vote ns _ (voteRuleB_cons _ hRule) hHonU hInNs
-          (votedAny_or_voted_step hState)
-      · exact scheduleHonestVotes_achieves_vote ns sent hRule hHonU hInNs hState
+/-- Send `m` now. -/
+def NetState.push (s : NetState) (m : Msg) : NetState := { s with log := (m, s.time) :: s.log }
 
-private theorem filter_length_mono_mem (p q : NodeId → Bool) :
-    ∀ (xs : List NodeId),
-      (∀ n ∈ xs, p n = true → q n = true) →
-      (xs.filter p).length ≤ (xs.filter q).length
-  | [], _ => Nat.le_refl _
-  | x :: xs, h => by
-    have ih := filter_length_mono_mem p q xs (fun n hn hp => h n (List.mem_cons_of_mem x hn) hp)
-    simp only [List.filter_cons]
-    cases hpx : p x with
-    | false =>
-      cases q x <;> simp <;> omega
-    | true =>
-      have hqx := h x List.mem_cons_self hpx
-      simp [hqx]
-      omega
+theorem NetState.mem_localView {s : NetState} {n : NodeId} {m : Msg} :
+    m ∈ s.localView n ↔ m ∈ s.sent ∧ s.delivered n m = true := by
+  unfold NetState.localView
+  exact List.mem_filter
 
-theorem scheduleHonestVotes_quorum {P : Protocol} {sent : Sent} {v : Nat} {t : Target}
-    (hRule : voteRuleB P sent v t = true)
-    (hCompat : ∀ n, P.honest n → votedAny sent n v = false ∨ voted sent n v t = true) :
-    P.quorum ≤ votesFor P (scheduleHonestVotes P v t P.committee sent) v t := by
-  let sent' := scheduleHonestVotes P v t P.committee sent
-  have hMono : (honestMembers P).length ≤ (P.committee.filter (fun n => voted sent' n v t)).length := by
-    unfold honestMembers
-    refine filter_length_mono_mem (fun n => !P.faulty n) (fun n => voted sent' n v t) P.committee ?_
-    intro n hmem hnf
-    have hFaultyFalse : P.faulty n = false := by
-      cases hf : P.faulty n <;> simp_all
-    have hHon : P.honest n := ⟨hmem, hFaultyFalse⟩
-    exact scheduleHonestVotes_achieves_vote P.committee sent hRule hHon hmem (hCompat n hHon)
-  exact Nat.le_trans (honestMembers_length_ge_quorum P) hMono
+theorem NetState.mem_sent_of_mem_log {s : NetState} {m : Msg} {t : Nat} (h : (m, t) ∈ s.log) :
+    m ∈ s.sent := by
+  unfold NetState.sent
+  exact List.mem_map.2 ⟨(m, t), h, rfl⟩
 
-/-- Schedule honest `.finalize` votes across `nodes` for notarized block `c` in view `v`. -/
-def scheduleHonestFinalizes (P : Protocol) (v : Nat) (c : Chain) : List NodeId → Sent → Sent
-  | [], sent => sent
-  | n :: ns, sent =>
-    let sent' :=
-      if !P.faulty n && P.committee.contains n && !finalizeVoted sent n v c &&
-         voted sent n v (.block c) && decide (NotarizedBlock P sent v c) then
-        ⟨n, v, .finalize, .block c⟩ :: sent
-      else
-        sent
-    scheduleHonestFinalizes P v c ns sent'
+/-- What can happen. The adversary chooses the whole event list: which sent message reaches which
+    node and when (`deliver`), any message from a faulty sender (`inject`), and when the clock
+    advances (`tick`); `enter` and `send` are honest nodes acting by their rules. -/
+inductive NetEvent where
+  | deliver (n : NodeId) (m : Msg)
+  | inject (m : Msg)
+  | enter (n : NodeId) (v : Nat) (p : Chain)
+  | send (m : Msg)
+  | tick
 
-theorem scheduleHonestFinalizes_reach {P : Protocol} {v : Nat} {c : Chain} :
-    ∀ (nodes : List NodeId) {sent : Sent},
-      Reach P sent → Reach P (scheduleHonestFinalizes P v c nodes sent)
-  | [], _, hr => hr
-  | n :: ns, sent, hr => by
-    unfold scheduleHonestFinalizes
-    split
-    · rename_i hCond
-      simp only [Bool.and_eq_true, Bool.not_eq_true', List.contains_iff_mem,
-        decide_eq_true_eq] at hCond
-      have hStep := Step.finalize sent n v c ⟨hCond.1.1.1.2, hCond.1.1.1.1⟩ hCond.1.2 hCond.2
-      exact scheduleHonestFinalizes_reach ns (Reach.step hr hStep)
-    · exact scheduleHonestFinalizes_reach ns hr
+/-- An honest node's rule for sending `m`, judged on its own deliveries and the clock: the view's
+    leader proposes once after entering; a node that entered the view and has not voted in it
+    votes for a block by `voteRuleB` on its deliveries, or for the dummy once its timer
+    (`viewEntry + timeout`) has expired; a node finalizes a block it voted for once its deliveries
+    notarize it. -/
+def honestSendOk (P : Protocol) (cfg : NetConfig) (s : NetState) (m : Msg) : Bool :=
+  !P.faulty m.sender && P.committee.contains m.sender &&
+  match m.kind, m.target with
+  | .propose, .block _ =>
+    m.sender == P.leader m.view && (s.viewEntry m.sender m.view).isSome &&
+    !s.sent.any (fun q => q.sender == m.sender && q.view == m.view && q.kind == .propose)
+  | .vote, .block c =>
+    (s.viewEntry m.sender m.view).isSome && !votedAny s.sent m.sender m.view &&
+    voteRuleB P (s.localView m.sender) m.view (.block c)
+  | .vote, .dummy w =>
+    w == m.view && decide (1 ≤ m.view) && !votedAny s.sent m.sender m.view &&
+    (match s.viewEntry m.sender m.view with
+     | some t₀ => decide (t₀ + cfg.timeout ≤ s.time)
+     | none => false)
+  | .finalize, .block c =>
+    voted s.sent m.sender m.view (.block c) &&
+    decide (NotarizedBlock P (s.localView m.sender) m.view c)
+  | _, _ => false
 
-theorem scheduleHonestFinalizes_sub {P : Protocol} {v : Nat} {c : Chain} :
-    ∀ (nodes : List NodeId) (sent : Sent) {m : Msg},
-      m ∈ sent → m ∈ scheduleHonestFinalizes P v c nodes sent
-  | [], _, _, hm => hm
-  | n :: ns, sent, m, hm => by
-    unfold scheduleHonestFinalizes
-    split
-    · exact scheduleHonestFinalizes_sub ns _ (List.mem_cons_of_mem _ hm)
-    · exact scheduleHonestFinalizes_sub ns sent hm
+/-- Node `n` holds a proposal `q` it could vote for and has not voted in that view. -/
+def pendingVote (P : Protocol) (s : NetState) (n : NodeId) (q : Msg) : Bool :=
+  q.kind == .propose && (s.viewEntry n q.view).isSome && !votedAny s.sent n q.view &&
+  voteRuleB P (s.localView n) q.view q.target
 
-theorem scheduleHonestFinalizes_only_finalizes {P : Protocol} {v : Nat} {c : Chain} :
-    ∀ (nodes : List NodeId) (sent : Sent) {m : Msg},
-      m ∈ scheduleHonestFinalizes P v c nodes sent →
-      m ∈ sent ∨ m.kind = .finalize
-  | [], sent, m, hm => .inl hm
-  | n :: ns, sent, m, hm => by
-    unfold scheduleHonestFinalizes at hm
-    split at hm
-    · rcases scheduleHonestFinalizes_only_finalizes ns _ hm with hIn | hFin
-      · rcases List.mem_cons.1 hIn with rfl | hOld
-        · exact .inr rfl
-        · exact .inl hOld
-      · exact .inr hFin
-    · exact scheduleHonestFinalizes_only_finalizes ns sent hm
+/-- `q` is a block vote of node `n` whose block `n`'s deliveries notarize and `n` has not
+    finalized. -/
+def pendingFinalize (P : Protocol) (s : NetState) (n : NodeId) (q : Msg) : Bool :=
+  q.sender == n && q.kind == .vote &&
+  match q.target with
+  | .block c => decide (NotarizedBlock P (s.localView n) q.view c) && !finalizeVoted s.sent n q.view c
+  | .dummy _ => false
 
-private theorem scheduleHonestFinalizes_achieves_fin {P : Protocol} {v : Nat} {c : Chain} :
-    ∀ (nodes : List NodeId) (sent : Sent) {u : NodeId},
-      NotarizedBlock P sent v c →
-      P.honest u →
-      voted sent u v (.block c) = true →
-      u ∈ nodes →
-      finalizeVoted (scheduleHonestFinalizes P v c nodes sent) u v c = true
-  | [], _, _, _, _, _, hMem => False.elim (List.not_mem_nil hMem)
-  | n :: ns, sent, u, hNot, hHonU, hVotedU, hMem => by
-    unfold scheduleHonestFinalizes
-    rcases List.mem_cons.1 hMem with hEq | hInNs
-    · subst hEq
-      by_cases hAlready : finalizeVoted sent u v c = true
-      · split
-        · rw [finalizeVoted_iff]
-          exact scheduleHonestFinalizes_sub ns _
-            (List.mem_cons_of_mem _ ((finalizeVoted_iff _ _ _ _).1 hAlready))
-        · rw [finalizeVoted_iff]
-          exact scheduleHonestFinalizes_sub ns sent ((finalizeVoted_iff _ _ _ _).1 hAlready)
-      · have hFinFalse : finalizeVoted sent u v c = false := Bool.eq_false_iff.2 hAlready
-        have hCond :
-            (!P.faulty u && P.committee.contains u && !finalizeVoted sent u v c &&
-             voted sent u v (.block c) && decide (NotarizedBlock P sent v c)) = true := by
-          simp only [Bool.and_eq_true, Bool.not_eq_true', List.contains_iff_mem, decide_eq_true_eq]
-          exact ⟨⟨⟨⟨hHonU.2, hHonU.1⟩, hFinFalse⟩, hVotedU⟩, hNot⟩
-        simp only [hCond, ↓reduceIte]
-        rw [finalizeVoted_iff]
-        exact scheduleHonestFinalizes_sub ns _ List.mem_cons_self
-    · split
-      · exact scheduleHonestFinalizes_achieves_fin ns _
-          (notarizedBlock_cons _ hNot) hHonU (voted_cons sent _ u v (.block c) hVotedU) hInNs
-      · exact scheduleHonestFinalizes_achieves_fin ns sent hNot hHonU hVotedU hInNs
+/-- The clock may advance only from a settled state: every message whose delivery deadline
+    (`deltaNet` after the later of its send time and `gst`) has come is delivered to every honest
+    node, and no honest node has a pending block vote or finalize vote. Before `gst` nothing is
+    due; the adversary delays as it likes. -/
+def settledB (P : Protocol) (cfg : NetConfig) (s : NetState) : Bool :=
+  s.log.all (fun e =>
+    decide (s.time < e.2 + cfg.deltaNet) || decide (s.time < cfg.gst + cfg.deltaNet) ||
+      P.committee.all (fun n => P.faulty n || s.delivered n e.1)) &&
+  P.committee.all (fun n => P.faulty n ||
+    ((s.localView n).all (fun q => !pendingVote P s n q) &&
+     s.sent.all (fun q => !pendingFinalize P s n q)))
 
-theorem scheduleHonestFinalizes_finalized {P : Protocol} {sent : Sent} {v : Nat} {c : Chain}
-    (hNot : NotarizedBlock P sent v c)
-    (hAllVoted : ∀ n, P.honest n → voted sent n v (.block c) = true) :
-    Finalized P (scheduleHonestFinalizes P v c P.committee sent) v c := by
-  let sent' := scheduleHonestFinalizes P v c P.committee sent
-  have hMono : (honestMembers P).length ≤ (P.committee.filter (fun n => finalizeVoted sent' n v c)).length := by
-    unfold honestMembers
-    refine filter_length_mono_mem (fun n => !P.faulty n) (fun n => finalizeVoted sent' n v c) P.committee ?_
-    intro n hmem hnf
-    have hFaultyFalse : P.faulty n = false := by
-      cases hf : P.faulty n <;> simp_all
-    have hHon : P.honest n := ⟨hmem, hFaultyFalse⟩
-    exact scheduleHonestFinalizes_achieves_fin P.committee sent hNot hHon (hAllVoted n hHon) hmem
-  exact Nat.le_trans (honestMembers_length_ge_quorum P) hMono
+/-- One event. A refused event (`none`) is one the model does not allow: delivering a message
+    never sent, an injection by an honest sender, an honest send against the rule, a tick from an
+    unsettled state. -/
+def netStep (P : Protocol) (cfg : NetConfig) (s : NetState) : NetEvent → Option NetState
+  | .deliver n m =>
+    if s.sent.contains m then
+      some { s with delivered := fun n' m' => (n' == n && m' == m) || s.delivered n' m' }
+    else none
+  | .inject m => if P.faulty m.sender then some (s.push m) else none
+  | .enter n v p =>
+    if !P.faulty n && P.committee.contains n && decide (1 ≤ v) && decide (p.length = v - 1) &&
+        chainNotarizedB P (s.localView n) p && (s.viewEntry n v).isNone then
+      some { s with
+        viewEntry := fun n' v' => if n' = n ∧ v' = v then some s.time else s.viewEntry n' v' }
+    else none
+  | .send m => if honestSendOk P cfg s m then some (s.push m) else none
+  | .tick => if settledB P cfg s then some { s with time := s.time + 1 } else none
 
-/-! ## 4. Explicit View Timers, Pre-GST View Advance & Post-GST One-View Finalization -/
+/-- A timed trace: any event list, run from `s`. -/
+def runNet (P : Protocol) (cfg : NetConfig) : NetState → List NetEvent → Option NetState
+  | s, [] => some s
+  | s, e :: es =>
+    match netStep P cfg s e with
+    | some s' => runNet P cfg s' es
+    | none => none
 
-/-- Partial-synchrony timing parameters (`GST`, post-GST delay `deltaNet`, exponential timer base). -/
-structure PartialSyncConfig where
-  gst         : Nat
-  deltaNet    : Nat
-  baseTimeout : Nat
-  backoffCap  : Nat
+theorem runNet_cons {P : Protocol} {cfg : NetConfig} {s s' : NetState} {e : NetEvent}
+    {es : List NetEvent} :
+    runNet P cfg s (e :: es) = some s' ↔
+      ∃ s₁, netStep P cfg s e = some s₁ ∧ runNet P cfg s₁ es = some s' := by
+  simp only [runNet]
+  cases netStep P cfg s e <;> simp
 
-/-- Real-time schedule of a single consensus view `v`. -/
-structure ViewExecutionSchedule where
-  viewStart           : Nat
-  viewsSinceCommit    : Nat
-  enterTime           : NodeId → Nat
-  proposalArrival     : NodeId → Nat
-  notarizationArrival : NodeId → Nat
+theorem runNet_append {P : Protocol} {cfg : NetConfig} :
+    ∀ (a b : List NetEvent) {s s' : NetState},
+      runNet P cfg s (a ++ b) = some s' ↔
+        ∃ s₁, runNet P cfg s a = some s₁ ∧ runNet P cfg s₁ b = some s'
+  | [], b, s, s' =>
+    ⟨fun h => ⟨s, rfl, h⟩, fun ⟨s₁, h1, h2⟩ => by
+      have h1' : some s = some s₁ := h1
+      injection h1' with e
+      subst e
+      exact h2⟩
+  | e :: a, b, s, s' => by
+    rw [List.cons_append, runNet_cons]
+    constructor
+    · rintro ⟨s₀, h0, h⟩
+      obtain ⟨s₁, h1, h2⟩ := (runNet_append a b).1 h
+      exact ⟨s₁, runNet_cons.2 ⟨s₀, h0, h1⟩, h2⟩
+    · rintro ⟨s₁, h1, h2⟩
+      obtain ⟨s₀, h0, h1'⟩ := runNet_cons.1 h1
+      exact ⟨s₀, h0, (runNet_append a b).2 ⟨s₁, h1', h2⟩⟩
 
-/-- Effective view timer duration `Δ_timer` for `sched.viewsSinceCommit` under exponential backoff. -/
-def effectiveDeltaTimer (cfg : PartialSyncConfig) (sched : ViewExecutionSchedule) : Nat :=
-  viewTimeout cfg.baseTimeout sched.viewsSinceCommit cfg.backoffCap
+theorem settled_delivered {P : Protocol} {cfg : NetConfig} {s : NetState}
+    (h : settledB P cfg s = true) {m : Msg} {t : Nat} (hm : (m, t) ∈ s.log)
+    (hdue : t + cfg.deltaNet ≤ s.time) (hgst : cfg.gst + cfg.deltaNet ≤ s.time)
+    {n : NodeId} (hn : P.honest n) : s.delivered n m = true := by
+  unfold settledB at h
+  simp only [Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true, decide_eq_true_eq] at h
+  rcases h.1 (m, t) hm with (hlt | hlt) | hall
+  · exact absurd hlt (by omega)
+  · exact absurd hlt (by omega)
+  · rcases hall n hn.1 with hf | hd
+    · rw [hn.2] at hf; cases hf
+    · exact hd
 
-/-- Validator `n`'s local view-timeout deadline `enterTime n + Δ_timer`. -/
-def nodeTimerDeadline (cfg : PartialSyncConfig) (sched : ViewExecutionSchedule) (n : NodeId) : Nat :=
-  sched.enterTime n + effectiveDeltaTimer cfg sched
+theorem settled_vote {P : Protocol} {cfg : NetConfig} {s : NetState}
+    (h : settledB P cfg s = true) {n : NodeId} (hn : P.honest n) {q : Msg}
+    (hq : q ∈ s.localView n) (hk : q.kind = .propose)
+    (he : (s.viewEntry n q.view).isSome = true)
+    (hr : voteRuleB P (s.localView n) q.view q.target = true) :
+    votedAny s.sent n q.view = true := by
+  unfold settledB at h
+  simp only [Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true] at h
+  rcases h.2 n hn.1 with hf | hp
+  · rw [hn.2] at hf; cases hf
+  · have hpv := hp.1 q hq
+    cases hva : votedAny s.sent n q.view with
+    | true => rfl
+    | false => simp [pendingVote, hk, he, hva, hr] at hpv
 
-/-- Timed honest vote selector in view `v`: votes for `.block proposedChain` iff the valid proposal
-    arrives strictly before `nodeTimerDeadline`, otherwise votes `.dummy v` on timeout! -/
-def selectTimedVoteTarget (cfg : PartialSyncConfig) (sched : ViewExecutionSchedule)
-    (v : Nat) (proposedChain : Chain) (n : NodeId) : Target :=
-  if sched.proposalArrival n < nodeTimerDeadline cfg sched n then
-    .block proposedChain
-  else
-    .dummy v
+theorem settled_fin {P : Protocol} {cfg : NetConfig} {s : NetState}
+    (h : settledB P cfg s = true) {n : NodeId} (hn : P.honest n) {v : Nat} {c : Chain}
+    (hv : (⟨n, v, .vote, .block c⟩ : Msg) ∈ s.sent)
+    (hnot : NotarizedBlock P (s.localView n) v c) : finalizeVoted s.sent n v c = true := by
+  unfold settledB at h
+  simp only [Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true] at h
+  rcases h.2 n hn.1 with hf | hp
+  · rw [hn.2] at hf; cases hf
+  · have hpf := hp.2 _ hv
+    cases hfv : finalizeVoted s.sent n v c with
+    | true => rfl
+    | false => simp [pendingFinalize, hnot, hfv] at hpf
 
-/-- **Theorem 1: Pre-GST or Faulty-Leader View-Advance Progress (`pre_gst_or_faulty_leader_advances_view`)**:
-    In *any* view `v ≥ 1` extending a notarized `v - 1` chain `p` (`ChainNotarized P sent p`),
-    whenever all `≥ 2f + 1` honest nodes either:
-    - observe a block notarization in view `v` (`∃ x, NotarizedBlock P sent v (p ++ [.block v x])`), OR
-    - reach view timeout without casting a conflicting block vote (`votedAny sent n v = false ∨ voted sent n v (.dummy v) = true`,
-      which holds automatically whenever a faulty leader withholds proposals or sends invalid ones!),
-    view `v` constructively produces a reachable `sent'` (`Reach P sent'`) and a valid entry `e : Entry`
-    (`e.view = v`) with `ChainNotarized P sent' (p ++ [e])` and `(p ++ [e]).length = v`, ensuring honest
-    nodes are never permanently deadlocked in view `v`! -/
-theorem pre_gst_or_faulty_leader_advances_view
-    {P : Protocol} {sent : Sent} {v : Nat} {p : Chain}
-    (hReach : Reach P sent)
-    (hv : 1 ≤ v)
-    (hlen : p.length = v - 1)
-    (hpNot : ChainNotarized P sent p)
-    (hOutcome :
-      (∃ payload : Nat, NotarizedBlock P sent v (p ++ [.block v payload])) ∨
-      (∀ n : NodeId, P.honest n → votedAny sent n v = false ∨ voted sent n v (.dummy v) = true)) :
-    ∃ (sent' : Sent) (e : Entry),
-      Reach P sent' ∧
-      e.view = v ∧
-      (p ++ [e]).length = v ∧
-      ChainNotarized P sent' (p ++ [e]) := by
-  rcases hOutcome with ⟨payload, hNotBlock⟩ | hTimeoutReady
-  · refine ⟨sent, .block v payload, hReach, rfl, ?_, ?_⟩
-    · simp [hlen]; omega
-    · exact chainNotarized_snoc hpNot hlen hv hNotBlock
-  · let sent' := scheduleHonestVotes P v (.dummy v) P.committee sent
-    have hRuleDummy : voteRuleB P sent v (.dummy v) = true := by
-      simp [voteRuleB, hv]
-    have hReach' : Reach P sent' := scheduleHonestVotes_reach P.committee hReach
-    have hNotDummy : NotarizedDummy P sent' v :=
-      scheduleHonestVotes_quorum hRuleDummy hTimeoutReady
-    have hpNot' : ChainNotarized P sent' p := by
-      intro k hk
-      have he := hpNot k hk
-      cases hpk : p[k] with
-      | dummy w =>
-        rw [hpk] at he
-        refine ⟨he.1, Nat.le_trans he.2 ?_⟩
-        apply filter_length_mono _ _ P.committee
-        intro u hu
-        rw [voted_iff] at hu ⊢
-        exact scheduleHonestVotes_sub P.committee sent hu
-      | block w x =>
-        rw [hpk] at he
-        refine ⟨he.1, Nat.le_trans he.2 ?_⟩
-        apply filter_length_mono _ _ P.committee
-        intro u hu
-        rw [voted_iff] at hu ⊢
-        exact scheduleHonestVotes_sub P.committee sent hu
-    refine ⟨sent', .dummy v, hReach', rfl, ?_, ?_⟩
-    · simp [hlen]; omega
-    · exact chainNotarized_snoc_dummy hpNot' hlen hv hNotDummy
+/-- An honest send is a step of `SimplexProtocol`: what a node concludes from its own deliveries
+    holds of the whole message list. -/
+theorem honestSendOk_step {P : Protocol} {cfg : NetConfig} {s : NetState} {m : Msg}
+    (h : honestSendOk P cfg s m = true) : Step P s.sent (m :: s.sent) := by
+  have hsub : ∀ n q, q ∈ s.localView n → q ∈ s.sent := fun n q hq =>
+    (NetState.mem_localView.1 hq).1
+  rcases m with ⟨sender, view, kind, target⟩
+  unfold honestSendOk at h
+  simp only [Bool.and_eq_true, Bool.not_eq_true', List.contains_iff_mem] at h
+  obtain ⟨⟨hf, hmem⟩, hk⟩ := h
+  have hon : P.honest sender := ⟨hmem, hf⟩
+  cases kind with
+  | propose =>
+    cases target with
+    | block c =>
+      simp only [Bool.and_eq_true, beq_iff_eq] at hk
+      exact Step.propose s.sent sender view c hon hk.1.1
+    | dummy w => simp at hk
+  | vote =>
+    cases target with
+    | block c =>
+      simp only [Bool.and_eq_true, Bool.not_eq_true'] at hk
+      exact Step.vote s.sent sender view (.block c) hon hk.1.2
+        (voteRule_mono (hsub sender) (voteRuleB_sound hk.2))
+    | dummy w =>
+      simp only [Bool.and_eq_true, Bool.not_eq_true', beq_iff_eq, decide_eq_true_eq] at hk
+      exact Step.vote s.sent sender view (.dummy w) hon hk.1.2 ⟨hk.1.1.2, hk.1.1.1⟩
+  | finalize =>
+    cases target with
+    | block c =>
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hk
+      exact Step.finalize s.sent sender view c hon hk.1 (notarizedBlock_mono (hsub sender) hk.2)
+    | dummy w => simp at hk
 
-/-- Post-GST partial-synchrony timing contract for view `v`:
-    - view starts at or after `GST` (`cfg.gst ≤ sched.viewStart`),
-    - all honest nodes enter view `v` within `deltaNet` of `viewStart`,
-    - honest leader `L = P.leader v` broadcasts its proposal upon entering view `v`, arriving at
-      every honest node within `deltaNet` (`proposalArrival n ≤ enterTime L + deltaNet`),
-    - once all honest votes are cast (`≤ viewStart + 2 * deltaNet`), the notarization arrives
-      within `deltaNet` (`notarizationArrival n ≤ viewStart + 3 * deltaNet`),
-    - view timer satisfies `2 * deltaNet < effectiveDeltaTimer cfg sched` (`Δ_timer > 2 Δ_net`). -/
-structure PostGstHonestViewSync (P : Protocol) (cfg : PartialSyncConfig)
-    (sched : ViewExecutionSchedule) (v : Nat) : Prop where
-  postGst          : cfg.gst ≤ sched.viewStart
-  honestLeader     : P.honest (P.leader v)
-  honestEnterBound : ∀ n, P.honest n →
-                       sched.viewStart ≤ sched.enterTime n ∧
-                       sched.enterTime n ≤ sched.viewStart + cfg.deltaNet
-  proposalDelivery : ∀ n, P.honest n →
-                       sched.proposalArrival n ≤ sched.enterTime (P.leader v) + cfg.deltaNet
-  notarDelivery    : ∀ n, P.honest n →
-                       sched.notarizationArrival n ≤ sched.viewStart + 3 * cfg.deltaNet
-  timerMargin      : 2 * cfg.deltaNet < effectiveDeltaTimer cfg sched
+/-- An honest proposer has not proposed in that view before. -/
+theorem honestSendOk_propose_fresh {P : Protocol} {cfg : NetConfig} {s : NetState} {m : Msg}
+    (h : honestSendOk P cfg s m = true) (hk : m.kind = .propose) :
+    ∀ q ∈ s.sent, q.sender = m.sender → q.view = m.view → q.kind = .propose → False := by
+  rcases m with ⟨sender, view, kind, target⟩
+  simp only at hk
+  subst hk
+  unfold honestSendOk at h
+  simp only [Bool.and_eq_true, Bool.not_eq_true'] at h
+  obtain ⟨_, hk⟩ := h
+  cases target with
+  | block c =>
+    simp only [Bool.and_eq_true, Bool.not_eq_true'] at hk
+    intro q hq h1 h2 h3
+    have hany : (s.sent.any fun q => q.sender == sender && q.view == view && q.kind == .propose)
+        = true := List.any_eq_true.2 ⟨q, hq, by simp [h1, h2, h3]⟩
+    rw [hk.2] at hany
+    cases hany
+  | dummy w => simp at hk
 
-/-- Under `PostGstHonestViewSync`, every honest node receives the honest leader's proposal
-    **strictly before** its view timer `enterTime n + Δ_timer` expires, so `selectTimedVoteTarget`
-    always selects `.block proposedChain` and never `.dummy v`! -/
-theorem postGst_proposal_before_timeout
-    {P : Protocol} {cfg : PartialSyncConfig} {sched : ViewExecutionSchedule}
-    {v : Nat} (c : Chain) {n : NodeId}
-    (hSync : PostGstHonestViewSync P cfg sched v)
-    (hHon : P.honest n) :
-    sched.proposalArrival n < nodeTimerDeadline cfg sched n ∧
-    selectTimedVoteTarget cfg sched v c n = .block c := by
-  have hLeaderEnter := (hSync.honestEnterBound (P.leader v) hSync.honestLeader).2
-  have hNodeEnter := (hSync.honestEnterBound n hHon).1
-  have hPropArr := hSync.proposalDelivery n hHon
-  have hMargin := hSync.timerMargin
-  have hLt : sched.proposalArrival n < nodeTimerDeadline cfg sched n := by
-    unfold nodeTimerDeadline
-    omega
-  refine ⟨hLt, ?_⟩
-  unfold selectTimedVoteTarget
-  simp only [hLt, ↓reduceIte]
+/-- An honest vote: its sender had not voted in the view, and either it is for a block the view's
+    leader proposed, or the sender's view timer has expired. -/
+theorem honestSendOk_vote {P : Protocol} {cfg : NetConfig} {s : NetState} {m : Msg}
+    (h : honestSendOk P cfg s m = true) (hk : m.kind = .vote) :
+    votedAny s.sent m.sender m.view = false ∧
+    ((∃ c, m.target = .block c ∧ (⟨P.leader m.view, m.view, .propose, .block c⟩ : Msg) ∈ s.sent) ∨
+     (∃ t₀, s.viewEntry m.sender m.view = some t₀ ∧ t₀ + cfg.timeout ≤ s.time)) := by
+  rcases m with ⟨sender, view, kind, target⟩
+  simp only at hk
+  subst hk
+  unfold honestSendOk at h
+  simp only [Bool.and_eq_true, Bool.not_eq_true'] at h
+  obtain ⟨_, hk⟩ := h
+  cases target with
+  | block c =>
+    simp only [Bool.and_eq_true, Bool.not_eq_true'] at hk
+    obtain ⟨_, p', x', _, _, _, hprop⟩ := voteRuleB_sound hk.2
+    exact ⟨hk.1.2, .inl ⟨c, rfl, (NetState.mem_localView.1 hprop).1⟩⟩
+  | dummy w =>
+    simp only [Bool.and_eq_true, Bool.not_eq_true'] at hk
+    refine ⟨hk.1.2, .inr ?_⟩
+    have hexp := hk.2
+    cases hve : s.viewEntry sender view with
+    | none => rw [hve] at hexp; cases hexp
+    | some t₀ =>
+      rw [hve] at hexp
+      exact ⟨t₀, rfl, of_decide_eq_true hexp⟩
 
-/-- Execute a complete post-GST honest-leader view `v`:
-    1. Honest leader `P.leader v` proposes `p ++ [.block v payload]`,
-    2. All honest nodes run `selectTimedVoteTarget` and cast `.vote`,
-    3. All honest nodes cast `.finalize` upon notarization. -/
-def runPostGstHonestLeaderView
-    (P : Protocol) (cfg : PartialSyncConfig) (sched : ViewExecutionSchedule)
-    (sent₀ : Sent) (v payload : Nat) (p : Chain) : Sent :=
-  let c : Chain := p ++ [.block v payload]
-  let leader := P.leader v
-  let sentProp : Sent := ⟨leader, v, .propose, .block c⟩ :: sent₀
-  let target := selectTimedVoteTarget cfg sched v c leader
-  let sentVotes : Sent := scheduleHonestVotes P v target P.committee sentProp
-  scheduleHonestFinalizes P v c P.committee sentVotes
+/-- The three shapes of an accepted event: a delivery or view entry (clock and log unchanged,
+    deliveries and entries only grow), a send (by a faulty sender, or by the honest rule), or a
+    tick from a settled state. -/
+theorem netStep_cases {P : Protocol} {cfg : NetConfig} {s s' : NetState} {e : NetEvent}
+    (h : netStep P cfg s e = some s') :
+    (s'.time = s.time ∧ s'.log = s.log ∧
+      (∀ n m, s.delivered n m = true → s'.delivered n m = true) ∧
+      (∀ n v t, s.viewEntry n v = some t → s'.viewEntry n v = some t)) ∨
+    (∃ m, s' = s.push m ∧ (P.faulty m.sender = true ∨ honestSendOk P cfg s m = true)) ∨
+    (s' = { s with time := s.time + 1 } ∧ settledB P cfg s = true) := by
+  cases e with
+  | deliver n m =>
+    simp only [netStep] at h
+    split at h
+    · injection h with h
+      subst h
+      exact .inl ⟨rfl, rfl, fun n' m' hd => by simp [hd], fun _ _ _ ht => ht⟩
+    · cases h
+  | inject m =>
+    simp only [netStep] at h
+    split at h
+    · rename_i hf
+      injection h with h
+      exact .inr (.inl ⟨m, h.symm, .inl hf⟩)
+    · cases h
+  | enter n v p =>
+    simp only [netStep] at h
+    split at h
+    · rename_i hc
+      injection h with h
+      subst h
+      simp only [Bool.and_eq_true, Option.isNone_iff_eq_none] at hc
+      refine .inl ⟨rfl, rfl, fun _ _ hd => hd, fun n' v' t ht => ?_⟩
+      by_cases hnv : n' = n ∧ v' = v
+      · rw [hnv.1, hnv.2, hc.2] at ht
+        cases ht
+      · simp only [hnv, ↓reduceIte]
+        exact ht
+    · cases h
+  | send m =>
+    simp only [netStep] at h
+    split at h
+    · rename_i hc
+      injection h with h
+      exact .inr (.inl ⟨m, h.symm, .inr hc⟩)
+    · cases h
+  | tick =>
+    simp only [netStep] at h
+    split at h
+    · rename_i hc
+      injection h with h
+      exact .inr (.inr ⟨h.symm, hc⟩)
+    · cases h
 
-/-- **Theorem 2: Post-GST Honest-Leader One-View Finalization (`gst_honest_leader_finalizes`)**:
-    If view `v ≥ 1` enters at `viewStart ≥ GST` with an honest leader `P.leader v`, all honest
-    nodes enter view `v` within `Δ_net`, and `Δ_timer > 2 Δ_net` (`PostGstHonestViewSync`):
-    starting from any reachable `sent₀` where honest nodes have not yet voted in view `v` and
-    `ChainNotarized P sent₀ p` (`p.length = v - 1`), executing view `v` (`sentFinal`):
-    1. Preserves `Reach P sentFinal` (genuine `Step.propose`, `Step.vote`, `Step.finalize` steps),
-    2. Every honest node receives `L`'s proposal strictly before its view timer expires,
-    3. **Zero honest nodes cast `.dummy v`** (`voted sentFinal n v (.dummy v) = false`),
-    4. **All `≥ 2f + 1` honest nodes cast `.vote`** for `L`'s proposal `b = p ++ [.block v payload]`,
-    5. `NotarizedBlock P sentFinal v b` forms (and before timeout whenever `leader` enters at `viewStart`
-       with `notarizationArrival n ≤ viewStart + 2 * deltaNet`),
-    6. **All `≥ 2f + 1` honest nodes cast `.finalize`** for `b`,
-    7. **`Finalized P sentFinal v b` holds** and `extractFinCert?` produces a checking `FinCert(v, b)`
-       in that single view `v`! -/
+/-- An accepted event leaves the message list alone or adds one `SimplexProtocol.Step` to it. -/
+theorem netStep_sent {P : Protocol} {cfg : NetConfig} {s s' : NetState} {e : NetEvent}
+    (h : netStep P cfg s e = some s') : s'.sent = s.sent ∨ Step P s.sent s'.sent := by
+  rcases netStep_cases h with ⟨_, hlog, _, _⟩ | ⟨m, rfl, hm⟩ | ⟨rfl, _⟩
+  · left
+    unfold NetState.sent
+    rw [hlog]
+  · right
+    rcases hm with hf | ho
+    · exact Step.inject s.sent m hf
+    · exact honestSendOk_step ho
+  · exact .inl rfl
+
+theorem netStep_reach {P : Protocol} {cfg : NetConfig} {s s' : NetState} {e : NetEvent}
+    (h : netStep P cfg s e = some s') (hr : Reach P s.sent) : Reach P s'.sent := by
+  rcases netStep_sent h with hs | hs
+  · rw [hs]
+    exact hr
+  · exact Reach.step hr hs
+
+/-- **Every timed trace is a `SimplexProtocol` run**: the safety theorems of `SimplexProtocol`
+    hold of the message list of any `runNet`. -/
+theorem runNet_reach {P : Protocol} {cfg : NetConfig} :
+    ∀ (evs : List NetEvent) {s s' : NetState},
+      runNet P cfg s evs = some s' → Reach P s.sent → Reach P s'.sent
+  | [], s, s', h, hr => by
+    have h' : some s = some s' := h
+    injection h' with h'
+    subst h'
+    exact hr
+  | e :: es, s, s', h, hr => by
+    obtain ⟨s₁, h1, h2⟩ := runNet_cons.1 h
+    exact runNet_reach es h2 (netStep_reach h1 hr)
+
+/-! ## 6. Post-GST finalization over every timed trace -/
+
+/-- View `v` is launched at `s₀`, after GST: its leader is honest and has proposed the block
+    `p ++ [.block v x]` (and nothing else in the view); every honest node has entered the view
+    with at least `deltaNet` left on its timer, holds the notarized parent chain `p` in its own
+    deliveries, and has not voted in the view. Nothing is assumed about what happens next. -/
+structure ViewLaunched (P : Protocol) (cfg : NetConfig) (s₀ : NetState) (v : Nat) (p : Chain)
+    (x : Nat) : Prop where
+  reach : Reach P s₀.sent
+  postGst : cfg.gst ≤ s₀.time
+  deltaPos : 0 < cfg.deltaNet
+  stamped : ∀ e ∈ s₀.log, e.2 ≤ s₀.time
+  viewPos : 1 ≤ v
+  parentLen : p.length = v - 1
+  leaderHonest : P.honest (P.leader v)
+  proposed : (⟨P.leader v, v, .propose, .block (p ++ [.block v x])⟩ : Msg) ∈ s₀.sent
+  oneProposal : ∀ m ∈ s₀.sent, m.sender = P.leader v → m.view = v → m.kind = .propose →
+    m.target = .block (p ++ [.block v x])
+  entered : ∀ n, P.honest n →
+    ∃ t₀, s₀.viewEntry n v = some t₀ ∧ s₀.time + cfg.deltaNet < t₀ + cfg.timeout
+  parentKnown : ∀ n, P.honest n → ChainNotarized P (s₀.localView n) p
+  fresh : ∀ n, P.honest n → votedAny s₀.sent n v = false
+
+/-- What holds of every state a timed trace reaches from a launch at time `T`: the proposal stays
+    the leader's only one; honest votes in the view are for the block and were sent by
+    `T + deltaNet`; past `T + deltaNet` every honest node has voted for it; past `T + 2 * deltaNet`
+    every honest node has finalized it. -/
+structure ViewProgress (P : Protocol) (cfg : NetConfig) (T : Nat) (v : Nat) (p : Chain) (x : Nat)
+    (s : NetState) : Prop where
+  reach : Reach P s.sent
+  clock : T ≤ s.time
+  stamped : ∀ e ∈ s.log, e.2 ≤ s.time
+  proposed : ∃ t, t ≤ T ∧
+    ((⟨P.leader v, v, .propose, .block (p ++ [.block v x])⟩ : Msg), t) ∈ s.log
+  oneProposal : ∀ m ∈ s.sent, m.sender = P.leader v → m.view = v → m.kind = .propose →
+    m.target = .block (p ++ [.block v x])
+  entered : ∀ n, P.honest n →
+    ∃ t₀, s.viewEntry n v = some t₀ ∧ T + cfg.deltaNet < t₀ + cfg.timeout
+  parentKnown : ∀ n, P.honest n → ChainNotarized P (s.localView n) p
+  votes : ∀ m ∈ s.sent, P.honest m.sender → m.view = v → m.kind = .vote →
+    m.target = .block (p ++ [.block v x]) ∧ ∃ t, t ≤ T + cfg.deltaNet ∧ (m, t) ∈ s.log
+  allVoted : T + cfg.deltaNet < s.time →
+    ∀ n, P.honest n → voted s.sent n v (.block (p ++ [.block v x])) = true
+  allFinal : T + 2 * cfg.deltaNet < s.time →
+    ∀ n, P.honest n → finalizeVoted s.sent n v (p ++ [.block v x]) = true
+
+theorem ViewLaunched.progress {P : Protocol} {cfg : NetConfig} {s₀ : NetState} {v : Nat}
+    {p : Chain} {x : Nat} (hL : ViewLaunched P cfg s₀ v p x) :
+    ViewProgress P cfg s₀.time v p x s₀ where
+  reach := hL.reach
+  clock := Nat.le_refl _
+  stamped := hL.stamped
+  proposed := by
+    have hp := hL.proposed
+    unfold NetState.sent at hp
+    obtain ⟨e, he, heq⟩ := List.mem_map.1 hp
+    refine ⟨e.2, hL.stamped e he, ?_⟩
+    rw [← heq]
+    exact he
+  oneProposal := hL.oneProposal
+  entered := hL.entered
+  parentKnown := hL.parentKnown
+  votes := by
+    intro m hm hon hv hk
+    have hany := votedAny_of_mem hm hk
+    rw [hv, hL.fresh m.sender hon] at hany
+    cases hany
+  allVoted := fun h => absurd h (by omega)
+  allFinal := fun h => absurd h (by omega)
+
+/-- One accepted event keeps `ViewProgress`. The tick is where the model's two obligations are
+    used: at the tick out of `T + deltaNet` the proposal has been delivered to every honest node,
+    so none is left without a vote; at the tick out of `T + 2 * deltaNet` every honest vote has
+    been delivered to every honest node, so each sees the notarization and has finalized. -/
+theorem ViewProgress.step {P : Protocol} {cfg : NetConfig} {s₀ s s' : NetState} {v : Nat}
+    {p : Chain} {x : Nat} {e : NetEvent} (hL : ViewLaunched P cfg s₀ v p x)
+    (hI : ViewProgress P cfg s₀.time v p x s) (h : netStep P cfg s e = some s') :
+    ViewProgress P cfg s₀.time v p x s' := by
+  have hReach := netStep_reach h hI.reach
+  rcases netStep_cases h with ⟨htime, hlog, hdel, hent⟩ | ⟨m, rfl, hm⟩ | ⟨rfl, hset⟩
+  · have hsent : s'.sent = s.sent := by unfold NetState.sent; rw [hlog]
+    have hlocal : ∀ n q, q ∈ s.localView n → q ∈ s'.localView n := by
+      intro n q hq
+      obtain ⟨h1, h2⟩ := NetState.mem_localView.1 hq
+      exact NetState.mem_localView.2 ⟨by rw [hsent]; exact h1, hdel n q h2⟩
+    exact
+      { reach := hReach
+        clock := by rw [htime]; exact hI.clock
+        stamped := by rw [hlog, htime]; exact hI.stamped
+        proposed := by rw [hlog]; exact hI.proposed
+        oneProposal := by rw [hsent]; exact hI.oneProposal
+        entered := fun n hn => by
+          obtain ⟨t₀, ht, hb⟩ := hI.entered n hn
+          exact ⟨t₀, hent n v t₀ ht, hb⟩
+        parentKnown := fun n hn => chainNotarized_mono (hlocal n) (hI.parentKnown n hn)
+        votes := by rw [hsent, hlog]; exact hI.votes
+        allVoted := by rw [htime, hsent]; exact hI.allVoted
+        allFinal := by rw [htime, hsent]; exact hI.allFinal }
+  · have hhon : P.honest m.sender → honestSendOk P cfg s m = true := by
+      intro hon
+      rcases hm with hf | ho
+      · rw [hon.2] at hf; cases hf
+      · exact ho
+    have hlocal : ∀ n q, q ∈ s.localView n → q ∈ (s.push m).localView n := by
+      intro n q hq
+      obtain ⟨h1, h2⟩ := NetState.mem_localView.1 hq
+      exact NetState.mem_localView.2 ⟨List.mem_cons_of_mem m h1, h2⟩
+    have hlate : s₀.time + cfg.deltaNet < s.time → ∀ n, P.honest n →
+        votedAny s.sent n v = true := by
+      intro hlt n hn
+      exact votedAny_of_mem ((voted_iff _ _ _ _).1 (hI.allVoted hlt n hn)) rfl
+    exact
+      { reach := hReach
+        clock := hI.clock
+        stamped := by
+          intro e he
+          have he' : e ∈ (m, s.time) :: s.log := he
+          rcases List.mem_cons.1 he' with rfl | he''
+          · exact Nat.le_refl _
+          · exact hI.stamped e he''
+        proposed := by
+          obtain ⟨t, ht, hmem⟩ := hI.proposed
+          exact ⟨t, ht, List.mem_cons_of_mem _ hmem⟩
+        oneProposal := by
+          intro q hq hs hv hk
+          have hq' : q ∈ m :: s.sent := hq
+          rcases List.mem_cons.1 hq' with hqm | hq''
+          · exfalso
+            rw [hqm] at hs hv hk
+            have ho := hhon (by rw [hs]; exact hL.leaderHonest)
+            obtain ⟨t, _, hmem⟩ := hI.proposed
+            exact honestSendOk_propose_fresh ho hk _ (NetState.mem_sent_of_mem_log hmem)
+              hs.symm hv.symm rfl
+          · exact hI.oneProposal q hq'' hs hv hk
+        entered := hI.entered
+        parentKnown := fun n hn => chainNotarized_mono (hlocal n) (hI.parentKnown n hn)
+        votes := by
+          intro q hq hon hv hk
+          have hq' : q ∈ m :: s.sent := hq
+          rcases List.mem_cons.1 hq' with hqm | hq''
+          · rw [hqm] at hon hv hk ⊢
+            obtain ⟨hfresh, hcase⟩ := honestSendOk_vote (hhon hon) hk
+            rw [hv] at hfresh hcase
+            have hle : s.time ≤ s₀.time + cfg.deltaNet := by
+              rcases Nat.lt_or_ge (s₀.time + cfg.deltaNet) s.time with hlt | hge
+              · have hv' := hlate hlt m.sender hon
+                rw [hfresh] at hv'
+                cases hv'
+              · exact hge
+            refine ⟨?_, s.time, hle, List.mem_cons_self⟩
+            rcases hcase with ⟨c, hc, hprop⟩ | ⟨t₀, ht₀, hexp⟩
+            · rw [hc]
+              exact hI.oneProposal _ hprop rfl rfl rfl
+            · exfalso
+              obtain ⟨t₁, ht₁, hb⟩ := hI.entered m.sender hon
+              rw [ht₀] at ht₁
+              injection ht₁ with ht₁
+              omega
+          · obtain ⟨ht, t, hle, hmem⟩ := hI.votes q hq'' hon hv hk
+            exact ⟨ht, t, hle, List.mem_cons_of_mem _ hmem⟩
+        allVoted := fun hlt n hn => voted_cons s.sent m n v _ (hI.allVoted hlt n hn)
+        allFinal := fun hlt n hn => finalizeVoted_cons s.sent m n v _ (hI.allFinal hlt n hn) }
+  · have hgst := hL.postGst
+    have hpos := hL.deltaPos
+    exact
+      { reach := hReach
+        clock := Nat.le_succ_of_le hI.clock
+        stamped := fun e he => Nat.le_succ_of_le (hI.stamped e he)
+        proposed := hI.proposed
+        oneProposal := hI.oneProposal
+        entered := hI.entered
+        parentKnown := hI.parentKnown
+        votes := hI.votes
+        allVoted := by
+          intro hlt n hn
+          rcases Nat.lt_or_ge (s₀.time + cfg.deltaNet) s.time with h1 | h1
+          · exact hI.allVoted h1 n hn
+          · have hlt' : s₀.time + cfg.deltaNet < s.time + 1 := hlt
+            obtain ⟨t, ht, hmem⟩ := hI.proposed
+            have hdel := settled_delivered hset hmem (by omega) (by omega) hn
+            have hloc : (⟨P.leader v, v, .propose, .block (p ++ [.block v x])⟩ : Msg)
+                ∈ s.localView n :=
+              NetState.mem_localView.2 ⟨NetState.mem_sent_of_mem_log hmem, hdel⟩
+            have hrule := voteRuleB_of_proposal hL.viewPos hL.parentLen (hI.parentKnown n hn) hloc
+            obtain ⟨t₀, ht₀, _⟩ := hI.entered n hn
+            have hany : votedAny s.sent n v = true :=
+              settled_vote hset hn hloc rfl
+                (by show (s.viewEntry n v).isSome = true; rw [ht₀]; rfl) hrule
+            unfold votedAny at hany
+            obtain ⟨q, hq, hqc⟩ := List.any_eq_true.1 hany
+            simp only [Bool.and_eq_true, beq_iff_eq] at hqc
+            obtain ⟨hb, _⟩ := hI.votes q hq (by rw [hqc.1.1]; exact hn) hqc.1.2 hqc.2
+            rcases q with ⟨qs, qv, qk, qt⟩
+            simp only at hqc hb
+            rw [hqc.1.1, hqc.1.2, hqc.2, hb] at hq
+            exact (voted_iff _ _ _ _).2 hq
+        allFinal := by
+          intro hlt n hn
+          rcases Nat.lt_or_ge (s₀.time + 2 * cfg.deltaNet) s.time with h1 | h1
+          · exact hI.allFinal h1 n hn
+          · have hlt' : s₀.time + 2 * cfg.deltaNet < s.time + 1 := hlt
+            have hV := hI.allVoted (by omega)
+            have hnot : NotarizedBlock P (s.localView n) v (p ++ [.block v x]) := by
+              refine quorum_of_all_honest P _ (fun u hu => ?_)
+              have hvu := (voted_iff _ _ _ _).1 (hV u hu)
+              obtain ⟨_, t, ht, hmem⟩ := hI.votes _ hvu hu rfl rfl
+              have hdel := settled_delivered hset hmem (by omega) (by omega) hn
+              exact (voted_iff _ _ _ _).2 (NetState.mem_localView.2 ⟨hvu, hdel⟩)
+            exact settled_fin hset hn ((voted_iff _ _ _ _).1 (hV n hn)) hnot }
+
+theorem runNet_viewProgress {P : Protocol} {cfg : NetConfig} {s₀ : NetState} {v : Nat}
+    {p : Chain} {x : Nat} (hL : ViewLaunched P cfg s₀ v p x) :
+    ∀ (evs : List NetEvent) {s s' : NetState},
+      ViewProgress P cfg s₀.time v p x s → runNet P cfg s evs = some s' →
+      ViewProgress P cfg s₀.time v p x s'
+  | [], s, s', hI, h => by
+    have h' : some s = some s' := h
+    injection h' with h'
+    subst h'
+    exact hI
+  | e :: es, s, s', hI, h => by
+    obtain ⟨s₁, h1, h2⟩ := runNet_cons.1 h
+    exact runNet_viewProgress hL es (hI.step hL h1) h2
+
+/-- **Post-GST finalization over every adversarial timed trace.** Launch view `v` after GST with
+    an honest leader (`ViewLaunched`). Then for every event list the network accepts (any delivery
+    order, any delays within `deltaNet`, any messages injected by faulty senders), once the clock
+    has passed `2 * deltaNet` beyond the launch: the message list is a `SimplexProtocol` run,
+    every honest node voted for the leader's block and none for the dummy, the block is finalized,
+    and its finalization certificate checks and is the only one at its height. -/
 theorem gst_honest_leader_finalizes
-    {P : Protocol} {cfg : PartialSyncConfig} {sched : ViewExecutionSchedule}
-    {sent₀ : Sent} {v payload : Nat} {p : Chain}
-    (hReach₀ : Reach P sent₀)
-    (hv : 1 ≤ v)
-    (hlen : p.length = v - 1)
-    (hpNot : ChainNotarized P sent₀ p)
-    (hFreshView : ∀ n, P.honest n → votedAny sent₀ n v = false)
-    (hSync : PostGstHonestViewSync P cfg sched v) :
-    let b : Chain := p ++ [.block v payload]
-    let sentFinal : Sent := runPostGstHonestLeaderView P cfg sched sent₀ v payload p
-    Reach P sentFinal ∧
-    (∀ n, P.honest n → sched.proposalArrival n < nodeTimerDeadline cfg sched n) ∧
-    (∀ n, P.honest n → voted sentFinal n v (.dummy v) = false) ∧
-    (∀ n, P.honest n → voted sentFinal n v (.block b) = true) ∧
-    NotarizedBlock P sentFinal v b ∧
-    (∀ n, P.honest n → finalizeVoted sentFinal n v b = true) ∧
-    Finalized P sentFinal v b ∧
-    ChainNotarized P sentFinal b ∧
-    (∃ cert : FinCert,
-      extractFinCert? P sentFinal v b = some cert ∧
-      cert.view = v ∧
-      cert.chain = b ∧
-      cert.checks P sentFinal = true) := by
-  intro b sentFinal
-  let leader := P.leader v
-  let sentProp : Sent := ⟨leader, v, .propose, .block b⟩ :: sent₀
-  have hLeaderBefore := postGst_proposal_before_timeout b hSync hSync.honestLeader
-  have hTargetEq : selectTimedVoteTarget cfg sched v b leader = .block b := hLeaderBefore.2
-  let sentVotes : Sent := scheduleHonestVotes P v (.block b) P.committee sentProp
-  have hFinalEq : sentFinal = scheduleHonestFinalizes P v b P.committee sentVotes := by
-    unfold sentFinal runPostGstHonestLeaderView
-    simp only [b, leader, sentProp, hTargetEq, sentVotes]
-  have hStepProp : Step P sent₀ sentProp :=
-    Step.propose sent₀ leader v b hSync.honestLeader rfl
-  have hReachProp : Reach P sentProp := Reach.step hReach₀ hStepProp
-  have hpNotProp : ChainNotarized P sentProp p := chainNotarized_cons _ hpNot
-  have hRuleBlock : voteRuleB P sentProp v (.block b) = true :=
-    voteRuleB_of_proposal hv hlen hpNotProp List.mem_cons_self
-  have hFreshProp : ∀ n, P.honest n → votedAny sentProp n v = false := by
-    intro n hHon
-    unfold votedAny sentProp
-    simp only [List.any_cons, Bool.or_eq_false_iff]
-    exact ⟨by simp, hFreshView n hHon⟩
-  have hReachVotes : Reach P sentVotes :=
-    scheduleHonestVotes_reach P.committee hReachProp
-  have hAllVotedVotes : ∀ n, P.honest n → voted sentVotes n v (.block b) = true := by
-    intro n hHon
-    exact scheduleHonestVotes_achieves_vote P.committee sentProp hRuleBlock hHon hHon.1
-      (.inl (hFreshProp n hHon))
-  have hNotVotes : NotarizedBlock P sentVotes v b :=
-    scheduleHonestVotes_quorum hRuleBlock (fun n hHon => .inl (hFreshProp n hHon))
-  have hReachFinal : Reach P sentFinal := by
-    rw [hFinalEq]
-    exact scheduleHonestFinalizes_reach P.committee hReachVotes
-  have hAllVotedFinal : ∀ n, P.honest n → voted sentFinal n v (.block b) = true := by
-    intro n hHon
-    rw [hFinalEq, voted_iff]
-    exact scheduleHonestFinalizes_sub P.committee sentVotes
-      ((voted_iff _ _ _ _).1 (hAllVotedVotes n hHon))
-  have hNoDummyFinal : ∀ n, P.honest n → voted sentFinal n v (.dummy v) = false := by
-    intro n hHon
-    cases hDum : voted sentFinal n v (.dummy v) with
+    {P : Protocol} {cfg : NetConfig} {s₀ : NetState} {v : Nat} {p : Chain} {x : Nat}
+    (hL : ViewLaunched P cfg s₀ v p x) {evs : List NetEvent} {s : NetState}
+    (hRun : runNet P cfg s₀ evs = some s) (hTime : s₀.time + 2 * cfg.deltaNet < s.time) :
+    Reach P s.sent ∧
+    (∀ n, P.honest n → voted s.sent n v (.block (p ++ [.block v x])) = true ∧
+      voted s.sent n v (.dummy v) = false) ∧
+    Finalized P s.sent v (p ++ [.block v x]) ∧
+    ∃ cert : FinCert, cert.view = v ∧ cert.chain = p ++ [.block v x] ∧
+      cert.checks P s.sent = true ∧
+      ∀ other : FinCert, other.checks P s.sent = true →
+        other.chain.height = (p ++ [Entry.block v x]).height →
+        other.chain.blocks = (p ++ [Entry.block v x]).blocks := by
+  have hI := runNet_viewProgress hL evs hL.progress hRun
+  have hpos := hL.deltaPos
+  have hFin : Finalized P s.sent v (p ++ [.block v x]) :=
+    quorum_of_all_honest P _ (hI.allFinal hTime)
+  obtain ⟨cert, _, hcv, hcc, hchk⟩ := extractFinCert_checks_of_finalized hFin
+  refine ⟨hI.reach, fun n hn => ⟨hI.allVoted (by omega) n hn, ?_⟩, hFin, cert, hcv, hcc, hchk, ?_⟩
+  · cases hd : voted s.sent n v (.dummy v) with
     | false => rfl
     | true =>
-      have hMemFinal := (voted_iff sentFinal n v (.dummy v)).1 hDum
-      rw [hFinalEq] at hMemFinal
-      rcases scheduleHonestFinalizes_only_finalizes P.committee sentVotes hMemFinal with hInVotes | hIsFin
-      · rcases scheduleHonestVotes_only_target_votes P.committee sentProp hInVotes with hInProp | hVoteTarget
-        · rcases List.mem_cons.1 hInProp with hEqProp | hIn₀
-          · cases hEqProp
-          · have hAny := votedAny_of_mem hIn₀ rfl
-            rw [hFreshView n hHon] at hAny
-            cases hAny
-        · cases hVoteTarget.2.2.2
-      · cases hIsFin
-  have hNotFinal : NotarizedBlock P sentFinal v b := by
-    rw [hFinalEq]
-    refine Nat.le_trans hNotVotes ?_
-    apply filter_length_mono _ _ P.committee
-    intro n hn
-    rw [voted_iff] at hn ⊢
-    exact scheduleHonestFinalizes_sub P.committee sentVotes hn
-  have hAllFinFinal : ∀ n, P.honest n → finalizeVoted sentFinal n v b = true := by
-    intro n hHon
-    rw [hFinalEq]
-    exact scheduleHonestFinalizes_achieves_fin P.committee sentVotes hNotVotes hHon
-      (hAllVotedVotes n hHon) hHon.1
-  have hFinalized : Finalized P sentFinal v b := by
-    rw [hFinalEq]
-    exact scheduleHonestFinalizes_finalized hNotVotes hAllVotedVotes
-  have hChainNotFinal : ChainNotarized P sentFinal b :=
-    finalized_chainNotarized (reach_inv hReachFinal) hFinalized
-  exact ⟨hReachFinal,
-         fun n hHon => (postGst_proposal_before_timeout b hSync hHon).1,
-         hNoDummyFinal,
-         hAllVotedFinal,
-         hNotFinal,
-         hAllFinFinal,
-         hFinalized,
-         hChainNotFinal,
-         extractFinCert_checks_of_finalized hFinalized⟩
+      have ht := (hI.votes _ ((voted_iff _ _ _ _).1 hd) hn rfl rfl).1
+      simp at ht
+  · intro other hother hheight
+    have hEq := FinCert.unique_per_height_reach hI.reach hother hchk (by rw [hcc]; exact hheight)
+    rw [hcc] at hEq
+    exact hEq
 
-/-- **View-Indexed Canonical Liveness & Uniqueness Corollary (`gst_honest_leader_finalizes_in_view`)**:
-    Composes `gst_honest_leader_finalizes` with `FinCert.unique_per_height_reach` and
-    `notarized_block_unique`: in view `v` after `GST` with an honest leader and `Δ_timer > 2 Δ_net`,
-    `runPostGstHonestLeaderView` produces a checking `FinCert` for `b = p ++ [.block v payload]`,
-    notarization in view `v` forms strictly before timeout when `notarizationArrival n ≤ viewStart + 2 * deltaNet`,
-    and **every** checking `FinCert` at height `b.height` on `sentFinal` agrees identically on `b.blocks`! -/
-theorem gst_honest_leader_finalizes_in_view
-    {P : Protocol} {cfg : PartialSyncConfig} {sched : ViewExecutionSchedule}
-    {sent₀ : Sent} {v payload : Nat} {p : Chain}
-    (hReach₀ : Reach P sent₀)
-    (hv : 1 ≤ v)
-    (hlen : p.length = v - 1)
-    (hpNot : ChainNotarized P sent₀ p)
-    (hFreshView : ∀ n, P.honest n → votedAny sent₀ n v = false)
-    (hSync : PostGstHonestViewSync P cfg sched v)
-    (hFastNotar : ∀ n, P.honest n → sched.notarizationArrival n ≤ sched.viewStart + 2 * cfg.deltaNet) :
-    let b : Chain := p ++ [.block v payload]
-    let sentFinal : Sent := runPostGstHonestLeaderView P cfg sched sent₀ v payload p
-    (∀ n, P.honest n → sched.notarizationArrival n < nodeTimerDeadline cfg sched n) ∧
-    Finalized P sentFinal v b ∧
-    (∃ cert : FinCert,
-      cert.view = v ∧
-      cert.chain = b ∧
-      cert.checks P sentFinal = true ∧
-      ∀ other : FinCert,
-        other.checks P sentFinal = true →
-        other.chain.height = b.height →
-        other.chain.blocks = b.blocks) := by
-  intro b sentFinal
-  obtain ⟨hReachF, _, _, _, _, _, hFin, _, ⟨cert, _, hcv, hcc, hcChk⟩⟩ :=
-    gst_honest_leader_finalizes hReach₀ hv hlen hpNot hFreshView hSync
-  refine ⟨?_, hFin, ⟨cert, hcv, hcc, hcChk, ?_⟩⟩
-  · intro n hHon
-    have hEnter := (hSync.honestEnterBound n hHon).1
-    have hArr := hFastNotar n hHon
-    have hMargin := hSync.timerMargin
-    unfold nodeTimerDeadline
-    omega
-  · intro other hOtherChk hHeight
-    have hEq := FinCert.unique_per_height_reach hReachF hOtherChk hcChk (hHeight.trans (hcc ▸ rfl))
-    simpa [hcc] using hEq
-
-/-! ## 5. Non-Vacuity / Inhabitedness Witnesses -/
+/-! ## 7. The premises are inhabited: four validators, three honest, a 256-bit payload -/
 
 private def sampleProto4 : Protocol :=
   ⟨[0, 1, 2, 3], 1, (· == 3), by decide, by decide, by decide⟩
 
-private def sampleHashId : HashBytes.Hash :=
+/-- One block whose payload needs more than 64 bits. -/
+private def sampleBlock : Chain := [.block 1 (2 ^ 200 + 777)]
+
+private def sampleProposal : Msg := ⟨0, 1, .propose, .block sampleBlock⟩
+private def sampleVote (n : NodeId) : Msg := ⟨n, 1, .vote, .block sampleBlock⟩
+private def sampleFin (n : NodeId) : Msg := ⟨n, 1, .finalize, .block sampleBlock⟩
+private def sampleEquivocation : Msg := ⟨3, 1, .vote, .block [.block 1 666]⟩
+
+private def sampleHash : HashBytes.Hash :=
   fun bs => HashBytes.be 32 (bs.foldl (fun acc b => (acc * 131 + b.toNat + 1) % 65537) 1)
 
-private def sampleSalt32 : ByteArray :=
-  bytesOfList (List.replicate 32 0x42)
+private def sampleSalt : NodeId → Nat → Kind → ByteArray :=
+  fun n _ _ => bytesOfList (List.replicate 32 (UInt8.ofNat (n + 1)))
 
-private def sampleMsg0 : Msg :=
-  ⟨0, 1, .propose, .block [.block 1 99]⟩
+private def sampleLog : List Msg := [sampleProposal, sampleVote 0, sampleVote 1, sampleVote 2]
 
-private def sampleKeys4 : KeyDirectory where
-  pubKey _ := deriveSlotPubKey sampleHashId (signableByteArray 0#256 sampleMsg0) sampleSalt32
+private def sampleSigned (m : Msg) : SignedSimplexMsg := ⟨m, sampleSalt m.sender m.view m.kind⟩
 
-private def sampleSigned0 : SignedSimplexMsg where
-  msg := sampleMsg0
-  signerPk := 0#256
-  signature := sampleSalt32
+/-- Slot keys for a committee with three honest validators: `HonestSlotKeys` is satisfiable with
+    more than one honest validator, each key made from its owner's slot alone. -/
+example : HonestSlotKeys sampleHash 4096 (KeyDirectory.derive sampleHash sampleLog sampleSalt)
+    sampleProto4 sampleLog sampleSalt :=
+  KeyDirectory.derive_honestSlotKeys sampleHash 4096 200 sampleProto4 sampleLog sampleSalt
+    (fun bs => by simp [sampleHash, HashBytes.length_be]) (by decide +kernel)
+    (fun n v k => by simp [sampleSalt, bytesOfList_toList]) (by decide +kernel) (by decide)
 
-example : msgCanonical sampleMsg0 = true := by decide
-example : entryCanonical (.block 1 99) = true := by decide
-example : targetCanonical (.block [.block 1 99]) = true := by decide
-example : checkHonestProtocolRule sampleProto4 [] sampleMsg0 = true := by decide
-example : verifySignedSent (SignatureScheme.mk (fun _ _ _ => true)) ⟨fun _ => 0#256⟩
-            sampleProto4.committee [sampleSigned0] = true := by decide
+example : msgCanonical (sampleVote 2) = true := by decide +kernel
+example : checkHonestProtocolRule sampleProto4 [] sampleProposal = true := by decide +kernel
+example : verifySignedSent (commitSlotSigScheme sampleHash 4096)
+    (KeyDirectory.derive sampleHash sampleLog sampleSalt)
+    sampleProto4.committee (sampleLog.map sampleSigned) = true := by decide +kernel
 
-example :
-    let cfg : PartialSyncConfig := ⟨100, 10, 25, 2⟩
-    let sched : ViewExecutionSchedule := ⟨100, 0, fun _ => 100, fun _ => 108, fun _ => 118⟩
-    let sentF := runPostGstHonestLeaderView sampleProto4 cfg sched [] 1 777 []
-    (extractFinCert? sampleProto4 sentF 1 [.block 1 777]).isSome = true := by
-  decide
+private def sampleCfg : NetConfig := ⟨0, 1, 5⟩
+
+private def sampleNet₀ : NetState where
+  time := 0
+  log := [(sampleProposal, 0)]
+  delivered := fun _ _ => false
+  viewEntry := fun _ v => if v = 1 then some 0 else none
+
+private def deliverAll (ms : List Msg) : List NetEvent :=
+  ms.flatMap fun m => [0, 1, 2].map fun n => NetEvent.deliver n m
+
+/-- A run the adversary could choose: the Byzantine validator equivocates, deliveries come at the
+    last allowed moment. -/
+private def sampleRun : List NetEvent :=
+  deliverAll [sampleProposal] ++
+  [.send (sampleVote 0), .send (sampleVote 1), .send (sampleVote 2), .inject sampleEquivocation,
+   .tick] ++
+  deliverAll [sampleVote 0, sampleVote 1, sampleVote 2, sampleEquivocation] ++
+  [.send (sampleFin 0), .send (sampleFin 1), .send (sampleFin 2), .tick] ++
+  deliverAll [sampleFin 0, sampleFin 1, sampleFin 2] ++ [.tick]
+
+private theorem sampleViewLaunched : ViewLaunched sampleProto4 sampleCfg sampleNet₀ 1 [] (2 ^ 200 + 777) where
+  reach := Reach.step Reach.nil
+    (Step.propose [] 0 1 sampleBlock ⟨by decide, by decide⟩ (by decide))
+  postGst := Nat.le_refl _
+  deltaPos := by decide
+  stamped := by decide
+  viewPos := Nat.le_refl _
+  parentLen := rfl
+  leaderHonest := ⟨by decide, by decide⟩
+  proposed := List.Mem.head _
+  oneProposal := by
+    intro m hm _ _ _
+    have hm' : m ∈ [sampleProposal] := hm
+    rw [List.mem_singleton] at hm'
+    rw [hm']
+    rfl
+  entered := fun _ _ => ⟨0, rfl, by decide⟩
+  parentKnown := fun _ _ k hk => absurd hk (Nat.not_lt_zero k)
+  fresh := fun n _ => by simp [votedAny, sampleNet₀, NetState.sent, sampleProposal]
+
+/-- The model is not stuck: this run is accepted and its clock passes `2 * deltaNet`. -/
+example : (runNet sampleProto4 sampleCfg sampleNet₀ sampleRun).map (·.time) = some 3 := by
+  decide +kernel
+
+/-- So the liveness theorem applies to it. -/
+example : ∀ s, runNet sampleProto4 sampleCfg sampleNet₀ sampleRun = some s →
+    Finalized sampleProto4 s.sent 1 sampleBlock := by
+  intro s h
+  have ht : (runNet sampleProto4 sampleCfg sampleNet₀ sampleRun).map (·.time) = some 3 := by
+    decide +kernel
+  rw [h] at ht
+  have ht' : s.time = 3 := by simpa using ht
+  exact (gst_honest_leader_finalizes sampleViewLaunched h (by rw [ht']; decide)).2.2.1
 
 end Obend.Consensus.SimplexLiveness
 end

@@ -4,7 +4,9 @@ module
 
 Verifies:
 1. Durable WAL Crash-Recovery (`DurableSimplexHost`, `durable_recovery_prevents_equivocation`,
-   `durable_expose_once_across_crashes`).
+   `durable_expose_once_across_crashes`, and the journaled outbox:
+   `durable_outbox_dispatch_once_across_crashes`; its concrete run is in
+   `DeosSimplexOutboxSeamTest`).
 2. 4-Tier Finality Promotion (`SimplexFinalityGate`, `advanceSimplexGate`, `quorum_final_gates_unique_per_height`,
    `advanceSimplexGate_collapsed_binds_cshake`, `QuorumBoundFinalityGate`, `simplex_accountable_safety`).
 3. Bernstein-Disjoint Fast-Path Commutativity & Collapsed Root Convergence
@@ -20,11 +22,12 @@ public import Obend.Hardware.AgenticEDA
 public import Obend.FFI.Bridge
 public import Obend.Tactic.Tooth
 import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
 import all Obend.Vault.UnifiedDeos
 import all Obend.Hardware.AgenticEDA
 import all Obend.FFI.Bridge
 
-@[expose] public section
+public section
 
 namespace Obend.Tests.DurableNodeTest
 
@@ -45,7 +48,8 @@ set_option autoImplicit false
 example :
     (let initialState : VolatileSimplexVoter := { self := 0, deadline := 10, votes := [] }
      let initialHost : DurableSimplexHost :=
-       { self := 0, deadline := 10, journaledVotes := [], volatileState := some initialState }
+       { self := 0, deadline := 10, journaledVotes := [], volatileState := some initialState,
+         outbox := ⟨3, 0, 0, 0, [], 0, []⟩ }
      let chainA : Chain := [.block 1 101]
      let chainB : Chain := [.block 1 202]
      match durableCastVote initialHost 1 chainA with
@@ -148,6 +152,8 @@ theorem edaSwarm_refusedByPhysics_candidate_refused
 #check @advanceSimplexGate_collapsed_binds_cshake
 #check @durable_recovery_prevents_equivocation
 #check @durable_expose_once_across_crashes
+#check @durable_outbox_dispatch_once_across_crashes
+#check @validHostRun_outboxTrace
 #check @turnCommitCore_unproposed_tid_refused
 #check @verifyReceiptCore_empty_session_refused
 
@@ -160,6 +166,7 @@ theorem edaSwarm_refusedByPhysics_candidate_refused
 #print axioms advanceSimplexGate_collapsed_binds_cshake
 #print axioms durable_recovery_prevents_equivocation
 #print axioms durable_expose_once_across_crashes
+#print axioms durable_outbox_dispatch_once_across_crashes
 
 end Obend.Tests.DurableNodeTest
 end

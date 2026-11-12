@@ -3,7 +3,6 @@ module
 # Obend.Polis.EpistemicVouchMarket — stake-bonded vouching, cut-bounded trust, judged slashing
 
 Principals bond collateral and stake it on other principals or on claims.
-
 1. **Trust capacity.** The vouch graph is a capacitated network; trust from a root to a target is
    the minimum cut between them (`effectiveTrustCapacity`). Evidence of trust is a packing of
    vouch chains (`packingValue`). No packing exceeds any cut (`vouchPacking_le_cut`: weak duality,
@@ -15,12 +14,14 @@ Principals bond collateral and stake it on other principals or on claims.
    are the account keys of `Obend.Logic.ConservedValue`; `BookDelta` says two books differ by one.
 3. **Slashing.** `slashRefutedClaim` fires only on a refuting run of an `Obend.Judge`, seizes the
    loss fraction of every live stake in the claim's vouching genealogy, and splits it between the
-   bounty hunter and the treasury.
+   bounty hunter and the treasury. Claims are named by 256-bit digests (`tallyDigest_binding`).
 4. **Turns and traces.** `stepEpistemicMarket`, `ValidEpistemicMarketTrace`, the invariant
    `MarketInv`, conservation over traces, and `marketStep_skip_implies_violation`.
 -/
 public import Obend.Judge.Class
 public import Obend.Logic.SeparationFrame
+public import Obend.Digest.HashBytes
+public import Obend.Digest.Cshake256.Spec
 
 public section
 namespace Obend.Polis.EpistemicVouchMarket
@@ -29,12 +30,10 @@ set_option autoImplicit false
 open Obend.Logic (ConservedValue deltaAt)
 
 /-! ## 1. Sums over lists -/
-
 /-- `Σ f a` over a list. -/
 def sumBy {α : Type} (f : α → Nat) : List α → Nat
   | [] => 0
   | a :: l => f a + sumBy f l
-
 theorem sumBy_le_add {α : Type} {f g h : α → Nat} :
     ∀ {l : List α}, (∀ a ∈ l, f a ≤ g a + h a) → sumBy f l ≤ sumBy g l + sumBy h l
   | [], _ => Nat.zero_le _
@@ -72,7 +71,6 @@ theorem ite_some {α : Type} {c : Prop} [Decidable c] {a b : α}
   · cases h
 
 /-! ## 2. The vouch network, cuts, and packings of vouch chains -/
-
 /-- A node of the vouch graph: a principal, or a claim named by its 256-bit digest. -/
 inductive TrustNode where
   | principal (id : Nat)
@@ -81,8 +79,7 @@ inductive TrustNode where
 
 /-- A capacitated edge: `cap` is what the voucher `src` loses if `dst` is refuted. -/
 structure CapEdge where
-  src : TrustNode
-  dst : TrustNode
+  (src dst : TrustNode)
   cap : Nat
   deriving DecidableEq
 
@@ -196,11 +193,9 @@ theorem vouchPacking_le_cut (r c : TrustNode) (side : TrustNode → Bool) (hr : 
       · cases h
 
 /-! ### The minimum cut -/
-
 def memB {α : Type} [DecidableEq α] (v : α) : List α → Bool
   | [] => false
   | w :: ws => decide (v = w) || memB v ws
-
 theorem memB_iff {α : Type} [DecidableEq α] {v : α} : ∀ {l : List α}, memB v l = true ↔ v ∈ l
   | [] => by simp [memB]
   | w :: ws => by simp [memB, memB_iff (l := ws)]
@@ -220,7 +215,6 @@ theorem mem_addNode_of_mem (v : TrustNode) {w : TrustNode} {l : List TrustNode} 
 def nodesOf : List CapEdge → List TrustNode
   | [] => []
   | e :: es => addNode e.src (addNode e.dst (nodesOf es))
-
 theorem mem_nodesOf : ∀ {net : List CapEdge} {e : CapEdge}, e ∈ net →
     e.src ∈ nodesOf net ∧ e.dst ∈ nodesOf net
   | [], _, h => by cases h
@@ -234,7 +228,6 @@ theorem mem_nodesOf : ∀ {net : List CapEdge} {e : CapEdge}, e ∈ net →
 def subsets : List TrustNode → List (List TrustNode)
   | [] => [[]]
   | v :: vs => subsets vs ++ (subsets vs).map (v :: ·)
-
 theorem filter_mem_subsets (p : TrustNode → Bool) : ∀ l : List TrustNode, l.filter p ∈ subsets l
   | [] => by simp [subsets]
   | v :: vs => by
@@ -248,7 +241,6 @@ def rootSide (r c : TrustNode) (S : List TrustNode) (v : TrustNode) : Bool :=
 def minOf : Nat → List Nat → Nat
   | m, [] => m
   | m, x :: xs => minOf (min m x) xs
-
 theorem minOf_le_seed : ∀ (xs : List Nat) (m : Nat), minOf m xs ≤ m
   | [], _ => Nat.le_refl _
   | x :: xs, m => Nat.le_trans (minOf_le_seed xs _) (Nat.min_le_left m x)
@@ -348,7 +340,6 @@ theorem certifyTrustCapacity_exact {net : List CapEdge} {r c : TrustNode}
       · cases h
 
 /-! ### Sybil regions -/
-
 /-- The capacity entering a region `A` from outside it. -/
 def externalInflow (net : List CapEdge) (A : TrustNode → Bool) : Nat :=
   sumBy (fun e => if !A e.src && A e.dst then e.cap else 0) net
@@ -358,10 +349,9 @@ def honestSubnet (net : List CapEdge) (A : TrustNode → Bool) : List CapEdge :=
   net.filter fun e => !A e.src && !A e.dst
 
 /-- **Splitting an identity buys no trust.** Let `A` be any region that does not hold the root:
-one pseudonym or `k` of them, with any edges whatever leaving its nodes (rings of mutual vouches,
-self-vouches, edges of any stated capacity to any target). If the capacity entering `A` from
-outside totals at most `S`, then a target inside `A` receives at most `S`, and a target anywhere
-receives at most `S` more than it does in the network with `A` deleted. -/
+any number of pseudonyms, with any edges leaving its nodes (rings of mutual vouches, self-vouches,
+any stated capacity to any target). If the capacity entering `A` from outside is at most `S`, a
+target in `A` receives at most `S`, and any target at most `S` more than with `A` deleted. -/
 theorem sybilSplit_non_amplifying (net : List CapEdge) {r c : TrustNode} (A : TrustNode → Bool)
     (S : Nat) (hrc : r ≠ c) (hr : A r = false) (hS : externalInflow net A ≤ S) :
     (A c = true → effectiveTrustCapacity net r c ≤ S) ∧
@@ -388,7 +378,6 @@ theorem sybilSplit_non_amplifying (net : List CapEdge) {r c : TrustNode} (A : Tr
     omega
 
 /-! ## 3. Books: one indexed list of balances, moved only by transfers -/
-
 /-- The balance at account `a`; an account past the end holds nothing. -/
 def bal : List Nat → Nat → Nat
   | [], _ => 0
@@ -468,10 +457,8 @@ theorem bookTotal_transfer {L : List Nat} {s d v : Nat} (h : v ≤ bal L s) :
 (`Obend.Logic.ConservedValue`), under which no balance goes below zero. -/
 def BookDelta (L L' : List Nat) : Prop :=
   ∃ cv : ConservedValue, ∀ a : Nat, (bal L' a : Int) = bal L a + deltaAt cv.entries a
-
 theorem BookDelta.refl (L : List Nat) : BookDelta L L :=
   ⟨.zero, fun a => by simp [ConservedValue.zero, deltaAt]⟩
-
 theorem BookDelta.trans {L₁ L₂ L₃ : List Nat} (h₁ : BookDelta L₁ L₂) (h₂ : BookDelta L₂ L₃) :
     BookDelta L₁ L₃ := by
   obtain ⟨c₁, e₁⟩ := h₁
@@ -508,33 +495,26 @@ theorem bondAcct_ne {u w : Nat} (h : u ≠ w) : bondAcct u ≠ bondAcct w := by 
 theorem freeAcct_ne {u w : Nat} (h : u ≠ w) : freeAcct u ≠ freeAcct w := by unfold freeAcct; omega
 
 /-! ## 4. Vouches, the vouching genealogy of a claim, and the market's state -/
-
 /-- A vouch: `voucher` stakes `stake` on `target`, loses `lossBps` basis points of it if the
 target is refuted, and cannot take it back before `unlockEpoch`. -/
 structure VouchEdge where
   voucher : Nat
   target : TrustNode
-  stake : Nat
-  lossBps : Nat
-  unlockEpoch : Nat
+  (stake lossBps unlockEpoch : Nat)
   deriving DecidableEq
 
 /-- What a refutation takes from the stake. -/
 def slashableCapacity (e : VouchEdge) : Nat := e.stake * e.lossBps / 10000
-
 theorem slashableCapacity_le_stake {e : VouchEdge} (h : e.lossBps ≤ 10000) :
     slashableCapacity e ≤ e.stake :=
   Nat.div_le_of_le_mul (by rw [Nat.mul_comm 10000]; exact Nat.mul_le_mul_left _ h)
 
 structure Challenge where
   claim : BitVec 256
-  challenger : Nat
-  deadline : Nat
+  (challenger deadline : Nat)
   deriving DecidableEq
 structure UnbondRequest where
-  principal : Nat
-  amount : Nat
-  cooldownExpiry : Nat
+  (principal amount cooldownExpiry : Nat)
   deriving DecidableEq
 
 structure MarketState where
@@ -655,7 +635,6 @@ theorem slashHit_of_direct {horizon : Nat} {st : MarketState} {d : BitVec 256} {
   exact ⟨hl, inGenealogy_iff.2 (.direct hd)⟩
 
 /-! ## 5. Refutation by a judge, and what it seizes -/
-
 section Judged
 variable {Obj Cert : Type}
 
@@ -844,20 +823,13 @@ theorem slashBook_seizes_all {bps : Nat} (hb : bps ≤ 10000) (hunter : Nat)
       omega
 
 /-! ## 6. Turns -/
-
+/-- `digestOf` names a claim on a vouch; `challengeWindow` is the epochs a challenge stays open
+and the least lock of a new vouch; `cooldown` the epochs between asking to unbond and receiving;
+`challengeFee` what a challenger pays the treasury; `bountyBps` the hunter's share of a seizure,
+in basis points; `horizon` how many vouches for vouchers a refutation follows. -/
 structure MarketParams (Obj : Type) where
-  /-- how a claim is named on a vouch -/
   digestOf : Obj → BitVec 256
-  /-- epochs a challenge stays open, and the least lock of a new vouch -/
-  challengeWindow : Nat
-  /-- epochs between asking to unbond and receiving -/
-  cooldown : Nat
-  /-- what a challenger pays the treasury to open a challenge -/
-  challengeFee : Nat
-  /-- the hunter's share of a seizure, in basis points -/
-  bountyBps : Nat
-  /-- how many vouches for vouchers a refutation follows -/
-  horizon : Nat
+  (challengeWindow cooldown challengeFee bountyBps horizon : Nat)
   bounty_le : bountyBps ≤ 10000
 
 inductive MarketTurn (Obj Cert : Type) where
@@ -974,7 +946,6 @@ theorem validTrace_iff_run (P : MarketParams Obj) [Judge Obj Cert] :
       | some st₁ => rw [hs] at h; exact .turn hs ((validTrace_iff_run P).2 h)
 
 /-! ## 7. Refusal is complete -/
-
 /-- Why a turn is refused. `advanceEpoch` has no constructor: it is never refused. -/
 inductive MarketViolation (P : MarketParams Obj) [Judge Obj Cert] (st : MarketState) :
     MarketTurn Obj Cert → Prop
@@ -1106,7 +1077,6 @@ theorem marketStep_skip_implies_violation (P : MarketParams Obj) [Judge Obj Cert
     | bondBelowRequest hm hlt => simp [stepEpistemicMarket, hm, Nat.not_le.2 hlt]
 
 /-! ## 8. The invariant, conservation, slashing, and the cooldown -/
-
 /-- What every reachable state satisfies. -/
 structure MarketInv (P : MarketParams Obj) (st : MarketState) : Prop where
   /-- locked stakes and pending unbonds are covered by bonded collateral -/
@@ -1370,8 +1340,7 @@ theorem cooldown_prevents_hit_and_run {P : MarketParams Obj} [Judge Obj Cert]
     fun _ _ hlt => (marketStep_skip_implies_violation P st' _).2 (.withdrawsCommittedStake hlt),
     fun _ hall => (marketStep_skip_implies_violation P st' _).2 (.cooldownNotExpired hall)⟩
 
-/-- A withdrawal that happened was of a pending request of that principal whose cooldown had run
-out. -/
+/-- A withdrawal that happened was of that principal's pending request, its cooldown run out. -/
 theorem unbond_only_after_cooldown {P : MarketParams Obj} [Judge Obj Cert] {st st' : MarketState}
     {p : Nat} (h : stepEpistemicMarket P st (.finalizeUnbond p : MarketTurn Obj Cert) = some st') :
     ∃ r : UnbondRequest, r.principal = p ∧ r.cooldownExpiry ≤ st.epoch ∧
@@ -1431,14 +1400,13 @@ theorem trust_bounded_by_bond {P : MarketParams Obj} {st : MarketState} (hinv : 
 end Judged
 
 /-! ## 9. A judge of tallies, and witnesses that the premises above are inhabited -/
-
 /-- The claim that `entries` sum to `total`. -/
 structure TallyClaim where
   entries : List Nat
   total : Nat
+  deriving DecidableEq
 
-inductive TallyClause where
-  | mismatch
+inductive TallyClause where | mismatch
 
 /-- Judges a tally by adding it up, when the grade covers its length. A refusal is a refutation;
 every tally is in the fragment. -/
@@ -1469,14 +1437,47 @@ instance tallyJudge : Judge TallyClaim Unit where
       simp only [h, h', ↓reduceIte]
     · simp [h] at hne
 
-/-- Names a tally by folding it into 256 bits. A name for small vectors: a deployed market
-supplies a collision-resistant digest here. -/
-def tallyDigest (o : TallyClaim) : BitVec 256 :=
-  (o.total :: o.entries).foldl
-    (fun acc x => acc * 1099511628211#256 + BitVec.ofNat 256 x + 1#256) 14695981039346656037#256
+open Obend.Digest.HashBytes Obend.Digest.Cshake256
 
-/-- A market over tallies: window 2, cooldown 3, fee 1, a quarter of each seizure to the hunter,
-one level of vouches for vouchers. -/
+/-- The cSHAKE256 customization of tally names: `obend.polis.vouch.tally.v1`. -/
+def tallyDomain : List UInt8 :=
+  [0x6f, 0x62, 0x65, 0x6e, 0x64, 0x2e, 0x70, 0x6f, 0x6c, 0x69, 0x73, 0x2e, 0x76, 0x6f, 0x75, 0x63,
+    0x68, 0x2e, 0x74, 0x61, 0x6c, 0x6c, 0x79, 0x2e, 0x76, 0x31]
+/-- A tally's bytes: the total, then every entry, each in an eight-byte big-endian frame.
+`TallyFramed` is the width guard: every field fits its frame. -/
+def tallyPreimage (o : TallyClaim) : List UInt8 := (o.total :: o.entries).flatMap (be 8)
+def TallyFramed (o : TallyClaim) : Prop := ∀ e ∈ o.total :: o.entries, e < 256 ^ 8
+theorem flatMap_be_injective : ∀ {xs ys : List Nat}, (∀ e ∈ xs, e < 256 ^ 8) →
+    (∀ e ∈ ys, e < 256 ^ 8) → xs.flatMap (be 8) = ys.flatMap (be 8) → xs = ys
+  | [], [], _, _, _ => rfl
+  | [], _ :: _, _, _, h | _ :: _, [], _, _, h => by
+    have hh := congrArg List.length h; simp at hh <;> omega
+  | x :: xs, y :: ys, hx, hy, h => by
+    simp only [List.flatMap_cons] at h
+    obtain ⟨hhead, htail⟩ := List.append_inj h (by simp)
+    rw [be_injective (hx x List.mem_cons_self) (hy y List.mem_cons_self) hhead,
+      flatMap_be_injective (fun e he => hx e (List.mem_cons_of_mem _ he))
+        (fun e he => hy e (List.mem_cons_of_mem _ he)) htail]
+/-- Names a tally by the 256-bit cSHAKE256 digest of its framed bytes under `tallyDomain`. -/
+def tallyDigest (o : TallyClaim) : BitVec 256 :=
+  BitVec.ofNat 256 (ofBE (cshake256Bytes tallyDomain (tallyPreimage o)))
+
+/-- **A name binds its tally.** Two framed tallies with one name are equal, or their framed bytes
+are a collision of cSHAKE256 under the tally domain. -/
+theorem tallyDigest_binding {o₁ o₂ : TallyClaim} (h₁ : TallyFramed o₁) (h₂ : TallyFramed o₂)
+    (h : tallyDigest o₁ = tallyDigest o₂) : o₁ = o₂ ∨ Collision (cshake256Bytes tallyDomain) :=
+  if hp : tallyPreimage o₁ = tallyPreimage o₂ then .inl (by
+    have hl := flatMap_be_injective h₁ h₂ hp
+    cases o₁; cases o₂; simp_all)
+  else .inr ⟨_, _, hp, by
+    have hb : ∀ x, ofBE (cshake256Bytes tallyDomain x) < 2 ^ 256 := fun x => by
+      simpa using ofBE_lt (cshake256Bytes tallyDomain x)
+    have hn := congrArg BitVec.toNat h
+    simp only [tallyDigest, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb _)] at hn
+    exact hn⟩
+example : TallyFramed ⟨[1, 2], 4⟩ := by unfold TallyFramed; decide
+
+/-- A market over tallies: window 2, cooldown 3, fee 1, a quarter to the hunter, horizon 1. -/
 def tallyMarket : MarketParams TallyClaim := ⟨tallyDigest, 2, 3, 1, 2500, 1, by decide⟩
 
 example : refutationHolds (⟨[1, 2], 4⟩ : TallyClaim) 2 () = true := by decide
@@ -1486,12 +1487,11 @@ example : certifyTrustCapacity
     [⟨.principal 0, .principal 1, 5⟩, ⟨.principal 1, .claim 7#256, 3⟩]
     (.principal 0) (.claim 7#256) [(3, [0, 1])] [.principal 1] = some 3 := by decide
 
-/-- A trace that deposits, vouches for a false tally, is challenged and slashed: of the 30 units
-seized, 7 reach the hunter and 23 the treasury. -/
+/-- Deposit, vouch, challenge: the fee reaches the treasury (the test runs the judged slash). -/
 example : ValidEpistemicMarketTrace tallyMarket ⟨0, [0, 10, 0, 100], [], [], []⟩
-    [.depositBond 1 80, .addVouch ⟨1, .claim (tallyDigest ⟨[1, 2], 4⟩), 60, 5000, 2⟩,
-      .challengeClaim 0 (tallyDigest ⟨[1, 2], 4⟩), .slashRefuted 0 ⟨[1, 2], 4⟩ 2 ()]
-    ⟨0, [24, 16, 0, 20, 50], [], [], []⟩ :=
+    ([.depositBond 1 80, .addVouch ⟨1, .claim 7#256, 60, 5000, 2⟩, .challengeClaim 0 7#256] :
+      List (MarketTurn TallyClaim Unit))
+    ⟨0, [1, 9, 0, 20, 80], [⟨1, .claim 7#256, 60, 5000, 2⟩], [⟨7#256, 0, 2⟩], []⟩ :=
   (validTrace_iff_run tallyMarket).2 (by decide)
 
 end Obend.Polis.EpistemicVouchMarket
