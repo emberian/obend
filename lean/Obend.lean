@@ -46,6 +46,7 @@ public import Obend.Doc
 public import Obend.Doc.ReactiveNotebook
 public import Obend.Elab
 public import Obend.Spec
+public import Obend.Spec.BidirectionalSurfaceElab
 public import Obend.Run
 public import Obend.Run.VaultDurableBridge
 public import Obend.Ledger
@@ -132,6 +133,7 @@ public import Obend.Crypto.Poseidon2Goldilocks
 public import Obend.Crypto.DarkBazaar
 public import Obend.Crypto.BinaryTower256
 public import Obend.Crypto.BinarySpartanAndShout
+public import Obend.Crypto.ThresholdFheAndLatticeVrf
 public import Obend.Polis.EvidencedOcap
 public import Obend.Polis.ZkBiscuit
 public import Obend.Polis.VerkleUmem
@@ -146,6 +148,9 @@ public import Obend.Polis.PrivatePredicate
 public import Obend.Polis.JointCoReceipt
 public import Obend.Polis.PrepaidLeaseAndFork
 public import Obend.Polis.GrainCustodyHost
+public import Obend.Core.GradedSessionMetatheory
+public import Obend.OS.Sel4MicrokitKernelCore
+public import Obend.OS.Sel4MicrokitKernel
 public import Obend.SymbolicZk.SemiringDatalog
 public import Obend.SymbolicZk.RankedFixpointArith
 public import Obend.SymbolicZk.CamUnifyArith

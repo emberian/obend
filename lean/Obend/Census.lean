@@ -152,6 +152,7 @@ import Obend.Crypto.PikkuFoldLayered
 import Obend.Crypto.Poseidon2Goldilocks
 import Obend.Crypto.SameOpening
 import Obend.Crypto.Sumcheck
+import Obend.Crypto.ThresholdFheAndLatticeVrf
 import Obend.Crypto.Transcript
 import Obend.Core.AliasExposure
 import Obend.Core.Assumptions
@@ -180,6 +181,7 @@ import Obend.Core.FilteredStreamSteps
 import Obend.Core.FiniteBisimulation
 import Obend.Core.FinitePresentation
 import Obend.Core.FiniteRowLaws
+import Obend.Core.GradedSessionMetatheory
 import Obend.Core.Interaction
 import Obend.Core.Invariant
 import Obend.Core.LegacyAgreement
@@ -525,6 +527,8 @@ import Obend.Lower.Syntax
 import Obend.Lower.Transport
 import Obend.Lower.Typing
 import Obend.Main
+import Obend.OS.Sel4MicrokitKernel
+import Obend.OS.Sel4MicrokitKernelCore
 import Obend.Paco.GPaco
 import Obend.Polis.CapTP
 import Obend.Polis.EpistemicVouchMarket
@@ -594,6 +598,7 @@ import Obend.Slot.SupportSheaf
 import Obend.Slot.World
 import Obend.Spec
 import Obend.Spec.Annotated
+import Obend.Spec.BidirectionalSurfaceElab
 import Obend.Spec.C4
 import Obend.Spec.Capture
 import Obend.Spec.Contract

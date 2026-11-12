@@ -1170,6 +1170,48 @@ module = "Obend.Hardware.GlitchAndTempestSafe"
 theorem = "checkTempestGlitchEmc_sound"
 description = "Multi-GHz coupled-PCB TEMPEST/EMC certificate (`balanced_wddl_zero_secret_dependent_power_and_cm`, `masked_dualRail_exact_mutual_info_zero`, `imperfect_pcb_tempest_snr_below_noise_floor`)."
 
+[[apex]]
+id = "os-sel4-microkit-no-amplification"
+subsystem = "OS"
+module = "Obend.OS.Sel4MicrokitKernelCore"
+theorem = "no_authority_amplification_across_syscalls"
+description = "seL4/Microkit CSpace capability derivation tree (`revokeCap_severs_all_descendants`), SMMU DMA confinement, and non-amplifying authority across syscalls."
+
+[[apex]]
+id = "os-sel4-microkit-verifier-loop-safe"
+subsystem = "OS"
+module = "Obend.OS.Sel4MicrokitKernel"
+theorem = "sel4_microkit_verifier_loop_safe"
+description = "MCS sporadic-server temporal isolation, private-frame copy-before-verify ring ingress, and multi-turn verifier loop welded to `IrreversibleOutbox` and `GrainPowerbox`."
+
+[[apex]]
+id = "crypto-tulva-bitz-lav-auction-safe"
+subsystem = "Crypto"
+module = "Obend.Crypto.ThresholdFheAndLatticeVrf"
+theorem = "auctionRun_safe"
+description = "Tagged Tulva smudged threshold RLWE decryption, BitZ packed-bit range/same-opening proofs, and LAV lattice ring-VRF multi-turn sealed-bid auction machine."
+
+[[apex]]
+id = "crypto-lav-unique-vrf-or-msis"
+subsystem = "Crypto"
+module = "Obend.Crypto.ThresholdFheAndLatticeVrf"
+theorem = "lav_unique_output_or_msisBreak"
+description = "Lattice anonymous ring-VRF (`LAV`) output uniqueness reduced constructively to short Module-SIS collision extraction (`MSISBreak`)."
+
+[[apex]]
+id = "core-qtt-graded-session-linear-caps"
+subsystem = "Core"
+module = "Obend.Core.GradedSessionMetatheory"
+theorem = "qtt_step_preserves_typing_and_linear_caps"
+description = "Quantitative Type Theory (`ResourceRig` / `ZeroOneOmega`) linear capability single-use preservation, zero-grade erasure noninterference, and `CapTP` binary session fidelity."
+
+[[apex]]
+id = "spec-bidirectional-surface-elab-sound"
+subsystem = "Spec"
+module = "Obend.Spec.BidirectionalSurfaceElab"
+theorem = "checkSurface_sound"
+description = "Bidirectional surface-to-core elaborator producing well-typed `PartialTyping` derivations while refusing unbound variables, unscoped laws, effect leaks, and linearity violations."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
