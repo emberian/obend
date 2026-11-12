@@ -561,9 +561,8 @@ def loopEvents (cfg : IngressCfg) : List VerifierTurn → List KEvent
 
 /-- A run of the verifier loop. In each turn the other domains and devices act (`pre`), the
 verifier copies the ring slot, they act again (`mid`), and then the verifier hands the gatekeeper
-a request whose snapshot is what it reads from its private frame at that moment and whose
-after-image is what it reads from the shared ring; the powerbox must accept the grain's
-invocation of the snapshot, and the outbox must accept the request. -/
+a request whose snapshot is what it reads from its private frame at that moment; the powerbox
+must accept the grain's invocation of the snapshot, and the outbox must accept the request. -/
 def ValidVerifierLoop (P : Protocol) (part : SeL4MicrokitPartition) (cfg : IngressCfg) :
     LoopState → List VerifierTurn → LoopState → Prop
   | s, [], f => f = s ∧ Reach P s.sent ∧ checkMicrokitIsolation part = true
@@ -573,8 +572,6 @@ def ValidVerifierLoop (P : Protocol) (part : SeL4MicrokitPartition) (cfg : Ingre
     (translate (copyState s.kernel t).maps (.cpu cfg.vpd) cfg.privV true).isSome = true ∧
     readVia (dispatchState cfg s.kernel t) cfg.vpd (dispatchVaddr cfg) cfg.len =
       some t.out.req.spsc.sharedRingBeforeCopy ∧
-    readVia (dispatchState cfg s.kernel t) cfg.vpd cfg.sharedV cfg.len =
-      some t.out.req.spsc.sharedRingAfterVerify ∧
     Reach P s.sent ∧ SentSteps P s.sent t.out.nextSent ∧
     ∃ (h₁ : PowerboxHost) (stMid st₁ : OutboxState),
       stepPowerboxHost s.host (invokeOf t) = some h₁ ∧
@@ -597,7 +594,7 @@ theorem loop_outboxTrace {turns : List VerifierTurn} {s f : LoopState}
     exact ⟨rfl, rfl, hr, hi⟩
   | cons t ts ih =>
     simp only [ValidVerifierLoop] at h
-    obtain ⟨-, -, -, -, -, -, hr, hs, h₁, stMid, st₁, -, hstep, hrec, hrest⟩ := h
+    obtain ⟨-, -, -, -, -, hr, hs, h₁, stMid, st₁, -, hstep, hrec, hrest⟩ := h
     exact ⟨hr, hs, stMid, st₁, hstep, hrec, ih hrest⟩
 
 /-- The powerbox's side of a loop run is a valid powerbox trace of invocations. -/
@@ -611,7 +608,7 @@ theorem loop_powerboxTrace {turns : List VerifierTurn} {s f : LoopState}
     rfl
   | cons t ts ih =>
     simp only [ValidVerifierLoop] at h
-    obtain ⟨-, -, -, -, -, -, -, -, h₁, stMid, st₁, hinv, -, -, hrest⟩ := h
+    obtain ⟨-, -, -, -, -, -, -, h₁, stMid, st₁, hinv, -, -, hrest⟩ := h
     exact ⟨h₁, hinv, ih hrest⟩
 
 /-- The kernel's side of a loop run is one kernel trace. -/
@@ -625,7 +622,7 @@ theorem loop_kernel_run {turns : List VerifierTurn} {s f : LoopState}
     rfl
   | cons t ts ih =>
     simp only [ValidVerifierLoop] at h
-    obtain ⟨-, -, -, -, -, -, -, -, h₁, stMid, st₁, -, -, -, hrest⟩ := h
+    obtain ⟨-, -, -, -, -, -, -, h₁, stMid, st₁, -, -, -, hrest⟩ := h
     rw [ih hrest]
     simp only [loopEvents, runK_append, runK, dispatchState, copyState, ingressCopy]
 
@@ -645,7 +642,7 @@ theorem loop_ingress {k₀ : KState} {da₀ : Nat} (hU : VUnique k₀.maps)
     exact ⟨hInv, fun _ ht => by cases ht⟩
   | cons t ts ih =>
     simp only [ValidVerifierLoop] at h
-    obtain ⟨hpre, hmid, hring, hcopy, hdisp, -, -, -, h₁, stMid, st₁, -, -, -, hrest⟩ := h
+    obtain ⟨hpre, hmid, hring, hcopy, hdisp, -, -, h₁, stMid, st₁, -, -, -, hrest⟩ := h
     obtain ⟨hInv₁, -⟩ := privInv_run t.pre s.kernel hInv hpre
     obtain ⟨heq, hInv₃⟩ :=
       copy_into_private_pd_frame_before_verify hU hP₀ hInv₁ hring hcopy t.mid hmid hdisp
@@ -664,7 +661,7 @@ theorem loop_audit {turns : List VerifierTurn} {s f : LoopState}
   | nil => intro t ht; cases ht
   | cons t ts ih =>
     simp only [ValidVerifierLoop] at h
-    obtain ⟨-, -, -, -, -, -, -, -, h₁, stMid, st₁, hinv, -, -, hrest⟩ := h
+    obtain ⟨-, -, -, -, -, -, -, h₁, stMid, st₁, hinv, -, -, hrest⟩ := h
     intro x hx
     rcases List.mem_cons.mp hx with rfl | hx
     · obtain ⟨c, -, -, rfl⟩ := step_invoke hinv

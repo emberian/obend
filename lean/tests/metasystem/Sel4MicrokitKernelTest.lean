@@ -468,11 +468,11 @@ example (mid : List KEvent) (hAdv : ∀ ev ∈ mid, ev.actor ≠ some verifier) 
 def proto : Protocol := ⟨[0, 1, 2, 3], 1, (· == 3), by decide, by decide, by decide⟩
 def outbox₀ : OutboxState := ⟨3, 0, 500, 0, [], 0, []⟩
 
-/-- The request the gatekeeper is handed: the snapshot `1 2 3 4`, and the ring as the client left
-it after the copy. -/
+/-- The request the gatekeeper is handed: the private-frame snapshot `1 2 3 4` copied from SPSC
+channel 0 before concurrent producer/DMA writes race the shared ring. -/
 def readReq : OutboxEffectReq :=
   ⟨1, .idempotentRead, 1, [], none, none,
-    ⟨0, bytesOfList [1, 2, 3, 4], bytesOfList [0xFF, 0xFF, 3, 4]⟩⟩
+    ⟨0, bytesOfList [1, 2, 3, 4]⟩⟩
 
 /-- The client publishes, the verifier copies, the client and the device race, grain 0 invokes
 slot 0. -/
@@ -488,9 +488,7 @@ theorem turn_kernel :
     readVia (copyState k₀ turn) cfg.vpd cfg.sharedV cfg.len = some turn.ringAtCopy ∧
     (translate (copyState k₀ turn).maps (.cpu cfg.vpd) cfg.privV true).isSome = true ∧
     readVia (dispatchState cfg k₀ turn) cfg.vpd (dispatchVaddr cfg) cfg.len =
-      some turn.out.req.spsc.sharedRingBeforeCopy ∧
-    readVia (dispatchState cfg k₀ turn) cfg.vpd cfg.sharedV cfg.len =
-      some turn.out.req.spsc.sharedRingAfterVerify := by
+      some turn.out.req.spsc.sharedRingBeforeCopy := by
   decide
 
 theorem turn_outbox : stepOutbox proto sampleValidPartition [] outbox₀ readReq = some outbox₁ := by
@@ -499,8 +497,8 @@ theorem turn_outbox : stepOutbox proto sampleValidPartition [] outbox₀ readReq
 theorem turn_valid (h h₁ : PowerboxHost) (hinv : stepPowerboxHost h (invokeOf turn) = some h₁) :
     ValidVerifierLoop proto sampleValidPartition cfg ⟨k₀, [], outbox₀, h⟩ [turn]
       ⟨dispatchState cfg k₀ turn, [], outbox₁, h₁⟩ :=
-  ⟨turn_kernel.1, turn_kernel.2.1, turn_kernel.2.2.1, turn_kernel.2.2.2.1, turn_kernel.2.2.2.2.1,
-    turn_kernel.2.2.2.2.2, Reach.nil, SentSteps.refl _, h₁, outbox₁, outbox₁, hinv, turn_outbox,
+  ⟨turn_kernel.1, turn_kernel.2.1, turn_kernel.2.2.1, turn_kernel.2.2.2.1, turn_kernel.2.2.2.2,
+    Reach.nil, SentSteps.refl _, h₁, outbox₁, outbox₁, hinv, turn_outbox,
     rfl, rfl, Reach.nil, by decide⟩
 
 /-- Every kernel and outbox premise of the loop theorem is discharged on that run. -/
