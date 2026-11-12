@@ -36,11 +36,20 @@ spec PureWord64Spec for Word64Ops:
     ((a + self.signBit64) % self.modulus64) < ((b + self.signBit64) % self.modulus64)
   def qmul32(a: Nat, b: Nat) -> Nat:
     ((a * b) / self.q32Scale) % self.modulus64
-  claim add64_open_recursion(a: Nat, b: Nat): self.add64(a, b) == (a + b) % self.modulus64
-  claim sub64_open_recursion(a: Nat, b: Nat): self.sub64(a, b) == (a + (self.modulus64 - (b % self.modulus64))) % self.modulus64
-  claim shl64_open_recursion(a: Nat, pow2: Nat): self.shl64(a, pow2) == (a * pow2) % self.modulus64
-  claim lshr64_open_recursion(a: Nat, pow2: Nat): self.lshr64(a, pow2) == (a % self.modulus64) / pow2
-  claim qmul32_open_recursion(a: Nat, b: Nat): self.qmul32(a, b) == ((a * b) / self.q32Scale) % self.modulus64
+  # Subtraction by two's complement: with `comp` the complement of `b` (`b + comp == 2^64`) and
+  # `a == b + d` (no borrow), the sum `a + comp` that `sub64` reduces is exactly `d + 2^64`, so the
+  # reduction modulo `2^64` returns the true difference `d`.
+  claim sub64_twos_complement_cancel(a: Nat, b: Nat, comp: Nat, d: Nat) given b + comp == 18446744073709551616n && a == b + d by judge("groebner@1"): a + comp == d + 18446744073709551616n
+  # Euclidean shift-right / shift-left floor conservation: `a == q * pow2 + rem` implies `(a / pow2) * pow2 <= a`.
+  claim lshr64_shl64_floor_conservation(a: Nat, q: Nat, rem: Nat, pow2: Nat) given a == q * pow2 + rem by judge("groebner@1"): q * pow2 <= a
+  # `Q` fixed-point products of scaled integers are exact: `(x * s) * (y * s)` is `(x * y * s)` times
+  # the scale `s` with no remainder, so `qmul32`'s division by `q32Scale` loses nothing on them
+  # (`qmul32_three_times_two_exact` below is the instance x = 3, y = 2, s = 2^32).
+  claim qmul32_scaled_integers_exact(x: Nat, y: Nat, s: Nat) by judge("groebner@1"): (x * s) * (y * s) == ((x * y) * s) * s
+  # Signed `slt64` sign-bit bias (`+ 2^63`) stays strictly below `2^64` for all non-negative signed 64-bit ints (`<= 2^63 - 1`).
+  claim slt64_nonneg_no_wrap_headroom(a: Nat) given a <= 9223372036854775807n by judge("interval@1"): a + 9223372036854775808n <= 18446744073709551615n
+  # Exact `Q32.32` fixed-point product witness: `3.0 * 2.0 == 6.0` (`3 * 2^32` times `2 * 2^32` scaled by `2^-32`).
+  claim qmul32_three_times_two_exact() by weave: self.qmul32(12884901888n, 8589934592n) == 25769803776n
 
 def seedWord64() -> Word64Ops:
   {modulus64: 0n, signBit64: 0n, q32Scale: 0n, add64: fn(a: Nat, b: Nat) -> Nat: 0n, sub64: fn(a: Nat, b: Nat) -> Nat: 0n, shl64: fn(a: Nat, p: Nat) -> Nat: 0n, lshr64: fn(a: Nat, p: Nat) -> Nat: 0n, slt64: fn(a: Nat, b: Nat) -> Bool: 0n < 0n, qmul32: fn(a: Nat, b: Nat) -> Nat: 0n}

@@ -21,12 +21,20 @@ spec HelicalChannelReferenceSpec for ImpellerCoolingChannel:
     2000n
   def boreDiameterUm() -> Nat:
     self.boreRadiusUm + self.boreRadiusUm
-  claim bore_diameter_twice_radius(): self.boreDiameterUm() == self.boreRadiusUm + self.boreRadiusUm
+  # Minimum wall-thickness invariant (`checkWall_sound` geometric precondition): for bore offset 4000 um,
+  # conformal bore radius `rBore <= 2000` um, and minimum wall `2000` um, `offset + rBore + minWall <= 8000` um,
+  # leaving >= 2000 um outer margin inside the 10000 um impeller hub radius.
+  claim conformal_bore_preserves_hub_wall_margin(rBoreUm: Nat) given rBoreUm <= 2000n by judge("interval@1"): 4000n + rBoreUm + 2000n <= 8000n
+  # Annular wall section around the bore: with outer radius `rOuter == rBore + wall`, the ring area
+  # `rOuter^2 - rBore^2` (in units of pi) is the wall thickness times the sum of the two radii, i.e.
+  # wall times mean circumference (written without subtraction).
+  claim annular_wall_section_is_wall_times_radius_sum(rBoreUm: Nat, wallUm: Nat, rOuterUm: Nat) given rOuterUm == rBoreUm + wallUm by judge("groebner@1"): rOuterUm * rOuterUm == rBoreUm * rBoreUm + wallUm * (rOuterUm + rBoreUm)
 
 spec ConformalBoreLocalOverride for ImpellerCoolingChannel:
   requires boreRadiusUm() -> Nat
   def boreRadiusUm() -> Nat:
     2000n
+  claim conformal_override_widens_bore_diameter() by weave: self.boreDiameterUm() == 4000n
 
 def seedCoolingChannel() -> ImpellerCoolingChannel:
   {boreRadiusUm: 0n, boreOffsetXUm: 0n, minWallUm: 0n, boreDiameterUm: 0n}

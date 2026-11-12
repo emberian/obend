@@ -20,12 +20,16 @@ spec BaseImpellerSubLayerSpec for ImpellerBody:
     0n
   def hubTopUm(baseUm: Nat) -> Nat:
     baseUm + self.hubHeightUm
-  claim hub_top_follows_height(baseUm: Nat): self.hubTopUm(baseUm) == baseUm + self.hubHeightUm
+  # Axial Z-stackup clearance law: across any fixture datum `baseUm <= 50000` um, the shrouded
+  # 8000 um impeller hub top stays strictly below a 63000 um Z-retract safety plane (5000 um clearance).
+  claim hub_top_retract_plane_clearance(baseUm: Nat) given baseUm <= 50000n by judge("interval@1"): baseUm + 8000n + 5000n <= 63000n
+  claim hub_stackup_datum_monotonicity(bLow: Nat, bHigh: Nat, hUm: Nat) given bLow <= bHigh by judge("groebner@1"): bLow + hUm <= bHigh + hUm
 
 spec HighSpeedShroudOverride for ImpellerBody:
   requires hubHeightUm() -> Nat
   def hubHeightUm() -> Nat:
     8000n
+  claim high_speed_shroud_raises_hub_top() by weave: self.hubTopUm(1500n) == 9500n
 
 def seedImpellerBody() -> ImpellerBody:
   {hubRadiusUm: 0n, hubHeightUm: 0n, hubCentreXUm: 0n, hubTopUm: fn(b: Nat) -> Nat: b}

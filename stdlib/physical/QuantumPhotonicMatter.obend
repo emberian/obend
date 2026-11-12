@@ -22,7 +22,9 @@ spec PlanarWaveguideMeshBase for ClementsPhotonicArray:
     inputMw * self.krawtchoukRatioWeight + 10n
   def szegedyQuotientStepPhaseMrad(stepIdx: Nat) -> Nat:
     stepIdx * 25n
-  claim clements_power_open_recursion(inputMw: Nat): self.transferredOpticalPowerMw(inputMw) == inputMw * self.krawtchoukRatioWeight + 10n
+  # Unitary 2x2 MZI directional-coupler Cauchy-Schwarz optical intensity bound:
+  # |(a*c + b*d)|^2 <= (a^2 + b^2) * (c^2 + d^2) ensures passive port power never exceeds total input power.
+  claim clements_mzi_cauchy_schwarz_power(a: Nat, b: Nat, c: Nat, d: Nat) by judge("groebner@1"): (a * c + b * d) * (a * c + b * d) <= (a * a + b * b) * (c * c + d * d)
 
 spec KrawtchoukFaddeevCompensatedOverride for ClementsPhotonicArray:
   requires szegedyQuotientStepPhaseMrad(stepIdx: Nat) -> Nat
@@ -32,6 +34,7 @@ spec KrawtchoukFaddeevCompensatedOverride for ClementsPhotonicArray:
     0n
   def szegedyQuotientStepPhaseMrad(stepIdx: Nat) -> Nat:
     super.szegedyQuotientStepPhaseMrad(stepIdx) + 50n
+  claim compensated_clements_eliminates_thermal_residual() by weave: self.transferredOpticalPowerMw(20n) == 90n
 
 def seedClementsArray() -> ClementsPhotonicArray:
   {krawtchoukRatioWeight: 0n, faddeevThermalResidualPpm: 0n, transferredOpticalPowerMw: fn(p: Nat) -> Nat: 0n, szegedyQuotientStepPhaseMrad: fn(s: Nat) -> Nat: 0n}
@@ -64,7 +67,14 @@ spec TetronParitySectorBase for MajoranaTetronCodeCell:
     braidCount * 90n + self.cliffordParityGapUeV
   def lindbladResetRateKhz(quasiparticleFlux: Nat) -> Nat:
     quasiparticleFlux * 3n + 12n
-  claim tetron_braid_open_recursion(braidCount: Nat): self.ivanovBraidPhaseMrad(braidCount) == braidCount * 90n + self.cliffordParityGapUeV
+  # Ivanov exchange of two Majorana modes acts on a qubit amplitude pair as the unnormalised braid
+  # matrix M = [[1, -1], [1, 1]]: `(x, y) -> (a, b)` with `a == x - y` (written `a + y == x`) and
+  # `b == x + y`. It doubles the squared norm, so M / sqrt(2) is unitary; four exchanges scale the
+  # norm by 16, consistent with M^4 == -4 * I (the braid's four-fold periodicity up to sign).
+  claim tetron_braid_exchange_doubles_norm(x: Nat, y: Nat, a: Nat, b: Nat) given a + y == x && b == x + y by judge("groebner@1"): a * a + b * b == 2n * (x * x + y * y)
+  # Fermion-parity eigenvalue sPos-sNeg = 2p-1 squares to one. Signed Nat limbs retain both
+  # sectors: (p,sPos,sNeg) = (0,0,1) and (1,1,0), unlike a nonnegative eigenvalue carrier.
+  claim tetron_parity_involution_square(p: Nat, sPos: Nat, sNeg: Nat) given p * p == p && sPos + 1n == 2n * p + sNeg by judge("groebner@1"): sPos * sPos + sNeg * sNeg == 2n * sPos * sNeg + 1n
 
 spec LindbladCooledTetronOverride for MajoranaTetronCodeCell:
   requires lindbladResetRateKhz(quasiparticleFlux: Nat) -> Nat
@@ -74,6 +84,7 @@ spec LindbladCooledTetronOverride for MajoranaTetronCodeCell:
     0n
   def lindbladResetRateKhz(quasiparticleFlux: Nat) -> Nat:
     super.lindbladResetRateKhz(quasiparticleFlux) + 30n
+  claim lindblad_cooling_widens_tetron_parity_gap() by weave: self.ivanovBraidPhaseMrad(2n) == 420n
 
 def seedTetronCell() -> MajoranaTetronCodeCell:
   {cliffordParityGapUeV: 0n, breakingScoreFloor: 0n, ivanovBraidPhaseMrad: fn(b: Nat) -> Nat: 0n, lindbladResetRateKhz: fn(q: Nat) -> Nat: 0n}

@@ -25,7 +25,7 @@ What is here, and what is not.
   `Obend.Hardware.Fabulous.Bitstream` decodes the `.bin` against FABulous's `bitStreamSpec.csv`,
   `pips.txt` and `bel.v2.txt` (on this design it agrees bit for bit with nextpnr's FASM) and follows
   the configured routing back to a `Net` of LUT4 gates and flops; `Mac8Net.lean` is that net, generated.
-  `Obend.Hardware.Fabulous.Mac8.mac8_fabric_realizes_module` (from `fabric_realizes_module`, a plain
+  `Obend.Hardware.Fabulous.mac8_fabric_realizes_module` (in `lean/Obend/Hardware/Fabulous/Mac8.lean`, from `fabric_realizes_module`, a plain
   induction) says the net shows `output mac_out` on every cycle of every in-width trace; its one-step and
   reset conditions are closed Boolean statements over the gate equations, discharged by `bv_decide`
   (compiled-evaluation trust, re-run by `#assert_compiled`). `verify_fabric.sh` rebuilds the bitstream
@@ -58,7 +58,7 @@ What is here, and what is not.
   `Cert.checkF_sound`), a few blocks per `decide +kernel`, and `mac8_bin_required`: the committed bitstream, as the
   Lean number `Mac8Bin.lean` and read through `binBits` (FABulous's bit_gen frame layout, header and frame-select
   words checked by `mac8Bin_framed`), has every bit the certificate requires (11,267).
-  `Mac8Tiles.mac8_bitstream_realizes_module` is the MAC theorem for that configuration with no hypothesis
+  `Obend.Hardware.Fabulous.mac8_bitstream_realizes_module` (in `lean/Obend/Hardware/Fabulous/Mac8Tiles.lean`) is the MAC theorem for that configuration with no hypothesis
   on the bits. Those modules build on hbox (`swarm-build`, `SWARM_MEM_MAX=16G`); on the Mac,
   `verify_fabric.sh` regenerates the three files byte for byte. Taken as given: the tiles' top-level
   wiring (`LUT4AB.v`'s jump and nested wires, as `pips.txt` fixed pips, which `obend fabric check` checks),
@@ -85,7 +85,7 @@ compared the Lean AST with a renaming of itself and read no SystemVerilog; the L
 `emitModuleSV` from an `RtlModule` runs it after byte equality and before Verilator.
 
 - **The emitted SV against Lean's model (all of them).** `obend-emit-sv <target> --lec` writes
-  `X_lec.smt2` from the same `RtlModule` (`Obend.Hardware.YosysLec.emitYosysLecSmt2`; checked in,
+  `X_lec.smt2` from the same `RtlModule` (`emitYosysLecSmt2` in `lean/Obend/Hardware/YosysLec.lean`; checked in,
   regenerated and byte-compared like the `.sv`). It is Lean's model of the module as `QF_BV` terms
   (`smtOf`, printed by `SmtBV.print`), read over the port and register names of Yosys's `yosys -p write_smt2` of
   `X.sv` (frontend and `proc` only, no optimization passes), and a miter. z3 `unsat` proves: for every input and every register state, the module
@@ -137,16 +137,21 @@ compared the Lean AST with a renaming of itself and read no SystemVerilog; the L
 - **Gates.** Each run flips bit 0 of the first output in a copy of `X.sv` (never the committed file);
   the LEC must answer `sat` and prints the failing obligation with both values, and EQY must fail.
 
-Not covered: `foc-hil` and `sdr-ft8` (hand-written `.sv`, no `RtlModule`), and
-`silicon-kernel-verilator` (its `.sv` is printed by a string emitter, not from an `RtlModule`).
+App-level sequential LEC coverage: `apps/foc-hil/verilator/foc_drive_top.sv` is emitted from
+`Obend.Apps.FocHil.focHilSequentialRtlModule` (`obend-emit-sv foc-hil`) and LEC-checked against
+`foc_drive_top_lec.smt2` (`--no-eqy`, 64-bit Q32 decoupling multiplies); `apps/sdr-ft8/verilator/`
+emits and LEC-checks the three receive-chain stages `sdr_nco_mix.sv`, `sdr_cic3_r64.sv` and
+`sdr_ft8_disc.sv` from `sdrNcoModule`, `sdrCicModule` and `sdrFt8DiscModule` in
+`lean/Obend/Apps/SdrFt8Rx.lean`. Outside `RtlModule` LEC: `apps/sdr-ft8/verilator/sdr_ft8_top.sv`
+(legacy hand-written transceiver reference) and `silicon-kernel-verilator` (its `.sv` is printed by
+a string emitter, not from an `RtlModule`).
 
-Two hand-typed property sheets remain, `apps/foc-hil/verilator/foc_drive_props.smt2` and
-`apps/sdr-ft8/verilator/sdr_ft8_props.smt2`, each run by its app's `verify_*.sh`. They state
-properties of formulas typed into them (a transcription of the hand-written datapath, the
-over-temperature gate kill, image cancellation and the like), not of the `.sv` beside them; they stay
-because those two apps have no `RtlModule`, so nothing else checks them at all. The quantum_photonic
-and sovereign_drex sheets were removed on 2026-11-05: their modules are emitted from an
-`RtlModule`, and the LEC checks the `.sv` itself.
+Two standalone Z3 `QF_BV` property sheets, `apps/foc-hil/verilator/foc_drive_props.smt2` and
+`apps/sdr-ft8/verilator/sdr_ft8_props.smt2`, run inside their app `verify_*.sh` scripts: the FOC
+sheet checks safety-barrier formulas alongside the `foc_drive_top.sv` `RtlModule` LEC, and the SDR
+sheet checks formulas transcribed from the hand-written `sdr_ft8_top.sv` reference datapath. All
+other app hardware modules (`obend-risc`, `zk-ntt`, `fidget-cam`, `quantum-photonic-matter`,
+`sovereign-drex`) are emitted directly from an `RtlModule` and verified on their `.sv` by `lec.sh`.
 
 `rust-ffi/` is unrelated to the FPGA path (CBOR codec, FEMM/octree engines) and is owned by the
 physics lane.
@@ -284,10 +289,10 @@ to the superseded shaders and do not certify this revision. The new workgroup sh
 RDNA2 model lane to add lane-count and shared-memory instructions before the full G2 gate is green.
 The array-to-RTL commuting square below covers ordinary array graphs; no block-NTT-to-RTL theorem is claimed.
 
-### rung G2: the dumped ISA, read by Lean (`rdna2/`, `isa_check.sh`)
+### rung G2: the dumped ISA, read by Lean (`gpu/rdna2/`, `isa_check.sh`)
 
-`rdna2/amdgpu_isa_rdna2.xml` is AMD's machine-readable RDNA 2 specification (GPUOpen, bundle of 2026-08-06;
-`rdna2/README.md` has the URL, date and hashes). `rdna2/gen_encodings.py` writes
+`gpu/rdna2/amdgpu_isa_rdna2.xml` is AMD's machine-readable RDNA 2 specification (GPUOpen, bundle of 2026-08-06;
+`gpu/rdna2/README.md` has the URL, date and hashes). `gpu/rdna2/gen_encodings.py` writes
 `Obend.Hardware.Gpu.Rdna2.Encodings` and `Insts.*` from it: every encoding with its identifier mask,
 identifiers, condition expressions and bit fields, every instruction with every encoding entry and
 operand, every operand type with its predefined values; nothing in them is typed. `Obend.Hardware.Gpu.Rdna2.Decode`
@@ -303,8 +308,8 @@ after LNSym's `ArmState` (accessors, a `step` that decodes and executes, a `run`
 arrays so the compiled check runs the largest dump in seconds. Each instruction follows the
 pseudo-code of the RDNA 2 ISA reference guide (chapter 12, cited per instruction) and, where the
 instruction exists in gem5's executable Vega model, was checked against gem5's `execute` body:
-`rdna2/gem5_ref.cpp` ports those bodies line by line, `rdna2/gem5_ref.py` assembles each twin with
-llvm-mc and writes `rdna2/gem5_vectors.tsv` (random register states before and after), and the model's
+`gpu/rdna2/gem5_ref.cpp` ports those bodies line by line, `gpu/rdna2/gem5_ref.py` assembles each twin with
+llvm-mc and writes `gpu/rdna2/gem5_vectors.tsv` (random register states before and after), and the model's
 `step` must reproduce every register of every row. The subset: `s_mov_b32/b64`, `s_movk_i32`,
 `s_and_b64`, `s_cbranch_execz`, `s_endpgm`, `s_waitcnt`, `s_clause`, `s_load_dword*`,
 `s_buffer_load_dword*`, `buffer_load/store_dword{,x2,x4}`, `v_mov_b32`, `v_add_nc_u32`, `v_and/or_b32`,
@@ -321,24 +326,24 @@ dropped bits).
 The correspondence is a certificate, checked once per dump, that RADV's machine code computes the
 graph for every input (translation validation: Necula, PLDI 2000; Alive2, PLDI 2021; the symbolic
 simulation is LNSym's approach on our own model). The model is generic over its value and memory domains
-and every instruction commutes with domain homomorphisms (`Natural.run_hom`), so one `step` runs both
+and every instruction commutes with domain homomorphisms (`run_hom` in `lean/Obend/Hardware/Gpu/Rdna2/Natural.lean`), so one `step` runs both
 concretely and over terms (`Term`: hash-consed 32-bit terms with folding constructors and their
-evaluation laws), and `Sym.wave_sound` relates a symbolic wave to every concrete wave it describes.
+evaluation laws), and `wave_sound` (in `lean/Obend/Hardware/Gpu/Rdna2/Sym.lean`) relates a symbolic wave to every concrete wave it describes.
 `Host` is the memory RADV binds (`ac_build_raw_buffer_descriptor`, Mesa 24.2.8; the set's address in
 `s2`, the workgroup id in `s3`, the thread id in `v0`, per `radv_shader_args.c` and the manual's 3.12).
 What is certified is the schedule the emitter dispatches (`ArrayEmit.compile` of the lowering): an
 elementwise stage of the plan, or a collective, an admitted block program whose dispatches run LDS
-phases between barriers. Each dispatch is a certificate stage (`Cert.Spec`: its threads, its LDS, a
+phases between barriers. Each dispatch is a certificate stage (`Spec` in `lean/Obend/Hardware/Gpu/Rdna2/Cert.lean`: its threads, its LDS, a
 table of the words it writes as terms over the dispatch's start, its meaning), an elementwise stage's
-table the plan's kernels in 32-bit limbs (`Lower.pKernel`, `pKernel_sound`) and a block dispatch's the
+table the plan's kernels in 32-bit limbs (`pKernel`, `pKernel_sound` in `lean/Obend/Hardware/Gpu/Rdna2/Lower.lean`) and a block dispatch's the
 dispatch run symbolically group by group and phase by phase as `BlockLower` runs it (`Block.blockSpec`).
-`Cert.checkProgram` runs every wave of every dispatch symbolically from a start memory whose wire buffer
+`checkProgram` (in `lean/Obend/Hardware/Gpu/Rdna2/Cert.lean`) runs every wave of every dispatch symbolically from a start memory whose wire buffer
 is a variable per dword (constants an earlier dispatch stored are kept as literals; the LDS is per
 workgroup scratch the start view never reads) and checks each stored dword: in the buffer, in a word the
 dispatch's table names, stored once, and equal to the table's term up to a residual. EXEC is a pair of
 values like any register: a lane whose bit a compare computed from data writes the select, on that bit,
 of its new and old value (manual 6.2.2), and an `S_CBRANCH_EXECZ` on such a mask is a join
-(`Join.srun`): the region is run once symbolically and once with EXEC zero, and when the second leaves
+(`srun` in `lean/Obend/Hardware/Gpu/Rdna2/Join.lean`): the region is run once symbolically and once with EXEC zero, and when the second leaves
 every VGPR and stored dword as it was, the join keeps the first's vector state and selects each changed
 scalar on EXECZ, the reading by which LLVM drops or keeps the branch (`mustRetainExeczBranch`), with the
 state merge of symbolic execution; `srun_sound`: the concrete run, which branches by its own EXEC, ends
@@ -358,7 +363,7 @@ evaluation law, then `grind`'s ring solver). `Schedule.certifySchedule_sound`: i
 accepts and the residuals hold, then for every content of the wire buffer the decoded programs, run on
 the model as the host dispatches the schedule (the index buffer `ArrayEmit.scheduleTables`, the function
 the plan's tables are written from), leave in every word what the schedule's actions compute
-(`ArrayEmit.evalActions`). `Certified.certifyDump` is the check of one dump: the graph well formed with a
+(`ArrayEmit.evalActions`). `certifyDump` (in `lean/Obend/Hardware/Gpu/Rdna2/Certified.lean`) is the check of one dump: the graph well formed with a
 checked layout, the waits sufficient (`Waitcnt`, below: the hypothesis that makes the model's immediate
 memory the device's), every stage decoded, and the schedule certified with the library;
 `certifyDump_sound` composes it with `ArrayEmitCorrect.compile_runProgram` and `lowerArrayToGpu_sound`,
@@ -400,8 +405,8 @@ hazard rules of LLVM's `SIInsertWaitcnts` (every use and def against the counter
 vector load's write-after-write needs no wait on gfx10; store data needs no wait), and refuses a program
 that touches a load's destination before a covering wait. `isa_check.sh` stage 6 runs it on every dump
 and requires a dump with the first `vmcnt` wait of stage 0 replaced by `s_nop 0` to be refused;
-`rdna2/waitcnt_plant.py` plants the same `s_nop` in the machine code the card runs, through Mesa's
-shader cache, for the measurement reported in `rdna2/README.md`.
+`gpu/rdna2/waitcnt_plant.py` plants the same `s_nop` in the machine code the card runs, through Mesa's
+shader cache, for the measurement reported in `gpu/rdna2/README.md`.
 
 What the model does not yet do: execute the new shared-memory workgroup kernels. Its sequential-wave
 execution covered the earlier disjoint stage kernels; the workgroup extension must preserve G4's

@@ -36,8 +36,16 @@ spec Nominal40mSdrFt8Transceiver for SdrFt8Transceiver:
     rfMv * self.imageRejectionDb + 1250n
   def rxSensitivityMarginDb(snrDb: Nat) -> Nat:
     snrDb * 10n + self.friisNoiseFactorMilli
-  claim demod_ft8_open_recursion(rfMv: Nat): self.demodFt8SymbolStream(rfMv) == rfMv * self.imageRejectionDb + 1250n
-  claim rx_sensitivity_open_recursion(snrDb: Nat): self.rxSensitivityMarginDb(snrDb) == snrDb * 10n + self.friisNoiseFactorMilli
+  # Friis cascade, in noise-excess form `e = F - 1` (`e_ab = e_a + e_b / G_a`), is associative:
+  # folding stages 2 and 3 first (`g2 * e23 == g2 * e2 + e3`) and then putting the LNA in front
+  # (`g1 * e123 == g1 * e1 + e23`) gives the three-stage formula
+  # `e123 = e1 + e2 / g1 + e3 / (g1 * g2)`, written cleared of denominators. Each later stage's excess
+  # is divided by all the gain ahead of it.
+  claim friis_cascade_lna_noise_suppression(g1: Nat, g2: Nat, e1: Nat, e2: Nat, e3: Nat, e23: Nat, e123: Nat) given g2 * e23 == g2 * e2 + e3 && g1 * e123 == g1 * e1 + e23 by judge("groebner@1"): (g1 * g2) * e123 == (g1 * g2) * e1 + g2 * e2 + e3
+  # Sideband amplitudes of an I/Q pair with branch gains `gI`, `gQ`: the wanted sideband is
+  # `gI + gQ` and the image `m == gI - gQ` (written `m + gQ == gI`), so the wanted power exceeds the
+  # image power by exactly `4 * gI * gQ`; the image vanishes only when the gain trim equalises them.
+  claim iq_sideband_power_difference(gI: Nat, gQ: Nat, m: Nat) given m + gQ == gI by judge("groebner@1"): (gI + gQ) * (gI + gQ) == m * m + 4n * gI * gQ
   # Image rejection after calibration. The I/Q gain trim steps 1/500 and the phase trim 2 mrad, so the
   # residual gain error is at most 1000 ppm (a) and the residual phase error at most 1 mrad, for which
   # 1 - cos(phi) <= 500001e-12 (w; the taylor-model@1 enclosure of cos over [-1/1000, 1/1000]). With
@@ -57,6 +65,7 @@ spec Calibrated40mFt8TransceiverOverride for SdrFt8Transceiver:
     1410n
   def ddcFilteredMag(rfMv: Nat) -> Nat:
     super.ddcFilteredMag(rfMv) + 12n
+  claim calibrated_40m_transceiver_boosts_irr() by weave: self.demodFt8SymbolStream(100n) == 8050n
 
 def seedSdrFt8Transceiver() -> SdrFt8Transceiver:
   {carrierFreqKhz: 0n, imageRejectionDb: 0n, friisNoiseFactorMilli: 0n, ddcFilteredMag: fn(rf: Nat) -> Nat: 0n, demodFt8SymbolStream: fn(rf: Nat) -> Nat: 0n, rxSensitivityMarginDb: fn(sn: Nat) -> Nat: 0n}

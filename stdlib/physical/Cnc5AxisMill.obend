@@ -24,7 +24,13 @@ spec Uncompensated5AxisMill for Cnc5AxisMill:
     10000n
   def totalVolumetricErrorUm(cantileverArmDm: Nat) -> Nat:
     self.servoLagUm(10n) + self.endMillDeflectionUm(5n) + self.abbeAngularDriftUm(cantileverArmDm)
-  claim volumetric_decomposition(arm: Nat): self.totalVolumetricErrorUm(arm) == self.servoLagUm(10n) + self.endMillDeflectionUm(5n) + self.abbeAngularDriftUm(arm)
+  # Abbe + Ruckig compensation contracts the volumetric error from `80 + 4 * arm` um to `20 + arm` um.
+  # Over the 10 dm cantilever envelope every compensated pose (`armComp`) is at least 50 um better
+  # than every uncompensated pose (`armRaw`), including the uncompensated mill at zero arm.
+  claim abbe_ruckig_error_contraction(armComp: Nat, armRaw: Nat) given armComp <= 10n && armRaw <= 10n by judge("interval@1"): 20n + armComp + 50n <= 80n + 4n * armRaw
+  # Error-budget stack-up: the worst-case linear sum of two error sources (servo lag and Abbe drift)
+  # is at most sqrt(2) times their root-sum-square (`(e1 + e2)^2 <= 2 * (e1^2 + e2^2)`).
+  claim linear_stackup_within_sqrt2_of_rss(eServoUm: Nat, eAbbeUm: Nat) by judge("groebner@1"): (eServoUm + eAbbeUm) * (eServoUm + eAbbeUm) <= 2n * (eServoUm * eServoUm + eAbbeUm * eAbbeUm)
 
 spec AbbeAndRuckigCompensatedMill for Cnc5AxisMill:
   requires commandedAxisAt10mmUm(cantileverArmDm: Nat) -> Nat
@@ -37,6 +43,8 @@ spec AbbeAndRuckigCompensatedMill for Cnc5AxisMill:
     cantileverArmDm * 1n
   def commandedAxisAt10mmUm(cantileverArmDm: Nat) -> Nat:
     super.commandedAxisAt10mmUm(cantileverArmDm) + super.abbeAngularDriftUm(cantileverArmDm)
+  claim compensated_mill_contracts_volumetric_error() by weave: self.totalVolumetricErrorUm(6n) == 26n
+  claim compensated_precompensates_uncompensated_abbe() by weave: self.commandedAxisAt10mmUm(6n) == 10024n
 
 def seedMill() -> Cnc5AxisMill:
   {servoLagUm: fn(v: Nat) -> Nat: 0n, endMillDeflectionUm: fn(f: Nat) -> Nat: 0n, abbeAngularDriftUm: fn(arm: Nat) -> Nat: 0n, commandedAxisAt10mmUm: fn(arm: Nat) -> Nat: 10000n, totalVolumetricErrorUm: fn(arm: Nat) -> Nat: 0n}

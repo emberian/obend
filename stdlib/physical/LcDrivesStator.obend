@@ -22,7 +22,12 @@ spec OuterJacketStator for PhysicalStator:
     50n + copperLossKw * self.thermalResistance
   def camSurfaceErrorUm(feedMmPerSec: Nat) -> Nat:
     feedMmPerSec * 4n
-  claim peak_temp_open_recursion(copperLossKw: Nat): self.peakWindingTemp(copperLossKw) == 50n + copperLossKw * self.thermalResistance
+  # Direct in-slot liquid cooling (9 K/kW vs 29 K/kW jacket) holds peak Class-H winding temperature
+  # <= 176 C across the full 0..14 kW copper-loss envelope (`50 + 9 * lossKw <= 180`).
+  claim inslot_class_h_thermal_envelope(copperLossKw: Nat) given copperLossKw <= 14n by judge("interval@1"): 50n + copperLossKw * 9n <= 180n
+  # The outer-jacket baseline (29 K/kW) is already past the 180 C Class-H limit at every copper loss
+  # from 5 kW up, the range the in-slot upgrade above keeps inside it.
+  claim outer_jacket_exceeds_class_h_from_5kw(copperLossKw: Nat) given 5n <= copperLossKw && copperLossKw <= 14n by judge("interval@1"): 180n <= 50n + copperLossKw * 29n
 
 spec LcDrivesInSlotUpgrade for PhysicalStator:
   requires sdfMargin(radialClearanceMm: Nat) -> Nat
@@ -30,6 +35,7 @@ spec LcDrivesInSlotUpgrade for PhysicalStator:
     9n
   def sdfMargin(radialClearanceMm: Nat) -> Nat:
     super.sdfMargin(radialClearanceMm) + 6n
+  claim inslot_cooling_lowers_8kw_winding_temp() by weave: self.peakWindingTemp(8n) == 122n
 
 spec FiveAxisFinishMilled for PhysicalStator:
   requires camSurfaceErrorUm(feedMmPerSec: Nat) -> Nat

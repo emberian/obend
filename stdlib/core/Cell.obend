@@ -22,7 +22,12 @@ spec BaseCellSpec for StateCell:
     steps * 5n + self.epoch
   def nextValue(delta: Nat) -> Nat:
     self.value + delta
-  claim next_value_open_recursion(delta: Nat): self.nextValue(delta) == self.value + delta
+  # Two successive `nextValue` steps compose into one: if `v1` is `v0` advanced by `d1` and `v2` is
+  # `v1` advanced by `d2`, then `v2` is `v0` advanced by `d1 + d2` (deltas act on the cell additively,
+  # so a replayed log may coalesce adjacent steps).
+  claim next_value_open_recursion(v0: Nat, d1: Nat, d2: Nat, v1: Nat, v2: Nat) given v1 == v0 + d1 && v2 == v1 + d2 by judge("groebner@1"): v2 == v0 + (d1 + d2)
+  # Monotone state-delta accumulation: larger non-negative deltas strictly preserve cell value order.
+  claim cell_next_monotone_in_delta(v0: Nat, d1: Nat, d2: Nat) given d1 <= d2 by judge("groebner@1"): v0 + d1 <= v0 + d2
 
 spec VersionedCellOverride for StateCell:
   requires gasCost(steps: Nat) -> Nat
@@ -30,6 +35,7 @@ spec VersionedCellOverride for StateCell:
     2n
   def gasCost(steps: Nat) -> Nat:
     super.gasCost(steps) + 10n
+  claim versioned_gas_reflects_overridden_epoch() by weave: self.gasCost(4n) == 32n
 
 def seedCell() -> StateCell:
   {epoch: 0n, value: 0n, gasCost: fn(s: Nat) -> Nat: s, nextValue: fn(d: Nat) -> Nat: d}

@@ -39,7 +39,9 @@ spec BaseSicFcmlLegSpec for SicFcmlLegController:
     180n + tempC * 2n
   def safetyBarrierHeadroomC(tempC: Nat) -> Nat:
     self.thermalWarningLimitC + tempC
-  claim lyapunov_cap_balance_open_recursion(capErrMv: Nat): self.alwaysFfCapErrMv(capErrMv) == capErrMv * self.activeBalGainPermille + 25n
+  # Thermal CBF gate-kill barrier (`law bounded_winding_temp_c: new.windingTempC <= 180`):
+  # below the 155 C warning threshold, derated duty `180 + 2 * tempC + 10` stays strictly <= 500 permille (50% modulation cap).
+  claim fcml_thermal_derating_half_duty_cap(tempC: Nat) given tempC <= 155n by judge("interval@1"): 180n + tempC * 2n + 10n <= 500n
   # The balancer's energy contraction (0.8 e)^2 <= e^2, as a polynomial inequality groebner@1 can bind
   # (sos-lyapunov-cbf@1 has no claim surface; the old claim `capErrMv <= 15000n` was false).
   claim fcml_balance_energy_contracts(capErrMv: Nat) by judge("groebner@1"): capErrMv * 8n * (capErrMv * 8n) <= capErrMv * 10n * (capErrMv * 10n)
@@ -52,6 +54,7 @@ spec LyapunovBalancedThermalBarrierOverride for SicFcmlLegController:
     155n
   def thermalDeratedDutyPermille(tempC: Nat) -> Nat:
     super.thermalDeratedDutyPermille(tempC) + 10n
+  claim lyapunov_override_contracts_15v_step() by weave: self.alwaysFfCapErrMv(15n) == 12025n
 
 def seedSicFcmlLeg() -> SicFcmlLegController:
   {fcmlLevels: 0n, activeBalGainPermille: 0n, thermalWarningLimitC: 0n, thermalShutdownLimitC: 0n, overCurrentLimitAmp: 0n, alwaysFfCapErrMv: fn(ce: Nat) -> Nat: 0n, thermalDeratedDutyPermille: fn(tc: Nat) -> Nat: 0n, safetyBarrierHeadroomC: fn(tc: Nat) -> Nat: 0n}

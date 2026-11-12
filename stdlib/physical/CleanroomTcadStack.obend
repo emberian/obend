@@ -20,7 +20,13 @@ spec PlanarBulkMosfetBase for CleanroomTcadStack:
     overdriveMilliV * 5n + self.vthMilliV
   def gateDelayPs(fanout: Nat) -> Nat:
     fanout * 8n + 20n
-  claim drain_current_open_recursion(overdriveMilliV: Nat): self.drainCurrentUa(overdriveMilliV) == overdriveMilliV * 5n + self.vthMilliV
+  # With the high-k metal-gate threshold (250 mV), the drain-current model stays within 5250 uA
+  # (5.25 mA) for every overdrive up to 1.0 V; the bound is attained at 1000 mV.
+  claim hkmg_drain_overdrive_envelope(ovMv: Nat) given ovMv <= 1000n by judge("interval@1"): ovMv * 5n + 250n <= 5250n
+  # Logical-effort stage sizing: for two cascaded stages with efforts `f1`, `f2` (path effort
+  # `F = f1 * f2` fixed), the effort delay `f1 + f2` is at least `2 * sqrt(F)`, with equality only at
+  # equal stage efforts (`4 * f1 * f2 <= (f1 + f2)^2`).
+  claim logical_effort_equal_stage_optimum(f1: Nat, f2: Nat) by judge("groebner@1"): 4n * f1 * f2 <= (f1 + f2) * (f1 + f2)
 
 spec HighKMetalGateFinFetUpgrade for CleanroomTcadStack:
   requires gateDelayPs(fanout: Nat) -> Nat
@@ -30,6 +36,7 @@ spec HighKMetalGateFinFetUpgrade for CleanroomTcadStack:
     250n
   def gateDelayPs(fanout: Nat) -> Nat:
     super.gateDelayPs(fanout) + 4n
+  claim hkmg_finfet_rebinds_vth_in_drain_current() by weave: self.drainCurrentUa(200n) == 1250n
 
 def seedTcadStack() -> CleanroomTcadStack:
   {oxideEotPicometers: 0n, vthMilliV: 0n, drainCurrentUa: fn(v: Nat) -> Nat: 0n, gateDelayPs: fn(f: Nat) -> Nat: 0n}
@@ -63,7 +70,9 @@ spec PlanarWaveguideBase for Q3PhotonicCouplerArray:
     pInMw * self.couplingWeight + self.hypercubeDim
   def krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat:
     modeIdx * 15n
-  claim transferred_power_open_recursion(pInMw: Nat): self.transferredPowerMw(pInMw) == pInMw * self.couplingWeight + self.hypercubeDim
+  # Q_3 hypercube Hamming-shell generating function: the shells at distance 0..3 from a vertex have
+  # multiplicities 1, 3, 3, 1, the coefficients of `(x + y)^3` (at x = y = 1 they sum to the 8 modes).
+  claim q3_krawtchouk_shell_conservation(x: Nat, y: Nat) by judge("groebner@1"): (x + y) * (x + y) * (x + y) == x * x * x + 3n * x * x * y + 3n * x * y * y + y * y * y
 
 spec KrawtchoukCouplingOverride for Q3PhotonicCouplerArray:
   requires krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat
@@ -71,6 +80,7 @@ spec KrawtchoukCouplingOverride for Q3PhotonicCouplerArray:
     7n
   def krawtchoukPhaseShiftMrad(modeIdx: Nat) -> Nat:
     super.krawtchoukPhaseShiftMrad(modeIdx) + 45n
+  claim krawtchouk_override_boosts_transferred_power() by weave: self.transferredPowerMw(20n) == 143n
 
 def seedPhotonic() -> Q3PhotonicCouplerArray:
   {couplingWeight: 0n, hypercubeDim: 0n, transferredPowerMw: fn(p: Nat) -> Nat: 0n, krawtchoukPhaseShiftMrad: fn(m: Nat) -> Nat: 0n}

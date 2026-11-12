@@ -37,7 +37,13 @@ spec BaseQuantumPhotonicCoProcSpec for QuantumPhotonicCoProcessor:
     batchVectors * 4n + self.faddeevCrosstalkDet
   def coProcessorCycleBudget(syndromeRounds: Nat) -> Nat:
     syndromeRounds * 16n + 4n
-  claim coproc_quotient_adjoint_open_recursion(batchVectors: Nat): self.quotientReverseAdjointOps(batchVectors) == batchVectors * 4n + self.faddeevCrosstalkDet
+  # Disorder leakage is second order in the coupler phase error: for an error up to 26 mrad the
+  # leaked power `eps^2` (ppm) stays within `law bounded_disorder_leakage: new.disorderLeakagePpm <= 676`;
+  # the bound is attained at 26 mrad.
+  claim coproc_quadratic_disorder_leakage_within_law(epsMrad: Nat) given epsMrad <= 26n by judge("interval@1"): epsMrad * epsMrad <= 676n
+  # Under `law bounded_heater_power_mw: new.heaterPowerMw <= 120` across 8 thermo-optic channels,
+  # total mesh thermal budget stays within 960 mW package cryo dissipation limit.
+  claim coproc_8channel_heater_cryo_budget(chPowerMw: Nat) given chPowerMw <= 120n by judge("interval@1"): 8n * chPowerMw <= 960n
 
 spec FaultTolerantCoProcOverride for QuantumPhotonicCoProcessor:
   requires coProcessorCycleBudget(syndromeRounds: Nat) -> Nat
@@ -45,6 +51,7 @@ spec FaultTolerantCoProcOverride for QuantumPhotonicCoProcessor:
     3142n
   def coProcessorCycleBudget(syndromeRounds: Nat) -> Nat:
     super.coProcessorCycleBudget(syndromeRounds) + 32n
+  claim fault_tolerant_override_extends_cycle_budget() by weave: self.coProcessorCycleBudget(6n) == 132n
 
 def seedQuantumPhotonicCoProc() -> QuantumPhotonicCoProcessor:
   {wlCompressedShells: 0n, faddeevCrosstalkDet: 0n, cmtKrawtchoukLength2Nm: 0n, quotientReverseAdjointOps: fn(b: Nat) -> Nat: b, coProcessorCycleBudget: fn(r: Nat) -> Nat: r}

@@ -23,7 +23,14 @@ spec SicBaseSwitch for Ms350PhaseLeg:
     currentA * 3n + self.deadtimeNs
   def effectiveGateDelayNs(marginNs: Nat) -> Nat:
     marginNs + 12n
-  claim switching_loss_open_recursion(currentA: Nat): self.switchingLossUj(currentA) == currentA * 3n + self.deadtimeNs
+  # Across the 350 A continuous phase-current envelope, protected 120 ns deadtime switching energy
+  # stays bounded below 1.2 mJ (`currentA * 3 + 120 <= 1170` uJ).
+  claim protected_sic_switching_loss_bound(currentA: Nat) given currentA <= 350n by judge("interval@1"): currentA * 3n + 120n <= 1170n
+  # 6-cell FCML voltage-stress reduction: the six cell voltages sum to the DC bus, and the total
+  # capacitive switching stress `sum v_i^2` is at least `V_bus^2 / 6`, with equality exactly when the
+  # flying capacitors are balanced. Any imbalance raises the stress above the balanced 6x reduction
+  # (`(v1 + ... + v6)^2 <= 6 * (v1^2 + ... + v6^2)`).
+  claim fcml_6cell_voltage_stress_reduction(v1: Nat, v2: Nat, v3: Nat, v4: Nat, v5: Nat, v6: Nat) by judge("groebner@1"): (v1 + v2 + v3 + v4 + v5 + v6) * (v1 + v2 + v3 + v4 + v5 + v6) <= 6n * (v1 * v1 + v2 * v2 + v3 * v3 + v4 * v4 + v5 * v5 + v6 * v6)
 
 spec DeadtimeProtectionOverride for Ms350PhaseLeg:
   requires effectiveGateDelayNs(marginNs: Nat) -> Nat
@@ -33,6 +40,7 @@ spec DeadtimeProtectionOverride for Ms350PhaseLeg:
     80n
   def effectiveGateDelayNs(marginNs: Nat) -> Nat:
     super.effectiveGateDelayNs(marginNs) + 25n
+  claim deadtime_override_updates_switching_loss() by weave: self.switchingLossUj(100n) == 420n
 
 def seedSicSwitch() -> Ms350PhaseLeg:
   {deadtimeNs: 0n, slewRateLimitVPerNs: 0n, shootThroughSafe: fn(d: Nat) -> Bool: false, switchingLossUj: fn(i: Nat) -> Nat: 0n, effectiveGateDelayNs: fn(m: Nat) -> Nat: 0n}

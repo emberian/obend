@@ -31,8 +31,13 @@ spec BaseCicDecimatorFirSpec for CicDecimatorFirChain:
     intSample * self.decimationRatio + 5n
   def foldedSymmetricFirOut(combSample: Nat) -> Nat:
     combSample * self.firCenterTapWeight + self.cicStages
-  claim cic_comb_open_recursion(intSample: Nat): self.alwaysFfCicComb3(intSample) == intSample * self.decimationRatio + 5n
-  claim folded_fir_open_recursion(combSample: Nat): self.foldedSymmetricFirOut(combSample) == combSample * self.firCenterTapWeight + self.cicStages
+  # Symmetric linear-phase FIR pre-adder folding: a 4-tap filter with taps `h0, h1, h1, h0` is the
+  # direct form's four products on the left and two pre-added products on the right.
+  claim folded_symmetric_fir_saves_multiplier(x0: Nat, x1: Nat, x2: Nat, x3: Nat, h0: Nat, h1: Nat) by judge("groebner@1"): h0 * x0 + h1 * x1 + h1 * x2 + h0 * x3 == h0 * (x0 + x3) + h1 * (x1 + x2)
+  # A CIC stage is a moving sum (Hogenauer): the integrator runs `s1 == s0 + x1`, `s2 == s1 + x2`, and
+  # the comb that subtracts the integrator state from two samples back (`s2 == s0 + out`) outputs
+  # exactly `x1 + x2`. The integrator state itself cancels, which is why its wrap-around is harmless.
+  claim cic_integrator_comb_is_moving_sum(x1: Nat, x2: Nat, s0: Nat, s1: Nat, s2: Nat, out: Nat) given s1 == s0 + x1 && s2 == s1 + x2 && s2 == s0 + out by judge("groebner@1"): out == x1 + x2
   # Hogenauer's register width for this CIC (R = 64, M = 1, N = 3, 16-bit two's-complement input):
   # the gain is (R*M)^N = 64^3 = 262144 = 2^18, so an input of magnitude at most 2^15 = 32768 gives an
   # output of magnitude at most 2^33, which is the most a 34-bit register holds (B = N*log2(R*M) + 16).
@@ -50,6 +55,7 @@ spec HogenauerCompensatedCicFirOverride for CicDecimatorFirChain:
     256n
   def alwaysFfCicInt3(inSample: Nat) -> Nat:
     super.alwaysFfCicInt3(inSample) + 4n
+  claim hogenauer_droop_override_boosts_center_tap() by weave: self.foldedSymmetricFirOut(120n) == 30723n
 
 def seedCicFirChain() -> CicDecimatorFirChain:
   {cicStages: 0n, decimationRatio: 0n, firCenterTapWeight: 0n, alwaysFfCicInt3: fn(is: Nat) -> Nat: 0n, alwaysFfCicComb3: fn(cs: Nat) -> Nat: 0n, foldedSymmetricFirOut: fn(fs: Nat) -> Nat: 0n}

@@ -25,7 +25,13 @@ spec BaseTetronBraidSpec for TetronSyndromeDecoder:
     cliffordWords * self.majoranaZeroModes + self.coolingPumpRateMHz
   def syndromeRecoveryLatencyNs(oddPoisonEvents: Nat) -> Nat:
     oddPoisonEvents * 16n + self.majoranaZeroModes
-  claim tetron_syndrome_braid_open_recursion(cliffordWords: Nat): self.braidGateDepth(cliffordWords) == cliffordWords * self.majoranaZeroModes + self.coolingPumpRateMHz
+  # Concatenating two braid words about the same Majorana pair multiplies their rotors
+  # `a + b * g` and `c + d * g` (`g^2 == -1`) into `r + (a * d + b * c) * g` with `r == a * c - b * d`
+  # (written `r + b * d == a * c`), and the squared norms multiply: a concatenation of unitary braid
+  # words is unitary (Brahmagupta-Fibonacci).
+  claim tetron_braid_word_concat_preserves_norm(a: Nat, b: Nat, c: Nat, d: Nat, r: Nat) given r + b * d == a * c by judge("groebner@1"): r * r + (a * d + b * c) * (a * d + b * c) == (a * a + b * b) * (c * c + d * d)
+  # Up to 16 odd-parity quasiparticle poisoning bursts, cooled recovery latency stays within a 280 ns cryo cycle.
+  claim parity_cooling_recovery_cycle_bound(oddEvents: Nat) given oddEvents <= 16n by judge("interval@1"): oddEvents * 16n + 4n + 12n <= 280n
 
 spec ParityCooledTetronOverride for TetronSyndromeDecoder:
   requires syndromeRecoveryLatencyNs(oddPoisonEvents: Nat) -> Nat
@@ -33,6 +39,7 @@ spec ParityCooledTetronOverride for TetronSyndromeDecoder:
     160n
   def syndromeRecoveryLatencyNs(oddPoisonEvents: Nat) -> Nat:
     super.syndromeRecoveryLatencyNs(oddPoisonEvents) + 12n
+  claim parity_cooled_pump_updates_braid_budget() by weave: self.braidGateDepth(10n) == 200n
 
 def seedTetronSyndromeDecoder() -> TetronSyndromeDecoder:
   {majoranaZeroModes: 0n, evenParityEigenvalue: 0n, coolingPumpRateMHz: 0n, braidGateDepth: fn(w: Nat) -> Nat: w, syndromeRecoveryLatencyNs: fn(e: Nat) -> Nat: e}

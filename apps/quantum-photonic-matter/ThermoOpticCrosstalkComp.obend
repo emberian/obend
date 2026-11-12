@@ -25,7 +25,13 @@ spec BaseFaddeevLeVerrierCompSpec for ThermoOpticMeshCompensator:
     targetPhaseMrads * 11n + self.faddeevDetScale
   def residualCrosstalkError(channelIdx: Nat) -> Nat:
     channelIdx * 0n + self.diagonalSelfHeatingGain
-  claim faddeev_drive_open_recursion(targetPhaseMrads: Nat): self.precompensatedHeaterDrive(targetPhaseMrads) == targetPhaseMrads * 11n + self.faddeevDetScale
+  # 2x2 principal minor of the thermo-optic crosstalk matrix, `[[d, c], [c, d]]` (self-heating `d`,
+  # nearest-neighbour coupling `c`): its eigenvalues are `d - c` (written `lamLo + c == d`) and
+  # `d + c`, and their product is the minor's determinant `d^2 - c^2`, the last Faddeev-LeVerrier
+  # coefficient. The minor is invertible exactly when `c != d`.
+  claim crosstalk_minor_det_is_eigenvalue_product(d: Nat, c: Nat, lamLo: Nat, lamHi: Nat) given lamLo + c == d && lamHi == d + c by judge("groebner@1"): lamLo * lamHi + c * c == d * d
+  # Across [0, 3142] mrad (0..pi phase shift), precompensated heater drive `11 * phi + 8769` fits within 16-bit DAC (`<= 65535`).
+  claim faddeev_heater_dac_16bit_headroom(phiMrad: Nat) given phiMrad <= 3142n by judge("interval@1"): phiMrad * 11n + 8769n <= 65535n
 
 spec ClosedLoopCrosstalkOverride for ThermoOpticMeshCompensator:
   requires residualCrosstalkError(channelIdx: Nat) -> Nat
@@ -33,6 +39,7 @@ spec ClosedLoopCrosstalkOverride for ThermoOpticMeshCompensator:
     110n
   def residualCrosstalkError(channelIdx: Nat) -> Nat:
     super.residualCrosstalkError(channelIdx) + 15n
+  claim closed_loop_crosstalk_channel_uniformity() by weave: self.residualCrosstalkError(3n) == 125n
 
 def seedThermoOpticComp() -> ThermoOpticMeshCompensator:
   {faddeevDetScale: 0n, diagonalSelfHeatingGain: 0n, nearestNeighborCrosstalk: 0n, precompensatedHeaterDrive: fn(p: Nat) -> Nat: p, residualCrosstalkError: fn(c: Nat) -> Nat: c}

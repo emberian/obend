@@ -29,7 +29,10 @@ spec UncalibratedClarkePark for ClarkeParkTransform:
     ibMa * 607n + 20n
   def cordicAngleResidualMrad(thetaMrad: Nat) -> Nat:
     thetaMrad + self.phaseOffsetMrad
-  claim direct_axis_open_recursion(iaMa: Nat): self.directAxisCurrentMa(iaMa) == iaMa * self.cordicGainPermille + 15n
+  # Power-invariant Park orthogonal rotation preserves d/q squared stator current magnitude:
+  # (iAlpha * cosT + iBeta * sinT)^2 + (iBeta * cosT - iAlpha * sinT)^2 == (iAlpha^2 + iBeta^2) * (cosT^2 + sinT^2),
+  # written without subtraction via `idOut == iAlpha * c + iBeta * s` and `iqOut + iAlpha * s == iBeta * c`.
+  claim park_rotation_preserves_stator_norm(iA: Nat, iB: Nat, c: Nat, s: Nat, iq: Nat) given iq + iA * s == iB * c by judge("groebner@1"): (iA * c + iB * s) * (iA * c + iB * s) + iq * iq == (iA * iA + iB * iB) * (c * c + s * s)
   # `taylor-model@1` has no claim surface (the language has no transcendental functions); the CORDIC
   # gain bound below is what interval@1 can bind: up to the 350 A over-current limit, the scaled
   # d-axis current stays below 2^31 (fixed-point headroom).
@@ -43,6 +46,7 @@ spec Cordic4StageCompensatedPark for ClarkeParkTransform:
     4n
   def quadratureAxisCurrentMa(ibMa: Nat) -> Nat:
     super.quadratureAxisCurrentMa(ibMa) + 8n
+  claim cordic_4stage_calibrates_direct_axis() by weave: self.directAxisCurrentMa(100n) == 60815n
 
 def seedClarkePark() -> ClarkeParkTransform:
   {cordicGainPermille: 0n, phaseOffsetMrad: 0n, alphaCurrentMa: fn(ia: Nat) -> Nat: 0n, directAxisCurrentMa: fn(ia: Nat) -> Nat: 0n, quadratureAxisCurrentMa: fn(ib: Nat) -> Nat: 0n, cordicAngleResidualMrad: fn(th: Nat) -> Nat: 0n}

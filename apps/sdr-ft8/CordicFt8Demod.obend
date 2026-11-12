@@ -27,8 +27,12 @@ spec BaseCordicFt8Spec for CordicFt8Demodulator:
     phaseMrad * 2n + 3n
   def ft8SymbolBin(deltaPhaseMrad: Nat) -> Nat:
     deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
-  claim cordic_mag_open_recursion(iVal: Nat): self.cordicEnvelopeMag(iVal) == iVal * self.cordicGainPermille + 10n
-  claim ft8_tone_bin_open_recursion(deltaPhaseMrad: Nat): self.ft8SymbolBin(deltaPhaseMrad) == deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
+  # Unrolled CORDIC pseudo-rotation gain factor (`x' = x - y/2^k`, `y' = y + x/2^k`, scaled by `2^k = s`):
+  # `(s*x - y)^2 + (s*y + x)^2 == (s^2 + 1) * (x^2 + y^2)`, written without subtraction via `xRot + y == s * x`.
+  claim cordic_microrotation_norm_scaling(x: Nat, y: Nat, s: Nat, xRot: Nat) given xRot + y == s * x by judge("groebner@1"): xRot * xRot + (s * y + x) * (s * y + x) == (s * s + 1n) * (x * x + y * y)
+  # FT8 8-FSK bandwidth invariant: 8 tones spaced at 6250 mHz span `7 * 6250 == 43750` mHz, fitting
+  # strictly inside a standard 50000 mHz (50 Hz) HF FT8 sub-band channel with 6250 mHz guard band.
+  claim ft8_8fsk_occupied_bandwidth_fits_50hz(toneIdx: Nat) given toneIdx <= 7n by judge("interval@1"): toneIdx * 6250n + 6250n <= 50000n
   # FT8's eight tones at 6.25 Hz spacing, seen by the lag-2 discriminator at the CIC's output rate
   # 12000/64 = 187.5 samples/s: tone k turns the lag-2 product by k*2pi/15 rad = k*418879 urad. Each
   # tone's decision region is half a spacing (209438 urad, less the threshold rounding) either side;
@@ -46,6 +50,7 @@ spec Unrolled4StageCordicFt8Override for CordicFt8Demodulator:
     6250n
   def alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat:
     super.alwaysFfDeltaPhaseMrad(phaseMrad) + 2n
+  claim unrolled_4stage_cordic_gain_1646() by weave: self.cordicEnvelopeMag(80n) == 131690n
 
 record CordicStatefulDiscrim:
   cicScaleSample(usbMv: Nat) -> Nat

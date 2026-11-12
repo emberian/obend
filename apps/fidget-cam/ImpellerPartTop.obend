@@ -42,12 +42,19 @@ spec OpenUsdSubLayerImpellerSpec for ImpellerCamTop:
     18000n
   def toolOffsetUm() -> Nat:
     self.toolRadiusUm + self.stockAllowanceUm
-  claim tool_offset_is_radius_plus_stock(): self.toolOffsetUm() == self.toolRadiusUm + self.stockAllowanceUm
+  # Gouge-free roughing offset law (`checkPathNoGouge_sound`): for positive stock allowance `sUm >= 100` um
+  # up to `1000` um on the 2000 um ball-nose cutter, roughing centreline offset `2000 + sUm` strictly
+  # clears the finish surface (`>= 2100` um) while staying inside the `12000` um shank reach.
+  claim roughing_offset_clears_finish_surface(sUm: Nat) given 100n <= sUm && sUm <= 1000n by judge("interval@1"): 2100n <= 2000n + sUm
+  # Five 2000 um step-down passes plus the 400 um finish allowance (10400 um) are the most the
+  # 12000 um shank reaches; a sixth pass (12400 um) would not fit.
+  claim shank_reach_exceeds_stepdown_passes(passes: Nat) given passes <= 5n by judge("interval@1"): passes * 2000n + 400n <= 12000n
 
 spec LiverpsLocalCamOverride for ImpellerCamTop:
   requires stockAllowanceUm() -> Nat
   def stockAllowanceUm() -> Nat:
     400n
+  claim livrps_override_tightens_finish_offset() by weave: self.toolOffsetUm() == 2400n
 
 def seedImpellerCamTop() -> ImpellerCamTop:
   {latticeUm: 0n, toolRadiusUm: 0n, shankLengthUm: 0n, stockAllowanceUm: 0n, clearanceAboveTopUm: 0n, stepDownUm: 0n, cutFeedMmMin: 0n, plungeFeedMmMin: 0n, spindleRpm: 0n, toolOffsetUm: 0n}

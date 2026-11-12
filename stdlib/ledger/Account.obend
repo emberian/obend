@@ -27,7 +27,13 @@ spec BaseAccountSpec for LedgerAccount:
     self.balance + amount * self.feeRate
   def totalSettlement(amount: Nat) -> Nat:
     amount + self.reserveFloor
-  claim available_open_recursion(amount: Nat): self.availableAfterFee(amount) == self.balance + amount * self.feeRate
+  # Double-entry conservation of a fee-bearing transfer: the payer is debited `amt + fee`
+  # (`balA == balA2 + amt + fee`), the payee is credited `amt` (`balB2 == balB + amt`), and the two
+  # closing balances plus the collected fee equal the two opening balances. Nothing is minted or lost.
+  claim available_open_recursion(balA: Nat, balB: Nat, amt: Nat, fee: Nat, balA2: Nat, balB2: Nat) given balA == balA2 + amt + fee && balB2 == balB + amt by judge("groebner@1"): balA2 + balB2 + fee == balA + balB
+  # Under `law bounded_fee_bps: new.feeBps <= 500` (5%), fee numerator on settlements up to
+  # 1,000,000 units stays bounded within 500,000,000 bps-units.
+  claim fee_bps_cap_envelope(amount: Nat, feeBps: Nat) given amount <= 1000000n && feeBps <= 500n by judge("interval@1"): amount * feeBps <= 500000000n
 
 spec EscrowAccountOverride for LedgerAccount:
   requires totalSettlement(amount: Nat) -> Nat
@@ -35,6 +41,7 @@ spec EscrowAccountOverride for LedgerAccount:
     150n
   def totalSettlement(amount: Nat) -> Nat:
     super.totalSettlement(amount) + 20n
+  claim escrow_settlement_absorbs_reserve_override() by weave: self.totalSettlement(100n) == 270n
 
 def seedAccount() -> LedgerAccount:
   {balance: 0n, reserveFloor: 0n, feeRate: 0n, availableAfterFee: fn(a: Nat) -> Nat: a, totalSettlement: fn(a: Nat) -> Nat: a}

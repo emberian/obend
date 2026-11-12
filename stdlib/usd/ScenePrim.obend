@@ -23,7 +23,13 @@ spec SubLayerPrimSpec for UsdScenePrim:
     parentMm + self.localOffsetMm
   def voxelStepCost(voxels: Nat) -> Nat:
     voxels * self.lodBias
-  claim world_transform_open_recursion(parentMm: Nat): self.worldTransformMm(parentMm) == parentMm + self.localOffsetMm
+  # A shared local offset preserves the order of parent placements: prims nested under parents at
+  # `p1 <= p2` keep that order in world space (no z-fighting inversion from a common xformOp).
+  claim world_transform_open_recursion(p1: Nat, p2: Nat, offMm: Nat) given p1 <= p2 by judge("groebner@1"): p1 + offMm <= p2 + offMm
+  # xformOp stack composition: applying a local scale-translate `(sL, tL)` and then the parent's
+  # `(sP, tP)` is the single scale-translate `(sP * sL, sP * tL + tP)`, so a prim's local-to-world
+  # transform can be flattened once per layer stack instead of per point.
+  claim usd_xform_stack_composes_affinely(x: Nat, sL: Nat, tL: Nat, sP: Nat, tP: Nat) by judge("groebner@1"): sP * (sL * x + tL) + tP == (sP * sL) * x + (sP * tL + tP)
 
 spec LocalOpinionOverride for UsdScenePrim:
   requires voxelStepCost(voxels: Nat) -> Nat
@@ -31,6 +37,7 @@ spec LocalOpinionOverride for UsdScenePrim:
     40n
   def voxelStepCost(voxels: Nat) -> Nat:
     super.voxelStepCost(voxels) + 8n
+  claim livrps_local_opinion_overrides_sublayer() by weave: self.worldTransformMm(100n) == 140n
 
 def seedPrim() -> UsdScenePrim:
   {localOffsetMm: 0n, lodBias: 0n, worldTransformMm: fn(p: Nat) -> Nat: p, voxelStepCost: fn(v: Nat) -> Nat: v}

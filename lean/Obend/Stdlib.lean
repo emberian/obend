@@ -10,26 +10,36 @@ import all Init.Data.ByteArray.Basic
 /-!
 # Obend.Stdlib — Multi-File `.obend` Domain Standard Library (`stdlib/{core,ledger,usd,physical}/*.obend`)
 
-Imports the multi-file `.obend` domain standard library at compile time via `#import_obend`:
+Imports and certifies the complete 11-module `.obend` domain standard library at compile time via
+`#import_obend`, including the 4 Tier-1 hardware physical modules:
 1. `stdlib/core/Cell.obend` (`StdlibCell`): capability-guarded state cell with `BaseCellSpec`,
-   `VersionedCellOverride`, `next_value_open_recursion` claim, and `monotone_epoch` / `write_once_owner` laws.
-2. `stdlib/ledger/Account.obend` (`StdlibAccount`): sovereign ledger & escrow account importing
-   `./Cell.obend as Cell`, with `BaseAccountSpec`, `EscrowAccountOverride`, `available_open_recursion`
-   claim, and `monotone_nonce` / `bounded_fee_bps` laws.
-3. `stdlib/usd/ScenePrim.obend` (`StdlibScenePrim`): OpenUSD LIVRPS scene primitive importing
-   `./Cell.obend as Cell`, with `SubLayerPrimSpec`, `LocalOpinionOverride`,
-   `world_transform_open_recursion` claim, and `monotone_frame` law.
-4. `stdlib/physical/QuantumPhotonicMatter.obend` (`StdQuantumPhotonic`): planar Clements photonic
-   CTQW array (`PlanarWaveguideMeshBase` -> `KrawtchoukFaddeevCompensatedOverride`) and Majorana
-   tetron Lindblad code cell (`TetronParitySectorBase` -> `LindbladCooledTetronOverride`), with
-   `clements_power_open_recursion` and `tetron_braid_open_recursion` claims.
+   `VersionedCellOverride`, monotonicity/open-recursion/override claims, and `monotone_epoch` /
+   `write_once_owner` laws.
+2. `stdlib/core/Word64.obend` (`StdlibWord64`): 64-bit modular machine-word and `Q32.32` fixed-point
+   specification with two's-complement cancellation, shift floor conservation, signed comparison
+   headroom, and exact `Q32.32` product claims.
+3. `stdlib/ledger/Account.obend` (`StdlibAccount`): sovereign ledger & escrow account importing
+   `../core/Cell.obend as Cell`, with double-entry transfer conservation, fee-cap envelope, and escrow override claims.
+4. `stdlib/usd/ScenePrim.obend` (`StdlibScenePrim`): OpenUSD LIVRPS scene primitive importing
+   `../core/Cell.obend as Cell`, with xformOp stack composition and LIVRPS local-opinion override claims.
+5. `stdlib/physical/QuantumPhotonicMatter.obend` (`StdQuantumPhotonic`): planar Clements photonic
+   CTQW array (with unitary MZI Cauchy–Schwarz bound) and Majorana tetron Lindblad code cell
+   (with braid-exchange norm doubling and parity involution claims).
+6. `stdlib/physical/MultiphysicsPcbTempest.obend` (`StdMultiphysicsPcb`): differential stripline
+   AM-GM bound & mode-impedance product, copper-etch DFM undercut margin, sub-cutoff
+   (`λ_min / 20`) Faraday via-fence rule, and dual-rail WDDL constant-weight balance invariants.
+7. `stdlib/physical/SymplecticSpacecraft6Dof.obend` (`StdSymplecticSpacecraft`): rational Cayley
+   attitude norm preservation & 3D Lagrange orthogonality, multi-stage impulse/mass conservation,
+   and radiative-ablative TPS thermal margin laws.
+8. Tier-1 hardware physical standard library (`Obend.Hardware.UserspacePhysical`:
+   `LcDrivesStator`, `Ms350FcmlPhaseLeg`, `CleanroomTcadStack`, `Cnc5AxisMill`).
 
-Proves compile-time gate acceptance (`FrontEnd.accept`), open-recursive claim verification,
+Proves compile-time gate acceptance (`FrontEnd.accept`), relational engineering claim verification,
 `flatten_sound` / `book_sound`, and `OB5`/`LT5` cross-package cone-pin invariance
 (`coneSupports_linkComposition_of_disjoint`, `crossPackage_bEquiv_rebinds_slot_usable`).
 -/
 
-@[expose] public section
+public section
 
 namespace Obend.Stdlib
 
@@ -47,12 +57,19 @@ open Obend.Elab.Workbook
 set_option autoImplicit false
 set_option maxHeartbeats 800000
 
-/-! ## 1. Multi-File `#import_obend` of `stdlib/{core,ledger,usd}/*.obend` -/
+/-! ## 1. Multi-File `#import_obend` of All 11 `stdlib/{core,ledger,usd,physical}/*.obend` Modules -/
 
 #import_obend "stdlib/core/Cell.obend" as StdlibCell
+#import_obend "stdlib/core/Word64.obend" as StdlibWord64
 #import_obend "stdlib/ledger/Account.obend" as StdlibAccount
 #import_obend "stdlib/usd/ScenePrim.obend" as StdlibScenePrim
 #import_obend "stdlib/physical/QuantumPhotonicMatter.obend" as StdQuantumPhotonic
+#import_obend "stdlib/physical/MultiphysicsPcbTempest.obend" as StdMultiphysicsPcb
+#import_obend "stdlib/physical/SymplecticSpacecraft6Dof.obend" as StdSymplecticSpacecraft
+#import_obend "stdlib/physical/LcDrivesStator.obend" as StdLcDrivesStator
+#import_obend "stdlib/physical/Ms350FcmlPhaseLeg.obend" as StdMs350FcmlPhaseLeg
+#import_obend "stdlib/physical/CleanroomTcadStack.obend" as StdCleanroomTcadStack
+#import_obend "stdlib/physical/Cnc5AxisMill.obend" as StdCnc5AxisMill
 
 /-- All open-recursion claims across `Cell.obend`, `Account.obend`, and `ScenePrim.obend`
 are discharged and their semantic obligation meanings hold. -/
@@ -153,9 +170,7 @@ theorem stdlib_account_crossPackage_availableAfterFee_cone_survives :
 
 /-! ## 4. Quantum Photonic Matter Standard Library (`stdlib/physical/QuantumPhotonicMatter.obend`) -/
 
-/-- Values the `#import_obend` elaboration of `StdQuantumPhotonic` produced (an `example`, not a theorem:
-these are checks of concrete outputs; `accepted`/`_holds` conjuncts were removed 2026-11-04,
-the `_holds` theorems themselves are emitted by the importer). -/
+/-- Values the `#import_obend` elaboration of `StdQuantumPhotonic` produced. -/
 example :
     StdQuantumPhotonic.clementsPowerAt20Mw_val = .nat 90 ∧
     StdQuantumPhotonic.clementsPhaseAtStep4_val = .nat 150 ∧
@@ -269,6 +284,132 @@ theorem stdlib_quantum_photonic_crossPackage_cone_survives :
   have hreb := @crossPackage_bEquiv_rebinds_slot_usable objectName target m Ct L defItem v' o c s
     cert Frame htb htl hcl hpin hrest htu htr
   exact ⟨rebindEquivPin_memberConePin cert, hreb.2.1, hreb.2.2.1, hreb.2.2.2.1, hreb.2.2.2.2⟩
+
+/-! ## 5. Revived `Word64`, `MultiphysicsPcbTempest`, `SymplecticSpacecraft6Dof`, and Tier-1 Physical Claims -/
+
+/-- All flagship relational engineering claims across `Word64.obend`,
+`MultiphysicsPcbTempest.obend`, `SymplecticSpacecraft6Dof.obend`, and the 4 Tier-1 physical
+modules (`LcDrivesStator`, `Ms350FcmlPhaseLeg`, `CleanroomTcadStack`, `Cnc5AxisMill`) are
+discharged and their semantic obligation meanings hold. -/
+theorem stdlib_revival_flagship_claims_hold :
+    obligationMeaningWithJudges workbookFormats
+      StdlibWord64.claim_sub64_twos_complement_cancel_obj
+      StdlibWord64.claim_sub64_twos_complement_cancel_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdlibWord64.claim_slt64_nonneg_no_wrap_headroom_obj
+      StdlibWord64.claim_slt64_nonneg_no_wrap_headroom_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdMultiphysicsPcb.claim_stripline_impedance_amgm_bound_obj
+      StdMultiphysicsPcb.claim_stripline_impedance_amgm_bound_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdMultiphysicsPcb.claim_faraday_via_fence_subcutoff_bound_obj
+      StdMultiphysicsPcb.claim_faraday_via_fence_subcutoff_bound_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdMultiphysicsPcb.claim_wddl_complementary_zero_crowbar_obj
+      StdMultiphysicsPcb.claim_wddl_complementary_zero_crowbar_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdMultiphysicsPcb.claim_wddl_constant_dynamic_power_obj
+      StdMultiphysicsPcb.claim_wddl_constant_dynamic_power_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdSymplecticSpacecraft.claim_cayley_planar_attitude_norm_preserved_obj
+      StdSymplecticSpacecraft.claim_cayley_planar_attitude_norm_preserved_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdSymplecticSpacecraft.claim_cayley_3d_lagrange_orthogonality_obj
+      StdSymplecticSpacecraft.claim_cayley_3d_lagrange_orthogonality_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdSymplecticSpacecraft.claim_multistage_impulse_mass_conservation_obj
+      StdSymplecticSpacecraft.claim_multistage_impulse_mass_conservation_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdSymplecticSpacecraft.claim_radiative_ablative_thermal_margin_obj
+      StdSymplecticSpacecraft.claim_radiative_ablative_thermal_margin_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdLcDrivesStator.claim_inslot_class_h_thermal_envelope_obj
+      StdLcDrivesStator.claim_inslot_class_h_thermal_envelope_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdMs350FcmlPhaseLeg.claim_fcml_6cell_voltage_stress_reduction_obj
+      StdMs350FcmlPhaseLeg.claim_fcml_6cell_voltage_stress_reduction_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdCleanroomTcadStack.claim_hkmg_drain_overdrive_envelope_obj
+      StdCleanroomTcadStack.claim_hkmg_drain_overdrive_envelope_just ∧
+    obligationMeaningWithJudges workbookFormats
+      StdCnc5AxisMill.claim_abbe_ruckig_error_contraction_obj
+      StdCnc5AxisMill.claim_abbe_ruckig_error_contraction_just :=
+  ⟨StdlibWord64.claim_sub64_twos_complement_cancel_holds,
+   StdlibWord64.claim_slt64_nonneg_no_wrap_headroom_holds,
+   StdMultiphysicsPcb.claim_stripline_impedance_amgm_bound_holds,
+   StdMultiphysicsPcb.claim_faraday_via_fence_subcutoff_bound_holds,
+   StdMultiphysicsPcb.claim_wddl_complementary_zero_crowbar_holds,
+   StdMultiphysicsPcb.claim_wddl_constant_dynamic_power_holds,
+   StdSymplecticSpacecraft.claim_cayley_planar_attitude_norm_preserved_holds,
+   StdSymplecticSpacecraft.claim_cayley_3d_lagrange_orthogonality_holds,
+   StdSymplecticSpacecraft.claim_multistage_impulse_mass_conservation_holds,
+   StdSymplecticSpacecraft.claim_radiative_ablative_thermal_margin_holds,
+   StdLcDrivesStator.claim_inslot_class_h_thermal_envelope_holds,
+   StdMs350FcmlPhaseLeg.claim_fcml_6cell_voltage_stress_reduction_holds,
+   StdCleanroomTcadStack.claim_hkmg_drain_overdrive_envelope_holds,
+   StdCnc5AxisMill.claim_abbe_ruckig_error_contraction_holds⟩
+
+/-- Package law counts and concrete open-recursive evaluations for `MultiphysicsPcbTempest`,
+`SymplecticSpacecraft6Dof`, and `Word64`. -/
+theorem stdlib_pcb_and_spacecraft_laws_and_eval :
+    StdMultiphysicsPcb.package.laws.length = 4 ∧
+    StdSymplecticSpacecraft.package.laws.length = 4 ∧
+    StdMultiphysicsPcb.tempestDiffImpedanceMohm_val = .nat 100000 ∧
+    StdMultiphysicsPcb.tempestEtchedWidthAt120Um_val = .nat 156 ∧
+    StdMultiphysicsPcb.tempestCutoffAt12Ghz_val = .nat 96500 ∧
+    StdSymplecticSpacecraft.spacecraftCayleyDenomAt200_val = .nat 1040000 ∧
+    StdSymplecticSpacecraft.spacecraftImpulseAt500Kg_val = .nat 1741450 ∧
+    StdSymplecticSpacecraft.spacecraftTpsAt40g800Kw_val = .nat 1800 ∧
+    StdlibWord64.word64AddSample_val = .nat 155 ∧
+    StdlibWord64.word64Qmul32Sample_val = .nat 25769803776 := by
+  refine ⟨by decide +kernel, by decide +kernel, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+
+theorem stdlib_pcb_and_spacecraft_compositions_closed :
+    StdlibWord64.pureWord64_comp.closedB = true ∧
+    StdMultiphysicsPcb.tempestShieldedBoard_comp.closedB = true ∧
+    StdSymplecticSpacecraft.symplecticSpacecraft6Dof_comp.closedB = true := by
+  decide +kernel
+
+/-- **`stdlib_pcb_and_spacecraft_flatten_and_book_sound`**: every member `m` of
+`pureWord64_comp`, `tempestShieldedBoard_comp`, and `symplecticSpacecraft6Dof_comp` is
+observationally equivalent (`≈b`) to its flattened object and emitted `Leaf.Book`. -/
+theorem stdlib_pcb_and_spacecraft_flatten_and_book_sound (m : String) :
+    (.get StdlibWord64.pureWord64_comp.flatten m ≈b .get StdlibWord64.pureWord64_comp.object m) ∧
+    (.get (emit StdlibWord64.pureWord64_comp).link m ≈b .get StdlibWord64.pureWord64_comp.object m) ∧
+    (.get StdMultiphysicsPcb.tempestShieldedBoard_comp.flatten m ≈b
+      .get StdMultiphysicsPcb.tempestShieldedBoard_comp.object m) ∧
+    (.get (emit StdMultiphysicsPcb.tempestShieldedBoard_comp).link m ≈b
+      .get StdMultiphysicsPcb.tempestShieldedBoard_comp.object m) ∧
+    (.get StdSymplecticSpacecraft.symplecticSpacecraft6Dof_comp.flatten m ≈b
+      .get StdSymplecticSpacecraft.symplecticSpacecraft6Dof_comp.object m) ∧
+    (.get (emit StdSymplecticSpacecraft.symplecticSpacecraft6Dof_comp).link m ≈b
+      .get StdSymplecticSpacecraft.symplecticSpacecraft6Dof_comp.object m) := by
+  have ⟨hc1, hc2, hc3⟩ := stdlib_pcb_and_spacecraft_compositions_closed
+  exact ⟨flatten_sound _ hc1 m, book_sound _ hc1 m,
+         flatten_sound _ hc2 m, book_sound _ hc2 m,
+         flatten_sound _ hc3 m, book_sound _ hc3 m⟩
+
+/-- **`stdlib_pcb_and_spacecraft_crossPackage_cone_survives`**:
+1. `TempestFaradayWddlOverride` modifies `["oddModeImpedanceMohm", "copperThicknessUm", "viaFencePitchUm", "viaFenceCutoffMarginGhzMm"]`,
+   preserving the entire `slotReadCone` of `"wddlPairChargefJ"` on `baseStriplineBoard_comp`.
+2. `CayleySymplecticThermalOverride` modifies `["exhaustVelocityMps", "dryMassKg", "ablativeEnthalpyMjPerKg", "tpsThermalCapacityKwPerM2"]`,
+   preserving the entire `slotReadCone` of `"cayleyScaleDenom"` on `nominalRigidSpacecraft_comp`. -/
+theorem stdlib_pcb_and_spacecraft_crossPackage_cone_survives :
+    let Cp := StdMultiphysicsPcb.baseStriplineBoard_comp
+    let Lp := StdMultiphysicsPcb.tempestShieldedBoard_comp.top
+    let Cs := StdSymplecticSpacecraft.nominalRigidSpacecraft_comp
+    let Ls := StdSymplecticSpacecraft.symplecticSpacecraft6Dof_comp.top
+    coneSupports (linkComposition Cp Lp) (slotReadCone Cp "wddlPairChargefJ") =
+      coneSupports Cp (slotReadCone Cp "wddlPairChargefJ") ∧
+    coneSupports (linkComposition Cs Ls) (slotReadCone Cs "cayleyScaleDenom") =
+      coneSupports Cs (slotReadCone Cs "cayleyScaleDenom") := by
+  intro Cp Lp Cs Ls
+  have hfp : Lp.flat = false := by decide +kernel
+  have hdp : ∀ m ∈ slotReadCone Cp "wddlPairChargefJ", m ∉ overlayModifiedFields Lp := by decide +kernel
+  have hfs : Ls.flat = false := by decide +kernel
+  have hds : ∀ m ∈ slotReadCone Cs "cayleyScaleDenom", m ∉ overlayModifiedFields Ls := by decide +kernel
+  exact ⟨coneSupports_linkComposition_of_disjoint Cp Lp (slotReadCone Cp "wddlPairChargefJ") hfp hdp,
+         coneSupports_linkComposition_of_disjoint Cs Ls (slotReadCone Cs "cayleyScaleDenom") hfs hds⟩
 
 end Obend.Stdlib
 

@@ -29,7 +29,10 @@ spec UncalibratedTayloeMixer for TayloeQuadratureMixer:
     rfMv * self.iqGainPermille + 12n
   def desiredUsbSignalMv(rfMv: Nat) -> Nat:
     rfMv * self.iqGainPermille + self.ncoFreqKhz
-  claim image_cancel_open_recursion(rfMv: Nat): self.imageSidebandCancelMv(rfMv) == rfMv * self.iqGainPermille + 12n
+  # Hartley / Tayloe quadrature Weaver image-cancellation identity: for balanced I/Q branch gains
+  # (`gI == gQ`), upper-sideband sum `(sig + img) + (sig - img) == 2 * sig` cancels the image sideband
+  # identically while doubling desired signal amplitude (`(usbSum + img) + (lsbDiff) == 2 * sig + img`).
+  claim tayloe_hartley_image_cancellation(sigMv: Nat, imgMv: Nat, branchI: Nat, branchQ: Nat) given branchI == sigMv + imgMv && branchQ + imgMv == sigMv by judge("groebner@1"): branchI + branchQ == 2n * sigMv
   # The tuning NCO's phasor (Obend.Apps.SdrFt8Rx.sdrNcoModule, emitted as verilator/sdr_nco_mix.sv)
   # differs from (cos, sin) of its angle by at most 0.002491 and 0.000327 plus 3 LSB in Q30
   # (nco_phasor_error: the taylor-model@1 judge's enclosure over the core's whole range [0, pi/4], and
@@ -45,6 +48,7 @@ spec Calibrated4PhaseTayloeOverride for TayloeQuadratureMixer:
     500n
   def quadratureSampleMv(rfMv: Nat) -> Nat:
     super.quadratureSampleMv(rfMv) + 2n
+  claim calibrated_4phase_tayloe_half_supply_gain() by weave: self.imageSidebandCancelMv(100n) == 50012n
 
 def seedTayloeMixer() -> TayloeQuadratureMixer:
   {ncoFreqKhz: 0n, iqGainPermille: 0n, inPhaseSampleMv: fn(rf: Nat) -> Nat: 0n, quadratureSampleMv: fn(rf: Nat) -> Nat: 0n, imageSidebandCancelMv: fn(rf: Nat) -> Nat: 0n, desiredUsbSignalMv: fn(rf: Nat) -> Nat: 0n}

@@ -37,8 +37,14 @@ spec Nominal20kHzFocDrive for FocDriveController:
     capErrMv * 20n + 10n
   def statorWindingTempC(lossWatt: Nat) -> Nat:
     45n + lossWatt * self.statorThermalResPermille
-  claim closed_loop_vq_open_recursion(iqErrAmp: Nat): self.closedLoopVqMv(iqErrAmp) == iqErrAmp * self.icapDprBandwidthGain + 250n
-  claim stator_temp_open_recursion(lossWatt: Nat): self.statorWindingTempC(lossWatt) == 45n + lossWatt * self.statorThermalResPermille
+  # SVPWM hexagon linear-modulation ceiling under ICAP DPR high-bandwidth override (`Kp = 480` mV/A):
+  # up to 1200 A transient q-axis error, commanded `Vq = 480 * iqErr + 250` mV stays inside the 692.8 V
+  # (`1200 V / sqrt(3) = 692820` mV) 1200 V DC-bus linear modulation limit (`law bounded_dc_bus_voltage_v`).
+  claim icap_dpr_vq_svpwm_hexagon_bound(iqErrAmp: Nat) given iqErrAmp <= 1200n by judge("interval@1"): iqErrAmp * 480n + 250n <= 692820n
+  # The DPR thermal-resistance upgrade (`5 -> 4` mK/W) extends the Class-H loss headroom at a 45 C
+  # inlet from 27 kW to 33.75 kW: up to 33750 W the upgraded winding stays at or below 180 C
+  # (in mC; the nominal 5 mK/W reaches 180 C at 27000 W).
+  claim dpr_thermal_upgrade_extends_loss_headroom(lossWatt: Nat) given lossWatt <= 33750n by judge("interval@1"): 45000n + lossWatt * 4n <= 180000n
   # Below 14 kW of stator loss the in-slot winding (9 mK/W: 2 caloric + 5 convective + 2 wall,
   # FluidThermal.lean) stays under Class H at a 45 C coolant inlet. The box is the claim's own `given`;
   # a claim with no box is refused (AutoCert, 2026-11-04).
@@ -52,6 +58,7 @@ spec IcapDprHighBandwidthFocOverride for FocDriveController:
     4n
   def activeFcmlBalanceMv(capErrMv: Nat) -> Nat:
     super.activeFcmlBalanceMv(capErrMv) + 15n
+  claim icap_dpr_hotswap_boosts_vq_bandwidth() by weave: self.closedLoopVqMv(250n) == 120250n
 
 def seedFocDrive() -> FocDriveController:
   {controlFreqKhz: 0n, icapDprBandwidthGain: 0n, statorThermalResPermille: 0n, closedLoopVqMv: fn(iq: Nat) -> Nat: 0n, activeFcmlBalanceMv: fn(ce: Nat) -> Nat: 0n, statorWindingTempC: fn(lw: Nat) -> Nat: 0n}

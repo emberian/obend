@@ -18,12 +18,17 @@ spec PayloadBossArcSpec for MountingBossLug:
     2000n
   def lugReachUm() -> Nat:
     self.lugCentreXUm + self.lugRadiusUm
-  claim lug_reach_is_centre_plus_radius(): self.lugReachUm() == self.lugCentreXUm + self.lugRadiusUm
+  # Boss-to-bore radial separation invariant: with cooling bore outer edge at X <= -2000 um and
+  # mounting lug at X = +10000 um with stiffened radius `rLug <= 2500` um, outer lug reach stays
+  # within the 15000 um raw billet radius (`10000 + rLug + 2400 <= 15000` with cutter offset).
+  claim stiffened_lug_fits_billet_envelope(rLugUm: Nat) given rLugUm <= 2500n by judge("interval@1"): 10000n + rLugUm + 2400n <= 15000n
+  claim lug_reach_monotone_in_stiffening(cUm: Nat, rBase: Nat, rStiff: Nat) given rBase <= rStiff by judge("groebner@1"): cUm + rBase <= cUm + rStiff
 
 spec VariantStiffenedBossOverride for MountingBossLug:
   requires lugRadiusUm() -> Nat
   def lugRadiusUm() -> Nat:
     2500n
+  claim stiffened_variant_extends_lug_reach() by weave: self.lugReachUm() == 12500n
 
 def seedMountingBoss() -> MountingBossLug:
   {lugCentreXUm: 0n, lugRadiusUm: 0n, lugReachUm: 0n}

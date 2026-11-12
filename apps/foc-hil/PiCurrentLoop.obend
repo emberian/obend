@@ -34,8 +34,14 @@ spec BasePiCurrentSpec for PiCurrentController:
     idErrAmp * 400n + 120n
   def decoupledVqCommandMv(iqErrAmp: Nat) -> Nat:
     iqErrAmp * self.kpGainPermille + self.decouplingInductanceUh
-  claim integral_q_open_recursion(errQMa: Nat): self.alwaysFfIntQ(errQMa) == errQMa * self.kiGainPermille + 200n
-  claim vq_decoupling_open_recursion(iqErrAmp: Nat): self.decoupledVqCommandMv(iqErrAmp) == iqErrAmp * self.kpGainPermille + self.decouplingInductanceUh
+  # Integrator step under the clamp (`law bounded_integral_state: new.integralStateMv <= 600000`):
+  # from any state within 535 V, one high-bandwidth integrator step (`kiStepMv`, 65 mV/mA) on a
+  # current error up to 1000 mA cannot pass the 600 V clamp; the bound is attained at the corner.
+  claim pi_integrator_step_stays_under_clamp(intQ: Nat, errMa: Nat) given intQ <= 535000n && errMa <= 1000n by judge("interval@1"): intQ + errMa * 65n <= 600000n
+  # dq apparent-power identity that the decoupling terms rely on: with active power
+  # `P = vD * iD + vQ * iQ` and reactive power `Q = vQ * iD - vD * iQ` (written `q + vD * iQ == vQ * iD`),
+  # `P^2 + Q^2 == |v|^2 * |i|^2`. The cross-coupling voltages only move power between P and Q.
+  claim dq_apparent_power_identity(vD: Nat, vQ: Nat, iD: Nat, iQ: Nat, q: Nat) given q + vD * iQ == vQ * iD by judge("groebner@1"): (vD * iD + vQ * iQ) * (vD * iD + vQ * iQ) + q * q == (vD * vD + vQ * vQ) * (iD * iD + iQ * iQ)
   # With the current error bounded by 1400 A, Kp = 400 mOhm keeps the proportional term within the
   # 600 V integrator clamp of foc_drive_top.sv.
   claim pi_modulation_interval_bound(x: Nat) given x <= 1400n by judge("interval@1"): 120n + x * 400n <= 600000n
@@ -50,6 +56,7 @@ spec CrossCoupledDecouplingOverride for PiCurrentController:
     360n
   def decoupledVdCommandMv(idErrAmp: Nat) -> Nat:
     super.decoupledVdCommandMv(idErrAmp) + 40n
+  claim decoupled_override_updates_vq_command() by weave: self.decoupledVqCommandMv(250n) == 120360n
 
 record PiStatefulStep:
   kpStepMv(errMa: Nat) -> Nat

@@ -1,0 +1,84 @@
+edition ObjectiveBend 1
+# Physical Standard Library (`stdlib/physical/SymplecticSpacecraft6Dof.obend`):
+# Rational Cayley Lie-Group 6-DOF Attitude Kinematics, Multi-Stage Impulse & Mass Conservation,
+# and Radiative-Ablative Thermal Protection Margin Laws.
+
+law monotone_guidance_tick: monotone(guidanceNavTick)
+law write_once_abort_latch: writeOnce(flightTerminationLatch)
+law bounded_char_recession_um: new.charRecessionUm <= 12000
+law bounded_body_rate_mrad_s: new.bodyRateMradPerSec <= 500
+
+record Spacecraft6DofVehicle:
+  exhaustVelocityMps() -> Nat
+  dryMassKg() -> Nat
+  ablativeEnthalpyMjPerKg() -> Nat
+  cayleyScaleDenom(halfAnglePermille: Nat) -> Nat
+  stagedImpulseNs(propMassKg: Nat) -> Nat
+  tpsThermalCapacityKwPerM2(charFluxGramM2S: Nat, radFluxKwM2: Nat) -> Nat
+
+spec NominalRigidCraft6DofSpec for Spacecraft6DofVehicle:
+  requires exhaustVelocityMps() -> Nat
+  requires dryMassKg() -> Nat
+  requires ablativeEnthalpyMjPerKg() -> Nat
+  def exhaustVelocityMps() -> Nat:
+    3100n
+  def dryMassKg() -> Nat:
+    1800n
+  def ablativeEnthalpyMjPerKg() -> Nat:
+    15n
+  def cayleyScaleDenom(halfAnglePermille: Nat) -> Nat:
+    1000000n + halfAnglePermille * halfAnglePermille
+  # Burn impulse `m_prop * v_ex` plus the separation impulse of the pusher springs, which release the
+  # dry stage at 1 m/s (`m_dry * 1`); both terms are N*s.
+  def stagedImpulseNs(propMassKg: Nat) -> Nat:
+    propMassKg * self.exhaustVelocityMps + self.dryMassKg * 1n
+  def tpsThermalCapacityKwPerM2(charFluxGramM2S: Nat, radFluxKwM2: Nat) -> Nat:
+    radFluxKwM2 + charFluxGramM2S * self.ablativeEnthalpyMjPerKg
+  # Homogeneous Cayley norm identity for half-angle w/r: the cosine numerator is r^2-w^2,
+  # represented by signed Nat limbs cPos-cNeg, so neither large angles nor negative numerators
+  # are excluded. Clearing denominators proves (cPos-cNeg)^2 + (2rw)^2 == (r^2+w^2)^2.
+  claim cayley_planar_attitude_norm_preserved(w: Nat, r: Nat, cPos: Nat, cNeg: Nat) given cPos + w * w == r * r + cNeg by judge("groebner@1"): cPos * cPos + cNeg * cNeg + (2n * r * w) * (2n * r * w) == (r * r + w * w) * (r * r + w * w) + 2n * cPos * cNeg
+  # 3D rigid-body angular-momentum & Cayley skew-vector Lagrange identity:
+  # ||g x u||^2 + (g . u)^2 == ||g||^2 * ||u||^2 (written in pure polynomial form over Nat).
+  claim cayley_3d_lagrange_orthogonality(gx: Nat, gy: Nat, gz: Nat, ux: Nat, uy: Nat, uz: Nat) by judge("groebner@1"): (gy * uz) * (gy * uz) + (gz * uy) * (gz * uy) + (gz * ux) * (gz * ux) + (gx * uz) * (gx * uz) + (gx * uy) * (gx * uy) + (gy * ux) * (gy * ux) + (gx * ux + gy * uy + gz * uz) * (gx * ux + gy * uy + gz * uz) == (gx * gx + gy * gy + gz * gz) * (ux * ux + uy * uy + uz * uz) + 2n * (gy * uz * gz * uy + gz * ux * gx * uz + gx * uy * gy * ux)
+  # Two-stage impulse and mass bookkeeping in the burnout frame. Mass is conserved across both burns
+  # (`mWet == mDry + mProp1 + mProp2`) and the exhaust leaves at `vEx` relative to the vehicle
+  # (`vBurnout == vExhAbs + vEx`). Then the momentum of the dry vehicle, plus the momentum of all the
+  # exhaust, plus the two stage impulses `mProp1 * vEx` and `mProp2 * vEx`, is the momentum the whole
+  # wet mass would carry at burnout velocity: the stage impulses are exactly the exhaust's deficit.
+  claim multistage_impulse_mass_conservation(mDry: Nat, mProp1: Nat, mProp2: Nat, vExhAbs: Nat, vEx: Nat, mWet: Nat, vBurnout: Nat) given mWet == mDry + mProp1 + mProp2 && vBurnout == vExhAbs + vEx by judge("groebner@1"): mDry * vBurnout + (mProp1 + mProp2) * vExhAbs + mProp1 * vEx + mProp2 * vEx == mWet * vBurnout
+  # Radiative-ablative heat-shield energy balance: for peak aerothermal heating up to 1800 kW/m^2 and
+  # a char mass flux of 50..60 g/m^2/s, reradiation (850 kW/m^2) plus pyrolysis blowing at 22 MJ/kg
+  # (`charFlux * 22` kW/m^2, at least 1100) exceeds the heating by at least 150 kW/m^2.
+  claim radiative_ablative_thermal_margin(qAeroKwM2: Nat, charFluxGramM2S: Nat) given qAeroKwM2 <= 1800n && 50n <= charFluxGramM2S && charFluxGramM2S <= 60n by judge("interval@1"): qAeroKwM2 + 150n <= 850n + charFluxGramM2S * 22n
+
+spec CayleySymplecticThermalOverride for Spacecraft6DofVehicle:
+  requires tpsThermalCapacityKwPerM2(charFluxGramM2S: Nat, radFluxKwM2: Nat) -> Nat
+  def exhaustVelocityMps() -> Nat:
+    3480n
+  def dryMassKg() -> Nat:
+    1450n
+  def ablativeEnthalpyMjPerKg() -> Nat:
+    22n
+  def tpsThermalCapacityKwPerM2(charFluxGramM2S: Nat, radFluxKwM2: Nat) -> Nat:
+    super.tpsThermalCapacityKwPerM2(charFluxGramM2S, radFluxKwM2) + 120n
+  claim vacuum_nozzle_upgrades_staged_impulse() by weave: self.stagedImpulseNs(500n) == 1741450n
+  claim phenolic_impregnated_tps_boosts_margin() by weave: self.tpsThermalCapacityKwPerM2(40n, 800n) == 1800n
+
+def seedSpacecraft6Dof() -> Spacecraft6DofVehicle:
+  {exhaustVelocityMps: 0n, dryMassKg: 0n, ablativeEnthalpyMjPerKg: 0n, cayleyScaleDenom: fn(w: Nat) -> Nat: 0n, stagedImpulseNs: fn(m: Nat) -> Nat: 0n, tpsThermalCapacityKwPerM2: fn(c: Nat, r: Nat) -> Nat: 0n}
+
+def nominalRigidSpacecraft() -> Spacecraft6DofVehicle:
+  fix(NominalRigidCraft6DofSpec, seedSpacecraft6Dof())
+
+def symplecticSpacecraft6Dof() -> Spacecraft6DofVehicle:
+  fix(compose(NominalRigidCraft6DofSpec, CayleySymplecticThermalOverride), seedSpacecraft6Dof())
+
+def spacecraftCayleyDenomAt200() -> Nat:
+  symplecticSpacecraft6Dof().cayleyScaleDenom(200n)
+
+def spacecraftImpulseAt500Kg() -> Nat:
+  symplecticSpacecraft6Dof().stagedImpulseNs(500n)
+
+def spacecraftTpsAt40g800Kw() -> Nat:
+  symplecticSpacecraft6Dof().tpsThermalCapacityKwPerM2(40n, 800n)

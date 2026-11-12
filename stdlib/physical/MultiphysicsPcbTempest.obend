@@ -1,0 +1,95 @@
+edition ObjectiveBend 1
+# Physical Standard Library (`stdlib/physical/MultiphysicsPcbTempest.obend`):
+# Edge-Coupled Differential Stripline Impedance, Trapezoidal Copper-Etch DFM Undercut Bounds,
+# Sub-Cutoff (\lambda_min / 20) Faraday Via-Fence Shielding, and Constant-Weight Dual-Rail WDDL Balance.
+
+law monotone_pcb_signoff_epoch: monotone(pcbSignoffEpoch)
+law write_once_stackup_gerber_digest: writeOnce(stackupGerberDigest)
+law bounded_etch_undercut_um: new.etchUndercutUm <= 18
+law bounded_via_fence_pitch_um: new.viaFencePitchUm <= 750
+
+record StriplineTempestBoard:
+  oddModeImpedanceMohm() -> Nat
+  evenModeImpedanceMohm() -> Nat
+  copperThicknessUm() -> Nat
+  etchFactorNum() -> Nat
+  viaFencePitchUm() -> Nat
+  differentialImpedanceMohm() -> Nat
+  etchCompensatedArtworkWidthUm(nominalBottomUm: Nat) -> Nat
+  viaFenceCutoffMarginGhzMm(maxFreqGhz: Nat) -> Nat
+  wddlPairChargefJ(capLoadfF: Nat, railHighCount: Nat) -> Nat
+
+spec BaseStriplinePcbSpec for StriplineTempestBoard:
+  requires oddModeImpedanceMohm() -> Nat
+  requires evenModeImpedanceMohm() -> Nat
+  requires copperThicknessUm() -> Nat
+  requires viaFencePitchUm() -> Nat
+  def oddModeImpedanceMohm() -> Nat:
+    48000n
+  def evenModeImpedanceMohm() -> Nat:
+    56000n
+  def copperThicknessUm() -> Nat:
+    35n
+  def etchFactorNum() -> Nat:
+    3n
+  def viaFencePitchUm() -> Nat:
+    600n
+  def differentialImpedanceMohm() -> Nat:
+    self.oddModeImpedanceMohm + self.oddModeImpedanceMohm
+  # Artwork width drawn so that the etched foot still measures `nominalBottomUm`: one copper
+  # thickness of lateral undercut per side is added back (isotropic etch, etch factor 1, worst case).
+  def etchCompensatedArtworkWidthUm(nominalBottomUm: Nat) -> Nat:
+    nominalBottomUm + self.copperThicknessUm * 2n
+  def viaFenceCutoffMarginGhzMm(maxFreqGhz: Nat) -> Nat:
+    maxFreqGhz * self.viaFencePitchUm * 20n
+  def wddlPairChargefJ(capLoadfF: Nat, railHighCount: Nat) -> Nat:
+    capLoadfF * railHighCount
+  # Coupled transmission-line AM-GM bound: 4 * Z_odd * Z_even <= (Z_odd + Z_even)^2,
+  # establishing Z_0 = sqrt(Z_odd * Z_even) <= (Z_odd + Z_even) / 2 across all stackups.
+  claim stripline_impedance_amgm_bound(zOdd: Nat, zEven: Nat) by judge("groebner@1"): 4n * zOdd * zEven <= (zOdd + zEven) * (zOdd + zEven)
+  # Mode-impedance product invariant of a coupled pair: with Z_diff = 2 * Z_odd and
+  # Z_even = 2 * Z_comm, the differential and common-mode impedances multiply to Z_odd * Z_even
+  # (= Z_0^2), so tightening the coupling to lower Z_diff raises Z_comm by the same factor.
+  claim differential_common_mode_impedance_product(zOdd: Nat, zEven: Nat, zDiff: Nat, zComm: Nat) given zDiff == 2n * zOdd && zEven == 2n * zComm by judge("groebner@1"): zDiff * zComm == zOdd * zEven
+  # Copper-etch DFM necking envelope: on any trace drawn 100..500 um wide, a lateral undercut of at
+  # most 18 um per side (law `bounded_etch_undercut_um`) leaves an etched top width
+  # `wUm - 2 * uUm` of at least 64 um (written without subtraction).
+  claim copper_etch_dfm_undercut_margin(uUm: Nat, wUm: Nat) given uUm <= 18n && 100n <= wUm && wUm <= 500n by judge("interval@1"): 64n + 2n * uUm <= wUm
+  # Sub-cutoff (\lambda_min / 20) Faraday via-fence rule in FR4/Isola (v_p = 150 mm/ns = 150000 um*GHz):
+  # for pitch s <= 500 um and f_max <= 15 GHz, 20 * s * f_max <= 150000 um*GHz prevents waveguide leakage.
+  claim faraday_via_fence_subcutoff_bound(pitchUm: Nat, freqGhz: Nat) given pitchUm <= 500n && freqGhz <= 15n by judge("interval@1"): 20n * pitchUm * freqGhz <= 150000n
+  # Dual-rail WDDL TEMPEST constant-weight balance: on Boolean complementary rails (t^2 = t, f^2 = f, t + f = 1),
+  # simultaneous crowbar overlap t * f vanishes and quadratic dynamic switching energy t^2 + f^2 is data-invariant (= 1).
+  claim wddl_complementary_zero_crowbar(t: Nat, f: Nat) given t * t == t && f * f == f && t + f == 1n by judge("groebner@1"): t * f == 0n
+  claim wddl_constant_dynamic_power(t: Nat, f: Nat) given t * t == t && f * f == f && t + f == 1n by judge("groebner@1"): t * t + f * f == 1n
+
+spec TempestFaradayWddlOverride for StriplineTempestBoard:
+  requires viaFenceCutoffMarginGhzMm(maxFreqGhz: Nat) -> Nat
+  def oddModeImpedanceMohm() -> Nat:
+    50000n
+  def copperThicknessUm() -> Nat:
+    18n
+  def viaFencePitchUm() -> Nat:
+    400n
+  def viaFenceCutoffMarginGhzMm(maxFreqGhz: Nat) -> Nat:
+    super.viaFenceCutoffMarginGhzMm(maxFreqGhz) + 500n
+  claim calibrated_100ohm_diff_stripline() by weave: self.differentialImpedanceMohm() == 100000n
+  claim dense_via_fence_margin_at_12ghz() by weave: self.viaFenceCutoffMarginGhzMm(12n) == 96500n
+
+def seedStriplineBoard() -> StriplineTempestBoard:
+  {oddModeImpedanceMohm: 0n, evenModeImpedanceMohm: 0n, copperThicknessUm: 0n, etchFactorNum: 0n, viaFencePitchUm: 0n, differentialImpedanceMohm: 0n, etchCompensatedArtworkWidthUm: fn(w: Nat) -> Nat: w, viaFenceCutoffMarginGhzMm: fn(f: Nat) -> Nat: f, wddlPairChargefJ: fn(c: Nat, r: Nat) -> Nat: 0n}
+
+def baseStriplineBoard() -> StriplineTempestBoard:
+  fix(BaseStriplinePcbSpec, seedStriplineBoard())
+
+def tempestShieldedBoard() -> StriplineTempestBoard:
+  fix(compose(BaseStriplinePcbSpec, TempestFaradayWddlOverride), seedStriplineBoard())
+
+def tempestDiffImpedanceMohm() -> Nat:
+  tempestShieldedBoard().differentialImpedanceMohm
+
+def tempestEtchedWidthAt120Um() -> Nat:
+  tempestShieldedBoard().etchCompensatedArtworkWidthUm(120n)
+
+def tempestCutoffAt12Ghz() -> Nat:
+  tempestShieldedBoard().viaFenceCutoffMarginGhzMm(12n)
