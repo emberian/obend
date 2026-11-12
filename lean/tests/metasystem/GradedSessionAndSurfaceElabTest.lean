@@ -51,6 +51,106 @@ import all Obend.Spec.Types
 import all Obend.Tactic.Cases
 import all Obend.Tactic.Tooth
 import all Obend.Vault.Mandate
+import all Obend.Category.GradedLogic
+import all Obend.Category.Refines
+import all Obend.Core.Capacity
+import all Obend.Core.Code
+import all Obend.Core.Cubical2LTT
+import all Obend.Core.EquiRecursiveLookup
+import all Obend.Core.Invariant
+import all Obend.Core.MachineTyping
+import all Obend.Core.Nominal
+import all Obend.Core.Proofs.Adequacy.Birth
+import all Obend.Core.Proofs.Adequacy.CasesControl
+import all Obend.Core.Proofs.Adequacy.CasesEval
+import all Obend.Core.Proofs.Adequacy.CasesReturn
+import all Obend.Core.Proofs.Adequacy.Defs
+import all Obend.Core.Proofs.Adequacy.Graph
+import all Obend.Core.Proofs.Adequacy.Meaning
+import all Obend.Core.Proofs.Adequacy.Origins
+import all Obend.Core.Proofs.Adequacy.Progress
+import all Obend.Core.Proofs.Adequacy.Reach
+import all Obend.Core.Proofs.Adequacy.Run
+import all Obend.Core.Proofs.Adequacy.Safety
+import all Obend.Core.Proofs.Adequacy.SafetyRaw
+import all Obend.Core.Proofs.Adequacy.Scoped
+import all Obend.Core.Proofs.Adequacy.Sound
+import all Obend.Core.Proofs.Adequacy.Source
+import all Obend.Core.Proofs.Adequacy.StepRaw
+import all Obend.Core.Proofs.BidirectionalCompleteness
+import all Obend.Core.Proofs.Completeness
+import all Obend.Core.Proofs.DataSoundness
+import all Obend.Core.Proofs.GroundExecution
+import all Obend.Core.Proofs.Preservation.Base.Heads
+import all Obend.Core.Proofs.Preservation.Base.Insert
+import all Obend.Core.Proofs.Preservation.Base.Reusable
+import all Obend.Core.Proofs.Preservation.Base.Values
+import all Obend.Core.Proofs.Preservation.Base.Weaken
+import all Obend.Core.Proofs.StepCases
+import all Obend.Core.Proofs.Substitution.Defs
+import all Obend.Core.Proofs.Substitution.Uses
+import all Obend.Core.Proofs.TypedSubstitution
+import all Obend.Core.RuntimeOrigins
+import all Obend.Core.TermTraverse
+import all Obend.Core.Traverse
+import all Obend.Elab.Work
+import all Obend.Equiv.Ahead
+import all Obend.Equiv.Behaviour
+import all Obend.Equiv.Fields
+import all Obend.Equiv.Quote
+import all Obend.Equiv.Reduction
+import all Obend.Equiv.Simulation
+import all Obend.Fold
+import all Obend.Intention
+import all Obend.Judge.Clearing
+import all Obend.Judge.Lrat
+import all Obend.Kind
+import all Obend.Law.Claim
+import all Obend.Law.Inherit
+import all Obend.Law.Machine
+import all Obend.Law.Proofs.Claim
+import all Obend.Law.Proofs.Eval
+import all Obend.Law.Proofs.Inherit
+import all Obend.Law.Proofs.Machine
+import all Obend.Law.Proofs.Run
+import all Obend.Law.Proofs.Std
+import all Obend.Law.Run
+import all Obend.Law.Std
+import all Obend.Law.Syntax
+import all Obend.Ledger.Book
+import all Obend.Ledger.Floors
+import all Obend.Ledger.Register
+import all Obend.Ledger.Seat
+import all Obend.Logic.Claim
+import all Obend.Logic.Frame
+import all Obend.Logic.Ground
+import all Obend.Logic.LateBinding
+import all Obend.Logic.Obligation
+import all Obend.Logic.Rewrite
+import all Obend.Logic.SuperRefines
+import all Obend.Receipt
+import all Obend.Receipt.Merkle
+import all Obend.Repair.DeltaLensRenew
+import all Obend.Run.Control
+import all Obend.Run.Fold
+import all Obend.Run.Fork
+import all Obend.Run.Proofs.Control
+import all Obend.Run.Proofs.Invariant
+import all Obend.Run.Proofs.Shared
+import all Obend.Run.Runner
+import all Obend.Run.Shared
+import all Obend.Run.Spec
+import all Obend.Slot
+import all Obend.Slot.Core4
+import all Obend.Slot.Integrity
+import all Obend.Slot.Proofs.Protocol
+import all Obend.Slot.Proofs.ProtocolTyping
+import all Obend.Slot.Protocol
+import all Obend.Slot.Selection
+import all Obend.Slot.World
+import all Obend.Spec.DataWire
+import all Obend.Spec.Proofs.C4
+import all Obend.Tactic.MonadicReduction
 
 /-!
 Witnesses and teeth for `Obend.Core.GradedSessionMetatheory` and
@@ -79,7 +179,7 @@ example : ZeroOneOmega.add .one .zero = .one ∧ ZeroOneOmega.add .one .one = .o
 /-! ## A linear capability is used exactly once -/
 
 /-- A channel endpoint that sends one Boolean. -/
-def capTy : GTy := .chan (.send .bool .endS)
+def capTy : GTy := .chan (.send .one .bool .endS)
 
 /-- `fun (c :¹ chan) => c`: the capability is handed on. -/
 def handOn : Tm G := .lam .one capTy (.var 0)
@@ -145,10 +245,10 @@ example : Steps (ghostCall (.bool false)).erase (Tm.bool true : Tm G).erase :=
 
 /-- Send a Boolean, then offer `ok` (done) or `retry` (receive a unit, done). -/
 def proto : SessionTy G :=
-  .send .bool (.offer (.cons "ok" .endS (.cons "retry" (.recv .unit .endS) .nil)))
+  .send .one .bool (.offer (.cons "ok" .endS (.cons "retry" (.recv .one .unit .endS) .nil)))
 
 example : proto.dual =
-    .recv .bool (.select (.cons "ok" .endS (.cons "retry" (.send .unit .endS) .nil))) := by
+    .recv .one .bool (.select (.cons "ok" .endS (.cons "retry" (.send .one .unit .endS) .nil))) := by
   simp [proto, SessionTy.dual, Branches.dual]
 
 example : proto.dual.dual = proto := SessionTy.dual_dual proto
@@ -156,7 +256,7 @@ example : proto.dual.dual = proto := SessionTy.dual_dual proto
 theorem proto_wellFormed : proto.WellFormed := by
   simp [proto, SessionTy.WellFormed, Branches.WellFormed]
 
-def okRun : List (Action G) := [.send .bool, .offer "ok"]
+def okRun : List (Action G) := [.send .one .bool, .offer "ok"]
 
 theorem okTrace : Trace proto okRun .endS :=
   .step .send (.step (.offer (by simp [Branches.find])) (.done _))
@@ -192,7 +292,7 @@ example : countResolved freshHole (sessionEvents 7 okRun (SessionTy.endS : Sessi
 
 /-- An endpoint abandoned after the send never settles: the promise stays open. -/
 example : countResolved freshHole
-    (sessionEvents 7 [Action.send .bool]
+    (sessionEvents 7 [Action.send .one .bool]
       (.offer (.cons "ok" .endS .nil) : SessionTy G)) 7 = 0 := by
   rw [session_capTP_settlement freshHole 7 (freshHole_unspent 7)]
   rfl
@@ -374,6 +474,110 @@ example : diagnosticOf? (ofPTy (.arrow "sometimes" "linear" .natural .boolean)) 
 #tooth law_obligations_enforce by mutation obligationsHold := fun _ _ _ _ => true
 
 #tooth resolve_sound by mutation resolve := fun _ _ => some 0
+
+/-! Delegation moves a live endpoint, including a nonterminal delegated session. -/
+def delegated : SessionTy G := .send .one .bool .endS
+example : HasTy [.chan delegated] (.var 0) (.chan delegated) (Usage.single 0) := .var rfl
+theorem delegation_moves_once :
+    let payload : Tm G := .var 0
+    let after := Tm.pair .one (.var 0) (.pair .one (payload.shift 0 |>.shift 0) (.var 1))
+    HasTy [.chan .endS, .chan .endS, .chan delegated] after
+      (.tensor .one (.chan .endS) (.tensor .one (.chan delegated) (.chan .endS)))
+      (communicationUsage .one (Usage.single 0)) :=
+  (delegated_channel_subject_reduction (S := .endS)
+    (HasTy.var (Γ := [.chan delegated]) (i := 0) rfl)).2.2.1
+example : communicationUsage .one (Usage.single 0) 2 = .one := by decide +kernel
+example : (Tm.send .one (.var 0) (.var 0) : Tm G).occ 0 = 2 := by decide +kernel
+example : HasTy ([.chan .endS] : List GTy) (.close (.var 0)) .unit (Usage.single 0) := .close (.var rfl)
+example : HasTy ([.chan .endS] : List GTy) (.wait (.var 0)) .unit (Usage.single 0) := .wait (.var rfl)
+example : Step (Tm.letPair .one (.lam .one .bool (.lam .one .unit (.var 1)))
+    (.pair .one (.bool true) .unit) : Tm G)
+    (.app .one (.app .one (.lam .one .bool (.lam .one .unit (.var 1))) (.bool true)) .unit) := .pairBeta
+
+example : Quantity.linear.toZeroOneOmega = .one ∧ Quantity.erased.toZeroOneOmega = .zero := by decide +kernel
+example : (checkSurfaceQtt {} []
+    (.lam "x" .linear .once (some .boolean) (.var "x"))
+    (.arrow .once .linear .boolean .boolean)).isSome = true := by decide +kernel
+example : (checkSurfaceQtt {} []
+    (.lam "x" .erased .once (some .boolean) (.bool true))
+    (.arrow .once .erased .boolean .boolean)).isSome = true := by decide +kernel
+example : (checkSurfaceQtt {} []
+    (.lam "x" .linear .once (some .boolean) (.bool true))
+    (.arrow .once .linear .boolean .boolean)).isNone = true := by decide +kernel
+example : (checkSurfaceQtt {} []
+    (.lam "x" .affine .once (some .boolean) (.bool true))
+    (.arrow .once .affine .boolean .boolean)).isNone = true := by decide +kernel
+
+example : Rendezvous [.chan .endS, .chan .endS] closePair [] closedPair := .close []
+example : HasTy ([] : List GTy) closedPair (.tensor .one .unit .unit) Usage.zero :=
+  (close_wait_subject_reduction []).2.2
+
+-- Pair elimination consumes its continuation at grade one, even when its payload is erased.
+def consumeGhost : Tm G := .lam .zero .bool (.lam .one (.chan .endS) (.close (.var 0)))
+theorem consumeGhost_typed :
+    HasTy [] consumeGhost (.arr .zero .bool (.arr .one (.chan .endS) .unit)) Usage.zero := by
+  have h := HasTy.lam (Γ := []) (π := ZeroOneOmega.zero)
+    (HasTy.lam (π := ZeroOneOmega.one) (HasTy.close (HasTy.var (Γ := [.chan .endS, .bool]) (i := 0) rfl))
+      (by simp [Usage.single, ZeroOneOmega.le]))
+    (by simp [Usage.tail, Usage.single, ZeroOneOmega.le])
+  have hz : Usage.tail (Usage.tail (Usage.single 0 : Usage G)) = Usage.zero := by
+    funext n; simp [Usage.tail, Usage.single, Usage.zero]
+  rw [hz] at h
+  exact h
+example :
+    HasTy [.chan .endS] (.app .one (.app .zero (consumeGhost.shift 0) (.bool true)) (.var 0)) .unit
+      (Usage.add (Usage.insertAt 0 .zero Usage.zero)
+        (Usage.add (Usage.single 0) (Usage.scale .zero Usage.zero))) := by
+  have h := HasTy.letPair (consumeGhost_typed.weaken (Γ₁ := []) (.chan .endS))
+    (HasTy.pair (q := ZeroOneOmega.zero) (HasTy.var (i := 0) rfl) (HasTy.bool (v := true)))
+  exact (qtt_step_preserves_typing_and_linear_caps h Step.pairBeta).1
+
+example : (checkSurfaceQtt {} []
+    (.call (.lam "x" .linear .once (some .boolean) (.var "x")) (.bool true))
+    .boolean).isSome = true := by decide +kernel
+example : (checkSurfaceQtt {} []
+    (.letE "x" .linear none (.bool true) (.var "x")) .boolean).isSome = true := by decide +kernel
+#tooth Quantity.fits_qtt_iff by mutation Quantity.toZeroOneOmega := fun _ => .omega
+
+#tooth Rendezvous.erase by mutation erasable := fun _ => false
+#tooth delegated_channel_subject_reduction by mutation Tm.occ := fun _ _ => 0
+#tooth Quantity.toZeroOneOmega_left_inverse by mutation Quantity.toZeroOneOmega := fun _ => .omega
+#tooth checkSurface_qtt_grade_bridge by mutation Tm.occ := fun _ _ => 0
+
+/-! ## Cross-module synergy witnesses (`BidirectionalSurfaceElab` ↔ `GradedSessionMetatheory` ↔ `Cubical2LTT`) -/
+
+example : quantityToStageGrade .erased = .zero ∧
+    quantityToStageGrade .linear = .one ∧
+    quantityToStageGrade .unrestricted = .one := by decide +kernel
+
+example : Obend.Core.Cubical2LTT.runStageOne [10]
+    (bindByQttStage .zero (.varZero 0) (.varOne 0)) = 10 := by decide +kernel
+
+example : Obend.Core.Cubical2LTT.runStageOne [10]
+    (bindByQttStage .one (.litU64 7) (.addU64 (.varOne 0) (.varOne 1))) = 17 := by decide +kernel
+
+example :
+    ∃ ctx out,
+      checkSurfaceQtt {} [] (.lam "x" .linear .once (some .boolean) (.var "x"))
+        (.arrow .once .linear .boolean .boolean) = some ⟨ctx, out⟩ ∧
+      Obend.Core.Cubical2LTT.ApproxRun
+        [.affine 1 0 2 1, .affine (-3) 4 1 2]
+        (Int.ofNat (Obend.Core.Cubical2LTT.runStageOne [10]
+          (bindByQttStage .zero (.varZero 0) (.varOne 0))).toNat)
+        (-33) := by
+  cases h : checkSurfaceQtt {} [] (.lam "x" .linear .once (some .boolean) (.var "x"))
+      (.arrow .once .linear .boolean .boolean) with
+  | none =>
+    have hs : (checkSurfaceQtt {} [] (.lam "x" .linear .once (some .boolean) (.var "x"))
+      (.arrow .once .linear .boolean .boolean)).isSome = true := by decide +kernel
+    rw [h] at hs; cases hs
+  | some p =>
+    exact ⟨p.1, p.2, rfl,
+      .cons (y := 12) (by decide) (.cons (y := -33) (by decide) (.nil _))⟩
+
+#tooth qtt_erasable_iff_stageZero by mutation qttToStageGrade := fun _ => .one
+#tooth bindByQttStage_wellStaged by mutation bindByQttStage := fun _ p r => .letOne p r
+#tooth surface_qtt_cubical_delegated_synergy by mutation bindByQttStage := fun _ p r => .letOne p r
 
 #assert_axioms_tree
 

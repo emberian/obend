@@ -23,9 +23,12 @@ address translation, memory confinement):
 `ValidVerifierLoop` is a recursive definition, so `#tooth` can replay the loop theorems against a
 mutated kernel step.
 -/
+public import Obend.Digest.HashBytes
+public import Obend.Hardware.GlitchAndTempestSafe
 public import Obend.OS.Sel4MicrokitKernelCore
 public import Obend.Vault.IrreversibleOutbox
 public import Obend.Polis.GrainPowerbox
+import all Obend.Hardware.GlitchAndTempestSafe
 import all Obend.OS.Sel4MicrokitKernelCore
 import all Obend.Vault.IrreversibleOutbox
 import all Obend.Polis.GrainPowerbox
@@ -838,6 +841,329 @@ theorem schedOk_fresh (budget period now : Nat) (hT : 0 < period) :
 theorem loop_nil_inhabited (s : LoopState) (hr : Reach P s.sent)
     (hi : checkMicrokitIsolation part = true) : ValidVerifierLoop P part cfg s [] s :=
   ⟨rfl, hr, hi⟩
+
+/-! ## Canonical DeOS wire envelope -/
+
+open Obend.Digest.HashBytes (be ofBE length_be ofBE_be)
+
+/-- Six fields: challenge, grant, hops, nullifier, legs, proof. Payload validation is
+separate from framing; host padding and native-endian integers never cross the wire. -/
+structure DeosTurnWire where
+  fields : List (List UInt8)
+  deriving DecidableEq, Repr
+
+def wireFields (fields : List (List UInt8)) : List UInt8 :=
+  fields.flatMap fun field => be 4 field.length ++ field
+
+def parseWireFields : Nat → List UInt8 → Option (List (List UInt8) × List UInt8)
+  | 0, bs => some ([], bs)
+  | n + 1, bs => do
+    if bs.length < 4 then none else do
+      let len := ofBE (bs.take 4)
+      let tail := bs.drop 4
+      if tail.length < len then none else do
+        let (fields, rest) ← parseWireFields n (tail.drop len)
+        pure (tail.take len :: fields, rest)
+
+def deosWireBytes (turn : DeosTurnWire) : List UInt8 := 1 :: wireFields turn.fields
+
+def DeosTurnWire.Valid (turn : DeosTurnWire) : Prop :=
+  turn.fields.length = 6 ∧ ∀ f ∈ turn.fields, f.length < 256 ^ 4
+
+instance (turn : DeosTurnWire) : Decidable turn.Valid :=
+  inferInstanceAs (Decidable (turn.fields.length = 6 ∧ ∀ f ∈ turn.fields, f.length < 256 ^ 4))
+
+/-- Refuse an invalid field count or an unrepresentable u32 length; never truncate. -/
+def encodeDeosTurnWire (turn : DeosTurnWire) : Option (List UInt8) :=
+  if turn.Valid then some (deosWireBytes turn) else none
+
+theorem encodeDeosTurnWire_accepts_iff_valid (turn : DeosTurnWire) :
+    (encodeDeosTurnWire turn).isSome = true ↔ turn.Valid := by
+  simp [encodeDeosTurnWire]
+
+/-- Re-encoding enforces canonical lengths and exact consumption. -/
+def decodeDeosTurnWire (bs : List UInt8) : Option DeosTurnWire := do
+  if bs.head? != some 1 then none else do
+    let (fields, rest) ← parseWireFields 6 bs.tail
+    let turn := DeosTurnWire.mk fields
+    if rest.isEmpty && deosWireBytes turn == bs then
+      if turn.Valid then some turn else none
+    else none
+
+theorem parseWireFields_encode (fields : List (List UInt8)) (rest : List UInt8)
+    (bounded : ∀ f ∈ fields, f.length < 256 ^ 4) :
+    parseWireFields fields.length (wireFields fields ++ rest) = some (fields, rest) := by
+  induction fields with
+  | nil => rfl
+  | cons f fs ih =>
+    have hf := bounded f List.mem_cons_self
+    have ht : ∀ x ∈ fs, x.length < 256 ^ 4 := fun x hx => bounded x (List.mem_cons_of_mem _ hx)
+    simp only [wireFields, List.flatMap_cons, List.length_cons, List.append_assoc]
+    simp only [wireFields] at ih
+    simp [parseWireFields, ofBE_be hf, ih ht, Nat.not_lt]
+
+theorem decodeDeosTurnWire_encodeDeosTurnWire (turn : DeosTurnWire) (h : turn.Valid) :
+    (encodeDeosTurnWire turn).bind decodeDeosTurnWire = some turn := by
+  have parsed := parseWireFields_encode turn.fields [] h.2
+  rw [h.1] at parsed
+  simp only [List.append_nil] at parsed
+  simp [decodeDeosTurnWire, encodeDeosTurnWire, deosWireBytes, parsed, h]
+
+theorem decodeDeosTurnWire_canonical_len {bs : List UInt8} {turn : DeosTurnWire}
+    (h : decodeDeosTurnWire bs = some turn) :
+    encodeDeosTurnWire turn = some bs ∧ bs.length = 1 + (wireFields turn.fields).length := by
+  unfold decodeDeosTurnWire at h
+  split at h
+  · cases h
+  · cases hp : parseWireFields 6 bs.tail with
+    | none => simp [hp] at h
+    | some pair =>
+      obtain ⟨fields, rest⟩ := pair
+      simp only [hp, bind, Option.bind] at h
+      split at h
+      · rename_i he
+        simp only [Bool.and_eq_true, beq_iff_eq] at he
+        have eq := he.2
+        have e := eq.symm
+        split at h
+        · rename_i valid
+          cases h
+          exact ⟨by simp [encodeDeosTurnWire, valid, e],
+            by rw [e]; simp [deosWireBytes, Nat.add_comm]⟩
+        · cases h
+      · cases h
+
+theorem decodeDeosTurnWire_no_trailing {turn : DeosTurnWire} {bs extra : List UInt8}
+    (encoded : encodeDeosTurnWire turn = some bs)
+    (h : decodeDeosTurnWire (bs ++ extra) = some turn) : extra = [] := by
+  have eq := (decodeDeosTurnWire_canonical_len h).1
+  rw [encoded] at eq
+  have len := congrArg List.length (Option.some.inj eq)
+  simp only [List.length_append] at len
+  have hz : extra.length = 0 := by omega
+  simpa using hz
+
+/-- No canonical turn is a proper prefix of another accepted turn. -/
+theorem decodeDeosTurnWire_prefix_free (turn : DeosTurnWire) (valid : turn.Valid)
+    (extra : List UInt8) (other : DeosTurnWire)
+    (accepted : decodeDeosTurnWire (deosWireBytes turn ++ extra) = some other) :
+    extra = [] ∧ other = turn := by
+  have parsed := parseWireFields_encode turn.fields extra valid.2
+  rw [valid.1] at parsed
+  simp only [deosWireBytes, List.cons_append, decodeDeosTurnWire, List.head?_cons,
+    bne_self_eq_false, Bool.false_eq_true, ↓reduceIte, List.tail_cons, parsed,
+    bind, Option.bind] at accepted
+  split at accepted
+  · rename_i he
+    simp only [Bool.and_eq_true] at he
+    have empty : extra = [] := by
+      cases extra with
+      | nil => rfl
+      | cons x xs => simp at he
+    subst empty
+    have eq : other = turn := by
+      have h := accepted
+      simp only [Option.some.injEq] at h
+      exact h.symm
+    exact ⟨rfl, eq⟩
+  · cases accepted
+
+/-- Checking a snapshot returns exactly that snapshot as the commit payload. -/
+def verifyCopiedSlot (check : List UInt8 → Bool) (bytes : List UInt8) : Option (List UInt8) :=
+  if check bytes then some bytes else none
+
+/-- Freeze DMA ingress, copy a complete virtual span, check the copy, then read the
+commit payload after arbitrary device activity. Failed mapping/checks publish nothing. -/
+def verifierStep (k : KState) (frames : List Nat) (pd va len : Nat)
+    (writes : List (Nat × Nat × UInt8)) (check : List UInt8 → Bool) : Option (List UInt8) := do
+  let frozen := smmuUnmapRingFrames k frames
+  let addresses ← spanAddresses frozen.maps (.cpu pd) false va len
+  if addresses.all (fun a => frames.contains (a / pageSize)) then do
+    let _ ← verifyCopiedSlot check (addresses.map frozen.mem)
+    readMultiPageVia (runDeviceDma frozen writes) pd va len
+  else none
+
+theorem verifierStep_covers {k : KState} {frames : List Nat} {pd va len : Nat}
+    {writes : List (Nat × Nat × UInt8)} {check : List UInt8 → Bool} {bytes : List UInt8}
+    (accepted : verifierStep k frames pd va len writes check = some bytes) :
+    ∃ addresses, spanAddresses (smmuUnmapRingFrames k frames).maps (.cpu pd) false va len =
+      some addresses ∧ ∀ a ∈ addresses, a / pageSize ∈ frames := by
+  cases mapped : spanAddresses (smmuUnmapRingFrames k frames).maps (.cpu pd) false va len with
+  | none => simp [verifierStep, mapped] at accepted
+  | some addresses =>
+    simp only [verifierStep, mapped, bind, Option.bind] at accepted
+    split at accepted
+    · rename_i covered
+      exact ⟨addresses, rfl, by simpa only [List.all_eq_true, List.contains_iff_mem] using covered⟩
+    · cases accepted
+
+/-- After completed SMMU invalidation, arbitrarily many device writes leave every
+physical byte of the translated multi-page span unchanged. -/
+theorem smmu_unmap_before_verify_freezes_multi_page_ring
+    (k : KState) (frames : List Nat) (pd va len : Nat) (addresses : List Nat)
+    (mapped : spanAddresses (smmuUnmapRingFrames k frames).maps (.cpu pd) false va len = some addresses)
+    (covered : ∀ a ∈ addresses, a / pageSize ∈ frames)
+    (writes : List (Nat × Nat × UInt8)) (check : List UInt8 → Bool) :
+    readMultiPageVia (runDeviceDma (smmuUnmapRingFrames k frames) writes) pd va len =
+      some (addresses.map k.mem) ∧
+    ((readMultiPageVia (runDeviceDma (smmuUnmapRingFrames k frames) writes) pd va len).bind
+      (verifyCopiedSlot check)) = verifyCopiedSlot check (addresses.map k.mem) ∧
+    verifierStep k frames pd va len writes check = verifyCopiedSlot check (addresses.map k.mem) := by
+  obtain ⟨hm, hf⟩ := runDeviceDma_frozen (smmuUnmapRingFrames_excludes k frames) writes
+  have eq : addresses.map (runDeviceDma (smmuUnmapRingFrames k frames) writes).mem =
+      addresses.map k.mem := List.map_congr_left fun a ha => hf a (covered a ha)
+  have read : readMultiPageVia (runDeviceDma (smmuUnmapRingFrames k frames) writes) pd va len =
+      some (addresses.map k.mem) := by
+    simp only [readMultiPageVia, hm, mapped, Option.map_some, eq]
+  refine ⟨read, (by rw [read]; rfl), ?_⟩
+  have coverage : addresses.all (fun a => frames.contains (a / pageSize)) = true := by
+    simp only [List.all_eq_true, List.contains_iff_mem]
+    exact covered
+  unfold verifierStep
+  simp only [mapped, bind, Option.bind, coverage, ↓reduceIte]
+  change (verifyCopiedSlot check (addresses.map k.mem)).bind (fun _ => _) = _
+  rw [read]
+  unfold verifyCopiedSlot
+  split <;> rfl
+
+/-- The outbox request is built from the verified multi-page bytes, never caller-supplied
+snapshot fields. This is the executable adapter to the existing persistent outbox. -/
+def multiPageOutboxRequest (k : KState) (frames : List Nat) (pd va len : Nat)
+    (writes : List (Nat × Nat × UInt8)) (check : List UInt8 → Bool) (req : OutboxEffectReq) :
+    Option OutboxEffectReq := do
+  let bytes ← verifierStep k frames pd va len writes check
+  let transfer := { req.spsc with
+    sharedRingBeforeCopy := bytesOfList bytes
+    sharedRingAfterVerify := bytesOfList bytes }
+  pure { req with spsc := transfer }
+
+def multiPageOutboxStep (P : Protocol) (part : SeL4MicrokitPartition) (sent : Sent)
+    (st : OutboxState) (k : KState) (frames : List Nat) (pd va len : Nat)
+    (writes : List (Nat × Nat × UInt8)) (check : List UInt8 → Bool) (req : OutboxEffectReq) :
+    Option OutboxState := do
+  let prepared ← multiPageOutboxRequest k frames pd va len writes check req
+  stepOutbox P part sent st prepared
+
+theorem multiPageOutboxRequest_payload (k : KState) (frames : List Nat) (pd va len : Nat)
+    (addresses : List Nat)
+    (mapped : spanAddresses (smmuUnmapRingFrames k frames).maps (.cpu pd) false va len = some addresses)
+    (covered : ∀ a ∈ addresses, a / pageSize ∈ frames)
+    (writes : List (Nat × Nat × UInt8)) (check : List UInt8 → Bool) (req out : OutboxEffectReq)
+    (accepted : multiPageOutboxRequest k frames pd va len writes check req = some out) :
+    out.spsc.sharedRingBeforeCopy = bytesOfList (addresses.map k.mem) := by
+  have frozen := (smmu_unmap_before_verify_freezes_multi_page_ring k frames pd va len addresses
+    mapped covered writes check).2.2
+  cases hv : verifierStep k frames pd va len writes check with
+  | none => simp [multiPageOutboxRequest, hv] at accepted
+  | some bytes =>
+    rw [hv] at frozen
+    have eq : bytes = addresses.map k.mem := by
+      cases hc : check (addresses.map k.mem) <;> simp [verifyCopiedSlot, hc] at frozen
+      exact frozen
+    simp [multiPageOutboxRequest, hv] at accepted
+    subst accepted
+    simp [eq]
+
+/-- The persistent outbox's multi-turn theorem applies to requests built by the adapter.
+Every dispatched payload is the frozen multi-page source of one particular turn. -/
+theorem multi_page_outbox_trace_safe {sent₀ sentF : Sent} {st₀ stF : OutboxState}
+    {turns : List OutboxTurn} (clean : st₀.dispatchedActuations = [])
+    (trace : ValidOutboxTrace P part sent₀ st₀ turns sentF stF)
+    (source : OutboxTurn → KState) (frames : OutboxTurn → List Nat)
+    (span : OutboxTurn → Nat × Nat × Nat) (addresses : OutboxTurn → List Nat)
+    (writes : OutboxTurn → List (Nat × Nat × UInt8)) (check : OutboxTurn → List UInt8 → Bool)
+    (mapped : ∀ t ∈ turns, spanAddresses (smmuUnmapRingFrames (source t) (frames t)).maps
+      (.cpu (span t).1) false (span t).2.1 (span t).2.2 = some (addresses t))
+    (covered : ∀ t ∈ turns, ∀ a ∈ addresses t, a / pageSize ∈ frames t)
+    (prepared : ∀ t ∈ turns, multiPageOutboxRequest (source t) (frames t)
+      (span t).1 (span t).2.1 (span t).2.2 (writes t) (check t) t.req = some t.req) :
+    (stF.dispatchedActuations.map DispatchedActuation.nullifierId).Nodup ∧
+    ∀ a ∈ stF.dispatchedActuations, Finalized P sentF a.view a.chain ∧
+      ∃ t ∈ turns, a.dispatchedPayload = bytesOfList ((addresses t).map (source t).mem) := by
+  obtain ⟨_, _, nd, _, acts, _⟩ :=
+    firmament_sel4_copy_before_verify_and_irreversible_outbox_safe clean trace
+  refine ⟨nd, fun a ha => ?_⟩
+  obtain ⟨_, fin, _, ⟨t, ht, _, _, payload⟩, _⟩ := acts a ha
+  exact ⟨fin, t, ht, payload.trans (multiPageOutboxRequest_payload (source t) (frames t)
+    (span t).1 (span t).2.1 (span t).2.2 (addresses t) (mapped t ht) (covered t ht)
+    (writes t) (check t) t.req t.req (prepared t ht))⟩
+
+/-! ## 5. Cross-module weld: isolated seL4 PD outbox gated by hardware dual-rail glitch quarantine -/
+
+/-- Hardware-glitch-guarded multi-page seL4/Microkit outbox gatekeeper step:
+the verifier protection domain (`pd`) executes `cpuTurns` on `GlitchProtectedCpuState` before
+preparing and dispatching an irreversible outbox actuation. If the dual-rail wave-pipelined guard
+latches sticky `.glitchQuarantine`, external actuation/key buses clamp to `0#64` AND the kernel/outbox
+transition is refused (`none`). -/
+def glitchGuardedMultiPageOutboxStep
+    (winSpec : Obend.Hardware.GlitchAndTempestSafe.RailClockWindowSpec)
+    (imem : Obend.Hardware.PipelinedRisc.InstrMem)
+    (cpuTurns : List Obend.Hardware.GlitchAndTempestSafe.DualRailCpuTurn)
+    (cpuInit : Obend.Hardware.GlitchAndTempestSafe.GlitchProtectedCpuState)
+    (P : Protocol) (part : SeL4MicrokitPartition) (sent : Sent) (st : OutboxState)
+    (k : KState) (frames : List Nat) (pd va len : Nat)
+    (writes : List (Nat × Nat × UInt8)) (check : List UInt8 → Bool) (req : OutboxEffectReq) :
+    Obend.Hardware.GlitchAndTempestSafe.GlitchProtectedCpuState × Option OutboxState :=
+  let cpuFinal := Obend.Hardware.GlitchAndTempestSafe.runGlitchProtectedCpuTrace winSpec imem cpuTurns cpuInit
+  match cpuFinal.mode with
+  | .glitchQuarantine => (cpuFinal, none)
+  | .normal _ =>
+    (cpuFinal, multiPageOutboxStep P part sent st k frames pd va len writes check req)
+
+/-- End-to-end hardware-to-OS safety weld (`GlitchAndTempestSafe` → `Sel4MicrokitKernel`):
+For any unreset fault-injection trace `cpuTurns` starting from `initGlitchProtectedCpu s0 key0 act0`:
+1. Either sticky `.glitchQuarantine` latches, clamping both `externalActuationOut = 0#64` and
+   `externalKeyBusOut = 0#64` while hard-blocking the seL4 outbox transition (`outRes = none`);
+2. Or the verifier PD's architectural state equals an exact uncorrupted `m`-step ISA prefix
+   `stepIsaN imem m s0` (`m ≤ cpuTurns.length`), AND any accepted outbox transition `some st'`
+   dispatches a request whose payload is frozen by pre-verify SMMU unmapping (`bytesOfList (addresses.map k.mem)`)
+   despite arbitrary concurrent `writes`. -/
+theorem sel4_isolated_pd_glitch_quarantine_clamps_and_freezes_outbox
+    (winSpec : Obend.Hardware.GlitchAndTempestSafe.RailClockWindowSpec)
+    (imem : Obend.Hardware.PipelinedRisc.InstrMem)
+    (cpuTurns : List Obend.Hardware.GlitchAndTempestSafe.DualRailCpuTurn)
+    (s0 : Obend.Hardware.PipelinedRisc.IsaState) (key0 act0 : BitVec 64)
+    (hUnreset : cpuTurns.all Obend.Hardware.GlitchAndTempestSafe.isUnresetTurn = true)
+    (P : Protocol) (part : SeL4MicrokitPartition) (sent : Sent) (st : OutboxState)
+    (k : KState) (frames : List Nat) (pd va len : Nat) (addresses : List Nat)
+    (mapped : spanAddresses (smmuUnmapRingFrames k frames).maps (.cpu pd) false va len = some addresses)
+    (covered : ∀ a ∈ addresses, a / pageSize ∈ frames)
+    (writes : List (Nat × Nat × UInt8)) (check : List UInt8 → Bool) (req : OutboxEffectReq) :
+    let res := glitchGuardedMultiPageOutboxStep winSpec imem cpuTurns
+      (Obend.Hardware.GlitchAndTempestSafe.initGlitchProtectedCpu s0 key0 act0)
+      P part sent st k frames pd va len writes check req
+    (res.1.mode = .glitchQuarantine ∧
+      Obend.Hardware.GlitchAndTempestSafe.externalActuationOut res.1 = 0#64 ∧
+      Obend.Hardware.GlitchAndTempestSafe.externalKeyBusOut res.1 = 0#64 ∧
+      res.2 = none) ∨
+    ((∃ m ≤ cpuTurns.length, res.1.isa = Obend.Hardware.PipelinedRisc.stepIsaN imem m s0) ∧
+      ∀ st', res.2 = some st' →
+        ∃ prepared,
+          multiPageOutboxRequest k frames pd va len writes check req = some prepared ∧
+          stepOutbox P part sent st prepared = some st' ∧
+          prepared.spsc.sharedRingBeforeCopy = bytesOfList (addresses.map k.mem)) := by
+  dsimp only [glitchGuardedMultiPageOutboxStep]
+  have hImm := (Obend.Hardware.GlitchAndTempestSafe.power_glitch_immunity_multi_turn_sound
+    winSpec imem).2.1 cpuTurns s0 key0 act0 hUnreset
+  rcases hImm with ⟨hModeQ, hAct0, hKey0⟩ | ⟨m, hmLe, hIsaEq⟩
+  · left
+    simp [hModeQ, hAct0, hKey0]
+  · cases hMode : (Obend.Hardware.GlitchAndTempestSafe.runGlitchProtectedCpuTrace winSpec imem cpuTurns
+        (Obend.Hardware.GlitchAndTempestSafe.initGlitchProtectedCpu s0 key0 act0)).mode with
+    | glitchQuarantine =>
+      left
+      simp [hMode, Obend.Hardware.GlitchAndTempestSafe.externalActuationOut,
+        Obend.Hardware.GlitchAndTempestSafe.externalKeyBusOut]
+    | normal ph =>
+      right
+      refine ⟨⟨m, hmLe, hIsaEq⟩, fun st' hOut => ?_⟩
+      unfold multiPageOutboxStep at hOut
+      cases hPrep : multiPageOutboxRequest k frames pd va len writes check req with
+      | none => simp [hPrep] at hOut
+      | some prepared =>
+        simp only [hPrep, bind, Option.bind] at hOut
+        exact ⟨prepared, rfl, hOut,
+          multiPageOutboxRequest_payload k frames pd va len addresses mapped covered writes check req prepared hPrep⟩
 
 end Obend.OS.Sel4MicrokitKernel
 

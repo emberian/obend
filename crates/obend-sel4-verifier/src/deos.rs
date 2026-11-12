@@ -5,10 +5,85 @@
 //! proof. Four public inputs pin what the receipt may say: `cap_root` the root grant,
 //! `revoked_root` the nullifier window, `turn_hash` the turn descriptor, and
 //! `post_state_root` the `Canopy` commitment. `check` names the clause a refused
-//! receipt violates. The encodings here are fixed-width and are this crate's own;
-//! they are not the byte encodings of the Lean `ZkBiscuit` and `Seat` modules.
+//! receipt violates. The six-field wire envelope matches `Sel4MicrokitKernel`;
+//! typed lineage/settlement fields retain their explicitly fixed-width encodings.
 
 use super::*;
+
+/// Canonical six-field DeOS envelope, shared with Sel4MicrokitKernel:
+/// version 1, then six (u32 big-endian byte length, bytes) fields in this order.
+/// The typed relation still validates the contents; this layer never casts repr(C).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeosTurnWire<'a> {
+    pub challenge: &'a [u8],
+    pub grant: &'a [u8],
+    pub hops: &'a [u8],
+    pub nullifier: &'a [u8],
+    pub legs: &'a [u8],
+    pub proof: &'a [u8],
+}
+impl<'a> DeosTurnWire<'a> {
+    fn fields(self) -> [&'a [u8]; 6] {
+        [
+            self.challenge,
+            self.grant,
+            self.hops,
+            self.nullifier,
+            self.legs,
+            self.proof,
+        ]
+    }
+}
+/// Returns the exact encoded prefix. An undersized buffer or unrepresentable length fails.
+pub fn encode_turn_wire<'a>(turn: DeosTurnWire<'_>, out: &'a mut [u8]) -> Option<&'a [u8]> {
+    let fields = turn.fields();
+    let mut size = 1usize;
+    for field in fields {
+        u32::try_from(field.len()).ok()?;
+        size = size.checked_add(4)?.checked_add(field.len())?;
+    }
+    let out = out.get_mut(..size)?;
+    out[0] = 1;
+    let mut offset = 1usize;
+    for field in fields {
+        let end = offset.checked_add(4)?;
+        out.get_mut(offset..end)?
+            .copy_from_slice(&u32::try_from(field.len()).ok()?.to_be_bytes());
+        offset = end;
+        let end = offset.checked_add(field.len())?;
+        out.get_mut(offset..end)?.copy_from_slice(field);
+        offset = end;
+    }
+    Some(out)
+}
+/// Exact consumption: rejects every truncated field/header and every trailing byte.
+pub fn decode_turn_wire(bytes: &[u8]) -> Option<DeosTurnWire<'_>> {
+    if bytes.first() != Some(&1) {
+        return None;
+    }
+    let mut offset = 1usize;
+    let mut fields: [&[u8]; 6] = [&[]; 6];
+    for field in &mut fields {
+        let end = offset.checked_add(4)?;
+        let n =
+            usize::try_from(u32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?)).ok()?;
+        offset = end;
+        let end = offset.checked_add(n)?;
+        *field = bytes.get(offset..end)?;
+        offset = end;
+    }
+    if offset != bytes.len() {
+        return None;
+    }
+    Some(DeosTurnWire {
+        challenge: fields[0],
+        grant: fields[1],
+        hops: fields[2],
+        nullifier: fields[3],
+        legs: fields[4],
+        proof: fields[5],
+    })
+}
 
 /// One block of a `ZkBiscuit` attenuation chain, in fixed width: the holder and the
 /// channel are 32-byte digests here, not the byte strings of the Lean encoding.
@@ -121,7 +196,10 @@ impl<const N: usize> NullifierWindow<N> {
             return false;
         }
         self.spent[self.len] = n;
-        self.len += 1;
+        self.len = self
+            .len
+            .checked_add(1)
+            .expect("window insertion is capacity checked");
         true
     }
     pub fn root(&self) -> Digest {
@@ -143,6 +221,102 @@ pub struct DeosTurnReceipt<const HOPS: usize, const LEGS: usize, P: Copy> {
     pub legs: [SeatLeg; LEGS],
     pub proof: P,
 }
+/// Serialize the actual typed receipt into the shared six-field envelope. Proof bytes
+/// belong to the proof codec; this function frames them exactly and never casts a struct.
+pub fn encode_turn_receipt<'a, const H: usize, const L: usize, P: Copy>(
+    r: &DeosTurnReceipt<H, L, P>,
+    proof: &[u8],
+    out: &'a mut [u8],
+) -> Option<&'a [u8]> {
+    let hops_len = H.checked_mul(72)?;
+    let legs_len = L.checked_mul(16)?;
+    let sizes = [32, 72, hops_len, 32, legs_len, proof.len()];
+    let mut total = 1usize;
+    for n in sizes {
+        u32::try_from(n).ok()?;
+        total = total.checked_add(4)?.checked_add(n)?;
+    }
+    let out = out.get_mut(..total)?;
+    let mut pos = 0usize;
+    let mut put = |bytes: &[u8]| -> Option<()> {
+        let end = pos.checked_add(bytes.len())?;
+        out.get_mut(pos..end)?.copy_from_slice(bytes);
+        pos = end;
+        Some(())
+    };
+    put(&[1])?;
+    put(&32u32.to_be_bytes())?;
+    put(&r.fs_challenge0)?;
+    put(&72u32.to_be_bytes())?;
+    put(&r.grant.rights.to_be_bytes())?;
+    put(&r.grant.holder)?;
+    put(&r.grant.channel)?;
+    put(&u32::try_from(hops_len).ok()?.to_be_bytes())?;
+    for hop in r.hops {
+        put(&hop.rights.to_be_bytes())?;
+        put(&hop.holder)?;
+        put(&hop.channel)?;
+    }
+    put(&32u32.to_be_bytes())?;
+    put(&r.nullifier)?;
+    put(&u32::try_from(legs_len).ok()?.to_be_bytes())?;
+    for leg in r.legs {
+        put(&leg.pre.to_be_bytes())?;
+        put(&leg.delta.to_be_bytes())?;
+    }
+    put(&u32::try_from(proof.len()).ok()?.to_be_bytes())?;
+    put(proof)?;
+    Some(out)
+}
+
+/// Decode every descriptor field, refusing partial hops/legs and wrong digest widths.
+/// `proof` must validate/consume its entire supplied slice; framing never discards a suffix.
+pub fn decode_turn_receipt<const H: usize, const L: usize, P: Copy>(
+    bytes: &[u8],
+    proof: impl FnOnce(&[u8]) -> Option<P>,
+) -> Option<DeosTurnReceipt<H, L, P>> {
+    fn hop(b: &[u8]) -> Option<BiscuitHop> {
+        if b.len() != 72 {
+            return None;
+        }
+        Some(BiscuitHop {
+            rights: u64::from_be_bytes(b.get(..8)?.try_into().ok()?),
+            holder: b.get(8..40)?.try_into().ok()?,
+            channel: b.get(40..72)?.try_into().ok()?,
+        })
+    }
+    let w = decode_turn_wire(bytes)?;
+    if w.hops.len() != H.checked_mul(72)? || w.legs.len() != L.checked_mul(16)? {
+        return None;
+    }
+    let grant = hop(w.grant)?;
+    let mut hops = [grant; H];
+    for (i, h) in hops.iter_mut().enumerate() {
+        let start = i.checked_mul(72)?;
+        *h = hop(w.hops.get(start..start.checked_add(72)?)?)?;
+    }
+    let mut legs = [SeatLeg { pre: 0, delta: 0 }; L];
+    for (i, leg) in legs.iter_mut().enumerate() {
+        let start = i.checked_mul(16)?;
+        let middle = start.checked_add(8)?;
+        leg.pre = i64::from_be_bytes(w.legs.get(start..middle)?.try_into().ok()?);
+        leg.delta = i64::from_be_bytes(
+            w.legs
+                .get(middle..start.checked_add(16)?)?
+                .try_into()
+                .ok()?,
+        );
+    }
+    Some(DeosTurnReceipt {
+        fs_challenge0: w.challenge.try_into().ok()?,
+        grant,
+        hops,
+        nullifier: w.nullifier.try_into().ok()?,
+        legs,
+        proof: proof(w.proof)?,
+    })
+}
+
 /// The clause of the DeOS turn relation a receipt violates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeosRefusal {
@@ -248,6 +422,13 @@ impl<
     > RelationVerifier<DeosTurnReceipt<HOPS, LEGS, DeosProof<CAP, Q, BOT, COLS, W>>>
     for DeosTurnRelationVerifier<COLS, DEG, LAYERS, W, N>
 {
+    fn commit_turn(
+        &mut self,
+        _pi: &FullPinnedPublicInputs,
+        r: &DeosTurnReceipt<HOPS, LEGS, DeosProof<CAP, Q, BOT, COLS, W>>,
+    ) -> bool {
+        self.spent.insert(r.nullifier)
+    }
     fn verify_relation(
         &self,
         pi: &FullPinnedPublicInputs,
@@ -288,6 +469,15 @@ mod tests {
         spent: &[Digest],
         skew: u64,
     ) -> (Verifier, SovereignTurnBundle<Receipt>) {
+        prove_at(legs, hop_rights, spent, skew, None)
+    }
+    fn prove_at(
+        legs: [SeatLeg; 2],
+        hop_rights: u64,
+        spent: &[Digest],
+        skew: u64,
+        previous: Option<&FullPinnedPublicInputs>,
+    ) -> (Verifier, SovereignTurnBundle<Receipt>) {
         let coeff = [Goldilocks::new(11), Goldilocks::new(5)];
         let rows: [[Goldilocks; 1]; 8] =
             core::array::from_fn(|i| [eval(&coeff, Goldilocks::new(i as u64))]);
@@ -313,11 +503,11 @@ mod tests {
         let p = FullPinnedPublicInputs {
             circuit_desc_digest: [0x11; 32],
             actor_vk_digest: [0x22; 32],
-            pre_state_root: [0x33; 32],
+            pre_state_root: previous.map_or([0x33; 32], |p| p.post_state_root),
             post_state_root: canopy_root(3, 2, &cap),
             cap_root: deos_lineage(&grant, &[]).unwrap(),
             revoked_root: window.root(),
-            height: 1,
+            height: previous.map_or(1, |p| p.height.checked_add(1).unwrap()),
             turn_hash: deos_turn_digest(&lineage, &nullifier, &legs),
         };
         let v = Verifier {
@@ -401,8 +591,8 @@ mod tests {
         assert!(settled.accepted);
         assert_eq!(settled.committed_root, b.public_inputs.post_state_root);
         // The PD spends the nullifier; the window's root moves with it.
-        let before = pd.verifier.spent.root();
-        assert!(pd.verifier.spent.insert(b.receipt.nullifier));
+        let before = b.public_inputs.revoked_root;
+        assert!(pd.verifier.spent.contains(&b.receipt.nullifier));
         assert!(!pd.verifier.spent.insert(b.receipt.nullifier));
         assert_ne!(pd.verifier.spent.root(), before);
         assert_eq!(
@@ -410,6 +600,184 @@ mod tests {
                 .check(&b.public_inputs, &b.challenge0, &b.receipt),
             Err(Instance)
         );
+    }
+
+    #[test]
+    fn lean_deos_wire_vector_and_all_truncations() {
+        let vector: &[u8] = &[
+            1, 0, 0, 0, 2, 0x12, 0x34, 0, 0, 0, 1, 0xff, 0, 0, 0, 0, 0, 0, 0, 1, 0xab, 0, 0, 0, 0,
+            0, 0, 0, 2, 0x56, 0x78,
+        ];
+        let turn = DeosTurnWire {
+            challenge: &[0x12, 0x34],
+            grant: &[0xff],
+            hops: &[],
+            nullifier: &[0xab],
+            legs: &[],
+            proof: &[0x56, 0x78],
+        };
+        let mut out = [0u8; 64];
+        assert_eq!(encode_turn_wire(turn, &mut out), Some(vector));
+        assert_eq!(decode_turn_wire(vector), Some(turn));
+        for end in 0..vector.len() {
+            assert_eq!(decode_turn_wire(&vector[..end]), None);
+        }
+        let mut trailing = std::vec::Vec::from(vector);
+        trailing.push(0);
+        assert_eq!(decode_turn_wire(&trailing), None);
+        let mut bad_len = std::vec::Vec::from(vector);
+        bad_len[1..5].fill(0xff);
+        assert_eq!(decode_turn_wire(&bad_len), None);
+        assert!(encode_turn_wire(turn, &mut [0; 4]).is_none());
+    }
+
+    #[test]
+    fn lean_typed_deos_signed_seat_vector() {
+        let receipt = DeosTurnReceipt {
+            fs_challenge0: [0x12; 32],
+            grant: BiscuitHop {
+                rights: 7,
+                holder: [7; 32],
+                channel: [8; 32],
+            },
+            hops: [],
+            nullifier: [0xab; 32],
+            legs: LEGS,
+            proof: (0x56u8, 0x78u8),
+        };
+        let expected: &[u8] = &[
+            1, 0, 0, 0, 32, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+            18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0,
+            0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 0, 0, 0, 0, 0, 0, 0, 32, 171, 171, 171, 171, 171, 171, 171,
+            171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171,
+            171, 171, 171, 171, 171, 171, 171, 171, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 100, 255,
+            255, 255, 255, 255, 255, 255, 216, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 40, 0,
+            0, 0, 2, 86, 120,
+        ];
+        let mut out = [0; 256];
+        assert_eq!(
+            encode_turn_receipt(&receipt, &[0x56, 0x78], &mut out),
+            Some(expected)
+        );
+        let decoded = decode_turn_receipt::<0, 2, _>(expected, |p| {
+            if let [a, b] = p {
+                Some((*a, *b))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+        assert_eq!(decoded.legs, LEGS);
+        assert_eq!(decoded.grant, receipt.grant);
+        assert_eq!(decoded.proof, receipt.proof);
+    }
+
+    #[test]
+    fn typed_wire_roundtrip_rejects_partial_hops_and_legs() {
+        let (_, b) = prove(LEGS, 0b011, &[], 0);
+        let r = DeosTurnReceipt {
+            fs_challenge0: b.receipt.fs_challenge0,
+            grant: b.receipt.grant,
+            hops: b.receipt.hops,
+            nullifier: b.receipt.nullifier,
+            legs: b.receipt.legs,
+            proof: 42u8,
+        };
+        let mut out = [0; 512];
+        let bytes = encode_turn_receipt(&r, &[42], &mut out).unwrap();
+        let proof = |bs: &[u8]| if let [v] = bs { Some(*v) } else { None };
+        let decoded = decode_turn_receipt::<1, 2, _>(bytes, proof).unwrap();
+        assert_eq!(decoded.fs_challenge0, r.fs_challenge0);
+        assert_eq!(decoded.grant, r.grant);
+        assert_eq!(decoded.hops, r.hops);
+        assert_eq!(decoded.nullifier, r.nullifier);
+        assert_eq!(decoded.legs, r.legs);
+        assert_eq!(decoded.proof, r.proof);
+        let w = decode_turn_wire(bytes).unwrap();
+        for bad in [
+            DeosTurnWire {
+                hops: &w.hops[..71],
+                ..w
+            },
+            DeosTurnWire {
+                legs: &w.legs[..31],
+                ..w
+            },
+            DeosTurnWire {
+                nullifier: &w.nullifier[..31],
+                ..w
+            },
+        ] {
+            let mut bad_bytes = [0; 512];
+            let encoded = encode_turn_wire(bad, &mut bad_bytes).unwrap();
+            assert!(decode_turn_receipt::<1, 2, _>(encoded, proof).is_none());
+        }
+    }
+
+    #[test]
+    fn same_drain_replay_is_quarantined() {
+        let (v, first) = prove(LEGS, 0b011, &[], 0);
+        // Valid height, pre-root and cryptographic transcript; stale revocation root.
+        // Without commit_turn both independently valid relations would be accepted.
+        let (_, second) = prove_at(LEGS, 0b011, &[], 0, Some(&first.public_inputs));
+        assert!(verify_cipherclerk(&v, &second));
+        let mut input = IpcRing::<_, 4>::new();
+        let mut output = IpcRing::<SettlementVerdict, 4>::new();
+        let (mut tx, mut rx) = input.split();
+        let (mut otx, mut orx) = output.split();
+        assert!(tx.push(first).is_ok() && tx.push(second).is_ok());
+        let mut pd = VerifierPd::new(v, first.public_inputs.pre_state_root, 0);
+        assert_eq!(pd.drain(&mut rx, &mut otx), 2);
+        assert!(orx.pop().unwrap().accepted);
+        assert!(!orx.pop().unwrap().accepted);
+        assert!(pd.quarantined && pd.verifier.spent.contains(&first.receipt.nullifier));
+        assert_eq!(pd.height, 1);
+    }
+
+    #[test]
+    fn distinct_turns_advance_spent_state_through_backpressure() {
+        let (v, first) = prove(LEGS, 0b011, &[], 0);
+        let (_, second) = prove_at(
+            LEGS,
+            0b001,
+            &[first.receipt.nullifier],
+            0,
+            Some(&first.public_inputs),
+        );
+        assert_ne!(first.receipt.nullifier, second.receipt.nullifier);
+        let mut input = IpcRing::<_, 4>::new();
+        let mut output = IpcRing::<SettlementVerdict, 1>::new();
+        let (mut tx, mut rx) = input.split();
+        let (mut otx, mut orx) = output.split();
+        assert!(tx.push(first).is_ok() && tx.push(second).is_ok());
+        let mut pd = VerifierPd::new(v, first.public_inputs.pre_state_root, 0);
+        assert_eq!(pd.drain(&mut rx, &mut otx), 2);
+        assert!(orx.pop().unwrap().accepted);
+        assert_eq!(pd.drain(&mut rx, &mut otx), 0);
+        assert!(orx.pop().unwrap().accepted);
+        assert!(!pd.quarantined);
+        assert_eq!(pd.height, 2);
+        assert!(pd.verifier.spent.contains(&first.receipt.nullifier));
+        assert!(pd.verifier.spent.contains(&second.receipt.nullifier));
+    }
+
+    #[test]
+    fn full_window_quarantines_before_state_commit() {
+        let (v, b) = prove(LEGS, 0b011, &[[1; 32], [2; 32], [3; 32], [4; 32]], 0);
+        assert!(verify_cipherclerk(&v, &b));
+        let mut input = IpcRing::<_, 2>::new();
+        let mut output = IpcRing::<SettlementVerdict, 2>::new();
+        let (mut tx, mut rx) = input.split();
+        let (mut otx, mut orx) = output.split();
+        assert!(tx.push(b).is_ok());
+        let mut pd = VerifierPd::new(v, b.public_inputs.pre_state_root, 0);
+        assert_eq!(pd.drain(&mut rx, &mut otx), 1);
+        assert!(!orx.pop().unwrap().accepted);
+        assert!(pd.quarantined);
+        assert_eq!(pd.committed_root, b.public_inputs.pre_state_root);
+        assert_eq!(pd.height, 0);
     }
 
     #[test]

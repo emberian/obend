@@ -1122,6 +1122,105 @@ theorem unowned_frame_immutable {k : KState} (hInv : KInv k) (f : Nat)
     rw [ha, hNone j r hr hw] at ht
     cases ht
 
+/-! ## Multi-page ingress and SMMU revocation -/
+
+/-- Translate every byte, including bytes beyond a page boundary. No partial success. -/
+def spanAddresses (maps : List Mapping) (sp : Space) (write : Bool) : Nat → Nat → Option (List Nat)
+  | _, 0 => some []
+  | va, n + 1 => do
+    let pa ← translate maps sp va write
+    let rest ← spanAddresses maps sp write (va + 1) n
+    pure (pa :: rest)
+
+theorem spanAddresses_length {maps : List Mapping} {sp : Space} {write : Bool}
+    {va len : Nat} {addresses : List Nat}
+    (h : spanAddresses maps sp write va len = some addresses) : addresses.length = len := by
+  induction len generalizing va addresses with
+  | zero => simp [spanAddresses] at h; subst h; rfl
+  | succ n ih =>
+    cases ht : translate maps sp va write with
+    | none => simp [spanAddresses, ht] at h
+    | some pa =>
+      cases hr : spanAddresses maps sp write (va + 1) n with
+      | none => simp [spanAddresses, ht, hr] at h
+      | some rest =>
+        simp [spanAddresses, ht, hr] at h
+        subst h
+        simp [ih hr]
+
+def readMultiPageVia (k : KState) (pd : PdId) (va len : Nat) : Option (List UInt8) :=
+  (spanAddresses k.maps (.cpu pd) false va len).map (List.map k.mem)
+
+/-- Resolve both spans before writing; snapshot the source before any destination write.
+Overlapping spans have memmove semantics; a missing page refuses the entire copy. -/
+def copyMultiPageVia (k : KState) (pd : PdId) (src dst len : Nat) : Option KState := do
+  let srcs ← spanAddresses k.maps (.cpu pd) false src len
+  let dsts ← spanAddresses k.maps (.cpu pd) true dst len
+  let writes := dsts.zip (srcs.map k.mem)
+  pure { k with mem := fun a => (writes.reverse.lookup a).getD (k.mem a) }
+
+/-- Revoke every device alias to protected frames, across all stream IDs. CPU mappings
+remain. This models completed SMMU invalidation, including the device translation cache. -/
+def smmuUnmapRingFrames (k : KState) (frames : List Nat) : KState :=
+  { k with maps := k.maps.filter fun e => match e.space with
+    | .cpu _ => true
+    | .dev _ => !(frames.contains e.pfn) }
+
+def deviceDmaWrite (k : KState) (sid va : Nat) (value : UInt8) : KState :=
+  storeVia k (.dev sid) va value
+
+def DmaExcluded (k : KState) (frames : List Nat) : Prop :=
+  ∀ e ∈ k.maps, ∀ sid, e.space = .dev sid → e.pfn ∉ frames
+
+theorem smmuUnmapRingFrames_excludes (k : KState) (frames : List Nat) :
+    DmaExcluded (smmuUnmapRingFrames k frames) frames := by
+  intro e he sid hs
+  have hf := (List.mem_filter.mp he).2
+  simp [hs] at hf
+  exact hf
+
+theorem deviceDmaWrite_maps (k : KState) (sid va : Nat) (value : UInt8) :
+    (deviceDmaWrite k sid va value).maps = k.maps := by
+  unfold deviceDmaWrite storeVia
+  split <;> rfl
+
+theorem deviceDmaWrite_frozen {k : KState} {frames : List Nat}
+    (excluded : DmaExcluded k frames) (sid va : Nat) (value : UInt8)
+    (a : Nat) (ha : a / pageSize ∈ frames) :
+    (deviceDmaWrite k sid va value).mem a = k.mem a := by
+  unfold deviceDmaWrite storeVia
+  split
+  · rename_i pa hp
+    have ne : a ≠ pa := by
+      intro eq
+      obtain ⟨e, he, _, hpa⟩ := translate_some hp
+      obtain ⟨hm, hs, _⟩ := lookupMap_some he
+      have page : pa / pageSize = e.pfn := by
+        rw [hpa]; exact page_of_addr _ _ (Nat.mod_lt _ (by decide))
+      rw [eq, page] at ha
+      exact excluded e hm sid hs ha
+    simp [ne]
+  · rfl
+
+/-- Unbounded traces; the environment chooses every stream, address and byte. -/
+def runDeviceDma : KState → List (Nat × Nat × UInt8) → KState
+  | k, [] => k
+  | k, (sid, va, value) :: rest => runDeviceDma (deviceDmaWrite k sid va value) rest
+
+theorem runDeviceDma_frozen {k : KState} {frames : List Nat}
+    (excluded : DmaExcluded k frames) (writes : List (Nat × Nat × UInt8)) :
+    (runDeviceDma k writes).maps = k.maps ∧
+      ∀ a, a / pageSize ∈ frames → (runDeviceDma k writes).mem a = k.mem a := by
+  induction writes generalizing k with
+  | nil => exact ⟨rfl, fun _ _ => rfl⟩
+  | cons w ws ih =>
+    obtain ⟨sid, va, value⟩ := w
+    have hm := deviceDmaWrite_maps k sid va value
+    have hx : DmaExcluded (deviceDmaWrite k sid va value) frames := by
+      simpa only [DmaExcluded, hm] using excluded
+    obtain ⟨hm', hf⟩ := ih hx
+    exact ⟨hm'.trans hm, fun a ha => (hf a ha).trans (deviceDmaWrite_frozen excluded sid va value a ha)⟩
+
 end Obend.OS.Sel4MicrokitKernel
 
 end

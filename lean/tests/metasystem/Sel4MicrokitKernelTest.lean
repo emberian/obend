@@ -183,6 +183,16 @@ import all Obend.Vault.Law
 import all Obend.Vault.Mandate
 import all Obend.Vault.Page
 import all Obend.Vault.Rehydration
+import all Init.Data.Rat.Basic
+import all Obend.Analysis.Diff
+import all Obend.Analysis.Groebner
+import all Obend.Analysis.RealAnalysis
+import all Obend.Analysis.SosLyapunov
+import all Obend.Hardware.CircuitDae
+import all Obend.Hardware.GlitchAndTempestSafe
+import all Obend.Hardware.HDL
+import all Obend.Hardware.PipelinedRiscCore
+import all Obend.Judge.RealAnalysis
 
 /-!
 # The seL4 / Microkit capability kernel, end to end
@@ -558,6 +568,117 @@ example (h h₁ : PowerboxHost) (hAcc : Accountable h)
 -- A mint that forgets the grant right serves a call the contract forbids.
 #tooth ksyscall_skip_implies_contract_violation by mutation mintOk :=
   fun n pd _ cap => n.owner == pd && cap.le n.cap
+
+/-! Byte-exact vector also asserted by Rust's lean_deos_wire_vector_and_all_truncations. -/
+def wireTurn : DeosTurnWire := ⟨[[0x12, 0x34], [0xff], [], [0xab], [], [0x56, 0x78]]⟩
+def wireVector : List UInt8 :=
+  [1, 0,0,0,2, 0x12,0x34, 0,0,0,1, 0xff, 0,0,0,0,
+    0,0,0,1, 0xab, 0,0,0,0, 0,0,0,2, 0x56,0x78]
+example : encodeDeosTurnWire wireTurn = some wireVector := by decide +kernel
+example : decodeDeosTurnWire wireVector = some wireTurn := by decide +kernel
+example : decodeDeosTurnWire (wireVector ++ [0]) = none := by decide +kernel
+example : decodeDeosTurnWire (wireVector.take 30) = none := by decide +kernel
+example : (List.range wireVector.length).all (fun n =>
+    (decodeDeosTurnWire (wireVector.take n)).isNone) = true := by decide +kernel
+example : wireTurn.Valid := by decide +kernel
+example : encodeDeosTurnWire ⟨[]⟩ = none := by decide +kernel
+
+-- A typed descriptor vector: full digest widths, a grant and two signed settlement legs.
+def typedWireTurn : DeosTurnWire := ⟨[
+  List.replicate 32 0x12,
+  Obend.Digest.HashBytes.be 8 7 ++ List.replicate 32 7 ++ List.replicate 32 8,
+  [], List.replicate 32 0xab,
+  Obend.Digest.HashBytes.be 8 100 ++ Obend.Digest.HashBytes.be 8 (2^64 - 40) ++
+    Obend.Digest.HashBytes.be 8 5 ++ Obend.Digest.HashBytes.be 8 40,
+  [0x56,0x78]]⟩
+def typedWireVector : List UInt8 :=
+  [1, 0, 0, 0, 32, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 0, 0, 0, 0, 0, 0, 0, 32, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 171, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 100, 255, 255, 255, 255, 255, 255, 255, 216, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0, 2, 86, 120]
+example : encodeDeosTurnWire typedWireTurn = some typedWireVector := by decide +kernel
+example : decodeDeosTurnWire typedWireVector = some typedWireTurn := by decide +kernel
+
+def multiPage : KState := { boot with
+  maps := [⟨.cpu 0, 0, 10, true, 0, 0, 0⟩, ⟨.cpu 0, 1, 20, true, 0, 0, 0⟩,
+    ⟨.cpu 0, 2, 30, true, 0, 0, 0⟩, ⟨.cpu 0, 3, 40, true, 0, 0, 0⟩,
+    ⟨.dev 7, 0, 10, true, 0, 0, 0⟩, ⟨.dev 7, 1, 20, true, 0, 0, 0⟩,
+    ⟨.dev 8, 5, 20, true, 0, 0, 0⟩]
+  mem := fun a => UInt8.ofNat (a / pageSize) }
+example : readMultiPageVia multiPage 0 4095 2 = some [10,20] := by decide +kernel
+example : readMultiPageVia multiPage 0 16383 2 = none := by decide +kernel
+example : ((copyMultiPageVia multiPage 0 4095 12287 2).bind
+    fun k => readMultiPageVia k 0 12287 2) = some [10,20] := by decide +kernel
+example : (copyMultiPageVia multiPage 0 16383 12287 2).isNone = true := by decide +kernel
+example : readMultiPageVia (deviceDmaWrite multiPage 8 20480 99) 0 4095 2 =
+    some [10,99] := by decide +kernel
+example : readMultiPageVia (runDeviceDma (smmuUnmapRingFrames multiPage [10,20])
+    [(7,4095,99), (7,4096,98), (8,20480,97)]) 0 4095 2 = some [10,20] := by decide +kernel
+example : ((readMultiPageVia (runDeviceDma (smmuUnmapRingFrames multiPage [10,20])
+    [(7,4095,99), (8,20480,97)]) 0 4095 2).bind
+    (verifyCopiedSlot (· == [10,20]))) = some [10,20] := by decide +kernel
+
+example : verifierStep multiPage [10,20] 0 4095 2 [(7,4095,99), (8,20480,97)]
+    (· == [10,20]) = some [10,20] := by decide +kernel
+example : verifierStep multiPage [10,20] 0 4095 2 [] (· == [10,99]) = none := by decide +kernel
+
+example : (multiPageOutboxStep proto sampleValidPartition [] outbox₀ multiPage [10,20]
+    0 4095 2 [(7,4095,99), (8,20480,97)] (· == [10,20]) readReq).isSome = true := by decide +kernel
+example : (multiPageOutboxStep proto sampleValidPartition [] outbox₀ multiPage [10,20]
+    0 4095 2 [] (fun _ => false) readReq).isNone = true := by decide +kernel
+#tooth multi_page_outbox_trace_safe by mutation smmuUnmapRingFrames := fun k _ => k
+
+-- Omitting a ring frame is a configuration refusal, not an assumption the caller may evade.
+example : verifierStep multiPage [10] 0 4095 2 [(8,20480,97)] (fun _ => true) = none := by decide +kernel
+
+#tooth verifierStep_covers by mutation verifierStep := fun _ _ _ _ _ _ _ => some []
+#tooth encodeDeosTurnWire_accepts_iff_valid by mutation encodeDeosTurnWire := fun turn => some (deosWireBytes turn)
+#tooth spanAddresses_length by mutation spanAddresses := fun _ _ _ _ _ => some []
+#tooth decodeDeosTurnWire_encodeDeosTurnWire by mutation parseWireFields := fun _ _ => none
+#tooth decodeDeosTurnWire_canonical_len by mutation decodeDeosTurnWire := fun _ => some ⟨[]⟩
+#tooth smmu_unmap_before_verify_freezes_multi_page_ring by mutation smmuUnmapRingFrames := fun k _ => k
+
+/-! ## Hardware dual-rail glitch quarantine × seL4 isolated PD outbox synergy witnesses -/
+
+def sampleWinSpec : Obend.Hardware.GlitchAndTempestSafe.RailClockWindowSpec :=
+  ⟨Obend.Analysis.CanonicalRat.mk 4 10, Obend.Analysis.CanonicalRat.mk 6 10,
+   Obend.Analysis.CanonicalRat.mk 9 10, Obend.Analysis.CanonicalRat.mk 11 10,
+   1, Obend.Analysis.CanonicalRat.mk 1 10, 1⟩
+
+def sampleCleanCycle : Obend.Hardware.GlitchAndTempestSafe.GlitchCycleFault :=
+  Obend.Hardware.GlitchAndTempestSafe.mkCleanGlitchCycleFault 1 1
+
+def sampleBrownoutCycle : Obend.Hardware.GlitchAndTempestSafe.GlitchCycleFault :=
+  { sampleCleanCycle with vGlitchDrop := Obend.Analysis.CanonicalRat.mk 3 10 }
+
+def samplePdIsaInit : Obend.Hardware.PipelinedRisc.IsaState :=
+  Obend.Hardware.GlitchAndTempestSafe.unauthInitIsaState
+
+def samplePdImem : Obend.Hardware.PipelinedRisc.InstrMem :=
+  Obend.Hardware.PipelinedRisc.progToImem Obend.Hardware.GlitchAndTempestSafe.authGuardProg
+
+-- Clean 2-cycle dual-rail execution advances ISA cleanly AND dispatches SMMU-frozen multi-page outbox:
+example :
+    let res := glitchGuardedMultiPageOutboxStep sampleWinSpec samplePdImem
+      [.clockCycle sampleCleanCycle, .clockCycle sampleCleanCycle]
+      (Obend.Hardware.GlitchAndTempestSafe.initGlitchProtectedCpu samplePdIsaInit 0xAA#64 0xBB#64)
+      proto sampleValidPartition [] outbox₀ multiPage [10,20]
+      0 4095 2 [(7,4095,99), (8,20480,97)] (· == [10,20]) readReq
+    res.1.mode = .normal .spacerPhase ∧ res.2.isSome = true := by decide +kernel
+
+-- Brownout glitch latches sticky `.glitchQuarantine`, clamps outputs to `0#64`, and blocks outbox (`none`):
+example :
+    let res := glitchGuardedMultiPageOutboxStep sampleWinSpec samplePdImem
+      [.clockCycle sampleBrownoutCycle, .clockCycle sampleCleanCycle]
+      (Obend.Hardware.GlitchAndTempestSafe.initGlitchProtectedCpu samplePdIsaInit 0xAA#64 0xBB#64)
+      proto sampleValidPartition [] outbox₀ multiPage [10,20]
+      0 4095 2 [(7,4095,99), (8,20480,97)] (· == [10,20]) readReq
+    res.1.mode = .glitchQuarantine ∧
+    Obend.Hardware.GlitchAndTempestSafe.externalActuationOut res.1 = 0#64 ∧
+    Obend.Hardware.GlitchAndTempestSafe.externalKeyBusOut res.1 = 0#64 ∧
+    res.2 = none := by decide +kernel
+
+#tooth sel4_isolated_pd_glitch_quarantine_clamps_and_freezes_outbox by
+  mutation glitchGuardedMultiPageOutboxStep := fun winSpec imem cpuTurns cpuInit P part sent st k frames pd va len writes check req =>
+    (Obend.Hardware.GlitchAndTempestSafe.runGlitchProtectedCpuTrace winSpec imem cpuTurns cpuInit,
+     multiPageOutboxStep P part sent st k frames pd va len writes check req)
 
 #assert_axioms_tree
 

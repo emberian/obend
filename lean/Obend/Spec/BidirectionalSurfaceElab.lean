@@ -23,6 +23,10 @@ with the proof that each reads only fields its subject's row has.
 Refusals are `Diagnostic`s naming what failed. The theorems at the end say when the unbound
 variable, effect leak and linearity refusals fire.
 -/
+public import Obend.Core.GradedSessionMetatheory
+import all Obend.Core.GradedSessionMetatheory
+public import Obend.Core.Cubical2LTT
+import all Obend.Core.Cubical2LTT
 public import Obend.Spec.Syntax
 public import Obend.Spec.Types
 public import Obend.Spec.Law
@@ -722,6 +726,273 @@ def ofContract (types : String → Option Ty) (contract : Syntax.ContractDecl) :
     pure (.law contract.name invariant subject)
   | some step, none => ofSyntax types 4096 step
   | none, _ => .error (.unsupported "contract without a step")
+
+end Obend.Spec.BidirectionalSurfaceElab
+
+namespace Obend.Core.Ty
+open Obend.Core.GradedSessionMetatheory (ZeroOneOmega)
+/-- Exact on the QTT fragment. Affine has no image preserving its allowance set in
+{0,1,ω}; the elaboration bridge below explicitly refuses it. -/
+def Quantity.toZeroOneOmega : Quantity → ZeroOneOmega
+  | .erased => .zero
+  | .linear => .one
+  | .unrestricted | .affine => .omega
+end Obend.Core.Ty
+namespace Obend.Core.GradedSessionMetatheory
+def ZeroOneOmega.toQuantity : ZeroOneOmega → Obend.Core.Ty.Quantity
+  | .zero => .erased
+  | .one => .linear
+  | .omega => .unrestricted
+end Obend.Core.GradedSessionMetatheory
+namespace Obend.Core.Ty
+open Obend.Core.GradedSessionMetatheory (ZeroOneOmega)
+/-- Addition and multiplication on the exact (non-affine) QTT fragment. -/
+def Quantity.qttAdd (a b : Quantity) : Quantity :=
+  (a.toZeroOneOmega.add b.toZeroOneOmega).toQuantity
+def Quantity.qttMul (a b : Quantity) : Quantity :=
+  (a.toZeroOneOmega.mul b.toZeroOneOmega).toQuantity
+
+theorem Quantity.toZeroOneOmega_right_inverse (g : ZeroOneOmega) :
+    g.toQuantity.toZeroOneOmega = g := by cases g <;> rfl
+
+theorem Quantity.toZeroOneOmega_left_inverse (q : Quantity) (exact : q ≠ .affine) :
+    q.toZeroOneOmega.toQuantity = q := by cases q <;> first | rfl | contradiction
+
+theorem Quantity.toZeroOneOmega_add (a b : Quantity) :
+    (a.qttAdd b).toZeroOneOmega = a.toZeroOneOmega.add b.toZeroOneOmega :=
+  Quantity.toZeroOneOmega_right_inverse _
+
+theorem Quantity.toZeroOneOmega_mul (a b : Quantity) :
+    (a.qttMul b).toZeroOneOmega = a.toZeroOneOmega.mul b.toZeroOneOmega :=
+  Quantity.toZeroOneOmega_right_inverse _
+
+/-- Exact inverse exists precisely where the bridge claims one. -/
+theorem Quantity.qtt_exact_iff (q : Quantity) :
+    q.toZeroOneOmega.toQuantity = q ↔ q ≠ .affine := by cases q <;> decide
+/-- Abstract the surface checker's exact occurrence counts into the usage rig. -/
+def Quantity.gradeOfCount : Nat → ZeroOneOmega
+  | 0 => .zero
+  | 1 => .one
+  | _ + 2 => .omega
+
+/-- The bridge preserves the existing surface binder check, not just constructor names. -/
+theorem Quantity.fits_qtt_iff (q : Quantity) (exact : q ≠ .affine) (n : Nat) :
+    q.fits n = true ↔ ZeroOneOmega.le (Quantity.gradeOfCount n) q.toZeroOneOmega := by
+  cases q with
+  | affine => exact (exact rfl).elim
+  | erased => cases n with
+    | zero => decide
+    | succ n => cases n <;> simp [Quantity.fits, Quantity.gradeOfCount, Quantity.toZeroOneOmega, ZeroOneOmega.le]
+  | linear => cases n with
+    | zero => decide
+    | succ n => cases n <;> simp [Quantity.fits, Quantity.gradeOfCount, Quantity.toZeroOneOmega, ZeroOneOmega.le]
+  | unrestricted => cases n with
+    | zero => decide
+    | succ n => cases n <;> simp [Quantity.fits, Quantity.gradeOfCount, Quantity.toZeroOneOmega, ZeroOneOmega.le]
+
+end Obend.Core.Ty
+
+namespace Obend.Spec.BidirectionalSurfaceElab
+open Obend.Core
+open Obend.Core.Ty
+
+/-- Supported structural types; other surface features have no QTT translation yet. -/
+def elabToQttType : Ty → Option (GradedSessionMetatheory.Ty GradedSessionMetatheory.ZeroOneOmega)
+  | .boolean => some .bool
+  | .emptyRow => some .unit
+  | .arrow _ q a b => do
+    if q == .affine then none else
+      pure (.arr q.toZeroOneOmega (← elabToQttType a) (← elabToQttType b))
+  | _ => none
+
+abbrev QttScope := List (String × GradedSessionMetatheory.Ty GradedSessionMetatheory.ZeroOneOmega)
+def elabToQttCtx : Scope → Option QttScope
+  | [] => some []
+  | (name, binding) :: rest => do
+    if binding.quantity == .affine then none else
+      pure ((name, ← elabToQttType binding.type) :: (← elabToQttCtx rest))
+
+/-- Every successful lowering carries a derivation for the actual returned syntax. -/
+structure QttElaborated (scope : QttScope) where
+  type : GradedSessionMetatheory.Ty GradedSessionMetatheory.ZeroOneOmega
+  term : GradedSessionMetatheory.Tm GradedSessionMetatheory.ZeroOneOmega
+  uses : GradedSessionMetatheory.Usage GradedSessionMetatheory.ZeroOneOmega
+  typed : GradedSessionMetatheory.HasTy (scope.map Prod.snd) term type uses
+
+def lookupQtt : (scope : QttScope) → String → Option (QttElaborated scope)
+  | [], _ => none
+  | (name, type) :: rest, key =>
+    if name = key then some ⟨type, .var 0, GradedSessionMetatheory.Usage.single 0, .var rfl⟩ else do
+      let v ← lookupQtt rest key
+      pure ⟨v.type, v.term.shift 0, GradedSessionMetatheory.Usage.insertAt 0 .zero v.uses,
+        v.typed.weaken (Γ₁ := []) type⟩
+
+/-- Direct lowering of Boolean functions, applications and lets. Inferred lambda domains and
+other surface constructors are refused, never translated to dummy QTT terms. -/
+def lowerSurfaceQtt (scope : QttScope) : Surface → Option (QttElaborated scope)
+  | .var name => lookupQtt scope name
+  | .bool b => some ⟨.bool, .bool b, GradedSessionMetatheory.Usage.zero, .bool⟩
+  | .lam name q _ (some domain) body => do
+    if q == .affine then none else do
+      let A ← elabToQttType domain
+      let b ← lowerSurfaceQtt ((name, A) :: scope) body
+      if fits : GradedSessionMetatheory.ZeroOneOmega.le (b.uses 0) q.toZeroOneOmega then
+        pure ⟨.arr q.toZeroOneOmega A b.type, .lam q.toZeroOneOmega A b.term,
+          GradedSessionMetatheory.Usage.tail b.uses, .lam b.typed fits⟩
+      else none
+  | .call fn arg => do
+    let f ← lowerSurfaceQtt scope fn
+    let a ← lowerSurfaceQtt scope arg
+    match ht : f.type with
+    | .arr q A B =>
+      if same : a.type = A then
+        pure ⟨B, .app q f.term a.term, GradedSessionMetatheory.Usage.add f.uses
+          (GradedSessionMetatheory.Usage.scale q a.uses),
+          .app (ht ▸ f.typed) (same ▸ a.typed)⟩
+      else none
+    | _ => none
+  | .letE name q _ value body => do
+    if q == .affine then none else do
+      let v ← lowerSurfaceQtt scope value
+      let b ← lowerSurfaceQtt ((name, v.type) :: scope) body
+      if fits : GradedSessionMetatheory.ZeroOneOmega.le (b.uses 0) q.toZeroOneOmega then
+        pure ⟨b.type, .app q.toZeroOneOmega (.lam q.toZeroOneOmega v.type b.term) v.term,
+          GradedSessionMetatheory.Usage.add (GradedSessionMetatheory.Usage.tail b.uses)
+            (GradedSessionMetatheory.Usage.scale q.toZeroOneOmega v.uses),
+          .app (.lam b.typed fits) v.typed⟩
+      else none
+  | _ => none
+
+/-- Both the existing surface checker and the direct QTT lowering must accept. -/
+def checkSurfaceQtt (env : Env) (scope : Scope) (source : Surface) (expected : Ty) :
+    Option (Σ ctx : QttScope, QttElaborated ctx) := do
+  let _ ← (checkSurface env scope source expected).toOption
+  let ctx ← elabToQttCtx scope
+  let out ← lowerSurfaceQtt ctx source
+  pure ⟨ctx, out⟩
+
+theorem checkSurface_qtt_grade_bridge {env : Env} {scope : Scope} {source : Surface}
+    {expected : Ty} {ctx : QttScope} {out : QttElaborated ctx}
+    (accepted : checkSurfaceQtt env scope source expected = some ⟨ctx, out⟩) :
+    (∃ checked, checkSurface env scope source expected = .ok checked) ∧
+      GradedSessionMetatheory.HasTy (ctx.map Prod.snd) out.term out.type out.uses ∧
+      ∀ k, (out.uses k = .one → out.term.occ k = 1) ∧
+        (out.uses k = .zero → out.term.occ k = 0) := by
+  refine ⟨?_, out.typed, fun k => ?_⟩
+  · cases h : checkSurface env scope source expected with
+    | error err => simp [checkSurfaceQtt, h, Except.toOption] at accepted
+    | ok checked => exact ⟨checked, rfl⟩
+  · have h := GradedSessionMetatheory.linear_cap_used_exactly_once out.typed k
+    exact ⟨h.2, h.1⟩
+
+/-! ## Cross-module weld: QTT surface elaboration, session rendezvous, and 2LTT staged adapters -/
+
+/-- Project QTT usage grades `{0, 1, ω}` onto 2LTT stage grades `{0, 1}`: zero-use ghost payloads
+live at stage `0` (erasable), whereas linear (`1`) and unrestricted (`ω`) payloads live at runtime
+realizer stage `1`. -/
+def qttToStageGrade : GradedSessionMetatheory.ZeroOneOmega → Cubical2LTT.StageGrade
+  | .zero => .zero
+  | .one => .one
+  | .omega => .one
+
+/-- Surface `Quantity` stage projection factored through `toZeroOneOmega`. -/
+def quantityToStageGrade (q : Quantity) : Cubical2LTT.StageGrade :=
+  qttToStageGrade q.toZeroOneOmega
+
+/-- Exact erasure alignment between `GradedSessionMetatheory.erasable` and `Cubical2LTT.StageGrade`:
+a QTT grade is session-erasable iff its 2LTT stage projection is `.zero`. -/
+theorem qtt_erasable_iff_stageZero (q : GradedSessionMetatheory.ZeroOneOmega) :
+    GradedSessionMetatheory.erasable q = true ↔ qttToStageGrade q = .zero := by
+  cases q <;> decide
+
+/-- Stage-directed 2LTT binder induced by a QTT delivery grade: zero-grade payloads bind in the
+compile-time ghost environment (`letZero`), while runtime payloads (`1` or `ω`) bind in the
+stage-1 realizer environment (`letOne`). -/
+def bindByQttStage (q : GradedSessionMetatheory.ZeroOneOmega)
+    (payloadExpr realizer : Cubical2LTT.Expr2LTT) : Cubical2LTT.Expr2LTT :=
+  match qttToStageGrade q with
+  | .zero => .letZero payloadExpr realizer
+  | .one => .letOne payloadExpr realizer
+
+theorem bindByQttStage_wellStaged (q : GradedSessionMetatheory.ZeroOneOmega)
+    {payloadExpr realizer : Cubical2LTT.Expr2LTT}
+    (hPayload : Cubical2LTT.WellStaged (qttToStageGrade q) payloadExpr = true)
+    (hRealizer : Cubical2LTT.WellStaged .one realizer = true) :
+    Cubical2LTT.WellStaged .one (bindByQttStage q payloadExpr realizer) = true := by
+  cases q <;>
+    simp only [bindByQttStage, qttToStageGrade, Cubical2LTT.WellStaged, Bool.and_eq_true] at hPayload ⊢ <;>
+    exact ⟨hPayload, hRealizer⟩
+
+/-- End-to-end cross-module synergy weld (`BidirectionalSurfaceElab` → `GradedSessionMetatheory` →
+`Cubical2LTT`):
+When `checkSurfaceQtt` elaborates `source` to `out` and transmits `out.term` across a graded session
+channel `S` at delivery grade `q` alongside stage-directed 2LTT realizer `bindByQttStage q` fed
+through a quantitative `Cubical2LTT.AdapterChain`:
+1. Both `checkSurface` and `GradedSessionMetatheory.rendezvous_subject_reduction` succeed,
+   preserving exact `communicationUsage q out.uses` (every linear resource has `occ = 1` before and
+   after communication) AND commuting with `Rendezvous.erase` (erasing payload to `.ghost` iff
+   `qttToStageGrade q = .zero`).
+2. `bindByQttStage q payloadExpr realizer` is stage-1 well-staged, erases all stage-0 ghost state
+   (`evalTwoLevel` is invariant across arbitrary `ghostEnv₁, ghostEnv₂`), and when `q = .zero` its
+   compiled `KernelOneExpr` equals `eraseToStageOne realizer`.
+3. Feeding the stage-1 output into `adapters` under any `ApproxRun` respects fused gain-amplified
+   error bounds `(actual - evalChain (fuseAdapters adapters) x).natAbs ≤ (chainGrade ...).errorNum`. -/
+theorem surface_qtt_cubical_delegated_synergy
+    {env : Env} {scope : Scope} {source : Surface} {expected : Ty}
+    {ctx : QttScope} {out : QttElaborated ctx}
+    (accepted : checkSurfaceQtt env scope source expected = some ⟨ctx, out⟩)
+    (q : GradedSessionMetatheory.ZeroOneOmega)
+    (S : GradedSessionMetatheory.SessionTy GradedSessionMetatheory.ZeroOneOmega)
+    {payloadExpr realizer : Cubical2LTT.Expr2LTT}
+    (hPayload : Cubical2LTT.WellStaged (qttToStageGrade q) payloadExpr = true)
+    (hRealizer : Cubical2LTT.WellStaged .one realizer = true)
+    (realEnv ghostEnv₁ ghostEnv₂ : List UInt64)
+    (adapters : Cubical2LTT.AdapterChain) (actual : Int)
+    (hApprox : Cubical2LTT.ApproxRun adapters
+      (Int.ofNat (Cubical2LTT.runStageOne realEnv (bindByQttStage q payloadExpr realizer)).toNat)
+      actual) :
+    let Γ := ctx.map Prod.snd
+    let before := GradedSessionMetatheory.Tm.pair .one
+      (.send q (.var 0) (out.term.shift 0 |>.shift 0)) (.recv (.var 1))
+    let after := GradedSessionMetatheory.Tm.pair .one
+      (.var 0) (.pair q (out.term.shift 0 |>.shift 0) (.var 1))
+    let Γ₀ := .chan (.send q out.type S) :: .chan (.recv q out.type S.dual) :: Γ
+    let Γ₁ := .chan S :: .chan S.dual :: Γ
+    let T := GradedSessionMetatheory.Ty.tensor .one (.chan S) (.tensor q out.type (.chan S.dual))
+    let staged := bindByQttStage q payloadExpr realizer
+    let x := Int.ofNat (Cubical2LTT.runStageOne realEnv staged).toNat
+    (∃ checked, checkSurface env scope source expected = .ok checked) ∧
+    GradedSessionMetatheory.Rendezvous Γ₀ before Γ₁ after ∧
+    GradedSessionMetatheory.Rendezvous Γ₀ before.erase Γ₁ after.erase ∧
+    GradedSessionMetatheory.HasTy Γ₁ after T
+      (GradedSessionMetatheory.communicationUsage q out.uses) ∧
+    (∀ k, GradedSessionMetatheory.communicationUsage q out.uses k = .one →
+      before.occ k = 1 ∧ after.occ k = 1) ∧
+    (qttToStageGrade q = .zero →
+      Cubical2LTT.eraseToStageOne staged = Cubical2LTT.eraseToStageOne realizer) ∧
+    Cubical2LTT.runStageOne realEnv staged =
+      Cubical2LTT.evalTwoLevel ghostEnv₁ realEnv staged ∧
+    Cubical2LTT.evalTwoLevel ghostEnv₁ realEnv staged =
+      Cubical2LTT.evalTwoLevel ghostEnv₂ realEnv staged ∧
+    (actual - Cubical2LTT.evalChain (Cubical2LTT.fuseAdapters adapters) x).natAbs ≤
+      (Cubical2LTT.chainGrade (Cubical2LTT.fuseAdapters adapters)).errorNum := by
+  dsimp only
+  obtain ⟨hChecked, hTyped, _⟩ := checkSurface_qtt_grade_bridge accepted
+  obtain ⟨hRend, _, hAfterTy, hOcc⟩ :=
+    GradedSessionMetatheory.rendezvous_subject_reduction (q := q) (S := S) hTyped
+  have hStageOk := bindByQttStage_wellStaged q hPayload hRealizer
+  obtain ⟨hRunEq, hGhostInv⟩ :=
+    Cubical2LTT.realizer_stage_erases_zero_ghosts
+      (bindByQttStage q payloadExpr realizer) realEnv ghostEnv₁ ghostEnv₂ hStageOk
+  have hFuse := Cubical2LTT.fuseAdapters_approx_sound adapters
+    (Int.ofNat (Cubical2LTT.runStageOne realEnv (bindByQttStage q payloadExpr realizer)).toNat)
+    actual hApprox
+  refine ⟨hChecked, hRend, hRend.erase, hAfterTy, hOcc, ?_, hRunEq, hGhostInv, hFuse⟩
+  intro hZero
+  cases q with
+  | zero => rfl
+  | one => cases hZero
+  | omega => cases hZero
 
 end Obend.Spec.BidirectionalSurfaceElab
 

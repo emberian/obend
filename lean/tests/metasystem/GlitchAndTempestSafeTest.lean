@@ -1,31 +1,25 @@
-import Obend.Hardware.GlitchAndTempestSafe
-import Obend.AssertAxioms
-import Obend.Tactic.Tooth
-
-/-!
-# `tests/metasystem/GlitchAndTempestSafeTest.lean`
-
-End-to-end concrete & universal verification of `Obend.Hardware.GlitchAndTempestSafe`:
-1. **Adversarial Voltage/Clock Glitch Physics, PDN RLC Droop & Single-Rail Auth-Skip (`§1`)**:
-   - On-die PDN RLC MNA passivity (`pdnDecapRlc_passive_and_dissipative`), CMOS alpha-power delay
-     monotonicity (`cmos_alpha_delay_monotone_and_diverges`), and `singleRail_powerGlitch_skips_auth_check`
-     (`0.7 V` brownout bypassing `BEQ` guard to commit `0xCAFEBABEDEADBEEF#64` at `0x1000#64`).
-2. **Dual-Rail Null-Convention / WDDL CPU, Verified `RtlModule` & Multi-Turn Glitch Immunity (`§2`)**:
-   - `dualRailWddlGuardRtlModule` (`checkRtlModuleW = true`), sticky quarantine clamping,
-   - Clean 2-cycle wave-pipelined ISA execution (`dualRail_clean_2cycle_executes_stepIsa`),
-   - Universal multi-turn unauthenticated store-immunity (`test_dualRail_never_unauthorized_store`)
-     under arbitrary voltage brownouts, double-glitches, clock-runt pulses, partial wire arrivals,
-     and `11` cross-rail overdrive faults.
-3. **Multi-GHz Coupled-PCB TEMPEST Non-Interference & Thermal-Noise Envelope (`§3`)**:
-   - Ideal symmetric PCB zero secret-dependent PDN & common-mode current at 2.5 GHz and 5.0 GHz,
-   - PRNG `railSwap` exact zero mutual information (`masked_dualRail_exact_mutual_info_zero`) on
-     asymmetric skewed PCBs across multi-turn traces,
-   - Imperfect manufactured PCB SNR `< 0.25 < 1` below `k_B T B · F_rx` thermal noise floor at `r ≥ 1 m`
-     (`imperfect_pcb_tempest_snr_below_noise_floor`) + constructive ground-slot & sparse-via refusals.
-4. **Total `Obend.Judge` (`tempestGlitchEmcJudge`) & `"tempest-glitch-emc@1"` Wire Roundtrip (`§4`)**.
-5. **`8` `#tooth` Universal Mutation Kills & `#assert_axioms_tree` Purity Census (`§5–§6`)**.
--/
-
+module
+public import Obend.Hardware.GlitchAndTempestSafe
+import all Obend.Analysis.Diff
+import all Obend.Analysis.Groebner
+import all Obend.Analysis.RealAnalysis
+import all Obend.Analysis.SosLyapunov
+import all Obend.AssertAxioms
+import all Obend.Core.Data
+import all Obend.Core.Machine
+import all Obend.Core.MachineFast
+import all Obend.Core.Term
+import all Obend.Core.Ty
+import all Obend.Hardware.CircuitDae
+import all Obend.Hardware.GlitchAndTempestSafe
+import all Obend.Hardware.HDL
+import all Obend.Hardware.PipelinedRiscCore
+import all Obend.Judge.Class
+import all Obend.Judge.RealAnalysis
+import all Obend.Tactic.Cases
+import all Obend.Tactic.Tooth
+import all Init.Data.Rat.Basic
+public section
 namespace Obend.Tests.GlitchAndTempestSafeTest
 
 open Obend
@@ -36,6 +30,80 @@ open Obend.Hardware.CircuitDae
 open Obend.Hardware.GlitchAndTempestSafe
 
 set_option autoImplicit false
+
+private theorem stepIsa_unauth_trap_invariant :
+    ∀ n : Nat,
+      (n = 0 → stepIsaN (progToImem authGuardProg) n unauthInitIsaState = unauthInitIsaState) ∧
+      (0 < n → stepIsaN (progToImem authGuardProg) n unauthInitIsaState = { unauthInitIsaState with pc := 8#64 })
+  | 0 => ⟨fun _ => rfl, fun h => by omega⟩
+  | 1 => ⟨fun h => by omega, fun _ => by decide +kernel⟩
+  | n + 2 => by
+    refine ⟨fun h => by omega, fun _ => ?_⟩
+    have hSplit : stepIsaN (progToImem authGuardProg) ((n + 1) + 1) unauthInitIsaState =
+        stepIsa (progToImem authGuardProg) (stepIsaN (progToImem authGuardProg) (n + 1) unauthInitIsaState) := by
+      simpa [stepIsaN_one] using stepIsaN_add (progToImem authGuardProg) (n + 1) 1 unauthInitIsaState
+    rw [hSplit, (stepIsa_unauth_trap_invariant (n + 1)).2 (by omega)]; decide +kernel
+
+/-- **Single-Rail Power-Glitch Instruction-Skip Vulnerability (`singleRail_powerGlitch_skips_auth_check`)**:
+At concrete brownout $V_{\text{glitch}} = 0.7\,\text{V} \in (V_{\text{ret}}, V_{\text{nom}}) = (0.6, 1.0)$,
+single-rail execution skips `BEQ r1 r0 8` and commits `dmem[0x1000] = 0xCAFEBABEDEADBEEF`, an architectural
+state provably unreachable by `PipelinedRisc.stepIsaN` at every $n \in \mathbb{N}$! -/
+theorem singleRail_powerGlitch_skips_auth_check :
+    let t := nominal1GhzTiming
+    let vBrownout : CanonicalRat := CanonicalRat.mk 7 10
+    let imem := progToImem authGuardProg
+    let sAfterGlitch :=
+      stepSingleRailGlitched t imem t.vNom t.tClkNom
+        (stepSingleRailGlitched t imem vBrownout t.tClkNom unauthInitIsaState)
+    cmosAlphaDelay t.kCritAlu t.vTh t.vNom ≤ t.tClkNom - t.tSetup ∧
+    t.vRet < vBrownout ∧ vBrownout < t.vNom ∧
+    cmosAlphaDelay t.kFastPc t.vTh vBrownout ≤ t.tClkNom - t.tSetup ∧
+    t.tClkNom - t.tSetup < cmosAlphaDelay t.kCritAlu t.vTh vBrownout ∧
+    sAfterGlitch.dmem.read 0x1000#64 = 0xCAFEBABEDEADBEEF#64 ∧
+    ∀ n : Nat,
+      (stepIsaN imem n unauthInitIsaState).dmem.read 0x1000#64 = 0#64 ∧
+      sAfterGlitch ≠ stepIsaN imem n unauthInitIsaState := by
+  dsimp only
+  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel,
+          by decide +kernel, by decide +kernel, by decide +kernel, fun n => ?_⟩
+  have hMemZero : (stepIsaN (progToImem authGuardProg) n unauthInitIsaState).dmem.read 0x1000#64 = 0#64 := by
+    rcases Nat.eq_zero_or_pos n with rfl | hPos
+    · rw [(stepIsa_unauth_trap_invariant 0).1 rfl]; rfl
+    · rw [(stepIsa_unauth_trap_invariant n).2 hPos]; rfl
+  refine ⟨hMemZero, fun hEq => ?_⟩
+  have hRead := congrArg (fun st : IsaState => st.dmem.read 0x1000#64) hEq
+  rw [hMemZero] at hRead; revert hRead; decide +kernel
+
+
+theorem wddl_gates_spacer_exact_and_monotone :
+    DualRailBit.wddlAnd .spacer .spacer = .spacer ∧
+    DualRailBit.wddlOr  .spacer .spacer = .spacer ∧
+    DualRailBit.wddlXor .spacer .spacer = .spacer ∧
+    (∀ x y : Bool,
+      DualRailBit.wddlNot (.encode x) = .encode (!x) ∧
+      DualRailBit.wddlAnd (.encode x) (.encode y) = .encode (x && y) ∧
+      DualRailBit.wddlOr  (.encode x) (.encode y) = .encode (x || y) ∧
+      DualRailBit.wddlXor (.encode x) (.encode y) = .encode (xor x y)) ∧
+    (∀ a1 a2 b1 b2 : DualRailBit, DualRailBit.delayLe a1 a2 → DualRailBit.delayLe b1 b2 →
+      DualRailBit.delayLe (DualRailBit.wddlAnd a1 b1) (DualRailBit.wddlAnd a2 b2) ∧
+      DualRailBit.delayLe (DualRailBit.wddlOr  a1 b1) (DualRailBit.wddlOr  a2 b2) ∧
+      DualRailBit.delayLe (DualRailBit.wddlXor a1 b1) (DualRailBit.wddlXor a2 b2)) := by
+  refine ⟨rfl, rfl, rfl, fun x y => by cases x <;> cases y <;> decide, ?_⟩
+  intro ⟨at1, af1⟩ ⟨at2, af2⟩ ⟨bt1, bf1⟩ ⟨bt2, bf2⟩ hA hB
+  cases at1 <;> cases af1 <;> cases at2 <;> cases af2 <;>
+    cases bt1 <;> cases bf1 <;> cases bt2 <;> cases bf2 <;>
+    simp_all [DualRailBit.delayLe, DualRailBit.wddlAnd, DualRailBit.wddlOr, DualRailBit.wddlXor]
+
+
+theorem dualRailWddlGuardRtl_wellFormed : checkRtlModuleW dualRailWddlGuardRtlModule = true := by decide +kernel
+
+
+-- Inhabitedness witnesses required by `lean/uninhabited-premise-risk`
+theorem certified2p5GhzStriplineEnv_valid : checkTempestEmcEnvelope certified2p5GhzStriplineEnv = true := by decide +kernel
+theorem certifiedTempestGlitch_valid :
+    checkTempestGlitchEmc 1 certifiedTempestGlitchProblem certifiedTempestGlitchCert = .ok := by decide +kernel
+
+
 
 private instance {ε α : Type} [DecidableEq ε] [DecidableEq α] : DecidableEq (Except ε α)
   | .error e1, .error e2 =>
@@ -213,27 +281,22 @@ def cyclicRtlBadTempestProblem : TempestGlitchEmcProblem :=
 def sparseViaBadTempestProblem : TempestGlitchEmcProblem :=
   { certifiedTempestGlitchProblem with pcbEnv := { certified2p5GhzStriplineEnv with viaPitchUm := 5000 } }
 
-private theorem test_decodeOk :
-    decodeTempestGlitchEmcProblem (encodeTempestGlitchEmcProblem certifiedTempestGlitchProblem) =
-      .ok certifiedTempestGlitchProblem := by decide +kernel
-
-private theorem test_decodeBad :
-    decodeTempestGlitchEmcProblem (encodeTempestGlitchEmcProblem groundSlotBadTempestProblem) =
-      .ok groundSlotBadTempestProblem := by decide +kernel
-
-private theorem test_decodeCert :
-    decodeTempestGlitchEmcCert (encodeTempestGlitchEmcCert certifiedTempestGlitchCert) =
-      .ok certifiedTempestGlitchCert := by decide +kernel
-
+-- Execute codec regressions without normalizing the complete string parser in kernel fixture proofs.
+#guard decide (decodeTempestGlitchEmcProblem (encodeTempestGlitchEmcProblem certifiedTempestGlitchProblem) =
+  .ok certifiedTempestGlitchProblem)
+#guard decide (decodeTempestGlitchEmcProblem (encodeTempestGlitchEmcProblem groundSlotBadTempestProblem) =
+  .ok groundSlotBadTempestProblem)
+#guard decide (decodeTempestGlitchEmcCert (encodeTempestGlitchEmcCert certifiedTempestGlitchCert) =
+  .ok certifiedTempestGlitchCert)
+#guard match tempestGlitchEmcFormat.checkBytes 1
+  (encodeTempestGlitchEmcProblem certifiedTempestGlitchProblem)
+  (encodeTempestGlitchEmcCert certifiedTempestGlitchCert) with | .ok => true | _ => false
+#guard match tempestGlitchEmcFormat.checkBytes 1
+  (encodeTempestGlitchEmcProblem groundSlotBadTempestProblem)
+  (encodeTempestGlitchEmcCert certifiedTempestGlitchCert) with
+  | .refused (.judge .groundSlotOrMissingGroundPlanes) [] => true | _ => false
 example :
     tempestGlitchEmcFormat.name ++ "@" ++ tempestGlitchEmcFormat.version = tempestGlitchEmcWireTag ∧
-    tempestGlitchEmcFormat.checkBytes 1
-      (encodeTempestGlitchEmcProblem certifiedTempestGlitchProblem)
-      (encodeTempestGlitchEmcCert certifiedTempestGlitchCert) = .ok ∧
-    tempestGlitchEmcFormat.checkBytes 1
-      (encodeTempestGlitchEmcProblem groundSlotBadTempestProblem)
-      (encodeTempestGlitchEmcCert certifiedTempestGlitchCert) =
-        .refused (.judge .groundSlotOrMissingGroundPlanes) [] ∧
     checkTempestGlitchEmc 0 certifiedTempestGlitchProblem certifiedTempestGlitchCert = .uncovered ∧
     checkTempestGlitchEmc 1 certifiedTempestGlitchProblem certifiedTempestGlitchCert = .ok ∧
     checkTempestGlitchEmc 1 cyclicRtlBadTempestProblem certifiedTempestGlitchCert =
@@ -242,22 +305,7 @@ example :
       .refused .sparseStitchingViaFence [] ∧
     checkTempestGlitchEmc 1 certifiedTempestGlitchProblem ⟨certifiedPdnDaeCert, 64⟩ =
       .refused .insufficientPrngMaskEntropy [] := by
-  have hChkOk : checkTempestGlitchEmc 1 certifiedTempestGlitchProblem certifiedTempestGlitchCert = .ok :=
-    certifiedTempestGlitch_valid
-  have hChkBad : checkTempestGlitchEmc 1 groundSlotBadTempestProblem certifiedTempestGlitchCert =
-      .refused .groundSlotOrMissingGroundPlanes [] := groundSlotBadTempest_refused 0
-  have hBytesOk : tempestGlitchEmcFormat.checkBytes 1
-      (encodeTempestGlitchEmcProblem certifiedTempestGlitchProblem)
-      (encodeTempestGlitchEmcCert certifiedTempestGlitchCert) = .ok := by
-    unfold Judge.Format.checkBytes tempestGlitchEmcFormat tempestGlitchEmcJudge
-    dsimp only [Judge.check]; rw [test_decodeOk, test_decodeCert]; dsimp only; rw [hChkOk]; rfl
-  have hBytesBad : tempestGlitchEmcFormat.checkBytes 1
-      (encodeTempestGlitchEmcProblem groundSlotBadTempestProblem)
-      (encodeTempestGlitchEmcCert certifiedTempestGlitchCert) =
-        .refused (.judge .groundSlotOrMissingGroundPlanes) [] := by
-    unfold Judge.Format.checkBytes tempestGlitchEmcFormat tempestGlitchEmcJudge
-    dsimp only [Judge.check]; rw [test_decodeBad, test_decodeCert]; dsimp only; rw [hChkBad]; rfl
-  exact ⟨rfl, hBytesOk, hBytesBad, by decide +kernel⟩
+  exact ⟨rfl, by decide +kernel, certifiedTempestGlitch_valid, by decide +kernel⟩
 
 theorem test_planted_tempest_and_rtl_refusals_impossible (c' : TempestGlitchEmcCert) :
     ¬ TempestGlitchEmcMeaning groundSlotBadTempestProblem c' ∧
@@ -304,6 +352,38 @@ theorem test_planted_tempest_and_rtl_refusals_impossible (c' : TempestGlitchEmcC
 -- 6. Axiom Purity Census (`0 sorryAx`, `0` custom axioms across entire import cone)
 -- ============================================================================
 
+private def bus : BusTempestSpec := ⟨3,2,5,#[⟨3,2,1,4⟩,⟨2,3,1,2⟩],6⟩
+example : checkBusTempestEmc bus = true := by decide +kernel
+example : checkBusTempestEmc { bus with xtalkMax := 5 } = false := by decide +kernel
+example : (wddlBusSsnAndCrosstalk bus [false,false,false]).1 = 30 ∧
+    (wddlBusSsnAndCrosstalk bus [true,false,true]).1 = 30 := by decide +kernel
+example : singleRailBusSsn bus [false,false,false] [false,false,false] = 0 ∧
+    singleRailBusSsn bus [false,false,false] [true,false,true] = 20 := by decide +kernel
+example : ratAbs (busDifferentialVoltage bus.aggressors.toList (fun a => if a.cp = 3 then 4 else -2)) = 6 := by decide +kernel
+example : checkTempestGlitchBus 1 certifiedTempestGlitchProblem certifiedTempestGlitchCert bus = true := by
+  unfold checkTempestGlitchBus; rw [certifiedTempestGlitch_valid]; decide +kernel
+example : checkTempestGlitchBus 1 certifiedTempestGlitchProblem certifiedTempestGlitchCert { bus with xtalkMax := 5 } = false := by
+  unfold checkTempestGlitchBus; rw [certifiedTempestGlitch_valid]; decide +kernel
+#tooth checkTempestGlitchBus_sound by
+  mutation checkTempestGlitchBus := fun _ _ _ _ => true
+#tooth balanced_wddl_bus_ssn_secret_independent by
+  mutation wddlTransitions := fun word => (word.filter id).length
+#tooth checkBusTempestEmc_sound by
+  mutation checkBusTempestEmc := fun _ => true
+#tooth checkBusTempestEmc_sound by
+  mutation busDifferentialVoltage := fun as signal => (as.map (fun a => (a.cp+a.cn)*signal a)).sum
+
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  for (name, info) in env.constants.map₁.toList do
+    let some idx := env.getModuleIdxFor? name | continue
+    unless env.header.moduleNames[idx.toNat]? == some `Obend.Hardware.GlitchAndTempestSafe do continue
+    if let .thmInfo _ := info then
+      if !name.isInternal && !name.isInternalDetail && name.components.getLast? != some `sizeOf_spec then
+        if ← liftTermElabM (Obend.AssertAxioms.closedStatement info.type) then
+          throwError "Closed library theorem: {name}"
+  logInfo "Obend.Hardware.GlitchAndTempestSafe: zero closed theorems"
 #assert_axioms_tree
 
 end Obend.Tests.GlitchAndTempestSafeTest

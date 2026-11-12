@@ -80,6 +80,8 @@ import all Obend.Core.TypeGraph
 import all Obend.Core.TypeGraphAlias
 import all Obend.Core.TypeGraphHead
 import all Obend.Core.TypeGraphResource
+import all Obend.Crypto.BinaryTower256
+import all Obend.Crypto.FastRing
 import all Obend.Crypto.DualSpine
 import all Obend.Crypto.Multilinear
 import all Obend.Crypto.PCS
@@ -213,154 +215,141 @@ open Obend.Vault.ExpVerkleAndOpenHash
 set_option autoImplicit false
 set_option Elab.async false
 
-#assert_axioms_tree
-
-open Lean Elab Command in
-run_cmd do
-  for n in [``comparePreimages, ``extractNodeCollision, ``extractOpeningCollision,
-      ``verifyExpVerkleOpening_binds_or_collision] do
-    let axioms ← liftCoreM (collectAxioms n)
-    for a in axioms do
-      unless a == ``propext || a == ``Quot.sound do
-        throwError "constructive extractor {n} uses {a}"
-  logInfo "Opening collision extractors: no choice, compiler trust, or custom axioms."
-
-/-- Fixture hash only: 32 independent byte accumulators. Security theorems quantify over H;
-production uses cSHAKE256, never this deliberately inexpensive test function. -/
+/-- Deliberately inexpensive fixture hash; production uses domain-separated cSHAKE256. -/
 def fixtureHash : Hash256 := fun bs =>
   ⟨⟨(Array.range 32).map fun j => bs.foldl
-    (fun acc b => acc * UInt8.ofNat (2 * j + 3) + b) (UInt8.ofNat j)⟩, by change ((Array.range 32).map _).size = 32; simp⟩
+    (fun acc b => acc * UInt8.ofNat (2 * j + 3) + b) (UInt8.ofNat j)⟩,
+    by change ((Array.range 32).map _).size = 32; simp⟩
 
-def forest0 : ExpVerkleForestExec := ⟨#[]⟩
-def forest1 := appendExpVerkle forest0 17
-def forest2 := appendExpVerkle forest1 29
-def forest3 := appendExpVerkle forest2 41
-
-def opening := proveExpVerkle fixtureHash forest3 2 1
-def root := expVerkleRoot fixtureHash forest3 2
-
-#guard forest3.entries == #[17, 29, 41]
+def forest : ExpVerkleForestExec := ⟨#[17,29,41]⟩
+def opening := openExpVerkle fixtureHash forest 1
+def root := commitExpVerkle fixtureHash forest
 #guard verifyExpVerkleOpening fixtureHash root 1 29 opening
 #guard !verifyExpVerkleOpening fixtureHash root 1 30 opening
 #guard !verifyExpVerkleOpening fixtureHash root 0 29 opening
 #guard !verifyExpVerkleOpening fixtureHash root 3 29 opening
+#guard !verifyExpVerkleOpening fixtureHash root 1 29 { opening with count := 4 }
+#guard !verifyExpVerkleOpening fixtureHash root 1 29 { opening with height := 3 }
 #guard !verifyExpVerkleOpening fixtureHash root 1 29
   { opening with vectors := opening.vectors.map (fun a => a.setIfInBounds 0 (fixtureHash [99])) }
+-- Reject even a self-consistent noncanonical height/root pair.
+#guard !verifyExpVerkleOpening fixtureHash (expVerkleRoot fixtureHash forest 3) 1 29
+  (proveExpVerkle fixtureHash forest 3 1)
+#guard ([1,2,3,4,5,16,17].all fun n =>
+  let f : ExpVerkleForestExec := ⟨(Array.range n).map (BitVec.ofNat 256)⟩
+  verifyExpVerkleOpening fixtureHash (commitExpVerkle fixtureHash f) (n-1)
+    (BitVec.ofNat 256 (n-1)) (openExpVerkle fixtureHash f (n-1)))
+#guard !verifyExpVerkleOpening fixtureHash (commitExpVerkle fixtureHash ⟨#[]⟩) 0 0
+  (openExpVerkle fixtureHash ⟨#[]⟩ 0)
+example (H : Hash256) (f : ExpVerkleForestExec) (i : Nat) (hi : i < f.entries.size) :
+    verifyExpVerkleOpening H (commitExpVerkle H f) i f.entries[i] (openExpVerkle H f i) = true :=
+  every_index_opens H f i hi
+example (H : Hash256) : verifyExpVerkleOpening H (commitExpVerkle H forest) 1 29
+    (openExpVerkle H forest 1) = true := every_index_opens H forest 1 (by decide +kernel)
+example : expVerkleDepth (2^32) = 6 := by decide +kernel
 
-example : Simulates ⟨[17, 29, 41]⟩ forest3 := by
-  unfold Simulates specEntries forest3 forest2 forest1 forest0 appendExpVerkle
-  rfl
-example : expVerkleDepth (2 ^ 32) = 6 := by decide +kernel
-example : capacity 6 = 2 ^ 32 := by decide +kernel
-example : expVerkleDepth (2 ^ 32) ≤ 6 := expVerkle_depth_le_logLog _ 5 (by decide +kernel)
-example : (appendExpVerkle forest3 53).entries[1]? = forest3.entries[1]? :=
-  appendExpVerkle_preserves _ _ _ (by decide +kernel)
-
-def table0 := emptyTable 16 3
+def table0 := emptyTable 16 3 (BitVec.ofNat 256 (2^255 + 19))
 def table1 := (insert table0 1 17).1
-def table2 := (insert table1 17 29).1
-def table3 := insertSeq table2 [(33, 41), (49, 53), (65, 67), (1, 99)]
-def pointer : SlotPointer := ⟨(0, 1), 1, 17⟩
+def table := insertSeq table1 [(17,29),(33,41),(49,53),(65,67),(1,999)]
+#guard lookup table 1 == some 17
+#guard lookup table 65 == some 67
+#guard (insert table 1 999).2 == .conflict 17
+#guard (probeCoords table 1).length == 12
+#guard (searchCount table 1 (probeCoords table 1)).2 ≤ probeBudget table
+#guard (searchCount table 999 (probeCoords table 999)).2 == probeBudget table
+#guard probeDigest fixtureHash 0 1 0 != probeDigest fixtureHash (BitVec.ofNat 256 (2^255)) 1 0
+#guard tableDigest fixtureHash table != tableDigest fixtureHash { table with seed := 0 }
 
-#guard (probeSlots 1 0 16).length == 4
-#guard (probeCoords table0 1).length == 12
-#guard lookup table3 1 == some 17
-#guard lookup table3 65 == some 67
-#guard getSlot table3 (0, 1) == some (1, 17)
-#guard verifySlotPointer table3 pointer
-#guard !verifySlotPointer table3 { pointer with coordinate := (0, 2) }
-
-example : TableWF table3 := by
-  unfold table3 table2 table1
+example : TableWF table := by
+  unfold table table1
   apply insertSeq_wf
   apply insert_wf
-  apply insert_wf
-  exact emptyTable_wf _ _
+  exact emptyTable_wf _ _ _
+example : KeyUnique table := by
+  unfold table table1
+  apply insertSeq_unique
+  · exact insert_wf _ _ _ (emptyTable_wf _ _ _)
+  · exact insert_unique _ _ _ (emptyTable_wf _ _ _) (emptyTable_unique _ _ _)
+example (t : ElasticOpenTable) (xs : List (Key × Val)) (k : Key) (v : Val) (h : lookup t k = some v) :
+    lookup (insertSeq t xs) k = some v := lookup_stable t xs k v h
+example (t : ElasticOpenTable) (xs : List (Key × Val)) (p : PhysSlot) (e : Key × Val)
+    (h : getSlot t p = some e) : getSlot (insertSeq t xs) p = some e :=
+  insertSeq_preserves_all_prior_slots t xs p e h
 
-example (xs : List (Key × Val)) : getSlot (insertSeq table1 xs) (0, 1) = some (1, 17) :=
-  insertSeq_preserves_all_prior_slots _ _ _ _ (by decide +kernel)
+/-- All six slots lie in every key's windows: worst-case saturation is explicit,
+and a refused seventh insertion preserves every previously accepted binding. -/
+def clustered := insertSeq (emptyTable 4 2 7) [(1,11),(17,22),(33,33),(49,44),(65,55),(81,66)]
+#guard (insert clustered 97 77).2 == .tableFull
+#guard lookup clustered 1 == some 11
+#guard lookup clustered 81 == some 66
+#guard lookup (insert clustered 97 77).1 81 == some 66
+#guard (searchCount clustered 97 (probeCoords clustered 97)).2 == 6
 
-def authenticated := authenticateTable fixtureHash table3
-def absence := proveAbsence fixtureHash authenticated 99
-#guard verifyAbsenceCert authenticated 99 absence
-#guard !verifyAbsenceCert authenticated 1 (proveAbsence fixtureHash authenticated 1)
-#guard !verifyAbsenceCert authenticated 99 { absence with coordinates := [] }
-#guard !verifyAbsenceCert authenticated 99 { absence with states := [] }
-#guard !verifyAbsenceCert authenticated 99 { absence with root := fixtureHash [99] }
+def absence := proveAbsence fixtureHash table 999
+#guard verifyExpVerkleAbsence fixtureHash (tableDigest fixtureHash table) 999 absence
+#guard !verifyExpVerkleAbsence fixtureHash (tableDigest fixtureHash table) 1 (proveAbsence fixtureHash table 1)
+#guard !verifyExpVerkleAbsence fixtureHash (tableDigest fixtureHash table) 999 { absence with windows := [] }
+#guard !verifyExpVerkleAbsence fixtureHash (tableDigest fixtureHash table) 999
+  { absence with windows := absence.windows.drop 1 }
+#guard !verifyExpVerkleAbsence fixtureHash (tableDigest fixtureHash table) 999
+  { absence with header := { absence.header with seed := 0 } }
+#guard !verifyExpVerkleAbsence fixtureHash (fixtureHash [99]) 999 absence
+#guard !verifyExpVerkleAbsence fixtureHash (tableDigest fixtureHash table) 999
+  { absence with windows := absence.windows.map fun o => { o with state := some (999, 0) } }
+#guard verifyExpVerkleAbsence fixtureHash (tableDigest fixtureHash clustered) 97
+  (proveAbsence fixtureHash clustered 97)
+#guard verifyExpVerkleAbsence fixtureHash (tableDigest fixtureHash (emptyTable 0 0)) 5
+  (proveAbsence fixtureHash (emptyTable 0 0) 5)
 
-example : lookup table3 99 = none ∧
-    ∀ p ∈ probeCoords table3 99, ∀ v, getSlot table3 p ≠ some (99, v) :=
-  (verifyAbsenceCert_sound fixtureHash authenticated 99 absence
-    (verifyAbsenceCert_complete fixtureHash authenticated 99 (by decide +kernel))).2
-
+example (H : Hash256) (t : ElasticOpenTable) (k : Key) (hn : lookup t k = none) :
+    verifyExpVerkleAbsence H (tableDigest H t) k (proveAbsence H t k) = true :=
+  verifyAbsence_complete H t k hn
+example (H : Hash256) (t : ElasticOpenTable) (k : Key) (c : AbsenceCertificate)
+    (hc : verifyExpVerkleAbsence H (tableDigest H t) k c = true) :
+    lookup t k = none ∨ Nonempty (ScopedCollision H (absencePreimages H t c)) :=
+  verifyAbsence_sound_or_collision H t k c hc
 example : Obend.Vault.ExpVerkleAndOpenHash.importFromChunkedWorld
-    (exportToChunkedWorld {} table3 forest3) = some (table3, forest3) :=
+    (exportToChunkedWorld {} table forest) = some (table, forest) :=
   exportToChunkedWorld_roundtrip _ _ _
 
-example : verifySnapshot fixtureHash (buildSnapshot fixtureHash {} table3 forest3 2) = true :=
-  buildSnapshot_complete _ _ _ _ _ (by decide +kernel)
+#guard checkSnapshotTable table ⟨#[17,29,41,53,67]⟩
+#guard !checkSnapshotTable table forest
 
-example : (expVerkleVaultJudge fixtureHash).Fragment (buildSnapshot fixtureHash {} table3 forest3 2) :=
-  True.intro
+def misplaced : ElasticOpenTable :=
+  let outside := ((List.range 16).find? fun j => !(probeSlots 1 0 16).contains j).getD 0
+  ⟨#[(Array.replicate 16 none).setIfInBounds outside (some (1,17))], 0⟩
+#guard !checkSnapshotTable misplaced forest
+example (H : Hash256) : verifySnapshot H
+    (buildSnapshot H {} (emptyTable 0 0) ⟨#[]⟩ 0) = true :=
+  buildSnapshot_complete H {} (emptyTable 0 0) ⟨#[]⟩ 0 (by decide +kernel)
+    ((checkSnapshotTable_iff _ _).mp (by decide +kernel))
+#tooth checkSnapshotTable_iff by mutation checkSnapshotTable := fun _ _ => true
+#tooth verifySnapshot_iff by mutation verifySnapshot := fun _ _ => true
+#tooth insert_succeeds_of_vacancy by mutation Obend.Vault.ExpVerkleAndOpenHash.insert :=
+  fun t _ _ => (t, .tableFull)
 
-/-- A full-width root distinct from the expected one, computed constructively. -/
-def differentDigest (d : Digest) : Digest :=
-  if d = fixtureHash [1] then fixtureHash [2] else fixtureHash [1]
-
-theorem differentDigest_ne (d : Digest) : differentDigest d ≠ d := by
-  unfold differentDigest
-  split
-  next h => rw [h]; decide +kernel
-  next h => exact Ne.symm h
-
-theorem badSnapshot_refused (s : ExpVerkleVaultSnapshot) (bad : Digest)
-    (h : bad ≠ bindVerkleUmemRoot (exportToChunkedWorld s.world s.table s.forest)) :
-    (expVerkleVaultJudge fixtureHash).check 0 { s with umemRoot := bad } () =
-      .refused SnapshotRefusal.inconsistentCommitment [] :=
-  snapshot_refusal fixtureHash { s with umemRoot := bad } h 0
-
-example (s : ExpVerkleVaultSnapshot) : ∃ bad : Digest,
-    (expVerkleVaultJudge fixtureHash).check 0 { s with umemRoot := bad } () =
-      .refused SnapshotRefusal.inconsistentCommitment [] := by
-  let d := bindVerkleUmemRoot (exportToChunkedWorld s.world s.table s.forest)
-  exact ⟨differentDigest d, badSnapshot_refused s (differentDigest d) (differentDigest_ne d)⟩
-
-def vault0 : VaultState := (emptyTable 16 3, ⟨#[]⟩)
-def vault1 := (appendVault vault0 1 17).1
-def vaultTrace := appendVaultSeq vault1 [(17, 29), (33, 41), (1, 999), (49, 53)]
-def linkedSlot : VaultSlotLink := ⟨⟨(0, 1), 1, 17⟩, 0⟩
-
-#guard vaultTrace.2.entries == #[17, 29, 41, 53]
-#guard getSlot vaultTrace.1 (0, 1) == some (1, 17)
-#guard verifyExpVerkleOpening cshakeHash (commitExpVerkle cshakeHash vaultTrace.2) 0 17
-  (openExpVerkle cshakeHash vaultTrace.2 0)
-#guard !verifyExpVerkleOpening cshakeHash (commitExpVerkle cshakeHash vaultTrace.2) 0 18
-  (openExpVerkle cshakeHash vaultTrace.2 0)
-
-example : VaultLinkValid vaultTrace linkedSlot := by
-  apply appendVaultSeq_preserves_links
-  exact appendVault_inserted vault0 1 17 (0, 1) (by decide +kernel)
-
-example (xs : List (Key × Val)) : VaultLinkValid (appendVaultSeq vault1 xs) linkedSlot :=
-  appendVaultSeq_preserves_links _ _ _
-    (appendVault_inserted vault0 1 17 (0, 1) (by decide +kernel))
-
--- Each mutation replays a universal stored proof, not just a closed fixture.
 #tooth leafBytes_injective by mutation leafBytes := fun idx _ => frameBytes [[0], natBytes idx]
-#tooth verifyExpVerkleOpening_complete by mutation verifyExpVerkleOpening := fun H r _ v p =>
-  decide (0 < p.count ∧ p.count ≤ capacity p.height ∧ H (forestBytes p.count p.height p.treeRoot) = r) &&
-    verifyNode H p.height 0 0 v p.treeRoot p.vectors
 #tooth nodeBytes_injective by mutation nodeBytes := fun level _ => frameBytes [[1], natBytes level]
-#tooth verifyAbsenceCert_sound by mutation verifyAbsenceCert := fun {_} _ _ _ => true
-#tooth verifyAbsenceCert_sound by mutation verifyAbsenceCert := fun {_} t k c =>
-  decide (c.root = t.root ∧ c.states = c.coordinates.map (getSlot t.table)) &&
-    c.states.all (fun s => match s with | none => true | some (key, _) => decide (key ≠ k))
-#tooth verifySnapshot_iff by mutation verifySnapshot := fun H s =>
-  decide (s.forest.entries.size ≤ capacity s.height) &&
-    decide (s.forestRoot = expVerkleRoot H s.forest s.height) &&
-    decide (s.tableRoot = tableDigest H s.table) &&
-    decide (s.root = H (weldBytes s.forestRoot s.tableRoot s.umemRoot))
-#tooth insert_preserves_all_prior_slots by mutation Obend.Vault.ExpVerkleAndOpenHash.insert := fun t k v =>
-  (⟨t.levels.modify 0 (fun row => row.setIfInBounds 0 (some (k, v)))⟩, .inserted (0, 0))
+#tooth slotBytes_injective by mutation slotBytes := fun _ => []
+#tooth headerBytes_injective by mutation headerBytes := fun _ => []
+#tooth probe_seed_binding by mutation probePreimage := fun _ k level =>
+  frameBytes [[20], Obend.Digest.HashBytes.be 32 k.toNat, natBytes level]
+#tooth verifyExpVerkleOpening_binds_or_collision by mutation verifyExpVerkleOpening := fun _ _ _ _ _ => true
+#tooth verifyAbsence_sound_or_collision by mutation verifyExpVerkleAbsence := fun _ _ _ _ => true
+#tooth verifyAbsence_complete by mutation verifyExpVerkleAbsence := fun _ _ _ _ => false
+#tooth lookup_stable by mutation Obend.Vault.ExpVerkleAndOpenHash.insert := fun t k v =>
+  (⟨t.levels.modify 0 (fun row => row.setIfInBounds 0 (some (k,v))), t.seed⟩, .inserted (0,0))
+#tooth insertSeq_unique by mutation Obend.Vault.ExpVerkleAndOpenHash.insert := fun t k v =>
+  (⟨t.levels.modify 0 (fun row => row.setIfInBounds 0 (some (k,v))), t.seed⟩, .inserted (0,0))
+#tooth lookup_worst_case by mutation searchCount := fun _ _ ps => (none, ps.length + 1)
+-- A separate constructive-extraction gate: the package census permits choice.
+open Lean Elab Command in
+run_cmd do
+  for name in [``comparePreimages, ``extractNodeCollision, ``extractOpeningCollision, ``extractSlotCollision, ``verifyAbsence_sound_or_collision] do
+    let axioms ← liftCoreM (collectAxioms name)
+    if axioms.contains ``Classical.choice then
+      throwError "Constructive audit failed: {name} uses choice"
+  logInfo "B1 constructive security audit passed"
+#assert_axioms_tree
 
 end Obend.Tests.Metasystem.ExpVerkleAndOpenHashTest

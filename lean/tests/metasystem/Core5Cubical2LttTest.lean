@@ -328,7 +328,7 @@ example (s : ScalarObs) (cb : Int × Bool) :
       exact Nat.le_refl _) s
   exact ⟨hid.2.2.1, hinv.1⟩
 
--- 6-step multiscale `AdapterChain` fusing into a single $O(1)$ pass `[.affine 12 5 3 5]`
+-- 6-step multiscale `AdapterChain` fusing into a single $O(1)$ pass `[.affine 12 5 5 7]`
 def multiscaleChain : AdapterChain :=
   [ .idCast
   , .affine 4 2 1 5
@@ -337,12 +337,12 @@ def multiscaleChain : AdapterChain :=
   , .tagCast 2 .bwd
   , .affine 3 (-1) 2 7 ]
 
-#guard fuseAdapters multiscaleChain == [.affine 12 5 3 5]
+#guard fuseAdapters multiscaleChain == [.affine 12 5 5 7]
 #guard evalChain (fuseAdapters multiscaleChain) 10 == evalChain multiscaleChain 10
 #guard (chainGrade multiscaleChain).uses == 4
 #guard (chainGrade (fuseAdapters multiscaleChain)).uses == 1
 #guard (chainGrade multiscaleChain).cycles == 14
-#guard (chainGrade (fuseAdapters multiscaleChain)).cycles == 5
+#guard (chainGrade (fuseAdapters multiscaleChain)).cycles == 7
 
 example (x : Int) :
     evalChain (fuseAdapters multiscaleChain) x = evalChain multiscaleChain x ∧
@@ -477,6 +477,29 @@ example :
 -- ============================================================================
 -- 6. `#assert_axioms_tree`, Strict `0 Classical.choice` & `0` Closed-Theorem Audit
 -- ============================================================================
+
+#guard (chainGrade multiscaleChain).errorNum == 5
+#guard (chainGrade (fuseAdapters multiscaleChain)).errorNum == 5
+#guard CofibCube27.eval (CofibCube27.join (CofibCube27.dimEq0 0) (CofibCube27.dimEq1 0)) (2,2,2) == false
+#guard CofibCube27.eval CofibCube27.top (2,2,2) == true
+#guard CofibCube27.substDim 1 2 (CofibCube27.join (CofibCube27.dimEq0 1) (CofibCube27.dimEq1 1)) == CofibCube27.bot
+example (d : Fin 3) : CofibCube27.join (CofibCube27.dimEq0 d) (CofibCube27.dimEq1 d) ≠ CofibCube27.top :=
+  CofibCube27.boundary_strictly_sub_top d
+private def amplifying : AdapterChain := [.affine 1 0 2 1, .affine (-3) 4 1 2]
+#guard fuseAdapters amplifying == [.affine (-3) 4 7 2]
+example : ApproxRun amplifying 10 (-33) :=
+  .cons (y := 12) (by decide) (.cons (y := -33) (by decide) (.nil _))
+example : ((-33 : Int)-evalChain (fuseAdapters amplifying) 10).natAbs ≤ (chainGrade (fuseAdapters amplifying)).errorNum :=
+  fuseAdapters_approx_sound amplifying 10 (-33) (.cons (y := 12) (by decide) (.cons (y := -33) (by decide) (.nil _)))
+#tooth CofibCube27.boundary_strictly_sub_top by
+  mutation CofibCube27.dimEq1 := fun d => ~~~(CofibCube27.dimEq0 d)
+#tooth CofibCube27.eval_substDim by
+  mutation CofibCube27.substDim := fun _ _ a => a
+#tooth CofibSyntax.toCube27_sound by
+  mutation CofibSyntax.toCube27 := fun _ => CofibCube27.bot
+#tooth fuseAdapters_approx_sound by
+  mutation affineError := fun _ inner outer => inner+outer
+example : ((-33 : Int)-evalChain amplifying 10).natAbs > 2+1 := by decide
 
 #assert_axioms_tree
 

@@ -435,8 +435,13 @@ pub fn canopy_hash_count(q: usize, depth: u32, t: u32) -> Option<(usize, usize)>
         return None;
     }
     Some((
-        q.checked_mul((depth - t) as usize + 1)?.checked_add(1)?,
-        q.checked_mul(depth as usize + 1)?,
+        q.checked_mul(
+            usize::try_from(depth.checked_sub(t)?)
+                .ok()?
+                .checked_add(1)?,
+        )?
+        .checked_add(1)?,
+        q.checked_mul(usize::try_from(depth).ok()?.checked_add(1)?)?,
     ))
 }
 /// Opens the committed codeword at transcript-selected positions and checks a random
@@ -562,6 +567,7 @@ pub fn verify_pikku(
     })
 }
 
+/// Monotone counters fail closed at usize::MAX; reinitialization requires exclusive ownership.
 /// Storage only. Safe access requires unique Producer/Consumer handles, created by
 /// an exclusive split. No Copy/Clone endpoints and no shared-reference push/pop API.
 #[repr(C, align(64))]
@@ -605,31 +611,35 @@ impl<T: Copy, const N: usize> Producer<'_, T, N> {
     pub fn push(&mut self, value: T) -> Result<(), T> {
         let write = self.ring.write.load(Ordering::Relaxed);
         let read = self.ring.read.load(Ordering::Acquire);
-        if write.wrapping_sub(read) >= N {
+        let Some(next) = write.checked_add(1) else {
+            return Err(value);
+        };
+        if write.checked_sub(read).is_none_or(|used| used >= N) {
             return Err(value);
         }
         // SAFETY: this endpoint exclusively owns the unoccupied write slot.
         unsafe {
             (*self.ring.slots[write % N].get()).write(value);
         }
-        self.ring
-            .write
-            .store(write.wrapping_add(1), Ordering::Release);
+        self.ring.write.store(next, Ordering::Release);
         Ok(())
     }
 }
 impl<T: Copy, const N: usize> Consumer<'_, T, N> {
     pub fn pop(&mut self) -> Option<T> {
         let read = self.ring.read.load(Ordering::Relaxed);
-        if read == self.ring.write.load(Ordering::Acquire) {
+        let next = read.checked_add(1)?;
+        let write = self.ring.write.load(Ordering::Acquire);
+        if write
+            .checked_sub(read)
+            .is_none_or(|used| used == 0 || used > N)
+        {
             return None;
         }
         // SAFETY: producer published this initialized slot and cannot overwrite it
         // until the subsequent Release advances read. T is Copy, so no destructor races.
         let value = unsafe { (*self.ring.slots[read % N].get()).assume_init_read() };
-        self.ring
-            .read
-            .store(read.wrapping_add(1), Ordering::Release);
+        self.ring.read.store(next, Ordering::Release);
         Some(value)
     }
 }
@@ -647,6 +657,10 @@ pub struct SovereignTurnBundle<R: Copy> {
 /// conservation, authority, revocation, effects and EVERY row. Gate flags below only
 /// reject early; they are not a substitute for this check.
 pub trait RelationVerifier<R: Copy> {
+    /// Reserve replay state before publishing a successful verdict. Failure is fail-closed.
+    fn commit_turn(&mut self, _pi: &FullPinnedPublicInputs, _receipt: &R) -> bool {
+        true
+    }
     fn verify_relation(&self, pi: &FullPinnedPublicInputs, challenge: &Digest, receipt: &R)
         -> bool;
 }
@@ -801,6 +815,8 @@ pub struct VerifierPd<V> {
     pub committed_root: Digest,
     pub height: u64,
     pending: Option<SettlementVerdict>,
+    /// Sticky quarantine: recovery requires constructing a fresh, reconciled PD.
+    pub quarantined: bool,
 }
 impl<V> VerifierPd<V> {
     pub fn new(verifier: V, root: Digest, height: u64) -> Self {
@@ -809,6 +825,7 @@ impl<V> VerifierPd<V> {
             committed_root: root,
             height,
             pending: None,
+            quarantined: false,
         }
     }
     /// Backpressure preserves a computed verdict. No inbound item is consumed while
@@ -832,9 +849,14 @@ impl<V> VerifierPd<V> {
             let Some(b) = inbound.pop() else {
                 return count;
             };
-            let accepted = self.height.checked_add(1) == Some(b.public_inputs.height)
+            let accepted = !self.quarantined
+                && self.height.checked_add(1) == Some(b.public_inputs.height)
                 && b.public_inputs.pre_state_root == self.committed_root
-                && verify_cipherclerk(&self.verifier, &b);
+                && verify_cipherclerk(&self.verifier, &b)
+                && self.verifier.commit_turn(&b.public_inputs, &b.receipt);
+            if !accepted {
+                self.quarantined = true;
+            }
             if accepted {
                 self.committed_root = b.public_inputs.post_state_root;
                 self.height = b.public_inputs.height;
@@ -844,7 +866,9 @@ impl<V> VerifierPd<V> {
                 accepted,
                 committed_root: self.committed_root,
             });
-            count += 1;
+            count = count
+                .checked_add(1)
+                .expect("drained count bounded by address space");
         }
     }
 }
@@ -1239,10 +1263,16 @@ mod tests {
         assert!(orx.pop().is_none());
     }
     #[test]
-    fn spsc_threaded_and_counter_wrap() {
+    fn spsc_threaded_and_counter_exhaustion() {
         let mut ring = IpcRing::<u64, 8>::new();
-        ring.write.store(usize::MAX - 3, Ordering::Relaxed);
-        ring.read.store(usize::MAX - 3, Ordering::Relaxed);
+        let mut exhausted = IpcRing::<u64, 8>::new();
+        exhausted.write.store(usize::MAX - 1, Ordering::Relaxed);
+        exhausted.read.store(usize::MAX - 1, Ordering::Relaxed);
+        let (mut etx, mut erx) = exhausted.split();
+        assert!(etx.push(7).is_ok());
+        assert_eq!(erx.pop(), Some(7));
+        assert!(etx.push(8).is_err());
+        assert_eq!(erx.pop(), None);
         let (mut tx, mut rx) = ring.split();
         std::thread::scope(|scope| {
             scope.spawn(move || {

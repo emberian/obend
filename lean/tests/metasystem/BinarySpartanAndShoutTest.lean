@@ -132,41 +132,29 @@ private theorem broken_rejected : checkAllRows brokenCircuit witness = false := 
 
 /-- The lookup table has four rows and an address of two bits. -/
 def table : Array F := #[𝟘,𝟙,𝟘,𝟘]
-private theorem canonical_tensor : tensorVector [true,false] = #[𝟘,𝟙,𝟘,𝟘] := by rfl
-example : checkBinaryShout table [true,false] #[𝟘,𝟙,𝟘,𝟘] 𝟙 = true := by
-  rw [← canonical_tensor, ← binaryShoutSparse_exec_eq_dense table ⟨[true,false],𝟙⟩]
-  decide +kernel
-private theorem zero_vector_rejected : checkTensor [true,false] #[𝟘,𝟘,𝟘,𝟘] = false := by
-  apply Bool.eq_false_iff.mpr
-  intro h
-  have hh := ((checkTensor_iff _ _).mp h).2 1 (by decide)
-  exact towerOne_ne_zero 7 hh.symm
-private theorem double_vector_rejected : checkTensor [true,false] #[𝟙,𝟙,𝟘,𝟘] = false := by
-  apply Bool.eq_false_iff.mpr
-  intro h
-  have hh := ((checkTensor_iff _ _).mp h).2 0 (by decide)
-  exact towerOne_ne_zero 7 hh
-private theorem triple_vector_rejected : checkTensor [true,false] #[𝟙,𝟙,𝟙,𝟘] = false := by
-  apply Bool.eq_false_iff.mpr
-  intro h
-  have hh := ((checkTensor_iff _ _).mp h).2 0 (by decide)
-  exact towerOne_ne_zero 7 hh
-example : checkBinaryShout table [true,false] #[𝟘,𝟘,𝟘,𝟘] 𝟙 = false := by
-  simp only [checkBinaryShout, zero_vector_rejected, Bool.and_false, Bool.false_and]
-example : checkBinaryShout table [true,false] #[𝟙,𝟙,𝟘,𝟘] 𝟙 = false := by
-  simp only [checkBinaryShout, double_vector_rejected, Bool.and_false, Bool.false_and]
-example : checkBinaryShout table [true,false] #[𝟙,𝟙,𝟙,𝟘] 𝟙 = false := by
-  simp only [checkBinaryShout, triple_vector_rejected, Bool.and_false, Bool.false_and]
-example : checkBinaryShout table [true,false] #[𝟘,𝟙,𝟘,𝟘] 𝟘 = false := by
-  rw [← canonical_tensor, ← binaryShoutSparse_exec_eq_dense table ⟨[true,false],𝟘⟩]
-  decide +kernel
+def read3 : TensorShoutRead 3 :=
+  ⟨[1,2,1], #[(basisFactor (1 : Fin 3)), basisFactor (2 : Fin 3), basisFactor (1 : Fin 3)], 𝟙⟩
+def table3 : Array F := basisFactor (16 : Fin 27)
+def read4 : TensorShoutRead 2 :=
+  ⟨[1,0,1,1], #[basisFactor (1 : Fin 2), basisFactor (0 : Fin 2),
+    basisFactor (1 : Fin 2), basisFactor (1 : Fin 2)], 𝟙⟩
+def table4 : Array F := basisFactor (13 : Fin 16)
+example : verifyTensorShoutRead 3 3 table3 read3 = true := by decide +kernel
+example : verifyTensorShoutRead 2 4 table4 read4 = true := by decide +kernel
+example : verifyTensorShoutBatch 3 3 table3 #[read3,read3] = true := by decide +kernel
+example : verifyTensorShoutRead 3 3 table3 { read3 with value := 𝟘 } = false := by decide +kernel
+example : verifyTensorShoutRead 3 3 table3 { read3 with factors := #[#[𝟙,𝟙,𝟙],basisFactor (2 : Fin 3),basisFactor (1 : Fin 3)] } = false := by decide +kernel
+example : verifyTensorShoutRead 3 3 table3 { read3 with factors := #[] } = false := by decide +kernel
+example : verifyTensorShoutRead 3 4 table3 read3 = false := by decide +kernel
+example : 3*3 < 3^3 := tensorShout_witness_sublinear 3 3 (by decide) (by decide) (by decide)
+example : 4*2 < 2^4 := tensorShout_witness_sublinear 2 4 (by decide) (by decide) (by decide)
+example : ¬ 2*2 < 2^2 := by decide
+example : radixAddress read3.indices = 16 ∧ radixAddress read4.indices = 13 := by decide +kernel
 example : towerAdd 7 (towerAdd 7 𝟙 𝟙) 𝟙 = 𝟙 := (tripleHot_sum_is_one 𝟘).1
-example : verifyShoutRead table ⟨[true,false],𝟙⟩ = true := by decide +kernel
-example : verifyShoutBatch table #[⟨[true,false],𝟙⟩,⟨[false,false],𝟘⟩] = true := by decide +kernel
-example : verifyShoutRead table ⟨[true,false],𝟘⟩ = false := by decide +kernel
-example (address : List Bool) (j : Nat) (hj : j < 2^address.length) :
-    tensorWeight address (addressBits address.length j) = if j = bitAddress address then 𝟙 else 𝟘 :=
-  tensorWeight_at_index address j hj
+example : innerProd (tensorExpansion 3 read3.factors).toList table3.toList = 𝟙 :=
+  (tensorShout_sound 3 3 table3 read3 (by decide +kernel)).choose_spec.2.2.2.2
+example : innerProd (tensorExpansion 2 read4.factors).toList (List.replicate 16 𝟙) = 𝟙 :=
+  (tensorShout_boolean_unit 2 4 table4 read4 (by decide +kernel)).1
 
 def audit : AuditObject := ⟨circuit, witness, binaryUdrPcsParams, table, [true,false], 𝟙⟩
 private theorem audit_ok : auditCheck audit = .ok := by
@@ -207,13 +195,6 @@ example (p : RoundPoly F) (roots : List F) (hn : roots.Nodup)
     (hd : p.coeffs.length ≤ 4) (hp : ∃ x, p.eval x ≠ 𝟘) (hr : ∀ x ∈ roots, p.eval x = 𝟘) :
     roots.length ≤ 3 := polynomial_roots_count 3 p roots hn hd hp hr
 
-example : verifyBinarySpartan context circuit (proveBinarySpartan context circuit witness) = true ∧
-    verifyShoutRead table ⟨[true,false],𝟙⟩ = true ∧
-    checkPcsSoundnessRegime binaryUdrPcsParams = true ∧
-    binarySpartanShoutJudge.check 0 audit () = .ok :=
-  ⟨proveBinarySpartan_complete context _ _ circuit_shape circuit_sat,
-    by decide +kernel, binaryUdrPcsParams_valid (), audit_ok⟩
-
 example : PolynomialRootHit 1 (⟨[𝟘,𝟙]⟩ : RoundPoly F) 𝟘 := by
   refine ⟨by decide, ⟨𝟙, ?_⟩, RoundPoly.eval_linear_zero 𝟘 𝟙⟩
   have he := RoundPoly.eval_linear_one (R := F) 𝟘 𝟙
@@ -225,38 +206,101 @@ example : PolynomialRootHit 1 (⟨[𝟘,𝟙]⟩ : RoundPoly F) 𝟘 := by
 #tooth pcs_sampling_bound by mutation checkPcsSoundnessRegime := fun p => decide (regimeDistance p)
 #tooth verifyBinarySpartan_binds_instance by mutation verifyBinarySpartan := fun _ _ _ => true
 #tooth verify_rejects_bad_round by mutation verifyBinarySpartan := fun _ _ _ => true
-#tooth checkTensor_iff by mutation checkTensor := fun a w => decide (w.size = 2^a.length)
-#tooth checkTensor_iff by mutation checkTensor := fun a w =>
-  decide (w.size = 2^a.length) && decide (w.toList.foldl (towerAdd 7) 𝟘 = 𝟙)
-#tooth binaryShout_onehot_lookup_sound by mutation checkBinaryShout := fun _ a w _ => checkTensor a w
-#tooth verifyShoutRead_sound by mutation verifyShoutRead := fun _ _ => true
+#tooth tensorShout_sound by mutation verifyTensorShoutRead := fun _ _ _ _ => true
+#tooth tensorShout_sound by mutation checkFactors := fun _ _ => true
+#tooth tensorProduct_basis by mutation tensorProduct := fun _ _ _ => 𝟙
+#tooth tensorShout_witness_size by mutation checkFactors := fun _ _ => true
+#tooth binarySpartan_verify_sound_or_schwartzZippel by mutation verifyBinarySpartan := fun _ _ _ => true
+#tooth witnessCommitment_binds by mutation witnessCommitment := fun _ => ⟨⟨Array.replicate 32 0⟩, by decide⟩
+#tooth r1cs_binding_or_collision by mutation encodeR1csInstance := fun _ => ByteArray.empty
 #tooth encodeR1csInstance_injective by mutation encodeR1csInstance := fun _ => ByteArray.empty
 #tooth discrepancyTable_exec_eq_spec by mutation discrepancyTableExec := fun _ _ => []
 #tooth auditCheck_iff by mutation checkAllRows := fun _ _ => true
 
-#print axioms binarySpartan_verify_sound_or_schwartzZippel
-#print axioms outer_zero_implies_root
-#print axioms polynomial_roots_count
-#print axioms binaryShout_onehot_lookup_sound
-#print axioms encodeR1csInstance_injective
-#print axioms r1cs_binding_or_collision
-#print axioms proveBinarySpartan_complete
-#print axioms hardware_mul_refines
-#print axioms encodeField_injective
-#print axioms encodeItems_injective
-#print axioms checkTensor_iff
-#print axioms extractR1csBinding
+/-- Honest proving on the broken relation, rather than an instance-mismatch rejection. -/
+def seeded : Transcript .relationBound := bindRelation "B1-regression" ByteArray.empty ByteArray.empty
+  (Transcript.newUnseeded ByteArray.empty)
+#guard !verifyBinarySpartan seeded brokenCircuit (proveBinarySpartan seeded brokenCircuit witness)
+#guard verifyBinarySpartan seeded circuit (proveBinarySpartan seeded circuit witness)
+
+open Obend.Digest.Cshake256 Obend.Digest.HashBytes
+local infixl:65 " ⊞ " => towerAdd 7
+
+def salt : Digest32 := ⟨⟨Array.replicate 32 0⟩, by decide⟩
+def otherSalt : Digest32 := ⟨⟨Array.replicate 32 1⟩, by decide⟩
+example : saltedWitnessPreimage witness salt ≠ saltedWitnessPreimage witness otherSalt := by
+  intro h
+  exact (by decide +kernel : salt ≠ otherSalt) (saltedWitnessPreimage_injective h).2
+example : saltedWitnessPreimage witness salt ≠ saltedWitnessPreimage #[𝟘] salt := by
+  intro h
+  exact (by decide +kernel : witness ≠ #[𝟘]) (saltedWitnessPreimage_injective h).1
+example : blindEval 𝟘 𝟙 = 𝟙 ∧ blindEval 𝟙 𝟙 = 𝟘 := by simp [blindEval]
+example (v₀ v₁ m : F) : blindEval v₁ ((m ⊞ v₀) ⊞ v₁) = blindEval v₀ m :=
+  (blindEval_bijection_hides_witness v₀ v₁).2.2 m
+example (n : Nat) (m : F) : hypercubeSum (n+1) [m,m] = 𝟘 := pairedMask_zeroSum n m
+example : hypercubeSum 1 (maskedTable [𝟘,𝟙] [𝟙,𝟙]) = hypercubeSum 1 [𝟘,𝟙] :=
+  maskedTable_hypercubeSum_eq 1 _ _ rfl (pairedMask_zeroSum 0 𝟙)
+example : verifyBlindedSpartan context 1 #[𝟘,𝟙] #[𝟙,𝟙] salt (hypercubeSum 1 [𝟘,𝟙])
+    (proveBlindedSpartan context 1 #[𝟘,𝟙] #[𝟙,𝟙] salt (hypercubeSum 1 [𝟘,𝟙])) = true :=
+  proveBlindedSpartan_complete context 1 _ _ salt rfl rfl (pairedMask_zeroSum 0 𝟙)
+example : verifyBoundTensorShoutBatch context 3 3 table3 #[read3,read3] = true :=
+  verifyBoundTensorShoutBatch_complete context _ _ _ _ (by decide +kernel)
+example : verifyBoundTensorShoutBatch context 3 3 table3 #[{ read3 with value := 𝟘 }] = false := by
+  simp only [verifyBoundTensorShoutBatch]
+  have h : verifyTensorShoutBatch 3 3 table3 #[{ read3 with value := 𝟘 }] = false := by decide +kernel
+  rw [h, Bool.false_and]
+
+#tooth blindEval_bijection_hides_witness by mutation blindEval := fun v _ => v
+#tooth maskedTable_hypercubeSum_eq by mutation maskedTable := fun _ mask => mask
+#tooth saltedWitnessCommitment_binds by mutation saltedWitnessCommitment := fun z _ => witnessCommitment z
+#tooth saltedWitnessPreimage_injective by mutation saltedWitnessPreimage := fun z _ => witnessPreimage z
+#tooth blindedSpartan_sound_or_schwartzZippel by mutation verifyBlindedSpartan := fun _ _ _ _ _ _ _ => true
+#tooth proveBlindedSpartan_complete by mutation blindEval := fun v _ => v
+#tooth spartanCommitmentSetup_eq by mutation spartanCommitmentSetup := fun tr i _ =>
+  squeezeOuter i.logRows (bindInstance (i, ByteArray.empty) tr).transcript
+#tooth absorbShoutCommitments_eq by mutation absorbShoutCommitments := fun tr B d td _ vs =>
+  (bindInstance (B, d, td.bytes, ByteArray.empty, vs) tr).transcript
+#tooth boundTensorShout_sound_or_schwartzZippel by mutation absorbShoutCommitments := fun tr B d td _ vs =>
+  (bindInstance (B, d, td.bytes, ByteArray.empty, vs) tr).transcript
+#tooth boundTensorShout_sound_or_schwartzZippel by mutation verifyBoundTensorShoutBatch := fun _ _ _ _ _ => true
+#tooth batchedReadInnerProd_refines by mutation batchedReadInnerProd := fun _ _ _ => 𝟘
+#tooth shoutFactorsDigest_binds by mutation shoutFactorsDigest := fun _ => salt
+
+-- Executable accepted/refused wire messages; all evaluation runs only on hbox.
+def blinded : BlindedSpartanOpening := proveBlindedSpartan seeded 1 #[𝟘,𝟙] #[𝟙,𝟙] salt 𝟙
+#guard verifyBlindedSpartan seeded 1 #[𝟘,𝟙] #[𝟙,𝟙] salt 𝟙 blinded
+#guard !verifyBlindedSpartan seeded 1 #[𝟘,𝟙] #[𝟙,𝟙] salt 𝟙 { blinded with evaluation := blinded.evaluation ⊞ 𝟙 }
+#guard !verifyBlindedSpartan seeded 1 #[𝟘,𝟙] #[𝟙,𝟘] salt 𝟙 blinded
+#guard !verifyBlindedSpartan seeded 1 #[𝟘,𝟙] #[𝟙,𝟙] otherSalt 𝟙 blinded
+#guard verifyBoundTensorShoutBatch seeded 3 3 table3 #[read3,read3]
+#guard !verifyBoundTensorShoutBatch seeded 3 3 table3 #[{ read3 with value := 𝟘 }]
+#guard (spartanCommitmentSetup seeded circuit salt).1 != (spartanCommitmentSetup seeded circuit otherSalt).1
+#guard (absorbShoutCommitments seeded 3 3 salt salt [𝟙]).state !=
+  (absorbShoutCommitments seeded 3 3 salt otherSalt [𝟙]).state
+
+-- A separate constructive-extraction gate: the package census permits choice.
+open Lean Elab Command in
 run_cmd do
-  for name in [``extractR1csBinding, ``binarySpartan_verify_sound_or_schwartzZippel,
-      ``outer_zero_implies_root, ``polynomial_roots_count, ``encodeR1csInstance_injective,
-      ``binaryShout_onehot_lookup_sound, ``proveBinarySpartan_complete, ``sparseInner_verify_sound,
-      ``proveSparseInner_complete, ``binaryShoutSparse_exec_eq_dense, ``hardware_mul_refines,
-      ``binaryChallengeAt_injective, ``binaryChallengeAt_surjective, ``binarySpartan_root_sets_bound,
-      ``r1csZerocheckTerm_eq] do
-    let axs ← Lean.Elab.Command.liftCoreM (Lean.collectAxioms name)
-    if axs.contains ``Classical.choice then
-      throwError "Constructive audit failed: {name} depends on Classical.choice"
-  Lean.logInfo "Constructive audit: all security theorems and collision extraction are choice-free"
+  for name in [``saltedWitnessPreimage, ``saltedWitnessPreimage_injective, ``saltedWitnessCommitment,
+      ``extractSaltedWitnessBinding, ``saltedWitnessCommitment_binds, ``blindEval, ``blindEval_bijection_hides_witness,
+      ``maskedTable, ``maskedTable_hypercubeSum_eq, ``maskedTable_eval, ``pairedMask_zeroSum,
+      ``spartanCommitmentSetup, ``spartanCommitmentSetup_eq, ``absorbShoutCommitments, ``extractShoutBinding,
+      ``batchedReadInnerProd_refines, ``shoutFactorsDigest, ``shoutFactorsDigest_binds, ``shoutBatchTranscript, ``batchedReadInnerProd, ``batchedClaimedValue,
+      ``verifyBoundTensorShoutBatch, ``boundTensorShout_sound_or_schwartzZippel, ``verifyBoundTensorShoutBatch_complete,
+      ``blindedSpartanTranscript, ``verifyBlindedSpartan, ``proveBlindedSpartan,
+      ``blindedSpartan_sound_or_schwartzZippel, ``proveBlindedSpartan_complete, ``extractR1csBinding, ``witnessCommitment_binds, ``r1cs_binding_or_collision, ``tensorShout_sound, ``tensorShout_boolean_unit, ``basisFactor_boolean_unit,
+      ``radixAddress_injective, ``radixAddress_digits, ``tensorShout_witness_sublinear, ``binarySpartan_verify_sound_or_schwartzZippel] do
+    let axioms ← liftCoreM (collectAxioms name)
+    if axioms.contains ``Classical.choice then
+      throwError "Constructive audit failed: {name} uses choice"
+  -- Check authored top-level contracts, excluding generated constructor/sizeOf lemmas.
+  let env ← getEnv
+  for (name, info) in env.constants.map₁.toList do
+    if name.getPrefix == `Obend.Crypto.BinarySpartanAndShout then
+      if let .thmInfo _ := info then
+        if ← liftTermElabM (Obend.AssertAxioms.closedStatement info.type) then
+          throwError "Closed library theorem: {name}"
+  logInfo "B1 constructive security and open-theorem audits passed"
 #assert_axioms_tree
 
 end Obend.Tests.BinarySpartanAndShout

@@ -3,6 +3,10 @@ public import Obend.Polis.VerkleUmem
 public import Obend.Vault.ChunkedWorld
 public import Obend.Vault.VerkleSnapshotBridge
 public import Obend.Judge.Class
+public import Std.Data.TreeSet.Lemmas
+public import Obend.Crypto.FastRing
+import all Obend.Crypto.BinaryTower256
+import all Init.Data.Array.Basic
 
 public section
 namespace Obend.Vault.ExpVerkleAndOpenHash
@@ -15,7 +19,8 @@ abbrev Digest := { b : ByteArray // b.size = 32 }
 abbrev Hash256 := List UInt8 → Digest
 
 def cshakeHash : Hash256 := fun bs =>
-  ⟨Obend.Polis.tagOf bs, Obend.Crypto.cshake32ByteArray_size _ _⟩
+  ⟨Obend.Crypto.cshake32ByteArray "OBEND.VAULT.EXPVERKLE/v2".toUTF8.data.toList bs,
+    Obend.Crypto.cshake32ByteArray_size _ _⟩
 
 /-- Every domain tag and payload is independently length-framed with unbounded LEB128 lengths. -/
 def frameBytes (fields : List (List UInt8)) : List UInt8 := encodeFields fields
@@ -30,52 +35,69 @@ structure CollisionPair (H : Hash256) where
   distinct : left ≠ right
   equalHash : H left = H right
 
-def hashBytes (H : Hash256) : Hash := fun bs => (H bs).val.data.toList
-
-theorem CollisionPair.hashBytes_collision {H : Hash256} (c : CollisionPair H) :
-    Collision (hashBytes H) :=
-  ⟨c.left, c.right, c.distinct, congrArg (fun d : Digest => ofBE d.val.data.toList) c.equalHash⟩
-
-/-- Constructive local reduction: both returned messages are exactly the compared preimages. -/
+/-- Constructive local reduction: both returned messages are certified equal to the compared preimages. -/
 def comparePreimages (H : Hash256) (a b : List UInt8) (h : H a = H b) :
-    PSum (a = b) (CollisionPair H) :=
-  if e : a = b then .inl e else .inr ⟨a, b, e, h⟩
+    PSum (a = b) { c : CollisionPair H // c.left = a ∧ c.right = b } :=
+  if e : a = b then .inl e else .inr ⟨⟨a, b, e, h⟩, rfl, rfl⟩
 
-abbrev Key := UInt64
-abbrev Val := UInt64
+abbrev Key := BitVec 256
+abbrev Val := BitVec 256
 abbrev PhysSlot := Nat × Nat
 abbrev Slot := Option (Key × Val)
 
 /-- Geometric capacities are fixed at creation; insertion only fills an empty physical slot. -/
 structure ElasticOpenTable where
   levels : Array (Array Slot)
+  seed : BitVec 256 := 0
   deriving DecidableEq
 
-def emptyTable (base levels : Nat) : ElasticOpenTable :=
-  ⟨(Array.range levels).map fun l => Array.replicate (base / 2 ^ l) none⟩
+def emptyTable (base levels : Nat) (seed : BitVec 256 := 0) : ElasticOpenTable :=
+  ⟨(Array.range levels).map (fun l => Array.replicate (base / 2 ^ l) none), seed⟩
 
 def getSlot (t : ElasticOpenTable) (p : PhysSlot) : Slot :=
   (t.levels[p.1]?.bind fun row => row[p.2]?).join
 
-/-- Four probes per level, truncated at the capacity. No whole-level fallback scan. -/
-def probeSlots (k : Key) (level cap : Nat) : List Nat :=
-  (List.range (min 4 cap)).map fun j => (k.toNat + level + j) % cap
+/-- Independently framed full-width seed, key, and unbounded level number. -/
+def probePreimage (seed : BitVec 256) (k : Key) (level : Nat) : List UInt8 :=
+  frameBytes [[20], be 32 seed.toNat, be 32 k.toNat, ChunkedWorld.encNat level]
+
+def probeDigest (H : Hash256) (seed : BitVec 256) (k : Key) (level : Nat) : Digest :=
+  H (probePreimage seed k level)
+
+/-- Salt affects all 256 hash bits before capacity reduction. A public salt does not
+promise resistance to adaptive grinding; distinct hashes may share a reduced window. -/
+def probeSlots (k : Key) (level cap : Nat) (seed : BitVec 256 := 0) : List Nat :=
+  let base := ofBE (probeDigest cshakeHash seed k level).val.data.toList
+  (List.range (min 4 cap)).map fun j => (base + j) % cap
+
+theorem probe_seed_binding (H : Hash256) (a b : BitVec 256) (k : Key) (l : Nat)
+    (hne : a ≠ b) (he : probeDigest H a k l = probeDigest H b k l) :
+    H (probePreimage a k l) = H (probePreimage b k l) ∧
+      probePreimage a k l ≠ probePreimage b k l := by
+  refine ⟨he, ?_⟩
+  intro h
+  have hf := frameBytes_injective h
+  have hs : be 32 a.toNat = be 32 b.toNat := by simpa only [List.cons.injEq, true_and, and_true] using hf
+  apply hne
+  apply BitVec.eq_of_toNat_eq
+  exact be_injective (by simpa using a.isLt) (by simpa using b.isLt) hs
 
 def probeCoords (t : ElasticOpenTable) (k : Key) : List PhysSlot :=
   (List.range t.levels.size).flatMap fun l =>
-    (probeSlots k l (t.levels[l]!.size)).map fun s => (l, s)
+    (probeSlots k l (t.levels[l]!.size) t.seed).map fun s => (l, s)
 
 def probeBudget (t : ElasticOpenTable) : Nat :=
   ((List.range t.levels.size).map fun l => min 4 (t.levels[l]!.size)).sum
 
-theorem probeSlots_length (k : Key) (l cap : Nat) :
-    (probeSlots k l cap).length = min 4 cap := by simp [probeSlots]
+theorem probeSlots_length (k : Key) (l cap : Nat) (seed : BitVec 256) :
+    (probeSlots k l cap seed).length = min 4 cap := by simp [probeSlots]
 
 theorem probeCoords_length (t : ElasticOpenTable) (k : Key) :
     (probeCoords t k).length = probeBudget t := by
   simp [probeCoords, probeBudget, List.length_flatMap, probeSlots_length]
 
-theorem probeSlots_bounded {k : Key} {l cap s : Nat} (h : s ∈ probeSlots k l cap) :
+theorem probeSlots_bounded {k : Key} {l cap s : Nat} {seed : BitVec 256}
+    (h : s ∈ probeSlots k l cap seed) :
     s < cap := by
   obtain ⟨j, hj, rfl⟩ := List.mem_map.mp h
   have hj' := List.mem_range.mp hj
@@ -117,7 +139,7 @@ theorem lookup_none_iff (t : ElasticOpenTable) (k : Key) :
 /-- Out-of-range writes are no-ops; occupied slots are also no-ops. -/
 def fillSlot (t : ElasticOpenTable) (p : PhysSlot) (e : Key × Val) : ElasticOpenTable :=
   if getSlot t p = none then
-    ⟨t.levels.modify p.1 (fun row => row.setIfInBounds p.2 (some e))⟩
+    ⟨t.levels.modify p.1 (fun row => row.setIfInBounds p.2 (some e)), t.seed⟩
   else t
 
 theorem fillSlot_preserves (t : ElasticOpenTable) (p q : PhysSlot) (e old : Key × Val)
@@ -142,13 +164,14 @@ theorem fillSlot_preserves (t : ElasticOpenTable) (p q : PhysSlot) (e old : Key 
 inductive InsertResult where
   | inserted (slot : PhysSlot)
   | alreadyPresent (slot : PhysSlot)
+  | conflict (existing : Val)
   | tableFull
   deriving DecidableEq, Repr
 
 /-- Write-once duplicate policy: even a different value leaves the first binding intact. -/
 def insert (t : ElasticOpenTable) (k : Key) (v : Val) : ElasticOpenTable × InsertResult :=
   match search t k (probeCoords t k) with
-  | some (p, _) => (t, .alreadyPresent p)
+  | some (p, old) => (t, if old = v then .alreadyPresent p else .conflict old)
   | none => match (probeCoords t k).find? (fun p => (getSlot t p).isNone) with
     | none => (t, .tableFull)
     | some p => (fillSlot t p (k, v), .inserted p)
@@ -279,7 +302,7 @@ theorem insert_then_lookup_eq (t : ElasticOpenTable) (k : Key) (v : Val) (p : Ph
     (hs : (insert t k v).2 = .inserted p) : lookup (insert t k v).1 k = some v := by
   unfold insert at hs ⊢
   cases hsearch : search t k (probeCoords t k) with
-  | some e => simp [hsearch] at hs
+  | some e => simp only [hsearch] at hs; split at hs <;> cases hs
   | none =>
     simp only [hsearch] at hs ⊢
     cases hf : (probeCoords t k).find? (fun q => (getSlot t q).isNone) with
@@ -306,81 +329,94 @@ theorem insert_then_lookup_eq (t : ElasticOpenTable) (k : Key) (v : Val) (p : Ph
         · rw [fillSlot_other t p q (k, v) he] at hfound
           exact False.elim (((search_none_iff _ _ _).mp hsearch) q hfound.1 w hfound.2)
 
+theorem search_fill_other_key (t : ElasticOpenTable) (p : PhysSlot) (e : Key × Val) (k : Key)
+    (hb : InBounds t p) (hn : getSlot t p = none) (hne : e.1 ≠ k) (ps : List PhysSlot) :
+    search (fillSlot t p e) k ps = search t k ps := by
+  induction ps with
+  | nil => rfl
+  | cons q qs ih =>
+    by_cases he : p = q
+    · subst q
+      simp only [search, fillSlot_same t p e hb hn, hn, hne, ite_false, ih]
+    · simp only [search, fillSlot_other t p q e he]
+      cases getSlot t q with
+      | none => exact ih
+      | some e => split <;> simp_all
+
+/-- Logical lookup stability, including malformed starting tables with duplicate keys:
+new inserts cannot shadow an earlier hit, because duplicate queries are never written. -/
+theorem lookup_stable_insert (t : ElasticOpenTable) (k q : Key) (v w : Val)
+    (hl : lookup t q = some w) : lookup (insert t k v).1 q = some w := by
+  unfold insert
+  split
+  · exact hl
+  · rename_i hs
+    have hk : k ≠ q := by
+      intro he; subst k
+      simp [lookup, hs] at hl
+    split
+    · exact hl
+    · rename_i p hp
+      have hm := List.mem_of_find?_eq_some hp
+      have hn := Option.isNone_iff_eq_none.mp
+        (List.find?_some (p := fun q : PhysSlot => (getSlot t q).isNone) hp)
+      simpa only [lookup, fillSlot_probeCoords,
+        search_fill_other_key t p (k, v) q (probeCoords_inBounds t k p hm) hn hk] using hl
+
+theorem lookup_stable (t : ElasticOpenTable) (xs : List (Key × Val)) (k : Key) (v : Val)
+    (hl : lookup t k = some v) : lookup (insertSeq t xs) k = some v := by
+  induction xs generalizing t with
+  | nil => exact hl
+  | cons e xs ih => exact ih _ (lookup_stable_insert t e.1 k e.2 v hl)
+
+/-- Instrumented search counts the slot inspections actually performed, stopping on a hit. -/
+def searchCount (t : ElasticOpenTable) (k : Key) : List PhysSlot → Option (PhysSlot × Val) × Nat
+  | [] => (none, 0)
+  | p :: ps => match getSlot t p with
+    | some (key, v) => if key = k then (some (p, v), 1)
+        else let r := searchCount t k ps; (r.1, r.2 + 1)
+    | none => let r := searchCount t k ps; (r.1, r.2 + 1)
+
+theorem searchCount_refines (t : ElasticOpenTable) (k : Key) (ps : List PhysSlot) :
+    (searchCount t k ps).1 = search t k ps ∧ (searchCount t k ps).2 ≤ ps.length := by
+  induction ps with
+  | nil => simp [searchCount, search]
+  | cons p ps ih =>
+    cases hg : getSlot t p with
+    | none => simpa [searchCount, search, hg] using ih
+    | some e =>
+      by_cases hk : e.1 = k
+      · simp [searchCount, search, hg, hk]
+      · simpa [searchCount, search, hg, hk] using ih
+
+theorem lookup_worst_case (t : ElasticOpenTable) (k : Key) :
+    (searchCount t k (probeCoords t k)).1.map Prod.snd = lookup t k ∧
+    (searchCount t k (probeCoords t k)).2 ≤ probeBudget t := by
+  have h := searchCount_refines t k (probeCoords t k)
+  exact ⟨congrArg (Option.map Prod.snd) h.1, by simpa [probeCoords_length] using h.2⟩
+
+theorem insert_succeeds_of_vacancy (t : ElasticOpenTable) (k : Key) (v : Val)
+    (hn : lookup t k = none) (p : PhysSlot) (hp : p ∈ probeCoords t k) (he : getSlot t p = none) :
+    ∃ q, (insert t k v).2 = .inserted q ∧ lookup (insert t k v).1 k = some v := by
+  have hs : search t k (probeCoords t k) = none := by simpa [lookup] using hn
+  have hf : (probeCoords t k).find? (fun q => (getSlot t q).isNone) ≠ none := by
+    intro h
+    have hh := List.find?_eq_none.mp h p hp
+    simp [he] at hh
+  cases hg : (probeCoords t k).find? (fun q => (getSlot t q).isNone) with
+  | none => exact False.elim (hf hg)
+  | some q =>
+    have hr : (insert t k v).2 = .inserted q := by simp [insert, hs, hg]
+    exact ⟨q, hr, insert_then_lookup_eq t k v q hr⟩
+
 /-- Physical coordinates are reachable under the occupant's own bounded probe schedule. -/
 def TableWF (t : ElasticOpenTable) : Prop :=
   ∀ p k v, getSlot t p = some (k, v) → p ∈ probeCoords t k
 
 def slotBytes (s : Slot) : List UInt8 :=
-  encodeFields (match s with | none => [[0]] | some (k, v) => [[1], be 8 k.toNat, be 8 v.toNat])
+  encodeFields (match s with | none => [[12]] | some (k, v) => [[13], be 32 k.toNat, be 32 v.toNat])
 
-/-- Rows and slots are separately framed, including empty slots and row lengths. -/
-def tableBytes (t : ElasticOpenTable) : List UInt8 :=
-  encodeFields ([10] :: t.levels.toList.map fun row => encodeFields (row.toList.map slotBytes))
-
-def tableDigest (H : Hash256) (t : ElasticOpenTable) : Digest := H (tableBytes t)
-
-/-- A trusted local table plus its authenticated root. Construction hashes once; verification
-reads only the bounded windows. A root-only remote verifier would need a collision disjunct. -/
-structure AuthenticatedTable (H : Hash256) where
-  table : ElasticOpenTable
-  root : Digest
-  authentic : root = tableDigest H table
-
-def authenticateTable (H : Hash256) (t : ElasticOpenTable) : AuthenticatedTable H :=
-  ⟨t, tableDigest H t, rfl⟩
-
-structure AbsenceCertificate where
-  root : Digest
-  coordinates : List PhysSlot
-  states : List Slot
-
-def proveAbsence (H : Hash256) (t : AuthenticatedTable H) (k : Key) : AbsenceCertificate :=
-  ⟨t.root, probeCoords t.table k, (probeCoords t.table k).map (getSlot t.table)⟩
-
-variable {H : Hash256} in
-def verifyAbsenceCert (t : AuthenticatedTable H) (k : Key)
-    (c : AbsenceCertificate) : Bool :=
-  decide (c.root = t.root ∧ c.coordinates = probeCoords t.table k ∧
-    c.states = c.coordinates.map (getSlot t.table)) &&
-  c.states.all (fun s => match s with | none => true | some (key, _) => decide (key ≠ k))
-
-theorem verifyAbsenceCert_sound (H : Hash256) (t : AuthenticatedTable H) (k : Key)
-    (c : AbsenceCertificate) (h : verifyAbsenceCert t k c = true) :
-    c.root = tableDigest H t.table ∧ lookup t.table k = none ∧
-      ∀ p ∈ probeCoords t.table k, ∀ v, getSlot t.table p ≠ some (k, v) := by
-  simp only [verifyAbsenceCert, Bool.and_eq_true, decide_eq_true_eq] at h
-  have ha := h.2
-  rw [h.1.2.2, h.1.2.1] at ha
-  have hn : ∀ p ∈ probeCoords t.table k, ∀ v, getSlot t.table p ≠ some (k, v) := by
-    intro p hp v hv
-    have ht := List.all_eq_true.mp ha (some (k, v)) (List.mem_map.mpr ⟨p, hp, hv⟩)
-    simp at ht
-  exact ⟨h.1.1.trans t.authentic, (lookup_none_iff _ _).mpr hn, hn⟩
-
-theorem verifyAbsenceCert_complete (H : Hash256) (t : AuthenticatedTable H) (k : Key)
-    (h : lookup t.table k = none) : verifyAbsenceCert t k (proveAbsence H t k) = true := by
-  have hn := (lookup_none_iff _ _).mp h
-  simp only [verifyAbsenceCert, proveAbsence, true_and, decide_true, Bool.true_and]
-  apply List.all_eq_true.mpr
-  intro s hs
-  obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hs
-  cases hg : getSlot t.table p with
-  | none => rfl
-  | some e =>
-    obtain ⟨key, v⟩ := e
-    simp only [decide_eq_true_eq]
-    intro he
-    subst key
-    exact hn p hp v hg
-
-theorem absence_excludes_all_slots (H : Hash256) (t : AuthenticatedTable H) (k : Key)
-    (c : AbsenceCertificate) (hw : TableWF t.table) (hc : verifyAbsenceCert t k c = true)
-    (p : PhysSlot) (v : Val) : getSlot t.table p ≠ some (k, v) := by
-  intro hp
-  exact (verifyAbsenceCert_sound H t k c hc).2.2 p (hw p k v hp) v hp
-
-
-theorem emptyTable_wf (base levels : Nat) : TableWF (emptyTable base levels) := by
+theorem emptyTable_wf (base levels : Nat) (seed : BitVec 256 := 0) : TableWF (emptyTable base levels seed) := by
   intro p k v h
   simp only [getSlot, emptyTable, Array.getElem?_map, Array.getElem?_range] at h
   split at h <;> simp_all [Array.getElem?_replicate]
@@ -413,6 +449,55 @@ theorem insertSeq_wf (t : ElasticOpenTable) (xs : List (Key × Val)) (hw : Table
   | nil => exact hw
   | cons e xs ih => exact ih _ (insert_wf t e.1 e.2 hw)
 
+/-- Each key occupies at most one physical slot in a constructed table. -/
+def KeyUnique (t : ElasticOpenTable) : Prop :=
+  ∀ p q k v w, getSlot t p = some (k,v) → getSlot t q = some (k,w) → p = q
+
+theorem emptyTable_unique (base levels : Nat) (seed : BitVec 256 := 0) :
+    KeyUnique (emptyTable base levels seed) := by
+  intro p q k v w h _
+  simp only [getSlot, emptyTable, Array.getElem?_map, Array.getElem?_range] at h
+  split at h <;> simp_all [Array.getElem?_replicate]
+  split at h <;> simp_all
+
+theorem insert_unique (t : ElasticOpenTable) (k : Key) (v : Val) (hw : TableWF t)
+    (hu : KeyUnique t) : KeyUnique (insert t k v).1 := by
+  unfold insert
+  split
+  · exact hu
+  · rename_i hs
+    split
+    · exact hu
+    · rename_i p hp
+      have hm := List.mem_of_find?_eq_some hp
+      have hn := Option.isNone_iff_eq_none.mp
+        (List.find?_some (p := fun q : PhysSlot => (getSlot t q).isNone) hp)
+      have hf := fillSlot_same t p (k,v) (probeCoords_inBounds t k p hm) hn
+      have absent : ∀ q w, getSlot t q ≠ some (k,w) := by
+        intro q w hq
+        exact (search_none_iff t k _).mp hs q (hw q k w hq) w hq
+      intro q r key x y hq hr
+      by_cases heq : p = q
+      · subst q
+        have hk : k = key := (Prod.mk.inj (Option.some.inj (hf.symm.trans hq))).1
+        by_cases her : p = r
+        · exact her
+        · rw [fillSlot_other t p r (k,v) her] at hr
+          exact False.elim (absent r y (by simpa [hk] using hr))
+      · rw [fillSlot_other t p q (k,v) heq] at hq
+        by_cases her : p = r
+        · subst r
+          have hk : k = key := (Prod.mk.inj (Option.some.inj (hf.symm.trans hr))).1
+          exact False.elim (absent q x (by simpa [hk] using hq))
+        · rw [fillSlot_other t p r (k,v) her] at hr
+          exact hu q r key x y hq hr
+
+theorem insertSeq_unique (t : ElasticOpenTable) (xs : List (Key × Val))
+    (hw : TableWF t) (hu : KeyUnique t) : KeyUnique (insertSeq t xs) := by
+  induction xs generalizing t with
+  | nil => exact hu
+  | cons e xs ih => exact ih _ (insert_wf t e.1 e.2 hw) (insert_unique t e.1 e.2 hw hu)
+
 theorem lookup_probe_bound (t : ElasticOpenTable) (k : Key) :
     (probeCoords t k).length ≤ 4 * t.levels.size := by
   rw [probeCoords_length]
@@ -423,6 +508,16 @@ theorem lookup_probe_bound (t : ElasticOpenTable) (k : Key) :
     | nil => simp
     | cons l ls ih => simp only [List.map_cons, List.sum_cons, List.length_cons]; omega
   simpa [probeBudget] using hb (List.range t.levels.size)
+
+theorem lookup_complete_of_wf (t : ElasticOpenTable) (k : Key) (v : Val) (p : PhysSlot)
+    (hw : TableWF t) (hv : getSlot t p = some (k,v)) : ∃ w, lookup t k = some w := by
+  obtain ⟨q,w,hs⟩ := search_complete t k _ p v (hw p k v hv) hv
+  exact ⟨w, by simp [lookup, hs]⟩
+
+/-- Four inspections per level; whenever the row has more than four slots this is
+strictly below a row scan. This bound is independent of key distribution and load. -/
+theorem probe_level_sublinear (k : Key) (l cap : Nat) (seed : BitVec 256) (hc : 4 < cap) :
+    (probeSlots k l cap seed).length < cap := by rw [probeSlots_length]; omega
 
 /-- Capacity at height zero is one leaf; subsequent capacities are 2, 4, 16, 256, ... . -/
 def capacity : Nat → Nat
@@ -522,7 +617,7 @@ theorem natBytes_injective {a b : Nat} (h : natBytes a = natBytes b) : a = b := 
   exact (congrArg Prod.fst (Option.some.inj ha)).symm
 
 def leafBytes (idx : Nat) (v : Option Val) : List UInt8 :=
-  frameBytes [[0], natBytes idx, match v with | none => [] | some x => be 8 x.toNat]
+  frameBytes [[0], natBytes idx, match v with | none => [] | some x => be 32 x.toNat]
 
 def nodeBytes (level : Nat) (children : Array Digest) : List UInt8 :=
   frameBytes ([1] :: natBytes level :: children.toList.map (fun d => d.val.data.toList))
@@ -537,8 +632,8 @@ theorem leafBytes_injective {i j : Nat} {v w : Val}
     (h : leafBytes i (some v) = leafBytes j (some w)) : i = j ∧ v = w := by
   have hf := frameBytes_injective h
   simp only [List.cons.injEq, and_true, true_and] at hf
-  refine ⟨natBytes_injective hf.1, UInt64.toNat_inj.mp ?_⟩
-  exact be_injective (by simpa using v.toNat_lt) (by simpa using w.toNat_lt) hf.2
+  refine ⟨natBytes_injective hf.1, BitVec.eq_of_toNat_eq ?_⟩
+  exact be_injective (by simpa using v.isLt) (by simpa using w.isLt) hf.2
 
 theorem nodeBytes_injective {i j : Nat} {a b : Array Digest}
     (h : nodeBytes i a = nodeBytes j b) : i = j ∧ a = b := by
@@ -639,6 +734,12 @@ theorem openAt_length (H : Hash256) (entries : Array Val) (height start idx : Na
   | zero => rfl
   | succ k ih => simp [openAt, ih]
 
+/-- Honest accounting: the opening sends every child digest. Small depth does not
+imply small bandwidth; already the top vector costs the full exponential arity. -/
+theorem opening_size_lower (H : Hash256) (entries : Array Val) (k start idx : Nat) :
+    arity k ≤ ((openAt H entries (k+1) start idx).map Array.size).sum := by
+  simp [openAt, childrenAt]
+
 def verifyNode (H : Hash256) : Nat → Nat → Nat → Val → Digest → List (Array Digest) → Bool
   | 0, start, idx, v, root, path =>
     decide (idx = 0 ∧ path = [] ∧ H (leafBytes start (some v)) = root)
@@ -659,9 +760,16 @@ def proveExpVerkle (H : Hash256) (f : ExpVerkleForestExec) (height idx : Nat) : 
 
 def verifyExpVerkleOpening (H : Hash256) (root : Digest) (idx : Nat) (v : Val)
     (p : ExpVerkleProof) : Bool :=
-  decide (idx < p.count ∧ p.count ≤ capacity p.height ∧
+  decide (idx < p.count ∧ p.count ≤ capacity p.height ∧ p.height = expVerkleDepth p.count ∧
     H (forestBytes p.count p.height p.treeRoot) = root) &&
   verifyNode H p.height 0 idx v p.treeRoot p.vectors
+
+private theorem range_get {n i : Nat} (h : i < (Array.range n).size) :
+    (Array.range n)[i] = i :=
+  Obend.Crypto.Fast.arrayOfFn_get (fun j : Fin n => j.val) ⟨i, by simpa only [Array.size_range] using h⟩
+private theorem range_getOpt {n i : Nat} : (Array.range n)[i]? = if i < n then some i else none := by
+  simp only [getElem?_def, Array.size_range, range_get, dite_eq_ite]
+attribute [local simp] range_get range_getOpt
 
 theorem verifyNode_complete (H : Hash256) (a : Array Val) (height start idx : Nat) (v : Val)
     (hi : idx < capacity height) (hv : a[start + idx]? = some v) :
@@ -686,16 +794,18 @@ theorem verifyNode_complete (H : Hash256) (a : Array Val) (height start idx : Na
     have ih' := ih (start + idx / capacity k * capacity k) (idx % capacity k) hmod (by simpa [he] using hv) (by
       have := (Array.getElem?_eq_some_iff.mp hv).1
       omega)
-    simpa [verifyNode, openAt, rootAt, childrenAt, hdiv, hstart, Array.getElem?_map,
-      Array.getElem?_range] using ih'
+    simp only [verifyNode, openAt, rootAt, childrenAt, hstart, ite_true,
+      Array.size_map, Array.size_range, true_and, decide_true, Bool.true_and,
+      Array.getElem?_map, range_getOpt, hdiv, Option.map_some]
+    exact ih'
 
 theorem verifyExpVerkleOpening_complete (H : Hash256) (f : ExpVerkleForestExec)
     (height idx : Nat) (v : Val) (hc : f.entries.size ≤ capacity height)
-    (hv : f.entries[idx]? = some v) :
+    (hv : f.entries[idx]? = some v) (hh : height = expVerkleDepth f.entries.size) :
     verifyExpVerkleOpening H (expVerkleRoot H f height) idx v (proveExpVerkle H f height idx) = true := by
   have hi : idx < f.entries.size := (Array.getElem?_eq_some_iff.mp hv).1
   have hn := verifyNode_complete H f.entries height 0 idx v (Nat.lt_of_lt_of_le hi hc) (by simpa using hv)
-  simpa [verifyExpVerkleOpening, expVerkleRoot, proveExpVerkle, hi, hc] using hn
+  simpa [verifyExpVerkleOpening, expVerkleRoot, proveExpVerkle, hi, hc, hh, expVerkleDepth_covers] using hn
 
 
 
@@ -710,7 +820,7 @@ theorem every_index_opens (H : Hash256) (f : ExpVerkleForestExec) (idx : Nat)
     (hi : idx < f.entries.size) :
     verifyExpVerkleOpening H (commitExpVerkle H f) idx f.entries[idx] (openExpVerkle H f idx) = true :=
   verifyExpVerkleOpening_complete H f _ idx _ (expVerkleDepth_covers _)
-    (Array.getElem?_eq_getElem hi)
+    (Array.getElem?_eq_getElem hi) rfl
 
 theorem opening_depth_bound (H : Hash256) (f : ExpVerkleForestExec) (idx k : Nat)
     (h : f.entries.size ≤ 2 ^ (2 ^ k)) : (openExpVerkle H f idx).vectors.length ≤ k + 1 := by
@@ -740,16 +850,35 @@ theorem appendSeq_preserves (f : ExpVerkleForestExec) (vs : List Val) (idx : Nat
   rw [← Array.getElem?_toList, appendSeq_entries, List.getElem?_append_left (by simpa using hi)]
   simp
 
+/-- All preimages on the submitted path, retaining absolute leaf position. -/
+def nodePreimages : Nat → Nat → Nat → Val → List (Array Digest) → List (List UInt8)
+  | 0, start, _, v, _ => [leafBytes start (some v)]
+  | _+1, _, _, _, [] => []
+  | k+1, start, idx, v, a :: ps => nodeBytes (k+1) a ::
+    nodePreimages k (start + idx / capacity k * capacity k) (idx % capacity k) v ps
+
+def openingPreimages (p : ExpVerkleProof) (idx : Nat) (v : Val) : List (List UInt8) :=
+  forestBytes p.count p.height p.treeRoot :: nodePreimages p.height 0 idx v p.vectors
+
+abbrev ScopedCollision (H : Hash256) (messages : List (List UInt8)) :=
+  { c : CollisionPair H // c.left ∈ messages ∧ c.right ∈ messages }
+
+private def widenCollision {H : Hash256} {small large : List (List UInt8)}
+    (c : ScopedCollision H small) (h : ∀ m ∈ small, m ∈ large) : ScopedCollision H large :=
+  ⟨c.val, h _ c.property.1, h _ c.property.2⟩
+
 /-- Traverse two accepted paths, returning the first differing preimage with equal digest.
 The recursion follows actual submitted vectors, so the collision is local to the openings. -/
 def extractNodeCollision (H : Hash256) (v w : Val) (hne : v ≠ w) :
     (height start idx : Nat) → (root : Digest) → (p q : List (Array Digest)) →
     verifyNode H height start idx v root p = true →
-    verifyNode H height start idx w root q = true → CollisionPair H
+    verifyNode H height start idx w root q = true →
+      ScopedCollision H (nodePreimages height start idx v p ++ nodePreimages height start idx w q)
   | 0, start, idx, root, p, q, hp, hq => by
     simp only [verifyNode, decide_eq_true_eq] at hp hq
-    exact ⟨leafBytes start (some v), leafBytes start (some w),
-      fun he => hne (leafBytes_injective he).2, hp.2.2.trans hq.2.2.symm⟩
+    exact ⟨⟨leafBytes start (some v), leafBytes start (some w),
+      fun he => hne (leafBytes_injective he).2, hp.2.2.trans hq.2.2.symm⟩,
+      by simp [nodePreimages], by simp [nodePreimages]⟩
   | k + 1, start, idx, root, p, q, hp, hq => by
     cases p with
     | nil => simp [verifyNode] at hp
@@ -766,44 +895,262 @@ def extractNodeCollision (H : Hash256) (v w : Val) (hne : v ≠ w) :
           cases hg : a[idx / capacity k]? with
           | none => simp [hg] at hp
           | some child =>
-            exact extractNodeCollision H v w hne k
+            apply widenCollision (extractNodeCollision H v w hne k
               (start + idx / capacity k * capacity k) (idx % capacity k) child ps qs
-              (by simpa [hg] using hp.2) (by simpa [hg] using hq.2)
-        else exact ⟨_, _, hab, he⟩
+              (by simpa [hg] using hp.2) (by simpa [hg] using hq.2))
+            intro m hm
+            simp only [nodePreimages, List.mem_append, List.mem_cons] at *
+            rcases hm with hm | hm
+            · exact .inl (.inr hm)
+            · exact .inr (.inr hm)
+        else exact ⟨⟨_, _, hab, he⟩, by simp [nodePreimages], by simp [nodePreimages]⟩
 
 /-- Full position-binding extractor, with no choice and no unscoped collision assumption. -/
 def extractOpeningCollision (H : Hash256) (root : Digest) (idx : Nat) (v w : Val)
     (p q : ExpVerkleProof) (hne : v ≠ w)
     (hp : verifyExpVerkleOpening H root idx v p = true)
-    (hq : verifyExpVerkleOpening H root idx w q = true) : CollisionPair H := by
+    (hq : verifyExpVerkleOpening H root idx w q = true) :
+    ScopedCollision H (openingPreimages p idx v ++ openingPreimages q idx w) := by
   simp only [verifyExpVerkleOpening, Bool.and_eq_true, decide_eq_true_eq] at hp hq
-  have he := hp.1.2.2.trans hq.1.2.2.symm
+  have he := hp.1.2.2.2.trans hq.1.2.2.2.symm
   if hf : forestBytes p.count p.height p.treeRoot = forestBytes q.count q.height q.treeRoot then
     have hb := forestBytes_injective hf
-    exact extractNodeCollision H v w hne p.height 0 idx p.treeRoot p.vectors q.vectors hp.2
-      (by simpa [hb.2.1, hb.2.2] using hq.2)
-  else exact ⟨_, _, hf, he⟩
+    apply widenCollision (extractNodeCollision H v w hne p.height 0 idx p.treeRoot p.vectors q.vectors hp.2
+      (by simpa [hb.2.1, hb.2.2] using hq.2))
+    intro m hm
+    simp only [openingPreimages, List.mem_append, List.mem_cons] at *
+    rcases hm with hm | hm
+    · exact .inl (.inr hm)
+    · exact .inr (.inr (by simpa [hb.2.1] using hm))
+  else exact ⟨⟨_, _, hf, he⟩, by simp [openingPreimages], by simp [openingPreimages]⟩
 
 theorem verifyExpVerkleOpening_binds_or_collision (H : Hash256) (root : Digest)
     (idx : Nat) (v w : Val) (p q : ExpVerkleProof)
     (hp : verifyExpVerkleOpening H root idx v p = true)
     (hq : verifyExpVerkleOpening H root idx w q = true) :
-    v = w ∨ ∃ a b, a ≠ b ∧ H a = H b := by
+    v = w ∨ Nonempty (ScopedCollision H (openingPreimages p idx v ++ openingPreimages q idx w)) := by
   by_cases he : v = w
   · exact .inl he
   · let c := extractOpeningCollision H root idx v w p q he hp hq
-    exact .inr ⟨c.left, c.right, c.distinct, c.equalHash⟩
+    exact .inr ⟨c⟩
 
+
+theorem opening_binds_count (H : Hash256) (root : Digest) (idx : Nat) (v w : Val)
+    (p q : ExpVerkleProof) (hp : verifyExpVerkleOpening H root idx v p = true)
+    (hq : verifyExpVerkleOpening H root idx w q = true) :
+    (p.count = q.count ∧ p.height = q.height) ∨
+      Nonempty (ScopedCollision H (openingPreimages p idx v ++ openingPreimages q idx w)) := by
+  simp only [verifyExpVerkleOpening, Bool.and_eq_true, decide_eq_true_eq] at hp hq
+  by_cases he : forestBytes p.count p.height p.treeRoot = forestBytes q.count q.height q.treeRoot
+  · have hi := forestBytes_injective he
+    exact .inl ⟨hi.1,hi.2.1⟩
+  · exact .inr ⟨⟨⟨_,_,he,hp.1.2.2.2.trans hq.1.2.2.2.symm⟩,
+      by simp [openingPreimages], by simp [openingPreimages]⟩⟩
+
+theorem slotBytes_injective {a b : Slot} (h : slotBytes a = slotBytes b) : a = b := by
+  have hf := encodeFields_injective _ _ h
+  cases a with
+  | none => cases b <;> simp_all [slotBytes]
+  | some a =>
+    cases b with
+    | none => simp_all [slotBytes]
+    | some b =>
+      have he : be 32 a.1.toNat = be 32 b.1.toNat ∧ be 32 a.2.toNat = be 32 b.2.toNat := by
+        simpa [slotBytes] using hf
+      have hk := be_injective (by simpa using a.1.isLt) (by simpa using b.1.isLt) he.1
+      have hv := be_injective (by simpa using a.2.isLt) (by simpa using b.2.isLt) he.2
+      exact congrArg some (Prod.ext (BitVec.eq_of_toNat_eq hk) (BitVec.eq_of_toNat_eq hv))
+
+/-- Row forests hold all 256 bits of each framed slot digest. -/
+def digestWord (d : Digest) : Val := BitVec.ofNat 256 (ofBE d.val.data.toList)
+
+theorem digestWord_injective {a b : Digest} (h : digestWord a = digestWord b) : a = b := by
+  open Obend.Crypto.BinaryTower256 in
+  have inv (d : Digest) : toBytes32 (digestWord d) = d.val :=
+    toBytes32_ofBytes32 d.val _ (by simp [ofBytes32, d.property, digestWord])
+  exact Subtype.ext ((inv a).symm.trans ((congrArg _ h).trans (inv b)))
+
+def slotWord (H : Hash256) (s : Slot) : Val := digestWord (H (slotBytes s))
+def rowForest (H : Hash256) (row : Array Slot) : ExpVerkleForestExec := ⟨row.map (slotWord H)⟩
+
+structure TableHeader where
+  seed : BitVec 256
+  rows : Array (Nat × Digest)
+  deriving DecidableEq
+
+def tableHeader (H : Hash256) (t : ElasticOpenTable) : TableHeader :=
+  ⟨t.seed, t.levels.map fun row => (row.size, commitExpVerkle H (rowForest H row))⟩
+
+def headerBytes (h : TableHeader) : List UInt8 :=
+  frameBytes ([10] :: be 32 h.seed.toNat :: h.rows.toList.map fun (n, r) =>
+    frameBytes [natBytes n, r.val.data.toList])
+
+theorem headerBytes_injective {a b : TableHeader} (h : headerBytes a = headerBytes b) : a = b := by
+  have hf := frameBytes_injective h
+  simp only [List.cons.injEq, true_and] at hf
+  have hs : a.seed = b.seed := BitVec.eq_of_toNat_eq
+    (be_injective (by simpa using a.seed.isLt) (by simpa using b.seed.isLt) hf.1)
+  have hr : a.rows = b.rows := Array.toList_inj.mp ((List.map_inj_right (fun x y he => by
+    have hh := frameBytes_injective he
+    simp only [List.cons.injEq, and_true] at hh
+    exact Prod.ext (natBytes_injective hh.1) (digest_bytes_injective hh.2))).mp hf.2)
+  cases a; cases b; cases hs; cases hr; rfl
+
+def tableDigest (H : Hash256) (t : ElasticOpenTable) : Digest := H (headerBytes (tableHeader H t))
+
+def headerCoords (h : TableHeader) (k : Key) : List PhysSlot :=
+  (List.range h.rows.size).flatMap fun l =>
+    (probeSlots k l ((h.rows[l]?.map Prod.fst).getD 0) h.seed).map fun s => (l, s)
+
+theorem headerCoords_eq (H : Hash256) (t : ElasticOpenTable) (k : Key) :
+    headerCoords (tableHeader H t) k = probeCoords t k := by
+  simp only [headerCoords, tableHeader, probeCoords, Array.size_map]
+  congr 1
+  funext l
+  by_cases hl : l < t.levels.size
+  · simp [Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem hl]
+  · simp only [Array.getElem?_map, Array.getElem?_eq_none (by omega : t.levels.size ≤ l),
+      Option.map_none, Option.getD_none, Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?]
+    rfl
+
+structure SlotOpening where
+  coordinate : PhysSlot
+  state : Slot
+  proof : ExpVerkleProof
+
+structure AbsenceCertificate where
+  header : TableHeader
+  windows : List SlotOpening
+
+def verifySlotOpening (H : Hash256) (header : TableHeader) (o : SlotOpening) : Bool :=
+  match header.rows[o.coordinate.1]? with
+  | none => false
+  | some (n, root) => decide (o.proof.count = n) &&
+    verifyExpVerkleOpening H root o.coordinate.2 (slotWord H o.state) o.proof
+
+/-- Root-only authentication: exactly the complete bounded probe window, including
+empty slots, is opened. Neither a trusted table nor a trusted slot state is an input. -/
+def verifyExpVerkleAbsence (H : Hash256) (root : Digest) (k : Key) (c : AbsenceCertificate) : Bool :=
+  decide (H (headerBytes c.header) = root ∧ c.windows.map SlotOpening.coordinate = headerCoords c.header k) &&
+  c.windows.all (fun o => verifySlotOpening H c.header o &&
+    match o.state with | none => true | some (key, _) => decide (key ≠ k))
+
+def openSlot (H : Hash256) (t : ElasticOpenTable) (p : PhysSlot) : SlotOpening :=
+  ⟨p, getSlot t p, openExpVerkle H (rowForest H t.levels[p.1]!) p.2⟩
+
+def proveAbsence (H : Hash256) (t : ElasticOpenTable) (k : Key) : AbsenceCertificate :=
+  ⟨tableHeader H t, (probeCoords t k).map (openSlot H t)⟩
+
+theorem openSlot_complete (H : Hash256) (t : ElasticOpenTable) (p : PhysSlot) (hb : InBounds t p) :
+    verifySlotOpening H (tableHeader H t) (openSlot H t p) = true := by
+  obtain ⟨row, hr, hs⟩ := hb
+  have hv : (rowForest H row).entries[p.2]? = some (slotWord H (getSlot t p)) := by
+    simp [rowForest, getSlot, hr, Array.getElem?_eq_getElem hs]
+  have he := verifyExpVerkleOpening_complete H (rowForest H row) _ p.2 _ (expVerkleDepth_covers _) hv rfl
+  simpa [verifySlotOpening, openSlot, tableHeader, Array.getElem?_map, hr,
+    Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?, openExpVerkle, proveExpVerkle,
+    rowForest, commitExpVerkle] using he
+
+theorem verifyAbsence_complete (H : Hash256) (t : ElasticOpenTable) (k : Key) (hn : lookup t k = none) :
+    verifyExpVerkleAbsence H (tableDigest H t) k (proveAbsence H t k) = true := by
+  have hn := (lookup_none_iff t k).mp hn
+  simp only [verifyExpVerkleAbsence, proveAbsence, Bool.and_eq_true]
+  constructor
+  · apply decide_eq_true
+    constructor
+    · rfl
+    · simp [openSlot, List.map_map, headerCoords_eq, Function.comp_def]
+  · apply List.all_eq_true.mpr
+    intro o ho
+    obtain ⟨p, hp, rfl⟩ := List.mem_map.mp ho
+    rw [Bool.and_eq_true]
+    refine ⟨openSlot_complete H t p (probeCoords_inBounds t k p hp), ?_⟩
+    change (match getSlot t p with | none => true | some (key, _) => decide (key ≠ k)) = true
+    cases hg : getSlot t p with
+    | none => rfl
+    | some e =>
+      apply decide_eq_true
+      intro he
+      exact hn p hp e.2 (hg.trans (congrArg some (Prod.ext he rfl)))
+
+def slotOpeningPreimages (H : Hash256) (t : ElasticOpenTable) (o : SlotOpening) : List (List UInt8) :=
+  slotBytes o.state :: slotBytes (getSlot t o.coordinate) ::
+    (openingPreimages o.proof o.coordinate.2 (slotWord H o.state) ++
+      openingPreimages (openSlot H t o.coordinate).proof o.coordinate.2
+        (slotWord H (getSlot t o.coordinate)))
+
+def absencePreimages (H : Hash256) (t : ElasticOpenTable) (c : AbsenceCertificate) : List (List UInt8) :=
+  headerBytes c.header :: headerBytes (tableHeader H t) :: c.windows.flatMap (slotOpeningPreimages H t)
+
+/-- A forged slot either agrees with the committed row or yields an explicit
+collision from the two openings or the two slot encodings. -/
+def extractSlotCollision (H : Hash256) (t : ElasticOpenTable) (o : SlotOpening)
+    (hb : InBounds t o.coordinate) (hv : verifySlotOpening H (tableHeader H t) o = true)
+    (hne : o.state ≠ getSlot t o.coordinate) : ScopedCollision H (slotOpeningPreimages H t o) := by
+  let row := t.levels[o.coordinate.1]!
+  have hr : t.levels[o.coordinate.1]? = some row := by
+    obtain ⟨r, hr, _⟩ := hb
+    simp [row, Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?, hr]
+  have hs : o.coordinate.2 < row.size := by
+    obtain ⟨r, hr', hs⟩ := hb
+    rw [hr] at hr'
+    cases Option.some.inj hr'
+    exact hs
+  have hg : (rowForest H row).entries[o.coordinate.2]? = some (slotWord H (getSlot t o.coordinate)) := by
+    simp [rowForest, getSlot, hr, Array.getElem?_eq_getElem hs]
+  have honest := verifyExpVerkleOpening_complete H (rowForest H row) _ o.coordinate.2 _
+    (expVerkleDepth_covers _) hg rfl
+  simp only [verifySlotOpening, tableHeader, Array.getElem?_map, hr, Option.map_some,
+    Bool.and_eq_true, decide_eq_true_eq] at hv
+  if he : slotWord H o.state = slotWord H (getSlot t o.coordinate) then
+    exact ⟨⟨_, _, fun hh => hne (slotBytes_injective hh), digestWord_injective he⟩,
+      by simp [slotOpeningPreimages], by simp [slotOpeningPreimages]⟩
+  else
+    apply widenCollision (extractOpeningCollision H _ _ _ _ o.proof _ he hv.2 honest)
+    intro m hm
+    exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hm)
+
+/-- The reduction returns concrete collision data, scoped to the submitted certificate
+and the authentic table by the extractor; successful absence covers every scheduled slot. -/
+theorem verifyAbsence_sound_or_collision (H : Hash256) (t : ElasticOpenTable) (k : Key)
+    (c : AbsenceCertificate) (hc : verifyExpVerkleAbsence H (tableDigest H t) k c = true) :
+    lookup t k = none ∨ Nonempty (ScopedCollision H (absencePreimages H t c)) := by
+  simp only [verifyExpVerkleAbsence, Bool.and_eq_true, decide_eq_true_eq] at hc
+  by_cases hh : c.header = tableHeader H t
+  · have coords : c.windows.map SlotOpening.coordinate = probeCoords t k := by
+      simpa [hh, headerCoords_eq] using hc.1.2
+    by_cases hn : lookup t k = none
+    · exact .inl hn
+    · right
+      cases hs : search t k (probeCoords t k) with
+      | none => exact False.elim (hn (by simp [lookup, hs]))
+      | some e =>
+        have hit := search_sound t k _ e.1 e.2 hs
+        have hm : e.1 ∈ c.windows.map SlotOpening.coordinate := coords.symm ▸ hit.1
+        obtain ⟨o, ho, he⟩ := List.mem_map.mp hm
+        have hv := List.all_eq_true.mp hc.2 o ho
+        simp only [Bool.and_eq_true] at hv
+        have hne : o.state ≠ getSlot t o.coordinate := by
+          intro eq
+          have hx : getSlot t o.coordinate = some (k, e.2) := he ▸ hit.2
+          rw [eq, hx] at hv
+          simp at hv
+        refine ⟨widenCollision (extractSlotCollision H t o (he ▸ probeCoords_inBounds t k e.1 hit.1)
+          (by simpa [hh] using hv.1) hne) ?_⟩
+        intro m hm
+        exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_flatMap.mpr ⟨o, ho, hm⟩))
+  · exact .inr ⟨⟨⟨_, _, fun he => hh (headerBytes_injective he), hc.1.1⟩,
+      by simp [absencePreimages], by simp [absencePreimages]⟩⟩
 
 /-- The deployed vault wire uses the existing total codec and preserves physical array shape. -/
-def wordCodec : ChunkedWorld.FastCodec UInt64 :=
-  ChunkedWorld.cMap UInt64.toNat (fun n => if n < 2 ^ 64 then some (UInt64.ofNat n) else none)
-    (by intro w; simp [w.toNat_lt]) ChunkedWorld.cNat
+def wordCodec : ChunkedWorld.FastCodec (BitVec 256) :=
+  ChunkedWorld.cMap BitVec.toNat (fun n => if n < 2 ^ 256 then some (BitVec.ofNat 256 n) else none)
+    (by intro w; simp [w.isLt]) ChunkedWorld.cNat
 
 def tableCodec : ChunkedWorld.FastCodec ElasticOpenTable :=
-  ChunkedWorld.cMap ElasticOpenTable.levels (fun a => some ⟨a⟩) (by intro t; rfl)
-    (ChunkedWorld.cArray (ChunkedWorld.cArray
-      (ChunkedWorld.cOption (ChunkedWorld.cPair wordCodec wordCodec))))
+  ChunkedWorld.cMap (fun t => (t.levels, t.seed)) (fun a => some ⟨a.1, a.2⟩) (by intro t; rfl)
+    (ChunkedWorld.cPair (ChunkedWorld.cArray (ChunkedWorld.cArray
+      (ChunkedWorld.cOption (ChunkedWorld.cPair wordCodec wordCodec)))) wordCodec)
 
 def forestCodec : ChunkedWorld.FastCodec ExpVerkleForestExec :=
   ChunkedWorld.cMap ExpVerkleForestExec.entries (fun a => some ⟨a⟩) (by intro f; rfl)
@@ -811,13 +1158,17 @@ def forestCodec : ChunkedWorld.FastCodec ExpVerkleForestExec :=
 
 def snapshotPayloadCodec := ChunkedWorld.cPair tableCodec forestCodec
 
-def snapshotWireTag : String := "exp-verkle-openhash@1"
+def snapshotWireTag : String := "exp-verkle-openhash@2"
 
-/-- Prefix a typed snapshot payload to the world's transport records. The original world,
-including its existing records, pages, and journal, is retained. -/
+/-- Replace the prior typed snapshot record; preserve unrelated transport records and world data. -/
 def exportToChunkedWorld (w : ChunkedWorld.World) (t : ElasticOpenTable)
     (f : ExpVerkleForestExec) : ChunkedWorld.World :=
-  { w with received := (snapshotWireTag, Json.hex (snapshotPayloadCodec.enc (t, f))) :: w.received }
+  { w with received := (snapshotWireTag, Json.hex (snapshotPayloadCodec.enc (t, f))) :: w.received.filter (fun r => r.1 != snapshotWireTag) }
+
+theorem exportToChunkedWorld_idempotent (w : ChunkedWorld.World) (t : ElasticOpenTable)
+    (f : ExpVerkleForestExec) :
+    exportToChunkedWorld (exportToChunkedWorld w t f) t f = exportToChunkedWorld w t f := by
+  simp [exportToChunkedWorld, List.filter_filter]
 
 def importFromChunkedWorld (w : ChunkedWorld.World) : Option (ElasticOpenTable × ExpVerkleForestExec) := do
   let (tag, text) ← w.received.head?
@@ -907,7 +1258,7 @@ theorem insert_placed (t : ElasticOpenTable) (k : Key) (v : Val) (p : PhysSlot)
     (h : (insert t k v).2 = .inserted p) : getSlot (insert t k v).1 p = some (k, v) := by
   unfold insert at h ⊢
   cases hs : search t k (probeCoords t k) with
-  | some e => simp [hs] at h
+  | some e => simp only [hs] at h; split at h <;> cases h
   | none =>
     simp only [hs] at h ⊢
     cases hq : (probeCoords t k).find? (fun q => (getSlot t q).isNone) with
@@ -936,6 +1287,7 @@ theorem appendVault_preserves_links (s : VaultState) (k : Key) (v : Val) (link :
     simpa [appendVault, hr, VaultLinkValid] using
       And.intro hslot ((appendExpVerkle_preserves _ v _ hi).trans h.2)
   | alreadyPresent p => simpa [appendVault, hr, VaultLinkValid] using And.intro hslot h.2
+  | conflict old => simpa [appendVault, hr, VaultLinkValid] using And.intro hslot h.2
   | tableFull => simpa [appendVault, hr, VaultLinkValid] using And.intro hslot h.2
 
 def appendVaultSeq (s : VaultState) : List (Key × Val) → VaultState
@@ -953,7 +1305,7 @@ theorem vaultLink_opens (H : Hash256) (s : VaultState) (link : VaultSlotLink)
     (h : VaultLinkValid s link) :
     verifyExpVerkleOpening H (commitExpVerkle H s.2) link.entryIndex link.pointer.value
       (openExpVerkle H s.2 link.entryIndex) = true :=
-  verifyExpVerkleOpening_complete H s.2 _ _ _ (expVerkleDepth_covers _) h.2
+  verifyExpVerkleOpening_complete H s.2 _ _ _ (expVerkleDepth_covers _) h.2 rfl
 
 /-- The weld commits all three roots, not a truncated limb or an equality between unrelated trees. -/
 def weldBytes (forest table umem : Digest) : List UInt8 :=
@@ -976,16 +1328,71 @@ structure ExpVerkleVaultSnapshot where
   umemRoot : Digest
   root : Digest
 
+def allSlotCoords (t : ElasticOpenTable) : List PhysSlot :=
+  (List.range t.levels.size).flatMap fun l => (List.range t.levels[l]!.size).map fun j => (l,j)
+
+theorem getSlot_mem_coords (t : ElasticOpenTable) (p : PhysSlot) (e : Key × Val)
+    (h : getSlot t p = some e) : p ∈ allSlotCoords t := by
+  cases hr : t.levels[p.1]? with
+  | none => simp [getSlot, hr] at h
+  | some row =>
+    have hl := (Array.getElem?_eq_some_iff.mp hr).1
+    cases hs : row[p.2]? with
+    | none => simp [getSlot, hr, hs] at h
+    | some state =>
+      have hj := (Array.getElem?_eq_some_iff.mp hs).1
+      apply List.mem_flatMap.mpr
+      refine ⟨p.1, List.mem_range.mpr hl, List.mem_map.mpr ⟨p.2, ?_, Prod.eta _⟩⟩
+      simpa [Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?, hr] using List.mem_range.mpr hj
+
+/-- Every live key is reachable, and its value is present in the authenticated append log.
+This is a materialized consistency audit, not a proof of a unique historical operation trace. -/
+def TableLinked (t : ElasticOpenTable) (f : ExpVerkleForestExec) : Prop :=
+  ∀ p k v, getSlot t p = some (k,v) → p ∈ probeCoords t k ∧ v ∈ f.entries.toList
+
+def forestValueIndex (f : ExpVerkleForestExec) : Std.TreeSet Nat :=
+  Std.TreeSet.ofList (f.entries.toList.map BitVec.toNat) compare
+
+theorem forestValueIndex_contains (f : ExpVerkleForestExec) (v : Val) :
+    (forestValueIndex f).contains v.toNat = true ↔ v ∈ f.entries.toList := by
+  simp only [forestValueIndex, Std.TreeSet.contains_ofList, List.contains_iff_mem, List.mem_map]
+  constructor
+  · rintro ⟨x,hx,he⟩
+    exact (BitVec.eq_of_toNat_eq he) ▸ hx
+  · intro h; exact ⟨v,h,rfl⟩
+
+/-- Build the balanced value index once, then scan slots with logarithmic value queries. -/
+def checkSnapshotTable (t : ElasticOpenTable) (f : ExpVerkleForestExec) : Bool :=
+  let values := forestValueIndex f
+  (allSlotCoords t).all fun p => match getSlot t p with
+    | none => true
+    | some (k,v) => decide (p ∈ probeCoords t k) && values.contains v.toNat
+
+theorem checkSnapshotTable_iff (t : ElasticOpenTable) (f : ExpVerkleForestExec) :
+    checkSnapshotTable t f = true ↔ TableLinked t f := by
+  simp only [checkSnapshotTable, List.all_eq_true]
+  constructor
+  · intro h p k v hv
+    have hh := h p (getSlot_mem_coords t p (k,v) hv)
+    simpa only [hv, Bool.and_eq_true, decide_eq_true_eq, forestValueIndex_contains] using hh
+  · intro h p _
+    cases hg : getSlot t p with
+    | none => rfl
+    | some e => simpa only [Bool.and_eq_true, decide_eq_true_eq, forestValueIndex_contains] using h p e.1 e.2 hg
+
+theorem TableLinked.wf {t : ElasticOpenTable} {f : ExpVerkleForestExec} (h : TableLinked t f) : TableWF t :=
+  fun p k v hv => (h p k v hv).1
+
 /-- Semantic consistency is stated as concrete commitment and capacity equations. -/
 def SnapshotMeaning (H : Hash256) (s : ExpVerkleVaultSnapshot) : Prop :=
-  s.forest.entries.size ≤ capacity s.height ∧
+  TableLinked s.table s.forest ∧ s.forest.entries.size ≤ capacity s.height ∧
   s.forestRoot = expVerkleRoot H s.forest s.height ∧
   s.tableRoot = tableDigest H s.table ∧
   s.umemRoot = bindVerkleUmemRoot (exportToChunkedWorld s.world s.table s.forest) ∧
   s.root = H (weldBytes s.forestRoot s.tableRoot s.umemRoot)
 
 def verifySnapshot (H : Hash256) (s : ExpVerkleVaultSnapshot) : Bool :=
-  decide (s.forest.entries.size ≤ capacity s.height) &&
+  checkSnapshotTable s.table s.forest && decide (s.forest.entries.size ≤ capacity s.height) &&
   decide (s.forestRoot = expVerkleRoot H s.forest s.height) &&
   decide (s.tableRoot = tableDigest H s.table) &&
   decide (s.umemRoot = bindVerkleUmemRoot (exportToChunkedWorld s.world s.table s.forest)) &&
@@ -993,7 +1400,7 @@ def verifySnapshot (H : Hash256) (s : ExpVerkleVaultSnapshot) : Bool :=
 
 theorem verifySnapshot_iff (H : Hash256) (s : ExpVerkleVaultSnapshot) :
     verifySnapshot H s = true ↔ SnapshotMeaning H s := by
-  simp [verifySnapshot, SnapshotMeaning, and_assoc]
+  simp [verifySnapshot, SnapshotMeaning, checkSnapshotTable_iff, and_assoc]
 
 def buildSnapshot (H : Hash256) (w : ChunkedWorld.World) (t : ElasticOpenTable)
     (f : ExpVerkleForestExec) (height : Nat) : ExpVerkleVaultSnapshot :=
@@ -1003,9 +1410,9 @@ def buildSnapshot (H : Hash256) (w : ChunkedWorld.World) (t : ElasticOpenTable)
   ⟨w, t, f, height, fr, tr, ur, H (weldBytes fr tr ur)⟩
 
 theorem buildSnapshot_complete (H : Hash256) (w : ChunkedWorld.World) (t : ElasticOpenTable)
-    (f : ExpVerkleForestExec) (height : Nat) (hc : f.entries.size ≤ capacity height) :
+    (f : ExpVerkleForestExec) (height : Nat) (hc : f.entries.size ≤ capacity height) (hl : TableLinked t f) :
     verifySnapshot H (buildSnapshot H w t f height) = true := by
-  simp [verifySnapshot, buildSnapshot, hc]
+  simp [verifySnapshot, buildSnapshot, hc, (checkSnapshotTable_iff t f).mpr hl]
 
 inductive SnapshotRefusal where
   | inconsistentCommitment

@@ -155,11 +155,11 @@ set_option maxHeartbeats 2000000
 private def policy : VehiclePolicy :=
   ⟨⟨⟨-10,10⟩,⟨-10,10⟩,⟨-10,100⟩⟩,⟨1000,500,400⟩,1,2,1,3,1/2,100,2,2⟩
 private def start : VehicleState :=
-  ⟨⟨eye,zero⟩,⟨0,0,2⟩,zero,⟨10,zero⟩,⟨2,2,2⟩,
-   [⟨4,2,zero,3⟩,⟨4,2,zero,3⟩],⟨⟨300,300,300⟩,4⟩⟩
+  ⟨⟨eye,zero⟩,⟨0,0,2⟩,zero,⟨10,zero⟩,⟨2,2,2,0,0,0⟩,
+   [⟨4,2,zero,3⟩,⟨4,2,zero,3⟩],⟨⟨300,300,300⟩,4,⟨1,1,1⟩⟩⟩
 private def nominalLoad : StructuralLoad := ⟨2,1/10,2,12,100,2⟩
 private def burn : VehicleCommand :=
-  ⟨1,⟨0,0,1⟩,⟨0,0,1/2⟩,[⟨2,1⟩,⟨2,1⟩],2,1,1,1,zero,zero,zero,zero,
+  ⟨1,⟨0,0,1⟩,⟨0,0,1/2⟩,[⟨2,1⟩,⟨2,1⟩],2,1,1,1,⟨0,0⟩,zero,zero,zero,
    ⟨1/10,1/10,2,1/8100000000,2,1/4⟩,nominalLoad,none⟩
 private def ascent : VehicleTurn := ⟨burn,stepVehicle start burn⟩
 private def coastBase : VehicleCommand :=
@@ -167,7 +167,7 @@ private def coastBase : VehicleCommand :=
               heat := ⟨1/10,1/10,0,0,2,0⟩ }
 private def separation : Separation :=
   let pre := stageView (poweredStep ascent.after coastBase)
-  ⟨5,⟨1,1,1⟩,⟨0,0,1⟩,(separateStage pre (pre.mass-5) ⟨0,0,1⟩).2⟩
+  ⟨5,⟨1,1,1,0,0,0⟩,⟨0,0,1⟩,(separateStage pre (pre.mass-5) ⟨0,0,1⟩).2⟩
 private def stageCommand : VehicleCommand := { coastBase with separation := some separation }
 private def insertion : VehicleTurn := ⟨stageCommand,stepVehicle ascent.after stageCommand⟩
 private def entryCommand : VehicleCommand :=
@@ -189,7 +189,7 @@ example : SafeTrace policy start mission.turns.toList := by
 example : se3Vehicle6DofJudge.Fragment mission := se3Vehicle6DofJudge_fragment_inhabited mission
 example : ascent.after.pose.rotation ≠ eye := by decide +kernel
 example : insertion.after.dry.mass = 5 ∧ entry.after.thermal.ablator = 7/2 := by decide +kernel
-example : normSq (gimbalDirection ⟨1/3,1/5,1/7⟩) = 1 := gimbalDirection_unit _
+example : normSq (gimbalDirection ⟨1/3,1/5⟩) = 1 := gimbalDirection_unit _
 example : ¬ SO3 (eulerAttitude eye ⟨0,0,1⟩) := by decide +kernel
 
 private def oneTurn (t : VehicleTurn) : VehicleMission := ⟨policy,start,#[t]⟩
@@ -199,7 +199,7 @@ private def negativeTank : VehicleTurn :=
   { ascent with after := { ascent.after with tanks := [⟨-1,1,zero,3⟩] } }
 private def overdraw : VehicleTurn :=
   { ascent with command := { burn with draws := [⟨5,1⟩,⟨2,1⟩] } }
-private def gimbalViolation : VehicleTurn := { ascent with command := { burn with gimbal := ⟨2,0,0⟩ } }
+private def gimbalViolation : VehicleTurn := { ascent with command := { burn with gimbal := ⟨2,0⟩ } }
 private def mixtureViolation : VehicleTurn := { ascent with command := { burn with draws := [⟨1,0⟩,⟨1,0⟩] } }
 private def lowFeedPolicy : VehiclePolicy := { policy with feedFloor := 4 }
 private def wrongStageMass : Separation :=
@@ -207,9 +207,9 @@ private def wrongStageMass : Separation :=
 private def mismatchedStage : VehicleTurn :=
   { insertion with command := { stageCommand with separation := some wrongStageMass } }
 private def burnThrough : VehicleTurn :=
-  { ascent with after := { ascent.after with thermal := ⟨ascent.after.thermal.kelvin,0⟩ } }
+  { ascent with after := { ascent.after with thermal := ⟨ascent.after.thermal.kelvin,0,⟨1,1,1⟩⟩ } }
 private def overTemperature : VehicleTurn :=
-  { ascent with after := { ascent.after with thermal := ⟨⟨300,501,300⟩,3⟩ } }
+  { ascent with after := { ascent.after with thermal := ⟨⟨300,501,300⟩,3,⟨1,1,1⟩⟩ } }
 private def overloaded : VehicleTurn :=
   { ascent with command := { burn with load := { nominalLoad with dynamicPressure := 1000 } } }
 private def badSeparation : Separation :=
@@ -277,7 +277,7 @@ example : (parallelAxis ⟨1,1,0⟩).b = -1 := by decide +kernel
   mutation separateStage := fun pre m impulse =>
     (⟨m,add pre.momentum impulse,pre.pos⟩,⟨pre.mass-m,impulse,pre.pos⟩)
 #tooth stepThermalNetwork_nonneg_kelvin by
-  mutation stepThermalNetwork := fun s _ => ⟨⟨-1,s.kelvin.y,s.kelvin.z⟩,s.ablator⟩
+  mutation stepThermalNetwork := fun s _ => ⟨⟨-1,s.kelvin.y,s.kelvin.z⟩,s.ablator,s.capacity⟩
 #tooth checkTrace_iff by
   mutation checkTrace := fun p s _ => checkState p s
 
@@ -286,7 +286,42 @@ example : (parallelAxis ⟨1,1,0⟩).b = -1 := by decide +kernel
 #tooth checkTraceExec_eq_spec by
   mutation checkTraceExec := fun _ _ _ => true
 #tooth stepThermalNetwork_passive by
-  mutation stepThermalNetwork := fun s _ => ⟨⟨s.kelvin.x+1,s.kelvin.y,s.kelvin.z⟩,s.ablator⟩
+  mutation stepThermalNetwork := fun s _ => ⟨⟨s.kelvin.x+1,s.kelvin.y,s.kelvin.z⟩,s.ablator,s.capacity⟩
+
+private def fullInertia : InertiaTensor3 := ⟨4,5,6,1,1,1⟩
+example : SylvesterPos fullInertia := by decide +kernel
+example : SPD fullInertia.toMat := sylvester_spd fullInertia (by decide +kernel)
+example : checkState policy { start with dryInertia := fullInertia } = true := by decide +kernel
+example : ¬ SylvesterPos (⟨1,1,1,2,0,0⟩ : InertiaTensor3) := by decide +kernel
+private def coupledThruster : GimbaledThruster := ⟨⟨1/3,1/5⟩,12,⟨1,2,3⟩⟩
+example : normSq (gimbalDirection coupledThruster.angles) = 1 := gimbalDirection_unit _
+example : coupledThruster.force.x ≠ 0 ∧ coupledThruster.force.y ≠ 0 ∧ coupledThruster.force.z ≠ 0 := by decide +kernel
+example : (coupledThruster.torque zero).x ≠ 0 ∧ (coupledThruster.torque zero).y ≠ 0 ∧
+    (coupledThruster.torque zero).z ≠ 0 := by decide +kernel
+private def weightedHeat : ThermalState := ⟨⟨300,200,100⟩,4,⟨2,3,4⟩⟩
+private def conduction : ThermalCommand := ⟨1,1,0,0,0,0⟩
+example : ThermalCFL weightedHeat conduction := by decide +kernel
+example : thermalEnergy (stepThermalNetwork weightedHeat conduction) = thermalEnergy weightedHeat := by decide +kernel
+example : (stepThermalNetwork weightedHeat conduction).kelvin.x = 250 := by decide +kernel
+example : (1 : Rat) ∈ accelerationSlice 0 0 1 2 := by decide +kernel
+example : ¬ (3 : Rat) ∈ accelerationSlice 0 0 1 2 := by decide +kernel
+example : ¬ boxSubset (sweptTube zero zero ⟨2,2,2⟩ 1) ⟨⟨0,0⟩,⟨0,0⟩,⟨0,0⟩⟩ = true := by decide +kernel
+example : (1 : Rat) ∈ accelerationSlice 0 0 1 4 := by
+  have h := affineAccelerationSlice_encloses 0 0 1 3 1 4 (by decide +kernel) (by decide +kernel)
+  have he : (0+0*1+1*(1*1)/2+3*(1*1*1)/6 : Rat) = 1 := by decide +kernel
+  rw [he] at h; exact h
+#tooth sylvester_spd by
+  mutation SylvesterPos := fun j => 0 < j.ixx ∧ 0 < j.iyy ∧ 0 < j.izz
+#tooth gimbalDirection_unit by
+  mutation gimbalDirection := fun u => ⟨u.pitch,u.yaw,1⟩
+#tooth gimbaled_torque_orthogonal by
+  mutation GimbaledThruster.torque := fun g _ => g.force
+#tooth stepThermalNetwork_energy_balance by
+  mutation thermalEnergy := fun s => s.kelvin.x+s.kelvin.y+s.kelvin.z
+#tooth accelerationSlice_encloses by
+  mutation accelerationSlice := fun x v t _ => ⟨x+v*t,x+v*t⟩
+#tooth turn_intersample_safe by
+  mutation boxSubset := fun _ _ => true
 
 -- The Rat representation carries proof dependencies on the standard axioms. The
 -- computational functions must remain compilable: no choice-based Type extraction.
@@ -297,5 +332,16 @@ run_cmd do
     if isNoncomputable env n then
       throwError "nonconstructive executable: {n}"
   logInfo "Vehicle update, array checker, and refusal extraction are computable"
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  for (name, info) in env.constants.map₁.toList do
+    let some idx := env.getModuleIdxFor? name | continue
+    unless env.header.moduleNames[idx.toNat]? == some `Obend.Hardware.SymplecticVehicle6Dof do continue
+    if let .thmInfo _ := info then
+      if !name.isInternal && !name.isInternalDetail && name.components.getLast? != some `sizeOf_spec then
+        if ← liftTermElabM (Obend.AssertAxioms.closedStatement info.type) then
+          throwError "Closed library theorem: {name}"
+  logInfo "Obend.Hardware.SymplecticVehicle6Dof: zero closed theorems"
 #assert_axioms_tree
 end Obend.Tests.SymplecticVehicle6DofTest

@@ -329,7 +329,8 @@ example : ((3 : Int) * (1 - 3)) % 6 = 0 ∧ (3 : Int) ≠ 0 ∧ (3 : Int) ≠ 1 
 
 /-- One row `(1, 1, 0)`: the image is `z₁ + z₂`, so Module-SIS for this `A` is broken on purpose. -/
 def lavPP : LavParams 2 :=
-  { q := 97, p := 8, beta := 2, cols := 3, outRows := 2, A := [[mk2 1 0, mk2 1 0, mk2 0 0]] }
+  { q := 257, p := 8, beta := 2, cMax := 2, gamma := 8, cols := 3, outRows := 2,
+    A := List.replicate 3 [mk2 1 0, mk2 1 0, mk2 0 0] }
 
 def zKey : List (FastIntPoly 2) := [mk2 1 0, mk2 0 0, mk2 1 1]
 /-- Another short preimage of the same public key. -/
@@ -341,8 +342,10 @@ def keyDigest : List UInt8 := lavKeyDigest H (lavImage lavPP zKey)
 def ringKeys : List (List UInt8) := [keyDigest, lavKeyDigest H (lavImage lavPP zOther)]
 def ringD : List UInt8 := lavRingDigest H ringKeys
 
+def lavMask : List (FastIntPoly 2) := [mk2 (-1) 1, mk2 1 (-1), mk2 (-1) (-1)]
+
 def evalAt (epoch slot : Nat) (z : List (FastIntPoly 2)) : List UInt8 × LavProof 2 :=
-  lavEval H lavPP ringD epoch slot z
+  (lavEval H lavPP ringD epoch slot z lavMask).getD ([], ⟨[], [], [], [], []⟩)
 
 #guard keyDigest.length == 32 && (evalAt 0 5 zKey).1.length == 32
 -- Completeness, and determinism of the value.
@@ -360,7 +363,7 @@ def evalAt (epoch slot : Nat) (z : List (FastIntPoly 2)) : List UInt8 × LavProo
         (evalAt 0 5 zLong).2
 -- A tampered pre-output, a value under another key.
 #guard !lavVerify H lavPP keyDigest ringD 0 5 (evalAt 0 5 zKey).1
-        { (evalAt 0 5 zKey).2 with y := zKey }
+        { (evalAt 0 5 zKey).2 with u := zKey }
 #guard !lavVerify H lavPP (lavKeyDigest H (lavImage lavPP zOther)) ringD 0 5 (evalAt 0 5 zKey).1
         (evalAt 0 5 zKey).2
 -- What the uniqueness theorem says, seen from the broken side: the planted kernel vector lets one
@@ -415,9 +418,284 @@ def runEpoch (budget : Nat) (turns : List (AuctionTurn (cfg budget))) : Option N
 -- Claims that are not the decrypted plaintext (a consistent opening of another value).
 #guard runEpoch 4 [mkTurn 4 0 5 [1] 111 [⟨3, goldOfInt 3⟩, ⟨1, goldOfInt 1⟩]] == none
 
+-- A2: parameter non-vacuity, exact Shamir coupling, and bonded release.
+example : ∃ p : LavParams 1, p.p = 2 ∧ p.outRows = 1 ∧ p.wfB = true ∧ IsEmpty (MsisBreakWitness p) :=
+  lav_msisBreak_nonvacuous 2 1
+def rigidLav : LavParams 1 := ⟨37, 2, 1, 2, 4, 1, 1, [[mk1 1]]⟩
+#guard rigidLav.wfB
+#guard let ev := (lavEval H rigidLav [] 0 0 [mk1 1] [mk1 (-1)]).getD ([], ⟨[], [], [], [], []⟩)
+  lavVerify H rigidLav (lavKeyDigest H ev.2.pk) [] 0 0 ev.1 ev.2
+#guard lavPP.wfB
+#guard !( { lavPP with q := 64 } : LavParams 2).wfB
+#guard !( { lavPP with q := 2 } : LavParams 2).wfB
+#guard !( { lavPP with A := [] } : LavParams 2).wfB
+#guard !( { lavPP with cols := 0 } : LavParams 2).wfB
+#guard !( { lavPP with beta := 0 } : LavParams 2).wfB
+#guard !( { lavPP with beta := 129 } : LavParams 2).wfB
+#guard !( { lavPP with A := [[mk2 1 0]] } : LavParams 2).wfB
+#guard !lavVerify H { lavPP with q := 64 } keyDigest ringD 0 5
+  (evalAt 0 5 zKey).1 (evalAt 0 5 zKey).2
+def plantedMsis : MsisBreakWitness lavPP := by
+  refine ⟨[mk2 1 0, mk2 (-1) 0, mk2 0 0], rfl,
+    ⟨mk2 1 0, by simp, by decide⟩, ?_, ?_⟩
+  · decide
+  · intro row hr k
+    have hr' : row = [mk2 1 0, mk2 1 0, mk2 0 0] := by simpa [lavPP, List.mem_replicate] using hr
+    subst row
+    simp only [rowDot, addFast_eq_spec, zeroVec_spec, negacyclicMulFast_eq_spec]
+    have hk : k = 0 ∨ k = 1 := by have := k.isLt; omega
+    rcases hk with rfl | rfl <;> decide
+
+-- Three responses have compatible bounded masks for two different candidate secrets.
+def responseCs : List Nat := [1, 2, 1]
+def responseZs : List (List (FastIntPoly 1)) := [[mk1 0], [mk1 2], [mk1 (-2)]]
+example : (∀ pair ∈ responseCs.zip responseZs, lavShort rigidLav.gamma (lavMaskShift pair.1 [mk1 1] pair.2) = true) ∧
+    (responseCs.zip responseZs).map (fun pair => lavResponse pair.1 [mk1 1] (lavMaskShift pair.1 [mk1 1] pair.2)) = responseZs :=
+  lav_response_hides_sk_multi_eval rigidLav responseCs responseZs [mk1 1]
+    (by decide) rfl (by decide) (by decide) (by decide)
+example : (∀ pair ∈ responseCs.zip responseZs, lavShort rigidLav.gamma (lavMaskShift pair.1 [mk1 (-1)] pair.2) = true) ∧
+    (responseCs.zip responseZs).map (fun pair => lavResponse pair.1 [mk1 (-1)] (lavMaskShift pair.1 [mk1 (-1)] pair.2)) = responseZs :=
+  lav_response_hides_sk_multi_eval rigidLav responseCs responseZs [mk1 (-1)]
+    (by decide) rfl (by decide) (by decide) (by decide)
+#guard (lavEval H rigidLav [] 0 0 [mk1 1] [mk1 4]).isNone
+#guard (lavEval H rigidLav [] 0 0 [mk1 1] [mk1 5]).isNone
+#guard (lavEval H rigidLav [] 0 0 [mk1 2] [mk1 (-2)]).isNone
+#guard (lavEval H rigidLav [] 0 0 [mk1 1] []).isNone
+#guard !lavVerify H lavPP keyDigest ringD 0 5 (evalAt 0 5 zKey).1 { (evalAt 0 5 zKey).2 with z := zKey }
+#guard !lavVerify H lavPP keyDigest ringD 0 5 (evalAt 0 5 zKey).1 { (evalAt 0 5 zKey).2 with wA := [] }
+#guard !lavVerify H lavPP keyDigest ringD 0 5 (evalAt 0 5 zKey).1 { (evalAt 0 5 zKey).2 with wB := [] }
+#guard !lavVerify H lavPP keyDigest ringD 0 5 (evalAt 0 5 zKey).1
+  { (evalAt 0 5 zKey).2 with u := ((evalAt 0 5 zKey).2.u.map (intAdd (mk2 lavPP.q 0))) }
+#guard !( { rigidLav with q := 39 } : LavParams 1).wfB
+#guard !( { rigidLav with cMax := 1 } : LavParams 1).wfB
+#guard !( { rigidLav with gamma := 2 } : LavParams 1).wfB
+#guard match hash_frame_binding (fun _ => []) (a₁ := [1]) (b₁ := []) (c₁ := [])
+    (a₂ := [2]) (b₂ := []) (c₂ := []) rfl with
+  | .inl _ => false
+  | .inr w => w.transcript.pre₁ == encodeFrameList [1] [] [] && w.transcript.pre₂ == encodeFrameList [2] [] []
+
+-- Small explicit transcripts keep all three extraction branches kernel-checkable.
+private def forkPP : LavParams 1 := ⟨37, 2, 1, 2, 4, 3, 1, List.replicate 3 [mk1 1, mk1 1, mk1 0]⟩
+private def forkH : Hash := fun _ => [1]
+private def forkπ₁ : LavProof 1 := ⟨List.replicate 3 (mk1 1), [mk1 2], List.replicate 3 (mk1 0), [mk1 36], [mk1 2, mk1 0, mk1 1]⟩
+private def forkπ₂ : LavProof 1 := ⟨List.replicate 3 (mk1 1), [mk1 2], List.replicate 3 (mk1 0), [mk1 36], [mk1 0, mk1 2, mk1 1]⟩
+private def forkπ₃ : LavProof 1 := ⟨List.replicate 3 (mk1 2), [mk1 2], List.replicate 3 (mk1 0), [mk1 36], [mk1 2, mk1 2, mk1 (-1)]⟩
+private def forkKD := lavKeyDigest forkH forkπ₁.pk
+private theorem forkB : lavHashMatrix forkH forkPP (lavSeed forkH [] 0 0) = [[mk1 1, mk1 1, mk1 1]] := by decide +kernel
+macro "forkAlgebra" : tactic => `(tactic| (
+  try simp only [lavHashImage, forkB]
+  simp only [lavImage, lavHashImage, lavMatImage, forkB, forkPP, forkπ₁, forkπ₂, forkπ₃,
+    polyVecAddMod, polyVecScaleMod, reduceVecMod, lavLin, List.map_replicate,
+    List.zipWith_replicate, List.map_cons, List.map_nil, List.zipWith_cons_cons,
+    List.zipWith_nil_left, List.cons.injEq, and_true]
+  first | apply congrArg (List.replicate 3) | skip
+  apply Sized.ext
+  funext k
+  have hk : k = 0 := Fin.ext (by have := k.isLt; omega)
+  subst k
+  simp only [reducePolyMod_spec, rowDot, addFast_eq_spec, scaleFast_eq_spec,
+    zeroVec_spec, negacyclicMulFast_eq_spec]
+  decide +kernel))
+private def fork₁ : LavRewind forkH forkPP [] 0 0 forkπ₁ :=
+  ⟨1, [mk1 1, mk1 0, mk1 0], by decide, by decide, by decide +kernel,
+    by decide, by decide, by forkAlgebra, by forkAlgebra⟩
+private def fork₂ : LavRewind forkH forkPP [] 0 0 forkπ₂ :=
+  ⟨1, [mk1 0, mk1 1, mk1 0], by decide, by decide, by decide +kernel,
+    by decide, by decide, by forkAlgebra, by forkAlgebra⟩
+private def fork₃ : LavRewind forkH forkPP [] 0 0 forkπ₃ :=
+  ⟨1, [mk1 1, mk1 1, mk1 (-1)], by decide, by decide, by decide +kernel,
+    by decide, by decide, by forkAlgebra, by forkAlgebra⟩
+private theorem forkAccepted₁ : lavVerify forkH forkPP forkKD [] 0 0 [1] forkπ₁ = true := by
+  simp only [lavVerify, Bool.and_eq_true, decide_eq_true_eq]
+  refine ⟨⟨⟨by decide, by decide +kernel⟩, by decide⟩, ?_, ?_, by decide +kernel⟩
+  · forkAlgebra
+  · forkAlgebra
+private theorem forkAccepted₂ : lavVerify forkH forkPP forkKD [] 0 0 [1] forkπ₂ = true := by
+  simp only [lavVerify, Bool.and_eq_true, decide_eq_true_eq]
+  refine ⟨⟨⟨by decide, by decide +kernel⟩, by decide⟩, ?_, ?_, by decide +kernel⟩
+  · forkAlgebra
+  · forkAlgebra
+private theorem forkAccepted₃ : lavVerify forkH forkPP forkKD [] 0 0 [1] forkπ₃ = true := by
+  simp only [lavVerify, Bool.and_eq_true, decide_eq_true_eq]
+  refine ⟨⟨⟨by decide, by decide +kernel⟩, by decide⟩, ?_, ?_, by decide +kernel⟩
+  · forkAlgebra
+  · forkAlgebra
+#guard forkPP.wfB
+#guard match extractLavUniqueOrMsis forkH forkPP forkKD [] 0 0 [1] [1] forkπ₁ forkπ₂
+    forkAccepted₁ forkAccepted₂ fork₁ fork₂ with
+  | .inr (.inl w) => w.w.length == forkPP.cols && lavShort forkPP.sisBound w.w &&
+      w.w.any (fun a => a != zeroVec 1) && (lavImage forkPP w.w).all (fun a => a == zeroVec 1)
+  | _ => false
+#guard match extractLavUniqueOrMsis forkH forkPP forkKD [] 0 0 [1] [1] forkπ₁ forkπ₁
+    forkAccepted₁ forkAccepted₁ fork₁ fork₁ with
+  | .inl _ => true
+  | _ => false
+#guard match extractLavUniqueOrMsis forkH forkPP forkKD [] 0 0 [1] [1] forkπ₁ forkπ₃
+    forkAccepted₁ forkAccepted₃ fork₁ fork₃ with
+  | .inr (.inr w) => w.transcript.pre₁ == lavKeyPreimage forkπ₁.pk &&
+      w.transcript.pre₂ == lavKeyPreimage forkπ₃.pk && w.transcript.pre₁ != w.transcript.pre₂
+  | _ => false
+
+-- Every coefficient vector is included, with the constant fixed; the map changes the random tail.
+theorem seven_prime : IsPrimeNat 7 := by
+  refine ⟨by decide, ?_⟩
+  intro d hd
+  have hb : d ≤ 7 := Nat.le_of_dvd (by decide) hd
+  have hm : 7 % d = 0 := Nat.mod_eq_zero_of_dvd hd
+  have hcases : ∀ d : Nat, d ≤ 7 → 7 % d = 0 → d = 1 ∨ d = 7 := by decide
+  exact hcases d hb hm
+example : let P := fun s => {p : ShamirPoly 7 3 // shamirPolyEval p 0 = s}
+    ∃ (F : P 2 → P 5) (G : P 5 → P 2),
+      (∀ p, G (F p) = p) ∧ (∀ p, F (G p) = p) ∧
+      ∀ p, ([1, 2] : List (Fin 7)).map (shamirPolyEval (F p).val) =
+        [1, 2].map (shamirPolyEval p.val) :=
+  shamir_below_threshold_uniform_privacy seven_prime [1, 2] (by decide) (by decide) 2 5
+def sep : ShamirPoly 7 3 := shamirSeparator [1, 2]
+def randomPoly : ShamirPoly 7 3 := (2, 3, 4, ())
+def coupledPoly : ShamirPoly 7 3 := shamirTranslate sep 3 randomPoly
+example : shamirPolyEval sep 0 = 1 ∧ shamirPolyEval sep 1 = 0 ∧ shamirPolyEval sep 2 = 0 := by decide
+example : shamirPolyEval randomPoly 0 = 2 ∧ shamirPolyEval coupledPoly 0 = 5 ∧
+    ([1, 2] : List (Fin 7)).map (shamirPolyEval randomPoly) =
+      [1, 2].map (shamirPolyEval coupledPoly) := by decide
+example : shamirTranslate sep (-3) coupledPoly = randomPoly := by decide
+-- Omitting the separator or allowing evaluation point zero leaks the secret.
+example : shamirPolyEval coupledPoly 0 ≠ shamirPolyEval randomPoly 0 := by decide
+example : shamirPolyEval (shamirTranslate (1, 0, 0, ()) 3 randomPoly) 1 ≠
+    shamirPolyEval randomPoly 1 := by decide
+example : 9 ≤ ((smudgeSupport 5).filter fun e => decide (-5 ≤ e + 2 ∧ e + 2 ≤ 5)).length ∧
+    ∀ y : Int, -5 + 2 ≤ y → y ≤ 5 - 2 → ∃ e ∈ smudgeSupport 5, e + 2 = y :=
+  tulva_smudge_shift_overlap_bound 5 2 2 (by decide)
+example : ∀ y : Int, -5 + 3 ≤ y → y ≤ 5 - 3 → ∃ e ∈ smudgeSupport 5, e - 3 = y :=
+  (tulva_smudge_shift_overlap_bound 5 3 (-3) (by decide)).2
+
+-- The field hypothesis matters: a single share at 2 modulo 8 reveals secret parity.
+example : ∀ r : Fin 8, shamirPolyEval (n := 2) ((2 : Fin 8), r, ()) (2 : Fin 8) ≠
+    shamirPolyEval (n := 2) ((3 : Fin 8), 0, ()) 2 := by decide
+
+-- An inhabited 40-bit flooding profile with explicit weighted-noise headroom.
+def smallFlood : TulvaProfile := ⟨⟨1, 2 ^ 48, 16⟩, 2, 1, 1, 2 ^ 40, 40⟩
+def smallEntries : List (Int × TulvaShare 1) := [(2, ⟨1, [], mk1 0⟩), (-1, ⟨2, [], mk1 0⟩)]
+example : (7 : Int).natAbs ≤ 1 + 3 * 2 ^ 40 ∧ 1 + 3 * 2 ^ 40 < 2 ^ 48 / (2 * 16) ∧
+    -(2 ^ 48 : Int) < 7 ∧ (7 : Int) < 2 ^ 48 :=
+  tulva_smudge_no_wraparound (fun _ => []) smallFlood [] ⟨mk1 0, mk1 0⟩ smallEntries
+    (by decide) 1 6 (by decide) (by decide)
+#guard (computePartialShare ppS 1 (mk1 1) (mk1 2) (mk1 3)).sharePoly ==
+  (computePartialShare ppS 1 (mk1 0) (mk1 2) (mk1 5)).sharePoly
+
+-- Commitment first, opens later. A withheld or malformed last share loses its entire bond.
+def releaseTurn : AuctionTurn (cfg 4) := mkTurn 4 0 5 [1] 111
+def releaseTag : List UInt8 := tulvaTag H releaseTurn.context releaseTurn.ct
+def openAt (id : Nat) : BondedShareOpening 2 :=
+  ⟨shareAt releaseTurn.context releaseTurn.ct id, [id.toUInt8, 77]⟩
+def member (id : Nat) (weight : Int) (bond : Nat) (o : BondedShareOpening 2 := openAt id) :
+    BondedCommitteeMember :=
+  ⟨id, weight, bond, ⟨commitShare H releaseTag id o, poseidon2Hash32_length _⟩⟩
+def committee : List BondedCommitteeMember := [member 1 2 10, member 2 (-1) 20]
+def allOpen : Nat → Option (BondedShareOpening 2) := fun id => some (openAt id)
+def lastWithholds : Nat → Option (BondedShareOpening 2) := fun id => if id = 2 then none else allOpen id
+def wrongSalt : Nat → Option (BondedShareOpening 2) := fun id =>
+  if id = 2 then some { openAt id with salt := [] } else allOpen id
+def badOpen : BondedShareOpening 2 :=
+  { openAt 2 with share := { (openAt 2).share with sharePoly := mk2 (-1) 0 } }
+def badCommittee : List BondedCommitteeMember := [member 1 2 10, member 2 (-1) 20 badOpen]
+def badOpens : Nat → Option (BondedShareOpening 2) := fun id =>
+  if id = 2 then some badOpen else allOpen id
+#guard bondedLockCheck 2 committee
+#guard !bondedLockCheck 3 committee
+#guard !bondedLockCheck 0 committee
+#guard !bondedLockCheck 2 [member 1 2 10, member 1 (-1) 20]
+#guard !bondedLockCheck 2 [member 1 2 0, member 2 (-1) 20]
+#guard (bondedAuctionResolve H pp.q releaseTag committee allOpen 7).slashedTotal == 7
+#guard (bondedAuctionResolve H pp.q releaseTag committee allOpen 7).refunds == [(1, 10), (2, 20)]
+#guard (bondedAuctionResolve H pp.q releaseTag committee lastWithholds 7).slashedTotal == 27
+#guard (bondedAuctionResolve H pp.q releaseTag committee wrongSalt 7).slashedTotal == 27
+#guard (bondedAuctionResolve H pp.q releaseTag committee wrongSalt 7).refunds == [(1, 10), (2, 0)]
+#guard (bondedAuctionResolve H pp.q releaseTag badCommittee badOpens 7).slashedTotal == 27
+#guard commitShare H releaseTag 1 (openAt 1) != commitShare H releaseTag 2 (openAt 1)
+#guard commitShare H releaseTag 1 (openAt 1) != commitShare H [0] 1 (openAt 1)
+#guard commitShare H releaseTag 1 (openAt 1) != commitShare H releaseTag 1 { openAt 1 with salt := [] }
+#guard commitShare H releaseTag 1 (openAt 1) != commitShare H releaseTag 1
+  { openAt 1 with share := { (openAt 1).share with point := 2 } }
+#guard commitShare H releaseTag 1 (openAt 1) != commitShare H releaseTag 1
+  { openAt 1 with share := { (openAt 1).share with tag := [] } }
+#guard commitShare H releaseTag 1 (openAt 1) != commitShare H releaseTag 1
+  { openAt 1 with share := { (openAt 1).share with sharePoly := mk2 0 0 } }
+def bondedInit : BondedAuctionState := ⟨.init, 0, [], [], 0, none⟩
+def bondedActions (opens : Nat → Option (BondedShareOpening 2)) : List (BondedAuctionAction (cfg 4)) :=
+  [.commit releaseTag committee, .resolve releaseTurn opens]
+#guard (bondedAuctionRun H (cfg 4) bondedInit (bondedActions allOpen)).auction.epoch == 1
+#guard (bondedAuctionRun H (cfg 4) bondedInit (bondedActions allOpen)).slashedTotal == 0
+#guard (bondedAuctionRun H (cfg 4) bondedInit (bondedActions lastWithholds)).auction.epoch == 0
+#guard (bondedAuctionRun H (cfg 4) bondedInit (bondedActions lastWithholds)).slashedTotal == 20
+#guard (bondedAuctionRun H (cfg 4) bondedInit (bondedActions lastWithholds)).released == 2
+#guard (bondedAuctionRun H (cfg 4) bondedInit [.resolve releaseTurn allOpen]).auction.epoch == 0
+#guard (bondedAuctionRun H (cfg 4) bondedInit
+  (bondedActions lastWithholds ++ [.resolve releaseTurn lastWithholds])).slashedTotal == 20
+#guard (bondedAuctionRun H (cfg 4) bondedInit
+  (bondedActions lastWithholds ++ [.commit releaseTag committee])).pending.isNone
+#guard (bondedAuctionRun H (cfg 4) bondedInit
+  [.commit releaseTag [member 1 2 10], .resolve releaseTurn allOpen]).auction.epoch == 0
+example : BondedAuctionInv (cfg 4) bondedInit := by intro tag ms h; cases h
+#guard (bondedAuctionRun H (cfg 4) bondedInit
+  (bondedActions lastWithholds ++ [.commit [99] (committee ++ [member 3 1 30])])).pending.isNone
+
 -- ============================================================================
 -- 5. Teeth
 -- ============================================================================
+
+-- The mutation tool accepts theorems; these retain the executable extractors in their proof terms.
+theorem hash_frame_binding_tooth (H : Hash) {a₁ b₁ c₁ a₂ b₂ c₂ : List UInt8}
+    (h : H (encodeFrameList a₁ b₁ c₁) = H (encodeFrameList a₂ b₂ c₂)) : Nonempty (    PSum (a₁ = a₂ ∧ b₁ = b₂ ∧ c₁ = c₂)
+      (ExactCollision H (encodeFrameList a₁ b₁ c₁) (encodeFrameList a₂ b₂ c₂))) :=
+  ⟨Obend.Crypto.hash_frame_binding H h⟩
+
+theorem tulvaTag_binds_query_tooth (H : Hash) (ctx₁ ctx₂ : List UInt8) {d : Nat}
+    (ct₁ ct₂ : RlweCiphertext d) (h : tulvaTag H ctx₁ ct₁ = tulvaTag H ctx₂ ct₂) : Nonempty (    PSum (ctx₁ = ctx₂ ∧ ct₁ = ct₂) (ExactCollision H
+      (encodeFrameList tulvaTagDomain ctx₁ (ciphertextBytes ct₁))
+      (encodeFrameList tulvaTagDomain ctx₂ (ciphertextBytes ct₂)))) :=
+  ⟨Obend.Crypto.tulvaTag_binds_query H ctx₁ ctx₂ ct₁ ct₂ h⟩
+
+theorem bitzCommit_binding_tooth (H : Hash) (w₁ w₂ : Nat) (rows₁ rows₂ : List (List Int))
+    (h : bitzCommit H w₁ rows₁ = bitzCommit H w₂ rows₂) : Nonempty (    PSum (w₁ = w₂ ∧ rows₁ = rows₂) (ExactCollision H
+      (encodeFrameList bitzDomain (leb128 w₁) (encodeIntRows rows₁))
+      (encodeFrameList bitzDomain (leb128 w₂) (encodeIntRows rows₂)))) :=
+  ⟨Obend.Crypto.bitzCommit_binding H w₁ w₂ rows₁ rows₂ h⟩
+
+theorem bitz_sameOpening_and_free_range_sound_tooth (H : Hash) (q width : Nat)
+    (commitment : List UInt8) (rows : List (List Int)) (claims : List BitzClaim)
+    (h : bitzVerify H q width commitment rows claims = true) : Nonempty (    PProd (rows.length = claims.length ∧ ∀ row cl, (row, cl) ∈ rows.zip claims →
+      ∃ n : Nat, n < 2 ^ width ∧ psiZ row = n ∧ cl.rq = n ∧ cl.fp.val = n)
+    (∀ rows', bitzCommit H width rows' = commitment → PSum (rows' = rows)
+      (ExactCollision H (encodeFrameList bitzDomain (leb128 width) (encodeIntRows rows'))
+        (encodeFrameList bitzDomain (leb128 width) (encodeIntRows rows))))) :=
+  ⟨Obend.Crypto.bitz_sameOpening_and_free_range_sound H q width commitment rows claims h⟩
+
+theorem lavSeed_binds_tooth (H : Hash) (r₁ r₂ : List UInt8) (e₁ e₂ s₁ s₂ : Nat)
+    (h : lavSeed H r₁ e₁ s₁ = lavSeed H r₂ e₂ s₂) : Nonempty (    PSum (r₁ = r₂ ∧ e₁ = e₂ ∧ s₁ = s₂)
+      (ExactCollision H (lavInput r₁ e₁ s₁) (lavInput r₂ e₂ s₂))) :=
+  ⟨Obend.Crypto.lavSeed_binds H r₁ r₂ e₁ e₂ s₁ s₂ h⟩
+
+theorem lav_unique_output_or_msisBreak_tooth {d : Nat} (H : Hash) (pp : LavParams d)
+    (keyDigest ring : List UInt8) (epoch slot : Nat) (v₁ v₂ : List UInt8) (π₁ π₂ : LavProof d)
+    (h₁ : lavVerify H pp keyDigest ring epoch slot v₁ π₁ = true)
+    (h₂ : lavVerify H pp keyDigest ring epoch slot v₂ π₂ = true)
+    (f₁ : LavRewind H pp ring epoch slot π₁) (f₂ : LavRewind H pp ring epoch slot π₂) : Nonempty (    PSum (v₁ = v₂) (PSum (MsisBreakWitness pp) (ExactCollision H (lavKeyPreimage π₁.pk) (lavKeyPreimage π₂.pk)))) :=
+  Obend.Crypto.lav_unique_output_or_msisBreak H pp keyDigest ring epoch slot v₁ v₂ π₁ π₂ h₁ h₂ f₁ f₂
+
+theorem bondedShareCommit_binding_or_collision_tooth (H : Hash) {d : Nat} (tag₁ tag₂ : List UInt8)
+    (id₁ id₂ : Nat) (o₁ o₂ : BondedShareOpening d)
+    (h : commitShare H tag₁ id₁ o₁ = commitShare H tag₂ id₂ o₂) : Nonempty (    PSum (tag₁ = tag₂ ∧ id₁ = id₂ ∧ o₁ = o₂) (ExactCollision H
+      (encodeFrameList [66, 79, 78, 68, 45, 83, 72, 65, 82, 69] tag₁ (shareOpeningBytes id₁ o₁))
+      (encodeFrameList [66, 79, 78, 68, 45, 83, 72, 65, 82, 69] tag₂ (shareOpeningBytes id₂ o₂)))) :=
+  ⟨Obend.Crypto.bondedShareCommit_binding_or_collision H tag₁ tag₂ id₁ id₂ o₁ o₂ h⟩
+
+theorem lav_T_uniqueness_tooth {d : Nat} (H : Hash) (pp : LavParams d) (ringKeys : List (List UInt8))
+    (epoch slot : Nat) (tickets : List (LavTicket d))
+    (hc : ∀ t ∈ tickets, lavRingVerify H pp ringKeys epoch slot t = true)
+    (hf : ∀ t ∈ tickets, LavRewind H pp (lavRingDigest H ringKeys) epoch slot t.proof)
+    (hn : (tickets.map (·.output)).Nodup) :
+    Nonempty (PSum (tickets.map (·.keyIndex)).Nodup (PSum (MsisBreakWitness pp) (TranscriptCollision H))) :=
+  ⟨lav_T_uniqueness H pp ringKeys epoch slot tickets hc hf hn⟩
 
 -- Accepting any interpolation coefficients breaks reconstruction.
 #tooth Obend.Crypto.tulvaCombine_recovers_plaintext by mutation
@@ -432,32 +710,67 @@ def runEpoch (budget : Nat) (turns : List (AuctionTurn (cfg budget))) : Option N
   Obend.Crypto.SmudgeSafe := fun _ _ _ => True
 
 -- Without booleanity there is no range.
-#tooth Obend.Crypto.bitz_sameOpening_and_free_range_sound by mutation
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.bitz_sameOpening_and_free_range_sound_tooth by mutation
   Obend.Crypto.checkBooleanRow := fun _ => true
 
 -- A recomposition that does not reduce modulo `q` is not the `ℤ_q` image.
-#tooth Obend.Crypto.bitz_sameOpening_and_free_range_sound by mutation
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.bitz_sameOpening_and_free_range_sound_tooth by mutation
   Obend.Crypto.psiRq := fun _ row => Obend.Crypto.psiZ row
 
 -- A commitment that drops the rows binds nothing.
-#tooth Obend.Crypto.bitzCommit_binding by mutation
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.bitzCommit_binding_tooth by mutation
   Obend.Crypto.encodeIntRows := fun _ => []
 
--- Without the norm bound the difference of two witnesses is not short.
-#tooth Obend.Crypto.lav_unique_output_or_msisBreak by mutation
-  Obend.Crypto.lavShort := fun _ _ => true
+-- Removing the computed cross-difference breaks the concrete fork extractor.
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.lav_unique_output_or_msisBreak_tooth by mutation
+  Obend.Crypto.lavVecSub := fun _ _ => []
 
 -- An input that drops the ring, epoch and slot separates nothing.
-#tooth Obend.Crypto.lavSeed_binds by mutation
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.lavSeed_binds_tooth by mutation
   Obend.Crypto.lavInput := fun _ _ _ => []
 
 -- A ring check that accepts every ticket gives no uniqueness.
-#tooth Obend.Crypto.lav_T_uniqueness by mutation
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.lav_T_uniqueness_tooth by mutation
   Obend.Crypto.lavRingVerify := fun _ _ _ _ _ _ _ => true
 
 -- A turn check that accepts everything keeps neither the budget nor tag freshness.
 #tooth Obend.Crypto.auctionRun_safe by mutation
   Obend.Crypto.auctionTurnCheck := fun _ _ _ _ => true
+
+#tooth Obend.Crypto.lavVerify_params by mutation
+  Obend.Crypto.LavParams.wfB := fun _ => true
+#tooth Obend.Crypto.shamir_below_threshold_uniform_privacy by mutation
+  Obend.Crypto.shamirSeparator := fun C => Obend.Crypto.shamirExtend
+    (Nat.zero_le (C.length + 1)) ()
+#tooth Obend.Crypto.tulva_smudge_no_wraparound by mutation
+  Obend.Crypto.tulvaNoiseTotal := fun _ _ _ => 0
+#tooth Obend.Crypto.tulva_smudge_shift_overlap_bound by mutation
+  Obend.Crypto.smudgeUncoupled := fun _ _ => []
+#tooth Obend.Crypto.bondedAuctionResolve_slashes by mutation
+  Obend.Crypto.bondedAuctionResolve := fun _ _ _ _ _ _ total => ⟨total, [], []⟩
+#tooth Obend.Crypto.bondedAuctionResolve_conserves by mutation
+  Obend.Crypto.bondedAuctionResolve := fun _ _ _ _ _ _ _ => ⟨0, [], []⟩
+#tooth Obend.Crypto.honest_member_never_slashed by mutation
+  Obend.Crypto.bondedSlash := fun _ _ _ _ m _ => m.bond
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.bondedShareCommit_binding_or_collision_tooth by mutation
+  Obend.Crypto.shareOpeningBytes := fun _ _ => []
+#tooth Obend.Crypto.bondedOpeningValid_refused by mutation
+  Obend.Crypto.bondedOpeningValid := fun _ _ _ _ _ _ => true
+#tooth Obend.Crypto.bondedAuctionRun_locked by mutation
+  Obend.Crypto.bondedLockCheck := fun _ _ => true
+
+#tooth Obend.Crypto.lav_response_hides_sk_multi_eval by mutation
+  Obend.Crypto.lavResponse := fun _ sk _ => sk
+#tooth Obend.Crypto.lav_response_hides_sk_multi_eval by mutation
+  Obend.Crypto.lavMaskShift := fun _ _ z => z
+#tooth Obend.Crypto.lavEval_complete by mutation
+  Obend.Crypto.lavResponse := fun _ sk _ => sk
+#tooth Obend.Crypto.lavSimulate_correct by mutation
+  Obend.Crypto.lavSimulate := fun _ _ _ _ pk u _ z => ⟨pk, u, pk, u, z⟩
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.hash_frame_binding_tooth by mutation
+  Obend.Crypto.encodeFrameList := fun _ _ _ => []
+#tooth Obend.Tests.ThresholdFheAndLatticeVrfTest.tulvaTag_binds_query_tooth by mutation
+  Obend.Crypto.ciphertextBytes := fun _ => []
 
 -- ============================================================================
 -- 6. Axiom audit
@@ -465,26 +778,60 @@ def runEpoch (budget : Nat) (turns : List (AuctionTurn (cfg budget))) : Option N
 
 #assert_axioms_tree
 
--- No definition of the module (the checkers, the combiner, the evaluator, the machine) is
--- noncomputable, and none mentions a `Classical` constant in its body: every case split that
--- computes goes through a `Decidable` instance. (Proofs carried inside definitions, such as the
--- range proof of `goldOfInt`, are not computation and are covered by the audit above.)
+-- Check safe definitions, including proof dependencies, for classical choice and compiler trust.
+-- Retain the dependency path to make a future regression actionable.
 open Lean Elab Command in
 run_cmd do
-  let env ← getEnv
+  let env := (← getEnv).setExporting false
   let mut seen := 0
+  let mut theorems := 0
   for (name, info) in env.constants.map₁.toList do
     let some idx := env.getModuleIdxFor? name | continue
     unless env.header.moduleNames[idx.toNat]? == some `Obend.Crypto.ThresholdFheAndLatticeVrf do continue
+    if let .thmInfo v := info then
+      -- Derived constructor size laws are generated, not authored library theorems.
+      unless name.isInternal || name.isInternalDetail || name.getString! == "sizeOf_spec" do
+        if ← liftTermElabM (Obend.AssertAxioms.closedStatement v.type) then
+          throwError m!"closed library theorem: {name}"
+        theorems := theorems + 1
     let .defnInfo v := info | continue
     unless v.safety == .safe do continue
     seen := seen + 1
+    let axioms ← liftCoreM <| Lean.collectAxioms name
+    if axioms.contains ``Classical.choice then
+      let mut todo : List (Name × List Name) := [(name, [name])]
+      let mut visited : NameSet := {}
+      while !todo.isEmpty do
+        let (n, path) := todo.head!
+        todo := todo.tail!
+        if visited.contains n then continue
+        visited := visited.insert n
+        let some ci := env.checked.get.find? n | throwError m!"missing classical dependency: {path.reverse}"
+        let val := match ci with
+          | .defnInfo v => some v.value
+          | .thmInfo v => some v.value
+          | .opaqueInfo v => some v.value
+          | _ => none
+        let deps := (val.getD ci.type).getUsedConstantsAsSet.toList ++ ci.type.getUsedConstantsAsSet.toList
+        let mut followed := false
+        for c in deps do
+          if c == ``Classical.choice then throwError m!"classical dependency: {path.reverse} -> {c}"
+          let ca ← liftCoreM <| Lean.collectAxioms c
+          if ca.contains ``Classical.choice then
+            followed := true
+            todo := (c, c :: path) :: todo
+        unless followed do throwError m!"opaque classical dependency: {path.reverse}"
+      throwError m!"definition {name} transitively uses Classical.choice"
+    for ax in axioms do
+      unless ax == ``propext || ax == ``Quot.sound do
+        throwError m!"definition {name} depends on forbidden axiom {ax}"
     if Lean.isNoncomputable env name then
       throwError m!"noncomputable definition: {name}"
     for c in v.value.getUsedConstantsAsSet.toList do
       if c.getRoot == `Classical then
         throwError m!"definition {name} computes through {c}"
   if seen == 0 then throwError "no definitions of the module were visible to the audit"
+  logInfo m!"A2 audit: {seen} safe definitions have no classical choice or compiler trust; {theorems} library theorems are non-closed."
 
 end Obend.Tests.ThresholdFheAndLatticeVrfTest
 end

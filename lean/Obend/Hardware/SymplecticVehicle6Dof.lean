@@ -6,12 +6,12 @@ import Std.Tactic
 public section
 
 /-! Exact rational discrete vehicle mechanics. No floating-point orthogonalization is used.
-The thermal model has three unit-heat-capacity nodes and integrated heat/conductance inputs.
+The thermal model has three positive-heat-capacity nodes and integrated heat/conductance inputs.
 Radiation is to a zero-Kelvin sink; the CFL condition includes the explicit sink-energy budget.
 Tank stations use a fixed body construction datum; moment arms subtract the recomputed CoM.
 The pose position tracks the spatial CoM. Separation is the common-point lumped-stage model.
 External force/torque and aerodynamic q/alpha are scenario inputs; axial load is checked against
-integrator force. Corridor claims concern discrete samples, not continuous ODE trajectories.
+integrator force. Swept corridors enclose trajectories under an explicit acceleration remainder bound.
 The Array checker refines the linked List semantics, including the initial and final states. -/
 namespace Obend.Hardware.SymplecticVehicle6Dof
 set_option autoImplicit false
@@ -248,6 +248,62 @@ structure SPD (m : Mat3Q) : Prop where
   symmetric : transpose m = m
   positive : ∀ v : Vec3Q, v ≠ zero → 0 < dot v (act m v)
 
+structure InertiaTensor3 where
+  ixx : Rat
+  iyy : Rat
+  izz : Rat
+  ixy : Rat := 0
+  ixz : Rat := 0
+  iyz : Rat := 0
+  deriving DecidableEq, Repr
+
+def InertiaTensor3.toMat (j : InertiaTensor3) : Mat3Q :=
+  ⟨j.ixx,j.ixy,j.ixz,j.ixy,j.iyy,j.iyz,j.ixz,j.iyz,j.izz⟩
+def InertiaTensor3.minor2 (j : InertiaTensor3) : Rat := j.ixx*j.iyy-j.ixy*j.ixy
+@[expose] def SylvesterPos (j : InertiaTensor3) : Prop :=
+  0 < j.ixx ∧ 0 < j.minor2 ∧ 0 < det3 j.toMat
+instance (j : InertiaTensor3) : Decidable (SylvesterPos j) := by unfold SylvesterPos; infer_instance
+
+theorem square_positive (x : Rat) (hx : x ≠ 0) : 0 < x*x := by
+  have hn := square_nonneg x
+  have he : x*x ≠ 0 := by intro h; apply hx; grind
+  exact Rat.lt_of_le_of_ne hn (Ne.symm he)
+
+/-- Denominator-free LDLᵀ completion of squares, including all three products of inertia. -/
+theorem sylvester_square_identity (j : InertiaTensor3) (v : Vec3Q) :
+    j.ixx*j.minor2*dot v (act j.toMat v) =
+      j.minor2*((j.ixx*v.x+j.ixy*v.y+j.ixz*v.z)*(j.ixx*v.x+j.ixy*v.y+j.ixz*v.z)) +
+      (j.minor2*v.y+(j.ixx*j.iyz-j.ixy*j.ixz)*v.z)*(j.minor2*v.y+(j.ixx*j.iyz-j.ixy*j.ixz)*v.z) +
+      j.ixx*det3 j.toMat*(v.z*v.z) := by
+  simp only [InertiaTensor3.minor2, InertiaTensor3.toMat, det3, dot, act]; grind
+
+theorem sylvester_spd (j : InertiaTensor3) (h : SylvesterPos j) : SPD j.toMat := by
+  refine ⟨rfl, ?_⟩
+  intro v hv
+  let a := j.ixx*v.x+j.ixy*v.y+j.ixz*v.z
+  let b := j.minor2*v.y+(j.ixx*j.iyz-j.ixy*j.ixz)*v.z
+  have ha := Rat.mul_nonneg (Rat.le_of_lt h.2.1) (square_nonneg a)
+  have hb := square_nonneg b
+  have hz := Rat.mul_nonneg (Rat.le_of_lt (Rat.mul_pos h.1 h.2.2)) (square_nonneg v.z)
+  have hid := sylvester_square_identity j v
+  have hpos : 0 < j.minor2*(a*a)+b*b+j.ixx*det3 j.toMat*(v.z*v.z) := by
+    by_cases vz : v.z = 0
+    · by_cases vy : v.y = 0
+      · have vx : v.x ≠ 0 := by intro vx; apply hv; cases v; simp_all [zero]
+        have an : a ≠ 0 := by dsimp [a]; intro he; have := Rat.ne_of_gt h.1; grind
+        have := Rat.mul_pos h.2.1 (square_positive a an); grind
+      · have bn : b ≠ 0 := by dsimp [b]; intro he; have := Rat.ne_of_gt h.2.1; grind
+        have := square_positive b bn; grind
+    · have := Rat.mul_pos (Rat.mul_pos h.1 h.2.2) (square_positive v.z vz); grind
+  have hp := Rat.mul_pos h.1 h.2.1
+  change 0 < j.minor2*(a*a)+b*b+j.ixx*det3 j.toMat*(v.z*v.z) at hpos
+  have hq : 0 < j.ixx*j.minor2*dot v (act j.toMat v) := by simpa only [hid] using hpos
+  have hn : ¬ dot v (act j.toMat v) ≤ 0 := by
+    intro he
+    have := Rat.mul_le_mul_of_nonneg_left he (Rat.le_of_lt hp)
+    grind
+  grind
+
 theorem lagrange_identity (r v : Vec3Q) :
     normSq r * normSq v - dot r v * dot r v = normSq (cross r v) := by
   simp only [normSq, dot, cross]; grind
@@ -321,13 +377,28 @@ theorem depleteTank_nonneg (t : TankState) (d : TankDraw) (h : DrawValid t d) :
 def drawTanks (ts : List TankState) (ds : List TankDraw) : List TankState := List.zipWith depleteTank ts ds
 
 def nozzleThrust (flow exhaust exitPressure ambient area : Rat) : Rat :=
-  flow * exhaust + (exitPressure-ambient)*area
+  if flow = 0 then 0 else flow * exhaust + (exitPressure-ambient)*area
 
-def gimbalDirection (u : Vec3Q) : Vec3Q := act (cayleyDelta u) ⟨0,0,1⟩
-theorem gimbalDirection_unit (u : Vec3Q) : normSq (gimbalDirection u) = 1 := by
+structure GimbalAngles where
+  pitch : Rat
+  yaw : Rat
+  deriving DecidableEq, Repr
+/-- Two-axis Cayley chart on the unit sphere, with no redundant roll command. -/
+def gimbalDirection (u : GimbalAngles) : Vec3Q := act (cayleyDelta ⟨u.pitch,u.yaw,0⟩) ⟨0,0,1⟩
+theorem gimbalDirection_unit (u : GimbalAngles) : normSq (gimbalDirection u) = 1 := by
   simp only [gimbalDirection, normSq, dot_adjoint]
-  rw [← act_mul, (cayleyDelta_so3 u).1, act_eye]
+  rw [← act_mul, (cayleyDelta_so3 ⟨u.pitch,u.yaw,0⟩).1, act_eye]
   simp only [dot]; grind
+
+structure GimbaledThruster where
+  angles : GimbalAngles
+  magnitude : Rat
+  station : Vec3Q
+  deriving DecidableEq, Repr
+def GimbaledThruster.force (g : GimbaledThruster) : Vec3Q := scale g.magnitude (gimbalDirection g.angles)
+def GimbaledThruster.torque (g : GimbaledThruster) (com : Vec3Q) : Vec3Q := cross (sub g.station com) g.force
+theorem gimbaled_torque_orthogonal (g : GimbaledThruster) (com : Vec3Q) : dot (g.torque com) g.force = 0 := by
+  simp only [GimbaledThruster.torque, cross, dot]; grind
 
 structure StageBody where
   mass : Rat
@@ -358,9 +429,10 @@ theorem staging_conserves_total_mass_and_linear_momentum
 structure ThermalState where
   kelvin : Vec3Q
   ablator : Rat
+  capacity : Vec3Q := ⟨1,1,1⟩
   deriving DecidableEq, Repr
 structure ThermalCommand where
-  /-- Integrated conductances, divided by unit nodal heat capacity. -/
+  /-- Integrated conductances; the update divides each nodal heat by its capacity. -/
   outerBond : Rat
   bondWall : Rat
   aero : Rat
@@ -375,43 +447,75 @@ def radiationLoss (c : ThermalCommand) (s : ThermalState) : Rat :=
 def shieldLoss (c : ThermalCommand) (s : ThermalState) : Rat := radiationLoss c s + c.latent*c.recession
 
 def stepThermalNetwork (s : ThermalState) (c : ThermalCommand) : ThermalState :=
-  ⟨⟨s.kelvin.x+c.outerBond*(s.kelvin.y-s.kelvin.x)+c.aero-shieldLoss c s,
-     s.kelvin.y+c.outerBond*(s.kelvin.x-s.kelvin.y)+c.bondWall*(s.kelvin.z-s.kelvin.y),
-     s.kelvin.z+c.bondWall*(s.kelvin.y-s.kelvin.z)⟩, s.ablator-c.recession⟩
-
+  { s with
+    kelvin := ⟨s.kelvin.x+(c.outerBond*(s.kelvin.y-s.kelvin.x)+c.aero-shieldLoss c s)/s.capacity.x,
+     s.kelvin.y+(c.outerBond*(s.kelvin.x-s.kelvin.y)+c.bondWall*(s.kelvin.z-s.kelvin.y))/s.capacity.y,
+     s.kelvin.z+c.bondWall*(s.kelvin.y-s.kelvin.z)/s.capacity.z⟩
+    ablator := s.ablator-c.recession }
 @[expose] def ThermalCFL (s : ThermalState) (c : ThermalCommand) : Prop :=
-  0 ≤ c.outerBond ∧ 0 ≤ c.bondWall ∧ c.outerBond+c.bondWall ≤ 1 ∧
+  0 < s.capacity.x ∧ 0 < s.capacity.y ∧ 0 < s.capacity.z ∧
+  0 ≤ c.outerBond ∧ 0 ≤ c.bondWall ∧ c.outerBond ≤ s.capacity.x ∧
+  c.outerBond+c.bondWall ≤ s.capacity.y ∧ c.bondWall ≤ s.capacity.z ∧
   0 ≤ c.aero ∧ 0 ≤ c.radiation ∧ 0 ≤ c.latent ∧ 0 ≤ c.recession ∧ c.recession ≤ s.ablator ∧
-  shieldLoss c s ≤ (1-c.outerBond)*s.kelvin.x+c.aero
+  shieldLoss c s ≤ (s.capacity.x-c.outerBond)*s.kelvin.x+c.aero
 instance (s : ThermalState) (c : ThermalCommand) : Decidable (ThermalCFL s c) := by
   unfold ThermalCFL; infer_instance
-
 @[expose] def Nonneg3 (v : Vec3Q) : Prop := 0 ≤ v.x ∧ 0 ≤ v.y ∧ 0 ≤ v.z
 instance (v : Vec3Q) : Decidable (Nonneg3 v) := by unfold Nonneg3; infer_instance
-
+private theorem capacity_update (cap t heat : Rat) (h : 0 < cap) : cap*(t+heat/cap) = cap*t+heat := by
+  have := Rat.inv_mul_cancel cap (Rat.ne_of_gt h)
+  simp only [Rat.div_def]; grind
+private theorem capacity_nonneg (cap t heat : Rat) (h : 0 < cap) (he : 0 ≤ cap*t+heat) : 0 ≤ t+heat/cap := by
+  have hc := capacity_update cap t heat h
+  have hi : 0 ≤ cap⁻¹ := Rat.le_of_lt (Rat.inv_pos.mpr h)
+  have hn := Rat.mul_nonneg he hi
+  have hi := Rat.inv_mul_cancel cap (Rat.ne_of_gt h)
+  have heq : (cap*t+heat)*cap⁻¹ = t+heat/cap := by simp only [Rat.div_def]; grind
+  rw [heq] at hn; exact hn
 theorem stepThermalNetwork_nonneg_kelvin (s : ThermalState) (c : ThermalCommand)
     (ht : Nonneg3 s.kelvin) (hc : ThermalCFL s c) :
     Nonneg3 (stepThermalNetwork s c).kelvin ∧ 0 ≤ (stepThermalNetwork s c).ablator := by
-  obtain ⟨hg, hh, hsum, ha, _, _, _, hm, hloss⟩ := hc
+  obtain ⟨cx,cy,cz,hg,hh,hx,hy,hz,_,_,_,_,hm,hl⟩ := hc
   have hgy := Rat.mul_nonneg hg ht.2.1
   have hgx := Rat.mul_nonneg hg ht.1
   have hhz := Rat.mul_nonneg hh ht.2.2
   have hhy := Rat.mul_nonneg hh ht.2.1
-  have hmid := Rat.mul_nonneg (show 0 ≤ 1-c.outerBond-c.bondWall by grind) ht.2.1
-  have hwall := Rat.mul_nonneg (show 0 ≤ 1-c.bondWall by grind) ht.2.2
-  simp only [stepThermalNetwork, Nonneg3]; grind
-
-def thermalEnergy (s : ThermalState) : Rat := s.kelvin.x+s.kelvin.y+s.kelvin.z
-
-theorem stepThermalNetwork_energy_balance (s : ThermalState) (c : ThermalCommand) :
+  have hmid := Rat.mul_nonneg (show 0 ≤ s.capacity.y-c.outerBond-c.bondWall by grind) ht.2.1
+  have hwall := Rat.mul_nonneg (show 0 ≤ s.capacity.z-c.bondWall by grind) ht.2.2
+  exact ⟨⟨capacity_nonneg _ _ _ cx (by grind), capacity_nonneg _ _ _ cy (by grind),
+    capacity_nonneg _ _ _ cz (by grind)⟩, by dsimp [stepThermalNetwork]; grind⟩
+def thermalEnergy (s : ThermalState) : Rat := dot s.capacity s.kelvin
+/-- Fixed nodal capacities; ablator latent energy exits through shieldLoss. -/
+theorem stepThermalNetwork_energy_balance (s : ThermalState) (c : ThermalCommand)
+    (hc : 0 < s.capacity.x ∧ 0 < s.capacity.y ∧ 0 < s.capacity.z) :
     thermalEnergy (stepThermalNetwork s c) = thermalEnergy s+c.aero-shieldLoss c s := by
-  simp only [thermalEnergy, stepThermalNetwork]; grind
-
+  simp only [thermalEnergy, dot, stepThermalNetwork]
+  rw [capacity_update _ _ _ hc.1, capacity_update _ _ _ hc.2.1, capacity_update _ _ _ hc.2.2]
+  grind
 theorem stepThermalNetwork_passive (s : ThermalState) (c : ThermalCommand)
     (hc : ThermalCFL s c) (ha : c.aero = 0) : thermalEnergy (stepThermalNetwork s c) ≤ thermalEnergy s := by
-  have hr := Rat.mul_nonneg (Rat.mul_nonneg hc.2.2.2.2.1 (square_nonneg s.kelvin.x)) (square_nonneg s.kelvin.x)
-  have hl := Rat.mul_nonneg hc.2.2.2.2.2.1 hc.2.2.2.2.2.2.1
-  rw [stepThermalNetwork_energy_balance]; simp only [shieldLoss, radiationLoss]; grind
+  obtain ⟨cx,cy,cz,_,_,_,_,_,_,hr,hl,hm,_,_⟩ := hc
+  have hr := Rat.mul_nonneg (Rat.mul_nonneg hr (square_nonneg s.kelvin.x)) (square_nonneg s.kelvin.x)
+  have hl := Rat.mul_nonneg hl hm
+  rw [stepThermalNetwork_energy_balance s c ⟨cx,cy,cz⟩]; simp only [shieldLoss, radiationLoss]; grind
+/-- Conduction alone obeys a discrete maximum principle for every positive nodal capacity. -/
+theorem stepThermalNetwork_maximum (s : ThermalState) (c : ThermalCommand) (m : Rat)
+    (hc : ThermalCFL s c) (ha : c.aero = 0) (hl : shieldLoss c s = 0)
+    (ht : s.kelvin.x ≤ m ∧ s.kelvin.y ≤ m ∧ s.kelvin.z ≤ m) :
+    (stepThermalNetwork s c).kelvin.x ≤ m ∧ (stepThermalNetwork s c).kelvin.y ≤ m ∧
+    (stepThermalNetwork s c).kelvin.z ≤ m := by
+  obtain ⟨cx,cy,cz,hg,hh,hx,hy,hz,_⟩ := hc
+  have h1 := Rat.mul_nonneg (show 0 ≤ s.capacity.x-c.outerBond by grind) (show 0 ≤ m-s.kelvin.x by grind)
+  have h2 := Rat.mul_nonneg hg (show 0 ≤ m-s.kelvin.y by grind)
+  have h3 := Rat.mul_nonneg hg (show 0 ≤ m-s.kelvin.x by grind)
+  have h4 := Rat.mul_nonneg (show 0 ≤ s.capacity.y-c.outerBond-c.bondWall by grind) (show 0 ≤ m-s.kelvin.y by grind)
+  have h5 := Rat.mul_nonneg hh (show 0 ≤ m-s.kelvin.z by grind)
+  have h6 := Rat.mul_nonneg hh (show 0 ≤ m-s.kelvin.y by grind)
+  have h7 := Rat.mul_nonneg (show 0 ≤ s.capacity.z-c.bondWall by grind) (show 0 ≤ m-s.kelvin.z by grind)
+  have bound (cap t q : Rat) (hp : 0 < cap) (hb : cap*t+q ≤ cap*m) : t+q/cap ≤ m := by
+    have hn := capacity_nonneg cap (m-t) (-q) hp (by grind)
+    simp only [Rat.div_def] at *; grind
+  exact ⟨bound _ _ _ cx (by grind), bound _ _ _ cy (by grind), bound _ _ _ cz (by grind)⟩
 
 structure StructuralLoad where
   dynamicPressure : Rat
@@ -446,19 +550,67 @@ structure Box3Q where
 @[expose] def InBox (v : Vec3Q) (b : Box3Q) : Prop := v.x ∈ b.x ∧ v.y ∈ b.y ∧ v.z ∈ b.z
 private instance (v : Vec3Q) (b : Box3Q) : Decidable (InBox v b) := by unfold InBox; infer_instance
 
-def discreteFlowpipe (p v : Vec3Q) (dt : Rat) : Box3Q :=
-  ⟨Analysis.stepFlowpipe1D (.ofPoint p.x) (.ofPoint v.x) dt (.ofPoint 0),
-   Analysis.stepFlowpipe1D (.ofPoint p.y) (.ofPoint v.y) dt (.ofPoint 0),
-   Analysis.stepFlowpipe1D (.ofPoint p.z) (.ofPoint v.z) dt (.ofPoint 0)⟩
-
-theorem discreteFlowpipe_encloses (p v : Vec3Q) (dt : Rat) : InBox (add p (scale dt v)) (discreteFlowpipe p v dt) := by
-  have hx := Analysis.stepFlowpipe1D_mem dt (Analysis.Interval.ofPoint_mem p.x)
-    (Analysis.Interval.ofPoint_mem v.x) (Analysis.Interval.ofPoint_mem 0)
-  have hy := Analysis.stepFlowpipe1D_mem dt (Analysis.Interval.ofPoint_mem p.y)
-    (Analysis.Interval.ofPoint_mem v.y) (Analysis.Interval.ofPoint_mem 0)
-  have hz := Analysis.stepFlowpipe1D_mem dt (Analysis.Interval.ofPoint_mem p.z)
-    (Analysis.Interval.ofPoint_mem v.z) (Analysis.Interval.ofPoint_mem 0)
-  simpa only [Rat.add_zero, InBox, add, scale, discreteFlowpipe] using And.intro hx (And.intro hy hz)
+def accelerationSlice (x v t aMax : Rat) : Analysis.Interval :=
+  ⟨x+v*t-aMax*(t*t)/2, x+v*t+aMax*(t*t)/2⟩
+/-- The Taylor remainder is a trajectory assumption, independently of the interval checker. -/
+theorem accelerationSlice_encloses (x v t aMax remainder : Rat)
+    (h : Analysis.ratAbs remainder ≤ aMax*(t*t)/2) :
+    x+v*t+remainder ∈ accelerationSlice x v t aMax := by
+  have := (Analysis.ratAbs_le_iff _ _).mp h
+  change _ ≤ _ ∧ _ ≤ _; dsimp [accelerationSlice]; grind
+/-- Exact integration of affine-in-time acceleration a₀+j·t. Endpoint acceleration bounds
+bound the whole linear acceleration segment, and its cubic position remainder. -/
+theorem affineAccelerationSlice_encloses (x v a₀ jerk t aMax : Rat)
+    (h₀ : Analysis.ratAbs a₀ ≤ aMax) (h₁ : Analysis.ratAbs (a₀+jerk*t) ≤ aMax) :
+    x+v*t+a₀*(t*t)/2+jerk*(t*t*t)/6 ∈ accelerationSlice x v t aMax := by
+  have h₀ := (Analysis.ratAbs_le_iff _ _).mp h₀
+  have h₁ := (Analysis.ratAbs_le_iff _ _).mp h₁
+  have hlo : -3*aMax ≤ 2*a₀+(a₀+jerk*t) := by grind
+  have hhi : 2*a₀+(a₀+jerk*t) ≤ 3*aMax := by grind
+  have hl := Rat.mul_le_mul_of_nonneg_right hlo (square_nonneg t)
+  have hh := Rat.mul_le_mul_of_nonneg_right hhi (square_nonneg t)
+  change _ ≤ _ ∧ _ ≤ _; dsimp [accelerationSlice]; grind
+/-- Union over all times in [0,dt], with a second-order acceleration pad. -/
+def sweptTube1D (x v dt aMax : Rat) : Analysis.Interval :=
+  ⟨min x (x+v*dt)-aMax*(dt*dt)/2, max x (x+v*dt)+aMax*(dt*dt)/2⟩
+theorem sweptTube1D_encloses (x v dt aMax t r : Rat) (ht : 0 ≤ t) (hd : t ≤ dt)
+    (ha : 0 ≤ aMax) (hr : Analysis.ratAbs r ≤ aMax*(t*t)/2) :
+    x+v*t+r ∈ sweptTube1D x v dt aMax := by
+  have hdt : 0 ≤ dt := Rat.le_trans ht hd
+  have hs : t*t ≤ dt*dt := by
+    have h1 := Rat.mul_le_mul_of_nonneg_left hd ht
+    have h2 := Rat.mul_le_mul_of_nonneg_right hd hdt
+    grind
+  have hb := Rat.mul_le_mul_of_nonneg_left hs ha
+  have hi := (Analysis.ratAbs_le_iff _ _).mp hr
+  have hlo : min x (x+v*dt) ≤ x+v*t := by
+    by_cases hv : 0 ≤ v
+    · have := Rat.mul_nonneg hv ht; have : min x (x+v*dt) ≤ x := by rw [Rat.min_def]; split <;> grind
+      grind
+    · have hn : 0 ≤ -v := by grind
+      have := Rat.mul_le_mul_of_nonneg_left hd hn
+      have : min x (x+v*dt) ≤ x+v*dt := by rw [Rat.min_def]; split <;> grind
+      grind
+  have hhi : x+v*t ≤ max x (x+v*dt) := by
+    by_cases hv : 0 ≤ v
+    · have := Rat.mul_le_mul_of_nonneg_left hd hv; have : x+v*dt ≤ max x (x+v*dt) := by rw [Rat.max_def]; split <;> grind
+      grind
+    · have hn : 0 ≤ -v := by grind
+      have := Rat.mul_nonneg hn ht; have : x ≤ max x (x+v*dt) := by rw [Rat.max_def]; split <;> grind
+      grind
+  change _ ≤ _ ∧ _ ≤ _; dsimp [sweptTube1D]; grind
+def sweptTube (p v a : Vec3Q) (dt : Rat) : Box3Q :=
+  ⟨sweptTube1D p.x v.x dt a.x, sweptTube1D p.y v.y dt a.y, sweptTube1D p.z v.z dt a.z⟩
+def boxSubset (a b : Box3Q) : Bool :=
+  a.x.isSubintervalOf b.x && a.y.isSubintervalOf b.y && a.z.isSubintervalOf b.z
+theorem boxSubset_sound (a b : Box3Q) (v : Vec3Q) (h : boxSubset a b = true) (hv : InBox v a) : InBox v b := by
+  simp only [boxSubset, Analysis.Interval.isSubintervalOf, Bool.and_eq_true, decide_eq_true_eq] at h
+  unfold InBox at *; simp only [Analysis.Interval.mem_iff] at *
+  exact ⟨⟨Rat.le_trans h.1.1.1 hv.1.1, Rat.le_trans hv.1.2 h.1.1.2⟩,
+    ⟨Rat.le_trans h.1.2.1 hv.2.1.1, Rat.le_trans hv.2.1.2 h.1.2.2⟩,
+    ⟨Rat.le_trans h.2.1 hv.2.2.1, Rat.le_trans hv.2.2.2 h.2.2⟩⟩
+theorem boxSubset_refl (a : Box3Q) : boxSubset a a = true := by
+  simp [boxSubset, Analysis.Interval.isSubintervalOf, Rat.le_refl]
 
 structure VehiclePolicy where
   corridor : Box3Q
@@ -478,8 +630,8 @@ structure VehicleState where
   bodyMomentum : Vec3Q
   momentum : Vec3Q
   dry : PointMass
-  /-- Principal dry inertia about its own center, strictly positive in safe states. -/
-  dryInertia : Vec3Q
+  /-- Full symmetric dry-body inertia about its own center, Sylvester-positive in safe states. -/
+  dryInertia : InertiaTensor3
   tanks : List TankState
   thermal : ThermalState
   deriving DecidableEq, Repr
@@ -489,13 +641,12 @@ def variableMasses (s : VehicleState) : List PointMass :=
   ⟨s.thermal.ablator,s.dry.station⟩ :: s.tanks.map tankPointMass
 def vehicleMass (s : VehicleState) : Rat := totalMass s.dry (variableMasses s)
 def vehicleCOM (s : VehicleState) : Vec3Q := centerOfMass s.dry (variableMasses s)
-def diagonal (v : Vec3Q) : Mat3Q := ⟨v.x,0,0,0,v.y,0,0,0,v.z⟩
 def vehicleInertia (s : VehicleState) : Mat3Q :=
-  compositeInertia (diagonal s.dryInertia) (vehicleCOM s) (s.dry :: variableMasses s)
+  compositeInertia s.dryInertia.toMat (vehicleCOM s) (s.dry :: variableMasses s)
 
 structure Separation where
   upperDryMass : Rat
-  upperDryInertia : Vec3Q
+  upperDryInertia : InertiaTensor3
   impulse : Vec3Q
   jettison : StageBody
   deriving DecidableEq, Repr
@@ -509,7 +660,7 @@ structure VehicleCommand where
   exitPressure : Rat
   ambientPressure : Rat
   exitArea : Rat
-  gimbal : Vec3Q
+  gimbal : GimbalAngles
   nozzleStation : Vec3Q
   externalForce : Vec3Q
   externalTorque : Vec3Q
@@ -520,9 +671,12 @@ structure VehicleCommand where
 
 def consumedOx (c : VehicleCommand) : Rat := (c.draws.map TankDraw.oxidizer).sum
 def consumedFuel (c : VehicleCommand) : Rat := (c.draws.map TankDraw.fuel).sum
-def bodyThrust (c : VehicleCommand) : Vec3Q :=
-  scale (nozzleThrust ((consumedOx c+consumedFuel c)/c.dt) c.exhaust c.exitPressure c.ambientPressure c.exitArea)
-    (gimbalDirection c.gimbal)
+def commandThruster (c : VehicleCommand) : GimbaledThruster :=
+  ⟨c.gimbal, nozzleThrust ((consumedOx c+consumedFuel c)/c.dt) c.exhaust c.exitPressure c.ambientPressure c.exitArea,
+   c.nozzleStation⟩
+def bodyThrust (c : VehicleCommand) : Vec3Q := (commandThruster c).force
+theorem engine_off_no_thrust (c : VehicleCommand) (h : consumedOx c+consumedFuel c = 0) : bodyThrust c = zero := by
+  simp [bodyThrust, commandThruster, nozzleThrust, h, GimbaledThruster.force, scale, zero, Rat.div_def]
 
 def resultantForce (s : VehicleState) (c : VehicleCommand) : Vec3Q :=
   add (act s.pose.rotation (bodyThrust c)) c.externalForce
@@ -537,7 +691,7 @@ def poweredStep (s : VehicleState) (c : VehicleCommand) : VehicleState :=
   let force := resultantForce s c
   -- Lost material carries the old translational velocity; thrust supplies relative exhaust impulse.
   let p := add (scale (m/vehicleMass s) s.momentum) (scale c.dt force)
-  let torque := add (cross (sub c.nozzleStation (vehicleCOM s)) (bodyThrust c)) c.externalTorque
+  let torque := add ((commandThruster c).torque (vehicleCOM s)) c.externalTorque
   { s with
     pose := ⟨cayleyStep s.pose.rotation c.increment, add s.pose.pos (scale c.dt (scale m⁻¹ p))⟩
     bodyMomentum := act (transpose (cayleyDelta c.increment)) (add s.bodyMomentum (scale c.dt torque))
@@ -567,37 +721,17 @@ structure VehicleTurn where
 @[expose] def StateSafe (p : VehiclePolicy) (s : VehicleState) : Prop :=
   SO3 s.pose.rotation ∧ 0 < s.dry.mass ∧
   (∀ t ∈ s.tanks, 0 ≤ t.oxidizer ∧ 0 ≤ t.fuel) ∧
-  0 < s.dryInertia.x ∧ 0 < s.dryInertia.y ∧ 0 < s.dryInertia.z ∧
+  0 < s.dryInertia.ixx ∧ 0 < s.dryInertia.minor2 ∧ 0 < det3 s.dryInertia.toMat ∧
   Nonneg3 s.thermal.kelvin ∧ s.thermal.kelvin.x ≤ p.maxKelvin.x ∧
   s.thermal.kelvin.y ≤ p.maxKelvin.y ∧ s.thermal.kelvin.z ≤ p.maxKelvin.z ∧
-  0 ≤ p.minimumAblator ∧ p.minimumAblator < s.thermal.ablator ∧ InBox s.pose.pos p.corridor
+  0 ≤ p.minimumAblator ∧ p.minimumAblator < s.thermal.ablator ∧ InBox s.pose.pos p.corridor ∧
+  0 < s.thermal.capacity.x ∧ 0 < s.thermal.capacity.y ∧ 0 < s.thermal.capacity.z
 private instance (p : VehiclePolicy) (s : VehicleState) : Decidable (StateSafe p s) := by
   unfold StateSafe; infer_instance
 
-theorem square_positive (x : Rat) (hx : x ≠ 0) : 0 < x*x := by
-  have hn := square_nonneg x
-  have he : x*x ≠ 0 := by intro h; apply hx; grind
-  exact Rat.lt_of_le_of_ne hn (Ne.symm he)
-
-theorem diagonal_spd (d : Vec3Q) (hx : 0 < d.x) (hy : 0 < d.y) (hz : 0 < d.z) : SPD (diagonal d) := by
-  refine ⟨rfl, ?_⟩
-  intro v hv
-  have he : dot v (act (diagonal d) v) = d.x*(v.x*v.x)+d.y*(v.y*v.y)+d.z*(v.z*v.z) := by
-    simp only [dot, act, diagonal]; grind
-  rw [he]
-  have hxx := Rat.mul_nonneg (Rat.le_of_lt hx) (square_nonneg v.x)
-  have hyy := Rat.mul_nonneg (Rat.le_of_lt hy) (square_nonneg v.y)
-  have hzz := Rat.mul_nonneg (Rat.le_of_lt hz) (square_nonneg v.z)
-  by_cases vx : v.x = 0
-  · by_cases vy : v.y = 0
-    · have vz : v.z ≠ 0 := by intro vz; apply hv; cases v; simp_all [zero]
-      have := Rat.mul_pos hz (square_positive v.z vz); grind
-    · have := Rat.mul_pos hy (square_positive v.y vy); grind
-  · have := Rat.mul_pos hx (square_positive v.x vx); grind
-
 theorem vehicleInertia_spd (p : VehiclePolicy) (s : VehicleState) (h : StateSafe p s) : SPD (vehicleInertia s) := by
   apply compositeInertia_spd
-  · exact diagonal_spd s.dryInertia h.2.2.2.1 h.2.2.2.2.1 h.2.2.2.2.2.1
+  · exact sylvester_spd s.dryInertia ⟨h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1⟩
   · intro q hq
     rcases List.mem_cons.mp hq with hq | hq
     · subst q; exact Rat.le_of_lt h.2.1
@@ -611,12 +745,12 @@ theorem vehicleInertia_spd (p : VehiclePolicy) (s : VehicleState) (h : StateSafe
         have ht := h.2.2.1 t ht
         exact Rat.add_nonneg ht.1 ht.2
 
-/-- The endpoint tube is computed by the shared Flowpipe interval operation. -/
-theorem poweredStep_flowpipe (s : VehicleState) (c : VehicleCommand) :
-    InBox (poweredStep s c).pose.pos
-      (discreteFlowpipe s.pose.pos
-        (scale (vehicleMass (poweredStep s c))⁻¹ (poweredStep s c).momentum) c.dt) := by
-  exact discreteFlowpipe_encloses _ _ _
+/-- Symplectic Euler has a full dt² kick; twice |F/m| covers its sample and the half-dt² physical remainder. -/
+def turnAccelerationBound (s : VehicleState) (c : VehicleCommand) : Vec3Q :=
+  let a := scale (vehicleMass (poweredStep s c))⁻¹ (resultantForce s c)
+  ⟨2*Analysis.ratAbs a.x, 2*Analysis.ratAbs a.y, 2*Analysis.ratAbs a.z⟩
+def turnTube (s : VehicleState) (c : VehicleCommand) : Box3Q :=
+  sweptTube s.pose.pos (scale (vehicleMass s)⁻¹ s.momentum) (turnAccelerationBound s c) c.dt
 
 def checkState (p : VehiclePolicy) (s : VehicleState) : Bool := decide (StateSafe p s)
 
@@ -655,20 +789,19 @@ inductive VehicleClause where
     0 < t.after.dry.mass ∧ (∀ tank ∈ t.after.tanks, 0 ≤ tank.oxidizer ∧ 0 ≤ tank.fuel) ∧
     s.tanks.length = t.command.draws.length ∧
     (∀ td ∈ s.tanks.zip t.command.draws, DrawValid td.1 td.2) ∧
-    0 < t.after.dryInertia.x ∧ 0 < t.after.dryInertia.y ∧ 0 < t.after.dryInertia.z
+    0 < t.after.dryInertia.ixx ∧ 0 < t.after.dryInertia.minor2 ∧ 0 < det3 t.after.dryInertia.toMat
   | .propulsion => PropulsionSafe p s t.command
   | .thermal =>
     ThermalCFL s.thermal t.command.heat ∧ Nonneg3 t.after.thermal.kelvin ∧
     t.after.thermal.kelvin.x ≤ p.maxKelvin.x ∧ t.after.thermal.kelvin.y ≤ p.maxKelvin.y ∧
-    t.after.thermal.kelvin.z ≤ p.maxKelvin.z ∧ 0 ≤ p.minimumAblator ∧ p.minimumAblator < t.after.thermal.ablator
+    t.after.thermal.kelvin.z ≤ p.maxKelvin.z ∧ 0 ≤ p.minimumAblator ∧ p.minimumAblator < t.after.thermal.ablator ∧
+    0 < t.after.thermal.capacity.x ∧ 0 < t.after.thermal.capacity.y ∧ 0 < t.after.thermal.capacity.z
   | .structural => StructuralSafe t.command.load ∧
     t.command.load.capacity = p.structuralCapacity ∧ p.minimumFactor ≤ t.command.load.minimumFactor ∧ 1 ≤ p.minimumFactor ∧
     t.command.load.lever = p.bendingLever ∧ axialDemand s t.command ≤ t.command.load.axialForceMagnitude
   | .staging => StageConserved s t
   | .corridor => InBox t.after.pose.pos p.corridor ∧
-    InBox (poweredStep s t.command).pose.pos
-      (discreteFlowpipe s.pose.pos
-        (scale (vehicleMass (poweredStep s t.command))⁻¹ (poweredStep s t.command).momentum) t.command.dt)
+    boxSubset (turnTube s t.command) p.corridor = true
   | .dynamics => t.after = stepVehicle s t.command ∧
     act (vehicleInertia s) t.command.omega = s.bodyMomentum ∧
     scale 2 t.command.increment = scale t.command.dt t.command.omega
@@ -698,7 +831,24 @@ theorem checkTurn_sound (p : VehiclePolicy) (s : VehicleState) (t : VehicleTurn)
 theorem turn_after_safe (p : VehiclePolicy) (s : VehicleState) (t : VehicleTurn) (h : TurnSafe p s t) : StateSafe p t.after := by
   have ha := h .attitude; have hm := h .mass; have ht := h .thermal; have hc := h .corridor
   exact ⟨ha, hm.1, hm.2.1, hm.2.2.2.2.1, hm.2.2.2.2.2.1, hm.2.2.2.2.2.2,
-    ht.2.1, ht.2.2.1, ht.2.2.2.1, ht.2.2.2.2.1, ht.2.2.2.2.2.1, ht.2.2.2.2.2.2, hc.1⟩
+    ht.2.1, ht.2.2.1, ht.2.2.2.1, ht.2.2.2.2.1, ht.2.2.2.2.2.1, ht.2.2.2.2.2.2.1, hc.1, ht.2.2.2.2.2.2.2⟩
+
+theorem turn_intersample_safe (p : VehiclePolicy) (s : VehicleState) (turn : VehicleTurn)
+    (h : TurnSafe p s turn) (t : Rat) (r : Vec3Q) (ht : 0 ≤ t) (hd : t ≤ turn.command.dt)
+    (hr : Analysis.ratAbs r.x ≤ (turnAccelerationBound s turn.command).x*(t*t)/2 ∧
+          Analysis.ratAbs r.y ≤ (turnAccelerationBound s turn.command).y*(t*t)/2 ∧
+          Analysis.ratAbs r.z ≤ (turnAccelerationBound s turn.command).z*(t*t)/2) :
+    InBox (add (add s.pose.pos (scale t (scale (vehicleMass s)⁻¹ s.momentum))) r) p.corridor := by
+  apply boxSubset_sound (turnTube s turn.command) p.corridor _ (h .corridor).2
+  have hn : Nonneg3 (turnAccelerationBound s turn.command) := by
+    have hx := Analysis.ratAbs_nonneg (scale (vehicleMass (poweredStep s turn.command))⁻¹ (resultantForce s turn.command)).x
+    have hy := Analysis.ratAbs_nonneg (scale (vehicleMass (poweredStep s turn.command))⁻¹ (resultantForce s turn.command)).y
+    have hz := Analysis.ratAbs_nonneg (scale (vehicleMass (poweredStep s turn.command))⁻¹ (resultantForce s turn.command)).z
+    unfold Nonneg3 turnAccelerationBound; grind
+  have hx := sweptTube1D_encloses s.pose.pos.x (scale (vehicleMass s)⁻¹ s.momentum).x turn.command.dt _ t r.x ht hd hn.1 hr.1
+  have hy := sweptTube1D_encloses s.pose.pos.y (scale (vehicleMass s)⁻¹ s.momentum).y turn.command.dt _ t r.y ht hd hn.2.1 hr.2.1
+  have hz := sweptTube1D_encloses s.pose.pos.z (scale (vehicleMass s)⁻¹ s.momentum).z turn.command.dt _ t r.z ht hd hn.2.2 hr.2.2
+  simpa only [InBox, turnTube, sweptTube, add, scale, Rat.mul_comm] using And.intro hx (And.intro hy hz)
 
 theorem accepted_axial_margin (p : VehiclePolicy) (s : VehicleState) (t : VehicleTurn)
     (h : TurnSafe p s t) : t.command.load.minimumFactor * axialDemand s t.command ≤ p.structuralCapacity := by
@@ -712,7 +862,7 @@ theorem accepted_axial_margin (p : VehiclePolicy) (s : VehicleState) (t : Vehicl
   rw [← hcap]; exact Rat.le_trans hx hm
 
 /-- Recursive semantics links each claimed poststate to the next turn's prestate. -/
-@[expose] def SafeTrace (p : VehiclePolicy) (s : VehicleState) : List VehicleTurn → Prop
+def SafeTrace (p : VehiclePolicy) (s : VehicleState) : List VehicleTurn → Prop
   | [] => StateSafe p s
   | t :: ts => TurnSafe p s t ∧ SafeTrace p t.after ts
 
