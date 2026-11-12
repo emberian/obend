@@ -1,6 +1,7 @@
 module
 public import Obend.Analysis.Diff
 public import Obend.Judge.Class
+public import Obend.Analysis.SosLyapunov
 /-!
 # Certificates for first-order hyperbolic systems (`Obend.Analysis.HyperbolicPdeCert`)
 
@@ -602,6 +603,7 @@ structure HyperbolicSystem where
   right : List Rat
   aMax : Rat
   cfl : Rat
+  deriving DecidableEq, Repr
 
 namespace HyperbolicSystem
 
@@ -641,6 +643,7 @@ structure HyperbolicCert where
   eigInv : List (List Rat)
   weights : List Rat
   sym : List (List Rat)
+  deriving DecidableEq, Repr
 
 inductive Clause where
   /-- the system's lists have different lengths -/
@@ -1043,7 +1046,8 @@ theorem check_complete {o : HyperbolicSystem} {c : HyperbolicCert} (hc : Certifi
 /-- The certificate format's name. -/
 def formatName : String := "hyperbolic-fvm@1"
 
-/-- **The judge of `hyperbolic-fvm@1`.** The checker does not use the grade. -/
+/-- Constant-Jacobian periodic 1D Rusanov FVM energy decay. Nonlinear fluxes
+are frozen at the supplied state; this is not a nonlinear shock-capturing certificate. -/
 instance hyperbolicPdeJudge : Judge HyperbolicSystem HyperbolicCert where
   Clause := Clause
   Meaning := Certified
@@ -1200,6 +1204,85 @@ theorem phm_energy_decay (n N : Nat) (U : Nat → Vec) :
     symEnergy phmSystem phmCert n (rusanovRun phmSystem.dim phmSystem.jacobian 3 (1 / 3) n N U)
       ≤ symEnergy phmSystem phmCert n U :=
   (check_sound (by decide +kernel : check phmSystem phmCert = .ok)).energy n N U
+
+
+private def fvmJsonWrite : Nat → SosJson → List Char → List Char
+  | 0, _, acc => 'n' :: 'u' :: 'l' :: 'l' :: acc
+  | _+1, .num m e, acc =>
+    let tail := if e = 0 then acc else 'e' :: '-' :: sosJsonNatWrite (e.log2+1) e acc
+    match m with
+    | .ofNat n => sosJsonNatWrite (n.log2+1) n tail
+    | .negSucc n => '-' :: sosJsonNatWrite ((n+1).log2+1) (n+1) tail
+  | n+1, .arr xs, acc => '[' :: sosJsonWriteArrElems (fvmJsonWrite n) xs (']' :: acc)
+  | n+1, .obj fs, acc => '{' :: sosJsonWriteObjFields (fvmJsonWrite n) fs ('}' :: acc)
+  | _+1, j, acc => sosJsonWriteAux 1 j acc
+private def fvmCompress (depth : Nat) (j : SosJson) : String := String.ofList (fvmJsonWrite depth j [])
+private def fvmExprDepth : RealExpr → Nat
+  | .const _ | .var _ => 3
+  | .sqr a => 1 + fvmExprDepth a
+  | .add a b | .sub a b | .mul a b => 1 + max (fvmExprDepth a) (fvmExprDepth b)
+
+/-- Structural flux-expression codec, including every constructor. -/
+private def encodeFvmExpr : RealExpr → SosJson
+  | .const q => .arr [.str "const".toList, sosJsonEncodeRat q]
+  | .var x => .arr [.str "var".toList, .str x.toList]
+  | .add a b => .arr [.str "add".toList, encodeFvmExpr a, encodeFvmExpr b]
+  | .sub a b => .arr [.str "sub".toList, encodeFvmExpr a, encodeFvmExpr b]
+  | .mul a b => .arr [.str "mul".toList, encodeFvmExpr a, encodeFvmExpr b]
+  | .sqr a => .arr [.str "sqr".toList, encodeFvmExpr a]
+private def decodeFvmExpr : Nat → SosJson → Except String RealExpr
+  | 0, _ => .error "flux expression nesting limit"
+  | n+1, j => do
+    match ← j.getArr? with
+    | [tag, a] =>
+      match ← tag.getStr? with
+      | "const" => return .const (← decodeRatJson a)
+      | "var" => return .var (← a.getStr?)
+      | "sqr" => return .sqr (← decodeFvmExpr n a)
+      | _ => .error "unknown unary flux tag"
+    | [tag, a, b] =>
+      let a ← decodeFvmExpr n a
+      let b ← decodeFvmExpr n b
+      match ← tag.getStr? with
+      | "add" => return .add a b
+      | "sub" => return .sub a b
+      | "mul" => return .mul a b
+      | _ => .error "unknown binary flux tag"
+    | _ => .error "invalid flux expression arity"
+private def encodeFvmVec (xs : List Rat) : SosJson := .arr (xs.map sosJsonEncodeRat)
+private def decodeFvmVec (j : SosJson) : Except String (List Rat) := j.getArr? >>= List.mapM decodeRatJson
+private def encodeFvmMat (xs : List (List Rat)) : SosJson := .arr (xs.map encodeFvmVec)
+private def decodeFvmMat (j : SosJson) : Except String (List (List Rat)) := j.getArr? >>= List.mapM decodeFvmVec
+/-- Wire object for the frozen-Jacobian periodic 1D Rusanov scheme. -/
+def encodeHyperbolicFvmObj (o : HyperbolicSystem) : String :=
+  fvmCompress (8 + o.flux.foldl (fun d e => max d (fvmExprDepth e)) 0) <| SosJson.mkObj
+  [("vars", .arr (o.vars.map (fun x => .str x.toList))), ("flux", .arr (o.flux.map encodeFvmExpr)),
+   ("state", encodeFvmVec o.state), ("left", encodeFvmVec o.left), ("right", encodeFvmVec o.right),
+   ("aMax", sosJsonEncodeRat o.aMax), ("cfl", sosJsonEncodeRat o.cfl)]
+def decodeHyperbolicFvmObj (s : String) : Except String HyperbolicSystem := do
+  let j ← sosJsonParse s
+  return ⟨← (j.getObjVal? "vars" >>= SosJson.getArr?) >>= List.mapM SosJson.getStr?,
+    ← (j.getObjVal? "flux" >>= SosJson.getArr?) >>= List.mapM (decodeFvmExpr 64),
+    ← j.getObjVal? "state" >>= decodeFvmVec, ← j.getObjVal? "left" >>= decodeFvmVec,
+    ← j.getObjVal? "right" >>= decodeFvmVec, ← j.getObjVal? "aMax" >>= decodeRatJson,
+    ← j.getObjVal? "cfl" >>= decodeRatJson⟩
+def encodeHyperbolicFvmCert (c : HyperbolicCert) : String := fvmCompress 8 <| SosJson.mkObj
+  [("jac", encodeFvmMat c.jac), ("eigVecs", encodeFvmMat c.eigVecs),
+   ("eigVals", encodeFvmVec c.eigVals), ("eigInv", encodeFvmMat c.eigInv),
+   ("weights", encodeFvmVec c.weights), ("sym", encodeFvmMat c.sym)]
+def decodeHyperbolicFvmCert (s : String) : Except String HyperbolicCert := do
+  let j ← sosJsonParse s
+  return ⟨← j.getObjVal? "jac" >>= decodeFvmMat, ← j.getObjVal? "eigVecs" >>= decodeFvmMat,
+    ← j.getObjVal? "eigVals" >>= decodeFvmVec, ← j.getObjVal? "eigInv" >>= decodeFvmMat,
+    ← j.getObjVal? "weights" >>= decodeFvmVec, ← j.getObjVal? "sym" >>= decodeFvmMat⟩
+/-- Constant-Jacobian periodic 1D Rusanov FVM energy decay, with total JSON decoders. -/
+def hyperbolicFvmFormat : Judge.Format where
+  name := "hyperbolic-fvm"; version := "1"; Obj := HyperbolicSystem; Cert := HyperbolicCert
+  judge := hyperbolicPdeJudge; decodeObj := decodeHyperbolicFvmObj; decodeCert := decodeHyperbolicFvmCert
+  trust := .kernel; regime := .decidable
+  bad := ({ maxwellSystem with cfl := -1 }, maxwellCert)
+  badGrade := 0
+  bad_refused := ⟨.cflViolation, [], by rfl⟩
 
 end Obend.Analysis.HyperbolicPde
 end

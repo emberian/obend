@@ -1,6 +1,9 @@
 module
 public import Obend.Trailblaze.ClusterGov
 public import Obend.Crypto.Transcript
+public import Obend.Hardware.SafePhysicalShield
+import all Obend.Hardware.SafePhysicalShield
+import all Obend.Hardware.CurrentLoop
 public import Obend.Judge.SvenvsCorrigibility
 import all Obend.Judge.SvenvsCorrigibility
 
@@ -546,5 +549,94 @@ theorem auditSwarmComputeMeter_sound_iff (log : JudgedReceiptLog) (cal : EnergyC
       SwarmMeterSpec log cal maxResidual rows.toList := by
     simp only [Array.findSome?_eq_none_iff, checkMeterRow_iff, SwarmMeterSpec, Array.mem_def]
   cases h : rows.findSome? (checkMeterRow log cal maxResidual) <;> simp_all
+
+
+open Obend.Analysis Obend.Hardware.SafePhysicalShield Obend.Hardware.CurrentLoop
+open Obend.Hardware.SiliconOuroboros
+/-- Two overlapping ADC zones cover the entire current core. -/
+def currentLoopEnvelopeZone (i : CanonicalRat) : HWState := if i ≤ 2 then 1 else 2
+def currentLoopEnvelopeStep (i : CanonicalRat) (u : HWAct) : CanonicalRat :=
+  stepZoh currentLoopShieldZoh i (currentLoopShieldVoltage u)
+def currentLoopEnvelopeSafe (i : CanonicalRat) : Prop := i ∈ mkCurrentLoopShieldSpec.core
+def currentLoopEnvelopeHome (i : CanonicalRat) : Prop := 1/100 ≤ i ∧ i ≤ 399/100
+def currentLoopEnvelopeInit (i : CanonicalRat) : Prop := i = 2
+def currentLoopEnvelopeRecovery (i : CanonicalRat) : HWAct := currentLoopShieldRoot (currentLoopEnvelopeZone i)
+def currentLoopEnvelopePolicy (i : CanonicalRat) (u : HWAct) : Bool :=
+  mkCurrentLoopShieldSpec.actionOk (currentLoopEnvelopeZone i) u
+private theorem currentLoopEnvelope_bounds {i : CanonicalRat} (h : currentLoopEnvelopeSafe i) :
+    0 ≤ i ∧ i ≤ 4 := by
+  have hc : mkCurrentLoopShieldSpec.core = ⟨0, 4⟩ := by decide +kernel
+  simpa only [currentLoopEnvelopeSafe, hc, Interval.mem_iff] using h
+private theorem currentLoopEnvelope_cell {i : CanonicalRat} (h : currentLoopEnvelopeSafe i) :
+    i ∈ mkCurrentLoopShieldSpec.cell (currentLoopEnvelopeZone i) := by
+  have hb := currentLoopEnvelope_bounds h
+  unfold currentLoopEnvelopeZone
+  split
+  · have hc : mkCurrentLoopShieldSpec.cell 1 = ⟨0, 15/4⟩ := by decide +kernel
+    rw [hc, Interval.mem_iff]; grind
+  · have hc : mkCurrentLoopShieldSpec.cell 2 = ⟨5/4, 4⟩ := by decide +kernel
+    rw [hc, Interval.mem_iff]; grind
+private theorem currentLoopEnvelope_step_safe {i : CanonicalRat} {u : HWAct}
+    (h : currentLoopEnvelopeSafe i) (ha : currentLoopEnvelopePolicy i u = true) :
+    currentLoopEnvelopeSafe (currentLoopEnvelopeStep i u) := by
+  have hf := flow_in_tube ha (by simpa only [currentLoopShieldFlow_zero] using currentLoopEnvelope_cell h)
+    (currentLoopInterSampleFlow_sound _ u i (currentLoopEnvelope_cell h))
+  simpa only [currentLoopShieldFlow_endpoint, currentLoopEnvelopeSafe, currentLoopEnvelopeStep] using hf.2
+/-- The fallback moves every core state into a strict interior home interval in one sample. -/
+theorem currentLoopEnvelope_recovery_home {i : CanonicalRat} (h : currentLoopEnvelopeSafe i) :
+    currentLoopEnvelopeHome (currentLoopEnvelopeStep i (currentLoopEnvelopeRecovery i)) := by
+  have hb := currentLoopEnvelope_bounds h
+  unfold currentLoopEnvelopeRecovery currentLoopEnvelopeZone
+  split <;> simp only [currentLoopEnvelopeHome, currentLoopEnvelopeStep, stepZoh,
+    currentLoopShieldZoh, currentLoopShieldRoot, currentLoopShieldVoltage] <;> grind
+private theorem currentLoopEnvelope_recoverable {i : CanonicalRat} (h : currentLoopEnvelopeSafe i) :
+    CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i :=
+  ⟨1, Nat.le_refl _, currentLoopEnvelope_recovery_home h⟩
+/-- Concrete initialization, policy and fallback proofs for the RL shield. -/
+theorem instPhysicalEnvelopeCurrentLoopShield :
+    InitSafe currentLoopEnvelopeInit (fun i => currentLoopEnvelopeSafe i ∧
+      CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i) ∧
+    SoundPolicy currentLoopEnvelopeStep (fun i => currentLoopEnvelopeSafe i ∧
+      CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i) currentLoopEnvelopePolicy ∧
+    SafeShield currentLoopEnvelopeStep (fun i => currentLoopEnvelopeSafe i ∧
+      CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i) currentLoopEnvelopeRecovery := by
+  have hs : currentLoopEnvelopeSafe 2 := by unfold currentLoopEnvelopeSafe; decide +kernel
+  refine ⟨?_, ?_, ?_⟩
+  · intro i hi; cases hi; exact ⟨hs, currentLoopEnvelope_recoverable hs⟩
+  · intro i u hi hu
+    have hn := currentLoopEnvelope_step_safe hi.1 hu
+    exact ⟨hn, currentLoopEnvelope_recoverable hn⟩
+  · intro i hi
+    have ha : currentLoopEnvelopePolicy i (currentLoopEnvelopeRecovery i) = true :=
+      currentLoopShieldRoot_passes _
+    have hn := currentLoopEnvelope_step_safe hi.1 ha
+    exact ⟨hn, currentLoopEnvelope_recoverable hn⟩
+/-- Arbitrarily many envelope-controlled RL samples preserve safety and one-sample recovery. -/
+theorem currentLoopPhysicalEnvelope_corrigibility_safe (authority : EnvelopeAuthority)
+    (evidence : CanonicalRat → HWAct → EnvelopeEvidence) (timing : BarrierTiming) :
+    ∀ ctrl, Invariant currentLoopEnvelopeStep currentLoopEnvelopeInit
+      (enveloped (envelopePolicy authority evidence currentLoopEnvelopePolicy 1 timing) currentLoopEnvelopeRecovery ctrl)
+      (fun i => currentLoopEnvelopeSafe i ∧
+        CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i) := by
+  obtain ⟨hi, hp, hs⟩ := instPhysicalEnvelopeCurrentLoopShield
+  exact physicalEnvelope_corrigibility_safe _ _ _ _ _ authority evidence _ 1 timing hi hp hs
+/-- Between each pair of reachable samples, the selected RL reconstruction stays in the physical envelope. -/
+theorem currentLoopPhysicalEnvelope_continuous_safe (authority : EnvelopeAuthority)
+    (evidence : CanonicalRat → HWAct → EnvelopeEvidence) (timing : BarrierTiming)
+    (ctrl : CanonicalRat → HWAct) (i : CanonicalRat)
+    (hr : Reach currentLoopEnvelopeStep currentLoopEnvelopeInit
+      (enveloped (envelopePolicy authority evidence currentLoopEnvelopePolicy 1 timing) currentLoopEnvelopeRecovery ctrl) i) :
+    ∀ t, 0 ≤ t → t ≤ mkCurrentLoopShieldSpec.Ts →
+      currentLoopShieldFlow i
+        (enveloped (envelopePolicy authority evidence currentLoopEnvelopePolicy 1 timing) currentLoopEnvelopeRecovery ctrl i) t
+          ∈ mkCurrentLoopShieldSpec.phys := by
+  have hs := (currentLoopPhysicalEnvelope_corrigibility_safe authority evidence timing ctrl i hr).1
+  apply currentLoopShieldFlow_safe _ _ _ (currentLoopEnvelope_cell hs)
+  unfold enveloped
+  split
+  · rename_i h
+    simp only [envelopePolicy, Bool.and_eq_true] at h
+    exact h.2
+  · exact currentLoopShieldRoot_passes _
 
 end Obend.ClusterGov.PhysicalEnvelope

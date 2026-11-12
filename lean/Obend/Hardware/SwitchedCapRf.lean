@@ -1448,5 +1448,16 @@ theorem cordicAtan2_error_lt_4000_urad (x y : Int) (hR : 8192 ≤ x.natAbs + y.n
       ((cordicAtan2 x y : Int) : Rat) - 4000 < 1000000 * lo ∧ 1000000 * hi < ((cordicAtan2 x y : Int) : Rat) + 4000 := by
   refine ⟨_, _, cordicAtan2_arg x y hR, ?_, ?_⟩ <;> simp only [Rat.intCast_add, Rat.intCast_sub, Rat.intCast_mul, Rat.intCast_neg, Rat.intCast_ofNat] <;> grind
 
+
+/-- Carry the passive RF alias envelope into an additive receiver-error power budget.
+`incident` is the interferer's input power; the coupling bound is a measured/modelled
+front-end contract, not a consequence of calibration alone. -/
+theorem rf_frontEnd_error_power (ω r1 r2 incident errorPower : Rat) (es : List LadderElem) (m : Nat)
+    (h1 : 0 < r1) (h2 : 0 < r2) (hp : ∀ e ∈ es, e.Passive) (hi : 0 ≤ incident)
+    (he : errorPower ≤ compositeAliasPower ω r1 r2 es m * incident) :
+    errorPower ≤ (1 / (((2*m+1 : Nat) : Rat) * ((2*m+1 : Nat) : Rat))) * incident := by
+  exact Rat.le_trans he (Rat.mul_le_mul_of_nonneg_right
+    (tayloe_cauer_composite_alias_bound ω r1 r2 es m h1 h2 hp).1 hi)
+
 end Obend.Hardware.SwitchedCapRf
 end

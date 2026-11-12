@@ -637,6 +637,58 @@ theorem rtlPiStepQ32_within_lsb (kpQ32 kiQ32 errMa intMv : Int) :
   have h4 := Int.lt_ediv_add_one_mul_self (errMa * kpQ32) (b := 4294967296) (by decide)
   refine ⟨?_, ?_, ?_, ?_⟩ <;> omega
 
+/-- Strict interior of signed register and DAC rails; products are checked before shifting. -/
+@[expose] def CurrentLoopNoSaturation (w : Nat) (dacMaxMv : Int) (q32 : Bool)
+    (kp ki err intMv : Int) : Prop :=
+  let lim : Int := 2 ^ (w - 1)
+  let out := if q32 then rtlPiStepQ32 kp ki err intMv else rtlPiStep kp ki err intMv
+  (-lim < intMv ∧ intMv < lim - 1) ∧
+  (-lim < err * kp ∧ err * kp < lim - 1) ∧
+  (-lim < err * ki ∧ err * ki < lim - 1) ∧
+  (-lim < out.1 ∧ out.1 < lim - 1) ∧
+  (-lim < out.2 ∧ out.2 < lim - 1) ∧
+  (-dacMaxMv < out.2 ∧ out.2 < dacMaxMv)
+instance (w : Nat) (dac : Int) (q : Bool) (kp ki e i : Int) :
+    Decidable (CurrentLoopNoSaturation w dac q kp ki e i) := by
+  unfold CurrentLoopNoSaturation; infer_instance
+/-- For nonnegative PI gains the two ordered corners bound every intermediate state/error.
+The check covers full multiplier products, accumulator and command, before finite-width encoding. -/
+def checkCurrentLoopNoSaturation (w : Nat) (dacMaxMv : Int) (q32 : Bool)
+    (kp ki errLo errHi intLo intHi : Int) : Bool :=
+  decide (0 < w ∧ 0 < dacMaxMv ∧ 0 ≤ kp ∧ 0 ≤ ki ∧ errLo ≤ errHi ∧ intLo ≤ intHi) &&
+  decide (CurrentLoopNoSaturation w dacMaxMv q32 kp ki errLo intLo) &&
+  decide (CurrentLoopNoSaturation w dacMaxMv q32 kp ki errHi intHi)
+theorem checkCurrentLoopNoSaturation_sound (w : Nat) (dac : Int) (q : Bool)
+    (kp ki elo ehi ilo ihi : Int)
+    (h : checkCurrentLoopNoSaturation w dac q kp ki elo ehi ilo ihi = true)
+    (e i : Int) (he : elo ≤ e ∧ e ≤ ehi) (hi : ilo ≤ i ∧ i ≤ ihi) :
+    CurrentLoopNoSaturation w dac q kp ki e i := by
+  simp only [checkCurrentLoopNoSaturation, Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨_, _, hkp, hki, _, _⟩, hlo⟩, hhi⟩ := h
+  have hp0 := Int.mul_le_mul_of_nonneg_right he.1 hkp
+  have hp1 := Int.mul_le_mul_of_nonneg_right he.2 hkp
+  have hk0 := Int.mul_le_mul_of_nonneg_right he.1 hki
+  have hk1 := Int.mul_le_mul_of_nonneg_right he.2 hki
+  cases q <;> simp only [CurrentLoopNoSaturation, Bool.false_eq_true, ↓reduceIte,
+    rtlPiStep, rtlPiStepQ32] at hlo hhi ⊢ <;> omega
+
+/-- Encoding either accepted PI output in an actual signed register preserves its integer value. -/
+theorem checkCurrentLoopNoSaturation_noWrap (w : Nat) (dac : Int) (q : Bool)
+    (kp ki elo ehi ilo ihi : Int)
+    (h : checkCurrentLoopNoSaturation w dac q kp ki elo ehi ilo ihi = true)
+    (e i : Int) (he : elo ≤ e ∧ e ≤ ehi) (hi : ilo ≤ i ∧ i ≤ ihi) :
+    let out := if q then rtlPiStepQ32 kp ki e i else rtlPiStep kp ki e i
+    (BitVec.ofInt w out.1).toInt = out.1 ∧ (BitVec.ofInt w out.2).toInt = out.2 := by
+  have hs := checkCurrentLoopNoSaturation_sound w dac q kp ki elo ehi ilo ihi h e i he hi
+  have hw : 0 < w := by
+    simp only [checkCurrentLoopNoSaturation, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact h.1.1.1
+  dsimp only [CurrentLoopNoSaturation] at hs
+  dsimp only
+  exact ⟨BitVec.toInt_ofInt_eq_self hw (by omega) (by omega),
+    BitVec.toInt_ofInt_eq_self hw (by omega) (by omega)⟩
+example : checkCurrentLoopNoSaturation 32 100 false 400 50 (-10) 10 (-20) 20 = true := by decide +kernel
+
 /-! ## 8. Input-to-State Stability (ISS) & Quantized `rtlPiStep` Ultimate-Boundedness Ball -/
 
 /-- Positive semidefiniteness of $V_P$ from `lyapStaticOk` (`P - m I ⪰ 0` and `m > 0`). -/

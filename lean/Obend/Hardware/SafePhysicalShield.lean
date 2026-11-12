@@ -63,6 +63,14 @@ import all Obend.Hardware.SiliconOuroboros
 import all Obend.Hardware.Analog
 import all Obend.Hardware.HDL
 
+public import Obend.Hardware.CurrentLoop
+public import Obend.Hardware.CircuitDae
+import all Obend.Hardware.CurrentLoop
+import all Obend.Hardware.CircuitDae
+import all Obend.Analysis.SosLyapunov
+import all Obend.Analysis.Groebner
+import all Obend.Judge.RealAnalysis
+
 public section
 namespace Obend.Hardware.SafePhysicalShield
 open HDL DprStutter SiliconOuroboros Obend.Analysis
@@ -833,6 +841,88 @@ example : thermalStage.actionOk 3 0 = true ∧ thermalStage.actionOk 3 3 = false
 example : thermalStage.SensorReads 50 2000 := by decide +kernel
 example : ∃ x, x 0 = 50 ∧ InterSampleFlow thermalStage 1 0 x :=
   interSampleFlow_exists thermalStage (by decide +kernel) (by decide +kernel)
+
+
+/-- A one-axis RL plant, R = 1 ohm, L = 1 henry, sampled at 10 ms. The rational
+ZOH enclosure uses the trapezoidal pole; the dense segment below is the affine
+DAE reconstruction, not an assertion that a rational curve is the real exponential. -/
+def currentLoopShieldZoh : CurrentLoop.ZohRl := ⟨⟨1, 1⟩, 1/100, 199/201, 2/201⟩
+theorem currentLoopShieldZoh_spec : currentLoopShieldZoh.Spec := by decide +kernel
+def currentLoopShieldVoltage (u : HWAct) : CanonicalRat := if u = 0 then 0 else 5
+/-- Finite slew pad and a 2-bit ADC spanning 0..5 A, with a 0..4 A sample core. -/
+def mkCurrentLoopShieldSpec : SampledPhysicalPlantSpec where
+  Ts := 1/100; phys := ⟨-1, 5⟩; speed := 100
+  field u := .sub (.const (currentLoopShieldVoltage u)) (.var "x")
+  adcBits := 2; vLsbMv := 1; sensOffset := 0; sensGain := 5/4; epsSensor := 0
+def currentLoopShieldRoot (z : HWState) : HWAct := if z.toNat ≤ 1 then 1 else 0
+theorem currentLoopShield_wf : mkCurrentLoopShieldSpec.wf = true := by decide +kernel
+theorem currentLoopShieldRoot_passes : RootSound mkCurrentLoopShieldSpec currentLoopShieldRoot := by
+  intro z
+  rcases bv2_cases z with rfl | rfl | rfl | rfl <;> decide +kernel
+/-- Trapezoidal dense reconstruction expressed through the existing ZOH current carrier. -/
+def currentLoopShieldFlow (i : CanonicalRat) (u : HWAct) (t : CanonicalRat) : CanonicalRat :=
+  CurrentLoop.zohIntersampleCurrent (1 - t * (200/201)) (t * (200/201)) i (currentLoopShieldVoltage u)
+theorem currentLoopShieldFlow_zero (i : CanonicalRat) (u : HWAct) : currentLoopShieldFlow i u 0 = i := by
+  simp [currentLoopShieldFlow, CurrentLoop.zohIntersampleCurrent]; grind
+theorem currentLoopShieldFlow_endpoint (i : CanonicalRat) (u : HWAct) :
+    currentLoopShieldFlow i u mkCurrentLoopShieldSpec.Ts =
+      CurrentLoop.stepZoh currentLoopShieldZoh i (currentLoopShieldVoltage u) := by
+  unfold currentLoopShieldFlow CurrentLoop.zohIntersampleCurrent CurrentLoop.stepZoh
+  simp only [mkCurrentLoopShieldSpec, currentLoopShieldZoh]
+  grind
+/-- The mean velocity is the RL field evaluated at the step midpoint. Its distance
+from the initial state is at most 5/201 A, inside the one-amp tube pad. -/
+theorem currentLoopInterSampleFlow_sound (z : HWState) (u : HWAct) (i : CanonicalRat)
+    (hi : i ∈ mkCurrentLoopShieldSpec.cell z) :
+    InterSampleFlow mkCurrentLoopShieldSpec z u (currentLoopShieldFlow i u) := by
+  let p := mkCurrentLoopShieldSpec
+  let v := currentLoopShieldVoltage u
+  have hv : 0 ≤ v ∧ v ≤ 5 := by dsimp [v, currentLoopShieldVoltage]; split <;> decide +kernel
+  have hc := (Interval.mem_iff _ _).mp hi
+  have hlo := (clampLo_spec ((p.zoneEst z).lo - p.epsAdc) p.core.lo).2.1
+  have hhi := (clampHi_spec ((p.zoneEst z).hi + p.epsAdc) p.core.hi).2.1
+  have hib : 0 ≤ i ∧ i ≤ 4 := by
+    change (p.cell z).lo ≤ i ∧ i ≤ (p.cell z).hi at hc
+    have hcore : p.core = ⟨0, 4⟩ := by decide +kernel
+    have h0 : p.core.lo ≤ i := Rat.le_trans hlo hc.1
+    have h1 : i ≤ p.core.hi := Rat.le_trans hc.2 hhi
+    rw [hcore] at h0 h1
+    exact ⟨h0, h1⟩
+  let mid := (200/201 : CanonicalRat) * i + v / 201
+  have hm : mid ∈ p.tube z := by
+    rw [Interval.mem_iff]
+    change (p.cell z).lo - p.pad ≤ mid ∧ mid ≤ (p.cell z).hi + p.pad
+    have hpad : p.pad = 1 := by decide +kernel
+    rw [hpad]
+    dsimp [mid]; grind
+  let F := Interval.sub (Interval.ofPoint v) (p.tube z)
+  have hF : evalInterval [("x", p.tube z)] (p.field u) = some F := by
+    simp [p, mkCurrentLoopShieldSpec, evalInterval, F, v]
+  refine ⟨F, hF, fun t _ _ => ⟨v - mid, Interval.sub_mem (by rw [Interval.mem_iff]; exact ⟨Rat.le_refl, Rat.le_refl⟩) hm, ?_⟩⟩
+  rw [currentLoopShieldFlow_zero]
+  dsimp [currentLoopShieldFlow, CurrentLoop.zohIntersampleCurrent, mid, v]
+  grind
+/-- The same sampled RL endpoint solves the one-node trapezoidal MNA equation exactly. -/
+def currentLoopMnaSpec : CircuitDae.MnaCircuitSpec := ⟨1, 1, [[1]], [[1]], [[1]], []⟩
+def currentLoopMnaStep (i : CanonicalRat) (u : HWAct) : CircuitDae.MnaTraceStep :=
+  ⟨1/100, [i], [CurrentLoop.stepZoh currentLoopShieldZoh i (currentLoopShieldVoltage u)],
+    [currentLoopShieldVoltage u], [], [], 0⟩
+theorem currentLoopMnaStep_residual (i : CanonicalRat) (u : HWAct) :
+    CircuitDae.mnaStepResidual currentLoopMnaSpec .trapezoidal (currentLoopMnaStep i u) = [0] := by
+  simp [CircuitDae.mnaStepResidual, currentLoopMnaSpec, currentLoopMnaStep,
+    CircuitDae.matVecMulN, CircuitDae.matRectVecMul, CircuitDae.vecSubN,
+    CircuitDae.mkVec, CircuitDae.mkVecFrom, CircuitDae.vecEntry, CircuitDae.matEntry,
+    CircuitDae.sumUpTo, CircuitDae.stampNonlinearCurrents, CurrentLoop.stepZoh, currentLoopShieldZoh]
+  grind
+/-- Directly usable continuous-tube theorem: no flow hypothesis remains. -/
+theorem currentLoopShieldFlow_safe (z : HWState) (u : HWAct) (i : CanonicalRat)
+    (hi : i ∈ mkCurrentLoopShieldSpec.cell z) (ha : mkCurrentLoopShieldSpec.actionOk z u = true) :
+    ∀ t, 0 ≤ t → t ≤ mkCurrentLoopShieldSpec.Ts →
+      currentLoopShieldFlow i u t ∈ mkCurrentLoopShieldSpec.phys := by
+  intro t ht hT
+  have h := flow_in_tube ha (by simpa only [currentLoopShieldFlow_zero] using hi)
+    (currentLoopInterSampleFlow_sound z u i hi)
+  exact tube_subset_phys _ _ (h.1 t ht hT).1
 
 end Obend.Hardware.SafePhysicalShield
 end

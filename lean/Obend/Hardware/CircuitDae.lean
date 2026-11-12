@@ -1,7 +1,6 @@
 module
 /-
 # Obend.Hardware.CircuitDae — Index-1 MNA Circuit DAE Judge (`"mna-dae@1"`) & 5-Cell SiC FCML Hybrid Balance
-
 1. **Rational MNA Linear Algebra & Gram Congruence (`§1`)**:
    - Nodal/branch inner products (`vecDotN`), matrix-vector products (`matVecMulN`), quadratic forms
      (`quadFormN`), stored electromagnetic/capacitive energy $\frac{1}{2} x^\top C x$ (`mnaStoredEnergy`),
@@ -31,28 +30,22 @@ public import Obend.Judge.Class
 public import Obend.Analysis.RealAnalysis
 public import Obend.Analysis.SosLyapunov
 public section
-
 namespace Obend.Hardware.CircuitDae
 open Obend
 open Obend.Analysis
 set_option autoImplicit false
-
 /-! ## 1. Finite-Dimensional Rational MNA Linear Algebra & Gram Congruence -/
-
 /-- Rational magnitude $|x|$ over `CanonicalRat`. -/
 def ratAbs (x : CanonicalRat) : CanonicalRat := if 0 ≤ x then x else -x
 theorem ratAbs_nonneg (x : CanonicalRat) : 0 ≤ ratAbs x := by unfold ratAbs; split <;> grind
 theorem ratAbs_le_iff (x b : CanonicalRat) : ratAbs x ≤ b ↔ (-b ≤ x ∧ x ≤ b) := by unfold ratAbs; split <;> grind
-
 /-- Entry `i` of a rational vector `v` and `(i, j)` of matrix `M` (`0` out of bounds). -/
 def vecEntry (v : List CanonicalRat) (i : Nat) : CanonicalRat := v.getD i 0
 def matEntry (M : List (List CanonicalRat)) (i j : Nat) : CanonicalRat := (M.getD i []).getD j 0
-
 /-- Structural vector constructors `[f s, ..., f (s+c-1)]` and `[f 0, ..., f (n-1)]`. -/
 def mkVecFrom (s : Nat) : Nat → (Nat → CanonicalRat) → List CanonicalRat
   | 0, _ => [] | c + 1, f => f s :: mkVecFrom (s + 1) c f
 def mkVec (n : Nat) (f : Nat → CanonicalRat) : List CanonicalRat := mkVecFrom 0 n f
-
 private theorem vecEntry_mkVecFrom (f : Nat → CanonicalRat) :
     ∀ (c s k : Nat), k < c → vecEntry (mkVecFrom s c f) k = f (s + k)
   | 0, _, _, hk => by omega
@@ -61,51 +54,41 @@ private theorem vecEntry_mkVecFrom (f : Nat → CanonicalRat) :
     have ih := vecEntry_mkVecFrom f c (s + 1) k (by omega)
     simp only [mkVecFrom, vecEntry, List.getD_cons_succ] at ih ⊢
     rw [ih]; congr 1; omega
-
 theorem vecEntry_mkVec (n : Nat) (f : Nat → CanonicalRat) (i : Nat) (hi : i < n) :
     vecEntry (mkVec n f) i = f i := by
   simpa [mkVec] using vecEntry_mkVecFrom f n 0 i hi
-
 /-- Structural finite sum $\sum_{i=0}^{n-1} f(i)$. -/
 def sumUpTo : Nat → (Nat → CanonicalRat) → CanonicalRat
   | 0, _ => 0
   | k + 1, f => sumUpTo k f + f k
-
 theorem sumUpTo_congr (n : Nat) (f g : Nat → CanonicalRat)
     (h : ∀ i, i < n → f i = g i) : sumUpTo n f = sumUpTo n g := by
   induction n with
   | zero => rfl
   | succ k ih => dsimp [sumUpTo]; rw [ih (fun i hi => h i (by omega)), h k (by omega)]
-
 theorem sumUpTo_add (n : Nat) (f g : Nat → CanonicalRat) :
     sumUpTo n (fun i => f i + g i) = sumUpTo n f + sumUpTo n g := by
   induction n with | zero => dsimp [sumUpTo]; grind | succ k ih => dsimp [sumUpTo]; rw [ih]; grind
-
 theorem sumUpTo_sub (n : Nat) (f g : Nat → CanonicalRat) :
     sumUpTo n (fun i => f i - g i) = sumUpTo n f - sumUpTo n g := by
   induction n with | zero => dsimp [sumUpTo]; grind | succ k ih => dsimp [sumUpTo]; rw [ih]; grind
-
 theorem sumUpTo_scale (n : Nat) (c : CanonicalRat) (f : Nat → CanonicalRat) :
     sumUpTo n (fun i => c * f i) = c * sumUpTo n f := by
   induction n with | zero => dsimp [sumUpTo]; grind | succ k ih => dsimp [sumUpTo]; rw [ih]; grind
-
 theorem sumUpTo_nonneg (n : Nat) (f : Nat → CanonicalRat)
     (h : ∀ i, i < n → 0 ≤ f i) : 0 ≤ sumUpTo n f := by
   induction n with
   | zero => dsimp [sumUpTo]; grind
   | succ k ih =>
     dsimp [sumUpTo]; have := ih (fun i hi => h i (by omega)); have := h k (by omega); grind
-
 theorem sumUpTo_zero (n : Nat) : sumUpTo n (fun _ => 0) = 0 := by
   induction n with | zero => rfl | succ k ih => dsimp [sumUpTo]; rw [ih]; grind
-
 theorem sumUpTo_comm (n m : Nat) (h : Nat → Nat → CanonicalRat) :
     sumUpTo n (fun i => sumUpTo m (fun j => h i j)) =
       sumUpTo m (fun j => sumUpTo n (fun i => h i j)) := by
   induction n with
   | zero => dsimp [sumUpTo]; symm; exact sumUpTo_zero m
   | succ k ih => dsimp [sumUpTo]; rw [ih, ← sumUpTo_add]
-
 theorem sumUpTo_delta (n k : Nat) (c : CanonicalRat) (hk : k < n) :
     sumUpTo n (fun i => if i = k then c else 0) = c := by
   induction n with
@@ -119,42 +102,34 @@ theorem sumUpTo_delta (n k : Nat) (c : CanonicalRat) (hk : k < n) :
         exact sumUpTo_zero m
       rw [hZero]; simp; grind
     · rw [ih (by omega)]; simp [hmk]; grind
-
 /-- Inner product $u^\top v = \sum_{i=0}^{n-1} u_i v_i$ and rational vector operations. -/
 def vecDotN (n : Nat) (u v : List CanonicalRat) : CanonicalRat := sumUpTo n (fun i => vecEntry u i * vecEntry v i)
 def vecAddN (n : Nat) (u v : List CanonicalRat) : List CanonicalRat := mkVec n (fun i => vecEntry u i + vecEntry v i)
 def vecSubN (n : Nat) (u v : List CanonicalRat) : List CanonicalRat := mkVec n (fun i => vecEntry u i - vecEntry v i)
 def vecScaleN (n : Nat) (c : CanonicalRat) (v : List CanonicalRat) : List CanonicalRat := mkVec n (fun i => c * vecEntry v i)
-
 /-- Square & rectangular matrix-vector products and standard basis vector $e_k \in \mathbb{Q}^n$. -/
 def matVecMulN (n : Nat) (M : List (List CanonicalRat)) (v : List CanonicalRat) : List CanonicalRat :=
   mkVec n (fun i => sumUpTo n (fun j => matEntry M i j * vecEntry v j))
 def matRectVecMul (n m : Nat) (B : List (List CanonicalRat)) (u : List CanonicalRat) : List CanonicalRat :=
   mkVec n (fun i => sumUpTo m (fun j => matEntry B i j * vecEntry u j))
 def basisVec (n k : Nat) : List CanonicalRat := mkVec n (fun i => if i = k then 1 else 0)
-
 private theorem vecEntry_vecSubN (n : Nat) (u v : List CanonicalRat) (i : Nat) (hi : i < n) :
     vecEntry (vecSubN n u v) i = vecEntry u i - vecEntry v i := vecEntry_mkVec n _ i hi
 private theorem vecEntry_basisVec (n k i : Nat) (hi : i < n) :
     vecEntry (basisVec n k) i = if i = k then 1 else 0 := vecEntry_mkVec n _ i hi
-
 /-- Bilinear form $u^\top M v$. -/
 def quadFormN (n : Nat) (M : List (List CanonicalRat)) (u v : List CanonicalRat) : CanonicalRat :=
   vecDotN n u (matVecMulN n M v)
-
 /-- Stored electromagnetic & capacitive MNA energy $\mathcal{E}(x) = \frac{1}{2} x^\top C x$. -/
 def mnaStoredEnergy (n : Nat) (C : List (List CanonicalRat)) (x : List CanonicalRat) : CanonicalRat :=
   (1 / 2) * quadFormN n C x x
-
 theorem vecDotN_comm (n : Nat) (u v : List CanonicalRat) :
     vecDotN n u v = vecDotN n v u :=
   sumUpTo_congr n _ _ (fun _ _ => by grind)
-
 theorem quadFormN_eq_sum (n : Nat) (M : List (List CanonicalRat)) (u v : List CanonicalRat) :
     quadFormN n M u v =
       sumUpTo n (fun i => vecEntry u i * sumUpTo n (fun j => matEntry M i j * vecEntry v j)) :=
   sumUpTo_congr n _ _ (fun i hi => by unfold matVecMulN; rw [vecEntry_mkVec n _ i hi])
-
 theorem quadFormN_basis_diag (n k : Nat) (M : List (List CanonicalRat)) (hk : k < n) :
     quadFormN n M (basisVec n k) (basisVec n k) = matEntry M k k := by
   rw [quadFormN_eq_sum]
@@ -174,7 +149,6 @@ theorem quadFormN_basis_diag (n k : Nat) (M : List (List CanonicalRat)) (hk : k 
     · simp [hik]
   rw [sumUpTo_congr n _ _ hInner]
   exact sumUpTo_delta n k (matEntry M k k) hk
-
 theorem quadFormN_symm_of_entries (n : Nat) (M : List (List CanonicalRat))
     (hSym : ∀ i j, i < n → j < n → matEntry M i j = matEntry M j i)
     (u v : List CanonicalRat) :
@@ -187,7 +161,6 @@ theorem quadFormN_symm_of_entries (n : Nat) (M : List (List CanonicalRat))
     exact sumUpTo_congr n _ _ (fun j hj => by rw [hSym i j hi hj]; grind)
   rw [hL, sumUpTo_comm]
   exact sumUpTo_congr n _ _ (fun _ _ => by rw [← sumUpTo_scale])
-
 private theorem quadFormN_sub_right (n : Nat) (M : List (List CanonicalRat))
     (u a b : List CanonicalRat) :
     quadFormN n M u (vecSubN n a b) = quadFormN n M u a - quadFormN n M u b := by
@@ -199,23 +172,19 @@ private theorem quadFormN_sub_right (n : Nat) (M : List (List CanonicalRat))
     rw [← sumUpTo_sub]
     exact sumUpTo_congr n _ _ (fun j hj => by rw [vecEntry_vecSubN n a b j hj]; grind)
   rw [hIn]; grind
-
 /-- Weighted rank-1 Cholesky/LDLT Gram congruence factor $w_r \ell_r \ell_r^\top$ ($w_r \ge 0$). -/
 structure MnaGramFactor where
   weight : CanonicalRat
   vec    : List CanonicalRat
   deriving DecidableEq, Repr
-
 /-- Assembled `(i, j)` entry of $\sum_r w_r \ell_r \ell_r^\top$. -/
 def gramEntry : List MnaGramFactor → Nat → Nat → CanonicalRat
   | [], _, _ => 0
   | f :: fs, i, j => f.weight * (vecEntry f.vec i * vecEntry f.vec j) + gramEntry fs i j
-
 /-- Bilinear evaluation $\sum_r w_r (\ell_r^\top u)(\ell_r^\top v)$. -/
 def evalGramBilinear (n : Nat) : List MnaGramFactor → List CanonicalRat → List CanonicalRat → CanonicalRat
   | [], _, _ => 0
   | f :: fs, u, v => f.weight * (vecDotN n f.vec u * vecDotN n f.vec v) + evalGramBilinear n fs u v
-
 theorem gramEntry_diag_nonneg :
     ∀ (factors : List MnaGramFactor) (i : Nat),
       (∀ f, f ∈ factors → 0 ≤ f.weight) → 0 ≤ gramEntry factors i i
@@ -225,7 +194,6 @@ theorem gramEntry_diag_nonneg :
     have hTerm := Rat.mul_nonneg (hW f (List.mem_cons_self ..)) (Interval.rat_sq_nonneg (vecEntry f.vec i))
     have hRest := gramEntry_diag_nonneg fs i (fun g hg => hW g (List.mem_cons_of_mem f hg))
     grind
-
 private theorem evalGramBilinear_nonneg (n : Nat) :
     ∀ (factors : List MnaGramFactor) (x : List CanonicalRat),
       (∀ f, f ∈ factors → 0 ≤ f.weight) → 0 ≤ evalGramBilinear n factors x x
@@ -235,7 +203,6 @@ private theorem evalGramBilinear_nonneg (n : Nat) :
     have hTerm := Rat.mul_nonneg (hW f (List.mem_cons_self ..)) (Interval.rat_sq_nonneg (vecDotN n f.vec x))
     have hRest := evalGramBilinear_nonneg n fs x (fun g hg => hW g (List.mem_cons_of_mem f hg))
     grind
-
 private theorem sum_gramEntry_eq_bilinear (n : Nat) :
     ∀ (factors : List MnaGramFactor) (u v : List CanonicalRat),
       sumUpTo n (fun i => vecEntry u i * sumUpTo n (fun j => gramEntry factors i j * vecEntry v j)) =
@@ -268,7 +235,6 @@ private theorem sum_gramEntry_eq_bilinear (n : Nat) :
       rw [← sumUpTo_scale]
       exact sumUpTo_congr n _ _ (fun _ _ => by grind)
     unfold vecDotN; rw [hPull]; grind
-
 /-- **Gram Congruence Symmetry & Positive Semidefiniteness (`gramCongruence_symm_and_psd`)**. -/
 theorem gramCongruence_symm_and_psd (n : Nat) (M : List (List CanonicalRat))
     (factors : List MnaGramFactor)
@@ -291,7 +257,6 @@ theorem gramCongruence_symm_and_psd (n : Nat) (M : List (List CanonicalRat))
     sumUpTo_congr n _ _ (fun i hi => by rw [sumUpTo_congr n _ _ (fun j hj => by rw [hEntries i j hi hj])])
   rw [hRew, sum_gramEntry_eq_bilinear]
   exact evalGramBilinear_nonneg n factors x hWeights
-
 /-- **Skew-Compatible Passive Conductance Lemma (`quadFormN_nonneg_of_symSum_gram`)**:
 Since $2 \, x^\top G x = x^\top (G + G^\top) x$, a Gram factorization of $G + G^\top$ certifies
 $0 \le x^\top G x$ even when $G$ contains skew-symmetric MNA inductor/transformer stamps. -/
@@ -327,15 +292,12 @@ theorem quadFormN_nonneg_of_symSum_gram (n : Nat) (G : List (List CanonicalRat))
   have hGramNonneg := evalGramBilinear_nonneg n factors x hWeights
   have hTwo : (2 : CanonicalRat) * 0 ≤ 2 * quadFormN n G x x := by rw [hDouble]; grind
   exact Rat.le_of_mul_le_mul_left hTwo (by decide +kernel)
-
 /-! ## 2. Index-1 MNA Circuit DAE Residual Enclosure & Unconditional Discrete Energy Passivity -/
-
 /-- Implicit DAE time-stepping integration method. -/
 inductive MnaMethod where
   | backwardEuler
   | trapezoidal
   deriving DecidableEq, Repr
-
 /-- Passive 2-terminal sector-monotone nonlinear device (`none` = reference ground `0 V`). -/
 structure MnaNonlinearBranch where
   nodeP? : Option Nat
@@ -343,12 +305,10 @@ structure MnaNonlinearBranch where
   gMin   : CanonicalRat
   gMax   : CanonicalRat
   deriving DecidableEq, Repr
-
 /-- Branch port voltage $v_b(x) = x_p - x_q$ (`0` at ground `none`). -/
 def branchVoltage (n : Nat) (b : MnaNonlinearBranch) (x : List CanonicalRat) : CanonicalRat :=
   (match b.nodeP? with | some p => if p < n then vecEntry x p else 0 | none => 0) -
   (match b.nodeN? with | some q => if q < n then vecEntry x q else 0 | none => 0)
-
 /-- Stamp all 2-terminal nonlinear branch currents `iBranches` into the $n$-dimensional MNA KCL vector. -/
 def stampNonlinearCurrents (n : Nat) : List MnaNonlinearBranch → List CanonicalRat → List CanonicalRat
   | [], _ => mkVec n (fun _ => 0)
@@ -359,7 +319,6 @@ def stampNonlinearCurrents (n : Nat) : List MnaNonlinearBranch → List Canonica
       (match b.nodeP? with | some p => if i = p ∧ p < n then ib else 0 | none => 0) -
       (match b.nodeN? with | some q => if i = q ∧ q < n then ib else 0 | none => 0) +
       vecEntry rest i)
-
 private theorem sum_optNode_term (n : Nat) (opt : Option Nat) (ib : CanonicalRat) (x : List CanonicalRat) :
     sumUpTo n (fun i => vecEntry x i * (match opt with | some p => if i = p ∧ p < n then ib else 0 | none => 0)) =
       (match opt with | some p => if p < n then vecEntry x p else 0 | none => 0) * ib := by
@@ -374,7 +333,6 @@ private theorem sum_optNode_term (n : Nat) (opt : Option Nat) (ib : CanonicalRat
         · simp [hip]
     · rw [sumUpTo_congr n _ (fun _ => 0) (fun _ _ => by simp [hp]), sumUpTo_zero]
       simp [hp]
-
 /-- **Tellegen KCL Incidence Passivity (`stampNonlinearCurrents_passive`)**:
 Sector-passive 2-terminal nonlinear branches ($v_b i_b \ge 0$) satisfy $x^\top i_{\text{nl}}(x) \ge 0$. -/
 theorem stampNonlinearCurrents_passive (n : Nat) :
@@ -414,7 +372,6 @@ theorem stampNonlinearCurrents_passive (n : Nat) :
       have hSucc := hPass (idx + 1) (by simp; omega)
       cases ibs <;> simp [vecEntry] at hSucc ⊢ <;> exact hSucc
     grind
-
 /-- MNA Circuit DAE specification $C \dot{x}(t) + G x(t) + i_{\text{nl}}(x(t)) = B u(t)$. -/
 structure MnaCircuitSpec where
   dim        : Nat
@@ -424,7 +381,6 @@ structure MnaCircuitSpec where
   matB       : List (List CanonicalRat)
   nlBranches : List MnaNonlinearBranch
   deriving DecidableEq, Repr
-
 /-- One implicit circuit DAE solver step with residual tolerance `residualTol`. -/
 structure MnaTraceStep where
   dt            : CanonicalRat
@@ -435,7 +391,6 @@ structure MnaTraceStep where
   iBranchesNext : List CanonicalRat
   residualTol   : CanonicalRat
   deriving DecidableEq, Repr
-
 /-- Discretized MNA KCL/KVL step residual vector for Backward-Euler or Trapezoidal integration. -/
 def mnaStepResidual (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTraceStep) : List CanonicalRat :=
   let n := spec.dim
@@ -454,7 +409,6 @@ def mnaStepResidual (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTrac
     mkVec n (fun i =>
       vecEntry cDx i / step.dt + vecEntry gxMid i +
       (vecEntry inlNext i + vecEntry inlPrev i) / 2 - vecEntry bu i)
-
 /-- Check sector monotonicity (`0 ≤ gMin ≤ gMax`) and passivity (`0 ≤ v · i`) for every nonlinear branch. -/
 def checkMnaStepNonlinear (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTraceStep) : Bool :=
   (List.range spec.nlBranches.length).all fun idx =>
@@ -474,7 +428,6 @@ def checkMnaStepNonlinear (spec : MnaCircuitSpec) (method : MnaMethod) (step : M
       decide (0 ≤ vPrev * iPrev) &&
       decide (0 ≤ (iPrev - b.gMin * vPrev) * (b.gMax * vPrev - iPrev)) &&
       decide (0 ≤ ((vNext + vPrev) / 2) * ((iNext + iPrev) / 2))
-
 /-- **Backward-Euler & Trapezoidal MNA Step Residual Enclosure Checker (`checkMnaStepEnclosure`)**. -/
 def checkMnaStepEnclosure (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTraceStep) : Bool :=
   decide (0 < step.dt) &&
@@ -483,11 +436,9 @@ def checkMnaStepEnclosure (spec : MnaCircuitSpec) (method : MnaMethod) (step : M
   (List.range spec.dim).all fun i =>
     let r_i := vecEntry (mnaStepResidual spec method step) i
     decide (-step.residualTol ≤ r_i) && decide (r_i ≤ step.residualTol)
-
 private theorem list_range_all_iff (n : Nat) (p : Nat → Bool) :
     (List.range n).all p = true ↔ ∀ i, i < n → p i = true := by
   simp [List.all_eq_true, List.mem_range]
-
 /-- **Soundness of `checkMnaStepEnclosure` (`checkMnaStepEnclosure_sound`)**. -/
 theorem checkMnaStepEnclosure_sound (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTraceStep)
     (hOk : checkMnaStepEnclosure spec method step = true) :
@@ -510,7 +461,6 @@ theorem checkMnaStepEnclosure_sound (spec : MnaCircuitSpec) (method : MnaMethod)
   refine ⟨hDt, hTol, hPassNext, fun i hi => ?_⟩
   rw [Interval.mem_iff]
   exact hRes i hi
-
 private theorem quadFormN_polarization_be (n : Nat) (C : List (List CanonicalRat))
     (hSym : ∀ i j, i < n → j < n → matEntry C i j = matEntry C j i)
     (xPrev xNext : List CanonicalRat) :
@@ -530,7 +480,6 @@ private theorem quadFormN_polarization_be (n : Nat) (C : List (List CanonicalRat
       quadFormN n C xNext xNext - quadFormN n C xNext xPrev :=
     quadFormN_sub_right n C xNext xNext xPrev
   rw [h3, h4]; grind
-
 /-- **Unconditional Backward-Euler MNA Energy Passivity (`mna_backward_euler_energy_dissipative`)**:
 When $C \succeq 0$, $G + G^\top \succeq 0$, and $x_{k+1}^\top i_{\text{nl}}(x_{k+1}) \ge 0$ under zero
 source $u = 0$, stored electromagnetic/capacitive energy $\frac{1}{2} x^\top C x$ is monotonically
@@ -582,7 +531,6 @@ theorem mna_backward_euler_energy_dissipative
   have hGTerm : 0 ≤ dt * quadFormN n G xNext xNext := Rat.mul_nonneg (by grind) hPsdG
   have hNlTerm : 0 ≤ dt * vecDotN n xNext inl := Rat.mul_nonneg (by grind) hNlPassive
   exact ⟨by grind, by grind, hEnNext⟩
-
 /-- **Unconditional Trapezoidal MNA Energy Passivity (`mna_trapezoidal_energy_dissipative`)**. -/
 theorem mna_trapezoidal_energy_dissipative
     (n : Nat) (C G : List (List CanonicalRat))
@@ -634,7 +582,6 @@ theorem mna_trapezoidal_energy_dissipative
   have hGTerm : 0 ≤ dt * quadFormN n G xMid xMid := Rat.mul_nonneg (by grind) hPsdG
   have hNlTerm : 0 ≤ dt * vecDotN n xMid iAvg := Rat.mul_nonneg (by grind) hNlMidPassive
   exact ⟨by grind, by grind⟩
-
 /-- **Multi-Step Variable-Timestep Backward-Euler Trace Stability (`mna_backward_euler_trace_energy_monotone`)**. -/
 theorem mna_backward_euler_trace_energy_monotone
     (n : Nat) (C G : List (List CanonicalRat))
@@ -671,25 +618,23 @@ theorem mna_backward_euler_trace_energy_monotone
           | succ m => simpa using hSucc)
       have hLast : ((dt1, x1, inl1) :: s2 :: tail).getLast? = (s2 :: tail).getLast? := rfl
       rw [hLast] at *; grind
-
 /-! ## 3. Inhabited `Obend.Judge` Instance (`mnaCircuitDaeJudge`) & `"mna-dae@1"` `Judge.Format` -/
-
 /-- Problem object for `mnaCircuitDaeJudge` (`"mna-dae@1"`). -/
 structure MnaDaeProblem where
   spec   : MnaCircuitSpec
   method : MnaMethod
   trace  : List MnaTraceStep
   deriving DecidableEq, Repr
-
 /-- Gram congruence passivity certificate for `mnaCircuitDaeJudge` (`"mna-dae@1"`). -/
 structure MnaDaeCert where
   capGramFactors     : List MnaGramFactor
   condSymGramFactors : List MnaGramFactor
   deriving DecidableEq, Repr
-
 /-- Refusal vocabulary for `mnaCircuitDaeJudge`. -/
 inductive MnaDaeClause where
   | badSystemDim
+  | badMatrixDims
+  | badTraceDimsOrContinuity
   | negativeCapacitanceDiag (node : Nat)
   | negativeConductanceDiag (node : Nat)
   | nonPassiveNonlinearStep (stepIdx : Nat)
@@ -697,7 +642,6 @@ inductive MnaDaeClause where
   | badCapGramCert
   | badCondGramCert
   deriving @[expose] DecidableEq, Repr
-
 /-- Nonlinear branch admissibility proposition for a single step (pure mathematical `Prop`). -/
 def MnaStepNonlinearProp (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTraceStep) : Prop :=
   ∀ idx, idx < spec.nlBranches.length →
@@ -713,11 +657,27 @@ def MnaStepNonlinearProp (spec : MnaCircuitSpec) (method : MnaMethod) (step : Mn
       0 ≤ vPrev * iPrev ∧
       0 ≤ (iPrev - b.gMin * vPrev) * (b.gMax * vPrev - iPrev) ∧
       0 ≤ ((vNext + vPrev) / 2) * ((iNext + iPrev) / 2))
-
 def dfltTraceStep : MnaTraceStep := ⟨1, [], [], [], [], [], 0⟩
-
+/-- Exact dimensions: default-zero indexing must not hide missing or extra entries. -/
+@[expose] def MnaSpecDims (s : MnaCircuitSpec) : Prop :=
+  s.matC.length = s.dim ∧ (∀ row ∈ s.matC, row.length = s.dim) ∧
+  s.matG.length = s.dim ∧ (∀ row ∈ s.matG, row.length = s.dim) ∧
+  s.matB.length = s.dim ∧ (∀ row ∈ s.matB, row.length = s.inputDim)
+instance (s : MnaCircuitSpec) : Decidable (MnaSpecDims s) := by unfold MnaSpecDims; infer_instance
+def checkMnaSpecDims (s : MnaCircuitSpec) : Bool := decide (MnaSpecDims s)
+theorem checkMnaSpecDims_iff (s : MnaCircuitSpec) : checkMnaSpecDims s = true ↔ MnaSpecDims s := by
+  simp [checkMnaSpecDims]
+/-- One held input and both endpoint branch currents have exact dimensions. -/
+@[expose] def MnaTraceDims (s : MnaCircuitSpec) (steps : List MnaTraceStep) : Prop :=
+  (∀ t ∈ steps, t.xPrev.length = s.dim ∧ t.xNext.length = s.dim ∧
+    t.uInput.length = s.inputDim ∧ t.iBranchesPrev.length = s.nlBranches.length ∧
+    t.iBranchesNext.length = s.nlBranches.length) ∧
+  ∀ pair ∈ steps.zip (steps.drop 1), pair.1.xNext = pair.2.xPrev
+instance (s : MnaCircuitSpec) (steps : List MnaTraceStep) : Decidable (MnaTraceDims s steps) := by
+  unfold MnaTraceDims; infer_instance
 /-- Independent semantic meaning of `mnaCircuitDaeJudge` (pure mathematical `Prop` without calling `check`). -/
 @[expose] def MnaDaeMeaning (prob : MnaDaeProblem) (cert : MnaDaeCert) : Prop :=
+  MnaSpecDims prob.spec ∧ MnaTraceDims prob.spec prob.trace ∧
   0 < prob.spec.dim ∧
   (∀ i j, i < prob.spec.dim → j < prob.spec.dim →
     matEntry prob.spec.matC i j = gramEntry cert.capGramFactors i j) ∧
@@ -730,35 +690,36 @@ def dfltTraceStep : MnaTraceStep := ⟨1, [], [], [], [], [], 0⟩
     0 < step.dt ∧ 0 ≤ step.residualTol ∧ MnaStepNonlinearProp prob.spec prob.method step ∧
     ∀ i, i < prob.spec.dim →
       vecEntry (mnaStepResidual prob.spec prob.method step) i ∈ Interval.mk (-step.residualTol) step.residualTol
-
 private def findFirst (n : Nat) (pred : Nat → Bool) : Option Nat := (List.range n).find? pred
-
 private theorem findFirst_some_iff (n : Nat) (pred : Nat → Bool) (k : Nat)
     (h : findFirst n pred = some k) : k < n ∧ pred k = true :=
   ⟨List.mem_range.mp (List.mem_of_find?_eq_some h), List.find?_some h⟩
-
 private theorem findFirst_none_iff (n : Nat) (pred : Nat → Bool)
     (h : findFirst n pred = none) : ∀ i, i < n → pred i = false := by
   simp only [findFirst, List.find?_eq_none, List.mem_range, Bool.not_eq_true] at h; exact h
-
 private theorem findFirst_eq_none_of_all_false (n : Nat) (pred : Nat → Bool)
     (h : ∀ i, i < n → pred i = false) : findFirst n pred = none := by
   simp only [findFirst, List.find?_eq_none, List.mem_range, Bool.not_eq_true]; exact h
-
 private def checkGramMatrix (n : Nat) (target : Nat → Nat → CanonicalRat) (factors : List MnaGramFactor) : Bool :=
   factors.all (fun f => decide (0 ≤ f.weight)) &&
   (List.range n).all (fun i => (List.range n).all (fun j => decide (target i j = gramEntry factors i j)))
-
 private def stepResidualOk (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTraceStep) : Bool :=
   decide (0 < step.dt) && decide (0 ≤ step.residualTol) &&
   (List.range spec.dim).all fun i =>
     let r_i := vecEntry (mnaStepResidual spec method step) i
     decide (-step.residualTol ≤ r_i) && decide (r_i ≤ step.residualTol)
-
+/-- Continuity and dimensions are checked in addition to every KCL enclosure. -/
+def checkMnaTrace (s : MnaCircuitSpec) (method : MnaMethod) (steps : List MnaTraceStep) : Bool :=
+  decide (MnaTraceDims s steps) && steps.all (stepResidualOk s method)
+theorem checkMnaTrace_dims {s : MnaCircuitSpec} {method : MnaMethod} {steps : List MnaTraceStep}
+    (h : checkMnaTrace s method steps = true) : MnaTraceDims s steps := by
+  simp only [checkMnaTrace, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h.1
 /-- Graded certificate checker for `mnaCircuitDaeJudge`. -/
 def checkMnaDaeProblem (grade : Nat) (prob : MnaDaeProblem) (cert : MnaDaeCert) :
     Judge.Verdict MnaDaeClause :=
   if grade < prob.trace.length then .uncovered
+  else if !checkMnaSpecDims prob.spec then .refused .badMatrixDims []
   else if prob.spec.dim == 0 then .refused .badSystemDim []
   else match findFirst prob.spec.dim (fun i => decide (matEntry prob.spec.matC i i < 0)) with
   | some i => .refused (.negativeCapacitanceDiag i) [i]
@@ -774,19 +735,18 @@ def checkMnaDaeProblem (grade : Nat) (prob : MnaDaeProblem) (cert : MnaDaeCert) 
             !stepResidualOk prob.spec prob.method (prob.trace.getD k dfltTraceStep)) with
         | some k => .refused (.stepResidualViolation k) [k]
         | none =>
-          if !checkGramMatrix prob.spec.dim (matEntry prob.spec.matC) cert.capGramFactors then
+          if !checkMnaTrace prob.spec prob.method prob.trace then .refused .badTraceDimsOrContinuity []
+          else if !checkGramMatrix prob.spec.dim (matEntry prob.spec.matC) cert.capGramFactors then
             .refused .badCapGramCert []
           else if !checkGramMatrix prob.spec.dim
               (fun i j => matEntry prob.spec.matG i j + matEntry prob.spec.matG j i) cert.condSymGramFactors then
             .refused .badCondGramCert []
           else .ok
-
 /-- Refuting clauses of `mnaCircuitDaeJudge`. -/
 def mnaClauseRefutes : MnaDaeClause → Bool
-  | .badSystemDim | .negativeCapacitanceDiag _ | .negativeConductanceDiag _
+  | .badMatrixDims | .badTraceDimsOrContinuity | .badSystemDim | .negativeCapacitanceDiag _ | .negativeConductanceDiag _
   | .nonPassiveNonlinearStep _ | .stepResidualViolation _ => true
   | .badCapGramCert | .badCondGramCert => false
-
 private theorem checkMnaStepNonlinear_iff (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTraceStep) :
     checkMnaStepNonlinear spec method step = true ↔ MnaStepNonlinearProp spec method step := by
   unfold checkMnaStepNonlinear MnaStepNonlinearProp; rw [list_range_all_iff]
@@ -800,7 +760,6 @@ private theorem checkMnaStepNonlinear_iff (spec : MnaCircuitSpec) (method : MnaM
     · exact ⟨⟨⟨hB.1, hB.2.1⟩, hB.2.2.1⟩, hB.2.2.2.1⟩
     · have hTr := hB.2.2.2.2 rfl
       exact ⟨⟨⟨⟨⟨⟨hB.1, hB.2.1⟩, hB.2.2.1⟩, hB.2.2.2.1⟩, hTr.1⟩, hTr.2.1⟩, hTr.2.2⟩
-
 private theorem stepResidualOk_iff (spec : MnaCircuitSpec) (method : MnaMethod) (step : MnaTraceStep) :
     stepResidualOk spec method step = true ↔
       (0 < step.dt ∧ 0 ≤ step.residualTol ∧
@@ -809,19 +768,20 @@ private theorem stepResidualOk_iff (spec : MnaCircuitSpec) (method : MnaMethod) 
   unfold stepResidualOk; simp only [Bool.and_eq_true, decide_eq_true_eq, list_range_all_iff]
   exact ⟨fun ⟨⟨h1, h2⟩, h3⟩ => ⟨h1, h2, fun i hi => (Interval.mem_iff _ _).mpr (h3 i hi)⟩,
          fun ⟨h1, h2, h3⟩ => ⟨⟨h1, h2⟩, fun i hi => (Interval.mem_iff _ _).mp (h3 i hi)⟩⟩
-
 private theorem checkGramMatrix_iff (n : Nat) (target : Nat → Nat → CanonicalRat) (factors : List MnaGramFactor) :
     checkGramMatrix n target factors = true ↔
       ((∀ i j, i < n → j < n → target i j = gramEntry factors i j) ∧ (∀ f, f ∈ factors → 0 ≤ f.weight)) := by
   unfold checkGramMatrix; simp only [Bool.and_eq_true, List.all_eq_true, List.mem_range, decide_eq_true_eq]
   exact ⟨fun ⟨hw, he⟩ => ⟨fun i j hi hj => he i hi j hj, hw⟩,
          fun ⟨he, hw⟩ => ⟨hw, fun i hi j hj => he i j hi hj⟩⟩
-
 /-- **Soundness of `checkMnaDaeProblem` (`checkMnaDaeProblem_sound`)**. -/
 theorem checkMnaDaeProblem_sound {r : Nat} {prob : MnaDaeProblem} {cert : MnaDaeCert}
     (hOk : checkMnaDaeProblem r prob cert = .ok) : MnaDaeMeaning prob cert := by
   unfold checkMnaDaeProblem at hOk
   split at hOk; · cases hOk
+  split at hOk; · cases hOk
+  rename_i hDims
+  have hDims : MnaSpecDims prob.spec := (checkMnaSpecDims_iff _).mp (by simpa using hDims)
   split at hOk; · cases hOk
   rename_i _ hDimNe
   have hNe0 : prob.spec.dim ≠ 0 := by intro hZ; simp [hZ] at hDimNe
@@ -844,13 +804,16 @@ theorem checkMnaDaeProblem_sound {r : Nat} {prob : MnaDaeProblem} {cert : MnaDae
         | some k => rw [hRes] at hOk; cases hOk
         | none =>
           rw [hRes] at hOk; dsimp only at hOk
+          split at hOk; · cases hOk
+          rename_i hTraceOk
+          have hTraceOk : checkMnaTrace prob.spec prob.method prob.trace = true := by simpa using hTraceOk
           by_cases hCapOk : checkGramMatrix prob.spec.dim (matEntry prob.spec.matC) cert.capGramFactors = true
           · simp only [hCapOk, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
             by_cases hCondOk : checkGramMatrix prob.spec.dim
                 (fun i j => matEntry prob.spec.matG i j + matEntry prob.spec.matG j i) cert.condSymGramFactors = true
             · obtain ⟨hCapE, hCapW⟩ := (checkGramMatrix_iff _ _ _).mp hCapOk
               obtain ⟨hCondE, hCondW⟩ := (checkGramMatrix_iff _ _ _).mp hCondOk
-              refine ⟨hDimPos, hCapE, hCapW, hCondE, hCondW, fun k hk => ?_⟩
+              refine ⟨hDims, checkMnaTrace_dims hTraceOk, hDimPos, hCapE, hCapW, hCondE, hCondW, fun k hk => ?_⟩
               have hNlK : checkMnaStepNonlinear prob.spec prob.method (prob.trace.getD k dfltTraceStep) = true := by
                 have hF := findFirst_none_iff _ _ hNl k hk
                 cases hB : checkMnaStepNonlinear prob.spec prob.method (prob.trace.getD k dfltTraceStep)
@@ -865,16 +828,17 @@ theorem checkMnaDaeProblem_sound {r : Nat} {prob : MnaDaeProblem} {cert : MnaDae
               exact ⟨hDt, hTol, (checkMnaStepNonlinear_iff _ _ _).mp hNlK, hIv⟩
             · simp [hCondOk] at hOk
           · simp [hCapOk] at hOk
-
 /-- **Refutation Soundness (`checkMnaDaeProblem_refuted`)**. -/
 theorem checkMnaDaeProblem_refuted {r : Nat} {prob : MnaDaeProblem} {cert : MnaDaeCert}
     {k : MnaDaeClause} {p : List Nat}
     (hRef : checkMnaDaeProblem r prob cert = .refused k p)
     (hRefutes : mnaClauseRefutes k = true) :
     ∀ c', ¬ MnaDaeMeaning prob c' := by
-  intro c' ⟨hDimPos, hCapE, hCapW, hCondE, hCondW, hTrace⟩
+  intro c' ⟨hDims, hTraceDims, hDimPos, hCapE, hCapW, hCondE, hCondW, hTrace⟩
   unfold checkMnaDaeProblem at hRef
   split at hRef; · cases hRef
+  have hDimsOk := (checkMnaSpecDims_iff _).mpr hDims
+  simp only [hDimsOk, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
   split at hRef
   · rename_i hDimZero; have := beq_iff_eq.mp hDimZero; omega
   · cases hC : findFirst prob.spec.dim (fun i => decide (matEntry prob.spec.matC i i < 0)) with
@@ -908,6 +872,14 @@ theorem checkMnaDaeProblem_refuted {r : Nat} {prob : MnaDaeProblem} {cert : MnaD
             rw [hTrue] at hFail; cases hFail
           | none =>
             rw [hRes] at hRef; dsimp only at hRef
+            have hTraceOk : checkMnaTrace prob.spec prob.method prob.trace = true := by
+              simp only [checkMnaTrace, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
+              refine ⟨hTraceDims, ?_⟩
+              intro t ht
+              obtain ⟨j, hj, rfl⟩ := List.getElem_of_mem ht
+              have hT := hTrace j hj
+              simpa [List.getD, hj] using (stepResidualOk_iff _ _ _).mpr ⟨hT.1, hT.2.1, hT.2.2.2⟩
+            simp only [hTraceOk, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
             by_cases hCapOk : checkGramMatrix prob.spec.dim (matEntry prob.spec.matC) cert.capGramFactors = true
             · simp only [hCapOk, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
               by_cases hCondOk : checkGramMatrix prob.spec.dim
@@ -917,14 +889,21 @@ theorem checkMnaDaeProblem_refuted {r : Nat} {prob : MnaDaeProblem} {cert : MnaD
                 injection hRef with hK _; subst hK; cases hRefutes
             · simp only [hCapOk, Bool.not_false, ↓reduceIte] at hRef
               injection hRef with hK _; subst hK; cases hRefutes
-
 /-- **Completeness of `checkMnaDaeProblem` on the universal fragment (`checkMnaDaeProblem_complete`)**. -/
 theorem checkMnaDaeProblem_complete {prob : MnaDaeProblem}
     (hEx : ∃ c, MnaDaeMeaning prob c) :
     ∃ c r, checkMnaDaeProblem r prob c = .ok := by
-  obtain ⟨c, hDimPos, hCapE, hCapW, hCondE, hCondW, hTrace⟩ := hEx
+  obtain ⟨c, hDims, hTraceDims, hDimPos, hCapE, hCapW, hCondE, hCondW, hTrace⟩ := hEx
   refine ⟨c, prob.trace.length, ?_⟩
   unfold checkMnaDaeProblem
+  have hDimsOk := (checkMnaSpecDims_iff _).mpr hDims
+  have hTraceOk : checkMnaTrace prob.spec prob.method prob.trace = true := by
+    simp only [checkMnaTrace, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
+    refine ⟨hTraceDims, ?_⟩
+    intro t ht
+    obtain ⟨j, hj, rfl⟩ := List.getElem_of_mem ht
+    have hT := hTrace j hj
+    simpa [List.getD, hj] using (stepResidualOk_iff _ _ _).mpr ⟨hT.1, hT.2.1, hT.2.2.2⟩
   have hNotLt : ¬ prob.trace.length < prob.trace.length := Nat.lt_irrefl _
   have hDimB : (prob.spec.dim == 0) = false := beq_eq_false_iff_ne.mpr (by omega)
   have hCNone : findFirst prob.spec.dim (fun i => decide (matEntry prob.spec.matC i i < 0)) = none :=
@@ -945,13 +924,12 @@ theorem checkMnaDaeProblem_complete {prob : MnaDaeProblem}
       have hT := hTrace k hk; have hOk := (stepResidualOk_iff _ _ _).mpr ⟨hT.1, hT.2.1, hT.2.2.2⟩; rw [hOk]; rfl)
   have hCapOk := (checkGramMatrix_iff _ _ _).mpr ⟨hCapE, hCapW⟩
   have hCondOk := (checkGramMatrix_iff _ _ _).mpr ⟨hCondE, hCondW⟩
-  simp only [hNotLt, ↓reduceIte, hDimB, Bool.false_eq_true]
+  simp only [hNotLt, ↓reduceIte, hDimsOk, Bool.not_true, hDimB, Bool.false_eq_true]
   rw [hCNone]; dsimp only
   rw [hGNone]; dsimp only
   rw [hNlNone]; dsimp only
   rw [hResNone]; dsimp only
-  simp [hCapOk, hCondOk]
-
+  simp [hTraceOk, hCapOk, hCondOk]
 /-- **Inhabited MNA Circuit DAE Judge (`mnaCircuitDaeJudge`)**. -/
 instance mnaCircuitDaeJudge : Judge MnaDaeProblem MnaDaeCert where
   Clause   := MnaDaeClause
@@ -969,7 +947,6 @@ instance mnaCircuitDaeJudge : Judge MnaDaeProblem MnaDaeCert where
     · simp [hr] at hNe
     · have hr' : ¬ r' < o.trace.length := by omega
       simp [hr, hr']
-
 /-- **Derived Physical Passivity & Step-Enclosure Theorem (`mnaDaeJudge_sound_passivity_and_enclosure`)**. -/
 theorem mnaDaeJudge_sound_passivity_and_enclosure {r : Nat} {prob : MnaDaeProblem} {cert : MnaDaeCert}
     (hOk : checkMnaDaeProblem r prob cert = .ok) :
@@ -982,46 +959,38 @@ theorem mnaDaeJudge_sound_passivity_and_enclosure {r : Nat} {prob : MnaDaeProble
             (stampNonlinearCurrents prob.spec.dim prob.spec.nlBranches step.iBranchesNext) ∧
       ∀ i, i < prob.spec.dim →
         vecEntry (mnaStepResidual prob.spec prob.method step) i ∈ Interval.mk (-step.residualTol) step.residualTol) := by
-  obtain ⟨_, hCapE, hCapW, hCondE, hCondW, hTrace⟩ := checkMnaDaeProblem_sound hOk
+  obtain ⟨_, _, _, hCapE, hCapW, hCondE, hCondW, hTrace⟩ := checkMnaDaeProblem_sound hOk
   obtain ⟨_, _, hPsdC⟩ := gramCongruence_symm_and_psd prob.spec.dim prob.spec.matC cert.capGramFactors hCapE hCapW
   refine ⟨fun x => Rat.mul_nonneg (by decide +kernel) (hPsdC x),
           quadFormN_nonneg_of_symSum_gram prob.spec.dim prob.spec.matG cert.condSymGramFactors hCondE hCondW,
           fun k hk => ?_⟩
   have hTk := hTrace k hk
   exact ⟨hTk.1, stampNonlinearCurrents_passive _ _ _ _ (fun idx hIdx => (hTk.2.2.1 idx hIdx).2.2.1), hTk.2.2.2⟩
-
 /-! ### Kernel-Reducible JSON Wire Encoders/Decoders & `"mna-dae@1"` `Judge.Format` -/
-
 private def encodeRatVecJson (v : List CanonicalRat) : SosJson := .arr (v.map sosJsonEncodeRat)
 private def decodeRatVecJson (j : SosJson) : Except String (List CanonicalRat) := j.getArr? >>= List.mapM decodeRatJson
 private def encodeRatMatJson (M : List (List CanonicalRat)) : SosJson := .arr (M.map encodeRatVecJson)
 private def decodeRatMatJson (j : SosJson) : Except String (List (List CanonicalRat)) := j.getArr? >>= List.mapM decodeRatVecJson
 private def encodeOptNatJson : Option Nat → SosJson | none => .ofInt (-1) | some k => .ofNat k
-
 private def decodeOptNatJson (j : SosJson) : Except String (Option Nat) := do
   let m ← j.getInt?; if m < 0 then .ok none else .ok (some m.toNat)
-
 private def encodeNlBranchJson (b : MnaNonlinearBranch) : SosJson :=
   SosJson.mkObj
     [ ("nodeP", encodeOptNatJson b.nodeP?), ("nodeN", encodeOptNatJson b.nodeN?)
     , ("gMin", sosJsonEncodeRat b.gMin), ("gMax", sosJsonEncodeRat b.gMax) ]
-
 private def decodeNlBranchJson (j : SosJson) : Except String MnaNonlinearBranch := do
   pure ⟨← j.getObjVal? "nodeP" >>= decodeOptNatJson, ← j.getObjVal? "nodeN" >>= decodeOptNatJson,
         ← j.getObjVal? "gMin" >>= decodeRatJson, ← j.getObjVal? "gMax" >>= decodeRatJson⟩
-
 private def encodeTraceStepJson (s : MnaTraceStep) : SosJson :=
   SosJson.mkObj
     [ ("dt", sosJsonEncodeRat s.dt), ("xPrev", encodeRatVecJson s.xPrev), ("xNext", encodeRatVecJson s.xNext)
     , ("uInput", encodeRatVecJson s.uInput), ("iBranchesPrev", encodeRatVecJson s.iBranchesPrev)
     , ("iBranchesNext", encodeRatVecJson s.iBranchesNext), ("residualTol", sosJsonEncodeRat s.residualTol) ]
-
 private def decodeTraceStepJson (j : SosJson) : Except String MnaTraceStep := do
   pure ⟨← j.getObjVal? "dt" >>= decodeRatJson, ← j.getObjVal? "xPrev" >>= decodeRatVecJson,
         ← j.getObjVal? "xNext" >>= decodeRatVecJson, ← j.getObjVal? "uInput" >>= decodeRatVecJson,
         ← j.getObjVal? "iBranchesPrev" >>= decodeRatVecJson, ← j.getObjVal? "iBranchesNext" >>= decodeRatVecJson,
         ← j.getObjVal? "residualTol" >>= decodeRatJson⟩
-
 def encodeMnaDaeProblem (prob : MnaDaeProblem) : String :=
   let methodStr := match prob.method with | .backwardEuler => "be" | .trapezoidal => "trap"
   sosJsonCompress <| SosJson.mkObj
@@ -1030,7 +999,6 @@ def encodeMnaDaeProblem (prob : MnaDaeProblem) : String :=
     , ("matB", encodeRatMatJson prob.spec.matB)
     , ("nlBranches", .arr (prob.spec.nlBranches.map encodeNlBranchJson))
     , ("method", .str methodStr.toList), ("trace", .arr (prob.trace.map encodeTraceStepJson)) ]
-
 def decodeMnaDaeProblem (wire : String) : Except String MnaDaeProblem := do
   let root ← sosJsonParse wire
   let dim ← root.getObjNat? "dim"
@@ -1044,46 +1012,35 @@ def decodeMnaDaeProblem (wire : String) : Except String MnaDaeProblem := do
     else if mStr == "trap" then .ok MnaMethod.trapezoidal else .error s!"unknown MNA method: {mStr}"
   let trace ← (root.getObjVal? "trace" >>= SosJson.getArr?) >>= List.mapM decodeTraceStepJson
   pure ⟨⟨dim, inputDim, matC, matG, matB, nlBranches⟩, method, trace⟩
-
 private def encodeGramFactorJson (f : MnaGramFactor) : SosJson :=
   SosJson.mkObj [("weight", sosJsonEncodeRat f.weight), ("vec", encodeRatVecJson f.vec)]
-
 private def decodeGramFactorJson (j : SosJson) : Except String MnaGramFactor := do
   pure ⟨← j.getObjVal? "weight" >>= decodeRatJson, ← j.getObjVal? "vec" >>= decodeRatVecJson⟩
-
 def encodeMnaDaeCert (cert : MnaDaeCert) : String :=
   sosJsonCompress <| SosJson.mkObj
     [ ("capGram", .arr (cert.capGramFactors.map encodeGramFactorJson))
     , ("condSymGram", .arr (cert.condSymGramFactors.map encodeGramFactorJson)) ]
-
 def decodeMnaDaeCert (wire : String) : Except String MnaDaeCert := do
   let root ← sosJsonParse wire
   pure ⟨← (root.getObjVal? "capGram" >>= SosJson.getArr?) >>= List.mapM decodeGramFactorJson,
         ← (root.getObjVal? "condSymGram" >>= SosJson.getArr?) >>= List.mapM decodeGramFactorJson⟩
-
 /-- Concrete 2-node RC + passive half-wave diode rectifier MNA DAE benchmark. -/
 def rcDiodeRectifierMnaSpec : MnaCircuitSpec :=
   ⟨2, 1, [[1, 0], [0, 2]], [[2, -1], [-1, 2]], [[1], [0]], [⟨some 0, some 1, 0, 1⟩]⟩
-
 def rcDiodeRectifierBeStep : MnaTraceStep :=
   ⟨1, [6, CanonicalRat.mk 1 2], [2, 1], [0], [1], [1], 0⟩
-
 def rcDiodeRectifierMnaProblem : MnaDaeProblem := ⟨rcDiodeRectifierMnaSpec, .backwardEuler, [rcDiodeRectifierBeStep]⟩
-
 def rcDiodeRectifierMnaCert : MnaDaeCert :=
   ⟨[⟨1, [1, 0]⟩, ⟨2, [0, 1]⟩], [⟨2, [1, 0]⟩, ⟨2, [0, 1]⟩, ⟨2, [1, -1]⟩]⟩
-
 /-- Planted non-passive negative-conductance MNA problem (`G_{00} = -3 < 0`). -/
 def nonPassiveNegCondMnaProblem : MnaDaeProblem :=
   ⟨{ rcDiodeRectifierMnaSpec with matG := [[-3, 0], [0, 1]] }, .backwardEuler, []⟩
-
 theorem nonPassiveNegCond_refused (grade : Nat) (cert : MnaDaeCert) :
     checkMnaDaeProblem grade nonPassiveNegCondMnaProblem cert =
       .refused (.negativeConductanceDiag 0) [0] := by
   unfold checkMnaDaeProblem nonPassiveNegCondMnaProblem rcDiodeRectifierMnaSpec
   have hNotLt : ¬ grade < ([] : List MnaTraceStep).length := by simp
   simp only [hNotLt, ↓reduceIte]; rfl
-
 /-- Registered `"mna-dae@1"` `Judge.Format`. -/
 def mnaCircuitDaeFormat : Judge.Format where
   name := "mna-dae"; version := "1"; Obj := MnaDaeProblem; Cert := MnaDaeCert
@@ -1091,56 +1048,43 @@ def mnaCircuitDaeFormat : Judge.Format where
   trust := .kernel; regime := .decidable
   bad := (nonPassiveNegCondMnaProblem, rcDiodeRectifierMnaCert)
   badGrade := 0; bad_refused := ⟨.negativeConductanceDiag 0, [0], nonPassiveNegCond_refused 0 rcDiodeRectifierMnaCert⟩
-
 -- Inhabitedness witnesses required by `lean/uninhabited-premise-risk`
 example : checkMnaStepEnclosure rcDiodeRectifierMnaSpec .backwardEuler rcDiodeRectifierBeStep = true := by decide +kernel
 example : checkMnaDaeProblem 1 rcDiodeRectifierMnaProblem rcDiodeRectifierMnaCert = .ok := by decide +kernel
-
 /-! ## 4. True 5-Cell (6-Level) SiC Flying-Capacitor Multilevel (`FCML`) Switched-Capacitor Hybrid Model -/
-
 /-- Instantaneous 5-cell FCML switching vector $s = (s_1, s_2, s_3, s_4, s_5) \in \{0, 1\}^5$. -/
 structure FcmlSwitchState5 where
   (s1 s2 s3 s4 s5 : Bool)
   deriving DecidableEq, Repr
-
 /-- Map a complementary SiC half-bridge cell state `Bool` into $\{0, 1\} \subset \mathbb{Q}$. -/
 def swBit (b : Bool) : CanonicalRat := if b then 1 else 0
-
 /-- Physical parameters of a 5-cell (6-level) SiC FCML leg: 4 flying capacitances $C_{1..4} > 0$ and $V_{\text{dc}} > 0$. -/
 structure FcmlCapSpec4 where
   (c1 c2 c3 c4 vdc : CanonicalRat)
   deriving DecidableEq, Repr
-
 @[expose] def FcmlCapSpec4.Spec (p : FcmlCapSpec4) : Prop :=
   0 < p.c1 ∧ 0 < p.c2 ∧ 0 < p.c3 ∧ 0 < p.c4 ∧ 0 < p.vdc
-
 /-- Flying-capacitor voltage state $v_C = (v_{C_1}, v_{C_2}, v_{C_3}, v_{C_4})$. -/
 structure FcmlCapState4 where
   (vc1 vc2 vc3 vc4 : CanonicalRat)
   deriving DecidableEq, Repr
-
 /-- Nominal balanced 5-cell FCML voltage ladder $v_{C_k}^* = \frac{k}{5} V_{\text{dc}}$ ($k = 1..4$). -/
 def fcmlNominalLadder (vdc : CanonicalRat) : FcmlCapState4 :=
   ⟨vdc / 5, (2 * vdc) / 5, (3 * vdc) / 5, (4 * vdc) / 5⟩
-
 /-- Capacitor voltage unbalance error $e_k = v_{C_k} - \frac{k}{5} V_{\text{dc}}$ ($k = 1..4$). -/
 def fcmlCapError (vdc : CanonicalRat) (v : FcmlCapState4) : FcmlCapState4 :=
   let nom := fcmlNominalLadder vdc
   ⟨v.vc1 - nom.vc1, v.vc2 - nom.vc2, v.vc3 - nom.vc3, v.vc4 - nom.vc4⟩
-
 /-- Exact KVL switch-node voltage $v_{\text{sw}}(s, v_C, V_{\text{dc}}) = \sum_{m=1}^5 s_m (v_{C_m} - v_{C_{m-1}})$. -/
 def fcmlSwitchNodeVoltage (vdc : CanonicalRat) (s : FcmlSwitchState5) (v : FcmlCapState4) : CanonicalRat :=
   swBit s.s1 * v.vc1 + swBit s.s2 * (v.vc2 - v.vc1) + swBit s.s3 * (v.vc3 - v.vc2) +
   swBit s.s4 * (v.vc4 - v.vc3) + swBit s.s5 * (vdc - v.vc4)
-
 /-- Per-cell SiC FET off-state voltage stress $(v_{C_1}, v_{C_2}-v_{C_1}, v_{C_3}-v_{C_2}, v_{C_4}-v_{C_3}, V_{\text{dc}}-v_{C_4})$. -/
 structure FcmlCellBlocking5 where
   (vb1 vb2 vb3 vb4 vb5 : CanonicalRat)
   deriving DecidableEq, Repr
-
 def fcmlCellBlockingVoltages (vdc : CanonicalRat) (v : FcmlCapState4) : FcmlCellBlocking5 :=
   ⟨v.vc1, v.vc2 - v.vc1, v.vc3 - v.vc2, v.vc4 - v.vc3, vdc - v.vc4⟩
-
 /-- **Exact Switched-Capacitor KCL Subinterval Recurrence (`stepFcmlSwitchSubinterval`)**. -/
 def stepFcmlSwitchSubinterval (p : FcmlCapSpec4) (dt iL : CanonicalRat)
     (s : FcmlSwitchState5) (v : FcmlCapState4) : FcmlCapState4 :=
@@ -1148,13 +1092,11 @@ def stepFcmlSwitchSubinterval (p : FcmlCapSpec4) (dt iL : CanonicalRat)
    v.vc2 + (dt / p.c2) * ((swBit s.s3 - swBit s.s2) * iL),
    v.vc3 + (dt / p.c3) * ((swBit s.s4 - swBit s.s3) * iL),
    v.vc4 + (dt / p.c4) * ((swBit s.s5 - swBit s.s4) * iL)⟩
-
 /-- Run a sequence of switched-capacitor subintervals at held inductor current `iL` and subinterval `dt`. -/
 def runFcmlSubintervals (p : FcmlCapSpec4) (dt iL : CanonicalRat) :
     List FcmlSwitchState5 → FcmlCapState4 → FcmlCapState4
   | [], v => v
   | s :: ss, v => runFcmlSubintervals p dt iL ss (stepFcmlSwitchSubinterval p dt iL s v)
-
 /-- **Balanced 6-Level Output & Instantaneous KCL/KVL Power Conservation (`fcml_instantaneous_power_conservation`)**. -/
 theorem fcml_instantaneous_power_conservation
     (vdc iL : CanonicalRat) (s : FcmlSwitchState5) (v : FcmlCapState4) :
@@ -1165,7 +1107,6 @@ theorem fcml_instantaneous_power_conservation
       (v.vc1 * ((swBit s.s2 - swBit s.s1) * iL) + v.vc2 * ((swBit s.s3 - swBit s.s2) * iL) +
        v.vc3 * ((swBit s.s4 - swBit s.s3) * iL) + v.vc4 * ((swBit s.s5 - swBit s.s4) * iL)) := by
   unfold fcmlSwitchNodeVoltage fcmlNominalLadder; exact ⟨by grind, by grind⟩
-
 /-- **SiC FET Blocking Voltage Safety from Unbalance Ball (`fcml_cell_blocking_bounded_by_unbalance`)**. -/
 theorem fcml_cell_blocking_bounded_by_unbalance
     (vdc dV vFetMax : CanonicalRat) (v : FcmlCapState4)
@@ -1182,18 +1123,14 @@ theorem fcml_cell_blocking_bounded_by_unbalance
   dsimp only [fcmlCellBlockingVoltages]
   exact ⟨⟨by grind, by grind⟩, ⟨by grind, by grind⟩, ⟨by grind, by grind⟩,
          ⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩
-
 /-! ## 5. Symmetric 5-Phase PSP Zero-Net-Charge-Drift & Saturated Active Duty-Trim Contraction -/
-
 /-- Cyclic cell permutation $\sigma(s_1, s_2, s_3, s_4, s_5) = (s_2, s_3, s_4, s_5, s_1)$ for 72°-shifted 5-phase PSP. -/
 def fcmlCyclicShift (s : FcmlSwitchState5) : FcmlSwitchState5 := ⟨s.s2, s.s3, s.s4, s.s5, s.s1⟩
-
 /-- The 5 symmetric PSP phase states $[s, \sigma(s), \sigma^2(s), \sigma^3(s), \sigma^4(s)]$. -/
 def fcmlSymmetricPsp5Cycle (s0 : FcmlSwitchState5) : List FcmlSwitchState5 :=
   let s1 := fcmlCyclicShift s0; let s2 := fcmlCyclicShift s1
   let s3 := fcmlCyclicShift s2; let s4 := fcmlCyclicShift s3
   [s0, s1, s2, s3, s4]
-
 /-- **Cyclic 5-Phase PSP Zero-Sum Incidence Theorem (`fcml_psp_cyclic_diff_sum_zero`)**. -/
 theorem fcml_psp_cyclic_diff_sum_zero (s0 : FcmlSwitchState5) :
     let cyc := fcmlSymmetricPsp5Cycle s0
@@ -1208,7 +1145,6 @@ theorem fcml_psp_cyclic_diff_sum_zero (s0 : FcmlSwitchState5) :
     (swBit q0.s5 - swBit q0.s4) + (swBit q1.s5 - swBit q1.s4) + (swBit q2.s5 - swBit q2.s4) +
       (swBit q3.s5 - swBit q3.s4) + (swBit q4.s5 - swBit q4.s4) = 0 := by
   dsimp [fcmlSymmetricPsp5Cycle, fcmlCyclicShift]; exact ⟨by grind, by grind, by grind, by grind⟩
-
 /-- **Symmetric 5-Phase PSP Zero-Net-Charge-Drift (`fcml_psp_nominal_zero_drift`)**. -/
 theorem fcml_psp_nominal_zero_drift
     (p : FcmlCapSpec4) (dt iL : CanonicalRat)
@@ -1223,18 +1159,15 @@ theorem fcml_psp_nominal_zero_drift
              (swBit q3.s5 - swBit q3.s4) + (swBit q4.s5 - swBit q4.s4) = 0) :
     runFcmlSubintervals p dt iL [q0, q1, q2, q3, q4] v0 = v0 := by
   dsimp [runFcmlSubintervals, stepFcmlSwitchSubinterval]; cases v0; congr 1 <;> grind
-
 /-- Per-cell active duty-cycle trims $(\Delta d_1, \Delta d_2, \Delta d_3, \Delta d_4, \Delta d_5)$. -/
 structure FcmlDutyTrim5 where
   (dd1 dd2 dd3 dd4 dd5 : CanonicalRat)
   deriving DecidableEq, Repr
-
 /-- Zero-sum 5-cell duty-trim synthesizer ($\Delta d_{k+1} - \Delta d_k = \delta_k$ and $\sum_{m=1}^5 \Delta d_m = 0$). -/
 def fcmlSynthesizeZeroSumTrim (del1 del2 del3 del4 : CanonicalRat) : FcmlDutyTrim5 :=
   let dd1 := -(4 * del1 + 3 * del2 + 2 * del3 + del4) / 5
   let dd2 := dd1 + del1; let dd3 := dd2 + del2; let dd4 := dd3 + del3; let dd5 := dd4 + del4
   ⟨dd1, dd2, dd3, dd4, dd5⟩
-
 theorem fcmlSynthesizeZeroSumTrim_exact (del1 del2 del3 del4 deltaMax : CanonicalRat)
     (h1 : -deltaMax ≤ del1 ∧ del1 ≤ deltaMax) (h2 : -deltaMax ≤ del2 ∧ del2 ≤ deltaMax)
     (h3 : -deltaMax ≤ del3 ∧ del3 ≤ deltaMax) (h4 : -deltaMax ≤ del4 ∧ del4 ≤ deltaMax) :
@@ -1248,16 +1181,13 @@ theorem fcmlSynthesizeZeroSumTrim_exact (del1 del2 del3 del4 deltaMax : Canonica
   exact ⟨by grind, by grind, by grind, by grind, by grind,
          ⟨by grind, by grind⟩, ⟨by grind, by grind⟩, ⟨by grind, by grind⟩,
          ⟨by grind, by grind⟩, ⟨by grind, by grind⟩⟩
-
 /-- Symmetric rational saturation clamp into $[-\delta_{\max}, \delta_{\max}]$. -/
 def ratClampSym (lim x : CanonicalRat) : CanonicalRat := max (-lim) (min lim x)
-
 /-- Current-sign-aware saturated proportional differential duty trim
 $\delta_k = \operatorname{clamp}_{[-\delta_{\max}, \delta_{\max}]}(-K_{\text{trim}} \operatorname{sgn}(i_L) e_k)$. -/
 def fcmlClampedDiffTrim (kTrim deltaMax iL ek : CanonicalRat) : CanonicalRat :=
   let sgn : CanonicalRat := if 0 ≤ iL then 1 else -1
   ratClampSym deltaMax (-(kTrim * sgn * ek))
-
 /-- One PWM-period averaged FCML active-balancing step with zero-sum saturated duty trims. -/
 def stepFcmlActiveBalance
     (p : FcmlCapSpec4) (tPwm kTrim deltaMax iL : CanonicalRat)
@@ -1270,7 +1200,6 @@ def stepFcmlActiveBalance
   , vc2 := v.vc2 + (tPwm / p.c2) * ((tr.dd3 - tr.dd2) * iL) + eta.vc2
   , vc3 := v.vc3 + (tPwm / p.c3) * ((tr.dd4 - tr.dd3) * iL) + eta.vc3
   , vc4 := v.vc4 + (tPwm / p.c4) * ((tr.dd5 - tr.dd4) * iL) + eta.vc4 }
-
 /-- Multi-cycle trajectory of `stepFcmlActiveBalance`. -/
 def runFcmlActiveBalance
     (p : FcmlCapSpec4) (tPwm kTrim deltaMax : CanonicalRat)
@@ -1279,33 +1208,25 @@ def runFcmlActiveBalance
   | 0 => v0
   | n + 1 => stepFcmlActiveBalance p tPwm kTrim deltaMax (iLSeq n) (etaSeq n)
       (runFcmlActiveBalance p tPwm kTrim deltaMax iLSeq etaSeq v0 n)
-
 /-- Infinity-norm Lyapunov unbalance energy $V_\infty(v_C) = \max_{k=1..4} |v_{C_k} - \frac{k}{5} V_{\text{dc}}|$. -/
 def fcmlMaxUnbalance (vdc : CanonicalRat) (v : FcmlCapState4) : CanonicalRat :=
   let e := fcmlCapError vdc v
   max (max (ratAbs e.vc1) (ratAbs e.vc2)) (max (ratAbs e.vc3) (ratAbs e.vc4))
-
 /-- Structural rational power $r^n$. -/
 def fcmlRatPow (r : CanonicalRat) : Nat → CanonicalRat
   | 0 => 1
   | n + 1 => r * fcmlRatPow r n
-
 private theorem rat_div_nonneg (a b : CanonicalRat) (ha : 0 ≤ a) (hb : 0 < b) : 0 ≤ a / b := by
   have hEq : b * (a / b) = a := by grind
   exact Rat.le_of_mul_le_mul_left (by rw [hEq]; grind) hb
-
 private theorem ratClampSym_neg (lim y : CanonicalRat) (hLim : 0 ≤ lim) :
     ratClampSym lim (-y) = -ratClampSym lim y := by unfold ratClampSym; grind
-
 private theorem rat_max4_le {a1 a2 a3 a4 b : CanonicalRat}
     (h1 : a1 ≤ b) (h2 : a2 ≤ b) (h3 : a3 ≤ b) (h4 : a4 ≤ b) :
     max (max a1 a2) (max a3 a4) ≤ b := by grind
-
 private theorem rat_max4_parts {a1 a2 a3 a4 b : CanonicalRat}
     (h : max (max a1 a2) (max a3 a4) ≤ b) : a1 ≤ b ∧ a2 ≤ b ∧ a3 ≤ b ∧ a4 ≤ b := by grind
-
 private theorem rat_le_trans_add {x a b c : CanonicalRat} (h1 : x ≤ a + c) (h2 : a ≤ b) : x ≤ b + c := by grind
-
 private theorem clamped_channel_contracts
     (cap tPwm kTrim deltaMax iL eMax gamma eta etaMax e : CanonicalRat)
     (hCap : 0 < cap) (hTpwm : 0 ≤ tPwm) (hK : 0 ≤ kTrim) (hDelta : 0 < deltaMax)
@@ -1375,7 +1296,6 @@ private theorem clamped_channel_contracts
         have hB := Rat.mul_le_mul_of_nonneg_left huMax (Rat.mul_nonneg hGain0 (by grind : 0 ≤ deltaMax))
         exact Rat.le_of_mul_le_mul_right (by grind : (gamma * u) * eMax ≤ (g * deltaMax) * eMax) hEMax
       dsimp [u] at *; exact ⟨by grind, by grind⟩
-
 /-- **Saturated Active Duty-Trim Lyapunov Contraction & Safe SiC FET Blocking (`fcml_active_trim_contracts_unbalance`)**:
 Bounded zero-sum duty trims contract $V_\infty(v_C[n]) = \max_{k=1..4} |v_{C_k}[n] - \frac{k}{5} V_{\text{dc}}|$
 exponentially into $R_{\text{bal}} = \eta_{\max} / \gamma$, preserve $V_\infty(v_C[n]) \le E_{\max}$, and
@@ -1473,6 +1393,5 @@ theorem fcml_active_trim_contracts_unbalance
     (by grind) hPosMargin hFetMargin
     ((ratAbs_le_iff _ eMax).mp hParts.1) ((ratAbs_le_iff _ eMax).mp hParts.2.1)
     ((ratAbs_le_iff _ eMax).mp hParts.2.2.1) ((ratAbs_le_iff _ eMax).mp hParts.2.2.2)
-
 end Obend.Hardware.CircuitDae
 end
