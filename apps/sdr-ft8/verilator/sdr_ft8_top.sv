@@ -3,6 +3,12 @@
 // The Lean module of the same name (Obend.Apps.SdrFt8.sdrFt8SequentialRtlModule) is a separate, smaller model (a six-register 64-bit toy);
 // no theorem in the tree relates it to this file. The Verilator testbench beside it exercises this file
 // against a C++ reference, not against Lean. See review/EXPERT-fpga-silicon-20261103.md §3.1.
+// Superseded for the receive path (2026-11-06) by the emitted chain sdr_nco_mix.sv -> sdr_cic3_r64.sv ->
+// sdr_ft8_disc.sv (Obend.Apps.SdrFt8Rx), which decodes a real recording. Two defects here, kept as is:
+// the "3-stage CIC" has three integrators and ONE comb (its output is a double integral, unbounded on a
+// DC input, not Hogenauer's filter), and the discriminator differences the phase across a whole FT8
+// symbol, where every FT8 tone turns by 2*pi*6.25 Hz*0.16 s = 2*pi, so real FT8 tones are indistinguishable;
+// it separates only the synthetic tones of iq_synthesizer.hpp.
 `timescale 1ns / 1ps
 
 module sdr_ft8_top (

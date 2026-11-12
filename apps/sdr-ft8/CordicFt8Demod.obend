@@ -29,6 +29,14 @@ spec BaseCordicFt8Spec for CordicFt8Demodulator:
     deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
   claim cordic_mag_open_recursion(iVal: Nat): self.cordicEnvelopeMag(iVal) == iVal * self.cordicGainPermille + 10n
   claim ft8_tone_bin_open_recursion(deltaPhaseMrad: Nat): self.ft8SymbolBin(deltaPhaseMrad) == deltaPhaseMrad * self.ft8ToneSpacingMilliHz + 7n
+  # FT8's eight tones at 6.25 Hz spacing, seen by the lag-2 discriminator at the CIC's output rate
+  # 12000/64 = 187.5 samples/s: tone k turns the lag-2 product by k*2pi/15 rad = k*418879 urad. Each
+  # tone's decision region is half a spacing (209438 urad, less the threshold rounding) either side;
+  # this claim is that the top tone's region still ends below pi (3141593 urad), so the eight regions
+  # fit in the discriminator's unambiguous range and no tone aliases into another. The slicer that
+  # realises the regions is Obend.Apps.SdrFt8Rx.binExpr (in sdrFt8DiscModule, emitted as
+  # verilator/sdr_ft8_disc.sv); binExpr_correct, ft8_bin_of_tone and ft8_bin_range are its theorems.
+  claim ft8_tone_regions_below_pi(k: Nat) given k <= 7n by judge("interval@1"): k * 418879n + 209438n <= 3141593n
 
 spec Unrolled4StageCordicFt8Override for CordicFt8Demodulator:
   requires alwaysFfDeltaPhaseMrad(phaseMrad: Nat) -> Nat
