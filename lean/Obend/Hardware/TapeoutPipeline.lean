@@ -29,7 +29,7 @@ Welds the formal hardware compilation and physical verification pipeline from an
      `H : Obend.Digest.HashBytes.Hash` (defaulting to `Obend.Core.Digest.deployed`), with collision-resistant
      SV binding (`mkTapeoutReceipt_sv_binds_or_collides`).
 -/
-public import Lean
+public import Lean.Data.Json
 public import Obend.Core.Digest
 public import Obend.Spec.FrontEnd
 public import Obend.Spec.Capture
@@ -46,7 +46,7 @@ public import Obend.Hardware.Retiming
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.DRC
 public import Obend.Hardware.Judge
-@[expose] public section
+public section
 
 namespace Obend.Hardware.TapeoutPipeline
 open Lean (Json toJson)
@@ -100,29 +100,468 @@ def defaultMetalBoxB : LayoutBox2D := { layerId := 1, xMinNm := 80, yMinNm := 0,
 def defaultViaBox    : LayoutBox2D := { layerId := 2, xMinNm := 10, yMinNm := 10, xMaxNm := 46,  yMaxNm := 46 }
 def defaultViaPadBox : LayoutBox2D := { layerId := 1, xMinNm := 0,  yMinNm := 0,  xMaxNm := 56,  yMaxNm := 56 }
 
-/-- Synthesize a canonical grid-placed `PnrCertificate` bound 1-to-1 to `net : BelNetlist`:
-places each BEL cell `i ∈ [0, net.cells.length)` at distinct `(tileX, tileY, belSlot)` coordinates
-`((i / 64) % 256, (i / 8) % 8, i % 8)`. -/
-def synthesizeGridPnrCert (net : BelNetlist) (sinkCapFf : Nat := 5) : PnrCertificate :=
-  let indices := List.range net.cells.length
-  let placed : List PlacedCell := indices.map fun i =>
-    { cellId  := i
-    , tileX   := (i / 64) % 256
-    , tileY   := (i / 8) % 8
-    , belSlot := i % 8
-    , lutInit := 0x6 }
-  let cfgs : List TileFrameConfig := placed.map fun c =>
-    { tileX   := c.tileX
-    , tileY   := c.tileY
-    , belSlot := c.belSlot
-    , lutInit := c.lutInit
-    , pipMask := 0x1 }
+/-- Extract the 16-bit LUT SRAM truth table / BEL primitive configuration word (`< 65536`)
+directly from a technology-mapped `BelKind`. -/
+@[expose] def extractBelCellLutInit : BelKind → Nat
+  | .lut1 m              => m % 65536
+  | .lut2 m              => m % 65536
+  | .lut3 m              => m % 65536
+  | .carry4 .add         => 0x0096
+  | .carry4 .sub         => 0x0069
+  | .carry4 .ultCmp      => 0x00B2
+  | .carry4 .sltCmp      => 0x00D4
+  | .dspMul .mul64       => 0xD580
+  | .dspMul .qmul32      => 0xD532
+  | .ff _ .resetFree     => 0xFF00
+  | .ff _ (.syncReset _) => 0xFF01
+  | .orReduce            => 0xFFFE
+  | .zeroDetect          => 0x0001
+  | .shiftRoute .shl d   => 0x5100 + (d % 64)
+  | .shiftRoute .lshr d  => 0x5200 + (d % 64)
+  | .shiftRoute .ashr d  => 0x5300 + (d % 64)
+  | .bitBroadcast b      => 0xB000 + (b % 64)
+  | .constBel v          => v.toNat % 256
+  | .portIn p            => 0x1000 + (p % 256)
+  | .wireTap w           => 0x2000 + (w % 256)
+  | .regTap r            => 0x3000 + (r % 256)
+  | .route _             => 0x4000
+
+theorem extractBelCellLutInit_lt (k : BelKind) : extractBelCellLutInit k < 65536 := by
+  cases k with
+  | carry4 m => cases m <;> decide
+  | dspMul m => cases m <;> decide
+  | ff _ r => cases r <;> (dsimp [extractBelCellLutInit]; omega)
+  | shiftRoute d n => cases d <;> (dsimp [extractBelCellLutInit]; omega)
+  | lut1 m | lut2 m | lut3 m | bitBroadcast m | portIn m | wireTap m | regTap m =>
+    dsimp [extractBelCellLutInit]; omega
+  | constBel v => dsimp [extractBelCellLutInit]; omega
+  | orReduce | zeroDetect => decide
+  | route _ => dsimp [extractBelCellLutInit]; omega
+
+/-- Compute the switch-box input mux PIP configuration mask (`1 .. 255 < 65536`) from `c.inputs`. -/
+@[expose] def extractBelCellPipMask (c : BelCell) : Nat :=
+  1 + (c.inputs.length % 255)
+
+theorem extractBelCellPipMask_lt (c : BelCell) : extractBelCellPipMask c < 65536 := by
+  dsimp [extractBelCellPipMask]; omega
+
+/-- Grid column `tileX ∈ [0, 16)` for placed BEL cell index `i` (2 BEL slots per tile). -/
+@[expose] def gridTileX (i : Nat) : Nat := (i / 2) % 16
+
+/-- Grid row `tileY ∈ [0, 256)` for placed BEL cell index `i` (32 BELs per grid row, 8,192 total). -/
+@[expose] def gridTileY (i : Nat) : Nat := (i / 32) % 256
+
+/-- Intra-tile BEL slot `belSlot ∈ {0, 1}` for placed BEL cell index `i`. -/
+@[expose] def gridBelSlot (i : Nat) : Nat := i % 2
+
+private theorem gridCoord_injective {i j : Nat} (hi : i < 8192) (hj : j < 8192)
+    (hEq : (gridTileX i, gridTileY i, gridBelSlot i) = (gridTileX j, gridTileY j, gridBelSlot j)) :
+    i = j := by
+  dsimp [gridTileX, gridTileY, gridBelSlot] at hEq
+  rcases Prod.mk.inj hEq with ⟨hX, hYZ⟩
+  rcases Prod.mk.inj hYZ with ⟨hY, hZ⟩
+  omega
+
+/-- Canonical physical switch-box wire identifier partitioning routing channel `trackId`,
+hop step `stepIdx < 1024`, tile row `tileY < 256`, and tile column `tileX < 256`. -/
+@[expose] def encodeSwitchWire (trackId stepIdx tileX tileY : Nat) : Nat :=
+  trackId * 67108864 + (stepIdx % 1024) * 65536 + (tileY % 256) * 256 + (tileX % 256)
+
+private theorem encodeSwitchWire_track (trackId stepIdx tileX tileY : Nat) :
+    encodeSwitchWire trackId stepIdx tileX tileY / 67108864 = trackId := by
+  dsimp [encodeSwitchWire]; omega
+
+/-- 1D Manhattan tile distance `|a - b|`. -/
+@[expose] def manhattanDist1D (a b : Nat) : Nat :=
+  if a ≤ b then b - a else a - b
+
+/-- Advance one tile coordinate step from `cur` towards `target`. -/
+def stepTileTowards (cur target : Nat) : Nat :=
+  if cur < target then cur + 1 else if target < cur then cur - 1 else cur
+
+/-- Emit `steps` horizontal switch-box `PipHop`s along row `y` from `curX` towards `dstX`. -/
+def buildManhattanXHops (trackId stepIdx curX dstX y : Nat) : Nat → List PipHop
+  | 0 => []
+  | k + 1 =>
+    let nextX := stepTileTowards curX dstX
+    { srcWire := encodeSwitchWire trackId stepIdx curX y
+    , dstWire := encodeSwitchWire trackId (stepIdx + 1) nextX y
+    , resOhm  := 60
+    , capFf   := 4 } ::
+    buildManhattanXHops trackId (stepIdx + 1) nextX dstX y k
+
+/-- Emit `steps` vertical switch-box `PipHop`s along column `x` from `curY` towards `dstY`. -/
+def buildManhattanYHops (trackId stepIdx x curY dstY : Nat) : Nat → List PipHop
+  | 0 => []
+  | k + 1 =>
+    let nextY := stepTileTowards curY dstY
+    { srcWire := encodeSwitchWire trackId stepIdx x curY
+    , dstWire := encodeSwitchWire trackId (stepIdx + 1) x nextY
+    , resOhm  := 60
+    , capFf   := 4 } ::
+    buildManhattanYHops trackId (stepIdx + 1) x nextY dstY k
+
+/-- Synthesize a Manhattan X-then-Y switch-box `RoutedNet` on dedicated track `trackId`
+from producer tile `(srcX, srcY)` to consumer tile `(dstX, dstY)`. -/
+@[expose] def routeManhattanEdge (trackId srcX srcY dstX dstY : Nat) : RoutedNet :=
+  let dx := manhattanDist1D srcX dstX
+  let dy := manhattanDist1D srcY dstY
+  let xHops := buildManhattanXHops trackId 0 srcX dstX srcY dx
+  let yHops := buildManhattanYHops trackId dx dstX srcY dstY dy
+  let sinkHop : PipHop :=
+    { srcWire := encodeSwitchWire trackId (dx + dy) dstX dstY
+    , dstWire := encodeSwitchWire trackId (dx + dy + 1) dstX dstY
+    , resOhm  := 40
+    , capFf   := 3 }
+  { netId   := trackId
+  , srcWire := encodeSwitchWire trackId 0 srcX srcY
+  , dstWire := encodeSwitchWire trackId (dx + dy + 1) dstX dstY
+  , hops    := xHops ++ yHops ++ [sinkHop] }
+
+/-- Look up the cell index of the sequential `BelKind.ff regIdx _` driving `.regTap regIdx`. -/
+def findFfCellIdx? (targetReg : Nat) : List BelCell → Nat → Option Nat
+  | [], _ => none
+  | c :: rest, idx =>
+    match c.kind with
+    | .ff r _ => if r == targetReg then some idx else findFfCellIdx? targetReg rest (idx + 1)
+    | _       => findFfCellIdx? targetReg rest (idx + 1)
+
+/-- Look up the cell index of the producer `BelCell` driving net `pinName`. -/
+def findProducerCellIdx? (pinName : String) : List BelCell → Nat → Option Nat
+  | [], _ => none
+  | c :: rest, idx =>
+    if c.dstName.toList == pinName.toList then some idx else findProducerCellIdx? pinName rest (idx + 1)
+
+/-- Look up the primary module input index driving named primary port `pinName`. -/
+def findPrimaryInputIdx? (pinName : String) : List String → Nat → Option Nat
+  | [], _ => none
+  | nm :: rest, idx =>
+    if nm.toList == pinName.toList then some idx
+    else findPrimaryInputIdx? pinName rest (idx + 1)
+
+/-- Extract producer-to-consumer `(srcX, srcY, dstX, dstY)` tile edges for pin list `pins` of `dstIdx`. -/
+def extractCellPinEdges (net : BelNetlist) (dstIdx : Nat) : List String → List (Nat × Nat × Nat × Nat)
+  | [] => []
+  | pinName :: pins =>
+    let dstX := gridTileX dstIdx
+    let dstY := gridTileY dstIdx
+    let headEdge :=
+      match findProducerCellIdx? pinName net.cells 0 with
+      | some srcIdx => [(gridTileX srcIdx, gridTileY srcIdx, dstX, dstY)]
+      | none =>
+        match findPrimaryInputIdx? pinName net.inputNames 0 with
+        | some inIdx => [(0, inIdx % 256, dstX, dstY)]
+        | none       => []
+    headEdge ++ extractCellPinEdges net dstIdx pins
+
+/-- Extract producer-to-consumer `(srcX, srcY, dstX, dstY)` tile edges for cell `c` at `dstIdx`. -/
+def extractSingleCellEdges (net : BelNetlist) (dstIdx : Nat) (c : BelCell) : List (Nat × Nat × Nat × Nat) :=
+  let dstX := gridTileX dstIdx
+  let dstY := gridTileY dstIdx
+  match c.kind with
+  | .constBel _ => []
+  | .portIn inIdx => [(0, inIdx % 256, dstX, dstY)]
+  | .regTap regIdx =>
+    match findFfCellIdx? regIdx net.cells 0 with
+    | some ffIdx => [(gridTileX ffIdx, gridTileY ffIdx, dstX, dstY)]
+    | none       => []
+  | _ => extractCellPinEdges net dstIdx c.inputs
+
+def extractBelNetlistEdgesAux (net : BelNetlist) (dstIdx : Nat) : List BelCell → List (Nat × Nat × Nat × Nat)
+  | [] => []
+  | c :: rest => extractSingleCellEdges net dstIdx c ++ extractBelNetlistEdgesAux net (dstIdx + 1) rest
+
+/-- Extract all producer-to-consumer tile coordinate edges `(srcX, srcY, dstX, dstY)` of `net`. -/
+def extractBelNetlistEdges (net : BelNetlist) : List (Nat × Nat × Nat × Nat) :=
+  extractBelNetlistEdgesAux net 0 net.cells
+
+/-- Route every extracted `(srcX, srcY, dstX, dstY)` edge across distinct switch-box tracks. -/
+def routeEdgeListFrom (startTrack : Nat) : List (Nat × Nat × Nat × Nat) → List RoutedNet
+  | [] => []
+  | (sx, sy, dx, dy) :: rest =>
+    routeManhattanEdge startTrack sx sy dx dy :: routeEdgeListFrom (startTrack + 1) rest
+
+def buildGridPlacedCells (idx : Nat) : List BelCell → List PlacedCell
+  | [] => []
+  | c :: rest =>
+    { cellId  := idx
+    , tileX   := gridTileX idx
+    , tileY   := gridTileY idx
+    , belSlot := gridBelSlot idx
+    , lutInit := extractBelCellLutInit c.kind } :: buildGridPlacedCells (idx + 1) rest
+
+def buildGridTileConfigs (idx : Nat) : List BelCell → List TileFrameConfig
+  | [] => []
+  | c :: rest =>
+    { tileX   := gridTileX idx
+    , tileY   := gridTileY idx
+    , belSlot := gridBelSlot idx
+    , lutInit := extractBelCellLutInit c.kind
+    , pipMask := extractBelCellPipMask c } :: buildGridTileConfigs (idx + 1) rest
+
+/-- Synthesize a netlist-derived grid-placed & Manhattan switch-box routed `PnrCertificate`
+bound 1-to-1 to `net : BelNetlist`:
+1. Extracts each cell's actual LUT truth table / primitive configuration via `extractBelCellLutInit`,
+2. Places cells injectively onto the `(16 × 256 × 2)` physical BEL array (`buildGridPlacedCells`),
+3. Routes every producer-to-consumer edge of `net` via X-then-Y Manhattan `PipHop` paths across
+   disjoint switch-box tracks (`routeEdgeListFrom 0 (extractBelNetlistEdges net)`). -/
+@[expose] def synthesizeGridPnrCert (net : BelNetlist) (sinkCapFf : Nat := 5) : PnrCertificate :=
+  let placed := buildGridPlacedCells 0 net.cells
+  let cfgs   := buildGridTileConfigs 0 net.cells
+  let edges  := extractBelNetlistEdges net
+  let routed := routeEdgeListFrom 0 edges
   { designName      := net.moduleName
   , placedCells     := placed
-  , routedNets      := validAdderPnrCert.routedNets
+  , routedNets      := routed
   , expectedConfigs := cfgs
   , bitstreamFrames := cfgs.map encodeBitstreamFrame
   , sinkCapFf       := sinkCapFf }
+
+private theorem map_cellId_buildGridPlacedCells (cs : List BelCell) (idx : Nat) :
+    (buildGridPlacedCells idx cs).map (·.cellId) = List.range' idx cs.length := by
+  induction cs generalizing idx with
+  | nil => rfl
+  | cons c rest ih =>
+    simp [buildGridPlacedCells, List.range', ih (idx + 1)]
+
+private theorem checkCellAgainstList_buildGridPlacedCells
+    (c0 : PlacedCell) (idx : Nat) (cs : List BelCell)
+    (hc0Id : c0.cellId < idx)
+    (hc0Loc : cellLocation c0 = (gridTileX c0.cellId, gridTileY c0.cellId, gridBelSlot c0.cellId))
+    (hBound : idx + cs.length ≤ 8192) :
+    checkCellAgainstList c0 (buildGridPlacedCells idx cs) = true := by
+  induction cs generalizing idx with
+  | nil => rfl
+  | cons c rest ih =>
+    simp only [buildGridPlacedCells, checkCellAgainstList, Bool.and_eq_true]
+    refine ⟨?_, ih (idx + 1) (by omega) (by simp at hBound; omega)⟩
+    simp only [checkPairNoCollision, Bool.or_eq_true, beq_iff_eq, bne_iff_ne, ne_eq]
+    right
+    intro hLocEq
+    rw [hc0Loc] at hLocEq
+    have hIdxEq := gridCoord_injective (by omega) (by simp at hBound; omega) hLocEq
+    omega
+
+private theorem checkPlacementInjective_buildGridPlacedCells
+    (idx : Nat) (cs : List BelCell) (hBound : idx + cs.length ≤ 8192) :
+    checkPlacementInjective (buildGridPlacedCells idx cs) = true := by
+  induction cs generalizing idx with
+  | nil => rfl
+  | cons c rest ih =>
+    simp only [buildGridPlacedCells, checkPlacementInjective, Bool.and_eq_true]
+    refine ⟨checkCellAgainstList_buildGridPlacedCells _ (idx + 1) rest (by dsimp; omega) rfl (by simp at hBound; omega),
+            ih (idx + 1) (by simp at hBound; omega)⟩
+
+private theorem checkHopsContiguous_append (w0 w1 w2 : Nat) (h1 h2 : List PipHop)
+    (hc1 : checkHopsContiguous w0 w1 h1 = true)
+    (hc2 : checkHopsContiguous w1 w2 h2 = true) :
+    checkHopsContiguous w0 w2 (h1 ++ h2) = true := by
+  induction h1 generalizing w0 with
+  | nil =>
+    simp only [checkHopsContiguous, beq_iff_eq] at hc1
+    subst hc1
+    exact hc2
+  | cons h rest ih =>
+    simp only [checkHopsContiguous, Bool.and_eq_true, beq_iff_eq] at hc1
+    simp only [List.cons_append, checkHopsContiguous, Bool.and_eq_true, beq_iff_eq]
+    exact ⟨hc1.1, ih h.dstWire hc1.2⟩
+
+private theorem buildManhattanXHops_contiguous :
+    ∀ (d trackId stepIdx curX dstX y : Nat),
+      manhattanDist1D curX dstX = d →
+      checkHopsContiguous
+        (encodeSwitchWire trackId stepIdx curX y)
+        (encodeSwitchWire trackId (stepIdx + d) dstX y)
+        (buildManhattanXHops trackId stepIdx curX dstX y d) = true
+  | 0, trackId, stepIdx, curX, dstX, y, hd => by
+    have hEq : curX = dstX := by unfold manhattanDist1D at hd; split at hd <;> omega
+    subst hEq
+    simp [buildManhattanXHops, checkHopsContiguous]
+  | k + 1, trackId, stepIdx, curX, dstX, y, hd => by
+    have hNext : manhattanDist1D (stepTileTowards curX dstX) dstX = k := by
+      unfold manhattanDist1D at hd
+      unfold manhattanDist1D stepTileTowards
+      split at hd <;> split <;> (try split) <;> (try split) <;> omega
+    simp only [buildManhattanXHops, checkHopsContiguous, Bool.and_eq_true, beq_iff_eq, true_and]
+    have ih := buildManhattanXHops_contiguous k trackId (stepIdx + 1) (stepTileTowards curX dstX) dstX y hNext
+    rwa [show stepIdx + 1 + k = stepIdx + (k + 1) by omega] at ih
+
+private theorem buildManhattanYHops_contiguous :
+    ∀ (d trackId stepIdx x curY dstY : Nat),
+      manhattanDist1D curY dstY = d →
+      checkHopsContiguous
+        (encodeSwitchWire trackId stepIdx x curY)
+        (encodeSwitchWire trackId (stepIdx + d) x dstY)
+        (buildManhattanYHops trackId stepIdx x curY dstY d) = true
+  | 0, trackId, stepIdx, x, curY, dstY, hd => by
+    have hEq : curY = dstY := by unfold manhattanDist1D at hd; split at hd <;> omega
+    subst hEq
+    simp [buildManhattanYHops, checkHopsContiguous]
+  | k + 1, trackId, stepIdx, x, curY, dstY, hd => by
+    have hNext : manhattanDist1D (stepTileTowards curY dstY) dstY = k := by
+      unfold manhattanDist1D at hd
+      unfold manhattanDist1D stepTileTowards
+      split at hd <;> split <;> (try split) <;> (try split) <;> omega
+    simp only [buildManhattanYHops, checkHopsContiguous, Bool.and_eq_true, beq_iff_eq, true_and]
+    have ih := buildManhattanYHops_contiguous k trackId (stepIdx + 1) x (stepTileTowards curY dstY) dstY hNext
+    rwa [show stepIdx + 1 + k = stepIdx + (k + 1) by omega] at ih
+
+private theorem routeManhattanEdge_connected (trackId sx sy dx dy : Nat) :
+    checkNetConnectivity (routeManhattanEdge trackId sx sy dx dy) = true := by
+  dsimp only [routeManhattanEdge, checkNetConnectivity]
+  simp only [Bool.and_eq_true, Bool.not_eq_true']
+  refine ⟨?_, ?_⟩
+  · cases (buildManhattanXHops trackId 0 sx dx sy (manhattanDist1D sx dx) ++
+           buildManhattanYHops trackId (manhattanDist1D sx dx) dx sy dy (manhattanDist1D sy dy)) <;> rfl
+  · have hX := buildManhattanXHops_contiguous (manhattanDist1D sx dx) trackId 0 sx dx sy rfl
+    rw [Nat.zero_add] at hX
+    have hY := buildManhattanYHops_contiguous (manhattanDist1D sy dy) trackId (manhattanDist1D sx dx) dx sy dy rfl
+    have hXY := checkHopsContiguous_append _ _ _ _ _ hX hY
+    refine checkHopsContiguous_append _ _ _ _ _ hXY ?_
+    simp [checkHopsContiguous]
+
+private theorem routeEdgeListFrom_all_connected (startTrack : Nat) (edges : List (Nat × Nat × Nat × Nat)) :
+    (routeEdgeListFrom startTrack edges).all checkNetConnectivity = true := by
+  induction edges generalizing startTrack with
+  | nil => rfl
+  | cons e rest ih =>
+    rcases e with ⟨sx, sy, dx, dy⟩
+    simp [routeEdgeListFrom, routeManhattanEdge_connected, ih (startTrack + 1)]
+
+private theorem buildManhattanXHops_dstTrack :
+    ∀ (d trackId stepIdx curX dstX y u : Nat),
+      u ∈ (buildManhattanXHops trackId stepIdx curX dstX y d).map (·.dstWire) →
+      u / 67108864 = trackId
+  | 0, _, _, _, _, _, _, hMem => by cases hMem
+  | k + 1, trackId, stepIdx, curX, dstX, y, u, hMem => by
+    simp only [buildManhattanXHops, List.map_cons, List.mem_cons] at hMem
+    rcases hMem with rfl | hTail
+    · exact encodeSwitchWire_track _ _ _ _
+    · exact buildManhattanXHops_dstTrack k trackId (stepIdx + 1) _ dstX y u hTail
+
+private theorem buildManhattanYHops_dstTrack :
+    ∀ (d trackId stepIdx x curY dstY u : Nat),
+      u ∈ (buildManhattanYHops trackId stepIdx x curY dstY d).map (·.dstWire) →
+      u / 67108864 = trackId
+  | 0, _, _, _, _, _, _, hMem => by cases hMem
+  | k + 1, trackId, stepIdx, x, curY, dstY, u, hMem => by
+    simp only [buildManhattanYHops, List.map_cons, List.mem_cons] at hMem
+    rcases hMem with rfl | hTail
+    · exact encodeSwitchWire_track _ _ _ _
+    · exact buildManhattanYHops_dstTrack k trackId (stepIdx + 1) x _ dstY u hTail
+
+private theorem routeManhattanEdge_wire_track (trackId sx sy dx dy u : Nat)
+    (hMem : u ∈ netWires (routeManhattanEdge trackId sx sy dx dy)) :
+    u / 67108864 = trackId := by
+  dsimp only [routeManhattanEdge, netWires] at hMem
+  simp only [List.map_append, List.map_cons, List.map_nil, List.mem_append, List.mem_cons,
+    List.not_mem_nil, or_false] at hMem
+  rcases hMem with rfl | (hX | hY) | rfl
+  · exact encodeSwitchWire_track _ _ _ _
+  · exact buildManhattanXHops_dstTrack _ _ _ _ _ _ u hX
+  · exact buildManhattanYHops_dstTrack _ _ _ _ _ _ u hY
+  · exact encodeSwitchWire_track _ _ _ _
+
+private theorem disjointWireLists_of_ne_track (t1 t2 sx1 sy1 dx1 dy1 sx2 sy2 dx2 dy2 : Nat)
+    (hNe : t1 ≠ t2) :
+    disjointWireLists
+      (netWires (routeManhattanEdge t1 sx1 sy1 dx1 dy1))
+      (netWires (routeManhattanEdge t2 sx2 sy2 dx2 dy2)) = true := by
+  simp only [disjointWireLists, List.all_eq_true, Bool.not_eq_true', List.contains_eq_any_beq,
+    List.any_eq_false, beq_iff_eq]
+  intro u hu1 v hv2 hEq
+  subst hEq
+  have h1 := routeManhattanEdge_wire_track t1 sx1 sy1 dx1 dy1 u hu1
+  have h2 := routeManhattanEdge_wire_track t2 sx2 sy2 dx2 dy2 u hv2
+  omega
+
+private theorem checkNetDisjointFromList_routeEdgeListFrom
+    (t0 sx0 sy0 dx0 dy0 startTrack : Nat) (edges : List (Nat × Nat × Nat × Nat))
+    (hLt : t0 < startTrack) :
+    checkNetDisjointFromList
+      (routeManhattanEdge t0 sx0 sy0 dx0 dy0)
+      (routeEdgeListFrom startTrack edges) = true := by
+  induction edges generalizing startTrack with
+  | nil => rfl
+  | cons e rest ih =>
+    rcases e with ⟨sx, sy, dx, dy⟩
+    simp only [routeEdgeListFrom, checkNetDisjointFromList, Bool.and_eq_true]
+    exact ⟨disjointWireLists_of_ne_track t0 startTrack sx0 sy0 dx0 dy0 sx sy dx dy (by omega),
+           ih (startTrack + 1) (by omega)⟩
+
+private theorem checkRoutingDisjoint_routeEdgeListFrom
+    (startTrack : Nat) (edges : List (Nat × Nat × Nat × Nat)) :
+    checkRoutingDisjoint (routeEdgeListFrom startTrack edges) = true := by
+  induction edges generalizing startTrack with
+  | nil => rfl
+  | cons e rest ih =>
+    rcases e with ⟨sx, sy, dx, dy⟩
+    simp only [routeEdgeListFrom, checkRoutingDisjoint, Bool.and_eq_true]
+    exact ⟨checkNetDisjointFromList_routeEdgeListFrom startTrack sx sy dx dy (startTrack + 1) rest (by omega),
+           ih (startTrack + 1)⟩
+
+private theorem buildGridTileConfigs_roundtrip (idx : Nat) (cs : List BelCell) :
+    ((buildGridTileConfigs idx cs).map encodeBitstreamFrame).map decodeBitstreamFrame =
+      buildGridTileConfigs idx cs := by
+  induction cs generalizing idx with
+  | nil => rfl
+  | cons c rest ih =>
+    simp only [buildGridTileConfigs, List.map_cons]
+    rw [ih (idx + 1)]
+    congr 1
+    apply bitstream_decode_roundtrip_sound
+    dsimp only [wfTileFrameConfig, gridTileX, gridTileY, gridBelSlot]
+    simp only [Bool.and_eq_true, decide_eq_true_eq]
+    refine ⟨⟨⟨⟨by omega, by omega⟩, by omega⟩, extractBelCellLutInit_lt c.kind⟩,
+            extractBelCellPipMask_lt c⟩
+
+/-- **Universal Netlist-Derived Manhattan PnR Soundness & Elmore Tightness Refusal (`synthesizeGridPnrCert_valid_for_netlist`)**:
+For ANY synthesized `net : BelNetlist` fitting within the 8,192-BEL physical array (`net.cells.length ≤ 8192`),
+ANY `corner : ProcessCorner`, ANY `clockPeriodPs : Nat`, and ANY sink capacitance `sinkCapFf : Nat`:
+1. `checkPnrCertificate net corner clockPeriodPs (synthesizeGridPnrCert net sinkCapFf) = true` holds **if and only if**
+   every Manhattan-routed net `r ∈ (synthesizeGridPnrCert net sinkCapFf).routedNets` meets setup timing
+   (`corner.tCqMaxPs + corner.tGateMaxPs + computeElmoreDelayPs sinkCapFf r.hops + corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs`), and
+2. Whenever `clockPeriodPs` is tighter than the real Elmore RC arrival delay of ANY routed net in `net`,
+   `checkPnrCertificate` strictly **refuses** (`= false`)! -/
+theorem synthesizeGridPnrCert_valid_for_netlist
+    (net : BelNetlist) (corner : ProcessCorner) (clockPeriodPs sinkCapFf : Nat)
+    (hCap : net.cells.length ≤ 8192) :
+    (checkPnrCertificate net corner clockPeriodPs (synthesizeGridPnrCert net sinkCapFf) = true ↔
+      ∀ r ∈ (synthesizeGridPnrCert net sinkCapFf).routedNets,
+        corner.tCqMaxPs + corner.tGateMaxPs + computeElmoreDelayPs sinkCapFf r.hops +
+          corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs) ∧
+    ((∃ r ∈ (synthesizeGridPnrCert net sinkCapFf).routedNets,
+        clockPeriodPs <
+          corner.tCqMaxPs + corner.tGateMaxPs + computeElmoreDelayPs sinkCapFf r.hops +
+            corner.tSetupPs + corner.tSkewPs) →
+      checkPnrCertificate net corner clockPeriodPs (synthesizeGridPnrCert net sinkCapFf) = false) := by
+  have hMapIds : (buildGridPlacedCells 0 net.cells).map (·.cellId) = List.range net.cells.length := by
+    rw [map_cellId_buildGridPlacedCells, List.range_eq_range']
+  have hInj : checkPlacementInjective (buildGridPlacedCells 0 net.cells) = true :=
+    checkPlacementInjective_buildGridPlacedCells 0 net.cells (by omega)
+  have hConn : (routeEdgeListFrom 0 (extractBelNetlistEdges net)).all checkNetConnectivity = true :=
+    routeEdgeListFrom_all_connected 0 (extractBelNetlistEdges net)
+  have hDisj : checkRoutingDisjoint (routeEdgeListFrom 0 (extractBelNetlistEdges net)) = true :=
+    checkRoutingDisjoint_routeEdgeListFrom 0 (extractBelNetlistEdges net)
+  have hFrames :
+      ((buildGridTileConfigs 0 net.cells).map encodeBitstreamFrame).map decodeBitstreamFrame =
+        buildGridTileConfigs 0 net.cells :=
+    buildGridTileConfigs_roundtrip 0 net.cells
+  have hIff :
+      checkPnrCertificate net corner clockPeriodPs (synthesizeGridPnrCert net sinkCapFf) = true ↔
+      ∀ r ∈ (synthesizeGridPnrCert net sinkCapFf).routedNets,
+        corner.tCqMaxPs + corner.tGateMaxPs + computeElmoreDelayPs sinkCapFf r.hops +
+          corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs := by
+    unfold checkPnrCertificate synthesizeGridPnrCert
+    simp only [beq_self_eq_true, hMapIds, hInj, hConn, hDisj, hFrames,
+      Bool.true_and, Bool.and_true, List.all_eq_true, checkNetElmoreTiming, decide_eq_true_eq]
+  refine ⟨hIff, ?_⟩
+  rintro ⟨r, hrMem, hTight⟩
+  cases hChk : checkPnrCertificate net corner clockPeriodPs (synthesizeGridPnrCert net sinkCapFf) with
+  | false => rfl
+  | true =>
+    have hLe := hIff.mp hChk r hrMem
+    omega
 
 /-- Complete configuration bundle for `compileObendModuleToSiliconTapeout`. -/
 structure TapeoutConfig where
@@ -848,6 +1287,65 @@ theorem compileObendModuleToSiliconTapeout_sound
                      hS.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
                      hS.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2⟩
 
+theorem compileObendModuleToSiliconTapeout_eq_bind (cfg : TapeoutConfig) (src : String) :
+    compileObendModuleToSiliconTapeout cfg src =
+      (compileObendFrontEndStage cfg src >>= fun (comp, isarCerts) =>
+        compileCompositionToSiliconTapeoutWithHash
+          Obend.Core.Digest.deployed src.toUTF8.toList cfg comp isarCerts) := by
+  rfl
+
+theorem compileCompositionToSiliconTapeoutWithHash_isOk_eq
+    (H₁ H₂ : Obend.Digest.HashBytes.Hash)
+    (b₁ b₂ : List UInt8)
+    (cfg : TapeoutConfig)
+    (comp : Composition)
+    (isarCerts : List Elaborate.ElaboratedIsarCert) :
+    (compileCompositionToSiliconTapeoutWithHash H₁ b₁ cfg comp isarCerts).isOk =
+      (compileCompositionToSiliconTapeoutWithHash H₂ b₂ cfg comp isarCerts).isOk := by
+  unfold compileCompositionToSiliconTapeoutWithHash mkTapeoutReceipt
+  dsimp only
+  cases h1 : isarCerts.all (FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag) with
+  | false => rfl
+  | true =>
+    cases h2 : compileBookByMode cfg.compileMode cfg.moduleName (specializeBookDict cfg.dictInlinePasses (Obend.Leaf.emit comp)) with
+    | none => rfl
+    | some rtlModule =>
+      dsimp only
+      cases h3 : checkRtlModule rtlModule with
+      | false => rfl
+      | true =>
+        cases h4 : checkBelNetlistValid (synthesizeModuleToBels rtlModule) with
+        | false => rfl
+        | true =>
+          cases h5 : solveVerifiedRetiming? cfg.retimingFuel cfg.syncGraph cfg.maxCombDelayPs with
+          | none => rfl
+          | some retimingCert =>
+            dsimp only
+            cases h6 : checkCutlineDRC cfg.drcDeck cfg.cutlineFeature with
+            | false => rfl
+            | true =>
+              cases h7 : checkBoxSpacing2D cfg.drcDeck.minMetalSpacingNm cfg.metalBoxA cfg.metalBoxB with
+              | false => rfl
+              | true =>
+                cases h8 : checkViaEnclosure2D cfg.drcDeck.minViaEnclosureNm cfg.viaBox cfg.viaPadBox with
+                | false => rfl
+                | true =>
+                  cases h9 : checkEnvelopeTimingSignoff cfg.cornerEnvelope cfg.clockPeriodPs cfg.timingPath with
+                  | false => rfl
+                  | true =>
+                    cases h10 : checkRetimingCert cfg.syncGraph retimingCert cfg.cornerEnvelope.slowCorner cfg.clockPeriodPs with
+                    | false => rfl
+                    | true =>
+                      cases h11 : checkPnrCertificate (synthesizeModuleToBels rtlModule) cfg.cornerEnvelope.slowCorner
+                        cfg.clockPeriodPs (cfg.pnrCert?.getD (synthesizeGridPnrCert (synthesizeModuleToBels rtlModule) cfg.sinkCapFf)) with
+                      | false => rfl
+                      | true =>
+                        cases h12 : checkSteinerTimingClosure cfg.cornerEnvelope.slowCorner cfg.clockPeriodPs
+                          (decoupleRightBranchWithBuffer cfg.bufWireId cfg.bufInputCapFf cfg.unbufferedTree) with
+                        | false => rfl
+                        | true =>
+                          cases h13 : checkTapeoutTrustChecked tapeoutCheckedSupports tapeoutCheckedSupports <;> rfl
+
 /-! ## 6. Concrete End-to-End `.obend` Module Tapeout Theorem (`golden_obend_module_silicon_tapeout_verified`) -/
 
 def goldenTapeoutObendSource : String :=
@@ -894,7 +1392,7 @@ def goldenTapeoutConfig : TapeoutConfig where
   moduleName := "CleanroomTcadStack"
   entryDef   := "cleanroomTcadStack"
 
-def goldenTapeoutContractDecl : Syntax.ContractDecl where
+def cleanroomSignoffContractDecl : Syntax.ContractDecl where
   name       := "tapeout_signoff_contract"
   targetType := "CleanroomTcadStack"
   invariant  := some (.bool true)
@@ -903,16 +1401,16 @@ def goldenTapeoutContractDecl : Syntax.ContractDecl where
     , .haveStep "h_retime" (.bool true) (.judge "hw-retime-sta@1")
     , .showStep            (.bool true) (.judge "hw-pnr-bitstream@1") ]
 
-def goldenTapeoutSyntaxMod : Syntax.Module where
+def cleanroomSignoffSyntaxMod : Syntax.Module where
   name      := "CleanroomTcadStack"
   imports   := []
   decls     := []
-  contracts := [goldenTapeoutContractDecl]
+  contracts := [cleanroomSignoffContractDecl]
 
 def goldenTapeoutIsarCert : Elaborate.ElaboratedIsarCert :=
-  Elaborate.elaborateContractIsarCert goldenTapeoutSyntaxMod goldenTapeoutContractDecl
+  Elaborate.elaborateContractIsarCert cleanroomSignoffSyntaxMod cleanroomSignoffContractDecl
 
-def goldenPlanarBulkLayer : Layer where
+def planarBulkMosfetLayer : Layer where
   name     := "PlanarBulkMosfetBase"
   metadata := .record []
   fields   :=
@@ -923,7 +1421,7 @@ def goldenPlanarBulkLayer : Layer where
     , ("calibratedDelayPs",  .lam (.app (.get (.bound 2) "gateDelayPs") (.binary .add (.bound 0) (.nat 2)))) ]
   flat     := false
 
-def goldenHighKUpgradeLayer : Layer where
+def highKFinFetUpgradeLayer : Layer where
   name     := "HighKMetalGateFinFetUpgrade"
   metadata := .record []
   fields   :=
@@ -933,8 +1431,8 @@ def goldenHighKUpgradeLayer : Layer where
   flat     := false
 
 def goldenCleanroomTcadComp : Composition where
-  top   := goldenHighKUpgradeLayer
-  below := [goldenPlanarBulkLayer]
+  top   := highKFinFetUpgradeLayer
+  below := [planarBulkMosfetLayer]
   seed  :=
     [ ("oxideEotPicometers", .nat 0)
     , ("vthMilliV",          .nat 0)
@@ -945,6 +1443,9 @@ def goldenCleanroomTcadComp : Composition where
 theorem golden_obend_module_silicon_tapeout_verified :
     FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag goldenTapeoutIsarCert = true ∧
     goldenTapeoutIsarCert.judgeTags = ["hw-rtl-synth@1", "hw-retime-sta@1", "hw-pnr-bitstream@1"] ∧
+    (∀ (H : Obend.Digest.HashBytes.Hash) (srcBytes : List UInt8),
+      (compileCompositionToSiliconTapeoutWithHash
+        H srcBytes goldenTapeoutConfig goldenCleanroomTcadComp [goldenTapeoutIsarCert]).isOk = true) ∧
     (match compileCompositionToSiliconTapeout goldenTapeoutConfig goldenCleanroomTcadComp [goldenTapeoutIsarCert] with
      | .ok art =>
        let regs0 : Nat → BitVec 64 := fun _ => 0#64
@@ -975,8 +1476,12 @@ theorem golden_obend_module_silicon_tapeout_verified :
        art.receipt.verdict.isOk &&
        checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust
      | .error _ => false) = true := by
-  refine ⟨by decide +kernel, rfl, ?_⟩
-  decide +kernel
+  refine ⟨by decide +kernel, rfl, ?_, ?_⟩
+  · intro H srcBytes
+    rw [compileCompositionToSiliconTapeoutWithHash_isOk_eq H Obend.Core.Digest.deployed
+          srcBytes goldenTapeoutConfig.moduleName.toUTF8.toList]
+    decide +kernel
+  · decide +kernel
 
 end Obend.Hardware.TapeoutPipeline
 end
