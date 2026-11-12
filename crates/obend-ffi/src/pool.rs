@@ -42,7 +42,9 @@ impl LeanWorkerPool {
             workers.push(spawn(move || {
                 ensure_lean_thread_initialized();
 
-                while let Ok(Some(job)) = rx_clone.lock().unwrap().recv() {
+                loop {
+                    let msg = { rx_clone.lock().unwrap().recv() };
+                    let Ok(Some(job)) = msg else { break };
                     job();
                 }
 

@@ -14,7 +14,9 @@ public meta import Obend.Core.Data
 public import Obend.Core.Term
 public import Obend.Law.Contract
 public import Obend.Lower.Transport
+public import Obend.Spec.Law
 public meta import Obend.Spec.Law
+public import Obend.Spec.LawDial
 public meta import Obend.Spec.LawDial
 
 @[expose] public section

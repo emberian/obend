@@ -29,6 +29,7 @@ wiring into `Obend.Judge.Genealogy.Habitat` and `Obend.Law.Narrows`:
 -/
 public import Obend.Judge.Genealogy
 public import Obend.Law.Contract
+public import Obend.Law.Run
 
 public section
 
@@ -122,7 +123,7 @@ theorem weaker_trans {S A : Type} {p q r : Policy S A} (hpq : Weaker p q) (hqr :
     loosening from `law₂` to `law₁` (`Weaker`) is dual to `law₂` narrowing `law₁`. -/
 theorem weaker_dual_narrows (law₁ law₂ : Term) :
     let polOf (l : Term) : Policy (Data × Data) Data :=
-      fun pair req => Obend.Law.evalAdmitsBounded l pair.1 pair.2 req
+      fun pair req => Obend.Law.okB (Obend.Law.run 64 (.app (.app (.app l pair.1.term) pair.2.term) req.term))
     (Weaker (polOf law₁) (polOf law₂) ↔ PolicyNarrows (polOf law₂) (polOf law₁)) ∧
     (Narrows law₂ law₁ → ∀ old new req, Admits law₂ old new req → Admits law₁ old new req) := by
   exact ⟨⟨fun h s a hq => h s a hq, fun h s a hq => h s a hq⟩, fun h old new req ha => h old new req ha⟩

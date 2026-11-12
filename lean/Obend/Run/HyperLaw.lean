@@ -336,14 +336,14 @@ theorem self_defeating_modal_refused_on_empty :
 /-! ### Structural JSON Wire Codecs & Registered `glEquilibriumFormat` (`gl-equilibrium@1`) -/
 
 open Lean (Json) in
-private def modalRuleToJson (r : ModalRule) : Json :=
+@[expose] def modalRuleToJson (r : ModalRule) : Json :=
   Json.mkObj
     [ ("head", Json.str r.head)
     , ("pos", Json.arr (r.posBody.map Json.str).toArray)
     , ("neg", Json.arr (r.negBody.map Json.str).toArray) ]
 
 open Lean (Json) in
-private def modalRuleOfJson (j : Json) : Except String ModalRule := do
+@[expose] def modalRuleOfJson (j : Json) : Except String ModalRule := do
   let head ← (j.getObjVal? "head") >>= Json.getStr?
   let posArr ← (j.getObjVal? "pos") >>= Json.getArr?
   let negArr ← (j.getObjVal? "neg") >>= Json.getArr?

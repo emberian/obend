@@ -874,7 +874,7 @@ theorem altSuperSubst_free : SubstFree altSuperSubst := by
   | 1 => exact obsFree_of_observes verticalComp.object (by decide +kernel)
   | k + 2 => exact .bound k
 
-theorem altSuperSubst_claimResolver_sound :
+theorem altSuperSubst_claimResolver_witness :
     RSound (claimResolver verticalComp 1) altSuperSubst := by
   have hw : verticalLimitClaimObj.wellFormed = true := by decide +kernel
   obtain ⟨_, _, _, hct, hseed, _, _⟩ := wellFormed_parts hw
@@ -929,7 +929,7 @@ theorem verticalLimit_impossible_claimCheck (k : Nat) (steps : List RStep) :
       ((Term.binary .subtract (.get (.bound 1) "limit") (.get (.bound 0) "limit")).substitute altSuperSubst)
       ((Term.nat 10).substitute altSuperSubst) :=
     holdsEq_of_observed (replay_sound (claimResolver verticalComp 1) (k := .b)
-      ⟨.inl rfl, fun _ => altSuperSubst_free⟩ altSuperSubst_claimResolver_sound steps
+      ⟨.inl rfl, fun _ => altSuperSubst_free⟩ altSuperSubst_claimResolver_witness steps
       (fun e => by cases e) hrep)
   have hrun20 : Obend.Law.run 100
       ((Term.binary .subtract (.get (.bound 1) "limit") (.get (.bound 0) "limit")).substitute altSuperSubst) =

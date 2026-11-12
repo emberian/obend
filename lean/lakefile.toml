@@ -17,7 +17,7 @@ defaultTargets = ["Obend"]
 name = "Obend"
 defaultFacets = ["leanArts", "shared"]
 globs = [
-  "Obend", "Obend.Analysis.+", "Obend.Apps.ZkNtt.Goldilocks", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Category.*", "Obend.Consensus.*", "Obend.Crypto.*", "Obend.Fold.*", "Obend.Intention", "Obend.Kind", "Obend.Kind.+", "Obend.Main", "Obend.Reasons.*", "Obend.Repair.*", "Obend.Trailblaze.+",
+  "Obend", "Obend.Analysis.+", "Obend.Apps.ZkNtt.Goldilocks", "Obend.AssertAxioms", "Obend.AssertCompiled", "Obend.Category.*", "Obend.Consensus.*", "Obend.Crypto.*", "Obend.Fold.*", "Obend.Intention", "Obend.Kind", "Obend.Kind.+", "Obend.Main", "Obend.Paco.+", "Obend.Reasons.*", "Obend.Repair.*", "Obend.Trailblaze.+",
   "Obend.Core.+", "Obend.Digest.+", "Obend.Doc.*", "Obend.Elab.*", "Obend.Equiv.+", "Obend.Hardware.*", "Obend.Judge.*",
   "Obend.Law.*", "Obend.Leaf.+", "Obend.Lower.+", "Obend.Ledger", "Obend.Ledger.*", "Obend.Logic.+", "Obend.Receipt.*", "Obend.Run.*", "Obend.Slot.*", "Obend.Spec.*", "Obend.Tactic.+",
   "Obend.Vault.*", "Obend.FFI", "Obend.FFI.*", "Obend.Format.+",

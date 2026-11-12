@@ -84,6 +84,13 @@ module = "Obend.Core.MachineFast"
 theorem = "runFrom_eq_runBounded"
 description = "Unboxed `@[csimp]` fast-path executor `runFrom` agrees identically with specification `runBounded`."
 
+[[apex]]
+id = "core-range-safe-arithmetic"
+subsystem = "Core"
+module = "Obend.Core.RangeSafe"
+theorem = "rangeSafe_pipeline_inhabited"
+description = "Interval/range-safe modular-to-integer arithmetic bridge discharging overflow/wrap preconditions across hardware and field pipelines."
+
 # ==============================================================================
 # 2. `Leaf` — Book Emission, Specialization, Static Folding & Served Pin Linking
 # ==============================================================================
@@ -115,6 +122,27 @@ subsystem = "Leaf"
 module = "Obend.Leaf.Specialize"
 theorem = "specialize_integrity"
 description = "Moved or invalidated upstream slot pins deterministically block stale specialized `Leaf` candidates."
+
+[[apex]]
+id = "leaf-link-specialize-gpaco"
+subsystem = "Leaf"
+module = "Obend.Leaf.LinkSpecialize"
+theorem = "gpaco_clo_upToStep_sound"
+description = "Whole-book link specialization (`LinkSpecialize`) and `GPaco` up-to closure establish coinductive behavioral equivalence across mutual recursion."
+
+[[apex]]
+id = "logic-super-refines-frame"
+subsystem = "Leaf"
+module = "Obend.Logic.SuperRefines"
+theorem = "superClaim_sound"
+description = "Vertical `super.m` unfolding (`SuperRefines`) and `SupportSheaf` overlay transport preserve open-recursive claims across outer overrides."
+
+[[apex]]
+id = "slot-support-sheaf-transport"
+subsystem = "Leaf"
+module = "Obend.Slot.SupportSheaf"
+theorem = "disjoint_transport_sound"
+description = "Clarke coalgebraic delta-lens `RepairableSheaf` transports `Slot`, `Intention`, and `SuperClaimCert` pins across disjoint overlays in O(1)."
 
 # ==============================================================================
 # 3. `Vault` — Log Replay, Segmented/Chunked Windows, UnifiedDeos & Rehydration
@@ -200,6 +228,13 @@ subsystem = "Judge"
 module = "Obend.Judge.SvenvsCorrigibility"
 theorem = "pca_enveloped_safe"
 description = "3-tier `svenvs` constitutional stack, `MaxPol` safe weakening, demonic B-step latency-bounded corrigibility, and proof-carrying actions."
+
+[[apex]]
+id = "judge-computational-dual-assumption"
+subsystem = "Judge"
+module = "Obend.Judge.Computational"
+theorem = "dualAssumption_sound"
+description = "0-axiom game-based `ComputationalJudge` reduces cheating witnesses to explicit cryptographic adversary breaks with dual-assumption tightening."
 
 [[apex]]
 id = "reasons-unified-gl-equilibrium"
