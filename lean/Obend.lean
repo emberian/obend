@@ -87,6 +87,7 @@ public import Obend.Hardware.Gpu.Rdna2.DppShuffle
 public import Obend.Hardware.Gpu.SoacOptimize
 public import Obend.Hardware.Gpu.StencilTile
 public import Obend.Hardware.MultiDStencilTile
+public import Obend.Hardware.Device.DriftDiffusion
 public import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize

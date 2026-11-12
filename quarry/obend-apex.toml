@@ -1296,6 +1296,13 @@ module = "Obend.Doc.WorkbookEngine"
 theorem = "evalWorkbookIncremental_eq_full"
 description = "Live multi-projection bidirectional workbook engine with exact incremental dirty-cone evaluation equivalence (`evalWorkbookIncremental_eq_full`) and Putnam/Foster `GetPut`/`PutGet` lens laws (`lens_put_get`)."
 
+[[apex]]
+id = "hardware-device-drift-diffusion-qfermi-cert"
+subsystem = "Hardware"
+module = "Obend.Hardware.Device.DriftDiffusion"
+theorem = "ddFormat_sound"
+description = "Scharfetter-Gummel quasi-Fermi drift-diffusion TCAD byte Judge (`devsim-qfermi@1`) proving parsed wire equilibrium, Poisson residual bounds, and current continuity."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
