@@ -1,33 +1,11 @@
 module
 /-
-# Obend.Hardware.TapeoutPipeline — Unified End-to-End `.obend` Source-to-Silicon Compilation & Netlist-Bound Receipt Pipeline
-
-Welds the formal hardware compilation and physical verification pipeline from an `.obend` source string
-(`compileObendModuleToSiliconTapeout`) to a netlist-bound, cSHAKE256-digested `SiliconTapeoutArtifact`:
-
-1. **`FrontEnd.parseModule`, `FrontEnd.checkModuleIsarCerts`, `FrontEnd.lowerDecoded` & `FrontEnd.accept`**:
-   - Parses `.obend` source text, verifies structured Isar `contract` proof scripts and registered judge tags,
-     lowers to Core4, runs the proof-producing bidirectional type checker (`FrontEnd.accept`), and extracts
-     the open-recursive `Obend.Logic.Composition`.
-2. **`Obend.Leaf.emit` + `specializeBookDict` (`betaRecordDict` ∘ `inlineDict`)**:
-   - Lowers the `Composition` to a flat `Obend.Leaf.Book` (`emit C`) and specializes dictionary/record
-     wrappers via `betaRecordDict passes (inlineDict passes d.code)`.
-3. **`Compiler.compileBookToPipelinedRtl` / `compileBookToRtlSat` / `compileBookToSeqRtlSat` + `checkRtlModule`**:
-   - Compiles the specialized `Book` to an `RtlModule` and verifies combinational DAG acyclicity + CDC safety.
-4. **`Synth.synthesizeModuleToBels` + `checkBelNetlistValid`**:
-   - Maps the `RtlModule` to an FPGA/ASIC primitive `BelNetlist` (`LUT1`/`LUT2`/`LUT3`/`CARRY4`/`DSP`/`FF`)
-     with universal combinational/sequential trace equivalence (`synthesizeModuleToBels_trace_equiv`) and
-     exact flip-flop count (`countFfBels = rtlModule.regs.length`).
-5. **`Retiming.solveVerifiedRetiming?` & `checkRetimingCert`**:
-   - Solves Leiserson–Saxe FEAS integer lag constraints and verifies non-negative retimed edge register
-     weights and DAG longest-path timing closure (`checkAllCombPathsMeetDelay_sound`).
-6. **Netlist-Bound `PlaceRoute` (`synthesizeGridPnrCert` + `checkPnrCertificate belNetlist ...`) + 2D `DRC` + `[FF, TT, SS]` Envelope STA**:
-   - Binds `checkPnrCertificate` 1-to-1 to the synthesized `belNetlist`, checks buffered `SteinerTree`
-     Elmore timing closure, 1D/2D Manhattan `LayoutBox2D` DRC, and dual-corner `[FF, TT, SS]` timing signoff.
-7. **SystemVerilog Emission (`emitModuleSV`) & Real cSHAKE256 Byte Commitment (`Obend.Core.Digest.deployed`)**:
-   - Hashes the actual `.obend` source UTF-8 bytes and emitted SystemVerilog `sv.toUTF8.toList` bytes via
-     `H : Obend.Digest.HashBytes.Hash` (defaulting to `Obend.Core.Digest.deployed`), with collision-resistant
-     SV binding (`mkTapeoutReceipt_sv_binds_or_collides`).
+# Obend.Hardware.TapeoutPipeline — `.obend` source to netlist-bound silicon tapeout artifact
+Stages: front end (`FrontEnd.parseModule` … `accept`), `Leaf.emit` + `specializeBookDict`, Book-to-RTL (`checkRtlModule`),
+BEL synthesis (`synthesizeModuleToBels`), retiming, netlist-bound PnR (`synthesizeGridPnrCert`, `checkPnrCertificate`),
+artifact-bound physical signoff (`checkArtifactBoundTapeout`: the timing graph, fanout tree, pad/via geometry and critical
+path are derived from the synthesized netlist and its PnR certificate), DRC, `[FF, TT, SS]` envelope STA, SystemVerilog
+emission and the cSHAKE256 receipt (`tapeout_sv_digest_binds_or_collides`).
 -/
 public import Lean.Data.Json
 public import Obend.Core.Digest
@@ -47,85 +25,40 @@ public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.DRC
 public import Obend.Hardware.Judge
 public section
-
 namespace Obend.Hardware.TapeoutPipeline
 open Lean (Json toJson)
-open Obend.Core.Term
-open Obend.Equiv
-open Obend.Logic
-open Obend.Leaf
-open Obend.Lower
-open Obend.Spec
-open Obend.Hardware.Process
-open Obend.Hardware.HDL
-open Obend.Hardware.Compiler
-open Obend.Hardware.Synth
-open Obend.Hardware.Retiming
-open Obend.Hardware.PlaceRoute
-open Obend.Hardware.DRC
-open Obend.Hardware.Judge
-
+open Obend.Core.Term Obend.Equiv Obend.Logic Obend.Leaf Obend.Lower Obend.Spec Obend.Hardware.Process Obend.Hardware.HDL
+open Obend.Hardware.Compiler Obend.Hardware.Synth Obend.Hardware.Retiming Obend.Hardware.PlaceRoute Obend.Hardware.DRC Obend.Hardware.Judge
 set_option autoImplicit false
 
 /-! ## 1. Hardware Compilation Modes, Default DRC Geometry, Configuration & Error Diagnostics -/
-
 /-- RTL compilation strategy for Stage 3 of the `.obend` tapeout pipeline. -/
 inductive RtlCompileMode where
   | pipelined        -- Register-stage pipelined datapath (`compileBookToPipelinedRtl`)
   | combinationalSat -- Saturating combinational datapath (`compileBookToRtlSat`)
   | sequentialSat    -- Multi-cycle sequential FSM (`compileBookToSeqRtlSat`)
   deriving DecidableEq, Repr
-
 /-- Default 7nm Metal-1 foundry DRC deck used by `TapeoutConfig`. -/
-def default7nmDrcDeck : FoundryDrcDeck where
-  deckName          := "7nm_M1_EUV_Deck"
-  minMetalWidthNm   := 36
-  minMetalSpacingNm := 36
-  minViaWidthNm     := 32
-  minViaEnclosureNm := 8
-  maxResistAspect   := 3
-
+def default7nmDrcDeck : FoundryDrcDeck :=
+  { deckName := "7nm_M1_EUV_Deck", minMetalWidthNm := 36, minMetalSpacingNm := 36, minViaWidthNm := 32
+  , minViaEnclosureNm := 8, maxResistAspect := 3 }
 /-- Default DRC-clean Metal-1 cutline feature (`40nm` width, `40nm` spacing). -/
-def default7nmCutlineFeature : CutlineDrcFeature where
-  metalWidthNm    := 40
-  metalSpacingNm  := 40
-  viaWidthNm      := 36
-  viaEnclosureNm  := 10
-  resistOpeningNm := 40
-  resistHeightNm  := 100
-  ildThicknessNm  := 120
-
+def default7nmCutlineFeature : CutlineDrcFeature :=
+  { metalWidthNm := 40, metalSpacingNm := 40, viaWidthNm := 36, viaEnclosureNm := 10, resistOpeningNm := 40
+  , resistHeightNm := 100, ildThicknessNm := 120 }
 def defaultMetalBoxA : LayoutBox2D := { layerId := 1, xMinNm := 0,  yMinNm := 0,  xMaxNm := 40,  yMaxNm := 100 }
 def defaultMetalBoxB : LayoutBox2D := { layerId := 1, xMinNm := 80, yMinNm := 0,  xMaxNm := 120, yMaxNm := 100 }
 def defaultViaBox    : LayoutBox2D := { layerId := 2, xMinNm := 10, yMinNm := 10, xMaxNm := 46,  yMaxNm := 46 }
 def defaultViaPadBox : LayoutBox2D := { layerId := 1, xMinNm := 0,  yMinNm := 0,  xMaxNm := 56,  yMaxNm := 56 }
-
 /-- Extract the 16-bit LUT SRAM truth table / BEL primitive configuration word (`< 65536`)
 directly from a technology-mapped `BelKind`. -/
 @[expose] def extractBelCellLutInit : BelKind → Nat
-  | .lut1 m              => m % 65536
-  | .lut2 m              => m % 65536
-  | .lut3 m              => m % 65536
-  | .carry4 .add         => 0x0096
-  | .carry4 .sub         => 0x0069
-  | .carry4 .ultCmp      => 0x00B2
-  | .carry4 .sltCmp      => 0x00D4
-  | .dspMul .mul64       => 0xD580
-  | .dspMul .qmul32      => 0xD532
-  | .ff _ .resetFree     => 0xFF00
-  | .ff _ (.syncReset _) => 0xFF01
-  | .orReduce            => 0xFFFE
-  | .zeroDetect          => 0x0001
-  | .shiftRoute .shl d   => 0x5100 + (d % 64)
-  | .shiftRoute .lshr d  => 0x5200 + (d % 64)
-  | .shiftRoute .ashr d  => 0x5300 + (d % 64)
-  | .bitBroadcast b      => 0xB000 + (b % 64)
-  | .constBel v          => v.toNat % 256
-  | .portIn p            => 0x1000 + (p % 256)
-  | .wireTap w           => 0x2000 + (w % 256)
-  | .regTap r            => 0x3000 + (r % 256)
-  | .route _             => 0x4000
-
+  | .lut1 m => m % 65536 | .lut2 m => m % 65536 | .lut3 m => m % 65536 | .carry4 .add => 0x0096 | .carry4 .sub => 0x0069
+  | .carry4 .ultCmp => 0x00B2 | .carry4 .sltCmp => 0x00D4 | .dspMul .mul64 => 0xD580 | .dspMul .qmul32 => 0xD532
+  | .ff _ .resetFree => 0xFF00 | .ff _ (.syncReset _) => 0xFF01 | .orReduce => 0xFFFE | .zeroDetect => 0x0001
+  | .shiftRoute .shl d => 0x5100 + (d % 64) | .shiftRoute .lshr d => 0x5200 + (d % 64) | .shiftRoute .ashr d => 0x5300 + (d % 64)
+  | .bitBroadcast b => 0xB000 + (b % 64) | .constBel v => v.toNat % 256 | .portIn p => 0x1000 + (p % 256) | .wireTap w => 0x2000 + (w % 256)
+  | .regTap r => 0x3000 + (r % 256) | .route _ => 0x4000
 theorem extractBelCellLutInit_lt (k : BelKind) : extractBelCellLutInit k < 65536 := by
   cases k with
   | carry4 m => cases m <;> decide
@@ -137,23 +70,17 @@ theorem extractBelCellLutInit_lt (k : BelKind) : extractBelCellLutInit k < 65536
   | constBel v => dsimp [extractBelCellLutInit]; omega
   | orReduce | zeroDetect => decide
   | route _ => dsimp [extractBelCellLutInit]; omega
-
 /-- Compute the switch-box input mux PIP configuration mask (`1 .. 255 < 65536`) from `c.inputs`. -/
 @[expose] def extractBelCellPipMask (c : BelCell) : Nat :=
   1 + (c.inputs.length % 255)
-
 theorem extractBelCellPipMask_lt (c : BelCell) : extractBelCellPipMask c < 65536 := by
   dsimp [extractBelCellPipMask]; omega
-
 /-- Grid column `tileX ∈ [0, 16)` for placed BEL cell index `i` (2 BEL slots per tile). -/
 @[expose] def gridTileX (i : Nat) : Nat := (i / 2) % 16
-
 /-- Grid row `tileY ∈ [0, 256)` for placed BEL cell index `i` (32 BELs per grid row, 8,192 total). -/
 @[expose] def gridTileY (i : Nat) : Nat := (i / 32) % 256
-
 /-- Intra-tile BEL slot `belSlot ∈ {0, 1}` for placed BEL cell index `i`. -/
 @[expose] def gridBelSlot (i : Nat) : Nat := i % 2
-
 private theorem gridCoord_injective {i j : Nat} (hi : i < 8192) (hj : j < 8192)
     (hEq : (gridTileX i, gridTileY i, gridBelSlot i) = (gridTileX j, gridTileY j, gridBelSlot j)) :
     i = j := by
@@ -161,24 +88,19 @@ private theorem gridCoord_injective {i j : Nat} (hi : i < 8192) (hj : j < 8192)
   rcases Prod.mk.inj hEq with ⟨hX, hYZ⟩
   rcases Prod.mk.inj hYZ with ⟨hY, hZ⟩
   omega
-
 /-- Canonical physical switch-box wire identifier partitioning routing channel `trackId`,
 hop step `stepIdx < 1024`, tile row `tileY < 256`, and tile column `tileX < 256`. -/
 @[expose] def encodeSwitchWire (trackId stepIdx tileX tileY : Nat) : Nat :=
   trackId * 67108864 + (stepIdx % 1024) * 65536 + (tileY % 256) * 256 + (tileX % 256)
-
 private theorem encodeSwitchWire_track (trackId stepIdx tileX tileY : Nat) :
     encodeSwitchWire trackId stepIdx tileX tileY / 67108864 = trackId := by
   dsimp [encodeSwitchWire]; omega
-
 /-- 1D Manhattan tile distance `|a - b|`. -/
 @[expose] def manhattanDist1D (a b : Nat) : Nat :=
   if a ≤ b then b - a else a - b
-
 /-- Advance one tile coordinate step from `cur` towards `target`. -/
 def stepTileTowards (cur target : Nat) : Nat :=
   if cur < target then cur + 1 else if target < cur then cur - 1 else cur
-
 /-- Emit `steps` horizontal switch-box `PipHop`s along row `y` from `curX` towards `dstX`. -/
 def buildManhattanXHops (trackId stepIdx curX dstX y : Nat) : Nat → List PipHop
   | 0 => []
@@ -189,7 +111,6 @@ def buildManhattanXHops (trackId stepIdx curX dstX y : Nat) : Nat → List PipHo
     , resOhm  := 60
     , capFf   := 4 } ::
     buildManhattanXHops trackId (stepIdx + 1) nextX dstX y k
-
 /-- Emit `steps` vertical switch-box `PipHop`s along column `x` from `curY` towards `dstY`. -/
 def buildManhattanYHops (trackId stepIdx x curY dstY : Nat) : Nat → List PipHop
   | 0 => []
@@ -200,7 +121,6 @@ def buildManhattanYHops (trackId stepIdx x curY dstY : Nat) : Nat → List PipHo
     , resOhm  := 60
     , capFf   := 4 } ::
     buildManhattanYHops trackId (stepIdx + 1) x nextY dstY k
-
 /-- Synthesize a Manhattan X-then-Y switch-box `RoutedNet` on dedicated track `trackId`
 from producer tile `(srcX, srcY)` to consumer tile `(dstX, dstY)`. -/
 @[expose] def routeManhattanEdge (trackId srcX srcY dstX dstY : Nat) : RoutedNet :=
@@ -217,7 +137,6 @@ from producer tile `(srcX, srcY)` to consumer tile `(dstX, dstY)`. -/
   , srcWire := encodeSwitchWire trackId 0 srcX srcY
   , dstWire := encodeSwitchWire trackId (dx + dy + 1) dstX dstY
   , hops    := xHops ++ yHops ++ [sinkHop] }
-
 /-- Look up the cell index of the sequential `BelKind.ff regIdx _` driving `.regTap regIdx`. -/
 def findFfCellIdx? (targetReg : Nat) : List BelCell → Nat → Option Nat
   | [], _ => none
@@ -225,62 +144,47 @@ def findFfCellIdx? (targetReg : Nat) : List BelCell → Nat → Option Nat
     match c.kind with
     | .ff r _ => if r == targetReg then some idx else findFfCellIdx? targetReg rest (idx + 1)
     | _       => findFfCellIdx? targetReg rest (idx + 1)
-
 /-- Look up the cell index of the producer `BelCell` driving net `pinName`. -/
 def findProducerCellIdx? (pinName : String) : List BelCell → Nat → Option Nat
   | [], _ => none
   | c :: rest, idx =>
     if c.dstName.toList == pinName.toList then some idx else findProducerCellIdx? pinName rest (idx + 1)
-
 /-- Look up the primary module input index driving named primary port `pinName`. -/
 def findPrimaryInputIdx? (pinName : String) : List String → Nat → Option Nat
   | [], _ => none
   | nm :: rest, idx =>
     if nm.toList == pinName.toList then some idx
     else findPrimaryInputIdx? pinName rest (idx + 1)
-
-/-- Extract producer-to-consumer `(srcX, srcY, dstX, dstY)` tile edges for pin list `pins` of `dstIdx`. -/
-def extractCellPinEdges (net : BelNetlist) (dstIdx : Nat) : List String → List (Nat × Nat × Nat × Nat)
+/-- Fan-in of pin list `pins` of cell `dst` as `(sourceIsCell, source, dst)`; a non-cell source is a primary input. -/
+def belPinFanIn (net : BelNetlist) (dst : Nat) : List String → List (Bool × Nat × Nat)
   | [] => []
-  | pinName :: pins =>
-    let dstX := gridTileX dstIdx
-    let dstY := gridTileY dstIdx
-    let headEdge :=
-      match findProducerCellIdx? pinName net.cells 0 with
-      | some srcIdx => [(gridTileX srcIdx, gridTileY srcIdx, dstX, dstY)]
-      | none =>
-        match findPrimaryInputIdx? pinName net.inputNames 0 with
-        | some inIdx => [(0, inIdx % 256, dstX, dstY)]
-        | none       => []
-    headEdge ++ extractCellPinEdges net dstIdx pins
-
-/-- Extract producer-to-consumer `(srcX, srcY, dstX, dstY)` tile edges for cell `c` at `dstIdx`. -/
-def extractSingleCellEdges (net : BelNetlist) (dstIdx : Nat) (c : BelCell) : List (Nat × Nat × Nat × Nat) :=
-  let dstX := gridTileX dstIdx
-  let dstY := gridTileY dstIdx
+  | pin :: pins =>
+    (match findProducerCellIdx? pin net.cells 0 with
+     | some j => [(true, j, dst)]
+     | none => match findPrimaryInputIdx? pin net.inputNames 0 with
+       | some k => [(false, k, dst)]
+       | none => []) ++ belPinFanIn net dst pins
+def belCellFanIn (net : BelNetlist) (dst : Nat) (c : BelCell) : List (Bool × Nat × Nat) :=
   match c.kind with
   | .constBel _ => []
-  | .portIn inIdx => [(0, inIdx % 256, dstX, dstY)]
-  | .regTap regIdx =>
-    match findFfCellIdx? regIdx net.cells 0 with
-    | some ffIdx => [(gridTileX ffIdx, gridTileY ffIdx, dstX, dstY)]
-    | none       => []
-  | _ => extractCellPinEdges net dstIdx c.inputs
-
-def extractBelNetlistEdgesAux (net : BelNetlist) (dstIdx : Nat) : List BelCell → List (Nat × Nat × Nat × Nat)
+  | .portIn k => [(false, k, dst)]
+  | .regTap r => match findFfCellIdx? r net.cells 0 with | some f => [(true, f, dst)] | none => []
+  | _ => belPinFanIn net dst c.inputs
+def belFanInAux (net : BelNetlist) (dst : Nat) : List BelCell → List (Bool × Nat × Nat)
   | [] => []
-  | c :: rest => extractSingleCellEdges net dstIdx c ++ extractBelNetlistEdgesAux net (dstIdx + 1) rest
-
-/-- Extract all producer-to-consumer tile coordinate edges `(srcX, srcY, dstX, dstY)` of `net`. -/
+  | c :: rest => belCellFanIn net dst c ++ belFanInAux net (dst + 1) rest
+/-- Every producer-to-consumer fan-in edge of `net`, consumer cells in order. -/
+def belFanIn (net : BelNetlist) : List (Bool × Nat × Nat) := belFanInAux net 0 net.cells
+/-- Tile coordinates `(srcX, srcY, dstX, dstY)` of every fan-in edge on the grid placement (primary input `k` enters
+at tile `(0, k % 256)`). -/
 def extractBelNetlistEdges (net : BelNetlist) : List (Nat × Nat × Nat × Nat) :=
-  extractBelNetlistEdgesAux net 0 net.cells
-
+  (belFanIn net).map fun e =>
+    (if e.1 then gridTileX e.2.1 else 0, if e.1 then gridTileY e.2.1 else e.2.1 % 256, gridTileX e.2.2, gridTileY e.2.2)
 /-- Route every extracted `(srcX, srcY, dstX, dstY)` edge across distinct switch-box tracks. -/
 def routeEdgeListFrom (startTrack : Nat) : List (Nat × Nat × Nat × Nat) → List RoutedNet
   | [] => []
   | (sx, sy, dx, dy) :: rest =>
     routeManhattanEdge startTrack sx sy dx dy :: routeEdgeListFrom (startTrack + 1) rest
-
 def buildGridPlacedCells (idx : Nat) : List BelCell → List PlacedCell
   | [] => []
   | c :: rest =>
@@ -289,7 +193,6 @@ def buildGridPlacedCells (idx : Nat) : List BelCell → List PlacedCell
     , tileY   := gridTileY idx
     , belSlot := gridBelSlot idx
     , lutInit := extractBelCellLutInit c.kind } :: buildGridPlacedCells (idx + 1) rest
-
 def buildGridTileConfigs (idx : Nat) : List BelCell → List TileFrameConfig
   | [] => []
   | c :: rest =>
@@ -298,13 +201,8 @@ def buildGridTileConfigs (idx : Nat) : List BelCell → List TileFrameConfig
     , belSlot := gridBelSlot idx
     , lutInit := extractBelCellLutInit c.kind
     , pipMask := extractBelCellPipMask c } :: buildGridTileConfigs (idx + 1) rest
-
-/-- Synthesize a netlist-derived grid-placed & Manhattan switch-box routed `PnrCertificate`
-bound 1-to-1 to `net : BelNetlist`:
-1. Extracts each cell's actual LUT truth table / primitive configuration via `extractBelCellLutInit`,
-2. Places cells injectively onto the `(16 × 256 × 2)` physical BEL array (`buildGridPlacedCells`),
-3. Routes every producer-to-consumer edge of `net` via X-then-Y Manhattan `PipHop` paths across
-   disjoint switch-box tracks (`routeEdgeListFrom 0 (extractBelNetlistEdges net)`). -/
+/-- The netlist-derived grid-placed, Manhattan-routed `PnrCertificate` of `net`: real LUT/primitive words, injective
+placement on the `16 × 256 × 2` BEL array, and one routed net per fan-in edge on its own switch-box track. -/
 @[expose] def synthesizeGridPnrCert (net : BelNetlist) (sinkCapFf : Nat := 5) : PnrCertificate :=
   let placed := buildGridPlacedCells 0 net.cells
   let cfgs   := buildGridTileConfigs 0 net.cells
@@ -316,14 +214,12 @@ bound 1-to-1 to `net : BelNetlist`:
   , expectedConfigs := cfgs
   , bitstreamFrames := cfgs.map encodeBitstreamFrame
   , sinkCapFf       := sinkCapFf }
-
 private theorem map_cellId_buildGridPlacedCells (cs : List BelCell) (idx : Nat) :
     (buildGridPlacedCells idx cs).map (·.cellId) = List.range' idx cs.length := by
   induction cs generalizing idx with
   | nil => rfl
   | cons c rest ih =>
     simp [buildGridPlacedCells, List.range', ih (idx + 1)]
-
 private theorem checkCellAgainstList_buildGridPlacedCells
     (c0 : PlacedCell) (idx : Nat) (cs : List BelCell)
     (hc0Id : c0.cellId < idx)
@@ -341,7 +237,6 @@ private theorem checkCellAgainstList_buildGridPlacedCells
     rw [hc0Loc] at hLocEq
     have hIdxEq := gridCoord_injective (by omega) (by simp at hBound; omega) hLocEq
     omega
-
 private theorem checkPlacementInjective_buildGridPlacedCells
     (idx : Nat) (cs : List BelCell) (hBound : idx + cs.length ≤ 8192) :
     checkPlacementInjective (buildGridPlacedCells idx cs) = true := by
@@ -351,7 +246,6 @@ private theorem checkPlacementInjective_buildGridPlacedCells
     simp only [buildGridPlacedCells, checkPlacementInjective, Bool.and_eq_true]
     refine ⟨checkCellAgainstList_buildGridPlacedCells _ (idx + 1) rest (by dsimp; omega) rfl (by simp at hBound; omega),
             ih (idx + 1) (by simp at hBound; omega)⟩
-
 private theorem checkHopsContiguous_append (w0 w1 w2 : Nat) (h1 h2 : List PipHop)
     (hc1 : checkHopsContiguous w0 w1 h1 = true)
     (hc2 : checkHopsContiguous w1 w2 h2 = true) :
@@ -365,7 +259,6 @@ private theorem checkHopsContiguous_append (w0 w1 w2 : Nat) (h1 h2 : List PipHop
     simp only [checkHopsContiguous, Bool.and_eq_true, beq_iff_eq] at hc1
     simp only [List.cons_append, checkHopsContiguous, Bool.and_eq_true, beq_iff_eq]
     exact ⟨hc1.1, ih h.dstWire hc1.2⟩
-
 private theorem buildManhattanXHops_contiguous :
     ∀ (d trackId stepIdx curX dstX y : Nat),
       manhattanDist1D curX dstX = d →
@@ -385,7 +278,6 @@ private theorem buildManhattanXHops_contiguous :
     simp only [buildManhattanXHops, checkHopsContiguous, Bool.and_eq_true, beq_iff_eq, true_and]
     have ih := buildManhattanXHops_contiguous k trackId (stepIdx + 1) (stepTileTowards curX dstX) dstX y hNext
     rwa [show stepIdx + 1 + k = stepIdx + (k + 1) by omega] at ih
-
 private theorem buildManhattanYHops_contiguous :
     ∀ (d trackId stepIdx x curY dstY : Nat),
       manhattanDist1D curY dstY = d →
@@ -405,7 +297,6 @@ private theorem buildManhattanYHops_contiguous :
     simp only [buildManhattanYHops, checkHopsContiguous, Bool.and_eq_true, beq_iff_eq, true_and]
     have ih := buildManhattanYHops_contiguous k trackId (stepIdx + 1) x (stepTileTowards curY dstY) dstY hNext
     rwa [show stepIdx + 1 + k = stepIdx + (k + 1) by omega] at ih
-
 private theorem routeManhattanEdge_connected (trackId sx sy dx dy : Nat) :
     checkNetConnectivity (routeManhattanEdge trackId sx sy dx dy) = true := by
   dsimp only [routeManhattanEdge, checkNetConnectivity]
@@ -419,7 +310,6 @@ private theorem routeManhattanEdge_connected (trackId sx sy dx dy : Nat) :
     have hXY := checkHopsContiguous_append _ _ _ _ _ hX hY
     refine checkHopsContiguous_append _ _ _ _ _ hXY ?_
     simp [checkHopsContiguous]
-
 private theorem routeEdgeListFrom_all_connected (startTrack : Nat) (edges : List (Nat × Nat × Nat × Nat)) :
     (routeEdgeListFrom startTrack edges).all checkNetConnectivity = true := by
   induction edges generalizing startTrack with
@@ -427,7 +317,6 @@ private theorem routeEdgeListFrom_all_connected (startTrack : Nat) (edges : List
   | cons e rest ih =>
     rcases e with ⟨sx, sy, dx, dy⟩
     simp [routeEdgeListFrom, routeManhattanEdge_connected, ih (startTrack + 1)]
-
 private theorem buildManhattanXHops_dstTrack :
     ∀ (d trackId stepIdx curX dstX y u : Nat),
       u ∈ (buildManhattanXHops trackId stepIdx curX dstX y d).map (·.dstWire) →
@@ -438,7 +327,6 @@ private theorem buildManhattanXHops_dstTrack :
     rcases hMem with rfl | hTail
     · exact encodeSwitchWire_track _ _ _ _
     · exact buildManhattanXHops_dstTrack k trackId (stepIdx + 1) _ dstX y u hTail
-
 private theorem buildManhattanYHops_dstTrack :
     ∀ (d trackId stepIdx x curY dstY u : Nat),
       u ∈ (buildManhattanYHops trackId stepIdx x curY dstY d).map (·.dstWire) →
@@ -449,7 +337,6 @@ private theorem buildManhattanYHops_dstTrack :
     rcases hMem with rfl | hTail
     · exact encodeSwitchWire_track _ _ _ _
     · exact buildManhattanYHops_dstTrack k trackId (stepIdx + 1) x _ dstY u hTail
-
 private theorem routeManhattanEdge_wire_track (trackId sx sy dx dy u : Nat)
     (hMem : u ∈ netWires (routeManhattanEdge trackId sx sy dx dy)) :
     u / 67108864 = trackId := by
@@ -461,7 +348,6 @@ private theorem routeManhattanEdge_wire_track (trackId sx sy dx dy u : Nat)
   · exact buildManhattanXHops_dstTrack _ _ _ _ _ _ u hX
   · exact buildManhattanYHops_dstTrack _ _ _ _ _ _ u hY
   · exact encodeSwitchWire_track _ _ _ _
-
 private theorem disjointWireLists_of_ne_track (t1 t2 sx1 sy1 dx1 dy1 sx2 sy2 dx2 dy2 : Nat)
     (hNe : t1 ≠ t2) :
     disjointWireLists
@@ -474,7 +360,6 @@ private theorem disjointWireLists_of_ne_track (t1 t2 sx1 sy1 dx1 dy1 sx2 sy2 dx2
   have h1 := routeManhattanEdge_wire_track t1 sx1 sy1 dx1 dy1 u hu1
   have h2 := routeManhattanEdge_wire_track t2 sx2 sy2 dx2 dy2 u hv2
   omega
-
 private theorem checkNetDisjointFromList_routeEdgeListFrom
     (t0 sx0 sy0 dx0 dy0 startTrack : Nat) (edges : List (Nat × Nat × Nat × Nat))
     (hLt : t0 < startTrack) :
@@ -488,7 +373,6 @@ private theorem checkNetDisjointFromList_routeEdgeListFrom
     simp only [routeEdgeListFrom, checkNetDisjointFromList, Bool.and_eq_true]
     exact ⟨disjointWireLists_of_ne_track t0 startTrack sx0 sy0 dx0 dy0 sx sy dx dy (by omega),
            ih (startTrack + 1) (by omega)⟩
-
 private theorem checkRoutingDisjoint_routeEdgeListFrom
     (startTrack : Nat) (edges : List (Nat × Nat × Nat × Nat)) :
     checkRoutingDisjoint (routeEdgeListFrom startTrack edges) = true := by
@@ -499,7 +383,6 @@ private theorem checkRoutingDisjoint_routeEdgeListFrom
     simp only [routeEdgeListFrom, checkRoutingDisjoint, Bool.and_eq_true]
     exact ⟨checkNetDisjointFromList_routeEdgeListFrom startTrack sx sy dx dy (startTrack + 1) rest (by omega),
            ih (startTrack + 1)⟩
-
 private theorem buildGridTileConfigs_roundtrip (idx : Nat) (cs : List BelCell) :
     ((buildGridTileConfigs idx cs).map encodeBitstreamFrame).map decodeBitstreamFrame =
       buildGridTileConfigs idx cs := by
@@ -514,15 +397,8 @@ private theorem buildGridTileConfigs_roundtrip (idx : Nat) (cs : List BelCell) :
     simp only [Bool.and_eq_true, decide_eq_true_eq]
     refine ⟨⟨⟨⟨by omega, by omega⟩, by omega⟩, extractBelCellLutInit_lt c.kind⟩,
             extractBelCellPipMask_lt c⟩
-
-/-- **Universal Netlist-Derived Manhattan PnR Soundness & Elmore Tightness Refusal (`synthesizeGridPnrCert_valid_for_netlist`)**:
-For ANY synthesized `net : BelNetlist` fitting within the 8,192-BEL physical array (`net.cells.length ≤ 8192`),
-ANY `corner : ProcessCorner`, ANY `clockPeriodPs : Nat`, and ANY sink capacitance `sinkCapFf : Nat`:
-1. `checkPnrCertificate net corner clockPeriodPs (synthesizeGridPnrCert net sinkCapFf) = true` holds **if and only if**
-   every Manhattan-routed net `r ∈ (synthesizeGridPnrCert net sinkCapFf).routedNets` meets setup timing
-   (`corner.tCqMaxPs + corner.tGateMaxPs + computeElmoreDelayPs sinkCapFf r.hops + corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs`), and
-2. Whenever `clockPeriodPs` is tighter than the real Elmore RC arrival delay of ANY routed net in `net`,
-   `checkPnrCertificate` strictly **refuses** (`= false`)! -/
+/-- For every netlist of at most 8,192 BELs, corner, clock and sink load: the grid certificate is accepted exactly when
+every routed net meets Elmore setup timing, and a clock tighter than any net's arrival is refused. -/
 theorem synthesizeGridPnrCert_valid_for_netlist
     (net : BelNetlist) (corner : ProcessCorner) (clockPeriodPs sinkCapFf : Nat)
     (hCap : net.cells.length ≤ 8192) :
@@ -563,6 +439,205 @@ theorem synthesizeGridPnrCert_valid_for_netlist
     have hLe := hIff.mp hChk r hrMem
     omega
 
+/-! ## 1b. Netlist-bound physical extraction: timing graph, fanout forest, pad/via geometry, critical path -/
+
+/-- Logic depth of one BEL: a LUT or reduction is one gate level, a DSP multiplier slice four; carry chains are
+counted in `belCarryBlocks` (a 64-lane chain is eight `CARRY8` blocks); taps, constants and D pins add nothing. -/
+def belLogicLevels : BelKind → Nat
+  | .lut1 _ | .lut2 _ | .lut3 _ | .orReduce | .zeroDetect => 1
+  | .dspMul _ => 4
+  | _ => 0
+def belCarryBlocks : BelKind → Nat | .carry4 _ => 8 | _ => 0
+def belCellDelayPs (corner : ProcessCorner) (k : BelKind) : Nat :=
+  belLogicLevels k * corner.tGateMaxPs + belCarryBlocks k * corner.tCarryMaxPs
+def isFfCellAt (nl : BelNetlist) (j : Nat) : Bool := (nl.cells[j]?).any isFfBel
+/-- Elmore delay (ps) of the routed net of fan-in edge `k` (routed net `k`, `checkRoutingBindsFanIn`). -/
+def fanInWirePs (pnr : PnrCertificate) (k : Nat) : Nat :=
+  match pnr.routedNets[k]? with | some n => computeElmoreDelayPs pnr.sinkCapFf n.hops | none => 0
+/-- **The timing graph of the placed and routed netlist.** Vertex `i < N` is cell `i` (for a flip-flop, its D side),
+`N + k` primary input `k`, `N + P + f` the Q side of flip-flop cell `f`. A flip-flop is a one-register edge D → Q; a
+fan-in edge carries no register and the delay of its routed wire plus its consumer cell at `corner`. -/
+def deriveSyncGraphFromBelNetlist (corner : ProcessCorner) (nl : BelNetlist) (pnr : PnrCertificate) : SyncGraph :=
+  let n := nl.cells.length
+  let p := nl.inputNames.length
+  { name := nl.moduleName
+  , primaryInputs := (List.range p).map (n + ·)
+  , primaryOutputs := (List.range nl.outputNames.length).filterMap fun k => findProducerCellIdx? (outNetName k) nl.cells 0
+  , edges :=
+      (nl.cells.zipIdx.filterMap fun ci =>
+        if isFfBel ci.1 then some ({ src := ci.2, dst := n + p + ci.2, origRegs := 1, combDelayPs := 0 } : SyncEdge) else none) ++
+      (belFanIn nl).zipIdx.map fun ek =>
+        ({ src := if ek.1.1 then (if isFfCellAt nl ek.1.2.1 then n + p + ek.1.2.1 else ek.1.2.1) else n + ek.1.2.1
+         , dst := ek.1.2.2, origRegs := 0
+         , combDelayPs := fanInWirePs pnr ek.2 + ((nl.cells[ek.1.2.2]?).elim 0 fun c => belCellDelayPs corner c.kind) } : SyncEdge) }
+/-- A routed net as a chain of RC segments ending in a sink of `sinkCapFf`. -/
+def hopChainTree (sinkCapFf : Nat) (w : Nat) : List PipHop → SteinerTree
+  | [] => .sink w sinkCapFf
+  | h :: rest => .branch h.srcWire h.resOhm h.capFf (hopChainTree sinkCapFf h.dstWire rest) (.sink h.dstWire 0)
+/-- The fanout forest of the routed netlist: the net of every fan-in edge, joined at an ideal (zero-impedance) root. -/
+def deriveSteinerTreeFromPnr (nl : BelNetlist) (pnr : PnrCertificate) (sinkCapFf : Nat) : SteinerTree :=
+  ((pnr.routedNets.take (belFanIn nl).length).map fun n => hopChainTree sinkCapFf n.srcWire n.hops).foldr
+    (fun t acc => .branch 0 0 0 t acc) (.sink 0 0)
+/-- Pad and via geometry of the placement under `deck`: BEL `(x, y, slot)` gets a square layer-1 pad of side
+`max minMetalWidth (minViaWidth + 2·minViaEnclosure)` at pitch `side + minMetalSpacing`, two slots per tile, and a
+centred layer-2 via cut. Returns `(cellId, pad)` shapes and `(via, pad)` pairs. -/
+def deriveLayoutBoxesFromPnr (deck : FoundryDrcDeck) (pnr : PnrCertificate) :
+    List (Nat × LayoutBox2D) × List (LayoutBox2D × LayoutBox2D) :=
+  let side := max deck.minMetalWidthNm (deck.minViaWidthNm + 2 * deck.minViaEnclosureNm)
+  let pitch := side + max deck.minMetalSpacingNm 1
+  let pad (c : PlacedCell) : LayoutBox2D :=
+    { layerId := 1, xMinNm := (2 * c.tileX + c.belSlot) * pitch, yMinNm := c.tileY * pitch
+    , xMaxNm := (2 * c.tileX + c.belSlot) * pitch + side, yMaxNm := c.tileY * pitch + side }
+  let via (c : PlacedCell) : LayoutBox2D :=
+    { layerId := 2, xMinNm := (pad c).xMinNm + deck.minViaEnclosureNm, yMinNm := (pad c).yMinNm + deck.minViaEnclosureNm
+    , xMaxNm := (pad c).xMaxNm - deck.minViaEnclosureNm, yMaxNm := (pad c).yMaxNm - deck.minViaEnclosureNm }
+  (pnr.placedCells.map fun c => (c.cellId, pad c), pnr.placedCells.map fun c => (via c, pad c))
+/-- One in-order pass of a path-depth recurrence: a cell's depth is its weight `w` plus `pick` over its fan-in of
+(source depth, `0` after a flip-flop, `base` at a primary input) plus the edge weight `ew`. Exact when fan-in respects
+cell order (`checkRoutingBindsFanIn`). `max`/`0` gives the longest path, `min`/large the shortest launched path. -/
+def belPathDepths (nl : BelNetlist) (pick : Nat → Nat → Nat) (base : Nat) (w : BelKind → Nat) (ew : Nat → Nat) : List Nat :=
+  nl.cells.zipIdx.foldl (fun depths ci =>
+    let vals := ((belFanIn nl).zipIdx.filter fun ek => ek.1.2.2 == ci.2).map fun ek =>
+      (if ek.1.1 then (if isFfCellAt nl ek.1.2.1 then 0 else depths.getD ek.1.2.1 base) else base) + ew ek.2
+    depths ++ [vals.foldl pick base + w ci.1.kind]) []
+/-- **The critical path of the placed and routed netlist**: deepest logic and carry depth of any path, the worst
+accumulated routed Elmore delay in units of `corner.tWireHopPs`, and the fewest levels between two flip-flops
+(4096 when no path joins two flip-flops, so hold is unconstrained). -/
+def deriveCriticalTimingPathFromPnr (corner : ProcessCorner) (nl : BelNetlist) (pnr : PnrCertificate) : TimingPath :=
+  let worst (w : BelKind → Nat) (ew : Nat → Nat) : Nat := (belPathDepths nl max 0 w ew).foldl max 0
+  let minDepths := belPathDepths nl min 4096 (fun k => belLogicLevels k + min (belCarryBlocks k) 1) (fun _ => 0)
+  { name := nl.moduleName ++ "_critical_path"
+  , logicLevels := worst belLogicLevels (fun _ => 0)
+  , minLevels := (nl.cells.zipIdx.filter fun ci => isFfBel ci.1).foldl (fun m ci => min m (minDepths.getD ci.2 4096)) 4096
+  , carryBits := worst belCarryBlocks (fun _ => 0)
+  , tileHops := (worst (fun _ => 0) (fanInWirePs pnr) + corner.tWireHopPs - 1) / max corner.tWireHopPs 1 }
+/-- Everything physical signoff reads, derived from the netlist and its PnR certificate. -/
+structure ArtifactPhysicalChecks where
+  syncGraph : SyncGraph
+  steinerTree : SteinerTree
+  metalShapes : List (Nat × LayoutBox2D)
+  viaCuts : List (LayoutBox2D × LayoutBox2D)
+  criticalPath : TimingPath
+  deriving DecidableEq, Repr
+def derivePhysicalChecksFromBelNetlist (corner : ProcessCorner) (deck : FoundryDrcDeck) (nl : BelNetlist)
+    (pnr : PnrCertificate) : ArtifactPhysicalChecks :=
+  { syncGraph := deriveSyncGraphFromBelNetlist corner nl pnr, steinerTree := deriveSteinerTreeFromPnr nl pnr pnr.sinkCapFf
+  , metalShapes := (deriveLayoutBoxesFromPnr deck pnr).1, viaCuts := (deriveLayoutBoxesFromPnr deck pnr).2
+  , criticalPath := deriveCriticalTimingPathFromPnr corner nl pnr }
+/-- Routed net `k` routes fan-in edge `k`: as many nets as edges, each starting on its source's tile and ending on
+its consumer's (a wire id carries its tile as `encodeSwitchWire` lays it out), and fan-in respects cell order. -/
+def checkRoutingBindsFanIn (nl : BelNetlist) (pnr : PnrCertificate) : Bool :=
+  let tileOf (i : Nat) : Nat × Nat := (pnr.placedCells[i]?).elim (0, 0) fun c => (c.tileX % 256, c.tileY % 256)
+  decide (pnr.routedNets.length = (belFanIn nl).length) &&
+  ((belFanIn nl).zip pnr.routedNets).all fun en =>
+    (!en.1.1 || isFfCellAt nl en.1.2.1 || decide (en.1.2.1 < en.1.2.2)) &&
+    ((en.2.srcWire % 256, en.2.srcWire / 256 % 256) == (if en.1.1 then tileOf en.1.2.1 else (0, en.1.2.1 % 256))) &&
+    ((en.2.dstWire % 256, en.2.dstWire / 256 % 256) == tileOf en.1.2.2)
+def nthOr0 : List Nat → Nat → Nat
+  | [], _ => 0 | x :: _, 0 => x | _ :: xs, n + 1 => nthOr0 xs n
+/-- `arr` certifies arrivals for `edges`: along every register-free edge the arrival grows by at least the edge's
+delay and stays within `budget` (vertices past `arr`, primary inputs and flip-flop outputs, arrive at `0`). -/
+def checkGraphArrivals (arr : List Nat) (budget : Nat) (edges : List SyncEdge) : Bool :=
+  edges.all fun e => e.origRegs != 0 ||
+    (decide (nthOr0 arr e.src + e.combDelayPs ≤ nthOr0 arr e.dst) && decide (nthOr0 arr e.dst ≤ budget))
+private theorem graphArrivals_walk (arr : List Nat) (budget : Nat) (edges : List SyncEdge)
+    (hOk : checkGraphArrivals arr budget edges = true) :
+    ∀ (walk : List SyncEdge) (u v : Nat), checkContiguousSyncEdges u v walk = true →
+      (∀ e ∈ walk, e ∈ edges ∧ e.origRegs = 0) →
+      nthOr0 arr u + combWalkDelay walk ≤ nthOr0 arr v ∧ (walk ≠ [] → nthOr0 arr v ≤ budget) := by
+  intro walk
+  induction walk with
+  | nil =>
+    intro u v hC _; simp only [checkContiguousSyncEdges, beq_iff_eq] at hC; subst hC
+    exact ⟨by simp [combWalkDelay], fun h => absurd rfl h⟩
+  | cons e rest ih =>
+    intro u v hC hZ
+    simp only [checkContiguousSyncEdges, Bool.and_eq_true, beq_iff_eq] at hC
+    obtain ⟨hSrc, hRest⟩ := hC; subst hSrc
+    have hE := hZ e (List.Mem.head _)
+    have hChk := (List.all_eq_true.mp hOk) e hE.1
+    simp [hE.2] at hChk
+    obtain ⟨hI, hB⟩ := ih e.dst v hRest (fun x hx => hZ x (List.Mem.tail _ hx))
+    refine ⟨by simp only [combWalkDelay]; omega, fun _ => ?_⟩
+    cases rest with
+    | nil => simp only [checkContiguousSyncEdges, beq_iff_eq] at hRest; rw [← hRest]; exact hChk.2
+    | cons r rs => exact hB (by simp)
+/-- **Artifact-bound physical signoff.** On the checks derived from `nl` and `pnr` alone: routing binds the fan-in,
+every register-to-register path of the emitted netlist closes setup at the slow corner without retiming, the fanout
+forest closes Elmore timing, pads of distinct cells keep `deck` spacing, every via is enclosed, and the critical path
+closes setup at `SS` and hold at `FF`. No `TapeoutConfig` sample graph, tree, box or path is read. -/
+def checkArtifactBoundTapeout (env : ProcessCornerEnvelope) (clockPeriodPs : Nat) (deck : FoundryDrcDeck)
+    (nl : BelNetlist) (pnr : PnrCertificate) : Bool :=
+  let slow := env.slowCorner
+  let phys := derivePhysicalChecksFromBelNetlist slow deck nl pnr
+  checkRoutingBindsFanIn nl pnr && decide (slow.tCqMaxPs + slow.tSetupPs + slow.tSkewPs ≤ clockPeriodPs) &&
+  checkGraphArrivals (belPathDepths nl max 0 (belCellDelayPs slow) (fanInWirePs pnr))
+    (clockPeriodPs - (slow.tCqMaxPs + slow.tSetupPs + slow.tSkewPs)) phys.syncGraph.edges &&
+  checkSteinerTimingClosure slow clockPeriodPs phys.steinerTree &&
+  phys.metalShapes.all (fun a => phys.metalShapes.all fun b => a.1 == b.1 || checkBoxSpacing2D deck.minMetalSpacingNm a.2 b.2) &&
+  phys.viaCuts.all (fun v => checkViaEnclosure2D deck.minViaEnclosureNm v.1 v.2) &&
+  checkEnvelopeTimingSignoff env clockPeriodPs phys.criticalPath
+example : checkArtifactBoundTapeout envelope7nm 2000 default7nmDrcDeck validAdderBelNetlist
+    (synthesizeGridPnrCert validAdderBelNetlist) = true := by decide +kernel
+/-- **Soundness of artifact-bound signoff**, about the graph, forest, geometry and path derived from `nl` and `pnr`:
+routing covers the fan-in; every contiguous register-free walk of the timing graph fits the clock at the slow corner;
+the forest closes; pads of distinct cells share no point; every via lies in its pad; and timing signoff holds at
+every corner between `FF` and `SS`. -/
+theorem checkArtifactBoundTapeout_sound (env : ProcessCornerEnvelope) (clockPeriodPs : Nat) (deck : FoundryDrcDeck)
+    (nl : BelNetlist) (pnr : PnrCertificate) (hOk : checkArtifactBoundTapeout env clockPeriodPs deck nl pnr = true) :
+    pnr.routedNets.length = (belFanIn nl).length ∧
+    (∀ (u v : Nat) (walk : List SyncEdge), checkContiguousSyncEdges u v walk = true →
+      (∀ e ∈ walk, e ∈ (derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr).syncGraph.edges ∧ e.origRegs = 0) →
+      env.slowCorner.tCqMaxPs + combWalkDelay walk + env.slowCorner.tSetupPs + env.slowCorner.tSkewPs ≤ clockPeriodPs) ∧
+    checkSteinerTimingClosure env.slowCorner clockPeriodPs
+      (derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr).steinerTree = true ∧
+    (∀ a ∈ (derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr).metalShapes,
+      ∀ b ∈ (derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr).metalShapes, a.1 ≠ b.1 →
+        ∀ x y, ¬ (a.2.containsPoint x y ∧ b.2.containsPoint x y)) ∧
+    (∀ v ∈ (derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr).viaCuts,
+      ∀ x y, v.1.containsPoint x y → v.2.containsPoint x y) ∧
+    (∀ c : ProcessCorner, CornerBetween env.fastCorner c env.slowCorner → checkTimingSignoff c clockPeriodPs
+      (derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr).criticalPath = true) := by
+  simp only [checkArtifactBoundTapeout, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, Bool.or_eq_true,
+    beq_iff_eq] at hOk
+  obtain ⟨⟨⟨⟨⟨⟨hBind, hOv⟩, hComb⟩, hSt⟩, hBox⟩, hVia⟩, hEnv⟩ := hOk
+  refine ⟨?_, fun u v walk hC hZ => ?_, hSt, fun a ha b hb hne x y => ?_, fun v hv x y hIn => ?_, fun c hBet => ?_⟩
+  · simp only [checkRoutingBindsFanIn, Bool.and_eq_true, decide_eq_true_eq] at hBind; exact hBind.1
+  · obtain ⟨h1, h2⟩ := graphArrivals_walk _ _ _ hComb walk u v hC hZ
+    cases walk with
+    | nil => simp only [combWalkDelay]; omega
+    | cons e r => have := h2 (by simp); omega
+  · rcases hBox a ha b hb with h | h
+    · exact absurd h hne
+    · exact boxSpacing2D_disjoint _ _ _ x y h
+  · exact (viaEnclosure2D_contained _ _ _ x y (hVia v hv) hIn).1
+  · exact (envelope_timing_signoff_implies_all_intermediate_corners_safe env clockPeriodPs _ c hBet hEnv).1
+/-- Signoff of a netlist and its PnR certificate with nothing else supplied: netlist validity, the netlist-bound
+PnR certificate, then `checkArtifactBoundTapeout`; returns the derived checks. -/
+def runArtifactBoundTapeoutSignoff (env : ProcessCornerEnvelope) (clockPeriodPs : Nat) (deck : FoundryDrcDeck)
+    (nl : BelNetlist) (pnr : PnrCertificate) : Option ArtifactPhysicalChecks :=
+  if checkBelNetlistValid nl && checkPnrCertificate nl env.slowCorner clockPeriodPs pnr &&
+      checkArtifactBoundTapeout env clockPeriodPs deck nl pnr then
+    some (derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr)
+  else none
+theorem runArtifactBoundTapeoutSignoff_sound (env : ProcessCornerEnvelope) (clockPeriodPs : Nat) (deck : FoundryDrcDeck)
+    (nl : BelNetlist) (pnr : PnrCertificate) (phys : ArtifactPhysicalChecks)
+    (hOk : runArtifactBoundTapeoutSignoff env clockPeriodPs deck nl pnr = some phys) :
+    phys = derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr ∧ checkBelNetlistValid nl = true ∧
+    checkPnrCertificate nl env.slowCorner clockPeriodPs pnr = true ∧
+    checkArtifactBoundTapeout env clockPeriodPs deck nl pnr = true := by
+  unfold runArtifactBoundTapeoutSignoff at hOk; split at hOk
+  · rename_i h; simp only [Bool.and_eq_true] at h; injection hOk with hP; exact ⟨hP.symm, h.1.1, h.1.2, h.2⟩
+  · cases hOk
+/-- Any `RtlModule` to a signed-off netlist: the emission gate `checkRtlModuleW`, BEL synthesis, grid PnR, and
+artifact-bound signoff. Returns the netlist, its PnR certificate, the derived checks and the SystemVerilog. -/
+def compileRtlModuleArtifactBoundTapeout (env : ProcessCornerEnvelope) (clockPeriodPs : Nat) (deck : FoundryDrcDeck)
+    (m : RtlModule) (sinkCapFf : Nat := 5) : Option (BelNetlist × PnrCertificate × ArtifactPhysicalChecks × String) :=
+  if checkRtlModuleW m then
+    (runArtifactBoundTapeoutSignoff env clockPeriodPs deck (synthesizeModuleToBels m)
+      (synthesizeGridPnrCert (synthesizeModuleToBels m) sinkCapFf)).map fun phys =>
+        (synthesizeModuleToBels m, synthesizeGridPnrCert (synthesizeModuleToBels m) sinkCapFf, phys, emitModuleSV m)
+  else none
 /-- Complete configuration bundle for `compileObendModuleToSiliconTapeout`. -/
 structure TapeoutConfig where
   moduleName        : String
@@ -586,14 +661,9 @@ structure TapeoutConfig where
   viaPadBox         : LayoutBox2D := defaultViaPadBox
   cornerEnvelope    : ProcessCornerEnvelope := envelope7nm
   timingPath        : TimingPath :=
-    { name        := "obend_pipelined_stage_path"
-    , logicLevels := 3
-    , minLevels   := 3
-    , carryBits   := 4
-    , tileHops    := 1 }
+    { name := "obend_pipelined_stage_path", logicLevels := 3, minLevels := 3, carryBits := 4, tileHops := 1 }
   datedRoot         : Nat := 20261102
   deriving DecidableEq, Repr
-
 /-- Structured refusal diagnostic naming the exact stage of the tapeout pipeline that refused. -/
 inductive TapeoutError where
   | frontEndParseRefused (stage message : String)
@@ -607,6 +677,7 @@ inductive TapeoutError where
   | retimingSolverRefused (graphName : String)
   | retimingCertRefused (graphName : String)
   | pnrCertRefused (designName : String)
+  | artifactBoundSignoffRefused (moduleName : String)
   | steinerTimingRefused (moduleName : String)
   | cutlineDrcRefused (deckName : String)
   | boxSpacing2DRefused (deckName : String)
@@ -614,7 +685,6 @@ inductive TapeoutError where
   | envelopeTimingRefused (moduleName : String)
   | receiptCeilingRefused (reason : String)
   deriving DecidableEq, Repr
-
 /-- Render a `TapeoutError` as a human-readable diagnostic string. -/
 def TapeoutError.toString : TapeoutError → String
   | .frontEndParseRefused st msg  => s!"[Stage 1: FrontEnd.parseModule ({st})] {msg}"
@@ -628,6 +698,7 @@ def TapeoutError.toString : TapeoutError → String
   | .retimingSolverRefused g      => s!"[Stage 5: Retiming.solveVerifiedRetiming?] no feasible lag assignment for {g}"
   | .retimingCertRefused g        => s!"[Stage 5: Retiming.checkRetimingCert] retiming certificate failed STA at SS corner for {g}"
   | .pnrCertRefused d             => s!"[Stage 6: PlaceRoute.checkPnrCertificate] Netlist-bound PnR certificate refused for {d}"
+  | .artifactBoundSignoffRefused m => s!"[Stage 6: checkArtifactBoundTapeout] netlist-derived timing/DRC signoff failed for {m}"
   | .steinerTimingRefused m       => s!"[Stage 6: PlaceRoute.checkSteinerTimingClosure] buffered Steiner tree failed Elmore timing for {m}"
   | .cutlineDrcRefused d          => s!"[Stage 7: DRC.checkCutlineDRC] 1D cutline DRC violation on deck {d}"
   | .boxSpacing2DRefused d        => s!"[Stage 7: DRC.checkBoxSpacing2D] 2D metal box spacing violation on deck {d}"
@@ -636,16 +707,13 @@ def TapeoutError.toString : TapeoutError → String
   | .receiptCeilingRefused r      => s!"[Stage 8: Receipt.ceiling] trust ceiling check failed: {r}"
 
 /-! ## 2. Stage 2 Dictionary Specialization (`specializeBookDict`) & Slot Preservation -/
-
 def specializeBookItemDict (passes : Nat) : BookItem → BookItem
   | .slot d =>
     .slot { d with code := betaRecordDict passes (inlineDict passes d.code) }
   | .static m v =>
     .static m (betaRecordDict passes (inlineDict passes v))
-
 def specializeBookDict (passes : Nat) (B : Book) : Book where
   items := B.items.map (specializeBookItemDict passes)
-
 theorem specializeBookItems_preserves_slot_members (passes : Nat) (items : List BookItem) :
     ((items.map (specializeBookItemDict passes)).filterMap BookItem.def?).map (·.member) =
       (items.filterMap BookItem.def?).map (·.member) := by
@@ -657,14 +725,12 @@ theorem specializeBookItems_preserves_slot_members (passes : Nat) (items : List 
       simp only [List.map_cons, specializeBookItemDict, List.filterMap_cons, BookItem.def?, ih]
     | static m v =>
       simp only [List.map_cons, specializeBookItemDict, List.filterMap_cons, BookItem.def?, ih]
-
 theorem specializeBookDict_preserves_slots (passes : Nat) (B : Book) :
     (specializeBookDict passes B).slots = B.slots ∧
     (∀ t : Term, t ≈b betaRecordDict passes t) := by
   refine ⟨?_, bequiv_betaRecordDict passes⟩
   unfold specializeBookDict Book.slots Book.defs
   exact specializeBookItems_preserves_slot_members passes B.items
-
 def compileBookByMode (mode : RtlCompileMode) (modName : String) (B : Book) : Option RtlModule :=
   match mode with
   | .pipelined        => compileBookToPipelinedRtl modName B
@@ -672,31 +738,25 @@ def compileBookByMode (mode : RtlCompileMode) (modName : String) (B : Book) : Op
   | .sequentialSat    => compileBookToSeqRtlSat modName B
 
 /-! ## 3. Verified `SiliconTapeoutArtifact`, Real Byte Hashing & Kernel-Checked Support List -/
-
 /-- The 3 kernel-checked hardware judge supports executed during `compileObendModuleToSiliconTapeout`. -/
 def tapeoutCheckedSupports : List (String × Obend.Receipt.Trust) :=
   [ ("hw-rtl-synth",     .checked "hw-rtl-synth"     "1" .kernel)
   , ("hw-retime-sta",    .checked "hw-retime-sta"    "1" .kernel)
   , ("hw-pnr-bitstream", .checked "hw-pnr-bitstream" "1" .kernel) ]
-
 def isAdmittedTapeoutJudgeTag (tag : String) : Bool :=
   (findHardwareFormat? tag).isSome
-
 def trustBaseEq : Obend.Judge.TrustBase → Obend.Judge.TrustBase → Bool
   | .kernel,      .kernel      => true
   | .compiled,    .compiled    => true
   | .external w1, .external w2 => w1 == w2
   | _,            _            => false
-
 def trustEq : Obend.Receipt.Trust → Obend.Receipt.Trust → Bool
   | .checked f1 v1 b1, .checked f2 v2 b2 => (f1 == f2) && (v1 == v2) && trustBaseEq b1 b2
   | .attested p1 r1,   .attested p2 r2   => (p1 == p2) && (r1 == r2)
   | _,                 _                 => false
-
 def isCheckedTrust : Obend.Receipt.Trust → Bool
   | .checked _ _ _ => true
   | .attested _ _  => false
-
 def checkTapeoutTrustChecked (ran claimed : List (String × Obend.Receipt.Trust)) : Bool :=
   !ran.isEmpty &&
   ran.all (fun (s, t) =>
@@ -704,16 +764,11 @@ def checkTapeoutTrustChecked (ran claimed : List (String × Obend.Receipt.Trust)
     | some t' => trustEq t' t
     | none    => false) &&
   claimed.all (fun (_, t) => isCheckedTrust t)
-
 /-- Construct the dated `Obend.Receipt.Receipt` for a verified silicon compilation run, computing
 `pre` and `post` via `H : Obend.Digest.HashBytes.Hash` (defaulting to `Obend.Core.Digest.deployed`
 cSHAKE256) over the actual source bytes `srcBytes` and emitted SystemVerilog `svBytes`! -/
-def mkTapeoutReceipt
-    (H : Obend.Digest.HashBytes.Hash)
-    (cfg : TapeoutConfig)
-    (srcBytes svBytes : List UInt8)
-    (belCount : Nat)
-    (pnrDesignName rtlName : String) :
+def mkTapeoutReceipt (H : Obend.Digest.HashBytes.Hash) (cfg : TapeoutConfig) (srcBytes svBytes : List UInt8)
+    (belCount : Nat) (pnrDesignName rtlName : String) :
     Obend.Receipt.Receipt String String String String where
   pre        := "cshake256:" ++ rtlNatToStr (Obend.Digest.HashBytes.ofBE (H srcBytes))
   post       := "cshake256:" ++ rtlNatToStr (Obend.Digest.HashBytes.ofBE (H svBytes))
@@ -729,19 +784,15 @@ def mkTapeoutReceipt
     , ("checkRetimingCert",          true)
     , ("checkPnrCertificate",        true)
     , ("checkCutlineDRC",            true)
-    , ("checkEnvelopeTimingSignoff", true) ]
+    , ("checkEnvelopeTimingSignoff", true)
+    , ("checkArtifactBoundTapeout",  true) ]
   verdict    := .ok
   quantifier := .forAll
   trust      := tapeoutCheckedSupports
   dated      := cfg.datedRoot
   proofs     := []
   prev       := "cshake256:genesis"
-
-/-- **Cryptographic Binding of Emitted SystemVerilog Bytes (`tapeout_sv_digest_binds_or_collides`)**:
-For ANY hash `H : Obend.Digest.HashBytes.Hash` (including `Obend.Core.Digest.deployed`) and any two
-emitted SystemVerilog byte streams `svBytes1, svBytes2 : List UInt8`, equal post-state integer digests
-`ofBE (H svBytes1) = ofBE (H svBytes2)` imply `svBytes1 = svBytes2` or a hash collision
-`Obend.Digest.HashBytes.Collision H`! -/
+/-- Equal SystemVerilog digests under any hash `H` mean equal byte streams or a collision of `H`. -/
 theorem tapeout_sv_digest_binds_or_collides
     (H : Obend.Digest.HashBytes.Hash)
     (svBytes1 svBytes2 : List UInt8)
@@ -750,7 +801,6 @@ theorem tapeout_sv_digest_binds_or_collides
   by_cases hSame : svBytes1 = svBytes2
   · exact Or.inl hSame
   · exact Or.inr ⟨svBytes1, svBytes2, hSame, hEq⟩
-
 /-- Complete verified silicon compilation & physical signoff artifact. -/
 structure SiliconTapeoutArtifact where
   moduleName          : String
@@ -768,15 +818,12 @@ structure SiliconTapeoutArtifact where
   systemVerilog       : String
   svDigest            : Nat
   receipt             : Obend.Receipt.Receipt String String String String
+  clockPeriodPs       : Nat
+  physical            : ArtifactPhysicalChecks
 
 /-! ## 4. Stages 2–8 Kernel-Reducible Compiler (`compileCompositionToSiliconTapeout`) & Soundness -/
-
-def compileCompositionToSiliconTapeoutWithHash
-    (H : Obend.Digest.HashBytes.Hash)
-    (srcBytes : List UInt8)
-    (cfg : TapeoutConfig)
-    (comp : Composition)
-    (isarCerts : List Elaborate.ElaboratedIsarCert := []) :
+def compileCompositionToSiliconTapeoutWithHash (H : Obend.Digest.HashBytes.Hash) (srcBytes : List UInt8)
+    (cfg : TapeoutConfig) (comp : Composition) (isarCerts : List Elaborate.ElaboratedIsarCert := []) :
     Except TapeoutError SiliconTapeoutArtifact := do
   if !(isarCerts.all (FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag)) then
     .error (.isarContractRefused "isar-cert-verification" "contract Isar proof script or judge tag invalid")
@@ -812,6 +859,8 @@ def compileCompositionToSiliconTapeoutWithHash
                 let pnrCert := cfg.pnrCert?.getD (synthesizeGridPnrCert belNetlist cfg.sinkCapFf)
                 if !(checkPnrCertificate belNetlist tcadEnvelope.slowCorner cfg.clockPeriodPs pnrCert) then
                   .error (.pnrCertRefused pnrCert.designName)
+                else if !(checkArtifactBoundTapeout tcadEnvelope cfg.clockPeriodPs cfg.drcDeck belNetlist pnrCert) then
+                  .error (.artifactBoundSignoffRefused cfg.moduleName)
                 else
                   let bufferedSteinerTree :=
                     decoupleRightBranchWithBuffer cfg.bufWireId cfg.bufInputCapFf cfg.unbufferedTree
@@ -827,52 +876,22 @@ def compileCompositionToSiliconTapeoutWithHash
                     else
                       let retimedGraph := applyRetimingCertToGraph cfg.syncGraph retimingCert
                       .ok
-                        { moduleName          := cfg.moduleName
-                        , comp                := comp
-                        , isarCerts           := isarCerts
-                        , rawBook             := rawBook
-                        , specializedBook     := specializedBook
-                        , rtlModule           := rtlModule
-                        , belNetlist          := belNetlist
-                        , retimingCert        := retimingCert
-                        , retimedGraph        := retimedGraph
-                        , pnrCert             := pnrCert
-                        , bufferedSteinerTree := bufferedSteinerTree
-                        , tcadEnvelope        := tcadEnvelope
-                        , systemVerilog       := sv
-                        , svDigest            := Obend.Digest.HashBytes.ofBE (H svBytes)
-                        , receipt             := receipt }
-
+                        { moduleName := cfg.moduleName, comp := comp, isarCerts := isarCerts, rawBook := rawBook
+                         , specializedBook := specializedBook, rtlModule := rtlModule, belNetlist := belNetlist, retimingCert := retimingCert
+                         , retimedGraph := retimedGraph, pnrCert := pnrCert, bufferedSteinerTree := bufferedSteinerTree
+                         , tcadEnvelope := tcadEnvelope, systemVerilog := sv, svDigest := Obend.Digest.HashBytes.ofBE (H svBytes)
+                         , receipt := receipt, clockPeriodPs := cfg.clockPeriodPs, physical :=
+                          derivePhysicalChecksFromBelNetlist tcadEnvelope.slowCorner cfg.drcDeck belNetlist pnrCert }
 /-- Default instantiation using `Obend.Core.Digest.deployed` (cSHAKE256). -/
-def compileCompositionToSiliconTapeout
-    (cfg : TapeoutConfig)
-    (comp : Composition)
-    (isarCerts : List Elaborate.ElaboratedIsarCert := []) :
-    Except TapeoutError SiliconTapeoutArtifact :=
+def compileCompositionToSiliconTapeout (cfg : TapeoutConfig) (comp : Composition)
+    (isarCerts : List Elaborate.ElaboratedIsarCert := []) : Except TapeoutError SiliconTapeoutArtifact :=
   compileCompositionToSiliconTapeoutWithHash Obend.Core.Digest.deployed cfg.moduleName.toUTF8.toList cfg comp isarCerts
-
-/-- **Master Soundness Theorem (`compileCompositionToSiliconTapeoutWithHash_sound`)**:
-Whenever `compileCompositionToSiliconTapeoutWithHash H srcBytes cfg comp isarCerts = .ok art`:
-1. Isar contracts & registered judge tags are verified,
-2. `art.rawBook = Obend.Leaf.emit art.comp` and `art.specializedBook.slots = art.rawBook.slots`,
-3. `checkRtlModule art.rtlModule = true`, `art.belNetlist = synthesizeModuleToBels art.rtlModule`,
-   `checkBelNetlistValid art.belNetlist = true`, and `countFfBels art.belNetlist = art.rtlModule.regs.length`,
-4. `checkRetimingCert` holds with non-negative retimed edge weights (`solveVerifiedRetiming_sound`),
-5. **Netlist-bound PnR**: `checkPnrCertificate art.belNetlist art.tcadEnvelope.slowCorner cfg.clockPeriodPs art.pnrCert = true`,
-   so `art.pnrCert.placedCells.length = art.belNetlist.cells.length`, placement is list-wide injective,
-   and routing is list-wide short-free (`checkPnrCertificate_sound`),
-6. 1D/2D `DRC` and `[FF, TT, SS]` envelope timing hold,
-7. **Real SV Byte Commitment**: `art.systemVerilog = emitModuleSV art.rtlModule`,
-   `art.svDigest = H art.systemVerilog.toUTF8.toList`, `art.receipt.post = "cshake256:" ++ rtlNatToStr art.svDigest`,
-   `art.receipt.verdict = .ok`, and `checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust = true`! -/
-theorem compileCompositionToSiliconTapeoutWithHash_sound
-    (H : Obend.Digest.HashBytes.Hash)
-    (srcBytes : List UInt8)
-    (cfg : TapeoutConfig)
-    (comp : Composition)
-    (isarCerts : List Elaborate.ElaboratedIsarCert)
-    (art : SiliconTapeoutArtifact)
-    (hOk : compileCompositionToSiliconTapeoutWithHash H srcBytes cfg comp isarCerts = .ok art) :
+/-- **What an accepted tapeout establishes** of its artifact: verified Isar contracts and judge tags; the Book,
+RTL (`checkRtlModule`) and BEL netlist (`synthesizeModuleToBels`, valid, exact flip-flop count); the retiming
+certificate; the netlist-bound PnR certificate (injective placement, short-free routing); DRC and `[FF, TT, SS]`
+envelope timing; the SystemVerilog byte commitment and receipt; and, last, artifact-bound physical signoff. -/
+@[expose] def TapeoutSound (H : Obend.Digest.HashBytes.Hash) (cfg : TapeoutConfig) (comp : Composition)
+    (isarCerts : List Elaborate.ElaboratedIsarCert) (art : SiliconTapeoutArtifact) : Prop :=
     art.comp = comp ∧
     art.isarCerts = isarCerts ∧
     (∀ cert ∈ art.isarCerts,
@@ -904,7 +923,13 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
     art.svDigest = Obend.Digest.HashBytes.ofBE (H art.systemVerilog.toUTF8.toList) ∧
     art.receipt.post = "cshake256:" ++ rtlNatToStr art.svDigest ∧
     art.receipt.verdict = .ok ∧
-    checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust = true := by
+    checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust = true ∧
+    checkArtifactBoundTapeout art.tcadEnvelope cfg.clockPeriodPs cfg.drcDeck art.belNetlist art.pnrCert = true
+theorem compileCompositionToSiliconTapeoutWithHash_sound
+    (H : Obend.Digest.HashBytes.Hash) (srcBytes : List UInt8) (cfg : TapeoutConfig) (comp : Composition)
+    (isarCerts : List Elaborate.ElaboratedIsarCert) (art : SiliconTapeoutArtifact)
+    (hOk : compileCompositionToSiliconTapeoutWithHash H srcBytes cfg comp isarCerts = .ok art) :
+    TapeoutSound H cfg comp isarCerts art := by
   unfold compileCompositionToSiliconTapeoutWithHash at hOk
   dsimp only at hOk
   cases hIsarB : isarCerts.all (FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag) with
@@ -956,6 +981,9 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
                       | false => rw [hPnrB] at hOk; cases hOk
                       | true =>
                         rw [hPnrB] at hOk
+                        cases hArtB : checkArtifactBoundTapeout tcadEnv cfg.clockPeriodPs cfg.drcDeck belNl pnrC
+                        · rw [hArtB] at hOk; cases hOk
+                        rw [hArtB] at hOk
                         let bufTree := decoupleRightBranchWithBuffer cfg.bufWireId cfg.bufInputCapFf cfg.unbufferedTree
                         cases hSteinerB : checkSteinerTimingClosure tcadEnv.slowCorner cfg.clockPeriodPs bufTree with
                         | false => rw [hSteinerB] at hOk; cases hOk
@@ -995,58 +1023,21 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
                                    hPitch,
                                    fun x y => boxSpacing2D_disjoint cfg.drcDeck.minMetalSpacingNm cfg.metalBoxA cfg.metalBoxB x y hBoxB,
                                    fun x y hIn => (viaEnclosure2D_contained cfg.drcDeck.minViaEnclosureNm cfg.viaBox cfg.viaPadBox x y hViaB hIn).1,
-                                   hEnvB, hIntermSafe, rfl, rfl, rfl, rfl, hCeil⟩
-
+                                   hEnvB, hIntermSafe, rfl, rfl, rfl, rfl, hCeil, hArtB⟩
 theorem compileCompositionToSiliconTapeout_sound
-    (cfg : TapeoutConfig)
-    (comp : Composition)
-    (isarCerts : List Elaborate.ElaboratedIsarCert)
-    (art : SiliconTapeoutArtifact)
-    (hOk : compileCompositionToSiliconTapeout cfg comp isarCerts = .ok art) :
-    art.comp = comp ∧
-    art.isarCerts = isarCerts ∧
-    (∀ cert ∈ art.isarCerts,
-      cert.scriptValid = true ∧ ∀ tag ∈ cert.judgeTags, isAdmittedTapeoutJudgeTag tag = true) ∧
-    art.rawBook = Obend.Leaf.emit art.comp ∧
-    art.specializedBook.slots = art.rawBook.slots ∧
-    compileBookByMode cfg.compileMode cfg.moduleName art.specializedBook = some art.rtlModule ∧
-    checkRtlModule art.rtlModule = true ∧
-    art.belNetlist = synthesizeModuleToBels art.rtlModule ∧
-    checkBelNetlistValid art.belNetlist = true ∧
-    countFfBels art.belNetlist = art.rtlModule.regs.length ∧
-    checkRetimingCert cfg.syncGraph art.retimingCert art.tcadEnvelope.slowCorner cfg.clockPeriodPs = true ∧
-    (∀ e ∈ cfg.syncGraph.edges, 0 ≤ retimedEdgeWeight (lookupLag art.retimingCert) e) ∧
-    checkPnrCertificate art.belNetlist art.tcadEnvelope.slowCorner cfg.clockPeriodPs art.pnrCert = true ∧
-    art.pnrCert.placedCells.length = art.belNetlist.cells.length ∧
-    checkPlacementInjective art.pnrCert.placedCells = true ∧
-    checkRoutingDisjoint art.pnrCert.routedNets = true ∧
-    checkSteinerTimingClosure art.tcadEnvelope.slowCorner cfg.clockPeriodPs art.bufferedSteinerTree = true ∧
-    cfg.drcDeck.minMetalWidthNm + cfg.drcDeck.minMetalSpacingNm ≤
-      cfg.cutlineFeature.metalWidthNm + cfg.cutlineFeature.metalSpacingNm ∧
-    (∀ x y, ¬ (cfg.metalBoxA.containsPoint x y ∧ cfg.metalBoxB.containsPoint x y)) ∧
-    (∀ x y, cfg.viaBox.containsPoint x y → cfg.viaPadBox.containsPoint x y) ∧
-    checkEnvelopeTimingSignoff art.tcadEnvelope cfg.clockPeriodPs cfg.timingPath = true ∧
-    (art.tcadEnvelope.Valid →
-      ∀ c : ProcessCorner,
-        CornerBetween art.tcadEnvelope.fastCorner c art.tcadEnvelope.slowCorner →
-        checkTimingSignoff c cfg.clockPeriodPs cfg.timingPath = true) ∧
-    art.systemVerilog = emitModuleSV art.rtlModule ∧
-    art.svDigest = Obend.Digest.HashBytes.ofBE (Obend.Core.Digest.deployed art.systemVerilog.toUTF8.toList) ∧
-    art.receipt.post = "cshake256:" ++ rtlNatToStr art.svDigest ∧
-    art.receipt.verdict = .ok ∧
-    checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust = true :=
+    (cfg : TapeoutConfig) (comp : Composition) (isarCerts : List Elaborate.ElaboratedIsarCert)
+    (art : SiliconTapeoutArtifact) (hOk : compileCompositionToSiliconTapeout cfg comp isarCerts = .ok art) :
+    TapeoutSound Obend.Core.Digest.deployed cfg comp isarCerts art :=
   compileCompositionToSiliconTapeoutWithHash_sound
     Obend.Core.Digest.deployed cfg.moduleName.toUTF8.toList cfg comp isarCerts art hOk
 
 /-! ## 5. Stage 1 `.obend` Front-End Lowering (`compileObendFrontEndStage`) & Full Pipeline (`compileObendModuleToSiliconTapeout`) -/
-
 def defaultTapeoutLimits : Json :=
   Json.mkObj
     [ ("heap",      toJson "100000")
     , ("stack",     toJson "100000")
     , ("ticks",     toJson "100000")
     , ("checkWork", toJson "65536") ]
-
 def resolveTapeoutKnotTerm (root : Term) (rawFields : List (String × Term)) (visiting : List String) :
     Nat → Term → Term
   | 0, t => t
@@ -1100,7 +1091,6 @@ def resolveTapeoutKnotTerm (root : Term) (rawFields : List (String × Term)) (vi
     .split (resolveTapeoutKnotTerm root rawFields visiting fuel t) names
       (resolveTapeoutKnotTerm root rawFields visiting fuel f)
   | _ + 1, t => t
-
 def decodeTapeoutComposition (want : Composition → Bool) : Term → Option Composition
   | .fix S (.record seed) =>
     (Obend.Logic.Program.decodeOperands 64 S).bind fun (top, below) =>
@@ -1116,14 +1106,12 @@ def decodeTapeoutComposition (want : Composition → Bool) : Term → Option Com
           if want C then some C else none
         | _ => none
   | _ => none
-
 def findTapeoutComposition (want : Composition → Bool) : Nat → Term → Option Composition
   | 0, _ => none
   | fuel + 1, t =>
     match decodeTapeoutComposition want t with
     | some C => some C
     | none => (Obend.Law.step? t).bind (findTapeoutComposition want fuel)
-
 def extractCompositionFromErased
     (modName : String) (entryDef : String) (decodedMod : Syntax.Module) (erasedTerm : Term) :
     Option Composition :=
@@ -1151,7 +1139,6 @@ def extractCompositionFromErased
       | .function .. | .extension .. | .spec .. => true
       | _ => false
     callables.reverse.findSome? (fun d => tryDecl d.name)
-
 def resolveEntryDefName (cfg : TapeoutConfig) (decodedMod : Syntax.Module) : String :=
   if cfg.entryDef != "" then
     cfg.entryDef
@@ -1163,13 +1150,11 @@ def resolveEntryDefName (cfg : TapeoutConfig) (decodedMod : Syntax.Module) : Str
     match callables.getLast? with
     | some d => d.name
     | none => "main"
-
 def mkTapeoutSourceModule (cfg : TapeoutConfig) (src : String) : FrontEnd.SourceModule where
   name    := cfg.moduleName
   source  := src
   sha256  := Sha256.hexString src
   imports := []
-
 def compileObendFrontEndStage (cfg : TapeoutConfig) (src : String) :
     Except TapeoutError (Composition × List Elaborate.ElaboratedIsarCert) := do
   let srcMod := mkTapeoutSourceModule cfg src
@@ -1190,7 +1175,6 @@ def compileObendFrontEndStage (cfg : TapeoutConfig) (src : String) :
           match extractCompositionFromErased cfg.moduleName entryDef decodedMod accepted.erased with
           | none => .error (.noCompositionFound cfg.moduleName)
           | some comp => .ok (comp, isarCerts)
-
 /-- **Unified `.obend`-to-Silicon Compiler (`compileObendModuleToSiliconTapeout`)**:
 Hashes actual `src.toUTF8.toList` and emitted SystemVerilog `sv.toUTF8.toList` bytes with
 `Obend.Core.Digest.deployed` (cSHAKE256) and binds `checkPnrCertificate` 1-to-1 to `art.belNetlist`. -/
@@ -1198,7 +1182,6 @@ def compileObendModuleToSiliconTapeout (cfg : TapeoutConfig) (src : String) :
     Except TapeoutError SiliconTapeoutArtifact := do
   let (comp, isarCerts) ← compileObendFrontEndStage cfg src
   compileCompositionToSiliconTapeoutWithHash Obend.Core.Digest.deployed src.toUTF8.toList cfg comp isarCerts
-
 theorem compileObendModuleToSiliconTapeout_sound
     (cfg : TapeoutConfig) (src : String) (art : SiliconTapeoutArtifact)
     (hOk : compileObendModuleToSiliconTapeout cfg src = .ok art) :
@@ -1285,21 +1268,21 @@ theorem compileObendModuleToSiliconTapeout_sound
                      hS.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
                      hS.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
                      hS.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-                     hS.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2⟩
-
+                     hS.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1⟩
+/-- An accepted `.obend` module passed artifact-bound physical signoff on its own netlist and PnR certificate. -/
+theorem compileObendModuleToSiliconTapeout_artifact_bound (cfg : TapeoutConfig) (src : String)
+    (art : SiliconTapeoutArtifact) (hOk : compileObendModuleToSiliconTapeout cfg src = .ok art) :
+    checkArtifactBoundTapeout art.tcadEnvelope cfg.clockPeriodPs cfg.drcDeck art.belNetlist art.pnrCert = true :=
+  (compileCompositionToSiliconTapeoutWithHash_sound _ _ cfg _ _ art
+    (compileObendModuleToSiliconTapeout_sound cfg src art hOk).2.1).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 theorem compileObendModuleToSiliconTapeout_eq_bind (cfg : TapeoutConfig) (src : String) :
     compileObendModuleToSiliconTapeout cfg src =
       (compileObendFrontEndStage cfg src >>= fun (comp, isarCerts) =>
         compileCompositionToSiliconTapeoutWithHash
           Obend.Core.Digest.deployed src.toUTF8.toList cfg comp isarCerts) := by
   rfl
-
-theorem compileCompositionToSiliconTapeoutWithHash_isOk_eq
-    (H₁ H₂ : Obend.Digest.HashBytes.Hash)
-    (b₁ b₂ : List UInt8)
-    (cfg : TapeoutConfig)
-    (comp : Composition)
-    (isarCerts : List Elaborate.ElaboratedIsarCert) :
+theorem compileCompositionToSiliconTapeoutWithHash_isOk_eq (H₁ H₂ : Obend.Digest.HashBytes.Hash) (b₁ b₂ : List UInt8)
+    (cfg : TapeoutConfig) (comp : Composition) (isarCerts : List Elaborate.ElaboratedIsarCert) :
     (compileCompositionToSiliconTapeoutWithHash H₁ b₁ cfg comp isarCerts).isOk =
       (compileCompositionToSiliconTapeoutWithHash H₂ b₂ cfg comp isarCerts).isOk := by
   unfold compileCompositionToSiliconTapeoutWithHash mkTapeoutReceipt
@@ -1340,14 +1323,46 @@ theorem compileCompositionToSiliconTapeoutWithHash_isOk_eq
                         cfg.clockPeriodPs (cfg.pnrCert?.getD (synthesizeGridPnrCert (synthesizeModuleToBels rtlModule) cfg.sinkCapFf)) with
                       | false => rfl
                       | true =>
+                        cases h11b : checkArtifactBoundTapeout cfg.cornerEnvelope cfg.clockPeriodPs cfg.drcDeck
+                          (synthesizeModuleToBels rtlModule)
+                          (cfg.pnrCert?.getD (synthesizeGridPnrCert (synthesizeModuleToBels rtlModule) cfg.sinkCapFf))
+                        · rfl
                         cases h12 : checkSteinerTimingClosure cfg.cornerEnvelope.slowCorner cfg.clockPeriodPs
                           (decoupleRightBranchWithBuffer cfg.bufWireId cfg.bufInputCapFf cfg.unbufferedTree) with
                         | false => rfl
                         | true =>
                           cases h13 : checkTapeoutTrustChecked tapeoutCheckedSupports tapeoutCheckedSupports <;> rfl
 
-/-! ## 6. Concrete End-to-End `.obend` Module Tapeout Theorem (`golden_obend_module_silicon_tapeout_verified`) -/
+/-! ## 5b. LibreLane configuration and receipt JSON -/
 
+/-- LibreLane `config.json` for the artifact: design, the emitted SystemVerilog file, clock port(s), period in ns. -/
+def renderLibrelaneConfigJson (art : SiliconTapeoutArtifact) : String :=
+  (Json.mkObj
+    [ ("DESIGN_NAME", Json.str art.rtlModule.name)
+    , ("VERILOG_FILES", Json.arr #[Json.str ("dir::" ++ art.rtlModule.name ++ ".sv")])
+    , ("CLOCK_PORT", if (moduleDomains art.rtlModule).length ≤ 1 then Json.str "clk"
+        else Json.arr ((moduleDomains art.rtlModule).map fun d => Json.str ("clk_" ++ d.portSuffix)).toArray)
+    , ("CLOCK_PERIOD", Json.num ⟨art.clockPeriodPs, 3⟩) ]).pretty
+/-- The tapeout receipt as JSON: the receipt's fields, the SystemVerilog digest, and the netlist-derived signoff. -/
+def renderTapeoutReceiptJson (art : SiliconTapeoutArtifact) : String :=
+  (Json.mkObj
+    [ ("module", Json.str art.moduleName), ("rtlModule", Json.str art.rtlModule.name)
+    , ("pre", Json.str art.receipt.pre), ("post", Json.str art.receipt.post), ("row", Json.str art.receipt.row)
+    , ("law", Json.str art.receipt.law), ("prev", Json.str art.receipt.prev), ("dated", toJson art.receipt.dated)
+    , ("svDigest", Json.str (rtlNatToStr art.svDigest))
+    , ("verdict", Json.str (if art.receipt.verdict.isOk then "ok" else "refused"))
+    , ("pins", Json.mkObj (art.receipt.pins.map fun kv => (kv.1, kv.2.elim Json.null Json.str)))
+    , ("openings", Json.mkObj (art.receipt.openings.map fun kb => (kb.1, Json.bool kb.2)))
+    , ("trust", Json.arr (art.receipt.trust.map fun kt => Json.str kt.1).toArray)
+    , ("clockPeriodPs", toJson art.clockPeriodPs), ("belCells", toJson art.belNetlist.cells.length)
+    , ("routedNets", toJson art.pnrCert.routedNets.length)
+    , ("criticalPath", Json.mkObj
+        [ ("logicLevels", toJson art.physical.criticalPath.logicLevels)
+        , ("carryBlocks", toJson art.physical.criticalPath.carryBits)
+        , ("wireHops", toJson art.physical.criticalPath.tileHops)
+        , ("minLevels", toJson art.physical.criticalPath.minLevels) ]) ]).pretty
+
+/-! ## 6. Concrete End-to-End `.obend` Module Tapeout Theorem (`golden_obend_module_silicon_tapeout_verified`) -/
 def goldenTapeoutObendSource : String :=
   "edition ObjectiveBend 1\n" ++
   "record CleanroomTcadStack:\n" ++
@@ -1387,59 +1402,45 @@ def goldenTapeoutObendSource : String :=
   "  {oxideEotPicometers: 0n, vthMilliV: 0n, drainCurrentUa: fn(v: Nat) -> Nat: 0n, gateDelayPs: fn(f: Nat) -> Nat: 0n, calibratedDelayPs: fn(f: Nat) -> Nat: 0n}\n\n" ++
   "def cleanroomTcadStack() -> CleanroomTcadStack:\n" ++
   "  fix(compose(PlanarBulkMosfetBase, HighKMetalGateFinFetUpgrade), seedTcadStack())\n"
-
 def goldenTapeoutConfig : TapeoutConfig where
   moduleName := "CleanroomTcadStack"
   entryDef   := "cleanroomTcadStack"
-
 def cleanroomSignoffContractDecl : Syntax.ContractDecl where
-  name       := "tapeout_signoff_contract"
+  name := "tapeout_signoff_contract"
   targetType := "CleanroomTcadStack"
-  invariant  := some (.bool true)
-  steps      :=
-    [ .haveStep "h_rtl"    (.bool true) (.judge "hw-rtl-synth@1")
-    , .haveStep "h_retime" (.bool true) (.judge "hw-retime-sta@1")
+  invariant := some (.bool true)
+  steps :=
+    [ .haveStep "h_rtl"    (.bool true) (.judge "hw-rtl-synth@1"), .haveStep "h_retime" (.bool true) (.judge "hw-retime-sta@1")
     , .showStep            (.bool true) (.judge "hw-pnr-bitstream@1") ]
-
 def cleanroomSignoffSyntaxMod : Syntax.Module where
-  name      := "CleanroomTcadStack"
-  imports   := []
-  decls     := []
+  name := "CleanroomTcadStack"
+  imports := []
+  decls := []
   contracts := [cleanroomSignoffContractDecl]
-
 def goldenTapeoutIsarCert : Elaborate.ElaboratedIsarCert :=
   Elaborate.elaborateContractIsarCert cleanroomSignoffSyntaxMod cleanroomSignoffContractDecl
-
 def planarBulkMosfetLayer : Layer where
-  name     := "PlanarBulkMosfetBase"
+  name := "PlanarBulkMosfetBase"
   metadata := .record []
-  fields   :=
-    [ ("oxideEotPicometers", .nat 1200)
-    , ("vthMilliV",          .nat 400)
-    , ("drainCurrentUa",     .lam (.binary .add (.binary .multiply (.bound 0) (.nat 5)) (.get (.bound 2) "vthMilliV")))
-    , ("gateDelayPs",        .lam (.binary .add (.binary .multiply (.bound 0) (.nat 8)) (.nat 20)))
-    , ("calibratedDelayPs",  .lam (.app (.get (.bound 2) "gateDelayPs") (.binary .add (.bound 0) (.nat 2)))) ]
-  flat     := false
-
+  fields :=
+    [ ("oxideEotPicometers", .nat 1200), ("vthMilliV", .nat 400)
+    , ("drainCurrentUa", .lam (.binary .add (.binary .multiply (.bound 0) (.nat 5)) (.get (.bound 2) "vthMilliV")))
+    , ("gateDelayPs", .lam (.binary .add (.binary .multiply (.bound 0) (.nat 8)) (.nat 20)))
+    , ("calibratedDelayPs", .lam (.app (.get (.bound 2) "gateDelayPs") (.binary .add (.bound 0) (.nat 2)))) ]
+  flat := false
 def highKFinFetUpgradeLayer : Layer where
-  name     := "HighKMetalGateFinFetUpgrade"
+  name := "HighKMetalGateFinFetUpgrade"
   metadata := .record []
-  fields   :=
-    [ ("oxideEotPicometers", .nat 700)
-    , ("vthMilliV",          .nat 250)
-    , ("gateDelayPs",        .lam (.binary .add (.app (.get (.bound 1) "gateDelayPs") (.bound 0)) (.nat 4))) ]
-  flat     := false
-
+  fields :=
+    [ ("oxideEotPicometers", .nat 700), ("vthMilliV", .nat 250)
+    , ("gateDelayPs", .lam (.binary .add (.app (.get (.bound 1) "gateDelayPs") (.bound 0)) (.nat 4))) ]
+  flat := false
 def goldenCleanroomTcadComp : Composition where
-  top   := highKFinFetUpgradeLayer
+  top := highKFinFetUpgradeLayer
   below := [planarBulkMosfetLayer]
-  seed  :=
-    [ ("oxideEotPicometers", .nat 0)
-    , ("vthMilliV",          .nat 0)
-    , ("drainCurrentUa",     .lam (.nat 0))
-    , ("gateDelayPs",        .lam (.nat 0))
-    , ("calibratedDelayPs",  .lam (.nat 0)) ]
-
+  seed :=
+    [ ("oxideEotPicometers", .nat 0), ("vthMilliV", .nat 0), ("drainCurrentUa", .lam (.nat 0)), ("gateDelayPs", .lam (.nat 0))
+    , ("calibratedDelayPs", .lam (.nat 0)) ]
 theorem golden_obend_module_silicon_tapeout_verified :
     FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag goldenTapeoutIsarCert = true ∧
     goldenTapeoutIsarCert.judgeTags = ["hw-rtl-synth@1", "hw-retime-sta@1", "hw-pnr-bitstream@1"] ∧
@@ -1460,17 +1461,11 @@ theorem golden_obend_module_silicon_tapeout_verified :
        (art.pnrCert.placedCells.length == art.belNetlist.cells.length) &&
        checkPnrCertificate art.belNetlist art.tcadEnvelope.slowCorner goldenTapeoutConfig.clockPeriodPs art.pnrCert &&
        (evalModuleOutputs art.rtlModule (fun _ => 4#64) regs2At4 ==
-         [ ("out_oxideEotPicometers", 700#64)
-         , ("out_vthMilliV",          250#64)
-         , ("out_gateDelayPs",        56#64)
-         , ("out_drainCurrentUa",     270#64)
-         , ("out_calibratedDelayPs",  72#64) ]) &&
+         [ ("out_oxideEotPicometers", 700#64), ("out_vthMilliV", 250#64), ("out_gateDelayPs", 56#64)
+         , ("out_drainCurrentUa", 270#64), ("out_calibratedDelayPs", 72#64) ]) &&
        (evalModuleOutputs art.rtlModule (fun _ => 200#64) regs2At200 ==
-         [ ("out_oxideEotPicometers", 700#64)
-         , ("out_vthMilliV",          250#64)
-         , ("out_gateDelayPs",        1624#64)
-         , ("out_drainCurrentUa",     1250#64)
-         , ("out_calibratedDelayPs",  1640#64) ]) &&
+         [ ("out_oxideEotPicometers", 700#64), ("out_vthMilliV", 250#64), ("out_gateDelayPs", 1624#64)
+         , ("out_drainCurrentUa", 1250#64), ("out_calibratedDelayPs", 1640#64) ]) &&
        checkEnvelopeTimingSignoff art.tcadEnvelope goldenTapeoutConfig.clockPeriodPs goldenTapeoutConfig.timingPath &&
        (!art.systemVerilog.isEmpty) &&
        art.receipt.verdict.isOk &&
@@ -1482,6 +1477,5 @@ theorem golden_obend_module_silicon_tapeout_verified :
           srcBytes goldenTapeoutConfig.moduleName.toUTF8.toList]
     decide +kernel
   · decide +kernel
-
 end Obend.Hardware.TapeoutPipeline
 end
