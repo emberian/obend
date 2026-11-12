@@ -25,6 +25,7 @@ extern crate alloc;
 #[cfg(any(test, feature = "std"))]
 extern crate std;
 
+pub mod amend_cli;
 pub mod canopy;
 pub mod det_cbor;
 pub mod goldilocks;
