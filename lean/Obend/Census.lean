@@ -383,6 +383,8 @@ import Obend.Hardware.Gpu.CollectiveWorkBuild
 import Obend.Hardware.Gpu.NttCorrect
 import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
 import Obend.Hardware.Gpu.Rdna2.DppShuffle
+import Obend.Hardware.Gpu.SoacOptimize
+import Obend.Hardware.Gpu.StencilTile
 import Obend.Hardware.HDL
 import Obend.Hardware.Hvm
 import Obend.Hardware.Hvm.Model

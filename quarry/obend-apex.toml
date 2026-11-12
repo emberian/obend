@@ -1107,6 +1107,20 @@ module = "Obend.Hardware.PipelinedZkCrypto"
 theorem = "gf2_64TowerMulRtl_eq_towerMul"
 description = "Synthesizable Karatsuba-cascaded `GF(2^64)` Wiedemann binary tower multiplier `RtlModule` evaluates identically to `towerMul 6`."
 
+[[apex]]
+id = "hardware-gpu-soac-vertical-fusion"
+subsystem = "Hardware"
+module = "Obend.Hardware.Gpu.SoacOptimize"
+theorem = "fuseVertical_sound"
+description = "Futhark-style SOAC normalization (DCE/CSE/index-algebra/alias elimination) and producer-consumer vertical kernel fusion preserving array semantics while reducing HBM traffic."
+
+[[apex]]
+id = "hardware-gpu-stencil-halo-tile"
+subsystem = "Hardware"
+module = "Obend.Hardware.Gpu.StencilTile"
+theorem = "compileStencilGlobal_emitted_sound"
+description = "Workgroup halo-tiled stencil refinement (`tiledHaloStencil_eq_spec`, strict HBM read savings `tiledHbmReads_lt_global`) and verified emitted GPU kernel lowering."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

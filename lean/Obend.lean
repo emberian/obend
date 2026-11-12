@@ -78,6 +78,8 @@ public import Obend.Hardware.Tpu.Machine
 public import Obend.Hardware.Tpu.CryptoSystolic
 public import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
 public import Obend.Hardware.Gpu.Rdna2.DppShuffle
+public import Obend.Hardware.Gpu.SoacOptimize
+public import Obend.Hardware.Gpu.StencilTile
 public import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
