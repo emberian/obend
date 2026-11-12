@@ -1331,6 +1331,34 @@ module = "Obend.Lower.SiliconElabFabric"
 theorem = "cuckooZ4_rejects_sorry_or_mvar"
 description = "Hardware Zone-4 kernel gate refusal (`cuckooZ4_rejects_sorry_or_mvar`) proving `cuckooSiliconElabMemModule` refuses acceptance whenever `sorry` or unresolved metavariable flags are latched."
 
+[[apex]]
+id = "run-core4-fast-bytecode-loop-sound"
+subsystem = "Run"
+module = "Obend.Run.Core4"
+theorem = "execCore4LoopFast_sound"
+description = "Dictionary-passing `Core4` loop execution over the unboxed `Array UInt64` register bytecode VM (`execCore4LoopFast_sound`) paired with `@[csimp] theorem turn_eq_turnFast`."
+
+[[apex]]
+id = "run-runner-array-drive-fast-refinement"
+subsystem = "Run"
+module = "Obend.Run.Runner"
+theorem = "driveFast_eq_drive"
+description = "Contiguous `Array.push` handler driver refinement (`driveFast_eq_drive`) eliminating quadratic `List` appends across multi-turn `Obend.Run` handler execution."
+
+[[apex]]
+id = "run-law-submission-judge-sound"
+subsystem = "Run"
+module = "Obend.Run.LawJudge"
+theorem = "checkLawSubmission_sound"
+description = "Inhabited non-tautological `lawSubmissionJudge` soundness (`checkLawSubmission_sound`) with constructive refusal (`checkLawSubmission_refuted`) and `lawSubmissionJudge_inhabited`."
+
+[[apex]]
+id = "leaf-self-applicable-mix-unroll-pow5"
+subsystem = "Leaf"
+module = "Obend.Leaf.SelfApplicableMixCore"
+theorem = "unrollPowInterp_specializes_5"
+description = "Non-identity recursive `mix` specialization (`unrollPowInterp_specializes_5`) unrolling a loop-based exponentiation interpreter at static `n = 5` into straight-line multiplication."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

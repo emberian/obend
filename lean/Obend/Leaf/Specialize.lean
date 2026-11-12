@@ -51,7 +51,15 @@ set_option autoImplicit false
 inductive LeafCell where
   | layer (key : String)
   | object (name : String)
-  deriving DecidableEq, Repr
+  deriving Repr
+
+@[expose] instance : DecidableEq LeafCell
+  | .layer a, .layer b =>
+    if h : a = b then isTrue (h ▸ rfl) else isFalse fun hc => LeafCell.noConfusion hc h
+  | .object a, .object b =>
+    if h : a = b then isTrue (h ▸ rfl) else isFalse fun hc => LeafCell.noConfusion hc h
+  | .layer _, .object _ => isFalse LeafCell.noConfusion
+  | .object _, .layer _ => isFalse LeafCell.noConfusion
 
 /-- A support: the cell, and the code it held when the book was emitted. -/
 structure LeafPin where
@@ -66,7 +74,7 @@ structure LeafView where
 /-- The world of the specialization slot: each cell pinned to its code at the view's clock; a step
 moves the clock forward. A support holds when its cell holds the code it pinned (`termEq`, so the
 pin is exact: no collision disjunct is owed). -/
-instance : World LeafView LeafPin where
+@[expose] instance : World LeafView LeafPin where
   Cell := LeafCell
   Pin := Nat × Option Term
   cell := LeafPin.cell
@@ -214,7 +222,7 @@ decreasing_by
 
 /-- Extract all member names read via `.get (.bound 0) m` (adjusting binder depth under `.lam`,
 `.ifZero`, and `.case`) across a `Term`. -/
-@[expose] def extractReadMembers (t : Term) : List String :=
+abbrev extractReadMembers (t : Term) : List String :=
   extractReadMembersAt 0 t
 
 /-- Alias for `extractReadMembers`. -/

@@ -3225,7 +3225,6 @@ theorem select_needs_grant (s : Store) (m : Member) (page : String) (k i : Nat)
     ∃ msg, selectIn s (.member m) page k i = .error msg := by
   obtain ⟨p, hp⟩ := Option.isSome_iff_exists.1 hp
   simp [selectIn, hp, Actor.may, hm, Actor.name]
-  exact ⟨_, rfl⟩
 
 /-- **Posting needs the grant**, likewise. -/
 theorem post_needs_grant (H : Hash) (s : Store) (m : Member) (page text : String)
@@ -3233,7 +3232,6 @@ theorem post_needs_grant (H : Hash) (s : Store) (m : Member) (page text : String
     ∃ msg, postAs H s (.member m) page text = .error msg := by
   obtain ⟨p, hp⟩ := Option.isSome_iff_exists.1 hp
   simp [postAs, hp, Actor.may, hm, Actor.name]
-  exact ⟨_, rfl⟩
 
 #tooth mergePage_pushout by mutation mergePage := fun A _ => some A
 #tooth select_needs_grant by mutation Actor.may := fun _ _ _ => true
