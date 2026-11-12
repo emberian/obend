@@ -1033,8 +1033,7 @@ def multiPageOutboxRequest (k : KState) (frames : List Nat) (pd va len : Nat)
     Option OutboxEffectReq := do
   let bytes ← verifierStep k frames pd va len writes check
   let transfer := { req.spsc with
-    sharedRingBeforeCopy := bytesOfList bytes
-    sharedRingAfterVerify := bytesOfList bytes }
+    sharedRingBeforeCopy := bytesOfList bytes }
   pure { req with spsc := transfer }
 
 def multiPageOutboxStep (P : Protocol) (part : SeL4MicrokitPartition) (sent : Sent)
