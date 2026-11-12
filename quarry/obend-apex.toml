@@ -1240,6 +1240,20 @@ module = "Obend.Hardware.PCB"
 theorem = "coupledFem_thomsonDirichlet_impedance_brackets_sound"
 description = "Coupled differential PCB impedance brackets welded to Thomson-Dirichlet FEEC FEM, IPC-2221 DFM etch/drill/registration envelopes, Faraday stitching-via fence, and 2D PDN target impedance."
 
+[[apex]]
+id = "geometry-dec-maxwell-divb-and-bianchi"
+subsystem = "Geometry"
+module = "Obend.Geometry.CochainAndGauge"
+theorem = "discrete_bianchi_identity"
+description = "3-skeleton discrete exterior calculus (`decMaxwell_divB_invariant` exact div-free Yee evolution), SPD Hodge Laplacian, and non-Abelian Wilson plaquette 6-face Bianchi identity."
+
+[[apex]]
+id = "geometry-dirac-multiscale-doublecat-interchange"
+subsystem = "Geometry"
+module = "Obend.Geometry.DiracDoubleCat"
+theorem = "doubleCat_interchange_law"
+description = "Acausal finite-dimensional Dirac structures (`D = D^perp`), Brayton-Moser resistive port-Hamiltonian closure, and `MultiscaleOpenDouble` Eckmann-Hilton interchange with telegrapher-to-MNA coarse-graining."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

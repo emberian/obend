@@ -356,6 +356,8 @@ import Obend.FFI.Bridge
 import Obend.Fold
 import Obend.Fold.Collapse
 import Obend.Format.Reader
+import Obend.Geometry.CochainAndGauge
+import Obend.Geometry.DiracDoubleCat
 import Obend.Hardware
 import Obend.Hardware.Accelerators
 import Obend.Hardware.AgenticEDA

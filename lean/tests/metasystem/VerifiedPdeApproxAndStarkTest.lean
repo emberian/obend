@@ -131,6 +131,7 @@ import all Obend.Spec.C4
 import all Obend.Spec.Proofs.C4
 import all Obend.SymbolicZk.CompileToPiop
 import all Obend.SymbolicZk.CompileToPiopCore
+import all Obend.SymbolicZk.SkolemChaseCore
 import all Obend.SymbolicZk.StencilRolloutStark
 import all Obend.Tactic.Cases
 import all Obend.Tactic.MonadicReduction
