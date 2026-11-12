@@ -942,16 +942,127 @@ theorem compileSymbolicTraceToSumcheck_complete
   dsimp only at hHonest; rw [hSumZero] at hHonest
   exact ⟨hValid, hAllZero, hHonest.1, hHonest.2⟩
 
+private def encodePiopFields : List (List UInt8) → List UInt8
+  | [] => []
+  | f :: fs => encodeListField f ++ encodePiopFields fs
+
+private theorem encodePiopFields_inj : ∀ (xs ys : List (List UInt8)),
+    xs.length = ys.length → encodePiopFields xs = encodePiopFields ys → xs = ys
+  | [], [], _, _ => rfl
+  | [], _ :: _, hL, _ => by cases hL
+  | _ :: _, [], hL, _ => by cases hL
+  | x :: xs, y :: ys, hL, h => by
+    simp only [List.length_cons, Nat.add_right_cancel_iff] at hL
+    obtain ⟨hxy, hrest⟩ := encodeListField_prefix_inj (by simpa [encodePiopFields] using h)
+    rw [hxy, encodePiopFields_inj xs ys hL hrest]
+
+def encodePiopFrame (xs : List (List UInt8)) : List UInt8 :=
+  leb128 xs.length ++ encodePiopFields xs
+
+theorem encodePiopFrame_injective {xs ys : List (List UInt8)}
+    (h : encodePiopFrame xs = encodePiopFrame ys) : xs = ys := by
+  obtain ⟨hL, hF⟩ := leb128_prefix_inj h
+  exact encodePiopFields_inj xs ys hL hF
+
+def encodeBeforeConstraint (c : BeforeConstraint) : List UInt8 :=
+  encodePiopFrame [leb128 c.lhs, leb128 c.rhs, leb128 c.bitWidth]
+
+theorem encodeBeforeConstraint_injective {a b : BeforeConstraint}
+    (h : encodeBeforeConstraint a = encodeBeforeConstraint b) : a = b := by
+  obtain ⟨la, ra, wa⟩ := a; obtain ⟨lb, rb, wb⟩ := b
+  have hf := encodePiopFrame_injective h
+  simp only [List.cons.injEq, and_true] at hf
+  rw [(leb128_prefix_inj (n₁ := la) (n₂ := lb) (r₁ := []) (r₂ := []) (by simpa using hf.1)).1,
+      (leb128_prefix_inj (n₁ := ra) (n₂ := rb) (r₁ := []) (r₂ := []) (by simpa using hf.2.1)).1,
+      (leb128_prefix_inj (n₁ := wa) (n₂ := wb) (r₁ := []) (r₂ := []) (by simpa using hf.2.2)).1]
+
+private theorem map_inj_of_inj {α β : Type} (f : α → β) (hf : ∀ {x y : α}, f x = f y → x = y) :
+    ∀ (xs ys : List α), xs.map f = ys.map f → xs = ys
+  | [], [], _ => rfl
+  | [], _ :: _, h => by cases h
+  | _ :: _, [], h => by cases h
+  | x :: xs, y :: ys, h => by
+    simp only [List.map_cons, List.cons.injEq] at h
+    rw [hf h.1, map_inj_of_inj f hf xs ys h.2]
+
+private theorem encodeGoldilocksArray_inj {a b : Array Goldilocks}
+    (h : encodeGoldilocksList a.toList = encodeGoldilocksList b.toList) : a = b :=
+  Array.ext' (encodePointBytes_injective (congrArg Obend.Digest.Cshake256.Native.bytesOfList h))
+
 /-- Canonical, length-framed encoding of every public statement field. -/
 def symbolicStatementBytes (s : SymbolicZkStmt) : ByteArray :=
-  let bef := s.beforeConstraints.toList.flatMap fun c =>
-    encodeListField (leb128 c.lhs) ++ encodeListField (leb128 c.rhs) ++
-      encodeListField (leb128 c.bitWidth)
   Obend.Digest.Cshake256.Native.bytesOfList
-    (encodeListField bef ++
-      ([s.linmemInit, s.linmemProd, s.linmemCons, s.linmemFinal,
-        s.lookupTable, s.lookupQueries].flatMap fun a =>
-          encodeListField (encodeGoldilocksList a.toList)) ++ encodeListField (leb128 s.numVars))
+    (encodePiopFrame
+      [encodePiopFrame (s.beforeConstraints.toList.map encodeBeforeConstraint),
+       encodeGoldilocksList s.linmemInit.toList,
+       encodeGoldilocksList s.linmemProd.toList,
+       encodeGoldilocksList s.linmemCons.toList,
+       encodeGoldilocksList s.linmemFinal.toList,
+       encodeGoldilocksList s.lookupTable.toList,
+       encodeGoldilocksList s.lookupQueries.toList,
+       leb128 s.numVars])
+
+theorem symbolicStatementBytes_injective {s₁ s₂ : SymbolicZkStmt}
+    (h : symbolicStatementBytes s₁ = symbolicStatementBytes s₂) : s₁ = s₂ := by
+  obtain ⟨b₁, i₁, p₁, c₁, f₁, t₁, q₁, v₁⟩ := s₁
+  obtain ⟨b₂, i₂, p₂, c₂, f₂, t₂, q₂, v₂⟩ := s₂
+  have hl := congrArg (fun x : ByteArray => x.data.toList) h
+  simp only [symbolicStatementBytes, Obend.Digest.Cshake256.Native.bytesOfList_toList] at hl
+  have hf := encodePiopFrame_injective hl
+  simp only [List.cons.injEq, and_true] at hf
+  rcases hf with ⟨hb, hi, hp, hc, hf', ht, hq, hv⟩
+  have hbEq : b₁ = b₂ := Array.ext' (map_inj_of_inj encodeBeforeConstraint
+    encodeBeforeConstraint_injective _ _ (encodePiopFrame_injective hb))
+  rw [hbEq, encodeGoldilocksArray_inj hi, encodeGoldilocksArray_inj hp, encodeGoldilocksArray_inj hc,
+      encodeGoldilocksArray_inj hf', encodeGoldilocksArray_inj ht, encodeGoldilocksArray_inj hq,
+      (leb128_prefix_inj (n₁ := v₁) (n₂ := v₂) (r₁ := []) (r₂ := []) (by simpa using hv)).1]
+
+/-- Canonical, length-framed encoding of every private witness field. -/
+def symbolicWitnessBytes (w : SymbolicZkWitness) : ByteArray :=
+  Obend.Digest.Cshake256.Native.bytesOfList
+    (encodePiopFrame
+      [encodePiopFrame (w.beforeBits.toList.map fun a => encodeGoldilocksList a.toList),
+       encodePiopFrame (w.lookupMults.toList.map leb128)])
+
+theorem symbolicWitnessBytes_injective {w₁ w₂ : SymbolicZkWitness}
+    (h : symbolicWitnessBytes w₁ = symbolicWitnessBytes w₂) : w₁ = w₂ := by
+  obtain ⟨b₁, m₁⟩ := w₁; obtain ⟨b₂, m₂⟩ := w₂
+  have hl := congrArg (fun x : ByteArray => x.data.toList) h
+  simp only [symbolicWitnessBytes, Obend.Digest.Cshake256.Native.bytesOfList_toList] at hl
+  have hf := encodePiopFrame_injective hl
+  simp only [List.cons.injEq, and_true] at hf
+  have hbEq : b₁ = b₂ := Array.ext' (map_inj_of_inj (fun a : Array Goldilocks => encodeGoldilocksList a.toList)
+    encodeGoldilocksArray_inj _ _ (encodePiopFrame_injective hf.1))
+  have hmEq : m₁ = m₂ := Array.ext' (map_inj_of_inj leb128
+    (fun {x y} hxy => (leb128_prefix_inj (n₁ := x) (n₂ := y) (r₁ := []) (r₂ := []) (by simpa using hxy)).1)
+    _ _ (encodePiopFrame_injective hf.2))
+  rw [hbEq, hmEq]
+
+def symbolicWitnessCustomization : List UInt8 := "OBEND.SYMBOLICZK.WITNESS/v1".toUTF8.data.toList
+
+/-- Domain-separated 256-bit `cSHAKE256` commitment to `SymbolicZkWitness`. -/
+def symbolicWitnessCommit (w : SymbolicZkWitness) : ByteArray :=
+  Obend.Digest.Cshake256.Native.bytesOfList
+    (Obend.Digest.Cshake256.cshake256Bytes symbolicWitnessCustomization (symbolicWitnessBytes w).data.toList)
+
+/-- Exact two-witness collision witness pinned to `(w₁, w₂)`. -/
+structure PinnedWitnessCollision (w₁ w₂ : SymbolicZkWitness) : Type where
+  distinct : (symbolicWitnessBytes w₁).data.toList ≠ (symbolicWitnessBytes w₂).data.toList
+  sameBytes : Obend.Digest.Cshake256.cshake256Bytes symbolicWitnessCustomization
+      (symbolicWitnessBytes w₁).data.toList =
+    Obend.Digest.Cshake256.cshake256Bytes symbolicWitnessCustomization
+      (symbolicWitnessBytes w₂).data.toList
+
+/-- Constructive `0 Classical` witness-commitment binding extractor. -/
+def symbolicWitnessCommitExtract (w₁ w₂ : SymbolicZkWitness)
+    (h : symbolicWitnessCommit w₁ = symbolicWitnessCommit w₂) :
+    PSum (PLift (w₁ = w₂)) (PinnedWitnessCollision w₁ w₂) :=
+  if hb : (symbolicWitnessBytes w₁).data.toList = (symbolicWitnessBytes w₂).data.toList then
+    .inl ⟨symbolicWitnessBytes_injective (byteArray_eq_of_toList_eq hb)⟩
+  else
+    .inr ⟨hb, by
+      have hl := congrArg (fun b : ByteArray => b.data.toList) h
+      simpa only [symbolicWitnessCommit, Obend.Digest.Cshake256.Native.bytesOfList_toList] using hl⟩
 
 def squeezeSymbolicPoint : (n : Nat) → Transcript .instanceBound →
     List Goldilocks × Transcript .instanceBound
@@ -977,11 +1088,12 @@ def symbolicChallenges (s : SymbolicZkStmt) (witComm : ByteArray)
   let (τ, tr) := squeezeSymbolicPoint s.numVars tr
   (γLin, γLup, τ, tr)
 
-/-- This verifier accepts no caller-selected identity or batching challenge. -/
+/-- This verifier binds `witComm` to `symbolicWitnessCommit w` before squeezing any challenge,
+accepting no caller-selected identity/batching challenge and no post-challenge witness grinding. -/
 def verifySymbolicSumcheck (s : SymbolicZkStmt) (w : SymbolicZkWitness)
     (witComm : ByteArray) (maxDeg : Nat) (rounds : List (RoundPoly Goldilocks))
     (seed : Transcript .relationBound) :=
-  if stmtWitnessStructValid s w then
+  if stmtWitnessStructValid s w && decide (witComm = symbolicWitnessCommit w) then
     verifySumcheck maxDeg s.numVars CommRingOps.zero rounds (symbolicChallenges s witComm seed).2.2.2
   else none
 
@@ -989,6 +1101,7 @@ def verifySymbolicSumcheck (s : SymbolicZkStmt) (w : SymbolicZkWitness)
 theorem verifySymbolicSumcheck_complete (s : SymbolicZkStmt) (w : SymbolicZkWitness)
     (witComm : ByteArray) (maxDeg : Nat) (hDeg : 1 ≤ maxDeg) (seed : Transcript .relationBound)
     (hStruct : stmtWitnessStructValid s w = true)
+    (hWit : witComm = symbolicWitnessCommit w)
     (hZero : hypercubeSum s.numVars (batchedSymbolicPiopTable s w
       (symbolicChallenges s witComm seed).1 (symbolicChallenges s witComm seed).2.1
       (symbolicChallenges s witComm seed).2.2.1) = CommRingOps.zero) :
@@ -998,7 +1111,7 @@ theorem verifySymbolicSumcheck_complete (s : SymbolicZkStmt) (w : SymbolicZkWitn
   have h := (honestSumcheckProver_completeness hDeg s.numVars tbl
     (symbolicChallenges s witComm seed).2.2.2).1
   rw [hZero] at h
-  exact ⟨_, _, _, by simpa only [verifySymbolicSumcheck, hStruct, ite_true] using h⟩
+  exact ⟨_, _, _, by simpa only [verifySymbolicSumcheck, hStruct, hWit, decide_true, Bool.and_self, ite_true] using h⟩
 
 /-- **Cryptographic SymbolicZkVM-to-Sumcheck Soundness Weld (`compileSymbolicTraceToSumcheck_sound`)**. -/
 theorem compileSymbolicTraceToSumcheck_sound
@@ -1018,7 +1131,8 @@ theorem compileSymbolicTraceToSumcheck_sound
     let linRhs := stmt.linmemCons.toList ++ stmt.linmemFinal.toList
     let (nT, dT) := logUpTablePoly (stmt.lookupTable.toList.zip wit.lookupMults.toList)
     let (nQ, dQ) := logUpQueryPoly stmt.lookupQueries.toList
-    SymbolicSemanticsValid stmt wit ∨
+    witComm = symbolicWitnessCommit wit ∧
+    (SymbolicSemanticsValid stmt wit ∨
     (¬ linLhs.Perm linRhs ∧ (charPoly linLhs).eval γLin = (charPoly linRhs).eval γLin) ∨
     (¬ ((∀ q ∈ stmt.lookupQueries.toList, q ∈ stmt.lookupTable.toList) ∧
         (∀ (i : Nat) (hti : i < stmt.lookupTable.toList.length) (hmi : i < wit.lookupMults.toList.length),
@@ -1026,15 +1140,24 @@ theorem compileSymbolicTraceToSumcheck_sound
       CommRingOps.mul (nT.eval γLup) (dQ.eval γLup) = CommRingOps.mul (nQ.eval γLup) (dT.eval γLup)) ∨
     ((∃ r ∈ resVec, r ≠ CommRingOps.zero) ∧ mleEval resVec τ = CommRingOps.zero) ∨
     ExistsRoundRootHit stmt.numVars tbl rounds tr ∨
-    claim.expectedVal ≠ mleEval tbl claim.point := by
+    claim.expectedVal ≠ mleEval tbl claim.point) := by
   let γLin := (symbolicChallenges stmt witComm seed).1
   let γLup := (symbolicChallenges stmt witComm seed).2.1
   let τ := (symbolicChallenges stmt witComm seed).2.2.1
   let tr := (symbolicChallenges stmt witComm seed).2.2.2
   have hτ : τ.length = stmt.numVars := squeezeSymbolicPoint_length _ _
+  have hWitBind : witComm = symbolicWitnessCommit wit := by
+    unfold verifySymbolicSumcheck at hAcc
+    rw [hStruct, Bool.true_and] at hAcc
+    split at hAcc
+    · rename_i hw; exact of_decide_eq_true hw
+    · cases hAcc
   have hAcc : verifySumcheck maxDeg stmt.numVars CommRingOps.zero rounds tr = some (claim, trFinal) := by
-    simpa [verifySymbolicSumcheck, hStruct] using hAcc
+    unfold verifySymbolicSumcheck at hAcc
+    rw [hStruct, decide_eq_true hWitBind, Bool.and_self] at hAcc
+    simpa only [↓reduceIte] using hAcc
   dsimp only
+  refine ⟨hWitBind, ?_⟩
   let resVec := symbolicResidualVector stmt wit γLin γLup
   let tbl := batchedSymbolicPiopTable stmt wit γLin γLup τ
   by_cases hSumEq0 : hypercubeSum stmt.numVars tbl = CommRingOps.zero

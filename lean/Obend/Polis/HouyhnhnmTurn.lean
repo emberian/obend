@@ -310,8 +310,7 @@ structure TurnProofSystem (c : TurnCommitments) (v : InnerVerifier) where
   prove : (s : CellState) → (t : StructuredTurn) → (height : Nat) →
     execTurnSymbolic v s t = true → RootBindings c s → Receipt
   sound : ∀ p challenge receipt, verify p challenge receipt = true →
-    TurnRelation c v p ∨ BoundedCollision deployedCanopyHash32.eval (merkleMaxPreimageBytes 5) ∨
-      ¬ ModuleSISHard (inhabitedAjtaiParams 5) 131070
+    TurnRelation c v p
   complete : ∀ s t height hs hr,
     verify (materializeInputs c s t height)
       (squeezeChallenge256 (turnTranscript (materializeInputs c s t height))).1.val
@@ -364,7 +363,7 @@ def dualPcsTurnProofSystem (c : TurnCommitments) (v : InnerVerifier) : TurnProof
   prove s t height _ _ := proveDualPcsTurn c s t height
   sound p challenge r h := by
     simp only [verifyDualPcsTurn, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .inl ⟨r.state, r.turn, h.1.1.1.1, h.1.1.1.2,
+    exact ⟨r.state, r.turn, h.1.1.1.1, h.1.1.1.2,
       encodePublicInputs_injective _ _ h.1.1.2⟩
   complete s t height hs hr := by
     have h := verifyDualSumcheckPIOP_completeness (canopyMerklePCS deployedCanopyHash32)
@@ -418,8 +417,7 @@ theorem cipherclerk_zero_reexec_sound {c : TurnCommitments} {v : InnerVerifier}
     (h : verifyCipherclerkBundle ps b = true) :
     b.boundPrefix = relationPrefix b.publicInputs ∧ wellFormedInputs b.publicInputs = true ∧
     b.publicInputs.revokedRoot.size = 32 ∧ b.publicInputs.revokedRoot ≠ emptyRevokedRoot32 ∧
-    (TurnRelation c v b.publicInputs ∨ BoundedCollision deployedCanopyHash32.eval (merkleMaxPreimageBytes 5) ∨
-      ¬ ModuleSISHard (inhabitedAjtaiParams 5) 131070) := by
+    TurnRelation c v b.publicInputs := by
   simp only [verifyCipherclerkBundle, Bool.and_eq_true, decide_eq_true_eq] at h
   have hl := h.1.2
   simp only [liveRevokedRoot, decide_eq_true_eq] at hl
@@ -671,8 +669,35 @@ def debitHandles (caps : Array Mandate) (is : List InvocationWithProvenance) :
     Option (Array Mandate) :=
   is.foldlM debitHandle caps
 
+/-- Walk the stored `Grant.under parentId` chain in `caps` using fuel (`caps.size`),
+    returning every mandate ID `[..., parentId, m.id]` from root to leaf, or `none` if a named
+    parent ID is missing or cyclic. -/
+def storedAncestryIds (caps : Array Mandate) : Nat → Mandate → Option (List UInt64)
+  | 0, _ => none
+  | fuel + 1, m =>
+    match m.grant with
+    | .root _ _ => some [UInt64.ofNat m.id]
+    | .under parentId =>
+      match caps.find? (fun p => p.id == parentId) with
+      | none => none
+      | some parent =>
+        (storedAncestryIds caps fuel parent).map (· ++ [UInt64.ofNat m.id])
+
+/-- Every invocation's stored capability handle must resolve a valid `Grant` chain in `caps`
+    whose every mandate ID is both declared in `i.credNul` AND unrevoked in `revoked`. -/
+def storedInvocationsLive (caps : Array Mandate) (revoked : SortedU64Set)
+    (is : List InvocationWithProvenance) : Bool :=
+  is.all fun i =>
+    match caps[i.capabilityIndex]? with
+    | none => false
+    | some m =>
+      match storedAncestryIds caps caps.size m with
+      | none => false
+      | some chain =>
+        chain.all (fun k => decide (k ∈ i.credNul) && !revoked.contains k)
+
 /-- Delegate a child handle: `Mandate.delegate` carves the child's budget out of the parent's,
-the child is appended, and it inherits the parent's root. -/
+`childId` must be fresh across `caps`, the child is appended, and it inherits the parent's root. -/
 def delegateHandle (caps : Array Mandate) (lineage : Array Nat) :
     Option HandleDelegation → Option (Array Mandate × Array Nat)
   | none => some (caps, lineage)
@@ -683,7 +708,7 @@ def delegateHandle (caps : Array Mandate) (lineage : Array Nat) :
       match lineage[d.parent]? with
       | none => none
       | some root =>
-        if requestFits d.request held then
+        if requestFits d.request held && caps.all (fun m => m.id != d.request.childId) then
           some ((caps.setIfInBounds d.parent
               (held.delegate d.request.childId d.request.recipient d.request.rights d.request.quota
                 d.request.cells d.request.expiresAt ⟨fun m => d.request.methods.contains m⟩).1).push
@@ -707,7 +732,8 @@ def nextSession (c : TurnCommitments) (st : HouyhnhnmSessionState) (turn : Houyh
 /-- **One session turn.** -/
 def stepHouyhnhnmSession (c : TurnCommitments) (v : InnerVerifier) (st : HouyhnhnmSessionState)
     (turn : HouyhnhnmTurn) : Option HouyhnhnmSessionState :=
-  if decide (RootBindings c st.cell) && execTurnSymbolic v st.cell turn.structured then
+  if decide (RootBindings c st.cell) && execTurnSymbolic v st.cell turn.structured &&
+      storedInvocationsLive st.cell.capabilities st.cell.revoked turn.structured.invocations.toList then
     match spendChannels st.cell.revoked (chanNuls turn) with
     | none => none
     | some spent =>
@@ -723,6 +749,8 @@ theorem stepHouyhnhnmSession_eq_some_iff (c : TurnCommitments) (v : InnerVerifie
     (st : HouyhnhnmSessionState) (turn : HouyhnhnmTurn) (st' : HouyhnhnmSessionState) :
     stepHouyhnhnmSession c v st turn = some st' ↔
       RootBindings c st.cell ∧ execTurnSymbolic v st.cell turn.structured = true ∧
+      storedInvocationsLive st.cell.capabilities st.cell.revoked
+        turn.structured.invocations.toList = true ∧
       ∃ spent debited caps lineage,
         spendChannels st.cell.revoked (chanNuls turn) = some spent ∧
         debitHandles st.cell.capabilities turn.structured.invocations.toList = some debited ∧
@@ -733,24 +761,28 @@ theorem stepHouyhnhnmSession_eq_some_iff (c : TurnCommitments) (v : InnerVerifie
   · cases he : execTurnSymbolic v st.cell turn.structured with
     | false => simp [hr]
     | true =>
-      cases hs : spendChannels st.cell.revoked (chanNuls turn) with
-      | none => simp [hr]
-      | some spent =>
-        cases hd : debitHandles st.cell.capabilities turn.structured.invocations.toList with
+      cases hanc : storedInvocationsLive st.cell.capabilities st.cell.revoked
+          turn.structured.invocations.toList with
+      | false => simp [hr]
+      | true =>
+        cases hs : spendChannels st.cell.revoked (chanNuls turn) with
         | none => simp [hr]
-        | some debited =>
-          cases hg : delegateHandle debited st.lineage turn.delegation with
-          | none => simp [hg]
-          | some next =>
-            obtain ⟨caps, lineage⟩ := next
-            first
-              | (simp [hr, hg]; done)
-              | (simp [hr, hg]
-                 constructor
-                 · intro h
-                   exact ⟨caps, lineage, ⟨rfl, rfl⟩, h⟩
-                 · rintro ⟨_, _, ⟨rfl, rfl⟩, h⟩
-                   exact h)
+        | some spent =>
+          cases hd : debitHandles st.cell.capabilities turn.structured.invocations.toList with
+          | none => simp [hr]
+          | some debited =>
+            cases hg : delegateHandle debited st.lineage turn.delegation with
+            | none => simp [hg]
+            | some next =>
+              obtain ⟨caps, lineage⟩ := next
+              first
+                | (simp [hr, hg]; done)
+                | (simp [hr, hg]
+                   constructor
+                   · intro h
+                     exact ⟨caps, lineage, ⟨rfl, rfl⟩, h⟩
+                   · rintro ⟨_, _, ⟨rfl, rfl⟩, h⟩
+                     exact h)
   · simp [hr]
 
 /-! ### Why a turn is refused -/
@@ -759,8 +791,8 @@ theorem stepHouyhnhnmSession_eq_some_iff (c : TurnCommitments) (v : InnerVerifie
 are not bound to the stores; the deltas do not conserve; a balance would go negative; an
 invocation has no capability, fails its mandate, or sits under a revoked nullifier; an effect
 fails the inner verifier; a root is malformed or the revoked root is the empty one; a row
-constraint fails; a channel nullifier is replayed; a handle's budget is exhausted; the
-delegation is refused. -/
+constraint fails; stored capability ancestry is missing, omitted from `credNul`, or revoked;
+a channel nullifier is replayed; a handle's budget is exhausted; the delegation is refused. -/
 def HouyhnhnmStepViolation (c : TurnCommitments) (v : InnerVerifier)
     (st : HouyhnhnmSessionState) (turn : HouyhnhnmTurn) : Prop :=
   ¬ RootBindings c st.cell ∨
@@ -776,6 +808,8 @@ def HouyhnhnmStepViolation (c : TurnCommitments) (v : InnerVerifier)
   ¬ ((st.cell.actorVkDigest.size = 32 ∧ st.cell.capRoot.size = 32) ∧
       liveRevokedRoot st.cell.revokedRoot = true) ∨
   checkAllRowsNonVacuous turn.structured.rows = false ∨
+  storedInvocationsLive st.cell.capabilities st.cell.revoked
+    turn.structured.invocations.toList = false ∨
   spendChannels st.cell.revoked (chanNuls turn) = none ∨
   debitHandles st.cell.capabilities turn.structured.invocations.toList = none ∨
   ∃ debited, debitHandles st.cell.capabilities turn.structured.invocations.toList = some debited ∧
@@ -814,29 +848,33 @@ theorem stepHouyhnhnmSession_eq_none_iff (c : TurnCommitments) (v : InnerVerifie
           · exact .inr (.inr (.inl h2))
         · exact .inr (.inl h1)
       | true =>
-        cases hs : spendChannels st.cell.revoked (chanNuls turn) with
-        | none => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl)))))))
-        | some spent =>
-          cases hd : debitHandles st.cell.capabilities turn.structured.invocations.toList with
+        cases hanc : storedInvocationsLive st.cell.capabilities st.cell.revoked
+            turn.structured.invocations.toList with
+        | false => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl)))))))
+        | true =>
+          cases hs : spendChannels st.cell.revoked (chanNuls turn) with
           | none => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))))
-          | some debited =>
-            cases hg : delegateHandle debited st.lineage turn.delegation with
-            | none =>
-              exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨debited, rfl, hg⟩))))))))
-            | some next =>
-              have hsome := (stepHouyhnhnmSession_eq_some_iff c v st turn _).mpr
-                ⟨hr, he, spent, debited, next.1, next.2, hs, hd, hg, rfl⟩
-              rw [hnone] at hsome
-              cases hsome
+          | some spent =>
+            cases hd : debitHandles st.cell.capabilities turn.structured.invocations.toList with
+            | none => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl)))))))))
+            | some debited =>
+              cases hg : delegateHandle debited st.lineage turn.delegation with
+              | none =>
+                exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨debited, rfl, hg⟩)))))))))
+              | some next =>
+                have hsome := (stepHouyhnhnmSession_eq_some_iff c v st turn _).mpr
+                  ⟨hr, he, hanc, spent, debited, next.1, next.2, hs, hd, hg, rfl⟩
+                rw [hnone] at hsome
+                cases hsome
     · exact .inl hr
   · intro hviol
     cases hstep : stepHouyhnhnmSession c v st turn with
     | none => rfl
     | some st' =>
-      obtain ⟨hr, he, spent, debited, caps, lineage, hs, hd, hg, _⟩ :=
+      obtain ⟨hr, he, hanc, spent, debited, caps, lineage, hs, hd, hg, _⟩ :=
         (stepHouyhnhnmSession_eq_some_iff c v st turn st').mp hstep
       obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := (execTurnSymbolic_iff _ _ _).mp he
-      rcases hviol with h | h | h | h | h | h | h | h | h | ⟨d, hd', h⟩
+      rcases hviol with h | h | h | h | h | h | h | h | h | h | ⟨d, hd', h⟩
       · exact absurd hr h
       · exact absurd h1 h
       · exact absurd h2 h
@@ -844,6 +882,7 @@ theorem stepHouyhnhnmSession_eq_none_iff (c : TurnCommitments) (v : InnerVerifie
       · exact absurd h4 h
       · exact absurd ⟨h5, h6⟩ h
       · rw [h7] at h; cases h
+      · rw [hanc] at h; cases h
       · rw [hs] at h; cases h
       · rw [hd] at h; cases h
       · rw [hd] at hd'; cases hd'; rw [hg] at h; cases h
@@ -940,7 +979,7 @@ theorem step_revoked_spec {c : TurnCommitments} {v : InnerVerifier}
     (h : stepHouyhnhnmSession c v st turn = some st') (k : UInt64) :
     st'.cell.revoked.spec k ↔
       st.cell.revoked.spec k ∨ k ∈ chanNuls turn ∨ k ∈ turn.revokedCredentials := by
-  obtain ⟨_, _, spent, debited, caps, lineage, hs, _, _, rfl⟩ :=
+  obtain ⟨_, _, _, spent, debited, caps, lineage, hs, _, _, rfl⟩ :=
     (stepHouyhnhnmSession_eq_some_iff c v st turn st').mp h
   simp only [nextSession, revokeAll_spec, (spendChannels_spec _ _ _ hs).1, or_assoc]
 
@@ -1096,7 +1135,7 @@ theorem delegateHandle_facts {roots caps caps' : Array Mandate} {lineage lineage
       cases hroot : lineage[d.parent]? with
       | none => simp [delegateHandle, hheld, hroot] at h
       | some root =>
-        by_cases hf : requestFits d.request held = true
+        by_cases hf : (requestFits d.request held && caps.all (fun m => m.id != d.request.childId)) = true
         · simp only [delegateHandle, hheld, hroot, hf, ↓reduceIte, Option.some.injEq,
             Prod.mk.injEq] at h
           obtain ⟨rfl, rfl⟩ := h
@@ -1138,7 +1177,7 @@ theorem step_budget_and_lineage {c : TurnCommitments} {v : InnerVerifier}
     (h : stepHouyhnhnmSession c v st turn = some st') (hl : HandleLineage roots st) :
     budgetSum st'.cell.capabilities + turnCost turn = budgetSum st.cell.capabilities ∧
       HandleLineage roots st' := by
-  obtain ⟨_, _, spent, debited, caps, lineage, _, hd, hg, rfl⟩ :=
+  obtain ⟨_, _, _, spent, debited, caps, lineage, _, hd, hg, rfl⟩ :=
     (stepHouyhnhnmSession_eq_some_iff c v st turn st').mp h
   obtain ⟨hb, hn⟩ := debitHandles_facts _ _ _ hd
   obtain ⟨hb2, hs2, hl2⟩ := delegateHandle_facts (roots := roots) hg (hl.1.trans hn.1.symm)
@@ -1212,7 +1251,7 @@ theorem validHouyhnhnmTrace_conserves_balances (c : TurnCommitments) (v : InnerV
       ((∀ b ∈ st.cell.balances, 0 ≤ b) → ∀ b ∈ s.cell.balances, 0 ≤ b))
     ?_ turns st st' h ⟨rfl, fun hb => hb⟩
   intro s turn s' hp hs
-  obtain ⟨_, he, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
+  obtain ⟨_, he, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
     (stepHouyhnhnmSession_eq_some_iff c v s turn s').mp hs
   refine ⟨?_, fun _ => ((execTurnSymbolic_iff _ _ _).mp he).2.1⟩
   simp only [nextSession]
@@ -1259,6 +1298,34 @@ theorem validHouyhnhnmTrace_no_nullifier_replay (c : TurnCommitments) (v : Inner
     rw [execTurnSymbolic_refuses_revoked v st'.cell turn.structured k hk' i hi hcone] at he
     cases he
 
+/-- **Stored capability ancestry cannot be bypassed by omitting `credNul`.**
+    Even if a caller supplies `i.credNul = []` (omitting revoked ancestor IDs), any invocation
+    whose stored capability `m` has a revoked mandate ID `k ∈ chain` in its `Grant` ancestry
+    chain is refused by `stepHouyhnhnmSession`. -/
+theorem validHouyhnhnmTrace_stored_ancestry_no_bypass
+    (c : TurnCommitments) (v : InnerVerifier)
+    (later : List HouyhnhnmTurn) (st st' : HouyhnhnmSessionState)
+    (h : ValidHouyhnhnmTrace c v st later st') (k : UInt64) (hk : st.cell.revoked.spec k)
+    (turn : HouyhnhnmTurn) (i : InvocationWithProvenance)
+    (hi : i ∈ turn.structured.invocations)
+    (m : Mandate) (hm : st'.cell.capabilities[i.capabilityIndex]? = some m)
+    (chain : List UInt64)
+    (hchain : storedAncestryIds st'.cell.capabilities st'.cell.capabilities.size m = some chain)
+    (hkChain : k ∈ chain) :
+    stepHouyhnhnmSession c v st' turn = none := by
+  have hk' := validHouyhnhnmTrace_revoked_monotone c v later st st' h k hk
+  cases hstep : stepHouyhnhnmSession c v st' turn with
+  | none => rfl
+  | some s'' =>
+    obtain ⟨_, _, hanc, _⟩ := (stepHouyhnhnmSession_eq_some_iff c v st' turn s'').mp hstep
+    have hiList : i ∈ turn.structured.invocations.toList := Array.mem_toList_iff.mpr hi
+    have hEach := List.all_eq_true.mp hanc i hiList
+    simp only [hm, hchain, List.all_eq_true, Bool.and_eq_true] at hEach
+    have hkNotRev := (hEach k hkChain).2
+    have hkCont : st'.cell.revoked.contains k = true :=
+      (st'.cell.revoked.contains_eq_spec k).mpr hk'
+    simp [hkCont] at hkNotRev
+
 /-- The total cost of the invocations of a trace. -/
 def traceCost (turns : List HouyhnhnmTurn) : Nat := (turns.map turnCost).sum
 
@@ -1280,11 +1347,11 @@ theorem validHouyhnhnmTrace_budget_and_lineage (c : TurnCommitments) (v : InnerV
     obtain ⟨mid, hm, hrest⟩ := (validHouyhnhnmTrace_cons c v st st' t ts).mp h
     obtain ⟨hb, hl'⟩ := step_budget_and_lineage roots hm hl
     have hr' : RootBindings c mid.cell := by
-      obtain ⟨_, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
+      obtain ⟨_, _, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
         (stepHouyhnhnmSession_eq_some_iff c v st t mid).mp hm
       exact ⟨rfl, rfl⟩
     have hh : mid.turnHeight = st.turnHeight + 1 := by
-      obtain ⟨_, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
+      obtain ⟨_, _, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
         (stepHouyhnhnmSession_eq_some_iff c v st t mid).mp hm
       rfl
     obtain ⟨hb2, hl2, hr2, hh2⟩ :=

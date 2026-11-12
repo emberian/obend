@@ -375,7 +375,7 @@ def invoke (handle : Nat) (who : Principal) (cost : Nat) (cone : List UInt64) (c
 
 /-- Carol spends 5 on handle 0 and attaches the credential receipt. -/
 def turn1 : HouyhnhnmTurn :=
-  ⟨⟨#[-3, 3], #[invoke 0 carol 5 [2, 7] 90],
+  ⟨⟨#[-3, 3], #[invoke 0 carol 5 [1, 7] 90],
       #[credentialEffect deployedReceiptParams policyDigest cell0 policy view witness], ⟨#[0]⟩⟩,
     [], none⟩
 
@@ -383,12 +383,12 @@ open Obend.Vault.Mandate in
 /-- Dave spends 4 on handle 1, delegates a child of budget 3 to Carol, and revokes credential 7,
 an ancestor of handle 0. -/
 def turn2 : HouyhnhnmTurn :=
-  ⟨⟨#[1, -1], #[invoke 1 dave 4 [3, 8] 91], #[], ⟨#[0]⟩⟩, [7],
+  ⟨⟨#[1, -1], #[invoke 1 dave 4 [2, 8] 91], #[], ⟨#[0]⟩⟩, [7],
     some ⟨1, ⟨5, carol, [.call], 3, [1], 90, [5]⟩⟩⟩
 
 /-- Carol spends 1 on the delegated handle 2. -/
 def turn3 : HouyhnhnmTurn :=
-  ⟨⟨#[0, 0], #[invoke 2 carol 1 [3, 8, 9] 92], #[], ⟨#[0]⟩⟩, [], none⟩
+  ⟨⟨#[0, 0], #[invoke 2 carol 1 [2, 5, 8, 9] 92], #[], ⟨#[0]⟩⟩, [], none⟩
 
 def run (turns : List HouyhnhnmTurn) : Option HouyhnhnmSessionState :=
   runHouyhnhnmSession commitments verifier session0 turns
@@ -402,11 +402,18 @@ def run (turns : List HouyhnhnmTurn) : Option HouyhnhnmSessionState :=
 -- A channel nullifier is spent once.
 #guard (run [turn1, turn1]).isNone
 #guard (run [turn1, turn2, { turn3 with structured :=
-  { turn3.structured with invocations := #[invoke 2 carol 1 [3, 8, 9] 91] } }]).isNone
+  { turn3.structured with invocations := #[invoke 2 carol 1 [2, 5, 8, 9] 91] } }]).isNone
+
+-- Omitting stored capability ancestry IDs (`credNul = []`) is refused, and duplicate childId is refused.
+#guard (run [turn1, turn2, { turn3 with structured :=
+  { turn3.structured with invocations := #[invoke 2 carol 1 [] 99] } }]).isNone
+open Obend.Vault.Mandate in
+def dupChildId : HandleDelegation := ⟨1, ⟨2, carol, [.call], 3, [1], 90, [5]⟩⟩
+#guard (run [turn1, { turn2 with delegation := some dupChildId }]).isNone
 
 /-- Carol again on handle 0, a fresh channel, one unit. -/
 def coneTurn : HouyhnhnmTurn :=
-  ⟨⟨#[0, 0], #[invoke 0 carol 1 [2, 7] 93], #[], ⟨#[0]⟩⟩, [], none⟩
+  ⟨⟨#[0, 0], #[invoke 0 carol 1 [1, 7] 93], #[], ⟨#[0]⟩⟩, [], none⟩
 
 -- Admitted before credential 7 is revoked, refused after: one revocation kills the cone.
 #guard (run [turn1, coneTurn]).isSome
@@ -414,9 +421,9 @@ def coneTurn : HouyhnhnmTurn :=
 
 -- Handle 0 has 7: a second spend of 5 is refused, across turns and inside one turn, although
 -- each invocation alone is within the mandate.
-#guard (run [turn1, ⟨⟨#[0, 0], #[invoke 0 carol 5 [2, 7] 94], #[], ⟨#[0]⟩⟩, [], none⟩]).isNone
+#guard (run [turn1, ⟨⟨#[0, 0], #[invoke 0 carol 5 [1, 7] 94], #[], ⟨#[0]⟩⟩, [], none⟩]).isNone
 def doubleSpend : HouyhnhnmTurn :=
-  ⟨⟨#[0, 0], #[invoke 0 carol 4 [2, 7] 95, invoke 0 carol 4 [2, 7] 96], #[], ⟨#[0]⟩⟩, [], none⟩
+  ⟨⟨#[0, 0], #[invoke 0 carol 4 [1, 7] 95, invoke 0 carol 4 [1, 7] 96], #[], ⟨#[0]⟩⟩, [], none⟩
 #guard execTurnSymbolic verifier cell0 doubleSpend.structured
 #guard (run [doubleSpend]).isNone
 
@@ -458,7 +465,7 @@ theorem sessionMonitor_quiet (c : TurnCommitments) (v : InnerVerifier)
   have hr' : RootBindings c st'.cell :=
     validHouyhnhnmTrace_invariant (fun s => RootBindings c s.cell)
       (fun s turn s' _ hs => by
-        obtain ⟨_, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
+        obtain ⟨_, _, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
           (stepHouyhnhnmSession_eq_some_iff c v s turn s').mp hs
         exact ⟨rfl, rfl⟩) turns st st' h hr
   simp [detectDivergence, compareClaims, auditSubsystem, sessionMonitor, hr']
@@ -501,9 +508,25 @@ theorem sessionMonitor_catches_unbound_root (c : TurnCommitments) (st : Houyhnhn
   fun c => encodeFrame (encodeFrame c.issuer c.subject c.schema)
     (encodeFrame (encodeDetCbor c.attributes) ByteArray.empty c.lineage) (natField c.epoch)
 
--- The receipt verifier without the opening: the sumcheck rounds alone.
+-- The receipt verifier dropping ONLY `verifyDualSumcheckPIOP` (surgical single-check mutation).
 #tooth verifyExPostCredentialReceipt_sound by mutation verifyExPostCredentialReceipt :=
-  fun _ _ _ _ _ => true
+  fun P pol _ s rc =>
+    decide (s.revokedRoot = rc.witness.revoked.root.bytes) &&
+    checkCredentialEval pol (receiptView s rc.witness) rc.witness &&
+    decide (s.tableCommitment = commitTable P (complianceTable pol (receiptView s rc.witness) rc.witness))
+
+private def verifyDualSumcheckPIOPAlwaysTrue
+    {R : Type} [Obend.Crypto.CommRingOps R] [DecidableEq R]
+    [Obend.Crypto.TranscriptChallenge R] [Obend.Crypto.TranscriptEncode R]
+    (P₁ P₂ : Obend.Crypto.MultilinearPCS R)
+    [Obend.Crypto.TranscriptEncode P₁.Commitment] [Obend.Crypto.TranscriptEncode P₂.Commitment]
+    (_ : P₁.Params × P₂.Params) (_ _ : Nat) (_ : P₁.Commitment × P₂.Commitment)
+    (_ : R) (_ : List (Obend.Crypto.RoundPoly R)) (_ : P₁.OpeningProof × P₂.OpeningProof)
+    (_ : Obend.Crypto.Transcript .relationBound) : Bool := true
+
+-- Standalone PIOP compliance soundness without `checkCredentialEval` pre-check.
+#tooth deployedDualSumcheckPIOP_compliance_sound by mutation
+  Obend.Crypto.verifyDualSumcheckPIOP := verifyDualSumcheckPIOPAlwaysTrue
 
 -- An inner verifier that accepts every proof.
 #tooth execTurnSymbolic_vc_sound by mutation verifiableCredentialInnerVerifier :=
@@ -517,6 +540,14 @@ theorem sessionMonitor_catches_unbound_root (c : TurnCommitments) (st : Houyhnhn
 
 -- A debit that debits nothing.
 #tooth validHouyhnhnmTrace_budget_and_lineage by mutation debitHandle := fun caps _ => some caps
+
+-- Stored capability ancestry check: without it, omitting `credNul` bypasses revoked ancestors.
+#tooth validHouyhnhnmTrace_stored_ancestry_no_bypass by mutation storedInvocationsLive :=
+  fun _ _ _ => true
+
+-- Zero-reexecution bundle verifier check: without checking `verify`, `TurnRelation` fails.
+#tooth cipherclerk_zero_reexec_sound by mutation verifyCipherclerkBundle :=
+  fun _ _ => true
 
 -- A step that takes every turn the admission check admits, skipping spends and debits.
 #tooth stepHouyhnhnmSession_eq_none_iff by mutation stepHouyhnhnmSession :=
@@ -541,10 +572,10 @@ elab "#assert_credential_axioms" : command => do
     if info matches .axiomInfo _ then throwError "{constant} is an axiom or a hidden body"
     for a in ← liftCoreM <| collectAxioms constant do
       unless Obend.AssertAxioms.standard.contains a do throwError "{constant} rests on {a}"
-  for extractor in [``credentialCommitmentExtract, ``issuerSliceExtract] do
+  for extractor in [``credentialCommitmentExtract, ``credentialCommitmentExtractPinned, ``issuerSliceExtract] do
     if Lean.isNoncomputable env extractor then throwError "{extractor} is noncomputable"
   let mut withChoice : List Name := []
-  for extractor in [``credentialCommitmentExtract, ``issuerSliceExtract] do
+  for extractor in [``credentialCommitmentExtract, ``credentialCommitmentExtractPinned, ``issuerSliceExtract] do
     if (← liftCoreM <| collectAxioms extractor).contains ``Classical.choice then
       withChoice := extractor :: withChoice
   unless withChoice.isEmpty do throwError "extractors using Classical.choice: {withChoice}"

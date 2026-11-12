@@ -157,6 +157,23 @@ example :
     elemStiffnessBilinear unitSquareCapMesh.verts t [0, 0, 1, 1] [0, 1 / 2, 1, 1 / 3] := by
   decide +kernel
 
+/-- Genuine 2D Whitney 1-form / Nédélec $W^1(\text{curl})$ Kronecker DOFs, commuting $d_0$, and $\operatorname{curl}(d_0 u_h) = 0$. -/
+example :
+    let v0 : Point2Q := ⟨0, 0⟩; let v1 : Point2Q := ⟨2, 0⟩; let v2 : Point2Q := ⟨0, 3⟩
+    let w : Whitney1ElemDofs2D := ⟨5, -2, 7⟩
+    dot2Q (whitney1Eval v0 v1 v2 w (mid2Q v0 v1)) (sub2Q v1 v0) = 5 ∧
+    dot2Q (whitney1Eval v0 v1 v2 w (mid2Q v1 v2)) (sub2Q v2 v1) = -2 ∧
+    dot2Q (whitney1Eval v0 v1 v2 w (mid2Q v2 v0)) (sub2Q v0 v2) = 7 ∧
+    whitney1Eval v0 v1 v2 (whitney1D0 1 5 10) ⟨1 / 3, 1 / 2⟩ = ⟨2, 3⟩ ∧
+    whitney1Curl v0 v1 v2 (whitney1D0 1 5 10) = 0 := by
+  have hEx := whitney1_feec_exactness ⟨0, 0⟩ ⟨2, 0⟩ ⟨0, 3⟩ ⟨1 / 3, 1 / 2⟩ ⟨5, -2, 7⟩ 1 5 10 (by decide +kernel)
+  refine ⟨hEx.1, hEx.2.1, hEx.2.2.1, ?_, hEx.2.2.2.2⟩
+  rw [hEx.2.2.2.1]; decide +kernel
+
+/-- Semantic $RT_0$ equilibration predicate biconditional (`checkRt0Equilibrated_iff`). -/
+example : Rt0Equilibrated unitSquareCapMesh unitSquareExactFlux :=
+  (checkRt0Equilibrated_iff unitSquareCapMesh unitSquareExactFlux).mp (by decide +kernel)
+
 /-- Global Poisson $RT_0$ equilibration with non-zero volumetric source $f_T = -4$ ($\operatorname{div}\sigma_h = 4$). -/
 def poissonSourceMesh : SimplexMesh2D :=
   { unitSquareCapMesh with
@@ -336,20 +353,60 @@ example :
   ⟨ipcClass3RfFab, ipcClass3RfLayout, coupledDiffSampleExtraction, sampleDiffSensitivity,
    by decide +kernel⟩
 
-/-! ## 4. `#tooth` Kernel Mutation Kills (10 Probes Across FEEC FEM & PCB Multiphysics) -/
+/-- Non-vacuity witness for `coupledFem_thomsonDirichlet_impedance_brackets_sound` & TEM inductance derivation. -/
+example :
+    CertifiedFeecPde coupledDiffSampleExtraction.evenProb coupledDiffSampleExtraction.evenCert ∧
+    0 < ((100000000 : Rat) - 60000000) / 2 :=
+  ⟨coupledDiffSample_continuum_inhabited.1, coupledDiffSample_continuum_inhabited.2.2.2.2.1⟩
+
+example :
+    let br := deriveTemInductanceBrackets (temKappaPicoHAttoF 1000000000)
+      { unitSquareCapProblem with mesh := uniformFourTriMesh, errorTolSq := 1 }
+      { uh := approxTrialUh, flux := approxTrialFlux } eps0AttoFPerMeter
+    0 < br.1 ∧ br.1 < br.2 := by
+  decide +kernel
+
+/-- Geometry-derived $\text{TM}_{10}$ cavity mode check accepts physical plane `(50 mm × 40 mm, Dk = 4.2)`
+and refuses forged `cavityFirstModeRadPerSec = 5 × 10¹⁰ rad/s` above physical cavity resonance! -/
+example :
+    checkPlanePairGeometryResonance sampleCorePdnSpec 50000000 40000000 4200 = true ∧
+    checkPlanePairGeometryResonance
+      { sampleCorePdnSpec with cavityFirstModeRadPerSec := 50000000000 }
+      50000000 40000000 4200 = false := by
+  decide +kernel
+
+/-- Coupled electro-thermal copper trace self-heating witness + thermal runaway refusal (`I = 10 A`). -/
+example :
+    checkTraceElectroThermal ipcClass3RfFab ipcClass3RfLayout sampleTraceElectroThermal = true ∧
+    checkTraceElectroThermal ipcClass3RfFab ipcClass3RfLayout
+      { sampleTraceElectroThermal with currentAmp := 10 } = false ∧
+    traceEquilibriumDeltaTKelvin ipcClass3RfFab ipcClass3RfLayout sampleTraceElectroThermal =
+      traceColdDeltaTKelvin ipcClass3RfFab ipcClass3RfLayout sampleTraceElectroThermal *
+        (1 + sampleTraceElectroThermal.tcrPerKelvin *
+          traceEquilibriumDeltaTKelvin ipcClass3RfFab ipcClass3RfLayout sampleTraceElectroThermal) :=
+  ⟨by decide +kernel, by decide +kernel,
+   (traceElectroThermal_sound ipcClass3RfFab ipcClass3RfLayout sampleTraceElectroThermal
+     (by decide +kernel)).2.2.2.2.1⟩
+
+/-! ## 4. `#tooth` Kernel Mutation Kills (13 Probes Across FEEC FEM & PCB Multiphysics) -/
 
 /-- Tooth 1: Omitting strict orientation $\det J_T > 0$ breaks `checkMeshConformingAndCadValid_sound`. -/
 def checkTriElementSkipOrientation (verts : List Point2Q) (maxAspectRatio : Rat) (t : TriElement2D) : Bool :=
+  let n := verts.length
   let v0 := getVert2D verts t.i0; let v1 := getVert2D verts t.i1; let v2 := getVert2D verts t.i2
-  decide (t.i0 < verts.length) &&
-  decide (sumEdgeLenSq2D v0 v1 v2 ≤ maxAspectRatio) &&
+  let d := twiceArea2D v0 v1 v2
+  decide (t.i0 < n ∧ t.i1 < n ∧ t.i2 < n) &&
+  decide (t.i0 ≠ t.i1 ∧ t.i1 ≠ t.i2 ∧ t.i2 ≠ t.i0) &&
+  decide (sumEdgeLenSq2D v0 v1 v2 ≤ maxAspectRatio * d) &&
   t.eps.isSpdB
 #tooth Obend.Analysis.SimplicialFeecFem.checkMeshConformingAndCadValid_sound by mutation
   Obend.Analysis.SimplicialFeecFem.checkTriElementValid := checkTriElementSkipOrientation
 
 /-- Tooth 2: Omitting 3D tetrahedral positive-volume check breaks `tetMeshOriented_sound`. -/
 def checkTetMeshSkipVolume (m : SimplexMesh3D) : Bool :=
-  !m.tets.isEmpty && decide (0 < m.verts.length)
+  !m.tets.isEmpty && m.tets.all (fun K =>
+    let n := m.verts.length
+    decide (K.i0 < n ∧ K.i1 < n ∧ K.i2 < n ∧ K.i3 < n) && decide (0 < K.epsScalar))
 #tooth Obend.Analysis.SimplicialFeecFem.tetMeshOriented_sound by mutation
   Obend.Analysis.SimplicialFeecFem.checkTetMeshOriented := checkTetMeshSkipVolume
 
@@ -374,23 +431,52 @@ def capacitanceLowerBoundInflated (mesh : SimplexMesh2D) (uh : List Rat) (flux :
 /-- Tooth 6: Omitting regional copper thieving balance check breaks `checkCopperDensityBalanced_sound`. -/
 def checkCopperDensitySkipRegion (maxDeltaPermille : Nat) (symPairs : List (Nat × Nat)) (regionTiles : List Nat) : Bool :=
   !symPairs.isEmpty && !regionTiles.isEmpty &&
-  symPairs.all (fun p => decide (natAbsDiff p.1 p.2 ≤ maxDeltaPermille))
+  symPairs.all (fun p => decide (p.1 ≤ 1000 ∧ p.2 ≤ 1000) && decide (natAbsDiff p.1 p.2 ≤ maxDeltaPermille))
 #tooth Obend.Hardware.PCB.checkCopperDensityBalanced_sound by mutation
   Obend.Hardware.PCB.checkCopperDensityBalanced := checkCopperDensitySkipRegion
 
-/-- Tooth 7: Omitting drill wander & layer registration shift in annular-ring check breaks `dfm_via_breakout_impossible`. -/
+/-- Tooth 7: Omitting ONLY drill wander & layer registration shift in annular-ring check breaks `dfm_via_breakout_impossible`. -/
 def checkPcbDfmSkipRegistration (fab : PcbFabCapabilities) (layout : PcbLayoutRules) : Bool :=
+  let dEtch := etchVariationBoundNm fab
+  let dDrill := 2 * layout.viaDrillRadiusNm
+  decide (0 < fab.minTraceWidthNm ∧ 0 < fab.minTraceSpacingNm) &&
+  decide (0 < fab.copperThickNm ∧ 0 < fab.etchFactorMilli) &&
+  decide (0 < fab.maxDrillAspectRatio ∧ 0 < fab.minAnnularRingNm) &&
+  decide (0 < fab.minSolderMaskWebNm ∧ 90 ≤ fab.minJunctionAngleDeg) &&
+  decide (fab.localEtchMatchTolNm ≤ dEtch) &&
+  decide (fab.minTraceWidthNm + dEtch ≤ layout.nomTraceWidthNm) &&
+  decide (fab.minTraceSpacingNm + dEtch ≤ layout.nomTraceSpacingNm) &&
   decide (0 < layout.viaDrillRadiusNm) &&
-  decide (layout.viaDrillRadiusNm + fab.minAnnularRingNm ≤ layout.viaPadRadiusNm)
+  decide (layout.boardThicknessNm ≤ fab.maxDrillAspectRatio * dDrill) &&
+  decide (layout.viaDrillRadiusNm + fab.minAnnularRingNm ≤ layout.viaPadRadiusNm) &&
+  decide (fab.minJunctionAngleDeg ≤ layout.minTraceAngleDeg) &&
+  decide ((fab.minSolderMaskWebNm : Int) ≤ solderMaskWebNm fab layout) &&
+  checkCopperDensityBalanced fab.maxCopperImbalancePermille
+    layout.symLayerCopperPairsPermille layout.regionCopperTilesPermille
 #tooth Obend.Hardware.PCB.dfm_via_breakout_impossible by mutation
   Obend.Hardware.PCB.checkPcbDfmEnvelope := checkPcbDfmSkipRegistration
 
-/-- Tooth 8: Omitting DFM corner capacitive-skew check breaks `dfm_differential_zdiff_and_skew_sound`. -/
+/-- Tooth 8: Omitting ONLY the DFM corner capacitive-skew clause breaks `dfm_differential_zdiff_and_skew_sound`. -/
 def checkDfmDiffSkipSkew (fab : PcbFabCapabilities) (layout : PcbLayoutRules)
     (ext : CoupledFemExtraction2D) (sens : CoupledProcessSensitivity) : Bool :=
+  let dEtch : Rat := (etchVariationBoundNm fab : Rat)
+  let dLam : Rat := (fab.lamHeightTolNm : Rat)
+  let dcWorst := sens.kCapWidthAttoFPerNm * dEtch + sens.kCapHeightAttoFPerNm * dLam
+  let dlWorst := sens.kIndWidthPicoHPerNm * dEtch + sens.kIndHeightPicoHPerNm * dLam
+  let cCornerMin := cOddLoAttoF ext - dcWorst
+  let cCornerMax := cOddHiAttoF ext + dcWorst
+  let lCornerMin := ext.lOddLoPicoH - dlWorst
+  let lCornerMax := ext.lOddHiPicoH + dlWorst
+  let zMinQ : Rat := (sens.zDiffMinMilliOhm : Rat)
+  let zMaxQ : Rat := (sens.zDiffMaxMilliOhm : Rat)
   checkPcbDfmEnvelope fab layout &&
   checkCoupledFemExtraction ext &&
-  decide (sens.zDiffMinMilliOhm ≤ sens.zDiffMaxMilliOhm)
+  decide (0 ≤ sens.kCapWidthAttoFPerNm ∧ 0 ≤ sens.kCapHeightAttoFPerNm) &&
+  decide (0 ≤ sens.kIndWidthPicoHPerNm ∧ 0 ≤ sens.kIndHeightPicoHPerNm) &&
+  decide (0 ≤ sens.kAsymCapAttoFPerNm ∧ 0 ≤ sens.intrinsicMeshAsymAttoF) &&
+  decide (0 < cCornerMin ∧ 0 < lCornerMin) &&
+  decide (zMinQ * zMinQ ≤ (4 * mOhmSqPerPicoHAttoF * lCornerMin) / cCornerMax) &&
+  decide ((4 * mOhmSqPerPicoHAttoF * lCornerMax) / cCornerMin ≤ zMaxQ * zMaxQ)
 #tooth Obend.Hardware.PCB.dfm_differential_zdiff_and_skew_sound by mutation
   Obend.Hardware.PCB.checkDfmDiffImpedanceAndSkew := checkDfmDiffSkipSkew
 
@@ -402,10 +488,40 @@ def slotPenaltyFlippedSign (slotGapNm detourSpanNm traceHeightNm : Nat) : Rat :=
 
 /-- Tooth 10: Checking PDN impedance only at $\omega_{\min}$ (omitting $\omega_{\max}$) breaks `pdn_target_impedance_sound`. -/
 def checkPdnSkipMaxEndpoint (p : PdnPlanePairSpec) : Bool :=
-  decide (pdnImpedanceMagSqOhmSq p p.omegaMinRadPerSec ≤
-    pdnTargetImpedanceOhm p * pdnTargetImpedanceOhm p)
+  let zT := pdnTargetImpedanceOhm p
+  decide (0 < p.maxRippleVolt ∧ 0 < p.maxTransientStepAmp) &&
+  decide (0 < p.esrOhm ∧ 0 ≤ p.spreadingInductanceHenry ∧ 0 < p.planePlusDecapFarad) &&
+  decide (0 < p.omegaMinRadPerSec ∧ p.omegaMinRadPerSec ≤ p.omegaMaxRadPerSec) &&
+  decide (2 * p.omegaMaxRadPerSec ≤ p.cavityFirstModeRadPerSec) &&
+  decide (pdnImpedanceMagSqOhmSq p p.omegaMinRadPerSec ≤ zT * zT)
 #tooth Obend.Hardware.PCB.pdn_target_impedance_sound by mutation
   Obend.Hardware.PCB.checkPdnTargetImpedance := checkPdnSkipMaxEndpoint
+
+/-- Tooth 11: Flipping edge sign in `whitney1D0` breaks `whitney1_feec_exactness` ($\operatorname{curl}(d_0 u_h) \ne 0$). -/
+def whitney1D0BrokenSign (u0 u1 u2 : Rat) : Whitney1ElemDofs2D := ⟨u1 - u0, u2 - u1, u2 - u0⟩
+#tooth Obend.Analysis.SimplicialFeecFem.whitney1_feec_exactness by mutation
+  Obend.Analysis.SimplicialFeecFem.whitney1D0 := whitney1D0BrokenSign
+
+/-- Tooth 12: Omitting the thermal-runaway denominator check `0 < denom` breaks `traceElectroThermal_sound`. -/
+def checkTraceElectroThermalSkipRunaway
+    (fab : PcbFabCapabilities) (layout : PcbLayoutRules) (s : TraceElectroThermalSpec) : Bool :=
+  let dtEq := traceEquilibriumDeltaTKelvin fab layout s
+  checkPcbDfmEnvelope fab layout &&
+  decide (0 < s.traceLengthNm) &&
+  decide (0 < s.rhoCuOhmNm ∧ 0 < s.tcrPerKelvin ∧ 0 < s.thetaJaKelvinPerWatt) &&
+  decide (0 ≤ s.currentAmp ∧ 0 < s.maxDeltaTKelvin) &&
+  decide (dtEq ≤ s.maxDeltaTKelvin) &&
+  decide (s.ambientTempC + dtEq ≤ s.laminateTgDeratedC)
+#tooth Obend.Hardware.PCB.traceElectroThermal_sound by mutation
+  Obend.Hardware.PCB.checkTraceElectroThermal := checkTraceElectroThermalSkipRunaway
+
+/-- Tooth 13: Omitting physical $\text{TM}_{10}$ cavity mode bound breaks `planePairGeometryResonance_sound`. -/
+def checkPlanePairSkipTm10 (p : PdnPlanePairSpec) (planeLenNm planeWidNm dkPermille : Nat) : Bool :=
+  checkPdnTargetImpedance p &&
+  decide (0 < planeLenNm ∧ 0 < planeWidNm ∧ 1000 ≤ dkPermille) &&
+  decide (0 < p.cavityFirstModeRadPerSec)
+#tooth Obend.Hardware.PCB.planePairGeometryResonance_sound by mutation
+  Obend.Hardware.PCB.checkPlanePairGeometryResonance := checkPlanePairSkipTm10
 
 #assert_axioms_tree
 

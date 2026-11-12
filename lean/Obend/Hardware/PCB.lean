@@ -610,6 +610,114 @@ theorem coupledFem_thomsonDirichlet_impedance_brackets_sound
   refine ⟨hFeecE, hFeecO, hcE, hcO, ?_, hzOdd, hzDiff, hzComm⟩
   exact rat_div_pos (by grind) (by grind)
 
+/-- Exact SI vacuum speed of light $c_0 = 299{,}792{,}458\,\text{m/s}$ for quasi-TEM $(\mathbf{L}, \mathbf{C}_{\text{air}})$ duality. -/
+def c0MetersPerSec : Nat := 299792458
+
+/-- Quasi-TEM $L \cdot C_{\text{air}} = \ell^2 / c_0^2$ constant in $\text{pH} \cdot \text{aF}$ over segment length `lenNm` ($\text{nm}$). -/
+def temKappaPicoHAttoF (lenNm : Nat) : Rat :=
+  (1000000000000 * (lenNm : Rat) * (lenNm : Rat)) / ((c0MetersPerSec : Rat) * (c0MetersPerSec : Rat))
+
+/-- Derive rigorous two-sided quasi-TEM inductance brackets $[L_{\text{lo}}, L_{\text{hi}}]$ ($\text{pH}$)
+directly from an air-filled ($\varepsilon_r = 1$) FEEC Thomson–Dirichlet capacitance certificate via $L = \kappa / C_{\text{air}}$. -/
+def deriveTemInductanceBrackets
+    (kappaPicoHAttoF : Rat) (airProb : FeecPdeProblem2D)
+    (airCert : FeecPragerSyngeCert2D) (capUnitScaleAttoF : Rat) : Rat × Rat :=
+  let cAirLo := capUnitScaleAttoF * capacitanceLowerBound airProb.mesh airCert.uh airCert.flux
+  let cAirHi := capUnitScaleAttoF * capacitanceUpperBound airProb.mesh airCert.uh
+  (kappaPicoHAttoF / cAirHi, kappaPicoHAttoF / cAirLo)
+
+/-- **Quasi-TEM Inductance Bracket Derivation Soundness (`deriveTemInductanceBrackets_sound`)**:
+Welds `thomsonDirichlet_capacitance_bracket` on the air-filled cross-section ($\varepsilon_r = 1$) with
+order-reversing reciprocal interval arithmetic $L = \kappa / C_{\text{air}}$ to certify rigorous two-sided
+continuum inductance bounds $L_{\text{lo}} \le L_{\text{true}} \le L_{\text{hi}}$. -/
+theorem deriveTemInductanceBrackets_sound
+    (kappaPicoHAttoF : Rat) (airProb : FeecPdeProblem2D)
+    (airCert : FeecPragerSyngeCert2D) (capUnitScaleAttoF : Rat)
+    (hAirOk : checkFeecPragerSynge airProb airCert = .ok)
+    (hKappaPos : 0 < kappaPicoHAttoF) (hScalePos : 0 < capUnitScaleAttoF)
+    (hDualPos : 0 < dualComplementaryEnergy airProb.mesh airCert.flux)
+    (hcLoPos : 0 < capacitanceLowerBound airProb.mesh airCert.uh airCert.flux)
+    {FieldA : Type} (HA : ContinuumEnergySpace FieldA)
+    (gradUA gradUhA epsInvSigmaA : FieldA) (cAirDimless : Rat)
+    (hcAir : cAirDimless = HA.normSq gradUA)
+    (hPrimalA : HA.normSq gradUhA = capacitanceUpperBound airProb.mesh airCert.uh)
+    (hDualA : HA.normSq epsInvSigmaA = dualComplementaryEnergy airProb.mesh airCert.flux)
+    (hWeakA : HA.innerEps gradUA (HA.sub gradUhA gradUA) = 0)
+    (hChargeA : HA.innerEps gradUA epsInvSigmaA =
+      -dualNetElectrodeCharge airProb.mesh airCert.uh airCert.flux) :
+    let brackets := deriveTemInductanceBrackets kappaPicoHAttoF airProb airCert capUnitScaleAttoF
+    let lTruePicoH := kappaPicoHAttoF / (capUnitScaleAttoF * cAirDimless)
+    CertifiedFeecPde airProb airCert ∧
+    0 < brackets.1 ∧
+    brackets.1 ≤ lTruePicoH ∧
+    lTruePicoH ≤ brackets.2 := by
+  have hFeec := checkFeecPragerSynge_sound hAirOk
+  have hBr := thomsonDirichlet_capacitance_bracket HA airProb.mesh airCert.uh airCert.flux
+    gradUA gradUhA epsInvSigmaA cAirDimless hcAir hPrimalA hDualA hDualPos hWeakA hChargeA
+  have hcAirLoPos : 0 < capUnitScaleAttoF * capacitanceLowerBound airProb.mesh airCert.uh airCert.flux :=
+    Rat.mul_pos hScalePos hcLoPos
+  have hcAirBounds :
+      capUnitScaleAttoF * capacitanceLowerBound airProb.mesh airCert.uh airCert.flux ≤
+        capUnitScaleAttoF * cAirDimless ∧
+      capUnitScaleAttoF * cAirDimless ≤
+        capUnitScaleAttoF * capacitanceUpperBound airProb.mesh airCert.uh :=
+    ⟨Rat.mul_le_mul_of_nonneg_left hBr.1 (Rat.le_of_lt hScalePos),
+     Rat.mul_le_mul_of_nonneg_left hBr.2 (Rat.le_of_lt hScalePos)⟩
+  have hInv := rat_div_mono_interval (Rat.le_of_lt hKappaPos) ⟨Rat.le_refl, Rat.le_refl⟩
+    hcAirLoPos hcAirBounds
+  have hLoPos : 0 < kappaPicoHAttoF / (capUnitScaleAttoF * capacitanceUpperBound airProb.mesh airCert.uh) :=
+    rat_div_pos hKappaPos (by grind)
+  exact ⟨hFeec, hLoPos, hInv.1, hInv.2⟩
+
+private theorem coupledEvenCapMesh_geom :
+    ∀ t ∈ coupledEvenCapMesh.tris,
+      0 < twiceArea2D (getVert2D coupledEvenCapMesh.verts t.i0)
+            (getVert2D coupledEvenCapMesh.verts t.i1)
+            (getVert2D coupledEvenCapMesh.verts t.i2) ∧
+      t.eps.isSpd := by
+  have hS := checkMeshConformingAndCadValid_sound coupledEvenCapMesh unitSquareCadFRep
+    (.sub .varY (.const 1)) 0 (1 / 100) 10 (by decide +kernel)
+  exact fun t ht => ⟨(hS.2.2.2.1 t ht).1, (hS.2.2.2.1 t ht).2.2.2⟩
+
+private theorem coupledOddCapMesh_geom :
+    ∀ t ∈ coupledOddCapMesh.tris,
+      0 < twiceArea2D (getVert2D coupledOddCapMesh.verts t.i0)
+            (getVert2D coupledOddCapMesh.verts t.i1)
+            (getVert2D coupledOddCapMesh.verts t.i2) ∧
+      t.eps.isSpd := by
+  have hS := checkMeshConformingAndCadValid_sound coupledOddCapMesh unitSquareCadFRep
+    (.sub .varY (.const 1)) 0 (1 / 100) 10 (by decide +kernel)
+  exact fun t ht => ⟨(hS.2.2.2.1 t ht).1, (hS.2.2.2.1 t ht).2.2.2⟩
+
+/-- Non-vacuity witness instantiating `coupledFem_thomsonDirichlet_impedance_brackets_sound` on
+`coupledDiffSampleExtraction` over `meshContinuumEnergySpace` (`0` vacuous hypotheses). -/
+theorem coupledDiffSample_continuum_inhabited :
+    CertifiedFeecPde coupledDiffSampleExtraction.evenProb coupledDiffSampleExtraction.evenCert ∧
+    CertifiedFeecPde coupledDiffSampleExtraction.oddProb coupledDiffSampleExtraction.oddCert ∧
+    (cEvenLoAttoF coupledDiffSampleExtraction ≤ 60000000 ∧
+      60000000 ≤ cEvenHiAttoF coupledDiffSampleExtraction) ∧
+    (cOddLoAttoF coupledDiffSampleExtraction ≤ 100000000 ∧
+      100000000 ≤ cOddHiAttoF coupledDiffSampleExtraction) ∧
+    0 < ((100000000 : Rat) - 60000000) / 2 ∧
+    (zDiffSqLoMilliOhmSq coupledDiffSampleExtraction ≤
+        (4 * mOhmSqPerPicoHAttoF * 250000) / 100000000 ∧
+      (4 * mOhmSqPerPicoHAttoF * 250000) / 100000000 ≤
+        zDiffSqHiMilliOhmSq coupledDiffSampleExtraction) := by
+  let HE := meshContinuumEnergySpace coupledEvenCapMesh coupledEvenCapMesh_geom
+  let HO := meshContinuumEnergySpace coupledOddCapMesh coupledOddCapMesh_geom
+  let gPos : MeshMidpointField := fun _ => (⟨0, 1⟩, ⟨0, 1⟩, ⟨0, 1⟩)
+  let gNeg : MeshMidpointField := fun _ => (⟨0, -1⟩, ⟨0, -1⟩, ⟨0, -1⟩)
+  have hFull := coupledFem_thomsonDirichlet_impedance_brackets_sound
+    coupledDiffSampleExtraction (by decide +kernel) HE HO
+    gPos gPos gNeg gPos gPos gNeg 3 5 335000 250000
+    (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    ⟨by decide +kernel, by decide +kernel⟩ ⟨by decide +kernel, by decide +kernel⟩
+  dsimp only [coupledDiffSampleExtraction] at hFull
+  rw [show (20000000 : Rat) * 3 = 60000000 by decide +kernel,
+      show (20000000 : Rat) * 5 = 100000000 by decide +kernel] at hFull
+  exact ⟨hFull.1, hFull.2.1, hFull.2.2.1, hFull.2.2.2.1, hFull.2.2.2.2.1, hFull.2.2.2.2.2.2.1⟩
+
 /-- Lipschitz sensitivity bounds of coupled pair $(\mathbf{L}, \mathbf{C})$ under etch & laminate tolerances. -/
 structure CoupledProcessSensitivity where
   kCapWidthAttoFPerNm : Rat
@@ -964,6 +1072,39 @@ private theorem rat_sq_bounded_on_interval {a b x m : Rat}
     have h2 : (-x) * (-a) ≤ (-a) * (-a) := Rat.mul_le_mul_of_nonneg_right hna hnaNonneg
     grind
 
+private theorem pdn_impedance_sq_le_target_sq
+    (p : PdnPlanePairSpec) (hOk : checkPdnTargetImpedance p = true)
+    (omega : Rat) (hBand : p.omegaMinRadPerSec ≤ omega ∧ omega ≤ p.omegaMaxRadPerSec) :
+    0 < p.maxRippleVolt ∧ 0 < p.maxTransientStepAmp ∧
+    2 * omega ≤ p.cavityFirstModeRadPerSec ∧
+    pdnImpedanceMagSqOhmSq p omega ≤ pdnTargetImpedanceOhm p * pdnTargetImpedanceOhm p := by
+  unfold checkPdnTargetImpedance at hOk
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
+  obtain ⟨⟨⟨⟨⟨hRip, hPhys⟩, hOmRange⟩, hCav⟩, hLoSq⟩, hHiSq⟩ := hOk
+  have hOmPos : 0 < omega := by grind
+  have hIndLo : p.omegaMinRadPerSec * p.spreadingInductanceHenry ≤ omega * p.spreadingInductanceHenry :=
+    Rat.mul_le_mul_of_nonneg_right hBand.1 hPhys.2.1
+  have hIndHi : omega * p.spreadingInductanceHenry ≤ p.omegaMaxRadPerSec * p.spreadingInductanceHenry :=
+    Rat.mul_le_mul_of_nonneg_right hBand.2 hPhys.2.1
+  have hCapDenLoPos : 0 < p.omegaMinRadPerSec * p.planePlusDecapFarad := Rat.mul_pos hOmRange.1 hPhys.2.2
+  have hCapDenPos : 0 < omega * p.planePlusDecapFarad := Rat.mul_pos hOmPos hPhys.2.2
+  have hInvHiLe : 1 / (omega * p.planePlusDecapFarad) ≤ 1 / (p.omegaMinRadPerSec * p.planePlusDecapFarad) :=
+    (rat_div_mono_interval (by grind) ⟨Rat.le_refl, Rat.le_refl⟩ hCapDenLoPos
+      ⟨Rat.mul_le_mul_of_nonneg_right hBand.1 (Rat.le_of_lt hPhys.2.2), Rat.le_refl⟩).2
+  have hInvLoLe : 1 / (p.omegaMaxRadPerSec * p.planePlusDecapFarad) ≤ 1 / (omega * p.planePlusDecapFarad) :=
+    (rat_div_mono_interval (by grind) ⟨Rat.le_refl, Rat.le_refl⟩ hCapDenPos
+      ⟨Rat.le_refl, Rat.mul_le_mul_of_nonneg_right hBand.2 (Rat.le_of_lt hPhys.2.2)⟩).1
+  have hReactLo : pdnReactanceOhm p p.omegaMinRadPerSec ≤ pdnReactanceOhm p omega := by
+    unfold pdnReactanceOhm; grind
+  have hReactHi : pdnReactanceOhm p omega ≤ pdnReactanceOhm p p.omegaMaxRadPerSec := by
+    unfold pdnReactanceOhm; grind
+  let zT := pdnTargetImpedanceOhm p
+  have hReactSqBnd : pdnReactanceOhm p omega * pdnReactanceOhm p omega ≤ zT * zT - p.esrOhm * p.esrOhm :=
+    rat_sq_bounded_on_interval hReactLo hReactHi
+      (by unfold pdnImpedanceMagSqOhmSq at hLoSq; dsimp only [zT]; grind)
+      (by unfold pdnImpedanceMagSqOhmSq at hHiSq; dsimp only [zT]; grind)
+  exact ⟨hRip.1, hRip.2, by grind, by unfold pdnImpedanceMagSqOhmSq; dsimp only [zT] at hReactSqBnd ⊢; grind⟩
+
 /-- **Continuous-Band 2D Plane-Pair PDN Target Impedance Soundness (`pdn_target_impedance_sound`)**:
 Proves via reactance monotonicity and quadratic convexity that for EVERY continuous angular frequency
 $\omega \in [\omega_{\min}, \omega_{\max}]$ (not merely a discrete sample grid), the PDN stays below
@@ -979,43 +1120,198 @@ theorem pdn_target_impedance_sound
     2 * omega ≤ p.cavityFirstModeRadPerSec ∧
     pdnImpedanceMagSqOhmSq p omega ≤ pdnTargetImpedanceOhm p * pdnTargetImpedanceOhm p ∧
     zMag ≤ pdnTargetImpedanceOhm p := by
-  unfold checkPdnTargetImpedance at hOk
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
-  obtain ⟨⟨⟨⟨⟨hRip, hPhys⟩, hOmRange⟩, hCav⟩, hLoSq⟩, hHiSq⟩ := hOk
-  have hOmPos : 0 < omega := by grind
-  have hIndLo : p.omegaMinRadPerSec * p.spreadingInductanceHenry ≤ omega * p.spreadingInductanceHenry :=
-    Rat.mul_le_mul_of_nonneg_right hBand.1 hPhys.2.1
-  have hIndHi : omega * p.spreadingInductanceHenry ≤ p.omegaMaxRadPerSec * p.spreadingInductanceHenry :=
-    Rat.mul_le_mul_of_nonneg_right hBand.2 hPhys.2.1
-  have hCapDenLoPos : 0 < p.omegaMinRadPerSec * p.planePlusDecapFarad :=
-    Rat.mul_pos hOmRange.1 hPhys.2.2
-  have hCapDenPos : 0 < omega * p.planePlusDecapFarad :=
-    Rat.mul_pos hOmPos hPhys.2.2
-  have hCapDenHiPos : 0 < p.omegaMaxRadPerSec * p.planePlusDecapFarad :=
-    Rat.mul_pos (by grind) hPhys.2.2
-  have hInvHiLe : 1 / (omega * p.planePlusDecapFarad) ≤
-      1 / (p.omegaMinRadPerSec * p.planePlusDecapFarad) :=
-    (rat_div_mono_interval (by grind) ⟨Rat.le_refl, Rat.le_refl⟩ hCapDenLoPos
-      ⟨Rat.mul_le_mul_of_nonneg_right hBand.1 (Rat.le_of_lt hPhys.2.2), Rat.le_refl⟩).2
-  have hInvLoLe : 1 / (p.omegaMaxRadPerSec * p.planePlusDecapFarad) ≤
-      1 / (omega * p.planePlusDecapFarad) :=
-    (rat_div_mono_interval (by grind) ⟨Rat.le_refl, Rat.le_refl⟩ hCapDenPos
-      ⟨Rat.le_refl, Rat.mul_le_mul_of_nonneg_right hBand.2 (Rat.le_of_lt hPhys.2.2)⟩).1
-  have hReactLo : pdnReactanceOhm p p.omegaMinRadPerSec ≤ pdnReactanceOhm p omega := by
-    unfold pdnReactanceOhm; grind
-  have hReactHi : pdnReactanceOhm p omega ≤ pdnReactanceOhm p p.omegaMaxRadPerSec := by
-    unfold pdnReactanceOhm; grind
-  let zT := pdnTargetImpedanceOhm p
-  have hReactSqBnd : pdnReactanceOhm p omega * pdnReactanceOhm p omega ≤
-      zT * zT - p.esrOhm * p.esrOhm :=
-    rat_sq_bounded_on_interval hReactLo hReactHi
-      (by unfold pdnImpedanceMagSqOhmSq at hLoSq; dsimp only [zT]; grind)
-      (by unfold pdnImpedanceMagSqOhmSq at hHiSq; dsimp only [zT]; grind)
-  have hImpSq : pdnImpedanceMagSqOhmSq p omega ≤ zT * zT := by
-    unfold pdnImpedanceMagSqOhmSq; dsimp only [zT] at hReactSqBnd ⊢; grind
-  have hzTNonneg : 0 ≤ zT := Rat.le_of_lt (rat_div_pos hRip.1 hRip.2)
+  obtain ⟨hRip1, hRip2, hCav, hImpSq⟩ := pdn_impedance_sq_le_target_sq p hOk omega hBand
+  have hzTNonneg : 0 ≤ pdnTargetImpedanceOhm p := Rat.le_of_lt (rat_div_pos hRip1 hRip2)
   have _ := hzNonneg
-  refine ⟨by grind, hImpSq, rat_le_of_sq_le_sq hzTNonneg (by rw [hzSq]; exact hImpSq)⟩
+  exact ⟨hCav, hImpSq, rat_le_of_sq_le_sq hzTNonneg (by rw [hzSq]; exact hImpSq)⟩
+
+/-- Conservative lower bound on $\pi^2$ ($\pi_{\text{lo}} = 314159 / 100000 < \pi$) for $\text{TM}_{10}$ cavity mode bounds. -/
+def piLoRat : Rat := 314159 / 100000
+
+/-- Derived physical $\text{TM}_{10}$ / $\text{TM}_{01}$ parallel-plate cavity resonance lower bound
+$\omega_{10,\text{lo}}^2 = \frac{\pi_{\text{lo}}^2 c_0^2}{\varepsilon_r \max(L_x, L_y)^2}$ in $(\text{rad/s})^2$ from plane dimensions
+`planeLenNm`, `planeWidNm` ($\text{nm}$) and substrate `dkPermille` ($1000 \cdot \varepsilon_r$). -/
+def planePairTm10RadPerSecSqLower (planeLenNm planeWidNm dkPermille : Nat) : Rat :=
+  let maxSpanNm : Nat := max planeLenNm planeWidNm
+  let num : Rat := piLoRat * piLoRat * (c0MetersPerSec : Rat) * (c0MetersPerSec : Rat) *
+    1000000000000000000 * 1000
+  let den : Rat := (dkPermille : Rat) * (maxSpanNm : Rat) * (maxSpanNm : Rat)
+  num / den
+
+/-- Verify that `p.cavityFirstModeRadPerSec` is physically bounded by the rectangular plane-pair
+$\text{TM}_{10}$ cavity resonance of `(planeLenNm, planeWidNm, dkPermille)` AND `checkPdnTargetImpedance p` holds. -/
+def checkPlanePairGeometryResonance
+    (p : PdnPlanePairSpec) (planeLenNm planeWidNm dkPermille : Nat) : Bool :=
+  checkPdnTargetImpedance p &&
+  decide (0 < planeLenNm ∧ 0 < planeWidNm ∧ 1000 ≤ dkPermille) &&
+  decide (0 < p.cavityFirstModeRadPerSec) &&
+  decide (p.cavityFirstModeRadPerSec * p.cavityFirstModeRadPerSec ≤
+    planePairTm10RadPerSecSqLower planeLenNm planeWidNm dkPermille)
+
+example : checkPlanePairGeometryResonance sampleCorePdnSpec 50000000 40000000 4200 = true := by
+  decide +kernel
+
+/-- **Geometry-Derived Plane-Pair $\text{TM}_{10}$ Cavity Resonance Soundness (`planePairGeometryResonance_sound`)**:
+Prevents unchecked `cavityFirstModeRadPerSec` inflation by proving $(2 \omega)^2 \le \omega_{10,\text{lo}}^2(L_x, L_y, \varepsilon_r)$
+across the entire continuous frequency band $\omega \in [\omega_{\min}, \omega_{\max}]$. -/
+theorem planePairGeometryResonance_sound
+    (p : PdnPlanePairSpec) (planeLenNm planeWidNm dkPermille : Nat)
+    (hOk : checkPlanePairGeometryResonance p planeLenNm planeWidNm dkPermille = true)
+    (omega : Rat) (hBand : p.omegaMinRadPerSec ≤ omega ∧ omega ≤ p.omegaMaxRadPerSec) :
+    0 < planeLenNm ∧ 0 < planeWidNm ∧ 1000 ≤ dkPermille ∧
+    (2 * omega) * (2 * omega) ≤ planePairTm10RadPerSecSqLower planeLenNm planeWidNm dkPermille ∧
+    pdnImpedanceMagSqOhmSq p omega ≤ pdnTargetImpedanceOhm p * pdnTargetImpedanceOhm p := by
+  unfold checkPlanePairGeometryResonance at hOk
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
+  obtain ⟨⟨⟨hPdn, hGeom⟩, hCavPos⟩, hCavSq⟩ := hOk
+  obtain ⟨_, _, h2OmLe, hImpSq⟩ := pdn_impedance_sq_le_target_sq p hPdn omega hBand
+  have hOmPos : 0 < omega := by
+    unfold checkPdnTargetImpedance at hPdn
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hPdn
+    have := hPdn.1.1.1.2.1; grind
+  have h1 : (2 * omega) * (2 * omega) ≤ (2 * omega) * p.cavityFirstModeRadPerSec :=
+    Rat.mul_le_mul_of_nonneg_left h2OmLe (by grind)
+  have h2 : (2 * omega) * p.cavityFirstModeRadPerSec ≤
+      p.cavityFirstModeRadPerSec * p.cavityFirstModeRadPerSec :=
+    Rat.mul_le_mul_of_nonneg_right h2OmLe (Rat.le_of_lt hCavPos)
+  exact ⟨hGeom.1, hGeom.2.1, hGeom.2.2, by grind, hImpSq⟩
+
+/-! ## 5. Coupled Electro-Thermal Trace Joule Self-Heating & TCR Runaway Immunity -/
+
+/-- Coupled electro-thermal copper trace specification with linear TCR self-heating feedback
+$R(\Delta T) = R_{\text{wc}} (1 + \alpha_{\text{TCR}} \Delta T)$ over the worst-case DFM over-etched cross-section. -/
+structure TraceElectroThermalSpec where
+  traceLengthNm : Nat
+  rhoCuOhmNm : Rat
+  tcrPerKelvin : Rat
+  thetaJaKelvinPerWatt : Rat
+  currentAmp : Rat
+  ambientTempC : Rat
+  maxDeltaTKelvin : Rat
+  laminateTgDeratedC : Rat
+  deriving DecidableEq, Repr
+
+/-- Worst-case cold DC trace resistance $R_{\text{wc}} = \frac{\rho_0 \ell}{(w_{\text{nom}} - \delta_{\text{etch}}) t_{\text{Cu}}}$ ($\Omega$)
+at maximum two-sided etch undercut $\delta_{\text{etch}}$. -/
+def worstCaseTraceResistanceOhm
+    (fab : PcbFabCapabilities) (layout : PcbLayoutRules) (s : TraceElectroThermalSpec) : Rat :=
+  let wWorstNm : Nat := layout.nomTraceWidthNm - etchVariationBoundNm fab
+  (s.rhoCuOhmNm * (s.traceLengthNm : Rat)) / ((wWorstNm : Rat) * (fab.copperThickNm : Rat))
+
+/-- Uncoupled cold Joule temperature rise $\Delta T_0 = \theta_{\text{JA}} I^2 R_{\text{wc}}$ ($\text{K}$). -/
+def traceColdDeltaTKelvin
+    (fab : PcbFabCapabilities) (layout : PcbLayoutRules) (s : TraceElectroThermalSpec) : Rat :=
+  s.thetaJaKelvinPerWatt * (s.currentAmp * s.currentAmp * worstCaseTraceResistanceOhm fab layout s)
+
+/-- Coupled electro-thermal feedback stability denominator $D_{\text{th}} = 1 - \alpha_{\text{TCR}} \Delta T_0$. -/
+def traceThermalDenom
+    (fab : PcbFabCapabilities) (layout : PcbLayoutRules) (s : TraceElectroThermalSpec) : Rat :=
+  1 - s.tcrPerKelvin * traceColdDeltaTKelvin fab layout s
+
+/-- Exact coupled electro-thermal equilibrium temperature rise $\Delta T_{\text{eq}} = \Delta T_0 / (1 - \alpha_{\text{TCR}} \Delta T_0)$ ($\text{K}$). -/
+def traceEquilibriumDeltaTKelvin
+    (fab : PcbFabCapabilities) (layout : PcbLayoutRules) (s : TraceElectroThermalSpec) : Rat :=
+  traceColdDeltaTKelvin fab layout s / traceThermalDenom fab layout s
+
+/-- Coupled electro-thermal trace checker: verifies DFM trace envelope, strict thermal-runaway stability
+margin $0 < 1 - \alpha_{\text{TCR}} \theta_{\text{JA}} I^2 R_{\text{wc}}$, $\Delta T_{\text{eq}} \le \Delta T_{\max}$, and $T_{\text{amb}} + \Delta T_{\text{eq}} \le T_{g,\text{derated}}$. -/
+def checkTraceElectroThermal
+    (fab : PcbFabCapabilities) (layout : PcbLayoutRules) (s : TraceElectroThermalSpec) : Bool :=
+  let denom := traceThermalDenom fab layout s
+  let dtEq := traceEquilibriumDeltaTKelvin fab layout s
+  checkPcbDfmEnvelope fab layout &&
+  decide (0 < s.traceLengthNm) &&
+  decide (0 < s.rhoCuOhmNm ∧ 0 < s.tcrPerKelvin ∧ 0 < s.thetaJaKelvinPerWatt) &&
+  decide (0 ≤ s.currentAmp ∧ 0 < s.maxDeltaTKelvin) &&
+  decide (0 < denom) &&
+  decide (dtEq ≤ s.maxDeltaTKelvin) &&
+  decide (s.ambientTempC + dtEq ≤ s.laminateTgDeratedC)
+
+def sampleTraceElectroThermal : TraceElectroThermalSpec where
+  traceLengthNm := 50000000
+  rhoCuOhmNm := 1724 / 100
+  tcrPerKelvin := 393 / 100000
+  thetaJaKelvinPerWatt := 35
+  currentAmp := 3 / 2
+  ambientTempC := 55
+  maxDeltaTKelvin := 20
+  laminateTgDeratedC := 130
+
+example :
+    checkTraceElectroThermal ipcClass3RfFab ipcClass3RfLayout sampleTraceElectroThermal = true := by
+  decide +kernel
+
+/-- **Coupled Electro-Thermal Equilibrium & Runaway-Immunity Soundness (`traceElectroThermal_sound`)**:
+Certifies over worst-case DFM over-etched copper geometry $w_{\text{wc}} = w_{\text{nom}} - \delta_{\text{etch}} \ge w_{\min} > 0$:
+1. Positive worst-case DC resistance $R_{\text{wc}} > 0$ and thermal stability margin $0 < 1 - \alpha_{\text{TCR}} \Delta T_0$,
+2. Exact coupled Joule–TCR fixed-point balance $\Delta T_{\text{eq}} = \theta_{\text{JA}} I^2 R_{\text{wc}} (1 + \alpha_{\text{TCR}} \Delta T_{\text{eq}})$,
+3. Certified thermal ceiling $0 \le \Delta T_{\text{eq}} \le \Delta T_{\max}$ and $T_{\text{amb}} + \Delta T_{\text{eq}} \le T_{g,\text{derated}}$. -/
+theorem traceElectroThermal_sound
+    (fab : PcbFabCapabilities) (layout : PcbLayoutRules) (s : TraceElectroThermalSpec)
+    (hOk : checkTraceElectroThermal fab layout s = true) :
+    let rWc := worstCaseTraceResistanceOhm fab layout s
+    let dt0 := traceColdDeltaTKelvin fab layout s
+    let denom := traceThermalDenom fab layout s
+    let dtEq := traceEquilibriumDeltaTKelvin fab layout s
+    fab.minTraceWidthNm ≤ layout.nomTraceWidthNm - etchVariationBoundNm fab ∧
+    0 < rWc ∧
+    0 < denom ∧
+    0 ≤ dtEq ∧
+    dtEq = dt0 * (1 + s.tcrPerKelvin * dtEq) ∧
+    dtEq ≤ s.maxDeltaTKelvin ∧
+    s.ambientTempC + dtEq ≤ s.laminateTgDeratedC := by
+  unfold checkTraceElectroThermal at hOk
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
+  obtain ⟨⟨⟨⟨⟨⟨hDfm, hLen⟩, hPhys⟩, hCur⟩, hDenPos⟩, hDtMax⟩, hTg⟩ := hOk
+  unfold checkPcbDfmEnvelope at hDfm
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hDfm
+  have hMinWPos : 0 < fab.minTraceWidthNm := hDfm.1.1.1.1.1.1.1.1.1.1.1.1.1
+  have hCuPos : 0 < fab.copperThickNm := hDfm.1.1.1.1.1.1.1.1.1.1.1.2.1
+  have hWidthEtch : fab.minTraceWidthNm + etchVariationBoundNm fab ≤ layout.nomTraceWidthNm :=
+    hDfm.1.1.1.1.1.1.1.2
+  have hwWcPos : 0 < layout.nomTraceWidthNm - etchVariationBoundNm fab := by omega
+  have hrWcPos : 0 < worstCaseTraceResistanceOhm fab layout s := by
+    unfold worstCaseTraceResistanceOhm
+    have hNum : 0 < s.rhoCuOhmNm * (s.traceLengthNm : Rat) :=
+      Rat.mul_pos hPhys.1 (by exact_mod_cast hLen)
+    have hDen : 0 < ((layout.nomTraceWidthNm - etchVariationBoundNm fab : Nat) : Rat) * (fab.copperThickNm : Rat) :=
+      Rat.mul_pos (by exact_mod_cast hwWcPos) (by exact_mod_cast hCuPos)
+    exact rat_div_pos hNum hDen
+  have hdt0Nonneg : 0 ≤ traceColdDeltaTKelvin fab layout s := by
+    unfold traceColdDeltaTKelvin
+    exact Rat.mul_nonneg (Rat.le_of_lt hPhys.2.2)
+      (Rat.mul_nonneg (rat_sq_nonneg s.currentAmp) (Rat.le_of_lt hrWcPos))
+  have hdtEqNonneg : 0 ≤ traceEquilibriumDeltaTKelvin fab layout s :=
+    rat_div_nonneg hdt0Nonneg hDenPos
+  have hFixedPt : traceEquilibriumDeltaTKelvin fab layout s =
+      traceColdDeltaTKelvin fab layout s *
+        (1 + s.tcrPerKelvin * traceEquilibriumDeltaTKelvin fab layout s) := by
+    let dt0 := traceColdDeltaTKelvin fab layout s
+    let denom := traceThermalDenom fab layout s
+    let dtEq := traceEquilibriumDeltaTKelvin fab layout s
+    have hDenNe : denom ≠ 0 := Rat.ne_of_gt hDenPos
+    have hCancel : dtEq * denom = dt0 := Rat.div_mul_cancel hDenNe
+    have hDef : denom = 1 - s.tcrPerKelvin * dt0 := rfl
+    have hProd : (dtEq - dt0 * (1 + s.tcrPerKelvin * dtEq)) * denom = 0 := by
+      have hDist : (dtEq - dt0 * (1 + s.tcrPerKelvin * dtEq)) * denom =
+          dtEq * denom - dt0 * denom - dt0 * s.tcrPerKelvin * (dtEq * denom) := by grind
+      rw [hDist, hCancel, hDef]; grind
+    rcases Rat.mul_eq_zero.mp hProd with hZero | hAbs
+    · dsimp only [dtEq, dt0] at hZero; grind
+    · exact absurd hAbs hDenNe
+  exact ⟨by omega, hrWcPos, hDenPos, hdtEqNonneg, hFixedPt, hDtMax, hTg⟩
+
+/-- **Thermal Runaway Impossibility (`traceThermalRunaway_impossible`)**:
+When positive TCR loop gain reaches or exceeds unity ($1 - \alpha_{\text{TCR}} \Delta T_0 \le 0$) under
+non-zero cold power ($\Delta T_0 > 0$), NO non-negative steady-state equilibrium $\Delta T \ge 0$ exists. -/
+theorem traceThermalRunaway_impossible
+    (dt0 tcr dt : Rat) (hDt0Pos : 0 < dt0) (hRunaway : 1 - tcr * dt0 ≤ 0) (hNonneg : 0 ≤ dt) :
+    dt ≠ dt0 * (1 + tcr * dt) := by
+  intro hEq
+  have h1 : (1 - tcr * dt0) * dt = dt0 := by grind
+  have h2 : (1 - tcr * dt0) * dt ≤ 0 := by
+    have := Rat.mul_le_mul_of_nonneg_right hRunaway hNonneg; grind
+  grind
 
 /-- Unified board-level multiphysics checker combining PCB DFM, FEM-bracketed coupled differential
 impedance & skew, high-speed return-path slot continuity, Faraday fence shielding, and 2D PDN target impedance. -/

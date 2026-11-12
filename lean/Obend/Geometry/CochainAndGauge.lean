@@ -328,22 +328,33 @@ theorem d2_zero (K : CellComplex3D) : d2 K (zeroCochain K.numF) = zeroCochain K.
   rw [sumUpTo_congr K.numF _ (fun _ => 0) (fun f hf => by rw [vecEntry_mkVec K.numF _ f hf]; grind)]
   exact sumUpTo_zero K.numF
 
+theorem d1_add (K : CellComplex3D) (α₁ α₂ : List CanonicalRat) :
+    d1 K (vecAddN K.numE α₁ α₂) = vecAddN K.numF (d1 K α₁) (d1 K α₂) := by
+  unfold d1 vecAddN
+  refine mkVec_ext K.numF _ _ (fun f hf => ?_)
+  rw [vecEntry_mkVec K.numF _ f hf, vecEntry_mkVec K.numF _ f hf, ← sumUpTo_add]
+  refine sumUpTo_congr K.numE _ _ (fun e he => ?_)
+  rw [vecEntry_mkVec K.numE _ e he]; grind
+
+/-- **Abelian 1-Cochain Gauge Invariance (`abelian_gauge_invariance`)**:
+    Adding any exact coboundary $d_0 \chi$ to a 1-cochain gauge potential $A \in C^1(K)$ leaves
+    its magnetic / Abelian 2-cochain curvature $F = d_1 A$ strictly invariant: $d_1 (A + d_0 \chi) = d_1 A$. -/
+theorem abelian_gauge_invariance (K : CellComplex3D) (hExact : checkComplexExact K = true)
+    (A χ : List CanonicalRat) :
+    d1 K (vecAddN K.numE A (d0 K χ)) = d1 K A := by
+  rw [d1_add, (coboundary_sq_zero K hExact χ A).1]
+  unfold vecAddN d1
+  refine mkVec_ext K.numF _ _ (fun f hf => ?_)
+  rw [vecEntry_mkVec K.numF _ f hf, vecEntry_zeroCochain]; grind
+
 /-- Canonical 3D unit cube cell complex (8 vertices, 12 edges, 6 oriented plaquettes, 1 3-cell). -/
 def unitCubeComplex3D : CellComplex3D where
   numV := 8
-  edges :=
-    [ (0, 1), (2, 3), (4, 5), (6, 7)   -- x-edges: 0, 1, 2, 3
-    , (0, 2), (1, 3), (4, 6), (5, 7)   -- y-edges: 4, 5, 6, 7
-    , (0, 4), (1, 5), (2, 6), (3, 7) ] -- z-edges: 8, 9, 10, 11
-  faces :=
-    [ [(0, 1), (5, 1), (1, -1), (4, -1)]    -- f0: z=0 bottom  (xy)
-    , [(2, 1), (7, 1), (3, -1), (6, -1)]    -- f1: z=1 top     (xy)
-    , [(0, 1), (9, 1), (2, -1), (8, -1)]    -- f2: y=0 front   (xz)
-    , [(1, 1), (11, 1), (3, -1), (10, -1)]  -- f3: y=1 back    (xz)
-    , [(4, 1), (10, 1), (6, -1), (8, -1)]   -- f4: x=0 left    (yz)
-    , [(5, 1), (11, 1), (7, -1), (9, -1)] ] -- f5: x=1 right   (yz)
-  volumes :=
-    [ [(1, 1), (0, -1), (2, 1), (3, -1), (5, 1), (4, -1)] ]
+  edges := [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)]
+  faces := [ [(0, 1), (5, 1), (1, -1), (4, -1)], [(2, 1), (7, 1), (3, -1), (6, -1)]
+           , [(0, 1), (9, 1), (2, -1), (8, -1)], [(1, 1), (11, 1), (3, -1), (10, -1)]
+           , [(4, 1), (10, 1), (6, -1), (8, -1)], [(5, 1), (11, 1), (7, -1), (9, -1)] ]
+  volumes := [ [(1, 1), (0, -1), (2, 1), (3, -1), (5, 1), (4, -1)] ]
 
 /-! ## 2. Staggered DEC Yee Electromagnetics, Charge Continuity & SPD Hodge–Laplacian $\Delta_0$ -/
 
@@ -421,52 +432,38 @@ theorem decMaxwell_divB_invariant (K : CellComplex3D) (M : DecHodgeMetric)
 
 private theorem divDual0_add (K : CellComplex3D) (u v : List CanonicalRat) :
     divDual0 K (vecAddN K.numE u v) = vecAddN K.numV (divDual0 K u) (divDual0 K v) := by
-  unfold divDual0 bdry1 vecScaleN vecAddN
-  refine mkVec_ext K.numV _ _ (fun i hi => ?_)
-  rw [vecEntry_mkVec K.numV _ i hi, vecEntry_mkVec K.numV _ i hi, vecEntry_mkVec K.numV _ i hi,
-      vecEntry_mkVec K.numV _ i hi, vecEntry_mkVec K.numV _ i hi]
+  unfold divDual0 bdry1 vecScaleN vecAddN; refine mkVec_ext K.numV _ _ (fun i hi => ?_)
+  simp only [vecEntry_mkVec K.numV _ i hi]
   have hSum : sumUpTo K.numE (fun e => inc01 K e i * vecEntry (mkVec K.numE (fun k => vecEntry u k + vecEntry v k)) e) =
-      sumUpTo K.numE (fun e => inc01 K e i * vecEntry u e) +
-      sumUpTo K.numE (fun e => inc01 K e i * vecEntry v e) := by
-    rw [← sumUpTo_add]
-    exact sumUpTo_congr K.numE _ _ (fun e he => by rw [vecEntry_mkVec K.numE _ e he]; grind)
+      sumUpTo K.numE (fun e => inc01 K e i * vecEntry u e) + sumUpTo K.numE (fun e => inc01 K e i * vecEntry v e) := by
+    rw [← sumUpTo_add]; exact sumUpTo_congr K.numE _ _ (fun e he => by rw [vecEntry_mkVec K.numE _ e he]; grind)
   rw [hSum]; grind
 
 private theorem divDual0_sub (K : CellComplex3D) (u v : List CanonicalRat) :
     divDual0 K (vecSubN K.numE u v) = vecSubN K.numV (divDual0 K u) (divDual0 K v) := by
-  unfold divDual0 bdry1 vecScaleN vecSubN
-  refine mkVec_ext K.numV _ _ (fun i hi => ?_)
-  rw [vecEntry_mkVec K.numV _ i hi, vecEntry_mkVec K.numV _ i hi, vecEntry_mkVec K.numV _ i hi,
-      vecEntry_mkVec K.numV _ i hi, vecEntry_mkVec K.numV _ i hi]
+  unfold divDual0 bdry1 vecScaleN vecSubN; refine mkVec_ext K.numV _ _ (fun i hi => ?_)
+  simp only [vecEntry_mkVec K.numV _ i hi]
   have hSum : sumUpTo K.numE (fun e => inc01 K e i * vecEntry (mkVec K.numE (fun k => vecEntry u k - vecEntry v k)) e) =
-      sumUpTo K.numE (fun e => inc01 K e i * vecEntry u e) -
-      sumUpTo K.numE (fun e => inc01 K e i * vecEntry v e) := by
-    rw [← sumUpTo_sub]
-    exact sumUpTo_congr K.numE _ _ (fun e he => by rw [vecEntry_mkVec K.numE _ e he]; grind)
+      sumUpTo K.numE (fun e => inc01 K e i * vecEntry u e) - sumUpTo K.numE (fun e => inc01 K e i * vecEntry v e) := by
+    rw [← sumUpTo_sub]; exact sumUpTo_congr K.numE _ _ (fun e he => by rw [vecEntry_mkVec K.numE _ e he]; grind)
   rw [hSum]; grind
 
 private theorem divDual0_scale (K : CellComplex3D) (s : CanonicalRat) (u : List CanonicalRat) :
     divDual0 K (vecScaleN K.numE s u) = vecScaleN K.numV s (divDual0 K u) := by
-  unfold divDual0 bdry1 vecScaleN
-  refine mkVec_ext K.numV _ _ (fun i hi => ?_)
-  rw [vecEntry_mkVec K.numV _ i hi, vecEntry_mkVec K.numV _ i hi, vecEntry_mkVec K.numV _ i hi]
+  unfold divDual0 bdry1 vecScaleN; refine mkVec_ext K.numV _ _ (fun i hi => ?_)
+  simp only [vecEntry_mkVec K.numV _ i hi]
   have hSum : sumUpTo K.numE (fun e => inc01 K e i * vecEntry (mkVec K.numE (fun k => s * vecEntry u k)) e) =
       s * sumUpTo K.numE (fun e => inc01 K e i * vecEntry u e) := by
-    rw [← sumUpTo_scale]
-    exact sumUpTo_congr K.numE _ _ (fun e he => by rw [vecEntry_mkVec K.numE _ e he]; grind)
+    rw [← sumUpTo_scale]; exact sumUpTo_congr K.numE _ _ (fun e he => by rw [vecEntry_mkVec K.numE _ e he]; grind)
   rw [hSum]; grind
 
 private theorem divDual0_curlDual1_zero (K : CellComplex3D) (hExact : checkComplexExact K = true)
-    (h : List CanonicalRat) :
-    divDual0 K (curlDual1 K h) = zeroCochain K.numV := by
-  unfold divDual0 curlDual1
-  rw [bdry1_bdry2_zero K hExact h]
-  unfold vecScaleN zeroCochain
-  refine mkVec_ext K.numV _ _ (fun v hv => ?_)
-  rw [vecEntry_mkVec K.numV _ v hv]; grind
+    (h : List CanonicalRat) : divDual0 K (curlDual1 K h) = zeroCochain K.numV := by
+  unfold divDual0 curlDual1; rw [bdry1_bdry2_zero K hExact h]; unfold vecScaleN zeroCochain
+  exact mkVec_ext K.numV _ _ (fun v hv => by rw [vecEntry_mkVec K.numV _ v hv]; grind)
 
 private theorem rat_mul_div_cancel (s x : CanonicalRat) (hs : 0 < s) : s * (x / s) = x := by
-  have hne : s ≠ 0 := by grind
+  have : s ≠ 0 := by grind
   grind
 
 /-- **Multi-Step Charge Continuity & Gauss's Law Preservation (`decMaxwell_charge_continuity`)**:
@@ -681,49 +678,31 @@ def scale (c : CanonicalRat) (A : Mat2Rat) : Mat2Rat := ⟨c * A.a11, c * A.a12,
 def transpose (A : Mat2Rat) : Mat2Rat := ⟨A.a11, A.a21, A.a12, A.a22⟩
 def det (A : Mat2Rat) : CanonicalRat := A.a11 * A.a22 - A.a12 * A.a21
 def trace (A : Mat2Rat) : CanonicalRat := A.a11 + A.a22
-
-def mul (A B : Mat2Rat) : Mat2Rat where
-  a11 := A.a11 * B.a11 + A.a12 * B.a21
-  a12 := A.a11 * B.a12 + A.a12 * B.a22
-  a21 := A.a21 * B.a11 + A.a22 * B.a21
-  a22 := A.a21 * B.a12 + A.a22 * B.a22
-
-def mulVec (A : Mat2Rat) (v : Vec2Rat) : Vec2Rat where
-  x := A.a11 * v.x + A.a12 * v.y
-  y := A.a21 * v.x + A.a22 * v.y
-
+def mul (A B : Mat2Rat) : Mat2Rat :=
+  ⟨A.a11 * B.a11 + A.a12 * B.a21, A.a11 * B.a12 + A.a12 * B.a22,
+   A.a21 * B.a11 + A.a22 * B.a21, A.a21 * B.a12 + A.a22 * B.a22⟩
+def mulVec (A : Mat2Rat) (v : Vec2Rat) : Vec2Rat :=
+  ⟨A.a11 * v.x + A.a12 * v.y, A.a21 * v.x + A.a22 * v.y⟩
 theorem mul_assoc (A B C : Mat2Rat) : mul (mul A B) C = mul A (mul B C) := by
   cases A; cases B; cases C; simp only [mul, mk.injEq]; exact ⟨by grind, by grind, by grind, by grind⟩
-
 theorem id_mul (A : Mat2Rat) : mul id A = A := by
   cases A; simp only [mul, id, mk.injEq]; exact ⟨by grind, by grind, by grind, by grind⟩
-
 theorem mul_id (A : Mat2Rat) : mul A id = A := by
   cases A; simp only [mul, id, mk.injEq]; exact ⟨by grind, by grind, by grind, by grind⟩
-
 theorem mul_mulVec (A B : Mat2Rat) (v : Vec2Rat) : mulVec (mul A B) v = mulVec A (mulVec B v) := by
   cases A; cases B; cases v; simp only [mul, mulVec, Vec2Rat.mk.injEq]; exact ⟨by grind, by grind⟩
-
 theorem id_mulVec (v : Vec2Rat) : mulVec id v = v := by
   cases v; simp only [mulVec, id, Vec2Rat.mk.injEq]; exact ⟨by grind, by grind⟩
-
-theorem sub_mulVec (A B : Mat2Rat) (v : Vec2Rat) :
-    mulVec (sub A B) v = Vec2Rat.sub (mulVec A v) (mulVec B v) := by
+theorem sub_mulVec (A B : Mat2Rat) (v : Vec2Rat) : mulVec (sub A B) v = Vec2Rat.sub (mulVec A v) (mulVec B v) := by
   cases A; cases B; cases v; simp only [sub, mulVec, Vec2Rat.sub, Vec2Rat.mk.injEq]; exact ⟨by grind, by grind⟩
-
-theorem mulVec_sub (A : Mat2Rat) (u v : Vec2Rat) :
-    mulVec A (Vec2Rat.sub u v) = Vec2Rat.sub (mulVec A u) (mulVec A v) := by
+theorem mulVec_sub (A : Mat2Rat) (u v : Vec2Rat) : mulVec A (Vec2Rat.sub u v) = Vec2Rat.sub (mulVec A u) (mulVec A v) := by
   cases A; cases u; cases v; simp only [mulVec, Vec2Rat.sub, Vec2Rat.mk.injEq]; exact ⟨by grind, by grind⟩
-
 theorem trace_mul_comm (A B : Mat2Rat) : trace (mul A B) = trace (mul B A) := by
   cases A; cases B; unfold trace mul; dsimp; grind
-
 theorem mul_sub (A B C : Mat2Rat) : mul A (sub B C) = sub (mul A B) (mul A C) := by
   cases A; cases B; cases C; simp only [mul, sub, mk.injEq]; exact ⟨by grind, by grind, by grind, by grind⟩
-
 theorem sub_mul (A B C : Mat2Rat) : mul (sub A B) C = sub (mul A C) (mul B C) := by
   cases A; cases B; cases C; simp only [mul, sub, mk.injEq]; exact ⟨by grind, by grind, by grind, by grind⟩
-
 end Mat2Rat
 
 /-- Invertible $2 \times 2$ gauge link element $U \in GL_2(\mathbb{Q})$ carrying explicit inverse $U^{-1}$. -/
@@ -778,40 +757,23 @@ theorem covariant_commutator_eq_curvature (conn : GaugeConnection2D)
   dsimp only [covDiffX, covDiffY, plaquetteCurvature, wilsonPlaquette, transportedCornerStalk]
   rw [Mat2Rat.mulVec_sub, Mat2Rat.mulVec_sub, Mat2Rat.sub_mulVec, Mat2Rat.id_mulVec,
       ← Mat2Rat.mul_mulVec, ← Mat2Rat.mul_mulVec, ← Mat2Rat.mul_mulVec]
+  have invR : ∀ (g : GaugeElem2) (Y : Mat2Rat), Mat2Rat.mul g.fwd (Mat2Rat.mul g.inv Y) = Y :=
+    fun g Y => by rw [← Mat2Rat.mul_assoc, g.inv_r, Mat2Rat.id_mul]
   have hCancel :
-      Mat2Rat.mul
-        (Mat2Rat.mul (conn.uy i j).inv
-          (Mat2Rat.mul (conn.ux i (j + 1)).inv
-            (Mat2Rat.mul (conn.uy (i + 1) j).fwd (conn.ux i j).fwd)))
+      Mat2Rat.mul (Mat2Rat.mul (conn.uy i j).inv (Mat2Rat.mul (conn.ux i (j + 1)).inv
+        (Mat2Rat.mul (conn.uy (i + 1) j).fwd (conn.ux i j).fwd)))
         (Mat2Rat.mul (conn.ux i j).inv (conn.uy (i + 1) j).inv) =
       Mat2Rat.mul (conn.uy i j).inv (conn.ux i (j + 1)).inv := by
-    calc
-      Mat2Rat.mul
-          (Mat2Rat.mul (conn.uy i j).inv
-            (Mat2Rat.mul (conn.ux i (j + 1)).inv
-              (Mat2Rat.mul (conn.uy (i + 1) j).fwd (conn.ux i j).fwd)))
-          (Mat2Rat.mul (conn.ux i j).inv (conn.uy (i + 1) j).inv)
-        = Mat2Rat.mul (conn.uy i j).inv
-            (Mat2Rat.mul (conn.ux i (j + 1)).inv
-              (Mat2Rat.mul (conn.uy (i + 1) j).fwd
-                (Mat2Rat.mul (Mat2Rat.mul (conn.ux i j).fwd (conn.ux i j).inv) (conn.uy (i + 1) j).inv))) := by
-          simp only [Mat2Rat.mul_assoc]
-      _ = Mat2Rat.mul (conn.uy i j).inv
-            (Mat2Rat.mul (conn.ux i (j + 1)).inv
-              (Mat2Rat.mul (conn.uy (i + 1) j).fwd (conn.uy (i + 1) j).inv)) := by
-          rw [(conn.ux i j).inv_r, Mat2Rat.id_mul]
-      _ = Mat2Rat.mul (conn.uy i j).inv (conn.ux i (j + 1)).inv := by
-          rw [(conn.uy (i + 1) j).inv_r, Mat2Rat.mul_id]
+    simp only [Mat2Rat.mul_assoc, invR, GaugeElem2.inv_r, Mat2Rat.mul_id]
   rw [hCancel]
   generalize Mat2Rat.mulVec (Mat2Rat.mul (conn.ux i j).inv (conn.uy (i + 1) j).inv) (ψ (i + 1) (j + 1)) = aVec
   generalize Mat2Rat.mulVec (Mat2Rat.mul (conn.uy i j).inv (conn.ux i (j + 1)).inv) (ψ (i + 1) (j + 1)) = bVec
   generalize Mat2Rat.mulVec (conn.ux i j).inv (ψ (i + 1) j) = cVec
   generalize Mat2Rat.mulVec (conn.uy i j).inv (ψ i (j + 1)) = dVec
   generalize ψ i j = eVec
-  rcases aVec with ⟨ax, ay⟩; rcases bVec with ⟨bx, by_⟩
-  rcases cVec with ⟨cx, cy⟩; rcases dVec with ⟨dx, dy⟩; rcases eVec with ⟨ex, ey⟩
-  simp only [Vec2Rat.sub, Vec2Rat.mk.injEq]
-  exact ⟨by grind, by grind⟩
+  rcases aVec with ⟨ax, ay⟩; rcases bVec with ⟨bx, by_⟩; rcases cVec with ⟨cx, cy⟩
+  rcases dVec with ⟨dx, dy⟩; rcases eVec with ⟨ex, ey⟩
+  simp only [Vec2Rat.sub, Vec2Rat.mk.injEq]; exact ⟨by grind, by grind⟩
 
 /-- Flat gauge connections ($F_\square \equiv 0$) have strictly commuting covariant partials $D_x D_y = D_y D_x$. -/
 theorem flat_connection_commutes (conn : GaugeConnection2D)
@@ -863,21 +825,15 @@ def gaugeTransformElem (gU gV u : GaugeElem2) : GaugeElem2 where
   fwd := Mat2Rat.mul gV.fwd (Mat2Rat.mul u.fwd gU.inv)
   inv := Mat2Rat.mul gU.fwd (Mat2Rat.mul u.inv gV.inv)
   inv_l := by
-    calc
-      Mat2Rat.mul (Mat2Rat.mul gU.fwd (Mat2Rat.mul u.inv gV.inv)) (Mat2Rat.mul gV.fwd (Mat2Rat.mul u.fwd gU.inv))
-        = Mat2Rat.mul gU.fwd (Mat2Rat.mul u.inv (Mat2Rat.mul (Mat2Rat.mul gV.inv gV.fwd) (Mat2Rat.mul u.fwd gU.inv))) := by
-          simp only [Mat2Rat.mul_assoc]
-      _ = Mat2Rat.mul gU.fwd (Mat2Rat.mul (Mat2Rat.mul u.inv u.fwd) gU.inv) := by
-          rw [gV.inv_l, Mat2Rat.id_mul, ← Mat2Rat.mul_assoc u.inv u.fwd gU.inv]
-      _ = Mat2Rat.id := by rw [u.inv_l, Mat2Rat.id_mul, gU.inv_r]
+    have il : ∀ (g : GaugeElem2) (Y : Mat2Rat), Mat2Rat.mul g.inv (Mat2Rat.mul g.fwd Y) = Y :=
+      fun g Y => by rw [← Mat2Rat.mul_assoc, g.inv_l, Mat2Rat.id_mul]
+    simp only [Mat2Rat.mul_assoc, il, GaugeElem2.inv_r]
   inv_r := by
-    calc
-      Mat2Rat.mul (Mat2Rat.mul gV.fwd (Mat2Rat.mul u.fwd gU.inv)) (Mat2Rat.mul gU.fwd (Mat2Rat.mul u.inv gV.inv))
-        = Mat2Rat.mul gV.fwd (Mat2Rat.mul u.fwd (Mat2Rat.mul (Mat2Rat.mul gU.inv gU.fwd) (Mat2Rat.mul u.inv gV.inv))) := by
-          simp only [Mat2Rat.mul_assoc]
-      _ = Mat2Rat.mul gV.fwd (Mat2Rat.mul (Mat2Rat.mul u.fwd u.inv) gV.inv) := by
-          rw [gU.inv_l, Mat2Rat.id_mul, ← Mat2Rat.mul_assoc u.fwd u.inv gV.inv]
-      _ = Mat2Rat.id := by rw [u.inv_r, Mat2Rat.id_mul, gV.inv_r]
+    have il : ∀ (g : GaugeElem2) (Y : Mat2Rat), Mat2Rat.mul g.inv (Mat2Rat.mul g.fwd Y) = Y :=
+      fun g Y => by rw [← Mat2Rat.mul_assoc, g.inv_l, Mat2Rat.id_mul]
+    have ir : ∀ (g : GaugeElem2) (Y : Mat2Rat), Mat2Rat.mul g.fwd (Mat2Rat.mul g.inv Y) = Y :=
+      fun g Y => by rw [← Mat2Rat.mul_assoc, g.inv_r, Mat2Rat.id_mul]
+    simp only [Mat2Rat.mul_assoc, il, ir, GaugeElem2.inv_r]
 
 def gaugeTransformConn (g : Int → Int → GaugeElem2) (conn : GaugeConnection2D) : GaugeConnection2D where
   ux := fun i j => gaugeTransformElem (g i j) (g (i + 1) j) (conn.ux i j)
@@ -901,41 +857,19 @@ theorem gauge_transform_covariance (g : Int → Int → GaugeElem2)
     plaquetteCurvature conn' i j = Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (plaquetteCurvature conn i j) (g i j).inv) ∧
     Mat2Rat.trace (wilsonPlaquette conn' i j) = Mat2Rat.trace (wilsonPlaquette conn i j) := by
   intro conn' ψ'
+  have il : ∀ (g : GaugeElem2) (Y : Mat2Rat), Mat2Rat.mul g.inv (Mat2Rat.mul g.fwd Y) = Y :=
+    fun g Y => by rw [← Mat2Rat.mul_assoc, g.inv_l, Mat2Rat.id_mul]
   have hDx : covDiffX conn' ψ' i j = Mat2Rat.mulVec (g i j).fwd (covDiffX conn ψ i j) := by
-    unfold covDiffX conn' ψ' gaugeTransformConn gaugeTransformSec gaugeTransformElem
-    dsimp only
+    unfold covDiffX conn' ψ' gaugeTransformConn gaugeTransformSec gaugeTransformElem; dsimp only
     rw [Mat2Rat.mulVec_sub, ← Mat2Rat.mul_mulVec, ← Mat2Rat.mul_mulVec]
-    have hMid : Mat2Rat.mul (Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (conn.ux i j).inv (g (i + 1) j).inv)) (g (i + 1) j).fwd =
-        Mat2Rat.mul (g i j).fwd (conn.ux i j).inv := by
-      calc
-        Mat2Rat.mul (Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (conn.ux i j).inv (g (i + 1) j).inv)) (g (i + 1) j).fwd
-          = Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (conn.ux i j).inv (Mat2Rat.mul (g (i + 1) j).inv (g (i + 1) j).fwd)) := by
-            simp only [Mat2Rat.mul_assoc]
-        _ = Mat2Rat.mul (g i j).fwd (conn.ux i j).inv := by
-            rw [(g (i + 1) j).inv_l, Mat2Rat.mul_id]
-    rw [hMid]
+    simp only [Mat2Rat.mul_assoc, GaugeElem2.inv_l, Mat2Rat.mul_id]
   have hDy : covDiffY conn' ψ' i j = Mat2Rat.mulVec (g i j).fwd (covDiffY conn ψ i j) := by
-    unfold covDiffY conn' ψ' gaugeTransformConn gaugeTransformSec gaugeTransformElem
-    dsimp only
+    unfold covDiffY conn' ψ' gaugeTransformConn gaugeTransformSec gaugeTransformElem; dsimp only
     rw [Mat2Rat.mulVec_sub, ← Mat2Rat.mul_mulVec, ← Mat2Rat.mul_mulVec]
-    have hMid : Mat2Rat.mul (Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (conn.uy i j).inv (g i (j + 1)).inv)) (g i (j + 1)).fwd =
-        Mat2Rat.mul (g i j).fwd (conn.uy i j).inv := by
-      calc
-        Mat2Rat.mul (Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (conn.uy i j).inv (g i (j + 1)).inv)) (g i (j + 1)).fwd
-          = Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (conn.uy i j).inv (Mat2Rat.mul (g i (j + 1)).inv (g i (j + 1)).fwd)) := by
-            simp only [Mat2Rat.mul_assoc]
-        _ = Mat2Rat.mul (g i j).fwd (conn.uy i j).inv := by
-            rw [(g i (j + 1)).inv_l, Mat2Rat.mul_id]
-    rw [hMid]
+    simp only [Mat2Rat.mul_assoc, GaugeElem2.inv_l, Mat2Rat.mul_id]
   have hW : wilsonPlaquette conn' i j = Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (wilsonPlaquette conn i j) (g i j).inv) := by
-    unfold wilsonPlaquette conn' gaugeTransformConn gaugeTransformElem
-    dsimp only
-    have cancelLeft : ∀ (A B : Mat2Rat) (h : GaugeElem2),
-        Mat2Rat.mul A (Mat2Rat.mul h.inv (Mat2Rat.mul h.fwd B)) = Mat2Rat.mul A B := by
-      intro A B h
-      rw [← Mat2Rat.mul_assoc h.inv h.fwd B, h.inv_l, Mat2Rat.id_mul]
-    simp only [Mat2Rat.mul_assoc]
-    rw [cancelLeft _ _ (g i (j + 1)), cancelLeft _ _ (g (i + 1) (j + 1)), cancelLeft _ _ (g (i + 1) j)]
+    unfold wilsonPlaquette conn' gaugeTransformConn gaugeTransformElem; dsimp only
+    simp only [Mat2Rat.mul_assoc, il]
   have hF : plaquetteCurvature conn' i j = Mat2Rat.mul (g i j).fwd (Mat2Rat.mul (plaquetteCurvature conn i j) (g i j).inv) := by
     unfold plaquetteCurvature
     rw [hW, Mat2Rat.sub_mul, Mat2Rat.mul_sub, Mat2Rat.id_mul, (g i j).inv_r]
@@ -946,18 +880,42 @@ theorem gauge_transform_covariance (g : Int → Int → GaugeElem2)
 /-- 12 oriented link transports of a 3D unit lattice cube (matching `unitCubeComplex3D.edges`),
     conjugated to basepoint $v_0$ via surface whiskers so the 6 face Wilson loops multiply to $I_2$. -/
 structure CubeGaugeLinks where
-  e0  : GaugeElem2  -- 0 → 1
-  e1  : GaugeElem2  -- 2 → 3
-  e2  : GaugeElem2  -- 4 → 5
-  e3  : GaugeElem2  -- 6 → 7
-  e4  : GaugeElem2  -- 0 → 2
-  e5  : GaugeElem2  -- 1 → 3
-  e6  : GaugeElem2  -- 4 → 6
-  e7  : GaugeElem2  -- 5 → 7
-  e8  : GaugeElem2  -- 0 → 4
-  e9  : GaugeElem2  -- 1 → 5
-  e10 : GaugeElem2  -- 2 → 6
-  e11 : GaugeElem2  -- 3 → 7
+  (e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 : GaugeElem2)
+
+def cubeLink (L : CubeGaugeLinks) : Nat → GaugeElem2
+  | 0 => L.e0 | 1 => L.e1 | 2 => L.e2 | 3 => L.e3 | 4 => L.e4 | 5 => L.e5
+  | 6 => L.e6 | 7 => L.e7 | 8 => L.e8 | 9 => L.e9 | 10 => L.e10 | _ => L.e11
+
+def evalFaceBoundaryChain (L : CubeGaugeLinks) : List (Nat × Int) → Mat2Rat
+  | [] => Mat2Rat.id
+  | (e, s) :: rest =>
+    Mat2Rat.mul (evalFaceBoundaryChain L rest)
+      (if s == 1 then (cubeLink L e).fwd else if s == -1 then (cubeLink L e).inv else Mat2Rat.id)
+
+def evalFaceBoundaryChainInv (L : CubeGaugeLinks) : List (Nat × Int) → Mat2Rat
+  | [] => Mat2Rat.id
+  | (e, s) :: rest =>
+    Mat2Rat.mul
+      (if s == 1 then (cubeLink L e).inv else if s == -1 then (cubeLink L e).fwd else Mat2Rat.id)
+      (evalFaceBoundaryChainInv L rest)
+
+def whiskerToOrigin (w : Option GaugeElem2) (M : Mat2Rat) : Mat2Rat :=
+  match w with
+  | none => M
+  | some g => Mat2Rat.mul g.inv (Mat2Rat.mul M g.fwd)
+
+/-- Mechanical derivation of the 6 basepoint-anchored Wilson loops directly from
+    `unitCubeComplex3D.faces` (`f0⁻¹, e4⁻¹ f3⁻¹ e4, f4⁻¹, e8⁻¹ f1 e8, f2, e0⁻¹ f5 e0`). -/
+def cubeComplexBoundaryProduct (L : CubeGaugeLinks) : Mat2Rat :=
+  let fs := unitCubeComplex3D.faces
+  let m := Mat2Rat.mul
+  let Wf0Inv := whiskerToOrigin none (evalFaceBoundaryChainInv L (fs.getD 0 []))
+  let Wf3Inv := whiskerToOrigin (some L.e4) (evalFaceBoundaryChainInv L (fs.getD 3 []))
+  let Wf4Inv := whiskerToOrigin none (evalFaceBoundaryChainInv L (fs.getD 4 []))
+  let Wf1    := whiskerToOrigin (some L.e8) (evalFaceBoundaryChain L (fs.getD 1 []))
+  let Wf2    := whiskerToOrigin none (evalFaceBoundaryChain L (fs.getD 2 []))
+  let Wf5    := whiskerToOrigin (some L.e0) (evalFaceBoundaryChain L (fs.getD 5 []))
+  m Wf0Inv (m Wf3Inv (m Wf4Inv (m Wf1 (m Wf2 Wf5))))
 
 /-- Ordered product of the 6 basepoint-anchored face holonomies around a 3D lattice cube:
     $W_{\text{bot}}^{-1} \cdot W_{\text{back}}^{-1} \cdot W_{\text{left}}^{-1} \cdot W_{\text{top}} \cdot W_{\text{front}} \cdot W_{\text{right}}$. -/
@@ -970,6 +928,12 @@ def cubeSixFaceHolonomyProduct (L : CubeGaugeLinks) : Mat2Rat :=
   let W5 := m L.e0.inv (m L.e5.inv (m L.e1.fwd L.e4.fwd))
   let W6 := m L.e0.inv (m L.e9.inv (m L.e7.inv (m L.e11.fwd (m L.e5.fwd L.e0.fwd))))
   m W5 (m W4 (m W3 (m W2 (m W1 W6))))
+
+theorem cubeSixFaceHolonomyProduct_eq_unitCubeFaces (L : CubeGaugeLinks) :
+    cubeSixFaceHolonomyProduct L = cubeComplexBoundaryProduct L := by
+  simp [cubeSixFaceHolonomyProduct, cubeComplexBoundaryProduct, unitCubeComplex3D,
+    whiskerToOrigin, evalFaceBoundaryChain, evalFaceBoundaryChainInv, cubeLink, List.getD,
+    Mat2Rat.id_mul, Mat2Rat.mul_id, Mat2Rat.mul_assoc]
 
 /-- **Discrete Bianchi Identity (`discrete_bianchi_identity`)**:
     1. **Additive Abelian Gauge Curvature**: For every certified 3-skeleton complex `K` and 1-cochain
@@ -1068,6 +1032,41 @@ def cayleyRot2 (α : CanonicalRat) : Mat2Rat :=
 def cayleyRot2Deriv (α dα : CanonicalRat) : Mat2Rat :=
   let ω := (2 * dα) / (1 + α * α)
   Mat2Rat.mul (cayleyRot2 α) ⟨0, ω, -ω, 0⟩
+
+/-- Rational dual number $a + b\varepsilon$ ($\varepsilon^2 = 0$) certifying exact Fréchet differentiation. -/
+structure DualRat where
+  real : CanonicalRat
+  eps  : CanonicalRat
+  deriving DecidableEq, Repr
+
+namespace DualRat
+def const (c : CanonicalRat) : DualRat := ⟨c, 0⟩
+def add (u v : DualRat) : DualRat := ⟨u.real + v.real, u.eps + v.eps⟩
+def sub (u v : DualRat) : DualRat := ⟨u.real - v.real, u.eps - v.eps⟩
+def neg (u : DualRat) : DualRat := ⟨-u.real, -u.eps⟩
+def mul (u v : DualRat) : DualRat := ⟨u.real * v.real, u.eps * v.real + u.real * v.eps⟩
+def div (u v : DualRat) : DualRat :=
+  ⟨u.real / v.real, (u.eps * v.real - u.real * v.eps) / (v.real * v.real)⟩
+end DualRat
+
+/-- Exact Fréchet dual-number evaluation of $R(z) = \frac{1}{1+z^2}\begin{pmatrix}1-z^2 & 2z \\ -2z & 1-z^2\end{pmatrix}$
+    at $z = \alpha + \dot{\alpha}\varepsilon$, proving `cayleyRot2Deriv` is the true tangent derivative of `cayleyRot2`. -/
+theorem cayleyRot2Dual_frechet_deriv (α dα : CanonicalRat) :
+    let z : DualRat := ⟨α, dα⟩
+    let zSq := DualRat.mul z z
+    let den := DualRat.add (DualRat.const 1) zSq
+    let c := DualRat.div (DualRat.sub (DualRat.const 1) zSq) den
+    let s := DualRat.div (DualRat.mul (DualRat.const 2) z) den
+    let ns := DualRat.neg s
+    Mat2Rat.mk c.real s.real ns.real c.real = cayleyRot2 α ∧
+    Mat2Rat.mk c.eps s.eps ns.eps c.eps = cayleyRot2Deriv α dα := by
+  have hdPos : 0 < 1 + α * α := by have := Interval.rat_sq_nonneg α; grind
+  have hdNe : 1 + α * α ≠ 0 := by grind
+  dsimp [DualRat.const, DualRat.add, DualRat.sub, DualRat.neg, DualRat.mul, DualRat.div,
+    cayleyRot2, cayleyRot2Deriv, Mat2Rat.mul]
+  constructor
+  · simp only [Mat2Rat.mk.injEq]; exact ⟨by grind, by grind, by grind, by grind⟩
+  · simp only [Mat2Rat.mk.injEq]; exact ⟨by grind, by grind, by grind, by grind⟩
 
 /-- Induced rotating-frame Coriolis gauge connection $\Omega(\alpha, \dot{\alpha}) = R(\alpha)^\top \dot{R}(\alpha, \dot{\alpha})$. -/
 def parkCoriolisConn (α dα : CanonicalRat) : Mat2Rat :=
@@ -1271,6 +1270,213 @@ theorem sheaf_cycle_holonomy_obstruction (K : CellComplex3D) (hExact : checkComp
       have hp0Ne : vecEntry prices u0 ≠ 0 := by grind
       grind
     exact hHolNe hProdEq1
+
+/-- Signed undirected 1-chain step traversing `edge` forward (`+1`, `u → w`) or backward (`-1`, `w → u`). -/
+structure SignedEdgeStep where
+  edge    : Nat
+  forward : Bool
+  deriving DecidableEq, Repr
+
+/-- Certifies that `walk` is a valid undirected path in `K` from vertex `src` to vertex `dst`. -/
+def checkUndirectedWalk (K : CellComplex3D) : Nat → Nat → List SignedEdgeStep → Bool
+  | u, dst, [] => decide (u = dst)
+  | u, dst, step :: rest =>
+    match K.edges[step.edge]? with
+    | some (a, b) =>
+      if step.forward then decide (u = a) && checkUndirectedWalk K b dst rest
+      else decide (u = b) && checkUndirectedWalk K a dst rest
+    | none => false
+
+/-- Signed line integral $\int_\gamma \omega = \sum_{s \in \gamma} \pm \omega_{s.\text{edge}}$ along an undirected walk. -/
+def walkIntegral (ω : List CanonicalRat) : List SignedEdgeStep → CanonicalRat
+  | [] => 0
+  | step :: rest =>
+    (if step.forward then vecEntry ω step.edge else -vecEntry ω step.edge) + walkIntegral ω rest
+
+theorem walkIntegral_d0 (K : CellComplex3D) (hExact : checkComplexExact K = true)
+    (φ : List CanonicalRat) :
+    ∀ (u v : Nat) (walk : List SignedEdgeStep),
+      checkUndirectedWalk K u v walk = true →
+      walkIntegral (d0 K φ) walk = vecEntry φ v - vecEntry φ u := by
+  intro u v walk
+  induction walk generalizing u with
+  | nil =>
+    intro hW
+    simp only [checkUndirectedWalk, decide_eq_true_eq] at hW
+    subst hW; simp [walkIntegral]; grind
+  | cons step rest ih =>
+    intro hW
+    unfold checkUndirectedWalk at hW
+    cases hEdge : K.edges[step.edge]? with
+    | none => rw [hEdge] at hW; cases hW
+    | some ab =>
+      rcases ab with ⟨a, b⟩
+      rw [hEdge] at hW
+      cases hFwd : step.forward
+      · rw [hFwd] at hW; simp only [Bool.false_eq_true, ↓reduceIte, Bool.and_eq_true, decide_eq_true_eq] at hW
+        obtain ⟨rfl, hW2⟩ := hW
+        have hRest := ih a hW2
+        simp only [walkIntegral, hFwd, Bool.false_eq_true, ↓reduceIte]
+        rw [d0_edge_diff K hExact φ step.edge a u hEdge, hRest]; grind
+      · rw [hFwd] at hW; simp only [↓reduceIte, Bool.and_eq_true, decide_eq_true_eq] at hW
+        obtain ⟨rfl, hW2⟩ := hW
+        have hRest := ih b hW2
+        simp only [walkIntegral, hFwd, ↓reduceIte]
+        rw [d0_edge_diff K hExact φ step.edge u b hEdge, hRest]; grind
+
+/-- **Genuine Spanning-Tree Fundamental-Cycle $H^1 = 0 \iff$ Exactness (`sheaf_spanning_tree_exact_iff`)**:
+    Given root-to-vertex undirected walks `treeWalk v` for every vertex $v < |V|$, a 1-cochain
+    $\omega \in C^1(K)$ is exact ($\exists x,\, d_0 x = \omega$) **if and only if** every edge's
+    fundamental cycle holonomy $\int_{\text{treeWalk}(u)} \omega + \omega_e - \int_{\text{treeWalk}(w)} \omega$
+    vanishes — constructing the global potential $x_v := \int_{\text{treeWalk}(v)} \omega$ directly. -/
+theorem sheaf_spanning_tree_exact_iff (K : CellComplex3D) (hExact : checkComplexExact K = true)
+    (root : Nat) (treeWalk : Nat → List SignedEdgeStep)
+    (hWalks : ∀ v, v < K.numV → checkUndirectedWalk K root v (treeWalk v) = true)
+    (ω : List CanonicalRat) (hLen : ω.length = K.numE) :
+    (∃ x, d0 K x = ω) ↔
+      (∀ e u w, K.edges[e]? = some (u, w) →
+        walkIntegral ω (treeWalk u) + vecEntry ω e - walkIntegral ω (treeWalk w) = 0) := by
+  constructor
+  · rintro ⟨x, rfl⟩ e u w hEdge
+    obtain ⟨hu, hw⟩ := checkComplexExact_edge_bounds K hExact e u w hEdge
+    rw [walkIntegral_d0 K hExact x root u (treeWalk u) (hWalks u hu),
+        walkIntegral_d0 K hExact x root w (treeWalk w) (hWalks w hw),
+        d0_edge_diff K hExact x e u w hEdge]
+    grind
+  · intro hFund
+    let x := mkVec K.numV (fun v => walkIntegral ω (treeWalk v))
+    refine ⟨x, cochain_eq_of_entries K.numE _ _ (d0_length K x) hLen (fun e he => ?_)⟩
+    rcases (⟨K.edges[e], List.getElem?_eq_getElem he⟩ : ∃ pq, K.edges[e]? = some pq) with ⟨⟨u, w⟩, hEdge⟩
+    obtain ⟨hu, hw⟩ := checkComplexExact_edge_bounds K hExact e u w hEdge
+    rw [d0_edge_diff K hExact x e u w hEdge]
+    dsimp [x]
+    rw [vecEntry_mkVec K.numV _ w hw, vecEntry_mkVec K.numV _ u hu]
+    have hf := hFund e u w hEdge
+    grind
+
+/-- Directed-acyclic diamond graph ($0 \to 1$, $1 \to 2$, $0 \to 2$): zero closed directed cycles,
+    yet non-trivial undirected $H^1$ obstruction when fundamental cycle holonomy $\omega_0 + \omega_1 - \omega_2 \neq 0$. -/
+def diamondDagComplex : CellComplex3D where
+  numV := 3
+  edges := [(0, 1), (1, 2), (0, 2)]
+  faces := []
+  volumes := []
+
+theorem diamondDag_directed_acyclic_yet_nonexact :
+    checkComplexExact diamondDagComplex = true ∧
+    (∀ cyc : List Nat, checkClosedDirectedCycle diamondDagComplex cyc = false) ∧
+    (¬ ∃ x, d0 diamondDagComplex x = [1, 1, 3]) := by
+  refine ⟨by decide +kernel, ?_, ?_⟩
+  · intro cyc
+    cases hEq : checkClosedDirectedCycle diamondDagComplex cyc
+    · rfl
+    · unfold checkClosedDirectedCycle at hEq
+      simp only [Bool.and_eq_true, Bool.not_eq_true', range_all_iff] at hEq
+      obtain ⟨hNe, hLinks⟩ := hEq
+      have hmPos : 0 < cyc.length := by cases cyc <;> simp at hNe ⊢
+      let vOf : Nat → Nat := fun k => (diamondDagComplex.edges[cyc.getD k 0]?.getD (0, 0)).1
+      have hStrict : ∀ k, k < cyc.length → vOf k < vOf ((k + 1) % cyc.length) := by
+        intro k hk
+        have hL := hLinks k hk
+        have hEdgeLt : ∀ (e p q : Nat), diamondDagComplex.edges[e]? = some (p, q) → p < q := by
+          intro e p q hE
+          match e with
+          | 0 => simp [diamondDagComplex] at hE; omega
+          | 1 => simp [diamondDagComplex] at hE; omega
+          | 2 => simp [diamondDagComplex] at hE; omega
+          | n + 3 => simp [diamondDagComplex] at hE
+        cases hCur : diamondDagComplex.edges[cyc.getD k 0]? with
+        | none => rw [hCur] at hL; cases hL
+        | some uw =>
+          cases hNxt : diamondDagComplex.edges[cyc.getD ((k + 1) % cyc.length) 0]? with
+          | none => rw [hCur, hNxt] at hL; cases hL
+          | some uwNext =>
+            rw [hCur, hNxt] at hL
+            rcases uw with ⟨u, w⟩; rcases uwNext with ⟨uNext, wNext⟩
+            simp only [decide_eq_true_eq] at hL
+            have hlt := hEdgeLt _ u w hCur
+            simp only [vOf, hCur, hNxt, Option.getD_some]; subst hL; exact hlt
+      have hMono : ∀ j, j < cyc.length → vOf 0 ≤ vOf j := by
+        intro j; induction j with
+        | zero => intro _; omega
+        | succ s ih =>
+          intro hs; have h1 := ih (by omega); have h2 := hStrict s (by omega)
+          rw [Nat.mod_eq_of_lt hs] at h2; omega
+      have hLast := hStrict (cyc.length - 1) (by omega)
+      rw [Nat.sub_add_cancel hmPos, Nat.mod_self] at hLast
+      have hLe := hMono (cyc.length - 1) (by omega)
+      omega
+  · rintro ⟨x, hx⟩
+    have hExact : checkComplexExact diamondDagComplex = true := by decide +kernel
+    have e0 := d0_edge_diff diamondDagComplex hExact x 0 0 1 rfl
+    have e1 := d0_edge_diff diamondDagComplex hExact x 1 1 2 rfl
+    have e2 := d0_edge_diff diamondDagComplex hExact x 2 0 2 rfl
+    rw [hx] at e0 e1 e2
+    simp only [vecEntry, List.getD] at e0 e1 e2
+    grind
+
+/-- **Arbitrary-Length Closed Directed Cycle FX Arbitrage Refutation (`sheaf_arbitrary_cycle_fx_arbitrage`)**:
+    Generalizes part 3 of `sheaf_cycle_holonomy_obstruction` from 3-cycles to closed directed cycles
+    `cyc` of **arbitrary** positive length $m \ge 1$. -/
+theorem sheaf_arbitrary_cycle_fx_arbitrage (K : CellComplex3D) (hExact : checkComplexExact K = true)
+    (rates : List CanonicalRat) (cyc : List Nat)
+    (hCyc : checkClosedDirectedCycle K cyc = true)
+    (hHolNe : mulCycleHolonomy rates cyc ≠ 1) :
+    ¬ ∃ prices, IsFlatMultiplicativeSection K rates prices := by
+  rintro ⟨prices, hPos, hFlat⟩
+  unfold checkClosedDirectedCycle at hCyc
+  simp only [Bool.and_eq_true, Bool.not_eq_true', range_all_iff] at hCyc
+  obtain ⟨hNe, hLinks⟩ := hCyc
+  have hmPos : 0 < cyc.length := by cases cyc <;> simp at hNe ⊢
+  let tailOf : Nat → Nat := fun k => (K.edges[cyc.getD k 0]?.getD (0, 0)).1
+  have hStep : ∀ k, k < cyc.length →
+      vecEntry prices (tailOf ((k + 1) % cyc.length)) =
+        vecEntry rates (cyc.getD k 0) * vecEntry prices (tailOf k) := by
+    intro k hk
+    have hL := hLinks k hk
+    cases hCur : K.edges[cyc.getD k 0]? with
+    | none => rw [hCur] at hL; cases hL
+    | some uw =>
+      cases hNxt : K.edges[cyc.getD ((k + 1) % cyc.length) 0]? with
+      | none => rw [hCur, hNxt] at hL; cases hL
+      | some uwNext =>
+        rw [hCur, hNxt] at hL
+        rcases uw with ⟨u, w⟩; rcases uwNext with ⟨uNext, wNext⟩
+        simp only [decide_eq_true_eq] at hL; subst hL
+        dsimp [tailOf]; rw [hCur, hNxt]; exact hFlat _ u w hCur
+  have hDropMul : ∀ r, r ≤ cyc.length →
+      vecEntry prices (tailOf 0) =
+        mulCycleHolonomy rates (cyc.drop (cyc.length - r)) *
+          vecEntry prices (tailOf ((cyc.length - r) % cyc.length)) := by
+    intro r
+    induction r with
+    | zero =>
+      intro _
+      simp [Nat.sub_zero, List.drop_length, mulCycleHolonomy, Nat.mod_self]
+    | succ r ih =>
+      intro hrLe
+      let j := cyc.length - (r + 1)
+      have hjLt : j < cyc.length := by omega
+      have hSuccEq : cyc.length - r = j + 1 := by omega
+      have hDrop : cyc.drop j = cyc.getD j 0 :: cyc.drop (j + 1) := by
+        have hGet : cyc.getD j 0 = cyc[j] := by simp [List.getD_eq_getElem?_getD, hjLt]
+        rw [hGet, List.drop_eq_getElem_cons hjLt]
+      have hPrev := ih (by omega)
+      rw [hSuccEq] at hPrev
+      change vecEntry prices (tailOf 0) = mulCycleHolonomy rates (cyc.drop j) * vecEntry prices (tailOf (j % cyc.length))
+      rw [hPrev, hDrop, mulCycleHolonomy, Nat.mod_eq_of_lt hjLt, hStep j hjLt]
+      grind
+  have hFull := hDropMul cyc.length (Nat.le_refl _)
+  simp only [Nat.sub_self, List.drop_zero, Nat.zero_mod] at hFull
+  have hL0 := hLinks 0 hmPos
+  cases hCur0 : K.edges[cyc.getD 0 0]? with
+  | none => rw [hCur0] at hL0; cases hL0
+  | some uw0 =>
+    rcases uw0 with ⟨u0, w0⟩
+    obtain ⟨hu0, _⟩ := checkComplexExact_edge_bounds K hExact _ u0 w0 hCur0
+    have hp0Pos : 0 < vecEntry prices (tailOf 0) := by dsimp [tailOf]; rw [hCur0]; exact hPos u0 hu0
+    have hp0Ne : vecEntry prices (tailOf 0) ≠ 0 := by grind
+    exact hHolNe (by grind)
 
 end Obend.Geometry.CochainAndGauge
 end

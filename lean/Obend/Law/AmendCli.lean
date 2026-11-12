@@ -581,4 +581,72 @@ theorem executeTrace_atomic (st : LiveState) (ts : List (AmendmentTurn 16)) (k :
       (traceActions st k ts) ((executeTrace st ts).fabric k).neighbors :=
   ⟨executeTrace_safe st ts hs, executeTrace_neighbors st ts k⟩
 
+def receiptStepFee (r : AmendReceipt) : Nat :=
+  match r.revision with
+  | .accepted v _ => fee v
+  | .refused _ _ _ => 0
+
+def receiptStepGen (r : AmendReceipt) : Nat :=
+  match r.revision with
+  | .accepted _ _ => 1
+  | .refused _ _ _ => 0
+
+def sumNats : List Nat → Nat
+  | [] => 0
+  | x :: xs => x + sumNats xs
+
+/-- Multi-turn live execution carrying per-turn `ModuleCert` bundles and emitting the full
+    audit trail of `AmendReceipt`s. -/
+def executeTraceWithReceipts (st : LiveState) :
+    List (AmendmentTurn 16 × List (ModuleCert 16)) → LiveState × List AmendReceipt
+  | [] => (st, [])
+  | (t, cs) :: rest =>
+    let (st', r) := executeLiveAmendment st t cs
+    let (stFinal, rs) := executeTraceWithReceipts st' rest
+    (stFinal, r :: rs)
+
+theorem executeLiveAmendment_accounting (st : LiveState) (t : AmendmentTurn 16)
+    (cs : List (ModuleCert 16)) :
+    let out := executeLiveAmendment st t cs
+    out.1.transferred = st.transferred + receiptStepFee out.2 ∧
+    out.1.generations = st.generations + receiptStepGen out.2 ∧
+    out.2.turnDigest = t.digest ∧
+    out.2.bedrockDigest = bedrock.digest ∧
+    out.2.supportDigest = supportDigest cs := by
+  dsimp only
+  unfold executeLiveAmendment
+  cases pointwiseRevise bedrock (st.world t.slot).clauses t.clauses with
+  | accepted v R => simp [receiptStepFee, receiptStepGen]
+  | refused v R cost => simp [receiptStepFee, receiptStepGen]
+
+inductive StepReceiptRel {α β : Type} (R : α → β → Prop) : List α → List β → Prop where
+  | nil : StepReceiptRel R [] []
+  | cons {a : α} {b : β} {as : List α} {bs : List β} :
+      R a b → StepReceiptRel R as bs → StepReceiptRel R (a :: as) (b :: bs)
+
+/-- **Multi-Turn Receipt-Chain & Fee/Generation Accounting Soundness (`0 Classical`)**:
+    Across any sequence of accepted and refused amendments, `transferred` equals initial balance
+    plus exact accepted fees, `generations` equals initial generation plus accepted count, and
+    every receipt binds `(t.digest, bedrock.digest, supportDigest cs)`. -/
+theorem executeTraceWithReceipts_accounting_sound :
+    ∀ (st : LiveState) (steps : List (AmendmentTurn 16 × List (ModuleCert 16))),
+      let out := executeTraceWithReceipts st steps
+      out.2.length = steps.length ∧
+      out.1.transferred = st.transferred + sumNats (out.2.map receiptStepFee) ∧
+      out.1.generations = st.generations + sumNats (out.2.map receiptStepGen) ∧
+      StepReceiptRel (fun step r =>
+        r.turnDigest = step.1.digest ∧ r.bedrockDigest = bedrock.digest ∧
+        r.supportDigest = supportDigest step.2) steps out.2
+  | st, [] => ⟨rfl, Nat.add_zero _, Nat.add_zero _, .nil⟩
+  | st, (t, cs) :: rest => by
+    dsimp only [executeTraceWithReceipts]
+    obtain ⟨hFee1, hGen1, hDig⟩ := executeLiveAmendment_accounting st t cs
+    obtain ⟨hLen, hFeeR, hGenR, hAll⟩ :=
+      executeTraceWithReceipts_accounting_sound (executeLiveAmendment st t cs).1 rest
+    refine ⟨congrArg Nat.succ hLen, ?_, ?_, .cons hDig hAll⟩
+    · simp only [List.map_cons, sumNats]
+      rw [hFeeR, hFee1, Nat.add_assoc]
+    · simp only [List.map_cons, sumNats]
+      rw [hGenR, hGen1, Nat.add_assoc]
+
 end Obend.Law.AmendCli

@@ -43,55 +43,131 @@ theorem computeVarDataRoot_exec_eq (es : Array VarEntry) :
     computeVarDataRootExec es = computeVarDataRoot es.toList := by
   simp [computeVarDataRootExec, computeVarDataRoot, varFields, canonicalVar]
 
+def contentHash256Call (e : VarEntry) : CshakeCall :=
+  ("OBEND.CUSTODY.CONTENT/v1", [e.contents.data.toList])
+
+def contentHash256Extract (a b : VarEntry) (h : contentHash256 a = contentHash256 b) :
+    PSum (PLift (a.contents = b.contents)) (CshakeCallCollision [contentHash256Call a, contentHash256Call b]) :=
+  match hashExtract "OBEND.CUSTODY.CONTENT/v1" [a.contents.data.toList] [b.contents.data.toList] h with
+  | .inl he =>
+    have hb : a.contents.data.toList = b.contents.data.toList := by simpa using he.down
+    .inl ⟨byteArray_eq_of_toList_eq hb⟩
+  | .inr hc => .inr hc
+
 theorem contentHash256_binds (a b : VarEntry) (h : contentHash256 a = contentHash256 b) :
-    a.contents = b.contents ∨ CshakeCollision := by
-  rcases hash_binds "OBEND.CUSTODY.CONTENT/v1" h with he | hc
-  · have hb : a.contents.data.toList = b.contents.data.toList := by simpa using he
-    exact .inl (byteArray_eq_of_toList_eq hb)
-  · exact .inr hc
+    a.contents = b.contents ∨ CshakeCollisionAmong [contentHash256Call a, contentHash256Call b] := by
+  cases contentHash256Extract a b h with
+  | inl hb => exact .inl hb.down
+  | inr hc => exact .inr ⟨hc⟩
 
 def entryFields (e : VarEntry) : List UInt8 :=
   encodeFields [e.pathBytes, (contentHash256 e).data.toList]
 
-theorem entryFields_binds (a b : VarEntry) (h : entryFields a = entryFields b) :
-    a = b ∨ CshakeCollision := by
+def entryFieldsExtract (a b : VarEntry) (h : entryFields a = entryFields b) :
+    PSum (PLift (a = b)) (CshakeCallCollision [contentHash256Call a, contentHash256Call b]) :=
   have he := encodeFields_injective _ _ h
   have hh : a.pathBytes = b.pathBytes ∧
       (contentHash256 a).data.toList = (contentHash256 b).data.toList := by simpa using he
-  rcases contentHash256_binds a b (byteArray_eq_of_toList_eq hh.2) with hc | collision
-  · left; cases a; cases b; simp_all
-  · exact .inr collision
+  match contentHash256Extract a b (byteArray_eq_of_toList_eq hh.2) with
+  | .inl hc => .inl ⟨by cases a; cases b; have hc' := hc.down; simp_all⟩
+  | .inr collision => .inr collision
+
+theorem entryFields_binds (a b : VarEntry) (h : entryFields a = entryFields b) :
+    a = b ∨ CshakeCollisionAmong [contentHash256Call a, contentHash256Call b] := by
+  cases entryFieldsExtract a b h with
+  | inl he => exact .inl he.down
+  | inr hc => exact .inr ⟨hc⟩
+
+def entryListCalls (es : List VarEntry) : List CshakeCall :=
+  es.map contentHash256Call
+
+def entryListExtract : ∀ (as bs : List VarEntry),
+    as.map entryFields = bs.map entryFields →
+    PSum (PLift (as = bs)) (CshakeCallCollision (entryListCalls as ++ entryListCalls bs))
+  | [], [], _ => .inl ⟨rfl⟩
+  | [], _ :: _, h => nomatch h
+  | _ :: _, [], h => nomatch h
+  | a :: as, b :: bs, h =>
+    have he := List.cons.inj h
+    match entryFieldsExtract a b he.1 with
+    | .inr hc =>
+      .inr (hc.weaken (by
+        intro c hmem
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with rfl | rfl
+        · exact List.mem_append_left _ (.head _)
+        · exact List.mem_append_right _ (.head _)))
+    | .inl hab =>
+      match entryListExtract as bs he.2 with
+      | .inl ht => .inl ⟨by rw [hab.down, ht.down]⟩
+      | .inr hc =>
+        .inr (hc.weaken (by
+          intro c hmem
+          rcases List.mem_append.1 hmem with hL | hR
+          · exact List.mem_append_left _ (.tail _ hL)
+          · exact List.mem_append_right _ (.tail _ hR)))
 
 theorem entryList_binds (as bs : List VarEntry) (h : as.map entryFields = bs.map entryFields) :
-    as = bs ∨ CshakeCollision := by
-  induction as generalizing bs with
-  | nil => cases bs with
-    | nil => exact .inl rfl
-    | cons b bs => simp at h
-  | cons a as ih =>
-    cases bs with
-    | nil => simp at h
-    | cons b bs =>
-      have he := List.cons.inj h
-      rcases entryFields_binds a b he.1 with hab | hc
-      · rcases ih bs he.2 with ht | hc
-        · exact .inl (by rw [hab,ht])
-        · exact .inr hc
-      · exact .inr hc
+    as = bs ∨ CshakeCollisionAmong (entryListCalls as ++ entryListCalls bs) := by
+  cases entryListExtract as bs h with
+  | inl he => exact .inl he.down
+  | inr hc => exact .inr ⟨hc⟩
+
+def varDataRootCalls (es : List VarEntry) : List CshakeCall :=
+  merkleRootCalls (varFields es) ++ entryListCalls (canonicalVar es)
+
+def varDataRootExtract (as bs : List VarEntry) (h : computeVarDataRoot as = computeVarDataRoot bs) :
+    PSum (PLift (canonicalVar as = canonicalVar bs))
+      (CshakeCallCollision (varDataRootCalls as ++ varDataRootCalls bs)) :=
+  match merkleRootExtract (varFields as) (varFields bs) h with
+  | .inr hc =>
+    .inr (hc.weaken (by
+      intro c hmem
+      simp only [varDataRootCalls]
+      rcases List.mem_append.1 hmem with hL | hR
+      · exact List.mem_append_left _ (List.mem_append_left _ hL)
+      · exact List.mem_append_right _ (List.mem_append_left _ hR)))
+  | .inl he =>
+    match entryListExtract (canonicalVar as) (canonicalVar bs) he.down with
+    | .inl hcan => .inl hcan
+    | .inr hc =>
+      .inr (hc.weaken (by
+        intro c hmem
+        simp only [varDataRootCalls]
+        rcases List.mem_append.1 hmem with hL | hR
+        · exact List.mem_append_left _ (List.mem_append_right _ hL)
+        · exact List.mem_append_right _ (List.mem_append_right _ hR)))
 
 theorem varDataRoot_binds (as bs : List VarEntry) (h : computeVarDataRoot as = computeVarDataRoot bs) :
-    canonicalVar as = canonicalVar bs ∨ CshakeCollision := by
-  rcases merkleRoot_binds h with he | hc
-  · exact entryList_binds _ _ he
-  · exact .inr hc
+    canonicalVar as = canonicalVar bs ∨
+      CshakeCollisionAmong (varDataRootCalls as ++ varDataRootCalls bs) := by
+  cases varDataRootExtract as bs h with
+  | inl he => exact .inl he.down
+  | inr hc => exact .inr ⟨hc⟩
+
+def packageDigestCall (p : SignedGrainPackage) : CshakeCall :=
+  ("OBEND.CUSTODY.PACKAGE/v1",
+   [p.publisher.data.toList, p.code.data.toList, p.programDigest.data.toList])
+
+def packageDigestExtract (a b : SignedGrainPackage) (h : packageDigest a = packageDigest b) :
+    PSum (PLift (a.publisher = b.publisher ∧ a.code = b.code ∧ a.programDigest = b.programDigest))
+      (CshakeCallCollision [packageDigestCall a, packageDigestCall b]) :=
+  match hashExtract "OBEND.CUSTODY.PACKAGE/v1"
+      [a.publisher.data.toList, a.code.data.toList, a.programDigest.data.toList]
+      [b.publisher.data.toList, b.code.data.toList, b.programDigest.data.toList] h with
+  | .inl he =>
+    have hh : a.publisher.data.toList = b.publisher.data.toList ∧
+        a.code.data.toList = b.code.data.toList ∧
+        a.programDigest.data.toList = b.programDigest.data.toList := by simpa using he.down
+    .inl ⟨byteArray_eq_of_toList_eq hh.1, byteArray_eq_of_toList_eq hh.2.1, byteArray_eq_of_toList_eq hh.2.2⟩
+  | .inr hc => .inr hc
 
 theorem packageDigest_binds (a b : SignedGrainPackage) (h : packageDigest a = packageDigest b) :
-    (a.publisher = b.publisher ∧ a.code = b.code ∧ a.programDigest = b.programDigest) ∨ CshakeCollision := by
-  rcases hash_binds "OBEND.CUSTODY.PACKAGE/v1" h with he | hc
-  · have hh : a.publisher.data.toList = b.publisher.data.toList ∧
-        a.code.data.toList = b.code.data.toList ∧ a.programDigest.data.toList = b.programDigest.data.toList := by simpa using he
-    exact .inl ⟨byteArray_eq_of_toList_eq hh.1, byteArray_eq_of_toList_eq hh.2.1, byteArray_eq_of_toList_eq hh.2.2⟩
-  · exact .inr hc
+    (a.publisher = b.publisher ∧ a.code = b.code ∧ a.programDigest = b.programDigest) ∨
+      CshakeCollisionAmong [packageDigestCall a, packageDigestCall b] := by
+  cases packageDigestExtract a b h with
+  | inl he => exact .inl he.down
+  | inr hc => exact .inr ⟨hc⟩
 
 abbrev SettlementKey := UInt64 × Nat
 structure SettlementLedger where
@@ -280,35 +356,78 @@ def IngressMountain.openings : IngressMountain → List (Nat × ByteArray)
   | .leaf n r => [(n,r)]
   | .node a b => a.openings ++ b.openings
 
+def IngressMountain.rootCalls : IngressMountain → List CshakeCall
+  | .leaf n r => [("OBEND.CUSTODY.MOUNTAIN/v1", [[0], leb128 n, r.data.toList])]
+  | .node a b =>
+    ("OBEND.CUSTODY.MOUNTAIN/v1", [[1], a.root.data.toList, b.root.data.toList]) ::
+      (a.rootCalls ++ b.rootCalls)
+
+def IngressMountain.rootExtract : ∀ (a b : IngressMountain), a.root = b.root →
+    PSum (PLift (a = b)) (CshakeCallCollision (a.rootCalls ++ b.rootCalls))
+  | .leaf n r, .leaf m s, h =>
+    match hashExtract "OBEND.CUSTODY.MOUNTAIN/v1"
+        [[0], leb128 n, r.data.toList] [[0], leb128 m, s.data.toList] h with
+    | .inl hp =>
+      have he : leb128 n = leb128 m ∧ r.data.toList = s.data.toList := by simpa using hp.down
+      .inl ⟨by rw [natBytes_inj he.1, byteArray_eq_of_toList_eq he.2]⟩
+    | .inr hc => .inr hc
+  | .leaf n r, .node x y, h =>
+    match hashExtract "OBEND.CUSTODY.MOUNTAIN/v1"
+        [[0], leb128 n, r.data.toList] [[1], x.root.data.toList, y.root.data.toList] h with
+    | .inl hp => False.elim (by have hp' := hp.down; simp at hp')
+    | .inr hc =>
+      .inr (hc.weaken (by
+        intro c hmem
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with rfl | rfl
+        · exact List.mem_append_left _ (.head _)
+        · exact List.mem_append_right _ (.head _)))
+  | .node x y, .leaf n r, h =>
+    match hashExtract "OBEND.CUSTODY.MOUNTAIN/v1"
+        [[1], x.root.data.toList, y.root.data.toList] [[0], leb128 n, r.data.toList] h with
+    | .inl hp => False.elim (by have hp' := hp.down; simp at hp')
+    | .inr hc =>
+      .inr (hc.weaken (by
+        intro c hmem
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with rfl | rfl
+        · exact List.mem_append_left _ (.head _)
+        · exact List.mem_append_right _ (.head _)))
+  | .node x y, .node u v, h =>
+    match hashExtract "OBEND.CUSTODY.MOUNTAIN/v1"
+        [[1], x.root.data.toList, y.root.data.toList] [[1], u.root.data.toList, v.root.data.toList] h with
+    | .inr hc =>
+      .inr (hc.weaken (by
+        intro c hmem
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with rfl | rfl
+        · exact List.mem_append_left _ (.head _)
+        · exact List.mem_append_right _ (.head _)))
+    | .inl hp =>
+      have he : x.root.data.toList = u.root.data.toList ∧ y.root.data.toList = v.root.data.toList := by
+        simpa using hp.down
+      match x.rootExtract u (byteArray_eq_of_toList_eq he.1) with
+      | .inr hc =>
+        .inr (hc.weaken (by
+          intro c hmem
+          rcases List.mem_append.1 hmem with hL | hR
+          · exact List.mem_append_left _ (.tail _ (List.mem_append_left _ hL))
+          · exact List.mem_append_right _ (.tail _ (List.mem_append_left _ hR))))
+      | .inl hx =>
+        match y.rootExtract v (byteArray_eq_of_toList_eq he.2) with
+        | .inl hy => .inl ⟨by rw [hx.down, hy.down]⟩
+        | .inr hc =>
+          .inr (hc.weaken (by
+            intro c hmem
+            rcases List.mem_append.1 hmem with hL | hR
+            · exact List.mem_append_left _ (.tail _ (List.mem_append_right _ hL))
+            · exact List.mem_append_right _ (.tail _ (List.mem_append_right _ hR))))
+
 theorem IngressMountain.root_binds (a b : IngressMountain) (h : a.root = b.root) :
-    a = b ∨ CshakeCollision := by
-  induction a generalizing b with
-  | leaf n r =>
-    cases b with
-    | leaf m s =>
-      rcases hash_binds "OBEND.CUSTODY.MOUNTAIN/v1" h with hp | hc
-      · have he : leb128 n = leb128 m ∧ r.data.toList = s.data.toList := by simpa using hp
-        exact .inl (by rw [natBytes_inj he.1, byteArray_eq_of_toList_eq he.2])
-      · exact .inr hc
-    | node x y =>
-      rcases hash_binds "OBEND.CUSTODY.MOUNTAIN/v1" h with hp | hc
-      · simp at hp
-      · exact .inr hc
-  | node x y ihx ihy =>
-    cases b with
-    | leaf n r =>
-      rcases hash_binds "OBEND.CUSTODY.MOUNTAIN/v1" h with hp | hc
-      · simp at hp
-      · exact .inr hc
-    | node u v =>
-      rcases hash_binds "OBEND.CUSTODY.MOUNTAIN/v1" h with hp | hc
-      · have he : x.root.data.toList = u.root.data.toList ∧ y.root.data.toList = v.root.data.toList := by simpa using hp
-        rcases ihx u (byteArray_eq_of_toList_eq he.1) with hx | hc
-        · rcases ihy v (byteArray_eq_of_toList_eq he.2) with hy | hc
-          · exact .inl (by rw [hx,hy])
-          · exact .inr hc
-        · exact .inr hc
-      · exact .inr hc
+    a = b ∨ CshakeCollisionAmong (a.rootCalls ++ b.rootCalls) := by
+  cases a.rootExtract b h with
+  | inl he => exact .inl he.down
+  | inr hc => exact .inr ⟨hc⟩
 
 /-- Peaks are stored smallest first; equal heights carry into a binary parent. -/
 def appendMountain (m : IngressMountain) : List IngressMountain → List IngressMountain
@@ -346,31 +465,81 @@ theorem IngressMmr.append_openings (s : IngressMmr) (req : ByteArray) :
     (s.append req).openings = s.openings ++ [(s.count, req)] :=
   appendMountain_openings _ _
 
-theorem peaks_bind : ∀ (a b : List IngressMountain),
+def peaksRootCalls : List IngressMountain → List CshakeCall
+  | [] => []
+  | p :: ps => p.rootCalls ++ peaksRootCalls ps
+
+def peaksExtract : ∀ (a b : List IngressMountain),
     (a.map fun p => p.root.data.toList) = (b.map fun p => p.root.data.toList) →
-    a = b ∨ CshakeCollision
-  | [], [], _ => .inl rfl
-  | [], _ :: _, h => by simp at h
-  | _ :: _, [], h => by simp at h
-  | x :: xs, y :: ys, h => by
+    PSum (PLift (a = b)) (CshakeCallCollision (peaksRootCalls a ++ peaksRootCalls b))
+  | [], [], _ => .inl ⟨rfl⟩
+  | [], _ :: _, h => nomatch h
+  | _ :: _, [], h => nomatch h
+  | x :: xs, y :: ys, h =>
     have he := List.cons.inj h
-    rcases x.root_binds y (byteArray_eq_of_toList_eq he.1) with hx | hc
-    · rcases peaks_bind xs ys he.2 with ht | hc
-      · exact .inl (by rw [hx,ht])
-      · exact .inr hc
-    · exact .inr hc
+    match x.rootExtract y (byteArray_eq_of_toList_eq he.1) with
+    | .inr hc =>
+      .inr (hc.weaken (by
+        intro c hmem
+        simp only [peaksRootCalls]
+        rcases List.mem_append.1 hmem with hL | hR
+        · exact List.mem_append_left _ (List.mem_append_left _ hL)
+        · exact List.mem_append_right _ (List.mem_append_left _ hR)))
+    | .inl hx =>
+      match peaksExtract xs ys he.2 with
+      | .inl ht => .inl ⟨by rw [hx.down, ht.down]⟩
+      | .inr hc =>
+        .inr (hc.weaken (by
+          intro c hmem
+          simp only [peaksRootCalls]
+          rcases List.mem_append.1 hmem with hL | hR
+          · exact List.mem_append_left _ (List.mem_append_right _ hL)
+          · exact List.mem_append_right _ (List.mem_append_right _ hR)))
+
+theorem peaks_bind (a b : List IngressMountain)
+    (h : (a.map fun p => p.root.data.toList) = (b.map fun p => p.root.data.toList)) :
+    a = b ∨ CshakeCollisionAmong (peaksRootCalls a ++ peaksRootCalls b) := by
+  cases peaksExtract a b h with
+  | inl he => exact .inl he.down
+  | inr hc => exact .inr ⟨hc⟩
+
+def IngressMmr.rootCalls (s : IngressMmr) : List CshakeCall :=
+  ("OBEND.CUSTODY.MMR.ROOT/v1",
+   [leb128 s.count, encodeFields (s.peaks.map fun p => p.root.data.toList)]) ::
+    peaksRootCalls s.peaks
+
+def IngressMmr.rootExtract (a b : IngressMmr) (h : a.root = b.root) :
+    PSum (PLift (a = b)) (CshakeCallCollision (a.rootCalls ++ b.rootCalls)) :=
+  match hashExtract "OBEND.CUSTODY.MMR.ROOT/v1"
+      [leb128 a.count, encodeFields (a.peaks.map fun p => p.root.data.toList)]
+      [leb128 b.count, encodeFields (b.peaks.map fun p => p.root.data.toList)]
+      (by unfold IngressMmr.root at h; exact h) with
+  | .inr hc =>
+    .inr (hc.weaken (by
+      intro c hmem
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+      rcases hmem with rfl | rfl
+      · exact List.mem_append_left _ (.head _)
+      · exact List.mem_append_right _ (.head _)))
+  | .inl hp =>
+    have he : leb128 a.count = leb128 b.count ∧
+        encodeFields (a.peaks.map fun p => p.root.data.toList) =
+          encodeFields (b.peaks.map fun p => p.root.data.toList) := by simpa using hp.down
+    have hn := natBytes_inj he.1
+    match peaksExtract a.peaks b.peaks (encodeFields_injective _ _ he.2) with
+    | .inl hs => .inl ⟨by cases a; cases b; have hs' := hs.down; simp_all⟩
+    | .inr hc =>
+      .inr (hc.weaken (by
+        intro c hmem
+        rcases List.mem_append.1 hmem with hL | hR
+        · exact List.mem_append_left _ (.tail _ hL)
+        · exact List.mem_append_right _ (.tail _ hR)))
 
 theorem IngressMmr.root_binds (a b : IngressMmr) (h : a.root = b.root) :
-    a = b ∨ CshakeCollision := by
-  rcases hash_binds "OBEND.CUSTODY.MMR.ROOT/v1" h with hp | hc
-  · have he : leb128 a.count = leb128 b.count ∧
-        encodeFields (a.peaks.map fun p => p.root.data.toList) =
-          encodeFields (b.peaks.map fun p => p.root.data.toList) := by simpa using hp
-    have hn := natBytes_inj he.1
-    rcases peaks_bind a.peaks b.peaks (encodeFields_injective _ _ he.2) with hs | hc
-    · left; cases a; cases b; simp_all
-    · exact .inr hc
-  · exact .inr hc
+    a = b ∨ CshakeCollisionAmong (a.rootCalls ++ b.rootCalls) := by
+  cases a.rootExtract b h with
+  | inl he => exact .inl he.down
+  | inr hc => exact .inr ⟨hc⟩
 
 structure AriadneTicket where
   seqNo : Nat
@@ -420,27 +589,46 @@ def verifyNonOmission (t : AriadneTicket) (prior later : IngressMmr)
   decide (prior.root = t.mmrRoot ∧ prior.openings.IsPrefix later.openings ∧
     later.openings = turns ∧ t.seqNo < turns.length)
 
+/-- Constructive `0 Classical` non-omission extractor: either `verifyNonOmission` refuses
+    or `original.rootCalls ++ prior.rootCalls` constructively exhibits a `CshakeCallCollision`. -/
+def hostOmissionExtract
+    (verifySignature : ByteArray → ByteArray → Bool) (t : AriadneTicket)
+    (original prior later : IngressMmr) (turns : List (Nat × ByteArray))
+    (ht : ValidTicket verifySignature t original)
+    (bad : turns[t.seqNo]? ≠ some (t.seqNo, t.reqDigest)) :
+    PSum (PLift (verifyNonOmission t prior later turns = false))
+         (CshakeCallCollision (original.rootCalls ++ prior.rootCalls)) :=
+  if hv : verifyNonOmission t prior later turns = true then
+    have he : prior.root = t.mmrRoot ∧ prior.openings.IsPrefix later.openings ∧
+        later.openings = turns ∧ t.seqNo < turns.length := of_decide_eq_true hv
+    match original.rootExtract prior (ht.2.1.trans he.1.symm) with
+    | .inl hp =>
+      False.elim (by
+        have hEq := hp.down
+        subst hEq
+        obtain ⟨suffix, hs⟩ := he.2.1
+        have hlen : t.seqNo < original.openings.length := List.getElem?_eq_some_iff.1 ht.2.2 |>.1
+        have hh : turns[t.seqNo]? = original.openings[t.seqNo]? := by
+          rw [← he.2.2.1, ← hs]
+          exact List.getElem?_append_left hlen
+        exact bad (hh.trans ht.2.2))
+    | .inr hc => .inr hc
+  else
+    .inl ⟨Bool.eq_false_iff.mpr hv⟩
+
 /-- An accepted later turns cannot delete or substitute a committed sequential opening.
-A different opening of the ticket's MMR root constructs an actual cSHAKE collision. -/
+A different opening of the ticket's MMR root constructs an actual cSHAKE collision
+inside `original.rootCalls ++ prior.rootCalls`. -/
 theorem host_cannot_omit_committed_turn_or_collision
     (verifySignature : ByteArray → ByteArray → Bool) (t : AriadneTicket)
     (original prior later : IngressMmr) (turns : List (Nat × ByteArray))
     (ht : ValidTicket verifySignature t original)
     (bad : turns[t.seqNo]? ≠ some (t.seqNo, t.reqDigest)) :
-    verifyNonOmission t prior later turns = false ∨ CshakeCollision := by
-  by_cases hv : verifyNonOmission t prior later turns = true
-  · have he : prior.root = t.mmrRoot ∧ prior.openings.IsPrefix later.openings ∧
-        later.openings = turns ∧ t.seqNo < turns.length := of_decide_eq_true hv
-    rcases original.root_binds prior (ht.2.1.trans he.1.symm) with hp | hc
-    · subst prior
-      obtain ⟨suffix, hs⟩ := he.2.1
-      have hlen : t.seqNo < original.openings.length := List.getElem?_eq_some_iff.1 ht.2.2 |>.1
-      have hh : turns[t.seqNo]? = original.openings[t.seqNo]? := by
-        rw [← he.2.2.1, ← hs]
-        exact List.getElem?_append_left hlen
-      exact False.elim (bad (hh.trans ht.2.2))
-    · exact .inr hc
-  · exact .inl (Bool.eq_false_iff.mpr hv)
+    verifyNonOmission t prior later turns = false ∨
+      CshakeCollisionAmong (original.rootCalls ++ prior.rootCalls) := by
+  cases hostOmissionExtract verifySignature t original prior later turns ht bad with
+  | inl hf => exact .inl hf.down
+  | inr hc => exact .inr ⟨hc⟩
 
 structure GrainCustodyAnchor where
   generation : Nat
@@ -484,23 +672,32 @@ def transitionHead (a : GrainArchive) : ByteArray :=
     (frozenGrainRoot a.frozenGrain).data.toList, (settlementRoot a.settlements).data.toList,
     a.anchor.ingressRoot.data.toList, (executionRoot a.executions).data.toList]
 
+def transitionHeadCall (a : GrainArchive) : CshakeCall :=
+  ("OBEND.CUSTODY.ARCHIVE/v1",
+   [a.previousHead.data.toList, leb128 a.anchor.generation,
+    a.anchor.packageDigest.data.toList, a.anchor.varDataRoot.data.toList, a.anchor.leaseRoot.data.toList,
+    (frozenGrainRoot a.frozenGrain).data.toList, (settlementRoot a.settlements).data.toList,
+    a.anchor.ingressRoot.data.toList, (executionRoot a.executions).data.toList])
+
 /-- Equality of transition heads binds every committed component, or supplies an actual
-full-output cSHAKE collision. This includes the frozen c-list and both persistent ledgers. -/
+full-output cSHAKE collision in `[transitionHeadCall a, transitionHeadCall b]`. -/
 theorem transitionHead_binds (a b : GrainArchive) (h : transitionHead a = transitionHead b) :
     (a.previousHead = b.previousHead ∧ a.anchor.generation = b.anchor.generation ∧
       a.anchor.packageDigest = b.anchor.packageDigest ∧ a.anchor.varDataRoot = b.anchor.varDataRoot ∧
       a.anchor.leaseRoot = b.anchor.leaseRoot ∧ frozenGrainRoot a.frozenGrain = frozenGrainRoot b.frozenGrain ∧
       settlementRoot a.settlements = settlementRoot b.settlements ∧
       a.anchor.ingressRoot = b.anchor.ingressRoot ∧ executionRoot a.executions = executionRoot b.executions) ∨
-    CshakeCollision := by
-  rcases hash_binds "OBEND.CUSTODY.ARCHIVE/v1" h with he | hc
-  · simp only [List.cons.injEq, and_true] at he
-    obtain ⟨hp, hg, hk, hv, hl, hf, hs, hi, hx⟩ := he
+    CshakeCollisionAmong [transitionHeadCall a, transitionHeadCall b] := by
+  cases hashExtract "OBEND.CUSTODY.ARCHIVE/v1" (transitionHeadCall a).2 (transitionHeadCall b).2 h with
+  | inl he =>
+    have he' := he.down
+    simp only [transitionHeadCall, List.cons.injEq, and_true] at he'
+    obtain ⟨hp, hg, hk, hv, hl, hf, hs, hi, hx⟩ := he'
     exact .inl ⟨byteArray_eq_of_toList_eq hp, natBytes_inj hg,
       byteArray_eq_of_toList_eq hk, byteArray_eq_of_toList_eq hv,
       byteArray_eq_of_toList_eq hl, byteArray_eq_of_toList_eq hf,
       byteArray_eq_of_toList_eq hs, byteArray_eq_of_toList_eq hi, byteArray_eq_of_toList_eq hx⟩
-  · exact .inr hc
+  | inr hc => exact .inr ⟨hc⟩
 
 /-- Signature verification is supplied by the authenticated package boundary, not a hash predicate. -/
 @[expose] def reopenCustody (authenticate : SignedGrainPackage → Bool)
@@ -537,19 +734,22 @@ theorem package_mismatch_poisoned (auth : SignedGrainPackage → Bool) (verify :
     reopenCustody auth verify (some a) b = .poisoned .package := by
   simp [reopenCustody, h]
 
-/-- Reopening a changed canonical image either refuses it or exhibits a concrete collision.
-Package substitution is checked against the immutable digest in the same archived anchor. -/
+/-- Reopening a changed canonical image either refuses it or exhibits a concrete collision
+    among `varDataRootCalls a.entries ++ varDataRootCalls original`.
+    Package substitution is checked against the immutable digest in the same archived anchor. -/
 theorem tampered_var_or_package_poisoned_or_collision
     (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool) (a : GrainArchive) (b : Option GrainCustodyAnchor)
     (original : List VarEntry) (hroot : a.anchor.varDataRoot = computeVarDataRoot original)
     (ht : canonicalVar a.entries ≠ canonicalVar original ∨ packageDigest a.package ≠ a.anchor.packageDigest) :
-    (∃ reason, reopenCustody auth verify (some a) b = .poisoned reason) ∨ CshakeCollision := by
+    (∃ reason, reopenCustody auth verify (some a) b = .poisoned reason) ∨
+      CshakeCollisionAmong (varDataRootCalls a.entries ++ varDataRootCalls original) := by
   rcases ht with hv | hp
-  · by_cases he : computeVarDataRoot a.entries = a.anchor.varDataRoot
-    · rcases varDataRoot_binds a.entries original (he.trans hroot) with hf | hc
+  · if he : computeVarDataRoot a.entries = a.anchor.varDataRoot then
+      rcases varDataRoot_binds a.entries original (he.trans hroot) with hf | hc
       · exact False.elim (hv hf)
       · exact .inr hc
-    · exact .inl (var_mismatch_poisoned auth verify a b he)
+    else
+      exact .inl (var_mismatch_poisoned auth verify a b he)
   · exact .inl ⟨.package, package_mismatch_poisoned auth verify a b hp⟩
 
 def recoverOneAhead (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool) (a : GrainArchive)

@@ -220,14 +220,28 @@ example (key : CommitKey) (ins outs : List Opening) :
 
 def rangeIds (os : List Opening) : List VkId := os.map fun op => rangeVk ⟨op.commit demoKey, 64⟩
 
--- Every range claim must be discharged; the vat alone cannot.
-#guard (transferPred demoKey ins0 outs0 64 .tt).check (dischargeOracle (rangeIds (ins0 ++ outs0))) σ0
+-- Every range claim AND the audited blinding-conservation claim (`auditVk`) must be discharged:
+-- range leaves alone (without `auditVk` / `auditedOracle`) are refused!
+#guard (transferPred demoKey ins0 outs0 64 .tt).check (auditedOracle demoKey ins0 outs0 64) σ0
+#guard !(transferPred demoKey ins0 outs0 64 .tt).check (dischargeOracle (rangeIds (ins0 ++ outs0))) σ0
 #guard !(transferPred demoKey ins0 outs0 64 .tt).check noOracle σ0
 #guard !(transferPred demoKey ins0 outs0 64 .tt).check (dischargeOracle (rangeIds ins0)) σ0
 #guard !(transferPred demoKey ins0 outsInflated 64 .tt).check
-  (dischargeOracle (rangeIds (ins0 ++ outsInflated))) σ0
+  (auditedOracle demoKey ins0 outsInflated 64) σ0
 #guard !(transferPred demoKey ins0 outs0 64 (.le 0 4)).check
-  (dischargeOracle (rangeIds (ins0 ++ outs0))) σ0
+  (auditedOracle demoKey ins0 outs0 64) σ0
+-- Unblinded forgery (`[⟨0, 0⟩] → [⟨200, -120⟩]`) passes raw `homCheck` + 8-bit ranges,
+-- but is REFUSED by `auditedOracle` / `transferPred` because `blindSum ins ≠ blindSum outs`!
+#guard !(transferPred demoKey [⟨0#256, 0#256⟩] [⟨200#256, 0#256 - 120#256⟩] 8 .tt).check
+  (auditedOracle demoKey [⟨0#256, 0#256⟩] [⟨200#256, 0#256 - 120#256⟩] 8) σ0
+
+example (c v b : BitVec 256) :
+    commitVal demoHidingKey.toCommitKey v b = c ↔ b = demoHidingKey.blindFor c v :=
+  commitVal_hiding_bijection demoHidingKey c v b
+
+example := demoKey_equivocates
+example := homCheck_accepts_unblinded_forgery
+example := privPred_conservation_inhabited
 
 example (σ : Step) : (transferPred demoKey ins0 outs0 64 .tt).check noOracle σ = false :=
   privPred_ranges_refused_firstParty σ _ ⟨(⟨30#256, 11#256⟩ : Opening).commit demoKey, 64⟩
@@ -254,12 +268,21 @@ def served (preds : List DistPred) (createdAt : Nat) : Option Discharge :=
 def verdict (d : Option Discharge) (bind tail : ByteArray) (now : Nat) : Option Bool :=
   d.map fun d => verifyDischarge cavA (bindDischarge d bind) tail σ0 now 300
 
--- Sealing: the round trip, a wrong key, a flipped ciphertext byte.
+-- Sealing: the round trip, a wrong key, a flipped ciphertext byte, and `SealLedger` nonce freshness.
 #guard aeadOpen k3p (aeadSeal k3p n1 [1, 2, 3]) == some [1, 2, 3]
 #guard (aeadSeal k3p n1 [1, 2, 3]).body != [1, 2, 3]
 #guard (aeadOpen tailA (aeadSeal k3p n1 [1, 2, 3])).isNone
 #guard (aeadOpen k3p { aeadSeal k3p n1 [1, 2, 3] with body := [0, 0, 0] }).isNone
 #guard (aeadOpen k3p { aeadSeal k3p n1 [1, 2, 3] with nonce := n2 }).isNone
+#guard ((SealLedger.sealFresh ⟨[]⟩ k3p n1 [1, 2, 3]).bind fun (st1, _) =>
+  st1.sealFresh k3p n1 [4, 5, 6]).isNone
+#guard ((SealLedger.sealFresh ⟨[]⟩ k3p n1 [1, 2, 3]).bind fun (st1, _) =>
+  st1.sealFresh k3p n2 [4, 5, 6]).isSome
+
+example (len : Nat) : len ≤ (keystreamFor k3p n1 len).length := keystreamFor_covers k3p n1 len
+example : xorWith (aeadSeal k3p n1 [1, 2, 3]).body (aeadSeal k3p n1 [4, 5, 6]).body =
+    xorWith [1, 2, 3] [4, 5, 6] :=
+  aeadSeal_nonce_reuse_leaks k3p n1 [1, 2, 3] [4, 5, 6] rfl
 
 -- The third party recovers the key and the predicate; nobody else does.
 #guard openTicket k3p cavA == some (rKey, predId)
@@ -575,6 +598,21 @@ example : FloorsHold (runSettlements demoEnv 2 ledger0 settlementAttempts).book 
 #tooth Obend.Polis.PrivatePredicate.inflation_refused by mutation
   Obend.Polis.PrivatePredicate.homCheck := fun _ _ => true
 
+-- An auditor that skips the `blindSum ins = blindSum outs` check (allowing unblinded forgery!).
+#tooth Obend.Polis.PrivatePredicate.privPred_conservation_sound by mutation
+  Obend.Polis.PrivatePredicate.auditTransfer := fun key ins outs claim =>
+    decide (claim.g = key.g) && decide (claim.h = key.h) &&
+    decide (claim.inCommits = ins.map (Opening.commit key)) &&
+    decide (claim.outCommits = outs.map (Opening.commit key)) &&
+    decide (claim.inBinds = ins.map Opening.bind) &&
+    decide (claim.outBinds = outs.map Opening.bind) &&
+    (ins ++ outs).all (fun op => decide (op.value.toNat < 2 ^ claim.bits))
+
+-- A sealing ledger that fails to refuse reused nonces.
+#tooth Obend.Polis.PrivatePredicate.SealLedger.reused_nonce_refused by mutation
+  Obend.Polis.PrivatePredicate.SealLedger.sealFresh := fun st key nonce msg =>
+    some (⟨nonce :: st.seenNonces⟩, aeadSeal key nonce msg)
+
 -- A verifier that does not ask for the binding to the parent.
 #tooth Obend.Polis.PrivatePredicate.unbound_or_wrong_parent_refused by mutation
   Obend.Polis.PrivatePredicate.verifyDischarge := fun cav d parentTail σ now maxAge =>
@@ -658,6 +696,7 @@ example : FloorsHold (runSettlements demoEnv 2 ledger0 settlementAttempts).book 
 #print axioms Obend.Polis.PrivatePredicate.DistPred.encode_injective
 #print axioms Obend.Polis.PrivatePredicate.eval_subst_eq_eval_pevalVat
 #print axioms Obend.Polis.PrivatePredicate.private_conservation_iff_value_sum
+#print axioms Obend.Polis.PrivatePredicate.privPred_conservation_extract
 #print axioms Obend.Polis.PrivatePredicate.privPred_conservation_sound
 #print axioms Obend.Polis.PrivatePredicate.verifyDischarge_iff
 #print axioms Obend.Polis.PrivatePredicate.unbound_or_wrong_parent_refused

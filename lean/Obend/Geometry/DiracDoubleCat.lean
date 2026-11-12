@@ -271,62 +271,47 @@ theorem dirac_image_parametrization (D : KernelDirac)
       intro A w hw i hi; unfold matVecMulN; rw [vecEntry_mkVec n _ i hi]
       rw [sumUpTo_congr n _ (fun _ => 0) (fun j hj => by rw [hw j hj]; grind)]
       exact sumUpTo_zero n
+    have blockexpand : ∀ (P Q R : List (List CanonicalRat)),
+        ∀ i, i < n →
+          vecEntry (matVecMulN n P μ) i =
+            vecEntry (matVecMulN n (matMulN n (matMulN n P D.gramInv) Q) f) i +
+            vecEntry (matVecMulN n (matMulN n (matMulN n P D.gramInv) R) e) i → True := fun _ _ _ _ _ _ => trivial
+    have _ := blockexpand
+    have expandMu : ∀ (P : List (List CanonicalRat)) (i : Nat), i < n →
+        vecEntry (matVecMulN n P μ) i =
+          vecEntry (matVecMulN n (matMulN n (matMulN n P D.gramInv) D.matL) f) i +
+          vecEntry (matVecMulN n (matMulN n (matMulN n P D.gramInv) D.matK) e) i := by
+      intro P i hi; dsimp only [μ]
+      rw [← matVecMulN_mul n P D.gramInv _ i hi, matVecMulN_add_vec n (matMulN n P D.gramInv) _ _ i hi,
+          ← matVecMulN_mul n (matMulN n P D.gramInv) D.matL f i hi,
+          ← matVecMulN_mul n (matMulN n P D.gramInv) D.matK e i hi]
+    have expandZero : ∀ (P : List (List CanonicalRat)) (i : Nat), i < n →
+        0 = vecEntry (matVecMulN n (matMulN n (matMulN n P D.gramInv) D.matK) f) i +
+            vecEntry (matVecMulN n (matMulN n (matMulN n P D.gramInv) D.matL) e) i := by
+      intro P i hi
+      have h0 := matOnZero (matMulN n P D.gramInv) (vecAddN n (matVecMulN n D.matK f) (matVecMulN n D.matL e)) hZeroVec i hi
+      rw [matVecMulN_add_vec n (matMulN n P D.gramInv) _ _ i hi,
+          ← matVecMulN_mul n (matMulN n P D.gramInv) D.matK f i hi,
+          ← matVecMulN_mul n (matMulN n P D.gramInv) D.matL e i hi] at h0
+      exact h0.symm
     refine ⟨fun i hi => ?_, fun i hi => ?_⟩
-    · have hLtMu : vecEntry (matVecMulN n Lt μ) i =
-          vecEntry (matVecMulN n (matMulN n (matMulN n Lt D.gramInv) D.matL) f) i +
-          vecEntry (matVecMulN n (matMulN n (matMulN n Lt D.gramInv) D.matK) e) i := by
-        dsimp only [μ]
-        rw [← matVecMulN_mul n Lt D.gramInv _ i hi,
-            matVecMulN_add_vec n (matMulN n Lt D.gramInv) _ _ i hi,
-            ← matVecMulN_mul n (matMulN n Lt D.gramInv) D.matL f i hi,
-            ← matVecMulN_mul n (matMulN n Lt D.gramInv) D.matK e i hi]
-      have hKtZero : 0 =
-          vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matK) f) i +
-          vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matL) e) i := by
-        have h0 := matOnZero (matMulN n Kt D.gramInv)
-          (vecAddN n (matVecMulN n D.matK f) (matVecMulN n D.matL e)) hZeroVec i hi
-        rw [matVecMulN_add_vec n (matMulN n Kt D.gramInv) _ _ i hi,
-            ← matVecMulN_mul n (matMulN n Kt D.gramInv) D.matK f i hi,
-            ← matVecMulN_mul n (matMulN n Kt D.gramInv) D.matL e i hi] at h0
-        exact h0.symm
-      have hDiagF :
-          vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matK) f) i +
+    · have hLtMu := expandMu Lt i hi
+      have hKtZero := expandZero Kt i hi
+      have hDiagF : vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matK) f) i +
           vecEntry (matVecMulN n (matMulN n (matMulN n Lt D.gramInv) D.matL) f) i = vecEntry f i := by
-        rw [← matVecMulN_add_mat n _ _ f i hi]
-        exact matVecMulN_eq_id_of_entries n _ hDiag f i hi
-      have hCrossE :
-          vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matL) e) i +
+        rw [← matVecMulN_add_mat n _ _ f i hi]; exact matVecMulN_eq_id_of_entries n _ hDiag f i hi
+      have hCrossE : vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matL) e) i +
           vecEntry (matVecMulN n (matMulN n (matMulN n Lt D.gramInv) D.matK) e) i = 0 := by
-        rw [← matVecMulN_add_mat n _ _ e i hi]
-        exact matVecMulN_eq_zero_of_entries n _ hCross e i hi
+        rw [← matVecMulN_add_mat n _ _ e i hi]; exact matVecMulN_eq_zero_of_entries n _ hCross e i hi
       grind
-    · have hKtMu : vecEntry (matVecMulN n Kt μ) i =
-          vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matL) f) i +
-          vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matK) e) i := by
-        dsimp only [μ]
-        rw [← matVecMulN_mul n Kt D.gramInv _ i hi,
-            matVecMulN_add_vec n (matMulN n Kt D.gramInv) _ _ i hi,
-            ← matVecMulN_mul n (matMulN n Kt D.gramInv) D.matL f i hi,
-            ← matVecMulN_mul n (matMulN n Kt D.gramInv) D.matK e i hi]
-      have hLtZero : 0 =
-          vecEntry (matVecMulN n (matMulN n (matMulN n Lt D.gramInv) D.matK) f) i +
-          vecEntry (matVecMulN n (matMulN n (matMulN n Lt D.gramInv) D.matL) e) i := by
-        have h0 := matOnZero (matMulN n Lt D.gramInv)
-          (vecAddN n (matVecMulN n D.matK f) (matVecMulN n D.matL e)) hZeroVec i hi
-        rw [matVecMulN_add_vec n (matMulN n Lt D.gramInv) _ _ i hi,
-            ← matVecMulN_mul n (matMulN n Lt D.gramInv) D.matK f i hi,
-            ← matVecMulN_mul n (matMulN n Lt D.gramInv) D.matL e i hi] at h0
-        exact h0.symm
-      have hCrossF :
-          vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matL) f) i +
+    · have hKtMu := expandMu Kt i hi
+      have hLtZero := expandZero Lt i hi
+      have hCrossF : vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matL) f) i +
           vecEntry (matVecMulN n (matMulN n (matMulN n Lt D.gramInv) D.matK) f) i = 0 := by
-        rw [← matVecMulN_add_mat n _ _ f i hi]
-        exact matVecMulN_eq_zero_of_entries n _ hCross f i hi
-      have hDiagE :
-          vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matK) e) i +
+        rw [← matVecMulN_add_mat n _ _ f i hi]; exact matVecMulN_eq_zero_of_entries n _ hCross f i hi
+      have hDiagE : vecEntry (matVecMulN n (matMulN n (matMulN n Kt D.gramInv) D.matK) e) i +
           vecEntry (matVecMulN n (matMulN n (matMulN n Lt D.gramInv) D.matL) e) i = vecEntry e i := by
-        rw [← matVecMulN_add_mat n _ _ e i hi]
-        exact matVecMulN_eq_id_of_entries n _ hDiag e i hi
+        rw [← matVecMulN_add_mat n _ _ e i hi]; exact matVecMulN_eq_id_of_entries n _ hDiag e i hi
       grind
 
 /-- **Exact Self-Orthogonality (`dirac_self_orthogonal_iff`)**:
@@ -512,6 +497,42 @@ theorem diracPlant_trajectory_lyapunov {State PortIn PortOut : Type}
         P.energy s₀ + P.toOpenDissipativeSys.trajectorySupply s₀ us :=
   OpenDissipativeSys.energy_bounded_along_trajectory P.toOpenDissipativeSys s₀ us
 
+/-- Quadratic storage energy $H(x) = \sum_{i < d} \frac{1}{2} q_i x_i^2$ and midpoint discrete gradient
+    $e_{\text{stor}, i} = q_i \frac{x'_i + x_i}{2}$ over `CanonicalRat`. -/
+def quadStorageEnergy (d : Nat) (q x : List CanonicalRat) : CanonicalRat :=
+  sumUpTo d (fun i => (1 / 2) * vecEntry q i * (vecEntry x i * vecEntry x i))
+
+def midpointStorageEffort (d : Nat) (q xPrev xNext : List CanonicalRat) : List CanonicalRat :=
+  mkVec d (fun i => vecEntry q i * ((vecEntry xNext i + vecEntry xPrev i) / 2))
+
+/-- **Exact Discrete-Gradient Midpoint Port-Hamiltonian Dissipation (`midpoint_resistive_ph_step_dissipative`)**:
+    For any quadratic Hamiltonian $H(x) = \sum_{i < d} \frac{1}{2} q_i x_i^2$, midpoint effort
+    $e_{\text{stor}} = Q \frac{x' + x}{2}$ satisfies the exact discrete chain rule
+    $H(x') - H(x) = \langle e_{\text{stor}}, x' - x \rangle$ with **zero** numerical energy drift;
+    when coupled to any certified `ResistiveDiracClosure` (`C.ExtMem fExt eExt`) via
+    $\langle e_{\text{stor}}, x' - x \rangle = \Delta t (P_{\text{supply}} + \langle e_{\text{ext}}, f_{\text{ext}} \rangle)$
+    with $\Delta t > 0$, dissipative passivity $H(x') - H(x) \le \Delta t \, P_{\text{supply}}$ follows identically. -/
+theorem midpoint_resistive_ph_step_dissipative
+    (C : ResistiveDiracClosure) (hOk : checkResistiveDiracClosure C = true)
+    (d : Nat) (q xPrev xNext fExt eExt : List CanonicalRat)
+    (dt supplyPower : CanonicalRat) (hDt : 0 < dt)
+    (hMem : C.ExtMem fExt eExt)
+    (hInterconn : vecDotN d (midpointStorageEffort d q xPrev xNext) (vecSubN d xNext xPrev) =
+      dt * (supplyPower + vecDotN C.extDim eExt fExt)) :
+    quadStorageEnergy d q xNext - quadStorageEnergy d q xPrev =
+      vecDotN d (midpointStorageEffort d q xPrev xNext) (vecSubN d xNext xPrev) ∧
+    quadStorageEnergy d q xNext - quadStorageEnergy d q xPrev ≤ dt * supplyPower := by
+  have hChain : quadStorageEnergy d q xNext - quadStorageEnergy d q xPrev =
+      vecDotN d (midpointStorageEffort d q xPrev xNext) (vecSubN d xNext xPrev) := by
+    unfold quadStorageEnergy midpointStorageEffort vecDotN vecSubN
+    rw [← sumUpTo_sub]
+    refine sumUpTo_congr d _ _ (fun i hi => ?_)
+    rw [vecEntry_mkVec d _ i hi, vecEntry_mkVec d _ i hi]; grind
+  have hDiss := resistiveDirac_dissipative_power C hOk fExt eExt hMem
+  have hMul : dt * (supplyPower + vecDotN C.extDim eExt fExt) ≤ dt * supplyPower :=
+    Rat.mul_le_mul_of_nonneg_left (by grind) (Rat.le_of_lt hDt)
+  exact ⟨hChain, by rw [hChain, hInterconn]; exact hMul⟩
+
 /-! ### 1.2 Four Concrete Certified Dirac Structures (Hypergraph KCL/KVL, Gyrator, Transformer, DEC Poynting) -/
 
 /-- Canonical 3-port common-bus `StrictOpenHypergraph` (`Obend.Hardware.OpenHypergraph`) with 2 input
@@ -606,13 +627,11 @@ def gyratorMotorDirac (kt : CanonicalRat) : KernelDirac :=
 /-- Symbolic certification of `gyratorMotorDirac kt` for **every** torque constant $k_t \in \mathbb{Q}$. -/
 theorem gyratorMotorDirac_certified (kt : CanonicalRat) :
     checkDiracIsotropicAndRank (gyratorMotorDirac kt) = true ∧
-    ∀ f e : List CanonicalRat,
-      (gyratorMotorDirac kt).Mem f e ↔
-        (vecEntry e 0 + kt * vecEntry f 1 = 0 ∧ vecEntry e 1 - kt * vecEntry f 0 = 0) := by
+    ∀ f e : List CanonicalRat, (gyratorMotorDirac kt).Mem f e ↔
+      (vecEntry e 0 + kt * vecEntry f 1 = 0 ∧ vecEntry e 1 - kt * vecEntry f 0 = 0) := by
   have hd : 1 + kt * kt ≠ 0 := by have := Interval.rat_sq_nonneg kt; grind
-  refine ⟨?_, fun f e => ?_⟩
-  · unfold checkDiracIsotropicAndRank
-    dsimp only [gyratorMotorDirac]
+  refine ⟨?_, fun f e => ⟨fun h => ?_, ?_⟩⟩
+  · unfold checkDiracIsotropicAndRank; dsimp only [gyratorMotorDirac]
     simp only [Bool.and_eq_true, checkMatZeroN_iff, checkMatIdN_iff, check2x2_entry_iff]
     have lt0 : 0 < 2 := by omega
     have lt1 : 1 < 2 := by omega
@@ -622,44 +641,33 @@ theorem gyratorMotorDirac_certified (kt : CanonicalRat) :
                matEntry_mul2 _ _ _ _ lt1 lt0, matEntry_mul2 _ _ _ _ lt1 lt1,
                matEntry_trans2 _ _ _ lt0 lt0, matEntry_trans2 _ _ _ lt0 lt1,
                matEntry_trans2 _ _ _ lt1 lt0, matEntry_trans2 _ _ _ lt1 lt1,
-               matEntry_cons_zero, matEntry_cons_succ, vecEntry_cons_zero, vecEntry_cons_succ,
-               ↓reduceIte]
+               matEntry_cons_zero, matEntry_cons_succ, vecEntry_cons_zero, vecEntry_cons_succ, ↓reduceIte]
     grind
-  · dsimp only [KernelDirac.Mem, gyratorMotorDirac]
-    constructor
-    · intro h
-      have h0 := h 0 (by omega)
-      have h1 := h 1 (by omega)
-      simp only [matVecMulN, mkVec, mkVecFrom, sumUpTo,
-        vecEntry_cons_zero, vecEntry_cons_succ, matEntry_cons_zero, matEntry_cons_succ] at h0 h1
-      grind
-    · rintro ⟨h0, h1⟩ i hi
-      match i with
-      | 0 | 1 =>
-        simp only [matVecMulN, mkVec, mkVecFrom, sumUpTo,
-          vecEntry_cons_zero, vecEntry_cons_succ, matEntry_cons_zero, matEntry_cons_succ]
-        grind
-      | n + 2 => omega
+  · dsimp only [KernelDirac.Mem, gyratorMotorDirac] at h
+    have h0 := h 0 (by omega); have h1 := h 1 (by omega)
+    simp only [matVecMulN, mkVec, mkVecFrom, sumUpTo, vecEntry_cons_zero, vecEntry_cons_succ,
+      matEntry_cons_zero, matEntry_cons_succ] at h0 h1; grind
+  · rintro ⟨h0, h1⟩ i hi; dsimp only [KernelDirac.Mem, gyratorMotorDirac] at hi ⊢
+    match i with
+    | 0 | 1 =>
+      simp only [matVecMulN, mkVec, mkVecFrom, sumUpTo, vecEntry_cons_zero, vecEntry_cons_succ,
+        matEntry_cons_zero, matEntry_cons_succ]; grind
+    | n + 2 => omega
 
 /-- 2-port ideal transformer Dirac structure with arbitrary rational turns ratio $r \in \mathbb{Q}$:
     $i_1 + r i_2 = 0$ ($f_0 + r f_1 = 0$) and $v_2 = r v_1$ ($e_1 - r e_0 = 0$). -/
 def idealTransformerDirac (r : CanonicalRat) : KernelDirac :=
   let invD := 1 / (1 + r * r)
-  { dim := 2
-    matK := [[1, r], [0, 0]]
-    matL := [[0, 0], [-r, 1]]
-    gramInv := [[invD, 0], [0, invD]] }
+  { dim := 2, matK := [[1, r], [0, 0]], matL := [[0, 0], [-r, 1]], gramInv := [[invD, 0], [0, invD]] }
 
 /-- Symbolic certification of `idealTransformerDirac r` for **every** rational turns ratio $r \in \mathbb{Q}$. -/
 theorem idealTransformerDirac_certified (r : CanonicalRat) :
     checkDiracIsotropicAndRank (idealTransformerDirac r) = true ∧
-    ∀ f e : List CanonicalRat,
-      (idealTransformerDirac r).Mem f e ↔
-        (vecEntry f 0 + r * vecEntry f 1 = 0 ∧ vecEntry e 1 - r * vecEntry e 0 = 0) := by
+    ∀ f e : List CanonicalRat, (idealTransformerDirac r).Mem f e ↔
+      (vecEntry f 0 + r * vecEntry f 1 = 0 ∧ vecEntry e 1 - r * vecEntry e 0 = 0) := by
   have hd : 1 + r * r ≠ 0 := by have := Interval.rat_sq_nonneg r; grind
-  refine ⟨?_, fun f e => ?_⟩
-  · unfold checkDiracIsotropicAndRank
-    dsimp only [idealTransformerDirac]
+  refine ⟨?_, fun f e => ⟨fun h => ?_, ?_⟩⟩
+  · unfold checkDiracIsotropicAndRank; dsimp only [idealTransformerDirac]
     simp only [Bool.and_eq_true, checkMatZeroN_iff, checkMatIdN_iff, check2x2_entry_iff]
     have lt0 : 0 < 2 := by omega
     have lt1 : 1 < 2 := by omega
@@ -669,24 +677,18 @@ theorem idealTransformerDirac_certified (r : CanonicalRat) :
                matEntry_mul2 _ _ _ _ lt1 lt0, matEntry_mul2 _ _ _ _ lt1 lt1,
                matEntry_trans2 _ _ _ lt0 lt0, matEntry_trans2 _ _ _ lt0 lt1,
                matEntry_trans2 _ _ _ lt1 lt0, matEntry_trans2 _ _ _ lt1 lt1,
-               matEntry_cons_zero, matEntry_cons_succ, vecEntry_cons_zero, vecEntry_cons_succ,
-               ↓reduceIte]
+               matEntry_cons_zero, matEntry_cons_succ, vecEntry_cons_zero, vecEntry_cons_succ, ↓reduceIte]
     grind
-  · dsimp only [KernelDirac.Mem, idealTransformerDirac]
-    constructor
-    · intro h
-      have h0 := h 0 (by omega)
-      have h1 := h 1 (by omega)
-      simp only [matVecMulN, mkVec, mkVecFrom, sumUpTo,
-        vecEntry_cons_zero, vecEntry_cons_succ, matEntry_cons_zero, matEntry_cons_succ] at h0 h1
-      grind
-    · rintro ⟨h0, h1⟩ i hi
-      match i with
-      | 0 | 1 =>
-        simp only [matVecMulN, mkVec, mkVecFrom, sumUpTo,
-          vecEntry_cons_zero, vecEntry_cons_succ, matEntry_cons_zero, matEntry_cons_succ]
-        grind
-      | n + 2 => omega
+  · dsimp only [KernelDirac.Mem, idealTransformerDirac] at h
+    have h0 := h 0 (by omega); have h1 := h 1 (by omega)
+    simp only [matVecMulN, mkVec, mkVecFrom, sumUpTo, vecEntry_cons_zero, vecEntry_cons_succ,
+      matEntry_cons_zero, matEntry_cons_succ] at h0 h1; grind
+  · rintro ⟨h0, h1⟩ i hi; dsimp only [KernelDirac.Mem, idealTransformerDirac] at hi ⊢
+    match i with
+    | 0 | 1 =>
+      simp only [matVecMulN, mkVec, mkVecFrom, sumUpTo, vecEntry_cons_zero, vecEntry_cons_succ,
+        matEntry_cons_zero, matEntry_cons_succ]; grind
+    | n + 2 => omega
 
 /-- Single 1D DEC segment cell complex ($V = 2$, oriented edge $0 \to 1$). -/
 def segment1DComplex : CellComplex3D where
@@ -874,11 +876,44 @@ theorem horizComp_preserves_power_balance {A B C : ScaleObj}
     vecDotN A.portDim eA fA + vecDotN C.portDim eC fC ≤ 0 :=
   (horizComp S1 S2).power_dissipative fA eA fC eC hRel
 
-/-- Symmetric monoidal object tensor $A_1 \otimes A_2$ summing port and observable dimensions. -/
+/-- Embed any certified lossless `KernelDirac` of dimension `A.portDim + B.portDim` directly as a
+    horizontal 1-morphism `HorizOpenSys A B` (`e_A · f_A + e_B · f_B = 0 ≤ 0`). -/
+def KernelDirac.toHorizOpenSys {A B : ScaleObj} (D : KernelDirac)
+    (hDim : D.dim = A.portDim + B.portDim)
+    (hOk : checkDiracIsotropicAndRank D = true)
+    (obsMap : List CanonicalRat → List CanonicalRat)
+    (hLip : ∀ x y, vecMaxDist B.obsDim (obsMap x) (obsMap y) ≤ vecMaxDist A.obsDim x y) :
+    HorizOpenSys A B where
+  portRel fA eA fB eB := D.Mem (splitConcatVec A.portDim B.portDim fA fB)
+                               (splitConcatVec A.portDim B.portDim eA eB)
+  power_dissipative fA eA fB eB hMem := by
+    have h0 := dirac_power_conservation D hOk
+      (splitConcatVec A.portDim B.portDim fA fB) (splitConcatVec A.portDim B.portDim eA eB) hMem
+    rw [hDim, vecDotN_splitConcat] at h0
+    grind
+  stepObs := obsMap
+  stepObs_nonexpansive := hLip
+
+/-- Disjoint union (coproduct) of two oriented 3-skeleton cell complexes $K_1 \sqcup K_2$,
+    offsetting $K_2$'s vertex, edge, and face indices by $(|V_1|, |E_1|, |F_1|)$. -/
+def disjointUnionComplex (K1 K2 : CellComplex3D) : CellComplex3D where
+  numV := K1.numV + K2.numV
+  edges := K1.edges ++ K2.edges.map (fun (u, w) => (K1.numV + u, K1.numV + w))
+  faces := K1.faces ++ K2.faces.map (fun ch => ch.map (fun (e, s) => (K1.numE + e, s)))
+  volumes := K1.volumes ++ K2.volumes.map (fun ch => ch.map (fun (f, s) => (K1.numF + f, s)))
+
+theorem disjointUnionComplex_counts (K1 K2 : CellComplex3D) :
+    (disjointUnionComplex K1 K2).numV = K1.numV + K2.numV ∧
+    (disjointUnionComplex K1 K2).numE = K1.numE + K2.numE ∧
+    (disjointUnionComplex K1 K2).numF = K1.numF + K2.numF ∧
+    (disjointUnionComplex K1 K2).numC = K1.numC + K2.numC := by
+  simp [disjointUnionComplex, CellComplex3D.numE, CellComplex3D.numF, CellComplex3D.numC]
+
+/-- Symmetric monoidal object tensor $A_1 \otimes A_2$ summing port/observable dimensions and taking $K_1 \sqcup K_2$. -/
 def tensorScaleObj (A1 A2 : ScaleObj) : ScaleObj where
   portDim := A1.portDim + A2.portDim
   obsDim  := A1.obsDim + A2.obsDim
-  complex := A1.complex
+  complex := disjointUnionComplex A1.complex A2.complex
 
 /-- Parallel monoidal product `horizTensor S1 S2` of two open acausal systems. -/
 def horizTensor {A1 B1 A2 B2 : ScaleObj}
@@ -970,27 +1005,16 @@ structure VertCoarseGrain (Fine Coarse : ScaleObj) where
 
 /-- Vertical identity coarse-graining on `A`. -/
 def VertCoarseGrain.id (A : ScaleObj) : VertCoarseGrain A A where
-  proj0 x := x
-  proj1 x := x
-  proj2 x := x
-  proj3 x := x
-  proj1_zero := rfl
-  proj2_zero := rfl
-  proj3_zero := rfl
-  proj1_add _ _ := rfl
-  commutes01 _ := rfl
-  commutes12 _ := rfl
-  commutes23 _ := rfl
-  projObs x := x
-  projObs_nonexpansive _ _ := by grind
+  proj0 x := x; proj1 x := x; proj2 x := x; proj3 x := x
+  proj1_zero := rfl; proj2_zero := rfl; proj3_zero := rfl; proj1_add _ _ := rfl
+  commutes01 _ := rfl; commutes12 _ := rfl; commutes23 _ := rfl
+  projObs x := x; projObs_nonexpansive _ _ := by grind
 
 /-- Vertical composition of multiscale cochain projections `vertComp π1 π2`. -/
 def vertComp {F M C : ScaleObj}
     (π1 : VertCoarseGrain F M) (π2 : VertCoarseGrain M C) : VertCoarseGrain F C where
-  proj0 x := π2.proj0 (π1.proj0 x)
-  proj1 x := π2.proj1 (π1.proj1 x)
-  proj2 x := π2.proj2 (π1.proj2 x)
-  proj3 x := π2.proj3 (π1.proj3 x)
+  proj0 x := π2.proj0 (π1.proj0 x); proj1 x := π2.proj1 (π1.proj1 x)
+  proj2 x := π2.proj2 (π1.proj2 x); proj3 x := π2.proj3 (π1.proj3 x)
   proj1_zero := by rw [π1.proj1_zero, π2.proj1_zero]
   proj2_zero := by rw [π1.proj2_zero, π2.proj2_zero]
   proj3_zero := by rw [π1.proj3_zero, π2.proj3_zero]
@@ -1000,8 +1024,7 @@ def vertComp {F M C : ScaleObj}
   commutes23 B := by rw [π2.commutes23, π1.commutes23]
   projObs x := π2.projObs (π1.projObs x)
   projObs_nonexpansive x y :=
-    Rat.le_trans (π2.projObs_nonexpansive (π1.projObs x) (π1.projObs y))
-                 (π1.projObs_nonexpansive x y)
+    Rat.le_trans (π2.projObs_nonexpansive (π1.projObs x) (π1.projObs y)) (π1.projObs_nonexpansive x y)
 
 /-- **Coarse-Graining Preserves Cohomology & Topological Conservation (`coarseGrain_preserves_cohomology_and_conservation`)**:
     1. Closed 1-cocycles (irrotational fields $d_1 \alpha = 0$) project to closed coarse 1-cocycles $d_1(\pi_1 \alpha) = 0$.
@@ -1164,6 +1187,7 @@ theorem doubleCat_interchange_law
     (δ : MultiscaleSquare T1 T2 π11 π12) :
     let vh := vPaste (hPaste α β) (hPaste γ δ)
     let hv := hPaste (vPaste α γ) (vPaste β δ)
+    vh = hv ∧
     vh.defectEps = hv.defectEps ∧
     vh.grade = hv.grade ∧
     (∀ x, vecMaxDist A22.obsDim
@@ -1175,17 +1199,19 @@ theorem doubleCat_interchange_law
   intro vh hv
   have hEps : vh.defectEps = hv.defectEps := by
     change (α.defectEps + β.defectEps) + (γ.defectEps + δ.defectEps) =
-           (α.defectEps + γ.defectEps) + (β.defectEps + δ.defectEps)
-    grind
+           (α.defectEps + γ.defectEps) + (β.defectEps + δ.defectEps); grind
   have hGrade : vh.grade = hv.grade := by
-    change (α.grade + β.grade) + (γ.grade + δ.grade) =
-           (α.grade + γ.grade) + (β.grade + δ.grade)
+    change (α.grade + β.grade) + (γ.grade + δ.grade) = (α.grade + γ.grade) + (β.grade + δ.grade)
     rw [GradeMonoid.add_assoc α.grade β.grade (γ.grade + δ.grade),
-        ← GradeMonoid.add_assoc β.grade γ.grade δ.grade,
-        GradeMonoid.add_comm β.grade γ.grade,
-        GradeMonoid.add_assoc γ.grade β.grade δ.grade,
-        ← GradeMonoid.add_assoc α.grade γ.grade (β.grade + δ.grade)]
-  exact ⟨hEps, hGrade, vh.closure_bound, hv.closure_bound⟩
+        ← GradeMonoid.add_assoc β.grade γ.grade δ.grade, GradeMonoid.add_comm β.grade γ.grade,
+        GradeMonoid.add_assoc γ.grade β.grade δ.grade, ← GradeMonoid.add_assoc α.grade γ.grade (β.grade + δ.grade)]
+  have hEq : vh = hv := by
+    cases h1 : vh with | mk e1 nn1 g1 cb1 =>
+    cases h2 : hv with | mk e2 nn2 g2 cb2 =>
+    have he : e1 = e2 := by simpa [h1, h2] using hEps
+    have hg : g1 = g2 := by simpa [h1, h2] using hGrade
+    subst he; subst hg; rfl
+  exact ⟨hEq, hEps, hGrade, vh.closure_bound, hv.closure_bound⟩
 
 /-- Lift any `MultiscaleSquare` into a stateful graded computation in `GradedM CompositeGrade`
     (`Obend.Category.GradedLogic`), advancing the coarse observable while bounding subgrid error. -/
@@ -1377,44 +1403,29 @@ def fine2CellHorizSys : HorizOpenSys (fineLineScaleObj 2 2) (fineLineScaleObj 2 
 /-- Lumped 1-section MNA circuit specification ($C = [[2]]$, $G = [[6/7]]$, Backward-Euler $\Delta t = 1$
     giving $v' = \frac{7}{10} v$), paired with `Obend.Hardware.CircuitDae` passivity certificate. -/
 def lumpedTelegrapherMnaSpec : MnaCircuitSpec where
-  dim        := 1
-  inputDim   := 0
-  matC       := [[2]]
-  matG       := [[6 / 7]]
-  matB       := [[]]
-  nlBranches := []
+  dim := 1; inputDim := 0; matC := [[2]]; matG := [[6 / 7]]; matB := [[]]; nlBranches := []
 
 def lumpedTelegrapherMnaCert : MnaDaeCert where
-  capGramFactors     := [{ weight := 2, vec := [1] }]
-  condSymGramFactors := [{ weight := 12 / 7, vec := [1] }]
+  capGramFactors := [{ weight := 2, vec := [1] }]; condSymGramFactors := [{ weight := 12 / 7, vec := [1] }]
 
 def lumpedTelegrapherMnaProb : MnaDaeProblem where
-  spec   := lumpedTelegrapherMnaSpec
-  method := .backwardEuler
-  trace  := [{ dt := 1, xPrev := [1], xNext := [7 / 10], uInput := [],
-               iBranchesPrev := [], iBranchesNext := [], residualTol := 0 }]
+  spec := lumpedTelegrapherMnaSpec; method := .backwardEuler
+  trace := [{ dt := 1, xPrev := [1], xNext := [7 / 10], uInput := [],
+              iBranchesPrev := [], iBranchesNext := [], residualTol := 0 }]
 
 /-- Coarse lumped MNA horizontal open system matching `lumpedTelegrapherMnaSpec` ($v' = \frac{7}{10} v$). -/
 def lumpedMnaHorizSys : HorizOpenSys lumpedMnaScaleObj lumpedMnaScaleObj where
-  portRel fL eL fR eR :=
-    vecEntry fR 0 = -vecEntry fL 0 ∧ vecEntry eR 0 = vecEntry eL 0
-  power_dissipative fL eL fR eR := by
-    rintro ⟨hf, he⟩
-    dsimp only [lumpedMnaScaleObj, vecDotN, sumUpTo]
-    rw [hf, he]; grind
-  stepObs w :=
-    [(7 / 10) * clampRat 1 (vecEntry w 0)]
+  portRel fL eL fR eR := vecEntry fR 0 = -vecEntry fL 0 ∧ vecEntry eR 0 = vecEntry eL 0
+  power_dissipative fL eL fR eR := by rintro ⟨hf, he⟩; dsimp only [lumpedMnaScaleObj, vecDotN, sumUpTo]; rw [hf, he]; grind
+  stepObs w := [(7 / 10) * clampRat 1 (vecEntry w 0)]
   stepObs_nonexpansive x y := by
-    dsimp only [lumpedMnaScaleObj]
-    rw [vecMaxDist_le_iff 1 _ _ _ (vecMaxDist_nonneg 1 x y)]
-    intro i hi
-    have : i = 0 := by omega
+    dsimp only [lumpedMnaScaleObj]; rw [vecMaxDist_le_iff 1 _ _ _ (vecMaxDist_nonneg 1 x y)]
+    intro i hi; have : i = 0 := by omega
     subst this
     have h0 := (ratAbs_le_iff _ _).mp (Rat.le_trans
       (clampRat_lipschitz 1 (by decide +kernel) (vecEntry x 0) (vecEntry y 0))
       (entry_diff_le_vecMaxDist 1 x y 0 (by omega)))
-    simp only [vecEntry_cons_zero]
-    rw [ratAbs_le_iff]; grind
+    simp only [vecEntry_cons_zero]; rw [ratAbs_le_iff]; grind
 
 private theorem clampRat_id_of_bounds (vMax x : CanonicalRat)
     (hLo : -vMax ≤ x) (hHi : x ≤ vMax) : clampRat vMax x = x := by

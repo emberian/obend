@@ -190,7 +190,8 @@ example : ¬ ∃ prices, IsFlatMultiplicativeSection triangleMarketComplex [2, 2
   checkDiracIsotropicAndRank decMaxwellLineCellDirac
 
 /-- Concrete resistive closure terminating shaft port `1` of `gyratorMotorDirac 2` onto viscous
-    damping $R = [[3]]$ ($e_1 = 3 f_1$), inducing input electrical impedance $v_{\text{in}} = 12 i$. -/
+    damping $R = [[3]]$ ($e_1 = 3 f_1$), inducing passive reflected electrical impedance $e_0 = -\frac{4}{3} f_0$
+    ($f_1 = \frac{2}{3} f_0 \implies e_0 = -2 f_1 = -\frac{4}{3} f_0$, dissipating $e_0 f_0 = -\frac{4}{3} f_0^2 \le 0$). -/
 def dampedMotorClosure : ResistiveDiracClosure where
   extDim  := 1
   resDim  := 1
@@ -200,38 +201,58 @@ def dampedMotorClosure : ResistiveDiracClosure where
 
 #guard checkResistiveDiracClosure dampedMotorClosure
 
-/-- Concrete inhabited `DiracPortHamiltonianPlant` bridged to `Obend.Category.OpenDissipativeSys`. -/
-def zeroPortWitnessPlant : DiracPortHamiltonianPlant Nat Int Int where
-  energy s := (s : Int)
-  energy_nonneg s := Int.natCast_nonneg s
+/-- Non-zero inhabited motor port witness `fExt = [3], eExt = [-4]` (`fRes = [2], eRes = [6]`,
+    dissipating `eExt · fExt = -12 ≤ 0` into shaft viscous load `R = 3`). -/
+theorem dampedMotorClosure_nonzero_extMem : dampedMotorClosure.ExtMem [3] [-4] := by
+  refine ⟨[2], [6], ?_, fun j hj => ?_⟩
+  · intro i hi; change i < 2 at hi
+    match i with | 0 | 1 => decide +kernel | n + 2 => omega
+  · change j < 1 at hj
+    have hj0 : j = 0 := by omega
+    subst hj0
+    decide +kernel
+
+/-- Concrete inhabited `DiracPortHamiltonianPlant` carrying active non-zero motor port dissipation `[3], [-4]`. -/
+def activeMotorPlant : DiracPortHamiltonianPlant Nat Int Int where
+  energy s := 12 * (s : Int)
+  energy_nonneg s := by omega
   closure := dampedMotorClosure
   closure_ok := by decide +kernel
-  step s u := (s / 2, u)
-  portWitness _ _ := ([0], [0])
-  witness_mem _ _ := by
-    refine ⟨[0], [0], ?_, fun j hj => ?_⟩
-    · intro i hi
-      change i < 2 at hi
-      match i with
-      | 0 | 1 => decide +kernel
-      | n + 2 => omega
-    · change j < 1 at hj
-      have : j = 0 := by omega
-      subst this; decide +kernel
+  step s u := (if 0 < s then s - 1 else 0, u)
+  portWitness s _ := if 0 < s then ([3], [-4]) else ([0], [0])
+  witness_mem s _ := by
+    split
+    · exact dampedMotorClosure_nonzero_extMem
+    · refine ⟨[0], [0], ?_, fun j hj => ?_⟩
+      · intro i hi; change i < 2 at hi; match i with | 0 | 1 => decide +kernel | n + 2 => omega
+      · change j < 1 at hj
+        have hj0 : j = 0 := by omega
+        subst hj0
+        decide +kernel
   supply u _ := if 0 ≤ u then u else 0
   dissipative_balance s u := by
-    have hDot : vecDotN dampedMotorClosure.extDim [0] [0] = 0 := by decide +kernel
-    rw [hDot]
-    have hInt : ((s / 2 : Nat) : Int) - (s : Int) ≤ (if 0 ≤ u then u else 0) := by
-      split <;> omega
-    have hRat := Rat.intCast_le_intCast.mpr hInt
-    grind
+    by_cases hs : 0 < s
+    · simp only [hs, ↓reduceIte]
+      have hDot : vecDotN dampedMotorClosure.extDim [-4] [3] = -12 := by decide +kernel
+      rw [hDot]
+      have hInt : (12 * ((s - 1 : Nat) : Int) - 12 * (s : Int)) ≤ (if 0 ≤ u then u else 0) + (-12) := by
+        split <;> omega
+      have hRat := Rat.intCast_le_intCast.mpr hInt
+      grind
+    · simp only [hs, ↓reduceIte]
+      have hs0 : s = 0 := by omega
+      subst hs0
+      have hDot : vecDotN dampedMotorClosure.extDim [0] [0] = 0 := by decide +kernel
+      rw [hDot]
+      have hInt : (0 : Int) ≤ (if 0 ≤ u then u else 0) := by split <;> omega
+      have hRat := Rat.intCast_le_intCast.mpr hInt
+      grind
 
 example (s0 : Nat) (us : List Int) :
-    0 ≤ zeroPortWitnessPlant.energy (zeroPortWitnessPlant.toOpenDissipativeSys.runTrajectory s0 us) ∧
-    zeroPortWitnessPlant.energy (zeroPortWitnessPlant.toOpenDissipativeSys.runTrajectory s0 us) ≤
-      zeroPortWitnessPlant.energy s0 + zeroPortWitnessPlant.toOpenDissipativeSys.trajectorySupply s0 us :=
-  diracPlant_trajectory_lyapunov zeroPortWitnessPlant s0 us
+    0 ≤ activeMotorPlant.energy (activeMotorPlant.toOpenDissipativeSys.runTrajectory s0 us) ∧
+    activeMotorPlant.energy (activeMotorPlant.toOpenDissipativeSys.runTrajectory s0 us) ≤
+      activeMotorPlant.energy s0 + activeMotorPlant.toOpenDissipativeSys.trajectorySupply s0 us :=
+  diracPlant_trajectory_lyapunov activeMotorPlant s0 us
 
 /-- Non-trivial $2 \times 2$ double-category interchange witness with 4 distinct positive `defectEps`
     values (`1/10, 1/20, 1/30, 1/40`) and 4 distinct 5-axis `CompositeGrade` vectors, plus worked
@@ -327,11 +348,11 @@ def stepDecMaxwellMissingCurl (K : CellComplex3D) (M : DecHodgeMetric)
   by mutation Obend.Geometry.CochainAndGauge.gaugeTransformConn := fun _ conn => conn
 
 /-- 6. **Skew Instead of Symmetric Dirac Bond Pairing (`e1 · f2 - e2 · f1`):** makes every vector
-    isotropic regardless of Tellegen power $e \cdot f$, breaking `dirac_power_conservation`. -/
+    isotropic regardless of Tellegen power $e \cdot f$, falsifying `dirac_self_orthogonal_iff` ($D = D^\perp$). -/
 def diracPlusPairingSkew (n : Nat) (f1 e1 f2 e2 : List CanonicalRat) : CanonicalRat :=
   vecDotN n e1 f2 - vecDotN n e2 f1
 
-#tooth Obend.Geometry.DiracDoubleCat.dirac_power_conservation
+#tooth Obend.Geometry.DiracDoubleCat.dirac_self_orthogonal_iff
   by mutation Obend.Geometry.DiracDoubleCat.diracPlusPairing := diracPlusPairingSkew
 
 -- 7. Bypassed Dirac Isotropy & Rank Check (`checkDiracIsotropicAndRank := true`): admits
@@ -344,8 +365,8 @@ def diracPlusPairingSkew (n : Nat) (f1 e1 f2 e2 : List CanonicalRat) : Canonical
 #tooth Obend.Geometry.DiracDoubleCat.resistiveDirac_dissipative_power
   by mutation Obend.Geometry.DiracDoubleCat.checkResistiveDiracClosure := fun _ => true
 
-/-- 9. **Dropped Horizontal Grade Accumulation (`hPaste` drops `β.grade`):** breaks both
-    `hPaste_sound` and Eckmann–Hilton `doubleCat_interchange_law` across 2-cell grids. -/
+/-- 9. **Dropped Horizontal Grade Accumulation (`hPaste` drops `β.grade`):** breaks
+    `hPaste_sound` grade additivity `(hPaste α β).grade = α.grade + β.grade`. -/
 def hPasteDropRightGrade {F1 F2 F3 C1 C2 C3 : ScaleObj}
     {Sf1 : HorizOpenSys F1 F2} {Sf2 : HorizOpenSys F2 F3}
     {Sc1 : HorizOpenSys C1 C2} {Sc2 : HorizOpenSys C2 C3}
@@ -367,7 +388,45 @@ def hPasteDropRightGrade {F1 F2 F3 C1 C2 C3 : ScaleObj}
     have hAlpha := α.closure_bound x
     grind
 
-#tooth Obend.Geometry.DiracDoubleCat.doubleCat_interchange_law
+#tooth Obend.Geometry.DiracDoubleCat.hPaste_sound
   by mutation Obend.Geometry.DiracDoubleCat.hPaste := hPasteDropRightGrade
+
+/-- 10. **Non-Medial Multiplicative Defect Pasting (`vPaste` adds `α.defectEps * γ.defectEps`):**
+    genuinely violates Eckmann–Hilton mediality (`(a+b)(c+d) ≠ ac + bd`), breaking `doubleCat_interchange_law` (`vh = hv`). -/
+def vPasteNonlinearDefect {F1 F2 M1 M2 C1 C2 : ScaleObj}
+    {Sf : HorizOpenSys F1 F2} {Sm : HorizOpenSys M1 M2} {Sc : HorizOpenSys C1 C2}
+    {π1L : VertCoarseGrain F1 M1} {π1R : VertCoarseGrain F2 M2}
+    {π2L : VertCoarseGrain M1 C1} {π2R : VertCoarseGrain M2 C2}
+    (α : MultiscaleSquare Sf Sm π1L π1R)
+    (γ : MultiscaleSquare Sm Sc π2L π2R) :
+    MultiscaleSquare Sf Sc (vertComp π1L π2L) (vertComp π1R π2R) where
+  defectEps := α.defectEps + γ.defectEps + α.defectEps * γ.defectEps
+  defect_nonneg := by
+    have := α.defect_nonneg; have := γ.defect_nonneg
+    have := Rat.mul_nonneg α.defect_nonneg γ.defect_nonneg; grind
+  grade := α.grade + γ.grade
+  closure_bound x := by
+    dsimp [vertComp]
+    have hTri := vecMaxDist_triangle C2.obsDim
+      (π2R.projObs (π1R.projObs (Sf.stepObs x)))
+      (π2R.projObs (Sm.stepObs (π1L.projObs x)))
+      (Sc.stepObs (π2L.projObs (π1L.projObs x)))
+    have hProj := π2R.projObs_nonexpansive (π1R.projObs (Sf.stepObs x)) (Sm.stepObs (π1L.projObs x))
+    have hAlpha := α.closure_bound x
+    have hGamma := γ.closure_bound (π1L.projObs x)
+    have hProd := Rat.mul_nonneg α.defect_nonneg γ.defect_nonneg
+    grind
+
+#tooth Obend.Geometry.DiracDoubleCat.doubleCat_interchange_law
+  by mutation Obend.Geometry.DiracDoubleCat.vPaste := vPasteNonlinearDefect
+
+/-- 11. **Orientation-Blind Walk Integral (`walkIntegral` ignores backward `-` sign):**
+    breaks `sheaf_spanning_tree_exact_iff` on undirected spanning trees with reversed edges. -/
+def walkIntegralUnsigned (ω : List CanonicalRat) : List SignedEdgeStep → CanonicalRat
+  | [] => 0
+  | step :: rest => vecEntry ω step.edge + walkIntegralUnsigned ω rest
+
+#tooth Obend.Geometry.CochainAndGauge.sheaf_spanning_tree_exact_iff
+  by mutation Obend.Geometry.CochainAndGauge.walkIntegral := walkIntegralUnsigned
 
 end Obend.Tests.Metasystem.DiracDoubleCatAndGauge

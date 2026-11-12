@@ -115,6 +115,28 @@ def credentialCommitmentExtract (c₁ c₂ : IssuerCredential)
           simp only [credentialCommitment, cshake32ByteArray, Native.bytesOfList_toList] at hl
           exact congrArg ofBE hl }
 
+/-- Exact two-message collision witness pinned to `credentialPayload c₁` and `credentialPayload c₂`
+(avoiding pigeonhole-inhabited `HashCollisionWitness` over arbitrary `maxLen > 32` inputs). -/
+structure PinnedCredentialCollision (c₁ c₂ : IssuerCredential) : Type where
+  distinct : (credentialPayload c₁).data.toList ≠ (credentialPayload c₂).data.toList
+  sameDigest : credentialHash (credentialPayload c₁).data.toList =
+    credentialHash (credentialPayload c₂).data.toList
+
+/-- **Pinned Constructive Binding Extractor (`credentialCommitmentExtractPinned`, `0 Classical`)**:
+    Equal commitments come from equal credentials, or the exact pair
+    `(credentialPayload c₁, credentialPayload c₂)` collides under `credentialHash`. -/
+def credentialCommitmentExtractPinned (c₁ c₂ : IssuerCredential)
+    (h₁ : WithinWidth c₁.attributes = true) (h₂ : WithinWidth c₂.attributes = true)
+    (h : credentialCommitment c₁ = credentialCommitment c₂) :
+    PSum (c₁ = c₂) (PinnedCredentialCollision c₁ c₂) :=
+  if hp : (credentialPayload c₁).data.toList = (credentialPayload c₂).data.toList then
+    .inl (credentialPayload_injective c₁ c₂ h₁ h₂ (byteArray_eq_of_toList_eq hp))
+  else
+    .inr ⟨hp, by
+      have hl := congrArg (fun b : ByteArray => b.data.toList) h
+      simp only [credentialCommitment, cshake32ByteArray, Native.bytesOfList_toList] at hl
+      exact hl⟩
+
 /-- **Commitment binding.** Equal commitments come from equal credentials, or the two payloads
 are a named collision. -/
 theorem credentialCommitment_binding (c₁ c₂ : IssuerCredential)
@@ -147,7 +169,8 @@ structure DisclosureView where
   graphDigest : ByteArray
   disclosed : ByteArray
 
-/-- What stays with the holder. -/
+/-- Holder-side evaluation witness; transmitted transparently inside `ExPostReceipt`
+(this module makes no zero-knowledge claim), while `DisclosureView` is the redacted boundary. -/
 structure CredentialWitness where
   credential : IssuerCredential
   grant : Block
@@ -944,6 +967,132 @@ def proveExPostCredentialReceipt (P : ReceiptParams) (pol : StatusPolicy) (vk : 
     (s : CredentialStatement) (w : CredentialWitness) : ExPostReceipt :=
   ⟨(proveExPostOpening P pol vk s w).1, (proveExPostOpening P pol vk s w).2, w⟩
 
+def deployedReceiptParams : ReceiptParams :=
+  ⟨deployedCanopyHash32, inhabitedAjtaiParams 5, (inhabitedAjtaiParams_sisHard 5).1⟩
+
+/-- Constructive `Type`-valued dual-spine PCS opening break witness at arity `5`:
+    simultaneously carries a Canopy Merkle hash collision AND an Ajtai SIS short vector. -/
+structure DualOpeningBreak (P : ReceiptParams) : Type where
+  hashCollision : HashCollisionWitness P.hash.eval (merkleMaxPreimageBytes 5)
+  sisShortVec : SISShortVecWitness P.lattice.modulus 131070 P.lattice.matrix
+
+section PiopSoundness
+
+private theorem commitTable_eq (P : ReceiptParams) (tbl : List Goldilocks) :
+    commitTable P tbl = (canopyCommit P.hash 5 tbl, ajtaiLatticeCommit P.lattice 5 tbl) :=
+  rfl
+
+private theorem verifyDualSumcheckPIOP_unfold (H : Hash32) (pp : AjtaiParams)
+    (comm : CanopyCommitment × AjtaiCommitment) (claimedSum : Goldilocks)
+    (rounds : List (RoundPoly Goldilocks))
+    (opening : CanopyOpeningProof × AjtaiOpeningProof)
+    (tr : Transcript .relationBound)
+    (h : verifyDualSumcheckPIOP (canopyMerklePCS H) (ajtaiLatticePCS pp) ((), ()) 1 5
+      comm claimedSum rounds opening tr = true) :
+    ∃ claim trAfter,
+      verifySumcheck 1 5 claimedSum rounds
+        (bindDualSumcheckInstance comm 5 claimedSum tr).transcript = some (claim, trAfter) ∧
+      (canopyVerifyEval H 5 comm.1 claim opening.1
+        (absorbMsg dualTrack1Label ByteArray.empty trAfter)).1 = true ∧
+      (ajtaiLatticeVerifyEval pp 5 comm.2 claim opening.2
+        (absorbMsg dualTrack2Label ByteArray.empty trAfter)).1 = true := by
+  unfold verifyDualSumcheckPIOP verifyBoundSumcheck at h
+  dsimp only [BoundTranscript.inst] at h
+  cases hv : verifySumcheck 1 5 claimedSum rounds
+      (bindDualSumcheckInstance comm 5 claimedSum tr).transcript with
+  | none => simp only [hv] at h; cases h
+  | some ct =>
+    rcases ct with ⟨claim, trAfter⟩
+    simp only [hv, DualPCS, dualVerifyEval, canopyMerklePCS, ajtaiLatticePCS,
+      dualVerdictJoin, Bool.and_eq_true] at h
+    exact ⟨claim, trAfter, rfl, h.1, h.2⟩
+
+private def extractDualCommittedBreak (P : ReceiptParams)
+    (comm : CanopyCommitment × AjtaiCommitment)
+    (tbl : List Goldilocks) (hLen : tbl.length = 2 ^ 5)
+    (hComm : comm = commitTable P tbl)
+    (claim : EvalClaim Goldilocks 5)
+    (opening : CanopyOpeningProof × AjtaiOpeningProof)
+    (trAfter : Transcript .instanceBound)
+    (hAcc₁ : (canopyVerifyEval P.hash 5 comm.1 claim opening.1
+      (absorbMsg dualTrack1Label ByteArray.empty trAfter)).1 = true)
+    (hAcc₂ : (ajtaiLatticeVerifyEval P.lattice 5 comm.2 claim opening.2
+      (absorbMsg dualTrack2Label ByteArray.empty trAfter)).1 = true)
+    (hEvalNe : claim.expectedVal ≠ mleEval tbl claim.point) :
+    DualOpeningBreak P := by
+  rw [hComm, commitTable_eq] at hAcc₁ hAcc₂
+  let tr₁ := absorbMsg dualTrack1Label ByteArray.empty trAfter
+  let tr₂ := absorbMsg dualTrack2Label ByteArray.empty trAfter
+  let honestClaim : EvalClaim Goldilocks 5 :=
+    { point := claim.point, point_len := claim.point_len, expectedVal := mleEval tbl claim.point }
+  have hPt : claim.point = honestClaim.point := rfl
+  have hNe : claim.expectedVal ≠ honestClaim.expectedVal := hEvalNe
+  have hHon₁ : (canopyVerifyEval P.hash 5 (canopyCommit P.hash 5 tbl) honestClaim
+      (canopyOpenEval P.hash 5 tbl honestClaim tr₁).1 tr₁).1 = true :=
+    canopyMerklePCS_complete_aux P.hash () 5 tbl claim.point claim.point_len tr₁ trivial hLen
+  have hHon₂ : (ajtaiLatticeVerifyEval P.lattice 5 (ajtaiLatticeCommit P.lattice 5 tbl) honestClaim
+      (ajtaiLatticeOpenEval P.lattice 5 tbl honestClaim tr₂).1 tr₂).1 = true :=
+    ajtaiLatticePCS_complete_aux P.lattice () 5 tbl claim.point claim.point_len tr₂ P.cols_eq hLen
+  exact ⟨extractCanopyDoubleOpenCollision P.hash hPt hAcc₁ hHon₁ hNe,
+         (extractAjtaiDoubleOpenSIS P.lattice hPt hAcc₂ hHon₂ hNe).1⟩
+
+/-- **Cryptographic PIOP Compliance Soundness (`verifyDualSumcheckPIOP_compliance_sound`)**:
+    Without relying on the direct `checkCredentialEval` pre-check in `verifyExPostCredentialReceipt`,
+    if `verifyDualSumcheckPIOP` accepts `s.tableCommitment = commitTable P tbl` with claimed sum `0`,
+    then **either** `CompliantEvaluation` holds, **or** a Fiat–Shamir Sumcheck round hit an algebraic
+    discrepancy root (`ExistsRoundRootHit`), **or** the prover broke **both** PCS spines simultaneously. -/
+theorem verifyDualSumcheckPIOP_compliance_sound (P : ReceiptParams) (pol : StatusPolicy)
+    (vk : ByteArray) (s : CredentialStatement) (rc : ExPostReceipt)
+    (hComm : s.tableCommitment = commitTable P (complianceTable pol (receiptView s rc.witness) rc.witness))
+    (hPiop : verifyDualSumcheckPIOP (canopyMerklePCS P.hash) (ajtaiLatticePCS P.lattice) ((), ()) 1 5
+      s.tableCommitment Goldilocks.zero rc.rounds rc.opening (receiptTranscript vk s) = true) :
+    let tbl := complianceTable pol (receiptView s rc.witness) rc.witness
+    let btr := bindDualSumcheckInstance s.tableCommitment 5 Goldilocks.zero (receiptTranscript vk s)
+    CompliantEvaluation pol (receiptView s rc.witness) rc.witness ∨
+    ExistsRoundRootHit 5 tbl rc.rounds btr.transcript ∨
+    Nonempty (DualOpeningBreak P) := by
+  obtain ⟨claim, trAfter, hVerSc, hAcc₁, hAcc₂⟩ :=
+    verifyDualSumcheckPIOP_unfold P.hash P.lattice s.tableCommitment Goldilocks.zero
+      rc.rounds rc.opening (receiptTranscript vk s) hPiop
+  if hSum : Goldilocks.zero = hypercubeSum 5 (complianceTable pol (receiptView s rc.witness) rc.witness) then
+    exact .inl (stratified_credential_eval_sound _ _ _
+      ((complianceTable_sum_iff pol (receiptView s rc.witness) rc.witness).mp hSum.symm))
+  else
+    rcases verifySumcheck_sound_dichotomy 1 5
+        (complianceTable pol (receiptView s rc.witness) rc.witness)
+        Goldilocks.zero rc.rounds
+        (bindDualSumcheckInstance s.tableCommitment 5 Goldilocks.zero (receiptTranscript vk s)).transcript
+        claim trAfter hVerSc hSum with hEvalNe | hRoot
+    · exact .inr (.inr ⟨extractDualCommittedBreak P s.tableCommitment
+        (complianceTable pol (receiptView s rc.witness) rc.witness)
+        (complianceTable_length pol (receiptView s rc.witness) rc.witness)
+        hComm claim rc.opening trAfter hAcc₁ hAcc₂ hEvalNe⟩)
+    · exact .inr (.inl hRoot)
+
+/-- **Non-Vacuous Deployed PIOP Compliance Soundness (`deployedDualSumcheckPIOP_compliance_sound`)**:
+    Under `deployedReceiptParams` (for real 32-byte `deployedCanopyHash32`, with **zero** hash-collision
+    premise — completely immune to pigeonhole vacuity!), the Ajtai lattice spine is unconditionally
+    `ModuleSISHard` at norm `131070`, so `verifyDualSumcheckPIOP` alone implies `CompliantEvaluation`
+    up to `ExistsRoundRootHit`. -/
+theorem deployedDualSumcheckPIOP_compliance_sound (pol : StatusPolicy)
+    (vk : ByteArray) (s : CredentialStatement) (rc : ExPostReceipt)
+    (hComm : s.tableCommitment = commitTable deployedReceiptParams
+      (complianceTable pol (receiptView s rc.witness) rc.witness))
+    (hPiop : verifyDualSumcheckPIOP (canopyMerklePCS deployedReceiptParams.hash)
+      (ajtaiLatticePCS deployedReceiptParams.lattice) ((), ()) 1 5
+      s.tableCommitment Goldilocks.zero rc.rounds rc.opening (receiptTranscript vk s) = true) :
+    CompliantEvaluation pol (receiptView s rc.witness) rc.witness ∨
+    ExistsRoundRootHit 5 (complianceTable pol (receiptView s rc.witness) rc.witness) rc.rounds
+      (bindDualSumcheckInstance s.tableCommitment 5 Goldilocks.zero (receiptTranscript vk s)).transcript := by
+  rcases verifyDualSumcheckPIOP_compliance_sound deployedReceiptParams pol vk s rc hComm hPiop
+      with hOk | hRoot | hBrk
+  · exact .inl hOk
+  · exact .inr hRoot
+  · let ⟨brk⟩ := hBrk
+    exact False.elim ((inhabitedAjtaiParams_sisHard 5).2.2 ⟨brk.sisShortVec⟩)
+
+end PiopSoundness
+
 attribute [local irreducible] honestBoundSumcheckProver verifyDualSumcheckPIOP
 
 theorem verifyExPostCredentialReceipt_complete (P : ReceiptParams) (pol : StatusPolicy)
@@ -984,9 +1133,6 @@ theorem honestReceipt_accepted (P : ReceiptParams) (vk policyDigest : ByteArray)
   · exact congrArg RevokedRoot.bytes hr.symm
   · rwa [hv]
   · rw [hv]; rfl
-
-def deployedReceiptParams : ReceiptParams :=
-  ⟨deployedCanopyHash32, inhabitedAjtaiParams 5, (inhabitedAjtaiParams_sisHard 5).1⟩
 
 def canopyCommitmentCodec : Codec CanopyCommitment :=
   (Codec.pair Codec.nat Codec.digest32).refine (fun p => some ⟨p.1, p.2⟩)

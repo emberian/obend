@@ -179,11 +179,11 @@ private def events : List CustodyHostEvent :=
        let w := es.foldl walEvent ⟨⟨lease, []⟩, none⟩
        w.recover.durable.lease.remaining == 80 && w.recover.durable.records.length == 2
 
-private def requestOne : ByteArray := ⟨(List.replicate 32 (1 : UInt8)).toArray⟩
-private def requestTwo : ByteArray := ⟨(List.replicate 32 (2 : UInt8)).toArray⟩
-private def ticketed : IngressMmr × AriadneTicket :=
+def requestOne : ByteArray := ⟨(List.replicate 32 (1 : UInt8)).toArray⟩
+def requestTwo : ByteArray := ⟨(List.replicate 32 (2 : UInt8)).toArray⟩
+def ticketed : IngressMmr × AriadneTicket :=
   ariadneCommitTurn (fun b => b) IngressMmr.empty requestOne
-private def later : IngressMmr := ticketed.1.append requestTwo
+def later : IngressMmr := ticketed.1.append requestTwo
 #guard verifyNonOmission ticketed.2 ticketed.1 later later.openings
 #guard !verifyNonOmission ticketed.2 ticketed.1 later [(1,requestTwo)]
 #guard !verifyNonOmission ticketed.2 ticketed.1 later [(0,"replaced".toUTF8),(1,requestTwo)]
@@ -267,6 +267,32 @@ example (s : IngressMmr) (req : ByteArray) (hs : ReachableIngress s) :
   mutation SettlementWal.recover := fun w =>
     let s := w.pending.getD w.durable
     ⟨{s with lease := advanceLease s.lease}, none⟩
+
+-- Non-vacuity witnesses: finite trace call sets are decidably collision-free on real cSHAKE256!
+#guard cshakeCollisionFree (leaseStateRootCalls lease ++ leaseStateRootCalls twice)
+#guard cshakeCollisionFree (ticketed.1.rootCalls ++ later.rootCalls)
+
+theorem concrete_non_omission_unconditional :
+    verifyNonOmission ticketed.2 ticketed.1 later [(1, requestTwo)] = false := by
+  have hVt : ValidTicket (fun msg sig => decide (msg = sig)) ticketed.2 ticketed.1 :=
+    ariadneCommitTurn_complete _ _ (fun _ => by simp) IngressMmr.empty requestOne .empty
+  rcases host_cannot_omit_committed_turn_or_collision
+      (fun msg sig => decide (msg = sig)) ticketed.2 ticketed.1 ticketed.1 later
+      [(1, requestTwo)] hVt (by decide) with hRefused | hCol
+  · exact hRefused
+  · obtain ⟨w⟩ := hCol
+    have hm1 : (w.domain, w.leftFields) ∈ ticketed.1.rootCalls := by
+      rcases List.mem_append.1 w.leftMem with h | h <;> exact h
+    have hm2 : (w.domain, w.rightFields) ∈ ticketed.1.rootCalls := by
+      rcases List.mem_append.1 w.rightMem with h | h <;> exact h
+    simp only [ticketed, ariadneCommitTurn, IngressMmr.empty, IngressMmr.append, appendMountain,
+      IngressMmr.rootCalls, peaksRootCalls, List.append_nil,
+      IngressMountain.rootCalls, List.mem_cons, List.not_mem_nil, or_false, Prod.mk.injEq] at hm1 hm2
+    rcases hm1 with ⟨hd1, hf1⟩ | ⟨hd1, hf1⟩ <;> rcases hm2 with ⟨hd2, hf2⟩ | ⟨hd2, hf2⟩
+    · exact False.elim (w.distinct (by rw [hf1, hf2]))
+    · rw [hd1] at hd2; exact False.elim ((by decide : "OBEND.CUSTODY.MMR.ROOT/v1" ≠ "OBEND.CUSTODY.MOUNTAIN/v1") hd2)
+    · rw [hd1] at hd2; exact False.elim ((by decide : "OBEND.CUSTODY.MOUNTAIN/v1" ≠ "OBEND.CUSTODY.MMR.ROOT/v1") hd2)
+    · exact False.elim (w.distinct (by rw [hf1, hf2]))
 
 #print axioms double_charge_impossible_during_wal_recovery
 #print axioms fork_receipt_chain_binds_anchor_or_collision

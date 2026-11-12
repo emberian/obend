@@ -210,6 +210,13 @@ theorem contains_insert (s : RevokedSet) (x y : Nat) :
 theorem contains_insert_self (s : RevokedSet) (x : Nat) : (s.insert x).contains x = true :=
   (contains_insert s x x).2 (.inl rfl)
 
+theorem contains_foldl_insert (s : RevokedSet) (extra : List Nat) (y : Nat)
+    (hy : s.contains y = true) :
+    (extra.foldl RevokedSet.insert s).contains y = true := by
+  induction extra generalizing s with
+  | nil => exact hy
+  | cons z zs ih => exact ih (s.insert z) ((contains_insert s z y).2 (.inr hy))
+
 /-- A revocation is one write: the set grows by at most one key. -/
 theorem insert_size_le (s : RevokedSet) (x : Nat) : (s.insert x).keys.size ≤ s.keys.size + 1 := by
   have h := insertSorted_length_le x s.keys.toList
@@ -709,6 +716,22 @@ theorem revoke_ancestor_kills_cone (rs : RevokedSet) (env : Nat → KleenePred3)
     simp only [lineageLive, RevokedSet.contains_insert_self, Bool.not_true] at hlive
     cases hlive
 
+/-- **Multi-turn revocation persistence.** Once `anc` is revoked, no subsequent sequence `extra`
+of nullifier insertions across later turns can revive `anc ++ ext`. -/
+theorem revoke_persists_across_inserts (rs : RevokedSet) (extra : List Nat)
+    (env : Nat → KleenePred3) (g : Block) (anc ext : Array Block) :
+    foldChain (extra.foldl RevokedSet.insert (rs.insert (credNul (lineageOf g anc.toList))))
+      env g (anc ++ ext) = none := by
+  let rs' := extra.foldl RevokedSet.insert (rs.insert (credNul (lineageOf g anc.toList)))
+  cases hfold : foldChain rs' env g (anc ++ ext) with
+  | none => rfl
+  | some acc =>
+    have hlive := (foldChain_prefix_live rs' env g anc ext acc hfold).1
+    have hmem : rs'.contains (credNul (lineageOf g anc.toList)) = true :=
+      RevokedSet.contains_foldl_insert _ extra _ (RevokedSet.contains_insert_self rs _)
+    simp only [lineageLive, hmem, Bool.not_true] at hlive
+    cases hlive
+
 /-- Revoking a channel kills every chain with a hop on it. -/
 theorem revoke_channel_kills (rs : RevokedSet) (env : Nat → KleenePred3) (g : Block)
     (blocks : Array Block) (b : Block) (hb : b ∈ blocks.toList) :
@@ -759,8 +782,33 @@ private theorem foldBlocks_insert (rs : RevokedSet) (env : Nat → KleenePred3) 
     rw [ha1]
     exact this
 
-/-- **Revocation is precise.** A chain that folded before `x` was revoked and fails after has a
-hop whose credential nullifier (of the root grant or of some prefix) or channel nullifier is `x`. -/
+private theorem exists_split_of_not_forall (lin : ByteArray) (x : Nat) :
+    ∀ (l : List Block),
+      (¬ ∀ pre b post, l = pre ++ b :: post →
+        credNul ((pre ++ [b]).foldl stepLineage lin) ≠ x ∧ chanNul b.channel ≠ x) →
+      ∃ pre b post, l = pre ++ b :: post ∧
+        (credNul ((pre ++ [b]).foldl stepLineage lin) = x ∨ chanNul b.channel = x)
+  | [], hnot => False.elim (hnot fun pre _ _ hs => by cases pre <;> cases hs)
+  | b :: rest, hnot =>
+    if hb1 : credNul (stepLineage lin b) = x then
+      ⟨[], b, rest, rfl, .inl hb1⟩
+    else if hb2 : chanNul b.channel = x then
+      ⟨[], b, rest, rfl, .inr hb2⟩
+    else
+      have hrest : ¬ ∀ pre b' post, rest = pre ++ b' :: post →
+          credNul ((pre ++ [b']).foldl stepLineage (stepLineage lin b)) ≠ x ∧
+          chanNul b'.channel ≠ x := fun hall =>
+        hnot fun pre b' post hs => by
+          cases pre with
+          | nil => cases hs; exact ⟨hb1, hb2⟩
+          | cons hd tl =>
+            cases hs
+            simpa [List.cons_append, List.foldl_cons] using hall tl b' post rfl
+      let ⟨pre, b', post, hs, hcase⟩ := exists_split_of_not_forall (stepLineage lin b) x rest hrest
+      ⟨b :: pre, b', post, by rw [hs]; rfl, by simpa [List.cons_append, List.foldl_cons] using hcase⟩
+
+/-- **Revocation is precise** (`0 Classical.choice`). A chain that folded before `x` was revoked
+and fails after has a hop whose credential nullifier or channel nullifier is `x`. -/
 theorem revoke_only_kills_matching (rs : RevokedSet) (env : Nat → KleenePred3) (g : Block)
     (blocks : Array Block) (acc : CapAccumulator) (x : Nat)
     (h : foldChain rs env g blocks = some acc)
@@ -769,41 +817,62 @@ theorem revoke_only_kills_matching (rs : RevokedSet) (env : Nat → KleenePred3)
       chanNul g.channel = x ∨ ∃ b, b ∈ blocks.toList ∧ chanNul b.channel = x := by
   obtain ⟨a0, hroot, hfold⟩ := (foldChain_eq_some_iff _ _ _ _ _).1 h
   obtain ⟨hrl, hrc, ha0⟩ := foldRoot_eq_some hroot
-  by_cases hx0 : credNul (rootLineage g) = x
-  · exact .inl ⟨[], blocks.toList, rfl, hx0⟩
-  by_cases hx1 : chanNul g.channel = x
-  · exact .inr (.inl hx1)
-  by_cases hstep : ∀ pre b post, blocks.toList = pre ++ b :: post →
-      credNul ((pre ++ [b]).foldl stepLineage a0.lineage) ≠ x ∧ chanNul b.channel ≠ x
-  · exfalso
-    have hroot' : foldRoot (rs.insert x) env g = some a0 := by
-      simp only [lineageLive, channelLive, Bool.not_eq_true'] at hrl hrc
-      rw [ha0]
-      simp [foldRoot, lineageLive, channelLive, contains_insert_false hrl hx0,
-        contains_insert_false hrc hx1]
-    have hlive := foldBlocks_insert rs env x _ _ _ hfold hstep
-    have hsome := (foldChain_eq_some_iff (rs.insert x) env g blocks acc).2 ⟨a0, hroot', hlive⟩
-    rw [hdead] at hsome
-    cases hsome
-  · have hex : ∃ pre b post, blocks.toList = pre ++ b :: post ∧
-        (credNul ((pre ++ [b]).foldl stepLineage a0.lineage) = x ∨ chanNul b.channel = x) := by
-      apply Classical.byContradiction
-      intro hno
-      apply hstep
-      intro pre b post hs
-      constructor
-      · intro e
-        exact hno ⟨pre, b, post, hs, .inl e⟩
-      · intro e
-        exact hno ⟨pre, b, post, hs, .inr e⟩
-    obtain ⟨pre, b, post, hs, hcase | hcase⟩ := hex
-    · left
-      refine ⟨pre ++ [b], post, by rw [hs]; simp, ?_⟩
-      rw [ha0] at hcase
-      exact hcase
-    · right
-      right
-      exact ⟨b, by rw [hs]; simp, hcase⟩
+  if hx0 : credNul (rootLineage g) = x then
+    exact .inl ⟨[], blocks.toList, rfl, hx0⟩
+  else if hx1 : chanNul g.channel = x then
+    exact .inr (.inl hx1)
+  else
+    let allOk := blocks.toList.length
+    have _ := allOk
+    by_cases hstep : (List.range blocks.toList.length).all fun idx =>
+        let pre := blocks.toList.take idx
+        match blocks.toList[idx]? with
+        | none => true
+        | some b => decide (credNul ((pre ++ [b]).foldl stepLineage a0.lineage) ≠ x) &&
+                    decide (chanNul b.channel ≠ x)
+    · exfalso
+      have hstepProp : ∀ pre b post, blocks.toList = pre ++ b :: post →
+          credNul ((pre ++ [b]).foldl stepLineage a0.lineage) ≠ x ∧ chanNul b.channel ≠ x := by
+        intro pre b post hs
+        have hidx : pre.length < blocks.toList.length := by rw [hs, List.length_append]; simp
+        have hmem := List.all_eq_true.1 hstep pre.length (List.mem_range.2 hidx)
+        have htake : blocks.toList.take pre.length = pre := by rw [hs, List.take_left]
+        have hget : blocks.toList[pre.length]? = some b := by
+          rw [hs, List.getElem?_append_right (Nat.le_refl _), Nat.sub_self]; rfl
+        simp only [htake, hget, Bool.and_eq_true, decide_eq_true_eq] at hmem
+        exact hmem
+      have hroot' : foldRoot (rs.insert x) env g = some a0 := by
+        simp only [lineageLive, channelLive, Bool.not_eq_true'] at hrl hrc
+        rw [ha0]
+        simp [foldRoot, lineageLive, channelLive, contains_insert_false hrl hx0,
+          contains_insert_false hrc hx1]
+      have hlive := foldBlocks_insert rs env x _ _ _ hfold hstepProp
+      have hsome := (foldChain_eq_some_iff (rs.insert x) env g blocks acc).2 ⟨a0, hroot', hlive⟩
+      rw [hdead] at hsome
+      cases hsome
+    · have hnot : ¬ ∀ pre b post, blocks.toList = pre ++ b :: post →
+          credNul ((pre ++ [b]).foldl stepLineage a0.lineage) ≠ x ∧ chanNul b.channel ≠ x := by
+        intro hall
+        apply hstep
+        rw [List.all_eq_true]
+        intro idx hidx
+        have hlt := List.mem_range.1 hidx
+        have hdrop : blocks.toList.drop idx = blocks.toList[idx] :: blocks.toList.drop (idx + 1) :=
+          List.drop_eq_getElem_cons hlt
+        have hsplit : blocks.toList =
+            blocks.toList.take idx ++ blocks.toList[idx] :: blocks.toList.drop (idx + 1) := by
+          have htd := List.take_append_drop idx blocks.toList
+          rw [hdrop] at htd
+          exact htd.symm
+        obtain ⟨h1, h2⟩ := hall _ _ _ hsplit
+        simp only [List.foldl_append, List.foldl_cons, List.foldl_nil, Array.getElem_toList] at h1 h2
+        simp [List.getElem?_eq_getElem hlt, h1, h2]
+      obtain ⟨pre, b, post, hs, hcase | hcase⟩ := exists_split_of_not_forall a0.lineage x blocks.toList hnot
+      · left
+        refine ⟨pre ++ [b], post, by rw [hs]; simp, ?_⟩
+        rw [ha0] at hcase
+        exact hcase
+      · exact .inr (.inr ⟨b, by rw [hs]; simp, hcase⟩)
 
 /-- **Accumulator binding.** Two folds that end in the same provenance digest folded the same
 root grant along the same hops, or they exhibit a collision. -/

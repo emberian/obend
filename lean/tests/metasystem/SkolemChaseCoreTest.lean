@@ -98,6 +98,7 @@ def sampleRank : PosRankMap := [
 ]
 
 #guard WfRuleSet sampleOntology == true
+#guard WfRuleSet [ruleEmpDept, { ruleDeptAudit with id := 10 }] == false
 #guard maxRankOf sampleRank == 2
 #guard checkWeaklyAcyclic sampleRank sampleOntology == true
 #guard checkWeaklyAcyclic sampleRank [cyclicChainRule] == false
@@ -217,6 +218,9 @@ example : ∀ a ∈ saturatedSpec, ∀ t ∈ a.args, skolemDepth t ≤ 2 :=
 
 #tooth Obend.SymbolicZk.SkolemChaseCore.weaklyAcyclic_rank_bound by
   mutation Obend.SymbolicZk.SkolemChaseCore.checkWeaklyAcyclic := fun _ _ => true
+
+#tooth Obend.SymbolicZk.SkolemChaseCore.skolem_ruleId_non_aliasing by
+  mutation Obend.SymbolicZk.SkolemChaseCore.WfRuleSet := fun rules => rules.all WfRule
 
 #print axioms Obend.SymbolicZk.SkolemChaseCore.runBoundedChaseExec_eq_spec
 #print axioms Obend.SymbolicZk.SkolemChaseCore.chase_fixpoint_models_rules

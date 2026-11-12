@@ -37,10 +37,7 @@ theorem rat_sq_nonneg (q : Rat) : 0 ≤ q * q := rat_sq_nonneg' q
 
 theorem rat_sq_pos_of_ne_zero {q : Rat} (hne : q ≠ 0) : 0 < q * q := by
   have h0 := rat_sq_nonneg q
-  have hmul : q * q ≠ 0 := fun h => by
-    rcases Rat.mul_eq_zero.mp h with h1 | h2
-    · exact hne h1
-    · exact hne h2
+  have hmul : q * q ≠ 0 := fun h => (Rat.mul_eq_zero.mp h).elim hne hne
   grind
 
 theorem rat_div_nonneg {a b : Rat} (ha : 0 ≤ a) (hb : 0 < b) : 0 ≤ a / b := by
@@ -49,110 +46,88 @@ theorem rat_div_pos {a b : Rat} (ha : 0 < a) (hb : 0 < b) : 0 < a / b := by
   rw [Rat.div_def]; exact Rat.mul_pos ha (Rat.inv_pos.mpr hb)
 theorem rat_div_le_of_mul_le {a b c : Rat} (hb : 0 < b) (h : a ≤ c * b) : a / b ≤ c := by
   have hCancel := Rat.div_mul_cancel (a := a) (Rat.ne_of_gt hb)
-  rcases @Rat.le_total (a / b) c with hle | hge
-  · exact hle
-  · by_cases heq : a / b = c
-    · grind
-    · have := Rat.mul_lt_mul_of_pos_right (show c < a / b by grind) hb; grind
+  rcases @Rat.le_total (a / b) c with hle | hge; · exact hle
+  by_cases heq : a / b = c; · grind
+  have := Rat.mul_lt_mul_of_pos_right (show c < a / b by grind) hb; grind
 theorem rat_le_div_of_mul_le {a b c : Rat} (hb : 0 < b) (h : c * b ≤ a) : c ≤ a / b := by
   have hCancel := Rat.div_mul_cancel (a := a) (Rat.ne_of_gt hb)
-  rcases @Rat.le_total c (a / b) with hle | hge
-  · exact hle
-  · by_cases heq : c = a / b
-    · grind
-    · have := Rat.mul_lt_mul_of_pos_right (show a / b < c by grind) hb; grind
+  rcases @Rat.le_total c (a / b) with hle | hge; · exact hle
+  by_cases heq : c = a / b; · grind
+  have := Rat.mul_lt_mul_of_pos_right (show a / b < c by grind) hb; grind
 private theorem list_getD_mem_of_lt {α : Type} :
     ∀ (xs : List α) (d : α) {k : Nat}, k < xs.length → xs.getD k d ∈ xs
   | [], _, _, hk => by simp at hk
   | x :: _, _, 0, _ => List.mem_cons_self ..
-  | x :: rest, d, k + 1, hk =>
-    List.mem_cons_of_mem x (list_getD_mem_of_lt rest d (by simp at hk; omega))
+  | x :: rest, d, k + 1, hk => List.mem_cons_of_mem x (list_getD_mem_of_lt rest d (by simp at hk; omega))
 
 private theorem list_erase_nodup_props {α : Type} [DecidableEq α] (y : α) :
-    ∀ (xs : List α), xs.Nodup →
-      (xs.erase y).length ≤ xs.length ∧ (∀ z ∈ xs.erase y, z ∈ xs ∧ z ≠ y)
+    ∀ (xs : List α), xs.Nodup → (xs.erase y).length ≤ xs.length ∧ (∀ z ∈ xs.erase y, z ∈ xs ∧ z ≠ y)
   | [], _ => ⟨Nat.le_refl _, fun _ h => by cases h⟩
   | x :: rest, hnd => by
-    obtain ⟨hxNot, hndRest⟩ := List.nodup_cons.mp hnd
-    simp only [List.erase_cons]
+    obtain ⟨hxNot, hndRest⟩ := List.nodup_cons.mp hnd; simp only [List.erase_cons]
     by_cases hxy : x == y
-    · have heq := eq_of_beq hxy; subst heq
-      simp only [beq_self_eq_true, ↓reduceIte, List.length_cons]
-      exact ⟨by omega, fun z hz => ⟨List.mem_cons_of_mem x hz, fun hzx => hxNot (hzx ▸ hz)⟩⟩
+    · have heq := eq_of_beq hxy; subst heq; simp only [beq_self_eq_true, ↓reduceIte, List.length_cons]
+      exact ⟨by omega, fun z hz => ⟨List.mem_cons_of_mem _ hz, fun hzx => hxNot (hzx ▸ hz)⟩⟩
     · simp only [hxy, Bool.false_eq_true, ↓reduceIte, List.length_cons]
       obtain ⟨hlen, hmem⟩ := list_erase_nodup_props y rest hndRest
       refine ⟨by omega, fun z hz => ?_⟩
       rcases List.mem_cons.mp hz with rfl | hz'
       · exact ⟨List.mem_cons_self .., fun hzy => by subst hzy; simp at hxy⟩
-      · obtain ⟨hzIn, hzNe⟩ := hmem z hz'
-        exact ⟨List.mem_cons_of_mem x hzIn, hzNe⟩
+      · exact ⟨List.mem_cons_of_mem x (hmem z hz').1, (hmem z hz').2⟩
 
 @[expose] def sumList {α : Type} : List α → (α → Rat) → Rat
   | [], _ => 0
   | x :: xs, f => f x + sumList xs f
 
-theorem sumList_congr {α : Type} {xs : List α} {f g : α → Rat}
-    (h : ∀ x ∈ xs, f x = g x) : sumList xs f = sumList xs g := by
+theorem sumList_congr {α : Type} {xs : List α} {f g : α → Rat} (h : ∀ x ∈ xs, f x = g x) :
+    sumList xs f = sumList xs g := by
   induction xs with
   | nil => rfl
   | cons x rest ih =>
-    simp only [sumList]
-    rw [h x (List.mem_cons_self ..), ih (fun y hy => h y (List.mem_cons_of_mem x hy))]
+    simp only [sumList]; rw [h x (List.mem_cons_self ..), ih (fun y hy => h y (List.mem_cons_of_mem x hy))]
 
 theorem sumList_add {α : Type} (xs : List α) (f g : α → Rat) :
     sumList xs (fun x => f x + g x) = sumList xs f + sumList xs g := by
-  induction xs with
-  | nil => simp only [sumList]; grind
-  | cons _ _ ih => simp only [sumList, ih]; grind
+  induction xs with | nil => simp only [sumList]; grind | cons _ _ ih => simp only [sumList, ih]; grind
 theorem sumList_scale {α : Type} (c : Rat) (xs : List α) (f : α → Rat) :
     sumList xs (fun x => c * f x) = c * sumList xs f := by
-  induction xs with
-  | nil => simp only [sumList]; grind
-  | cons _ _ ih => simp only [sumList, ih]; grind
+  induction xs with | nil => simp only [sumList]; grind | cons _ _ ih => simp only [sumList, ih]; grind
 theorem sumList_append {α : Type} (xs ys : List α) (f : α → Rat) :
     sumList (xs ++ ys) f = sumList xs f + sumList ys f := by
   induction xs with
   | nil => simp only [List.nil_append, sumList]; grind
   | cons _ _ ih => simp only [List.cons_append, sumList, ih]; grind
-theorem sumList_nonneg {α : Type} {xs : List α} {f : α → Rat}
-    (h : ∀ x ∈ xs, 0 ≤ f x) : 0 ≤ sumList xs f := by
+theorem sumList_nonneg {α : Type} {xs : List α} {f : α → Rat} (h : ∀ x ∈ xs, 0 ≤ f x) :
+    0 ≤ sumList xs f := by
   induction xs with
   | nil => exact Rat.le_refl
   | cons x rest ih =>
-    simp only [sumList]
-    have hx := h x (List.mem_cons_self ..)
-    have hr := ih (fun y hy => h y (List.mem_cons_of_mem x hy))
-    grind
+    simp only [sumList]; have := h x (List.mem_cons_self ..)
+    have := ih (fun y hy => h y (List.mem_cons_of_mem x hy)); grind
 
 theorem sumList_eq_zero_imp_all_zero {α : Type} {xs : List α} {f : α → Rat}
-    (hnn : ∀ x ∈ xs, 0 ≤ f x) (hsum : sumList xs f = 0) :
-    ∀ x ∈ xs, f x = 0 := by
+    (hnn : ∀ x ∈ xs, 0 ≤ f x) (hsum : sumList xs f = 0) : ∀ x ∈ xs, f x = 0 := by
   induction xs with
   | nil => intro _ hm; cases hm
   | cons x rest ih =>
-    simp only [sumList] at hsum
-    have hx := hnn x (List.mem_cons_self ..)
-    have hrest := sumList_nonneg (xs := rest) (fun y hy => hnn y (List.mem_cons_of_mem x hy))
-    intro y hy
-    rcases List.mem_cons.mp hy with rfl | hy'
+    simp only [sumList] at hsum; have := hnn x (List.mem_cons_self ..)
+    have := sumList_nonneg (xs := rest) (fun y hy => hnn y (List.mem_cons_of_mem x hy))
+    intro y hy; rcases List.mem_cons.mp hy with rfl | hy'
     · grind
     · exact ih (fun z hz => hnn z (List.mem_cons_of_mem x hz)) (by grind) y hy'
 
 theorem sumList_erase_eq {α : Type} [DecidableEq α] :
-    ∀ (xs : List α) (y : α) (f : α → Rat), y ∈ xs →
-      sumList xs f = f y + sumList (xs.erase y) f
+    ∀ (xs : List α) (y : α) (f : α → Rat), y ∈ xs → sumList xs f = f y + sumList (xs.erase y) f
   | [], _, _, hm => by cases hm
   | x :: rest, y, f, hm => by
-    simp only [List.erase_cons]
-    by_cases hxy : x == y
+    simp only [List.erase_cons]; by_cases hxy : x == y
     · have heq := eq_of_beq hxy; subst heq; simp [sumList]
     · simp only [hxy, Bool.false_eq_true, ↓reduceIte, sumList]
       have hyRest : y ∈ rest := by
         rcases List.mem_cons.mp hm with rfl | hmem
         · simp at hxy
         · exact hmem
-      have ih := sumList_erase_eq rest y f hyRest
-      grind
+      have := sumList_erase_eq rest y f hyRest; grind
 
 /-- **Involution Cancellation Lemma (`sumList_zero_of_involution`)**. -/
 theorem sumList_zero_of_involution {α : Type} [DecidableEq α]
@@ -209,10 +184,7 @@ theorem sumList_zero_of_involution {α : Type} [DecidableEq α]
 
 /-! ## 1. Verified CAD-to-Mesh Simplicial Geometry (2D Triangles & 3D Tetrahedra) -/
 
-structure Point2Q where
-  x : Rat
-  y : Rat
-  deriving DecidableEq, Repr
+structure Point2Q where (x y : Rat) deriving DecidableEq, Repr
 private theorem mkPoint2Q_eq {x1 y1 x2 y2 : Rat} (hx : x1 = x2) (hy : y1 = y2) :
     Point2Q.mk x1 y1 = Point2Q.mk x2 y2 := by subst hx; subst hy; rfl
 def add2Q (u v : Point2Q) : Point2Q := ⟨u.x + v.x, u.y + v.y⟩
@@ -221,66 +193,45 @@ def scale2Q (c : Rat) (u : Point2Q) : Point2Q := ⟨c * u.x, c * u.y⟩
 def dot2Q (u v : Point2Q) : Rat := u.x * v.x + u.y * v.y
 def normSq2Q (u : Point2Q) : Rat := dot2Q u u
 def mid2Q (u v : Point2Q) : Point2Q := ⟨(u.x + v.x) / 2, (u.y + v.y) / 2⟩
-structure Mat2Q where
-  a11 : Rat
-  a12 : Rat
-  a21 : Rat
-  a22 : Rat
-  deriving DecidableEq, Repr
+structure Mat2Q where (a11 a12 a21 a22 : Rat) deriving DecidableEq, Repr
 
 def Mat2Q.det (M : Mat2Q) : Rat := M.a11 * M.a22 - M.a12 * M.a21
-def Mat2Q.mulVec (M : Mat2Q) (v : Point2Q) : Point2Q :=
-  ⟨M.a11 * v.x + M.a12 * v.y, M.a21 * v.x + M.a22 * v.y⟩
+def Mat2Q.mulVec (M : Mat2Q) (v : Point2Q) : Point2Q := ⟨M.a11 * v.x + M.a12 * v.y, M.a21 * v.x + M.a22 * v.y⟩
 def Mat2Q.quadForm (M : Mat2Q) (v : Point2Q) : Rat := dot2Q v (M.mulVec v)
-def Mat2Q.inv (M : Mat2Q) : Mat2Q :=
-  let d := M.det; ⟨M.a22 / d, (-M.a12) / d, (-M.a21) / d, M.a11 / d⟩
+def Mat2Q.inv (M : Mat2Q) : Mat2Q := let d := M.det; ⟨M.a22 / d, (-M.a12) / d, (-M.a21) / d, M.a11 / d⟩
 def Mat2Q.isotropic (eps : Rat) : Mat2Q := ⟨eps, 0, 0, eps⟩
 def Mat2Q.isSpd (M : Mat2Q) : Prop := M.a12 = M.a21 ∧ 0 < M.a11 ∧ 0 < M.det
-def Mat2Q.isSpdB (M : Mat2Q) : Bool :=
-  decide (M.a12 = M.a21) && decide (0 < M.a11) && decide (0 < M.det)
+def Mat2Q.isSpdB (M : Mat2Q) : Bool := decide (M.a12 = M.a21) && decide (0 < M.a11) && decide (0 < M.det)
 
 theorem mat2Q_quadForm_symm {M : Mat2Q} (hsym : M.a12 = M.a21) (u w : Point2Q) :
-    dot2Q u (M.mulVec w) = dot2Q w (M.mulVec u) := by
-  unfold Mat2Q.mulVec dot2Q; rw [hsym]; grind
-
+    dot2Q u (M.mulVec w) = dot2Q w (M.mulVec u) := by unfold Mat2Q.mulVec dot2Q; rw [hsym]; grind
 theorem mat2Q_sylvester_identity {M : Mat2Q} (hsym : M.a12 = M.a21) (v : Point2Q) :
     M.a11 * M.quadForm v =
       (M.a11 * v.x + M.a12 * v.y) * (M.a11 * v.x + M.a12 * v.y) + M.det * (v.y * v.y) := by
   unfold Mat2Q.quadForm Mat2Q.mulVec dot2Q Mat2Q.det; rw [hsym]; grind
 
-theorem mat2Q_spd_quadForm_nonneg {M : Mat2Q} (hSpd : M.isSpd) (v : Point2Q) :
-    0 ≤ M.quadForm v := by
-  obtain ⟨hsym, ha11, hdet⟩ := hSpd
-  have hid := mat2Q_sylvester_identity hsym v
-  have hsq1 := rat_sq_nonneg (M.a11 * v.x + M.a12 * v.y)
-  have hdetTerm := Rat.mul_nonneg (Rat.le_of_lt hdet) (rat_sq_nonneg v.y)
-  rcases @Rat.le_total 0 (M.quadForm v) with hpos | hneg
-  · exact hpos
-  · by_cases hz : M.quadForm v = 0
-    · grind
-    · have := Rat.mul_lt_mul_of_pos_left (show M.quadForm v < 0 by grind) ha11; grind
+theorem mat2Q_spd_quadForm_nonneg {M : Mat2Q} (hSpd : M.isSpd) (v : Point2Q) : 0 ≤ M.quadForm v := by
+  obtain ⟨hsym, ha11, hdet⟩ := hSpd; have hid := mat2Q_sylvester_identity hsym v
+  have := rat_sq_nonneg (M.a11 * v.x + M.a12 * v.y)
+  have := Rat.mul_nonneg (Rat.le_of_lt hdet) (rat_sq_nonneg v.y)
+  rcases @Rat.le_total 0 (M.quadForm v) with hpos | hneg; · exact hpos
+  by_cases hz : M.quadForm v = 0; · grind
+  have := Rat.mul_lt_mul_of_pos_left (show M.quadForm v < 0 by grind) ha11; grind
 
 theorem mat2Q_spd_quadForm_pos {M : Mat2Q} (hSpd : M.isSpd) (v : Point2Q)
     (hne : v.x ≠ 0 ∨ v.y ≠ 0) : 0 < M.quadForm v := by
-  obtain ⟨hsym, ha11, hdet⟩ := hSpd
-  have hid := mat2Q_sylvester_identity hsym v
+  obtain ⟨hsym, ha11, hdet⟩ := hSpd; have hid := mat2Q_sylvester_identity hsym v
   have hprodPos : 0 < M.a11 * M.quadForm v := by
     by_cases hvy : v.y = 0
-    · have hvx : v.x ≠ 0 := by
-        rcases hne with hx | hy
-        · exact hx
-        · exact absurd hvy hy
+    · have hvx : v.x ≠ 0 := hne.elim id (fun hy => absurd hvy hy)
       have hlinNe : M.a11 * v.x + M.a12 * v.y ≠ 0 := by
-        rw [hvy]; intro h0
-        rcases Rat.mul_eq_zero.mp (show M.a11 * v.x = 0 by grind) with h1 | h2
+        rw [hvy]; intro h0; rcases Rat.mul_eq_zero.mp (show M.a11 * v.x = 0 by grind) with h1 | h2
         · grind
         · exact hvx h2
-      have hsqPos := rat_sq_pos_of_ne_zero hlinNe
-      have hvy0 : M.det * (v.y * v.y) = 0 := by rw [hvy]; grind
+      have := rat_sq_pos_of_ne_zero hlinNe; have : M.det * (v.y * v.y) = 0 := by rw [hvy]; grind
       grind
-    · have hsq1 := rat_sq_nonneg (M.a11 * v.x + M.a12 * v.y)
-      have hdetPos := Rat.mul_pos hdet (rat_sq_pos_of_ne_zero hvy)
-      grind
+    · have := rat_sq_nonneg (M.a11 * v.x + M.a12 * v.y)
+      have := Rat.mul_pos hdet (rat_sq_pos_of_ne_zero hvy); grind
   rcases @Rat.le_total (M.quadForm v) 0 with hle | hge
   · have := Rat.mul_le_mul_of_nonneg_left hle (Rat.le_of_lt ha11); grind
   · by_cases hz : M.quadForm v = 0
@@ -344,9 +295,7 @@ theorem mat2Q_inv_spd {M : Mat2Q} (hSpd : M.isSpd) : M.inv.isSpd := by
     · grind
 
 structure TriElement2D where
-  i0 : Nat
-  i1 : Nat
-  i2 : Nat
+  (i0 i1 i2 : Nat)
   eps : Mat2Q
   sourceF : Rat
   deriving DecidableEq, Repr
@@ -355,18 +304,10 @@ def twiceArea2D (v0 v1 v2 : Point2Q) : Rat := (jacobian2D v0 v1 v2).det
 def elemArea2D (v0 v1 v2 : Point2Q) : Rat := twiceArea2D v0 v1 v2 / 2
 def sumEdgeLenSq2D (v0 v1 v2 : Point2Q) : Rat :=
   normSq2Q (sub2Q v1 v0) + normSq2Q (sub2Q v2 v1) + normSq2Q (sub2Q v0 v2)
-structure Point3Q where
-  x : Rat
-  y : Rat
-  z : Rat
-  deriving DecidableEq, Repr
+structure Point3Q where (x y z : Rat) deriving DecidableEq, Repr
 structure TetElement3D where
-  i0 : Nat
-  i1 : Nat
-  i2 : Nat
-  i3 : Nat
-  epsScalar : Rat
-  sourceF : Rat
+  (i0 i1 i2 i3 : Nat)
+  (epsScalar sourceF : Rat)
   deriving DecidableEq, Repr
 
 def sixVolume3D (v0 v1 v2 v3 : Point3Q) : Rat :=
@@ -387,12 +328,7 @@ def p1TetGrad3D (v0 v1 v2 v3 : Point3Q) (u0 u1 u2 u3 : Rat) : Point3Q :=
    ((dz2 * dx3 - dx2 * dz3) * du1 + (dx1 * dz3 - dz1 * dx3) * du2 + (dz1 * dx2 - dx1 * dz2) * du3) / d,
    ((dx2 * dy3 - dy2 * dx3) * du1 + (dy1 * dx3 - dx1 * dy3) * du2 + (dx1 * dy2 - dy1 * dx2) * du3) / d⟩
 
-structure Rt0ElementFlux3D where
-  ax : Rat
-  ay : Rat
-  az : Rat
-  b : Rat
-  deriving DecidableEq, Repr
+structure Rt0ElementFlux3D where (ax ay az b : Rat) deriving DecidableEq, Repr
 def rt0Div3D (σ : Rt0ElementFlux3D) : Rat := 3 * σ.b
 structure SimplexMesh3D where
   verts : List Point3Q
@@ -400,18 +336,13 @@ structure SimplexMesh3D where
   deriving DecidableEq, Repr
 
 def checkTetMeshOriented (m : SimplexMesh3D) : Bool :=
-  !m.tets.isEmpty &&
-  m.tets.all (fun K =>
+  !m.tets.isEmpty && m.tets.all (fun K =>
     let n := m.verts.length
-    decide (K.i0 < n ∧ K.i1 < n ∧ K.i2 < n ∧ K.i3 < n) &&
-    decide (0 < K.epsScalar) &&
+    decide (K.i0 < n ∧ K.i1 < n ∧ K.i2 < n ∧ K.i3 < n) && decide (0 < K.epsScalar) &&
     decide (0 < sixVolume3D (m.verts.getD K.i0 ⟨0, 0, 0⟩) (m.verts.getD K.i1 ⟨0, 0, 0⟩)
       (m.verts.getD K.i2 ⟨0, 0, 0⟩) (m.verts.getD K.i3 ⟨0, 0, 0⟩)))
 
-example :
-    checkTetMeshOriented
-      { verts := [⟨0, 0, 0⟩, ⟨1, 0, 0⟩, ⟨0, 1, 0⟩, ⟨0, 0, 1⟩]
-        tets := [{ i0 := 0, i1 := 1, i2 := 2, i3 := 3, epsScalar := 1, sourceF := 0 }] } = true := by
+example : checkTetMeshOriented { verts := [⟨0, 0, 0⟩, ⟨1, 0, 0⟩, ⟨0, 1, 0⟩, ⟨0, 0, 1⟩], tets := [{ i0 := 0, i1 := 1, i2 := 2, i3 := 3, epsScalar := 1, sourceF := 0 }] } = true := by
   decide +kernel
 
 theorem tetMeshOriented_sound (m : SimplexMesh3D) (hOk : checkTetMeshOriented m = true) :
@@ -420,33 +351,26 @@ theorem tetMeshOriented_sound (m : SimplexMesh3D) (hOk : checkTetMeshOriented m 
             (m.verts.getD K.i2 ⟨0, 0, 0⟩) (m.verts.getD K.i3 ⟨0, 0, 0⟩) ∧
       ∀ u0 u1 u2 u3 c : Rat,
         p1TetGrad3D (m.verts.getD K.i0 ⟨0, 0, 0⟩) (m.verts.getD K.i1 ⟨0, 0, 0⟩)
-          (m.verts.getD K.i2 ⟨0, 0, 0⟩) (m.verts.getD K.i3 ⟨0, 0, 0⟩)
-          (u0 + c) (u1 + c) (u2 + c) (u3 + c) =
+          (m.verts.getD K.i2 ⟨0, 0, 0⟩) (m.verts.getD K.i3 ⟨0, 0, 0⟩) (u0 + c) (u1 + c) (u2 + c) (u3 + c) =
         p1TetGrad3D (m.verts.getD K.i0 ⟨0, 0, 0⟩) (m.verts.getD K.i1 ⟨0, 0, 0⟩)
           (m.verts.getD K.i2 ⟨0, 0, 0⟩) (m.verts.getD K.i3 ⟨0, 0, 0⟩) u0 u1 u2 u3) := by
-  unfold checkTetMeshOriented at hOk
-  simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hOk
-  intro K hK
-  refine ⟨rat_div_pos (hOk.2 K hK).2 (by grind), fun u0 u1 u2 u3 c => ?_⟩
+  unfold checkTetMeshOriented at hOk; simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hOk
+  intro K hK; refine ⟨rat_div_pos (hOk.2 K hK).2 (by grind), fun u0 u1 u2 u3 c => ?_⟩
   unfold p1TetGrad3D
-  rw [show (u1 + c) - (u0 + c) = u1 - u0 by grind,
-      show (u2 + c) - (u0 + c) = u2 - u0 by grind,
+  rw [show (u1 + c) - (u0 + c) = u1 - u0 by grind, show (u2 + c) - (u0 + c) = u2 - u0 by grind,
       show (u3 + c) - (u0 + c) = u3 - u0 by grind]
 
 /-! ### 1B. CAD Boundary Roles, Conforming 2D Mesh Topology & `GeometryCAM.FRepExpr` Bridge -/
 
 inductive VertexCadRole where
-  | interior
-  | outerBoundary
-  | conductorBoundary (conductorId : Nat)
+  | interior | outerBoundary | conductorBoundary (conductorId : Nat)
   deriving DecidableEq, Repr
 
 structure SimplexMesh2D where
   verts : List Point2Q
   vertRoles : List VertexCadRole
   tris : List TriElement2D
-  dirichletEdges : List (Nat × Nat)
-  neumannEdges : List (Nat × Nat)
+  (dirichletEdges neumannEdges : List (Nat × Nat))
   deriving DecidableEq, Repr
 
 def getVert2D (verts : List Point2Q) (i : Nat) : Point2Q := verts.getD i ⟨0, 0⟩
@@ -489,35 +413,20 @@ theorem triBoundingQBox_frep_enclosure_sound
     (evalFRepIntervalQ (triBoundingQBox v0 v1 v2 zSlice) e).contains (evalFRepQ px py zSlice e) := by
   intro px py; apply frepQ_enclosure_sound
   unfold QBox.contains QIv.contains triBoundingQBox; dsimp only
-  have xmin : min v0.x (min v1.x v2.x) ≤ v0.x ∧ min v0.x (min v1.x v2.x) ≤ v1.x ∧
-      min v0.x (min v1.x v2.x) ≤ v2.x := by rw [Rat.min_def, Rat.min_def]; split <;> split <;> grind
-  have xmax : v0.x ≤ max v0.x (max v1.x v2.x) ∧ v1.x ≤ max v0.x (max v1.x v2.x) ∧
-      v2.x ≤ max v0.x (max v1.x v2.x) := by rw [Rat.max_def, Rat.max_def]; split <;> split <;> grind
-  have ymin : min v0.y (min v1.y v2.y) ≤ v0.y ∧ min v0.y (min v1.y v2.y) ≤ v1.y ∧
-      min v0.y (min v1.y v2.y) ≤ v2.y := by rw [Rat.min_def, Rat.min_def]; split <;> split <;> grind
-  have ymax : v0.y ≤ max v0.y (max v1.y v2.y) ∧ v1.y ≤ max v0.y (max v1.y v2.y) ∧
-      v2.y ≤ max v0.y (max v1.y v2.y) := by rw [Rat.max_def, Rat.max_def]; split <;> split <;> grind
-  have x0 := Rat.mul_le_mul_of_nonneg_left xmin.1 hl0
-  have x1 := Rat.mul_le_mul_of_nonneg_left xmin.2.1 hl1
-  have x2 := Rat.mul_le_mul_of_nonneg_left xmin.2.2 hl2
-  have X0 := Rat.mul_le_mul_of_nonneg_left xmax.1 hl0
-  have X1 := Rat.mul_le_mul_of_nonneg_left xmax.2.1 hl1
-  have X2 := Rat.mul_le_mul_of_nonneg_left xmax.2.2 hl2
-  have y0 := Rat.mul_le_mul_of_nonneg_left ymin.1 hl0
-  have y1 := Rat.mul_le_mul_of_nonneg_left ymin.2.1 hl1
-  have y2 := Rat.mul_le_mul_of_nonneg_left ymin.2.2 hl2
-  have Y0 := Rat.mul_le_mul_of_nonneg_left ymax.1 hl0
-  have Y1 := Rat.mul_le_mul_of_nonneg_left ymax.2.1 hl1
-  have Y2 := Rat.mul_le_mul_of_nonneg_left ymax.2.2 hl2
-  refine ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩, ⟨Rat.le_refl, Rat.le_refl⟩⟩
-  · have : (l0 + l1 + l2) * min v0.x (min v1.x v2.x) = min v0.x (min v1.x v2.x) := by rw [hsum]; grind
-    grind
-  · have : (l0 + l1 + l2) * max v0.x (max v1.x v2.x) = max v0.x (max v1.x v2.x) := by rw [hsum]; grind
-    grind
-  · have : (l0 + l1 + l2) * min v0.y (min v1.y v2.y) = min v0.y (min v1.y v2.y) := by rw [hsum]; grind
-    grind
-  · have : (l0 + l1 + l2) * max v0.y (max v1.y v2.y) = max v0.y (max v1.y v2.y) := by rw [hsum]; grind
-    grind
+  have hull1D : ∀ a b c : Rat,
+      min a (min b c) ≤ l0 * a + l1 * b + l2 * c ∧ l0 * a + l1 * b + l2 * c ≤ max a (max b c) := by
+    intro a b c
+    have mn : min a (min b c) ≤ a ∧ min a (min b c) ≤ b ∧ min a (min b c) ≤ c := by
+      rw [Rat.min_def, Rat.min_def]; split <;> split <;> grind
+    have mx : a ≤ max a (max b c) ∧ b ≤ max a (max b c) ∧ c ≤ max a (max b c) := by
+      rw [Rat.max_def, Rat.max_def]; split <;> split <;> grind
+    have m0 := Rat.mul_le_mul_of_nonneg_left mn.1 hl0; have m1 := Rat.mul_le_mul_of_nonneg_left mn.2.1 hl1
+    have m2 := Rat.mul_le_mul_of_nonneg_left mn.2.2 hl2; have M0 := Rat.mul_le_mul_of_nonneg_left mx.1 hl0
+    have M1 := Rat.mul_le_mul_of_nonneg_left mx.2.1 hl1; have M2 := Rat.mul_le_mul_of_nonneg_left mx.2.2 hl2
+    have s1 : (l0 + l1 + l2) * min a (min b c) = min a (min b c) := by rw [hsum]; grind
+    have s2 : (l0 + l1 + l2) * max a (max b c) = max a (max b c) := by rw [hsum]; grind
+    exact ⟨by grind, by grind⟩
+  exact ⟨hull1D v0.x v1.x v2.x, hull1D v0.y v1.y v2.y, ⟨Rat.le_refl, Rat.le_refl⟩⟩
 
 def checkTriElementValid (verts : List Point2Q) (maxAspectRatio : Rat) (t : TriElement2D) : Bool :=
   let n := verts.length
@@ -668,6 +577,81 @@ def p1BasisGrad (v0 v1 v2 : Point2Q) : Fin 3 → Point2Q
   | ⟨0, _⟩ => let d := twiceArea2D v0 v1 v2; ⟨(v1.y - v2.y) / d, (v2.x - v1.x) / d⟩
   | ⟨1, _⟩ => let d := twiceArea2D v0 v1 v2; ⟨(v2.y - v0.y) / d, (v0.x - v2.x) / d⟩
   | ⟨2, _⟩ => let d := twiceArea2D v0 v1 v2; ⟨(v0.y - v1.y) / d, (v1.x - v0.x) / d⟩
+
+/-- Lowest-order 2D Whitney 1-form / Nédélec $W^1(\text{curl}; K)$ edge-circulation DOFs $(c_{01}, c_{12}, c_{20})$. -/
+structure Whitney1ElemDofs2D where
+  (c01 c12 c20 : Rat)
+  deriving DecidableEq, Repr
+
+def baryCoord1 (v0 v1 v2 p : Point2Q) : Rat :=
+  ((v2.y - v0.y) * (p.x - v0.x) - (v2.x - v0.x) * (p.y - v0.y)) / twiceArea2D v0 v1 v2
+def baryCoord2 (v0 v1 v2 p : Point2Q) : Rat :=
+  (-(v1.y - v0.y) * (p.x - v0.x) + (v1.x - v0.x) * (p.y - v0.y)) / twiceArea2D v0 v1 v2
+def baryCoord0 (v0 v1 v2 p : Point2Q) : Rat := 1 - baryCoord1 v0 v1 v2 p - baryCoord2 v0 v1 v2 p
+
+/-- Evaluate 2D Whitney 1-form $\omega(p) = \sum_{(i,j)} c_{ij} (\lambda_i(p) \nabla \lambda_j - \lambda_j(p) \nabla \lambda_i)$. -/
+def whitney1Eval (v0 v1 v2 : Point2Q) (w : Whitney1ElemDofs2D) (p : Point2Q) : Point2Q :=
+  let l0 := baryCoord0 v0 v1 v2 p; let l1 := baryCoord1 v0 v1 v2 p; let l2 := baryCoord2 v0 v1 v2 p
+  let g0 := p1BasisGrad v0 v1 v2 ⟨0, by decide⟩
+  let g1 := p1BasisGrad v0 v1 v2 ⟨1, by decide⟩
+  let g2 := p1BasisGrad v0 v1 v2 ⟨2, by decide⟩
+  add2Q (add2Q (scale2Q w.c01 (sub2Q (scale2Q l0 g1) (scale2Q l1 g0)))
+               (scale2Q w.c12 (sub2Q (scale2Q l1 g2) (scale2Q l2 g1))))
+        (scale2Q w.c20 (sub2Q (scale2Q l2 g0) (scale2Q l0 g2)))
+
+def whitney1D0 (u0 u1 u2 : Rat) : Whitney1ElemDofs2D := ⟨u1 - u0, u2 - u1, u0 - u2⟩
+def whitney1Curl (v0 v1 v2 : Point2Q) (w : Whitney1ElemDofs2D) : Rat :=
+  (w.c01 + w.c12 + w.c20) / elemArea2D v0 v1 v2
+
+/-- **Whitney 1-Form / Nédélec $W^1$ FEEC Exactness (`whitney1_feec_exactness`)**:
+    1. Exact Kronecker edge-circulation DOFs $\omega(m_{ij}) \cdot (v_j - v_i) = c_{ij}$ on all 3 edges,
+    2. Exact commuting cochain-to-field exterior derivative $\mathcal{I}_{W^1}(d_0 u_h)(p) = \nabla u_h$,
+    3. Exact discrete curl-of-grad nilpotence $\operatorname{curl}(\mathcal{I}_{W^1}(d_0 u_h)) = 0$. -/
+theorem whitney1_feec_exactness (v0 v1 v2 p : Point2Q) (w : Whitney1ElemDofs2D)
+    (u0 u1 u2 : Rat) (hPos : 0 < twiceArea2D v0 v1 v2) :
+    dot2Q (whitney1Eval v0 v1 v2 w (mid2Q v0 v1)) (sub2Q v1 v0) = w.c01 ∧
+    dot2Q (whitney1Eval v0 v1 v2 w (mid2Q v1 v2)) (sub2Q v2 v1) = w.c12 ∧
+    dot2Q (whitney1Eval v0 v1 v2 w (mid2Q v2 v0)) (sub2Q v0 v2) = w.c20 ∧
+    whitney1Eval v0 v1 v2 (whitney1D0 u0 u1 u2) p =
+      ⟨((v2.y - v0.y) * (u1 - u0) - (v1.y - v0.y) * (u2 - u0)) / twiceArea2D v0 v1 v2,
+       (-(v2.x - v0.x) * (u1 - u0) + (v1.x - v0.x) * (u2 - u0)) / twiceArea2D v0 v1 v2⟩ ∧
+    whitney1Curl v0 v1 v2 (whitney1D0 u0 u1 u2) = 0 := by
+  let d := twiceArea2D v0 v1 v2
+  have hdNe : d ≠ 0 := Rat.ne_of_gt hPos
+  have hdDef : (v1.x - v0.x) * (v2.y - v0.y) - (v2.x - v0.x) * (v1.y - v0.y) = d := rfl
+  have eqOfMulSq : ∀ a b : Rat, (a - b) * d * d = 0 → a = b := fun a b h => by
+    rcases Rat.mul_eq_zero.mp h with h1 | hd0; · rcases Rat.mul_eq_zero.mp h1 with h2 | hd0' <;> grind
+    exact absurd hd0 hdNe
+  have cB1 : ∀ q : Point2Q, baryCoord1 v0 v1 v2 q * d =
+      (v2.y - v0.y) * (q.x - v0.x) - (v2.x - v0.x) * (q.y - v0.y) :=
+    fun q => Rat.div_mul_cancel hdNe
+  have cB2 : ∀ q : Point2Q, baryCoord2 v0 v1 v2 q * d =
+      -(v1.y - v0.y) * (q.x - v0.x) + (v1.x - v0.x) * (q.y - v0.y) :=
+    fun q => Rat.div_mul_cancel hdNe
+  have g0x := Rat.div_mul_cancel (a := v1.y - v2.y) hdNe
+  have g0y := Rat.div_mul_cancel (a := v2.x - v1.x) hdNe
+  have g1x := Rat.div_mul_cancel (a := v2.y - v0.y) hdNe
+  have g1y := Rat.div_mul_cancel (a := v0.x - v2.x) hdNe
+  have g2x := Rat.div_mul_cancel (a := v0.y - v1.y) hdNe
+  have g2y := Rat.div_mul_cancel (a := v1.x - v0.x) hdNe
+  refine ⟨eqOfMulSq _ _ ?_, eqOfMulSq _ _ ?_, eqOfMulSq _ _ ?_, mkPoint2Q_eq ?_ ?_, ?_⟩
+  · have b1 := cB1 (mid2Q v0 v1); have b2 := cB2 (mid2Q v0 v1)
+    unfold whitney1Eval baryCoord0 p1BasisGrad mid2Q add2Q sub2Q scale2Q dot2Q at *
+    dsimp only [d] at *; grind
+  · have b1 := cB1 (mid2Q v1 v2); have b2 := cB2 (mid2Q v1 v2)
+    unfold whitney1Eval baryCoord0 p1BasisGrad mid2Q add2Q sub2Q scale2Q dot2Q at *
+    dsimp only [d] at *; grind
+  · have b1 := cB1 (mid2Q v2 v0); have b2 := cB2 (mid2Q v2 v0)
+    unfold whitney1Eval baryCoord0 p1BasisGrad mid2Q add2Q sub2Q scale2Q dot2Q at *
+    dsimp only [d] at *; grind
+  · dsimp only [whitney1Eval, whitney1D0, baryCoord0, p1BasisGrad, add2Q, sub2Q, scale2Q]
+    repeat rw [Rat.div_def]
+    grind
+  · dsimp only [whitney1Eval, whitney1D0, baryCoord0, p1BasisGrad, add2Q, sub2Q, scale2Q]
+    repeat rw [Rat.div_def]
+    grind
+  · unfold whitney1Curl whitney1D0; dsimp only
+    rw [show (u1 - u0) + (u2 - u1) + (u0 - u2) = 0 by grind]; grind
 
 def elemLocalDof (uh : List Rat) (t : TriElement2D) : Fin 3 → Rat
   | ⟨0, _⟩ => uh.getD t.i0 0
@@ -827,6 +811,21 @@ def partnerHalfEdgeSlot (mesh : SimplexMesh2D) (slot : Nat × Nat) : Nat × Nat 
   | some opp => opp
   | none => slot
 
+/-- Semantic $H(\text{div})$ Raviart–Thomas flux equilibration predicate (independent of Boolean `check`). -/
+def Rt0Equilibrated (mesh : SimplexMesh2D) (flux : List Rt0ElementFlux2D) : Prop :=
+  flux.length = mesh.tris.length ∧
+  (∀ k, k < mesh.tris.length →
+    let t := mesh.tris.getD k { i0 := 0, i1 := 0, i2 := 0, eps := Mat2Q.isotropic 1, sourceF := 0 }
+    rt0Div (flux.getD k ⟨0, 0, 0⟩) + t.sourceF = 0) ∧
+  (∀ slot ∈ allHalfEdgeSlots mesh.tris.length,
+    let opp := partnerHalfEdgeSlot mesh slot
+    let e := slotHalfEdge mesh slot
+    if opp ≠ slot then
+      partnerHalfEdgeSlot mesh opp = slot ∧ slotHalfEdge mesh opp = (e.2, e.1) ∧
+      slotNormalFlux mesh flux slot + slotNormalFlux mesh flux opp = 0
+    else
+      e ∈ mesh.dirichletEdges ∨ (e ∈ mesh.neumannEdges ∧ slotNormalFlux mesh flux slot = 0))
+
 @[expose] def checkRt0Equilibrated (mesh : SimplexMesh2D) (flux : List Rt0ElementFlux2D) : Bool :=
   let nT := mesh.tris.length
   let slots := allHalfEdgeSlots nT
@@ -846,25 +845,46 @@ def partnerHalfEdgeSlot (mesh : SimplexMesh2D) (slot : Nat × Nat) : Nat × Nat 
       mesh.dirichletEdges.contains e ||
       (mesh.neumannEdges.contains e && decide (slotNormalFlux mesh flux slot = 0)))
 
+theorem checkRt0Equilibrated_iff (mesh : SimplexMesh2D) (flux : List Rt0ElementFlux2D) :
+    checkRt0Equilibrated mesh flux = true ↔ Rt0Equilibrated mesh flux := by
+  unfold checkRt0Equilibrated Rt0Equilibrated
+  simp only [Bool.and_eq_true, List.all_eq_true, List.mem_range, decide_eq_true_eq]
+  refine ⟨fun ⟨⟨hLen, hDiv⟩, hSlots⟩ => ⟨hLen, hDiv, fun slot hMem => ?_⟩,
+          fun ⟨hLen, hDiv, hSlots⟩ => ⟨⟨hLen, hDiv⟩, fun slot hMem => ?_⟩⟩
+  · have hs := hSlots slot hMem
+    by_cases hNe : partnerHalfEdgeSlot mesh slot ≠ slot
+    · rw [if_pos hNe]; rw [bne_iff_ne.mpr hNe] at hs
+      simp only [↓reduceIte, Bool.and_eq_true, decide_eq_true_eq] at hs
+      exact ⟨hs.1.1, hs.1.2, hs.2⟩
+    · rw [if_neg hNe]
+      have hEq : partnerHalfEdgeSlot mesh slot = slot := Decidable.of_not_not hNe
+      rw [hEq, bne_self_eq_false] at hs
+      simp only [Bool.false_eq_true, ↓reduceIte, Bool.or_eq_true, Bool.and_eq_true,
+        List.contains_iff_mem, decide_eq_true_eq] at hs
+      exact hs
+  · have hs := hSlots slot hMem
+    by_cases hNe : partnerHalfEdgeSlot mesh slot ≠ slot
+    · rw [if_pos hNe] at hs; rw [bne_iff_ne.mpr hNe]
+      simp only [↓reduceIte, Bool.and_eq_true, decide_eq_true_eq]
+      exact ⟨⟨hs.1, hs.2.1⟩, hs.2.2⟩
+    · rw [if_neg hNe] at hs
+      have hEq : partnerHalfEdgeSlot mesh slot = slot := Decidable.of_not_not hNe
+      rw [hEq, bne_self_eq_false]
+      simp only [Bool.false_eq_true, ↓reduceIte, Bool.or_eq_true, Bool.and_eq_true,
+        List.contains_iff_mem, decide_eq_true_eq]
+      exact hs
+
 def unitSquareExactFlux : List Rt0ElementFlux2D := [⟨0, -4, 0⟩, ⟨0, -4, 0⟩]
 
 example : checkRt0Equilibrated unitSquareCapMesh unitSquareExactFlux = true := by decide +kernel
 
 /-! ## 3. Element-by-Element Green's Identity, Prager–Synge Hypercircle & Thomson–Dirichlet Brackets -/
 
-structure P2ElemDofs where
-  w0 : Rat
-  w1 : Rat
-  w2 : Rat
-  w01 : Rat
-  w12 : Rat
-  w20 : Rat
-  deriving DecidableEq, Repr
+structure P2ElemDofs where (w0 w1 w2 w01 w12 w20 : Rat) deriving DecidableEq, Repr
 
 def p1ToP2Dofs (wh : List Rat) (t : TriElement2D) : P2ElemDofs :=
   let w0 := wh.getD t.i0 0; let w1 := wh.getD t.i1 0; let w2 := wh.getD t.i2 0
-  { w0 := w0, w1 := w1, w2 := w2
-    w01 := (w0 + w1) / 2, w12 := (w1 + w2) / 2, w20 := (w2 + w0) / 2 }
+  { w0 := w0, w1 := w1, w2 := w2, w01 := (w0 + w1) / 2, w12 := (w1 + w2) / 2, w20 := (w2 + w0) / 2 }
 
 def p2ScaledGradAt (v0 v1 v2 : Point2Q) (c0 c1 c2 : Rat) : Point2Q :=
   ⟨c0 * (v1.y - v2.y) + c1 * (v2.y - v0.y) + c2 * (v0.y - v1.y),
@@ -1281,20 +1301,13 @@ theorem thomsonDirichlet_unit_charge_bracket
 
 structure FeecPdeProblem2D where
   mesh : SimplexMesh2D
-  cadDomain : FRepExpr
-  cadConductorCutout : FRepExpr
-  zSlice : Rat
-  tauCad : Rat
-  maxAspectRatio : Rat
-  dirichletGroundVerts : List Nat
-  dirichletHotVerts : List Nat
+  (cadDomain cadConductorCutout : FRepExpr)
+  (zSlice tauCad maxAspectRatio : Rat)
+  (dirichletGroundVerts dirichletHotVerts : List Nat)
   errorTolSq : Rat
   deriving DecidableEq, Repr
 
-structure FeecPragerSyngeCert2D where
-  uh : List Rat
-  flux : List Rt0ElementFlux2D
-  deriving DecidableEq, Repr
+structure FeecPragerSyngeCert2D where (uh : List Rat) (flux : List Rt0ElementFlux2D) deriving DecidableEq, Repr
 
 inductive FeecClause where
   | invalidOrInvertedElement | nonConformingMeshTopology | cadBoundaryViolation
@@ -1308,20 +1321,20 @@ def feecRefutes : FeecClause → Bool
   | .potentialBoundaryMismatch | .brokenRt0Equilibration | .errorBudgetExceeded => false
 
 def checkPotentialDirichletBC (prob : FeecPdeProblem2D) (uh : List Rat) : Bool :=
+  let dirVerts := prob.dirichletGroundVerts ++ prob.dirichletHotVerts
   decide (uh.length = prob.mesh.verts.length) &&
   prob.dirichletGroundVerts.all (fun v => decide (uh.getD v 0 = 0)) &&
-  prob.dirichletHotVerts.all (fun v => decide (uh.getD v 0 = 1))
+  prob.dirichletHotVerts.all (fun v => decide (uh.getD v 0 = 1)) &&
+  prob.mesh.dirichletEdges.all (fun e => dirVerts.contains e.1 && dirVerts.contains e.2)
 
-def guardFeec (b : Bool) (cl : FeecClause) (rest : Judge.Verdict FeecClause) :
-    Judge.Verdict FeecClause :=
+def guardFeec (b : Bool) (cl : FeecClause) (rest : Judge.Verdict FeecClause) : Judge.Verdict FeecClause :=
   if b then rest else .refused cl []
 
 private theorem guardFeec_cases (b : Bool) (cl : FeecClause) (rest v : Judge.Verdict FeecClause)
-    (h : guardFeec b cl rest = v) :
-    (b = false ∧ v = .refused cl []) ∨ (b = true ∧ rest = v) := by
-  cases b
-  · exact Or.inl ⟨rfl, h.symm⟩
-  · exact Or.inr ⟨rfl, h⟩
+    (h : guardFeec b cl rest = v) : (b = false ∧ v = .refused cl []) ∨ (b = true ∧ rest = v) := by
+  cases b with
+  | false => exact Or.inl ⟨rfl, h.symm⟩
+  | true => exact Or.inr ⟨rfl, h⟩
 
 @[expose] def checkFeecPragerSynge (prob : FeecPdeProblem2D) (cert : FeecPragerSyngeCert2D) :
     Judge.Verdict FeecClause :=
@@ -1357,8 +1370,11 @@ structure CertifiedFeecPde (prob : FeecPdeProblem2D) (cert : FeecPragerSyngeCert
   tolNonneg : 0 ≤ prob.errorTolSq
   bcMatch : cert.uh.length = prob.mesh.verts.length ∧
     (∀ v ∈ prob.dirichletGroundVerts, cert.uh.getD v 0 = 0) ∧
-    (∀ v ∈ prob.dirichletHotVerts, cert.uh.getD v 0 = 1)
-  rt0Equil : checkRt0Equilibrated prob.mesh cert.flux = true
+    (∀ v ∈ prob.dirichletHotVerts, cert.uh.getD v 0 = 1) ∧
+    (∀ e ∈ prob.mesh.dirichletEdges,
+      e.1 ∈ prob.dirichletGroundVerts ++ prob.dirichletHotVerts ∧
+      e.2 ∈ prob.dirichletGroundVerts ++ prob.dirichletHotVerts)
+  rt0Equil : Rt0Equilibrated prob.mesh cert.flux
   estimatorWithinBudget : pragerSyngeEstimatorSq prob.mesh cert.uh cert.flux ≤ prob.errorTolSq
   continuumErrorBound : ∀ {Field : Type} (H : ContinuumEnergySpace Field)
     (gradU gradUh epsInvSigma : Field),
@@ -1385,15 +1401,15 @@ theorem checkFeecPragerSynge_sound {prob : FeecPdeProblem2D} {cert : FeecPragerS
   rcases guardFeec_cases _ _ _ _ hOk with ⟨_, hv⟩ | ⟨h8, _⟩; · cases hv
   have hEst : pragerSyngeEstimatorSq prob.mesh cert.uh cert.flux ≤ prob.errorTolSq :=
     of_decide_eq_true h8
-  refine ⟨?_, h2, h3, h4, of_decide_eq_true h5, ?_, h7, hEst, ?_⟩
+  refine ⟨?_, h2, h3, h4, of_decide_eq_true h5, ?_, (checkRt0Equilibrated_iff _ _).mp h7, hEst, ?_⟩
   · intro t ht
     have hEl := List.all_eq_true.mp h1 t ht
     unfold checkTriElementValid Mat2Q.isSpdB at hEl
     simp only [Bool.and_eq_true, decide_eq_true_eq] at hEl
     exact ⟨hEl.1.1.1.1, hEl.1.1.1.2, hEl.1.1.2, hEl.1.2, ⟨hEl.2.1.1, hEl.2.1.2, hEl.2.2⟩⟩
   · unfold checkPotentialDirichletBC at h6
-    simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h6
-    exact ⟨h6.1.1, h6.1.2, h6.2⟩
+    simp only [Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem, decide_eq_true_eq] at h6
+    exact ⟨h6.1.1.1, h6.1.1.2, h6.1.2, h6.2⟩
   · intro Field H gradU gradUh epsInvSigma hOrtho hEmbed
     exact Rat.le_trans
       (pragerSynge_continuum_error_bound H prob.mesh cert.uh cert.flux gradU gradUh epsInvSigma hOrtho hEmbed)
@@ -1414,20 +1430,13 @@ theorem checkFeecPragerSynge_refuted {prob : FeecPdeProblem2D} {cert : FeecPrage
       simp only [Bool.and_eq_true, decide_eq_true_eq]
       exact ⟨⟨⟨⟨hBnd, hDist⟩, hd⟩, hAsp⟩, ⟨⟨hSpd.1, hSpd.2.1⟩, hSpd.2.2⟩⟩
     rw [hAll] at hb; cases hb
-  rcases guardFeec_cases _ _ _ _ hRef with ⟨hb, _⟩ | ⟨_, hRef⟩
-  · rw [hc.topoConforming] at hb; cases hb
-  rcases guardFeec_cases _ _ _ _ hRef with ⟨hb, _⟩ | ⟨_, hRef⟩
-  · rw [hc.cadValid] at hb; cases hb
-  rcases guardFeec_cases _ _ _ _ hRef with ⟨hb, _⟩ | ⟨_, hRef⟩
-  · rw [hc.dirichletConn] at hb; cases hb
-  rcases guardFeec_cases _ _ _ _ hRef with ⟨hb, _⟩ | ⟨_, hRef⟩
-  · exact (of_decide_eq_false hb) hc.tolNonneg
-  rcases guardFeec_cases _ _ _ _ hRef with ⟨_, hv⟩ | ⟨_, hRef⟩
-  · injection hv with hkEq _; subst hkEq; cases hIsRef
-  rcases guardFeec_cases _ _ _ _ hRef with ⟨_, hv⟩ | ⟨_, hRef⟩
-  · injection hv with hkEq _; subst hkEq; cases hIsRef
-  rcases guardFeec_cases _ _ _ _ hRef with ⟨_, hv⟩ | ⟨_, hRef⟩
-  · injection hv with hkEq _; subst hkEq; cases hIsRef
+  rcases guardFeec_cases _ _ _ _ hRef with ⟨hb, _⟩ | ⟨_, hRef⟩; · rw [hc.topoConforming] at hb; cases hb
+  rcases guardFeec_cases _ _ _ _ hRef with ⟨hb, _⟩ | ⟨_, hRef⟩; · rw [hc.cadValid] at hb; cases hb
+  rcases guardFeec_cases _ _ _ _ hRef with ⟨hb, _⟩ | ⟨_, hRef⟩; · rw [hc.dirichletConn] at hb; cases hb
+  rcases guardFeec_cases _ _ _ _ hRef with ⟨hb, _⟩ | ⟨_, hRef⟩; · exact (of_decide_eq_false hb) hc.tolNonneg
+  rcases guardFeec_cases _ _ _ _ hRef with ⟨_, hv⟩ | ⟨_, hRef⟩; · injection hv with hkEq _; subst hkEq; cases hIsRef
+  rcases guardFeec_cases _ _ _ _ hRef with ⟨_, hv⟩ | ⟨_, hRef⟩; · injection hv with hkEq _; subst hkEq; cases hIsRef
+  rcases guardFeec_cases _ _ _ _ hRef with ⟨_, hv⟩ | ⟨_, hRef⟩; · injection hv with hkEq _; subst hkEq; cases hIsRef
   cases hRef
 
 theorem checkFeecPragerSynge_complete {prob : FeecPdeProblem2D} {cert : FeecPragerSyngeCert2D}
@@ -1438,10 +1447,11 @@ theorem checkFeecPragerSynge_complete {prob : FeecPdeProblem2D} {cert : FeecPrag
   simp only [Bool.and_eq_true] at hMeshOk
   have hBc : checkPotentialDirichletBC prob cert.uh = true := by
     unfold checkPotentialDirichletBC
-    simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq]
-    exact ⟨⟨hc.bcMatch.1, hc.bcMatch.2.1⟩, hc.bcMatch.2.2⟩
+    simp only [Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem, decide_eq_true_eq]
+    exact ⟨⟨⟨hc.bcMatch.1, hc.bcMatch.2.1⟩, hc.bcMatch.2.2.1⟩, hc.bcMatch.2.2.2⟩
+  have hRt0 : checkRt0Equilibrated prob.mesh cert.flux = true := (checkRt0Equilibrated_iff _ _).mpr hc.rt0Equil
   unfold checkFeecPragerSynge guardFeec
-  rw [hMeshOk.1.1, hMeshOk.1.2, hMeshOk.2, hConn, decide_eq_true hTol, hBc, hc.rt0Equil,
+  rw [hMeshOk.1.1, hMeshOk.1.2, hMeshOk.2, hConn, decide_eq_true hTol, hBc, hRt0,
       decide_eq_true hc.estimatorWithinBudget]
   simp
 

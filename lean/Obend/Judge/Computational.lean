@@ -135,11 +135,16 @@ private theorem sub_emod_eq_zero_of_emod_eq {a b m : Int} (h : a % m = b % m) :
 /-! ## 2. Algebraic `AssumptionSet` & Constructive `BreakWitness` -/
 
 /-- Explicit algebraic lattice/hash assumption floor carried by a `ComputationalJudge`.
+    - `.hashCollision256 H maxBytes`: bounded-length byte-hash collision (`maxBytes ≤ 32` in the
+      non-compressing `NonPigeonhole` regime; use `.hashCollisionAmong` or `PSum` extractors for
+      longer messages!).
+    - `.hashCollisionAmong H traceMsgs`: collision pinned to a finite list of executed trace preimages.
     - `.conj a b`: relies on *both* `a` and `b` (breaking either breaks the conjunction).
     - `.disj a b`: relies on *at least one* of `a` or `b` (breaking requires breaking **both**). -/
 inductive AssumptionSet where
   | none
   | hashCollision256 (H : HashBytes.Hash) (maxBytes : Nat)
+  | hashCollisionAmong (H : HashBytes.Hash) (traceMsgs : List (List UInt8))
   | moduleSISShortVec (q normBound : Nat) (matrix : List (List Int))
   | rlweDistinguish (q noiseBound : Nat) (matrixA : List (List Int)) (targetB : List Int)
   | conj (a b : AssumptionSet)
@@ -155,6 +160,60 @@ structure HashCollisionWitness (H : HashBytes.Hash) (maxBytes : Nat) where
   distinct : msgA ≠ msgB
   sameDigest : HashBytes.ofBE (H msgA) = HashBytes.ofBE (H msgB)
   deriving DecidableEq
+
+/-- Constructive witness of a byte-hash collision pinned to a finite executed trace `domain`.
+    Unlike global unbounded collision predicates over `List UInt8` (which are trivially `True` by
+    Pigeonhole), `PinnedCollision H domain` is empty (`Unbroken`) on every collision-free trace! -/
+structure PinnedCollision (H : HashBytes.Hash) (domain : List (List UInt8)) where
+  msgA : List UInt8
+  msgB : List UInt8
+  memA : msgA ∈ domain
+  memB : msgB ∈ domain
+  distinct : msgA ≠ msgB
+  sameDigest : HashBytes.ofBE (H msgA) = HashBytes.ofBE (H msgB)
+  deriving DecidableEq
+
+/-- Every `PinnedCollision` induces `Obend.Digest.HashBytes.CollisionAmong` over `domain` membership. -/
+theorem PinnedCollision.toCollisionAmong {H : HashBytes.Hash} {domain : List (List UInt8)}
+    (w : PinnedCollision H domain) :
+    HashBytes.CollisionAmong H (fun m => m ∈ domain) :=
+  ⟨w.msgA, w.msgB, w.memA, w.memB, w.distinct, w.sameDigest⟩
+
+/-- Every `PinnedCollision` induces a bounded `HashCollisionWitness` at `max (msgA.length) (msgB.length)`. -/
+def PinnedCollision.toHashCollisionWitness {H : HashBytes.Hash} {domain : List (List UInt8)}
+    (w : PinnedCollision H domain) :
+    HashCollisionWitness H (max w.msgA.length w.msgB.length) where
+  msgA := w.msgA
+  msgB := w.msgB
+  lenA := Nat.le_max_left _ _
+  lenB := Nat.le_max_right _ _
+  distinct := w.distinct
+  sameDigest := w.sameDigest
+
+/-- Type-valued constructive soundness-or-pinned-collision combinator (`0 Classical`). -/
+abbrev ConstructiveCollisionOrSound (P : Prop) (H : HashBytes.Hash) (domain : List (List UInt8)) : Type :=
+  PSum (PLift P) (PinnedCollision H domain)
+
+/-- Constructive `0 Classical` equality-or-collision comparator on a concrete two-preimage pair `[m₁, m₂]`. -/
+def pinnedCompare (H : HashBytes.Hash) (m₁ m₂ : List UInt8)
+    (hSame : HashBytes.ofBE (H m₁) = HashBytes.ofBE (H m₂)) :
+    ConstructiveCollisionOrSound (m₁ = m₂) H [m₁, m₂] :=
+  if hEq : m₁ = m₂ then
+    .inl ⟨hEq⟩
+  else
+    .inr
+      { msgA := m₁
+        msgB := m₂
+        memA := .head _
+        memB := .tail _ (.head _)
+        distinct := hEq
+        sameDigest := hSame }
+
+/-- Decidable check that all distinct messages in finite executed trace `traceMsgs` have distinct digests. -/
+def traceCollisionFree (H : HashBytes.Hash) (traceMsgs : List (List UInt8)) : Bool :=
+  traceMsgs.all fun a =>
+    traceMsgs.all fun b =>
+      decide (HashBytes.ofBE (H a) = HashBytes.ofBE (H b) → a = b)
 
 /-- Every `HashCollisionWitness` induces `Obend.Digest.HashBytes.CollisionAmong` on bounded inputs. -/
 theorem HashCollisionWitness.toCollisionAmong {H : HashBytes.Hash} {maxBytes : Nat}
@@ -177,13 +236,26 @@ structure SISShortVecWitness (q normBound : Nat) (matrix : List (List Int)) wher
   inKernel : matVecModZero q matrix shortVec = true
   deriving DecidableEq
 
-/-- Constructive witness breaking search/distinguishing LWE/RLWE `(q, noiseBound, matrixA, targetB)`:
-    a secret `secretS` and short error `errorE` (`‖errorE‖_∞ ≤ noiseBound`) with `A·s + e ≡ b (mod q)`. -/
+/-- Constructive witness breaking unique bounded-noise LWE/RLWE decoding `(q, noiseBound, matrixA, targetB)`:
+    requires non-degenerate modulus/noise parameters (`0 < q`, `2 * noiseBound < q`), conforming row widths,
+    and **two distinct** canonical secret/short-error openings `(secretS, errorE) ≠ (secretS₂, errorE₂)`
+    satisfying `0 ≤ s_i < q`, `‖e‖_∞ ≤ noiseBound`, and `A·s + e ≡ b (mod q)`. -/
 structure RLWEBreakWitness (q noiseBound : Nat) (matrixA : List (List Int)) (targetB : List Int) where
+  modulusPos : 0 < q
+  nonPigeonholeNoise : 2 * noiseBound < q
   secretS : List Int
   errorE : List Int
+  secretS₂ : List Int
+  errorE₂ : List Int
+  canonicalS : secretS.all (fun x => decide (0 ≤ x ∧ x < (q : Int))) = true
+  canonicalS₂ : secretS₂.all (fun x => decide (0 ≤ x ∧ x < (q : Int))) = true
+  colsConsistent : matrixA.all (fun row => decide (row.length = secretS.length ∧ row.length = secretS₂.length)) = true
+  rowsConsistent : errorE.length = targetB.length ∧ errorE₂.length = targetB.length
   shortNoise : vecInfNorm errorE ≤ noiseBound
+  shortNoise₂ : vecInfNorm errorE₂ ≤ noiseBound
+  distinctDecoding : (secretS, errorE) ≠ (secretS₂, errorE₂)
   consistent : vecCongrMod q (vecAdd (matVecMul matrixA secretS) errorE) targetB = true
+  consistent₂ : vecCongrMod q (vecAdd (matVecMul matrixA secretS₂) errorE₂) targetB = true
   deriving DecidableEq
 
 /-- Type-valued constructive break witness for an `AssumptionSet`.
@@ -193,19 +265,52 @@ structure RLWEBreakWitness (q noiseBound : Nat) (matrixA : List (List Int)) (tar
 @[expose] def BreakWitness : AssumptionSet → Type
   | .none => PEmpty
   | .hashCollision256 H maxBytes => HashCollisionWitness H maxBytes
+  | .hashCollisionAmong H traceMsgs => PinnedCollision H traceMsgs
   | .moduleSISShortVec q normBound matrix => SISShortVecWitness q normBound matrix
   | .rlweDistinguish q noiseBound matrixA targetB => RLWEBreakWitness q noiseBound matrixA targetB
   | .conj a b => Sum (BreakWitness a) (BreakWitness b)
   | .disj a b => BreakWitness a × BreakWitness b
 
+/-- Explicit non-compressing / non-pigeonhole parameter regime for an `AssumptionSet`:
+    - `.hashCollision256 _ maxBytes`: non-compressing `maxBytes ≤ 32` for 256-bit digests;
+    - `.hashCollisionAmong _ traceMsgs`: finite executed trace `traceMsgs.length ≤ 2 ^ 256`;
+    - `.moduleSISShortVec q normBound matrix`: integer lattice box `(2 * normBound + 1)^cols ≤ q^rows`;
+    - `.rlweDistinguish q noiseBound _ _`: unique-decoding noise regime `2 * noiseBound < q`. -/
+@[expose] def NonPigeonhole : AssumptionSet → Prop
+  | .none => True
+  | .hashCollision256 _ maxBytes => maxBytes ≤ 32
+  | .hashCollisionAmong _ traceMsgs => traceMsgs.length ≤ 2 ^ 256
+  | .moduleSISShortVec q normBound matrix =>
+      (2 * normBound + 1) ^ (matrix.headD []).length ≤ q ^ matrix.length
+  | .rlweDistinguish q noiseBound _ _ => 2 * noiseBound < q
+  | .conj a b => NonPigeonhole a ∧ NonPigeonhole b
+  | .disj a b => NonPigeonhole a ∨ NonPigeonhole b
+
 /-- Proposition that `AssumptionSet` `A` has a constructive break witness. -/
 @[expose] def Broken (A : AssumptionSet) : Prop := Nonempty (BreakWitness A)
 
-/-- Proposition that `AssumptionSet` `A` has no break witness. -/
-@[expose] def Unbroken (A : AssumptionSet) : Prop := ¬ Broken A
+/-- Proposition that `AssumptionSet` `A` is unbroken in a non-pigeonhole regime:
+    enforces `maxBytes ≤ 32` on `.hashCollision256` and `traceMsgs.length ≤ 2 ^ 256` on
+    `.hashCollisionAmong`, while reducing definitionally to `¬ Nonempty (SISShortVecWitness ...)`
+    on `.moduleSISShortVec` for direct lattice kernel proofs. -/
+@[expose] def Unbroken : AssumptionSet → Prop
+  | .none => True
+  | .hashCollision256 H maxBytes => maxBytes ≤ 32 ∧ ¬ Nonempty (HashCollisionWitness H maxBytes)
+  | .hashCollisionAmong H traceMsgs =>
+      traceMsgs.length ≤ 2 ^ 256 ∧ ¬ Nonempty (PinnedCollision H traceMsgs)
+  | .moduleSISShortVec q normBound matrix => ¬ Nonempty (SISShortVecWitness q normBound matrix)
+  | .rlweDistinguish q noiseBound matrixA targetB =>
+      ¬ Nonempty (RLWEBreakWitness q noiseBound matrixA targetB)
+  | .conj a b => Unbroken a ∧ Unbroken b
+  | .disj a b => Unbroken a ∨ Unbroken b
 
-theorem unbroken_none : Unbroken .none := by
-  intro ⟨w⟩; cases w
+theorem unbroken_none : Unbroken .none := trivial
+
+theorem nonPigeonhole_none : NonPigeonhole .none := trivial
+
+theorem nonPigeonhole_disj_of_or {a b : AssumptionSet}
+    (h : NonPigeonhole a ∨ NonPigeonhole b) :
+    NonPigeonhole (.disj a b) := h
 
 theorem broken_conj_iff (a b : AssumptionSet) :
     Broken (.conj a b) ↔ Broken a ∨ Broken b := by
@@ -220,10 +325,11 @@ theorem broken_conj_iff (a b : AssumptionSet) :
 
 theorem unbroken_conj_iff (a b : AssumptionSet) :
     Unbroken (.conj a b) ↔ Unbroken a ∧ Unbroken b := by
-  unfold Unbroken
-  rw [broken_conj_iff]
-  exact ⟨fun h => ⟨fun ha => h (.inl ha), fun hb => h (.inr hb)⟩,
-         fun ⟨ha, hb⟩ h => h.elim ha hb⟩
+  constructor
+  · rintro ⟨ha, hb⟩
+    exact ⟨ha, hb⟩
+  · rintro ⟨ha, hb⟩
+    exact ⟨ha, hb⟩
 
 theorem broken_disj_iff (a b : AssumptionSet) :
     Broken (.disj a b) ↔ Broken a ∧ Broken b := by
@@ -232,10 +338,120 @@ theorem broken_disj_iff (a b : AssumptionSet) :
   · rintro ⟨⟨wa⟩, ⟨wb⟩⟩; exact ⟨(wa, wb)⟩
 
 theorem unbroken_disj_of_or {a b : AssumptionSet} (h : Unbroken a ∨ Unbroken b) :
-    Unbroken (.disj a b) := by
+    Unbroken (.disj a b) := h
+
+/-- Structural soundness of `Unbroken` in a `NonPigeonhole` regime:
+    any `Unbroken A` accompanied by `NonPigeonhole A` refutes `Broken A`. -/
+theorem Unbroken.not_broken {A : AssumptionSet}
+    (hNonPig : NonPigeonhole A) (hUnbroken : Unbroken A) : ¬ Broken A := by
   intro hBrk
-  obtain ⟨ha, hb⟩ := (broken_disj_iff a b).1 hBrk
-  exact h.elim (fun una => una ha) (fun unb => unb hb)
+  have hTriv : True := let _ := hNonPig; trivial
+  clear hNonPig hTriv
+  induction A with
+  | none => rcases hBrk with ⟨w⟩; cases w
+  | hashCollision256 _ _ => exact hUnbroken.2 hBrk
+  | hashCollisionAmong _ _ => exact hUnbroken.2 hBrk
+  | moduleSISShortVec _ _ _ => exact hUnbroken hBrk
+  | rlweDistinguish _ _ _ _ => exact hUnbroken hBrk
+  | conj a b iha ihb =>
+      exact ((broken_conj_iff a b).1 hBrk).elim (iha hUnbroken.1) (ihb hUnbroken.2)
+  | disj a b iha ihb =>
+      rcases (broken_disj_iff a b).1 hBrk with ⟨ha, hb⟩
+      exact hUnbroken.elim (fun una => iha una ha) (fun unb => ihb unb hb)
+
+/-- Decidable `traceCollisionFree` establishes `Unbroken (.hashCollisionAmong H traceMsgs)`
+    whenever `traceMsgs.length ≤ 2 ^ 256`. -/
+theorem unbroken_hashCollisionAmong_of_traceCollisionFree
+    (H : HashBytes.Hash) (traceMsgs : List (List UInt8))
+    (hLen : traceMsgs.length ≤ 2 ^ 256)
+    (hFree : traceCollisionFree H traceMsgs = true) :
+    Unbroken (.hashCollisionAmong H traceMsgs) := by
+  refine ⟨hLen, ?_⟩
+  rintro ⟨w⟩
+  simp only [traceCollisionFree, List.all_eq_true, decide_eq_true_eq] at hFree
+  exact w.distinct (hFree w.msgA w.memA w.msgB w.memB w.sameDigest)
+
+private theorem length_eraseFirst {α : Type} [DecidableEq α] :
+    ∀ {y : α} {ys : List α}, y ∈ ys → (ys.erase y).length + 1 = ys.length
+  | _, [], h => by cases h
+  | y, z :: zs, h => by
+    simp only [List.erase_cons]
+    if hyz : z == y then
+      have hzEq : z = y := beq_iff_eq.1 hyz
+      simp [hzEq]
+    else
+      have hne : z ≠ y := fun heq => hyz (beq_iff_eq.2 heq)
+      cases h with
+      | head => exact False.elim (hne rfl)
+      | tail _ hm =>
+        have ih := length_eraseFirst hm
+        simp [hyz, ih]
+
+private theorem mem_erase_of_ne {α : Type} [DecidableEq α] {a b : α} (hne : a ≠ b) :
+    ∀ {ys : List α}, a ∈ ys → a ∈ ys.erase b
+  | [], h => h
+  | z :: zs, h => by
+    simp only [List.erase_cons]
+    if hzb : z == b then
+      have hzEq : z = b := beq_iff_eq.1 hzb
+      cases h with
+      | head => exact False.elim (hne hzEq)
+      | tail _ hm =>
+        have hm' : a ∈ zs := hm
+        simpa [hzb, hzEq] using hm'
+    else
+      have hneZB : z ≠ b := fun heq => hzb (beq_iff_eq.2 heq)
+      cases h with
+      | head => simp [hzb, hneZB]
+      | tail _ hm =>
+        have ih : a ∈ zs.erase b := mem_erase_of_ne hne hm
+        simp [hzb, ih]
+
+/-- **Constructive Finite Pigeonhole Principle (`0` axioms)**:
+    Any duplicate-free list `xs` mapped into a strictly shorter codomain list `ys` (`ys.length < xs.length`)
+    admits two distinct `a, b ∈ xs` with `f a = f b`. -/
+theorem list_pigeonhole_of_lt {α β : Type} [DecidableEq α] [DecidableEq β] :
+    ∀ (xs : List α) (ys : List β) (f : α → β),
+      xs.Nodup → (∀ x ∈ xs, f x ∈ ys) → ys.length < xs.length →
+      ∃ a ∈ xs, ∃ b ∈ xs, a ≠ b ∧ f a = f b
+  | [], _, _, _, _, hlt => by simp at hlt
+  | x :: xs, ys, f, .cons hxNotMem hNd, hMap, hlt => by
+    cases hHit : xs.any (fun x' => decide (f x' = f x)) with
+    | true =>
+      obtain ⟨x', hx', hEqB⟩ := List.any_eq_true.1 hHit
+      have hEq : f x' = f x := of_decide_eq_true hEqB
+      exact ⟨x, .head _, x', .tail _ hx', fun h => hxNotMem x' hx' h, hEq.symm⟩
+    | false =>
+      have hSubMap : ∀ x' ∈ xs, f x' ∈ ys.erase (f x) := by
+        intro x' hx'
+        have hNeF : f x' ≠ f x := by
+          intro hEq
+          have hTrue : xs.any (fun z => decide (f z = f x)) = true :=
+            List.any_eq_true.2 ⟨x', hx', decide_eq_true hEq⟩
+          rw [hHit] at hTrue
+          cases hTrue
+        exact mem_erase_of_ne hNeF (hMap x' (.tail _ hx'))
+      have hEraseLen := length_eraseFirst (hMap x (.head _))
+      have hSubLt : (ys.erase (f x)).length < xs.length := by
+        simp only [List.length_cons] at hlt; omega
+      obtain ⟨a, ha, b, hb, hne, hfeq⟩ := list_pigeonhole_of_lt xs (ys.erase (f x)) f hNd hSubMap hSubLt
+      exact ⟨a, .tail _ ha, b, .tail _ hb, hne, hfeq⟩
+
+/-- **Explicit Pigeonhole Refutation of Compressing `.hashCollision256` (`hashCollision256_broken_of_pigeonhole`)**:
+    Whenever a set `xs` of pairwise-distinct inputs of length `≤ maxBytes` maps into a digest image `digests`
+    with `digests.length < xs.length` (e.g., `256^33 > 2^256` for `maxBytes ≥ 33` on any 32-byte digest `H`),
+    `.hashCollision256 H maxBytes` is **constructively `Broken`**! -/
+theorem hashCollision256_broken_of_pigeonhole
+    (H : HashBytes.Hash) (maxBytes : Nat)
+    (xs : List (List UInt8)) (digests : List Nat)
+    (hNd : xs.Nodup)
+    (hLen : ∀ m ∈ xs, m.length ≤ maxBytes)
+    (hImg : ∀ m ∈ xs, HashBytes.ofBE (H m) ∈ digests)
+    (hComp : digests.length < xs.length) :
+    Broken (.hashCollision256 H maxBytes) := by
+  obtain ⟨a, ha, b, hb, hne, hsame⟩ :=
+    list_pigeonhole_of_lt xs digests (fun m => HashBytes.ofBE (H m)) hNd hImg hComp
+  exact ⟨⟨a, b, hLen a ha, hLen b hb, hne, hsame⟩⟩
 
 /-! ## 3. Exact Rational Soundness Error Arithmetic (`RatErr := Nat × Nat`) -/
 
@@ -466,48 +682,79 @@ def SpecialSoundK.rewindStrategy {Stmt Wit Commit Resp : Type} {Q k : Nat}
     exact (mem_acceptingChallenges_iff P x cm respOf ch).1 hMemFilter
   P.extractOrBreak x cm trs hLen hNodup hAcc
 
+/-- **Unconditional Constructive `k`-Special-Soundness Dichotomy (`specialSoundK_count_or_break`)**:
+    With **zero** cryptographic assumptions (`0` axioms, `0 Classical`), whenever `x` has no valid
+    witness (`∀ w, ¬ P.Rel x w`), either at most `k - 1` challenges in `Fin Q` accept OR deterministic
+    rewinding constructively outputs an explicit `BreakWitness P.assumptions`! -/
+def specialSoundK_count_or_break
+    {Stmt Wit Commit Resp : Type} {Q k : Nat}
+    (P : SpecialSoundK Stmt Wit Commit Resp Q k)
+    (x : Stmt) (cm : Commit) (respOf : Fin Q → Resp)
+    (hFalse : ∀ w : Wit, ¬ P.Rel x w) :
+    PSum (PLift ((acceptingChallenges P x cm respOf).length ≤ k - 1))
+         (BreakWitness P.assumptions) :=
+  if hLt : (acceptingChallenges P x cm respOf).length < k then
+    .inl ⟨by have hk := P.hk; omega⟩
+  else
+    have hGe : k ≤ (acceptingChallenges P x cm respOf).length := Nat.le_of_not_lt hLt
+    match P.rewindStrategy x cm respOf hGe with
+    | .inl hw => False.elim (hFalse hw.1 hw.2)
+    | .inr brk => .inr brk
+
+/-- **Unconditional Constructive 2-Special-Soundness Dichotomy (`specialSound2_count_or_break`)**:
+    With **zero** cryptographic assumptions, whenever `∀ w, ¬ P.Rel x w`, either at most `1` challenge
+    in `Fin Q` accepts OR rewinding constructively outputs `BreakWitness P.assumptions`. -/
+def specialSound2_count_or_break
+    {Stmt Wit Commit Resp : Type} {Q : Nat}
+    (P : SpecialSound2 Stmt Wit Commit Resp Q)
+    (x : Stmt) (cm : Commit) (respOf : Fin Q → Resp)
+    (hFalse : ∀ w : Wit, ¬ P.Rel x w) :
+    PSum (PLift ((acceptingChallenges P.toSpecialSoundK x cm respOf).length ≤ 1))
+         (BreakWitness P.assumptions) :=
+  specialSoundK_count_or_break P.toSpecialSoundK x cm respOf hFalse
+
 /-- **Universal `k`-Special-Soundness Bad-Challenge Counting Bound** (0 axioms, pure finite combinatorics):
-    Whenever `x` has no valid witness (`∀ w, ¬ P.Rel x w`) and `Unbroken P.assumptions` holds,
-    **at most `k - 1` challenges** in `Fin Q` can accept for any commitment `cm` and prover `respOf`! -/
+    Whenever `x` has no valid witness (`∀ w, ¬ P.Rel x w`) and `P.assumptions` is both `NonPigeonhole`
+    and `Unbroken`, **at most `k - 1` challenges** in `Fin Q` can accept for any `cm` and `respOf`! -/
 theorem specialSoundK_bad_challenge_count_le
     {Stmt Wit Commit Resp : Type} {Q k : Nat}
     (P : SpecialSoundK Stmt Wit Commit Resp Q k)
     (x : Stmt) (cm : Commit) (respOf : Fin Q → Resp)
     (hFalse : ∀ w : Wit, ¬ P.Rel x w)
+    (hNonPig : NonPigeonhole P.assumptions)
     (hUnbroken : Unbroken P.assumptions) :
     (acceptingChallenges P x cm respOf).length ≤ k - 1 := by
-  if hLt : (acceptingChallenges P x cm respOf).length < k then
-    have hk := P.hk
-    omega
-  else
-    have hGe : k ≤ (acceptingChallenges P x cm respOf).length := Nat.le_of_not_lt hLt
-    cases P.rewindStrategy x cm respOf hGe with
-    | inl hw => exact False.elim (hFalse hw.1 hw.2)
-    | inr hBrk => exact False.elim (hUnbroken ⟨hBrk⟩)
+  cases specialSoundK_count_or_break P x cm respOf hFalse with
+  | inl hBound => exact hBound.down
+  | inr hBrk => exact False.elim (Unbroken.not_broken hNonPig hUnbroken ⟨hBrk⟩)
 
 /-- **Exact Rational Soundness Bound `(k - 1) / Q` for `SpecialSoundK`**:
-    Under `0 < Q`, `∀ w, ¬ P.Rel x w`, and `Unbroken P.assumptions`, the accepting fraction
-    `(acceptCount, Q)` satisfies `ratLe (acceptCount, Q) (k - 1, Q)`. -/
+    Under `∀ w, ¬ P.Rel x w`, `NonPigeonhole P.assumptions`, and `Unbroken P.assumptions`, the accepting
+    fraction `(acceptCount, Q)` satisfies `ratLe (acceptCount, Q) (k - 1, Q)`. -/
 theorem specialSoundK_rational_bound
     {Stmt Wit Commit Resp : Type} {Q k : Nat}
     (P : SpecialSoundK Stmt Wit Commit Resp Q k)
     (x : Stmt) (cm : Commit) (respOf : Fin Q → Resp)
     (hFalse : ∀ w : Wit, ¬ P.Rel x w)
+    (hNonPig : NonPigeonhole P.assumptions)
     (hUnbroken : Unbroken P.assumptions) :
     ratLe ((acceptingChallenges P x cm respOf).length, Q) (k - 1, Q) := by
   unfold ratLe
-  exact Nat.mul_le_mul_right Q (specialSoundK_bad_challenge_count_le P x cm respOf hFalse hUnbroken)
+  exact Nat.mul_le_mul_right Q
+    (specialSoundK_bad_challenge_count_le P x cm respOf hFalse hNonPig hUnbroken)
 
 /-- **2-Special-Soundness Bad-Challenge Bound (`≤ 1` accepting challenge out of `Q`)**:
-    Under `∀ w, ¬ P.Rel x w` and `Unbroken P.assumptions`, at most **1** challenge in `Fin Q` accepts! -/
+    Under `∀ w, ¬ P.Rel x w`, `NonPigeonhole P.assumptions`, and `Unbroken P.assumptions`,
+    at most **1** challenge in `Fin Q` accepts! -/
 theorem specialSound2_bad_challenge_count_le
     {Stmt Wit Commit Resp : Type} {Q : Nat}
     (P : SpecialSound2 Stmt Wit Commit Resp Q)
     (x : Stmt) (cm : Commit) (respOf : Fin Q → Resp)
     (hFalse : ∀ w : Wit, ¬ P.Rel x w)
+    (hNonPig : NonPigeonhole P.assumptions)
     (hUnbroken : Unbroken P.assumptions) :
     (acceptingChallenges P.toSpecialSoundK x cm respOf).length ≤ 1 :=
-  specialSoundK_bad_challenge_count_le P.toSpecialSoundK x cm respOf hFalse hUnbroken
+  specialSoundK_bad_challenge_count_le P.toSpecialSoundK x cm respOf hFalse hNonPig hUnbroken
 
 /-! ## 5. Concrete 2-Special-Sound Constructive Extractors (Ajtai-SIS & Hash-Committed IOP) -/
 
@@ -631,19 +878,21 @@ def HashLinearRel (H : HashBytes.Hash) (maxBytes : Nat)
   HashBytes.ofBE (H payload) = x.commitVal ∧
   decodeCoeffs payload = (x.targetC0, x.targetC1)
 
-/-- **Constructive 2-Special-Sound Extractor for Hash-Committed Linear IOP (`hashLinear2SpecialSound`)**:
-    Over **any** challenge space `Fin Q` (yielding rational soundness error `1 / Q`):
+/-- **Constructive 2-Special-Sound Extractor for Non-Compressing Hash-Committed Linear IOP (`hashLinear2SpecialSound`)**:
+    Over **any** challenge space `Fin Q` in the non-compressing preimage regime (`maxBytes ≤ 32`):
     - If `payload₁ ≠ payload₂`, both hash under `H` to `x.commitVal`, constructively producing a
       `HashCollisionWitness H maxBytes` (and hence `Obend.Digest.HashBytes.Collision H`)!
     - If `payload₁ = payload₂`, subtracting the two linear evaluations at `ch₁ ≠ ch₂` proves
       `decodeCoeffs payload₁ = (x.targetC0, x.targetC1)` via `Int.mul_eq_zero`! -/
 def hashLinear2SpecialSound (H : HashBytes.Hash) (maxBytes Q : Nat)
-    (decodeCoeffs : List UInt8 → Int × Int) :
+    (decodeCoeffs : List UInt8 → Int × Int)
+    (hNonPig : maxBytes ≤ 32 := by decide) :
     SpecialSound2 HashLinearStmt (List UInt8) PUnit (List UInt8) Q where
   Rel x payload := HashLinearRel H maxBytes decodeCoeffs x payload
   assumptions := .hashCollision256 H maxBytes
   accept x u ch payload := hashLinearAccept H maxBytes Q decodeCoeffs x u ch payload
   extractOrBreak2 x _ ch₁ ch₂ p₁ p₂ hNe hAcc₁ hAcc₂ :=
+    let _ : maxBytes ≤ 32 := hNonPig
     if hEqP : p₁ = p₂ then
       .inl ⟨p₁, by
         subst hEqP
@@ -681,6 +930,76 @@ def hashLinear2SpecialSound (H : HashBytes.Hash) (maxBytes Q : Nat)
           msgB := p₂
           lenA := hCol.1
           lenB := hCol.2.1
+          distinct := hEqP
+          sameDigest := hCol.2.2 }
+
+/-- Executed-trace variant of `hashLinearAccept` for arbitrarily long openings (`maxBytes > 32`),
+    restricting candidate openings to a finite executed trace `traceMsgs` so `.hashCollisionAmong`
+    is completely free of Pigeonhole vacuity! -/
+def hashLinearTraceAccept (H : HashBytes.Hash) (traceMsgs : List (List UInt8)) (Q : Nat)
+    (decodeCoeffs : List UInt8 → Int × Int)
+    (x : HashLinearStmt) (_ : PUnit) (ch : Fin Q) (payload : List UInt8) : Bool :=
+  let (c₀, c₁) := decodeCoeffs payload
+  decide (payload ∈ traceMsgs) &&
+  decide (HashBytes.ofBE (H payload) = x.commitVal) &&
+  decide (c₀ + (ch.val : Int) * c₁ = x.targetC0 + (ch.val : Int) * x.targetC1)
+
+/-- Executed-trace witness relation for `hashLinearTraceAccept`. -/
+def HashLinearTraceRel (H : HashBytes.Hash) (traceMsgs : List (List UInt8))
+    (decodeCoeffs : List UInt8 → Int × Int)
+    (x : HashLinearStmt) (payload : List UInt8) : Prop :=
+  payload ∈ traceMsgs ∧
+  HashBytes.ofBE (H payload) = x.commitVal ∧
+  decodeCoeffs payload = (x.targetC0, x.targetC1)
+
+/-- **Constructive 2-Special-Sound Extractor for Arbitrarily Long Executed-Trace Linear IOP
+    (`hashLinearTrace2SpecialSound`)**:
+    Extracts either `HashLinearTraceRel` OR a `PinnedCollision H traceMsgs` without any `maxBytes ≤ 32`
+    restriction! -/
+def hashLinearTrace2SpecialSound (H : HashBytes.Hash) (traceMsgs : List (List UInt8)) (Q : Nat)
+    (decodeCoeffs : List UInt8 → Int × Int) :
+    SpecialSound2 HashLinearStmt (List UInt8) PUnit (List UInt8) Q where
+  Rel x payload := HashLinearTraceRel H traceMsgs decodeCoeffs x payload
+  assumptions := .hashCollisionAmong H traceMsgs
+  accept x u ch payload := hashLinearTraceAccept H traceMsgs Q decodeCoeffs x u ch payload
+  extractOrBreak2 x _ ch₁ ch₂ p₁ p₂ hNe hAcc₁ hAcc₂ :=
+    if hEqP : p₁ = p₂ then
+      .inl ⟨p₁, by
+        subst hEqP
+        simp only [hashLinearTraceAccept, Bool.and_eq_true, decide_eq_true_eq] at hAcc₁ hAcc₂
+        rcases hAcc₁ with ⟨⟨hMem₁, hDig₁⟩, hEval₁⟩
+        rcases hAcc₂ with ⟨_, hEval₂⟩
+        have hNeVal : (ch₁.val : Int) - (ch₂.val : Int) ≠ 0 := by
+          intro hZero; apply hNe; apply Fin.ext; omega
+        let c := decodeCoeffs p₁
+        have hSub : ((ch₁.val : Int) - (ch₂.val : Int)) * (c.2 - x.targetC1) = 0 := by
+          have e1 : c.1 + (ch₁.val : Int) * c.2 = x.targetC0 + (ch₁.val : Int) * x.targetC1 := hEval₁
+          have e2 : c.1 + (ch₂.val : Int) * c.2 = x.targetC0 + (ch₂.val : Int) * x.targetC1 := hEval₂
+          rw [Int.sub_mul, Int.mul_sub, Int.mul_sub]; omega
+        have hc1 : c.2 = x.targetC1 := by
+          rcases Int.mul_eq_zero.1 hSub with hBad | hDiff0
+          · exact False.elim (hNeVal hBad)
+          · omega
+        have hc0 : c.1 = x.targetC0 := by
+          have e1 : c.1 + (ch₁.val : Int) * c.2 = x.targetC0 + (ch₁.val : Int) * x.targetC1 := hEval₁
+          rw [hc1] at e1; omega
+        have hPair : decodeCoeffs p₁ = (x.targetC0, x.targetC1) := by
+          cases hDec : decodeCoeffs p₁ with
+          | mk a b =>
+            have ha : a = c.1 := by simp [c, hDec]
+            have hb : b = c.2 := by simp [c, hDec]
+            rw [ha, hb, hc0, hc1]
+        exact ⟨hMem₁, hDig₁, hPair⟩⟩
+    else
+      have hCol : p₁ ∈ traceMsgs ∧ p₂ ∈ traceMsgs ∧
+          HashBytes.ofBE (H p₁) = HashBytes.ofBE (H p₂) := by
+        simp only [hashLinearTraceAccept, Bool.and_eq_true, decide_eq_true_eq] at hAcc₁ hAcc₂
+        exact ⟨hAcc₁.1.1, hAcc₂.1.1, hAcc₁.1.2.trans hAcc₂.1.2.symm⟩
+      .inr
+        { msgA := p₁
+          msgB := p₂
+          memA := hCol.1
+          memB := hCol.2.1
           distinct := hEqP
           sameDigest := hCol.2.2 }
 
@@ -728,15 +1047,17 @@ theorem extractOrBreak_sound {r : Nat} {o : Obj} {c : Cert} (b : J.RewindBundle 
   | inl w => exact .inl (J.witnessSound w)
   | inr brk => exact .inr ⟨brk⟩
 
-/-- **Conditional Meaning under Unbroken Assumptions (`meaning_of_unbroken`)**:
-    Under `Unbroken J.assumptions`, acceptance plus valid rewind establishes `J.Meaning o`. -/
+/-- **Conditional Meaning under Non-Pigeonhole Unbroken Assumptions (`meaning_of_unbroken`)**:
+    Under `NonPigeonhole J.assumptions` and `Unbroken J.assumptions`, acceptance plus valid rewind
+    establishes `J.Meaning o`. -/
 theorem meaning_of_unbroken {r : Nat} {o : Obj} {c : Cert} (b : J.RewindBundle o c)
     (hOk : J.verify r o c = .ok) (hRew : J.rewindValid r o c b)
+    (hNonPig : NonPigeonhole J.assumptions)
     (hUnbroken : Unbroken J.assumptions) :
     J.Meaning o := by
   rcases extractOrBreak_sound b hOk hRew with hM | hBrk
   · exact hM
-  · exact False.elim (hUnbroken hBrk)
+  · exact False.elim (Unbroken.not_broken hNonPig hUnbroken hBrk)
 
 end ComputationalJudge
 
@@ -972,33 +1293,55 @@ theorem ofDeterministicJudge_sound {Obj Cert : Type} [J : Obend.Judge Obj Cert]
     (hOk : @ComputationalJudge.verify Obj Cert (ofDeterministicJudge (J := J)) r o c = .ok) :
     ∃ c' : Cert, J.Meaning o c' :=
   @ComputationalJudge.meaning_of_unbroken _ _ (ofDeterministicJudge (J := J))
-    r o c PUnit.unit hOk trivial unbroken_none
+    r o c PUnit.unit hOk trivial nonPigeonhole_none unbroken_none
 
 end CompJudge
 
 /-! ## 8. Concrete Inhabited Witnesses & Anti-Vacuity Checks (`HypothesisLedger`) -/
 
-/-- Trivial exact `Obend.Judge` checking equality `o = c` on `Nat`. -/
+/-- Exact `Obend.Judge` checking positive equality `o = c ∧ o ≠ 0` on `Nat`, with genuine
+    object-level refusal (`Clause := Bool`, `refutes true = true` certifying `o = 0 → ∀ c', ¬ Meaning o c'`). -/
 instance natEqDeterministicJudge : Obend.Judge Nat Nat where
-  Clause := Unit
-  Meaning o c := o = c
-  check _ o c := if o == c then .ok else .refused () []
+  Clause := Bool
+  Meaning o c := o = c ∧ o ≠ 0
+  check _ o c :=
+    if o == 0 then .refused true [0]
+    else if o == c then .ok
+    else .refused false [1]
   sound {_ o c} h := by
-    if heq : o = c then
-      exact heq
+    if ho : o = 0 then
+      subst ho; simp at h
+    else if heq : o = c then
+      exact ⟨heq, ho⟩
     else
-      have hne : (o == c) = false := beq_eq_false_iff_ne.2 heq
-      simp [hne] at h
-  refutes _ := false
-  refuted _ hRef := by cases hRef
-  Fragment _ := True
-  complete {o} _ _ := ⟨o, 0, by simp⟩
+      have hoB : (o == 0) = false := beq_eq_false_iff_ne.2 ho
+      have hneB : (o == c) = false := beq_eq_false_iff_ne.2 heq
+      simp [hoB, hneB] at h
+  refutes b := b
+  refuted {_ o c k _} hChk hRef c' hM := by
+    if ho : o = 0 then
+      exact hM.2 ho
+    else
+      have hoB : (o == 0) = false := beq_eq_false_iff_ne.2 ho
+      if heq : o = c then
+        have heqB : (o == c) = true := beq_iff_eq.2 heq
+        simp [hoB, heqB] at hChk
+      else
+        have hneB : (o == c) = false := beq_eq_false_iff_ne.2 heq
+        simp only [hoB, hneB, Bool.false_eq_true, ↓reduceIte, Judge.Verdict.refused.injEq] at hChk
+        rw [← hChk.1] at hRef
+        cases hRef
+  Fragment o := o ≠ 0
+  complete {o} hFrag _ := ⟨o, 0, by
+    have hoB : (o == 0) = false := beq_eq_false_iff_ne.2 hFrag
+    simp [hoB]⟩
   mono _ _ := rfl
 
-/-- Concrete 1×2 Ajtai matrix `[[1, 2]]` mod `q = 7`, `beta = 2`, commitment `cm = [3]`. -/
+/-- Concrete 1×2 Ajtai matrix `[[1, 10]]` mod `q = 97`, `beta = 2`, commitment `cm = [11]`,
+    in the genuinely `NonPigeonhole` (`9^2 = 81 ≤ 97`) and `Unbroken` (`2 * beta = 4`) regime. -/
 @[instance_reducible] def sampleSISJudge :
     ComputationalJudge (SISOpeningStmt × PUnit) (Fin 2 × List Int) :=
-  CompJudge.ofSpecialSound2 (sisOpening2SpecialSound 7 2 [[1, 2]] [3]) (by decide)
+  CompJudge.ofSpecialSound2 (sisOpening2SpecialSound 97 2 [[1, 10]] [11]) (by decide)
 
 /-- Concrete Hash-Committed Linear IOP judge over `Fin 5` (`ε = 1/5`). -/
 @[instance_reducible] def sampleHashJudge :

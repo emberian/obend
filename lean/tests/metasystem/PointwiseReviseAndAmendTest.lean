@@ -278,6 +278,9 @@ def jsonLifecycle : Bool :=
   .refused 7 [{newFee with priority := 9}] 27
 #guard (traceActions initial 0 [upgrade, hostile, restore]).length == 6
 #guard (traceActions initial 1 [upgrade, hostile, restore]).isEmpty
+#guard let out := executeTraceWithReceipts initial [(upgrade, []), (hostile, []), (restore, [])]
+       out.2.length == 3 && out.1.generations == 2 &&
+       out.1.transferred == sumNats (out.2.map receiptStepFee)
 
 -- Concrete semantic failure witnesses: each floor component protects a real invariant.
 example : ¬ DemonicRecovWithin (Det (protocolStep 4)) (protocolRecovery 4)
@@ -317,6 +320,7 @@ example (ts : List (AmendmentTurn 16)) (count k : Nat) (s : HWState) (hs : hwSaf
 #tooth bedrock_recovery by mutation checkBedrock := fun v => productionEnabled v && backedValue v
 #tooth bedrock_viable by mutation checkBedrock := fun v => recoveryEnabled v && backedValue v
 #tooth bedrock_conserved by mutation checkBedrock := fun v => recoveryEnabled v && productionEnabled v
+#tooth executeTraceWithReceipts_accounting_sound by mutation receiptStepFee := fun _ => 0
 
 -- This gate is stricter than the whole-tree census: computational extractors
 -- and the revision algebra must be constructive. Hardware trace proofs reuse
@@ -324,12 +328,13 @@ example (ts : List (AmendmentTurn 16)) (count k : Nat) (s : HWState) (hs : hwSaf
 open Lean Elab Command in
 run_cmd do
   let targets := [``pointwiseRevise, ``repairWitness, ``parseAmendBundleJson,
-    ``executeLiveAmendment, ``executeTrace, ``feeLedger, ``protocolMeaning,
+    ``executeLiveAmendment, ``executeTrace, ``executeTraceWithReceipts, ``feeLedger, ``protocolMeaning,
     ``pointwiseRevise_entails_bedrock, ``pointwiseRevise_entails_amendment,
     ``pointwiseRevise_accepts_iff, ``pointwiseRevise_vacuous_equivalence,
     ``pointwiseRevise_maximal_preservation, ``pointwiseRevise_refusal_optimal,
     ``pointwiseRevise_supportSheaf_frame_skip, ``pointwiseRevise_multiTurn_trace_safe,
-    ``checkedSkip, ``checkedSkip_sound, ``execute_acceptance_sound, ``execute_refusal_sound]
+    ``checkedSkip, ``checkedSkip_sound, ``execute_acceptance_sound, ``execute_refusal_sound,
+    ``executeTraceWithReceipts_accounting_sound]
   for n in targets do
     let axioms ← liftCoreM <| collectAxioms n
     for ax in axioms do

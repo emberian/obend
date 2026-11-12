@@ -265,8 +265,20 @@ def invalidStmt : SymbolicZkStmt :=
 def invalidTbl := batchedSymbolicPiopTable invalidStmt sampleWit chalLin chalLup tau4
 #guard hypercubeSum invalidStmt.numVars invalidTbl != CommRingOps.zero
 
+-- End-to-end bound `verifySymbolicSumcheck` check: accepts authentic `symbolicWitnessCommit`, rejects forged `witComm`
+def sampleSeed : Transcript .relationBound :=
+  bindRelation "obend.symboliczK.piop.test/v1" ByteArray.empty ByteArray.empty
+    (Transcript.newUnseeded (Native.bytesOfList [0x77]))
+def sampleWitComm : ByteArray := symbolicWitnessCommit sampleWit
+def sampleChals := symbolicChallenges sampleStmt sampleWitComm sampleSeed
+def sampleBoundTbl := batchedSymbolicPiopTable sampleStmt sampleWit sampleChals.1 sampleChals.2.1 sampleChals.2.2.1
+def sampleBoundProver := honestSumcheckProver sampleStmt.numVars sampleBoundTbl sampleChals.2.2.2
+
+#guard (verifySymbolicSumcheck sampleStmt sampleWit sampleWitComm 1 sampleBoundProver.1 sampleSeed).isSome
+#guard (verifySymbolicSumcheck sampleStmt sampleWit ByteArray.empty 1 sampleBoundProver.1 sampleSeed).isNone
+
 -- ============================================================================
--- 4. `#tooth` Mutation Kills Across All 3 Primitives & Sumcheck Weld (5 Kills)
+-- 4. `#tooth` Mutation Kills Across All 3 Primitives & Sumcheck Weld (6 Kills)
 -- ============================================================================
 
 -- Kill 1: Dropping the `RangeSafe` width guard (`2 * 2^w ≤ p`) allows 63-bit mod-p wraparound
@@ -293,6 +305,14 @@ def invalidTbl := batchedSymbolicPiopTable invalidStmt sampleWit chalLin chalLup
 -- `compileSymbolicTraceToSumcheck_sound`!
 #tooth Obend.SymbolicZk.CompileToPiop.compileSymbolicTraceToSumcheck_sound by mutation
   Obend.SymbolicZk.CompileToPiop.symbolicResidualVector := fun _ _ _ _ => []
+
+-- Kill 6: Skipping `witComm = symbolicWitnessCommit w` check in `verifySymbolicSumcheck`
+-- allows post-challenge witness grinding and breaks `compileSymbolicTraceToSumcheck_sound`!
+#tooth Obend.SymbolicZk.CompileToPiop.compileSymbolicTraceToSumcheck_sound by mutation
+  Obend.SymbolicZk.CompileToPiop.verifySymbolicSumcheck := fun s w witComm maxDeg rounds seed =>
+    if stmtWitnessStructValid s w then
+      verifySumcheck maxDeg s.numVars CommRingOps.zero rounds (symbolicChallenges s witComm seed).2.2.2
+    else none
 
 -- ============================================================================
 -- 5. `#assert_axioms_tree`, Strict Axiom Purity & Zero-Closed-Theorem Audit
