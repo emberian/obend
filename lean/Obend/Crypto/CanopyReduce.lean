@@ -1,6 +1,7 @@
 module
 public import Obend.Crypto.PikkuFoldLayered
 public import Obend.Crypto.PCS
+import all Obend.Crypto.PikkuFoldLayered
 
 public section
 namespace Obend.Crypto.Fast.Canopy
@@ -16,8 +17,8 @@ structure HashCollisionPair where
 
 abbrev HashCollisionWitness := HashCollisionPair
 
-@[expose] def hashBytes (b : ByteArray) : Digest32 := evalDigest32 deployedCanopyHash32 b.data.toList
-@[expose] def node (l r : Digest32) : Digest32 := hashNode32 deployedCanopyHash32 l r
+def hashBytes (b : ByteArray) : Digest32 := evalDigest32 deployedCanopyHash32 b.data.toList
+def node (l r : Digest32) : Digest32 := hashNode32 deployedCanopyHash32 l r
 
 private def collisionOfDigest (x y : List UInt8) (hne : x ≠ y)
     (heq : evalDigest32 deployedCanopyHash32 x = evalDigest32 deployedCanopyHash32 y) : HashCollisionPair where
@@ -31,7 +32,7 @@ private def collisionOfDigest (x y : List UInt8) (hne : x ≠ y)
     simpa only [evalDigest32, Native.bytesOfList_toList, deployedCanopyHash32] using h
 
 /-- LEB128 of canonical representatives is injective, unlike reduction of arbitrary 64-bit words. -/
-@[expose] def encodeRowList : List Goldilocks → List UInt8
+def encodeRowList : List Goldilocks → List UInt8
   | [] => []
   | x :: xs => leb128 x.val ++ encodeRowList xs
 
@@ -51,9 +52,9 @@ theorem encodeRowList_injective {xs ys : List Goldilocks} (hlen : xs.length = ys
       simp only [List.length_cons, Nat.add_right_cancel_iff] at hlen
       rw [he, ih hlen ht]
 
-@[expose] def rowPreimage (idx : Nat) (row : Array Goldilocks) : List UInt8 :=
+def rowPreimage (idx : Nat) (row : Array Goldilocks) : List UInt8 :=
   [0] ++ leb128 idx ++ leb128 row.size ++ encodeRowList row.toList
-@[expose] def hashRow (idx : Nat) (row : Array Goldilocks) : Digest32 :=
+def hashRow (idx : Nat) (row : Array Goldilocks) : Digest32 :=
   evalDigest32 deployedCanopyHash32 (rowPreimage idx row)
 
 theorem rowPreimage_injective {i j : Nat} {a b : Array Goldilocks}
@@ -68,18 +69,18 @@ abbrev Path (h : Nat) := Sized Digest32 h
 
 private theorem pow_step (n : Nat) : 2^(n+1) = 2 * 2^n := by rw [Nat.pow_succ, Nat.mul_comm]
 
-@[expose] def parentLevel {d : Nat} (xs : Level (d+1)) : Level d :=
+def parentLevel {d : Nat} (xs : Level (d+1)) : Level d :=
   Sized.ofFn fun i => node (xs.spec ⟨2*i.val, by have := i.isLt; rw [pow_step]; omega⟩)
     (xs.spec ⟨2*i.val+1, by have := i.isLt; rw [pow_step]; omega⟩)
 
-@[expose] def parentIndex {d : Nat} (i : Fin (2^(d+1))) : Fin (2^d) :=
+def parentIndex {d : Nat} (i : Fin (2^(d+1))) : Fin (2^d) :=
   ⟨i.val / 2, by have := i.isLt; have hp := pow_step d; omega⟩
 
-@[expose] def siblingIndex {d : Nat} (i : Fin (2^(d+1))) : Fin (2^(d+1)) :=
+def siblingIndex {d : Nat} (i : Fin (2^(d+1))) : Fin (2^(d+1)) :=
   ⟨if i.val % 2 = 0 then i.val+1 else i.val-1, by
     have := i.isLt; have hp := pow_step d; split <;> omega⟩
 
-@[expose] def joinAt (idx : Nat) (value sibling : Digest32) : Digest32 :=
+def joinAt (idx : Nat) (value sibling : Digest32) : Digest32 :=
   if idx % 2 = 0 then node value sibling else node sibling value
 
 theorem parentLevel_spec {d : Nat} (xs : Level (d+1)) (i : Fin (2^(d+1))) :
@@ -87,10 +88,10 @@ theorem parentLevel_spec {d : Nat} (xs : Level (d+1)) (i : Fin (2^(d+1))) :
   simp only [parentLevel, Sized.spec_ofFn, parentIndex, joinAt, siblingIndex]
   split <;> congr 2 <;> apply Fin.ext <;> simp only <;> omega
 
-@[expose] def pathHead {h : Nat} (p : Path (h+1)) : Digest32 := p.spec ⟨0, by omega⟩
-@[expose] def pathTail {h : Nat} (p : Path (h+1)) : Path h :=
+def pathHead {h : Nat} (p : Path (h+1)) : Digest32 := p.spec ⟨0, by omega⟩
+def pathTail {h : Nat} (p : Path (h+1)) : Path h :=
   Sized.ofFn fun i => p.spec ⟨i.val+1, by omega⟩
-@[expose] def pathCons {h : Nat} (x : Digest32) (p : Path h) : Path (h+1) :=
+def pathCons {h : Nat} (x : Digest32) (p : Path h) : Path (h+1) :=
   Sized.ofFn fun i => if hz : i.val = 0 then x else p.spec ⟨i.val-1, by omega⟩
 
 @[simp] theorem pathHead_cons {h : Nat} (x : Digest32) (p : Path h) : pathHead (pathCons x p) = x := by
@@ -116,7 +117,7 @@ def openPath : (h t : Nat) → (xs : Level (h+t)) → Fin (2^(h+t)) → Path h
     let j : Fin (2^((h+t)+1)) := ⟨i.val, by simpa [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using i.isLt⟩
     pathCons (ys.spec (siblingIndex j)) (openPath h t (parentLevel ys) (parentIndex j))
 
-@[expose] def climb : (h : Nat) → Nat → Digest32 → Path h → Digest32
+def climb : (h : Nat) → Nat → Digest32 → Path h → Digest32
   | 0, _, value, _ => value
   | h+1, idx, value, p => climb h (idx/2) (joinAt idx value (pathHead p)) (pathTail p)
 
@@ -131,7 +132,7 @@ theorem openPath_complete (h t : Nat) (xs : Level (h+t)) (i : Fin (2^(h+t))) :
     rw [parentLevel_spec] at hh
     exact hh
 
-@[expose] def root (t : Nat) (xs : Level t) : Digest32 :=
+def root (t : Nat) (xs : Level t) : Digest32 :=
   (reduceLevels t 0 ⟨xs.coeffs, by simpa using xs.size_eq⟩).spec ⟨0, by simp⟩
 
 theorem openRoot_complete (t : Nat) (xs : Level t) (i : Fin (2^t)) :
@@ -174,7 +175,7 @@ structure Config where
 abbrev Table (cfg : Config) := Sized (Sized Goldilocks cfg.width) (2^(cfg.bottomDepth+cfg.capDepth))
 abbrev Query (cfg : Config) := Fin (2^(cfg.bottomDepth+cfg.capDepth))
 
-@[expose] def leaves (cfg : Config) (table : Table cfg) : Level (cfg.bottomDepth+cfg.capDepth) :=
+def leaves (cfg : Config) (table : Table cfg) : Level (cfg.bottomDepth+cfg.capDepth) :=
   Sized.ofFn fun i => hashRow i.val (table.spec i).coeffs
 
 structure BatchOpening (cfg : Config) (qs : Array (Query cfg)) where
@@ -221,6 +222,18 @@ private theorem accepted_query (cfg : Config) (digest : Digest32) (qs : Array (Q
   rw [arrayOfFn_get _ j] at hx
   exact of_decide_eq_true hx
 
+/-- Two distinct caps authenticating to the same root constructively exhibit a cSHAKE collision. -/
+def capRoot_binding_collision (t : Nat) (digest : Digest32) (cap₁ cap₂ : Level t)
+    (h₁ : root t cap₁ = digest) (h₂ : root t cap₂ = digest) (hne : cap₁ ≠ cap₂) :
+    HashCollisionPair :=
+  have specNe : cap₁.spec ≠ cap₂.spec := fun h => hne (Sized.ext h)
+  let diff := findDifference (2^t) cap₁.spec cap₂.spec specNe
+  let ci := diff.val
+  let pp := openPath t 0 ⟨cap₁.coeffs, by simpa using cap₁.size_eq⟩ ⟨ci.val, by simp⟩
+  let qp := openPath t 0 ⟨cap₂.coeffs, by simpa using cap₂.size_eq⟩ ⟨ci.val, by simp⟩
+  climb_collision t ci.val (cap₁.spec ci) (cap₂.spec ci) pp qp diff.property
+    ((openRoot_complete t cap₁ ci).trans (h₁.trans (h₂.symm.trans (openRoot_complete t cap₂ ci).symm)))
+
 /-- Two accepted rows at the same query constructively yield an actual cSHAKE collision. -/
 def verifyBatchCanopy_binding_collision (cfg : Config) (digest : Digest32) (qs : Array (Query cfg))
     (p q : BatchOpening cfg qs) (hp : verifyBatchCanopy cfg digest qs p = true)
@@ -246,8 +259,7 @@ def verifyBatchCanopy_binding_collision (cfg : Config) (digest : Digest32) (qs :
       apply climb_collision cfg.capDepth ci.val (p.cap.spec ci) (q.cap.spec ci) pp qp hc
       rw [openRoot_complete, openRoot_complete]
       have hpRoot : root cfg.capDepth p.cap = digest := by
-        simpa only [verifyBatchCanopy, Bool.and_eq_true, decide_eq_true_eq] using (show root cfg.capDepth p.cap = digest from by
-          simp only [verifyBatchCanopy, Bool.and_eq_true, decide_eq_true_eq] at hp; exact hp.1)
+        simp only [verifyBatchCanopy, Bool.and_eq_true, decide_eq_true_eq] at hp; exact hp.1
       have hqRoot : root cfg.capDepth q.cap = digest := by
         simp only [verifyBatchCanopy, Bool.and_eq_true, decide_eq_true_eq] at hq; exact hq.1
       exact hpRoot.trans hqRoot.symm
@@ -262,17 +274,14 @@ theorem canopy_hash_count_strictly_less (q d t : Nat) (ht : t ≤ d) (hsave : 2^
   unfold canopyBatchHashes naiveMerkleBatchHashes
   omega
 
-/-- The existing native multiplier carries a choice-dependent range proof.
-This canonical modular multiplication keeps the verifier and its L0 reductions
-choice-free; its value agrees with the native multiplier. FastRing retains the
-native split-loop execution path. -/
-@[expose] def canopyMul (a b : Goldilocks) : Goldilocks := Goldilocks.ofNat (a.val*b.val)
+/-- Canonical modular multiplication keeps the verifier and its L0 reductions choice-free. -/
+def canopyMul (a b : Goldilocks) : Goldilocks := Goldilocks.ofNat (a.val*b.val)
 
 theorem canopyMul_eq (a b : Goldilocks) : canopyMul a b = Goldilocks.mul a b := by
   apply Goldilocks.ext
   exact (Goldilocks.mul_val a b).symm
 
-@[expose] def rowScale {w : Nat} (c : Goldilocks) (row : Sized Goldilocks w) : Sized Goldilocks w :=
+def rowScale {w : Nat} (c : Goldilocks) (row : Sized Goldilocks w) : Sized Goldilocks w :=
   Sized.ofFn fun i => canopyMul c (row.spec i)
 
 theorem rowScale_eq {w : Nat} (c : Goldilocks) (row : Sized Goldilocks w) :
@@ -281,16 +290,16 @@ theorem rowScale_eq {w : Nat} (c : Goldilocks) (row : Sized Goldilocks w) :
   simp only [rowScale, FastGoldilocksRing.scalarMulFast, Sized.spec_ofFn, canopyMul_eq]
 
 /-- Array dot product, with dimensions checked by the carrier. -/
-@[expose] def evalRow {w : Nat} (weights row : Sized Goldilocks w) : Goldilocks :=
+def evalRow {w : Nat} (weights row : Sized Goldilocks w) : Goldilocks :=
   (Array.ofFn fun i : Fin w => canopyMul (weights.spec i) (row.spec i)).foldl Goldilocks.add Goldilocks.zero
 
 /-- Adjacent even/odd codeword folding, not barycentric MLE folding. -/
-@[expose] def ifold {n : Nat} (α : Goldilocks) (codeword : Sized Goldilocks (2*n)) : Sized Goldilocks n :=
+def ifold {n : Nat} (α : Goldilocks) (codeword : Sized Goldilocks (2*n)) : Sized Goldilocks n :=
   Sized.ofFn fun i => Goldilocks.add (codeword.spec ⟨2*i.val, by omega⟩)
     (canopyMul α (codeword.spec ⟨2*i.val+1, by omega⟩))
 
 /-- Horner accumulation over rows. The accumulator is one contiguous row. -/
-@[expose] def iacc {n w : Nat} (c : Goldilocks) (rows : Sized (Sized Goldilocks w) n) : Sized Goldilocks w :=
+def iacc {n w : Nat} (c : Goldilocks) (rows : Sized (Sized Goldilocks w) n) : Sized Goldilocks w :=
   rows.coeffs.foldl (fun acc row => FastGoldilocksRing.addFast
     (rowScale c acc) row) (FastGoldilocksRing.zeroFast w)
 
@@ -313,7 +322,6 @@ private theorem evalRow_linear {w : Nat} (weights a b : Sized Goldilocks w) (c :
     evalRow weights (FastGoldilocksRing.addFast (rowScale c a) b) =
       Goldilocks.add (canopyMul c (evalRow weights a)) (evalRow weights b) := by
   simp only [canopyMul_eq, rowScale_eq]
-  -- Traverse all three dot products together with an explicit additive invariant.
   have aux (xs : List (Fin w)) (z x y : Goldilocks)
       (hz : z = Goldilocks.add (Goldilocks.mul c x) y) :
       xs.foldl (fun acc i => Goldilocks.add acc (Goldilocks.mul (weights.spec i)
@@ -384,7 +392,7 @@ theorem ifold_linear {w : Nat} (α c : Goldilocks) (a b : Sized Goldilocks (2*w)
   simp only [ifold, FastGoldilocksRing.addFast, rowScale, Sized.spec_ofFn]
   exact butterfly_linear α c _ _ _ _
 
-@[expose] def foldRows {n w : Nat} (α : Goldilocks) (rows : Sized (Sized Goldilocks (2*w)) n) :
+def foldRows {n w : Nat} (α : Goldilocks) (rows : Sized (Sized Goldilocks (2*w)) n) :
     Sized (Sized Goldilocks w) n := ⟨rows.coeffs.map (ifold α), by simp [rows.size_eq]⟩
 
 theorem ifold_iacc {n w : Nat} (α c : Goldilocks) (rows : Sized (Sized Goldilocks (2*w)) n) :
@@ -404,12 +412,12 @@ theorem ifold_iacc {n w : Nat} (α c : Goldilocks) (rows : Sized (Sized Goldiloc
   rw [hz] at h
   exact h.symm
 
-@[expose] def pairedRows {n w : Nat} (cfg : Config) (hw : cfg.width = 2*w)
+def pairedRows {n w : Nat} (cfg : Config) (hw : cfg.width = 2*w)
     (rows : Sized (Sized Goldilocks cfg.width) n) : Sized (Sized Goldilocks (2*w)) n :=
   ⟨rows.coeffs.map (fun row => ⟨row.coeffs, row.size_eq.trans hw⟩), by simp [rows.size_eq]⟩
 
-/-- Authenticate rows, fold adjacent entries, and verify their batch evaluation.
-Both challenges and weights are absorbed by the transcript before squeezing. -/
+/-- Core algebraic & Merkle check given challenges `(α, c, weights)`; for end-to-end Fenzi-safe
+    Fiat–Shamir challenge derivation from the absorbed instance & cap, use `verifyCanopyCommitAndReduceTranscript`. -/
 @[expose] def verifyCanopyCommitAndReduce {w : Nat} (cfg : Config) (hw : cfg.width = 2*w)
     (digest : Digest32) (qs : Array (Query cfg)) (p : BatchOpening cfg qs)
     (α c : Goldilocks) (weights : Sized Goldilocks w) (claim : Goldilocks) : Bool :=
@@ -451,8 +459,142 @@ def accumulatorTranscript (cfg : Config) (digest : Digest32) (queryBytes pointBy
     (encodeFrame descriptor (Native.bytesOfList (leb128 cfg.bottomDepth ++ leb128 cfg.capDepth ++ leb128 cfg.width)) ByteArray.empty)
     (encodeFrame digest.bytes queryBytes pointBytes) (Transcript.newUnseeded ByteArray.empty)
 
+/-- Canonical byte serialization of Canopy query indices. -/
+def encodeQueryIndices (cfg : Config) (qs : Array (Query cfg)) : ByteArray :=
+  Native.bytesOfList (leb128 qs.size ++ qs.toList.flatMap (fun q => leb128 q.val))
+
+/-- Canonical byte serialization of a Canopy subtree cap. -/
+def encodeCapDigests {t : Nat} (cap : Level t) : ByteArray :=
+  Native.bytesOfList (leb128 cap.coeffs.size ++ cap.coeffs.toList.flatMap (fun d => encodeListField d.bytes.data.toList))
+
+/-- Squeeze `k` canonical Goldilocks words from an `.instanceBound` transcript. -/
+def squeezeGoldilocksList : (k : Nat) → Transcript .instanceBound → List Goldilocks × Transcript .instanceBound
+  | 0, tr => ([], tr)
+  | k + 1, tr =>
+    let (g, tr₁) := squeezeGoldilocks tr
+    let (gs, tr₂) := squeezeGoldilocksList k tr₁
+    (g :: gs, tr₂)
+
+theorem squeezeGoldilocksList_length :
+    ∀ (k : Nat) (tr : Transcript .instanceBound), (squeezeGoldilocksList k tr).1.length = k
+  | 0, _ => rfl
+  | k + 1, tr => by
+    simp [squeezeGoldilocksList, squeezeGoldilocksList_length k (squeezeGoldilocks tr).2]
+
+/-- Squeeze `(α, c, weights)` strictly from an `.instanceBound` transcript after absorbing `(cfg, digest, qs, cap)`. -/
+def deriveCanopyChallenges (w : Nat) (cfg : Config) (descriptor pointBytes : ByteArray)
+    (digest : Digest32) (qs : Array (Query cfg)) (cap : Level cfg.capDepth) :
+    Goldilocks × Goldilocks × Sized Goldilocks w :=
+  let trRel := accumulatorTranscript cfg digest (encodeQueryIndices cfg qs) pointBytes descriptor
+  let bTr := bindInstance (encodeCapDigests cap) trRel
+  let (α, tr₁) := squeezeGoldilocks bTr.transcript
+  let (c, tr₂) := squeezeGoldilocks tr₁
+  let ws := (squeezeGoldilocksList w tr₂).1
+  (α, c, ⟨ws.toArray, by simpa [ws] using squeezeGoldilocksList_length w tr₂⟩)
+
+/-- **Constructive `0 Classical` Transcript-State & Cap Binding Extractor (`extractCanopyTranscriptCollisionOrEq`)**:
+    Equal `.instanceBound` sponge states in `deriveCanopyChallenges` either arise from identical
+    encoded relation frames AND identical serialized caps (`encodeCapDigests cap₁ = encodeCapDigests cap₂`),
+    or constructively produce a bounded `cSHAKE256` collision witness on `fsInstanceCustomization` or `fsBindCustomization`. -/
+def extractCanopyTranscriptCollisionOrEq (cfg₁ cfg₂ : Config)
+    (desc₁ pt₁ desc₂ pt₂ : ByteArray) (d₁ d₂ : Digest32)
+    (qs₁ : Array (Query cfg₁)) (qs₂ : Array (Query cfg₂))
+    (cap₁ : Level cfg₁.capDepth) (cap₂ : Level cfg₂.capDepth)
+    (hState : (bindInstance (encodeCapDigests cap₁)
+                (accumulatorTranscript cfg₁ d₁ (encodeQueryIndices cfg₁ qs₁) pt₁ desc₁)).transcript.state =
+              (bindInstance (encodeCapDigests cap₂)
+                (accumulatorTranscript cfg₂ d₂ (encodeQueryIndices cfg₂ qs₂) pt₂ desc₂)).transcript.state) :
+    PSum
+      (encodeFrame desc₁ (Native.bytesOfList (leb128 cfg₁.bottomDepth ++ leb128 cfg₁.capDepth ++ leb128 cfg₁.width)) ByteArray.empty =
+         encodeFrame desc₂ (Native.bytesOfList (leb128 cfg₂.bottomDepth ++ leb128 cfg₂.capDepth ++ leb128 cfg₂.width)) ByteArray.empty ∧
+       encodeFrame d₁.bytes (encodeQueryIndices cfg₁ qs₁) pt₁ =
+         encodeFrame d₂.bytes (encodeQueryIndices cfg₂ qs₂) pt₂ ∧
+       encodeCapDigests cap₁ = encodeCapDigests cap₂)
+      (PSum
+        (Obend.Judge.Computational.HashCollisionWitness
+          (cshake256Bytes fsInstanceCustomization)
+          (Nat.max
+            (instancePreimageList
+              (accumulatorTranscript cfg₁ d₁ (encodeQueryIndices cfg₁ qs₁) pt₁ desc₁).state
+              (accumulatorTranscript cfg₁ d₁ (encodeQueryIndices cfg₁ qs₁) pt₁ desc₁).stepCount
+              (TranscriptEncode.encodeTranscriptBytes (encodeCapDigests cap₁))).length
+            (instancePreimageList
+              (accumulatorTranscript cfg₂ d₂ (encodeQueryIndices cfg₂ qs₂) pt₂ desc₂).state
+              (accumulatorTranscript cfg₂ d₂ (encodeQueryIndices cfg₂ qs₂) pt₂ desc₂).stepCount
+              (TranscriptEncode.encodeTranscriptBytes (encodeCapDigests cap₂))).length))
+        (Obend.Judge.Computational.HashCollisionWitness
+          (cshake256Bytes fsBindCustomization)
+          (Nat.max
+            (bindPreimageList (Transcript.newUnseeded ByteArray.empty).state "OBEND.CANOPY.IACC/v1"
+              (encodeFrame desc₁ (Native.bytesOfList (leb128 cfg₁.bottomDepth ++ leb128 cfg₁.capDepth ++ leb128 cfg₁.width)) ByteArray.empty)
+              (encodeFrame d₁.bytes (encodeQueryIndices cfg₁ qs₁) pt₁)).length
+            (bindPreimageList (Transcript.newUnseeded ByteArray.empty).state "OBEND.CANOPY.IACC/v1"
+              (encodeFrame desc₂ (Native.bytesOfList (leb128 cfg₂.bottomDepth ++ leb128 cfg₂.capDepth ++ leb128 cfg₂.width)) ByteArray.empty)
+              (encodeFrame d₂.bytes (encodeQueryIndices cfg₂ qs₂) pt₂)).length))) :=
+  match extractBindInstanceOrEq
+      (encodeCapDigests cap₁) (encodeCapDigests cap₂)
+      (accumulatorTranscript cfg₁ d₁ (encodeQueryIndices cfg₁ qs₁) pt₁ desc₁)
+      (accumulatorTranscript cfg₂ d₂ (encodeQueryIndices cfg₂ qs₂) pt₂ desc₂) hState with
+  | .inr wInst => .inr (.inl wInst)
+  | .inl ⟨hTrRel, hCapEq⟩ =>
+    match extractBindRelationOrEq
+        (Transcript.newUnseeded ByteArray.empty) (Transcript.newUnseeded ByteArray.empty)
+        "OBEND.CANOPY.IACC/v1" "OBEND.CANOPY.IACC/v1"
+        (encodeFrame desc₁ (Native.bytesOfList (leb128 cfg₁.bottomDepth ++ leb128 cfg₁.capDepth ++ leb128 cfg₁.width)) ByteArray.empty)
+        (encodeFrame desc₂ (Native.bytesOfList (leb128 cfg₂.bottomDepth ++ leb128 cfg₂.capDepth ++ leb128 cfg₂.width)) ByteArray.empty)
+        (encodeFrame d₁.bytes (encodeQueryIndices cfg₁ qs₁) pt₁)
+        (encodeFrame d₂.bytes (encodeQueryIndices cfg₂ qs₂) pt₂)
+        (congrArg Transcript.state hTrRel) with
+    | .inr wBind => .inr (.inr wBind)
+    | .inl ⟨_, _, hRelEq, hInstFrameEq⟩ => .inl ⟨hRelEq, hInstFrameEq, hCapEq⟩
+
+/-- **Fenzi-Safe Transcript-Bound Canopy Verifier (`verifyCanopyCommitAndReduceTranscript`)**:
+    Absorbs `(descriptor, cfg, digest, qs, pointBytes)` and binds `p.cap` into `.instanceBound`
+    *before* squeezing `(α, c, weights)`, closing out-of-transcript challenge quantification. -/
+@[expose] def verifyCanopyCommitAndReduceTranscript {w : Nat} (cfg : Config) (hw : cfg.width = 2*w)
+    (descriptor pointBytes : ByteArray) (digest : Digest32)
+    (qs : Array (Query cfg)) (p : BatchOpening cfg qs) (claim : Goldilocks) : Bool :=
+  let (α, c, weights) := deriveCanopyChallenges w cfg descriptor pointBytes digest qs p.cap
+  verifyCanopyCommitAndReduce cfg hw digest qs p α c weights claim
+
+theorem verifyCanopyCommitAndReduceTranscript_complete {w : Nat} (cfg : Config) (hw : cfg.width = 2*w)
+    (descriptor pointBytes : ByteArray) (table : Table cfg) (qs : Array (Query cfg)) :
+    let digest := commit cfg table
+    let p := openBatchCanopy cfg table qs
+    let (α, c, weights) := deriveCanopyChallenges w cfg descriptor pointBytes digest qs p.cap
+    let claim := (foldRows α (pairedRows cfg hw p.rows)).coeffs.foldl
+      (fun acc row => Goldilocks.add (canopyMul c acc) (evalRow weights row)) Goldilocks.zero
+    verifyCanopyCommitAndReduceTranscript cfg hw descriptor pointBytes digest qs p claim = true := by
+  dsimp only [verifyCanopyCommitAndReduceTranscript]
+  exact verifyCanopyCommitAndReduce_complete cfg hw table qs _ _ _
+
+/-- **Constructive `0 Classical` Transcript-Bound Binding Extractor**:
+    Any two openings `p`, `r` accepted by `verifyCanopyCommitAndReduceTranscript` for `claim₁ ≠ claim₂`
+    constructively yield a `HashCollisionPair` — either in the cap commitment (`p.cap ≠ r.cap`)
+    or in the authenticated row/path openings under the identical squeezed `(α, c, weights)` (`p.cap = r.cap`). -/
+def verifyCanopyCommitAndReduceTranscript_binding {w : Nat} (cfg : Config) (hw : cfg.width = 2*w)
+    (descriptor pointBytes : ByteArray) (digest : Digest32) (qs : Array (Query cfg))
+    (p r : BatchOpening cfg qs) (claim₁ claim₂ : Goldilocks)
+    (hp : verifyCanopyCommitAndReduceTranscript cfg hw descriptor pointBytes digest qs p claim₁ = true)
+    (hr : verifyCanopyCommitAndReduceTranscript cfg hw descriptor pointBytes digest qs r claim₂ = true)
+    (hne : claim₁ ≠ claim₂) : HashCollisionPair :=
+  if hCap : p.cap = r.cap then
+    let ch := deriveCanopyChallenges w cfg descriptor pointBytes digest qs p.cap
+    verifyCanopyCommitAndReduce_binding cfg hw digest qs p r ch.1 ch.2.1 ch.2.2 claim₁ claim₂
+      hp (by dsimp only [verifyCanopyCommitAndReduceTranscript] at hr; rw [← hCap] at hr; exact hr) hne
+  else
+    have hpRoot : root cfg.capDepth p.cap = digest := by
+      simp only [verifyCanopyCommitAndReduceTranscript, verifyCanopyCommitAndReduce, verifyBatchCanopy,
+        Bool.and_eq_true, decide_eq_true_eq] at hp
+      exact hp.1.1
+    have hrRoot : root cfg.capDepth r.cap = digest := by
+      simp only [verifyCanopyCommitAndReduceTranscript, verifyCanopyCommitAndReduce, verifyBatchCanopy,
+        Bool.and_eq_true, decide_eq_true_eq] at hr
+      exact hr.1.1
+    capRoot_binding_collision cfg.capDepth digest p.cap r.cap hpRoot hrRoot hCap
+
 /-- Offset signed encoding is injective on [-β,β] when 2β<p. -/
-@[expose] def encodeSignedCanonical (β : Nat) (z : Int) : Goldilocks := goldOfInt (z + β)
+def encodeSignedCanonical (β : Nat) (z : Int) : Goldilocks := goldOfInt (z + β)
 
 theorem encodeSignedCanonical_injective (β : Nat) (hβ : 2*β < Obend.Apps.ZkNtt.goldilocksPrime)
     (x y : Int) (hx : x.natAbs ≤ β) (hy : y.natAbs ≤ β)
@@ -469,17 +611,17 @@ theorem encodeSignedCanonical_injective (β : Nat) (hβ : 2*β < Obend.Apps.ZkNt
 
 abbrev Witness (cfg : Config) := FastIntPoly (2^(cfg.bottomDepth+cfg.capDepth)*cfg.width)
 
-@[expose] def witnessRow (cfg : Config) (u : Witness cfg) (i : Query cfg) : FastIntPoly cfg.width :=
+def witnessRow (cfg : Config) (u : Witness cfg) (i : Query cfg) : FastIntPoly cfg.width :=
   Sized.ofFn fun j => u.spec ⟨i.val*cfg.width+j.val, by
     have := i.isLt
     have := Nat.mul_le_mul_right cfg.width (Nat.succ_le_of_lt i.isLt)
     simp only [Nat.succ_mul] at *
     omega⟩
 
-@[expose] def encodeRowOf (cfg : Config) (β : Nat) (u : Witness cfg) (i : Query cfg) : Sized Goldilocks cfg.width :=
+def encodeRowOf (cfg : Config) (β : Nat) (u : Witness cfg) (i : Query cfg) : Sized Goldilocks cfg.width :=
   Sized.ofFn fun j => encodeSignedCanonical β ((witnessRow cfg u i).spec j)
 
-@[expose] def encodeWitness (cfg : Config) (β : Nat) (u : Witness cfg) : Table cfg :=
+def encodeWitness (cfg : Config) (β : Nat) (u : Witness cfg) : Table cfg :=
   Sized.ofFn (encodeRowOf cfg β u)
 
 @[expose] def commitDual {m : Nat} (cfg : Config) (β : Nat)

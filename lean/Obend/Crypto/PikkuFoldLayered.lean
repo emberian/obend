@@ -1,9 +1,13 @@
 module
 public import Obend.Crypto.FastRing
 public import Obend.Crypto.Transcript
+public import Obend.Crypto.GameSoundness
+import all Obend.Crypto.GameSoundness
 
 public section
 namespace Obend.Crypto.Fast
+
+open Obend.Crypto.GameSoundness
 
 /-- Sparse ternary rows contain only signed unit entries; absence represents zero. -/
 structure SignedIndex (n : Nat) where
@@ -13,14 +17,14 @@ structure SignedIndex (n : Nat) where
 
 abbrev TernaryMatrix (rows cols : Nat) := Sized (Array (SignedIndex cols)) rows
 
-@[expose] def signedValue (negative : Bool) (x : Int) : Int := if negative then -x else x
+def signedValue (negative : Bool) (x : Int) : Int := if negative then -x else x
 
-@[expose] def sparseRow {n : Nat} (row : Array (SignedIndex n)) (w : FastIntPoly n) : Int :=
+def sparseRow {n : Nat} (row : Array (SignedIndex n)) (w : FastIntPoly n) : Int :=
   sumInt row.size fun j => if h : j < row.size then
     signedValue row[j].negative (w.spec row[j].col) else 0
 
 /-- Only additions/subtractions of selected coefficients; no integer multiplications. -/
-@[expose] def sparseRowFast {n : Nat} (row : Array (SignedIndex n)) (w : FastIntPoly n) : Int :=
+def sparseRowFast {n : Nat} (row : Array (SignedIndex n)) (w : FastIntPoly n) : Int :=
   row.foldl (fun acc e => acc + signedValue e.negative (w.spec e.col)) 0
 
 theorem sparseRowFast_eq_sparseRow {n : Nat} (row : Array (SignedIndex n)) (w : FastIntPoly n) :
@@ -31,10 +35,10 @@ theorem sparseRowFast_eq_sparseRow {n : Nat} (row : Array (SignedIndex n)) (w : 
   simp only [sumInt, hacc, i.isLt, ↓reduceDIte]
   rfl
 
-@[expose] def applyTernary {m n : Nat} (M : TernaryMatrix m n) (w : FastIntPoly n) : FastIntPoly m :=
+def applyTernary {m n : Nat} (M : TernaryMatrix m n) (w : FastIntPoly n) : FastIntPoly m :=
   Sized.ofFn fun i => sparseRowFast (M.spec i) w
 
-@[expose] def rowWeight {m n : Nat} (M : TernaryMatrix m n) : Nat :=
+def rowWeight {m n : Nat} (M : TernaryMatrix m n) : Nat :=
   M.coeffs.foldl (fun k row => max k row.size) 0
 
 private theorem rowWeight_ge {m n : Nat} (M : TernaryMatrix m n) (i : Fin m) :
@@ -110,7 +114,7 @@ def kronecker {m n : Nat} (r : Nat) (M : TernaryMatrix m n) : TernaryMatrix (r *
         omega⟩, entry.negative⟩
 
 /-- Read each block in place. No expanded matrix or copied witness slices are allocated. -/
-@[expose] def applyKroneckerTernaryFast {m n : Nat} (r : Nat) (M : TernaryMatrix m n)
+def applyKroneckerTernaryFast {m n : Nat} (r : Nat) (M : TernaryMatrix m n)
     (w : FastIntPoly (r*n)) : FastIntPoly (r*m) :=
   Sized.ofFn fun i =>
     have hm : 0 < m := by
@@ -134,7 +138,7 @@ theorem applyKroneckerTernaryFast_eq_spec {m n : Nat} (r : Nat) (M : TernaryMatr
     sparseRowFast, kronecker, Array.foldl_map]
 
 /-- The public execution entry point also uses the unmaterialized kernel. -/
-@[expose] def applyKroneckerTernary {m n : Nat} (r : Nat) (M : TernaryMatrix m n)
+def applyKroneckerTernary {m n : Nat} (r : Nat) (M : TernaryMatrix m n)
     (w : FastIntPoly (r*n)) : FastIntPoly (r*m) := applyKroneckerTernaryFast r M w
 
 theorem rowWeight_kronecker_le {m n : Nat} (r : Nat) (M : TernaryMatrix m n) :
@@ -151,13 +155,13 @@ inductive Layers : Nat → Nat → Type where
   | done (n : Nat) : Layers n n
   | step {n m k : Nat} (M : TernaryMatrix m n) (rest : Layers m k) : Layers n k
 
-@[expose] def Layers.apply {n m : Nat} : Layers n m → FastIntPoly n → FastIntPoly m
+def Layers.apply {n m : Nat} : Layers n m → FastIntPoly n → FastIntPoly m
   | .done _, w => w
   | .step M rest, w => rest.apply (applyTernary M w)
-@[expose] def Layers.weight {n m : Nat} : Layers n m → Nat
+def Layers.weight {n m : Nat} : Layers n m → Nat
   | .done _ => 1
   | .step M rest => rest.weight * rowWeight M
-@[expose] def Layers.length {n m : Nat} : Layers n m → Nat
+def Layers.length {n m : Nat} : Layers n m → Nat
   | .done _ => 0
   | .step _ rest => rest.length + 1
 
@@ -171,7 +175,7 @@ theorem normInf_layeredKronecker_le {n m : Nat} (layers : Layers n m) (w : FastI
       (Nat.le_trans (normInf_ternary_le M w) (Nat.mul_le_mul_left _ hw)))
       (by simp [Layers.weight, Nat.mul_assoc])
 
-@[expose] def Layers.uniform {n m : Nat} (K : Nat) : Layers n m → Prop
+def Layers.uniform {n m : Nat} (K : Nat) : Layers n m → Prop
   | .done _ => True
   | .step M rest => rowWeight M ≤ K ∧ rest.uniform K
 
@@ -256,7 +260,7 @@ theorem foldTwoInstances_complete {m n : Nat} (A : IntMatrix m n) (c : Int)
       (Nat.add_le_add hu (Nat.le_trans (normInfFast_scale_le _ _) (Nat.mul_le_mul_left _ hv)))
 
 /-- Signed, length-delimited integer encoding, including zero's unique sign. -/
-@[expose] def encodeInts {n : Nat} (w : FastIntPoly n) : ByteArray :=
+def encodeInts {n : Nat} (w : FastIntPoly n) : ByteArray :=
   Obend.Digest.Cshake256.Native.bytesOfList
     (leb128 n ++ w.coeffs.toList.flatMap fun x =>
       (if x < 0 then [1] else [0]) ++ leb128 x.natAbs)
@@ -267,22 +271,23 @@ def foldTranscript (descriptor cm₁ y₁ cm₂ y₂ : ByteArray) : Transcript .
     (encodeFrame (encodeFrame cm₁ y₁ ByteArray.empty) (encodeFrame cm₂ y₂ ByteArray.empty) ByteArray.empty)
     (Transcript.newUnseeded ByteArray.empty)
 
-/-- No auxiliary commitment is generated by this fold. -/
+/-- Full-field Goldilocks fold helper for ring-level transcript callers; use `boundedFoldFromTranscript`
+    and `verifyBoundedChallengeFold` for norm-controlled lattice folding (`|c| ≤ bChal`). -/
 def foldFromTranscript {n : Nat} (tr : Transcript .relationBound) (u v : FastIntPoly n) :
     FastIntPoly n × Transcript .relationBound :=
   let (c, tr') := squeezeGoldilocks tr
   (foldWitness (c.val : Int) u v, tr')
 
-@[expose] def splitLo {m : Nat} (w : FastIntPoly (2*m)) : FastIntPoly m :=
+def splitLo {m : Nat} (w : FastIntPoly (2*m)) : FastIntPoly m :=
   Sized.ofFn fun i => w.spec ⟨i.val, by omega⟩
-@[expose] def splitHi {m : Nat} (w : FastIntPoly (2*m)) : FastIntPoly m :=
+def splitHi {m : Nat} (w : FastIntPoly (2*m)) : FastIntPoly m :=
   Sized.ofFn fun i => w.spec ⟨m + i.val, by omega⟩
 @[expose] def akitaFold {m : Nat} (c : Int) (w : FastIntPoly (2*m)) : FastIntPoly m :=
   foldWitness c (splitLo w) (splitHi w)
 
-@[expose] def matrixLo {m n : Nat} (A : IntMatrix m (2*n)) : IntMatrix m n :=
+def matrixLo {m n : Nat} (A : IntMatrix m (2*n)) : IntMatrix m n :=
   Sized.ofFn fun i => splitLo (A.spec i)
-@[expose] def matrixHi {m n : Nat} (A : IntMatrix m (2*n)) : IntMatrix m n :=
+def matrixHi {m n : Nat} (A : IntMatrix m (2*n)) : IntMatrix m n :=
   Sized.ofFn fun i => splitHi (A.spec i)
 
 theorem dot_split {n : Nat} (a w : FastIntPoly (2*n)) :
@@ -307,7 +312,7 @@ theorem matVecModQ_split {m n : Nat} (A : IntMatrix m (2*n)) (q : Nat) (w : Fast
   simp only [matVecModQ, matVec, matrixLo, matrixHi, Sized.spec_ofFn, dot_split]
   exact Int.add_emod _ _ _
 
-@[expose] def foldModQ {m : Nat} (q : Nat) (c : Int) (lo hi : FastIntPoly m) : FastIntPoly m :=
+def foldModQ {m : Nat} (q : Nat) (c : Int) (lo hi : FastIntPoly m) : FastIntPoly m :=
   Sized.ofFn fun i => (lo.spec i + c * hi.spec i) % (q : Int)
 
 theorem matVecModQ_foldWitness {m n : Nat} (G : IntMatrix m n) (q : Nat) (c : Int)
@@ -403,5 +408,385 @@ def akitaTwoChallenge_extract_sis {m n : Nat} (G : IntMatrix m n) (q β : Nat)
   else
     exact foldTwoInstances_binding_reduction G q _ (akitaFold c₁ u) (akitaFold c₁ v) he h₁
       (bound c₁ (Nat.le_max_left _ _) u hu) (bound c₁ (Nat.le_max_left _ _) v hv)
+
+/-! ## Fenzi-Safe Instance-Bound Small-Norm Challenge Folding & `TranscriptTree` Extraction -/
+
+/-- Canonical folding instance absorbed *after* relation binding and *before* squeezing
+    (`Fenzi ePrint 2026/1838` countermeasure + cross-term commitment binding). -/
+abbrev PikkuFoldInstance := ((List Int × List Int) × (ByteArray × ByteArray)) × ByteArray
+
+/-- Bind the materialized circuit/matrix descriptor via `bindRelation` and then absorb
+    both commitments `(cm₁, cm₂)`, public evaluations `(y₁, y₂)`, and auxiliary cross-terms
+    via `bindInstance` into `.instanceBound` *before* any folding challenge is squeezed. -/
+def fenziSafeFoldTranscript (descriptor : ByteArray) (cm₁ cm₂ : List Int)
+    (y₁ y₂ crossTerms : ByteArray) : BoundTranscript ((((cm₁, cm₂), (y₁, y₂)), crossTerms) : PikkuFoldInstance) :=
+  let trRel := bindRelation "OBEND.PIKKU.BOUNDED/v2" descriptor ByteArray.empty (Transcript.newUnseeded ByteArray.empty)
+  bindInstance (((cm₁, cm₂), (y₁, y₂)), crossTerms) trRel
+
+/-- Constructive `0 Classical` statement + cross-term binding extractor for `fenziSafeFoldTranscript`:
+    equal `.instanceBound` sponge states either come from the exact same `(descriptor, cm₁, cm₂, y₁, y₂, crossTerms)`
+    or constructively produce a bounded `cSHAKE256` collision witness on `fsBindCustomization` or `fsInstanceCustomization`. -/
+def extractFenziSafeFoldCollisionOrEq
+    (d₁ d₂ : ByteArray) (cm₁A cm₂A cm₁B cm₂B : List Int) (y₁A y₂A ctA y₁B y₂B ctB : ByteArray)
+    (hState : (fenziSafeFoldTranscript d₁ cm₁A cm₂A y₁A y₂A ctA).transcript.state =
+              (fenziSafeFoldTranscript d₂ cm₁B cm₂B y₁B y₂B ctB).transcript.state) :
+    PSum
+      (d₁ = d₂ ∧ cm₁A = cm₁B ∧ cm₂A = cm₂B ∧ y₁A = y₁B ∧ y₂A = y₂B ∧ ctA = ctB)
+      (PSum
+        (Obend.Judge.Computational.HashCollisionWitness
+          (Obend.Digest.Cshake256.cshake256Bytes fsInstanceCustomization)
+          (Nat.max
+            (instancePreimageList
+              (bindRelation "OBEND.PIKKU.BOUNDED/v2" d₁ ByteArray.empty (Transcript.newUnseeded ByteArray.empty)).state
+              (bindRelation "OBEND.PIKKU.BOUNDED/v2" d₁ ByteArray.empty (Transcript.newUnseeded ByteArray.empty)).stepCount
+              (TranscriptEncode.encodeTranscriptBytes (((cm₁A, cm₂A), (y₁A, y₂A)), ctA))).length
+            (instancePreimageList
+              (bindRelation "OBEND.PIKKU.BOUNDED/v2" d₂ ByteArray.empty (Transcript.newUnseeded ByteArray.empty)).state
+              (bindRelation "OBEND.PIKKU.BOUNDED/v2" d₂ ByteArray.empty (Transcript.newUnseeded ByteArray.empty)).stepCount
+              (TranscriptEncode.encodeTranscriptBytes (((cm₁B, cm₂B), (y₁B, y₂B)), ctB))).length))
+        (Obend.Judge.Computational.HashCollisionWitness
+          (Obend.Digest.Cshake256.cshake256Bytes fsBindCustomization)
+          (Nat.max
+            (bindPreimageList (Transcript.newUnseeded ByteArray.empty).state "OBEND.PIKKU.BOUNDED/v2" d₁ ByteArray.empty).length
+            (bindPreimageList (Transcript.newUnseeded ByteArray.empty).state "OBEND.PIKKU.BOUNDED/v2" d₂ ByteArray.empty).length))) :=
+  match extractBindInstanceOrEq
+      (((cm₁A, cm₂A), (y₁A, y₂A)), ctA) (((cm₁B, cm₂B), (y₁B, y₂B)), ctB)
+      (bindRelation "OBEND.PIKKU.BOUNDED/v2" d₁ ByteArray.empty (Transcript.newUnseeded ByteArray.empty))
+      (bindRelation "OBEND.PIKKU.BOUNDED/v2" d₂ ByteArray.empty (Transcript.newUnseeded ByteArray.empty)) hState with
+  | .inr wInst => .inr (.inl wInst)
+  | .inl ⟨hTrRel, hInstEq⟩ =>
+    match extractBindRelationOrEq
+        (Transcript.newUnseeded ByteArray.empty) (Transcript.newUnseeded ByteArray.empty)
+        "OBEND.PIKKU.BOUNDED/v2" "OBEND.PIKKU.BOUNDED/v2"
+        d₁ d₂ ByteArray.empty ByteArray.empty (congrArg Transcript.state hTrRel) with
+    | .inr wBind => .inr (.inr wBind)
+    | .inl ⟨_, _, hdEq, _⟩ =>
+      .inl (by
+        rcases Prod.mk.inj hInstEq with ⟨hPair, hCt⟩
+        rcases Prod.mk.inj hPair with ⟨hCm, hY⟩
+        rcases Prod.mk.inj hCm with ⟨hCm1, hCm2⟩
+        rcases Prod.mk.inj hY with ⟨hY1, hY2⟩
+        exact ⟨hdEq, hCm1, hCm2, hY1, hY2, hCt⟩)
+
+/-- Squeeze a small-norm signed integer challenge `c ∈ [-bChal, bChal]` strictly from an `.instanceBound`
+    transcript (preventing both unabsorbed challenge grinding and 64-bit Goldilocks norm explosion). -/
+def squeezeBoundedSignedChal (bChal : Nat) (tr : Transcript .instanceBound) : Int × Transcript .instanceBound :=
+  let (w, tr') := squeezeGoldilocks tr
+  let span := 2 * bChal + 1
+  (((w.val % span : Nat) : Int) - (bChal : Int), tr')
+
+theorem squeezeBoundedSignedChal_abs_le (bChal : Nat) (tr : Transcript .instanceBound) :
+    (squeezeBoundedSignedChal bChal tr).1.natAbs ≤ bChal := by
+  unfold squeezeBoundedSignedChal
+  dsimp only
+  have hMod : (squeezeGoldilocks tr).1.val % (2 * bChal + 1) < 2 * bChal + 1 :=
+    Nat.mod_lt _ (by omega)
+  omega
+
+/-- Fold two witnesses using the small-norm signed challenge squeezed from an `.instanceBound` transcript. -/
+def boundedFoldFromTranscript {n : Nat} (bChal : Nat) (tr : Transcript .instanceBound)
+    (u v : FastIntPoly n) : Int × FastIntPoly n × Transcript .instanceBound :=
+  let (c, tr') := squeezeBoundedSignedChal bChal tr
+  (c, foldWitness c u v, tr')
+
+theorem boundedFoldFromTranscript_norm_le {n : Nat} (bChal : Nat) (tr : Transcript .instanceBound)
+    (u v : FastIntPoly n) (β₁ β₂ : Nat)
+    (hu : normInfFast u.coeffs ≤ β₁) (hv : normInfFast v.coeffs ≤ β₂) :
+    normInfFast (boundedFoldFromTranscript bChal tr u v).2.1.coeffs ≤ β₁ + bChal * β₂ := by
+  unfold boundedFoldFromTranscript
+  have hStep := (foldTwoInstances_complete (Sized.ofFn fun (_ : Fin 0) => zeroVec n)
+    (squeezeBoundedSignedChal bChal tr).1 u v β₁ β₂ hu hv).2
+  have hc := squeezeBoundedSignedChal_abs_le bChal tr
+  exact Nat.le_trans hStep (Nat.add_le_add_left (Nat.mul_le_mul_right β₂ hc) β₁)
+
+/-- **`LatticeFold+` Norm-Split / Refresh Gate (`checkNormRefreshGate`)**:
+    Ensures positive challenge budget `0 < bChal`, folded norm `β₁ + bChal * β₂ ≤ nextRoundCap`,
+    and full 2-special-soundness fork-extraction headroom `2 * bChal * nextRoundCap < sisBetaBound`. -/
+@[expose] def checkNormRefreshGate (β₁ β₂ bChal nextRoundCap sisBetaBound : Nat) : Bool :=
+  decide (0 < bChal) &&
+    decide (β₁ + bChal * β₂ ≤ nextRoundCap) &&
+    decide (2 * bChal * nextRoundCap < sisBetaBound)
+
+theorem checkNormRefreshGate_inhabited (β : Nat) :
+    checkNormRefreshGate β β 2 (3 * β) (12 * β + 1) = true := by
+  unfold checkNormRefreshGate
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  omega
+
+theorem checkNormRefreshGate_sound {n : Nat} {β₁ β₂ bChal nextRoundCap sisBetaBound : Nat}
+    (hGate : checkNormRefreshGate β₁ β₂ bChal nextRoundCap sisBetaBound = true)
+    (tr : Transcript .instanceBound) (u v : FastIntPoly n)
+    (hu : normInfFast u.coeffs ≤ β₁) (hv : normInfFast v.coeffs ≤ β₂) :
+    0 < bChal ∧
+    normInfFast (boundedFoldFromTranscript bChal tr u v).2.1.coeffs ≤ nextRoundCap ∧
+    2 * bChal * nextRoundCap < sisBetaBound := by
+  simp only [checkNormRefreshGate, Bool.and_eq_true, decide_eq_true_eq] at hGate
+  rcases hGate with ⟨⟨hbPos, hCap⟩, hSis⟩
+  exact ⟨hbPos, Nat.le_trans (boundedFoldFromTranscript_norm_le bChal tr u v β₁ β₂ hu hv) hCap, hSis⟩
+
+/-- Canonical length-framed serialization of an `m × n` integer matrix `A` for Fiat–Shamir relation binding. -/
+def encodeIntMatrix {m n : Nat} (A : IntMatrix m n) : ByteArray :=
+  Obend.Digest.Cshake256.Native.bytesOfList
+    (leb128 m ++ leb128 n ++ A.coeffs.toList.flatMap fun row => encodeListField (encodeInts row).data.toList)
+
+/-- Relation-level Fiat–Shamir descriptor binding `(descriptor, A, q, bChal, nextRoundCap, sisBetaBound)`
+    before `.instanceBound` challenge squeezing (preventing post-commitment matrix/modulus/bound grinding). -/
+def pikkuBoundedDimDesc {m n : Nat} (A : IntMatrix m n)
+    (q bChal nextRoundCap sisBetaBound : Nat) (descriptor : ByteArray) : ByteArray :=
+  encodeFrame descriptor (encodeIntMatrix A)
+    (Obend.Digest.Cshake256.Native.bytesOfList
+      (leb128 q ++ leb128 bChal ++ leb128 nextRoundCap ++ leb128 sisBetaBound))
+
+/-- **Fenzi-Safe Bounded-Challenge Fold Verifier (`verifyBoundedChallengeFold`)**:
+    Enforces `checkNormRefreshGate`, absorbs `(A, q, bChal, nextRoundCap, sisBetaBound, descriptor,
+    cm₁, cm₂, y₁, y₂, crossTerms)` into `.instanceBound`, squeezes `|c| ≤ bChal`, checks
+    `‖wFolded‖_∞ ≤ nextRoundCap`, and checks `A · wFolded ≡ cm₁ + c · cm₂ (mod q)`. -/
+@[expose] def verifyBoundedChallengeFold {m n : Nat} (A : IntMatrix m n)
+    (q β₁ β₂ bChal nextRoundCap sisBetaBound : Nat)
+    (descriptor y₁ y₂ crossTerms : ByteArray)
+    (cm₁ cm₂ : FastIntPoly m) (wFolded : FastIntPoly n) : Bool :=
+  let dimDesc := pikkuBoundedDimDesc A q bChal nextRoundCap sisBetaBound descriptor
+  checkNormRefreshGate β₁ β₂ bChal nextRoundCap sisBetaBound &&
+    let bTr := fenziSafeFoldTranscript dimDesc cm₁.coeffs.toList cm₂.coeffs.toList y₁ y₂ crossTerms
+    let (c, _) := squeezeBoundedSignedChal bChal bTr.transcript
+    decide (cm₁.coeffs.size = m && wFolded.coeffs.size = n) &&
+      decide (normInfFast wFolded.coeffs ≤ nextRoundCap) &&
+      decide (matVecModQ A q wFolded = foldModQ q c cm₁ cm₂)
+
+theorem verifyBoundedChallengeFold_complete {m n : Nat} (A : IntMatrix m n)
+    (q β₁ β₂ bChal nextRoundCap sisBetaBound : Nat)
+    (descriptor y₁ y₂ crossTerms : ByteArray) (u v : FastIntPoly n)
+    (hGate : checkNormRefreshGate β₁ β₂ bChal nextRoundCap sisBetaBound = true)
+    (hu : normInfFast u.coeffs ≤ β₁) (hv : normInfFast v.coeffs ≤ β₂) :
+    let dimDesc := pikkuBoundedDimDesc A q bChal nextRoundCap sisBetaBound descriptor
+    let cm₁ := matVecModQ A q u
+    let cm₂ := matVecModQ A q v
+    let bTr := fenziSafeFoldTranscript dimDesc cm₁.coeffs.toList cm₂.coeffs.toList y₁ y₂ crossTerms
+    let (_, wFolded, _) := boundedFoldFromTranscript bChal bTr.transcript u v
+    wFolded.coeffs.size = n ∧ cm₁.coeffs.size = m ∧
+    verifyBoundedChallengeFold A q β₁ β₂ bChal nextRoundCap sisBetaBound
+      descriptor y₁ y₂ crossTerms cm₁ cm₂ wFolded = true := by
+  dsimp only [verifyBoundedChallengeFold, boundedFoldFromTranscript]
+  let dimDesc := pikkuBoundedDimDesc A q bChal nextRoundCap sisBetaBound descriptor
+  have hSnd := checkNormRefreshGate_sound hGate
+    (fenziSafeFoldTranscript dimDesc (matVecModQ A q u).coeffs.toList
+      (matVecModQ A q v).coeffs.toList y₁ y₂ crossTerms).transcript u v hu hv
+  have hMod := matVecModQ_foldWitness A q
+    (squeezeBoundedSignedChal bChal (fenziSafeFoldTranscript dimDesc (matVecModQ A q u).coeffs.toList
+      (matVecModQ A q v).coeffs.toList y₁ y₂ crossTerms).transcript).1 u v
+  refine ⟨?_, (matVecModQ A q u).size_eq, ?_⟩
+  · exact (foldWitness _ u v).size_eq
+  · simp only [hGate, Bool.true_and, Bool.and_eq_true, decide_eq_true_eq]
+    exact ⟨⟨⟨(matVecModQ A q u).size_eq, (foldWitness _ u v).size_eq⟩, hSnd.2.1⟩, hMod⟩
+
+private theorem fold_fork_elim_mod (c₁ c₂ d₁ d₂ ci₁ ci₂ q : Int)
+    (h₁ : d₁ % q = (ci₁ + c₁ * ci₂) % q) (h₂ : d₂ % q = (ci₁ + c₂ * ci₂) % q) :
+    (c₂ * d₁ - c₁ * d₂) % q = ((c₂ - c₁) * ci₁) % q := by
+  rw [Int.sub_emod, Int.mul_emod c₂ d₁, h₁, ← Int.mul_emod,
+      Int.mul_emod c₁ d₂, h₂, ← Int.mul_emod, ← Int.sub_emod]
+  congr 1
+  simp only [Int.mul_add, Int.sub_mul]
+  have hc : c₂ * (c₁ * ci₂) = c₁ * (c₂ * ci₂) := by ac_rfl
+  rw [hc]; omega
+
+/-- **2-Special-Soundness Rewinding / Forking Extraction for Bounded-Challenge Fold**:
+    Any two folded witnesses `w₁, w₂` accepted at distinct small challenges `c₁ ≠ c₂` (`|cᵢ| ≤ bChal`,
+    `‖wᵢ‖_∞ ≤ nextRoundCap`, `matVecModQ A q wᵢ = foldModQ q cᵢ cm₁ cm₂`) extract a relaxed opening
+    `Δw = c₂ · w₁ - c₁ · w₂` of `cm₁` with slack `δ = c₂ - c₁ ≠ 0`, `|δ| ≤ 2 * bChal`, and
+    `‖Δw‖_∞ ≤ 2 * bChal * nextRoundCap`. -/
+theorem verifyBoundedChallengeFold_forking_extract {m n : Nat} (A : IntMatrix m n)
+    (q bChal nextRoundCap : Nat) (cm₁ cm₂ : FastIntPoly m)
+    (c₁ c₂ : Int) (w₁ w₂ : FastIntPoly n)
+    (hcNe : c₁ ≠ c₂) (hc₁ : c₁.natAbs ≤ bChal) (hc₂ : c₂.natAbs ≤ bChal)
+    (hw₁ : normInfFast w₁.coeffs ≤ nextRoundCap) (hw₂ : normInfFast w₂.coeffs ≤ nextRoundCap)
+    (hRel₁ : matVecModQ A q w₁ = foldModQ q c₁ cm₁ cm₂)
+    (hRel₂ : matVecModQ A q w₂ = foldModQ q c₂ cm₁ cm₂) :
+    let Δw := intSub (intScale c₂ w₁) (intScale c₁ w₂)
+    let δ := c₂ - c₁
+    c₁ ≠ c₂ ∧ δ ≠ 0 ∧ δ.natAbs ≤ 2 * bChal ∧
+    normInfFast Δw.coeffs ≤ 2 * bChal * nextRoundCap ∧
+    matVecModQ A q Δw = Sized.ofFn (fun i => (δ * cm₁.spec i) % (q : Int)) := by
+  refine ⟨hcNe, by omega, by omega, ?_, ?_⟩
+  · have hb₁ : normInfFast (intScale c₂ w₁).coeffs ≤ bChal * nextRoundCap :=
+      Nat.le_trans (normInfFast_scale_le c₂ w₁) (Nat.mul_le_mul hc₂ hw₁)
+    have hb₂ : normInfFast (intScale c₁ w₂).coeffs ≤ bChal * nextRoundCap :=
+      Nat.le_trans (normInfFast_scale_le c₁ w₂) (Nat.mul_le_mul hc₁ hw₂)
+    calc normInfFast (intSub (intScale c₂ w₁) (intScale c₁ w₂)).coeffs
+      _ ≤ bChal * nextRoundCap + bChal * nextRoundCap :=
+          Nat.le_trans (normInfFast_sub_le _ _) (Nat.add_le_add hb₁ hb₂)
+      _ = 2 * bChal * nextRoundCap := by rw [Nat.mul_assoc, ← Nat.two_mul]
+  · apply Sized.ext; funext i
+    have h₁i := congrArg (fun v => v.spec i) hRel₁
+    have h₂i := congrArg (fun v => v.spec i) hRel₂
+    simp only [matVecModQ, matVec, foldModQ, Sized.spec_ofFn] at h₁i h₂i ⊢
+    rw [dot_sub, dot_scale, dot_scale]
+    exact fold_fork_elim_mod c₁ c₂ _ _ _ _ (q : Int) h₁i h₂i
+
+/-- Composes `checkNormRefreshGate` directly with `verifyBoundedChallengeFold_forking_extract`:
+    passing the runtime norm-refresh gate guarantees `normInfFast Δw.coeffs < sisBetaBound`! -/
+theorem verifyBoundedChallengeFold_forking_within_sisBeta {m n : Nat} (A : IntMatrix m n)
+    (q β₁ β₂ bChal nextRoundCap sisBetaBound : Nat) (cm₁ cm₂ : FastIntPoly m)
+    (c₁ c₂ : Int) (w₁ w₂ : FastIntPoly n)
+    (hGate : checkNormRefreshGate β₁ β₂ bChal nextRoundCap sisBetaBound = true)
+    (hcNe : c₁ ≠ c₂) (hc₁ : c₁.natAbs ≤ bChal) (hc₂ : c₂.natAbs ≤ bChal)
+    (hw₁ : normInfFast w₁.coeffs ≤ nextRoundCap) (hw₂ : normInfFast w₂.coeffs ≤ nextRoundCap)
+    (hRel₁ : matVecModQ A q w₁ = foldModQ q c₁ cm₁ cm₂)
+    (hRel₂ : matVecModQ A q w₂ = foldModQ q c₂ cm₁ cm₂) :
+    let Δw := intSub (intScale c₂ w₁) (intScale c₁ w₂)
+    normInfFast Δw.coeffs < sisBetaBound ∧
+    matVecModQ A q Δw = Sized.ofFn (fun i => ((c₂ - c₁) * cm₁.spec i) % (q : Int)) := by
+  have hExt := verifyBoundedChallengeFold_forking_extract A q bChal nextRoundCap cm₁ cm₂ c₁ c₂ w₁ w₂
+    hcNe hc₁ hc₂ hw₁ hw₂ hRel₁ hRel₂
+  simp only [checkNormRefreshGate, Bool.and_eq_true, decide_eq_true_eq] at hGate
+  exact ⟨Nat.lt_of_le_of_lt hExt.2.2.2.1 hGate.2, hExt.2.2.2.2⟩
+
+/-- **Quantitative Parallel Challenge Soundness / Anti-Grinding Bound (`parallelBoundedChalHitProb_le`)**:
+    Sampling $k$ small-norm challenges from `[-bChal, bChal]^k` (`uniformVecDist bChal target.length`)
+    hits any specific bad challenge vector `target` (e.g. a cheating root in each parallel slot)
+    with probability at most $(2 \cdot b_{\text{chal}} + 1)^{-k}$ (`(2*bChal+1)^(-k)` amplification). -/
+theorem parallelBoundedChalHitProb_le (bChal : Nat) :
+    ∀ (target : List Int),
+      RatProb.le
+        ((uniformVecDist bChal target.length).probEvent (· == target))
+        ⟨1, (2 * bChal + 1) ^ target.length, Nat.pow_pos (by omega)⟩
+  | [] => by
+    unfold uniformVecDist FinDist.pure FinDist.probEvent RatProb.le
+    simp [FinDist.totalWeight, eventMass, weightSum]
+  | t :: ts => by
+    have hHead0 : RatProb.le ((uniformIntervalDist bChal).probEvent (· == t)) ⟨1, 2 * bChal + 1, by omega⟩ := by
+      unfold uniformIntervalDist; rw [FinDist.probEvent_map]
+      unfold FinDist.uniform FinDist.probEvent FinDist.totalWeight RatProb.le
+      dsimp only [Function.comp_def]; rw [uniform_weightSum, uniform_eventMass, List.length_range]
+      apply Nat.mul_le_mul_right
+      have hNodupOne : ∀ (ks : List Nat), ks.Nodup → (ks.filter (fun k : Nat => ((k : Int) - bChal) == t)).length ≤ 1 := by
+        intro ks; induction ks with
+        | nil => intros; exact Nat.zero_le 1
+        | cons k ks ih =>
+          intro hNd; rcases hNd with _ | ⟨hNot, hNdR⟩; dsimp only [List.filter]
+          by_cases hk : ((k : Int) - bChal) = t
+          · simp only [beq_iff_eq.2 hk, List.length_cons]
+            have hEmpty : ks.filter (fun j : Nat => ((j : Int) - bChal) == t) = [] := by
+              rw [List.filter_eq_nil_iff]; intro j hj; simp only [beq_iff_eq]; intro hjEq
+              exact hNot j hj (by omega)
+            simp [hEmpty]
+          · simp [beq_eq_false_iff_ne.2 hk, ih hNdR]
+      exact hNodupOne _ List.nodup_range
+    have hHead := hHead0
+    have ih := parallelBoundedChalHitProb_le bChal ts
+    simp only [List.length_cons, uniformVecDist, FinDist.probEvent_map]
+    unfold FinDist.prod
+    unfold RatProb.le FinDist.probEvent FinDist.totalWeight at ih hHead
+    unfold RatProb.le FinDist.probEvent FinDist.bind FinDist.totalWeight
+    dsimp only at ih hHead ⊢
+    rw [bindRaw_weightSum, Nat.pow_succ]
+    have hTailLe : ∀ a, eventMass ((· == (t :: ts)) ∘ fun q : Int × List Int => q.1 :: q.2)
+          ((uniformVecDist bChal ts.length).map (fun b => (a, b))).support * ((2 * bChal + 1) ^ ts.length) ≤
+        (if a == t then 1 else 0) * (uniformVecDist bChal ts.length).totalWeight := by
+      intro a; by_cases ha : a = t
+      · subst ha
+        have hEvEq : ((· == (a :: ts)) ∘ fun q : Int × List Int => q.1 :: q.2) ∘ (fun b => (a, b)) = (· == ts) := by
+          funext b; simp [Function.comp_def]
+        have hMp := FinDist.probEvent_map (fun b => (a, b)) (uniformVecDist bChal ts.length)
+          ((· == (a :: ts)) ∘ fun q : Int × List Int => q.1 :: q.2)
+        rw [hEvEq] at hMp
+        have hCross : eventMass ((· == (a :: ts)) ∘ fun q => q.1 :: q.2)
+            ((uniformVecDist bChal ts.length).map (fun b => (a, b))).support =
+            eventMass (· == ts) (uniformVecDist bChal ts.length).support :=
+          congrArg RatProb.num hMp
+        rw [hCross]; simp only [beq_self_eq_true, ↓reduceIte, Nat.one_mul]
+        simpa [FinDist.totalWeight] using ih
+      · simp only [beq_eq_false_iff_ne.2 ha, Bool.false_eq_true, ↓reduceIte, Nat.zero_mul]
+        rw [Nat.le_zero, Nat.mul_eq_zero]
+        left
+        let ev : Int × List Int → Bool := ((· == (t :: ts)) ∘ fun q => q.1 :: q.2)
+        have hZero : ∀ (xs : List ((Int × List Int) × Nat)),
+            (∀ p ∈ xs, p.1.1 = a) → eventMass ev xs = 0 := by
+          intro xs; induction xs with
+          | nil => intros; rfl
+          | cons hd rest ihZ =>
+            rcases hd with ⟨⟨a', b'⟩, w'⟩; intro hAll
+            have ha' : a' = a := hAll _ List.mem_cons_self; subst ha'
+            have hF : ev (a', b') = false := beq_eq_false_iff_ne.2 (fun h => ha (List.cons.inj h).1)
+            dsimp only [eventMass]; rw [hF]; simp only [Bool.false_eq_true, ↓reduceIte, Nat.zero_add]
+            exact ihZ (fun p hp => hAll p (List.mem_cons_of_mem _ hp))
+        apply hZero
+        intro p hp
+        unfold FinDist.map at hp
+        rcases List.mem_map.1 hp with ⟨⟨_, _⟩, _, rfl⟩
+        rfl
+    have auxB : ∀ (zs : List (Int × Nat)),
+        eventMass ((· == (t :: ts)) ∘ fun q : Int × List Int => q.1 :: q.2)
+          (bindRaw zs (fun a => (uniformVecDist bChal ts.length).map (fun b => (a, b)))).1 *
+          ((2 * bChal + 1) ^ ts.length) ≤
+        eventMass (· == t) zs *
+          (bindRaw zs (fun a => (uniformVecDist bChal ts.length).map (fun b => (a, b)))).2 := by
+      intro zs; induction zs with
+      | nil => simp [bindRaw, eventMass]
+      | cons hd zs ihZ =>
+        rcases hd with ⟨a, u⟩
+        simp only [bindRaw, eventMass_append, eventMass_scaleSupport, eventMass]
+        let subD := (uniformVecDist bChal ts.length).map (fun b => (a, b))
+        let E1 := eventMass ((· == (t :: ts)) ∘ fun q : Int × List Int => q.1 :: q.2) subD.support
+        let T1 := weightSum subD.support
+        let B1 := eventMass ((· == (t :: ts)) ∘ fun q : Int × List Int => q.1 :: q.2)
+                    (bindRaw zs (fun x => (uniformVecDist bChal ts.length).map (fun b => (x, b)))).1
+        let D1 := (bindRaw zs (fun x => (uniformVecDist bChal ts.length).map (fun b => (x, b)))).2
+        have hT1 : T1 = (uniformVecDist bChal ts.length).totalWeight := FinDist.weightSum_map _ _
+        have hStep1 := hTailLe a
+        rw [← hT1] at hStep1
+        rw [Nat.add_mul]
+        have p1 : u * D1 * E1 * ((2 * bChal + 1) ^ ts.length) ≤ (if a == t then u else 0) * (T1 * D1) := by
+          calc u * D1 * E1 * ((2 * bChal + 1) ^ ts.length)
+            _ = u * D1 * (E1 * ((2 * bChal + 1) ^ ts.length)) := by ac_rfl
+            _ ≤ u * D1 * ((if a == t then 1 else 0) * T1) := Nat.mul_le_mul_left _ hStep1
+            _ = (if a == t then u else 0) * (T1 * D1) := by cases (a == t) <;> simp <;> ac_rfl
+        have p2 : T1 * B1 * ((2 * bChal + 1) ^ ts.length) ≤ eventMass (· == t) zs * (T1 * D1) := by
+          calc T1 * B1 * ((2 * bChal + 1) ^ ts.length)
+            _ = T1 * (B1 * ((2 * bChal + 1) ^ ts.length)) := by ac_rfl
+            _ ≤ T1 * (eventMass (· == t) zs * D1) := Nat.mul_le_mul_left _ ihZ
+            _ = eventMass (· == t) zs * (T1 * D1) := by ac_rfl
+        calc u * D1 * E1 * ((2 * bChal + 1) ^ ts.length) + T1 * B1 * ((2 * bChal + 1) ^ ts.length)
+          _ ≤ (if a == t then u else 0) * (T1 * D1) + eventMass (· == t) zs * (T1 * D1) := Nat.add_le_add p1 p2
+          _ = ((if a == t then u else 0) + eventMass (· == t) zs) * (T1 * D1) := by rw [Nat.add_mul]
+    let zs0 := (uniformIntervalDist bChal).support
+    let D0 := (bindRaw zs0 (fun a => (uniformVecDist bChal ts.length).map (fun b => (a, b)))).2
+    calc eventMass ((· == (t :: ts)) ∘ fun q : Int × List Int => q.1 :: q.2)
+          (bindRaw zs0 (fun a => (uniformVecDist bChal ts.length).map (fun b => (a, b)))).1 *
+          (((2 * bChal + 1) ^ ts.length) * (2 * bChal + 1))
+      _ = (eventMass ((· == (t :: ts)) ∘ fun q : Int × List Int => q.1 :: q.2)
+            (bindRaw zs0 (fun a => (uniformVecDist bChal ts.length).map (fun b => (a, b)))).1 *
+            ((2 * bChal + 1) ^ ts.length)) * (2 * bChal + 1) := by ac_rfl
+      _ ≤ (eventMass (· == t) zs0 * D0) * (2 * bChal + 1) := Nat.mul_le_mul_right _ (auxB zs0)
+      _ = (eventMass (· == t) zs0 * (2 * bChal + 1)) * D0 := by ac_rfl
+      _ ≤ (1 * weightSum zs0) * D0 := Nat.mul_le_mul_right D0 hHead
+      _ = 1 * (weightSum zs0 * D0) := by ac_rfl
+
+/-- Convert `IntMatrix m n` to `List (List Int)` for `GameSoundness.TranscriptTree` extraction. -/
+def intMatrixToLists {m n : Nat} (A : IntMatrix m n) : List (List Int) :=
+  A.coeffs.toList.map (fun row => row.coeffs.toList)
+
+theorem intMatrixToLists_rows {m n : Nat} (A : IntMatrix m n) :
+    ∀ row ∈ intMatrixToLists A, row.length = n := by
+  intro row hMem
+  rcases List.mem_map.1 hMem with ⟨r, _, rfl⟩
+  simpa using r.size_eq
+
+/-- Multi-round `TranscriptTree` extraction bridge for `PikkuFoldLayered`:
+    any depth-$d$ binary forking tree over `intMatrixToLists A` with per-round challenge bound `bChal`
+    and leaf witness bound `b₀` satisfying `normAtDepth bChal d b₀ < sisBetaBound` constructively
+    extracts a relaxed witness `(w, δ)` with `δ ≠ 0`, `Nat.Coprime δ.natAbs q`, and `‖w‖_∞ < sisBetaBound`. -/
+theorem pikkuForkingTree_extract_within_sisBeta {m n : Nat}
+    (A : IntMatrix m n) (q bChal b₀ sisBetaBound : Nat)
+    {d : Nat} (tr : TranscriptTree d)
+    (hValid : ValidForkingTree q n bChal b₀ (intMatrixToLists A) tr)
+    (hGate : normAtDepth bChal d b₀ < sisBetaBound) :
+    let (w, δ) := extractFromForkingTree tr
+    w.length = n ∧ δ ≠ 0 ∧ δ.natAbs ≤ slackAtDepth bChal d ∧
+    (∀ x ∈ w, x.natAbs < sisBetaBound) ∧
+    (∀ p ∈ List.zip (intMatrixToLists A) tr.rootCm, (dotInt p.1 w - δ * p.2) % (q : Int) = 0) ∧
+    Nat.Coprime δ.natAbs q := by
+  have hS := extractFromForkingTree_sound q n bChal b₀ (intMatrixToLists A) (intMatrixToLists_rows A) tr hValid
+  have hB := extractFromForkingTree_within_sisBeta q n bChal b₀ sisBetaBound (intMatrixToLists A) (intMatrixToLists_rows A) tr hValid hGate
+  exact ⟨hS.1, hS.2.1, hS.2.2.1, hB, hS.2.2.2.2.1, hS.2.2.2.2.2⟩
 
 end Obend.Crypto.Fast

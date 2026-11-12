@@ -21,6 +21,8 @@ public import Obend.Crypto.Multilinear
 public import Obend.Crypto.Transcript
 public import Obend.Crypto.Sumcheck
 public import Obend.Judge.Computational
+public import Obend.Crypto.GameSoundness
+import all Obend.Crypto.GameSoundness
 
 public section
 namespace Obend.Crypto
@@ -230,12 +232,6 @@ def extractEvalDigest32Collision (H : Hash32) {maxBytes : Nat} {p₁ p₂ : List
       congrArg (fun d => d.bytes.data.toList) heq
     simp only [evalDigest32, Native.bytesOfList_toList] at hl
     exact congrArg ofBE hl
-
-theorem evalDigest32_eq_imp_collision (H : Hash32) {p₁ p₂ : List UInt8}
-    (hne : p₁ ≠ p₂) (heq : evalDigest32 H p₁ = evalDigest32 H p₂) :
-    Collision H.eval :=
-  (extractEvalDigest32Collision H (Nat.le_max_left p₁.length p₂.length)
-    (Nat.le_max_right p₁.length p₂.length) hne heq).toCollision
 
 /-- Tight upper bound on Merkle leaf & internal-node preimage byte lengths for a $2^v$-leaf tree:
     - at $v = 0$ ($2^0 = 1$ leaf, zero internal nodes), only leaf index `0` is hashed (`10` bytes);
@@ -472,19 +468,19 @@ def extractClimbMerkleCollision (H : Hash32) {maxBytes : Nat} :
               (fun hpre => hEqR (merkleNodePreimage_injective hpre).2)
               hNodeEq
 
-/-- **Merkle Climb Binding (`climbMerkle32_binds`, `0 Classical`)**:
-    Two valid climbs from position `idx` of a size-`n` tree to the same `root` either start
-    from the exact same leaf `Digest32` or witness a `Collision H.eval`. -/
-theorem climbMerkle32_binds (H : Hash32)
+/-- **Constructive `Type`-Valued Merkle Climb Extractor (`climbMerkle32_bindsOrCollides`, `0 Classical`)**:
+    Two valid climbs from position `idx` of a size-`n` tree to the same `root` constructively return
+    either `leaf₁ = leaf₂` or a `HashCollisionWitness H.eval 65` without unkeyed `Prop` vacuity. -/
+def climbMerkle32_bindsOrCollides (H : Hash32)
     (p₁ p₂ : List Digest32) (n idx : Nat) (leaf₁ leaf₂ root : Digest32)
     (h₁ : climbMerkle32 H n idx leaf₁ p₁ = some root)
     (h₂ : climbMerkle32 H n idx leaf₂ p₂ = some root) :
-    leaf₁ = leaf₂ ∨ Collision H.eval := by
+    PSum (leaf₁ = leaf₂) (HashCollisionWitness H.eval 65) :=
   if hEq : leaf₁ = leaf₂ then
-    exact .inl hEq
+    .inl hEq
   else
-    exact .inr (extractClimbMerkleCollision H (maxBytes := 65) p₁ p₂ n idx leaf₁ leaf₂ root
-      (fun _ => Nat.le_refl 65) hEq h₁ h₂).toCollision
+    .inr (extractClimbMerkleCollision H (maxBytes := 65) p₁ p₂ n idx leaf₁ leaf₂ root
+      (fun _ => Nat.le_refl 65) hEq h₁ h₂)
 
 /-- Hash a Goldilocks table into indexed 32-byte Merkle leaves. -/
 def hashTableLeaves (H : Hash32) (tbl : List Goldilocks) : List Digest32 :=
@@ -627,9 +623,51 @@ def canopyVerifyEval (H : Hash32) {phase : TranscriptPhase} [CanSqueezeTranscrip
     (mleEval (prf.entries.map Prod.fst) claim.point == claim.expectedVal)
   (ok, tr')
 
+/-- Exact transcript frame hashed by `canopyVerifyEval` during `absorbMsg`. -/
+def canopyAbsorbFrameList {phase : TranscriptPhase} {v : Nat}
+    (comm : CanopyCommitment) (claim : EvalClaim Goldilocks v) (tr : Transcript phase) : List UInt8 :=
+  encodeFrameList tr.state.data.toList canopyOpenLabel.data.toList
+    (leb128 tr.stepCount ++ (canopyOpenFrame comm.root claim).data.toList)
+
+/-- **Constructive `0 Classical` Point-Binding Extractor (`extractCanopyVerifyEvalPointOrCollision`)**: -/
+def extractCanopyVerifyEvalPointOrCollision (H : Hash32)
+    {phase : TranscriptPhase} [CanSqueezeTranscript phase]
+    {v₁ v₂ : Nat} (comm₁ comm₂ : CanopyCommitment)
+    (c₁ : EvalClaim Goldilocks v₁) (c₂ : EvalClaim Goldilocks v₂)
+    (π₁ π₂ : CanopyOpeningProof) (tr₁ tr₂ : Transcript phase)
+    (hState : (canopyVerifyEval H v₁ comm₁ c₁ π₁ tr₁).2.state =
+              (canopyVerifyEval H v₂ comm₂ c₂ π₂ tr₂).2.state) :
+    PSum
+      (tr₁ = tr₂ ∧ comm₁.root = comm₂.root ∧ c₁.point = c₂.point ∧ c₁.expectedVal = c₂.expectedVal)
+      { p : List UInt8 × List UInt8 //
+        p.1 = canopyAbsorbFrameList comm₁ c₁ tr₁ ∧
+        p.2 = canopyAbsorbFrameList comm₂ c₂ tr₂ ∧
+        p.1 ≠ p.2 ∧
+        cshake256Bytes fsAbsorbCustomization p.1 = cshake256Bytes fsAbsorbCustomization p.2 } :=
+  let f₁ := canopyAbsorbFrameList comm₁ c₁ tr₁
+  let f₂ := canopyAbsorbFrameList comm₂ c₂ tr₂
+  if hf : f₁ = f₂ then
+    .inl (by
+      obtain ⟨hSt, _, hTail⟩ := encodeFrameList_injective hf
+      obtain ⟨hCnt, hOpen⟩ := leb128_prefix_inj hTail
+      have hTr : tr₁ = tr₂ := by
+        cases tr₁; cases tr₂
+        have hs := byteArray_eq_of_toList_eq hSt
+        simp only at hs hCnt; subst hs hCnt; rfl
+      obtain ⟨hr, hpt, hval⟩ := canopyOpenFrame_injective (byteArray_eq_of_toList_eq hOpen)
+      exact ⟨hTr, hr, hpt, hval⟩)
+  else
+    .inr ⟨(f₁, f₂), rfl, rfl, hf, by
+      dsimp only [canopyVerifyEval] at hState
+      rw [absorbMsg_state_eq, absorbMsg_state_eq] at hState
+      have hl := congrArg (fun b => b.data.toList) hState
+      dsimp only [f₁, f₂, canopyAbsorbFrameList]
+      simpa only [cshake32ByteArray, Native.bytesOfList_toList] using hl⟩
+
 /-- **Point-Binding Theorem for `canopyVerifyEval` (`canopyVerifyEval_binds_point`)**:
     Two `canopyVerifyEval` runs yielding identical output sponge states either bound the exact
-    same `(tr, comm.root, claim.point, claim.expectedVal)` tuple or witness a bounded cSHAKE256 collision. -/
+    same `(tr, comm.root, claim.point, claim.expectedVal)` tuple or those two specific transcript
+    frames collide under `cshake256Bytes fsAbsorbCustomization` (zero pigeonhole vacuity). -/
 theorem canopyVerifyEval_binds_point (H : Hash32)
     {phase : TranscriptPhase} [CanSqueezeTranscript phase]
     {v₁ v₂ : Nat} {comm₁ comm₂ : CanopyCommitment}
@@ -638,18 +676,16 @@ theorem canopyVerifyEval_binds_point (H : Hash32)
     (hState : (canopyVerifyEval H v₁ comm₁ c₁ π₁ tr₁).2.state =
               (canopyVerifyEval H v₂ comm₂ c₂ π₂ tr₂).2.state) :
     (tr₁ = tr₂ ∧ comm₁.root = comm₂.root ∧ c₁.point = c₂.point ∧ c₁.expectedVal = c₂.expectedVal) ∨
-    BoundedCollision (cshake256Bytes fsAbsorbCustomization)
-      (Nat.max
-        (encodeFrameList tr₁.state.data.toList canopyOpenLabel.data.toList
-          (leb128 tr₁.stepCount ++ (canopyOpenFrame comm₁.root c₁).data.toList)).length
-        (encodeFrameList tr₂.state.data.toList canopyOpenLabel.data.toList
-          (leb128 tr₂.stepCount ++ (canopyOpenFrame comm₂.root c₂).data.toList)).length) := by
-  cases extractAbsorbMsgOrEq canopyOpenLabel (canopyOpenFrame comm₁.root c₁)
-      canopyOpenLabel (canopyOpenFrame comm₂.root c₂) tr₁ tr₂ hState with
-  | inl heq =>
-    obtain ⟨hr, hpt, hval⟩ := canopyOpenFrame_injective heq.2.2
-    exact .inl ⟨heq.1, hr, hpt, hval⟩
-  | inr w => exact .inr ⟨w⟩
+    (canopyAbsorbFrameList comm₁ c₁ tr₁ ≠ canopyAbsorbFrameList comm₂ c₂ tr₂ ∧
+      cshake256Bytes fsAbsorbCustomization (canopyAbsorbFrameList comm₁ c₁ tr₁) =
+        cshake256Bytes fsAbsorbCustomization (canopyAbsorbFrameList comm₂ c₂ tr₂)) := by
+  cases extractCanopyVerifyEvalPointOrCollision H comm₁ comm₂ c₁ c₂ π₁ π₂ tr₁ tr₂ hState with
+  | inl hEq => exact .inl hEq
+  | inr w =>
+    rcases w with ⟨⟨_, _⟩, hp₁, hp₂, hNe, hHash⟩
+    dsimp only at hp₁ hp₂ hNe hHash
+    rw [hp₁, hp₂] at hNe hHash
+    exact .inr ⟨hNe, hHash⟩
 
 theorem map_fst_honest_entries (H : Hash32) (tbl : List Goldilocks) :
     (tbl.mapIdx fun idx x => (x, merklePath32 H (hashTableLeaves H tbl) idx)).map Prod.fst = tbl := by
@@ -778,19 +814,6 @@ theorem merkle_double_open_yields_bounded_collision (H : Hash32)
     BoundedCollision H.eval (merkleMaxPreimageBytes v) :=
   ⟨extractCanopyDoubleOpenCollision H hPt hAcc₁ hAcc₂ hDisagree⟩
 
-/-- Backwards-compatible global collision corollary (`BoundedCollision → Collision`). -/
-theorem merkle_double_open_yields_hash_collision (H : Hash32)
-    {phase₁ phase₂ : TranscriptPhase} [CanSqueezeTranscript phase₁] [CanSqueezeTranscript phase₂]
-    {v : Nat} {comm : CanopyCommitment}
-    {c₁ c₂ : EvalClaim Goldilocks v} {π₁ π₂ : CanopyOpeningProof}
-    {tr₁ : Transcript phase₁} {tr₂ : Transcript phase₂}
-    (hPt : c₁.point = c₂.point)
-    (hAcc₁ : (canopyVerifyEval H v comm c₁ π₁ tr₁).1 = true)
-    (hAcc₂ : (canopyVerifyEval H v comm c₂ π₂ tr₂).1 = true)
-    (hDisagree : c₁.expectedVal ≠ c₂.expectedVal) :
-    Collision H.eval :=
-  (extractCanopyDoubleOpenCollision H hPt hAcc₁ hAcc₂ hDisagree).toCollision
-
 theorem canopyMerklePCS_complete_aux (H : Hash32) :
     ∀ {phase : TranscriptPhase} [CanSqueezeTranscript phase]
       (_ : Unit) (v : Nat) (tbl : List Goldilocks)
@@ -833,41 +856,216 @@ theorem canopyMerklePCS_complete_aux (H : Hash32) :
 instance (H : Hash32) : LawfulTranscriptEncode (canopyMerklePCS H).Commitment :=
   inferInstanceAs (LawfulTranscriptEncode CanopyCommitment)
 
-/-- **Non-Vacuous Bounded Collision-Resistance Implies `BindingSoundAt` (`0 Classical`)**:
-    Under `¬ BoundedCollision H.eval (merkleMaxPreimageBytes v)`, `canopyMerklePCS H` is
-    evaluation-binding at arity `v` with zero classical axioms. -/
-theorem canopyMerklePCS_bindingSoundAt_of_boundedCollisionFree (H : Hash32) (v : Nat)
-    (hNoCol : ¬ BoundedCollision H.eval (merkleMaxPreimageBytes v)) :
-    BindingSoundAt v (canopyMerklePCS H) := by
-  intro _ _ _ _ _ comm c₁ c₂ π₁ π₂ tr₁ tr₂ hPt hAcc₁ hAcc₂
-  if hEq : c₁.expectedVal = c₂.expectedVal then
-    exact hEq
-  else
-    exact False.elim (hNoCol ⟨extractCanopyDoubleOpenCollision H hPt hAcc₁ hAcc₂ hEq⟩)
-
-/-- Predicate-indexed `BindingSound` corollary for `canopyMerklePCS H` (`0 Classical`). -/
-theorem canopyMerklePCS_bindingSound_of_collisionFree (H : Hash32)
-    (hNoCol : ∀ v : Nat, ¬ BoundedCollision H.eval (merkleMaxPreimageBytes v)) :
-    BindingSound (canopyMerklePCS H) := fun v =>
-  canopyMerklePCS_bindingSoundAt_of_boundedCollisionFree H v (hNoCol v)
-
-/-! ## 5. Concrete Inhabitedness Witness Proving `¬ BoundedCollision` Is Non-Vacuous -/
-
-/-- Explicit injective 32-byte length-padded identity map on inputs of length `≤ 31` bytes:
-    proves `¬ BoundedCollision H.eval maxBytes` (`maxBytes ≤ 31`, including `merkleMaxPreimageBytes 0 = 10`)
-    is genuinely satisfiable without pigeonhole contradiction. -/
-def toyInjectiveHash32 : Hash32 where
-  eval input :=
-    if input.length ≤ 31 then
-      UInt8.ofNat input.length :: (input ++ List.replicate (31 - input.length) (0 : UInt8))
+/-- Exact list of 65-byte internal-node preimages hashed along a `climbMerkle32` path. -/
+def climbMerkleFrames (H : Hash32) :
+    List Digest32 → Nat → Nat → Digest32 → List (List UInt8)
+  | [], _, _, _ => []
+  | s :: ss, n, idx, leaf =>
+    if n < 2 || idx ≥ n then []
+    else if idx < n / 2 then
+      match climbMerkle32 H (n / 2) idx leaf ss with
+      | none => []
+      | some l => merkleNodePreimage l s :: climbMerkleFrames H ss (n / 2) idx leaf
     else
-      List.replicate 32 (0xff : UInt8)
-  len_eq input := by
-    split
-    · rename_i hle
-      simp only [List.length_cons, List.length_append, List.length_replicate]
-      omega
-    · simp
+      match climbMerkle32 H (n - n / 2) (idx - n / 2) leaf ss with
+      | none => []
+      | some r => merkleNodePreimage s r :: climbMerkleFrames H ss (n - n / 2) (idx - n / 2) leaf
+
+/-- Exact leaf + internal-node preimage frames hashed by `verifyMerklePath H n idx val path`. -/
+def merkleEntryFrames (H : Hash32) (n idx : Nat) (val : Goldilocks) (path : List Digest32) :
+    List (List UInt8) :=
+  merkleLeafPreimage idx val :: climbMerkleFrames H path n idx (hashLeaf32 H idx val)
+
+/-- Exact finite set of hash preimage frames queried by `canopyVerifyEval H v comm c π tr`. -/
+def canopyOpeningFrames (H : Hash32) (v : Nat) (π : CanopyOpeningProof) : List (List UInt8) :=
+  (List.finRange π.entries.length).flatMap fun i =>
+    merkleEntryFrames H (2 ^ v) i.val (π.entries[i]).1 (π.entries[i]).2
+
+private theorem extractClimbMerkleCollision_mem_frames (H : Hash32) {maxBytes : Nat} :
+    ∀ (p₁ p₂ : List Digest32) (n idx : Nat) (leaf₁ leaf₂ root : Digest32)
+      (hNodeBound : 2 ≤ n → 65 ≤ maxBytes) (hNe : leaf₁ ≠ leaf₂)
+      (h₁ : climbMerkle32 H n idx leaf₁ p₁ = some root)
+      (h₂ : climbMerkle32 H n idx leaf₂ p₂ = some root),
+      let w := extractClimbMerkleCollision H p₁ p₂ n idx leaf₁ leaf₂ root hNodeBound hNe h₁ h₂
+      w.msgA ∈ climbMerkleFrames H p₁ n idx leaf₁ ∧
+      w.msgB ∈ climbMerkleFrames H p₂ n idx leaf₂
+  | [], [], n, idx, leaf₁, leaf₂, _, _, hNe, h₁, h₂ => by
+    exfalso
+    simp only [climbMerkle32] at h₁ h₂
+    split at h₁
+    · rename_i hc; simp only [hc, ↓reduceIte, Option.some.injEq] at h₁ h₂; exact hNe (h₁.trans h₂.symm)
+    · cases h₁
+  | [], _ :: _, _, _, _, _, _, _, _, h₁, h₂ => by
+    exfalso
+    simp only [climbMerkle32] at h₁ h₂
+    split at h₁
+    · rename_i hc; simp only [Bool.and_eq_true, decide_eq_true_eq] at hc; rcases hc with ⟨rfl, _⟩; simp at h₂
+    · cases h₁
+  | _ :: _, [], _, _, _, _, _, _, _, h₁, h₂ => by
+    exfalso
+    simp only [climbMerkle32] at h₁ h₂
+    split at h₂
+    · rename_i hc; simp only [Bool.and_eq_true, decide_eq_true_eq] at hc; rcases hc with ⟨rfl, _⟩; simp at h₁
+    · cases h₂
+  | s₁ :: ss₁, s₂ :: ss₂, n, idx, leaf₁, leaf₂, root, hNodeBound, hNe, h₁, h₂ => by
+    dsimp only [extractClimbMerkleCollision, climbMerkleFrames]
+    if hBad : n < 2 || idx ≥ n then
+      exfalso; simp [climbMerkle32, hBad] at h₁
+    else
+      have h65 : 65 ≤ maxBytes := hNodeBound (by
+        simp only [Bool.or_eq_true, decide_eq_true_eq] at hBad; omega)
+      simp only [hBad, Bool.false_eq_true, ↓reduceIte, ↓reduceDIte]
+      if hi : idx < n / 2 then
+        simp only [hi, ↓reduceIte, ↓reduceDIte]
+        refine ⟨?_, ?_⟩
+        · split
+          · rename_i hc₁; exfalso; simp [climbMerkle32, hBad, hi, hc₁] at h₁
+          · rename_i l₁ hc₁
+            split
+            · rename_i _ hc₁'; exfalso; simp [climbMerkle32, hBad, hi, hc₁'] at h₁
+            · rename_i _ hc₂' _; exfalso; simp [climbMerkle32, hBad, hi, hc₂'] at h₂
+            · rename_i l₁' l₂' hc₁' hc₂'
+              have hl : l₁' = l₁ := Option.some.inj (hc₁'.symm.trans hc₁)
+              subst hl
+              if hEqL : l₁' = l₂' then
+                subst hEqL
+                simp only [↓reduceDIte]
+                exact List.mem_cons_of_mem _ (extractClimbMerkleCollision_mem_frames H
+                  (maxBytes := maxBytes) ss₁ ss₂ (n / 2) idx leaf₁ leaf₂ l₁' (fun _ => h65) hNe hc₁' hc₂').1
+              else
+                simp only [hEqL, ↓reduceDIte, extractEvalDigest32Collision]
+                exact List.Mem.head _
+        · split
+          · rename_i hc₂; exfalso; simp [climbMerkle32, hBad, hi, hc₂] at h₂
+          · rename_i l₂ hc₂
+            split
+            · rename_i _ hc₁'; exfalso; simp [climbMerkle32, hBad, hi, hc₁'] at h₁
+            · rename_i _ hc₂' _; exfalso; simp [climbMerkle32, hBad, hi, hc₂'] at h₂
+            · rename_i l₁' l₂' hc₁' hc₂'
+              have hl : l₂' = l₂ := Option.some.inj (hc₂'.symm.trans hc₂)
+              subst hl
+              if hEqL : l₁' = l₂' then
+                subst hEqL
+                simp only [↓reduceDIte]
+                exact List.mem_cons_of_mem _ (extractClimbMerkleCollision_mem_frames H
+                  (maxBytes := maxBytes) ss₁ ss₂ (n / 2) idx leaf₁ leaf₂ l₁' (fun _ => h65) hNe hc₁' hc₂').2
+              else
+                simp only [hEqL, ↓reduceDIte, extractEvalDigest32Collision]
+                exact List.Mem.head _
+      else
+        simp only [hi, ↓reduceIte, ↓reduceDIte]
+        refine ⟨?_, ?_⟩
+        · split
+          · rename_i hc₁; exfalso; simp [climbMerkle32, hBad, hi, hc₁] at h₁
+          · rename_i r₁ hc₁
+            split
+            · rename_i _ hc₁'; exfalso; simp [climbMerkle32, hBad, hi, hc₁'] at h₁
+            · rename_i _ hc₂' _; exfalso; simp [climbMerkle32, hBad, hi, hc₂'] at h₂
+            · rename_i r₁' r₂' hc₁' hc₂'
+              have hr : r₁' = r₁ := Option.some.inj (hc₁'.symm.trans hc₁)
+              subst hr
+              if hEqR : r₁' = r₂' then
+                subst hEqR
+                simp only [↓reduceDIte]
+                exact List.mem_cons_of_mem _ (extractClimbMerkleCollision_mem_frames H
+                  (maxBytes := maxBytes) ss₁ ss₂ (n - n / 2) (idx - n / 2) leaf₁ leaf₂ r₁' (fun _ => h65) hNe hc₁' hc₂').1
+              else
+                simp only [hEqR, ↓reduceDIte, extractEvalDigest32Collision]
+                exact List.Mem.head _
+        · split
+          · rename_i hc₂; exfalso; simp [climbMerkle32, hBad, hi, hc₂] at h₂
+          · rename_i r₂ hc₂
+            split
+            · rename_i _ hc₁'; exfalso; simp [climbMerkle32, hBad, hi, hc₁'] at h₁
+            · rename_i _ hc₂' _; exfalso; simp [climbMerkle32, hBad, hi, hc₂'] at h₂
+            · rename_i r₁' r₂' hc₁' hc₂'
+              have hr : r₂' = r₂ := Option.some.inj (hc₂'.symm.trans hc₂)
+              subst hr
+              if hEqR : r₁' = r₂' then
+                subst hEqR
+                simp only [↓reduceDIte]
+                exact List.mem_cons_of_mem _ (extractClimbMerkleCollision_mem_frames H
+                  (maxBytes := maxBytes) ss₁ ss₂ (n - n / 2) (idx - n / 2) leaf₁ leaf₂ r₁' (fun _ => h65) hNe hc₁' hc₂').2
+              else
+                simp only [hEqR, ↓reduceDIte, extractEvalDigest32Collision]
+                exact List.Mem.head _
+
+theorem extractMerklePathCollision_mem_frames (H : Hash32) {v idx : Nat} (hIdx : idx < 2 ^ v)
+    {v₁ v₂ : Goldilocks} (p₁ p₂ : List Digest32) (root : Digest32)
+    (hNe : v₁ ≠ v₂)
+    (hv₁ : verifyMerklePath H (2 ^ v) idx v₁ p₁ root = true)
+    (hv₂ : verifyMerklePath H (2 ^ v) idx v₂ p₂ root = true) :
+    let w := extractMerklePathCollision H hIdx p₁ p₂ root hNe hv₁ hv₂
+    w.msgA ∈ merkleEntryFrames H (2 ^ v) idx v₁ p₁ ∧
+    w.msgB ∈ merkleEntryFrames H (2 ^ v) idx v₂ p₂ := by
+  dsimp only [extractMerklePathCollision, merkleEntryFrames]
+  if hLeafEq : hashLeaf32 H idx v₁ = hashLeaf32 H idx v₂ then
+    simp only [hLeafEq, ↓reduceDIte, extractEvalDigest32Collision]
+    exact ⟨List.Mem.head _, List.Mem.head _⟩
+  else
+    simp only [hLeafEq, ↓reduceDIte]
+    have hSub := extractClimbMerkleCollision_mem_frames H (maxBytes := merkleMaxPreimageBytes v)
+      p₁ p₂ (2 ^ v) idx (hashLeaf32 H idx v₁) (hashLeaf32 H idx v₂) root
+      (by cases v with | zero => intro h; omega | succ k => intro _; exact Nat.le_max_left 65 (11 + k))
+      hLeafEq
+      (by simpa [verifyMerklePath, beq_iff_eq] using hv₁)
+      (by simpa [verifyMerklePath, beq_iff_eq] using hv₂)
+    exact ⟨List.mem_cons_of_mem _ hSub.1, List.mem_cons_of_mem _ hSub.2⟩
+
+private theorem mem_canopyOpeningFrames_of_entry (H : Hash32) {v idx : Nat}
+    {π : CanopyOpeningProof} (hIn : idx < π.entries.length) {m : List UInt8}
+    (hMem : m ∈ merkleEntryFrames H (2 ^ v) idx (π.entries[idx]'hIn).1 (π.entries[idx]'hIn).2) :
+    m ∈ canopyOpeningFrames H v π :=
+  List.mem_flatMap.2 ⟨⟨idx, hIn⟩, List.mem_finRange _, hMem⟩
+
+private theorem extractMerklePathCollision_mem_openingFrames (H : Hash32) {v idx : Nat}
+    {π₁ π₂ : CanopyOpeningProof} (hIdx : idx < 2 ^ v)
+    (hIn₁ : idx < π₁.entries.length) (hIn₂ : idx < π₂.entries.length)
+    (root : Digest32)
+    (hNe : (π₁.entries[idx]'hIn₁).1 ≠ (π₂.entries[idx]'hIn₂).1)
+    (hv₁ : verifyMerklePath H (2 ^ v) idx (π₁.entries[idx]'hIn₁).1 (π₁.entries[idx]'hIn₁).2 root = true)
+    (hv₂ : verifyMerklePath H (2 ^ v) idx (π₂.entries[idx]'hIn₂).1 (π₂.entries[idx]'hIn₂).2 root = true) :
+    (extractMerklePathCollision H hIdx (π₁.entries[idx]'hIn₁).2 (π₂.entries[idx]'hIn₂).2 root hNe hv₁ hv₂).msgA ∈
+      canopyOpeningFrames H v π₁ ∧
+    (extractMerklePathCollision H hIdx (π₁.entries[idx]'hIn₁).2 (π₂.entries[idx]'hIn₂).2 root hNe hv₁ hv₂).msgB ∈
+      canopyOpeningFrames H v π₂ := by
+  have hMem := extractMerklePathCollision_mem_frames H hIdx
+    (π₁.entries[idx]'hIn₁).2 (π₂.entries[idx]'hIn₂).2 root hNe hv₁ hv₂
+  exact ⟨mem_canopyOpeningFrames_of_entry H hIn₁ hMem.1,
+         mem_canopyOpeningFrames_of_entry H hIn₂ hMem.2⟩
+
+/-- Every witness extracted by `extractCanopyDoubleOpenCollision` has `msgA ∈ canopyOpeningFrames H v π₁`
+    and `msgB ∈ canopyOpeningFrames H v π₂` (so only the openings' own finite Merkle frames need be logged!). -/
+theorem extractCanopyDoubleOpenCollision_mem_frames (H : Hash32)
+    {phase₁ phase₂ : TranscriptPhase} [CanSqueezeTranscript phase₁] [CanSqueezeTranscript phase₂]
+    {v : Nat} {comm : CanopyCommitment}
+    {c₁ c₂ : EvalClaim Goldilocks v} {π₁ π₂ : CanopyOpeningProof}
+    {tr₁ : Transcript phase₁} {tr₂ : Transcript phase₂}
+    (hPt : c₁.point = c₂.point)
+    (hAcc₁ : (canopyVerifyEval H v comm c₁ π₁ tr₁).1 = true)
+    (hAcc₂ : (canopyVerifyEval H v comm c₂ π₂ tr₂).1 = true)
+    (hDisagree : c₁.expectedVal ≠ c₂.expectedVal) :
+    let w := extractCanopyDoubleOpenCollision H hPt hAcc₁ hAcc₂ hDisagree
+    w.msgA ∈ canopyOpeningFrames H v π₁ ∧ w.msgB ∈ canopyOpeningFrames H v π₂ := by
+  dsimp only [extractCanopyDoubleOpenCollision]
+  apply extractMerklePathCollision_mem_openingFrames
+
+/-- **Constructive `0 Classical` Double-Open-Or-Equal Extractor for All Arities `v : Nat`**:
+    For EVERY variable count `v` (including compressing trees `v ≥ 1` where `merkleMaxPreimageBytes v = 65`),
+    any two accepted openings at `c₁.point = c₂.point` either agree on `expectedVal` or constructively
+    return an explicit `HashCollisionWitness H.eval (merkleMaxPreimageBytes v)`. -/
+def canopyMerklePCS_extractDoubleOpenOrEq (H : Hash32) (v : Nat)
+    {phase₁ phase₂ : TranscriptPhase} [CanSqueezeTranscript phase₁] [CanSqueezeTranscript phase₂]
+    (comm : CanopyCommitment) (c₁ c₂ : EvalClaim Goldilocks v)
+    (π₁ π₂ : CanopyOpeningProof) (tr₁ : Transcript phase₁) (tr₂ : Transcript phase₂)
+    (hPt : c₁.point = c₂.point)
+    (hAcc₁ : ((canopyMerklePCS H).verifyEval () v comm c₁ π₁ tr₁).1 = true)
+    (hAcc₂ : ((canopyMerklePCS H).verifyEval () v comm c₂ π₂ tr₂).1 = true) :
+    PSum (c₁.expectedVal = c₂.expectedVal) (HashCollisionWitness H.eval (merkleMaxPreimageBytes v)) :=
+  if hEq : c₁.expectedVal = c₂.expectedVal then
+    .inl hEq
+  else
+    .inr (extractCanopyDoubleOpenCollision H hPt hAcc₁ hAcc₂ hEq)
 
 private theorem be_ofBE_reverse_aux :
     ∀ (ys : List UInt8), be ys.reverse.length (ofBE ys.reverse) = ys.reverse
@@ -887,6 +1085,138 @@ private theorem be_ofBE_roundtrip (xs : List UInt8) : be xs.length (ofBE xs) = x
 private theorem ofBE_injective_of_length_eq {xs ys : List UInt8}
     (hlen : xs.length = ys.length) (heq : ofBE xs = ofBE ys) : xs = ys := by
   rw [← be_ofBE_roundtrip xs, ← be_ofBE_roundtrip ys, hlen, heq]
+
+theorem evalDigest32_eq_of_sameDigest (H : Hash32) {m₁ m₂ : List UInt8}
+    (hSame : ofBE (H.eval m₁) = ofBE (H.eval m₂)) :
+    evalDigest32 H m₁ = evalDigest32 H m₂ :=
+  Digest32.ext (congrArg Native.bytesOfList
+    (ofBE_injective_of_length_eq ((H.len_eq m₁).trans (H.len_eq m₂).symm) hSame))
+
+/-- **LazyRO Collision-Free Log Binding (`canopyMerklePCS_bind_of_roLog`, `0 Classical`)**:
+    In the Random Oracle Model (`GameSoundness.ROLog`), for ANY arity `v` (including `v ≥ 1`),
+    whenever the finite Merkle frames of `π₁` and `π₂` (`canopyOpeningFrames H v πᵢ`) appear in a
+    collision-free 32-byte `Digest32` query log (`GameSoundness.hasLogCollision log = false`, bounded
+    by Birthday `q(q-1)/(2·2^256)`), their claimed evaluations MUST agree! -/
+theorem canopyMerklePCS_bind_of_roLog (H : Hash32) (v : Nat)
+    {phase₁ phase₂ : TranscriptPhase} [CanSqueezeTranscript phase₁] [CanSqueezeTranscript phase₂]
+    (log : GameSoundness.ROLog (List UInt8) Digest32)
+    (hNoLogCol : GameSoundness.hasLogCollision log = false)
+    (comm : CanopyCommitment) (c₁ c₂ : EvalClaim Goldilocks v)
+    (π₁ π₂ : CanopyOpeningProof) (tr₁ : Transcript phase₁) (tr₂ : Transcript phase₂)
+    (hPt : c₁.point = c₂.point)
+    (hAcc₁ : ((canopyMerklePCS H).verifyEval () v comm c₁ π₁ tr₁).1 = true)
+    (hAcc₂ : ((canopyMerklePCS H).verifyEval () v comm c₂ π₂ tr₂).1 = true)
+    (hLogged₁ : ∀ m ∈ canopyOpeningFrames H v π₁, (m, evalDigest32 H m) ∈ log)
+    (hLogged₂ : ∀ m ∈ canopyOpeningFrames H v π₂, (m, evalDigest32 H m) ∈ log) :
+    c₁.expectedVal = c₂.expectedVal := by
+  if hEq : c₁.expectedVal = c₂.expectedVal then
+    exact hEq
+  else
+    exfalso
+    let w := extractCanopyDoubleOpenCollision H hPt hAcc₁ hAcc₂ hEq
+    have hMem := extractCanopyDoubleOpenCollision_mem_frames H hPt hAcc₁ hAcc₂ hEq
+    have hCol : GameSoundness.hasLogCollision log = true :=
+      (GameSoundness.hasLogCollision_iff log).2
+        ⟨(w.msgA, evalDigest32 H w.msgA), hLogged₁ w.msgA hMem.1,
+         (w.msgB, evalDigest32 H w.msgB), hLogged₂ w.msgB hMem.2,
+         w.distinct, evalDigest32_eq_of_sameDigest H w.sameDigest⟩
+    rw [hNoLogCol] at hCol
+    cases hCol
+
+/-- **Game-Level `LazyRO` Birthday Bound for 32-Byte Canopy Frame Logs (`canopyMerkle_lazyRO_birthday_bound`)**:
+    Over any nodup 32-byte `Digest32` domain `dom` (`|dom| = 2^256` at full 32-byte width), any
+    $q$-query adaptive adversary `adv : QueryProg (List UInt8) Digest32 α q` against `lazyROPackage`
+    violates `hasLogCollision log = false` with probability at most $\frac{q(q-1)}{2 \cdot |dom|}$. -/
+theorem canopyMerkle_lazyRO_birthday_bound {α : Type}
+    (dom : List Digest32) (hne : dom ≠ []) (hNodup : dom.Nodup)
+    {q : Nat} (adv : GameSoundness.QueryProg (List UInt8) Digest32 α q) :
+    GameSoundness.RatProb.le
+      ((GameSoundness.runProg (GameSoundness.lazyROPackage dom hne) adv []).probEvent
+        (fun (_, lf) => GameSoundness.hasLogCollision lf))
+      ⟨q * (q - 1), 2 * dom.length, Nat.mul_pos (by decide) (GameSoundness.length_pos_of_ne_nil hne)⟩ :=
+  GameSoundness.lazyRO_collision_prob_le_birthday_dom dom hne hNodup adv
+
+/-- Logged double-opening forgery event connecting verifier execution to the `LazyRO` query transcript `lf`. -/
+def isLoggedDoubleOpenForgery (H : Hash32) (v : Nat)
+    {phase₁ phase₂ : TranscriptPhase} [CanSqueezeTranscript phase₁] [CanSqueezeTranscript phase₂]
+    (comm : CanopyCommitment) (tr₁ : Transcript phase₁) (tr₂ : Transcript phase₂)
+    (outLog : (EvalClaim Goldilocks v × EvalClaim Goldilocks v × CanopyOpeningProof × CanopyOpeningProof) ×
+              GameSoundness.ROLog (List UInt8) Digest32) : Bool :=
+  let ((c₁, c₂, π₁, π₂), lf) := outLog
+  decide (c₁.point = c₂.point) && decide (c₁.expectedVal ≠ c₂.expectedVal) &&
+    ((canopyMerklePCS H).verifyEval () v comm c₁ π₁ tr₁).1 &&
+    ((canopyMerklePCS H).verifyEval () v comm c₂ π₂ tr₂).1 &&
+    (canopyOpeningFrames H v π₁).all (fun m => decide ((m, evalDigest32 H m) ∈ lf)) &&
+    (canopyOpeningFrames H v π₂).all (fun m => decide ((m, evalDigest32 H m) ∈ lf))
+
+/-- **End-to-End `LazyRO` PCS Forgery Probability Bound (`canopyDoubleOpen_forger_prob_le_birthday`)**:
+    Bridges `canopyMerklePCS_bind_of_roLog` directly to `lazyROPackage`: any $q$-query adaptive adversary
+    whose accepted verification frames appear in the RO log `lf` produces a discrepant double opening
+    (`c₁.point = c₂.point ∧ c₁.expectedVal ≠ c₂.expectedVal`) with probability at most $\frac{q(q-1)}{2 \cdot |dom|}$. -/
+theorem canopyDoubleOpen_forger_prob_le_birthday (H : Hash32) (v : Nat)
+    {phase₁ phase₂ : TranscriptPhase} [CanSqueezeTranscript phase₁] [CanSqueezeTranscript phase₂]
+    (dom : List Digest32) (hne : dom ≠ []) (hNodup : dom.Nodup)
+    (comm : CanopyCommitment) (tr₁ : Transcript phase₁) (tr₂ : Transcript phase₂)
+    {q : Nat}
+    (adv : GameSoundness.QueryProg (List UInt8) Digest32
+             (EvalClaim Goldilocks v × EvalClaim Goldilocks v × CanopyOpeningProof × CanopyOpeningProof) q) :
+    GameSoundness.RatProb.le
+      ((GameSoundness.runProg (GameSoundness.lazyROPackage dom hne) adv []).probEvent
+        (isLoggedDoubleOpenForgery H v comm tr₁ tr₂))
+      ⟨q * (q - 1), 2 * dom.length, Nat.mul_pos (by decide) (GameSoundness.length_pos_of_ne_nil hne)⟩ := by
+  refine GameSoundness.RatProb.le_trans ?_ (canopyMerkle_lazyRO_birthday_bound dom hne hNodup adv)
+  unfold GameSoundness.RatProb.le GameSoundness.FinDist.probEvent
+  apply Nat.mul_le_mul_right
+  have ptImp : ∀ outLog, isLoggedDoubleOpenForgery H v comm tr₁ tr₂ outLog = true →
+      GameSoundness.hasLogCollision outLog.2 = true := by
+    rintro ⟨⟨c₁, c₂, π₁, π₂⟩, lf⟩ hF
+    simp only [isLoggedDoubleOpenForgery, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hF
+    rcases hF with ⟨⟨⟨⟨⟨hPt, hNe⟩, hAcc₁⟩, hAcc₂⟩, hLog₁⟩, hLog₂⟩
+    cases hCol : GameSoundness.hasLogCollision lf
+    · exact False.elim (hNe (canopyMerklePCS_bind_of_roLog H v lf hCol comm c₁ c₂ π₁ π₂ tr₁ tr₂ hPt hAcc₁ hAcc₂ hLog₁ hLog₂))
+    · rfl
+  have monoMass : ∀ {α : Type} (p₁ p₂ : α → Bool) (hImp : ∀ x, p₁ x = true → p₂ x = true) (xs : List (α × Nat)),
+      GameSoundness.eventMass p₁ xs ≤ GameSoundness.eventMass p₂ xs := by
+    intro α p₁ p₂ hImp xs; induction xs with
+    | nil => exact Nat.le_refl 0
+    | cons hd tail ih =>
+      rcases hd with ⟨x, wt⟩; dsimp only [GameSoundness.eventMass]
+      cases hp₁ : p₁ x
+      · cases p₂ x <;> simp only [Bool.false_eq_true, ↓reduceIte] <;> omega
+      · rw [hImp x hp₁]; simp only [↓reduceIte]; omega
+  exact monoMass (isLoggedDoubleOpenForgery H v comm tr₁ tr₂) (fun (_, lf) => GameSoundness.hasLogCollision lf)
+    (fun ⟨out, lf⟩ hF => ptImp (out, lf) hF)
+    (GameSoundness.runProg (GameSoundness.lazyROPackage dom hne) adv []).support
+
+/-- **Non-Compressing (`10 ≤ 32`-Byte) Arity-0 Bounded Collision-Resistance Implies `BindingSoundAt 0` (`0 Classical`)**:
+    At `v = 0`, `merkleMaxPreimageBytes 0 = 10 ≤ 32`, so `¬ BoundedCollision H.eval 10` is genuinely
+    non-vacuous (`toyInjectiveHash32_no_boundedCollision`); for `v ≥ 1`, use `canopyMerklePCS_bind_of_roLog`
+    and `canopyMerklePCS_extractDoubleOpenOrEq`. -/
+theorem canopyMerklePCS_bindingSoundAt_of_boundedCollisionFree (H : Hash32)
+    (hNoCol : ¬ BoundedCollision H.eval 10) :
+    BindingSoundAt 0 (canopyMerklePCS H) := by
+  intro _ _ _ _ _ comm c₁ c₂ π₁ π₂ tr₁ tr₂ hPt hAcc₁ hAcc₂
+  cases canopyMerklePCS_extractDoubleOpenOrEq H 0 comm c₁ c₂ π₁ π₂ tr₁ tr₂ hPt hAcc₁ hAcc₂ with
+  | inl hEq => exact hEq
+  | inr w => exact False.elim (hNoCol ⟨w⟩)
+
+/-! ## 5. Concrete Inhabitedness Witness Proving `¬ BoundedCollision` Is Non-Vacuous -/
+
+/-- Explicit injective 32-byte length-padded identity map on inputs of length `≤ 31` bytes:
+    proves `¬ BoundedCollision H.eval maxBytes` (`maxBytes ≤ 31`, including `merkleMaxPreimageBytes 0 = 10`)
+    is genuinely satisfiable without pigeonhole contradiction. -/
+def toyInjectiveHash32 : Hash32 where
+  eval input :=
+    if input.length ≤ 31 then
+      UInt8.ofNat input.length :: (input ++ List.replicate (31 - input.length) (0 : UInt8))
+    else
+      List.replicate 32 (0xff : UInt8)
+  len_eq input := by
+    split
+    · rename_i hle
+      simp only [List.length_cons, List.length_append, List.length_replicate]
+      omega
+    · simp
 
 /-- **Inhabitedness / Non-Vacuity Theorem (`toyInjectiveHash32_no_boundedCollision`)**:
     For every `maxBytes ≤ 31`, `¬ BoundedCollision toyInjectiveHash32.eval maxBytes` holds unconditionally,
@@ -909,7 +1239,7 @@ theorem toyInjectiveHash32_no_boundedCollision {maxBytes : Nat} (hMax : maxBytes
   exact w.distinct hMsgEq
 
 example : BindingSoundAt 0 (canopyMerklePCS toyInjectiveHash32) :=
-  canopyMerklePCS_bindingSoundAt_of_boundedCollisionFree toyInjectiveHash32 0
+  canopyMerklePCS_bindingSoundAt_of_boundedCollisionFree toyInjectiveHash32
     (toyInjectiveHash32_no_boundedCollision (by decide))
 
 end Obend.Crypto
