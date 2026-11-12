@@ -114,7 +114,7 @@ def data_declaration(form):
     )
 
 
-def shared_query(text, smtio_path):
+def shared_query(text, smtio_path, keep_defines=False):
     """Yosys's production unroller, followed by exact ground definitions.
 
     smtio.py::SmtIo.unroll_stmt memoizes applications to the named states and
@@ -123,8 +123,10 @@ def shared_query(text, smtio_path):
     declare-const shorthand is expanded because smtio expects declare-fun.
 
     Every resulting `define-fun f () S body` becomes a fresh constant of sort S
-    plus `(assert (= f body))`. This exact definitional extension retains every
-    equation while avoiding exponential macro expansion in the SMT parser.
+    plus `(assert (= f body))` (or stays a ground `define-fun` when
+    `keep_defines=True` for DAG-hash-consing solvers such as Bitwuzla). This
+    exact definitional extension retains every equation while avoiding
+    exponential macro expansion in the SMT parser.
     """
     source = commands(text)
     checks = [i for i, c in enumerate(source) if c.form == ['check-sat']]
@@ -143,7 +145,8 @@ def shared_query(text, smtio_path):
     opts.unroll = True
     # State unrolling normally removes all UFs. Keep the logic's UF capability
     # when the original multiplication abstraction declares data-only functions.
-    if any(data_declaration(c.form) and c.form[2] for c in source):
+    has_uf = any(data_declaration(c.form) and c.form[2] for c in source)
+    if has_uf:
         opts.logic = 'QF_AUFBV'
     opts.debug_file = io.StringIO()
     solver = module.SmtIo(opts)
@@ -176,7 +179,10 @@ def shared_query(text, smtio_path):
     for c in commands(unrolled):
         f = c.form
         if f[0] in {'check-sat', 'get-value'}:
-            queries.append(unrolled[c.start:c.end])
+            if f == ['check-sat'] and has_uf and not keep_defines:
+                queries.append('(check-sat-using (then simplify propagate-values solve-eqs smt))')
+            else:
+                queries.append(unrolled[c.start:c.end])
             continue
         if f[0] in {'declare-fun', 'define-fun'}:
             name = symbol(f[1])
@@ -186,8 +192,11 @@ def shared_query(text, smtio_path):
         if f[0] == 'define-fun':
             if len(f) != 5 or f[2] != []:
                 raise ValueError('unroller left a nonground function definition')
-            result.append(render(['declare-fun', f[1], [], f[3]]))
-            result.append(render(['assert', ['=', f[1], f[4]]]))
+            if keep_defines:
+                result.append(unrolled[c.start:c.end])
+            else:
+                result.append(render(['declare-fun', f[1], [], f[3]]))
+                result.append(render(['assert', ['=', f[1], f[4]]]))
         else:
             result.append(unrolled[c.start:c.end])
     # Model-only state getters can be unrolled lazily while reading get-value.
@@ -217,10 +226,11 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--yosys', required=True)
     parser.add_argument('--smtio', default=os.environ.get('YOSYS_SMTIO'))
+    parser.add_argument('--keep-defines', action='store_true')
     args = parser.parse_args()
     try:
         path = find_smtio(args.yosys, args.smtio)
-        args.output.write_text(shared_query(args.input.read_text(), path))
+        args.output.write_text(shared_query(args.input.read_text(), path, keep_defines=args.keep_defines))
         return 0
     except (ValueError, OSError, AssertionError, ImportError) as error:
         print(f'[FAIL] SMT sharing: {error}', file=sys.stderr)

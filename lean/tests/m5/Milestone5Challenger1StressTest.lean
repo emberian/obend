@@ -4,10 +4,10 @@ import Obend.Doc.Patch
 import Obend.Core.Data
 import Obend.Vault.HardwareProjection
 import Obend.Hardware.HDL
+import Obend.Hardware.Synth
 import Obend.Hardware.Process
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.DRC
-import Obend.Hardware.WaferSpace
 import Obend.Hardware.Circuits
 import Obend.Hardware.Fabric
 import Obend.Vault.Json
@@ -17,10 +17,10 @@ open Obend.Doc
 open Obend.Core.Data
 open Obend.Vault.HardwareProjection
 open Obend.Hardware.HDL
+open Obend.Hardware.Synth
 open Obend.Hardware.Process
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.DRC
-open Obend.Hardware.WaferSpace
 open Obend.Hardware.Circuits
 open Obend.Vault.Json
 open Lean (Json toJson fromJson?)
@@ -360,18 +360,18 @@ def test_complex_rtl_dag_projection : Bool :=
     name := "complex_alu"
     inputNames := ["inA", "inB", "inC", "inD"]
     wires := [
-      ⟨0, "w_add", .alu .add (.inputPort 0) (.inputPort 1)⟩,
-      ⟨1, "w_sub", .alu .sub (.inputPort 2) (.inputPort 3)⟩,
-      ⟨2, "w_mul", .alu .mul (.wireRef 0) (.wireRef 1)⟩,
-      ⟨3, "w_mux", .mux (.alu .ult (.wireRef 0) (.wireRef 1)) (.wireRef 2) (.bitNot (.wireRef 2))⟩
+      { wireIdx := 0, name := "w_add", expr := .alu .add (.inputPort 0) (.inputPort 1) },
+      { wireIdx := 1, name := "w_sub", expr := .alu .sub (.inputPort 2) (.inputPort 3) },
+      { wireIdx := 2, name := "w_mul", expr := .alu .mul (.wireRef 0) (.wireRef 1) },
+      { wireIdx := 3, name := "w_mux", expr := .mux (.alu .ult (.wireRef 0) (.wireRef 1)) (.wireRef 2) (.bitNot (.wireRef 2)) }
     ]
     regs := [
-      ⟨0, "r_sync", .coreClk, .syncReset 0, false, .wireRef 3⟩,
-      ⟨1, "r_cdc", .axiIoClk, .resetFree, true, .wireRef 0⟩
+      { regIdx := 0, name := "r_sync", domain := .coreClk, resetKind := .syncReset 0, isSynchronizer := false, nextExpr := .wireRef 3 },
+      { regIdx := 1, name := "r_cdc", domain := .axiIoClk, resetKind := .resetFree, isSynchronizer := true, nextExpr := .wireRef 0 }
     ]
     outputs := [
-      ⟨"out_sync", .regRead 0⟩,
-      ⟨"out_cdc", .regRead 1⟩
+      { name := "out_sync", expr := .regRead 0 },
+      { name := "out_cdc", expr := .regRead 1 }
     ]
   }
   let cValid := projectCircuit "alu_cell" mValid
@@ -392,8 +392,8 @@ def test_complex_rtl_dag_projection : Bool :=
     name := "cycle_alu"
     inputNames := ["inA"]
     wires := [
-      ⟨0, "w0", .wireRef 1⟩, -- references wire 1 before wire 1 is declared!
-      ⟨1, "w1", .inputPort 0⟩
+      { wireIdx := 0, name := "w0", expr := .wireRef 1 }, -- references wire 1 before wire 1 is declared!
+      { wireIdx := 1, name := "w1", expr := .inputPort 0 }
     ]
     regs := []
     outputs := [{ name := "out", expr := .wireRef 0 }]
@@ -593,62 +593,52 @@ def test_cutline_drc_stress_violations : Bool :=
 
 #guard test_cutline_drc_stress_violations == true
 
--- Test 3.4: WaferSpace Signoff Multi-Condition Stress
-def test_waferspace_signoff_stress : Bool :=
-  -- Baseline: golden signoff passes
-  let cPass := projectWaferSignoff "signoff_pass" goldenGf180SignoffCert
-  let okPass := match cPass with
+-- Test 3.4: Netlist-Bound PnR Layout & Certificate Multi-Condition Stress
+def test_pnr_signoff_stress : Bool :=
+  -- Baseline: golden netlist-bound PnR layout & certificate pass
+  let cPass := projectGdsii "pnr_pass" validAdderPnrCert
+  let okPass :=
+    checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 validAdderPnrCert &&
+    match cPass with
     | .cell _ .hardwareLayout ast _ _ =>
       match ast with
       | .record fields =>
-        (fields.lookup "signoff_passed" == some (.boolean true)) &&
-        (fields.lookup "status" == some (.label "SIGNOFF_PASSED"))
+        (fields.lookup "placement_injective" == some (.boolean true)) &&
+        (fields.lookup "routing_disjoint" == some (.boolean true))
       | _ => false
     | _ => false
 
-  -- Invalidation 1: LVS netlist mismatch (layout has different transistor count)
-  let certBadLvs : WaferSpaceSignoffCert := {
-    goldenGf180SignoffCert with
-    layoutSig := { goldenGf180SignoffCert.schematicSig with nfetCount := 999 }
-  }
-  let cBadLvs := projectWaferSignoff "signoff_bad_lvs" certBadLvs
-  let okBadLvs := match cBadLvs with
+  -- Invalidation 1: BEL placement collision
+  let cBadPlace := projectGdsii "pnr_bad_place" collidingBelPnrCert
+  let okBadPlace :=
+    (!checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 collidingBelPnrCert) &&
+    match cBadPlace with
     | .cell _ .hardwareLayout ast _ _ =>
       match ast with
       | .record fields =>
-        (fields.lookup "signoff_passed" == some (.boolean false)) &&
-        (fields.lookup "lvs_matched" == some (.boolean false)) &&
-        (fields.lookup "status" == some (.label "SIGNOFF_REFUSED"))
+        (fields.lookup "placement_injective" == some (.boolean false))
       | _ => false
     | _ => false
 
-  -- Invalidation 2: Plasma antenna ratio violation
-  let cBadAntenna := projectWaferSignoff "signoff_bad_antenna" badAntennaSignoffCert
-  let okBadAntenna := match cBadAntenna with
+  -- Invalidation 2: PIP routing short circuit
+  let cBadRoute := projectGdsii "pnr_bad_route" shortedWirePnrCert
+  let okBadRoute :=
+    (!checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 shortedWirePnrCert) &&
+    match cBadRoute with
     | .cell _ .hardwareLayout ast _ _ =>
       match ast with
       | .record fields =>
-        (fields.lookup "signoff_passed" == some (.boolean false)) &&
-        (fields.lookup "antenna_safe" == some (.boolean false)) &&
-        (fields.lookup "status" == some (.label "SIGNOFF_REFUSED"))
+        (fields.lookup "routing_disjoint" == some (.boolean false))
       | _ => false
     | _ => false
 
-  -- Invalidation 3: CMP metal under-density
-  let cBadCmp := projectWaferSignoff "signoff_bad_cmp" badCmpDensitySignoffCert
-  let okBadCmp := match cBadCmp with
-    | .cell _ .hardwareLayout ast _ _ =>
-      match ast with
-      | .record fields =>
-        (fields.lookup "signoff_passed" == some (.boolean false)) &&
-        (fields.lookup "cmp_density_safe" == some (.boolean false)) &&
-        (fields.lookup "status" == some (.label "SIGNOFF_REFUSED"))
-      | _ => false
-    | _ => false
+  -- Invalidation 3: Netlist cell-count / LUT-init mismatch
+  let okBadNetlist :=
+    !checkPnrCertificate { validAdderBelNetlist with cells := [] } corner7nm_SS 2000 validAdderPnrCert
 
-  okPass && okBadLvs && okBadAntenna && okBadCmp
+  okPass && okBadPlace && okBadRoute && okBadNetlist
 
-#guard test_waferspace_signoff_stress == true
+#guard test_pnr_signoff_stress == true
 
 -- Test 3.5: Read-Only Invariance & Purity Check
 def test_readonly_projection_invariance : Bool :=

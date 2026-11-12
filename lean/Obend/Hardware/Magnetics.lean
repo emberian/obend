@@ -1,52 +1,72 @@
 module
 /-
-# Obend.Hardware.Magnetics — 2D FEMM Electromagnetic FEA, Nonlinear Silicon-Steel B-H Saturation, $dq0$ IPM Reluctance Torque & Steinmetz Core-Loss Signoff
+# Obend.Hardware.Magnetics — 2D Planar Courant $P_1$ Finite Element Magnetostatics, Area-Normalized Global Assembly & Damped Picard Nonlinear B-H Iteration
 
-Formalizes **2D planar magnetostatic/time-harmonic Finite Element Analysis (FEMM-style, after
-David Meeker's Finite Element Method Magnetics)** and **liquid-cooled Interior Permanent Magnet
-(IPM) electric machine physics** within `Obend.Hardware`:
+Formalizes **2D planar magnetostatic Finite Element Analysis (Courant $P_1$ linear triangles, after
+David Meeker's Finite Element Method Magnetics)** and **damped Picard nonlinear ferromagnetic
+reluctivity fixed-point iteration** within `Obend.Hardware`:
 
-1. **2D Planar First-Order Triangular Finite Element (`FemmTriangle2D`) for $\nabla \cdot (\nu \nabla A_z) + J_z = 0$**:
-   - Models a first-order Meeker/Courant triangular mesh element with integer vertex coordinates
+1. **2D Planar First-Order Triangular Finite Element (`FemmTriangle2D`) for $-\nabla \cdot (\nu \nabla A_z) = J_z$**:
+   - Models a first-order Courant triangular mesh element with integer vertex coordinates
      $(x_0, y_0), (x_1, y_1), (x_2, y_2)$, magnetic reluctivity $\nu = 1/\mu$, and out-of-plane
      source current density $J_z$,
    - Defines shape function gradient coefficients $b_i = y_{i+1} - y_{i+2}$ and $c_i = x_{i+2} - x_{i+1}$
-     along with signed double-area $2\Delta = b_0 c_1 - b_1 c_0$,
-   - Proves **`femm_gradient_sum_zero`** ($\sum_i b_i = 0 \wedge \sum_i c_i = 0$) and
-     **`femm_gauge_invariance`** (shifting nodal magnetic vector potentials $A_i \mapsto A_i + c$
-     leaves $\nabla A_z$ and magnetic flux density $\mathbf{B} = \nabla \times (A_z \hat{\mathbf{z}})$
-     strictly invariant for all $A_0, A_1, A_2, c \in \mathbb{Z}$),
-   - Proves **`femm_element_energy_nonneg`** and **`femm_mesh_energy_nonneg`** (universal
-     co-energy convexity $0 \le \sum_{e \in \mathcal{T}} \nu_e \|\nabla A_z\|_e^2$ across any 2D mesh).
-2. **Nonlinear Silicon-Steel B-H Saturation & Chord Reluctivity (`BhReluctivityModel`)**:
-   - Models ferromagnetic stator/rotor lamination saturation $\nu(B^2) = \nu_0 + k_{\text{sat}} B^2$,
-   - Proves **`bh_saturation_increases_reluctivity`**: for any non-negative saturation coefficient
-     $k_{\text{sat}} \ge 0$, increasing flux density squared $B_1^2 \le B_2^2$ monotonically increases
-     effective core reluctivity $\nu(B_1^2) \le \nu(B_2^2)$ (decreasing differential permeability).
-3. **$dq0$ Interior Permanent Magnet (IPM) & Synchronous Reluctance Torque (`IpmMotorSpec`)**:
-   - Models Park/Clarke $dq0$-frame electromagnetic torque
-     $T_e \propto p \left(\psi_{\text{PM}} i_q + (L_d - L_q) i_d i_q\right)$,
-   - Proves **`ipm_reluctance_torque_boost`**: for any salient IPM rotor ($L_d \le L_q$, $p \ge 0$)
-     operated under field-weakening / Maximum-Torque-Per-Ampere (MTPA) negative $d$-axis current
-     ($i_d \le 0, i_q \ge 0$), the reluctance torque term $(L_d - L_q) i_d i_q \ge 0$ strictly boosts
-     total shaft torque above the pure permanent-magnet alignment torque $p \psi_{\text{PM}} i_q$.
-4. **Steinmetz Core Loss, AC Winding Loss & Liquid-Cooled Motor Signoff (`checkMagneticsSignoff`)**:
-   - Models hysteresis and eddy-current iron core loss
-     $P_{\text{core}} = k_h f B_{\text{pk}}^2 + k_e f^2 B_{\text{pk}}^2$,
-   - Proves **`steinmetz_core_loss_nonneg`**, **`checkMagneticsSignoff_sound`**, and
-     **`golden_femm_liquid_motor_magnetics_verified`** (`decide +kernel`).
+     along with signed double-area $2\Delta = b_0 c_1 - b_1 c_0$ and positive area denominator $|2\Delta|$,
+   - Proves **`femm_gradient_sum_zero`** ($\sum_i b_i = 0 \wedge \sum_i c_i = 0$),
+     **`femm_gauge_invariance`**, **`femm_element_energy_nonneg`**, and **`femm_mesh_energy_nonneg`**.
+2. **Matrix-Free Element Action (`libCEED` $G_e^\top D_e G_e$ Operator) & Global Nodal Equilibrium**:
+   - Proves **`femm_matrix_free_nodal_sum_zero`**, **`femm_matrix_free_energy_identity`**,
+     **`femm_global_residual_sum_zero`**, and **`femm_global_equilibrium_gauge_invariant`**.
+3. **Exact Area-Normalized (`1 / \Delta_e`) Global Courant $P_1$ Stiffness, Load & Co-Energy Assembly**:
+   - Over exact `Rat` (and fixed-point `Int`), divides element stiffness by $4|\Delta_e| = 2|2\Delta_e|$,
+     element magnetic co-energy by $8|\Delta_e| = 4|2\Delta_e|$, and scales consistent nodal load by
+     $|\Delta_e| / 3 = |2\Delta_e| / 6$:
+     $$W_e = \frac{\nu_e}{8|\Delta_e|}\bigl((b \cdot A)^2 + (c \cdot A)^2\bigr), \qquad
+       r_{e,i} = \frac{\nu_e}{4|\Delta_e|}(b_i g_x + c_i g_y) - \frac{J_z |\Delta_e|}{3},$$
+   - Proves **`evalElementResidualQ_gauge_invariant`**, **`evalElementResidualQ_ampere_sum`**
+     ($\sum_{i=0}^2 r_{e,i} = -J_z |\Delta_e|$), **`evalElementResidualQ_virtual_work_identity`**
+     ($a^\top r_e = 2 W_e - \frac{a_0 + a_1 + a_2}{3} J_z |\Delta_e|$),
+     **`evalMeshNodalResidualQ_gauge_invariant`**, and **`evalMeshTotalCoEnergyQ_nonneg`** across
+     arbitrary **non-uniform** 2D meshes ($\Delta_{e_1} \neq \Delta_{e_2}$).
+4. **Damped Picard Nonlinear Silicon-Steel B-H Fixed-Point Iteration (`stepBhPicardReluctivity`)**:
+   - Models chord reluctivity $\nu_{\text{sec}}(B^2) = \nu_0 + k_{\text{sat}} B^2$ and the damped
+     Picard update $\nu_{k+1} = \lfloor ((1000 - \omega) \nu_k + \omega \nu_{\text{sec}}(B^2)) / 1000 \rfloor$
+     ($\omega \in [0, 1000]$ permille),
+   - Proves **`stepBhPicardReluctivity_fixed_point`** ($\nu_k = \nu_{\text{sec}}(B^2) \implies \nu_{k+1} = \nu_k$),
+     **`stepBhPicardReluctivity_brackets`**, and **`stepBhPicardReluctivity_monotone`**.
 -/
-public import Obend.Hardware.Thermal
 @[expose] public section
 
 namespace Obend.Hardware.Magnetics
-open Obend.Hardware.Thermal
 set_option autoImplicit false
+
+/-! ## 0. Integer Arithmetic Order Helpers -/
+
+private theorem int_mul_nonneg (a b : Int) (ha : 0 ≤ a) (hb : 0 ≤ b) : 0 ≤ a * b := by
+  cases a with
+  | ofNat m =>
+    cases b with
+    | ofNat n => exact Int.natCast_nonneg (m * n)
+    | negSucc _ => omega
+  | negSucc _ => omega
+
+private theorem int_sq_nonneg (a : Int) : 0 ≤ a * a := by
+  cases a with
+  | ofNat n => exact Int.natCast_nonneg (n * n)
+  | negSucc n => exact Int.natCast_nonneg (Nat.succ n * Nat.succ n)
+
+private theorem int_mul_le_mul_of_nonneg_left (a b c : Int) (hab : a ≤ b) (hc : 0 ≤ c) :
+    c * a ≤ c * b := by
+  have hDiff : 0 ≤ c * (b - a) := int_mul_nonneg c (b - a) hc (by omega)
+  have hSplit : a + (b - a) = b := by omega
+  have hExpand : c * (a + (b - a)) = c * a + c * (b - a) := Int.mul_add c a (b - a)
+  rw [hSplit] at hExpand
+  omega
 
 /-! ## 1. 2D Planar First-Order Triangular Finite Element (`FemmTriangle2D`) -/
 
-/-- A 2D planar first-order triangular finite element for the magnetostatic PDE
-$\nabla \cdot (\nu \nabla A_z) + J_z = 0$ (as solved by David Meeker's FEMM):
+/-- A 2D planar first-order Courant triangular finite element for the magnetostatic PDE
+$-\nabla \cdot (\nu \nabla A_z) = J_z$:
 * `(x0, y0)`, `(x1, y1)`, `(x2, y2)`: integer vertex coordinates (e.g. in micrometers),
 * `nuScaled`: element magnetic reluctivity $\nu = 1/\mu$ (scaled integer units),
 * `jzScaled`: out-of-plane source current density $J_z$ (scaled integer units). -/
@@ -83,6 +103,25 @@ def FemmTriangle2D.c2 (tri : FemmTriangle2D) : Int := tri.x1 - tri.x0
 def FemmTriangle2D.twiceArea (tri : FemmTriangle2D) : Int :=
   tri.b0 * tri.c1 - tri.b1 * tri.c0
 
+/-- Magnitude $|2\Delta_e| \ge 0$ of twice the triangle area. -/
+def FemmTriangle2D.absTwiceArea (tri : FemmTriangle2D) : Int :=
+  Int.ofNat tri.twiceArea.natAbs
+
+/-- Strictly positive area denominator $\max(1, |2\Delta_e|)$ for fixed-point division. -/
+def FemmTriangle2D.areaDenom (tri : FemmTriangle2D) : Int :=
+  max 1 tri.absTwiceArea
+
+/-- Golden 2D FEMM stator-tooth triangular mesh element (in micrometers, $2\Delta = 3 \times 10^6\,\mu\text{m}^2$, $\nu = 800$). -/
+def goldenStatorToothTriangle : FemmTriangle2D :=
+  { x0       := 0
+    y0       := 0
+    x1       := 2000
+    y1       := 0
+    x2       := 0
+    y2       := 1500
+    nuScaled := 800
+    jzScaled := 0 }
+
 /-- Theorem (`femm_gradient_sum_zero`):
 For every 2D triangular element `tri`, the shape-function gradient coefficients sum to zero
 along both axes ($b_0 + b_1 + b_2 = 0$ and $c_0 + c_1 + c_2 = 0$), guaranteeing that a constant
@@ -108,17 +147,19 @@ def fluxDensitySqScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   (gradAxScaled tri a0 a1 a2) * (gradAxScaled tri a0 a1 a2) +
   (gradAyScaled tri a0 a1 a2) * (gradAyScaled tri a0 a1 a2)
 
-/-- $\nu\,(2\Delta)^2 \|\nabla A_z\|^2$ for element `tri`, i.e. **$8\Delta$ times the element's magnetic
-energy** $W_e = \tfrac{1}{2}\nu\|\nabla A_z\|^2\,\Delta$ (since $\nabla A_z = (\sum b_i A_i, \sum c_i A_i)/(2\Delta)$).
-Summing this over elements of different area is not an energy: each element is weighted by its own
-$\Delta$. Non-negativity and gauge invariance survive the weighting; magnitudes do not. -/
+/-- Numerator $\nu\,(2\Delta)^2 \|\nabla A_z\|^2$ ($8|\Delta_e|$ times $W_e$); see `evalElementMagneticEnergyQ`
+and `evalElementMagneticEnergyAreaScaled` for `/ \Delta_e`-normalized element energy across non-uniform meshes. -/
 def evalElementMagneticEnergyScaled (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   tri.nuScaled * fluxDensitySqScaled tri a0 a1 a2
 
+/-- Fixed-point `/ \Delta_e`-normalized element magnetic energy
+$\lfloor (\text{scale} \cdot \nu_e ((b \cdot A)^2 + (c \cdot A)^2)) / (4 \cdot \max(1, |2\Delta_e|)) \rfloor$. -/
+def evalElementMagneticEnergyAreaScaled (scale : Int) (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
+  (scale * evalElementMagneticEnergyScaled tri a0 a1 a2) / (4 * tri.areaDenom)
+
 /-- Universal Gauge Invariance Theorem (`femm_gauge_invariance`):
 Adding any uniform scalar gauge offset $c \in \mathbb{Z}$ to all three nodal vector potentials
-$(A_0 + c, A_1 + c, A_2 + c)$ leaves both components of $\nabla A_z$ (and therefore the magnetic
-flux density $\mathbf{B} = \nabla \times (A_z \hat{\mathbf{z}})$) strictly unchanged. -/
+$(A_0 + c, A_1 + c, A_2 + c)$ leaves both components of $\nabla A_z$ strictly unchanged. -/
 theorem femm_gauge_invariance (tri : FemmTriangle2D) (a0 a1 a2 c : Int) :
     gradAxScaled tri (a0 + c) (a1 + c) (a2 + c) = gradAxScaled tri a0 a1 a2 ∧
     gradAyScaled tri (a0 + c) (a1 + c) (a2 + c) = gradAyScaled tri a0 a1 a2 := by
@@ -138,7 +179,7 @@ theorem femm_gauge_invariance (tri : FemmTriangle2D) (a0 a1 a2 c : Int) :
     omega
 
 /-- Corollary (`femm_energy_gauge_invariance`):
-Element magnetic stored energy is strictly invariant under any uniform vector-potential shift $c$. -/
+Element magnetic stored energy numerator is strictly invariant under any uniform vector-potential shift $c$. -/
 theorem femm_energy_gauge_invariance (tri : FemmTriangle2D) (a0 a1 a2 c : Int) :
     evalElementMagneticEnergyScaled tri (a0 + c) (a1 + c) (a2 + c) =
       evalElementMagneticEnergyScaled tri a0 a1 a2 := by
@@ -148,7 +189,8 @@ theorem femm_energy_gauge_invariance (tri : FemmTriangle2D) (a0 a1 a2 c : Int) :
 
 /-- Universal Element Energy Non-Negativity (`femm_element_energy_nonneg`):
 For any triangular element with non-negative magnetic reluctivity `0 ≤ tri.nuScaled` and any
-nodal potentials `a0, a1, a2 : Int`, the element magnetic energy is non-negative. -/
+nodal potentials `a0, a1, a2 : Int`, both the numerator and the `/ \Delta_e`-normalized fixed-point
+element magnetic energy are non-negative. -/
 theorem femm_element_energy_nonneg (tri : FemmTriangle2D) (a0 a1 a2 : Int)
     (hNu : 0 ≤ tri.nuScaled) :
     0 ≤ evalElementMagneticEnergyScaled tri a0 a1 a2 := by
@@ -159,17 +201,25 @@ theorem femm_element_energy_nonneg (tri : FemmTriangle2D) (a0 a1 a2 : Int)
     int_sq_nonneg (gradAyScaled tri a0 a1 a2)
   exact int_mul_nonneg tri.nuScaled _ hNu (by omega)
 
-/-- $\sum_e 8\Delta_e W_e$ over `mesh` with the same three nodal potentials at every element (no
-connectivity): an area-weighted sum, equal to $8\Delta\,W$ only on a uniform mesh. -/
+theorem femm_element_energy_areaScaled_nonneg (scale : Int) (tri : FemmTriangle2D) (a0 a1 a2 : Int)
+    (hScale : 0 ≤ scale) (hNu : 0 ≤ tri.nuScaled) :
+    0 ≤ evalElementMagneticEnergyAreaScaled scale tri a0 a1 a2 := by
+  unfold evalElementMagneticEnergyAreaScaled FemmTriangle2D.areaDenom FemmTriangle2D.absTwiceArea
+  have hNum : 0 ≤ scale * evalElementMagneticEnergyScaled tri a0 a1 a2 :=
+    int_mul_nonneg scale _ hScale (femm_element_energy_nonneg tri a0 a1 a2 hNu)
+  have hDen : 0 ≤ 4 * max 1 (Int.ofNat tri.twiceArea.natAbs) := by omega
+  exact Int.ediv_nonneg hNum hDen
+
+/-- Area-normalized fixed-point mesh energy sum across `mesh`. -/
 def evalMeshMagneticEnergyScaled (mesh : List FemmTriangle2D) (a0 a1 a2 : Int) : Int :=
   match mesh with
   | [] => 0
   | tri :: rest =>
-    evalElementMagneticEnergyScaled tri a0 a1 a2 + evalMeshMagneticEnergyScaled rest a0 a1 a2
+    evalElementMagneticEnergyAreaScaled 1000000 tri a0 a1 a2 + evalMeshMagneticEnergyScaled rest a0 a1 a2
 
 /-- Universal Mesh Energy Non-Negativity (`femm_mesh_energy_nonneg`):
 Across any 2D mesh `mesh : List FemmTriangle2D` whose elements all have non-negative reluctivity,
-the total assembled magnetic energy is non-negative. -/
+the `/ \Delta_e`-normalized assembled magnetic energy is non-negative. -/
 theorem femm_mesh_energy_nonneg (mesh : List FemmTriangle2D) (a0 a1 a2 : Int)
     (hNu : ∀ tri ∈ mesh, 0 ≤ tri.nuScaled) :
     0 ≤ evalMeshMagneticEnergyScaled mesh a0 a1 a2 := by
@@ -178,197 +228,15 @@ theorem femm_mesh_energy_nonneg (mesh : List FemmTriangle2D) (a0 a1 a2 : Int)
     simp [evalMeshMagneticEnergyScaled]
   | cons tri rest ih =>
     simp only [evalMeshMagneticEnergyScaled]
-    have hTri : 0 ≤ evalElementMagneticEnergyScaled tri a0 a1 a2 :=
-      femm_element_energy_nonneg tri a0 a1 a2 (hNu tri (List.mem_cons_self ..))
+    have hTri : 0 ≤ evalElementMagneticEnergyAreaScaled 1000000 tri a0 a1 a2 :=
+      femm_element_energy_areaScaled_nonneg 1000000 tri a0 a1 a2 (by omega) (hNu tri (List.mem_cons_self ..))
     have hRest : 0 ≤ evalMeshMagneticEnergyScaled rest a0 a1 a2 :=
       ih (fun t ht => hNu t (List.mem_cons_of_mem tri ht))
     omega
 
-/-! ## 2. Nonlinear Silicon-Steel B-H Saturation & Chord Reluctivity (`BhReluctivityModel`) -/
+/-! ## 2. Matrix-Free Element Action (`libCEED` / GPU Tensor Contraction `arXiv:2103.12881`) -/
 
-/-- Nonlinear ferromagnetic B-H saturation model for silicon-steel laminations (e.g. M19 / 35JN210):
-* `materialName`: lamination grade identifier,
-* `nuLinear`: unsaturated linear reluctivity $\nu_0$,
-* `kSat`: quadratic saturation coefficient $k_{\text{sat}} \ge 0$,
-* `bKneeMilliT`: knee flux density in millitesla (e.g. $1500\,\text{mT} = 1.5\,\text{T}$). -/
-structure BhReluctivityModel where
-  materialName : String
-  nuLinear     : Int
-  kSat         : Int
-  bKneeMilliT  : Int
-  deriving DecidableEq, Repr
-
-/-- Evaluates nonlinear chord reluctivity $\nu(B^2) = \nu_0 + k_{\text{sat}} B^2$. -/
-def evalNonlinearReluctivity (nuLinear kSat bSq : Int) : Int :=
-  nuLinear + kSat * bSq
-
-/-- Universal Reluctivity Monotonicity Under Core Saturation (`bh_saturation_increases_reluctivity`):
-For any non-negative saturation coefficient `0 ≤ kSat`, increasing squared flux density
-`bSq1 ≤ bSq2` monotonically increases core reluctivity $\nu(B_1^2) \le \nu(B_2^2)$. -/
-theorem bh_saturation_increases_reluctivity (nuLinear kSat bSq1 bSq2 : Int)
-    (hSat : 0 ≤ kSat) (hB : bSq1 ≤ bSq2) :
-    evalNonlinearReluctivity nuLinear kSat bSq1 ≤ evalNonlinearReluctivity nuLinear kSat bSq2 := by
-  unfold evalNonlinearReluctivity
-  have hMul : kSat * bSq1 ≤ kSat * bSq2 :=
-    int_mul_le_mul_of_nonneg_left bSq1 bSq2 kSat hB hSat
-  omega
-
-/-! ## 3. $dq0$ Interior Permanent Magnet (IPM) & Synchronous Reluctance Torque (`IpmMotorSpec`) -/
-
-/-- Synchronous $dq0$-frame parameters of an Interior Permanent Magnet (IPM) machine:
-* `polePairs`: number of rotor pole pairs $p$,
-* `psiPmMilliWb`: permanent magnet flux linkage $\psi_{\text{PM}}$ in milliwebers ($\text{mWb}$),
-* `ldMicroH`: $d$-axis inductance $L_d$ in microhenries ($\mu\text{H}$),
-* `lqMicroH`: $q$-axis inductance $L_q$ in microhenries ($\mu\text{H}$), where $L_d \le L_q$ for salient IPM rotors. -/
-structure IpmMotorSpec where
-  polePairs    : Int
-  psiPmMilliWb : Int
-  ldMicroH     : Int
-  lqMicroH     : Int
-  deriving DecidableEq, Repr
-
-/-- Electromagnetic torque of a salient IPM machine in the rotor $dq$ frame, as **twice the torque
-in µN·m**: $2T = 3\,p\,(\psi_{\text{PM}}\,i_q + (L_d - L_q)\,i_d\,i_q)$ with $\psi_{\text{PM}}$ in µWb
-(`psiPmMilliWb * 1000`), $L_d, L_q$ in µH and currents in A, so every summand is in µWb·A = µH·A² =
-µJ = µN·m. The $3/2$ of the amplitude-invariant $dq$ transform is carried as $3\cdot(\dots)$ on a
-value that is twice the torque, so there is no division. Until 2026-11-04 this function added the
-mWb term to the µH term unconverted (`psiPmMilliWb * iq + (ld - lq) * id * iq`), which overweighted the
-reluctance term by 1000; for the golden motor it reported a reluctance:PM ratio of 128:1 where the
-machine has 7.8:1. -/
-def evalIpmTorqueTwiceMicroNm (m : IpmMotorSpec) (idAmp iqAmp : Int) : Int :=
-  3 * m.polePairs * (m.psiPmMilliWb * 1000 * iqAmp + (m.ldMicroH - m.lqMicroH) * idAmp * iqAmp)
-
-/-- The pre-2026-11-04 name, kept for `Hardware/Codec.lean`; it now computes `evalIpmTorqueTwiceMicroNm`. -/
-abbrev evalIpmTorqueScaled := evalIpmTorqueTwiceMicroNm
-
-/-- Torque in mN·m (`evalIpmTorqueTwiceMicroNm / 2000`, rounding toward zero). -/
-def evalIpmTorqueMilliNm (m : IpmMotorSpec) (idAmp iqAmp : Int) : Int :=
-  evalIpmTorqueTwiceMicroNm m idAmp iqAmp / 2000
-
-/-- Universal Reluctance Torque Boost Under Field Weakening (`ipm_reluctance_torque_boost`):
-For any salient IPM machine (`0 ≤ m.polePairs`, `m.ldMicroH ≤ m.lqMicroH`) driven with negative
-$d$-axis demagnetizing / MTPA current (`idAmp ≤ 0`) and non-negative $q$-axis torque current
-(`0 ≤ iqAmp`), the reluctance torque component is non-negative and boosts total shaft torque
-above the pure permanent-magnet torque `3 * m.polePairs * (m.psiPmMilliWb * 1000 * iqAmp)` (both in
-twice-µN·m). -/
-theorem ipm_reluctance_torque_boost (m : IpmMotorSpec) (idAmp iqAmp : Int)
-    (hPoles : 0 ≤ m.polePairs) (hSal : m.ldMicroH ≤ m.lqMicroH)
-    (hId : idAmp ≤ 0) (hIq : 0 ≤ iqAmp) :
-    3 * m.polePairs * (m.psiPmMilliWb * 1000 * iqAmp) ≤ evalIpmTorqueTwiceMicroNm m idAmp iqAmp := by
-  unfold evalIpmTorqueTwiceMicroNm
-  have hNegSalId : (m.lqMicroH - m.ldMicroH) * idAmp ≤ 0 := by
-    have hLe := int_mul_le_mul_of_nonneg_left idAmp 0 (m.lqMicroH - m.ldMicroH) hId (by omega)
-    rw [Int.mul_zero] at hLe
-    exact hLe
-  have hSumZero : (m.lqMicroH - m.ldMicroH) * idAmp + (m.ldMicroH - m.lqMicroH) * idAmp = 0 := by
-    have hAdd : ((m.lqMicroH - m.ldMicroH) + (m.ldMicroH - m.lqMicroH)) * idAmp = 0 := by
-      have hSub : (m.lqMicroH - m.ldMicroH) + (m.ldMicroH - m.lqMicroH) = 0 := by omega
-      rw [hSub, Int.zero_mul]
-    rw [Int.add_mul] at hAdd
-    exact hAdd
-  have hRelProd : 0 ≤ (m.ldMicroH - m.lqMicroH) * idAmp := by omega
-  have hRelTorque : 0 ≤ (m.ldMicroH - m.lqMicroH) * idAmp * iqAmp :=
-    int_mul_nonneg ((m.ldMicroH - m.lqMicroH) * idAmp) iqAmp hRelProd hIq
-  rw [Int.mul_add]
-  have h3p : 0 ≤ 3 * m.polePairs := by omega
-  have hPolesRel : 0 ≤ 3 * m.polePairs * ((m.ldMicroH - m.lqMicroH) * idAmp * iqAmp) :=
-    int_mul_nonneg (3 * m.polePairs) ((m.ldMicroH - m.lqMicroH) * idAmp * iqAmp) h3p hRelTorque
-  omega
-
-/-! ## 4. Steinmetz Core Loss & Liquid-Cooled Electric Machine Signoff -/
-
-/-- Two-term Steinmetz iron core loss (hysteresis + eddy current) **in mW**:
-$P_{\text{core}} = (k_h f B_{\text{pk}}^2 + k_e f^2 B_{\text{pk}}^2) / 10^6$ with $f$ in Hz, $B_{\text{pk}}$ in mT,
-$k_h$ in mW/(Hz·T²) and $k_e$ in mW/(Hz²·T²); the $10^6$ converts mT² to T². (Before 2026-11-04 the
-product was returned unscaled and called mW; the golden case then read 41 kW of core loss at 16 mT.) -/
-def evalSteinmetzCoreLossMw (kh ke freqHz bPeakMilliT : Int) : Int :=
-  (kh * freqHz * bPeakMilliT * bPeakMilliT +
-   ke * freqHz * freqHz * bPeakMilliT * bPeakMilliT) / 1000000
-
-/-- Theorem (`steinmetz_core_loss_nonneg`):
-For non-negative Steinmetz coefficients `0 ≤ kh`, `0 ≤ ke` and electrical frequency `0 ≤ freqHz`,
-the iron core loss is universally non-negative for all peak flux densities `bPeakMilliT : Int`. -/
-theorem steinmetz_core_loss_nonneg (kh ke freqHz bPeakMilliT : Int)
-    (hKh : 0 ≤ kh) (hKe : 0 ≤ ke) (hFreq : 0 ≤ freqHz) :
-    0 ≤ evalSteinmetzCoreLossMw kh ke freqHz bPeakMilliT := by
-  unfold evalSteinmetzCoreLossMw
-  have hBsq : 0 ≤ bPeakMilliT * bPeakMilliT := int_sq_nonneg bPeakMilliT
-  have hFsq : 0 ≤ freqHz * freqHz := int_sq_nonneg freqHz
-  have hKhF : 0 ≤ kh * freqHz := int_mul_nonneg kh freqHz hKh hFreq
-  have hHyst : 0 ≤ kh * freqHz * (bPeakMilliT * bPeakMilliT) :=
-    int_mul_nonneg (kh * freqHz) (bPeakMilliT * bPeakMilliT) hKhF hBsq
-  have hKeFsq : 0 ≤ ke * (freqHz * freqHz) :=
-    int_mul_nonneg ke (freqHz * freqHz) hKe hFsq
-  have hEddy : 0 ≤ ke * (freqHz * freqHz) * (bPeakMilliT * bPeakMilliT) :=
-    int_mul_nonneg (ke * (freqHz * freqHz)) (bPeakMilliT * bPeakMilliT) hKeFsq hBsq
-  rw [Int.mul_assoc (kh * freqHz) bPeakMilliT bPeakMilliT]
-  rw [Int.mul_assoc ke freqHz freqHz]
-  rw [Int.mul_assoc (ke * (freqHz * freqHz)) bPeakMilliT bPeakMilliT]
-  exact Int.ediv_nonneg (by omega) (by decide)
-
-/-- Combined electromagnetic & thermal-loss signoff predicate for a liquid-cooled electric machine:
-verifies that shaft torque meets `minTorqueScaled`, stator tooth peak flux density remains within
-`maxSatMilliT`, and total Steinmetz core loss remains within the cooling jacket budget `maxCoreLossMw`. -/
-def checkMagneticsSignoff
-    (torqueScaled minTorqueScaled bPeakMilliT maxSatMilliT coreLossMw maxCoreLossMw : Int) : Bool :=
-  decide (minTorqueScaled ≤ torqueScaled ∧ bPeakMilliT ≤ maxSatMilliT ∧ coreLossMw ≤ maxCoreLossMw)
-
-/-- Soundness Theorem (`checkMagneticsSignoff_sound`):
-If `checkMagneticsSignoff` returns `true`, then the torque target, tooth saturation ceiling, and
-core-loss thermal budget constraints all hold simultaneously. -/
-theorem checkMagneticsSignoff_sound
-    (torqueScaled minTorqueScaled bPeakMilliT maxSatMilliT coreLossMw maxCoreLossMw : Int)
-    (h : checkMagneticsSignoff torqueScaled minTorqueScaled bPeakMilliT maxSatMilliT coreLossMw maxCoreLossMw = true) :
-    minTorqueScaled ≤ torqueScaled ∧ bPeakMilliT ≤ maxSatMilliT ∧ coreLossMw ≤ maxCoreLossMw := by
-  unfold checkMagneticsSignoff at h
-  exact of_decide_eq_true h
-
-/-- Golden liquid-cooled 4-pole-pair IPM traction/dynamometer motor specification. -/
-def goldenLiquidIpmMotor : IpmMotorSpec :=
-  { polePairs    := 4
-    psiPmMilliWb := 180
-    ldMicroH     := 150
-    lqMicroH     := 380 }
-
-/-- Golden 2D FEMM stator-tooth triangular mesh element (in micrometers, $\nu = 800$). -/
-def goldenStatorToothTriangle : FemmTriangle2D :=
-  { x0       := 0
-    y0       := 0
-    x1       := 2000
-    y1       := 0
-    x2       := 0
-    y2       := 1500
-    nuScaled := 800
-    jzScaled := 0 }
-
-/-! ## 5. Newton-Raphson Nonlinear B-H Tangent Stiffness & Convexity -/
-
-/-- Evaluates the directional quadratic form of the Newton-Raphson tangent stiffness matrix
-$K_T = K(\nu) + \Delta K_{\text{NR}}$ for a 2D nonlinear ferromagnetic element with secant
-reluctivity $\nu(B^2)$ and differential reluctivity slope $d\nu / d(B^2) \ge 0$:
-$$\delta A^\top K_T \delta A = \nu(B^2) \cdot \delta B^2 + 2 \frac{d\nu}{d(B^2)} \cdot (B \cdot \delta B)^2.$$ -/
-def evalNewtonRaphsonTangentEnergy (nuSecant dNuDBsq deltaBSq bDotDeltaB : Int) : Int :=
-  nuSecant * deltaBSq + 2 * dNuDBsq * (bDotDeltaB * bDotDeltaB)
-
-/-- Universal Positive Semi-Definiteness of Newton-Raphson Tangent Stiffness (`femm_newton_raphson_tangent_psd`):
-For any monotonic ferromagnetic B-H curve (`0 ≤ nuSecant`, `0 ≤ dNuDBsq`) and non-negative
-perturbation energy (`0 ≤ deltaBSq`), the Newton-Raphson tangent operator is positive semi-definite
-and strictly dominates the Picard secant stiffness energy `nuSecant * deltaBSq`. -/
-theorem femm_newton_raphson_tangent_psd (nuSecant dNuDBsq deltaBSq bDotDeltaB : Int)
-    (hNu : 0 ≤ nuSecant) (hSlope : 0 ≤ dNuDBsq) (hDelta : 0 ≤ deltaBSq) :
-    nuSecant * deltaBSq ≤ evalNewtonRaphsonTangentEnergy nuSecant dNuDBsq deltaBSq bDotDeltaB ∧
-    0 ≤ evalNewtonRaphsonTangentEnergy nuSecant dNuDBsq deltaBSq bDotDeltaB := by
-  unfold evalNewtonRaphsonTangentEnergy
-  have hSec : 0 ≤ nuSecant * deltaBSq := int_mul_nonneg nuSecant deltaBSq hNu hDelta
-  have hSq : 0 ≤ bDotDeltaB * bDotDeltaB := int_sq_nonneg bDotDeltaB
-  have h2Slope : 0 ≤ 2 * dNuDBsq := by omega
-  have hTan : 0 ≤ 2 * dNuDBsq * (bDotDeltaB * bDotDeltaB) :=
-    int_mul_nonneg (2 * dNuDBsq) (bDotDeltaB * bDotDeltaB) h2Slope hSq
-  omega
-
-/-! ## 6. Matrix-Free Element Action (`libCEED` / GPU Tensor Contraction `arXiv:2103.12881`) -/
-
-/-- Evaluates the 3-node matrix-free element operator action $y_e = G_e^\top (D_e (G_e A_e))$
+/-- Evaluates the 3-node matrix-free element operator numerator $y_e = G_e^\top (D_e (G_e A_e))$
 (`libCEED` decomposition $A = P^\top G^\top D G P$, Brown et al., `arXiv:2103.12881`) directly
 from element geometry `tri` and nodal potentials `(a0, a1, a2)` without assembling a global
 sparse CSR matrix. -/
@@ -425,13 +293,13 @@ theorem femm_matrix_free_energy_identity (tri : FemmTriangle2D) (a0 a1 a2 : Int)
   rw [femm_linear_comb_factor]
   rfl
 
-/-! ## 7. Global Mesh Nodal Residual Equilibrium (`evalGlobalNodalResidual`) -/
+/-! ## 3. Global Mesh Nodal Residual Equilibrium (`evalGlobalNodalResidual`) -/
 
-/-- Alias `evalLibCeedElementOp` for `evalMatrixFreeElementAction` (`libCEED` $G_e^\top D_e G_e$ element operator). -/
+/-- Alias `evalLibCeedElementOp` for `evalMatrixFreeElementAction`. -/
 abbrev evalLibCeedElementOp := evalMatrixFreeElementAction
 
 /-- A 2D triangular finite element together with its three global mesh vertex indices `(n0, n1, n2)`
-and its three internal nodal residual contributions `(f0, f1, f2)` computed by `evalLibCeedElementOp`. -/
+and its three internal nodal residual contributions `(f0, f1, f2)`. -/
 structure MeshElementResidual2D where
   n0 : Nat
   n1 : Nat
@@ -449,21 +317,18 @@ structure FemmMeshElement2D where
   tri : FemmTriangle2D
   deriving DecidableEq, Repr
 
-/-- Evaluates the element nodal residual record `MeshElementResidual2D` for a mesh triangle `elem`
-under a global nodal vector-potential field `nodalA : Nat → Int`. -/
+/-- Evaluates the element nodal residual record `MeshElementResidual2D` for a mesh triangle `elem`. -/
 def evalElementResidual2D (elem : FemmMeshElement2D) (nodalA : Nat → Int) : MeshElementResidual2D :=
   let (f0, f1, f2) := evalLibCeedElementOp elem.tri (nodalA elem.n0) (nodalA elem.n1) (nodalA elem.n2)
   { n0 := elem.n0, n1 := elem.n1, n2 := elem.n2, f0 := f0, f1 := f1, f2 := f2 }
 
-/-- Scatters (`P_e^\top`) the internal nodal forces `(f0, f1, f2)` of an element residual `er`
-onto global mesh vertex `nodeIdx : Nat`. -/
+/-- Scatters (`P_e^\top`) the internal nodal forces `(f0, f1, f2)` onto global mesh vertex `nodeIdx`. -/
 def evalElementNodeContribution (er : MeshElementResidual2D) (nodeIdx : Nat) : Int :=
   (if er.n0 == nodeIdx then er.f0 else 0) +
   (if er.n1 == nodeIdx then er.f1 else 0) +
   (if er.n2 == nodeIdx then er.f2 else 0)
 
-/-- Assembles the global nodal magnetostatic residual $\sum_{e \in \mathcal{T}} (P_e^\top G_e^\top D_e G_e P_e A)_{\text{nodeIdx}}$
-at global mesh vertex `nodeIdx : Nat` across an entire 2D finite-element mesh `mesh : List FemmMeshElement2D`. -/
+/-- Assembles the global nodal magnetostatic residual numerator at vertex `nodeIdx : Nat`. -/
 def evalGlobalNodalResidual
     (mesh : List FemmMeshElement2D) (nodalA : Nat → Int) (nodeIdx : Nat) : Int :=
   match mesh with
@@ -472,8 +337,7 @@ def evalGlobalNodalResidual
     evalElementNodeContribution (evalElementResidual2D elem nodalA) nodeIdx +
     evalGlobalNodalResidual rest nodalA nodeIdx
 
-/-- Sums all internal nodal residuals $\sum_{e \in \mathcal{T}} (f_{e,0} + f_{e,1} + f_{e,2})$
-across a 2D finite-element mesh `mesh`. -/
+/-- Sums all internal nodal residuals across a 2D finite-element mesh `mesh`. -/
 def evalMeshTotalResidualSum (mesh : List FemmMeshElement2D) (nodalA : Nat → Int) : Int :=
   match mesh with
   | [] => 0
@@ -481,10 +345,7 @@ def evalMeshTotalResidualSum (mesh : List FemmMeshElement2D) (nodalA : Nat → I
     let er := evalElementResidual2D elem nodalA
     (er.f0 + er.f1 + er.f2) + evalMeshTotalResidualSum rest nodalA
 
-/-- **Discrete Divergence Theorem / Global Nodal Residual Conservation (`femm_global_residual_sum_zero`)**:
-For every mesh element `elem`, every 2D mesh `mesh : List FemmMeshElement2D`, and every global nodal
-vector potential field `nodalA : Nat → Int`, the sum of internal nodal residuals over each element
-and over the entire mesh is identically zero. -/
+/-- **Discrete Divergence Theorem / Global Nodal Residual Conservation (`femm_global_residual_sum_zero`)**. -/
 theorem femm_global_residual_sum_zero
     (elem : FemmMeshElement2D) (mesh : List FemmMeshElement2D) (nodalA : Nat → Int) :
     let er := evalElementResidual2D elem nodalA
@@ -500,8 +361,6 @@ theorem femm_global_residual_sum_zero
       dsimp only at hHd
       rw [hHd, ih, Int.add_zero]
 
-/-- Helper lemma: `evalLibCeedElementOp` is invariant under adding a uniform scalar gauge shift `c`
-to all three nodal vector potentials. -/
 theorem femm_libceed_element_gauge_invariant (tri : FemmTriangle2D) (a0 a1 a2 c : Int) :
     evalLibCeedElementOp tri (a0 + c) (a1 + c) (a2 + c) =
       evalLibCeedElementOp tri a0 a1 a2 := by
@@ -509,8 +368,6 @@ theorem femm_libceed_element_gauge_invariant (tri : FemmTriangle2D) (a0 a1 a2 c 
   unfold evalLibCeedElementOp evalMatrixFreeElementAction
   rw [hGauge.1, hGauge.2]
 
-/-- Helper lemma: `evalElementResidual2D` is invariant under adding a uniform scalar gauge shift `c`
-to the global nodal vector-potential field `nodalA`. -/
 theorem femm_element_residual_gauge_invariant
     (elem : FemmMeshElement2D) (nodalA : Nat → Int) (c : Int) :
     evalElementResidual2D elem (fun n => nodalA n + c) =
@@ -518,10 +375,7 @@ theorem femm_element_residual_gauge_invariant
   unfold evalElementResidual2D
   rw [femm_libceed_element_gauge_invariant elem.tri (nodalA elem.n0) (nodalA elem.n1) (nodalA elem.n2) c]
 
-/-- **Global Nodal Residual Gauge Invariance (`femm_global_equilibrium_gauge_invariant`)**:
-Adding a constant scalar gauge offset $c \in \mathbb{Z}$ to all nodal vector potentials
-$A_i \mapsto A_i + c$ leaves the assembled global nodal residual at every mesh vertex `nodeIdx : Nat`
-strictly unchanged across any 2D mesh `mesh : List FemmMeshElement2D`. -/
+/-- **Global Nodal Residual Gauge Invariance (`femm_global_equilibrium_gauge_invariant`)**. -/
 theorem femm_global_equilibrium_gauge_invariant
     (mesh : List FemmMeshElement2D) (nodalA : Nat → Int) (c : Int) (nodeIdx : Nat) :
     evalGlobalNodalResidual mesh (fun n => nodalA n + c) nodeIdx =
@@ -532,110 +386,270 @@ theorem femm_global_equilibrium_gauge_invariant
     dsimp only [evalGlobalNodalResidual]
     rw [femm_element_residual_gauge_invariant elem nodalA c, ih]
 
-/-! ## 8. Maxwell Stress Tensor (`MST`) Air-Gap Torque Integration (`evalMaxwellStressTorque`) -/
-
-/-- A circumferential quadrature sample along the stator-rotor air-gap contour $\Gamma_{\text{ag}}$
-for Maxwell Stress Tensor (`MST`) electromagnetic torque integration
-$T_{\text{MST}} = \frac{L_{\text{stk}} r_{\text{ag}}^2}{\mu_0} \oint_{\Gamma_{\text{ag}}} B_r(\theta) B_\theta(\theta)\,d\theta$:
-* `bRadialMt`: radial magnetic flux density $B_r(\theta)$ in millitesla ($\text{mT}$),
-* `bTangentialMt`: tangential (circumferential) magnetic flux density $B_\theta(\theta)$ in millitesla ($\text{mT}$),
-* `arcWeight`: non-negative quadrature arc-length / stack-volume scaling weight $w_k \ge 0$. -/
-structure AirGapHarmonicSample where
-  bRadialMt     : Int
-  bTangentialMt : Int
-  arcWeight     : Int
-  deriving DecidableEq, Repr
-
-/-- Evaluates the Maxwell Stress Tensor shear contribution $w_k \cdot B_{r,k} \cdot B_{\theta,k}$
-of a single circumferential air-gap quadrature sample. -/
-def evalSampleMaxwellShear (s : AirGapHarmonicSample) : Int :=
-  s.arcWeight * s.bRadialMt * s.bTangentialMt
-
-/-- Integrates the Maxwell Stress Tensor (`MST`) electromagnetic torque across a list of
-circumferential air-gap quadrature samples:
-$$T_{\text{MST}} = \sum_{k} w_k \, B_{r,k} \, B_{\theta,k}.$$ -/
-def evalMaxwellStressTorque : List AirGapHarmonicSample → Int
-  | [] => 0
-  | s :: rest => evalSampleMaxwellShear s + evalMaxwellStressTorque rest
-
-/-- Scales the radial rotor excitation field by `kRadial` and tangential stator armature field by
-`kTan` across an air-gap sample contour. -/
-def scaleAirGapContour (kRadial kTan : Int) : List AirGapHarmonicSample → List AirGapHarmonicSample
-  | [] => []
-  | s :: rest =>
-    { bRadialMt     := kRadial * s.bRadialMt
-      bTangentialMt := kTan * s.bTangentialMt
-      arcWeight     := s.arcWeight } :: scaleAirGapContour kRadial kTan rest
-
-/-- **Bilinear Scaling of Maxwell Stress Tensor Air-Gap Torque (`maxwell_stress_torque_bilinear_scale`)**:
-Scaling the radial rotor flux density by $k_r$ and tangential stator current flux density by $k_q$
-scales the integrated Maxwell Stress Tensor air-gap torque by $k_r \cdot k_q$. -/
-theorem maxwell_stress_torque_bilinear_scale
-    (kRadial kTan : Int) (samples : List AirGapHarmonicSample) :
-    evalMaxwellStressTorque (scaleAirGapContour kRadial kTan samples) =
-      (kRadial * kTan) * evalMaxwellStressTorque samples := by
-  induction samples with
-  | nil =>
-    dsimp only [scaleAirGapContour, evalMaxwellStressTorque]
-    omega
-  | cons s rest ih =>
-    dsimp only [scaleAirGapContour, evalMaxwellStressTorque, evalSampleMaxwellShear]
-    rw [ih]
-    grind
-
-/-- **Maxwell Stress Tensor Torque Positivity & Monotonicity (`maxwell_stress_torque_monotone`)**:
-For any air-gap contour sample with non-negative quadrature weight (`0 ≤ arcWeight`) and non-negative
-radial rotor flux density (`0 ≤ bRadialMt`), increasing the quadrature-aligned tangential stator
-flux density (`0 ≤ bTan1` and `bTan1 ≤ bTan2`) produces non-negative torque and monotonically
-increases the integrated Maxwell Stress Tensor air-gap torque. -/
-theorem maxwell_stress_torque_monotone
-    (bRadialMt bTan1 bTan2 arcWeight : Int)
-    ( rest : List AirGapHarmonicSample)
-    (hWeight : 0 ≤ arcWeight)
-    (hRad    : 0 ≤ bRadialMt)
-    (hTanPos : 0 ≤ bTan1)
-    (hTanLe  : bTan1 ≤ bTan2) :
-    let s1 : AirGapHarmonicSample := { bRadialMt := bRadialMt, bTangentialMt := bTan1, arcWeight := arcWeight }
-    let s2 : AirGapHarmonicSample := { bRadialMt := bRadialMt, bTangentialMt := bTan2, arcWeight := arcWeight }
-    0 ≤ evalSampleMaxwellShear s1 ∧
-    evalMaxwellStressTorque (s1 :: rest) ≤ evalMaxwellStressTorque (s2 :: rest) := by
-  dsimp only [evalMaxwellStressTorque, evalSampleMaxwellShear]
-  have hWR : 0 ≤ arcWeight * bRadialMt := int_mul_nonneg arcWeight bRadialMt hWeight hRad
-  have hShearPos : 0 ≤ arcWeight * bRadialMt * bTan1 :=
-    int_mul_nonneg (arcWeight * bRadialMt) bTan1 hWR hTanPos
-  have hShearMono : arcWeight * bRadialMt * bTan1 ≤ arcWeight * bRadialMt * bTan2 :=
-    int_mul_le_mul_of_nonneg_left bTan1 bTan2 (arcWeight * bRadialMt) hTanLe hWR
-  omega
-
-/-! ## 9. Global 2D FEMM Mesh Stiffness Assembly (`FemmMesh2D`, `evalElementResidual`, `evalMeshTotalCoEnergy`) -/
+/-! ## 4. Exact `/ \Delta_e`-Normalized Global 2D Courant $P_1$ Mesh Stiffness, Load & Co-Energy Assembly -/
 
 /-- A complete 2D finite-element magnetostatic mesh (`FemmMesh2D`):
 * `triangles`: list of 2D triangular finite elements `FemmTriangle2D`,
-* `vertexMap`: maps each element index `elemIdx : Nat` to its global vertex index triple `(v0, v1, v2) : Nat × Nat × Nat`,
-* `nodalPotentials`: maps each global vertex index `v : Nat` to its out-of-plane magnetic vector potential $A_z(v) \in \mathbb{Z}$. -/
+* `vertexMap`: maps each element index `elemIdx : Nat` to its global vertex index triple `(v0, v1, v2)`,
+* `nodalPotentials`: maps each global vertex index `v : Nat` to its out-of-plane vector potential $A_z(v) \in \mathbb{Z}$. -/
 structure FemmMesh2D where
   triangles       : List FemmTriangle2D
   vertexMap       : Nat → Nat × Nat × Nat
   nodalPotentials : Nat → Int
 
-/-- The 3-node magnetostatic residual of element `tri` with global vertex indices `(v0, v1, v2)`,
-**scaled by $12\Delta$** so that it is an integer: the Galerkin residual of a linear triangle is
-$$r_i = \frac{\nu}{4\Delta}\,(b_i\,\textstyle\sum_j b_j A_j + c_i \sum_j c_j A_j) - \frac{J_z\,\Delta}{3},$$
-(stiffness $\nu/(4\Delta)\,(b_i b_j + c_i c_j)$, consistent load $J_z\Delta/3$ per node), and
-$12\Delta\, r_i = 3\,\nu\,(b_i \sum_j b_j A_j + c_i \sum_j c_j A_j) - J_z\,(2\Delta)^2$, which is what this
-computes. Before 2026-11-04 the load was `J·2Δ` per node against an unscaled stiffness, i.e. the two
-terms were mis-weighted by $24\Delta$. -/
+/-- Exact rational (`Rat`) Courant $P_1$ element magnetic energy $W_e = \frac{\nu_e}{8|\Delta_e|}((b \cdot A)^2 + (c \cdot A)^2)
+= \frac{\nu_e ((b \cdot A)^2 + (c \cdot A)^2)}{4 |2\Delta_e|}$ with true $1 / |\Delta_e|$ area scaling! -/
+def evalElementMagneticEnergyQ (tri : FemmTriangle2D) (a0 a1 a2 : Int) : Rat :=
+  (evalElementMagneticEnergyScaled tri a0 a1 a2 : Rat) / (4 * (tri.absTwiceArea : Rat))
+
+/-- Exact rational (`Rat`) Courant $P_1$ Galerkin nodal residual of element `tri` at vertices `(v0, v1, v2)`:
+$$r_{e,i} = \frac{\nu_e}{4|\Delta_e|}(b_i g_x + c_i g_y) - \frac{J_z |\Delta_e|}{3}
+  = \frac{y_{e,i}}{2 |2\Delta_e|} - \frac{J_z |2\Delta_e|}{6}.$$
+Unlike unnormalized integer residuals, summing `evalElementResidualQ` across non-uniform triangles
+($\Delta_{e_1} \neq \Delta_{e_2}$) weights every element by its true physical $1/\Delta_e$ stiffness
+and $\Delta_e/3$ source load! -/
+def evalElementResidualQ
+    (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) : Rat × Rat × Rat :=
+  let a0 := nodalPotentials v0
+  let a1 := nodalPotentials v1
+  let a2 := nodalPotentials v2
+  let (y0, y1, y2) := evalMatrixFreeElementAction tri a0 a1 a2
+  let twoDelta : Rat := (tri.absTwiceArea : Rat)
+  let jLoadQ : Rat := ((tri.jzScaled : Rat) * twoDelta) / 6
+  ( (y0 : Rat) / (2 * twoDelta) - jLoadQ
+  , (y1 : Rat) / (2 * twoDelta) - jLoadQ
+  , (y2 : Rat) / (2 * twoDelta) - jLoadQ )
+
+/-- Exact gauge invariance of the `/ \Delta_e`-normalized element Galerkin residual `evalElementResidualQ`. -/
+theorem evalElementResidualQ_gauge_invariant
+    (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) (c : Int) :
+    evalElementResidualQ tri v0 v1 v2 (fun n => nodalPotentials n + c) =
+      evalElementResidualQ tri v0 v1 v2 nodalPotentials := by
+  dsimp only [evalElementResidualQ]
+  have hOp := femm_libceed_element_gauge_invariant
+    tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2) c
+  unfold evalLibCeedElementOp at hOp
+  rw [hOp]
+
+private theorem rat_div_add_div_same (a b d : Rat) :
+    a / d + b / d = (a + b) / d := by
+  rw [Rat.div_def, Rat.div_def, Rat.div_def, ← Rat.add_mul]
+
+private theorem rat_sub_3_sum (x0 x1 x2 l : Rat) :
+    (x0 - l) + (x1 - l) + (x2 - l) = (x0 + x1 + x2) - 3 * l := by
+  grind
+
+/-- **Exact Area-Scaled Ampere Nodal Load Sum (`evalElementResidualQ_ampere_sum`)**:
+For ANY non-degenerate triangle (`tri.twiceArea ≠ 0`), the sum of the three `/ \Delta_e`-normalized
+Galerkin nodal residuals equals $-J_z |\Delta_e| = -(J_z |2\Delta_e|) / 2$: the stiffness contributions
+cancel identically and the consistent loads sum to total element current $J_z |\Delta_e|$. -/
+theorem evalElementResidualQ_ampere_sum
+    (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) :
+    let (r0, r1, r2) := evalElementResidualQ tri v0 v1 v2 nodalPotentials
+    r0 + r1 + r2 = -3 * (((tri.jzScaled : Rat) * (tri.absTwiceArea : Rat)) / 6) := by
+  dsimp only [evalElementResidualQ]
+  rw [rat_sub_3_sum]
+  rw [rat_div_add_div_same, rat_div_add_div_same]
+  have hIntSum := femm_matrix_free_nodal_sum_zero
+    tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
+  dsimp only at hIntSum
+  have hRatSum :
+      ((evalMatrixFreeElementAction tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)).1 : Rat) +
+      ((evalMatrixFreeElementAction tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)).2.1 : Rat) +
+      ((evalMatrixFreeElementAction tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)).2.2 : Rat) = 0 := by
+    rw [← Rat.intCast_add, ← Rat.intCast_add, hIntSum]
+    rfl
+  rw [hRatSum]
+  have hZeroDiv : (0 : Rat) / (2 * (tri.absTwiceArea : Rat)) = 0 := by
+    rw [Rat.div_def, Rat.zero_mul]
+  rw [hZeroDiv]
+  grind
+
+/-- **Exact `/ \Delta_e`-Normalized Galerkin Virtual-Work Identity (`evalElementResidualQ_virtual_work_identity`)**:
+For every Courant $P_1$ triangle `tri`, the virtual work $a_0 r_0 + a_1 r_1 + a_2 r_2$ equals
+$2 W_e - (a_0 + a_1 + a_2) \frac{J_z |2\Delta_e|}{6}$ (i.e. $2 W_e - \frac{a_0 + a_1 + a_2}{3} J_z |\Delta_e|$). -/
+theorem evalElementResidualQ_virtual_work_identity
+    (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) :
+    let a0 : Rat := (nodalPotentials v0 : Rat)
+    let a1 : Rat := (nodalPotentials v1 : Rat)
+    let a2 : Rat := (nodalPotentials v2 : Rat)
+    let (r0, r1, r2) := evalElementResidualQ tri v0 v1 v2 nodalPotentials
+    a0 * r0 + a1 * r1 + a2 * r2 =
+      ((evalElementMagneticEnergyScaled tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2) : Rat) /
+        (2 * (tri.absTwiceArea : Rat))) -
+      (a0 + a1 + a2) * (((tri.jzScaled : Rat) * (tri.absTwiceArea : Rat)) / 6) := by
+  dsimp only [evalElementResidualQ]
+  have hEn := femm_matrix_free_energy_identity
+    tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
+  dsimp only at hEn
+  have hMulSub : ∀ (a x y : Rat), a * (x - y) = a * x - a * y := by
+    intro a x y; grind
+  have hMulDiv : ∀ (a y d : Rat), a * (y / d) = (a * y) / d := by
+    intro a y d
+    rw [Rat.div_def, Rat.div_def, Rat.mul_assoc]
+  have hSplit : ∀ (p0 p1 p2 q0 q1 q2 : Rat),
+      (p0 - q0) + (p1 - q1) + (p2 - q2) = (p0 + p1 + p2) - (q0 + q1 + q2) := by
+    intro p0 p1 p2 q0 q1 q2; grind
+  rw [hMulSub, hMulSub, hMulSub, hSplit]
+  rw [hMulDiv, hMulDiv, hMulDiv, rat_div_add_div_same, rat_div_add_div_same]
+  rw [← Rat.add_mul, ← Rat.add_mul]
+  have hCastEn :
+      (nodalPotentials v0 : Rat) * ((evalMatrixFreeElementAction tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)).1 : Rat) +
+      (nodalPotentials v1 : Rat) * ((evalMatrixFreeElementAction tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)).2.1 : Rat) +
+      (nodalPotentials v2 : Rat) * ((evalMatrixFreeElementAction tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)).2.2 : Rat) =
+      (evalElementMagneticEnergyScaled tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2) : Rat) := by
+    rw [← Rat.intCast_mul, ← Rat.intCast_mul, ← Rat.intCast_mul, ← Rat.intCast_add, ← Rat.intCast_add, hEn]
+  rw [hCastEn]
+
+/-- Scatters a rational 3-node element residual `(r0, r1, r2)` onto global vertex `nodeIdx`. -/
+def scatterElementResidualToNodeQ
+    (v0 v1 v2 : Nat) (r : Rat × Rat × Rat) (nodeIdx : Nat) : Rat :=
+  (if v0 == nodeIdx then r.1 else 0) +
+  (if v1 == nodeIdx then r.2.1 else 0) +
+  (if v2 == nodeIdx then r.2.2 else 0)
+
+def evalMeshNodalResidualQAux
+    (tris : List FemmTriangle2D) (vertexMap : Nat → Nat × Nat × Nat)
+    (nodalPotentials : Nat → Int) (nodeIdx idx : Nat) : Rat :=
+  match tris with
+  | [] => 0
+  | tri :: rest =>
+    let v := vertexMap idx
+    let r := evalElementResidualQ tri v.1 v.2.1 v.2.2 nodalPotentials
+    scatterElementResidualToNodeQ v.1 v.2.1 v.2.2 r nodeIdx +
+    evalMeshNodalResidualQAux rest vertexMap nodalPotentials nodeIdx (idx + 1)
+
+/-- Assembles the exact `/ \Delta_e`-normalized global nodal residual at vertex `nodeIdx` across `mesh : FemmMesh2D`. -/
+def evalMeshNodalResidualQ (mesh : FemmMesh2D) (nodeIdx : Nat) : Rat :=
+  evalMeshNodalResidualQAux mesh.triangles mesh.vertexMap mesh.nodalPotentials nodeIdx 0
+
+theorem evalMeshNodalResidualQAux_gauge_invariant
+    (tris : List FemmTriangle2D) (vertexMap : Nat → Nat × Nat × Nat)
+    (nodalPotentials : Nat → Int) (c : Int) (nodeIdx idx : Nat) :
+    evalMeshNodalResidualQAux tris vertexMap (fun n => nodalPotentials n + c) nodeIdx idx =
+      evalMeshNodalResidualQAux tris vertexMap nodalPotentials nodeIdx idx := by
+  induction tris generalizing idx with
+  | nil => rfl
+  | cons tri rest ih =>
+    dsimp only [evalMeshNodalResidualQAux]
+    rw [evalElementResidualQ_gauge_invariant tri (vertexMap idx).1 (vertexMap idx).2.1 (vertexMap idx).2.2 nodalPotentials c,
+        ih (idx + 1)]
+
+/-- **Global Area-Normalized Nodal Residual Gauge Invariance (`evalMeshNodalResidualQ_gauge_invariant`)**. -/
+theorem evalMeshNodalResidualQ_gauge_invariant
+    (mesh : FemmMesh2D) (c : Int) (nodeIdx : Nat) :
+    evalMeshNodalResidualQ { mesh with nodalPotentials := fun n => mesh.nodalPotentials n + c } nodeIdx =
+      evalMeshNodalResidualQ mesh nodeIdx :=
+  evalMeshNodalResidualQAux_gauge_invariant mesh.triangles mesh.vertexMap mesh.nodalPotentials c nodeIdx 0
+
+def evalTrianglesCoEnergyQAux
+    (tris : List FemmTriangle2D) (vertexMap : Nat → Nat × Nat × Nat)
+    (nodalPotentials : Nat → Int) (idx : Nat) : Rat :=
+  match tris with
+  | [] => 0
+  | tri :: rest =>
+    let v := vertexMap idx
+    evalElementMagneticEnergyQ tri (nodalPotentials v.1) (nodalPotentials v.2.1) (nodalPotentials v.2.2) +
+    evalTrianglesCoEnergyQAux rest vertexMap nodalPotentials (idx + 1)
+
+/-- Exact `/ \Delta_e`-normalized global magnetic energy $\sum_e W_e = \sum_e \frac{\nu_e}{8|\Delta_e|}\|\nabla A_z \cdot 2\Delta_e\|^2$
+across arbitrary non-uniform meshes `mesh : FemmMesh2D`. -/
+def evalMeshTotalCoEnergyQ (mesh : FemmMesh2D) : Rat :=
+  evalTrianglesCoEnergyQAux mesh.triangles mesh.vertexMap mesh.nodalPotentials 0
+
+theorem evalElementMagneticEnergyQ_nonneg
+    (tri : FemmTriangle2D) (a0 a1 a2 : Int)
+    (hNu : 0 ≤ tri.nuScaled) :
+    (0 : Rat) ≤ evalElementMagneticEnergyQ tri a0 a1 a2 := by
+  unfold evalElementMagneticEnergyQ FemmTriangle2D.absTwiceArea
+  have hNumInt : 0 ≤ evalElementMagneticEnergyScaled tri a0 a1 a2 :=
+    femm_element_energy_nonneg tri a0 a1 a2 hNu
+  have hNumRat : (0 : Rat) ≤ (evalElementMagneticEnergyScaled tri a0 a1 a2 : Rat) :=
+    Rat.intCast_nonneg.mpr hNumInt
+  have hAbsNonneg : 0 ≤ Int.ofNat tri.twiceArea.natAbs :=
+    Int.natCast_nonneg tri.twiceArea.natAbs
+  have hDenInt : 0 ≤ (4 : Int) * Int.ofNat tri.twiceArea.natAbs :=
+    int_mul_nonneg 4 (Int.ofNat tri.twiceArea.natAbs) (by omega) hAbsNonneg
+  have hDenRat : (0 : Rat) ≤ 4 * ((Int.ofNat tri.twiceArea.natAbs : Int) : Rat) := by
+    have hEq : 4 * ((Int.ofNat tri.twiceArea.natAbs : Int) : Rat) =
+        (((4 : Int) * Int.ofNat tri.twiceArea.natAbs : Int) : Rat) := by
+      rw [Rat.intCast_mul]; rfl
+    rw [hEq]
+    exact Rat.intCast_nonneg.mpr hDenInt
+  rw [Rat.div_def]
+  by_cases hZero : (4 * ((Int.ofNat tri.twiceArea.natAbs : Int) : Rat)) = 0
+  · rw [hZero]
+    grind
+  · have hPos : (0 : Rat) < 4 * ((Int.ofNat tri.twiceArea.natAbs : Int) : Rat) := by grind
+    exact Rat.mul_nonneg hNumRat (Rat.le_of_lt (Rat.inv_pos.2 hPos))
+
+theorem evalTrianglesCoEnergyQAux_nonneg
+    (tris : List FemmTriangle2D) (vertexMap : Nat → Nat × Nat × Nat)
+    (nodalPotentials : Nat → Int) (idx : Nat)
+    (hNu : ∀ tri ∈ tris, 0 ≤ tri.nuScaled) :
+    (0 : Rat) ≤ evalTrianglesCoEnergyQAux tris vertexMap nodalPotentials idx := by
+  induction tris generalizing idx with
+  | nil =>
+    dsimp only [evalTrianglesCoEnergyQAux]
+    decide
+  | cons tri rest ih =>
+    dsimp only [evalTrianglesCoEnergyQAux]
+    have hTri := evalElementMagneticEnergyQ_nonneg tri
+      (nodalPotentials (vertexMap idx).1)
+      (nodalPotentials (vertexMap idx).2.1)
+      (nodalPotentials (vertexMap idx).2.2)
+      (hNu tri (List.mem_cons_self ..))
+    have hRest := ih (idx + 1) (fun t ht => hNu t (List.mem_cons_of_mem tri ht))
+    exact Rat.add_nonneg hTri hRest
+
+/-- **Global Area-Normalized Mesh Co-Energy Non-Negativity (`evalMeshTotalCoEnergyQ_nonneg`)**:
+Across ANY non-uniform 2D mesh `mesh : FemmMesh2D` with `0 ≤ tri.nuScaled`, the `/ \Delta_e`-normalized
+total magnetic energy `evalMeshTotalCoEnergyQ mesh` is non-negative! -/
+theorem evalMeshTotalCoEnergyQ_nonneg
+    (mesh : FemmMesh2D)
+    (hNu : ∀ tri ∈ mesh.triangles, 0 ≤ tri.nuScaled) :
+    (0 : Rat) ≤ evalMeshTotalCoEnergyQ mesh :=
+  evalTrianglesCoEnergyQAux_nonneg mesh.triangles mesh.vertexMap mesh.nodalPotentials 0 hNu
+
+theorem evalTrianglesCoEnergyQAux_gauge_invariant
+    (tris : List FemmTriangle2D) (vertexMap : Nat → Nat × Nat × Nat)
+    (nodalPotentials : Nat → Int) (c : Int) (idx : Nat) :
+    evalTrianglesCoEnergyQAux tris vertexMap (fun n => nodalPotentials n + c) idx =
+      evalTrianglesCoEnergyQAux tris vertexMap nodalPotentials idx := by
+  induction tris generalizing idx with
+  | nil => rfl
+  | cons tri rest ih =>
+    dsimp only [evalTrianglesCoEnergyQAux, evalElementMagneticEnergyQ]
+    rw [femm_energy_gauge_invariance tri
+          (nodalPotentials (vertexMap idx).1)
+          (nodalPotentials (vertexMap idx).2.1)
+          (nodalPotentials (vertexMap idx).2.2) c,
+        ih (idx + 1)]
+
+/-- **Global Area-Normalized Mesh Co-Energy Gauge Invariance (`evalMeshTotalCoEnergyQ_gauge_invariant`)**. -/
+theorem evalMeshTotalCoEnergyQ_gauge_invariant
+    (mesh : FemmMesh2D) (c : Int) :
+    evalMeshTotalCoEnergyQ { mesh with nodalPotentials := fun n => mesh.nodalPotentials n + c } =
+      evalMeshTotalCoEnergyQ mesh :=
+  evalTrianglesCoEnergyQAux_gauge_invariant mesh.triangles mesh.vertexMap mesh.nodalPotentials c 0
+
+/-! ### Fixed-Point Area-Normalized Mesh Assembly (`evalElementResidual`, `evalMeshNodalResidual`, `evalMeshTotalCoEnergy`) -/
+
+/-- Fixed-point `/ \Delta_e`-normalized 3-node Galerkin residual (in micro-units, `femScale = 1_000_000`):
+$$r_{e,i}^{\text{fx}} = \left\lfloor \frac{10^6 \cdot y_{e,i}}{2 \cdot \text{areaDenom}} \right\rfloor
+  - \left\lfloor \frac{10^6 \cdot J_z \cdot \text{absTwiceArea}}{6} \right\rfloor.$$ -/
 def evalElementResidual
     (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) : Int × Int × Int :=
   let a0 := nodalPotentials v0
   let a1 := nodalPotentials v1
   let a2 := nodalPotentials v2
   let (y0, y1, y2) := evalMatrixFreeElementAction tri a0 a1 a2
-  let jLoad := tri.jzScaled * (tri.twiceArea * tri.twiceArea)
-  (3 * y0 - jLoad, 3 * y1 - jLoad, 3 * y2 - jLoad)
+  let denom := 2 * tri.areaDenom
+  let jLoad := (1000000 * tri.jzScaled * tri.absTwiceArea) / 6
+  ( (1000000 * y0) / denom - jLoad
+  , (1000000 * y1) / denom - jLoad
+  , (1000000 * y2) / denom - jLoad )
 
-/-- Gauge invariance of `evalElementResidual`: adding a uniform scalar potential shift $c \in \mathbb{Z}$
-to `nodalPotentials` leaves all three nodal residuals strictly unchanged. -/
 theorem evalElementResidual_gauge_invariant
     (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) (c : Int) :
     evalElementResidual tri v0 v1 v2 (fun n => nodalPotentials n + c) =
@@ -646,52 +660,16 @@ theorem evalElementResidual_gauge_invariant
   unfold evalLibCeedElementOp at hOp
   rw [hOp]
 
-/-- Total nodal load of an element (`evalElementResidual_ampere_sum`): the three scaled residuals sum
-to $-3\,J_z\,(2\Delta)^2 = -12\Delta\,(J_z\Delta)$, i.e. the nodal loads sum to the element current
-$J_z\Delta$ and the stiffness part sums to zero, for every nodal potential distribution. -/
-theorem evalElementResidual_ampere_sum
-    (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) :
-    let (r0, r1, r2) := evalElementResidual tri v0 v1 v2 nodalPotentials
-    r0 + r1 + r2 = -3 * (tri.jzScaled * (tri.twiceArea * tri.twiceArea)) := by
-  dsimp only [evalElementResidual]
-  have hZero := femm_matrix_free_nodal_sum_zero
-    tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
-  dsimp only [evalMatrixFreeElementAction] at hZero ⊢
-  omega
-
-/-- Evaluates the element magnetostatic magnetic co-energy functional
-$\nu_e \|\nabla A_z\|_e^2$ for triangle `tri` at global vertices `(v0, v1, v2)`. -/
 def evalElementCoEnergy
     (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) : Int :=
-  evalElementMagneticEnergyScaled tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
+  evalElementMagneticEnergyAreaScaled 1000000 tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
 
-/-- **Galerkin virtual-work identity (`evalElementResidual_virtual_work_identity`)**, scaled by $12\Delta$:
-$a^\top (12\Delta\, r) = 3\,\nu(2\Delta)^2\|\nabla A_z\|^2 - (a_0 + a_1 + a_2)\,J_z\,(2\Delta)^2$, i.e.
-$a^\top r = 2W_e - (a_0 + a_1 + a_2) J_z \Delta / 3$ after dividing by $12\Delta$. -/
-theorem evalElementResidual_virtual_work_identity
-    (tri : FemmTriangle2D) (v0 v1 v2 : Nat) (nodalPotentials : Nat → Int) :
-    let a0 := nodalPotentials v0
-    let a1 := nodalPotentials v1
-    let a2 := nodalPotentials v2
-    let (r0, r1, r2) := evalElementResidual tri v0 v1 v2 nodalPotentials
-    a0 * r0 + a1 * r1 + a2 * r2 =
-      3 * evalElementCoEnergy tri v0 v1 v2 nodalPotentials -
-      (a0 + a1 + a2) * (tri.jzScaled * (tri.twiceArea * tri.twiceArea)) := by
-  dsimp only [evalElementResidual, evalElementCoEnergy]
-  have hEn := femm_matrix_free_energy_identity
-    tri (nodalPotentials v0) (nodalPotentials v1) (nodalPotentials v2)
-  dsimp only [evalMatrixFreeElementAction] at hEn ⊢
-  rw [← hEn]
-  grind
-
-/-- Scatters the 3-node element residual `(r0, r1, r2)` of element `(v0, v1, v2)` onto global vertex `nodeIdx`. -/
 def scatterElementResidualToNode
     (v0 v1 v2 : Nat) (r : Int × Int × Int) (nodeIdx : Nat) : Int :=
   (if v0 == nodeIdx then r.1 else 0) +
   (if v1 == nodeIdx then r.2.1 else 0) +
   (if v2 == nodeIdx then r.2.2 else 0)
 
-/-- Helper assembling the global nodal residual at `nodeIdx` across `tris` starting at element index `idx`. -/
 def evalMeshNodalResidualAux
     (tris : List FemmTriangle2D) (vertexMap : Nat → Nat × Nat × Nat)
     (nodalPotentials : Nat → Int) (nodeIdx idx : Nat) : Int :=
@@ -703,7 +681,6 @@ def evalMeshNodalResidualAux
     scatterElementResidualToNode v.1 v.2.1 v.2.2 r nodeIdx +
     evalMeshNodalResidualAux rest vertexMap nodalPotentials nodeIdx (idx + 1)
 
-/-- Assembles the global nodal magnetostatic residual at vertex `nodeIdx : Nat` across `mesh : FemmMesh2D`. -/
 def evalMeshNodalResidual (mesh : FemmMesh2D) (nodeIdx : Nat) : Int :=
   evalMeshNodalResidualAux mesh.triangles mesh.vertexMap mesh.nodalPotentials nodeIdx 0
 
@@ -719,16 +696,12 @@ theorem evalMeshNodalResidualAux_gauge_invariant
     rw [evalElementResidual_gauge_invariant tri (vertexMap idx).1 (vertexMap idx).2.1 (vertexMap idx).2.2 nodalPotentials c,
         ih (idx + 1)]
 
-/-- **Global `FemmMesh2D` Nodal Residual Gauge Invariance (`evalMeshNodalResidual_gauge_invariant`)**:
-Adding a uniform scalar potential shift $c \in \mathbb{Z}$ to `mesh.nodalPotentials` leaves the assembled
-global nodal residual `evalMeshNodalResidual` invariant at every vertex `nodeIdx : Nat`. -/
 theorem evalMeshNodalResidual_gauge_invariant
     (mesh : FemmMesh2D) (c : Int) (nodeIdx : Nat) :
     evalMeshNodalResidual { mesh with nodalPotentials := fun n => mesh.nodalPotentials n + c } nodeIdx =
       evalMeshNodalResidual mesh nodeIdx :=
   evalMeshNodalResidualAux_gauge_invariant mesh.triangles mesh.vertexMap mesh.nodalPotentials c nodeIdx 0
 
-/-- Helper assembling total magnetic co-energy over a list of triangles starting at element index `idx`. -/
 def evalTrianglesCoEnergyAux
     (tris : List FemmTriangle2D) (vertexMap : Nat → Nat × Nat × Nat)
     (nodalPotentials : Nat → Int) (idx : Nat) : Int :=
@@ -739,9 +712,6 @@ def evalTrianglesCoEnergyAux
     evalElementCoEnergy tri v.1 v.2.1 v.2.2 nodalPotentials +
     evalTrianglesCoEnergyAux rest vertexMap nodalPotentials (idx + 1)
 
-/-- $\sum_e 8\Delta_e W_e$ over `mesh : FemmMesh2D` (each element's energy weighted by its own area;
-see `evalElementMagneticEnergyScaled`). Non-negative and gauge invariant; not the total energy unless
-the mesh is uniform. -/
 def evalMeshTotalCoEnergy (mesh : FemmMesh2D) : Int :=
   evalTrianglesCoEnergyAux mesh.triangles mesh.vertexMap mesh.nodalPotentials 0
 
@@ -754,16 +724,20 @@ theorem evalTrianglesCoEnergyAux_nonneg
   | nil =>
     simp [evalTrianglesCoEnergyAux]
   | cons tri rest ih =>
-    dsimp only [evalTrianglesCoEnergyAux]
-    have hTri : 0 ≤ evalElementCoEnergy tri (vertexMap idx).1 (vertexMap idx).2.1 (vertexMap idx).2.2 nodalPotentials :=
-      femm_element_energy_nonneg tri _ _ _ (hNu tri (List.mem_cons_self ..))
+    dsimp only [evalTrianglesCoEnergyAux, evalElementCoEnergy]
+    have hTri : 0 ≤ evalElementMagneticEnergyAreaScaled 1000000 tri
+        (nodalPotentials (vertexMap idx).1)
+        (nodalPotentials (vertexMap idx).2.1)
+        (nodalPotentials (vertexMap idx).2.2) :=
+      femm_element_energy_areaScaled_nonneg 1000000 tri
+        (nodalPotentials (vertexMap idx).1)
+        (nodalPotentials (vertexMap idx).2.1)
+        (nodalPotentials (vertexMap idx).2.2)
+        (by omega) (hNu tri (List.mem_cons_self ..))
     have hRest : 0 ≤ evalTrianglesCoEnergyAux rest vertexMap nodalPotentials (idx + 1) :=
       ih (idx + 1) (fun t ht => hNu t (List.mem_cons_of_mem tri ht))
     exact Int.add_nonneg hTri hRest
 
-/-- **Global Mesh Co-Energy Non-Negativity (`evalMeshTotalCoEnergy_nonneg`)**:
-For any `mesh : FemmMesh2D` whose elements have non-negative magnetic reluctivity (`0 ≤ tri.nuScaled`),
-the assembled global co-energy `evalMeshTotalCoEnergy mesh` is non-negative (`0 ≤ evalMeshTotalCoEnergy mesh`). -/
 theorem evalMeshTotalCoEnergy_nonneg
     (mesh : FemmMesh2D)
     (hNu : ∀ tri ∈ mesh.triangles, 0 ≤ tri.nuScaled) :
@@ -778,144 +752,97 @@ theorem evalTrianglesCoEnergyAux_gauge_invariant
   induction tris generalizing idx with
   | nil => rfl
   | cons tri rest ih =>
-    dsimp only [evalTrianglesCoEnergyAux, evalElementCoEnergy]
+    dsimp only [evalTrianglesCoEnergyAux, evalElementCoEnergy, evalElementMagneticEnergyAreaScaled]
     rw [femm_energy_gauge_invariance tri
           (nodalPotentials (vertexMap idx).1)
           (nodalPotentials (vertexMap idx).2.1)
           (nodalPotentials (vertexMap idx).2.2) c,
         ih (idx + 1)]
 
-/-- **Global Mesh Co-Energy Gauge Invariance (`evalMeshTotalCoEnergy_gauge_invariant`)**:
-Shifting all nodal vector potentials by a constant gauge offset $c \in \mathbb{Z}$ leaves
-`evalMeshTotalCoEnergy` strictly invariant. -/
 theorem evalMeshTotalCoEnergy_gauge_invariant
     (mesh : FemmMesh2D) (c : Int) :
     evalMeshTotalCoEnergy { mesh with nodalPotentials := fun n => mesh.nodalPotentials n + c } =
       evalMeshTotalCoEnergy mesh :=
   evalTrianglesCoEnergyAux_gauge_invariant mesh.triangles mesh.vertexMap mesh.nodalPotentials c 0
 
-/-! ## 10. Maxwell Stress Tensor Air-Gap Tangential Force & Torque (`evalMaxwellStressTorqueScaled`) -/
+/-! ## 5. Damped Picard Nonlinear B-H Chord/Secant Fixed-Point Iteration (`stepBhPicardReluctivity`) -/
 
-/-- Evaluates the scaled Maxwell Stress Tensor (`MST`) air-gap electromagnetic torque:
-$$T_{\text{MST,scaled}} = r_{\text{gap}}^2 \cdot L_{\text{stk}} \cdot \sum_{k} \Delta\theta_k \, B_{r,k} \, B_{\theta,k}$$
-for air-gap radius `rGapMm`, active axial stack length `lStackMm`, and circumferential
-air-gap quadrature samples `samples : List AirGapHarmonicSample`. -/
-def evalMaxwellStressTorqueScaled
-    (rGapMm lStackMm : Int) (samples : List AirGapHarmonicSample) : Int :=
-  (rGapMm * rGapMm * lStackMm) * evalMaxwellStressTorque samples
+/-- Evaluates nonlinear ferromagnetic chord/secant reluctivity $\nu_{\text{sec}}(B^2) = \nu_0 + k_{\text{sat}} B^2$. -/
+def evalNonlinearReluctivity (nuLinear kSat bSq : Int) : Int :=
+  nuLinear + kSat * bSq
 
-/-- Swaps radial and tangential magnetic flux density components $(B_{r,k}, B_{\theta,k}) \mapsto (B_{\theta,k}, B_{r,k})$
-at each quadrature sample along the air-gap contour, reflecting the symmetry of the Maxwell shear
-stress tensor $\sigma_{r\theta} = \frac{1}{\mu_0} B_r B_\theta = \sigma_{\theta r}$. -/
-def swapAirGapBrBtheta : List AirGapHarmonicSample → List AirGapHarmonicSample
-  | [] => []
-  | s :: rest =>
-    { bRadialMt     := s.bTangentialMt
-      bTangentialMt := s.bRadialMt
-      arcWeight     := s.arcWeight } :: swapAirGapBrBtheta rest
+/-- **Damped Picard Fixed-Point Update (`stepBhPicardReluctivity`)**:
+Given relaxation factor `omegaPermille ∈ [0, 1000]` ($\omega = \text{omegaPermille}/1000 \in [0, 1]$),
+computes the convex-combination fixed-point update toward $\nu_{\text{sec}}(B^2) = \nu_0 + k_{\text{sat}} B^2$:
+$$\nu_{k+1} = \left\lfloor \frac{(1000 - \omega_{\text{pm}}) \cdot \nu_k + \omega_{\text{pm}} \cdot \nu_{\text{sec}}(B^2)}{1000} \right\rfloor.$$
+Unlike an unnormalized running sum, `stepBhPicardReluctivity` has the genuine fixed point
+$\nu^* = \nu_{\text{sec}}(B^2)$ for every relaxation weight $\omega_{\text{pm}} \in \mathbb{Z}$! -/
+def stepBhPicardReluctivity (nuLinear kSat omegaPermille nuCur bSq : Int) : Int :=
+  ((1000 - omegaPermille) * nuCur + omegaPermille * evalNonlinearReluctivity nuLinear kSat bSq) / 1000
 
-theorem evalMaxwellStressTorque_swap (samples : List AirGapHarmonicSample) :
-    evalMaxwellStressTorque (swapAirGapBrBtheta samples) = evalMaxwellStressTorque samples := by
-  induction samples with
-  | nil => rfl
-  | cons s rest ih =>
-    dsimp only [swapAirGapBrBtheta, evalMaxwellStressTorque, evalSampleMaxwellShear]
-    rw [ih]
-    grind
+/-- **Exact Fixed-Point Stationarity Theorem (`stepBhPicardReluctivity_fixed_point`)**:
+Whenever `nuCur = evalNonlinearReluctivity nuLinear kSat bSq`, `stepBhPicardReluctivity` preserves
+`nuCur` identically for EVERY relaxation factor `omegaPermille : Int`! -/
+theorem stepBhPicardReluctivity_fixed_point
+    (nuLinear kSat omegaPermille nuCur bSq : Int)
+    (hFix : nuCur = evalNonlinearReluctivity nuLinear kSat bSq) :
+    stepBhPicardReluctivity nuLinear kSat omegaPermille nuCur bSq = nuCur := by
+  unfold stepBhPicardReluctivity
+  rw [← hFix]
+  have hComb : (1000 - omegaPermille) * nuCur + omegaPermille * nuCur = nuCur * 1000 := by
+    have : (1000 - omegaPermille + omegaPermille) * nuCur = 1000 * nuCur := by
+      have h1000 : 1000 - omegaPermille + omegaPermille = 1000 := by omega
+      rw [h1000]
+    rw [Int.add_mul] at this
+    rw [this, Int.mul_comm]
+  rw [hComb]
+  exact Int.mul_ediv_cancel nuCur (by decide)
 
-theorem evalMaxwellStressTorque_append (s1 s2 : List AirGapHarmonicSample) :
-    evalMaxwellStressTorque (s1 ++ s2) =
-      evalMaxwellStressTorque s1 + evalMaxwellStressTorque s2 := by
-  induction s1 with
-  | nil =>
-    dsimp only [List.nil_append, evalMaxwellStressTorque]
-    omega
-  | cons s rest ih =>
-    dsimp only [List.cons_append, evalMaxwellStressTorque]
-    rw [ih]
-    omega
-
-/-- **Maxwell Stress Tensor Quadrature Symmetry & Sector Additivity (`maxwell_stress_quadrature_symmetry`)**:
-For any air-gap radius `rGapMm`, stack length `lStackMm`, and circumferential quadrature contours `samples`, `s1`, `s2`:
-1. Swapping radial and tangential flux density components $(B_r, B_\theta) \leftrightarrow (B_\theta, B_r)$
-   preserves `evalMaxwellStressTorqueScaled` identically ($\sigma_{r\theta} = \sigma_{\theta r}$),
-2. Concatenating circumferential pole/slot quadrature sectors `s1 ++ s2` adds their torques linearly, and
-3. Reflecting the radial coordinate `rGapMm ↦ -rGapMm` preserves `evalMaxwellStressTorqueScaled`. -/
-theorem maxwell_stress_quadrature_symmetry
-    (rGapMm lStackMm : Int) (samples s1 s2 : List AirGapHarmonicSample) :
-    evalMaxwellStressTorqueScaled rGapMm lStackMm (swapAirGapBrBtheta samples) =
-      evalMaxwellStressTorqueScaled rGapMm lStackMm samples ∧
-    evalMaxwellStressTorqueScaled rGapMm lStackMm (s1 ++ s2) =
-      evalMaxwellStressTorqueScaled rGapMm lStackMm s1 +
-      evalMaxwellStressTorqueScaled rGapMm lStackMm s2 ∧
-    evalMaxwellStressTorqueScaled (-rGapMm) lStackMm samples =
-      evalMaxwellStressTorqueScaled rGapMm lStackMm samples := by
-  refine ⟨?_, ?_, ?_⟩
-  · unfold evalMaxwellStressTorqueScaled
-    rw [evalMaxwellStressTorque_swap]
-  · unfold evalMaxwellStressTorqueScaled
-    rw [evalMaxwellStressTorque_append, Int.mul_add]
-  · unfold evalMaxwellStressTorqueScaled
-    have hR : (-rGapMm) * (-rGapMm) = rGapMm * rGapMm := by grind
-    rw [hR]
-
-/-- **Maxwell Stress Tensor Agreement with $dq$ Permanent-Magnet & Reluctance Torque
-(`maxwell_stress_agrees_with_dq0_pm_torque`)** — by construction: the air-gap samples are built from the
-$dq$ quantities (`bRadialMt := ψ_µWb + (L_d − L_q) i_d`, `bTangentialMt := i_q`, weight `3p`), so this is a
-renaming identity in twice-µN·m, not a field computation.
-1. Under the linkage law $\psi_{\text{PM,µWb}} = r_{\text{gap}}^2 L_{\text{stk}} B_{r,\text{PM}} \Delta\theta$, one sample
-   with weight $3p\,\Delta\theta$ reproduces the alignment torque `evalIpmTorqueTwiceMicroNm m 0 iqAmp`.
-2. With radial "field" $\psi_{\text{µWb}} + (L_d - L_q) i_d$ and tangential $i_q$, weight $3p$, it reproduces
-   `evalIpmTorqueTwiceMicroNm m idAmp iqAmp`. -/
-theorem maxwell_stress_agrees_with_dq0_pm_torque
-    (m : IpmMotorSpec) (rGapMm lStackMm bRadialPm dTheta idAmp iqAmp : Int)
-    (hPsi : m.psiPmMilliWb * 1000 = rGapMm * rGapMm * lStackMm * bRadialPm * dTheta) :
-    evalMaxwellStressTorqueScaled rGapMm lStackMm
-      [{ bRadialMt := bRadialPm, bTangentialMt := iqAmp, arcWeight := 3 * m.polePairs * dTheta }] =
-      evalIpmTorqueTwiceMicroNm m 0 iqAmp ∧
-    evalMaxwellStressTorqueScaled 1 1
-      [{ bRadialMt     := m.psiPmMilliWb * 1000 + (m.ldMicroH - m.lqMicroH) * idAmp
-         bTangentialMt := iqAmp
-         arcWeight     := 3 * m.polePairs }] =
-      evalIpmTorqueTwiceMicroNm m idAmp iqAmp := by
-  dsimp only [evalMaxwellStressTorqueScaled, evalMaxwellStressTorque,
-              evalSampleMaxwellShear, evalIpmTorqueTwiceMicroNm]
-  refine ⟨?_, by grind⟩
-  have hkey : rGapMm * rGapMm * lStackMm * bRadialPm * dTheta * iqAmp = m.psiPmMilliWb * 1000 * iqAmp := by
-    rw [hPsi]
-  grind
-
-/-! ## 11. Nonlinear B-H Chord/Secant Fixed-Point Step (`stepBhSecantReluctivity`) -/
-
-/-- $\nu_{\text{cur}} + (\nu_0 + k_{\text{sat}} B^2)$: the running sum of secant reluctivities. This is
-**not** a Picard or secant fixed-point step (it has no fixed point for $\nu_0 > 0$); it was named one
-until 2026-11-04. A damped Picard update would be $\nu_{\text{cur}} + \omega(\nu_{\text{sec}} - \nu_{\text{cur}})$. -/
-def accumulateBhSecantReluctivity (nuLinear kSat nuCur bSq : Int) : Int :=
-  nuCur + evalNonlinearReluctivity nuLinear kSat bSq
-
-/-- Positivity, lower bound and monotonicity of the secant-reluctivity sum
-(`bhSecantAccumulate_positive_and_monotone`): for `0 < nuLinear`, `0 ≤ kSat`,
-`0 ≤ nuCur1 ≤ nuCur2`, `0 ≤ bSq1 ≤ bSq2`, the sum is positive, at least `nuCur1 + nuLinear`, and
-monotone in both arguments. (It says nothing about convergence of a B-H iteration; see
-`accumulateBhSecantReluctivity`.) -/
-theorem bhSecantAccumulate_positive_and_monotone
-    (nuLinear kSat nuCur1 nuCur2 bSq1 bSq2 : Int)
-    (hNu0 : 0 < nuLinear)
-    (hSat : 0 ≤ kSat)
-    (hCurPos : 0 ≤ nuCur1)
-    (hCurLe  : nuCur1 ≤ nuCur2)
-    (hBPos   : 0 ≤ bSq1)
-    (hBLe    : bSq1 ≤ bSq2) :
-    0 < accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
-    nuCur1 + nuLinear ≤ accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ∧
-    accumulateBhSecantReluctivity nuLinear kSat nuCur1 bSq1 ≤
-      accumulateBhSecantReluctivity nuLinear kSat nuCur2 bSq2 := by
-  unfold accumulateBhSecantReluctivity evalNonlinearReluctivity
-  have hSatB1 : 0 ≤ kSat * bSq1 := int_mul_nonneg kSat bSq1 hSat hBPos
+/-- **Convex Bracketing & Monotonicity of Damped Picard Reluctivity (`stepBhPicardReluctivity_monotone`)**:
+For any under-relaxation weight `0 ≤ omegaPermille ≤ 1000`, `0 ≤ kSat`, `nuCur1 ≤ nuCur2`, and `bSq1 ≤ bSq2`:
+1. `stepBhPicardReluctivity` is monotone in both the current iterate `nuCur` and squared flux density `bSq`,
+2. When `0 < nuLinear`, `0 ≤ bSq1`, and `nuLinear ≤ nuCur1`, the updated reluctivity stays strictly positive
+   and bounded below by `nuLinear`! -/
+theorem stepBhPicardReluctivity_monotone
+    (nuLinear kSat omegaPermille nuCur1 nuCur2 bSq1 bSq2 : Int)
+    (hOmegaLo : 0 ≤ omegaPermille)
+    (hOmegaHi : omegaPermille ≤ 1000)
+    (hSat     : 0 ≤ kSat)
+    (hCurLe   : nuCur1 ≤ nuCur2)
+    (hBLe     : bSq1 ≤ bSq2) :
+    stepBhPicardReluctivity nuLinear kSat omegaPermille nuCur1 bSq1 ≤
+      stepBhPicardReluctivity nuLinear kSat omegaPermille nuCur2 bSq2 ∧
+    (0 < nuLinear → 0 ≤ bSq1 → nuLinear ≤ nuCur1 →
+      nuLinear ≤ stepBhPicardReluctivity nuLinear kSat omegaPermille nuCur1 bSq1) := by
+  unfold stepBhPicardReluctivity evalNonlinearReluctivity
+  have h1mOmega : 0 ≤ 1000 - omegaPermille := by omega
+  have hTermCur : (1000 - omegaPermille) * nuCur1 ≤ (1000 - omegaPermille) * nuCur2 :=
+    int_mul_le_mul_of_nonneg_left nuCur1 nuCur2 (1000 - omegaPermille) hCurLe h1mOmega
   have hSatMono : kSat * bSq1 ≤ kSat * bSq2 :=
     int_mul_le_mul_of_nonneg_left bSq1 bSq2 kSat hBLe hSat
-  refine ⟨by omega, by omega, by omega⟩
+  have hSecMono : nuLinear + kSat * bSq1 ≤ nuLinear + kSat * bSq2 := by omega
+  have hTermSec : omegaPermille * (nuLinear + kSat * bSq1) ≤ omegaPermille * (nuLinear + kSat * bSq2) :=
+    int_mul_le_mul_of_nonneg_left _ _ omegaPermille hSecMono hOmegaLo
+  constructor
+  · exact Int.ediv_le_ediv (by omega) (by omega)
+  · intro _ hBPos hNuLeCur
+    have hSatPos : 0 ≤ kSat * bSq1 := int_mul_nonneg kSat bSq1 hSat hBPos
+    have hNuLeSec : nuLinear ≤ nuLinear + kSat * bSq1 := by omega
+    have hLow1 : (1000 - omegaPermille) * nuLinear ≤ (1000 - omegaPermille) * nuCur1 :=
+      int_mul_le_mul_of_nonneg_left nuLinear nuCur1 (1000 - omegaPermille) hNuLeCur h1mOmega
+    have hLow2 : omegaPermille * nuLinear ≤ omegaPermille * (nuLinear + kSat * bSq1) :=
+      int_mul_le_mul_of_nonneg_left nuLinear (nuLinear + kSat * bSq1) omegaPermille hNuLeSec hOmegaLo
+    have hComb : (1000 - omegaPermille) * nuLinear + omegaPermille * nuLinear = nuLinear * 1000 := by
+      have : (1000 - omegaPermille + omegaPermille) * nuLinear = 1000 * nuLinear := by
+        have h1000 : 1000 - omegaPermille + omegaPermille = 1000 := by omega
+        rw [h1000]
+      rw [Int.add_mul] at this
+      rw [this, Int.mul_comm]
+    have hNumGe : nuLinear * 1000 ≤ (1000 - omegaPermille) * nuCur1 + omegaPermille * (nuLinear + kSat * bSq1) := by
+      omega
+    have hDiv := Int.ediv_le_ediv (c := 1000) (by omega) hNumGe
+    rw [Int.mul_ediv_cancel nuLinear (by decide)] at hDiv
+    exact hDiv
 
 end Obend.Hardware.Magnetics
 end
-

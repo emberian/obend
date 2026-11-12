@@ -32,12 +32,16 @@ mathematics in the Lean 4 kernel:
      SiGe / GaAs Low-Noise Amplifier while refusing a potentially oscillating negative-resistance stage
      (`golden2mHamLna_stable_and_unstable_refused`).
 -/
-public import Obend.Hardware.RF
 @[expose] public section
 
 namespace Obend.Hardware.DSP
 
-open Obend.Hardware.RF
+private theorem int_sq_nonneg (a : Int) : 0 ≤ a * a := by
+  rcases Int.le_total 0 a with h | h
+  · exact Int.mul_nonneg h h
+  · have hNeg : 0 ≤ -a := by omega
+    have hProd := Int.mul_nonneg hNeg hNeg
+    grind
 
 /-! ## 1. Iterative CORDIC Vector/Rotation Engine & Numerically Controlled Oscillator (NCO) -/
 
@@ -532,8 +536,8 @@ Universally for any antenna element IQ signal `s : IqPhasor`, the phase-matched 
 theorem iq_matched_filter_inphase_nonneg (s : IqPhasor) :
     0 ≤ (iqConjMul s s).i := by
   dsimp only [iqConjMul]
-  have hI := Obend.Hardware.Thermal.int_sq_nonneg s.i
-  have hQ := Obend.Hardware.Thermal.int_sq_nonneg s.q
+  have hI := int_sq_nonneg s.i
+  have hQ := int_sq_nonneg s.q
   omega
 
 /-- Theorem (`ula_4elem_matched_beamformer_coherent`):
@@ -548,12 +552,10 @@ theorem ula_4elem_matched_beamformer_coherent (s : IqPhasor) :
   dsimp only [evalUlaIqBeamformer, iqConjMul]
   have hq : s.q * s.i - s.i * s.q = 0 := by
     rw [Int.mul_comm s.q s.i, Int.sub_self]
-  have hI := Obend.Hardware.Thermal.int_sq_nonneg s.i
-  have hQ := Obend.Hardware.Thermal.int_sq_nonneg s.q
+  have hI := int_sq_nonneg s.i
+  have hQ := int_sq_nonneg s.q
   rw [hq]
   refine ⟨by omega, by omega, by omega⟩
-
-/-! ## 7. Connected SDR Digital Downconverter (DDC) Datapath (`SdrDdcChainSpec`, `evalSdrDdcSample`, `checkSdrDdcSignoff`) -/
 
 /-- Alias for `evalCicRequiredWidthBits` matching Hogenauer's required accumulator bit width. -/
 abbrev cicRequiredBitWidth (cic : CicFilterSpec) : Nat :=
@@ -562,163 +564,6 @@ abbrev cicRequiredBitWidth (cic : CicFilterSpec) : Nat :=
 /-- Alias for `evalFoldedSymmetricFirTapPair` evaluating a folded symmetric linear-phase FIR tap pair. -/
 abbrev evalSymmetricFirTapPair (coeff xEarly xLate : Int) : Int :=
   evalFoldedSymmetricFirTapPair coeff xEarly xLate
-
-/-- Connected Software-Defined Radio (SDR) Digital Downconverter (DDC) datapath specification chaining:
-1. `NcoAccum` phase accumulator (`stepNco`),
-2. 2-stage CORDIC local oscillator (`stepCordicStage0` + `stepCordicStage1`),
-3. `RF.lean` Tayloe quadrature $I/Q$ image-rejecting mixer (`evalQuadratureImagePhaseCancel`),
-4. Hogenauer `CicFilterSpec` decimator with verified overflow-free accumulator bit-width (`cicRequiredBitWidth`),
-5. Folded symmetric linear-phase FIR compensating filter (`evalSymmetricFirTapPair`). -/
-structure SdrDdcChainSpec where
-  ddcName          : String
-  nco              : NcoAccum
-  loInitVec        : CordicVec
-  cordicDir0       : Bool
-  cordicDir1       : Bool
-  iqGainI          : Int
-  iqGainQ          : Int
-  iqPhaseErr       : Int
-  cic              : CicFilterSpec
-  cicAllocatedBits : Nat
-  firTapCoeff      : Int
-  deriving DecidableEq, Repr
-
-/-- Evaluate one sample through the connected SDR Digital Downconverter (DDC) datapath:
-1. Synthesizes the 2-stage CORDIC LO vector `loVec = stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1`,
-2. Demodulates the desired sideband `evalQuadratureDesiredSideband` minus any residual image
-   `evalQuadratureImagePhaseCancel`,
-3. Filters the decimated baseband sample pair `(cicDecimated, delayedSample)` via the folded symmetric
-   linear-phase FIR tap pair `evalSymmetricFirTapPair`. -/
-def evalSdrDdcSample (spec : SdrDdcChainSpec) (rfSigAmp delayedSample : Int) : Int :=
-  let loVec := stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1
-  let desiredBb := evalQuadratureDesiredSideband spec.iqGainI spec.iqGainQ (rfSigAmp * loVec.x)
-  let imageResidual := evalQuadratureImagePhaseCancel spec.iqGainI spec.iqGainQ spec.iqPhaseErr rfSigAmp
-  let cicDecimated := desiredBb - imageResidual
-  evalSymmetricFirTapPair spec.firTapCoeff cicDecimated delayedSample
-
-/-- Complete signoff checker for the connected SDR Digital Downconverter (`SdrDdcChainSpec`):
-1. Positive NCO phase modulus (`0 < spec.nco.phaseModulus`),
-2. Non-zero CORDIC LO seed vector (`0 < evalCordicNormSq spec.loInitVec`),
-3. Strictly positive, matched Tayloe quadrature $I/Q$ conversion gain (`0 < spec.iqGainI` and `spec.iqGainI == spec.iqGainQ`) and zero phase skew (`spec.iqPhaseErr == 0`),
-4. Hogenauer CIC decimator accumulator bit-width prevents 2's-complement wrap-around (`checkCicOverflowFree`). -/
-def checkSdrDdcSignoff (spec : SdrDdcChainSpec) : Bool :=
-  decide (0 < spec.nco.phaseModulus) &&
-  decide (0 < evalCordicNormSq spec.loInitVec) &&
-  decide (0 < spec.iqGainI) &&
-  (spec.iqGainI == spec.iqGainQ) &&
-  (spec.iqPhaseErr == 0) &&
-  checkCicOverflowFree spec.cic spec.cicAllocatedBits
-
-/-- Theorem (`sdrDdcChain_signoff_sound`):
-Whenever `checkSdrDdcSignoff spec = true`, for any RF input amplitude `rfSigAmp` and FIR delay-line
-samples `xEarly, xLate`:
-1. The stepped NCO phase word stays strictly within `[0, spec.nco.phaseModulus)`,
-2. The 2-stage CORDIC local oscillator scales squared vector magnitude by exact factor `10`,
-3. The Tayloe $I/Q$ unwanted image sideband cancels identically to `0`,
-4. The CIC accumulator width `spec.cicAllocatedBits` satisfies Hogenauer's overflow-free bit-growth bound
-   `spec.cic.inputWidthBits ≤ cicRequiredBitWidth spec.cic ≤ spec.cicAllocatedBits`,
-5. The folded symmetric FIR tap multiplier matches the 2-multiplier direct form (`evalDirectFirTapPair`), and
-6. End-to-end sample evaluation `evalSdrDdcSample` equals the image-free direct FIR output! -/
-theorem sdrDdcChain_signoff_sound
-    (spec : SdrDdcChainSpec) (rfSigAmp xEarly xLate : Int)
-    (hOk : checkSdrDdcSignoff spec = true) :
-    (stepNco spec.nco).phaseWord < spec.nco.phaseModulus ∧
-    evalCordicNormSq (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1) =
-      10 * evalCordicNormSq spec.loInitVec ∧
-    evalQuadratureImagePhaseCancel spec.iqGainI spec.iqGainQ spec.iqPhaseErr rfSigAmp = 0 ∧
-    spec.cic.inputWidthBits ≤ cicRequiredBitWidth spec.cic ∧
-    cicRequiredBitWidth spec.cic ≤ spec.cicAllocatedBits ∧
-    evalSymmetricFirTapPair spec.firTapCoeff xEarly xLate =
-      evalDirectFirTapPair spec.firTapCoeff xEarly xLate ∧
-    evalSdrDdcSample spec rfSigAmp xLate =
-      evalDirectFirTapPair spec.firTapCoeff
-        (2 * spec.iqGainI * (rfSigAmp * (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1).x))
-        xLate := by
-  dsimp only [checkSdrDdcSignoff] at hOk
-  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
-  have hMod : 0 < spec.nco.phaseModulus := of_decide_eq_true hOk.1.1.1.1.1
-  have hGain : spec.iqGainI = spec.iqGainQ := LawfulBEq.eq_of_beq hOk.1.1.2
-  have hPhase : spec.iqPhaseErr = 0 := LawfulBEq.eq_of_beq hOk.1.2
-  have hCic := cic_register_width_sound spec.cic spec.cicAllocatedBits hOk.2
-  have hTayloeImg := (tayloe_iq_cancels_image_sideband spec.iqGainI spec.iqGainQ spec.iqPhaseErr rfSigAmp hGain hPhase).1
-  have hTayloeDes := (tayloe_iq_cancels_image_sideband spec.iqGainI spec.iqGainQ spec.iqPhaseErr
-    (rfSigAmp * (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1).x) hGain hPhase).2
-  refine ⟨nco_phase_in_bounds spec.nco hMod,
-          cordic_twoStage_exact_gain_10x spec.loInitVec spec.cordicDir0 spec.cordicDir1,
-          hTayloeImg,
-          hCic.1,
-          hCic.2,
-          firSymmetric_folds_multipliers spec.firTapCoeff xEarly xLate,
-          ?_⟩
-  dsimp only [evalSdrDdcSample, evalSymmetricFirTapPair]
-  rw [hTayloeImg, Int.sub_zero, hTayloeDes]
-  exact firSymmetric_folds_multipliers spec.firTapCoeff
-    (2 * spec.iqGainI * (rfSigAmp * (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1).x))
-    xLate
-
-/-- Theorem (`sdrDdcChain_positive_lo_and_gain`):
-Whenever `checkSdrDdcSignoff spec = true`, the Tayloe $I/Q$ conversion gain is strictly positive
-(`0 < spec.iqGainI`) and the 2-stage CORDIC local oscillator output vector has strictly positive
-squared Euclidean power (`0 < evalCordicNormSq (stepCordicTwoStage ...)`). -/
-theorem sdrDdcChain_positive_lo_and_gain
-    (spec : SdrDdcChainSpec)
-    (hOk : checkSdrDdcSignoff spec = true) :
-    0 < spec.iqGainI ∧
-    0 < evalCordicNormSq (stepCordicTwoStage spec.loInitVec spec.cordicDir0 spec.cordicDir1) := by
-  dsimp only [checkSdrDdcSignoff] at hOk
-  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hOk
-  have hLoPos : 0 < evalCordicNormSq spec.loInitVec := of_decide_eq_true hOk.1.1.1.1.2
-  have hGainPos : 0 < spec.iqGainI := of_decide_eq_true hOk.1.1.1.2
-  have hScale := cordic_twoStage_exact_gain_10x spec.loInitVec spec.cordicDir0 spec.cordicDir1
-  refine ⟨hGainPos, ?_⟩
-  rw [hScale]
-  omega
-
-/-- Canonical 40m FT8 SDR Digital Downconverter datapath configuration (`16-bit` NCO modulus $65536$,
-2-stage CORDIC LO seed `(100, 0)`, matched Tayloe $I/Q$ gains `500`, 4-stage $R=64$ CIC decimator
-with $38$-bit accumulator, and symmetric FIR tap coefficient `12`). -/
-def goldenSdrDdcChainSpec : SdrDdcChainSpec where
-  ddcName          := "sdr_40m_ft8_ddc_chain"
-  nco              := { phaseModulus := 65536, phaseWord := 12000, tuningWord := 7074 }
-  loInitVec        := { x := 100, y := 0 }
-  cordicDir0       := true
-  cordicDir1       := false
-  iqGainI          := 500
-  iqGainQ          := 500
-  iqPhaseErr       := 0
-  cic              := { filterName := "cic4_r64_m1", inputWidthBits := 14, numStages := 4, decimationRatio := 64, diffDelay := 1, ceilLog2Rm := 6 }
-  cicAllocatedBits := 38
-  firTapCoeff      := 12
-
-/-- Defective DDC configuration with $I/Q$ gain imbalance (`iqGainI = 500 ≠ iqGainQ = 480`). -/
-def unbalancedIqSdrDdcSpec : SdrDdcChainSpec :=
-  { goldenSdrDdcChainSpec with
-    ddcName := "sdr_ddc_iq_imbalanced"
-    iqGainQ := 480 }
-
-/-- Defective DDC configuration with zero conversion gain (`iqGainI = 0, iqGainQ = 0`). -/
-def deadMixerSdrDdcSpec : SdrDdcChainSpec :=
-  { goldenSdrDdcChainSpec with
-    ddcName := "sdr_ddc_dead_mixer"
-    iqGainI := 0
-    iqGainQ := 0 }
-
-/-- Defective DDC configuration with truncated 24-bit CIC accumulator (`24 < 38` required bits). -/
-def underAllocatedCicSdrDdcSpec : SdrDdcChainSpec :=
-  { goldenSdrDdcChainSpec with
-    ddcName          := "sdr_ddc_cic_overflow"
-    cicAllocatedBits := 24 }
-
-/-- Theorem (`sdrDdcChain_signoff_poles`):
-`checkSdrDdcSignoff` accepts `goldenSdrDdcChainSpec` and refuses `unbalancedIqSdrDdcSpec`
-($I/Q$ image leakage), `deadMixerSdrDdcSpec` (zero mixer conversion gain), and
-`underAllocatedCicSdrDdcSpec` (CIC integrator wrap-around overflow)! -/
-theorem sdrDdcChain_signoff_poles :
-    checkSdrDdcSignoff goldenSdrDdcChainSpec = true ∧
-    checkSdrDdcSignoff unbalancedIqSdrDdcSpec = false ∧
-    checkSdrDdcSignoff deadMixerSdrDdcSpec = false ∧
-    checkSdrDdcSignoff underAllocatedCicSdrDdcSpec = false :=
-  ⟨rfl, rfl, rfl, rfl⟩
 
 end Obend.Hardware.DSP
 end

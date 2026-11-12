@@ -28,7 +28,6 @@ public import Obend.Leaf.Specialize
 public import Obend.Leaf.Static
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.OpenUSD
-public import Obend.Hardware.FluidThermal
 public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.Silicon
 public import Obend.Hardware.Types

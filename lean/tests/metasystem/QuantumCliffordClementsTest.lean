@@ -227,9 +227,23 @@ def brokenSynthesizeSylvesterProjector (Q : IntMatrix) (_ : List Int) (_ : Nat) 
 
 /-! ## 3. Pillar 3 Tests: Coupler-to-Quotient Ratio Synthesis & Planar Clements 4-Mode Mesh -/
 
--- 3.1 Exact Coupler-to-Quotient Ratio Verification (`couplerRealizesQuotientRatio`, `compileEquitableToPhotonicArray_ratio_sound`)
+-- 3.1 Exact Coupler-to-Quotient Ratio Verification (`couplerRealizesQuotientRatio`, `synthesizeKrawtchoukPhotonicCouplers_realizes_ratio`)
+def testCouplerKrawtchouk375 : CouplerRatioSpec where
+  couplerName   := "dc_krawtchouk_375"
+  gapNm         := 225
+  couplingLenUm := 11
+  tSqPpm        := 625000
+  kappaSqPpm    := 375000
+
+def testCoupler360 : CouplerRatioSpec where
+  couplerName   := "dc_360"
+  gapNm         := 230
+  couplingLenUm := 10
+  tSqPpm        := 640000
+  kappaSqPpm    := 360000
+
 example : couplerRealizesQuotientRatio hypercubeQ3Quotient
-    [couplerKrawtchouk375, coupler3dB, couplerKrawtchouk375] = true := rfl
+    [testCouplerKrawtchouk375, coupler3dBRatio, testCouplerKrawtchouk375] = true := rfl
 
 example (Q : Nat → Nat → Int) (dim : Nat) (scale : Int) :
     couplerRealizesQuotientRatio Q (synthesizeKrawtchoukPhotonicCouplers Q dim scale) = true :=
@@ -237,16 +251,16 @@ example (Q : Nat → Nat → Int) (dim : Nat) (scale : Int) :
 
 -- Negative refusal poles: uniform 1:1:1 couplers and 36:50:36 couplers are strictly refused!
 example : couplerRealizesQuotientRatio hypercubeQ3Quotient
-    [coupler3dB, coupler3dB, coupler3dB] = false := rfl
+    [coupler3dBRatio, coupler3dBRatio, coupler3dBRatio] = false := rfl
 
-example : compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part
-    hypercubeQ3Quotient illegalMismatchedUniformCouplerArray = false := rfl
+example : couplerRealizesQuotientRatio hypercubeQ3Quotient
+    [testCoupler360, coupler3dBRatio, testCoupler360] = false := rfl
 
-example : compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part
-    hypercubeQ3Quotient illegalMismatched36_50_36CouplerArray = false := rfl
-
-example : compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part
-    hypercubeQ3Quotient certifiedQ3KrawtchoukPhotonicArray = true := rfl
+example :
+    checkEquitablePartition hypercubeQ3Matrix 4 hypercubeQ3Part hypercubeQ3Quotient = true ∧
+    couplerRealizesQuotientRatio hypercubeQ3Quotient
+      (synthesizeKrawtchoukPhotonicCouplers hypercubeQ3Quotient 4 125000) = true :=
+  ⟨rfl, synthesizeKrawtchoukPhotonicCouplers_realizes_ratio hypercubeQ3Quotient 4 125000⟩
 
 -- 3.2 Planar Clements 4-Mode Nearest-Neighbor Mesh (`evalPlanarClements4Mesh`, `planarClements4Mesh_conserves_optical_power`)
 -- Zero-input boundary case
@@ -271,11 +285,11 @@ example :
   decide
 
 -- `#tooth` mutation probes for Pillar 3
-def brokenCouplerRealizesQuotientRatio (_ : Nat → Nat → Int) (_ : List DirectionalCouplerSpec) : Bool :=
-  true
+def brokenSynthesizeKrawtchoukPhotonicCouplers (_ : Nat → Nat → Int) (dim : Nat) (_ : Int) : List CouplerRatioSpec :=
+  List.replicate (dim - 1) coupler3dBRatio
 
-#tooth Obend.Hardware.QuantumMatter.compileEquitableToPhotonicArray_ratio_sound
-  by mutation Obend.Hardware.QuantumMatter.couplerRealizesQuotientRatio := brokenCouplerRealizesQuotientRatio
+#tooth Obend.Hardware.QuantumMatter.synthesizeKrawtchoukPhotonicCouplers_realizes_ratio
+  by mutation Obend.Hardware.QuantumMatter.synthesizeKrawtchoukPhotonicCouplers := brokenSynthesizeKrawtchoukPhotonicCouplers
 
 def brokenEvalPlanarClements4Mesh (t1 k1 _ _ : Int) (e0 e1 e2 e3 : ComplexField) :
     ComplexField × ComplexField × ComplexField × ComplexField :=
@@ -378,7 +392,6 @@ def brokenIsEvenBladeSupported (_ : CliffordElem) : Bool :=
 #print axioms Obend.Analysis.continuous_time_taylor_propagator_intertwines_unpartitioned
 #print axioms Obend.Hardware.QuantumMatter.planarClements4Mesh_conserves_optical_power
 #print axioms Obend.Hardware.QuantumMatter.synthesizeKrawtchoukPhotonicCouplers_realizes_ratio
-#print axioms Obend.Hardware.QuantumMatter.compileEquitableToPhotonicArray_ratio_sound
 #print axioms Obend.Hardware.QuantumMatter.clifford_majorana_algebra_laws
 #print axioms Obend.Hardware.QuantumMatter.clifford_commutesWithParity_iff_even_blades
 #print axioms Obend.Hardware.QuantumMatter.clifford_commutesWithParity_zero_offblock_and_leakage

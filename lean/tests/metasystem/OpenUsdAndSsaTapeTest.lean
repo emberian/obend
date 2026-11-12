@@ -6,6 +6,7 @@ public import Obend.Hardware.OpenUSD
 public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.Codec
 public import Obend.Hardware.Judge
+import all Obend.Judge.Class
 import all Obend.Hardware.OpenUSD
 import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.Codec
@@ -50,6 +51,7 @@ open Obend.Hardware.GeometryCAM
 open Obend.Hardware.OpenUSD
 open Obend.Hardware.Codec
 open Obend.Hardware.Judge
+open Obend.Judge
 set_option autoImplicit false
 
 /-! ## 1. Pillar 1 Tests: Unified OpenUSD `SdfLayer` $\to$ `Core4` `Term.mix` / `Term.fix` & LIVERPS Dominance -/
@@ -328,20 +330,21 @@ theorem test_pnr_tape_bypass_refused :
 
 /-- 4.3 Wire-string numeric field parsers (`extractNatField` / `extractIntField`) drive real certification. -/
 theorem test_wire_numeric_field_parsers :
-    extractNatField "{\"mode\": \"golden\", \"antennaRatio\": 2400}" "antennaRatio" = some 2400 ∧
+    extractNatField "{\"mode\": \"golden\", \"costCents\": 320}" "costCents" = some 320 ∧
     extractIntField "{\"mode\": \"golden\", \"minMarginMv\": -150}" "minMarginMv" = some (-150) ∧
-    extractNatField "bendRadiusNm=2000,circumferenceUm=50" "bendRadiusNm" = some 2000 ∧
-    (let mrr :=
-       { Obend.Hardware.Photonics.goldenSoi220Microring with
-         bendRadiusNm := (extractNatField "{\"mode\": \"golden\", \"bendRadiusNm\": 2000}" "bendRadiusNm").getD
-           Obend.Hardware.Photonics.goldenSoi220Microring.bendRadiusNm }
-     checkPhotonicsPicJudge 0 15000 mrr =
-       .refused (.photonicsPicSignoffViolation Obend.Hardware.Photonics.goldenSoi220Microring.ringName) []) ∧
-    (let meander :=
-       { Obend.Hardware.PCB.goldenDdrMeander with
-         numSegments := (extractNatField "{\"mode\": \"golden\", \"numSegments\": 0}" "numSegments").getD
-           Obend.Hardware.PCB.goldenDdrMeander.numSegments }
-     checkPcbBoardJudge 0 50 meander = .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []) :=
+    extractNatField "cell1TileY=0,sinkCapFf=5" "cell1TileY" = some 0 ∧
+    (let pnr : Obend.Hardware.PlaceRoute.PnrCertificate :=
+       { Obend.Hardware.PlaceRoute.validAdderPnrCert with
+         placedCells :=
+           [ { cellId := 0, tileX := 0, tileY := 0, belSlot := 0, lutInit := 0x6 }
+           , { cellId := 1, tileX := 0,
+               tileY := (extractNatField "{\"cell1TileY\": 0}" "cell1TileY").getD 1,
+               belSlot := 0, lutInit := 0x6 } ] }
+     checkPnrJudge 0 2000 pnr = .refused (.pnrCollisionShortOrTiming "obend_routed_adder2") []) ∧
+    (let cand : Obend.Hardware.AgenticEDA.EdaVaultPart :=
+       { Obend.Hardware.AgenticEDA.goldenBaselinePart with
+         costCents := (extractNatField "{\"costCents\": 320}" "costCents").getD 120 }
+     checkAgenticEdaJudge 0 400 cand = .refused (.agenticEdaSwapViolation "U4_LDO") []) :=
   extractNatField_and_extractIntField_verified
 
 /-- 4.4 Token boundaries, and the strict decoders: a certificate that omits a field is `.error`, not a
@@ -350,19 +353,14 @@ theorem test_wire_token_boundary_and_decoders :
     extractNatField "{\"max_fanout\": 99, \"mode\": \"calibrated\"}" "fanout" = none ∧
     extractNatField "max_fanout=99,mode=calibrated" "fanout" = none ∧
     extractIntField "{\"extra_minMarginMv\": -500}" "minMarginMv" = none ∧
-    (decodePhotonicsCert "mode=golden").isOk = false ∧
-    (decodePcbBoardCert "mode=golden").isOk = false ∧
+    (decodeDatasheetFitCert "mode=calibrated").isOk = false ∧
+    (decodeAgenticEdaCert "mode=golden").isOk = false ∧
     (decodeRtlSynthCert "{\"module\": \"m\"}").isOk = false ∧
     (decodePnrCert "{\"mode\": \"valid\"}").isOk = false ∧
-    (match decodePhotonicsCert "ringName=mrr_wdm_soi220_r5um,bendRadiusNm=2000,circumferenceUm=50,rSelfPermille=985,aRoundTripPermille=985" with
-     | .ok c => c.bendRadiusNm == 2000 && c.circumferenceUm == 50 &&
-       checkPhotonicsPicJudge 0 15000 c == .refused (.photonicsPicSignoffViolation Obend.Hardware.Photonics.goldenSoi220Microring.ringName) []
-     | .error _ => false) = true ∧
-    (match decodePcbBoardCert "baseLengthUm=24000,numSegments=0,meanderAmplitudeUm=1500,minLoopSpacingUm=600" with
-     | .ok c => c.numSegments == 0 &&
-       checkPcbBoardJudge 0 50 c == .refused (.pcbBoardSignoffViolation "DDR_CLK_MEANDER") []
-     | .error _ => false) = true :=
-  extractNatField_token_boundary_and_decoders_verified
+    (match decodePnrCert "designName=obend_routed_adder2,sinkCapFf=5,cell1TileY=0,cell0BelSlot=0,cell1BelSlot=0,net0DstWire=12,net1DstWire=21" with
+     | .ok c => c.sinkCapFf == 5 && !(checkPnrJudge 0 2000 c).isOk
+     | .error _ => false) = true := by
+  decide +kernel
 
 /-! ## 5. `#tooth` Mutation-Killing Probes & `#print axioms` Verification (`0 sorryAx`) -/
 
@@ -422,12 +420,9 @@ def pruneFRepTapeForgotNeg (B : Box3D) (e : FRepExpr) : FRepExpr :=
 /-- Tooth 4: Broken `verifyBinaryTapeCert` that restores the permissive `_ => decide (c.words.length ≥ 1)` catch-all bypass. -/
 def verifyBinaryTapeCertPermissive (c : BinaryTapeCert) : Bool :=
   match c.domain with
-  | .magnetics           => decide (c.words.length ≥ 3 ∧ c.metric0 > 0 ∧ c.metric1 ≤ 5000000)
-  | .mechanicsVonNeumann => decide (c.words.length ≥ 4 ∧ c.metric1 ≤ c.metric0 ∧ c.metric1 > 0)
-  | .fluidThermal        => decide (c.words.length ≥ 4 ∧ c.metric0 ≥ 64 ∧ c.metric1 ≤ 165000)
-  | .powerElectronics    => decide (c.words.length ≥ 2 ∧ c.metric0 ≤ 1150)
-  | .multiphysics        => decide (c.words.length ≥ 2 ∧ c.metric0 > 0)
-  | _                    => decide (c.words.length ≥ 1)
+  | .magnetics    => decide (c.words.length ≥ 3 ∧ c.metric0 > 0 ∧ c.metric1 ≤ 5000000)
+  | .multiphysics => decide (c.words.length ≥ 2 ∧ c.metric0 > 0)
+  | _             => decide (c.words.length ≥ 1)
 
 #tooth Obend.Hardware.Codec.pnr_tape_cert_bypass_refused by mutation Obend.Hardware.Codec.verifyBinaryTapeCert := verifyBinaryTapeCertPermissive
 

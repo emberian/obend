@@ -1,37 +1,39 @@
 module
 /-
-# Obend.Hardware.PlaceRoute — Physical Device Grid, Untrusted PnR Certificate Checker, Elmore RC Delay & Bitstream Decoder
+# Obend.Hardware.PlaceRoute — Physical Device Grid, Netlist-Bound PnR Certificate Checker, Elmore RC Delay & Bitstream Decoder
 
-Eliminates blind trust in vendor/open-source Place-and-Route (`nextpnr`, `VPR`, `Vivado`) and
-bitstream assemblers (`fasm2frames`) by requiring external PnR tools to emit a verifiable
-`PnrCertificate` checked in linear/quadratic time by the Objective Bend kernel:
+Eliminates blind trust in external Place-and-Route (`nextpnr`, `VPR`, `Vivado`) and bitstream
+assemblers (`fasm2frames`) by requiring PnR tools to emit a `PnrCertificate` bound to a concrete
+`BelNetlist` and verified by the Objective Bend kernel:
 
-1. **Physical Device Grid & Placement Injectivity (`PlacedCell`, `checkPlacementInjective`)**:
+1. **Physical Device Grid & List-Wide Placement Injectivity (`PlacedCell`, `checkPlacementInjective`)**:
    - Verifies that no two distinct logical cells occupy the same physical `(tileX, tileY, belSlot)`,
-   - Proves `placement_injective_no_collision`.
+   - Proves both pairwise `placement_injective_no_collision` and list-wide `∀ i ≠ j`
+     `checkPlacementInjective_sound`.
 2. **Switch-Box PIP Routing Disjointness & Contiguous Connectivity (`PipHop`, `RoutedNet`)**:
-   - Verifies that every net's PIP hops form a contiguous directed path from `srcWire` to `dstWire`
-     (`checkNetContiguous`) and that no wire node is driven by two distinct nets (`checkRoutingDisjoint`),
-   - Proves `routing_disjoint_no_short` and `contiguous_net_reaches_sink`.
-3. **Physical Elmore RC Interconnect Delay (`computeElmoreDelayFsOhm`, `checkElmoreTiming`)**:
+   - Verifies contiguous source-to-sink PIP paths (`checkNetConnectivity`) and list-wide short-circuit
+     freedom (`checkRoutingDisjoint`),
+   - Proves `contiguous_net_reaches_sink`, `routing_disjoint_no_short`, and list-wide `∀ i ≠ j`
+     `checkRoutingDisjoint_sound`.
+3. **Physical Elmore RC Interconnect Delay & Multi-Sink Steiner Trees (`computeElmoreDelayPs`, `SteinerTree`)**:
    - Computes exact distributed RC Elmore delay $T_{\text{Elmore}} = \sum_{e} R_e \cdot C_{\text{downstream}}(e)$
-     along each routed PIP tree and checks setup timing closure at the target `ProcessCorner`,
-   - Proves `elmore_delay_monotone`.
-4. **FABulous Configuration Bitstream Frame Encoder/Decoder (`BitstreamFrame`, `decodeBitstreamFrame`)**:
-   - Decodes raw 32-bit configuration frames into `(tileX, tileY, belSlot, lutInit, pipMask)`,
-   - Proves `bitstream_decode_roundtrip_sound` (`decodeBitstreamFrames (encodeBitstreamFrames cfg) = cfg`).
+     and proves monotonicity and repeater buffer delay reduction.
+4. **Netlist-Bound PnR & Bitstream Verifier (`checkPnrCertificate`, `checkPnrCertificate_sound`)**:
+   - Binds every `PnrCertificate` to its target `BelNetlist` (`designName == net.moduleName` and
+     1-to-1 BEL `cellId` coverage `0 .. net.cells.length - 1`) and proves full end-to-end soundness.
 -/
 public import Obend.Hardware.Process
+public import Obend.Hardware.Synth
 @[expose] public section
 
 namespace Obend.Hardware.PlaceRoute
-open Obend.Hardware.Process
+open Obend.Hardware.Process Obend.Hardware.Synth
 set_option autoImplicit false
 
-/-! ## 1. Physical Placement Table & Injectivity Checker (`checkPlacementInjective`) -/
+/-! ## 1. Physical Placement Table & List-Wide Injectivity (`checkPlacementInjective`) -/
 
 /-- Physical assignment of a logical cell `cellId` to a tile coordinate `(tileX, tileY)`,
-BEL slot `belSlot`, and 4-LUT truth table `lutInit`. -/
+BEL slot `belSlot`, and LUT truth table `lutInit`. -/
 structure PlacedCell where
   cellId  : Nat
   tileX   : Nat
@@ -59,9 +61,7 @@ def checkPlacementInjective : List PlacedCell → Bool
   | [] => true
   | c :: rest => checkCellAgainstList c rest && checkPlacementInjective rest
 
-/-- Theorem (`placement_injective_no_collision`):
-If `checkPairNoCollision c1 c2 = true` and `c1.cellId ≠ c2.cellId`, then `c1` and `c2` occupy
-strictly distinct physical `(tileX, tileY, belSlot)` locations on the die! -/
+/-- Pairwise non-collision lemma (`placement_injective_no_collision`). -/
 theorem placement_injective_no_collision
     (c1 c2 : PlacedCell)
     (hOk : checkPairNoCollision c1 c2 = true)
@@ -72,7 +72,64 @@ theorem placement_injective_no_collision
   · exact False.elim (hNeId hEq)
   · exact hNeLoc
 
-/-! ## 2. Switch-Box PIP Routing Connectivity & Short-Circuit Freedom (`checkRoutingDisjoint`) -/
+private theorem checkCellAgainstList_getElem
+    (c : PlacedCell) (rest : List PlacedCell)
+    (hOk : checkCellAgainstList c rest = true)
+    (k : Nat) (hk : k < rest.length) :
+    checkPairNoCollision c rest[k] = true := by
+  induction rest generalizing k with
+  | nil => exact absurd hk (Nat.not_lt_zero _)
+  | cons c2 tail ih =>
+    simp only [checkCellAgainstList, Bool.and_eq_true] at hOk
+    cases k with
+    | zero => exact hOk.1
+    | succ k' =>
+      simp only [List.length_cons] at hk
+      exact ih hOk.2 k' (by omega)
+
+private theorem checkPlacementInjective_lt
+    (cells : List PlacedCell)
+    (hInj : checkPlacementInjective cells = true)
+    (i j : Nat) (hi : i < cells.length) (hj : j < cells.length)
+    (hLt : i < j)
+    (hNeId : cells[i].cellId ≠ cells[j].cellId) :
+    cellLocation cells[i] ≠ cellLocation cells[j] := by
+  induction cells generalizing i j with
+  | nil => exact absurd hi (Nat.not_lt_zero _)
+  | cons c rest ih =>
+    simp only [checkPlacementInjective, Bool.and_eq_true] at hInj
+    cases i with
+    | zero =>
+      cases j with
+      | zero => omega
+      | succ j' =>
+        simp only [List.length_cons] at hj
+        have hPair := checkCellAgainstList_getElem c rest hInj.1 j' (by omega)
+        exact placement_injective_no_collision c rest[j'] hPair hNeId
+    | succ i' =>
+      cases j with
+      | zero => omega
+      | succ j' =>
+        simp only [List.length_cons] at hi hj
+        exact ih hInj.2 i' j' (by omega) (by omega) (by omega) hNeId
+
+/-- **Universal List-Wide Placement Injectivity Soundness (`checkPlacementInjective_sound`)**:
+For ANY placed-cell table `cells` passing `checkPlacementInjective cells = true` and ANY two
+distinct indices `i ≠ j` with `cells[i].cellId ≠ cells[j].cellId`, `cells[i]` and `cells[j]`
+occupy strictly distinct physical `(tileX, tileY, belSlot)` coordinates on the die! -/
+theorem checkPlacementInjective_sound
+    (cells : List PlacedCell)
+    (hInj : checkPlacementInjective cells = true)
+    (i j : Nat) (hi : i < cells.length) (hj : j < cells.length)
+    (hNeIdx : i ≠ j)
+    (hNeId : cells[i].cellId ≠ cells[j].cellId) :
+    cellLocation cells[i] ≠ cellLocation cells[j] := by
+  by_cases hLt : i < j
+  · exact checkPlacementInjective_lt cells hInj i j hi hj hLt hNeId
+  · have hGt : j < i := by omega
+    exact Ne.symm (checkPlacementInjective_lt cells hInj j i hj hi hGt (Ne.symm hNeId))
+
+/-! ## 2. Switch-Box PIP Routing Connectivity & List-Wide Short-Circuit Freedom (`checkRoutingDisjoint`) -/
 
 /-- A single Programmable Interconnect Point (PIP) hop from `srcWire` to `dstWire` with physical
 switch resistance `resOhm` ($\Omega$) and wire segment capacitance `capFf` ($\text{fF}$). -/
@@ -125,7 +182,7 @@ theorem contiguous_net_reaches_sink
 def netWires (net : RoutedNet) : List Nat :=
   net.srcWire :: net.hops.map (·.dstWire)
 
-/-- Check that two wire lists share no common wire node (`disjointWires`). -/
+/-- Check that two wire lists share no common wire node (`disjointWireLists`). -/
 def disjointWireLists (w1 w2 : List Nat) : Bool :=
   w1.all (fun u => !w2.contains u)
 
@@ -141,8 +198,7 @@ def checkRoutingDisjoint : List RoutedNet → Bool
   | [] => true
   | net :: rest => checkNetDisjointFromList net rest && checkRoutingDisjoint rest
 
-/-- Theorem (`routing_disjoint_no_short`):
-If `disjointWireLists w1 w2 = true`, then no wire `u ∈ w1` is contained in `w2` (`w2.contains u = false`). -/
+/-- Pairwise disjointness lemma (`routing_disjoint_no_short`). -/
 theorem routing_disjoint_no_short
     (w1 w2 : List Nat) (u : Nat)
     (hDisj : disjointWireLists w1 w2 = true)
@@ -150,6 +206,68 @@ theorem routing_disjoint_no_short
     w2.contains u = false := by
   simp only [disjointWireLists, List.all_eq_true, Bool.not_eq_true'] at hDisj
   exact hDisj u hIn1
+
+private theorem checkNetDisjointFromList_getElem
+    (net : RoutedNet) (rest : List RoutedNet)
+    (hDisj : checkNetDisjointFromList net rest = true)
+    (k : Nat) (hk : k < rest.length) :
+    disjointWireLists (netWires net) (netWires rest[k]) = true := by
+  induction rest generalizing k with
+  | nil => exact absurd hk (Nat.not_lt_zero _)
+  | cons n2 tail ih =>
+    simp only [checkNetDisjointFromList, Bool.and_eq_true] at hDisj
+    cases k with
+    | zero => exact hDisj.1
+    | succ k' =>
+      simp only [List.length_cons] at hk
+      exact ih hDisj.2 k' (by omega)
+
+private theorem checkRoutingDisjoint_lt
+    (nets : List RoutedNet)
+    (hDisj : checkRoutingDisjoint nets = true)
+    (i j : Nat) (hi : i < nets.length) (hj : j < nets.length)
+    (hLt : i < j) (u : Nat)
+    (hMemI : u ∈ netWires nets[i]) :
+    u ∉ netWires nets[j] := by
+  induction nets generalizing i j with
+  | nil => exact absurd hi (Nat.not_lt_zero _)
+  | cons n rest ih =>
+    simp only [checkRoutingDisjoint, Bool.and_eq_true] at hDisj
+    cases i with
+    | zero =>
+      cases j with
+      | zero => omega
+      | succ j' =>
+        simp only [List.length_cons] at hj
+        have hPair := checkNetDisjointFromList_getElem n rest hDisj.1 j' (by omega)
+        have hNoContain := routing_disjoint_no_short (netWires n) (netWires rest[j']) u hPair hMemI
+        intro hMemJ
+        have hTrue : (netWires rest[j']).contains u = true := List.contains_iff_mem.mpr hMemJ
+        rw [hTrue] at hNoContain
+        cases hNoContain
+    | succ i' =>
+      cases j with
+      | zero => omega
+      | succ j' =>
+        simp only [List.length_cons] at hi hj
+        exact ih hDisj.2 i' j' (by omega) (by omega) (by omega) hMemI
+
+/-- **Universal List-Wide Routing Disjointness Soundness (`checkRoutingDisjoint_sound`)**:
+For ANY routed net table `nets` passing `checkRoutingDisjoint nets = true` and ANY two distinct
+net indices `i ≠ j` (whether `i < j` or `j < i`), no physical wire node `u` belongs to both
+`netWires nets[i]` and `netWires nets[j]`! -/
+theorem checkRoutingDisjoint_sound
+    (nets : List RoutedNet)
+    (hDisj : checkRoutingDisjoint nets = true)
+    (i j : Nat) (hi : i < nets.length) (hj : j < nets.length)
+    (hNe : i ≠ j) (u : Nat)
+    (hMemI : u ∈ netWires nets[i]) :
+    u ∉ netWires nets[j] := by
+  by_cases hLt : i < j
+  · exact checkRoutingDisjoint_lt nets hDisj i j hi hj hLt u hMemI
+  · have hGt : j < i := by omega
+    intro hMemJ
+    exact checkRoutingDisjoint_lt nets hDisj j i hj hi hGt u hMemJ hMemI
 
 /-! ## 3. Elmore RC Interconnect Delay & Timing Signoff (`computeElmoreDelayPs`) -/
 
@@ -170,8 +288,7 @@ def computeElmoreDelayPs (sinkCapFf : Nat) (hops : List PipHop) : Nat :=
   (computeElmoreDelayFs sinkCapFf hops + 999) / 1000
 
 /-- Theorem (`elmore_delay_monotone`):
-Prepending a PIP routing hop `h` strictly increases or preserves the cumulative Elmore RC delay
-(`computeElmoreDelayFs sinkCapFf (h :: rest) ≥ computeElmoreDelayFs sinkCapFf rest`). -/
+Prepending a PIP routing hop `h` strictly increases or preserves the cumulative Elmore RC delay. -/
 theorem elmore_delay_monotone
     (sinkCapFf : Nat) (h : PipHop) (rest : List PipHop) :
     computeElmoreDelayFs sinkCapFf rest ≤ computeElmoreDelayFs sinkCapFf (h :: rest) := by
@@ -237,7 +354,7 @@ theorem bitstream_decode_roundtrip_sound
   simp only [encodeBitstreamFrame, decodeBitstreamFrame, TileFrameConfig.mk.injEq]
   refine ⟨by omega, by omega, by omega, by omega, by omega⟩
 
-/-! ## 5. Complete Untrusted Place-and-Route Certificate & Kernel Verifier (`checkPnrCertificate`) -/
+/-! ## 5. Netlist-Bound Place-and-Route Certificate & Kernel Verifier (`checkPnrCertificate`) -/
 
 /-- Complete untrusted Place-and-Route & Bitstream certificate submitted to `Obend.Judge`. -/
 structure PnrCertificate where
@@ -249,21 +366,123 @@ structure PnrCertificate where
   sinkCapFf       : Nat
   deriving DecidableEq, Repr
 
-/-- Complete kernel PnR & bitstream certificate checker:
-1. Placement is injective (`checkPlacementInjective`),
-2. All routed nets are contiguous from source to sink (`checkNetConnectivity`),
-3. No two nets short-circuit on a shared wire (`checkRoutingDisjoint`),
-4. Every routed net meets Elmore RC setup timing (`checkNetElmoreTiming`),
-5. Every bitstream frame decodes to `expectedConfigs` (`bitstreamFrames.map decodeBitstreamFrame == expectedConfigs`). -/
+/-- Complete netlist-bound kernel PnR & bitstream certificate checker:
+1. `cert.designName == net.moduleName` and `cert.placedCells.map (·.cellId) == List.range net.cells.length`
+   (every BEL cell of `net` is placed 1-to-1 with unique sequential `cellId`s),
+2. Placement is injective (`checkPlacementInjective`),
+3. All routed nets are contiguous from source to sink (`checkNetConnectivity`),
+4. No two nets short-circuit on a shared wire (`checkRoutingDisjoint`),
+5. Every routed net meets Elmore RC setup timing (`checkNetElmoreTiming`),
+6. Every bitstream frame decodes to `expectedConfigs`. -/
 def checkPnrCertificate
-    (corner : ProcessCorner) (clockPeriodPs : Nat) (cert : PnrCertificate) : Bool :=
+    (net : BelNetlist) (corner : ProcessCorner) (clockPeriodPs : Nat) (cert : PnrCertificate) : Bool :=
+  (cert.designName == net.moduleName) &&
+  (cert.placedCells.map (·.cellId) == List.range net.cells.length) &&
   checkPlacementInjective cert.placedCells &&
   cert.routedNets.all checkNetConnectivity &&
   checkRoutingDisjoint cert.routedNets &&
   cert.routedNets.all (checkNetElmoreTiming corner clockPeriodPs cert.sinkCapFf) &&
   (cert.bitstreamFrames.map decodeBitstreamFrame == cert.expectedConfigs)
 
-/-- Concrete verified PnR certificate for a 2-BEL routed adder slice on `corner7nm_SS` at 500 MHz (`2000 ps`). -/
+private theorem cellId_eq_index_of_map_eq_range
+    (cells : List PlacedCell) (n : Nat)
+    (hMap : cells.map (·.cellId) = List.range n) :
+    cells.length = n ∧ ∀ (i : Nat) (hi : i < cells.length), cells[i].cellId = i := by
+  have hLen : cells.length = n := by
+    have := congrArg List.length hMap
+    simpa using this
+  refine ⟨hLen, ?_⟩
+  intro i hi
+  have hElem : (cells.map (·.cellId))[i]'(by simp [hi]) = (List.range n)[i]'(by simp [← hLen, hi]) := by
+    simp [hMap]
+  simpa using hElem
+
+/-- **Universal Netlist-Bound `checkPnrCertificate` Soundness (`checkPnrCertificate_sound`)**:
+Whenever `checkPnrCertificate net corner clockPeriodPs cert = true`:
+1. `cert.designName = net.moduleName` and `cert.placedCells.length = net.cells.length`,
+2. **List-wide BEL placement injectivity**: for ALL `i ≠ j` in `0 .. net.cells.length - 1`,
+   `cellLocation cert.placedCells[i] ≠ cellLocation cert.placedCells[j]`,
+3. **List-wide PIP routing short-freedom**: for ALL `i ≠ j` in `0 .. cert.routedNets.length - 1`,
+   no physical wire node belongs to both `netWires cert.routedNets[i]` and `netWires cert.routedNets[j]`,
+4. **Source-to-sink PIP connectivity & Elmore timing**: every `r ∈ cert.routedNets` reaches `r.dstWire`
+   from `r.srcWire` and closes setup timing at `corner`,
+5. **Bitstream decoding fidelity**: `cert.bitstreamFrames.map decodeBitstreamFrame = cert.expectedConfigs`! -/
+theorem checkPnrCertificate_sound
+    (net : BelNetlist) (corner : ProcessCorner) (clockPeriodPs : Nat) (cert : PnrCertificate)
+    (hOk : checkPnrCertificate net corner clockPeriodPs cert = true) :
+    cert.designName = net.moduleName ∧
+    cert.placedCells.length = net.cells.length ∧
+    (∀ (i j : Nat) (hi : i < cert.placedCells.length) (hj : j < cert.placedCells.length),
+      i ≠ j → cellLocation cert.placedCells[i] ≠ cellLocation cert.placedCells[j]) ∧
+    (∀ (i j : Nat) (hi : i < cert.routedNets.length) (hj : j < cert.routedNets.length),
+      i ≠ j → ∀ u ∈ netWires cert.routedNets[i], u ∉ netWires cert.routedNets[j]) ∧
+    (∀ r ∈ cert.routedNets,
+      hopsEndpoint r.srcWire r.hops = r.dstWire ∧
+      checkNetElmoreTiming corner clockPeriodPs cert.sinkCapFf r = true) ∧
+    cert.bitstreamFrames.map decodeBitstreamFrame = cert.expectedConfigs := by
+  simp only [checkPnrCertificate, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at hOk
+  rcases hOk with ⟨⟨⟨⟨⟨⟨hDesign, hIds⟩, hInj⟩, hConn⟩, hDisj⟩, hTiming⟩, hFrames⟩
+  obtain ⟨hLen, hCellIdAt⟩ := cellId_eq_index_of_map_eq_range cert.placedCells net.cells.length hIds
+  refine ⟨hDesign, hLen, ?_, ?_, ?_, hFrames⟩
+  · intro i j hi hj hNe
+    have hNeId : cert.placedCells[i].cellId ≠ cert.placedCells[j].cellId := by
+      rw [hCellIdAt i hi, hCellIdAt j hj]
+      exact hNe
+    exact checkPlacementInjective_sound cert.placedCells hInj i j hi hj hNe hNeId
+  · intro i j hi hj hNe u hu
+    exact checkRoutingDisjoint_sound cert.routedNets hDisj i j hi hj hNe u hu
+  · intro r hr
+    have hc := hConn r hr
+    simp only [checkNetConnectivity, Bool.and_eq_true] at hc
+    exact ⟨contiguous_net_reaches_sink r.srcWire r.dstWire r.hops hc.2, hTiming r hr⟩
+
+/-- Extract the LUT SRAM mask (`< 65536`) associated with a `BelKind` (`0` for fixed-function BELs). -/
+def belKindLutInit : BelKind → Nat
+  | .lut1 m | .lut2 m | .lut3 m => m % 65536
+  | _ => 0
+
+/-- Constructively place, route, and frame-encode a canonical conflict-free `PnrCertificate` for
+any synthesized `BelNetlist` (8 BELs per tile row, disjoint 2-wire PIP channels per BEL). -/
+def buildCanonicalPnrCert (net : BelNetlist) (sinkCapFf : Nat := 5) : PnrCertificate :=
+  let cfgs : List TileFrameConfig :=
+    net.cells.zipIdx.map fun (c, k) =>
+      { tileX   := (k / 64) % 256
+      , tileY   := ((k / 8) % 8) % 256
+      , belSlot := k % 8
+      , lutInit := belKindLutInit c.kind
+      , pipMask := 1 }
+  let placed : List PlacedCell :=
+    net.cells.zipIdx.map fun (c, k) =>
+      { cellId  := k
+      , tileX   := k / 64
+      , tileY   := (k / 8) % 8
+      , belSlot := k % 8
+      , lutInit := belKindLutInit c.kind }
+  let routed : List RoutedNet :=
+    (List.range net.cells.length).map fun k =>
+      let w0 := 100 + 2 * k
+      let w1 := 101 + 2 * k
+      { netId   := k
+      , srcWire := w0
+      , dstWire := w1
+      , hops    := [{ srcWire := w0, dstWire := w1, resOhm := 40, capFf := 3 }] }
+  { designName      := net.moduleName
+  , placedCells     := placed
+  , routedNets      := routed
+  , expectedConfigs := cfgs
+  , bitstreamFrames := cfgs.map encodeBitstreamFrame
+  , sinkCapFf       := sinkCapFf }
+
+/-- Target 2-BEL adder slice netlist corresponding to `validAdderPnrCert`. -/
+def validAdderBelNetlist : BelNetlist where
+  moduleName  := "obend_routed_adder2"
+  inputNames  := ["a0", "b0", "a1", "b1"]
+  cells       :=
+    [ { dstName := "sum0", kind := .lut2 0x6, inputs := ["a0", "b0"] }
+    , { dstName := "sum1", kind := .lut2 0x6, inputs := ["a1", "b1"] } ]
+  outputNames := ["sum0", "sum1"]
+
+/-- Concrete verified PnR certificate for `validAdderBelNetlist` on `corner7nm_SS` at 500 MHz (`2000 ps`). -/
 def validAdderPnrCert : PnrCertificate where
   designName := "obend_routed_adder2"
   placedCells :=
@@ -300,34 +519,27 @@ def shortedWirePnrCert : PnrCertificate :=
       , { netId := 1, srcWire := 20, dstWire := 11
         , hops := [ { srcWire := 20, dstWire := 11, resOhm := 40, capFf := 3 } ] } ] }
 
-/-- Theorem: `checkPnrCertificate` accepts `validAdderPnrCert` and refuses both BEL placement
-collisions (`collidingBelPnrCert`) and PIP routing shorts (`shortedWirePnrCert`)! -/
 example :
-    checkPnrCertificate corner7nm_SS 2000 validAdderPnrCert = true ∧
-    checkPnrCertificate corner7nm_SS 2000 collidingBelPnrCert = false ∧
-    checkPnrCertificate corner7nm_SS 2000 shortedWirePnrCert = false :=
+    checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 validAdderPnrCert = true ∧
+    checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 collidingBelPnrCert = false ∧
+    checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 shortedWirePnrCert = false :=
   ⟨rfl, rfl, rfl⟩
 
 /-! ## 6. Multi-Sink Steiner Fanout Trees & Exact Recursive Elmore RC Delay (`SteinerTree`) -/
 
-/-- Multi-sink Steiner routing tree modeling high-fanout clock/data interconnects:
-* `.sink wireId loadCapFf`: leaf receiver pin with input gate capacitance `loadCapFf` ($\text{fF}$),
-* `.branch wireId segResOhm segCapFf left right`: internal wire segment of resistance `segResOhm` ($\Omega$)
-  and lumped capacitance `segCapFf` ($\text{fF}$) driving subtrees `left` and `right`. -/
+/-- Multi-sink Steiner routing tree modeling high-fanout clock/data interconnects. -/
 inductive SteinerTree where
   | sink (wireId : Nat) (loadCapFf : Nat)
   | branch (wireId : Nat) (segResOhm segCapFf : Nat) (left right : SteinerTree)
   deriving DecidableEq, Repr
 
-/-- Exact total downstream lump capacitance $C_{\text{down}}(u)$ (in $\text{fF}$) of a `SteinerTree`:
-$$C_{\text{down}}(u) = C_{\text{seg}}(u) + C_{\text{down}}(\text{left}) + C_{\text{down}}(\text{right}).$$ -/
+/-- Exact total downstream lump capacitance $C_{\text{down}}(u)$ (in $\text{fF}$) of a `SteinerTree`. -/
 def downstreamCapFf : SteinerTree → Nat
   | .sink _ loadCapFf => loadCapFf
   | .branch _ _ segCapFf left right =>
     segCapFf + downstreamCapFf left + downstreamCapFf right
 
-/-- Exact worst-case root-to-sink Elmore RC delay (in $\text{fF}\cdot\Omega = \text{fs}$) of a `SteinerTree`:
-$$T_{\text{Elmore}}(u) = R_{\text{seg}}(u) \cdot C_{\text{down}}(u) + \max(T_{\text{Elmore}}(\text{left}), T_{\text{Elmore}}(\text{right})).$$ -/
+/-- Exact worst-case root-to-sink Elmore RC delay (in $\text{fF}\cdot\Omega = \text{fs}$) of a `SteinerTree`. -/
 def maxSteinerElmoreDelayFsOhm : SteinerTree → Nat
   | .sink _ _ => 0
   | .branch _ segResOhm segCapFf left right =>
@@ -353,8 +565,7 @@ def inflateSinkLoads (deltaCapFf : Nat) : SteinerTree → SteinerTree
 
 /-- **Theorem (`downstreamCapFf_monotone_load`)**:
 Increasing leaf sink load capacitance by `deltaCapFf` across any `SteinerTree` monotonically
-increases (or preserves) both the total downstream lump capacitance `downstreamCapFf` and the
-worst-case root-to-sink Elmore delay `maxSteinerElmoreDelayFsOhm`. -/
+increases (or preserves) both `downstreamCapFf` and `maxSteinerElmoreDelayFsOhm`. -/
 theorem downstreamCapFf_monotone_load (deltaCapFf : Nat) (t : SteinerTree) :
     downstreamCapFf t ≤ downstreamCapFf (inflateSinkLoads deltaCapFf t) ∧
     maxSteinerElmoreDelayFsOhm t ≤ maxSteinerElmoreDelayFsOhm (inflateSinkLoads deltaCapFf t) := by
@@ -380,9 +591,8 @@ theorem downstreamCapFf_monotone_load (deltaCapFf : Nat) (t : SteinerTree) :
     · omega
 
 /-- **Theorem (`maxSteinerElmoreDelay_nonneg`)**:
-For any `t : SteinerTree`, the worst-case Elmore RC delay is non-negative, and at any `.branch`
-node it is bounded below by the trunk segment's $R_{\text{seg}} \cdot C_{\text{down}}$ product and
-by both child subtrees' Elmore delays. -/
+For any `t : SteinerTree`, the worst-case Elmore RC delay is non-negative and bounded below by
+the trunk segment's $R_{\text{seg}} \cdot C_{\text{down}}$ product and both child subtrees. -/
 theorem maxSteinerElmoreDelay_nonneg (t : SteinerTree) :
     0 ≤ maxSteinerElmoreDelayFsOhm t ∧
     match t with
@@ -398,36 +608,24 @@ theorem maxSteinerElmoreDelay_nonneg (t : SteinerTree) :
     simp only [maxSteinerElmoreDelayFsOhm, downstreamCapFf]
     omega
 
-/-- Insert a repeater buffer with input gate capacitance `bufInputCapFf` at the right fanout branch
-of a 2-branch `SteinerTree`, electrically decoupling the heavy right subtree from the upstream trunk. -/
+/-- Insert a repeater buffer with input gate capacitance `bufInputCapFf` at the right fanout branch. -/
 def decoupleRightBranchWithBuffer (bufWireId bufInputCapFf : Nat) : SteinerTree → SteinerTree
   | .sink w c => .sink w c
   | .branch w r c left _right =>
     .branch w r c left (.sink bufWireId bufInputCapFf)
 
-/-- Unbuffered 2-branch Steiner clock/data fanout tree:
-* Global trunk driver segment (`wireId = 0`, `R = 2000 Ω`, `C = 50 fF`),
-* Left critical sink (`wireId = 1`, `C_load = 100 fF`),
-* Right high-capacitance fanout branch (`wireId = 2`, `R = 1500 Ω`, `C = 100 fF`, driving two `400 fF`
-  sinks for a total right-branch lump load of `900 fF` and total trunk load `1050 fF`). -/
+/-- Unbuffered 2-branch Steiner clock/data fanout tree. -/
 def unbufferedFanoutTree : SteinerTree :=
   .branch 0 2000 50
     (.sink 1 100)
     (.branch 2 1500 100 (.sink 3 400) (.sink 4 400))
 
-/-- Buffered 2-branch Steiner fanout tree where a repeater buffer (`bufInputCapFf = 25 fF`) isolates
-the heavy right subtree (`900 fF`) from the upstream trunk driver (`175 fF` total trunk load). -/
+/-- Buffered 2-branch Steiner fanout tree. -/
 def bufferedFanoutTree : SteinerTree :=
   decoupleRightBranchWithBuffer 2 25 unbufferedFanoutTree
 
 /-- **Theorem (`steiner_fanout_buffer_insertion_reduces_elmore_delay`)**:
-1. On the concrete 2-branch clock/data tree `unbufferedFanoutTree`, inserting a repeater buffer
-   (`bufferedFanoutTree`) strictly reduces total upstream lump capacitance (`175 fF < 1050 fF`),
-   strictly reduces root-to-sink Elmore RC delay (`350000 fs < 3450000 fs`, i.e. `350 ps < 3450 ps`),
-   and flips 500 MHz (`2000 ps`) timing closure from `false` (`unbufferedFanoutTree`) to `true` (`bufferedFanoutTree`)!
-2. Universally, for any trunk `.branch w r c left right` with `0 < r` and `bufCap < downstreamCapFf right`,
-   decoupling the right branch with a repeater of input capacitance `bufCap` strictly reduces both
-   `downstreamCapFf` and `maxSteinerElmoreDelayFsOhm`. -/
+Repeater buffer insertion strictly reduces total upstream lump capacitance and worst-case Elmore RC delay. -/
 theorem steiner_fanout_buffer_insertion_reduces_elmore_delay :
     downstreamCapFf bufferedFanoutTree < downstreamCapFf unbufferedFanoutTree ∧
     maxSteinerElmoreDelayFsOhm bufferedFanoutTree < maxSteinerElmoreDelayFsOhm unbufferedFanoutTree ∧
@@ -455,3 +653,4 @@ theorem steiner_fanout_buffer_insertion_reduces_elmore_delay :
   · omega
 
 end Obend.Hardware.PlaceRoute
+end

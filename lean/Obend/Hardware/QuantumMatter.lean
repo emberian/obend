@@ -50,29 +50,27 @@ set_option autoImplicit false
 
 /-! ## 1. Multi-Waveguide Photonic CTQW Array & Exact $\mathbb{Z}[i]$ Unitary Power Conservation -/
 
-/-- Specification of an $r$-waveguide evanescently coupled photonic CTQW array synthesized from an
-$N$-vertex graph Hamiltonian via its $r$-cell equitable quotient:
-* `arrayName`: physical PIC macro identifier,
-* `platform`: open-foundry photonic process (`soi220nm`, `ihpSg13g2Epic`, or `sin400nm`),
-* `waveguide`: single-mode strip/rib waveguide specification,
-* `numSourceVertices`: number of vertices $N$ in the unreduced source graph,
-* `numQuotientModes`: number of physical waveguides $r$ in the planar tridiagonal array,
-* `couplers`: list of $r - 1$ adjacent evanescent directional couplers between waveguides $(j, j+1)$,
-* `fanoutBendRadiusNm`: S-bend radius (in $\text{nm}$) for input/output grating/edge-coupler fanout,
-* `isolationPitchNm`: pitch (in $\text{nm}$) in fanout / non-interacting regions to suppress parasitic
-  next-nearest-neighbor evanescent crosstalk ($\ge 2000\,\text{nm}$),
-* `interactionLengthUm`: active coupled-array propagation length $z$ (in $\mu\text{m}$). -/
-structure PhotonicWaveguideArraySpec where
-  arrayName          : String
-  platform           : PhotonicPlatform
-  waveguide          : WaveguideSpec
-  numSourceVertices  : Nat
-  numQuotientModes   : Nat
-  couplers           : List DirectionalCoupler
-  fanoutBendRadiusNm : Nat
-  isolationPitchNm   : Nat
-  interactionLengthUm : Nat
+/-- Coupling-ratio specification for an adjacent waveguide pair in a planar Krawtchouk tridiagonal
+coupled-waveguide array (`tSqPpm + kappaSqPpm = 1_000_000` in lossless operation). -/
+structure CouplerRatioSpec where
+  couplerName   : String
+  gapNm         : Nat
+  couplingLenUm : Nat
+  tSqPpm        : Int
+  kappaSqPpm    : Int
   deriving DecidableEq, Repr
+
+/-- Squared cross-coupling coefficient $\kappa^2$ (in ppm) of a `CouplerRatioSpec`. -/
+def CouplerRatioSpec.kappaSqScaled (dc : CouplerRatioSpec) : Int :=
+  dc.kappaSqPpm
+
+/-- Canonical 50:50 (`3 dB`) reference coupler ratio (`t^2 = 500_000 ppm`, `\kappa^2 = 500_000 ppm`). -/
+def coupler3dBRatio : CouplerRatioSpec where
+  couplerName   := "dc_3dB_ref"
+  gapNm         := 200
+  couplingLenUm := 14
+  tSqPpm        := 500000
+  kappaSqPpm    := 500000
 
 /-- Symmetrized squared inter-cell coupling weight $\kappa_{i,j}^2 \propto Q_{i,j} \cdot Q_{j,i} \in \mathbb{Z}$
 between quotient cells $C_i$ and $C_j$. By `equitable_handshake_identity` ($|C_i| Q_{i,j} = |C_j| Q_{j,i}$),
@@ -268,19 +266,7 @@ theorem photonic_ctqw_array_power_conserved
     rw [hMidSum] at hDistMesh
     omega
 
-/-! ## 2. Real Physical Matter Compiler DRC, Exact Quotient-Coupling Ratio Verification & Synthesis -/
-
-/-- Check whether a single `DirectionalCoupler` in a coupled waveguide array satisfies open-foundry
-lithography and CMT design rules:
-1. Trench width `150 ≤ dc.gapNm` (193nm DUV lithography minimum feature spacing),
-2. Evanescent coupling range `dc.gapNm ≤ 600` (prevents dead/decoupled gaps),
-3. Strictly positive interaction length `1 ≤ dc.couplingLenUm`,
-4. Lossless CMT unitary power conservation `isLosslessCoupler dc` ($t^2 + \kappa^2 = 10^6\,\text{ppm}$). -/
-def checkArrayCouplerDrc (dc : DirectionalCoupler) : Bool :=
-  decide (150 ≤ dc.gapNm) &&
-  decide (dc.gapNm ≤ 600) &&
-  decide (1 ≤ dc.couplingLenUm) &&
-  isLosslessCoupler dc
+/-! ## 2. Exact Quotient-Coupling Ratio Verification & Krawtchouk Synthesis -/
 
 /-- Check whether adjacent directional couplers in `couplers` realize the exact cross-multiplied
 symmetrized quotient coupling-squared ratios of `Q`:
@@ -288,11 +274,11 @@ $$\forall j,\quad \kappa_j^2 \cdot \left(Q_{j+1, j+2} Q_{j+2, j+1}\right)
   = \kappa_{j+1}^2 \cdot \left(Q_{j, j+1} Q_{j+1, j}\right).$$ -/
 def couplerRealizesQuotientRatio
     (Q : Nat → Nat → Int)
-    (couplers : List DirectionalCouplerSpec) : Bool :=
+    (couplers : List CouplerRatioSpec) : Bool :=
   let pairIndices := List.range (couplers.length - 1)
   pairIndices.all (fun j =>
-    let cJ    := couplers[j]?.getD coupler3dB
-    let cNext := couplers[j + 1]?.getD coupler3dB
+    let cJ    := couplers[j]?.getD coupler3dBRatio
+    let cNext := couplers[j + 1]?.getD coupler3dBRatio
     let qSqJ    := Q j (j + 1) * Q (j + 1) j
     let qSqNext := Q (j + 1) (j + 2) * Q (j + 2) (j + 1)
     decide (cJ.kappaSqScaled * qSqNext = cNext.kappaSqScaled * qSqJ))
@@ -304,19 +290,17 @@ producing exact $3 : 4 : 3 = 375000 : 500000 : 375000\,\text{ppm}$ Krawtchouk co
 def synthesizeKrawtchoukPhotonicCouplers
     (Q : Nat → Nat → Int)
     (dim : Nat)
-    (scale : Int) : List DirectionalCouplerSpec :=
+    (scale : Int) : List CouplerRatioSpec :=
   (List.range (dim - 1)).map (fun j =>
     let qSq := Q j (j + 1) * Q (j + 1) j
     let kappaSq := scale * qSq
     let tSq := 1000000 - kappaSq
     let isHalf := decide (kappaSq = 500000)
-    { couplerName    := "dc_krawtchouk_synth"
-    , gapNm          := cond isHalf 200 225
-    , couplingLenUm  := cond isHalf 14 11
-    , tFieldPermille := cond isHalf 707 791
-    , kFieldPermille := cond isHalf 707 612
-    , tSqPpm         := tSq
-    , kappaSqPpm     := kappaSq })
+    { couplerName   := "dc_krawtchouk_synth"
+    , gapNm         := cond isHalf 200 225
+    , couplingLenUm := cond isHalf 14 11
+    , tSqPpm        := tSq
+    , kappaSqPpm    := kappaSq })
 
 /-- **Theorem (`synthesizeKrawtchoukPhotonicCouplers_realizes_ratio`)**:
 For EVERY quotient matrix `Q : Nat → Nat → Int`, EVERY dimension `dim : Nat`, and EVERY integer
@@ -334,192 +318,10 @@ theorem synthesizeKrawtchoukPhotonicCouplers_realizes_ratio
   have hj1 : j < dim - 1 := by omega
   have hj2 : j + 1 < dim - 1 := by omega
   simp only [List.getElem?_map, List.getElem?_range hj1, List.getElem?_range hj2,
-    Option.map_some, Option.getD_some, DirectionalCoupler.kappaSqScaled, decide_eq_true_eq]
+    Option.map_some, Option.getD_some, CouplerRatioSpec.kappaSqScaled, decide_eq_true_eq]
   rw [Int.mul_assoc scale (Q j (j + 1) * Q (j + 1) j) (Q (j + 1) (j + 2) * Q (j + 2) (j + 1))]
   rw [Int.mul_comm (Q j (j + 1) * Q (j + 1) j) (Q (j + 1) (j + 2) * Q (j + 2) (j + 1))]
   rw [← Int.mul_assoc scale (Q (j + 1) (j + 2) * Q (j + 2) (j + 1)) (Q j (j + 1) * Q (j + 1) j)]
-
-/-- Complete **Photonic Matter Compiler Design Rule Check** (`checkPhotonicArrayMatterDrc`):
-1. Waveguide platform matches `spec.platform` and core width lies in the single-mode $\text{TE}_{00}$
-   window $[400\,\text{nm}, 1200\,\text{nm}]$,
-2. Fan-in/fan-out S-bend radius satisfies the platform minimum radiative bend limit
-   (`minPhotonicBendRadiusNm spec.platform ≤ spec.fanoutBendRadiusNm`),
-3. Non-adjacent isolation pitch satisfies `2000 ≤ spec.isolationPitchNm` to prevent parasitic
-   next-nearest-neighbor crosstalk,
-4. Tridiagonal quotient topology holds (`2 ≤ spec.numQuotientModes`, `spec.numQuotientModes ≤ spec.numSourceVertices`,
-   and `spec.couplers.length + 1 == spec.numQuotientModes`),
-5. Every evanescent coupler in `spec.couplers` passes `checkArrayCouplerDrc`. -/
-def checkPhotonicArrayMatterDrc (spec : PhotonicWaveguideArraySpec) : Bool :=
-  let minBend := minPhotonicBendRadiusNm spec.platform
-  decide (spec.waveguide.platform = spec.platform) &&
-  decide (400 ≤ spec.waveguide.widthNm) &&
-  decide (spec.waveguide.widthNm ≤ 1200) &&
-  decide (minBend ≤ spec.fanoutBendRadiusNm) &&
-  decide (2000 ≤ spec.isolationPitchNm) &&
-  decide (2 ≤ spec.numQuotientModes) &&
-  decide (spec.numQuotientModes ≤ spec.numSourceVertices) &&
-  decide (spec.couplers.length + 1 = spec.numQuotientModes) &&
-  spec.couplers.all checkArrayCouplerDrc
-
-/-- **Hybrid Symbolic-Physical Matter Compiler** (`compileEquitableToPhotonicArray`):
-Certifies end-to-end compilation of an $N$-vertex quantum walk Hamiltonian `m` into a planar
-$r$-waveguide photonic integrated circuit `spec`:
-1. Verifies that `(m, spec.numQuotientModes, part, quotientEntry)` is a valid equitable partition
-   (`checkEquitablePartition = true`) with zero residual floor (`evalEquitableResidualNormSq = 0`),
-2. Verifies the symmetrizability handshake identity $|C_i| Q_{i,j} = |C_j| Q_{j,i}$
-   (`checkHandshakeIdentity = true`),
-3. Verifies that every adjacent quotient cell pair $(j, j+1)$ has non-zero symmetrized coupling
-   `1 ≤ evalSymmetrizedCouplingSq quotientEntry j (j + 1)`,
-4. Verifies that `spec.couplers` realize the exact cross-multiplied quotient coupling ratios
-   (`couplerRealizesQuotientRatio quotientEntry spec.couplers = true`),
-5. Verifies all physical photonic foundry DRC constraints (`checkPhotonicArrayMatterDrc spec = true`). -/
-def compileEquitableToPhotonicArray
-    (m : IntMatrix)
-    (part : Nat → Nat)
-    (quotientEntry : Nat → Nat → Int)
-    (spec : PhotonicWaveguideArraySpec) : Bool :=
-  let chainPairs := List.range (spec.numQuotientModes - 1)
-  decide (m.dim = spec.numSourceVertices) &&
-  checkEquitablePartition m spec.numQuotientModes part quotientEntry &&
-  checkHandshakeIdentity m.dim spec.numQuotientModes part quotientEntry &&
-  decide (evalEquitableResidualNormSq m spec.numQuotientModes part quotientEntry = 0) &&
-  chainPairs.all (fun j => decide (1 ≤ evalSymmetrizedCouplingSq quotientEntry j (j + 1))) &&
-  couplerRealizesQuotientRatio quotientEntry spec.couplers &&
-  checkPhotonicArrayMatterDrc spec
-
-/-- Golden 4-waveguide `SiEPIC 220nm SOI` Krawtchouk photonic array compiled from the 8-vertex
-Hypercube $Q_3$ ($8$ non-planar vertices $\to 4$ planar waveguides with exact Krawtchouk coupling ratios
-$\kappa_{0,1}^2 : \kappa_{1,2}^2 : \kappa_{2,3}^2 = 375000 : 500000 : 375000 = 3 : 4 : 3$). -/
-def goldenQ3Soi220PhotonicArray : PhotonicWaveguideArraySpec where
-  arrayName           := "q3_krawtchouk_4wg_soi220"
-  platform            := .soi220nm
-  waveguide           := soi220StripWaveguide1550
-  numSourceVertices   := 8
-  numQuotientModes    := 4
-  couplers            := [couplerKrawtchouk375, coupler3dB, couplerKrawtchouk375]
-  fanoutBendRadiusNm  := 5000
-  isolationPitchNm    := 2500
-  interactionLengthUm := 42
-
-/-- Certified 4-waveguide Krawtchouk photonic array whose couplers are directly synthesized by
-`synthesizeKrawtchoukPhotonicCouplers hypercubeQ3Quotient 4 125000`. -/
-def certifiedQ3KrawtchoukPhotonicArray : PhotonicWaveguideArraySpec :=
-  { goldenQ3Soi220PhotonicArray with
-    arrayName := "q3_krawtchouk_4wg_synthesized"
-    couplers  := synthesizeKrawtchoukPhotonicCouplers hypercubeQ3Quotient 4 125000 }
-
-/-- Golden 4-waveguide low-loss `400nm Si3N4` ($\text{SiN}$) Krawtchouk photonic array compiled from
-$Q_3$ ($R_{\text{bend}} = 25000\,\text{nm}$ meeting the $\text{Si}_3\text{N}_4$ radiative bend limit,
-with exact $3 : 4 : 3$ Krawtchouk coupling ratios). -/
-def goldenQ3Sin400PhotonicArray : PhotonicWaveguideArraySpec where
-  arrayName           := "q3_krawtchouk_4wg_sin400"
-  platform            := .sin400nm
-  waveguide           := sin400Waveguide1550
-  numSourceVertices   := 8
-  numQuotientModes    := 4
-  couplers            := [couplerKrawtchouk375, coupler3dB, couplerKrawtchouk375]
-  fanoutBendRadiusNm  := 25000
-  isolationPitchNm    := 3000
-  interactionLengthUm := 85
-
-/-- Sub-lithographic `100nm < 150nm` trench coupler array that violates DUV lithography DRC. -/
-def illegalSubLithoGapArray : PhotonicWaveguideArraySpec :=
-  { goldenQ3Soi220PhotonicArray with
-    couplers := [{ couplerKrawtchouk375 with gapNm := 100 }, coupler3dB, couplerKrawtchouk375] }
-
-/-- Leaky `10000nm < 25000nm` tight-bend $\text{Si}_3\text{N}_4$ array that violates the `sin400nm`
-radiative bend radius limit. -/
-def illegalLeakySinBendArray : PhotonicWaveguideArraySpec :=
-  { goldenQ3Sin400PhotonicArray with fanoutBendRadiusNm := 10000 }
-
-/-- Cramped `1200nm < 2000nm` pitch array that suffers parasitic next-nearest-neighbor crosstalk. -/
-def illegalCrosstalkPitchArray : PhotonicWaveguideArraySpec :=
-  { goldenQ3Soi220PhotonicArray with isolationPitchNm := 1200 }
-
-/-- Mismatched uniform $1 : 1 : 1$ (`500000 : 500000 : 500000`) coupler array that passes physical DRC
-but violates $Q_3$'s $3 : 4 : 3$ Krawtchouk quotient coupling ratio (`couplerRealizesQuotientRatio = false`). -/
-def illegalMismatchedUniformCouplerArray : PhotonicWaveguideArraySpec :=
-  { goldenQ3Soi220PhotonicArray with
-    couplers := [coupler3dB, coupler3dB, coupler3dB] }
-
-/-- Mismatched $36 : 50 : 36 \neq 3 : 4 : 3$ (`360000 : 500000 : 360000`) coupler array that fails exact
-Krawtchouk ratio verification (`360000 * 4 = 1440000 ≠ 1500000 = 500000 * 3`). -/
-def illegalMismatched36_50_36CouplerArray : PhotonicWaveguideArraySpec :=
-  { goldenQ3Soi220PhotonicArray with
-    couplers := [couplerPythagorean80_60, coupler3dB, couplerPythagorean80_60] }
-
-/-- **Theorem (`compileEquitableToPhotonicArray_ratio_sound`)**:
-1. **Universal Quotient-Ratio Soundness**:
-   Whenever `compileEquitableToPhotonicArray m part Q spec = true`, the array's couplers satisfy
-   `couplerRealizesQuotientRatio Q spec.couplers = true`, so for every adjacent coupler pair
-   $j < \text{spec.couplers.length} - 1$:
-   $$\kappa_j^2 \cdot (Q_{j+1, j+2} Q_{j+2, j+1}) = \kappa_{j+1}^2 \cdot (Q_{j, j+1} Q_{j+1, j}).$$
-2. **Exact Krawtchouk $3 : 4 : 3$ Synthesis & Mismatched Ratio Refusal**:
-   - `synthesizeKrawtchoukPhotonicCouplers hypercubeQ3Quotient 4 125000` synthesizes couplers with
-     `kappaSqScaled = [375000, 500000, 375000]` ($3 : 4 : 3$), and `certifiedQ3KrawtchoukPhotonicArray`
-     passes `compileEquitableToPhotonicArray = true`.
-   - Both the uniform $1 : 1 : 1$ array (`illegalMismatchedUniformCouplerArray`) and the approximate
-     $36 : 50 : 36$ array (`illegalMismatched36_50_36CouplerArray`) are refused (`= false`). -/
-theorem compileEquitableToPhotonicArray_ratio_sound
-    (m : IntMatrix)
-    (part : Nat → Nat)
-    (Q : Nat → Nat → Int)
-    (spec : PhotonicWaveguideArraySpec)
-    (hComp : compileEquitableToPhotonicArray m part Q spec = true) :
-    (couplerRealizesQuotientRatio Q spec.couplers = true ∧
-     ∀ j, j < spec.couplers.length - 1 →
-       (spec.couplers[j]?.getD coupler3dB).kappaSqScaled * (Q (j + 1) (j + 2) * Q (j + 2) (j + 1)) =
-         (spec.couplers[j + 1]?.getD coupler3dB).kappaSqScaled * (Q j (j + 1) * Q (j + 1) j)) ∧
-    compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part hypercubeQ3Quotient
-      certifiedQ3KrawtchoukPhotonicArray = true ∧
-    compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part hypercubeQ3Quotient
-      illegalMismatchedUniformCouplerArray = false ∧
-    compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part hypercubeQ3Quotient
-      illegalMismatched36_50_36CouplerArray = false := by
-  have h1 := ((Bool.and_eq_true _ _).mp hComp).1
-  have hRatio : couplerRealizesQuotientRatio Q spec.couplers = true :=
-    ((Bool.and_eq_true _ _).mp h1).2
-  refine ⟨⟨hRatio, ?_⟩, rfl, rfl, rfl⟩
-  intro j hj
-  unfold couplerRealizesQuotientRatio at hRatio
-  rw [list_all_iff_forall] at hRatio
-  have hjMem : j ∈ List.range (spec.couplers.length - 1) := List.mem_range.mpr hj
-  exact of_decide_eq_true (hRatio j hjMem)
-
-/-- **Theorem (`photonic_matter_compiler_drc_sound`)**:
-1. **Universal Physical DRC Soundness**:
-   Whenever `checkPhotonicArrayMatterDrc spec = true`, the compiled photonic array is guaranteed to
-   satisfy:
-   - `minPhotonicBendRadiusNm spec.platform ≤ spec.fanoutBendRadiusNm` (zero radiative bend leakage),
-   - `2000 ≤ spec.isolationPitchNm` (crosstalk suppression),
-   - `400 ≤ spec.waveguide.widthNm ∧ spec.waveguide.widthNm ≤ 1200` (single-mode $\text{TE}_{00}$ confinement),
-   - `spec.couplers.length + 1 = spec.numQuotientModes` (planar tridiagonal chain topology).
-2. **Concrete Matter Compilation Poles ($Q_3 \to 4$-Waveguide PIC)**:
-   - Both `goldenQ3Soi220PhotonicArray` and `goldenQ3Sin400PhotonicArray` pass full equitable + physical
-     compilation (`compileEquitableToPhotonicArray = true`) with symmetrized Krawtchouk couplings
-     $(\kappa_{0,1}^2, \kappa_{1,2}^2, \kappa_{2,3}^2) = (3, 4, 3)$.
-   - `illegalSubLithoGapArray` (`gapNm = 100 < 150`), `illegalLeakySinBendArray` (`R = 10um < 25um` on SiN),
-     and `illegalCrosstalkPitchArray` (`pitch = 1200nm < 2000nm`) are all refused (`= false`). -/
-theorem photonic_matter_compiler_drc_sound
-    (spec : PhotonicWaveguideArraySpec)
-    (hDrc : checkPhotonicArrayMatterDrc spec = true) :
-    (minPhotonicBendRadiusNm spec.platform ≤ spec.fanoutBendRadiusNm ∧
-     2000 ≤ spec.isolationPitchNm ∧
-     400 ≤ spec.waveguide.widthNm ∧
-     spec.waveguide.widthNm ≤ 1200 ∧
-     spec.couplers.length + 1 = spec.numQuotientModes) ∧
-    compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part hypercubeQ3Quotient goldenQ3Soi220PhotonicArray = true ∧
-    compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part hypercubeQ3Quotient goldenQ3Sin400PhotonicArray = true ∧
-    evalSymmetrizedCouplingSq hypercubeQ3Quotient 0 1 = 3 ∧
-    evalSymmetrizedCouplingSq hypercubeQ3Quotient 1 2 = 4 ∧
-    evalSymmetrizedCouplingSq hypercubeQ3Quotient 2 3 = 3 ∧
-    compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part hypercubeQ3Quotient illegalSubLithoGapArray = false ∧
-    compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part hypercubeQ3Quotient illegalLeakySinBendArray = false ∧
-    compileEquitableToPhotonicArray hypercubeQ3Matrix hypercubeQ3Part hypercubeQ3Quotient illegalCrosstalkPitchArray = false := by
-  unfold checkPhotonicArrayMatterDrc at hDrc
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at hDrc
-  refine ⟨⟨hDrc.1.1.1.1.1.2, hDrc.1.1.1.1.2, hDrc.1.1.1.1.1.1.1.2, hDrc.1.1.1.1.1.1.2, hDrc.1.2⟩, ?_⟩
-  decide +kernel
 
 /-! ## 3. IBM Heavy-Hex $C_{12}$ Unit-Cell Lattice & Microsoft Majorana-1 Tetron Parity Sector -/
 

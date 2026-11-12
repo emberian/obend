@@ -26,8 +26,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 EMIT="${OBEND_EMIT_SV:-${REPO_ROOT}/lean/.lake/build/bin/obend-emit-sv}"
 OSS_CAD="${OSS_CAD:-/Users/ember/tools/oss-cad-suite}"
-YOSYS="${YOSYS_BIN:-${OSS_CAD}/bin/yosys}"
-EQY="${EQY_BIN:-${OSS_CAD}/bin/eqy}"
+YOSYS="${YOSYS_BIN:-$([[ -x "${OSS_CAD}/bin/yosys" ]] && echo "${OSS_CAD}/bin/yosys" || command -v yosys || echo "${OSS_CAD}/bin/yosys")}"
+EQY="${EQY_BIN:-$([[ -x "${OSS_CAD}/bin/eqy" ]] && echo "${OSS_CAD}/bin/eqy" || command -v eqy || echo "${OSS_CAD}/bin/eqy")}"
+BITWUZLA="${BITWUZLA_BIN:-$([[ -x "${OSS_CAD}/bin/bitwuzla" ]] && echo "${OSS_CAD}/bin/bitwuzla" || command -v bitwuzla || true)}"
 Z3="${Z3_BIN:-$(command -v z3 || echo /opt/homebrew/bin/z3)}"
 for t in "${EMIT}" "${YOSYS}" "${Z3}"; do
   [[ -x "${t}" ]] || { echo "[FAIL] lec: ${t} not found (lake build obend-emit-sv; OSS CAD Suite under ${OSS_CAD})" >&2; exit 1; }
@@ -124,10 +125,23 @@ decide() {  # $1 = yosys .smt2, $2 = lean half, $3 = with get-value (0/1)
   if [[ "${verdict}" == "unsat" || "${verdict}" == "sat" || "${verdict}" == error ]]; then return; fi
   perl -pe 's/^(\(define-fun \S+ \(\(state \S+\)\) \(_ BitVec (\d+)\) )\(bvmul /$1(|lec_mul_$2| /' "$1" > "${work}/abs.yosys.smt2"
   perl -pe 's/\(bvmul \(\(_ sign_extend 64\)/(|lec_mul_128| ((_ sign_extend 64)/g; s/\(bvmul /(|lec_mul_64| /g' "${lean}" > "${work}/abs.lean.smt2"
-  answer="$( { grep -ohE 'lec_mul_[0-9]+' "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2" | sort -u \
-               | sed -E 's/lec_mul_([0-9]+)/(declare-fun |&| ((_ BitVec \1) (_ BitVec \1)) (_ BitVec \1))/'
-             cat "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2"; } | run_query ${LEC_ABS_SECS:+-T:"${LEC_ABS_SECS}"} 2>&1 || true)"
+  { grep -ohE 'lec_mul_[0-9]+' "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2" | sort -u \
+      | sed -E 's/lec_mul_([0-9]+)/(declare-fun |&| ((_ BitVec \1) (_ BitVec \1)) (_ BitVec \1))/'
+    cat "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2"; } > "${work}/abs.combined.smt2"
+  local z3_abs_t="${LEC_ABS_SECS:-$([[ -n "${BITWUZLA}" && -x "${BITWUZLA}" ]] && echo 15 || true)}"
+  answer="$(run_query ${z3_abs_t:+-T:"${z3_abs_t}"} < "${work}/abs.combined.smt2" 2>&1 || true)"
   how="multiplication uninterpreted"; verdict="$(solver_verdict "${answer}")"
+  if [[ "${verdict}" != "unsat" && "${verdict}" != error && -n "${BITWUZLA}" && -x "${BITWUZLA}" ]]; then
+    if python3 "${SCRIPT_DIR}/smt_share.py" "${work}/abs.combined.smt2" "${work}/abs.bw.smt2" \
+        --yosys "${YOSYS}" --keep-defines >"${work}/query.prepare.log" 2>&1; then
+      local bw_answer bw_verdict
+      bw_answer="$("${BITWUZLA}" ${LEC_ABS_SECS:+--time-limit=$((LEC_ABS_SECS * 1000))} "${work}/abs.bw.smt2" 2>&1 || true)"
+      bw_verdict="$(solver_verdict "${bw_answer}")"
+      if [[ "${bw_verdict}" == "unsat" || "${bw_verdict}" == error ]]; then
+        answer="${bw_answer}"; verdict="${bw_verdict}"
+      fi
+    fi
+  fi
   if [[ "${verdict}" == "sat" || "${verdict}" == "timeout" || "${verdict}" == "unknown" ]]; then verdict="undecided"; fi
 }
 

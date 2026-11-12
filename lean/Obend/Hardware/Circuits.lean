@@ -32,16 +32,11 @@ electronics** within `Obend.Hardware`:
      `buck_overcurrent_saturation_refused`.
 4. **Unified Datasheet-Fit & Circuit Calibration Certificate (`DatasheetFitCert`, `checkDatasheetFitSignoff`)**.
 -/
-public import Obend.Hardware.Thermal
 public import Obend.Hardware.Datasheet
-public import Obend.Hardware.Analog
-public import Obend.Hardware.PCB
-public import Obend.Hardware.RF
 @[expose] public section
 
 namespace Obend.Hardware.Circuits
-open Obend.Hardware.Thermal Obend.Hardware.Datasheet
-open Obend.Hardware.Analog Obend.Hardware.PCB Obend.Hardware.RF
+open Obend.Hardware.Datasheet
 set_option autoImplicit false
 
 /-! ## 1. Classic `SN74LS00` Schottky TTL Totem-Pole 2-Input NAND Gate (`evalTtlNandMv`) -/
@@ -251,7 +246,7 @@ theorem opamp_negative_feedback_stabilizes_gain
     (hBeta : 0 ≤ betaPermille) :
     evalFeedbackLoopFactor aOl1 betaPermille ≤ evalFeedbackLoopFactor aOl2 betaPermille := by
   dsimp only [evalFeedbackLoopFactor]
-  have hMul := int_mul_le_mul_of_nonneg_right aOl1 aOl2 betaPermille hGain hBeta
+  have hMul := Int.mul_le_mul_of_nonneg_right hGain hBeta
   omega
 
 /-! ## 3. Synchronous Buck DC-DC Power Converter (`BuckSpec`, `checkBuckCcmSafe`) -/
@@ -416,154 +411,5 @@ theorem datasheet_fit_signoff_poles :
     checkDatasheetFitSignoff badUncalibratedDriftFitCert = false :=
   ⟨rfl, rfl, rfl⟩
 
-/-! ## 5. Unified Mixed-Signal ASIC-to-PCB Transceiver Board Signoff (`AsicToPcbChannelSpec`, `checkAsicToPcbChannelSignoff`) -/
-
-/-- Unified Mixed-Signal ASIC-to-PCB Transceiver Board Signoff Specification (`AsicToPcbChannelSpec`)
-combining:
-1. `Datasheet` CMOS control I/O noise-margin levels (`cmosDrv`, `cmosRcv`, `pullupBoostMv`, `minCmosMarginMv`)
-   and high-speed differential `LvdsIoSpec` sensitivity/common-mode margins (`lvdsSpec`, `gndShiftMv`, `minDiffMarginMv`),
-2. `Analog` multi-voltage UPF gate-oxide breakdown & level-shifter checks (`upfChecks : List FetVoltageCheck`),
-3. `PCB` high-speed SerDes/LVDS eye-diagram vertical/horizontal opening & differential impedance (`eyeSpec : EyeDiagramSpec`),
-4. `RF` antenna/coax transmission-line VSWR $\le 1.5 : 1$ (`rfZ0Ohm`, `rfLoad`),
-5. `Circuits` synchronous Buck DC-DC power supply CCM & inductor core-saturation safety (`buckStage : BuckSpec`). -/
-structure AsicToPcbChannelSpec where
-  boardName       : String
-  cmosDrv         : LogicFamilySpec
-  cmosRcv         : LogicFamilySpec
-  pullupBoostMv   : Int
-  minCmosMarginMv : Int
-  lvdsSpec        : LvdsIoSpec
-  gndShiftMv      : Int
-  minDiffMarginMv : Int
-  upfChecks       : List FetVoltageCheck
-  eyeSpec         : EyeDiagramSpec
-  rfZ0Ohm         : Int
-  rfLoad          : Impedance
-  buckStage       : BuckSpec
-  deriving DecidableEq, Repr
-
-/-- Complete Mixed-Signal ASIC-to-PCB Transceiver Board Signoff Checker (`checkAsicToPcbChannelSignoff`):
-1. CMOS control interface passes `checkLogicInterface`,
-2. Differential LVDS/SerDes receiver eye height (`evalEyeHeightMv spec.eyeSpec`) passes `checkLvdsIoCompatibility`,
-3. Non-empty UPF power check table (`!spec.upfChecks.isEmpty`) and all AMS MOSFETs pass multi-voltage
-   UPF gate-oxide and level-shifter verification (`checkAmsPowerSafe`),
-4. High-speed PCB differential channel passes `checkEyeOpeningSignoff` (insertion loss, $Z_{\text{diff}}$, vertical & horizontal eye opening),
-5. RF coax/antenna port passes `checkVswrUnder3To2` ($\text{VSWR} \le 1.5 : 1$),
-6. Board Buck regulator passes `checkBuckCcmSafe`. -/
-def checkAsicToPcbChannelSignoff (spec : AsicToPcbChannelSpec) : Bool :=
-  let rxEyeMv : Int := Int.ofNat (evalEyeHeightMv spec.eyeSpec)
-  checkLogicInterface spec.cmosDrv spec.cmosRcv spec.pullupBoostMv spec.minCmosMarginMv &&
-  checkLvdsIoCompatibility spec.lvdsSpec rxEyeMv spec.gndShiftMv spec.minDiffMarginMv &&
-  !spec.upfChecks.isEmpty &&
-  checkAmsPowerSafe spec.upfChecks &&
-  checkEyeOpeningSignoff spec.eyeSpec &&
-  checkVswrUnder3To2 spec.rfZ0Ohm spec.rfLoad &&
-  checkBuckCcmSafe spec.buckStage
-
-/-- Theorem (`asicToPcbChannelSignoff_sound`):
-Whenever `checkAsicToPcbChannelSignoff spec = true`, the coupled mixed-signal ASIC-to-PCB transceiver
-board simultaneously guarantees:
-1. Valid CMOS DC logic thresholds with margin `spec.minCmosMarginMv`,
-2. Positive LVDS differential slicer margin (`spec.lvdsSpec.vthMaxMv + spec.minDiffMarginMv ≤ evalEyeHeightMv spec.eyeSpec`),
-3. Zero MOSFET gate-oxide overvoltage breakdown and level-shifter protection across all UPF voltage domains,
-4. Bounded PCB channel insertion loss, matched differential impedance, and certified vertical & horizontal eye openings,
-5. RF transmission-line reflection bounded by $25 |\Gamma|^2 \le 1$ ($\text{VSWR} \le 1.5 : 1$), and
-6. Continuous-Conduction-Mode Buck regulation without magnetic core saturation! -/
-theorem asicToPcbChannelSignoff_sound
-    (spec : AsicToPcbChannelSpec)
-    (hOk : checkAsicToPcbChannelSignoff spec = true) :
-    (spec.cmosRcv.vihMinMv + spec.minCmosMarginMv ≤ spec.cmosDrv.vohMinMv + spec.pullupBoostMv ∧
-     spec.cmosDrv.volMaxMv + spec.minCmosMarginMv ≤ spec.cmosRcv.vilMaxMv) ∧
-    spec.lvdsSpec.vthMaxMv + spec.minDiffMarginMv ≤ Int.ofNat (evalEyeHeightMv spec.eyeSpec) ∧
-    (∀ c ∈ spec.upfChecks,
-      c.appliedSwingMv ≤ c.oxideRatingMv ∧
-      (c.srcDomainMv ≠ c.dstDomainMv → c.hasLevelShifter = true)) ∧
-    (evalChannelInsertionLossMdB spec.eyeSpec.dielectric
-        (evalSerpentineTotalLengthUm spec.eyeSpec.meander)
-        spec.eyeSpec.freqMhz spec.eyeSpec.skinCoeff ≤ spec.eyeSpec.maxInsertionLossMdB ∧
-     natAbsDiff (evalDiffImpedanceMilliOhm spec.eyeSpec.diffPair) spec.eyeSpec.diffPair.zDiffTargetMilliOhm ≤
-        spec.eyeSpec.diffPair.zDiffTolMilliOhm ∧
-     spec.eyeSpec.minEyeHeightMv ≤ evalEyeHeightMv spec.eyeSpec ∧
-     spec.eyeSpec.minEyeWidthFs ≤ evalEyeWidthFs spec.eyeSpec) ∧
-    25 * gammaMagSqNum spec.rfZ0Ohm spec.rfLoad ≤ gammaMagSqDen spec.rfZ0Ohm spec.rfLoad ∧
-    evalBuckPeakInductorMa spec.buckStage ≤ spec.buckStage.iSatMaxMa := by
-  dsimp only [checkAsicToPcbChannelSignoff] at hOk
-  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true,
-      Bool.and_eq_true, Bool.and_eq_true] at hOk
-  have hLogic := checkLogicInterface_guarantees_valid_thresholds
-    spec.cmosDrv spec.cmosRcv spec.pullupBoostMv spec.minCmosMarginMv hOk.1.1.1.1.1.1
-  have hLvds := lvdsIoCompatibility_sound
-    spec.lvdsSpec (Int.ofNat (evalEyeHeightMv spec.eyeSpec)) spec.gndShiftMv spec.minDiffMarginMv hOk.1.1.1.1.1.2
-  have hUpf := powerSafe_no_oxide_overvoltage spec.upfChecks hOk.1.1.1.2
-  have hEye := eyeOpeningSignoff_sound spec.eyeSpec hOk.1.1.2
-  have hVswrRaw := hOk.1.2
-  dsimp only [checkVswrUnder3To2] at hVswrRaw
-  rw [Bool.and_eq_true, Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq, decide_eq_true_eq] at hVswrRaw
-  have hBuck := buck_ccm_safe_prevents_core_saturation spec.buckStage hOk.2
-  exact ⟨⟨hLogic.1, hLogic.2.1⟩, hLvds.2.1, hUpf, hEye, hVswrRaw.2, hBuck.2⟩
-
-/-- Golden Mixed-Signal SDR ASIC-to-PCB Transceiver Carrier Board Specification (`GF180MCU`/`Sky130`
-1.8V core + 3.3V I/O with level shifter, `LVCMOS33` $\to$ `74HCT` control interface, `ANSI-644A` LVDS
-over $10\,\text{Gbps}$ `Rogers RO4350B` differential pair, $50\,\Omega$ matched RF port, and $5\,\text{V}$ Buck). -/
-def goldenAsicToPcbChannelSpec : AsicToPcbChannelSpec where
-  boardName       := "obend_ams_sdr_transceiver_carrier_v1"
-  cmosDrv         := cmos3v3AsicIoSpec
-  cmosRcv         := cd74hct00Datasheet.logic
-  pullupBoostMv   := 0
-  minCmosMarginMv := 400
-  lvdsSpec        := lvdsAnsi644Spec
-  gndShiftMv      := 50
-  minDiffMarginMv := 100
-  upfChecks       :=
-    [ { deviceName := "M_core_sar_cmp", srcDomainMv := 1800, dstDomainMv := 1800, appliedSwingMv := 1800, oxideRatingMv := 1980, hasLevelShifter := false }
-    , { deviceName := "M_io_lvds_drv",  srcDomainMv := 1800, dstDomainMv := 3300, appliedSwingMv := 3300, oxideRatingMv := 3600, hasLevelShifter := true } ]
-  eyeSpec         := goldenSerdesEyeSpec
-  rfZ0Ohm         := 50
-  rfLoad          := ⟨50, 0⟩
-  buckStage       := golden5vBuckSpec
-
-/-- Defective board spec with a `3.3V` swing applied to a `1.8V` thin-oxide core FET without a level shifter. -/
-def badOxideAsicToPcbSpec : AsicToPcbChannelSpec :=
-  { goldenAsicToPcbChannelSpec with
-    boardName := "bad_thin_oxide_breakdown_board"
-    upfChecks :=
-      [ { deviceName := "M_thin_core_overvolt", srcDomainMv := 3300, dstDomainMv := 1800, appliedSwingMv := 3300, oxideRatingMv := 1980, hasLevelShifter := false } ] }
-
-/-- Defective board spec with an empty UPF power check table (`upfChecks = []`). -/
-def badEmptyUpfAsicToPcbSpec : AsicToPcbChannelSpec :=
-  { goldenAsicToPcbChannelSpec with
-    boardName := "bad_empty_upf_table_board"
-    upfChecks := [] }
-
-/-- Defective board spec with an illegal negative LVDS ground shift (`gndShiftMv = -5000 mV`). -/
-def badLvdsGndShiftAsicToPcbSpec : AsicToPcbChannelSpec :=
-  { goldenAsicToPcbChannelSpec with
-    boardName  := "bad_lvds_gnd_shift_board"
-    gndShiftMv := -5000 }
-
-/-- Defective board spec using a lossy $120\,\text{mm}$ FR-4 SerDes lane that fails eye-opening signoff. -/
-def badEyeClosureAsicToPcbSpec : AsicToPcbChannelSpec :=
-  { goldenAsicToPcbChannelSpec with
-    boardName := "bad_fr4_eye_closure_board"
-    eyeSpec   := highLossFr4EyeSpec }
-
-/-- Defective board spec with an unmatched $300\,\Omega$ antenna load on the $50\,\Omega$ RF port ($\text{VSWR} = 6:1$). -/
-def badVswrAsicToPcbSpec : AsicToPcbChannelSpec :=
-  { goldenAsicToPcbChannelSpec with
-    boardName := "bad_rf_vswr_board"
-    rfLoad    := ⟨300, 0⟩ }
-
-/-- Theorem (`asicToPcbChannelSignoff_poles`):
-`checkAsicToPcbChannelSignoff` accepts `goldenAsicToPcbChannelSpec` and refuses
-`badOxideAsicToPcbSpec`, `badEmptyUpfAsicToPcbSpec`, `badLvdsGndShiftAsicToPcbSpec`,
-`badEyeClosureAsicToPcbSpec`, and `badVswrAsicToPcbSpec`! -/
-theorem asicToPcbChannelSignoff_poles :
-    checkAsicToPcbChannelSignoff goldenAsicToPcbChannelSpec = true ∧
-    checkAsicToPcbChannelSignoff badOxideAsicToPcbSpec = false ∧
-    checkAsicToPcbChannelSignoff badEmptyUpfAsicToPcbSpec = false ∧
-    checkAsicToPcbChannelSignoff badLvdsGndShiftAsicToPcbSpec = false ∧
-    checkAsicToPcbChannelSignoff badEyeClosureAsicToPcbSpec = false ∧
-    checkAsicToPcbChannelSignoff badVswrAsicToPcbSpec = false :=
-  ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
-
 end Obend.Hardware.Circuits
+end

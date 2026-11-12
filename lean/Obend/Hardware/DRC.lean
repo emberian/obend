@@ -24,11 +24,11 @@ contamination laws (`fabublox.com`):
    - Proves `drc_clean_implies_min_pitch`, `drc_clean_implies_via_landed`, and
      `extracted_corner_monotone_in_oxide`.
 -/
-public import Obend.Hardware.FabuBlox
+public import Obend.Hardware.Process
 @[expose] public section
 
 namespace Obend.Hardware.DRC
-open Obend.Hardware.Process Obend.Hardware.FabuBlox
+open Obend.Hardware.Process
 set_option autoImplicit false
 
 /-! ## 1. 4-Zone FabuBlox Cleanroom Contamination Lattice (`CleanroomZone`) -/

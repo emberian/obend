@@ -52,7 +52,13 @@ class SharingTest(unittest.TestCase):
 '''
         for rhs, expected in (('(product x #x01)', 'unsat'), ('(product x #x02)', 'sat')):
             query = base + f'(assert (not (= lhs {rhs})))\n(check-sat)\n'
-            self.assertEqual(self.solve(shared_query(query, self.smtio)).strip(), expected)
+            transformed = shared_query(query, self.smtio)
+            self.assertIn('(check-sat-using (then simplify propagate-values solve-eqs smt))', transformed)
+            self.assertEqual(self.solve(transformed).strip(), expected)
+            kept = shared_query(query, self.smtio, keep_defines=True)
+            self.assertIn('(define-fun lhs () (_ BitVec 8) (product x #x01))', kept)
+            self.assertIn('(check-sat)', kept)
+            self.assertEqual(self.solve(kept).strip(), expected)
 
     def test_refuse_scope_reset_and_conflicting_definitions(self):
         for query in ('(push 1)\n(check-sat)', '(pop 1)\n(check-sat)',

@@ -21,14 +21,47 @@ is `Obend.Hardware.Gpu`, run on the devices by `hardware/gpu/verify_gpu.sh`.
 4. **Systolic chain and `DSP58` cascade folds**: `runSystolicMacChain`, `runDsp58Cascade` and
    `systolic_tpu_eq_dsp58_cascade_eq_kulisch_dot`, three folds over `Int` lists being the same fold.
 -/
-public import Obend.Hardware.Thermal
 public import Obend.Hardware.HDL
 @[expose] public section
 
 namespace Obend.Hardware.Accelerators
-open Obend.Hardware.Thermal
 open Obend.Hardware.HDL
 set_option autoImplicit false
+
+/-! ## 0. Integer Arithmetic Order Helpers -/
+
+/-- The product of two non-negative integers `a ≥ 0` and `b ≥ 0` is non-negative (`0 ≤ a * b`). -/
+theorem int_mul_nonneg (a b : Int) (ha : 0 ≤ a) (hb : 0 ≤ b) : 0 ≤ a * b := by
+  cases a with
+  | ofNat m =>
+    cases b with
+    | ofNat n =>
+      exact Int.ofNat_nonneg (m * n)
+    | negSucc _ => omega
+  | negSucc _ => omega
+
+/-- For any integer `a : Int`, its square is non-negative (`0 ≤ a * a`). -/
+theorem int_sq_nonneg (a : Int) : 0 ≤ a * a := by
+  cases a with
+  | ofNat n =>
+    exact Int.ofNat_nonneg (n * n)
+  | negSucc n =>
+    exact Int.ofNat_nonneg (Nat.succ n * Nat.succ n)
+
+/-- Monotonicity of integer multiplication by a non-negative left factor `c ≥ 0`. -/
+theorem int_mul_le_mul_of_nonneg_left (a b c : Int) (hab : a ≤ b) (hc : 0 ≤ c) :
+    c * a ≤ c * b := by
+  have hDiff : 0 ≤ c * (b - a) := int_mul_nonneg c (b - a) hc (by omega)
+  have hSplit : a + (b - a) = b := by omega
+  have hExpand : c * (a + (b - a)) = c * a + c * (b - a) := Int.mul_add c a (b - a)
+  rw [hSplit] at hExpand
+  omega
+
+/-- Monotonicity of integer multiplication by a non-negative right factor `c ≥ 0`. -/
+theorem int_mul_le_mul_of_nonneg_right (a b c : Int) (hab : a ≤ b) (hc : 0 ≤ c) :
+    a * c ≤ b * c := by
+  rw [Int.mul_comm a c, Int.mul_comm b c]
+  exact int_mul_le_mul_of_nonneg_left a b c hab hc
 
 /-! ## 1. Ozaki Scheme I/II with Base-13 `FP4 (E2M1)` Limb Representation (`arXiv:2608.06812`) -/
 

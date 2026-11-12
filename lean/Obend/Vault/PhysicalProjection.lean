@@ -21,10 +21,7 @@ Implements `WS 30` (`PHYSICAL.md` $\leftrightarrow$ `.obnb` Notebooks):
 public import Obend.Vault.HardwareProjection
 public import Obend.Leaf.Emit
 public import Obend.Hardware.Kinematics
-public import Obend.Hardware.FluidThermal
 public import Obend.Hardware.Magnetics
-public import Obend.Hardware.PowerElectronics
-public import Obend.Hardware.Mechanics
 public import Obend.Hardware.OpenUSD
 public import Obend.Hardware.UserspacePhysical
 public import Obend.Analysis.Hybrid
@@ -36,11 +33,7 @@ open Obend.Core.Term
 open Obend.Doc
 open Obend.Vault.HardwareProjection (dInt)
 open Obend.Hardware.Kinematics
-open Obend.Hardware.FluidThermal
 open Obend.Hardware.Magnetics
-open Obend.Hardware.PowerElectronics
-open Obend.Hardware.Mechanics
-open Obend.Hardware.Thermal
 open Obend.Hardware.OpenUSD
 open Obend.Hardware.UserspacePhysical
 open Obend.Logic
@@ -199,27 +192,27 @@ def projectOpenUsdScene
 
 /-! ## 3. Coupled LC-Drive Stator Multiphysics & Continuous ODE Flowpipe Projection -/
 
-/-- Specification for a coupled liquid-cooled stator multiphysics + continuous ODE flowpipe viewport cell. -/
+/-- Specification for a coupled Courant $P_1$ stator FEMM + continuous ODE flowpipe viewport cell. -/
 structure StatorMultiphysicsViewportSpec where
-  partName      : String
-  channel       : CoolingChannelSpec
-  ode           : OdeSystem
-  initBox       : List (String × Interval)
-  steps         : Nat
-  safeBounds    : List (String × Interval)
+  partName       : String
+  statorTriangle : FemmTriangle2D
+  ode            : OdeSystem
+  initBox        : List (String × Interval)
+  steps          : Nat
+  safeBounds     : List (String × Interval)
   deriving DecidableEq, Repr
 
 /-- Project a `StatorMultiphysicsViewportSpec` into canonical `Core.Data`. -/
 def statorMultiphysicsToData (spec : StatorMultiphysicsViewportSpec) : Data :=
   let statorBook := emit lcDrivesStatorUsdComp
-  let darcyDrop := evalDarcyPressureDropScaled spec.channel
+  let femmCoEnergy := evalElementMagneticEnergyAreaScaled 1000000 spec.statorTriangle 10 (-4) 6
   let flowpipeSafe := verifyTrajectorySafety spec.ode spec.initBox spec.steps spec.safeBounds
   .record [
     ("kind", .label "physical_stator_multiphysics"),
     ("part_name", .label spec.partName),
     ("stator_slot_count", .natural statorBook.slots.length),
     ("stator_book_closed", .boolean statorBook.closedB),
-    ("darcy_pressure_drop_scaled", dInt darcyDrop),
+    ("femm_coenergy_scaled", dInt femmCoEnergy),
     ("flowpipe_steps", .natural spec.steps),
     ("flowpipe_safe", .boolean flowpipeSafe),
     ("status", .label (if flowpipeSafe && statorBook.closedB then "MULTIPHYSICS_CERTIFIED" else "UNSAFE"))
@@ -273,17 +266,12 @@ a-priori box), and at the third step the a-priori enclosure reaches down to abou
 enclosures too, so the bound is the method's, `[12, 35]`, as in `Flowpipe`'s own fixture. A tighter
 bound needs a mean-value (Lohner) step, not a looser spec. -/
 def goldenStatorMultiphysicsSpec : StatorMultiphysicsViewportSpec where
-  partName   := "LC_Drives_InSlot_Stator_Assy"
-  channel    :=
-    { frictionFactorMilli := 25
-    , lengthMm            := 240
-    , hydraulicDiaMm      := 4
-    , fluidDensityKgM3    := 1065
-    , velocityMmPerSec    := 2500 }
-  ode        := thermalCoolingOde
-  initBox    := [("T", ⟨28, 30⟩)]
-  steps      := 3
-  safeBounds := [("T", ⟨12, 35⟩)]
+  partName       := "LC_Drives_InSlot_Stator_Assy"
+  statorTriangle := goldenStatorToothTriangle
+  ode            := thermalCoolingOde
+  initBox        := [("T", ⟨28, 30⟩)]
+  steps          := 3
+  safeBounds     := [("T", ⟨12, 35⟩)]
 
 /-- **Theorem (`physical_projection_deterministic`)**:
 All three physical-world `.obnb` projection functions (`projectCncToolpath`, `projectOpenUsdScene`,
@@ -344,15 +332,6 @@ theorem physical_projection_doc_noninterference
     (otherAtom : AtomId) (hNe : otherAtom ≠ newAtom) :
     (((newAtom, cell) :: G.atoms).lookup otherAtom) = G.atoms.lookup otherAtom :=
   Obend.Vault.HardwareProjection.hardware_projection_doc_noninterference G newAtom cell otherAtom hNe
-
-/-! ## 5. Coupled Motor-Inverter-Cooler Drive-Train Co-Design `.obnb` Projection -/
-
-export Obend.Vault.HardwareProjection (
-  driveTrainCoDesignToData
-  projectDriveTrainCoDesign
-  projectDriveTrainCoDesign_deterministic
-  driveTrainCoDesign_projection_sound
-)
 
 end Obend.Vault.PhysicalProjection
 end

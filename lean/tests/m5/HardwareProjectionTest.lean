@@ -5,7 +5,7 @@ import Obend.Hardware.HDL
 import Obend.Hardware.Process
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.DRC
-import Obend.Hardware.WaferSpace
+import Obend.Hardware.Synth
 import Obend.Hardware.Circuits
 import Obend.Hardware.Fabric
 
@@ -15,7 +15,7 @@ open Obend.Hardware.HDL
 open Obend.Hardware.Process
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.DRC
-open Obend.Hardware.WaferSpace
+open Obend.Hardware.Synth
 open Obend.Hardware.Circuits
 
 set_option autoImplicit false
@@ -27,7 +27,7 @@ def test_project_circuit : Bool :=
   let m : Circuit := {
     name       := "adder_cell"
     inputNames := ["a", "b"]
-    wires      := [⟨0, "w0", .alu .add (.inputPort 0) (.inputPort 1)⟩]
+    wires      := [{ wireIdx := 0, name := "w0", expr := .alu .add (.inputPort 0) (.inputPort 1) }]
     regs       := []
     outputs    := [{ name := "sum", expr := .wireRef 0 }]
   }
@@ -42,20 +42,13 @@ def test_project_circuit : Bool :=
 
 #guard test_project_circuit == true
 
--- Test 2: LVS Netlist Projection & LVS Congruence
+-- Test 2: BEL Netlist Projection & Congruence
 def test_project_netlist_congruence : Bool :=
-  let golden : Netlist := {
-    moduleName     := "inv_gate"
-    nfetCount      := 1
-    pfetCount      := 1
-    mimCapCount    := 0
-    totalCapFf     := 5
-    pinConnections := [("IN", "net_a"), ("OUT", "net_y")]
-  }
+  let golden : Netlist := validAdderBelNetlist
   let layout := golden
   let cGolden := projectNetlist "netlist_0" golden
   let cLayout := projectNetlist "netlist_0" layout
-  (checkLvsMatch golden layout == true) &&
+  (checkBelNetlistValid golden == true) &&
   (cGolden == cLayout)
 
 #guard test_project_netlist_congruence == true

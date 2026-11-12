@@ -634,5 +634,592 @@ theorem rtlPiStep_within_lsb (kpMilli kiMilli errMa intMv : Int) :
   have h4 := Int.lt_ediv_add_one_mul_self (errMa * kpMilli) (b := 1000) (by decide)
   refine ⟨?_, ?_, ?_, ?_⟩ <;> omega
 
+/-- Hardware Q32 fixed-point PI step matching `HDL.evalAluOp .qmul32` (`((err * k_q32) >>> 32)`):
+gains scaled by $2^{32} / 1000$, products shifted right by 32 bits (`Int` Euclidean floor `/ 2^32`). -/
+@[expose] def rtlPiStepQ32 (kpQ32 kiQ32 errMa intMv : Int) : Int × Int :=
+  let int' := intMv + (errMa * kiQ32) / 4294967296
+  (int', (errMa * kpQ32) / 4294967296 + int')
+
+/-- Each Q32 fixed-point shift loses strictly less than 1 LSB (`1 mV`). -/
+theorem rtlPiStepQ32_within_lsb (kpQ32 kiQ32 errMa intMv : Int) :
+    let (int', v) := rtlPiStepQ32 kpQ32 kiQ32 errMa intMv
+    4294967296 * (int' - intMv) ≤ errMa * kiQ32 ∧
+    errMa * kiQ32 < 4294967296 * (int' - intMv) + 4294967296 ∧
+    4294967296 * (v - int') ≤ errMa * kpQ32 ∧
+    errMa * kpQ32 < 4294967296 * (v - int') + 4294967296 := by
+  dsimp only [rtlPiStepQ32]
+  have h1 := Int.ediv_mul_le (errMa * kiQ32) (b := 4294967296) (by decide)
+  have h2 := Int.lt_ediv_add_one_mul_self (errMa * kiQ32) (b := 4294967296) (by decide)
+  have h3 := Int.ediv_mul_le (errMa * kpQ32) (b := 4294967296) (by decide)
+  have h4 := Int.lt_ediv_add_one_mul_self (errMa * kpQ32) (b := 4294967296) (by decide)
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> omega
+
+/-! ## 8. Input-to-State Stability (ISS) & Quantized `rtlPiStep` Ultimate-Boundedness Ball
+
+Combines `discrete_lyapunov_decay` (§4) with `rtlPiStep_within_lsb` (§7) and 1-mA ADC quantization
+into a universal **quantized sampled-data ISS ultimate-boundedness theorem**:
+1. `quadForm_peter_paul` & `discrete_lyapunov_iss_step`: For any $\theta > 0$ (`theta * thetaInv = 1`),
+   expanding $V_P(\theta u - w) \ge 0$ gives the exact rational Peter–Paul inequality
+   $$V_P(M s + w) \le (1 + \theta)\rho\, V_P(s) + (1 + \theta^{-1}) c\, \|w\|_2^2.$$
+2. `discrete_lyapunov_iss_ball`: Whenever $\rho_{\text{iss}} = (1 + \theta)\rho < 1$ and every step's
+   perturbation obeys $\|w_k\|_2^2 \le d_{\text{sq}}$, the sublevel ball
+   $\mathcal{B}_{\text{iss}} = \{s : V_P(s) \le R_{\text{ball}}\}$ with
+   $(1 - \rho_{\text{iss}}) R_{\text{ball}} = (1 + \theta^{-1}) c\, d_{\text{sq}}$ is:
+   - **geometrically attractive** ($V_P(s_k) - R_{\text{ball}} \le \rho_{\text{iss}}^k (V_P(s_0) - R_{\text{ball}})$),
+   - **strictly contracting outside** ($V_P(s_k) > R_{\text{ball}} \implies V_P(s_{k+1}) < V_P(s_k)$),
+   - **forward invariant** ($V_P(s_0) \le R_{\text{ball}} \implies \forall k,\, V_P(s_k) \le R_{\text{ball}}$), and
+   - **ultimately bounding on current error** ($m x_k^2 \le \rho_{\text{iss}}^k c (x_0^2 + z_0^2) + R_{\text{ball}}$).
+3. `stepQuantizedRtlLoop` & `quantized_current_loop_iss_ball`: Connects the exact integer `rtlPiStep`
+   (mV accumulator, `/ 1000` product truncations) + 1-mA ADC floor quantization directly to `stepLoop`,
+   proving explicit perturbation bounds via `rtlPiStep_within_lsb` and instantiating the universal ISS
+   ball on the LC Drives 20 kHz IPM current loop (`lc_drives_quantized_current_loop_iss_ball`). -/
+
+/-- Positive semidefiniteness of $V_P$ from `lyapStaticOk` (`P - m I ⪰ 0` and `m > 0`). -/
+theorem quadForm_nonneg_of_static
+    (p11 p12 p22 eps c m y1 y2 : CanonicalRat)
+    (hStatic : lyapStaticOk p11 p12 p22 eps c m = true) :
+    0 ≤ quadForm p11 p12 p22 y1 y2 := by
+  unfold lyapStaticOk at hStatic
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hStatic
+  obtain ⟨⟨⟨⟨⟨_, hm⟩, _⟩, _⟩, hm1⟩, hm2⟩ := hStatic
+  have hM := quadForm_nonneg_of_minors (p11 - m) p12 (p22 - m) y1 y2 hm1 hm2
+  have hMid : quadForm (p11 - m) p12 (p22 - m) y1 y2 =
+      quadForm p11 p12 p22 y1 y2 - m * (y1 * y1 + y2 * y2) := by
+    unfold quadForm; grind
+  rw [hMid] at hM
+  have hy1 := Interval.rat_sq_nonneg y1
+  have hy2 := Interval.rat_sq_nonneg y2
+  have hSum : 0 ≤ m * (y1 * y1 + y2 * y2) := Rat.mul_nonneg (by grind) (by grind)
+  grind
+
+/-- Exact rational Peter–Paul inequality for any positive-definite `quadForm`:
+$\theta V_P(u + w) \le \theta(1 + \theta) V_P(u) + (1 + \theta) V_P(w)$, proved via
+$\text{RHS} - \text{LHS} = V_P(\theta u - w) \ge 0$. -/
+theorem quadForm_peter_paul
+    (p11 p12 p22 eps c m theta ux uz wx wz : CanonicalRat)
+    (hStatic : lyapStaticOk p11 p12 p22 eps c m = true) :
+    theta * quadForm p11 p12 p22 (ux + wx) (uz + wz) ≤
+      theta * (1 + theta) * quadForm p11 p12 p22 ux uz +
+      (1 + theta) * quadForm p11 p12 p22 wx wz := by
+  have hNonneg := quadForm_nonneg_of_static p11 p12 p22 eps c m (theta * ux - wx) (theta * uz - wz) hStatic
+  have hId :
+      theta * (1 + theta) * quadForm p11 p12 p22 ux uz +
+      (1 + theta) * quadForm p11 p12 p22 wx wz -
+      theta * quadForm p11 p12 p22 (ux + wx) (uz + wz) =
+      quadForm p11 p12 p22 (theta * ux - wx) (theta * uz - wz) := by
+    unfold quadForm; grind
+  grind
+
+/-- **One-Step Perturbed Lyapunov ISS Inequality (`discrete_lyapunov_iss_step`)**:
+Under `lyapStaticOk` and `lyapDynamicOk`, for any $\theta > 0$ (`theta * thetaInv = 1`), any state
+$(x, z)$, and any additive state disturbance $(w_x, w_z)$:
+$$V_P(M s + w) \le ((1 + \theta)\rho)\, V_P(s) + ((1 + \theta^{-1}) c)\, (w_x^2 + w_z^2).$$ -/
+theorem discrete_lyapunov_iss_step
+    (p11 p12 p22 a11 a12 a21 a22 eps c m rho theta thetaInv x z wx wz : CanonicalRat)
+    (hStatic : lyapStaticOk p11 p12 p22 eps c m = true)
+    (hDyn : lyapDynamicOk p11 p12 p22 a11 a12 a21 a22 eps = true)
+    (hrho : rho * c = c - eps)
+    (hTheta : 0 < theta)
+    (hInv : theta * thetaInv = 1) :
+    quadForm p11 p12 p22 (mapX a11 a12 x z + wx) (mapZ a21 a22 x z + wz) ≤
+      ((1 + theta) * rho) * quadForm p11 p12 p22 x z +
+      ((1 + thetaInv) * c) * (wx * wx + wz * wz) := by
+  have hPP := quadForm_peter_paul p11 p12 p22 eps c m theta (mapX a11 a12 x z) (mapZ a21 a22 x z) wx wz hStatic
+  have hDec := discrete_lyapunov_decay p11 p12 p22 a11 a12 a21 a22 eps c m rho x z hStatic hDyn hrho
+  have hWBound := (discrete_lyapunov_decay p11 p12 p22 a11 a12 a21 a22 eps c m rho wx wz hStatic hDyn hrho).2.2
+  have h1 : theta * (1 + theta) * quadForm p11 p12 p22 (mapX a11 a12 x z) (mapZ a21 a22 x z) ≤
+      theta * (1 + theta) * (rho * quadForm p11 p12 p22 x z) :=
+    Rat.mul_le_mul_of_nonneg_left hDec.1 (Rat.mul_nonneg (by grind) (by grind))
+  have h2 : (1 + theta) * quadForm p11 p12 p22 wx wz ≤
+      (1 + theta) * (c * (wx * wx + wz * wz)) :=
+    Rat.mul_le_mul_of_nonneg_left hWBound (by grind)
+  have hGainEq : theta * ((1 + thetaInv) * c) = (1 + theta) * c := by
+    calc theta * ((1 + thetaInv) * c)
+        = (theta + theta * thetaInv) * c := by grind
+      _ = (theta + 1) * c := by rw [hInv]
+      _ = (1 + theta) * c := by grind
+  have hScaled :
+      theta * quadForm p11 p12 p22 (mapX a11 a12 x z + wx) (mapZ a21 a22 x z + wz) ≤
+      theta * (((1 + theta) * rho) * quadForm p11 p12 p22 x z +
+        ((1 + thetaInv) * c) * (wx * wx + wz * wz)) := by
+    have hRhs :
+        theta * (((1 + theta) * rho) * quadForm p11 p12 p22 x z +
+          ((1 + thetaInv) * c) * (wx * wx + wz * wz)) =
+        theta * (1 + theta) * (rho * quadForm p11 p12 p22 x z) +
+          (1 + theta) * (c * (wx * wx + wz * wz)) := by
+      calc theta * (((1 + theta) * rho) * quadForm p11 p12 p22 x z +
+              ((1 + thetaInv) * c) * (wx * wx + wz * wz))
+          = theta * (1 + theta) * (rho * quadForm p11 p12 p22 x z) +
+              (theta * ((1 + thetaInv) * c)) * (wx * wx + wz * wz) := by grind
+        _ = theta * (1 + theta) * (rho * quadForm p11 p12 p22 x z) +
+              (1 + theta) * (c * (wx * wx + wz * wz)) := by rw [hGainEq]; grind
+    rw [hRhs]
+    grind
+  exact Rat.le_of_mul_le_mul_left hScaled hTheta
+
+/-- **Universal Multi-Step ISS Ultimate-Boundedness Ball (`discrete_lyapunov_iss_ball`)**:
+For any disturbed trajectory `traj : Nat → CanonicalRat × CanonicalRat` whose step disturbance satisfies
+$w_x^2 + w_z^2 \le d_{\text{sq}}$ at every sample, with ISS rate $\rho_{\text{iss}} = (1 + \theta)\rho \in [0, 1)$
+and ball radius $R_{\text{ball}}$ satisfying $(1 - \rho_{\text{iss}}) R_{\text{ball}} = (1 + \theta^{-1}) c\, d_{\text{sq}}$:
+1. $V_P(s_k) - R_{\text{ball}} \le \rho_{\text{iss}}^k (V_P(s_0) - R_{\text{ball}})$,
+2. Outside the ball ($R_{\text{ball}} < V_P(s_k)$), $V_P(s_{k+1}) < V_P(s_k)$ strictly contracts,
+3. Inside the ball ($V_P(s_0) \le R_{\text{ball}}$), $V_P(s_k) \le R_{\text{ball}}$ for all $k$,
+4. $m x_k^2 \le \rho_{\text{iss}}^k c (x_0^2 + z_0^2) + R_{\text{ball}}$ for all $k$. -/
+theorem discrete_lyapunov_iss_ball
+    (p11 p12 p22 a11 a12 a21 a22 eps c m rho theta thetaInv rhoIss dSq rBall : CanonicalRat)
+    (hStatic : lyapStaticOk p11 p12 p22 eps c m = true)
+    (hDyn : lyapDynamicOk p11 p12 p22 a11 a12 a21 a22 eps = true)
+    (hrho : rho * c = c - eps)
+    (hTheta : 0 < theta)
+    (hInv : theta * thetaInv = 1)
+    (hRhoIssDef : rhoIss = (1 + theta) * rho)
+    (hRhoIss0 : 0 ≤ rhoIss)
+    (hRhoIss1 : rhoIss < 1)
+    (hdSq0 : 0 ≤ dSq)
+    (hBall : (1 - rhoIss) * rBall = ((1 + thetaInv) * c) * dSq)
+    (traj : Nat → CanonicalRat × CanonicalRat)
+    (hStep : ∀ j, ∃ wx wz,
+      traj (j + 1) = (mapX a11 a12 (traj j).1 (traj j).2 + wx, mapZ a21 a22 (traj j).1 (traj j).2 + wz) ∧
+      wx * wx + wz * wz ≤ dSq) :
+    (∀ k, quadForm p11 p12 p22 (traj k).1 (traj k).2 - rBall ≤
+      ratPow rhoIss k * (quadForm p11 p12 p22 (traj 0).1 (traj 0).2 - rBall)) ∧
+    (∀ k, rBall < quadForm p11 p12 p22 (traj k).1 (traj k).2 →
+      quadForm p11 p12 p22 (traj (k + 1)).1 (traj (k + 1)).2 <
+        quadForm p11 p12 p22 (traj k).1 (traj k).2) ∧
+    (quadForm p11 p12 p22 (traj 0).1 (traj 0).2 ≤ rBall →
+      ∀ k, quadForm p11 p12 p22 (traj k).1 (traj k).2 ≤ rBall) ∧
+    (∀ k, m * ((traj k).1 * (traj k).1) ≤
+      ratPow rhoIss k * (c * ((traj 0).1 * (traj 0).1 + (traj 0).2 * (traj 0).2)) + rBall) := by
+  have hcPos : 0 < c := by
+    unfold lyapStaticOk at hStatic
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hStatic
+    grind
+  have hmPos : 0 < m := by
+    unfold lyapStaticOk at hStatic
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hStatic
+    exact hStatic.1.1.1.1.2
+  have hThetaInvPos : 0 < thetaInv := by
+    rcases @Rat.le_total thetaInv 0 with hle | hge
+    · have := Rat.mul_le_mul_of_nonneg_left hle (by grind : 0 ≤ theta)
+      grind
+    · by_cases hz : thetaInv = 0
+      · rw [hz] at hInv; grind
+      · grind
+  have hKappaNonneg : 0 ≤ (1 + thetaInv) * c := Rat.mul_nonneg (by grind) (by grind)
+  have hrBallNonneg : 0 ≤ rBall := by
+    have hProd : (1 - rhoIss) * 0 ≤ (1 - rhoIss) * rBall := by
+      rw [hBall]
+      have := Rat.mul_nonneg hKappaNonneg hdSq0
+      grind
+    exact Rat.le_of_mul_le_mul_left hProd (by grind)
+  have hOneStep : ∀ j,
+      quadForm p11 p12 p22 (traj (j + 1)).1 (traj (j + 1)).2 - rBall ≤
+        rhoIss * (quadForm p11 p12 p22 (traj j).1 (traj j).2 - rBall) := by
+    intro j
+    obtain ⟨wx, wz, hEq, hwSq⟩ := hStep j
+    have hIss := discrete_lyapunov_iss_step p11 p12 p22 a11 a12 a21 a22 eps c m rho theta thetaInv
+      (traj j).1 (traj j).2 wx wz hStatic hDyn hrho hTheta hInv
+    have hwScaled : ((1 + thetaInv) * c) * (wx * wx + wz * wz) ≤ ((1 + thetaInv) * c) * dSq :=
+      Rat.mul_le_mul_of_nonneg_left hwSq hKappaNonneg
+    have hNextEq : quadForm p11 p12 p22 (traj (j + 1)).1 (traj (j + 1)).2 =
+        quadForm p11 p12 p22 (mapX a11 a12 (traj j).1 (traj j).2 + wx)
+          (mapZ a21 a22 (traj j).1 (traj j).2 + wz) := by
+      rw [hEq]
+    rw [← hNextEq, ← hRhoIssDef] at hIss
+    rw [← hBall] at hwScaled
+    grind
+  have hExcess : ∀ k,
+      quadForm p11 p12 p22 (traj k).1 (traj k).2 - rBall ≤
+        ratPow rhoIss k * (quadForm p11 p12 p22 (traj 0).1 (traj 0).2 - rBall) := by
+    intro k
+    induction k with
+    | zero => dsimp [ratPow]; grind
+    | succ j ih =>
+      have hj := hOneStep j
+      have hMul := Rat.mul_le_mul_of_nonneg_left ih hRhoIss0
+      have hPow : ratPow rhoIss (j + 1) = rhoIss * ratPow rhoIss j := rfl
+      rw [hPow]
+      grind
+  refine ⟨hExcess, ?_, ?_, ?_⟩
+  · intro k hOut
+    have hk := hOneStep k
+    have hDiffPos : 0 < quadForm p11 p12 p22 (traj k).1 (traj k).2 - rBall := by grind
+    have hStrict : rhoIss * (quadForm p11 p12 p22 (traj k).1 (traj k).2 - rBall) <
+        1 * (quadForm p11 p12 p22 (traj k).1 (traj k).2 - rBall) := by
+      have hPos : 0 < (1 - rhoIss) * (quadForm p11 p12 p22 (traj k).1 (traj k).2 - rBall) :=
+        Rat.mul_pos (by grind) hDiffPos
+      grind
+    grind
+  · intro hIn0 k
+    have hk := hExcess k
+    have hPow := ratPow_nonneg rhoIss hRhoIss0 k
+    have hNonpos : ratPow rhoIss k * (quadForm p11 p12 p22 (traj 0).1 (traj 0).2 - rBall) ≤
+        ratPow rhoIss k * 0 :=
+      Rat.mul_le_mul_of_nonneg_left (by grind) hPow
+    grind
+  · intro k
+    have hk := hExcess k
+    have hPow := ratPow_nonneg rhoIss hRhoIss0 k
+    have hDecK := discrete_lyapunov_decay p11 p12 p22 a11 a12 a21 a22 eps c m rho
+      (traj k).1 (traj k).2 hStatic hDyn hrho
+    have hDec0 := discrete_lyapunov_decay p11 p12 p22 a11 a12 a21 a22 eps c m rho
+      (traj 0).1 (traj 0).2 hStatic hDyn hrho
+    have hzk := Interval.rat_sq_nonneg (traj k).2
+    have hmzk : 0 ≤ m * ((traj k).2 * (traj k).2) := Rat.mul_nonneg (by grind) hzk
+    have hDropBall : ratPow rhoIss k * (quadForm p11 p12 p22 (traj 0).1 (traj 0).2 - rBall) ≤
+        ratPow rhoIss k * quadForm p11 p12 p22 (traj 0).1 (traj 0).2 :=
+      Rat.mul_le_mul_of_nonneg_left (by grind) hPow
+    have hUp0 : ratPow rhoIss k * quadForm p11 p12 p22 (traj 0).1 (traj 0).2 ≤
+        ratPow rhoIss k * (c * ((traj 0).1 * (traj 0).1 + (traj 0).2 * (traj 0).2)) :=
+      Rat.mul_le_mul_of_nonneg_left hDec0.2.2 hPow
+    grind
+
+/-- Convert milli-units (`mA`, `mV`, `mΩ`) to `CanonicalRat` SI units (`A`, `V`, `Ω`). -/
+@[expose] def ratMilli (n : Int) : CanonicalRat := (n : CanonicalRat) / 1000
+
+/-- 1-mA ADC floor quantizer mapping continuous stator current `i` (A) to integer `mA`. -/
+@[expose] def adcFloorMa (i : CanonicalRat) : Int :=
+  (1000 * i).floor
+
+/-- `adcFloorMa i` under-approximates `1000 * i` within 1 mA (`1 LSB`):
+`ratMilli (adcFloorMa i) ≤ i ∧ i ≤ ratMilli (adcFloorMa i) + ratMilli 1`. -/
+theorem adcFloorMa_within_lsb (i : CanonicalRat) :
+    ratMilli (adcFloorMa i) ≤ i ∧ i ≤ ratMilli (adcFloorMa i) + ratMilli 1 := by
+  unfold adcFloorMa ratMilli
+  have hLo : (((1000 * i).floor : Int) : CanonicalRat) ≤ 1000 * i := Rat.floor_le (1000 * i)
+  have hHi : 1000 * i ≤ (((1000 * i).floor : Int) : CanonicalRat) + 1 := by
+    have hLt := Rat.lt_floor_add_one (1000 * i)
+    rw [Rat.intCast_add] at hLt
+    exact Rat.le_of_lt hLt
+  refine ⟨?_, ?_⟩ <;> grind
+
+/-- Hybrid sampled-data state of the quantized RTL PI current loop:
+continuous-amplitude physical current `i : CanonicalRat` (A) coupled to the exact integer hardware
+integrator register `intMv : Int` (mV). -/
+structure QuantizedLoopState where
+  i     : CanonicalRat
+  intMv : Int
+  deriving @[expose] DecidableEq, Repr
+
+/-- Embed a `QuantizedLoopState` into the continuous `LoopState` (`int = ratMilli intMv`). -/
+@[expose] def QuantizedLoopState.toLoopState (qs : QuantizedLoopState) : LoopState :=
+  ⟨qs.i, ratMilli qs.intMv⟩
+
+/-- One 20 kHz sample of the physical ZOH RL plant driven by the integer `rtlPiStep` controller
+with 1-mA ADC quantization `adcFloorMa`:
+1. `errMa = rMa - adcFloorMa qs.i`,
+2. `(intMv', vPiMv) = rtlPiStep kpMilli kiMilli errMa qs.intMv`,
+3. `i' = d.a * qs.i + d.b * ratMilli (vPiMv + vffMv)`. -/
+@[expose] def stepQuantizedRtlLoop
+    (d : ZohRl) (kpMilli kiMilli rMa vffMv : Int) (qs : QuantizedLoopState) : QuantizedLoopState :=
+  let errMa := rMa - adcFloorMa qs.i
+  let (intMv', vPiMv) := rtlPiStep kpMilli kiMilli errMa qs.intMv
+  ⟨d.a * qs.i + d.b * ratMilli (vPiMv + vffMv), intMv'⟩
+
+/-- Iterate `stepQuantizedRtlLoop` for `k` 20 kHz control ticks. -/
+@[expose] def iterateQuantizedRtlLoop
+    (d : ZohRl) (kpMilli kiMilli rMa vffMv : Int) : Nat → QuantizedLoopState → QuantizedLoopState
+  | 0, qs => qs
+  | k + 1, qs => iterateQuantizedRtlLoop d kpMilli kiMilli rMa vffMv k
+      (stepQuantizedRtlLoop d kpMilli kiMilli rMa vffMv qs)
+
+private theorem sq_le_of_bounds (w bnd : CanonicalRat)
+    (hLo : -bnd ≤ w) (hHi : w ≤ bnd) : w * w ≤ bnd * bnd := by
+  have hNonneg : 0 ≤ (bnd - w) * (bnd + w) := Rat.mul_nonneg (by grind) (by grind)
+  grind
+
+/-- **Exact Quantization Perturbation Theorem (`stepQuantizedRtlLoop_error_perturbation`)**:
+By `rtlPiStep_within_lsb` and `adcFloorMa_within_lsb`, one step of `stepQuantizedRtlLoop` equals
+the ideal linear error map `M` applied to `(errX, errZ)` plus an explicit quantization disturbance
+`(wx, wz)` bounded by
+$$w_x^2 + w_z^2 \le \frac{d.b^2 (2 + K_p + K_i)^2 + (1 + K_i)^2}{10^6}$$
+for all `0 ≤ kpMilli`, `0 ≤ kiMilli`, `0 ≤ d.b`, and `d.b * d.plant.rOhm = 1 - d.a`! -/
+theorem stepQuantizedRtlLoop_error_perturbation
+    (d : ZohRl) (kpMilli kiMilli rMa vffMv : Int)
+    (hKp0 : 0 ≤ kpMilli) (hKi0 : 0 ≤ kiMilli)
+    (hb0 : 0 ≤ d.b) (hbR : d.b * d.plant.rOhm = 1 - d.a)
+    (qs : QuantizedLoopState) :
+    let r := ratMilli rMa
+    let vff := ratMilli vffMv
+    let g : PiGains := ⟨ratMilli kpMilli, ratMilli kiMilli⟩
+    let s := qs.toLoopState
+    let sNext := (stepQuantizedRtlLoop d kpMilli kiMilli rMa vffMv qs).toLoopState
+    ∃ wx wz : CanonicalRat,
+      errX r sNext = mapX (m11 d g) (m12 d) (errX r s) (errZ d r vff s) + wx ∧
+      errZ d r vff sNext = mapZ (m21 g) m22 (errX r s) (errZ d r vff s) + wz ∧
+      wx * wx + wz * wz ≤
+        (d.b * d.b * ((2 + g.kp + g.ki) * (2 + g.kp + g.ki)) + (1 + g.ki) * (1 + g.ki)) / 1000000 := by
+  intro r vff g s sNext
+  let iMa := adcFloorMa qs.i
+  let errMa := rMa - iMa
+  have hLsb := rtlPiStep_within_lsb kpMilli kiMilli errMa qs.intMv
+  let intMv' := (rtlPiStep kpMilli kiMilli errMa qs.intMv).1
+  let vPiMv := (rtlPiStep kpMilli kiMilli errMa qs.intMv).2
+  have hAdc := adcFloorMa_within_lsb qs.i
+  have hIdeal := stepLoop_error_dynamics d g r vff s hbR
+  let sIdeal := stepLoop d g r vff s
+  let wx := errX r sNext - errX r sIdeal
+  let wz := errZ d r vff sNext - errZ d r vff sIdeal
+  refine ⟨wx, wz, ?_, ?_, ?_⟩
+  · unfold mapX; rw [← hIdeal.1]; dsimp [wx]; grind
+  · unfold mapZ; rw [← hIdeal.2]; dsimp [wz]; grind
+  · -- Bound wz = ratMilli (intMv' - qs.intMv) - g.ki * (r - qs.i)
+    have hKiLoInt : 1000 * (intMv' - qs.intMv) ≤ errMa * kiMilli := hLsb.1
+    have hKiHiInt : errMa * kiMilli ≤ 1000 * (intMv' - qs.intMv) + 1000 := Int.le_of_lt hLsb.2.1
+    have hKpLoInt : 1000 * (vPiMv - intMv') ≤ errMa * kpMilli := hLsb.2.2.1
+    have hKpHiInt : errMa * kpMilli ≤ 1000 * (vPiMv - intMv') + 1000 := Int.le_of_lt hLsb.2.2.2
+    have hKiLoRat : (1000 : CanonicalRat) * ((intMv' : CanonicalRat) - (qs.intMv : CanonicalRat)) ≤
+        (errMa : CanonicalRat) * (kiMilli : CanonicalRat) := by
+      have h := Rat.intCast_le_intCast.mpr hKiLoInt
+      simpa [Rat.intCast_mul, Rat.intCast_sub] using h
+    have hKiHiRat : (errMa : CanonicalRat) * (kiMilli : CanonicalRat) ≤
+        (1000 : CanonicalRat) * ((intMv' : CanonicalRat) - (qs.intMv : CanonicalRat)) + 1000 := by
+      have h := Rat.intCast_le_intCast.mpr hKiHiInt
+      simpa [Rat.intCast_add, Rat.intCast_mul, Rat.intCast_sub] using h
+    have hKpLoRat : (1000 : CanonicalRat) * ((vPiMv : CanonicalRat) - (intMv' : CanonicalRat)) ≤
+        (errMa : CanonicalRat) * (kpMilli : CanonicalRat) := by
+      have h := Rat.intCast_le_intCast.mpr hKpLoInt
+      simpa [Rat.intCast_mul, Rat.intCast_sub] using h
+    have hKpHiRat : (errMa : CanonicalRat) * (kpMilli : CanonicalRat) ≤
+        (1000 : CanonicalRat) * ((vPiMv : CanonicalRat) - (intMv' : CanonicalRat)) + 1000 := by
+      have h := Rat.intCast_le_intCast.mpr hKpHiInt
+      simpa [Rat.intCast_add, Rat.intCast_mul, Rat.intCast_sub] using h
+    have hKpNonneg : 0 ≤ g.kp := by
+      dsimp [g, ratMilli]
+      have : (0 : CanonicalRat) ≤ (kpMilli : CanonicalRat) := Rat.intCast_le_intCast.mpr hKp0
+      grind
+    have hKiNonneg : 0 ≤ g.ki := by
+      dsimp [g, ratMilli]
+      have : (0 : CanonicalRat) ≤ (kiMilli : CanonicalRat) := Rat.intCast_le_intCast.mpr hKi0
+      grind
+    have hErrHatLo : r - qs.i ≤ ratMilli errMa := by
+      dsimp [r, errMa, iMa, ratMilli] at hAdc ⊢
+      have hSub : ((rMa - adcFloorMa qs.i : Int) : CanonicalRat) = (rMa : CanonicalRat) - (adcFloorMa qs.i : CanonicalRat) :=
+        Rat.intCast_sub rMa (adcFloorMa qs.i)
+      rw [hSub]; grind
+    have hErrHatHi : ratMilli errMa ≤ (r - qs.i) + ratMilli 1 := by
+      dsimp [r, errMa, iMa, ratMilli] at hAdc ⊢
+      have hSub : ((rMa - adcFloorMa qs.i : Int) : CanonicalRat) = (rMa : CanonicalRat) - (adcFloorMa qs.i : CanonicalRat) :=
+        Rat.intCast_sub rMa (adcFloorMa qs.i)
+      rw [hSub]; grind
+    have hKiAdcLo : g.ki * (r - qs.i) ≤ g.ki * ratMilli errMa :=
+      Rat.mul_le_mul_of_nonneg_left hErrHatLo hKiNonneg
+    have hKiAdcHi : g.ki * ratMilli errMa ≤ g.ki * ((r - qs.i) + ratMilli 1) :=
+      Rat.mul_le_mul_of_nonneg_left hErrHatHi hKiNonneg
+    have hKpAdcLo : g.kp * (r - qs.i) ≤ g.kp * ratMilli errMa :=
+      Rat.mul_le_mul_of_nonneg_left hErrHatLo hKpNonneg
+    have hKpAdcHi : g.kp * ratMilli errMa ≤ g.kp * ((r - qs.i) + ratMilli 1) :=
+      Rat.mul_le_mul_of_nonneg_left hErrHatHi hKpNonneg
+    have hKiProdEq : g.ki * ratMilli errMa = ((errMa : CanonicalRat) * (kiMilli : CanonicalRat)) / 1000000 := by
+      dsimp [g, ratMilli]; grind
+    have hKpProdEq : g.kp * ratMilli errMa = ((errMa : CanonicalRat) * (kpMilli : CanonicalRat)) / 1000000 := by
+      dsimp [g, ratMilli]; grind
+    rw [hKiProdEq] at hKiAdcLo hKiAdcHi
+    rw [hKpProdEq] at hKpAdcLo hKpAdcHi
+    have hwzEq : wz = ratMilli intMv' - ratMilli qs.intMv - g.ki * (r - qs.i) := by
+      dsimp [wz, sNext, sIdeal, s, QuantizedLoopState.toLoopState, stepQuantizedRtlLoop, stepLoop, errZ, intMv', errMa, iMa]
+      grind
+    have hwxEq : wx = d.b * ((ratMilli vPiMv - ratMilli intMv' - g.kp * (r - qs.i)) + wz) := by
+      dsimp [wx, wz, sNext, sIdeal, s, QuantizedLoopState.toLoopState, stepQuantizedRtlLoop, stepLoop, errX, errZ, vff, intMv', vPiMv, errMa, iMa]
+      have hAdd : ratMilli (vPiMv + vffMv) = ratMilli vPiMv + ratMilli vffMv := by
+        dsimp [ratMilli]; rw [Rat.intCast_add]; grind
+      rw [hAdd]
+      grind
+    have hIntStepLo : ((errMa : CanonicalRat) * (kiMilli : CanonicalRat)) / 1000000 - 1 / 1000 ≤
+        ratMilli intMv' - ratMilli qs.intMv := by
+      dsimp [ratMilli]; grind
+    have hIntStepHi : ratMilli intMv' - ratMilli qs.intMv ≤
+        ((errMa : CanonicalRat) * (kiMilli : CanonicalRat)) / 1000000 := by
+      dsimp [ratMilli]; grind
+    have hPropStepLo : ((errMa : CanonicalRat) * (kpMilli : CanonicalRat)) / 1000000 - 1 / 1000 ≤
+        ratMilli vPiMv - ratMilli intMv' := by
+      dsimp [ratMilli]; grind
+    have hPropStepHi : ratMilli vPiMv - ratMilli intMv' ≤
+        ((errMa : CanonicalRat) * (kpMilli : CanonicalRat)) / 1000000 := by
+      dsimp [ratMilli]; grind
+    have hwzLo : -((1 + g.ki) / 1000) ≤ wz := by
+      rw [hwzEq]
+      have h1 : ratMilli 1 = 1 / 1000 := rfl
+      rw [h1] at hKiAdcHi
+      grind
+    have hwzHi : wz ≤ (1 + g.ki) / 1000 := by
+      rw [hwzEq]
+      have h1 : ratMilli 1 = 1 / 1000 := rfl
+      rw [h1] at hKiAdcHi
+      grind
+    have hvPiDiffLo : -((1 + g.kp) / 1000) ≤ ratMilli vPiMv - ratMilli intMv' - g.kp * (r - qs.i) := by
+      have h1 : ratMilli 1 = 1 / 1000 := rfl
+      rw [h1] at hKpAdcHi
+      grind
+    have hvPiDiffHi : ratMilli vPiMv - ratMilli intMv' - g.kp * (r - qs.i) ≤ (1 + g.kp) / 1000 := by
+      have h1 : ratMilli 1 = 1 / 1000 := rfl
+      rw [h1] at hKpAdcHi
+      grind
+    have hvDiffLo : -((2 + g.kp + g.ki) / 1000) ≤ (ratMilli vPiMv - ratMilli intMv' - g.kp * (r - qs.i)) + wz := by
+      grind
+    have hvDiffHi : (ratMilli vPiMv - ratMilli intMv' - g.kp * (r - qs.i)) + wz ≤ (2 + g.kp + g.ki) / 1000 := by
+      grind
+    have hwxLo : -(d.b * ((2 + g.kp + g.ki) / 1000)) ≤ wx := by
+      rw [hwxEq]
+      have := Rat.mul_le_mul_of_nonneg_left hvDiffLo hb0
+      grind
+    have hwxHi : wx ≤ d.b * ((2 + g.kp + g.ki) / 1000) := by
+      rw [hwxEq]
+      exact Rat.mul_le_mul_of_nonneg_left hvDiffHi hb0
+    have hwzSq := sq_le_of_bounds wz ((1 + g.ki) / 1000) hwzLo hwzHi
+    have hwxSq := sq_le_of_bounds wx (d.b * ((2 + g.kp + g.ki) / 1000)) hwxLo hwxHi
+    grind
+
+/-- **Universal Quantized Closed-Loop ISS Ball Theorem (`quantized_current_loop_iss_ball`)**:
+Combines `checkLoopLyapunovBox_sound`, `discrete_lyapunov_iss_ball`, `rtlPiStep_within_lsb`, and
+`adcFloorMa_within_lsb`: for every plant `d` and integer PI gains `(kpMilli, kiMilli)` in a certified
+parameter box, every reference `rMa`, feed-forward `vffMv`, and initial hybrid state `qs0`:
+1. The Lyapunov energy decays geometrically into `rBall` at rate `rhoIss = (1 + theta) * rho < 1`,
+2. Outside `rBall`, `V_P` strictly decreases on EVERY single 20 kHz quantized `rtlPiStep` sample,
+3. Inside `rBall`, `V_P ≤ rBall` is forward-invariant for all `k : Nat`,
+4. The squared current error obeys `m * (i_k - r)^2 ≤ rhoIss^k * c * (x_0^2 + z_0^2) + rBall` for all `k`. -/
+theorem quantized_current_loop_iss_ball
+    (aIv bIv kpIv kiIv : Interval)
+    (p11 p12 p22 eps c m rho theta thetaInv rhoIss dSq rBall : CanonicalRat)
+    (hCheck : checkLoopLyapunovBox (paramBox aIv bIv kpIv kiIv) p11 p12 p22 eps c m = true)
+    (hrho : rho * c = c - eps)
+    (hTheta : 0 < theta)
+    (hInv : theta * thetaInv = 1)
+    (hRhoIssDef : rhoIss = (1 + theta) * rho)
+    (hRhoIss0 : 0 ≤ rhoIss)
+    (hRhoIss1 : rhoIss < 1)
+    (hBall : (1 - rhoIss) * rBall = ((1 + thetaInv) * c) * dSq)
+    (d : ZohRl) (kpMilli kiMilli : Int)
+    (hKp0 : 0 ≤ kpMilli) (hKi0 : 0 ≤ kiMilli) (hb0 : 0 ≤ d.b)
+    (ha : d.a ∈ aIv) (hb : d.b ∈ bIv)
+    (hkp : ratMilli kpMilli ∈ kpIv) (hki : ratMilli kiMilli ∈ kiIv)
+    (hbR : d.b * d.plant.rOhm = 1 - d.a)
+    (hdSqBound :
+      (d.b * d.b * ((2 + ratMilli kpMilli + ratMilli kiMilli) * (2 + ratMilli kpMilli + ratMilli kiMilli)) +
+        (1 + ratMilli kiMilli) * (1 + ratMilli kiMilli)) / 1000000 ≤ dSq)
+    (rMa vffMv : Int) (qs0 : QuantizedLoopState) :
+    let r := ratMilli rMa
+    let vff := ratMilli vffMv
+    let traj : Nat → CanonicalRat × CanonicalRat := fun k =>
+      let s := (iterateQuantizedRtlLoop d kpMilli kiMilli rMa vffMv k qs0).toLoopState
+      (errX r s, errZ d r vff s)
+    (∀ k, quadForm p11 p12 p22 (traj k).1 (traj k).2 - rBall ≤
+      ratPow rhoIss k * (quadForm p11 p12 p22 (traj 0).1 (traj 0).2 - rBall)) ∧
+    (∀ k, rBall < quadForm p11 p12 p22 (traj k).1 (traj k).2 →
+      quadForm p11 p12 p22 (traj (k + 1)).1 (traj (k + 1)).2 <
+        quadForm p11 p12 p22 (traj k).1 (traj k).2) ∧
+    (quadForm p11 p12 p22 (traj 0).1 (traj 0).2 ≤ rBall →
+      ∀ k, quadForm p11 p12 p22 (traj k).1 (traj k).2 ≤ rBall) ∧
+    (∀ k, m * ((traj k).1 * (traj k).1) ≤
+      ratPow rhoIss k * (c * ((traj 0).1 * (traj 0).1 + (traj 0).2 * (traj 0).2)) + rBall) := by
+  intro r vff traj
+  obtain ⟨hStatic, hDyn⟩ := checkLoopLyapunovBox_sound aIv bIv kpIv kiIv p11 p12 p22 eps c m hCheck
+    d.a d.b (ratMilli kpMilli) (ratMilli kiMilli) ha hb hkp hki
+  have hIterStep : ∀ j (qs : QuantizedLoopState),
+      iterateQuantizedRtlLoop d kpMilli kiMilli rMa vffMv (j + 1) qs =
+        stepQuantizedRtlLoop d kpMilli kiMilli rMa vffMv
+          (iterateQuantizedRtlLoop d kpMilli kiMilli rMa vffMv j qs) := by
+    intro j
+    induction j with
+    | zero => intro qs; rfl
+    | succ n ih => intro qs; exact ih (stepQuantizedRtlLoop d kpMilli kiMilli rMa vffMv qs)
+  have hdSq0 : 0 ≤ dSq := by
+    have hSq1 := Interval.rat_sq_nonneg (d.b * (2 + ratMilli kpMilli + ratMilli kiMilli))
+    have hSq2 := Interval.rat_sq_nonneg (1 + ratMilli kiMilli)
+    grind
+  apply discrete_lyapunov_iss_ball
+    p11 p12 p22
+    (d.a - d.b * (ratMilli kpMilli + ratMilli kiMilli)) d.b (-ratMilli kiMilli) 1
+    eps c m rho theta thetaInv rhoIss dSq rBall
+    hStatic hDyn hrho hTheta hInv hRhoIssDef hRhoIss0 hRhoIss1 hdSq0 hBall traj
+  intro j
+  have hPert := stepQuantizedRtlLoop_error_perturbation d kpMilli kiMilli rMa vffMv hKp0 hKi0 hb0 hbR
+    (iterateQuantizedRtlLoop d kpMilli kiMilli rMa vffMv j qs0)
+  obtain ⟨wx, wz, hEx, hEz, hwSq⟩ := hPert
+  refine ⟨wx, wz, ?_, by grind⟩
+  dsimp only [traj]
+  rw [hIterStep j qs0]
+  exact Prod.ext (by simpa [m11, m12] using hEx) (by simpa [m21, m22] using hEz)
+
+/-- LC Drives quantized ISS rate $\rho_{\text{iss}} = (1 + 1/270) \cdot (135/136) = 271/272 < 1$. -/
+@[expose] def lcTheta : CanonicalRat := CanonicalRat.mk 1 270
+@[expose] def lcThetaInv : CanonicalRat := 270
+@[expose] def lcRhoIss : CanonicalRat := CanonicalRat.mk 271 272
+/-- Upper bound $2 / 10^6 \ge ((1/3)^2 \cdot 2.45^2 + 1.05^2) / 10^6 \approx 1.7694 / 10^6$ on the
+squared 1-mV + 1-mA quantization disturbance per 20 kHz control tick. -/
+@[expose] def lcQuantDSq : CanonicalRat := CanonicalRat.mk 2 1000000
+/-- Explicit LC Drives quantized ISS Lyapunov ball radius:
+$R_{\text{ball}} = 272 \cdot (271 \cdot 34) \cdot (2 / 10^6) = 626552 / 125000 \approx 5.0124$. -/
+@[expose] def lcIssBallRadius : CanonicalRat := CanonicalRat.mk 626552 125000
+
+/-- **LC Drives 20 kHz Quantized `rtlPiStep` ISS Ultimate-Boundedness Theorem
+(`lc_drives_quantized_current_loop_iss_ball`)**:
+For EVERY pole `d` in the LC Drives ZOH enclosure (`a ∈ [249/250, 124501/125000]`, `b ∈ [499/1500, 1/3]`,
+`b R = 1 - a`), EVERY integer reference `rMa` (mA), feed-forward `vffMv` (mV), and initial hybrid
+state `qs0` under the `.obend` gains (`kpMilli = 400`, `kiMilli = 50`):
+1. `V_P(s_k) - lcIssBallRadius ≤ (271/272)^k (V_P(s_0) - lcIssBallRadius)`,
+2. Outside `lcIssBallRadius`, `V_P` strictly contracts on every quantized `rtlPiStep` sample,
+3. `V_P ≤ lcIssBallRadius` is forward-invariant for all `k`,
+4. `4 * (i_k - r)^2 ≤ (271/272)^k * 34 * (x_0^2 + z_0^2) + 626552/125000` for all `k`
+   (ultimate current error ball $|i_\infty - r| \le \sqrt{5.0124 / 4} \approx 1.12\text{ A}$ under
+   worst-case adversarial 1-mV multiplier + 1-mA ADC quantization). -/
+theorem lc_drives_quantized_current_loop_iss_ball
+    (d : ZohRl)
+    (ha : d.a ∈ (⟨CanonicalRat.mk 249 250, CanonicalRat.mk 124501 125000⟩ : Interval))
+    (hb : d.b ∈ (⟨CanonicalRat.mk 499 1500, CanonicalRat.mk 1 3⟩ : Interval))
+    (hbR : d.b * d.plant.rOhm = 1 - d.a)
+    (rMa vffMv : Int) (qs0 : QuantizedLoopState) :
+    let r := ratMilli rMa
+    let vff := ratMilli vffMv
+    let traj : Nat → CanonicalRat × CanonicalRat := fun k =>
+      let s := (iterateQuantizedRtlLoop d 400 50 rMa vffMv k qs0).toLoopState
+      (errX r s, errZ d r vff s)
+    (∀ k, quadForm lcP11 lcP12 lcP22 (traj k).1 (traj k).2 - lcIssBallRadius ≤
+      ratPow lcRhoIss k * (quadForm lcP11 lcP12 lcP22 (traj 0).1 (traj 0).2 - lcIssBallRadius)) ∧
+    (∀ k, lcIssBallRadius < quadForm lcP11 lcP12 lcP22 (traj k).1 (traj k).2 →
+      quadForm lcP11 lcP12 lcP22 (traj (k + 1)).1 (traj (k + 1)).2 <
+        quadForm lcP11 lcP12 lcP22 (traj k).1 (traj k).2) ∧
+    (quadForm lcP11 lcP12 lcP22 (traj 0).1 (traj 0).2 ≤ lcIssBallRadius →
+      ∀ k, quadForm lcP11 lcP12 lcP22 (traj k).1 (traj k).2 ≤ lcIssBallRadius) ∧
+    (∀ k, lcM * ((traj k).1 * (traj k).1) ≤
+      ratPow lcRhoIss k * (lcC * ((traj 0).1 * (traj 0).1 + (traj 0).2 * (traj 0).2)) + lcIssBallRadius) := by
+  have hc := lc_drives_box_certificate
+  have hb0 : 0 ≤ d.b := by
+    rw [Interval.mem_iff] at hb
+    have : (0 : CanonicalRat) ≤ CanonicalRat.mk 499 1500 := by decide +kernel
+    grind
+  have hbHi : d.b ≤ CanonicalRat.mk 1 3 := (Interval.mem_iff _ _).mp hb |>.2
+  have hdSq :
+      (d.b * d.b * ((2 + ratMilli 400 + ratMilli 50) * (2 + ratMilli 400 + ratMilli 50)) +
+        (1 + ratMilli 50) * (1 + ratMilli 50)) / 1000000 ≤ lcQuantDSq := by
+    have hbsq : d.b * d.b ≤ CanonicalRat.mk 1 3 * CanonicalRat.mk 1 3 := by
+      have h1 := Rat.mul_le_mul_of_nonneg_left hbHi hb0
+      have h2 := Rat.mul_le_mul_of_nonneg_right hbHi (by decide +kernel : (0 : CanonicalRat) ≤ CanonicalRat.mk 1 3)
+      grind
+    have hK1 : (2 + ratMilli 400 + ratMilli 50) * (2 + ratMilli 400 + ratMilli 50) = CanonicalRat.mk 2401 400 := by
+      decide +kernel
+    have hK2 : (1 + ratMilli 50) * (1 + ratMilli 50) = CanonicalRat.mk 441 400 := by
+      decide +kernel
+    rw [hK1, hK2]
+    have hScaled := Rat.mul_le_mul_of_nonneg_right hbsq (by decide +kernel : (0 : CanonicalRat) ≤ CanonicalRat.mk 2401 400)
+    have hTop : CanonicalRat.mk 1 3 * CanonicalRat.mk 1 3 * CanonicalRat.mk 2401 400 + CanonicalRat.mk 441 400 ≤ 2 := by
+      decide +kernel
+    dsimp [lcQuantDSq]
+    have hNum : d.b * d.b * CanonicalRat.mk 2401 400 + CanonicalRat.mk 441 400 ≤ 2 := by grind
+    have hConst : CanonicalRat.mk 2 1000000 = (2 : CanonicalRat) / 1000000 := by decide +kernel
+    rw [hConst]
+    grind
+  exact quantized_current_loop_iss_ball
+    ⟨CanonicalRat.mk 249 250, CanonicalRat.mk 124501 125000⟩
+    ⟨CanonicalRat.mk 499 1500, CanonicalRat.mk 1 3⟩
+    ⟨CanonicalRat.mk 2 5, CanonicalRat.mk 2 5⟩
+    ⟨CanonicalRat.mk 1 20, CanonicalRat.mk 1 20⟩
+    lcP11 lcP12 lcP22 lcEps lcC lcM lcRho lcTheta lcThetaInv lcRhoIss lcQuantDSq lcIssBallRadius
+    hc.1 hc.2.1
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    d 400 50 (by decide) (by decide) hb0 ha hb
+    (by decide +kernel) (by decide +kernel) hbR hdSq rMa vffMv qs0
+
 end Obend.Hardware.CurrentLoop
 end

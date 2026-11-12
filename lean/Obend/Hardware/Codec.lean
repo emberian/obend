@@ -37,9 +37,6 @@ public import Obend.Hardware.ThermalPassivity
 public import Obend.Hardware.Analog
 public import Obend.Hardware.DSP
 public import Obend.Hardware.Magnetics
-public import Obend.Hardware.FluidThermal
-public import Obend.Hardware.PowerElectronics
-public import Obend.Hardware.Mechanics
 
 @[expose] public section
 
@@ -317,9 +314,6 @@ inductive HwCertDomain
   | analog2d            -- 8
   | dspBeamformer       -- 9
   | magnetics           -- 10
-  | fluidThermal        -- 11
-  | powerElectronics    -- 12
-  | mechanicsVonNeumann -- 13
   deriving DecidableEq, Repr
 
 def HwCertDomain.toCode : HwCertDomain → Nat
@@ -333,9 +327,6 @@ def HwCertDomain.toCode : HwCertDomain → Nat
   | .analog2d => 8
   | .dspBeamformer => 9
   | .magnetics => 10
-  | .fluidThermal => 11
-  | .powerElectronics => 12
-  | .mechanicsVonNeumann => 13
 
 def HwCertDomain.fromCode : Nat → Option HwCertDomain
   | 1 => some .pnr
@@ -348,9 +339,6 @@ def HwCertDomain.fromCode : Nat → Option HwCertDomain
   | 8 => some .analog2d
   | 9 => some .dspBeamformer
   | 10 => some .magnetics
-  | 11 => some .fluidThermal
-  | 12 => some .powerElectronics
-  | 13 => some .mechanicsVonNeumann
   | _ => none
 
 @[simp] theorem HwCertDomain.fromCode_toCode (d : HwCertDomain) :
@@ -472,7 +460,7 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
       bitstreamFrames := [encodeBitstreamFrame cfg0, encodeBitstreamFrame cfg1]
       sinkCapFf := capFf
     }
-    checkPnrCertificate corner7nm_SS periodPs cert
+    checkPnrCertificate validAdderBelNetlist corner7nm_SS periodPs cert
   | .retiming =>
     -- p0: lag0, p1: lag1, p2: lag2, p3: ioLatencyShift, p4: combDelay01Ps, p5: clockPeriodPs
     let cert : RetimingCert := {
@@ -481,26 +469,17 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
     }
     checkRetimingCert macUnretimedGraph cert corner7nm_SS c.p5.toNat
   | .photonics =>
-    -- p0: circumferenceUm, p1: ngPermille, p2: bendRadiusNm, p3: lambdaNm, p4: rSelfPermille, p5: aRoundTripPermille
-    let mrr : MicroringResonator := {
-      ringName := "cbor_mrr"
-      bendRadiusNm := c.p2.toNat
-      circumferenceUm := c.p0.toNat
-      rSelfPermille := c.p4
-      aRoundTripPermille := c.p5
-    }
-    decide (evalMrrResonantThruNum mrr == 0) &&
-      decide (evalFsrPm c.p3.toNat c.p1.toNat c.p0.toNat > 0) &&
-      decide (c.p2.toNat ≥ 5000)
+    -- p0: t, p1: kappa, p2: e1.re, p3: e1.im, p4: e2.re, p5: e2.im
+    let e1 : ComplexField := ⟨c.p2, c.p3⟩
+    let e2 : ComplexField := ⟨c.p4, c.p5⟩
+    let (o1, o2) := evalDirectionalCoupler2x2 c.p0 c.p1 e1 e2
+    let (barCross, _) := evalCascadedMzi2x2 c.p0 c.p0 ⟨1, 0⟩ e1 ⟨0, 0⟩
+    decide (o1.normSq + o2.normSq == (c.p0 * c.p0 + c.p1 * c.p1) * (e1.normSq + e2.normSq)) &&
+      decide (c.p0 * c.p0 + c.p1 * c.p1 > 0) &&
+      decide (barCross == ⟨0, 0⟩)
   | .pcb =>
-    -- p0: baseLengthUm, p1: numSegments, p2: meanderAmplitudeUm, p3: minLoopSpacingUm, p4: propDelayFsPerUm, p5: refLengthUm
-    let m : SerpentineMeander := {
-      baseLengthUm := c.p0.toNat
-      numSegments := c.p1.toNat
-      meanderAmplitudeUm := c.p2.toNat
-      minLoopSpacingUm := c.p3.toNat
-    }
-    decide (evalFlightTimeSkewFs c.p5.toNat (evalSerpentineTotalLengthUm m) c.p4.toNat == 0)
+    -- p0: widthUm, p1: heightUm, p2: copperThickUm, p3: erPermille, p4: z0ExtractedMilliOhm, p5: z0TargetMilliOhm
+    checkSingleEndedZ0 c.p0.toNat c.p1.toNat c.p2.toNat c.p3.toNat c.p4.toNat c.p5.toNat 3000
   | .dpr =>
     -- p0: slotIdx, p1: opKindBits, p2: ruleOpcodeBits, p3: immVal, p4: inputVal, p5: expectedOut
     match decodeTileOpKindBits c.p1.toNat, decodeRuleOpcodeBits c.p2.toNat with
@@ -529,7 +508,6 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
       candPart
       lvcmos33ReceiverSpec
       c.p5
-      goldenQfn16Courtyard
       goldenFreshDatasheetCite
       "procurement_scout"
       defaultEdaFacts == .admitted
@@ -551,36 +529,11 @@ def verifyBinaryHwCert (c : BinaryHwCert) : Bool :=
     let matched := Obend.Hardware.DSP.iqConjMul sig sig
     decide (matched.q == 0 ∧ matched.i == c.p0 * c.p0 + c.p1 * c.p1 ∧ matched.i ≥ 0)
   | .magnetics =>
-    -- p0: polePairs, p1: psiPmMilliWb, p2: ldMicroH, p3: lqMicroH, p4: idAmp, p5: iqAmp
-    let m : Obend.Hardware.Magnetics.IpmMotorSpec := {
-      polePairs := c.p0
-      psiPmMilliWb := c.p1
-      ldMicroH := c.p2
-      lqMicroH := c.p3
-    }
+    -- p0: a0, p1: a1, p2: a2, p3: nuLinear, p4: kSat, p5: bSq
     let tri := Obend.Hardware.Magnetics.goldenStatorToothTriangle
-    let torque := Obend.Hardware.Magnetics.evalIpmTorqueScaled m c.p4 c.p5
-    let pmOnly := m.polePairs * (m.psiPmMilliWb * c.p5)
-    decide (0 ≤ Obend.Hardware.Magnetics.evalElementMagneticEnergyScaled tri 10 (-4) 6 ∧
-            pmOnly ≤ torque ∧
-            0 < torque)
-  | .fluidThermal =>
-    -- p0: tInletMilliC, p1: powerLossW, p2: rCaloric, p3: rConv, p4: rCond, p5: maxClassHMilliC
-    let tWinding := Obend.Hardware.FluidThermal.evalPeakWindingTempMilliC c.p0 c.p1 c.p2 c.p3 c.p4
-    Obend.Hardware.FluidThermal.checkLiquidThermalSignoff
-      tWinding c.p5 102000 120000 42000 80000 68000 105000
-  | .powerElectronics =>
-    -- p0: isc, p1: gs, p2: vStar, p3: vDcBusV, p4: lBusNh, p5: diDtAmpPerNs
-    let vPeak := Obend.Hardware.PowerElectronics.evalTurnOffPeakVoltageV c.p3 c.p4 c.p5
-    Obend.Hardware.PowerElectronics.checkIncrementalConductanceMpp c.p0 c.p1 c.p2 &&
-    decide (vPeak ≤ 1200 ∧
-            Obend.Hardware.PowerElectronics.evalExtractedPower c.p0 c.p1 (c.p2 - 20) ≤
-              Obend.Hardware.PowerElectronics.evalExtractedPower c.p0 c.p1 c.p2)
-  | .mechanicsVonNeumann =>
-    -- p0: coldAirGapUm, p1: thermalGrowthUm, p2: centrifugalGrowthUm, p3: bearingRunoutUm, p4: minSafeAirGapUm, p5: expectedNetKw
-    let hotGap := Obend.Hardware.Mechanics.evalHotAirGapUm c.p0 c.p1 c.p2 c.p3
-    decide (0 < c.p4 ∧ c.p4 ≤ hotGap ∧ hotGap ≤ c.p0) &&
-    Obend.Hardware.Mechanics.checkReflexiveSelfClosure Obend.Hardware.Mechanics.goldenVonNeumannFactory
+    let e := Obend.Hardware.Magnetics.evalElementMagneticEnergyAreaScaled 1000000 tri c.p0 c.p1 c.p2
+    let nuNext := Obend.Hardware.Magnetics.stepBhPicardReluctivity c.p3 c.p4 500 c.p3 c.p5
+    decide (0 ≤ e ∧ 0 < c.p3 ∧ c.p3 ≤ nuNext ∧ 0 < nuNext)
 
 /-! ### Golden Binary CBOR Certificate Instances & Kernel Proofs -/
 
@@ -588,7 +541,10 @@ def goldenBinaryPnrCert : BinaryHwCert :=
   { domain := .pnr, p0 := 0, p1 := 0, p2 := 0, p3 := 1, p4 := 5, p5 := 2000 }
 
 def goldenBinaryPhotonicsCert : BinaryHwCert :=
-  { domain := .photonics, p0 := 50, p1 := 4200, p2 := 8000, p3 := 1550, p4 := 985, p5 := 985 }
+  { domain := .photonics, p0 := 3, p1 := 4, p2 := 10, p3 := -5, p4 := 2, p5 := 7 }
+
+def goldenBinaryPcbCert : BinaryHwCert :=
+  { domain := .pcb, p0 := 330, p1 := 152, p2 := 35, p3 := 3480, p4 := 50000, p5 := 50000 }
 
 def goldenBinaryDprCert : BinaryHwCert :=
   { domain := .dpr, p0 := 2, p1 := 0, p2 := 2, p3 := 4, p4 := 10, p5 := 40 }
@@ -597,16 +553,7 @@ def goldenBinaryEdaSwapCert : BinaryHwCert :=
   { domain := .edaBomSwap, p0 := 2950, p1 := 180, p2 := 68000, p3 := 1280, p4 := 120, p5 := 400 }
 
 def goldenBinaryMagneticsCert : BinaryHwCert :=
-  { domain := .magnetics, p0 := 6, p1 := 250, p2 := 300, p3 := 800, p4 := -100, p5 := 400 }
-
-def goldenBinaryFluidThermalCert : BinaryHwCert :=
-  { domain := .fluidThermal, p0 := 40000, p1 := 5000, p2 := 4, p3 := 8, p4 := 6, p5 := 180000 }
-
-def goldenBinaryPowerElectronicsCert : BinaryHwCert :=
-  { domain := .powerElectronics, p0 := 200, p1 := 1, p2 := 100, p3 := 800, p4 := 15, p5 := 10 }
-
-def goldenBinaryMechanicsCert : BinaryHwCert :=
-  { domain := .mechanicsVonNeumann, p0 := 1500, p1 := 250, p2 := 180, p3 := 50, p4 := 500, p5 := 140 }
+  { domain := .magnetics, p0 := 10, p1 := -4, p2 := 6, p3 := 800, p4 := 2, p5 := 100 }
 
 /-! ### Variable-Length Binary CBOR Tape / Mesh / Evolutionary Certificates (`BinaryTapeCert`)
 
@@ -712,24 +659,8 @@ instance : BinaryCodec BinaryTapeCert where
   decodeBytes := decodeBinaryTapeCert
   decode_encode := decode_encode_binaryTapeCert
 
-/-- Kernel replay of the 4-domain coupled evolutionary candidate physics model
-(`evaluate_physical_candidate` in `hardware/rust-ffi/src/lib.rs`): given
-`(toothWidthUm, microchannelAspectPermille, fcmlFreqKhz)`, computes exact peak winding
-temperature in milli-Celsius. -/
-def evalEvolutionCandidatePeakTemp
-    (toothWidthUm microchannelAspectPermille fcmlFreqKhz : Nat) : Nat :=
-  let slotWidthUm := max (10000 - toothWidthUm) 2000
-  let dcCopperLossW := 14000000 / slotWidthUm
-  let coreIronLossW := toothWidthUm / 4
-  let fcmlRippleLossW := 48000 / (6 * max fcmlFreqKhz 20)
-  let totalLossW := dcCopperLossW + coreIronLossW + fcmlRippleLossW
-  let rCaloric := 4
-  let rConv := max (24000 / max microchannelAspectPermille 500) 4
-  let rCond := max (toothWidthUm / 800) 4
-  40000 + totalLossW * (rCaloric + rConv + rCond)
-
-/-- Verify a variable-length `BinaryTapeCert` across multi-element 2D FEMM meshes,
-    3D F-Rep `fidget`-pruned CSG instruction tapes, and in-silico evolutionary Pareto fronts.
+/-- Verify a variable-length `BinaryTapeCert` across multi-element 2D FEMM meshes and
+    graph-Laplacian thermal passivity networks.
     All fixed-arity `BinaryHwCert` domains (`.pnr`, `.retiming`, `.photonics`, `.pcb`, `.dpr`,
     `.edaBomSwap`, `.analog2d`, `.dspBeamformer`) are strictly refused (`false`) when submitted
     as a `BinaryTapeCert` so they cannot bypass fixed-arity `verifyBinaryHwCert` checks. -/
@@ -739,23 +670,10 @@ def verifyBinaryTapeCert (c : BinaryTapeCert) : Bool :=
   decide (c.metric1.toNat > 0) &&
   c.words.all (fun w => decide (w.toNat > 0)) &&
   match c.domain with
-  | .magnetics =>
+  | .magnetics | .multiphysics =>
     decide (c.words.length ≥ 4) &&
     decide (c.metric1.toNat ≤ 5000000) &&
     decide ((c.words.foldl (fun acc w => acc + w.toNat) 0) == c.metric0.toNat)
-  | .mechanicsVonNeumann =>
-    decide (c.words.length ≥ 4) &&
-    decide (c.metric1.toNat < c.metric0.toNat)
-  | .fluidThermal | .powerElectronics | .multiphysics =>
-    match c.words with
-    | tw :: mc :: fq :: fd :: _ =>
-      decide (c.metric0.toNat ≥ 64) &&
-      decide (c.metric1.toNat ≤ 165000) &&
-      decide (tw.toNat ≥ 3800) &&
-      decide (fd.toNat ≤ 12) &&
-      decide (800 + fq.toNat / 2 ≤ 1150) &&
-      decide (evalEvolutionCandidatePeakTemp tw.toNat mc.toNat fq.toNat == c.metric1.toNat)
-    | _ => false
   | _ =>
     false
 
@@ -775,18 +693,6 @@ def goldenBinaryFemmTapeCert : BinaryTapeCert :=
   , metric0 := 15200
   , metric1 := 184000
   , words := [4200, 3800, 3100, 2200, 1100, 800] }
-
-def goldenBinaryOctreeTapeCert : BinaryTapeCert :=
-  { domain := .mechanicsVonNeumann
-  , metric0 := 768
-  , metric1 := 256
-  , words := [32, 32, 32, 32, 32, 32, 32, 32] }
-
-def goldenBinaryEvolutionTapeCert : BinaryTapeCert :=
-  { domain := .fluidThermal
-  , metric0 := 80
-  , metric1 := 103184
-  , words := [4800, 3500, 140, 8, 6] }
 
 /-! ## 6. `.obnb` (`NEXT-MATHEMATICA.md` §5) `Obend.Core.Data` Hardware Cell Projections -/
 
@@ -875,7 +781,7 @@ def projectPnrTimingToObnbData (cellId : Nat) (net : BelNetlist) (clockPeriodPs 
     title := net.moduleName
     primaryCount := net.cells.length
     secondaryMetric := clockPeriodPs
-    verifiedPass := checkPnrCertificate corner7nm_SS clockPeriodPs cert
+    verifiedPass := checkPnrCertificate net corner7nm_SS clockPeriodPs cert
   }
 
 /-- Project a `BelNetlist` placement grid into a `.hardwareLayout` `.obnb` cell (`Obend.Core.Data.Data`). -/
@@ -915,9 +821,9 @@ def obendHwCborProjectCell (raw : ByteArray) : ByteArray :=
     let cell : ObnbHardwareCell := {
       cellId := cert.domain.toCode
       kind := match cert.domain with
-        | .pnr | .pcb | .analog2d | .mechanicsVonNeumann => .hardwareLayout
-        | .retiming | .photonics | .dspBeamformer | .powerElectronics => .hardwareTiming
-        | .dpr | .edaBomSwap | .multiphysics | .magnetics | .fluidThermal => .hardwareSchematic
+        | .pnr | .pcb | .analog2d => .hardwareLayout
+        | .retiming | .photonics | .dspBeamformer => .hardwareTiming
+        | .dpr | .edaBomSwap | .multiphysics | .magnetics => .hardwareSchematic
       title := s!"obnb_hw_domain_{cert.domain.toCode}"
       primaryCount := cert.p0.toNat
       secondaryMetric := c_p5_nat cert
@@ -930,9 +836,9 @@ def obendHwCborProjectCell (raw : ByteArray) : ByteArray :=
       let cell : ObnbHardwareCell := {
         cellId := tapeCert.domain.toCode
         kind := match tapeCert.domain with
-          | .pnr | .pcb | .analog2d | .mechanicsVonNeumann => .hardwareLayout
-          | .retiming | .photonics | .dspBeamformer | .powerElectronics => .hardwareTiming
-          | .dpr | .edaBomSwap | .multiphysics | .magnetics | .fluidThermal => .hardwareSchematic
+          | .pnr | .pcb | .analog2d => .hardwareLayout
+          | .retiming | .photonics | .dspBeamformer => .hardwareTiming
+          | .dpr | .edaBomSwap | .multiphysics | .magnetics => .hardwareSchematic
         title := s!"obnb_hw_tape_{tapeCert.domain.toCode}"
         primaryCount := tapeCert.words.length
         secondaryMetric := tapeCert.metric0.toNat
