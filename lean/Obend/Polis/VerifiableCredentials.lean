@@ -1,72 +1,22 @@
 module
 /-
-# Obend.Polis.VerifiableCredentials — issuer credentials, policy evaluation over them, and an ex-post receipt
-
-Four parts.
-
-**§1 The credential commitment.** An `IssuerCredential` carries the issuer, the subject, a schema,
-an attribute value in the deterministic CBOR data model, a JSON evidence document, the provenance
-digest of the capability chain it was issued under, and an epoch. `credentialPayload` frames every
-one of the seven fields; `credentialPayload_injective` is unconditional on values within the CBOR
-width bound. `credentialCommitment` is cSHAKE256 of the payload under its own customization, 32
-bytes. `credentialCommitmentExtract` computes, from two credentials with one commitment, their
-equality or a collision of that hash on the two payloads.
-
-**§2 The evaluation relation.** `checkCredentialEval pol pub w` is the relation a holder's proof
-attests: a public view `pub`, a private witness `w`.
-* the credential opens `pub.credentialDigest`;
-* a `ZkBiscuit` chain folds under the committed revoked set, authorizes the rights the policy
-  needs, and ends in the credential's provenance digest. Its caveats are read in the three-valued
-  model of the policy (`kleeneEnv`): true, undefined, false;
-* the issuer's status facts about the subject are a slice under a `CompletenessToken`
-  (`Obend.Vault.Lsafe`), and a `LinMemTrace` (`Obend.SymbolicZk.LinMem`) with those facts as its
-  initial cells, nothing produced and nothing left over shows each one was read exactly once;
-* the policy rules together with the facts read have the well-founded model `(modelTrue,
-  modelUpper)` (`checkRankedWFS`), and the goal atom is true in it;
-* the disclosed document is the evidence with one span redacted, and the redaction passes
-  `checkLsafeRedaction`.
-
-`stratified_credential_eval_sound` reads an accepted evaluation as `CompliantEvaluation`, the same
-conditions at the specification tier, and `checkCredentialEval_complete` is the converse.
-`no_forged_negative_by_omission`: every committed fact is true in the model, and every true atom
-has a rule whose positive body is true and none of whose negated atoms is a committed fact, so a
-prover cannot derive an absence by leaving a fact out. `revoked_fact_refuses_goal` is the
-corollary for a goal guarded by a negated revocation atom. `issuerSliceExtract` ties the presented
-slice to the one the issuer committed to, or computes a collision.
-`disclosure_noninterference`: two accepted evaluations whose evidence differs only inside the
-redacted span disclose the same bytes, and their documents have one machine state.
-
-**§3 The receipt.** `complianceTable` has one row per clause of the relation, `0` when the clause
-holds. `verifyExPostCredentialReceipt` binds the verifier key and the framed public statement into
-the transcript and runs `verifyDualSumcheckPIOP` on the claim that the committed table sums to
-zero. `exPostReceiptExtract` is the extractor: from an accepted receipt whose table commitment is
-that of a table with a nonzero sum it computes a Fiat-Shamir root hit, or (`dualOpeningExtract`)
-both a bounded hash collision and a short SIS vector. `verifyExPostCredentialReceipt_sound` is its reading for a witness.
-`verifyExPostCredentialReceipt_complete` is the honest prover, and
-`honestReceipt_witness_independent` says its receipt is a function of the public statement alone.
-
-**§4 The wire form.** `Codec` is a byte codec with a proved round trip; `receiptCodec` is the
-receipt's. `verifiableCredentialInnerVerifier` decodes a proof, checks the statement digest and
-the policy, and runs the receipt verifier.
-
-What is not here. The receipt proves a statement about the table the verifier holds a commitment
-to. That this table is the compliance table of a witness is a premise of the soundness theorem,
-to be discharged by an arithmetization of `checkCredentialEval`, which this module does not
-contain. Until it is, a receipt is not by itself evidence about a credential: the table of an
-accepted evaluation is all zeros, its commitment is a public constant, its round polynomials are
-zero, and the honest receipt is accepted under any verifier key and for any statement carrying
-that commitment (the test suite records this). The commitment is binding; nothing here says it
-hides. The Canopy opening presents the whole table. `dualExtract`'s `DualForgery` fixes its
-transcripts at `.relationBound`, so the receipt extractor calls the phase-polymorphic extractors
-beneath it (`extractCanopyOpenMerkleCollision`, `extractShortDiffSISWitness`).
+# Credential evaluation and transparent Dual-PCS receipts
+Full-width fact identities, canonical witness encoding, semantic verification under a
+verifier-owned policy, and statement/witness-bound compliance tables. Receipts disclose
+witness data; this module does not claim zero knowledge.
 -/
 public import Obend.Polis.ZkBiscuit
 public import Obend.Vault.Lsafe
 public import Obend.SymbolicZk.LinMem
 public import Obend.SymbolicZk.RankedFixpointArith
 public import Obend.Crypto.DualSpine
+public import Obend.SymbolicZk.CompileToPiop
+import all Obend.SymbolicZk.CompileToPiop
+import all Obend.SymbolicZk.CompileToPiopCore
 import all Obend.SymbolicZk.RankedFixpointArith
 import all Obend.Vault.Lsafe
+import all Obend.Crypto.Multilinear
+import all Obend.Apps.ZkNtt.Goldilocks
 import all Obend.Crypto.Sumcheck
 import all Obend.Crypto.DualSpine
 
@@ -97,6 +47,7 @@ structure IssuerCredential where
   evidence : ByteArray
   lineage : ByteArray
   epoch : Nat
+  width : WithinWidth attributes = true
 
 /-- A natural number as a field: its LEB128 bytes. -/
 def natField (n : Nat) : ByteArray := Native.bytesOfList (leb128 n)
@@ -117,8 +68,8 @@ value is recovered by `encodeDetCbor_injective`. -/
 theorem credentialPayload_injective (c₁ c₂ : IssuerCredential)
     (h₁ : WithinWidth c₁.attributes = true) (h₂ : WithinWidth c₂.attributes = true)
     (h : credentialPayload c₁ = credentialPayload c₂) : c₁ = c₂ := by
-  obtain ⟨i₁, s₁, k₁, a₁, e₁, l₁, n₁⟩ := c₁
-  obtain ⟨i₂, s₂, k₂, a₂, e₂, l₂, n₂⟩ := c₂
+  obtain ⟨i₁, s₁, k₁, a₁, e₁, l₁, n₁, ca₁⟩ := c₁
+  obtain ⟨i₂, s₂, k₂, a₂, e₂, l₂, n₂, ca₂⟩ := c₂
   simp only [credentialPayload] at h
   obtain ⟨ha, hb, hc⟩ := encodeFrame_injective h
   obtain ⟨h1, h2, h3⟩ := encodeFrame_injective ha
@@ -187,6 +138,7 @@ structure StatusPolicy where
   need : UInt64
   statusPred : UInt64
   issuerAuth : ByteArray
+  factAtoms : Array ByteArray := #[]
 
 /-- What crosses the boundary: the commitments and the redacted document. -/
 structure DisclosureView where
@@ -211,8 +163,42 @@ structure CredentialWitness where
   spanEnd : Nat
   replacement : ByteArray
 
-/-- The atom a status edge asserts: its object, read as a big-endian word. -/
-def factAtom (e : KgEdge) : UInt64 := UInt64.ofNat (ofBE e.obj.data.toList)
+/-- A full-width fact identity. All three fields are length-framed before hashing. -/
+def factAtomPreimage (e : KgEdge) : List UInt8 :=
+  encodeListField (be 8 e.predId.toNat) ++ encodeListField e.subj.data.toList ++
+    encodeListField e.obj.data.toList
+
+def factAtom (e : KgEdge) : ByteArray :=
+  cshake32ByteArray "OBEND.POLIS.FACT_ATOM/v1".toUTF8.data.toList (factAtomPreimage e)
+
+theorem factAtom_size (e : KgEdge) : (factAtom e).size = 32 := cshake32ByteArray_size _ _
+
+theorem factAtom_binds (a b : KgEdge) (h : factAtom a = factAtom b) :
+    a = b ∨ CollisionAmong (cshake256Bytes "OBEND.POLIS.FACT_ATOM/v1".toUTF8.data.toList)
+      (fun x => x = factAtomPreimage a ∨ x = factAtomPreimage b) := by
+  rcases cshake32_binds "OBEND.POLIS.FACT_ATOM/v1".toUTF8.data.toList h with hp | hc
+  · simp only [factAtomPreimage, List.append_assoc] at hp
+    obtain ⟨hp, hs⟩ := encodeListField_prefix_inj hp
+    obtain ⟨hs, ho⟩ := encodeListField_prefix_inj hs
+    have ho := (encodeListField_prefix_inj (r₁ := []) (r₂ := []) (by simpa using ho)).1
+    have he : a.predId = b.predId := UInt64.toNat_inj.mp
+      (be_injective (by have := a.predId.toNat_lt; exact this)
+        (by have := b.predId.toNat_lt; exact this) hp)
+    apply Or.inl
+    have hs' := byteArray_eq_of_toList_eq hs
+    have ho' := byteArray_eq_of_toList_eq ho
+    cases a; cases b
+    simp_all
+  · exact .inr hc
+
+/-- Dense model indices name a verifier-provided dictionary of full-width fact identities.
+They are indices, never truncated digests. Unknown facts are rejected by `checkFactNames`. -/
+def factIndex (pol : StatusPolicy) (e : KgEdge) : UInt64 :=
+  UInt64.ofNat (pol.factAtoms.toList.idxOf (factAtom e))
+
+def checkFactNames (pol : StatusPolicy) (w : CredentialWitness) : Bool :=
+  decide (pol.factAtoms.size < 2 ^ 64) &&
+    w.edges.all (fun e => pol.factAtoms.contains (factAtom e))
 
 /-- The facts a trace read, in the order it read them. -/
 def loadedFacts (tr : LinMemTrace) : List UInt64 :=
@@ -250,7 +236,8 @@ def checkFacts (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitnes
       w.credential.subject w.edges w.token &&
     verifyLinMemExec w.memory && decide (w.memory.produced.size = 0) &&
     decide (w.memory.finalCells.size = 0) &&
-    decide (w.memory.init.toList.map LinCell.payload = w.edges.toList.map factAtom)
+    decide (w.memory.init.toList.map LinCell.payload = w.edges.toList.map (factIndex pol)) &&
+    checkFactNames pol w
 
 /-- The model is the well-founded model of the policy over the facts read, and the goal holds. -/
 def checkModel (pol : StatusPolicy) (w : CredentialWitness) : Bool :=
@@ -282,7 +269,8 @@ structure CompliantEvaluation (pol : StatusPolicy) (pub : DisclosureView)
   memory : LinMemSpec w.memory
   noProduced : w.memory.produced.size = 0
   noResidue : w.memory.finalCells.size = 0
-  initFacts : w.memory.init.toList.map LinCell.payload = w.edges.toList.map factAtom
+  initFacts : w.memory.init.toList.map LinCell.payload = w.edges.toList.map (factIndex pol)
+  factNames : checkFactNames pol w = true
   modelTrue : Obend.Reasons.Same (decodeBits w.modelTrue)
       (Obend.Reasons.wf (toReasonsProgram (evalProgram pol w.memory))).1
   modelUpper : Obend.Reasons.Same (decodeBits w.modelUpper)
@@ -314,12 +302,12 @@ theorem stratified_credential_eval_sound (pol : StatusPolicy) (pub : DisclosureV
   simp only [checkBinding, Bool.and_eq_true, decide_eq_true_eq] at hb
   obtain ⟨hrev, hchain⟩ := (checkChain_iff pol pub w).mp hc
   simp only [checkFacts, Bool.and_eq_true, decide_eq_true_eq] at hf
-  obtain ⟨⟨⟨⟨htok, hlin⟩, hprod⟩, hfin⟩, hinit⟩ := hf
+  obtain ⟨⟨⟨⟨⟨htok, hlin⟩, hprod⟩, hfin⟩, hinit⟩, hnames⟩ := hf
   simp only [checkModel, Bool.and_eq_true] at hm
   obtain ⟨hmodelT, hmodelU⟩ := checkRankedWFS_sound hm.1
   simp only [checkDisclosure, Bool.and_eq_true, decide_eq_true_eq] at hd
   exact ⟨hb.1, hb.2, hrev, hchain, htok, (verifyLinMemExec_iff_spec _).mp hlin, hprod, hfin,
-    hinit, hmodelT, hmodelU, hm.2, hd.1, hd.2⟩
+    hinit, hnames, hmodelT, hmodelU, hm.2, hd.1, hd.2⟩
 
 /-- **Every compliant evaluation is accepted**, with some rank certificate for its model. -/
 theorem checkCredentialEval_complete (pol : StatusPolicy) (pub : DisclosureView)
@@ -336,8 +324,8 @@ theorem checkCredentialEval_complete (pol : StatusPolicy) (pub : DisclosureView)
   simp only [checkCredentialEval, hchain, Bool.and_eq_true, checkBinding, checkFacts, checkModel,
     checkDisclosure, decide_eq_true_eq]
   exact ⟨⟨⟨⟨⟨hc.bound, hc.width⟩, trivial⟩,
-    ⟨⟨⟨⟨hc.token, (verifyLinMemExec_iff_spec _).mpr hc.memory⟩, hc.noProduced⟩, hc.noResidue⟩,
-      hc.initFacts⟩⟩, ⟨hcert, hc.goal⟩⟩, ⟨hc.redaction, hc.disclosed⟩⟩
+    ⟨⟨⟨⟨⟨hc.token, (verifyLinMemExec_iff_spec _).mpr hc.memory⟩, hc.noProduced⟩, hc.noResidue⟩,
+      hc.initFacts⟩, hc.factNames⟩⟩, ⟨hcert, hc.goal⟩⟩, ⟨hc.redaction, hc.disclosed⟩⟩
 
 /-! ### Non-omission -/
 
@@ -345,7 +333,7 @@ theorem checkCredentialEval_complete (pol : StatusPolicy) (pub : DisclosureView)
 none invented. -/
 theorem loadedFacts_perm {pol : StatusPolicy} {pub : DisclosureView} {w : CredentialWitness}
     (h : CompliantEvaluation pol pub w) :
-    (w.edges.toList.map factAtom).Perm (loadedFacts w.memory) := by
+    (w.edges.toList.map (factIndex pol)).Perm (loadedFacts w.memory) := by
   have hp : (w.memory.init.toList ++ w.memory.produced.toList).Perm
       (w.memory.consumed.toList.map ConsumedEvent.cell ++ w.memory.finalCells.toList) :=
     h.memory.2.2
@@ -401,20 +389,20 @@ of whose negated atoms is true, undefined, or a committed fact. A prover who lea
 revocation fact to derive what it blocks has no accepted evaluation. -/
 theorem no_forged_negative_by_omission (pol : StatusPolicy) (pub : DisclosureView)
     (w : CredentialWitness) (h : checkCredentialEval pol pub w = true) :
-    (∀ e ∈ w.edges.toList, bit w.modelTrue (factAtom e).toNat = true) ∧
+    (∀ e ∈ w.edges.toList, bit w.modelTrue (factIndex pol e).toNat = true) ∧
     ∀ head, bit w.modelTrue head = true →
       ∃ r ∈ (evalProgram pol w.memory).rules, r.head = head ∧
         (∀ b ∈ r.pos, bit w.modelTrue b = true) ∧
         ∀ d ∈ r.neg, bit w.modelUpper d = false ∧
-          ∀ e ∈ w.edges.toList, (factAtom e).toNat ≠ d := by
+          ∀ e ∈ w.edges.toList, (factIndex pol e).toNat ≠ d := by
   have hc := stratified_credential_eval_sound pol pub w h
   simp only [checkCredentialEval, Bool.and_eq_true, checkModel] at h
   obtain ⟨hfacts, hatoms⟩ := checkRankedWFS_atom h.1.2.1
-  have hedge : ∀ e ∈ w.edges.toList, bit w.modelTrue (factAtom e).toNat = true := by
+  have hedge : ∀ e ∈ w.edges.toList, bit w.modelTrue (factIndex pol e).toNat = true := by
     intro e he
-    have hmem : factAtom e ∈ loadedFacts w.memory :=
+    have hmem : factIndex pol e ∈ loadedFacts w.memory :=
       (loadedFacts_perm hc).mem_iff.mp (List.mem_map.mpr ⟨e, he, rfl⟩)
-    exact hfacts (factRule (factAtom e)) (factRule_mem_evalProgram pol w.memory _ hmem) rfl rfl
+    exact hfacts (factRule (factIndex pol e)) (factRule_mem_evalProgram pol w.memory _ hmem) rfl rfl
   refine ⟨hedge, fun head hhead => ?_⟩
   obtain ⟨_, r, hr, hrh, hpos, hneg⟩ := hatoms head hhead
   refine ⟨r, hr, hrh, hpos, fun d hd => ⟨hneg d hd, fun e he hed => ?_⟩⟩
@@ -427,7 +415,7 @@ theorem no_forged_negative_by_omission (pol : StatusPolicy) (pub : DisclosureVie
 theorem revoked_fact_refuses_goal (pol : StatusPolicy) (pub : DisclosureView)
     (w : CredentialWitness) (d : Nat)
     (hguard : ∀ r ∈ (evalProgram pol w.memory).rules, r.head = pol.goal → d ∈ r.neg)
-    (e : KgEdge) (he : e ∈ w.edges.toList) (hed : (factAtom e).toNat = d) :
+    (e : KgEdge) (he : e ∈ w.edges.toList) (hed : (factIndex pol e).toNat = d) :
     checkCredentialEval pol pub w = false := by
   cases h : checkCredentialEval pol pub w with
   | false => rfl
@@ -488,362 +476,6 @@ theorem disclosure_noninterference (pol : StatusPolicy) (pub₁ pub₂ : Disclos
   · rw [c₁.disclosed]; exact hk₁
   · rw [c₂.disclosed]; exact hk₂
   · rw [c₁.disclosed]; exact hv₁
-
-/-! ## 3. The ex-post receipt -/
-
-/-- The receipt's commitment scheme: a 32-byte hash for the Merkle track and Ajtai parameters
-for the lattice track, at the arity of the eight-row compliance table. -/
-structure ReceiptParams where
-  hash : Hash32
-  lattice : AjtaiParams
-  cols_eq : lattice.cols = 4 * 2 ^ 3
-
-/-- `0` when a clause holds, `1` when it does not. -/
-def violationBit (ok : Bool) : Goldilocks := if ok then Goldilocks.zero else Goldilocks.one
-
-/-- One row per clause of the relation, padded to eight. -/
-def tableOfChecks (b₁ b₂ b₃ b₄ b₅ : Bool) : List Goldilocks :=
-  [violationBit b₁, violationBit b₂, violationBit b₃, violationBit b₄, violationBit b₅,
-    Goldilocks.zero, Goldilocks.zero, Goldilocks.zero]
-
-/-- **The compliance table** of an evaluation: which clauses of `checkCredentialEval` failed. -/
-def complianceTable (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness) :
-    List Goldilocks :=
-  tableOfChecks (checkBinding pub w) (checkChain pol pub w) (checkFacts pol pub w)
-    (checkModel pol w) (checkDisclosure pub w)
-
-theorem tableOfChecks_sum (b₁ b₂ b₃ b₄ b₅ : Bool) :
-    hypercubeSum 3 (tableOfChecks b₁ b₂ b₃ b₄ b₅) = Goldilocks.zero ↔
-      (b₁ && b₂ && b₃ && b₄ && b₅) = true := by
-  cases b₁ <;> cases b₂ <;> cases b₃ <;> cases b₄ <;> cases b₅ <;> decide
-
-/-- **The table sums to zero exactly on accepted evaluations.** -/
-theorem complianceTable_sum_iff (pol : StatusPolicy) (pub : DisclosureView)
-    (w : CredentialWitness) :
-    hypercubeSum 3 (complianceTable pol pub w) = Goldilocks.zero ↔
-      checkCredentialEval pol pub w = true :=
-  tableOfChecks_sum _ _ _ _ _
-
-theorem complianceTable_length (pol : StatusPolicy) (pub : DisclosureView)
-    (w : CredentialWitness) : (complianceTable pol pub w).length = 2 ^ 3 := by
-  simp [complianceTable, tableOfChecks]
-
-/-- The table of an accepted evaluation does not depend on the witness. -/
-theorem complianceTable_of_accepted (pol : StatusPolicy) (pub : DisclosureView)
-    (w : CredentialWitness) (h : checkCredentialEval pol pub w = true) :
-    complianceTable pol pub w = tableOfChecks true true true true true := by
-  simp only [checkCredentialEval, Bool.and_eq_true] at h
-  obtain ⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩ := h
-  simp only [complianceTable, h1, h2, h3, h4, h5]
-
-/-- The dual commitment to a table: a Merkle root and an Ajtai syndrome. -/
-def commitTable (P : ReceiptParams) (tbl : List Goldilocks) : CanopyCommitment × AjtaiCommitment :=
-  (canopyCommit P.hash 3 tbl, ajtaiLatticeCommit P.lattice 3 tbl)
-
-/-- The public statement of a receipt. Every field is a digest, a root, the disclosed document,
-or the table commitment; nothing of the witness is in it. -/
-structure CredentialStatement where
-  policyDigest : ByteArray
-  credentialDigest : ByteArray
-  revokedRoot : ByteArray
-  graphDigest : ByteArray
-  disclosed : ByteArray
-  tableCommitment : CanopyCommitment × AjtaiCommitment
-
-/-- The statement of a public view under a policy digest and a table commitment. -/
-def statementOf (policyDigest : ByteArray) (pub : DisclosureView)
-    (comm : CanopyCommitment × AjtaiCommitment) : CredentialStatement :=
-  ⟨policyDigest, pub.credentialDigest, pub.revokedRoot.bytes, pub.graphDigest, pub.disclosed, comm⟩
-
-/-- The framed statement: what the transcript absorbs before any challenge. -/
-def statementBytes (s : CredentialStatement) : ByteArray :=
-  encodeFrame (encodeFrame s.policyDigest s.credentialDigest s.revokedRoot)
-    (encodeFrame s.graphDigest s.disclosed ByteArray.empty)
-    (TranscriptEncode.encodeTranscriptBytes s.tableCommitment)
-
-theorem statementBytes_injective (s₁ s₂ : CredentialStatement)
-    (h : statementBytes s₁ = statementBytes s₂) : s₁ = s₂ := by
-  obtain ⟨p₁, c₁, r₁, g₁, d₁, t₁⟩ := s₁
-  obtain ⟨p₂, c₂, r₂, g₂, d₂, t₂⟩ := s₂
-  simp only [statementBytes] at h
-  obtain ⟨ha, hb, hc⟩ := encodeFrame_injective h
-  obtain ⟨h1, h2, h3⟩ := encodeFrame_injective ha
-  obtain ⟨h4, h5, _⟩ := encodeFrame_injective hb
-  have h6 : t₁ = t₂ := LawfulTranscriptEncode.encodeTranscriptBytes_injective hc
-  subst h1 h2 h3 h4 h5 h6
-  rfl
-
-/-- Customization string of the statement digest. -/
-def statementCustomization : List UInt8 := "OBEND.POLIS.VC-STATEMENT/v1".toUTF8.data.toList
-
-/-- The digest a turn's effect names its inner statement by. -/
-def statementDigest (s : CredentialStatement) : ByteArray :=
-  cshake32ByteArray statementCustomization (statementBytes s).data.toList
-
-/-- Equal statement digests name equal statements, or the two framed statements collide. -/
-theorem statementDigest_binding (s₁ s₂ : CredentialStatement)
-    (h : statementDigest s₁ = statementDigest s₂) :
-    s₁ = s₂ ∨ CollisionAmong (cshake256Bytes statementCustomization) (fun x =>
-      x = (statementBytes s₁).data.toList ∨ x = (statementBytes s₂).data.toList) := by
-  rcases cshake32_binds statementCustomization h with hp | hc
-  · exact .inl (statementBytes_injective s₁ s₂ (byteArray_eq_of_toList_eq hp))
-  · exact .inr hc
-
-/-- A receipt: the sumcheck round polynomials and the dual opening. -/
-structure ExPostReceipt where
-  rounds : List (RoundPoly Goldilocks)
-  opening : CanopyOpeningProof × AjtaiOpeningProof
-
-def receiptProtocolId : String := "obend.polis.vc-receipt/v1"
-
-/-- The transcript of a receipt: the verifier key and the framed statement are bound by
-`bindRelation` before anything is squeezed. -/
-def receiptTranscript (vk : ByteArray) (s : CredentialStatement) : Transcript .relationBound :=
-  bindRelation receiptProtocolId vk (statementBytes s) (Transcript.newUnseeded ByteArray.empty)
-
-/-- **The receipt verifier.** The claim is that the committed table sums to zero over the
-3-cube: no clause of the relation failed. It sees the statement and the receipt only. -/
-def verifyExPostCredentialReceipt (P : ReceiptParams) (vk : ByteArray) (s : CredentialStatement)
-    (rc : ExPostReceipt) : Bool :=
-  verifyDualSumcheckPIOP (canopyMerklePCS P.hash) (ajtaiLatticePCS P.lattice) ((), ()) 1 3
-    s.tableCommitment Goldilocks.zero rc.rounds rc.opening (receiptTranscript vk s)
-
-/-- The instance-bound transcript the sumcheck rounds run on. -/
-def receiptBoundTranscript (vk : ByteArray) (s : CredentialStatement) :
-    BoundTranscript (s.tableCommitment, ((3 : Nat), Goldilocks.zero)) :=
-  bindDualSumcheckInstance s.tableCommitment 3 Goldilocks.zero (receiptTranscript vk s)
-
-/-- The sumcheck half of the verifier: the evaluation claim the rounds reduce to. -/
-def receiptSumcheck (vk : ByteArray) (s : CredentialStatement) (rc : ExPostReceipt) :
-    Option (EvalClaim Goldilocks 3 × Transcript .instanceBound) :=
-  verifySumcheck 1 3 Goldilocks.zero rc.rounds (receiptBoundTranscript vk s).transcript
-
-theorem verifyExPostCredentialReceipt_eq (P : ReceiptParams) (vk : ByteArray)
-    (s : CredentialStatement) (rc : ExPostReceipt) :
-    verifyExPostCredentialReceipt P vk s rc =
-      match receiptSumcheck vk s rc with
-      | none => false
-      | some out =>
-        ((canopyAjtaiDualPCS P.hash P.lattice).verifyEval ((), ()) 3 s.tableCommitment out.1
-          rc.opening out.2).1 := by
-  unfold verifyExPostCredentialReceipt verifyDualSumcheckPIOP verifyBoundSumcheck receiptSumcheck
-    receiptBoundTranscript
-  dsimp only [BoundTranscript.inst]
-  cases verifySumcheck 1 3 Goldilocks.zero rc.rounds
-    (bindDualSumcheckInstance s.tableCommitment 3 Goldilocks.zero
-      (receiptTranscript vk s)).transcript with
-  | none => rfl
-  | some out =>
-    obtain ⟨claim, trA⟩ := out
-    rfl
-
-/-- **Both tracks break on a false opening.** An accepted dual opening of the commitment to `tbl`
-at a value that is not `tbl`'s evaluation yields a bounded collision of the Merkle hash (the
-opened entries differ from `tbl` under one root) and a short vector in the kernel of the Ajtai
-matrix (the opened limbs differ from `tbl`'s under one syndrome). -/
-def dualOpeningExtract (P : ReceiptParams) {phase : TranscriptPhase} [CanSqueezeTranscript phase]
-    (tbl : List Goldilocks) (hlen : tbl.length = 2 ^ 3) (claim : EvalClaim Goldilocks 3)
-    (π : CanopyOpeningProof × AjtaiOpeningProof) (tr : Transcript phase)
-    (hacc : ((canopyAjtaiDualPCS P.hash P.lattice).verifyEval ((), ()) 3 (commitTable P tbl)
-      claim π tr).1 = true)
-    (hne : claim.expectedVal ≠ mleEval tbl claim.point) :
-    HashCollisionWitness P.hash.eval (merkleMaxPreimageBytes 3) ×
-      SISShortVecWitness P.lattice.modulus 131070 P.lattice.matrix :=
-  have hBoth :
-      (canopyVerifyEval P.hash 3 (canopyCommit P.hash 3 tbl) claim π.1
-        (absorbMsg dualTrack1Label ByteArray.empty tr)).1 = true ∧
-      (ajtaiLatticeVerifyEval P.lattice 3 (ajtaiLatticeCommit P.lattice 3 tbl) claim π.2
-        (absorbMsg dualTrack2Label ByteArray.empty tr)).1 = true := by
-    simpa [commitTable, canopyAjtaiDualPCS, DualPCS, dualVerifyEval, canopyMerklePCS,
-      ajtaiLatticePCS, dualVerdictJoin, Bool.and_eq_true] using hacc
-  have hTblNe : π.1.entries.map Prod.fst ≠ tbl := by
-    have hAccM := hBoth.1
-    simp only [canopyVerifyEval, Bool.and_eq_true, beq_iff_eq] at hAccM
-    intro hEqEntries
-    rw [hEqEntries] at hAccM
-    exact hne hAccM.2.symm
-  have hHonestLen : (gadgetDecomposeTable tbl).length = P.lattice.cols := by
-    rw [gadgetDecomposeTable_length, hlen, P.cols_eq]
-  have hAjtaiFacts :
-      π.2.shortLimbs.length = P.lattice.cols ∧
-      ShortNormBound 65535 π.2.shortLimbs ∧
-      π.2.shortLimbs ≠ gadgetDecomposeTable tbl ∧
-      (∀ l₁ : π.2.shortLimbs.length = P.lattice.cols,
-        ajtaiCommit P.lattice π.2.shortLimbs l₁ =
-          ajtaiCommit P.lattice (gadgetDecomposeTable tbl) hHonestLen) := by
-    have hAccA := hBoth.2
-    unfold ajtaiLatticeVerifyEval ajtaiLatticeCommit at hAccA
-    dsimp only at hAccA
-    simp only [Bool.and_eq_true, beq_iff_eq] at hAccA
-    obtain ⟨_, hAccA⟩ := hAccA
-    if hPrfLen : π.2.shortLimbs.length = P.lattice.cols then
-      simp only [hPrfLen, hHonestLen, ↓reduceDIte, Bool.and_eq_true, beq_iff_eq,
-        checkShortNorm_iff] at hAccA
-      rcases hAccA with ⟨⟨⟨_, hSh⟩, hSyn⟩, hRec⟩
-      refine ⟨hPrfLen, hSh, ?_, fun _ => hSyn⟩
-      intro hEqLimbs
-      rw [hEqLimbs, gadgetRecomposeTable_decompose tbl, beq_iff_eq] at hRec
-      exact hne hRec.symm
-    else
-      simp only [hPrfLen, ↓reduceDIte] at hAccA; cases hAccA
-  (extractCanopyOpenMerkleCollision P.hash tbl hlen π.1
-      (absorbMsg dualTrack1Label ByteArray.empty tr) hBoth.1 hTblNe,
-    extractShortDiffSISWitness P.lattice π.2.shortLimbs (gadgetDecomposeTable tbl)
-      hAjtaiFacts.1 hHonestLen hAjtaiFacts.2.1 (gadgetDecomposeTable_short tbl)
-      hAjtaiFacts.2.2.1 (hAjtaiFacts.2.2.2 hAjtaiFacts.1))
-
-/-- **The receipt extractor.** If a receipt is accepted for a statement whose table commitment
-is the commitment to `tbl`, and `tbl` does not sum to zero, then a sumcheck round challenge hit a
-root of a nonzero discrepancy polynomial, or both commitment tracks are broken: a collision and a
-short vector are returned. Decided on the evaluation claim, with no choice. -/
-def exPostReceiptExtract (P : ReceiptParams) (vk : ByteArray) (s : CredentialStatement)
-    (rc : ExPostReceipt) (tbl : List Goldilocks) (hlen : tbl.length = 2 ^ 3)
-    (hcomm : s.tableCommitment = commitTable P tbl)
-    (hacc : verifyExPostCredentialReceipt P vk s rc = true)
-    (hsum : hypercubeSum 3 tbl ≠ Goldilocks.zero) :
-    PSum (PLift (ExistsRoundRootHit 3 tbl rc.rounds (receiptBoundTranscript vk s).transcript))
-      (HashCollisionWitness P.hash.eval (merkleMaxPreimageBytes 3) ×
-        SISShortVecWitness P.lattice.modulus 131070 P.lattice.matrix) :=
-  match hv : receiptSumcheck vk s rc with
-  | none => False.elim (by rw [verifyExPostCredentialReceipt_eq, hv] at hacc; cases hacc)
-  | some out =>
-    if heval : out.1.expectedVal = mleEval tbl out.1.point then
-      .inl ⟨by
-        rcases verifySumcheck_sound_dichotomy 1 3 tbl Goldilocks.zero rc.rounds
-          (receiptBoundTranscript vk s).transcript out.1 out.2 hv (Ne.symm hsum) with h | h
-        · exact absurd heval h
-        · exact h⟩
-    else
-      .inr (dualOpeningExtract P tbl hlen out.1 rc.opening out.2
-        (by rw [verifyExPostCredentialReceipt_eq, hv, hcomm] at hacc; exact hacc) heval)
-
-/-- **Receipt soundness.** For any witness whose compliance table is the committed table, an
-accepted receipt means the evaluation is accepted by the relation, or a round challenge hit a
-root, or the Merkle hash has a bounded collision and the Ajtai matrix a short kernel vector. -/
-theorem verifyExPostCredentialReceipt_sound (P : ReceiptParams) (vk : ByteArray)
-    (s : CredentialStatement) (rc : ExPostReceipt) (pol : StatusPolicy) (pub : DisclosureView)
-    (w : CredentialWitness)
-    (hcomm : s.tableCommitment = commitTable P (complianceTable pol pub w))
-    (hacc : verifyExPostCredentialReceipt P vk s rc = true) :
-    checkCredentialEval pol pub w = true ∨
-      ExistsRoundRootHit 3 (complianceTable pol pub w) rc.rounds
-        (receiptBoundTranscript vk s).transcript ∨
-      (BoundedCollision P.hash.eval (merkleMaxPreimageBytes 3) ∧
-        ¬ ModuleSISHard P.lattice 131070) := by
-  cases hc : checkCredentialEval pol pub w with
-  | true => exact .inl rfl
-  | false =>
-    have hsum : hypercubeSum 3 (complianceTable pol pub w) ≠ Goldilocks.zero := by
-      intro hz
-      rw [(complianceTable_sum_iff pol pub w).mp hz] at hc
-      cases hc
-    match exPostReceiptExtract P vk s rc _ (complianceTable_length pol pub w) hcomm hacc hsum with
-    | .inl hit => exact .inr (.inl hit.down)
-    | .inr (col, sis) => exact .inr (.inr ⟨⟨col⟩, fun hard => hard ⟨sis⟩⟩)
-
-/-- **Hash or lattice.** If the Merkle hash has no bounded collision, or Module-SIS is hard for
-the Ajtai matrix, an accepted receipt over the committed compliance table means the evaluation
-is accepted or a round challenge hit a root. -/
-theorem receipt_compliant_of_hash_or_sis (P : ReceiptParams) (vk : ByteArray)
-    (s : CredentialStatement) (rc : ExPostReceipt) (pol : StatusPolicy) (pub : DisclosureView)
-    (w : CredentialWitness)
-    (hcomm : s.tableCommitment = commitTable P (complianceTable pol pub w))
-    (hacc : verifyExPostCredentialReceipt P vk s rc = true)
-    (hOr : ¬ BoundedCollision P.hash.eval (merkleMaxPreimageBytes 3) ∨
-      ModuleSISHard P.lattice 131070) :
-    checkCredentialEval pol pub w = true ∨
-      ExistsRoundRootHit 3 (complianceTable pol pub w) rc.rounds
-        (receiptBoundTranscript vk s).transcript := by
-  rcases verifyExPostCredentialReceipt_sound P vk s rc pol pub w hcomm hacc with h | h | ⟨hc, hs⟩
-  · exact .inl h
-  · exact .inr h
-  · rcases hOr with hno | hard
-    · exact absurd hc hno
-    · exact absurd hard hs
-
-/-- The honest prover: it commits to the table, runs the sumcheck rounds on the transcript bound
-to that commitment, and opens both tracks at the point the rounds reduce to. -/
-def proveExPostCredentialReceipt (P : ReceiptParams) (vk : ByteArray) (s : CredentialStatement)
-    (tbl : List Goldilocks) : ExPostReceipt :=
-  let comm : (canopyMerklePCS P.hash).Commitment × (ajtaiLatticePCS P.lattice).Commitment :=
-    (DualPCS (R := Goldilocks) (canopyMerklePCS P.hash) (ajtaiLatticePCS P.lattice)).commit
-      ((), ()) 3 tbl
-  let (rounds, claim, trAfter) :=
-    honestBoundSumcheckProver (R := Goldilocks) comm 3 tbl (receiptTranscript vk s)
-  let (prf, _) := (DualPCS (R := Goldilocks) (canopyMerklePCS P.hash)
-    (ajtaiLatticePCS P.lattice)).openEval ((), ()) 3 tbl claim trAfter
-  ⟨rounds, prf⟩
-
-/-- **Receipt completeness.** The honest prover's receipt for a table that sums to zero, under
-its own commitment, is accepted. -/
-theorem verifyExPostCredentialReceipt_complete (P : ReceiptParams) (vk : ByteArray)
-    (s : CredentialStatement) (tbl : List Goldilocks) (hlen : tbl.length = 2 ^ 3)
-    (hcomm : s.tableCommitment = commitTable P tbl)
-    (hsum : hypercubeSum 3 tbl = Goldilocks.zero) :
-    verifyExPostCredentialReceipt P vk s (proveExPostCredentialReceipt P vk s tbl) = true := by
-  have h := verifyDualSumcheckPIOP_completeness (canopyMerklePCS P.hash)
-    (ajtaiLatticePCS P.lattice) ((), ()) (Nat.le_refl 1) 3 tbl (receiptTranscript vk s)
-    ⟨trivial, P.cols_eq⟩ hlen
-  rw [hsum] at h
-  have hcomm' : s.tableCommitment =
-      (DualPCS (R := Goldilocks) (canopyMerklePCS P.hash) (ajtaiLatticePCS P.lattice)).commit
-        ((), ()) 3 tbl := hcomm
-  unfold verifyExPostCredentialReceipt proveExPostCredentialReceipt
-  rw [hcomm']
-  dsimp only at h ⊢
-  refine Eq.trans ?_ h
-  congr 1
-
-/-- **The honest receipt of an accepted evaluation is accepted**, for the statement that carries
-the commitment to its compliance table. -/
-theorem honestReceipt_accepted (P : ReceiptParams) (vk policyDigest : ByteArray)
-    (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness)
-    (h : checkCredentialEval pol pub w = true) :
-    verifyExPostCredentialReceipt P vk
-      (statementOf policyDigest pub (commitTable P (complianceTable pol pub w)))
-      (proveExPostCredentialReceipt P vk
-        (statementOf policyDigest pub (commitTable P (complianceTable pol pub w)))
-        (complianceTable pol pub w)) = true :=
-  verifyExPostCredentialReceipt_complete P vk _ _ (complianceTable_length pol pub w) rfl
-    ((complianceTable_sum_iff pol pub w).mpr h)
-
-/-- **The honest receipt does not depend on the witness.** Two accepted evaluations with one
-public view produce the same statement and the same receipt: what the verifier receives is a
-function of the public view. -/
-theorem honestReceipt_witness_independent (P : ReceiptParams) (vk policyDigest : ByteArray)
-    (pol : StatusPolicy) (pub : DisclosureView) (w₁ w₂ : CredentialWitness)
-    (h₁ : checkCredentialEval pol pub w₁ = true) (h₂ : checkCredentialEval pol pub w₂ = true) :
-    statementOf policyDigest pub (commitTable P (complianceTable pol pub w₁)) =
-        statementOf policyDigest pub (commitTable P (complianceTable pol pub w₂)) ∧
-      proveExPostCredentialReceipt P vk
-          (statementOf policyDigest pub (commitTable P (complianceTable pol pub w₁)))
-          (complianceTable pol pub w₁) =
-        proveExPostCredentialReceipt P vk
-          (statementOf policyDigest pub (commitTable P (complianceTable pol pub w₂)))
-          (complianceTable pol pub w₂) := by
-  rw [complianceTable_of_accepted pol pub w₁ h₁, complianceTable_of_accepted pol pub w₂ h₂]
-  exact ⟨rfl, rfl⟩
-
-
-/-- The deployed hash with the library's Ajtai parameters at arity 3. Their matrix has no short
-kernel vector at all (`inhabitedAjtaiParams_sisHard`), so the lattice track binds without an
-assumption; it does not compress. -/
-def deployedReceiptParams : ReceiptParams :=
-  ⟨deployedCanopyHash32, inhabitedAjtaiParams 3, (inhabitedAjtaiParams_sisHard 3).1⟩
-
-/-- At the deployed parameters an accepted receipt over the committed compliance table leaves
-only the accepted evaluation or a round-challenge root hit. -/
-theorem deployedReceipt_compliant (vk : ByteArray) (s : CredentialStatement) (rc : ExPostReceipt)
-    (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness)
-    (hcomm : s.tableCommitment = commitTable deployedReceiptParams (complianceTable pol pub w))
-    (hacc : verifyExPostCredentialReceipt deployedReceiptParams vk s rc = true) :
-    checkCredentialEval pol pub w = true ∨
-      ExistsRoundRootHit 3 (complianceTable pol pub w) rc.rounds
-        (receiptBoundTranscript vk s).transcript :=
-  receipt_compliant_of_hash_or_sis deployedReceiptParams vk s rc pol pub w hcomm hacc
-    (.inr (inhabitedAjtaiParams_sisHard 3).2.2)
-
-/-! ## 4. The wire form -/
 
 /-- Read one LEB128 number from the front of a byte list. -/
 def unleb128 : List UInt8 → Option (Nat × List UInt8)
@@ -969,6 +601,393 @@ def int : Codec Int :=
 
 end Codec
 
+
+namespace Codec
+
+def bool : Codec Bool := nat.refine
+  (fun n => if n = 0 then some false else if n = 1 then some true else none)
+  (fun b => if b then 1 else 0) (fun b => by cases b <;> rfl)
+def u64 : Codec UInt64 := nat.refine
+  (fun n => if n < 2 ^ 64 then some (UInt64.ofNat n) else none)
+  UInt64.toNat (fun n => by simp [n.toNat_lt])
+def array {α : Type} (c : Codec α) : Codec (Array α) :=
+  (list c).refine (fun l => some l.toArray) Array.toList (fun a => by simp)
+/-- The structural codec preserves all width-bounded CBOR values, including raw text
+bytes. UTF-8 validation is not part of a computational extractor's carrier. -/
+def cbor : Codec {v : CborVal // WithinWidth v = true} := (list byte).refine
+  (fun bs => match decSpecAt (fun _ => true) false bs.length bs with
+    | some (v, []) => if h : WithinWidth v = true then some ⟨v, h⟩ else none
+    | _ => none)
+  (fun v => encSpec v.val)
+  (fun v => by
+    have hv := decSpecAt_enc (fun _ => true) false (encSpec v.val).length v.val []
+      (Nat.le_refl _) v.property
+    simp only [List.append_nil] at hv
+    simp only [hv, v.property, dite_true])
+
+end Codec
+
+def caveatTokens : Caveat → List (Nat × Nat)
+  | .atom v => [(0, v)]
+  | .const b => [(1, if b then 1 else 0)]
+  | .and a b => caveatTokens a ++ caveatTokens b ++ [(2, 0)]
+  | .or a b => caveatTokens a ++ caveatTokens b ++ [(3, 0)]
+  | .not a => caveatTokens a ++ [(4, 0)]
+
+def caveatTokenStep (stack : Option (List Caveat)) (token : Nat × Nat) : Option (List Caveat) := do
+  let stack ← stack
+  match token, stack with
+  | (0, v), ss => some (.atom v :: ss)
+  | (1, 0), ss => some (.const false :: ss)
+  | (1, 1), ss => some (.const true :: ss)
+  | (2, 0), b :: a :: ss => some (.and a b :: ss)
+  | (3, 0), b :: a :: ss => some (.or a b :: ss)
+  | (4, 0), a :: ss => some (.not a :: ss)
+  | _, _ => none
+
+theorem caveatTokens_roundtrip (c : Caveat) (stack : List Caveat) :
+    (caveatTokens c).foldl caveatTokenStep (some stack) = some (c :: stack) := by
+  induction c generalizing stack with
+  | atom _ => rfl
+  | const b => cases b <;> rfl
+  | and a b ha hb => simp [caveatTokens, List.foldl_append, ha, hb, caveatTokenStep]
+  | or a b ha hb => simp [caveatTokens, List.foldl_append, ha, hb, caveatTokenStep]
+  | not a ha => simp [caveatTokens, List.foldl_append, ha, caveatTokenStep]
+
+def caveatCodec : Codec Caveat := (Codec.list (Codec.pair Codec.nat Codec.nat)).refine
+  (fun tokens => match tokens.foldl caveatTokenStep (some []) with
+    | some [c] => some c | _ => none)
+  caveatTokens (fun c => by rw [caveatTokens_roundtrip])
+
+def revokedCodec : Codec RevokedSet := (Codec.array Codec.nat).refine
+  (fun keys => if h : keys.toList.Pairwise (· < ·) then some ⟨keys, h⟩ else none)
+  RevokedSet.keys (fun r => by simp [r.sorted])
+
+def credentialCodec : Codec IssuerCredential :=
+  (Codec.pair Codec.bytes (Codec.pair Codec.bytes (Codec.pair Codec.bytes (Codec.pair Codec.cbor (Codec.pair Codec.bytes (Codec.pair Codec.bytes Codec.nat)))))).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1.val, p.2.2.2.2.1, p.2.2.2.2.2.1, p.2.2.2.2.2.2, p.2.2.2.1.property⟩)
+    (fun v => (v.issuer, v.subject, v.schema, ⟨v.attributes, v.width⟩, v.evidence, v.lineage, v.epoch)) (fun v => by cases v; rfl)
+
+def blockCodec : Codec Block :=
+  (Codec.pair Codec.u64 (Codec.pair caveatCodec (Codec.pair Codec.bytes Codec.bytes))).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2.1, p.2.2.2⟩)
+    (fun v => (v.rights, v.caveat, v.holder, v.channel)) (fun v => by cases v; rfl)
+
+def edgeCodec : Codec KgEdge :=
+  (Codec.pair Codec.u64 (Codec.pair Codec.bytes Codec.bytes)).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2⟩)
+    (fun v => (v.predId, v.subj, v.obj)) (fun v => by cases v; rfl)
+
+def tokenCodec : Codec CompletenessToken :=
+  (Codec.pair Codec.bytes (Codec.pair Codec.u64 (Codec.pair Codec.bytes (Codec.pair Codec.bytes Codec.bytes)))).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2⟩)
+    (fun v => (v.graphDigest32, v.predId, v.subjScope, v.scopedEdgesDigest32, v.issuerTag32)) (fun v => by cases v; rfl)
+
+def linCellCodec : Codec LinCell :=
+  (Codec.pair Codec.u64 (Codec.pair Codec.u64 Codec.u64)).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2⟩)
+    (fun v => (v.allocId, v.birthStep, v.payload)) (fun v => by cases v; rfl)
+
+def consumedCodec : Codec ConsumedEvent :=
+  (Codec.pair linCellCodec Codec.u64).refine
+    (fun p => some ⟨p.1, p.2⟩)
+    (fun v => (v.cell, v.consumeStep)) (fun v => by cases v; rfl)
+
+def memoryCodec : Codec LinMemTrace :=
+  (Codec.pair (Codec.array linCellCodec) (Codec.pair (Codec.array linCellCodec) (Codec.pair (Codec.array consumedCodec) (Codec.array linCellCodec)))).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2.1, p.2.2.2⟩)
+    (fun v => (v.init, v.produced, v.consumed, v.finalCells)) (fun v => by cases v; rfl)
+
+def certCodec : Codec ArrayCert :=
+  (Codec.pair (Codec.array Codec.nat) (Codec.pair (Codec.array Codec.nat) (Codec.pair (Codec.array Codec.nat) (Codec.pair (Codec.array Codec.nat) (Codec.pair (Codec.array Codec.nat) (Codec.array (Codec.pair Codec.bool Codec.nat))))))).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2⟩)
+    (fun v => (v.stage, v.rankT, v.rankU, v.supportT, v.supportU, v.blockers)) (fun v => by cases v; rfl)
+
+def witnessCodec : Codec CredentialWitness :=
+  (Codec.pair credentialCodec (Codec.pair blockCodec (Codec.pair (Codec.array blockCodec) (Codec.pair revokedCodec (Codec.pair (Codec.array edgeCodec) (Codec.pair tokenCodec (Codec.pair memoryCodec (Codec.pair (Codec.array Codec.bool) (Codec.pair (Codec.array Codec.bool) (Codec.pair certCodec (Codec.pair Codec.nat (Codec.pair Codec.nat Codec.bytes)))))))))))).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2.1, p.2.2.2.2.2.2.1, p.2.2.2.2.2.2.2.1, p.2.2.2.2.2.2.2.2.1, p.2.2.2.2.2.2.2.2.2.1, p.2.2.2.2.2.2.2.2.2.2.1, p.2.2.2.2.2.2.2.2.2.2.2.1, p.2.2.2.2.2.2.2.2.2.2.2.2⟩)
+    (fun v => (v.credential, v.grant, v.hops, v.revoked, v.edges, v.token, v.memory, v.modelTrue, v.modelUpper, v.cert, v.spanStart, v.spanEnd, v.replacement)) (fun v => by cases v; rfl)
+
+/-! ## 3. Transparent statement- and witness-bound PIOP receipts
+
+The executable verifier receives the witness and checks its relation and canonical table.
+This is a transparent PCS realization, not a hiding proof system. The policy, including its
+issuer authenticator and full fact dictionary, is supplied by the verifier, never the receipt.
+-/
+structure ReceiptParams where
+  hash : Hash32
+  lattice : AjtaiParams
+  cols_eq : lattice.cols = 4 * 2 ^ 5
+
+def violationBit (ok : Bool) : Goldilocks := if ok then Goldilocks.zero else Goldilocks.one
+
+/-- Relation checks lower into the shared Before-constraint compiler. -/
+def credentialConstraintStmt (bs : List Bool) : CompileToPiop.SymbolicZkStmt :=
+  { beforeConstraints := (bs.map fun b => (⟨if b then 0 else 1, 1, 1⟩ : CompileToPiop.BeforeConstraint)).toArray,
+    linmemInit := #[], linmemProd := #[], linmemCons := #[], linmemFinal := #[],
+    lookupTable := #[], lookupQueries := #[], numVars := 4 }
+
+def credentialConstraintWitness (bs : List Bool) : CompileToPiop.SymbolicZkWitness :=
+  ⟨(bs.map fun _ => #[Goldilocks.zero]).toArray, #[]⟩
+
+def tableOfChecks (b₁ b₂ b₃ b₄ b₅ : Bool) : List Goldilocks :=
+  CompileToPiop.symbolicResidualVector (credentialConstraintStmt [b₁, b₂, b₃, b₄, b₅])
+    (credentialConstraintWitness [b₁, b₂, b₃, b₄, b₅]) Goldilocks.zero Goldilocks.zero
+
+private theorem tableOfChecks_length (b₁ b₂ b₃ b₄ b₅ : Bool) :
+    (tableOfChecks b₁ b₂ b₃ b₄ b₅).length = 12 := by
+  cases b₁ <;> cases b₂ <;> cases b₃ <;> cases b₄ <;> cases b₅ <;> rfl
+
+theorem credentialConstraintStmt_semantics (b₁ b₂ b₃ b₄ b₅ : Bool) :
+    CompileToPiop.SymbolicSemanticsValid (credentialConstraintStmt [b₁, b₂, b₃, b₄, b₅])
+      (credentialConstraintWitness [b₁, b₂, b₃, b₄, b₅]) ↔ (b₁ && b₂ && b₃ && b₄ && b₅) = true := by
+  cases b₁ <;> cases b₂ <;> cases b₃ <;> cases b₄ <;> cases b₅ <;>
+    simp [CompileToPiop.SymbolicSemanticsValid, credentialConstraintStmt, credentialConstraintWitness]
+
+def policyBytes (pol : StatusPolicy) : ByteArray := Native.bytesOfList
+  (encodeListField (leb128 pol.program.numAtoms) ++
+   encodeListField (pol.program.rules.toList.flatMap fun r =>
+     encodeListField (leb128 r.head) ++ encodeListField ((Codec.array Codec.nat).enc r.pos) ++
+     encodeListField ((Codec.array Codec.nat).enc r.neg)) ++
+   encodeListField (leb128 pol.goal) ++ encodeListField (be 8 pol.need.toNat) ++
+   encodeListField (be 8 pol.statusPred.toNat) ++ encodeListField pol.issuerAuth.data.toList ++
+   encodeListField ((Codec.array Codec.bytes).enc pol.factAtoms))
+
+def evaluationBinding (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness) : ByteArray :=
+  cshake32ByteArray "OBEND.POLIS.VC-EVALUATION/v1".toUTF8.data.toList
+    (encodeFrame (policyBytes pol)
+      (encodeFrame pub.credentialDigest pub.revokedRoot.bytes (encodeFrame pub.graphDigest pub.disclosed ByteArray.empty))
+      (Native.bytesOfList (witnessCodec.enc w))).data.toList
+
+theorem evaluationBinding_size (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness) :
+    (evaluationBinding pol pub w).size = 32 := cshake32ByteArray_size _ _
+attribute [local irreducible] evaluationBinding
+
+def bindingPairs : List Goldilocks → List Goldilocks
+  | [] => []
+  | x :: xs => x :: CommRingOps.neg x :: bindingPairs xs
+
+/-- Eight 32-bit limbs retain every digest bit without reducing a 64-bit word modulo the field. -/
+def bindingWords (digest : ByteArray) : List Goldilocks :=
+  (List.range 8).map fun i => Goldilocks.ofNat (ofBE ((digest.data.toList.drop (4 * i)).take 4))
+
+/-- Every witness byte and public field is committed through the full 256-bit binding.
+A fixed nonzero row rules out even the all-zero digest corner case. Paired rows sum to zero. -/
+def complianceTable (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness) : List Goldilocks :=
+  tableOfChecks (checkBinding pub w) (checkChain pol pub w) (checkFacts pol pub w)
+    (checkModel pol w) (checkDisclosure pub w) ++
+  bindingPairs (Goldilocks.one :: bindingWords (evaluationBinding pol pub w)) ++
+  List.replicate 2 Goldilocks.zero
+
+private def ringSum : List Goldilocks → Goldilocks
+  | [] => CommRingOps.zero
+  | x :: xs => CommRingOps.add x (ringSum xs)
+private theorem ringSum_append (xs ys : List Goldilocks) :
+    ringSum (xs ++ ys) = CommRingOps.add (ringSum xs) (ringSum ys) := by
+  induction xs with
+  | nil => simp [ringSum, LawfulCommRing.zero_add]
+  | cons x xs ih => simp [ringSum, ih, LawfulCommRing.add_assoc]
+private theorem ringSum_pairs (xs : List Goldilocks) : ringSum (bindingPairs xs) = CommRingOps.zero := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih => simp [bindingPairs, ringSum, ih, LawfulCommRing.add_zero, LawfulCommRing.add_right_neg]
+private theorem ringSum_zeros (n : Nat) : ringSum (List.replicate n Goldilocks.zero) = Goldilocks.zero := by
+  induction n with
+  | zero => rfl
+  | succ n ih =>
+    simp only [List.replicate_succ, ringSum, ih]
+    exact LawfulCommRing.zero_add _
+private theorem innerProd_ones (xs : List Goldilocks) (n : Nat) (h : xs.length ≤ n) :
+    innerProd xs (List.replicate n CommRingOps.one) = ringSum xs := by
+  induction xs generalizing n with
+  | nil => simp [innerProd, ringSum]
+  | cons x xs ih =>
+    cases n with
+    | zero => simp at h
+    | succ n => simp [List.replicate_succ, innerProd, ringSum, LawfulCommRing.mul_one, ih n (by simp at h; omega)]
+private theorem cubeSum_ringSum (n : Nat) (xs : List Goldilocks) (h : xs.length ≤ 2 ^ n) :
+    hypercubeSum n xs = ringSum xs := by
+  unfold hypercubeSum
+  rw [List.map_const', hypercube_length]
+  exact innerProd_ones xs (2 ^ n) h
+private theorem bindingPairs_length (xs : List Goldilocks) : (bindingPairs xs).length = 2 * xs.length := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih => simp [bindingPairs, ih]; omega
+
+theorem complianceTable_length (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness) :
+    (complianceTable pol pub w).length = 2 ^ 5 := by
+  simp only [complianceTable, tableOfChecks_length, List.length_append, bindingPairs_length,
+    List.length_cons, bindingWords, List.length_map, List.length_range, List.length_replicate]
+
+
+set_option maxRecDepth 4096 in
+theorem complianceTable_sum_iff (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness) :
+    hypercubeSum 5 (complianceTable pol pub w) = Goldilocks.zero ↔ checkCredentialEval pol pub w = true := by
+  rw [cubeSum_ringSum 5 _ (Nat.le_of_eq (complianceTable_length pol pub w))]
+  simp only [complianceTable, ringSum_append, ringSum_pairs, ringSum_zeros, LawfulCommRing.add_zero]
+  unfold checkCredentialEval
+  generalize checkBinding pub w = b₁, checkChain pol pub w = b₂, checkFacts pol pub w = b₃,
+    checkModel pol w = b₄, checkDisclosure pub w = b₅
+  cases b₁ <;> cases b₂ <;> cases b₃ <;> cases b₄ <;> cases b₅ <;>
+    simp only [tableOfChecks, credentialConstraintStmt, credentialConstraintWitness,
+      CompileToPiop.symbolicResidualVector, CompileToPiop.beforeResidualList,
+      List.toList_toArray, List.map_cons, List.map_nil, List.zip_cons_cons, List.zip_nil_left,
+      List.append_nil, List.cons_append, List.nil_append, ringSum,
+      CompileToPiop.boolBitResidual, CompileToPiop.beforeSlackResidualArray_eq_spec,
+      CompileToPiop.beforeSlackResidual, CompileToPiop.packedBitsGoldilocks,
+      CompileToPiop.charPolyEvalArray, CompileToPiop.logUpTableEvalArray,
+      CompileToPiop.logUpQueryEvalArray, Array.foldr_empty,
+      show (#[] : Array Goldilocks).zip (#[] : Array Nat) = #[] from
+        Array.zip_eq_empty_iff.mpr (.inl rfl),
+      Array.empty_append, LawfulCommRing.sub_self] <;>
+    rw [show ∀ x : Goldilocks, (x = Goldilocks.zero ↔ x.val = 0) from
+      fun x => ⟨fun h => congrArg Goldilocks.val h, fun h => Goldilocks.ext h⟩] <;>
+    simp only [CommRingOps.add, CommRingOps.sub, CommRingOps.mul, CommRingOps.zero, CommRingOps.one, Goldilocks.add_val, Goldilocks.sub_val,
+      Goldilocks.mul_val, Goldilocks.ofNat, Goldilocks.zero, Goldilocks.one] <;> decide
+
+
+attribute [local irreducible] complianceTable checkCredentialEval
+
+def commitTable (P : ReceiptParams) (tbl : List Goldilocks) : CanopyCommitment × AjtaiCommitment :=
+  (DualPCS (R := Goldilocks) (canopyMerklePCS P.hash) (ajtaiLatticePCS P.lattice)).commit ((), ()) 5 tbl
+
+structure CredentialStatement where
+  policyDigest : ByteArray
+  credentialDigest : ByteArray
+  revokedRoot : ByteArray
+  graphDigest : ByteArray
+  disclosed : ByteArray
+  tableCommitment : CanopyCommitment × AjtaiCommitment
+
+/-- The statement of a public view under a policy digest and a table commitment. -/
+def statementOf (policyDigest : ByteArray) (pub : DisclosureView)
+    (comm : CanopyCommitment × AjtaiCommitment) : CredentialStatement :=
+  ⟨policyDigest, pub.credentialDigest, pub.revokedRoot.bytes, pub.graphDigest, pub.disclosed, comm⟩
+
+/-- The framed statement: what the transcript absorbs before any challenge. -/
+def statementBytes (s : CredentialStatement) : ByteArray :=
+  encodeFrame (encodeFrame s.policyDigest s.credentialDigest s.revokedRoot)
+    (encodeFrame s.graphDigest s.disclosed ByteArray.empty)
+    (TranscriptEncode.encodeTranscriptBytes s.tableCommitment)
+
+theorem statementBytes_injective (s₁ s₂ : CredentialStatement)
+    (h : statementBytes s₁ = statementBytes s₂) : s₁ = s₂ := by
+  obtain ⟨p₁, c₁, r₁, g₁, d₁, t₁⟩ := s₁
+  obtain ⟨p₂, c₂, r₂, g₂, d₂, t₂⟩ := s₂
+  simp only [statementBytes] at h
+  obtain ⟨ha, hb, hc⟩ := encodeFrame_injective h
+  obtain ⟨h1, h2, h3⟩ := encodeFrame_injective ha
+  obtain ⟨h4, h5, _⟩ := encodeFrame_injective hb
+  have h6 : t₁ = t₂ := LawfulTranscriptEncode.encodeTranscriptBytes_injective hc
+  subst h1 h2 h3 h4 h5 h6
+  rfl
+
+/-- Customization string of the statement digest. -/
+def statementCustomization : List UInt8 := "OBEND.POLIS.VC-STATEMENT/v1".toUTF8.data.toList
+
+/-- The digest a turn's effect names its inner statement by. -/
+def statementDigest (s : CredentialStatement) : ByteArray :=
+  cshake32ByteArray statementCustomization (statementBytes s).data.toList
+
+/-- Equal statement digests name equal statements, or the two framed statements collide. -/
+theorem statementDigest_binding (s₁ s₂ : CredentialStatement)
+    (h : statementDigest s₁ = statementDigest s₂) :
+    s₁ = s₂ ∨ CollisionAmong (cshake256Bytes statementCustomization) (fun x =>
+      x = (statementBytes s₁).data.toList ∨ x = (statementBytes s₂).data.toList) := by
+  rcases cshake32_binds statementCustomization h with hp | hc
+  · exact .inl (statementBytes_injective s₁ s₂ (byteArray_eq_of_toList_eq hp))
+  · exact .inr hc
+
+
+structure ExPostReceipt where
+  rounds : List (RoundPoly Goldilocks)
+  opening : CanopyOpeningProof × AjtaiOpeningProof
+  witness : CredentialWitness
+
+def receiptProtocolId : String := "obend.polis.vc-receipt/v2"
+def receiptTranscript (vk : ByteArray) (s : CredentialStatement) : Transcript .relationBound :=
+  bindRelation receiptProtocolId vk (statementBytes s) (Transcript.newUnseeded ByteArray.empty)
+
+def receiptView (s : CredentialStatement) (w : CredentialWitness) : DisclosureView :=
+  ⟨s.credentialDigest, w.revoked.root, s.graphDigest, s.disclosed⟩
+
+def verifyExPostCredentialReceipt (P : ReceiptParams) (pol : StatusPolicy) (vk : ByteArray)
+    (s : CredentialStatement) (rc : ExPostReceipt) : Bool :=
+  decide (s.revokedRoot = rc.witness.revoked.root.bytes) &&
+  checkCredentialEval pol (receiptView s rc.witness) rc.witness &&
+  decide (s.tableCommitment = commitTable P (complianceTable pol (receiptView s rc.witness) rc.witness)) &&
+  verifyDualSumcheckPIOP (canopyMerklePCS P.hash) (ajtaiLatticePCS P.lattice) ((), ()) 1 5
+    s.tableCommitment Goldilocks.zero rc.rounds rc.opening (receiptTranscript vk s)
+
+theorem verifyExPostCredentialReceipt_sound (P : ReceiptParams) (pol : StatusPolicy)
+    (vk : ByteArray) (s : CredentialStatement) (rc : ExPostReceipt)
+    (h : verifyExPostCredentialReceipt P pol vk s rc = true) :
+    CompliantEvaluation pol (receiptView s rc.witness) rc.witness ∧
+    s.revokedRoot = rc.witness.revoked.root.bytes ∧
+    s.tableCommitment = commitTable P (complianceTable pol (receiptView s rc.witness) rc.witness) ∧
+    verifyDualSumcheckPIOP (canopyMerklePCS P.hash) (ajtaiLatticePCS P.lattice) ((), ()) 1 5
+      s.tableCommitment Goldilocks.zero rc.rounds rc.opening (receiptTranscript vk s) = true := by
+  simp only [verifyExPostCredentialReceipt, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact ⟨stratified_credential_eval_sound _ _ _ h.1.1.2, h.1.1.1, h.1.2, h.2⟩
+
+private def proveExPostOpening (P : ReceiptParams) (pol : StatusPolicy) (vk : ByteArray)
+    (s : CredentialStatement) (w : CredentialWitness) : List (RoundPoly Goldilocks) × (CanopyOpeningProof × AjtaiOpeningProof) :=
+  let tbl := complianceTable pol (receiptView s w) w
+  let comm := commitTable P tbl
+  let sc := honestBoundSumcheckProver (R := Goldilocks) comm 5 tbl (receiptTranscript vk s)
+  let opening := (DualPCS (R := Goldilocks) (canopyMerklePCS P.hash)
+    (ajtaiLatticePCS P.lattice)).openEval ((), ()) 5 tbl sc.2.1 sc.2.2
+  (sc.1, opening.1)
+
+def proveExPostCredentialReceipt (P : ReceiptParams) (pol : StatusPolicy) (vk : ByteArray)
+    (s : CredentialStatement) (w : CredentialWitness) : ExPostReceipt :=
+  ⟨(proveExPostOpening P pol vk s w).1, (proveExPostOpening P pol vk s w).2, w⟩
+
+attribute [local irreducible] honestBoundSumcheckProver verifyDualSumcheckPIOP
+
+theorem verifyExPostCredentialReceipt_complete (P : ReceiptParams) (pol : StatusPolicy)
+    (vk : ByteArray) (s : CredentialStatement) (w : CredentialWitness)
+    (hr : s.revokedRoot = w.revoked.root.bytes)
+    (hc : checkCredentialEval pol (receiptView s w) w = true)
+    (hcomm : s.tableCommitment = commitTable P (complianceTable pol (receiptView s w) w)) :
+    verifyExPostCredentialReceipt P pol vk s (proveExPostCredentialReceipt P pol vk s w) = true := by
+  have h := verifyDualSumcheckPIOP_completeness (canopyMerklePCS P.hash)
+    (ajtaiLatticePCS P.lattice) ((), ()) (Nat.le_refl 1) 5
+    (complianceTable pol (receiptView s w) w) (receiptTranscript vk s)
+    ⟨trivial, P.cols_eq⟩ (complianceTable_length _ _ _)
+  dsimp only at h
+  rw [(complianceTable_sum_iff _ _ _).mpr hc] at h
+  unfold verifyExPostCredentialReceipt
+  change (decide (s.revokedRoot = w.revoked.root.bytes) && checkCredentialEval pol (receiptView s w) w &&
+    decide (s.tableCommitment = commitTable P (complianceTable pol (receiptView s w) w)) && _) = true
+  apply (Bool.and_eq_true _ _).mpr
+  constructor
+  · exact (Bool.and_eq_true _ _).mpr ⟨(Bool.and_eq_true _ _).mpr ⟨decide_eq_true hr, hc⟩, decide_eq_true hcomm⟩
+  rw [hcomm]
+  change verifyDualSumcheckPIOP (canopyMerklePCS P.hash) (ajtaiLatticePCS P.lattice) ((), ()) 1 5
+    (commitTable P (complianceTable pol (receiptView s w) w)) Goldilocks.zero
+    (proveExPostOpening P pol vk s w).1 (proveExPostOpening P pol vk s w).2 (receiptTranscript vk s) = true
+  unfold proveExPostOpening
+  dsimp only [commitTable] at *
+  exact h
+
+theorem honestReceipt_accepted (P : ReceiptParams) (vk policyDigest : ByteArray)
+    (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness)
+    (h : checkCredentialEval pol pub w = true) :
+    let s := statementOf policyDigest pub (commitTable P (complianceTable pol pub w))
+    verifyExPostCredentialReceipt P pol vk s (proveExPostCredentialReceipt P pol vk s w) = true := by
+  have hr := (stratified_credential_eval_sound pol pub w h).revokedBound
+  have hv : receiptView (statementOf policyDigest pub (commitTable P (complianceTable pol pub w))) w = pub := by
+    cases pub; simp_all [receiptView, statementOf]
+  apply verifyExPostCredentialReceipt_complete
+  · exact congrArg RevokedRoot.bytes hr.symm
+  · rwa [hv]
+  · rw [hv]; rfl
+
+def deployedReceiptParams : ReceiptParams :=
+  ⟨deployedCanopyHash32, inhabitedAjtaiParams 5, (inhabitedAjtaiParams_sisHard 5).1⟩
+
 def canopyCommitmentCodec : Codec CanopyCommitment :=
   (Codec.pair Codec.nat Codec.digest32).refine (fun p => some ⟨p.1, p.2⟩)
     (fun c => (c.numVars, c.root)) (fun _ => rfl)
@@ -990,12 +1009,13 @@ def receiptCodec : Codec ExPostReceipt :=
   (Codec.pair
       (Codec.list ((Codec.list Codec.goldilocks).refine (fun l => some ⟨l⟩) RoundPoly.coeffs
         (fun _ => rfl)))
-      (Codec.pair
+      (Codec.pair (Codec.pair
         ((Codec.list (Codec.pair Codec.goldilocks (Codec.list Codec.digest32))).refine
           (fun l => some ⟨l⟩) CanopyOpeningProof.entries (fun _ => rfl))
         ((Codec.list Codec.int).refine (fun l => some ⟨l⟩) AjtaiOpeningProof.shortLimbs
-          (fun _ => rfl)))).refine
-    (fun p => some ⟨p.1, p.2⟩) (fun rc => (rc.rounds, rc.opening)) (fun _ => rfl)
+          (fun _ => rfl))) witnessCodec)).refine
+    (fun p => some ⟨p.1, p.2.1, p.2.2⟩)
+    (fun rc => (rc.rounds, rc.opening, rc.witness)) (fun _ => rfl)
 
 /-- A proof on the wire: the statement, then the receipt. -/
 def encodeReceiptBytes (s : CredentialStatement) (rc : ExPostReceipt) : ByteArray :=
@@ -1013,46 +1033,45 @@ theorem decodeReceiptBytes_encode (s : CredentialStatement) (rc : ExPostReceipt)
   rw [List.append_nil] at h
   simp [decodeReceiptBytes, encodeReceiptBytes, Native.bytesOfList_toList, h]
 
-/-- **The inner verifier of a turn effect.** `proof` decodes to a statement and a receipt; the
-statement is the one the effect names by digest and is about the expected policy; the receipt
-verifies under the actor's verifier key. -/
-def verifiableCredentialInnerVerifier (P : ReceiptParams) (policyDigest : ByteArray)
+
+/-- The verifier's policy is trusted input. Receipts cannot supply their own authorization key. -/
+def verifiableCredentialInnerVerifier (P : ReceiptParams) (pol : StatusPolicy) (policyDigest : ByteArray)
     (vk statement proof : ByteArray) : Bool :=
   match decodeReceiptBytes proof with
   | none => false
-  | some x =>
-    decide (statementDigest x.1 = statement) && decide (x.1.policyDigest = policyDigest) &&
-      verifyExPostCredentialReceipt P vk x.1 x.2
+  | some x => decide (statementDigest x.1 = statement) && decide (x.1.policyDigest = policyDigest) &&
+      verifyExPostCredentialReceipt P pol vk x.1 x.2
 
-/-- What an accepted effect proof contains. -/
-theorem verifiableCredentialInnerVerifier_sound (P : ReceiptParams)
+theorem verifiableCredentialInnerVerifier_sound (P : ReceiptParams) (pol : StatusPolicy)
     (policyDigest vk statement proof : ByteArray)
-    (h : verifiableCredentialInnerVerifier P policyDigest vk statement proof = true) :
+    (h : verifiableCredentialInnerVerifier P pol policyDigest vk statement proof = true) :
     ∃ s rc, decodeReceiptBytes proof = some (s, rc) ∧ statementDigest s = statement ∧
-      s.policyDigest = policyDigest ∧ verifyExPostCredentialReceipt P vk s rc = true := by
+      s.policyDigest = policyDigest ∧ verifyExPostCredentialReceipt P pol vk s rc = true ∧
+      CompliantEvaluation pol (receiptView s rc.witness) rc.witness := by
   unfold verifiableCredentialInnerVerifier at h
   cases hd : decodeReceiptBytes proof with
   | none => rw [hd] at h; cases h
   | some x =>
     rw [hd] at h
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-    exact ⟨x.1, x.2, rfl, h.1.1, h.1.2, h.2⟩
+    exact ⟨x.1, x.2, rfl, h.1.1, h.1.2, h.2, (verifyExPostCredentialReceipt_sound _ _ _ _ _ h.2).1⟩
 
-/-- **Every accepted evaluation has an accepted effect proof**: the honest receipt, encoded. -/
-theorem verifiableCredentialInnerVerifier_complete (P : ReceiptParams)
-    (policyDigest vk : ByteArray) (pol : StatusPolicy) (pub : DisclosureView)
-    (w : CredentialWitness) (h : checkCredentialEval pol pub w = true) :
-    verifiableCredentialInnerVerifier P policyDigest vk
-      (statementDigest (statementOf policyDigest pub (commitTable P (complianceTable pol pub w))))
-      (encodeReceiptBytes
-        (statementOf policyDigest pub (commitTable P (complianceTable pol pub w)))
-        (proveExPostCredentialReceipt P vk
-          (statementOf policyDigest pub (commitTable P (complianceTable pol pub w)))
-          (complianceTable pol pub w))) = true := by
+theorem verifiableCredentialInnerVerifier_complete (P : ReceiptParams) (policyDigest vk : ByteArray)
+    (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness)
+    (h : checkCredentialEval pol pub w = true) :
+    let s := statementOf policyDigest pub (commitTable P (complianceTable pol pub w))
+    verifiableCredentialInnerVerifier P pol policyDigest vk (statementDigest s)
+      (encodeReceiptBytes s (proveExPostCredentialReceipt P pol vk s w)) = true := by
+  dsimp only
   unfold verifiableCredentialInnerVerifier
   rw [decodeReceiptBytes_encode]
   simp only [decide_true, Bool.true_and, statementOf, Bool.and_true]
   exact honestReceipt_accepted P vk policyDigest pol pub w h
 
+theorem verifiableCredentialInnerVerifier_inhabited (P : ReceiptParams) (policyDigest vk : ByteArray)
+    (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness)
+    (h : checkCredentialEval pol pub w = true) :
+    ∃ statement proof, verifiableCredentialInnerVerifier P pol policyDigest vk statement proof = true :=
+  ⟨_, _, verifiableCredentialInnerVerifier_complete P policyDigest vk pol pub w h⟩
 
 end Obend.Polis.VerifiableCredentials

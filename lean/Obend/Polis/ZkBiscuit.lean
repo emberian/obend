@@ -106,7 +106,7 @@ theorem searchAux_complete (keys : Array Nat) (x : Nat)
         exact searchAux_complete keys x hs fuel lo _ (by omega) (by omega) i hi' hlo hlt' hx
 
 /-- Insert into a strictly sorted list, keeping it strictly sorted. -/
-@[expose] def insertSorted (x : Nat) : List Nat → List Nat
+def insertSorted (x : Nat) : List Nat → List Nat
   | [] => [x]
   | y :: ys => if x < y then x :: y :: ys else if x = y then y :: ys else y :: insertSorted x ys
 
@@ -178,7 +178,7 @@ namespace RevokedSet
   searchAux s.keys x s.keys.size 0 s.keys.size
 
 /-- Revoke one nullifier. -/
-@[expose] def insert (s : RevokedSet) (x : Nat) : RevokedSet :=
+def insert (s : RevokedSet) (x : Nat) : RevokedSet :=
   ⟨(insertSorted x s.keys.toList).toArray, insertSorted_pairwise x _ s.sorted⟩
 
 theorem ext {s₁ s₂ : RevokedSet} (h : s₁.keys = s₂.keys) : s₁ = s₂ := by
@@ -221,10 +221,10 @@ end RevokedSet
 def revokedCustomization : List UInt8 := "OBEND.POLIS.REVOKED/v1".toUTF8.data.toList
 
 /-- The hash the revoked-set commitment is a collision of when it fails to bind. -/
-@[expose] def revokedHash : Hash := cshake256Bytes revokedCustomization
+def revokedHash : Hash := cshake256Bytes revokedCustomization
 
 /-- The keys of a revoked set as bytes: each key in LEB128, each length-prefixed. -/
-@[expose] def encodeNats (l : List Nat) : List UInt8 := encodeFields (l.map leb128)
+def encodeNats (l : List Nat) : List UInt8 := encodeFields (l.map leb128)
 
 theorem map_leb128_injective : ∀ (l₁ l₂ : List Nat), l₁.map leb128 = l₂.map leb128 → l₁ = l₂
   | [], [], _ => rfl
@@ -274,13 +274,13 @@ theorem RevokedSet.root_binds {s₁ s₂ : RevokedSet} (h : s₁.root = s₂.roo
 def nulCustomization : List UInt8 := "OBEND.POLIS.NUL/v1".toUTF8.data.toList
 
 /-- The nullifier hash: one function for both namespaces, which the first byte separates. -/
-@[expose] def nulHash : Hash := cshake256Bytes nulCustomization
+def nulHash : Hash := cshake256Bytes nulCustomization
 
 /-- The credential nullifier of a provenance digest: revoking it revokes that hop and its cone. -/
-@[expose] def credNul (lineage : ByteArray) : Nat := ofBE (nulHash (1 :: lineage.data.toList))
+def credNul (lineage : ByteArray) : Nat := ofBE (nulHash (1 :: lineage.data.toList))
 
 /-- The channel nullifier: revoking it revokes every hop made over that channel. -/
-@[expose] def chanNul (channel : ByteArray) : Nat := ofBE (nulHash (2 :: channel.data.toList))
+def chanNul (channel : ByteArray) : Nat := ofBE (nulHash (2 :: channel.data.toList))
 
 /-- The two nullifier namespaces never meet except at a collision. -/
 theorem credNul_chanNul_separated (lineage channel : ByteArray)
@@ -303,7 +303,7 @@ attribute [local irreducible] credNul chanNul
 /-! ## 3. Delegation blocks and provenance -/
 
 /-- A prefix-free byte encoding of caveats. -/
-@[expose] def Caveat.encode : Caveat → List UInt8
+def Caveat.encode : Caveat → List UInt8
   | .atom v => 0 :: leb128 v
   | .const b => [1, if b then 1 else 0]
   | .and a b => 2 :: (encode a ++ encode b)
@@ -376,7 +376,7 @@ structure Block where
   channel : ByteArray
 
 /-- The bytes of a block that enter the provenance digest. -/
-@[expose] def Block.encode (b : Block) : List UInt8 :=
+def Block.encode (b : Block) : List UInt8 :=
   be 8 b.rights.toNat ++
     (b.caveat.encode ++
       (encodeListField b.holder.data.toList ++ encodeListField b.channel.data.toList))
@@ -399,25 +399,25 @@ theorem Block.encode_injective {b₁ b₂ : Block} (h : b₁.encode = b₂.encod
 def lineageCustomization : List UInt8 := "OBEND.POLIS.LINEAGE/v1".toUTF8.data.toList
 
 /-- The provenance hash. -/
-@[expose] def lineageHash : Hash := cshake256Bytes lineageCustomization
+def lineageHash : Hash := cshake256Bytes lineageCustomization
 
 /-- What is hashed for a root grant. -/
-@[expose] def rootPreimage (g : Block) : List UInt8 := 0 :: g.encode
+def rootPreimage (g : Block) : List UInt8 := 0 :: g.encode
 
 /-- What is hashed for one more hop. -/
-@[expose] def stepPreimage (prev : ByteArray) (b : Block) : List UInt8 :=
+def stepPreimage (prev : ByteArray) (b : Block) : List UInt8 :=
   1 :: (encodeListField prev.data.toList ++ b.encode)
 
 /-- The provenance digest of a root grant. -/
-@[expose] def rootLineage (g : Block) : ByteArray :=
+def rootLineage (g : Block) : ByteArray :=
   cshake32ByteArray lineageCustomization (rootPreimage g)
 
 /-- The provenance digest after one more hop. -/
-@[expose] def stepLineage (prev : ByteArray) (b : Block) : ByteArray :=
+def stepLineage (prev : ByteArray) (b : Block) : ByteArray :=
   cshake32ByteArray lineageCustomization (stepPreimage prev b)
 
 /-- The provenance digest of a chain. -/
-@[expose] def lineageOf (g : Block) (blocks : List Block) : ByteArray :=
+def lineageOf (g : Block) (blocks : List Block) : ByteArray :=
   blocks.foldl stepLineage (rootLineage g)
 
 theorem stepLineage_binds {p₁ p₂ : ByteArray} {b₁ b₂ : Block}
@@ -446,7 +446,7 @@ theorem rootLineage_ne_stepLineage {g b : Block} {p : ByteArray}
 attribute [local irreducible] rootLineage stepLineage
 
 /-- The preimages hashed in computing `lineageOf g l`: the root's, and one per hop. -/
-@[expose] def LineageHashed (g : Block) (l : List Block) (x : List UInt8) : Prop :=
+def LineageHashed (g : Block) (l : List Block) (x : List UInt8) : Prop :=
   x = rootPreimage g ∨ ∃ pre b post, l = pre ++ b :: post ∧ x = stepPreimage (lineageOf g pre) b
 
 theorem LineageHashed.snoc {g : Block} {l : List Block} {x : List UInt8} (a : Block)

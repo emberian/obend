@@ -51,6 +51,8 @@ pub enum CanopyError {
     },
     InvalidBlowupFactor(usize),
     InvalidQueryCount(usize),
+    InvalidVariableCount(usize),
+    InsufficientQuerySoundness { bits: usize, required: usize },
     UdrRadiusViolation {
         radius: usize,
         min_distance: usize,
@@ -121,12 +123,26 @@ pub struct CanopyParams {
 }
 
 impl CanopyParams {
-    /// Construct and validate `CanopyParams`, enforcing `ePrint 2026/2424` (`binaryAdditive_forces_udr`).
+    /// Construct and validate `CanopyParams`, enforcing `ePrint 2026/2424` (`binaryAdditive_forces_udr`)
+    /// and strictly positive UDR/Johnson query soundness bits (`>= 1` bit).
+    /// Production 128-bit profiles use [`Self::new_with_min_soundness`] / [`Self::default_128bit`]
+    /// and [`Self::validate_soundness`] (`>= 128` query-error bits).
     pub fn new(
         domain_kind: DomainKind,
         regime: ProximityRegime,
         blowup_factor: usize,
         num_queries: usize,
+    ) -> Result<Self, CanopyError> {
+        Self::new_with_min_soundness(domain_kind, regime, blowup_factor, num_queries, 1)
+    }
+
+    /// Construct `CanopyParams` enforcing at least `min_soundness_bits` conservative query-error bits.
+    pub fn new_with_min_soundness(
+        domain_kind: DomainKind,
+        regime: ProximityRegime,
+        blowup_factor: usize,
+        num_queries: usize,
+        min_soundness_bits: usize,
     ) -> Result<Self, CanopyError> {
         if domain_kind == DomainKind::BinaryAdditive
             && regime != ProximityRegime::UniqueDecodingRadius
@@ -142,29 +158,64 @@ impl CanopyParams {
         if num_queries == 0 {
             return Err(CanopyError::InvalidQueryCount(num_queries));
         }
-        Ok(Self {
+        let params = Self {
             domain_kind,
             regime,
             blowup_factor,
             num_queries,
             coset_shift: Goldilocks::NON_RESIDUE,
-        })
+        };
+        params.validate_min_soundness(min_soundness_bits.max(1))?;
+        Ok(params)
     }
 
-    /// Standard 128-bit Track H prime-field parameters (`blowup = 4`, `queries = 32`).
-    pub fn default_128bit() -> Self {
-        Self {
-            domain_kind: DomainKind::PrimeField,
-            regime: ProximityRegime::UniqueDecodingRadius,
-            blowup_factor: 4,
-            num_queries: 32,
-            coset_shift: Goldilocks::NON_RESIDUE,
+    /// Conservative query-error exponent, excluding hash and field-collision terms.
+    /// With rate rho=1/B, UDR agreement is at most (1+rho)/2. At B=2,
+    /// three queries give <1/2; at B>=4, two give <1/2. Johnson agreement
+    /// is sqrt(rho), giving q*log2(B)/2 bits. Capacity uses the Johnson
+    /// bound too: this implementation does not certify a capacity decoder.
+    /// Sampling without replacement improves these bounds; opening every column
+    /// makes the query error zero. No floating-point rounding overstates security.
+    pub fn soundness_bits(&self) -> usize {
+        if self.blowup_factor < 2 || !self.blowup_factor.is_power_of_two() {
+            return 0;
         }
+        match self.regime {
+            ProximityRegime::UniqueDecodingRadius =>
+                self.num_queries / if self.blowup_factor == 2 { 3 } else { 2 },
+            _ => self.num_queries.saturating_mul(self.blowup_factor.ilog2() as usize) / 2,
+        }
+    }
+
+    pub fn validate_min_soundness(&self, required: usize) -> Result<(), CanopyError> {
+        let bits = self.soundness_bits();
+        if bits < required {
+            return Err(CanopyError::InsufficientQuerySoundness { bits, required });
+        }
+        Ok(())
+    }
+
+    pub fn validate_soundness(&self) -> Result<(), CanopyError> {
+        self.validate_min_soundness(128)
+    }
+
+    /// 128 query-error bits under UDR at rate 1/4; separate algebraic errors remain.
+    pub fn default_128bit() -> Self {
+        Self::new_with_min_soundness(
+            DomainKind::PrimeField,
+            ProximityRegime::UniqueDecodingRadius,
+            4,
+            256,
+            128,
+        )
+        .expect("validated 128-bit query profile")
     }
 
     /// Check integer unique-decoding radius bound `2 * radius < d = L - C + 1` for a given `msg_cols`.
     pub fn check_code_dimensions(&self, msg_cols: usize) -> Result<usize, CanopyError> {
-        let codeword_cols = msg_cols * self.blowup_factor;
+        self.validate_min_soundness(1)?;
+        let codeword_cols = msg_cols.checked_mul(self.blowup_factor)
+            .ok_or(CanopyError::InvalidBlowupFactor(self.blowup_factor))?;
         let min_distance = codeword_cols - msg_cols + 1;
         if self.regime == ProximityRegime::UniqueDecodingRadius {
             let max_udr_radius = (min_distance - 1) / 2;
@@ -359,6 +410,7 @@ pub fn canopy_commit(
     table: &[Goldilocks],
     salt_seed: Option<&[u8; 32]>,
 ) -> Result<CanopyProverState, CanopyError> {
+    if num_vars > 24 { return Err(CanopyError::InvalidVariableCount(num_vars)); }
     let expected_len = 1usize << num_vars;
     if table.len() != expected_len {
         return Err(CanopyError::TableSizeMismatch {
@@ -632,6 +684,7 @@ pub fn canopy_verify(
     tr: &mut FenziTranscript<InstanceBound>,
 ) -> Result<HashInvocationStats, CanopyError> {
     let num_vars = comm.num_vars as usize;
+    if num_vars > 24 { return Err(CanopyError::InvalidVariableCount(num_vars)); }
     if eval_point.len() != num_vars {
         return Err(CanopyError::PointDimensionMismatch {
             expected: num_vars,
@@ -787,6 +840,7 @@ pub fn verify_independent_merkle_baseline(
     tr: &mut FenziTranscript<InstanceBound>,
 ) -> Result<HashInvocationStats, CanopyError> {
     let num_vars = comm.num_vars as usize;
+    if num_vars > 24 { return Err(CanopyError::InvalidVariableCount(num_vars)); }
     let (row_vars, col_vars) = split_var_counts(num_vars);
     let num_rows = 1usize << row_vars;
     let msg_cols = 1usize << col_vars;
@@ -975,28 +1029,28 @@ mod tests {
             DomainKind::BinaryAdditive,
             ProximityRegime::JohnsonBound,
             4,
-            32
+            256
         )
         .is_err());
         assert!(CanopyParams::new(
             DomainKind::BinaryAdditive,
             ProximityRegime::CapacityBound,
             4,
-            32
+            256
         )
         .is_err());
         assert!(CanopyParams::new(
             DomainKind::BinaryAdditive,
             ProximityRegime::UniqueDecodingRadius,
             4,
-            32
+            256
         )
         .is_ok());
         assert!(CanopyParams::new(
             DomainKind::PrimeField,
             ProximityRegime::CapacityBound,
             4,
-            32
+            256
         )
         .is_ok());
     }
@@ -1061,7 +1115,12 @@ mod tests {
 
         // Tamper 2: mutate an auxiliary sibling digest -> rejected!
         let mut bad_sib = proof.clone();
-        bad_sib.aux_siblings[0][0] ^= 0x01;
+        if let Some(sibling) = bad_sib.aux_siblings.first_mut() {
+            sibling[0] ^= 0x01;
+        } else {
+            // Full column coverage needs no auxiliary sibling. A supplied one must be rejected.
+            bad_sib.aux_siblings.push([1; 32]);
+        }
         let mut t_tr = base_tr.clone();
         assert!(canopy_verify(&params, &state.commitment, &point, claimed, &bad_sib, &mut t_tr).is_err());
 

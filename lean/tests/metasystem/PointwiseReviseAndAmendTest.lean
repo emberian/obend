@@ -2,6 +2,11 @@ module
 public import Obend.Law.AmendCli
 public import Obend.AssertAxioms
 public import Obend.Tactic.Tooth
+-- Expose imported proof bodies to the package axiom audit.
+import all Obend.Apps.ZkNtt.Goldilocks
+import all Obend.Crypto.Multilinear
+import all Obend.Crypto.Transcript
+import all Obend.Judge.Computational
 import all Obend.AssertAxioms
 import all Obend.Category.Refines
 import all Obend.Core.AliasExposure
@@ -307,7 +312,7 @@ example (ts : List (AmendmentTurn 16)) (count k : Nat) (s : HWState) (hs : hwSaf
 #tooth pointwiseRevise_refusal_optimal by mutation repairWitness := fun B _ => B.seed
 #tooth pointwiseRevise_supportSheaf_frame_skip by mutation skipModule := fun _ _ => none
 #tooth execute_acceptance_sound by mutation executeLiveAmendment := fun st t _ =>
-  (st, ⟨t.slot, .accepted bedrock.seed [], [], [], #[]⟩)
+  (st, ⟨t.slot, .accepted bedrock.seed [], [], [], #[], ByteArray.empty, ByteArray.empty, ByteArray.empty⟩)
 #tooth checkedSkip_sound by mutation checkedSkip := fun _ _ c => some c
 #tooth bedrock_recovery by mutation checkBedrock := fun v => productionEnabled v && backedValue v
 #tooth bedrock_viable by mutation checkBedrock := fun v => recoveryEnabled v && backedValue v

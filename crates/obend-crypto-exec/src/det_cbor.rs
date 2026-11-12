@@ -19,7 +19,7 @@ use crate::goldilocks::{
 use crate::pikkufold::{
     AkitaFoldProof, AkitaFoldRound, GADGET_LIMB_MAX, HALF_Q_LAT, LatticeCommitment, LatticeError,
     LatticeParams, RING_DEGREE, RingElem, akita_prove_open, akita_verify_open, commit_ring_witness,
-    pack_goldilocks_to_ring_witness,
+    pack_goldilocks_to_ring_witness, unpack_ring_witness_to_goldilocks,
 };
 use crate::transcript::{
     DUAL_TRACK1_LABEL, DUAL_TRACK2_LABEL, FenziTranscript, leb128,
@@ -29,7 +29,7 @@ use crate::transcript::{
 pub const MAX_CBOR_DEPTH: usize = 64;
 
 /// Current canonical wire schema version for `DualPcsReceipt`.
-pub const DUAL_PCS_RECEIPT_SCHEMA_V1: u64 = 1;
+pub const DUAL_PCS_RECEIPT_SCHEMA_VERSION: u64 = 2;
 
 /// Errors returned by strict RFC 8949 §4.2 Deterministic CBOR encoding/decoding or `DualPcsReceipt` checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -583,6 +583,9 @@ pub struct DualPcsReceipt {
     pub canopy_proof: CanopyBatchedProof,
     pub lattice_commitment: LatticeCommitment,
     pub lattice_proof: AkitaFoldProof,
+    /// Canonical short opening of Track L. This transparent receipt discloses its table;
+    /// Akita alone proves knowledge of a short vector, not a Goldilocks MLE evaluation.
+    pub lattice_opening: Vec<RingElem>,
     pub final_transcript_digest: [u8; 32],
 }
 
@@ -739,6 +742,10 @@ impl DualPcsReceipt {
                 CborValue::Text(String::from("kronecker_projection")),
                 encode_ring_cbor(&self.lattice_proof.kronecker_projection),
             ),
+            (
+                CborValue::Text(String::from("opened_witness")),
+                CborValue::Array(self.lattice_opening.iter().map(encode_ring_cbor).collect()),
+            ),
             (CborValue::Text(String::from("rounds")), akita_rounds),
         ]);
 
@@ -802,7 +809,7 @@ impl DualPcsReceipt {
         }
 
         let schema_version = map_lookup(root, "schema_version")?.as_u64()?;
-        if schema_version != DUAL_PCS_RECEIPT_SCHEMA_V1 {
+        if schema_version != DUAL_PCS_RECEIPT_SCHEMA_VERSION {
             return Err(DetCborError::SchemaMismatch(String::from(
                 "unsupported schema_version",
             )));
@@ -927,15 +934,20 @@ impl DualPcsReceipt {
 
         // Decode AkitaFoldProof
         let lp_map = map_lookup(root, "lattice_proof")?.as_map()?;
-        if lp_map.len() != 4 {
+        if lp_map.len() != 5 {
             return Err(DetCborError::UnexpectedFieldCount {
-                expected: 4,
+                expected: 5,
                 actual: lp_map.len(),
             });
         }
         let initial_norm_bound = map_lookup(lp_map, "initial_norm_bound")?.as_u64()?;
         let kronecker_projection = decode_ring_cbor(map_lookup(lp_map, "kronecker_projection")?)?;
         let final_witness = decode_ring_cbor(map_lookup(lp_map, "final_witness")?)?;
+        let lattice_opening = map_lookup(lp_map, "opened_witness")?
+            .as_array()?
+            .iter()
+            .map(decode_ring_cbor)
+            .collect::<Result<Vec<_>, _>>()?;
         let rounds_arr = map_lookup(lp_map, "rounds")?.as_array()?;
         let mut rounds = Vec::with_capacity(rounds_arr.len());
         for rv in rounds_arr {
@@ -983,6 +995,7 @@ impl DualPcsReceipt {
             canopy_proof,
             lattice_commitment,
             lattice_proof,
+            lattice_opening,
             final_transcript_digest,
         })
     }
@@ -1050,7 +1063,7 @@ pub fn prove_dual_pcs_receipt(
     tr.join(&tr_h, &tr_l);
 
     Ok(DualPcsReceipt {
-        schema_version: DUAL_PCS_RECEIPT_SCHEMA_V1,
+        schema_version: DUAL_PCS_RECEIPT_SCHEMA_VERSION,
         protocol_id: String::from(protocol_id),
         vk_digest,
         circuit_desc: circuit_desc.to_vec(),
@@ -1063,6 +1076,7 @@ pub fn prove_dual_pcs_receipt(
         canopy_proof,
         lattice_commitment,
         lattice_proof,
+        lattice_opening: ring_witness,
         final_transcript_digest: *tr.state(),
     })
 }
@@ -1074,7 +1088,10 @@ pub fn verify_dual_pcs_receipt(
     lattice_params: &LatticeParams,
     receipt: &DualPcsReceipt,
 ) -> Result<HashInvocationStats, DetCborError> {
-    if receipt.schema_version != DUAL_PCS_RECEIPT_SCHEMA_V1 {
+    if receipt.num_vars > 24 {
+        return Err(DetCborError::SchemaMismatch(String::from("num_vars exceeds 24")));
+    }
+    if receipt.schema_version != DUAL_PCS_RECEIPT_SCHEMA_VERSION {
         return Err(DetCborError::SchemaMismatch(String::from("bad schema_version")));
     }
     if receipt.canopy_commitment.num_vars != receipt.num_vars {
@@ -1118,6 +1135,15 @@ pub fn verify_dual_pcs_receipt(
         &receipt.canopy_proof,
         &mut tr_h,
     )?;
+    // Check the SAME evaluation as Track H, with canonical 16-bit limbs and zero padding.
+    // A short unrelated vector (including zero) must not satisfy this gate.
+    let opened_table = unpack_ring_witness_to_goldilocks(
+        &receipt.lattice_opening, 1usize << receipt.num_vars)?;
+    if commit_ring_witness(lattice_params, &receipt.lattice_opening)? != receipt.lattice_commitment
+        || mle_eval_base_at_ext2(&opened_table, &sc_claim.point)? != sc_claim.expected_val
+    {
+        return Err(DetCborError::ReducedClaimMismatch);
+    }
     akita_verify_open(
         lattice_params,
         &receipt.lattice_commitment,
@@ -1137,6 +1163,79 @@ pub fn verify_dual_pcs_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Adversarial prover recomputes BOTH transcripts and valid openings after selecting
+    // an unrelated lattice vector. This is stronger than corrupting a commitment in transit.
+    fn prove_split_tracks(protocol_id: &str, vk_digest: [u8; 32], circuit_desc: &[u8],
+        canopy_params: &CanopyParams, lattice_params: &LatticeParams,
+        num_vars: usize, table: &[Goldilocks]) -> Result<DualPcsReceipt, DetCborError> {
+    let canopy_state = canopy_commit(canopy_params, num_vars, table, None)?;
+    let ring_witness = vec![RingElem::zero(); lattice_params.cols];
+    let lattice_commitment = commit_ring_witness(lattice_params, &ring_witness)?;
+
+    let mut sum_base = Goldilocks::ZERO;
+    for &x in table {
+        sum_base += x;
+    }
+    let claimed_hypercube_sum = GoldilocksExt2::from_base(sum_base);
+    let dual_comm_bytes =
+        encode_dual_comm_bytes(&canopy_state.commitment, &lattice_commitment);
+
+    // Phase 1 -> Phase 2 -> Phase 3 (`Unbound -> RelationBound -> InstanceBound`)
+    let mut tr = FenziTranscript::new(b"OBEND.DUAL_PCS.SEED/v1")
+        .bind_relation(protocol_id, &vk_digest, circuit_desc)
+        .bind_instance(&dual_comm_bytes, claimed_hypercube_sum, &[]);
+
+    let (sumcheck_rounds, eval_claim) = prove_multilinear_sumcheck_ext2(table, &mut tr)?;
+    debug_assert_eq!(
+        mle_eval_base_at_ext2(table, &eval_claim.point)?,
+        eval_claim.expected_val
+    );
+
+    // Fork into Track H (`Canopy`) & Track L (`PikkuFold`/`Akita`), absorbing reduced point explicitly
+    let mut pt_bytes = leb128(eval_claim.point.len());
+    for z in &eval_claim.point {
+        pt_bytes.extend_from_slice(&z.to_be_bytes());
+    }
+    tr.absorb(b"DUAL.PCS.EVAL_POINT", &pt_bytes);
+    tr.absorb_ext2(b"DUAL.PCS.EVAL_VAL", eval_claim.expected_val);
+
+    let mut tr_h = tr.fork(DUAL_TRACK1_LABEL);
+    let mut tr_l = tr.fork(DUAL_TRACK2_LABEL);
+
+    let canopy_proof = canopy_open(canopy_params, &canopy_state, &eval_claim.point, &mut tr_h)?;
+    let lattice_proof =
+        akita_prove_open(lattice_params, &ring_witness, GADGET_LIMB_MAX, &mut tr_l)?;
+
+    tr.join(&tr_h, &tr_l);
+
+    Ok(DualPcsReceipt {
+        schema_version: DUAL_PCS_RECEIPT_SCHEMA_VERSION,
+        protocol_id: String::from(protocol_id),
+        vk_digest,
+        circuit_desc: circuit_desc.to_vec(),
+        num_vars: num_vars as u32,
+        claimed_hypercube_sum,
+        sumcheck_rounds,
+        reduced_eval_point: eval_claim.point,
+        reduced_eval_val: eval_claim.expected_val,
+        canopy_commitment: canopy_state.commitment,
+        canopy_proof,
+        lattice_commitment,
+        lattice_proof,
+        lattice_opening: ring_witness,
+        final_transcript_digest: *tr.state(),
+    })
+    }
+
+    #[test]
+    fn test_unrelated_short_lattice_opening_refused_at_same_evaluation() {
+        let cp = CanopyParams::default_128bit();
+        let lp = LatticeParams::expand_from_seed([0x55; 32], 2, 4).unwrap();
+        let table = vec![Goldilocks::ONE; 16];
+        let forged = prove_split_tracks("OBEND.SPLIT_TEST/v1", [1; 32], b"split", &cp, &lp, 4, &table).unwrap();
+        assert_eq!(verify_dual_pcs_receipt(&cp, &lp, &forged), Err(DetCborError::ReducedClaimMismatch));
+    }
 
     #[test]
     fn test_rfc8949_det_cbor_strict_canonicality_and_rejections() {
@@ -1214,7 +1313,7 @@ mod tests {
             crate::canopy::DomainKind::PrimeField,
             crate::canopy::ProximityRegime::UniqueDecodingRadius,
             4,
-            16,
+            256,
         )
         .unwrap();
         let lattice_params = LatticeParams::expand_from_seed([0x55u8; 32], 3, 8).unwrap();

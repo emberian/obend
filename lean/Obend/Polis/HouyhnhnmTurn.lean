@@ -1,11 +1,14 @@
 module
 public import Obend.Polis.CapTP
 public import Obend.Polis.VerifiableCredentials
+import all Obend.Crypto.DualSpine
+import all Obend.Crypto.Sumcheck
 
 public section
 namespace Obend.Polis.HouyhnhnmTurn
 open Obend.Crypto Obend.Vault.Mandate Obend.Polis.CapTP
 open Obend.Polis.VerifiableCredentials
+open Obend.Digest.Cshake256 Obend.Digest.HashBytes
 
 structure FullPinnedPublicInputs where
   circuitDescDigest : ByteArray
@@ -185,6 +188,55 @@ def revokedCommitment (revoked : SortedU64Set) : ByteArray :=
   cshake32ByteArray "obend.revoked-set.v1".toUTF8.data.toList
     (CapTP.encodeNats (revoked.data.toList.map UInt64.toNat)).data.toList
 
+/-- Successful invocations consume their channel nullifier and leaf credential nullifier.
+Ancestor credentials remain usable by sibling delegations. -/
+def spendInvocation (revoked : SortedU64Set) (i : InvocationWithProvenance) : SortedU64Set :=
+  let withChannel := revoked.insert i.chanNul
+  match i.credNul.getLast? with
+  | none => withChannel
+  | some leaf => withChannel.insert leaf
+
+def spendInvocations : SortedU64Set → List InvocationWithProvenance → SortedU64Set
+  | revoked, [] => revoked
+  | revoked, i :: rest => spendInvocations (spendInvocation revoked i) rest
+
+def nextState (s : CellState) (t : StructuredTurn) : CellState :=
+  let revoked := spendInvocations s.revoked t.invocations.toList
+  { s with
+    balances := nextBalances s t
+    revoked := revoked
+    revokedRoot := revokedCommitment revoked }
+
+theorem spendInvocation_monotone (r : SortedU64Set) (i : InvocationWithProvenance) (k : UInt64)
+    (h : r.spec k) : (spendInvocation r i).spec k := by
+  unfold spendInvocation
+  cases i.credNul.getLast? <;> simp [h]
+
+theorem spendInvocation_channel (r : SortedU64Set) (i : InvocationWithProvenance) :
+    (spendInvocation r i).spec i.chanNul := by
+  unfold spendInvocation
+  cases i.credNul.getLast? <;> simp
+
+theorem spendInvocations_monotone (is : List InvocationWithProvenance) (r : SortedU64Set) (k : UInt64)
+    (h : r.spec k) : (spendInvocations r is).spec k := by
+  induction is generalizing r with
+  | nil => exact h
+  | cons i is ih => exact ih _ (spendInvocation_monotone r i k h)
+
+theorem spendInvocations_channel (is : List InvocationWithProvenance) (r : SortedU64Set)
+    (i : InvocationWithProvenance) (h : i ∈ is) : (spendInvocations r is).spec i.chanNul := by
+  induction is generalizing r with
+  | nil => cases h
+  | cons j is ih =>
+    rcases List.mem_cons.mp h with rfl | h
+    · exact spendInvocations_monotone is _ _ (spendInvocation_channel r i)
+    · exact ih _ h
+
+theorem nextState_refuses_replay (s : CellState) (t : StructuredTurn) (i : InvocationWithProvenance)
+    (h : i ∈ t.invocations.toList) : provenanceLive (nextState s t).revoked i.credNul i.chanNul = false := by
+  have hc := ((nextState s t).revoked.contains_eq_spec i.chanNul).mpr (spendInvocations_channel _ _ i h)
+  simp [provenanceLive, hc]
+
 /-- A backend supplies canonical state/turn commitments and a proof verifier. The
 soundness and completeness fields are explicit obligations, not custom axioms or
 Boolean claims in a bundle. This interface does not implement a SNARK. -/
@@ -197,12 +249,32 @@ structure TurnCommitments where
   turnHash_size : ∀ t, (turnHash t).size = 32
   circuitDigest_size : circuitDigest.size = 32
 
+/-- Live stores are framed outside the caller's state encoder, so even a balances-only
+encoder cannot omit spent nullifiers from the public pre/post state roots. -/
+def stateRootBytes (c : TurnCommitments) (s : CellState) : ByteArray :=
+  encodeFrame (c.stateRoot s) (revokedCommitment s.revoked) (c.capabilityRoot s.capabilities)
+
+def committedStateRoot (c : TurnCommitments) (s : CellState) : ByteArray :=
+  cshake32ByteArray "OBEND.POLIS.TURN_STATE/v1".toUTF8.data.toList (stateRootBytes c s).data.toList
+
+theorem committedStateRoot_size (c : TurnCommitments) (s : CellState) :
+    (committedStateRoot c s).size = 32 := cshake32ByteArray_size _ _
+
+theorem committedStateRoot_revoked_binding (c : TurnCommitments) (s t : CellState)
+    (h : committedStateRoot c s = committedStateRoot c t) :
+    revokedCommitment s.revoked = revokedCommitment t.revoked ∨
+      CollisionAmong (cshake256Bytes "OBEND.POLIS.TURN_STATE/v1".toUTF8.data.toList)
+        (fun x => x = (stateRootBytes c s).data.toList ∨ x = (stateRootBytes c t).data.toList) := by
+  rcases cshake32_binds "OBEND.POLIS.TURN_STATE/v1".toUTF8.data.toList h with he | hc
+  · exact .inl (encodeFrame_injective (byteArray_eq_of_toList_eq he)).2.1
+  · exact .inr hc
+
 def materializeInputs (c : TurnCommitments) (s : CellState) (t : StructuredTurn)
     (height : Nat) : FullPinnedPublicInputs where
   circuitDescDigest := c.circuitDigest
   actorVkDigest := s.actorVkDigest
-  preStateRoot := c.stateRoot s
-  postStateRoot := c.stateRoot { s with balances := nextBalances s t }
+  preStateRoot := committedStateRoot c s
+  postStateRoot := committedStateRoot c (nextState s t)
   capRoot := s.capRoot
   revokedRoot := s.revokedRoot
   height := height
@@ -211,6 +283,9 @@ def materializeInputs (c : TurnCommitments) (s : CellState) (t : StructuredTurn)
 /-- Cached roots must be tied to the live stores before a turn crosses a boundary. -/
 @[expose] def RootBindings (c : TurnCommitments) (s : CellState) : Prop :=
   s.revokedRoot = revokedCommitment s.revoked ∧ s.capRoot = c.capabilityRoot s.capabilities
+
+instance (c : TurnCommitments) (s : CellState) : Decidable (RootBindings c s) :=
+  inferInstanceAs (Decidable (_ ∧ _))
 
 theorem symbolic_inputs_wellformed (c : TurnCommitments) (v : InnerVerifier)
     (s : CellState) (t : StructuredTurn) (height : Nat) (h : execTurnSymbolic v s t = true) :
@@ -222,7 +297,7 @@ theorem symbolic_inputs_wellformed (c : TurnCommitments) (v : InnerVerifier)
   simp only [decide_eq_true_eq] at hc
   unfold wellFormedInputs
   apply decide_eq_true
-  exact ⟨c.circuitDigest_size, hc.1, c.stateRoot_size _, c.stateRoot_size _,
+  exact ⟨c.circuitDigest_size, hc.1, committedStateRoot_size c _, committedStateRoot_size c _,
     hc.2, hr.1, c.turnHash_size _⟩
 
 def TurnRelation (c : TurnCommitments) (v : InnerVerifier) (p : FullPinnedPublicInputs) : Prop :=
@@ -234,11 +309,75 @@ structure TurnProofSystem (c : TurnCommitments) (v : InnerVerifier) where
   verify : FullPinnedPublicInputs → ByteArray → Receipt → Bool
   prove : (s : CellState) → (t : StructuredTurn) → (height : Nat) →
     execTurnSymbolic v s t = true → RootBindings c s → Receipt
-  sound : ∀ p challenge receipt, verify p challenge receipt = true → TurnRelation c v p
+  sound : ∀ p challenge receipt, verify p challenge receipt = true →
+    TurnRelation c v p ∨ BoundedCollision deployedCanopyHash32.eval (merkleMaxPreimageBytes 5) ∨
+      ¬ ModuleSISHard (inhabitedAjtaiParams 5) 131070
   complete : ∀ s t height hs hr,
     verify (materializeInputs c s t height)
       (squeezeChallenge256 (turnTranscript (materializeInputs c s t height))).1.val
       (prove s t height hs hr) = true
+
+/-- A transparent opening carries the state and turn as data, plus a genuine dual PCS
+opening. It does not assume a proof of TurnRelation as part of the receipt carrier. -/
+structure DualPcsTurnReceipt where
+  state : CellState
+  turn : StructuredTurn
+  rounds : List (RoundPoly Goldilocks)
+  opening : CanopyOpeningProof × AjtaiOpeningProof
+
+def turnInputTable (p : FullPinnedPublicInputs) : List Goldilocks :=
+  (cshake32ByteArray "OBEND.POLIS.TURN_TABLE/v1".toUTF8.data.toList
+    (encodePublicInputs p).data.toList).data.toList.map (fun b => Goldilocks.ofNat b.toNat)
+
+attribute [local irreducible] cshake32ByteArray honestBoundSumcheckProver verifyDualSumcheckPIOP
+
+theorem turnInputTable_length (p : FullPinnedPublicInputs) : (turnInputTable p).length = 2 ^ 5 := by
+  simp only [turnInputTable, List.length_map, Array.length_toList]
+  exact cshake32ByteArray_size _ _
+
+attribute [local irreducible] turnInputTable
+
+def verifyDualPcsTurn (c : TurnCommitments) (v : InnerVerifier) (p : FullPinnedPublicInputs)
+    (challenge : ByteArray) (r : DualPcsTurnReceipt) : Bool :=
+  execTurnSymbolic v r.state r.turn && decide (RootBindings c r.state) &&
+  decide (encodePublicInputs (materializeInputs c r.state r.turn p.height) = encodePublicInputs p) &&
+  decide (challenge = (squeezeChallenge256 (turnTranscript p)).1.val) &&
+  let pcs := DualPCS (R := Goldilocks) (canopyMerklePCS deployedCanopyHash32)
+    (ajtaiLatticePCS (inhabitedAjtaiParams 5))
+  verifyDualSumcheckPIOP (canopyMerklePCS deployedCanopyHash32)
+    (ajtaiLatticePCS (inhabitedAjtaiParams 5)) ((), ()) 1 5 (pcs.commit ((), ()) 5 (turnInputTable p))
+    (hypercubeSum 5 (turnInputTable p)) r.rounds r.opening (turnTranscript p)
+
+def proveDualPcsTurn (c : TurnCommitments) (s : CellState) (t : StructuredTurn) (height : Nat) : DualPcsTurnReceipt :=
+  let p := materializeInputs c s t height
+  let tbl := turnInputTable p
+  let pcs := DualPCS (R := Goldilocks) (canopyMerklePCS deployedCanopyHash32)
+    (ajtaiLatticePCS (inhabitedAjtaiParams 5))
+  let sc := honestBoundSumcheckProver (R := Goldilocks) (pcs.commit ((), ()) 5 tbl) 5 tbl (turnTranscript p)
+  ⟨s, t, sc.1, (pcs.openEval ((), ()) 5 tbl sc.2.1 sc.2.2).1⟩
+
+/-- Concrete, inhabited Dual-PCS realization. Its transparent verifier rechecks the
+relation; replacing that work with a succinct arithmetization is a separate optimization. -/
+def dualPcsTurnProofSystem (c : TurnCommitments) (v : InnerVerifier) : TurnProofSystem c v where
+  Receipt := DualPcsTurnReceipt
+  verify := verifyDualPcsTurn c v
+  prove s t height _ _ := proveDualPcsTurn c s t height
+  sound p challenge r h := by
+    simp only [verifyDualPcsTurn, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .inl ⟨r.state, r.turn, h.1.1.1.1, h.1.1.1.2,
+      encodePublicInputs_injective _ _ h.1.1.2⟩
+  complete s t height hs hr := by
+    have h := verifyDualSumcheckPIOP_completeness (canopyMerklePCS deployedCanopyHash32)
+      (ajtaiLatticePCS (inhabitedAjtaiParams 5)) ((), ()) (Nat.le_refl 1) 5
+      (turnInputTable (materializeInputs c s t height))
+      (turnTranscript (materializeInputs c s t height))
+      ⟨trivial, (inhabitedAjtaiParams_sisHard 5).1⟩ (turnInputTable_length _)
+    simpa only [verifyDualPcsTurn, proveDualPcsTurn, hs, hr,
+      show (materializeInputs c s t height).height = height from rfl,
+      eq_self, decide_true, Bool.true_and] using h
+
+theorem dualPcsTurnProofSystem_inhabited (c : TurnCommitments) (v : InnerVerifier) :
+    Nonempty (TurnProofSystem c v) := ⟨dualPcsTurnProofSystem c v⟩
 
 structure SovereignTurnBundle {c : TurnCommitments} {v : InnerVerifier} (ps : TurnProofSystem c v) where
   publicInputs : FullPinnedPublicInputs
@@ -262,9 +401,9 @@ theorem symbolic_collapse_refines {c : TurnCommitments} {v : InnerVerifier}
     (ps : TurnProofSystem c v) (s : CellState) (t : StructuredTurn) (height : Nat)
     (hs : execTurnSymbolic v s t = true) (hr : RootBindings c s) :
     verifyCipherclerkBundle ps (collapseTurn ps s t height hs hr) = true ∧
-    (collapseTurn ps s t height hs hr).publicInputs.preStateRoot = c.stateRoot s ∧
+    (collapseTurn ps s t height hs hr).publicInputs.preStateRoot = committedStateRoot c s ∧
     (collapseTurn ps s t height hs hr).publicInputs.postStateRoot =
-      c.stateRoot { s with balances := nextBalances s t } := by
+      committedStateRoot c (nextState s t) := by
   have hl : liveRevokedRoot s.revokedRoot = true := (Bool.and_eq_true _ _).mp hs |>.1 |> (Bool.and_eq_true _ _).mp |>.2
   refine ⟨?_, rfl, rfl⟩
   simp only [verifyCipherclerkBundle, collapseTurn, decide_true, Bool.true_and]
@@ -279,7 +418,8 @@ theorem cipherclerk_zero_reexec_sound {c : TurnCommitments} {v : InnerVerifier}
     (h : verifyCipherclerkBundle ps b = true) :
     b.boundPrefix = relationPrefix b.publicInputs ∧ wellFormedInputs b.publicInputs = true ∧
     b.publicInputs.revokedRoot.size = 32 ∧ b.publicInputs.revokedRoot ≠ emptyRevokedRoot32 ∧
-    TurnRelation c v b.publicInputs := by
+    (TurnRelation c v b.publicInputs ∨ BoundedCollision deployedCanopyHash32.eval (merkleMaxPreimageBytes 5) ∨
+      ¬ ModuleSISHard (inhabitedAjtaiParams 5) 131070) := by
   simp only [verifyCipherclerkBundle, Bool.and_eq_true, decide_eq_true_eq] at h
   have hl := h.1.2
   simp only [liveRevokedRoot, decide_eq_true_eq] at hl
@@ -433,35 +573,24 @@ theorem execTurnSymbolic_refuses_revoked (v : InnerVerifier) (s : CellState) (t 
 /-- **The inner verifier, concretely**: an effect's proof is an encoded credential statement and
 ex-post receipt (`Obend.Polis.VerifiableCredentials`), checked against the statement digest the
 effect names, the expected policy, and the actor's verifier key. -/
-def vcInnerVerifier (P : ReceiptParams) (policyDigest : ByteArray) : InnerVerifier :=
-  verifiableCredentialInnerVerifier P policyDigest
+def vcInnerVerifier (P : ReceiptParams) (pol : StatusPolicy) (policyDigest : ByteArray) : InnerVerifier :=
+  verifiableCredentialInnerVerifier P pol policyDigest
 
-/-- **What an admitted turn's effects carry.** Under `vcInnerVerifier`, every effect of an
-admitted turn is the cell's actor's, and its proof decodes to a statement with the named digest
-and the expected policy and a receipt that verifies under the cell's verifier key. For any
-witness whose compliance table is the committed table, that witness's evaluation is accepted,
-or a sumcheck round challenge hit a root, or both commitment tracks are broken. -/
-theorem execTurnSymbolic_vc_sound (P : ReceiptParams) (policyDigest : ByteArray)
+/-- Every admitted effect carries a compliant witness under the verifier's policy. -/
+theorem execTurnSymbolic_vc_sound (P : ReceiptParams) (pol : StatusPolicy) (policyDigest : ByteArray)
     (s : CellState) (t : StructuredTurn)
-    (h : execTurnSymbolic (vcInnerVerifier P policyDigest) s t = true) :
+    (h : execTurnSymbolic (vcInnerVerifier P pol policyDigest) s t = true) :
     ∀ e ∈ t.effects, e.actorId = s.actorId ∧ e.actorVkDigest = s.actorVkDigest ∧
       ∃ stmt rc, decodeReceiptBytes e.proof = some (stmt, rc) ∧
         statementDigest stmt = e.innerStatementDigest ∧ stmt.policyDigest = policyDigest ∧
-        verifyExPostCredentialReceipt P s.actorVkDigest stmt rc = true ∧
-        ∀ (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness),
-          stmt.tableCommitment = commitTable P (complianceTable pol pub w) →
-            checkCredentialEval pol pub w = true ∨
-            ExistsRoundRootHit 3 (complianceTable pol pub w) rc.rounds
-              (receiptBoundTranscript s.actorVkDigest stmt).transcript ∨
-            (BoundedCollision P.hash.eval (merkleMaxPreimageBytes 3) ∧
-              ¬ ModuleSISHard P.lattice 131070) := by
+        verifyExPostCredentialReceipt P pol s.actorVkDigest stmt rc = true ∧
+        CompliantEvaluation pol (receiptView stmt rc.witness) rc.witness := by
   intro e he
   obtain ⟨⟨hid, hvk⟩, hv⟩ := ((execTurnSymbolic_iff _ s t).mp h).2.2.2.1 e he
-  obtain ⟨stmt, rc, hdec, hdig, hpol, hacc⟩ :=
-    verifiableCredentialInnerVerifier_sound P policyDigest _ _ _ hv
+  obtain ⟨stmt, rc, hdec, hdig, hpol, hacc, hmeaning⟩ :=
+    verifiableCredentialInnerVerifier_sound P pol policyDigest _ _ _ hv
   rw [hvk] at hacc
-  exact ⟨hid, hvk, stmt, rc, hdec, hdig, hpol, hacc, fun pol pub w hcomm =>
-    verifyExPostCredentialReceipt_sound P s.actorVkDigest stmt rc pol pub w hcomm hacc⟩
+  exact ⟨hid, hvk, stmt, rc, hdec, hdig, hpol, hacc, hmeaning⟩
 
 /-- The effect an actor attaches for an accepted evaluation: the statement's digest and the
 encoded honest receipt. -/
@@ -470,17 +599,17 @@ def credentialEffect (P : ReceiptParams) (policyDigest : ByteArray) (s : CellSta
   ⟨s.actorId, s.actorVkDigest,
     statementDigest (statementOf policyDigest pub (commitTable P (complianceTable pol pub w))),
     encodeReceiptBytes (statementOf policyDigest pub (commitTable P (complianceTable pol pub w)))
-      (proveExPostCredentialReceipt P s.actorVkDigest
+      (proveExPostCredentialReceipt P pol s.actorVkDigest
         (statementOf policyDigest pub (commitTable P (complianceTable pol pub w)))
-        (complianceTable pol pub w))⟩
+        w)⟩
 
 /-- **Admission is complete for honest credential effects.** A turn admitted without effects is
 admitted with the credential effect of any accepted evaluation. -/
 theorem execTurnSymbolic_vc_complete (P : ReceiptParams) (policyDigest : ByteArray)
     (s : CellState) (t : StructuredTurn) (pol : StatusPolicy) (pub : DisclosureView)
     (w : CredentialWitness) (hw : checkCredentialEval pol pub w = true)
-    (ht : execTurnSymbolic (vcInnerVerifier P policyDigest) s { t with effects := #[] } = true) :
-    execTurnSymbolic (vcInnerVerifier P policyDigest) s
+    (ht : execTurnSymbolic (vcInnerVerifier P pol policyDigest) s { t with effects := #[] } = true) :
+    execTurnSymbolic (vcInnerVerifier P pol policyDigest) s
       { t with effects := #[credentialEffect P policyDigest s pol pub w] } = true := by
   obtain ⟨h1, h2, h3, _, h5, h6, h7⟩ := (execTurnSymbolic_iff _ s _).mp ht
   refine (execTurnSymbolic_iff _ s _).mpr ⟨h1, h2, h3, ?_, h5, h6, h7⟩
@@ -490,8 +619,7 @@ theorem execTurnSymbolic_vc_complete (P : ReceiptParams) (policyDigest : ByteArr
   exact ⟨⟨rfl, rfl⟩, verifiableCredentialInnerVerifier_complete P policyDigest s.actorVkDigest
     pol pub w hw⟩
 
-instance (c : TurnCommitments) (s : CellState) : Decidable (RootBindings c s) :=
-  inferInstanceAs (Decidable (_ ∧ _))
+
 
 /-- A child handle carved out of the handle at index `parent`. -/
 structure HandleDelegation where

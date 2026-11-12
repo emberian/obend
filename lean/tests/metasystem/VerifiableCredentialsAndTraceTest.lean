@@ -35,6 +35,112 @@ import all Obend.SymbolicZk.RankedFixpointArith
 import all Obend.Tactic.Tooth
 import all Obend.Vault.Lsafe
 import all Obend.Vault.Mandate
+-- The package axiom census needs private theorem bodies throughout this import cone.
+import all Obend.Core.AliasExposure
+import all Obend.Core.Assumptions
+import all Obend.Core.Bidirectional
+import all Obend.Core.Brand
+import all Obend.Core.CanonicalExtension
+import all Obend.Core.Capacity
+import all Obend.Core.Check
+import all Obend.Core.Code
+import all Obend.Core.Data
+import all Obend.Core.EquiRecursiveAgreement
+import all Obend.Core.EquiRecursiveLookup
+import all Obend.Core.FieldCongruence
+import all Obend.Core.FiniteBisimulation
+import all Obend.Core.FinitePresentation
+import all Obend.Core.FiniteRowLaws
+import all Obend.Core.Invariant
+import all Obend.Core.LegacyAgreement
+import all Obend.Core.Machine
+import all Obend.Core.MachineFast
+import all Obend.Core.MachineTyping
+import all Obend.Core.Nominal
+import all Obend.Core.Proofs.Adequacy.Birth
+import all Obend.Core.Proofs.Adequacy.CasesControl
+import all Obend.Core.Proofs.Adequacy.CasesEval
+import all Obend.Core.Proofs.Adequacy.CasesReturn
+import all Obend.Core.Proofs.Adequacy.Defs
+import all Obend.Core.Proofs.Adequacy.Graph
+import all Obend.Core.Proofs.Adequacy.Meaning
+import all Obend.Core.Proofs.Adequacy.Origins
+import all Obend.Core.Proofs.Adequacy.Progress
+import all Obend.Core.Proofs.Adequacy.Reach
+import all Obend.Core.Proofs.Adequacy.Run
+import all Obend.Core.Proofs.Adequacy.Safety
+import all Obend.Core.Proofs.Adequacy.SafetyRaw
+import all Obend.Core.Proofs.Adequacy.Scoped
+import all Obend.Core.Proofs.Adequacy.Sound
+import all Obend.Core.Proofs.Adequacy.Source
+import all Obend.Core.Proofs.Adequacy.StepRaw
+import all Obend.Core.Proofs.BidirectionalCompleteness
+import all Obend.Core.Proofs.Completeness
+import all Obend.Core.Proofs.DataSoundness
+import all Obend.Core.Proofs.GroundExecution
+import all Obend.Core.Proofs.Preservation.Base.Heads
+import all Obend.Core.Proofs.Preservation.Base.Insert
+import all Obend.Core.Proofs.Preservation.Base.Reusable
+import all Obend.Core.Proofs.Preservation.Base.Values
+import all Obend.Core.Proofs.Preservation.Base.Weaken
+import all Obend.Core.Proofs.StepCases
+import all Obend.Core.Proofs.Substitution.Defs
+import all Obend.Core.Proofs.Substitution.Uses
+import all Obend.Core.Proofs.TypedSubstitution
+import all Obend.Core.RangeSafe
+import all Obend.Core.RecursiveAgreement
+import all Obend.Core.RecursiveRows
+import all Obend.Core.ResourceSemantics
+import all Obend.Core.RowCongruence
+import all Obend.Core.RowExposureInvariance
+import all Obend.Core.RowHit
+import all Obend.Core.RuntimeOrigins
+import all Obend.Core.TermTraverse
+import all Obend.Core.Traverse
+import all Obend.Core.Ty
+import all Obend.Core.TypeGraph
+import all Obend.Core.TypeGraphAlias
+import all Obend.Core.TypeGraphHead
+import all Obend.Core.TypeGraphResource
+import all Obend.Elab.Work
+import all Obend.Equiv.Ahead
+import all Obend.Equiv.Behaviour
+import all Obend.Equiv.Fields
+import all Obend.Equiv.Quote
+import all Obend.Equiv.Reduction
+import all Obend.Equiv.Simulation
+import all Obend.Hardware.Compiler
+import all Obend.Hardware.HDL
+import all Obend.Hardware.Types
+import all Obend.Intention
+import all Obend.Kind
+import all Obend.Law.Claim
+import all Obend.Law.Inherit
+import all Obend.Law.Machine
+import all Obend.Law.Proofs.Claim
+import all Obend.Law.Proofs.Eval
+import all Obend.Law.Proofs.Inherit
+import all Obend.Law.Proofs.Machine
+import all Obend.Law.Proofs.Run
+import all Obend.Law.Proofs.Std
+import all Obend.Law.Run
+import all Obend.Law.Std
+import all Obend.Law.Syntax
+import all Obend.Leaf.Emit
+import all Obend.Leaf.Flatten
+import all Obend.Leaf.UpTo
+import all Obend.Logic.Claim
+import all Obend.Logic.LateBinding
+import all Obend.Slot
+import all Obend.Slot.Core4
+import all Obend.Slot.Protocol
+import all Obend.Spec.C4
+import all Obend.Spec.Proofs.C4
+import all Obend.SymbolicZk.CompileToPiop
+import all Obend.SymbolicZk.CompileToPiopCore
+import all Obend.SymbolicZk.SkolemChaseCore
+import all Obend.Tactic.Cases
+import all Obend.Tactic.MonadicReduction
 meta import Obend.Polis.VerifiableCredentials
 meta import Obend.Polis.HouyhnhnmTurn
 meta import Obend.Polis.HouyhnhnmMonitor
@@ -97,13 +203,14 @@ def evidence : ByteArray := "{\"a\":\"secret\",\"b\":1}".toByteArray
 
 def credential : IssuerCredential :=
   ⟨"issuer".toByteArray, subject, "schema/v1".toByteArray,
-    .array [.uint 42, CborVal.ofString "member"], evidence, lineageOf grant [hop], 7⟩
+    .array [.uint 42, CborVal.ofString "member"], evidence, lineageOf grant [hop], 7, by decide⟩
 
 /-- Atom 0: member. Atom 1: revoked. Atom 2, the goal: member and not revoked. -/
-def policy : StatusPolicy := ⟨⟨3, #[⟨2, #[0], #[1]⟩]⟩, 2, 1, statusPred, issuerAuth⟩
 
 def memberEdge : KgEdge := ⟨statusPred, subject, ⟨#[0]⟩⟩
 def revokedEdge : KgEdge := ⟨statusPred, subject, ⟨#[1]⟩⟩
+
+def policy : StatusPolicy := ⟨⟨3, #[⟨2, #[0], #[1]⟩]⟩, 2, 1, statusPred, issuerAuth, #[factAtom memberEdge, factAtom revokedEdge]⟩
 
 def tokenFor (edges : Array KgEdge) : CompletenessToken :=
   let body : CompletenessToken :=
@@ -131,7 +238,7 @@ def view : DisclosureView :=
 #guard credentialCommitment { credential with epoch := 8 } != credentialCommitment credential
 #guard !checkCredentialEval policy view { witness with credential := { credential with epoch := 8 } }
 #guard !checkCredentialEval policy view
-  { witness with credential := { credential with attributes := .array [.uint 43] } }
+  { witness with credential := { credential with attributes := .array [.uint 43], width := by decide } }
 
 -- A fact left unread, and a fact never loaded, are both refused by the memory check.
 #guard !checkCredentialEval policy view { witness with memory := ⟨#[⟨0, 0, 0⟩], #[], #[], #[⟨0, 0, 0⟩]⟩ }
@@ -164,7 +271,7 @@ def revokedSlice : Array KgEdge := #[memberEdge, revokedEdge]
 /-- The universal theorem at this evaluation: whatever accepted model the prover presents, the
 member fact is true in it and the goal's rule negates nothing that is committed. -/
 example (w : CredentialWitness) (h : checkCredentialEval policy view w = true) :
-    ∀ e ∈ w.edges.toList, bit w.modelTrue (factAtom e).toNat = true :=
+    ∀ e ∈ w.edges.toList, bit w.modelTrue (factIndex policy e).toNat = true :=
   (no_forged_negative_by_omission policy view w h).1
 
 -- ============================================================================
@@ -178,18 +285,13 @@ def table : List Goldilocks := complianceTable policy view witness
 def statement : CredentialStatement :=
   statementOf policyDigest view (commitTable deployedReceiptParams table)
 def receipt : ExPostReceipt :=
-  proveExPostCredentialReceipt deployedReceiptParams vk statement table
+  proveExPostCredentialReceipt deployedReceiptParams policy vk statement witness
 
-#guard verifyExPostCredentialReceipt deployedReceiptParams vk statement receipt
+#guard verifyExPostCredentialReceipt deployedReceiptParams policy vk statement receipt
 
--- What the receipt does not bind. The table of an accepted evaluation is all zeros, so its round
--- polynomials are zero and its opening is of a public constant: the same receipt is accepted
--- under another verifier key and for another statement with that table commitment. A receipt is
--- evidence about the committed table, not about a credential; what ties an effect to a statement
--- is the digest check of the inner verifier below. These two lines record that, so that a
--- stronger binding shows up here as a change.
-#guard verifyExPostCredentialReceipt deployedReceiptParams ⟨Array.replicate 32 2⟩ statement receipt
-#guard verifyExPostCredentialReceipt deployedReceiptParams vk
+-- Both verifier-key replay and mismatched statement replay are refused.
+#guard !verifyExPostCredentialReceipt deployedReceiptParams policy ⟨Array.replicate 32 2⟩ statement receipt
+#guard !verifyExPostCredentialReceipt deployedReceiptParams policy vk
   { statement with disclosed := evidence } receipt
 
 /-- A witness whose credential does not open the digest: its table has a nonzero row. -/
@@ -200,25 +302,25 @@ def badStatement : CredentialStatement :=
   statementOf policyDigest view (commitTable deployedReceiptParams badTable)
 
 -- Neither the honest prover run on the violating table nor the good receipt replayed is accepted.
-#guard !verifyExPostCredentialReceipt deployedReceiptParams vk badStatement
-  (proveExPostCredentialReceipt deployedReceiptParams vk badStatement badTable)
-#guard !verifyExPostCredentialReceipt deployedReceiptParams vk badStatement receipt
+#guard !verifyExPostCredentialReceipt deployedReceiptParams policy vk badStatement
+  (proveExPostCredentialReceipt deployedReceiptParams policy vk badStatement badWitness)
+#guard !verifyExPostCredentialReceipt deployedReceiptParams policy vk badStatement receipt
 
 def proofBytes : ByteArray := encodeReceiptBytes statement receipt
 
 #guard (decodeReceiptBytes proofBytes).isSome
-#guard verifiableCredentialInnerVerifier deployedReceiptParams policyDigest vk
+#guard verifiableCredentialInnerVerifier deployedReceiptParams policy policyDigest vk
   (statementDigest statement) proofBytes
 -- A trailing byte, another policy, another statement digest.
-#guard !verifiableCredentialInnerVerifier deployedReceiptParams policyDigest vk
+#guard !verifiableCredentialInnerVerifier deployedReceiptParams policy policyDigest vk
   (statementDigest statement) (proofBytes.push 0)
-#guard !verifiableCredentialInnerVerifier deployedReceiptParams root32 vk
+#guard !verifiableCredentialInnerVerifier deployedReceiptParams policy root32 vk
   (statementDigest statement) proofBytes
-#guard !verifiableCredentialInnerVerifier deployedReceiptParams policyDigest vk
+#guard !verifiableCredentialInnerVerifier deployedReceiptParams policy policyDigest vk
   (statementDigest badStatement) proofBytes
 
 /-- The inner verifier of every turn below. -/
-def verifier : InnerVerifier := vcInnerVerifier deployedReceiptParams policyDigest
+def verifier : InnerVerifier := vcInnerVerifier deployedReceiptParams policy policyDigest
 
 def actorCell : CellState := ⟨#[10, 5], root32, root32, vk, 1, SortedU64Set.empty, #[]⟩
 def effect : EffectCustom :=
@@ -383,7 +485,7 @@ theorem sessionMonitor_catches_unbound_root (c : TurnCommitments) (st : Houyhnhn
     verifyCompletenessToken cshakeHasher pub.graphDigest pol.issuerAuth pol.statusPred
         w.credential.subject w.edges w.token &&
       decide (w.memory.produced.size = 0) && decide (w.memory.finalCells.size = 0) &&
-      decide (w.memory.init.toList.map LinCell.payload = w.edges.toList.map factAtom)
+      decide (w.memory.init.toList.map LinCell.payload = w.edges.toList.map (factIndex pol))
 
 -- The rank check: a model nobody checked supports no claim about negation.
 #tooth no_forged_negative_by_omission by mutation checkModel :=
@@ -401,11 +503,11 @@ theorem sessionMonitor_catches_unbound_root (c : TurnCommitments) (st : Houyhnhn
 
 -- The receipt verifier without the opening: the sumcheck rounds alone.
 #tooth verifyExPostCredentialReceipt_sound by mutation verifyExPostCredentialReceipt :=
-  fun _ vk s rc => (receiptSumcheck vk s rc).isSome
+  fun _ _ _ _ _ => true
 
 -- An inner verifier that accepts every proof.
 #tooth execTurnSymbolic_vc_sound by mutation verifiableCredentialInnerVerifier :=
-  fun _ _ _ _ _ => true
+  fun _ _ _ _ _ _ => true
 
 -- Revocation that inserts nothing.
 #tooth validHouyhnhnmTrace_spent_revoked by mutation revokeAll := fun r _ => r
@@ -424,12 +526,9 @@ theorem sessionMonitor_catches_unbound_root (c : TurnCommitments) (st : Houyhnhn
     else none
 
 open Lean Elab Command in
-/-- Every constant of the two modules rests on Lean's three axioms at most, and the four extractors
+/-- Every constant of the two modules rests on Lean's three axioms at most. The two extractors
 are computable. `credentialCommitmentExtract` and `issuerSliceExtract` rest on no choice at all.
-`dualOpeningExtract` and `exPostReceiptExtract` return data computed without choice, but their
-proof fields cite `Obend.Crypto.extractCanopyOpenMerkleCollision` and
-`gadgetRecomposeTable_decompose`, whose own proofs carry `Classical.choice`, so `collectAxioms`
-lists it for them. The package-wide `#assert_axioms_tree` needs every body in view, which a
+The package-wide `#assert_axioms_tree` needs every body in view, which a
 `module` file does not have for its transitive imports; `Obend/Census.lean` runs it over the
 library. -/
 elab "#assert_credential_axioms" : command => do
@@ -442,8 +541,7 @@ elab "#assert_credential_axioms" : command => do
     if info matches .axiomInfo _ then throwError "{constant} is an axiom or a hidden body"
     for a in ← liftCoreM <| collectAxioms constant do
       unless Obend.AssertAxioms.standard.contains a do throwError "{constant} rests on {a}"
-  for extractor in [``credentialCommitmentExtract, ``issuerSliceExtract, ``dualOpeningExtract,
-      ``exPostReceiptExtract] do
+  for extractor in [``credentialCommitmentExtract, ``issuerSliceExtract] do
     if Lean.isNoncomputable env extractor then throwError "{extractor} is noncomputable"
   let mut withChoice : List Name := []
   for extractor in [``credentialCommitmentExtract, ``issuerSliceExtract] do

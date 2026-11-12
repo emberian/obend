@@ -12,6 +12,7 @@ Completes the `Lookup + LinMem + Before` → Multilinear PIOP & `Sumcheck` crypt
    `Sumcheck` compiler (`compileSymbolicTraceToSumcheck_complete` & `compileSymbolicTraceToSumcheck_sound`).
 -/
 public import Obend.SymbolicZk.CompileToPiopCore
+public import Obend.SymbolicZk.SkolemChaseCore
 import all Obend.SymbolicZk.CompileToPiopCore
 import all Obend.Crypto.Multilinear
 import all Obend.Crypto.Transcript
@@ -594,7 +595,7 @@ theorem logUpIdentity_implies_lookup
 
 def zipMulPadded {R : Type} [CommRingOps R] : List R → List R → List R
   | [], _ => []
-  | _, [] => []
+  | xs, [] => xs
   | x :: xs, y :: ys => CommRingOps.mul x y :: zipMulPadded xs ys
 
 def eqWeightedTable {R : Type} [CommRingOps R] (tbl τ : List R) : List R :=
@@ -773,15 +774,6 @@ structure SymbolicZkWitness where
   lookupMults : Array Nat
   deriving DecidableEq, Repr
 
-@[expose] def stmtWitnessStructValid (stmt : SymbolicZkStmt) (wit : SymbolicZkWitness) : Bool :=
-  decide (wit.beforeBits.size = stmt.beforeConstraints.size) &&
-  (stmt.beforeConstraints.toList.zip wit.beforeBits.toList).all (fun p =>
-    beforeWidthSafe p.1.bitWidth && decide (p.1.lhs < 2 ^ p.1.bitWidth) &&
-    decide (p.1.rhs ≤ 2 ^ p.1.bitWidth) && decide (p.2.size = p.1.bitWidth)) &&
-  decide stmt.lookupTable.toList.Nodup &&
-  decide (wit.lookupMults.size = stmt.lookupTable.size) &&
-  wit.lookupMults.toList.all (fun m => decide (m < goldilocksPrime)) &&
-  decide (2 * (stmt.lookupTable.size + stmt.lookupQueries.size) + 3 ≤ goldilocksPrime)
 
 def beforeResidualList : List (BeforeConstraint × Array Goldilocks) → List Goldilocks
   | [] => []
@@ -798,6 +790,33 @@ def symbolicResidualVector (stmt : SymbolicZkStmt) (wit : SymbolicZkWitness)
   let (nQ, dQ) := logUpQueryEvalArray stmt.lookupQueries γLup
   let lupRes := CommRingOps.sub (CommRingOps.mul nT dQ) (CommRingOps.mul nQ dT)
   bef ++ [linRes, lupRes]
+
+@[expose] def stmtWitnessStructValid (stmt : SymbolicZkStmt) (wit : SymbolicZkWitness) : Bool :=
+  decide (wit.beforeBits.size = stmt.beforeConstraints.size) &&
+  (stmt.beforeConstraints.toList.zip wit.beforeBits.toList).all (fun p =>
+    beforeWidthSafe p.1.bitWidth && decide (p.1.lhs < 2 ^ p.1.bitWidth) &&
+    decide (p.1.rhs ≤ 2 ^ p.1.bitWidth) && decide (p.2.size = p.1.bitWidth)) &&
+  decide stmt.lookupTable.toList.Nodup &&
+  decide (wit.lookupMults.size = stmt.lookupTable.size) &&
+  wit.lookupMults.toList.all (fun m => decide (m < goldilocksPrime)) &&
+  decide (2 * (stmt.lookupTable.size + stmt.lookupQueries.size) + 3 ≤ goldilocksPrime) &&
+  decide ((beforeResidualList (stmt.beforeConstraints.toList.zip wit.beforeBits.toList)).length + 2 ≤
+    2 ^ stmt.numVars)
+
+/-- Every residual has a hypercube slot; accepted inputs cannot lose trailing constraints. -/
+theorem stmtWitnessStructValid_covers (stmt : SymbolicZkStmt) (wit : SymbolicZkWitness)
+    (h : stmtWitnessStructValid stmt wit = true) (γLin γLup : Goldilocks) :
+    (symbolicResidualVector stmt wit γLin γLup).length ≤ 2 ^ stmt.numVars := by
+  have hc := (Bool.and_eq_true _ _).mp h |>.2
+  simpa [symbolicResidualVector] using (of_decide_eq_true hc)
+
+/-- Weighting preserves the entire input even for malformed, undersized challenge vectors.
+The verifier additionally enforces `stmtWitnessStructValid_covers` before sumcheck. -/
+theorem zipMulPadded_length {R : Type} [CommRingOps R] (xs ws : List R) :
+    (zipMulPadded xs ws).length = xs.length := by
+  induction xs generalizing ws with
+  | nil => simp [zipMulPadded]
+  | cons x xs ih => cases ws <;> simp [zipMulPadded, ih]
 
 def batchedSymbolicPiopTable (stmt : SymbolicZkStmt) (wit : SymbolicZkWitness)
     (γLin γLup : Goldilocks) (τ : List Goldilocks) : List Goldilocks :=
@@ -861,7 +880,9 @@ theorem compileSymbolicTraceToSumcheck_complete
       (stmt.linmemCons.toList ++ stmt.linmemFinal.toList))
     (hNd : stmt.lookupTable.toList.Nodup)
     (hLup : ∀ q ∈ stmt.lookupQueries.toList, q ∈ stmt.lookupTable.toList)
-    (hLupDeg : 2 * (stmt.lookupTable.size + stmt.lookupQueries.size) + 3 ≤ goldilocksPrime) :
+    (hLupDeg : 2 * (stmt.lookupTable.size + stmt.lookupQueries.size) + 3 ≤ goldilocksPrime)
+    (hCapacity : (beforeResidualList (stmt.beforeConstraints.toList.zip
+      (stmt.beforeConstraints.map compileBeforeWitness).toList)).length + 2 ≤ 2 ^ stmt.numVars) :
     let wit : SymbolicZkWitness :=
       { beforeBits := stmt.beforeConstraints.map compileBeforeWitness
         lookupMults := stmt.lookupTable.map (fun t => stmt.lookupQueries.toList.count t) }
@@ -896,7 +917,8 @@ theorem compileSymbolicTraceToSumcheck_complete
       exact decide_eq_true (by omega)
     have h6 : decide (2 * (stmt.lookupTable.size + stmt.lookupQueries.size) + 3 ≤ goldilocksPrime) = true :=
       decide_eq_true hLupDeg
-    simp [h1, h2, h3, h4, h5, h6]
+    simp only [h1, h2, h3, h4, h5, h6, Bool.true_and]
+    exact decide_eq_true hCapacity
   have hAllZero : ∀ r ∈ symbolicResidualVector stmt wit γLin γLup, r = CommRingOps.zero := by
     intro r hr
     simp only [symbolicResidualVector, List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hr
@@ -920,14 +942,76 @@ theorem compileSymbolicTraceToSumcheck_complete
   dsimp only at hHonest; rw [hSumZero] at hHonest
   exact ⟨hValid, hAllZero, hHonest.1, hHonest.2⟩
 
+/-- Canonical, length-framed encoding of every public statement field. -/
+def symbolicStatementBytes (s : SymbolicZkStmt) : ByteArray :=
+  let bef := s.beforeConstraints.toList.flatMap fun c =>
+    encodeListField (leb128 c.lhs) ++ encodeListField (leb128 c.rhs) ++
+      encodeListField (leb128 c.bitWidth)
+  Obend.Digest.Cshake256.Native.bytesOfList
+    (encodeListField bef ++
+      ([s.linmemInit, s.linmemProd, s.linmemCons, s.linmemFinal,
+        s.lookupTable, s.lookupQueries].flatMap fun a =>
+          encodeListField (encodeGoldilocksList a.toList)) ++ encodeListField (leb128 s.numVars))
+
+def squeezeSymbolicPoint : (n : Nat) → Transcript .instanceBound →
+    List Goldilocks × Transcript .instanceBound
+  | 0, tr => ([], tr)
+  | n + 1, tr =>
+    let (r, tr') := squeezeGoldilocks tr
+    let (rs, tr'') := squeezeSymbolicPoint n tr'
+    (r :: rs, tr'')
+
+theorem squeezeSymbolicPoint_length (n : Nat) (tr : Transcript .instanceBound) :
+    (squeezeSymbolicPoint n tr).1.length = n := by
+  induction n generalizing tr with
+  | zero => rfl
+  | succ n ih => simp [squeezeSymbolicPoint, ih]
+
+/-- Instance binding precedes BOTH polynomial identity challenges and the batching point. -/
+def symbolicChallenges (s : SymbolicZkStmt) (witComm : ByteArray)
+    (seed : Transcript .relationBound) :
+    Goldilocks × Goldilocks × List Goldilocks × Transcript .instanceBound :=
+  let tr := (bindInstance (symbolicStatementBytes s, witComm) seed).transcript
+  let (γLin, tr) := squeezeGoldilocks tr
+  let (γLup, tr) := squeezeGoldilocks tr
+  let (τ, tr) := squeezeSymbolicPoint s.numVars tr
+  (γLin, γLup, τ, tr)
+
+/-- This verifier accepts no caller-selected identity or batching challenge. -/
+def verifySymbolicSumcheck (s : SymbolicZkStmt) (w : SymbolicZkWitness)
+    (witComm : ByteArray) (maxDeg : Nat) (rounds : List (RoundPoly Goldilocks))
+    (seed : Transcript .relationBound) :=
+  if stmtWitnessStructValid s w then
+    verifySumcheck maxDeg s.numVars CommRingOps.zero rounds (symbolicChallenges s witComm seed).2.2.2
+  else none
+
+/-- Honest prover completeness after binding the statement and witness commitment. -/
+theorem verifySymbolicSumcheck_complete (s : SymbolicZkStmt) (w : SymbolicZkWitness)
+    (witComm : ByteArray) (maxDeg : Nat) (hDeg : 1 ≤ maxDeg) (seed : Transcript .relationBound)
+    (hStruct : stmtWitnessStructValid s w = true)
+    (hZero : hypercubeSum s.numVars (batchedSymbolicPiopTable s w
+      (symbolicChallenges s witComm seed).1 (symbolicChallenges s witComm seed).2.1
+      (symbolicChallenges s witComm seed).2.2.1) = CommRingOps.zero) :
+    ∃ rounds claim tr, verifySymbolicSumcheck s w witComm maxDeg rounds seed = some (claim, tr) := by
+  let tbl := batchedSymbolicPiopTable s w (symbolicChallenges s witComm seed).1
+    (symbolicChallenges s witComm seed).2.1 (symbolicChallenges s witComm seed).2.2.1
+  have h := (honestSumcheckProver_completeness hDeg s.numVars tbl
+    (symbolicChallenges s witComm seed).2.2.2).1
+  rw [hZero] at h
+  exact ⟨_, _, _, by simpa only [verifySymbolicSumcheck, hStruct, ite_true] using h⟩
+
 /-- **Cryptographic SymbolicZkVM-to-Sumcheck Soundness Weld (`compileSymbolicTraceToSumcheck_sound`)**. -/
 theorem compileSymbolicTraceToSumcheck_sound
     (stmt : SymbolicZkStmt) (wit : SymbolicZkWitness) (maxDeg : Nat)
-    (γLin γLup : Goldilocks) (τ : List Goldilocks) (hτ : τ.length = stmt.numVars)
-    (rounds : List (RoundPoly Goldilocks)) (tr : Transcript .relationBound)
-    (claim : EvalClaim Goldilocks stmt.numVars) (trFinal : Transcript .relationBound)
+    (witComm : ByteArray) (seed : Transcript .relationBound)
+    (rounds : List (RoundPoly Goldilocks))
+    (claim : EvalClaim Goldilocks stmt.numVars) (trFinal : Transcript .instanceBound)
     (hStruct : stmtWitnessStructValid stmt wit = true)
-    (hAcc : verifySumcheck maxDeg stmt.numVars CommRingOps.zero rounds tr = some (claim, trFinal)) :
+    (hAcc : verifySymbolicSumcheck stmt wit witComm maxDeg rounds seed = some (claim, trFinal)) :
+    let γLin := (symbolicChallenges stmt witComm seed).1
+    let γLup := (symbolicChallenges stmt witComm seed).2.1
+    let τ := (symbolicChallenges stmt witComm seed).2.2.1
+    let tr := (symbolicChallenges stmt witComm seed).2.2.2
     let resVec := symbolicResidualVector stmt wit γLin γLup
     let tbl := batchedSymbolicPiopTable stmt wit γLin γLup τ
     let linLhs := stmt.linmemInit.toList ++ stmt.linmemProd.toList
@@ -943,6 +1027,13 @@ theorem compileSymbolicTraceToSumcheck_sound
     ((∃ r ∈ resVec, r ≠ CommRingOps.zero) ∧ mleEval resVec τ = CommRingOps.zero) ∨
     ExistsRoundRootHit stmt.numVars tbl rounds tr ∨
     claim.expectedVal ≠ mleEval tbl claim.point := by
+  let γLin := (symbolicChallenges stmt witComm seed).1
+  let γLup := (symbolicChallenges stmt witComm seed).2.1
+  let τ := (symbolicChallenges stmt witComm seed).2.2.1
+  let tr := (symbolicChallenges stmt witComm seed).2.2.2
+  have hτ : τ.length = stmt.numVars := squeezeSymbolicPoint_length _ _
+  have hAcc : verifySumcheck maxDeg stmt.numVars CommRingOps.zero rounds tr = some (claim, trFinal) := by
+    simpa [verifySymbolicSumcheck, hStruct] using hAcc
   dsimp only
   let resVec := symbolicResidualVector stmt wit γLin γLup
   let tbl := batchedSymbolicPiopTable stmt wit γLin γLup τ
@@ -958,7 +1049,7 @@ theorem compileSymbolicTraceToSumcheck_sound
       have hResAll0 : ∀ r ∈ resVec, r = CommRingOps.zero :=
         fun r hr => of_decide_eq_true (List.all_eq_true.mp hResB r hr)
       simp only [stmtWitnessStructValid, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hStruct
-      rcases hStruct with ⟨⟨⟨⟨⟨hBefSz, hBefAll⟩, _hNd⟩, hMultSz⟩, _hMultBound⟩, _hLupDeg⟩
+      rcases hStruct with ⟨⟨⟨⟨⟨⟨hBefSz, hBefAll⟩, _hNd⟩, hMultSz⟩, _hMultBound⟩, _hLupDeg⟩, _hCapacity⟩
       have hBefValid : ∀ c ∈ stmt.beforeConstraints.toList, c.lhs < c.rhs := by
         apply beforeResidualList_zero_implies_lt stmt.beforeConstraints.toList wit.beforeBits.toList
           (by simpa using hBefSz)
@@ -1013,6 +1104,96 @@ theorem compileSymbolicTraceToSumcheck_sound
     · exact .inr (.inr (.inr (.inr (.inr hEvalNe))))
     · exact .inr (.inr (.inr (.inr (.inl hHit))))
 
+/-- A chase atom is lowered to its dictionary index; a missing atom receives the
+out-of-table sentinel `dictionary.length`. No hash truncation or field alias is used. -/
+def lowerChaseAtoms (dictionary required : SkolemChaseCore.FactSet) : SymbolicZkStmt :=
+  { beforeConstraints := #[], linmemInit := #[], linmemProd := #[],
+    linmemCons := #[], linmemFinal := #[],
+    lookupTable := ((List.range dictionary.length).map Goldilocks.ofNat).toArray,
+    lookupQueries := (required.map fun a => Goldilocks.ofNat (dictionary.idxOf a)).toArray,
+    numVars := 1 }
+
+def lowerChaseWitness (dictionary required : SkolemChaseCore.FactSet) : SymbolicZkWitness :=
+  let s := lowerChaseAtoms dictionary required
+  { beforeBits := #[], lookupMults := s.lookupTable.map (fun x => s.lookupQueries.toList.count x) }
+
+private theorem chase_index_mem (dictionary : SkolemChaseCore.FactSet)
+    (hBound : dictionary.length < goldilocksPrime) (a : SkolemChaseCore.Atom SkolemChaseCore.Term) :
+    Goldilocks.ofNat (dictionary.idxOf a) ∈ (List.range dictionary.length).map Goldilocks.ofNat ↔
+      a ∈ dictionary := by
+  constructor
+  · intro h
+    obtain ⟨i, hi, he⟩ := List.mem_map.mp h
+    have hi' := List.mem_range.mp hi
+    have hb : dictionary.idxOf a ≤ dictionary.length := List.idxOf_le_length
+    have hv := congrArg Goldilocks.val he
+    simp only [Goldilocks.ofNat, Nat.mod_eq_of_lt (Nat.lt_trans hi' hBound),
+      Nat.mod_eq_of_lt (Nat.lt_of_le_of_lt hb hBound)] at hv
+    exact List.idxOf_lt_length_iff.mp (hv ▸ hi')
+  · intro h
+    exact List.mem_map.mpr ⟨dictionary.idxOf a,
+      List.mem_range.mpr (List.idxOf_lt_length_of_mem h), rfl⟩
+
+/-- Exact lowering of atom-satisfaction witnesses into LogUp semantics. This applies
+in particular to instantiated heads of a restricted-chase derivation or fixpoint. -/
+theorem lowerChaseAtoms_semantics (dictionary required : SkolemChaseCore.FactSet)
+    (hBound : dictionary.length < goldilocksPrime) :
+    SymbolicSemanticsValid (lowerChaseAtoms dictionary required)
+      (lowerChaseWitness dictionary required) ↔ ∀ a ∈ required, a ∈ dictionary := by
+  constructor
+  · intro h a ha
+    apply (chase_index_mem dictionary hBound a).mp
+    exact h.2.2.1 _ (by simp [lowerChaseAtoms, List.mem_map.mpr ⟨a, ha, rfl⟩])
+  · intro h
+    refine ⟨by simp [lowerChaseAtoms], by simp [lowerChaseAtoms], ?_, ?_⟩
+    · intro q hq
+      simp only [lowerChaseAtoms, List.toList_toArray, List.mem_map] at hq
+      obtain ⟨a, ha, rfl⟩ := hq
+      exact (chase_index_mem dictionary hBound a).mpr (h a ha)
+    · intro i hi hm
+      simp [lowerChaseWitness]
+
+/-- Lower an instantiated rule, including both its premise atoms and its witness head.
+Missing variable assignments fail compilation; missing atoms fail the lookup relation. -/
+def lowerChaseRuleInstance (model : SkolemChaseCore.FactSet) (rule : SkolemChaseCore.TgdRule)
+    (assignment : SkolemChaseCore.Subst SkolemChaseCore.Term) :
+    Option (SymbolicZkStmt × SymbolicZkWitness) := do
+  let body ← SkolemChaseCore.evalPatAtoms SkolemChaseCore.Term.const assignment rule.body
+  let head ← SkolemChaseCore.evalPatAtoms SkolemChaseCore.Term.const assignment rule.head
+  pure (lowerChaseAtoms model (body ++ head), lowerChaseWitness model (body ++ head))
+
+/-- The lowered PIOP witness means exactly that this rule instance has a satisfied
+premise and a satisfied witness head in the model, not merely that its inputs parse. -/
+theorem lowerChaseRuleInstance_sound (model : SkolemChaseCore.FactSet)
+    (rule : SkolemChaseCore.TgdRule) (assignment : SkolemChaseCore.Subst SkolemChaseCore.Term)
+    (body head : SkolemChaseCore.FactSet)
+    (hb : SkolemChaseCore.evalPatAtoms SkolemChaseCore.Term.const assignment rule.body = some body)
+    (hh : SkolemChaseCore.evalPatAtoms SkolemChaseCore.Term.const assignment rule.head = some head)
+    (hBound : model.length < goldilocksPrime) :
+    lowerChaseRuleInstance model rule assignment =
+      some (lowerChaseAtoms model (body ++ head), lowerChaseWitness model (body ++ head)) ∧
+    (SymbolicSemanticsValid (lowerChaseAtoms model (body ++ head))
+      (lowerChaseWitness model (body ++ head)) ↔
+      (∀ a ∈ body, a ∈ model) ∧ (∀ a ∈ head, a ∈ model)) := by
+  constructor
+  · simp [lowerChaseRuleInstance, hb, hh]
+  · rw [lowerChaseAtoms_semantics _ _ hBound]
+    simp only [List.mem_append, or_imp, forall_and]
+
+/-- A complete chased model lowers every initial atom into an accepted semantic witness.
+The same dictionary also satisfies every rule by the chase fixpoint theorem. -/
+theorem lowerChaseFixpoint_sound (rules : List SkolemChaseCore.TgdRule) (fuel : Nat)
+    (initial : SkolemChaseCore.FactSet)
+    (hWf : SkolemChaseCore.WfRuleSet rules = true)
+    (hSat : SkolemChaseCore.allRulesSatisfied rules
+      (SkolemChaseCore.runBoundedChase rules fuel initial) = true)
+    (hBound : (SkolemChaseCore.runBoundedChase rules fuel initial).length < goldilocksPrime) :
+    let model := SkolemChaseCore.runBoundedChase rules fuel initial
+    SymbolicSemanticsValid (lowerChaseAtoms model initial) (lowerChaseWitness model initial) ∧
+      SkolemChaseCore.ModelsRules SkolemChaseCore.Term.const rules model := by
+  have h := SkolemChaseCore.chase_fixpoint_models_rules rules fuel initial hWf hSat
+  exact ⟨(lowerChaseAtoms_semantics _ _ hBound).mpr h.1, h.2⟩
+
 private theorem sampleWitnessStructValid :
     stmtWitnessStructValid
       { beforeConstraints := #[⟨2, 5, 4⟩], linmemInit := #[Goldilocks.ofNat 10],
@@ -1022,15 +1203,13 @@ private theorem sampleWitnessStructValid :
       { beforeBits := #[#[CommRingOps.zero, CommRingOps.one, CommRingOps.zero, CommRingOps.zero]],
         lookupMults := #[1, 2] } = true := by decide
 
-theorem stmtWitnessStructValid_complete (numVars : Nat) :
+theorem stmtWitnessStructValid_inhabited (n : Nat) (hn : 1 ≤ n) :
     ∃ (stmt : SymbolicZkStmt) (wit : SymbolicZkWitness),
-      stmt.numVars = numVars ∧ stmtWitnessStructValid stmt wit = true :=
-  ⟨{ beforeConstraints := #[⟨2, 5, 4⟩], linmemInit := #[Goldilocks.ofNat 10],
-     linmemProd := #[Goldilocks.ofNat 20], linmemCons := #[Goldilocks.ofNat 20],
-     linmemFinal := #[Goldilocks.ofNat 10], lookupTable := #[Goldilocks.ofNat 10, Goldilocks.ofNat 20],
-     lookupQueries := #[Goldilocks.ofNat 20, Goldilocks.ofNat 10, Goldilocks.ofNat 20], numVars := numVars },
-   { beforeBits := #[#[CommRingOps.zero, CommRingOps.one, CommRingOps.zero, CommRingOps.zero]],
-     lookupMults := #[1, 2] }, rfl, sampleWitnessStructValid⟩
+      stmt.numVars = n ∧ stmt.lookupQueries = #[Goldilocks.one] ∧ stmtWitnessStructValid stmt wit = true := by
+  have hcap : 2 ≤ 2 ^ n := Nat.le_trans (by decide : 2 ≤ 2 ^ 1) (Nat.pow_le_pow_right (by decide) hn)
+  refine ⟨⟨#[], #[], #[], #[], #[], #[Goldilocks.one], #[Goldilocks.one], n⟩,
+    ⟨#[], #[1]⟩, rfl, rfl, ?_⟩
+  simp [stmtWitnessStructValid, beforeResidualList, hcap, goldilocksPrime]
 
 example : stmtWitnessStructValid
     { beforeConstraints := #[⟨2, 5, 4⟩], linmemInit := #[Goldilocks.ofNat 10],

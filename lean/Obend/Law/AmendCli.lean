@@ -1,6 +1,7 @@
 module
 public import Obend.Law.PointwiseRevise
 public import Lean.Data.Json
+public import Obend.Crypto.Transcript
 import all Obend.Law.PointwiseRevise
 import all Obend.Hardware.SiliconOuroboros
 import all Obend.Hardware.DprStutter
@@ -9,6 +10,38 @@ import all Obend.Judge.CertifierRatchet
 import all Obend.Logic.SeparationFrame
 
 public section
+namespace Obend.Law.PointwiseRevise
+open Obend.Crypto Obend.Digest.Cshake256 Obend.Digest.HashBytes
+
+/-- Shared finite-law wire schema: length-framed names, priorities, and full truth tables. -/
+def Clause.bytes {n : Nat} (c : Clause n) : List UInt8 :=
+  encodeListField c.name.toUTF8.data.toList ++ encodeListField (leb128 c.priority) ++
+    encodeListField (be ((n + 7) / 8) c.allowed.toNat)
+
+def theoryBytes {n : Nat} (cs : SpecTheory n) : List UInt8 :=
+  leb128 cs.length ++ cs.flatMap (fun c => encodeListField c.bytes)
+
+def AmendmentTurn.bytes {n : Nat} (t : AmendmentTurn n) : List UInt8 :=
+  encodeListField (leb128 n) ++ encodeListField (leb128 t.slot) ++
+    encodeListField (theoryBytes t.clauses)
+
+def AmendmentTurn.digest {n : Nat} (t : AmendmentTurn n) : ByteArray :=
+  cshake32ByteArray "OBEND.LAW.AMENDMENT_TURN/v1".toUTF8.data.toList t.bytes
+
+def Bedrock.bytes {n : Nat} (B : Bedrock n) : List UInt8 :=
+  let table := (List.finRange n).foldl (fun mask v => if B.check v then mask + 2 ^ v.val else mask) 0
+  encodeListField (leb128 n) ++ encodeListField (be ((n + 7) / 8) table) ++
+    encodeListField (leb128 B.seed.val)
+
+def Bedrock.digest {n : Nat} (B : Bedrock n) : ByteArray :=
+  cshake32ByteArray "OBEND.LAW.BEDROCK/v1".toUTF8.data.toList B.bytes
+
+theorem AmendmentTurn.digest_size {n : Nat} (t : AmendmentTurn n) : t.digest.size = 32 :=
+  cshake32ByteArray_size _ _
+theorem Bedrock.digest_size {n : Nat} (B : Bedrock n) : B.digest.size = 32 :=
+  cshake32ByteArray_size _ _
+end Obend.Law.PointwiseRevise
+
 namespace Obend.Law.AmendCli
 open PointwiseRevise Lean
 open Obend.Hardware.DprStutter Obend.Hardware.SiliconOuroboros
@@ -311,13 +344,48 @@ structure LiveState where
 
 def LiveState.value (st : LiveState) : ConservedValue := feeLedger st.transferred
 
+private instance : Repr ByteArray where
+  reprPrec b _ := repr b.data
+
 structure AmendReceipt where
   slot : Nat
   revision : Revision 16
   evicted : SpecTheory 16
   skipped : List String
   frames : Array TileFrame
+  turnDigest : ByteArray
+  bedrockDigest : ByteArray
+  supportDigest : ByteArray
   deriving Repr
+
+open Obend.Crypto Obend.Digest.Cshake256 Obend.Digest.HashBytes
+
+/-- Support commitments bind footprints, every expected model, and the retained payload. -/
+def supportBytes (certs : List (ModuleCert 16)) : List UInt8 :=
+  leb128 certs.length ++ certs.flatMap fun c =>
+    encodeListField (leb128 c.footprint.length ++ c.footprint.flatMap (fun k =>
+      encodeListField (leb128 k) ++ encodeListField (leb128 (c.expected k).val)) ++
+      encodeListField c.payload.toUTF8.data.toList)
+
+def supportDigest (certs : List (ModuleCert 16)) : ByteArray :=
+  cshake32ByteArray "OBEND.LAW.SUPPORT/v1".toUTF8.data.toList (supportBytes certs)
+
+def AmendReceipt.bytes (r : AmendReceipt) : List UInt8 :=
+  let rev := match r.revision with
+    | .accepted v cs => [0] ++ encodeListField (leb128 v.val) ++ encodeListField (theoryBytes cs)
+    | .refused v cs cost => [1] ++ encodeListField (leb128 v.val) ++
+        encodeListField (theoryBytes cs) ++ encodeListField (leb128 cost)
+  encodeListField (leb128 r.slot) ++ encodeListField rev ++ encodeListField (theoryBytes r.evicted) ++
+    encodeListField (leb128 r.skipped.length ++ r.skipped.flatMap (fun s => encodeListField s.toUTF8.data.toList)) ++
+    encodeListField (leb128 r.frames.size ++ r.frames.toList.flatMap (fun f =>
+      encodeListField (be 8 f.payload.toNat) ++ encodeListField (be 8 f.crc.toNat))) ++
+    encodeListField r.turnDigest.data.toList ++ encodeListField r.bedrockDigest.data.toList ++
+    encodeListField r.supportDigest.data.toList
+
+def AmendReceipt.digest (r : AmendReceipt) : ByteArray :=
+  cshake32ByteArray "OBEND.LAW.AMEND_RECEIPT/v1".toUTF8.data.toList r.bytes
+
+theorem AmendReceipt.digest_size (r : AmendReceipt) : r.digest.size = 32 := cshake32ByteArray_size _ _
 
 def checkedSkip (w : World 16) (t : AmendmentTurn 16) (c : ModuleCert 16) : Option (ModuleCert 16) :=
   if moduleUsable w c then skipModule t c else none
@@ -358,8 +426,8 @@ def executeLiveAmendment (st : LiveState) (t : AmendmentTurn 16)
         transferred := st.transferred + fee v
         generations := st.generations + 1 }
     (next, ⟨t.slot, .accepted v R,
-      (st.world t.slot).clauses.filter (fun c => !holds c v), skippedModules st.world t certs, frames⟩)
-  | .refused v R cost => (st, ⟨t.slot, .refused v R cost, [], [], #[]⟩)
+      (st.world t.slot).clauses.filter (fun c => !holds c v), skippedModules st.world t certs, frames, t.digest, bedrock.digest, supportDigest certs⟩)
+  | .refused v R cost => (st, ⟨t.slot, .refused v R cost, [], [], #[], t.digest, bedrock.digest, supportDigest certs⟩)
 
 def renderAmendReceiptJson (r : AmendReceipt) : String :=
   let common := [("slot", toJson r.slot), ("skippedModules", toJson r.skipped)]
