@@ -126,3 +126,35 @@ All fine-grained kernel hardening targets (`G1`–`G6`, [`METATHEORY.md` §3.1](
     3. **Functorial Rerender Square & Frustum-Snapshot Re-Expansion**: `rerender_square` (`project ∘ step = step ∘ project`), `rerender_after_step_authorized`, `snapshot_roundtrip`, and `snapshot_roundtrip_attenuated`.
     4. **3-Dimensional `ReactiveAffordance`**: `TransitionGate` (`pre old ∧ post new ∧ link old new`) + `[openHeight, closeHeight]` deadline window + the 6 cross-polarity teeth (`fireReactive_iff`, `fireReactive_wrong_old_refuses`, `fireReactive_after_deadline_refuses`, `fireReactive_window_reactive`).
   - [`lean/tests/rehydration/RehydrationTest.lean`](lean/tests/rehydration/RehydrationTest.lean): the `#tooth` kernel mutation tests and `#print axioms` checks for it (built by the `Tests` target).
+
+
+## Active: deployed vault change-proportional cost — OPEN (2026-11-08)
+
+GPT-6 Astra (codex), `lane-vault-perf`, starting `4ad39c7`. The requested
+`O(change · log(vault))` bound is **not achieved**. The connected implementation now has
+segmented receipt-log recovery, exact indexed query/admission replacements, deferred judgment
+footprints, shared form checks and exact-input decoder reuse. The old specifications remain for
+proofs; the compiler uses their proved replacements. See [integration and theorem statements](review/VAULT-PERF-RESULTS.md)
+and [measurements against Git](review/VAULT-PERF-MEASUREMENTS.md).
+
+The remaining engineering work is owned, not deferred for permission:
+
+- Emit certified ordered page edits from **all** Store mutations and maintain name/id/backlink
+  indices across those edits. The current maintained name tree spans an admission batch only.
+- Replace the eager list world with persistent authenticated objects and demand reads. Preserve
+  duplicate/first-match and page-order semantics; chunk histories as well as the page collection.
+- Separate versioned receipt commitments from snapshot encoding. Migrate v1 explicitly only when
+  root updates and authenticated object loading are connected; rebuilding a Merkle tree from the
+  complete world each turn would retain the old cost.
+- Thread certified judgment/render dependencies through the complete Replay transition path,
+  including helpers used by open, merge and restoration. Stored `seen` text alone is not a valid
+  render-cache certificate.
+- Supply a trustworthy changed-path source, with explicit rescan after journal gaps/overflow,
+  for arbitrary external markdown edits. A full scan cannot satisfy a sublinear unchanged bound.
+- Complete the 10,000-record curves at 2,000 and 20,000 pages and all rejoin bursts. Current short
+  matched probes and the surviving whole-checkpoint byte counts already refute the target bound;
+  extrapolated multi-day baseline time is not a completed result.
+
+The concrete interfaces, mutation audit, proof obligations and publication ordering are in the
+[representation design](review/VAULT-PERF-DESIGN.md). No disconnected Merkle implementation or
+partial receipt-format migration was added to claim closure of this workstream.

@@ -58,7 +58,7 @@ public import Obend.Vault.Log
 public import Obend.Vault.Json
 public import Obend.Ledger.Commit
 public import Obend.Vault.Form
-public import Obend.Vault.FormCheck
+public import Obend.Vault.FormCheckCache
 public import Obend.Vault.Transport
 public import Obend.Vault.Retention
 public import Obend.Vault.Merge
@@ -209,6 +209,43 @@ def changedOf (s : Store) (V : List (String × String)) : List (String × String
 the world has seen, with the changed ones' new text. -/
 def reconstructSeen (s : Store) (changed : List (String × String)) : List (String × String) :=
   (seenNames s).map fun n => (n, (changed.lookup n).getD ((seenOf s n).getD ""))
+
+/-! Batch lookups use one ordered index for the whole reconstruction. -/
+
+def readingOfIndexed (s : Store) (V : List (String × String)) : List (String × Option String) :=
+  let pages := Index.ofList Page.name s.pages
+  V.map fun (n, t) => (n, if (Index.first pages n).bind Page.seen == some t then none else some t)
+
+@[csimp] theorem readingOf_eq_indexed : @readingOf = @readingOfIndexed := by
+  funext s V
+  simp only [readingOf, readingOfIndexed, seenOf, Store.page?, Index.first_ofList] <;> rfl
+
+def reconstructIndexed (s : Store) (files : List (String × Option String)) : List (String × String) :=
+  let pages := Index.ofList Page.name s.pages
+  files.map fun (n, o) => (n, o.getD (((Index.first pages n).bind Page.seen).getD ""))
+
+@[csimp] theorem reconstruct_eq_indexed : @reconstruct = @reconstructIndexed := by
+  funext s files
+  simp only [reconstruct, reconstructIndexed, seenOf, Store.page?, Index.first_ofList]
+
+def changedOfIndexed (s : Store) (V : List (String × String)) : List (String × String) :=
+  let pages := Index.ofList Page.name s.pages
+  V.filter fun (n, t) => (Index.first pages n).bind Page.seen != some t
+
+@[csimp] theorem changedOf_eq_indexed : @changedOf = @changedOfIndexed := by
+  funext s V
+  simp only [changedOf, changedOfIndexed, seenOf, Store.page?, Index.first_ofList]
+
+def reconstructSeenIndexed (s : Store) (changed : List (String × String)) : List (String × String) :=
+  let pages := Index.ofList Page.name s.pages
+  let files := Index.ofList Prod.fst changed
+  (seenNames s).map fun n =>
+    (n, ((Index.first files n).map Prod.snd).getD (((Index.first pages n).bind Page.seen).getD ""))
+
+@[csimp] theorem reconstructSeen_eq_indexed : @reconstructSeen = @reconstructSeenIndexed := by
+  funext s changed
+  simp only [reconstructSeen, reconstructSeenIndexed, Index.first_pairs_lookup]
+  simp only [seenOf, Store.page?, Index.first_ofList] <;> rfl
 
 theorem lookup_mem_pair {l : List (String × String)} {a b : String} (h : l.lookup a = some b) : (a, b) ∈ l := by
   induction l with

@@ -1,6 +1,6 @@
 # Power loss is an interruption: a walkthrough
 
-A vault's world is a function of its log. Every command appends its turns to `.obend/log`, one
+A vault's world is a function of its log. Every command appends its turns to the byte stream selected by `.obend/log`, one
 record each (the receipt of the record before it, the world's commitment before and after, the
 digest of the turn, the turn, a seal), and only then writes files; `.obend/checkpoint` is a cache of
 the world after the log's first records (`Obend.Vault.Log`, `Obend.Vault.Replay`). This walkthrough
@@ -49,7 +49,7 @@ receipt .obend/receipts/P-0001.json
 invoices/INV-2: posted as P-0002 (period 11): debit accounts/Receivables 250, credit accounts/Revenue 250
 receipt .obend/receipts/P-0002.json
 log: 7 records, 3618 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 3618 bytes, and the checkpoint, 6701 bytes
+logical log: 3618 bytes; checkpoint: 6701 bytes
   record 1 (open): bytes 0 to 821
   record 2 (open): bytes 821 to 1038
   record 3 (rows): bytes 1038 to 1498
@@ -91,7 +91,7 @@ P-0001.md
 P-0002.md
 _kind.md
 log: 8 records, 4137 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 4237 bytes, and the checkpoint, 7103 bytes
+logical log: 4237 bytes; checkpoint: 7103 bytes
 last record: 8 (open), bytes 3618 to 4137
 torn tail: 100 bytes after record 8, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 8
@@ -132,7 +132,7 @@ postings: P-0001, P-0002
 checked (trial-balance@1, decidable, compiled): every posting of period 11 is in it
 wrote reports/TB-11.md
 log: 11 records, 5295 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 5295 bytes, and the checkpoint, 8160 bytes
+logical log: 5295 bytes; checkpoint: 8160 bytes
 last record: 11 (open), bytes 4571 to 5295
 checkpoint: the world after record 11
 world b5055f7b4289e044: replayed from genesis
@@ -151,7 +151,7 @@ cd books && obend ledger post invoices/INV-3 && obend log
 invoices/INV-3: posted as P-0003 (period 11): debit accounts/Receivables 125, credit accounts/Revenue 125
 receipt .obend/receipts/P-0003.json
 log: 14 records, 6778 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 6778 bytes, and the checkpoint, 9928 bytes
+logical log: 6778 bytes; checkpoint: 9928 bytes
 last record: 14 (open), bytes 5972 to 6778
 checkpoint: the world after record 14
 world 12cc447348db8da3: replayed from genesis
@@ -179,7 +179,7 @@ last record: 15 (member), bytes 6778 to 7009
 ```sh
 cd books
 read start stop < <(obend log | sed -n 's/^last record: [0-9]* (member), bytes \([0-9]*\) to \([0-9]*\)$/\1 \2/p')
-cp .obend/log ../log.whole
+python3 "$OBEND_ROOT/lean/tests/vault/log_bytes.py" cat . > ../log.whole
 bad=0
 for k in $(seq "$start" "$stop"); do
   rm -rf ../cut && cp -R . ../cut && head -c "$k" ../log.whole > ../cut/.obend/log
@@ -254,7 +254,7 @@ postings: P-0001, P-0002, P-0003, P-0004
 checked (trial-balance@1, decidable, compiled): every posting of period 11 is in it
 wrote reports/TB-11.md
 log: 20 records, 9645 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 9645 bytes, and the checkpoint, 13513 bytes
+logical log: 9645 bytes; checkpoint: 13513 bytes
 last record: 20 (open), bytes 9124 to 9645
 checkpoint: the world after record 20
 world 3a5ef196550808d9: replayed from genesis
@@ -273,13 +273,13 @@ replay of those two records.
 ```sh
 cd books && rm -rf ../gap && cp -R . ../gap
 read a b < <(obend log records | sed -n 's/^  record 3 ([a-z]*): bytes \([0-9]*\) to \([0-9]*\)$/\1 \2/p')
-{ head -c "$a" .obend/log; tail -c +$((b + 1)) .obend/log; } > ../gap/.obend/log
+python3 "$OBEND_ROOT/lean/tests/vault/log_bytes.py" remove ../gap "$a" "$b"
 cd ../gap && obend log
 ```
 
 ```text
 log: 2 records, 1038 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 9185 bytes, and the checkpoint, 13513 bytes
+logical log: 9185 bytes; checkpoint: 13513 bytes
 last record: 2 (open), bytes 821 to 1038
 torn tail: 8147 bytes after record 2, dropped (link: it does not follow the record before it)
 checkpoint: dropped (it does not hold against the log); the world is replayed from genesis
@@ -297,13 +297,13 @@ as well, says the log no longer reaches it.
 ```sh refused
 cd books && rm -rf ../gap && cp -R . ../gap
 read a b < <(obend log records | sed -n 's/^  record 3 ([a-z]*): bytes \([0-9]*\) to \([0-9]*\)$/\1 \2/p')
-python3 -c "import sys; p=sys.argv[1]; k=int(sys.argv[2]); d=bytearray(open(p,'rb').read()); d[k]^=1; open(p,'wb').write(d)" ../gap/.obend/log $((a + 150))
+python3 "$OBEND_ROOT/lean/tests/vault/log_bytes.py" flip ../gap $((a + 150))
 cd ../gap && obend log
 ```
 
 ```text
 log: 2 records, 1038 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 9645 bytes, and the checkpoint, 13513 bytes
+logical log: 9645 bytes; checkpoint: 13513 bytes
 last record: 2 (open), bytes 821 to 1038
 torn tail: 8607 bytes after record 2, dropped (digest: its turn is not the one its receipt names)
 checkpoint: the world after record 20
@@ -348,7 +348,7 @@ OBEND_TEST_TEAR=$((n + 2)):400:$PWD/../barrier nohup obend merge ../laptop > ../
 echo $! > ../obend.pid
 for i in $(seq 200); do [ -e ../barrier ] && break; sleep 0.05; done
 kill "$(cat ../obend.pid)"; wait "$(cat ../obend.pid)" 2>/dev/null; rm ../barrier ../obend.pid ../merge.out
-echo "the torn turn: $(tail -c 264 .obend/log | head -c 16)…"; cat accounts/Cash.md; obend log | tail -7
+echo "the torn turn: $(python3 "$OBEND_ROOT/lean/tests/vault/log_bytes.py" cat . | tail -c 264 | head -c 16)…"; cat accounts/Cash.md; obend log | tail -7
 ```
 
 ```text
@@ -416,7 +416,7 @@ OBEND_TEST_TEAR=$((n + 2)):200:$PWD/../barrier nohup obend judge ../pay.json > .
 echo $! > ../obend.pid
 for i in $(seq 200); do [ -e ../barrier ] && break; sleep 0.05; done
 kill "$(cat ../obend.pid)"; wait "$(cat ../obend.pid)" 2>/dev/null; rm ../barrier ../obend.pid ../judge.out
-echo "the torn turn: $(tail -c 64 .obend/log | head -c 16)…"; head -2 ledger/alice.md | tail -1; ls .obend/forms; obend log | tail -7
+echo "the torn turn: $(python3 "$OBEND_ROOT/lean/tests/vault/log_bytes.py" cat . | tail -c 64 | head -c 16)…"; head -2 ledger/alice.md | tail -1; ls .obend/forms; obend log | tail -7
 ```
 
 ```text

@@ -672,7 +672,7 @@ theorem judgeProposal_prepared {H : Obend.Digest.HashBytes.Hash} {s s' : Store} 
 (`Prepared.call`). -/
 theorem judgePrepared_call {es res : List Entry} {pr : Prepared} {over : List (String × Data)}
     (h : judgePrepared es res pr over = .ok ()) : pr.call.verdict = .admitted := by
-  unfold judgePrepared at h
+  unfold judgePrepared judgePreparedFrom at h
   cases hv : pr.call.verdict with
   | admitted => rfl
   | refused law why => simp [hv] at h

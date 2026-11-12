@@ -48,7 +48,7 @@ cd alice && obend log | head -2
 
 ```text
 log: 52 records, 11901 bytes, each following the one before it from the genesis sentinel
-a command reads: the log, 11901 bytes, and the checkpoint, 3960 bytes
+logical log: 11901 bytes; checkpoint: 3960 bytes
 ```
 
 ## 2. Refused while something needs the prefix
@@ -114,7 +114,7 @@ recovered: an interrupted forget's new log (300 bytes) dropped; the log stands
 recovered: the forget at record 56 was whole and the log was not compacted: compacted to one checkpoint record
 nothing changed
 log: 2 records, 4511 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest d17eb0c332fd7b08), ending at receipt 2bddb961b3bb2975
-a command reads: the log, 4511 bytes, and the checkpoint, 0 bytes
+logical log: 4511 bytes; checkpoint: 0 bytes
 last record: 2 (open), bytes 4294 to 4511
 checkpoint: none; the world is replayed from genesis
 world d4c73969f0d645b9: replayed from genesis
@@ -138,7 +138,7 @@ cd alice && printf -- "---\nbalance: 5\n---\n# Carol\n\nAfter the forget.\n" > l
 ```text
 ledger/carol: v7 written
 log: 3 records, 4799 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest d17eb0c332fd7b08), ending at receipt 2bddb961b3bb2975
-a command reads: the log, 4799 bytes, and the checkpoint, 0 bytes
+logical log: 4799 bytes; checkpoint: 0 bytes
   record 1 (compacted): bytes 0 to 4294
   record 2 (open): bytes 4294 to 4511
   record 3 (open): bytes 4511 to 4799
