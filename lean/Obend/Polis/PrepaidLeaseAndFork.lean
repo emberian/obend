@@ -1,5 +1,6 @@
 module
 public import Obend.Polis.VerkleUmem
+public import Obend.Polis.GrainPowerbox
 
 public section
 namespace Obend.Polis.Custody
@@ -213,23 +214,38 @@ theorem equal_roots_bind_cursor_remaining_drawn_or_collision {a b : PrepaidLease
   · exact .inr hc
 
 abbrev EgressDoor := String
-abbrev SessionCap := UInt64
+/-- A custody capability is the frozen powerbox reference, not its integer slot name. -/
+abbrev SessionCap := GrainPowerbox.FrozenRef
 
 structure ConfinedSession where
   sessionId : UInt64
   lease : PrepaidLease
   mindRoot : ByteArray
   egressDoors : List EgressDoor
-  caps : List SessionCap
+  caps : List UInt64
   receiptHead : ByteArray
   checkpointRoot : ByteArray
-  deriving DecidableEq
+  frozenGrain : GrainPowerbox.FrozenGrain
+  allowedReadSlots : List UInt64 := []
+  allowedEmitSlots : List UInt64 := []
+  allowHashDigest : Bool := false
+  issuedIds : List UInt64 := []
+
+/-- Integer wire names resolve only inside this session's frozen c-list and allowlist. -/
+def resolveSessionCap (s : ConfinedSession) (slot : UInt64) : Option SessionCap :=
+  if slot ∈ s.caps then s.frozenGrain.refs[slot.toNat]? else none
+
+theorem ungranted_slot_refused (s : ConfinedSession) (slot : UInt64) (h : slot ∉ s.caps) :
+    resolveSessionCap s slot = none := by simp [resolveSessionCap, h]
 
 structure ForkChildSpec where
   id : UInt64
   budget : Nat
   doors : List EgressDoor
-  caps : List SessionCap
+  caps : List UInt64
+  allowedReadSlots : List UInt64 := []
+  allowedEmitSlots : List UInt64 := []
+  allowHashDigest : Bool := false
   deriving DecidableEq
 
 structure ForkTwoSpec where
@@ -242,18 +258,38 @@ inductive ForkRefusal where
   deriving DecidableEq, Repr
 
 @[expose] def attenuates (p : ConfinedSession) (c : ForkChildSpec) : Prop :=
-  (∀ d ∈ c.doors, d ∈ p.egressDoors) ∧ (∀ k ∈ c.caps, k ∈ p.caps)
+  ((∀ d ∈ c.doors, d ∈ p.egressDoors) ∧ (∀ k ∈ c.caps, k ∈ p.caps)) ∧
+  (∀ k ∈ c.allowedReadSlots, k ∈ p.allowedReadSlots) ∧
+  (∀ k ∈ c.allowedEmitSlots, k ∈ p.allowedEmitSlots) ∧
+  (c.allowHashDigest = true → p.allowHashDigest = true)
 instance (p : ConfinedSession) (c : ForkChildSpec) : Decidable (attenuates p c) := by
-  change Decidable ((∀ d ∈ c.doors, d ∈ p.egressDoors) ∧ (∀ k ∈ c.caps, k ∈ p.caps))
+  unfold attenuates
   infer_instance
 
-def authorityRoot (doors : List EgressDoor) (caps : List SessionCap) : ByteArray :=
+def canonicalU64 (xs : List UInt64) : List UInt64 :=
+  (xs.mergeSort (fun a b => a.toNat ≤ b.toNat)).eraseReps
+
+def authorityRoot (doors : List EgressDoor) (caps : List UInt64)
+    (reads emits : List UInt64 := []) (allowHash : Bool := false) : ByteArray :=
   hash "OBEND.CUSTODY.AUTHORITY/v1"
-    [encodeFields (doors.map fun d => d.toUTF8.data.toList), encodeFields (caps.map fun c => leb128 c.toNat)]
+    [encodeFields (((doors.map fun d => d.toUTF8.data.toList).mergeSort
+        (fun a b => compare a b != .gt)).eraseReps),
+     encodeFields ((canonicalU64 caps).map fun c => leb128 c.toNat),
+     encodeFields ((canonicalU64 reads).map fun c => leb128 c.toNat),
+     encodeFields ((canonicalU64 emits).map fun c => leb128 c.toNat),
+     [if allowHash then 1 else 0]]
+
+/-- Every frozen reference binds its descriptor opening, owner, name and full digest. -/
+def frozenGrainRoot (g : GrainPowerbox.FrozenGrain) : ByteArray :=
+  hash "OBEND.CUSTODY.FROZEN/v1" [leb128 g.grain, encodeFields (g.refs.toList.map fun r =>
+    let (tag, id) := match r.via with | .user n => (0, n) | .grain n => (1, n)
+    encodeFields [r.petname.toUTF8.data.toList, [UInt8.ofNat tag], leb128 id, r.cap.root.encode,
+      encodeFields (r.cap.hops.toList.map fun b => b.encode),
+      encodeFields (r.cap.membranes.map leb128), Obend.Digest.HashBytes.be 32 r.commitment.toNat])]
 
 def sessionCheckpoint (s : ConfinedSession) : ByteArray :=
   hash "OBEND.CUSTODY.SESSION/v1" [leb128 s.sessionId.toNat, (leaseStateRoot s.lease).data.toList,
-    s.mindRoot.data.toList, (authorityRoot s.egressDoors s.caps).data.toList, s.receiptHead.data.toList]
+    s.mindRoot.data.toList, (authorityRoot s.egressDoors s.caps s.allowedReadSlots s.allowedEmitSlots s.allowHashDigest).data.toList, s.receiptHead.data.toList, (frozenGrainRoot s.frozenGrain).data.toList]
 
 def childMind (p : ConfinedSession) (c : ForkChildSpec) : ByteArray :=
   hash "OBEND.CUSTODY.MIND/v1" [leb128 c.id.toNat, p.mindRoot.data.toList]
@@ -262,17 +298,19 @@ def forkGenesis (parent : ByteArray) (id : UInt64) (mind leaseRoot authority : B
   hash "OBEND.CUSTODY.FORK/v1"
     [parent.data.toList, leb128 id.toNat, mind.data.toList, leaseRoot.data.toList, authority.data.toList]
 
-def makeChild (p : ConfinedSession) (s : ForkChildSpec) : ConfinedSession :=
+def makeChild (p : ConfinedSession) (s : ForkChildSpec) (siblings : List UInt64 := []) : ConfinedSession :=
   let l := openLease s.id p.lease.nextDue p.lease.rent s.budget
   let m := childMind p s
-  let head := forkGenesis p.checkpointRoot s.id m (leaseStateRoot l) (authorityRoot s.doors s.caps)
-  let child : ConfinedSession := ⟨s.id, l, m, s.doors, s.caps, head, head⟩
+  let head := forkGenesis p.checkpointRoot s.id m (leaseStateRoot l) (authorityRoot s.doors s.caps s.allowedReadSlots s.allowedEmitSlots s.allowHashDigest)
+  let child : ConfinedSession := ⟨s.id, l, m, s.doors, s.caps, head, head, {p.frozenGrain with grain := s.id.toNat},
+    s.allowedReadSlots, s.allowedEmitSlots, s.allowHashDigest,
+    s.id :: p.sessionId :: (siblings ++ p.issuedIds)⟩
   {child with checkpointRoot := sessionCheckpoint child}
 
 /-- A fork transfers principal, not rent. The retained tranche's initial allocation is
 rebased by the transfer; its rent cursor and drawn accumulator remain unchanged. -/
 def retainedParent (p : ConfinedSession) (s : ForkTwoSpec) : ConfinedSession :=
-  let retained := { p with lease := { p.lease with
+  let retained := { p with issuedIds := s.left.id :: s.right.id :: p.sessionId :: p.issuedIds, lease := { p.lease with
       initialBudget := p.lease.initialBudget - (s.left.budget + s.right.budget),
       remaining := p.lease.remaining - (s.left.budget + s.right.budget) } }
   {retained with checkpointRoot := sessionCheckpoint retained}
@@ -281,10 +319,11 @@ def forkTwo (p : ConfinedSession) (s : ForkTwoSpec) :
     Except ForkRefusal (ConfinedSession × ConfinedSession × ConfinedSession) :=
   if s.left.id = s.right.id ∨ s.left.id = p.lease.leaseId ∨ s.right.id = p.lease.leaseId then
     .error .duplicateIdentity
+  else if s.left.id ∈ p.issuedIds ∨ s.right.id ∈ p.issuedIds then .error .duplicateIdentity
   else if ¬ (attenuates p s.left ∧ attenuates p s.right) then .error .amplifiedAuthority
   else if p.lease.remaining < s.left.budget + s.right.budget then .error .budgetOverdraw
   else if childMind p s.left = childMind p s.right then .error .namespaceCollision
-  else .ok (retainedParent p s, makeChild p s.left, makeChild p s.right)
+  else .ok (retainedParent p s, makeChild p s.left [s.right.id], makeChild p s.right [s.left.id])
 
 theorem forkTwo_success {p p' a b : ConfinedSession} {s : ForkTwoSpec}
     (h : forkTwo p s = .ok (p', a, b)) :
@@ -292,30 +331,26 @@ theorem forkTwo_success {p p' a b : ConfinedSession} {s : ForkTwoSpec}
     attenuates p s.left ∧ attenuates p s.right ∧
     s.left.budget + s.right.budget ≤ p.lease.remaining ∧
     childMind p s.left ≠ childMind p s.right ∧
-    p' = retainedParent p s ∧ a = makeChild p s.left ∧ b = makeChild p s.right := by
+    p' = retainedParent p s ∧ a = makeChild p s.left [s.right.id] ∧ b = makeChild p s.right [s.left.id] := by
   unfold forkTwo at h
-  split at h
-  · contradiction
-  next hi =>
-    split at h
-    · contradiction
-    next ha =>
-      split at h
-      · contradiction
-      next hb =>
-        split at h
-        · contradiction
-        next hm =>
-          have hid := not_or.mp hi
-          have hid' := not_or.mp hid.2
-          have hat := Decidable.not_not.mp ha
-          have hbud : s.left.budget + s.right.budget ≤ p.lease.remaining := by omega
-          have he := Except.ok.inj h
-          have he₁ := congrArg Prod.fst he
-          have he₂ := congrArg (fun x => x.2.1) he
-          have he₃ := congrArg (fun x => x.2.2) he
-          exact ⟨hid.1, hid'.1, hid'.2, hat.1, hat.2, hbud, hm,
-            he₁.symm, he₂.symm, he₃.symm⟩
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> simp_all
+
+theorem issued_identity_rejected (p : ConfinedSession) (s : ForkTwoSpec)
+    (h : s.left.id ∈ p.issuedIds ∨ s.right.id ∈ p.issuedIds) :
+    forkTwo p s = .error .duplicateIdentity := by
+  unfold forkTwo
+  split <;> simp_all
+
+theorem forkTwo_inherits_ids {p p' a b : ConfinedSession} {s : ForkTwoSpec}
+    (h : forkTwo p s = .ok (p', a, b)) :
+    ∀ id ∈ p.issuedIds, id ∈ p'.issuedIds ∧ id ∈ a.issuedIds ∧ id ∈ b.issuedIds := by
+  rcases forkTwo_success h with ⟨_, _, _, _, _, _, _, rfl, rfl, rfl⟩
+  intro id hi
+  simp [retainedParent, makeChild, hi]
 
 theorem forkTwo_sovereign_isolation {p p' a b : ConfinedSession} {s : ForkTwoSpec}
     (h : forkTwo p s = .ok (p', a, b)) :
@@ -329,7 +364,19 @@ theorem forkTwo_attenuates_confinement {p p' a b : ConfinedSession} {s : ForkTwo
     ((∀ d ∈ a.egressDoors, d ∈ p.egressDoors) ∧ (∀ k ∈ a.caps, k ∈ p.caps)) ∧
     ((∀ d ∈ b.egressDoors, d ∈ p.egressDoors) ∧ (∀ k ∈ b.caps, k ∈ p.caps)) := by
   rcases forkTwo_success h with ⟨_, _, _, ha, hb, _, _, _, rfl, rfl⟩
-  exact ⟨ha, hb⟩
+  exact ⟨ha.1, hb.1⟩
+
+/-- The c-list is shared as a frozen value; only retained slot names can resolve. -/
+theorem child_cap_resolves_in_parent (p : ConfinedSession) (c : ForkChildSpec)
+    (ids : List UInt64) (slot : UInt64) (cap : SessionCap)
+    (ha : attenuates p c) (h : resolveSessionCap (makeChild p c ids) slot = some cap) :
+    resolveSessionCap p slot = some cap := by
+  unfold resolveSessionCap at h ⊢
+  simp only [makeChild] at h
+  by_cases hs : slot ∈ c.caps
+  · have hp := ha.1.2 slot hs
+    simpa [hs, hp] using h
+  · simp [hs] at h
 
 theorem amplified_egress_or_cap_rejected (p : ConfinedSession) (s : ForkTwoSpec)
     (h : ¬ (attenuates p s.left ∧ attenuates p s.right)) :
@@ -337,7 +384,9 @@ theorem amplified_egress_or_cap_rejected (p : ConfinedSession) (s : ForkTwoSpec)
   unfold forkTwo
   split
   · exact ⟨_, rfl⟩
-  · simp
+  · split
+    · exact ⟨_, rfl⟩
+    · simp [h]
 
 theorem duplicate_identity_rejected (p : ConfinedSession) (s : ForkTwoSpec)
     (h : s.left.id = s.right.id ∨ s.left.id = p.lease.leaseId ∨ s.right.id = p.lease.leaseId) :
@@ -371,7 +420,7 @@ theorem forkTwo_preserves_lease_balance {p p' a b : ConfinedSession} {s : ForkTw
 /-- An independent verifier supplies an alleged fork point; equality of the genesis
 receipt binds it to the actual point, with a concrete collision on any substitution. -/
 def verifyForkGenesis (p : ByteArray) (c : ConfinedSession) : Bool :=
-  decide (forkGenesis p c.sessionId c.mindRoot (leaseStateRoot c.lease) (authorityRoot c.egressDoors c.caps) = c.receiptHead)
+  decide (forkGenesis p c.sessionId c.mindRoot (leaseStateRoot c.lease) (authorityRoot c.egressDoors c.caps c.allowedReadSlots c.allowedEmitSlots c.allowHashDigest) = c.receiptHead)
 
 theorem genesis_binds {p q : ByteArray} {id : UInt64} {m l auth : ByteArray}
     (h : forkGenesis p id m l auth = forkGenesis q id m l auth) : p = q ∨ CshakeCollision := by
@@ -388,11 +437,11 @@ theorem forkTwo_anchors_receipt_chains_or_collision
     (∀ q, verifyForkGenesis q a = true → q = p.checkpointRoot ∨ CshakeCollision) ∧
     (∀ q, verifyForkGenesis q b = true → q = p.checkpointRoot ∨ CshakeCollision) := by
   rcases forkTwo_success h with ⟨_, _, _, _, _, _, _, _, rfl, rfl⟩
-  have accepts (c : ForkChildSpec) : verifyForkGenesis p.checkpointRoot (makeChild p c) = true := by
+  have accepts (c : ForkChildSpec) (ids : List UInt64) : verifyForkGenesis p.checkpointRoot (makeChild p c ids) = true := by
     unfold verifyForkGenesis
     apply decide_eq_true
     rfl
-  refine ⟨accepts s.left, accepts s.right, ?_, ?_⟩
+  refine ⟨accepts s.left [s.right.id], accepts s.right [s.left.id], ?_, ?_⟩
   all_goals
     intro q hq
     have he := of_decide_eq_true hq
@@ -425,12 +474,27 @@ theorem fork_receipt_chain_binds_anchor_or_collision (events : List ByteArray)
   · exact genesis_binds he
   · exact .inr hc
 
-/-- The live frontier can fork any node, repeatedly and recursively. The prefix and
-suffix permit multiple independent handles; no singleton environment restriction. -/
+/-- The allocator checks every live handle, including allocations made by sibling branches.
+The per-session history additionally remembers retired identities along each lineage. -/
+def forkFrontier (pre post : List ConfinedSession) (p : ConfinedSession) (s : ForkTwoSpec) :
+    Except ForkRefusal (ConfinedSession × ConfinedSession × ConfinedSession) :=
+  if s.left.id ∈ (pre ++ post).map (·.sessionId) ∨
+      s.right.id ∈ (pre ++ post).map (·.sessionId) then .error .duplicateIdentity
+  else forkTwo p s
+
+theorem forkFrontier_success {pre post : List ConfinedSession} {p p' a b : ConfinedSession}
+    {s : ForkTwoSpec} (h : forkFrontier pre post p s = .ok (p', a, b)) :
+    forkTwo p s = .ok (p', a, b) ∧
+    s.left.id ∉ (pre ++ post).map (·.sessionId) ∧
+    s.right.id ∉ (pre ++ post).map (·.sessionId) := by
+  unfold forkFrontier at h
+  split at h <;> simp_all
+
+/-- Each initial live identity is distinct; subsequent allocations are checked operationally. -/
 inductive ValidSessionTree : List ConfinedSession → List ConfinedSession → Prop
-  | initial (ss) : ValidSessionTree ss ss
+  | initial (ss) : (ss.map (·.sessionId)).Nodup → ValidSessionTree ss ss
   | fork {root pre post p p' a b s} : ValidSessionTree root (pre ++ p :: post) →
-      forkTwo p s = .ok (p', a, b) →
+      forkFrontier pre post p s = .ok (p', a, b) →
       ValidSessionTree root (pre ++ p' :: a :: b :: post)
 
 def frontierBudget (ss : List ConfinedSession) : Nat := (ss.map (·.lease.remaining)).sum
@@ -440,11 +504,37 @@ theorem multi_fork_tree_conservation {root ss : List ConfinedSession}
   induction h with
   | initial => rfl
   | @fork pre post p p' a b s _ hf ih =>
+    have hf := (forkFrontier_success hf).1
     have hc := forkTwo_conserves_budget hf
     have he := forkTwo_success hf
     have ha : a.lease.remaining = a.lease.initialBudget := by rw [he.2.2.2.2.2.2.2.2.1]; rfl
     have hb : b.lease.remaining = b.lease.initialBudget := by rw [he.2.2.2.2.2.2.2.2.2]; rfl
     simp only [frontierBudget, List.map_append, List.map_cons, List.sum_append, List.sum_cons] at *
     omega
+
+theorem multi_fork_tree_distinct {root ss : List ConfinedSession}
+    (h : ValidSessionTree root ss)
+    (ids : ∀ p ∈ root, p.sessionId = p.lease.leaseId) : (ss.map (·.sessionId)).Nodup := by
+  have invariant : (ss.map (·.sessionId)).Nodup ∧
+      ∀ p ∈ ss, p.sessionId = p.lease.leaseId := by
+    induction h with
+    | initial hn => exact ⟨hn, ids⟩
+    | @fork pre post p p' a b s ht hf ih =>
+      obtain ⟨hf, hl, hr⟩ := forkFrontier_success hf
+      obtain ⟨hne, hpl, hpr, _, _, _, _, rfl, rfl, rfl⟩ := forkTwo_success hf
+      have hp := ih.2 p (by simp)
+      constructor
+      · simp only [List.map_append, List.map_cons, List.nodup_append, List.nodup_cons] at *
+        simp only [retainedParent, makeChild]
+        grind
+      · intro q hq
+        simp only [List.mem_append, List.mem_cons] at hq
+        rcases hq with hq | rfl | rfl | rfl | hq
+        · exact ih.2 q (by simp [hq])
+        · exact hp
+        · rfl
+        · rfl
+        · exact ih.2 q (by simp [hq])
+  exact invariant.1
 
 end Obend.Polis.Custody

@@ -15,83 +15,9 @@ use std::path::{Path, PathBuf};
 pub type CustodyDigest = [u8; 32];
 type Digest = CustodyDigest;
 
-// Keccak-f[1600], SP 800-185 cSHAKE256 with N empty and a nonempty customization.
-fn keccak(s: &mut [u64; 25]) {
-    const RC: [u64; 24] = [
-        1,
-        0x8082,
-        0x800000000000808a,
-        0x8000000080008000,
-        0x808b,
-        0x80000001,
-        0x8000000080008081,
-        0x8000000000008009,
-        0x8a,
-        0x88,
-        0x80008009,
-        0x8000000a,
-        0x8000808b,
-        0x800000000000008b,
-        0x8000000000008089,
-        0x8000000000008003,
-        0x8000000000008002,
-        0x8000000000000080,
-        0x800a,
-        0x800000008000000a,
-        0x8000000080008081,
-        0x8000000000008080,
-        0x80000001,
-        0x8000000080008008,
-    ];
-    const ROT: [u32; 25] =
-        [0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14];
-    for rc in RC {
-        let c: [u64; 5] = std::array::from_fn(|x| (0..5).fold(0, |a, y| a ^ s[x + 5 * y]));
-        for x in 0..5 {
-            for y in 0..5 {
-                s[x + 5 * y] ^= c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-            }
-        }
-        let mut b = [0; 25];
-        for x in 0..5 {
-            for y in 0..5 {
-                b[y + 5 * ((2 * x + 3 * y) % 5)] = s[x + 5 * y].rotate_left(ROT[x + 5 * y]);
-            }
-        }
-        for x in 0..5 {
-            for y in 0..5 {
-                s[x + 5 * y] = b[x + 5 * y] ^ ((!b[(x + 1) % 5 + 5 * y]) & b[(x + 2) % 5 + 5 * y]);
-            }
-        }
-        s[0] ^= rc;
-    }
-}
-fn left_encode(n: usize) -> Vec<u8> {
-    let bytes = n.to_be_bytes();
-    let first = bytes.iter().position(|b| *b != 0).unwrap_or(bytes.len() - 1);
-    let mut out = vec![(bytes.len() - first) as u8];
-    out.extend_from_slice(&bytes[first..]);
-    out
-}
-fn cshake(domain: &[u8], input: &[u8]) -> Digest {
-    let mut bytes = left_encode(136);
-    bytes.extend(left_encode(0));
-    bytes.extend(left_encode(domain.len() * 8));
-    bytes.extend(domain);
-    bytes.resize(bytes.len().div_ceil(136) * 136, 0);
-    bytes.extend(input);
-    bytes.push(4);
-    bytes.resize(bytes.len().div_ceil(136) * 136, 0);
-    *bytes.last_mut().expect("padded sponge") |= 128;
-    let mut s = [0u64; 25];
-    for block in bytes.chunks_exact(136) {
-        for (i, b) in block.iter().enumerate() {
-            s[i / 8] ^= (*b as u64) << (8 * (i % 8));
-        }
-        keccak(&mut s);
-    }
-    std::array::from_fn(|i| (s[i / 8] >> (8 * (i % 8))) as u8)
-}
+use obend_crypto_exec::transcript::cshake256_32 as cshake;
+use std::sync::{Arc, Mutex};
+
 fn nat(mut n: u64) -> Vec<u8> {
     let mut out = Vec::new();
     loop {
@@ -231,6 +157,7 @@ pub enum ForkError {
 }
 #[derive(Debug)]
 pub struct ConfinedGrainSession {
+    frozen_grain: FrozenGrain,
     lease: PrepaidLease,
     mind_root: Digest,
     egress_doors: BTreeSet<String>,
@@ -241,7 +168,7 @@ pub struct ConfinedGrainSession {
     receipt_head: Digest,
     genesis: ForkGenesis,
     turn_receipts: Vec<Digest>,
-    issued: BTreeSet<u64>,
+    issued: Arc<Mutex<BTreeSet<u64>>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ForkGenesis {
@@ -282,8 +209,24 @@ fn authority_root(doors: &BTreeSet<String>, caps: &BTreeSet<u64>, gc: &GrainCapa
         &[
             fields(&doors.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>()),
             fields(&caps.iter().copied().map(nat).collect::<Vec<_>>()),
-            fields(&gc.allowed_read_slots.iter().copied().map(nat).collect::<Vec<_>>()),
-            fields(&gc.allowed_emit_slots.iter().copied().map(nat).collect::<Vec<_>>()),
+            fields(
+                &gc.allowed_read_slots
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .map(nat)
+                    .collect::<Vec<_>>(),
+            ),
+            fields(
+                &gc.allowed_emit_slots
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .map(nat)
+                    .collect::<Vec<_>>(),
+            ),
             vec![u8::from(gc.allow_hash_digest)],
         ],
     )
@@ -294,6 +237,7 @@ impl ConfinedGrainSession {
         doors: BTreeSet<String>,
         caps: BTreeSet<u64>,
         gc: GrainCapabilities,
+        frozen_grain: FrozenGrain,
     ) -> Result<Self, ForkError> {
         if !lease.valid() {
             return Err(ForkError::InvalidParent);
@@ -308,6 +252,7 @@ impl ConfinedGrainSession {
         };
         let head = genesis.commitment();
         let mut s = Self {
+            frozen_grain,
             lease,
             mind_root,
             egress_doors: doors,
@@ -318,7 +263,7 @@ impl ConfinedGrainSession {
             receipt_head: head,
             genesis,
             turn_receipts: Vec::new(),
-            issued: BTreeSet::new(),
+            issued: Arc::new(Mutex::new(BTreeSet::new())),
         };
         s.checkpoint_root = s.state_root();
         Ok(s)
@@ -332,8 +277,15 @@ impl ConfinedGrainSession {
                 self.mind_root.to_vec(),
                 authority_root(&self.egress_doors, &self.caps, &self.grain_capabilities).to_vec(),
                 self.receipt_head.to_vec(),
+                self.frozen_grain.commitment().to_vec(),
             ],
         )
+    }
+    pub fn resolve_cap(&self, slot: u64) -> Option<&FrozenRef> {
+        if !self.caps.contains(&slot) {
+            return None;
+        }
+        self.frozen_grain.refs.get(usize::try_from(slot).ok()?)
     }
     pub fn lease(&self) -> &PrepaidLease {
         &self.lease
@@ -361,13 +313,30 @@ impl ConfinedGrainSession {
     }
     pub fn execute(
         &mut self,
+        period: u64,
         program: &GrainProgram,
         inputs: &[(u64, Vec<u8>)],
         budget: crate::grain::GrainBudget,
-    ) -> GrainExecutionReceipt {
+    ) -> Result<GrainExecutionReceipt, LeaseError> {
+        // Reserve whole rent quanta for the declared fuel cap before executing.
+        // Every refusal occurs before touching receipts, memory, or the live lease.
+        if self.lease.rent == 0 {
+            return Err(LeaseError::InvalidState);
+        }
+        let quanta = budget.max_fuel.div_ceil(self.lease.rent).max(1);
+        let cost = quanta.checked_mul(self.lease.rent).ok_or(LeaseError::Overflow)?;
+        let mut charged = self.lease.clone();
+        charged.discharge_period(period, charged.rent)?;
+        if cost > self.lease.remaining {
+            return Err(LeaseError::InsufficientBudget);
+        }
+        charged.next_due = self.lease.next_due.checked_add(quanta).ok_or(LeaseError::Overflow)?;
+        charged.drawn = self.lease.drawn.checked_add(cost).ok_or(LeaseError::Overflow)?;
+        charged.remaining = self.lease.remaining - cost;
         let executor = GrainExecutor::new(budget, self.grain_capabilities.clone());
         let receipt = executor.execute(program, inputs);
         let payload = execution_payload(&receipt, turn_request_digest(program, inputs, &executor));
+        self.lease = charged;
         self.receipt_head = hash("OBEND.CUSTODY.RECEIPT/v1", &[self.receipt_head.to_vec(), payload.to_vec()]);
         self.turn_receipts.push(payload);
         for (slot, bytes) in &receipt.emitted_slots {
@@ -376,7 +345,7 @@ impl ConfinedGrainSession {
         self.mind_root =
             hash("OBEND.CUSTODY.MIND/v1", &[nat(self.lease.lease_id), compute_var_data_root(&self.memory).to_vec()]);
         self.checkpoint_root = self.state_root();
-        receipt
+        Ok(receipt)
     }
     pub fn verify_receipt_chain(&self, parent: Digest) -> bool {
         self.genesis.parent_checkpoint == parent
@@ -386,16 +355,17 @@ impl ConfinedGrainSession {
             }) == self.receipt_head
     }
     /// Checks everything before mutation. Repeated calls cannot reuse an issued child identity.
-    /// The caller owns the global lease-id allocation; ancestry-specific namespaces also bind the fork point.
+    /// All descendants share the allocation registry, including allocations made later by siblings.
     pub fn fork_two(&mut self, a: ConfinedForkSpec, b: ConfinedForkSpec) -> Result<(Self, Self), ForkError> {
         if !self.lease.valid() {
             return Err(ForkError::InvalidParent);
         }
+        let mut issued = self.issued.lock().map_err(|_| ForkError::InvalidParent)?;
         if a.lease_id == b.lease_id
             || a.lease_id == self.lease.lease_id
             || b.lease_id == self.lease.lease_id
-            || self.issued.contains(&a.lease_id)
-            || self.issued.contains(&b.lease_id)
+            || issued.contains(&a.lease_id)
+            || issued.contains(&b.lease_id)
         {
             return Err(ForkError::DuplicateIdentity);
         }
@@ -423,6 +393,7 @@ impl ConfinedGrainSession {
             };
             let head = genesis.commitment();
             let mut c = Self {
+                frozen_grain: FrozenGrain { grain: s.lease_id, refs: self.frozen_grain.refs.clone() },
                 lease,
                 mind_root,
                 egress_doors: s.egress_doors,
@@ -433,7 +404,7 @@ impl ConfinedGrainSession {
                 receipt_head: head,
                 genesis,
                 turn_receipts: Vec::new(),
-                issued: BTreeSet::new(),
+                issued: Arc::clone(&self.issued),
             };
             c.checkpoint_root = c.state_root();
             c
@@ -442,8 +413,9 @@ impl ConfinedGrainSession {
         if a.mind_root == b.mind_root {
             return Err(ForkError::NamespaceCollision);
         }
-        self.issued.insert(a.lease.lease_id);
-        self.issued.insert(b.lease.lease_id);
+        issued.insert(self.lease.lease_id);
+        issued.insert(a.lease.lease_id);
+        issued.insert(b.lease.lease_id);
         self.lease.remaining -= sum;
         self.lease.initial_budget -= sum;
         self.checkpoint_root = self.state_root();
@@ -666,8 +638,52 @@ impl SettlementRecord {
         Self::new(self.before.clone(), self.period).as_ref() == Ok(self)
     }
 }
+/// Canonical frozen powerbox wire image; descriptor bytes are Block.encode openings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrozenRef {
+    pub petname: String,
+    pub via_grain: bool,
+    pub via_id: u64,
+    pub root: Vec<u8>,
+    pub hops: Vec<Vec<u8>>,
+    pub membranes: Vec<u64>,
+    pub commitment: Digest,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrozenGrain {
+    pub grain: u64,
+    pub refs: Vec<FrozenRef>,
+}
+impl FrozenGrain {
+    fn commitment(&self) -> Digest {
+        hash(
+            "OBEND.CUSTODY.FROZEN/v1",
+            &[
+                nat(self.grain),
+                fields(
+                    &self
+                        .refs
+                        .iter()
+                        .map(|r| {
+                            fields(&[
+                                r.petname.as_bytes().to_vec(),
+                                vec![u8::from(r.via_grain)],
+                                nat(r.via_id),
+                                r.root.clone(),
+                                fields(&r.hops),
+                                fields(&r.membranes.iter().copied().map(nat).collect::<Vec<_>>()),
+                                r.commitment.to_vec(),
+                            ])
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+            ],
+        )
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Archive {
+    frozen_grain: FrozenGrain,
     package: SignedGrainPackage,
     #[serde(serialize_with = "serialize_var", deserialize_with = "deserialize_var")]
     var: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -693,16 +709,32 @@ fn deserialize_var<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<Ve
 }
 impl Archive {
     fn transition_digest(&self) -> Digest {
-        let mut anchor = self.anchor.clone();
-        anchor.receipt_head = [0; 32];
-        // Struct field order is fixed; maps are encoded as canonical sorted rows.
+        let settlements = merkle_root(
+            &self
+                .settlements
+                .iter()
+                .map(|r| fields(&[nat(r.lease_id), nat(r.period), r.receipt.to_vec()]))
+                .collect::<Vec<_>>(),
+        );
+        let executions = merkle_root(
+            &self
+                .executions
+                .iter()
+                .map(|(n, req, receipt)| fields(&[nat(*n), req.to_vec(), receipt.to_vec()]))
+                .collect::<Vec<_>>(),
+        );
         hash(
-            "OBEND.CUSTODY.TRANSITION/v1",
+            "OBEND.CUSTODY.ARCHIVE/v1",
             &[
-                serde_json::to_vec(&self.previous).expect("anchor serialization"),
-                serde_json::to_vec(&anchor).expect("anchor serialization"),
-                serde_json::to_vec(&self.executions).expect("execution serialization"),
-                serde_json::to_vec(&self.settlements).expect("settlement serialization"),
+                self.previous.as_ref().map(|a| a.receipt_head.to_vec()).unwrap_or_default(),
+                nat(self.anchor.generation),
+                self.anchor.package_digest.to_vec(),
+                self.anchor.var_data_root.to_vec(),
+                self.anchor.lease_root.to_vec(),
+                self.frozen_grain.commitment().to_vec(),
+                settlements.to_vec(),
+                self.anchor.ingress_root.to_vec(),
+                executions.to_vec(),
             ],
         )
     }
@@ -895,6 +927,7 @@ impl GrainCustodyHost {
         &mut self,
         package: SignedGrainPackage,
         lease: PrepaidLease,
+        frozen_grain: FrozenGrain,
         auth: &impl CustodyAuthenticator,
     ) -> Result<(), CustodyError> {
         if self.status != GrainCustodyStatus::Empty {
@@ -913,6 +946,7 @@ impl GrainCustodyHost {
         };
         self.persist_archive(
             Archive {
+                frozen_grain,
                 package,
                 lease,
                 var: BTreeMap::new(),
@@ -951,10 +985,12 @@ impl GrainCustodyHost {
     pub fn checkpoint(
         &mut self,
         var: BTreeMap<Vec<u8>, Vec<u8>>,
+        frozen_grain: FrozenGrain,
         auth: &impl CustodyAuthenticator,
     ) -> Result<(), CustodyError> {
         let mut a = self.next_archive()?;
         a.var = var;
+        a.frozen_grain = frozen_grain;
         self.persist_archive(a, auth)
     }
     /// The durable pending record is a before/after pair. Replay applies the after image
@@ -1159,7 +1195,7 @@ mod tests {
     fn host(t: &Temp) -> GrainCustodyHost {
         let mut h = GrainCustodyHost::open(&t.0, [7; 32], &Auth).unwrap();
         assert_eq!(h.status(), &GrainCustodyStatus::Empty);
-        h.install(package(), PrepaidLease::new(1, 0, 10, 100), &Auth).unwrap();
+        h.install(package(), PrepaidLease::new(1, 0, 10, 100), FrozenGrain { grain: 1, refs: vec![] }, &Auth).unwrap();
         h
     }
     fn parent() -> ConfinedGrainSession {
@@ -1168,6 +1204,7 @@ mod tests {
             ["api:443".into()].into(),
             [1, 2].into(),
             GrainCapabilities::allow_all(&[1, 2]),
+            FrozenGrain { grain: 1, refs: vec![] },
         )
         .unwrap()
     }
@@ -1211,6 +1248,129 @@ mod tests {
                 161, 54, 245, 207, 119, 70, 114, 106, 236, 117
             ]
         );
+    }
+    fn hex(d: Digest) -> String {
+        d.iter().map(|b| format!("{b:02x}")).collect()
+    }
+    #[test]
+    fn custody_wire_vectors() {
+        let gc = GrainCapabilities::strict(vec![129, 2, 2], vec![8, 3], true);
+        let doors = ["z".into(), "api:443".into()].into();
+        let caps = [128, 1].into();
+        let authority = authority_root(&doors, &caps, &gc);
+        let package = SignedGrainPackage {
+            publisher: [7; 32],
+            bytes: vec![0, 255, 128],
+            program_digest: [9; 32],
+            signature: vec![],
+        };
+        let lease = PrepaidLease::new(257, 128, 10, 100);
+        let session =
+            ConfinedGrainSession::new(lease.clone(), doors, caps, gc, FrozenGrain { grain: 257, refs: vec![] })
+                .unwrap();
+        let settlement = SettlementRecord::new(lease, 128).unwrap();
+        let mut ingress = AriadneIngressLog::default();
+        ingress.push([1; 32]);
+        ingress.push([2; 32]);
+        let var = [(b"x".to_vec(), b"abc".to_vec())].into();
+        let anchor = GrainCustodyAnchor {
+            generation: 129,
+            package_digest: package.digest(),
+            var_data_root: compute_var_data_root(&var),
+            receipt_head: [0; 32],
+            lease_root: settlement.after.state_root(),
+            ingress_root: ingress.root(),
+        };
+        let mut previous = anchor.clone();
+        previous.receipt_head = [6; 32];
+        previous.generation = 128;
+        let archive = Archive {
+            package,
+            var,
+            lease: settlement.after.clone(),
+            anchor,
+            previous: Some(previous),
+            frozen_grain: FrozenGrain { grain: 257, refs: vec![] },
+            transition: [0; 32],
+            transition_signature: vec![],
+            settlements: vec![settlement],
+            ingress,
+            executions: vec![(0, [1; 32], [5; 32])],
+        };
+        assert_eq!(hex(authority), "073cd30c52c70354069f7752ce084f869bab1a22418b931297fdce2f726d0ed9");
+        assert_eq!(hex(archive.package.digest()), "cb7bfdba43c79d62764d185088fe2340325237b8fc86626c04694e3b75170bd7");
+        assert_eq!(hex(session.state_root()), "68e2cbe03a4dfe7e41fed63a8de29df8edb6905b2ed9398e8c3b354608978a56");
+        assert_eq!(
+            hex(archive.transition_digest()),
+            "2304c16c0e41ca4b4a7c4e33fb3f31759efd64c0cab5851785645e4918290a62"
+        );
+        assert_eq!(hex(archive.ingress.root()), "1825228bfbbed2ea44769b36f726113a6a7c9f4a9cfea136f5cf7746726aec75");
+        assert_eq!(
+            authority,
+            authority_root(
+                &session.egress_doors,
+                &session.caps,
+                &GrainCapabilities::strict(vec![2, 129], vec![3, 8, 3], true)
+            )
+        );
+    }
+    #[test]
+    fn execution_lease_atomicity_and_schedule() {
+        let mut p = parent();
+        let program = GrainProgram::new("halt", vec![GrainOp::Halt]);
+        let before = (p.lease.clone(), p.state_root(), p.memory.clone(), p.turn_receipts.clone());
+        assert_eq!(
+            p.execute(0, &program, &[], GrainBudget::new(101, 1024, 1024)).unwrap_err(),
+            LeaseError::InsufficientBudget
+        );
+        assert_eq!(before, (p.lease.clone(), p.state_root(), p.memory.clone(), p.turn_receipts.clone()));
+        p.execute(0, &program, &[], GrainBudget::new(11, 1024, 1024)).unwrap();
+        assert_eq!((p.lease.remaining, p.lease.drawn, p.lease.next_due), (80, 20, 2));
+        assert!(p.lease.valid());
+        assert_ne!(before.1, p.state_root());
+        let after = (p.lease.clone(), p.state_root(), p.memory.clone(), p.turn_receipts.clone());
+        assert_eq!(p.execute(1, &program, &[], GrainBudget::new(10, 1024, 1024)).unwrap_err(), LeaseError::Replay);
+        assert_eq!(p.execute(3, &program, &[], GrainBudget::new(10, 1024, 1024)).unwrap_err(), LeaseError::OffSchedule);
+        assert_eq!(after, (p.lease.clone(), p.state_root(), p.memory.clone(), p.turn_receipts.clone()));
+    }
+    #[test]
+    fn lineage_and_sibling_allocations_are_shared() {
+        let mut p = parent();
+        let (mut a, mut b) = p.fork_two(spec(2, 30), spec(3, 30)).unwrap();
+        assert!(matches!(a.fork_two(spec(1, 1), spec(4, 1)), Err(ForkError::DuplicateIdentity)));
+        assert!(matches!(a.fork_two(spec(3, 1), spec(4, 1)), Err(ForkError::DuplicateIdentity)));
+        let _ = a.fork_two(spec(4, 1), spec(5, 1)).unwrap();
+        assert!(matches!(b.fork_two(spec(4, 1), spec(6, 1)), Err(ForkError::DuplicateIdentity)));
+        assert!(matches!(p.fork_two(spec(5, 1), spec(6, 1)), Err(ForkError::DuplicateIdentity)));
+    }
+    #[test]
+    fn one_ahead_recomputed_roots_need_signature() {
+        for target in 0..3 {
+            let t = Temp::new();
+            let mut h = host(&t);
+            h.checkpoint([(vec![1], vec![2])].into(), FrozenGrain { grain: 1, refs: vec![] }, &Auth).unwrap();
+            drop(h);
+            mutate(&t, |a| {
+                match target {
+                    0 => {
+                        a.var.insert(vec![1], vec![99]);
+                        a.anchor.var_data_root = compute_var_data_root(&a.var);
+                    }
+                    1 => {
+                        a.frozen_grain.grain += 1;
+                    }
+                    _ => {
+                        a.lease = PrepaidLease::new(2, 0, 10, 100);
+                        a.anchor.lease_root = a.lease.state_root();
+                    }
+                }
+                a.transition = a.transition_digest();
+                a.anchor.receipt_head = a.transition;
+            });
+            let mut h = GrainCustodyHost::open(&t.0, [7; 32], &Auth).unwrap();
+            assert_eq!(h.status(), &GrainCustodyStatus::Poisoned(CustodyPoisonReason::BrokenReceipt));
+            assert!(h.recover_one_ahead(&Auth).is_err());
+        }
     }
     #[test]
     fn cshake_nist_vector() {
@@ -1375,7 +1535,7 @@ mod tests {
     fn one_ahead_recovery() {
         let t = Temp::new();
         let mut h = host(&t);
-        h.checkpoint([(b"x".to_vec(), vec![1])].into(), &Auth).unwrap();
+        h.checkpoint([(b"x".to_vec(), vec![1])].into(), FrozenGrain { grain: 1, refs: vec![] }, &Auth).unwrap();
         drop(h);
         let mut h = GrainCustodyHost::open(&t.0, [7; 32], &Auth).unwrap();
         assert_eq!(h.status(), &GrainCustodyStatus::RecoveryRequired);
@@ -1464,7 +1624,7 @@ mod tests {
         let t = Temp::new();
         let mut h = host(&t);
         let old = read_json::<Archive>(&t.0.join("archive.json")).unwrap().unwrap();
-        h.checkpoint([(vec![1], vec![2])].into(), &Auth).unwrap();
+        h.checkpoint([(vec![1], vec![2])].into(), FrozenGrain { grain: 1, refs: vec![] }, &Auth).unwrap();
         h.recover_one_ahead(&Auth).unwrap();
         let retained = h.anchor().unwrap().clone();
         drop(h);
@@ -1478,7 +1638,7 @@ mod tests {
         let mut p = parent();
         let root = p.checkpoint_root();
         let (mut a, b) = p.fork_two(spec(2, 20), spec(3, 20)).unwrap();
-        let r = a.execute(&test_program(), &[], GrainBudget::default());
+        let r = a.execute(a.lease.next_due, &test_program(), &[], GrainBudget::new(10, 1024, 1024)).unwrap();
         assert_eq!(r.termination, GrainTermination::CapabilityDenied);
         assert!(a.verify_receipt_chain(root));
         assert!(b.verify_receipt_chain(root));

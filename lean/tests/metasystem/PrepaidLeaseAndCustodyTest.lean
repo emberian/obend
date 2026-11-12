@@ -21,6 +21,84 @@ import all Obend.Judge.Computational
 import all Obend.Polis.VerkleUmem
 import all Obend.Tactic.Tooth
 
+import all Obend.Polis.GrainPowerbox
+import all Obend.Core.AliasExposure
+import all Obend.Core.Assumptions
+import all Obend.Core.Bidirectional
+import all Obend.Core.Brand
+import all Obend.Core.CanonicalExtension
+import all Obend.Core.Check
+import all Obend.Core.Data
+import all Obend.Core.Digest
+import all Obend.Core.EquiRecursiveAgreement
+import all Obend.Core.FieldCongruence
+import all Obend.Core.FiniteBisimulation
+import all Obend.Core.FinitePresentation
+import all Obend.Core.FiniteRowLaws
+import all Obend.Core.Invariant
+import all Obend.Core.LegacyAgreement
+import all Obend.Core.Machine
+import all Obend.Core.MachineFast
+import all Obend.Core.MachineTyping
+import all Obend.Core.Proofs.Substitution.Defs
+import all Obend.Core.Proofs.Substitution.Uses
+import all Obend.Core.Proofs.TypedSubstitution
+import all Obend.Core.RecursiveAgreement
+import all Obend.Core.RecursiveRows
+import all Obend.Core.ResourceSemantics
+import all Obend.Core.RowCongruence
+import all Obend.Core.RowExposureInvariance
+import all Obend.Core.RowHit
+import all Obend.Core.TermTraverse
+import all Obend.Core.Traverse
+import all Obend.Core.Ty
+import all Obend.Core.TypeGraph
+import all Obend.Core.TypeGraphAlias
+import all Obend.Core.TypeGraphHead
+import all Obend.Core.TypeGraphResource
+import all Obend.Doc
+import all Obend.Doc.Backlinks
+import all Obend.Doc.Graph
+import all Obend.Doc.Merge
+import all Obend.Doc.Patch
+import all Obend.Doc.Render
+import all Obend.Doc.Section
+import all Obend.Doc.Structured
+import all Obend.Intention
+import all Obend.Law.Claim
+import all Obend.Law.Inherit
+import all Obend.Law.Proofs.Claim
+import all Obend.Law.Proofs.Eval
+import all Obend.Law.Proofs.Inherit
+import all Obend.Law.Proofs.Run
+import all Obend.Law.Proofs.Std
+import all Obend.Law.Proofs.Typing
+import all Obend.Law.Run
+import all Obend.Law.Std
+import all Obend.Law.Syntax
+import all Obend.Polis.CapTP
+import all Obend.Polis.EvidencedOcap
+import all Obend.Polis.ZkBiscuit
+import all Obend.Run.Core4
+import all Obend.Run.Runner
+import all Obend.Slot
+import all Obend.Slot.Integrity
+import all Obend.Slot.Protocol
+import all Obend.Slot.World
+import all Obend.Spec.C4
+import all Obend.Spec.DataWire
+import all Obend.Spec.Law
+import all Obend.Spec.LawCompile
+import all Obend.Spec.LawDial
+import all Obend.Spec.Proofs.C4
+import all Obend.Spec.Proofs.LawCompile
+import all Obend.Tactic.Cases
+import all Obend.Vault.Affordance
+import all Obend.Vault.Law
+import all Obend.Vault.Mandate
+import all Obend.Vault.Page
+import all Obend.Vault.Rehydration
+
 public section
 namespace Obend.Polis.Custody.Tests
 open Obend.Crypto
@@ -44,10 +122,10 @@ example : leaseStateRoot lease = leaseStateRoot lease := rfl
 
 private def parent : ConfinedSession :=
   let root := leaseStateRoot twice
-  let p : ConfinedSession := ⟨1, twice, root, ["api:443", "store:443"], [1,2], root, root⟩
+  let p : ConfinedSession := ⟨1, twice, root, ["api:443", "store:443"], [1,2], root, root, ⟨1, #[]⟩, [], [], false, []⟩
   {p with checkpointRoot := sessionCheckpoint p}
-private def childA : ForkChildSpec := ⟨2, 30, ["api:443"], [1]⟩
-private def childB : ForkChildSpec := ⟨3, 20, [], []⟩
+private def childA : ForkChildSpec := ⟨2, 30, ["api:443"], [1], [], [], false⟩
+private def childB : ForkChildSpec := ⟨3, 20, [], [], [], [], false⟩
 private def forkSpec : ForkTwoSpec := ⟨childA, childB⟩
 
 -- Compiled concrete cryptographic witnesses complement the universally quantified kernel proofs.
@@ -63,35 +141,36 @@ example : forkTwo parent ⟨{childA with doors := ["ungranted:443"]}, childB⟩ 
 example : forkTwo parent ⟨{childA with caps := [9]}, childB⟩ = .error .amplifiedAuthority := by rfl
 example : forkTwo parent ⟨{childA with budget := 81}, childB⟩ = .error .budgetOverdraw := by rfl
 
-private def package : SignedGrainPackage := ⟨ByteArray.empty, ByteArray.empty, ByteArray.empty⟩
+private def package : SignedGrainPackage := ⟨ByteArray.empty, ByteArray.empty, ByteArray.empty, ByteArray.empty⟩
 private def archive (n : Nat) (prev : ByteArray) : GrainArchive :=
   let a : GrainArchive := ⟨package, [],
-    ⟨n, packageDigest package, computeVarDataRoot [], ByteArray.empty, leaseStateRoot lease⟩, prev⟩
-  {a with anchor := {a.anchor with receiptHead := transitionHead a}}
+    ⟨n, packageDigest package, computeVarDataRoot [], ByteArray.empty, leaseStateRoot lease, IngressMmr.empty.root⟩, prev, ⟨1, #[]⟩, lease, ⟨lease, []⟩,
+    IngressMmr.empty, [], ByteArray.empty⟩
+  sealArchive (fun x => x) a
 private def genesis : GrainArchive := archive 0 ByteArray.empty
 private def second : GrainArchive := archive 1 genesis.anchor.receiptHead
 private def authenticate (p : SignedGrainPackage) : Bool := decide (p = package)
 
-#guard reopenCustody authenticate none none == .empty
-#guard reopenCustody authenticate (some genesis) (some genesis.anchor) == .ready
-#guard reopenCustody authenticate (some second) (some genesis.anchor) == .recoveryRequired
-#guard recoverOneAhead authenticate second (some genesis.anchor) == some second.anchor
-#guard reopenCustody authenticate (some second) (some second.anchor) == .ready
-#guard match reopenCustody authenticate (some (archive 2 genesis.anchor.receiptHead)) (some genesis.anchor) with
+#guard reopenCustody authenticate (fun msg sig => msg == sig) none none == .empty
+#guard reopenCustody authenticate (fun msg sig => msg == sig) (some genesis) (some genesis.anchor) == .ready
+#guard reopenCustody authenticate (fun msg sig => msg == sig) (some second) (some genesis.anchor) == .recoveryRequired
+#guard recoverOneAhead authenticate (fun msg sig => msg == sig) second (some genesis.anchor) == some second.anchor
+#guard reopenCustody authenticate (fun msg sig => msg == sig) (some second) (some second.anchor) == .ready
+#guard match reopenCustody authenticate (fun msg sig => msg == sig) (some (archive 2 genesis.anchor.receiptHead)) (some genesis.anchor) with
   | .poisoned .divergence => true
   | _ => false
-#guard match reopenCustody authenticate
+#guard match reopenCustody authenticate (fun msg sig => msg == sig)
     (some {second with entries := [⟨[1], "tamper".toUTF8⟩]}) (some genesis.anchor) with
   | .poisoned .varData => true
   | _ => false
-#guard match reopenCustody authenticate
+#guard match reopenCustody authenticate (fun msg sig => msg == sig)
     (some {second with package := {package with code := "swapped".toUTF8}}) (some genesis.anchor) with
   | .poisoned .package => true
   | _ => false
 
 private def events : List CustodyHostEvent :=
   [.settle 0, .crash, .restart, .settle 0, .settle 1, .crash, .restart, .settle 1, .settle 2]
-#guard let s := runCustodyEvents ⟨lease, []⟩ events
+#guard let s := runSettlementEvents ⟨lease, []⟩ events
        s.lease.remaining == 70 && s.lease.drawn == 30 && s.records.length == 3
 #guard let s := settleOrReplay ⟨lease, []⟩ 0
        settlementReceipt (settleOrReplay s 0) (1,0) == settlementReceipt s (1,0)
@@ -137,13 +216,13 @@ example (s : IngressMmr) (req : ByteArray) (hs : ReachableIngress s) :
     else .ok (retainedParent p s, makeChild p s.left, makeChild p s.right)
 
 #tooth var_mismatch_poisoned by
-  mutation reopenCustody := fun _ a b => match a,b with
+  mutation reopenCustody := fun _ _ a b => match a,b with
     | none, none => .empty
     | some _, some _ => .ready
     | _, _ => .poisoned .divergence
 
 #tooth two_ahead_poisoned by
-  mutation reopenCustody := fun _ a b => match a,b with
+  mutation reopenCustody := fun _ _ a b => match a,b with
     | some x, some y => if y.generation < x.anchor.generation then .recoveryRequired else .ready
     | none, none => .empty
     | _, _ => .poisoned .divergence

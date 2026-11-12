@@ -1,5 +1,6 @@
 module
 public import Obend.Polis.PrepaidLeaseAndFork
+public import Obend.Polis.GrainPowerbox
 import all Obend.Polis.PrepaidLeaseAndFork
 
 public section
@@ -11,10 +12,11 @@ structure SignedGrainPackage where
   publisher : ByteArray
   code : ByteArray
   signature : ByteArray
+  programDigest : ByteArray
   deriving DecidableEq
 
 def packageDigest (p : SignedGrainPackage) : ByteArray :=
-  hash "OBEND.CUSTODY.PACKAGE/v1" [p.publisher.data.toList, p.code.data.toList]
+  hash "OBEND.CUSTODY.PACKAGE/v1" [p.publisher.data.toList, p.code.data.toList, p.programDigest.data.toList]
 
 structure VarEntry where
   pathBytes : List UInt8
@@ -84,132 +86,12 @@ theorem varDataRoot_binds (as bs : List VarEntry) (h : computeVarDataRoot as = c
   · exact .inr hc
 
 theorem packageDigest_binds (a b : SignedGrainPackage) (h : packageDigest a = packageDigest b) :
-    (a.publisher = b.publisher ∧ a.code = b.code) ∨ CshakeCollision := by
+    (a.publisher = b.publisher ∧ a.code = b.code ∧ a.programDigest = b.programDigest) ∨ CshakeCollision := by
   rcases hash_binds "OBEND.CUSTODY.PACKAGE/v1" h with he | hc
   · have hh : a.publisher.data.toList = b.publisher.data.toList ∧
-        a.code.data.toList = b.code.data.toList := by simpa using he
-    exact .inl ⟨byteArray_eq_of_toList_eq hh.1, byteArray_eq_of_toList_eq hh.2⟩
+        a.code.data.toList = b.code.data.toList ∧ a.programDigest.data.toList = b.programDigest.data.toList := by simpa using he
+    exact .inl ⟨byteArray_eq_of_toList_eq hh.1, byteArray_eq_of_toList_eq hh.2.1, byteArray_eq_of_toList_eq hh.2.2⟩
   · exact .inr hc
-
-structure GrainCustodyAnchor where
-  generation : Nat
-  packageDigest : ByteArray
-  varDataRoot : ByteArray
-  receiptHead : ByteArray
-  leaseRoot : ByteArray
-  deriving DecidableEq
-
-structure GrainArchive where
-  package : SignedGrainPackage
-  entries : List VarEntry
-  anchor : GrainCustodyAnchor
-  previousHead : ByteArray
-  deriving DecidableEq
-
-inductive CustodyPoisonReason where
-  | package | varData | divergence | rollback | brokenReceipt | missingArchive
-  deriving DecidableEq, Repr
-inductive GrainCustodyStatus where
-  | empty | ready | recoveryRequired | poisoned (reason : CustodyPoisonReason)
-  deriving DecidableEq, Repr
-
-def transitionHead (a : GrainArchive) : ByteArray :=
-  hash "OBEND.CUSTODY.ARCHIVE/v1" [a.previousHead.data.toList, leb128 a.anchor.generation,
-    a.anchor.packageDigest.data.toList, a.anchor.varDataRoot.data.toList, a.anchor.leaseRoot.data.toList]
-
-/-- Signature verification is supplied by the authenticated package boundary, not a hash predicate. -/
-@[expose] def reopenCustody (authenticate : SignedGrainPackage → Bool)
-    (archive : Option GrainArchive) (anchor : Option GrainCustodyAnchor) : GrainCustodyStatus :=
-  match archive, anchor with
-  | none, none => .empty
-  | none, some _ => .poisoned .missingArchive
-  | some a, base =>
-    if authenticate a.package = false ∨ packageDigest a.package ≠ a.anchor.packageDigest then .poisoned .package
-    else if computeVarDataRoot a.entries ≠ a.anchor.varDataRoot then .poisoned .varData
-    else if transitionHead a ≠ a.anchor.receiptHead then .poisoned .brokenReceipt
-    else match base with
-      | none => if a.anchor.generation = 0 then .recoveryRequired else .poisoned .divergence
-      | some b =>
-        if a.anchor.packageDigest ≠ b.packageDigest then .poisoned .package
-        else if a.anchor = b then .ready
-        else if a.anchor.generation < b.generation then .poisoned .rollback
-        else if a.anchor.generation = b.generation + 1 ∧ a.previousHead = b.receiptHead then .recoveryRequired
-        else .poisoned .divergence
-
-theorem var_mismatch_poisoned (auth : SignedGrainPackage → Bool) (a : GrainArchive)
-    (b : Option GrainCustodyAnchor) (h : computeVarDataRoot a.entries ≠ a.anchor.varDataRoot) :
-    ∃ reason, reopenCustody auth (some a) b = .poisoned reason := by
-  by_cases hp : auth a.package = false ∨ packageDigest a.package ≠ a.anchor.packageDigest
-  · exact ⟨.package, by simp [reopenCustody, hp]⟩
-  · exact ⟨.varData, by simp [reopenCustody, hp, h]⟩
-
-theorem package_mismatch_poisoned (auth : SignedGrainPackage → Bool) (a : GrainArchive)
-    (b : Option GrainCustodyAnchor) (h : packageDigest a.package ≠ a.anchor.packageDigest) :
-    reopenCustody auth (some a) b = .poisoned .package := by
-  simp [reopenCustody, h]
-
-/-- Reopening a changed canonical image either refuses it or exhibits a concrete collision.
-Package substitution is checked against the immutable digest in the same archived anchor. -/
-theorem tampered_var_or_package_poisoned_or_collision
-    (auth : SignedGrainPackage → Bool) (a : GrainArchive) (b : Option GrainCustodyAnchor)
-    (original : List VarEntry) (hroot : a.anchor.varDataRoot = computeVarDataRoot original)
-    (ht : canonicalVar a.entries ≠ canonicalVar original ∨ packageDigest a.package ≠ a.anchor.packageDigest) :
-    (∃ reason, reopenCustody auth (some a) b = .poisoned reason) ∨ CshakeCollision := by
-  rcases ht with hv | hp
-  · by_cases he : computeVarDataRoot a.entries = a.anchor.varDataRoot
-    · rcases varDataRoot_binds a.entries original (he.trans hroot) with hf | hc
-      · exact False.elim (hv hf)
-      · exact .inr hc
-    · exact .inl (var_mismatch_poisoned auth a b he)
-  · exact .inl ⟨.package, package_mismatch_poisoned auth a b hp⟩
-
-def recoverOneAhead (auth : SignedGrainPackage → Bool) (a : GrainArchive)
-    (b : Option GrainCustodyAnchor) : Option GrainCustodyAnchor :=
-  if reopenCustody auth (some a) b = .recoveryRequired then some a.anchor else none
-
-attribute [local irreducible] hash merkleRoot leaseStateRoot
-
-theorem recovery_facts (auth : SignedGrainPackage → Bool) (a : GrainArchive) (b : GrainCustodyAnchor)
-    (h : reopenCustody auth (some a) (some b) = .recoveryRequired) :
-    auth a.package = true ∧ packageDigest a.package = a.anchor.packageDigest ∧
-    computeVarDataRoot a.entries = a.anchor.varDataRoot ∧ transitionHead a = a.anchor.receiptHead ∧
-    a.anchor.packageDigest = b.packageDigest ∧ a.anchor.generation = b.generation + 1 ∧
-    a.previousHead = b.receiptHead := by
-  simp only [reopenCustody] at h
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> simp_all
-
-theorem one_ahead_crash_recovery_exact (auth : SignedGrainPackage → Bool)
-    (a : GrainArchive) (b : GrainCustodyAnchor)
-    (h : reopenCustody auth (some a) (some b) = .recoveryRequired) :
-    recoverOneAhead auth a (some b) = some a.anchor ∧
-    reopenCustody auth (some a) (some a.anchor) = .ready ∧
-    a.anchor.generation = b.generation + 1 ∧ a.previousHead = b.receiptHead := by
-  obtain ⟨ha, hp, hv, ht, _, hg, hh⟩ := recovery_facts auth a b h
-  refine ⟨by simp [recoverOneAhead, h], ?_, hg, hh⟩
-  simp [reopenCustody, ha, hp, hv, ht]
-
-theorem two_ahead_poisoned (auth : SignedGrainPackage → Bool) (a : GrainArchive)
-    (b : GrainCustodyAnchor) (h : b.generation + 2 ≤ a.anchor.generation) :
-    ∃ reason, reopenCustody auth (some a) (some b) = .poisoned reason := by
-  have hn : a.anchor ≠ b := by intro he; have := congrArg GrainCustodyAnchor.generation he; omega
-  have hg : a.anchor.generation ≠ b.generation + 1 := by omega
-  have hl : ¬ a.anchor.generation < b.generation := by omega
-  simp only [reopenCustody]
-  split
-  · exact ⟨_, rfl⟩
-  · split
-    · exact ⟨_, rfl⟩
-    · split
-      · exact ⟨_, rfl⟩
-      · split
-        · exact ⟨_, rfl⟩
-        · simp only [hg, false_and, ite_false]; exact ⟨_, rfl⟩
 
 abbrev SettlementKey := UInt64 × Nat
 structure SettlementLedger where
@@ -250,13 +132,13 @@ inductive CustodyHostEvent where
   | restart
   deriving DecidableEq, Repr
 
-def custodyEvent (s : SettlementLedger) : CustodyHostEvent → SettlementLedger
+def settlementEvent (s : SettlementLedger) : CustodyHostEvent → SettlementLedger
   | .settle p => settleOrReplay s p
   | .crash => s
   | .restart => s
 
-def runCustodyEvents (s : SettlementLedger) (events : List CustodyHostEvent) : SettlementLedger :=
-  events.foldl custodyEvent s
+def runSettlementEvents (s : SettlementLedger) (events : List CustodyHostEvent) : SettlementLedger :=
+  events.foldl settlementEvent s
 
 def LedgerInvariant (id : UInt64) (start rent budget : Nat) (s : SettlementLedger) : Prop :=
   (settledKeys s).Nodup ∧ ReachableLease id start rent budget s.records.length s.lease
@@ -279,7 +161,7 @@ theorem settle_preserves_invariant {id : UInt64} {start rent budget : Nat}
 theorem events_preserve_invariant {id : UInt64} {start rent budget : Nat}
     (es : List CustodyHostEvent) (s : SettlementLedger)
     (h : LedgerInvariant id start rent budget s) :
-    LedgerInvariant id start rent budget (runCustodyEvents s es) := by
+    LedgerInvariant id start rent budget (runSettlementEvents s es) := by
   induction es generalizing s with
   | nil => exact h
   | cons e es ih =>
@@ -293,7 +175,7 @@ theorem events_preserve_invariant {id : UInt64} {start rent budget : Nat}
 is the cardinality of that duplicate-free key list times rent, not the number of attempts. -/
 theorem double_charge_impossible_across_crash (id : UInt64) (start rent budget : Nat)
     (events : List CustodyHostEvent) :
-    let s := runCustodyEvents ⟨openLease id start rent budget, []⟩ events
+    let s := runSettlementEvents ⟨openLease id start rent budget, []⟩ events
     (settledKeys s).Nodup ∧ s.lease.drawn = (settledKeys s).length * rent ∧
     s.lease.remaining = budget - (settledKeys s).length * rent := by
   have hi : LedgerInvariant id start rent budget ⟨openLease id start rent budget, []⟩ :=
@@ -559,5 +441,273 @@ theorem host_cannot_omit_committed_turn_or_collision
       exact False.elim (bad (hh.trans ht.2.2))
     · exact .inr hc
   · exact .inl (Bool.eq_false_iff.mpr hv)
+
+structure GrainCustodyAnchor where
+  generation : Nat
+  packageDigest : ByteArray
+  varDataRoot : ByteArray
+  receiptHead : ByteArray
+  leaseRoot : ByteArray
+  ingressRoot : ByteArray
+  deriving DecidableEq
+
+structure GrainArchive where
+  package : SignedGrainPackage
+  entries : List VarEntry
+  anchor : GrainCustodyAnchor
+  previousHead : ByteArray
+  frozenGrain : GrainPowerbox.FrozenGrain
+  lease : PrepaidLease
+  settlements : SettlementLedger
+  ingress : IngressMmr
+  executions : List (Nat × ByteArray × ByteArray)
+  transitionSignature : ByteArray
+
+inductive CustodyPoisonReason where
+  | package | varData | lease | ingress | signature | divergence | rollback | brokenReceipt | missingArchive
+  deriving DecidableEq, Repr
+inductive GrainCustodyStatus where
+  | empty | ready | recoveryRequired | poisoned (reason : CustodyPoisonReason)
+  deriving DecidableEq, Repr
+
+def settlementRoot (s : SettlementLedger) : ByteArray :=
+  merkleRoot (s.records.reverse.map fun (key, receipt) =>
+    encodeFields [leb128 key.1.toNat, leb128 key.2, receipt.data.toList])
+
+def executionRoot (xs : List (Nat × ByteArray × ByteArray)) : ByteArray :=
+  merkleRoot (xs.map fun (n, req, receipt) =>
+    encodeFields [leb128 n, req.data.toList, receipt.data.toList])
+
+def transitionHead (a : GrainArchive) : ByteArray :=
+  hash "OBEND.CUSTODY.ARCHIVE/v1" [a.previousHead.data.toList, leb128 a.anchor.generation,
+    a.anchor.packageDigest.data.toList, a.anchor.varDataRoot.data.toList, a.anchor.leaseRoot.data.toList,
+    (frozenGrainRoot a.frozenGrain).data.toList, (settlementRoot a.settlements).data.toList,
+    a.anchor.ingressRoot.data.toList, (executionRoot a.executions).data.toList]
+
+/-- Equality of transition heads binds every committed component, or supplies an actual
+full-output cSHAKE collision. This includes the frozen c-list and both persistent ledgers. -/
+theorem transitionHead_binds (a b : GrainArchive) (h : transitionHead a = transitionHead b) :
+    (a.previousHead = b.previousHead ∧ a.anchor.generation = b.anchor.generation ∧
+      a.anchor.packageDigest = b.anchor.packageDigest ∧ a.anchor.varDataRoot = b.anchor.varDataRoot ∧
+      a.anchor.leaseRoot = b.anchor.leaseRoot ∧ frozenGrainRoot a.frozenGrain = frozenGrainRoot b.frozenGrain ∧
+      settlementRoot a.settlements = settlementRoot b.settlements ∧
+      a.anchor.ingressRoot = b.anchor.ingressRoot ∧ executionRoot a.executions = executionRoot b.executions) ∨
+    CshakeCollision := by
+  rcases hash_binds "OBEND.CUSTODY.ARCHIVE/v1" h with he | hc
+  · simp only [List.cons.injEq, and_true] at he
+    obtain ⟨hp, hg, hk, hv, hl, hf, hs, hi, hx⟩ := he
+    exact .inl ⟨byteArray_eq_of_toList_eq hp, natBytes_inj hg,
+      byteArray_eq_of_toList_eq hk, byteArray_eq_of_toList_eq hv,
+      byteArray_eq_of_toList_eq hl, byteArray_eq_of_toList_eq hf,
+      byteArray_eq_of_toList_eq hs, byteArray_eq_of_toList_eq hi, byteArray_eq_of_toList_eq hx⟩
+  · exact .inr hc
+
+/-- Signature verification is supplied by the authenticated package boundary, not a hash predicate. -/
+@[expose] def reopenCustody (authenticate : SignedGrainPackage → Bool)
+    (verify : ByteArray → ByteArray → Bool)
+    (archive : Option GrainArchive) (anchor : Option GrainCustodyAnchor) : GrainCustodyStatus :=
+  match archive, anchor with
+  | none, none => .empty
+  | none, some _ => .poisoned .missingArchive
+  | some a, base =>
+    if authenticate a.package = false ∨ packageDigest a.package ≠ a.anchor.packageDigest then .poisoned .package
+    else if computeVarDataRoot a.entries ≠ a.anchor.varDataRoot then .poisoned .varData
+    else if transitionHead a ≠ a.anchor.receiptHead then .poisoned .brokenReceipt
+    else if a.anchor.leaseRoot ≠ leaseStateRoot a.lease ∨ a.settlements.lease ≠ a.lease then .poisoned .lease
+    else if a.anchor.ingressRoot ≠ a.ingress.root then .poisoned .ingress
+    else if verify (transitionHead a) a.transitionSignature = false then .poisoned .signature
+    else match base with
+      | none => if a.anchor.generation = 0 then .recoveryRequired else .poisoned .divergence
+      | some b =>
+        if a.anchor.packageDigest ≠ b.packageDigest then .poisoned .package
+        else if a.anchor = b then .ready
+        else if a.anchor.generation < b.generation then .poisoned .rollback
+        else if a.anchor.generation = b.generation + 1 ∧ a.previousHead = b.receiptHead then .recoveryRequired
+        else .poisoned .divergence
+
+theorem var_mismatch_poisoned (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool) (a : GrainArchive)
+    (b : Option GrainCustodyAnchor) (h : computeVarDataRoot a.entries ≠ a.anchor.varDataRoot) :
+    ∃ reason, reopenCustody auth verify (some a) b = .poisoned reason := by
+  by_cases hp : auth a.package = false ∨ packageDigest a.package ≠ a.anchor.packageDigest
+  · exact ⟨.package, by simp [reopenCustody, hp]⟩
+  · exact ⟨.varData, by simp [reopenCustody, hp, h]⟩
+
+theorem package_mismatch_poisoned (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool) (a : GrainArchive)
+    (b : Option GrainCustodyAnchor) (h : packageDigest a.package ≠ a.anchor.packageDigest) :
+    reopenCustody auth verify (some a) b = .poisoned .package := by
+  simp [reopenCustody, h]
+
+/-- Reopening a changed canonical image either refuses it or exhibits a concrete collision.
+Package substitution is checked against the immutable digest in the same archived anchor. -/
+theorem tampered_var_or_package_poisoned_or_collision
+    (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool) (a : GrainArchive) (b : Option GrainCustodyAnchor)
+    (original : List VarEntry) (hroot : a.anchor.varDataRoot = computeVarDataRoot original)
+    (ht : canonicalVar a.entries ≠ canonicalVar original ∨ packageDigest a.package ≠ a.anchor.packageDigest) :
+    (∃ reason, reopenCustody auth verify (some a) b = .poisoned reason) ∨ CshakeCollision := by
+  rcases ht with hv | hp
+  · by_cases he : computeVarDataRoot a.entries = a.anchor.varDataRoot
+    · rcases varDataRoot_binds a.entries original (he.trans hroot) with hf | hc
+      · exact False.elim (hv hf)
+      · exact .inr hc
+    · exact .inl (var_mismatch_poisoned auth verify a b he)
+  · exact .inl ⟨.package, package_mismatch_poisoned auth verify a b hp⟩
+
+def recoverOneAhead (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool) (a : GrainArchive)
+    (b : Option GrainCustodyAnchor) : Option GrainCustodyAnchor :=
+  if reopenCustody auth verify (some a) b = .recoveryRequired then some a.anchor else none
+
+attribute [local irreducible] hash merkleRoot leaseStateRoot
+
+theorem recovery_facts (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool) (a : GrainArchive) (b : GrainCustodyAnchor)
+    (h : reopenCustody auth verify (some a) (some b) = .recoveryRequired) :
+    auth a.package = true ∧ packageDigest a.package = a.anchor.packageDigest ∧
+    computeVarDataRoot a.entries = a.anchor.varDataRoot ∧ transitionHead a = a.anchor.receiptHead ∧
+    a.anchor.packageDigest = b.packageDigest ∧ a.anchor.generation = b.generation + 1 ∧
+    a.previousHead = b.receiptHead ∧ a.anchor.leaseRoot = leaseStateRoot a.lease ∧
+    a.settlements.lease = a.lease ∧ a.anchor.ingressRoot = a.ingress.root ∧
+    verify (transitionHead a) a.transitionSignature = true := by
+  simp only [reopenCustody] at h
+  repeat first | contradiction | split at h
+  all_goals simp_all
+
+theorem one_ahead_crash_recovery_exact (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool)
+    (a : GrainArchive) (b : GrainCustodyAnchor)
+    (h : reopenCustody auth verify (some a) (some b) = .recoveryRequired) :
+    recoverOneAhead auth verify a (some b) = some a.anchor ∧
+    reopenCustody auth verify (some a) (some a.anchor) = .ready ∧
+    a.anchor.generation = b.generation + 1 ∧ a.previousHead = b.receiptHead := by
+  obtain ⟨ha, hp, hv, ht, _, hg, hh, hl, hs, hi, hvfy⟩ := recovery_facts auth verify a b h
+  refine ⟨by simp [recoverOneAhead, h], ?_, hg, hh⟩
+  have hvfy' : verify a.anchor.receiptHead a.transitionSignature = true := by simpa [ht] using hvfy
+  simp [reopenCustody, ha, hp, hv, ht, hl, hs, hi, hvfy']
+
+theorem two_ahead_poisoned (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool) (a : GrainArchive)
+    (b : GrainCustodyAnchor) (h : b.generation + 2 ≤ a.anchor.generation) :
+    ∃ reason, reopenCustody auth verify (some a) (some b) = .poisoned reason := by
+  have hn : a.anchor ≠ b := by intro he; have := congrArg GrainCustodyAnchor.generation he; omega
+  have hg : a.anchor.generation ≠ b.generation + 1 := by omega
+  have hl : ¬ a.anchor.generation < b.generation := by omega
+  simp only [reopenCustody]
+  repeat first | (exact ⟨_, rfl⟩) | split
+  all_goals simp_all
+
+/-- Both ordinary reopen and WAL replay authenticate the complete transition. -/
+theorem unsigned_archive_refused (auth : SignedGrainPackage → Bool)
+    (verify : ByteArray → ByteArray → Bool) (a : GrainArchive) (b : Option GrainCustodyAnchor)
+    (h : verify (transitionHead a) a.transitionSignature = false) :
+    ∃ reason, reopenCustody auth verify (some a) b = .poisoned reason := by
+  simp only [reopenCustody]
+  repeat first | (exact ⟨_, rfl⟩) | split
+  all_goals simp_all
+
+theorem lease_mismatch_refused (auth : SignedGrainPackage → Bool)
+    (verify : ByteArray → ByteArray → Bool) (a : GrainArchive) (b : Option GrainCustodyAnchor)
+    (h : a.anchor.leaseRoot ≠ leaseStateRoot a.lease) :
+    ∃ reason, reopenCustody auth verify (some a) b = .poisoned reason := by
+  simp only [reopenCustody]
+  repeat first | (exact ⟨_, rfl⟩) | split
+  all_goals simp_all
+
+/-- Seal the composed after-image; signatures are not modeled as hashes. -/
+def sealArchive (sign : ByteArray → ByteArray) (a : GrainArchive) : GrainArchive :=
+  let anchor := { a.anchor with
+    packageDigest := packageDigest a.package
+    varDataRoot := computeVarDataRoot a.entries
+    leaseRoot := leaseStateRoot a.lease
+    ingressRoot := a.ingress.root }
+  let a := { a with anchor := anchor, settlements := {a.settlements with lease := a.lease} }
+  { a with
+    anchor := { a.anchor with receiptHead := transitionHead a }
+    transitionSignature := sign (transitionHead a) }
+
+theorem sealed_one_ahead_recovers (auth : SignedGrainPackage → Bool)
+    (verify : ByteArray → ByteArray → Bool) (sign : ByteArray → ByteArray)
+    (law : ∀ msg, verify msg (sign msg) = true) (a : GrainArchive) (base : GrainCustodyAnchor)
+    (hp : auth a.package = true) (hb : packageDigest a.package = base.packageDigest)
+    (hg : a.anchor.generation = base.generation + 1) (hh : a.previousHead = base.receiptHead) :
+    reopenCustody auth verify (some (sealArchive sign a)) (some base) = .recoveryRequired := by
+  have hn : (sealArchive sign a).anchor ≠ base := by
+    intro he
+    have he := congrArg GrainCustodyAnchor.generation he
+    simp only [sealArchive] at he
+    omega
+  simp only [sealArchive, transitionHead, hg, hb, hh] at hn
+  simp [reopenCustody, sealArchive, transitionHead, hp, hb, hg, hh, law, hn,
+    show ¬ base.generation + 1 < base.generation by omega]
+
+/-- The archive and one-ahead WAL survive a crash; the working image does not. -/
+structure GrainCustodyHost where
+  durable : GrainArchive
+  wal : Option GrainArchive
+  volatile : Option GrainArchive
+
+def custodyEvent (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool)
+    (s : GrainCustodyHost) : CustodyHostEvent → GrainCustodyHost
+  | .crash => {s with volatile := none}
+  | .restart =>
+    let candidate := s.wal.getD s.durable
+    match reopenCustody auth verify (some candidate) (some s.durable.anchor) with
+    | .ready | .recoveryRequired => ⟨candidate, none, some candidate⟩
+    | _ => {s with volatile := none}
+  | .settle p =>
+    match s.volatile with
+    | none => s
+    | some a =>
+      let ledger := settleOrReplay a.settlements p
+      {s with volatile := some {a with lease := ledger.lease, settlements := ledger}}
+
+theorem crash_erases_volatile (auth : SignedGrainPackage → Bool)
+    (verify : ByteArray → ByteArray → Bool) (s : GrainCustodyHost) :
+    (custodyEvent auth verify s .crash).volatile = none ∧
+    (custodyEvent auth verify s .crash).durable = s.durable ∧
+    (custodyEvent auth verify s .crash).wal = s.wal := by
+  simp [custodyEvent]
+
+theorem restart_ignores_uncommitted (auth : SignedGrainPackage → Bool)
+    (verify : ByteArray → ByteArray → Bool) (s : GrainCustodyHost) (v : Option GrainArchive) :
+    custodyEvent auth verify {s with volatile := v} .restart =
+      custodyEvent auth verify {s with volatile := none} .restart := by
+  simp [custodyEvent]
+
+/-- Prepare a signed WAL after-image from volatile state. Installation uses the same
+reopen verifier as crash recovery; an existing pending image cannot be overwritten. -/
+def prepareCustody (auth : SignedGrainPackage → Bool) (verify : ByteArray → ByteArray → Bool)
+    (sign : ByteArray → ByteArray) (s : GrainCustodyHost) : Option GrainCustodyHost :=
+  match s.wal, s.volatile with
+  | none, some working =>
+    let next := sealArchive sign {working with
+      previousHead := s.durable.anchor.receiptHead
+      anchor := {working.anchor with generation := s.durable.anchor.generation + 1}}
+    if reopenCustody auth verify (some next) (some s.durable.anchor) = .recoveryRequired then
+      some {s with wal := some next}
+    else none
+  | _, _ => none
+
+theorem prepared_wal_authenticated (auth : SignedGrainPackage → Bool)
+    (verify : ByteArray → ByteArray → Bool) (sign : ByteArray → ByteArray)
+    (s next : GrainCustodyHost) (h : prepareCustody auth verify sign s = some next) :
+    next.durable = s.durable ∧ ∃ a, next.wal = some a ∧
+      reopenCustody auth verify (some a) (some s.durable.anchor) = .recoveryRequired := by
+  cases hw : s.wal with
+  | some pending => simp [prepareCustody, hw] at h
+  | none =>
+    cases hv : s.volatile with
+    | none => simp [prepareCustody, hw, hv] at h
+    | some working =>
+      let a := sealArchive sign {working with
+        previousHead := s.durable.anchor.receiptHead
+        anchor := {working.anchor with generation := s.durable.anchor.generation + 1}}
+      simp only [prepareCustody, hw, hv] at h
+      change (if reopenCustody auth verify (some a) (some s.durable.anchor) = .recoveryRequired
+        then some {s with wal := some a, volatile := some working} else none) = some next at h
+      by_cases hc : reopenCustody auth verify (some a) (some s.durable.anchor) = .recoveryRequired
+      · have he : {s with wal := some a, volatile := some working} = next := by simpa only [if_pos hc, Option.some.injEq] using h
+        subst next
+        exact ⟨rfl, a, rfl, hc⟩
+      · simp [hc] at h
+
+/-- Restoring authority uses the powerbox revocation and provenance machinery. -/
+def restorePowerbox (host : GrainPowerbox.PowerboxHost) (a : GrainArchive) : GrainPowerbox.GrainState :=
+  GrainPowerbox.thawGrain host a.frozenGrain
 
 end Obend.Polis.Custody
