@@ -1097,6 +1097,1063 @@ theorem extractMinCost_improves_cost
   rw [saturateHyperEGraph_origEdges, hypergraphToEGraph_origEdges] at hSelect
   exact Nat.le_trans hPrune hSelect
 
+/-! ## 5B. Universal Acyclic Hypergraph Extraction Soundness (`extractMinCostHypergraph_sound`, `saturate_and_extract_preserves_eval`) -/
+
+/-- Acyclic / topological DAG invariant for a list of `HyperEdge`s with respect to wire rank `rank : Nat → Nat`:
+1. Every hyperedge `e` reads strictly lower-ranked source wires (`∀ w ∈ e.srcWires, rank w < rank e.dstWire`),
+2. Output wires appear in strictly increasing topological rank order
+   (`List.Pairwise (fun e1 e2 => rank e1.dstWire < rank e2.dstWire) edges`). -/
+def EdgesTopological (rank : Nat → Nat) (edges : List HyperEdge) : Prop :=
+  (∀ e ∈ edges, ∀ w ∈ e.srcWires, rank w < rank e.dstWire) ∧
+  List.Pairwise (fun e1 e2 => rank e1.dstWire < rank e2.dstWire) edges
+
+/-- Acyclic / topological DAG invariant for a `HyperEGraph` `eg` with respect to wire rank `rank : Nat → Nat`:
+1. Every E-Class `c ∈ eg.classes` retains its seed node `edgeToENode c.origEdge ∈ c.nodes` and `c.origEdge.dstWire = c.classId`,
+2. Every child wire `w ∈ n.children` of every candidate node `n ∈ c.nodes` has strictly smaller topological
+   rank than `c.classId` (`rank w < rank c.classId`),
+3. E-Classes appear in strictly increasing topological rank order
+   (`List.Pairwise (fun c1 c2 => rank c1.classId < rank c2.classId) eg.classes`). -/
+def EGraphTopological (rank : Nat → Nat) (eg : HyperEGraph) : Prop :=
+  (∀ c ∈ eg.classes,
+    c.origEdge.dstWire = c.classId ∧
+    edgeToENode c.origEdge ∈ c.nodes ∧
+    (∀ n ∈ c.nodes, ∀ w ∈ n.children, rank w < rank c.classId)) ∧
+  List.Pairwise (fun c1 c2 => rank c1.classId < rank c2.classId) eg.classes
+
+/-- Computable topological SSA checker verifying strictly increasing output wire IDs and `w < e.dstWire`
+on all source wires (`rank := id`). -/
+def checkEdgesTopologicalAux : Option Nat → List HyperEdge → Bool
+  | _, [] => true
+  | none, e :: rest =>
+    e.srcWires.all (fun w => decide (w < e.dstWire)) &&
+    checkEdgesTopologicalAux (some e.dstWire) rest
+  | some prevDst, e :: rest =>
+    decide (prevDst < e.dstWire) &&
+    e.srcWires.all (fun w => decide (w < e.dstWire)) &&
+    checkEdgesTopologicalAux (some e.dstWire) rest
+
+/-- Computable topological SSA well-formedness check for a `StrictOpenHypergraph`. -/
+def checkHypergraphTopologicalSSA (g : StrictOpenHypergraph) : Bool :=
+  checkEdgesTopologicalAux none (extractHyperEdges g)
+
+private theorem checkEdgesTopologicalAux_lower (prev : Nat) (edges : List HyperEdge)
+    (h : checkEdgesTopologicalAux (some prev) edges = true) :
+    (∀ e ∈ edges, prev < e.dstWire ∧ ∀ w ∈ e.srcWires, w < e.dstWire) ∧
+    List.Pairwise (fun e1 e2 => e1.dstWire < e2.dstWire) edges := by
+  induction edges generalizing prev with
+  | nil => exact ⟨(fun _ hm => nomatch hm), List.Pairwise.nil⟩
+  | cons e rest ih =>
+    unfold checkEdgesTopologicalAux at h
+    simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
+    rcases h with ⟨⟨hPrev, hSrc⟩, hRest⟩
+    obtain ⟨hRestAll, hRestPair⟩ := ih e.dstWire hRest
+    refine ⟨?_, List.Pairwise.cons ?_ hRestPair⟩
+    · intro e' he'
+      rcases List.mem_cons.mp he' with rfl | hMem
+      · exact ⟨hPrev, hSrc⟩
+      · obtain ⟨hGt, hSrc'⟩ := hRestAll e' hMem
+        exact ⟨Nat.lt_trans hPrev hGt, hSrc'⟩
+    · intro e' he'
+      exact (hRestAll e' he').1
+
+theorem checkHypergraphTopologicalSSA_sound (g : StrictOpenHypergraph)
+    (h : checkHypergraphTopologicalSSA g = true) :
+    EdgesTopological id (extractHyperEdges g) := by
+  unfold checkHypergraphTopologicalSSA at h
+  cases edges : extractHyperEdges g with
+  | nil => exact ⟨(fun _ hm => nomatch hm), List.Pairwise.nil⟩
+  | cons e rest =>
+    rw [edges] at h
+    unfold checkEdgesTopologicalAux at h
+    simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
+    rcases h with ⟨hSrc, hRest⟩
+    obtain ⟨hRestAll, hRestPair⟩ := checkEdgesTopologicalAux_lower e.dstWire rest hRest
+    refine ⟨?_, List.Pairwise.cons ?_ hRestPair⟩
+    · intro e' he' w hw
+      rcases List.mem_cons.mp he' with rfl | hMem
+      · exact hSrc w hw
+      · exact (hRestAll e' hMem).2 w hw
+    · intro e' he'
+      exact (hRestAll e' he').1
+
+private theorem map_eq_of_forall_mem {α β : Type} (f g : α → β) (xs : List α)
+    (h : ∀ x ∈ xs, f x = g x) : xs.map f = xs.map g := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    simp only [List.map_cons]
+    rw [h x List.mem_cons_self, ih (fun y hy => h y (List.mem_cons_of_mem x hy))]
+
+theorem evalENode_congr {env1 env2 : EClassId → Int} {n : HyperENode}
+    (h : ∀ w ∈ n.children, env1 w = env2 w) :
+    evalENode env1 n = evalENode env2 n := by
+  unfold evalENode
+  rw [map_eq_of_forall_mem env1 env2 n.children h]
+
+private theorem stepHyperEdge_self (env : Nat → Int) (e : HyperEdge) :
+    stepHyperEdge env e e.dstWire = evalENode env (edgeToENode e) := by
+  unfold stepHyperEdge evalENode edgeToENode
+  simp
+
+private theorem stepHyperEdge_ne (env : Nat → Int) (e : HyperEdge) (w : Nat)
+    (hne : w ≠ e.dstWire) :
+    stepHyperEdge env e w = env w := by
+  unfold stepHyperEdge
+  cases hbeq : (w == e.dstWire)
+  · rfl
+  · exact absurd (LawfulBEq.eq_of_beq hbeq) hne
+
+theorem evalHyperEdgesComb_preserve_unwritten
+    (env : Nat → Int) (edges : List HyperEdge) (w : Nat)
+    (hUnwritten : ∀ e ∈ edges, w ≠ e.dstWire) :
+    evalHyperEdgesComb env edges w = env w := by
+  induction edges generalizing env with
+  | nil => rfl
+  | cons e rest ih =>
+    unfold evalHyperEdgesComb
+    simp only [List.foldl_cons]
+    change evalHyperEdgesComb (stepHyperEdge env e) rest w = env w
+    rw [ih (stepHyperEdge env e) (fun e' he' => hUnwritten e' (List.mem_cons_of_mem e he'))]
+    exact stepHyperEdge_ne env e w (hUnwritten e List.mem_cons_self)
+
+theorem evalHyperEdgesComb_edge_consistent
+    (rank : Nat → Nat) (edges : List HyperEdge) (initEnv : Nat → Int)
+    (hTopo : EdgesTopological rank edges) :
+    ∀ e ∈ edges,
+      evalENode (evalHyperEdgesComb initEnv edges) (edgeToENode e) =
+        evalHyperEdgesComb initEnv edges e.dstWire := by
+  induction edges generalizing initEnv with
+  | nil =>
+    intro _ he
+    nomatch he
+  | cons e0 rest ih =>
+    rcases hTopo with ⟨hSrc, hPair⟩
+    cases hPair with
+    | cons hHeadLt hRestPair =>
+      have hRestTopo : EdgesTopological rank rest :=
+        ⟨fun e' he' => hSrc e' (List.mem_cons_of_mem e0 he'), hRestPair⟩
+      intro e he
+      unfold evalHyperEdgesComb
+      simp only [List.foldl_cons]
+      change evalENode (evalHyperEdgesComb (stepHyperEdge initEnv e0) rest) (edgeToENode e) =
+        evalHyperEdgesComb (stepHyperEdge initEnv e0) rest e.dstWire
+      rcases List.mem_cons.mp he with rfl | heRest
+      · have hDstUnwritten : ∀ e' ∈ rest, e.dstWire ≠ e'.dstWire := by
+          intro e' he' hEq
+          have hLt := hHeadLt e' he'
+          rw [hEq] at hLt
+          exact Nat.lt_irrefl _ hLt
+        have hDstPres :
+            evalHyperEdgesComb (stepHyperEdge initEnv e) rest e.dstWire =
+              evalENode initEnv (edgeToENode e) := by
+          rw [evalHyperEdgesComb_preserve_unwritten (stepHyperEdge initEnv e) rest e.dstWire hDstUnwritten]
+          exact stepHyperEdge_self initEnv e
+        have hChildrenPres :
+            ∀ w ∈ (edgeToENode e).children,
+              evalHyperEdgesComb (stepHyperEdge initEnv e) rest w = initEnv w := by
+          intro w hw
+          have hwRank : rank w < rank e.dstWire := hSrc e List.mem_cons_self w hw
+          have hwNeSelf : w ≠ e.dstWire := by
+            intro hEq
+            rw [hEq] at hwRank
+            exact Nat.lt_irrefl _ hwRank
+          have hwUnwritten : ∀ e' ∈ rest, w ≠ e'.dstWire := by
+            intro e' he' hEq
+            have hLt := Nat.lt_trans hwRank (hHeadLt e' he')
+            rw [hEq] at hLt
+            exact Nat.lt_irrefl _ hLt
+          rw [evalHyperEdgesComb_preserve_unwritten (stepHyperEdge initEnv e) rest w hwUnwritten]
+          exact stepHyperEdge_ne initEnv e w hwNeSelf
+        rw [evalENode_congr hChildrenPres, hDstPres]
+      · exact ih (stepHyperEdge initEnv e0) hRestTopo e heRest
+
+private theorem pairwise_map_edgeToEClass (rank : Nat → Nat) (edges : List HyperEdge)
+    (hp : List.Pairwise (fun e1 e2 => rank e1.dstWire < rank e2.dstWire) edges) :
+    List.Pairwise (fun c1 c2 => rank c1.classId < rank c2.classId) (edges.map edgeToEClass) := by
+  induction hp with
+  | nil => exact List.Pairwise.nil
+  | @cons e rest hHead _ ih =>
+    simp only [List.map_cons]
+    refine List.Pairwise.cons ?_ ih
+    intro c' hc'
+    rw [List.mem_map] at hc'
+    obtain ⟨e', he', rfl⟩ := hc'
+    exact hHead e' he'
+
+/-- **Seed Consistency Theorem (`hypergraphToEGraph_consistent`)**:
+For every topologically ordered `StrictOpenHypergraph` `g` and initial valuation `initEnv`,
+`hypergraphToEGraph g` is semantically consistent with `evalHyperEdgesComb initEnv (extractHyperEdges g)`. -/
+theorem hypergraphToEGraph_consistent
+    (rank : Nat → Nat) (g : StrictOpenHypergraph) (initEnv : Nat → Int)
+    (hTopo : EdgesTopological rank (extractHyperEdges g)) :
+    EGraphConsistent (hypergraphToEGraph g) (evalHyperEdgesComb initEnv (extractHyperEdges g)) := by
+  intro c hc n hn
+  unfold hypergraphToEGraph at hc
+  simp only [List.mem_map] at hc
+  obtain ⟨e, heMem, rfl⟩ := hc
+  unfold edgeToEClass at hn ⊢
+  simp only [List.mem_singleton] at hn
+  subst hn
+  exact evalHyperEdgesComb_edge_consistent rank (extractHyperEdges g) initEnv hTopo e heMem
+
+/-- **Seed Topological Invariant (`hypergraphToEGraph_topological`)**:
+Lifting a topologically ordered `StrictOpenHypergraph` `g` produces an `EGraphTopological` E-Graph. -/
+theorem hypergraphToEGraph_topological
+    (rank : Nat → Nat) (g : StrictOpenHypergraph)
+    (hTopo : EdgesTopological rank (extractHyperEdges g)) :
+    EGraphTopological rank (hypergraphToEGraph g) := by
+  rcases hTopo with ⟨hSrc, hPair⟩
+  refine ⟨?_, pairwise_map_edgeToEClass rank (extractHyperEdges g) hPair⟩
+  intro c hc
+  unfold hypergraphToEGraph at hc
+  simp only [List.mem_map] at hc
+  obtain ⟨e, heMem, rfl⟩ := hc
+  refine ⟨rfl, List.mem_cons_self, ?_⟩
+  intro n hn w hw
+  unfold edgeToEClass at hn
+  simp only [List.mem_singleton] at hn
+  subst hn
+  exact hSrc e heMem w hw
+
+theorem hypergraphToEGraph_unwritten
+    (g : StrictOpenHypergraph) (initEnv : Nat → Int) (w : Nat)
+    (hNoClass : ∀ c ∈ (hypergraphToEGraph g).classes, c.classId ≠ w) :
+    evalHyperEdgesComb initEnv (extractHyperEdges g) w = initEnv w := by
+  refine evalHyperEdgesComb_preserve_unwritten initEnv (extractHyperEdges g) w ?_
+  intro e he hEq
+  have hcMem : edgeToEClass e ∈ (hypergraphToEGraph g).classes := by
+    unfold hypergraphToEGraph
+    exact List.mem_map.mpr ⟨e, he, rfl⟩
+  exact hNoClass (edgeToEClass e) hcMem hEq.symm
+
+private theorem matchUnaryScale_mem {n : HyperENode} {k : Int} {u : EClassId}
+    (h : matchUnaryScale n = some (k, u)) : u ∈ n.children := by
+  rcases n with ⟨op, children⟩
+  cases op <;> try contradiction
+  rcases children with _ | ⟨c0, _ | _⟩ <;> try contradiction
+  simp only [matchUnaryScale, Option.some.injEq, Prod.mk.injEq] at h
+  rcases h with ⟨rfl, rfl⟩
+  exact List.mem_cons_self
+
+private theorem matchBinaryAdd_mem {n : HyperENode} {u v : EClassId}
+    (h : matchBinaryAdd n = some (u, v)) : u ∈ n.children ∧ v ∈ n.children := by
+  rcases n with ⟨op, children⟩
+  cases op <;> try contradiction
+  rcases children with _ | ⟨c0, _ | ⟨c1, _ | _⟩⟩ <;> try contradiction
+  simp only [matchBinaryAdd, Option.some.injEq, Prod.mk.injEq] at h
+  rcases h with ⟨rfl, rfl⟩
+  exact ⟨List.mem_cons_self, List.mem_cons_of_mem _ List.mem_cons_self⟩
+
+private theorem matchBinarySub_mem {n : HyperENode} {u v : EClassId}
+    (h : matchBinarySub n = some (u, v)) : u ∈ n.children ∧ v ∈ n.children := by
+  rcases n with ⟨op, children⟩
+  cases op <;> try contradiction
+  rcases children with _ | ⟨c0, _ | ⟨c1, _ | _⟩⟩ <;> try contradiction
+  simp only [matchBinarySub, Option.some.injEq, Prod.mk.injEq] at h
+  rcases h with ⟨rfl, rfl⟩
+  exact ⟨List.mem_cons_self, List.mem_cons_of_mem _ List.mem_cons_self⟩
+
+private theorem matchBinaryMul_mem {n : HyperENode} {u v : EClassId}
+    (h : matchBinaryMul n = some (u, v)) : u ∈ n.children ∧ v ∈ n.children := by
+  rcases n with ⟨op, children⟩
+  cases op <;> try contradiction
+  rcases children with _ | ⟨c0, _ | ⟨c1, _ | _⟩⟩ <;> try contradiction
+  simp only [matchBinaryMul, Option.some.injEq, Prod.mk.injEq] at h
+  rcases h with ⟨rfl, rfl⟩
+  exact ⟨List.mem_cons_self, List.mem_cons_of_mem _ List.mem_cons_self⟩
+
+private theorem mem_findClassNodes_rank
+    (rank : Nat → Nat) (classes : List EClass)
+    (hClasses : ∀ c0 ∈ classes, ∀ m ∈ c0.nodes, ∀ w ∈ m.children, rank w < rank c0.classId)
+    (u : EClassId) (m : HyperENode)
+    (hMem : m ∈ findClassNodes classes u) :
+    ∀ w ∈ m.children, rank w < rank u := by
+  induction classes with
+  | nil => contradiction
+  | cons c0 rest ih =>
+    unfold findClassNodes at hMem
+    cases hcu : (c0.classId == u)
+    · simp only [hcu, Bool.false_eq_true, ↓reduceIte] at hMem
+      exact ih (fun c' hc' => hClasses c' (List.mem_cons_of_mem c0 hc')) hMem
+    · simp only [hcu, ↓reduceIte] at hMem
+      have hEq : c0.classId = u := LawfulBEq.eq_of_beq hcu
+      intro w hw
+      rw [← hEq]
+      exact hClasses c0 List.mem_cons_self m hMem w hw
+
+private theorem findScaleInNodes_mem_node :
+    ∀ (nodes : List HyperENode) (k : Int) (w : EClassId),
+      findScaleInNodes nodes = some (k, w) → ∃ m ∈ nodes, w ∈ m.children
+  | [], _, _, h => by contradiction
+  | m :: rest, k, w, h => by
+    unfold findScaleInNodes at h
+    cases hm : matchUnaryScale m with
+    | some kw =>
+      rcases kw with ⟨k0, w0⟩
+      simp only [hm, Option.some.injEq, Prod.mk.injEq] at h
+      rcases h with ⟨rfl, rfl⟩
+      exact ⟨m, List.mem_cons_self, matchUnaryScale_mem hm⟩
+    | none =>
+      simp only [hm] at h
+      obtain ⟨m', hm', hw'⟩ := findScaleInNodes_mem_node rest k w h
+      exact ⟨m', List.mem_cons_of_mem m hm', hw'⟩
+
+private theorem findMulInNodes_mem_node :
+    ∀ (nodes : List HyperENode) (x y : EClassId),
+      findMulInNodes nodes = some (x, y) → ∃ m ∈ nodes, x ∈ m.children ∧ y ∈ m.children
+  | [], _, _, h => by contradiction
+  | m :: rest, x, y, h => by
+    unfold findMulInNodes at h
+    cases hm : matchBinaryMul m with
+    | some xy =>
+      rcases xy with ⟨x0, y0⟩
+      simp only [hm, Option.some.injEq, Prod.mk.injEq] at h
+      rcases h with ⟨rfl, rfl⟩
+      exact ⟨m, List.mem_cons_self, matchBinaryMul_mem hm⟩
+    | none =>
+      simp only [hm] at h
+      obtain ⟨m', hm', hx', hy'⟩ := findMulInNodes_mem_node rest x y h
+      exact ⟨m', List.mem_cons_of_mem m hm', hx', hy'⟩
+
+/-- **Rule Acyclicity Preservation (`deriveRuleNode?_preserves_rank`)**:
+Every algebraic/cotangent rule in `EqSatRule` preserves strict topological child rank ordering. -/
+theorem deriveRuleNode?_preserves_rank
+    (rank : Nat → Nat) (r : EqSatRule) (classes : List EClass)
+    (hClasses : ∀ c0 ∈ classes, ∀ m ∈ c0.nodes, ∀ w ∈ m.children, rank w < rank c0.classId)
+    (targetRank : Nat) (n n' : HyperENode)
+    (hnRank : ∀ w ∈ n.children, rank w < targetRank)
+    (hDerive : deriveRuleNode? r classes n = some n') :
+    ∀ w ∈ n'.children, rank w < targetRank := by
+  cases r with
+  | scaleOneElim =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchUnaryScale n with
+    | none => simp [hm] at hDerive
+    | some ku =>
+      rcases ku with ⟨k, u⟩
+      simp only [hm] at hDerive
+      cases hk : (k == 1)
+      · simp [hk] at hDerive
+      · simp only [hk, ↓reduceIte] at hDerive
+        intro w hw
+        exact Nat.lt_trans
+          (mem_findClassNodes_rank rank classes hClasses u n' (firstNode?_mem hDerive) w hw)
+          (hnRank u (matchUnaryScale_mem hm))
+  | scaleZeroElim =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchUnaryScale n with
+    | none => simp [hm] at hDerive
+    | some ku =>
+      rcases ku with ⟨k, _⟩
+      simp only [hm] at hDerive
+      cases hk : (k == 0)
+      · simp [hk] at hDerive
+      · simp only [hk, ↓reduceIte, Option.some.injEq] at hDerive
+        subst hDerive
+        intro _ hw
+        nomatch hw
+  | scaleFuse =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchUnaryScale n with
+    | none => simp [hm] at hDerive
+    | some ku =>
+      rcases ku with ⟨k1, u⟩
+      simp only [hm] at hDerive
+      cases hf : findScaleInNodes (findClassNodes classes u) with
+      | none => simp [hf] at hDerive
+      | some kw =>
+        rcases kw with ⟨k2, w0⟩
+        simp only [hf, Option.some.injEq] at hDerive
+        subst hDerive
+        obtain ⟨m, hmMem, hw0Mem⟩ := findScaleInNodes_mem_node _ k2 w0 hf
+        intro w hw
+        simp only [List.mem_singleton] at hw
+        subst hw
+        exact Nat.lt_trans
+          (mem_findClassNodes_rank rank classes hClasses u m hmMem w hw0Mem)
+          (hnRank u (matchUnaryScale_mem hm))
+  | addZeroRight =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryAdd n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm] at hDerive
+      cases hf : findConstInNodes (findClassNodes classes v) with
+      | none => simp [hf] at hDerive
+      | some c =>
+        simp only [hf] at hDerive
+        cases hc : (c == 0)
+        · simp [hc] at hDerive
+        · simp only [hc, ↓reduceIte, Option.some.injEq] at hDerive
+          subst hDerive
+          intro w hw
+          simp only [List.mem_singleton] at hw
+          subst hw
+          exact hnRank w (matchBinaryAdd_mem hm).1
+  | addZeroLeft =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryAdd n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm] at hDerive
+      cases hf : findConstInNodes (findClassNodes classes u) with
+      | none => simp [hf] at hDerive
+      | some c =>
+        simp only [hf] at hDerive
+        cases hc : (c == 0)
+        · simp [hc] at hDerive
+        · simp only [hc, ↓reduceIte, Option.some.injEq] at hDerive
+          subst hDerive
+          intro w hw
+          simp only [List.mem_singleton] at hw
+          subst hw
+          exact hnRank w (matchBinaryAdd_mem hm).2
+  | addComm =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryAdd n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm, Option.some.injEq] at hDerive
+      subst hDerive
+      obtain ⟨hu, hv⟩ := matchBinaryAdd_mem hm
+      intro w hw
+      rcases List.mem_cons.mp hw with rfl | hw1
+      · exact hnRank w hv
+      · simp only [List.mem_singleton] at hw1
+        subst hw1
+        exact hnRank w hu
+  | mulComm =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryMul n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm, Option.some.injEq] at hDerive
+      subst hDerive
+      obtain ⟨hu, hv⟩ := matchBinaryMul_mem hm
+      intro w hw
+      rcases List.mem_cons.mp hw with rfl | hw1
+      · exact hnRank w hv
+      · simp only [List.mem_singleton] at hw1
+        subst hw1
+        exact hnRank w hu
+  | mulOneRight =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryMul n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm] at hDerive
+      obtain ⟨hu, hv⟩ := matchBinaryMul_mem hm
+      cases hs : findScaleInNodes (findClassNodes classes v) with
+      | some kw =>
+        rcases kw with ⟨k, w0⟩
+        simp only [hs] at hDerive
+        cases hk : (k == 1)
+        · simp [hk] at hDerive
+        · simp only [hk, ↓reduceIte, Option.some.injEq] at hDerive
+          subst hDerive
+          obtain ⟨m, hmMem, hw0Mem⟩ := findScaleInNodes_mem_node _ k w0 hs
+          intro w hw
+          rcases List.mem_cons.mp hw with rfl | hw1
+          · exact hnRank w hu
+          · simp only [List.mem_singleton] at hw1
+            subst hw1
+            exact Nat.lt_trans
+              (mem_findClassNodes_rank rank classes hClasses v m hmMem w hw0Mem)
+              (hnRank v hv)
+      | none =>
+        simp only [hs] at hDerive
+        cases hcFind : findConstInNodes (findClassNodes classes v) with
+        | none => simp [hcFind] at hDerive
+        | some c =>
+          simp only [hcFind] at hDerive
+          cases hc : (c == 1)
+          · simp [hc] at hDerive
+          · simp only [hc, ↓reduceIte, Option.some.injEq] at hDerive
+            subst hDerive
+            intro w hw
+            simp only [List.mem_singleton] at hw
+            subst hw
+            exact hnRank w hu
+  | mulZeroRight =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryMul n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨_, v⟩
+      simp only [hm] at hDerive
+      cases hf : findConstInNodes (findClassNodes classes v) with
+      | none => simp [hf] at hDerive
+      | some c =>
+        simp only [hf] at hDerive
+        cases hc : (c == 0)
+        · simp [hc] at hDerive
+        · simp only [hc, ↓reduceIte, Option.some.injEq] at hDerive
+          subst hDerive
+          intro _ hw
+          nomatch hw
+  | subSelfZero =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinarySub n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm] at hDerive
+      cases huv : (u == v)
+      · simp [huv] at hDerive
+      · simp only [huv, ↓reduceIte, Option.some.injEq] at hDerive
+        subst hDerive
+        intro _ hw
+        nomatch hw
+  | addNegScaleToSub =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryAdd n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm] at hDerive
+      obtain ⟨hu, hv⟩ := matchBinaryAdd_mem hm
+      cases hf : findScaleInNodes (findClassNodes classes v) with
+      | none => simp [hf] at hDerive
+      | some kw =>
+        rcases kw with ⟨k, w0⟩
+        simp only [hf] at hDerive
+        cases hk : (k == -1)
+        · simp [hk] at hDerive
+        · simp only [hk, ↓reduceIte, Option.some.injEq] at hDerive
+          subst hDerive
+          obtain ⟨m, hmMem, hw0Mem⟩ := findScaleInNodes_mem_node _ k w0 hf
+          intro w hw
+          rcases List.mem_cons.mp hw with rfl | hw1
+          · exact hnRank w hu
+          · simp only [List.mem_singleton] at hw1
+            subst hw1
+            exact Nat.lt_trans
+              (mem_findClassNodes_rank rank classes hClasses v m hmMem w hw0Mem)
+              (hnRank v hv)
+  | fuseMulAddToMac =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryAdd n with
+    | none => simp [hm] at hDerive
+    | some uz =>
+      rcases uz with ⟨u, z⟩
+      simp only [hm] at hDerive
+      obtain ⟨hu, hz⟩ := matchBinaryAdd_mem hm
+      cases hf : findMulInNodes (findClassNodes classes u) with
+      | none => simp [hf] at hDerive
+      | some xy =>
+        rcases xy with ⟨x, y⟩
+        simp only [hf, Option.some.injEq] at hDerive
+        subst hDerive
+        obtain ⟨m, hmMem, hxMem, hyMem⟩ := findMulInNodes_mem_node _ x y hf
+        intro w hw
+        rcases List.mem_cons.mp hw with rfl | hw1
+        · exact Nat.lt_trans
+            (mem_findClassNodes_rank rank classes hClasses u m hmMem w hxMem)
+            (hnRank u hu)
+        · rcases List.mem_cons.mp hw1 with rfl | hw2
+          · exact Nat.lt_trans
+              (mem_findClassNodes_rank rank classes hClasses u m hmMem w hyMem)
+              (hnRank u hu)
+          · simp only [List.mem_singleton] at hw2
+            subst hw2
+            exact hnRank w hz
+  | fuseAddMulToMac =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryAdd n with
+    | none => simp [hm] at hDerive
+    | some zu =>
+      rcases zu with ⟨z, u⟩
+      simp only [hm] at hDerive
+      obtain ⟨hz, hu⟩ := matchBinaryAdd_mem hm
+      cases hf : findMulInNodes (findClassNodes classes u) with
+      | none => simp [hf] at hDerive
+      | some xy =>
+        rcases xy with ⟨x, y⟩
+        simp only [hf, Option.some.injEq] at hDerive
+        subst hDerive
+        obtain ⟨m, hmMem, hxMem, hyMem⟩ := findMulInNodes_mem_node _ x y hf
+        intro w hw
+        rcases List.mem_cons.mp hw with rfl | hw1
+        · exact Nat.lt_trans
+            (mem_findClassNodes_rank rank classes hClasses u m hmMem w hxMem)
+            (hnRank u hu)
+        · rcases List.mem_cons.mp hw1 with rfl | hw2
+          · exact Nat.lt_trans
+              (mem_findClassNodes_rank rank classes hClasses u m hmMem w hyMem)
+              (hnRank u hu)
+          · simp only [List.mem_singleton] at hw2
+            subst hw2
+            exact hnRank w hz
+  | factorRightDistrib =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryAdd n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm] at hDerive
+      cases huv : (u == v)
+      · simp [huv] at hDerive
+      · simp only [huv, ↓reduceIte, Option.some.injEq] at hDerive
+        subst hDerive
+        intro w hw
+        simp only [List.mem_singleton] at hw
+        subst hw
+        exact hnRank w (matchBinaryAdd_mem hm).1
+  | constFoldAdd =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryAdd n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm] at hDerive
+      cases hfa : findConstInNodes (findClassNodes classes u) with
+      | none => simp [hfa] at hDerive
+      | some _ =>
+        simp only [hfa] at hDerive
+        cases hfb : findConstInNodes (findClassNodes classes v) with
+        | none => simp [hfb] at hDerive
+        | some _ =>
+          simp only [hfb, Option.some.injEq] at hDerive
+          subst hDerive
+          intro _ hw
+          nomatch hw
+  | constFoldMul =>
+    unfold deriveRuleNode? at hDerive
+    cases hm : matchBinaryMul n with
+    | none => simp [hm] at hDerive
+    | some uv =>
+      rcases uv with ⟨u, v⟩
+      simp only [hm] at hDerive
+      cases hfa : findConstInNodes (findClassNodes classes u) with
+      | none => simp [hfa] at hDerive
+      | some _ =>
+        simp only [hfa] at hDerive
+        cases hfb : findConstInNodes (findClassNodes classes v) with
+        | none => simp [hfb] at hDerive
+        | some _ =>
+          simp only [hfb, Option.some.injEq] at hDerive
+          subst hDerive
+          intro _ hw
+          nomatch hw
+
+theorem mem_expandClassNodes_of_mem
+    (r : EqSatRule) (classes : List EClass) (nodes : List HyperENode)
+    {m : HyperENode} (hm : m ∈ nodes) :
+    m ∈ expandClassNodes r classes nodes := by
+  induction nodes with
+  | nil => nomatch hm
+  | cons n rest ih =>
+    unfold expandClassNodes
+    rcases List.mem_cons.mp hm with rfl | hmRest
+    · cases hDerive : deriveRuleNode? r classes m with
+      | none => simp [hDerive]
+      | some n' =>
+        cases hEq : HyperENode.beq n' m <;> simp [hDerive, hEq]
+    · cases hDerive : deriveRuleNode? r classes n with
+      | none =>
+        simp only [hDerive]
+        exact List.mem_cons_of_mem n (ih hmRest)
+      | some n' =>
+        simp only [hDerive]
+        cases hEq : HyperENode.beq n' n
+        · simp only [hEq, Bool.false_eq_true, ↓reduceIte]
+          exact List.mem_cons_of_mem n (List.mem_cons_of_mem n' (ih hmRest))
+        · simp only [hEq, ↓reduceIte]
+          exact List.mem_cons_of_mem n (ih hmRest)
+
+theorem expandClassNodes_preserves_rank
+    (rank : Nat → Nat) (r : EqSatRule) (classes : List EClass)
+    (hClasses : ∀ c0 ∈ classes, ∀ m ∈ c0.nodes, ∀ w ∈ m.children, rank w < rank c0.classId)
+    (targetRank : Nat) (nodes : List HyperENode)
+    (hNodes : ∀ n ∈ nodes, ∀ w ∈ n.children, rank w < targetRank) :
+    ∀ m ∈ expandClassNodes r classes nodes, ∀ w ∈ m.children, rank w < targetRank := by
+  induction nodes with
+  | nil =>
+    intro _ hm
+    contradiction
+  | cons n rest ih =>
+    have hnRank : ∀ w ∈ n.children, rank w < targetRank := hNodes n List.mem_cons_self
+    have hRest : ∀ m ∈ expandClassNodes r classes rest, ∀ w ∈ m.children, rank w < targetRank :=
+      ih (fun n0 hn0 => hNodes n0 (List.mem_cons_of_mem n hn0))
+    intro m hm
+    unfold expandClassNodes at hm
+    cases hDerive : deriveRuleNode? r classes n with
+    | none =>
+      simp only [hDerive, List.mem_cons] at hm
+      rcases hm with rfl | hmRest
+      · exact hnRank
+      · exact hRest m hmRest
+    | some n' =>
+      simp only [hDerive] at hm
+      have hn'Rank := deriveRuleNode?_preserves_rank rank r classes hClasses targetRank n n' hnRank hDerive
+      cases hEq : HyperENode.beq n' n
+      · simp only [hEq, Bool.false_eq_true, ↓reduceIte, List.mem_cons] at hm
+        rcases hm with rfl | rfl | hmRest
+        · exact hnRank
+        · exact hn'Rank
+        · exact hRest m hmRest
+      · simp only [hEq, ↓reduceIte, List.mem_cons] at hm
+        rcases hm with rfl | hmRest
+        · exact hnRank
+        · exact hRest m hmRest
+
+private theorem pairwise_map_preserve_classId (rank : Nat → Nat) (f : EClass → EClass)
+    (hf : ∀ c, (f c).classId = c.classId) (classes : List EClass)
+    (hp : List.Pairwise (fun c1 c2 => rank c1.classId < rank c2.classId) classes) :
+    List.Pairwise (fun c1 c2 => rank c1.classId < rank c2.classId) (classes.map f) := by
+  induction hp with
+  | nil => exact List.Pairwise.nil
+  | @cons c rest hHead _ ih =>
+    simp only [List.map_cons]
+    refine List.Pairwise.cons ?_ ih
+    intro c' hc'
+    rw [List.mem_map] at hc'
+    obtain ⟨c0, hc0, rfl⟩ := hc'
+    rw [hf c, hf c0]
+    exact hHead c0 hc0
+
+theorem applyEqSatRule_preserves_topological
+    (rank : Nat → Nat) (r : EqSatRule) (eg : HyperEGraph)
+    (hTopo : EGraphTopological rank eg) :
+    EGraphTopological rank (applyEqSatRule r eg) := by
+  rcases hTopo with ⟨hClasses, hPair⟩
+  have hNodesRank : ∀ c0 ∈ eg.classes, ∀ m ∈ c0.nodes, ∀ w ∈ m.children, rank w < rank c0.classId :=
+    fun c0 hc0 => (hClasses c0 hc0).2.2
+  refine ⟨?_, pairwise_map_preserve_classId rank
+    (fun c => { c with nodes := expandClassNodes r eg.classes c.nodes })
+    (fun _ => rfl) eg.classes hPair⟩
+  intro c' hc'
+  unfold applyEqSatRule at hc'
+  simp only [List.mem_map] at hc'
+  obtain ⟨c, hcMem, rfl⟩ := hc'
+  obtain ⟨hOrigDst, hOrigMem, hcRank⟩ := hClasses c hcMem
+  refine ⟨hOrigDst, mem_expandClassNodes_of_mem r eg.classes c.nodes hOrigMem, ?_⟩
+  exact expandClassNodes_preserves_rank rank r eg.classes hNodesRank (rank c.classId) c.nodes hcRank
+
+theorem applyEqSatRules_preserves_topological
+    (rank : Nat → Nat) (rules : List EqSatRule) (eg : HyperEGraph)
+    (hTopo : EGraphTopological rank eg) :
+    EGraphTopological rank (applyEqSatRules rules eg) := by
+  induction rules generalizing eg with
+  | nil => exact hTopo
+  | cons r rest ih =>
+    unfold applyEqSatRules
+    simp only [List.foldl_cons]
+    exact ih (applyEqSatRule r eg) (applyEqSatRule_preserves_topological rank r eg hTopo)
+
+theorem saturateHyperEGraph_preserves_topological
+    (rank : Nat → Nat) (fuel : Nat) (rules : List EqSatRule) (eg : HyperEGraph)
+    (hTopo : EGraphTopological rank eg) :
+    EGraphTopological rank (saturateHyperEGraph fuel rules eg) := by
+  induction fuel generalizing eg with
+  | zero => exact hTopo
+  | succ k ih =>
+    unfold saturateHyperEGraph
+    exact ih (applyEqSatRules rules eg) (applyEqSatRules_preserves_topological rank rules eg hTopo)
+
+@[simp] theorem applyEqSatRule_classIds (r : EqSatRule) (eg : HyperEGraph) :
+    (applyEqSatRule r eg).classes.map (·.classId) = eg.classes.map (·.classId) := by
+  unfold applyEqSatRule
+  simp [List.map_map]
+
+@[simp] theorem applyEqSatRules_classIds (rules : List EqSatRule) (eg : HyperEGraph) :
+    (applyEqSatRules rules eg).classes.map (·.classId) = eg.classes.map (·.classId) := by
+  induction rules generalizing eg with
+  | nil => rfl
+  | cons r rest ih =>
+    rw [applyEqSatRules, List.foldl_cons, ← applyEqSatRules, ih, applyEqSatRule_classIds]
+
+@[simp] theorem saturateHyperEGraph_classIds (fuel : Nat) (rules : List EqSatRule) (eg : HyperEGraph) :
+    (saturateHyperEGraph fuel rules eg).classes.map (·.classId) = eg.classes.map (·.classId) := by
+  induction fuel generalizing eg with
+  | zero => rfl
+  | succ k ih =>
+    unfold saturateHyperEGraph
+    rw [ih, applyEqSatRules_classIds]
+
+@[simp] theorem applyEqSatRule_boundaryOut (r : EqSatRule) (eg : HyperEGraph) :
+    (applyEqSatRule r eg).boundaryOut = eg.boundaryOut := rfl
+
+@[simp] theorem applyEqSatRules_boundaryOut (rules : List EqSatRule) (eg : HyperEGraph) :
+    (applyEqSatRules rules eg).boundaryOut = eg.boundaryOut := by
+  induction rules generalizing eg with
+  | nil => rfl
+  | cons r rest ih =>
+    rw [applyEqSatRules, List.foldl_cons, ← applyEqSatRules, ih, applyEqSatRule_boundaryOut]
+
+@[simp] theorem saturateHyperEGraph_boundaryOut (fuel : Nat) (rules : List EqSatRule) (eg : HyperEGraph) :
+    (saturateHyperEGraph fuel rules eg).boundaryOut = eg.boundaryOut := by
+  induction fuel generalizing eg with
+  | zero => rfl
+  | succ k ih =>
+    unfold saturateHyperEGraph
+    rw [ih, applyEqSatRules_boundaryOut]
+
+theorem pickMinCostNode_mem
+    (costModel : HyperCostModel) (best : HyperENode) (nodes : List HyperENode) :
+    pickMinCostNode costModel best nodes ∈ best :: nodes := by
+  induction nodes generalizing best with
+  | nil => exact List.mem_cons_self
+  | cons n rest ih =>
+    unfold pickMinCostNode
+    by_cases hle : costModel.opCost n.op ≤ costModel.opCost best.op
+    · simp only [hle, ↓reduceIte]
+      exact List.mem_cons_of_mem best (ih n)
+    · simp only [hle, ↓reduceIte]
+      rcases List.mem_cons.mp (ih best) with hEq | hMemRest
+      · rw [hEq]
+        exact List.mem_cons_self
+      · exact List.mem_cons_of_mem best (List.mem_cons_of_mem n hMemRest)
+
+private theorem evalHyperEdgesComb_extractClassEdgesAux
+    (rank : Nat → Nat) (costModel : HyperCostModel) (finalEnv : Nat → Int)
+    (todo : List EClass)
+    (hTodoEval : ∀ c ∈ todo,
+      evalENode finalEnv (pickMinCostNode costModel (edgeToENode c.origEdge) c.nodes) = finalEnv c.classId)
+    (hTodoRank : ∀ c ∈ todo,
+      ∀ w ∈ (pickMinCostNode costModel (edgeToENode c.origEdge) c.nodes).children, rank w < rank c.classId)
+    (hTodoPair : List.Pairwise (fun c1 c2 => rank c1.classId < rank c2.classId) todo)
+    (curEnv : Nat → Int)
+    (hAgree : ∀ w, (∀ c ∈ todo, c.classId ≠ w) → curEnv w = finalEnv w) :
+    ∀ w, evalHyperEdgesComb curEnv (todo.map (extractClassEdge costModel)) w = finalEnv w := by
+  induction todo generalizing curEnv with
+  | nil =>
+    intro w
+    exact hAgree w (fun _ hm => nomatch hm)
+  | cons c rest ih =>
+    cases hTodoPair with
+    | cons hHeadLt hRestPair =>
+      let best := pickMinCostNode costModel (edgeToENode c.origEdge) c.nodes
+      let ec := extractClassEdge costModel c
+      have hChildrenAgree : ∀ u ∈ best.children, curEnv u = finalEnv u := by
+        intro u hu
+        have huRank : rank u < rank c.classId := hTodoRank c List.mem_cons_self u hu
+        refine hAgree u ?_
+        intro c' hc' hEq
+        rcases List.mem_cons.mp hc' with rfl | hc'Rest
+        · rw [hEq] at huRank
+          exact Nat.lt_irrefl _ huRank
+        · have hLt := Nat.lt_trans huRank (hHeadLt c' hc'Rest)
+          rw [hEq] at hLt
+          exact Nat.lt_irrefl _ hLt
+      have hBestEval : evalENode curEnv best = finalEnv c.classId := by
+        rw [evalENode_congr hChildrenAgree]
+        exact hTodoEval c List.mem_cons_self
+      have hStepAgree : ∀ w, (∀ c' ∈ rest, c'.classId ≠ w) → stepHyperEdge curEnv ec w = finalEnv w := by
+        intro w hwRest
+        by_cases hwc : w = c.classId
+        · subst hwc
+          have hSelf : stepHyperEdge curEnv ec c.classId = evalENode curEnv best := by
+            change stepHyperEdge curEnv ec ec.dstWire = evalENode curEnv (edgeToENode ec)
+            exact stepHyperEdge_self curEnv ec
+          rw [hSelf, hBestEval]
+        · have hStepNe : stepHyperEdge curEnv ec w = curEnv w :=
+            stepHyperEdge_ne curEnv ec w hwc
+          rw [hStepNe]
+          refine hAgree w ?_
+          intro c' hc'
+          rcases List.mem_cons.mp hc' with rfl | hc'Rest
+          · exact Ne.symm hwc
+          · exact hwRest c' hc'Rest
+      intro w
+      simp only [List.map_cons, evalHyperEdgesComb, List.foldl_cons]
+      exact ih
+        (fun c' hc' => hTodoEval c' (List.mem_cons_of_mem c hc'))
+        (fun c' hc' => hTodoRank c' (List.mem_cons_of_mem c hc'))
+        hRestPair
+        (stepHyperEdge curEnv ec)
+        hStepAgree
+        w
+
+theorem evalHyperEdgesComb_extractClassEdges_eq
+    (rank : Nat → Nat) (costModel : HyperCostModel) (eg : HyperEGraph)
+    (initEnv finalEnv : Nat → Int)
+    (hCons : EGraphConsistent eg finalEnv)
+    (hTopo : EGraphTopological rank eg)
+    (hUnwritten : ∀ w, (∀ c ∈ eg.classes, c.classId ≠ w) → finalEnv w = initEnv w) :
+    ∀ w, evalHyperEdgesComb initEnv (eg.classes.map (extractClassEdge costModel)) w = finalEnv w := by
+  rcases hTopo with ⟨hClasses, hPair⟩
+  refine evalHyperEdgesComb_extractClassEdgesAux rank costModel finalEnv eg.classes ?_ ?_ hPair initEnv ?_
+  · intro c hc
+    have hBestMem : pickMinCostNode costModel (edgeToENode c.origEdge) c.nodes ∈ c.nodes := by
+      rcases List.mem_cons.mp (pickMinCostNode_mem costModel (edgeToENode c.origEdge) c.nodes) with hEq | hIn
+      · rw [hEq]
+        exact (hClasses c hc).2.1
+      · exact hIn
+    exact hCons c hc _ hBestMem
+  · intro c hc w hw
+    have hBestMem : pickMinCostNode costModel (edgeToENode c.origEdge) c.nodes ∈ c.nodes := by
+      rcases List.mem_cons.mp (pickMinCostNode_mem costModel (edgeToENode c.origEdge) c.nodes) with hEq | hIn
+      · rw [hEq]
+        exact (hClasses c hc).2.1
+      · exact hIn
+    exact (hClasses c hc).2.2 _ hBestMem w hw
+  · intro w hw
+    exact (hUnwritten w hw).symm
+
+private theorem ne_of_contains_false {xs : List Nat} {x y : Nat}
+    (hFalse : xs.contains x = false) (hMem : y ∈ xs) : y ≠ x := by
+  induction xs with
+  | nil => nomatch hMem
+  | cons z zs ih =>
+    simp only [List.contains_cons, Bool.or_eq_false_iff] at hFalse
+    rcases List.mem_cons.mp hMem with rfl | hMemRest
+    · intro hEq
+      subst hEq
+      have hSelf : (y == y) = true := beq_iff_eq.mpr rfl
+      rw [hSelf] at hFalse
+      exact Bool.noConfusion hFalse.1
+    · exact ih hFalse.2 hMemRest
+
+/-- **Backward Liveness Dead-Edge Pruning Soundness (`evalHyperEdgesComb_pruneDeadEdgesAux_eq`)**:
+For EVERY `List HyperEdge` and wire valuations `env1, env2` agreeing on the backward-live input set
+`(pruneDeadEdgesAux liveWires edges).1`, evaluating the pruned edge list `(pruneDeadEdgesAux liveWires edges).2`
+from `env1` agrees identically on all `w ∈ liveWires` with evaluating the full `edges` list from `env2`. -/
+theorem evalHyperEdgesComb_pruneDeadEdgesAux_eq
+    (liveWires : List Nat) (edges : List HyperEdge) (env1 env2 : Nat → Int)
+    (hAgree : ∀ w ∈ (pruneDeadEdgesAux liveWires edges).1, env1 w = env2 w) :
+    ∀ w ∈ liveWires,
+      evalHyperEdgesComb env1 (pruneDeadEdgesAux liveWires edges).2 w =
+        evalHyperEdgesComb env2 edges w := by
+  induction edges generalizing env1 env2 with
+  | nil =>
+    intro w hw
+    exact hAgree w hw
+  | cons e rest ih =>
+    unfold pruneDeadEdgesAux at hAgree ⊢
+    cases hRec : pruneDeadEdgesAux liveWires rest with
+    | mk liveAfter keptRest =>
+      rw [hRec] at hAgree
+      dsimp only at hAgree ⊢
+      cases hCont : liveAfter.contains e.dstWire
+      · simp only [hCont, Bool.false_eq_true, ↓reduceIte] at hAgree ⊢
+        have hStepAgree : ∀ u ∈ liveAfter, env1 u = stepHyperEdge env2 e u := by
+          intro u hu
+          have hNe : u ≠ e.dstWire := ne_of_contains_false hCont hu
+          rw [stepHyperEdge_ne env2 e u hNe]
+          exact hAgree u hu
+        have hSub := ih env1 (stepHyperEdge env2 e) (by rw [hRec]; exact hStepAgree)
+        rw [hRec] at hSub
+        exact hSub
+      · simp only [hCont, ↓reduceIte] at hAgree ⊢
+        have hStepAgree : ∀ u ∈ liveAfter, stepHyperEdge env1 e u = stepHyperEdge env2 e u := by
+          intro u hu
+          by_cases hEq : u = e.dstWire
+          · subst hEq
+            rw [stepHyperEdge_self, stepHyperEdge_self]
+            exact evalENode_congr (fun s (hs : s ∈ e.srcWires) =>
+              hAgree s (List.mem_append.mpr (Or.inl hs)))
+          · rw [stepHyperEdge_ne env1 e u hEq, stepHyperEdge_ne env2 e u hEq]
+            exact hAgree u (List.mem_append.mpr (Or.inr hu))
+        have hSub := ih (stepHyperEdge env1 e) (stepHyperEdge env2 e) (by rw [hRec]; exact hStepAgree)
+        rw [hRec] at hSub
+        exact hSub
+
+/-- **Dead-Edge Pruning Soundness (`pruneDeadEdges_sound`)**:
+Pruning dead hyperedges preserves combinational evaluation on all `boundaryOut` wires for EVERY `List HyperEdge`. -/
+theorem pruneDeadEdges_sound
+    (boundaryOut : List Nat) (edges : List HyperEdge) (initEnv : Nat → Int) :
+    boundaryOut.map (evalHyperEdgesComb initEnv (pruneDeadEdges boundaryOut edges)) =
+      boundaryOut.map (evalHyperEdgesComb initEnv edges) := by
+  refine map_eq_of_forall_mem _ _ boundaryOut ?_
+  exact evalHyperEdgesComb_pruneDeadEdgesAux_eq boundaryOut edges initEnv initEnv (fun _ _ => rfl)
+
+/-- **Universal E-Graph Minimum-Cost Extraction Soundness (`extractMinCostHypergraph_sound`)**:
+For EVERY `eg : HyperEGraph` that is semantically consistent (`EGraphConsistent eg finalEnv`) and
+topologically acyclic (`EGraphTopological rank eg`), extracting the minimum-cost `StrictOpenHypergraph`
+under ANY `costModel : HyperCostModel` evaluates identically to `eg.boundaryOut.map finalEnv`! -/
+theorem extractMinCostHypergraph_sound
+    (rank : Nat → Nat) (costModel : HyperCostModel) (eg : HyperEGraph)
+    (initEnv finalEnv : Nat → Int)
+    (hCons : EGraphConsistent eg finalEnv)
+    (hTopo : EGraphTopological rank eg)
+    (hUnwritten : ∀ w, (∀ c ∈ eg.classes, c.classId ≠ w) → finalEnv w = initEnv w) :
+    evalHypergraphComb (extractMinCostHypergraph costModel eg) initEnv =
+      eg.boundaryOut.map finalEnv := by
+  unfold extractMinCostHypergraph
+  rw [evalHypergraphComb_mkStrictOpenHypergraph_reindex, pruneDeadEdges_sound]
+  exact map_eq_of_forall_mem _ _ eg.boundaryOut fun w _ =>
+    evalHyperEdgesComb_extractClassEdges_eq rank costModel eg initEnv finalEnv hCons hTopo hUnwritten w
+
+/-- **Universal Acyclic Hypergraph Equality-Saturation & Extraction Soundness (`saturate_and_extract_preserves_eval`)**:
+For **EVERY** topologically acyclic `g : StrictOpenHypergraph` (`EdgesTopological rank (extractHyperEdges g)`),
+**EVERY** `costModel : HyperCostModel`, **EVERY** saturation depth `fuel : Nat`, **EVERY** rule list
+`rules : List EqSatRule`, and **EVERY** wire valuation `initEnv : Nat → Int`:
+$$\text{evalHypergraphComb}(\text{extractMinCostHypergraph}(\text{saturateHyperEGraph}(g)), \text{initEnv}) = \text{evalHypergraphComb}(g, \text{initEnv}).$$ -/
+theorem saturate_and_extract_preserves_eval
+    (rank : Nat → Nat) (costModel : HyperCostModel) (g : StrictOpenHypergraph)
+    (fuel : Nat) (rules : List EqSatRule) (initEnv : Nat → Int)
+    (hTopo : EdgesTopological rank (extractHyperEdges g)) :
+    evalHypergraphComb
+      (extractMinCostHypergraph costModel
+        (saturateHyperEGraph fuel rules (hypergraphToEGraph g)))
+      initEnv =
+    evalHypergraphComb g initEnv := by
+  let finalEnv := evalHyperEdgesComb initEnv (extractHyperEdges g)
+  have hSeedCons : EGraphConsistent (hypergraphToEGraph g) finalEnv :=
+    hypergraphToEGraph_consistent rank g initEnv hTopo
+  have hSeedTopo : EGraphTopological rank (hypergraphToEGraph g) :=
+    hypergraphToEGraph_topological rank g hTopo
+  have hSatCons : EGraphConsistent (saturateHyperEGraph fuel rules (hypergraphToEGraph g)) finalEnv :=
+    saturateHyperEGraph_preserves_consistency fuel rules (hypergraphToEGraph g) finalEnv hSeedCons
+  have hSatTopo : EGraphTopological rank (saturateHyperEGraph fuel rules (hypergraphToEGraph g)) :=
+    saturateHyperEGraph_preserves_topological rank fuel rules (hypergraphToEGraph g) hSeedTopo
+  have hSatUnwritten :
+      ∀ w, (∀ c ∈ (saturateHyperEGraph fuel rules (hypergraphToEGraph g)).classes, c.classId ≠ w) →
+        finalEnv w = initEnv w := by
+    intro w hw
+    refine hypergraphToEGraph_unwritten g initEnv w ?_
+    intro c hc hEq
+    have hIdMem : c.classId ∈ (hypergraphToEGraph g).classes.map (·.classId) :=
+      List.mem_map.mpr ⟨c, hc, rfl⟩
+    rw [← saturateHyperEGraph_classIds fuel rules (hypergraphToEGraph g), List.mem_map] at hIdMem
+    obtain ⟨c', hc'Mem, hc'Id⟩ := hIdMem
+    exact hw c' hc'Mem (hc'Id.trans hEq)
+  rw [extractMinCostHypergraph_sound rank costModel
+        (saturateHyperEGraph fuel rules (hypergraphToEGraph g))
+        initEnv finalEnv hSatCons hSatTopo hSatUnwritten]
+  rw [saturateHyperEGraph_boundaryOut]
+  rfl
+
+/-- Computable-guard corollary (`saturate_and_extract_preserves_eval_ssa`):
+Whenever `checkHypergraphTopologicalSSA g = true`, equality saturation + minimum-cost extraction
+preserves `evalHypergraphComb` across all `costModel`, `fuel`, `rules`, and `initEnv`. -/
+theorem saturate_and_extract_preserves_eval_ssa
+    (costModel : HyperCostModel) (g : StrictOpenHypergraph)
+    (fuel : Nat) (rules : List EqSatRule) (initEnv : Nat → Int)
+    (hCheck : checkHypergraphTopologicalSSA g = true) :
+    evalHypergraphComb
+      (extractMinCostHypergraph costModel
+        (saturateHyperEGraph fuel rules (hypergraphToEGraph g)))
+      initEnv =
+    evalHypergraphComb g initEnv :=
+  saturate_and_extract_preserves_eval id costModel g fuel rules initEnv
+    (checkHypergraphTopologicalSSA_sound g hCheck)
+
+/-- Universal soundness of `optimizeAdjointHypergraph` (`optimizeAdjointHypergraph_sound_universal`):
+For EVERY `g : StrictOpenHypergraph` whose reverse-mode adjoint `compileGraphAdjoint g` passes
+`checkHypergraphTopologicalSSA`, `optimizeAdjointHypergraph costModel g` evaluates identically to
+`compileGraphAdjoint g` on ALL wire assignments `initEnv : Nat → Int`. -/
+theorem optimizeAdjointHypergraph_sound_universal
+    (costModel : HyperCostModel) (g : StrictOpenHypergraph) (initEnv : Nat → Int)
+    (hCheck : checkHypergraphTopologicalSSA (compileGraphAdjoint g) = true) :
+    evalHypergraphComb (optimizeAdjointHypergraph costModel g) initEnv =
+      evalHypergraphComb (compileGraphAdjoint g) initEnv :=
+  saturate_and_extract_preserves_eval_ssa costModel (compileGraphAdjoint g)
+    1 [ .mulOneRight, .scaleFuse, .fuseAddMulToMac ] initEnv hCheck
+
+/-- Broken `extractClassEdge` emitting a bogus constant `-1` for `#tooth` mutation verification. -/
+def extractClassEdgeBroken (_costModel : HyperCostModel) (c : EClass) : HyperEdge :=
+  { opIdx := c.origEdge.opIdx, op := .const (-1), srcWires := [], dstWire := c.classId }
+
+#tooth saturate_and_extract_preserves_eval by mutation
+  extractClassEdge := extractClassEdgeBroken
+
 /-- **Theorem (`goldenDiamondAdjoint_eqSat_strict_cost_reduction`)**:
 On `compileGraphAdjoint goldenDiamondHypergraph` ($f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$),
 `optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph`:

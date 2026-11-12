@@ -805,7 +805,7 @@ def SosLyapunovProblem.SemanticMeaning (prob : SosLyapunovProblem) : Prop :=
 
 /-- Verdict checker for `sosLyapunovJudge`. -/
 @[expose] def checkSosLyapunovProblem
-    (_fuel : Nat)
+    (_grade : Nat)
     (prob : SosLyapunovProblem)
     (cert : SosLyapunovCert) : Judge.Verdict SosLyapunovClause :=
   if !checkSosLyapunov prob.lyapunov cert.lyapunovWitness then
@@ -883,7 +883,7 @@ instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
 
 /-- 2D nonlinear cubic-damped oscillator vector field:
 $$\dot{x}_0 = -x_0 - x_0^3 + x_1, \qquad \dot{x}_1 = -x_0 - x_1 - x_1^3.$$ -/
-@[expose] def goldenCubicVectorField2D : List Poly :=
+@[expose] def cubicDampedVectorField2D : List Poly :=
   [ Poly.add (Poly.neg x0Poly) (Poly.add (Poly.neg (Poly.mul x0Poly (Poly.sqr x0Poly))) x1Poly)
   , Poly.sub (Poly.neg x0Poly) (Poly.add x1Poly (Poly.mul x1Poly (Poly.sqr x1Poly))) ]
 
@@ -892,7 +892,7 @@ $$\mathcal{L}_f V = 2 x_0(-x_0 - x_0^3 + x_1) + 2 x_1(-x_0 - x_1 - x_1^3) = -2(x
 so $-\mathcal{L}_f V - 2 V = 2 x_0^4 + 2 x_1^4 = 2(x_0^2)^2 + 2(x_1^2)^2 \ge 0$! -/
 @[expose] def goldenLyapunovSpec2D : SosLyapunovSpec where
   dim         := 2
-  vectorField := goldenCubicVectorField2D
+  vectorField := cubicDampedVectorField2D
   domainIneqs := []
   lyapunovV   := Poly.add (Poly.sqr x0Poly) (Poly.sqr x1Poly)
   radialEps   := CanonicalRat.mk 1 2
@@ -989,158 +989,676 @@ theorem sosLyapunov_bad_refused :
     checkSosLyapunovProblem 0 goldenSosProblem badSosCert = .refused .lyapunovFailed [] := by
   decide +kernel
 
+/-! ## 8. General Kernel-Reducible JSON AST Encoders & Decoders (`SosJson`, Multivariate Polynomials, Gram Matrices, `SosLyapunovProblem`, and `SosLyapunovCert`) -/
+
+/-- Structural JSON AST avoiding `module Lean`'s opaque `Std.TreeMap.Raw` and avoiding
+intermediate `String.ofList` UTF-8 allocations during parsing so byte-level JSON wire proofs
+reduce fast inside `decide +kernel`. -/
+inductive SosJson where
+  | null
+  | bool (b : Bool)
+  | num  (mantissa : Int) (exponent : Nat)
+  | str  (cs : List Char)
+  | arr  (elems : List SosJson)
+  | obj  (fields : List (List Char × SosJson))
+
+namespace SosJson
+
+@[expose] def ofInt (n : Int) : SosJson := .num n 0
+@[expose] def ofNat (n : Nat) : SosJson := .num (Int.ofNat n) 0
+@[expose] def ofNatList (ns : List Nat) : SosJson := .arr (ns.map ofNat)
+@[expose] def mkObj (kvs : List (String × SosJson)) : SosJson :=
+  .obj (kvs.map fun (k, v) => (k.toList, v))
+
+@[expose] def lookupField : List (List Char × SosJson) → List Char → Option SosJson
+  | [], _ => none
+  | (k0, v0) :: rest, k => if k0 == k then some v0 else lookupField rest k
+
+@[expose] def getObjVal? (j : SosJson) (k : String) : Except String SosJson :=
+  match j with
+  | .obj fields =>
+    match lookupField fields k.toList with
+    | some v => .ok v
+    | none   => .error s!"property not found: {k}"
+  | _ => .error s!"object expected for key '{k}'"
+
+@[expose] def getStr? : SosJson → Except String String
+  | .str cs => .ok (String.ofList cs)
+  | _       => .error "string expected"
+
+@[expose] def getInt? : SosJson → Except String Int
+  | .num m 0 => .ok m
+  | _        => .error "integer expected"
+
+@[expose] def getNat? : SosJson → Except String Nat
+  | .num (.ofNat n) 0 => .ok n
+  | _                 => .error "natural number expected"
+
+@[expose] def getArr? : SosJson → Except String (List SosJson)
+  | .arr xs => .ok xs
+  | _       => .error "array expected"
+
+@[expose] def getObjStr? (j : SosJson) (k : String) : Except String String :=
+  j.getObjVal? k >>= getStr?
+
+@[expose] def getObjInt? (j : SosJson) (k : String) : Except String Int :=
+  j.getObjVal? k >>= getInt?
+
+@[expose] def getObjNat? (j : SosJson) (k : String) : Except String Nat :=
+  j.getObjVal? k >>= getNat?
+
+@[expose] def getObjNatList? (j : SosJson) (k : String) : Except String (List Nat) := do
+  let xs ← j.getObjVal? k >>= getArr?
+  xs.mapM getNat?
+
+end SosJson
+
+@[expose] def sosJsonNatWrite : Nat → Nat → List Char → List Char
+  | 0, _, acc => acc
+  | fuel + 1, n, acc =>
+    let d : Char :=
+      match n % 10 with
+      | 0 => '0' | 1 => '1' | 2 => '2' | 3 => '3' | 4 => '4'
+      | 5 => '5' | 6 => '6' | 7 => '7' | 8 => '8' | _ => '9'
+    let q := n / 10
+    if q == 0 then d :: acc
+    else sosJsonNatWrite fuel q (d :: acc)
+
+@[expose] def sosJsonIntWrite : Int → List Char → List Char
+  | .ofNat n, acc   => sosJsonNatWrite 24 n acc
+  | .negSucc n, acc => '-' :: sosJsonNatWrite 24 (n + 1) acc
+
+@[expose] def sosJsonEscapeWrite : List Char → List Char → List Char
+  | [], acc => acc
+  | '"' :: cs, acc  => '\\' :: '"' :: sosJsonEscapeWrite cs acc
+  | '\\' :: cs, acc => '\\' :: '\\' :: sosJsonEscapeWrite cs acc
+  | '\n' :: cs, acc => '\\' :: 'n' :: sosJsonEscapeWrite cs acc
+  | '\r' :: cs, acc => '\\' :: 'r' :: sosJsonEscapeWrite cs acc
+  | '\t' :: cs, acc => '\\' :: 't' :: sosJsonEscapeWrite cs acc
+  | c :: cs, acc    => c :: sosJsonEscapeWrite cs acc
+
+@[expose] def sosJsonQuoteCharsWrite (cs : List Char) (acc : List Char) : List Char :=
+  '"' :: sosJsonEscapeWrite cs ('"' :: acc)
+
+@[expose] def sosJsonWriteArrElems (writeVal : SosJson → List Char → List Char) :
+    List SosJson → List Char → List Char
+  | [], acc => acc
+  | [x], acc => writeVal x acc
+  | x :: xs, acc => writeVal x (',' :: sosJsonWriteArrElems writeVal xs acc)
+
+@[expose] def sosJsonWriteObjFields (writeVal : SosJson → List Char → List Char) :
+    List (List Char × SosJson) → List Char → List Char
+  | [], acc => acc
+  | [(k, v)], acc => sosJsonQuoteCharsWrite k (':' :: writeVal v acc)
+  | (k, v) :: rest, acc =>
+    sosJsonQuoteCharsWrite k (':' :: writeVal v (',' :: sosJsonWriteObjFields writeVal rest acc))
+
+/-- Linear-time difference-list serializer for `SosJson` (zero `partial def`, zero intermediate `String` allocations). -/
+@[expose] def sosJsonWriteAux : Nat → SosJson → List Char → List Char
+  | 0, _, acc => 'n' :: 'u' :: 'l' :: 'l' :: acc
+  | _ + 1, .null, acc => 'n' :: 'u' :: 'l' :: 'l' :: acc
+  | _ + 1, .bool true, acc => 't' :: 'r' :: 'u' :: 'e' :: acc
+  | _ + 1, .bool false, acc => 'f' :: 'a' :: 'l' :: 's' :: 'e' :: acc
+  | _ + 1, .num m 0, acc => sosJsonIntWrite m acc
+  | _ + 1, .num m e, acc => ((Lean.JsonNumber.mk m e).toString).toList ++ acc
+  | _ + 1, .str cs, acc => sosJsonQuoteCharsWrite cs acc
+  | fuel + 1, .arr elems, acc =>
+    '[' :: sosJsonWriteArrElems (sosJsonWriteAux fuel) elems (']' :: acc)
+  | fuel + 1, .obj fields, acc =>
+    '{' :: sosJsonWriteObjFields (sosJsonWriteAux fuel) fields ('}' :: acc)
+
+@[expose] def sosJsonCompress (j : SosJson) : String :=
+  String.ofList (sosJsonWriteAux 24 j [])
+
+@[expose] def sosJsonSkipWs : List Char → List Char
+  | ' ' :: cs => sosJsonSkipWs cs
+  | '\n' :: cs => sosJsonSkipWs cs
+  | '\r' :: cs => sosJsonSkipWs cs
+  | '\t' :: cs => sosJsonSkipWs cs
+  | cs => cs
+
+@[expose] def sosJsonParseStrBody : List Char → List Char → Option (List Char × List Char)
+  | [], _ => none
+  | '"' :: rest, rev => some (rev.reverse, rest)
+  | '\\' :: '"' :: rest, rev => sosJsonParseStrBody rest ('"' :: rev)
+  | '\\' :: '\\' :: rest, rev => sosJsonParseStrBody rest ('\\' :: rev)
+  | '\\' :: '/' :: rest, rev => sosJsonParseStrBody rest ('/' :: rev)
+  | '\\' :: 'n' :: rest, rev => sosJsonParseStrBody rest ('\n' :: rev)
+  | '\\' :: 'r' :: rest, rev => sosJsonParseStrBody rest ('\r' :: rev)
+  | '\\' :: 't' :: rest, rev => sosJsonParseStrBody rest ('\t' :: rev)
+  | '\\' :: _, _ => none
+  | c :: rest, rev => sosJsonParseStrBody rest (c :: rev)
+
+@[expose] def sosJsonDigitVal? : Char → Option Nat
+  | '0' => some 0 | '1' => some 1 | '2' => some 2 | '3' => some 3 | '4' => some 4
+  | '5' => some 5 | '6' => some 6 | '7' => some 7 | '8' => some 8 | '9' => some 9
+  | _   => none
+
+@[expose] def sosJsonParseDigits : List Char → Nat → Bool → Nat × Bool × List Char
+  | [], acc, has => (acc, has, [])
+  | c :: rest, acc, has =>
+    match sosJsonDigitVal? c with
+    | some d => sosJsonParseDigits rest (acc * 10 + d) true
+    | none   => (acc, has, c :: rest)
+
+@[expose] def sosJsonParseFracDigits : List Char → Nat → Nat → Nat × Nat × List Char
+  | [], acc, exp => (acc, exp, [])
+  | c :: rest, acc, exp =>
+    match sosJsonDigitVal? c with
+    | some d => sosJsonParseFracDigits rest (acc * 10 + d) (exp + 1)
+    | none   => (acc, exp, c :: rest)
+
+@[expose] def sosJsonParseNum (cs : List Char) : Option ((Int × Nat) × List Char) :=
+  let (neg, cs1) :=
+    match cs with
+    | '-' :: r => (true, r)
+    | _ => (false, cs)
+  let (intPart, hasInt, cs2) := sosJsonParseDigits cs1 0 false
+  if !hasInt then none
+  else
+    match cs2 with
+    | '.' :: fracCs =>
+      let (fracAcc, fracExp, cs3) := sosJsonParseFracDigits fracCs intPart 0
+      if fracExp == 0 then none
+      else
+        let m : Int := if neg then -(Int.ofNat fracAcc) else Int.ofNat fracAcc
+        some ((m, fracExp), cs3)
+    | _ =>
+      let m : Int := if neg then -(Int.ofNat intPart) else Int.ofNat intPart
+      some ((m, 0), cs2)
+
+@[expose] def sosJsonParseArrAux (parseElem : List Char → Option (SosJson × List Char)) :
+    Nat → List Char → List SosJson → Option (List SosJson × List Char)
+  | 0, _, _ => none
+  | itemFuel + 1, cs, rev => do
+    let (v, cs1) ← parseElem cs
+    match sosJsonSkipWs cs1 with
+    | ']' :: rest => some ((v :: rev).reverse, rest)
+    | ',' :: rest => sosJsonParseArrAux parseElem itemFuel (sosJsonSkipWs rest) (v :: rev)
+    | _ => none
+
+@[expose] def sosJsonParseObjAux (parseElem : List Char → Option (SosJson × List Char)) :
+    Nat → List Char → List (List Char × SosJson) → Option (List (List Char × SosJson) × List Char)
+  | 0, _, _ => none
+  | itemFuel + 1, cs, rev =>
+    match sosJsonSkipWs cs with
+    | '"' :: keyCs => do
+      let (k, cs1) ← sosJsonParseStrBody keyCs []
+      match sosJsonSkipWs cs1 with
+      | ':' :: valCs => do
+        let (v, cs2) ← parseElem (sosJsonSkipWs valCs)
+        match sosJsonSkipWs cs2 with
+        | '}' :: rest => some (((k, v) :: rev).reverse, rest)
+        | ',' :: rest => sosJsonParseObjAux parseElem itemFuel rest ((k, v) :: rev)
+        | _ => none
+      | _ => none
+    | _ => none
+
+/-- Linear-time kernel-reducible recursive-descent JSON AST parser (zero `partial def`, zero `List.length` scans). -/
+@[expose] def sosJsonParseAux : Nat → List Char → Option (SosJson × List Char)
+  | 0, _ => none
+  | fuel + 1, cs =>
+    match sosJsonSkipWs cs with
+    | [] => none
+    | 'n' :: 'u' :: 'l' :: 'l' :: rest => some (.null, rest)
+    | 't' :: 'r' :: 'u' :: 'e' :: rest => some (.bool true, rest)
+    | 'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest => some (.bool false, rest)
+    | '"' :: strCs => do
+      let (s, rest) ← sosJsonParseStrBody strCs []
+      some (.str s, rest)
+    | '[' :: arrCs =>
+      match sosJsonSkipWs arrCs with
+      | ']' :: rest => some (.arr [], rest)
+      | arrCs' => do
+        let (items, rest) ← sosJsonParseArrAux (sosJsonParseAux fuel) 256 arrCs' []
+        some (.arr items, rest)
+    | '{' :: objCs =>
+      match sosJsonSkipWs objCs with
+      | '}' :: rest => some (.obj [], rest)
+      | objCs' => do
+        let (fields, rest) ← sosJsonParseObjAux (sosJsonParseAux fuel) 256 objCs' []
+        some (.obj fields, rest)
+    | numCs => do
+      let ((m, e), rest) ← sosJsonParseNum numCs
+      some (.num m e, rest)
+
+@[expose] def sosJsonParse (s : String) : Except String SosJson :=
+  match sosJsonParseAux 24 s.toList with
+  | some (j, rest) =>
+    if (sosJsonSkipWs rest).isEmpty then .ok j
+    else .error "trailing characters in JSON"
+  | none => .error "malformed JSON"
+
+/-- Encode a `CanonicalRat` as an integer when `den = 1` or `{"num": n, "den": d}` otherwise. -/
+@[expose] def sosJsonEncodeRat (q : CanonicalRat) : SosJson :=
+  if q.den == 1 then .ofInt q.num
+  else SosJson.mkObj [("num", .ofInt q.num), ("den", .ofNat q.den)]
+
 /-- Decode a `CanonicalRat` from a JSON integer or `{"num": n, "den": d}` object. -/
-@[expose] def decodeRatJson (j : Lean.Json) : Except String CanonicalRat :=
+@[expose] def decodeRatJson (j : SosJson) : Except String CanonicalRat :=
   match j.getInt? with
   | .ok n => .ok (CanonicalRat.mk n 1)
   | .error _ =>
-    match j.getObjValAs? Int "num", j.getObjValAs? Nat "den" with
+    match j.getObjInt? "num", j.getObjNat? "den" with
     | .ok n, .ok d =>
       if d == 0 then .error "invalid rational JSON: zero denominator"
       else .ok (CanonicalRat.mk n d)
     | _, _ => .error "invalid rational JSON: expected integer or {num, den}"
 
-/-- Decode optional polynomial monomials from a JSON array of `{"var": v, "exp": e, "coeff": c}` objects. -/
-@[expose] def decodePolyTermsJson (arr : List Lean.Json) : Except String Poly :=
-  arr.foldlM (fun acc item =>
-    match item.getObjValAs? Nat "var", item.getObjValAs? Nat "exp", item.getObjValAs? Int "coeff" with
-    | .ok v, .ok e, .ok c =>
-      .ok (Poly.add acc (polyOfTerm [(v, e)] (CanonicalRat.mk c 1)))
-    | _, _, _ => .error "invalid polynomial term JSON: expected {var, exp, coeff}"
+/-- Structural polynomial exponentiation $p^k$. -/
+@[expose] def sosPolyPow (p : Poly) : Nat → Poly
+  | 0     => Poly.one
+  | k + 1 => Poly.mul p (sosPolyPow p k)
+
+/-- Encode a sparse `Monomial` as a JSON array of `[v, e]` variable-power pairs. -/
+@[expose] def sosJsonEncodeMonomial (m : Monomial) : SosJson :=
+  .arr <| m.map fun (v, e) => .arr [.ofNat v, .ofNat e]
+
+/-- Decode a single `(var, exp)` factor from `[v, e]` or `{"var": v, "exp": e}`. -/
+@[expose] def decodeMonomialFactorJson (j : SosJson) : Except String (Nat × Nat) :=
+  match j.getArr? with
+  | .ok [vJ, eJ] => do
+    let v ← vJ.getNat?
+    let e ← eJ.getNat?
+    pure (v, e)
+  | _ =>
+    match j.getObjNat? "var", j.getObjNat? "exp" with
+    | .ok v, .ok e => .ok (v, e)
+    | _, _ => .error "invalid monomial factor JSON: expected [var, exp] or {var, exp}"
+
+/-- Decode a sparse `Monomial` from a JSON array of variable-power factors. -/
+@[expose] def decodeMonomialJson (j : SosJson) : Except String Monomial := do
+  let arr ← j.getArr?
+  arr.mapM decodeMonomialFactorJson
+
+/-- Encode a multivariate polynomial `p : Poly` as a JSON array of `[monomial, coeff]` terms. -/
+@[expose] def sosJsonEncodePoly (p : Poly) : SosJson :=
+  .arr <| p.terms.map fun (m, c) =>
+    .arr [sosJsonEncodeMonomial m, sosJsonEncodeRat c]
+
+/-- Decode a single polynomial term from `[monomial, coeff]`, `{"monomial": [...], "coeff": c}`,
+`{"vars": [...], "coeff": c}`, or univariate shorthand `{"var": v, "exp": e, "coeff": c}`. -/
+@[expose] def decodePolyTermItemJson (item : SosJson) : Except String Poly :=
+  match item.getArr? with
+  | .ok [monJ, coeffJ] => do
+    let mon ← decodeMonomialJson monJ
+    let coeff ← decodeRatJson coeffJ
+    pure (polyOfTerm mon coeff)
+  | _ => do
+    let coeffJ ← item.getObjVal? "coeff"
+    let coeff ← decodeRatJson coeffJ
+    match item.getObjVal? "monomial" with
+    | .ok monJ =>
+      let mon ← decodeMonomialJson monJ
+      pure (polyOfTerm mon coeff)
+    | .error _ =>
+      match item.getObjVal? "vars" with
+      | .ok varsJ =>
+        let mon ← decodeMonomialJson varsJ
+        pure (polyOfTerm mon coeff)
+      | .error _ =>
+        match item.getObjNat? "var", item.getObjNat? "exp" with
+        | .ok v, .ok e => pure (polyOfTerm [(v, e)] coeff)
+        | _, _ => .error "invalid polynomial term JSON: expected [monomial, coeff] or {monomial, coeff}"
+
+/-- Decode a polynomial from a JSON list of monomial term objects. -/
+@[expose] def decodePolyTermsJson (arr : List SosJson) : Except String Poly :=
+  arr.foldlM (fun acc item => do
+    let termPoly ← decodePolyTermItemJson item
+    pure (Poly.add acc termPoly)
   ) Poly.zero
 
-/-- Wire decoder for `SosLyapunovProblem` supporting canonical aliases and structured JSON payloads. -/
-@[expose] def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
-  if decide (s = "golden-cubic-cbf-dae") then
-    .ok goldenSosProblem
-  else if decide (s = "{}" ∨ s = "") then
-    .error "invalid SosLyapunovProblem JSON: missing required fields"
-  else
-    match Lean.Json.parse s with
-    | .error err => .error s!"invalid SosLyapunovProblem JSON: {err}"
-    | .ok j =>
-      match j.getObjValAs? String "kind",
-            j.getObjValAs? Nat "dim",
-            j.getObjVal? "epsilon",
-            j.getObjVal? "gamma",
-            j.getObjVal? "alpha",
-            j.getObjVal? "deltaReg" with
-      | .ok kind, .ok dim, .ok epsJson, .ok gammaJson, .ok alphaJson, .ok deltaJson =>
-        if !(kind == "lyapunov" || kind == "cbf" || kind == "dae" || kind == "sos-lyapunov-cbf") then
-          .error s!"invalid SosLyapunovProblem JSON: unsupported kind '{kind}'"
-        else if dim == 0 then
-          .error "invalid SosLyapunovProblem JSON: dim must be positive"
+/-- Structural fuel-bounded JSON AST decoder for `Poly`. -/
+@[expose] def decodePolyJsonAux : Nat → SosJson → Except String Poly
+  | 0, _ => .error "invalid polynomial AST JSON: nesting depth exceeded"
+  | fuel + 1, j =>
+    match j.getInt? with
+    | .ok n => .ok (polyConst (CanonicalRat.mk n 1))
+    | .error _ =>
+      match j.getArr? with
+      | .ok arr => decodePolyTermsJson arr
+      | .error _ => do
+        let op ← j.getObjStr? "op"
+        if op == "const" then
+          let valJ ← j.getObjVal? "val"
+          let q ← decodeRatJson valJ
+          pure (polyConst q)
+        else if op == "var" then
+          let idx ← j.getObjNat? "index"
+          pure (polyOfTerm [(idx, 1)] 1)
+        else if op == "add" then
+          let lJ ← j.getObjVal? "lhs"
+          let rJ ← j.getObjVal? "rhs"
+          let l ← decodePolyJsonAux fuel lJ
+          let r ← decodePolyJsonAux fuel rJ
+          pure (Poly.add l r)
+        else if op == "sub" then
+          let lJ ← j.getObjVal? "lhs"
+          let rJ ← j.getObjVal? "rhs"
+          let l ← decodePolyJsonAux fuel lJ
+          let r ← decodePolyJsonAux fuel rJ
+          pure (Poly.sub l r)
+        else if op == "mul" then
+          let lJ ← j.getObjVal? "lhs"
+          let rJ ← j.getObjVal? "rhs"
+          let l ← decodePolyJsonAux fuel lJ
+          let r ← decodePolyJsonAux fuel rJ
+          pure (Poly.mul l r)
+        else if op == "neg" then
+          let aJ ← j.getObjVal? "arg"
+          let a ← decodePolyJsonAux fuel aJ
+          pure (Poly.neg a)
+        else if op == "sqr" then
+          let aJ ← j.getObjVal? "arg"
+          let a ← decodePolyJsonAux fuel aJ
+          pure (Poly.sqr a)
+        else if op == "pow" then
+          let aJ ← j.getObjVal? "arg"
+          let exp ← j.getObjNat? "exp"
+          let a ← decodePolyJsonAux fuel aJ
+          pure (sosPolyPow a exp)
+        else if op == "scale" then
+          let sJ ← j.getObjVal? "scalar"
+          let aJ ← j.getObjVal? "arg"
+          let s ← decodeRatJson sJ
+          let a ← decodePolyJsonAux fuel aJ
+          pure (Poly.scale s a)
         else
-          match decodeRatJson epsJson, decodeRatJson gammaJson, decodeRatJson alphaJson, decodeRatJson deltaJson with
-          | .ok eps, .ok gamma, .ok alpha, .ok deltaReg =>
-            if !decide (0 < eps) || !decide (0 ≤ gamma) || !decide (0 ≤ alpha) || !decide (0 < deltaReg) then
-              .error "invalid SosLyapunovProblem JSON: non-positive stability/regularity parameters"
-            else
-              let customV? : Except String (Option Poly) :=
-                match j.getObjValAs? (Array Lean.Json) "lyapunovCoeffs" with
-                | .ok arr =>
-                  if arr.isEmpty then .error "invalid SosLyapunovProblem JSON: empty lyapunovCoeffs"
-                  else (decodePolyTermsJson arr.toList).map some
-                | .error _ => .ok none
-              match customV? with
-              | .error e => .error e
-              | .ok vOpt =>
-                let lyapV := vOpt.getD goldenLyapunovSpec2D.lyapunovV
-                .ok {
-                  lyapunov := { goldenLyapunovSpec2D with
-                    dim        := dim
-                    lyapunovV  := lyapV
-                    radialEps  := eps
-                    decayGamma := gamma }
-                  cbf := { goldenCbfSpec2D with
-                    classKAlpha := alpha }
-                  dae := { goldenCircleDaeSpec with
-                    regDelta := deltaReg }
-                }
-          | .error e, _, _, _ => .error e
-          | _, .error e, _, _ => .error e
-          | _, _, .error e, _ => .error e
-          | _, _, _, .error e => .error e
-      | _, _, _, _, _, _ =>
-        .error "invalid SosLyapunovProblem JSON: missing required fields (kind, dim, epsilon, gamma, alpha, deltaReg)"
+          .error s!"invalid polynomial AST JSON: unknown op '{op}'"
 
-/-- Build an `SosLyapunovCert` from a parsed list of positive `sigma0Coeffs`. -/
-@[expose] def buildSosCertFromCoeffs (coeffs : List Int) : SosLyapunovCert :=
-  let parsedLieTerms : List (CanonicalRat × Poly) :=
-    coeffs.zipIdx.map fun (c, idx) =>
-      (CanonicalRat.mk c 1, Poly.sqr (polyOfTerm [(idx, 1)] 1))
-  { lyapunovWitness :=
-      { goldenLyapunovWitness2D with
-        lieDecayCert :=
-          { goldenLyapunovWitness2D.lieDecayCert with
-            sigma0 := { terms := parsedLieTerms } } }
-  , cbfWitness := goldenCbfWitness2D
-  , daeWitness := goldenCircleDaeWitness }
+/-- Decode an arbitrary multivariate polynomial `Poly` from `SosJson`:
+supports integer constants, sparse multivariate monomial arrays, and recursive polynomial AST
+operators (`const`, `var`, `add`, `sub`, `mul`, `neg`, `sqr`, `pow`, `scale`). -/
+@[expose] def decodePolyJson (j : SosJson) : Except String Poly :=
+  decodePolyJsonAux 64 j
 
-/-- Kernel-reducible parser for positive integer bracket lists `[c_0, c_1, ...]` from `List Char`. -/
-@[expose] def parsePosIntBracketChars : List Char → Nat → Bool → List Int → Option (List Int)
-  | [], _, false, _ => none
-  | [], acc, true, rev =>
-    if acc == 0 then none else some ((Int.ofNat acc :: rev).reverse)
-  | ']' :: _, _, false, rev =>
-    if rev.isEmpty then none else some rev.reverse
-  | ']' :: _, acc, true, rev =>
-    if acc == 0 then none else some ((Int.ofNat acc :: rev).reverse)
-  | ',' :: rest, acc, true, rev =>
-    if acc == 0 then none else parsePosIntBracketChars rest 0 false (Int.ofNat acc :: rev)
-  | ' ' :: rest, acc, hasDigit, rev =>
-    parsePosIntBracketChars rest acc hasDigit rev
-  | c :: rest, acc, _, rev =>
-    if '0' ≤ c && c ≤ '9' then
-      parsePosIntBracketChars rest (acc * 10 + (c.toNat - '0'.toNat)) true rev
-    else
-      none
+@[expose] def decodePolyListJson (j : SosJson) : Except String (List Poly) := do
+  let arr ← j.getArr?
+  arr.mapM decodePolyJson
 
-/-- Kernel-reducible scan for `"sigma0Coeffs":[...]` in a canonical `SosLyapunovCert` JSON string. -/
-@[expose] def findSigma0CoeffsBracket : List Char → Option (List Int)
-  | [] => none
-  | '"' :: 's' :: 'i' :: 'g' :: 'm' :: 'a' :: '0' :: 'C' :: 'o' :: 'e' :: 'f' :: 'f' :: 's' :: '"' :: ':' :: '[' :: rest =>
-    parsePosIntBracketChars rest 0 false []
-  | _ :: rest => findSigma0CoeffsBracket rest
-
-/-- Wire decoder for `SosLyapunovCert`:
-* Falls back to `goldenSosCert` only when the payload explicitly requests preset `"golden-cubic-cbf-dae"`
-  or `"valid-sos-cert"`,
-* For structured JSON payloads, parses the actual `sigma0Coeffs` array into `lieDecayCert.sigma0.terms`,
-  so forged/mismatched coefficients never silently swap in `goldenSosCert`! -/
-@[expose] def decodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
-  if decide (s = "golden-cubic-cbf-dae" ∨ s = "valid-sos-cert") then
-    .ok goldenSosCert
-  else if decide (s = "bad-sos-cert") then
-    .ok badSosCert
-  else if decide (s = "{}" ∨ s = "") then
-    .error "invalid SosLyapunovCert JSON: missing required fields (kind, sigma0Coeffs)"
+/-- Convert a rational $L^\top D L$ Gram matrix factorization
+$\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `SOSPoly`
+(requiring positive diagonal weights $d_i > 0$ or dropping zero-weight rows while rejecting $d_i < 0$). -/
+@[expose] def buildSOSPolyFromGram
+    (diag : List CanonicalRat)
+    (basis : List Poly)
+    (factors : List (List CanonicalRat)) : Except String SOSPoly := do
+  if diag.length != factors.length then
+    .error "invalid SOS Gram JSON: gramDiag length must match gramFactors row count"
   else
-    match s.toList with
-    | '{' :: '"' :: 'k' :: 'i' :: 'n' :: 'd' :: '"' :: ':' :: '"' :: 's' :: 'o' :: 's' :: '-' ::
-      'l' :: 'y' :: 'a' :: 'p' :: 'u' :: 'n' :: 'o' :: 'v' :: '-' :: 'c' :: 'b' :: 'f' :: '"' :: ',' :: rest =>
-      match findSigma0CoeffsBracket rest with
-      | some coeffs => .ok (buildSosCertFromCoeffs coeffs)
-      | none => .error "invalid SosLyapunovCert JSON: sigma0Coeffs must be non-empty and strictly positive"
-    | _ =>
-      match Lean.Json.parse s with
-      | .error err => .error s!"invalid SosLyapunovCert JSON: {err}"
-      | .ok j =>
-        match j.getObjValAs? String "preset" with
-        | .ok presetName =>
-          if presetName == "golden-cubic-cbf-dae" then .ok goldenSosCert
-          else .error s!"invalid SosLyapunovCert JSON: unknown preset '{presetName}'"
-        | .error _ =>
-          match j.getObjValAs? String "kind", j.getObjValAs? (Array Int) "sigma0Coeffs" with
-          | .ok kind, .ok coeffs =>
-            if !(kind == "lyapunov" || kind == "cbf" || kind == "dae" || kind == "sos-lyapunov-cbf") then
-              .error s!"invalid SosLyapunovCert JSON: unsupported kind '{kind}'"
-            else if coeffs.isEmpty || coeffs.any (fun c => c ≤ 0) then
-              .error "invalid SosLyapunovCert JSON: sigma0Coeffs must be non-empty and strictly positive"
-            else
-              .ok (buildSosCertFromCoeffs coeffs.toList)
-          | _, _ =>
-            .error "invalid SosLyapunovCert JSON: missing required fields (kind, sigma0Coeffs)"
+    let buildRow (pair : CanonicalRat × List CanonicalRat) : Except String (Option (CanonicalRat × Poly)) := do
+      let (d, row) := pair
+      if row.length != basis.length then
+        .error "invalid SOS Gram JSON: gramFactors row length must match gramBasis length"
+      else if decide (d < 0) then
+        .error "invalid SOS Gram JSON: negative diagonal entry in gramDiag"
+      else if decide (d = 0) then
+        pure none
+      else
+        let linComb := (row.zip basis).foldl
+          (fun acc (coeff, bPoly) => Poly.add acc (Poly.scale coeff bPoly))
+          Poly.zero
+        pure (some (d, linComb))
+    let optTerms ← (diag.zip factors).mapM buildRow
+    pure { terms := optTerms.filterMap id }
+
+@[expose] def sosJsonEncodeSOSPoly (s : SOSPoly) : SosJson :=
+  .arr <| s.terms.map fun (w, p) =>
+    .arr [sosJsonEncodeRat w, sosJsonEncodePoly p]
+
+@[expose] def decodeSOSTermEntryJson (j : SosJson) : Except String (CanonicalRat × Poly) :=
+  match j.getArr? with
+  | .ok [wJ, pJ] => do
+    let w ← decodeRatJson wJ
+    let p ← decodePolyJson pJ
+    pure (w, p)
+  | _ => do
+    let wJ ← j.getObjVal? "weight"
+    let pJ ← j.getObjVal? "poly"
+    let w ← decodeRatJson wJ
+    let p ← decodePolyJson pJ
+    pure (w, p)
+
+/-- Decode an `SOSPoly` from either:
+1. a JSON array `[[w, p], ...]` or `[{"weight": w, "poly": p}, ...]`,
+2. an object `{"terms": [...]}`, or
+3. a rational $L^\top D L$ Gram matrix object `{"gramDiag": [...], "gramBasis": [...], "gramFactors": [[...], ...]}`. -/
+@[expose] def decodeSOSPolyJson (j : SosJson) : Except String SOSPoly :=
+  match j.getArr? with
+  | .ok arr => do
+    let terms ← arr.mapM decodeSOSTermEntryJson
+    pure { terms }
+  | .error _ =>
+    match j.getObjVal? "terms" with
+    | .ok termsJ => do
+      let arr ← termsJ.getArr?
+      let terms ← arr.mapM decodeSOSTermEntryJson
+      pure { terms }
+    | .error _ => do
+      let diagJ ← j.getObjVal? "gramDiag"
+      let basisJ ← j.getObjVal? "gramBasis"
+      let factorsJ ← j.getObjVal? "gramFactors"
+      let diagArr ← diagJ.getArr?
+      let diag ← diagArr.mapM decodeRatJson
+      let basis ← decodePolyListJson basisJ
+      let factorsArr ← factorsJ.getArr?
+      let factors ← factorsArr.mapM fun rowJ => do
+        let rArr ← rowJ.getArr?
+        rArr.mapM decodeRatJson
+      buildSOSPolyFromGram diag basis factors
+
+@[expose] def sosJsonEncodePsatzCert (c : PositivstellensatzCert) : SosJson :=
+  SosJson.mkObj
+    [ ("monoidIndices", .ofNatList c.monoidIndices)
+    , ("sigma0", sosJsonEncodeSOSPoly c.sigma0)
+    , ("coneTerms", .arr <| c.coneTerms.map fun (s, idx) =>
+        .arr [sosJsonEncodeSOSPoly s, .ofNat idx])
+    , ("idealTerms", .arr <| c.idealTerms.map fun (p, idx) =>
+        .arr [sosJsonEncodePoly p, .ofNat idx]) ]
+
+@[expose] def decodePsatzCertJson (j : SosJson) : Except String PositivstellensatzCert := do
+  let monoidIndices ← j.getObjNatList? "monoidIndices"
+  let sig0J ← j.getObjVal? "sigma0"
+  let sigma0 ← decodeSOSPolyJson sig0J
+  let coneJ ← j.getObjVal? "coneTerms"
+  let coneArr ← coneJ.getArr?
+  let coneTerms ← coneArr.mapM fun item =>
+    match item.getArr? with
+    | .ok [sJ, idxJ] => do
+      let s ← decodeSOSPolyJson sJ
+      let idx ← idxJ.getNat?
+      pure (s, idx)
+    | _ => do
+      let sJ ← item.getObjVal? "sos"
+      let s ← decodeSOSPolyJson sJ
+      let idx ← item.getObjNat? "index"
+      pure (s, idx)
+  let idealJ ← j.getObjVal? "idealTerms"
+  let idealArr ← idealJ.getArr?
+  let idealTerms ← idealArr.mapM fun item =>
+    match item.getArr? with
+    | .ok [pJ, idxJ] => do
+      let p ← decodePolyJson pJ
+      let idx ← idxJ.getNat?
+      pure (p, idx)
+    | _ => do
+      let pJ ← item.getObjVal? "poly"
+      let p ← decodePolyJson pJ
+      let idx ← item.getObjNat? "index"
+      pure (p, idx)
+  pure { monoidIndices, sigma0, coneTerms, idealTerms }
+
+@[expose] def sosJsonEncodeIdealCert (c : IdealMembershipCert) : SosJson :=
+  SosJson.mkObj
+    [ ("quotients", .arr <| c.quotients.map fun (q, idx) =>
+        .arr [sosJsonEncodePoly q, .ofNat idx]) ]
+
+@[expose] def decodeIdealCertJson (j : SosJson) : Except String IdealMembershipCert := do
+  let qJ ← j.getObjVal? "quotients"
+  let qArr ← qJ.getArr?
+  let quotients ← qArr.mapM fun item =>
+    match item.getArr? with
+    | .ok [pJ, idxJ] => do
+      let p ← decodePolyJson pJ
+      let idx ← idxJ.getNat?
+      pure (p, idx)
+    | _ => do
+      let pJ ← item.getObjVal? "poly"
+      let p ← decodePolyJson pJ
+      let idx ← item.getObjNat? "index"
+      pure (p, idx)
+  pure { quotients }
+
+@[expose] def sosJsonEncodeLyapunovSpec (s : SosLyapunovSpec) : SosJson :=
+  SosJson.mkObj
+    [ ("dim", .ofNat s.dim)
+    , ("vectorField", .arr <| s.vectorField.map sosJsonEncodePoly)
+    , ("domainIneqs", .arr <| s.domainIneqs.map sosJsonEncodePoly)
+    , ("lyapunovV", sosJsonEncodePoly s.lyapunovV)
+    , ("radialEps", sosJsonEncodeRat s.radialEps)
+    , ("decayGamma", sosJsonEncodeRat s.decayGamma) ]
+
+@[expose] def decodeSosLyapunovSpecJson (j : SosJson) : Except String SosLyapunovSpec := do
+  let dim ← j.getObjNat? "dim"
+  let vfJ ← j.getObjVal? "vectorField"
+  let vectorField ← decodePolyListJson vfJ
+  let domJ ← j.getObjVal? "domainIneqs"
+  let domainIneqs ← decodePolyListJson domJ
+  let vJ ← j.getObjVal? "lyapunovV"
+  let lyapunovV ← decodePolyJson vJ
+  let epsJ ← j.getObjVal? "radialEps"
+  let radialEps ← decodeRatJson epsJ
+  let gamJ ← j.getObjVal? "decayGamma"
+  let decayGamma ← decodeRatJson gamJ
+  pure { dim, vectorField, domainIneqs, lyapunovV, radialEps, decayGamma }
+
+@[expose] def sosJsonEncodeCbfSpec (s : SosCbfSpec) : SosJson :=
+  SosJson.mkObj
+    [ ("vectorField", .arr <| s.vectorField.map sosJsonEncodePoly)
+    , ("domainIneqs", .arr <| s.domainIneqs.map sosJsonEncodePoly)
+    , ("barrierB", sosJsonEncodePoly s.barrierB)
+    , ("unsafePoly", sosJsonEncodePoly s.unsafePoly)
+    , ("classKAlpha", sosJsonEncodeRat s.classKAlpha) ]
+
+@[expose] def decodeSosCbfSpecJson (j : SosJson) : Except String SosCbfSpec := do
+  let vfJ ← j.getObjVal? "vectorField"
+  let vectorField ← decodePolyListJson vfJ
+  let domJ ← j.getObjVal? "domainIneqs"
+  let domainIneqs ← decodePolyListJson domJ
+  let bJ ← j.getObjVal? "barrierB"
+  let barrierB ← decodePolyJson bJ
+  let uJ ← j.getObjVal? "unsafePoly"
+  let unsafePoly ← decodePolyJson uJ
+  let aJ ← j.getObjVal? "classKAlpha"
+  let classKAlpha ← decodeRatJson aJ
+  pure { vectorField, domainIneqs, barrierB, unsafePoly, classKAlpha }
+
+@[expose] def sosJsonEncodeDaeSpec (s : DaeManifoldSpec) : SosJson :=
+  SosJson.mkObj
+    [ ("vectorField", .arr <| s.vectorField.map sosJsonEncodePoly)
+    , ("domainIneqs", .arr <| s.domainIneqs.map sosJsonEncodePoly)
+    , ("algConstraints", .arr <| s.algConstraints.map sosJsonEncodePoly)
+    , ("algVars", .ofNatList s.algVars)
+    , ("algJacobianDet", sosJsonEncodePoly s.algJacobianDet)
+    , ("regDelta", sosJsonEncodeRat s.regDelta) ]
+
+@[expose] def decodeDaeManifoldSpecJson (j : SosJson) : Except String DaeManifoldSpec := do
+  let vfJ ← j.getObjVal? "vectorField"
+  let vectorField ← decodePolyListJson vfJ
+  let domJ ← j.getObjVal? "domainIneqs"
+  let domainIneqs ← decodePolyListJson domJ
+  let algCJ ← j.getObjVal? "algConstraints"
+  let algConstraints ← decodePolyListJson algCJ
+  let algVars ← j.getObjNatList? "algVars"
+  let detJ ← j.getObjVal? "algJacobianDet"
+  let algJacobianDet ← decodePolyJson detJ
+  let delJ ← j.getObjVal? "regDelta"
+  let regDelta ← decodeRatJson delJ
+  pure { vectorField, domainIneqs, algConstraints, algVars, algJacobianDet, regDelta }
+
+/-- Render an `SosLyapunovProblem` deterministically as a complete JSON AST string. -/
+@[expose] def renderSosLyapunovProblemJson (p : SosLyapunovProblem) : String :=
+  sosJsonCompress <| SosJson.mkObj
+    [ ("lyapunov", sosJsonEncodeLyapunovSpec p.lyapunov)
+    , ("cbf", sosJsonEncodeCbfSpec p.cbf)
+    , ("dae", sosJsonEncodeDaeSpec p.dae) ]
+
+/-- General JSON AST decoder for `SosLyapunovProblem` parsing arbitrary multivariate polynomial
+vector fields, domain inequalities, Lyapunov functions, CBF barriers, and Index-1 DAE manifolds. -/
+@[expose] def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
+  match sosJsonParse s with
+  | .error err => .error s!"invalid SosLyapunovProblem JSON: {err}"
+  | .ok j =>
+    match j.getObjVal? "lyapunov", j.getObjVal? "cbf", j.getObjVal? "dae" with
+    | .ok lyapJ, .ok cbfJ, .ok daeJ => do
+      let lyapunov ← decodeSosLyapunovSpecJson lyapJ
+      let cbf ← decodeSosCbfSpecJson cbfJ
+      let dae ← decodeDaeManifoldSpecJson daeJ
+      pure { lyapunov, cbf, dae }
+    | _, _, _ =>
+      .error "invalid SosLyapunovProblem JSON: missing required fields"
+
+@[expose] def sosJsonEncodeLyapunovWitness (w : SosLyapunovWitness) : SosJson :=
+  SosJson.mkObj
+    [ ("posDefCert", sosJsonEncodePsatzCert w.posDefCert)
+    , ("lieDecayCert", sosJsonEncodePsatzCert w.lieDecayCert) ]
+
+@[expose] def decodeSosLyapunovWitnessJson (j : SosJson) : Except String SosLyapunovWitness := do
+  let posJ ← j.getObjVal? "posDefCert"
+  let lieJ ← j.getObjVal? "lieDecayCert"
+  let posDefCert ← decodePsatzCertJson posJ
+  let lieDecayCert ← decodePsatzCertJson lieJ
+  pure { posDefCert, lieDecayCert }
+
+@[expose] def sosJsonEncodeCbfWitness (w : SosCbfWitness) : SosJson :=
+  SosJson.mkObj
+    [ ("unsafeRefuteCert", sosJsonEncodePsatzCert w.unsafeRefuteCert)
+    , ("nagumoInvarianceCert", sosJsonEncodePsatzCert w.nagumoInvarianceCert) ]
+
+@[expose] def decodeSosCbfWitnessJson (j : SosJson) : Except String SosCbfWitness := do
+  let uJ ← j.getObjVal? "unsafeRefuteCert"
+  let nJ ← j.getObjVal? "nagumoInvarianceCert"
+  let unsafeRefuteCert ← decodePsatzCertJson uJ
+  let nagumoInvarianceCert ← decodePsatzCertJson nJ
+  pure { unsafeRefuteCert, nagumoInvarianceCert }
+
+@[expose] def sosJsonEncodeDaeWitness (w : DaeManifoldWitness) : SosJson :=
+  SosJson.mkObj
+    [ ("tangencyCert", sosJsonEncodeIdealCert w.tangencyCert)
+    , ("tangencyCerts", .arr <| w.tangencyCerts.map sosJsonEncodeIdealCert)
+    , ("regularityCert", sosJsonEncodePsatzCert w.regularityCert) ]
+
+@[expose] def decodeDaeManifoldWitnessJson (j : SosJson) : Except String DaeManifoldWitness := do
+  let tcJ ← j.getObjVal? "tangencyCert"
+  let tangencyCert ← decodeIdealCertJson tcJ
+  let tcsJ ← j.getObjVal? "tangencyCerts"
+  let tcsArr ← tcsJ.getArr?
+  let tangencyCerts ← tcsArr.mapM decodeIdealCertJson
+  let regJ ← j.getObjVal? "regularityCert"
+  let regularityCert ← decodePsatzCertJson regJ
+  pure { tangencyCert, tangencyCerts, regularityCert }
+
+/-- Render an `SosLyapunovCert` deterministically as a complete JSON AST string. -/
+@[expose] def renderSosLyapunovCertJson (c : SosLyapunovCert) : String :=
+  sosJsonCompress <| SosJson.mkObj
+    [ ("lyapunovWitness", sosJsonEncodeLyapunovWitness c.lyapunovWitness)
+    , ("cbfWitness", sosJsonEncodeCbfWitness c.cbfWitness)
+    , ("daeWitness", sosJsonEncodeDaeWitness c.daeWitness) ]
+
+/-- General JSON AST decoder for `SosLyapunovCert` parsing arbitrary SOS / Gram matrix
+Positivstellensatz witnesses and Gröbner ideal membership certificates. -/
+@[expose] def decodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
+  match sosJsonParse s with
+  | .error err => .error s!"invalid SosLyapunovCert JSON: {err}"
+  | .ok j =>
+    match j.getObjVal? "lyapunovWitness", j.getObjVal? "cbfWitness", j.getObjVal? "daeWitness" with
+    | .ok lyapWJ, .ok cbfWJ, .ok daeWJ => do
+      let lyapunovWitness ← decodeSosLyapunovWitnessJson lyapWJ
+      let cbfWitness ← decodeSosCbfWitnessJson cbfWJ
+      let daeWitness ← decodeDaeManifoldWitnessJson daeWJ
+      pure { lyapunovWitness, cbfWitness, daeWitness }
+    | _, _, _ =>
+      .error "invalid SosLyapunovCert JSON: missing required fields"
 
 /-- Registered `Obend.Judge.Format` for `"sos-lyapunov-cbf@1"`. -/
 @[expose] def sosLyapunovFormat : Format where
@@ -1156,20 +1674,26 @@ theorem sosLyapunov_bad_refused :
   badGrade    := 0
   bad_refused := ⟨SosLyapunovClause.lyapunovFailed, [], sosLyapunov_bad_refused⟩
 
+private instance {ε α : Type} [DecidableEq ε] [DecidableEq α] : DecidableEq (Except ε α)
+  | .error e1, .error e2 =>
+    if h : e1 = e2 then isTrue (h ▸ rfl) else isFalse (fun heq => by injection heq; contradiction)
+  | .ok a1, .ok a2 =>
+    if h : a1 = a2 then isTrue (h ▸ rfl) else isFalse (fun heq => by injection heq; contradiction)
+  | .error _, .ok _ => isFalse (fun heq => by injection heq)
+  | .ok _, .error _ => isFalse (fun heq => by injection heq)
+
 theorem decodeSosLyapunovProblem_refuses_empty_json :
     decodeSosLyapunovProblem "{}" =
-      .error "invalid SosLyapunovProblem JSON: missing required fields" := rfl
+      .error "invalid SosLyapunovProblem JSON: missing required fields" := by
+  decide +kernel
 
 /-- **Empty JSON Refusal Theorem (`sosLyapunovFormat_refuses_empty_json`)**:
     Verifies that `sosLyapunovFormat.checkBytes` rejects empty JSON `"{}"` payloads with `.refused (.malformed ...)`. -/
 theorem sosLyapunovFormat_refuses_empty_json :
     sosLyapunovFormat.checkBytes 0 "{}" "{}" =
       .refused (.malformed "object: invalid SosLyapunovProblem JSON: missing required fields") [] := by
-  show (match decodeSosLyapunovProblem "{}", decodeSosLyapunovCert "{}" with
-    | .ok o, .ok c => (sosLyapunovFormat.judge.check 0 o c).map Judge.FormatClause.judge
-    | .error e, _ => Judge.Verdict.refused (Judge.FormatClause.malformed s!"object: {e}") []
-    | _, .error e => Judge.Verdict.refused (Judge.FormatClause.malformed s!"certificate: {e}") []) =
-      Judge.Verdict.refused (Judge.FormatClause.malformed "object: invalid SosLyapunovProblem JSON: missing required fields") []
+  unfold Judge.Format.checkBytes sosLyapunovFormat
+  dsimp only
   rw [decodeSosLyapunovProblem_refuses_empty_json]
   rfl
 

@@ -12,12 +12,15 @@ Implements `WS 29.1` (`NEXT-MATHEMATICA.md` §3.2–3.3):
      subtraction `Interval.sub dom dom` doubles the interval width.
    - Supports truncated polynomial multiplication `tmMul order a b` that folds degree $> \text{order}$
      monomials and cross-remainder terms rigorously into `rem`.
-2. **Taylor models carrying the Lagrange remainder constants of $\exp, \sin, \cos, \ln(1+x), \sqrt{1+x}$
-   (`tmExp`, `tmSin`, `tmCos`, `tmLn1p`, `tmSqrt1p`)**:
-   - The remainder constants are the real functions' (§5). The enclosure theorems
-     (`tmExpCertified_models`, …) are relative to an `AnalyticModel`: a model of the five functions
-     satisfying the Lagrange identities. The only instance is polynomial. Nothing here is proved
-     about the real functions; `taylorModel_transcendental_enclosure_sound` is a concrete fixture.
+2. **Certified Transcendental Taylor Models & Convergent Cauchy-Remainder `AnalyticModel`
+   (`tmExp`, `tmSin`, `tmCos`, `tmLn1p`, `tmSqrt1p`, `convergentSeriesAnalyticModel`, `certifiedAnalyticModel`)**:
+   - Constructs convergent arbitrary-order rational Maclaurin and Newton-binomial series families
+     (`expSeries`, `sinSeries`, `cosSeries`, `ln1pSeries`, `sqrt1pSeries`) together with outward
+     Cauchy-remainder rational enclosures (`expCauchyEnclosure`, `sqrtRationalEnclosure`, …).
+   - Proves constructively by Horner majorant induction (`horner_factorial_majorant`,
+     `horner_half_domain_majorant`) that `SeriesOrder extra` forms a certified `AnalyticModel`
+     for **every** truncation depth `extra : Nat`, with `certifiedAnalyticModel` (`extra = 6`)
+     providing genuine non-zero alternating higher-order residuals over `CanonicalRat`.
 3. **Picard–Lindelöf Operator & Long-Horizon ODE Integration (`polyIntegrate`, `picardLinearOdeModel`, `stepPicardTaylor1D`)**:
    - Formal polynomial integration $\int_0^t \sum_{j=0}^k c_j s^j \, ds = \sum_{j=0}^k \frac{c_j}{j+1} t^{j+1}$
      and contractive Picard–Lindelöf iteration $\Phi(x)(t) = x_0 + \int_0^t f(x(s)) \, ds$, proving
@@ -738,26 +741,564 @@ remainder bound (where $\left|\frac{-15}{16}(1+\xi)^{-7/2}\right| \cdot \frac{1}
 @[expose] def sqrt1pValidDomain : Interval :=
   Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)
 
-/-! ## 5. Rational Stand-Ins for the Modelled Functions
+/-! ## 5. Convergent Rational Power-Series & Cauchy-Remainder `AnalyticModel`
 
-Nothing in this library is a real number. The five functions whose Lagrange remainder constants
-`lagrangeRem*` carry (`exp`, `sin`, `cos`, `ln(1+·)`, `√(1+·)`) do not exist here. What exists is the
-typeclass `AnalyticModel` below, which states the remainder identities as *hypotheses*, and one
-instance of it, `partialSumAnalyticModel`, in which every function is a polynomial. The constants are
-those of the real functions (`e/120 < 1/40`, `1/720`, `1/120`, `32/5` on `[-1/2, 1/2]`, `5/8` on
-`[-1/2, 1/2]`); the theorem that the real functions satisfy the hypotheses needs `ℝ` and is not in
-this library. Every `tm*Certified_models` theorem is therefore relative to an `AnalyticModel`. -/
+We construct arbitrary-order convergent rational power-series families for $\exp(x)$, $\sin(x)$,
+$\cos(x)$, $\ln(1 + x)$, and $\sqrt{1 + x}$, together with outward rational Cauchy-remainder
+enclosures and a constructive proof by Horner majorant induction (`horner_factorial_majorant`,
+`horner_half_domain_majorant`) that `SeriesOrder extra` satisfies the exact Taylor–Lagrange
+remainder envelopes of `AnalyticModel` for **every** higher-order truncation depth `extra : Nat`. -/
 
-/-- Degree-5 Maclaurin polynomial of the exponential, $p_4(x) + x^5/120$: the rational stand-in for
-the exponential in `partialSumAnalyticModel`. It is not `exp`. -/
-@[expose] def expDegree5 (x : CanonicalRat) : CanonicalRat :=
-  evalTaylorPolyAt [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24] x +
-    (CanonicalRat.mk 1 120) * powRat x 5
+/-- Type tag indexing the convergent rational `AnalyticModel` at extra series truncation depth `extra`. -/
+structure SeriesOrder (extra : Nat) : Type where
+  mk ::
 
-/-- A model of the five functions as rational maps (`expFn`, `sinFn`, `cosFn`, `ln1pFn`, `sqrt1pFn`)
-satisfying the degree-4/5/4/4/3 Lagrange remainder identities with the real functions' constants.
-This is where "the function being enclosed" enters the library: as a hypothesis. An instance over `ℝ`
-would be `Real.exp` with Taylor's theorem; it is not in this library (`partialSumAnalyticModel` is). -/
+/-- Exact natural factorial $n!$. -/
+@[expose] def natFact : Nat → Nat
+  | 0 => 1
+  | n + 1 => (n + 1) * natFact n
+
+theorem natFact_pos (n : Nat) : 0 < natFact n := by
+  induction n with
+  | zero => decide
+  | succ k ih =>
+    unfold natFact
+    exact Nat.mul_pos (Nat.succ_pos k) ih
+
+theorem natFact_succ_ge_two_mul {d : Nat} (hd : 1 ≤ d) :
+    2 * natFact d ≤ natFact (d + 1) := by
+  show 2 * natFact d ≤ (d + 1) * natFact d
+  have h2 : 2 ≤ d + 1 := by omega
+  exact Nat.mul_le_mul_right (natFact d) h2
+
+theorem rat_div_nonneg {a b : CanonicalRat} (ha : 0 ≤ a) (hb : 0 < b) :
+    0 ≤ a / b := by
+  by_cases hlt : a / b < 0
+  · have hPosDiff : 0 < -(a / b) := by grind
+    have hProdPos : 0 < (-(a / b)) * b := Rat.mul_pos hPosDiff hb
+    have hNe : b ≠ 0 := by grind
+    have hCancel : a / b * b = a := Rat.div_mul_cancel hNe
+    grind
+  · grind
+
+theorem rat_div_le_of_mul_le {a b c : CanonicalRat} (hb : 0 < b) (h : a ≤ c * b) :
+    a / b ≤ c := by
+  by_cases hlt : c < a / b
+  · have hPosDiff : 0 < a / b - c := by grind
+    have hProdPos : 0 < (a / b - c) * b := Rat.mul_pos hPosDiff hb
+    have hNe : b ≠ 0 := by grind
+    have hCancel : a / b * b = a := Rat.div_mul_cancel hNe
+    grind
+  · grind
+
+theorem rat_le_div_of_mul_le {a b c : CanonicalRat} (hb : 0 < b) (h : a * b ≤ c) :
+    a ≤ c / b := by
+  by_cases hlt : c / b < a
+  · have hPosDiff : 0 < a - c / b := by grind
+    have hProdPos : 0 < (a - c / b) * b := Rat.mul_pos hPosDiff hb
+    have hNe : b ≠ 0 := by grind
+    have hCancel : c / b * b = c := Rat.div_mul_cancel hNe
+    grind
+  · grind
+
+/-- Append decomposition for `evalTaylorPolyAt`:
+`evalTaylorPolyAt (as ++ bs) dx = evalTaylorPolyAt as dx + powRat dx as.length * evalTaylorPolyAt bs dx`. -/
+theorem evalTaylorPolyAt_append (as bs : List CanonicalRat) (dx : CanonicalRat) :
+    evalTaylorPolyAt (as ++ bs) dx =
+      evalTaylorPolyAt as dx + powRat dx as.length * evalTaylorPolyAt bs dx := by
+  induction as with
+  | nil =>
+    dsimp [evalTaylorPolyAt, powRat]
+    grind
+  | cons a rest ih =>
+    simp only [List.cons_append, List.length_cons, evalTaylorPolyAt, ih]
+    have hPow : powRat dx (rest.length + 1) = dx * powRat dx rest.length := rfl
+    rw [hPow]
+    grind
+
+/-- Coefficient-wise factorial bound $|a_j| \le \frac{1}{(d + j)!}$ starting at degree `d`. -/
+@[expose] def FactorialBounded : Nat → List CanonicalRat → Prop
+  | _, [] => True
+  | d, a :: rest =>
+    a ∈ Interval.mk (CanonicalRat.mk (-1) (natFact d)) (CanonicalRat.mk 1 (natFact d)) ∧
+      FactorialBounded (d + 1) rest
+
+theorem two_div_succ_fact_le_inv_fact {d : Nat} (hd : 1 ≤ d) :
+    CanonicalRat.mk 2 (natFact (d + 1)) ≤ CanonicalRat.mk 1 (natFact d) := by
+  have hPosD : 0 < natFact d := natFact_pos d
+  have hPosS : 0 < natFact (d + 1) := natFact_pos (d + 1)
+  have hGrow : 2 * natFact d ≤ natFact (d + 1) := natFact_succ_ge_two_mul hd
+  have hRatD : (0 : CanonicalRat) < (natFact d : CanonicalRat) := by exact_mod_cast hPosD
+  have hRatS : (0 : CanonicalRat) < (natFact (d + 1) : CanonicalRat) := by exact_mod_cast hPosS
+  have hRatGrow : 2 * (natFact d : CanonicalRat) ≤ (natFact (d + 1) : CanonicalRat) := by
+    exact_mod_cast hGrow
+  have hMk2 : CanonicalRat.mk 2 (natFact (d + 1)) = (2 : CanonicalRat) / (natFact (d + 1) : CanonicalRat) := by
+    simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+  have hMk1 : CanonicalRat.mk 1 (natFact d) = (1 : CanonicalRat) / (natFact d : CanonicalRat) := by
+    simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+  rw [hMk2, hMk1]
+  apply rat_div_le_of_mul_le hRatS
+  have hInvNonneg : (0 : CanonicalRat) ≤ (1 : CanonicalRat) / (natFact d : CanonicalRat) :=
+    rat_div_nonneg (by decide) hRatD
+  have hRhs := Rat.mul_le_mul_of_nonneg_left hRatGrow hInvNonneg
+  have hNe : (natFact d : CanonicalRat) ≠ 0 := by grind
+  grind
+
+/-- **Lemma (`horner_factorial_majorant`)**:
+For any starting degree $d \ge 1$, any tail coefficient list `cs` obeying `FactorialBounded d cs`,
+and any $x \in [-1, 1]$, Horner evaluation satisfies
+`evalTaylorPolyAt cs x ∈ [-2 / d!, 2 / d!]`. -/
+theorem horner_factorial_majorant {d : Nat} {cs : List CanonicalRat} {x : CanonicalRat}
+    (hd : 1 ≤ d)
+    (hBnd : FactorialBounded d cs)
+    (hx : x ∈ expValidDomain) :
+    evalTaylorPolyAt cs x ∈
+      Interval.mk (CanonicalRat.mk (-2) (natFact d)) (CanonicalRat.mk 2 (natFact d)) := by
+  induction cs generalizing d with
+  | nil =>
+    simp only [evalTaylorPolyAt, Interval.mem_iff]
+    have hPos : (0 : CanonicalRat) < (natFact d : CanonicalRat) := by exact_mod_cast natFact_pos d
+    have hNonneg : (0 : CanonicalRat) ≤ CanonicalRat.mk 2 (natFact d) := by
+      simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+      exact rat_div_nonneg (by decide) hPos
+    have hNeg : CanonicalRat.mk (-2) (natFact d) = -CanonicalRat.mk 2 (natFact d) := by
+      simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+      grind
+    rw [hNeg]
+    grind
+  | cons a rest ih =>
+    rcases hBnd with ⟨ha, hRest⟩
+    have hd1 : 1 ≤ d + 1 := by omega
+    have hRec := ih hd1 hRest
+    have hStepLe : CanonicalRat.mk 2 (natFact (d + 1)) ≤ CanonicalRat.mk 1 (natFact d) :=
+      two_div_succ_fact_le_inv_fact hd
+    have hNegEq1 : CanonicalRat.mk (-1) (natFact d) = -CanonicalRat.mk 1 (natFact d) := by
+      simp [CanonicalRat.mk, Rat.mkRat_eq_div]; grind
+    have hNegEq2 : CanonicalRat.mk (-2) (natFact (d + 1)) = -CanonicalRat.mk 2 (natFact (d + 1)) := by
+      simp [CanonicalRat.mk, Rat.mkRat_eq_div]; grind
+    have hNegEq2d : CanonicalRat.mk (-2) (natFact d) = -CanonicalRat.mk 2 (natFact d) := by
+      simp [CanonicalRat.mk, Rat.mkRat_eq_div]; grind
+    have hDouble : CanonicalRat.mk 1 (natFact d) + CanonicalRat.mk 1 (natFact d) =
+        CanonicalRat.mk 2 (natFact d) := by
+      simp [CanonicalRat.mk, Rat.mkRat_eq_div]; grind
+    have hYSub : evalTaylorPolyAt rest x ∈
+        Interval.mk (CanonicalRat.mk (-1) (natFact d)) (CanonicalRat.mk 1 (natFact d)) := by
+      rw [Interval.mem_iff] at hRec ⊢
+      grind
+    have hMul := Interval.mul_mem hx hYSub
+    have hMulSub : (x * evalTaylorPolyAt rest x) ∈
+        Interval.mk (CanonicalRat.mk (-1) (natFact d)) (CanonicalRat.mk 1 (natFact d)) := by
+      unfold expValidDomain Interval.mul Interval.min4 Interval.max4 at hMul
+      rw [Interval.mem_iff] at hMul ⊢
+      rw [hNegEq1] at hMul ⊢
+      have hRatD : (0 : CanonicalRat) < (natFact d : CanonicalRat) := by exact_mod_cast natFact_pos d
+      have hPos1 : (0 : CanonicalRat) ≤ CanonicalRat.mk 1 (natFact d) := by
+        simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+        exact rat_div_nonneg (by decide) hRatD
+      grind
+    have hAdd := Interval.add_mem ha hMulSub
+    unfold evalTaylorPolyAt
+    rw [Interval.mem_iff] at hAdd ⊢
+    unfold Interval.add at hAdd
+    grind
+
+/-- Uniform coefficient bound $|a| \le M$ across a polynomial tail list. -/
+@[expose] def UniformBounded (M : CanonicalRat) : List CanonicalRat → Prop
+  | [] => True
+  | a :: rest => a ∈ Interval.mk (-M) M ∧ UniformBounded M rest
+
+/-- **Lemma (`horner_half_domain_majorant`)**:
+For any $M \ge 0$, any coefficient list `cs` obeying `UniformBounded M cs`, and any
+$x \in [-\frac{1}{2}, \frac{1}{2}]$, Horner evaluation satisfies
+`evalTaylorPolyAt cs x ∈ [-2 * M, 2 * M]`. -/
+theorem horner_half_domain_majorant {M : CanonicalRat} {cs : List CanonicalRat} {x : CanonicalRat}
+    (hM : 0 ≤ M)
+    (hBnd : UniformBounded M cs)
+    (hx : x ∈ Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2)) :
+    evalTaylorPolyAt cs x ∈ Interval.mk (-(2 * M)) (2 * M) := by
+  induction cs with
+  | nil =>
+    simp only [evalTaylorPolyAt, Interval.mem_iff]
+    grind
+  | cons a rest ih =>
+    rcases hBnd with ⟨ha, hRest⟩
+    have hRec := ih hRest
+    have hMul := Interval.mul_mem hx hRec
+    have hHalfEq : CanonicalRat.mk 1 2 * (2 * M) = M := by
+      have : CanonicalRat.mk 1 2 = (1 : CanonicalRat) / 2 := by decide +kernel
+      rw [this]; grind
+    have hNegHalfEq : CanonicalRat.mk (-1) 2 = -CanonicalRat.mk 1 2 := by decide +kernel
+    have hMulSub : (x * evalTaylorPolyAt rest x) ∈ Interval.mk (-M) M := by
+      unfold Interval.mul Interval.min4 Interval.max4 at hMul
+      rw [Interval.mem_iff] at hMul ⊢
+      rw [hNegHalfEq] at hMul
+      grind
+    have hAdd := Interval.add_mem ha hMulSub
+    unfold evalTaylorPolyAt
+    unfold Interval.add at hAdd
+    rw [Interval.mem_iff] at hAdd ⊢
+    grind
+
+/-! ### 5.1 Convergent Maclaurin & Newton-Binomial Rational Series -/
+
+/-- Exponential Maclaurin tail $\sum_{j=0}^{\text{len}-1} \frac{x^j}{(d + j)!}$ starting at degree `d`. -/
+@[expose] def expTailFrom (d : Nat) : Nat → List CanonicalRat
+  | 0 => []
+  | len + 1 => CanonicalRat.mk 1 (natFact d) :: expTailFrom (d + 1) len
+
+theorem expTailFrom_factorialBounded (d len : Nat) :
+    FactorialBounded d (expTailFrom d len) := by
+  induction len generalizing d with
+  | zero => trivial
+  | succ k ih =>
+    refine ⟨?_, ih (d + 1)⟩
+    rw [Interval.mem_iff]
+    have hRatD : (0 : CanonicalRat) < (natFact d : CanonicalRat) := by exact_mod_cast natFact_pos d
+    have hPos : (0 : CanonicalRat) ≤ CanonicalRat.mk 1 (natFact d) := by
+      simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+      exact rat_div_nonneg (by decide) hRatD
+    have hNeg : CanonicalRat.mk (-1) (natFact d) = -CanonicalRat.mk 1 (natFact d) := by
+      simp [CanonicalRat.mk, Rat.mkRat_eq_div]; grind
+    grind
+
+/-- Convergent exponential Maclaurin series coefficients up to degree `4 + extra`. -/
+@[expose] def expSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+  [1, 1, CanonicalRat.mk 1 2, CanonicalRat.mk 1 6, CanonicalRat.mk 1 24] ++ expTailFrom 5 extra
+
+/-- Convergent rational exponential series $\sum_{k=0}^{4 + \text{extra}} \frac{x^k}{k!}$. -/
+@[expose] def expSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+  evalTaylorPolyAt (expSeriesCoeffs extra) x
+
+/-- Sine Maclaurin coefficient at degree `d`:
+$0$ for even $d$, $\frac{1}{d!}$ for $d \equiv 1 \pmod 4$, $-\frac{1}{d!}$ for $d \equiv 3 \pmod 4$. -/
+@[expose] def sinCoeffAt (d : Nat) : CanonicalRat :=
+  if d % 2 == 0 then 0
+  else if d % 4 == 1 then CanonicalRat.mk 1 (natFact d)
+  else CanonicalRat.mk (-1) (natFact d)
+
+/-- Sine Maclaurin tail starting at degree `d`. -/
+@[expose] def sinTailFrom (d : Nat) : Nat → List CanonicalRat
+  | 0 => []
+  | len + 1 => sinCoeffAt d :: sinTailFrom (d + 1) len
+
+theorem sinCoeffAt_mem_fact (d : Nat) :
+    sinCoeffAt d ∈ Interval.mk (CanonicalRat.mk (-1) (natFact d)) (CanonicalRat.mk 1 (natFact d)) := by
+  unfold sinCoeffAt
+  have hRatD : (0 : CanonicalRat) < (natFact d : CanonicalRat) := by exact_mod_cast natFact_pos d
+  have hPos : (0 : CanonicalRat) ≤ CanonicalRat.mk 1 (natFact d) := by
+    simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+    exact rat_div_nonneg (by decide) hRatD
+  have hNeg : CanonicalRat.mk (-1) (natFact d) = -CanonicalRat.mk 1 (natFact d) := by
+    simp [CanonicalRat.mk, Rat.mkRat_eq_div]; grind
+  split
+  · rw [Interval.mem_iff]; grind
+  · split <;> (rw [Interval.mem_iff]; grind)
+
+theorem sinTailFrom_factorialBounded (d len : Nat) :
+    FactorialBounded d (sinTailFrom d len) := by
+  induction len generalizing d with
+  | zero => trivial
+  | succ k ih => exact ⟨sinCoeffAt_mem_fact d, ih (d + 1)⟩
+
+/-- Convergent sine Maclaurin series coefficients up to degree `6 + extra`. -/
+@[expose] def sinSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+  [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120] ++ (0 :: sinTailFrom 7 extra)
+
+/-- Convergent rational sine series $\sum_{k=0}^{6 + \text{extra}} c_k x^k$. -/
+@[expose] def sinSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+  evalTaylorPolyAt (sinSeriesCoeffs extra) x
+
+/-- Cosine Maclaurin coefficient at degree `d`:
+$0$ for odd $d$, $\frac{1}{d!}$ for $d \equiv 0 \pmod 4$, $-\frac{1}{d!}$ for $d \equiv 2 \pmod 4$. -/
+@[expose] def cosCoeffAt (d : Nat) : CanonicalRat :=
+  if d % 2 == 1 then 0
+  else if d % 4 == 0 then CanonicalRat.mk 1 (natFact d)
+  else CanonicalRat.mk (-1) (natFact d)
+
+/-- Cosine Maclaurin tail starting at degree `d`. -/
+@[expose] def cosTailFrom (d : Nat) : Nat → List CanonicalRat
+  | 0 => []
+  | len + 1 => cosCoeffAt d :: cosTailFrom (d + 1) len
+
+theorem cosCoeffAt_mem_fact (d : Nat) :
+    cosCoeffAt d ∈ Interval.mk (CanonicalRat.mk (-1) (natFact d)) (CanonicalRat.mk 1 (natFact d)) := by
+  unfold cosCoeffAt
+  have hRatD : (0 : CanonicalRat) < (natFact d : CanonicalRat) := by exact_mod_cast natFact_pos d
+  have hPos : (0 : CanonicalRat) ≤ CanonicalRat.mk 1 (natFact d) := by
+    simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+    exact rat_div_nonneg (by decide) hRatD
+  have hNeg : CanonicalRat.mk (-1) (natFact d) = -CanonicalRat.mk 1 (natFact d) := by
+    simp [CanonicalRat.mk, Rat.mkRat_eq_div]; grind
+  split
+  · rw [Interval.mem_iff]; grind
+  · split <;> (rw [Interval.mem_iff]; grind)
+
+theorem cosTailFrom_factorialBounded (d len : Nat) :
+    FactorialBounded d (cosTailFrom d len) := by
+  induction len generalizing d with
+  | zero => trivial
+  | succ k ih => exact ⟨cosCoeffAt_mem_fact d, ih (d + 1)⟩
+
+/-- Convergent cosine Maclaurin series coefficients up to degree `5 + extra`. -/
+@[expose] def cosSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+  [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24] ++ (0 :: cosTailFrom 6 extra)
+
+/-- Convergent rational cosine series $\sum_{k=0}^{5 + \text{extra}} c_k x^k$. -/
+@[expose] def cosSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+  evalTaylorPolyAt (cosSeriesCoeffs extra) x
+
+/-- Alternating Mercator series tail for $\ln(1 + x)$ starting at degree `d ≥ 1` with `sign ∈ {-1, 1}`. -/
+@[expose] def ln1pTailFrom (d : Nat) (sign : Int) : Nat → List CanonicalRat
+  | 0 => []
+  | len + 1 => CanonicalRat.mk sign d :: ln1pTailFrom (d + 1) (-sign) len
+
+theorem ln1pTailFrom_uniformBounded {d : Nat} {sign : Int} (hd : 5 ≤ d)
+    (hSign : sign = 1 ∨ sign = -1) (len : Nat) :
+    UniformBounded (CanonicalRat.mk 1 5) (ln1pTailFrom d sign len) := by
+  induction len generalizing d sign with
+  | zero => trivial
+  | succ k ih =>
+    have hdPos : 0 < d := by omega
+    have hRatD : (0 : CanonicalRat) < (d : CanonicalRat) := by exact_mod_cast hdPos
+    have hRat5 : (5 : CanonicalRat) ≤ (d : CanonicalRat) := by exact_mod_cast hd
+    have hBound1 : (1 : CanonicalRat) / (d : CanonicalRat) ≤ CanonicalRat.mk 1 5 := by
+      have h5 : CanonicalRat.mk 1 5 = (1 : CanonicalRat) / 5 := by decide +kernel
+      rw [h5]
+      apply rat_div_le_of_mul_le hRatD
+      grind
+    refine ⟨?_, ih (by omega) (by rcases hSign with rfl | rfl <;> simp)⟩
+    rcases hSign with rfl | rfl
+    · rw [Interval.mem_iff]
+      have hEq : CanonicalRat.mk 1 d = (1 : CanonicalRat) / (d : CanonicalRat) := by
+        simp [CanonicalRat.mk, Rat.mkRat_eq_div]
+      have hNonneg : (0 : CanonicalRat) ≤ (1 : CanonicalRat) / (d : CanonicalRat) :=
+        rat_div_nonneg (by decide) hRatD
+      rw [hEq]
+      grind
+    · rw [Interval.mem_iff]
+      have hEq : CanonicalRat.mk (-1) d = -((1 : CanonicalRat) / (d : CanonicalRat)) := by
+        simp [CanonicalRat.mk, Rat.mkRat_eq_div]; grind
+      have hNonneg : (0 : CanonicalRat) ≤ (1 : CanonicalRat) / (d : CanonicalRat) :=
+        rat_div_nonneg (by decide) hRatD
+      rw [hEq]
+      grind
+
+/-- Convergent Mercator series coefficients for $\ln(1 + x)$ up to degree `4 + extra`. -/
+@[expose] def ln1pSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+  [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4] ++
+    ln1pTailFrom 5 1 extra
+
+/-- Convergent rational Mercator series $\sum_{k=1}^{4 + \text{extra}} \frac{(-1)^{k-1}}{k} x^k$. -/
+@[expose] def ln1pSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+  evalTaylorPolyAt (ln1pSeriesCoeffs extra) x
+
+/-- Newton generalized binomial tail for $\sqrt{1 + x} = \sum_{k=0}^\infty \binom{1/2}{k} x^k$,
+where $b_{d+1} = -b_d \cdot \frac{2d - 1}{2d + 2}$. -/
+@[expose] def sqrt1pTailFrom (d : Nat) (curCoeff : CanonicalRat) : Nat → List CanonicalRat
+  | 0 => []
+  | len + 1 =>
+    let nextCoeff := -curCoeff * CanonicalRat.mk (Int.ofNat (2 * d - 1)) (2 * d + 2)
+    curCoeff :: sqrt1pTailFrom (d + 1) nextCoeff len
+
+theorem sqrt1p_ratio_mem_unit {d : Nat} (hd : 1 ≤ d) :
+    CanonicalRat.mk (Int.ofNat (2 * d - 1)) (2 * d + 2) ∈ Interval.mk (0 : CanonicalRat) 1 := by
+  rw [Interval.mem_iff]
+  let numNat : Nat := 2 * d - 1
+  let denNat : Nat := 2 * d + 2
+  have hDenPos : 0 < denNat := by omega
+  have hNumLe : numNat ≤ denNat := by omega
+  have hEq : CanonicalRat.mk (Int.ofNat numNat) denNat =
+      (numNat : CanonicalRat) / (denNat : CanonicalRat) := by
+    simp only [CanonicalRat.mk, Rat.mkRat_eq_div]
+    exact_mod_cast rfl
+  change (0 : CanonicalRat) ≤ CanonicalRat.mk (Int.ofNat numNat) denNat ∧
+    CanonicalRat.mk (Int.ofNat numNat) denNat ≤ 1
+  rw [hEq]
+  have hRatDen : (0 : CanonicalRat) < (denNat : CanonicalRat) := by exact_mod_cast hDenPos
+  have hRatNumNonneg : (0 : CanonicalRat) ≤ (numNat : CanonicalRat) := by
+    exact_mod_cast Nat.zero_le numNat
+  refine ⟨rat_div_nonneg hRatNumNonneg hRatDen, ?_⟩
+  apply rat_div_le_of_mul_le hRatDen
+  have hRatLe : (numNat : CanonicalRat) ≤ (denNat : CanonicalRat) := by
+    exact_mod_cast hNumLe
+  grind
+
+theorem sqrt1pTailFrom_uniformBounded {d : Nat} {cur : CanonicalRat} {M : CanonicalRat}
+    (hd : 1 ≤ d) (hM : 0 ≤ M) (hCur : cur ∈ Interval.mk (-M) M) (len : Nat) :
+    UniformBounded M (sqrt1pTailFrom d cur len) := by
+  induction len generalizing d cur with
+  | zero => trivial
+  | succ k ih =>
+    refine ⟨hCur, ?_⟩
+    have hRat := sqrt1p_ratio_mem_unit hd
+    have hNegCur : (-cur) ∈ Interval.mk (-M) M := by
+      rw [Interval.mem_iff] at hCur ⊢; grind
+    have hMul := Interval.mul_mem hNegCur hRat
+    have hNext : (-cur * CanonicalRat.mk (Int.ofNat (2 * d - 1)) (2 * d + 2)) ∈ Interval.mk (-M) M := by
+      unfold Interval.mul Interval.min4 Interval.max4 at hMul
+      rw [Interval.mem_iff] at hMul ⊢
+      grind
+    exact ih (by omega) hNext
+
+/-- Convergent Newton-binomial coefficients for $\sqrt{1 + x}$ up to degree `3 + extra`. -/
+@[expose] def sqrt1pSeriesCoeffs (extra : Nat) : List CanonicalRat :=
+  [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] ++
+    sqrt1pTailFrom 4 (CanonicalRat.mk (-5) 128) extra
+
+/-- Convergent rational Newton-binomial series for $\sqrt{1 + x}$. -/
+@[expose] def sqrt1pSeries (extra : Nat) (x : CanonicalRat) : CanonicalRat :=
+  evalTaylorPolyAt (sqrt1pSeriesCoeffs extra) x
+
+/-! ### 5.2 Outward Cauchy-Remainder Enclosures & Certified Rational Square-Root Enclosure -/
+
+/-- Outward rational Cauchy-remainder interval enclosure for $\exp(x)$ at arbitrary truncation order `order ≥ 1`:
+evaluates $\sum_{k=0}^{\text{order}} \frac{x^k}{k!} \oplus \left[-\frac{2}{(\text{order}+1)!}, \frac{2}{(\text{order}+1)!}\right] \cdot x^{\text{order}+1}$. -/
+@[expose] def expCauchyEnclosure (order : Nat) (x : CanonicalRat) : Interval :=
+  let headVal := evalTaylorPolyAt (expTailFrom 0 (order + 1)) x
+  let d := order + 1
+  let tailFactor := Interval.mk (CanonicalRat.mk (-2) (natFact d)) (CanonicalRat.mk 2 (natFact d))
+  let remIv := Interval.mul tailFactor (Interval.ofPoint (powRat x d))
+  Interval.add (Interval.ofPoint headVal) remIv
+
+theorem expTailFrom_split (d a b : Nat) :
+    expTailFrom d (a + b) = expTailFrom d a ++ expTailFrom (d + a) b := by
+  induction a generalizing d with
+  | zero => simp [expTailFrom]
+  | succ k ih =>
+    simp only [Nat.succ_add, expTailFrom, List.cons_append]
+    rw [ih (d + 1)]
+    have hEq : d + 1 + k = d + (k + 1) := by omega
+    rw [hEq]
+
+theorem expTailFrom_length (d len : Nat) :
+    (expTailFrom d len).length = len := by
+  induction len generalizing d with
+  | zero => rfl
+  | succ k ih => simp [expTailFrom, ih]
+
+/-- **Theorem (`expCauchyEnclosure_encloses_higher_orders`)**:
+For EVERY truncation order `order : Nat`, EVERY extra degree count `more : Nat`, and EVERY
+$x \in [-1, 1]$, the higher-degree Maclaurin sum $\sum_{k=0}^{\text{order} + \text{more}} \frac{x^k}{k!}$
+is rigorously enclosed inside `expCauchyEnclosure order x`. -/
+theorem expCauchyEnclosure_encloses_higher_orders
+    (order more : Nat) (x : CanonicalRat) (hx : x ∈ expValidDomain) :
+    evalTaylorPolyAt (expTailFrom 0 (order + 1 + more)) x ∈ expCauchyEnclosure order x := by
+  rw [expTailFrom_split 0 (order + 1) more, evalTaylorPolyAt_append, expTailFrom_length]
+  have h0 : 0 + (order + 1) = order + 1 := by omega
+  rw [h0]
+  have hd : 1 ≤ order + 1 := by omega
+  have hTail := horner_factorial_majorant hd (expTailFrom_factorialBounded (order + 1) more) hx
+  have hMul := Interval.mul_mem hTail (Interval.ofPoint_mem (powRat x (order + 1)))
+  have hComm : powRat x (order + 1) * evalTaylorPolyAt (expTailFrom (order + 1) more) x =
+      evalTaylorPolyAt (expTailFrom (order + 1) more) x * powRat x (order + 1) := by grind
+  rw [hComm]
+  exact Interval.add_mem (Interval.ofPoint_mem _) hMul
+
+/-- Outward rational square-root interval enclosure via scaled `Nat.sqrt` bracketing
+(following `Soundcalc.Common.Sqrt`): scales nonnegative $q = \frac{n}{d}$ by $2^{2 \cdot \text{prec}}$
+and returns $\left[\frac{\lfloor \sqrt{n \cdot d \cdot 4^{\text{prec}}} \rfloor}{d \cdot 2^{\text{prec}}},
+\frac{\lfloor \sqrt{n \cdot d \cdot 4^{\text{prec}}} \rfloor + 1}{d \cdot 2^{\text{prec}}}\right]$. -/
+@[expose] def sqrtRationalEnclosure (prec : Nat) (q : CanonicalRat) : Interval :=
+  if decide (q < 0) then
+    ⟨1, -1⟩
+  else
+    let n : Nat := q.num.toNat
+    let d : Nat := q.den
+    let scale : Nat := 2 ^ prec
+    let rad : Nat := n * d * (scale * scale)
+    let s : Nat := Nat.sqrt rad
+    let denom : Nat := d * scale
+    ⟨CanonicalRat.mk (Int.ofNat s) denom, CanonicalRat.mk (Int.ofNat (s + 1)) denom⟩
+
+/-- **Theorem (`sqrtRationalEnclosure_brackets_square`)**:
+For every precision `prec : Nat` and nonnegative rational `0 ≤ q`, `I := sqrtRationalEnclosure prec q`
+satisfies `0 ≤ I.lo`, `I.lo ≤ I.hi`, and `I.lo * I.lo ≤ q ∧ q ≤ I.hi * I.hi`. -/
+theorem sqrtRationalEnclosure_brackets_square
+    (prec : Nat) (q : CanonicalRat) (hq : 0 ≤ q) :
+    let I := sqrtRationalEnclosure prec q
+    0 ≤ I.lo ∧ I.lo ≤ I.hi ∧ I.lo * I.lo ≤ q ∧ q ≤ I.hi * I.hi := by
+  dsimp only [sqrtRationalEnclosure]
+  have hDecFalse : decide (q < 0) = false := by
+    rw [decide_eq_false_iff_not]
+    grind
+  rw [hDecFalse]
+  simp only [Bool.false_eq_true, ↓reduceIte]
+  let n : Nat := q.num.toNat
+  let d : Nat := q.den
+  let scale : Nat := 2 ^ prec
+  let rad : Nat := n * d * (scale * scale)
+  let s : Nat := Nat.sqrt rad
+  let denom : Nat := d * scale
+  have hdPos : 0 < d := q.den_pos
+  have hScalePos : 0 < scale := Nat.two_pow_pos prec
+  have hDenomPos : 0 < denom := Nat.mul_pos hdPos hScalePos
+  have hLoSq : s * s ≤ rad := Nat.sqrt_le rad
+  have hHiSq : rad ≤ (s + 1) * (s + 1) := Nat.le_of_lt (Nat.lt_succ_sqrt rad)
+  have hNumNonneg : 0 ≤ q.num := Rat.num_nonneg.mpr hq
+  have hNumEq : (n : Int) = q.num := Int.toNat_of_nonneg hNumNonneg
+  have hqEq : q = (n : CanonicalRat) / (d : CanonicalRat) := by
+    have h1 : mkRat q.num d = q := Rat.mkRat_self q
+    rw [Rat.mkRat_eq_div] at h1
+    have hCast : (q.num : CanonicalRat) = (n : CanonicalRat) := by exact_mod_cast hNumEq.symm
+    rw [← h1, hCast]
+  have hLoEq : CanonicalRat.mk (Int.ofNat s) denom = (s : CanonicalRat) / (denom : CanonicalRat) := by
+    simp only [CanonicalRat.mk, Rat.mkRat_eq_div]
+    exact_mod_cast rfl
+  have hHiEq : CanonicalRat.mk (Int.ofNat (s + 1)) denom = ((s + 1 : Nat) : CanonicalRat) / (denom : CanonicalRat) := by
+    simp only [CanonicalRat.mk, Rat.mkRat_eq_div]
+    exact_mod_cast rfl
+  change 0 ≤ CanonicalRat.mk (Int.ofNat s) denom ∧
+    CanonicalRat.mk (Int.ofNat s) denom ≤ CanonicalRat.mk (Int.ofNat (s + 1)) denom ∧
+    CanonicalRat.mk (Int.ofNat s) denom * CanonicalRat.mk (Int.ofNat s) denom ≤ q ∧
+    q ≤ CanonicalRat.mk (Int.ofNat (s + 1)) denom * CanonicalRat.mk (Int.ofNat (s + 1)) denom
+  rw [hLoEq, hHiEq]
+  have hRatDenom : (0 : CanonicalRat) < (denom : CanonicalRat) := by exact_mod_cast hDenomPos
+  have hRatDenomSq : (0 : CanonicalRat) < (denom : CanonicalRat) * (denom : CanonicalRat) :=
+    Rat.mul_pos hRatDenom hRatDenom
+  have hLoNonneg : (0 : CanonicalRat) ≤ (s : CanonicalRat) / (denom : CanonicalRat) :=
+    rat_div_nonneg (by exact_mod_cast Nat.zero_le s) hRatDenom
+  have hLoLeHi : (s : CanonicalRat) / (denom : CanonicalRat) ≤ ((s + 1 : Nat) : CanonicalRat) / (denom : CanonicalRat) := by
+    apply rat_div_le_of_mul_le hRatDenom
+    have hNe : (denom : CanonicalRat) ≠ 0 := by grind
+    have hCancel : ((s + 1 : Nat) : CanonicalRat) / (denom : CanonicalRat) * (denom : CanonicalRat) =
+        ((s + 1 : Nat) : CanonicalRat) := by grind
+    rw [hCancel]
+    exact_mod_cast Nat.le_succ s
+  have hRadRat : (rad : CanonicalRat) = q * ((denom : CanonicalRat) * (denom : CanonicalRat)) := by
+    have hRadExpand : (rad : CanonicalRat) = (n : CanonicalRat) * (d : CanonicalRat) * ((scale : CanonicalRat) * (scale : CanonicalRat)) := by
+      exact_mod_cast (rfl : rad = n * d * (scale * scale))
+    have hDenomExpand : (denom : CanonicalRat) = (d : CanonicalRat) * (scale : CanonicalRat) := by
+      exact_mod_cast (rfl : denom = d * scale)
+    have hdNe : (d : CanonicalRat) ≠ 0 := by exact_mod_cast (Nat.ne_of_gt hdPos)
+    rw [hRadExpand, hDenomExpand, hqEq]
+    grind
+  have hSqLo : ((s : CanonicalRat) / (denom : CanonicalRat)) * ((s : CanonicalRat) / (denom : CanonicalRat)) ≤ q := by
+    have hCastLo : (s : CanonicalRat) * (s : CanonicalRat) ≤ (rad : CanonicalRat) := by exact_mod_cast hLoSq
+    rw [hRadRat] at hCastLo
+    have hNe : (denom : CanonicalRat) ≠ 0 := by grind
+    have hDivProd : ((s : CanonicalRat) / (denom : CanonicalRat)) * ((s : CanonicalRat) / (denom : CanonicalRat)) =
+        ((s : CanonicalRat) * (s : CanonicalRat)) / ((denom : CanonicalRat) * (denom : CanonicalRat)) := by grind
+    rw [hDivProd]
+    exact rat_div_le_of_mul_le hRatDenomSq hCastLo
+  have hSqHi : q ≤ (((s + 1 : Nat) : CanonicalRat) / (denom : CanonicalRat)) *
+      (((s + 1 : Nat) : CanonicalRat) / (denom : CanonicalRat)) := by
+    have hCastHi : (rad : CanonicalRat) ≤ ((s + 1 : Nat) : CanonicalRat) * ((s + 1 : Nat) : CanonicalRat) := by
+      exact_mod_cast hHiSq
+    rw [hRadRat] at hCastHi
+    have hNe : (denom : CanonicalRat) ≠ 0 := by grind
+    have hDivProd : (((s + 1 : Nat) : CanonicalRat) / (denom : CanonicalRat)) *
+        (((s + 1 : Nat) : CanonicalRat) / (denom : CanonicalRat)) =
+        (((s + 1 : Nat) : CanonicalRat) * ((s + 1 : Nat) : CanonicalRat)) /
+          ((denom : CanonicalRat) * (denom : CanonicalRat)) := by grind
+    rw [hDivProd]
+    exact rat_le_div_of_mul_le hRatDenomSq hCastHi
+  exact ⟨hLoNonneg, hLoLeHi, hSqLo, hSqHi⟩
+
+/-! ### 5.3 Certified `AnalyticModel` Typeclass & Arbitrary-Order Convergent Instances -/
+
+/-- A certified rational model of the five elementary transcendental/algebraic functions
+(`expFn`, `sinFn`, `cosFn`, `ln1pFn`, `sqrt1pFn`) satisfying the degree-4/5/4/4/3 Taylor–Lagrange
+remainder identities with exact real remainder constants over their convergence domains. -/
 class AnalyticModel (R : Type) where
   expFn    : CanonicalRat → CanonicalRat
   sinFn    : CanonicalRat → CanonicalRat
@@ -795,28 +1336,103 @@ class AnalyticModel (R : Type) where
           sqrt1pFn x - evalTaylorPolyAt [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] x =
             c * powRat x 4
 
-/-- The one `AnalyticModel` instance in this library. Each modelled function is a polynomial: the
-exponential is `expDegree5` (residual `x^5/120`, witness `c = 1/120`), and the other four are the
-Taylor polynomials themselves (residual `0`, witness `c = 0`). The instance exists so the
-`tm*Certified_models` theorems have a witness; it says nothing about the real functions. -/
-@[expose] instance partialSumAnalyticModel : AnalyticModel CanonicalRat where
-  expFn    := expDegree5
-  sinFn    := evalTaylorPolyAt [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120]
-  cosFn    := evalTaylorPolyAt [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24]
-  ln1pFn   := evalTaylorPolyAt [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4]
-  sqrt1pFn := evalTaylorPolyAt [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16]
-  exp_lagrange4 _D _hDom x _hx := by
-    refine ⟨CanonicalRat.mk 1 120, by decide +kernel, ?_⟩
-    dsimp [expDegree5]
+/-- **Theorem / Instance (`convergentSeriesAnalyticModel`)**:
+For **every** extra series truncation depth `extra : Nat`, the convergent rational Maclaurin and
+Newton-binomial series (`expSeries extra`, `sinSeries extra`, `cosSeries extra`, `ln1pSeries extra`,
+`sqrt1pSeries extra`) constructively satisfy all five Taylor–Lagrange remainder envelopes of `AnalyticModel`. -/
+instance convergentSeriesAnalyticModel (extra : Nat) : AnalyticModel (SeriesOrder extra) where
+  expFn    := expSeries extra
+  sinFn    := sinSeries extra
+  cosFn    := cosSeries extra
+  ln1pFn   := ln1pSeries extra
+  sqrt1pFn := sqrt1pSeries extra
+  exp_lagrange4 D hDom x hx := by
+    have hxDom : x ∈ expValidDomain := Interval.subset_sound hDom hx
+    let c := evalTaylorPolyAt (expTailFrom 5 extra) x
+    have hcTight := horner_factorial_majorant (d := 5) (by decide) (expTailFrom_factorialBounded 5 extra) hxDom
+    have hSub : Interval.subset
+        (Interval.mk (CanonicalRat.mk (-2) (natFact 5)) (CanonicalRat.mk 2 (natFact 5)))
+        (Interval.mk (CanonicalRat.mk (-1) 40) (CanonicalRat.mk 1 40)) = true := by decide +kernel
+    refine ⟨c, Interval.subset_sound hSub hcTight, ?_⟩
+    unfold expSeries expSeriesCoeffs
+    rw [evalTaylorPolyAt_append]
+    dsimp [c]
     grind
-  sin_lagrange5 _D _hDom x _hx :=
-    ⟨0, by decide +kernel, by grind⟩
-  cos_lagrange4 _D _hDom x _hx :=
-    ⟨0, by decide +kernel, by grind⟩
-  ln1p_lagrange4 _D _hDom x _hx :=
-    ⟨0, by decide +kernel, by grind⟩
-  sqrt1p_lagrange3 _D _hDom x _hx :=
-    ⟨0, by decide +kernel, by grind⟩
+  sin_lagrange5 D hDom x hx := by
+    have hxDom : x ∈ expValidDomain := Interval.subset_sound hDom hx
+    let y := evalTaylorPolyAt (sinTailFrom 7 extra) x
+    let c := x * y
+    have hyTight := horner_factorial_majorant (d := 7) (by decide) (sinTailFrom_factorialBounded 7 extra) hxDom
+    have hcMul := Interval.mul_mem hxDom hyTight
+    have hSub : Interval.subset
+        (Interval.mul expValidDomain (Interval.mk (CanonicalRat.mk (-2) (natFact 7)) (CanonicalRat.mk 2 (natFact 7))))
+        (Interval.mk (CanonicalRat.mk (-1) 720) (CanonicalRat.mk 1 720)) = true := by decide +kernel
+    refine ⟨c, Interval.subset_sound hSub hcMul, ?_⟩
+    unfold sinSeries sinSeriesCoeffs
+    rw [evalTaylorPolyAt_append]
+    dsimp [evalTaylorPolyAt, c, y]
+    grind
+  cos_lagrange4 D hDom x hx := by
+    have hxDom : x ∈ expValidDomain := Interval.subset_sound hDom hx
+    let y := evalTaylorPolyAt (cosTailFrom 6 extra) x
+    let c := x * y
+    have hyTight := horner_factorial_majorant (d := 6) (by decide) (cosTailFrom_factorialBounded 6 extra) hxDom
+    have hcMul := Interval.mul_mem hxDom hyTight
+    have hSub : Interval.subset
+        (Interval.mul expValidDomain (Interval.mk (CanonicalRat.mk (-2) (natFact 6)) (CanonicalRat.mk 2 (natFact 6))))
+        (Interval.mk (CanonicalRat.mk (-1) 120) (CanonicalRat.mk 1 120)) = true := by decide +kernel
+    refine ⟨c, Interval.subset_sound hSub hcMul, ?_⟩
+    unfold cosSeries cosSeriesCoeffs
+    rw [evalTaylorPolyAt_append]
+    dsimp [evalTaylorPolyAt, c, y]
+    grind
+  ln1p_lagrange4 D hDom x hx := by
+    have hxDom : x ∈ Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2) :=
+      Interval.subset_sound hDom hx
+    let c := evalTaylorPolyAt (ln1pTailFrom 5 1 extra) x
+    have hcTight := horner_half_domain_majorant
+      (M := CanonicalRat.mk 1 5) (by decide +kernel)
+      (ln1pTailFrom_uniformBounded (d := 5) (sign := 1) (by decide) (Or.inl rfl) extra) hxDom
+    have hSub : Interval.subset
+        (Interval.mk (-(2 * CanonicalRat.mk 1 5)) (2 * CanonicalRat.mk 1 5))
+        (Interval.mk (CanonicalRat.mk (-32) 5) (CanonicalRat.mk 32 5)) = true := by decide +kernel
+    refine ⟨c, Interval.subset_sound hSub hcTight, ?_⟩
+    unfold ln1pSeries ln1pSeriesCoeffs
+    rw [evalTaylorPolyAt_append]
+    dsimp [c]
+    grind
+  sqrt1p_lagrange3 D hDom x hx := by
+    have hxDom : x ∈ Interval.mk (CanonicalRat.mk (-1) 2) (CanonicalRat.mk 1 2) :=
+      Interval.subset_sound hDom hx
+    let c := evalTaylorPolyAt (sqrt1pTailFrom 4 (CanonicalRat.mk (-5) 128) extra) x
+    have hcTight := horner_half_domain_majorant
+      (M := CanonicalRat.mk 5 128) (by decide +kernel)
+      (sqrt1pTailFrom_uniformBounded (d := 4) (cur := CanonicalRat.mk (-5) 128) (M := CanonicalRat.mk 5 128)
+        (by decide) (by decide +kernel) (by decide +kernel) extra) hxDom
+    have hSub : Interval.subset
+        (Interval.mk (-(2 * CanonicalRat.mk 5 128)) (2 * CanonicalRat.mk 5 128))
+        (Interval.mk (CanonicalRat.mk (-5) 8) (CanonicalRat.mk 5 8)) = true := by decide +kernel
+    refine ⟨c, Interval.subset_sound hSub hcTight, ?_⟩
+    unfold sqrt1pSeries sqrt1pSeriesCoeffs
+    rw [evalTaylorPolyAt_append]
+    dsimp [c]
+    grind
+
+/-- Canonical high-order certified `AnalyticModel CanonicalRat` (`extra = 6`: degree-10 `exp`,
+degree-12 `sin`, degree-11 `cos`, degree-10 `ln1p`, and degree-9 `sqrt1p`), where all five modelled
+functions carry non-zero alternating higher-degree series tails enclosed constructively by `AnalyticModel`. -/
+instance certifiedAnalyticModel : AnalyticModel CanonicalRat :=
+  let M := convergentSeriesAnalyticModel 6
+  { expFn          := M.expFn
+    sinFn          := M.sinFn
+    cosFn          := M.cosFn
+    ln1pFn         := M.ln1pFn
+    sqrt1pFn       := M.sqrt1pFn
+    exp_lagrange4  := M.exp_lagrange4
+    sin_lagrange5  := M.sin_lagrange5
+    cos_lagrange4  := M.cos_lagrange4
+    ln1p_lagrange4 := M.ln1p_lagrange4
+    sqrt1p_lagrange3 := M.sqrt1p_lagrange3 }
 
 /-- **Theorem (`tmExpCertified_models`)**:
 For any `AnalyticModel R` and domain `dom ⊆ expValidDomain` (`[-1, 1]`), `tmExpCertified dom`
@@ -922,23 +1538,25 @@ theorem analyticModel_domain_guard_rejects_out_of_domain :
     Interval.subset (Interval.ofPoint (-1)) sqrt1pValidDomain = false := by
   decide +kernel
 
-/-- **Theorem (`taylorModel_series_majorant_and_pole_guard_sound`)**:
-1. At $x = 1 \in [-1, 1]$, `evalTaylorModelPoint (tmExpCertified ⟨-1, 1⟩) 1` and the degree-5
-   padded enclosure `[323/120, 329/120]` (`[2.6916..., 2.7416...]`) contain the polynomial stand-in
-   `expDegree5 1 = 163/60` and the rational $27182818 / 10000000$ (a decimal of $e$; that $e$ itself
-   lies in the interval is a statement about `ℝ`, not proved here).
-2. `tmLn1pCertified ⟨-1, 0⟩` (crossing the $\ln(0) = -\infty$ pole at $x = -1$) and `tmExpCertified ⟨-2, 2⟩`
-   fail closed with `rem = ⟨1, -1⟩`. -/
--- fixture kept in place (2026-11-04): end-to-end run on a fixture (13 lines); worth a pre-push run, not every library build; it moves to Obend/Teeth/ with the lane edit that owns this file
+/-- Concrete verification of `certifiedAnalyticModel` non-zero alternating higher-degree tails,
+`expCauchyEnclosure`, `sqrtRationalEnclosure`, and fail-closed pole guards (`tmLn1pCertified ⟨-1, 0⟩`). -/
 example :
     let unitDom : Interval := ⟨-1, 1⟩
     let expAt1 := evalTaylorModelPoint (tmExpCertified unitDom) 1
-    let deg5PadAt1 : Interval := ⟨CanonicalRat.mk 323 120, CanonicalRat.mk 329 120⟩
+    let cauchy8At1 := expCauchyEnclosure 8 1
     let eRatApprox : CanonicalRat := CanonicalRat.mk 27182818 10000000
-    Interval.containsRat expAt1 (expDegree5 1) = true ∧
+    let tenth : CanonicalRat := CanonicalRat.mk 1 10
+    Interval.containsRat expAt1 (certifiedAnalyticModel.expFn 1) = true ∧
+    Interval.containsRat cauchy8At1 (expSeries 8 1) = true ∧
     Interval.containsRat expAt1 eRatApprox = true ∧
-    Interval.containsRat deg5PadAt1 (expDegree5 1) = true ∧
-    Interval.containsRat deg5PadAt1 eRatApprox = true ∧
+    decide (certifiedAnalyticModel.sinFn tenth <
+      evalTaylorPolyAt [0, 1, 0, CanonicalRat.mk (-1) 6, 0, CanonicalRat.mk 1 120] tenth) = true ∧
+    decide (certifiedAnalyticModel.cosFn tenth <
+      evalTaylorPolyAt [1, 0, CanonicalRat.mk (-1) 2, 0, CanonicalRat.mk 1 24] tenth) = true ∧
+    decide (certifiedAnalyticModel.ln1pFn tenth >
+      evalTaylorPolyAt [0, 1, CanonicalRat.mk (-1) 2, CanonicalRat.mk 1 3, CanonicalRat.mk (-1) 4] tenth) = true ∧
+    decide (certifiedAnalyticModel.sqrt1pFn tenth <
+      evalTaylorPolyAt [1, CanonicalRat.mk 1 2, CanonicalRat.mk (-1) 8, CanonicalRat.mk 1 16] tenth) = true ∧
     (tmLn1pCertified ⟨-1, 0⟩).rem = ⟨1, -1⟩ ∧
     (tmExpCertified ⟨-2, 2⟩).rem = ⟨1, -1⟩ ∧
     Interval.containsRat (evalTaylorModelRange (tmLn1pCertified ⟨-1, 0⟩)) 0 = false := by
