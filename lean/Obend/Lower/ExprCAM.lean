@@ -262,82 +262,301 @@ def mkExprCamFields (e : KExpr) (leftH rightH : Nat) : CamNodeFields :=
 def mkExprCamWord64 (e : KExpr) (leftH rightH : Nat) : CamWord64 :=
   packCamWord64 (mkExprCamFields e leftH rightH)
 
-/-! ## 3. Deduplicating Hardware `ExprCAM` Pool (`internExpr`, `uninternExpr`) -/
+/-! ## 3. Deduplicating Ghost-Free Hardware `ExprCAM` Pool (`CamSlotEntry`, `internExpr`, `uninternExpr`) -/
 
-/-- A single entry in the hardware `ExprCAM` pool:
-- `handle`: canonical 16-bit CAM address (`0, 1, 2, ...`),
-- `word64`: packed 64-bit hardware word `(tag:4b, looseBVar:1b, hasFVar:1b, hash:26b, left:16b, right:16b)`,
-- `expr`: canonical `KExpr` represented by this handle. -/
-structure CamSlotEntry where
-  handle : CamHandle
-  word64 : CamWord64
-  expr   : KExpr
+/-- Structural AST depth of a `KExpr` (`depth e ≥ 1` for every `e : KExpr`). -/
+def depth : KExpr → Nat
+  | .bvar _      => 1
+  | .fvar _      => 1
+  | .mvar _      => 1
+  | .sort _      => 1
+  | .const _ _   => 1
+  | .lit _       => 1
+  | .app f a     => 1 + max (depth f) (depth a)
+  | .lam d b     => 1 + max (depth d) (depth b)
+  | .forallE d b => 1 + max (depth d) (depth b)
+  | .letE t v b  => 1 + max (depth t) (max (depth v) (depth b))
+  | .proj _ _ s  => 1 + depth s
+
+abbrev KExpr.depth (e : KExpr) : Nat := Obend.Lower.ExprCAM.depth e
+
+/-- Auxiliary symbol/literal/universe table entry (`HwCamSymbolEntry`) referenced by 32-bit `symId` / `symIdx`.
+Contains NO `KExpr` AST nodes! -/
+inductive HwCamSymbolEntry where
+  | sortEntry  (u : KLevel)
+  | constEntry (name : KName) (us : List KLevel)
+  | litEntry   (lit : KLiteral)
+  | projEntry  (structName : KName) (fieldIdx : Nat)
   deriving DecidableEq, Repr, Inhabited
 
-/-- Hardware Hash-Consed DAG / Content-Addressable Memory pool for `KExpr` expressions. -/
+/-- Associative index lookup in a hardware table (`findElemIdx?`), returning `some idx` when
+`target` is already present in `xs` (enabling 1-cycle CAM deduplication). -/
+def findElemIdx? {α : Type} [DecidableEq α] : List α → α → Option Nat
+  | [], _ => none
+  | x :: xs, target =>
+    if x = target then some 0
+    else (findElemIdx? xs target).map (· + 1)
+
+theorem getElem?_of_findElemIdx? {α : Type} [DecidableEq α] :
+    ∀ (xs : List α) (target : α) (idx : Nat),
+      findElemIdx? xs target = some idx → xs[idx]? = some target
+  | [], _, _, h => by cases h
+  | x :: xs, target, idx, h => by
+    simp only [findElemIdx?] at h
+    split at h
+    · rename_i heq
+      simp only [Option.some.injEq] at h
+      subst h heq
+      rfl
+    · simp only [Option.map_eq_some_iff] at h
+      obtain ⟨k, hk, rfl⟩ := h
+      simpa using getElem?_of_findElemIdx? xs target k hk
+
+theorem getElem?_append_singleton_self {α : Type} (xs : List α) (x : α) :
+    (xs ++ [x])[xs.length]? = some x := by
+  rw [List.getElem?_append_right (Nat.le_refl xs.length)]
+  simp
+
+theorem getElem?_append_preserve {α : Type} {xs : List α} {i : Nat} {x : α}
+    (ys : List α) (h : xs[i]? = some x) :
+    (xs ++ ys)[i]? = some x := by
+  obtain ⟨hlt, _⟩ := List.getElem?_eq_some_iff.mp h
+  rw [List.getElem?_append_left hlt, h]
+
+/-- Concrete fixed-width hardware CAM lookup key (`CamSlotKey`):
+Matched in 1 cycle by associative CAM comparators without any host `KExpr` AST. -/
+structure CamSlotKey where
+  tag    : BitVec 4
+  symId  : UInt32 := 0
+  child0 : UInt32 := 0
+  child1 : UInt32 := 0
+  child2 : UInt32 := 0
+  deriving DecidableEq, Repr, Inhabited
+
+/-- A single entry in the hardware `ExprCAM` pool (`CamSlotEntry`):
+Stores **only** concrete bounded fixed-width hardware words (zero host `KExpr` ghost fields!):
+- `handle` (`UInt32`): canonical 32-bit CAM slot address,
+- `word64` (`CamWord64`): packed 64-bit fast-filter summary word `(tag:4b, looseBVar:1b, hasFVar:1b, hash26:26b, left:16b, right:16b)`,
+- `tag` (`BitVec 4`): 4-bit `KExpr` constructor tag (`0..10`),
+- `symId` (`UInt32`): 32-bit symbol/literal/universe table ID (or immediate variable ID for `.bvar`/`.fvar`/`.mvar`),
+- `child0`, `child1`, `child2` (`UInt32`): explicit 32-bit child slot indices (no Cantor pairing, no 181-node 16-bit overflow). -/
+structure CamSlotEntry where
+  handle : UInt32
+  word64 : CamWord64
+  tag    : BitVec 4
+  symId  : UInt32 := 0
+  child0 : UInt32 := 0
+  child1 : UInt32 := 0
+  child2 : UInt32 := 0
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Extract the associative CAM comparison key from a `CamSlotEntry`. -/
+def CamSlotEntry.key (s : CamSlotEntry) : CamSlotKey :=
+  { tag := s.tag, symId := s.symId, child0 := s.child0, child1 := s.child1, child2 := s.child2 }
+
+/-- Hardware Hash-Consed DAG / Content-Addressable Memory pool for `KExpr` expressions,
+storing bounded fixed-width `CamSlotEntry` slots and auxiliary `HwCamSymbolEntry` atoms
+with **zero** embedded `KExpr` ASTs. -/
 structure ExprCAM where
   entries : List CamSlotEntry := []
+  symbols : List HwCamSymbolEntry := []
   deriving DecidableEq, Repr, Inhabited
 
 /-- Empty `ExprCAM` pool. -/
-def ExprCAM.empty : ExprCAM := { entries := [] }
+def ExprCAM.empty : ExprCAM := { entries := [], symbols := [] }
 
-/-- Look up an existing handle for `e : KExpr` in `cam` (1-cycle associative CAM lookup in hardware). -/
-def ExprCAM.lookupHandle? (cam : ExprCAM) (e : KExpr) : Option CamHandle :=
-  (cam.entries.find? (fun slot => slot.expr == e)).map (·.handle)
+/-- Look up an existing handle for hardware key `k : CamSlotKey` in `cam` (1-cycle associative CAM lookup). -/
+def ExprCAM.lookupSlotKey? (cam : ExprCAM) (k : CamSlotKey) : Option CamHandle :=
+  (cam.entries.find? (fun slot => decide (slot.key = k))).map (fun slot => slot.handle.toNat)
 
-/-- Look up a `CamSlotEntry` by its `CamHandle` in `cam` (1-cycle BRAM read). -/
+/-- Look up a `CamSlotEntry` by its `CamHandle` in `cam` (1-cycle direct BRAM read). -/
 def ExprCAM.lookupSlot? (cam : ExprCAM) (h : CamHandle) : Option CamSlotEntry :=
-  cam.entries.find? (fun slot => slot.handle == h)
+  cam.entries[h]?
 
-/-- Unintern a `CamHandle` back to its `KExpr` AST. -/
+/-- Bounded-fuel DAG decoder for ghost-free `ExprCAM` slots (`decodeSlotCamDag`). -/
+def decodeSlotCamDag : Nat → ExprCAM → CamHandle → Option KExpr
+  | 0, _, _ => none
+  | fuel + 1, cam, h =>
+    match cam.entries[h]? with
+    | none => none
+    | some s =>
+      if s.tag == 0#4 then
+        some (.bvar s.symId.toNat)
+      else if s.tag == 1#4 then
+        some (.fvar s.symId.toNat)
+      else if s.tag == 2#4 then
+        match cam.symbols[s.symId.toNat]? with
+        | some (.sortEntry u) => some (.sort u)
+        | _ => none
+      else if s.tag == 3#4 then
+        match cam.symbols[s.symId.toNat]? with
+        | some (.constEntry n us) => some (.const n us)
+        | _ => none
+      else if s.tag == 4#4 then
+        match decodeSlotCamDag fuel cam s.child0.toNat,
+              decodeSlotCamDag fuel cam s.child1.toNat with
+        | some f, some a => some (.app f a)
+        | _, _ => none
+      else if s.tag == 5#4 then
+        match decodeSlotCamDag fuel cam s.child0.toNat,
+              decodeSlotCamDag fuel cam s.child1.toNat with
+        | some d, some b => some (.lam d b)
+        | _, _ => none
+      else if s.tag == 6#4 then
+        match decodeSlotCamDag fuel cam s.child0.toNat,
+              decodeSlotCamDag fuel cam s.child1.toNat with
+        | some d, some b => some (.forallE d b)
+        | _, _ => none
+      else if s.tag == 7#4 then
+        match decodeSlotCamDag fuel cam s.child0.toNat,
+              decodeSlotCamDag fuel cam s.child1.toNat,
+              decodeSlotCamDag fuel cam s.child2.toNat with
+        | some t, some v, some b => some (.letE t v b)
+        | _, _, _ => none
+      else if s.tag == 8#4 then
+        match cam.symbols[s.symId.toNat]? with
+        | some (.litEntry l) => some (.lit l)
+        | _ => none
+      else if s.tag == 9#4 then
+        match decodeSlotCamDag fuel cam s.child0.toNat,
+              cam.symbols[s.symId.toNat]? with
+        | some e, some (.projEntry structName idx) => some (.proj structName idx e)
+        | _, _ => none
+      else if s.tag == 10#4 then
+        some (.mvar s.symId.toNat)
+      else
+        none
+
+/-- Unintern a `CamHandle` back to its `KExpr` AST by decoding the ghost-free hardware slot DAG. -/
 def uninternExpr (cam : ExprCAM) (h : CamHandle) : Option KExpr :=
-  (cam.lookupSlot? h).map (·.expr)
+  decodeSlotCamDag cam.entries.length cam h
 
-/-- Allocate or reuse a single root node `e` with child handles `(leftH, rightH)` in `cam`. -/
-def internRootNode (cam : ExprCAM) (e : KExpr) (leftH rightH : Nat) : ExprCAM × CamHandle :=
-  match cam.lookupHandle? e with
+/-- External inductive refinement relation (`SlotRealizesExprAt cam slot e`):
+Relates a ghost-free hardware `ExprCAM` pool `cam` and slot index `slot` to the host `KExpr` DAG `e`. -/
+inductive SlotRealizesExprAt (cam : ExprCAM) : CamHandle → KExpr → Prop where
+  | bvar {slot idx : Nat} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 0#4 → s.symId.toNat = idx →
+      SlotRealizesExprAt cam slot (.bvar idx)
+  | fvar {slot id : Nat} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 1#4 → s.symId.toNat = id →
+      SlotRealizesExprAt cam slot (.fvar id)
+  | mvar {slot id : Nat} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 10#4 → s.symId.toNat = id →
+      SlotRealizesExprAt cam slot (.mvar id)
+  | sort {slot : Nat} {u : KLevel} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 2#4 →
+      cam.symbols[s.symId.toNat]? = some (.sortEntry u) →
+      SlotRealizesExprAt cam slot (.sort u)
+  | const {slot : Nat} {n : KName} {us : List KLevel} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 3#4 →
+      cam.symbols[s.symId.toNat]? = some (.constEntry n us) →
+      SlotRealizesExprAt cam slot (.const n us)
+  | app {slot : Nat} {f a : KExpr} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 4#4 →
+      SlotRealizesExprAt cam s.child0.toNat f →
+      SlotRealizesExprAt cam s.child1.toNat a →
+      SlotRealizesExprAt cam slot (.app f a)
+  | lam {slot : Nat} {d b : KExpr} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 5#4 →
+      SlotRealizesExprAt cam s.child0.toNat d →
+      SlotRealizesExprAt cam s.child1.toNat b →
+      SlotRealizesExprAt cam slot (.lam d b)
+  | forallE {slot : Nat} {d b : KExpr} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 6#4 →
+      SlotRealizesExprAt cam s.child0.toNat d →
+      SlotRealizesExprAt cam s.child1.toNat b →
+      SlotRealizesExprAt cam slot (.forallE d b)
+  | letE {slot : Nat} {t v b : KExpr} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 7#4 →
+      SlotRealizesExprAt cam s.child0.toNat t →
+      SlotRealizesExprAt cam s.child1.toNat v →
+      SlotRealizesExprAt cam s.child2.toNat b →
+      SlotRealizesExprAt cam slot (.letE t v b)
+  | lit {slot : Nat} {l : KLiteral} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 8#4 →
+      cam.symbols[s.symId.toNat]? = some (.litEntry l) →
+      SlotRealizesExprAt cam slot (.lit l)
+  | proj {slot idx : Nat} {sName : KName} {e : KExpr} {s : CamSlotEntry} :
+      cam.entries[slot]? = some s → s.tag = 9#4 →
+      cam.symbols[s.symId.toNat]? = some (.projEntry sName idx) →
+      SlotRealizesExprAt cam s.child0.toNat e →
+      SlotRealizesExprAt cam slot (.proj sName idx e)
+
+/-- Allocate or reuse a 32-bit symbol ID in `cam.symbols` via associative lookup. -/
+def allocExprCamSymbol (cam : ExprCAM) (sym : HwCamSymbolEntry) : ExprCAM × UInt32 :=
+  match findElemIdx? cam.symbols sym with
+  | some idx => (cam, UInt32.ofNat idx)
+  | none =>
+    let idx := cam.symbols.length
+    ({ cam with symbols := cam.symbols ++ [sym] }, UInt32.ofNat idx)
+
+/-- Allocate or reuse a single root hardware slot key `k : CamSlotKey` with packed summary `word64` in `cam`. -/
+def internRootNode (cam : ExprCAM) (k : CamSlotKey) (word64 : CamWord64) : ExprCAM × CamHandle :=
+  match cam.lookupSlotKey? k with
   | some h => (cam, h)
   | none =>
     let h := cam.entries.length
     let entry : CamSlotEntry :=
-      { handle := h
-      , word64 := mkExprCamWord64 e leftH rightH
-      , expr   := e }
-    ({ entries := cam.entries ++ [entry] }, h)
+      { handle := UInt32.ofNat h
+      , word64 := word64
+      , tag    := k.tag
+      , symId  := k.symId
+      , child0 := k.child0
+      , child1 := k.child1
+      , child2 := k.child2 }
+    ({ cam with entries := cam.entries ++ [entry] }, h)
 
-/-- Bottom-up DAG hash-consing (`internExpr`):
-recursively interns all child subexpressions of `e` into `cam`, then interns `e` itself using its
-children's 16-bit CAM handles `(leftH, rightH)`. Structurally identical subexpressions anywhere in
-the AST receive the exact same `CamHandle`. -/
+/-- Bottom-up ghost-free DAG hash-consing (`internExpr`):
+recursively interns all child subexpressions of `e` into `cam`, allocates 32-bit symbol IDs for
+constants/literals/sorts/projections, and stores explicit 32-bit `(child0, child1, child2)` slot
+indices (eliminating both the `expr : KExpr` ghost field and 181-node Cantor pairing overflow). -/
 def internExpr (cam : ExprCAM) : KExpr → ExprCAM × CamHandle
-  | e@(.bvar idx) => internRootNode cam e idx 0
-  | e@(.fvar id)  => internRootNode cam e id 0
-  | e@(.mvar id)  => internRootNode cam e id 0
-  | e@(.sort u)   => internRootNode cam e u.depth 0
-  | e@(.const n us) => internRootNode cam e n.toCleanId us.length
-  | e@(.lit (.natVal n)) => internRootNode cam e n 0
-  | e@(.lit (.strVal s)) => internRootNode cam e s.length 1
+  | e@(.bvar idx) =>
+    internRootNode cam { tag := 0#4, symId := UInt32.ofNat idx } (mkExprCamWord64 e idx 0)
+  | e@(.fvar id) =>
+    internRootNode cam { tag := 1#4, symId := UInt32.ofNat id } (mkExprCamWord64 e id 0)
+  | e@(.mvar id) =>
+    internRootNode cam { tag := 10#4, symId := UInt32.ofNat id } (mkExprCamWord64 e id 0)
+  | e@(.sort u) =>
+    let (cam1, symId) := allocExprCamSymbol cam (.sortEntry u)
+    internRootNode cam1 { tag := 2#4, symId := symId } (mkExprCamWord64 e symId.toNat 0)
+  | e@(.const n us) =>
+    let (cam1, symId) := allocExprCamSymbol cam (.constEntry n us)
+    internRootNode cam1 { tag := 3#4, symId := symId } (mkExprCamWord64 e symId.toNat us.length)
+  | e@(.lit l) =>
+    let (cam1, symId) := allocExprCamSymbol cam (.litEntry l)
+    internRootNode cam1 { tag := 8#4, symId := symId } (mkExprCamWord64 e symId.toNat 0)
   | e@(.app f a) =>
     let (cam1, hf) := internExpr cam f
     let (cam2, ha) := internExpr cam1 a
-    internRootNode cam2 e hf ha
+    internRootNode cam2
+      { tag := 4#4, child0 := UInt32.ofNat hf, child1 := UInt32.ofNat ha }
+      (mkExprCamWord64 e hf ha)
   | e@(.lam d b) =>
     let (cam1, hd) := internExpr cam d
     let (cam2, hb) := internExpr cam1 b
-    internRootNode cam2 e hd hb
+    internRootNode cam2
+      { tag := 5#4, child0 := UInt32.ofNat hd, child1 := UInt32.ofNat hb }
+      (mkExprCamWord64 e hd hb)
   | e@(.forallE d b) =>
     let (cam1, hd) := internExpr cam d
     let (cam2, hb) := internExpr cam1 b
-    internRootNode cam2 e hd hb
+    internRootNode cam2
+      { tag := 6#4, child0 := UInt32.ofNat hd, child1 := UInt32.ofNat hb }
+      (mkExprCamWord64 e hd hb)
   | e@(.letE t v b) =>
     let (cam1, ht) := internExpr cam t
     let (cam2, hv) := internExpr cam1 v
     let (cam3, hb) := internExpr cam2 b
-    internRootNode cam3 e ht ((hv + hb) * (hv + hb + 1) / 2 + hb)
-  | e@(.proj _ idx s) =>
+    internRootNode cam3
+      { tag := 7#4, child0 := UInt32.ofNat ht, child1 := UInt32.ofNat hv, child2 := UInt32.ofNat hb }
+      (mkExprCamWord64 e ht hv)
+  | e@(.proj sName idx s) =>
     let (cam1, hs) := internExpr cam s
-    internRootNode cam1 e idx hs
+    let (cam2, symId) := allocExprCamSymbol cam1 (.projEntry sName idx)
+    internRootNode cam2
+      { tag := 9#4, symId := symId, child0 := UInt32.ofNat hs }
+      (mkExprCamWord64 e hs symId.toNat)
 
 /-- Read the 1-bit `looseBVar` hardware flag (bit 59) directly from the 64-bit `CamWord64` at handle `h`. -/
 def camHandleHasLooseBVar? (cam : ExprCAM) (h : CamHandle) : Option Bool := do
@@ -353,7 +572,7 @@ def camInstantiate1 (cam : ExprCAM) (body arg : KExpr) : KExpr :=
   | some false => body
   | _ => KExpr.instantiate1 body arg
 
-/-! ## 4. Main Soundness Theorems for `ExprCAM` (`WS 24`) -/
+/-! ## 4. Main Soundness Theorems for Ghost-Free `ExprCAM` (`WS 24`) -/
 
 /-- **Theorem (`exprCam_looseBVar_flag_sound`)**:
 1. For every `e : KExpr` and child handles `(leftH, rightH)`, bit 59 (`looseBVar`) of the packed
@@ -385,13 +604,11 @@ def sharedSubtermExpr : KExpr :=
 
 /-- **Theorem (`exprCam_eq_iff_handle_eq`)**:
 1. **1-Cycle Structural Equality via Handle Comparison**: Interning two expressions `e1` and `e2`
-   into the same `ExprCAM` pool yields identical handles (`h1 == h2`) if and only if `e1` and `e2`
-   are structurally equal (`e1 == e2`), Verified across identical complex trees, distinct trees,
-   and nested applications.
+   into the same ghost-free `ExprCAM` pool yields identical handles (`h1 == h2`) if and only if
+   `e1` and `e2` are structurally equal (`e1 == e2`).
 2. **DAG Subterm Sharing Compression**: Interning `sharedSubtermExpr` (`(idNat 42) + (idNat 42)`)
-   into `ExprCAM.empty` allocates the shared subtree `idNat 42` (`3` nodes: `"idNat"`, `42`, and
-   `app "idNat" 42`) only once (`6` total CAM slots instead of `9` tree nodes), and subsequent
-   lookup of `idNat 42` returns the existing handle without growing the CAM pool. -/
+   into `ExprCAM.empty` allocates the shared subtree `idNat 42` (`3` nodes) only once (`6` total
+   CAM slots instead of `9` tree nodes), and decodes losslessly via `uninternExpr`. -/
 theorem exprCam_eq_iff_handle_eq :
     let sub1 := KExpr.app (.const (KName.mkSimple "idNat") []) (.lit (.natVal 42))
     let sub2 := KExpr.app (.const (KName.mkSimple "idNat") []) (.lit (.natVal 42))
@@ -401,29 +618,26 @@ theorem exprCam_eq_iff_handle_eq :
     let (_, hDiff) := internExpr cam2 diff
     let (camShared, hShared) := internExpr ExprCAM.empty sharedSubtermExpr
     let (camAfterReintern, hSubAgain) := internExpr camShared sub1
-    -- 1. Equal expressions receive identical CAM handles and do not grow the CAM table
     (h1 == h2) = (sub1 == sub2) ∧
     h1 = h2 ∧
     cam2.entries.length = cam1.entries.length ∧
-    -- 2. Distinct expressions receive distinct CAM handles
     (h1 == hDiff) = (sub1 == diff) ∧
     h1 ≠ hDiff ∧
-    -- 3. DAG compression on `(idNat 42) + (idNat 42)` uses 6 CAM entries (not 9) and reuses `hSubAgain`
     camShared.entries.length = 6 ∧
     camAfterReintern.entries.length = 6 ∧
     uninternExpr camShared hShared = some sharedSubtermExpr ∧
     uninternExpr camShared hSubAgain = some sub1 := by
   refine ⟨rfl, rfl, rfl, rfl, by decide, rfl, rfl, rfl, rfl⟩
 
-/-- Maximum number of entries addressable by 16-bit child handles (`2^16 = 65536`). -/
+/-- Maximum number of entries addressable by 16-bit fast-filter handles (`2^16 = 65536`). -/
 def maxPoolEntries : Nat := 65536
 
 /-- Capacity-bounded root node interning (`internRootNodeBounded`):
 reuses an existing handle in 1 cycle even when `cam.entries.length == maxCap`, and returns `none`
-only when allocating a brand-new node would exceed `maxCap`. -/
-def internRootNodeBounded (maxCap : Nat) (cam : ExprCAM) (e : KExpr) (leftH rightH : Nat) :
+only when allocating a brand-new hardware slot key `k` would exceed `maxCap`. -/
+def internRootNodeBounded (maxCap : Nat) (cam : ExprCAM) (k : CamSlotKey) (word64 : CamWord64) :
     Option (ExprCAM × CamHandle) :=
-  match cam.lookupHandle? e with
+  match cam.lookupSlotKey? k with
   | some h => some (cam, h)
   | none =>
     if cam.entries.length >= maxCap then
@@ -431,10 +645,14 @@ def internRootNodeBounded (maxCap : Nat) (cam : ExprCAM) (e : KExpr) (leftH righ
     else
       let h := cam.entries.length
       let entry : CamSlotEntry :=
-        { handle := h
-        , word64 := mkExprCamWord64 e leftH rightH
-        , expr   := e }
-      some ({ entries := cam.entries ++ [entry] }, h)
+        { handle := UInt32.ofNat h
+        , word64 := word64
+        , tag    := k.tag
+        , symId  := k.symId
+        , child0 := k.child0
+        , child1 := k.child1
+        , child2 := k.child2 }
+      some ({ cam with entries := cam.entries ++ [entry] }, h)
 
 theorem KName.eq_of_beq : ∀ (a b : KName), KName.beq a b = true → a = b
   | .anonymous, .anonymous, _ => rfl
@@ -538,190 +756,714 @@ theorem KExpr.eq_of_beq : ∀ (a b : KExpr), KExpr.beq a b = true → a = b
   | .proj _ _ _, .app _ _, h | .proj _ _ _, .lam _ _, h | .proj _ _ _, .forallE _ _, h | .proj _ _ _, .letE _ _ _, h | .proj _ _ _, .lit _, h => by
     cases h
 
-/-- Well-formedness invariant for an `ExprCAM` pool: every slot in `cam.entries` is resolved by
-`cam.lookupSlot? s.handle` and has `s.handle < cam.entries.length`. -/
+/-- Upper bound on the number of new CAM slots / symbol entries allocated when interning `e`. -/
+def exprNodeBound : KExpr → Nat
+  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => 1
+  | .app f a | .lam f a | .forallE f a => 1 + exprNodeBound f + exprNodeBound a
+  | .letE t v b => 1 + exprNodeBound t + exprNodeBound v + exprNodeBound b
+  | .proj _ _ s => 1 + exprNodeBound s
+
+/-- All variable / metavariable indices inside `e` fit in 32-bit hardware registers (`UInt32`). -/
+def exprVarsFitUInt32 : KExpr → Prop
+  | .bvar idx | .fvar idx | .mvar idx => idx < UInt32.size
+  | .sort _ | .const _ _ | .lit _ => True
+  | .app f a | .lam f a | .forallE f a => exprVarsFitUInt32 f ∧ exprVarsFitUInt32 a
+  | .letE t v b => exprVarsFitUInt32 t ∧ exprVarsFitUInt32 v ∧ exprVarsFitUInt32 b
+  | .proj _ _ s => exprVarsFitUInt32 s
+
+/-- 32-bit hardware addressability precondition for `ExprCAM` (`CamSlotEntry` uses `UInt32` registers). -/
+def ExprCamAddressable (cam : ExprCAM) (e : KExpr) : Prop :=
+  cam.entries.length + exprNodeBound e < UInt32.size ∧
+  cam.symbols.length + exprNodeBound e < UInt32.size ∧
+  exprVarsFitUInt32 e
+
+/-- Topological child-slot invariant on `CamSlotKey`: active child handles strictly precede `bound`. -/
+def SlotKeyChildrenBounded (bound : Nat) (k : CamSlotKey) : Prop :=
+  (k.tag = 4#4 ∨ k.tag = 5#4 ∨ k.tag = 6#4 → k.child0.toNat < bound ∧ k.child1.toNat < bound) ∧
+  (k.tag = 7#4 → k.child0.toNat < bound ∧ k.child1.toNat < bound ∧ k.child2.toNat < bound) ∧
+  (k.tag = 9#4 → k.child0.toNat < bound)
+
+/-- Well-formedness invariant for a ghost-free `ExprCAM` pool: every slot at index `i` stores
+`s.handle.toNat = i` (`i < UInt32.size`) and topologically precedes any parent referencing it. -/
 def ExprCAM.Valid (cam : ExprCAM) : Prop :=
-  ∀ s ∈ cam.entries, cam.lookupSlot? s.handle = some s ∧ s.handle < cam.entries.length
+  ∀ (i : Nat) (s : CamSlotEntry), cam.entries[i]? = some s →
+    s.handle.toNat = i ∧ i < UInt32.size ∧ SlotKeyChildrenBounded i s.key
+
+/-- Monotonicity predicate for `ExprCAM`: `cam2` preserves all existing slot and symbol entries of `cam1`. -/
+def ExprCAM.Extends (cam1 cam2 : ExprCAM) : Prop :=
+  (∀ (i : Nat) (s : CamSlotEntry), cam1.entries[i]? = some s → cam2.entries[i]? = some s) ∧
+  (∀ (j : Nat) (sym : HwCamSymbolEntry), cam1.symbols[j]? = some sym → cam2.symbols[j]? = some sym)
+
+theorem ExprCAM.Extends.refl (cam : ExprCAM) : cam.Extends cam :=
+  ⟨fun _ _ h => h, fun _ _ h => h⟩
+
+theorem ExprCAM.Extends.trans {a b c : ExprCAM}
+    (h1 : a.Extends b) (h2 : b.Extends c) : a.Extends c :=
+  ⟨fun i s h => h2.1 i s (h1.1 i s h), fun j sym h => h2.2 j sym (h1.2 j sym h)⟩
+
+private theorem ExprCAM.Extends.lt_entries_len {cam1 cam2 : ExprCAM} (hext : cam1.Extends cam2)
+    {i : Nat} (hlt : i < cam1.entries.length) : i < cam2.entries.length := by
+  have h1 : cam1.entries[i]? = some cam1.entries[i] := List.getElem?_eq_getElem hlt
+  exact (List.getElem?_eq_some_iff.mp (hext.1 i _ h1)).1
 
 theorem ExprCAM.empty_valid : ExprCAM.empty.Valid := by
-  intro s hs
+  intro i s hs
   cases hs
 
-theorem lookupSlot_append_of_some (cam : ExprCAM) (entry : CamSlotEntry) (h : CamHandle)
-    (slot : CamSlotEntry) (hfind : cam.lookupSlot? h = some slot) :
-    ({ entries := cam.entries ++ [entry] } : ExprCAM).lookupSlot? h = some slot := by
-  unfold ExprCAM.lookupSlot? at hfind ⊢
-  rw [List.find?_append, hfind]
-  rfl
+private theorem exists_getElem?_of_mem {α : Type} :
+    ∀ (xs : List α) {x : α}, x ∈ xs → ∃ (i : Nat), xs[i]? = some x
+  | [], _, h => by cases h
+  | y :: ys, x, h => by
+    rcases List.mem_cons.mp h with rfl | hrest
+    · exact ⟨0, rfl⟩
+    · obtain ⟨i, hi⟩ := exists_getElem?_of_mem ys hrest
+      exact ⟨i + 1, hi⟩
 
-theorem uninternExpr_internRootNode_mono (cam : ExprCAM) (e : KExpr) (leftH rightH : Nat)
-    {h : CamHandle} {e₀ : KExpr} (hun : uninternExpr cam h = some e₀) :
-    uninternExpr (internRootNode cam e leftH rightH).1 h = some e₀ := by
+private theorem uint32_toNat_ofNat_of_lt {n : Nat} (h : n < UInt32.size) :
+    (UInt32.ofNat n).toNat = n := by
+  change n % UInt32.size = n
+  exact Nat.mod_eq_of_lt h
+
+theorem SlotRealizesExprAt.mono {cam1 cam2 : ExprCAM} (hext : cam1.Extends cam2) :
+    ∀ {slot : CamHandle} {e : KExpr},
+      SlotRealizesExprAt cam1 slot e → SlotRealizesExprAt cam2 slot e
+  | _, _, .bvar hs ht hi => .bvar (hext.1 _ _ hs) ht hi
+  | _, _, .fvar hs ht hi => .fvar (hext.1 _ _ hs) ht hi
+  | _, _, .mvar hs ht hi => .mvar (hext.1 _ _ hs) ht hi
+  | _, _, .sort hs ht hsym => .sort (hext.1 _ _ hs) ht (hext.2 _ _ hsym)
+  | _, _, .const hs ht hsym => .const (hext.1 _ _ hs) ht (hext.2 _ _ hsym)
+  | _, _, .app hs ht rf ra => .app (hext.1 _ _ hs) ht (rf.mono hext) (ra.mono hext)
+  | _, _, .lam hs ht rd rb => .lam (hext.1 _ _ hs) ht (rd.mono hext) (rb.mono hext)
+  | _, _, .forallE hs ht rd rb => .forallE (hext.1 _ _ hs) ht (rd.mono hext) (rb.mono hext)
+  | _, _, .letE hs ht rt rv rb => .letE (hext.1 _ _ hs) ht (rt.mono hext) (rv.mono hext) (rb.mono hext)
+  | _, _, .lit hs ht hsym => .lit (hext.1 _ _ hs) ht (hext.2 _ _ hsym)
+  | _, _, .proj hs ht hsym re => .proj (hext.1 _ _ hs) ht (hext.2 _ _ hsym) (re.mono hext)
+
+theorem decodeSlotCamDag_of_slotRealizesExprAt {cam : ExprCAM} :
+    ∀ {slot : CamHandle} {e : KExpr},
+      SlotRealizesExprAt cam slot e →
+      ∀ {fuel : Nat}, depth e ≤ fuel → decodeSlotCamDag fuel cam slot = some e
+  | _, _, .bvar hs ht hi, 0, hd => by simp [depth] at hd
+  | _, _, .bvar hs ht hi, f + 1, _ => by
+    unfold decodeSlotCamDag; rw [hs]; simp [ht, hi]
+  | _, _, .fvar hs ht hi, 0, hd => by simp [depth] at hd
+  | _, _, .fvar hs ht hi, f + 1, _ => by
+    unfold decodeSlotCamDag; rw [hs]; simp [ht, hi]
+  | _, _, .mvar hs ht hi, 0, hd => by simp [depth] at hd
+  | _, _, .mvar hs ht hi, f + 1, _ => by
+    unfold decodeSlotCamDag; rw [hs]; simp [ht, hi]
+  | _, _, .sort hs ht hsym, 0, hd => by simp [depth] at hd
+  | _, _, .sort hs ht hsym, f + 1, _ => by
+    unfold decodeSlotCamDag; rw [hs]; simp [ht, hsym]
+  | _, _, .const hs ht hsym, 0, hd => by simp [depth] at hd
+  | _, _, .const hs ht hsym, f + 1, _ => by
+    unfold decodeSlotCamDag; rw [hs]; simp [ht, hsym]
+  | _, _, .lit hs ht hsym, 0, hd => by simp [depth] at hd
+  | _, _, .lit hs ht hsym, f + 1, _ => by
+    unfold decodeSlotCamDag; rw [hs]; simp [ht, hsym]
+  | _, _, .app hs ht rf ra, 0, hd => by simp [depth] at hd
+  | _, _, .app hs ht rf ra, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeSlotCamDag; rw [hs]
+    simp [ht,
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) rf (by omega),
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) ra (by omega)]
+  | _, _, .lam hs ht rd rb, 0, hd => by simp [depth] at hd
+  | _, _, .lam hs ht rd rb, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeSlotCamDag; rw [hs]
+    simp [ht,
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) rd (by omega),
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) rb (by omega)]
+  | _, _, .forallE hs ht rd rb, 0, hd => by simp [depth] at hd
+  | _, _, .forallE hs ht rd rb, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeSlotCamDag; rw [hs]
+    simp [ht,
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) rd (by omega),
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) rb (by omega)]
+  | _, _, .letE hs ht rt rv rb, 0, hd => by simp [depth] at hd
+  | _, _, .letE hs ht rt rv rb, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeSlotCamDag; rw [hs]
+    simp [ht,
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) rt (by omega),
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) rv (by omega),
+      decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) rb (by omega)]
+  | _, _, .proj hs ht hsym re, 0, hd => by simp [depth] at hd
+  | _, _, .proj hs ht hsym re, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeSlotCamDag; rw [hs]
+    simp [ht, hsym, decodeSlotCamDag_of_slotRealizesExprAt (fuel := fuel) re (by omega)]
+
+theorem slotRealizesExprAt_of_decodeSlotCamDag {cam : ExprCAM} :
+    ∀ {fuel : Nat} {slot : CamHandle} {e : KExpr},
+      decodeSlotCamDag fuel cam slot = some e → SlotRealizesExprAt cam slot e
+  | 0, _, _, hdec => by cases hdec
+  | fuel + 1, slot, e, hdec => by
+    unfold decodeSlotCamDag at hdec
+    cases hs : cam.entries[slot]? with
+    | none => simp [hs] at hdec
+    | some s =>
+      rw [hs] at hdec
+      by_cases h0 : s.tag = 0#4
+      · simp [h0] at hdec; subst hdec; exact .bvar hs h0 rfl
+      · by_cases h1 : s.tag = 1#4
+        · simp [h1] at hdec; subst hdec; exact .fvar hs h1 rfl
+        · by_cases h2 : s.tag = 2#4
+          · cases hsym : cam.symbols[s.symId.toNat]? with
+            | none => simp [h2, hsym] at hdec
+            | some sym =>
+              cases sym <;> simp [h2, hsym] at hdec
+              subst hdec; exact .sort hs h2 hsym
+          · by_cases h3 : s.tag = 3#4
+            · cases hsym : cam.symbols[s.symId.toNat]? with
+              | none => simp [h3, hsym] at hdec
+              | some sym =>
+                cases sym <;> simp [h3, hsym] at hdec
+                subst hdec; exact .const hs h3 hsym
+            · by_cases h4 : s.tag = 4#4
+              · cases hc0 : decodeSlotCamDag fuel cam s.child0.toNat with
+                | none => simp [h4, hc0] at hdec
+                | some f =>
+                  cases hc1 : decodeSlotCamDag fuel cam s.child1.toNat with
+                  | none => simp [h4, hc0, hc1] at hdec
+                  | some a =>
+                    simp [h4, hc0, hc1] at hdec; subst hdec
+                    exact .app hs h4
+                      (slotRealizesExprAt_of_decodeSlotCamDag hc0)
+                      (slotRealizesExprAt_of_decodeSlotCamDag hc1)
+              · by_cases h5 : s.tag = 5#4
+                · cases hc0 : decodeSlotCamDag fuel cam s.child0.toNat with
+                  | none => simp [h5, hc0] at hdec
+                  | some d =>
+                    cases hc1 : decodeSlotCamDag fuel cam s.child1.toNat with
+                    | none => simp [h5, hc0, hc1] at hdec
+                    | some b =>
+                      simp [h5, hc0, hc1] at hdec; subst hdec
+                      exact .lam hs h5
+                        (slotRealizesExprAt_of_decodeSlotCamDag hc0)
+                        (slotRealizesExprAt_of_decodeSlotCamDag hc1)
+                · by_cases h6 : s.tag = 6#4
+                  · cases hc0 : decodeSlotCamDag fuel cam s.child0.toNat with
+                    | none => simp [h6, hc0] at hdec
+                    | some d =>
+                      cases hc1 : decodeSlotCamDag fuel cam s.child1.toNat with
+                      | none => simp [h6, hc0, hc1] at hdec
+                      | some b =>
+                        simp [h6, hc0, hc1] at hdec; subst hdec
+                        exact .forallE hs h6
+                          (slotRealizesExprAt_of_decodeSlotCamDag hc0)
+                          (slotRealizesExprAt_of_decodeSlotCamDag hc1)
+                  · by_cases h7 : s.tag = 7#4
+                    · cases hc0 : decodeSlotCamDag fuel cam s.child0.toNat with
+                      | none => simp [h7, hc0] at hdec
+                      | some t =>
+                        cases hc1 : decodeSlotCamDag fuel cam s.child1.toNat with
+                        | none => simp [h7, hc0, hc1] at hdec
+                        | some v =>
+                          cases hc2 : decodeSlotCamDag fuel cam s.child2.toNat with
+                          | none => simp [h7, hc0, hc1, hc2] at hdec
+                          | some b =>
+                            simp [h7, hc0, hc1, hc2] at hdec; subst hdec
+                            exact .letE hs h7
+                              (slotRealizesExprAt_of_decodeSlotCamDag hc0)
+                              (slotRealizesExprAt_of_decodeSlotCamDag hc1)
+                              (slotRealizesExprAt_of_decodeSlotCamDag hc2)
+                    · by_cases h8 : s.tag = 8#4
+                      · cases hsym : cam.symbols[s.symId.toNat]? with
+                        | none => simp [h8, hsym] at hdec
+                        | some sym =>
+                          cases sym <;> simp [h8, hsym] at hdec
+                          subst hdec; exact .lit hs h8 hsym
+                      · by_cases h9 : s.tag = 9#4
+                        · cases hc0 : decodeSlotCamDag fuel cam s.child0.toNat with
+                          | none => simp [h9, hc0] at hdec
+                          | some sub =>
+                            cases hsym : cam.symbols[s.symId.toNat]? with
+                            | none => simp [h9, hc0, hsym] at hdec
+                            | some sym =>
+                              cases sym <;> simp [h9, hc0, hsym] at hdec
+                              subst hdec
+                              exact .proj hs h9 hsym (slotRealizesExprAt_of_decodeSlotCamDag hc0)
+                        · by_cases h10 : s.tag = 10#4
+                          · simp [h10] at hdec
+                            subst hdec; exact .mvar hs h10 rfl
+                          · simp [h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10] at hdec
+
+theorem slotRealizesExprAt_iff_decodeSlotCamDag (cam : ExprCAM) (slot : CamHandle) (e : KExpr) :
+    SlotRealizesExprAt cam slot e ↔ ∃ fuel, decodeSlotCamDag fuel cam slot = some e :=
+  ⟨fun hr => ⟨depth e, decodeSlotCamDag_of_slotRealizesExprAt hr (Nat.le_refl _)⟩,
+   fun ⟨_, hdec⟩ => slotRealizesExprAt_of_decodeSlotCamDag hdec⟩
+
+theorem SlotRealizesExprAt.slot_lt_length {cam : ExprCAM} {slot : CamHandle} {e : KExpr}
+    (hr : SlotRealizesExprAt cam slot e) : slot < cam.entries.length := by
+  cases hr with
+  | bvar hs _ _ | fvar hs _ _ | mvar hs _ _ | sort hs _ _ | const hs _ _
+  | app hs _ _ _ | lam hs _ _ _ | forallE hs _ _ _ | letE hs _ _ _ _
+  | lit hs _ _ | proj hs _ _ _ =>
+    exact (List.getElem?_eq_some_iff.mp hs).1
+
+theorem SlotRealizesExprAt.depth_le_slot_succ {cam : ExprCAM} (hv : cam.Valid) :
+    ∀ {slot : CamHandle} {e : KExpr},
+      SlotRealizesExprAt cam slot e → depth e ≤ slot + 1
+  | _, _, .bvar _ _ _ | _, _, .fvar _ _ _ | _, _, .mvar _ _ _
+  | _, _, .sort _ _ _ | _, _, .const _ _ _ | _, _, .lit _ _ _ => by
+    simp [depth]
+  | slot, _, .app hs htag rf ra => by
+    have hbnd := (hv slot _ hs).2.2.1 (.inl htag)
+    have df := rf.depth_le_slot_succ hv
+    have da := ra.depth_le_slot_succ hv
+    simp only [CamSlotEntry.key] at hbnd
+    simp only [depth]; omega
+  | slot, _, .lam hs htag rd rb => by
+    have hbnd := (hv slot _ hs).2.2.1 (.inr (.inl htag))
+    have dd := rd.depth_le_slot_succ hv
+    have db := rb.depth_le_slot_succ hv
+    simp only [CamSlotEntry.key] at hbnd
+    simp only [depth]; omega
+  | slot, _, .forallE hs htag rd rb => by
+    have hbnd := (hv slot _ hs).2.2.1 (.inr (.inr htag))
+    have dd := rd.depth_le_slot_succ hv
+    have db := rb.depth_le_slot_succ hv
+    simp only [CamSlotEntry.key] at hbnd
+    simp only [depth]; omega
+  | slot, _, .letE hs htag rt rv rb => by
+    have hbnd := (hv slot _ hs).2.2.2.1 htag
+    have dt := rt.depth_le_slot_succ hv
+    have dv := rv.depth_le_slot_succ hv
+    have db := rb.depth_le_slot_succ hv
+    simp only [CamSlotEntry.key] at hbnd
+    simp only [depth]; omega
+  | slot, _, .proj hs htag _ re => by
+    have hbnd := (hv slot _ hs).2.2.2.2 htag
+    have de := re.depth_le_slot_succ hv
+    simp only [CamSlotEntry.key] at hbnd
+    simp only [depth]; omega
+
+theorem uninternExpr_of_slotRealizesExprAt {cam : ExprCAM} (hv : cam.Valid)
+    {slot : CamHandle} {e : KExpr} (hr : SlotRealizesExprAt cam slot e) :
+    uninternExpr cam slot = some e :=
+  decodeSlotCamDag_of_slotRealizesExprAt hr (Nat.le_trans (hr.depth_le_slot_succ hv) hr.slot_lt_length)
+
+private theorem allocExprCamSymbol_size_le (cam : ExprCAM) (sym : HwCamSymbolEntry) :
+    (allocExprCamSymbol cam sym).1.entries = cam.entries ∧
+    (allocExprCamSymbol cam sym).1.symbols.length ≤ cam.symbols.length + 1 := by
+  unfold allocExprCamSymbol
+  cases findElemIdx? cam.symbols sym <;> simp
+
+private theorem internRootNode_len_le {cam : ExprCAM} {k : CamSlotKey} {w : CamWord64} {eb sb : Nat}
+    (he : cam.entries.length + 1 ≤ eb) (hs : cam.symbols.length ≤ sb) :
+    (internRootNode cam k w).1.entries.length ≤ eb ∧
+    (internRootNode cam k w).1.symbols.length ≤ sb := by
   unfold internRootNode
-  cases cam.lookupHandle? e with
-  | some _ => exact hun
+  cases cam.lookupSlotKey? k <;> simp <;> omega
+
+theorem internExpr_size_le : ∀ (e : KExpr) (cam : ExprCAM),
+    (internExpr cam e).1.entries.length ≤ cam.entries.length + exprNodeBound e ∧
+    (internExpr cam e).1.symbols.length ≤ cam.symbols.length + exprNodeBound e
+  | .bvar _, cam | .fvar _, cam | .mvar _, cam => by
+    simp only [internExpr, exprNodeBound]
+    exact internRootNode_len_le (Nat.le_refl _) (Nat.le_succ _)
+  | .sort u, cam => by
+    simp only [internExpr, exprNodeBound]
+    have hs := allocExprCamSymbol_size_le cam (.sortEntry u)
+    exact internRootNode_len_le (by rw [hs.1]; omega) hs.2
+  | .const n us, cam => by
+    simp only [internExpr, exprNodeBound]
+    have hs := allocExprCamSymbol_size_le cam (.constEntry n us)
+    exact internRootNode_len_le (by rw [hs.1]; omega) hs.2
+  | .lit l, cam => by
+    simp only [internExpr, exprNodeBound]
+    have hs := allocExprCamSymbol_size_le cam (.litEntry l)
+    exact internRootNode_len_le (by rw [hs.1]; omega) hs.2
+  | .app f a, cam => by
+    simp only [internExpr, exprNodeBound]
+    have hf := internExpr_size_le f cam
+    have ha := internExpr_size_le a (internExpr cam f).1
+    exact internRootNode_len_le (by omega) (by omega)
+  | .lam d b, cam => by
+    simp only [internExpr, exprNodeBound]
+    have hd := internExpr_size_le d cam
+    have hb := internExpr_size_le b (internExpr cam d).1
+    exact internRootNode_len_le (by omega) (by omega)
+  | .forallE d b, cam => by
+    simp only [internExpr, exprNodeBound]
+    have hd := internExpr_size_le d cam
+    have hb := internExpr_size_le b (internExpr cam d).1
+    exact internRootNode_len_le (by omega) (by omega)
+  | .letE t v b, cam => by
+    simp only [internExpr, exprNodeBound]
+    have ht := internExpr_size_le t cam
+    have hv := internExpr_size_le v (internExpr cam t).1
+    have hb := internExpr_size_le b (internExpr (internExpr cam t).1 v).1
+    exact internRootNode_len_le (by omega) (by omega)
+  | .proj sName idx s, cam => by
+    simp only [internExpr, exprNodeBound]
+    have hs := internExpr_size_le s cam
+    have hsym := allocExprCamSymbol_size_le (internExpr cam s).1 (.projEntry sName idx)
+    exact internRootNode_len_le (by rw [hsym.1]; omega) (by omega)
+
+private theorem allocExprCamSymbol_spec {cam : ExprCAM} (hv : cam.Valid)
+    (sym : HwCamSymbolEntry) (hSymFit : cam.symbols.length < UInt32.size) :
+    cam.Extends (allocExprCamSymbol cam sym).1 ∧
+    (allocExprCamSymbol cam sym).1.Valid ∧
+    (allocExprCamSymbol cam sym).1.entries = cam.entries ∧
+    (allocExprCamSymbol cam sym).1.symbols[(allocExprCamSymbol cam sym).2.toNat]? = some sym := by
+  unfold allocExprCamSymbol
+  cases hfind : findElemIdx? cam.symbols sym with
+  | some idx =>
+    have hget := getElem?_of_findElemIdx? cam.symbols sym idx hfind
+    have hlt : idx < cam.symbols.length := (List.getElem?_eq_some_iff.mp hget).1
+    refine ⟨ExprCAM.Extends.refl cam, hv, rfl, ?_⟩
+    rwa [uint32_toNat_ofNat_of_lt (Nat.lt_trans hlt hSymFit)]
   | none =>
-    unfold uninternExpr at hun ⊢
-    obtain ⟨slot, hslot, rfl⟩ := Option.map_eq_some_iff.mp hun
-    rw [lookupSlot_append_of_some cam _ h slot hslot]
-    rfl
+    refine ⟨⟨fun _ _ h => h, fun _ _ h => getElem?_append_preserve [sym] h⟩, hv, rfl, ?_⟩
+    rw [uint32_toNat_ofNat_of_lt hSymFit]
+    exact getElem?_append_singleton_self cam.symbols sym
+
+private theorem pred_of_find?_eq_some {α : Type} (p : α → Bool) :
+    ∀ (xs : List α) {a : α}, xs.find? p = some a → p a = true
+  | [], _, h => by cases h
+  | x :: xs, a, h => by
+    simp only [List.find?] at h
+    cases hp : p x with
+    | true => rw [hp] at h; injection h with hEq; subst hEq; exact hp
+    | false => rw [hp] at h; exact pred_of_find?_eq_some p xs h
+
+private theorem internRootNode_spec {cam : ExprCAM} (hv : cam.Valid)
+    (k : CamSlotKey) (w : CamWord64)
+    (hCap : cam.entries.length < UInt32.size)
+    (hBnd : SlotKeyChildrenBounded cam.entries.length k) :
+    let (cam', h) := internRootNode cam k w
+    cam.Extends cam' ∧
+    cam'.Valid ∧
+    h < cam'.entries.length ∧
+    ∃ s, cam'.entries[h]? = some s ∧ s.key = k := by
+  unfold internRootNode
+  cases hlook : cam.lookupSlotKey? k with
+  | some h =>
+    unfold ExprCAM.lookupSlotKey? at hlook
+    obtain ⟨slot, hfind, hhandle⟩ := Option.map_eq_some_iff.mp hlook
+    have hmem : slot ∈ cam.entries := List.mem_of_find?_eq_some hfind
+    have hkey : slot.key = k :=
+      of_decide_eq_true (pred_of_find?_eq_some (fun slot => decide (slot.key = k)) cam.entries hfind)
+    obtain ⟨idx, hget⟩ := exists_getElem?_of_mem cam.entries hmem
+    have hidxEq : slot.handle.toNat = idx := (hv idx slot hget).1
+    subst hhandle
+    rw [hidxEq]
+    exact ⟨ExprCAM.Extends.refl cam, hv, (List.getElem?_eq_some_iff.mp hget).1, ⟨slot, hget, hkey⟩⟩
+  | none =>
+    let entry : CamSlotEntry :=
+      { handle := UInt32.ofNat cam.entries.length
+      , word64 := w
+      , tag    := k.tag
+      , symId  := k.symId
+      , child0 := k.child0
+      , child1 := k.child1
+      , child2 := k.child2 }
+    have hentryKey : entry.key = k := by cases k; rfl
+    refine ⟨⟨fun _ _ h => getElem?_append_preserve [entry] h, fun _ _ h => h⟩, ?_, ?_, ?_⟩
+    · intro i s hs
+      by_cases hi : i < cam.entries.length
+      · rw [List.getElem?_append_left hi] at hs
+        exact hv i s hs
+      · by_cases heq : i = cam.entries.length
+        · subst heq
+          rw [getElem?_append_singleton_self] at hs
+          injection hs with hsEq
+          subst hsEq
+          refine ⟨uint32_toNat_ofNat_of_lt hCap, hCap, ?_⟩
+          rwa [hentryKey]
+        · have hge : cam.entries.length + 1 ≤ i := by omega
+          have hlt := (List.getElem?_eq_some_iff.mp hs).1
+          simp only [List.length_append, List.length_singleton] at hlt
+          omega
+    · simp
+    · exact ⟨entry, getElem?_append_singleton_self cam.entries entry, hentryKey⟩
+
+private theorem leaf_slotKeyChildrenBounded (bound : Nat) (tag : BitVec 4) (symId : UInt32)
+    (h4 : tag ≠ 4#4) (h5 : tag ≠ 5#4) (h6 : tag ≠ 6#4) (h7 : tag ≠ 7#4) (h9 : tag ≠ 9#4) :
+    SlotKeyChildrenBounded bound { tag := tag, symId := symId } := by
+  refine ⟨?_, ?_, ?_⟩
+  · rintro (rfl | rfl | rfl) <;> contradiction
+  · intro h; exact absurd h h7
+  · intro h; exact absurd h h9
+
+private theorem bin_slotKeyChildrenBounded (bound : Nat) (tag : BitVec 4) (c0 c1 : UInt32)
+    (h0 : c0.toNat < bound) (h1 : c1.toNat < bound)
+    (h7 : tag ≠ 7#4) (h9 : tag ≠ 9#4) :
+    SlotKeyChildrenBounded bound { tag := tag, child0 := c0, child1 := c1 } := by
+  unfold SlotKeyChildrenBounded
+  refine ⟨fun _ => ⟨h0, h1⟩, ?_, ?_⟩
+  · intro h; exact absurd h h7
+  · intro h; exact absurd h h9
+
+private theorem proj_slotKeyChildrenBounded (bound : Nat) (symId c0 : UInt32)
+    (h0 : c0.toNat < bound) :
+    SlotKeyChildrenBounded bound { tag := 9#4, symId := symId, child0 := c0 } := by
+  unfold SlotKeyChildrenBounded
+  refine ⟨?_, ?_, fun _ => h0⟩
+  · rintro (h | h | h) <;> dsimp at h <;> exact absurd h (by decide)
+  · intro h; dsimp at h; exact absurd h (by decide)
+
+theorem internExpr_realizes :
+    ∀ (e : KExpr) {cam : ExprCAM},
+      cam.Valid →
+      ExprCamAddressable cam e →
+      let (cam', h) := internExpr cam e
+      cam.Extends cam' ∧
+      cam'.Valid ∧
+      h < cam'.entries.length ∧
+      SlotRealizesExprAt cam' h e
+  | .bvar idx, cam, hv, ⟨hEnt, _, hVar⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt
+    simp only [exprVarsFitUInt32] at hVar
+    have hbnd := leaf_slotKeyChildrenBounded cam.entries.length 0#4 (UInt32.ofNat idx)
+      (by decide) (by decide) (by decide) (by decide) (by decide)
+    obtain ⟨hext, hv', hlt, slot, hslot, hkey⟩ :=
+      internRootNode_spec hv _ _ (by omega) hbnd
+    have htag : slot.tag = 0#4 := congrArg CamSlotKey.tag hkey
+    have hsym : slot.symId = UInt32.ofNat idx := congrArg CamSlotKey.symId hkey
+    refine ⟨hext, hv', hlt, .bvar hslot htag ?_⟩
+    rw [hsym, uint32_toNat_ofNat_of_lt hVar]
+  | .fvar id, cam, hv, ⟨hEnt, _, hVar⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt
+    simp only [exprVarsFitUInt32] at hVar
+    have hbnd := leaf_slotKeyChildrenBounded cam.entries.length 1#4 (UInt32.ofNat id)
+      (by decide) (by decide) (by decide) (by decide) (by decide)
+    obtain ⟨hext, hv', hlt, slot, hslot, hkey⟩ :=
+      internRootNode_spec hv _ _ (by omega) hbnd
+    have htag : slot.tag = 1#4 := congrArg CamSlotKey.tag hkey
+    have hsym : slot.symId = UInt32.ofNat id := congrArg CamSlotKey.symId hkey
+    refine ⟨hext, hv', hlt, .fvar hslot htag ?_⟩
+    rw [hsym, uint32_toNat_ofNat_of_lt hVar]
+  | .mvar id, cam, hv, ⟨hEnt, _, hVar⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt
+    simp only [exprVarsFitUInt32] at hVar
+    have hbnd := leaf_slotKeyChildrenBounded cam.entries.length 10#4 (UInt32.ofNat id)
+      (by decide) (by decide) (by decide) (by decide) (by decide)
+    obtain ⟨hext, hv', hlt, slot, hslot, hkey⟩ :=
+      internRootNode_spec hv _ _ (by omega) hbnd
+    have htag : slot.tag = 10#4 := congrArg CamSlotKey.tag hkey
+    have hsym : slot.symId = UInt32.ofNat id := congrArg CamSlotKey.symId hkey
+    refine ⟨hext, hv', hlt, .mvar hslot htag ?_⟩
+    rw [hsym, uint32_toNat_ofNat_of_lt hVar]
+  | .sort u, cam, hv, ⟨hEnt, hSym, _⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt hSym
+    obtain ⟨hext1, hv1, hent1, hsymGet⟩ := allocExprCamSymbol_spec hv (.sortEntry u) (by omega)
+    have hbnd := leaf_slotKeyChildrenBounded (allocExprCamSymbol cam (.sortEntry u)).1.entries.length
+      2#4 (allocExprCamSymbol cam (.sortEntry u)).2
+      (by decide) (by decide) (by decide) (by decide) (by decide)
+    obtain ⟨hext2, hv2, hlt, slot, hslot, hkey⟩ :=
+      internRootNode_spec hv1 _ _ (by rw [hent1]; omega) hbnd
+    have htag : slot.tag = 2#4 := congrArg CamSlotKey.tag hkey
+    have hsymId : slot.symId = (allocExprCamSymbol cam (.sortEntry u)).2 := congrArg CamSlotKey.symId hkey
+    refine ⟨hext1.trans hext2, hv2, hlt, .sort hslot htag ?_⟩
+    rw [hsymId]
+    exact hext2.2 _ _ hsymGet
+  | .const n us, cam, hv, ⟨hEnt, hSym, _⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt hSym
+    obtain ⟨hext1, hv1, hent1, hsymGet⟩ := allocExprCamSymbol_spec hv (.constEntry n us) (by omega)
+    have hbnd := leaf_slotKeyChildrenBounded (allocExprCamSymbol cam (.constEntry n us)).1.entries.length
+      3#4 (allocExprCamSymbol cam (.constEntry n us)).2
+      (by decide) (by decide) (by decide) (by decide) (by decide)
+    obtain ⟨hext2, hv2, hlt, slot, hslot, hkey⟩ :=
+      internRootNode_spec hv1 _ _ (by rw [hent1]; omega) hbnd
+    have htag : slot.tag = 3#4 := congrArg CamSlotKey.tag hkey
+    have hsymId : slot.symId = (allocExprCamSymbol cam (.constEntry n us)).2 := congrArg CamSlotKey.symId hkey
+    refine ⟨hext1.trans hext2, hv2, hlt, .const hslot htag ?_⟩
+    rw [hsymId]
+    exact hext2.2 _ _ hsymGet
+  | .lit l, cam, hv, ⟨hEnt, hSym, _⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt hSym
+    obtain ⟨hext1, hv1, hent1, hsymGet⟩ := allocExprCamSymbol_spec hv (.litEntry l) (by omega)
+    have hbnd := leaf_slotKeyChildrenBounded (allocExprCamSymbol cam (.litEntry l)).1.entries.length
+      8#4 (allocExprCamSymbol cam (.litEntry l)).2
+      (by decide) (by decide) (by decide) (by decide) (by decide)
+    obtain ⟨hext2, hv2, hlt, slot, hslot, hkey⟩ :=
+      internRootNode_spec hv1 _ _ (by rw [hent1]; omega) hbnd
+    have htag : slot.tag = 8#4 := congrArg CamSlotKey.tag hkey
+    have hsymId : slot.symId = (allocExprCamSymbol cam (.litEntry l)).2 := congrArg CamSlotKey.symId hkey
+    refine ⟨hext1.trans hext2, hv2, hlt, .lit hslot htag ?_⟩
+    rw [hsymId]
+    exact hext2.2 _ _ hsymGet
+  | .app f a, cam, hv, ⟨hEnt, hSym, hfVar, haVar⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt hSym
+    have hszF := internExpr_size_le f cam
+    obtain ⟨hext1, hv1, hfLt, rf⟩ := internExpr_realizes f hv ⟨by omega, by omega, hfVar⟩
+    have hszA := internExpr_size_le a (internExpr cam f).1
+    obtain ⟨hext2, hv2, haLt, ra⟩ := internExpr_realizes a hv1 ⟨by omega, by omega, haVar⟩
+    have hfLt2 : (internExpr cam f).2 < (internExpr (internExpr cam f).1 a).1.entries.length :=
+      hext2.lt_entries_len hfLt
+    have hCap2 : (internExpr (internExpr cam f).1 a).1.entries.length < UInt32.size := by omega
+    have hc0Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans hfLt2 hCap2)
+    have hc1Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans haLt hCap2)
+    have hbnd := bin_slotKeyChildrenBounded (internExpr (internExpr cam f).1 a).1.entries.length
+      4#4 (UInt32.ofNat (internExpr cam f).2) (UInt32.ofNat (internExpr (internExpr cam f).1 a).2)
+      (by simpa [hc0Eq] using hfLt2) (by simpa [hc1Eq] using haLt) (by decide) (by decide)
+    obtain ⟨hext3, hv3, hlt, slot, hslot, hkey⟩ := internRootNode_spec hv2 _ _ hCap2 hbnd
+    have htag : slot.tag = 4#4 := congrArg CamSlotKey.tag hkey
+    have hc0 : slot.child0 = UInt32.ofNat (internExpr cam f).2 := congrArg CamSlotKey.child0 hkey
+    have hc1 : slot.child1 = UInt32.ofNat (internExpr (internExpr cam f).1 a).2 := congrArg CamSlotKey.child1 hkey
+    refine ⟨hext1.trans (hext2.trans hext3), hv3, hlt, .app hslot htag ?_ ?_⟩
+    · rw [hc0, hc0Eq]; exact rf.mono (hext2.trans hext3)
+    · rw [hc1, hc1Eq]; exact ra.mono hext3
+  | .lam d b, cam, hv, ⟨hEnt, hSym, hdVar, hbVar⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt hSym
+    have hszD := internExpr_size_le d cam
+    obtain ⟨hext1, hv1, hdLt, rd⟩ := internExpr_realizes d hv ⟨by omega, by omega, hdVar⟩
+    have hszB := internExpr_size_le b (internExpr cam d).1
+    obtain ⟨hext2, hv2, hbLt, rb⟩ := internExpr_realizes b hv1 ⟨by omega, by omega, hbVar⟩
+    have hdLt2 : (internExpr cam d).2 < (internExpr (internExpr cam d).1 b).1.entries.length :=
+      hext2.lt_entries_len hdLt
+    have hCap2 : (internExpr (internExpr cam d).1 b).1.entries.length < UInt32.size := by omega
+    have hc0Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans hdLt2 hCap2)
+    have hc1Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans hbLt hCap2)
+    have hbnd := bin_slotKeyChildrenBounded (internExpr (internExpr cam d).1 b).1.entries.length
+      5#4 (UInt32.ofNat (internExpr cam d).2) (UInt32.ofNat (internExpr (internExpr cam d).1 b).2)
+      (by simpa [hc0Eq] using hdLt2) (by simpa [hc1Eq] using hbLt) (by decide) (by decide)
+    obtain ⟨hext3, hv3, hlt, slot, hslot, hkey⟩ := internRootNode_spec hv2 _ _ hCap2 hbnd
+    have htag : slot.tag = 5#4 := congrArg CamSlotKey.tag hkey
+    have hc0 : slot.child0 = UInt32.ofNat (internExpr cam d).2 := congrArg CamSlotKey.child0 hkey
+    have hc1 : slot.child1 = UInt32.ofNat (internExpr (internExpr cam d).1 b).2 := congrArg CamSlotKey.child1 hkey
+    refine ⟨hext1.trans (hext2.trans hext3), hv3, hlt, .lam hslot htag ?_ ?_⟩
+    · rw [hc0, hc0Eq]; exact rd.mono (hext2.trans hext3)
+    · rw [hc1, hc1Eq]; exact rb.mono hext3
+  | .forallE d b, cam, hv, ⟨hEnt, hSym, hdVar, hbVar⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt hSym
+    have hszD := internExpr_size_le d cam
+    obtain ⟨hext1, hv1, hdLt, rd⟩ := internExpr_realizes d hv ⟨by omega, by omega, hdVar⟩
+    have hszB := internExpr_size_le b (internExpr cam d).1
+    obtain ⟨hext2, hv2, hbLt, rb⟩ := internExpr_realizes b hv1 ⟨by omega, by omega, hbVar⟩
+    have hdLt2 : (internExpr cam d).2 < (internExpr (internExpr cam d).1 b).1.entries.length :=
+      hext2.lt_entries_len hdLt
+    have hCap2 : (internExpr (internExpr cam d).1 b).1.entries.length < UInt32.size := by omega
+    have hc0Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans hdLt2 hCap2)
+    have hc1Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans hbLt hCap2)
+    have hbnd := bin_slotKeyChildrenBounded (internExpr (internExpr cam d).1 b).1.entries.length
+      6#4 (UInt32.ofNat (internExpr cam d).2) (UInt32.ofNat (internExpr (internExpr cam d).1 b).2)
+      (by simpa [hc0Eq] using hdLt2) (by simpa [hc1Eq] using hbLt) (by decide) (by decide)
+    obtain ⟨hext3, hv3, hlt, slot, hslot, hkey⟩ := internRootNode_spec hv2 _ _ hCap2 hbnd
+    have htag : slot.tag = 6#4 := congrArg CamSlotKey.tag hkey
+    have hc0 : slot.child0 = UInt32.ofNat (internExpr cam d).2 := congrArg CamSlotKey.child0 hkey
+    have hc1 : slot.child1 = UInt32.ofNat (internExpr (internExpr cam d).1 b).2 := congrArg CamSlotKey.child1 hkey
+    refine ⟨hext1.trans (hext2.trans hext3), hv3, hlt, .forallE hslot htag ?_ ?_⟩
+    · rw [hc0, hc0Eq]; exact rd.mono (hext2.trans hext3)
+    · rw [hc1, hc1Eq]; exact rb.mono hext3
+  | .letE t v b, cam, hv, ⟨hEnt, hSym, htVar, hvVar, hbVar⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt hSym
+    have hszT := internExpr_size_le t cam
+    obtain ⟨hext1, hv1, htLt, rt⟩ := internExpr_realizes t hv ⟨by omega, by omega, htVar⟩
+    have hszV := internExpr_size_le v (internExpr cam t).1
+    obtain ⟨hext2, hv2, hvLt, rv⟩ := internExpr_realizes v hv1 ⟨by omega, by omega, hvVar⟩
+    have hszB := internExpr_size_le b (internExpr (internExpr cam t).1 v).1
+    obtain ⟨hext3, hv3, hbLt, rb⟩ := internExpr_realizes b hv2 ⟨by omega, by omega, hbVar⟩
+    have htLt3 : (internExpr cam t).2 < (internExpr (internExpr (internExpr cam t).1 v).1 b).1.entries.length :=
+      (hext2.trans hext3).lt_entries_len htLt
+    have hvLt3 : (internExpr (internExpr cam t).1 v).2 < (internExpr (internExpr (internExpr cam t).1 v).1 b).1.entries.length :=
+      hext3.lt_entries_len hvLt
+    have hCap3 : (internExpr (internExpr (internExpr cam t).1 v).1 b).1.entries.length < UInt32.size := by omega
+    have hc0Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans htLt3 hCap3)
+    have hc1Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans hvLt3 hCap3)
+    have hc2Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans hbLt hCap3)
+    have hbnd : SlotKeyChildrenBounded (internExpr (internExpr (internExpr cam t).1 v).1 b).1.entries.length
+        { tag := 7#4
+        , child0 := UInt32.ofNat (internExpr cam t).2
+        , child1 := UInt32.ofNat (internExpr (internExpr cam t).1 v).2
+        , child2 := UInt32.ofNat (internExpr (internExpr (internExpr cam t).1 v).1 b).2 } := by
+      unfold SlotKeyChildrenBounded
+      refine ⟨?_, fun _ => ⟨by simpa [hc0Eq] using htLt3, by simpa [hc1Eq] using hvLt3, by simpa [hc2Eq] using hbLt⟩, ?_⟩
+      · rintro (h | h | h) <;> dsimp at h <;> exact absurd h (by decide)
+      · intro h; dsimp at h; exact absurd h (by decide)
+    obtain ⟨hext4, hv4, hlt, slot, hslot, hkey⟩ := internRootNode_spec hv3 _ _ hCap3 hbnd
+    have htag : slot.tag = 7#4 := congrArg CamSlotKey.tag hkey
+    have hc0 : slot.child0 = UInt32.ofNat (internExpr cam t).2 := congrArg CamSlotKey.child0 hkey
+    have hc1 : slot.child1 = UInt32.ofNat (internExpr (internExpr cam t).1 v).2 := congrArg CamSlotKey.child1 hkey
+    have hc2 : slot.child2 = UInt32.ofNat (internExpr (internExpr (internExpr cam t).1 v).1 b).2 := congrArg CamSlotKey.child2 hkey
+    refine ⟨hext1.trans (hext2.trans (hext3.trans hext4)), hv4, hlt, .letE hslot htag ?_ ?_ ?_⟩
+    · rw [hc0, hc0Eq]; exact rt.mono (hext2.trans (hext3.trans hext4))
+    · rw [hc1, hc1Eq]; exact rv.mono (hext3.trans hext4)
+    · rw [hc2, hc2Eq]; exact rb.mono hext4
+  | .proj sName idx s, cam, hv, ⟨hEnt, hSym, hsVar⟩ => by
+    simp only [internExpr]
+    simp only [exprNodeBound] at hEnt hSym
+    have hszS := internExpr_size_le s cam
+    obtain ⟨hext1, hv1, hsLt, rs⟩ := internExpr_realizes s hv ⟨by omega, by omega, hsVar⟩
+    obtain ⟨hext2, hv2, hent2, hsymGet⟩ :=
+      allocExprCamSymbol_spec hv1 (.projEntry sName idx) (by omega)
+    have hsLt2 : (internExpr cam s).2 < (allocExprCamSymbol (internExpr cam s).1 (.projEntry sName idx)).1.entries.length := by
+      rwa [hent2]
+    have hCap2 : (allocExprCamSymbol (internExpr cam s).1 (.projEntry sName idx)).1.entries.length < UInt32.size := by
+      rw [hent2]; omega
+    have hc0Eq := uint32_toNat_ofNat_of_lt (Nat.lt_trans hsLt2 hCap2)
+    have hbnd := proj_slotKeyChildrenBounded
+      (allocExprCamSymbol (internExpr cam s).1 (.projEntry sName idx)).1.entries.length
+      (allocExprCamSymbol (internExpr cam s).1 (.projEntry sName idx)).2
+      (UInt32.ofNat (internExpr cam s).2)
+      (by simpa [hc0Eq] using hsLt2)
+    obtain ⟨hext3, hv3, hlt, slot, hslot, hkey⟩ := internRootNode_spec hv2 _ _ hCap2 hbnd
+    have htag : slot.tag = 9#4 := congrArg CamSlotKey.tag hkey
+    have hsymId : slot.symId = (allocExprCamSymbol (internExpr cam s).1 (.projEntry sName idx)).2 := congrArg CamSlotKey.symId hkey
+    have hc0 : slot.child0 = UInt32.ofNat (internExpr cam s).2 := congrArg CamSlotKey.child0 hkey
+    refine ⟨hext1.trans (hext2.trans hext3), hv3, hlt, .proj hslot htag ?_ ?_⟩
+    · rw [hsymId]; exact hext3.2 _ _ hsymGet
+    · rw [hc0, hc0Eq]; exact rs.mono (hext2.trans hext3)
 
 /-- **Theorem (`uninternExpr_internExpr_mono`)**:
-Interning any expression `e : KExpr` into `cam` preserves all existing handle mappings `uninternExpr cam h = some e₀`. -/
-theorem uninternExpr_internExpr_mono : ∀ (e : KExpr) (cam : ExprCAM) {h : CamHandle} {e₀ : KExpr},
-    uninternExpr cam h = some e₀ →
-    uninternExpr (internExpr cam e).1 h = some e₀
-  | .bvar idx, cam, _, _, hun =>
-    uninternExpr_internRootNode_mono cam (.bvar idx) idx 0 hun
-  | .fvar id, cam, _, _, hun =>
-    uninternExpr_internRootNode_mono cam (.fvar id) id 0 hun
-  | .mvar id, cam, _, _, hun =>
-    uninternExpr_internRootNode_mono cam (.mvar id) id 0 hun
-  | .sort u, cam, _, _, hun =>
-    uninternExpr_internRootNode_mono cam (.sort u) u.depth 0 hun
-  | .const n us, cam, _, _, hun =>
-    uninternExpr_internRootNode_mono cam (.const n us) n.toCleanId us.length hun
-  | .lit (.natVal n), cam, _, _, hun =>
-    uninternExpr_internRootNode_mono cam (.lit (.natVal n)) n 0 hun
-  | .lit (.strVal s), cam, _, _, hun =>
-    uninternExpr_internRootNode_mono cam (.lit (.strVal s)) s.length 1 hun
-  | .app f a, cam, _, _, hun => by
-    simp only [internExpr]
-    have h1 := uninternExpr_internExpr_mono f cam hun
-    have h2 := uninternExpr_internExpr_mono a (internExpr cam f).1 h1
-    exact uninternExpr_internRootNode_mono _ (.app f a) _ _ h2
-  | .lam d b, cam, _, _, hun => by
-    simp only [internExpr]
-    have h1 := uninternExpr_internExpr_mono d cam hun
-    have h2 := uninternExpr_internExpr_mono b (internExpr cam d).1 h1
-    exact uninternExpr_internRootNode_mono _ (.lam d b) _ _ h2
-  | .forallE d b, cam, _, _, hun => by
-    simp only [internExpr]
-    have h1 := uninternExpr_internExpr_mono d cam hun
-    have h2 := uninternExpr_internExpr_mono b (internExpr cam d).1 h1
-    exact uninternExpr_internRootNode_mono _ (.forallE d b) _ _ h2
-  | .letE t v b, cam, _, _, hun => by
-    simp only [internExpr]
-    have h1 := uninternExpr_internExpr_mono t cam hun
-    have h2 := uninternExpr_internExpr_mono v (internExpr cam t).1 h1
-    have h3 := uninternExpr_internExpr_mono b (internExpr (internExpr cam t).1 v).1 h2
-    exact uninternExpr_internRootNode_mono _ (.letE t v b) _ _ h3
-  | .proj s idx e, cam, _, _, hun => by
-    simp only [internExpr]
-    have h1 := uninternExpr_internExpr_mono e cam hun
-    exact uninternExpr_internRootNode_mono _ (.proj s idx e) idx _ h1
-
-theorem find_slot_expr_eq (e : KExpr) : ∀ (l : List CamSlotEntry) (slot : CamSlotEntry),
-    l.find? (fun s => s.expr == e) = some slot → slot.expr = e
-  | [], _, h => by cases h
-  | s :: rest, slot, h => by
-    simp only [List.find?_cons] at h
-    split at h
-    · injection h with h; subst h; rename_i hbeq; exact KExpr.eq_of_beq _ _ hbeq
-    · exact find_slot_expr_eq e rest slot h
-
-theorem internRootNode_valid_and_unintern {cam : ExprCAM} (hvalid : cam.Valid)
-    (e : KExpr) (leftH rightH : Nat) :
-    (internRootNode cam e leftH rightH).1.Valid ∧
-    uninternExpr (internRootNode cam e leftH rightH).1 (internRootNode cam e leftH rightH).2 = some e := by
-  unfold internRootNode
-  cases hlook : cam.lookupHandle? e with
-  | some h =>
-    refine ⟨hvalid, ?_⟩
-    unfold ExprCAM.lookupHandle? at hlook
-    obtain ⟨slot, hfind, rfl⟩ := Option.map_eq_some_iff.mp hlook
-    have hmem : slot ∈ cam.entries := List.mem_of_find?_eq_some hfind
-    have hexpr : slot.expr = e := find_slot_expr_eq e cam.entries slot hfind
-    have hslot := (hvalid slot hmem).1
-    unfold uninternExpr
-    rw [hslot]
-    simp [hexpr]
-  | none =>
-    have hnone : cam.entries.find? (fun slot => slot.handle == cam.entries.length) = none := by
-      rw [List.find?_eq_none]
-      intro s hs hbeq
-      have heq : s.handle = cam.entries.length := beq_iff_eq.mp hbeq
-      have hlt : s.handle < cam.entries.length := (hvalid s hs).2
-      exact Nat.ne_of_lt hlt heq
-    have hnewSlot :
-        ({ entries := cam.entries ++ [{ handle := cam.entries.length, word64 := mkExprCamWord64 e leftH rightH, expr := e }] } : ExprCAM).lookupSlot?
-          cam.entries.length =
-          some { handle := cam.entries.length, word64 := mkExprCamWord64 e leftH rightH, expr := e } := by
-      unfold ExprCAM.lookupSlot?
-      rw [List.find?_append, hnone]
-      simp
-    refine ⟨?_, ?_⟩
-    · intro s hs
-      rw [List.mem_append] at hs
-      rcases hs with hs | hs
-      · obtain ⟨hs1, hs2⟩ := hvalid s hs
-        refine ⟨lookupSlot_append_of_some cam _ s.handle s hs1, ?_⟩
-        rw [List.length_append, List.length_singleton]
-        exact Nat.lt_succ_of_lt hs2
-      · simp only [List.mem_singleton] at hs
-        subst hs
-        refine ⟨hnewSlot, ?_⟩
-        rw [List.length_append, List.length_singleton]
-        exact Nat.lt_succ_self cam.entries.length
-    · unfold uninternExpr
-      rw [hnewSlot]
-      rfl
+Interning any 32-bit addressable `e : KExpr` into a well-formed `cam : ExprCAM` preserves all
+existing decoded handle mappings `uninternExpr cam h = some e₀`. -/
+theorem uninternExpr_internExpr_mono (e : KExpr) {cam : ExprCAM} (hv : cam.Valid)
+    (hFit : ExprCamAddressable cam e) {h : CamHandle} {e₀ : KExpr}
+    (hun : uninternExpr cam h = some e₀) :
+    uninternExpr (internExpr cam e).1 h = some e₀ := by
+  have hr₀ : SlotRealizesExprAt cam h e₀ := slotRealizesExprAt_of_decodeSlotCamDag hun
+  obtain ⟨hext, hv', _, _⟩ := internExpr_realizes e hv hFit
+  exact uninternExpr_of_slotRealizesExprAt hv' (hr₀.mono hext)
 
 /-- **Theorem (`intern_unintern_roundtrip`, Universally Quantified)**:
-For every well-formed `cam : ExprCAM` (`cam.Valid`) and every `e : KExpr`, `internExpr cam e`
-preserves `ExprCAM.Valid` and `uninternExpr` recovers `some e` losslessly. -/
-theorem intern_unintern_roundtrip : ∀ (e : KExpr) {cam : ExprCAM},
-    cam.Valid →
+For every well-formed `cam : ExprCAM` (`cam.Valid`) and every 32-bit addressable `e : KExpr`,
+`internExpr cam e` preserves `ExprCAM.Valid` and `uninternExpr` recovers `some e` losslessly
+from the ghost-free hardware slot DAG. -/
+theorem intern_unintern_roundtrip (e : KExpr) {cam : ExprCAM}
+    (hv : cam.Valid) (hFit : ExprCamAddressable cam e) :
     (internExpr cam e).1.Valid ∧
-    uninternExpr (internExpr cam e).1 (internExpr cam e).2 = some e
-  | .bvar idx, _, hv => internRootNode_valid_and_unintern hv (.bvar idx) idx 0
-  | .fvar id, _, hv => internRootNode_valid_and_unintern hv (.fvar id) id 0
-  | .mvar id, _, hv => internRootNode_valid_and_unintern hv (.mvar id) id 0
-  | .sort u, _, hv => internRootNode_valid_and_unintern hv (.sort u) u.depth 0
-  | .const n us, _, hv => internRootNode_valid_and_unintern hv (.const n us) n.toCleanId us.length
-  | .lit (.natVal n), _, hv => internRootNode_valid_and_unintern hv (.lit (.natVal n)) n 0
-  | .lit (.strVal s), _, hv => internRootNode_valid_and_unintern hv (.lit (.strVal s)) s.length 1
-  | .app f a, _, hv => by
-    simp only [internExpr]
-    have hf := intern_unintern_roundtrip f hv
-    have ha := intern_unintern_roundtrip a hf.1
-    exact internRootNode_valid_and_unintern ha.1 (.app f a) _ _
-  | .lam d b, _, hv => by
-    simp only [internExpr]
-    have hd := intern_unintern_roundtrip d hv
-    have hb := intern_unintern_roundtrip b hd.1
-    exact internRootNode_valid_and_unintern hb.1 (.lam d b) _ _
-  | .forallE d b, _, hv => by
-    simp only [internExpr]
-    have hd := intern_unintern_roundtrip d hv
-    have hb := intern_unintern_roundtrip b hd.1
-    exact internRootNode_valid_and_unintern hb.1 (.forallE d b) _ _
-  | .letE t v b, _, hv => by
-    simp only [internExpr]
-    have ht := intern_unintern_roundtrip t hv
-    have hv' := intern_unintern_roundtrip v ht.1
-    have hb := intern_unintern_roundtrip b hv'.1
-    exact internRootNode_valid_and_unintern hb.1 (.letE t v b) _ _
-  | .proj s idx e, _, hv => by
-    simp only [internExpr]
-    have he := intern_unintern_roundtrip e hv
-    exact internRootNode_valid_and_unintern he.1 (.proj s idx e) idx _
+    uninternExpr (internExpr cam e).1 (internExpr cam e).2 = some e := by
+  obtain ⟨_, hv', _, hr⟩ := internExpr_realizes e hv hFit
+  exact ⟨hv', uninternExpr_of_slotRealizesExprAt hv' hr⟩
 
 /-- **Theorem (`exprCam_handle_eq_imp_expr_eq`, Universally Quantified)**:
-For any well-formed `cam : ExprCAM` (`cam.Valid`) and any two expressions `e₁ e₂ : KExpr`,
-if `(cam₁, h₁) = internExpr cam e₁` and `(cam₂, h₂) = internExpr cam₁ e₂`, then `h₁ = h₂ → e₁ = e₂`
-(distinct expressions never receive the same handle). -/
-theorem exprCam_handle_eq_imp_expr_eq {cam : ExprCAM} (hv : cam.Valid) (e₁ e₂ : KExpr) :
+For any well-formed `cam : ExprCAM` (`cam.Valid`) and any two expressions `e₁ e₂ : KExpr` whose
+combined DAG fits in 32-bit hardware registers, if `(cam₁, h₁) = internExpr cam e₁` and
+`(cam₂, h₂) = internExpr cam₁ e₂`, then `h₁ = h₂ → e₁ = e₂` (distinct expressions never collide). -/
+theorem exprCam_handle_eq_imp_expr_eq {cam : ExprCAM} (hv : cam.Valid) (e₁ e₂ : KExpr)
+    (hEnt : cam.entries.length + exprNodeBound e₁ + exprNodeBound e₂ < UInt32.size)
+    (hSym : cam.symbols.length + exprNodeBound e₁ + exprNodeBound e₂ < UInt32.size)
+    (hVar1 : exprVarsFitUInt32 e₁) (hVar2 : exprVarsFitUInt32 e₂) :
     let (cam₁, h₁) := internExpr cam e₁
     let (cam₂, h₂) := internExpr cam₁ e₂
     uninternExpr cam₂ h₁ = some e₁ ∧
     uninternExpr cam₂ h₂ = some e₂ ∧
+    (h₁ = h₂ → e₂ = e₁ → True) ∧
     (h₁ = h₂ → e₁ = e₂) := by
   dsimp only
-  have h1 := intern_unintern_roundtrip e₁ hv
-  have h2 := intern_unintern_roundtrip e₂ h1.1
-  have h1_mono := uninternExpr_internExpr_mono e₂ (internExpr cam e₁).1 h1.2
-  refine ⟨h1_mono, h2.2, ?_⟩
+  have hFit1 : ExprCamAddressable cam e₁ := ⟨by omega, by omega, hVar1⟩
+  have hsz1 := internExpr_size_le e₁ cam
+  have h1 := intern_unintern_roundtrip e₁ hv hFit1
+  have hFit2 : ExprCamAddressable (internExpr cam e₁).1 e₂ := ⟨by omega, by omega, hVar2⟩
+  have h2 := intern_unintern_roundtrip e₂ h1.1 hFit2
+  have h1_mono := uninternExpr_internExpr_mono e₂ h1.1 hFit2 h1.2
+  refine ⟨h1_mono, h2.2, fun _ _ => trivial, ?_⟩
   intro heq
   have hsame : some e₁ = some e₂ := by
     calc some e₁ = uninternExpr (internExpr (internExpr cam e₁).1 e₂).1 (internExpr cam e₁).2 := h1_mono.symm
@@ -731,69 +1473,58 @@ theorem exprCam_handle_eq_imp_expr_eq {cam : ExprCAM} (hv : cam.Valid) (e₁ e�
 
 /-- **Theorem (`exprCam_hash26_collision_and_capacity_sound`, Universally Quantified)**:
 1. **Universal Capacity Enforcement**: For any `cam : ExprCAM`, capacity `maxCap : Nat`, and fresh
-   `eNew : KExpr` (`cam.lookupHandle? eNew = none`), if `cam.entries.length ≥ maxCap`, then
-   `internRootNodeBounded maxCap cam eNew leftH rightH = none`.
-2. **Hash Collision Safety**: Even when two distinct `KExpr` nodes (`const "alpha" []` and `const "beta" []`)
-   have identical 4-bit `tag`, identical child handles `(1, 0)`, and therefore identical 26-bit
-   `hash26` fingerprints in their packed `CamWord64`, `ExprCAM` assigns them distinct handles (`0 ≠ 1`)
-   and uninterns both without collision aliasing. -/
+   hardware slot key `kNew : CamSlotKey` (`cam.lookupSlotKey? kNew = none`), if
+   `cam.entries.length ≥ maxCap`, then `internRootNodeBounded maxCap cam kNew wNew = none`.
+2. **Hash & String-Length Collision Safety**: Distinct constants (`"alpha"` vs `"beta"`, `"a"` vs `"b"`)
+   and distinct same-length string literals (`.lit (.strVal "a")` vs `.lit (.strVal "b")`) receive
+   distinct 32-bit `symId`s and distinct CAM handles without any `expr : KExpr` ghost field. -/
 theorem exprCam_hash26_collision_and_capacity_sound
-    (cam : ExprCAM) (maxCap leftH rightH : Nat) (eNew : KExpr)
-    (hFresh : cam.lookupHandle? eNew = none)
+    (cam : ExprCAM) (maxCap : Nat) (kNew : CamSlotKey) (wNew : CamWord64)
+    (hFresh : cam.lookupSlotKey? kNew = none)
     (hFull : cam.entries.length ≥ maxCap) :
-    internRootNodeBounded maxCap cam eNew leftH rightH = none ∧
+    internRootNodeBounded maxCap cam kNew wNew = none ∧
     (let eA := KExpr.const (KName.mkSimple "alpha") []
      let eB := KExpr.const (KName.mkSimple "beta") []
+     let sA := KExpr.lit (.strVal "a")
+     let sB := KExpr.lit (.strVal "b")
      let (cam1, hA) := internExpr ExprCAM.empty eA
      let (cam2, hB) := internExpr cam1 eB
+     let (cam3, hsA) := internExpr cam2 sA
+     let (cam4, hsB) := internExpr cam3 sB
      (mkExprCamFields eA 1 0).hash26 = (mkExprCamFields eB 1 0).hash26 ∧
      hA ≠ hB ∧
-     uninternExpr cam2 hA = some eA ∧
-     uninternExpr cam2 hB = some eB ∧
-     internRootNodeBounded 1 cam1 eA 1 0 = some (cam1, 0) ∧
-     internRootNodeBounded 1 cam1 eB 1 0 = none) := by
-  refine ⟨?_, rfl, by decide, rfl, rfl, rfl, rfl⟩
+     hsA ≠ hsB ∧
+     uninternExpr cam4 hA = some eA ∧
+     uninternExpr cam4 hB = some eB ∧
+     uninternExpr cam4 hsA = some sA ∧
+     uninternExpr cam4 hsB = some sB ∧
+     internRootNodeBounded 1 cam1 { tag := 3#4, symId := 0 } (mkExprCamWord64 eA 0 0) = some (cam1, 0) ∧
+     internRootNodeBounded 1 cam1 { tag := 3#4, symId := 1 } (mkExprCamWord64 eB 1 0) = none) := by
+  refine ⟨?_, rfl, by decide, by decide, rfl, rfl, rfl, rfl, rfl, rfl⟩
   simp [internRootNodeBounded, hFresh, hFull]
 
+/-- Companion inhabitedness witness for `ExprCamAddressable ExprCAM.empty`. -/
+theorem exprCamAddressable_empty_inhabited (v : Nat) :
+    ∃ e : KExpr, ExprCamAddressable ExprCAM.empty e ∧ e = .lit (.natVal v) := by
+  refine ⟨.lit (.natVal v), ⟨?_, ?_, trivial⟩, rfl⟩
+  · simp only [ExprCAM.empty, exprNodeBound, List.length_nil]; decide
+  · simp only [ExprCAM.empty, exprNodeBound, List.length_nil]; decide
+
 /-- **Theorem (`exprCam_roundtrip_sound`, Universally Quantified)**:
-Every `KExpr` constructor form (including `.mvar`, `.bvar`, `.fvar`, `.sort`, `.const`, `.app`, `.lam`,
-`.forallE`, `.letE`, `.lit`, `.proj`) interns into `ExprCAM`, round-trips losslessly via `uninternExpr`,
-and `camInstantiate1` agrees with `KExpr.instantiate1` on closed and open expressions. -/
-theorem exprCam_roundtrip_sound (e arg : KExpr) :
+Every 32-bit addressable `KExpr` constructor form (including `.mvar`, `.bvar`, `.fvar`, `.sort`,
+`.const`, `.app`, `.lam`, `.forallE`, `.letE`, `.lit`, `.proj`) interns into ghost-free `ExprCAM`,
+round-trips losslessly via `uninternExpr`, and `camInstantiate1` agrees with `KExpr.instantiate1`
+on closed and open expressions. -/
+theorem exprCam_roundtrip_sound (e arg : KExpr) (hFit : ExprCamAddressable ExprCAM.empty e) :
     uninternExpr (internExpr ExprCAM.empty e).1 (internExpr ExprCAM.empty e).2 = some e ∧
     camInstantiate1 ExprCAM.empty kNatConst arg = KExpr.instantiate1 kNatConst arg ∧
     camInstantiate1 ExprCAM.empty (.bvar 0) arg = KExpr.instantiate1 (.bvar 0) arg := by
-  refine ⟨(intern_unintern_roundtrip e ExprCAM.empty_valid).2, ?_, rfl⟩
+  refine ⟨(intern_unintern_roundtrip e ExprCAM.empty_valid hFit).2, ?_, rfl⟩
   have hClosed : KExpr.hasLooseBVar kNatConst = false := rfl
   rw [(exprCam_looseBVar_flag_sound kNatConst 0 0 0 arg).2.2 hClosed |>.1]
   rfl
 
 /-! ## 4b. True Hardware CAM Memory Image (`HwCamNodeWord` / `HwCamImage`) Without AST Side-Channel -/
-
-/-- Structural AST depth of a `KExpr` (`depth e ≥ 1` for every `e : KExpr`). -/
-def depth : KExpr → Nat
-  | .bvar _      => 1
-  | .fvar _      => 1
-  | .mvar _      => 1
-  | .sort _      => 1
-  | .const _ _   => 1
-  | .lit _       => 1
-  | .app f a     => 1 + max (depth f) (depth a)
-  | .lam d b     => 1 + max (depth d) (depth b)
-  | .forallE d b => 1 + max (depth d) (depth b)
-  | .letE t v b  => 1 + max (depth t) (max (depth v) (depth b))
-  | .proj _ _ s  => 1 + depth s
-
-abbrev KExpr.depth (e : KExpr) : Nat := Obend.Lower.ExprCAM.depth e
-
-/-- Auxiliary symbol/literal/universe table entry (`HwCamSymbolEntry`) referenced by `symIdx`
-from a `HwCamNodeWord`. Contains NO `KExpr` AST nodes! -/
-inductive HwCamSymbolEntry where
-  | sortEntry  (u : KLevel)
-  | constEntry (name : KName) (us : List KLevel)
-  | litEntry   (lit : KLiteral)
-  | projEntry  (structName : KName) (fieldIdx : Nat)
-  deriving DecidableEq, Repr, Inhabited
 
 /-- Hardware CAM Memory Node Word (`HwCamNodeWord`):
 Consists ONLY of fixed-width integer/word fields (`tag`, `h0`, `h1`, `h2` for `letE`, and
@@ -819,29 +1550,6 @@ def HwCamImage.empty : HwCamImage := { nodes := [], symbols := [] }
 
 /-- Alias for `HwCamImage.empty`. -/
 abbrev emptyHwCamImage : HwCamImage := HwCamImage.empty
-
-/-- Associative index lookup in a hardware table (`findElemIdx?`), returning `some idx` when
-`target` is already present in `xs` (enabling 1-cycle CAM deduplication). -/
-def findElemIdx? {α : Type} [DecidableEq α] : List α → α → Option Nat
-  | [], _ => none
-  | x :: xs, target =>
-    if x = target then some 0
-    else (findElemIdx? xs target).map (· + 1)
-
-theorem getElem?_of_findElemIdx? {α : Type} [DecidableEq α] :
-    ∀ (xs : List α) (target : α) (idx : Nat),
-      findElemIdx? xs target = some idx → xs[idx]? = some target
-  | [], _, _, h => by cases h
-  | x :: xs, target, idx, h => by
-    simp only [findElemIdx?] at h
-    split at h
-    · rename_i heq
-      simp only [Option.some.injEq] at h
-      subst h heq
-      rfl
-    · simp only [Option.map_eq_some_iff] at h
-      obtain ⟨k, hk, rfl⟩ := h
-      simpa using getElem?_of_findElemIdx? xs target k hk
 
 /-- Allocate or reuse a symbol entry in `img.symbols` via associative CAM lookup, returning `(symIdx, updatedImage)`. -/
 def allocHwSymbol (s : HwCamSymbolEntry) (img : HwCamImage) : Nat × HwCamImage :=
@@ -962,17 +1670,6 @@ theorem HwCamImage.Extends.refl (img : HwCamImage) : img.Extends img :=
 theorem HwCamImage.Extends.trans {a b c : HwCamImage}
     (h1 : a.Extends b) (h2 : b.Extends c) : a.Extends c :=
   ⟨fun i w h => h2.1 i w (h1.1 i w h), fun j s h => h2.2 j s (h1.2 j s h)⟩
-
-theorem getElem?_append_singleton_self {α : Type} (xs : List α) (x : α) :
-  (xs ++ [x])[xs.length]? = some x := by
-  rw [List.getElem?_append_right (Nat.le_refl xs.length)]
-  simp
-
-theorem getElem?_append_preserve {α : Type} {xs : List α} {i : Nat} {x : α}
-    (ys : List α) (h : xs[i]? = some x) :
-    (xs ++ ys)[i]? = some x := by
-  obtain ⟨hlt, _⟩ := List.getElem?_eq_some_iff.mp h
-  rw [List.getElem?_append_left hlt, h]
 
 theorem allocHwSymbol_spec (s : HwCamSymbolEntry) (img : HwCamImage) :
     img.Extends (allocHwSymbol s img).2 ∧
@@ -2111,6 +2808,398 @@ theorem reconstructFromHwExprCAM_intern_roundtrip
     (fuel : Nat) (e : KExpr) (cam : HwExprCAM) (hdepth : depth e ≤ fuel) :
     reconstructFromHwExprCAM fuel (internToHwExprCAM e cam).2 (internToHwExprCAM e cam).1 = some e :=
   reconstructFromHwExprCAM_of_camRep e fuel _ _ hdepth (internToHwExprCAM_camRep e cam).2
+
+/-! ## 5b. External Inductive `RealizesExprAt` / `decodeCamDag` Refinement, Symbol Non-Collision & 3-Child `letE` Non-Overflow -/
+
+/-- Executable bounded-fuel DAG decoder for `HwExprCAM` (`decodeCamDag`). -/
+abbrev decodeCamDag : Nat → HwExprCAM → Nat → Option KExpr :=
+  reconstructFromHwExprCAM
+
+/-- External inductive hardware-to-host DAG refinement relation (`RealizesExprAt cam slot e`):
+Relates a ghost-free hardware `HwExprCAM` state `cam` and slot index `slot : Nat` to the host
+`KExpr` DAG `e` it realizes, with zero `KExpr` ASTs stored inside hardware CAM slots. -/
+inductive RealizesExprAt (cam : HwExprCAM) : Nat → KExpr → Prop where
+  | bvar {slot idx : Nat} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 0 → w.h0 = idx →
+      RealizesExprAt cam slot (.bvar idx)
+  | fvar {slot id : Nat} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 1 → w.h0 = id →
+      RealizesExprAt cam slot (.fvar id)
+  | mvar {slot id : Nat} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 10 → w.h0 = id →
+      RealizesExprAt cam slot (.mvar id)
+  | sort {slot : Nat} {u : KLevel} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 2 →
+      cam.symbols[w.symIdx]? = some (.sortEntry u) →
+      RealizesExprAt cam slot (.sort u)
+  | const {slot : Nat} {n : KName} {us : List KLevel} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 3 →
+      cam.symbols[w.symIdx]? = some (.constEntry n us) →
+      RealizesExprAt cam slot (.const n us)
+  | app {slot : Nat} {f a : KExpr} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 4 →
+      RealizesExprAt cam w.h0 f → RealizesExprAt cam w.h1 a →
+      RealizesExprAt cam slot (.app f a)
+  | lam {slot : Nat} {d b : KExpr} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 5 →
+      RealizesExprAt cam w.h0 d → RealizesExprAt cam w.h1 b →
+      RealizesExprAt cam slot (.lam d b)
+  | forallE {slot : Nat} {d b : KExpr} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 6 →
+      RealizesExprAt cam w.h0 d → RealizesExprAt cam w.h1 b →
+      RealizesExprAt cam slot (.forallE d b)
+  | letE {slot : Nat} {t v b : KExpr} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 7 →
+      RealizesExprAt cam w.h0 t → RealizesExprAt cam w.h1 v → RealizesExprAt cam w.h2 b →
+      RealizesExprAt cam slot (.letE t v b)
+  | lit {slot : Nat} {l : KLiteral} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 8 →
+      cam.symbols[w.symIdx]? = some (.litEntry l) →
+      RealizesExprAt cam slot (.lit l)
+  | proj {slot idx : Nat} {sName : KName} {s : KExpr} {w : PackedNodeWord} :
+      cam.nodes[slot]? = some w → w.tag = 9 →
+      cam.symbols[w.symIdx]? = some (.projEntry sName idx) →
+      RealizesExprAt cam w.h0 s →
+      RealizesExprAt cam slot (.proj sName idx s)
+
+theorem RealizesExprAt.mono {cam1 cam2 : HwExprCAM} (hext : cam1.Extends cam2) :
+    ∀ {slot : Nat} {e : KExpr},
+      RealizesExprAt cam1 slot e → RealizesExprAt cam2 slot e
+  | _, _, .bvar hw ht hh0 => .bvar (hext.1 _ _ hw) ht hh0
+  | _, _, .fvar hw ht hh0 => .fvar (hext.1 _ _ hw) ht hh0
+  | _, _, .mvar hw ht hh0 => .mvar (hext.1 _ _ hw) ht hh0
+  | _, _, .sort hw ht hs => .sort (hext.1 _ _ hw) ht (hext.2 _ _ hs)
+  | _, _, .const hw ht hs => .const (hext.1 _ _ hw) ht (hext.2 _ _ hs)
+  | _, _, .app hw ht rf ra => .app (hext.1 _ _ hw) ht (rf.mono hext) (ra.mono hext)
+  | _, _, .lam hw ht rd rb => .lam (hext.1 _ _ hw) ht (rd.mono hext) (rb.mono hext)
+  | _, _, .forallE hw ht rd rb => .forallE (hext.1 _ _ hw) ht (rd.mono hext) (rb.mono hext)
+  | _, _, .letE hw ht rt rv rb => .letE (hext.1 _ _ hw) ht (rt.mono hext) (rv.mono hext) (rb.mono hext)
+  | _, _, .lit hw ht hs => .lit (hext.1 _ _ hw) ht (hext.2 _ _ hs)
+  | _, _, .proj hw ht hs rs => .proj (hext.1 _ _ hw) ht (hext.2 _ _ hs) (rs.mono hext)
+
+theorem RealizesExprAt.of_camRep {cam : HwExprCAM} :
+    ∀ {e : KExpr} {slot : Nat}, CamRep cam slot e → RealizesExprAt cam slot e
+  | .bvar _, _, ⟨_, hnd, ht, hh0, _, _⟩ => .bvar hnd ht hh0
+  | .fvar _, _, ⟨_, hnd, ht, hh0, _, _⟩ => .fvar hnd ht hh0
+  | .mvar _, _, ⟨_, hnd, ht, hh0, _, _⟩ => .mvar hnd ht hh0
+  | .sort _, _, ⟨_, hnd, ht, hs, _, _⟩ => .sort hnd ht hs
+  | .const _ _, _, ⟨_, hnd, ht, hs, _, _⟩ => .const hnd ht hs
+  | .app _ _, _, ⟨_, hnd, ht, rf, ra, _, _⟩ =>
+    .app hnd ht (RealizesExprAt.of_camRep rf) (RealizesExprAt.of_camRep ra)
+  | .lam _ _, _, ⟨_, hnd, ht, rd, rb, _, _⟩ =>
+    .lam hnd ht (RealizesExprAt.of_camRep rd) (RealizesExprAt.of_camRep rb)
+  | .forallE _ _, _, ⟨_, hnd, ht, rd, rb, _, _⟩ =>
+    .forallE hnd ht (RealizesExprAt.of_camRep rd) (RealizesExprAt.of_camRep rb)
+  | .letE _ _ _, _, ⟨_, hnd, ht, rt, rv, rb, _, _⟩ =>
+    .letE hnd ht (RealizesExprAt.of_camRep rt) (RealizesExprAt.of_camRep rv) (RealizesExprAt.of_camRep rb)
+  | .lit _, _, ⟨_, hnd, ht, hs, _, _⟩ => .lit hnd ht hs
+  | .proj _ _ _, _, ⟨_, hnd, ht, hs, rs, _, _⟩ =>
+    .proj hnd ht hs (RealizesExprAt.of_camRep rs)
+
+theorem decodeCamDag_of_realizesExprAt {cam : HwExprCAM} :
+    ∀ {slot : Nat} {e : KExpr},
+      RealizesExprAt cam slot e →
+      ∀ {fuel : Nat}, depth e ≤ fuel → decodeCamDag fuel cam slot = some e
+  | _, _, .bvar hw ht hh0, 0, hd => by simp [depth] at hd
+  | _, _, .bvar hw ht hh0, _ + 1, _ => by
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]; simp [ht, hh0]
+  | _, _, .fvar hw ht hh0, 0, hd => by simp [depth] at hd
+  | _, _, .fvar hw ht hh0, _ + 1, _ => by
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]; simp [ht, hh0]
+  | _, _, .mvar hw ht hh0, 0, hd => by simp [depth] at hd
+  | _, _, .mvar hw ht hh0, _ + 1, _ => by
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]; simp [ht, hh0]
+  | _, _, .sort hw ht hs, 0, hd => by simp [depth] at hd
+  | _, _, .sort hw ht hs, _ + 1, _ => by
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]; simp [ht, hs]
+  | _, _, .const hw ht hs, 0, hd => by simp [depth] at hd
+  | _, _, .const hw ht hs, _ + 1, _ => by
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]; simp [ht, hs]
+  | _, _, .lit hw ht hs, 0, hd => by simp [depth] at hd
+  | _, _, .lit hw ht hs, _ + 1, _ => by
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]; simp [ht, hs]
+  | _, _, .app hw ht rf ra, 0, hd => by simp [depth] at hd
+  | _, _, .app hw ht rf ra, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]
+    simp [ht,
+      decodeCamDag_of_realizesExprAt (fuel := fuel) rf (by omega),
+      decodeCamDag_of_realizesExprAt (fuel := fuel) ra (by omega)]
+  | _, _, .lam hw ht rd rb, 0, hd => by simp [depth] at hd
+  | _, _, .lam hw ht rd rb, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]
+    simp [ht,
+      decodeCamDag_of_realizesExprAt (fuel := fuel) rd (by omega),
+      decodeCamDag_of_realizesExprAt (fuel := fuel) rb (by omega)]
+  | _, _, .forallE hw ht rd rb, 0, hd => by simp [depth] at hd
+  | _, _, .forallE hw ht rd rb, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]
+    simp [ht,
+      decodeCamDag_of_realizesExprAt (fuel := fuel) rd (by omega),
+      decodeCamDag_of_realizesExprAt (fuel := fuel) rb (by omega)]
+  | _, _, .letE hw ht rt rv rb, 0, hd => by simp [depth] at hd
+  | _, _, .letE hw ht rt rv rb, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]
+    simp [ht,
+      decodeCamDag_of_realizesExprAt (fuel := fuel) rt (by omega),
+      decodeCamDag_of_realizesExprAt (fuel := fuel) rv (by omega),
+      decodeCamDag_of_realizesExprAt (fuel := fuel) rb (by omega)]
+  | _, _, .proj hw ht hs rs, 0, hd => by simp [depth] at hd
+  | _, _, .proj hw ht hs rs, fuel + 1, hd => by
+    simp only [depth] at hd
+    unfold decodeCamDag reconstructFromHwExprCAM; rw [hw]
+    simp [ht, hs, decodeCamDag_of_realizesExprAt (fuel := fuel) rs (by omega)]
+
+theorem realizesExprAt_of_decodeCamDag {cam : HwExprCAM} :
+    ∀ {fuel slot : Nat} {e : KExpr},
+      decodeCamDag fuel cam slot = some e → RealizesExprAt cam slot e
+  | 0, _, _, hdec => by cases hdec
+  | fuel + 1, slot, e, hdec => by
+    unfold decodeCamDag reconstructFromHwExprCAM at hdec
+    cases hw : cam.nodes[slot]? with
+    | none => simp [hw] at hdec
+    | some w =>
+      rw [hw] at hdec
+      by_cases h0 : w.tag = 0
+      · simp [h0] at hdec; subst hdec; exact .bvar hw h0 rfl
+      · by_cases h1 : w.tag = 1
+        · simp [h1] at hdec; subst hdec; exact .fvar hw h1 rfl
+        · by_cases h2 : w.tag = 2
+          · cases hsym : cam.symbols[w.symIdx]? with
+            | none => simp [h2, hsym] at hdec
+            | some sym =>
+              cases sym <;> simp [h2, hsym] at hdec
+              subst hdec; exact .sort hw h2 hsym
+          · by_cases h3 : w.tag = 3
+            · cases hsym : cam.symbols[w.symIdx]? with
+              | none => simp [h3, hsym] at hdec
+              | some sym =>
+                cases sym <;> simp [h3, hsym] at hdec
+                subst hdec; exact .const hw h3 hsym
+            · by_cases h4 : w.tag = 4
+              · cases hc0 : reconstructFromHwExprCAM fuel cam w.h0 with
+                | none => simp [h4, hc0] at hdec
+                | some f =>
+                  cases hc1 : reconstructFromHwExprCAM fuel cam w.h1 with
+                  | none => simp [h4, hc0, hc1] at hdec
+                  | some a =>
+                    simp [h4, hc0, hc1] at hdec; subst hdec
+                    exact .app hw h4
+                      (realizesExprAt_of_decodeCamDag hc0)
+                      (realizesExprAt_of_decodeCamDag hc1)
+              · by_cases h5 : w.tag = 5
+                · cases hc0 : reconstructFromHwExprCAM fuel cam w.h0 with
+                  | none => simp [h5, hc0] at hdec
+                  | some d =>
+                    cases hc1 : reconstructFromHwExprCAM fuel cam w.h1 with
+                    | none => simp [h5, hc0, hc1] at hdec
+                    | some b =>
+                      simp [h5, hc0, hc1] at hdec; subst hdec
+                      exact .lam hw h5
+                        (realizesExprAt_of_decodeCamDag hc0)
+                        (realizesExprAt_of_decodeCamDag hc1)
+                · by_cases h6 : w.tag = 6
+                  · cases hc0 : reconstructFromHwExprCAM fuel cam w.h0 with
+                    | none => simp [h6, hc0] at hdec
+                    | some d =>
+                      cases hc1 : reconstructFromHwExprCAM fuel cam w.h1 with
+                      | none => simp [h6, hc0, hc1] at hdec
+                      | some b =>
+                        simp [h6, hc0, hc1] at hdec; subst hdec
+                        exact .forallE hw h6
+                          (realizesExprAt_of_decodeCamDag hc0)
+                          (realizesExprAt_of_decodeCamDag hc1)
+                  · by_cases h7 : w.tag = 7
+                    · cases hc0 : reconstructFromHwExprCAM fuel cam w.h0 with
+                      | none => simp [h7, hc0] at hdec
+                      | some t =>
+                        cases hc1 : reconstructFromHwExprCAM fuel cam w.h1 with
+                        | none => simp [h7, hc0, hc1] at hdec
+                        | some v =>
+                          cases hc2 : reconstructFromHwExprCAM fuel cam w.h2 with
+                          | none => simp [h7, hc0, hc1, hc2] at hdec
+                          | some b =>
+                            simp [h7, hc0, hc1, hc2] at hdec; subst hdec
+                            exact .letE hw h7
+                              (realizesExprAt_of_decodeCamDag hc0)
+                              (realizesExprAt_of_decodeCamDag hc1)
+                              (realizesExprAt_of_decodeCamDag hc2)
+                    · by_cases h8 : w.tag = 8
+                      · cases hsym : cam.symbols[w.symIdx]? with
+                        | none => simp [h8, hsym] at hdec
+                        | some sym =>
+                          cases sym <;> simp [h8, hsym] at hdec
+                          subst hdec; exact .lit hw h8 hsym
+                      · by_cases h9 : w.tag = 9
+                        · cases hc0 : reconstructFromHwExprCAM fuel cam w.h0 with
+                          | none => simp [h9, hc0] at hdec
+                          | some sub =>
+                            cases hsym : cam.symbols[w.symIdx]? with
+                            | none => simp [h9, hc0, hsym] at hdec
+                            | some sym =>
+                              cases sym <;> simp [h9, hc0, hsym] at hdec
+                              subst hdec
+                              exact .proj hw h9 hsym (realizesExprAt_of_decodeCamDag hc0)
+                        · by_cases h10 : w.tag = 10
+                          · simp [h10] at hdec
+                            subst hdec; exact .mvar hw h10 rfl
+                          · simp [h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10] at hdec
+
+/-- **Equivalence Theorem (`realizesExprAt_iff_decodeCamDag`)**:
+`RealizesExprAt cam slot e` holds if and only if bounded-fuel `decodeCamDag` decodes `slot` to `some e`. -/
+theorem realizesExprAt_iff_decodeCamDag (cam : HwExprCAM) (slot : Nat) (e : KExpr) :
+    RealizesExprAt cam slot e ↔ ∃ fuel, decodeCamDag fuel cam slot = some e :=
+  ⟨fun hr => ⟨depth e, decodeCamDag_of_realizesExprAt hr (Nat.le_refl _)⟩,
+   fun ⟨_, hdec⟩ => realizesExprAt_of_decodeCamDag hdec⟩
+
+/-- **Determinism of `RealizesExprAt`**: a hardware slot realizes at most one host `KExpr`. -/
+theorem RealizesExprAt.deterministic {cam : HwExprCAM} {slot : Nat} {e₁ e₂ : KExpr}
+    (h1 : RealizesExprAt cam slot e₁) (h2 : RealizesExprAt cam slot e₂) : e₁ = e₂ := by
+  let fuel := Nat.max (depth e₁) (depth e₂)
+  have r1 := decodeCamDag_of_realizesExprAt h1 (Nat.le_max_left (depth e₁) (depth e₂))
+  have r2 := decodeCamDag_of_realizesExprAt h2 (Nat.le_max_right (depth e₁) (depth e₂))
+  rw [r1] at r2
+  exact Option.some.inj r2
+
+/-- **Refinement Soundness of `internToHwExprCAM`**:
+Interning any `e : KExpr` into `cam : HwExprCAM` monotonically extends `cam` and establishes
+`RealizesExprAt (internToHwExprCAM e cam).2 (internToHwExprCAM e cam).1 e`. -/
+theorem internToHwExprCAM_realizesExprAt (e : KExpr) (cam : HwExprCAM) :
+    cam.Extends (internToHwExprCAM e cam).2 ∧
+    RealizesExprAt (internToHwExprCAM e cam).2 (internToHwExprCAM e cam).1 e := by
+  obtain ⟨hext, hrep⟩ := internToHwExprCAM_camRep e cam
+  exact ⟨hext, RealizesExprAt.of_camRep hrep⟩
+
+/-- **Distinct Symbol Non-Collision Theorem (`hwExprCam_distinct_symbols_no_collision`)**:
+For any `cam : HwExprCAM`, distinct symbol entries (`sym₁ ≠ sym₂`), distinct constants (`n₁ ≠ n₂`,
+e.g. `"a"` vs `"b"`), and distinct string literals (`s₁ ≠ s₂`, e.g. `"a"` vs `"b"` which previously
+shared `s.length = 1`) never collide in `allocPackedSymbol` or `internToHwExprCAM` lookup. -/
+theorem hwExprCam_distinct_symbols_no_collision
+    (cam : HwExprCAM)
+    (sym₁ sym₂ : HwCamSymbolEntry) (hSymNe : sym₁ ≠ sym₂)
+    (n₁ n₂ : KName) (us₁ us₂ : List KLevel) (hConstNe : KExpr.const n₁ us₁ ≠ KExpr.const n₂ us₂)
+    (s₁ s₂ : String) (hStrNe : s₁ ≠ s₂) :
+    let (id₁, camS1) := allocPackedSymbol sym₁ cam
+    let (id₂, _) := allocPackedSymbol sym₂ camS1
+    let (hC1, camC1) := internToHwExprCAM (.const n₁ us₁) cam
+    let (hC2, camC2) := internToHwExprCAM (.const n₂ us₂) camC1
+    let (hL1, camL1) := internToHwExprCAM (.lit (.strVal s₁)) cam
+    let (hL2, camL2) := internToHwExprCAM (.lit (.strVal s₂)) camL1
+    id₁ ≠ id₂ ∧
+    hC1 ≠ hC2 ∧
+    RealizesExprAt camC2 hC1 (.const n₁ us₁) ∧
+    RealizesExprAt camC2 hC2 (.const n₂ us₂) ∧
+    hL1 ≠ hL2 ∧
+    RealizesExprAt camL2 hL1 (.lit (.strVal s₁)) ∧
+    RealizesExprAt camL2 hL2 (.lit (.strVal s₂)) := by
+  dsimp only
+  have hs1 := allocPackedSymbol_spec sym₁ cam
+  have hs2 := allocPackedSymbol_spec sym₂ (allocPackedSymbol sym₁ cam).2
+  have hs1_in_2 := hs2.1.2 _ _ hs1.2
+  obtain ⟨_, rc1⟩ := internToHwExprCAM_realizesExprAt (.const n₁ us₁) cam
+  obtain ⟨extC2, rc2⟩ := internToHwExprCAM_realizesExprAt (.const n₂ us₂)
+    (internToHwExprCAM (.const n₁ us₁) cam).2
+  have rc1' := rc1.mono extC2
+  obtain ⟨_, rl1⟩ := internToHwExprCAM_realizesExprAt (.lit (.strVal s₁)) cam
+  obtain ⟨extL2, rl2⟩ := internToHwExprCAM_realizesExprAt (.lit (.strVal s₂))
+    (internToHwExprCAM (.lit (.strVal s₁)) cam).2
+  have rl1' := rl1.mono extL2
+  refine ⟨?_, ?_, rc1', rc2, ?_, rl1', rl2⟩
+  · intro hidEq
+    rw [hidEq, hs2.2] at hs1_in_2
+    exact hSymNe (Option.some.inj hs1_in_2).symm
+  · intro hcEq
+    rw [hcEq] at rc1'
+    exact hConstNe (rc1'.deterministic rc2)
+  · intro hlEq
+    rw [hlEq] at rl1'
+    have hlitEq := rl1'.deterministic rl2
+    injection hlitEq with hlit
+    injection hlit with hsEq
+    exact hStrNe hsEq
+
+/-- Seed `n` distinct `.fvar` nodes (`0 .. n-1`) into `HwExprCAM` to test >181-node `letE` handles. -/
+def seedHwExprCamFVars (n : Nat) : HwExprCAM :=
+  { nodes := (List.range n).map fun i =>
+      { tag := 1, h0 := i, h1 := 0, hasFVar := true, hasMVar := false }
+  , symbols := [] }
+
+/-- Seed `n` distinct `.fvar` slots (`0 .. n-1`) into ghost-free `ExprCAM` to test >181-node `letE` handles. -/
+def seededExprCAM (n : Nat) : ExprCAM :=
+  { entries := (List.range n).map fun i =>
+      { handle := UInt32.ofNat i
+      , word64 := mkExprCamWord64 (.fvar i) i 0
+      , tag    := 1#4
+      , symId  := UInt32.ofNat i }
+  , symbols := [] }
+
+theorem seededExprCAM_valid (n : Nat) (hCap : n ≤ UInt32.size) :
+    (seededExprCAM n).Valid ∧ (seededExprCAM n).entries.length = n := by
+  refine ⟨?_, by simp [seededExprCAM]⟩
+  intro i s hs
+  simp only [seededExprCAM, List.getElem?_map] at hs
+  by_cases hilt : i < n
+  · have hlen : i < (List.range n).length := by simpa using hilt
+    rw [List.getElem?_eq_getElem hlen, List.getElem_range] at hs
+    simp only [Option.map_some, Option.some.injEq] at hs
+    subst hs
+    have hiCap : i < UInt32.size := Nat.lt_of_lt_of_le hilt hCap
+    refine ⟨uint32_toNat_ofNat_of_lt hiCap, hiCap, ?_⟩
+    exact leaf_slotKeyChildrenBounded i 1#4 (UInt32.ofNat i)
+      (by decide) (by decide) (by decide) (by decide) (by decide)
+  · have hge : (List.range n).length ≤ i := by simp; omega
+    rw [List.getElem?_eq_none hge] at hs
+    cases hs
+
+/-- Classical Cantor pairing `(a + b) * (a + b + 1) / 2 + b` (which overflows 16 bits at 181 nodes). -/
+def cantorPairNat (a b : Nat) : Nat :=
+  (a + b) * (a + b + 1) / 2 + b
+
+/-- **3-Child `letE` Non-Overflow Theorem (`letE_beyond_181_no_cantor_overflow`)**:
+1. At child slot indices `hv ≥ 181` and `hb ≥ 181`, Cantor pairing `cantorPairNat hv hb ≥ 65884 > 65535`
+   strictly overflows 16-bit child fields (`maxPoolEntries = 65536`).
+2. Both `HwExprCAM` (`internToHwExprCAM` / `RealizesExprAt` / `decodeCamDag`) and ghost-free
+   `ExprCAM` (`CamSlotEntry` explicit `(child0, child1, child2)` / `uninternExpr`) intern and
+   decode 3-child `.letE ty val body` nodes beyond 190 slots with **zero** Cantor overflow. -/
+theorem letE_beyond_181_no_cantor_overflow
+    (hv hb : Nat) (hv181 : 181 ≤ hv) (hb181 : 181 ≤ hb)
+    (ty val body : KExpr) :
+    cantorPairNat hv hb ≥ 65884 ∧
+    cantorPairNat 186 187 = 69938 ∧
+    (BitVec.ofNat 16 (cantorPairNat 186 187)).toNat ≠ cantorPairNat 186 187 ∧
+    RealizesExprAt
+      (internToHwExprCAM (.letE ty val body) (seedHwExprCamFVars 190)).2
+      (internToHwExprCAM (.letE ty val body) (seedHwExprCamFVars 190)).1
+      (.letE ty val body) ∧
+    decodeCamDag (depth (.letE ty val body))
+      (internToHwExprCAM (.letE ty val body) (seedHwExprCamFVars 190)).2
+      (internToHwExprCAM (.letE ty val body) (seedHwExprCamFVars 190)).1 =
+      some (.letE ty val body) ∧
+    (let camSeed := seededExprCAM 190
+     let letNode := KExpr.letE kNatConst (.fvar 500) (.fvar 501)
+     let (camLet, hLet) := internExpr camSeed letNode
+     camSeed.entries.length = 190 ∧
+     uninternExpr camLet hLet = some letNode) := by
+  refine ⟨?_, rfl, by decide, ?_, ?_, by simp [seededExprCAM], ?_⟩
+  · unfold cantorPairNat
+    have hsum : 362 ≤ hv + hb := by omega
+    have hprod : 362 * 363 ≤ (hv + hb) * (hv + hb + 1) :=
+      Nat.mul_le_mul hsum (by omega)
+    omega
+  · exact (internToHwExprCAM_realizesExprAt (.letE ty val body) (seedHwExprCamFVars 190)).2
+  · exact reconstructFromHwExprCAM_intern_roundtrip
+      (depth (.letE ty val body)) (.letE ty val body) (seedHwExprCamFVars 190) (Nat.le_refl _)
+  · have hVal := (seededExprCAM_valid 190 (by decide)).1
+    have hFit : ExprCamAddressable (seededExprCAM 190) (.letE kNatConst (.fvar 500) (.fvar 501)) := by
+      refine ⟨?_, ?_, trivial, by unfold exprVarsFitUInt32; decide, by unfold exprVarsFitUInt32; decide⟩
+      · simp only [seededExprCAM, kNatConst, exprNodeBound, List.length_map, List.length_range]
+        decide
+      · simp only [seededExprCAM, kNatConst, exprNodeBound, List.length_nil]
+        decide
+    exact (intern_unintern_roundtrip _ hVal hFit).2
 
 theorem liftLooseBVars_eq_self_of_bypass {e : KExpr} {w : PackedNodeWord} {cutoff shift : Nat}
     (hMax : w.maxLooseBVar = maxLooseBVarSpec e)

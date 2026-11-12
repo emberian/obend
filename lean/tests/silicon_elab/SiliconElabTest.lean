@@ -201,13 +201,17 @@ def reduceQuotLiftNoOp (_ _ : KExpr) : Option KExpr :=
 #tooth Obend.Lower.LeanKernel.kernelWhnf_quot_lift_sound by mutation Obend.Lower.LeanKernel.reduceQuotLift? := reduceQuotLiftNoOp
 
 /-- 12. Broken `internRootNode` in `Obend.Lower.ExprCAM` that skips CAM lookup deduplication. -/
-def internRootNodeNoDedup (cam : ExprCAM) (e : KExpr) (leftH rightH : Nat) : ExprCAM × CamHandle :=
+def internRootNodeNoDedup (cam : ExprCAM) (k : CamSlotKey) (word64 : CamWord64) : ExprCAM × CamHandle :=
   let h := cam.entries.length
   let entry : CamSlotEntry :=
-    { handle := h
-    , word64 := mkExprCamWord64 e leftH rightH
-    , expr   := e }
-  ({ entries := cam.entries ++ [entry] }, h)
+    { handle := UInt32.ofNat h
+    , word64 := word64
+    , tag    := k.tag
+    , symId  := k.symId
+    , child0 := k.child0
+    , child1 := k.child1
+    , child2 := k.child2 }
+  ({ cam with entries := cam.entries ++ [entry] }, h)
 
 #tooth Obend.Lower.ExprCAM.exprCam_eq_iff_handle_eq by mutation Obend.Lower.ExprCAM.internRootNode := internRootNodeNoDedup
 

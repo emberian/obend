@@ -282,6 +282,518 @@ theorem emit_slot (C : Composition) (k : Nat) (d : LeafDef) (h : (emit C).defs[k
 dispatcher is the only place they meet. -/
 def Book.closedB (B : Book) : Bool := B.defs.all fun d => Obend.Law.closedB d.code
 
+/-! ## Escaping-`self` syntactic guard (`checkNoEscapingSelf`) & `reads` frame soundness -/
+
+/-- Leaf expression AST (`Core4` `Term` under `self` at De Bruijn binder depth `d`). -/
+abbrev LeafExpr := Term
+
+/-- Runtime `self` record environment mapping member names to closed `Core4` terms. -/
+abbrev SelfEnv := List (String × Term)
+
+/-- Non-`self` check on a bare bound variable `.bound i` when `self` is at De Bruijn depth `d`. -/
+def checkBoundNotSelf (d i : Nat) : Bool :=
+  i != d
+
+/-- Syntactic predicate recognizing `.bound _` targets in `.get target field`. -/
+def isBoundTerm : Term → Bool
+  | .bound _ => true
+  | _ => false
+
+mutual
+  /-- Executable syntactic guard (`checkNoEscapingSelfAt d e`):
+  Accepts `self` (`.bound d`) **only** as the immediate target of a static field projection
+  `.get (.bound d) field`, rejecting bare `.bound d` anywhere else. -/
+  def checkNoEscapingSelfAt (d : Nat) : LeafExpr → Bool
+    | .hole _ σ => checkNoEscapingSelfList d σ
+    | .bound i => checkBoundNotSelf d i
+    | .lam b => checkNoEscapingSelfAt (d + 1) b
+    | .app f a | .mix f a | .fix f a | .specification f a | .prototype f a
+    | .binary _ f a | .split f _ a =>
+      checkNoEscapingSelfAt d f && checkNoEscapingSelfAt d a
+    | .reflect p | .metadata p | .project p | .inject _ p | .perform p | .done p =>
+      checkNoEscapingSelfAt d p
+    | .nat _ | .boolean _ | .label _ => true
+    | .extend i fs => checkNoEscapingSelfAt d i && checkNoEscapingSelfFields d fs
+    | .record fs => checkNoEscapingSelfFields d fs
+    | .get g _ => isBoundTerm g || checkNoEscapingSelfAt d g
+    | .ifZero v z s =>
+      checkNoEscapingSelfAt d v && checkNoEscapingSelfAt d z && checkNoEscapingSelfAt (d + 1) s
+    | .case sc arms =>
+      checkNoEscapingSelfAt d sc && checkNoEscapingSelfFields (d + 1) arms
+    | .ifBool c x y =>
+      checkNoEscapingSelfAt d c && checkNoEscapingSelfAt d x && checkNoEscapingSelfAt d y
+
+  def checkNoEscapingSelfList (d : Nat) : List Term → Bool
+    | [] => true
+    | t :: ts => checkNoEscapingSelfAt d t && checkNoEscapingSelfList d ts
+
+  def checkNoEscapingSelfFields (d : Nat) : List (String × Term) → Bool
+    | [] => true
+    | (_, t) :: fs => checkNoEscapingSelfAt d t && checkNoEscapingSelfFields d fs
+end
+
+/-- Top-level syntactic guard rejecting bare escaping `self` (`.bound 0` outside `.get (.bound 0) m`). -/
+def checkNoEscapingSelf (e : LeafExpr) : Bool :=
+  checkNoEscapingSelfAt 0 e
+
+/-- Alias matching the `selfProjOnly` naming convention. -/
+abbrev selfProjOnly : LeafExpr → Bool := checkNoEscapingSelf
+
+/-- Proposition witnessing that `e : LeafExpr` contains no bare escaping `self`. -/
+def NoEscapingSelf (e : LeafExpr) : Prop :=
+  checkNoEscapingSelf e = true
+
+/-- Check that an emitted `LeafDef`'s body contains no bare escaping `self`. -/
+def checkLeafDefNoEscapingSelf (d : LeafDef) : Bool :=
+  match d.kind, d.code with
+  | .method, .lam body => checkNoEscapingSelfAt 0 body
+  | .cell, .lam (.lam body) => checkNoEscapingSelfAt 1 body
+  | _, _ => false
+
+/-- Check that every slot definition in a `Book` satisfies `checkLeafDefNoEscapingSelf`. -/
+def Book.noEscapingSelf (B : Book) : Bool :=
+  B.defs.all checkLeafDefNoEscapingSelf
+
+/-- Look up field `m` in `env : SelfEnv` (first-match semantics matching `Core4` `Step.field`). -/
+def lookupSelfEnv (env : SelfEnv) (m : String) : Option Term :=
+  (env.find? (fun field => field.1 == m)).map (·.2)
+
+/-- Resolve static projection `self.m` at binder depth `d` against `env`.
+Missing fields map to stuck `.get (.record []) m`, matching `Core4` missing-field semantics. -/
+def resolveSelfFieldAt (d : Nat) (env : SelfEnv) (m : String) : Term :=
+  match lookupSelfEnv env m with
+  | some v => v.rename (· + d)
+  | none => .get (.record []) m
+
+/-- Local variable substitution for `locals : List Term` (`self` sits at index `locals.length`). -/
+def localsSubst (locals : List Term) (i : Nat) : Term :=
+  if i < locals.length then
+    locals[i]?.getD (.bound i)
+  else
+    .bound (i - 1)
+
+mutual
+  /-- Bind local variables `σ` and `self` environment `env` (at De Bruijn depth `d`) across `e`:
+  - `.get (.bound i) m` with `i == d` resolves `m` from `env`,
+  - bare `.bound i` with `i == d` (escaping `self`) substitutes the entire `.record env`. -/
+  def bindLeafEnvAt (d : Nat) (σ : Nat → Term) (env : SelfEnv) : LeafExpr → Term
+    | .hole n ts => .hole n (bindLeafEnvList d σ env ts)
+    | .bound i =>
+      if i == d then (Term.record env).rename (· + d)
+      else σ i
+    | .lam b => .lam (bindLeafEnvAt (d + 1) (liftSubstitution σ) env b)
+    | .app f a => .app (bindLeafEnvAt d σ env f) (bindLeafEnvAt d σ env a)
+    | .mix l u => .mix (bindLeafEnvAt d σ env l) (bindLeafEnvAt d σ env u)
+    | .fix s i => .fix (bindLeafEnvAt d σ env s) (bindLeafEnvAt d σ env i)
+    | .specification m e => .specification (bindLeafEnvAt d σ env m) (bindLeafEnvAt d σ env e)
+    | .prototype s g => .prototype (bindLeafEnvAt d σ env s) (bindLeafEnvAt d σ env g)
+    | .reflect p => .reflect (bindLeafEnvAt d σ env p)
+    | .metadata p => .metadata (bindLeafEnvAt d σ env p)
+    | .project p => .project (bindLeafEnvAt d σ env p)
+    | .nat v => .nat v
+    | .boolean b => .boolean b
+    | .label s => .label s
+    | .binary op l r => .binary op (bindLeafEnvAt d σ env l) (bindLeafEnvAt d σ env r)
+    | .extend i fs => .extend (bindLeafEnvAt d σ env i) (bindLeafEnvFields d σ env fs)
+    | .record fs => .record (bindLeafEnvFields d σ env fs)
+    | .get (.bound i) m =>
+      if i == d then resolveSelfFieldAt d env m
+      else .get (σ i) m
+    | .get g m => .get (bindLeafEnvAt d σ env g) m
+    | .ifZero v z s =>
+      .ifZero (bindLeafEnvAt d σ env v) (bindLeafEnvAt d σ env z)
+        (bindLeafEnvAt (d + 1) (liftSubstitution σ) env s)
+    | .inject tag p => .inject tag (bindLeafEnvAt d σ env p)
+    | .case sc arms =>
+      .case (bindLeafEnvAt d σ env sc) (bindLeafEnvFields (d + 1) (liftSubstitution σ) env arms)
+    | .ifBool c x y =>
+      .ifBool (bindLeafEnvAt d σ env c) (bindLeafEnvAt d σ env x) (bindLeafEnvAt d σ env y)
+    | .perform p => .perform (bindLeafEnvAt d σ env p)
+    | .done p => .done (bindLeafEnvAt d σ env p)
+    | .split t ns f => .split (bindLeafEnvAt d σ env t) ns (bindLeafEnvAt d σ env f)
+
+  def bindLeafEnvList (d : Nat) (σ : Nat → Term) (env : SelfEnv) : List Term → List Term
+    | [] => []
+    | t :: ts => bindLeafEnvAt d σ env t :: bindLeafEnvList d σ env ts
+
+  def bindLeafEnvFields (d : Nat) (σ : Nat → Term) (env : SelfEnv) :
+      List (String × Term) → List (String × Term)
+    | [] => []
+    | (k, t) :: fs => (k, bindLeafEnvAt d σ env t) :: bindLeafEnvFields d σ env fs
+end
+
+/-- Bind local variable bindings `locals` (`self` at depth `locals.length`) and `self` record `env`. -/
+def bindLeafEnv (locals : List Term) (env : SelfEnv) (e : LeafExpr) : Term :=
+  bindLeafEnvAt locals.length (localsSubst locals) env e
+
+/-- Evaluate `e : LeafExpr` under local bindings `locals` and `self` environment `env` for up to
+`fuel` steps of the `Core4` reference operational semantics (`Obend.Law.run`). -/
+def evalLeafExpr (fuel : Nat) (locals : List Term) (env : SelfEnv) (e : LeafExpr) : Option Term :=
+  Obend.Law.run fuel (bindLeafEnv locals env e)
+
+private theorem attach_map_eq_map_emit {α β : Type} (l : List α) (g : α → β) :
+    (l.attach.map fun ⟨x, _⟩ => g x) = l.map g := by
+  conv => rhs; rw [← List.attach_map_subtype_val l]
+  rw [List.map_map]; rfl
+
+private theorem selfReads_get_nonBound {d : Nat} {g : Term} {m : String}
+    (hnb : isBoundTerm g = false) :
+    selfReads d (.get g m) = selfReads d g := by
+  cases g <;> first | contradiction | simp [selfReads]
+
+private theorem bindLeafEnvAt_get_nonBound (d : Nat) (σ : Nat → Term) (env : SelfEnv)
+    {g : Term} (m : String) (hnb : isBoundTerm g = false) :
+    bindLeafEnvAt d σ env (.get g m) = .get (bindLeafEnvAt d σ env g) m := by
+  cases g <;> first | contradiction | simp [bindLeafEnvAt]
+
+mutual
+  /-- **Core Frame Congruence Lemma (`bindLeafEnvAt_congr_of_noEscapingSelf`)**:
+  Whenever `checkNoEscapingSelfAt d e = true` and `env₁, env₂` agree on every member in `selfReads d e`,
+  binding `env₁` vs `env₂` at depth `d` under identical local bindings `σ` yields the exact same `Term`. -/
+  theorem bindLeafEnvAt_congr_of_noEscapingSelf :
+      ∀ (e : LeafExpr) (d : Nat) (σ : Nat → Term) {env₁ env₂ : SelfEnv},
+        checkNoEscapingSelfAt d e = true →
+        (∀ m ∈ selfReads d e, lookupSelfEnv env₁ m = lookupSelfEnv env₂ m) →
+        bindLeafEnvAt d σ env₁ e = bindLeafEnvAt d σ env₂ e
+    | .hole n ts, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo
+      simp only [selfReads, attach_map_eq_map_emit ts (fun t => selfReads d t)] at hAg
+      simp only [bindLeafEnvAt, Term.hole.injEq, true_and]
+      exact bindLeafEnvList_congr_of_noEscapingSelf ts d σ hNo hAg
+    | .bound i, d, σ, _, _, hNo, _ => by
+      simp only [checkNoEscapingSelfAt, checkBoundNotSelf, bne_iff_ne] at hNo
+      have hbeq : (i == d) = false := beq_eq_false_iff_ne.mpr hNo
+      simp [bindLeafEnvAt, hbeq]
+    | .lam b, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo
+      simp only [selfReads] at hAg
+      simp [bindLeafEnvAt, bindLeafEnvAt_congr_of_noEscapingSelf b (d + 1) (liftSubstitution σ) hNo hAg]
+    | .app f a, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf f d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvAt_congr_of_noEscapingSelf a d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+    | .mix l u, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf l d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvAt_congr_of_noEscapingSelf u d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+    | .fix s i, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf s d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvAt_congr_of_noEscapingSelf i d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+    | .specification m e, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf m d σ hNo.1 (fun m' hm => hAg m' (.inl hm)),
+        bindLeafEnvAt_congr_of_noEscapingSelf e d σ hNo.2 (fun m' hm => hAg m' (.inr hm))]
+    | .prototype s g, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf s d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvAt_congr_of_noEscapingSelf g d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+    | .reflect p, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo; simp only [selfReads] at hAg
+      simp [bindLeafEnvAt, bindLeafEnvAt_congr_of_noEscapingSelf p d σ hNo hAg]
+    | .metadata p, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo; simp only [selfReads] at hAg
+      simp [bindLeafEnvAt, bindLeafEnvAt_congr_of_noEscapingSelf p d σ hNo hAg]
+    | .project p, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo; simp only [selfReads] at hAg
+      simp [bindLeafEnvAt, bindLeafEnvAt_congr_of_noEscapingSelf p d σ hNo hAg]
+    | .nat _, _, _, _, _, _, _ => rfl
+    | .boolean _, _, _, _, _, _, _ => rfl
+    | .label _, _, _, _, _, _, _ => rfl
+    | .binary op l r, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf l d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvAt_congr_of_noEscapingSelf r d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+    | .extend i fs, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, attach_map_eq_map_emit fs (fun f : String × Term => selfReads d f.2),
+        List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf i d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvFields_congr_of_noEscapingSelf fs d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+    | .record fs, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo
+      simp only [selfReads, attach_map_eq_map_emit fs (fun f : String × Term => selfReads d f.2)] at hAg
+      simp [bindLeafEnvAt, bindLeafEnvFields_congr_of_noEscapingSelf fs d σ hNo hAg]
+    | .get g m, d, σ, env₁, env₂, hNo, hAg => by
+      cases hbg : isBoundTerm g
+      · simp only [checkNoEscapingSelfAt, hbg, Bool.false_or] at hNo
+        rw [selfReads_get_nonBound hbg] at hAg
+        rw [bindLeafEnvAt_get_nonBound d σ env₁ m hbg, bindLeafEnvAt_get_nonBound d σ env₂ m hbg]
+        rw [bindLeafEnvAt_congr_of_noEscapingSelf g d σ hNo hAg]
+      · cases g <;> try contradiction
+        rename_i i
+        by_cases hid : (i == d) = true
+        · simp only [selfReads, hid, ite_true, List.mem_singleton] at hAg
+          simp [bindLeafEnvAt, hid, resolveSelfFieldAt, hAg m rfl]
+        · simp [bindLeafEnvAt, hid]
+    | .ifZero v z s, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf v d σ hNo.1.1 (fun m hm => hAg m (.inl (.inl hm))),
+        bindLeafEnvAt_congr_of_noEscapingSelf z d σ hNo.1.2 (fun m hm => hAg m (.inl (.inr hm))),
+        bindLeafEnvAt_congr_of_noEscapingSelf s (d + 1) (liftSubstitution σ) hNo.2
+          (fun m hm => hAg m (.inr hm))]
+    | .inject tag p, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo; simp only [selfReads] at hAg
+      simp [bindLeafEnvAt, bindLeafEnvAt_congr_of_noEscapingSelf p d σ hNo hAg]
+    | .case sc arms, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads,
+        attach_map_eq_map_emit arms (fun a : String × Term => selfReads (d + 1) a.2),
+        List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf sc d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvFields_congr_of_noEscapingSelf arms (d + 1) (liftSubstitution σ) hNo.2
+          (fun m hm => hAg m (.inr hm))]
+    | .ifBool c x y, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf c d σ hNo.1.1 (fun m hm => hAg m (.inl (.inl hm))),
+        bindLeafEnvAt_congr_of_noEscapingSelf x d σ hNo.1.2 (fun m hm => hAg m (.inl (.inr hm))),
+        bindLeafEnvAt_congr_of_noEscapingSelf y d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+    | .perform p, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo; simp only [selfReads] at hAg
+      simp [bindLeafEnvAt, bindLeafEnvAt_congr_of_noEscapingSelf p d σ hNo hAg]
+    | .done p, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt] at hNo; simp only [selfReads] at hAg
+      simp [bindLeafEnvAt, bindLeafEnvAt_congr_of_noEscapingSelf p d σ hNo hAg]
+    | .split t ns f, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfAt, Bool.and_eq_true] at hNo
+      simp only [selfReads, List.mem_append] at hAg
+      simp [bindLeafEnvAt,
+        bindLeafEnvAt_congr_of_noEscapingSelf t d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvAt_congr_of_noEscapingSelf f d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+
+  theorem bindLeafEnvList_congr_of_noEscapingSelf :
+      ∀ (ts : List Term) (d : Nat) (σ : Nat → Term) {env₁ env₂ : SelfEnv},
+        checkNoEscapingSelfList d ts = true →
+        (∀ m ∈ (ts.map (selfReads d)).flatten, lookupSelfEnv env₁ m = lookupSelfEnv env₂ m) →
+        bindLeafEnvList d σ env₁ ts = bindLeafEnvList d σ env₂ ts
+    | [], _, _, _, _, _, _ => rfl
+    | t :: ts, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfList, Bool.and_eq_true] at hNo
+      simp only [List.map_cons, List.flatten_cons, List.mem_append] at hAg
+      simp [bindLeafEnvList,
+        bindLeafEnvAt_congr_of_noEscapingSelf t d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvList_congr_of_noEscapingSelf ts d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+
+  theorem bindLeafEnvFields_congr_of_noEscapingSelf :
+      ∀ (fs : List (String × Term)) (d : Nat) (σ : Nat → Term) {env₁ env₂ : SelfEnv},
+        checkNoEscapingSelfFields d fs = true →
+        (∀ m ∈ (fs.map (fun f => selfReads d f.2)).flatten, lookupSelfEnv env₁ m = lookupSelfEnv env₂ m) →
+        bindLeafEnvFields d σ env₁ fs = bindLeafEnvFields d σ env₂ fs
+    | [], _, _, _, _, _, _ => rfl
+    | (k, t) :: fs, d, σ, _, _, hNo, hAg => by
+      simp only [checkNoEscapingSelfFields, Bool.and_eq_true] at hNo
+      simp only [List.map_cons, List.flatten_cons, List.mem_append] at hAg
+      simp [bindLeafEnvFields,
+        bindLeafEnvAt_congr_of_noEscapingSelf t d σ hNo.1 (fun m hm => hAg m (.inl hm)),
+        bindLeafEnvFields_congr_of_noEscapingSelf fs d σ hNo.2 (fun m hm => hAg m (.inr hm))]
+end
+
+/-- **Frame Soundness at Arbitrary Binder Depth (`leafExpr_reads_frame_sound_at`)**:
+For any `e : LeafExpr` with `checkNoEscapingSelfAt locals.length e = true`, evaluating `e` on two
+`self` environments `env₁, env₂` that agree on every field in `selfReads locals.length e` (under
+identical local variable bindings `locals`) produces the exact same result. -/
+theorem leafExpr_reads_frame_sound_at
+    (fuel : Nat) (locals : List Term) (env₁ env₂ : SelfEnv) (e : LeafExpr)
+    (hNoEscape : checkNoEscapingSelfAt locals.length e = true)
+    (hAgree : ∀ m ∈ selfReads locals.length e, lookupSelfEnv env₁ m = lookupSelfEnv env₂ m) :
+    evalLeafExpr fuel locals env₁ e = evalLeafExpr fuel locals env₂ e := by
+  unfold evalLeafExpr bindLeafEnv
+  rw [bindLeafEnvAt_congr_of_noEscapingSelf e locals.length (localsSubst locals) hNoEscape hAgree]
+
+/-- **Top-Level `LeafExpr` Frame Soundness (`leafExpr_reads_frame_sound`)**:
+For any `e : LeafExpr` with `checkNoEscapingSelf e = true`, evaluating `e` on two `self`
+environments `env₁, env₂` that agree on every field in `selfReads 0 e` produces the exact same result. -/
+theorem leafExpr_reads_frame_sound
+    (fuel : Nat) (env₁ env₂ : SelfEnv) (e : LeafExpr)
+    (hNoEscape : checkNoEscapingSelf e = true)
+    (hAgree : ∀ m ∈ selfReads 0 e, lookupSelfEnv env₁ m = lookupSelfEnv env₂ m) :
+    evalLeafExpr fuel [] env₁ e = evalLeafExpr fuel [] env₂ e :=
+  leafExpr_reads_frame_sound_at fuel [] env₁ env₂ e hNoEscape hAgree
+
+/-- Check that every projected `self.m` member read in `e` resolves to a slot in `slots`. -/
+def checkSelfReadsInSlots (slots : List String) (e : LeafExpr) : Bool :=
+  (selfReads 0 e).all (fun m => slots.contains m)
+
+/-- Two `self` environments agree on all slot indices listed in `reads : List Nat`. -/
+def AgreeOnSlotReads (slots : List String) (reads : List Nat) (env₁ env₂ : SelfEnv) : Prop :=
+  ∀ idx ∈ reads, ∀ m : String, slots[idx]? = some m → lookupSelfEnv env₁ m = lookupSelfEnv env₂ m
+
+private theorem findIdxGo_some_of_mem {α : Type} [BEq α] [LawfulBEq α] (a : α) :
+    ∀ (xs : List α) (acc : Nat), a ∈ xs →
+      ∃ k, List.findIdx?.go (· == a) xs acc = some (acc + k) ∧ xs[k]? = some a
+  | [], _, h => by cases h
+  | x :: xs, acc, h => by
+    simp only [List.findIdx?.go]
+    by_cases hxa : (x == a) = true
+    · refine ⟨0, ?_, ?_⟩
+      · simp [hxa]
+      · simp [beq_iff_eq.mp hxa]
+    · have hne : x ≠ a := fun heq => hxa (beq_iff_eq.mpr heq)
+      have hmem : a ∈ xs := by
+        rcases List.mem_cons.mp h with rfl | hrest
+        · exact absurd rfl hne
+        · exact hrest
+      obtain ⟨k, hk, hget⟩ := findIdxGo_some_of_mem a xs (acc + 1) hmem
+      refine ⟨k + 1, ?_, by simpa using hget⟩
+      simp only [hxa, Bool.false_eq_true, ↓reduceIte]
+      rw [show acc + (k + 1) = (acc + 1) + k by omega]
+      exact hk
+
+private theorem idxOf?_some_of_mem {α : Type} [BEq α] [LawfulBEq α]
+    (xs : List α) (a : α) (h : a ∈ xs) :
+    ∃ idx, xs.idxOf? a = some idx ∧ xs[idx]? = some a := by
+  obtain ⟨k, hk, hget⟩ := findIdxGo_some_of_mem a xs 0 h
+  exact ⟨k, by simpa [List.idxOf?, List.findIdx?] using hk, hget⟩
+
+private theorem mem_eraseDupsLoop {α : Type} [BEq α] [LawfulBEq α] {x : α} :
+    ∀ (xs acc : List α), (x ∈ xs ∨ x ∈ acc) → x ∈ List.eraseDupsBy.loop (· == ·) xs acc
+  | [], acc, h => by
+    simp only [List.eraseDupsBy.loop, List.mem_reverse]
+    rcases h with hnil | hacc
+    · cases hnil
+    · exact hacc
+  | y :: ys, acc, h => by
+    simp only [List.eraseDupsBy.loop]
+    split
+    · rename_i hcontains
+      have hyacc : y ∈ acc := by
+        rcases List.any_eq_true.mp hcontains with ⟨z, hz, hbeq⟩
+        rwa [beq_iff_eq.mp hbeq]
+      apply mem_eraseDupsLoop ys acc
+      rcases h with hcons | hacc
+      · rcases List.mem_cons.mp hcons with rfl | hys
+        · exact .inr hyacc
+        · exact .inl hys
+      · exact .inr hacc
+    · apply mem_eraseDupsLoop ys (y :: acc)
+      rcases h with hcons | hacc
+      · rcases List.mem_cons.mp hcons with rfl | hys
+        · exact .inr List.mem_cons_self
+        · exact .inl hys
+      · exact .inr (List.mem_cons_of_mem y hacc)
+
+private theorem mem_eraseDups_of_mem {α : Type} [BEq α] [LawfulBEq α] {x : α} {xs : List α}
+    (h : x ∈ xs) : x ∈ xs.eraseDups :=
+  mem_eraseDupsLoop xs [] (.inl h)
+
+/-- Companion inhabitedness witness for `checkNoEscapingSelf`, `checkSelfReadsInSlots`, and `AgreeOnSlotReads`. -/
+theorem leafFrame_premises_inhabited (v u₁ u₂ : Nat) :
+    (∃ e : LeafExpr, checkNoEscapingSelf e = true) ∧
+    (∃ (slots : List String) (body : LeafExpr), checkSelfReadsInSlots slots body = true) ∧
+    (∃ (slots : List String) (i : Nat) (member : String) (body : LeafExpr) (env₁ env₂ : SelfEnv),
+      checkNoEscapingSelf body = true ∧
+      checkSelfReadsInSlots slots body = true ∧
+      AgreeOnSlotReads slots (emitDef slots i (member, body)).reads env₁ env₂) := by
+  refine ⟨⟨.get (.bound 0) "x", rfl⟩,
+          ⟨["x", "unused"], .get (.bound 0) "x", by simp [checkSelfReadsInSlots, selfReads]⟩,
+          ⟨["x", "unused"], 0, "f", .get (.bound 0) "x",
+           [("x", .nat v), ("unused", .nat u₁)], [("x", .nat v), ("unused", .nat u₂)],
+           rfl, by simp [checkSelfReadsInSlots, selfReads], ?_⟩⟩
+  have hreads : (emitDef ["x", "unused"] 0 ("f", .get (.bound 0) "x")).reads = [0] := by
+    simp [emitDef, selfReads, List.idxOf?, List.findIdx?, List.findIdx?.go,
+      List.eraseDups, List.eraseDupsBy, List.eraseDupsBy.loop]
+  intro idx hidx m hm
+  rw [hreads, List.mem_singleton] at hidx
+  subst hidx
+  injection hm with hmEq
+  subst hmEq
+  rfl
+
+/-- **Slot-Indexed `LeafDef.reads` Frame Soundness (`leafDef_reads_frame_sound`)**:
+For any vtable member `(member, body)` with `checkNoEscapingSelf body = true` and well-scoped slot
+reads (`checkSelfReadsInSlots slots body = true`), if `env₁` and `env₂` agree on every slot index
+`idx ∈ (emitDef slots i (member, body)).reads`, then `evalLeafExpr` on `env₁` and `env₂` produces
+the exact same result (under arbitrary local bindings when `locals = []` and arbitrary fuel). -/
+theorem leafDef_reads_frame_sound
+    (fuel : Nat) (slots : List String) (i : Nat) (member : String) (body : LeafExpr)
+    (env₁ env₂ : SelfEnv)
+    (hNoEscape : checkNoEscapingSelf body = true)
+    (hScoped : checkSelfReadsInSlots slots body = true)
+    (hSlotAgree : AgreeOnSlotReads slots (emitDef slots i (member, body)).reads env₁ env₂) :
+    evalLeafExpr fuel [] env₁ body = evalLeafExpr fuel [] env₂ body := by
+  apply leafExpr_reads_frame_sound fuel env₁ env₂ body hNoEscape
+  intro m hm
+  have hcontains : slots.contains m = true := by
+    unfold checkSelfReadsInSlots at hScoped
+    exact List.all_eq_true.mp hScoped m hm
+  have hmSlots : m ∈ slots := List.contains_iff_mem.mp hcontains
+  obtain ⟨idx, hidx, hget⟩ := idxOf?_some_of_mem slots m hmSlots
+  have hmemFilter : idx ∈ (selfReads 0 body).filterMap slots.idxOf? :=
+    List.mem_filterMap.mpr ⟨m, hm, hidx⟩
+  have hmemReads : idx ∈ (emitDef slots i (member, body)).reads :=
+    mem_eraseDups_of_mem hmemFilter
+  exact hSlotAgree idx hmemReads m hget
+
+/-- **Escaping-`self` Counterexample (`bare_self_falsifies_frame_without_guard`)**:
+Without `checkNoEscapingSelf`, bare `self` (`.bound 0`) and record destructuring of bare `self`
+(`.split (.bound 0) ["secret"] (.lam (.bound 0))`) both report `reads = []`, so `env₁` and `env₂`
+vacuously agree on all `reads`, yet `evalLeafExpr` yields distinct results whenever `v₁ ≠ v₂`. -/
+theorem bare_self_falsifies_frame_without_guard (v₁ v₂ : Nat) (hne : v₁ ≠ v₂) :
+    let bareSelf : LeafExpr := .bound 0
+    let splitSelf : LeafExpr := .split (.bound 0) ["secret"] (.lam (.bound 0))
+    let env₁ : SelfEnv := [("secret", .nat v₁)]
+    let env₂ : SelfEnv := [("secret", .nat v₂)]
+    checkNoEscapingSelf bareSelf = false ∧
+    checkNoEscapingSelf splitSelf = false ∧
+    selfReads 0 bareSelf = [] ∧
+    selfReads 0 splitSelf = [] ∧
+    (∀ m ∈ selfReads 0 bareSelf, lookupSelfEnv env₁ m = lookupSelfEnv env₂ m) ∧
+    (∀ m ∈ selfReads 0 splitSelf, lookupSelfEnv env₁ m = lookupSelfEnv env₂ m) ∧
+    evalLeafExpr 4 [] env₁ bareSelf ≠ evalLeafExpr 4 [] env₂ bareSelf ∧
+    evalLeafExpr 8 [] env₁ splitSelf ≠ evalLeafExpr 8 [] env₂ splitSelf := by
+  refine ⟨rfl, rfl, by simp [selfReads], by simp [selfReads], ?_, ?_, ?_, ?_⟩
+  · intro _ hm; simp [selfReads] at hm
+  · intro _ hm; simp [selfReads] at hm
+  · intro heq
+    have hval1 : evalLeafExpr 4 [] [("secret", .nat v₁)] (.bound 0) =
+        some (.record [("secret", .nat v₁)]) := by
+      simp [evalLeafExpr, bindLeafEnv, bindLeafEnvAt, Term.rename,
+        Obend.Law.run, Obend.Law.isValueB]
+    have hval2 : evalLeafExpr 4 [] [("secret", .nat v₂)] (.bound 0) =
+        some (.record [("secret", .nat v₂)]) := by
+      simp [evalLeafExpr, bindLeafEnv, bindLeafEnvAt, Term.rename,
+        Obend.Law.run, Obend.Law.isValueB]
+    rw [hval1, hval2] at heq
+    injection heq with hrec
+    injection hrec with hcons
+    injection hcons with hhd _
+    injection hhd with _ hnat
+    injection hnat with hv
+    exact hne hv
+  · intro heq
+    have hs1 : evalLeafExpr 8 [] [("secret", .nat v₁)] (.split (.bound 0) ["secret"] (.lam (.bound 0))) =
+        some (.nat v₁) := by
+      simp [evalLeafExpr, bindLeafEnv, bindLeafEnvAt, liftSubstitution, Term.rename,
+        Obend.Law.run, Obend.Law.isValueB, Obend.Law.step?,
+        splitValues, applyAll, instantiate]
+    have hs2 : evalLeafExpr 8 [] [("secret", .nat v₂)] (.split (.bound 0) ["secret"] (.lam (.bound 0))) =
+        some (.nat v₂) := by
+      simp [evalLeafExpr, bindLeafEnv, bindLeafEnvAt, liftSubstitution, Term.rename,
+        Obend.Law.run, Obend.Law.isValueB, Obend.Law.step?,
+        splitValues, applyAll, instantiate]
+    rw [hs1, hs2] at heq
+    injection heq with hnat
+    injection hnat with hv
+    exact hne hv
+
 /-! ## The typing side -/
 
 /-- The record type of a row. -/
