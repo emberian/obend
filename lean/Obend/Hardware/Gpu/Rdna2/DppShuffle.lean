@@ -221,15 +221,23 @@ def dppWave64ReduceAdd {α : Type} (op : α → α → α) (zero : α) (x : Lane
 def sumLanes {α : Type} (op : α → α → α) (zero : α) (x : Lanes α) : α :=
   (List.ofFn x).foldr op zero
 
+private theorem tree8 {α : Type} (op : α → α → α)
+    (assoc : ∀ a b c, op (op a b) c = op a (op b c))
+    (x0 x1 x2 x3 x4 x5 x6 x7 r : α) :
+    op (op (op (op x0 x1) (op x2 x3)) (op (op x4 x5) (op x6 x7))) r =
+      op x0 (op x1 (op x2 (op x3 (op x4 (op x5 (op x6 (op x7 r))))))) := by
+  simp only [assoc]
+
 set_option maxRecDepth 8192 in
-set_option maxHeartbeats 2000000 in
 theorem dppWave64ReduceAdd_eq_sum {α : Type} (op : α → α → α) (zero : α)
     (assoc : ∀ a b c, op (op a b) c = op a (op b c))
     (right_id : ∀ a, op a zero = a) (x : Lanes α) :
     dppWave64ReduceAdd op zero x 63 = sumLanes op zero x := by
+  have h63 := right_id (x 63)
   change op (op (op (op (op (op (x 0) (x 1)) (op (x 2) (x 3))) (op (op (x 4) (x 5)) (op (x 6) (x 7)))) (op (op (op (x 8) (x 9)) (op (x 10) (x 11))) (op (op (x 12) (x 13)) (op (x 14) (x 15))))) (op (op (op (op (x 16) (x 17)) (op (x 18) (x 19))) (op (op (x 20) (x 21)) (op (x 22) (x 23)))) (op (op (op (x 24) (x 25)) (op (x 26) (x 27))) (op (op (x 28) (x 29)) (op (x 30) (x 31)))))) (op (op (op (op (op (x 32) (x 33)) (op (x 34) (x 35))) (op (op (x 36) (x 37)) (op (x 38) (x 39)))) (op (op (op (x 40) (x 41)) (op (x 42) (x 43))) (op (op (x 44) (x 45)) (op (x 46) (x 47))))) (op (op (op (op (x 48) (x 49)) (op (x 50) (x 51))) (op (op (x 52) (x 53)) (op (x 54) (x 55)))) (op (op (op (x 56) (x 57)) (op (x 58) (x 59))) (op (op (x 60) (x 61)) (op (x 62) (x 63)))))) =
     op (x 0) (op (x 1) (op (x 2) (op (x 3) (op (x 4) (op (x 5) (op (x 6) (op (x 7) (op (x 8) (op (x 9) (op (x 10) (op (x 11) (op (x 12) (op (x 13) (op (x 14) (op (x 15) (op (x 16) (op (x 17) (op (x 18) (op (x 19) (op (x 20) (op (x 21) (op (x 22) (op (x 23) (op (x 24) (op (x 25) (op (x 26) (op (x 27) (op (x 28) (op (x 29) (op (x 30) (op (x 31) (op (x 32) (op (x 33) (op (x 34) (op (x 35) (op (x 36) (op (x 37) (op (x 38) (op (x 39) (op (x 40) (op (x 41) (op (x 42) (op (x 43) (op (x 44) (op (x 45) (op (x 46) (op (x 47) (op (x 48) (op (x 49) (op (x 50) (op (x 51) (op (x 52) (op (x 53) (op (x 54) (op (x 55) (op (x 56) (op (x 57) (op (x 58) (op (x 59) (op (x 60) (op (x 61) (op (x 62) (op (x 63) (zero))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
-  simp only [assoc, right_id]
+  rw [h63]
+  repeat rw [assoc]
 
 /-- A genuine RDNA2 cross-row primitive: V_PERMLANEX16 with identity selectors.
 It exchanges rows 0↔1 and 2↔3, and cannot exchange the two 32-lane halves. -/

@@ -135,6 +135,7 @@ import Obend.Consensus
 import Obend.Consensus.Epistemic
 import Obend.Consensus.Finality
 import Obend.Consensus.Simplex
+import Obend.Consensus.SimplexLiveness
 import Obend.Consensus.SimplexProtocol
 import Obend.Consensus.SimplexTrace
 import Obend.Crypto
@@ -310,6 +311,7 @@ import Obend.Doc.Backlinks
 import Obend.Doc.Graph
 import Obend.Doc.Merge
 import Obend.Doc.Patch
+import Obend.Doc.ReactiveNotebook
 import Obend.Doc.Render
 import Obend.Doc.Section
 import Obend.Doc.Structured
@@ -348,7 +350,9 @@ import Obend.Hardware
 import Obend.Hardware.Accelerators
 import Obend.Hardware.AgenticEDA
 import Obend.Hardware.Analog
+import Obend.Hardware.AwsF2Shell
 import Obend.Hardware.Cic
+import Obend.Hardware.CircuitDae
 import Obend.Hardware.Circuits
 import Obend.Hardware.Cli
 import Obend.Hardware.Codec
@@ -373,6 +377,8 @@ import Obend.Hardware.GeometryCAM
 import Obend.Hardware.Gpu.CollectiveImport
 import Obend.Hardware.Gpu.CollectiveWorkBuild
 import Obend.Hardware.Gpu.NttCorrect
+import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
+import Obend.Hardware.Gpu.Rdna2.DppShuffle
 import Obend.Hardware.HDL
 import Obend.Hardware.Hvm
 import Obend.Hardware.Hvm.Model
@@ -399,6 +405,8 @@ import Obend.Hardware.SiliconOuroboros
 import Obend.Hardware.Synth
 import Obend.Hardware.TapeoutPipeline
 import Obend.Hardware.ThermalPassivity
+import Obend.Hardware.Tpu.CryptoSystolic
+import Obend.Hardware.Tpu.Machine
 import Obend.Hardware.Types
 import Obend.Hardware.UserspacePhysical
 import Obend.Intention
@@ -425,11 +433,13 @@ import Obend.Kind
 import Obend.Kind.Proofs
 import Obend.Kind.Registry
 import Obend.Law
+import Obend.Law.AmendCli
 import Obend.Law.Claim
 import Obend.Law.Contract
 import Obend.Law.Fold
 import Obend.Law.Inherit
 import Obend.Law.Machine
+import Obend.Law.PointwiseRevise
 import Obend.Law.Proofs.Claim
 import Obend.Law.Proofs.Eval
 import Obend.Law.Proofs.Fill
@@ -499,11 +509,14 @@ import Obend.Lower.Typing
 import Obend.Main
 import Obend.Paco.GPaco
 import Obend.Polis.CapTP
+import Obend.Polis.EpistemicVouchMarket
 import Obend.Polis.EvidencedOcap
+import Obend.Polis.GrainPowerbox
 import Obend.Polis.HouyhnhnmMonitor
 import Obend.Polis.HouyhnhnmTurn
 import Obend.Polis.VerkleUmem
 import Obend.Polis.ZkBiscuit
+import Obend.Polis.ZoeSeatSettlement
 import Obend.Reasons
 import Obend.Reasons.UnifiedEquilibrium
 import Obend.Receipt
@@ -588,9 +601,12 @@ import Obend.Spec.Types
 import Obend.Spec.Workspace
 import Obend.Stdlib
 import Obend.SymbolicZk.CamUnifyArith
+import Obend.SymbolicZk.CompileToPiop
+import Obend.SymbolicZk.CompileToPiopCore
 import Obend.SymbolicZk.LinMem
 import Obend.SymbolicZk.RankedFixpointArith
 import Obend.SymbolicZk.SemiringDatalog
+import Obend.SymbolicZk.SkolemChaseCore
 import Obend.Tactic.Cases
 import Obend.Tactic.ClaimAudit
 import Obend.Tactic.Compositional
@@ -608,6 +624,7 @@ import Obend.Trailblaze.LeanFpga
 import Obend.Trailblaze.Obligations
 import Obend.Trailblaze.Polis
 import Obend.Trailblaze.PolisBlum
+import Obend.Trailblaze.StageBInstances
 import Obend.Trailblaze.ZkStripe
 import Obend.Teeth.Analysis.Fixtures
 import Obend.Teeth.Core.AggregateTeeth
@@ -673,6 +690,7 @@ import Obend.Vault.FormCheckCache
 import Obend.Vault.HardwareProjection
 import Obend.Vault.Hyperedge
 import Obend.Vault.Index
+import Obend.Vault.IrreversibleOutbox
 import Obend.Vault.Json
 import Obend.Vault.Law
 import Obend.Vault.Log
@@ -691,6 +709,7 @@ import Obend.Vault.Store
 import Obend.Vault.SwarmLedgerSeams
 import Obend.Vault.Transport
 import Obend.Vault.UnifiedDeos
+import Obend.Vault.VerkleSnapshotBridge
 
 open Lean Elab Command in
 run_cmd do

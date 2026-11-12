@@ -12,6 +12,10 @@ Completes the `Lookup + LinMem + Before` → Multilinear PIOP & `Sumcheck` crypt
    `Sumcheck` compiler (`compileSymbolicTraceToSumcheck_complete` & `compileSymbolicTraceToSumcheck_sound`).
 -/
 public import Obend.SymbolicZk.CompileToPiopCore
+import all Obend.SymbolicZk.CompileToPiopCore
+import all Obend.Crypto.Multilinear
+import all Obend.Crypto.Transcript
+import all Obend.Crypto.Sumcheck
 
 public section
 namespace Obend.SymbolicZk.CompileToPiop

@@ -16,6 +16,9 @@ public import Obend.Core.RangeSafe
 public import Obend.Crypto.Multilinear
 public import Obend.Crypto.Transcript
 public import Obend.Crypto.Sumcheck
+import all Obend.Crypto.Multilinear
+import all Obend.Crypto.Transcript
+import all Obend.Crypto.Sumcheck
 
 public section
 namespace Obend.SymbolicZk.CompileToPiop

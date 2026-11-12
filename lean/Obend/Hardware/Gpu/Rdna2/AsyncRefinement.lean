@@ -1024,7 +1024,6 @@ private theorem empty_eq_init (s : AsyncWaveState)
 
 namespace ReadWaitUse
 set_option maxRecDepth 65536
-set_option maxHeartbeats 8000000
 set_option cbv.maxSteps 10000000
 /-- Kernel-checked string evaluation rules for the sealed standard-library APIs
 used by the existing decoder's family classification. -/
@@ -1042,9 +1041,22 @@ private theorem drop_eval (s : String) (n : Nat) :
 attribute [local cbv_eval] startsWith_eval drop_eval
 
 /-- Retrieve the actual instruction, operand and encoding metadata from AMD's
-existing tables. Only the decoded operand fields and machine words are supplied;
-there is no fabricated `Inst.access` summary in the witness. The test suite also
-checks these fields and accesses against the binary decoder. -/
+existing tables by verified chunk index. Only the decoded operand fields and
+machine words are supplied; there is no fabricated `Inst.access` summary in the
+witness. The test suite also checks these fields and accesses against the binary
+decoder. -/
+def fromTablesAt (chunk : List Instruction) (instIdx encIdx : Nat)
+    (name encoding : String) (fields : List (String × Nat))
+    (words : List UInt32) : Option Inst :=
+  match chunk[instIdx]?, encodings[encIdx]? with
+  | some ins, some enc =>
+    if ins.name == name && enc.name == encoding then
+      match ins.encodings.find? (·.encoding == encoding) with
+      | some ie => some { inst := ins, enc, ie, fields, words }
+      | none => none
+    else none
+  | _, _ => none
+
 def fromTables (name encoding : String) (fields : List (String × Nat))
     (words : List UInt32) : Option Inst := do
   let ins ← instructions.find? (·.name == name)
@@ -1053,18 +1065,17 @@ def fromTables (name encoding : String) (fields : List (String × Nat))
   return { inst := ins, enc, ie, fields, words }
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
-def load : Inst := (fromTables "S_LOAD_DWORD" "ENC_SMEM"
+def load : Inst := (fromTablesAt instructionsChunk4 94 5 "S_LOAD_DWORD" "ENC_SMEM"
   [("SDATA", 8), ("SBASE", 0), ("SOFFSET", 125), ("OFFSET", 0)]
   [0xf4000200, 0xfa000000]).get (by decide)
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
-def waitAll : Inst := (fromTables "S_WAITCNT" "ENC_SOPP" [("SIMM16", 0)] [0xbf8c0000]).get (by decide)
+def waitAll : Inst := (fromTablesAt instructionsChunk6 89 2 "S_WAITCNT" "ENC_SOPP"
+  [("SIMM16", 0)] [0xbf8c0000]).get (by decide)
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
-def move : Inst := (fromTables "S_MOV_B32" "ENC_SOP1" [("SDST", 10), ("SSRC0", 8)]
+def move : Inst := (fromTablesAt instructionsChunk5 12 0 "S_MOV_B32" "ENC_SOP1"
+  [("SDST", 10), ("SSRC0", 8)]
   [0xbe8a0308]).get (by decide)
 
 def initial : WaveState := GWave.init (({} : Memory).insert 0 7) 0 0
@@ -1078,7 +1089,6 @@ def afterWait : WaveState := instructionAfter waitAll (instructionAfter load ini
 def block : List Inst := [load, waitAll, move]
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
 theorem load_footprint : FootprintSound load (AsyncWaveState.init initial) := by
   refine ⟨by rfl, ?_, rfl, ?_, ?_⟩
   · intro h; rcases h with h | h <;> contradiction
@@ -1086,11 +1096,9 @@ theorem load_footprint : FootprintSound load (AsyncWaveState.init initial) := by
   · intro _ _ w hw; simp [queues, AsyncWaveState.init] at hw
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
 theorem load_issues (ns : List Nat) : issue (AsyncWaveState.init initial) load ns = .ok issued := by cbv
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
 theorem load_retires : complete issued (.lgkm 0) = .ok returned := by cbv
 
 /-- The post-load domain includes both possible completion states. -/
@@ -1112,7 +1120,6 @@ private theorem pending_coherent (s : AsyncWaveState) (hs : PendingLoad s) : Coh
   rcases hs with rfl | rfl <;> simp [Coherent, queues, issued, returned, AsyncWaveState.init, Independent]
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
 private theorem pending_live (s : AsyncWaveState) (hs : PendingLoad s) :
     (s.halted || s.err.isSome) = false := by
   rcases hs with rfl | rfl <;> cbv
@@ -1167,7 +1174,6 @@ theorem block_wellFormed : BlockWellFormed (fun s => s = AsyncWaveState.init ini
       · exact BlockWellFormed.nil _
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
 theorem block_checked : checkAsyncBlock block = true := by cbv
 
 /-- An inhabited multi-instruction instance of the exported theorem, applicable
@@ -1185,7 +1191,6 @@ theorem load_wait_use_refines (turns : List Turn) (sFinal : AsyncWaveState)
 def turns : List Turn := [⟨[], load, []⟩, ⟨[], waitAll, [0]⟩, ⟨[], move, []⟩]
 
 set_option maxRecDepth 65536 in
-set_option maxHeartbeats 4000000 in
 theorem load_wait_use_inhabited :
     ∃ sFinal, run (AsyncWaveState.init initial) turns = .ok sFinal ∧
       readSgpr sFinal.toGWave 10 = 7 := by

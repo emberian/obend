@@ -38,9 +38,9 @@ set_option autoImplicit false
 def g7 : Goldilocks := Goldilocks.ofNat 7
 def g42 : Goldilocks := Goldilocks.ofNat 42
 
-#guard Goldilocks.mul g7 (Goldilocks.inv g7) == Goldilocks.one
-#guard Goldilocks.mul g42 (Goldilocks.inv g42) == Goldilocks.one
-#guard Goldilocks.inv Goldilocks.zero == Goldilocks.zero
+#guard Goldilocks.mul g7 (Obend.SymbolicZk.CompileToPiop.Goldilocks.inv g7) == Goldilocks.one
+#guard Goldilocks.mul g42 (Obend.SymbolicZk.CompileToPiop.Goldilocks.inv g42) == Goldilocks.one
+#guard Obend.SymbolicZk.CompileToPiop.Goldilocks.inv Goldilocks.zero == Goldilocks.zero
 
 -- Width guard: 62 bits is safe (2 * 2^62 = 2^63 < p), 63 bits is unsafe (2 * 2^63 = 2^64 > p)
 #guard beforeWidthSafe 32 == true

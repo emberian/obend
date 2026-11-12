@@ -30,6 +30,8 @@ subsystems = [
   "Logic",
   "Equiv",
   "Tactic",
+  "Law",
+  "Doc",
 ]
 
 entry_points = [
@@ -787,6 +789,158 @@ theorem = "AuditVerdict.ofViolations_isOk_iff"
 description = "5-law kernel `Environment`/`Expr` claim-contract auditor (`#audit_claim_contract`) refusing axiom bypasses, projection cosplay, vacuous premises, and uncosted weakenings."
 
 # ==============================================================================
+# Wave 5 Batch 1 — Stage-B Cathedral Seal, SymbolicZk PIOP/Chase, Polis, Law,
+# Doc, TPU/RDNA2/AWS-F2/CircuitDae Silicon, Simplex GST Liveness & Verkle Vault
+# ==============================================================================
+
+[[apex]]
+id = "trailblaze-stageb-cathedral-seven-organ-sealed"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.StageBInstances"
+theorem = "stageB_cathedral_seven_organ_trace_sealed"
+description = "Unconditional Stage-B 7-organ Cathedral multi-turn trace theorem (`0` `*Obligations` typeclass binders) sealing Polis, LeanFpga, ZkStripe, and ClusterGov."
+
+[[apex]]
+id = "symboliczk-piop-sumcheck-weld"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.CompileToPiop"
+theorem = "compileSymbolicTraceToSumcheck_sound"
+description = "Multilinear PIOP + LogUp lookup + `LinMem` grand-product compilation into Sumcheck with explicit Schwartz-Zippel soundness bound."
+
+[[apex]]
+id = "symboliczk-linmem-charpoly-perm"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.CompileToPiopCore"
+theorem = "linmemPolyIdentity_implies_perm"
+description = "Characteristic-polynomial root factorization over integral domains implies exact multiset permutation for `LinMem` allocation/consumption traces."
+
+[[apex]]
+id = "symboliczk-skolem-chase-universal"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.SkolemChaseCore"
+theorem = "skolemChase_universal_homomorphism"
+description = "Weakly acyclic restricted Skolem chase reaches a universal model homomorphism with verified core retraction preservation (`checkRetractionCore_sound`)."
+
+[[apex]]
+id = "law-pointwise-revise-multiturn-safe"
+subsystem = "Law"
+module = "Obend.Law.PointwiseRevise"
+theorem = "pointwiseRevise_multiTurn_trace_safe"
+description = "Bedrock-guarded Dalal/AGM pointwise specification revision preserves constitutional invariants and `SupportSheaf` disjoint frames across multi-turn amendment traces."
+
+[[apex]]
+id = "law-amend-cli-live-trace-safe"
+subsystem = "Law"
+module = "Obend.Law.AmendCli"
+theorem = "executeTrace_protocol_safe"
+description = "Live `obend amend` workflow composes pointwise specification revision, `SupportSheaf` skip reuse, and neighbor-isolated FPGA bitstream installation."
+
+[[apex]]
+id = "hardware-tpu-dma-async-refines-sync"
+subsystem = "Hardware"
+module = "Obend.Hardware.Tpu.Machine"
+theorem = "checkDmaSemaphores_async_refines_sync"
+description = "Semaphore-verified asynchronous TPU VMEM/HBM DMA queue scheduling refines deterministic synchronous TPU execution across arbitrary completion schedules."
+
+[[apex]]
+id = "hardware-tpu-systolic-crypto-ntt"
+subsystem = "Hardware"
+module = "Obend.Hardware.Tpu.CryptoSystolic"
+theorem = "baileyMxuNtt_eq_specNtt"
+description = "Exact multi-limb systolic MXU Goldilocks GEMM, 4-step Bailey NTT, and centered ternary Ajtai commitment projections without FP rounding."
+
+[[apex]]
+id = "hardware-rdna2-waitcnt-async-refines-sync"
+subsystem = "Hardware"
+module = "Obend.Hardware.Gpu.Rdna2.AsyncRefinement"
+theorem = "Async.waitcnt_safe_async_refines_sync"
+description = "Scoreboard-verified `s_waitcnt` RDNA2 wave blocks with out-of-order VM/LGKM/VS writeback queues refine synchronous ISA execution."
+
+[[apex]]
+id = "hardware-rdna2-dpp-wave64-reduce"
+subsystem = "Hardware"
+module = "Obend.Hardware.Gpu.Rdna2.DppShuffle"
+theorem = "Dpp.rdna2Wave64ReduceAdd_eq_sum"
+description = "RDNA2 DPP16 row shuffles + `v_permlanex16` + cross-half lane exchange implement exact 64-lane associative wave reductions and NTT butterflies."
+
+[[apex]]
+id = "doc-reactive-notebook-incremental-eq-scratch"
+subsystem = "Doc"
+module = "Obend.Doc.ReactiveNotebook"
+theorem = "incrementalRecompute_eq_fromScratch"
+description = "Topological dirty-cone incremental reactive notebook evaluation matches full from-scratch evaluation while reusing untouched cell receipts."
+
+[[apex]]
+id = "polis-zoe-offer-safety-unconditional"
+subsystem = "Polis"
+module = "Obend.Polis.ZoeSeatSettlement"
+theorem = "zoe_offer_safety_unconditional"
+description = "Escrow-staged ZoE seat settlement guarantees unconditional offer safety and conservation across arbitrary untrusted guest reallocations and multi-turn exits."
+
+[[apex]]
+id = "polis-grain-powerbox-no-ambient-authority"
+subsystem = "Polis"
+module = "Obend.Polis.GrainPowerbox"
+theorem = "no_ambient_authority_in_grain"
+description = "Grain powerbox caretaker membranes enforce provenance-accountable authority, transitive revocation severance, blame soundness, and revocation-safe thaw."
+
+[[apex]]
+id = "polis-epistemic-vouch-sybil-non-amplifying"
+subsystem = "Polis"
+module = "Obend.Polis.EpistemicVouchMarket"
+theorem = "sybilSplit_non_amplifying"
+description = "Min-cut bounded epistemic vouching refuses Sybil split amplification while judged refutations slash backing stake conserving total market value."
+
+[[apex]]
+id = "hardware-awsf2-pcie-fabulous-hotswap-safe"
+subsystem = "Hardware"
+module = "Obend.Hardware.AwsF2Shell"
+theorem = "f2_pcie_fabulous_hotswap_stutter_safe"
+description = "AWS EC2 F2 VU47P `cl_obend` shell port bindings, BAR0-clamped FABulous overlay bitstream hot-swap stutter safety, and RapidWright/OpenPDK DRC signoff."
+
+[[apex]]
+id = "hardware-tapeout-obend-module-sound"
+subsystem = "Hardware"
+module = "Obend.Hardware.TapeoutPipeline"
+theorem = "compileObendModuleToSiliconTapeout_sound"
+description = "Netlist-derived Place-and-Route + `cSHAKE256`-bound SystemVerilog emission + timing/DRC signoff from `.obend` source modules to silicon tapeout."
+
+[[apex]]
+id = "hardware-circuit-dae-passivity-enclosure"
+subsystem = "Hardware"
+module = "Obend.Hardware.CircuitDae"
+theorem = "mnaDaeJudge_sound_passivity_and_enclosure"
+description = "Modified Nodal Analysis (MNA) index-1 DAE Judge certifies Gram passivity, Backward-Euler/Trapezoidal energy dissipation, and 5-cell SiC FCML balance."
+
+[[apex]]
+id = "hardware-current-loop-deadtime-iss"
+subsystem = "Hardware"
+module = "Obend.Hardware.CurrentLoop"
+theorem = "currentLoop_deadTime_and_quant_iss_ball"
+description = "Discrete Lyapunov Input-to-State Stability (ISS) ball for Q32 quantized PI current control under ADC floor, inverter dead-time, and back-EMF coupling."
+
+[[apex]]
+id = "consensus-simplex-gst-liveness"
+subsystem = "Consensus"
+module = "Obend.Consensus.SimplexLiveness"
+theorem = "gst_honest_leader_finalizes"
+description = "Post-GST Simplex BFT liveness with EUF-CMA authenticated message projection guarantees view Synchronization and honest-leader block finalization."
+
+[[apex]]
+id = "vault-irreversible-outbox-sel4-safe"
+subsystem = "Vault"
+module = "Obend.Vault.IrreversibleOutbox"
+theorem = "firmament_sel4_copy_before_verify_and_irreversible_outbox_safe"
+description = "Pillar-6 seL4 Microkit SPSC copy-before-verify ring isolation + 3-class `IrreversibleOutbox` settlement gated on finalized `Simplex` QCs."
+
+[[apex]]
+id = "vault-verkle-snapshot-incremental-commit"
+subsystem = "Vault"
+module = "Obend.Vault.VerkleSnapshotBridge"
+theorem = "incrementalVerkleSnapshot_eq_fullCommit"
+description = "O(1) dirty-chunk `ChunkedWorld` COW snapshots match monolithic Ajtai/Dual Verkle commitments with idempotent torn-tail WAL crash recovery."
+
+# ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
 
@@ -839,7 +993,7 @@ description = "`Tower256` `zkStripe` + 13-family CBOR `AutomataCert` + 4-hop `tl
 id = "pillar6-firmament-sel4-microkit-outbox"
 pillar = "Pillar 6: Obend.Firmament"
 subsystem = "Vault"
-target_module = "Obend.Firmament.MicrokitOutbox"
+target_module = "Obend.Vault.IrreversibleOutbox"
 target_theorem = "firmament_sel4_copy_before_verify_and_irreversible_outbox_safe"
 wave = "Wave 5"
 description = "`seL4` Microkit PDs mandatory copy-before-verify SPSC ring isolation + 3-class `IrreversibleEffectSettlement` gated on `Simplex` finalized QCs."
