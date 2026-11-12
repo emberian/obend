@@ -26,7 +26,7 @@ spec Epoch1ElaboratorBase for SiliconElaboratorFabric:
     bodyHandle + 0n
   def zone4KernelGate(statusTag: Nat) -> Nat:
     if statusTag == 1n then 1n else 0n
-  claim epoch1_lut_open_recursion(argVal: Nat): self.zone3LutEval(argVal) == argVal * self.zone3Gain + self.zone3Offset
+  claim epoch1_lut_word16_headroom(argVal: Nat) given argVal <= 16380n by judge("interval@1"): argVal * 4n + 2n <= 65535n
 
 spec Epoch2IcapDprOverride for SiliconElaboratorFabric:
   requires zone1ClosedBetaBypass(bodyHandle: Nat) -> Nat

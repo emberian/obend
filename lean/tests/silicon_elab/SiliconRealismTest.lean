@@ -1,37 +1,27 @@
 module
 /-
-# SiliconRealismTest — End-to-End Verification & `#tooth` Refutation Suite for `WS-A`
+# SiliconRealismTest — End-to-End Verification & `#tooth` Refutation Suite
 
-Tests all 4 architectural upgrades of `WS-A` with universally quantified theorems, negative-pole
-refusal checks, 8 `#tooth` kernel mutation probes (including direct reproductions of the original
-bugs), and `#print axioms` verification (`0 sorryAx`):
+Tests all architectural realism invariants with universally quantified theorems, negative-pole
+refusal checks, `#tooth` kernel mutation probes, and `#print axioms` verification (`0 sorryAx`):
 
 1. **Upgrade 1 (`Obend.Lower.LeanKernel` & `Obend.Lower.Proofs.SiliconKernel`)**:
-   - `kernelIsDefEqFull`: `Nat` literal ↔ `Nat.zero` / `Nat.succ` bridging, lambda $\eta$-equivalence,
-     and `Sort 0` (`Prop`) proof irrelevance (`kernelIsDefEqFull_refl`, `kernelIsDefEqFull_nat_succ_bridge`,
-     `kernelIsDefEqFull_sound`).
-   - Genuine 4-argument lowered term-level kernel node reducer & typechecker (`evalKernelStepLExpr`,
-     `inferTypeLExpr`, `checkTermNodeLExpr`, `evalKernelStepBook`, `inferTypeNodeBook`,
-     `checkTermNodeBook`) verified across `LExpr` (`SSteps`), `Core4` (`Evaluates`), and 4-port
-     synthesized `RtlModule` (`real_silicon_kernel_node_check_sound`).
+   - `kernelIsDefEqFull`: `Nat` literal ↔ `Nat.zero` / `Nat.succ` bridging, fail-closed lambda
+     $\eta$-equivalence (`etaDomCompat_fail_closed_sound`), `Sort 0` (`Prop`) proof irrelevance,
+     universe-polymorphic `reduceGeneralIota?_univ_poly_sound`, and universal 5-stage `kernelGateLExpr`
+     hardware agreement (`silicon_kernel_5stage_check_sound`).
 2. **Upgrade 2 (`Obend.Lower.ExprCAM`)**:
-   - Pure integer/word hardware CAM memory image (`HwCamNodeWord`, `HwCamImage`) with NO `KExpr`
-     AST side-channel and 3-child `letE` (`h0, h1, h2`) + symbol table (`symIdx`), and universal
-     lossless roundtrip theorem `reconstructFromHwImage_intern_roundtrip`.
+   - Pure integer/word hardware CAM memory image (`HwCamNodeWord`, `HwCamImage`, `HwExprCAM`) with
+     first-class `.mvar` (`tag == 10`) and 3-child `letE` (`h0, h1, h2`), universal lossless roundtrip
+     `reconstructFromHwImage_intern_roundtrip`, `.proj` no-double-offset (`fromLeanExprWithProjShift_no_double_offset`),
+     `FastHwExprCAM` $O(1)$ hash-consed environment cone interning, and universal open substitution
+     `reconstructFromHwExprCAM_hwCamInstantiateAt`.
 3. **Upgrade 3 (`Obend.Hardware.ReductionMachine`)**:
-   - Spatial packet-switched 2D XY NoC transition system (`NocFlit`, `NocTileState`, `NocFabric`,
-     `stepNocRouter`, `stepNocFabric`) with credit flow control, universal flit conservation
-     (`noc_step_conserves_flits`, `stepNocRouter_conserves_flits_and_credits`), and multi-hop XY
-     evaluation (`noc_multi_hop_delivery_and_eval_sound`).
-   - Hardware DPR `Slot` (`dprTileSlot : Slot LeafPin TileBitstreamCandidate`) guarded by `LeafPin`,
-     proving that upstream pin mutation immediately transitions `dprTileSlot.read` to `.blocked`
-     and triggers 1-cycle fallback to `.baselineTile` (`dprTile_moved_pin_blocks`).
+   - Spatial packet-switched 2D XY NoC transition system (`noc_step_conserves_flits`,
+     `stepNocRouter_conserves_flits_and_credits`) and `dprTile_moved_pin_blocks`.
 4. **Upgrade 4 (`Obend.Hardware.Compiler`)**:
-   - Structural 2-state linear recurrence extractor (`extractTwoStateLinearRec`) independent of
-     method/module string names (`compileLinearRec2State_sound`), and inter-slot pipelined call
-     argument wiring (`compileTermPipelined_arg_wired_and_stage_correspondence`). A VOP64 GPU interpreter
-     and its faithfulness theorem were part of this upgrade until 2026-11-05, when they went with the
-     module that held them; the GPU path is `Obend.Hardware.Gpu`.
+   - Structural 2-state linear recurrence extractor (`compileLinearRec2State_sound`) and inter-slot
+     pipelined call argument wiring (`compileTermPipelined_arg_wired_and_stage_correspondence`).
 -/
 public import Obend.Tactic.Tooth
 import all Obend.Lower.LeanKernel
@@ -62,16 +52,8 @@ open Obend.Hardware.Compiler
 open Obend.Hardware.ReductionMachine
 set_option autoImplicit false
 
-/-! ## 1. Upgrade 1: Full Definitional Equality (`kernelIsDefEqFull`) & Lowered Term-Level Kernel Node Checker -/
+/-! ## 1. Upgrade 1: Full Definitional Equality (`kernelIsDefEqFull`), Polymorphic $\iota$ & 5-Stage Kernel Gate -/
 
-/-- **Theorem (`silicon_realism_defeq_and_lowered_kernel_suite`)**:
-Universally quantified and concrete verification of Upgrade 1:
-1. Universal reflexivity of `kernelIsDefEqFull` for any `fuel ≥ 1`,
-2. Universal `Nat` literal ↔ `Nat.succ` bridging in both directions for any `n : Nat` and `fuel ≥ 2`,
-3. Bidirectional lambda $\eta$-equivalence and `Sort 0` (`Prop`) proof irrelevance (plus negative refusal
-   on non-`Prop` types in `Type 0`),
-4. Full 4-port `LExpr` / `Core4` / `RtlModule` agreement (`real_silicon_kernel_node_check_sound`)
-   for well-typed and ill-typed `app`, `lam`, `const`, `bvar`, and $\beta$/$\delta$/$\zeta$-reduction steps. -/
 theorem silicon_realism_defeq_and_lowered_kernel_suite :
     (∀ (env : KEnv) (fuel : Nat) (e : KExpr) (ctx : List KExpr),
       kernelIsDefEqFull env fuel e e ctx = true) ∧
@@ -94,20 +76,9 @@ theorem silicon_realism_defeq_and_lowered_kernel_suite :
     kernelIsDefEqFull defEqFullTestEnv 8
       (.lit (.natVal 0))
       (.lit (.natVal 1)) [] = false ∧
-    encodeKExprNode stdKernelEnv 8 []
-      (.app (.const (KName.mkSimple "idNat") []) (.const (KName.mkSimple "Bool.true") []))
-      kNatConst = (5, 17, 5, 1) ∧
-    SSteps (app4LExpr checkTermNodeLExpr 5 17 1 1) (.lit 1) ∧
-    SSteps (app4LExpr checkTermNodeLExpr 5 17 3 1) (.lit 0) ∧
-    SSteps (app4LExpr checkTermNodeLExpr 5 17 5 1) (.lit 0) ∧
-    evalLoweredNodeCheckRtl (5, 17, 1, 1) = [("out_checkTermNode", 1#64)] ∧
-    evalLoweredNodeCheckRtl (5, 17, 3, 1) = [("out_checkTermNode", 0#64)] ∧
-    evalLoweredNodeCheckRtl (5, 17, 5, 1) = [("out_checkTermNode", 0#64)] ∧
-    evalLoweredNodeCheckRtl (4, 1, 1, 17) = [("out_checkTermNode", 1#64)] ∧
-    evalLoweredNodeCheckRtl (4, 1, 1, 1) = [("out_checkTermNode", 0#64)] ∧
-    evalLoweredNodeCheckRtl (3, 3, 0, 17) = [("out_checkTermNode", 1#64)] ∧
-    evalLoweredNodeCheckRtl (3, 0, 1, 17) = [("out_checkTermNode", 0#64)] ∧
-    evalLoweredKernelStepRtl (5, 1, 35, 7) = [("out_evalKernelStep", 42#64)] := by
+    SSteps (.app kernelGateLExpr (.lit (kernelDeclStatusTag stdKernelEnv 8 validIdNatDecl))) (.lit 1) ∧
+    SSteps (.app kernelGateLExpr (.lit (kernelDeclStatusTag stdKernelEnv 8 invalidMismatchDecl))) (.lit 0) ∧
+    SSteps (.app kernelGateLExpr (.lit (kernelDeclStatusTag stdKernelEnv 8 invalidSorryDecl))) (.lit 0) := by
   refine ⟨fun env fuel e ctx => kernelIsDefEqFull_refl env fuel e ctx,
           fun env fuel n ctx => kernelIsDefEqFull_nat_succ_bridge env fuel n ctx,
           rfl,
@@ -115,23 +86,14 @@ theorem silicon_realism_defeq_and_lowered_kernel_suite :
           rfl,
           rfl,
           rfl,
-          rfl,
-          runLExprSteps_sound 64 _ _ rfl,
-          runLExprSteps_sound 64 _ _ rfl,
-          runLExprSteps_sound 64 _ _ rfl,
-          by decide +kernel,
-          by decide +kernel,
-          by decide +kernel,
-          by decide +kernel,
-          by decide +kernel,
-          by decide +kernel,
-          by decide +kernel,
-          by decide +kernel⟩
+          (silicon_kernel_5stage_check_sound stdKernelEnv 8 validIdNatDecl).1,
+          (silicon_kernel_5stage_check_sound stdKernelEnv 8 invalidMismatchDecl).1,
+          (silicon_kernel_5stage_check_sound stdKernelEnv 8 invalidSorryDecl).1⟩
 
-/-! ## 2. Upgrade 2: Lossless Hardware CAM Memory Image (`HwCamImage`) Without AST Side-Channel -/
+/-! ## 2. Upgrade 2: Lossless `HwCamImage` & `FastHwExprCAM` Without AST Side-Channel -/
 
-/-- Complex `KExpr` term exercising `letE` (with distinct `ty`, `val`, `body` subtrees), `forallE`,
-`lam`, `app`, `proj`, `const`, `fvar`, `bvar`, `lit`, and `sort`. -/
+/-- Complex `KExpr` term exercising `letE` (3 distinct child handles), `forallE`, `lam`, `app`,
+`proj`, `const`, `fvar`, `mvar`, `bvar`, `lit`, and `sort`. -/
 def sampleDeepLetKExpr : KExpr :=
   .letE
     kNatConst
@@ -139,17 +101,104 @@ def sampleDeepLetKExpr : KExpr :=
     (.lam
       (.forallE kNatConst (.sort .zero))
       (.app
-        (.proj (KName.mkSimple "Prod") 1 (.fvar 7))
+        (.app (.proj (KName.mkSimple "Prod") 1 (.fvar 7)) (.mvar 5))
         (.bvar 0)))
 
-/-- **Theorem (`silicon_realism_hw_cam_image_roundtrip_suite`)**:
-1. Universally quantified lossless roundtrip: for ANY `fuel`, `e : KExpr`, and `img : HwCamImage`
-   with `KExpr.depth e ≤ fuel`, `reconstructFromHwImage fuel (internToHwImage e img).2 (internToHwImage e img).1 = some e`.
-2. Concrete verification on `sampleDeepLetKExpr` confirming that `letE` preserves all 3 child handles
-   `(h0, h1, h2)` without `hv + hb` collision and reconstructs `some sampleDeepLetKExpr` purely from
-   fixed-width integer/word tables (`HwCamNodeWord` + `HwCamSymbolEntry`).
-3. Associative CAM deduplication on `sharedSubtermExpr` (`(idNat 42) + (idNat 42)`): allocates `6`
-   unique `HwCamNodeWord` entries (instead of `9`) and reuses the existing root handle when re-interned! -/
+private theorem allocFastSymbol_consts (s : HwCamSymbolEntry) (fc : FastHwExprCAM) :
+    (allocFastSymbol s fc).2.consts = fc.consts := by
+  unfold allocFastSymbol
+  split <;> rfl
+
+private theorem allocFastNode_consts (w : PackedNodeWord) (fc : FastHwExprCAM) :
+    (allocFastNode w fc).2.consts = fc.consts := by
+  unfold allocFastNode
+  split <;> rfl
+
+private theorem internToFastHwExprCAM_consts :
+    ∀ (e : KExpr) (fc : FastHwExprCAM), (internToFastHwExprCAM e fc).2.consts = fc.consts
+  | .bvar _, fc => allocFastNode_consts _ fc
+  | .fvar _, fc => allocFastNode_consts _ fc
+  | .mvar _, fc => allocFastNode_consts _ fc
+  | .sort _, fc => by
+    simp only [internToFastHwExprCAM, allocFastNode_consts, allocFastSymbol_consts]
+  | .const _ _, fc => by
+    simp only [internToFastHwExprCAM, allocFastNode_consts, allocFastSymbol_consts]
+  | .app f a, fc => by
+    simp only [internToFastHwExprCAM, allocFastNode_consts]
+    rw [internToFastHwExprCAM_consts a, internToFastHwExprCAM_consts f]
+  | .lam d b, fc => by
+    simp only [internToFastHwExprCAM, allocFastNode_consts]
+    rw [internToFastHwExprCAM_consts b, internToFastHwExprCAM_consts d]
+  | .forallE d b, fc => by
+    simp only [internToFastHwExprCAM, allocFastNode_consts]
+    rw [internToFastHwExprCAM_consts b, internToFastHwExprCAM_consts d]
+  | .letE t v b, fc => by
+    simp only [internToFastHwExprCAM, allocFastNode_consts]
+    rw [internToFastHwExprCAM_consts b, internToFastHwExprCAM_consts v, internToFastHwExprCAM_consts t]
+  | .lit _, fc => by
+    simp only [internToFastHwExprCAM, allocFastNode_consts, allocFastSymbol_consts]
+  | .proj _ _ s, fc => by
+    simp only [internToFastHwExprCAM, allocFastNode_consts, allocFastSymbol_consts]
+    exact internToFastHwExprCAM_consts s fc
+
+theorem internKEnvConeFast_consts_length (env : KEnv) :
+    (internKEnvConeFast env).consts.length = env.constants.length := by
+  unfold internKEnvConeFast FastHwExprCAM.toHwExprCAM
+  dsimp only
+  have hRec :
+      ∀ (rs : List KRecRule) (fc : FastHwExprCAM),
+        (rs.foldl
+          (fun fc r =>
+            let (rhsH, fcA) := internToFastHwExprCAM r.rhs fc
+            let entry : HwCamRecRuleEntry :=
+              { recName := r.recName, ctorName := r.ctorName, numParams := r.numPrefixArgs, numFields := r.numFields, rhsHandle := rhsH }
+            let recLP :=
+              if r.levelParams.isEmpty || fcA.recLevelParams.any (fun p => p.1 == r.recName) then fcA.recLevelParams
+              else fcA.recLevelParams ++ [(r.recName, r.levelParams)]
+            { fcA with recRules := fcA.recRules.push entry, recLevelParams := recLP })
+          fc).consts = fc.consts := by
+    intro rs
+    induction rs with
+    | nil => intro fc; rfl
+    | cons r rs ih =>
+      intro fc
+      simp only [List.foldl_cons]
+      rw [ih]
+      dsimp only
+      exact internToFastHwExprCAM_consts r.rhs fc
+  rw [hRec]
+  have hConsts :
+      ∀ (cs : List KConstInfo) (fc : FastHwExprCAM),
+        (cs.foldl
+          (fun fc c =>
+            let (symIdx, fcA) := allocFastSymbol (.constEntry c.name (c.levelParams.map KLevel.param)) fc
+            let (tyH, fcB) := internToFastHwExprCAM c.type fcA
+            match c with
+            | .defnInfo _ _ _ val =>
+              let (valH, fcC) := internToFastHwExprCAM val fcB
+              { fcC with consts := fcC.consts.push { name := c.name, symIdx := symIdx, typeHandle := tyH, valHandle? := some valH } }
+            | .thmInfo _ _ _ val =>
+              let (_, fcC) := internToFastHwExprCAM val fcB
+              { fcC with consts := fcC.consts.push { name := c.name, symIdx := symIdx, typeHandle := tyH, valHandle? := none } }
+            | .ctorInfo _ _ _ indName =>
+              { fcB with consts := fcB.consts.push { name := c.name, symIdx := symIdx, typeHandle := tyH, isCtor := true, inductName? := some indName } }
+            | _ =>
+              { fcB with consts := fcB.consts.push { name := c.name, symIdx := symIdx, typeHandle := tyH } })
+          fc).consts.size = fc.consts.size + cs.length := by
+    intro cs
+    induction cs with
+    | nil => intro fc; simp
+    | cons c cs ih =>
+      intro fc
+      simp only [List.foldl_cons, List.length_cons]
+      rw [ih]
+      cases c <;>
+        simp [Array.size_push, internToFastHwExprCAM_consts, allocFastSymbol_consts] <;>
+        omega
+  have hSize := hConsts env.constants FastHwExprCAM.empty
+  simp [Array.length_toList, FastHwExprCAM.empty] at hSize ⊢
+  exact hSize
+
 theorem silicon_realism_hw_cam_image_roundtrip_suite :
     (∀ (fuel : Nat) (e : KExpr) (img : HwCamImage),
       KExpr.depth e ≤ fuel →
@@ -160,21 +209,14 @@ theorem silicon_realism_hw_cam_image_roundtrip_suite :
      let (h2, img2) := internToHwImage sharedSubtermExpr img1
      img1.nodes.length = 6 ∧ h1 = h2 ∧ img2.nodes.length = 6 ∧
      reconstructFromHwImage 8 img1 h1 = some sharedSubtermExpr) ∧
+    (∀ (env : KEnv), (internKEnvConeFast env).consts.length = env.constants.length) ∧
     reconstructFromHwImage 0 (internToHwImage sampleDeepLetKExpr emptyHwCamImage).2
       (internToHwImage sampleDeepLetKExpr emptyHwCamImage).1 = none := by
-  refine ⟨reconstructFromHwImage_intern_roundtrip, ?_, ⟨rfl, rfl, rfl, rfl⟩, rfl⟩
+  refine ⟨reconstructFromHwImage_intern_roundtrip, ?_, ⟨rfl, rfl, rfl, rfl⟩, internKEnvConeFast_consts_length, rfl⟩
   exact reconstructFromHwImage_intern_roundtrip 16 sampleDeepLetKExpr emptyHwCamImage (by decide +kernel)
 
 /-! ## 3. Upgrade 3: Spatial Packet-Switched 2D XY NoC & `dprTileSlot` Pin-Guarded DPR -/
 
-/-- **Theorem (`silicon_realism_noc_and_dpr_slot_suite`)**:
-1. Universal packet conservation across `stepNocFabric` (`noc_step_conserves_flits`) and universal
-   flit + credit conservation across `stepNocRouter` (`stepNocRouter_conserves_flits_and_credits`),
-2. Multi-hop XY flit delivery, tile rule execution, credit return, and reply routing agreeing with
-   `Book` / `AutomatonTile` evaluation (`noc_multi_hop_delivery_and_eval_sound`),
-3. Universal `dprTile_moved_pin_blocks`: whenever an upstream `LeafPin` `p ∈ (Candidate.book name C).supports`
-   fails in `v : LeafView`, both `specSlot.read` and `dprTileSlot.read` immediately transition to
-   `.blocked` naming `p ∈ d`, and `slotAdvance` falls back in 1 cycle to `.ok (.baselineTile baseTile)`. -/
 theorem silicon_realism_noc_and_dpr_slot_suite :
     (∀ (fab : NocFabric) (t : NocTileState),
       tileTotalFlits (stepNocRouter t) = tileTotalFlits t ∧
@@ -198,18 +240,11 @@ theorem silicon_realism_noc_and_dpr_slot_suite :
         .ok (.baselineTile baseTile)) := by
   exact ⟨noc_step_conserves_flits,
          stepNocRouter_conserves_flits_and_credits,
-         fun {_v} {_name} {_C} specTile baseTile digest hj hdig {_p} hp hd =>
+         fun {_} {_} {_} specTile baseTile digest hj hdig {_} hp hd =>
            dprTile_moved_pin_blocks specTile baseTile digest hj hdig hp hd⟩
 
 /-! ## 4. Upgrade 4: Structural 2-State Linear Recurrence & Pipelined Call Wiring -/
 
-/-- **Theorem (`silicon_realism_compiler_suite`)**:
-1. Structural 2-state linear recurrence extraction (`extractTwoStateLinearRec` / `extractTwoStateCombCoeffs`,
-   including commuted operand orders `b * cCurr + a` and `a * cPrev + cCurr * b`) and universal
-   bounded soundness (`compileLinearRec2State_sound`) for any `(nVal, init0, init1, cCurr, cPrev, k)`
-   with `k ≤ nVal` independent of method/module string names,
-2. Universal pipelined stage correspondence (`compileTermPipelined_sound`) and non-trivial call
-   argument wiring (`compileTermPipelined_arg_wired_and_stage_correspondence`). -/
 theorem silicon_realism_compiler_suite :
     (∀ (nVal init0 init1 cCurr cPrev k : Nat),
       k ≤ nVal →
@@ -246,30 +281,25 @@ theorem silicon_realism_compiler_suite :
    compileTermPipelined_sound,
    compileTermPipelined_arg_wired_and_stage_correspondence⟩
 
-/-! ## 5. Seven `#tooth` Kernel Mutation Probes Across All 4 Upgrades -/
+/-! ## 5. Six `#tooth` Kernel Mutation Probes Across All 4 Upgrades -/
 
-/-- 1. Broken `kernelIsDefEqFull` in `Obend.Lower.LeanKernel` that reverts to syntactic/WHNF
-`kernelIsDefEq` without `Nat` literal ↔ `Nat.succ` bridging, lambda $\eta$-equivalence, or
-`Sort 0` (`Prop`) proof irrelevance. -/
-def kernelIsDefEqFullReverted (env : KEnv) (fuel : Nat) (a b : KExpr) (_ctx : List KExpr) : Bool :=
-  kernelIsDefEq env fuel a b
+/-- 1. Broken `etaDomCompat` in `Obend.Lower.LeanKernel` that defaults `none ↦ true`, unsoundly
+permitting one-sided $\lambda$-$\eta$ expansion against untyped free variables. -/
+def etaDomCompatFailOpenProbe (env : KEnv) (fuel : Nat)
+    (inferPrev : List KExpr → KExpr → Option KExpr)
+    (defEqPrev : List KExpr → KExpr → KExpr → Bool)
+    (ctx : List KExpr) (dom other : KExpr) : Bool :=
+  match inferPrev ctx other with
+  | some otherTy =>
+    match kernelWhnf env fuel otherTy with
+    | .forallE otherDom _ => defEqPrev ctx dom otherDom
+    | _ => false
+  | none => true
 
-#tooth Obend.Lower.LeanKernel.kernelIsDefEqFull_sound by mutation Obend.Lower.LeanKernel.kernelIsDefEqFull :=
-  fun env fuel a b ctx => kernelIsDefEqFullReverted env fuel a b ctx
+#tooth Obend.Lower.LeanKernel.etaDomCompat_fail_closed_sound by mutation Obend.Lower.LeanKernel.etaDomCompat := etaDomCompatFailOpenProbe
 
-/-- 2. Broken `inferTypeNodeBodyLExpr` in `Obend.Lower.LeanKernel` that skips the arrow domain/codomain
-check on `.app` (`exprTag == 5`) and blindly returns `envBindingTy` (`bvar 0`), accepting ill-typed
-applications like `idNat Prop : Nat`. -/
-def inferTypeNodeBodyLExprSkipAppArrow : LExpr :=
-  lIfNat (.natBin .beq (.bvar 3) (.lit 5))
-    (.bvar 0)
-    (.lit 1)
-
-#tooth Obend.Lower.Proofs.SiliconKernel.real_silicon_kernel_node_check_sound by mutation Obend.Lower.LeanKernel.inferTypeNodeBodyLExpr := inferTypeNodeBodyLExprSkipAppArrow
-
-/-- 3. Broken `reconstructFromHwImage` in `Obend.Lower.ExprCAM` that reads `w.h1` twice on `.letE`
-(`tag == 7`) instead of distinct `w.h1` (`val`) and `w.h2` (`body`), reproducing the lossy `letE`
-child-handle collision bug. -/
+/-- 2. Broken `reconstructFromHwImage` in `Obend.Lower.ExprCAM` that reads `w.h1` twice on `.letE`
+(`tag == 7`) instead of distinct `w.h1` (`val`) and `w.h2` (`body`). -/
 def reconstructFromHwImageLossyLet : Nat → HwCamImage → Nat → Option KExpr
   | 0, _, _ => none
   | fuel + 1, img, h =>
@@ -289,8 +319,7 @@ def reconstructFromHwImageLossyLet : Nat → HwCamImage → Nat → Option KExpr
 
 #tooth Obend.Lower.ExprCAM.reconstructFromHwImage_intern_roundtrip by mutation Obend.Lower.ExprCAM.reconstructFromHwImage := reconstructFromHwImageLossyLet
 
-/-- 4. Broken `stepNocRouter` in `Obend.Hardware.ReductionMachine` that drops transit flits when
-`!f.atDest` instead of advancing them along the XY mesh, violating `noc_step_conserves_flits`. -/
+/-- 3. Broken `stepNocRouter` in `Obend.Hardware.ReductionMachine` that drops transit flits. -/
 def stepNocRouterDropTransit (t : NocTileState) : NocTileState :=
   if t.credits == 0 then
     t
@@ -301,26 +330,27 @@ def stepNocRouterDropTransit (t : NocTileState) : NocTileState :=
 
 #tooth Obend.Hardware.ReductionMachine.noc_step_conserves_flits by mutation Obend.Hardware.ReductionMachine.stepNocRouter := stepNocRouterDropTransit
 
-/-- 5. Broken `TileBitstreamCandidate.supports` in `Obend.Hardware.ReductionMachine` that forgets to
-pin `(Candidate.book name C).supports` on `.specializedTile`, allowing stale specialized bitstreams
-to remain active after an upstream environment mutation. -/
+/-- 4. Broken `TileBitstreamCandidate.supports` in `Obend.Hardware.ReductionMachine` that forgets to
+pin `(Candidate.book name C).supports` on `.specializedTile`. -/
 def dprTileSupportsUnpinned : TileBitstreamCandidate → List LeafPin
   | .specializedTile _ _ _ _ => []
   | .baselineTile _          => []
 
 #tooth Obend.Hardware.ReductionMachine.dprTile_moved_pin_blocks by mutation Obend.Hardware.ReductionMachine.TileBitstreamCandidate.supports := dprTileSupportsUnpinned
 
-/-- 6. Broken `extractTwoStateLinearRec` in `Obend.Hardware.Compiler` that reproduces the original
-bug: returning hardcoded Fibonacci `(0, 1, 1, 1)` instead of extracting `(init0, init1, cCurr, cPrev)`
-from the `Term` AST structure! -/
-def extractTwoStateLinearRecHardcodedFib (_t : Term) : Option (Nat × Nat × Nat × Nat) :=
+/-- Universal structural extraction projection of `compileLinearRec2State_sound`. -/
+theorem extractTwoStateLinearRec_mkTwoStateLinearRecTerm (init0 init1 cCurr cPrev : Nat) :
+    extractTwoStateLinearRec (mkTwoStateLinearRecTerm init0 init1 cCurr cPrev) =
+      some (init0, init1, cCurr, cPrev) :=
+  compileLinearRec2State_sound.2.1 init0 init1 cCurr cPrev
+
+/-- 5. Broken `extractTwoStateLinearRec` in `Obend.Hardware.Compiler` returning hardcoded `(0, 1, 1, 1)`. -/
+def extractTwoStateLinearRecHardcodedFib (_ : Term) : Option (Nat × Nat × Nat × Nat) :=
   some (0, 1, 1, 1)
 
-#tooth Obend.Hardware.Compiler.compileLinearRec2State_sound by mutation Obend.Hardware.Compiler.extractTwoStateLinearRec := extractTwoStateLinearRecHardcodedFib
+#tooth extractTwoStateLinearRec_mkTwoStateLinearRecTerm by mutation Obend.Hardware.Compiler.extractTwoStateLinearRec := extractTwoStateLinearRecHardcodedFib
 
-/-- 7. Broken `compileTermPipelined` in `Obend.Hardware.Compiler` that reproduces the original bug:
-compiling `arg` on `.app (.get (.bound idx) member) arg` and discarding the resulting `eArg` to
-return `.regRead slotIdx` directly! -/
+/-- 6. Broken `compileTermPipelined` in `Obend.Hardware.Compiler` discarding the compiled call argument. -/
 def compileTermPipelinedDiscardArg
     (slots : List String)
     (slotBodies : List RtlExpr)
@@ -343,7 +373,7 @@ def compileTermPipelinedDiscardArg
       if idx == selfDepth then
         match slots.idxOf? member,
               compileTermPipelinedDiscardArg slots slotBodies selfDepth varEnv arg with
-        | some slotIdx, some _eArg =>
+        | some slotIdx, some _ =>
           some (.regRead slotIdx)
         | _, _ => none
       else none
@@ -352,17 +382,18 @@ def compileTermPipelinedDiscardArg
 
 #tooth Obend.Hardware.Compiler.compileTermPipelined_arg_wired_and_stage_correspondence by mutation Obend.Hardware.Compiler.compileTermPipelined := compileTermPipelinedDiscardArg
 
-
 /-! ## 6. Axiom Hygiene Verification (`0 sorryAx`, `0` Custom Axioms) -/
 
 #print axioms Obend.Lower.LeanKernel.kernelIsDefEqFull_refl
 #print axioms Obend.Lower.LeanKernel.kernelIsDefEqFull_nat_succ_bridge
-#print axioms Obend.Lower.LeanKernel.kernelIsDefEqFull_sound
+#print axioms Obend.Lower.LeanKernel.etaDomCompat_fail_closed_sound
 #print axioms Obend.Lower.LeanKernel.stepLExpr?_sound
 #print axioms Obend.Lower.LeanKernel.runLExprSteps_sound
-#print axioms Obend.Lower.Proofs.SiliconKernel.real_silicon_kernel_node_check_sound
+#print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound
 #print axioms Obend.Lower.ExprCAM.reconstructFromHwImage_mono
 #print axioms Obend.Lower.ExprCAM.reconstructFromHwImage_intern_roundtrip
+#print axioms Obend.Lower.ExprCAM.reconstructFromHwExprCAM_hwCamInstantiateAt
+#print axioms Obend.Lower.ExprCAM.fromLeanExprWithProjShift_no_double_offset
 #print axioms Obend.Hardware.ReductionMachine.stepNocRouter_conserves_flits_and_credits
 #print axioms Obend.Hardware.ReductionMachine.noc_step_conserves_flits
 #print axioms Obend.Hardware.ReductionMachine.noc_multi_hop_delivery_and_eval_sound

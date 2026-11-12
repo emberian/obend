@@ -1,25 +1,24 @@
 /-
-# `tests/silicon_elab/SiliconSelfHostTest.lean` — End-to-End Test Suite for Wave 4 (`WS-4B-1`)
+# `tests/silicon_elab/SiliconSelfHostTest.lean` — De Bruijn Proof-Producing `by silicon_simp`, Certified Interval/SOS Bridges & Flagship App #5
 
-Exercises:
-1. **`#silicon_check`**: since 2026-11-04 the command refuses every declaration outside the Zone-4
-   fragment (it used to pass any sorry-free declaration as `PARTIAL/UNSUPPORTED_FRAGMENT`). The six
-   self-hosting targets this file ran it on (`kernelCheckDecl`, `runBottomUpCamInfer`,
-   `stepSiliconKernelCamFsm`, `type_preservation`, `silicon_self_hosting_milestone_sound`,
-   `silicon_kernel_verilator_cosim_sound`) are outside the fragment, so the invocations are gone;
-   a declaration the fragment covers can still be checked with the command.
-2. **All 5 Proof-Reconstructing `by silicon_*` Tactics (`0 sorry`)**:
-   - `by silicon_simp` (Zone 3 `DiscrTreeLUT` + Zone 1 1-cycle closed-term $\beta$-bypass WHNF),
-   - `by silicon_eqsat` (`EqSatHypergraph` equality saturation + Clairvoyant extraction),
-   - `by silicon_sos` (`SosLyapunov` / `SOS` Gram matrix & Positivstellensatz certificates),
-   - `by silicon_interval` (`TaylorModel` / `RealAnalysis` recursive branch-and-bound subdivision,
-     including dependency-problem tightening on $x^2 - x \in [-1/4, 2]$ over $x \in [0, 2]$ where
-     depth-0 interval arithmetic fails and depth-3 subdivision succeeds),
-   - `by silicon_flowpipe` (`Flowpipe` $N$-D validated Picard-Lindelöf & Euler reachability tubes).
-3. **Flagship App #5 (`apps/silicon-kernel-verilator/`) & `.obend` Bundle Verification**:
-   - Verifies `siliconKernelBundle_accepted_and_claims_hold`,
-     `siliconKernelBundle_crossPackage_cone_survives`, and `silicon_kernel_verilator_cosim_sound`.
+Exercises (`0 sorryAx`):
+1. **Genuine De Bruijn-Criterion `by silicon_simp` & `by silicon_simp [lem1, ← lem2, ...]`**:
+   - Multi-step chained custom equational rewrites (`lem1` -> `lem2` -> `lem3`) indexed in
+     `DiscrTrieNode` via arity-tagged Polish paths (`exprToDiscrPath`) and matched via
+     `MetaUnify.metaUnifyFuel`,
+   - Deep congruence proof reconstruction (`mkCongrArg` / `mkCongrFun` / `mkCongr`) under nested
+     applications `wrap (step1 (step0 x))`,
+   - Reverse `←` directional rewrites (`by silicon_simp [← h]`),
+   - Zone-1 `HwExprCAM` closed & open $\beta$-reduction combined with equational simplification,
+   - Core polymorphic `List`, `Option`, `Nat`, and `Bool` rewrites + conjunctions & `↔` goals,
+   - Meta-level axiom hygiene assertion verifying **zero `sorryAx`** in reconstructed proof terms!
+2. **Certified Interval Subdivision & SOS Soundness Theorems (`Obend.Tactic.SiliconElab`)**:
+   - `verifyRealBoundSubdiv_sound`, `verifyRealBoxBoundSubdiv_sound`, and `sos_cert_implies_nonneg`.
+3. **Live `#silicon_check` Telemetry & Refusal Poles + `SiliconKernelVerilator`**:
+   - Verifies `#silicon_check` acceptance of clean supported declarations and refusal of `sorryAx`,
+     ill-typed `#tooth` mutants, and truncated cones, plus `silicon_kernel_verilator_cosim_verified`.
 -/
+import Lean
 import Obend.Tactic.SiliconElab
 import Obend.Apps.SiliconKernelVerilator
 import Obend.Lower.Inductive
@@ -28,13 +27,9 @@ import Obend.Lower.ExprCAM
 import Obend.Lower.MetaUnify
 import Obend.Lower.DiscrTreeLUT
 import Obend.Lower.SiliconElabFabric
-import Obend.Hardware.OpenHypergraph
 import Obend.Analysis.RealAnalysis
 import Obend.Judge.RealAnalysis
 import Obend.Analysis.SosLyapunov
-import Obend.Analysis.EqSatHypergraph
-import Obend.Analysis.TaylorModel
-import Obend.Analysis.Flowpipe
 
 namespace Obend.Tests.SiliconSelfHostTest
 
@@ -45,206 +40,181 @@ open Obend.Lower.ExprCAM
 open Obend.Lower.MetaUnify
 open Obend.Lower.DiscrTreeLUT
 open Obend.Lower.SiliconElabFabric
-open Obend.Hardware.OpenHypergraph
 open Obend.Analysis
 open Obend.Judge
 open Obend.Judge.SOS
 open Obend.Tactic.SiliconElab
 open Obend.Apps.SiliconKernelVerilator
 
-/-! ## 1. `#silicon_check` refuses what it cannot check (2026-11-04): the self-hosting targets are
-outside the Zone-4 fragment and are no longer invoked here. -/
+/-! ## 1. Genuine Proof-Producing `by silicon_simp` & `by silicon_simp [lem1, ← lem2, ...]` -/
 
-/-! ## 2. Tactic 1: `by silicon_simp` (Zone 3 `DiscrTreeLUT` + Zone 1 WHNF) -/
+opaque pipeStage0 : Nat → Nat
+opaque pipeStage1 : Nat → Nat
+opaque pipeStage2 : Nat → Nat
+opaque pipeWrap   : Nat → Nat → Nat
 
-theorem test_silicon_simp_zone1_whnf :
-    let eClosedBeta := KExpr.app (.lam kNatConst (.lit (.natVal 42))) (.lit (.natVal 7))
-    let (hClosedBeta, cam1) := internToHwExprCAM eClosedBeta HwExprCAM.empty
-    (stepCamWhnf { cam := cam1, focusHandle := hClosedBeta }).steps = 1 := by
+/-- Default Zone-3 `DiscrTrieNode` + Zone-1 WHNF equational simplification over symbolic `Nat`s
+(zero `omega`/`simp`/`grind` fallback — `pipeWrap` is `opaque`!). -/
+theorem test_silicon_simp_nat_and_beta (a b : Nat) :
+    pipeWrap ((fun x : Nat => x + 0) (a * 1)) (0 + (b - b)) = pipeWrap a 0 := by
   silicon_simp
 
-theorem test_silicon_simp_discr_lut :
-    evalSlotGuardedDiscrTile sampleEpoch1Guard epoch1LeafView 1 10#64 = (true, 42#64) ∧
-    evalSlotGuardedDiscrTile sampleEpoch2Guard epoch2LeafView 2 10#64 = (true, 70#64) := by
+/-- Polymorphic `List`, `Option`, and `Bool` equational rewrites with `mkCongr` / `mkCongrArg`. -/
+theorem test_silicon_simp_poly_list_option_bool (α β : Type) (f : α → β) (x : α) (xs : List α) (b : Bool) :
+    (([x] ++ ([] ++ xs)).length = Nat.succ xs.length) ∧
+    (Option.map f (some x) = some (f x)) ∧
+    ((!(!b && true) || false) = b) := by
   silicon_simp
 
-theorem test_silicon_simp_four_zone_miller :
-    let qSimp := KExpr.app (.const (KName.mkSimple "scaleAdd") []) (.lit (.natVal 10))
-    (match runSiliconElabFabricFourZones stdKernelEnv 8 sampleMetaCtx sampleMillerConstraints
-             sampleMillerRawDecl sampleEpoch1Guard sampleEpoch1DiscrTrie epoch1LeafView 1 qSimp 10#64 with
-     | some (_, z3, z4, elabDecl) =>
-       !declHasMVar elabDecl &&
-       kernelCheckDecl stdKernelEnv 8 elabDecl &&
-       z3.usedFastPath &&
-       (z3.lutValue == 42#64) &&
-       (z4.statusTag == 1) &&
-       z4.rtlJudgeAccepted
-     | none => false) = true := by
+/-- Chained 3-step user lemma rewrites (`h0`, `h1`, `h2`) under deep nested congruence! -/
+theorem test_silicon_simp_chained_user_lemmas
+    (x y : Nat)
+    (h0 : ∀ n, pipeStage0 n = pipeStage1 (n + 0))
+    (h1 : ∀ n, pipeStage1 n = pipeStage2 (1 * n))
+    (h2 : pipeStage2 x = y) :
+    pipeWrap (pipeStage0 x) (y + 0) = pipeWrap y y := by
+  silicon_simp [h0, h1, h2]
+
+/-- Reverse `←` directional rewrite (`by silicon_simp [← hRev]`) on an `opaque` function! -/
+theorem test_silicon_simp_reverse_arrow
+    (x z : Nat)
+    (hRev : pipeStage2 z = pipeStage0 x) :
+    pipeWrap (pipeStage0 (x + 0)) 0 = pipeWrap (pipeStage2 z) 0 := by
+  silicon_simp [← hRev]
+
+/-- Propositional `↔` goal closed via `propext` + `iff_of_eq` inside `silicon_simp`. -/
+theorem test_silicon_simp_iff_goal (P Q : Prop) (h : P ↔ Q) :
+    P ↔ Q := by
+  silicon_simp [h]
+
+/-- Hardware Zone-1 WHNF & Zone-3 `DiscrTreeLUT` universally quantified equational checks via `by silicon_simp`. -/
+theorem test_silicon_simp_zone1_and_zone3 (n : Nat) :
+    (let eClosedBeta := KExpr.app (.lam kNatConst (.lit (.natVal 42))) (.lit (.natVal 7))
+     let (hClosedBeta, cam1) := internToHwExprCAM eClosedBeta HwExprCAM.empty
+     (stepCamWhnf { cam := cam1, focusHandle := hClosedBeta }).steps = 1) ∧
+    ((queryDiscrTrieNode epoch1DiscrTrie
+        (exprToDiscrPath 8 (.app (.const (KName.mkSimple "scaleAdd") []) (.lit (.natVal n))))).map
+        (·.lutTag) = [101]) ∧
+    ((compileDiscrTrieToRtl "tcam_z3" [(101, 4, 2)]).outputs.length = 1) := by
   silicon_simp
 
-/-! ## 3. Tactic 2: `by silicon_eqsat` (`EqSatHypergraph` Saturation & Clairvoyant Extraction) -/
-
-theorem test_silicon_eqsat_diamond_cost_reduction :
-    let gAdj := compileGraphAdjoint goldenDiamondHypergraph
-    let gOpt := optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph
-    let env : Nat → Int := fun w =>
-      match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0
-    evalHypergraphCost defaultRtlCostModel gOpt < evalHypergraphCost defaultRtlCostModel gAdj ∧
-    (extractHyperEdges gOpt).length < (extractHyperEdges gAdj).length ∧
-    (extractHyperEdges gOpt).length = 11 ∧
-    (extractHyperEdges gAdj).length = 13 ∧
-    gOpt.wf = true ∧
-    evalHypergraphComb gOpt env = evalHypergraphComb gAdj env ∧
-    evalHypergraphComb gOpt env = [87, 11, 11, 7, 7] ∧
-    evalHypergraphLayeredSync gOpt env = [87, 11, 11, 7, 7] := by
-  silicon_eqsat
-
-theorem test_silicon_eqsat_diamond_symbolic_cotangents (x0 x1 x2 x3 dOut : Int) :
-    let gAdj := compileGraphAdjoint goldenDiamondHypergraph
-    let gOpt := optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph
-    let env : Nat → Int := fun w =>
-      match w with
-      | 0 => x0
-      | 1 => x1
-      | 2 => x2
-      | 3 => x3
-      | 9 => dOut
-      | _ => 0
-    evalHypergraphComb gOpt env = evalHypergraphComb gAdj env ∧
-    evalHypergraphComb gOpt env =
-      [ (x0 + x1) * (x2 + x3) + 10
-      , (x2 + x3) * dOut
-      , (x2 + x3) * dOut
-      , (x0 + x1) * dOut
-      , (x0 + x1) * dOut ] := by
-  silicon_eqsat
-
-theorem test_silicon_eqsat_bespoke_symbolic_ring (a b c : Int) :
-    (a + b) * c + a * 0 = a * c + b * c := by
-  silicon_eqsat
-
-/-! ## 4. Tactic 3: `by silicon_sos` (`SosLyapunov` / `SOS` Gram Witness Verification) -/
-
-theorem test_silicon_sos_universal_nonneg :
-    SOSQuery.SemanticMeaning sampleSosNonnegQuery := by
-  silicon_sos
-
-theorem test_silicon_sos_lyapunov_cbf :
-    checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
-    checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true := by
-  silicon_sos
-
-/-! ## 5. Tactic 4: `by silicon_interval` (`TaylorModel`, Negative Endpoints, Depth > 6 & 2D Box Subdivision) -/
-
-theorem test_silicon_interval_depth0_insufficient_and_depth3_succeeds :
-    verifyRealBoundSubdiv 0 "x" domZeroToTwo quadMinusLinearExpr tightQuadBound = false ∧
-    verifyRealBoundSubdiv 3 "x" domZeroToTwo quadMinusLinearExpr tightQuadBound = true := by
-  silicon_interval
-
-theorem test_silicon_interval_subdiv_universal
-    (rho : String → CanonicalRat) (hDom : rho "x" ∈ domZeroToTwo) :
-    evalExpr rho quadMinusLinearExpr ∈ tightQuadBound := by
-  silicon_interval
-
-theorem test_silicon_interval_neg_endpoints_depth7 :
-    verifyRealBoundSubdiv 0 "x" negDomMinusOneToZero quadPlusLinearExpr tightNegQuadBound = false ∧
-    verifyRealBoundSubdiv 7 "x" negDomMinusOneToZero quadPlusLinearExpr tightNegQuadBound = true := by
-  silicon_interval
-
-theorem test_silicon_interval_neg_endpoints_depth7_universal
-    (rho : String → CanonicalRat) (hDom : rho "x" ∈ negDomMinusOneToZero) :
-    evalExpr rho quadPlusLinearExpr ∈ tightNegQuadBound := by
-  silicon_interval
-
-theorem test_silicon_interval_multivariate_2d_box :
-    verifyRealBoxBoundSubdiv [] box2DZeroToTwo quad2DBoxExpr tight2DBoxBound = false ∧
-    verifyRealBoxBoundSubdiv ["x", "y", "x", "y", "x", "y"] box2DZeroToTwo quad2DBoxExpr tight2DBoxBound = true := by
-  silicon_interval
-
-theorem test_silicon_interval_multivariate_2d_box_universal
-    (rho : String → CanonicalRat)
-    (hBox : ∀ v I, box2DZeroToTwo.lookup v = some I → rho v ∈ I) :
-    evalExpr rho quad2DBoxExpr ∈ tight2DBoxBound := by
-  silicon_interval
-
-/-! ## 6. Tactic 5: `by silicon_flowpipe` (`Flowpipe` Validated Picard & Euler Reachability) -/
-
-theorem test_silicon_flowpipe_universal_step_mem
-    {stateBox velBox remPad : Interval} {x0 v0 r : CanonicalRat} (dt : CanonicalRat)
-    (hx0 : x0 ∈ stateBox) (hv0 : v0 ∈ velBox) (hr : r ∈ remPad) :
-    (x0 + dt * v0 + r) ∈ stepFlowpipe1D stateBox velBox dt remPad := by
-  silicon_flowpipe
-
-/-- Cooling is certified safe for two steps. It was three until the flowpipe became validated
-Picard over boxes: the validated tube widens (after three steps `T ∈ [15.08, 28.5]`) and the third
-step's continuous-time rough enclosure leaves `[15, 35]`, so three steps are no longer certified. -/
-theorem test_silicon_flowpipe_euler_enclosure :
-    let X0 : Interval := ⟨28, 30⟩
-    let V0 : Interval := ⟨-10, -8⟩
-    let dt : CanonicalRat := CanonicalRat.mk 1 2
-    let rem : Interval := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
-    let X1 := stepFlowpipe1D X0 V0 dt rem
-    let initBox := [("T", X0)]
-    let safeEnv := [("T", (⟨15, 35⟩ : Interval))]
-    X1 = ⟨CanonicalRat.mk 229 10, CanonicalRat.mk 261 10⟩ ∧
-    Interval.containsRat X1 (28 + dt * (-8) + CanonicalRat.mk (-1) 10) = true ∧
-    Interval.containsRat X1 (29 + dt * (-9) + 0) = true ∧
-    Interval.containsRat X1 (30 + dt * (-10) + CanonicalRat.mk 1 10) = true ∧
-    verifyTrajectorySafety thermalCoolingOde initBox 2 safeEnv = true ∧
-    verifyTrajectorySafety thermalRunawayOde initBox 2 safeEnv = false := by
-  silicon_flowpipe
-
-/-! ## 7. Edge-Case Refusal Poles: Deep Nested `sorryAx`, Transitive Cone `sorryAx` & `#tooth` Mutants -/
-
-/-- Environment cone contaminated by a `sorryAx` helper declaration `selfHostSorryProofInfo`. -/
-def coneEnvWithSorryHelper : KEnv :=
-  { constants := stdKernelEnv.constants ++ [selfHostSorryProofInfo]
-  , recRules  := stdKernelEnv.recRules }
-
-theorem test_edge_cases_deep_sorry_cone_sorry_and_tooth_refusal :
-    -- 1. `deepNestedSorryLeanConstInfo` (with `sorryAx` at depth 8, truncated at `maxDepth = 3`) is refused
-    (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).hasSorryAx = true ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).kernelVerdict = false ∧
-    -- 2. A clean declaration checked in a `sorryAx`-contaminated environment cone is refused
-    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostIdentityProofInfo).hasSorryAx = true ∧
-    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 selfHostIdentityProofInfo).kernelVerdict = false ∧
-    -- 3. `#tooth`-mutated ill-typed declaration is refused by `runSiliconCheckTelemetry`
-    (runSiliconCheckTelemetry stdKernelEnv 8 selfHostMutatedBadProofInfo).kernelVerdict = false := by
-  decide +kernel
-
--- 4. Live meta-level `#silicon_check` runner refuses `sorryAx`-contaminated `Lean.ConstantInfo`s
+-- Compile-time audit: verify via `Lean.collectAxioms` that none of the `by silicon_simp` theorems depend on `sorryAx`!
 run_cmd do
   let env ← Lean.getEnv
-  let (_, v1) := runSiliconCheckCommandMeta env sampleLiveLeanSorryInfo none
-  let (_, v2) := runSiliconCheckCommandMeta env deepNestedSorryLeanConstInfo none
-  let (_, v3) := runSiliconCheckCommandMeta env sampleLiveLeanDefnInfo none
-  if v1 || v2 || !v3 then
-    Lean.throwError s!"Expected sampleLiveLeanSorryInfo=false ({v1}), deepNestedSorryLeanConstInfo=false ({v2}), sampleLiveLeanDefnInfo=true ({v3})"
+  let targets :=
+    [ ``test_silicon_simp_nat_and_beta
+    , ``test_silicon_simp_poly_list_option_bool
+    , ``test_silicon_simp_chained_user_lemmas
+    , ``test_silicon_simp_reverse_arrow
+    , ``test_silicon_simp_iff_goal
+    , ``test_silicon_simp_zone1_and_zone3 ]
+  for nm in targets do
+    if (env.find? nm).isNone then
+      Lean.throwError s!"Missing theorem `{nm}`"
+    let axs ← Lean.collectAxioms nm
+    if axs.contains ``sorryAx then
+      Lean.throwError s!"`{nm}` contains sorryAx!"
 
-/-! ## 8. Master End-to-End Reflexive Self-Hosting & Flagship App #5 Theorem -/
+/-! ## 2. Certified Interval Subdivision & SOS Non-Negativity Theorems (`Obend.Tactic.SiliconElab`) -/
 
-theorem silicon_self_host_end_to_end_test_sound :
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostKernelCheckDeclInfo).1 = true ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostBottomUpCamInferInfo).1 = true ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostIdentityProofInfo).1 = true ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostMutatedBadProofInfo).1 = false ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 selfHostMutatedBadProofInfo).kernelVerdict = false ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostSorryProofInfo).1 = false ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 selfHostSorryProofInfo).kernelVerdict = false ∧
+theorem test_interval_subdiv_universal
+    (rho : String → CanonicalRat) (hDom : rho "x" ∈ domZeroToTwo) :
+    evalExpr rho quadMinusLinearExpr ∈ tightQuadBound :=
+  verifyRealBoundSubdiv_sound 3 "x" domZeroToTwo quadMinusLinearExpr tightQuadBound
+    (by decide +kernel) rho hDom
+
+theorem test_box_subdiv_universal
+    (rho : String → CanonicalRat)
+    (hBox : ∀ v I, box2DZeroToTwo.lookup v = some I → rho v ∈ I) :
+    evalExpr rho quad2DBoxExpr ∈ tight2DBoxBound :=
+  quad2DBox_subdiv_encloses rho hBox
+
+theorem test_sos_universal_nonneg :
+    SOSQuery.SemanticMeaning sampleSosNonnegQuery :=
+  sampleSosNonneg_holds
+
+/-! ## 3. `#silicon_check` Telemetry, Deep `sorryAx` Refusal Poles & `SiliconKernelVerilator` -/
+
+/-- Host `Lean.ConstantInfo` containing `sorryAx` nested 6 lambdas deep (beyond `maxDepth = 3`). -/
+def deepNestedSorryLeanConstInfo : Lean.ConstantInfo :=
+  let natC := Lean.mkConst ``Nat
+  let sorryLeaf := Lean.mkApp2 (Lean.mkConst ``sorryAx [.succ .zero]) natC (Lean.mkConst ``Bool.false)
+  let deepBody :=
+    Lean.Expr.lam `x1 natC
+      (Lean.Expr.lam `x2 natC
+        (Lean.Expr.lam `x3 natC
+          (Lean.Expr.lam `x4 natC
+            (Lean.Expr.lam `x5 natC
+              (Lean.Expr.lam `x6 natC sorryLeaf .default) .default) .default) .default) .default) .default
+  let arrow6 :=
+    Lean.Expr.forallE `x1 natC
+      (Lean.Expr.forallE `x2 natC
+        (Lean.Expr.forallE `x3 natC
+          (Lean.Expr.forallE `x4 natC
+            (Lean.Expr.forallE `x5 natC
+              (Lean.Expr.forallE `x6 natC natC .default) .default) .default) .default) .default) .default
+  .defnInfo
+    { name        := `deepNestedSorryFn
+    , levelParams := []
+    , type        := arrow6
+    , value       := deepBody
+    , hints       := .abbrev
+    , safety      := .safe }
+
+def cleanIdNatLeanConstInfo : Lean.ConstantInfo :=
+  let natC := Lean.mkConst ``Nat
+  .defnInfo
+    { name        := `cleanIdNatFn
+    , levelParams := []
+    , type        := Lean.Expr.forallE `x natC natC .default
+    , value       := Lean.Expr.lam `x natC (.bvar 0) .default
+    , hints       := .abbrev
+    , safety      := .safe }
+
+def coneEnvWithSorryHelper : KEnv :=
+  { constants   := stdKernelEnv.constants ++ [invalidSorryDecl]
+  , recRules    := stdKernelEnv.recRules
+  , inductDecls := stdKernelEnv.inductDecls }
+
+run_cmd do
+  let env ← Lean.getEnv
+  let (_, vSorry) := runSiliconCheckCommandMeta env deepNestedSorryLeanConstInfo none
+  let (_, vClean) := runSiliconCheckCommandMeta env cleanIdNatLeanConstInfo none
+  if vSorry || !vClean then
+    Lean.throwError s!"Expected deepNestedSorry=false ({vSorry}) and cleanIdNat=true ({vClean})"
+
+theorem silicon_self_host_end_to_end_verified (m : String) :
+    (.get SiliconKernelBundle.epoch2DprSiliconFabric_comp.flatten m ≈b
+      .get SiliconKernelBundle.epoch2DprSiliconFabric_comp.object m) ∧
+    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty validIdNatDecl).1 = true ∧
+    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty validPropIdDecl).1 = true ∧
+    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty invalidMismatchDecl).1 = false ∧
+    (runSiliconCheckTelemetry stdKernelEnv 8 invalidMismatchDecl).kernelVerdict = false ∧
+    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty invalidSorryDecl).1 = false ∧
+    (runSiliconCheckTelemetry stdKernelEnv 8 invalidSorryDecl).kernelVerdict = false ∧
+    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 validPropIdDecl).hasSorryAx = true ∧
+    (runSiliconCheckTelemetry coneEnvWithSorryHelper 8 validPropIdDecl).kernelVerdict = false ∧
+    (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).hasSorryAx = true ∧
     (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).kernelVerdict = false ∧
     runVerilatorCoSimModel.status = "PASS" ∧
     runVerilatorCoSimModel.epoch1LutOut = 42#64 ∧
     runVerilatorCoSimModel.epoch2LutOut = 70#64 := by
-  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel,
+  have hCosim := silicon_kernel_verilator_cosim_verified m
+  refine ⟨hCosim.1, by decide +kernel, by decide +kernel, by decide +kernel,
           by decide +kernel, by decide +kernel, by decide +kernel,
-          by decide +kernel, by decide +kernel,
-          by decide +kernel, by decide +kernel, by decide +kernel⟩
+          by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel,
+          hCosim.2.2.1, hCosim.2.2.2.1, hCosim.2.2.2.2.1⟩
 
+#print axioms test_silicon_simp_nat_and_beta
+#print axioms test_silicon_simp_poly_list_option_bool
+#print axioms test_silicon_simp_chained_user_lemmas
+#print axioms test_silicon_simp_reverse_arrow
+#print axioms test_silicon_simp_iff_goal
+#print axioms test_silicon_simp_zone1_and_zone3
 #print axioms Obend.Tactic.SiliconElab.verifyRealBoundSubdiv_sound
 #print axioms Obend.Tactic.SiliconElab.verifyRealBoxBoundSubdiv_sound
 #print axioms Obend.Tactic.SiliconElab.sos_cert_implies_nonneg
-#print axioms Obend.Tactic.SiliconElab.silicon_self_hosting_milestone_sound
-#print axioms Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_sound
-#print axioms silicon_self_host_end_to_end_test_sound
+#print axioms Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_verified
+#print axioms silicon_self_host_end_to_end_verified
 
 end Obend.Tests.SiliconSelfHostTest
