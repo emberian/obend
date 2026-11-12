@@ -405,25 +405,41 @@ theorem judge_certifies_epsilon_optimal (m : Market) (orders : List Order)
           omega
   · contradiction
 
+/-- Declarative primal-dual LP clearing specification:
+    1. Distinct order accounts (`(q.orders.map Order.account).Nodup`), and
+    2. Certified fills are ε-optimal over EVERY feasible circulation `f'` on the order book. -/
+def ClearingSemanticMeaning (q : ClearingQuery) (c : Certificate) : Prop :=
+  (q.orders.map (·.account)).Nodup ∧
+  let n := q.orders.length
+  let A : Fin n → Int := fun i => match (q.orders.get i).side with | .bid => 1 | .ask => -1
+  let cap : Fin n → Int := fun i => if (q.orders.get i).crosses c.price then ((q.orders.get i).qty : Int) else 0
+  let f : Fin n → Int := fun i => (q.orders.get i).fill q.market q.transfers
+  ∀ (f' : Fin n → Int),
+    finSum n (fun i => A i * f' i) = 0 →
+    (∀ i, 0 ≤ f' i) →
+    (∀ i, f' i ≤ cap i) →
+    finSum n f' ≤ finSum n f + (q.market.epsilon : Int)
+
 /-- Full Judge instance registration for Obend runtime. -/
 instance drexClearingJudge : Judge ClearingQuery Certificate where
   Clause := ClearingRefusal
-  Meaning q c := judge q.market q.orders q.transfers c = .ok ()
+  Meaning := ClearingSemanticMeaning
   check _ q c :=
     match judge q.market q.orders q.transfers c with
     | .ok () => .ok
     | .error r => .refused r []
   sound := by
-    intro r q c h
+    intro _ q c h
     split at h
     · rename_i hu
-      exact hu
+      exact ⟨judge_ok_accounts_nodup q.market q.orders q.transfers c hu,
+        judge_certifies_epsilon_optimal q.market q.orders q.transfers c hu⟩
     · contradiction
   refutes _ := false
   refuted := by intro _ _ _ _ _ _ h; cases h
   Fragment q := ∃ c, judge q.market q.orders q.transfers c = .ok ()
   complete := by
-    intro o _ ⟨c, hc⟩
+    intro o ⟨c, hc⟩ _
     refine ⟨c, 0, ?_⟩
     simp [hc]
   mono := by intro _ _ _ _ _ _; rfl

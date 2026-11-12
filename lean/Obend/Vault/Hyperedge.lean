@@ -153,13 +153,18 @@ theorem holds_of_pin_agrees {s₀ s : VaultStore} {fp : Footprint}
 /-- A signed asset balance adjustment `(asset, delta)` attached to a `CellDelta`. -/
 abbrev HalfEdge := String × Int
 
+/-- Lightweight turn-ID tag attached to a `CellDelta` leg (e.g. by lowered form/move compilers). -/
+inductive LegTurnTag where
+  | byLoweredDecider (label : String) (pins : List FootprintPin) (turnId : ByteArray)
+
 structure CellDelta where
   cell : String
   preState : Data
   postState : Data
   touchedFields : List String := []
   halfEdges : List HalfEdge := []
-  cert : Option ContractCert := none
+  boundTurnId : ByteArray := ByteArray.empty
+  cert : Option LegTurnTag := none
 
 /-- Compute the net balance change for a specific asset in a single cell delta. -/
 def deltaAsset (d : CellDelta) (asset : String) : Int :=
@@ -186,7 +191,7 @@ def turnRequest (turnId : ByteArray) (occasion : Data) (cell : String) : Data :=
 def legTurnId (d : CellDelta) : ByteArray :=
   match d.cert with
   | some (.byLoweredDecider _ _ r) => r
-  | _ => ByteArray.empty
+  | none => d.boundTurnId
 
 /-- External judge witness cited by a `VaultTurn`. -/
 structure TurnWitness where
@@ -307,10 +312,10 @@ legs report no half-edges (so `balanced` holds), and the write cells are checked
 `Obend.FFI.Bridge.turnCommitCore` builds every committed turn through it, with the woven judge
 witnesses in `witnesses`, and checks them with `checkTurnWitness`. -/
 
-/-- A write leg whose contract certificate carries the turn id (`legTurnId_witnessLeg`). -/
+/-- A write leg bound to the turn apex `tid` (`legTurnId_witnessLeg`). -/
 def witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) : CellDelta :=
   { cell := cell, preState := pre, postState := post,
-    cert := some (.byLoweredDecider "turn-leg" [] tid) }
+    boundTurnId := tid }
 
 theorem legTurnId_witnessLeg (tid : ByteArray) (cell : String) (pre post : Data) :
     legTurnId (witnessLeg tid cell pre post) = tid := rfl
@@ -382,6 +387,8 @@ theorem VaultTurn.ofWitnessLegs_witness_clause {formats : List Obend.Judge.Forma
     ∀ w ∈ turn.witnesses, ∃ F,
       findJudgeFormat formats w.formatName w.version = some F ∧
       F.checkBytes w.grade w.objBytes w.certBytes = .ok := by
+  have ⟨_, _, _, hwit⟩ := VaultTurn.ofWitnessLegs_fields h
+  rw [hwit] at hall ⊢
   intro w hw
   exact checkTurnWitness_sound (List.all_eq_true.mp hall w hw)
 

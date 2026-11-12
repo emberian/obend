@@ -27,6 +27,7 @@ Integrates the inner-system verification mechanisms from `Dregg2` (`CfgCompact`,
    and registered `Obend.Judge.Format` (`"dclutch-hoard-clearing"` v`"1"`).
 -/
 
+public import Lean.Data.Json
 public import Obend.Judge.Class
 public import Obend.Judge.Clearing
 public import Obend.Slot.Protocol
@@ -36,6 +37,7 @@ public import Obend.Leaf.Emit
 @[expose] public section
 namespace Obend.Judge
 
+open Lean (Json toJson)
 open Obend.Core.Term
 open Obend.Slot.Protocol
 open Obend.Leaf
@@ -454,15 +456,6 @@ theorem dfaAccepts_confinementDfa_eq (tokens : List String) :
   rw [confinementDfa_classifyFrom_zero]
   cases tokens.any isControlToken <;> rfl
 
-/-- Complement guard `InjectionFree`: a token sequence is injection-free iff the complement
-    confinement automaton `confinementDfa` accepts it (no control tokens occur). -/
-def InjectionFree (tokens : List String) : Prop :=
-  dfaAccepts confinementDfa tokens = true
-
-theorem injectionFree_iff_dfaAccepts (tokens : List String) :
-    InjectionFree tokens ↔ dfaAccepts confinementDfa tokens = true :=
-  Iff.rfl
-
 theorem list_any_eq_false_iff {α : Type} (p : α → Bool) (l : List α) :
     l.any p = false ↔ ∀ x ∈ l, p x = false := by
   induction l with
@@ -479,8 +472,13 @@ theorem list_any_eq_false_iff {α : Type} (p : α → Bool) (l : List α) :
     · intro h
       exact ⟨h a List.mem_cons_self, fun x hx => h x (List.mem_cons_of_mem a hx)⟩
 
-theorem injectionFree_iff_forall (tokens : List String) :
-    InjectionFree tokens ↔ ∀ tok ∈ tokens, isControlToken tok = false := by
+/-- Declarative complement guard `InjectionFree`: no token in `tokens` is a reserved
+    control or delimiter token (`isControlToken tok = false`). -/
+def InjectionFree (tokens : List String) : Prop :=
+  ∀ tok ∈ tokens, isControlToken tok = false
+
+theorem injectionFree_iff_dfaAccepts (tokens : List String) :
+    InjectionFree tokens ↔ dfaAccepts confinementDfa tokens = true := by
   unfold InjectionFree
   rw [dfaAccepts_confinementDfa_eq, Bool.not_eq_true', list_any_eq_false_iff]
 
@@ -512,8 +510,8 @@ theorem filter_isControlToken_eq_nil_iff (tokens : List String) :
         cases this
 
 theorem injectionFree_iff_controlTokens_nil (tokens : List String) :
-    InjectionFree tokens ↔ controlTokens tokens = [] := by
-  rw [injectionFree_iff_forall, filter_isControlToken_eq_nil_iff]
+    InjectionFree tokens ↔ controlTokens tokens = [] :=
+  (filter_isControlToken_eq_nil_iff tokens).symm
 
 /-- Object for the DFA confinement & trace-commitment judge. -/
 structure DfaConfinementQuery where
@@ -553,12 +551,16 @@ def verifyDfaConfinement (q : DfaConfinementQuery) (c : DfaConfinementCert) :
         | false => .error (.digestMismatch (runningDigest q.dfa q.tableSeed c.tokens) c.claimedDigest)
         | true => .ok ()
 
+/-- Declarative semantic specification for `dfaConfinementJudge`. -/
+def DfaConfinementMeaning (q : DfaConfinementQuery) (c : DfaConfinementCert) : Prop :=
+  dfaAccepts q.dfa c.tokens = true ∧
+  dfaClassify q.dfa c.tokens = q.expectedFinalState ∧
+  runningDigest q.dfa q.tableSeed c.tokens = c.claimedDigest ∧
+  (q.requireInjectionFree = true → InjectionFree c.tokens)
+
 theorem verifyDfaConfinement_sound {q : DfaConfinementQuery} {c : DfaConfinementCert}
     (h : verifyDfaConfinement q c = .ok ()) :
-    dfaAccepts q.dfa c.tokens = true ∧
-    dfaClassify q.dfa c.tokens = q.expectedFinalState ∧
-    runningDigest q.dfa q.tableSeed c.tokens = c.claimedDigest ∧
-    (q.requireInjectionFree = true → InjectionFree c.tokens) := by
+    DfaConfinementMeaning q c := by
   unfold verifyDfaConfinement at h
   cases h1 : (q.requireInjectionFree && !dfaAccepts confinementDfa c.tokens) <;> rw [h1] at h
   · cases h2 : dfaAccepts q.dfa c.tokens <;> rw [h2] at h
@@ -567,9 +569,9 @@ theorem verifyDfaConfinement_sound {q : DfaConfinementQuery} {c : DfaConfinement
       · cases h
       · cases h4 : (runningDigest q.dfa q.tableSeed c.tokens == c.claimedDigest) <;> rw [h4] at h
         · cases h
-        · refine ⟨rfl, beq_iff_eq.mp h3, beq_iff_eq.mp h4, ?_⟩
+        · refine ⟨h2, beq_iff_eq.mp h3, beq_iff_eq.mp h4, ?_⟩
           intro hReq
-          unfold InjectionFree
+          apply (injectionFree_iff_dfaAccepts c.tokens).mpr
           cases hConf : dfaAccepts confinementDfa c.tokens
           · rw [hReq, hConf] at h1
             cases h1
@@ -586,19 +588,21 @@ def dfaConfinementCheck (_ : Nat) (q : DfaConfinementQuery) (c : DfaConfinementC
 /-- `Judge` instance for `DfaConfinementQuery` and `DfaConfinementCert`. -/
 instance dfaConfinementJudge : Judge DfaConfinementQuery DfaConfinementCert where
   Clause := DfaRefusal
-  Meaning q c := verifyDfaConfinement q c = .ok ()
+  Meaning := DfaConfinementMeaning
   check := dfaConfinementCheck
   sound := by
     intro _ q c h
     unfold dfaConfinementCheck at h
     cases hVer : verifyDfaConfinement q c with
-    | ok u => cases u; rfl
+    | ok u =>
+      cases u
+      exact verifyDfaConfinement_sound hVer
     | error r => rw [hVer] at h; cases h
   refutes _ := false
   refuted := by intro _ _ _ _ _ _ h; cases h
   Fragment q := ∃ c, verifyDfaConfinement q c = .ok ()
   complete := by
-    intro _ _ ⟨c, hc⟩
+    intro _ ⟨c, hc⟩ _
     refine ⟨c, 0, ?_⟩
     unfold dfaConfinementCheck
     rw [hc]
@@ -630,28 +634,64 @@ theorem badCert_refused :
       .refused (.injectionDetected "{{") [] :=
   rfl
 
-/-- Constructive wire encoder for `DfaConfinementCert`. -/
+/-- Encode `TableDfa` to `Lean.Json`. -/
+def tableDfaToJson (d : TableDfa) : Json :=
+  Json.mkObj
+    [ ("start", toJson d.start)
+    , ("accepting", Json.arr (d.accepting.map toJson).toArray)
+    , ("transitions", Json.arr (d.transitions.map fun ((q, tok), nxt) =>
+        Json.mkObj [("state", toJson q), ("token", Json.str tok), ("next", toJson nxt)]).toArray)
+    , ("stateDefaults", Json.arr (d.stateDefaults.map fun (q, nxt) =>
+        Json.mkObj [("state", toJson q), ("next", toJson nxt)]).toArray)
+    , ("defaultSink", toJson d.defaultSink) ]
+
+/-- Parse `TableDfa` from `Lean.Json`. -/
+def tableDfaOfJson (j : Json) : Except String TableDfa := do
+  let start ← j.getObjValAs? Nat "start"
+  let accepting ← (← (← j.getObjVal? "accepting").getArr?).toList.mapM (·.getNat?)
+  let trArr ← (← j.getObjVal? "transitions").getArr?
+  let transitions ← trArr.toList.mapM fun item => do
+    let q ← item.getObjValAs? Nat "state"
+    let tok ← item.getObjValAs? String "token"
+    let nxt ← item.getObjValAs? Nat "next"
+    pure ((q, tok), nxt)
+  let defArr ← (← j.getObjVal? "stateDefaults").getArr?
+  let stateDefaults ← defArr.toList.mapM fun item => do
+    let q ← item.getObjValAs? Nat "state"
+    let nxt ← item.getObjValAs? Nat "next"
+    pure (q, nxt)
+  let defaultSink ← j.getObjValAs? Nat "defaultSink"
+  pure { start, accepting, transitions, stateDefaults, defaultSink }
+
+/-- Encode `DfaConfinementQuery` as canonical JSON wire string. -/
+def encodeDfaQuery (q : DfaConfinementQuery) : String :=
+  Json.compress <| Json.mkObj
+    [ ("dfa", tableDfaToJson q.dfa)
+    , ("tableSeed", toJson q.tableSeed)
+    , ("expectedFinalState", toJson q.expectedFinalState)
+    , ("requireInjectionFree", toJson q.requireInjectionFree) ]
+
+/-- Encode `DfaConfinementCert` as canonical JSON wire string. -/
 def encodeDfaCert (c : DfaConfinementCert) : String :=
-  if c.tokens == goodDfaCert.tokens && c.claimedDigest == goodDfaCert.claimedDigest then "good"
-  else if c.tokens == badCert.tokens && c.claimedDigest == badCert.claimedDigest then "bad"
-  else if c.tokens == [] && c.claimedDigest == 7 then "7:"
-  else "999:hello,world,safe_payload"
+  Json.compress <| Json.mkObj
+    [ ("tokens", Json.arr (c.tokens.map Json.str).toArray)
+    , ("claimedDigest", toJson c.claimedDigest) ]
 
-/-- Canonical decoder for `DfaConfinementQuery` supporting presets and `"<seed>:<expected>:<req>"`. -/
-def decodeDfaQuery (s : String) : Except String DfaConfinementQuery :=
-  if s == "default" || s == "7:0:1" || s == "" then .ok defaultDfaQuery
-  else if s == "non-injection-free" || s == "7:0:0" then .ok { defaultDfaQuery with requireInjectionFree := false }
-  else if s == "mismatch-state" || s == "7:1:1" then .ok { defaultDfaQuery with expectedFinalState := 1 }
-  else .error "unsupported DfaConfinementQuery encoding"
+/-- Parse `DfaConfinementQuery` from JSON wire string. -/
+def decodeDfaQuery (s : String) : Except String DfaConfinementQuery := do
+  let j ← Json.parse s
+  let dfa ← tableDfaOfJson (← j.getObjVal? "dfa")
+  let tableSeed ← j.getObjValAs? Nat "tableSeed"
+  let expectedFinalState ← j.getObjValAs? Nat "expectedFinalState"
+  let requireInjectionFree ← j.getObjValAs? Bool "requireInjectionFree"
+  pure { dfa, tableSeed, expectedFinalState, requireInjectionFree }
 
-/-- Canonical decoder for `DfaConfinementCert` supporting presets and `"<digest>:<tok1>,<tok2>,..."`. -/
-def decodeDfaCert (s : String) : Except String DfaConfinementCert :=
-  if s == "good" || s == "default" || s == "" then .ok goodDfaCert
-  else if s == "bad" then .ok badCert
-  else if s == "empty" || s == "7:" then .ok { tokens := [], claimedDigest := 7 }
-  else if s == "tampered-digest" || s == "999:hello,world,safe_payload" then
-    .ok { goodDfaCert with claimedDigest := 999 }
-  else .error "unsupported DfaConfinementCert encoding"
+/-- Parse `DfaConfinementCert` from JSON wire string. -/
+def decodeDfaCert (s : String) : Except String DfaConfinementCert := do
+  let j ← Json.parse s
+  let tokens ← (← (← j.getObjVal? "tokens").getArr?).toList.mapM (·.getStr?)
+  let claimedDigest ← j.getObjValAs? Nat "claimedDigest"
+  pure { tokens, claimedDigest }
 
 /-- Registered `Obend.Judge.Format` for `dfa-confinement` v`1`. -/
 def dfaFormat : Judge.Format where
@@ -879,26 +919,35 @@ def cfgCompactCheck (_ : Nat) (q : CfgCompactQuery) (c : CfgCompactCert) :
   | .ok () => .ok
   | .error r => .refused r []
 
+/-- Declarative semantic specification for `cfgCompactJudge`:
+    both pushdown replay from `[.nonterminal q.grammar.start]` and multi-step CFG derivation
+    `CfgDerives q.grammar [.nonterminal q.grammar.start] (q.input.map .terminal)` hold. -/
+def CfgCompactMeaning (q : CfgCompactQuery) (c : CfgCompactCert) : Prop :=
+  PushdownReplay q.grammar c.rules q.input [.nonterminal q.grammar.start] ∧
+  CfgDerives q.grammar [.nonterminal q.grammar.start] (q.input.map .terminal)
+
 /-- `Judge` instance for $O(\text{tokens})$ compact CFG replay. -/
 instance cfgCompactJudge : Judge CfgCompactQuery CfgCompactCert where
   Clause := CfgRefusal
-  Meaning (q : CfgCompactQuery) (c : CfgCompactCert) :=
-    replayCfgCompact q.grammar c.rules q.input = .ok ()
+  Meaning := CfgCompactMeaning
   check := cfgCompactCheck
   sound := by
     intro _ q c h
     unfold cfgCompactCheck at h
     cases hVer : replayCfgCompact q.grammar c.rules q.input with
-    | ok u => cases u; rfl
+    | ok u =>
+      cases u
+      exact replayCfgCompact_sound q.grammar c.rules q.input hVer
     | error r => rw [hVer] at h; cases h
   refutes _ := false
   refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment (q : CfgCompactQuery) := ∃ (c : CfgCompactCert), replayCfgCompact q.grammar c.rules q.input = .ok ()
+  Fragment (q : CfgCompactQuery) :=
+    ∃ (c : CfgCompactCert), PushdownReplay q.grammar c.rules q.input [.nonterminal q.grammar.start]
   complete := by
-    intro _ _ ⟨c, hc⟩
+    intro q ⟨c, hc⟩ _
     refine ⟨c, 0, ?_⟩
     unfold cfgCompactCheck
-    rw [hc]
+    rw [replayCfgCompact_complete q.grammar hc]
   mono := by intro _ _ _ _ _ _; rfl
 
 /-- Reference structured API / JSON transcript grammar:
@@ -941,55 +990,66 @@ theorem badCfgCert_refused :
       .refused (.missingRuleFor "S") [] :=
   rfl
 
-/-- Parse a single named `CfgRule` from `transcriptCfg`. -/
-def parseCfgRuleName (s : String) : Option CfgRule :=
-  if s == "rEnvelope" then some rEnvelope
-  else if s == "rArray" then some rArray
-  else if s == "rString" then some rString
-  else if s == "forged" then some { lhs := "S", rhs := [.terminal "{{"] }
-  else none
+/-- Encode `CfgSym` to `Lean.Json`. -/
+def cfgSymToJson : CfgSym → Json
+  | .terminal tok => Json.mkObj [("terminal", Json.str tok)]
+  | .nonterminal nt => Json.mkObj [("nonterminal", Json.str nt)]
 
-/-- Render a `CfgRule` from `transcriptCfg` to its canonical identifier. -/
-def encodeCfgRuleName (r : CfgRule) : String :=
-  if r.lhs == "S" && r.rhs.length == 5 then "rEnvelope"
-  else if r.lhs == "Val" && r.rhs.length == 3 then "rArray"
-  else if r.lhs == "Val" && r.rhs.length == 1 then "rString"
-  else "forged"
+/-- Parse `CfgSym` from `Lean.Json`. -/
+def cfgSymOfJson (j : Json) : Except String CfgSym := do
+  match j.getObjValAs? String "terminal" with
+  | .ok tok => pure (.terminal tok)
+  | .error _ =>
+    let nt ← j.getObjValAs? String "nonterminal"
+    pure (.nonterminal nt)
 
-/-- Constructive wire encoder for `CfgCompactCert`. -/
+/-- Encode `CfgRule` to `Lean.Json`. -/
+def cfgRuleToJson (r : CfgRule) : Json :=
+  Json.mkObj
+    [ ("lhs", Json.str r.lhs)
+    , ("rhs", Json.arr (r.rhs.map cfgSymToJson).toArray) ]
+
+/-- Parse `CfgRule` from `Lean.Json`. -/
+def cfgRuleOfJson (j : Json) : Except String CfgRule := do
+  let lhs ← j.getObjValAs? String "lhs"
+  let rhs ← (← (← j.getObjVal? "rhs").getArr?).toList.mapM cfgSymOfJson
+  pure { lhs, rhs }
+
+/-- Encode `CfgGrammar` to `Lean.Json`. -/
+def cfgGrammarToJson (g : CfgGrammar) : Json :=
+  Json.mkObj
+    [ ("start", Json.str g.start)
+    , ("rules", Json.arr (g.rules.map cfgRuleToJson).toArray) ]
+
+/-- Parse `CfgGrammar` from `Lean.Json`. -/
+def cfgGrammarOfJson (j : Json) : Except String CfgGrammar := do
+  let start ← j.getObjValAs? String "start"
+  let rules ← (← (← j.getObjVal? "rules").getArr?).toList.mapM cfgRuleOfJson
+  pure { start, rules }
+
+/-- Encode `CfgCompactQuery` as canonical JSON wire string. -/
+def encodeCfgQuery (q : CfgCompactQuery) : String :=
+  Json.compress <| Json.mkObj
+    [ ("grammar", cfgGrammarToJson q.grammar)
+    , ("input", Json.arr (q.input.map Json.str).toArray) ]
+
+/-- Encode `CfgCompactCert` as canonical JSON wire string. -/
 def encodeCfgCert (c : CfgCompactCert) : String :=
-  let names := c.rules.map encodeCfgRuleName
-  if names == ["rEnvelope", "rArray", "rString"] then "rEnvelope,rArray,rString"
-  else if names == ["rEnvelope", "rArray", "rArray", "rString"] then "rEnvelope,rArray,rArray,rString"
-  else if names == ["rEnvelope", "rArray", "rString", "rString"] then "rEnvelope,rArray,rString,rString"
-  else if names == ["rArray"] then "rArray"
-  else if names == ["forged"] then "forged"
-  else if names == [] then "bad"
-  else "unsupported"
+  Json.compress <| Json.mkObj
+    [ ("rules", Json.arr (c.rules.map cfgRuleToJson).toArray) ]
 
-/-- Canonical decoder for `CfgCompactQuery` supporting presets and `"tokens:<t1>,<t2>,..."`. -/
-def decodeCfgQuery (s : String) : Except String CfgCompactQuery :=
-  if s == "default" || s == "tokens:{,msg,:,[,\"ok\",],}" || s == "" then .ok sampleCfgQuery
-  else if s == "nested" || s == "tokens:{,msg,:,[,[,\"ok\",],],}" then
-    .ok { grammar := transcriptCfg, input := ["{", "msg", ":", "[", "[", "\"ok\"", "]", "]", "}"] }
-  else if s == "terminal-mismatch" || s == "tokens:{,msg,:,[,{{,],}" then
-    .ok { grammar := transcriptCfg, input := ["{", "msg", ":", "[", "{{", "]", "}"] }
-  else if s == "unconsumed-input" || s == "tokens:{,msg,:,[,\"ok\",],},extra" then
-    .ok { grammar := transcriptCfg, input := ["{", "msg", ":", "[", "\"ok\"", "]", "}", "extra"] }
-  else .error "unsupported CfgCompactQuery encoding"
+/-- Parse `CfgCompactQuery` from JSON wire string. -/
+def decodeCfgQuery (s : String) : Except String CfgCompactQuery := do
+  let j ← Json.parse s
+  let grammar ← cfgGrammarOfJson (← j.getObjVal? "grammar")
+  let input ← (← (← j.getObjVal? "input").getArr?).toList.mapM (·.getStr?)
+  pure { grammar, input }
 
-/-- Canonical decoder for `CfgCompactCert` supporting presets and comma-separated rule lists. -/
-def decodeCfgCert (s : String) : Except String CfgCompactCert :=
-  if s == "good" || s == "default" || s == "rEnvelope,rArray,rString" then .ok goodCfgCert
-  else if s == "bad" || s == "" then .ok badCfgCert
-  else if s == "nested" || s == "rEnvelope,rArray,rArray,rString" then
-    .ok { rules := [rEnvelope, rArray, rArray, rString] }
-  else if s == "lhs-mismatch" || s == "rArray" then .ok { rules := [rArray] }
-  else if s == "unknown-rule" || s == "forged" then
-    .ok { rules := [{ lhs := "S", rhs := [.terminal "{{"] }] }
-  else if s == "unconsumed-rules" || s == "rEnvelope,rArray,rString,rString" then
-    .ok { rules := [rEnvelope, rArray, rString, rString] }
-  else .error "unsupported CfgCompactCert encoding"
+/-- Parse `CfgCompactCert` from JSON wire string. -/
+def decodeCfgCert (s : String) : Except String CfgCompactCert := do
+  let j ← Json.parse s
+  let rules ← (← (← j.getObjVal? "rules").getArr?).toList.mapM cfgRuleOfJson
+  pure { rules }
 
 /-- Registered `Obend.Judge.Format` for `cfg-compact` v`1`. -/
 def cfgCompactFormat : Judge.Format where
@@ -1043,15 +1103,15 @@ def allSlotsCleanB (b : String → List String) (T : PromptTemplate) : Bool :=
 
 theorem allSlotsCleanB_iff (b : String → List String) (T : PromptTemplate) :
     allSlotsCleanB b T = true ↔ AllSlotsClean b T := by
-  unfold allSlotsCleanB AllSlotsClean InjectionFree
+  unfold allSlotsCleanB AllSlotsClean
   rw [List.all_eq_true]
   constructor
   · intro h name hmem
-    exact h (.slot name) hmem
+    exact (injectionFree_iff_dfaAccepts (b name)).mpr (h (.slot name) hmem)
   · intro h seg hmem
     cases seg with
     | lit _ => rfl
-    | slot name => exact h name hmem
+    | slot name => exact (injectionFree_iff_dfaAccepts (b name)).mp (h name hmem)
 
 /-- **Slot Confinement Theorem (`slot_confinement`)**:
     When every untrusted slot filling in `T` passes the `InjectionFree` complement DFA guard
@@ -1730,18 +1790,22 @@ def verifyDclutchHoardClearing (s : HoardMarketState) (c : JointClearingCert) :
           | false => .error (.quoteBackingMismatch (collectedQuote c c.fills) ((c.scale : Int) * c.sets))
           | true => .ok ()
 
-/-- Bridge theorem: any `(s, c)` accepted by `verifyDclutchHoardClearing` satisfies:
-    1. `HoardCollateralInvariant s` before clearing and `HoardCollateralInvariant (applyCompleteSetDelta s c.sets)` after clearing,
+/-- Declarative semantic specification for `dclutchHoardJudge`:
+    1. `HoardCollateralInvariant s` holds pre-clearing and post-clearing,
     2. `c.prices.sum = c.scale` (simplex price normalization),
     3. `collectedQuote c c.fills = (c.scale : Int) * c.sets` (exact Hoard set funding),
-    4. `∀ f ∈ c.fills, 0 < f.lots → f.order.perLotDebit c ≤ f.order.limit` (`filled_at_or_better`). -/
+    4. Every filled order executes at or better than its limit (`perLotDebit ≤ limit`). -/
+def DclutchHoardMeaning (s : HoardMarketState) (c : JointClearingCert) : Prop :=
+  HoardCollateralInvariant s ∧
+  HoardCollateralInvariant (applyCompleteSetDelta s c.sets) ∧
+  c.prices.sum = c.scale ∧
+  collectedQuote c c.fills = (c.scale : Int) * c.sets ∧
+  (∀ f ∈ c.fills, 0 < f.lots → f.order.perLotDebit c ≤ f.order.limit)
+
+/-- Bridge theorem: any `(s, c)` accepted by `verifyDclutchHoardClearing` satisfies `DclutchHoardMeaning s c`. -/
 theorem verifyDclutchHoardClearing_sound {s : HoardMarketState} {c : JointClearingCert}
     (h : verifyDclutchHoardClearing s c = .ok ()) :
-    HoardCollateralInvariant s ∧
-    HoardCollateralInvariant (applyCompleteSetDelta s c.sets) ∧
-    c.prices.sum = c.scale ∧
-    collectedQuote c c.fills = (c.scale : Int) * c.sets ∧
-    (∀ f ∈ c.fills, 0 < f.lots → f.order.perLotDebit c ≤ f.order.limit) := by
+    DclutchHoardMeaning s c := by
   unfold verifyDclutchHoardClearing at h
   cases h1 : hoardCollateralValid s <;> rw [h1] at h
   · cases h
@@ -1767,25 +1831,27 @@ def dclutchHoardCheck (_ : Nat) (s : HoardMarketState) (c : JointClearingCert) :
 
 /-- `Judge` instance for `dclutch` Hoard complete-set & joint KKT clearing.
     Note: `.hoardInvariantViolated` is a genuine universal refutation (`refutes = true`)
-    because an under-collateralized `HoardMarketState` cannot be cleared by any certificate `c'`. -/
+    because an under-collateralized `HoardMarketState` cannot satisfy `HoardCollateralInvariant s`. -/
 instance dclutchHoardJudge : Judge HoardMarketState JointClearingCert where
   Clause := DclutchHoardRefusal
-  Meaning s c := verifyDclutchHoardClearing s c = .ok ()
+  Meaning := DclutchHoardMeaning
   check := dclutchHoardCheck
   sound := by
     intro _ s c h
     unfold dclutchHoardCheck at h
     cases hVer : verifyDclutchHoardClearing s c with
-    | ok u => cases u; rfl
+    | ok u =>
+      cases u
+      exact verifyDclutchHoardClearing_sound hVer
     | error r => rw [hVer] at h; cases h
   refutes
     | .hoardInvariantViolated => true
     | _ => false
   refuted := by
-    intro _ s c k p h hk c' hMean
+    intro _ s c k _ h hk _ hMean
     cases k <;> try cases hk
     have hInvC' : hoardCollateralValid s = true :=
-      (hoardCollateralValid_iff s).mpr (verifyDclutchHoardClearing_sound hMean).1
+      (hoardCollateralValid_iff s).mpr hMean.1
     unfold dclutchHoardCheck verifyDclutchHoardClearing at h
     rw [hInvC'] at h
     cases h2 : (s.outcomes == c.outcomeCount) <;> rw [h2] at h
@@ -1797,7 +1863,7 @@ instance dclutchHoardJudge : Judge HoardMarketState JointClearingCert where
       · cases h
   Fragment s := ∃ c, verifyDclutchHoardClearing s c = .ok ()
   complete := by
-    intro _ _ ⟨c, hc⟩
+    intro _ ⟨c, hc⟩ _
     refine ⟨c, 0, ?_⟩
     unfold dclutchHoardCheck
     rw [hc]
@@ -1849,61 +1915,69 @@ theorem badHoardClearingCert_refused :
       .refused .invalidKktClearing [] :=
   rfl
 
-/-- Constructive wire encoder for `HoardMarketState`: `"<outcomes>:<hoard>:<s0>,<s1>,..."`. -/
+/-- Encode `HoardMarketState` as canonical JSON wire string. -/
 def encodeHoardState (s : HoardMarketState) : String :=
-  if s.outcomes == 2 && s.hoard == 10 && s.supply == [10, 10] then "2:10:10,10"
-  else if s.outcomes == 3 && s.hoard == 5 && s.supply == [5, 5, 5] then "3:5:5,5,5"
-  else if s.outcomes == 2 && s.hoard == 5 && s.supply == [10, 10] then "2:5:10,10"
-  else "unsupported"
+  Json.compress <| Json.mkObj
+    [ ("outcomes", toJson s.outcomes)
+    , ("hoard", toJson s.hoard)
+    , ("supply", Json.arr (s.supply.map toJson).toArray) ]
 
-/-- Canonical decoder for `HoardMarketState` supporting presets and `"<outcomes>:<hoard>:<s0>,<s1>,..."`. -/
-def decodeHoardState (s : String) : Except String HoardMarketState :=
-  if s == "default" || s == "2:10:10,10" || s == "" then .ok sampleHoardState
-  else if s == "three-outcome" || s == "3:5:5,5,5" then
-    .ok { outcomes := 3, hoard := 5, supply := [5, 5, 5] }
-  else if s == "undercollateralized" || s == "2:5:10,10" then
-    .ok { outcomes := 2, hoard := 5, supply := [10, 10] }
-  else .error "unsupported HoardMarketState encoding"
+/-- Parse `HoardMarketState` from JSON wire string. -/
+def decodeHoardState (s : String) : Except String HoardMarketState := do
+  let j ← Json.parse s
+  let outcomes ← j.getObjValAs? Nat "outcomes"
+  let hoard ← j.getObjValAs? Nat "hoard"
+  let supply ← (← (← j.getObjVal? "supply").getArr?).toList.mapM (·.getNat?)
+  pure { outcomes, hoard, supply }
 
-/-- Canonical decoder for `JointClearingCert` supporting presets and `"<outcomeCount>:<scale>:<sets>:<p0>,<p1>,..."`. -/
-def decodeJointClearingCert (s : String) : Except String JointClearingCert :=
-  if s == "good" || s == "default" || s == "" then .ok goodHoardClearingCert
-  else if s == "bad" then .ok badHoardClearingCert
-  else if s == "three-outcome" then
-    .ok {
-      outcomeCount := 3
-      scale := 100
-      prices := [30, 30, 40]
-      fills := [
-        { order := mkOutcomeBuy 10 0 2 35 3, lots := 2 },
-        { order := mkOutcomeBuy 11 1 2 35 3, lots := 2 },
-        { order := mkOutcomeBuy 12 2 2 45 3, lots := 2 }
-      ]
-      sets := 2
-    }
-  else if s == "limit-violated" then
-    .ok {
-      outcomeCount := 2
-      scale := 100
-      prices := [50, 50]
-      fills := [
-        { order := mkOutcomeBuy 1 0 1 40 2, lots := 1 },
-        { order := mkOutcomeBuy 2 1 1 60 2, lots := 1 }
-      ]
-      sets := 1
-    }
-  else if s == "duplicate-id" then
-    .ok {
-      outcomeCount := 2
-      scale := 100
-      prices := [50, 50]
-      fills := [
-        { order := mkOutcomeBuy 1 0 1 60 2, lots := 1 },
-        { order := mkOutcomeBuy 1 1 1 60 2, lots := 1 }
-      ]
-      sets := 1
-    }
-  else .error "unsupported JointClearingCert encoding"
+/-- Encode `JointOrder` to `Lean.Json`. -/
+def jointOrderToJson (o : JointOrder) : Json :=
+  Json.mkObj
+    [ ("orderId", toJson o.orderId)
+    , ("receivePerLot", Json.arr (o.receivePerLot.map toJson).toArray)
+    , ("deliverPerLot", Json.arr (o.deliverPerLot.map toJson).toArray)
+    , ("quantity", toJson o.quantity)
+    , ("limit", toJson o.limit) ]
+
+/-- Parse `JointOrder` from `Lean.Json`. -/
+def jointOrderOfJson (j : Json) : Except String JointOrder := do
+  let orderId ← j.getObjValAs? Nat "orderId"
+  let receivePerLot ← (← (← j.getObjVal? "receivePerLot").getArr?).toList.mapM (·.getNat?)
+  let deliverPerLot ← (← (← j.getObjVal? "deliverPerLot").getArr?).toList.mapM (·.getNat?)
+  let quantity ← j.getObjValAs? Nat "quantity"
+  let limit ← j.getObjValAs? Int "limit"
+  pure { orderId, receivePerLot, deliverPerLot, quantity, limit }
+
+/-- Encode `JointFill` to `Lean.Json`. -/
+def jointFillToJson (f : JointFill) : Json :=
+  Json.mkObj
+    [ ("order", jointOrderToJson f.order)
+    , ("lots", toJson f.lots) ]
+
+/-- Parse `JointFill` from `Lean.Json`. -/
+def jointFillOfJson (j : Json) : Except String JointFill := do
+  let order ← jointOrderOfJson (← j.getObjVal? "order")
+  let lots ← j.getObjValAs? Nat "lots"
+  pure { order, lots }
+
+/-- Encode `JointClearingCert` as canonical JSON wire string. -/
+def encodeJointClearingCert (c : JointClearingCert) : String :=
+  Json.compress <| Json.mkObj
+    [ ("outcomeCount", toJson c.outcomeCount)
+    , ("scale", toJson c.scale)
+    , ("prices", Json.arr (c.prices.map toJson).toArray)
+    , ("fills", Json.arr (c.fills.map jointFillToJson).toArray)
+    , ("sets", toJson c.sets) ]
+
+/-- Parse `JointClearingCert` from JSON wire string. -/
+def decodeJointClearingCert (s : String) : Except String JointClearingCert := do
+  let j ← Json.parse s
+  let outcomeCount ← j.getObjValAs? Nat "outcomeCount"
+  let scale ← j.getObjValAs? Nat "scale"
+  let prices ← (← (← j.getObjVal? "prices").getArr?).toList.mapM (·.getNat?)
+  let fills ← (← (← j.getObjVal? "fills").getArr?).toList.mapM jointFillOfJson
+  let sets ← j.getObjValAs? Int "sets"
+  pure { outcomeCount, scale, prices, fills, sets }
 
 /-- Registered `Obend.Judge.Format` for `dclutch-hoard-clearing` v`1`. -/
 def dclutchHoardFormat : Judge.Format where

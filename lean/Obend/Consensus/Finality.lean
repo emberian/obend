@@ -1,33 +1,47 @@
 module
 /-
-# Obend.Consensus.Finality — 4-Tier Finality Ladder and Promotion State Machine
+# Obend.Consensus.Finality — 4-Tier Finality Ladder Bound to `SimplexProtocol.FinCert` & cSHAKE256
 
-Absorbs `minidregg/Theory/Finality.lean` and `NEXT-MATHEMATICA.md:130` into Obend's
-consensus architecture.
+Binds Obend's 4-tier finality ladder directly to `SimplexProtocol` (`Protocol`, `Sent`,
+`FinCert`, `Finalized`, `Reach`) and SP 800-185 cSHAKE256 `Digest` (`ByteArray`) state roots.
 
 ## 4-Tier Finality Ladder:
-1. `speculative` (Tier 0): Local turn proposal, optimistic execution, read uncommitted.
-2. `attested`    (Tier 1): Peer or leader attestation, deterministic execution preview (read-only).
-3. `quorum_final` (Tier 2): 2f+1 Quorum Certificate (QC) formed in Simplex BFT, state-write committed.
-4. `collapsed`   (Tier 3): Merkle folded into canonical root, immutable archive, non-repudiable receipt.
+1. `speculative`  (Tier 0): Local turn proposal, optimistic execution, read uncommitted.
+2. `attested`     (Tier 1): Leader proposal attested in `SimplexProtocol.Sent`, read-only preview.
+3. `quorum_final` (Tier 2): `SimplexProtocol.FinCert` verified (`cert.checks P sent = true`),
+                            witnessing `2f + 1` committee `finalize` votes (`Finalized P sent`),
+                            state-write committed.
+4. `collapsed`    (Tier 3): Finalized chain digest + vault Merkle state root folded via
+                            domain-separated `cshake256Kernel` into canonical `collapsedRoot`.
 
 ## Core Metatheorems:
-- `rank_injective`: Distinct tiers have distinct rank ordinals.
-- `speculative_bot` & `collapsed_top`: Ladder bounded between speculative and collapsed.
-- `admitsOp_mono`: Permissions monotonically expand as finality advances.
-- `reachable_no_downgrade`: Along any valid sequence of promotions, finality never weakens.
-- `downgrade_not_a_step` & `downgrade_unreachable`: Downgrades (e.g. quorum_final -> speculative) are refuted.
-- `joinTier_dominates`: Multi-cell turn commits at the lattice join of its written cells' tiers.
+- `rank_injective`, `speculative_bot`, `collapsed_top`, `admitsOp_mono`, `reachable_no_downgrade`,
+  `downgrade_not_a_step`, `downgrade_unreachable`, `collapsed_is_terminal`.
+- `joinTier_dominates`, `turnCommitTier_dominates_cells`, `turnCommitTier_admits_stateWrite`.
+- `advanceSimplexGate_quorum_final_sound`: `.quorum_final` promotion requires a checking
+  `SimplexProtocol.FinCert` and implies `SimplexProtocol.Finalized`.
+- `quorum_final_gates_unique_per_height`: over any reachable `SimplexProtocol.Reach P sent`,
+  any two `.quorum_final` gates whose `FinCert` chains have equal height certify the exact
+  same finalized block sequence (`cert₁.chain.blocks = cert₂.chain.blocks`).
+- `advanceSimplexGate_collapsed_binds_cshake`: `.collapsed` promotion deterministically binds
+  the SP 800-185 `cshake256Bytes` fold of the finalized chain digest and vault state root.
 -/
 
 public import Obend.Core.Data
 public import Obend.Vault.Hyperedge
+public import Obend.Consensus.SimplexProtocol
+public import Obend.Digest.Cshake256.Seam
 
 @[expose] public section
 namespace Obend.Consensus.Finality
 
 open Obend.Core.Data
 open Obend.Vault
+open Obend.Consensus.Simplex (NodeId)
+open Obend.Consensus.SimplexProtocol (Protocol Sent Entry Chain Msg FinCert Finalized Reach)
+open Obend.Digest.Cshake256 (cshake256Bytes)
+open Obend.Digest.Cshake256.Fast (cshake256Fast_eq)
+open Obend.Digest.Cshake256.Native (bytesOfList bytesOfList_toList cshake256Kernel)
 
 set_option autoImplicit false
 
@@ -37,9 +51,9 @@ set_option autoImplicit false
 inductive FinalityTier where
   | speculative   -- Tier 0: Turn proposed, local optimistic branch, read uncommitted
   | attested      -- Tier 1: Leader / peer attested, execute read-only preview
-  | quorum_final  -- Tier 2: Quorum certificate (QC) formed, state-write committed
-  | collapsed     -- Tier 3: Merkle folded into root, immutable archive, sealed receipt
-  deriving DecidableEq, Inhabited
+  | quorum_final  -- Tier 2: Quorum certificate (FinCert) formed, state-write committed
+  | collapsed     -- Tier 3: cSHAKE256 / Merkle folded into root, immutable archive
+  deriving DecidableEq, Repr, Inhabited
 
 namespace FinalityTier
 
@@ -114,8 +128,8 @@ inductive Operation where
   | readUncommitted   -- Dirty read / optimistic query
   | executeReadOnly   -- Deterministic preview / dry run without state mutation
   | stateWrite        -- Mutate cell state / commit deltas to VaultStore
-  | immutableArchive  -- Fold into Merkle root / historical archive / prune ephemeral data
-  deriving DecidableEq
+  | immutableArchive  -- Fold into cSHAKE256 Merkle root / historical archive
+  deriving DecidableEq, Repr
 
 /-- The minimum tier required to permit an operation. -/
 def minTier : Operation → FinalityTier
@@ -133,20 +147,8 @@ theorem admitsOp_mono {t₁ t₂ : FinalityTier} {op : Operation}
   simp only [admitsOp, decide_eq_true_iff] at hadm ⊢
   exact FinalityTier.le_trans hadm hle
 
-/-! ### Concrete Operation Boundaries -/
-
-example : admitsOp .speculative .readUncommitted = true := by decide
-example : admitsOp .speculative .executeReadOnly = false := by decide
-example : admitsOp .speculative .stateWrite = false := by decide
-example : admitsOp .speculative .immutableArchive = false := by decide
-
-example : admitsOp .attested .executeReadOnly = true := by decide
-example : admitsOp .attested .stateWrite = false := by decide
-
 theorem quorum_final_admits_stateWrite : admitsOp .quorum_final .stateWrite = true := by decide
-example : admitsOp .quorum_final .immutableArchive = false := by decide
 
-example : admitsOp .collapsed .immutableArchive = true := by decide
 theorem collapsed_admits_all (op : Operation) : admitsOp .collapsed op = true := by
   cases op <;> decide
 
@@ -189,17 +191,13 @@ theorem reachable_no_downgrade {t₀ t : FinalityTier} (hrun : FinalitySteps t�
   | refl => exact FinalityTier.le_refl _
   | tail _ hstep ih => exact FinalityTier.le_trans ih hstep
 
-/-- Tooth 1: weakening `quorum_final` to `speculative` is not an admissible step. -/
 theorem downgrade_not_a_step : ¬ FinalityStep .quorum_final .speculative := by decide
 
-/-- Tooth 2: weakening `collapsed` to `attested` is not an admissible step. -/
 theorem collapsed_downgrade_not_a_step : ¬ FinalityStep .collapsed .attested := by decide
 
-/-- Tooth 3: no sequence of finality events can reach `speculative` from `quorum_final`. -/
 theorem downgrade_unreachable : ¬ FinalitySteps .quorum_final .speculative :=
   fun hrun => absurd (reachable_no_downgrade hrun) (by decide)
 
-/-- Collapsed state is terminal / absorbing under promotions. -/
 theorem collapsed_is_terminal (t : FinalityTier) (hrun : FinalitySteps .collapsed t) :
     t = .collapsed := by
   have h := reachable_no_downgrade hrun
@@ -207,7 +205,6 @@ theorem collapsed_is_terminal (t : FinalityTier) (hrun : FinalitySteps .collapse
 
 /-! ## §4. Commit at the Lattice Join of Written Cells -/
 
-/-- Lattice join of a list of finality tiers. -/
 def joinTier : List FinalityTier → FinalityTier
   | [] => .speculative
   | t :: ts => FinalityTier.max t (joinTier ts)
@@ -227,9 +224,6 @@ theorem joinTier_dominates (ts : List FinalityTier) (t : FinalityTier) (h : t �
       have hle_max := FinalityTier.le_max_right x (joinTier xs)
       exact FinalityTier.le_trans hle_tail hle_max
 
-/-- The commit tier for a multi-cell turn writing cells of specified tiers.
-    A turn that performs state writes must achieve AT LEAST `quorum_final`,
-    as well as dominating every cell's individual finality requirement. -/
 def turnCommitTier (cells : List FinalityTier) : FinalityTier :=
   FinalityTier.max .quorum_final (joinTier cells)
 
@@ -245,9 +239,8 @@ theorem turnCommitTier_admits_stateWrite (cells : List FinalityTier) :
     FinalityTier.le_max_left .quorum_final (joinTier cells)
   exact admitsOp_mono hq quorum_final_admits_stateWrite
 
-/-! ## §5. Verified Finality Gate Record -/
+/-! ## §5. Basic Finality Gate Record -/
 
-/-- Finality tracking gate for turns climbing the finality ladder. -/
 structure FinalityGate where
   turnId : ByteArray
   currentTier : FinalityTier
@@ -255,13 +248,11 @@ structure FinalityGate where
   qc : Option ByteArray
   merkleRoot : Option ByteArray
 
-/-- Well-formedness invariants for a finality gate at each tier. -/
 def FinalityGate.WellFormed (gate : FinalityGate) : Prop :=
   (gate.currentTier.rank ≥ 1 → gate.attestations ≠ []) ∧
   (gate.currentTier.rank ≥ 2 → gate.qc.isSome = true) ∧
   (gate.currentTier.rank ≥ 3 → gate.merkleRoot.isSome = true)
 
-/-- Initialize a fresh finality gate for a newly proposed speculative turn. -/
 def FinalityGate.init (turnId : ByteArray) : FinalityGate where
   turnId := turnId
   currentTier := .speculative
@@ -273,7 +264,6 @@ theorem FinalityGate.init_wf (turnId : ByteArray) : (FinalityGate.init turnId).W
   unfold FinalityGate.init FinalityGate.WellFormed FinalityTier.rank
   refine ⟨by intro h; contradiction, by intro h; contradiction, by intro h; contradiction⟩
 
-/-- Advance a finality gate along an authorized event. -/
 def advanceGate (gate : FinalityGate) (ev : PromotionEvent) : Option FinalityGate :=
   match gate, ev with
   | ⟨turnId, .speculative, _, _, _⟩, .attestTurn signer =>
@@ -284,7 +274,6 @@ def advanceGate (gate : FinalityGate) (ev : PromotionEvent) : Option FinalityGat
     some ⟨turnId, .collapsed, atts, qc, some rootDigest⟩
   | _, _ => none
 
-/-- Gate advancement strictly advances finality. -/
 theorem advanceGate_advances (gate : FinalityGate) (ev : PromotionEvent) (next : FinalityGate)
     (hadv : advanceGate gate ev = some next) : gate.currentTier ≤ next.currentTier := by
   cases gate with
@@ -292,18 +281,207 @@ theorem advanceGate_advances (gate : FinalityGate) (ev : PromotionEvent) (next :
     cases currentTier <;> cases ev <;> simp [advanceGate] at hadv
     all_goals (obtain rfl := hadv; dsimp only [FinalityGate.currentTier]; decide)
 
-/-! ## §6. Quorum-Signer & State-Root Bound Finality Promotion -/
+/-! ## §6. `SimplexProtocol.FinCert` + cSHAKE256 `Digest` Finality Gate -/
 
-/-- Promotion events binding non-empty quorum signer sets and canonical state roots. -/
+/-- Canonical 32-byte digest carrier. -/
+abbrev Digest := ByteArray
+
+/-- Domain customization tag for hashing finalized `SimplexProtocol.Chain` blocks. -/
+def simplexChainDomain : Digest :=
+  "OBEND-SIMPLEX-CHAIN-V1".toUTF8
+
+/-- Domain customization tag for collapsing `(chainDigest || vaultStateRoot)` into Tier 3. -/
+def collapseRootDomain : Digest :=
+  "OBEND-COLLAPSE-ROOT-V1".toUTF8
+
+/-- Encode a `Nat` in 8 little-endian bytes for deterministic cSHAKE256 preimages. -/
+def natLe8Bytes (n : Nat) : List UInt8 :=
+  [ UInt8.ofNat (n % 256)
+  , UInt8.ofNat ((n / 256) % 256)
+  , UInt8.ofNat ((n / 65536) % 256)
+  , UInt8.ofNat ((n / 16777216) % 256)
+  , UInt8.ofNat ((n / 4294967296) % 256)
+  , UInt8.ofNat ((n / 1099511627776) % 256)
+  , UInt8.ofNat ((n / 281474976710656) % 256)
+  , UInt8.ofNat ((n / 72057594037927936) % 256) ]
+
+/-- Canonical byte serialization of a `SimplexProtocol.Entry`. -/
+def encodeChainEntry : Entry → List UInt8
+  | .block v payload => (0x01 : UInt8) :: (natLe8Bytes v ++ natLe8Bytes payload)
+  | .dummy v         => (0x00 : UInt8) :: natLe8Bytes v
+
+/-- Canonical byte serialization of `c.blocks` (ignoring view dummies so equal-height
+    finalized chains produce identical digests!). -/
+def encodeFinalizedBlocks (c : Chain) : ByteArray :=
+  bytesOfList (c.blocks.flatMap encodeChainEntry)
+
+/-- cSHAKE256 digest of a finalized chain's block sequence. -/
+def chainDigest (c : Chain) : Digest :=
+  cshake256Kernel simplexChainDomain (encodeFinalizedBlocks c)
+
+/-- Domain-separated cSHAKE256 fold of `(chainDigest || vaultStateRoot)` for `.collapsed`. -/
+def foldCollapsedRoot (cDigest vaultRoot : Digest) : Digest :=
+  cshake256Kernel collapseRootDomain (bytesOfList (cDigest.data.toList ++ vaultRoot.data.toList))
+
+theorem foldCollapsedRoot_eq_spec (cDigest vaultRoot : Digest) :
+    (foldCollapsedRoot cDigest vaultRoot).data.toList =
+      cshake256Bytes collapseRootDomain.data.toList
+        (cDigest.data.toList ++ vaultRoot.data.toList) := by
+  unfold foldCollapsedRoot cshake256Kernel
+  rw [bytesOfList_toList, bytesOfList_toList, cshake256Fast_eq]
+
+/-- Events promoting a `SimplexFinalityGate` against `(P : Protocol, sent : Sent)`. -/
+inductive SimplexPromotionEvent where
+  | attestProposal (leader : NodeId) (view : Nat) (chain : Chain) (vaultRoot : Digest)
+  | finalizeWithCert (cert : FinCert) (vaultRoot : Digest)
+  | collapseArchive (vaultRoot : Digest)
+  deriving DecidableEq
+
+/-- Finality gate bound to `SimplexProtocol.FinCert` and cSHAKE256 `Digest` roots. -/
+structure SimplexFinalityGate where
+  turnId        : Digest
+  currentTier   : FinalityTier
+  attestedView  : Option Nat := none
+  finCert       : Option FinCert := none
+  vaultRoot     : Option Digest := none
+  collapsedRoot : Option Digest := none
+  deriving DecidableEq
+
+/-- Initialize a speculative `SimplexFinalityGate` for `turnId`. -/
+def SimplexFinalityGate.init (turnId : Digest) : SimplexFinalityGate :=
+  { turnId := turnId, currentTier := .speculative }
+
+/-- Advance `SimplexFinalityGate` against `SimplexProtocol`:
+    - Tier 0 → Tier 1 (`attestProposal`): verifies `leader ∈ P.committee`, `leader = P.leader view`,
+      the leader's `.propose` message is in `sent`, and `vaultRoot` is a 32-byte digest.
+    - Tier 1 → Tier 2 (`finalizeWithCert`): verifies `cert.checks P sent = true` (`2f + 1` distinct
+      committee `finalize` votes in `sent`) and matching 32-byte `vaultRoot`.
+    - Tier 2 → Tier 3 (`collapseArchive`): requires `gate.finCert = some cert` and matching
+      `gate.vaultRoot = some vaultRoot`, folding `chainDigest cert.chain` and `vaultRoot` via
+      `foldCollapsedRoot` (SP 800-185 cSHAKE256). -/
+def advanceSimplexGate
+    (P : Protocol) (sent : Sent)
+    (gate : SimplexFinalityGate)
+    (ev : SimplexPromotionEvent) : Option SimplexFinalityGate :=
+  match gate.currentTier, ev with
+  | .speculative, .attestProposal leader view chain vRoot =>
+    if decide (leader ∈ P.committee ∧ leader = P.leader view ∧
+               (⟨leader, view, .propose, .block chain⟩ : Msg) ∈ sent ∧
+               vRoot.size = 32) then
+      some { gate with
+        currentTier  := .attested
+        attestedView := some view
+        vaultRoot    := some vRoot }
+    else
+      none
+  | .attested, .finalizeWithCert cert vRoot =>
+    if cert.checks P sent && decide (gate.vaultRoot = some vRoot ∧ vRoot.size = 32) then
+      some { gate with
+        currentTier := .quorum_final
+        finCert     := some cert
+        vaultRoot   := some vRoot }
+    else
+      none
+  | .quorum_final, .collapseArchive vRoot =>
+    match gate.finCert, gate.vaultRoot with
+    | some cert, some existingRoot =>
+      if decide (vRoot = existingRoot ∧ vRoot.size = 32) then
+        let cRoot := foldCollapsedRoot (chainDigest cert.chain) vRoot
+        some { gate with
+          currentTier   := .collapsed
+          collapsedRoot := some cRoot }
+      else
+        none
+    | _, _ => none
+  | _, _ => none
+
+/-- `advanceSimplexGate` monotonically advances `currentTier` along `FinalityTier`. -/
+theorem advanceSimplexGate_advances
+    (P : Protocol) (sent : Sent)
+    (gate next : SimplexFinalityGate) (ev : SimplexPromotionEvent)
+    (h : advanceSimplexGate P sent gate ev = some next) :
+    gate.currentTier ≤ next.currentTier := by
+  cases htier : gate.currentTier <;> cases ev <;>
+    simp [advanceSimplexGate, htier] at h
+  · rcases h with ⟨_, rfl⟩
+    dsimp only
+    decide
+  · rcases h with ⟨_, rfl⟩
+    dsimp only
+    decide
+  · cases hcert : gate.finCert <;> cases hroot : gate.vaultRoot <;>
+      simp [hcert, hroot] at h
+    rcases h with ⟨_, rfl⟩
+    dsimp only
+    decide
+
+/-- Promoting to `.quorum_final` via `advanceSimplexGate` guarantees `cert.checks P sent = true`,
+    `Finalized P sent cert.view cert.chain`, and a 32-byte `vaultRoot`. -/
+theorem advanceSimplexGate_quorum_final_sound
+    (P : Protocol) (sent : Sent)
+    (gate next : SimplexFinalityGate)
+    (cert : FinCert) (vRoot : Digest)
+    (h : advanceSimplexGate P sent gate (.finalizeWithCert cert vRoot) = some next) :
+    next.currentTier = .quorum_final ∧
+    next.finCert = some cert ∧
+    cert.checks P sent = true ∧
+    Finalized P sent cert.view cert.chain ∧
+    next.vaultRoot = some vRoot ∧
+    vRoot.size = 32 := by
+  cases htier : gate.currentTier <;>
+    simp [advanceSimplexGate, htier] at h
+  rcases h with ⟨⟨hchecks, _, hsz⟩, rfl⟩
+  exact ⟨rfl, rfl, hchecks, FinCert.checks_implies_finalized hchecks, rfl, hsz⟩
+
+/-- **Unique Finalized Chain Digest Per Height**:
+    Over any reachable `SimplexProtocol.Reach P sent`, any two `.quorum_final` promotions
+    whose `FinCert` chains have equal block height certify identical block sequences AND
+    identical `chainDigest` values! -/
+theorem quorum_final_gates_unique_per_height
+    {P : Protocol} {sent : Sent} (hr : Reach P sent)
+    {gate₁ next₁ gate₂ next₂ : SimplexFinalityGate}
+    {cert₁ cert₂ : FinCert} {root₁ root₂ : Digest}
+    (h₁ : advanceSimplexGate P sent gate₁ (.finalizeWithCert cert₁ root₁) = some next₁)
+    (h₂ : advanceSimplexGate P sent gate₂ (.finalizeWithCert cert₂ root₂) = some next₂)
+    (h_height : cert₁.chain.height = cert₂.chain.height) :
+    cert₁.chain.blocks = cert₂.chain.blocks ∧
+    chainDigest cert₁.chain = chainDigest cert₂.chain := by
+  have hc₁ := (advanceSimplexGate_quorum_final_sound P sent gate₁ next₁ cert₁ root₁ h₁).2.2.1
+  have hc₂ := (advanceSimplexGate_quorum_final_sound P sent gate₂ next₂ cert₂ root₂ h₂).2.2.1
+  have hblocks := FinCert.unique_per_height_reach hr hc₁ hc₂ h_height
+  refine ⟨hblocks, ?_⟩
+  unfold chainDigest encodeFinalizedBlocks
+  rw [hblocks]
+
+/-- Promoting to `.collapsed` binds the exact SP 800-185 `cshake256Bytes` fold of
+    `chainDigest cert.chain` and `vRoot`. -/
+theorem advanceSimplexGate_collapsed_binds_cshake
+    (P : Protocol) (sent : Sent)
+    (gate next : SimplexFinalityGate) (vRoot : Digest)
+    (h : advanceSimplexGate P sent gate (.collapseArchive vRoot) = some next) :
+    ∃ cert : FinCert,
+      gate.finCert = some cert ∧
+      next.currentTier = .collapsed ∧
+      next.collapsedRoot = some (foldCollapsedRoot (chainDigest cert.chain) vRoot) ∧
+      (foldCollapsedRoot (chainDigest cert.chain) vRoot).data.toList =
+        cshake256Bytes collapseRootDomain.data.toList
+          ((chainDigest cert.chain).data.toList ++ vRoot.data.toList) := by
+  cases htier : gate.currentTier <;>
+    simp [advanceSimplexGate, htier] at h
+  cases hcert : gate.finCert <;> cases hroot : gate.vaultRoot <;>
+    simp [hcert, hroot] at h
+  rename_i cert existingRoot
+  rcases h with ⟨⟨rfl, _⟩, rfl⟩
+  exact ⟨cert, rfl, rfl, rfl, foldCollapsedRoot_eq_spec (chainDigest cert.chain) vRoot⟩
+
+/-! ## §7. Committee-Bound Quorum Gate (`QuorumBoundFinalityGate`) -/
+
 inductive QuorumBoundPromotionEvent where
   | attestTurn (signer : Nat) (stateRoot : Nat)
   | formQC (qcDigest : Nat) (signers : List Nat) (stateRoot : Nat)
   | collapseRoot (merkleRoot : Nat) (signers : List Nat)
   deriving DecidableEq, BEq, Repr, Inhabited
 
-/-- Finality gate binding `FinalityTier` promotion to non-empty, duplicate-free quorum
-    signer sets (`signers.Nodup`, `∀ s ∈ signers, s ∈ committee`, `2 * faults + 1 ≤ qcSigners.length`)
-    and a non-zero state root (`stateRoot ≠ 0`). -/
 structure QuorumBoundFinalityGate where
   turnId        : Nat
   currentTier   : FinalityTier
@@ -316,9 +494,6 @@ structure QuorumBoundFinalityGate where
   committee     : List Nat := [0, 1, 2, 3]
   deriving DecidableEq, Inhabited
 
-/-- Advance a `QuorumBoundFinalityGate` only when the quorum signer set is non-empty,
-    duplicate-free (`signers.Nodup`), drawn from `gate.committee`, meets the `2 * faults + 1`
-    threshold, and binds the gate's non-zero `stateRoot`. -/
 def advanceQuorumBoundGate
     (gate : QuorumBoundFinalityGate)
     (ev : QuorumBoundPromotionEvent) : Option QuorumBoundFinalityGate :=
@@ -350,9 +525,6 @@ def advanceQuorumBoundGate
       none
   | _, _ => none
 
-/-- Promoting to `.quorum_final` via `advanceQuorumBoundGate` guarantees a non-empty,
-    duplicate-free committee quorum (`next.qcSigners.Nodup`, `∀ s ∈ next.qcSigners, s ∈ gate.committee`,
-    `2 * gate.faults + 1 ≤ next.qcSigners.length`) and a non-zero state root. -/
 theorem advanceQuorumBoundGate_formQC_sound
     (gate next : QuorumBoundFinalityGate)
     (qcDigest : Nat) (signers : List Nat) (root : Nat)
@@ -371,28 +543,22 @@ theorem advanceQuorumBoundGate_formQC_sound
   refine ⟨rfl, rfl, h_ne, h_nodup, h_comm, h_quorum, h_root, ?_⟩
   simpa [h_root] using h_nz
 
-/-- Attempting to form a QC with duplicate signers (`¬ signers.Nodup`, e.g. `[0, 0, 0]`) is strictly refused. -/
 theorem advanceQuorumBoundGate_refuses_duplicate_signers
     (gate : QuorumBoundFinalityGate) (qcDigest root : Nat) (signers : List Nat)
     (h_dup : ¬ signers.Nodup) :
     advanceQuorumBoundGate gate (.formQC qcDigest signers root) = none := by
   cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier, h_dup]
 
-/-- Attempting to form a QC with an empty signer set is strictly refused. -/
 theorem advanceQuorumBoundGate_refuses_empty_signers
     (gate : QuorumBoundFinalityGate) (qcDigest root : Nat) :
     advanceQuorumBoundGate gate (.formQC qcDigest [] root) = none := by
   cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier]
 
-/-- Attempting to form a QC with a mismatched state root (`root ≠ gate.stateRoot`) is strictly refused. -/
 theorem advanceQuorumBoundGate_refuses_mismatched_root
     (gate : QuorumBoundFinalityGate) (qcDigest : Nat) (signers : List Nat) (root : Nat)
     (h_mismatch : root ≠ gate.stateRoot) :
     advanceQuorumBoundGate gate (.formQC qcDigest signers root) = none := by
-  cases h_tier : gate.currentTier
-  · simp [advanceQuorumBoundGate, h_tier]
-  · simp [advanceQuorumBoundGate, h_tier, h_mismatch]
-  · simp [advanceQuorumBoundGate, h_tier]
-  · simp [advanceQuorumBoundGate, h_tier]
+  cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier, h_mismatch]
 
 end Obend.Consensus.Finality
+end

@@ -1,3 +1,4 @@
+import Obend.Ledger.Floors
 import Obend.Ledger.Seat
 import Obend.Ledger.Vault
 import Obend.Run.Durable
@@ -8,17 +9,21 @@ import Obend.Slot.Selection
 import Obend.Tactic.Tooth
 
 /-!
-# `tests/metasystem/DurableHostAndZoeSeatTest.lean` — Metasystem Regression & Verification Suite (`WS-O`)
+# `tests/metasystem/DurableHostAndZoeSeatTest.lean` — Metasystem Regression & Verification Suite
 
-Exercises all concrete Lean deliverables for `WS-O`:
-1. Multi-Seat Atomic Batch Swap with Proved ZoE Offer Safety & Conservation
-   (`BatchRealloc`, `checkBatchReallocSafe`, `applyBatchRealloc`,
-   `batchRealloc_preserves_all_seats_offer_safe`, `batchRealloc_zero_sum_conservation`,
-   `batchRealloc_disjoint_from_ordinary_accounts`, `settleVaultSeats`, `settleVaultSeats_sound`).
-2. Idempotent Multi-Crash Recovery & Outbox Linearizability
-   (`runDurableTrace`, `crash_recover_idempotent`, `pending_decreases_on_expose`).
-3. Cost-Ordered / Priority-Monotone Selection Policy
-   (`prioritySelect`, `priorityAdvance`, `priorityAdvance_sound`, `priorityAdvance_monotone`).
+Exercises:
+1. Typed-Account Finite-Support Resource Kernel (`Obend.Ledger.Floors`):
+   - `AccountKind` (`user | issuerWell | seat | escrow | feePool`), `AccountAddr`, `FloorBook`,
+   - `admitBatch_preserves_floors`, `realizeBatchOnReg_sound` (`Register.Reg` + `Movement` simulation).
+2. Full ZoE Offer Safety (`Obend.Ledger.Seat`):
+   - One-time `Invitation` spending (`InvitationRegistry.no_double_redeem`),
+   - Explicit `donate` zero-want gift guard (`donationUnmarked_refused`, `admitOffer_donationUnmarked_refused`),
+   - Identity-blind `SeatView` (`seatView_identity_blind`),
+   - Full-balance-support `exitSeat` sweep (`exit_sweeps_all_assets`),
+   - Multi-seat atomic `BatchRealloc` (`checkBatchReallocSafe`, `batchRealloc_preserves_all_seats_offer_safe`,
+     `batchRealloc_zero_sum_all_assets`, `batchRealloc_disjoint_from_ordinary_accounts`).
+3. Idempotent Multi-Crash Recovery & Outbox Linearizability (`Obend.Run.Durable`) and
+   Cost-Ordered Selection Policy (`Obend.Slot.Selection`).
 -/
 
 namespace Obend.Tests.DurableHostAndZoeSeatTest
@@ -36,12 +41,49 @@ open Obend.Run.DurableExample
 open Obend.Run.Negotiation (Wv host O₀ ctl au stored₀ NCand commitOp)
 
 -- ============================================================================
--- 1. Multi-Seat Atomic Batch Swap (`BatchRealloc`, `checkBatchReallocSafe`)
+-- 1. Typed-Account Finite-Support `FloorBook` & `Register.Reg` Bridge
 -- ============================================================================
 
 def assetUsdc : AssetId := 1
 def assetEth  : AssetId := 2
 def assetBtc  : AssetId := 3
+def assetBonus : AssetId := 99
+
+def issuerAddr : AccountAddr := AccountAddr.issuerWell assetUsdc
+def aliceAddr  : AccountAddr := ⟨.user, 100⟩
+def bobAddr    : AccountAddr := ⟨.user, 200⟩
+
+def mintAndTransferBatch : List TypedPosting :=
+  [ { source := issuerAddr, destination := aliceAddr, asset := assetUsdc, amount := 500 }
+  , { source := aliceAddr,  destination := bobAddr,   asset := assetUsdc, amount := 125 } ]
+
+def overdraftBatch : List TypedPosting :=
+  [ { source := aliceAddr, destination := bobAddr, asset := assetUsdc, amount := 10 } ]
+
+#guard (FloorBook.empty.admitBatch mintAndTransferBatch).isSome == true
+#guard (FloorBook.empty.admitBatch overdraftBatch).isNone == true
+
+theorem test_overdraft_refused :
+    (FloorBook.empty.admitBatch overdraftBatch).isSome = false := rfl
+
+#tooth test_overdraft_refused by mutation
+  FloorBook.admitPosting := fun fb p => some (fb.applyRaw p)
+
+example (fb' : FloorBook) (g' : Reg)
+    (hrun : realizeBatchOnReg
+      (mintAndTransferBatch.map (fun p => (p, "mint-xfer", "test")))
+      FloorBook.empty ({ postings := [] } : Reg) = some (fb', g')) :
+    (∀ (addr : AccountAddr) (ast : AssetId),
+      g'.accountBalance (addr.toRegAccount ast) = fb'.balance addr ast) ∧
+    FloorsHold fb' ∧
+    (∀ (addr : AccountAddr) (ast : AssetId), addr.kind ≠ AccountKind.issuerWell →
+      0 ≤ g'.accountBalance (addr.toRegAccount ast)) ∧
+    (∀ ast, fb'.assetSum ast = FloorBook.empty.assetSum ast) :=
+  realizeBatchOnReg_sound floorsHold_empty (fun _ _ => rfl) hrun
+
+-- ============================================================================
+-- 2. Full ZoE Offer Safety (`InvitationRegistry`, `donate`, `SeatView`, `exitSeat`, `BatchRealloc`)
+-- ============================================================================
 
 def ordinaryAlice : AccountId := 100
 def ordinaryBob   : AccountId := 200
@@ -50,15 +92,47 @@ def seat1Acc : AccountId := protectedBase + 1
 def seat2Acc : AccountId := protectedBase + 2
 def seat3Acc : AccountId := protectedBase + 3
 
+-- One-time invitation spending (`no_double_redeem`) & `donate` guard:
+def mintedRegPair : InvitationRegistry × Invitation :=
+  InvitationRegistry.empty.mint 7 "drex-swap-seat"
+
+#guard (mintedRegPair.1.spend mintedRegPair.2.id).isSome == true
+#guard (match mintedRegPair.1.spend mintedRegPair.2.id with
+        | some (regAfter, _) => (regAfter.spend mintedRegPair.2.id).isNone
+        | none => false) == true
+
+def unmarkedGiftProposal : Proposal :=
+  { give := [(assetUsdc, 50)], want := [], exit := .onDemand, donate := false }
+
+def markedGiftProposal : Proposal :=
+  { give := [(assetUsdc, 50)], want := [], exit := .onDemand, donate := true }
+
+#guard (match checkDonationGuard unmarkedGiftProposal with | .error .donationUnmarked => true | _ => false)
+#guard (match checkDonationGuard markedGiftProposal with | .ok () => true | _ => false)
+
 -- Seat 1 gives 100 USDC, wants 10 ETH
 def seat1 : Seat :=
   { account := seat1Acc
+  , offerer := ordinaryAlice
   , payee := ordinaryAlice
   , proposal :=
       { give := [(assetUsdc, 100)]
       , want := [(assetEth, 10)]
       , exit := .onDemand
       , donate := false } }
+
+-- Seat 1 renamed participant identities (`offerer := 999, payee := 888`) with default `disclose = {}`
+def seat1Renamed : Seat :=
+  { account := seat1Acc
+  , offerer := 999
+  , payee := 888
+  , proposal := seat1.proposal }
+
+-- Identity-blind `SeatView` check:
+#guard seat1.view == seat1Renamed.view
+
+example : seat1.view = seat1Renamed.view :=
+  seatView_identity_blind seat1 seat1Renamed rfl rfl rfl rfl
 
 -- Seat 2 gives 10 ETH, wants 2 BTC
 def seat2 : Seat :=
@@ -82,17 +156,22 @@ def seat3 : Seat :=
 
 def activeSeats : List Seat := [seat1, seat2, seat3]
 
-def initialEscrowBook : Book where
-  accounts := [ordinaryAlice, ordinaryBob, 300, seat1Acc, seat2Acc, seat3Acc]
-  balances := fun acc ast =>
-    if acc == ordinaryAlice && ast == assetUsdc then 500
-    else if acc == ordinaryBob && ast == assetEth then 50
-    else if acc == seat1Acc && ast == assetUsdc then 100
-    else if acc == seat2Acc && ast == assetEth then 10
-    else if acc == seat3Acc && ast == assetBtc then 2
-    else 0
-  leaseRecords := fun _ => none
-  floors := fun _ _ => 0
+def initialEscrowBook : Book :=
+  ((((({ Book.empty with accounts := [ordinaryAlice, ordinaryBob, 300, seat1Acc, seat2Acc, seat3Acc] }
+      ).setBalance ordinaryAlice assetUsdc 500
+      ).setBalance ordinaryBob assetEth 50
+      ).setBalance seat1Acc assetUsdc 100
+      ).setBalance seat1Acc assetBonus 7
+      ).setBalance seat2Acc assetEth 10
+      |>.setBalance seat3Acc assetBtc 2
+
+-- Full-balance-support `exitSeat` sweep: sweeps BOTH `assetUsdc` (100) AND unsolicited `assetBonus` (7)!
+def exitedBook1 : Book := exitSeat initialEscrowBook seat1
+
+#guard exitedBook1.balance seat1Acc assetUsdc == 0
+#guard exitedBook1.balance seat1Acc assetBonus == 0
+#guard exitedBook1.balance ordinaryAlice assetUsdc == 600
+#guard exitedBook1.balance ordinaryAlice assetBonus == 7
 
 -- Valid 3-way circular ZoE swap satisfying every seat's `want` with zero-sum conservation
 def valid3WaySwap : BatchRealloc :=
@@ -113,18 +192,12 @@ def unauthorizedOrdinaryTouchSwap : BatchRealloc :=
   { postings :=
       [ ⟨ordinaryAlice, seat1Acc, assetUsdc, 100⟩ ] }
 
--- Positive pole: `valid3WaySwap` passes `checkBatchReallocSafe` and `settleVaultSeats`
-#guard checkBatchReallocSafe initialEscrowBook activeSeats valid3WaySwap == true
-#guard (settleVaultSeats initialEscrowBook activeSeats valid3WaySwap).isSome == true
-
--- Negative poles: `unsafeSwap`, `unauthorizedOrdinaryTouchSwap`, and duplicate seat accounts are strictly refused
 def duplicateSeats : List Seat := [seat1, seat1, seat2, seat3]
 
+#guard checkBatchReallocSafe initialEscrowBook activeSeats valid3WaySwap == true
 #guard checkBatchReallocSafe initialEscrowBook activeSeats unsafeSwap == false
 #guard checkBatchReallocSafe initialEscrowBook activeSeats unauthorizedOrdinaryTouchSwap == false
 #guard checkBatchReallocSafe initialEscrowBook duplicateSeats valid3WaySwap == false
-#guard (settleVaultSeats initialEscrowBook activeSeats unsafeSwap).isNone == true
-#guard (settleVaultSeats initialEscrowBook duplicateSeats valid3WaySwap).isNone == true
 
 theorem test_unsafe_swap_rejected :
     checkBatchReallocSafe initialEscrowBook activeSeats unsafeSwap = false := rfl
@@ -132,7 +205,6 @@ theorem test_unsafe_swap_rejected :
 #tooth test_unsafe_swap_rejected by mutation
   checkBatchReallocSafe := fun _ _ _ => true
 
--- Instantiate `batchRealloc_nodup_seats`, `batchRealloc_preserves_all_seats_offer_safe`, and `batchRealloc_zero_sum_all_assets`:
 example : (activeSeats.map Seat.account).Nodup :=
   batchRealloc_nodup_seats initialEscrowBook activeSeats valid3WaySwap rfl
 
@@ -145,36 +217,17 @@ example (ast : AssetId) :
     batchTotalCredits activeSeats valid3WaySwap ast = batchTotalDebits activeSeats valid3WaySwap ast :=
   batchRealloc_zero_sum_all_assets initialEscrowBook activeSeats valid3WaySwap rfl ast
 
--- Instantiate `batchRealloc_disjoint_from_ordinary_accounts` on `ordinaryAlice`:
 example (ast : AssetId) :
     (applyBatchRealloc initialEscrowBook valid3WaySwap).balance ordinaryAlice ast =
       initialEscrowBook.balance ordinaryAlice ast :=
   batchRealloc_disjoint_from_ordinary_accounts
     initialEscrowBook activeSeats valid3WaySwap rfl ordinaryAlice (by decide) ast
 
--- Verify ordinary account balances are untouched executable check:
 #guard (applyBatchRealloc initialEscrowBook valid3WaySwap).balance ordinaryAlice assetUsdc == 500
 #guard (applyBatchRealloc initialEscrowBook valid3WaySwap).balance ordinaryBob assetEth == 50
 
--- Instantiate `settleVaultSeats_sound` and `settleVaultSeats_conserves`:
-example (b' : Book) (h : settleVaultSeats initialEscrowBook activeSeats valid3WaySwap = some b') :
-    b' = applyBatchRealloc initialEscrowBook valid3WaySwap ∧
-    checkBatchReallocSafe initialEscrowBook activeSeats valid3WaySwap = true ∧
-    (∀ s ∈ activeSeats, safeAt b' s.account s.proposal = true) ∧
-    (∀ ast ∈ batchAssets activeSeats valid3WaySwap,
-      batchTotalCredits activeSeats valid3WaySwap ast = batchTotalDebits activeSeats valid3WaySwap ast) ∧
-    (∀ ordinary, ordinary < protectedBase → ∀ ast, b'.balance ordinary ast = initialEscrowBook.balance ordinary ast) :=
-  settleVaultSeats_sound initialEscrowBook b' activeSeats valid3WaySwap h
-
-example (b' : Book) (h : settleVaultSeats initialEscrowBook activeSeats valid3WaySwap = some b') :
-    (activeSeats.map Seat.account).Nodup ∧
-    (∀ ast : AssetId, batchTotalCredits activeSeats valid3WaySwap ast = batchTotalDebits activeSeats valid3WaySwap ast) ∧
-    (∀ (_h_reg : ∀ s ∈ activeSeats, s.account ∈ initialEscrowBook.accounts) (_hnodup : initialEscrowBook.accounts.Nodup) (ast : AssetId),
-      b'.totalAsset ast = initialEscrowBook.totalAsset ast) :=
-  settleVaultSeats_conserves initialEscrowBook b' activeSeats valid3WaySwap h
-
 -- ============================================================================
--- 2. Idempotent Multi-Crash Recovery & Outbox Linearizability (`Run/Durable`)
+-- 3. Idempotent Multi-Crash Recovery & Outbox Linearizability (`Run/Durable`)
 -- ============================================================================
 
 abbrev HostSt := DState nledger sig HoleN Res Unit Unit NCand Negotiation.Fact Ob .idle
@@ -188,11 +241,9 @@ def preCrashEvents : List HEv :=
 def stateBeforeExpose : HostSt :=
   runDurableTrace nledger base (fun _ => spec) (fun _ => au) (fun _ => ctl) J₀ initHostState preCrashEvents
 
--- Before exposing position 4, pending effects are `[0, 2, 4]` and outbox is `[]`.
 #guard pending nledger stateBeforeExpose == [0, 2, 4]
 #guard stateBeforeExpose.outbox == []
 
--- Expose position 4 and verify `pending_decreases_on_expose`:
 def stateAfterExpose : HostSt :=
   runDurableTrace nledger base (fun _ => spec) (fun _ => au) (fun _ => ctl) J₀ stateBeforeExpose [.expose 4]
 
@@ -211,7 +262,6 @@ example (s' : HostSt)
     (pending nledger s').length < (pending nledger stateBeforeExpose).length :=
   pending_decreases_on_expose nledger base (fun _ => spec) (fun _ => au) (fun _ => ctl) J₀ stateBeforeExpose s' 4 h
 
--- Instantiate `crash_recover_idempotent` for any `crashes ≥ 1`:
 example (s : HostSt) (crashes : Nat) (hc : 1 ≤ crashes) :
     let trace : List HEv := List.replicate crashes .crash ++ [.recover]
     let single : List HEv := [.crash, .recover]
@@ -221,7 +271,6 @@ example (s : HostSt) (crashes : Nat) (hc : 1 ≤ crashes) :
     (runDurableTrace nledger base (fun _ => spec) (fun _ => au) (fun _ => ctl) J₀ s trace).outbox = s.outbox :=
   crash_recover_idempotent nledger base (fun _ => spec) (fun _ => au) (fun _ => ctl) J₀ s crashes hc
 
--- Executable check that 5 consecutive crashes + recover equals 1 crash + recover:
 def stateAfter1CrashRecover : HostSt :=
   runDurableTrace nledger base (fun _ => spec) (fun _ => au) (fun _ => ctl) J₀ stateAfterExpose [.crash, .recover]
 
@@ -234,7 +283,7 @@ def stateAfter5CrashesRecover : HostSt :=
 #guard stateAfter5CrashesRecover.mem.isSome == true
 
 -- ============================================================================
--- 3. Cost-Ordered / Priority-Monotone Selection Policy (`Slot/Selection`)
+-- 4. Cost-Ordered / Priority-Monotone Selection Policy (`Slot/Selection`)
 -- ============================================================================
 
 def memberCost : Member → Nat
@@ -243,47 +292,40 @@ def memberCost : Member → Nat
 
 def testOrder : List Member := [.alice, .bob]
 
--- At height 0, both `.alice` and `.bob` are usable in `toySlot`, and `.bob` has lower cost (10 < 50):
 example : prioritySelect toySlot (holdsAt (V := Nat) 0) testOrder memberCost = .ok .bob := rfl
 #guard match prioritySelect toySlot (holdsAt (V := Nat) 0) testOrder memberCost with | .ok .bob => true | _ => false
 
--- If `.alice` (cost 50) is currently stored at height 0, `priorityAdvance memberCost` upgrades to `.bob` (cost 10):
 example : (priorityAdvance memberCost).advance toySlot 0 testOrder (some .alice) = .ok .bob := rfl
 #guard match (priorityAdvance memberCost).advance toySlot 0 testOrder (some .alice) with | .ok .bob => true | _ => false
 
--- If `.bob` (cost 10) is currently stored at height 0, `priorityAdvance memberCost` keeps `.bob`:
-example : (priorityAdvance memberCost).advance toySlot 0 testOrder (some .bob) = .ok .bob := rfl
-#guard match (priorityAdvance memberCost).advance toySlot 0 testOrder (some .bob) with | .ok .bob => true | _ => false
-
--- At height 1, `.alice` is retired, so `priorityAdvance` selects `.bob`:
-example : (priorityAdvance memberCost).advance toySlot 1 testOrder (some .alice) = .ok .bob := rfl
-#guard match (priorityAdvance memberCost).advance toySlot 1 testOrder (some .alice) with | .ok .bob => true | _ => false
-
--- Instantiate `priorityAdvance_sound` both with default cost and explicit `memberCost`:
 example : SelectionSound (priorityAdvance : Advance Nat Member Member) :=
   priorityAdvance_sound
 
 example : SelectionSound (priorityAdvance memberCost : Advance Nat Member Member) :=
   priorityAdvance_sound
 
--- Instantiate `priorityAdvance_monotone`:
 example (c : Member)
     (h : (priorityAdvance memberCost).advance toySlot 0 testOrder (some .alice) = .ok c) :
     memberCost c ≤ memberCost .alice :=
   priorityAdvance_monotone toySlot 0 testOrder .alice c rfl h
 
 -- ============================================================================
--- 4. Axiom Audit (`0 sorryAx`)
+-- 5. Axiom Audit (`0 sorryAx`)
 -- ============================================================================
 
+#print axioms FloorBook.admitBatch_preserves_floors
+#print axioms realizeBatchOnReg_sound
+#print axioms InvitationRegistry.no_double_redeem
+#print axioms donationUnmarked_refused
+#print axioms admitOffer_donationUnmarked_refused
+#print axioms seatView_identity_blind
+#print axioms exit_sweeps_all_assets
 #print axioms batchRealloc_nodup_seats
 #print axioms batchRealloc_preserves_all_seats_offer_safe
 #print axioms batchRealloc_zero_sum_conservation
 #print axioms batchRealloc_zero_sum_all_assets
 #print axioms batchRealloc_disjoint_from_ordinary_accounts
 #print axioms batchRealloc_conserves
-#print axioms settleVaultSeats_sound
-#print axioms settleVaultSeats_conserves
 #print axioms crash_recover_idempotent
 #print axioms pending_decreases_on_expose
 #print axioms prioritySelect_ok

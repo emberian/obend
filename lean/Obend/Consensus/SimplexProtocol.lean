@@ -597,5 +597,126 @@ theorem extractReceipt_nodup (P : Protocol) (sent : Sent) (v : Nat) (a b : Targe
     (extractReceipt P.committee sent v a b).signers.Nodup :=
   nodup_filter_simplex _ P.nodup
 
+/-! ## 9. Finalization Certificates (`FinCert`) -/
+
+private def eraseFirstNat (a : Nat) : List Nat → List Nat
+  | [] => []
+  | y :: ys => if a = y then ys else y :: eraseFirstNat a ys
+
+private theorem eraseFirstNat_length {a : Nat} :
+    ∀ {ys : List Nat}, a ∈ ys → (eraseFirstNat a ys).length + 1 = ys.length
+  | [], h => absurd h List.not_mem_nil
+  | y :: ys, h => by
+    simp only [eraseFirstNat]
+    by_cases hay : a = y
+    · simp [hay]
+    · simp only [hay, ↓reduceIte, List.length_cons]
+      rcases List.mem_cons.1 h with rfl | hmem
+      · exact absurd rfl hay
+      · have ih := eraseFirstNat_length hmem
+        omega
+
+private theorem mem_eraseFirstNat_of_ne {a x : Nat} (hne : x ≠ a) :
+    ∀ {ys : List Nat}, x ∈ ys → x ∈ eraseFirstNat a ys
+  | [], h => absurd h List.not_mem_nil
+  | y :: ys, h => by
+    simp only [eraseFirstNat]
+    by_cases hay : a = y
+    · simp only [hay, ↓reduceIte]
+      rcases List.mem_cons.1 h with rfl | hmem
+      · exact absurd hay.symm hne
+      · exact hmem
+    · simp only [hay, ↓reduceIte, List.mem_cons]
+      rcases List.mem_cons.1 h with rfl | hmem
+      · exact .inl rfl
+      · exact .inr (mem_eraseFirstNat_of_ne hne hmem)
+
+theorem nodup_subset_length_le :
+    ∀ {xs ys : List Nat}, xs.Nodup → (∀ x ∈ xs, x ∈ ys) → xs.length ≤ ys.length
+  | [], _, _, _ => Nat.zero_le _
+  | a :: xs, ys, hnd, hsub => by
+    cases hnd with
+    | cons hnot hnd_xs =>
+      have ha : a ∈ ys := hsub a (.head xs)
+      have hsub' : ∀ x ∈ xs, x ∈ eraseFirstNat a ys := fun x hx =>
+        mem_eraseFirstNat_of_ne (fun heq => hnot x hx heq.symm) (hsub x (.tail a hx))
+      have ih := nodup_subset_length_le hnd_xs hsub'
+      have hlen := eraseFirstNat_length ha
+      simp only [List.length_cons]
+      omega
+
+/-- Checkable finalization certificate naming a view, a finalized chain, and the distinct
+    committee members whose `finalize` votes appear in `sent`. -/
+structure FinCert where
+  view : Nat
+  chain : Chain
+  signers : List NodeId
+  deriving DecidableEq, Repr
+
+/-- Verify a `FinCert` against committee `P` and message history `sent`:
+    `signers` are duplicate-free, meet `P.quorum` (`2f + 1`), belong to `P.committee`,
+    and each cast a `finalize` vote for `chain` in `view`. -/
+def FinCert.checks (c : FinCert) (P : Protocol) (sent : Sent) : Bool :=
+  decide c.signers.Nodup &&
+  decide (P.quorum ≤ c.signers.length) &&
+  c.signers.all (fun n => P.committee.contains n && finalizeVoted sent n c.view c.chain)
+
+/-- Extract a canonical `FinCert` from `sent` when `Finalized P sent v c` holds. -/
+def extractFinCert? (P : Protocol) (sent : Sent) (v : Nat) (c : Chain) : Option FinCert :=
+  let signers := P.committee.filter (fun n => finalizeVoted sent n v c)
+  if P.quorum ≤ signers.length then
+    some { view := v, chain := c, signers := signers }
+  else
+    none
+
+/-- Every `FinCert` that passes `checks` witnesses `Finalized P sent c.view c.chain`. -/
+theorem FinCert.checks_implies_finalized {c : FinCert} {P : Protocol} {sent : Sent}
+    (h : c.checks P sent = true) :
+    Finalized P sent c.view c.chain := by
+  simp only [FinCert.checks, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true,
+    List.contains_iff_mem] at h
+  obtain ⟨⟨hnd, hquorum⟩, hall⟩ := h
+  have hsub : ∀ n ∈ c.signers, n ∈ P.committee.filter (fun m => finalizeVoted sent m c.view c.chain) := by
+    intro n hn
+    exact List.mem_filter.2 (hall n hn)
+  exact Nat.le_trans hquorum (nodup_subset_length_le hnd hsub)
+
+/-- Extracting a `FinCert` from a finalized chain produces a checking certificate. -/
+theorem extractFinCert_checks_of_finalized {P : Protocol} {sent : Sent} {v : Nat} {c : Chain}
+    (hf : Finalized P sent v c) :
+    ∃ cert : FinCert, extractFinCert? P sent v c = some cert ∧
+      cert.view = v ∧ cert.chain = c ∧ cert.checks P sent = true := by
+  unfold extractFinCert?
+  have hq : P.quorum ≤ (P.committee.filter fun n => finalizeVoted sent n v c).length := hf
+  simp only [hq, ↓reduceIte]
+  refine ⟨_, rfl, rfl, rfl, ?_⟩
+  simp only [FinCert.checks, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true,
+    List.contains_iff_mem]
+  refine ⟨⟨nodup_filter_simplex _ P.nodup, hq⟩, fun n hn => ?_⟩
+  exact List.mem_filter.1 hn
+
+/-- Two checking `FinCert`s under `Inv P sent` certify prefix-consistent chains. -/
+theorem FinCert.consistent {P : Protocol} {sent : Sent} (hI : Inv P sent)
+    {c₁ c₂ : FinCert} (h₁ : c₁.checks P sent = true) (h₂ : c₂.checks P sent = true) :
+    c₁.chain <+: c₂.chain ∨ c₂.chain <+: c₁.chain :=
+  finalized_consistent hI (FinCert.checks_implies_finalized h₁) (FinCert.checks_implies_finalized h₂)
+
+/-- Two checking `FinCert`s of equal chain height certify the exact same block sequence. -/
+theorem FinCert.unique_per_height {P : Protocol} {sent : Sent} (hI : Inv P sent)
+    {c₁ c₂ : FinCert} (h₁ : c₁.checks P sent = true) (h₂ : c₂.checks P sent = true)
+    (hh : c₁.chain.height = c₂.chain.height) :
+    c₁.chain.blocks = c₂.chain.blocks :=
+  fin_cert_unique_per_height hI
+    (FinCert.checks_implies_finalized h₁)
+    (FinCert.checks_implies_finalized h₂)
+    hh
+
+/-- Over any reachable message trace `Reach P sent`, checking `FinCert`s of equal height agree. -/
+theorem FinCert.unique_per_height_reach {P : Protocol} {sent : Sent} (hr : Reach P sent)
+    {c₁ c₂ : FinCert} (h₁ : c₁.checks P sent = true) (h₂ : c₂.checks P sent = true)
+    (hh : c₁.chain.height = c₂.chain.height) :
+    c₁.chain.blocks = c₂.chain.blocks :=
+  FinCert.unique_per_height (reach_inv hr) h₁ h₂ hh
+
 end Obend.Consensus.SimplexProtocol
 end

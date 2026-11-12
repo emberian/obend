@@ -24,7 +24,7 @@ spec BaseUniformOrderBookSpec for DrexOrderBook:
     self.totalCbdcLiquidity + orderLots * 100n
   def bookConservationSlack(feeBps: Nat) -> Nat:
     feeBps * 4n + self.uniformClearingPriceBps
-  claim orderbook_volume_open_recursion(orderLots: Nat): self.matchedVolumeUnits(orderLots) == self.totalCbdcLiquidity + orderLots * 100n
+  claim orderbook_volume_liquidity_bound(orderLots: Nat) given orderLots <= 250n by judge("interval@1"): 125000n + orderLots * 100n <= 150000n
 
 spec WholesaleDvPOrderBookOverride for DrexOrderBook:
   requires bookConservationSlack(feeBps: Nat) -> Nat

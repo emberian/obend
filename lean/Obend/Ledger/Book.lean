@@ -1,95 +1,144 @@
 module
 /-
-# Obend.Ledger.Book — conserved multi-asset balance ledger with credit floors
+# Obend.Ledger.Book — Finite-Support Multi-Asset Resource Ledger Bridged to `Floors` & `Register`
 
-Multi-asset balance ledger with credit floors, account coordinates, and operations:
-* `transfer`: moves value between accounts
-* `mint`: moves value out of the asset's issuer well (negative supply)
-* `burn`: returns value to that issuer well
-* `fee`: moves value to an explicit collector
-* `lease`: prepays `rate * epochs` to a lessor and installs the lease record
-* `setFloor`: zero-value posting from issuer well installing credit floor
-* `sweep`: moves demurrage/idle balance to commons or issuer well
-* `hold`: reserves balance in escrow
-* `release`: unreserves balance from escrow
+Replaces function-closure internals (`AccountId → AssetId → Int`) with the closure-free
+finite-support resource kernel from `Obend.Ledger.Floors` and `Obend.Ledger.Register`:
 
-Theorems:
-* `applyPosting_conserves`: every posting preserves the per-asset total.
-* `Operation.apply_conserves`: all 9 operations share one per-asset conservation theorem.
-* `Batch.conservation`: batch execution of registrations, operations, and deregistrations conserves every asset.
+1. **Finite-Support `Book` (`DecidableEq`, `Repr`, Zero Closures)**:
+   - Backed by `FinMap (AccountId × AssetId)` (`entries : List ((AccountId × AssetId) × Int)`),
+     `leaseMap : List (LeaseId × LeaseRecord)`, and `floorMap : List ((AccountId × AssetId) × Nat)`.
+   - Exposes `Book.heldAssets (b : Book) (acc : AccountId) : List AssetId`, computing the exact
+     duplicate-free finite support `{ ast | b.balance acc ast ≠ 0 }` executably!
+2. **Elimination of `AssetId`/`AccountId` Issuer-Well Collision**:
+   - `mint`, `burn`, and `setFloor` route issuer supply through `issuerWellAccount asset`
+     (`2 * protectedBase + asset`), strictly disjoint from ordinary user accounts (`< protectedBase`)
+     and protected seat/escrow accounts (`[protectedBase, 2 * protectedBase)`).
+3. **Direct `Register.Movement` Bridge**:
+   - `ResourcePosting.toMovements` compiles any `ResourcePosting` to balanced `Register.Movement` pairs.
 -/
+public import Obend.Ledger.Floors
 
 @[expose] public section
 namespace Obend.Ledger
 
 set_option autoImplicit false
 
-/-! ## Account, Asset & Lease Coordinates -/
-
-abbrev AccountId := Nat
-abbrev AssetId := Nat
-abbrev LeaseId := Nat
-abbrev Epoch := Nat
-
-/-- The floor of the protected coordinate space: kernel-held and seat account ids. -/
-def protectedBase : Nat := 2 ^ 256
+/-! ## Lease & Posting Records -/
 
 /-- The durable semantic content installed by a prepaid lease. -/
 structure LeaseRecord where
-  holder : AccountId
-  lessor : AccountId
-  asset : AssetId
-  prepaid : Nat
+  holder   : AccountId
+  lessor   : AccountId
+  asset    : AssetId
+  prepaid  : Nat
   startsAt : Epoch
   expiresAt : Epoch
   deriving DecidableEq, Repr
 
-/-- The conserved normal form: exactly one debit and one equal credit. -/
+/-- Conserved normal-form posting: one debit on `source` and one equal credit on `destination`. -/
 structure ResourcePosting where
-  source : AccountId
+  source      : AccountId
   destination : AccountId
-  asset : AssetId
-  amount : Nat
+  asset       : AssetId
+  amount      : Nat
   deriving DecidableEq, Repr
 
 abbrev Book.Posting := ResourcePosting
 
-/-- A signed multi-asset balance ledger with credit floors. -/
+/-- Compile a `ResourcePosting` to balanced `Register.Movement` lines on `Obend.Ledger.Register`. -/
+def ResourcePosting.toMovements (p : ResourcePosting) : List Movement :=
+  let acctStr (acc : AccountId) :=
+    "acct:" ++ String.ofList (natBitChars acc) ++ ":ast:" ++ String.ofList (natBitChars p.asset)
+  transferMovements (acctStr p.source) (acctStr p.destination) p.amount
+
+theorem ResourcePosting.toMovements_balanced (p : ResourcePosting) :
+    (p.toMovements.map (·.debit)).sum = (p.toMovements.map (·.credit)).sum :=
+  transferMovements_balanced _ _ _
+
+/-! ## Finite-Support `Book` (Closure-Free) -/
+
+/-- Closure-free signed multi-asset balance ledger with finite support and credit floors. -/
 structure Book where
-  accounts : List AccountId
-  balances : AccountId → AssetId → Int
-  leaseRecords : LeaseId → Option LeaseRecord
-  floors : AccountId → AssetId → Nat
+  accounts     : List AccountId := []
+  balances     : FinMap (AccountId × AssetId) := FinMap.empty
+  leaseRecords : List (LeaseId × LeaseRecord) := []
+  floors       : List ((AccountId × AssetId) × Nat) := []
+  deriving DecidableEq, Repr
 
 def Book.balance (b : Book) (a : AccountId) (ast : AssetId) : Int :=
-  b.balances a ast
+  b.balances.get (a, ast)
 
 def Book.floor (b : Book) (a : AccountId) (ast : AssetId) : Nat :=
-  b.floors a ast
+  (b.floors.lookup (a, ast)).getD 0
 
 def Book.leases (b : Book) (id : LeaseId) : Option LeaseRecord :=
-  b.leaseRecords id
+  b.leaseRecords.lookup id
 
-def Book.empty : Book where
-  accounts := []
-  balances := fun _ _ => 0
-  leaseRecords := fun _ => none
-  floors := fun _ _ => 0
+def Book.empty : Book := {}
 
-/-- The conserved total for one asset across all registered accounts. -/
+@[simp] theorem Book.balance_empty (a : AccountId) (ast : AssetId) :
+    Book.empty.balance a ast = 0 := rfl
+
+/-- Update a single `(account, asset)` balance in `b` (useful for initializing test books cleanly). -/
+def Book.setBalance (b : Book) (a : AccountId) (ast : AssetId) (val : Int) : Book :=
+  { b with balances := b.balances.set (a, ast) val }
+
+@[simp] theorem Book.balance_setBalance (b : Book) (a a' : AccountId) (ast ast' : AssetId) (val : Int) :
+    (b.setBalance a ast val).balance a' ast' =
+      if a' = a ∧ ast' = ast then val else b.balance a' ast' := by
+  unfold Book.setBalance Book.balance
+  simp [FinMap.get_set, Prod.mk.injEq]
+
+/-- Exact finite duplicate-free list of all assets in which `acc` currently holds a nonzero balance. -/
+def Book.heldAssets (b : Book) (acc : AccountId) : List AssetId :=
+  (dedupLocal ((b.balances.entries.filter (fun p => p.1.1 == acc)).map (fun p => p.1.2))).filter
+    (fun ast => b.balance acc ast != 0)
+
+theorem Book.heldAssets_nodup (b : Book) (acc : AccountId) :
+    (b.heldAssets acc).Nodup := by
+  unfold Book.heldAssets
+  exact nodup_filter_local _ (nodup_dedupLocal _)
+
+theorem Book.balance_zero_of_not_in_entries (b : Book) (acc : AccountId) (ast : AssetId)
+    (hnot : (acc, ast) ∉ b.balances.entries.map Prod.fst) :
+    b.balance acc ast = 0 :=
+  FinMap.get_eq_zero_of_not_mem_fst b.balances (acc, ast) hnot
+
+theorem Book.mem_heldAssets_iff (b : Book) (acc : AccountId) (ast : AssetId) :
+    ast ∈ b.heldAssets acc ↔ b.balance acc ast ≠ 0 := by
+  unfold Book.heldAssets
+  rw [List.mem_filter, mem_dedupLocal, bne_iff_ne]
+  constructor
+  · exact fun h => h.2
+  · intro hne
+    refine ⟨?_, hne⟩
+    have hmem_fst : (acc, ast) ∈ b.balances.entries.map Prod.fst :=
+      Classical.byContradiction fun hnot => hne (b.balance_zero_of_not_in_entries acc ast hnot)
+    rcases List.mem_map.mp hmem_fst with ⟨⟨⟨a0, ast0⟩, v⟩, hp, heq⟩
+    cases heq
+    exact List.mem_map.mpr ⟨((acc, ast), v), List.mem_filter.mpr ⟨hp, beq_self_eq_true acc⟩, rfl⟩
+
+theorem Book.balance_eq_zero_of_not_mem_heldAssets (b : Book) (acc : AccountId) {ast : AssetId}
+    (hnot : ast ∉ b.heldAssets acc) :
+    b.balance acc ast = 0 :=
+  Classical.byContradiction fun hne => hnot ((b.mem_heldAssets_iff acc ast).mpr hne)
+
+/-- Conserved total for one asset across all registered accounts in `b.accounts`. -/
 def Book.totalAsset (b : Book) (ast : AssetId) : Int :=
   (b.accounts.map (fun a => b.balance a ast)).sum
+
+/-- Global algebraic sum of `ast` across the entire `FinMap` (independent of `b.accounts`). -/
+def Book.globalAssetSum (b : Book) (ast : AssetId) : Int :=
+  ((b.balances.entries.filter (fun p => p.1.2 == ast)).map Prod.snd).sum
 
 /-! ## Posting Execution & Invariant Preservation -/
 
 def Book.applyPosting (b : Book) (p : ResourcePosting) : Book where
   accounts := b.accounts
-  balances := fun a ast =>
-    let cur := b.balances a ast
-    if ast = p.asset then
-      cur - (if a = p.source then (p.amount : Int) else 0)
-          + (if a = p.destination then (p.amount : Int) else 0)
-    else cur
+  balances :=
+    (b.balances.addDelta (p.source, p.asset) (-(p.amount : Int))).addDelta
+      (p.destination, p.asset) (p.amount : Int)
   leaseRecords := b.leaseRecords
   floors := b.floors
 
@@ -102,7 +151,21 @@ def Book.applyPosting (b : Book) (p : ResourcePosting) : Book where
 @[simp] theorem Book.applyPosting_leases (b : Book) (p : ResourcePosting) :
     (b.applyPosting p).leaseRecords = b.leaseRecords := rfl
 
-/-! ## Elementary Indicator Summation Lemmas -/
+theorem Book.balance_applyPosting (b : Book) (p : ResourcePosting) (a : AccountId) (ast : AssetId) :
+    (b.applyPosting p).balance a ast =
+      if ast = p.asset then
+        b.balance a ast
+          - (if a = p.source then (p.amount : Int) else 0)
+          + (if a = p.destination then (p.amount : Int) else 0)
+      else b.balance a ast := by
+  unfold Book.applyPosting Book.balance
+  simp only [FinMap.get_addDelta, Prod.mk.injEq]
+  by_cases hast : ast = p.asset <;> by_cases hs : a = p.source <;> by_cases hd : a = p.destination
+  all_goals
+    simp_all
+    try omega
+
+/-! ## Indicator Summation Lemmas -/
 
 theorem sum_zero_of_forall_zero {α : Type} (l : List α) (f : α → Int) (h : ∀ x ∈ l, f x = 0) :
     (l.map f).sum = 0 := by
@@ -150,23 +213,57 @@ theorem sum_map_add_sub (l : List AccountId) (f : AccountId → Int) (src dst : 
     rw [ih]
     omega
 
-/-- Every posting preserves the per-asset total. -/
+/-- Every posting preserves `totalAsset` across registered accounts. -/
 theorem Book.applyPosting_conserves (b : Book) (p : ResourcePosting)
     (hsrc : p.source ∈ b.accounts) (hdst : p.destination ∈ b.accounts)
     (hnodup : b.accounts.Nodup) (ast : AssetId) :
     (b.applyPosting p).totalAsset ast = b.totalAsset ast := by
-  unfold Book.totalAsset Book.applyPosting Book.balance
-  dsimp only
+  unfold Book.totalAsset
+  have hpoint : (b.accounts.map fun a => (b.applyPosting p).balance a ast) =
+      (b.accounts.map fun a =>
+        if ast = p.asset then
+          b.balance a ast
+            - (if a = p.source then (p.amount : Int) else 0)
+            + (if a = p.destination then (p.amount : Int) else 0)
+        else b.balance a ast) := by
+    apply List.map_congr_left
+    intro a _
+    exact Book.balance_applyPosting b p a ast
+  rw [Book.applyPosting_accounts, hpoint]
   by_cases heq : ast = p.asset
   · subst heq
     simp only [ite_true]
-    rw [sum_map_add_sub b.accounts (fun a => b.balances a p.asset) p.source p.destination (p.amount : Int)]
+    rw [sum_map_add_sub b.accounts (fun a => b.balance a p.asset) p.source p.destination (p.amount : Int)]
     rw [sum_single_indicator b.accounts p.source (p.amount : Int) hsrc hnodup]
     rw [sum_single_indicator b.accounts p.destination (p.amount : Int) hdst hnodup]
     omega
   · simp only [heq, ite_false]
 
-/-! ## The Nine Ledger Operations -/
+/-- Every posting ALSO preserves `globalAssetSum` unconditionally (even without account registration). -/
+theorem Book.applyPosting_conserves_global (b : Book) (p : ResourcePosting) (ast : AssetId) :
+    (b.applyPosting p).globalAssetSum ast = b.globalAssetSum ast := by
+  unfold Book.applyPosting Book.globalAssetSum
+  have step (m : FinMap (AccountId × AssetId)) (acc : AccountId) (pAst : AssetId) (d : Int) :
+      (((m.addDelta (acc, pAst) d).entries.filter (fun q => q.1.2 == ast)).map Prod.snd).sum =
+        ((m.entries.filter (fun q => q.1.2 == ast)).map Prod.snd).sum +
+          (if pAst = ast then d else 0) := by
+    unfold FinMap.addDelta
+    cases hd : d == 0 with
+    | true =>
+      have hd0 : d = 0 := beq_iff_eq.mp hd
+      subst hd0; simp
+    | false =>
+      simp only [Bool.false_eq_true, ↓reduceIte, List.filter_cons]
+      by_cases ha : pAst = ast
+      · subst ha; simp only [beq_self_eq_true, ↓reduceIte, List.map_cons, List.sum_cons]; omega
+      · have hb : (pAst == ast) = false := beq_eq_false_iff_ne.mpr ha
+        simp [hb, ha]
+  rw [step, step]
+  by_cases ha : p.asset = ast
+  · subst ha; simp; omega
+  · simp [ha]
+
+/-! ## The Nine Ledger Operations (with Protected `issuerWellAccount` Namespace) -/
 
 inductive Operation where
   | transfer (source destination : AccountId) (asset : AssetId) (amount : Nat)
@@ -181,16 +278,29 @@ inductive Operation where
   | release (escrow destination : AccountId) (asset : AssetId) (amount : Nat)
   deriving DecidableEq, Repr
 
+/-- Normalization of all 9 operations to a single `ResourcePosting`, routing `mint`, `burn`,
+    and `setFloor` through the dedicated `issuerWellAccount asset` namespace (`2 * protectedBase + asset`)
+    so `asset : AssetId` can never collide with ordinary user or seat `AccountId`s! -/
 def Operation.posting : Operation → ResourcePosting
   | .transfer s d a amt => ⟨s, d, a, amt⟩
-  | .mint a d amt => ⟨a, d, a, amt⟩
-  | .burn s a amt => ⟨s, a, a, amt⟩
+  | .mint a d amt => ⟨issuerWellAccount a, d, a, amt⟩
+  | .burn s a amt => ⟨s, issuerWellAccount a, a, amt⟩
   | .fee p c a amt => ⟨p, c, a, amt⟩
   | .lease _ h l a rate ep _ => ⟨h, l, a, rate * ep⟩
-  | .setFloor a acc _ => ⟨a, acc, a, 0⟩
+  | .setFloor a acc _ => ⟨issuerWellAccount a, acc, a, 0⟩
   | .sweep h c a _ _ amt => ⟨h, c, a, amt⟩
   | .hold h e a amt => ⟨h, e, a, amt⟩
   | .release e d a amt => ⟨e, d, a, amt⟩
+
+/-- Minting `amt` of `asset` to an ordinary user `u < protectedBase` (even `asset = 0, u = 0`)
+    credits `u` by the full `+amt` instead of self-cancelling! -/
+theorem mint_credits_ordinary_user (b : Book) (ast : AssetId) (u : AccountId) (amt : Nat)
+    (hu : u < protectedBase) :
+    (b.applyPosting (Operation.mint ast u amt).posting).balance u ast =
+      b.balance u ast + (amt : Int) := by
+  have hne : u ≠ issuerWellAccount ast := Ne.symm (issuerWellAccount_ne_ordinary hu ast)
+  rw [Book.balance_applyPosting]
+  simp [Operation.posting, hne]
 
 def retained (permille : Nat) (balance : Nat) : Nat → Nat
   | 0 => balance
@@ -219,13 +329,9 @@ def Operation.apply (op : Operation) (b : Book) : Book :=
   let paid := b.applyPosting op.posting
   match op with
   | .lease id h l a rate epochs startsAt =>
-      { paid with leaseRecords := fun i =>
-          if i = id then some ⟨h, l, a, rate * epochs, startsAt, startsAt + epochs⟩
-          else paid.leaseRecords i }
-  | .setFloor a acc floor =>
-      { paid with floors := fun acc' a' =>
-          if acc' = acc ∧ a' = a then floor
-          else paid.floors acc' a' }
+      { paid with leaseRecords := (id, ⟨h, l, a, rate * epochs, startsAt, startsAt + epochs⟩) :: paid.leaseRecords }
+  | .setFloor a acc fl =>
+      { paid with floors := ((acc, a), fl) :: paid.floors }
   | _ => paid
 
 @[simp] theorem Operation.apply_accounts (op : Operation) (b : Book) :
@@ -236,7 +342,6 @@ theorem Operation.apply_total_eq_posting (op : Operation) (b : Book) (ast : Asse
     (op.apply b).totalAsset ast = (b.applyPosting op.posting).totalAsset ast := by
   cases op <;> rfl
 
-/-- Common conservation theorem across all 9 operations. -/
 theorem Operation.apply_conserves (op : Operation) (b : Book)
     (hsrc : op.posting.source ∈ b.accounts) (hdst : op.posting.destination ∈ b.accounts)
     (hnodup : b.accounts.Nodup) (ast : AssetId) :
@@ -255,9 +360,10 @@ def RegistrationAdmission (b : Book) (acc : AccountId) : Prop :=
 theorem Book.registerAccount_conserves (b : Book) (acc : AccountId)
     (adm : RegistrationAdmission b acc) (ast : AssetId) :
     (b.registerAccount acc).totalAsset ast = b.totalAsset ast := by
-  unfold Book.totalAsset Book.registerAccount Book.balance
+  unfold Book.totalAsset Book.registerAccount
   simp only [List.map_cons, List.sum_cons]
-  have h0 : b.balances acc ast = 0 := adm.2.1 ast
+  have h0 : b.balance acc ast = 0 := adm.2.1 ast
+  dsimp [Book.balance] at h0 ⊢
   rw [h0]
   omega
 
@@ -293,9 +399,7 @@ theorem sum_erase_zero (l : List AccountId) (acc : AccountId) (f : AccountId →
       omega
     · rename_i hxacc
       have hx : x ≠ acc := by
-        intro h
-        subst h
-        simp at hxacc
+        intro h; subst h; simp at hxacc
       simp only [List.map_cons, List.sum_cons]
       rcases List.mem_cons.mp hmem with rfl | hin
       · exact False.elim (hx rfl)
@@ -304,8 +408,8 @@ theorem sum_erase_zero (l : List AccountId) (acc : AccountId) (f : AccountId →
 theorem Book.deregisterAccount_conserves (b : Book) (acc : AccountId)
     (adm : DeregistrationAdmission b acc) (hnodup : b.accounts.Nodup) (ast : AssetId) :
     (b.deregisterAccount acc).totalAsset ast = b.totalAsset ast := by
-  unfold Book.totalAsset Book.deregisterAccount Book.balance
-  exact sum_erase_zero b.accounts acc (fun a => b.balances a ast) adm.2.1 hnodup (adm.2.2.1 ast)
+  unfold Book.totalAsset Book.deregisterAccount
+  exact sum_erase_zero b.accounts acc (fun a => b.balance a ast) adm.2.1 hnodup (adm.2.2.1 ast)
 
 def deregisterAccounts (b : Book) : List AccountId → Book
   | [] => b
@@ -324,8 +428,8 @@ def OperationsAdmitted (b : Book) : List Operation → Prop
   | op :: rest => Admission b op ∧ OperationsAdmitted (op.apply b) rest
 
 structure Batch where
-  registrations : List AccountId
-  operations : List Operation
+  registrations   : List AccountId
+  operations      : List Operation
   deregistrations : List AccountId
   deriving DecidableEq, Repr
 
@@ -341,27 +445,49 @@ def Batch.Admission (b : Book) (batch : Batch) : Prop :=
       (applyOperations (registerAccounts b batch.registrations) batch.operations)
       batch.deregistrations
 
-theorem registerAccounts_nodup {b : Book} (hnodup : b.accounts.Nodup) :
-    ∀ {accs : List AccountId}, RegistrationsAdmitted b accs →
-      (registerAccounts b accs).accounts.Nodup
-  | [], _ => hnodup
-  | acc :: rest, ⟨adm, radm⟩ => by
-    have h1 : (b.registerAccount acc).accounts.Nodup := List.nodup_cons.mpr ⟨adm.1, hnodup⟩
-    exact registerAccounts_nodup h1 radm
+theorem registerAccounts_nodup (accs : List AccountId) (b : Book)
+    (hnodup : b.accounts.Nodup) (hadm : RegistrationsAdmitted b accs) :
+    (registerAccounts b accs).accounts.Nodup := by
+  induction accs generalizing b with
+  | nil => exact hnodup
+  | cons acc tail ih =>
+    exact ih (b.registerAccount acc) (List.nodup_cons.mpr ⟨hadm.1.1, hnodup⟩) hadm.2
 
-theorem applyOperations_nodup {b : Book} (hnodup : b.accounts.Nodup) :
-    ∀ (ops : List Operation), (applyOperations b ops).accounts.Nodup
-  | [] => hnodup
-  | op :: rest => by
+theorem applyOperations_nodup :
+    ∀ (ops : List Operation) {b : Book}, b.accounts.Nodup → (applyOperations b ops).accounts.Nodup
+  | [], _, hnodup => hnodup
+  | op :: rest, b, hnodup => by
     have h1 : (op.apply b).accounts.Nodup := by rw [op.apply_accounts]; exact hnodup
-    exact applyOperations_nodup h1 rest
+    exact applyOperations_nodup rest h1
+
+theorem mem_erase_sub {α : Type} [BEq α] {a x : α} :
+    ∀ {l : List α}, x ∈ l.erase a → x ∈ l
+  | [], h => h
+  | b :: bs, h => by
+    rw [List.erase_cons] at h
+    split at h
+    · exact List.Mem.tail b h
+    · rcases List.mem_cons.mp h with rfl | hm
+      · exact List.Mem.head bs
+      · exact List.Mem.tail b (mem_erase_sub hm)
+
+theorem nodup_erase_local (a : AccountId) :
+    ∀ {l : List AccountId}, l.Nodup → (l.erase a).Nodup
+  | [], h => h
+  | x :: xs, hnd => by
+    rw [List.nodup_cons] at hnd
+    rw [List.erase_cons]
+    split
+    · exact hnd.2
+    · rw [List.nodup_cons]
+      exact ⟨fun hm => hnd.1 (mem_erase_sub hm), nodup_erase_local a hnd.2⟩
 
 theorem registerAccounts_conserves (b : Book) (accs : List AccountId)
     (adm : RegistrationsAdmitted b accs) (ast : AssetId) :
     (registerAccounts b accs).totalAsset ast = b.totalAsset ast := by
   induction accs generalizing b with
   | nil => rfl
-  | cons acc rest ih =>
+  | cons acc _ ih =>
     exact (ih (b.registerAccount acc) adm.2).trans (b.registerAccount_conserves acc adm.1 ast)
 
 theorem applyOperations_conserves (b : Book) (ops : List Operation)
@@ -369,7 +495,7 @@ theorem applyOperations_conserves (b : Book) (ops : List Operation)
     (applyOperations b ops).totalAsset ast = b.totalAsset ast := by
   induction ops generalizing b with
   | nil => rfl
-  | cons op rest ih =>
+  | cons op _ ih =>
     have hop := op.apply_conserves b adm.1.sourcePresent adm.1.destinationPresent hnodup ast
     have h1 : (op.apply b).accounts.Nodup := by rw [op.apply_accounts]; exact hnodup
     exact (ih (op.apply b) h1 adm.2).trans hop
@@ -379,20 +505,21 @@ theorem deregisterAccounts_conserves (b : Book) (accs : List AccountId)
     (deregisterAccounts b accs).totalAsset ast = b.totalAsset ast := by
   induction accs generalizing b with
   | nil => rfl
-  | cons acc rest ih =>
-    have hdec : (b.deregisterAccount acc).accounts.Nodup := List.Nodup.erase acc hnodup
+  | cons acc _ ih =>
+    have hdec : (b.deregisterAccount acc).accounts.Nodup := nodup_erase_local acc hnodup
     exact (ih (b.deregisterAccount acc) hdec adm.2).trans (b.deregisterAccount_conserves acc adm.1 hnodup ast)
 
-/-- Universal batch conservation law. -/
 theorem Batch.conservation (b : Book) (batch : Batch)
     (adm : batch.Admission b) (hnodup : b.accounts.Nodup) (ast : AssetId) :
     (batch.apply b).totalAsset ast = b.totalAsset ast := by
   unfold Batch.apply
-  have hreg_nodup := registerAccounts_nodup hnodup adm.1
-  have hops_nodup := applyOperations_nodup hreg_nodup batch.operations
+  have hreg_nodup := registerAccounts_nodup batch.registrations b hnodup adm.1
+  have hops_nodup := applyOperations_nodup batch.operations hreg_nodup
   have hdereg := deregisterAccounts_conserves _ batch.deregistrations hops_nodup adm.2.2 ast
   have hops := applyOperations_conserves _ batch.operations hreg_nodup adm.2.1 ast
   have hreg := registerAccounts_conserves b batch.registrations adm.1 ast
   exact hdereg.trans (hops.trans hreg)
 
 end Obend.Ledger
+
+end

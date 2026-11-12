@@ -611,7 +611,7 @@ theorem verifyBlindedMultiProof_revealed_binds {H : Hash} (hb : Bounded H) (cell
     (id = cells[bo.index].id ∧ readCapOf req = cells[bo.index].readCap ∧
       writeCapOf req = cells[bo.index].writeCap ∧ capMaskOf req = cells[bo.index].capMask ∧
       salt = cells[bo.index].salt ∧ content = cells[bo.index].content) ∨ Collision H := by
-  rcases verifyBlindedMultiProof_binds hb cells hs h hroot hsize hbo hi with heq | hcoll
+  rcases verifyBlindedMultiProof_binds (bmp := bmp) hb cells hs h hroot hsize hbo hi with heq | hcoll
   · rw [hcell] at heq
     have heq' : cellBlind H ⟨id, req, salt, content⟩ = cellBlind H cells[bo.index] := heq
     rcases cellBlind_binds hb hid hsalt hid' hsalt' heq' with hf | hcoll
