@@ -302,7 +302,7 @@ removed. -/
 
 /-- Etching what was just deposited restores the stack, whatever is under it, for any `t ≥ 0`
 (when the top film has positive thickness). -/
-theorem etch_deposit (w : WaferState) (m : FilmMaterial) {t : CanonicalRat} (ht : 0 ≤ t)
+theorem etch_deposit (w : WaferState) (m : FilmMaterial) {t : CanonicalRat} (_ht : 0 ≤ t)
     (hpos : ∀ f ∈ w.films, 0 < f.thicknessCm) :
     (w.deposit m t).etch m t = some w := by
   obtain ⟨bg, films, dops, rem⟩ := w
@@ -334,6 +334,110 @@ where
     | k + 1, s =>
       let h' := (hi + v / hi) / 2
       go ((((h' * s).ceil : Int) : CanonicalRat) / s) k s
+
+private theorem rat_sq_nonneg (x : CanonicalRat) : 0 ≤ x * x := by
+  rcases @Rat.le_total 0 x with hx | hx
+  · exact Rat.mul_nonneg hx hx
+  · have hnx : 0 ≤ -x := by grind
+    have hmul := Rat.mul_nonneg hnx hnx
+    grind
+
+private theorem sqrtEnclosure_go_spec {v hi s : CanonicalRat} (hv : 0 ≤ v) (hs : 0 < s)
+    (hpos : 0 < hi) (hhi : v ≤ hi * hi) :
+    ∀ k, 0 < sqrtEnclosure.go v hi k s ∧ v ≤ sqrtEnclosure.go v hi k s * sqrtEnclosure.go v hi k s
+  | 0 => ⟨hpos, hhi⟩
+  | k + 1 => by
+    simp only [sqrtEnclosure.go]
+    let q := v / hi
+    let h' := (hi + q) / 2
+    let hi₁ := (((h' * s).ceil : Int) : CanonicalRat) / s
+    have hinv : 0 ≤ hi⁻¹ := Rat.le_of_lt (Rat.inv_pos.2 hpos)
+    have hq_nonneg : 0 ≤ q := by rw [show q = v * hi⁻¹ from Rat.div_def v hi]; exact Rat.mul_nonneg hv hinv
+    have hh'_pos : 0 < h' := by
+      rw [show h' = (hi + q) * (2 : CanonicalRat)⁻¹ from Rat.div_def (hi + q) 2]
+      exact Rat.mul_pos (by grind) (Rat.inv_pos.2 (by decide))
+    have hhi_q : hi * q = v := by
+      rw [show q = v * hi⁻¹ from Rat.div_def v hi, Rat.mul_comm v hi⁻¹, ← Rat.mul_assoc,
+          Rat.mul_inv_cancel hi (Rat.ne_of_gt hpos), Rat.one_mul]
+    have h2h' : 2 * h' = hi + q := by
+      rw [show h' = (hi + q) * (2 : CanonicalRat)⁻¹ from Rat.div_def (hi + q) 2]
+      grind
+    have hdiff_sq : 0 ≤ (hi - q) * (hi - q) := rat_sq_nonneg (hi - q)
+    have hamgm : v ≤ h' * h' := by
+      have hid : (2 * h') * (2 * h') = (hi - q) * (hi - q) + 4 * (hi * q) := by
+        rw [h2h']
+        grind
+      rw [hhi_q] at hid
+      grind
+    have hle₁ : h' ≤ hi₁ := Interval.le_div_of_mul_le hs Rat.le_ceil
+    have hpos₁ : 0 < hi₁ := by grind
+    have hsq₁ : h' * h' ≤ hi₁ * hi₁ := by
+      have hh'_nn : 0 ≤ h' := Rat.le_of_lt hh'_pos
+      have h1 : h' * h' ≤ h' * hi₁ := Rat.mul_le_mul_of_nonneg_left hle₁ hh'_nn
+      have h2 : h' * hi₁ ≤ hi₁ * hi₁ := Rat.mul_le_mul_of_nonneg_right hle₁ (Rat.le_of_lt hpos₁)
+      exact Rat.le_trans h1 h2
+    exact sqrtEnclosure_go_spec hv hs hpos₁ (Rat.le_trans hamgm hsq₁) k
+
+/-- **The root enclosure brackets its argument (`sqrtEnclosure_spec`)**: for every `v ≥ 0` and
+iteration count `iters`, `0 ≤ lo`, `0 < hi`, `lo² ≤ v ≤ hi²`, and any non-negative square root `r`
+with `v ∈ [r², r²]` (or `lo_v ≤ r² ≤ hi_v`) lies inside `[lo, hi]`. -/
+theorem sqrtEnclosure_spec {v : CanonicalRat} (hv : 0 ≤ v) (iters : Nat := 48) :
+    0 ≤ (sqrtEnclosure v iters).lo ∧
+    0 < (sqrtEnclosure v iters).hi ∧
+    (sqrtEnclosure v iters).lo * (sqrtEnclosure v iters).lo ≤ v ∧
+    v ≤ (sqrtEnclosure v iters).hi * (sqrtEnclosure v iters).hi ∧
+    (∀ r : CanonicalRat, 0 ≤ r → r * r = v → r ∈ sqrtEnclosure v iters) := by
+  unfold sqrtEnclosure
+  have hs_nat : (0 : CanonicalRat) < (roundScale : Nat) := by exact_mod_cast roundScale_pos
+  let s : CanonicalRat := (roundScale : Nat)
+  have hs : 0 < s := hs_nat
+  have h0_pos : 0 < max (1 : CanonicalRat) v := by
+    rw [Rat.max_def]; split <;> grind
+  have h0_sq : v ≤ max (1 : CanonicalRat) v * max (1 : CanonicalRat) v := by
+    rw [Rat.max_def]
+    split
+    · rename_i hge1
+      have hmul : 1 * v ≤ v * v := Rat.mul_le_mul_of_nonneg_right hge1 hv
+      rwa [Rat.one_mul] at hmul
+    · grind
+  obtain ⟨hhi_pos, hhi_sq⟩ := sqrtEnclosure_go_spec hv hs h0_pos h0_sq iters
+  let hi := sqrtEnclosure.go v (max 1 v) iters s
+  have hlo_nn : 0 ≤ v / hi := by
+    rw [Rat.div_def]
+    exact Rat.mul_nonneg hv (Rat.le_of_lt (Rat.inv_pos.2 hhi_pos))
+  have hlo_le_hi : v / hi ≤ hi := Interval.div_le_of_le_mul hhi_pos hhi_sq
+  have hlo_hi : (v / hi) * hi = v := by
+    rw [Rat.div_def, Rat.mul_assoc, Rat.inv_mul_cancel hi (Rat.ne_of_gt hhi_pos), Rat.mul_one]
+  have hlo_sq : (v / hi) * (v / hi) ≤ v := by
+    have h1 : (v / hi) * (v / hi) ≤ (v / hi) * hi :=
+      Rat.mul_le_mul_of_nonneg_left hlo_le_hi hlo_nn
+    rw [hlo_hi] at h1
+    exact h1
+  refine ⟨hlo_nn, hhi_pos, hlo_sq, hhi_sq, ?_⟩
+  intro r hr hrv
+  rw [Interval.mem_iff]
+  dsimp only
+  constructor
+  · apply le_of_ratPow_le hr (k := 1)
+    simpa [ratPow, hrv] using hlo_sq
+  · apply le_of_ratPow_le (Rat.le_of_lt hhi_pos) (k := 1)
+    simpa [ratPow, hrv] using hhi_sq
+
+/-- Interval-monotone root bracket: if `0 ≤ a`, `0 ≤ r`, and `a ≤ r² ≤ b`, then `r` lies in
+`[(sqrtEnclosure a iters).lo, (sqrtEnclosure b iters).hi]`. -/
+theorem sqrtEnclosure_bracket_mem {a b r : CanonicalRat} (ha : 0 ≤ a) (hr : 0 ≤ r)
+    (har : a ≤ r * r) (hrb : r * r ≤ b) (iters : Nat := 48) :
+    r ∈ (⟨(sqrtEnclosure a iters).lo, (sqrtEnclosure b iters).hi⟩ : Interval) := by
+  have hb : 0 ≤ b := Rat.le_trans ha (Rat.le_trans har hrb)
+  obtain ⟨_, _, hlo_a, _, _⟩ := sqrtEnclosure_spec ha iters
+  obtain ⟨_, hhi_b_pos, _, hhi_b, _⟩ := sqrtEnclosure_spec hb iters
+  rw [Interval.mem_iff]
+  dsimp only
+  constructor
+  · apply le_of_ratPow_le hr (k := 1)
+    simpa [ratPow] using Rat.le_trans hlo_a har
+  · apply le_of_ratPow_le (Rat.le_of_lt hhi_b_pos) (k := 1)
+    simpa [ratPow] using Rat.le_trans hrb hhi_b
 
 /-- `[π]` to 15 digits. -/
 @[expose] def piInterval : Interval := ⟨3.14159265358979, 3.14159265358980⟩

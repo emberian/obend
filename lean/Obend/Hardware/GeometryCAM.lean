@@ -51,7 +51,6 @@ public import Obend.Judge.Class
 @[expose] public section
 
 namespace Obend.Hardware.GeometryCAM
-open Obend.Hardware.Thermal
 open Obend.Hardware.Accelerators
 set_option autoImplicit false
 
@@ -2480,140 +2479,7 @@ theorem synthesizeCertifiedSweptVolume_no_gouge_sound
     (by unfold computeCertifiedStepPad; omega)
     (by omega)
 
-
-
-/-! ## 4. Machine-Tool Dynamics: Servo Lag, End-Mill Cantilever Deflection & Altintas Chatter -/
-
-/-- Evaluates the radial cutting force $F_r = k_r \cdot a_p \cdot h_{\text{chip}}$ (in milli-Newtons)
-for radial cutting coefficient `krScaled`, axial depth of cut `apUm`, and feed per tooth `chipLoadUm`. -/
-def evalRadialCuttingForceMn (krScaled apUm chipLoadUm : Int) : Int :=
-  krScaled * apUm * chipLoadUm
-
-/-- Evaluates the true physical cutter position (in nanometers) by accounting for:
-1. Commanded G-code position `xCmdNm`,
-2. Ballscrew/servo velocity tracking lag `feedVelMmPerS * servoLagNsPerMm`, and
-3. End-mill cantilever bending deflection `toolComplianceNmPerMn * radialForceMn`. -/
-def evalActualCutterPosNm
-    (xCmdNm feedVelMmPerS servoLagNsPerMm toolComplianceNmPerMn radialForceMn : Int) : Int :=
-  xCmdNm - (feedVelMmPerS * servoLagNsPerMm + toolComplianceNmPerMn * radialForceMn)
-
-/-- Evaluates the total dimensional surface error $x_{\text{cmd}} - x_{\text{actual}}$ (in nanometers)
-induced by machine-tool servo lag and cutter deflection. -/
-def evalMachiningDimensionalErrorNm
-    (feedVelMmPerS servoLagNsPerMm toolComplianceNmPerMn radialForceMn : Int) : Int :=
-  feedVelMmPerS * servoLagNsPerMm + toolComplianceNmPerMn * radialForceMn
-
-/-- **Exact Machine-Tool Deflection & Servo-Lag Error Identity (`machining_dimensional_error_identity`)**:
-The discrepancy between the G-code commanded coordinate and the physical cutter tip coordinate is
-identically `evalMachiningDimensionalErrorNm`. -/
-theorem machining_dimensional_error_identity
-    (xCmdNm feedVelMmPerS servoLagNsPerMm toolComplianceNmPerMn radialForceMn : Int) :
-    xCmdNm - evalActualCutterPosNm xCmdNm feedVelMmPerS servoLagNsPerMm toolComplianceNmPerMn radialForceMn =
-      evalMachiningDimensionalErrorNm feedVelMmPerS servoLagNsPerMm toolComplianceNmPerMn radialForceMn := by
-  unfold evalActualCutterPosNm evalMachiningDimensionalErrorNm
-  omega
-
-/-- **Feed & Chip-Load Governor Theorem (`machining_governor_bounds_surface_error`)**:
-Whenever feed velocity `feedVel ≤ maxFeedVel` and radial cutting force `radialForce ≤ maxForce`
-with non-negative servo lag and tool compliance (`0 ≤ servoLag`, `0 ≤ compliance`), the actual
-machined surface dimensional error is bounded by the governed ceiling. -/
-theorem machining_governor_bounds_surface_error
-    (feedVel maxFeedVel servoLag compliance radialForce maxForce : Int)
-    (hFeed : feedVel ≤ maxFeedVel)
-    (hForce : radialForce ≤ maxForce)
-    (hLag : 0 ≤ servoLag)
-    (hComp : 0 ≤ compliance) :
-    evalMachiningDimensionalErrorNm feedVel servoLag compliance radialForce ≤
-      evalMachiningDimensionalErrorNm maxFeedVel servoLag compliance maxForce := by
-  unfold evalMachiningDimensionalErrorNm
-  have h1 := int_mul_le_mul_of_nonneg_right feedVel maxFeedVel servoLag hFeed hLag
-  have h2 := int_mul_le_mul_of_nonneg_left radialForce maxForce compliance hForce hComp
-  omega
-
-/-- **Altintas–Budak Regenerative Chatter Stability Predicate (`checkAltintasChatterStable`)**:
-In Yusuf Altintas's regenerative chatter theory, self-excited vibrations are avoided when the
-product of axial depth of cut `apUm`, cutting force coefficient `kfScaled`, and the negative real
-part of the spindle-tool-holder transfer function `negReFrfScaled` stays within the critical
-damping stability boundary `chatterLimitScaled`:
-$$2 \cdot a_p \cdot K_f \cdot |\operatorname{Re}[G(\omega_c)]| \le C_{\text{lim}}.$$ -/
-def checkAltintasChatterStable
-    (apUm kfScaled negReFrfScaled chatterLimitScaled : Int) : Bool :=
-  decide (0 ≤ apUm ∧ 2 * apUm * kfScaled * negReFrfScaled ≤ chatterLimitScaled)
-
-/-- **Altintas Chatter Stability Monotonicity (`altintas_chatter_depth_monotone`)**:
-For any positive cutting coefficient and spindle FRF magnitude (`0 ≤ kfScaled`, `0 ≤ negReFrfScaled`),
-if an axial depth of cut `ap2` is chatter-stable, then any shallower cut `0 ≤ ap1 ≤ ap2` is also
-guaranteed to be chatter-stable. -/
-theorem altintas_chatter_depth_monotone
-    (ap1 ap2 kfScaled negReFrfScaled chatterLimitScaled : Int)
-    (hAp1 : 0 ≤ ap1) (hLe : ap1 ≤ ap2)
-    (hKf : 0 ≤ kfScaled) (hFrf : 0 ≤ negReFrfScaled)
-    (hStable2 : checkAltintasChatterStable ap2 kfScaled negReFrfScaled chatterLimitScaled = true) :
-    checkAltintasChatterStable ap1 kfScaled negReFrfScaled chatterLimitScaled = true := by
-  unfold checkAltintasChatterStable at *
-  have h2 := of_decide_eq_true hStable2
-  rw [decide_eq_true_iff]
-  refine ⟨hAp1, ?_⟩
-  have h2Ap : 2 * ap1 ≤ 2 * ap2 := by omega
-  have hMul1 := int_mul_le_mul_of_nonneg_right (2 * ap1) (2 * ap2) kfScaled h2Ap hKf
-  have hMul2 := int_mul_le_mul_of_nonneg_right (2 * ap1 * kfScaled) (2 * ap2 * kfScaled) negReFrfScaled hMul1 hFrf
-  omega
-
-/-! ## 5. In-Silico Evolutionary Physical Design Search & Signoff -/
-
-/-- A candidate physical design and CAM process plan generated by an evolutionary / gradient agent:
-* `candidateId`: nominal design identifier,
-* `sweptLo`: interval lower bound of cutter swept-volume SDF over the protected target part box,
-* `surfaceErrNm`: worst-case servo-lag + tool-deflection surface error (in nm),
-* `maxTolNm`: maximum allowed dimensional tolerance (in nm),
-* `apUm`, `kfScaled`, `negReFrfScaled`, `chatterLimitScaled`: Altintas chatter parameters,
-* `performanceScore`: multiphysics objective score (e.g., torque-to-weight or thermal margin). -/
-structure PhysicalDesignCandidate where
-  candidateId        : Nat
-  sweptLo            : Int
-  surfaceErrNm       : Int
-  maxTolNm           : Int
-  apUm               : Int
-  kfScaled           : Int
-  negReFrfScaled     : Int
-  chatterLimitScaled : Int
-  performanceScore   : Int
-  deriving DecidableEq, Repr
-
-/-- Kernel verification gate for a physical design candidate:
-1. Zero gouging (`0 < c.sweptLo`),
-2. Dimensional accuracy under machine-tool deflection & servo lag (`c.surfaceErrNm ≤ c.maxTolNm`),
-3. Altintas regenerative chatter stability (`checkAltintasChatterStable = true`), and
-4. Multiphysics performance floor (`minScore ≤ c.performanceScore`). -/
-def checkCandidateManufacturingSafe (minScore : Int) (c : PhysicalDesignCandidate) : Bool :=
-  decide (0 < c.sweptLo) &&
-  decide (c.surfaceErrNm ≤ c.maxTolNm) &&
-  checkAltintasChatterStable c.apUm c.kfScaled c.negReFrfScaled c.chatterLimitScaled &&
-  decide (minScore ≤ c.performanceScore)
-
-/-- Filter an evolutionary population of candidate physical designs down to the kernel-certified subset. -/
-def filterVerifiedDesigns (minScore : Int) (pop : List PhysicalDesignCandidate) : List PhysicalDesignCandidate :=
-  pop.filter (checkCandidateManufacturingSafe minScore)
-
-/-- **Evolutionary Design Search Soundness Theorem (`evolutionary_search_emits_only_verified_designs`)**:
-Every physical design candidate `c` retained by `filterVerifiedDesigns minScore pop` is guaranteed
-to be gouge-free (`0 < c.sweptLo`), within dimensional tolerance (`c.surfaceErrNm ≤ c.maxTolNm`),
-chatter-stable (`checkAltintasChatterStable = true`), and above the multiphysics performance floor. -/
-theorem evolutionary_search_emits_only_verified_designs
-    (minScore : Int) (pop : List PhysicalDesignCandidate) (c : PhysicalDesignCandidate)
-    (hMem : c ∈ filterVerifiedDesigns minScore pop) :
-    0 < c.sweptLo ∧
-    c.surfaceErrNm ≤ c.maxTolNm ∧
-    checkAltintasChatterStable c.apUm c.kfScaled c.negReFrfScaled c.chatterLimitScaled = true ∧
-    minScore ≤ c.performanceScore := by
-  unfold filterVerifiedDesigns at hMem
-  rw [List.mem_filter] at hMem
-  have hOk := hMem.2
-  unfold checkCandidateManufacturingSafe at hOk
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
-  exact ⟨hOk.1.1.1, hOk.1.1.2, hOk.1.2, hOk.2⟩
-
-/-! ## 6. One F-Rep: the tree compiles to the tape (`FRepExpr.toTape`)
+/-! ## 4. One F-Rep: the tree compiles to the tape (`FRepExpr.toTape`)
 
 The tree (`FRepExpr`) carries the interval, gradient and swept-volume theorems; the tape (`SsaTapeOp`)
 carries pruning, compaction and the RTL compiler. Until 2026-11-04 nothing related them, so every

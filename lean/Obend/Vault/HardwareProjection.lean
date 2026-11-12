@@ -17,17 +17,15 @@ public import Obend.Core.Data
 public import Obend.Doc.Structured
 public import Obend.Doc.Graph
 public import Obend.Hardware.HDL
+public import Obend.Hardware.Synth
 public import Obend.Hardware.Process
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.DRC
-public import Obend.Hardware.WaferSpace
 public import Obend.Hardware.Circuits
 public import Obend.Hardware.Retiming
 public import Obend.Hardware.Fabric
 public import Obend.Hardware.Analog
 public import Obend.Hardware.Magnetics
-public import Obend.Hardware.FluidThermal
-public import Obend.Hardware.PowerElectronics
 
 @[expose] public section
 
@@ -36,18 +34,15 @@ namespace Obend.Vault.HardwareProjection
 open Obend.Core.Data
 open Obend.Doc
 open Obend.Hardware.HDL
+open Obend.Hardware.Synth
 open Obend.Hardware.Process
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.DRC
-open Obend.Hardware.WaferSpace
 open Obend.Hardware.Circuits
 open Obend.Hardware.Retiming
 open Obend.Hardware.Analog
 open Obend.Hardware.Fabric
-open Obend.Hardware.Thermal
 open Obend.Hardware.Magnetics
-open Obend.Hardware.FluidThermal
-open Obend.Hardware.PowerElectronics
 
 set_option autoImplicit false
 
@@ -56,8 +51,8 @@ set_option autoImplicit false
 /-- Primary circuit representation: synchronous RTL module with combinational DAG & CDC discipline. -/
 abbrev Circuit := Obend.Hardware.HDL.RtlModule
 
-/-- Primary netlist representation: canonical LVS device netlist signature. -/
-abbrev Netlist := Obend.Hardware.WaferSpace.LvsNetlistSig
+/-- Primary netlist representation: synthesized FPGA/ASIC primitive `BelNetlist`. -/
+abbrev Netlist := Obend.Hardware.Synth.BelNetlist
 
 /-- Composite static timing analysis report specification. -/
 structure TimingReport where
@@ -68,12 +63,6 @@ structure TimingReport where
 
 /-- Primary physical layout representation: untrusted PnR placement, routing, and bitstream certificate. -/
 abbrev GdsLayout := Obend.Hardware.PlaceRoute.PnrCertificate
-
-instance : ToString WaferSpacePdk where
-  toString
-    | .gf180mcuD => "gf180mcuD"
-    | .sky130A   => "sky130A"
-    | .ihpSg13g2 => "ihpSg13g2"
 
 /-! ## 2. Data AST Encoding Helpers -/
 
@@ -200,18 +189,19 @@ def syncGraphToData (g : SyncGraph) : Data :=
     ])))
   ]
 
-/-- Project an LVS netlist signature into canonical `Core.Data`. -/
-def lvsNetlistToData (sig : LvsNetlistSig) : Data :=
+/-- Project a synthesized `BelNetlist` into canonical `Core.Data`. -/
+def belNetlistToData (net : BelNetlist) : Data :=
   .record [
     ("kind", .label "netlist"),
-    ("type", .label "lvs_netlist"),
-    ("module_name", .label sig.moduleName),
-    ("nfet_count", .natural sig.nfetCount),
-    ("pfet_count", .natural sig.pfetCount),
-    ("mim_cap_count", .natural sig.mimCapCount),
-    ("total_cap_ff", .natural sig.totalCapFf),
-    ("connections", .record (sig.pinConnections.zipIdx.map fun ((pin, net), i) =>
-      (toString i, .record [("pin", .label pin), ("net", .label net)])))
+    ("type", .label "bel_netlist"),
+    ("module_name", .label net.moduleName),
+    ("input_count", .natural net.inputNames.length),
+    ("cell_count", .natural net.cells.length),
+    ("ff_count", .natural (countFfBels net)),
+    ("output_count", .natural net.outputNames.length),
+    ("valid", .boolean (checkBelNetlistValid net)),
+    ("cells", .record (net.cells.zipIdx.map fun (c, i) =>
+      (toString i, .record [("dst", .label c.dstName), ("fanin", .natural c.inputs.length)])))
   ]
 
 /-- Project a single routed net into `Core.Data`. -/
@@ -329,21 +319,6 @@ def cutlineDrcToData (deck : FoundryDrcDeck) (feat : CutlineDrcFeature) : Data :
     ("status", .label (if drcClean then "DRC_CLEAN" else "DRC_VIOLATION"))
   ]
 
-/-- Project wafer shuttle tapeout signoff certificate into canonical `Core.Data`. -/
-def waferSpaceSignoffToData (cert : WaferSpaceSignoffCert) : Data :=
-  .record [
-    ("kind", .label "wafer_space_signoff"),
-    ("project_name", .label cert.projectName),
-    ("pdk", .label (toString cert.pdk)),
-    ("padring_complete", .boolean (checkPadringComplete cert.padring)),
-    ("antenna_safe", .boolean (checkAllAntennaNets cert.pdk cert.antennaNets)),
-    ("cmp_density_safe", .boolean (checkAllCmpDensity cert.metalLayers)),
-    ("power_safe", .boolean (checkAmsPowerSafe cert.voltageChecks)),
-    ("lvs_matched", .boolean (checkLvsMatch cert.schematicSig cert.layoutSig)),
-    ("signoff_passed", .boolean (checkWaferSpaceSignoff cert)),
-    ("status", .label (if checkWaferSpaceSignoff cert then "SIGNOFF_PASSED" else "SIGNOFF_REFUSED"))
-  ]
-
 /-! ## 4. Projections into `Doc.Content.cell` -/
 
 /-- Project an `RtlModule` circuit into a `.hardwareSchematic` document cell. -/
@@ -354,13 +329,13 @@ def projectCircuit
     (receipt : Option ByteArray := none) : Doc.Content :=
   .cell id .hardwareSchematic (circuitToData m) pins receipt
 
-/-- Project an LVS netlist into a `.hardwareSchematic` document cell. -/
+/-- Project a `BelNetlist` into a `.hardwareSchematic` document cell. -/
 def projectNetlist
     (id : String)
     (sig : Netlist)
     (pins : List (String × ByteArray) := [])
     (receipt : Option ByteArray := none) : Doc.Content :=
-  .cell id .hardwareSchematic (lvsNetlistToData sig) pins receipt
+  .cell id .hardwareSchematic (belNetlistToData sig) pins receipt
 
 /-- Project a static timing analysis result into a `.hardwareTiming` document cell. -/
 def projectTiming
@@ -396,14 +371,6 @@ def projectDrc
     (pins : List (String × ByteArray) := [])
     (receipt : Option ByteArray := none) : Doc.Content :=
   .cell id .hardwareLayout (cutlineDrcToData deck feat) pins receipt
-
-/-- Project wafer shuttle tapeout signoff into a `.hardwareLayout` document cell. -/
-def projectWaferSignoff
-    (id : String)
-    (cert : WaferSpaceSignoffCert)
-    (pins : List (String × ByteArray) := [])
-    (receipt : Option ByteArray := none) : Doc.Content :=
-  .cell id .hardwareLayout (waferSpaceSignoffToData cert) pins receipt
 
 /-! ## 5. Metatheorems: Determinism, Semantic Congruence, Safety & Non-Interference -/
 
@@ -456,16 +423,6 @@ theorem projectDrc_deterministic
     projectDrc id deck1 feat1 pins1 rec1 = projectDrc id deck2 feat2 pins2 rec2 := by
   subst hDeck hFeat hPins hRec
   rfl
-
-/-- Theorem: Layout-Versus-Schematic (LVS) match congruence.
-If `checkLvsMatch schem layout = true`, their projections are bit-identical. -/
-theorem lvs_match_congr_projection
-    (id : String) (schem layout : Netlist)
-    (pins : List (String × ByteArray)) (rec : Option ByteArray)
-    (hLvs : checkLvsMatch schem layout = true) :
-    projectNetlist id schem pins rec = projectNetlist id layout pins rec := by
-  have hEq : schem = layout := lvsMatch_sound schem layout hLvs
-  rw [hEq]
 
 /-- Theorem: FABulous configuration bitstream roundtrip congruence.
 Projecting encoded bitstreams recovers the exact original tile configuration. -/
@@ -537,80 +494,5 @@ theorem hardware_ast_pin_receipt_noninterference
     | .cell _ _ ast1 _ _, .cell _ _ ast2 _ _ => ast1 = ast2
     | _, _ => False :=
   rfl
-
-/-! ## 6. Coupled Drive-Train Co-Design Projection (`driveTrainCoDesignToData`, `projectDriveTrainCoDesign`) -/
-
-/-- Project a coupled Motor-Inverter-Cooler drive-train co-design specification
-(`CoupledDriveTrainSpec`) into canonical `Core.Data`. -/
-def driveTrainCoDesignToData (spec : CoupledDriveTrainSpec) : Data :=
-  let vPeakV := evalTurnOffPeakVoltageV spec.vDcBusV spec.lBusNh spec.diDtAmpPerNs
-  let pInv := evalSicInverterTotalLoss spec.iRmsAmp spec.rDsOnMohm spec.kSwScaled spec.fSwKhz spec.vDcBusV
-  let motor : IpmMotorSpec :=
-    { polePairs    := spec.polePairs
-    , psiPmMilliWb := spec.psiPmMilliWb
-    , ldMicroH     := spec.ldMicroH
-    , lqMicroH     := spec.lqMicroH }
-  let shaftTorque := evalIpmTorqueScaled motor spec.idAmp spec.iqAmp
-  let cuSlope := evalCopperJouleSlope spec.iRmsAmp spec.r0CuMohm spec.alphaCuPermille
-  let passed := checkDriveTrainCoDesign spec
-  .record [
-    ("kind", .label "coupled_drive_train_codesign"),
-    ("drive_name", .label spec.driveName),
-    ("modulation_permille", dInt spec.modulationPermille),
-    ("v_dc_bus_v", dInt spec.vDcBusV),
-    ("v_peak_turn_off_v", dInt vPeakV),
-    ("v_dss_rated_v", dInt spec.vDssRatedV),
-    ("inverter_loss_w", dInt pInv),
-    ("max_inverter_loss_w", dInt spec.maxInverterLossBudget),
-    ("shaft_torque_scaled", dInt shaftTorque),
-    ("min_shaft_torque_scaled", dInt spec.minShaftTorqueScaled),
-    ("core_loss_w", dInt spec.pCoreLoss),
-    ("copper_joule_slope", dInt cuSlope),
-    ("cooler_conductance_gth", dInt spec.gThCooler),
-    ("thermal_margin_gth", dInt (spec.gThCooler - cuSlope)),
-    ("t_coolant_milli_c", dInt spec.tCoolantMilliC),
-    ("t_winding_milli_c", dInt spec.tWindingMilliC),
-    ("max_class_h_milli_c", dInt spec.maxClassHInsulationMilliC),
-    ("codesign_passed", .boolean passed),
-    ("status", .label (if passed then "DRIVETRAIN_CERTIFIED" else "DRIVETRAIN_REFUSED"))
-  ]
-
-/-- Project a coupled Motor-Inverter-Cooler `CoupledDriveTrainSpec` into a `.hardwareSchematic`
-`.obnb` `Doc.Content.cell` record. -/
-def projectDriveTrainCoDesign
-    (id : String)
-    (spec : CoupledDriveTrainSpec)
-    (pins : List (String × ByteArray) := [])
-    (receipt : Option ByteArray := none) : Doc.Content :=
-  .cell id .hardwareSchematic (driveTrainCoDesignToData spec) pins receipt
-
-/-- Theorem (`projectDriveTrainCoDesign_deterministic`):
-Coupled drive-train co-design `.obnb` projection is strictly deterministic. -/
-theorem projectDriveTrainCoDesign_deterministic
-    (id : String) (s1 s2 : CoupledDriveTrainSpec)
-    (pins1 pins2 : List (String × ByteArray))
-    (rec1 rec2 : Option ByteArray)
-    (hSpec : s1 = s2) (hPins : pins1 = pins2) (hRec : rec1 = rec2) :
-    projectDriveTrainCoDesign id s1 pins1 rec1 = projectDriveTrainCoDesign id s2 pins2 rec2 := by
-  subst hSpec hPins hRec
-  rfl
-
-/-- **Theorem (`driveTrainCoDesign_projection_sound`)**:
-For any `spec : CoupledDriveTrainSpec`, if `checkDriveTrainCoDesign spec = true`, then
-`driveTrainCoDesign_sound` guarantees all seven electromagnetic, power-electronic, and
-electro-thermal stability invariants, and `projectDriveTrainCoDesign` deterministically
-projects `goldenCoupledDriveTrainSpec` into a `.hardwareSchematic` cell. -/
-theorem driveTrainCoDesign_projection_sound
-    (id : String) (s1 s2 : CoupledDriveTrainSpec)
-    (pins : List (String × ByteArray)) (rec : Option ByteArray)
-    (hEq : s1 = s2)
-    (hOk : checkDriveTrainCoDesign s1 = true) :
-    projectDriveTrainCoDesign id s1 pins rec = projectDriveTrainCoDesign id s2 pins rec ∧
-    evalCopperJouleSlope s1.iRmsAmp s1.r0CuMohm s1.alphaCuPermille < s1.gThCooler ∧
-    evalTurnOffPeakVoltageV s1.vDcBusV s1.lBusNh s1.diDtAmpPerNs ≤ s1.vDssRatedV ∧
-    checkDriveTrainCoDesign goldenCoupledDriveTrainSpec = true := by
-  have hDet := projectDriveTrainCoDesign_deterministic id s1 s2 pins pins rec rec hEq rfl rfl
-  have hSound := driveTrainCoDesign_sound s1 hOk
-  refine ⟨hDet, hSound.2.2.2.2.2.1, hSound.2.1, golden_coupled_drive_train_verified⟩
 
 end Obend.Vault.HardwareProjection

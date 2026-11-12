@@ -34,6 +34,7 @@ public import Obend.Hardware.QuantumMatter
 public import Obend.Teeth.Hardware.CliffordKernel
 public import Obend.Hardware.Photonics
 public import Obend.Hardware.Synth
+public import Obend.Analysis.TaylorModel
 public import Obend.Analysis.Equitable
 public import Obend.Analysis.QuantumWalk
 public import Obend.Leaf.Static
@@ -238,7 +239,8 @@ theorem quantumPhotonicMatter_wl_quotient_clements_and_cmt_sound
       quotientHypergraphSlot.usable (holdsAt (mkChannelWeightView 1 5 99 7 7)) candConcrete = false ∧
       (quotientHypergraphSlot.dead (holdsAt (mkChannelWeightView 1 5 99 7 7)) candConcrete).map LeafPin.cell =
         [.layer "weights.w1"])) ∧
-    -- 4. Clements unitarity, Duhamel disorder leakage, Faddeev-LeVerrier crosstalk, CMT intervals
+    -- 4. Clements unitarity, Duhamel disorder leakage, Faddeev-LeVerrier crosstalk,
+    --    certified rational TaylorModel enclosures (`Obend.Analysis.TaylorModel`), and Z[i] MZI transfer matrices
     (let s := t * t + kappa * kappa
      let (p0, p1, p2, p3) := evalPlanarClements4x4 t kappa e0 e1 e2 e3
      s * p0.normSq + p1.normSq + p2.normSq + s * p3.normSq =
@@ -248,13 +250,18 @@ theorem quantumPhotonicMatter_wl_quotient_clements_and_cmt_sound
      res.2 = 8769 ∧
      goldenThermalCrosstalk4x4.mulVec res.1 =
        [res.2 * phi0, res.2 * phi1, res.2 * phi2, res.2 * phi3]) ∧
-    (evalCmtTransferPowerInterval cmtCoupler3dBPhase785).contains 500000 = true ∧
-    (evalCmtUnitarityInterval (cmtCoupler3dBSoi14Um 0)).contains 1000000000000 = true ∧
-    (evalCmtUnitarityInterval (cmtCouplerKrawtchouk01 0)).contains 1000000000000 = true ∧
-    (cmtCouplerKrawtchouk01 0).interactionLengthUm = couplerKrawtchouk375.couplingLenUm ∧
-    (cmtCoupler3dBSoi14Um 0).interactionLengthUm = coupler3dB.couplingLenUm ∧
-    (CmtInterval.scaleNonneg 4 (evalCmtTransferPowerInterval (cmtCouplerKrawtchouk01 0))).contains 1500000 = true ∧
-    (CmtInterval.scaleNonneg 3 (evalCmtTransferPowerInterval (cmtCoupler3dBSoi14Um 0))).contains 1500000 = true := by
+    (let dom3dB : Interval := ⟨CanonicalRat.mk 785 1000, CanonicalRat.mk 786 1000⟩
+     let sin3dB := tmSinCertified dom3dB
+     let cos3dB := tmCosCertified dom3dB
+     Interval.containsRat (evalTaylorModelRange (tmMul 6 sin3dB sin3dB)) (CanonicalRat.mk 1 2) = true ∧
+     Interval.containsRat (evalTaylorModelRange (tmAdd (tmMul 4 sin3dB sin3dB) (tmMul 4 cos3dB cos3dB))) 1 = true) ∧
+    (let domKraw01 : Interval := ⟨CanonicalRat.mk 659 1000, CanonicalRat.mk 660 1000⟩
+     let sinKraw := tmSinCertified domKraw01
+     let cosKraw := tmCosCertified domKraw01
+     Interval.containsRat (evalTaylorModelRange (tmMul 6 sinKraw sinKraw)) (CanonicalRat.mk 3 8) = true ∧
+     Interval.containsRat (evalTaylorModelRange (tmAdd (tmMul 4 sinKraw sinKraw) (tmMul 4 cosKraw cosKraw))) 1 = true) ∧
+    (evalCascadedMzi2x2 t t ⟨1, 0⟩ e0 ⟨0, 0⟩).1 = ⟨0, 0⟩ ∧
+    (evalCascadedMzi2x2 t t ⟨-1, 0⟩ e0 ⟨0, 0⟩).2 = ⟨0, 0⟩ := by
   have hWl := wlStabilize_fixedPoint_iff_equitable A n color hValid
   have hWlQ3 :
       (List.range 8).map (wlStabilize hypercubeQ3Matrix 8 q3PointSourceSeed) =
@@ -270,21 +277,32 @@ theorem quantumPhotonicMatter_wl_quotient_clements_and_cmt_sound
   have hCrossDet : (compensateThermalCrosstalk goldenThermalCrosstalk4x4 [phi0, phi1, phi2, phi3]).2 = 8769 :=
     faddeevAdjugate_cancels_crosstalk_4x4.1
   have hCrossVec := compensateThermalCrosstalk_exact_4x4 phi0 phi1 phi2 phi3
-  have h3db : (evalCmtTransferPowerInterval cmtCoupler3dBPhase785).contains 500000 = true :=
-    cmt_phase_5050_encloses_3db_split.2.2.2.2.2.2.2.1
-  have hUnit := cmt_unitarity_interval_encloses_one 0 0 0 0 0 0
-    (by omega) (by omega) (by omega) (by omega) (by omega) (by omega)
-  have hCmt := cmt_krawtchouk_length_synthesis_sound
+  have hTm3dB :
+      let dom3dB : Interval := ⟨CanonicalRat.mk 785 1000, CanonicalRat.mk 786 1000⟩
+      let sin3dB := tmSinCertified dom3dB
+      let cos3dB := tmCosCertified dom3dB
+      Interval.containsRat (evalTaylorModelRange (tmMul 6 sin3dB sin3dB)) (CanonicalRat.mk 1 2) = true ∧
+      Interval.containsRat (evalTaylorModelRange (tmAdd (tmMul 4 sin3dB sin3dB) (tmMul 4 cos3dB cos3dB))) 1 = true := by
+    decide +kernel
+  have hTmKraw :
+      let domKraw01 : Interval := ⟨CanonicalRat.mk 659 1000, CanonicalRat.mk 660 1000⟩
+      let sinKraw := tmSinCertified domKraw01
+      let cosKraw := tmCosCertified domKraw01
+      Interval.containsRat (evalTaylorModelRange (tmMul 6 sinKraw sinKraw)) (CanonicalRat.mk 3 8) = true ∧
+      Interval.containsRat (evalTaylorModelRange (tmAdd (tmMul 4 sinKraw sinKraw) (tmMul 4 cosKraw cosKraw))) 1 = true := by
+    decide +kernel
+  have hMziCross := cascaded_mzi_zero_phase_pure_cross t e0
+  have hMziBar := cascaded_mzi_pi_phase_pure_bar t e0
   exact ⟨⟨hWl.2.1, hWl.2.2.1, hWlQ3.1, hWlQ3.2⟩,
          ⟨hInter.1, hInter.2.1, hInter.2.2.1, hInter.2.2.2.1, hInter.2.2.2.2.2.1, hInter.2.2.2.2.2.2.2⟩,
          hMoved,
          hClem,
          ⟨hLeak.2.1, hLeak.2.2⟩,
          ⟨hCrossDet, hCrossVec⟩,
-         h3db,
-         hUnit.2.2.1,
-         hUnit.2.2.2.2.2.1,
-         hCmt.1, hCmt.2.2.1, hCmt.2.2.2.2.2.2.2.2.2.1, hCmt.2.2.2.2.2.2.2.2.2.2.1⟩
+         hTm3dB,
+         hTmKraw,
+         hMziCross,
+         hMziBar⟩
 
 /-! ## 4. Szegedy Quantum Walk Lumping, Matrix Taylor PST & Majorana Parity-Cooling Stabilizers -/
 

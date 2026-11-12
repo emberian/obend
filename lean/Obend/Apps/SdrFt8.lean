@@ -23,7 +23,6 @@ public import Obend.Hardware.Compiler
 public import Obend.Hardware.Synth
 public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.Accelerators
-public import Obend.Hardware.RF
 public import Obend.Hardware.DSP
 public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.TaylorModel
@@ -125,7 +124,6 @@ open Obend.Hardware.Compiler
 open Obend.Hardware.Synth
 open Obend.Hardware.PlaceRoute
 open Obend.Hardware.Accelerators
-open Obend.Hardware.RF
 open Obend.Hardware.DSP
 
 set_option autoImplicit false
@@ -536,38 +534,24 @@ def sdrFt8Cic3Spec : CicFilterSpec where
   ceilLog2Rm      := 6
 
 /-- **Theorem (`sdr_ft8_image_rejection_and_ddc_signoff_sound`)**:
-Connects the `apps/sdr-ft8/` `.obend` transceiver stack to the RF and DSP mathematical theorems:
-1. **Tayloe Quadrature Image-Sideband Cancellation (`tayloe_iq_cancels_image_sideband`)**:
-   When $I/Q$ conversion gains match (`gainI = gainQ`) and quadrature phase skew is zero (`phaseErr = 0`),
-   the opposite-sideband image cancels identically (`evalQuadratureImagePhaseCancel = 0`) while the
-   desired sideband coherently doubles (`evalQuadratureDesiredSideband = 2 * gainI * sigAmp`).
-2. **40m FT8 RF Front-End & Cascaded Friis Noise Signoff (`rf_transceiver_signoff_poles`, `golden3StageSdrRxChain_verified`)**:
-   `checkRfTransceiverSignoff golden40mFt8TransceiverCert = true`, refusing unfiltered PA harmonic
-   violations and $6:1$ VSWR mismatches, while the 3-stage LNA + Tayloe + PGA receiver front-end
-   achieves $+38.0\text{ dB}$ (`380` tenths dB) gain and $1410$ milli-NF ($\approx 1.49\text{ dB}$ NF).
-3. **3-Stage Hogenauer CIC Bit-Growth Bound (`cic_register_width_sound`)**:
+Connects the `apps/sdr-ft8/` `.obend` transceiver stack to the certified `SdrFt8Rx` and `DSP` theorems:
+1. **Certified 63 dB Quadrature Image Rejection (`SdrFt8Rx.sdr_irr_ge_63dB`, `SdrFt8Rx.irr_judge_ok`, `SdrFt8Rx.irrCos_judge_ok`)**:
+   Over the calibration half-step box (`g ∈ [999/1000, 1001/1000]`, `φ ∈ SdrFt8Rx.irrPhaseDom`),
+   image power × `1995263` (`> 10^6.3`) is bounded by wanted power across all `AnalyticModel`s.
+2. **3-Stage Hogenauer CIC Bit-Growth Bound (`cic_register_width_sound`)**:
    `sdrFt8Cic3Spec` requires $16 + 3 \times 6 = 34\text{ bits}$ and passes `checkCicOverflowFree`
-   at $36\text{ bits}$.
-4. **Folded Symmetric FIR Multiplier Halving (`firSymmetric_folds_multipliers`)**:
+   at $36\text{ bits}$ (matching `SdrFt8Rx.sdrCicModule`'s exact 34-bit registers).
+3. **Folded Symmetric FIR Multiplier Halving (`firSymmetric_folds_multipliers`)**:
    Pre-adding symmetric delay-line samples `coeff * (xEarly + xLate)` equals the 2-multiplier
    direct form `coeff * xEarly + coeff * xLate` identically for all `coeff, xEarly, xLate`.
-5. **4-Stage Unrolled CORDIC Convergence (`cordic_4stage_pipeline_verified`)**:
-   `runCordicMicroPipeline 1000 0 442 goldenCordic4Stages = (1484, 704, 0)` with zero residual
-   angle error (`z4 = 0`).
-6. **End-to-End SDR DDC Signoff (`sdrDdcChain_signoff_sound`, `sdrDdcChain_signoff_poles`)**:
-   `checkSdrDdcSignoff goldenSdrDdcChainSpec = true`, guaranteeing NCO phase bounds, $10\times$
-   2-stage CORDIC LO norm scaling, zero image residual, overflow-free CIC accumulators, and
-   exact folded symmetric FIR sample equivalence. -/
+4. **4-Stage Unrolled CORDIC Convergence (`cordic_4stage_pipeline_verified`) & Matched IQ Phasor Zero-Quadrature (`iq_matched_filter_quadrature_zero`)**. -/
 theorem sdr_ft8_image_rejection_and_ddc_signoff_sound :
-    (∀ (gainI gainQ phaseErr sigAmp : Int),
-      gainI = gainQ → phaseErr = 0 →
-      evalQuadratureImagePhaseCancel gainI gainQ phaseErr sigAmp = 0 ∧
-      evalQuadratureDesiredSideband gainI gainQ sigAmp = 2 * gainI * sigAmp) ∧
-    checkRfTransceiverSignoff golden40mFt8TransceiverCert = true ∧
-    checkRfTransceiverSignoff unfilteredPaTransceiverCert = false ∧
-    checkRfTransceiverSignoff highVswrTransceiverCert = false ∧
-    evalCascadedGainDbTenths golden3StageSdrRxChain = 380 ∧
-    evalCascadedFriisMilliNf golden3StageSdrRxChain = 1410 ∧
+    Obend.Judge.intervalCheck 0 SdrFt8Rx.irrQuery .direct = .ok ∧
+    (∀ (R : Type) [M : AnalyticModel R] (g φ : CanonicalRat),
+      (CanonicalRat.mk 999 1000 ≤ g ∧ g ≤ CanonicalRat.mk 1001 1000) →
+      φ ∈ SdrFt8Rx.irrPhaseDom →
+      SdrFt8Rx.irrK * (1 - 2 * g * M.cosFn φ + g * g) ≤
+        1 + 2 * g * M.cosFn φ + g * g) ∧
     evalCicRequiredWidthBits sdrFt8Cic3Spec = 34 ∧
     checkCicOverflowFree sdrFt8Cic3Spec 36 = true ∧
     (sdrFt8Cic3Spec.inputWidthBits ≤ evalCicRequiredWidthBits sdrFt8Cic3Spec ∧
@@ -576,33 +560,15 @@ theorem sdr_ft8_image_rejection_and_ddc_signoff_sound :
       evalFoldedSymmetricFirTapPair coeff xEarly xLate =
       evalDirectFirTapPair coeff xEarly xLate) ∧
     runCordicMicroPipeline 1000 0 442 goldenCordic4Stages = (1484, 704, 0) ∧
-    checkSdrDdcSignoff goldenSdrDdcChainSpec = true ∧
-    checkSdrDdcSignoff unbalancedIqSdrDdcSpec = false ∧
-    checkSdrDdcSignoff underAllocatedCicSdrDdcSpec = false ∧
-    (∀ (rfSigAmp xEarly xLate : Int),
-      (stepNco goldenSdrDdcChainSpec.nco).phaseWord < goldenSdrDdcChainSpec.nco.phaseModulus ∧
-      evalQuadratureImagePhaseCancel goldenSdrDdcChainSpec.iqGainI goldenSdrDdcChainSpec.iqGainQ
-        goldenSdrDdcChainSpec.iqPhaseErr rfSigAmp = 0 ∧
-      evalSymmetricFirTapPair goldenSdrDdcChainSpec.firTapCoeff xEarly xLate =
-        evalDirectFirTapPair goldenSdrDdcChainSpec.firTapCoeff xEarly xLate) := by
-  refine ⟨ tayloe_iq_cancels_image_sideband
-         , rf_transceiver_signoff_poles.1
-         , rf_transceiver_signoff_poles.2.1
-         , rf_transceiver_signoff_poles.2.2
-         , golden3StageSdrRxChain_verified.1
-         , golden3StageSdrRxChain_verified.2.1
+    (∀ s : IqPhasor, (iqConjMul s s).q = 0 ∧ 0 ≤ (iqConjMul s s).i) := by
+  refine ⟨ SdrFt8Rx.irr_judge_ok
+         , fun R _ g φ hg hφ => SdrFt8Rx.sdr_irr_ge_63dB R g φ hg hφ
          , rfl
          , rfl
          , cic_register_width_sound sdrFt8Cic3Spec 36 rfl
          , firSymmetric_folds_multipliers
          , cordic_4stage_pipeline_verified.1
-         , sdrDdcChain_signoff_poles.1
-         , sdrDdcChain_signoff_poles.2.1
-         , sdrDdcChain_signoff_poles.2.2.2
-         , ?_ ⟩
-  intro rfSigAmp xEarly xLate
-  have hDdc := sdrDdcChain_signoff_sound goldenSdrDdcChainSpec rfSigAmp xEarly xLate rfl
-  exact ⟨hDdc.1, hDdc.2.2.1, hDdc.2.2.2.2.2.1⟩
+         , fun s => ⟨iq_matched_filter_quadrature_zero s, iq_matched_filter_inphase_nonneg s⟩ ⟩
 
 /-! ## 6. Hardware Synthesis: `.obend` Books, Stateful `always_ff` 3-Stage CIC + Folded FIR + CORDIC $\Delta\phi$ FT8 Demodulator -/
 

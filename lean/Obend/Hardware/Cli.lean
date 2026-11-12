@@ -136,63 +136,6 @@ def cmdVerifyRetime (args : List String) : IO UInt32 := do
     IO.println s!"wrote {outPath}"
   verifyHardware recJson
 
-/-- Run `waferspace-signoff@1` CLI check and optionally emit a receipt. -/
-def cmdWaferSpaceSignoff (args : List String) : IO UInt32 := do
-  let (modeOpt, args1) := extractFlag "--mode" args
-  let (outOpt, _)      := extractFlag "--out" args1
-  let mode := modeOpt.getD "golden"
-  let hasDiode : Nat := if mode == "bad_antenna" then 0 else 1
-  let m1Routed : Nat := if mode == "bad_cmp" then 1500 else 3500
-  let m1Dummy  : Nat := if mode == "bad_cmp" then 0 else 1000
-  let objJson  := Json.mkObj [("pdk", toJson "gf180mcuD")]
-  let certJson := Json.mkObj
-    [ ("projectName",         toJson "obend_gf180mcu_ams_coproc")
-    , ("pdk",                 toJson "gf180mcuD")
-    , ("antennaMetalAreaUm2", toJson (2400 : Nat))
-    , ("antennaGateAreaUm2",  toJson (1 : Nat))
-    , ("antennaHasDiode",     toJson hasDiode)
-    , ("metal1RoutedUm2",     toJson m1Routed)
-    , ("metal1DummyUm2",      toJson m1Dummy)
-    , ("metal1WindowUm2",     toJson (10000 : Nat))
-    , ("nfetCount",           toJson (128 : Nat))
-    , ("pfetCount",           toJson (128 : Nat))
-    , ("layoutNfetCount",     toJson (128 : Nat)) ]
-  let recJson  := mkHwReceiptJson "waferspace-signoff@1" objJson certJson
-  if let some outPath := outOpt then
-    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
-    IO.println s!"wrote {outPath}"
-  verifyHardware recJson
-
-/-- Run `fabublox-run@1` CLI check and optionally emit a receipt. -/
-def cmdFabuBloxCheck (args : List String) : IO UInt32 := do
-  let (recipeOpt, args1) := extractFlag "--recipe" args
-  let (outOpt, _)        := extractFlag "--out" args1
-  let recipe := recipeOpt.getD "damascene"
-  let rieDepth : Nat := if recipe == "under_etch" then 80 else 120
-  let baseFields : List (String × Json) :=
-    [ ("annealTempC",       toJson (950 : Nat))
-    , ("annealDurationMin", toJson (5 : Nat))
-    , ("lithoXMinNm",       toJson (80 : Nat))
-    , ("lithoXMaxNm",       toJson (120 : Nat))
-    , ("resistThicknessNm", toJson (200 : Nat))
-    , ("rieDepthNm",        toJson rieDepth)
-    , ("rieSelectivity",    toJson (10 : Nat))
-    , ("cuDepositNm",       toJson (250 : Nat))
-    , ("cuDepositTempC",    toJson (180 : Nat))
-    , ("cmpTargetNm",       toJson (150 : Nat)) ]
-  let extraFields : List (String × Json) :=
-    if recipe == "post_cu_anneal" then
-      [ ("postCuAnnealTempC", toJson (600 : Nat))
-      , ("postCuAnnealMin",   toJson (10 : Nat)) ]
-    else []
-  let objJson  := Json.mkObj [("maxThermalBudgetCMin", toJson (50000 : Nat))]
-  let certJson := Json.mkObj (baseFields ++ extraFields)
-  let recJson  := mkHwReceiptJson "fabublox-run@1" objJson certJson
-  if let some outPath := outOpt then
-    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
-    IO.println s!"wrote {outPath}"
-  verifyHardware recJson
-
 /-- Run `datasheet-fit@1` CLI check and optionally emit a receipt. -/
 def cmdDatasheetCheck (args : List String) : IO UInt32 := do
   let (modeOpt, args1) := extractFlag "--mode" args
@@ -212,80 +155,6 @@ def cmdDatasheetCheck (args : List String) : IO UInt32 := do
     , ("maxCalErrMv",   toJson maxErr)
     , ("buckLoadMa",    toJson (2000 : Nat)) ]
   let recJson  := mkHwReceiptJson "datasheet-fit@1" objJson certJson
-  if let some outPath := outOpt then
-    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
-    IO.println s!"wrote {outPath}"
-  verifyHardware recJson
-
-/-- Run `rf-transceiver-signoff@1` CLI check and optionally emit a receipt. -/
-def cmdRfSignoff (args : List String) : IO UInt32 := do
-  let (modeOpt, args1) := extractFlag "--mode" args
-  let (outOpt, _)      := extractFlag "--out" args1
-  let mode := modeOpt.getD "ft8_40m_golden"
-  let rigName :=
-    if mode == "unfiltered_pa_harmonics" then "obend_qcx_unfiltered_pa"
-    else if mode == "high_vswr_mismatch" then "obend_qcx_high_vswr"
-    else "obend_qcx_sdr_40m_ft8"
-  let loadR : Int := if mode == "high_vswr_mismatch" then 300 else 50
-  let lpfEl : Nat := if mode == "unfiltered_pa_harmonics" then 0 else 7
-  let lpf2  : Int := if mode == "unfiltered_pa_harmonics" then 0 else 406
-  let lpf3  : Int := if mode == "unfiltered_pa_harmonics" then 0 else 620
-  let objJson  := Json.mkObj [("band", toJson "40m")]
-  let certJson := Json.mkObj
-    [ ("rigName",            toJson rigName)
-    , ("band",               toJson "40m")
-    , ("carrierFreqKhz",     toJson (7074 : Nat))
-    , ("z0Ohm",              toJson (50 : Int))
-    , ("loadROhm",           toJson loadR)
-    , ("loadXOhm",           toJson (0 : Int))
-    , ("iqRejectionTenthDb", toJson (524 : Nat))
-    , ("rxCascadedMilliNf",  toJson (1528 : Nat))
-    , ("lpfElementCount",    toJson lpfEl)
-    , ("lpf2ndAttenTenthDb", toJson lpf2)
-    , ("lpf3rdAttenTenthDb", toJson lpf3)
-    , ("paSteadyTjMk",       toJson (84200 : Int)) ]
-  let recJson  := mkHwReceiptJson "rf-transceiver-signoff@1" objJson certJson
-  if let some outPath := outOpt then
-    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
-    IO.println s!"wrote {outPath}"
-  verifyHardware recJson
-
-/-- Run `photonics-pic-signoff@1` CLI check and optionally emit a receipt. -/
-def cmdPhotonicsSignoff (args : List String) : IO UInt32 := do
-  let (modeOpt, args1) := extractFlag "--mode" args
-  let (outOpt, _)      := extractFlag "--out" args1
-  let mode := modeOpt.getD "golden"
-  let ringName := if mode == "tight_bend" then "mrr_leaky_r2um" else "mrr_wdm_soi220_r5um"
-  let bendNm : Nat := if mode == "tight_bend" then 2000 else 5000
-  let circUm : Nat := if mode == "tight_bend" then 12 else 31
-  let rSelf  : Int := 985
-  let aRt    : Int := 985
-  let objJson  := Json.mkObj [("minFsrPm", toJson (15000 : Nat))]
-  let certJson := Json.mkObj
-    [ ("ringName",           toJson ringName)
-    , ("bendRadiusNm",       toJson bendNm)
-    , ("circumferenceUm",    toJson circUm)
-    , ("rSelfPermille",      toJson rSelf)
-    , ("aRoundTripPermille", toJson aRt) ]
-  let recJson  := mkHwReceiptJson "photonics-pic-signoff@1" objJson certJson
-  if let some outPath := outOpt then
-    IO.FS.writeFile outPath (recJson.pretty ++ "\n")
-    IO.println s!"wrote {outPath}"
-  verifyHardware recJson
-
-/-- Run `pcb-board-signoff@1` CLI check and optionally emit a receipt. -/
-def cmdPcbSignoff (args : List String) : IO UInt32 := do
-  let (modeOpt, args1) := extractFlag "--mode" args
-  let (outOpt, _)      := extractFlag "--out" args1
-  let mode := modeOpt.getD "golden"
-  let nSeg : Nat := if mode == "skew_mismatch" then 0 else 4
-  let objJson  := Json.mkObj [("maxSkewFs", toJson (50 : Nat))]
-  let certJson := Json.mkObj
-    [ ("baseLengthUm",       toJson (24000 : Nat))
-    , ("numSegments",        toJson nSeg)
-    , ("meanderAmplitudeUm", toJson (1500 : Nat))
-    , ("minLoopSpacingUm",   toJson (600 : Nat)) ]
-  let recJson  := mkHwReceiptJson "pcb-board-signoff@1" objJson certJson
   if let some outPath := outOpt then
     IO.FS.writeFile outPath (recJson.pretty ++ "\n")
     IO.println s!"wrote {outPath}"
@@ -329,32 +198,24 @@ def cmdVerifyCbor (args : List String) : IO UInt32 := do
   let mode := modeOpt.getD "golden"
   let expectedDom : Obend.Hardware.Codec.HwCertDomain :=
     if domName == "photonics" then .photonics
+    else if domName == "pcb" then .pcb
     else if domName == "dpr" then .dpr
     else if domName == "eda" then .edaBomSwap
     else if domName == "magnetics" || domName == "femm" then .magnetics
-    else if domName == "fluid" || domName == "cooling" then .fluidThermal
-    else if domName == "power" || domName == "ms350" then .powerElectronics
-    else if domName == "mechanics" || domName == "von_neumann" then .mechanicsVonNeumann
     else .pnr
   let baseCert : Obend.Hardware.Codec.BinaryHwCert :=
     match expectedDom with
     | .photonics => Obend.Hardware.Codec.goldenBinaryPhotonicsCert
+    | .pcb => Obend.Hardware.Codec.goldenBinaryPcbCert
     | .dpr => Obend.Hardware.Codec.goldenBinaryDprCert
     | .edaBomSwap => Obend.Hardware.Codec.goldenBinaryEdaSwapCert
     | .magnetics => Obend.Hardware.Codec.goldenBinaryMagneticsCert
-    | .fluidThermal => Obend.Hardware.Codec.goldenBinaryFluidThermalCert
-    | .powerElectronics => Obend.Hardware.Codec.goldenBinaryPowerElectronicsCert
-    | .mechanicsVonNeumann => Obend.Hardware.Codec.goldenBinaryMechanicsCert
     | _ =>
       if mode == "corrupt" then badBinaryPnrCert
       else Obend.Hardware.Codec.goldenBinaryPnrCert
   let defaultBytes : ByteArray :=
     if mode == "tape" then
-      let tapeCert := match expectedDom with
-        | .mechanicsVonNeumann => Obend.Hardware.Codec.goldenBinaryOctreeTapeCert
-        | .fluidThermal => Obend.Hardware.Codec.goldenBinaryEvolutionTapeCert
-        | _ => Obend.Hardware.Codec.goldenBinaryFemmTapeCert
-      Obend.Hardware.Codec.encodeToByteArray tapeCert
+      Obend.Hardware.Codec.encodeToByteArray Obend.Hardware.Codec.goldenBinaryFemmTapeCert
     else
       Obend.Hardware.Codec.encodeToByteArray baseCert
   let rawBytes : ByteArray ← match binInOpt with
@@ -431,7 +292,7 @@ def cmdTapeout (args : List String) : IO UInt32 := do
   let (entryOpt, args1)   := extractFlag "--entry" args
   let (modeOpt, args2)    := extractFlag "--mode" args1
   let (svOutOpt, args3)   := extractFlag "--out-sv" args2
-  let (llOutOpt, args4)   := extractFlag "--out-librelane" args3
+  let (_llOutOpt, args4)  := extractFlag "--out-librelane" args3
   let (recOutOpt, args5)  := extractFlag "--out-receipt" args4
   let posArgs := args5.filter (fun a => !a.startsWith "--")
   let useGolden := args5.contains "--golden" || posArgs.isEmpty
@@ -472,35 +333,27 @@ def cmdTapeout (args : List String) : IO UInt32 := do
     if let some svPath := svOutOpt then
       IO.FS.writeFile svPath art.systemVerilog
       IO.println s!"wrote SystemVerilog ({art.rtlModule.wires.length} wires, {art.rtlModule.regs.length} regs) to {svPath}"
-    if let some llPath := llOutOpt then
-      IO.FS.writeFile llPath (art.libreLaneJson ++ "\n")
-      IO.println s!"wrote LibreLane GF180MCU config to {llPath}"
     if let some recPath := recOutOpt then
-      IO.eprintln s!"refused: no tapeout receipt is written to {recPath}; the DRC, FabuBlox, TCAD and wafer.space stages check model certificates from `TapeoutConfig` defaults, not a layout of this design (QUALIFICATION-AND-SILICON-LEAN.md §3). The SystemVerilog and LibreLane outputs stand on their own."
+      IO.eprintln s!"refused: no standalone JSON receipt is written to {recPath}; use `art.receipt` (cSHAKE256 SV byte digest) or `--out-sv`."
       return 3
-    IO.println s!"verified tapeout ({art.moduleName}): slots={art.specializedBook.slots.length}, wires={art.rtlModule.wires.length}, regs={art.rtlModule.regs.length}, bels={art.belNetlist.cells.length}, tcad=[FF:{art.tcadEnvelope.fastCorner.tGateMaxPs}ps, TT:{art.tcadEnvelope.nomCorner.tGateMaxPs}ps, SS:{art.tcadEnvelope.slowCorner.tGateMaxPs}ps], verdict=ok"
+    IO.println s!"verified tapeout ({art.moduleName}): slots={art.specializedBook.slots.length}, wires={art.rtlModule.wires.length}, regs={art.rtlModule.regs.length}, bels={art.belNetlist.cells.length}, corner=[FF:{art.tcadEnvelope.fastCorner.tGateMaxPs}ps, TT:{art.tcadEnvelope.nomCorner.tGateMaxPs}ps, SS:{art.tcadEnvelope.slowCorner.tGateMaxPs}ps], verdict=ok"
     return 0
 
-/-- CLI entry point for `obend verilate ...`, `obend tapeout ...`, `obend hardware ...`, `obend fabublox ...` and `obend fabric ...`. -/
+/-- CLI entry point for `obend verilate ...`, `obend tapeout ...`, `obend hardware ...`, and `obend fabric ...`. -/
 public def main? : List String → Option (IO UInt32)
-  | "verilate" :: rest                         => some (cmdVerilate rest)
-  | "hardware" :: "verilate" :: rest           => some (cmdVerilate rest)
-  | "hardware" :: "emit-silicon-sv" :: rest    => some (cmdEmitSiliconSv rest)
-  | "tapeout" :: rest                          => some (cmdTapeout rest)
-  | "hardware" :: "tapeout" :: rest            => some (cmdTapeout rest)
-  | "hardware" :: "verify-pnr" :: rest         => some (cmdVerifyPnr rest)
-  | "hardware" :: "verify-retime" :: rest      => some (cmdVerifyRetime rest)
-  | "hardware" :: "waferspace-signoff" :: rest => some (cmdWaferSpaceSignoff rest)
-  | "hardware" :: "datasheet-check" :: rest    => some (cmdDatasheetCheck rest)
-  | "hardware" :: "rf-signoff" :: rest         => some (cmdRfSignoff rest)
-  | "hardware" :: "photonics-signoff" :: rest  => some (cmdPhotonicsSignoff rest)
-  | "hardware" :: "pcb-signoff" :: rest        => some (cmdPcbSignoff rest)
-  | "hardware" :: "eda-vault-check" :: rest    => some (cmdEdaVaultCheck rest)
-  | "hardware" :: "verify-cbor" :: rest        => some (cmdVerifyCbor rest)
-  | "hardware" :: "verify-tape-cbor" :: rest   => some (cmdVerifyCbor ("--mode" :: "tape" :: rest))
-  | "hardware" :: "emit-sv" :: rest            => some (cmdEmitSv rest)
-  | "fabublox" :: "check" :: rest              => some (cmdFabuBloxCheck rest)
-  | "fabric" :: rest                           => some (Obend.Hardware.Fabulous.cmdFabric rest)
+  | "verilate" :: rest                       => some (cmdVerilate rest)
+  | "hardware" :: "verilate" :: rest         => some (cmdVerilate rest)
+  | "hardware" :: "emit-silicon-sv" :: rest  => some (cmdEmitSiliconSv rest)
+  | "tapeout" :: rest                        => some (cmdTapeout rest)
+  | "hardware" :: "tapeout" :: rest          => some (cmdTapeout rest)
+  | "hardware" :: "verify-pnr" :: rest       => some (cmdVerifyPnr rest)
+  | "hardware" :: "verify-retime" :: rest    => some (cmdVerifyRetime rest)
+  | "hardware" :: "datasheet-check" :: rest  => some (cmdDatasheetCheck rest)
+  | "hardware" :: "eda-vault-check" :: rest  => some (cmdEdaVaultCheck rest)
+  | "hardware" :: "verify-cbor" :: rest      => some (cmdVerifyCbor rest)
+  | "hardware" :: "verify-tape-cbor" :: rest => some (cmdVerifyCbor ("--mode" :: "tape" :: rest))
+  | "hardware" :: "emit-sv" :: rest          => some (cmdEmitSv rest)
+  | "fabric" :: rest                         => some (Obend.Hardware.Fabulous.cmdFabric rest)
   | _ => none
 
 end Obend.Hardware.Cli

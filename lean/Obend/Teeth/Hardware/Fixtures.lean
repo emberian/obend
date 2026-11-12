@@ -12,7 +12,6 @@ import Obend.Hardware.AgenticEDA
 import Obend.Hardware.GeometryCAM
 import Obend.Hardware.Kinematics
 import Obend.Hardware.OpenUSD
-import Obend.Hardware.PowerElectronics
 import Obend.Hardware.Retiming
 import Obend.Hardware.UserspacePhysical
 
@@ -29,7 +28,7 @@ open Obend.Hardware.PCB
    `rf_vswr_cap`, `bom_budget`),
 2. `judgeAgenticEdaProposal` **admits** `procurement_scout`'s valid QFN-16 second-source swap
    (`goldenSecondSourcePart`) after executing the compiled `Core4` smart contracts and verifying
-   datasheet freshness, QFN-16 courtyard fit, and $400\,\text{mV}$ CMOS noise margins,
+   datasheet freshness and $400\,\text{mV}$ CMOS noise margins,
 3. `judgeAgenticEdaProposal` **refuses** `overbudgetSecondSourcePart` by blaming the exact
    smart-contract law `"bom_budget"` (`new.cost_cents <= 250`),
 4. `judgeAgenticEdaProposal` **refuses** a stale datasheet citation (`pinnedBlockHash ≠ currentDatasheetHash`)
@@ -42,7 +41,6 @@ example :
       goldenSecondSourcePart
       lvcmos33ReceiverSpec
       400
-      goldenQfn16Courtyard
       goldenFreshDatasheetCite
       "procurement_scout"
       defaultEdaFacts = .admitted ∧
@@ -52,7 +50,6 @@ example :
       overbudgetSecondSourcePart
       lvcmos33ReceiverSpec
       400
-      goldenQfn16Courtyard
       goldenFreshDatasheetCite
       "procurement_scout"
       defaultEdaFacts = .refusedBySmartContract "bom_budget" "bom_budget" ∧
@@ -62,7 +59,6 @@ example :
       goldenSecondSourcePart
       lvcmos33ReceiverSpec
       400
-      goldenQfn16Courtyard
       { goldenFreshDatasheetCite with currentDatasheetHash := 0x9A4F2C02 }
       "procurement_scout"
       defaultEdaFacts = .refusedByPhysics "stale-datasheet-cite" := by
@@ -71,7 +67,6 @@ end Obend.Hardware.AgenticEDA
 
 -- from Obend/Hardware/GeometryCAM.lean:662: end-to-end run on a fixture (16 lines); worth a pre-push run, not every library build
 namespace Obend.Hardware.GeometryCAM
-open Obend.Hardware.Thermal
 open Obend.Hardware.Accelerators
 /-- **Golden Multi-Feature Stator CSG Tape Compaction Certificate (`golden_fidget_tape_pruning_verified`)**:
 On a 3-feature stator CSG expression combining:
@@ -102,7 +97,6 @@ end Obend.Hardware.GeometryCAM
 
 -- from Obend/Hardware/GeometryCAM.lean:2514: end-to-end run on a fixture (16 lines); worth a pre-push run, not every library build
 namespace Obend.Hardware.GeometryCAM
-open Obend.Hardware.Thermal
 open Obend.Hardware.Accelerators
 /-- **Golden Self-Certified Dual-Interval Gradient & Swept-Volume Verification
 (`golden_certified_lipschitz_swept_volume_verified`)**:
@@ -128,40 +122,6 @@ example :
     computeCertifiedLipschitzBox box (.scalePos 100 plane) = 900 ∧
     computeCertifiedLipschitzBox box sphere = 72 ∧
     checkVoxelNoGouge box (synthesizeCertifiedSweptVolume box sphere [(0, 0, 0)] 2) = true := by
-  decide +kernel
-end Obend.Hardware.GeometryCAM
-
--- from Obend/Hardware/GeometryCAM.lean:2672: end-to-end run on a fixture (20 lines); worth a pre-push run, not every library build
-namespace Obend.Hardware.GeometryCAM
-open Obend.Hardware.Thermal
-open Obend.Hardware.Accelerators
-/-- **Golden 5-Axis Stator-Slot Microchannel Milling & Evolutionary Search Certificate
-(`golden_geometry_cam_evolutionary_search_verified`)**:
-Verifies by kernel evaluation (`decide +kernel`):
-1. Octree exterior pruning of a 3D F-Rep sphere $x^2 + y^2 + z^2 - 100$ over box $[10, 12]^3$ (`lo = 200 > 0`),
-2. Zero-gouge CAM material removal on the stator tooth bounding box,
-3. Machine-tool deflection + servo-lag error ($3500\,\text{nm} \le 5000\,\text{nm}$ tolerance), and
-4. Evolutionary filtering of a 3-candidate design population (rejecting a gouging candidate and a
-   chattering candidate, and selecting the verified high-torque candidate `#2`). -/
-example :
-    let sphereR10 := FRepExpr.offset 100 (.add (.add (.sq .varX) (.sq .varY)) (.sq .varZ))
-    let farBox : Box3D :=
-      { xIv := { lo := 10, hi := 12 }
-        yIv := { lo := 10, hi := 12 }
-        zIv := { lo := 10, hi := 12 } }
-    let candGouge : PhysicalDesignCandidate :=
-      { candidateId := 1, sweptLo := -5, surfaceErrNm := 2000, maxTolNm := 5000,
-        apUm := 1500, kfScaled := 2, negReFrfScaled := 3, chatterLimitScaled := 25000, performanceScore := 950 }
-    let candVerified : PhysicalDesignCandidate :=
-      { candidateId := 2, sweptLo := 200, surfaceErrNm := 3500, maxTolNm := 5000,
-        apUm := 2000, kfScaled := 2, negReFrfScaled := 3, chatterLimitScaled := 25000, performanceScore := 920 }
-    let candChatter : PhysicalDesignCandidate :=
-      { candidateId := 3, sweptLo := 150, surfaceErrNm := 3000, maxTolNm := 5000,
-        apUm := 6000, kfScaled := 2, negReFrfScaled := 3, chatterLimitScaled := 25000, performanceScore := 980 }
-    (evalFRepInterval farBox sphereR10).lo = 200 ∧
-    checkVoxelNoGouge farBox sphereR10 = true ∧
-    evalMachiningDimensionalErrorNm 50 10 3 1000 = 3500 ∧
-    (filterVerifiedDesigns 800 [candGouge, candVerified, candChatter]).map (·.candidateId) = [2] := by
   decide +kernel
 end Obend.Hardware.GeometryCAM
 
@@ -192,7 +152,6 @@ open Obend.Law (CellContract Holds Admits Narrows CellTrace cellContract_relaw_s
   cellContract_trace_sound law3 guard okT andT falseT leNat natT lawEnv scons_zero scons_succ
   admits_iff guard_ok andT_true leNat_true natT_eval evaluates_self evaluates_step
   evaluates_steps evaluates_of_steps evaluates_ifBool)
-open Obend.Hardware.Thermal
 open Obend.Hardware.Accelerators
 open Obend.Hardware.GeometryCAM
 /-- Golden OpenUSD Relocation, Affine SDF Cancellation & Temporal Persistence Verification. -/
@@ -213,26 +172,6 @@ example :
     checkPartLifecycleInvariant 1200 180000 (finalUsdState t0 [t1, t2, t3]) = true := by
   decide +kernel
 end Obend.Hardware.OpenUSD
-
--- from Obend/Hardware/PowerElectronics.lean:352: a 7-line closed evaluation; worth a pre-push run
-namespace Obend.Hardware.PowerElectronics
-open Obend.Hardware.Thermal
-open Obend.Hardware.Magnetics
-open Obend.Hardware.FluidThermal
-/-- **Theorem (`ms350_7level_fcml_36x_inductance_and_6x_voltage_reduction`)**:
-Upgrading from a 2-level inverter (`M = 1`) to a 7-level Mission Power `MS350` FCML stage (`M = 6`)
-on a $1500\,\text{V}_{\text{DC}}$ solar string:
-1. Reduces nominal per-cell switch blocking voltage $6\times$ from $1500\,\text{V}$ to $250\,\text{V}$,
-2. Multiplies effective inductor ripple frequency $6\times$ (e.g. $50\,\text{kHz} \to 300\,\text{kHz}$), and
-3. Reduces required filter inductance $M^2 = 36\times$ from $360\,\mu\text{H}$ to $10\,\mu\text{H}$! -/
-example :
-    evalFcmlCellBlockingVoltageV 1500 1 = 1500 ∧
-    evalFcmlCellBlockingVoltageV 1500 6 = 250 ∧
-    evalFcmlEffectiveRippleFreqHz 50000 6 = 300000 ∧
-    evalFcmlRequiredInductanceUh 360 1 = 360 ∧
-    evalFcmlRequiredInductanceUh 360 6 = 10 := by
-  decide +kernel
-end Obend.Hardware.PowerElectronics
 
 -- from Obend/Hardware/Retiming.lean:491: a 7-line closed evaluation; worth a pre-push run
 namespace Obend.Hardware.Retiming

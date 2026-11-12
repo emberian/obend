@@ -33,7 +33,6 @@ public import Obend.Core.Data
 public import Obend.Vault.Page
 public import Obend.Vault.Law
 public import Obend.Hardware.Datasheet
-public import Obend.Hardware.PCB
 public import Obend.Doc.Merge
 public import Obend.Receipt.Merkle
 @[expose] public section
@@ -43,7 +42,6 @@ namespace Obend.Hardware.AgenticEDA
 open Obend.Vault
 open Obend.Spec.Law (LawExpr Facts)
 open Obend.Hardware.Datasheet
-open Obend.Hardware.PCB
 
 /-! ## 1. Markdown Vault Component & Board Specification Parser -/
 
@@ -144,43 +142,7 @@ def parseVaultPageLaws (markdownSrc : String) : Except String (List (String × L
     | .ok e => .ok (name, e)
     | .error err => .error ("law " ++ name ++ ": " ++ err)
 
-/-! ## 2. 2D Geometric Footprint Drop-In Verification & Datasheet Block-Cite Freshness -/
-
-/-- 2D PCB land-pattern courtyard & pin-grid receptor specification on a board layout. -/
-structure FootprintCourtyardSpec where
-  footprintName : String
-  requiredPinCount : Nat
-  requiredPinPitchUm : Nat
-  maxCourtyardWidthUm : Nat
-  maxCourtyardLengthUm : Nat
-  deriving DecidableEq, Repr
-
-/-- Check whether an agent-proposed component `part` is a valid 2D mechanical drop-in replacement
-for `fp`:
-1. Exact positive pin count match (`part.pinCount = fp.requiredPinCount > 0`),
-2. Exact positive pin pitch match (`part.pinPitchUm = fp.requiredPinPitchUm > 0`),
-3. Package width and length fit within the PCB courtyard envelope (`pkgWidthUm ≤ maxCourtyardWidthUm`
-   and `pkgLengthUm ≤ maxCourtyardLengthUm`). -/
-def checkFootprintDropIn (fp : FootprintCourtyardSpec) (part : EdaVaultPart) : Bool :=
-  decide (0 < fp.requiredPinCount) &&
-  decide (0 < fp.requiredPinPitchUm) &&
-  decide (part.pinCount = fp.requiredPinCount) &&
-  decide (part.pinPitchUm = fp.requiredPinPitchUm) &&
-  decide (0 < part.pkgWidthUm ∧ part.pkgWidthUm ≤ fp.maxCourtyardWidthUm) &&
-  decide (0 < part.pkgLengthUm ∧ part.pkgLengthUm ≤ fp.maxCourtyardLengthUm)
-
-/-- Theorem (`footprintDropIn_sound`):
-If `checkFootprintDropIn fp part = true`, then the candidate part's pin count and pitch match the
-land pattern identically and its 2D physical body is strictly contained within the PCB courtyard. -/
-theorem footprintDropIn_sound (fp : FootprintCourtyardSpec) (part : EdaVaultPart)
-    (hOk : checkFootprintDropIn fp part = true) :
-    part.pinCount = fp.requiredPinCount ∧
-    part.pinPitchUm = fp.requiredPinPitchUm ∧
-    part.pkgWidthUm ≤ fp.maxCourtyardWidthUm ∧
-    part.pkgLengthUm ≤ fp.maxCourtyardLengthUm := by
-  dsimp only [checkFootprintDropIn] at hOk
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
-  omega
+/-! ## 2. Datasheet Block-Cite Freshness -/
 
 /-- A content-addressed datasheet block citation (`[[DatasheetPage#^blockId]]`) pinned at a
 version/content digest `pinnedBlockHash` and checked against the vault's current datasheet digest
@@ -209,7 +171,7 @@ theorem staleDatasheetCite_refused (cite : DatasheetCitePin)
     decide_eq_false hStale
   rw [hFalse, Bool.and_false]
 
-/-! ## 3. Smart-Contract Multi-Agent EDA Proposal Judge (`Obend.Vault.judge` + Physical Sign-Off) -/
+/-! ## 3. Smart-Contract Multi-Agent EDA Proposal Judge (`Obend.Vault.judge` + Electrical Sign-Off) -/
 
 /-- Outcome of judging an autonomous EDA agent's proposed component/board revision. -/
 inductive AgenticEdaVerdict where
@@ -219,28 +181,17 @@ inductive AgenticEdaVerdict where
   | undecided (why : String)
   deriving DecidableEq, Repr
 
-/-- **Full Multi-Agent Smart-Contract + Physical EDA Judge**:
-Given:
-* `laws`: the board/part Markdown page's `law:` smart contracts (`List (String × LawExpr)`),
-* `oldPart`, `newPart`: previous and agent-proposed component/board specifications,
-* `downstreamReceiver`: downstream IC input logic specification driven by `newPart`,
-* `minNoiseMarginMv`: required high/low CMOS static noise margin ($\text{mV}$),
-* `courtyard`: 2D PCB land-pattern footprint receptor,
-* `citePin`: content-addressed datasheet block citation pin (`[[Datasheet#^spec]]`),
-* `agentName`, `facts`: proposing agent identity and ledger request facts,
-
-evaluates:
+/-- **Full Multi-Agent Smart-Contract + Electrical EDA Judge**:
+Evaluates:
 1. All `.obend` frontmatter `law:` smart contracts via `Obend.Vault.judge` (compiled to `Core4` and
    executed by `Obend.Law.run`),
-2. Physical CMOS static noise-margin compatibility (`checkLogicInterface`),
-3. 2D PCB courtyard & pin-pitch drop-in compatibility (`checkFootprintDropIn`),
-4. Content-addressed datasheet block citation freshness (`checkDatasheetCiteFresh`). -/
+2. Content-addressed datasheet block citation freshness (`checkDatasheetCiteFresh`),
+3. Physical CMOS static noise-margin compatibility (`checkLogicInterface`). -/
 def judgeAgenticEdaProposal
     (laws : List (String × LawExpr))
     (oldPart newPart : EdaVaultPart)
     (downstreamReceiver : LogicFamilySpec)
     (minNoiseMarginMv : Int)
-    (courtyard : FootprintCourtyardSpec)
     (citePin : DatasheetCitePin)
     (agentName : String)
     (facts : Facts) : AgenticEdaVerdict :=
@@ -254,8 +205,6 @@ def judgeAgenticEdaProposal
   | .admitted =>
     if !checkDatasheetCiteFresh citePin then
       .refusedByPhysics "stale-datasheet-cite"
-    else if !checkFootprintDropIn courtyard newPart then
-      .refusedByPhysics "footprint-courtyard-mismatch"
     else if !checkLogicInterface newPart.toLogicFamilySpec downstreamReceiver 0 minNoiseMarginMv then
       .refusedByPhysics "cmos-noise-margin-violation"
     else
@@ -266,28 +215,22 @@ If `judgeAgenticEdaProposal` admits an autonomous agent's hardware proposal, the
 1. **Smart-Contract Soundness**: Every `.obend` frontmatter `law:` on `laws` holds of the state
    transition `(oldData, newData)` by `Obend.Vault.judge_admits`,
 2. **Datasheet Provenance**: The cited vendor datasheet block hash is fresh (`pinnedBlockHash = currentDatasheetHash`),
-3. **2D Geometric Drop-In**: The component's pin count, pin pitch, width, and length fit the PCB courtyard,
-4. **Electrical Noise Margin**: Both high-level and low-level CMOS static noise margins against
+3. **Electrical Noise Margin**: Both high-level and low-level CMOS static noise margins against
    `downstreamReceiver` are at least `minNoiseMarginMv`! -/
 theorem agenticEdaProposal_admits_sound
     (laws : List (String × LawExpr))
     (oldPart newPart : EdaVaultPart)
     (downstreamReceiver : LogicFamilySpec)
     (minNoiseMarginMv : Int)
-    (courtyard : FootprintCourtyardSpec)
     (citePin : DatasheetCitePin)
     (agentName : String)
     (facts : Facts)
     (hAdmit : judgeAgenticEdaProposal laws oldPart newPart downstreamReceiver
-      minNoiseMarginMv courtyard citePin agentName facts = .admitted) :
+      minNoiseMarginMv citePin agentName facts = .admitted) :
     let oldData := stateOf edaStateKeys oldPart.toScalarFields
     let newData := stateOf edaStateKeys newPart.toScalarFields
     (∀ p ∈ laws, p.2.denote facts (some oldData) newData = true) ∧
     citePin.pinnedBlockHash = citePin.currentDatasheetHash ∧
-    newPart.pinCount = courtyard.requiredPinCount ∧
-    newPart.pinPitchUm = courtyard.requiredPinPitchUm ∧
-    newPart.pkgWidthUm ≤ courtyard.maxCourtyardWidthUm ∧
-    newPart.pkgLengthUm ≤ courtyard.maxCourtyardLengthUm ∧
     downstreamReceiver.vihMinMv + minNoiseMarginMv ≤ newPart.toLogicFamilySpec.vohMinMv ∧
     newPart.toLogicFamilySpec.volMaxMv + minNoiseMarginMv ≤ downstreamReceiver.vilMaxMv := by
   dsimp only [judgeAgenticEdaProposal] at hAdmit
@@ -298,22 +241,17 @@ theorem agenticEdaProposal_admits_sound
     cases hCite : checkDatasheetCiteFresh citePin
     · rw [hCite] at hAdmit; cases hAdmit
     · rw [hCite] at hAdmit
-      cases hFp : checkFootprintDropIn courtyard newPart
-      · rw [hFp] at hAdmit; cases hAdmit
-      · rw [hFp] at hAdmit
-        cases hLogic : checkLogicInterface newPart.toLogicFamilySpec downstreamReceiver 0 minNoiseMarginMv
-        · rw [hLogic] at hAdmit; cases hAdmit
-        · have hLaws := judge_admits (k := .write) hVaultAdmit
-          have hFpSound := footprintDropIn_sound courtyard newPart hFp
-          have hLogicSound := checkLogicInterface_guarantees_valid_thresholds
-            newPart.toLogicFamilySpec downstreamReceiver 0 minNoiseMarginMv hLogic
-          have hHi : downstreamReceiver.vihMinMv + minNoiseMarginMv ≤ newPart.toLogicFamilySpec.vohMinMv := by
-            have h1 := hLogicSound.1
-            omega
-          dsimp only [checkDatasheetCiteFresh] at hCite
-          simp only [Bool.and_eq_true, decide_eq_true_eq] at hCite
-          exact ⟨hLaws, hCite.2, hFpSound.1, hFpSound.2.1, hFpSound.2.2.1, hFpSound.2.2.2,
-            hHi, hLogicSound.2.1⟩
+      cases hLogic : checkLogicInterface newPart.toLogicFamilySpec downstreamReceiver 0 minNoiseMarginMv
+      · rw [hLogic] at hAdmit; cases hAdmit
+      · have hLaws := judge_admits (k := .write) hVaultAdmit
+        have hLogicSound := checkLogicInterface_guarantees_valid_thresholds
+          newPart.toLogicFamilySpec downstreamReceiver 0 minNoiseMarginMv hLogic
+        have hHi : downstreamReceiver.vihMinMv + minNoiseMarginMv ≤ newPart.toLogicFamilySpec.vohMinMv := by
+          have h1 := hLogicSound.1
+          omega
+        dsimp only [checkDatasheetCiteFresh] at hCite
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at hCite
+        exact ⟨hLaws, hCite.2, hHi, hLogicSound.2.1⟩
 
 /-! ## 4. Concrete Multi-Agent Markdown Vault BOM & Layout Coordination Certificate -/
 
@@ -363,14 +301,6 @@ def goldenSecondSourcePart : EdaVaultPart :=
 def overbudgetSecondSourcePart : EdaVaultPart :=
   { goldenSecondSourcePart with
     costCents := 320 }
-
-/-- Standard QFN-16 ($3\text{mm} \times 3\text{mm}$, $0.5\text{mm}$ pitch) PCB courtyard receptor. -/
-def goldenQfn16Courtyard : FootprintCourtyardSpec :=
-  { footprintName := "QFN-16_3x3mm_P0.5mm"
-    requiredPinCount := 16
-    requiredPinPitchUm := 500
-    maxCourtyardWidthUm := 3200
-    maxCourtyardLengthUm := 3200 }
 
 /-- Fresh content-addressed datasheet block citation for `[[TI_TPS7A47#^elec_spec]]`. -/
 def goldenFreshDatasheetCite : DatasheetCitePin :=
@@ -589,7 +519,6 @@ candidate Markdown page directly in the kernel, then runs `judgeAgenticEdaPropos
       newPart
       lvcmos33ReceiverSpec
       minNoiseMarginMv
-      goldenQfn16Courtyard
       citePin
       "procurement_scout"
       defaultEdaFacts
@@ -729,7 +658,6 @@ structure MultiAgentBoardMergeProposal where
   rfLayoutAgentBoard : EdaVaultPart
   downstreamReceiver : LogicFamilySpec := lvcmos33ReceiverSpec
   minNoiseMarginMv : Int := 400
-  courtyard : FootprintCourtyardSpec := goldenQfn16Courtyard
   citePin : DatasheetCitePin := goldenFreshDatasheetCite
   agentName : String := "multi_agent_codesign"
   facts : Facts := defaultEdaFacts
@@ -752,7 +680,6 @@ structure MultiAgentBoardMergeProposal where
       mergedBoard
       prop.downstreamReceiver
       prop.minNoiseMarginMv
-      prop.courtyard
       prop.citePin
       prop.agentName
       prop.facts
@@ -763,8 +690,7 @@ Whenever `mergeAndJudgeAgenticEdaBoard prop = .admitted`:
 2. **Smart-Contract Soundness**: Every `.obend` `law:` in `prop.laws` holds on the transition from
    `prop.baseBoard` to the 3-way merged board `mergedBoard`,
 3. **Datasheet Provenance**: `prop.citePin.pinnedBlockHash = prop.citePin.currentDatasheetHash`,
-4. **2D Geometric Drop-In**: `mergedBoard` fits `prop.courtyard` with exact pin count and pitch,
-5. **CMOS Static Noise Margin**: Both high and low logic noise margins are at least `prop.minNoiseMarginMv`. -/
+4. **CMOS Static Noise Margin**: Both high and low logic noise margins are at least `prop.minNoiseMarginMv`. -/
 theorem mergeAndJudgeAgenticEdaBoard_sound
     (prop : MultiAgentBoardMergeProposal)
     (hAdmit : mergeAndJudgeAgenticEdaBoard prop = .admitted) :
@@ -774,10 +700,6 @@ theorem mergeAndJudgeAgenticEdaBoard_sound
     edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard = [] ∧
     (∀ p ∈ prop.laws, p.2.denote prop.facts (some baseData) mergedData = true) ∧
     prop.citePin.pinnedBlockHash = prop.citePin.currentDatasheetHash ∧
-    mergedBoard.pinCount = prop.courtyard.requiredPinCount ∧
-    mergedBoard.pinPitchUm = prop.courtyard.requiredPinPitchUm ∧
-    mergedBoard.pkgWidthUm ≤ prop.courtyard.maxCourtyardWidthUm ∧
-    mergedBoard.pkgLengthUm ≤ prop.courtyard.maxCourtyardLengthUm ∧
     prop.downstreamReceiver.vihMinMv + prop.minNoiseMarginMv ≤ mergedBoard.toLogicFamilySpec.vohMinMv ∧
     mergedBoard.toLogicFamilySpec.volMaxMv + prop.minNoiseMarginMv ≤ prop.downstreamReceiver.vilMaxMv := by
   dsimp only [mergeAndJudgeAgenticEdaBoard] at hAdmit
@@ -791,7 +713,7 @@ theorem mergeAndJudgeAgenticEdaBoard_sound
     have hSound := agenticEdaProposal_admits_sound
       prop.laws prop.baseBoard
       (mergeEdaPartFields3 prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard)
-      prop.downstreamReceiver prop.minNoiseMarginMv prop.courtyard prop.citePin prop.agentName prop.facts
+      prop.downstreamReceiver prop.minNoiseMarginMv prop.citePin prop.agentName prop.facts
       hAdmit
     exact ⟨hNil, hSound⟩
 

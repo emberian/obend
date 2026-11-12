@@ -10,14 +10,10 @@ public import Obend.Hardware.Compiler
 public import Obend.Hardware.Synth
 public import Obend.Hardware.Retiming
 public import Obend.Hardware.PlaceRoute
-public import Obend.Hardware.FabuBlox
 public import Obend.Hardware.DRC
 public import Obend.Hardware.Analog
-public import Obend.Hardware.WaferSpace
-public import Obend.Hardware.Thermal
 public import Obend.Hardware.Datasheet
 public import Obend.Hardware.Circuits
-public import Obend.Hardware.RF
 public import Obend.Hardware.ThermalPassivity
 public import Obend.Hardware.Device.Enclosure
 public import Obend.Hardware.Device.Constants
@@ -31,9 +27,7 @@ public import Obend.Hardware.Hvm
 public import Obend.Hardware.DSP
 public import Obend.Hardware.AgenticEDA
 public import Obend.Hardware.Magnetics
-public import Obend.Hardware.FluidThermal
-public import Obend.Hardware.PowerElectronics
-public import Obend.Hardware.Mechanics
+public import Obend.Hardware.CurrentLoop
 public import Obend.Hardware.Accelerators
 public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.Kinematics
@@ -59,8 +53,6 @@ public import Obend.Hardware.Gpu.BookImport
 public import Obend.Hardware.Gpu.DispatchProtocol
 public import Obend.Hardware.Gpu.SourceProtocol
 public import Obend.Hardware.QuantumMatter
-public import Obend.Hardware.DigitalTwin
-public import Obend.Hardware.TcadBridge
 public import Obend.Hardware.TapeoutPipeline
 public import Obend.Hardware.Codec
 public import Obend.Hardware.Judge

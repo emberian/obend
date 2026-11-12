@@ -10,20 +10,20 @@ Objective Bend's untrusted-producer / verified-checker architecture:
      initial non-negative register count $w(e) \in \mathbb{N}$ and combinational propagation delay,
    - An external, untrusted LP/network-flow optimizer proposes an integer lag assignment
      $r : V \to \mathbb{Z}$, transforming edge weights to $w_r(e) = w(e) + r(v) - r(u)$.
-2. **Kernel Certificate Checker (`checkRetimingCert`)**:
+2. **Kernel Certificate Checker (`checkRetimingCert`, `checkAllCombPathsMeetDelay`)**:
    - Verifies $w_r(e) \ge 0$ for every edge $e \in E$ (no negative physical flip-flops!),
    - Verifies uniform I/O boundary lag ($r(i) = 0$ on primary inputs, $r(o) = L$ on primary outputs),
-   - Verifies static timing closure ($D(e) + T_{\text{cq}} + T_{\text{setup}} + T_{\text{skew}} \le T_{\text{clk}}$)
-     on every combinational edge with $w_r(e) = 0$.
+   - Computes order-independent Bellman–Ford longest combinational arrival times across all
+     zero-register edges ($w_r(e) = 0$) and verifies the topological arrival-time inequality
+     $\text{arr}(u) + D(e) \le \text{arr}(v) \le D_{\max}$ (simultaneously bounding all multi-hop
+     combinational paths regardless of edge list order and rejecting positive-delay zero-register loops).
 3. **Mechanized Soundness Theorems (`0 sorry`)**:
    - `retimed_weights_nonneg`: accepted certificates never produce negative edge register counts,
-   - `path_weight_telescopes`: along any directed path $v_0 \to \dots \to v_k$, retimed register
-     weights telescope to $\sum w(e_i) + r(v_k) - r(v_0)$,
-   - `cycle_weight_invariant`: around any directed cycle ($v_k = v_0$), the total number of
-     registers is strictly invariant under retiming,
-   - `leiserson_saxe_shift_sound`: retiming a 2-stage arithmetic pipeline `(a * b) + c` by pulling
-     a register across the adder preserves exact cycle-accurate input/output behavior while cutting
-     the critical path to close 500 MHz timing.
+   - `path_weight_telescopes` & `cycle_weight_invariant`: register counts telescope on paths and
+     are invariant around directed cycles,
+   - `checkAllCombPathsMeetDelay_sound` & `solveVerifiedRetiming_sound`: EVERY contiguous
+     zero-register walk in `g.edges` has total combinational delay $\le D_{\max}$ independent of
+     `g.edges` ordering.
 -/
 public import Obend.Hardware.Process
 @[expose] public section
@@ -78,8 +78,7 @@ def checkAllEdgesNonneg (lag : Nat → Int) (edges : List SyncEdge) : Bool :=
   edges.all (checkEdgeWeightNonneg lag)
 
 /-- Theorem (`retimed_weights_nonneg`):
-If `checkEdgeWeightNonneg lag e = true`, then the retimed edge weight is non-negative (`0 ≤ retimedEdgeWeight lag e`),
-and if `checkAllEdgesNonneg lag edges = true`, every `e ∈ edges` has `0 ≤ retimedEdgeWeight lag e`. -/
+If `checkAllEdgesNonneg lag edges = true`, every `e ∈ edges` has `0 ≤ retimedEdgeWeight lag e`. -/
 theorem retimed_weights_nonneg
     (lag : Nat → Int) (edges : List SyncEdge)
     (hOk : checkAllEdgesNonneg lag edges = true) :
@@ -156,26 +155,99 @@ def checkBoundaryLags (g : SyncGraph) (cert : RetimingCert) : Bool :=
   (g.primaryInputs.all (fun u => decide (lookupLag cert u = 0))) &&
   (g.primaryOutputs.all (fun v => decide (lookupLag cert v = cert.ioLatencyShift)))
 
-/-- Check that every edge in `g` whose retimed register weight is `0` (purely combinational stage)
-closes setup timing within `clockPeriodPs` at process corner `corner`:
-Wait-free combinational edges (`w_r(e) == 0`) must satisfy
-`corner.tCqMaxPs + e.combDelayPs + corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs`,
-while registered edges (`w_r(e) ≥ 1`) break the combinational path across a flip-flop boundary. -/
+/-- Check single-edge setup timing closure under retimed register weight `wr = w_r(e)`:
+* Negative register weights (`wr < 0`) are physically invalid (`false`),
+* Purely combinational edges (`wr == 0`) must satisfy
+  `corner.tCqMaxPs + e.combDelayPs + corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs`,
+* Registered edges (`wr ≥ 1`) cut the combinational path across a flip-flop boundary (`true`). -/
 def checkRetimedTimingEdge
     (lag : Nat → Int) (corner : ProcessCorner) (clockPeriodPs : Nat) (e : SyncEdge) : Bool :=
   let wr := retimedEdgeWeight lag e
-  if wr == 0 then
+  if decide (wr < 0) then
+    false
+  else if wr == 0 then
     decide (corner.tCqMaxPs + e.combDelayPs + corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs)
   else
-    decide (corner.tCqMaxPs + (e.combDelayPs / 2) + corner.tSetupPs + corner.tSkewPs ≤ clockPeriodPs)
+    true
 
-/-- Complete kernel certificate checker for an untrusted Leiserson–Saxe retiming certificate. -/
+/-- Look up the integer lag of vertex `v` in an association list `lags`. -/
+def lookupLagAssoc (lags : List (Nat × Int)) (v : Nat) : Int :=
+  match lags.find? (fun (id, _) => id == v) with
+  | some (_, lag) => lag
+  | none => 0
+
+/-- Look up the accumulated combinational arrival time (in ps) at vertex `v` in `arrs`. -/
+def lookupArrivalAssoc (arrs : List (Nat × Nat)) (v : Nat) : Nat :=
+  match arrs.find? (fun (id, _) => id == v) with
+  | some (_, arr) => arr
+  | none => 0
+
+/-- Update or insert the combinational arrival time (in ps) of vertex `v` in `arrs`. -/
+def updateArrivalAssoc (arrs : List (Nat × Nat)) (v : Nat) (newArr : Nat) : List (Nat × Nat) :=
+  match arrs with
+  | [] => [(v, newArr)]
+  | (id, oldArr) :: rest =>
+    if id == v then (id, newArr) :: rest
+    else (id, oldArr) :: updateArrivalAssoc rest v newArr
+
+/-- Propagate combinational arrival time across a zero-register retimed edge (`w_r(e) ≤ 0`)
+as in Leiserson–Saxe's Algorithm FEAS. -/
+def stepCombArrivalEdge (lags : List (Nat × Int)) (arrs : List (Nat × Nat)) (e : SyncEdge) :
+    List (Nat × Nat) :=
+  if retimedEdgeWeight (lookupLagAssoc lags) e ≤ 0 then
+    let candArr := lookupArrivalAssoc arrs e.src + e.combDelayPs
+    if lookupArrivalAssoc arrs e.dst < candArr then
+      updateArrivalAssoc arrs e.dst candArr
+    else
+      arrs
+  else
+    arrs
+
+/-- Run `passes` Bellman–Ford longest-path relaxation sweeps across all zero-register edges so
+multi-hop arrival times converge to the exact DAG critical path independent of edge list order. -/
+def computeCombArrivalsLoop :
+    Nat → List (Nat × Int) → List SyncEdge → List (Nat × Nat) → List (Nat × Nat)
+  | 0, _, _, arrs => arrs
+  | k + 1, lags, edges, arrs =>
+    computeCombArrivalsLoop k lags edges (edges.foldl (stepCombArrivalEdge lags) arrs)
+
+/-- Compute order-independent longest combinational arrival times across all zero-weight retimed
+edges in `edges` via `|E|` Bellman–Ford relaxation sweeps. -/
+def computeCombArrivals (lags : List (Nat × Int)) (edges : List SyncEdge) : List (Nat × Nat) :=
+  computeCombArrivalsLoop edges.length lags edges []
+
+/-- Check that every zero-register retimed edge and every multi-hop combinational path in `edges`
+meets `maxCombDelayPs` under `cert`, verified via Bellman–Ford arrival fixed-point inequalities
+`arr(src) + d(e) ≤ arr(dst) ≤ maxCombDelayPs` (which are completely independent of edge order in
+`edges` and reject positive-delay zero-register combinational loops). -/
+def checkAllCombPathsMeetDelay (cert : RetimingCert) (maxCombDelayPs : Nat) (edges : List SyncEdge) : Bool :=
+  let lag  := lookupLag cert
+  let arrs := computeCombArrivals cert.vertexLags edges
+  edges.all (fun e =>
+    if retimedEdgeWeight lag e ≤ 0 then
+      decide (e.combDelayPs ≤ maxCombDelayPs) &&
+      decide (lookupArrivalAssoc arrs e.src + e.combDelayPs ≤ lookupArrivalAssoc arrs e.dst) &&
+      decide (lookupArrivalAssoc arrs e.dst ≤ maxCombDelayPs)
+    else
+      true)
+
+/-- Complete kernel certificate checker for an untrusted Leiserson–Saxe retiming certificate:
+1. All retimed edge weights are non-negative (`checkAllEdgesNonneg`),
+2. Primary inputs/outputs obey uniform lag boundaries (`checkBoundaryLags`),
+3. Every zero-register edge and every multi-hop zero-register combinational path closes setup timing
+   within `clockPeriodPs` at `corner`. -/
 def checkRetimingCert
     (g : SyncGraph) (cert : RetimingCert) (corner : ProcessCorner) (clockPeriodPs : Nat) : Bool :=
   let lag := lookupLag cert
+  let overheadPs := corner.tCqMaxPs + corner.tSetupPs + corner.tSkewPs
   checkAllEdgesNonneg lag g.edges &&
   checkBoundaryLags g cert &&
-  g.edges.all (checkRetimedTimingEdge lag corner clockPeriodPs)
+  g.edges.all (checkRetimedTimingEdge lag corner clockPeriodPs) &&
+  (if g.edges.any (fun e => retimedEdgeWeight lag e == 0) then
+    decide (overheadPs ≤ clockPeriodPs) &&
+    checkAllCombPathsMeetDelay cert (clockPeriodPs - overheadPs) g.edges
+   else
+    true)
 
 /-- Apply a verified retiming certificate to transform `SyncGraph` edge register counts. -/
 def applyRetiming (g : SyncGraph) (cert : RetimingCert) : SyncGraph :=
@@ -186,9 +258,7 @@ def applyRetiming (g : SyncGraph) (cert : RetimingCert) : SyncGraph :=
 
 /-! ## 4. Functional Equivalence of Retimed Pipelines (`leiserson_saxe_shift_sound`) -/
 
-/-- Un-retimed 2-cycle MAC pipeline state:
-Combinational path computes `(a * b) + c` in a single long stage, followed by two output registers
-`s1` and `s2` (`w(mul → add) = 0`, `w(add → out) = 2`). -/
+/-- Un-retimed 2-cycle MAC pipeline state (`w(mul → add) = 0`, `w(add → out) = 2`). -/
 structure UnretimedMacState where
   s1 : BitVec 64
   s2 : BitVec 64
@@ -199,9 +269,7 @@ def stepUnretimedMac (st : UnretimedMacState) (a b c : BitVec 64) : UnretimedMac
   { s1 := (a * b) + c
   , s2 := st.s1 }
 
-/-- Retimed 2-cycle MAC pipeline state (`lag(add) = -1`):
-One register is pulled backward across the adder so `mulReg` registers `a * b` and `cReg` registers `c`
-at stage 1 (`w_r(mul → add) = 1`), and `outReg` registers `mulReg + cReg` at stage 2 (`w_r(add → out) = 1`). -/
+/-- Retimed 2-cycle MAC pipeline state (`w_r(mul → add) = 1`, `w_r(add → out) = 1`). -/
 structure RetimedMacState where
   mulReg : BitVec 64
   cReg   : BitVec 64
@@ -253,15 +321,13 @@ def negativeWeightBadCert : RetimingCert where
   vertexLags     := [(0, 0), (1, -1), (2, 0)]
   ioLatencyShift := 0
 
-/-- Theorem: At 500 MHz (`2000 ps` on `corner7nm_SS`), the unretimed graph fails timing closure,
-the negative-weight certificate is refused, and `balancedRetimingCert` is accepted! -/
 example :
     checkRetimingCert macUnretimedGraph identityRetimingCert corner7nm_SS 2000 = false ∧
     checkRetimingCert macUnretimedGraph negativeWeightBadCert corner7nm_SS 2000 = false ∧
     checkRetimingCert macUnretimedGraph balancedRetimingCert corner7nm_SS 2000 = true :=
   ⟨rfl, rfl, rfl⟩
 
-/-! ## 6. Constructive Bellman–Ford / Iterative Relaxation Retiming Solver & Graph Transformation -/
+/-! ## 6. Constructive Bellman–Ford Retiming Solver & Order-Independent Longest-Path Soundness -/
 
 /-- Deduplicate a list of vertex IDs while preserving first-appearance order. -/
 def dedupVertexIds : List Nat → List Nat
@@ -274,12 +340,6 @@ def dedupVertexIds : List Nat → List Nat
 def collectGraphVertices (g : SyncGraph) : List Nat :=
   dedupVertexIds (g.primaryInputs ++ g.primaryOutputs ++ g.edges.flatMap (fun e => [e.src, e.dst]))
 
-/-- Look up the integer lag of vertex `v` in an association list `lags`. -/
-def lookupLagAssoc (lags : List (Nat × Int)) (v : Nat) : Int :=
-  match lags.find? (fun (id, _) => id == v) with
-  | some (_, lag) => lag
-  | none => 0
-
 /-- Update or insert the integer lag of vertex `v` in `lags`. -/
 def updateLagAssoc (lags : List (Nat × Int)) (v : Nat) (newLag : Int) : List (Nat × Int) :=
   match lags with
@@ -288,49 +348,13 @@ def updateLagAssoc (lags : List (Nat × Int)) (v : Nat) (newLag : Int) : List (N
     if id == v then (id, newLag) :: rest
     else (id, oldLag) :: updateLagAssoc rest v newLag
 
-/-- Look up the accumulated combinational arrival time (in ps) at vertex `v` in `arrs`. -/
-def lookupArrivalAssoc (arrs : List (Nat × Nat)) (v : Nat) : Nat :=
-  match arrs.find? (fun (id, _) => id == v) with
-  | some (_, arr) => arr
-  | none => 0
-
-/-- Update or insert the combinational arrival time (in ps) of vertex `v` in `arrs`. -/
-def updateArrivalAssoc (arrs : List (Nat × Nat)) (v : Nat) (newArr : Nat) : List (Nat × Nat) :=
-  match arrs with
-  | [] => [(v, newArr)]
-  | (id, oldArr) :: rest =>
-    if id == v then (id, newArr) :: rest
-    else (id, oldArr) :: updateArrivalAssoc rest v newArr
-
-/-- Propagate combinational arrival time across a zero-register retimed edge (`w_r(e) ≤ 0`)
-as in Leiserson–Saxe's Algorithm FEAS. -/
-def stepCombArrivalEdge (lags : List (Nat × Int)) (arrs : List (Nat × Nat)) (e : SyncEdge) :
-    List (Nat × Nat) :=
-  if retimedEdgeWeight (lookupLagAssoc lags) e ≤ 0 then
-    let candArr := lookupArrivalAssoc arrs e.src + e.combDelayPs
-    if lookupArrivalAssoc arrs e.dst < candArr then
-      updateArrivalAssoc arrs e.dst candArr
-    else
-      arrs
-  else
-    arrs
-
-/-- Compute combinational arrival times across all zero-weight retimed edges in `edges`. -/
-def computeCombArrivals (lags : List (Nat × Int)) (edges : List SyncEdge) : List (Nat × Nat) :=
-  edges.foldl (stepCombArrivalEdge lags) []
-
 /-- Minimum retimed register count required on edge `e` to satisfy target combinational delay `maxCombDelayPs`:
 if `e.combDelayPs > maxCombDelayPs`, at least `1` flip-flop must be placed on `e`; otherwise `0`. -/
 def minRequiredEdgeRegs (maxCombDelayPs : Nat) (e : SyncEdge) : Int :=
   if e.combDelayPs > maxCombDelayPs then 1 else 0
 
 /-- Relax a single `SyncEdge` under Leiserson–Saxe FEAS difference constraints
-$r(\text{dst}) - r(\text{src}) \ge \text{req}(e) - w(e)$:
-* Requires $\text{req}(e) = 1$ whenever either `e.combDelayPs > maxCombDelayPs` or the accumulated
-  multi-hop combinational arrival time across zero-register edges exceeds `maxCombDelayPs`,
-* Pulls registers backward (`r(dst) := minDstLag`) when `dst` is an unconstrained internal vertex,
-* Pushes registers forward (`r(src) := r(dst) + w(e) - req`) when `dst` is pinned at I/O or
-  upper-bounded (`r(dst) < 0`) by a downstream primary output. -/
+$r(\text{dst}) - r(\text{src}) \ge \text{req}(e) - w(e)$. -/
 def relaxRetimingEdge
     (g : SyncGraph) (maxCombDelayPs : Nat) (arrs : List (Nat × Nat))
     (lags : List (Nat × Int)) (e : SyncEdge) : List (Nat × Int) :=
@@ -364,25 +388,80 @@ def relaxRetimingLoop : Nat → SyncGraph → Nat → List (Nat × Int) → List
   | fuel + 1, g, maxCombDelayPs, lags =>
     relaxRetimingLoop fuel g maxCombDelayPs (relaxRetimingPass g maxCombDelayPs lags)
 
-/-- Constructive Bellman–Ford / iterative relaxation Leiserson–Saxe retiming solver:
-initializes all vertices to lag `0` and relaxes difference constraints for `fuel` passes to meet
-`maxCombDelayPs`. -/
+/-- Constructive Bellman–Ford / iterative relaxation Leiserson–Saxe retiming solver. -/
 def solveRetimingFuel (fuel : Nat) (g : SyncGraph) (maxCombDelayPs : Nat) : RetimingCert :=
   let initLags := (collectGraphVertices g).map (fun v => (v, (0 : Int)))
   { vertexLags     := relaxRetimingLoop fuel g maxCombDelayPs initLags
   , ioLatencyShift := 0 }
 
-/-- Check that every zero-register retimed edge and every accumulated combinational path in `edges`
-meets the target `maxCombDelayPs` bound under `cert`. -/
-def checkAllCombPathsMeetDelay (cert : RetimingCert) (maxCombDelayPs : Nat) (edges : List SyncEdge) : Bool :=
-  let lag  := lookupLag cert
-  let arrs := computeCombArrivals cert.vertexLags edges
-  edges.all (fun e =>
-    if retimedEdgeWeight lag e ≤ 0 then
-      decide (e.combDelayPs ≤ maxCombDelayPs) &&
-      decide (lookupArrivalAssoc arrs e.src + e.combDelayPs ≤ maxCombDelayPs)
-    else
-      true)
+/-- Check that a list of `SyncEdge`s forms a contiguous walk from `curVtx` to `endVtx`. -/
+def checkContiguousSyncEdges (curVtx endVtx : Nat) : List SyncEdge → Bool
+  | [] => curVtx == endVtx
+  | e :: rest => (e.src == curVtx) && checkContiguousSyncEdges e.dst endVtx rest
+
+/-- Total combinational propagation delay $\sum_{e \in \text{walk}} D(e)$ along a contiguous walk. -/
+def combWalkDelay : List SyncEdge → Nat
+  | [] => 0
+  | e :: rest => e.combDelayPs + combWalkDelay rest
+
+private theorem combWalk_arrival_bound
+    (cert : RetimingCert) (maxDelay : Nat) (edges : List SyncEdge)
+    (hDelayOk : checkAllCombPathsMeetDelay cert maxDelay edges = true) :
+    let arr := fun v => lookupArrivalAssoc (computeCombArrivals cert.vertexLags edges) v
+    ∀ (walk : List SyncEdge) (u v : Nat),
+      walk ≠ [] →
+      checkContiguousSyncEdges u v walk = true →
+      (∀ e ∈ walk, e ∈ edges ∧ retimedEdgeWeight (lookupLag cert) e ≤ 0) →
+      arr u + combWalkDelay walk ≤ arr v ∧ arr v ≤ maxDelay := by
+  simp only [checkAllCombPathsMeetDelay, List.all_eq_true] at hDelayOk
+  intro arr walk
+  induction walk with
+  | nil =>
+    intro _ _ hNe; exact False.elim (hNe rfl)
+  | cons e rest ih =>
+    intro u v _ hContig hAllZero
+    simp only [checkContiguousSyncEdges, Bool.and_eq_true, beq_iff_eq] at hContig
+    rcases hContig with ⟨rfl, hRestContig⟩
+    obtain ⟨heMem, heZero⟩ := hAllZero e List.mem_cons_self
+    have heCheck := hDelayOk e heMem
+    simp only [heZero, ↓reduceIte, Bool.and_eq_true, decide_eq_true_eq] at heCheck
+    rcases heCheck with ⟨⟨_, heStep⟩, heDstBound⟩
+    cases rest with
+    | nil =>
+      simp only [checkContiguousSyncEdges, beq_iff_eq] at hRestContig
+      subst hRestContig
+      simp only [combWalkDelay, Nat.add_zero]
+      exact ⟨heStep, heDstBound⟩
+    | cons e2 rest2 =>
+      have hSub := ih e.dst v (List.cons_ne_nil _ _) hRestContig
+        (fun x hx => hAllZero x (List.mem_cons_of_mem _ hx))
+      dsimp only [arr] at hSub ⊢
+      simp only [combWalkDelay] at hSub ⊢
+      exact ⟨by omega, hSub.2⟩
+
+/-- **Universal Order-Independent Combinational Path Soundness (`checkAllCombPathsMeetDelay_sound`)**:
+Whenever `checkAllCombPathsMeetDelay cert maxDelay edges = true`, EVERY contiguous walk `walk` of
+zero-register edges in `edges` (of ANY hop count, regardless of the ordering of `edges`) has total
+combinational delay `combWalkDelay walk ≤ maxDelay`, and no positive-delay zero-register cycle can
+exist in `edges`! -/
+theorem checkAllCombPathsMeetDelay_sound
+    (cert : RetimingCert) (maxDelay : Nat) (edges : List SyncEdge)
+    (hOk : checkAllCombPathsMeetDelay cert maxDelay edges = true)
+    (u v : Nat) (walk : List SyncEdge)
+    (hContig : checkContiguousSyncEdges u v walk = true)
+    (hZeroWalk : ∀ e ∈ walk, e ∈ edges ∧ retimedEdgeWeight (lookupLag cert) e ≤ 0) :
+    combWalkDelay walk ≤ maxDelay ∧
+    (u = v → combWalkDelay walk = 0) := by
+  cases walk with
+  | nil =>
+    simp [combWalkDelay]
+  | cons e rest =>
+    have hBound := combWalk_arrival_bound cert maxDelay edges hOk
+      (e :: rest) u v (List.cons_ne_nil _ _) hContig hZeroWalk
+    refine ⟨by omega, ?_⟩
+    intro hCycle
+    subst hCycle
+    omega
 
 /-- Verified wrapper around `solveRetimingFuel` that checks `checkAllEdgesNonneg` and
 `checkAllCombPathsMeetDelay` on the resulting certificate before returning `some cert`. -/
@@ -395,13 +474,18 @@ def solveVerifiedRetiming? (fuel : Nat) (g : SyncGraph) (maxCombDelayPs : Nat) :
     none
 
 /-- **Theorem (`solveVerifiedRetiming_sound`)**:
-Whenever `solveVerifiedRetiming? fuel g maxDelay = some cert`, every edge $e \in g.\text{edges}$ is
-guaranteed to have non-negative retimed register weight $w_r(e) \ge 0$
-(`0 ≤ retimedEdgeWeight (lookupLag cert) e`). -/
+Whenever `solveVerifiedRetiming? fuel g maxDelay = some cert`:
+1. Every edge $e \in g.\text{edges}$ has non-negative retimed register weight $w_r(e) \ge 0$, AND
+2. Every contiguous zero-register combinational walk in `g.edges` has total combinational delay
+   `combWalkDelay walk ≤ maxDelay` (independent of edge ordering in `g.edges`)! -/
 theorem solveVerifiedRetiming_sound
     (fuel : Nat) (g : SyncGraph) (maxDelay : Nat) (cert : RetimingCert)
     (hSome : solveVerifiedRetiming? fuel g maxDelay = some cert) :
-    ∀ e ∈ g.edges, 0 ≤ retimedEdgeWeight (lookupLag cert) e := by
+    (∀ e ∈ g.edges, 0 ≤ retimedEdgeWeight (lookupLag cert) e) ∧
+    (∀ (u v : Nat) (walk : List SyncEdge),
+      checkContiguousSyncEdges u v walk = true →
+      (∀ e ∈ walk, e ∈ g.edges ∧ retimedEdgeWeight (lookupLag cert) e ≤ 0) →
+      combWalkDelay walk ≤ maxDelay) := by
   unfold solveVerifiedRetiming? at hSome
   dsimp only at hSome
   split at hSome
@@ -409,7 +493,9 @@ theorem solveVerifiedRetiming_sound
     simp only [Bool.and_eq_true] at hOk
     injection hSome with hEq
     subst hEq
-    exact retimed_weights_nonneg (lookupLag _) g.edges hOk.1
+    refine ⟨retimed_weights_nonneg (lookupLag _) g.edges hOk.1, ?_⟩
+    intro u v walk hContig hZeroWalk
+    exact (checkAllCombPathsMeetDelay_sound _ maxDelay g.edges hOk.2 u v walk hContig hZeroWalk).1
   · cases hSome
 
 /-- Apply a `RetimingCert` to a `SyncGraph`, updating every edge's `origRegs` to
@@ -427,11 +513,6 @@ def edgeToPathHop (e : SyncEdge) : PathHop where
 /-- Project a list of `SyncEdge`s along a path/cycle to `List PathHop`. -/
 def edgesToPathHops (edges : List SyncEdge) : List PathHop :=
   edges.map edgeToPathHop
-
-/-- Check that a list of `SyncEdge`s forms a contiguous walk from `curVtx` to `endVtx`. -/
-def checkContiguousSyncEdges (curVtx endVtx : Nat) : List SyncEdge → Bool
-  | [] => curVtx == endVtx
-  | e :: rest => (e.src == curVtx) && checkContiguousSyncEdges e.dst endVtx rest
 
 theorem pathEndVtx_edgesToPathHops (curVtx endVtx : Nat) (edges : List SyncEdge)
     (hContig : checkContiguousSyncEdges curVtx endVtx edges = true) :
@@ -487,3 +568,4 @@ theorem applyRetimingCertToGraph_preserves_cycle_weight
   exact cycle_weight_invariant (lookupLag cert) startVtx (edgesToPathHops g.edges) hEnd
 
 end Obend.Hardware.Retiming
+end

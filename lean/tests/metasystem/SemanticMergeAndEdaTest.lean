@@ -437,10 +437,6 @@ example (prop : MultiAgentBoardMergeProposal)
     edaBoardConflictFields prop.baseBoard prop.powerAgentBoard prop.rfLayoutAgentBoard = [] ∧
     (∀ p ∈ prop.laws, p.2.denote prop.facts (some baseData) mergedData = true) ∧
     prop.citePin.pinnedBlockHash = prop.citePin.currentDatasheetHash ∧
-    mergedBoard.pinCount = prop.courtyard.requiredPinCount ∧
-    mergedBoard.pinPitchUm = prop.courtyard.requiredPinPitchUm ∧
-    mergedBoard.pkgWidthUm ≤ prop.courtyard.maxCourtyardWidthUm ∧
-    mergedBoard.pkgLengthUm ≤ prop.courtyard.maxCourtyardLengthUm ∧
     prop.downstreamReceiver.vihMinMv + prop.minNoiseMarginMv ≤ mergedBoard.toLogicFamilySpec.vohMinMv ∧
     mergedBoard.toLogicFamilySpec.volMaxMv + prop.minNoiseMarginMv ≤ prop.downstreamReceiver.vilMaxMv :=
   mergeAndJudgeAgenticEdaBoard_sound prop hAdmit

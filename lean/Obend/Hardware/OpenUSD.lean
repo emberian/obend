@@ -33,7 +33,6 @@ open Obend.Law (CellContract Holds Admits Narrows CellTrace cellContract_relaw_s
   cellContract_trace_sound law3 guard okT andT falseT leNat natT lawEnv scons_zero scons_succ
   admits_iff guard_ok andT_true leNat_true natT_eval evaluates_self evaluates_step
   evaluates_steps evaluates_of_steps evaluates_ifBool)
-open Obend.Hardware.Thermal
 open Obend.Hardware.Accelerators
 open Obend.Hardware.GeometryCAM
 set_option autoImplicit false

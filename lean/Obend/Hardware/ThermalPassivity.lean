@@ -17,12 +17,23 @@ current and hand-typed EOT / `V_th` / subthreshold formulas — are deleted. The
 every constant is a parameter and the solver's output is a checked certificate; the three corner
 formulas `TapeoutPipeline` still reads live in `Hardware/TcadBridge.lean` §0 under their own name.
 -/
-public import Obend.Hardware.Thermal
 @[expose] public section
 
 namespace Obend.Hardware.ThermalPassivity
-open Obend.Hardware.Thermal
 set_option autoImplicit false
+
+private theorem int_mul_nonneg (a b : Int) (ha : 0 ≤ a) (hb : 0 ≤ b) : 0 ≤ a * b := by
+  cases a with
+  | ofNat m =>
+    cases b with
+    | ofNat n => exact Int.ofNat_nonneg (m * n)
+    | negSucc _ => omega
+  | negSucc _ => omega
+
+private theorem int_sq_nonneg (a : Int) : 0 ≤ a * a := by
+  cases a with
+  | ofNat n => exact Int.ofNat_nonneg (n * n)
+  | negSucc n => exact Int.ofNat_nonneg (Nat.succ n * Nat.succ n)
 
 /-! ## 1. Fourier Heat PDE to Cauer RC Model-Order Reduction via PRIMA Congruence Projection -/
 
@@ -98,29 +109,6 @@ theorem prima_preserves_passivity
   have hFull : 0 ≤ evalFineThermalEnergy op (v1 * z) (v2 * z) :=
     fine_thermal_operator_dissipative op (v1 * z) (v2 * z) hg1 hg2 hg12
   exact ⟨hGhat, hEnergy, hFull⟩
-
-/-- A posteriori PDE-to-lumped Model-Order Reduction (MOR) error certificate:
-Given the PDE residual norm $\|r(\hat{x})\| = \text{residualNorm}$, coercivity (minimum eigenvalue)
-lower bound $\lambda_{\min} > 0$, and maximum allowable temperature error `maxErrorMk`, verifies the
-Lax-Milgram / Babuška-Brezzi bound $\|r(\hat{x})\| \le \text{maxErrorMk} \cdot \lambda_{\min}$. -/
-def checkMorErrorBound (residualNorm lambdaMin maxErrorMk : Nat) : Bool :=
-  decide (lambdaMin > 0) && decide (residualNorm ≤ maxErrorMk * lambdaMin)
-
-/-- Theorem (`mor_error_bound_sound`):
-If `checkMorErrorBound residualNorm lambdaMin maxErrorMk = true`, then the coercivity constant is
-strictly positive (`lambdaMin > 0`), the residual satisfies `residualNorm ≤ maxErrorMk * lambdaMin`,
-and `residualNorm / lambdaMin ≤ (maxErrorMk * lambdaMin) / lambdaMin`. -/
-theorem mor_error_bound_sound
-    (residualNorm lambdaMin maxErrorMk : Nat)
-    (hOk : checkMorErrorBound residualNorm lambdaMin maxErrorMk = true) :
-    lambdaMin > 0 ∧
-    residualNorm ≤ maxErrorMk * lambdaMin ∧
-    residualNorm / lambdaMin ≤ (maxErrorMk * lambdaMin) / lambdaMin := by
-  unfold checkMorErrorBound at hOk
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at hOk
-  have hDiv : residualNorm / lambdaMin ≤ (maxErrorMk * lambdaMin) / lambdaMin :=
-    Nat.div_le_div_right hOk.2
-  exact ⟨hOk.1, hOk.2, hDiv⟩
 
 /-! ## 2. N-Node Graph-Laplacian Thermal Network & Universal Quadratic Passivity -/
 

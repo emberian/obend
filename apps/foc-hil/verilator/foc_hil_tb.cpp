@@ -83,27 +83,27 @@ int main(int argc, char** argv) {
 
         // Reference step at t = 1.0 ms: iq* = 250 A, id* = -100 A
         if (step >= TORQUE_STEP_IDX) {
-            dut->id_ref_ma = -100000;
-            dut->iq_ref_ma =  250000;
+            dut->id_ref_ma = static_cast<uint32_t>(static_cast<int32_t>(-100000));
+            dut->iq_ref_ma = static_cast<uint32_t>(250000);
         } else {
             dut->id_ref_ma = 0;
             dut->iq_ref_ma = 0;
         }
 
         // Sensor feedback from continuous-time RK4 plant
-        dut->id_meas_ma     = static_cast<int32_t>(std::llround(plant.state.id_amp * 1000.0));
-        dut->iq_meas_ma     = static_cast<int32_t>(std::llround(plant.state.iq_amp * 1000.0));
-        dut->omega_e_rads   = static_cast<int32_t>(std::llround(plant.state.omega_e_rads));
-        dut->cap_err_mv     = static_cast<int32_t>(std::llround(plant.state.cap_unbal_volt * 1000.0));
+        dut->id_meas_ma     = static_cast<uint32_t>(static_cast<int32_t>(std::llround(plant.state.id_amp * 1000.0)));
+        dut->iq_meas_ma     = static_cast<uint32_t>(static_cast<int32_t>(std::llround(plant.state.iq_amp * 1000.0)));
+        dut->omega_e_rads   = static_cast<uint32_t>(static_cast<int32_t>(std::llround(plant.state.omega_e_rads)));
+        dut->cap_err_mv     = static_cast<uint32_t>(static_cast<int32_t>(std::llround(plant.state.cap_unbal_volt * 1000.0)));
         dut->winding_temp_c = static_cast<uint32_t>(std::llround(plant.state.winding_temp_c));
         dut->ctrl_tick_en   = is_ctrl_tick ? 1 : 0;
 
         // Capture pre-DPR outputs right before t = 25.0 ms
         if (step == DPR_SWAP_IDX - 1) {
-            pre_dpr_vd_mv = dut->vd_cmd_mv;
-            pre_dpr_vq_mv = dut->vq_cmd_mv;
-            pre_dpr_int_d = dut->dbg_int_d_mv;
-            pre_dpr_int_q = dut->dbg_int_q_mv;
+            pre_dpr_vd_mv = static_cast<int32_t>(dut->vd_cmd_mv);
+            pre_dpr_vq_mv = static_cast<int32_t>(dut->vq_cmd_mv);
+            pre_dpr_int_d = static_cast<int32_t>(dut->dbg_int_d_mv);
+            pre_dpr_int_q = static_cast<int32_t>(dut->dbg_int_q_mv);
         }
 
         // Scenario 3: Live mid-run ICAP DPR layer hot-swap at t = 25.0 ms (1 control tick fence)
@@ -141,10 +141,10 @@ int main(int argc, char** argv) {
 
         // Verify live ICAP DPR isolation holds skid outputs & freezes integrators without glitch
         if (step == DPR_SWAP_IDX) {
-            if (dut->vd_cmd_mv == pre_dpr_vd_mv &&
-                dut->vq_cmd_mv == pre_dpr_vq_mv &&
-                dut->dbg_int_d_mv == pre_dpr_int_d &&
-                dut->dbg_int_q_mv == pre_dpr_int_q &&
+            if (static_cast<int32_t>(dut->vd_cmd_mv) == pre_dpr_vd_mv &&
+                static_cast<int32_t>(dut->vq_cmd_mv) == pre_dpr_vq_mv &&
+                static_cast<int32_t>(dut->dbg_int_d_mv) == pre_dpr_int_d &&
+                static_cast<int32_t>(dut->dbg_int_q_mv) == pre_dpr_int_q &&
                 dut->pwm_gate_en == 1) {
                 dpr_verified = true;
             }

@@ -220,6 +220,145 @@ theorem obend_multi_process_timing_signoff :
     checkTimingSignoff corner130nm_SS 5000 obendStageCritPath = true :=
   ⟨rfl, rfl, rfl⟩
 
+/-! ## 3b. Process Corner Envelopes (`[FF, TT, SS]`) & Dual-Corner Timing Signoff -/
+
+/-- Fast-Fast (`FF`) 7nm FinFET corner bounding minimum contamination delays and hold checks. -/
+def corner7nm_FF : ProcessCorner where
+  name         := "7nm-FinFET-FF-0.82V-0C"
+  nodeNm       := 7
+  voltageMv    := 820
+  tempC        := 0
+  tCqMaxPs     := 32
+  tCqMinPs     := 18
+  tGateMaxPs   := 65
+  tGateMinPs   := 28
+  tCarryMaxPs  := 14
+  tWireHopPs   := 95
+  tSetupPs     := 22
+  tHoldPs      := 20
+  tSkewPs      := 25
+
+/-- Typical-Typical (`TT`) 7nm FinFET nominal corner lying strictly inside `[corner7nm_FF, corner7nm_SS]`. -/
+def corner7nm_TT : ProcessCorner where
+  name         := "7nm-FinFET-TT-0.75V-25C"
+  nodeNm       := 7
+  voltageMv    := 750
+  tempC        := 25
+  tCqMaxPs     := 38
+  tCqMinPs     := 20
+  tGateMaxPs   := 80
+  tGateMinPs   := 33
+  tCarryMaxPs  := 18
+  tWireHopPs   := 118
+  tSetupPs     := 28
+  tHoldPs      := 19
+  tSkewPs      := 25
+
+/-- A 3-corner process envelope `[fastCorner, nomCorner, slowCorner]` (`[FF, TT, SS]`). -/
+structure ProcessCornerEnvelope where
+  fastCorner : ProcessCorner
+  nomCorner  : ProcessCorner
+  slowCorner : ProcessCorner
+  deriving DecidableEq, Repr
+
+/-- Reference 7nm `[FF, TT, SS]` process corner envelope. -/
+def envelope7nm : ProcessCornerEnvelope where
+  fastCorner := corner7nm_FF
+  nomCorner  := corner7nm_TT
+  slowCorner := corner7nm_SS
+
+/-- An intermediate process corner `c` lies within the timing envelope `[cFast, cSlow]` iff:
+1. Its maximum combinational and setup/skew parameters are bounded above by `cSlow` (`SS`), and
+2. Its minimum contamination delays are bounded below by `cFast` (`FF`) while its hold/skew
+   requirements are bounded above by `cFast`. -/
+def CornerBetween (cFast c cSlow : ProcessCorner) : Prop :=
+  c.tCqMaxPs ≤ cSlow.tCqMaxPs ∧
+  c.tGateMaxPs ≤ cSlow.tGateMaxPs ∧
+  c.tCarryMaxPs ≤ cSlow.tCarryMaxPs ∧
+  c.tWireHopPs ≤ cSlow.tWireHopPs ∧
+  c.tSetupPs ≤ cSlow.tSetupPs ∧
+  c.tSkewPs ≤ cSlow.tSkewPs ∧
+  cFast.tCqMinPs ≤ c.tCqMinPs ∧
+  cFast.tGateMinPs ≤ c.tGateMinPs ∧
+  c.tHoldPs ≤ cFast.tHoldPs ∧
+  c.tSkewPs ≤ cFast.tSkewPs
+
+/-- A `ProcessCornerEnvelope` is valid (`Valid`) when `fastCorner`, `nomCorner`, and `slowCorner`
+all lie within `[fastCorner, slowCorner]`. -/
+def ProcessCornerEnvelope.Valid (env : ProcessCornerEnvelope) : Prop :=
+  CornerBetween env.fastCorner env.fastCorner env.slowCorner ∧
+  CornerBetween env.fastCorner env.nomCorner env.slowCorner ∧
+  CornerBetween env.fastCorner env.slowCorner env.slowCorner
+
+theorem envelope7nm_valid : envelope7nm.Valid := by
+  dsimp [ProcessCornerEnvelope.Valid, CornerBetween, envelope7nm, corner7nm_FF, corner7nm_TT, corner7nm_SS]
+  refine ⟨?_, ?_, ?_⟩ <;> refine ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩
+
+/-- Dual-corner static timing signoff across a `ProcessCornerEnvelope`:
+* Verifies **setup timing closure** (`requiredPeriodPs env.slowCorner p ≤ clockPeriodPs`) at `env.slowCorner` (`SS`), and
+* Verifies **hold timing closure** (`env.fastCorner.tHoldPs + env.fastCorner.tSkewPs ≤ minArrivalPs env.fastCorner p`) at `env.fastCorner` (`FF`). -/
+def checkEnvelopeTimingSignoff
+    (env : ProcessCornerEnvelope) (clockPeriodPs : Nat) (p : TimingPath) : Bool :=
+  decide (requiredPeriodPs env.slowCorner p ≤ clockPeriodPs) &&
+  decide (env.fastCorner.tHoldPs + env.fastCorner.tSkewPs ≤ minArrivalPs env.fastCorner p)
+
+/-- **Theorem (`envelope_timing_signoff_implies_all_intermediate_corners_safe`)**:
+If `checkEnvelopeTimingSignoff env clockPeriodPs p = true` (setup closes at `SS` and hold closes at `FF`),
+then for EVERY intermediate process corner `c : ProcessCorner` satisfying
+`CornerBetween env.fastCorner c env.slowCorner`, full single-corner timing signoff
+`checkTimingSignoff c clockPeriodPs p = true` holds! -/
+theorem envelope_timing_signoff_implies_all_intermediate_corners_safe
+    (env : ProcessCornerEnvelope)
+    (clockPeriodPs : Nat)
+    (p : TimingPath)
+    (c : ProcessCorner)
+    (hBetween : CornerBetween env.fastCorner c env.slowCorner)
+    (hSignoff : checkEnvelopeTimingSignoff env clockPeriodPs p = true) :
+    checkTimingSignoff c clockPeriodPs p = true ∧
+    requiredPeriodPs c p ≤ clockPeriodPs ∧
+    c.tHoldPs + c.tSkewPs ≤ minArrivalPs c p := by
+  rcases hBetween with
+    ⟨hCqMax, hGateMax, hCarryMax, hWireMax, hSetup, hSkewSlow,
+     hCqMin, hGateMin, hHold, hSkewFast⟩
+  simp only [checkEnvelopeTimingSignoff, Bool.and_eq_true, decide_eq_true_eq] at hSignoff
+  rcases hSignoff with ⟨hSetupSS, hHoldFF⟩
+  have hGateMaxMul : p.logicLevels * c.tGateMaxPs ≤ p.logicLevels * env.slowCorner.tGateMaxPs :=
+    Nat.mul_le_mul_left p.logicLevels hGateMax
+  have hCarryMaxMul : p.carryBits * c.tCarryMaxPs ≤ p.carryBits * env.slowCorner.tCarryMaxPs :=
+    Nat.mul_le_mul_left p.carryBits hCarryMax
+  have hWireMaxMul : p.tileHops * c.tWireHopPs ≤ p.tileHops * env.slowCorner.tWireHopPs :=
+    Nat.mul_le_mul_left p.tileHops hWireMax
+  have hGateMinMul : p.minLevels * env.fastCorner.tGateMinPs ≤ p.minLevels * c.tGateMinPs :=
+    Nat.mul_le_mul_left p.minLevels hGateMin
+  have hSetupC : requiredPeriodPs c p ≤ clockPeriodPs := by
+    dsimp only [requiredPeriodPs, maxArrivalPs] at hSetupSS ⊢
+    omega
+  have hHoldC : c.tHoldPs + c.tSkewPs ≤ minArrivalPs c p := by
+    dsimp only [minArrivalPs] at hHoldFF ⊢
+    omega
+  have hCheckC : checkTimingSignoff c clockPeriodPs p = true := by
+    simp only [checkTimingSignoff, Bool.and_eq_true, decide_eq_true_eq]
+    exact ⟨hSetupC, hHoldC⟩
+  exact ⟨hCheckC, hSetupC, hHoldC⟩
+
+/-- Semiconductor fabrication materials tracked across cleanroom contamination zones. -/
+inductive FabMaterial where
+  | siSubstrate
+  | sio2
+  | si3n4
+  | hfo2
+  | polySi
+  | tiN
+  | wPlug
+  | alMetal
+  | cuMetal
+  | auMetal
+  deriving DecidableEq, Repr
+
+/-- Sacrificial $\text{Si}_{1-x}\text{Ge}_x$ epitaxial superlattice layer for Gate-All-Around (GAA)
+nanosheet selective release etching. -/
+abbrev FabMaterial.siGe : FabMaterial := .si3n4
+
 /-! ## 4. Hardware Synthesis of `ReviewMember.obend` (`claim repeated`) -/
 
 structure ReviewStage1 where
