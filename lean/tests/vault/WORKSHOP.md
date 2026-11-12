@@ -420,7 +420,7 @@ cd ws && obend forget finished --retire accept-relay --retire land-relay --retir
 ```
 
 ```text
-forgot 66 records (298587 bytes) under the retention contract finished, retiring accept-relay, land-relay, accept-harness, land-harness, topup-relay: the log is one checkpoint record of 178077 bytes
+forgot 66 records (298587 bytes) under the retention contract finished, retiring accept-relay, land-relay, accept-harness, land-harness, topup-relay: the log is one checkpoint record of 178078 bytes
 ```
 
 ## 8. Defects the day exposed, fixed

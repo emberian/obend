@@ -62,6 +62,7 @@ public import Obend.Vault.FormCheckCache
 public import Obend.Vault.Transport
 public import Obend.Vault.Retention
 public import Obend.Vault.Merge
+public import Obend.Vault.ChunkedWorld
 public import Obend.Digest.Cshake256
 public import Obend.Reasons
 @[expose] public section
@@ -83,50 +84,12 @@ def logHash (b : Bytes) : Bytes := Obend.Digest.Cshake256.cshake256Bytes "obend-
 
 /-! ## The world and its turns -/
 
-deriving instance DecidableEq for Page
-deriving instance DecidableEq for PageWrite
-deriving instance DecidableEq for PageConflict
-deriving instance DecidableEq for Store
-deriving instance DecidableEq for Journal
-deriving instance DecidableEq for Obend.Vault.Form.Cell
-deriving instance DecidableEq for Obend.Vault.Form.Form
-
 open Obend.Vault.Form (Form Grant Assignment Admitted)
 open Obend.Vault.Rehydration (WitnessReceipt)
 open Obend.Vault.Transport (Issue Grants Standing Landing Obligation Contract)
 
-/-- The world beside a vault: the store of its pages and members (with the merges' open conflicts),
-the register's journal, the forms it issued, the receipt chain of the proposals it judged, and the
-forms it received and the proposals it sent (each by form name, the text it exports). -/
-structure World where
-  store : Store := {}
-  journal : Journal := Journal.empty
-  forms : List Form := []
-  receipts : List WitnessReceipt := []
-  received : List (String × String) := []
-  sent : List (String × String) := []
-  /-- what the vault keeps of each form it issued: its contract and its basis (`Obend.Vault.Transport`) -/
-  issues : List Issue := []
-  /-- the grants it issued and revoked -/
-  grants : Grants := {}
-  /-- the proposals it landed, by the identity of their intent -/
-  landed : List Landing := []
-  /-- the proposals it sent and has no receipt for -/
-  outstanding : List Obligation := []
-  /-- how many proposals it has sent -/
-  minted : Nat := 0
-  /-- the retention contracts its `forget` turns declared (`Obend.Vault.Retention`) -/
-  retention : List Retention.Contract := []
-  /-- the branches it declared (`obend fork`) -/
-  forks : List Retention.Fork := []
-  /-- its reasons: what it observed, assumed, explained, defeated and proposed, and the judgment -/
-  reasons : Obend.Reasons.State := {}
-  /-- the checks it made, at capture and at each abstraction, of the judgments a fill of each of its
-  forms makes (`Obend.Vault.Form.Form.checksAt`), each the checker accepted, kept as its record
-  (`Form.CheckRecord`); a command that uses a form's checks makes them again from these
-  (`Form.checksOf`) -/
-  checked : List Form.CheckRecord := []
-deriving DecidableEq
+/-- The world beside a vault (`Obend.Vault.ChunkedWorld.World`). -/
+abbrev World := Obend.Vault.ChunkedWorld.World
 
 /-- One turn of the deployed entry. -/
 inductive Turn
@@ -141,7 +104,7 @@ inductive Turn
   | recited (who : Option String) (page : String)
   | merged (label : String) (other : Store) (skipLedger : Bool) (otherGrants : Option Grants := none)
       (otherLanded : List Landing := []) (reaches : Option Bool := none)
-      (otherReasons : Option Obend.Reasons.State := none)
+      (otherReasons : Option Obend.Reasons.State := none) (member : Option String := none)
   | resolved (k : Nat) (right : Bool)
   | rows (rs : List Row)
   | captured (situation name : String) (g : Grant) (src dst : String) (amount : Nat) (field : String)
@@ -163,7 +126,7 @@ inductive Turn
   | released (intent : String)
   | forget (c : Retention.Contract)
   | compacted (count digest anchor : Nat) (w : World)
-  | forked (name : String)
+  | forked (name : String) (member : Option String := none)
   | reasoned (e : Obend.Reasons.Event)
   | justified (name digest : String) (hops : List Grant) (a : Assignment) (intent : Option String) (because : String)
 
@@ -458,13 +421,62 @@ theorem sortLandings_returned (w : World) (G : Grants) (theirs : List Landing) (
     l ∉ (sortLandings w G theirs).1 ∧ l ∉ (sortLandings w G theirs).2.1 ∧ l ∉ (sortLandings w G theirs).2.2 := by
   refine ⟨?_, ?_, ?_⟩ <;> simp [sortLandings, h]
 
+/-- A sturdyref granting write standing over `cell`. -/
+def mkWriteRef (uri cell : String) : Rehydration.Sturdyref Obend.Core.Data.Data :=
+  { uri := uri, surface := [], log := [],
+    lineage := { held := [.write], permits := fun _ => true },
+    cellId := cell }
+
+/-- Build `Merge.ForkAuth` at the tip for an optional member-attributed fork (`obend fork --for MEMBER`). -/
+def forkAuthFor (here other : Store) (G : Grants) (who? : Option String) : Merge.ForkAuth :=
+  match who? with
+  | none => {}
+  | some who =>
+    if who == "" || who == "owner" then {} else
+    let names := Merge.namesOf here other
+    let mem? := here.member? who
+    let memGrants := (mem?.map (·.grants)).getD []
+    let memId := (mem?.map (·.id)).getD (here.members.length + 1)
+    let liveSups := G.supports who
+    let revSups := G.standing.filter fun s => G.revoked.contains s.id && s.grant.holder == who
+    let memRefs := names.filterMap fun c =>
+      if (mem?.map (fun m => m.may "write" c)) == some true then
+        some (mkWriteRef ("member:" ++ who ++ ":write:" ++ c) c)
+      else none
+    let liveGrantRefs := names.flatMap fun c =>
+      liveSups.filterMap fun s =>
+        if Form.mayWrite (s.grant.viewer names) c then
+          some (mkWriteRef ("grant:" ++ s.id ++ ":" ++ c) c)
+        else none
+    let revGrantRefs := names.flatMap fun c =>
+      revSups.filterMap fun s =>
+        if Form.mayWrite (s.grant.viewer names) c then
+          some (mkWriteRef ("grant:" ++ s.id ++ ":" ++ c) c, ("grant:" ++ s.id ++ ":" ++ c, "owner"))
+        else none
+    let allRefs := memRefs ++ liveGrantRefs ++ revGrantRefs.map (·.1)
+    let allRev := revGrantRefs.map (·.2)
+    let tipAuth : Branch.Authority := { refs := allRefs, revoked := allRev }
+    let reliesOf : String → Bool → List String := fun c isRelaw =>
+      if isRelaw && (mem?.map (fun m => m.may "relaw" c)) != some true then []
+      else
+        let liveUris := (allRefs.filter fun sr => sr.cellId == c && tipAuth.live sr.uri).map (·.uri)
+        if !liveUris.isEmpty then liveUris
+        else (allRefs.filter fun sr => sr.cellId == c).map (·.uri)
+    let extraWrite := (names.filter fun c => liveSups.any fun s => Form.mayWrite (s.grant.viewer names) c).map
+      ("write", ·)
+    { actor := who
+      tipAuth := tipAuth
+      reliesOf := reliesOf
+      actorRef := .member ⟨who, memId, memGrants ++ extraWrite⟩ }
+
 /-- The merge of another replica's store (with its grants and landings, when the record carries them). -/
 def mergeStep (w : World) (label : String) (other : Store) (skipLedger : Bool) (og : Option Grants)
-    (theirs : List Landing) : Except String (World × Outcome) :=
+    (theirs : List Landing) (auth : Merge.ForkAuth := {}) : Except String (World × Outcome) :=
   match og, theirs with
   | none, _ =>
       let (s, notes) := Merge.mergeVault H w.store other label
         (skip := if skipLedger then Obend.Ledger.Cli.ledgerOwned else fun _ => false)
+        (auth := auth)
       .ok ({ w with store := settle H s }, .merged s notes)
   | some og, theirs =>
       let G := w.grants.merge og
@@ -472,6 +484,7 @@ def mergeStep (w : World) (label : String) (other : Store) (skipLedger : Bool) (
       let held := (refused ++ dups).flatMap (·.pages)
       let (s, notes) := Merge.mergeVault H w.store other label
         (skip := fun n => (skipLedger && Obend.Ledger.Cli.ledgerOwned n) || held.contains n)
+        (auth := auth)
       let said := refused.map (fun l => ", ".intercalate l.pages ++ ": not merged from " ++ label ++ ": the landing of " ++
           l.form ++ " (intent " ++ l.intent ++ ", by " ++ l.holder ++ ") rested on " ++ ", ".intercalate l.supports ++
           ", revoked here") ++
@@ -796,19 +809,28 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     match w.store.actor who >>= fun a => reciteIn H w.store a page with
     | .ok (s, n) => .ok ({ w with store := settle H s }, .recited s n)
     | .error e => .error e
-  | .merged label other skipLedger og theirs reaches rs =>
+  | .merged label other skipLedger og theirs reaches rs member =>
     match lateMerge w label reaches with
     | some e => .error e
     | none =>
-      match mergeStep w label other skipLedger og theirs with
+      let effWho := member.orElse fun _ => w.forkMembers.lookup label
+      let mergedG := match og with | some g => w.grants.merge g | none => w.grants
+      let auth := forkAuthFor w.store other mergedG effWho
+      match mergeStep w label other skipLedger og theirs auth with
       | .ok (w', o) =>
         let held : List String := match og with
           | some g => let (_, refused, dups) := sortLandings w (w.grants.merge g) theirs
                       (refused ++ dups).flatMap (·.pages)
           | none => []
+        let unauth : String → Bool := fun n =>
+          auth.actor != "owner" && !(auth.reliesOf n false).any (auth.tipAuth.live ·)
         let (w'', o') := afterMerge w w' o label other rs
-          (fun n => held.contains n || (skipLedger && Obend.Ledger.Cli.ledgerOwned n))
-        .ok ({ w'' with forks := markMerged w''.forks label }, o')
+          (fun n => held.contains n || unauth n || (skipLedger && Obend.Ledger.Cli.ledgerOwned n))
+        let hasRefusal := match o' with
+          | .merged _ ns => ns.any fun l => (l.splitOn ": not merged").length > 1
+          | _ => false
+        let nextForkMembers := if hasRefusal then w''.forkMembers else w''.forkMembers.filter (·.1 != label)
+        .ok ({ w'' with forks := markMerged w''.forks label, forkMembers := nextForkMembers }, o')
       | .error e => .error e
   | .resolved k right =>
     match Merge.resolveIn w.store k (if right then .right else .left) with
@@ -914,9 +936,12 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
     | some e => .error e
     | none => .ok ({ w with retention := w.retention ++ [c] }, .quiet)
   | .compacted _ _ _ w' => .ok (w', .quiet)
-  | .forked name =>
+  | .forked name member =>
     if w.forks.any (fun b => b.name == name && !b.merged) then .error ("refused: the branch " ++ name ++ " is out already")
-    else .ok ({ w with forks := (w.forks.filter (·.name != name)) ++ [⟨name, false⟩] }, .quiet)
+    else
+      let fm := (w.forkMembers.filter (·.1 != name)) ++
+        (match member with | some m => if m == "" || m == "owner" then [] else [(name, m)] | none => [])
+      .ok ({ w with forks := (w.forks.filter (·.name != name)) ++ [⟨name, false⟩], forkMembers := fm }, .quiet)
   | .reasoned e =>
     match w.reasons.step e with
     | .error err => .error err
@@ -1012,7 +1037,8 @@ def worldJson (w : World) : Json :=
     (if w.retention.isEmpty then [] else [("retention", Json.arr (w.retention.map Retention.contractJson).toArray)]) ++
     (if w.forks.isEmpty then [] else [("forks", Json.arr (w.forks.map Retention.forkJson).toArray)]) ++
     (if w.reasons == {} then [] else [("reasons", Obend.Reasons.stateJson w.reasons)]) ++
-    (if w.checked.isEmpty then [] else [("checked", Json.arr (w.checked.map Form.checkedJson).toArray)])))
+    (if w.checked.isEmpty then [] else [("checked", Json.arr (w.checked.map Form.checkedJson).toArray)]) ++
+    (if w.forkMembers.isEmpty then [] else [("forkMembers", pairsJson w.forkMembers)])))
 
 def worldOf (j : Json) : Except String World := do
   let store ← fullStoreOf (← j.getObjVal? "store")
@@ -1036,8 +1062,9 @@ def worldOf (j : Json) : Except String World := do
   -- a check read back is checked again: only what the checker accepts here is kept
   let checked ← opt "checked" [] fun v => do
     (← v.getArr?).toList.mapM Form.checkedOf
+  let forkMembers ← opt "forkMembers" [] pairsOf
   return ⟨store, journal, forms, receipts, received, sent, issues, grants, landed, outstanding, minted, retention, forks,
-    reasons, checked⟩
+    reasons, checked, forkMembers⟩
 
 def turnJson : Turn → Json
   | .base w => Json.mkObj [("turn", "base"), ("world", worldJson w)]
@@ -1053,14 +1080,15 @@ def turnJson : Turn → Json
   | .selected who page k i => Json.mkObj [("turn", "select"), ("as", optStrJson who), ("page", Json.str page),
       ("section", toJson k), ("candidate", toJson i)]
   | .recited who page => Json.mkObj [("turn", "recite"), ("as", optStrJson who), ("page", Json.str page)]
-  | .merged label other skip og theirs reaches rs => Json.mkObj ([("turn", Json.str "merge"), ("label", Json.str label),
+  | .merged label other skip og theirs reaches rs member => Json.mkObj ([("turn", Json.str "merge"), ("label", Json.str label),
       ("other", storeJson other), ("skipLedger", toJson skip)] ++
       (match rs with | some r => [("otherReasons", Obend.Reasons.stateJson r)] | none => []) ++
       (match og with
         | some g => [("otherGrants", Transport.grantsJson g),
             ("otherLanded", Json.arr (theirs.map Transport.landingJson).toArray)]
         | none => []) ++
-      (match reaches with | some b => [("reaches", toJson b)] | none => []))
+      (match reaches with | some b => [("reaches", toJson b)] | none => []) ++
+      (match member with | some m => [("for", Json.str m)] | none => []))
   | .resolved k right => Json.mkObj [("turn", "resolve"), ("conflict", toJson k), ("right", toJson right)]
   | .rows rs => Json.mkObj [("turn", "rows"), ("rows", Json.arr (rs.map rowJson).toArray)]
   | .captured situation name g src dst amount field refs => Json.mkObj [("turn", "capture"),
@@ -1092,7 +1120,8 @@ def turnJson : Turn → Json
   | .forget c => Json.mkObj [("turn", "forget"), ("contract", Retention.contractJson c)]
   | .compacted count digest anchor w => Json.mkObj [("turn", "compacted"), ("count", toJson count),
       ("digest", toJson digest), ("anchor", toJson anchor), ("world", worldJson w)]
-  | .forked name => Json.mkObj [("turn", "fork"), ("name", Json.str name)]
+  | .forked name member => Json.mkObj ([("turn", Json.str "fork"), ("name", Json.str name)] ++
+      (match member with | some m => [("for", Json.str m)] | none => []))
   | .reasoned e => Json.mkObj [("turn", "reason"), ("event", Obend.Reasons.eventJson e)]
   | .justified name digest hops a intent because => Json.mkObj ([("turn", Json.str "justified"), ("name", Json.str name),
       ("digest", Json.str digest), ("hops", Json.arr (hops.map Form.grantJson).toArray),
@@ -1130,6 +1159,7 @@ def turnOf (j : Json) : Except String Turn := do
     let label ← j.getObjValAs? String "label"
     let other ← storeOf (← j.getObjVal? "other")
     let skip ← j.getObjValAs? Bool "skipLedger"
+    let member := (j.getObjValAs? String "for").toOption
     match j.getObjVal? "otherGrants" with
     | .ok g =>
       let theirs ← (← j.getObjValAs? (Array Json) "otherLanded").toList.mapM Transport.landingOf
@@ -1137,8 +1167,8 @@ def turnOf (j : Json) : Except String Turn := do
       let rs ← match j.getObjVal? "otherReasons" with
         | .ok r => some <$> Obend.Reasons.stateOf r
         | .error _ => pure none
-      return .merged label other skip (some (← Transport.grantsOf g)) theirs reaches rs
-    | .error _ => return .merged label other skip none [] (j.getObjValAs? Bool "reaches").toOption
+      return .merged label other skip (some (← Transport.grantsOf g)) theirs reaches rs member
+    | .error _ => return .merged label other skip none [] (j.getObjValAs? Bool "reaches").toOption none member
   | "resolve" => return .resolved (← j.getObjValAs? Nat "conflict") (← j.getObjValAs? Bool "right")
   | "rows" => return .rows (← (← j.getObjValAs? (Array Json) "rows").toList.mapM rowOf)
   | "capture" =>
@@ -1195,7 +1225,7 @@ def turnOf (j : Json) : Except String Turn := do
     let digest ← j.getObjValAs? Nat "digest"
     let anchor ← j.getObjValAs? Nat "anchor"
     return .compacted count digest anchor (← worldOf (← j.getObjVal? "world"))
-  | "fork" => return .forked (← j.getObjValAs? String "name")
+  | "fork" => return .forked (← j.getObjValAs? String "name") (j.getObjValAs? String "for").toOption
   | "reason" => return .reasoned (← Obend.Reasons.eventOf (← j.getObjVal? "event"))
   | "justified" =>
     let name ← j.getObjValAs? String "name"
@@ -1265,10 +1295,11 @@ def Turn.kind : Turn → String
 
 /-! ## The deployed machine and its theorems -/
 
-/-- **The deployed machine**: a record's bytes are decoded to a turn and stepped by `stepTurn`. -/
+/-- **The deployed machine**: a record's bytes are decoded to a turn and stepped by `stepTurn`;
+its world commitment is the canonical Merkleized manifest (`ChunkedWorld.manifestBytes`). -/
 def deployed : Machine World Outcome where
   step w b := do stepTurn w (← decodeTurn b)
-  encW := encodeWorld
+  encW := ChunkedWorld.manifestBytes
 
 /-- The world before any turn. -/
 def genesis : World := {}
@@ -1325,16 +1356,42 @@ theorem recover_eq_replay_prefix {S : Session} (h : Reachable S) (k : Nat) :
       Reachable ⟨replay deployed genesis (S.log.take m), S.log.take m⟩ :=
   Log.recover_eq_replay_prefix h k
 
+/-- Decode a checkpoint's world bytes: sharded Merkle manifest when present, falling back to legacy
+monolithic JSON (`decodeWorld`). -/
+def decodeCheckpointWorld (store : String → Option Bytes) (b : Bytes) : Option World :=
+  match ChunkedWorld.decodeManifestWith store b with
+  | .ok w => some w
+  | .error _ => decodeWorld b
+
 /-- **`checkpoint_is_cache`**: at every truncation of the deployed entry's log, recovering from a
 checkpoint it wrote is recovering from genesis. The premise is the check the entry makes before it
 writes a checkpoint: the world's bytes decode to the world. -/
 theorem checkpoint_is_cache {S : Session} (h : Reachable S) {n : Nat} (hn0 : 0 < n) (hn : n ≤ S.log.length)
-    (hcache : decodeWorld (encodeWorld (replay deployed genesis (S.log.take n))) =
+    {decW : Bytes → Option World}
+    (hcache : decW (deployed.encW (replay deployed genesis (S.log.take n))) =
       some (replay deployed genesis (S.log.take n))) (k : Nat) :
-    recoverWith logHash deployed decodeWorld genesis (checkpointAt logHash deployed genesis S.log n)
+    recoverWith logHash deployed decW genesis (checkpointAt logHash deployed genesis S.log n)
         ((encodeAll logHash S.log).take k) =
       recover logHash deployed genesis ((encodeAll logHash S.log).take k) :=
   Log.checkpoint_is_cache h hn0 hn hcache k
+
+/-- **`sharded_checkpoint_is_cache`**: at every truncation of the deployed entry's log, when the
+shard store holds the shards named by the checkpoint's world, recovering from the sharded checkpoint
+equals recovering from genesis — with NO unproved JSON round-trip premise (`hcache` is discharged
+universally by `ChunkedWorld.decodeManifestWith_manifestBytes`). -/
+theorem sharded_checkpoint_is_cache {S : Session} (h : Reachable S) {n : Nat} (hn0 : 0 < n)
+    (hn : n ≤ S.log.length) (store : String → Option Bytes)
+    (hstore : ∀ k sb,
+      (k, sb) ∈ (ChunkedWorld.encodeShardedWorld (replay deployed genesis (S.log.take n))).shards →
+        store k = some sb)
+    (k : Nat) :
+    recoverWith logHash deployed (decodeCheckpointWorld store) genesis
+        (checkpointAt logHash deployed genesis S.log n) ((encodeAll logHash S.log).take k) =
+      recover logHash deployed genesis ((encodeAll logHash S.log).take k) := by
+  apply Log.checkpoint_is_cache h hn0 hn ?_ k
+  have hm := ChunkedWorld.decodeManifestWith_manifestBytes (replay deployed genesis (S.log.take n)) store hstore
+  change decodeCheckpointWorld store (ChunkedWorld.manifestBytes (replay deployed genesis (S.log.take n))) = _
+  simp [decodeCheckpointWorld, hm]
 
 /-! ## Obligations and the identity of an intent, at the deployed machine -/
 
@@ -1471,7 +1528,8 @@ theorem reasoned_consistent {w w' : World} {o : Outcome} {e : Obend.Reasons.Even
     exact Obend.Reasons.step_consistent hc hr
 
 theorem mergeStep_keeps {w w1 : World} {label : String} {other : Store} {skip : Bool} {og : Option Grants}
-    {theirs : List Landing} {o : Outcome} (h : mergeStep w label other skip og theirs = .ok (w1, o)) :
+    {theirs : List Landing} {auth : Merge.ForkAuth} {o : Outcome}
+    (h : mergeStep w label other skip og theirs auth = .ok (w1, o)) :
     w1.outstanding = w.outstanding ∧ ∀ x ∈ w.landed, x ∈ w1.landed := by
   unfold mergeStep at h
   split at h <;> (simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h) <;>
@@ -1479,7 +1537,8 @@ theorem mergeStep_keeps {w w1 : World} {label : String} {other : Store} {skip : 
 
 theorem merged_keeps {w w' : World} {o : Outcome} {label : String} {other : Store} {skip : Bool}
     {og : Option Grants} {theirs : List Landing} {reaches : Option Bool} {rs : Option Obend.Reasons.State}
-    (h : stepTurn w (.merged label other skip og theirs reaches rs) = .ok (w', o)) :
+    {member : Option String}
+    (h : stepTurn w (.merged label other skip og theirs reaches rs member) = .ok (w', o)) :
     (∀ x ∈ w.outstanding, x ∈ w'.outstanding) ∧ (∀ x ∈ w.landed, x ∈ w'.landed) := by
   simp only [stepTurn] at h
   split at h
@@ -1712,13 +1771,14 @@ theorem late_correction_refused (w : World) :
       stepTurn w (.judged name digest hops a none) = .error (lateText name c) ∧
       ∀ i, Transport.duplicateOf w.landed i = none →
         stepTurn w (.judged name digest hops a (some i)) = .error (lateText name c)) ∧
-    (∀ label other skip og theirs reaches rs e, lateMerge w label reaches = some e →
-      stepTurn w (.merged label other skip og theirs reaches rs) = .error e) ∧
+    (∀ label other skip og theirs reaches rs member e, lateMerge w label reaches = some e →
+      stepTurn w (.merged label other skip og theirs reaches rs member) = .error e) ∧
     (∀ label c, w.retention.getLast? = some c → w.retention.find? (·.abandon.contains label) = none →
       lateMerge w label (some false) = some ("not merged: late: " ++ label ++ "'s log does not reach the horizon of the " ++
         "retention contract " ++ c.name ++ " (it forked before the prefix forgotten here); its corrections " ++
         "would arrive later than the contract allows")) := by
-  refine ⟨fun name digest hops a c hc => ⟨?_, fun i hi => ?_⟩, fun label other skip og theirs reaches rs e he => ?_,
+  refine ⟨fun name digest hops a c hc => ⟨?_, fun i hi => ?_⟩,
+    fun label other skip og theirs reaches rs member e he => ?_,
     fun label c hc hab => ?_⟩
   · simp only [stepTurn, judgeTurn, hc]
   · simp only [stepTurn, judgeTurn, hi, judgeNew, hc]

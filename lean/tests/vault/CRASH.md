@@ -49,7 +49,7 @@ receipt .obend/receipts/P-0001.json
 invoices/INV-2: posted as P-0002 (period 11): debit accounts/Receivables 250, credit accounts/Revenue 250
 receipt .obend/receipts/P-0002.json
 log: 7 records, 3618 bytes, each following the one before it from the genesis sentinel
-logical log: 3618 bytes; checkpoint: 6701 bytes
+logical log: 3618 bytes; checkpoint: 1262 bytes
   record 1 (open): bytes 0 to 821
   record 2 (open): bytes 821 to 1038
   record 3 (rows): bytes 1038 to 1498
@@ -59,9 +59,9 @@ logical log: 3618 bytes; checkpoint: 6701 bytes
   record 7 (open): bytes 2884 to 3618
 last record: 7 (open), bytes 2884 to 3618
 checkpoint: the world after record 7
-world 30c543485a796b87: replayed from genesis
-world 30c543485a796b87: the checkpoint and the records after it
-world 30c543485a796b87: as record 7 commits to it
+world e5c23845f5cc4619: replayed from genesis
+world e5c23845f5cc4619: the checkpoint and the records after it
+world e5c23845f5cc4619: as record 7 commits to it
 one world
 ```
 
@@ -91,13 +91,13 @@ P-0001.md
 P-0002.md
 _kind.md
 log: 8 records, 4137 bytes, each following the one before it from the genesis sentinel
-logical log: 4237 bytes; checkpoint: 7103 bytes
+logical log: 4237 bytes; checkpoint: 1328 bytes
 last record: 8 (open), bytes 3618 to 4137
 torn tail: 100 bytes after record 8, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 8
-world c10586f08cba41b3: replayed from genesis
-world c10586f08cba41b3: the checkpoint and the records after it
-world c10586f08cba41b3: as record 8 commits to it
+world 0daa29d0a6e0c51e: replayed from genesis
+world 0daa29d0a6e0c51e: the checkpoint and the records after it
+world 0daa29d0a6e0c51e: as record 8 commits to it
 one world
 ```
 
@@ -132,12 +132,12 @@ postings: P-0001, P-0002
 checked (trial-balance@1, decidable, compiled): every posting of period 11 is in it
 wrote reports/TB-11.md
 log: 11 records, 5295 bytes, each following the one before it from the genesis sentinel
-logical log: 5295 bytes; checkpoint: 8160 bytes
+logical log: 5295 bytes; checkpoint: 1394 bytes
 last record: 11 (open), bytes 4571 to 5295
 checkpoint: the world after record 11
-world b5055f7b4289e044: replayed from genesis
-world b5055f7b4289e044: the checkpoint and the records after it
-world b5055f7b4289e044: as record 11 commits to it
+world 41b0b18c6ddef6de: replayed from genesis
+world 41b0b18c6ddef6de: the checkpoint and the records after it
+world 41b0b18c6ddef6de: as record 11 commits to it
 one world
 ```
 
@@ -151,12 +151,12 @@ cd books && obend ledger post invoices/INV-3 && obend log
 invoices/INV-3: posted as P-0003 (period 11): debit accounts/Receivables 125, credit accounts/Revenue 125
 receipt .obend/receipts/P-0003.json
 log: 14 records, 6778 bytes, each following the one before it from the genesis sentinel
-logical log: 6778 bytes; checkpoint: 9928 bytes
+logical log: 6778 bytes; checkpoint: 1592 bytes
 last record: 14 (open), bytes 5972 to 6778
 checkpoint: the world after record 14
-world 12cc447348db8da3: replayed from genesis
-world 12cc447348db8da3: the checkpoint and the records after it
-world 12cc447348db8da3: as record 14 commits to it
+world d4ac72474e5cb55d: replayed from genesis
+world d4ac72474e5cb55d: the checkpoint and the records after it
+world d4ac72474e5cb55d: as record 14 commits to it
 one world
 ```
 
@@ -254,12 +254,12 @@ postings: P-0001, P-0002, P-0003, P-0004
 checked (trial-balance@1, decidable, compiled): every posting of period 11 is in it
 wrote reports/TB-11.md
 log: 20 records, 9645 bytes, each following the one before it from the genesis sentinel
-logical log: 9645 bytes; checkpoint: 13513 bytes
+logical log: 9645 bytes; checkpoint: 1877 bytes
 last record: 20 (open), bytes 9124 to 9645
 checkpoint: the world after record 20
-world 3a5ef196550808d9: replayed from genesis
-world 3a5ef196550808d9: the checkpoint and the records after it
-world 3a5ef196550808d9: as record 20 commits to it
+world 780fa2a7f1ee0767: replayed from genesis
+world 780fa2a7f1ee0767: the checkpoint and the records after it
+world 780fa2a7f1ee0767: as record 20 commits to it
 one world
 ```
 
@@ -279,13 +279,13 @@ cd ../gap && obend log
 
 ```text
 log: 2 records, 1038 bytes, each following the one before it from the genesis sentinel
-logical log: 9185 bytes; checkpoint: 13513 bytes
+logical log: 9185 bytes; checkpoint: 1877 bytes
 last record: 2 (open), bytes 821 to 1038
 torn tail: 8147 bytes after record 2, dropped (link: it does not follow the record before it)
 checkpoint: dropped (it does not hold against the log); the world is replayed from genesis
-world 2d9c173f134be93c: replayed from genesis
-world 2d9c173f134be93c: the checkpoint and the records after it
-world 2d9c173f134be93c: as record 2 commits to it
+world 0d6f889d468527df: replayed from genesis
+world 0d6f889d468527df: the checkpoint and the records after it
+world 0d6f889d468527df: as record 2 commits to it
 one world
 ```
 
@@ -303,13 +303,13 @@ cd ../gap && obend log
 
 ```text
 log: 2 records, 1038 bytes, each following the one before it from the genesis sentinel
-logical log: 9645 bytes; checkpoint: 13513 bytes
+logical log: 9645 bytes; checkpoint: 1877 bytes
 last record: 2 (open), bytes 821 to 1038
 torn tail: 8607 bytes after record 2, dropped (digest: its turn is not the one its receipt names)
 checkpoint: the world after record 20
-world 2d9c173f134be93c: replayed from genesis
-world 3a5ef196550808d9: the checkpoint and the records after it
-world 2d9c173f134be93c: as record 2 commits to it
+world 0d6f889d468527df: replayed from genesis
+world 780fa2a7f1ee0767: the checkpoint and the records after it
+world 0d6f889d468527df: as record 2 commits to it
 NOT ONE WORLD
 ```
 
@@ -322,13 +322,13 @@ cd books && obend log | tail -4 && rm .obend/checkpoint && obend log | tail -4 &
 ```
 
 ```text
-world 3a5ef196550808d9: replayed from genesis
-world 3a5ef196550808d9: the checkpoint and the records after it
-world 3a5ef196550808d9: as record 20 commits to it
+world 780fa2a7f1ee0767: replayed from genesis
+world 780fa2a7f1ee0767: the checkpoint and the records after it
+world 780fa2a7f1ee0767: as record 20 commits to it
 one world
-world 3a5ef196550808d9: replayed from genesis
-world 3a5ef196550808d9: the checkpoint and the records after it
-world 3a5ef196550808d9: as record 20 commits to it
+world 780fa2a7f1ee0767: replayed from genesis
+world 780fa2a7f1ee0767: the checkpoint and the records after it
+world 780fa2a7f1ee0767: as record 20 commits to it
 one world
 ```
 
@@ -361,9 +361,9 @@ code: 1000
 last record: 21 (open), bytes 9645 to 9862
 torn tail: 400 bytes after record 21, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 21
-world 3a5ef196550808d9: replayed from genesis
-world 3a5ef196550808d9: the checkpoint and the records after it
-world 3a5ef196550808d9: as record 21 commits to it
+world 780fa2a7f1ee0767: replayed from genesis
+world 780fa2a7f1ee0767: the checkpoint and the records after it
+world 780fa2a7f1ee0767: as record 21 commits to it
 one world
 ```
 
@@ -388,9 +388,9 @@ code: 1000
 # Cash
 
 The till.
-world 8ee310814faff53a: replayed from genesis
-world 8ee310814faff53a: the checkpoint and the records after it
-world 8ee310814faff53a: as record 26 commits to it
+world ec03fb8f621e7029: replayed from genesis
+world ec03fb8f621e7029: the checkpoint and the records after it
+world ec03fb8f621e7029: as record 26 commits to it
 one world
 ```
 
@@ -426,9 +426,9 @@ pay.json
 last record: 6 (open), bytes 1415 to 1632
 torn tail: 200 bytes after record 6, dropped (torn: the bytes end inside a record)
 checkpoint: the world after record 6
-world 548a2745384f373f: replayed from genesis
-world 548a2745384f373f: the checkpoint and the records after it
-world 548a2745384f373f: as record 6 commits to it
+world 456843c40193b325: replayed from genesis
+world 456843c40193b325: the checkpoint and the records after it
+world 456843c40193b325: as record 6 commits to it
 one world
 ```
 
@@ -449,8 +449,8 @@ rendered ledger/alice.md
 rendered ledger/carol.md
 work: performed 1, retained 1 of 1
 balance: 60
-world b6fd575c8ce69c6b: replayed from genesis
-world b6fd575c8ce69c6b: the checkpoint and the records after it
-world b6fd575c8ce69c6b: as record 9 commits to it
+world f4dad6cd0cc8354f: replayed from genesis
+world f4dad6cd0cc8354f: the checkpoint and the records after it
+world f4dad6cd0cc8354f: as record 9 commits to it
 one world
 ```
