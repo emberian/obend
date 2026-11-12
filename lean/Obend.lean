@@ -45,6 +45,7 @@ public import Obend.Law.AmendCli
 public import Obend.Doc
 public import Obend.Doc.ReactiveNotebook
 public import Obend.Elab
+public import Obend.Elab.PdeSolverElab
 public import Obend.Spec
 public import Obend.Spec.BidirectionalSurfaceElab
 public import Obend.Run
@@ -84,6 +85,7 @@ public import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
 public import Obend.Hardware.Gpu.Rdna2.DppShuffle
 public import Obend.Hardware.Gpu.SoacOptimize
 public import Obend.Hardware.Gpu.StencilTile
+public import Obend.Hardware.MultiDStencilTile
 public import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
@@ -122,6 +124,7 @@ public import Obend.Analysis.EqSatHypergraph
 public import Obend.Analysis.Hybrid
 public import Obend.Analysis.HyperbolicPdeCert
 public import Obend.Analysis.PdeSexprAndApprox
+public import Obend.Analysis.NonlinearMultiDPde
 public import Obend.Analysis.SimplicialFeecFem
 public import Obend.Geometry.CochainAndGauge
 public import Obend.Geometry.DiracDoubleCat
@@ -134,6 +137,7 @@ public import Obend.Tactic.Compositional
 public import Obend.Tactic.DataRefinement
 public import Obend.Tactic.ProgramLogic
 public import Obend.Tactic.SymbolicCert
+public import Obend.Tactic.SymDiffAndFlux
 public import Obend.Tactic.ClaimAudit
 public import Obend.Crypto
 public import Obend.Crypto.Poseidon2Goldilocks

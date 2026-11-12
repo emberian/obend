@@ -107,6 +107,7 @@ import Obend.Analysis.Groebner
 import Obend.Analysis.Hybrid
 import Obend.Analysis.HyperbolicPdeCert
 import Obend.Analysis.Impact
+import Obend.Analysis.NonlinearMultiDPde
 import Obend.Analysis.PdeSexprAndApprox
 import Obend.Analysis.QuantumWalk
 import Obend.Analysis.RealAnalysis
@@ -329,6 +330,7 @@ import Obend.Elab
 import Obend.Elab.AutoCertTaylorSound
 import Obend.Elab.Coerce
 import Obend.Elab.Gate
+import Obend.Elab.PdeSolverElab
 import Obend.Elab.Prepare
 import Obend.Elab.Proofs.AliasFree
 import Obend.Elab.Proofs.CoerceProbes
@@ -404,6 +406,7 @@ import Obend.Hardware.HvmConfluence
 import Obend.Hardware.Judge
 import Obend.Hardware.Kinematics
 import Obend.Hardware.Magnetics
+import Obend.Hardware.MultiDStencilTile
 import Obend.Hardware.OpenHypergraph
 import Obend.Hardware.OpenUSD
 import Obend.Hardware.PCB
@@ -651,6 +654,7 @@ import Obend.Tactic.DocsCensus
 import Obend.Tactic.MonadicReduction
 import Obend.Tactic.ProgramLogic
 import Obend.Tactic.SiliconElab
+import Obend.Tactic.SymDiffAndFlux
 import Obend.Tactic.SymbolicCert
 import Obend.Tactic.Tooth
 import Obend.Tactic.Weave

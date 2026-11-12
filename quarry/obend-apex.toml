@@ -1268,6 +1268,27 @@ module = "Obend.Leaf.BytecodeRegisterJit"
 theorem = "specializeAndCompileLoop_sound"
 description = "Dictionary-erasing static specializer (`specializeDictTerm`) + range-safe flat `Array ByteInstr` / `Array UInt64` register loop compiler and bounds-checked C99 emitter."
 
+[[apex]]
+id = "analysis-nonlinear-multid-pde-sweep-conservation"
+subsystem = "Analysis"
+module = "Obend.Analysis.NonlinearMultiDPde"
+theorem = "multiDSweep_conserves_total_mass_momentum_energy"
+description = "Multidimensional nonlinear conservation-law `FluxExpr` calculus, multivariable Frechet Taylor remainder, reflective `CanonPoly` normalizer, 2nd-order MUSCL-minmod TVD stability, and Lie/Strang sweep conservation."
+
+[[apex]]
+id = "hardware-multid-brick-halo-tile-equivalence"
+subsystem = "Hardware"
+module = "Obend.Hardware.MultiDStencilTile"
+theorem = "multiDBrickTiled_eq_global_sweep"
+description = "Futamura-specialized CSE SSA DAG lowering, D-dimensional brick halo tiling (including tail bricks) with proved HBM traffic reduction, SOAC vertical fusion, and Q32 systolic RTL synthesis."
+
+[[apex]]
+id = "tactic-pde-solver-metaprog-fused-gpu-sound"
+subsystem = "Tactic"
+module = "Obend.Tactic.SymDiffAndFlux"
+theorem = "spec_fusedGpuKernel_sound"
+description = "Reflective conservation-law parser, fluctuation/symmetrizer normalizer (`fluctuationConservation_of_reflective`), and metaprogrammed `#pde_solver` fused multi-D GPU kernel soundness."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
