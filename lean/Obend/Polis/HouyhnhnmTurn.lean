@@ -1,9 +1,11 @@
 module
 public import Obend.Polis.CapTP
+public import Obend.Polis.VerifiableCredentials
 
 public section
 namespace Obend.Polis.HouyhnhnmTurn
 open Obend.Crypto Obend.Vault.Mandate Obend.Polis.CapTP
+open Obend.Polis.VerifiableCredentials
 
 structure FullPinnedPublicInputs where
   circuitDescDigest : ByteArray
@@ -16,12 +18,12 @@ structure FullPinnedPublicInputs where
   turnHash : ByteArray
   deriving DecidableEq
 
-@[expose] def wellFormedInputs (p : FullPinnedPublicInputs) : Bool :=
+def wellFormedInputs (p : FullPinnedPublicInputs) : Bool :=
   decide (p.circuitDescDigest.size = 32 ∧ p.actorVkDigest.size = 32 ∧
     p.preStateRoot.size = 32 ∧ p.postStateRoot.size = 32 ∧ p.capRoot.size = 32 ∧
     p.revokedRoot.size = 32 ∧ p.turnHash.size = 32)
 
-@[expose] def natBytes (n : Nat) : ByteArray :=
+def natBytes (n : Nat) : ByteArray :=
   Obend.Digest.Cshake256.Native.bytesOfList (leb128 n)
 
 theorem natBytes_injective (a b : Nat) (h : natBytes a = natBytes b) : a = b := by
@@ -45,7 +47,7 @@ theorem encodePublicInputs_injective (p q : FullPinnedPublicInputs)
   have hn := natBytes_injective _ _ hc1
   cases p; cases q; simp_all
 
-@[expose] def relationPrefix (p : FullPinnedPublicInputs) : ByteArray :=
+def relationPrefix (p : FullPinnedPublicInputs) : ByteArray :=
   canonicalPrefix "obend.sovereign-turn.v1" p.circuitDescDigest (encodePublicInputs p)
 
 theorem fenzi_pi_injective (p q : FullPinnedPublicInputs)
@@ -181,7 +183,7 @@ theorem capability_lookup_eq_spec (s : CellState) (index : Nat) :
 
 def revokedCommitment (revoked : SortedU64Set) : ByteArray :=
   cshake32ByteArray "obend.revoked-set.v1".toUTF8.data.toList
-    (encodeNats (revoked.data.toList.map UInt64.toNat)).data.toList
+    (CapTP.encodeNats (revoked.data.toList.map UInt64.toNat)).data.toList
 
 /-- A backend supplies canonical state/turn commitments and a proof verifier. The
 soundness and completeness fields are explicit obligations, not custom axioms or
@@ -195,7 +197,7 @@ structure TurnCommitments where
   turnHash_size : ∀ t, (turnHash t).size = 32
   circuitDigest_size : circuitDigest.size = 32
 
-@[expose] def materializeInputs (c : TurnCommitments) (s : CellState) (t : StructuredTurn)
+def materializeInputs (c : TurnCommitments) (s : CellState) (t : StructuredTurn)
     (height : Nat) : FullPinnedPublicInputs where
   circuitDescDigest := c.circuitDigest
   actorVkDigest := s.actorVkDigest
@@ -243,7 +245,7 @@ structure SovereignTurnBundle {c : TurnCommitments} {v : InnerVerifier} (ps : Tu
   boundPrefix : ByteArray
   receipt : ps.Receipt
 
-@[expose] def verifyCipherclerkBundle {c : TurnCommitments} {v : InnerVerifier}
+def verifyCipherclerkBundle {c : TurnCommitments} {v : InnerVerifier}
     (ps : TurnProofSystem c v) (b : SovereignTurnBundle ps) : Bool :=
   decide (b.boundPrefix = relationPrefix b.publicInputs) && wellFormedInputs b.publicInputs &&
   liveRevokedRoot b.publicInputs.revokedRoot &&
@@ -295,10 +297,10 @@ structure ReversibleTurn where
   forwardDeltas : Array Int
   deriving DecidableEq
 
-@[expose] def ReversibleTurn.invert (t : ReversibleTurn) : ReversibleTurn :=
+def ReversibleTurn.invert (t : ReversibleTurn) : ReversibleTurn :=
   ⟨t.forwardDeltas.map (- ·)⟩
 abbrev BalanceState := Nat → Int
-@[expose] def applyTurn (t : ReversibleTurn) (s : BalanceState) : BalanceState :=
+def applyTurn (t : ReversibleTurn) (s : BalanceState) : BalanceState :=
   fun i => s i + t.forwardDeltas[i]?.getD 0
 
 theorem invert_cancel (t : ReversibleTurn) (s : BalanceState) :
@@ -371,5 +373,799 @@ theorem rollbackTo_recovers_checkpoint (suffix : List ReversibleTurn) (checkpoin
     unfold rollback applyHistory at hh
     rw [hh]
     exact invert_cancel t checkpoint
+
+/-! ## Sessions: many turns over many capability handles
+
+A turn admitted by `execTurnSymbolic` is checked against one cell state. A session carries that
+state across turns: channel nullifiers are spent, credential nullifiers are revoked, each
+invocation debits the remaining budget of its handle, and a turn may delegate a child handle.
+`stepHouyhnhnmSession` is one turn; `runHouyhnhnmSession` folds it over a list. The theorems
+below are about arbitrary lists of turns. -/
+
+/-- What an admitted turn checked, clause by clause. -/
+theorem execTurnSymbolic_iff (v : InnerVerifier) (s : CellState) (t : StructuredTurn) :
+    execTurnSymbolic v s t = true ↔
+      (t.deltas.size = s.balances.size ∧ t.deltas.toList.sum = 0) ∧
+      (∀ b ∈ nextBalances s t, 0 ≤ b) ∧
+      (∀ i ∈ t.invocations, ∃ m, s.capabilities[i.capabilityIndex]? = some m ∧
+        checkInvocation m i.invocation = true ∧
+        provenanceLive s.revoked i.credNul i.chanNul = true) ∧
+      (∀ e ∈ t.effects, (e.actorId = s.actorId ∧ e.actorVkDigest = s.actorVkDigest) ∧
+        v e.actorVkDigest e.innerStatementDigest e.proof = true) ∧
+      (s.actorVkDigest.size = 32 ∧ s.capRoot.size = 32) ∧
+      liveRevokedRoot s.revokedRoot = true ∧ checkAllRowsNonVacuous t.rows = true := by
+  have hinv : ∀ i : InvocationWithProvenance,
+      (match s.capabilities[i.capabilityIndex]? with
+        | none => false
+        | some m => checkInvocation m i.invocation &&
+            provenanceLive s.revoked i.credNul i.chanNul) = true ↔
+      ∃ m, s.capabilities[i.capabilityIndex]? = some m ∧ checkInvocation m i.invocation = true ∧
+        provenanceLive s.revoked i.credNul i.chanNul = true := by
+    intro i
+    cases s.capabilities[i.capabilityIndex]? with
+    | none => simp
+    | some m => simp
+  simp only [execTurnSymbolic, Bool.and_eq_true, decide_eq_true_eq,
+    Array.all_eq_true_iff_forall_mem, hinv, and_assoc]
+
+theorem provenanceLive_iff (revoked : SortedU64Set) (boundPrefix : List UInt64) (channel : UInt64) :
+    provenanceLive revoked boundPrefix channel = true ↔
+      (∀ k ∈ boundPrefix, ¬ revoked.spec k) ∧ ¬ revoked.spec channel := by
+  simp only [provenanceLive, Bool.and_eq_true, List.all_eq_true, Bool.not_eq_true',
+    ← Bool.not_eq_true, SortedU64Set.contains_eq_spec]
+
+/-- **A revoked nullifier refuses the turn.** If `k` is revoked, no turn is admitted that carries
+an invocation over channel `k` or whose capability has `k` among its ancestor credentials. -/
+theorem execTurnSymbolic_refuses_revoked (v : InnerVerifier) (s : CellState) (t : StructuredTurn)
+    (k : UInt64) (hk : s.revoked.spec k) (i : InvocationWithProvenance) (hi : i ∈ t.invocations)
+    (hcone : i.chanNul = k ∨ k ∈ i.credNul) : execTurnSymbolic v s t = false := by
+  cases h : execTurnSymbolic v s t with
+  | false => rfl
+  | true =>
+    obtain ⟨_, _, _, hlive⟩ := ((execTurnSymbolic_iff v s t).mp h).2.2.1 i hi
+    obtain ⟨hpre, hch⟩ := (provenanceLive_iff _ _ _).mp hlive
+    rcases hcone with rfl | hmem
+    · exact absurd hk hch
+    · exact absurd hk (hpre k hmem)
+
+/-! ## The credential receipt as the inner verifier -/
+
+/-- **The inner verifier, concretely**: an effect's proof is an encoded credential statement and
+ex-post receipt (`Obend.Polis.VerifiableCredentials`), checked against the statement digest the
+effect names, the expected policy, and the actor's verifier key. -/
+def vcInnerVerifier (P : ReceiptParams) (policyDigest : ByteArray) : InnerVerifier :=
+  verifiableCredentialInnerVerifier P policyDigest
+
+/-- **What an admitted turn's effects carry.** Under `vcInnerVerifier`, every effect of an
+admitted turn is the cell's actor's, and its proof decodes to a statement with the named digest
+and the expected policy and a receipt that verifies under the cell's verifier key. For any
+witness whose compliance table is the committed table, that witness's evaluation is accepted,
+or a sumcheck round challenge hit a root, or both commitment tracks are broken. -/
+theorem execTurnSymbolic_vc_sound (P : ReceiptParams) (policyDigest : ByteArray)
+    (s : CellState) (t : StructuredTurn)
+    (h : execTurnSymbolic (vcInnerVerifier P policyDigest) s t = true) :
+    ∀ e ∈ t.effects, e.actorId = s.actorId ∧ e.actorVkDigest = s.actorVkDigest ∧
+      ∃ stmt rc, decodeReceiptBytes e.proof = some (stmt, rc) ∧
+        statementDigest stmt = e.innerStatementDigest ∧ stmt.policyDigest = policyDigest ∧
+        verifyExPostCredentialReceipt P s.actorVkDigest stmt rc = true ∧
+        ∀ (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness),
+          stmt.tableCommitment = commitTable P (complianceTable pol pub w) →
+            checkCredentialEval pol pub w = true ∨
+            ExistsRoundRootHit 3 (complianceTable pol pub w) rc.rounds
+              (receiptBoundTranscript s.actorVkDigest stmt).transcript ∨
+            (BoundedCollision P.hash.eval (merkleMaxPreimageBytes 3) ∧
+              ¬ ModuleSISHard P.lattice 131070) := by
+  intro e he
+  obtain ⟨⟨hid, hvk⟩, hv⟩ := ((execTurnSymbolic_iff _ s t).mp h).2.2.2.1 e he
+  obtain ⟨stmt, rc, hdec, hdig, hpol, hacc⟩ :=
+    verifiableCredentialInnerVerifier_sound P policyDigest _ _ _ hv
+  rw [hvk] at hacc
+  exact ⟨hid, hvk, stmt, rc, hdec, hdig, hpol, hacc, fun pol pub w hcomm =>
+    verifyExPostCredentialReceipt_sound P s.actorVkDigest stmt rc pol pub w hcomm hacc⟩
+
+/-- The effect an actor attaches for an accepted evaluation: the statement's digest and the
+encoded honest receipt. -/
+def credentialEffect (P : ReceiptParams) (policyDigest : ByteArray) (s : CellState)
+    (pol : StatusPolicy) (pub : DisclosureView) (w : CredentialWitness) : EffectCustom :=
+  ⟨s.actorId, s.actorVkDigest,
+    statementDigest (statementOf policyDigest pub (commitTable P (complianceTable pol pub w))),
+    encodeReceiptBytes (statementOf policyDigest pub (commitTable P (complianceTable pol pub w)))
+      (proveExPostCredentialReceipt P s.actorVkDigest
+        (statementOf policyDigest pub (commitTable P (complianceTable pol pub w)))
+        (complianceTable pol pub w))⟩
+
+/-- **Admission is complete for honest credential effects.** A turn admitted without effects is
+admitted with the credential effect of any accepted evaluation. -/
+theorem execTurnSymbolic_vc_complete (P : ReceiptParams) (policyDigest : ByteArray)
+    (s : CellState) (t : StructuredTurn) (pol : StatusPolicy) (pub : DisclosureView)
+    (w : CredentialWitness) (hw : checkCredentialEval pol pub w = true)
+    (ht : execTurnSymbolic (vcInnerVerifier P policyDigest) s { t with effects := #[] } = true) :
+    execTurnSymbolic (vcInnerVerifier P policyDigest) s
+      { t with effects := #[credentialEffect P policyDigest s pol pub w] } = true := by
+  obtain ⟨h1, h2, h3, _, h5, h6, h7⟩ := (execTurnSymbolic_iff _ s _).mp ht
+  refine (execTurnSymbolic_iff _ s _).mpr ⟨h1, h2, h3, ?_, h5, h6, h7⟩
+  intro e he
+  have hee : e = credentialEffect P policyDigest s pol pub w := by simpa using he
+  subst hee
+  exact ⟨⟨rfl, rfl⟩, verifiableCredentialInnerVerifier_complete P policyDigest s.actorVkDigest
+    pol pub w hw⟩
+
+instance (c : TurnCommitments) (s : CellState) : Decidable (RootBindings c s) :=
+  inferInstanceAs (Decidable (_ ∧ _))
+
+/-- A child handle carved out of the handle at index `parent`. -/
+structure HandleDelegation where
+  parent : Nat
+  request : DelegationRequest
+
+/-- One session turn: the structured turn, the credential nullifiers it revokes, and at most one
+delegation. The channel nullifiers it spends are those of its invocations. -/
+structure HouyhnhnmTurn where
+  structured : StructuredTurn
+  revokedCredentials : List UInt64
+  delegation : Option HandleDelegation
+
+/-- A session: the cell, the number of turns taken, for each capability handle the index of the
+initial handle it descends from, and the post-state root committed after each turn, newest first. -/
+structure HouyhnhnmSessionState where
+  cell : CellState
+  turnHeight : Nat
+  lineage : Array Nat
+  postRoots : List ByteArray
+
+/-- A session opens with every handle its own root. -/
+def openSession (cell : CellState) : HouyhnhnmSessionState :=
+  ⟨cell, 0, Array.range cell.capabilities.size, []⟩
+
+def chanNuls (turn : HouyhnhnmTurn) : List UInt64 :=
+  turn.structured.invocations.toList.map (·.chanNul)
+
+/-- Spend channel nullifiers one at a time: each must be absent from the set built so far, so a
+nullifier already revoked and a nullifier repeated inside the turn are both refused. -/
+def spendChannels (revoked : SortedU64Set) : List UInt64 → Option SortedU64Set
+  | [] => some revoked
+  | k :: ks => if revoked.contains k then none else spendChannels (revoked.insert k) ks
+
+def revokeAll (revoked : SortedU64Set) (ks : List UInt64) : SortedU64Set :=
+  ks.foldl SortedU64Set.insert revoked
+
+/-- Debit one invocation's cost from the remaining budget of its handle. -/
+def debitHandle (caps : Array Mandate) (i : InvocationWithProvenance) : Option (Array Mandate) :=
+  match caps[i.capabilityIndex]? with
+  | none => none
+  | some m =>
+    if i.invocation.cost ≤ m.budget then
+      some (caps.setIfInBounds i.capabilityIndex { m with budget := m.budget - i.invocation.cost })
+    else none
+
+/-- Debit every invocation of a turn in order: two invocations on one handle share its budget. -/
+def debitHandles (caps : Array Mandate) (is : List InvocationWithProvenance) :
+    Option (Array Mandate) :=
+  is.foldlM debitHandle caps
+
+/-- Delegate a child handle: `Mandate.delegate` carves the child's budget out of the parent's,
+the child is appended, and it inherits the parent's root. -/
+def delegateHandle (caps : Array Mandate) (lineage : Array Nat) :
+    Option HandleDelegation → Option (Array Mandate × Array Nat)
+  | none => some (caps, lineage)
+  | some d =>
+    match caps[d.parent]? with
+    | none => none
+    | some held =>
+      match lineage[d.parent]? with
+      | none => none
+      | some root =>
+        if requestFits d.request held then
+          some ((caps.setIfInBounds d.parent
+              (held.delegate d.request.childId d.request.recipient d.request.rights d.request.quota
+                d.request.cells d.request.expiresAt ⟨fun m => d.request.methods.contains m⟩).1).push
+              (held.delegate d.request.childId d.request.recipient d.request.rights d.request.quota
+                d.request.cells d.request.expiresAt ⟨fun m => d.request.methods.contains m⟩).2,
+            lineage.push root)
+        else none
+
+/-- The state after a turn whose checks passed. Both cached roots are recomputed from the stores. -/
+def nextSession (c : TurnCommitments) (st : HouyhnhnmSessionState) (turn : HouyhnhnmTurn)
+    (spent : SortedU64Set) (caps : Array Mandate) (lineage : Array Nat) : HouyhnhnmSessionState :=
+  let cell : CellState :=
+    { st.cell with
+      balances := nextBalances st.cell turn.structured
+      capabilities := caps
+      capRoot := c.capabilityRoot caps
+      revoked := revokeAll spent turn.revokedCredentials
+      revokedRoot := revokedCommitment (revokeAll spent turn.revokedCredentials) }
+  ⟨cell, st.turnHeight + 1, lineage, c.stateRoot cell :: st.postRoots⟩
+
+/-- **One session turn.** -/
+def stepHouyhnhnmSession (c : TurnCommitments) (v : InnerVerifier) (st : HouyhnhnmSessionState)
+    (turn : HouyhnhnmTurn) : Option HouyhnhnmSessionState :=
+  if decide (RootBindings c st.cell) && execTurnSymbolic v st.cell turn.structured then
+    match spendChannels st.cell.revoked (chanNuls turn) with
+    | none => none
+    | some spent =>
+      match debitHandles st.cell.capabilities turn.structured.invocations.toList with
+      | none => none
+      | some debited =>
+        match delegateHandle debited st.lineage turn.delegation with
+        | none => none
+        | some next => some (nextSession c st turn spent next.1 next.2)
+  else none
+
+theorem stepHouyhnhnmSession_eq_some_iff (c : TurnCommitments) (v : InnerVerifier)
+    (st : HouyhnhnmSessionState) (turn : HouyhnhnmTurn) (st' : HouyhnhnmSessionState) :
+    stepHouyhnhnmSession c v st turn = some st' ↔
+      RootBindings c st.cell ∧ execTurnSymbolic v st.cell turn.structured = true ∧
+      ∃ spent debited caps lineage,
+        spendChannels st.cell.revoked (chanNuls turn) = some spent ∧
+        debitHandles st.cell.capabilities turn.structured.invocations.toList = some debited ∧
+        delegateHandle debited st.lineage turn.delegation = some (caps, lineage) ∧
+        nextSession c st turn spent caps lineage = st' := by
+  unfold stepHouyhnhnmSession
+  by_cases hr : RootBindings c st.cell
+  · cases he : execTurnSymbolic v st.cell turn.structured with
+    | false => simp [hr]
+    | true =>
+      cases hs : spendChannels st.cell.revoked (chanNuls turn) with
+      | none => simp [hr]
+      | some spent =>
+        cases hd : debitHandles st.cell.capabilities turn.structured.invocations.toList with
+        | none => simp [hr]
+        | some debited =>
+          cases hg : delegateHandle debited st.lineage turn.delegation with
+          | none => simp [hg]
+          | some next =>
+            obtain ⟨caps, lineage⟩ := next
+            first
+              | (simp [hr, hg]; done)
+              | (simp [hr, hg]
+                 constructor
+                 · intro h
+                   exact ⟨caps, lineage, ⟨rfl, rfl⟩, h⟩
+                 · rintro ⟨_, _, ⟨rfl, rfl⟩, h⟩
+                   exact h)
+  · simp [hr]
+
+/-! ### Why a turn is refused -/
+
+/-- The refusal clauses of a session turn, in the order the step tests them: the cached roots
+are not bound to the stores; the deltas do not conserve; a balance would go negative; an
+invocation has no capability, fails its mandate, or sits under a revoked nullifier; an effect
+fails the inner verifier; a root is malformed or the revoked root is the empty one; a row
+constraint fails; a channel nullifier is replayed; a handle's budget is exhausted; the
+delegation is refused. -/
+def HouyhnhnmStepViolation (c : TurnCommitments) (v : InnerVerifier)
+    (st : HouyhnhnmSessionState) (turn : HouyhnhnmTurn) : Prop :=
+  ¬ RootBindings c st.cell ∨
+  ¬ (turn.structured.deltas.size = st.cell.balances.size ∧
+      turn.structured.deltas.toList.sum = 0) ∨
+  ¬ (∀ b ∈ nextBalances st.cell turn.structured, 0 ≤ b) ∨
+  ¬ (∀ i ∈ turn.structured.invocations, ∃ m,
+      st.cell.capabilities[i.capabilityIndex]? = some m ∧ checkInvocation m i.invocation = true ∧
+      provenanceLive st.cell.revoked i.credNul i.chanNul = true) ∨
+  ¬ (∀ e ∈ turn.structured.effects,
+      (e.actorId = st.cell.actorId ∧ e.actorVkDigest = st.cell.actorVkDigest) ∧
+      v e.actorVkDigest e.innerStatementDigest e.proof = true) ∨
+  ¬ ((st.cell.actorVkDigest.size = 32 ∧ st.cell.capRoot.size = 32) ∧
+      liveRevokedRoot st.cell.revokedRoot = true) ∨
+  checkAllRowsNonVacuous turn.structured.rows = false ∨
+  spendChannels st.cell.revoked (chanNuls turn) = none ∨
+  debitHandles st.cell.capabilities turn.structured.invocations.toList = none ∨
+  ∃ debited, debitHandles st.cell.capabilities turn.structured.invocations.toList = some debited ∧
+    delegateHandle debited st.lineage turn.delegation = none
+
+/-- **The step refuses exactly the violating turns.** -/
+theorem stepHouyhnhnmSession_eq_none_iff (c : TurnCommitments) (v : InnerVerifier)
+    (st : HouyhnhnmSessionState) (turn : HouyhnhnmTurn) :
+    stepHouyhnhnmSession c v st turn = none ↔ HouyhnhnmStepViolation c v st turn := by
+  unfold HouyhnhnmStepViolation
+  constructor
+  · intro hnone
+    by_cases hr : RootBindings c st.cell
+    · cases he : execTurnSymbolic v st.cell turn.structured with
+      | false =>
+        have hne : ¬ execTurnSymbolic v st.cell turn.structured = true := by rw [he]; decide
+        rw [execTurnSymbolic_iff] at hne
+        by_cases h1 : turn.structured.deltas.size = st.cell.balances.size ∧
+            turn.structured.deltas.toList.sum = 0
+        · by_cases h2 : ∀ b ∈ nextBalances st.cell turn.structured, 0 ≤ b
+          · by_cases h3 : ∀ i ∈ turn.structured.invocations, ∃ m,
+                st.cell.capabilities[i.capabilityIndex]? = some m ∧
+                checkInvocation m i.invocation = true ∧
+                provenanceLive st.cell.revoked i.credNul i.chanNul = true
+            · by_cases h4 : ∀ e ∈ turn.structured.effects,
+                  (e.actorId = st.cell.actorId ∧ e.actorVkDigest = st.cell.actorVkDigest) ∧
+                  v e.actorVkDigest e.innerStatementDigest e.proof = true
+              · by_cases h5 : (st.cell.actorVkDigest.size = 32 ∧ st.cell.capRoot.size = 32) ∧
+                    liveRevokedRoot st.cell.revokedRoot = true
+                · cases h6 : checkAllRowsNonVacuous turn.structured.rows with
+                  | false => exact .inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))
+                  | true => exact absurd ⟨h1, h2, h3, h4, h5.1, h5.2, h6⟩ hne
+                · exact .inr (.inr (.inr (.inr (.inr (.inl h5)))))
+              · exact .inr (.inr (.inr (.inr (.inl h4))))
+            · exact .inr (.inr (.inr (.inl h3)))
+          · exact .inr (.inr (.inl h2))
+        · exact .inr (.inl h1)
+      | true =>
+        cases hs : spendChannels st.cell.revoked (chanNuls turn) with
+        | none => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl)))))))
+        | some spent =>
+          cases hd : debitHandles st.cell.capabilities turn.structured.invocations.toList with
+          | none => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))))
+          | some debited =>
+            cases hg : delegateHandle debited st.lineage turn.delegation with
+            | none =>
+              exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨debited, rfl, hg⟩))))))))
+            | some next =>
+              have hsome := (stepHouyhnhnmSession_eq_some_iff c v st turn _).mpr
+                ⟨hr, he, spent, debited, next.1, next.2, hs, hd, hg, rfl⟩
+              rw [hnone] at hsome
+              cases hsome
+    · exact .inl hr
+  · intro hviol
+    cases hstep : stepHouyhnhnmSession c v st turn with
+    | none => rfl
+    | some st' =>
+      obtain ⟨hr, he, spent, debited, caps, lineage, hs, hd, hg, _⟩ :=
+        (stepHouyhnhnmSession_eq_some_iff c v st turn st').mp hstep
+      obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := (execTurnSymbolic_iff _ _ _).mp he
+      rcases hviol with h | h | h | h | h | h | h | h | h | ⟨d, hd', h⟩
+      · exact absurd hr h
+      · exact absurd h1 h
+      · exact absurd h2 h
+      · exact absurd h3 h
+      · exact absurd h4 h
+      · exact absurd ⟨h5, h6⟩ h
+      · rw [h7] at h; cases h
+      · rw [hs] at h; cases h
+      · rw [hd] at h; cases h
+      · rw [hd] at hd'; cases hd'; rw [hg] at h; cases h
+
+/-- **A skipped turn violates the contract.** The step filter drops no valid turn. -/
+theorem houyhnhnmStep_skip_implies_violation (c : TurnCommitments) (v : InnerVerifier)
+    (st : HouyhnhnmSessionState) (turn : HouyhnhnmTurn)
+    (h : stepHouyhnhnmSession c v st turn = none) : HouyhnhnmStepViolation c v st turn :=
+  (stepHouyhnhnmSession_eq_none_iff c v st turn).mp h
+
+/-- **Every non-violating turn is taken.** -/
+theorem stepHouyhnhnmSession_complete (c : TurnCommitments) (v : InnerVerifier)
+    (st : HouyhnhnmSessionState) (turn : HouyhnhnmTurn)
+    (h : ¬ HouyhnhnmStepViolation c v st turn) :
+    ∃ st', stepHouyhnhnmSession c v st turn = some st' := by
+  cases hstep : stepHouyhnhnmSession c v st turn with
+  | none => exact absurd ((stepHouyhnhnmSession_eq_none_iff c v st turn).mp hstep) h
+  | some st' => exact ⟨st', rfl⟩
+
+/-! ### The nullifier set -/
+
+theorem not_spec_of_contains_false {s : SortedU64Set} {k : UInt64} (h : ¬ s.contains k = true) :
+    ¬ s.spec k := fun hs => h ((s.contains_eq_spec k).mpr hs)
+
+theorem spendChannels_spec : ∀ (ks : List UInt64) (r spent : SortedU64Set),
+    spendChannels r ks = some spent →
+      (∀ k, spent.spec k ↔ r.spec k ∨ k ∈ ks) ∧ (∀ k ∈ ks, ¬ r.spec k) ∧ ks.Nodup
+  | [], r, spent, h => by
+    simp only [spendChannels, Option.some.injEq] at h
+    subst h
+    simp
+  | k :: ks, r, spent, h => by
+    simp only [spendChannels] at h
+    split at h
+    · cases h
+    · rename_i hk
+      obtain ⟨h1, h2, h3⟩ := spendChannels_spec ks (r.insert k) spent h
+      refine ⟨fun x => ?_, ?_, ?_⟩
+      · rw [h1, SortedU64Set.spec_insert, List.mem_cons]
+        constructor
+        · rintro ((hx | hx) | hx)
+          · exact .inr (.inl hx)
+          · exact .inl hx
+          · exact .inr (.inr hx)
+        · rintro (hx | hx | hx)
+          · exact .inl (.inr hx)
+          · exact .inl (.inl hx)
+          · exact .inr hx
+      · intro x hx
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact not_spec_of_contains_false hk
+        · exact fun hs => h2 x hx ((SortedU64Set.spec_insert _ _ _).mpr (.inr hs))
+      · exact List.nodup_cons.mpr
+          ⟨fun hmem => h2 k hmem ((SortedU64Set.spec_insert _ _ _).mpr (.inl rfl)), h3⟩
+
+/-- Spending succeeds exactly on fresh, pairwise distinct channel nullifiers. -/
+theorem spendChannels_complete : ∀ (ks : List UInt64) (r : SortedU64Set),
+    (∀ k ∈ ks, ¬ r.spec k) → ks.Nodup → ∃ spent, spendChannels r ks = some spent
+  | [], r, _, _ => ⟨r, rfl⟩
+  | k :: ks, r, hf, hn => by
+    obtain ⟨hnotin, hn'⟩ := List.nodup_cons.mp hn
+    have hk : r.contains k = false := by
+      cases hc : r.contains k with
+      | false => rfl
+      | true => exact absurd ((r.contains_eq_spec k).mp hc) (hf k List.mem_cons_self)
+    obtain ⟨spent, hsp⟩ := spendChannels_complete ks (r.insert k) (by
+      intro x hx hs
+      rcases (SortedU64Set.spec_insert _ _ _).mp hs with rfl | hs
+      · exact hnotin hx
+      · exact hf x (List.mem_cons_of_mem _ hx) hs) hn'
+    exact ⟨spent, by simp only [spendChannels, hk]; exact hsp⟩
+
+theorem revokeAll_spec (ks : List UInt64) : ∀ (r : SortedU64Set) (k : UInt64),
+    (revokeAll r ks).spec k ↔ r.spec k ∨ k ∈ ks := by
+  unfold revokeAll
+  induction ks with
+  | nil => intro r k; simp
+  | cons x xs ih =>
+    intro r k
+    simp only [List.foldl_cons, ih, SortedU64Set.spec_insert, List.mem_cons]
+    constructor
+    · rintro ((hx | hx) | hx)
+      · exact .inr (.inl hx)
+      · exact .inl hx
+      · exact .inr (.inr hx)
+    · rintro (hx | hx | hx)
+      · exact .inl (.inr hx)
+      · exact .inl (.inl hx)
+      · exact .inr hx
+
+/-- The nullifiers a turn adds: its channels and its revoked credentials. -/
+theorem step_revoked_spec {c : TurnCommitments} {v : InnerVerifier}
+    {st st' : HouyhnhnmSessionState} {turn : HouyhnhnmTurn}
+    (h : stepHouyhnhnmSession c v st turn = some st') (k : UInt64) :
+    st'.cell.revoked.spec k ↔
+      st.cell.revoked.spec k ∨ k ∈ chanNuls turn ∨ k ∈ turn.revokedCredentials := by
+  obtain ⟨_, _, spent, debited, caps, lineage, hs, _, _, rfl⟩ :=
+    (stepHouyhnhnmSession_eq_some_iff c v st turn st').mp h
+  simp only [nextSession, revokeAll_spec, (spendChannels_spec _ _ _ hs).1, or_assoc]
+
+/-! ### Budgets and lineage -/
+
+def budgetSum (caps : Array Mandate) : Nat := (caps.toList.map (·.budget)).sum
+
+def turnCost (turn : HouyhnhnmTurn) : Nat :=
+  (turn.structured.invocations.toList.map (·.invocation.cost)).sum
+
+theorem sum_map_set {α : Type} (f : α → Nat) : ∀ (l : List α) (i : Nat) (a x : α),
+    l[i]? = some a → ((l.set i x).map f).sum + f a = (l.map f).sum + f x
+  | [], i, a, x, h => by simp at h
+  | b :: l, 0, a, x, h => by
+    simp only [List.getElem?_cons_zero, Option.some.injEq] at h
+    subst h
+    simp only [List.set_cons_zero, List.map_cons, List.sum_cons]
+    omega
+  | b :: l, i + 1, a, x, h => by
+    simp only [List.getElem?_cons_succ] at h
+    have ih := sum_map_set f l i a x h
+    simp only [List.set_cons_succ, List.map_cons, List.sum_cons]
+    omega
+
+/-- `new` has the handles of `old`, each no wider than it was. -/
+def Narrows (new old : Array Mandate) : Prop :=
+  new.size = old.size ∧ ∀ (i : Nat) (m : Mandate), new[i]? = some m → ∃ m0, old[i]? = some m0 ∧ attenuates m m0
+
+theorem Narrows.refl (caps : Array Mandate) : Narrows caps caps :=
+  ⟨rfl, fun _ m h => ⟨m, h, attenuates_refl m⟩⟩
+
+theorem Narrows.trans {a b c : Array Mandate} (hab : Narrows a b) (hbc : Narrows b c) :
+    Narrows a c := by
+  refine ⟨hab.1.trans hbc.1, fun i m h => ?_⟩
+  obtain ⟨m1, h1, a1⟩ := hab.2 i m h
+  obtain ⟨m2, h2, a2⟩ := hbc.2 i m1 h1
+  exact ⟨m2, h2, attenuates_trans a1 a2⟩
+
+theorem narrows_setIfInBounds {caps : Array Mandate} {idx : Nat} {m m' : Mandate}
+    (hm : caps[idx]? = some m) (ha : attenuates m' m) :
+    Narrows (caps.setIfInBounds idx m') caps := by
+  refine ⟨Array.size_setIfInBounds, fun i x hx => ?_⟩
+  rw [Array.getElem?_setIfInBounds] at hx
+  by_cases hi : idx = i
+  · subst hi
+    rw [ite_eq_left rfl] at hx
+    split at hx
+    · cases hx
+      exact ⟨m, hm, ha⟩
+    · cases hx
+  · rw [ite_eq_right hi] at hx
+    exact ⟨x, hx, attenuates_refl x⟩
+
+theorem attenuates_debit (m : Mandate) (cost : Nat) :
+    attenuates { m with budget := m.budget - cost } m :=
+  ⟨fun _ h => h, Nat.sub_le _ _, fun _ h => h, Nat.le_refl _, rfl, fun _ h => h⟩
+
+theorem debitHandle_eq_some {caps caps' : Array Mandate} {i : InvocationWithProvenance}
+    (h : debitHandle caps i = some caps') :
+    ∃ m, caps[i.capabilityIndex]? = some m ∧ i.invocation.cost ≤ m.budget ∧
+      caps' = caps.setIfInBounds i.capabilityIndex
+        { m with budget := m.budget - i.invocation.cost } := by
+  unfold debitHandle at h
+  cases hm : caps[i.capabilityIndex]? with
+  | none => rw [hm] at h; cases h
+  | some m =>
+    rw [hm] at h
+    simp only at h
+    split at h
+    · rename_i hc
+      exact ⟨m, rfl, hc, (Option.some.inj h).symm⟩
+    · cases h
+
+/-- A debit is refused exactly when the handle is missing or its remaining budget is short. -/
+theorem debitHandle_eq_none_iff (caps : Array Mandate) (i : InvocationWithProvenance) :
+    debitHandle caps i = none ↔
+      ∀ m, caps[i.capabilityIndex]? = some m → m.budget < i.invocation.cost := by
+  unfold debitHandle
+  cases hm : caps[i.capabilityIndex]? with
+  | none => simp
+  | some m =>
+    by_cases hc : i.invocation.cost ≤ m.budget
+    · simp only [hc, ↓reduceIte, reduceCtorEq, Option.some.injEq, forall_eq', false_iff]
+      omega
+    · simp only [hc, ↓reduceIte, Option.some.injEq, forall_eq', true_iff]
+      omega
+
+theorem debitHandle_facts {caps caps' : Array Mandate} {i : InvocationWithProvenance}
+    (h : debitHandle caps i = some caps') :
+    budgetSum caps' + i.invocation.cost = budgetSum caps ∧ Narrows caps' caps := by
+  obtain ⟨m, hm, hc, rfl⟩ := debitHandle_eq_some h
+  refine ⟨?_, narrows_setIfInBounds hm (attenuates_debit m _)⟩
+  have hl : caps.toList[i.capabilityIndex]? = some m := by simpa using hm
+  have hs := sum_map_set (·.budget) caps.toList i.capabilityIndex m
+    { m with budget := m.budget - i.invocation.cost } hl
+  simp only [budgetSum, Array.toList_setIfInBounds]
+  simp only at hs
+  omega
+
+theorem debitHandles_facts : ∀ (is : List InvocationWithProvenance) (caps caps' : Array Mandate),
+    debitHandles caps is = some caps' →
+      budgetSum caps' + (is.map (·.invocation.cost)).sum = budgetSum caps ∧ Narrows caps' caps
+  | [], caps, caps', h => by
+    simp only [debitHandles, List.foldlM_nil] at h
+    cases h
+    exact ⟨by simp, Narrows.refl _⟩
+  | i :: is, caps, caps', h => by
+    simp only [debitHandles, List.foldlM_cons] at h
+    cases h1 : debitHandle caps i with
+    | none => rw [h1] at h; cases h
+    | some mid =>
+      rw [h1] at h
+      obtain ⟨hb, hn⟩ := debitHandles_facts is mid caps' h
+      obtain ⟨hb1, hn1⟩ := debitHandle_facts h1
+      refine ⟨?_, hn.trans hn1⟩
+      simp only [List.map_cons, List.sum_cons]
+      omega
+
+/-- Every handle attenuates the initial handle its lineage names, and the lineage table is as
+long as the handle table. -/
+def HandleLineage (roots : Array Mandate) (st : HouyhnhnmSessionState) : Prop :=
+  st.lineage.size = st.cell.capabilities.size ∧
+  ∀ (i : Nat) (m : Mandate), st.cell.capabilities[i]? = some m →
+    ∃ (r : Nat) (m0 : Mandate), st.lineage[i]? = some r ∧ roots[r]? = some m0 ∧ attenuates m m0
+
+theorem handleLineage_openSession (cell : CellState) :
+    HandleLineage cell.capabilities (openSession cell) := by
+  refine ⟨by simp [openSession], fun i m h => ?_⟩
+  obtain ⟨hi, _⟩ := Array.getElem?_eq_some_iff.mp h
+  have hi' : i < cell.capabilities.size := hi
+  refine ⟨i, m, ?_, h, attenuates_refl m⟩
+  simp [openSession, hi']
+
+theorem delegateHandle_facts {roots caps caps' : Array Mandate} {lineage lineage' : Array Nat}
+    {d : Option HandleDelegation}
+    (h : delegateHandle caps lineage d = some (caps', lineage'))
+    (hsize : lineage.size = caps.size)
+    (hlin : ∀ (i : Nat) (m : Mandate), caps[i]? = some m →
+      ∃ (r : Nat) (m0 : Mandate), lineage[i]? = some r ∧ roots[r]? = some m0 ∧ attenuates m m0) :
+    budgetSum caps' = budgetSum caps ∧ lineage'.size = caps'.size ∧
+      ∀ (i : Nat) (m : Mandate), caps'[i]? = some m →
+        ∃ (r : Nat) (m0 : Mandate), lineage'[i]? = some r ∧ roots[r]? = some m0 ∧
+          attenuates m m0 := by
+  cases d with
+  | none =>
+    simp only [delegateHandle, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨rfl, hsize, hlin⟩
+  | some d =>
+    cases hheld : caps[d.parent]? with
+    | none => simp [delegateHandle, hheld] at h
+    | some held =>
+      cases hroot : lineage[d.parent]? with
+      | none => simp [delegateHandle, hheld, hroot] at h
+      | some root =>
+        by_cases hf : requestFits d.request held = true
+        · simp only [delegateHandle, hheld, hroot, hf, ↓reduceIte, Option.some.injEq,
+            Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          obtain ⟨r, m0, hr, hm0, hatt⟩ := hlin d.parent held hheld
+          rw [hroot] at hr
+          cases hr
+          refine ⟨?_, by simp [hsize], fun i m hm => ?_⟩
+          · have hl : caps.toList[d.parent]? = some held := by simpa using hheld
+            have hs := sum_map_set (·.budget) caps.toList d.parent held
+              (held.delegate d.request.childId d.request.recipient d.request.rights
+                d.request.quota d.request.cells d.request.expiresAt
+                ⟨fun m => d.request.methods.contains m⟩).1 hl
+            have hc := delegate_conserves held d.request.childId d.request.recipient
+              d.request.rights d.request.quota d.request.cells d.request.expiresAt
+              ⟨fun m => d.request.methods.contains m⟩
+            simp only [budgetSum, Array.toList_push, Array.toList_setIfInBounds, List.map_append,
+              List.sum_append, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil]
+            omega
+          · rw [Array.getElem?_push, Array.size_setIfInBounds] at hm
+            rw [Array.getElem?_push, hsize]
+            by_cases hi : i = caps.size
+            · rw [ite_eq_left hi] at hm
+              cases hm
+              rw [ite_eq_left hi]
+              exact ⟨root, m0, rfl, hm0, attenuates_trans (delegate_child_attenuates _ _ _ _ _ _ _ _) hatt⟩
+            · rw [ite_eq_right hi] at hm
+              rw [ite_eq_right hi]
+              obtain ⟨m1, hm1, a1⟩ := (narrows_setIfInBounds hheld
+                (delegate_parent_attenuates held d.request.childId d.request.recipient
+                  d.request.rights d.request.quota d.request.cells d.request.expiresAt
+                  ⟨fun m => d.request.methods.contains m⟩)).2 i m hm
+              obtain ⟨r1, m2, hr1, hm2, a2⟩ := hlin i m1 hm1
+              exact ⟨r1, m2, hr1, hm2, attenuates_trans a1 a2⟩
+        · simp [delegateHandle, hheld, hroot, hf] at h
+
+/-- What one turn does to budgets and lineage. -/
+theorem step_budget_and_lineage {c : TurnCommitments} {v : InnerVerifier}
+    {st st' : HouyhnhnmSessionState} {turn : HouyhnhnmTurn} (roots : Array Mandate)
+    (h : stepHouyhnhnmSession c v st turn = some st') (hl : HandleLineage roots st) :
+    budgetSum st'.cell.capabilities + turnCost turn = budgetSum st.cell.capabilities ∧
+      HandleLineage roots st' := by
+  obtain ⟨_, _, spent, debited, caps, lineage, _, hd, hg, rfl⟩ :=
+    (stepHouyhnhnmSession_eq_some_iff c v st turn st').mp h
+  obtain ⟨hb, hn⟩ := debitHandles_facts _ _ _ hd
+  obtain ⟨hb2, hs2, hl2⟩ := delegateHandle_facts (roots := roots) hg (hl.1.trans hn.1.symm)
+    (fun i m hm => by
+      obtain ⟨m1, hm1, a1⟩ := hn.2 i m hm
+      obtain ⟨r, m0, hr, hm0, a0⟩ := hl.2 i m1 hm1
+      exact ⟨r, m0, hr, hm0, attenuates_trans a1 a0⟩)
+  refine ⟨?_, hs2, hl2⟩
+  simp only [nextSession, turnCost]
+  omega
+
+/-! ### Traces -/
+
+/-- Run a list of turns; `none` as soon as one is refused. -/
+def runHouyhnhnmSession (c : TurnCommitments) (v : InnerVerifier) (st : HouyhnhnmSessionState)
+    (turns : List HouyhnhnmTurn) : Option HouyhnhnmSessionState :=
+  turns.foldlM (stepHouyhnhnmSession c v) st
+
+/-- `st'` is reached from `st` by taking `turns` in order, every one of them admitted. -/
+def ValidHouyhnhnmTrace (c : TurnCommitments) (v : InnerVerifier) (st : HouyhnhnmSessionState)
+    (turns : List HouyhnhnmTurn) (st' : HouyhnhnmSessionState) : Prop :=
+  runHouyhnhnmSession c v st turns = some st'
+
+theorem validHouyhnhnmTrace_nil (c : TurnCommitments) (v : InnerVerifier)
+    (st st' : HouyhnhnmSessionState) : ValidHouyhnhnmTrace c v st [] st' ↔ st = st' := by
+  simp [ValidHouyhnhnmTrace, runHouyhnhnmSession]
+
+theorem validHouyhnhnmTrace_cons (c : TurnCommitments) (v : InnerVerifier)
+    (st st' : HouyhnhnmSessionState) (turn : HouyhnhnmTurn) (turns : List HouyhnhnmTurn) :
+    ValidHouyhnhnmTrace c v st (turn :: turns) st' ↔
+      ∃ mid, stepHouyhnhnmSession c v st turn = some mid ∧
+        ValidHouyhnhnmTrace c v mid turns st' := by
+  simp only [ValidHouyhnhnmTrace, runHouyhnhnmSession, List.foldlM_cons]
+  cases stepHouyhnhnmSession c v st turn <;> simp
+
+theorem validHouyhnhnmTrace_append (c : TurnCommitments) (v : InnerVerifier) :
+    ∀ (xs ys : List HouyhnhnmTurn) (st st' : HouyhnhnmSessionState),
+      ValidHouyhnhnmTrace c v st (xs ++ ys) st' ↔
+        ∃ mid, ValidHouyhnhnmTrace c v st xs mid ∧ ValidHouyhnhnmTrace c v mid ys st'
+  | [], ys, st, st' => by simp [validHouyhnhnmTrace_nil]
+  | x :: xs, ys, st, st' => by
+    simp only [List.cons_append, validHouyhnhnmTrace_cons, validHouyhnhnmTrace_append c v xs ys]
+    constructor
+    · rintro ⟨m, hm, mid, h1, h2⟩
+      exact ⟨mid, ⟨m, hm, h1⟩, h2⟩
+    · rintro ⟨mid, ⟨m, hm, h1⟩, h2⟩
+      exact ⟨m, hm, mid, h1, h2⟩
+
+/-- A property every admitted turn preserves holds at the end of every trace. -/
+theorem validHouyhnhnmTrace_invariant {c : TurnCommitments} {v : InnerVerifier}
+    (P : HouyhnhnmSessionState → Prop)
+    (hstep : ∀ st turn st', P st → stepHouyhnhnmSession c v st turn = some st' → P st') :
+    ∀ (turns : List HouyhnhnmTurn) (st st' : HouyhnhnmSessionState),
+      ValidHouyhnhnmTrace c v st turns st' → P st → P st'
+  | [], st, st', h, hp => by
+    rw [validHouyhnhnmTrace_nil] at h
+    exact h ▸ hp
+  | turn :: turns, st, st', h, hp => by
+    obtain ⟨mid, hm, hrest⟩ := (validHouyhnhnmTrace_cons c v st st' turn turns).mp h
+    exact validHouyhnhnmTrace_invariant P hstep turns mid st' hrest (hstep st turn mid hp hm)
+
+/-- **Balances are conserved and stay non-negative along every trace.** The total is the initial
+total after any number of turns, and no account that started non-negative goes below zero. -/
+theorem validHouyhnhnmTrace_conserves_balances (c : TurnCommitments) (v : InnerVerifier)
+    (turns : List HouyhnhnmTurn) (st st' : HouyhnhnmSessionState)
+    (h : ValidHouyhnhnmTrace c v st turns st') :
+    st'.cell.balances.toList.sum = st.cell.balances.toList.sum ∧
+      ((∀ b ∈ st.cell.balances, 0 ≤ b) → ∀ b ∈ st'.cell.balances, 0 ≤ b) := by
+  refine validHouyhnhnmTrace_invariant
+    (fun s => s.cell.balances.toList.sum = st.cell.balances.toList.sum ∧
+      ((∀ b ∈ st.cell.balances, 0 ≤ b) → ∀ b ∈ s.cell.balances, 0 ≤ b))
+    ?_ turns st st' h ⟨rfl, fun hb => hb⟩
+  intro s turn s' hp hs
+  obtain ⟨_, he, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
+    (stepHouyhnhnmSession_eq_some_iff c v s turn s').mp hs
+  refine ⟨?_, fun _ => ((execTurnSymbolic_iff _ _ _).mp he).2.1⟩
+  simp only [nextSession]
+  rw [symbolic_conserves_balances v s.cell turn.structured he]
+  exact hp.1
+
+/-- **Nullifiers accumulate.** A nullifier in the revoked set stays there through every later
+turn. -/
+theorem validHouyhnhnmTrace_revoked_monotone (c : TurnCommitments) (v : InnerVerifier)
+    (turns : List HouyhnhnmTurn) (st st' : HouyhnhnmSessionState)
+    (h : ValidHouyhnhnmTrace c v st turns st') (k : UInt64) (hk : st.cell.revoked.spec k) :
+    st'.cell.revoked.spec k :=
+  validHouyhnhnmTrace_invariant (fun s => s.cell.revoked.spec k)
+    (fun _ _ _ hp hs => (step_revoked_spec hs k).mpr (.inl hp)) turns st st' h hk
+
+/-- Every channel nullifier a trace spent and every credential nullifier it revoked is in the
+final revoked set. -/
+theorem validHouyhnhnmTrace_spent_revoked (c : TurnCommitments) (v : InnerVerifier) :
+    ∀ (turns : List HouyhnhnmTurn) (st st' : HouyhnhnmSessionState),
+      ValidHouyhnhnmTrace c v st turns st' → ∀ turn ∈ turns, ∀ k,
+        k ∈ chanNuls turn ∨ k ∈ turn.revokedCredentials → st'.cell.revoked.spec k
+  | [], _, _, _, _, hmem, _, _ => by cases hmem
+  | t :: ts, st, st', h, turn, hmem, k, hk => by
+    obtain ⟨mid, hm, hrest⟩ := (validHouyhnhnmTrace_cons c v st st' t ts).mp h
+    rcases List.mem_cons.mp hmem with rfl | hmem
+    · exact validHouyhnhnmTrace_revoked_monotone c v ts mid st' hrest k
+        ((step_revoked_spec hm k).mpr (.inr hk))
+    · exact validHouyhnhnmTrace_spent_revoked c v ts mid st' hrest turn hmem k hk
+
+/-- **No replay, and one revocation kills the cone.** Once `k` is in the revoked set, after any
+further turns `later`, a turn that invokes over channel `k`, or under a capability with `k` among
+its ancestor credentials, is refused. -/
+theorem validHouyhnhnmTrace_no_nullifier_replay (c : TurnCommitments) (v : InnerVerifier)
+    (later : List HouyhnhnmTurn) (st st' : HouyhnhnmSessionState)
+    (h : ValidHouyhnhnmTrace c v st later st') (k : UInt64) (hk : st.cell.revoked.spec k)
+    (turn : HouyhnhnmTurn) (i : InvocationWithProvenance)
+    (hi : i ∈ turn.structured.invocations) (hcone : i.chanNul = k ∨ k ∈ i.credNul) :
+    stepHouyhnhnmSession c v st' turn = none := by
+  have hk' := validHouyhnhnmTrace_revoked_monotone c v later st st' h k hk
+  cases hstep : stepHouyhnhnmSession c v st' turn with
+  | none => rfl
+  | some s'' =>
+    obtain ⟨_, he, _⟩ := (stepHouyhnhnmSession_eq_some_iff c v st' turn s'').mp hstep
+    rw [execTurnSymbolic_refuses_revoked v st'.cell turn.structured k hk' i hi hcone] at he
+    cases he
+
+/-- The total cost of the invocations of a trace. -/
+def traceCost (turns : List HouyhnhnmTurn) : Nat := (turns.map turnCost).sum
+
+/-- **Budgets deplete and lineage holds along every trace.** What the handles have left plus
+what the trace spent is what they started with, so the trace never spends more than the initial
+budgets; every handle, delegated ones included, attenuates the initial handle its lineage names;
+and the cached roots stay bound to the stores. -/
+theorem validHouyhnhnmTrace_budget_and_lineage (c : TurnCommitments) (v : InnerVerifier)
+    (roots : Array Mandate) : ∀ (turns : List HouyhnhnmTurn) (st st' : HouyhnhnmSessionState),
+      ValidHouyhnhnmTrace c v st turns st' → HandleLineage roots st → RootBindings c st.cell →
+        budgetSum st'.cell.capabilities + traceCost turns = budgetSum st.cell.capabilities ∧
+        HandleLineage roots st' ∧ RootBindings c st'.cell ∧
+        st'.turnHeight = st.turnHeight + turns.length
+  | [], st, st', h, hl, hr => by
+    rw [validHouyhnhnmTrace_nil] at h
+    subst h
+    exact ⟨by simp [traceCost], hl, hr, by simp⟩
+  | t :: ts, st, st', h, hl, _ => by
+    obtain ⟨mid, hm, hrest⟩ := (validHouyhnhnmTrace_cons c v st st' t ts).mp h
+    obtain ⟨hb, hl'⟩ := step_budget_and_lineage roots hm hl
+    have hr' : RootBindings c mid.cell := by
+      obtain ⟨_, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
+        (stepHouyhnhnmSession_eq_some_iff c v st t mid).mp hm
+      exact ⟨rfl, rfl⟩
+    have hh : mid.turnHeight = st.turnHeight + 1 := by
+      obtain ⟨_, _, spent, debited, caps, lineage, _, _, _, rfl⟩ :=
+        (stepHouyhnhnmSession_eq_some_iff c v st t mid).mp hm
+      rfl
+    obtain ⟨hb2, hl2, hr2, hh2⟩ :=
+      validHouyhnhnmTrace_budget_and_lineage c v roots ts mid st' hrest hl' hr'
+    refine ⟨?_, hl2, hr2, ?_⟩
+    · simp only [traceCost, List.map_cons, List.sum_cons] at hb2 ⊢
+      omega
+    · simp only [List.length_cons]
+      omega
+
 
 end Obend.Polis.HouyhnhnmTurn
