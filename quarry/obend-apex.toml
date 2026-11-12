@@ -1212,6 +1212,20 @@ module = "Obend.Spec.BidirectionalSurfaceElab"
 theorem = "checkSurface_sound"
 description = "Bidirectional surface-to-core elaborator producing well-typed `PartialTyping` derivations while refusing unbound variables, unscoped laws, effect leaks, and linearity violations."
 
+[[apex]]
+id = "analysis-pde-sexpr-approx-tube"
+subsystem = "Analysis"
+module = "Obend.Analysis.PdeSexprAndApprox"
+theorem = "checkApprox_sound"
+description = "S-expression conservation-law compiler (1D Maxwell / Munz PHM / linear advection), Peter-Paul rational a-priori error tube, and `pde-approx-defect@1` surrogate certificate."
+
+[[apex]]
+id = "symboliczk-stencil-rollout-dualspine-stark"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.StencilRolloutStark"
+theorem = "verifyZkPdeRolloutReceipt_sound_or_dualBreak"
+description = "Range-safe Q32 GPU Maxwell stencil rollout bounded within rational PDE error tube and attested by Goldilocks/DualSpine PIOP receipt with constructive `PSum` collision/SIS extractor."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

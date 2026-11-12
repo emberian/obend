@@ -29,7 +29,7 @@ commitments are succinct, but openings and traces are transparent: the historica
 Zk API name does not imply statistical hiding or a zero-knowledge protocol.
 -/
 public section
-namespace Obend.SymbolicZk.VerifiedStencilStark
+namespace Obend.SymbolicZk.StencilRolloutStark
 open Obend.Analysis Obend.Analysis.HyperbolicPde Obend.Analysis.PdeSexprAndApprox
 open Obend.Hardware.ArrayHypergraph (Word)
 open Obend.Hardware.Gpu.ArraySource
@@ -37,7 +37,6 @@ open Obend.Core.Term
 open Obend.Core.RangeSafe
 open Obend.Crypto
 set_option autoImplicit false
-set_option maxHeartbeats 800000
 set_option maxRecDepth 8192
 abbrev WordGrid := List Word
 def amplitudeLimit : Nat := 2^48
@@ -1083,4 +1082,4 @@ theorem gpuMaxwellRollout_within_tube (p m : WordGrid) (hl : m.length = p.length
       (gridSub (decodeMaxwellGrid p m) initial)) (maxwellDefectBudget p.length) K := by
   simpa only [gpuMaxwellRollout_eq_q32 p m hl hp hm K, q32MaxwellTrajectory] using
     q32Maxwell_gpu_rollout_within_rational_pde_tube p m hl hp hm initial K η hη
-end Obend.SymbolicZk.VerifiedStencilStark
+end Obend.SymbolicZk.StencilRolloutStark

@@ -118,6 +118,7 @@ public import Obend.Analysis.QuantumWalk
 public import Obend.Analysis.EqSatHypergraph
 public import Obend.Analysis.Hybrid
 public import Obend.Analysis.HyperbolicPdeCert
+public import Obend.Analysis.PdeSexprAndApprox
 public import Obend.Category
 public import Obend.Repair
 public import Obend.Repair.DeriveConfig
@@ -158,6 +159,7 @@ public import Obend.SymbolicZk.LinMem
 public import Obend.SymbolicZk.CompileToPiopCore
 public import Obend.SymbolicZk.CompileToPiop
 public import Obend.SymbolicZk.SkolemChaseCore
+public import Obend.SymbolicZk.StencilRolloutStark
 public import Obend.Trailblaze.Obligations
 public import Obend.Trailblaze.PolisBlum
 public import Obend.Trailblaze.Polis

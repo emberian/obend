@@ -1,6 +1,6 @@
 module
 public import Obend.Analysis.PdeSexprAndApprox
-public import Obend.SymbolicZk.VerifiedStencilStark
+public import Obend.SymbolicZk.StencilRolloutStark
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms
 import all Obend.Analysis.Diff
@@ -131,17 +131,17 @@ import all Obend.Spec.C4
 import all Obend.Spec.Proofs.C4
 import all Obend.SymbolicZk.CompileToPiop
 import all Obend.SymbolicZk.CompileToPiopCore
-import all Obend.SymbolicZk.VerifiedStencilStark
+import all Obend.SymbolicZk.StencilRolloutStark
 import all Obend.Tactic.Cases
 import all Obend.Tactic.MonadicReduction
 import all Obend.Tactic.Tooth
 meta import all Obend.Analysis.PdeSexprAndApprox
-meta import all Obend.SymbolicZk.VerifiedStencilStark
+meta import all Obend.SymbolicZk.StencilRolloutStark
 
 public section
 namespace Obend.Tests.PdeApproxAndStark
 open Obend.Analysis.HyperbolicPde Obend.Analysis.PdeSexprAndApprox
-open Obend.SymbolicZk.VerifiedStencilStark
+open Obend.SymbolicZk.StencilRolloutStark
 set_option maxRecDepth 8192
 set_option maxHeartbeats 2000000
 
@@ -452,7 +452,7 @@ private meta partial def auditComputationalChoice (e : Lean.Expr) :
 
 run_cmd do
   let env ← Lean.getEnv
-  let ownModules := [`Obend.Analysis.PdeSexprAndApprox, `Obend.SymbolicZk.VerifiedStencilStark]
+  let ownModules := [`Obend.Analysis.PdeSexprAndApprox, `Obend.SymbolicZk.StencilRolloutStark]
   for (name, info) in env.constants.map₁.toList do
     let some idx := env.getModuleIdxFor? name | continue
     let some mod := env.header.moduleNames[idx.toNat]? | continue

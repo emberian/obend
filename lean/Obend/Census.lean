@@ -107,6 +107,7 @@ import Obend.Analysis.Groebner
 import Obend.Analysis.Hybrid
 import Obend.Analysis.HyperbolicPdeCert
 import Obend.Analysis.Impact
+import Obend.Analysis.PdeSexprAndApprox
 import Obend.Analysis.QuantumWalk
 import Obend.Analysis.RealAnalysis
 import Obend.Analysis.Replay
@@ -635,6 +636,7 @@ import Obend.SymbolicZk.LinMem
 import Obend.SymbolicZk.RankedFixpointArith
 import Obend.SymbolicZk.SemiringDatalog
 import Obend.SymbolicZk.SkolemChaseCore
+import Obend.SymbolicZk.StencilRolloutStark
 import Obend.Tactic.Cases
 import Obend.Tactic.ClaimAudit
 import Obend.Tactic.Compositional
