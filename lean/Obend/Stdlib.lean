@@ -4,6 +4,7 @@ public import Obend.Elab.Workbook
 public meta import Obend.Elab.Workbook
 public import Obend.Leaf.Static
 public import Obend.Spec.CrossPackage
+public import Obend.Hardware.UserspacePhysical
 import all Init.Data.String.Defs
 import all Init.Data.ByteArray.Basic
 
@@ -66,10 +67,8 @@ set_option maxHeartbeats 800000
 #import_obend "stdlib/physical/QuantumPhotonicMatter.obend" as StdQuantumPhotonic
 #import_obend "stdlib/physical/MultiphysicsPcbTempest.obend" as StdMultiphysicsPcb
 #import_obend "stdlib/physical/SymplecticSpacecraft6Dof.obend" as StdSymplecticSpacecraft
-#import_obend "stdlib/physical/LcDrivesStator.obend" as StdLcDrivesStator
-#import_obend "stdlib/physical/Ms350FcmlPhaseLeg.obend" as StdMs350FcmlPhaseLeg
-#import_obend "stdlib/physical/CleanroomTcadStack.obend" as StdCleanroomTcadStack
-#import_obend "stdlib/physical/Cnc5AxisMill.obend" as StdCnc5AxisMill
+-- `StdLcDrivesStator`, `StdMs350FcmlPhaseLeg`, `StdCleanroomTcadStack`, and `StdCnc5AxisMill`
+-- are elaborated once in Tier-1 `Obend.Hardware.UserspacePhysical` and re-exported here.
 
 /-- All open-recursion claims across `Cell.obend`, `Account.obend`, and `ScenePrim.obend`
 are discharged and their semantic obligation meanings hold. -/

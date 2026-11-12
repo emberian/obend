@@ -7,6 +7,8 @@ and `Obend.FFI.Bridge` workbook & CAE/PDE format gates.
 -/
 public import Obend.Doc.WorkbookEngine
 public import Obend.FFI.Bridge
+meta import Obend.Doc.WorkbookEngine
+meta import Obend.FFI.Bridge
 import Obend.Tactic.Tooth
 import all Obend.Tactic.Tooth
 import all Obend.Doc.Graph
@@ -17,6 +19,7 @@ import all Obend.Doc.Merge
 import all Obend.Doc.Render
 import all Obend.Doc.Structured
 import all Obend.Doc.ReactiveNotebook
+import all Obend.Spec.Sha256
 import all Obend.Doc.WorkbookEngine
 import all Obend.FFI.BridgeTypes
 import all Obend.FFI.Bridge

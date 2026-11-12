@@ -1289,6 +1289,13 @@ module = "Obend.Tactic.SymDiffAndFlux"
 theorem = "spec_fusedGpuKernel_sound"
 description = "Reflective conservation-law parser, fluctuation/symmetrizer normalizer (`fluctuationConservation_of_reflective`), and metaprogrammed `#pde_solver` fused multi-D GPU kernel soundness."
 
+[[apex]]
+id = "doc-workbook-incremental-and-bidirectional-lenses"
+subsystem = "Doc"
+module = "Obend.Doc.WorkbookEngine"
+theorem = "evalWorkbookIncremental_eq_full"
+description = "Live multi-projection bidirectional workbook engine with exact incremental dirty-cone evaluation equivalence (`evalWorkbookIncremental_eq_full`) and Putnam/Foster `GetPut`/`PutGet` lens laws (`lens_put_get`)."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

@@ -44,6 +44,7 @@ public import Obend.Law.PointwiseRevise
 public import Obend.Law.AmendCli
 public import Obend.Doc
 public import Obend.Doc.ReactiveNotebook
+public import Obend.Doc.WorkbookEngine
 public import Obend.Elab
 public import Obend.Elab.PdeSolverElab
 public import Obend.Spec

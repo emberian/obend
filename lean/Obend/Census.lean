@@ -326,6 +326,7 @@ import Obend.Doc.ReactiveNotebook
 import Obend.Doc.Render
 import Obend.Doc.Section
 import Obend.Doc.Structured
+import Obend.Doc.WorkbookEngine
 import Obend.Elab
 import Obend.Elab.AutoCertTaylorSound
 import Obend.Elab.Coerce
@@ -355,6 +356,7 @@ import Obend.Equiv.Simulation
 import Obend.Equiv.Yields
 import Obend.FFI
 import Obend.FFI.Bridge
+import Obend.FFI.BridgeTypes
 import Obend.Fold
 import Obend.Fold.Collapse
 import Obend.Format.Reader

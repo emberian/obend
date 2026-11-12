@@ -10,6 +10,7 @@ public import Obend.Doc.Backlinks
 public import Obend.Doc.Structured
 public import Obend.Doc.ReactiveNotebook
 public import Obend.Receipt.Merkle
+public import Obend.Spec.Sha256
 import all Obend.Doc.ReactiveNotebook
 public section
 namespace Obend.Doc.WorkbookEngine
