@@ -68,6 +68,8 @@ public import Obend.Hardware.AwsF2Shell
 public import Obend.Hardware.CircuitDae
 public import Obend.Hardware.SafePhysicalShield
 public import Obend.Hardware.SwitchedCapRf
+public import Obend.Hardware.PipelinedRiscCore
+public import Obend.Hardware.PipelinedRisc
 public import Obend.Hardware.DprStutter
 public import Obend.Hardware.SiliconOuroboros
 public import Obend.Hardware.HvmConfluence

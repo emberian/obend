@@ -1072,6 +1072,20 @@ module = "Obend.Vault.PortableContinuation"
 theorem = "migrationHistory_preserves_home_or_collision"
 description = "Canonical DetCBOR `HomeArchive` export/import tombstones stale source hosts, refuses replay, and preserves pages, membranes, and balances across migrations."
 
+[[apex]]
+id = "hardware-pipelined-risc-burch-dill"
+subsystem = "Hardware"
+module = "Obend.Hardware.PipelinedRiscCore"
+theorem = "burchDill_step_commutes"
+description = "5-stage IF/ID/EX/MEM/WB forwarding & load-use/branch-hazard RISC pipeline commutes with single-cycle ISA semantics under Burch-Dill pipeline flushing."
+
+[[apex]]
+id = "hardware-pipelined-risc-rtl-refinement"
+subsystem = "Hardware"
+module = "Obend.Hardware.PipelinedRisc"
+theorem = "pipelinedRiscRtl_step_refines"
+description = "Synthesizable `RtlModule` netlist for the 5-stage forwarding RISC processor cycle-accurately refines `stepPipeline` across every architectural and pipeline latch."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
