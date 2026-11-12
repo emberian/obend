@@ -41,6 +41,9 @@ public import Obend.Doc.Merge
 public import Obend.Slot
 public import Obend.Intention
 public import Obend.Digest.HashBytes
+import all Obend.Doc.Graph
+import all Obend.Doc.Patch
+import all Obend.Doc.Merge
 public section
 
 namespace Obend.Doc
@@ -52,7 +55,7 @@ open Obend.Slot Obend.Digest.HashBytes
 /-! ## A page's bytes -/
 
 /-- The UTF-8 encoding of a character. -/
-@[expose] def utf8 (c : Char) : List UInt8 :=
+def utf8 (c : Char) : List UInt8 :=
   let n := c.toNat
   if n < 0x80 then [n.toUInt8]
   else if n < 0x800 then [(0xC0 + n / 64).toUInt8, (0x80 + n % 64).toUInt8]
@@ -63,12 +66,12 @@ open Obend.Slot Obend.Digest.HashBytes
       (0x80 + n % 64).toUInt8]
 
 /-- A string's UTF-8 bytes. -/
-@[expose] def bytes (s : String) : List UInt8 := s.toList.flatMap utf8
+def bytes (s : String) : List UInt8 := s.toList.flatMap utf8
 
 namespace Graph
 
 /-- Canonical source text for a structured cell AST (`Obend.Core.Data.Data`). -/
-@[expose] def cellAstSource : Obend.Core.Data.Data → String
+def cellAstSource : Obend.Core.Data.Data → String
   | .label s => s
   | .natural n => toString n
   | .boolean b => toString b
@@ -92,7 +95,7 @@ its `!`), a field `:key: value`, and a structured cell its canonical fenced `obe
 
 mutual
 /-- Segments as text, each atom read by `f`. -/
-@[expose] def segsWith (f : AtomId → String) : List Segment → String
+def segsWith (f : AtomId → String) : List Segment → String
   | [] => ""
   | s :: ss => segWith f s ++ segsWith f ss
 /-- A segment as text; a conflict shows every alternative between markers. -/
@@ -124,7 +127,7 @@ abbrev World := PageId → List Graph
   (∀ p, p ≠ q → W' p = W p) ∧ ∃ ext, ext ≠ [] ∧ W' q = W q ++ ext
 
 /-- A text's lines, without their newlines. -/
-@[expose] def lines : List Char → List (List Char)
+def lines : List Char → List (List Char)
   | [] => [[]]
   | c :: cs => match lines cs with
     | l :: ls => if c = '\n' then [] :: l :: ls else (c :: l) :: ls
@@ -132,7 +135,7 @@ abbrev World := PageId → List Graph
 
 /-- The block marked `^b` or heading `# b`: the first line ending ` ^b` (Obsidian's block
 identifier), or if none, the first markdown heading line `# b` / `## b` / `### b`. -/
-@[expose] def blockLine (b : String) (src : List Char) : Option (List Char) :=
+def blockLine (b : String) (src : List Char) : Option (List Char) :=
   let ls := lines src
   match ls.find? (fun l => (' ' :: '^' :: b.toList).isSuffixOf l) with
   | some l => some l
@@ -586,7 +589,7 @@ theorem cite_stale_iff_blocked (H : Hash) (W : World) (c : Cite) :
 namespace Teeth
 
 /-- A toy byte hash: the byte sum. Every theorem above is for every hash. -/
-@[expose] def toy : Hash := fun (b : List UInt8) => [(b.foldl (fun s (x : UInt8) => s + x.toNat) 0).toUInt8]
+def toy : Hash := fun (b : List UInt8) => [(b.foldl (fun s (x : UInt8) => s + x.toNat) 0).toUInt8]
 
 /-- Page 2, "Beta", one version: `beta`. -/
 def beta : Graph := Graph.empty.apply [.add 1 (.text "beta") root]

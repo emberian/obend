@@ -63,7 +63,7 @@ inductive Span
   | page
   | block (id : String)
   | bytes (r : Range)
-deriving @[expose] DecidableEq, Repr
+deriving DecidableEq, Repr
 
 /-- A cite: `(page, span, version, byte commitment)` of another page (DESIGN §5), with the mode a
 byte cite tracks its source in. An identity cite's version, commitment and mode are inert. -/
@@ -86,7 +86,7 @@ instance : DecidableEq ByteArray := decByteArray
 instance : Repr ByteArray where
   reprPrec b p := reprPrec b.data p
 
-/-- Discriminated structured cell projection kinds (Milestone 5 Feature 34). -/
+/-- Discriminated structured cell projection kinds (Milestone 5 Feature 34 + Houyhnhnm CAE/PDE/Custody). -/
 inductive ProjectionKind where
   | prose
   | obendCode
@@ -98,7 +98,13 @@ inductive ProjectionKind where
   | hardwareTiming
   | hardwareLayout
   | ledgerSeat
-deriving @[expose] DecidableEq, Repr
+  | pdeConservation
+  | feecSimplicialFem
+  | pcbMultiphysicsDfm
+  | vehicle6DofTrajectory
+  | zkCustodyReceipt
+  | frustumRedactedView
+deriving DecidableEq, Repr
 
 /-- What an atom carries. -/
 inductive Content
@@ -111,7 +117,7 @@ inductive Content
   /-- a structured quotation cell carrying Core.Data, footprint pins, and Merkle receipt -/
   | cell (id : String) (kind : ProjectionKind) (ast : Obend.Core.Data.Data)
          (pins : List (String × ByteArray)) (receipt : Option ByteArray)
-deriving @[expose] DecidableEq, Repr
+deriving DecidableEq, Repr
 
 /-- A page's state. -/
 structure Graph where
@@ -168,7 +174,7 @@ theorem Before.trans' {G : Graph} {a b c : AtomId} (h : G.Before a b) (k : G.Bef
   | trans h _ ih => exact .trans h (ih k)
 
 /-- The direct successors of `a`. -/
-@[expose] def succs (G : Graph) (a : AtomId) : List AtomId :=
+def succs (G : Graph) (a : AtomId) : List AtomId :=
   G.edges.filterMap fun e => if e.1 = a then some e.2 else none
 
 theorem mem_succs {G : Graph} {a b : AtomId} : b ∈ G.succs a ↔ G.edge a b = true := by
@@ -181,22 +187,22 @@ theorem mem_succs {G : Graph} {a b : AtomId} : b ∈ G.succs a ↔ G.edge a b = 
   · intro h; exact ⟨(a, b), h, by simp⟩
 
 /-- One step of the forward cone: `S` and every successor of a member of `S`. -/
-@[expose] def grow (G : Graph) (S : List AtomId) : List AtomId :=
+def grow (G : Graph) (S : List AtomId) : List AtomId :=
   S ++ (G.edges.filter fun e => S.contains e.1).map Prod.snd
 
 /-- `n` steps of the forward cone. -/
-@[expose] def coneN (G : Graph) : Nat → List AtomId → List AtomId
+def coneN (G : Graph) : Nat → List AtomId → List AtomId
   | 0, S => S
   | n + 1, S => G.coneN n (G.grow S)
 
 /-- The strict forward cone of `a`, to depth the number of edges. -/
-@[expose] def cone (G : Graph) (a : AtomId) : List AtomId := G.coneN G.edges.length (G.succs a)
+def cone (G : Graph) (a : AtomId) : List AtomId := G.coneN G.edges.length (G.succs a)
 
 /-- The decided order: `b` is in the strict forward cone of `a`. -/
 @[expose] def beforeB (G : Graph) (a b : AtomId) : Bool := (G.cone a).contains b
 
 /-- `S` is closed under the order edges. -/
-@[expose] def Closed (G : Graph) (S : List AtomId) : Bool :=
+def Closed (G : Graph) (S : List AtomId) : Bool :=
   G.edges.all fun e => !S.contains e.1 || S.contains e.2
 
 theorem mem_grow {G : Graph} {S : List AtomId} {y : AtomId} :
@@ -264,18 +270,18 @@ step added, keeps no repeats, and stops when a step adds nothing. It holds the s
 (`mem_coneFrom`), so `beforeB` is compiled as it (`beforeB_eq_fast`, `@[csimp]`). -/
 
 /-- The successors of `fr` that `seen` does not hold, without repeats. -/
-@[expose] def fresh (G : Graph) (seen fr : List AtomId) : List AtomId :=
+def fresh (G : Graph) (seen fr : List AtomId) : List AtomId :=
   ((fr.flatMap G.succs).filter fun y => !seen.contains y).eraseDups
 
 /-- `n` steps of the cone from `seen`, growing from its frontier `fr`. -/
-@[expose] def coneFrom (G : Graph) : Nat → List AtomId → List AtomId → List AtomId
+def coneFrom (G : Graph) : Nat → List AtomId → List AtomId → List AtomId
   | 0, seen, _ => seen
   | n + 1, seen, fr =>
     let new := G.fresh seen fr
     if new.isEmpty then seen else G.coneFrom n (seen ++ new) new
 
 /-- The decided order, from the frontier. -/
-@[expose] def beforeBFast (G : Graph) (a b : AtomId) : Bool :=
+def beforeBFast (G : Graph) (a b : AtomId) : Bool :=
   (G.coneFrom G.edges.length (G.succs a) (G.succs a)).contains b
 
 theorem mem_fresh {G : Graph} {seen fr : List AtomId} {y : AtomId} :

@@ -3,7 +3,7 @@ module
 # Obend.FFI.Bridge — 8-Function Zero-Copy C-ABI FFI Bridge
 Milestone 5, Features 37 & 38.
 -/
-public import Lean
+import Lean
 public import Obend.Core.Data
 public import Obend.Core.Digest
 public import Obend.Core.Ty
@@ -18,6 +18,7 @@ public import Obend.Judge
 public import Obend.Doc.Graph
 public import Obend.Doc.Structured
 public import Obend.Doc.Render
+public import Obend.FFI.BridgeTypes
 public import Obend.Receipt.Merkle
 public import Obend.Spec.Parse
 public import Obend.Spec.Sha256
@@ -32,7 +33,7 @@ public import Obend.Logic.Receipt
 public import Obend.Leaf.Emit
 public import Obend.Tactic.Tooth
 
-@[expose] public section
+public section
 namespace Obend.FFI
 
 open Lean (Json toJson)
@@ -71,6 +72,7 @@ structure SessionState where
   committedRoots : Array ByteArray := #[]
   committedTurns : List VaultTurn := []
   doc : Graph := Graph.empty
+  workbook : Obend.Doc.WorkbookEngine.Workbook := defaultSessionWorkbook
   scratch : ByteArray := ByteArray.empty
   lastError : Option String := none
   deriving Inhabited
@@ -78,11 +80,11 @@ structure SessionState where
 abbrev Session := SessionState
 
 /-- The live `Obend.Vault.Replay.World` served by this FFI session. -/
-def SessionState.world (s : SessionState) : Obend.Vault.Replay.World :=
+@[expose] def SessionState.world (s : SessionState) : Obend.Vault.Replay.World :=
   s.replaySession.world
 
 /-- Canonical empty session state at `Obend.Vault.Replay.genesis`. -/
-def SessionState.empty : SessionState := {}
+@[expose] def SessionState.empty : SessionState := {}
 
 /-- Initialize session state from configuration bytes. -/
 @[export obend_session_init_core]
@@ -179,7 +181,7 @@ def normalizeObendSource (rawText : String) : String × Option String × List (S
   (modName.getD "WorkbookModule", entryName, deps, normalizedMain)
 
 /-- Resolve `import ./Foo.obend as Alias` edges against already-captured `prior` modules. -/
-def buildSourceModule (prior : Array SourceModule) (name : String) (source : String) (ast : Json) : SourceModule := Id.run do
+private def buildSourceModule (prior : Array SourceModule) (name : String) (source : String) (ast : Json) : SourceModule := Id.run do
   let sha256 := Obend.Spec.Capture.sha source.toUTF8
   let edges := ((ast.getObjVal? "imports").bind Json.getArr?).toOption.getD #[]
   let mut imports : List LockedImport := []
@@ -193,10 +195,10 @@ def buildSourceModule (prior : Array SourceModule) (name : String) (source : Str
         imports := imports ++ [⟨edgePath, edgeAlias, span, idx, pm.name, pm.sha256⟩]
   ⟨name, source, sha256, imports⟩
 
-def defaultHostLimits : Json :=
+private def defaultHostLimits : Json :=
   Json.mkObj [("ticks", toJson "100000"), ("heap", toJson "100000"), ("stack", toJson "100000"), ("checkWork", toJson "65536")]
 
-def defaultPreviewLimits : Json :=
+private def defaultPreviewLimits : Json :=
   Json.mkObj [("ticks", toJson "100000"), ("heap", toJson "100000"), ("stack", toJson "100000")]
 
 def dialVerdictName : Obend.Spec.LawDial.DialVerdict → String
@@ -247,7 +249,7 @@ def findCompositionFromTerm (want : Obend.Logic.Composition → Bool) (t : Obend
   (findObjectWithSeed want 20000 t).orElse (fun _ => findObjectWithSeed want 20000 (.app t (.record [])))
 
 /-- Evaluate a 0-argument knot field `t` on the bounded demand machine for live PIDE preview. -/
-def previewZeroArgTerm (entry : String) (t : Obend.Core.Term.Term) : Json :=
+private def previewZeroArgTerm (entry : String) (t : Obend.Core.Term.Term) : Json :=
   let outcome := match Obend.Core.Machine.runBounded ⟨100000, 100000⟩ 100000 (Obend.Core.Machine.initial t) with
     | .finished (.closure _ _) _ =>
       Obend.Core.Machine.runBounded ⟨100000, 100000⟩ 100000 (Obend.Core.Machine.initial (.app t (.record [])))
@@ -286,7 +288,7 @@ def previewZeroArgTerm (entry : String) (t : Obend.Core.Term.Term) : Json :=
 
 /-- Pure single- or multi-module `.obend` elaboration, type-checking, claim proving, Leaf book emission,
     and demand-machine preview evaluation. -/
-def elaborateObendSource (rawText : String) : Json × Bool :=
+private def elaborateObendSource (rawText : String) : Json × Bool :=
   let (moduleName, requestedEntry, depSpecs, source) := normalizeObendSource rawText
   let bytes := source.toUTF8
   let sha256 := Obend.Spec.Capture.sha bytes
@@ -886,12 +888,23 @@ def turnCommitCore (s : SessionState) (tidBytes : ByteArray) : SessionState × I
     | none =>
       ({ s with lastError := some "Turn ID not found in pendingProposals" }, -5)
 
-/-- Hardware/CAD judge format predicate for read-only hardware witness verification. -/
-def isHardwareProjectionFormat (name : String) : Bool :=
-  name == "cam-gouge" ||
-  name == "devsim-dd1d" ||
-  name == "yosys-lec" ||
-  name == "fabulous-readback" ||
+/-- Hardware/CAE/PDE/PCB/TEMPEST/6DOF judge format predicate for read-only witness verification. -/
+@[expose] def isHardwareProjectionFormat (name : String) : Bool :=
+  name == "cam-gouge" || name == "cam-gouge@1" ||
+  name == "devsim-dd1d" || name == "devsim-dd1d@1" ||
+  name == "yosys-lec" || name == "yosys-lec@1" ||
+  name == "fabulous-readback" || name == "fabulous-readback@1" ||
+  name == "fabublox-run" || name == "fabublox-run@1" ||
+  name == "waferspace-signoff" || name == "waferspace-signoff@1" ||
+  name == "mna-dae@1" || name == "mna-dae" ||
+  name == "vivado-sta@1" || name == "vivado-sta" ||
+  name == "openpdk-drc-sta@1" || name == "openpdk-drc-sta" ||
+  name == "hyperbolic-fvm@1" || name == "hyperbolic-fvm" ||
+  name == "pde-approx-defect@1" || name == "pde-approx-defect" ||
+  name == "devsim-qfermi@1" || name == "devsim-qfermi" ||
+  name == "feec-prager-synge@1" || name == "feec-prager-synge" ||
+  name == "se3-vehicle-6dof@1" || name == "se3-vehicle-6dof" ||
+  name == "tempest-glitch-emc@1" || name == "tempest-glitch-emc" ||
   name.startsWith "hw-"
 
 /-- Read-only hardware projection dispatch: decodes `hwBytes` as a `TurnWitness`, verifies it
@@ -1046,6 +1059,33 @@ def cellWeaveCertCore (s : SessionState) (certBytes : ByteArray) : SessionState 
           | none => "is not registered"
         ({ s with lastError := some s!"Judge format {w.formatName}@{w.version} {why}" }, ByteArray.empty, -8)
 
+/-- Incremental `.obnb` + reactive + transclusion workbook step over JSON wire bytes (`init`,
+    `editCell`, `editSection`, `exportRedacted`). Fails closed on empty/non-JSON (`-3`) and
+    DAG/schema violations (`-4`); never mutates `committedRoots`. -/
+@[export obend_workbook_step_json]
+def workbookStepJsonCore (s : SessionState) (reqBytes : ByteArray) : SessionState × ByteArray × Int32 :=
+  match stepWorkbookJsonBytes s.workbook reqBytes with
+  | .ok (wb', outBytes) =>
+    ({ s with workbook := wb', scratch := outBytes, lastError := none }, outBytes, 0)
+  | .error (code, errMsg) =>
+    ({ s with lastError := some errMsg }, ByteArray.empty, code)
+
+/-- Bidirectional Putnam/Foster projection lens scrub over JSON wire bytes (`{cellKey, fieldName, newValue}`).
+    Refuses read-only proof badges (`-5`), unknown/ill-typed fields (`-4`), and malformed JSON (`-3`). -/
+@[export obend_workbook_scrub_cell_json]
+def workbookScrubCellJsonCore (s : SessionState) (reqBytes : ByteArray) : SessionState × ByteArray × Int32 :=
+  match scrubWorkbookCellJsonBytes s.workbook reqBytes with
+  | .ok (wb', outBytes) =>
+    ({ s with workbook := wb', scratch := outBytes, lastError := none }, outBytes, 0)
+  | .error (code, errMsg) =>
+    ({ s with lastError := some errMsg }, ByteArray.empty, code)
+
+/-! ### Lean-Managed C-ABI Marshaling Helpers (`obend-ffi`)
+    Delegates all `lean_object*` allocation and refcounting to Lean's compiler. -/
+@[export obend_ffi_ba_empty] def ffiBaEmpty (cap : USize) : ByteArray := ByteArray.emptyWithCapacity cap.toNat
+@[export obend_ffi_ba_push] def ffiBaPush (ba : ByteArray) (b : UInt8) : ByteArray := ba.push b
+@[export obend_ffi_res_into_state] def ffiResIntoState (res : SessionState × ByteArray × Int32) : SessionState := res.1
+
 
 /-! ## What the bridge refuses, and what an acceptance means
 
@@ -1056,7 +1096,8 @@ admits a record into `s.replaySession` (`turnCommitCore_preserves_reachable`), s
 FFI session serves the replay of its log (`Obend.Vault.Replay.state_eq_replay_log`). -/
 
 theorem verifyReceiptCore_empty_refused (s : SessionState) :
-    (verifyReceiptCore s ByteArray.empty).2 = -8 := by rfl
+    (verifyReceiptCore s ByteArray.empty).2 = -8 := by
+  unfold verifyReceiptCore decodeReceipt?; rfl
 
 /-- A frame shorter than the 56-byte header, in particular a bare 32-byte root, is refused. -/
 theorem verifyReceiptCore_short_refused (s : SessionState) (rcpt : ByteArray) (h : rcpt.size < 56) :
@@ -1128,7 +1169,8 @@ theorem cellWeaveCertCore_committedRoots_unchanged (s : SessionState) (certBytes
   all_goals rfl
 
 theorem cellWeaveCertCore_empty_refused (s : SessionState) :
-    (cellWeaveCertCore s ByteArray.empty).2.2 = -8 := by rfl
+    (cellWeaveCertCore s ByteArray.empty).2.2 = -8 := by
+  unfold cellWeaveCertCore; rfl
 
 /-- A payload that is not a judge witness is refused and proposes nothing. -/
 theorem cellWeaveCertCore_not_witness_refused (s : SessionState) (certBytes : ByteArray)
@@ -1148,7 +1190,8 @@ theorem cellWeaveCertCore_refused_witness_not_proposed (s : SessionState) (certB
   simp [hne, hdec, hw]
 
 theorem turnCommitCore_empty_refused (s : SessionState) :
-    (turnCommitCore s ByteArray.empty).2 = -6 := by rfl
+    (turnCommitCore s ByteArray.empty).2 = -6 := by
+  unfold turnCommitCore; rfl
 
 theorem turnCommitCore_non32_refused (s : SessionState) (tid : ByteArray)
     (h : tid.size ≠ 32) :
@@ -1306,10 +1349,12 @@ theorem projectHardwareCore_sound (s : SessionState) (hwBytes : ByteArray)
       · simp at hok
 
 theorem turnProposeCore_empty_refused (s : SessionState) :
-    (turnProposeCore s ByteArray.empty).2.2 = -3 := by rfl
+    (turnProposeCore s ByteArray.empty).2.2 = -3 := by
+  unfold turnProposeCore; rfl
 
 theorem cellPopLeanCore_empty_refused (s : SessionState) :
-    (cellPopLeanCore s ByteArray.empty).2.2 = -3 := by rfl
+    (cellPopLeanCore s ByteArray.empty).2.2 = -3 := by
+  unfold cellPopLeanCore; rfl
 
 theorem cellPopLeanCore_nonempty_refused (s : SessionState) (cellBytes : ByteArray)
     (hne : cellBytes.isEmpty = false) :
@@ -1321,7 +1366,7 @@ theorem cellPopLeanCore_nonempty_refused (s : SessionState) (cellBytes : ByteArr
 theorem sessionStoreLookup_updates_after_applyWrites :
     let w1 := applyWritesToWorld SessionState.empty.replaySession.world Graph.empty [("x", .natural 10)]
     let s1 := { SessionState.empty with replaySession := ⟨w1, []⟩ }
-    sessionStoreLookup s1 "x" = some (.natural 10) :=
+    sessionStoreLookup s1 "x" = some (.natural 10) := by
   rfl
 
 theorem admitFootprint_stale_pin_refused :
@@ -1345,6 +1390,28 @@ theorem admitFootprint_stale_pin_refused :
     injection hdata with hnat
     omega
 
+theorem workbookStepJsonCore_empty_refused (s : SessionState) :
+    (workbookStepJsonCore s ByteArray.empty).2.2 = -3 ∧
+    (workbookStepJsonCore s ByteArray.empty).2.1 = ByteArray.empty := by
+  unfold workbookStepJsonCore; rw [stepWorkbookJsonBytes_empty_refused]; exact ⟨rfl, rfl⟩
+
+theorem workbookScrubCellJsonCore_empty_refused (s : SessionState) :
+    (workbookScrubCellJsonCore s ByteArray.empty).2.2 = -3 ∧
+    (workbookScrubCellJsonCore s ByteArray.empty).2.1 = ByteArray.empty := by
+  unfold workbookScrubCellJsonCore; rw [scrubWorkbookCellJsonBytes_empty_refused]; exact ⟨rfl, rfl⟩
+
+theorem workbookStepJsonCore_committedRoots_unchanged (s : SessionState) (reqBytes : ByteArray) :
+    (workbookStepJsonCore s reqBytes).1.committedRoots = s.committedRoots := by
+  unfold workbookStepJsonCore; split <;> rfl
+
+theorem workbookScrubCellJsonCore_committedRoots_unchanged (s : SessionState) (reqBytes : ByteArray) :
+    (workbookScrubCellJsonCore s reqBytes).1.committedRoots = s.committedRoots := by
+  unfold workbookScrubCellJsonCore; split <;> rfl
+
+theorem isHardwareProjectionFormat_cae_pde_formats :
+    (["mna-dae@1", "vivado-sta@1", "openpdk-drc-sta@1", "hyperbolic-fvm@1",
+      "pde-approx-defect@1", "devsim-qfermi@1", "feec-prager-synge@1",
+      "se3-vehicle-6dof@1", "tempest-glitch-emc@1"].all isHardwareProjectionFormat) = true := rfl
 
 end Obend.FFI
 end

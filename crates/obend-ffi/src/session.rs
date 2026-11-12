@@ -213,6 +213,26 @@ impl ObendSession {
         }
     }
 
+    /// Execute an incremental `.obnb` + reactive + transclusion workbook step (`init`, `editCell`,
+    /// `editSection`, `exportRedacted`) backed by `Obend.FFI.Bridge.workbookStepJsonCore`.
+    pub fn step_workbook(&mut self, req_json: &[u8]) -> Result<Vec<u8>, ObendError> {
+        ensure_lean_thread_initialized();
+        match unsafe { sys::call_workbook_step_json(self.handle, req_json) } {
+            Ok(bytes) => Ok(bytes),
+            Err(rc) => Err(self.last_error_or(ObendError::from_code(rc))),
+        }
+    }
+
+    /// Execute a Putnam/Foster bidirectional projection lens scrub (`{cellKey, fieldName, newValue}`)
+    /// backed by `Obend.FFI.Bridge.workbookScrubCellJsonCore`. Read-only proof badges fail closed (`TurnRefused`).
+    pub fn scrub_projection_cell(&mut self, req_json: &[u8]) -> Result<Vec<u8>, ObendError> {
+        ensure_lean_thread_initialized();
+        match unsafe { sys::call_workbook_scrub_cell_json(self.handle, req_json) } {
+            Ok(bytes) => Ok(bytes),
+            Err(rc) => Err(self.last_error_or(ObendError::from_code(rc))),
+        }
+    }
+
     fn last_error_or(&self, default: ObendError) -> ObendError {
         let msg = self.get_last_error();
         if msg.is_empty() {

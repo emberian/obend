@@ -79,6 +79,140 @@ extern "C" {
         out_ptr: *mut *mut u8,
         out_len: *mut usize,
     ) -> i32;
+
+    pub fn obend_workbook_step_json(
+        s: *mut std::ffi::c_void,
+        req_ba: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+
+    pub fn obend_workbook_scrub_cell_json(
+        s: *mut std::ffi::c_void,
+        req_ba: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+
+    pub fn obend_ffi_ba_empty(cap: usize) -> *mut std::ffi::c_void;
+    pub fn obend_ffi_ba_push(ba: *mut std::ffi::c_void, b: u8) -> *mut std::ffi::c_void;
+    pub fn obend_ffi_res_into_state(res: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+}
+
+/// Exact `<lean/lean.h>` 8-byte object header (`m_rc`, `m_cs_sz`, `m_other`, `m_tag`).
+#[cfg(not(feature = "stub"))]
+#[repr(C)]
+struct LeanObjectHeader {
+    m_rc: i32,
+    m_cs_sz: u16,
+    m_other: u8,
+    m_tag: u8,
+}
+
+/// Exact `<lean/lean.h>` `lean_sarray_object` prefix (`m_header`, `m_size`, `m_capacity`).
+#[cfg(not(feature = "stub"))]
+#[repr(C)]
+struct LeanSArrayHeader {
+    m_header: LeanObjectHeader,
+    m_size: usize,
+    m_capacity: usize,
+}
+
+#[cfg(not(feature = "stub"))]
+const _: () = {
+    assert!(std::mem::size_of::<LeanObjectHeader>() == 8);
+    assert!(std::mem::size_of::<LeanSArrayHeader>() == 8 + 2 * std::mem::size_of::<usize>());
+};
+
+#[cfg(not(feature = "stub"))]
+#[inline]
+unsafe fn lean_ctor_get(o: *const std::ffi::c_void, idx: usize) -> *mut std::ffi::c_void {
+    let fields =
+        (o as *const u8).add(std::mem::size_of::<LeanObjectHeader>()) as *const *mut std::ffi::c_void;
+    *fields.add(idx)
+}
+
+#[cfg(not(feature = "stub"))]
+#[inline]
+unsafe fn lean_unbox_uint32(o: *const std::ffi::c_void) -> u32 {
+    #[cfg(target_pointer_width = "64")]
+    {
+        ((o as usize) >> 1) as u32
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        let hdr = &*(o as *const LeanObjectHeader);
+        let obj_bytes = (hdr.m_other as usize) * std::mem::size_of::<*mut std::ffi::c_void>();
+        let payload =
+            (o as *const u8).add(std::mem::size_of::<LeanObjectHeader>() + obj_bytes) as *const u32;
+        *payload
+    }
+}
+
+#[cfg(not(feature = "stub"))]
+#[inline]
+unsafe fn lean_sarray_to_vec(o: *const std::ffi::c_void) -> Vec<u8> {
+    let hdr = &*(o as *const LeanSArrayHeader);
+    let len = hdr.m_size;
+    if len == 0 {
+        return Vec::new();
+    }
+    let data_ptr = (o as *const u8).add(std::mem::size_of::<LeanSArrayHeader>());
+    std::slice::from_raw_parts(data_ptr, len).to_vec()
+}
+
+#[cfg(not(feature = "stub"))]
+unsafe fn invoke_lean_session_json(
+    session: *mut Session,
+    req: &[u8],
+    f: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+) -> Result<Vec<u8>, i32> {
+    if session.is_null() {
+        return Err(-1);
+    }
+    obend_ensure_lean_thread();
+    // `ObendSessionHandle` (`lean/c/obend_bridge.c:7`) stores `lean_object *lean_state` at offset 0.
+    let state_slot = session as *mut *mut std::ffi::c_void;
+    let old_state = *state_slot;
+    if old_state.is_null() {
+        return Err(-2);
+    }
+    let mut req_ba = obend_ffi_ba_empty(req.len());
+    for &b in req {
+        req_ba = obend_ffi_ba_push(req_ba, b);
+    }
+    // `f` consumes owned `old_state` and `req_ba`, returning owned `SessionState × ByteArray × Int32`.
+    *state_slot = std::ptr::null_mut();
+    let res = f(old_state, req_ba);
+    if res.is_null() {
+        return Err(-1);
+    }
+    // Borrow `inner = res.2`, `out_ba = inner.1`, `code = inner.2` while `res` is live (`m_rc >= 1`).
+    let inner = lean_ctor_get(res, 1);
+    let out_ba = lean_ctor_get(inner, 0);
+    let code = lean_unbox_uint32(lean_ctor_get(inner, 1)) as i32;
+    let out = if code == 0 {
+        Some(lean_sarray_to_vec(out_ba))
+    } else {
+        None
+    };
+    // Lean's generated `obend_ffi_res_into_state` runs `lean_inc(res.1)` + `lean_dec(res)` and
+    // returns owned `new_state` with zero manual refcount arithmetic in Rust.
+    let new_state = obend_ffi_res_into_state(res);
+    *state_slot = new_state;
+    match out {
+        Some(buf) => Ok(buf),
+        None => Err(code),
+    }
+}
+
+#[cfg(not(feature = "stub"))]
+pub unsafe fn call_workbook_step_json(session: *mut Session, req: &[u8]) -> Result<Vec<u8>, i32> {
+    invoke_lean_session_json(session, req, obend_workbook_step_json)
+}
+
+#[cfg(not(feature = "stub"))]
+pub unsafe fn call_workbook_scrub_cell_json(
+    session: *mut Session,
+    req: &[u8],
+) -> Result<Vec<u8>, i32> {
+    invoke_lean_session_json(session, req, obend_workbook_scrub_cell_json)
 }
 
 #[cfg(feature = "stub")]
@@ -352,6 +486,42 @@ pub mod stub {
         let mut err = stub.err_buf.lock().unwrap();
         *err = STUB_REFUSAL.to_vec();
         -10
+    }
+
+    pub unsafe fn call_workbook_step_json(
+        session: *mut Session,
+        req: &[u8],
+    ) -> Result<Vec<u8>, i32> {
+        if session.is_null() {
+            return Err(-1);
+        }
+        let stub = &*(session as *mut StubSession);
+        if req.is_empty() {
+            let mut err = stub.err_buf.lock().unwrap();
+            *err = b"Empty workbook step payload".to_vec();
+            return Err(-3);
+        }
+        let mut err = stub.err_buf.lock().unwrap();
+        *err = STUB_REFUSAL.to_vec();
+        Err(-10)
+    }
+
+    pub unsafe fn call_workbook_scrub_cell_json(
+        session: *mut Session,
+        req: &[u8],
+    ) -> Result<Vec<u8>, i32> {
+        if session.is_null() {
+            return Err(-1);
+        }
+        let stub = &*(session as *mut StubSession);
+        if req.is_empty() {
+            let mut err = stub.err_buf.lock().unwrap();
+            *err = b"Empty scrub payload".to_vec();
+            return Err(-3);
+        }
+        let mut err = stub.err_buf.lock().unwrap();
+        *err = STUB_REFUSAL.to_vec();
+        Err(-10)
     }
 }
 #[cfg(feature = "stub")]

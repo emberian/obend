@@ -1,5 +1,6 @@
 //! Streaming `.vcd`, `.stl`, `.ngc`, `.smt2`, and `.sv` artifact parsers plus the PIDE
-//! `ObendSession` elaboration and law-affordance client.
+//! `ObendSession` dependency-aware `.obnb` workbook runner, bidirectional lens scrubber, and
+//! CAE/PDE/PCB/FEEC/6DOF/ZK multi-projection cards.
 
 pub mod apps;
 pub mod evaluator;
@@ -9,10 +10,13 @@ pub use apps::{
     parse_ngc_text, parse_obend_layer_source, parse_smt2_text, parse_stl_bytes, parse_sv_summary,
     parse_vcd_file, parse_vcd_reader, render_vcd_waveform_svg, validate_app_slug, vcd_bits_to_hex,
     AppArtifactDetail, AppArtifactSummary, AppObendLayerSource, AppRtlModuleSummary,
-    AppSmt2LecSpec, AppVcdDigest, CamArtifactBundle, NgcArtifactStats, StlArtifactStats,
-    VcdSignalSummary, WorkspaceAppsReport,
+    AppSmt2LecSpec, AppVcdDigest, CamArtifactBundle, FeecSimplicialFemCard,
+    FrustumRedactedViewCard, NgcArtifactStats, PcbMultiphysicsDfmCard, PdeConservationCard,
+    ProjectionCard, StlArtifactStats, VcdSignalSummary, Vehicle6DofTrajectoryCard,
+    VerifiedProofBadge, WorkspaceAppsReport, ZkCustodyReceiptCard,
 };
 pub use evaluator::{
-    ClaimSummary, DeclarationSummary, ElaborationSummary, LawAffordanceReport, LawSummary,
-    LeafBookSummary, NotebookCell, NotebookRunner,
+    extract_wikilink_owners, hex_encode_32, sha256_bytes, ClaimSummary, DeclarationSummary,
+    ElaborationSummary, LawAffordanceReport, LawSummary, LeafBookSummary, NotebookCell,
+    NotebookRunner, WorkbookExecutionReport,
 };

@@ -32,3 +32,4 @@ public import Obend.Doc.Section
 public import Obend.Doc.Render
 public import Obend.Doc.Backlinks
 public import Obend.Doc.Structured
+public import Obend.Doc.WorkbookEngine

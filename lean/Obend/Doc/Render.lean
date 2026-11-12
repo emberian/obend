@@ -26,6 +26,10 @@ The round trip (`source (read md) = md` for a vault) is checked on the two-page 
 `lean/tests/doc/` and by `decide` below; it is not proved for every markdown file.
 -/
 public import Obend.Doc.Section
+import all Obend.Doc.Graph
+import all Obend.Doc.Patch
+import all Obend.Doc.Merge
+import all Obend.Doc.Section
 public section
 
 namespace Obend.Doc
@@ -45,7 +49,7 @@ deriving DecidableEq, Repr
 
 /-- The name of a wikilink whose `[[` has been read, and what follows its `]]`; `none` when the
 line ends first. -/
-@[expose] def takeLink : List Char → List Char → Option (List Char × List Char)
+def takeLink : List Char → List Char → Option (List Char × List Char)
   | [], _ => none
   | '\n' :: _, _ => none
   | ']' :: ']' :: rest, acc => some (acc.reverse, rest)
@@ -55,19 +59,19 @@ line ends first. -/
 being built keeps them), closing backtick included, and what follows; `none` when the line ends
 first. What is in code is text: `[[x]]` there is not a link (Obsidian reads it so too). A fenced
 block's own lines are lexed as any line; only the span on one line is known. -/
-@[expose] def takeCode : List Char → List Char → Option (List Char × List Char)
+def takeCode : List Char → List Char → Option (List Char × List Char)
   | [], _ => none
   | '\n' :: _, _ => none
   | '`' :: rest, acc => some ('`' :: acc, rest)
   | c :: rest, acc => takeCode rest (c :: acc)
 
 /-- Close the text read so far (kept reversed) as a run, if any. -/
-@[expose] def flush (acc : List Char) : List Tok := if acc = [] then [] else [.text acc.reverse]
+def flush (acc : List Char) : List Tok := if acc = [] then [] else [.text acc.reverse]
 
 /-- Lex markdown: a run per line, split around wikilinks and embeds (including block and heading
 transclusions `![[P#^b]]` and `![[P#Heading]]`); a wikilink inside an inline code span is text.
 `n` bounds the steps. -/
-@[expose] def lex : Nat → List Char → List Char → List Tok
+def lex : Nat → List Char → List Char → List Tok
   | 0, _, acc => flush acc
   | _ + 1, [], acc => flush acc
   | n + 1, '!' :: '[' :: '[' :: rest, acc => match takeLink rest [] with
@@ -198,7 +202,7 @@ def viewAtom (H : Hash) (W : World) (G : Graph) (a : AtomId) : String :=
 /-- How an atom reads when expanding transclusions (`![[Page]]`, `![[Page#^id]]`, `![[Page#Heading]]`)
 from the world `W`: verified embeds inline their resolved target text from `W`, while failed cites
 carry their failure reasons `{...}`. -/
-@[expose] def viewAtomTranscluded (H : Hash) (W : World) (G : Graph) (a : AtomId) : String :=
+def viewAtomTranscluded (H : Hash) (W : World) (G : Graph) (a : AtomId) : String :=
   match G.label a with
   | some (.cite n c) =>
     match (citeFacts c).filter fun f => !holds H W f with
@@ -255,7 +259,7 @@ namespace Teeth
 
 open Obend.Doc.Teeth (toy)
 
-@[expose] def vault : Vault :=
+def vault : Vault :=
   [("Alpha", "# Alpha\nSee [[Beta]] and [[Gamma]].\n![[Beta]]\nQuote: [[Beta#^ans]]\n"),
    ("Beta", "# Beta\nBack to [[Alpha]].\nThe answer. ^ans\n")]
 
@@ -304,7 +308,7 @@ example : renderAt toy revisedVault 1 =
 
 /-- Block transclusion `![[Beta#^ans]]` lexes as `.embed`, round-trips in `renderAt`, and inlines
     the cited block line `"The answer. ^ans"` in `renderTranscludedAt`. -/
-@[expose] def blockTransclusionVault : Vault :=
+def blockTransclusionVault : Vault :=
   [("Alpha", "# Alpha\n![[Beta#^ans]]\n"),
    ("Beta", "# Beta\nThe answer. ^ans\n")]
 
@@ -315,7 +319,7 @@ example : tokens "a `[[B]]` c [[D]]\n" = [.text "a `[[B]]` c ".toList, .link ['D
 
 /-- An alias is display text: `[[Beta|the answer page]]` cites Beta's identity, and the page's
 text keeps the alias. -/
-@[expose] def aliasVault : Vault :=
+def aliasVault : Vault :=
   [("Alpha", "# Alpha\nSee [[Beta|the answer page]] and [[Beta#^ans|its answer]].\n"),
    ("Beta", "# Beta\nThe answer. ^ans\n")]
 

@@ -1360,3 +1360,273 @@ pub fn parse_ngc_text(rel_path: String, size_bytes: u64, text: &str) -> NgcArtif
         preview_lines,
     }
 }
+
+// ============================================================================
+// Houyhnhnm Ch. 7 Multi-Projection Cards (CAE / PCB / FEEC / PDE / 6DOF / ZK)
+// ============================================================================
+
+/// Read-only verified proof badge attached to a projection card (`scrub_readOnly_refused`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifiedProofBadge {
+    pub badge_field: String,
+    pub judge_format: String,
+    pub verified: bool,
+    pub commitment_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PcbMultiphysicsDfmCard {
+    pub cell_key: String,
+    pub trace_width_um: u64,
+    pub clearance_um: u64,
+    pub copper_weight_oz: u64,
+    /// Read-only computed characteristic impedance (Ohms)
+    pub impedance_ohm: u64,
+    /// Read-only computed TEMPEST shielding margin (dB)
+    pub tempest_margin_db: u64,
+    pub drc_badge: VerifiedProofBadge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeecSimplicialFemCard {
+    pub cell_key: String,
+    pub polynomial_order: u64,
+    pub mesh_refinement: u64,
+    /// Read-only Prager-Synge hypercircle duality gap (ppm)
+    pub prager_synge_gap_ppm: u64,
+    /// Read-only simplicial cohomology Betti invariant `beta_1`
+    pub cohomology_betti_1: u64,
+    pub feec_badge: VerifiedProofBadge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PdeConservationCard {
+    pub cell_key: String,
+    pub cfl_milli: u64,
+    pub grid_cells: u64,
+    /// Read-only discrete Lax-Friedrichs entropy residual (ppb)
+    pub entropy_residual_ppb: u64,
+    pub hyperbolic_badge: VerifiedProofBadge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Vehicle6DofTrajectoryCard {
+    pub cell_key: String,
+    pub thrust_n: u64,
+    pub mass_kg: u64,
+    pub horizon_steps: u64,
+    /// Read-only Lie-group SE(3) symplectic energy drift (ppm)
+    pub energy_drift_ppm: u64,
+    pub se3_badge: VerifiedProofBadge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZkCustodyReceiptCard {
+    pub cell_key: String,
+    pub epoch_limit: u64,
+    pub threshold_k: u64,
+    pub merkle_root_hex: String,
+    pub custody_badge: VerifiedProofBadge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrustumRedactedViewCard {
+    pub cell_key: String,
+    pub viewer_clearance: String,
+    pub max_depth: u64,
+    pub redacted_cell_count: usize,
+    pub visible_cell_count: usize,
+    pub commitment_badge: VerifiedProofBadge,
+}
+
+/// First-class Houyhnhnm multi-projection workbook card supporting bidirectional parameter
+/// scrubbing ("No Dead Pixels") while protecting read-only verified proof badges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectionCard {
+    PcbMultiphysicsDfm(PcbMultiphysicsDfmCard),
+    FeecSimplicialFem(FeecSimplicialFemCard),
+    PdeConservation(PdeConservationCard),
+    Vehicle6DofTrajectory(Vehicle6DofTrajectoryCard),
+    ZkCustodyReceipt(ZkCustodyReceiptCard),
+    FrustumRedactedView(FrustumRedactedViewCard),
+}
+
+impl ProjectionCard {
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::PcbMultiphysicsDfm(_) => "pcbMultiphysicsDfm",
+            Self::FeecSimplicialFem(_) => "feecSimplicialFem",
+            Self::PdeConservation(_) => "pdeConservation",
+            Self::Vehicle6DofTrajectory(_) => "vehicle6DofTrajectory",
+            Self::ZkCustodyReceipt(_) => "zkCustodyReceipt",
+            Self::FrustumRedactedView(_) => "frustumRedactedView",
+        }
+    }
+
+    pub fn judge_format(&self) -> &str {
+        match self {
+            Self::PcbMultiphysicsDfm(c) => &c.drc_badge.judge_format,
+            Self::FeecSimplicialFem(c) => &c.feec_badge.judge_format,
+            Self::PdeConservation(c) => &c.hyperbolic_badge.judge_format,
+            Self::Vehicle6DofTrajectory(c) => &c.se3_badge.judge_format,
+            Self::ZkCustodyReceipt(c) => &c.custody_badge.judge_format,
+            Self::FrustumRedactedView(c) => &c.commitment_badge.judge_format,
+        }
+    }
+
+    /// Scrub a numeric parameter in-place, updating derived display readouts while deterministically
+    /// refusing any edit to read-only verified proof badges (`scrub_readOnly_refused`).
+    pub fn scrub_field(&mut self, field_name: &str, new_val: u64) -> Result<(), String> {
+        if field_name == "receiptBadge" {
+            return Err("Refused scrub on read-only field 'receiptBadge'".to_string());
+        }
+        match self {
+            Self::PcbMultiphysicsDfm(c) => match field_name {
+                "drcVerified" | "impedanceOhm" | "tempestMarginDb" => {
+                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
+                }
+                "traceWidthUm" => {
+                    c.trace_width_um = new_val.max(1);
+                    c.impedance_ohm = (8_500 / c.trace_width_um.max(25)).clamp(25, 120);
+                    Ok(())
+                }
+                "clearanceUm" => {
+                    c.clearance_um = new_val;
+                    c.tempest_margin_db = 40 + (c.clearance_um / 20);
+                    Ok(())
+                }
+                "copperWeightOz" => {
+                    c.copper_weight_oz = new_val.max(1);
+                    Ok(())
+                }
+                other => Err(format!("Unknown PCB projection field '{other}'")),
+            },
+            Self::FeecSimplicialFem(c) => match field_name {
+                "pragerSyngeGap" | "cohomologyBetti" => {
+                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
+                }
+                "polynomialOrder" => {
+                    c.polynomial_order = new_val.max(1);
+                    c.prager_synge_gap_ppm = 1_000 / (c.polynomial_order * c.mesh_refinement.max(1));
+                    Ok(())
+                }
+                "meshRefinement" => {
+                    c.mesh_refinement = new_val.max(1);
+                    c.prager_synge_gap_ppm = 1_000 / (c.polynomial_order.max(1) * c.mesh_refinement);
+                    Ok(())
+                }
+                other => Err(format!("Unknown FEEC projection field '{other}'")),
+            },
+            Self::PdeConservation(c) => match field_name {
+                "entropyResidual" | "hyperbolicCert" => {
+                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
+                }
+                "cflMilli" => {
+                    c.cfl_milli = new_val;
+                    c.hyperbolic_badge.verified = new_val <= 1_000;
+                    Ok(())
+                }
+                "gridCells" => {
+                    c.grid_cells = new_val.max(1);
+                    Ok(())
+                }
+                other => Err(format!("Unknown PDE projection field '{other}'")),
+            },
+            Self::Vehicle6DofTrajectory(c) => match field_name {
+                "se3SymplecticCert" | "energyDriftPpm" => {
+                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
+                }
+                "thrustN" => {
+                    c.thrust_n = new_val;
+                    Ok(())
+                }
+                "massKg" => {
+                    c.mass_kg = new_val.max(1);
+                    Ok(())
+                }
+                "horizonSteps" => {
+                    c.horizon_steps = new_val.max(1);
+                    Ok(())
+                }
+                other => Err(format!("Unknown 6DOF trajectory projection field '{other}'")),
+            },
+            Self::ZkCustodyReceipt(c) => match field_name {
+                "merkleRoot" | "custodyProof" => {
+                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
+                }
+                "epochLimit" => {
+                    c.epoch_limit = new_val;
+                    Ok(())
+                }
+                "thresholdK" => {
+                    c.threshold_k = new_val.max(1);
+                    Ok(())
+                }
+                other => Err(format!("Unknown ZK custody projection field '{other}'")),
+            },
+            Self::FrustumRedactedView(c) => match field_name {
+                "commitmentRoot" | "redactionProof" => {
+                    Err(format!("Refused scrub on read-only badge field '{field_name}'"))
+                }
+                "maxDepth" => {
+                    c.max_depth = new_val;
+                    Ok(())
+                }
+                other => Err(format!("Unknown frustum redaction projection field '{other}'")),
+            },
+        }
+    }
+
+    /// Render a compact SVG status card summarizing scrubbable sliders and verified kernel badges.
+    pub fn render_svg_card(&self) -> String {
+        let kind = self.kind_label();
+        let fmt = self.judge_format();
+        let detail = match self {
+            Self::PcbMultiphysicsDfm(c) => format!(
+                "trace={}um clearance={}um Z0={}ohm TEMPEST={}dB verified={}",
+                c.trace_width_um,
+                c.clearance_um,
+                c.impedance_ohm,
+                c.tempest_margin_db,
+                c.drc_badge.verified
+            ),
+            Self::FeecSimplicialFem(c) => format!(
+                "order=p{} mesh={} gap={}ppm betti1={} verified={}",
+                c.polynomial_order,
+                c.mesh_refinement,
+                c.prager_synge_gap_ppm,
+                c.cohomology_betti_1,
+                c.feec_badge.verified
+            ),
+            Self::PdeConservation(c) => format!(
+                "CFL=0.{:03} cells={} residual={}ppb verified={}",
+                c.cfl_milli,
+                c.grid_cells,
+                c.entropy_residual_ppb,
+                c.hyperbolic_badge.verified
+            ),
+            Self::Vehicle6DofTrajectory(c) => format!(
+                "thrust={}N mass={}kg steps={} drift={}ppm verified={}",
+                c.thrust_n, c.mass_kg, c.horizon_steps, c.energy_drift_ppm, c.se3_badge.verified
+            ),
+            Self::ZkCustodyReceipt(c) => format!(
+                "epochLimit={} threshold={} root={} verified={}",
+                c.epoch_limit,
+                c.threshold_k,
+                &c.merkle_root_hex[..c.merkle_root_hex.len().min(12)],
+                c.custody_badge.verified
+            ),
+            Self::FrustumRedactedView(c) => format!(
+                "clearance={} depth={} visible={} redacted={} verified={}",
+                c.viewer_clearance,
+                c.max_depth,
+                c.visible_cell_count,
+                c.redacted_cell_count,
+                c.commitment_badge.verified
+            ),
+        };
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"520\" height=\"72\" data-kind=\"{kind}\" data-judge=\"{fmt}\"><rect width=\"520\" height=\"72\" rx=\"6\" fill=\"#111827\"/><text x=\"12\" y=\"26\" fill=\"#e5e7eb\">{kind} [{fmt}]</text><text x=\"12\" y=\"52\" fill=\"#93c5fd\">{detail}</text></svg>"
+        )
+    }
+}

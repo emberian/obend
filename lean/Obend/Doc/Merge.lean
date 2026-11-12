@@ -37,6 +37,8 @@ are those `heads` (`walk_conflict`), each with its branch, and the walk resumes 
 rejoin.
 -/
 public import Obend.Doc.Patch
+import all Obend.Doc.Graph
+import all Obend.Doc.Patch
 public section
 
 namespace Obend.Doc
@@ -284,12 +286,12 @@ theorem file_of_fileB {G : Graph} (h : G.fileB = true) : File G := by
 /-! ## The linearization -/
 
 /-- Remove repeats, keeping first occurrences. -/
-@[expose] def dedup (l : List AtomId) : List AtomId :=
+def dedup (l : List AtomId) : List AtomId :=
   l.foldl (fun acc x => if acc.contains x then acc else acc ++ [x]) []
 
 /-- The atoms met walking forward from `x` until a live run: the dead (or absent) ones crossed, and
 the live runs where each path stops. -/
-@[expose] def frontN (G : Graph) : Nat → AtomId → List AtomId
+def frontN (G : Graph) : Nat → AtomId → List AtomId
   | 0, _ => []
   | n + 1, x => (G.succs x).flatMap fun y => if G.run y then [y] else y :: G.frontN n y
 
@@ -319,7 +321,7 @@ deriving Repr
 
 /-- Walk from `x`, ignoring the atoms `stop` excludes (inside a branch: what another alternative
 reaches). -/
-@[expose] def walk (G : Graph) : Nat → (AtomId → Bool) → AtomId → List Segment
+def walk (G : Graph) : Nat → (AtomId → Bool) → AtomId → List Segment
   | 0, _, _ => []
   | n + 1, stop, x =>
     match (G.heads x).filter (fun y => !stop y) with
@@ -356,13 +358,13 @@ namespace Teeth
 open Graph
 
 /-- The file `a b`. -/
-@[expose] def ab : Graph := empty.apply [.add 1 (.text "a") root, .add 2 (.text "b") 1]
+def ab : Graph := empty.apply [.add 1 (.text "a") root, .add 2 (.text "b") 1]
 /-- `a c b`: insert `c` between them. -/
-@[expose] def acb : Graph := ab.apply [.add 3 (.text "c") 1, .connect 3 2]
+def acb : Graph := ab.apply [.add 3 (.text "c") 1, .connect 3 2]
 /-- `a d b`: insert `d` between them. -/
-@[expose] def adb : Graph := ab.apply [.add 4 (.text "d") 1, .connect 4 2]
+def adb : Graph := ab.apply [.add 4 (.text "d") 1, .connect 4 2]
 /-- The merge: `c` and `d` both between `a` and `b`, unordered. -/
-@[expose] def merged : Graph := merge acb adb
+def merged : Graph := merge acb adb
 
 theorem compat : Compatible acb adb := compatible_of_compatB (by decide)
 
@@ -428,7 +430,7 @@ end Teeth
 inductive MergeCellResult (α : Type) where
   | merged (val : α)
   | conflict (baseVal leftVal rightVal : α)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Structured 3-way merge conflict localized to a specific cell/block key `key`. -/
 structure MergeConflict where
@@ -436,14 +438,14 @@ structure MergeConflict where
   baseVal : Option Obend.Core.Data.Data
   leftVal : Option Obend.Core.Data.Data
   rightVal : Option Obend.Core.Data.Data
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Outcome of a 3-way keyed cell/section LCA merge across a document's cells:
 carries the merged `(key, Data)` association list and the list of localized `MergeConflict`s. -/
 structure KeyedMergeOutcome where
   mergedCells : List (String × Obend.Core.Data.Data)
   conflicts : List MergeConflict
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- **3-Way Single-Cell LCA Merge (`mergeCell3`)**:
 Given a common ancestor value `base` and two concurrent agent branch values `vL` and `vR`:
@@ -523,7 +525,7 @@ theorem mergeCell3_disjoint_edits_succeed {α : Type} [DecidableEq α]
   ⟨mergeCell3_right_unchanged base1 vL1, mergeCell3_left_unchanged base2 vR2⟩
 
 /-- Collect all distinct cell keys present across `base`, `left`, and `right` in order of appearance. -/
-@[expose] def collectCellKeys
+def collectCellKeys
     (base left right : List (String × Obend.Core.Data.Data)) : List String :=
   Patch.dedupStringKeys ((base.map Prod.fst) ++ (left.map Prod.fst) ++ (right.map Prod.fst))
 
@@ -534,7 +536,7 @@ theorem mergeCell3_disjoint_edits_succeed {α : Type} [DecidableEq α]
   simp [collectCellKeys, List.mem_append]
 
 /-- Perform a 3-way LCA cell merge at key `k` across keyed cell states `base`, `left`, and `right`. -/
-@[expose] def mergeKeyedCellAt
+def mergeKeyedCellAt
     (base left right : List (String × Obend.Core.Data.Data)) (k : String) :
     MergeCellResult (Option Obend.Core.Data.Data) :=
   mergeCell3 (base.lookup k) (left.lookup k) (right.lookup k)
@@ -551,7 +553,7 @@ theorem mergeKeyedCellAt_of_not_mem_collectCellKeys
     Patch.lookup_eq_none_of_not_mem_map_fst hR]
 
 /-- Extract the merged `Option Data` value at key `k` when `mergeKeyedCellAt` succeeds with `some v`. -/
-@[expose] def mergedCellValueAt
+def mergedCellValueAt
     (base left right : List (String × Obend.Core.Data.Data)) (k : String) :
     Option Obend.Core.Data.Data :=
   match mergeKeyedCellAt base left right k with

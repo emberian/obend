@@ -27,6 +27,7 @@ the atoms it touches.
 -/
 public import Obend.Doc.Graph
 public import Obend.Tactic.Tooth
+import all Obend.Doc.Graph
 public section
 
 namespace Obend.Doc
@@ -444,8 +445,8 @@ end Teeth
 /-! ### Keyed Structured Cells (`Content.cell`) & Cell-Level Patching -/
 
 mutual
-/-- Kernel-exposed decidable equality on `Obend.Core.Data.Data` for 3-way cell diffs and merges. -/
-@[expose] def decDataExposed : (a b : Obend.Core.Data.Data) → Decidable (a = b)
+/-- Constructive decidable equality on `Obend.Core.Data.Data` for 3-way cell diffs and merges. -/
+def decDataExposed : (a b : Obend.Core.Data.Data) → Decidable (a = b)
   | .natural x, .natural y =>
     if h : x = y then isTrue (by rw [h]) else isFalse (by intro e; cases e; exact h rfl)
   | .natural _, .boolean _ => isFalse (by intro h; cases h)
@@ -483,7 +484,7 @@ mutual
       | isFalse h => isFalse (by intro e; cases e; exact h rfl)
     else isFalse (by intro e; cases e; exact hl rfl)
 
-@[expose] def decFieldsExposed :
+def decFieldsExposed :
     (fs gs : List (String × Obend.Core.Data.Data)) → Decidable (fs = gs)
   | [], [] => isTrue rfl
   | [], _ :: _ => isFalse (by intro h; cases h)
@@ -514,7 +515,7 @@ namespace Patch
 
 /-- A structured cell assignment that supersedes any live `.cell` atom with the same `cellId` in `G`:
 adds the new cell atom `i` after `after`, and tombstones previous live cells with key `cellId`. -/
-@[expose] def supersedeCell (G : Graph) (i after : AtomId) (cellId : String)
+def supersedeCell (G : Graph) (i after : AtomId) (cellId : String)
     (kind : ProjectionKind) (ast : Obend.Core.Data.Data)
     (pins : List (String × ByteArray)) (receipt : Option ByteArray) : Patch :=
   .add i (.cell cellId kind ast pins receipt) after ::
@@ -541,7 +542,7 @@ theorem supersedeCell_forward (G : Graph) (i after : AtomId) (cellId : String)
     · cases he
 
 /-- Deduplicate a list of string keys, keeping the first occurrence of each key in order. -/
-@[expose] def dedupStringKeys : List String → List String
+def dedupStringKeys : List String → List String
   | [] => []
   | k :: rest => k :: (dedupStringKeys rest).filter (· != k)
 
@@ -575,7 +576,7 @@ theorem lookup_eq_none_of_not_mem_map_fst {β : Type} {l : List (String × β)} 
 
 /-- Compute the keyed cell diff between `base` and `branch`: returns `(k, branch.lookup k)` for every
 key `k` in `base` or `branch` whose value changed (`branch.lookup k ≠ base.lookup k`). -/
-@[expose] def diffKeyedCells
+def diffKeyedCells
     (base branch : List (String × Obend.Core.Data.Data)) :
     List (String × Option Obend.Core.Data.Data) :=
   let keys := dedupStringKeys ((base.map Prod.fst) ++ (branch.map Prod.fst))

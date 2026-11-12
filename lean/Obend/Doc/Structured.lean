@@ -13,20 +13,18 @@ public import Obend.Doc.Patch
 public import Obend.Core.Data
 public import Obend.Run.Core4
 public import Obend.Spec.DataWire
-public import Lean.Data.Json
 
 public section
 
 namespace Obend.Doc
 
 open Obend.Core.Data (Data)
-open Lean (Json toJson fromJson? ToJson FromJson)
 
 set_option autoImplicit false
 
 /-! ## 1. Feature 34: ProjectionKind Enumeration, Decider & Wire Codecs -/
 
-/-- Exhaustive list of all 10 distinct projection kinds. -/
+/-- Exhaustive list of all 16 distinct projection kinds. -/
 @[expose] def ProjectionKind.all : List ProjectionKind :=
   [ .prose
   , .obendCode
@@ -37,36 +35,54 @@ set_option autoImplicit false
   , .hardwareSchematic
   , .hardwareTiming
   , .hardwareLayout
-  , .ledgerSeat ]
+  , .ledgerSeat
+  , .pdeConservation
+  , .feecSimplicialFem
+  , .pcbMultiphysicsDfm
+  , .vehicle6DofTrajectory
+  , .zkCustodyReceipt
+  , .frustumRedactedView ]
 
-theorem ProjectionKind.all_length : ProjectionKind.all.length = 10 := rfl
+theorem ProjectionKind.all_length : ProjectionKind.all.length = 16 := rfl
 
 /-- Canonical string discriminant representation for wire and .obnb serialization. -/
 @[expose] def ProjectionKind.toLabel : ProjectionKind → String
-  | .prose             => "prose"
-  | .obendCode         => "obendCode"
-  | .casSymbolic       => "casSymbolic"
-  | .leanBridge        => "leanBridge"
-  | .lawContract       => "lawContract"
-  | .deosAffordance    => "deosAffordance"
-  | .hardwareSchematic => "hardwareSchematic"
-  | .hardwareTiming    => "hardwareTiming"
-  | .hardwareLayout    => "hardwareLayout"
-  | .ledgerSeat        => "ledgerSeat"
+  | .prose                 => "prose"
+  | .obendCode             => "obendCode"
+  | .casSymbolic           => "casSymbolic"
+  | .leanBridge            => "leanBridge"
+  | .lawContract           => "lawContract"
+  | .deosAffordance        => "deosAffordance"
+  | .hardwareSchematic     => "hardwareSchematic"
+  | .hardwareTiming        => "hardwareTiming"
+  | .hardwareLayout        => "hardwareLayout"
+  | .ledgerSeat            => "ledgerSeat"
+  | .pdeConservation       => "pdeConservation"
+  | .feecSimplicialFem     => "feecSimplicialFem"
+  | .pcbMultiphysicsDfm    => "pcbMultiphysicsDfm"
+  | .vehicle6DofTrajectory => "vehicle6DofTrajectory"
+  | .zkCustodyReceipt      => "zkCustodyReceipt"
+  | .frustumRedactedView   => "frustumRedactedView"
 
 /-- Parse a string discriminant into a `ProjectionKind`. Rejects unknown or malformed strings. -/
 @[expose] def ProjectionKind.ofLabel : String → Option ProjectionKind
-  | "prose"             => some .prose
-  | "obendCode"         => some .obendCode
-  | "casSymbolic"       => some .casSymbolic
-  | "leanBridge"        => some .leanBridge
-  | "lawContract"       => some .lawContract
-  | "deosAffordance"    => some .deosAffordance
-  | "hardwareSchematic" => some .hardwareSchematic
-  | "hardwareTiming"    => some .hardwareTiming
-  | "hardwareLayout"    => some .hardwareLayout
-  | "ledgerSeat"        => some .ledgerSeat
-  | _                   => none
+  | "prose"                 => some .prose
+  | "obendCode"             => some .obendCode
+  | "casSymbolic"           => some .casSymbolic
+  | "leanBridge"            => some .leanBridge
+  | "lawContract"           => some .lawContract
+  | "deosAffordance"        => some .deosAffordance
+  | "hardwareSchematic"     => some .hardwareSchematic
+  | "hardwareTiming"        => some .hardwareTiming
+  | "hardwareLayout"        => some .hardwareLayout
+  | "ledgerSeat"            => some .ledgerSeat
+  | "pdeConservation"       => some .pdeConservation
+  | "feecSimplicialFem"     => some .feecSimplicialFem
+  | "pcbMultiphysicsDfm"    => some .pcbMultiphysicsDfm
+  | "vehicle6DofTrajectory" => some .vehicle6DofTrajectory
+  | "zkCustodyReceipt"      => some .zkCustodyReceipt
+  | "frustumRedactedView"   => some .frustumRedactedView
+  | _                       => none
 
 @[simp] theorem ProjectionKind.ofLabel_toLabel (k : ProjectionKind) :
     ProjectionKind.ofLabel k.toLabel = some k := by
@@ -77,26 +93,40 @@ theorem ProjectionKind.toLabel_injective {a b : ProjectionKind} (h : a.toLabel =
   rw [ProjectionKind.ofLabel_toLabel, ProjectionKind.ofLabel_toLabel] at h1
   injection h1
 
+/-- Complete membership witness: every `ProjectionKind` appears in `ProjectionKind.all`. -/
+theorem ProjectionKind.mem_all (k : ProjectionKind) : k ∈ ProjectionKind.all := by
+  cases k <;> decide
+
 /-- Structural decider for `ProjectionKind` equality. -/
-@[expose] def ProjectionKind.decideEq (a b : ProjectionKind) : Decidable (a = b) :=
+def ProjectionKind.decideEq (a b : ProjectionKind) : Decidable (a = b) :=
   inferInstance
 
-/-- Classification: whether a kind belongs to read-only hardware CAD/EDA projections. -/
+/-- Classification: whether a kind belongs to physical/hardware CAD/EDA/CAE projections. -/
 @[expose] def ProjectionKind.isHardware : ProjectionKind → Bool
-  | .hardwareSchematic | .hardwareTiming | .hardwareLayout => true
+  | .hardwareSchematic | .hardwareTiming | .hardwareLayout
+  | .pcbMultiphysicsDfm | .vehicle6DofTrajectory => true
   | _ => false
 
-/-- Classification: whether a kind represents executable computation. -/
+/-- Classification: whether a kind represents executable computation or PDE/FEM solvers. -/
 @[expose] def ProjectionKind.isExecutable : ProjectionKind → Bool
-  | .obendCode | .casSymbolic | .leanBridge => true
+  | .obendCode | .casSymbolic | .leanBridge
+  | .pdeConservation | .feecSimplicialFem => true
   | _ => false
 
-/-- Classification: whether a kind represents smart contract or capability vaults. -/
+/-- Classification: whether a kind represents smart contract, custody, or capability views. -/
 @[expose] def ProjectionKind.isContractual : ProjectionKind → Bool
-  | .lawContract | .deosAffordance | .ledgerSeat => true
+  | .lawContract | .deosAffordance | .ledgerSeat
+  | .zkCustodyReceipt | .frustumRedactedView => true
   | _ => false
 
-theorem ProjectionKind.hardware_count : (ProjectionKind.all.filter ProjectionKind.isHardware).length = 3 := rfl
+theorem ProjectionKind.hardware_count :
+    (ProjectionKind.all.filter ProjectionKind.isHardware).length = 5 := rfl
+
+theorem ProjectionKind.executable_count :
+    (ProjectionKind.all.filter ProjectionKind.isExecutable).length = 5 := rfl
+
+theorem ProjectionKind.contractual_count :
+    (ProjectionKind.all.filter ProjectionKind.isContractual).length = 5 := rfl
 
 /-- Serialize `ProjectionKind` to canonical `Core.Data`. -/
 @[expose] def ProjectionKind.toData (k : ProjectionKind) : Data :=
@@ -259,7 +289,7 @@ structure StructuredCell where
   ast : Data
   pins : List (String × ByteArray) := []
   receipt : Option ByteArray := none
-deriving @[expose] DecidableEq, Repr
+deriving DecidableEq, Repr
 
 /-- Embed a `StructuredCell` into `Doc.Content`. -/
 @[expose] def StructuredCell.toContent (c : StructuredCell) : Content :=
@@ -302,7 +332,7 @@ def receiptOfData : Data → Option (Option ByteArray)
   | _ => none
 
 /-- Serialize a `StructuredCell` into canonical `Obend.Core.Data`. -/
-@[expose] def cellToCoreData (c : StructuredCell) : Data :=
+def cellToCoreData (c : StructuredCell) : Data :=
   .record [
     ("id", .label c.id),
     ("kind", ProjectionKind.toData c.kind),
@@ -312,7 +342,7 @@ def receiptOfData : Data → Option (Option ByteArray)
   ]
 
 /-- Deserialize a `StructuredCell` from `Obend.Core.Data`. -/
-@[expose] def cellOfCoreData : Data → Option StructuredCell
+def cellOfCoreData : Data → Option StructuredCell
   | .record [
       (_, .label cid),
       (_, kd),
@@ -371,15 +401,15 @@ structure ObnbDocument where
   title : String
   cells : List StructuredCell
   edges : List (String × String) := []
-deriving @[expose] DecidableEq, Repr
+deriving DecidableEq, Repr
 
 /-- Convert an `ObnbDocument` into a `Doc.Graph` patch sequence. -/
-@[expose] def documentToPatch (doc : ObnbDocument) : Patch :=
+def documentToPatch (doc : ObnbDocument) : Patch :=
   doc.cells.zipIdx.map fun (c, i) =>
     Op.add (i + 1) (StructuredCell.toContent c) i
 
 /-- Look up a structured cell in a document graph by its cell ID. -/
-@[expose] def findCellById (G : Graph) (cellId : String) : Option StructuredCell :=
+def findCellById (G : Graph) (cellId : String) : Option StructuredCell :=
   G.atoms.findSome? fun (_, content) =>
     match content with
     | .cell id k ast pins receipt =>
@@ -404,10 +434,10 @@ inductive PinStatus where
   | valid
   | stale (pinName : String) (expected actual : String)
   | missing (pinName : String)
-deriving @[expose] DecidableEq, Repr
+deriving DecidableEq, Repr
 
 /-- Verify a single footprint pin against an active environment. -/
-@[expose] def verifyPin (pin : String × ByteArray) (env : String → Option ByteArray) : PinStatus :=
+def verifyPin (pin : String × ByteArray) (env : String → Option ByteArray) : PinStatus :=
   match env pin.1 with
   | none => .missing pin.1
   | some actual =>
@@ -415,7 +445,7 @@ deriving @[expose] DecidableEq, Repr
     else .stale pin.1 (byteArrayToHex pin.2) (byteArrayToHex actual)
 
 /-- Verify all footprint pins of a cell. -/
-@[expose] def verifyCellPins (c : StructuredCell) (env : String → Option ByteArray) : List PinStatus :=
+def verifyCellPins (c : StructuredCell) (env : String → Option ByteArray) : List PinStatus :=
   c.pins.map (verifyPin · env)
 
 /-- Whether all footprint pins of a cell are verified and active. -/

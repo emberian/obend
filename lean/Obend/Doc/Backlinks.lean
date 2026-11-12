@@ -19,6 +19,11 @@ every page, each entry naming the citing page, the atom and the cite.
 -/
 public import Obend.Doc.Render
 public import Obend.Tactic.Tooth
+import all Obend.Doc.Graph
+import all Obend.Doc.Patch
+import all Obend.Doc.Merge
+import all Obend.Doc.Section
+import all Obend.Doc.Render
 public section
 
 namespace Obend.Doc
