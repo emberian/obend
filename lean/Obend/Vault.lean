@@ -85,6 +85,7 @@ public import Obend.Vault.ChunkedWorld
 public import Obend.Vault.HardwareProjection
 public import Obend.Vault.PhysicalProjection
 public import Obend.Vault.UnifiedDeos
+public import Obend.Vault.SwarmLedgerSeams
 public import Obend.Vault.Branch
 public import Obend.Vault.BranchCli
 public import Obend.Vault.Merge

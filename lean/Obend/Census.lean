@@ -406,6 +406,7 @@ import Obend.Judge.LayeredCost
 import Obend.Judge.Lrat
 import Obend.Judge.Netting
 import Obend.Judge.RealAnalysis
+import Obend.Judge.SvenvsCorrigibility
 import Obend.Judge.TranscriptPolicy
 import Obend.Kind
 import Obend.Kind.Proofs
@@ -479,6 +480,7 @@ import Obend.Lower.Transport
 import Obend.Lower.Typing
 import Obend.Main
 import Obend.Reasons
+import Obend.Reasons.UnifiedEquilibrium
 import Obend.Receipt
 import Obend.Receipt.Cli
 import Obend.Receipt.Export
@@ -515,6 +517,7 @@ import Obend.Run.Shared
 import Obend.Run.SharedExample
 import Obend.Run.Spec
 import Obend.Run.Ticks
+import Obend.Run.VaultDurableBridge
 import Obend.Slot
 import Obend.Slot.Budget
 import Obend.Slot.Core4
@@ -563,9 +566,12 @@ import Obend.Tactic.MonadicReduction
 import Obend.Tactic.SiliconElab
 import Obend.Tactic.Tooth
 import Obend.Tactic.Weave
+import Obend.Trailblaze.CathedralApex
+import Obend.Trailblaze.ClusterGov
 import Obend.Trailblaze.LeanFpga
 import Obend.Trailblaze.Obligations
 import Obend.Trailblaze.Polis
+import Obend.Trailblaze.ZkStripe
 import Obend.Teeth.Analysis.Fixtures
 import Obend.Teeth.Core.AggregateTeeth
 import Obend.Teeth.Core.BackFail
@@ -644,6 +650,7 @@ import Obend.Vault.Replay
 import Obend.Vault.Retention
 import Obend.Vault.SegmentLog
 import Obend.Vault.Store
+import Obend.Vault.SwarmLedgerSeams
 import Obend.Vault.Transport
 import Obend.Vault.UnifiedDeos
 

@@ -169,6 +169,20 @@ module = "Obend.Vault.Transport"
 theorem = "valuesHold_of_cellMoves"
 description = "Offline vault branch transport and handoff preserve cell invariants without duplicate or dropped effects."
 
+[[apex]]
+id = "vault-swarm-ledger-seams"
+subsystem = "Vault"
+module = "Obend.Vault.SwarmLedgerSeams"
+theorem = "synthesizePassingDelta_complete"
+description = "Swarm ledger seam synthesis and LawDial repair find passing deltas whenever admissible under monotonic Reasons constraints."
+
+[[apex]]
+id = "vault-durable-bridge-custody"
+subsystem = "Vault"
+module = "Obend.Run.VaultDurableBridge"
+theorem = "transfer_conserves_custody_exact"
+description = "Segmented OBL1 log durable simulation and linear capability-carrying `.perform` plans strictly conserve custody and refuse forgery."
+
 # ==============================================================================
 # 4. `Judge` — Genealogy Non-Regression, LRAT, Clearing, Netting, Confinement & Receipts
 # ==============================================================================
@@ -179,6 +193,20 @@ subsystem = "Judge"
 module = "Obend.Judge.Genealogy"
 theorem = "lob_cost_necessary"
 description = "Self-verifying Judge succession enforces `home` revert corrigibility, floor non-regression, and explicit `LobCost` accounting."
+
+[[apex]]
+id = "judge-svenvs-pca-corrigibility"
+subsystem = "Judge"
+module = "Obend.Judge.SvenvsCorrigibility"
+theorem = "pca_enveloped_safe"
+description = "3-tier `svenvs` constitutional stack, `MaxPol` safe weakening, demonic B-step latency-bounded corrigibility, and proof-carrying actions."
+
+[[apex]]
+id = "reasons-unified-gl-equilibrium"
+subsystem = "Judge"
+module = "Obend.Reasons.UnifiedEquilibrium"
+theorem = "stratified_unique_glStable"
+description = "Unified Van Gelder alternating-fixpoint and Gelfond-Lifschitz equilibrium semantics agree uniquely on stratified justification programs."
 
 [[apex]]
 id = "judge-lrat-unsat-sound"
@@ -463,6 +491,13 @@ subsystem = "Trailblaze"
 module = "Obend.Trailblaze.LeanFpga"
 theorem = "apex_lean_fpga_rung2_to_rung5"
 description = "End-to-end Lean-to-FPGA Rung 2..5 spine composes multi-valued cube evaluation, linear port wiring, FABulous bitstream roundtrip, and DPR isolation."
+
+[[apex]]
+id = "trailblaze-cathedral-zkstripe-clustergov"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.CathedralApex"
+theorem = "apex_cathedral_zkstripe_to_clustergov_sound"
+description = "End-to-end Cathedral composition from `ZkStripe` VPA call-tree audit through `Reasons` and `HyperLaw2NonInterference` to Ozaki schedule-invariant AI cluster steps."
 
 # ==============================================================================
 # Planned Wave 4+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)

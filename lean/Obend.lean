@@ -27,13 +27,16 @@ public import Obend.Slot.Budget
 public import Obend.Intention
 public import Obend.Kind
 public import Obend.Judge
+public import Obend.Judge.SvenvsCorrigibility
 public import Obend.Receipt
 public import Obend.Reasons
+public import Obend.Reasons.UnifiedEquilibrium
 public import Obend.Law
 public import Obend.Doc
 public import Obend.Elab
 public import Obend.Spec
 public import Obend.Run
+public import Obend.Run.VaultDurableBridge
 public import Obend.Ledger
 public import Obend.Fold
 public import Obend.FFI
@@ -73,3 +76,6 @@ public import Obend.Crypto
 public import Obend.Trailblaze.Obligations
 public import Obend.Trailblaze.Polis
 public import Obend.Trailblaze.LeanFpga
+public import Obend.Trailblaze.ZkStripe
+public import Obend.Trailblaze.ClusterGov
+public import Obend.Trailblaze.CathedralApex
