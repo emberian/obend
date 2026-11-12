@@ -91,6 +91,9 @@ pub mod stub {
 
     pub const RECEIPT_MAGIC: &[u8; 16] = b"OBEND_RCPT_V1\0\0\0";
 
+    pub const STUB_REFUSAL: &[u8] =
+        b"stub FFI: no Lean kernel is linked (built with OBEND_ALLOW_STUB_FFI); nothing is verified here";
+
     pub struct StubSession {
         pub id: usize,
         pub scratch_buf: Mutex<Vec<u8>>,
@@ -164,12 +167,9 @@ pub mod stub {
             return -3;
         }
         let stub = &*(session as *mut StubSession);
-        let mut buf = stub.scratch_buf.lock().unwrap();
-        let slice = std::slice::from_raw_parts(cell_ptr, cell_len);
-        *buf = slice.to_vec();
-        *out_ptr = buf.as_mut_ptr();
-        *out_len = buf.len();
-        0
+        let mut err = stub.err_buf.lock().unwrap();
+        *err = STUB_REFUSAL.to_vec();
+        -10
     }
 
     pub unsafe fn obend_turn_propose(
@@ -248,20 +248,11 @@ pub mod stub {
             return -7;
         }
         let stub = &*(session as *mut StubSession);
-        let mut buf = stub.scratch_buf.lock().unwrap();
-        let slice = std::slice::from_raw_parts(hw_ptr, hw_len);
-        *buf = slice.to_vec();
-        *out_ptr = buf.as_mut_ptr();
-        *out_len = buf.len();
-        0
+        let mut err = stub.err_buf.lock().unwrap();
+        *err = STUB_REFUSAL.to_vec();
+        -10
     }
 
-    pub const STUB_REFUSAL: &[u8] =
-        b"stub FFI: no Lean kernel is linked (built with OBEND_ALLOW_STUB_FFI); nothing is verified here";
-
-    /// The stub verifies nothing. It refuses every receipt with `-10` (`ObendError::StubBackend`)
-    /// and says so in the error detail, so a build without the Lean library cannot pass a
-    /// receipt through a substitute. `propose`/`commit` still run, because they claim nothing.
     pub unsafe fn obend_verify_receipt(
         session: *mut Session,
         receipt_ptr: *const u8,
@@ -287,12 +278,14 @@ pub mod stub {
         if session.is_null() || out_ptr.is_null() || out_len.is_null() {
             return -1;
         }
-        // Read once: the message set by the last refusal is returned and cleared, so a later
-        // error does not carry a stale detail.
         let stub = &*(session as *mut StubSession);
         let mut buf = stub.err_buf.lock().unwrap();
         let mut scratch = stub.scratch_buf.lock().unwrap();
-        *scratch = if buf.is_empty() { b"No error".to_vec() } else { std::mem::take(&mut *buf) };
+        *scratch = if buf.is_empty() {
+            b"No error".to_vec()
+        } else {
+            std::mem::take(&mut *buf)
+        };
         *out_ptr = scratch.as_mut_ptr();
         *out_len = scratch.len();
         0
@@ -315,11 +308,9 @@ pub mod stub {
             return -3;
         }
         let stub = &*(session as *mut StubSession);
-        let mut buf = stub.scratch_buf.lock().unwrap();
-        *buf = b"{\"cellCount\":1,\"turn\":0,\"lawDial\":\"locked\",\"repairSuggestion\":\"suggestMultiField_admits: Bellman-Ford shortest repair delta=0\"}".to_vec();
-        *out_ptr = buf.as_mut_ptr();
-        *out_len = buf.len();
-        0
+        let mut err = stub.err_buf.lock().unwrap();
+        *err = STUB_REFUSAL.to_vec();
+        -10
     }
 
     pub unsafe fn obend_cell_pop_lean(
@@ -339,35 +330,11 @@ pub mod stub {
             return -3;
         }
         let stub = &*(session as *mut StubSession);
-        let slice = std::slice::from_raw_parts(cell_ptr, cell_len);
-        let snippet = if let Ok(s) = std::str::from_utf8(slice) {
-            let parts: Vec<&str> = s.trim().split(':').collect();
-            if parts.len() == 4 {
-                let id_clean: String = parts[0]
-                    .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                    .collect();
-                let val = parts[1].split('.').next().unwrap_or("28").trim();
-                let lo = parts[2].split('.').next().unwrap_or("15").trim();
-                let hi = parts[3].split('.').next().unwrap_or("35").trim();
-                format!(
-                    "import Obend.Tactic.Weave\nopen Obend.Tactic.Weave\n\n/-- Auto-popped from .obnb {id_clean} -/\ntheorem cell_{id_clean}_contract : ({lo} ≤ ({val} : Int) ∧ ({val} : Int) ≤ {hi}) := by\n  obend_unfold\n  obend_law\n"
-                )
-            } else {
-                "import Obend.Tactic.Weave\nopen Obend.Tactic.Weave\n\n/-- Auto-popped from .obnb cell_1 -/\ntheorem cell_1_contract : (0 ≤ (1 : Int) ∧ (1 : Int) ≤ 32) := by\n  obend_unfold\n  obend_law\n".to_string()
-            }
-        } else {
-            "import Obend.Tactic.Weave\nopen Obend.Tactic.Weave\n\n/-- Auto-popped from .obnb cell_1 -/\ntheorem cell_1_contract : (0 ≤ (1 : Int) ∧ (1 : Int) ≤ 32) := by\n  obend_unfold\n  obend_law\n".to_string()
-        };
-        let mut buf = stub.scratch_buf.lock().unwrap();
-        *buf = snippet.into_bytes();
-        *out_ptr = buf.as_mut_ptr();
-        *out_len = buf.len();
-        0
+        let mut err = stub.err_buf.lock().unwrap();
+        *err = STUB_REFUSAL.to_vec();
+        -10
     }
 
-    /// The stub has no judge registry, so no witness can be checked: every weave is refused.
-    /// (`Obend.FFI.Bridge.cellWeaveCertCore` accepts only a witness its registered format accepts.)
     pub unsafe fn obend_cell_weave_cert(
         session: *mut Session,
         cert_ptr: *const u8,
@@ -389,4 +356,3 @@ pub mod stub {
 }
 #[cfg(feature = "stub")]
 pub use stub::*;
-

@@ -1,7 +1,6 @@
 //! Receipts are bound to the session that committed them, and nothing is admitted by being
-//! proposed, hashed, or merely 32 bytes long. These are the Rust-side teeth for the two
-//! self-admission paths closed in `lean/Obend/FFI/Bridge.lean` on 2026-11-04
-//! (`turnProposeCore_committedRoots_unchanged`, `verifyReceiptCore_sound`).
+//! proposed, hashed, or merely 32 bytes long (`turnProposeCore_committedRoots_unchanged`,
+//! `verifyReceiptCore_sound`).
 
 use obend_ffi::session::{encode_receipt, ObendSession};
 

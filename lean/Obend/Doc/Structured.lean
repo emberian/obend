@@ -142,10 +142,115 @@ def hexToBytes : List Char → Option (List UInt8)
     return (x * 16 + y).toUInt8 :: r
   | [_] => none
 
+def stripHexPrefix : List Char → List Char
+  | '0' :: 'x' :: rest => rest
+  | '0' :: 'X' :: rest => rest
+  | cs => cs
+
 def hexToByteArray (s : String) : Option ByteArray := do
-  let chars := if s.startsWith "0x" || s.startsWith "0X" then s.toList.drop 2 else s.toList
-  let bytes ← hexToBytes chars
+  let bytes ← hexToBytes (stripHexPrefix s.toList)
   return ByteArray.mk bytes.toArray
+
+private theorem unhexDigit_hexDigit_fin : ∀ n : Fin 16, unhexDigit (hexDigit n.val) = some n.val := by
+  decide
+
+private theorem hexDigit_ne_x_fin : ∀ n : Fin 16, hexDigit n.val ≠ 'x' ∧ hexDigit n.val ≠ 'X' := by
+  decide
+
+theorem unhexDigit_hexDigit {n : Nat} (hn : n < 16) : unhexDigit (hexDigit n) = some n :=
+  unhexDigit_hexDigit_fin ⟨n, hn⟩
+
+theorem hexDigit_ne_x {n : Nat} (hn : n < 16) : hexDigit n ≠ 'x' ∧ hexDigit n ≠ 'X' :=
+  hexDigit_ne_x_fin ⟨n, hn⟩
+
+def bytesToHexChars : List UInt8 → List Char
+  | [] => []
+  | b :: bs => hexDigit (b.toNat / 16) :: hexDigit (b.toNat % 16) :: bytesToHexChars bs
+
+private theorem byteToHex_toList (b : UInt8) :
+    (byteToHex b).toList = [hexDigit (b.toNat / 16), hexDigit (b.toNat % 16)] := by
+  simp [byteToHex]
+
+private theorem foldl_byteToHex_toList :
+    ∀ (bs : List UInt8) (acc : String),
+      ((bs.map byteToHex).foldl (· ++ ·) acc).toList = acc.toList ++ bytesToHexChars bs
+  | [], acc => by simp [bytesToHexChars]
+  | b :: bs, acc => by
+    simp only [List.map_cons, List.foldl_cons, bytesToHexChars]
+    rw [foldl_byteToHex_toList bs (acc ++ byteToHex b), String.toList_append, byteToHex_toList]
+    simp [List.append_assoc]
+
+private theorem stripHexPrefix_cons2 (c1 c2 : Char) (rest : List Char)
+    (hx : c2 ≠ 'x') (hX : c2 ≠ 'X') :
+    stripHexPrefix (c1 :: c2 :: rest) = c1 :: c2 :: rest := by
+  cases h1 : (c1 == '0')
+  · unfold stripHexPrefix
+    split
+    · rename_i rest' heq
+      injection heq with hc1 _
+      rw [hc1] at h1
+      cases h1
+    · rename_i rest' heq
+      injection heq with hc1 _
+      rw [hc1] at h1
+      cases h1
+    · rfl
+  · unfold stripHexPrefix
+    split
+    · rename_i rest' heq
+      injection heq with _ htail
+      injection htail with hc2 _
+      exact absurd hc2 hx
+    · rename_i rest' heq
+      injection heq with _ htail
+      injection htail with hc2 _
+      exact absurd hc2 hX
+    · rfl
+
+private theorem stripHexPrefix_bytesToHexChars :
+    ∀ bs : List UInt8, stripHexPrefix (bytesToHexChars bs) = bytesToHexChars bs
+  | [] => rfl
+  | b :: bs => by
+    have hlo : b.toNat % 16 < 16 := Nat.mod_lt _ (by decide)
+    obtain ⟨hnx, hnX⟩ := hexDigit_ne_x hlo
+    exact stripHexPrefix_cons2 _ _ _ hnx hnX
+
+private theorem uint8_div_mod_reconstruct (b : UInt8) :
+    ((b.toNat / 16) * 16 + b.toNat % 16).toUInt8 = b := by
+  have hsum : (b.toNat / 16) * 16 + b.toNat % 16 = b.toNat := by omega
+  rw [hsum]
+  cases b with
+  | ofBitVec v =>
+    cases v with
+    | ofFin f =>
+      cases f with
+      | mk n hn =>
+        simp [UInt8.toNat, Nat.toUInt8, UInt8.ofNat, BitVec.ofNat, Fin.ofNat, Nat.mod_eq_of_lt hn]
+
+private theorem hexToBytes_bytesToHexChars :
+    ∀ bs : List UInt8, hexToBytes (bytesToHexChars bs) = some bs
+  | [] => rfl
+  | b :: bs => by
+    have hb : b.toNat < 256 := b.toNat_lt
+    have hhi : b.toNat / 16 < 16 := by omega
+    have hlo : b.toNat % 16 < 16 := by omega
+    simp only [bytesToHexChars, hexToBytes, bind, Option.bind]
+    rw [unhexDigit_hexDigit hhi, unhexDigit_hexDigit hlo, hexToBytes_bytesToHexChars bs]
+    dsimp only [pure]
+    rw [uint8_div_mod_reconstruct b]
+
+/-- Round-trip soundness of `byteArrayToHex` and `hexToByteArray`. -/
+@[simp] theorem hexToByteArray_byteArrayToHex (b : ByteArray) :
+    hexToByteArray (byteArrayToHex b) = some b := by
+  cases b with
+  | mk arr =>
+    cases arr with
+    | mk bs =>
+      unfold hexToByteArray byteArrayToHex
+      simp only [bind, Option.bind, pure]
+      rw [foldl_byteToHex_toList bs ""]
+      simp only [String.toList_empty, List.nil_append]
+      rw [stripHexPrefix_bytesToHexChars bs, hexToBytes_bytesToHexChars bs]
 
 /-- Structured non-markdown cell record inside a notebook. -/
 structure StructuredCell where
@@ -221,25 +326,41 @@ def receiptOfData : Data → Option (Option ByteArray)
     return { id := cid, kind := k, ast := ast, pins := ps, receipt := r }
   | _ => none
 
-/-- Metatheorem: Projection preservation under Core.Data serialization. -/
+@[simp] theorem pinOfData_pinToData (p : String × ByteArray) :
+    pinOfData (pinToData p) = some p := by
+  rcases p with ⟨name, bytes⟩
+  simp [pinToData, pinOfData, bind, Option.bind, pure]
+
+private theorem mapM_pinOfData_zipIdx :
+    ∀ (ps : List (String × ByteArray)) (idx : Nat),
+      ((ps.zipIdx idx).map fun (p, i) => (toString i, pinToData p)).mapM (fun f => pinOfData f.2) =
+        some ps
+  | [], _ => rfl
+  | p :: ps, idx => by
+    simp only [List.zipIdx_cons, List.map_cons, List.mapM_cons, pinOfData_pinToData,
+      mapM_pinOfData_zipIdx ps (idx + 1), bind, Option.bind, pure]
+
+@[simp] theorem pinsOfData_pinsToData (ps : List (String × ByteArray)) :
+    pinsOfData (pinsToData ps) = some ps := by
+  unfold pinsToData pinsOfData
+  rw [List.mapIdx_eq_zipIdx_map]
+  exact mapM_pinOfData_zipIdx ps 0
+
+@[simp] theorem receiptOfData_receiptToData (r : Option ByteArray) :
+    receiptOfData (receiptToData r) = some r := by
+  cases r <;> simp [receiptToData, receiptOfData]
+
+/-- Full `Core.Data` round-trip soundness for `StructuredCell`. -/
+@[simp] theorem cellOfCoreData_cellToCoreData (c : StructuredCell) :
+    cellOfCoreData (cellToCoreData c) = some c := by
+  cases c
+  simp [cellToCoreData, cellOfCoreData, bind, Option.bind, pure]
+
+/-- Metatheorem: Unconditional projection preservation under `Core.Data` serialization. -/
 theorem projection_preservation (c : StructuredCell) :
-    ∀ c' ∈ cellOfCoreData (cellToCoreData c), c'.kind = c.kind := by
-  intro c' hc'
-  unfold cellToCoreData cellOfCoreData at hc'
-  dsimp only at hc'
-  rw [ProjectionKind.ofData_toData] at hc'
-  cases hp : pinsOfData (pinsToData c.pins) with
-  | none =>
-    simp [hp] at hc'
-  | some ps =>
-    simp only [hp] at hc'
-    cases hr : receiptOfData (receiptToData c.receipt) with
-    | none =>
-      simp [hr] at hc'
-    | some rc =>
-      simp only [hr] at hc'
-      cases hc'
-      rfl
+    (cellOfCoreData (cellToCoreData c)).map StructuredCell.kind = some c.kind := by
+  rw [cellOfCoreData_cellToCoreData]
+  rfl
 
 
 /-! ## 4. .obnb Document Graph Representation & CRDT Merge -/
@@ -266,10 +387,9 @@ deriving @[expose] DecidableEq, Repr
       else none
     | _ => none
 
-/-- Metatheorem: Adding a cell at a distinct atom ID preserves an existing cell's label. -/
+/-- Metatheorem: Appending a cell atom preserves an existing atom's label. -/
 theorem cell_preserved_under_add (G : Graph) (a i : AtomId) (c : StructuredCell) (content' : Content) (prev : AtomId)
-    (h_label : G.label a = some (StructuredCell.toContent c))
-    (_h_ne : a ≠ i) :
+    (h_label : G.label a = some (StructuredCell.toContent c)) :
     (G.step (Op.add i content' prev)).label a = some (StructuredCell.toContent c) := by
   unfold Graph.step Graph.label at *
   dsimp only

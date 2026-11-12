@@ -1,6 +1,6 @@
-//! 8-Flagship-App Qualification Explorer, `.obend` Layer Stack, `.smt2` `QF_BV` LEC Specs,
-//! Fast Streaming `.vcd` Waveform Digest & SVG Logic Analyzer, and `fidget-cam` `.stl`/`.ngc`
-//! Artifact Inspector (`QUALIFICATION-AND-SILICON-LEAN.md` §4 Flagship Apps #1–#8).
+//! Streaming `.vcd` waveform parser & SVG renderer, binary/ASCII `.stl` mesh inspector,
+//! 5-axis `.ngc` G-code toolpath analyzer, `.smt2` / `.sv` / `.obend` structural parsers,
+//! and dynamic workspace `apps/` directory discovery.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,85 +9,10 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-/// Static specification entry for one of the 8 Flagship Userspace Applications (`QUALIFICATION-AND-SILICON-LEAN.md` §4).
-#[derive(Debug, Clone, Copy)]
-pub struct FlagshipAppDescriptor {
-    pub index: usize,
-    pub slug: &'static str,
-    pub title: &'static str,
-    pub lean_module: &'static str,
-    pub qualification_summary: &'static str,
-}
-
-/// Canonical registry of all 8 Flagship Applications in `QUALIFICATION-AND-SILICON-LEAN.md` §4 order.
-pub const FLAGSHIP_APPS: [FlagshipAppDescriptor; 8] = [
-    FlagshipAppDescriptor {
-        index: 1,
-        slug: "obend-risc",
-        title: "3-Layer Open-Recursive Sequential RISC Softcore CPU",
-        lean_module: "lean/Obend/Apps/ObendRisc.lean",
-        qualification_summary: "BaseRiscCore >> PrivilegeCsrOverride >> CustomSimdZkExt; in-core RV64I/custom 0x2B bit-slice decode, always_ff pc/mstatus/mepc/mcause/x1..x15, SMT2 LEC & Fibonacci/trap firmware.",
-    },
-    FlagshipAppDescriptor {
-        index: 2,
-        slug: "foc-hil",
-        title: "Closed-Loop 20 kHz FOC Motor Drive + 6-Level SiC FCML Inverter HIL",
-        lean_module: "lean/Obend/Apps/FocHil.lean",
-        qualification_summary: "ClarkePark -> PiCurrentLoop -> SicFcmlInverterLeg -> FocDriveTop; AutoCert sos-lyapunov-cbf@1 / taylor-model@1 / interval@1, RK4 PMSM HIL & mid-run ICAP DPR hot-swap.",
-    },
-    FlagshipAppDescriptor {
-        index: 3,
-        slug: "sdr-ft8",
-        title: "All-Digital 40m Tayloe IQ SDR & 4-Stage CORDIC FT8 Demodulator",
-        lean_module: "lean/Obend/Apps/SdrFt8.lean",
-        qualification_summary: "Signed Q16.16/Q32.32 stateful always_ff receiver chain (TayloeQuadratureMixer -> CicDecimatorFir -> CordicFt8Demod -> SdrFt8Top), >=60 dB IRR & 79/79 FT8 symbol recovery.",
-    },
-    FlagshipAppDescriptor {
-        index: 4,
-        slug: "zk-ntt",
-        title: "Goldilocks 256-Point NTT & 8-Round Sumcheck Co-Processor (RTL + AMD VOP64)",
-        lean_module: "lean/Obend/Apps/ZkNtt.lean",
-        qualification_summary: "Goldilocks (p = 2^64 - 2^32 + 1) shift/mask reduction, Cooley-Tukey radix-2 butterfly, stateful always_ff Sumcheck accumulators, EqSat >=30% mul reduction, Verilator + AMD VOP64.",
-    },
-    FlagshipAppDescriptor {
-        index: 5,
-        slug: "silicon-kernel-verilator",
-        title: "Verilated 4-Zone Silicon Elaborator & Live ICAP DPR Hot-Swap Showcase",
-        lean_module: "lean/Obend/Apps/SiliconKernelVerilator.lean",
-        qualification_summary: "Streams OBCAMv1 declaration bundles over AXI4-Stream into 5-module silicon_elab_top.sv, executes 3-phase glitch-free Zone 3 ICAP DPR swap & 1-cycle moved_pin_blocks fallback.",
-    },
-    FlagshipAppDescriptor {
-        index: 6,
-        slug: "fidget-cam",
-        title: "Parametric OpenUSD/F-Rep CAD -> Pruned SSA Tape -> Verilated Voxelizer, .stl & 5-Axis .ngc",
-        lean_module: "lean/Obend/Apps/FidgetCam.lean",
-        qualification_summary: "LIVERPS impeller OpenUSD/F-Rep assembly lowered to interval-pruned SSA tape, evaluated on Verilated octree voxelizer, emitting verified binary .stl mesh & gouge-free 5-axis G-code.",
-    },
-    FlagshipAppDescriptor {
-        index: 7,
-        slug: "sovereign-drex",
-        title: "Live DReX + K-CARRY Hot-Upgradable Sovereign Exchange on 4-Validator Cluster",
-        lean_module: "lean/Obend/Apps/SovereignDrex.lean",
-        qualification_summary: "Multi-file Seat / OrderBook / BatchClearing / SovereignDrexTop on a 4-validator obend-node Simplex BFT cluster with mid-flight world-carry@1 hot-upgrade & WAL recovery.",
-    },
-    FlagshipAppDescriptor {
-        index: 8,
-        slug: "quantum-photonic-matter",
-        title: "Planar Clements Photonic CTQW, Majorana Tetron Lindblad & 1-WL Quotient Accelerator",
-        lean_module: "lean/Obend/Apps/QuantumPhotonicMatter.lean",
-        qualification_summary: "1-WL color-refined quotient hypergraph reverse-AD, Faddeev-LeVerrier thermo-optic crosstalk cancellation, Ivanov Majorana braiding & Lindblad parity cooling.",
-    },
-];
-
-/// Summary item returned in `GET /api/apps`.
+/// Summary of an application directory discovered under `<workspace>/apps/<slug>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FlagshipAppSummary {
-    pub index: usize,
+pub struct AppArtifactSummary {
     pub slug: String,
-    pub title: String,
-    pub lean_module: String,
-    pub lean_module_exists: bool,
-    pub qualification_summary: String,
     pub obend_layer_count: usize,
     pub obend_files: Vec<String>,
     pub sv_files: Vec<String>,
@@ -100,14 +25,14 @@ pub struct FlagshipAppSummary {
     pub cam_artifacts_present: bool,
 }
 
-/// JSON response for `GET /api/apps`.
+/// Summary report across all subdirectories in `<workspace>/apps/`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FlagshipAppsListResponse {
+pub struct WorkspaceAppsReport {
     pub apps_root: String,
     pub total_apps: usize,
     pub vcd_present_count: usize,
     pub lec_present_count: usize,
-    pub apps: Vec<FlagshipAppSummary>,
+    pub apps: Vec<AppArtifactSummary>,
 }
 
 /// Discovered `.obend` source layer inside `apps/<slug>/`.
@@ -150,7 +75,7 @@ pub struct AppRtlModuleSummary {
     pub always_ff_count: usize,
 }
 
-/// Per-signal transition & timeline summary extracted from a Verilator `.vcd` waveform file.
+/// Per-signal transition & timeline summary extracted from a `.vcd` waveform file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VcdSignalSummary {
     pub name: String,
@@ -162,7 +87,7 @@ pub struct VcdSignalSummary {
     pub samples: Vec<(u64, String)>,
 }
 
-/// `.vcd` waveform digest for a flagship app (gracefully reporting `build_status = "not_built"` if absent).
+/// `.vcd` waveform digest (`build_status = "not_built"` when no VCD file is present).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppVcdDigest {
     pub present: bool,
@@ -180,7 +105,7 @@ pub struct AppVcdDigest {
     pub waveform_svg: Option<String>,
 }
 
-/// Binary/ASCII `.stl` 3D triangle mesh statistics (`fidget-cam`).
+/// Binary/ASCII `.stl` 3D triangle mesh statistics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StlArtifactStats {
     pub rel_path: String,
@@ -193,7 +118,7 @@ pub struct StlArtifactStats {
     pub bbox_max: [f32; 3],
 }
 
-/// 5-axis `.ngc` G-code toolpath statistics (`fidget-cam`).
+/// 5-axis `.ngc` G-code toolpath statistics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NgcArtifactStats {
     pub rel_path: String,
@@ -208,30 +133,25 @@ pub struct NgcArtifactStats {
     pub preview_lines: Vec<String>,
 }
 
-/// Combined CAD/CAM buildout artifact report for `fidget-cam` (`.stl` + `.ngc`).
+/// Combined CAD/CAM buildout artifact report (`.stl` + `.ngc`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FidgetCamArtifacts {
+pub struct CamArtifactBundle {
     pub build_status: String,
     pub stl: Option<StlArtifactStats>,
     pub ngc: Option<NgcArtifactStats>,
 }
 
-/// Detailed JSON response for `GET /api/apps/<slug>`.
+/// Detailed artifact inspection report for `<workspace>/apps/<slug>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FlagshipAppDetailResponse {
-    pub index: usize,
+pub struct AppArtifactDetail {
     pub slug: String,
-    pub title: String,
-    pub lean_module: String,
-    pub lean_module_exists: bool,
-    pub qualification_summary: String,
     pub top_obend_file: Option<String>,
     pub obend_layers: Vec<AppObendLayerSource>,
     pub lec_specs: Vec<AppSmt2LecSpec>,
     pub rtl_modules: Vec<AppRtlModuleSummary>,
     pub firmware_files: Vec<String>,
     pub vcd_digest: AppVcdDigest,
-    pub cam_artifacts: Option<FidgetCamArtifacts>,
+    pub cam_artifacts: Option<CamArtifactBundle>,
 }
 
 /// Locate the Objective Bend repository workspace root.
@@ -251,36 +171,47 @@ pub fn find_workspace_root() -> PathBuf {
     PathBuf::from(".")
 }
 
-/// Validate a URL `<slug>` parameter against path traversal or empty values.
-pub fn validate_app_slug(raw_slug: &str) -> Result<&'static FlagshipAppDescriptor, (u16, String)> {
+/// Validate a `<slug>` directory name against path traversal or empty values.
+pub fn validate_app_slug(raw_slug: &str) -> Result<&str, String> {
     let trimmed = raw_slug.trim().trim_matches('/');
     if trimmed.is_empty()
         || trimmed.contains("..")
         || trimmed.contains('/')
         || trimmed.contains('\\')
     {
-        return Err((400, format!("Invalid flagship app slug: `{raw_slug}`")));
+        return Err(format!("Invalid app slug: `{raw_slug}`"));
     }
-    FLAGSHIP_APPS
-        .iter()
-        .find(|d| d.slug == trimmed)
-        .ok_or_else(|| (404, format!("Unknown flagship app slug: `{trimmed}`")))
+    Ok(trimmed)
 }
 
-/// Discover all 8 Flagship Applications in the active workspace (`GET /api/apps`).
-pub fn list_flagship_apps() -> FlagshipAppsListResponse {
-    list_flagship_apps_in_root(&find_workspace_root())
+/// Discover all application directories in the active workspace (`<workspace>/apps/*`).
+pub fn discover_apps() -> WorkspaceAppsReport {
+    discover_apps_in_root(&find_workspace_root())
 }
 
-/// Discover all 8 Flagship Applications relative to an explicit `workspace_root`.
-pub fn list_flagship_apps_in_root(workspace_root: &Path) -> FlagshipAppsListResponse {
+/// Discover all application directories relative to `workspace_root`.
+pub fn discover_apps_in_root(workspace_root: &Path) -> WorkspaceAppsReport {
     let apps_dir = workspace_root.join("apps");
-    let mut apps = Vec::with_capacity(FLAGSHIP_APPS.len());
+    let mut slugs = Vec::new();
+    if let Ok(entries) = fs::read_dir(&apps_dir) {
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_dir() {
+                let name = ent.file_name().to_string_lossy().into_owned();
+                if !name.starts_with('.') {
+                    slugs.push(name);
+                }
+            }
+        }
+    }
+    slugs.sort();
+
+    let mut apps = Vec::with_capacity(slugs.len());
     let mut vcd_present_count = 0usize;
     let mut lec_present_count = 0usize;
 
-    for desc in &FLAGSHIP_APPS {
-        let detail = build_app_detail(workspace_root, desc, false);
+    for slug in &slugs {
+        let detail = build_app_detail(workspace_root, slug, false);
         if detail.vcd_digest.present {
             vcd_present_count += 1;
         }
@@ -292,13 +223,8 @@ pub fn list_flagship_apps_in_root(workspace_root: &Path) -> FlagshipAppsListResp
             .as_ref()
             .map(|c| c.stl.is_some() || c.ngc.is_some())
             .unwrap_or(false);
-        apps.push(FlagshipAppSummary {
-            index: desc.index,
-            slug: desc.slug.to_string(),
-            title: desc.title.to_string(),
-            lean_module: desc.lean_module.to_string(),
-            lean_module_exists: detail.lean_module_exists,
-            qualification_summary: desc.qualification_summary.to_string(),
+        apps.push(AppArtifactSummary {
+            slug: slug.clone(),
             obend_layer_count: detail.obend_layers.len(),
             obend_files: detail
                 .obend_layers
@@ -324,7 +250,7 @@ pub fn list_flagship_apps_in_root(workspace_root: &Path) -> FlagshipAppsListResp
         });
     }
 
-    FlagshipAppsListResponse {
+    WorkspaceAppsReport {
         apps_root: apps_dir.display().to_string(),
         total_apps: apps.len(),
         vcd_present_count,
@@ -333,27 +259,22 @@ pub fn list_flagship_apps_in_root(workspace_root: &Path) -> FlagshipAppsListResp
     }
 }
 
-/// Load full qualification explorer detail for `slug` (`GET /api/apps/<slug>`).
-pub fn get_flagship_app_detail(slug: &str) -> Result<FlagshipAppDetailResponse, (u16, String)> {
-    get_flagship_app_detail_in_root(&find_workspace_root(), slug)
-}
-
-/// Load full qualification explorer detail for `slug` relative to `workspace_root`.
-pub fn get_flagship_app_detail_in_root(
+/// Inspect `<workspace_root>/apps/<slug>` and parse its `.obend`, `.smt2`, `.sv`, `.vcd`, `.stl`, and `.ngc` artifacts.
+pub fn inspect_app_in_root(
     workspace_root: &Path,
-    slug: &str,
-) -> Result<FlagshipAppDetailResponse, (u16, String)> {
-    let desc = validate_app_slug(slug)?;
-    Ok(build_app_detail(workspace_root, desc, true))
-}
-
-fn build_app_detail(
-    workspace_root: &Path,
-    desc: &FlagshipAppDescriptor,
+    raw_slug: &str,
     include_svg: bool,
-) -> FlagshipAppDetailResponse {
-    let app_dir = workspace_root.join("apps").join(desc.slug);
-    let lean_module_exists = workspace_root.join(desc.lean_module).exists();
+) -> Result<AppArtifactDetail, String> {
+    let slug = validate_app_slug(raw_slug)?;
+    let app_dir = workspace_root.join("apps").join(slug);
+    if !app_dir.is_dir() {
+        return Err(format!("App directory does not exist: `{}`", app_dir.display()));
+    }
+    Ok(build_app_detail(workspace_root, slug, include_svg))
+}
+
+fn build_app_detail(workspace_root: &Path, slug: &str, include_svg: bool) -> AppArtifactDetail {
+    let app_dir = workspace_root.join("apps").join(slug);
 
     let mut obend_paths = collect_files_with_ext(&app_dir, "obend", 2);
     obend_paths.sort();
@@ -430,7 +351,6 @@ fn build_app_detail(
         firmware_files.sort();
     }
 
-    // Locate `.vcd` buildout in `verilator/*.vcd`, `build/*.vcd`, or `*.vcd`
     let mut vcd_candidates = collect_files_with_ext(&app_dir, "vcd", 3);
     vcd_candidates.sort();
     let vcd_digest = if let Some(vcd_path) = vcd_candidates.first() {
@@ -443,46 +363,39 @@ fn build_app_detail(
         empty_vcd_digest("not_built")
     };
 
-    // Inspect `.stl` and `.ngc` CAD/CAM build artifacts when `fidget-cam` (or if present in `build/` / `verilator/build/`)
     let stl_candidates = collect_files_with_ext(&app_dir, "stl", 4);
     let ngc_candidates = collect_files_with_ext(&app_dir, "ngc", 4);
-    let cam_artifacts =
-        if desc.slug == "fidget-cam" || !stl_candidates.is_empty() || !ngc_candidates.is_empty() {
-            let stl = stl_candidates.first().and_then(|p| {
-                let bytes = fs::read(p).ok()?;
-                Some(parse_stl_bytes(to_rel_slash(workspace_root, p), &bytes))
-            });
-            let ngc = ngc_candidates.first().and_then(|p| {
-                let text = fs::read_to_string(p).ok()?;
-                let size_bytes = fs::metadata(p).map(|m| m.len()).unwrap_or(text.len() as u64);
-                Some(parse_ngc_text(
-                    to_rel_slash(workspace_root, p),
-                    size_bytes,
-                    &text,
-                ))
-            });
-            let build_status = match (&stl, &ngc) {
-                (Some(_), Some(_)) => "built",
-                (Some(_), None) | (None, Some(_)) => "partial",
-                (None, None) => "not_built",
-            }
-            .to_string();
-            Some(FidgetCamArtifacts {
-                build_status,
-                stl,
-                ngc,
-            })
-        } else {
-            None
-        };
+    let cam_artifacts = if !stl_candidates.is_empty() || !ngc_candidates.is_empty() {
+        let stl = stl_candidates.first().and_then(|p| {
+            let bytes = fs::read(p).ok()?;
+            Some(parse_stl_bytes(to_rel_slash(workspace_root, p), &bytes))
+        });
+        let ngc = ngc_candidates.first().and_then(|p| {
+            let text = fs::read_to_string(p).ok()?;
+            let size_bytes = fs::metadata(p).map(|m| m.len()).unwrap_or(text.len() as u64);
+            Some(parse_ngc_text(
+                to_rel_slash(workspace_root, p),
+                size_bytes,
+                &text,
+            ))
+        });
+        let build_status = match (&stl, &ngc) {
+            (Some(_), Some(_)) => "built",
+            (Some(_), None) | (None, Some(_)) => "partial",
+            (None, None) => "not_built",
+        }
+        .to_string();
+        Some(CamArtifactBundle {
+            build_status,
+            stl,
+            ngc,
+        })
+    } else {
+        None
+    };
 
-    FlagshipAppDetailResponse {
-        index: desc.index,
-        slug: desc.slug.to_string(),
-        title: desc.title.to_string(),
-        lean_module: desc.lean_module.to_string(),
-        lean_module_exists,
-        qualification_summary: desc.qualification_summary.to_string(),
+    AppArtifactDetail {
+        slug: slug.to_string(),
         top_obend_file,
         obend_layers,
         lec_specs,
@@ -558,7 +471,8 @@ fn to_rel_slash(root: &Path, target: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn parse_obend_layer_source(
+/// Parse an `.obend` layer file and extract imports, specs, claims, and laws.
+pub fn parse_obend_layer_source(
     filename: String,
     rel_path: String,
     size_bytes: u64,
@@ -665,7 +579,8 @@ pub fn parse_smt2_text(
     }
 }
 
-fn parse_sv_summary(
+/// Parse a SystemVerilog `.sv` source file and extract module names and `always_ff` counts.
+pub fn parse_sv_summary(
     filename: String,
     rel_path: String,
     size_bytes: u64,
