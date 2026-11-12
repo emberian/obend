@@ -105,7 +105,7 @@ def goldilocksPowAux : Nat → Goldilocks → Nat → Goldilocks
   if x.val == 0 then
     if exp == 0 then Goldilocks.one else Goldilocks.zero
   else
-    goldilocksPowAux 64 x exp
+    goldilocksPowAux (Nat.log2 exp + 1) x exp
 
 /-- Exact inverse S-box $x \mapsto x^{d_{\text{inv}}}$ over `Goldilocks`. -/
 @[expose] def sbox7Inv (x : Goldilocks) : Goldilocks :=
@@ -149,12 +149,16 @@ theorem goldilocksPowAux_val (fuel : Nat) (base : Goldilocks) :
         rw [Goldilocks.mul_val, hsq, Nat.mod_mul_mod]
         conv => rhs; rw [hexp, Nat.pow_add, Nat.pow_one]
 
-theorem goldilocksPow_val (x : Goldilocks) (exp : Nat) (hLt : exp < 2 ^ 64) :
+theorem goldilocksPow_val_unbounded (x : Goldilocks) (exp : Nat) :
     (goldilocksPow x exp).val = (x.val ^ exp) % goldilocksPrime := by
   unfold goldilocksPow
   cases hx0 : (x.val == 0)
   · simp only [Bool.false_eq_true, ↓reduceIte]
-    exact goldilocksPowAux_val 64 x exp hLt
+    have hFuel : exp < 2 ^ (Nat.log2 exp + 1) := by
+      by_cases he : exp = 0
+      · subst he; decide
+      · exact Nat.lt_log2_self
+    exact goldilocksPowAux_val (Nat.log2 exp + 1) x exp hFuel
   · simp only [↓reduceIte]
     have hxEq : x.val = 0 := eq_of_beq hx0
     rw [hxEq]
@@ -168,10 +172,14 @@ theorem goldilocksPow_val (x : Goldilocks) (exp : Nat) (hLt : exp < 2 ^ 64) :
       rw [heEq, Nat.pow_zero]
       rfl
 
+theorem goldilocksPow_val (x : Goldilocks) (exp : Nat) :
+    (goldilocksPow x exp).val = (x.val ^ exp) % goldilocksPrime :=
+  goldilocksPow_val_unbounded x exp
+
 theorem sbox7Inv_val (x : Goldilocks) :
     (sbox7Inv x).val = (x.val ^ poseidon2DInv) % goldilocksPrime := by
   unfold sbox7Inv
-  exact goldilocksPow_val x poseidon2DInv (by decide)
+  exact goldilocksPow_val x poseidon2DInv
 
 private theorem pow_mod_congr_nat {x y m : Nat} (h : x % m = y % m) (k : Nat) :
     (x ^ k) % m = (y ^ k) % m := by
@@ -352,7 +360,7 @@ private theorem mul_inv2559G_cancel (x : Goldilocks) :
   mul_cancel_of_prod_one (Goldilocks.ext (by rw [Goldilocks.mul_val]; rfl)) x
 
 /-- $4 \times 4$ MDS circulant matrix $M_4 = \text{circ}(2, 3, 1, 1)$ over `Goldilocks`
-    ($\det(M_4) = -105 \not\equiv 0 \pmod p$, all $1\times 1, 2\times 2, 3\times 3, 4\times 4$ minors non-zero). -/
+    ($\det(M_4) = -35 \not\equiv 0 \pmod p$, all $1\times 1, 2\times 2, 3\times 3, 4\times 4$ minors non-zero). -/
 def applyM4 (b : Lane4) : Lane4 :=
   let s := lane4Sum b
   let c2 := Goldilocks.ofNat 2

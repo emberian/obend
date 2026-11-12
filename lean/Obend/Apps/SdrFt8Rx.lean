@@ -1358,4 +1358,60 @@ theorem sdr_rf_frontEnd_composition (R : Type) [M : AnalyticModel R]
   have hb := Obend.Hardware.SwitchedCapRf.rf_frontEnd_error_power ω r1 r2 incident _ es m h1 h2 hp hi he
   have ht := ft8_iq_cordic_slicer_exact_tone k hk _ _ hR (margin dx dy hb)
   exact ⟨ht.1, ht.2, sdr_irr_ge_63dB R g φ hg hφ⟩
+/-- Non-trivial harmonic RF-to-discriminator composition (`1 ≤ m`): guarantees at least `9×` alias
+power rejection (`dx² + dy² ≤ incident / 9`) alongside exact FT8 bin recovery and 63 dB IRR. -/
+theorem sdr_rf_harmonic_frontEnd_composition (R : Type) [M : AnalyticModel R]
+    (ω r1 r2 incident g φ : CanonicalRat) (es : List Obend.Hardware.SwitchedCapRf.LadderElem)
+    (m k : Nat) (hm : 1 ≤ m) (hk : k ≤ 7) (x y dx dy : Int)
+    (h1 : 0 < r1) (h2 : 0 < r2) (hp : ∀ e ∈ es, e.Passive) (hi : 0 ≤ incident)
+    (he : (dx : CanonicalRat)*(dx : CanonicalRat) + (dy : CanonicalRat)*(dy : CanonicalRat) ≤
+      Obend.Hardware.SwitchedCapRf.compositeAliasPower ω r1 r2 es m * incident)
+    (margin : ∀ ex ey : Int,
+      (ex : CanonicalRat)*(ex : CanonicalRat) + (ey : CanonicalRat)*(ey : CanonicalRat) ≤ (1 / 9) * incident →
+      InToneCone k (x+ex) (y+ey))
+    (hR : 8192 ≤ (x+dx).natAbs + (y+dy).natAbs)
+    (hg : CanonicalRat.mk 999 1000 ≤ g ∧ g ≤ CanonicalRat.mk 1001 1000)
+    (hφ : φ ∈ irrPhaseDom) :
+    (dx : CanonicalRat)*(dx : CanonicalRat) + (dy : CanonicalRat)*(dy : CanonicalRat) ≤ (1 / 9) * incident ∧
+    ft8Bin (Obend.Hardware.SwitchedCapRf.cordicAtan2 (x+dx) (y+dy)) = k ∧
+    ft8Oob (Obend.Hardware.SwitchedCapRf.cordicAtan2 (x+dx) (y+dy)) = false ∧
+    irrK * (1 - 2*g*M.cosFn φ + g*g) ≤ 1 + 2*g*M.cosFn φ + g*g := by
+  have hb9 := Obend.Hardware.SwitchedCapRf.rf_harmonic_alias_attenuation_ge_9x ω r1 r2 incident _ es m
+    hm h1 h2 hp hi he
+  have ht := ft8_iq_cordic_slicer_exact_tone k hk _ _ hR (margin dx dy hb9)
+  exact ⟨hb9, ht.1, ht.2, sdr_irr_ge_63dB R g φ hg hφ⟩
+
+/-- Concrete non-zero harmonic interference witness (`m = 1`, `incident = 9`, `x = 10000`, `dx = 1`):
+every integer perturbation `(ex, ey)` within the attenuated alias ball `ex² + ey² ≤ 1` stays inside `InToneCone 0`. -/
+theorem sdr_rf_harmonic_margin_witness (ex ey : Int)
+    (hBall : (ex : CanonicalRat) * (ex : CanonicalRat) + (ey : CanonicalRat) * (ey : CanonicalRat) ≤ (1 / 9) * 9) :
+    InToneCone 0 (10000 + ex) ey := by
+  have hInt : ex * ex + ey * ey ≤ 1 := by
+    have hEq : ((ex * ex + ey * ey : Int) : CanonicalRat) =
+        (ex : CanonicalRat) * (ex : CanonicalRat) + (ey : CanonicalRat) * (ey : CanonicalRat) := by
+      simp [Rat.intCast_add, Rat.intCast_mul]
+    have hOne : (1 / 9 : CanonicalRat) * 9 = (1 : Int) := by decide +kernel
+    rw [← hEq, hOne] at hBall
+    exact Rat.intCast_le_intCast.mp hBall
+  have hSq0 : ∀ z : Int, 0 ≤ z * z := fun z => by
+    by_cases hz : 0 ≤ z
+    · exact Int.mul_nonneg hz hz
+    · have hn : 0 ≤ -z := by omega
+      have hp := Int.mul_nonneg hn hn
+      rw [Int.neg_mul_neg] at hp; exact hp
+  have hSq1 : ∀ z : Int, z * z ≤ 1 → -1 ≤ z ∧ z ≤ 1 := fun z hz => by
+    by_cases h1 : z ≤ -2
+    · have hn : 2 ≤ -z := by omega
+      have a : (2 : Int) * 2 ≤ (-z) * (-z) := Int.mul_le_mul hn hn (by omega) (by omega)
+      rw [Int.neg_mul_neg] at a; omega
+    · by_cases h2 : 2 ≤ z
+      · have a : (2 : Int) * 2 ≤ z * z := Int.mul_le_mul h2 h2 (by omega) (by omega)
+        omega
+      · omega
+  have hex : -1 ≤ ex ∧ ex ≤ 1 := hSq1 ex (by have := hSq0 ey; omega)
+  have hey : -1 ≤ ey ∧ ey ≤ 1 := hSq1 ey (by have := hSq0 ex; omega)
+  rcases (by omega : ex = -1 ∨ ex = 0 ∨ ex = 1) with rfl | rfl | rfl <;>
+    rcases (by omega : ey = -1 ∨ ey = 0 ∨ ey = 1) with rfl | rfl | rfl <;>
+    decide +kernel
+
 end Obend.Apps.SdrFt8Rx

@@ -111,17 +111,22 @@ def cuckooMultiKickTraceOk : Bool :=
   let (h1, cam2, sp1) := cuckooInsert 8 k1 false cam1
   let (h2, cam3, sp2) := cuckooInsert 8 k2 true  cam2
   let (h0Dup, cam3Dup, spDup) := cuckooInsert 8 k0 false cam3
+  let (h0SorDup, cam3SorDup, spSorDup) := cuckooInsert 8 k0 true cam3
   let (_, _, spZeroKick) := cuckooInsert 0 k3 false cam3
   (cuckooLoc0 d k0 == (0, 0)) && (cuckooLoc0 d k1 == (0, 0)) && (cuckooLoc0 d k2 == (0, 0)) &&
-  sp0.isNone && sp1.isNone && sp2.isNone && spDup.isNone && spZeroKick.isSome &&
+  sp0.isNone && sp1.isNone && sp2.isNone && spDup.isNone && spSorDup.isNone && spZeroKick.isSome &&
   (h0 == 0) && (h1 == 1) && (h2 == 2) && (h0Dup == 0) && (cam3Dup == cam3) &&
+  (h0SorDup == 0) && ((cuckooLookupSlot? cam3SorDup k0).map (·.hasSorry) == some true) &&
   ((cam3.readBankSlot 0 0).map (·.key) == some k2) &&
   ((cam3.readBankSlot 5 0).map (·.key) == some k0) &&
   ((cam3.readBankSlot 5 3).map (·.key) == some k1) &&
   (cuckooLookup? cam3 k0 == some 0) &&
   (cuckooLookup? cam3 k1 == some 1) &&
   (cuckooLookup? cam3 k2 == some 2) &&
-  ((cuckooLookupSlot? cam3 k2).map (·.hasSorry) == some true)
+  ((cuckooLookupSlot? cam3 k2).map (·.hasSorry) == some true) &&
+  (packNodeWord9Checked? { tag := 4, h0 := 70, h1 := 12 } false 70).isSome &&
+  (packNodeWord9Checked? { tag := 4, h0 := 513, h1 := 12 } false 70).isNone &&
+  (packNodeWord9Checked? { tag := 7, h0 := 1, h1 := 2, h2 := 3 } false 0).isNone
 
 #guard cuckooMultiKickTraceOk == true
 
@@ -223,6 +228,50 @@ def runCuckooHwScenario (sorryOnBody mvarOnLam : Bool) : MemState × List (Strin
   [ ("z1_focus_out", 325#64), ("whnf_phase_out", 0#64), ("z1_steps_out", 1#64), ("z1_bypass_out", 1#64)
   , ("acc_sorry_out", 0#64), ("acc_mvar_out", 1#64), ("z4_status_out", 2#64), ("z4_accepted_out", 0#64) ]
 
+/-- Verify hardware refusal of:
+1. Zero-work Zone-4 bypass (`z4_ctrl = 7#64` immediately after reset without completing WHNF);
+2. `z1_start = 1` attempt to wipe sticky `acc_sorry_q` after tainting;
+3. Mid-run / post-run BRAM write-port injection (`ram_we = 1` after `z1_steps_q = 1`);
+4. Non-dense `regIdx`, `|` identifier injection, vacuous 0-obligation LEC miter, and combinational `isSynchronizer` CDC bypass. -/
+def cuckooSecurityRefusalsOk : Bool :=
+  let initSt : MemState := { regs := fun _ => 0#64, mems := fun _ _ => 0#64 }
+  -- 1. Zero-work `z4_ctrl = 7#64` refusal
+  let stZeroWork := stepMemModule cuckooSiliconElabMemModule false (fun | 7 => 7#64 | _ => 0#64) initSt
+  let zeroWorkRefused := stZeroWork.regs 9 != 1#64
+  -- 2. Sticky `acc_sorry_q` survives `z1_start = 1` + subsequent `z4_ctrl = 7#64`
+  let stTainted := (runCuckooHwScenario true false).1
+  let stAfterStart := stepMemModule cuckooSiliconElabMemModule false (fun | 4 => 1#64 | 6 => 70#64 | _ => 0#64) stTainted
+  let stAfterLatch := stepMemModule cuckooSiliconElabMemModule false (fun | 7 => 7#64 | _ => 0#64) stAfterStart
+  let stickySurvived := (stAfterStart.regs 7 == 1#64) && (stAfterLatch.regs 9 == 0#64)
+  -- 3. Post-reduction BRAM write-port is locked (`z1_steps_q = 1`)
+  let stClean := (runCuckooHwScenario false false).1
+  let stOverwriteTry := stepMemModule cuckooSiliconElabMemModule false
+    (fun | 0 => 1#64 | 1 => 5#64 | 2 => 5#64 | 3 => 0xDEAD#64 | _ => 0#64) stClean
+  let bramLocked := stOverwriteTry.mems 5 5#64 == stClean.mems 5 5#64
+  -- 4. Non-dense `regIdx = 5` in 1-reg `RtlMemModule` refused
+  let badSparseMem : RtlMemModule :=
+    { dualModeRamDemo with core := { dualModeRamDemo.core with regs := [{ regIdx := 5, name := "cycle_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 8, nextExpr := .const 0#64 }] } }
+  -- 5. Pipe `|` in identifier refused
+  let badPipeIdentMem : RtlMemModule :=
+    { dualModeRamDemo with core := { dualModeRamDemo.core with name := "bad|miter" } }
+  -- 6. Vacuous 0-obligation LEC miter refused
+  let emptyMiter : RtlMemModule := { core := { name := "empty_m", inputNames := ["x"], inputWidths := [1], wires := [], regs := [], outputs := [] }, rams := [] }
+  -- 7. Combinational `isSynchronizer` bypass reading 1st-stage sync reg refused
+  let badCdcMod : RtlModule :=
+    { name := "bad_cdc"
+    , inputNames := ["x"], inputWidths := [1], wires := []
+    , regs :=
+        [ { regIdx := 0, name := "src_q", domain := .axiIoClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 1, nextExpr := .inputPort 0 }
+        , { regIdx := 1, name := "sync1_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := true, width := 1, nextExpr := .regRead 0 }
+        , { regIdx := 2, name := "sync2_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := true, width := 1, nextExpr := .regRead 1 }
+        , { regIdx := 3, name := "comb_spy_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := true, width := 1, nextExpr := .alu .bitXor (.regRead 1) (.inputPort 0) } ]
+    , outputs := [{ name := "y", expr := .regRead 2, width := 1 }] }
+  zeroWorkRefused && stickySurvived && bramLocked &&
+  !checkRtlMemModule badSparseMem && !checkRtlMemModule badPipeIdentMem &&
+  (emitYosysMemLecSmt2Checked? emptyMiter).isNone && !checkCdcTwoFlop badCdcMod
+
+#guard cuckooSecurityRefusalsOk == true
+
 -- ============================================================================
 -- 5. `#tooth` Mutation Kills (`≥ 4` Load-Bearing Hardware/Crypto Mutations)
 -- ============================================================================
@@ -281,5 +330,18 @@ def stepCamWhnfNoop (st : Zone1WhnfState) : Zone1WhnfState := st
 
 #tooth Obend.Lower.SiliconElabFabric.cuckooElabRtl_simulates_stepCamWhnf by mutation
   Obend.Lower.SiliconElabFabric.stepCamWhnf := stepCamWhnfNoop
+
+/-- Mutation 7: Blind `camHandleContainsSorry` returning `false` breaks `camHandleContainsSorry_detects_sorryAx_sound`. -/
+def camHandleContainsSorryBlind (_cam : HwExprCAM) : Nat → CamHandle → Bool | _, _ => false
+
+#tooth Obend.Lower.SiliconElabFabric.camHandleContainsSorry_detects_sorryAx_sound by mutation
+  Obend.Lower.SiliconElabFabric.camHandleContainsSorry := camHandleContainsSorryBlind
+
+/-- Mutation 8: Permissive `isDirectSecondSync` ignoring `nextExpr == .regRead s1.regIdx` breaks `checkCdcTwoFlop_first_stage_isolated`. -/
+def isDirectSecondSyncPermissive (s1 r : RegSpec) : Bool :=
+  r.isSynchronizer && r.domain == s1.domain && r.regIdx != s1.regIdx
+
+#tooth Obend.Hardware.HDL.checkCdcTwoFlop_first_stage_isolated by mutation
+  Obend.Hardware.HDL.isDirectSecondSync := isDirectSecondSyncPermissive
 
 end Obend.Tests.SyncRamAndCuckooElabTest

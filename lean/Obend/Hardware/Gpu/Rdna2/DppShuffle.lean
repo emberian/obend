@@ -484,5 +484,57 @@ theorem verifyDppWordShuffle_encode (vsrc0 : Nat) (ctrl : DppCtrl) (exec : BitVe
     verifyDppWordShuffle (encodeDppWord32 vsrc0 ctrl) exec src old = some (shuffleExec ctrl exec src old) := by
   simp [verifyDppWordShuffle, decodeDppModifierWord_encode, hs]
 
+/-- Checked DPP16 modifier dword encoder refusing out-of-range VGPR indices `vsrc0 ≥ 256`. -/
+def encodeDppWord32Checked? (vsrc0 : Nat) (ctrl : DppCtrl) : Option UInt32 :=
+  if vsrc0 < 256 then some (encodeDppWord32 vsrc0 ctrl) else none
+
+theorem decodeDppModifierWord_encodeChecked (vsrc0 : Nat) (ctrl : DppCtrl) (w : UInt32)
+    (hEnc : encodeDppWord32Checked? vsrc0 ctrl = some w) :
+    vsrc0 < 256 ∧ decodeDppModifierWord w = some (vsrc0, ctrl) := by
+  unfold encodeDppWord32Checked? at hEnc
+  split at hEnc
+  · rename_i hLt; injection hEnc with hw; subst hw
+    rw [decodeDppModifierWord_encode, Nat.mod_eq_of_lt hLt]
+    exact ⟨hLt, rfl⟩
+  · cases hEnc
+
+/-- VGPR-file-aware DPP16 shuffle verifier selecting `vgprs vsrc0` from the decoded `vsrc0 < 256` field. -/
+def verifyDppWordShuffleFromFile (w : UInt32) (exec : BitVec 64)
+    (vgprs : Nat → Vector UInt32 64) (old : Vector UInt32 64) : Option (Vector UInt32 64) :=
+  match decodeDppModifierWord w with
+  | some (vsrc0, ctrl) => if rdna2Supported ctrl.op then some (shuffleExec ctrl exec (vgprs vsrc0) old) else none
+  | none => none
+
+theorem verifyDppWordShuffleFromFile_sound (w : UInt32) (exec : BitVec 64)
+    (vgprs : Nat → Vector UInt32 64) (old out : Vector UInt32 64)
+    (h : verifyDppWordShuffleFromFile w exec vgprs old = some out) :
+    ∃ vsrc0 ctrl, vsrc0 < 256 ∧ decodeDppModifierWord w = some (vsrc0, ctrl) ∧ rdna2Supported ctrl.op = true ∧
+      (∀ i : Lane, writesLane ctrl exec i = false → out.get i = old.get i) ∧
+      (∀ (i j : Lane), writesLane ctrl exec i = true → sourceLane ctrl exec i = some j →
+        out.get i = (vgprs vsrc0).get j) ∧
+      (∀ i : Lane, writesLane ctrl exec i = true → sourceLane ctrl exec i = none →
+        out.get i = if ctrl.bound_ctrl then 0 else old.get i) := by
+  unfold verifyDppWordShuffleFromFile at h
+  split at h
+  · rename_i v ctrl hd
+    have hvLt : v < 256 := by
+      unfold decodeDppModifierWord decodeDppModifierNat at hd
+      split at hd
+      · obtain ⟨op, _, hEq⟩ := Option.map_eq_some_iff.mp hd
+        have h1 : w.toNat % 256 = v := congrArg Prod.fst hEq
+        rw [← h1]; exact Nat.mod_lt _ (by decide)
+      · cases hd
+    split at h
+    · rename_i hs; injection h with ho; subst ho
+      refine ⟨v, ctrl, hvLt, hd, hs, fun i hw => ?_, fun i j hw hj => ?_, fun i hw hn => ?_⟩
+      · rw [shuffleExec_eq_spec]; exact masked_holds 0 ctrl exec _ _ i hw
+      · rw [shuffleExec_eq_spec]; simp [shuffle, hw, hj]
+      · rw [shuffleExec_eq_spec]; exact invalid_source_behavior 0 ctrl exec _ _ i hw hn
+    · cases h
+  · cases h
+
+example : (verifyDppWordShuffleFromFile 0xff014000 allExec (fun _ => Vector.replicate 64 7)
+    (Vector.replicate 64 0)).isSome = true := by decide
+
 end Dpp
 end Obend.Hardware.Gpu.Rdna2

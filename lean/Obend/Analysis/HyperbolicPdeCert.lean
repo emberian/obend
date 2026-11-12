@@ -609,13 +609,33 @@ namespace HyperbolicSystem
 
 def dim (o : HyperbolicSystem) : Nat := o.vars.length
 
-/-- One flux, one state value and one left and right value per variable. -/
+/-- Distinct variable names (`Nodup` as a kernel-reducible boolean check). -/
+@[expose] def varsDistinct : List String → Bool
+  | [] => true
+  | x :: xs => !xs.contains x && varsDistinct xs
+
+/-- Every variable referenced in `e` belongs to the declared system variable list `vars`. -/
+@[expose] def exprVarsIn (vars : List String) : RealExpr → Bool
+  | .const _ => true
+  | .var x => vars.contains x
+  | .sqr a => exprVarsIn vars a
+  | .add a b | .sub a b | .mul a b => exprVarsIn vars a && exprVarsIn vars b
+
+/-- Every flux component references only declared system variables. -/
+@[expose] def allFluxVarsBound (vars : List String) : List RealExpr → Bool
+  | [] => true
+  | e :: es => exprVarsIn vars e && allFluxVarsBound vars es
+
+/-- Non-empty distinct variable names, closed flux expressions, and matching state/left/right dimensions. -/
 @[expose] def WellFormed (o : HyperbolicSystem) : Prop :=
-  o.flux.length = o.vars.length ∧ o.state.length = o.vars.length ∧ o.left.length = o.vars.length ∧
-    o.right.length = o.vars.length
+  0 < o.vars.length ∧ varsDistinct o.vars = true ∧ allFluxVarsBound o.vars o.flux = true ∧
+    o.flux.length = o.vars.length ∧ o.state.length = o.vars.length ∧ o.left.length = o.vars.length ∧
+      o.right.length = o.vars.length
 
 instance (o : HyperbolicSystem) : Decidable o.WellFormed :=
-  inferInstanceAs (Decidable (o.flux.length = o.vars.length ∧ o.state.length = o.vars.length ∧
+  inferInstanceAs (Decidable (0 < o.vars.length ∧ varsDistinct o.vars = true ∧
+    allFluxVarsBound o.vars o.flux = true ∧
+    o.flux.length = o.vars.length ∧ o.state.length = o.vars.length ∧
     o.left.length = o.vars.length ∧ o.right.length = o.vars.length))
 
 /-- **The Fréchet derivative of the flux at the state**, by forward-mode dual numbers: entry
@@ -1186,6 +1206,14 @@ example : check { maxwellSystem with aMax := 1 } maxwellCert = .refused .speedEx
   decide +kernel
 example : check { burgersSystem with state := [2], aMax := 2, cfl := 1 / 2 } burgersCert
     = .refused .conservationDefect [0] := by decide +kernel
+example : check ⟨[], [], [], [], [], 1, 1⟩ ⟨[], [], [], [], [], []⟩
+    = .refused .shapeMismatch [] := by decide +kernel
+example : check { maxwellSystem with vars := ["Ey", "Ey"] } maxwellCert
+    = .refused .shapeMismatch [] := by decide +kernel
+example : check { burgersSystem with flux := [.var "ghost"] } burgersCert
+    = .refused .shapeMismatch [] := by decide +kernel
+example : check maxwellSystem { maxwellCert with eigInv := [[0, 0], [0, 0]] }
+    = .refused .inverseMismatch [0, 0] := by decide +kernel
 
 /-- A refuting refusal at work: no certificate whatever makes Maxwell's equations with `c = 3/2`
 respect a speed bound of `1`. -/
@@ -1230,6 +1258,19 @@ private def encodeFvmExpr : RealExpr → SosJson
   | .sub a b => .arr [.str "sub".toList, encodeFvmExpr a, encodeFvmExpr b]
   | .mul a b => .arr [.str "mul".toList, encodeFvmExpr a, encodeFvmExpr b]
   | .sqr a => .arr [.str "sqr".toList, encodeFvmExpr a]
+mutual
+private def sosJsonSize : SosJson → Nat
+  | .arr xs => 1 + sosJsonArrSize xs
+  | .obj fs => 1 + sosJsonObjSize fs
+  | _ => 1
+private def sosJsonArrSize : List SosJson → Nat
+  | [] => 0
+  | x :: xs => sosJsonSize x + sosJsonArrSize xs
+private def sosJsonObjSize : List (List Char × SosJson) → Nat
+  | [] => 0
+  | (_, v) :: fs => sosJsonSize v + sosJsonObjSize fs
+end
+
 private def decodeFvmExpr : Nat → SosJson → Except String RealExpr
   | 0, _ => .error "flux expression nesting limit"
   | n+1, j => do
@@ -1262,7 +1303,7 @@ def encodeHyperbolicFvmObj (o : HyperbolicSystem) : String :=
 def decodeHyperbolicFvmObj (s : String) : Except String HyperbolicSystem := do
   let j ← sosJsonParse s
   return ⟨← (j.getObjVal? "vars" >>= SosJson.getArr?) >>= List.mapM SosJson.getStr?,
-    ← (j.getObjVal? "flux" >>= SosJson.getArr?) >>= List.mapM (decodeFvmExpr 64),
+    ← (j.getObjVal? "flux" >>= SosJson.getArr?) >>= List.mapM (fun jExpr => decodeFvmExpr (sosJsonSize jExpr + 1) jExpr),
     ← j.getObjVal? "state" >>= decodeFvmVec, ← j.getObjVal? "left" >>= decodeFvmVec,
     ← j.getObjVal? "right" >>= decodeFvmVec, ← j.getObjVal? "aMax" >>= decodeRatJson,
     ← j.getObjVal? "cfl" >>= decodeRatJson⟩

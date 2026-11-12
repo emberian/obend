@@ -1433,5 +1433,31 @@ theorem zoh_intersample_convex_hull_bound
     change ((1 - lam) * u + lam * v) * ((1 - lam) * u + lam * v) ≤ mSq
     grind
 
+/-- Multi-step non-saturation and signed register preservation along `runDeadTimeQ32Loop`:
+whenever the trajectory's ADC tracking error `rMa - adcFloorMa qs_k.i` stays in `[elo, ehi]` and
+integrator register `qs_k.intMv` stays in `[ilo, ihi]`, every control tick `k` satisfies
+`CurrentLoopNoSaturation` and `w`-bit two's-complement `BitVec.ofInt w` round-trips without wraparound. -/
+theorem runDeadTimeQ32Loop_multiStep_noWrap
+    (w : Nat) (dac : Int) (d : ZohRl) (kpQ32 kiQ32 rMa vffMv elo ehi ilo ihi : Int)
+    (vDtSeq : Nat → CanonicalRat) (qs0 : QuantizedLoopState)
+    (hSat : checkCurrentLoopNoSaturation w dac true kpQ32 kiQ32 elo ehi ilo ihi = true)
+    (hErrBox : ∀ k, elo ≤ rMa - adcFloorMa (runDeadTimeQ32Loop d kpQ32 kiQ32 rMa vffMv vDtSeq qs0 k).i ∧
+      rMa - adcFloorMa (runDeadTimeQ32Loop d kpQ32 kiQ32 rMa vffMv vDtSeq qs0 k).i ≤ ehi)
+    (hIntBox : ∀ k, ilo ≤ (runDeadTimeQ32Loop d kpQ32 kiQ32 rMa vffMv vDtSeq qs0 k).intMv ∧
+      (runDeadTimeQ32Loop d kpQ32 kiQ32 rMa vffMv vDtSeq qs0 k).intMv ≤ ihi)
+    (k : Nat) :
+    let qsk := runDeadTimeQ32Loop d kpQ32 kiQ32 rMa vffMv vDtSeq qs0 k
+    let errMa := rMa - adcFloorMa qsk.i
+    let out := rtlPiStepQ32 kpQ32 kiQ32 errMa qsk.intMv
+    CurrentLoopNoSaturation w dac true kpQ32 kiQ32 errMa qsk.intMv ∧
+    (BitVec.ofInt w out.1).toInt = out.1 ∧ (BitVec.ofInt w out.2).toInt = out.2 := by
+  intro qsk errMa out
+  exact ⟨checkCurrentLoopNoSaturation_sound w dac true kpQ32 kiQ32 elo ehi ilo ihi hSat errMa qsk.intMv
+      (hErrBox k) (hIntBox k),
+    checkCurrentLoopNoSaturation_noWrap w dac true kpQ32 kiQ32 elo ehi ilo ihi hSat errMa qsk.intMv
+      (hErrBox k) (hIntBox k)⟩
+
+example : checkCurrentLoopNoSaturation 64 100 true 1717986918 0 0 0 0 0 = true := by decide +kernel
+
 end Obend.Hardware.CurrentLoop
 end

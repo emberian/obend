@@ -533,5 +533,19 @@ theorem coarseForward_current_certified :
   unfold AbsLe at hb ⊢
   grind
 
+/-- Zero/negative physical device area is refused by `meshOk` as a refuting `.mesh` verdict. -/
+theorem coarseForward_zero_area_refused :
+    checkDdQuasiFermi { coarseForwardSpec with areaCm2 := 0 } coarseForward = .refused .mesh [] := by
+  decide +kernel
+
+/-- Unbounded scientific-notation exponent (`1e9999`) is refused cleanly by `decodeDdSpec` without DoS. -/
+theorem decodeDdSpec_refuses_huge_exponent :
+    (decodeDdSpec "{\"si\":{\"tempK\":1e9999}}").isOk = false := by
+  decide +kernel
+
+/-- Parametric slab family acceptance on non-unit area (`areaCm2 = 7/3`) via `slabQuasiFermi_area_accepted`. -/
+example : checkDdQuasiFermi { badSpec with areaCm2 := 7 / 3 } slabQuasiFermi = .ok :=
+  slabQuasiFermi_area_accepted (7 / 3) (by decide +kernel)
+
 end Obend.Teeth.Hardware.DeviceFixtures
 end

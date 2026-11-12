@@ -760,4 +760,94 @@ example : nistGhash 0x66e94bd4ef8a2c3b884cfa59ca342b2e#128
     [0x0388dace60b6a392f328c2b971b2fe78#128, 0x00000000000000000000000000000080#128] =
     0xf38cbb1ad69223dcc3457ae5b6b0f885#128 := by decide +kernel
 
+/-- SP 800-38D §6.4 128-bit GCM length block `[len(A)]₆₄ ‖ [len(C)]₆₄`. -/
+def packNistGcmLenBlock (aadBits ctBits : UInt64) : BitVec 128 :=
+  joinBits 6 ctBits.toBitVec aadBits.toBitVec
+
+theorem packNistGcmLenBlock_injective {a₁ c₁ a₂ c₂ : UInt64}
+    (h : packNistGcmLenBlock a₁ c₁ = packNistGcmLenBlock a₂ c₂) : a₁ = a₂ ∧ c₁ = c₂ := by
+  have hLo := congrArg (lowBits 6) h
+  have hHi := congrArg (highBits 6) h
+  simp only [packNistGcmLenBlock, lowBits_join, highBits_join] at hLo hHi
+  exact ⟨UInt64.eq_of_toBitVec_eq hHi, UInt64.eq_of_toBitVec_eq hLo⟩
+
+/-- Length-framed NIST SP 800-38D GHASH authenticating `A ‖ C ‖ ([len(A)]₆₄ ‖ [len(C)]₆₄)`. -/
+def nistGhashFramed (h : BitVec 128) (aadBlocks ctBlocks : List (BitVec 128))
+    (aadBits ctBits : UInt64) : BitVec 128 :=
+  nistGhash h (aadBlocks ++ ctBlocks ++ [packNistGcmLenBlock aadBits ctBits])
+
+private theorem nistGhash_replicate_zero_at_one :
+    ∀ k : Nat, nistGhash 0x80000000000000000000000000000000#128 (List.replicate k 0#128) = 0#128
+  | 0 => rfl
+  | k + 1 => by
+    unfold nistGhash
+    rw [List.replicate_succ, List.foldl_cons, BitVec.xor_self, nistGhashMul_one]
+    exact nistGhash_replicate_zero_at_one k
+
+/-- **Length-framed NIST GHASH kills leading-zero truncation/extension collisions**:
+unlike unframed `nistGhash`, for every `k m : Nat` and distinct `(aadBits, ctBits)` pairs,
+`nistGhashFramed` evaluates to distinct tags at the polynomial-identity key `0x8000…00`. -/
+theorem nistGhashFramed_kills_leading_zero_forgery (k m : Nat) (a₁ c₁ a₂ c₂ : UInt64)
+    (hNe : (a₁, c₁) ≠ (a₂, c₂)) :
+    nistGhashFramed 0x80000000000000000000000000000000#128 [] (List.replicate k 0#128) a₁ c₁ ≠
+      nistGhashFramed 0x80000000000000000000000000000000#128 [] (List.replicate m 0#128) a₂ c₂ := by
+  have evalAtOne : ∀ (n : Nat) (a c : UInt64),
+      nistGhashFramed 0x80000000000000000000000000000000#128 [] (List.replicate n 0#128) a c =
+        packNistGcmLenBlock a c := by
+    intro n a c
+    unfold nistGhashFramed nistGhash
+    rw [List.nil_append, List.foldl_append, List.foldl_cons, List.foldl_nil]
+    have hz := nistGhash_replicate_zero_at_one n
+    unfold nistGhash at hz
+    rw [hz, BitVec.zero_xor, nistGhashMul_one]
+  rw [evalAtOne k a₁ c₁, evalAtOne m a₂ c₂]
+  intro hEq
+  obtain ⟨ha, hc⟩ := packNistGcmLenBlock_injective hEq
+  exact hNe (Prod.ext ha hc)
+
+/-- Length-framed binary-tower GHASH block `[len(A)]₆₄ ‖ [len(C)]₆₄` unpacked into `Tower128`. -/
+def packTowerLenBlock (aadBits ctBits : UInt64) : Tower128 :=
+  unpackTower 7 (packNistGcmLenBlock aadBits ctBits)
+
+theorem packTowerLenBlock_injective {a₁ c₁ a₂ c₂ : UInt64}
+    (h : packTowerLenBlock a₁ c₁ = packTowerLenBlock a₂ c₂) : a₁ = a₂ ∧ c₁ = c₂ := by
+  have hp := congrArg (packTower 7) h
+  simp only [packTowerLenBlock, packTower_unpackTower] at hp
+  exact packNistGcmLenBlock_injective hp
+
+private theorem evalCoeffs_replicate_zero_at_one :
+    ∀ k : Nat, RoundPoly.evalCoeffs (List.replicate k (towerZero 7)) (towerOne 7) = towerZero 7
+  | 0 => rfl
+  | k + 1 => by
+    simp [List.replicate_succ, RoundPoly.evalCoeffs, evalCoeffs_replicate_zero_at_one k,
+      CommRingOps.add, CommRingOps.mul]
+
+/-- **Root bound for length-framed tower GHASH on zero-block extension forgeries**:
+any distinct `(a₁, c₁) ≠ (a₂, c₂)` length-framed zero-block streams collide on at most
+`max k m + 1` distinct keys `H : Tower128`. -/
+theorem ghashAuth_zero_extension_roots_bound (k m : Nat) (a₁ c₁ a₂ c₂ : UInt64)
+    (keys : List Tower128) (hnd : keys.Nodup) (hNe : (a₁, c₁) ≠ (a₂, c₂))
+    (heq : ∀ H ∈ keys,
+      ghashAuth H [] (List.replicate k (towerZero 7)) (packTowerLenBlock a₁ c₁) =
+      ghashAuth H [] (List.replicate m (towerZero 7)) (packTowerLenBlock a₂ c₂)) :
+    keys.length ≤ max k m + 1 := by
+  apply ghashDiff_roots_bound
+    ([] ++ List.replicate k (towerZero 7) ++ [packTowerLenBlock a₁ c₁])
+    ([] ++ List.replicate m (towerZero 7) ++ [packTowerLenBlock a₂ c₂])
+    (max k m + 1) keys
+  · simp; omega
+  · simp; omega
+  · exact hnd
+  · refine ⟨towerOne 7, ?_⟩
+    have evalOne : ∀ (n : Nat) (L : Tower128),
+        ghashPoly (towerOne 7) ([] ++ List.replicate n (towerZero 7) ++ [L]) = L := by
+      intro n L
+      simp [ghashPoly, RoundPoly.evalCoeffs, evalCoeffs_replicate_zero_at_one n,
+        CommRingOps.add, CommRingOps.mul]
+    rw [evalOne k, evalOne m]
+    intro hL
+    obtain ⟨ha, hc⟩ := packTowerLenBlock_injective hL
+    exact hNe (Prod.ext ha hc)
+  · exact heq
+
 end Obend.Crypto.BinaryTower256

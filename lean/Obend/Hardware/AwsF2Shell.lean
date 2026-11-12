@@ -248,7 +248,7 @@ def emitAwsF2ClWrapperSV (cfg : F2WrapperConfig) (coreMod : RtlModule) : Option 
   if validateF2CorePortBindings cfg coreMod then
     some (emitModuleSV coreMod ++ ("\n// Verified AWS EC2 F2 Custom Logic Shell Wrapper (" ++ cfg.targetDevice ++ ")\n" ++
       ("module " ++ cfg.clModuleName ++ " (\n  `include \"cl_ports.vh\"\n);\n" ++
-       "  wire rst_core_sync = ~rst_main_n;\n  assign cl_sh_flr_done = sh_cl_flr_assert;\n" ++
+       "  wire rst_core_sync = ~rst_main_n | sh_cl_flr_assert;\n  assign cl_sh_flr_done = sh_cl_flr_assert;\n" ++
        "  " ++ coreMod.name ++ " u_core (\n" ++ String.intercalate ",\n" (f2CoreConnections cfg coreMod) ++ "\n  );\n" ++
        "endmodule\n")))
   else none
@@ -260,7 +260,7 @@ theorem emitAwsF2ClWrapperSV_instantiates_wired_core (cfg : F2WrapperConfig) (co
     validateF2CorePortBindings cfg coreMod = true ∧
     (∃ glue : String, sv = emitModuleSV coreMod ++ (glue ++
       ("module " ++ cfg.clModuleName ++ " (\n  `include \"cl_ports.vh\"\n);\n" ++
-       "  wire rst_core_sync = ~rst_main_n;\n  assign cl_sh_flr_done = sh_cl_flr_assert;\n" ++
+       "  wire rst_core_sync = ~rst_main_n | sh_cl_flr_assert;\n  assign cl_sh_flr_done = sh_cl_flr_assert;\n" ++
        "  " ++ coreMod.name ++ " u_core (\n" ++ String.intercalate ",\n" (f2CoreConnections cfg coreMod) ++ "\n  );\n" ++
        "endmodule\n"))) ∧
     (∀ p ∈ coreInputPorts coreMod, ∃ b ∈ cfg.portBindings, ∃ spec ∈ canonicalAwsF2ClPorts,
@@ -358,21 +358,20 @@ theorem serializeTileFramesBytes_injective {f₁ f₂ : Array TileFrame}
 def digestTileFrames256 (H : Obend.Digest.HashBytes.Hash) (frames : Array TileFrame) : BitVec 256 :=
   BitVec.ofNat 256 (Obend.Digest.HashBytes.ofBE (H (serializeTileFramesBytes frames)))
 /-- **256-Bit Bitstream Digest Commitment Binding (`serializeTileFramesBytes_binding`, `0 Classical`)**. -/
-theorem serializeTileFramesBytes_binding
-    (H : Obend.Digest.HashBytes.Hash) (f₁ f₂ : Array TileFrame)
+theorem serializeTileFramesBytes_binding (H : Obend.Digest.HashBytes.Hash) (f₁ f₂ : Array TileFrame)
     (h1 : f₁.size < 2 ^ 64) (h2 : f₂.size < 2 ^ 64)
     (hW1 : Obend.Digest.HashBytes.ofBE (H (serializeTileFramesBytes f₁)) < 2 ^ 256)
     (hW2 : Obend.Digest.HashBytes.ofBE (H (serializeTileFramesBytes f₂)) < 2 ^ 256)
     (hDig : digestTileFrames256 H f₁ = digestTileFrames256 H f₂) :
-    f₁ = f₂ ∨ Obend.Digest.HashBytes.Collision H := by
-  if hSame : f₁ = f₂ then exact Or.inl hSame
-  else
+    f₁ = f₂ ∨ Obend.Digest.HashBytes.CollisionAmong H
+      (fun x => x = serializeTileFramesBytes f₁ ∨ x = serializeTileFramesBytes f₂) := by
+  if hSame : f₁ = f₂ then exact Or.inl hSame else
     right
     have hBytesNe : serializeTileFramesBytes f₁ ≠ serializeTileFramesBytes f₂ :=
       fun hBytesEq => hSame (serializeTileFramesBytes_injective h1 h2 hBytesEq)
     have hToNat := congrArg BitVec.toNat hDig
     simp only [digestTileFrames256, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hW1, Nat.mod_eq_of_lt hW2] at hToNat
-    exact ⟨serializeTileFramesBytes f₁, serializeTileFramesBytes f₂, hBytesNe, hToNat⟩
+    exact ⟨serializeTileFramesBytes f₁, serializeTileFramesBytes f₂, Or.inl rfl, Or.inr rfl, hBytesNe, hToNat⟩
 inductive F2OverlayPhase where | active | frozenIsolated | quarantined deriving DecidableEq, Repr, Inhabited
 structure F2FabulousOverlayState where
   fabric : DprFabric
@@ -382,12 +381,8 @@ structure F2FabulousOverlayState where
   bar0CyclesSpent : Nat
   deriving DecidableEq, Repr, Inhabited
 inductive F2Bar0Action where
-  | rstMainLow
-  | bar0FreezeIsolate
-  | bar0WriteExpectedDigest (dig : BitVec 256)
-  | bar0StreamFrames (frames : Array TileFrame)
-  | bar0AuthenticateCommit
-  | datapathCompute
+  | rstMainLow | bar0FreezeIsolate | bar0WriteExpectedDigest (dig : BitVec 256)
+  | bar0StreamFrames (frames : Array TileFrame) | bar0AuthenticateCommit | datapathCompute
   deriving DecidableEq, Repr
 def bar0HotSwapCycles (numTiles : Nat) : Nat := 4 + 32 + 32 * numTiles + 8
 @[expose] def bar0HotSwapLatencyNs (numTiles : Nat) : Nat := 4 * bar0HotSwapCycles numTiles
@@ -399,49 +394,62 @@ def bar0HotSwapCycles (numTiles : Nat) : Nat := 4 + 32 + 32 * numTiles + 8
   match act with
   | .rstMainLow =>
     let clamped := if st.fabric.phase = .active then observedBoundaryPort st.fabric else st.fabric.clampedOut
-    { fabric := { st.fabric with
-        phase := .isolateClamped, clampedOut := clamped, pending := none,
-        targetRegs := st.fabric.targetRegs.map (fun _ => false), neighbors := nextNeighbors }
-    , overlayPhase := .frozenIsolated, stagedFrames := #[], expectedDigest256 := 0#256, bar0CyclesSpent := 0 }
+    let fabRst : DprFabric :=
+      { st.fabric with phase := .isolateClamped, clampedOut := clamped, pending := none, targetRegs := st.fabric.targetRegs.map (fun _ => false), neighbors := nextNeighbors }
+    { fabric := fabRst, overlayPhase := .frozenIsolated, stagedFrames := #[], expectedDigest256 := 0#256, bar0CyclesSpent := 0 }
   | .bar0FreezeIsolate =>
     let fab1 := administer st.fabric .isolateClamped
     { st with fabric := { fab1 with neighbors := nextNeighbors },
               overlayPhase := .frozenIsolated, stagedFrames := #[], bar0CyclesSpent := 4 }
   | .bar0WriteExpectedDigest dig =>
-    if st.fabric.phase = .active then
-      { st with fabric := { st.fabric with neighbors := nextNeighbors } }
-    else
-      { st with fabric := { st.fabric with neighbors := nextNeighbors },
-                expectedDigest256 := dig, bar0CyclesSpent := st.bar0CyclesSpent + 32 }
+    if st.fabric.phase = .active then { st with fabric := { st.fabric with neighbors := nextNeighbors } }
+    else { st with fabric := { st.fabric with neighbors := nextNeighbors },
+                   expectedDigest256 := dig, bar0CyclesSpent := st.bar0CyclesSpent + 32 }
   | .bar0StreamFrames frames =>
-    if st.fabric.phase = .active then
-      { st with fabric := { st.fabric with neighbors := nextNeighbors } }
+    if st.fabric.phase = .active then { st with fabric := { st.fabric with neighbors := nextNeighbors } }
     else
       let fab1 := administer st.fabric (.loadFrames frames)
       { st with fabric := { fab1 with neighbors := nextNeighbors },
                 stagedFrames := frames, bar0CyclesSpent := st.bar0CyclesSpent + 32 * frames.size }
   | .bar0AuthenticateCommit =>
-    if st.fabric.phase = .active then
-      { st with fabric := { st.fabric with neighbors := nextNeighbors } }
+    if st.fabric.phase = .active then { st with fabric := { st.fabric with neighbors := nextNeighbors } }
     else if digestTileFrames256 H st.stagedFrames == st.expectedDigest256 then
       match decodeTileFrames st.fabric.activeTiles.size st.stagedFrames with
       | some decoded =>
         let fabOk : DprFabric :=
-          { st.fabric with
-            phase := .active, activeTiles := decoded, sram := st.stagedFrames,
-            pending := none, neighbors := nextNeighbors }
+          { st.fabric with phase := .active, activeTiles := decoded, sram := st.stagedFrames, pending := none, neighbors := nextNeighbors }
         { st with fabric := fabOk, overlayPhase := .active, bar0CyclesSpent := st.bar0CyclesSpent + 8 }
       | none =>
-        let fabQuar : DprFabric :=
-          { st.fabric with phase := .isolateClamped, pending := none, neighbors := nextNeighbors }
+        let fabQuar : DprFabric := { st.fabric with phase := .isolateClamped, pending := none, neighbors := nextNeighbors }
         { st with fabric := fabQuar, overlayPhase := .quarantined, bar0CyclesSpent := st.bar0CyclesSpent + 8 }
     else
-      let fabQuar : DprFabric :=
-        { st.fabric with phase := .isolateClamped, pending := none, neighbors := nextNeighbors }
+      let fabQuar : DprFabric := { st.fabric with phase := .isolateClamped, pending := none, neighbors := nextNeighbors }
       { st with fabric := fabQuar, overlayPhase := .quarantined, bar0CyclesSpent := st.bar0CyclesSpent + 8 }
   | .datapathCompute =>
     let fab1 := administer st.fabric .compute
     { st with fabric := { fab1 with neighbors := nextNeighbors } }
+def checkHash256Width (H : Obend.Digest.HashBytes.Hash) (bs : List UInt8) : Bool :=
+  decide (Obend.Digest.HashBytes.ofBE (H bs) < 2 ^ 256)
+/-- Width-checked BAR0 overlay step refusing oversized `≥ 2^256` hash outputs instead of truncating mod `2^256`. -/
+def f2FabulousOverlayStepChecked (H : Obend.Digest.HashBytes.Hash) (st : F2FabulousOverlayState) (act : F2Bar0Action) :
+    F2FabulousOverlayState :=
+  match act with
+  | .bar0AuthenticateCommit =>
+    if st.fabric.phase = .active then f2FabulousOverlayStep H st .bar0AuthenticateCommit
+    else if checkHash256Width H (serializeTileFramesBytes st.stagedFrames) then f2FabulousOverlayStep H st .bar0AuthenticateCommit
+    else
+      let nextNeighbors := tickNeighbors st.fabric.inputs (observedBoundaryPort st.fabric) st.fabric.neighbors
+      { st with fabric := { st.fabric with phase := .isolateClamped, pending := none, neighbors := nextNeighbors },
+                overlayPhase := .quarantined, bar0CyclesSpent := st.bar0CyclesSpent + 8 }
+  | _ => f2FabulousOverlayStep H st act
+theorem f2FabulousOverlayStepChecked_quarantines_oversized_digest
+    (H : Obend.Digest.HashBytes.Hash) (st : F2FabulousOverlayState) (hNotAct : st.fabric.phase ≠ .active)
+    (hOver : 2 ^ 256 ≤ Obend.Digest.HashBytes.ofBE (H (serializeTileFramesBytes st.stagedFrames))) :
+    (f2FabulousOverlayStepChecked H st .bar0AuthenticateCommit).overlayPhase = .quarantined ∧
+    (f2FabulousOverlayStepChecked H st .bar0AuthenticateCommit).fabric.phase = .isolateClamped := by
+  have hFalse : checkHash256Width H (serializeTileFramesBytes st.stagedFrames) = false := by
+    simp [checkHash256Width]; omega
+  simp [f2FabulousOverlayStepChecked, hNotAct, hFalse]
 def runF2Bar0Schedule (H : Obend.Digest.HashBytes.Hash) (st : F2FabulousOverlayState) :
     List F2Bar0Action → F2FabulousOverlayState
   | [] => st
@@ -622,25 +630,16 @@ theorem f2_pcie_fabulous_hotswap_stutter_safe (H : Obend.Digest.HashBytes.Hash) 
       rcases hBad with hNeDig | hNone
       · simp [beq_eq_false_iff_ne.mpr hNeDig]
       · rw [hNone]; split <;> exact ⟨rfl, rfl, rfl⟩
-    exact ⟨hs4.1, hs4.2.1, hs4.2.2,
-           observedBoundaryPort_of_ne_active s4.fabric (by rw [hs4.2.1]; simp)⟩
-
+    exact ⟨hs4.1, hs4.2.1, hs4.2.2, observedBoundaryPort_of_ne_active s4.fabric (by rw [hs4.2.1]; simp)⟩
 /-! ## 3. Pre-Placed UltraScale+ / RapidWright Locked Macro & `XDC` Emitter -/
 inductive Vu47pSiteKind where | sliceL | dsp48e2 | uram288 deriving DecidableEq, Repr
-def Vu47pSiteKind.prefixStr : Vu47pSiteKind → String
-  | .sliceL => "SLICE" | .dsp48e2 => "DSP48E2" | .uram288 => "URAM288"
-inductive UltraScaleBelPin where
-  | lut6 (slot : Fin 8) | ff (slot : Fin 8) | dspAlu | uramBase
-  deriving DecidableEq, Repr
+def Vu47pSiteKind.prefixStr : Vu47pSiteKind → String | .sliceL => "SLICE" | .dsp48e2 => "DSP48E2" | .uram288 => "URAM288"
+inductive UltraScaleBelPin where | lut6 (slot : Fin 8) | ff (slot : Fin 8) | dspAlu | uramBase deriving DecidableEq, Repr
 def slotChar (s : Fin 8) : Char :=
-  match s.val with
-  | 0 => 'A' | 1 => 'B' | 2 => 'C' | 3 => 'D'
-  | 4 => 'E' | 5 => 'F' | 6 => 'G' | _ => 'H'
+  match s.val with | 0 => 'A' | 1 => 'B' | 2 => 'C' | 3 => 'D' | 4 => 'E' | 5 => 'F' | 6 => 'G' | _ => 'H'
 def UltraScaleBelPin.toBelName : UltraScaleBelPin → String
-  | .lut6 s => String.ofList [slotChar s, '6', 'L', 'U', 'T']
-  | .ff s => String.ofList [slotChar s, 'F', 'F']
-  | .dspAlu => "DSP_ALU"
-  | .uramBase => "URAM288_BASE"
+  | .lut6 s => String.ofList [slotChar s, '6', 'L', 'U', 'T'] | .ff s => String.ofList [slotChar s, 'F', 'F']
+  | .dspAlu => "DSP_ALU" | .uramBase => "URAM288_BASE"
 private theorem slotChar_injective {s₁ s₂ : Fin 8} (h : slotChar s₁ = slotChar s₂) : s₁ = s₂ := by
   rcases s₁ with ⟨v₁, hv₁⟩; rcases s₂ with ⟨v₂, hv₂⟩
   have h1 : v₁ = 0 ∨ v₁ = 1 ∨ v₁ = 2 ∨ v₁ = 3 ∨ v₁ = 4 ∨ v₁ = 5 ∨ v₁ = 6 ∨ v₁ = 7 := by omega

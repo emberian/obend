@@ -145,7 +145,8 @@ bits, a positive LSB, and a full scale that covers the core with the sensor erro
 def wf (p : SampledPhysicalPlantSpec) : Bool :=
   decide (0 < p.Ts) && decide (0 ≤ p.speed) && decide (0 ≤ p.sensGain) && decide (0 ≤ p.epsSensor) &&
   decide (2 ≤ p.adcBits) && decide (0 < p.vLsbMv) &&
-  decide (p.core.hi + p.epsSensor - p.sensOffset < p.sensGain * ((2 ^ p.adcBits * p.vLsbMv : Nat) : CanonicalRat))
+  decide (p.core.hi + p.epsSensor - p.sensOffset < p.sensGain * ((2 ^ p.adcBits * p.vLsbMv : Nat) : CanonicalRat)) &&
+  decide (p.core.lo ≤ p.core.hi) && decide (p.sensOffset ≤ p.core.lo - p.epsSensor)
 
 /-- **The check of one (zone, command) pair.** The Picard a-priori inclusion of `tube z` from `cell z`
 over one period, and re-entry of the period's endpoint into the core. -/
@@ -171,8 +172,17 @@ open SampledPhysicalPlantSpec
 
 theorem wf_iff (p : SampledPhysicalPlantSpec) : p.wf = true ↔
     0 < p.Ts ∧ 0 ≤ p.speed ∧ 0 ≤ p.sensGain ∧ 0 ≤ p.epsSensor ∧ 2 ≤ p.adcBits ∧ 0 < p.vLsbMv ∧
-    p.core.hi + p.epsSensor - p.sensOffset < p.sensGain * ((2 ^ p.adcBits * p.vLsbMv : Nat) : CanonicalRat) := by
+    p.core.hi + p.epsSensor - p.sensOffset < p.sensGain * ((2 ^ p.adcBits * p.vLsbMv : Nat) : CanonicalRat) ∧
+    p.core.lo ≤ p.core.hi ∧ p.sensOffset ≤ p.core.lo - p.epsSensor := by
   simp only [wf, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+
+/-- Non-empty core and lower-rail ADC sensor coverage implied by `wf`. -/
+theorem wf_core_sensor_coverage (p : SampledPhysicalPlantSpec) (hwf : p.wf = true) :
+    p.core.lo ≤ p.core.hi ∧ ∀ x, x ∈ p.core → p.sensOffset ≤ x - p.epsSensor := by
+  obtain ⟨_, _, _, _, _, _, _, hcore, hlo⟩ := (wf_iff p).1 hwf
+  refine ⟨hcore, fun x hx => ?_⟩
+  rw [Interval.mem_iff] at hx
+  grind
 
 theorem estimate_mono (p : SampledPhysicalPlantSpec) (hg : 0 ≤ p.sensGain) {a b : Nat} (h : a ≤ b) :
     p.estimate a ≤ p.estimate b := by
@@ -190,7 +200,7 @@ the code is in range. -/
 theorem adc_estimate_within_eps (p : SampledPhysicalPlantSpec) (hwf : p.wf = true) {x : CanonicalRat} {vInMv : Nat}
     (hx : x ∈ p.core) (hs : p.SensorReads x vInMv) :
     ratAbs (p.estimate (p.adcCode vInMv) - x) ≤ p.epsAdc ∧ p.adcCode vInMv < 2 ^ p.adcBits := by
-  obtain ⟨_, _, hg, he, _, hlsb, hrange⟩ := (wf_iff p).1 hwf
+  obtain ⟨_, _, hg, he, _, hlsb, hrange, _, _⟩ := (wf_iff p).1 hwf
   rw [SensorReads, ratAbs_le_iff] at hs
   rw [Interval.mem_iff] at hx
   have hq := Analog.runSarAdcN_exact_quantization_bounds p.adcBits vInMv p.vLsbMv hlsb
@@ -243,7 +253,7 @@ theorem zoneOf_bounds (p : SampledPhysicalPlantSpec) (hbits : 2 ≤ p.adcBits) {
 theorem state_in_cell (p : SampledPhysicalPlantSpec) (hwf : p.wf = true) {x : CanonicalRat} {vInMv : Nat}
     (hx : x ∈ p.core) (hs : p.SensorReads x vInMv) : x ∈ p.cell (p.zoneOf (p.adcCode vInMv)) := by
   obtain ⟨hest, hrange⟩ := adc_estimate_within_eps p hwf hx hs
-  obtain ⟨_, _, hg, _, hbits, _, _⟩ := (wf_iff p).1 hwf
+  obtain ⟨_, _, hg, _, hbits, _, _, _, _⟩ := (wf_iff p).1 hwf
   obtain ⟨hzlo, hzhi⟩ := zoneOf_bounds p hbits hrange
   have h1 := estimate_mono p hg hzlo
   have h2 := estimate_mono p hg hzhi
@@ -923,6 +933,39 @@ theorem currentLoopShieldFlow_safe (z : HWState) (u : HWAct) (i : CanonicalRat)
   have h := flow_in_tube ha (by simpa only [currentLoopShieldFlow_zero] using hi)
     (currentLoopInterSampleFlow_sound z u i hi)
   exact tube_subset_phys _ _ (h.1 t ht hT).1
+
+/-- Open-world configuration-bus handler (`adminStepRawBus`): arbitrary `frames : Array TileFrame`
+(including valid-CRC unauthenticated rogue frames!) are quarantined into `.isolateClamped` unless
+accompanied by an authenticated `(candidate, cert)` matching `compilePolicyFrames` and accepted by `st.verifier`. -/
+def adminStepRawBus (p : SampledPhysicalPlantSpec) (st : ShieldStage)
+    (frames : Array TileFrame) (auth? : Option (RtlExpr × FastProofCert × Bool)) : ShieldStage :=
+  match auth? with
+  | some (cand, cert, promote) =>
+    if frames == compilePolicyFrames (policyOfRtl cand) then
+      amendShieldPolicy p st cand cert promote
+    else
+      { st with dpr := stepDprFabric st.dpr .isolateClamped }
+  | none =>
+    { st with dpr := stepDprFabric st.dpr .isolateClamped }
+
+theorem adminStepRawBus_sound (p : SampledPhysicalPlantSpec) {st : ShieldStage}
+    (h : ShieldSound p st) (frames : Array TileFrame)
+    (auth? : Option (RtlExpr × FastProofCert × Bool)) :
+    ShieldSound p (adminStepRawBus p st frames auth?) := by
+  cases auth? with
+  | none =>
+    exact ⟨h.kernel, (fabric_isolate h.fabric).1, h.root, h.core⟩
+  | some triple =>
+    rcases triple with ⟨cand, cert, promote⟩
+    simp only [adminStepRawBus]
+    split
+    · exact adminStep_sound p h (.load cand cert promote)
+    · exact ⟨h.kernel, (fabric_isolate h.fabric).1, h.root, h.core⟩
+
+theorem adminStepRawBus_unauth_fences (p : SampledPhysicalPlantSpec) (st : ShieldStage)
+    (frames : Array TileFrame) (hAct : st.dpr.phase = .active) :
+    (adminStepRawBus p st frames none).dpr.phase = .isolateClamped := by
+  simp [adminStepRawBus, stepDprFabric, administer, hAct]
 
 end Obend.Hardware.SafePhysicalShield
 end

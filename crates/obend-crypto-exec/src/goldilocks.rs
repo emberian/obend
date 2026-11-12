@@ -47,6 +47,7 @@ pub enum GoldilocksExecError {
     InvalidPowerOfTwoLength(usize),
     LogLengthExceedsTwoAdicity(u32),
     ZeroBlowupFactor,
+    ZeroCosetShift,
     RoundCountMismatch { expected: usize, actual: usize },
     DegreeBoundExceeded { max_deg: usize, actual_coeffs: usize },
     RoundSumCheckFailed { round: usize },
@@ -60,6 +61,7 @@ impl fmt::Display for GoldilocksExecError {
             Self::InvalidPowerOfTwoLength(n) => write!(f, "length {n} is not a non-zero power of two"),
             Self::LogLengthExceedsTwoAdicity(k) => write!(f, "log2(N)={k} exceeds Goldilocks 2-adicity 32"),
             Self::ZeroBlowupFactor => write!(f, "LDE blowup factor must be a power of two >= 1"),
+            Self::ZeroCosetShift => write!(f, "coset LDE shift must be non-zero in F_p^*"),
             Self::RoundCountMismatch { expected, actual } => {
                 write!(f, "sumcheck round count mismatch: expected {expected}, got {actual}")
             }
@@ -723,11 +725,20 @@ pub fn coset_lde(
     if blowup == 0 || !blowup.is_power_of_two() {
         return Err(GoldilocksExecError::ZeroBlowupFactor);
     }
+    if shift == Goldilocks::ZERO {
+        return Err(GoldilocksExecError::ZeroCosetShift);
+    }
     let c = evals.len();
     if c == 0 || !c.is_power_of_two() {
         return Err(GoldilocksExecError::InvalidPowerOfTwoLength(c));
     }
-    let extended_len = c.checked_mul(blowup).ok_or(GoldilocksExecError::LogLengthExceedsTwoAdicity(33))?;
+    let extended_len = c
+        .checked_mul(blowup)
+        .ok_or(GoldilocksExecError::LogLengthExceedsTwoAdicity(GOLDILOCKS_TWO_ADICITY + 1))?;
+    let ext_log = extended_len.trailing_zeros();
+    if ext_log > GOLDILOCKS_TWO_ADICITY {
+        return Err(GoldilocksExecError::LogLengthExceedsTwoAdicity(ext_log));
+    }
     let mut coeffs = evals.to_vec();
     intt_in_place(&mut coeffs)?;
 
@@ -787,12 +798,13 @@ pub fn eq_poly_at<F: FieldElem>(z: &[F], r: &[F]) -> F {
 /// layout (`idx` bit `i` = `(idx >> i) & 1`, so coordinate `0` alternates at stride `1`).
 pub fn eq_poly_table<F: FieldElem>(point: &[F]) -> Vec<F> {
     let v = point.len();
+    assert!(
+        v < usize::BITS as usize,
+        "eq_poly_table dimension {v} exceeds addressable hypercube"
+    );
     let total = 1usize << v;
     let mut table = vec![F::ZERO; total];
     table[0] = F::ONE;
-    // Build from MSB down to LSB so coordinate 0 ends up at stride 1:
-    // After processing `point[v - 1 .. k]`, `cur_len = 2^(v - k)`.
-    // Splitting each entry `w` into `[(1 - r_k) * w, r_k * w]` doubles length with `r_k` at bit 0!
     let mut cur_len = 1usize;
     for &rk in point.iter().rev() {
         let one_minus_rk = F::ONE - rk;
@@ -808,7 +820,9 @@ pub fn eq_poly_table<F: FieldElem>(point: &[F]) -> Vec<F> {
 
 /// Evaluate multilinear table `tbl` ($|\text{tbl}| = 2^v$) at `point` in $O(2^v)$ operations.
 pub fn mle_eval<F: FieldElem>(tbl: &[F], point: &[F]) -> Result<F, GoldilocksExecError> {
-    let expected = 1usize << point.len();
+    let Some(expected) = (point.len() < usize::BITS as usize).then(|| 1usize << point.len()) else {
+        return Err(GoldilocksExecError::InvalidPowerOfTwoLength(tbl.len()));
+    };
     if tbl.len() != expected {
         return Err(GoldilocksExecError::InvalidPowerOfTwoLength(tbl.len()));
     }
@@ -826,7 +840,9 @@ pub fn mle_eval_base_at_ext2(
     tbl: &[Goldilocks],
     point: &[GoldilocksExt2],
 ) -> Result<GoldilocksExt2, GoldilocksExecError> {
-    let expected = 1usize << point.len();
+    let Some(expected) = (point.len() < usize::BITS as usize).then(|| 1usize << point.len()) else {
+        return Err(GoldilocksExecError::InvalidPowerOfTwoLength(tbl.len()));
+    };
     if tbl.len() != expected {
         return Err(GoldilocksExecError::InvalidPowerOfTwoLength(tbl.len()));
     }
@@ -870,7 +886,7 @@ impl SumcheckRoundPolyExt2 {
 
     #[inline]
     pub fn deg_le(&self, max_deg: usize) -> bool {
-        self.coeffs.len() <= max_deg + 1
+        self.coeffs.len() <= max_deg.saturating_add(1)
     }
 
     /// Canonical byte serialization matching `Obend.Crypto.Sumcheck.encodeRoundPoly`.
@@ -984,7 +1000,9 @@ pub fn prove_eq_weighted_sumcheck_ext2(
     tr: &mut FenziTranscript<InstanceBound>,
 ) -> Result<(Vec<SumcheckRoundPolyExt2>, SumcheckEvalClaimExt2), GoldilocksExecError> {
     let num_vars = eval_point.len();
-    let expected_len = 1usize << num_vars;
+    let Some(expected_len) = (num_vars < usize::BITS as usize).then(|| 1usize << num_vars) else {
+        return Err(GoldilocksExecError::InvalidPowerOfTwoLength(base_tbl.len()));
+    };
     if base_tbl.len() != expected_len {
         return Err(GoldilocksExecError::InvalidPowerOfTwoLength(base_tbl.len()));
     }
@@ -1531,5 +1549,31 @@ mod tests {
                 219, 70, 102, 137, 73, 207, 135, 141, 48, 175, 71
             ]
         );
+    }
+
+    #[test]
+    fn test_coset_lde_and_mle_defensive_bounds() {
+        let evals = [Goldilocks::ONE, Goldilocks::TWO];
+        // Degenerate zero shift in F_p is rejected rather than collapsing non-constant terms.
+        assert_eq!(
+            coset_lde(&evals, Goldilocks::ZERO, 2),
+            Err(GoldilocksExecError::ZeroCosetShift)
+        );
+        // Oversized blowup exceeding Goldilocks 2-adicity 32 fails BEFORE allocating 2^33 words.
+        assert_eq!(
+            coset_lde(&evals, Goldilocks::NON_RESIDUE, 1usize << 32),
+            Err(GoldilocksExecError::LogLengthExceedsTwoAdicity(33))
+        );
+        // Oversized point dimension >= usize::BITS returns InvalidPowerOfTwoLength without shift panic.
+        let huge_pt = vec![GoldilocksExt2::ONE; usize::BITS as usize];
+        assert_eq!(
+            mle_eval_base_at_ext2(&evals, &huge_pt),
+            Err(GoldilocksExecError::InvalidPowerOfTwoLength(evals.len()))
+        );
+        // `deg_le(usize::MAX)` saturates cleanly without arithmetic overflow.
+        let poly = SumcheckRoundPolyExt2 {
+            coeffs: vec![GoldilocksExt2::ONE, GoldilocksExt2::ZERO],
+        };
+        assert!(poly.deg_le(usize::MAX));
     }
 }

@@ -658,21 +658,25 @@ def MnaStepNonlinearProp (spec : MnaCircuitSpec) (method : MnaMethod) (step : Mn
       0 ≤ (iPrev - b.gMin * vPrev) * (b.gMax * vPrev - iPrev) ∧
       0 ≤ ((vNext + vPrev) / 2) * ((iNext + iPrev) / 2))
 def dfltTraceStep : MnaTraceStep := ⟨1, [], [], [], [], [], 0⟩
-/-- Exact dimensions: default-zero indexing must not hide missing or extra entries. -/
+/-- Exact dimensions and valid nonlinear branch terminal indices (`< s.dim`): out-of-range terminals never silently become ground. -/
 @[expose] def MnaSpecDims (s : MnaCircuitSpec) : Prop :=
   s.matC.length = s.dim ∧ (∀ row ∈ s.matC, row.length = s.dim) ∧
   s.matG.length = s.dim ∧ (∀ row ∈ s.matG, row.length = s.dim) ∧
-  s.matB.length = s.dim ∧ (∀ row ∈ s.matB, row.length = s.inputDim)
+  s.matB.length = s.dim ∧ (∀ row ∈ s.matB, row.length = s.inputDim) ∧
+  ∀ b ∈ s.nlBranches,
+    b.nodeP?.all (fun p => decide (p < s.dim)) = true ∧
+    b.nodeN?.all (fun q => decide (q < s.dim)) = true
 instance (s : MnaCircuitSpec) : Decidable (MnaSpecDims s) := by unfold MnaSpecDims; infer_instance
 def checkMnaSpecDims (s : MnaCircuitSpec) : Bool := decide (MnaSpecDims s)
 theorem checkMnaSpecDims_iff (s : MnaCircuitSpec) : checkMnaSpecDims s = true ↔ MnaSpecDims s := by
   simp [checkMnaSpecDims]
-/-- One held input and both endpoint branch currents have exact dimensions. -/
+/-- Exact vector dimensions plus inter-step continuity of both state `x` and nonlinear branch currents `iBranches`. -/
 @[expose] def MnaTraceDims (s : MnaCircuitSpec) (steps : List MnaTraceStep) : Prop :=
   (∀ t ∈ steps, t.xPrev.length = s.dim ∧ t.xNext.length = s.dim ∧
     t.uInput.length = s.inputDim ∧ t.iBranchesPrev.length = s.nlBranches.length ∧
     t.iBranchesNext.length = s.nlBranches.length) ∧
-  ∀ pair ∈ steps.zip (steps.drop 1), pair.1.xNext = pair.2.xPrev
+  ∀ pair ∈ steps.zip (steps.drop 1),
+    pair.1.xNext = pair.2.xPrev ∧ pair.1.iBranchesNext = pair.2.iBranchesPrev
 instance (s : MnaCircuitSpec) (steps : List MnaTraceStep) : Decidable (MnaTraceDims s steps) := by
   unfold MnaTraceDims; infer_instance
 /-- Independent semantic meaning of `mnaCircuitDaeJudge` (pure mathematical `Prop` without calling `check`). -/
@@ -973,7 +977,8 @@ private def encodeRatMatJson (M : List (List CanonicalRat)) : SosJson := .arr (M
 private def decodeRatMatJson (j : SosJson) : Except String (List (List CanonicalRat)) := j.getArr? >>= List.mapM decodeRatVecJson
 private def encodeOptNatJson : Option Nat → SosJson | none => .ofInt (-1) | some k => .ofNat k
 private def decodeOptNatJson (j : SosJson) : Except String (Option Nat) := do
-  let m ← j.getInt?; if m < 0 then .ok none else .ok (some m.toNat)
+  let m ← j.getInt?
+  if m = -1 then .ok none else if 0 ≤ m then .ok (some m.toNat) else .error "non-canonical negative branch node"
 private def encodeNlBranchJson (b : MnaNonlinearBranch) : SosJson :=
   SosJson.mkObj
     [ ("nodeP", encodeOptNatJson b.nodeP?), ("nodeN", encodeOptNatJson b.nodeN?)

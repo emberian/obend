@@ -1312,5 +1312,78 @@ theorem decodeAndVerifyAsyncKernel_sound (vgprCount : Nat) (ws : List UInt32)
     · subst hT; exact waitcnt_safe_async_refines_sync s₀ turns sFinal wf h.2 ex
   · cases h
 
+/-- Straight-line non-memory block check discharging `BlockWellFormed` without external footprint assumptions. -/
+def checkNonMemSyncInst (i : Inst) : Bool :=
+  !memoryInstruction i && (!(i.name == "S_WAITCNT" || i.name == "S_WAITCNT_VSCNT") || modifiersClear i)
+
+def checkNonMemSyncBlock (is : List Inst) : Bool := is.all checkNonMemSyncInst
+
+def allSyncLive : WaveState → List Inst → Bool
+  | _, [] => true
+  | s, i :: is => !(s.halted || s.err.isSome) && allSyncLive (instructionAfter i s) is
+
+theorem nonMemSyncBlock_wellFormed (s₀ : WaveState) (is : List Inst)
+    (hBlk : checkNonMemSyncBlock is = true) (hLive : allSyncLive s₀ is = true) :
+    BlockWellFormed (fun s => s = AsyncWaveState.init s₀) is := by
+  induction is generalizing s₀ with
+  | nil => exact BlockWellFormed.nil _
+  | cons i rest ih =>
+    simp only [checkNonMemSyncBlock, List.all_cons, Bool.and_eq_true] at hBlk
+    simp only [allSyncLive, Bool.and_eq_true, Bool.not_eq_true'] at hLive
+    have hInst := hBlk.1
+    unfold checkNonMemSyncInst at hInst
+    simp only [Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at hInst
+    by_cases hw : i.name == "S_WAITCNT" || i.name == "S_WAITCNT_VSCNT"
+    · have hName : i.name = "S_WAITCNT" ∨ i.name = "S_WAITCNT_VSCNT" := by
+        simp only [Bool.or_eq_true, beq_iff_eq] at hw; exact hw
+      have hClr : modifiersClear i = true := by simp [hw] at hInst; exact hInst.2
+      apply BlockWellFormed.cons _ (fun s => s = AsyncWaveState.init (instructionAfter i s₀)) i rest
+      · intro s hs; subst hs; exact wait_instruction_footprint i _ hName hClr hLive.1
+      · intro s t c hs hc; subst hs; exact False.elim (complete_empty _ _ _ hc)
+      · intro s t ns hs hi; subst hs
+        have hFp := wait_instruction_footprint i (AsyncWaveState.init s₀) hName hClr hLive.1
+        have hCoh : Coherent (queues (AsyncWaveState.init s₀)) := by simp [Coherent, queues, AsyncWaveState.init]
+        have hBnd0 : Bounded {} (AsyncWaveState.init s₀) := by
+          simp [Bounded, AsyncWaveState.init, AsyncWaveState.vmCnt, AsyncWaveState.lgkmCnt, AsyncWaveState.vsCnt, Pending.empty]
+        have hBnd1 := issue_bounded {} (AsyncWaveState.init s₀) t i ns hLive.1 hBnd0 hi
+        have hDrn : (updateCounters {} i).drained = true := by
+          rcases hName with hn | hn <;>
+            simp [updateCounters, hn, BlockCounters.drained, Pending.empty, fifoWait]
+        have hEmpty := bounded_drained _ t hBnd1 hDrn
+        have hSettle := (issue_settle (AsyncWaveState.init s₀) t i ns hCoh hFp hi).2
+        rw [empty_eq_init t hEmpty, hSettle]
+        rfl
+      · exact ih (instructionAfter i s₀) hBlk.2 hLive.2
+    · simp only [Bool.or_eq_true, not_or, beq_iff_eq] at hw
+      apply BlockWellFormed.cons _ (fun s => s = AsyncWaveState.init (instructionAfter i s₀)) i rest
+      · intro s hs; subst hs; exact nonmemory_empty_footprint i s₀ hw.1 hw.2 hInst.1 hLive.1
+      · intro s t c hs hc; subst hs; exact False.elim (complete_empty _ _ _ hc)
+      · intro s t ns hs hi; subst hs
+        rw [empty_plain_issue i s₀ ns hw.1 hw.2 hInst.1 hLive.1] at hi
+        exact (Except.ok.inj hi).symm
+      · exact ih (instructionAfter i s₀) hBlk.2 hLive.2
+
+/-- Self-contained word-level async-refines-sync theorem for straight-line non-memory kernels (zero external `BlockWellFormed` premise). -/
+theorem verifyNonMemKernelWords_sound (vgprCount : Nat) (ws : List UInt32) (is : List Inst)
+    (hDec : decodeKernelWords ws.length ws = some is)
+    (hVgpr : checkVgprFootprint vgprCount is = true)
+    (hAsync : checkAsyncBlock is = true)
+    (hNonMem : checkNonMemSyncBlock is = true)
+    (s₀ : WaveState) (hLive : allSyncLive s₀ is = true)
+    (turns : List Turn) (sFinal : AsyncWaveState)
+    (hTurns : turns.map (·.instruction) = is)
+    (hRun : run (AsyncWaveState.init s₀) turns = .ok sFinal) :
+    decodeKernelWords ws.length ws = some is ∧
+    (∀ i ∈ is, ∀ n, Reg.v n ∈ i.access.reads ++ i.access.writes → n < vgprCount) ∧
+    sFinal.vmQueue = [] ∧ sFinal.lgkmQueue = [] ∧ sFinal.vsQueue = [] ∧ sFinal.toGWave = syncRun s₀ is := by
+  subst hTurns
+  refine ⟨hDec, fun i hi n hn => ?_, waitcnt_safe_async_refines_sync s₀ turns sFinal
+    ⟨fun s => s = AsyncWaveState.init s₀, rfl, nonMemSyncBlock_wellFormed s₀ _ hNonMem hLive⟩ hAsync hRun⟩
+  have := List.all_eq_true.mp (List.all_eq_true.mp hVgpr i hi) (.v n) hn
+  simpa using this
+
+example : checkVgprFootprint 128 ([] : List Inst) = true ∧ checkNonMemSyncBlock ([] : List Inst) = true ∧
+    (∀ s₀ : WaveState, allSyncLive s₀ ([] : List Inst) = true) := ⟨rfl, rfl, fun _ => rfl⟩
+
 end Async
 end Obend.Hardware.Gpu.Rdna2

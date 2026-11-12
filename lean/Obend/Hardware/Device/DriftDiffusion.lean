@@ -104,9 +104,10 @@ def vol (o : DdSpec) (i : Nat) : CanonicalRat := (o.h (i - 1) + o.h i) / 2
 def vt (o : DdSpec) : CanonicalRat := o.si.vt
 def q (o : DdSpec) : CanonicalRat := o.si.q
 def eps (o : DdSpec) : CanonicalRat := o.si.eps
-/-- At least three nodes, strictly increasing. -/
+/-- At least three strictly increasing nodes and positive physical device parameters. -/
 def meshOk (o : DdSpec) : Bool :=
-  decide (3 ≤ o.nodes) &&
+  decide (3 ≤ o.nodes) && decide (0 < o.areaCm2) &&
+  decide (0 < o.si.tempK ∧ 0 < o.tauN ∧ 0 < o.tauP ∧ 0 ≤ o.tolRel) &&
   (List.range (o.nodes - 1)).all fun e => decide (0 < o.h e)
 end DdSpec
 namespace DdSolution
@@ -555,37 +556,76 @@ theorem checkDd_refused_mesh {o : DdSpec} {c : DdSolution} {p : List Nat}
     repeat' split at h
     all_goals cases h
 /-- **The judge.** A refusal by `.mesh` is a refutation (`DdMeaning.mesh` fails for every certificate).
-Completeness is claimed on the reference slab only, by its accepted certificate: the residual clause of
-`DdMeaning` is the bound for every Bernoulli table, and `checkDd` decides it by interval evaluation,
-which over-approximates the range of an expression in which `b_e` occurs twice, so a certificate with
-`DdMeaning` can be refused and no wider fragment is claimed. -/
+Completeness holds over the continuous positive-area equilibrium slab family `{ o | { o with areaCm2 := 1 } = badSpec }`. -/
+private theorem within_sub_zero_scale {J : Interval} {tol S A : CanonicalRat}
+    (h1 : (Interval.sub (Interval.ofPoint 0) (Interval.scale 1 J)).within (tol * 1 * S) = true) (hA : 0 ≤ A) :
+    (Interval.sub (Interval.ofPoint 0) (Interval.scale A J)).within (tol * A * S) = true := by
+  simp only [Interval.within, Bool.and_eq_true, decide_eq_true_eq] at h1 ⊢
+  simp only [Interval.sub, Interval.scale, Interval.mul, Interval.ofPoint, Interval.min4, Interval.max4] at h1 ⊢
+  rcases @Rat.le_total J.lo J.hi with h | h <;>
+    (have am := Rat.mul_le_mul_of_nonneg_left h hA; have s1 := Rat.mul_le_mul_of_nonneg_left h1.1 hA
+     have s2 := Rat.mul_le_mul_of_nonneg_left h1.2 hA; grind)
+/-- Equilibrium slab completeness across all positive cross-sectional areas `0 < A`. -/
+theorem slab_area_accepted (A : CanonicalRat) (hA : 0 < A) :
+    checkDd { badSpec with areaCm2 := A } slabSolution = .ok := by
+  let oA : DdSpec := { badSpec with areaCm2 := A }
+  have hmeshA : oA.meshOk = true := by
+    have h3 : decide (3 ≤ badSpec.nodes) = true := by decide +kernel
+    have hSi : decide (0 < badSpec.si.tempK ∧ 0 < badSpec.tauN ∧ 0 < badSpec.tauP ∧ 0 ≤ badSpec.tolRel) = true := by decide +kernel
+    have hH : (List.range (badSpec.nodes - 1)).all (fun e => decide (0 < badSpec.h e)) = true := by decide +kernel
+    have h3A : decide (3 ≤ oA.nodes) = true := h3
+    have hAA : decide (0 < oA.areaCm2) = true := decide_eq_true hA
+    have hSiA : decide (0 < oA.si.tempK ∧ 0 < oA.tauN ∧ 0 < oA.tauP ∧ 0 ≤ oA.tolRel) = true := hSi
+    have hHA : (List.range (oA.nodes - 1)).all (fun e => decide (0 < oA.h e)) = true := hH
+    simp only [DdSpec.meshOk, h3A, hAA, hSiA, hHA, Bool.and_self]
+  have hlen : slabSolution.lengthsOk oA.nodes = true := (by decide +kernel : slabSolution.lengthsOk badSpec.nodes = true)
+  have hrec : runRecipe oA.si.kBEv oA.dealGroveTol (WaferState.bare oA.background) oA.recipe slabSolution.recipeCert =
+      some (WaferState.bare badSpec.background) := rfl
+  have hdop : firstFailing oA.nodes (dopingOk oA slabSolution (WaferState.bare badSpec.background)) = none :=
+    (by decide +kernel : firstFailing badSpec.nodes (dopingOk badSpec slabSolution (WaferState.bare badSpec.background)) = none)
+  have hni : oA.si.niOk slabSolution.ni = true := (by decide +kernel : badSpec.si.niOk slabSolution.ni = true)
+  have hmob : firstFailing oA.nodes (mobilityOk oA slabSolution) = none :=
+    (by decide +kernel : firstFailing badSpec.nodes (mobilityOk badSpec slabSolution) = none)
+  have henv : bernEnv? oA slabSolution = some slabEnv := (by decide +kernel : bernEnv? badSpec slabSolution = some slabEnv)
+  have hc0 : contactOk oA slabSolution 0 oA.biasV = true := (by decide +kernel : contactOk badSpec slabSolution 0 badSpec.biasV = true)
+  have hc1 : contactOk oA slabSolution (oA.nodes - 1) 0 = true :=
+    (by decide +kernel : contactOk badSpec slabSolution (badSpec.nodes - 1) 0 = true)
+  have hnodes : firstFailing (oA.nodes - 2) (fun k => nodeOk oA slabSolution slabEnv (k + 1)) = none :=
+    (by decide +kernel : firstFailing (badSpec.nodes - 2) (fun k => nodeOk badSpec slabSolution slabEnv (k + 1)) = none)
+  have hcur1 : currentOk badSpec slabSolution slabEnv = true := by decide +kernel
+  have hcurA : currentOk oA slabSolution slabEnv = true := by
+    unfold currentOk at hcur1 ⊢
+    have hj : evalInterval slabEnv (jTot oA slabSolution 0) = evalInterval slabEnv (jTot badSpec slabSolution 0) := rfl
+    have hs : scaleJn oA slabSolution slabEnv 0 + scaleJp oA slabSolution slabEnv 0 =
+        scaleJn badSpec slabSolution slabEnv 0 + scaleJp badSpec slabSolution slabEnv 0 := rfl
+    rw [hj, hs]; change (match evalInterval slabEnv (jTot badSpec slabSolution 0) with | some J => _ | none => false) = true
+    split at hcur1; · exact within_sub_zero_scale hcur1 (Rat.le_of_lt hA)
+    · cases hcur1
+  change checkDd oA slabSolution = .ok
+  unfold checkDd; dsimp only
+  simp only [hmeshA, hlen, hrec, hdop, hni, hmob, henv, hc0, hc1, hnodes, hcurA, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
 instance ddJudge : Obend.Judge DdSpec DdSolution where
-  Clause := DdClause
-  Meaning := DdMeaning
-  check _ := checkDd
-  sound := checkDd_sound
-  refutes := refutesClause
+  Clause := DdClause; Meaning := DdMeaning; check _ := checkDd; sound := checkDd_sound; refutes := refutesClause
   refuted := by
-    intro _ o c k p h hk c' hm
-    cases k <;> first | cases hk | skip
-    have hmesh := checkDd_refused_mesh h
-    rw [hm.mesh] at hmesh
-    cases hmesh
-  Fragment o := o = badSpec
+    intro _ o c k p h hk c' hm; cases k <;> first | cases hk | skip
+    have hmesh := checkDd_refused_mesh h; rw [hm.mesh] at hmesh; cases hmesh
+  Fragment o := { o with areaCm2 := 1 } = badSpec
   complete := by
-    intro o h _
-    subst h
-    exact ⟨slabSolution, 0, slab_accepted⟩
+    intro o hFrag ⟨_, hm₀⟩
+    have hEq : o = { badSpec with areaCm2 := o.areaCm2 } := by cases o; cases hFrag; rfl
+    have hA : 0 < o.areaCm2 := by
+      have hm := hm₀.mesh; simp only [DdSpec.meshOk, Bool.and_eq_true, decide_eq_true_eq] at hm; exact hm.1.1.2
+    rw [hEq]; exact ⟨slabSolution, 0, slab_area_accepted o.areaCm2 hA⟩
   mono := by intro _ _ _ _ _ _; rfl
 /-! ### JSON wire -/
-/-- Scientific decimal exponents are normalized exactly, including signed exponents. -/
+/-- Scientific decimal exponents are normalized exactly with bounded exponent width (`≤ 1024`). -/
 private def ddParseNumber (cs : List Char) : Option ((Int × Nat) × List Char) := do
   let ((m, e), rest) ← sosJsonParseNum cs
   match rest with
   | 'e' :: tail | 'E' :: tail =>
     let (neg, tail) := match tail with | '-' :: t => (true, t) | '+' :: t => (false, t) | t => (false, t)
     let (n, has, tail) := sosJsonParseDigits tail 0 false
-    if !has then none else
+    if !has || 1024 < n then none else
       if neg then some ((m, e+n), tail)
       else if n ≤ e then some ((m, e-n), tail)
       else some ((m * (10 : Int)^(n-e), 0), tail)
@@ -1299,25 +1339,61 @@ example : qfCurrentOk badSpec slabQuasiFermi slabQfEnv = true := by decide +kern
 example : DdQuasiFermiMeaning badSpec slabQuasiFermi := checkDdQuasiFermi_sound slabQuasiFermi_accepted
 example : ∃ (x e : CanonicalRat), 0 < e ∧ (x = 0 → e = 1) ∧ (x ≠ 0 → e ≠ 1) ∧ bernOf (-x) e⁻¹ = e * bernOf x e :=
   ⟨1, 2, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
-/-- **The quasi-Fermi judge.** `.mesh` refutes; completeness is claimed on the reference slab, by its
-accepted certificate (the interval evaluation over-approximates, as for `ddJudge`). -/
+/-- **The quasi-Fermi judge.** `.mesh` refutes; completeness holds across all positive cross-sectional areas `0 < A`. -/
+theorem slabQuasiFermi_area_accepted (A : CanonicalRat) (hA : 0 < A) :
+    checkDdQuasiFermi { badSpec with areaCm2 := A } slabQuasiFermi = .ok := by
+  let oA : DdSpec := { badSpec with areaCm2 := A }
+  have hmeshA : oA.meshOk = true := by
+    have h3 : decide (3 ≤ badSpec.nodes) = true := by decide +kernel
+    have hSi : decide (0 < badSpec.si.tempK ∧ 0 < badSpec.tauN ∧ 0 < badSpec.tauP ∧ 0 ≤ badSpec.tolRel) = true := by decide +kernel
+    have hH : (List.range (badSpec.nodes - 1)).all (fun e => decide (0 < badSpec.h e)) = true := by decide +kernel
+    have h3A : decide (3 ≤ oA.nodes) = true := h3
+    have hAA : decide (0 < oA.areaCm2) = true := decide_eq_true hA
+    have hSiA : decide (0 < oA.si.tempK ∧ 0 < oA.tauN ∧ 0 < oA.tauP ∧ 0 ≤ oA.tolRel) = true := hSi
+    have hHA : (List.range (oA.nodes - 1)).all (fun e => decide (0 < oA.h e)) = true := hH
+    simp only [DdSpec.meshOk, h3A, hAA, hSiA, hHA, Bool.and_self]
+  have hlen : slabQuasiFermi.lengthsOk oA.nodes = true := (by decide +kernel : slabQuasiFermi.lengthsOk badSpec.nodes = true)
+  have hrec : runRecipe oA.si.kBEv oA.dealGroveTol (WaferState.bare oA.background) oA.recipe slabQuasiFermi.base.recipeCert =
+      some (WaferState.bare badSpec.background) := rfl
+  have hdop : firstFailing oA.nodes (dopingOk oA slabQuasiFermi.base (WaferState.bare badSpec.background)) = none :=
+    (by decide +kernel : firstFailing badSpec.nodes (dopingOk badSpec slabQuasiFermi.base (WaferState.bare badSpec.background)) = none)
+  have hni : oA.si.niOk slabQuasiFermi.base.ni = true := (by decide +kernel : badSpec.si.niOk slabQuasiFermi.base.ni = true)
+  have hmob : firstFailing oA.nodes (mobilityOk oA slabQuasiFermi.base) = none :=
+    (by decide +kernel : firstFailing badSpec.nodes (mobilityOk badSpec slabQuasiFermi.base) = none)
+  have henv : qfEnv? oA slabQuasiFermi = some slabQfEnv := (by decide +kernel : qfEnv? badSpec slabQuasiFermi = some slabQfEnv)
+  have hboltz : firstFailing oA.nodes (boltzmannOk oA slabQuasiFermi) = none :=
+    (by decide +kernel : firstFailing badSpec.nodes (boltzmannOk badSpec slabQuasiFermi) = none)
+  have hc0 : qfContactOk oA slabQuasiFermi slabQfEnv 0 oA.biasV = true :=
+    (by decide +kernel : qfContactOk badSpec slabQuasiFermi slabQfEnv 0 badSpec.biasV = true)
+  have hc1 : qfContactOk oA slabQuasiFermi slabQfEnv (oA.nodes - 1) 0 = true :=
+    (by decide +kernel : qfContactOk badSpec slabQuasiFermi slabQfEnv (badSpec.nodes - 1) 0 = true)
+  have hnodes : firstFailing (oA.nodes - 2) (fun k => qfNodeOk oA slabQuasiFermi slabQfEnv (k + 1)) = none :=
+    (by decide +kernel : firstFailing (badSpec.nodes - 2) (fun k => qfNodeOk badSpec slabQuasiFermi slabQfEnv (k + 1)) = none)
+  have hcur1 : qfCurrentOk badSpec slabQuasiFermi slabQfEnv = true := by decide +kernel
+  have hcurA : qfCurrentOk oA slabQuasiFermi slabQfEnv = true := by
+    unfold qfCurrentOk at hcur1 ⊢
+    have hj : evalInterval slabQfEnv (jTotQ oA slabQuasiFermi 0) = evalInterval slabQfEnv (jTotQ badSpec slabQuasiFermi 0) := rfl
+    have hs : scaleJnQ oA slabQuasiFermi slabQfEnv 0 + scaleJpQ oA slabQuasiFermi slabQfEnv 0 =
+        scaleJnQ badSpec slabQuasiFermi slabQfEnv 0 + scaleJpQ badSpec slabQuasiFermi slabQfEnv 0 := rfl
+    rw [hj, hs]; change (match evalInterval slabQfEnv (jTotQ badSpec slabQuasiFermi 0) with | some J => _ | none => false) = true
+    split at hcur1; · exact within_sub_zero_scale hcur1 (Rat.le_of_lt hA)
+    · cases hcur1
+  change checkDdQuasiFermi oA slabQuasiFermi = .ok
+  unfold checkDdQuasiFermi; dsimp only
+  simp only [hmeshA, hlen, hrec, hdop, hni, hmob, henv, hboltz, hc0, hc1, hnodes, hcurA,
+    Bool.not_true, Bool.false_eq_true, ↓reduceIte]
 instance ddQuasiFermiJudge : Obend.Judge DdSpec DdQuasiFermiSolution where
-  Clause := DdClause
-  Meaning := DdQuasiFermiMeaning
-  check _ := checkDdQuasiFermi
-  sound := checkDdQuasiFermi_sound
-  refutes := refutesClause
+  Clause := DdClause; Meaning := DdQuasiFermiMeaning; check _ := checkDdQuasiFermi; sound := checkDdQuasiFermi_sound; refutes := refutesClause
   refuted := by
-    intro _ o c k p h hk c' hm
-    cases k <;> first | cases hk | skip
-    have hmesh := checkDdQuasiFermi_refused_mesh h
-    rw [hm.mesh] at hmesh
-    cases hmesh
-  Fragment o := o = badSpec
+    intro _ o c k p h hk c' hm; cases k <;> first | cases hk | skip
+    have hmesh := checkDdQuasiFermi_refused_mesh h; rw [hm.mesh] at hmesh; cases hmesh
+  Fragment o := { o with areaCm2 := 1 } = badSpec
   complete := by
-    intro o h _
-    subst h
-    exact ⟨slabQuasiFermi, 0, slabQuasiFermi_accepted⟩
+    intro o hFrag ⟨_, hm₀⟩
+    have hEq : o = { badSpec with areaCm2 := o.areaCm2 } := by cases o; cases hFrag; rfl
+    have hA : 0 < o.areaCm2 := by
+      have hm := hm₀.mesh; simp only [DdSpec.meshOk, Bool.and_eq_true, decide_eq_true_eq] at hm; exact hm.1.1.2
+    rw [hEq]; exact ⟨slabQuasiFermi, 0, slabQuasiFermi_area_accepted o.areaCm2 hA⟩
   mono := by intro _ _ _ _ _ _; rfl
 private def ddStr (s : String) : SosJson := .str s.toList
 private def ddVec (v : List CanonicalRat) : SosJson := .arr (v.map sosJsonEncodeRat)

@@ -5,9 +5,6 @@ Implements `SILICON-ELABORATOR.md` §3–6: 128-bit `PackedNodeWord128` codec, 8
 (`cuckooCam_lookup_iff_member`, `cuckooCam_no_duplicate_handles`), 128-bit `GoldilocksExt2` `OfflineMemAcc`
 (`offlineMemCheck_spill_sound`), and 8-bank `SyncRam` `cuckooSiliconElabMemModule` (`cuckooElabRtl_simulates_stepCamWhnf`).
 -/
-public import Lean
-meta import Lean
-public import Obend.Tactic.Tooth
 public import Obend.Lower.ExprCAM
 public import Obend.Lower.MetaUnify
 public import Obend.Lower.DiscrTreeLUT
@@ -35,67 +32,61 @@ structure Zone1WhnfState where
   done : Bool := false
   steps : Nat := 0
   deriving @[expose] DecidableEq, Repr
-
 def rebuildCamAppSpine (cam : HwExprCAM) (fnHandle : CamHandle) : List CamHandle → CamHandle × HwExprCAM
-  | [] => (fnHandle, cam)
-  | argH :: rest => let (appH, cam1) := mkHwCamApp fnHandle argH cam; rebuildCamAppSpine cam1 appH rest
+  | [] => (fnHandle, cam) | argH :: rest => let (appH, cam1) := mkHwCamApp fnHandle argH cam; rebuildCamAppSpine cam1 appH rest
 def findHwCamConstDef? (cam : HwExprCAM) (symIdx : Nat) : Option Nat :=
-  match cam.consts.find? (fun c => c.symIdx == symIdx && c.valHandle?.isSome) with
-  | some c => c.valHandle? | none => none
+  match cam.consts.find? (fun c => c.symIdx == symIdx && c.valHandle?.isSome) with | some c => c.valHandle? | none => none
 def extractConstParamNames : List KLevel → Option (List KName)
   | [] => some [] | .param p :: rest => (extractConstParamNames rest).map (p :: ·) | _ :: _ => none
 def findHwCamConstDefInst? (cam : HwExprCAM) (symIdx : Nat) : Option (CamHandle × HwExprCAM) :=
   match findHwCamConstDef? cam symIdx with
   | some valH => some (valH, cam)
-  | none => do
-    let .constEntry name us ← cam.symbols[symIdx]? | none
-    let c ← cam.consts.find? (fun c => c.name == name && c.valHandle?.isSome)
-    let valH ← c.valHandle?
-    let .constEntry _ pLvls ← cam.symbols[c.symIdx]? | none
-    let pNames ← extractConstParamNames pLvls
-    if pNames.length == us.length then some (hwCamInstantiateLevelParams (cam.nodes.length + 8) (pNames.zip us) valH cam) else none
+  | none => match cam.symbols[symIdx]? with
+    | some (.constEntry name us) => do
+      let c ← cam.consts.find? (fun c => c.name == name && c.valHandle?.isSome); let valH ← c.valHandle?
+      match cam.symbols[c.symIdx]? with
+      | some (.constEntry _ pLvls) =>
+        let pNames ← extractConstParamNames pLvls
+        if pNames.length == us.length then some (hwCamInstantiateLevelParams (cam.nodes.length + 8) (pNames.zip us) valH cam) else none
+      | _ => none
+    | _ => none
 def decomposeCamCtorSpine : Nat → HwExprCAM → CamHandle → Option (Nat × List CamHandle)
   | 0, _, _ => none
   | fuel + 1, cam, h => do
-    let w ← cam.nodes[h]?
-    if w.tag == 3 then some (w.symIdx, [])
+    let w ← cam.nodes[h]?; if w.tag == 3 then some (w.symIdx, [])
     else if w.tag == 4 then (decomposeCamCtorSpine fuel cam w.h0).map fun (s, args) => (s, args ++ [w.h1]) else none
 def decomposeCamCtorOrLitSpine (fuel : Nat) (cam : HwExprCAM) (h : CamHandle) : Option (KName × List CamHandle × HwExprCAM) :=
   match decomposeCamCtorSpine fuel cam h with
   | some (ctorSym, args) => match cam.symbols[ctorSym]? with | some (.constEntry ctorName _) => some (ctorName, args, cam) | _ => none
   | none => do
-    let w ← cam.nodes[h]?
-    if w.tag == 8 then match cam.symbols[w.symIdx]? with
+    let w ← cam.nodes[h]?; if w.tag == 8 then match cam.symbols[w.symIdx]? with
       | some (.litEntry (.natVal 0)) => some (KName.mkSimple "Nat.zero", [], cam)
       | some (.litEntry (.natVal (k + 1))) => let (kH, cam1) := mkHwCamLit (.natVal k) cam; some (KName.mkSimple "Nat.succ", [kH], cam1)
-      | _ => none
-    else none
+      | _ => none else none
 def lookupCamRecLevelParams? (cam : HwExprCAM) (recName : KName) : Option (List KName) :=
   match (cam.recLevelParams.find? (fun p => p.1 == recName)).map (·.2) with
   | some ps => some ps
   | none => do
     let rc ← cam.consts.find? (fun c => c.name == recName)
-    let .constEntry _ pLvls ← cam.symbols[rc.symIdx]? | none
-    extractConstParamNames pLvls
-
+    match cam.symbols[rc.symIdx]? with | some (.constEntry _ pLvls) => extractConstParamNames pLvls | _ => none
 def reduceHwCamIota? (subWhnf : HwExprCAM → CamHandle → CamHandle × HwExprCAM)
-    (cam : HwExprCAM) (recSymIdx : Nat) (argStack : List CamHandle) : Option (CamHandle × HwExprCAM) := do
-  let .constEntry recName recUs ← cam.symbols[recSymIdx]? | none
-  let r0 ← cam.recRules.find? (fun r => r.recName == recName && decide (argStack.length > r.numParams))
-  let prefixArgs := argStack.take r0.numParams; let majorRawH ← argStack[r0.numParams]?
-  let extraArgs := argStack.drop (r0.numParams + 1); let (majorWhnfH, cam1) := subWhnf cam majorRawH
-  let (ctorName, ctorArgs, cam2) ← decomposeCamCtorOrLitSpine 32 cam1 majorWhnfH
-  let rule ← cam2.recRules.find? (fun r => r.recName == recName && r.ctorName == ctorName)
-  if ctorArgs.length >= rule.numFields then
-    let fieldArgs := ctorArgs.drop (ctorArgs.length - rule.numFields)
-    let (rhsInstH, cam3) := match lookupCamRecLevelParams? cam2 recName with
-      | some pNames =>
-        if pNames.length == recUs.length && !pNames.isEmpty then
-          hwCamInstantiateLevelParams (cam2.nodes.length + 8) (pNames.zip recUs) rule.rhsHandle cam2
-        else (rule.rhsHandle, cam2)
-      | none => (rule.rhsHandle, cam2)
-    some (rebuildCamAppSpine cam3 rhsInstH (prefixArgs ++ fieldArgs ++ extraArgs))
-  else none
+    (cam : HwExprCAM) (recSymIdx : Nat) (argStack : List CamHandle) : Option (CamHandle × HwExprCAM) :=
+  match cam.symbols[recSymIdx]? with
+  | some (.constEntry recName recUs) => do
+    let r0 ← cam.recRules.find? (fun r => r.recName == recName && decide (argStack.length > r.numParams))
+    let prefixArgs := argStack.take r0.numParams; let majorRawH ← argStack[r0.numParams]?
+    let extraArgs := argStack.drop (r0.numParams + 1); let (majorWhnfH, cam1) := subWhnf cam majorRawH
+    let (ctorName, ctorArgs, cam2) ← decomposeCamCtorOrLitSpine 32 cam1 majorWhnfH
+    let rule ← cam2.recRules.find? (fun r => r.recName == recName && r.ctorName == ctorName)
+    if ctorArgs.length >= rule.numFields then
+      let fieldArgs := ctorArgs.drop (ctorArgs.length - rule.numFields)
+      let (rhsInstH, cam3) := match lookupCamRecLevelParams? cam2 recName with
+        | some pNames => if pNames.length == recUs.length && !pNames.isEmpty then
+            hwCamInstantiateLevelParams (cam2.nodes.length + 8) (pNames.zip recUs) rule.rhsHandle cam2 else (rule.rhsHandle, cam2)
+        | none => (rule.rhsHandle, cam2)
+      some (rebuildCamAppSpine cam3 rhsInstH (prefixArgs ++ fieldArgs ++ extraArgs))
+    else none
+  | _ => none
 
 def stepCamWhnfAt (subWhnf : HwExprCAM → CamHandle → CamHandle × HwExprCAM) (st : Zone1WhnfState) : Zone1WhnfState :=
   if st.done then st else
@@ -182,13 +173,11 @@ def runZone1WhnfRegressionOk : Bool :=
   (reconstructFromHwExprCAM 16 stProj.cam stProj.focusHandle == some (.lit (.natVal 99)))
 
 /-! ## 2. Zone 2: Pure Handle-Level Unification, Bit-58 Scope Filter & Branch Join -/
-
 structure CamUnifyObligation where
   lhsHandle : CamHandle
   rhsHandle : CamHandle
   depth : Nat := 0
   deriving @[expose] DecidableEq, Repr
-
 structure Zone2UnifyTileState where
   tileId : Nat
   cam : HwExprCAM
@@ -198,9 +187,7 @@ structure Zone2UnifyTileState where
   failed : Bool := false
   cycles : Nat := 0
   deriving @[expose] DecidableEq, Repr
-
-def lookupCamAssign? (assigns : List (Nat × CamHandle)) (mvarId : Nat) : Option CamHandle :=
-  (assigns.find? (fun p => p.1 == mvarId)).map (·.2)
+def lookupCamAssign? (assigns : List (Nat × CamHandle)) (mvarId : Nat) : Option CamHandle := (assigns.find? (fun p => p.1 == mvarId)).map (·.2)
 def resolveCamHandle : Nat → HwExprCAM → List (Nat × CamHandle) → CamHandle → CamHandle
   | 0, _, _, h => h
   | fuel + 1, cam, assigns, h =>
@@ -225,15 +212,13 @@ def camOccursMVar : Nat → HwExprCAM → List (Nat × CamHandle) → Nat → Ca
 theorem camOccursMVar_bit58_false_sound (fuel : Nat) (cam : HwExprCAM) (assigns : List (Nat × CamHandle))
     (targetMVar : Nat) (h : CamHandle) (w : PackedNodeWord) (hNode : cam.nodes[h]? = some w) (hNoMVar : w.hasMVar = false) :
     camOccursMVar (fuel + 1) cam assigns targetMVar h = false := by simp [camOccursMVar, hNode, hNoMVar]
-def assignCamMVar? (fuel : Nat) (cam : HwExprCAM) (assigns : List (Nat × CamHandle))
-    (mvarId : Nat) (rhsH : CamHandle) : Option (List (Nat × CamHandle)) :=
+def assignCamMVar? (fuel : Nat) (cam : HwExprCAM) (assigns : List (Nat × CamHandle)) (mvarId : Nat) (rhsH : CamHandle) : Option (List (Nat × CamHandle)) :=
   let rhsResolved := resolveCamHandle 16 cam assigns rhsH
   match cam.nodes[rhsResolved]? with
   | none => none
   | some w =>
     if w.tag == 10 && w.h0 == mvarId then some assigns
-    else if w.hasLooseBVar || camOccursMVar fuel cam assigns mvarId rhsResolved then none
-    else some ((mvarId, rhsResolved) :: assigns)
+    else if w.hasLooseBVar || camOccursMVar fuel cam assigns mvarId rhsResolved then none else some ((mvarId, rhsResolved) :: assigns)
 
 def stepCamDefEq (st : Zone2UnifyTileState) : Zone2UnifyTileState :=
   if st.failed then st else
@@ -299,7 +284,6 @@ theorem mergeBranchAssigns_conflict_refused_sound (env : KEnv) (fuel : Nat) (acc
     mergeBranchAssigns env fuel acc ((mvarId, rhsB) :: rest) = none := by simp [mergeBranchAssigns, hExisting, hNeq, hNotDefEq]
 
 /-! ## 3. Zone 3: 2nd-Futamura `DiscrTreeLUT` Tile with 1-Cycle `moved_pin_blocks` Fallback & Glitch-Free `ICAP` DPR -/
-
 def mkAffineAutomatonTile (slotName : String) (gain offset : Nat) : AutomatonTile :=
   { slotIdx := 0, memberName := slotName, opKind := .methodSlot, readsSlots := []
   , datapath := .alu .add (.alu .mul (.inputPort 0) (.const (BitVec.ofNat 64 gain))) (.const (BitVec.ofNat 64 offset)) }
@@ -327,8 +311,7 @@ theorem zone3_moved_pin_fallback_sound (guard : SlotGuardReg) (trie : DiscrTrieN
     let out := stepZone3DiscrLut guard trie view pktEpoch queryExpr argVal z1State
     specSlot.usable (holdsAt view) guard.candidate = false ∧ out.usedFastPath = false ∧
     out.routedToZone1 = true ∧ out.matchedEntry? = none ∧ out.zone1FallbackState = stepCamWhnf z1State := by
-  have hMoved := evalSlotGuardedDiscrTile_moved_pin_blocks guard view p pktEpoch argVal hp hDead
-  dsimp only; unfold stepZone3DiscrLut
+  have hMoved := evalSlotGuardedDiscrTile_moved_pin_blocks guard view p pktEpoch argVal hp hDead; dsimp only; unfold stepZone3DiscrLut
   cases hEval : evalSlotGuardedDiscrTile guard view pktEpoch argVal with
   | mk b v => have hb : b = false := by rw [hEval] at hMoved; exact hMoved.2
               subst hb; simp [hMoved.1]
@@ -338,64 +321,45 @@ def admitSimpTheoremDpr (env : KEnv) (fuel : Nat) (thmDecl : KConstInfo) (slotNa
     let newGuard := mkAffineSlotGuard slotName newEpoch gain offset
     some (newGuard, runTileGlitchFreeDpr
       { targetTileId := tileState.tileId, newTile := newGuard.specializedTile, expectedCrc64 := frameCrc64, computedCrc64 := frameCrc64 } tileState)
-
 theorem admitSimpTheoremDpr_glitch_free_sound (env : KEnv) (fuel : Nat) (thmDecl : KConstInfo) (slotName : String)
-    (newEpoch gain offset : Nat) (frameCrc64 : BitVec 64)
-    (tileState tileAfter : ReconfigTileState) (guard' : SlotGuardReg)
+    (newEpoch gain offset : Nat) (frameCrc64 : BitVec 64) (tileState tileAfter : ReconfigTileState) (guard' : SlotGuardReg)
     (transientTile : AutomatonTile) (wireEnv regEnv : Nat → BitVec 64) (argVal : BitVec 64)
-    (hAdmit : admitSimpTheoremDpr env fuel thmDecl slotName newEpoch gain offset frameCrc64 tileState =
-      some (guard', tileAfter)) :
+    (hAdmit : admitSimpTheoremDpr env fuel thmDecl slotName newEpoch gain offset frameCrc64 tileState = some (guard', tileAfter)) :
     kernelCheckDecl env fuel thmDecl = true ∧ tileAfter.isolated = false ∧
-    evalReconfigTile { dprPhase1Isolate tileState.tileId tileState with activeTile := transientTile }
-      wireEnv regEnv argVal = tileState.skidHeldOutput := by
-  unfold admitSimpTheoremDpr at hAdmit
-  cases hChk : kernelCheckDecl env fuel thmDecl with
+    evalReconfigTile { dprPhase1Isolate tileState.tileId tileState with activeTile := transientTile } wireEnv regEnv argVal = tileState.skidHeldOutput := by
+  unfold admitSimpTheoremDpr at hAdmit; cases hChk : kernelCheckDecl env fuel thmDecl with
   | false => simp [hChk] at hAdmit
   | true =>
-    simp only [hChk, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hAdmit
-    rcases hAdmit with ⟨_, rfl⟩
-    exact ⟨rfl, by simp [runTileGlitchFreeDpr, dprPhase3ReleaseFence, dprPhase2LoadFrame, dprPhase1Isolate],
-           by simp [dprPhase1Isolate, evalReconfigTile]⟩
-
+    simp only [hChk, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hAdmit; rcases hAdmit with ⟨_, rfl⟩
+    exact ⟨rfl, by simp [runTileGlitchFreeDpr, dprPhase3ReleaseFence, dprPhase2LoadFrame, dprPhase1Isolate], by simp [dprPhase1Isolate, evalReconfigTile]⟩
 theorem admitSimpTheoremDpr_inhabited :
     ∃ (tileState tileAfter : ReconfigTileState) (guard' : SlotGuardReg),
-      admitSimpTheoremDpr stdKernelEnv 8 validIdNatDecl "discrEpoch" 2 6 10 0x600A#64 tileState =
-        some (guard', tileAfter) := by
+      admitSimpTheoremDpr stdKernelEnv 8 validIdNatDecl "discrEpoch" 2 6 10 0x600A#64 tileState = some (guard', tileAfter) := by
   let g1 := mkAffineSlotGuard "discrEpoch" 1 4 2
-  let initTile : ReconfigTileState :=
-    { tileId := 0, tileX := 0, tileY := 0, activeTile := g1.specializedTile, isolated := false, skidHeldOutput := 0#64, frameCrc64 := 0#64 }
+  let initTile : ReconfigTileState := { tileId := 0, tileX := 0, tileY := 0, activeTile := g1.specializedTile, isolated := false, skidHeldOutput := 0#64, frameCrc64 := 0#64 }
   have hChk : kernelCheckDecl stdKernelEnv 8 validIdNatDecl = true := by decide +kernel
   exact ⟨initTile, _, _, by simp [admitSimpTheoremDpr, hChk]; exact ⟨rfl, rfl⟩⟩
 
 /-! ## 4. Baseline Synthesizable 4-Zone `RtlModule` (`siliconElabRtlModule`) & SV Emitter -/
-
 def mkCam4ReadMux (addrExpr : RtlExpr) : RtlExpr :=
   let idx := .alu .bitAnd addrExpr (.const 3#64)
-  .mux (.alu .eq idx (.const 0#64)) (.regRead 0)
-    (.mux (.alu .eq idx (.const 1#64)) (.regRead 1) (.mux (.alu .eq idx (.const 2#64)) (.regRead 2) (.regRead 3)))
+  .mux (.alu .eq idx (.const 0#64)) (.regRead 0) (.mux (.alu .eq idx (.const 1#64)) (.regRead 1) (.mux (.alu .eq idx (.const 2#64)) (.regRead 2) (.regRead 3)))
 
 def siliconElabRtlModule : RtlModule where
   name := "silicon_elab_top"
   inputNames := [ "cam_we", "cam_wr_addr", "cam_wr_word", "z1_start", "z1_step", "z1_init_handle", "z2_rhs_handle",
                   "z3_pkt_epoch", "z3_pin_ok", "z3_rule_tag", "z3_arg_val", "dpr_cmd", "dpr_new_gain", "dpr_new_offset", "dpr_new_epoch", "z4_decl_flags" ]
   wires :=
-    [ { wireIdx := 0, name := "w_cur_word", expr := mkCam4ReadMux (.regRead 4) }
-    , { wireIdx := 1, name := "w_cur_tag", expr := .alu .bitAnd (.alu .lshr (.wireRef 0) (.const 60#64)) (.const 0xF#64) }
-    , { wireIdx := 2, name := "w_cur_h0", expr := .alu .bitAnd (.alu .lshr (.wireRef 0) (.const 16#64)) (.const 0xFFFF#64) }
-    , { wireIdx := 3, name := "w_fn_word", expr := mkCam4ReadMux (.wireRef 2) }
-    , { wireIdx := 4, name := "w_fn_tag", expr := .alu .bitAnd (.alu .lshr (.wireRef 3) (.const 60#64)) (.const 0xF#64) }
-    , { wireIdx := 5, name := "w_body_h", expr := .alu .bitAnd (.wireRef 3) (.const 0xFFFF#64) }
-    , { wireIdx := 6, name := "w_body_word", expr := mkCam4ReadMux (.wireRef 5) }
-    , { wireIdx := 7, name := "w_body_loose", expr := .alu .bitAnd (.alu .lshr (.wireRef 6) (.const 59#64)) (.const 1#64) }
+    [ { wireIdx := 0, name := "w_cur_word", expr := mkCam4ReadMux (.regRead 4) }, { wireIdx := 1, name := "w_cur_tag", expr := .alu .bitAnd (.alu .lshr (.wireRef 0) (.const 60#64)) (.const 0xF#64) }
+    , { wireIdx := 2, name := "w_cur_h0", expr := .alu .bitAnd (.alu .lshr (.wireRef 0) (.const 16#64)) (.const 0xFFFF#64) }, { wireIdx := 3, name := "w_fn_word", expr := mkCam4ReadMux (.wireRef 2) }
+    , { wireIdx := 4, name := "w_fn_tag", expr := .alu .bitAnd (.alu .lshr (.wireRef 3) (.const 60#64)) (.const 0xF#64) }, { wireIdx := 5, name := "w_body_h", expr := .alu .bitAnd (.wireRef 3) (.const 0xFFFF#64) }
+    , { wireIdx := 6, name := "w_body_word", expr := mkCam4ReadMux (.wireRef 5) }, { wireIdx := 7, name := "w_body_loose", expr := .alu .bitAnd (.alu .lshr (.wireRef 6) (.const 59#64)) (.const 1#64) }
     , { wireIdx := 8, name := "w_closed_beta_hit", expr := .alu .bitAnd (.alu .bitAnd (.alu .eq (.wireRef 1) (.const 4#64)) (.alu .eq (.wireRef 4) (.const 5#64))) (.alu .eq (.wireRef 7) (.const 0#64)) }
-    , { wireIdx := 9, name := "w_z2_handle_eq", expr := .alu .eq (.regRead 4) (.inputPort 6) }
-    , { wireIdx := 10, name := "w_z2_mvar_bit58", expr := .alu .bitAnd (.alu .lshr (.wireRef 0) (.const 58#64)) (.const 1#64) }
-    , { wireIdx := 11, name := "w_z3_static_tcam", expr := compileDiscrRulesExprAt 9 10 [(101, 4, 2), (102, 6, 10)] }
-    , { wireIdx := 12, name := "w_z3_dyn_raw", expr := .alu .add (.alu .mul (.inputPort 10) (.regRead 8)) (.regRead 9) }
+    , { wireIdx := 9, name := "w_z2_handle_eq", expr := .alu .eq (.regRead 4) (.inputPort 6) }, { wireIdx := 10, name := "w_z2_mvar_bit58", expr := .alu .bitAnd (.alu .lshr (.wireRef 0) (.const 58#64)) (.const 1#64) }
+    , { wireIdx := 11, name := "w_z3_static_tcam", expr := compileDiscrRulesExprAt 9 10 [(101, 4, 2), (102, 6, 10)] }, { wireIdx := 12, name := "w_z3_dyn_raw", expr := .alu .add (.alu .mul (.inputPort 10) (.regRead 8)) (.regRead 9) }
     , { wireIdx := 13, name := "w_z3_lut_val", expr := .mux (.regRead 10) (.regRead 11) (.wireRef 12) }
     , { wireIdx := 14, name := "w_z3_guard_ok", expr := .alu .bitAnd (.alu .bitAnd (.mux (.inputPort 8) (.const 1#64) (.const 0#64)) (.alu .eq (.inputPort 7) (.regRead 7))) (.alu .eq (.regRead 10) (.const 0#64)) }
-    , { wireIdx := 15, name := "w_z3_fallback_zone1", expr := .mux (.wireRef 14) (.const 0#64) (.const 1#64) }
-    , { wireIdx := 16, name := "w_z1_do_step", expr := .mux (.inputPort 4) (.const 1#64) (.const 0#64) }
+    , { wireIdx := 15, name := "w_z3_fallback_zone1", expr := .mux (.wireRef 14) (.const 0#64) (.const 1#64) }, { wireIdx := 16, name := "w_z1_do_step", expr := .mux (.inputPort 4) (.const 1#64) (.const 0#64) }
     , { wireIdx := 17, name := "w_z1_step_focus", expr := .mux (.wireRef 8) (.wireRef 5) (.mux (.alu .eq (.wireRef 1) (.const 4#64)) (.wireRef 2) (.regRead 4)) }
     , { wireIdx := 18, name := "w_z4_comb_status", expr :=
           let f := .inputPort 15; let hasSorry := .alu .bitAnd f (.const 1#64); let hasMVar := .alu .bitAnd (.alu .lshr f (.const 1#64)) (.const 1#64)
@@ -417,18 +381,14 @@ def siliconElabRtlModule : RtlModule where
     , { regIdx := 11, name := "dpr_skid_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, nextExpr := .mux (.alu .eq (.inputPort 11) (.const 1#64)) (.wireRef 13) (.regRead 11) }
     , { regIdx := 12, name := "z4_status_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, nextExpr := .mux (.alu .bitAnd (.alu .lshr (.inputPort 15) (.const 4#64)) (.const 1#64)) (.wireRef 18) (.regRead 12) } ]
   outputs :=
-    [ { name := "z1_focus_out", expr := .regRead 4 }, { name := "z1_steps_out", expr := .regRead 5 }
-    , { name := "z1_bypass_out", expr := .regRead 6 }, { name := "z2_handle_eq_out", expr := .wireRef 9 }
-    , { name := "z2_mvar_bit58_out", expr := .wireRef 10 }, { name := "z3_fast_path_out", expr := .wireRef 14 }
-    , { name := "z3_fallback_zone1_out", expr := .wireRef 15 }, { name := "z3_lut_val_out", expr := .wireRef 13 }
-    , { name := "z3_tcam_val_out", expr := .wireRef 11 }, { name := "dpr_isolated_out", expr := .regRead 10 }
-    , { name := "z4_status_out", expr := .regRead 12 }, { name := "z4_accepted_out", expr := .wireRef 19 } ]
+    [ { name := "z1_focus_out", expr := .regRead 4 }, { name := "z1_steps_out", expr := .regRead 5 }, { name := "z1_bypass_out", expr := .regRead 6 }
+    , { name := "z2_handle_eq_out", expr := .wireRef 9 }, { name := "z2_mvar_bit58_out", expr := .wireRef 10 }, { name := "z3_fast_path_out", expr := .wireRef 14 }
+    , { name := "z3_fallback_zone1_out", expr := .wireRef 15 }, { name := "z3_lut_val_out", expr := .wireRef 13 }, { name := "z3_tcam_val_out", expr := .wireRef 11 }
+    , { name := "dpr_isolated_out", expr := .regRead 10 }, { name := "z4_status_out", expr := .regRead 12 }, { name := "z4_accepted_out", expr := .wireRef 19 } ]
 
 theorem siliconElabRtlModule_valid :
-    checkRtlModule siliconElabRtlModule = true ∧ checkRtlModuleW siliconElabRtlModule = true ∧
-    checkRtlSynth 0 "silicon_elab_top" siliconElabRtlModule = .ok :=
+    checkRtlModule siliconElabRtlModule = true ∧ checkRtlModuleW siliconElabRtlModule = true ∧ checkRtlSynth 0 "silicon_elab_top" siliconElabRtlModule = .ok :=
   ⟨by decide +kernel, by decide +kernel, by decide +kernel⟩
-
 def emitSiliconElabFabricSV : String := emitModuleSV siliconElabRtlModule
 
 /-! ## 5. Zone 4: `HwExprCAM` Declaration Gate & 4-Zone Spatial Elaborator Soundness -/
@@ -441,32 +401,38 @@ def declTyAndVal : KConstInfo → KExpr × KExpr
   | 0, _ => true
   | fuel + 1, h =>
     match cam.nodes[h]? with
-    | none => false
+    | none => true
     | some w =>
       if w.tag == 3 then match cam.symbols[w.symIdx]? with | some (.constEntry name _) => name == KName.mkSimple "sorryAx" | _ => false
       else if w.tag == 4 || w.tag == 5 || w.tag == 6 then camHandleContainsSorry cam fuel w.h0 || camHandleContainsSorry cam fuel w.h1
       else if w.tag == 7 then camHandleContainsSorry cam fuel w.h0 || camHandleContainsSorry cam fuel w.h1 || camHandleContainsSorry cam fuel w.h2
       else if w.tag == 9 then camHandleContainsSorry cam fuel w.h0 else false
 
-def camHandleContainsSorryBlind (_cam : HwExprCAM) (_fuel : Nat) (_h : CamHandle) : Bool := false
 theorem camHandleContainsSorry_detects_sorryAx_sound (fuel : Nat) (us : List KLevel) (cam : HwExprCAM) :
     let (h, cam') := internToHwExprCAM (.const (KName.mkSimple "sorryAx") us) cam
-    camHandleContainsSorry cam' (fuel + 1) h = true := by
-  dsimp only [internToHwExprCAM]
-  generalize hs : allocPackedSymbol (.constEntry (KName.mkSimple "sorryAx") us) cam = pSym; rcases pSym with ⟨sIdx, cam1⟩
-  have hSymLookup : cam1.symbols[sIdx]? = some (.constEntry (KName.mkSimple "sorryAx") us) := by
-    unfold allocPackedSymbol at hs
-    cases hf : findElemIdx? cam.symbols (.constEntry (KName.mkSimple "sorryAx") us) <;> simp [hf] at hs <;> rcases hs with ⟨rfl, rfl⟩
-    · simp
-    · exact getElem?_of_findElemIdx? _ _ _ hf
-  generalize hn : allocPackedNode { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } cam1 = pNode; rcases pNode with ⟨h, cam2⟩
-  have hNode : cam2.nodes[h]? = some { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } ∧ cam2.symbols = cam1.symbols := by
-    unfold allocPackedNode at hn
-    cases hf : findElemIdx? cam1.nodes { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } <;> simp [hf] at hn <;> rcases hn with ⟨rfl, rfl⟩
-    · simp
-    · exact ⟨getElem?_of_findElemIdx? _ _ _ hf, rfl⟩
-  unfold camHandleContainsSorry; rw [hNode.1]; simp [hNode.2, hSymLookup]; decide
-#tooth camHandleContainsSorry_detects_sorryAx_sound by mutation camHandleContainsSorry := camHandleContainsSorryBlind
+    camHandleContainsSorry cam' (fuel + 1) h = true ∧
+    (∀ hOob, cam.nodes.length ≤ hOob → camHandleContainsSorry cam (fuel + 1) hOob = true) := by
+  have hMain : camHandleContainsSorry
+      (allocPackedNode { tag := 3, h0 := 0, h1 := 0, symIdx := (allocPackedSymbol (.constEntry (KName.mkSimple "sorryAx") us) cam).1 }
+        (allocPackedSymbol (.constEntry (KName.mkSimple "sorryAx") us) cam).2).2 (fuel + 1)
+      (allocPackedNode { tag := 3, h0 := 0, h1 := 0, symIdx := (allocPackedSymbol (.constEntry (KName.mkSimple "sorryAx") us) cam).1 }
+        (allocPackedSymbol (.constEntry (KName.mkSimple "sorryAx") us) cam).2).1 = true := by
+    generalize hs : allocPackedSymbol (.constEntry (KName.mkSimple "sorryAx") us) cam = pSym; rcases pSym with ⟨sIdx, cam1⟩
+    dsimp only
+    have hSymLookup : cam1.symbols[sIdx]? = some (.constEntry (KName.mkSimple "sorryAx") us) := by
+      unfold allocPackedSymbol at hs
+      cases hf : findElemIdx? cam.symbols (.constEntry (KName.mkSimple "sorryAx") us) <;> simp [hf] at hs <;> rcases hs with ⟨rfl, rfl⟩
+      · simp
+      · exact getElem?_of_findElemIdx? _ _ _ hf
+    generalize hn : allocPackedNode { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } cam1 = pNode; rcases pNode with ⟨h, cam2⟩
+    dsimp only
+    have hNode : cam2.nodes[h]? = some { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } ∧ cam2.symbols = cam1.symbols := by
+      unfold allocPackedNode at hn
+      cases hf : findElemIdx? cam1.nodes { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } <;> simp [hf] at hn <;> rcases hn with ⟨rfl, rfl⟩
+      · simp
+      · exact ⟨getElem?_of_findElemIdx? _ _ _ hf, rfl⟩
+    unfold camHandleContainsSorry; rw [hNode.1]; simp [hNode.2, hSymLookup]; decide
+  exact ⟨hMain, fun hOob hGe => by unfold camHandleContainsSorry; rw [List.getElem?_eq_none hGe]⟩
 def camHandleHasMVar (cam : HwExprCAM) (h : CamHandle) : Bool := (getPackedNode cam h).hasMVar
 def computeZone4StatusTag (env : KEnv) (fuel : Nat) (cam : HwExprCAM) (tyH valH : CamHandle) (decl : KConstInfo) : Nat :=
   let scanFuel := cam.nodes.length + 8
@@ -583,6 +549,11 @@ def packNodeWord128 (w : PackedNodeWord) (hasSorry : Bool) (handleId : Nat := 0)
   let hiNat := (w.h2 % 65536) + 65536 * (w.maxLooseBVar % 65536) + 4294967296 * (handleId % 4294967296)
   { lo64 := BitVec.ofNat 64 loNat, hi64 := BitVec.ofNat 64 hiNat }
 
+def packNodeWord9Checked? (w : PackedNodeWord) (hasSorry : Bool) (handleId : Nat := 0) : Option (BitVec 64) :=
+  if w.tag < 16 && w.tag != 7 && w.h0 < 512 && w.h1 < 512 && w.symIdx < 65536 && handleId < 512 then
+    some (packNodeWord128 w hasSorry handleId).lo64
+  else none
+
 def unpackNodeWord128 (p : PackedNodeWord128) : PackedNodeWord × Bool × Nat :=
   let lo := p.lo64.toNat; let hi := p.hi64.toNat
   ( { tag := (lo / 1152921504606846976) % 16, h0 := (lo / 65536) % 65536, h1 := lo % 65536
@@ -647,40 +618,24 @@ def cuckooRawHash0 (k : PackedNodeWord) : Nat :=
 def cuckooRawHash1 (k : PackedNodeWord) : Nat :=
   97 + 2246822519 * k.tag + 1140071481 * k.h0 + 3266489917 * k.h1 + 668265263 * k.h2 + 374761393 * k.symIdx
 
-def cuckooLoc0 (bankDepth : Nat) (k : PackedNodeWord) : Nat × Nat :=
-  let h := cuckooRawHash0 k; (h % 4, (h / 4) % bankDepth)
-
-def cuckooLoc1 (bankDepth : Nat) (k : PackedNodeWord) : Nat × Nat :=
-  let h := cuckooRawHash1 k; (4 + h % 4, (h / 4) % bankDepth)
-
+def cuckooLoc0 (bankDepth : Nat) (k : PackedNodeWord) : Nat × Nat := let h := cuckooRawHash0 k; (h % 4, (h / 4) % bankDepth)
+def cuckooLoc1 (bankDepth : Nat) (k : PackedNodeWord) : Nat × Nat := let h := cuckooRawHash1 k; (4 + h % 4, (h / 4) % bankDepth)
 theorem cuckooLoc_bounds {d : Nat} (hd : 0 < d) (k : PackedNodeWord) :
     (cuckooLoc0 d k).1 < 4 ∧ (cuckooLoc0 d k).2 < d ∧
     4 ≤ (cuckooLoc1 d k).1 ∧ (cuckooLoc1 d k).1 < 8 ∧ (cuckooLoc1 d k).2 < d ∧ cuckooLoc0 d k ≠ cuckooLoc1 d k := by
   unfold cuckooLoc0 cuckooLoc1; dsimp only
   refine ⟨by omega, Nat.mod_lt _ hd, by omega, by omega, Nat.mod_lt _ hd, fun hEq => ?_⟩
   have h1 := congrArg Prod.fst hEq; dsimp only at h1; omega
-
-def CuckooExprCAM.readBankSlot (cam : CuckooExprCAM) (b r : Nat) : Option CuckooSlot :=
-  cam.slots.getD (b * cam.bankDepth + r) none
-
+def CuckooExprCAM.readBankSlot (cam : CuckooExprCAM) (b r : Nat) : Option CuckooSlot := cam.slots.getD (b * cam.bankDepth + r) none
 def CuckooExprCAM.writeBankSlot (cam : CuckooExprCAM) (b r : Nat) (s : CuckooSlot) : CuckooExprCAM :=
   { cam with slots := cam.slots.set! (b * cam.bankDepth + r) (some s) }
-
 def cuckooProbeSlot? (s? : Option CuckooSlot) (k : PackedNodeWord) : Option CuckooSlot :=
   match s? with | some s => if s.key == k then some s else none | none => none
-
-/-- 1-cycle dual-bank parallel lookup probing `loc0` in Banks `0..3` and `loc1` in Banks `4..7`. -/
 def cuckooLookupSlot? (cam : CuckooExprCAM) (k : PackedNodeWord) : Option CuckooSlot :=
   (cuckooProbeSlot? (cam.readBankSlot (cuckooLoc0 cam.bankDepth k).1 (cuckooLoc0 cam.bankDepth k).2) k).or
     (cuckooProbeSlot? (cam.readBankSlot (cuckooLoc1 cam.bankDepth k).1 (cuckooLoc1 cam.bankDepth k).2) k)
-
-def cuckooLookup? (cam : CuckooExprCAM) (k : PackedNodeWord) : Option CamHandle :=
-  (cuckooLookupSlot? cam k).map (fun s : CuckooSlot => s.handle)
-
-def cuckooChooseLoc (useChoice1 : Bool) (d : Nat) (k : PackedNodeWord) : Nat × Nat :=
-  if useChoice1 then cuckooLoc1 d k else cuckooLoc0 d k
-
-/-- Bounded alternating Cuckoo eviction loop (`maxKicks`), returning `some spilled` if `maxKicks` is exhausted. -/
+def cuckooLookup? (cam : CuckooExprCAM) (k : PackedNodeWord) : Option CamHandle := (cuckooLookupSlot? cam k).map (fun s : CuckooSlot => s.handle)
+def cuckooChooseLoc (useChoice1 : Bool) (d : Nat) (k : PackedNodeWord) : Nat × Nat := if useChoice1 then cuckooLoc1 d k else cuckooLoc0 d k
 def cuckooEvictLoop : Nat → Bool → CuckooSlot → CuckooExprCAM → CuckooExprCAM × Option CuckooSlot
   | 0 => fun _ curSlot cam => (cam, some curSlot)
   | kicks + 1 => fun useChoice1 curSlot cam =>
@@ -688,27 +643,27 @@ def cuckooEvictLoop : Nat → Bool → CuckooSlot → CuckooExprCAM → CuckooEx
     match cam.readBankSlot loc.1 loc.2 with
     | none => (cam.writeBankSlot loc.1 loc.2 curSlot, none)
     | some victim => cuckooEvictLoop kicks (!useChoice1) victim (cam.writeBankSlot loc.1 loc.2 curSlot)
-
 def cuckooInsertMissAux (maxKicks : Nat) (k : PackedNodeWord) (newSlot : CuckooSlot) (camAlloc : CuckooExprCAM) :
     Option CuckooSlot → Option CuckooSlot → CamHandle × CuckooExprCAM × Option CuckooSlot
   | none, _ => (newSlot.handle, camAlloc.writeBankSlot (cuckooLoc0 camAlloc.bankDepth k).1 (cuckooLoc0 camAlloc.bankDepth k).2 newSlot, none)
   | some _, none => (newSlot.handle, camAlloc.writeBankSlot (cuckooLoc1 camAlloc.bankDepth k).1 (cuckooLoc1 camAlloc.bankDepth k).2 newSlot, none)
   | some _, some _ => let ev := cuckooEvictLoop maxKicks false newSlot camAlloc; (newSlot.handle, ev.1, ev.2)
-
+def cuckooTaintKeySorry (cam : CuckooExprCAM) (k : PackedNodeWord) : CuckooExprCAM :=
+  match cuckooProbeSlot? (cam.readBankSlot (cuckooLoc0 cam.bankDepth k).1 (cuckooLoc0 cam.bankDepth k).2) k with
+  | some s0 => cam.writeBankSlot (cuckooLoc0 cam.bankDepth k).1 (cuckooLoc0 cam.bankDepth k).2 { s0 with hasSorry := true }
+  | none => match cuckooProbeSlot? (cam.readBankSlot (cuckooLoc1 cam.bankDepth k).1 (cuckooLoc1 cam.bankDepth k).2) k with
+    | some s1 => cam.writeBankSlot (cuckooLoc1 cam.bankDepth k).1 (cuckooLoc1 cam.bankDepth k).2 { s1 with hasSorry := true } | none => cam
 def cuckooInsertAux (maxKicks : Nat) (k : PackedNodeWord) (hasSorry : Bool) (cam : CuckooExprCAM) :
     Option CamHandle → CamHandle × CuckooExprCAM × Option CuckooSlot
-  | some existingH => (existingH, cam, none)
+  | some existingH => (existingH, if hasSorry then cuckooTaintKeySorry cam k else cam, none)
   | none =>
     let newSlot : CuckooSlot := { key := k, hasSorry := hasSorry, handle := cam.nextHandle }
     let camAlloc : CuckooExprCAM := { cam with nextHandle := cam.nextHandle + 1 }
     cuckooInsertMissAux maxKicks k newSlot camAlloc
       (camAlloc.readBankSlot (cuckooLoc0 cam.bankDepth k).1 (cuckooLoc0 cam.bankDepth k).2)
       (camAlloc.readBankSlot (cuckooLoc1 cam.bankDepth k).1 (cuckooLoc1 cam.bankDepth k).2)
-
 def cuckooInsert (maxKicks : Nat) (k : PackedNodeWord) (hasSorry : Bool) (cam : CuckooExprCAM) :
-    CamHandle × CuckooExprCAM × Option CuckooSlot :=
-  cuckooInsertAux maxKicks k hasSorry cam (cuckooLookup? cam k)
-
+    CamHandle × CuckooExprCAM × Option CuckooSlot := cuckooInsertAux maxKicks k hasSorry cam (cuckooLookup? cam k)
 def CuckooMember (cam : CuckooExprCAM) (k : PackedNodeWord) (h : CamHandle) : Prop :=
   ∃ b r s, b < 8 ∧ r < cam.bankDepth ∧ cam.readBankSlot b r = some s ∧ s.key = k ∧ s.handle = h
 
@@ -742,7 +697,7 @@ private theorem ifFalse {α : Type _} {c : Prop} [inst : Decidable c] {a b : α}
 private theorem none_ne_some {α : Type _} {x : α} (h : (none : Option α) = some x) : False := by cases h
 private theorem some_ne_none {α : Type _} {x : α} (h : some x = (none : Option α)) : False := by cases h
 private theorem readBankSlot_writeBankSlot (cam : CuckooExprCAM) (hSz : cam.slots.size = 8 * cam.bankDepth)
-    {b r b' r' : Nat} (hb : b < 8) (hr : r < cam.bankDepth) (_hb' : b' < 8) (hr' : r' < cam.bankDepth) (s : CuckooSlot) :
+    {b r b' r' : Nat} (hb : b < 8) (hr : r < cam.bankDepth) (hr' : r' < cam.bankDepth) (s : CuckooSlot) :
     (cam.writeBankSlot b r s).readBankSlot b' r' = if (b', r') = (b, r) then some s else cam.readBankSlot b' r' := by
   have hj : b * cam.bankDepth + r < cam.slots.size := by rw [hSz]; exact bankIdx_lt hb hr
   change (cam.slots.set! (b * cam.bankDepth + r) (some s)).getD (b' * cam.bankDepth + r') none = _
@@ -804,17 +759,17 @@ private theorem writeBankSlot_preserves_wf (cam : CuckooExprCAM) (hWF : CuckooCa
       cam.readBankSlot b' r' = some s' → s'.key ≠ s.key ∧ s'.handle ≠ s.handle) :
     CuckooCamWF (cam.writeBankSlot b r s) := by
   refine ⟨hWF.depthPos, by simp only [CuckooExprCAM.writeBankSlot, Array.size_set!, hWF.slotsSize], ?_, ?_, ?_⟩
-  · intro b' r' s' hb' hr' hRd; rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hb' hr' s] at hRd
+  · intro b' r' s' hb' hr' hRd; rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hr' s] at hRd
     by_cases heq : (b', r') = (b, r)
     · rw [ifTrue heq] at hRd; have hs := Option.some.inj hRd; subst hs; rw [heq]; exact hPlace
     · rw [ifFalse heq] at hRd; exact hWF.validPlace b' r' s' hb' hr' hRd
-  · intro b' r' s' hb' hr' hRd; rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hb' hr' s] at hRd
+  · intro b' r' s' hb' hr' hRd; rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hr' s] at hRd
     by_cases heq : (b', r') = (b, r)
     · rw [ifTrue heq] at hRd; have hs := Option.some.inj hRd; subst hs; exact hLt
     · rw [ifFalse heq] at hRd; exact hWF.handleLt b' r' s' hb' hr' hRd
   · intro b₁ r₁ s₁ b₂ r₂ s₂ hb₁ hr₁ hb₂ hr₂ hRd₁ hRd₂ hNe
-    rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hb₁ hr₁ s] at hRd₁
-    rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hb₂ hr₂ s] at hRd₂
+    rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hr₁ s] at hRd₁
+    rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hr₂ s] at hRd₂
     by_cases h1 : (b₁, r₁) = (b, r)
     · rw [ifTrue h1] at hRd₁; have hs := Option.some.inj hRd₁; subst hs
       have h2 : (b₂, r₂) ≠ (b, r) := fun he => hNe (h1.trans he.symm)
@@ -831,30 +786,24 @@ private theorem cuckooChooseLoc_bounds (u : Bool) {d : Nat} (hd : 0 < d) (k : Pa
   obtain ⟨hb0, hr0, _, hb1, hr1, _⟩ := cuckooLoc_bounds hd k; cases u
   · exact ⟨by change (cuckooLoc0 d k).1 < 8; omega, hr0, Or.inl (Prod.ext rfl rfl)⟩
   · exact ⟨hb1, hr1, Or.inr (Prod.ext rfl rfl)⟩
-
 private theorem cuckooEvictStep_wf (kicks : Nat)
     (ih : ∀ (u : Bool) (c : CuckooSlot) (m : CuckooExprCAM), CuckooCamWF m → c.handle < m.nextHandle →
-      (∀ b r s, b < 8 → r < m.bankDepth → m.readBankSlot b r = some s → s.key ≠ c.key ∧ s.handle ≠ c.handle) →
-      CuckooCamWF (cuckooEvictLoop kicks u c m).1)
+      (∀ b r s, b < 8 → r < m.bankDepth → m.readBankSlot b r = some s → s.key ≠ c.key ∧ s.handle ≠ c.handle) → CuckooCamWF (cuckooEvictLoop kicks u c m).1)
     (u : Bool) (cur : CuckooSlot) (cam : CuckooExprCAM) (b r : Nat) (hb : b < 8) (hr : r < cam.bankDepth)
     (hPl : (b, r) = cuckooLoc0 cam.bankDepth cur.key ∨ (b, r) = cuckooLoc1 cam.bankDepth cur.key)
     (hWF : CuckooCamWF cam) (hLt : cur.handle < cam.nextHandle)
     (hDisj : ∀ b' r' s', b' < 8 → r' < cam.bankDepth → cam.readBankSlot b' r' = some s' → s'.key ≠ cur.key ∧ s'.handle ≠ cur.handle)
     (old? : Option CuckooSlot) (hOld : cam.readBankSlot b r = old?) :
-    CuckooCamWF (match old? with
-      | none => (cam.writeBankSlot b r cur, none)
-      | some victim => cuckooEvictLoop kicks (!u) victim (cam.writeBankSlot b r cur)).1 := by
+    CuckooCamWF (match old? with | none => (cam.writeBankSlot b r cur, none) | some victim => cuckooEvictLoop kicks (!u) victim (cam.writeBankSlot b r cur)).1 := by
   have hWF' := writeBankSlot_preserves_wf cam hWF hb hr cur hPl hLt (fun b' r' s' hb' hr' _ hRd => hDisj b' r' s' hb' hr' hRd)
   cases old? with
   | none => exact hWF'
   | some victim =>
     apply ih (!u) victim (cam.writeBankSlot b r cur) hWF' (hWF.handleLt b r victim hb hr hOld)
-    intro b' r' s' hb' hr' hRd; rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hb' hr' cur] at hRd
+    intro b' r' s' hb' hr' hRd; rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb hr hr' cur] at hRd
     by_cases heq : (b', r') = (b, r)
-    · rw [ifTrue heq] at hRd; have hs := Option.some.inj hRd; subst hs
-      have hvc := hDisj b r victim hb hr hOld; exact ⟨hvc.1.symm, hvc.2.symm⟩
+    · rw [ifTrue heq] at hRd; have hs := Option.some.inj hRd; subst hs; have hvc := hDisj b r victim hb hr hOld; exact ⟨hvc.1.symm, hvc.2.symm⟩
     · rw [ifFalse heq] at hRd; exact hWF.noDup b' r' s' b r victim hb' hr' hb hr hRd hOld heq
-
 private theorem cuckooEvictLoop_preserves_wf (kicks : Nat) :
     ∀ (u : Bool) (cur : CuckooSlot) (cam : CuckooExprCAM), CuckooCamWF cam → cur.handle < cam.nextHandle →
       (∀ b' r' s', b' < 8 → r' < cam.bankDepth → cam.readBankSlot b' r' = some s' → s'.key ≠ cur.key ∧ s'.handle ≠ cur.handle) →
@@ -864,7 +813,6 @@ private theorem cuckooEvictLoop_preserves_wf (kicks : Nat) :
   | succ kicks ih =>
     intro u cur cam hWF hLt hDisj; obtain ⟨hb, hr, hPl⟩ := cuckooChooseLoc_bounds u hWF.depthPos cur.key
     exact cuckooEvictStep_wf kicks ih u cur cam _ _ hb hr hPl hWF hLt hDisj _ rfl
-
 private theorem cuckooInsertMissAux_wf (m : Nat) (k : PackedNodeWord) (ns : CuckooSlot) (ca : CuckooExprCAM)
     (hKey : ns.key = k) (hWF : CuckooCamWF ca) (hLt : ns.handle < ca.nextHandle)
     (hDisj : ∀ b r s, b < 8 → r < ca.bankDepth → ca.readBankSlot b r = some s → s.key ≠ k ∧ s.handle ≠ ns.handle) :
@@ -875,75 +823,109 @@ private theorem cuckooInsertMissAux_wf (m : Nat) (k : PackedNodeWord) (ns : Cuck
       (Or.inl (hKey ▸ Prod.ext rfl rfl)) hLt (fun b r s hb hr _ hRd => by rw [hKey]; exact hDisj b r s hb hr hRd)
   | some _, none =>
     have ⟨_, _, _, hb1, hr1, _⟩ := cuckooLoc_bounds hWF.depthPos k
-    writeBankSlot_preserves_wf ca hWF hb1 hr1 ns
-      (Or.inr (hKey ▸ Prod.ext rfl rfl)) hLt (fun b r s hb hr _ hRd => by rw [hKey]; exact hDisj b r s hb hr hRd)
-  | some _, some _ =>
-    cuckooEvictLoop_preserves_wf m false ns ca hWF hLt (fun b r s hb hr hRd => by rw [hKey]; exact hDisj b r s hb hr hRd)
-
+    writeBankSlot_preserves_wf ca hWF hb1 hr1 ns (Or.inr (hKey ▸ Prod.ext rfl rfl)) hLt (fun b r s hb hr _ hRd => by rw [hKey]; exact hDisj b r s hb hr hRd)
+  | some _, some _ => cuckooEvictLoop_preserves_wf m false ns ca hWF hLt (fun b r s hb hr hRd => by rw [hKey]; exact hDisj b r s hb hr hRd)
+private theorem cuckooTaintKeySorry_wf (cam : CuckooExprCAM) (k : PackedNodeWord) (hWF : CuckooCamWF cam) : CuckooCamWF (cuckooTaintKeySorry cam k) := by
+  obtain ⟨hb0_4, hr0, _, hb1, hr1, _⟩ := cuckooLoc_bounds hWF.depthPos k; have hb0 : (cuckooLoc0 cam.bankDepth k).1 < 8 := by omega
+  unfold cuckooTaintKeySorry
+  cases hp0 : cuckooProbeSlot? (cam.readBankSlot (cuckooLoc0 cam.bankDepth k).1 (cuckooLoc0 cam.bankDepth k).2) k with
+  | some s0 =>
+    obtain ⟨hRd0, hK0⟩ := cuckooProbeSlot_eq_some.mp hp0
+    exact writeBankSlot_preserves_wf cam hWF hb0 hr0 { s0 with hasSorry := true } (Or.inl (hK0 ▸ Prod.ext rfl rfl))
+      (hWF.handleLt _ _ s0 hb0 hr0 hRd0) (fun b' r' s' hb' hr' hNe hRd' => hWF.noDup _ _ s' _ _ s0 hb' hr' hb0 hr0 hRd' hRd0 hNe)
+  | none =>
+    cases hp1 : cuckooProbeSlot? (cam.readBankSlot (cuckooLoc1 cam.bankDepth k).1 (cuckooLoc1 cam.bankDepth k).2) k with
+    | some s1 =>
+      obtain ⟨hRd1, hK1⟩ := cuckooProbeSlot_eq_some.mp hp1
+      exact writeBankSlot_preserves_wf cam hWF hb1 hr1 { s1 with hasSorry := true } (Or.inr (hK1 ▸ Prod.ext rfl rfl))
+        (hWF.handleLt _ _ s1 hb1 hr1 hRd1) (fun b' r' s' hb' hr' hNe hRd' => hWF.noDup _ _ s' _ _ s1 hb' hr' hb1 hr1 hRd' hRd1 hNe)
+    | none => exact hWF
 private theorem cuckooInsertAux_wf (m : Nat) (k : PackedNodeWord) (s : Bool) (cam : CuckooExprCAM) (hWF : CuckooCamWF cam) :
     ∀ (lk : Option CamHandle), cuckooLookup? cam k = lk → CuckooCamWF (cuckooInsertAux m k s cam lk).2.1
-  | some _, _ => hWF
+  | some _, _ => by unfold cuckooInsertAux; cases s <;> simp [hWF, cuckooTaintKeySorry_wf]
   | none, hLook =>
-    let ca : CuckooExprCAM := { cam with nextHandle := cam.nextHandle + 1 }
-    let ns : CuckooSlot := { key := k, hasSorry := s, handle := cam.nextHandle }
+    let ca : CuckooExprCAM := { cam with nextHandle := cam.nextHandle + 1 }; let ns : CuckooSlot := { key := k, hasSorry := s, handle := cam.nextHandle }
     cuckooInsertMissAux_wf m k ns ca rfl
       ⟨hWF.depthPos, hWF.slotsSize, hWF.validPlace, fun b r sl hb hr hRd => Nat.lt_trans (hWF.handleLt b r sl hb hr hRd) (Nat.lt_succ_self _), hWF.noDup⟩
       (Nat.lt_succ_self _)
       (fun b r sl hb hr hRd => ⟨fun hKEq => (none_ne_some (hLook.symm.trans ((cuckooCam_lookup_iff_member cam k sl.handle hWF).mpr ⟨b, r, sl, hb, hr, hRd, hKEq, rfl⟩))).elim,
-        Nat.ne_of_lt (hWF.handleLt b r sl hb hr hRd)⟩)
-      _ _
-
-private theorem cuckooInsertAux_hit {m : Nat} {k : PackedNodeWord} {s : Bool} {cam : CuckooExprCAM} {h : CamHandle} :
-    ∀ (lk : Option CamHandle), lk = some h → cuckooInsertAux m k s cam lk = (h, cam, none)
-  | _, rfl => rfl
-
-/-- **Cuckoo Insertion Well-Formedness & No-Duplicate-Handles Theorem (`cuckooCam_no_duplicate_handles`)**. -/
+        Nat.ne_of_lt (hWF.handleLt b r sl hb hr hRd)⟩) _ _
+private theorem cuckooTaintKeySorry_lookup (cam : CuckooExprCAM) (k : PackedNodeWord) (hOld : CamHandle)
+    (hWF : CuckooCamWF cam) (hMem : CuckooMember cam k hOld) :
+    ∃ s', cuckooLookupSlot? (cuckooTaintKeySorry cam k) k = some s' ∧ s'.handle = hOld ∧ s'.hasSorry = true := by
+  obtain ⟨hb0_4, hr0, _, hb1, hr1, hLocNe⟩ := cuckooLoc_bounds hWF.depthPos k; have hb0 : (cuckooLoc0 cam.bankDepth k).1 < 8 := by omega
+  rcases hMem with ⟨b, r, s, hb, hr, hRd, rfl, rfl⟩; rcases hWF.validPlace b r s hb hr hRd with hP0 | hP1
+  · have hbE := congrArg Prod.fst hP0; have hrE := congrArg Prod.snd hP0; subst hbE hrE
+    have hp0 := cuckooProbeSlot_eq_some.mpr ⟨hRd, (rfl : s.key = s.key)⟩; unfold cuckooTaintKeySorry; rw [hp0]; dsimp only
+    unfold cuckooLookupSlot?
+    have hWr : (cam.writeBankSlot (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+        (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2 = some { s with hasSorry := true } := by
+      rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb0 hr0 hr0, ifTrue rfl]
+    have hPr0 : cuckooProbeSlot? ((cam.writeBankSlot (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+        (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2) s.key = some { s with hasSorry := true } :=
+      cuckooProbeSlot_eq_some.mpr ⟨hWr, rfl⟩
+    exact ⟨{ s with hasSorry := true }, by
+      change (cuckooProbeSlot? ((cam.writeBankSlot (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+          (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2) s.key).or
+        (cuckooProbeSlot? ((cam.writeBankSlot (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+          (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2) s.key) = _
+      rw [hPr0]; rfl, rfl, rfl⟩
+  · have hbE := congrArg Prod.fst hP1; have hrE := congrArg Prod.snd hP1; subst hbE hrE
+    have hp0 : cuckooProbeSlot? (cam.readBankSlot (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2) s.key = none :=
+      cuckooProbeSlot_eq_none.mpr fun s0 hRd0 => (hWF.noDup _ _ s0 _ _ s hb0 hr0 hb1 hr1 hRd0 hRd hLocNe).1
+    have hp1 := cuckooProbeSlot_eq_some.mpr ⟨hRd, (rfl : s.key = s.key)⟩; unfold cuckooTaintKeySorry; rw [hp0, hp1]; dsimp only
+    unfold cuckooLookupSlot?
+    have hWr0 : (cam.writeBankSlot (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+        (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2 =
+        cam.readBankSlot (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2 := by
+      rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb1 hr1 hr0, ifFalse hLocNe]
+    have hWr1 : (cam.writeBankSlot (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+        (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2 = some { s with hasSorry := true } := by
+      rw [readBankSlot_writeBankSlot cam hWF.slotsSize hb1 hr1 hr1, ifTrue rfl]
+    have hPr1 : cuckooProbeSlot? ((cam.writeBankSlot (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+        (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2) s.key = some { s with hasSorry := true } :=
+      cuckooProbeSlot_eq_some.mpr ⟨hWr1, rfl⟩
+    exact ⟨{ s with hasSorry := true }, by
+      change (cuckooProbeSlot? ((cam.writeBankSlot (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+          (cuckooLoc0 cam.bankDepth s.key).1 (cuckooLoc0 cam.bankDepth s.key).2) s.key).or
+        (cuckooProbeSlot? ((cam.writeBankSlot (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2 { s with hasSorry := true }).readBankSlot
+          (cuckooLoc1 cam.bankDepth s.key).1 (cuckooLoc1 cam.bankDepth s.key).2) s.key) = _
+      rw [hWr0, hp0, hPr1]; rfl, rfl, rfl⟩
+/-- **Cuckoo Insertion Well-Formedness, Conservative `hasSorry` Dedup & No-Duplicate-Handles (`cuckooCam_no_duplicate_handles`)**. -/
 theorem cuckooCam_no_duplicate_handles
     (maxKicks : Nat) (k : PackedNodeWord) (hasSorry : Bool) (cam : CuckooExprCAM) (hWF : CuckooCamWF cam) :
     let res := cuckooInsert maxKicks k hasSorry cam
     CuckooCamWF res.2.1 ∧
     (∀ b₁ r₁ s₁ b₂ r₂ s₂, b₁ < 8 → r₁ < res.2.1.bankDepth → b₂ < 8 → r₂ < res.2.1.bankDepth →
-      res.2.1.readBankSlot b₁ r₁ = some s₁ → res.2.1.readBankSlot b₂ r₂ = some s₂ →
-      (b₁, r₁) ≠ (b₂, r₂) → s₁.key ≠ s₂.key ∧ s₁.handle ≠ s₂.handle) ∧
-    (∀ hOld, CuckooMember cam k hOld → res.1 = hOld ∧ res.2.1 = cam ∧ res.2.2 = none) := by
+      res.2.1.readBankSlot b₁ r₁ = some s₁ → res.2.1.readBankSlot b₂ r₂ = some s₂ → (b₁, r₁) ≠ (b₂, r₂) → s₁.key ≠ s₂.key ∧ s₁.handle ≠ s₂.handle) ∧
+    (∀ hOld, CuckooMember cam k hOld → res.1 = hOld ∧ res.2.2 = none ∧ (hasSorry = false → res.2.1 = cam) ∧
+      (hasSorry = true → ∃ s', cuckooLookupSlot? res.2.1 k = some s' ∧ s'.handle = hOld ∧ s'.hasSorry = true)) := by
   have hPres : CuckooCamWF (cuckooInsert maxKicks k hasSorry cam).2.1 := cuckooInsertAux_wf maxKicks k hasSorry cam hWF _ rfl
   refine ⟨hPres, hPres.noDup, fun hOld hMem => ?_⟩
-  have hHit : cuckooInsert maxKicks k hasSorry cam = (hOld, cam, none) :=
-    cuckooInsertAux_hit (cuckooLookup? cam k) ((cuckooCam_lookup_iff_member cam k hOld hWF).mpr hMem)
-  exact ⟨congrArg Prod.fst hHit, congrArg (fun x => x.2.1) hHit, congrArg (fun x => x.2.2) hHit⟩
-
-theorem cuckooCam_wf_inhabited :
-    ∃ (cam : CuckooExprCAM) (k : PackedNodeWord) (h : CamHandle), CuckooCamWF cam ∧ CuckooMember cam k h := by
-  let k0 : PackedNodeWord := { tag := 0, h0 := 0, h1 := 0 }
-  let s0 : CuckooSlot := { key := k0, hasSorry := false, handle := 0 }
-  let ca : CuckooExprCAM := { CuckooExprCAM.empty 1 with nextHandle := 1 }
-  have hE := cuckooEmpty_wf (d := 1) (by decide)
+  have hLk : cuckooLookup? cam k = some hOld := (cuckooCam_lookup_iff_member cam k hOld hWF).mpr hMem
+  unfold cuckooInsert; rw [hLk]; unfold cuckooInsertAux
+  exact ⟨rfl, rfl, fun hF => by simp [hF], fun hT => by simp only [hT, ↓reduceIte]; exact cuckooTaintKeySorry_lookup cam k hOld hWF hMem⟩
+theorem cuckooCam_wf_inhabited : ∃ (cam : CuckooExprCAM) (k : PackedNodeWord) (h : CamHandle), CuckooCamWF cam ∧ CuckooMember cam k h := by
+  let k0 : PackedNodeWord := { tag := 0, h0 := 0, h1 := 0 }; let s0 : CuckooSlot := { key := k0, hasSorry := false, handle := 0 }
+  let ca : CuckooExprCAM := { CuckooExprCAM.empty 1 with nextHandle := 1 }; have hE := cuckooEmpty_wf (d := 1) (by decide)
   have hEmptyRd : ∀ b r sl, ca.readBankSlot b r = some sl → False := fun b r sl hRd =>
     none_ne_some (by change (Array.replicate 8 none).getD (b * 1 + r) none = some sl at hRd; rwa [array_getD_replicate] at hRd)
   have hWFCa : CuckooCamWF ca := ⟨hE.depthPos, hE.slotsSize, hE.validPlace, fun b r sl _ _ hRd => (hEmptyRd b r sl hRd).elim, hE.noDup⟩
   have hWF1 : CuckooCamWF (ca.writeBankSlot 0 0 s0) := writeBankSlot_preserves_wf ca hWFCa (by decide) (by decide) s0
     (Or.inl (by simp [ca, CuckooExprCAM.empty, s0, k0, cuckooLoc0, cuckooRawHash0])) (by decide) (fun b r sl _ _ _ hRd => (hEmptyRd b r sl hRd).elim)
   have hMem : (ca.writeBankSlot 0 0 s0).readBankSlot 0 0 = some s0 := by
-    rw [readBankSlot_writeBankSlot ca hWFCa.slotsSize (by decide) (by decide) (by decide) (by decide) s0, ifTrue rfl]
+    rw [readBankSlot_writeBankSlot ca hWFCa.slotsSize (by decide) (by decide) (by decide) s0, ifTrue rfl]
   exact ⟨ca.writeBankSlot 0 0 s0, k0, 0, hWF1, 0, 0, s0, by decide, by decide, hMem, rfl, rfl⟩
-
 /-! ## 8. 128-Bit `GoldilocksExt2` Permutation-Product Spill Authenticator (`OfflineMemAcc`) -/
-
-/-- External HBM2 DAG spill/reload memory operation tuple (`224` bits total: `32 + 128 + 64`). -/
 structure SpillTuple where
   addr : UInt32
   word : PackedNodeWord128
   timestamp : UInt64
   deriving @[expose] DecidableEq, Repr
-
-/-- Lossless 4-limb 56-bit framing of `SpillTuple` into `Goldilocks` (every limb `< 2^56 < goldilocksPrime`). -/
 def encodeSpillLimbs (t : SpillTuple) : List Goldilocks :=
   let lo := t.word.lo64.toNat; let hi := t.word.hi64.toNat; let ts := t.timestamp.toNat
-  [ Goldilocks.ofNat (lo % 72057594037927936), Goldilocks.ofNat (hi % 72057594037927936)
-  , Goldilocks.ofNat (ts % 72057594037927936)
-  , Goldilocks.ofNat (t.addr.toNat + 4294967296 * (lo / 72057594037927936) +
-      1099511627776 * (hi / 72057594037927936) + 281474976710656 * (ts / 72057594037927936)) ]
-
+  [ Goldilocks.ofNat (lo % 72057594037927936), Goldilocks.ofNat (hi % 72057594037927936), Goldilocks.ofNat (ts % 72057594037927936)
+  , Goldilocks.ofNat (t.addr.toNat + 4294967296 * (lo / 72057594037927936) + 1099511627776 * (hi / 72057594037927936) + 281474976710656 * (ts / 72057594037927936)) ]
 theorem encodeSpillLimbs_injective {t₁ t₂ : SpillTuple} (hEq : encodeSpillLimbs t₁ = encodeSpillLimbs t₂) : t₁ = t₂ := by
   rcases t₁ with ⟨⟨a1⟩, ⟨lo1, hi1⟩, ⟨ts1⟩⟩; rcases t₂ with ⟨⟨a2⟩, ⟨lo2, hi2⟩, ⟨ts2⟩⟩
   unfold encodeSpillLimbs at hEq; simp only [List.cons.injEq, and_true] at hEq
@@ -1140,68 +1122,50 @@ private theorem subCoeffs_ofBase_nz :
     simp only [List.map, RoundPoly.subCoeffs]
     by_cases hxy : CommRingOps.sub (GoldilocksExt2.ofBase x) (GoldilocksExt2.ofBase y) = CommRingOps.zero
     · have exy : x = y := by simpa [GoldilocksExt2.ofBase] using congrArg GoldilocksExt2.c0 (sub_eq_zero_iff_ring.mp hxy)
-      subst exy; obtain ⟨c, hc, hcz⟩ := subCoeffs_ofBase_nz (Nat.succ.inj hLen) (fun htl => hNe (congrArg (x :: ·) htl))
-      exact ⟨c, .tail _ hc, hcz⟩
+      subst exy; obtain ⟨c, hc, hcz⟩ := subCoeffs_ofBase_nz (Nat.succ.inj hLen) (fun htl => hNe (congrArg (x :: ·) htl)); exact ⟨c, .tail _ hc, hcz⟩
     · exact ⟨_, .head _, hxy⟩
-
 theorem grandProd_roots_le (ws rs S : List GoldilocksExt2) (hNd : S.Nodup) (hNP : ¬ ws.Perm rs) :
     (S.filter (fun γ => decide (grandProd γ ws = grandProd γ rs))).length ≤ Nat.max ws.length rs.length :=
   grandProd_roots_le_poly (by decide) ws rs S hNd hNP
-
-/-- **128-Bit `OfflineMemAcc` Schwartz–Zippel Soundness (`offlineMemCheck_spill_sound`)**:
-1. Any two distinct `SpillTuple`s collide under `compressSpillTuple α` at **at most `3`** challenges in any `Nodup` `S_α`;
-2. Non-permuted $\alpha$-compressed write/read logs satisfy `wProd = rProd` at **at most `max |writeLog| |readLog|`** challenges in `S_γ`;
-3. `GoldilocksExt2` has cardinality `goldilocksPrime ^ 2 > 2 ^ 127`. -/
 theorem offlineMemCheck_spill_sound
     (t₁ t₂ : SpillTuple) (hNe : t₁ ≠ t₂) (α : GoldilocksExt2) (writeLog readLog : List SpillTuple)
     (hNotTagPerm : ¬ (writeLog.map (compressSpillTuple α)).Perm (readLog.map (compressSpillTuple α)))
     (S_α S_γ : List GoldilocksExt2) (hNdα : S_α.Nodup) (hNdγ : S_γ.Nodup) :
     (S_α.filter (fun r => decide (compressSpillTuple r t₁ = compressSpillTuple r t₂))).length ≤ 3 ∧
     (S_γ.filter (fun γ => decide ((runOfflineMemTrace γ α writeLog readLog).wProd =
-      (runOfflineMemTrace γ α writeLog readLog).rProd))).length ≤ Nat.max writeLog.length readLog.length ∧
-    2 ^ 127 < goldilocksPrime ^ 2 := by
+      (runOfflineMemTrace γ α writeLog readLog).rProd))).length ≤ Nat.max writeLog.length readLog.length ∧ 2 ^ 127 < goldilocksPrime ^ 2 := by
   refine ⟨?_, ?_, goldilocksExt2_card_gt_two_pow_126 127 (Nat.le_refl 127)⟩
   · let diff := RoundPoly.subCoeffs (spillPolyCoeffs t₁) (spillPolyCoeffs t₂)
     have hDiffNz : ∃ c ∈ diff, c ≠ CommRingOps.zero := subCoeffs_ofBase_nz rfl (fun hEq => hNe (encodeSpillLimbs_injective hEq))
     have hLen : diff.length ≤ 3 + 1 := by simp only [diff, RoundPoly.subCoeffs_length]; exact Nat.le_refl 4
     have hWit := exists_evalCoeffs_nz_poly (GoldilocksExt2.ofBase (Goldilocks.ofNat 1))
-      (GoldilocksExt2.ofBase (Goldilocks.ofNat 2)) (GoldilocksExt2.ofBase (Goldilocks.ofNat 3))
-      (by decide) (by decide) (by decide) (by decide) diff hLen hDiffNz
+      (GoldilocksExt2.ofBase (Goldilocks.ofNat 2)) (GoldilocksExt2.ofBase (Goldilocks.ofNat 3)) (by decide) (by decide) (by decide) (by decide) diff hLen hDiffNz
     have hB := RoundPoly.roots_nodup_length_le 3 diff S_α hNdα hLen hWit
     refine Nat.le_trans (filter_le_of_imp_on S_α fun r _ hEq => ?_) hB; rw [decide_eq_true_eq] at hEq ⊢
-    change RoundPoly.evalCoeffs (spillPolyCoeffs t₁) r = RoundPoly.evalCoeffs (spillPolyCoeffs t₂) r at hEq
-    rw [RoundPoly.evalCoeffs_sub, hEq, LawfulCommRing.sub_self]
+    change RoundPoly.evalCoeffs (spillPolyCoeffs t₁) r = RoundPoly.evalCoeffs (spillPolyCoeffs t₂) r at hEq; rw [RoundPoly.evalCoeffs_sub, hEq, LawfulCommRing.sub_self]
   · have hEqF : (fun γ => decide ((runOfflineMemTrace γ α writeLog readLog).wProd = (runOfflineMemTrace γ α writeLog readLog).rProd)) =
         (fun γ => decide (grandProd γ (writeLog.map (compressSpillTuple α)) = grandProd γ (readLog.map (compressSpillTuple α)))) := by
       funext γ; rw [(runOfflineMemTrace_prods γ α writeLog readLog).1, (runOfflineMemTrace_prods γ α writeLog readLog).2]
     rw [hEqF]; simpa only [List.length_map] using grandProd_roots_le (writeLog.map (compressSpillTuple α)) (readLog.map (compressSpillTuple α)) S_γ hNdγ hNotTagPerm
-
 theorem offlineMemCheck_inhabited :
     ∃ (t₁ t₂ : SpillTuple) (γ α : GoldilocksExt2), t₁ ≠ t₂ ∧
       (runOfflineMemTrace γ α [t₁, t₂] [t₂, t₁]).wProd = (runOfflineMemTrace γ α [t₁, t₂] [t₂, t₁]).rProd ∧
       (runOfflineMemTrace γ α [t₁, t₂] [t₁, t₁]).wProd ≠ (runOfflineMemTrace γ α [t₁, t₂] [t₁, t₁]).rProd :=
-  ⟨{ addr := 0, word := { lo64 := 0#64, hi64 := 0#64 }, timestamp := 0 },
-   { addr := 0, word := { lo64 := 1#64, hi64 := 0#64 }, timestamp := 0 },
-   GoldilocksExt2.ofBase (Goldilocks.ofNat 1), CommRingOps.zero,
-   by decide, offlineMemCheck_perm_complete _ _ _ _ (.swap _ _ .nil), by decide⟩
-
+  ⟨{ addr := 0, word := { lo64 := 0#64, hi64 := 0#64 }, timestamp := 0 }, { addr := 0, word := { lo64 := 1#64, hi64 := 0#64 }, timestamp := 0 },
+   GoldilocksExt2.ofBase (Goldilocks.ofNat 1), GoldilocksExt2.ofBase (Goldilocks.ofNat 7), by decide, offlineMemCheck_perm_complete _ _ _ _ (.swap _ _ .nil), by decide⟩
 /-! ## 9. Synthesizable 8-Bank `SyncRam` `cuckooSiliconElabMemModule` & Cycle-Accurate `stepCamWhnf` Simulation -/
-
 def mkBank8ReadMux (selExpr : RtlExpr) : RtlExpr :=
   let idx := .alu .bitAnd selExpr (.const 7#64)
   .mux (.alu .eq idx (.const 0#64)) (.regRead 10) (.mux (.alu .eq idx (.const 1#64)) (.regRead 11)
     (.mux (.alu .eq idx (.const 2#64)) (.regRead 12) (.mux (.alu .eq idx (.const 3#64)) (.regRead 13)
-    (.mux (.alu .eq idx (.const 4#64)) (.regRead 14) (.mux (.alu .eq idx (.const 5#64)) (.regRead 15)
-    (.mux (.alu .eq idx (.const 6#64)) (.regRead 16) (.regRead 17)))))))
-
-/-- Synthesizable 8-bank synchronous BRAM (`SyncRamSpec`) Zone-1 + Zone-4 elaborator (`RtlMemModule`).
-Zone-4 `hasSorry` (Bit 56) and `hasMVar` (Bit 58) flags are accumulated in hardware from BRAM readouts. -/
+    (.mux (.alu .eq idx (.const 4#64)) (.regRead 14) (.mux (.alu .eq idx (.const 5#64)) (.regRead 15) (.mux (.alu .eq idx (.const 6#64)) (.regRead 16) (.regRead 17)))))))
 def cuckooSiliconElabMemModule : RtlMemModule where
   core := {
     name := "cuckoo_silicon_elab_top"
     inputNames := [ "ram_we", "ram_wsel", "ram_waddr", "ram_wdata", "z1_start", "z1_step_en", "z1_init_handle", "z4_ctrl" ]
     inputWidths := [ 1, 3, 6, 64, 1, 1, 9, 3 ]
     wires :=
+      let hwReady := .alu .bitAnd (.alu .bitAnd (.mux (.regRead 5) (.const 1#64) (.const 0#64)) (.alu .eq (.regRead 1) (.const 0#64))) (.alu .eq (.inputPort 0) (.const 0#64))
       [ { wireIdx := 0, name := "w_ram_word", width := 64, expr := mkBank8ReadMux (.regRead 2) }
       , { wireIdx := 1, name := "w_ram_tag", width := 4, expr := .alu .bitAnd (.alu .lshr (.wireRef 0) (.const 60#64)) (.const 0xF#64) }
       , { wireIdx := 2, name := "w_ram_h0", width := 9, expr := .alu .bitAnd (.alu .lshr (.wireRef 0) (.const 16#64)) (.const 0x1FF#64) }
@@ -1217,16 +1181,17 @@ def cuckooSiliconElabMemModule : RtlMemModule where
       , { wireIdx := 12, name := "w_eff_mvar", width := 1, expr := .alu .bitOr (.regRead 8) (.alu .bitAnd (.wireRef 10) (.wireRef 5)) }
       , { wireIdx := 13, name := "w_z4_comb_status", width := 2
         , expr := .mux (.wireRef 11) (.const 0#64) (.mux (.wireRef 12) (.const 2#64)
-            (.mux (.alu .bitAnd (.inputPort 7) (.const 1#64)) (.mux (.alu .bitAnd (.alu .lshr (.inputPort 7) (.const 1#64)) (.const 1#64)) (.const 1#64) (.const 2#64)) (.const 3#64))) }
+            (.mux (.alu .bitAnd (.inputPort 7) (.const 1#64))
+              (.mux (.alu .bitAnd (.alu .bitAnd (.alu .lshr (.inputPort 7) (.const 1#64)) (.const 1#64)) hwReady) (.const 1#64) (.const 2#64)) (.const 3#64))) }
       , { wireIdx := 14, name := "w_z4_accepted", width := 1, expr := .alu .eq (.regRead 9) (.const 1#64) } ]
     regs :=
       let macroDone := .alu .bitOr (.alu .eq (.regRead 1) (.const 3#64))
         (.alu .bitOr (.alu .bitAnd (.alu .eq (.regRead 1) (.const 1#64)) (.mux (.alu .eq (.wireRef 1) (.const 4#64)) (.const 0#64) (.const 1#64)))
                      (.alu .bitAnd (.alu .eq (.regRead 1) (.const 2#64)) (.mux (.alu .eq (.wireRef 1) (.const 5#64)) (.const 0#64) (.const 1#64))))
+      let satIncSteps := .mux (.alu .eq (.regRead 5) (.const 0xFFFF#64)) (.const 0xFFFF#64) (.alu .bitAnd (.alu .add (.regRead 5) (.const 1#64)) (.const 0xFFFF#64))
       [ { regIdx := 0, name := "z1_focus_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 9
         , nextExpr :=
-            let stepFocus := .mux (.alu .eq (.regRead 1) (.const 2#64))
-              (.mux (.alu .eq (.wireRef 1) (.const 5#64)) (.regRead 0) (.regRead 3))
+            let stepFocus := .mux (.alu .eq (.regRead 1) (.const 2#64)) (.mux (.alu .eq (.wireRef 1) (.const 5#64)) (.regRead 0) (.regRead 3))
               (.mux (.alu .eq (.regRead 1) (.const 3#64)) (.mux (.alu .eq (.wireRef 4) (.const 0#64)) (.regRead 4) (.regRead 3)) (.regRead 0))
             .mux (.inputPort 4) (.inputPort 6) (.mux (.inputPort 5) stepFocus (.regRead 0)) }
       , { regIdx := 1, name := "whnf_phase_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 2
@@ -1235,25 +1200,14 @@ def cuckooSiliconElabMemModule : RtlMemModule where
               (.mux (.alu .eq (.regRead 1) (.const 1#64)) (.mux (.alu .eq (.wireRef 1) (.const 4#64)) (.const 2#64) (.const 0#64))
               (.mux (.alu .eq (.regRead 1) (.const 2#64)) (.mux (.alu .eq (.wireRef 1) (.const 5#64)) (.const 3#64) (.const 0#64)) (.const 0#64)))
             .mux (.inputPort 4) (.const 0#64) (.mux (.inputPort 5) nextPh (.regRead 1)) }
-      , { regIdx := 2, name := "bank_sel_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 3
-        , nextExpr := .mux (.inputPort 4) (.const 0#64) (.mux (.inputPort 5) (.wireRef 8) (.regRead 2)) }
-      , { regIdx := 3, name := "cur_h0_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 9
-        , nextExpr := .mux (.inputPort 4) (.const 0#64) (.mux (.alu .bitAnd (.inputPort 5) (.alu .eq (.regRead 1) (.const 1#64))) (.wireRef 2) (.regRead 3)) }
-      , { regIdx := 4, name := "body_h_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 9
-        , nextExpr := .mux (.inputPort 4) (.const 0#64) (.mux (.alu .bitAnd (.inputPort 5) (.alu .eq (.regRead 1) (.const 2#64))) (.wireRef 3) (.regRead 4)) }
-      , { regIdx := 5, name := "z1_steps_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 16
-        , nextExpr := .mux (.inputPort 4) (.const 0#64)
-            (.mux (.alu .bitAnd (.inputPort 5) macroDone) (.alu .bitAnd (.alu .add (.regRead 5) (.const 1#64)) (.const 0xFFFF#64)) (.regRead 5)) }
-      , { regIdx := 6, name := "z1_bypass_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 1
-        , nextExpr := .mux (.inputPort 4) (.const 0#64)
-            (.mux (.alu .bitAnd (.inputPort 5) (.alu .eq (.regRead 1) (.const 3#64))) (.alu .eq (.wireRef 4) (.const 0#64)) (.regRead 6)) }
-      , { regIdx := 7, name := "acc_sorry_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 1
-        , nextExpr := .mux (.inputPort 4) (.const 0#64) (.wireRef 11) }
-      , { regIdx := 8, name := "acc_mvar_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 1
-        , nextExpr := .mux (.inputPort 4) (.const 0#64) (.wireRef 12) }
-      , { regIdx := 9, name := "z4_status_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 2
-        , nextExpr := .mux (.inputPort 4) (.const 0#64)
-            (.mux (.alu .bitAnd (.alu .lshr (.inputPort 7) (.const 2#64)) (.const 1#64)) (.wireRef 13) (.regRead 9)) } ]
+      , { regIdx := 2, name := "bank_sel_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 3, nextExpr := .mux (.inputPort 4) (.const 0#64) (.mux (.inputPort 5) (.wireRef 8) (.regRead 2)) }
+      , { regIdx := 3, name := "cur_h0_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 9, nextExpr := .mux (.inputPort 4) (.const 0#64) (.mux (.alu .bitAnd (.inputPort 5) (.alu .eq (.regRead 1) (.const 1#64))) (.wireRef 2) (.regRead 3)) }
+      , { regIdx := 4, name := "body_h_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 9, nextExpr := .mux (.inputPort 4) (.const 0#64) (.mux (.alu .bitAnd (.inputPort 5) (.alu .eq (.regRead 1) (.const 2#64))) (.wireRef 3) (.regRead 4)) }
+      , { regIdx := 5, name := "z1_steps_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 16, nextExpr := .mux (.alu .bitAnd (.inputPort 5) macroDone) satIncSteps (.regRead 5) }
+      , { regIdx := 6, name := "z1_bypass_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 1, nextExpr := .mux (.inputPort 4) (.const 0#64) (.mux (.alu .bitAnd (.inputPort 5) (.alu .eq (.regRead 1) (.const 3#64))) (.alu .eq (.wireRef 4) (.const 0#64)) (.regRead 6)) }
+      , { regIdx := 7, name := "acc_sorry_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 1, nextExpr := .wireRef 11 }
+      , { regIdx := 8, name := "acc_mvar_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 1, nextExpr := .wireRef 12 }
+      , { regIdx := 9, name := "z4_status_q", domain := .coreClk, resetKind := .syncReset 0#64, isSynchronizer := false, width := 2, nextExpr := .mux (.inputPort 4) (.const 0#64) (.mux (.alu .bitAnd (.alu .lshr (.inputPort 7) (.const 2#64)) (.const 1#64)) (.wireRef 13) (.regRead 9)) } ]
     outputs :=
       [ { name := "z1_focus_out", expr := .regRead 0, width := 9 }, { name := "whnf_phase_out", expr := .regRead 1, width := 2 }
       , { name := "z1_steps_out", expr := .regRead 5, width := 16 }, { name := "z1_bypass_out", expr := .regRead 6, width := 1 }
@@ -1265,14 +1219,13 @@ def cuckooSiliconElabMemModule : RtlMemModule where
            (6, "cuckoo_bank6", "cuckoo_rdata6"), (7, "cuckoo_bank7", "cuckoo_rdata7")].map fun (b, nm, rnm) =>
     { ramIdx := b, name := nm, rdataName := rnm, domain := .coreClk, style := .bram, mode := .readFirst
     , addrWidth := 6, dataWidth := 64, readAddrExpr := .wireRef 9, writeAddrExpr := .inputPort 2, writeDataExpr := .inputPort 3
-    , writeEnExpr := .alu .bitAnd (.inputPort 0) (.alu .eq (.inputPort 1) (.const (BitVec.ofNat 64 b))) }
+    , writeEnExpr := .alu .bitAnd (.alu .bitAnd (.inputPort 0) (.alu .eq (.inputPort 1) (.const (BitVec.ofNat 64 b))))
+        (.alu .bitAnd (.alu .eq (.regRead 1) (.const 0#64)) (.alu .eq (.regRead 5) (.const 0#64))) }
 
 def emitCuckooSiliconElabSV : String := emitMemModuleSV cuckooSiliconElabMemModule
-
 theorem cuckooSiliconElabMemModule_valid :
     checkRtlMemModule cuckooSiliconElabMemModule = true ∧ checkRtlMemModuleW cuckooSiliconElabMemModule = true :=
   ⟨by decide +kernel, by decide +kernel⟩
-
 def cuckooIdleStepInputs : Nat → BitVec 64 := fun i => if i == 5 then 1#64 else 0#64
 
 private theorem handle_bank_row {h : Nat} (hh : h < 512) :
@@ -1296,6 +1249,10 @@ private theorem cuckooIdle_mems_eq (st : MemState) :
   funext k; by_cases h0 : k = 0 <;> by_cases h1 : k = 1 <;> by_cases h2 : k = 2 <;> by_cases h3 : k = 3 <;>
     by_cases h4 : k = 4 <;> by_cases h5 : k = 5 <;> by_cases h6 : k = 6 <;> by_cases h7 : k = 7 <;> simp_all
 
+private def cuckooHwReadyVal (ins regs : Nat → BitVec 64) : BitVec 64 :=
+  ((if regs 5 != 0#64 then 1#64 else 0#64) &&& (if regs 1 == 0#64 then 1#64 else 0#64)) &&&
+    (if ins 0 == 0#64 then 1#64 else 0#64)
+
 private def cuckooWireFnWith (ins regs : Nat → BitVec 64) (w0 : BitVec 64) : Nat → BitVec 64 :=
   let w1 := (w0 >>> 60) &&& 0xF#64; let w2 := (w0 >>> 16) &&& 0x1FF#64; let w3 := w0 &&& 0x1FF#64
   let w4 := (w0 >>> 59) &&& 1#64; let w5 := (w0 >>> 58) &&& 1#64; let w6 := (w0 >>> 56) &&& 1#64
@@ -1305,7 +1262,9 @@ private def cuckooWireFnWith (ins regs : Nat → BitVec 64) (w0 : BitVec 64) : N
   let w10 := ins 5 &&& (if regs 1 != 0#64 then 1#64 else 0#64)
   let w11 := regs 7 ||| (w10 &&& w6); let w12 := regs 8 ||| (w10 &&& w5)
   let w13 := if w11 != 0#64 then 0#64 else if w12 != 0#64 then 2#64
-             else if (ins 7 &&& 1#64) != 0#64 then (if ((ins 7 >>> 1) &&& 1#64) != 0#64 then 1#64 else 2#64) else 3#64
+             else if (ins 7 &&& 1#64) != 0#64 then
+               (if (((ins 7 >>> 1) &&& 1#64) &&& cuckooHwReadyVal ins regs) != 0#64 then 1#64 else 2#64)
+             else 3#64
   let w14 := if regs 9 == 1#64 then 1#64 else 0#64
   fun i => if i == 14 then w14 else if i == 13 then w13 else if i == 12 then w12 else if i == 11 then w11
     else if i == 10 then w10 else if i == 9 then w9 else if i == 8 then w8 else if i == 7 then w7
@@ -1331,7 +1290,9 @@ private theorem cuckooWireTable_eq (ins regs : Nat → BitVec 64) :
   let w10 := ins 5 &&& (if regs 1 != 0#64 then 1#64 else 0#64)
   let w11 := regs 7 ||| (w10 &&& w6); let w12 := regs 8 ||| (w10 &&& w5)
   let w13 := if w11 != 0#64 then 0#64 else if w12 != 0#64 then 2#64
-             else if (ins 7 &&& 1#64) != 0#64 then (if ((ins 7 >>> 1) &&& 1#64) != 0#64 then 1#64 else 2#64) else 3#64
+             else if (ins 7 &&& 1#64) != 0#64 then
+               (if (((ins 7 >>> 1) &&& 1#64) &&& cuckooHwReadyVal ins regs) != 0#64 then 1#64 else 2#64)
+             else 3#64
   let w14 := if regs 9 == 1#64 then 1#64 else 0#64
   refine (wire_foldl_step _ _ _ _ _ w0 hw0).trans ((wire_foldl_step _ _ _ _ _ w1 rfl).trans ?_)
   refine (wire_foldl_step _ _ _ _ _ w2 rfl).trans ((wire_foldl_step _ _ _ _ _ w3 rfl).trans ?_)
@@ -1351,8 +1312,10 @@ private theorem cuckooWireTable_eq (ins regs : Nat → BitVec 64) :
     cuckooWireFnWith ins regs w0 9 = (if (if regs 1 == 1#64 then 1#64 else 0#64) != 0#64 then (w0 >>> 16) &&& 0x1FF#64 else if (if regs 1 == 2#64 then 1#64 else 0#64) != 0#64 then w0 &&& 0x1FF#64 else regs 0) &&& 0x3F#64 := rfl
 @[simp] private theorem cuckooWF_11 (ins regs : Nat → BitVec 64) (w0 : BitVec 64) :
     cuckooWireFnWith ins regs w0 11 = regs 7 ||| ((ins 5 &&& (if regs 1 != 0#64 then 1#64 else 0#64)) &&& ((w0 >>> 56) &&& 1#64)) := rfl
+@[simp] private theorem cuckooWF_12 (ins regs : Nat → BitVec 64) (w0 : BitVec 64) :
+    cuckooWireFnWith ins regs w0 12 = regs 8 ||| ((ins 5 &&& (if regs 1 != 0#64 then 1#64 else 0#64)) &&& ((w0 >>> 58) &&& 1#64)) := rfl
 @[simp] private theorem cuckooWF_13 (ins regs : Nat → BitVec 64) (w0 : BitVec 64) :
-    cuckooWireFnWith ins regs w0 13 = (if (regs 7 ||| ((ins 5 &&& (if regs 1 != 0#64 then 1#64 else 0#64)) &&& ((w0 >>> 56) &&& 1#64))) != 0#64 then 0#64 else if (regs 8 ||| ((ins 5 &&& (if regs 1 != 0#64 then 1#64 else 0#64)) &&& ((w0 >>> 58) &&& 1#64))) != 0#64 then 2#64 else if (ins 7 &&& 1#64) != 0#64 then (if ((ins 7 >>> 1) &&& 1#64) != 0#64 then 1#64 else 2#64) else 3#64) := rfl
+    cuckooWireFnWith ins regs w0 13 = (if (regs 7 ||| ((ins 5 &&& (if regs 1 != 0#64 then 1#64 else 0#64)) &&& ((w0 >>> 56) &&& 1#64))) != 0#64 then 0#64 else if (regs 8 ||| ((ins 5 &&& (if regs 1 != 0#64 then 1#64 else 0#64)) &&& ((w0 >>> 58) &&& 1#64))) != 0#64 then 2#64 else if (ins 7 &&& 1#64) != 0#64 then (if (((ins 7 >>> 1) &&& 1#64) &&& cuckooHwReadyVal ins regs) != 0#64 then 1#64 else 2#64) else 3#64) := rfl
 private def cuckooRegNextExpr (i : Nat) : RtlExpr :=
   match cuckooSiliconElabMemModule.core.regs[i]? with | some r => r.nextExpr | none => .const 0#64
 private theorem cuckooStep_coreReg {i : Nat} (hi : i < 10) (ins : Nat → BitVec 64) (st : MemState) :
@@ -1368,20 +1331,55 @@ private theorem cuckooStep_ramReg {b : Nat} (hb : b < 8) (ins : Nat → BitVec 6
   have hTru64 : ∀ v : BitVec 64, truncToWidth 64 v = v := fun v => by change v &&& 0xFFFFFFFFFFFFFFFF#64 = v; exact BitVec.and_allOnes
   unfold stepMemModule; dsimp only [cuckooSiliconElabMemModule, evalSyncRamReadNext, evalRtlExpr, List.map, List.foldl]
   rcases (by omega : b = 0 ∨ b = 1 ∨ b = 2 ∨ b = 3 ∨ b = 4 ∨ b = 5 ∨ b = 6 ∨ b = 7) with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact hTru64 _
-
 theorem cuckooZ4_rejects_sorry_or_mvar (st : MemState) (ins : Nat → BitVec 64)
     (hIn4 : ins 4 = 0#64) (hLatch : (ins 7 >>> 2) &&& 1#64 = 1#64) (hBad : st.regs 7 = 1#64 ∨ st.regs 8 = 1#64) :
     (stepMemModule cuckooSiliconElabMemModule false ins st).regs 9 ≠ 1#64 := by
-  rw [cuckooStep_coreReg (by decide)]
-  generalize evalRtlExpr ins (fun _ => 0#64) st.regs (mkBank8ReadMux (.regRead 2)) = w0
+  rw [cuckooStep_coreReg (by decide)]; generalize evalRtlExpr ins (fun _ => 0#64) st.regs (mkBank8ReadMux (.regRead 2)) = w0
   dsimp only [cuckooRegNextExpr, cuckooSiliconElabMemModule, List.getElem?_cons_zero, List.getElem?_cons_succ]
-  simp only [evalRtlExpr, evalAluOp, cuckooWF_13, hIn4, show (2#64).toNat % 64 = 2 from rfl, hLatch,
-    bne_self_eq_false, Bool.false_eq_true, ↓reduceIte, show (1#64 != 0#64) = true from rfl]
-  have hOr1 : ∀ (x : BitVec 64), ((1#64 ||| x) != 0#64) = true := fun x =>
-    bne_iff_ne.mpr fun hZ => by have h := congrArg (fun v : BitVec 64 => v.getLsbD 0) hZ; simp at h
+  simp only [evalRtlExpr, evalAluOp, cuckooWF_13, hIn4, show (2#64).toNat % 64 = 2 from rfl, hLatch, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte, show (1#64 != 0#64) = true from rfl]
+  have hOr1 : ∀ (x : BitVec 64), ((1#64 ||| x) != 0#64) = true := fun x => bne_iff_ne.mpr fun hZ => by have h := congrArg (fun v : BitVec 64 => v.getLsbD 0) hZ; simp at h
   have hIte : ∀ (c : Bool), (if c = true then (0#64 : BitVec 64) else 2#64) ≠ 1#64 := fun c => by cases c <;> decide
   rcases hBad with hS | hM; · rw [hS, hOr1, ifTrue rfl]; decide
   · rw [hM, hOr1, ifTrue rfl]; exact hIte _
+theorem cuckooZ4_sticky_and_requires_work (st : MemState) (ins : Nat → BitVec 64) :
+    (st.regs 7 = 1#64 → (stepMemModule cuckooSiliconElabMemModule false ins st).regs 7 = 1#64) ∧
+    (st.regs 8 = 1#64 → (stepMemModule cuckooSiliconElabMemModule false ins st).regs 8 = 1#64) ∧
+    (st.regs 5 = 0#64 → st.regs 9 ≠ 1#64 → (stepMemModule cuckooSiliconElabMemModule false ins st).regs 9 ≠ 1#64) ∧
+    (st.regs 1 ≠ 0#64 ∨ st.regs 5 ≠ 0#64 → (stepMemModule cuckooSiliconElabMemModule false ins st).mems = st.mems) := by
+  have hOrBit : ∀ (x : BitVec 64), 1#64 ||| (x &&& 1#64) = 1#64 := fun x => by
+    apply BitVec.eq_of_toNat_eq; have h1 : (1#64).toNat = 2 ^ 1 - 1 := rfl
+    simp only [BitVec.toNat_or, BitVec.toNat_and, h1, Nat.and_two_pow_sub_one_eq_mod]
+    rcases (by omega : x.toNat % 2 = 0 ∨ x.toNat % 2 = 1) with h0 | h2
+    · simp [h0]
+    · simp [h2]
+  refine ⟨fun h7 => ?_, fun h8 => ?_, fun h5 h9 => ?_, fun hLock => ?_⟩
+  · rw [cuckooStep_coreReg (by decide)]; generalize evalRtlExpr ins (fun _ => 0#64) st.regs (mkBank8ReadMux (.regRead 2)) = w0
+    dsimp only [cuckooRegNextExpr, cuckooSiliconElabMemModule, List.getElem?_cons_zero, List.getElem?_cons_succ]
+    simp only [evalRtlExpr, cuckooWF_11, h7, ← BitVec.and_assoc]; exact hOrBit _
+  · rw [cuckooStep_coreReg (by decide)]; generalize evalRtlExpr ins (fun _ => 0#64) st.regs (mkBank8ReadMux (.regRead 2)) = w0
+    dsimp only [cuckooRegNextExpr, cuckooSiliconElabMemModule, List.getElem?_cons_zero, List.getElem?_cons_succ]
+    simp only [evalRtlExpr, cuckooWF_12, h8, ← BitVec.and_assoc]; exact hOrBit _
+  · rw [cuckooStep_coreReg (by decide)]; generalize evalRtlExpr ins (fun _ => 0#64) st.regs (mkBank8ReadMux (.regRead 2)) = w0
+    dsimp only [cuckooRegNextExpr, cuckooSiliconElabMemModule, List.getElem?_cons_zero, List.getElem?_cons_succ]
+    simp only [evalRtlExpr, evalAluOp, cuckooWF_13, cuckooHwReadyVal, h5, show (2#64).toNat % 64 = 2 from rfl, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte, BitVec.zero_and, BitVec.and_zero]
+    by_cases hc4 : (ins 4 != 0#64) = true
+    · rw [ifTrue hc4]; decide
+    · rw [ifFalse hc4]; by_cases hcL : (((ins 7 >>> 2) &&& 1#64) != 0#64) = true
+      · rw [ifTrue hcL]
+        by_cases hA : ((st.regs 7 ||| ((ins 5 &&& (if st.regs 1 != 0#64 then 1#64 else 0#64)) &&& ((w0 >>> 56) &&& 1#64))) != 0#64) = true
+        · rw [ifTrue hA]; decide
+        · rw [ifFalse hA]; by_cases hB : ((st.regs 8 ||| ((ins 5 &&& (if st.regs 1 != 0#64 then 1#64 else 0#64)) &&& ((w0 >>> 58) &&& 1#64))) != 0#64) = true
+          · rw [ifTrue hB]; decide
+          · rw [ifFalse hB]; cases ((ins 7 &&& 1#64) != 0#64) <;> decide
+      · rw [ifFalse hcL]; exact h9
+  · have hGate0 : ((if st.regs 1 == 0#64 then (1#64 : BitVec 64) else 0#64) &&& (if st.regs 5 == 0#64 then 1#64 else 0#64)) = 0#64 := by
+      rcases hLock with h1 | h5
+      · simp [beq_eq_false_iff_ne.mpr h1]
+      · simp [beq_eq_false_iff_ne.mpr h5]
+    dsimp only [stepMemModule, cuckooSiliconElabMemModule, stepSyncRamArray, List.map, List.foldl]
+    simp only [evalRtlExpr, evalAluOp, truncToWidth]
+    funext k; by_cases h0 : k = 0 <;> by_cases h1 : k = 1 <;> by_cases h2 : k = 2 <;> by_cases h3 : k = 3 <;>
+      by_cases h4 : k = 4 <;> by_cases h5 : k = 5 <;> by_cases h6 : k = 6 <;> by_cases h7 : k = 7 <;> simp_all
 
 private theorem cuckooStep_phase01 (appH lamH argH : CamHandle) (hAppB : appH < 512) (hLamB : lamH < 512) (hArgB : argH < 512)
     (appW lamW : PackedNodeWord) (sApp sLam : Bool) (hAppTag : appW.tag = 4) (hAppL : appW.h0 = lamH) (hAppR : appW.h1 = argH)

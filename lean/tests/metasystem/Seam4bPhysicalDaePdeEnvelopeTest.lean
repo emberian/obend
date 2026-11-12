@@ -6,6 +6,7 @@ import Obend.Apps.SdrFt8Rx
 import Obend.Analysis.HyperbolicPdeCert
 import Obend.Hardware.Device.DriftDiffusion
 import Obend.ClusterGov.PhysicalEnvelope
+import Obend.Teeth.Hardware.DeviceFixtures
 import Obend.Tactic.Tooth
 import Obend.AssertAxioms
 
@@ -128,6 +129,91 @@ example : (decodeHyperbolicFvmObj "{}").toOption = none ∧
   mutation Obend.Analysis.HyperbolicPde.check := fun _ _ => .ok
 #tooth Obend.Hardware.Device.checkDdQuasiFermi_sound by
   mutation Obend.Hardware.Device.checkDdQuasiFermi := fun _ _ => .ok
+
+-- Wave-7 Reciprocal Hardening: Negative Refusal Witnesses & Per-Guard Teeth
+
+-- 1. PhysicalEnvelope: under-metered energy refusal & duplicate-receipt swarm audit refusal
+theorem undermetered_energy_refused (r : Obend.ClusterGov.PhysicalEnvelope.JudgedReceipt) :
+    Obend.ClusterGov.PhysicalEnvelope.checkEnergyEnvelope
+      Obend.ClusterGov.PhysicalEnvelope.bandCalibration r 10 100 = false :=
+  Obend.ClusterGov.PhysicalEnvelope.checkEnergyEnvelope_refuses_undermetered
+    Obend.ClusterGov.PhysicalEnvelope.bandCalibration r 10 100 (by simp [Obend.ClusterGov.PhysicalEnvelope.bandCalibration])
+
+theorem duplicate_receipt_audit_refused (log : Obend.ClusterGov.PhysicalEnvelope.JudgedReceiptLog) :
+    let row : Obend.ClusterGov.PhysicalEnvelope.SwarmJobRow :=
+      ⟨42, ByteArray.empty, 40, 100, ByteArray.empty, 0, 7, ⟨7, #[]⟩⟩
+    Obend.ClusterGov.PhysicalEnvelope.auditSwarmComputeMeterDedup
+      log Obend.ClusterGov.PhysicalEnvelope.bandCalibration 0 #[row, row] =
+      .violation (.duplicateReceipt 42 7) := rfl
+
+-- 2. CircuitDae: out-of-range nonlinear branch node, branch-current discontinuity, & negative JSON node
+theorem oob_nl_branch_refused :
+    checkMnaDaeProblem 1 { rcDiodeRectifierMnaProblem with spec :=
+      { rcDiodeRectifierMnaSpec with nlBranches := [⟨some 9, none, 0, 1⟩] } } rcDiodeRectifierMnaCert =
+        .refused .badMatrixDims [] := by decide +kernel
+
+theorem branch_current_discontinuity_refused :
+    let step1 : MnaTraceStep := rcDiodeRectifierBeStep
+    let step2 : MnaTraceStep := ⟨1, [2, 1], [1, 1], [0], [0], [0], 10⟩
+    checkMnaDaeProblem 2 ⟨rcDiodeRectifierMnaSpec, .backwardEuler, [step1, step2]⟩ rcDiodeRectifierMnaCert =
+      .refused .badTraceDimsOrContinuity [] := by decide +kernel
+
+theorem negative_nl_node_json_refused :
+    (decodeMnaDaeProblem
+      r#"{"dim":1,"inputDim":1,"matC":[[1]],"matG":[[1]],"matB":[[1]],"nlBranches":[{"nodeP":-2,"nodeN":-1,"gMin":0,"gMax":1}],"method":"be","trace":[]}"#).isOk = false := by
+  decide +kernel
+
+-- 3. HyperbolicPdeCert: empty vars, duplicate vars, unbound flux var, & singular eigenvector matrix
+theorem pde_wellformed_and_inverse_refusals :
+    check { maxwellSystem with vars := [], flux := [], state := [], left := [], right := [] } maxwellCert =
+      .refused .shapeMismatch [] ∧
+    check { maxwellSystem with vars := ["Ey", "Ey"] } maxwellCert = .refused .shapeMismatch [] ∧
+    check { maxwellSystem with flux := [.var "ghost", .var "Ey"] } maxwellCert = .refused .shapeMismatch [] ∧
+    check maxwellSystem { maxwellCert with eigInv := [[0, 0], [0, 0]] } = .refused .inverseMismatch [0, 0] := by
+  decide +kernel
+
+-- 4. SafePhysicalShield, SdrFt8Rx, & DriftDiffusion / DeviceFixtures witnesses
+example : (adminStepRawBus thermalStage thermalGenesis #[] none).dpr.phase = .isolateClamped :=
+  adminStepRawBus_unauth_fences thermalStage thermalGenesis #[] rfl
+
+example : checkDdQuasiFermi
+    { Obend.Teeth.Hardware.DeviceFixtures.coarseForwardSpec with areaCm2 := 0 }
+    Obend.Teeth.Hardware.DeviceFixtures.coarseForward = .refused .mesh [] :=
+  Obend.Teeth.Hardware.DeviceFixtures.coarseForward_zero_area_refused
+
+example : (decodeDdSpec "{\"si\":{\"tempK\":1e9999}}").isOk = false :=
+  Obend.Teeth.Hardware.DeviceFixtures.decodeDdSpec_refuses_huge_exponent
+
+example : ∃ c r, ddQuasiFermiJudge.check r { badSpec with areaCm2 := 7 / 3 } c = .ok :=
+  ddQuasiFermiJudge.complete rfl ⟨slabQuasiFermi, checkDdQuasiFermi_sound
+    (slabQuasiFermi_area_accepted (7 / 3) (by decide +kernel))⟩
+
+example : Obend.Apps.SdrFt8Rx.InToneCone 0 10001 0 :=
+  Obend.Apps.SdrFt8Rx.sdr_rf_harmonic_margin_witness 1 0 (by decide +kernel)
+
+-- 5. Fine-grained per-guard #tooth mutations across Cohort B
+#tooth Obend.ClusterGov.PhysicalEnvelope.checkPhysicalEnvelope_sound by
+  mutation Obend.ClusterGov.PhysicalEnvelope.checkPhysicalEnvelope := fun _ _ => true
+#tooth Obend.ClusterGov.PhysicalEnvelope.enveloped_nonfallback_requires_envelope by
+  mutation Obend.ClusterGov.PhysicalEnvelope.envelopePolicy := fun _ _ _ _ _ _ _ => true
+#tooth Obend.ClusterGov.PhysicalEnvelope.auditSwarmComputeMeterDedup_sound by
+  mutation Obend.ClusterGov.PhysicalEnvelope.findDupReceiptRow := fun _ _ => none
+#tooth Obend.Hardware.CircuitDae.checkMnaDaeProblem_sound by
+  mutation Obend.Hardware.CircuitDae.checkMnaStepNonlinear := fun _ _ _ => true
+#tooth Obend.Analysis.HyperbolicPde.check_sound by
+  mutation Obend.Analysis.HyperbolicPde.weightB := fun _ _ => true
+#tooth Obend.Analysis.HyperbolicPde.check_sound by
+  mutation Obend.Analysis.HyperbolicPde.leftB := fun _ _ _ _ => true
+#tooth Obend.Hardware.SafePhysicalShield.adminStepRawBus_unauth_fences by
+  mutation Obend.Hardware.SafePhysicalShield.adminStepRawBus := fun _ st _ _ => st
+#tooth Obend.Hardware.CurrentLoop.runDeadTimeQ32Loop_multiStep_noWrap by
+  mutation Obend.Hardware.CurrentLoop.rtlPiStepQ32 := fun _ _ _ _ => (1000000000, 0)
+#tooth Obend.Hardware.SwitchedCapRf.rf_harmonic_alias_attenuation_ge_9x by
+  mutation Obend.Hardware.SwitchedCapRf.compositeAliasPower := fun _ _ _ _ _ => 1
+#tooth Obend.Hardware.Device.checkDdQuasiFermi_sound by
+  mutation Obend.Hardware.Device.qfNodeOk := fun _ _ _ _ => true
+#tooth Obend.Hardware.Device.checkDdQuasiFermi_sound by
+  mutation Obend.Hardware.Device.qfCurrentOk := fun _ _ _ => true
 
 #assert_axioms_tree
 end Obend.Tests.Seam4bPhysicalDaePdeEnvelope

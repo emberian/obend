@@ -945,5 +945,44 @@ theorem validateBaileyNttTileLayout_sound
   exact layoutProgramOk_sound hbmSize vmemTiles smemSize vregCount semSize [input, wr, wc, twiddle] _
     (by simp [baileyNttProgram, g1, g2, pw, t1, t2])
 
+/-- Validated layout for `goldilocksPointwiseProgram`: `dst`, `lhs`, `rhs` in range, `5 ≤ vregCount`, and `dst` aliases neither input. -/
+def validatePointwiseTileLayout (vmemTiles vregCount dst lhs rhs : Nat) : Bool :=
+  decide (dst < vmemTiles) && decide (lhs < vmemTiles) && decide (rhs < vmemTiles) &&
+  decide (5 ≤ vregCount) && decide (dst ≠ lhs) && decide (dst ≠ rhs)
+
+theorem validatePointwiseTileLayout_sound (hbmSize vmemTiles smemSize vregCount semSize dst lhs rhs : Nat)
+    (h : validatePointwiseTileLayout vmemTiles vregCount dst lhs rhs = true) :
+    checkProgramBounds hbmSize vmemTiles smemSize vregCount semSize (goldilocksPointwiseProgram dst lhs rhs) = true ∧
+    ∀ s : TpuCoreState,
+      (runSync s (goldilocksPointwiseProgram dst lhs rhs)).vmem[lhs]? = s.vmem[lhs]? ∧
+      (runSync s (goldilocksPointwiseProgram dst lhs rhs)).vmem[rhs]? = s.vmem[rhs]? := by
+  simp only [validatePointwiseTileLayout, Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨⟨⟨hd, hl⟩, hr⟩, hv⟩, hdl⟩, hdr⟩ := h
+  have h0 : 0 < vregCount ∧ 1 < vregCount ∧ 2 < vregCount ∧ 3 < vregCount ∧ 4 < vregCount := by omega
+  have hProt : [lhs, rhs].all (· != dst) = true := by simp [hdl.symm, hdr.symm]
+  have ok : (goldilocksPointwiseProgram dst lhs rhs).all (layoutInstrOk vmemTiles vregCount [lhs, rhs]) = true := by
+    simp [goldilocksPointwiseProgram, layoutInstrOk, hd, hl, hr, h0.1, h0.2.1, h0.2.2.1, h0.2.2.2.1, h0.2.2.2.2, hProt]
+  have ⟨hb, hf⟩ := layoutProgramOk_sound hbmSize vmemTiles smemSize vregCount semSize [lhs, rhs] _ ok
+  exact ⟨hb, fun s => ⟨hf lhs (by simp) s, hf rhs (by simp) s⟩⟩
+
+def goldilocksPointwiseChecked (vmemTiles vregCount dst lhs rhs : Nat) : Option TpuProg :=
+  if validatePointwiseTileLayout vmemTiles vregCount dst lhs rhs then
+    some (goldilocksPointwiseProgram dst lhs rhs)
+  else none
+
+theorem goldilocksPointwiseChecked_sound (hbmSize vmemTiles smemSize vregCount semSize dst lhs rhs : Nat) (p : TpuProg)
+    (h : goldilocksPointwiseChecked vmemTiles vregCount dst lhs rhs = some p) :
+    p = goldilocksPointwiseProgram dst lhs rhs ∧
+    checkProgramBounds hbmSize vmemTiles smemSize vregCount semSize p = true ∧
+    ∀ s : TpuCoreState, (runSync s p).vmem[lhs]? = s.vmem[lhs]? ∧ (runSync s p).vmem[rhs]? = s.vmem[rhs]? := by
+  unfold goldilocksPointwiseChecked at h
+  split at h
+  · rename_i hv; injection h with hp; subst hp
+    have ⟨hb, hf⟩ := validatePointwiseTileLayout_sound hbmSize vmemTiles smemSize vregCount semSize dst lhs rhs hv
+    exact ⟨rfl, hb, hf⟩
+  · cases h
+
+example : validatePointwiseTileLayout 3 5 2 0 1 = true := by decide
+example : (goldilocksPointwiseChecked 3 5 2 0 1).isSome = true := by decide
 
 end Obend.Hardware.Tpu

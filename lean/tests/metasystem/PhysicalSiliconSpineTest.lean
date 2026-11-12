@@ -35,7 +35,7 @@ kernel mutation-killing probes, and `#print axioms` verification (`0 sorryAx`) a
 4. `Obend.Hardware.Silicon` & `Obend.Hardware.TapeoutPipeline`:
    - `checkAllChannelHops`, `checkAllChannelHops_sound`,
    - `compileCompositionToSiliconTapeout`, `compileCompositionToSiliconTapeout_sound`,
-   - `golden_obend_module_silicon_tapeout_verified` & stage-by-stage negative refusal poles.
+   - `reference_obend_module_silicon_tapeout_verified` & stage-by-stage negative refusal poles.
 -/
 
 @[expose] public section
@@ -258,7 +258,7 @@ example :
     hSmall, h63, h63.trans hRtl63⟩
 
 /-- Stage-by-stage negative refusal poles across `compileCompositionToSiliconTapeout`:
-1. `goldenCleanroomTcadComp` passes (`.isOk = true`),
+1. `referenceCleanroomTcadComp` passes (`.isOk = true`),
 2. Unretimeable graph (`testUnretimeableGraph`) is refused,
 3. Colliding BEL PnR certificate (`collidingBelPnrCert`) is refused,
 4. Netlist cell-count mismatch (`validAdderPnrCert` with 2 cells vs synthesized >2 BELs) is refused,
@@ -266,17 +266,17 @@ example :
 6. Overhanging 2D via is refused,
 7. Overclocked 10 GHz (`clockPeriodPs = 100 ps`) envelope timing is refused. -/
 example :
-    (compileCompositionToSiliconTapeout goldenTapeoutConfig goldenCleanroomTcadComp [goldenTapeoutIsarCert]).isOk = true ∧
-    (compileCompositionToSiliconTapeout { goldenTapeoutConfig with syncGraph := testUnretimeableGraph } goldenCleanroomTcadComp []).isOk = false ∧
-    (compileCompositionToSiliconTapeout { goldenTapeoutConfig with pnrCert? := some collidingBelPnrCert } goldenCleanroomTcadComp []).isOk = false ∧
-    (compileCompositionToSiliconTapeout { goldenTapeoutConfig with pnrCert? := some validAdderPnrCert } goldenCleanroomTcadComp []).isOk = false ∧
+    (compileCompositionToSiliconTapeout referenceTapeoutConfig referenceCleanroomTcadComp [referenceTapeoutIsarCert]).isOk = true ∧
+    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with syncGraph := testUnretimeableGraph } referenceCleanroomTcadComp []).isOk = false ∧
+    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with pnrCert? := some collidingBelPnrCert } referenceCleanroomTcadComp []).isOk = false ∧
+    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with pnrCert? := some validAdderPnrCert } referenceCleanroomTcadComp []).isOk = false ∧
     (compileCompositionToSiliconTapeout
-      { goldenTapeoutConfig with metalBoxB := { layerId := 1, xMinNm := 20, yMinNm := 0, xMaxNm := 120, yMaxNm := 100 } }
-      goldenCleanroomTcadComp []).isOk = false ∧
+      { referenceTapeoutConfig with metalBoxB := { layerId := 1, xMinNm := 20, yMinNm := 0, xMaxNm := 120, yMaxNm := 100 } }
+      referenceCleanroomTcadComp []).isOk = false ∧
     (compileCompositionToSiliconTapeout
-      { goldenTapeoutConfig with viaBox := { layerId := 2, xMinNm := 2, yMinNm := 10, xMaxNm := 46, yMaxNm := 46 } }
-      goldenCleanroomTcadComp []).isOk = false ∧
-    (compileCompositionToSiliconTapeout { goldenTapeoutConfig with clockPeriodPs := 100 } goldenCleanroomTcadComp []).isOk = false := by
+      { referenceTapeoutConfig with viaBox := { layerId := 2, xMinNm := 2, yMinNm := 10, xMaxNm := 46, yMaxNm := 46 } }
+      referenceCleanroomTcadComp []).isOk = false ∧
+    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with clockPeriodPs := 100 } referenceCleanroomTcadComp []).isOk = false := by
   decide +kernel
 
 /-! ## 5. `#tooth` Kernel Mutation-Killing Probes & Axiom Audit -/
@@ -294,11 +294,8 @@ def downstreamCapFfDropRight : SteinerTree → Nat
 #tooth Obend.Hardware.PlaceRoute.steiner_fanout_buffer_insertion_reduces_elmore_delay
   by mutation Obend.Hardware.PlaceRoute.downstreamCapFf := downstreamCapFfDropRight
 
-def checkBoxSpacing2DAcceptAll (_minSpacingNm : Nat) (b1 b2 : LayoutBox2D) : Bool :=
-  b1.wf && b2.wf
-
 #tooth Obend.Hardware.DRC.boxSpacing2D_disjoint
-  by mutation Obend.Hardware.DRC.checkBoxSpacing2D := checkBoxSpacing2DAcceptAll
+  by mutation Obend.Hardware.DRC.checkBoxSpacing2D := fun _ b1 b2 => b1.wf && b2.wf
 
 #print axioms Obend.Hardware.Synth.synthesizeModuleToBels_trace_equiv
 #print axioms Obend.Hardware.Retiming.solveVerifiedRetiming_sound

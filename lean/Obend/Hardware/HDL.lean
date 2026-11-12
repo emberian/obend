@@ -777,11 +777,15 @@ abbrev crossDomainSources (regs : List RegSpec) (wires : List WireAssign) (r : R
   (exprReadRegs r.nextExpr wires).filter fun src =>
     match lookupRegDomain regs src with | some d => d != r.domain | none => true
 
-/-- First-stage synchronizer two-flop chain check. -/
+/-- First-stage synchronizer two-flop chain check: only a direct second-stage synchronizer
+in the same domain (`nextExpr == .regRead s1.regIdx`) may read `s1.regIdx`. -/
+abbrev isDirectSecondSync (s1 r : RegSpec) : Bool :=
+  r.isSynchronizer && r.domain == s1.domain && r.regIdx != s1.regIdx && r.nextExpr == .regRead s1.regIdx
+
 abbrev checkSyncChain (regs : List RegSpec) (wires : List WireAssign) (outputs : List OutputPort) (s1 : RegSpec) : Bool :=
   (crossDomainSources regs wires s1).isEmpty ||
-  (regs.any (fun s2 => s2.isSynchronizer && s2.domain == s1.domain && s2.regIdx != s1.regIdx && s2.nextExpr == .regRead s1.regIdx) &&
-   regs.all (fun r => r.isSynchronizer || !(exprReadRegs r.nextExpr wires).contains s1.regIdx) &&
+  (regs.any (isDirectSecondSync s1) &&
+   regs.all (fun r => isDirectSecondSync s1 r || !(exprReadRegs r.nextExpr wires).contains s1.regIdx) &&
    wires.all (fun w => !(exprReadRegsAndWires w.expr).1.contains s1.regIdx) &&
    outputs.all (fun o => !(exprReadRegs o.expr wires).contains s1.regIdx))
 
@@ -800,8 +804,21 @@ theorem checkCdcTwoFlop_second_stage (m : RtlModule) (s1 : RegSpec)
   have h := hOk s1 hMem; rw [hSync] at h; simp only [Bool.not_true, Bool.false_or] at h
   unfold checkSyncChain at h; rw [hCross] at h; simp only [Bool.false_or, Bool.and_eq_true] at h
   obtain ⟨⟨⟨hAny, _⟩, _⟩, _⟩ := h; rw [List.any_eq_true] at hAny; obtain ⟨s2, hs2, hp⟩ := hAny
-  simp only [Bool.and_eq_true, beq_iff_eq, bne_iff_ne, ne_eq] at hp
+  unfold isDirectSecondSync at hp; simp only [Bool.and_eq_true, beq_iff_eq, bne_iff_ne, ne_eq] at hp
   exact ⟨s2, hs2, hp.1.1.1, hp.1.1.2, hp.2⟩
+
+theorem checkCdcTwoFlop_first_stage_isolated (m : RtlModule) (s1 r : RegSpec)
+    (hOk : checkCdcTwoFlop m = true) (hs1 : s1 ∈ m.regs) (hr : r ∈ m.regs) (hSync : s1.isSynchronizer = true)
+    (hCross : (crossDomainSources m.regs m.wires s1).isEmpty = false)
+    (hReads : (exprReadRegs r.nextExpr m.wires).contains s1.regIdx = true) :
+    r.isSynchronizer = true ∧ r.domain = s1.domain ∧ r.regIdx ≠ s1.regIdx ∧ r.nextExpr = .regRead s1.regIdx := by
+  unfold checkCdcTwoFlop at hOk; rw [List.all_eq_true] at hOk
+  have h := hOk s1 hs1; rw [hSync] at h; simp only [Bool.not_true, Bool.false_or] at h
+  unfold checkSyncChain at h; rw [hCross] at h; simp only [Bool.false_or, Bool.and_eq_true] at h
+  obtain ⟨⟨⟨_, hAll⟩, _⟩, _⟩ := h; rw [List.all_eq_true] at hAll
+  have hrOk := hAll r hr; rw [hReads] at hrOk; simp only [Bool.not_true, Bool.or_false] at hrOk
+  unfold isDirectSecondSync at hrOk; simp only [Bool.and_eq_true, beq_iff_eq, bne_iff_ne, ne_eq] at hrOk
+  exact ⟨hrOk.1.1.1, hrOk.1.1.2, hrOk.1.2, hrOk.2⟩
 
 abbrev moduleDomains (m : RtlModule) : List ClkDomain :=
   m.regs.foldl (fun acc r => if acc.contains r.domain then acc else acc ++ [r.domain]) []
@@ -922,9 +939,19 @@ abbrev emitDomainBlocksSV (inExprs regNames : List String) (regsD : List RegSpec
       String.intercalate "\n" rstAssigns ++ "\n    end else begin\n" ++ String.intercalate "\n" stepAssigns ++ "\n    end\n  end\n"
   rfBlock ++ srBlock
 
+/-- Resolve register slot `idx` by `RegSpec.regIdx` (matching `stepModuleRegs` foldl last-write semantics),
+returning identical strings for canonical dense `0 .. n-1` register tables while faithfully resolving
+reordered or sparse `regIdx` tables! -/
+abbrev regNamesBySlotSV (regs : List RegSpec) : List String :=
+  let nSlots := regs.foldl (fun acc r => max acc (r.regIdx + 1)) regs.length
+  (List.range nSlots).map fun idx =>
+    match regs.foldl (fun acc r => if r.regIdx == idx then some r else acc) none with
+    | some r => readSV r.width r.name
+    | none => s!"r_{idx}"
+
 /-- Emit a complete, synthesizable SystemVerilog-2012 module directly from an `RtlModule` AST. -/
 abbrev emitModuleSV (m : RtlModule) : String :=
-  let regNames := m.regs.map fun r => readSV r.width r.name
+  let regNames := regNamesBySlotSV m.regs
   let wireName (i : Nat) : String := readSV (wireWidthOf m i) s!"w_{i}"
   let inExprs := inputExprsSV m
   let domains := moduleDomains m
@@ -986,19 +1013,28 @@ abbrev emitMacroAxisSkidSV : String :=
   "      main_data  <= up_data;\n    end\n  end\nendmodule\n"
 
 abbrev emitMacroIcapDprTileSV : String :=
-  "module obend_macro_icap_dpr_tile (\n  input  logic        clk,\n  input  logic        rst,\n  input  logic        trigger_reconfig,\n" ++
-  "  input  logic        drain_complete,\n  input  logic        icap_done,\n  input  logic [63:0] target_spec_digest,\n" ++
-  "  input  logic [63:0] wire_in,\n  input  logic [63:0] safe_default,\n  output logic        decouple_en,\n" ++
-  "  output logic [63:0] active_spec_digest,\n  output logic [63:0] wire_out\n);\n" ++
+  "module obend_macro_icap_dpr_tile (\n  input  logic         clk,\n  input  logic         rst,\n  input  logic         trigger_reconfig,\n" ++
+  "  input  logic         drain_complete,\n  input  logic         frame_valid,\n  input  logic         icap_done,\n  input  logic [255:0] target_spec_digest,\n" ++
+  "  input  logic [63:0]  wire_in,\n  input  logic [63:0]  safe_default,\n  output logic         decouple_en,\n" ++
+  "  output logic [255:0] active_spec_digest,\n  output logic [63:0]  wire_out\n);\n" ++
   "  typedef enum logic [1:0] {\n    DPR_ACTIVE    = 2'd0,\n    DPR_DRAINING  = 2'd1,\n    DPR_SWAPPING  = 2'd2,\n    DPR_WARMING   = 2'd3\n  } dpr_phase_t;\n" ++
-  "  dpr_phase_t  phase;\n  logic [63:0] rolling_crc_q;\n  always_ff @(posedge clk) begin\n    if (rst) begin\n" ++
-  "      phase              <= DPR_ACTIVE;\n      decouple_en        <= 1'b0;\n      active_spec_digest <= 64'd0;\n" ++
-  "      rolling_crc_q      <= 64'hCBF2_9CE4_8422_2325;\n    end else begin\n      case (phase)\n" ++
-  "        DPR_ACTIVE: if (trigger_reconfig) begin\n          phase         <= DPR_DRAINING;\n          decouple_en   <= 1'b1;\n          rolling_crc_q <= 64'hCBF2_9CE4_8422_2325;\n        end\n" ++
+  "  localparam logic [255:0] DPR_DOMAIN_IV_256 = 256'h6A09_E667_F3BC_C908_BB67_AE85_84CA_A73B_3C6E_F372_FE94_F82B_A54F_F53A_5F1D_36F1;\n" ++
+  "  dpr_phase_t   phase;\n  logic [255:0] rolling_digest256_q;\n  logic [255:0] next_digest256;\n  logic [31:0]  beat_count_q;\n" ++
+  "  always_comb begin\n" ++
+  "    if (frame_valid) begin\n" ++
+  "      next_digest256[63:0]    = ((rolling_digest256_q[63:0]    ^ wire_in) + {32'h9E37_79B9, beat_count_q}) ^ {rolling_digest256_q[230:192], rolling_digest256_q[255:231]};\n" ++
+  "      next_digest256[127:64]  = ((rolling_digest256_q[127:64]  ^ wire_in) + 64'hBF58_476D_1CE4_E5B9) ^ {next_digest256[46:0], next_digest256[63:47]};\n" ++
+  "      next_digest256[191:128] = ((rolling_digest256_q[191:128] ^ {beat_count_q, wire_in[31:0]}) + 64'h94D0_49BB_1331_11EB) ^ {next_digest256[100:64], next_digest256[127:101]};\n" ++
+  "      next_digest256[255:192] = ((rolling_digest256_q[255:192] ^ {wire_in[31:0], beat_count_q}) + 64'hD6E8_FEB8_6659_FD93) ^ {next_digest256[172:128], next_digest256[191:173]};\n" ++
+  "    end else begin\n      next_digest256 = rolling_digest256_q;\n    end\n  end\n" ++
+  "  always_ff @(posedge clk) begin\n    if (rst) begin\n" ++
+  "      phase               <= DPR_ACTIVE;\n      decouple_en         <= 1'b0;\n      active_spec_digest  <= 256'd0;\n" ++
+  "      rolling_digest256_q <= DPR_DOMAIN_IV_256;\n      beat_count_q        <= 32'd0;\n    end else begin\n      case (phase)\n" ++
+  "        DPR_ACTIVE: if (trigger_reconfig) begin\n          phase               <= DPR_DRAINING;\n          decouple_en         <= 1'b1;\n          rolling_digest256_q <= DPR_DOMAIN_IV_256;\n          beat_count_q        <= 32'd0;\n        end\n" ++
   "        DPR_DRAINING: if (drain_complete) begin\n          phase       <= DPR_SWAPPING;\n          decouple_en <= 1'b1;\n        end\n" ++
-  "        DPR_SWAPPING: begin\n          rolling_crc_q <= (rolling_crc_q ^ wire_in) * 64'h0000_0100_0000_01B3;\n          if (icap_done) begin\n" ++
-  "            if (rolling_crc_q == target_spec_digest) begin\n              phase              <= DPR_WARMING;\n              decouple_en        <= 1'b1;\n" ++
-  "              active_spec_digest <= rolling_crc_q;\n            end else begin\n              decouple_en <= 1'b1;\n            end\n          end\n        end\n" ++
+  "        DPR_SWAPPING: begin\n          rolling_digest256_q <= next_digest256;\n          if (frame_valid) beat_count_q <= beat_count_q + 32'd1;\n          if (icap_done) begin\n" ++
+  "            if ((next_digest256 == target_spec_digest) && ((beat_count_q != 32'd0) || frame_valid)) begin\n              phase              <= DPR_WARMING;\n              decouple_en        <= 1'b1;\n" ++
+  "              active_spec_digest <= next_digest256;\n            end else begin\n              decouple_en <= 1'b1;\n            end\n          end\n        end\n" ++
   "        DPR_WARMING: begin phase <= DPR_ACTIVE; decouple_en <= 1'b0; end\n      endcase\n    end\n  end\n  assign wire_out = decouple_en ? safe_default : wire_in;\nendmodule\n"
 
 abbrev emitMacroNocRouterXySV : String :=
@@ -1129,16 +1165,38 @@ abbrev augmentedMemRegs (m : RtlMemModule) : List RegSpec :=
     , nextExpr := .const 0#64
     , width := ram.dataWidth }
 
-/-- Check indexing (`0, 1, ...`), non-empty distinct names, width bounds, DAG bounds, and domain CDC across `rams`. -/
+/-- Valid SystemVerilog / SMT-LIB2 unquoted identifier (`[A-Za-z_][A-Za-z0-9_]*`, non-reserved, no `|`). -/
+abbrev validRtlIdent (s : String) : Bool :=
+  match s.toList with
+  | [] => false
+  | c :: cs =>
+    (c.isAlpha || c == '_') && cs.all (fun x => x.isAlphanum || x == '_') &&
+    !(["module", "endmodule", "input", "output", "logic", "reg", "wire", "always_comb", "always_ff",
+       "posedge", "if", "else", "begin", "end", "clk", "rst"].contains s)
+
+/-- Check dense `0 .. n-1` `regIdx` numbering and valid pairwise-distinct register names. -/
+def checkDenseCoreRegs (expectedIdx : Nat) (seen : List String) : List RegSpec → Bool
+  | [] => true
+  | r :: rest =>
+    (r.regIdx == expectedIdx) && validRtlIdent r.name && !seen.contains r.name &&
+    checkDenseCoreRegs (expectedIdx + 1) (r.name :: seen) rest
+
+/-- Check pairwise-distinct valid identifiers across a list against `seen`. -/
+def checkDistinctIdents (seen : List String) : List String → Option (List String)
+  | [] => some seen
+  | nm :: rest =>
+    if validRtlIdent nm && !seen.contains nm then checkDistinctIdents (nm :: seen) rest else none
+
+/-- Check indexing (`0, 1, ...`), valid distinct names, width bounds, DAG bounds, and domain CDC across `rams`. -/
 def checkSyncRamTable (nIn nTotalRegs nWires : Nat) (allRegs : List RegSpec)
-    (wires : List WireAssign) (rams : List SyncRamSpec) : Bool :=
+    (wires : List WireAssign) (initSeen : List String) (rams : List SyncRamSpec) : Bool :=
   let rec go (expectedIdx : Nat) (seenNames : List String) : List SyncRamSpec → Bool
     | [] => true
     | ram :: rest =>
       let sameDom (e : RtlExpr) : Bool :=
         (exprReadRegs e wires).all fun src => lookupRegDomain allRegs src == some ram.domain
       (ram.ramIdx == expectedIdx) &&
-      (ram.name != "") && (ram.rdataName != "") && (ram.name != ram.rdataName) &&
+      validRtlIdent ram.name && validRtlIdent ram.rdataName && (ram.name != ram.rdataName) &&
       !seenNames.contains ram.name && !seenNames.contains ram.rdataName &&
       validRamAddrWidth ram.addrWidth && validWidth ram.dataWidth &&
       checkExprDAG nIn nTotalRegs nWires ram.readAddrExpr &&
@@ -1148,19 +1206,26 @@ def checkSyncRamTable (nIn nTotalRegs nWires : Nat) (allRegs : List RegSpec)
       sameDom ram.readAddrExpr && sameDom ram.writeEnExpr &&
       sameDom ram.writeAddrExpr && sameDom ram.writeDataExpr &&
       go (expectedIdx + 1) (ram.name :: ram.rdataName :: seenNames) rest
-  go 0 (allRegs.take (nTotalRegs - rams.length) |>.map (·.name)) rams
+  go 0 initSeen rams
 
-/-- Structural DAG + CDC gate for `RtlMemModule`. -/
+/-- Structural DAG + dense-register + identifier-hygiene + CDC gate for `RtlMemModule`. -/
 abbrev checkRtlMemModule (m : RtlMemModule) : Bool :=
   let nIn := m.core.inputNames.length
   let nTotalRegs := m.core.regs.length + m.rams.length
   let nWires := m.core.wires.length
   let allRegs := augmentedMemRegs m
-  checkWireTableDAG nIn nTotalRegs m.core.wires &&
-  m.core.regs.all (fun r => checkExprDAG nIn nTotalRegs nWires r.nextExpr) &&
-  m.core.outputs.all (fun o => checkExprDAG nIn nTotalRegs nWires o.expr) &&
-  checkModuleCdc allRegs m.core.wires &&
-  checkSyncRamTable nIn nTotalRegs nWires allRegs m.core.wires m.rams
+  validRtlIdent m.core.name &&
+  (m.core.wires.all fun w => validRtlIdent w.name) &&
+  match checkDistinctIdents [] (m.core.inputNames ++ m.core.outputs.map (·.name)) with
+  | none => false
+  | some portSeen =>
+    checkDenseCoreRegs 0 portSeen m.core.regs &&
+    checkWireTableDAG nIn nTotalRegs m.core.wires &&
+    m.core.regs.all (fun r => checkExprDAG nIn nTotalRegs nWires r.nextExpr) &&
+    m.core.outputs.all (fun o => checkExprDAG nIn nTotalRegs nWires o.expr) &&
+    checkModuleCdc allRegs m.core.wires &&
+    checkSyncRamTable nIn nTotalRegs nWires allRegs m.core.wires
+      (m.core.regs.map (·.name) ++ portSeen) m.rams
 
 /-- Declared width of register or RAM readout slot `idx` in `m : RtlMemModule`. -/
 abbrev memRegWidthOf (m : RtlMemModule) (idx : Nat) : Nat :=
@@ -1236,7 +1301,7 @@ When `m.rams = []`, emits the exact byte-identical string `emitModuleSV m.core`.
 def emitMemModuleSV (m : RtlMemModule) : String :=
   if m.rams.isEmpty then emitModuleSV m.core
   else
-    let regNames := (m.core.regs.map fun r => readSV r.width r.name) ++
+    let regNames := regNamesBySlotSV m.core.regs ++
       (m.rams.map fun ram => readSV ram.dataWidth ram.rdataName)
     let wireName (i : Nat) : String := readSV (wireWidthOf m.core i) s!"w_{i}"
     let inExprs := inputExprsSV m.core

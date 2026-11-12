@@ -1074,14 +1074,9 @@ structure DarkBazaarClearedOutcome (d : Nat) where
   goodsSettlement : ConservedValue
 /-- Unified refusal sum for `verifyAndClearDarkBazaarEpoch`. -/
 inductive DarkBazaarRefusal where
-  | smudgeParamMismatch
-  | utilityBatchInvalid
-  | sableBatchInvalid
-  | ciphertextCountMismatch
-  | thresholdFailed (reason : ThresholdRefusal)
-  | aggregateBookMismatch
-  | sameOpeningFailed (reason : SameOpeningRefusal)
-  | sameOpeningUncovered
+  | smudgeParamMismatch | utilityBatchInvalid | sableBatchInvalid | ciphertextCountMismatch
+  | thresholdFailed (reason : ThresholdRefusal) | aggregateBookMismatch
+  | sameOpeningFailed (reason : SameOpeningRefusal) | sameOpeningUncovered
   deriving DecidableEq, Repr
 /-- **Executable 5-Stage `DarkBazaar` Epoch Verifier & Settlement Engine (`verifyAndClearDarkBazaarEpoch`)**. -/
 @[expose] def verifyAndClearDarkBazaarEpoch {sableDim : Nat} (cfg : ThresholdDecryptConfig)
@@ -1089,15 +1084,11 @@ inductive DarkBazaarRefusal where
     Except DarkBazaarRefusal (DarkBazaarClearedOutcome cfg.params.d) :=
   if !(decide (batch.openingQuery.noiseBound = cfg.encNoiseBound) &&
        decide (batch.openingQuery.smudgeBound = cfg.smudgeBound) &&
-       decide (batch.openingQuery.secBits = cfg.secBits)) then
-    .error .smudgeParamMismatch
+       decide (batch.openingQuery.secBits = cfg.secBits)) then .error .smudgeParamMismatch
   else if !checkUtilityBatch batch.utilityCerts
-      batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses then
-    .error .utilityBatchInvalid
-  else if !@checkSableBatch sableDim batch.sableWitnesses batch.openingWitness.orderWitnesses then
-    .error .sableBatchInvalid
-  else if batch.encryptedOrders.length != batch.openingQuery.committedOrders.length then
-    .error .ciphertextCountMismatch
+      batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses then .error .utilityBatchInvalid
+  else if !@checkSableBatch sableDim batch.sableWitnesses batch.openingWitness.orderWitnesses then .error .sableBatchInvalid
+  else if batch.encryptedOrders.length != batch.openingQuery.committedOrders.length then .error .ciphertextCountMismatch
   else
     let aggCt := rlweAggregateBatch cfg.params batch.encryptedOrders
     match thresholdDecryptChecked cfg aggCt batch.thresholdShares with
@@ -1105,19 +1096,15 @@ inductive DarkBazaarRefusal where
     | .ok decBook =>
       let expBook := expectedAggregateOrderBook cfg.params.d
         batch.openingQuery.committedOrders batch.openingWitness.orderWitnesses
-      if decBook != expBook then
-        .error .aggregateBookMismatch
+      if decBook != expBook then .error .aggregateBookMismatch
       else
         match verifySameOpening batch.openingQuery batch.openingWitness with
         | .refused r _ => .error (.sameOpeningFailed r)
         | .uncovered => .error .sameOpeningUncovered
         | .ok =>
-          .ok
-            { decryptedBook := decBook
-              currencySettlement :=
-                settleAssetConserved batch.openingQuery.market.currency batch.openingWitness.transfers
-              goodsSettlement :=
-                settleAssetConserved batch.openingQuery.market.goods batch.openingWitness.transfers }
+          .ok { decryptedBook := decBook
+              , currencySettlement := settleAssetConserved batch.openingQuery.market.currency batch.openingWitness.transfers
+              , goodsSettlement := settleAssetConserved batch.openingQuery.market.goods batch.openingWitness.transfers }
 /-- **Grand Pillar-4 Theorem (`darkBazaar_sable_rlwe_smudge_clearing_conserves`)**:
     Welds `TaylorModel` enclosure, `Sable` `Goldilocks` exactness, homomorphic RLWE aggregation,
     smudged $k$-of-$n$ threshold decryption, `SameOpening` KKT zero-gap clearing, and `ConservedValue`. -/
@@ -1229,66 +1216,46 @@ structure DarkBazaarState where
   cumulativeGoods : ConservedValue
   remainingDecryptionBudget : Nat
 /-- Initial empty `DarkBazaarState` with a fixed multi-epoch decryption budget. -/
-def DarkBazaarState.init (budget : Nat) : DarkBazaarState where
-  epoch := 0
-  spentNullifiers := .empty
-  cumulativeCurrency := .zero
-  cumulativeGoods := .zero
-  remainingDecryptionBudget := budget
+def DarkBazaarState.init (budget : Nat) : DarkBazaarState :=
+  { epoch := 0, spentNullifiers := .empty, cumulativeCurrency := .zero, cumulativeGoods := .zero, remainingDecryptionBudget := budget }
 inductive DarkBazaarTraceError where
-  | nullifierAlreadySpent (nf : Nat)
-  | decryptionBudgetExhausted (needed available : Nat)
-  | epochClearingFailed (reason : DarkBazaarRefusal)
+  | nullifierAlreadySpent (nf : Nat) | decryptionBudgetExhausted (needed available : Nat) | epochClearingFailed (reason : DarkBazaarRefusal)
   deriving DecidableEq, Repr
 /-- Execute one stateful `DarkBazaar` batch-auction epoch transition. -/
 @[expose] def stepDarkBazaarEpoch {sableDim : Nat} (cfg : ThresholdDecryptConfig)
     (st : DarkBazaarState) (batch : DarkBazaarEpochBatch sableDim cfg) :
     Except DarkBazaarTraceError (DarkBazaarState × DarkBazaarClearedOutcome cfg.params.d) :=
-  if nullifierContainsB st.spentNullifiers batch.epochNullifier then
-    .error (.nullifierAlreadySpent batch.epochNullifier)
+  if nullifierContainsB st.spentNullifiers batch.epochNullifier then .error (.nullifierAlreadySpent batch.epochNullifier)
   else if st.remainingDecryptionBudget < batch.thresholdShares.length then
     .error (.decryptionBudgetExhausted batch.thresholdShares.length st.remainingDecryptionBudget)
   else
     match verifyAndClearDarkBazaarEpoch cfg batch with
     | .error r => .error (.epochClearingFailed r)
     | .ok out =>
-      let st' : DarkBazaarState :=
-        { epoch := st.epoch + 1
-          spentNullifiers := st.spentNullifiers.insert batch.epochNullifier
-          cumulativeCurrency := ConservedValue.add st.cumulativeCurrency out.currencySettlement
-          cumulativeGoods := ConservedValue.add st.cumulativeGoods out.goodsSettlement
-          remainingDecryptionBudget := st.remainingDecryptionBudget - batch.thresholdShares.length }
-      .ok (st', out)
+      .ok ({ epoch := st.epoch + 1, spentNullifiers := st.spentNullifiers.insert batch.epochNullifier
+           , cumulativeCurrency := ConservedValue.add st.cumulativeCurrency out.currencySettlement
+           , cumulativeGoods := ConservedValue.add st.cumulativeGoods out.goodsSettlement
+           , remainingDecryptionBudget := st.remainingDecryptionBudget - batch.thresholdShares.length }, out)
 /-- Multi-turn reachability relation for sequential `DarkBazaar` batch-auction epochs. -/
 inductive ValidDarkBazaarTrace {sableDim : Nat} (cfg : ThresholdDecryptConfig) :
     DarkBazaarState → List (DarkBazaarEpochBatch sableDim cfg) → DarkBazaarState → Prop where
-  | nil (st : DarkBazaarState) :
-      ValidDarkBazaarTrace cfg st [] st
-  | step {st mid final : DarkBazaarState}
-      {batch : DarkBazaarEpochBatch sableDim cfg}
-      {rest : List (DarkBazaarEpochBatch sableDim cfg)}
-      {out : DarkBazaarClearedOutcome cfg.params.d}
+  | nil (st : DarkBazaarState) : ValidDarkBazaarTrace cfg st [] st
+  | step {st mid final : DarkBazaarState} {batch : DarkBazaarEpochBatch sableDim cfg}
+      {rest : List (DarkBazaarEpochBatch sableDim cfg)} {out : DarkBazaarClearedOutcome cfg.params.d}
       (hStep : stepDarkBazaarEpoch cfg st batch = .ok (mid, out))
-      (hTail : ValidDarkBazaarTrace cfg mid rest final) :
-      ValidDarkBazaarTrace cfg st (batch :: rest) final
-private theorem subsetB_trans_nullifiers {a b c : NullifierSet}
-    (h1 : a.subsetB b = true) (h2 : b.subsetB c = true) :
+      (hTail : ValidDarkBazaarTrace cfg mid rest final) : ValidDarkBazaarTrace cfg st (batch :: rest) final
+private theorem subsetB_trans_nullifiers {a b c : NullifierSet} (h1 : a.subsetB b = true) (h2 : b.subsetB c = true) :
     a.subsetB c = true :=
-  NullifierSet.subsetB_iff.2 fun x hx =>
-    NullifierSet.subsetB_iff.1 h2 x (NullifierSet.subsetB_iff.1 h1 x hx)
-private theorem subsetB_insert_self (s : NullifierSet) (nf : Nat) :
-    s.subsetB (s.insert nf) = true :=
-  NullifierSet.subsetB_iff.2 fun _ hx =>
-    NullifierSet.mem_insert.2 (Or.inr hx)
+  NullifierSet.subsetB_iff.2 fun x hx => NullifierSet.subsetB_iff.1 h2 x (NullifierSet.subsetB_iff.1 h1 x hx)
+private theorem subsetB_insert_self (s : NullifierSet) (nf : Nat) : s.subsetB (s.insert nf) = true :=
+  NullifierSet.subsetB_iff.2 fun _ hx => NullifierSet.mem_insert.2 (Or.inr hx)
 /-- **Multi-Epoch `DarkBazaar` Safety, Nullifier Non-Replay, Budget Monotonicity & `MintSafe` Conservation
     (`validDarkBazaarTrace_conserves_and_safe`)**. -/
 theorem validDarkBazaarTrace_conserves_and_safe {sableDim : Nat} (cfg : ThresholdDecryptConfig)
     (init final : DarkBazaarState) (batches : List (DarkBazaarEpochBatch sableDim cfg))
     (hTrace : ValidDarkBazaarTrace cfg init batches final) :
-    final.epoch = init.epoch + batches.length ∧
-    sumDeltas final.cumulativeCurrency.entries = 0 ∧
-    sumDeltas final.cumulativeGoods.entries = 0 ∧
-    init.spentNullifiers.subsetB final.spentNullifiers = true ∧
+    final.epoch = init.epoch + batches.length ∧ sumDeltas final.cumulativeCurrency.entries = 0 ∧
+    sumDeltas final.cumulativeGoods.entries = 0 ∧ init.spentNullifiers.subsetB final.spentNullifiers = true ∧
     final.remainingDecryptionBudget ≤ init.remainingDecryptionBudget ∧
     (∀ b ∈ batches, nullifierContainsB final.spentNullifiers b.epochNullifier = true) ∧
     (batches.map (·.epochNullifier)).Nodup := by
@@ -1296,15 +1263,13 @@ theorem validDarkBazaarTrace_conserves_and_safe {sableDim : Nat} (cfg : Threshol
   | nil st =>
     refine ⟨by simp, st.cumulativeCurrency.conserved, st.cumulativeGoods.conserved,
             NullifierSet.subsetB_iff.2 (fun _ hx => hx), Nat.le_refl _, ?_, List.nodup_nil⟩
-    intro _ hMem
-    cases hMem
+    intro _ hMem; cases hMem
   | @step st mid fin batch rest out hStep hTail ih =>
     unfold stepDarkBazaarEpoch at hStep
     cases hSpent : nullifierContainsB st.spentNullifiers batch.epochNullifier
     · simp only [hSpent, Bool.false_eq_true, ↓reduceIte] at hStep
       cases hBud : decide (st.remainingDecryptionBudget < batch.thresholdShares.length)
-      · have hNotLt : ¬ (st.remainingDecryptionBudget < batch.thresholdShares.length) :=
-          of_decide_eq_false hBud
+      · have hNotLt : ¬ (st.remainingDecryptionBudget < batch.thresholdShares.length) := of_decide_eq_false hBud
         simp only [hNotLt, ↓reduceIte] at hStep
         cases hClear : verifyAndClearDarkBazaarEpoch cfg batch with
         | error r => simp [hClear] at hStep
@@ -1313,30 +1278,18 @@ theorem validDarkBazaarTrace_conserves_and_safe {sableDim : Nat} (cfg : Threshol
           rcases hStep with ⟨hMidEq, _⟩
           rcases ih with ⟨hEp, hCur0, hGds0, hSubTail, hBudTail, hAllSpent, hNdTail⟩
           have hMidSub : st.spentNullifiers.subsetB mid.spentNullifiers = true := by
-            rw [← hMidEq]
-            exact subsetB_insert_self st.spentNullifiers batch.epochNullifier
+            rw [← hMidEq]; exact subsetB_insert_self st.spentNullifiers batch.epochNullifier
           have hBatchInMid : batch.epochNullifier ∈ mid.spentNullifiers.items := by
-            rw [← hMidEq]
-            exact NullifierSet.mem_insert.2 (Or.inl rfl)
+            rw [← hMidEq]; exact NullifierSet.mem_insert.2 (Or.inl rfl)
           have hBatchInFin : nullifierContainsB fin.spentNullifiers batch.epochNullifier = true :=
-            (nullifierContainsB_iff _ _).2
-              (NullifierSet.subsetB_iff.1 hSubTail batch.epochNullifier hBatchInMid)
+            (nullifierContainsB_iff _ _).2 (NullifierSet.subsetB_iff.1 hSubTail batch.epochNullifier hBatchInMid)
           have hMidEp : mid.epoch = st.epoch + 1 := by rw [← hMidEq]
-          have hMidBud : mid.remainingDecryptionBudget ≤ st.remainingDecryptionBudget := by
-            rw [← hMidEq]; dsimp only; omega
-          refine ⟨by simp [List.length_cons, hEp, hMidEp]; omega,
-                  hCur0, hGds0,
-                  subsetB_trans_nullifiers hMidSub hSubTail,
-                  Nat.le_trans hBudTail hMidBud,
-                  ?_, ?_⟩
-          · intro b hb
-            rcases List.mem_cons.1 hb with rfl | hbRest
-            · exact hBatchInFin
-            · exact hAllSpent b hbRest
-          · rw [List.map_cons, List.nodup_cons]
-            refine ⟨?_, hNdTail⟩
-            intro hDupMem
-            rcases List.mem_map.1 hDupMem with ⟨b2, hb2Mem, hb2Eq⟩
+          have hMidBud : mid.remainingDecryptionBudget ≤ st.remainingDecryptionBudget := by rw [← hMidEq]; dsimp only; omega
+          refine ⟨by simp [List.length_cons, hEp, hMidEp]; omega, hCur0, hGds0,
+                  subsetB_trans_nullifiers hMidSub hSubTail, Nat.le_trans hBudTail hMidBud, ?_, ?_⟩
+          · intro b hb; rcases List.mem_cons.1 hb with rfl | hbRest; exact hBatchInFin; exact hAllSpent b hbRest
+          · rw [List.map_cons, List.nodup_cons]; refine ⟨?_, hNdTail⟩
+            intro hDupMem; rcases List.mem_map.1 hDupMem with ⟨b2, hb2Mem, hb2Eq⟩
             have hSubFirst : ∀ {s1 s2 : DarkBazaarState} {bs : List (DarkBazaarEpochBatch sableDim cfg)},
                 ValidDarkBazaarTrace cfg s1 bs s2 → b2 ∈ bs →
                 nullifierContainsB s1.spentNullifiers b2.epochNullifier = false := by
@@ -1442,5 +1395,100 @@ theorem stepDarkBazaarEpoch_error_iff_inadmissible {sableDim : Nat} (cfg : Thres
         simp
   · simp only [↓reduceIte, Except.error.injEq, true_and, Bool.true_eq_false, false_and, or_false]
     exact ⟨Eq.symm, Eq.symm⟩
+
+/-! ## 7. Authorized Guardian Committee & 256-Bit Order-Payload Nullifier Binding -/
+/-- Verify `committee` has no duplicate IDs, is non-empty, and authorizes every share's `guardianId`. -/
+def checkAuthorizedCommittee {d : Nat} (committee : List Nat) (shares : List (PartialDecryptionShare d)) : Bool :=
+  (firstDupNat? committee).isNone && !committee.isEmpty && shares.all (fun s => committee.contains s.guardianId)
+
+theorem checkAuthorizedCommittee_sound {d : Nat} (committee : List Nat) (shares : List (PartialDecryptionShare d))
+    (h : checkAuthorizedCommittee committee shares = true) :
+    committee ≠ [] ∧ ∀ s ∈ shares, s.guardianId ∈ committee := by
+  simp only [checkAuthorizedCommittee, Bool.and_eq_true, Bool.not_eq_true', List.all_eq_true] at h
+  exact ⟨fun hc => by simp [hc] at h, fun s hs => List.contains_iff_mem.mp (h.2 s hs)⟩
+example : checkAuthorizedCommittee ([0, 1] : List Nat) ([] : List (PartialDecryptionShare 4)) = true := by decide
+
+private def dbFrameBytes (bs : List UInt8) : List UInt8 := Obend.Digest.HashBytes.be 8 bs.length ++ bs
+def encodeDarkBazaarIntBytes (z : Int) : List UInt8 :=
+  (if z < 0 then [(1 : UInt8)] else [(0 : UInt8)]) ++ Obend.Digest.HashBytes.be 8 z.natAbs
+
+/-- Derive a 256-bit order-payload nullifier via `poseidon2Hash32` over framed market context,
+`CommittedOrderSpec` commitments, and `RlweCiphertext` polynomials — independent of `epochNullifier`. -/
+def deriveOrderBatchNullifier256 {d : Nat} (market : Market)
+    (committedOrders : List CommittedOrderSpec) (encryptedOrders : List (RlweCiphertext d)) : BitVec 256 :=
+  let mktBytes := dbFrameBytes (reprStr market).toUTF8.toList
+  let ordBytes := dbFrameBytes (committedOrders.flatMap fun s =>
+    dbFrameBytes (reprStr s.account).toUTF8.toList ++
+    [match s.side with | .bid => (0 : UInt8) | .ask => (1 : UInt8)] ++
+    Obend.Digest.HashBytes.be 8 s.maxBits ++
+    dbFrameBytes (TranscriptEncode.encodeTranscriptBytes s.dualComm).toList)
+  let ctBytes := dbFrameBytes (encryptedOrders.flatMap fun ct =>
+    dbFrameBytes (ct.c0.coeffs.toList.flatMap encodeDarkBazaarIntBytes) ++
+    dbFrameBytes (ct.c1.coeffs.toList.flatMap encodeDarkBazaarIntBytes))
+  BitVec.ofNat 256 (Obend.Digest.HashBytes.ofBE (poseidon2Hash32 (mktBytes ++ ordBytes ++ ctBytes)))
+
+structure DarkBazaarAuthState where
+  base : DarkBazaarState
+  committee : List Nat
+  spentOrderDigests : List (BitVec 256)
+
+inductive DarkBazaarAuthError where
+  | unauthorizedGuardianCommittee
+  | orderPayloadReplay (digest256 : BitVec 256)
+  | traceError (err : DarkBazaarTraceError)
+  deriving DecidableEq, Repr
+
+/-- Authenticated multi-epoch step binding guardian committee authorization and 256-bit order nullifiers. -/
+def stepDarkBazaarEpochAuth {sableDim : Nat} (cfg : ThresholdDecryptConfig)
+    (st : DarkBazaarAuthState) (batch : DarkBazaarEpochBatch sableDim cfg) :
+    Except DarkBazaarAuthError (DarkBazaarAuthState × DarkBazaarClearedOutcome cfg.params.d) :=
+  if !checkAuthorizedCommittee st.committee batch.thresholdShares then
+    .error .unauthorizedGuardianCommittee
+  else
+    let ordDig := deriveOrderBatchNullifier256 batch.openingQuery.market
+      batch.openingQuery.committedOrders batch.encryptedOrders
+    if st.spentOrderDigests.contains ordDig then
+      .error (.orderPayloadReplay ordDig)
+    else
+      match stepDarkBazaarEpoch cfg st.base batch with
+      | .error e => .error (.traceError e)
+      | .ok (base', out) =>
+        .ok ({ st with base := base', spentOrderDigests := ordDig :: st.spentOrderDigests }, out)
+
+/-- **Order-Payload Replay Refusal (`stepDarkBazaarEpochAuth_refuses_order_replay`)**:
+re-submitting the same `(market, committedOrders, encryptedOrders)` in any subsequent state is refused
+even when the caller supplies a fresh `b₂.epochNullifier`! -/
+theorem stepDarkBazaarEpochAuth_refuses_order_replay {sableDim : Nat} (cfg : ThresholdDecryptConfig)
+    (st st₁ st₂ : DarkBazaarAuthState) (b₁ b₂ : DarkBazaarEpochBatch sableDim cfg)
+    (out₁ : DarkBazaarClearedOutcome cfg.params.d)
+    (hStep₁ : stepDarkBazaarEpochAuth cfg st b₁ = .ok (st₁, out₁))
+    (hMono : ∀ d ∈ st₁.spentOrderDigests, d ∈ st₂.spentOrderDigests)
+    (hMkt : b₂.openingQuery.market = b₁.openingQuery.market)
+    (hSpecs : b₂.openingQuery.committedOrders = b₁.openingQuery.committedOrders)
+    (hCts : b₂.encryptedOrders = b₁.encryptedOrders) :
+    (∀ st₃ out₂, stepDarkBazaarEpochAuth cfg st₂ b₂ ≠ .ok (st₃, out₂)) ∧
+    (checkAuthorizedCommittee st₂.committee b₂.thresholdShares = true →
+      stepDarkBazaarEpochAuth cfg st₂ b₂ = .error (.orderPayloadReplay
+        (deriveOrderBatchNullifier256 b₁.openingQuery.market b₁.openingQuery.committedOrders b₁.encryptedOrders))) := by
+  unfold stepDarkBazaarEpochAuth at hStep₁
+  cases hComm₁ : checkAuthorizedCommittee st.committee b₁.thresholdShares
+  · simp [hComm₁] at hStep₁
+  simp only [hComm₁, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep₁
+  cases hSpent₁ : st.spentOrderDigests.contains
+      (deriveOrderBatchNullifier256 b₁.openingQuery.market b₁.openingQuery.committedOrders b₁.encryptedOrders)
+  · simp only [hSpent₁, Bool.false_eq_true, ↓reduceIte] at hStep₁
+    cases hBase₁ : stepDarkBazaarEpoch cfg st.base b₁ with
+    | error e => simp [hBase₁] at hStep₁
+    | ok pair =>
+      simp only [hBase₁, Except.ok.injEq, Prod.mk.injEq] at hStep₁
+      have hMem₁ : deriveOrderBatchNullifier256 b₁.openingQuery.market b₁.openingQuery.committedOrders b₁.encryptedOrders ∈
+          st₁.spentOrderDigests := by rw [← hStep₁.1]; exact List.Mem.head _
+      have hMem₂ : deriveOrderBatchNullifier256 b₁.openingQuery.market b₁.openingQuery.committedOrders b₁.encryptedOrders ∈
+          st₂.spentOrderDigests := hMono _ hMem₁
+      refine ⟨fun st₃ out₂ => ?_, fun hComm₂ => ?_⟩
+      · unfold stepDarkBazaarEpochAuth; rw [hMkt, hSpecs, hCts]
+        cases checkAuthorizedCommittee st₂.committee b₂.thresholdShares <;> simp [hMem₂]
+      · unfold stepDarkBazaarEpochAuth; rw [hComm₂, hMkt, hSpecs, hCts]; simp [hMem₂]
+  · rw [hSpent₁] at hStep₁; cases hStep₁
 end Obend.Crypto
 end

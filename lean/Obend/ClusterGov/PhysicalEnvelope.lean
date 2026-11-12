@@ -326,7 +326,13 @@ def residualEnergy (cal : EnergyCalibration) (localProvenOps meter : Nat) : Nat 
 
 def checkEnergyEnvelope (cal : EnergyCalibration) (receipt : JudgedReceipt)
     (meter maxResidual : Nat) : Bool :=
+  decide (cal.eIdle + cal.eLo receipt.provenOps ≤ meter + cal.eta) &&
   decide (residualEnergy cal receipt.provenOps meter ≤ maxResidual)
+
+theorem checkEnergyEnvelope_refuses_undermetered (cal : EnergyCalibration) (receipt : JudgedReceipt)
+    (meter maxResidual : Nat) (hUnder : meter + cal.eta < cal.eIdle + cal.eLo receipt.provenOps) :
+    checkEnergyEnvelope cal receipt meter maxResidual = false := by
+  simp only [checkEnergyEnvelope, Bool.and_eq_false_iff, decide_eq_false_iff_not]; left; omega
 
 /-- The lower curve is credited only for work independently attributed to this
 rack. Sensor coverage, stored energy and the minimum energy cost are the stated
@@ -338,7 +344,8 @@ theorem energyConservation_bounds_hidden_ops (cal : EnergyCalibration) (receipt 
     cal.eMinPerOp * hidden ≤ residualEnergy cal receipt.provenOps meter ∧
       residualEnergy cal receipt.provenOps meter ≤ maxResidual ∧
       hidden ≤ maxResidual / cal.eMinPerOp ∧ (maxResidual < cal.eMinPerOp → hidden = 0) := by
-  have hb : residualEnergy cal receipt.provenOps meter ≤ maxResidual := of_decide_eq_true accepted
+  simp only [checkEnergyEnvelope, Bool.and_eq_true, decide_eq_true_eq] at accepted
+  have hb : residualEnergy cal receipt.provenOps meter ≤ maxResidual := accepted.2
   have he : cal.eMinPerOp * hidden ≤ residualEnergy cal receipt.provenOps meter := by
     unfold residualEnergy; omega
   have hm := Nat.le_trans he hb
@@ -439,6 +446,41 @@ def envelopePolicy {S A : Type} (authority : EnvelopeAuthority) (evidence : S �
   fun s a => decide (timing.lDetect + timing.lProve + timing.lActuate ≤ B * timing.tau) &&
     checkPhysicalEnvelope authority (evidence s a) && plantPolicy s a
 
+theorem checkPhysicalEnvelope_sound (authority : EnvelopeAuthority) (e : EnvelopeEvidence)
+    (h : checkPhysicalEnvelope authority e = true) :
+    checkCommitBeforeForward authority.log e.packet e.inclusion = true ∧
+    verifySealedVram authority.hardware authority.challenge e.location e.measuredRtt e.pages = true ∧
+    checkEnergyEnvelope authority.calibration e.location.receipt e.energyMeter authority.maxResidual = true ∧
+    e.location.receipt.stateHash = e.packet.pktStateHash ∧
+    e.location.receipt.epoch = authority.log.epoch ∧
+    authority.challenge.logEpoch = authority.log.epoch ∧
+    ∃ r, authority.log.entries[e.inclusion.index]? = some r ∧
+      stepBytes r.context.step = stepBytes e.location.receipt.context.step ∧
+      r.provenOps = e.location.receipt.provenOps := by
+  unfold checkPhysicalEnvelope at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨⟨hc, hv⟩, he⟩, hs, hep, hch⟩, hm⟩ := h
+  cases hr : authority.log.entries[e.inclusion.index]? with
+  | none => simp [hr] at hm
+  | some r =>
+    simp only [hr, decide_eq_true_eq] at hm
+    exact ⟨hc, hv, he, hs, hep, hch, r, rfl, hm.1, hm.2⟩
+
+theorem enveloped_nonfallback_requires_envelope {S A : Type}
+    (authority : EnvelopeAuthority) (evidence : S → A → EnvelopeEvidence)
+    (plantPolicy : Policy S A) (B : Nat) (timing : BarrierTiming)
+    (recov : S → A) (ctrl : S → A) (s : S)
+    (hNonFallback : enveloped (envelopePolicy authority evidence plantPolicy B timing) recov ctrl s ≠ recov s) :
+    timing.lDetect + timing.lProve + timing.lActuate ≤ B * timing.tau ∧
+    checkPhysicalEnvelope authority (evidence s (ctrl s)) = true ∧
+    plantPolicy s (ctrl s) = true := by
+  unfold enveloped at hNonFallback
+  split at hNonFallback
+  · rename_i hPol
+    simp only [envelopePolicy, Bool.and_eq_true, decide_eq_true_eq] at hPol
+    exact ⟨hPol.1.1, hPol.1.2, hPol.2⟩
+  · exact False.elim (hNonFallback rfl)
+
 /-- Plant safety and bounded recovery are preserved along every selected run.
 The plant policy must preserve BOTH invariants, and the fallback must too;
 receipt validity and a positive timing margin cannot replace these obligations. -/
@@ -471,6 +513,7 @@ inductive SwarmMeterViolation where
   | missingReceipt (jobId : Nat)
   | mismatchedReceipt (jobId : Nat)
   | residualBreach (jobId residual allowed : Nat)
+  | duplicateReceipt (jobId receiptIndex : Nat)
   deriving DecidableEq, Repr
 
 structure SwarmMeterSummary where
@@ -485,7 +528,7 @@ inductive SwarmMeterResult where
   deriving DecidableEq, Repr
 
 /-- GPU-seconds use the same lower-curve arithmetic in calibrated meter units.
-A row with positive work and no committed receipt is always refused. -/
+A row with positive work and no committed receipt, or meter reading below `eIdle + eLo`, is always refused. -/
 def checkMeterRow (log : JudgedReceiptLog) (cal : EnergyCalibration) (maxResidual : Nat)
     (row : SwarmJobRow) : Option SwarmMeterViolation :=
   match log.entries[row.receiptIndex]? with
@@ -493,20 +536,22 @@ def checkMeterRow (log : JudgedReceiptLog) (cal : EnergyCalibration) (maxResidua
   | some r =>
       if row.inclusion.index ≠ row.receiptIndex ∨ verifyReceiptInclusion log row.inclusion ≠ true ∨
           row.landedReceiptHash ≠ receiptDigest r ∨ row.provenOps ≠ r.provenOps ∨
-          row.jobId ≠ r.jobId ∨ row.host ≠ r.host then
+          row.jobId ≠ r.jobId ∨ row.host ≠ r.host ∨
+          row.gpuSecondsMetered + cal.eta < cal.eIdle + cal.eLo r.provenOps then
         some (.mismatchedReceipt row.jobId)
       else if residualEnergy cal r.provenOps row.gpuSecondsMetered ≤ maxResidual then none
       else some (.residualBreach row.jobId (residualEnergy cal r.provenOps row.gpuSecondsMetered) maxResidual)
 
 /-- Independent mathematical row semantics, stated with existential membership
-and the unsaturated conservation inequality (equivalent for Nat budgets). -/
+and the unsaturated two-sided conservation inequality (`eIdle + eLo ≤ meter + eta ≤ eIdle + eLo + maxResidual`). -/
 def MeterRowSpec (log : JudgedReceiptLog) (cal : EnergyCalibration) (maxResidual : Nat)
     (row : SwarmJobRow) : Prop :=
   ∃ r, log.entries[row.receiptIndex]? = some r ∧
     row.inclusion.index = row.receiptIndex ∧ verifyReceiptInclusion log row.inclusion = true ∧
     row.landedReceiptHash = receiptDigest r ∧ row.provenOps = r.provenOps ∧
     row.jobId = r.jobId ∧ row.host = r.host ∧
-    row.gpuSecondsMetered + cal.eta ≤ cal.eIdle + cal.eLo r.provenOps + maxResidual
+    (cal.eIdle + cal.eLo r.provenOps ≤ row.gpuSecondsMetered + cal.eta ∧
+      row.gpuSecondsMetered + cal.eta ≤ cal.eIdle + cal.eLo r.provenOps + maxResidual)
 
 def SwarmMeterSpec (log : JudgedReceiptLog) (cal : EnergyCalibration) (maxResidual : Nat)
     (rows : List SwarmJobRow) : Prop := ∀ row ∈ rows, MeterRowSpec log cal maxResidual row
@@ -521,6 +566,80 @@ def auditSwarmComputeMeter (log : JudgedReceiptLog) (cal : EnergyCalibration)
   | none => .clean (meterSummary rows)
   | some v => .violation v
 
+def findDupReceiptRow : List Nat → List SwarmJobRow → Option SwarmMeterViolation
+  | _, [] => none
+  | seen, row :: rest =>
+    if row.receiptIndex ∈ seen then some (.duplicateReceipt row.jobId row.receiptIndex)
+    else findDupReceiptRow (row.receiptIndex :: seen) rest
+
+/-- Deduplicated swarm meter audit refusing multiple meter rows claiming the same `receiptIndex`. -/
+def auditSwarmComputeMeterDedup (log : JudgedReceiptLog) (cal : EnergyCalibration)
+    (maxResidual : Nat) (rows : Array SwarmJobRow) : SwarmMeterResult :=
+  match findDupReceiptRow [] rows.toList with
+  | some dup => .violation dup
+  | none => auditSwarmComputeMeter log cal maxResidual rows
+
+private theorem findDupReceiptRow_mem_ne_none :
+    ∀ (xs : List SwarmJobRow) (acc : List Nat) {r' : SwarmJobRow},
+      r'.receiptIndex ∈ acc → r' ∈ xs → findDupReceiptRow acc xs ≠ none
+  | [], _, _, _, hm => by cases hm
+  | x :: xs, acc, r', hIn, hm => by
+    unfold findDupReceiptRow
+    by_cases hx : x.receiptIndex ∈ acc
+    · simp [hx]
+    · simp only [hx, ↓reduceIte]
+      rcases List.mem_cons.mp hm with rfl | hTail
+      · exact absurd hIn hx
+      · exact findDupReceiptRow_mem_ne_none xs (x.receiptIndex :: acc) (List.mem_cons_of_mem _ hIn) hTail
+
+private theorem findDupReceiptRow_none_nodup :
+    ∀ (seen : List Nat) (rs : List SwarmJobRow),
+      findDupReceiptRow seen rs = none → (rs.map (·.receiptIndex)).Nodup
+  | _, [], _ => List.Pairwise.nil
+  | seen, r :: rest, hNone => by
+    unfold findDupReceiptRow at hNone
+    by_cases hc : r.receiptIndex ∈ seen
+    · simp [hc] at hNone
+    · simp only [hc, ↓reduceIte] at hNone
+      refine List.Pairwise.cons (fun idx hMem hEq => ?_) (findDupReceiptRow_none_nodup (r.receiptIndex :: seen) rest hNone)
+      obtain ⟨r', hr', hIdx⟩ := List.mem_map.mp hMem
+      have hIn : r'.receiptIndex ∈ r.receiptIndex :: seen := by
+        rw [hIdx, ← hEq]; exact List.Mem.head _
+      exact findDupReceiptRow_mem_ne_none rest (r.receiptIndex :: seen) hIn hr' hNone
+
+theorem auditSwarmComputeMeterDedup_sound (log : JudgedReceiptLog) (cal : EnergyCalibration)
+    (maxResidual : Nat) (rows : Array SwarmJobRow) (summary : SwarmMeterSummary)
+    (hOk : auditSwarmComputeMeterDedup log cal maxResidual rows = .clean summary) :
+    (rows.toList.map (·.receiptIndex)).Nodup ∧ SwarmMeterSpec log cal maxResidual rows.toList := by
+  unfold auditSwarmComputeMeterDedup at hOk
+  cases hd : findDupReceiptRow [] rows.toList with
+  | some v => simp [hd] at hOk
+  | none =>
+    simp only [hd] at hOk
+    have hNd := findDupReceiptRow_none_nodup [] rows.toList hd
+    unfold auditSwarmComputeMeter at hOk
+    cases hf : rows.findSome? (checkMeterRow log cal maxResidual) with
+    | some v => simp [hf] at hOk
+    | none =>
+      refine ⟨hNd, ?_⟩
+      intro row hr
+      have hNone := Array.findSome?_eq_none_iff.mp hf row (Array.mem_def.mpr hr)
+      unfold checkMeterRow at hNone
+      cases he : log.entries[row.receiptIndex]? with
+      | none => simp [he] at hNone
+      | some r =>
+        simp only [he] at hNone
+        split at hNone
+        · cases hNone
+        · rename_i hGood; simp only [not_or, ne_eq, Decidable.not_not] at hGood
+          split at hNone
+          · rename_i hRes
+            refine ⟨r, he, hGood.1, hGood.2.1, hGood.2.2.1, hGood.2.2.2.1, hGood.2.2.2.2.1,
+              hGood.2.2.2.2.2.1, ?_, ?_⟩
+            · omega
+            · unfold residualEnergy at hRes; omega
+          · cases hNone
+
 theorem checkMeterRow_iff (log : JudgedReceiptLog) (cal : EnergyCalibration) (maxResidual : Nat)
     (row : SwarmJobRow) :
     checkMeterRow log cal maxResidual row = none ↔ MeterRowSpec log cal maxResidual row := by
@@ -533,11 +652,19 @@ theorem checkMeterRow_iff (log : JudgedReceiptLog) (cal : EnergyCalibration) (ma
     · rename_i bad
       simp only [Option.some_ne_none, false_iff]
       intro good
-      rcases good with ⟨hi, hv, hh, hp, hj, hhost, _⟩
-      simp_all
+      rcases good with ⟨hi, hv, hh, hp, hj, hhost, hlo, _⟩
+      rcases bad with b | b | b | b | b | b | b
+      · exact b hi
+      · exact b hv
+      · exact b hh
+      · exact b hp
+      · exact b hj
+      · exact b hhost
+      · omega
     · rename_i good
       simp only [not_or, ne_eq, Decidable.not_not] at good
-      simp only [good.1, good.2.1, good.2.2.1, good.2.2.2.1, good.2.2.2.2.1, good.2.2.2.2.2, true_and]
+      have hlo : cal.eIdle + cal.eLo r.provenOps ≤ row.gpuSecondsMetered + cal.eta := by omega
+      simp only [good.1, good.2.1, good.2.2.1, good.2.2.2.1, good.2.2.2.2.1, good.2.2.2.2.2.1, hlo, true_and]
       split <;> simp_all [residualEnergy] <;> omega
 
 theorem auditSwarmComputeMeter_sound_iff (log : JudgedReceiptLog) (cal : EnergyCalibration)
@@ -559,7 +686,7 @@ def currentLoopEnvelopeStep (i : CanonicalRat) (u : HWAct) : CanonicalRat :=
   stepZoh currentLoopShieldZoh i (currentLoopShieldVoltage u)
 def currentLoopEnvelopeSafe (i : CanonicalRat) : Prop := i ∈ mkCurrentLoopShieldSpec.core
 def currentLoopEnvelopeHome (i : CanonicalRat) : Prop := 1/100 ≤ i ∧ i ≤ 399/100
-def currentLoopEnvelopeInit (i : CanonicalRat) : Prop := i = 2
+def currentLoopEnvelopeInit (i : CanonicalRat) : Prop := currentLoopEnvelopeHome i
 def currentLoopEnvelopeRecovery (i : CanonicalRat) : HWAct := currentLoopShieldRoot (currentLoopEnvelopeZone i)
 def currentLoopEnvelopePolicy (i : CanonicalRat) (u : HWAct) : Bool :=
   mkCurrentLoopShieldSpec.actionOk (currentLoopEnvelopeZone i) u
@@ -582,6 +709,15 @@ private theorem currentLoopEnvelope_step_safe {i : CanonicalRat} {u : HWAct}
   have hf := flow_in_tube ha (by simpa only [currentLoopShieldFlow_zero] using currentLoopEnvelope_cell h)
     (currentLoopInterSampleFlow_sound _ u i (currentLoopEnvelope_cell h))
   simpa only [currentLoopShieldFlow_endpoint, currentLoopEnvelopeSafe, currentLoopEnvelopeStep] using hf.2
+/-- Sensor-and-ADC-mediated current-loop step safety through `SensorReads` + `adcCode` + `zoneOf`. -/
+theorem currentLoopShield_adc_step_safe {i : CanonicalRat} {vInMv : Nat} {u : HWAct}
+    (hs : currentLoopEnvelopeSafe i) (hSens : mkCurrentLoopShieldSpec.SensorReads i vInMv)
+    (ha : mkCurrentLoopShieldSpec.actionOk (mkCurrentLoopShieldSpec.zoneOf (mkCurrentLoopShieldSpec.adcCode vInMv)) u = true) :
+    currentLoopEnvelopeSafe (currentLoopEnvelopeStep i u) := by
+  have hCell := state_in_cell mkCurrentLoopShieldSpec currentLoopShield_wf hs hSens
+  have hf := flow_in_tube ha (by simpa only [currentLoopShieldFlow_zero] using hCell)
+    (currentLoopInterSampleFlow_sound _ u i hCell)
+  simpa only [currentLoopShieldFlow_endpoint, currentLoopEnvelopeSafe, currentLoopEnvelopeStep] using hf.2
 /-- The fallback moves every core state into a strict interior home interval in one sample. -/
 theorem currentLoopEnvelope_recovery_home {i : CanonicalRat} (h : currentLoopEnvelopeSafe i) :
     currentLoopEnvelopeHome (currentLoopEnvelopeStep i (currentLoopEnvelopeRecovery i)) := by
@@ -592,7 +728,7 @@ theorem currentLoopEnvelope_recovery_home {i : CanonicalRat} (h : currentLoopEnv
 private theorem currentLoopEnvelope_recoverable {i : CanonicalRat} (h : currentLoopEnvelopeSafe i) :
     CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i :=
   ⟨1, Nat.le_refl _, currentLoopEnvelope_recovery_home h⟩
-/-- Concrete initialization, policy and fallback proofs for the RL shield. -/
+/-- Concrete initialization, policy and fallback proofs for the RL shield over the entire home interval. -/
 theorem instPhysicalEnvelopeCurrentLoopShield :
     InitSafe currentLoopEnvelopeInit (fun i => currentLoopEnvelopeSafe i ∧
       CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i) ∧
@@ -600,9 +736,13 @@ theorem instPhysicalEnvelopeCurrentLoopShield :
       CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i) currentLoopEnvelopePolicy ∧
     SafeShield currentLoopEnvelopeStep (fun i => currentLoopEnvelopeSafe i ∧
       CWithin currentLoopEnvelopeStep currentLoopEnvelopeRecovery currentLoopEnvelopeHome 1 i) currentLoopEnvelopeRecovery := by
-  have hs : currentLoopEnvelopeSafe 2 := by unfold currentLoopEnvelopeSafe; decide +kernel
   refine ⟨?_, ?_, ?_⟩
-  · intro i hi; cases hi; exact ⟨hs, currentLoopEnvelope_recoverable hs⟩
+  · intro i hi
+    have hc : mkCurrentLoopShieldSpec.core = ⟨0, 4⟩ := by decide +kernel
+    have hs : currentLoopEnvelopeSafe i := by
+      unfold currentLoopEnvelopeInit currentLoopEnvelopeHome at hi
+      rw [currentLoopEnvelopeSafe, hc, Interval.mem_iff]; grind
+    exact ⟨hs, currentLoopEnvelope_recoverable hs⟩
   · intro i u hi hu
     have hn := currentLoopEnvelope_step_safe hi.1 hu
     exact ⟨hn, currentLoopEnvelope_recoverable hn⟩
@@ -638,5 +778,55 @@ theorem currentLoopPhysicalEnvelope_continuous_safe (authority : EnvelopeAuthori
     simp only [envelopePolicy, Bool.and_eq_true] at h
     exact h.2
   · exact currentLoopShieldRoot_passes _
+
+theorem checkPhysicalEnvelope_inhabited (payload host page nonce hardwareId : ByteArray)
+    (epoch job : Nat) :
+    ∃ (auth : EnvelopeAuthority) (ev : EnvelopeEvidence), checkPhysicalEnvelope auth ev = true := by
+  let stateH := hashBytes "OBEND.ENVELOPE.STATE/v1" payload
+  let r : JudgedReceipt := ⟨validClusterStepCtx, stateH, 7500000, epoch, job, host⟩
+  let log := commitReceiptLog #[r] 0 epoch
+  let policy : HardwareClassPolicy := ⟨hardwareId, 1000, 2000, 1, 0, 1⟩
+  let challenge : VramChallenge := ⟨nonce, epoch, pageDigest 0 page⟩
+  let claim : LocationClaim := ⟨r, hardwareId, pageDigest 0 page, 50000⟩
+  let openings : Array VramPageOpening := #[⟨page, ⟨0, #[]⟩⟩]
+  let pkt : EgressPacket := ⟨payload, stateH⟩
+  let inc : ReceiptInclusionProof := ⟨0, #[]⟩
+  let auth : EnvelopeAuthority := ⟨log, policy, challenge, bandCalibration, 0⟩
+  let ev : EnvelopeEvidence := ⟨pkt, inc, claim, 0, openings, 40⟩
+  have hj : checkJudgedReceipt r = true := by
+    unfold checkJudgedReceipt
+    have hctx : verifyClusterStep validClusterStepCtx = true := rfl
+    change (verifyClusterStep validClusterStepCtx && decide (_ ∧ _ ∧ _)) = true
+    rw [hctx]
+    simp [r, stateH, hashBytes_size, validClusterStepCtx]
+  have hi : verifyReceiptInclusion log inc = true := by
+    have hep : r.epoch = epoch := rfl
+    simp [verifyReceiptInclusion, log, inc, hj, hep, verifyOpening,
+      logRoot, commitReceiptLog, merkleRoot, climbMerkle, receiptDigest, hashBytes_size]
+  have hcbf : checkCommitBeforeForward log pkt inc = true := by
+    unfold checkCommitBeforeForward
+    change (verifyReceiptInclusion log inc && decide (_ ∧ _)) = true
+    rw [hi]
+    simp [log, inc, pkt, r, stateH, commitReceiptLog]
+  have offsets : deriveVramChallengeOffsets policy challenge claim = #[0] := by
+    simp [deriveVramChallengeOffsets, policy, challengeOffsets]
+    exact Nat.mod_one _
+  have hvram : verifySealedVram policy challenge claim 0 openings = true := by
+    unfold verifySealedVram
+    rw [offsets]
+    simp [verifyRttEnvelope, policy, challenge, claim, r, openings, verifyVramPage,
+      verifyOpening, climbMerkle, pageDigest, hashBytes_size]
+  refine ⟨auth, ev, ?_⟩
+  unfold checkPhysicalEnvelope
+  dsimp only [auth, ev]
+  rw [hcbf, hvram]
+  simp [log, pkt, inc, commitReceiptLog, challenge, claim, r, stateH,
+    checkEnergyEnvelope, residualEnergy, bandCalibration]
+
+example (log : JudgedReceiptLog) (cal : EnergyCalibration) :
+    auditSwarmComputeMeterDedup log cal 0 #[] = .clean ⟨0, 0, 0⟩ := rfl
+example : currentLoopEnvelopeSafe 2 ∧ mkCurrentLoopShieldSpec.SensorReads (5/2) 2 ∧
+    mkCurrentLoopShieldSpec.actionOk (mkCurrentLoopShieldSpec.zoneOf (mkCurrentLoopShieldSpec.adcCode 2)) 0 = true := by
+  refine ⟨by unfold currentLoopEnvelopeSafe; decide +kernel, by decide +kernel, by decide +kernel⟩
 
 end Obend.ClusterGov.PhysicalEnvelope

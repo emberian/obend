@@ -112,6 +112,11 @@ def validateWithoutDuplicateCheck (cfg : F2WrapperConfig) : Bool :=
 #guard (decodeOpenPdkSignoffObj "").toOption.isNone
 -- The kernel runs the decoder on a literal wire.
 theorem vivadoStaCert_wire_decodes : (decodeVivadoStaCert "335 45 1").toOption = some sampleVivadoStaCert := by decide +kernel
+-- PCIe FLR (`sh_cl_flr_assert`) is coupled into the synchronous core reset (`rst_core_sync`).
+#guard (emitAwsF2ClWrapperSV defaultAwsF2WrapperConfig adderCore).any fun sv =>
+  (sv.splitOn "wire rst_core_sync = ~rst_main_n | sh_cl_flr_assert;").length == 2
+#tooth Obend.Hardware.AwsF2Shell.f2FabulousOverlayStepChecked_quarantines_oversized_digest
+  by mutation Obend.Hardware.AwsF2Shell.checkHash256Width := fun _ _ => true
 
 end AwsF2
 
@@ -149,8 +154,8 @@ def chainNl (n : Nat) : BelNetlist := synthesizeModuleToBels (adderChain n)
 
 /-- The reference design's netlist, as the pipeline synthesizes it. -/
 def referenceNl : BelNetlist :=
-  ((compileBookByMode goldenTapeoutConfig.compileMode goldenTapeoutConfig.moduleName
-    (specializeBookDict goldenTapeoutConfig.dictInlinePasses (Obend.Leaf.emit goldenCleanroomTcadComp))).map
+  ((compileBookByMode referenceTapeoutConfig.compileMode referenceTapeoutConfig.moduleName
+    (specializeBookDict referenceTapeoutConfig.dictInlinePasses (Obend.Leaf.emit referenceCleanroomTcadComp))).map
       synthesizeModuleToBels).getD validAdderBelNetlist
 /-- The grid certificate with cell 1 moved from slot 1 to slot 2 of its tile: still an injective placement, but its
 pad lands on the pad of the next tile's slot 0. -/
@@ -171,17 +176,32 @@ def unroutedEdgeCert : PnrCertificate :=
 /-- **Geometry defect through the whole pipeline.** With every configured sample box, tree, graph and path left at
 its clean default, a PnR certificate whose pads overlap is refused at the artifact-bound stage. -/
 theorem overlapping_pads_refused_under_clean_config :
-    (match compileCompositionToSiliconTapeout { goldenTapeoutConfig with pnrCert? := some overlappingPadCert }
-        goldenCleanroomTcadComp [goldenTapeoutIsarCert] with
+    (match compileCompositionToSiliconTapeout { referenceTapeoutConfig with pnrCert? := some overlappingPadCert }
+        referenceCleanroomTcadComp [referenceTapeoutIsarCert] with
      | .error (.artifactBoundSignoffRefused _) => true
      | _ => false) = true := by decide +kernel
 /-- **Timing defect through the whole pipeline.** At 1300 ps the configured sample path and graph still pass, the
 reference design's own register-to-register paths (1263 ps of logic and wire at SS) do not. -/
 theorem slow_paths_refused_under_clean_config :
-    (match compileCompositionToSiliconTapeout { goldenTapeoutConfig with clockPeriodPs := 1300 }
-        goldenCleanroomTcadComp [goldenTapeoutIsarCert] with
+    (match compileCompositionToSiliconTapeout { referenceTapeoutConfig with clockPeriodPs := 1300 }
+        referenceCleanroomTcadComp [referenceTapeoutIsarCert] with
      | .error (.artifactBoundSignoffRefused _) => true
      | _ => false) = true := by decide +kernel
+
+-- Bucket 3 Row #6: Finite physical switch-box channel capacity refusal & mutation probes.
+#guard routeEdgeListChecked? 1 0 [(0, 0, 1, 0), (0, 1, 1, 1)] == .error (2, 1)
+#guard (routeEdgeListChecked? 2 0 [(0, 0, 1, 0), (0, 1, 1, 1)]).isOk
+#guard checkSwitchChannelCapacity 1 (synthesizeGridPnrCert referenceNl).routedNets == false
+#guard checkSwitchChannelCapacity 55 (synthesizeGridPnrCert referenceNl).routedNets == true
+#guard match compileCompositionToSiliconTapeout { referenceTapeoutConfig with channelCap := 1 }
+    referenceCleanroomTcadComp [referenceTapeoutIsarCert] with
+  | .error (.switchChannelCongestion 55 1) => true | _ => false
+
+#tooth Obend.Hardware.TapeoutPipeline.checkSwitchChannelCapacity_sound
+  by mutation Obend.Hardware.TapeoutPipeline.checkSwitchChannelCapacity := fun _ _ => true
+#tooth Obend.Hardware.TapeoutPipeline.checkSwitchChannelCapacity_sound
+  by mutation Obend.Hardware.TapeoutPipeline.checkSwitchChannelCapacity :=
+    fun cap nets => decide (0 < cap) && nets.all fun r => decide (r.netId ≤ cap)
 
 #tooth Obend.Hardware.TapeoutPipeline.checkArtifactBoundTapeout_sound
   by mutation Obend.Hardware.TapeoutPipeline.checkArtifactBoundTapeout := fun _ _ _ _ _ => true
@@ -197,7 +217,7 @@ theorem slow_paths_refused_under_clean_config :
 
 -- JSON for the reference artifact.
 def referenceJson (render : SiliconTapeoutArtifact → String) : Option Lean.Json :=
-  match compileCompositionToSiliconTapeout goldenTapeoutConfig goldenCleanroomTcadComp [goldenTapeoutIsarCert] with
+  match compileCompositionToSiliconTapeout referenceTapeoutConfig referenceCleanroomTcadComp [referenceTapeoutIsarCert] with
   | .ok art => (Lean.Json.parse (render art)).toOption
   | .error _ => none
 #guard ((referenceJson renderLibrelaneConfigJson).bind fun j => (j.getObjValAs? String "DESIGN_NAME").toOption) ==
@@ -266,6 +286,22 @@ def validateGemmBoundsOnly (vmemTiles vregCount dst lhs rhs scratch : Nat) : Boo
   by mutation Obend.Hardware.Tpu.checkInstrBounds := fun _ _ _ _ _ _ => true
 #tooth Obend.Hardware.Tpu.runSync_vmem_frame
   by mutation Obend.Hardware.Tpu.TpuInstr.mayWriteVmem := fun _ _ => false
+#guard decodeBf16 0x0001 != decodeBf16Ftz 0x0001
+#guard decodeBf16 0x3F80 == decodeBf16Ftz 0x3F80
+#guard validatePointwiseTileLayout 3 5 2 0 1
+#guard validatePointwiseTileLayout 3 5 0 0 1 == false
+-- End-to-end synchronous machine execution of `goldilocksPointwiseProgram` on `(p - 2) * (p - 3) ≡ 6 (mod p)`.
+#guard
+  let p := Obend.Apps.ZkNtt.goldilocksPrime
+  let s0 : TpuCoreState :=
+    { TpuCoreState.initial 0 3 0 5 0 with
+      vmem := #[ Sized.ofFn (fun _ => UInt64.ofNat (p - 2))
+               , Sized.ofFn (fun _ => UInt64.ofNat (p - 3))
+               , Sized.ofFn (fun _ => 0) ] }
+  let sf := runSync s0 (goldilocksPointwiseProgram 2 0 1)
+  sf.error.isNone && sf.vmem[2]? == some (Sized.ofFn (fun _ => 6))
+#tooth Obend.Hardware.Tpu.validatePointwiseTileLayout_sound
+  by mutation Obend.Hardware.Tpu.validatePointwiseTileLayout := fun _ _ _ _ _ => true
 
 end Tpu
 
@@ -324,6 +360,16 @@ open Obend.Hardware.Gpu.Rdna2 Obend.Hardware.Gpu.Rdna2.Async Obend.Hardware.Gpu.
   by mutation Obend.Hardware.Gpu.Rdna2.Dpp.encodeDppOp := fun _ => 0
 #tooth Obend.Hardware.Gpu.Rdna2.Dpp.verifyDppWordShuffle_sound
   by mutation Obend.Hardware.Gpu.Rdna2.Dpp.verifyDppWordShuffle := fun _ _ src _ => some src
+#guard (encodeDppWord32Checked? 256 { op := .row_mirror }).isNone
+#guard (encodeDppWord32Checked? 7 { op := .row_mirror }).isSome
+#guard verifyDppWordShuffleFromFile (encodeDppWord32 7 { op := .row_mirror }) allExec
+  (fun r => if r = 7 then Vector.replicate 64 42 else Vector.replicate 64 9) (Vector.replicate 64 0) ==
+  some (Vector.replicate 64 42)
+#tooth Obend.Hardware.Gpu.Rdna2.Dpp.verifyDppWordShuffleFromFile_sound
+  by mutation Obend.Hardware.Gpu.Rdna2.Dpp.verifyDppWordShuffleFromFile :=
+    fun w exec vgprs old => verifyDppWordShuffle w exec (vgprs 0) old
+#tooth Obend.Hardware.Gpu.Rdna2.Async.verifyNonMemKernelWords_sound
+  by mutation Obend.Hardware.Gpu.Rdna2.Async.checkNonMemSyncBlock := fun _ => true
 
 end Rdna2
 
@@ -433,6 +479,15 @@ def smudgeCfg : ThresholdDecryptConfig :=
 #tooth Obend.Crypto.renyiSmudgingBound_sound
   by mutation Obend.Crypto.checkRenyiSmudgeSecurity :=
     fun cfg seatSensitivity => decide (seatSensitivity ≤ 2 * cfg.smudgeBound + 1)
+-- Goldilocks > 64-bit exponentiation parity with Rust `Goldilocks::pow_words`.
+#guard (goldilocksPow (Goldilocks.ofNat 7) (2 ^ 64)).val == 12275445934081160404
+#tooth Obend.Crypto.BinaryTower256.nistGhashFramed_kills_leading_zero_forgery
+  by mutation Obend.Crypto.BinaryTower256.packNistGcmLenBlock := fun _ _ => 0#128
+#tooth Obend.Crypto.stepDarkBazaarEpochAuth_refuses_order_replay
+  by mutation Obend.Crypto.stepDarkBazaarEpochAuth := fun cfg st b =>
+    match stepDarkBazaarEpoch cfg st.base b with
+    | .error e => .error (.traceError e)
+    | .ok (b', out) => .ok ({ st with base := b' }, out)
 
 end Crypto
 

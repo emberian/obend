@@ -991,6 +991,16 @@ def emitYosysMemLecSmt2 (m : RtlMemModule) : String :=
 theorem emitYosysMemLecSmt2_empty (m : RtlModule) :
     emitYosysMemLecSmt2 { core := m, rams := [] } = emitYosysLecSmt2 m := by rfl
 
+/-- Non-vacuity check: at least one output, register, or synchronous RAM obligation is present,
+so the miter never degenerates to a trivial `(assert false)`. -/
+def hasMemLecObligations (m : RtlMemModule) : Bool :=
+  !m.core.outputs.isEmpty || !m.core.regs.isEmpty || !m.rams.isEmpty
+
+/-- Validated `QF_AUFBV` emitter gate: enforces `checkRtlMemModuleW` (including dense `regIdx`,
+`[A-Za-z_][A-Za-z0-9_]*` identifier validation, and width faithfulness) AND non-empty miter obligations. -/
+def emitYosysMemLecSmt2Checked? (m : RtlMemModule) : Option String :=
+  if checkRtlMemModuleW m && hasMemLecObligations m then some (emitYosysMemLecSmt2 m) else none
+
 /-- Faithfulness gate for `lecMemScript m`: all core and RAM port expressions are `smtFaithful`
 and every `SyncRamSpec` has `addrWidth ≤ 64` and `dataWidth ≤ 64`. -/
 def memModuleFaithful (m : RtlMemModule) : Bool :=
@@ -1232,6 +1242,197 @@ theorem memModuleFaithful_inhabited :
     simp only [Bool.and_eq_true] at hchk
     exact hchk.2
   exact ⟨m, hne, hmw, memModuleFaithful_of_checkMemWidths m hmw⟩
+
+private theorem checkDenseCoreRegs_idx_bounds :
+    ∀ (k : Nat) (seen : List String) (rs : List RegSpec),
+      checkDenseCoreRegs k seen rs = true →
+      (∀ r ∈ rs, k ≤ r.regIdx ∧ r.regIdx < k + rs.length) ∧ (rs.map (·.regIdx)).Nodup
+  | _, _, [], _ => ⟨(fun _ h => nomatch h), List.nodup_nil⟩
+  | k, seen, r :: rest, h => by
+    unfold checkDenseCoreRegs at h
+    simp only [Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨⟨⟨hrIdx, _⟩, _⟩, hRest⟩ := h
+    obtain ⟨hBnd, hNd⟩ := checkDenseCoreRegs_idx_bounds (k + 1) (r.name :: seen) rest hRest
+    refine ⟨fun x hx => ?_, List.nodup_cons.mpr ⟨fun hIn => ?_, hNd⟩⟩
+    · rcases List.mem_cons.mp hx with rfl | hx'
+      · simp [hrIdx]
+      · obtain ⟨hLo, hHi⟩ := hBnd x hx'
+        exact ⟨by omega, by simp only [List.length_cons]; omega⟩
+    · obtain ⟨y, hyMem, hyEq⟩ := List.mem_map.mp hIn
+      have hLo := (hBnd y hyMem).1
+      dsimp only at hyEq
+      omega
+
+private theorem checkSyncRamTable_go_nodup :
+    ∀ {nIn nTot nW : Nat} {allRegs : List RegSpec} {wires : List WireAssign}
+      (k : Nat) (seen : List String) (rams : List SyncRamSpec),
+      checkSyncRamTable.go nIn nTot nW allRegs wires k seen rams = true →
+      (∀ ram ∈ rams, k ≤ ram.ramIdx) ∧ (rams.map (·.ramIdx)).Nodup
+  | _, _, _, _, _, _, _, [], _ => ⟨(fun _ h => nomatch h), List.nodup_nil⟩
+  | nIn, nTot, nW, allRegs, wires, k, seen, ram :: rest, h => by
+    unfold checkSyncRamTable.go at h
+    simp only [Bool.and_eq_true, beq_iff_eq] at h
+    have hIdx : ram.ramIdx = k := h.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1
+    obtain ⟨hGe, hNd⟩ := checkSyncRamTable_go_nodup (k + 1) _ rest h.2
+    refine ⟨fun x hx => ?_, List.nodup_cons.mpr ⟨fun hIn => ?_, hNd⟩⟩
+    · rcases List.mem_cons.mp hx with rfl | hx'
+      · omega
+      · have := hGe x hx'; omega
+    · obtain ⟨y, hyMem, hyEq⟩ := List.mem_map.mp hIn
+      have := hGe y hyMem
+      dsimp only at hyEq
+      omega
+
+private theorem ramReadFold_preserves_below {nCore : Nat} (f : SyncRamSpec → BitVec 64) :
+    ∀ (rams : List SyncRamSpec) (acc : Nat → BitVec 64) (i : Nat), i < nCore →
+      (rams.foldl (fun regAcc ram =>
+        let v := f ram; fun j => if j == nCore + ram.ramIdx then v else regAcc j) acc) i = acc i
+  | [], acc, _, _ => rfl
+  | ram :: rest, acc, i, hi => by
+    simp only [List.foldl_cons]
+    rw [ramReadFold_preserves_below f rest _ i hi]
+    have hne : (i == nCore + ram.ramIdx) = false := by simp only [beq_eq_false_iff_ne]; omega
+    simp [hne]
+
+private theorem ramReadFold_at {nCore : Nat} (f : SyncRamSpec → BitVec 64) :
+    ∀ (rams : List SyncRamSpec), (rams.map (·.ramIdx)).Nodup →
+      ∀ (acc : Nat → BitVec 64) (ram : SyncRamSpec), ram ∈ rams →
+        (rams.foldl (fun regAcc rm =>
+          let v := f rm; fun j => if j == nCore + rm.ramIdx then v else regAcc j) acc)
+          (nCore + ram.ramIdx) = f ram
+  | [], _, _, _, hmem => nomatch hmem
+  | hd :: tl, hnd, acc, ram, hmem => by
+    obtain ⟨hnot, hnd'⟩ := List.nodup_cons.mp hnd
+    simp only [List.foldl_cons]
+    rcases List.mem_cons.mp hmem with rfl | htl
+    · suffices ∀ (l : List SyncRamSpec), (∀ rm ∈ l, rm.ramIdx ≠ ram.ramIdx) →
+          ∀ (st : Nat → BitVec 64), st (nCore + ram.ramIdx) = f ram →
+            (l.foldl (fun regAcc rm =>
+              let v := f rm; fun j => if j == nCore + rm.ramIdx then v else regAcc j) st)
+              (nCore + ram.ramIdx) = f ram by
+        exact this tl (fun rm hrm he => hnot (List.mem_map.mpr ⟨rm, hrm, he⟩)) _ (by simp)
+      intro l; induction l with
+      | nil => intro _ _ h; exact h
+      | cons x xs ih =>
+        intro hl st hst; simp only [List.foldl_cons]
+        apply ih (fun y hy => hl y (List.mem_cons_of_mem _ hy))
+        have hne : (nCore + ram.ramIdx == nCore + x.ramIdx) = false := by
+          simp only [beq_eq_false_iff_ne]; have := hl x List.mem_cons_self; omega
+        simpa [hne] using hst
+    · exact ramReadFold_at f tl hnd' _ ram htl
+
+private theorem ramArrFold_at (g : SyncRamSpec → (BitVec 64 → BitVec 64)) :
+    ∀ (rams : List SyncRamSpec), (rams.map (·.ramIdx)).Nodup →
+      ∀ (acc : Nat → BitVec 64 → BitVec 64) (ram : SyncRamSpec), ram ∈ rams →
+        (rams.foldl (fun memAcc rm =>
+          let arr' := g rm; fun k => if k == rm.ramIdx then arr' else memAcc k) acc)
+          ram.ramIdx = g ram
+  | [], _, _, _, hmem => nomatch hmem
+  | hd :: tl, hnd, acc, ram, hmem => by
+    obtain ⟨hnot, hnd'⟩ := List.nodup_cons.mp hnd
+    simp only [List.foldl_cons]
+    rcases List.mem_cons.mp hmem with rfl | htl
+    · suffices ∀ (l : List SyncRamSpec), (∀ rm ∈ l, rm.ramIdx ≠ ram.ramIdx) →
+          ∀ (st : Nat → BitVec 64 → BitVec 64), st ram.ramIdx = g ram →
+            (l.foldl (fun memAcc rm =>
+              let arr' := g rm; fun k => if k == rm.ramIdx then arr' else memAcc k) st)
+              ram.ramIdx = g ram by
+        exact this tl (fun rm hrm he => hnot (List.mem_map.mpr ⟨rm, hrm, he⟩)) _ (by simp)
+      intro l; induction l with
+      | nil => intro _ _ h; exact h
+      | cons x xs ih =>
+        intro hl st hst; simp only [List.foldl_cons]
+        apply ih (fun y hy => hl y (List.mem_cons_of_mem _ hy))
+        have hne : (ram.ramIdx == x.ramIdx) = false := by
+          simp only [beq_eq_false_iff_ne]; exact (hl x List.mem_cons_self).symm
+        simpa [hne] using hst
+    · exact ramArrFold_at g tl hnd' _ ram htl
+
+/-- State memory projection induced by Yosys's `LecMemAssign` on `m : RtlMemModule`. -/
+def lecMemState (m : RtlMemModule) (Y : LecMemAssign) : MemState where
+  regs := lecMemReg m Y
+  mems := fun k => match m.rams.find? (·.ramIdx == k) with
+    | some ram => Y.memVal ram
+    | none => fun _ => 0#64
+
+private theorem find_ramIdx_of_nodup :
+    ∀ (rams : List SyncRamSpec), (rams.map (·.ramIdx)).Nodup →
+      ∀ ram ∈ rams, rams.find? (·.ramIdx == ram.ramIdx) = some ram
+  | [], _, _, h => nomatch h
+  | hd :: tl, hnd, ram, hmem => by
+    obtain ⟨hnot, hnd'⟩ := List.nodup_cons.mp hnd
+    rcases List.mem_cons.mp hmem with rfl | htl
+    · simp
+    · have hne : (hd.ramIdx == ram.ramIdx) = false := by
+        simp only [beq_eq_false_iff_ne]; intro he; exact hnot (List.mem_map.mpr ⟨ram, htl, he.symm⟩)
+      simp [List.find?, hne, find_ramIdx_of_nodup tl hnd' ram htl]
+
+/-- **End-to-end `QF_AUFBV` LEC theorem against `stepMemModule` (`lecMemScript_unsat_of_step`)**.
+For any single-clock-domain `m : RtlMemModule` accepted by `checkRtlMemModuleW`, if Yosys's
+combinational outputs in `s` match `evalModuleOutputsW m.core` and Yosys's core registers, RAM
+readout latches, and RAM arrays in `s1` match `stepMemModule m (Y.core.bit false "rst")`, then
+`(lecMemScript m).holds Y` is refuted for every `Y` (`z3` must answer `unsat`). -/
+theorem lecMemScript_unsat_of_step (m : RtlMemModule) (hW : checkRtlMemModuleW m = true)
+    (h1 : (memModuleDomains m).length ≤ 1)
+    (hagree : ∀ Y : LecMemAssign, Y.core.h = true → Y.core.t = true →
+      let stNext := stepMemModule m (Y.core.bit false "rst") (lecMemInp m Y) (lecMemState m Y)
+      m.core.outputs.map (fun o =>
+          (o.name, ((yosysBV m.core.name o.name false o.width).eval (lecMemEnv m Y)).setWidth 64)) =
+        evalModuleOutputsW m.core (lecMemInp m Y) (lecMemReg m Y) ∧
+      (∀ r ∈ m.core.regs,
+          (yosysBV m.core.name r.name true r.width).eval (lecMemEnv m Y) =
+            (stNext.regs r.regIdx).setWidth r.width) ∧
+      (∀ ram ∈ m.rams,
+          (yosysBV m.core.name ram.rdataName true ram.dataWidth).eval (lecMemEnv m Y) =
+            (stNext.regs (m.core.regs.length + ram.ramIdx)).setWidth ram.dataWidth) ∧
+      (∀ ram ∈ m.rams, ∀ idx : BitVec ram.addrWidth,
+          BitVec.ofNat ram.dataWidth (Y.mem true ram.name idx.toNat) =
+            (stNext.mems ram.ramIdx (idx.setWidth 64)).setWidth ram.dataWidth)) :
+    ∀ Y, ¬ (lecMemScript m).holds Y := by
+  rcases Bool.and_eq_true_iff.mp hW with ⟨hW1, hMemW⟩
+  rcases Bool.and_eq_true_iff.mp hW1 with ⟨hW2, _⟩
+  rcases Bool.and_eq_true_iff.mp hW2 with ⟨hStruct, hPort⟩
+  have hDenseAndRam : (∃ ps, checkDenseCoreRegs 0 ps m.core.regs = true) ∧
+      (∃ s0, checkSyncRamTable m.core.inputNames.length (m.core.regs.length + m.rams.length)
+        m.core.wires.length (augmentedMemRegs m) m.core.wires s0 m.rams = true) := by
+    rcases Bool.and_eq_true_iff.mp hStruct with ⟨_, hMatch⟩
+    cases hId : checkDistinctIdents [] (m.core.inputNames ++ m.core.outputs.map (·.name)) with
+    | none => rw [hId] at hMatch; cases hMatch
+    | some ps =>
+      rw [hId] at hMatch
+      rcases Bool.and_eq_true_iff.mp hMatch with ⟨hM1, hRamTbl⟩
+      rcases Bool.and_eq_true_iff.mp hM1 with ⟨hM2, _⟩
+      rcases Bool.and_eq_true_iff.mp hM2 with ⟨hM3, _⟩
+      rcases Bool.and_eq_true_iff.mp hM3 with ⟨hM4, _⟩
+      rcases Bool.and_eq_true_iff.mp hM4 with ⟨hDense, _⟩
+      exact ⟨⟨ps, hDense⟩, ⟨_, hRamTbl⟩⟩
+  obtain ⟨⟨ps, hDense⟩, ⟨s0, hRamTbl⟩⟩ := hDenseAndRam
+  obtain ⟨hCoreBnd, hCoreNd⟩ := checkDenseCoreRegs_idx_bounds 0 ps m.core.regs hDense
+  obtain ⟨_, hRamNd⟩ := checkSyncRamTable_go_nodup 0 s0 m.rams hRamTbl
+  apply lecMemScript_unsat_of_agree m (memModuleFaithful_of_checkMemWidths m hMemW)
+  intro Y hh ht
+  obtain ⟨hout, hreg, hrr, hra⟩ := hagree Y hh ht
+  refine ⟨fun o ho => ?_, fun r hr => ?_, fun ram hram => ?_, fun ram hram idx => ?_⟩
+  · unfold evalModuleOutputsW at hout
+    have hwo : o.width ≤ 64 := by
+      unfold checkPortWidths at hPort; simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hPort
+      exact (hPort.2 o ho).2
+    have hEq := (List.map_inj_left.mp hout) o ho
+    simp only [Prod.mk.injEq, true_and] at hEq
+    exact (setWidth64_eq_truncToWidth hwo _ _).mp hEq
+  · have hrLt : r.regIdx < m.core.regs.length := by have := (hCoreBnd r hr).2; omega
+    have hrst : memResetPortOf m r = "rst" := by
+      unfold memResetPortOf; simp [show ¬ (memModuleDomains m).length > 1 by omega]
+    rw [hreg r hr, hrst]
+    unfold stepMemModule lecMemState; dsimp only
+    rw [ramReadFold_preserves_below _ m.rams _ r.regIdx hrLt,
+      stepModuleRegs_at m.core _ _ _ hCoreNd r hr]
+  · rw [hrr ram hram]
+    unfold stepMemModule lecMemState; dsimp only
+    rw [ramReadFold_at _ m.rams hRamNd _ ram hram, find_ramIdx_of_nodup m.rams hRamNd ram hram]
+  · rw [hra ram hram idx]
+    unfold stepMemModule lecMemState; dsimp only
+    rw [ramArrFold_at _ m.rams hRamNd _ ram hram, find_ramIdx_of_nodup m.rams hRamNd ram hram]
 
 end Obend.Hardware.YosysLec
 end

@@ -135,6 +135,23 @@ def decodeBf16 (bits : UInt16) : BinaryFloat :=
   else .finite ((if neg then -1 else 1) * (if e == 0 then (f : Int) else 128 + f))
     (if e == 0 then -133 else (e : Int) - 134)
 
+/-- Flush BF16 subnormals (`exponent == 0`, `mantissa != 0`) to signed zero per TPU hardware FTZ contract. -/
+def flushBf16Subnormal (bits : UInt16) : UInt16 :=
+  if bits.toNat / 128 % 256 == 0 then bits &&& 0x8000 else bits
+
+/-- TPU hardware-accurate BF16 decoder with subnormal flush-to-zero (FTZ). -/
+def decodeBf16Ftz (bits : UInt16) : BinaryFloat := decodeBf16 (flushBf16Subnormal bits)
+
+theorem decodeBf16Ftz_eq_decodeBf16_of_normal (bits : UInt16) (hNorm : bits.toNat / 128 % 256 ≠ 0) :
+    decodeBf16Ftz bits = decodeBf16 bits := by
+  have hFalse : (bits.toNat / 128 % 256 == 0) = false := beq_false_of_ne hNorm
+  simp [decodeBf16Ftz, flushBf16Subnormal, hFalse]
+
+/-- Hardware discrimination witness: IEEE subnormal `0x0001` (`2^-133`) flushes to `+0` under TPU FTZ. -/
+theorem decodeBf16_ne_decodeBf16Ftz_subnormal :
+    decodeBf16 0x0001 = .finite 1 (-133) ∧ decodeBf16Ftz 0x0001 = .zero false ∧
+    decodeBf16 0x0001 ≠ decodeBf16Ftz 0x0001 := by decide
+
 /-- Round an integer divided by 2^shift to nearest, ties to even. -/
 def roundShiftEven (n shift : Nat) : Nat :=
   let unit := 2^shift

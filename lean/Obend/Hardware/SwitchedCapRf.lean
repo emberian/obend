@@ -1459,5 +1459,27 @@ theorem rf_frontEnd_error_power (ω r1 r2 incident errorPower : Rat) (es : List 
   exact Rat.le_trans he (Rat.mul_le_mul_of_nonneg_right
     (tayloe_cauer_composite_alias_bound ω r1 r2 es m h1 h2 hp).1 hi)
 
+/-- Strict non-trivial harmonic alias attenuation (`1 ≤ m` gives at least `9×` power rejection `≤ incident / 9`). -/
+theorem rf_harmonic_alias_attenuation_ge_9x (ω r1 r2 incident errorPower : Rat) (es : List LadderElem) (m : Nat)
+    (hm : 1 ≤ m) (h1 : 0 < r1) (h2 : 0 < r2) (hp : ∀ e ∈ es, e.Passive) (hi : 0 ≤ incident)
+    (he : errorPower ≤ compositeAliasPower ω r1 r2 es m * incident) :
+    errorPower ≤ (1 / 9) * incident := by
+  have hBase := rf_frontEnd_error_power ω r1 r2 incident errorPower es m h1 h2 hp hi he
+  have h3Nat : 3 ≤ 2 * m + 1 := by omega
+  have h3 : (3 : Rat) ≤ ((2 * m + 1 : Nat) : Rat) := by exact_mod_cast h3Nat
+  let D : Rat := ((2 * m + 1 : Nat) : Rat) * ((2 * m + 1 : Nat) : Rat)
+  have h9 : (9 : Rat) ≤ D := by
+    have a := Rat.mul_le_mul_of_nonneg_left h3 (by decide : (0 : Rat) ≤ 3)
+    have b := Rat.mul_le_mul_of_nonneg_right h3 (by grind : (0 : Rat) ≤ ((2 * m + 1 : Nat) : Rat))
+    dsimp [D]; grind
+  have hDpos : (0 : Rat) < D := by grind
+  have hRecip : 1 / D ≤ (1 / 9 : Rat) := by
+    have hMul : 9 * (1 / D) ≤ D * (1 / D) :=
+      Rat.mul_le_mul_of_nonneg_right h9 (rat_div_nonneg (by decide) hDpos)
+    have hCan : D * (1 / D) = 1 := by
+      rw [Rat.mul_comm]; exact Rat.div_mul_cancel (Rat.ne_of_gt hDpos)
+    rw [hCan] at hMul; grind
+  exact Rat.le_trans hBase (Rat.mul_le_mul_of_nonneg_right hRecip hi)
+
 end Obend.Hardware.SwitchedCapRf
 end

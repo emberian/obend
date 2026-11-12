@@ -121,7 +121,7 @@ theorem device_wafer_and_process_envelope_spine_verified :
 /-! ## 4. End-to-End Netlist-Bound `.obend` Silicon Tapeout Pipeline Verification -/
 
 /-- Verify that the netlist-bound `.obend` tapeout pipeline (`compileObendModuleToSiliconTapeout_sound`,
-`compileCompositionToSiliconTapeout_sound`, `golden_obend_module_silicon_tapeout_verified`)
+`compileCompositionToSiliconTapeout_sound`, `reference_obend_module_silicon_tapeout_verified`)
 binds `checkPnrCertificate` 1-to-1 to `art.belNetlist` and commits emitted SystemVerilog bytes via
 real cSHAKE256 (`Obend.Core.Digest.deployed`). -/
 theorem silicon_tapeout_pipeline_spine_verified :
@@ -136,8 +136,8 @@ theorem silicon_tapeout_pipeline_spine_verified :
        art.systemVerilog = emitModuleSV art.rtlModule ∧
        art.svDigest = Obend.Digest.HashBytes.ofBE (Obend.Core.Digest.deployed art.systemVerilog.toUTF8.toList) ∧
        checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust = true) ∧
-    FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag goldenTapeoutIsarCert = true := by
-  refine ⟨fun cfg src art hOk => ?_, golden_obend_module_silicon_tapeout_verified.1⟩
+    FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag referenceTapeoutIsarCert = true := by
+  refine ⟨fun cfg src art hOk => ?_, reference_obend_module_silicon_tapeout_verified.1⟩
   have hSound := compileObendModuleToSiliconTapeout_sound cfg src art hOk
   exact ⟨hSound.2.2.1,
          hSound.2.2.2.1,

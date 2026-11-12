@@ -185,6 +185,36 @@ def routeEdgeListFrom (startTrack : Nat) : List (Nat × Nat × Nat × Nat) → L
   | [] => []
   | (sx, sy, dx, dy) :: rest =>
     routeManhattanEdge startTrack sx sy dx dy :: routeEdgeListFrom (startTrack + 1) rest
+/-- Finite physical switch-box track demand (`max track + 1`) across all nets and PIP hops. -/
+def maxRoutedTrackPlusOne (nets : List RoutedNet) : Nat :=
+  nets.foldl (fun acc r =>
+    let hopMax := r.hops.foldl (fun m h => max m (max (h.srcWire / 67108864 + 1) (h.dstWire / 67108864 + 1))) 0
+    max acc (max (r.netId + 1) (max (r.srcWire / 67108864 + 1) (max (r.dstWire / 67108864 + 1) hopMax)))) 0
+/-- Verify finite switch-box channel capacity `channelCap`: positive track budget and every net/hop track `< channelCap`. -/
+def checkSwitchChannelCapacity (channelCap : Nat) (nets : List RoutedNet) : Bool :=
+  decide (0 < channelCap) && nets.all fun r =>
+    decide (r.netId < channelCap) && decide (r.srcWire / 67108864 < channelCap) &&
+    decide (r.dstWire / 67108864 < channelCap) &&
+    r.hops.all fun h => decide (h.srcWire / 67108864 < channelCap) && decide (h.dstWire / 67108864 < channelCap)
+/-- Checked finite-capacity switch-box router refusing when `startTrack + edges.length > channelCap` or `channelCap = 0`. -/
+def routeEdgeListChecked? (channelCap startTrack : Nat) (edges : List (Nat × Nat × Nat × Nat)) :
+    Except (Nat × Nat) (List RoutedNet) :=
+  if channelCap == 0 || channelCap < startTrack + edges.length then .error (startTrack + edges.length, channelCap)
+  else .ok (routeEdgeListFrom startTrack edges)
+theorem checkSwitchChannelCapacity_sound (channelCap : Nat) (nets : List RoutedNet)
+    (hOk : checkSwitchChannelCapacity channelCap nets = true) :
+    0 < channelCap ∧ ∀ r ∈ nets, r.netId < channelCap ∧
+      (∀ u ∈ netWires r, u / 67108864 < channelCap) ∧
+      (∀ h ∈ r.hops, h.srcWire / 67108864 < channelCap ∧ h.dstWire / 67108864 < channelCap) := by
+  simp only [checkSwitchChannelCapacity, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hOk
+  refine ⟨hOk.1, fun r hr => ?_⟩
+  obtain ⟨⟨⟨hId, hSrc⟩, hDst⟩, hHops⟩ := hOk.2 r hr
+  refine ⟨hId, fun u hu => ?_, hHops⟩
+  simp only [netWires, List.mem_cons] at hu
+  rcases hu with rfl | huTail
+  · exact hSrc
+  · obtain ⟨h, hhMem, rfl⟩ := List.mem_map.mp huTail
+    exact (hHops h hhMem).2
 def buildGridPlacedCells (idx : Nat) : List BelCell → List PlacedCell
   | [] => []
   | c :: rest =>
@@ -664,27 +694,20 @@ structure TapeoutConfig where
   cornerEnvelope    : ProcessCornerEnvelope := envelope7nm
   timingPath        : TimingPath :=
     { name := "obend_pipelined_stage_path", logicLevels := 3, minLevels := 3, carryBits := 4, tileHops := 1 }
+  channelCap        : Nat := 128
   datedRoot         : Nat := 20261102
   deriving DecidableEq, Repr
 /-- Structured refusal diagnostic naming the exact stage of the tapeout pipeline that refused. -/
 inductive TapeoutError where
-  | frontEndParseRefused (stage message : String)
-  | isarContractRefused (stage message : String)
-  | frontEndLowerRefused (stage message : String)
-  | frontEndAcceptRefused (stage message : String)
-  | noCompositionFound (moduleName : String)
-  | rtlCompileRefused (moduleName : String)
-  | rtlModuleCheckRefused (moduleName : String)
-  | belSynthesisInvalid (moduleName : String)
-  | retimingSolverRefused (graphName : String)
-  | retimingCertRefused (graphName : String)
-  | pnrCertRefused (designName : String)
-  | artifactBoundSignoffRefused (moduleName : String)
-  | steinerTimingRefused (moduleName : String)
-  | cutlineDrcRefused (deckName : String)
-  | boxSpacing2DRefused (deckName : String)
-  | viaEnclosure2DRefused (deckName : String)
-  | envelopeTimingRefused (moduleName : String)
+  | frontEndParseRefused (stage message : String) | isarContractRefused (stage message : String)
+  | frontEndLowerRefused (stage message : String) | frontEndAcceptRefused (stage message : String)
+  | noCompositionFound (moduleName : String) | rtlCompileRefused (moduleName : String)
+  | rtlModuleCheckRefused (moduleName : String) | belSynthesisInvalid (moduleName : String)
+  | retimingSolverRefused (graphName : String) | retimingCertRefused (graphName : String)
+  | pnrCertRefused (designName : String) | switchChannelCongestion (requiredTracks channelCap : Nat)
+  | artifactBoundSignoffRefused (moduleName : String) | steinerTimingRefused (moduleName : String)
+  | cutlineDrcRefused (deckName : String) | boxSpacing2DRefused (deckName : String)
+  | viaEnclosure2DRefused (deckName : String) | envelopeTimingRefused (moduleName : String)
   | receiptCeilingRefused (reason : String)
   deriving DecidableEq, Repr
 /-- Render a `TapeoutError` as a human-readable diagnostic string. -/
@@ -700,6 +723,7 @@ def TapeoutError.toString : TapeoutError → String
   | .retimingSolverRefused g      => s!"[Stage 5: Retiming.solveVerifiedRetiming?] no feasible lag assignment for {g}"
   | .retimingCertRefused g        => s!"[Stage 5: Retiming.checkRetimingCert] retiming certificate failed STA at SS corner for {g}"
   | .pnrCertRefused d             => s!"[Stage 6: PlaceRoute.checkPnrCertificate] Netlist-bound PnR certificate refused for {d}"
+  | .switchChannelCongestion req cap => s!"[Stage 6: checkSwitchChannelCapacity] switch-box channel congestion ({req} > {cap})"
   | .artifactBoundSignoffRefused m => s!"[Stage 6: checkArtifactBoundTapeout] netlist-derived timing/DRC signoff failed for {m}"
   | .steinerTimingRefused m       => s!"[Stage 6: PlaceRoute.checkSteinerTimingClosure] buffered Steiner tree failed Elmore timing for {m}"
   | .cutlineDrcRefused d          => s!"[Stage 7: DRC.checkCutlineDRC] 1D cutline DRC violation on deck {d}"
@@ -794,34 +818,32 @@ def mkTapeoutReceipt (H : Obend.Digest.HashBytes.Hash) (cfg : TapeoutConfig) (sr
   dated      := cfg.datedRoot
   proofs     := []
   prev       := "cshake256:genesis"
-/-- Equal SystemVerilog digests under any hash `H` mean equal byte streams or a collision of `H`. -/
-theorem tapeout_sv_digest_binds_or_collides
-    (H : Obend.Digest.HashBytes.Hash)
-    (svBytes1 svBytes2 : List UInt8)
+/-- Equal SystemVerilog digests under any hash `H` mean equal byte streams or a collision on `{svBytes1, svBytes2}`. -/
+theorem tapeout_sv_digest_binds_or_collides (H : Obend.Digest.HashBytes.Hash) (svBytes1 svBytes2 : List UInt8)
     (hEq : Obend.Digest.HashBytes.ofBE (H svBytes1) = Obend.Digest.HashBytes.ofBE (H svBytes2)) :
-    svBytes1 = svBytes2 ∨ Obend.Digest.HashBytes.Collision H := by
+    svBytes1 = svBytes2 ∨ Obend.Digest.HashBytes.CollisionAmong H (fun x => x = svBytes1 ∨ x = svBytes2) := by
   by_cases hSame : svBytes1 = svBytes2
   · exact Or.inl hSame
-  · exact Or.inr ⟨svBytes1, svBytes2, hSame, hEq⟩
+  · exact Or.inr ⟨svBytes1, svBytes2, Or.inl rfl, Or.inr rfl, hSame, hEq⟩
 /-- Complete verified silicon compilation & physical signoff artifact. -/
 structure SiliconTapeoutArtifact where
-  moduleName          : String
-  comp                : Composition
-  isarCerts           : List Elaborate.ElaboratedIsarCert
-  rawBook             : Book
-  specializedBook     : Book
-  rtlModule           : RtlModule
-  belNetlist          : BelNetlist
-  retimingCert        : RetimingCert
-  retimedGraph        : SyncGraph
-  pnrCert             : PnrCertificate
+  moduleName : String
+  comp : Composition
+  isarCerts : List Elaborate.ElaboratedIsarCert
+  rawBook : Book
+  specializedBook : Book
+  rtlModule : RtlModule
+  belNetlist : BelNetlist
+  retimingCert : RetimingCert
+  retimedGraph : SyncGraph
+  pnrCert : PnrCertificate
   bufferedSteinerTree : SteinerTree
-  tcadEnvelope        : ProcessCornerEnvelope
-  systemVerilog       : String
-  svDigest            : Nat
-  receipt             : Obend.Receipt.Receipt String String String String
-  clockPeriodPs       : Nat
-  physical            : ArtifactPhysicalChecks
+  tcadEnvelope : ProcessCornerEnvelope
+  systemVerilog : String
+  svDigest : Nat
+  receipt : Obend.Receipt.Receipt String String String String
+  clockPeriodPs : Nat
+  physical : ArtifactPhysicalChecks
 
 /-! ## 4. Stages 2–8 Kernel-Reducible Compiler (`compileCompositionToSiliconTapeout`) & Soundness -/
 def compileCompositionToSiliconTapeoutWithHash (H : Obend.Digest.HashBytes.Hash) (srcBytes : List UInt8)
@@ -835,18 +857,15 @@ def compileCompositionToSiliconTapeoutWithHash (H : Obend.Digest.HashBytes.Hash)
     match compileBookByMode cfg.compileMode cfg.moduleName specializedBook with
     | none => .error (.rtlCompileRefused cfg.moduleName)
     | some rtlModule =>
-      if !(checkRtlModule rtlModule) then
-        .error (.rtlModuleCheckRefused cfg.moduleName)
+      if !(checkRtlModule rtlModule) then .error (.rtlModuleCheckRefused cfg.moduleName)
       else
         let belNetlist := synthesizeModuleToBels rtlModule
-        if !(checkBelNetlistValid belNetlist) then
-          .error (.belSynthesisInvalid cfg.moduleName)
+        if !(checkBelNetlistValid belNetlist) then .error (.belSynthesisInvalid cfg.moduleName)
         else
           match solveVerifiedRetiming? cfg.retimingFuel cfg.syncGraph cfg.maxCombDelayPs with
           | none => .error (.retimingSolverRefused cfg.syncGraph.name)
           | some retimingCert =>
-            if !(checkCutlineDRC cfg.drcDeck cfg.cutlineFeature) then
-              .error (.cutlineDrcRefused cfg.drcDeck.deckName)
+            if !(checkCutlineDRC cfg.drcDeck cfg.cutlineFeature) then .error (.cutlineDrcRefused cfg.drcDeck.deckName)
             else if !(checkBoxSpacing2D cfg.drcDeck.minMetalSpacingNm cfg.metalBoxA cfg.metalBoxB) then
               .error (.boxSpacing2DRefused cfg.drcDeck.deckName)
             else if !(checkViaEnclosure2D cfg.drcDeck.minViaEnclosureNm cfg.viaBox cfg.viaPadBox) then
@@ -861,6 +880,8 @@ def compileCompositionToSiliconTapeoutWithHash (H : Obend.Digest.HashBytes.Hash)
                 let pnrCert := cfg.pnrCert?.getD (synthesizeGridPnrCert belNetlist cfg.sinkCapFf)
                 if !(checkPnrCertificate belNetlist tcadEnvelope.slowCorner cfg.clockPeriodPs pnrCert) then
                   .error (.pnrCertRefused pnrCert.designName)
+                else if !(checkSwitchChannelCapacity cfg.channelCap pnrCert.routedNets) then
+                  .error (.switchChannelCongestion (maxRoutedTrackPlusOne pnrCert.routedNets) cfg.channelCap)
                 else if !(checkArtifactBoundTapeout tcadEnvelope cfg.clockPeriodPs cfg.drcDeck belNetlist pnrCert) then
                   .error (.artifactBoundSignoffRefused cfg.moduleName)
                 else
@@ -890,43 +911,36 @@ def compileCompositionToSiliconTapeout (cfg : TapeoutConfig) (comp : Composition
   compileCompositionToSiliconTapeoutWithHash Obend.Core.Digest.deployed cfg.moduleName.toUTF8.toList cfg comp isarCerts
 /-- **What an accepted tapeout establishes** of its artifact: verified Isar contracts and judge tags; the Book,
 RTL (`checkRtlModule`) and BEL netlist (`synthesizeModuleToBels`, valid, exact flip-flop count); the retiming
-certificate; the netlist-bound PnR certificate (injective placement, short-free routing); DRC and `[FF, TT, SS]`
-envelope timing; the SystemVerilog byte commitment and receipt; and, last, artifact-bound physical signoff. -/
+certificate; the netlist-bound PnR certificate (injective placement, short-free routing, finite switch-box channel
+capacity); DRC and `[FF, TT, SS]` envelope timing; the SystemVerilog byte commitment and receipt; and artifact-bound signoff. -/
 @[expose] def TapeoutSound (H : Obend.Digest.HashBytes.Hash) (cfg : TapeoutConfig) (comp : Composition)
     (isarCerts : List Elaborate.ElaboratedIsarCert) (art : SiliconTapeoutArtifact) : Prop :=
-    art.comp = comp ∧
-    art.isarCerts = isarCerts ∧
-    (∀ cert ∈ art.isarCerts,
-      cert.scriptValid = true ∧ ∀ tag ∈ cert.judgeTags, isAdmittedTapeoutJudgeTag tag = true) ∧
-    art.rawBook = Obend.Leaf.emit art.comp ∧
-    art.specializedBook.slots = art.rawBook.slots ∧
+    art.comp = comp ∧ art.isarCerts = isarCerts ∧
+    (∀ cert ∈ art.isarCerts, cert.scriptValid = true ∧ ∀ tag ∈ cert.judgeTags, isAdmittedTapeoutJudgeTag tag = true) ∧
+    art.rawBook = Obend.Leaf.emit art.comp ∧ art.specializedBook.slots = art.rawBook.slots ∧
     compileBookByMode cfg.compileMode cfg.moduleName art.specializedBook = some art.rtlModule ∧
-    checkRtlModule art.rtlModule = true ∧
-    art.belNetlist = synthesizeModuleToBels art.rtlModule ∧
-    checkBelNetlistValid art.belNetlist = true ∧
-    countFfBels art.belNetlist = art.rtlModule.regs.length ∧
+    checkRtlModule art.rtlModule = true ∧ art.belNetlist = synthesizeModuleToBels art.rtlModule ∧
+    checkBelNetlistValid art.belNetlist = true ∧ countFfBels art.belNetlist = art.rtlModule.regs.length ∧
     checkRetimingCert cfg.syncGraph art.retimingCert art.tcadEnvelope.slowCorner cfg.clockPeriodPs = true ∧
     (∀ e ∈ cfg.syncGraph.edges, 0 ≤ retimedEdgeWeight (lookupLag art.retimingCert) e) ∧
     checkPnrCertificate art.belNetlist art.tcadEnvelope.slowCorner cfg.clockPeriodPs art.pnrCert = true ∧
     art.pnrCert.placedCells.length = art.belNetlist.cells.length ∧
-    checkPlacementInjective art.pnrCert.placedCells = true ∧
-    checkRoutingDisjoint art.pnrCert.routedNets = true ∧
+    checkPlacementInjective art.pnrCert.placedCells = true ∧ checkRoutingDisjoint art.pnrCert.routedNets = true ∧
     checkSteinerTimingClosure art.tcadEnvelope.slowCorner cfg.clockPeriodPs art.bufferedSteinerTree = true ∧
     cfg.drcDeck.minMetalWidthNm + cfg.drcDeck.minMetalSpacingNm ≤
       cfg.cutlineFeature.metalWidthNm + cfg.cutlineFeature.metalSpacingNm ∧
     (∀ x y, ¬ (cfg.metalBoxA.containsPoint x y ∧ cfg.metalBoxB.containsPoint x y)) ∧
     (∀ x y, cfg.viaBox.containsPoint x y → cfg.viaPadBox.containsPoint x y) ∧
     checkEnvelopeTimingSignoff art.tcadEnvelope cfg.clockPeriodPs cfg.timingPath = true ∧
-    (art.tcadEnvelope.Valid →
-      ∀ c : ProcessCorner,
-        CornerBetween art.tcadEnvelope.fastCorner c art.tcadEnvelope.slowCorner →
-        checkTimingSignoff c cfg.clockPeriodPs cfg.timingPath = true) ∧
+    (art.tcadEnvelope.Valid → ∀ c : ProcessCorner,
+      CornerBetween art.tcadEnvelope.fastCorner c art.tcadEnvelope.slowCorner →
+      checkTimingSignoff c cfg.clockPeriodPs cfg.timingPath = true) ∧
     art.systemVerilog = emitModuleSV art.rtlModule ∧
     art.svDigest = Obend.Digest.HashBytes.ofBE (H art.systemVerilog.toUTF8.toList) ∧
-    art.receipt.post = "cshake256:" ++ rtlNatToStr art.svDigest ∧
-    art.receipt.verdict = .ok ∧
+    art.receipt.post = "cshake256:" ++ rtlNatToStr art.svDigest ∧ art.receipt.verdict = .ok ∧
     checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust = true ∧
-    checkArtifactBoundTapeout art.tcadEnvelope cfg.clockPeriodPs cfg.drcDeck art.belNetlist art.pnrCert = true
+    checkArtifactBoundTapeout art.tcadEnvelope cfg.clockPeriodPs cfg.drcDeck art.belNetlist art.pnrCert = true ∧
+    checkSwitchChannelCapacity cfg.channelCap art.pnrCert.routedNets = true
 theorem compileCompositionToSiliconTapeoutWithHash_sound
     (H : Obend.Digest.HashBytes.Hash) (srcBytes : List UInt8) (cfg : TapeoutConfig) (comp : Composition)
     (isarCerts : List Elaborate.ElaboratedIsarCert) (art : SiliconTapeoutArtifact)
@@ -941,8 +955,7 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
     cases hCompRtl : compileBookByMode cfg.compileMode cfg.moduleName (specializeBookDict cfg.dictInlinePasses (Obend.Leaf.emit comp)) with
     | none => rw [hCompRtl] at hOk; cases hOk
     | some rtlModule =>
-      rw [hCompRtl] at hOk
-      dsimp only at hOk
+      rw [hCompRtl] at hOk; dsimp only at hOk
       cases hRtlB : checkRtlModule rtlModule with
       | false => rw [hRtlB] at hOk; cases hOk
       | true =>
@@ -954,8 +967,7 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
           cases hSolve : solveVerifiedRetiming? cfg.retimingFuel cfg.syncGraph cfg.maxCombDelayPs with
           | none => rw [hSolve] at hOk; cases hOk
           | some retimingCert =>
-            rw [hSolve] at hOk
-            dsimp only at hOk
+            rw [hSolve] at hOk; dsimp only at hOk
             cases hCutB : checkCutlineDRC cfg.drcDeck cfg.cutlineFeature with
             | false => rw [hCutB] at hOk; cases hOk
             | true =>
@@ -983,6 +995,9 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
                       | false => rw [hPnrB] at hOk; cases hOk
                       | true =>
                         rw [hPnrB] at hOk
+                        cases hCapB : checkSwitchChannelCapacity cfg.channelCap pnrC.routedNets
+                        · rw [hCapB] at hOk; cases hOk
+                        rw [hCapB] at hOk
                         cases hArtB : checkArtifactBoundTapeout tcadEnv cfg.clockPeriodPs cfg.drcDeck belNl pnrC
                         · rw [hArtB] at hOk; cases hOk
                         rw [hArtB] at hOk
@@ -997,12 +1012,10 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
                           | false => rw [hCeil] at hOk; cases hOk
                           | true =>
                             rw [hCeil] at hOk
-                            injection hOk with hArtEq
-                            subst hArtEq
+                            injection hOk with hArtEq; subst hArtEq
                             have hIsarSound : ∀ cert ∈ isarCerts,
                                 cert.scriptValid = true ∧ ∀ tag ∈ cert.judgeTags, isAdmittedTapeoutJudgeTag tag = true := by
-                              intro cert hMem
-                              simp only [List.all_eq_true] at hIsarB
+                              intro cert hMem; simp only [List.all_eq_true] at hIsarB
                               exact FrontEnd.verifyCertJudgeTags_sound isAdmittedTapeoutJudgeTag cert (hIsarB cert hMem)
                             have hSlots := (specializeBookDict_preserves_slots cfg.dictInlinePasses (Obend.Leaf.emit comp)).1
                             have hFfCount := (synthesizeModuleToBels_valid_and_ff_count rtlModule).2
@@ -1011,8 +1024,7 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
                             have hPnrParts : checkPlacementInjective pnrC.placedCells = true ∧
                                 checkRoutingDisjoint pnrC.routedNets = true := by
                               simp only [checkPnrCertificate, Bool.and_eq_true] at hPnrB
-                              rcases hPnrB with ⟨⟨⟨⟨⟨⟨_, _⟩, hInj⟩, _⟩, hDisj⟩, _⟩, _⟩
-                              exact ⟨hInj, hDisj⟩
+                              rcases hPnrB with ⟨⟨⟨⟨⟨⟨_, _⟩, hInj⟩, _⟩, hDisj⟩, _⟩, _⟩; exact ⟨hInj, hDisj⟩
                             have hPitch := drc_clean_implies_min_pitch cfg.drcDeck cfg.cutlineFeature hCutB
                             have hIntermSafe : tcadEnv.Valid → ∀ c : ProcessCorner,
                                 CornerBetween tcadEnv.fastCorner c tcadEnv.slowCorner →
@@ -1025,7 +1037,7 @@ theorem compileCompositionToSiliconTapeoutWithHash_sound
                                    hPitch,
                                    fun x y => boxSpacing2D_disjoint cfg.drcDeck.minMetalSpacingNm cfg.metalBoxA cfg.metalBoxB x y hBoxB,
                                    fun x y hIn => (viaEnclosure2D_contained cfg.drcDeck.minViaEnclosureNm cfg.viaBox cfg.viaPadBox x y hViaB hIn).1,
-                                   hEnvB, hIntermSafe, rfl, rfl, rfl, rfl, hCeil, hArtB⟩
+                                   hEnvB, hIntermSafe, rfl, rfl, rfl, rfl, hCeil, hArtB, hCapB⟩
 theorem compileCompositionToSiliconTapeout_sound
     (cfg : TapeoutConfig) (comp : Composition) (isarCerts : List Elaborate.ElaboratedIsarCert)
     (art : SiliconTapeoutArtifact) (hOk : compileCompositionToSiliconTapeout cfg comp isarCerts = .ok art) :
@@ -1276,19 +1288,17 @@ theorem compileObendModuleToSiliconTapeout_artifact_bound (cfg : TapeoutConfig) 
     (art : SiliconTapeoutArtifact) (hOk : compileObendModuleToSiliconTapeout cfg src = .ok art) :
     checkArtifactBoundTapeout art.tcadEnvelope cfg.clockPeriodPs cfg.drcDeck art.belNetlist art.pnrCert = true :=
   (compileCompositionToSiliconTapeoutWithHash_sound _ _ cfg _ _ art
-    (compileObendModuleToSiliconTapeout_sound cfg src art hOk).2.1).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+    (compileObendModuleToSiliconTapeout_sound cfg src art hOk).2.1).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
 theorem compileObendModuleToSiliconTapeout_eq_bind (cfg : TapeoutConfig) (src : String) :
     compileObendModuleToSiliconTapeout cfg src =
       (compileObendFrontEndStage cfg src >>= fun (comp, isarCerts) =>
         compileCompositionToSiliconTapeoutWithHash
-          Obend.Core.Digest.deployed src.toUTF8.toList cfg comp isarCerts) := by
-  rfl
+          Obend.Core.Digest.deployed src.toUTF8.toList cfg comp isarCerts) := by rfl
 theorem compileCompositionToSiliconTapeoutWithHash_isOk_eq (H₁ H₂ : Obend.Digest.HashBytes.Hash) (b₁ b₂ : List UInt8)
     (cfg : TapeoutConfig) (comp : Composition) (isarCerts : List Elaborate.ElaboratedIsarCert) :
     (compileCompositionToSiliconTapeoutWithHash H₁ b₁ cfg comp isarCerts).isOk =
       (compileCompositionToSiliconTapeoutWithHash H₂ b₂ cfg comp isarCerts).isOk := by
-  unfold compileCompositionToSiliconTapeoutWithHash mkTapeoutReceipt
-  dsimp only
+  unfold compileCompositionToSiliconTapeoutWithHash mkTapeoutReceipt; dsimp only
   cases h1 : isarCerts.all (FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag) with
   | false => rfl
   | true =>
@@ -1325,6 +1335,9 @@ theorem compileCompositionToSiliconTapeoutWithHash_isOk_eq (H₁ H₂ : Obend.Di
                         cfg.clockPeriodPs (cfg.pnrCert?.getD (synthesizeGridPnrCert (synthesizeModuleToBels rtlModule) cfg.sinkCapFf)) with
                       | false => rfl
                       | true =>
+                        cases h11a : checkSwitchChannelCapacity cfg.channelCap
+                          (cfg.pnrCert?.getD (synthesizeGridPnrCert (synthesizeModuleToBels rtlModule) cfg.sinkCapFf)).routedNets
+                        · rfl
                         cases h11b : checkArtifactBoundTapeout cfg.cornerEnvelope cfg.clockPeriodPs cfg.drcDeck
                           (synthesizeModuleToBels rtlModule)
                           (cfg.pnrCert?.getD (synthesizeGridPnrCert (synthesizeModuleToBels rtlModule) cfg.sinkCapFf))
@@ -1364,62 +1377,36 @@ def renderTapeoutReceiptJson (art : SiliconTapeoutArtifact) : String :=
         , ("wireHops", toJson art.physical.criticalPath.tileHops)
         , ("minLevels", toJson art.physical.criticalPath.minLevels) ]) ]).pretty
 
-/-! ## 6. Concrete End-to-End `.obend` Module Tapeout Theorem (`golden_obend_module_silicon_tapeout_verified`) -/
-def goldenTapeoutObendSource : String :=
-  "edition ObjectiveBend 1\n" ++
-  "record CleanroomTcadStack:\n" ++
-  "  oxideEotPicometers() -> Nat\n" ++
-  "  vthMilliV() -> Nat\n" ++
-  "  drainCurrentUa(overdriveMilliV: Nat) -> Nat\n" ++
-  "  gateDelayPs(fanout: Nat) -> Nat\n" ++
-  "  calibratedDelayPs(fanout: Nat) -> Nat\n\n" ++
-  "contract tapeout_signoff_contract for CleanroomTcadStack:\n" ++
-  "  invariant: true\n" ++
-  "  have h_rtl: true by judge(\"hw-rtl-synth@1\")\n" ++
-  "  have h_retime: true by judge(\"hw-retime-sta@1\")\n" ++
+/-! ## 6. Concrete End-to-End `.obend` Module Tapeout Theorem (`reference_obend_module_silicon_tapeout_verified`) -/
+def referenceTapeoutObendSource : String :=
+  "edition ObjectiveBend 1\nrecord CleanroomTcadStack:\n  oxideEotPicometers() -> Nat\n  vthMilliV() -> Nat\n" ++
+  "  drainCurrentUa(overdriveMilliV: Nat) -> Nat\n  gateDelayPs(fanout: Nat) -> Nat\n  calibratedDelayPs(fanout: Nat) -> Nat\n\n" ++
+  "contract tapeout_signoff_contract for CleanroomTcadStack:\n  invariant: true\n" ++
+  "  have h_rtl: true by judge(\"hw-rtl-synth@1\")\n  have h_retime: true by judge(\"hw-retime-sta@1\")\n" ++
   "  show true by judge(\"hw-pnr-bitstream@1\")\n\n" ++
-  "spec PlanarBulkMosfetBase for CleanroomTcadStack:\n" ++
-  "  requires oxideEotPicometers() -> Nat\n" ++
-  "  requires vthMilliV() -> Nat\n" ++
-  "  requires gateDelayPs(fanout: Nat) -> Nat\n" ++
-  "  def oxideEotPicometers() -> Nat:\n" ++
-  "    1200n\n" ++
-  "  def vthMilliV() -> Nat:\n" ++
-  "    400n\n" ++
-  "  def drainCurrentUa(overdriveMilliV: Nat) -> Nat:\n" ++
-  "    overdriveMilliV * 5n + self.vthMilliV\n" ++
-  "  def gateDelayPs(fanout: Nat) -> Nat:\n" ++
-  "    fanout * 8n + 20n\n" ++
-  "  def calibratedDelayPs(fanout: Nat) -> Nat:\n" ++
-  "    self.gateDelayPs(fanout + 2n)\n\n" ++
-  "spec HighKMetalGateFinFetUpgrade for CleanroomTcadStack:\n" ++
-  "  requires gateDelayPs(fanout: Nat) -> Nat\n" ++
-  "  def oxideEotPicometers() -> Nat:\n" ++
-  "    700n\n" ++
-  "  def vthMilliV() -> Nat:\n" ++
-  "    250n\n" ++
-  "  def gateDelayPs(fanout: Nat) -> Nat:\n" ++
-  "    super.gateDelayPs(fanout) + 4n\n\n" ++
+  "spec PlanarBulkMosfetBase for CleanroomTcadStack:\n  requires oxideEotPicometers() -> Nat\n" ++
+  "  requires vthMilliV() -> Nat\n  requires gateDelayPs(fanout: Nat) -> Nat\n" ++
+  "  def oxideEotPicometers() -> Nat:\n    1200n\n  def vthMilliV() -> Nat:\n    400n\n" ++
+  "  def drainCurrentUa(overdriveMilliV: Nat) -> Nat:\n    overdriveMilliV * 5n + self.vthMilliV\n" ++
+  "  def gateDelayPs(fanout: Nat) -> Nat:\n    fanout * 8n + 20n\n" ++
+  "  def calibratedDelayPs(fanout: Nat) -> Nat:\n    self.gateDelayPs(fanout + 2n)\n\n" ++
+  "spec HighKMetalGateFinFetUpgrade for CleanroomTcadStack:\n  requires gateDelayPs(fanout: Nat) -> Nat\n" ++
+  "  def oxideEotPicometers() -> Nat:\n    700n\n  def vthMilliV() -> Nat:\n    250n\n" ++
+  "  def gateDelayPs(fanout: Nat) -> Nat:\n    super.gateDelayPs(fanout) + 4n\n\n" ++
   "def seedTcadStack() -> CleanroomTcadStack:\n" ++
   "  {oxideEotPicometers: 0n, vthMilliV: 0n, drainCurrentUa: fn(v: Nat) -> Nat: 0n, gateDelayPs: fn(f: Nat) -> Nat: 0n, calibratedDelayPs: fn(f: Nat) -> Nat: 0n}\n\n" ++
-  "def cleanroomTcadStack() -> CleanroomTcadStack:\n" ++
-  "  fix(compose(PlanarBulkMosfetBase, HighKMetalGateFinFetUpgrade), seedTcadStack())\n"
-def goldenTapeoutConfig : TapeoutConfig where
-  moduleName := "CleanroomTcadStack"
-  entryDef   := "cleanroomTcadStack"
+  "def cleanroomTcadStack() -> CleanroomTcadStack:\n  fix(compose(PlanarBulkMosfetBase, HighKMetalGateFinFetUpgrade), seedTcadStack())\n"
+def referenceTapeoutConfig : TapeoutConfig := { moduleName := "CleanroomTcadStack", entryDef := "cleanroomTcadStack" }
 def cleanroomSignoffContractDecl : Syntax.ContractDecl where
   name := "tapeout_signoff_contract"
   targetType := "CleanroomTcadStack"
   invariant := some (.bool true)
   steps :=
-    [ .haveStep "h_rtl"    (.bool true) (.judge "hw-rtl-synth@1"), .haveStep "h_retime" (.bool true) (.judge "hw-retime-sta@1")
-    , .showStep            (.bool true) (.judge "hw-pnr-bitstream@1") ]
-def cleanroomSignoffSyntaxMod : Syntax.Module where
-  name := "CleanroomTcadStack"
-  imports := []
-  decls := []
-  contracts := [cleanroomSignoffContractDecl]
-def goldenTapeoutIsarCert : Elaborate.ElaboratedIsarCert :=
+    [ .haveStep "h_rtl" (.bool true) (.judge "hw-rtl-synth@1"), .haveStep "h_retime" (.bool true) (.judge "hw-retime-sta@1")
+    , .showStep (.bool true) (.judge "hw-pnr-bitstream@1") ]
+def cleanroomSignoffSyntaxMod : Syntax.Module :=
+  { name := "CleanroomTcadStack", imports := [], decls := [], contracts := [cleanroomSignoffContractDecl] }
+def referenceTapeoutIsarCert : Elaborate.ElaboratedIsarCert :=
   Elaborate.elaborateContractIsarCert cleanroomSignoffSyntaxMod cleanroomSignoffContractDecl
 def planarBulkMosfetLayer : Layer where
   name := "PlanarBulkMosfetBase"
@@ -1437,47 +1424,56 @@ def highKFinFetUpgradeLayer : Layer where
     [ ("oxideEotPicometers", .nat 700), ("vthMilliV", .nat 250)
     , ("gateDelayPs", .lam (.binary .add (.app (.get (.bound 1) "gateDelayPs") (.bound 0)) (.nat 4))) ]
   flat := false
-def goldenCleanroomTcadComp : Composition where
+def referenceCleanroomTcadComp : Composition where
   top := highKFinFetUpgradeLayer
   below := [planarBulkMosfetLayer]
   seed :=
     [ ("oxideEotPicometers", .nat 0), ("vthMilliV", .nat 0), ("drainCurrentUa", .lam (.nat 0)), ("gateDelayPs", .lam (.nat 0))
     , ("calibratedDelayPs", .lam (.nat 0)) ]
-theorem golden_obend_module_silicon_tapeout_verified :
-    FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag goldenTapeoutIsarCert = true ∧
-    goldenTapeoutIsarCert.judgeTags = ["hw-rtl-synth@1", "hw-retime-sta@1", "hw-pnr-bitstream@1"] ∧
+theorem reference_obend_module_silicon_tapeout_verified :
+    FrontEnd.verifyCertJudgeTags isAdmittedTapeoutJudgeTag referenceTapeoutIsarCert = true ∧
+    referenceTapeoutIsarCert.judgeTags = ["hw-rtl-synth@1", "hw-retime-sta@1", "hw-pnr-bitstream@1"] ∧
     (∀ (H : Obend.Digest.HashBytes.Hash) (srcBytes : List UInt8),
       (compileCompositionToSiliconTapeoutWithHash
-        H srcBytes goldenTapeoutConfig goldenCleanroomTcadComp [goldenTapeoutIsarCert]).isOk = true) ∧
-    (match compileCompositionToSiliconTapeout goldenTapeoutConfig goldenCleanroomTcadComp [goldenTapeoutIsarCert] with
+        H srcBytes referenceTapeoutConfig referenceCleanroomTcadComp [referenceTapeoutIsarCert]).isOk = true) ∧
+    (match compileCompositionToSiliconTapeout referenceTapeoutConfig referenceCleanroomTcadComp [referenceTapeoutIsarCert] with
      | .ok art =>
        let regs0 : Nat → BitVec 64 := fun _ => 0#64
        let regs1At4 := stepModuleRegs art.rtlModule false (fun _ => 4#64) regs0
        let regs2At4 := stepModuleRegs art.rtlModule false (fun _ => 4#64) regs1At4
        let regs1At200 := stepModuleRegs art.rtlModule false (fun _ => 200#64) regs0
        let regs2At200 := stepModuleRegs art.rtlModule false (fun _ => 200#64) regs1At200
-       checkRtlModule art.rtlModule &&
-       checkBelNetlistValid art.belNetlist &&
-       (art.rtlModule.regs.length == 5) &&
-       (countFfBels art.belNetlist == 5) &&
+       checkRtlModule art.rtlModule && checkBelNetlistValid art.belNetlist &&
+       (art.rtlModule.regs.length == 5) && (countFfBels art.belNetlist == 5) &&
        (art.pnrCert.placedCells.length == art.belNetlist.cells.length) &&
-       checkPnrCertificate art.belNetlist art.tcadEnvelope.slowCorner goldenTapeoutConfig.clockPeriodPs art.pnrCert &&
+       checkPnrCertificate art.belNetlist art.tcadEnvelope.slowCorner referenceTapeoutConfig.clockPeriodPs art.pnrCert &&
+       checkSwitchChannelCapacity referenceTapeoutConfig.channelCap art.pnrCert.routedNets &&
        (evalModuleOutputs art.rtlModule (fun _ => 4#64) regs2At4 ==
          [ ("out_oxideEotPicometers", 700#64), ("out_vthMilliV", 250#64), ("out_gateDelayPs", 56#64)
          , ("out_drainCurrentUa", 270#64), ("out_calibratedDelayPs", 72#64) ]) &&
        (evalModuleOutputs art.rtlModule (fun _ => 200#64) regs2At200 ==
          [ ("out_oxideEotPicometers", 700#64), ("out_vthMilliV", 250#64), ("out_gateDelayPs", 1624#64)
          , ("out_drainCurrentUa", 1250#64), ("out_calibratedDelayPs", 1640#64) ]) &&
-       checkEnvelopeTimingSignoff art.tcadEnvelope goldenTapeoutConfig.clockPeriodPs goldenTapeoutConfig.timingPath &&
-       (!art.systemVerilog.isEmpty) &&
-       art.receipt.verdict.isOk &&
+       checkEnvelopeTimingSignoff art.tcadEnvelope referenceTapeoutConfig.clockPeriodPs referenceTapeoutConfig.timingPath &&
+       (!art.systemVerilog.isEmpty) && art.receipt.verdict.isOk &&
        checkTapeoutTrustChecked tapeoutCheckedSupports art.receipt.trust
      | .error _ => false) = true := by
   refine ⟨by decide +kernel, rfl, ?_, ?_⟩
   · intro H srcBytes
     rw [compileCompositionToSiliconTapeoutWithHash_isOk_eq H Obend.Core.Digest.deployed
-          srcBytes goldenTapeoutConfig.moduleName.toUTF8.toList]
+          srcBytes referenceTapeoutConfig.moduleName.toUTF8.toList]
     decide +kernel
   · decide +kernel
+/-- **Finite Switch-Box Channel Congestion Refusal (`tapeout_refuses_congested_channel`)**:
+two distinct edges on a 1-track channel are refused by `routeEdgeListChecked?`, and the 55-net reference design
+is refused with `.error (.switchChannelCongestion 55 1)` at `channelCap = 1` while succeeding at `channelCap = 55`. -/
+theorem tapeout_refuses_congested_channel :
+    routeEdgeListChecked? 1 0 [(0, 0, 1, 0), (0, 1, 1, 1)] = .error (2, 1) ∧
+    (routeEdgeListChecked? 2 0 [(0, 0, 1, 0), (0, 1, 1, 1)]).isOk = true ∧
+    (match compileCompositionToSiliconTapeout { referenceTapeoutConfig with channelCap := 1 }
+        referenceCleanroomTcadComp [referenceTapeoutIsarCert] with
+     | .error (.switchChannelCongestion 55 1) => true | _ => false) = true ∧
+    (compileCompositionToSiliconTapeout { referenceTapeoutConfig with channelCap := 55 }
+      referenceCleanroomTcadComp [referenceTapeoutIsarCert]).isOk = true := by decide +kernel
 end Obend.Hardware.TapeoutPipeline
 end
