@@ -129,6 +129,8 @@ import Obend.Category
 import Obend.Category.GradedLogic
 import Obend.Category.OpenSystem
 import Obend.Category.Refines
+import Obend.ClusterGov.PhysicalEnvelope
+import Obend.Codec.DetCbor
 import Obend.Consensus
 import Obend.Consensus.Epistemic
 import Obend.Consensus.Finality
@@ -136,9 +138,12 @@ import Obend.Consensus.Simplex
 import Obend.Consensus.SimplexProtocol
 import Obend.Consensus.SimplexTrace
 import Obend.Crypto
+import Obend.Crypto.CanopyReduce
 import Obend.Crypto.DualSpine
+import Obend.Crypto.FastRing
 import Obend.Crypto.Multilinear
 import Obend.Crypto.PCS
+import Obend.Crypto.PikkuFoldLayered
 import Obend.Crypto.SameOpening
 import Obend.Crypto.Sumcheck
 import Obend.Crypto.Transcript
@@ -323,6 +328,7 @@ import Obend.Elab.Workbook
 import Obend.Equiv.Ahead
 import Obend.Equiv.Behaviour
 import Obend.Equiv.Clairvoyant
+import Obend.Equiv.ClairvoyantBook
 import Obend.Equiv.Cost
 import Obend.Equiv.CostTests
 import Obend.Equiv.Demand
@@ -355,6 +361,7 @@ import Obend.Hardware.Fabulous.Mac8Tiles
 import Obend.Hardware.DRC
 import Obend.Hardware.DSP
 import Obend.Hardware.Datasheet
+import Obend.Hardware.DprStutter
 import Obend.Hardware.Device.Constants
 import Obend.Hardware.Device.DriftDiffusion
 import Obend.Hardware.Device.Enclosure
@@ -372,6 +379,7 @@ import Obend.Hardware.Hvm.Model
 import Obend.Hardware.Hvm.Net
 import Obend.Hardware.Hvm.Lower
 import Obend.Hardware.Hvm.Inet
+import Obend.Hardware.HvmConfluence
 import Obend.Hardware.Judge
 import Obend.Hardware.Kinematics
 import Obend.Hardware.Magnetics
@@ -387,6 +395,7 @@ import Obend.Hardware.ReductionMachine.Arena
 import Obend.Hardware.Retiming
 import Obend.Hardware.Rules
 import Obend.Hardware.Silicon
+import Obend.Hardware.SiliconOuroboros
 import Obend.Hardware.Synth
 import Obend.Hardware.TapeoutPipeline
 import Obend.Hardware.ThermalPassivity
@@ -396,6 +405,7 @@ import Obend.Intention
 import Obend.Judge
 import Obend.Judge.AutomataConfinement
 import Obend.Judge.Certified
+import Obend.Judge.CertifierRatchet
 import Obend.Judge.Class
 import Obend.Judge.Clearing
 import Obend.Judge.Computational
@@ -408,6 +418,7 @@ import Obend.Judge.LayeredCost
 import Obend.Judge.Lrat
 import Obend.Judge.Netting
 import Obend.Judge.RealAnalysis
+import Obend.Judge.ReflectiveGate
 import Obend.Judge.SvenvsCorrigibility
 import Obend.Judge.TranscriptPolicy
 import Obend.Kind
@@ -451,11 +462,14 @@ import Obend.Ledger.Vault
 import Obend.Logic.Claim
 import Obend.Logic.Frame
 import Obend.Logic.Ground
+import Obend.Logic.GuardedLob
 import Obend.Logic.LateBinding
+import Obend.Logic.MultiTurnHoare
 import Obend.Logic.Obligation
 import Obend.Logic.Program
 import Obend.Logic.Receipt
 import Obend.Logic.Rewrite
+import Obend.Logic.SeparationFrame
 import Obend.Logic.SuperRefines
 import Obend.Logic.Turn
 import Obend.Lower.Cli
@@ -484,6 +498,12 @@ import Obend.Lower.Transport
 import Obend.Lower.Typing
 import Obend.Main
 import Obend.Paco.GPaco
+import Obend.Polis.CapTP
+import Obend.Polis.EvidencedOcap
+import Obend.Polis.HouyhnhnmMonitor
+import Obend.Polis.HouyhnhnmTurn
+import Obend.Polis.VerkleUmem
+import Obend.Polis.ZkBiscuit
 import Obend.Reasons
 import Obend.Reasons.UnifiedEquilibrium
 import Obend.Receipt
@@ -494,6 +514,8 @@ import Obend.Receipt.Negotiation
 import Obend.Repair
 import Obend.Repair.AlgConfig
 import Obend.Repair.CoalgConfig
+import Obend.Repair.DeltaLensRenew
+import Obend.Repair.DeriveConfig
 import Obend.Repair.QuotAssembly
 import Obend.Run
 import Obend.Run.Adapter
@@ -565,11 +587,19 @@ import Obend.Spec.Syntax
 import Obend.Spec.Types
 import Obend.Spec.Workspace
 import Obend.Stdlib
+import Obend.SymbolicZk.CamUnifyArith
+import Obend.SymbolicZk.LinMem
+import Obend.SymbolicZk.RankedFixpointArith
+import Obend.SymbolicZk.SemiringDatalog
 import Obend.Tactic.Cases
+import Obend.Tactic.ClaimAudit
 import Obend.Tactic.Compositional
+import Obend.Tactic.DataRefinement
 import Obend.Tactic.DocsCensus
 import Obend.Tactic.MonadicReduction
+import Obend.Tactic.ProgramLogic
 import Obend.Tactic.SiliconElab
+import Obend.Tactic.SymbolicCert
 import Obend.Tactic.Tooth
 import Obend.Tactic.Weave
 import Obend.Trailblaze.CathedralApex
@@ -577,6 +607,7 @@ import Obend.Trailblaze.ClusterGov
 import Obend.Trailblaze.LeanFpga
 import Obend.Trailblaze.Obligations
 import Obend.Trailblaze.Polis
+import Obend.Trailblaze.PolisBlum
 import Obend.Trailblaze.ZkStripe
 import Obend.Teeth.Analysis.Fixtures
 import Obend.Teeth.Core.AggregateTeeth
@@ -646,6 +677,7 @@ import Obend.Vault.Json
 import Obend.Vault.Law
 import Obend.Vault.Log
 import Obend.Vault.LogBytes
+import Obend.Vault.Lsafe
 import Obend.Vault.Mandate
 import Obend.Vault.Merge
 import Obend.Vault.Page

@@ -1,5 +1,6 @@
 import Obend.Vault.Rehydration
 import Obend.Consensus.Simplex
+import Obend.Consensus.SimplexProtocol
 import Obend.Analysis.Hybrid
 import Obend.Core.PrototypeProvenance
 import Obend.Tactic.Tooth
@@ -8,11 +9,11 @@ import Obend.Tactic.Tooth
 # `tests/metasystem/InnerSeamWeldTest.lean` — Inner-System Seam Weld Verification & Axiom Audit
 
 End-to-end verification of the four inner-system welds:
-1. **`Obend.Vault.Rehydration`** — `FrozenMembrane` / `LiveMembrane` `Core.Data` codecs,
-   `Obend.Slot` (`membraneSlot`, `membranePayload`, `membraneEnvelope`), `membraneRehydrationLaw`,
-   `membraneCellContract`, and `rehydrate_satisfies_law`.
-2. **`Obend.Consensus.Simplex`** — `SimplexState` / `Cert` `Core.Data` codecs,
-   `simplexViewMonotoneLaw`, `simplexQuorumLaw`, `simplexCellContract`, and `simplex_step_respects_law`.
+1. **`Obend.Vault.Rehydration`** — `AttestedRoot`, `confined`, `classify`, `witnessChainOf`,
+   `MembraneViewer`, `Membrane.reshare`, `Sturdyref`, `rehydrateSturdyref`, and `ReactiveAffordance`.
+2. **`Obend.Consensus.Simplex` & `Obend.Consensus.SimplexProtocol`** — `Config`, `viewTimeout`,
+   `honest_quorum_intersection`, `qc_same_view_unique`, `exponential_backoff_timing`, and
+   `SimplexProtocol` (`Reach`, `FinCert.checks`, `FinCert.unique_per_height_reach`).
 3. **`Obend.Analysis.Hybrid`** — `HybridProblem` / `HybridCert` `Core.Data` codecs,
    `stepHybrid`, `verifyFlowpipe` + unsafe-zone disjointness check, and
    `hybridFlowpipeFormat : Obend.Judge.Format` (`"hybrid-flowpipe@1"`).
@@ -23,10 +24,10 @@ End-to-end verification of the four inner-system welds:
 namespace Obend.Tests.InnerSeamWeldTest
 
 open Obend.Core
-open Obend.Law
-open Obend.Spec.Law
+open Obend.Vault.Affordance (Auth fireGate CellAffordance FireCtx)
 open Obend.Vault.Rehydration
 open Obend.Consensus.Simplex
+open Obend.Consensus.SimplexProtocol
 open Obend.Analysis
 open Obend.Core.PrototypeProvenance
 
@@ -34,125 +35,130 @@ open Obend.Core.PrototypeProvenance
 -- 1. Vault Rehydration Inner-System Weld Tests
 -- ============================================================================
 
--- Roundtrip check for `FrozenMembrane.toData` / `FrozenMembrane.ofData?`.
-#guard FrozenMembrane.ofData? demoFrozenBase.toData == some demoFrozenBase
-#guard FrozenMembrane.ofData? (rehydrateAndStep demoFrozenBase 3).toData ==
-  some (rehydrateAndStep demoFrozenBase 3)
-#guard FrozenMembrane.ofData? (.natural 999) == none
+def sampleGoodRoot : AttestedRoot := { root := 101, v4Complete := true, quorum := true }
+def sampleBadRoot : AttestedRoot := { root := 101, v4Complete := true, quorum := false }
 
--- Roundtrip check for `LiveMembrane.toData` / `LiveMembrane.ofData?`.
-def sampleLiveMembrane : LiveMembrane :=
-  { surfaceId  := "council-surface"
-    epoch      := 5
-    capDigest  := 101
-    depDigest  := 202
-    activeCaps := [.read, .control]
-    liveness   := .Live }
+def sampleConfinedLog : InteractionLog := [.attested sampleGoodRoot, .attested sampleGoodRoot]
+def sampleAmbientLog : InteractionLog := [.attested sampleGoodRoot, .ambient]
+def sampleForgedLog : InteractionLog := [.attested sampleGoodRoot, .attested sampleBadRoot]
 
-#guard LiveMembrane.ofData? sampleLiveMembrane.toData == some sampleLiveMembrane
-#guard LiveMembrane.ofData? (.label "malformed") == none
+def sampleReceiptHash (r : WitnessReceipt) : Nat :=
+  r.prevHash + r.oldCommit + r.newCommit + r.effectsHash + 1
 
-example (m : FrozenMembrane) : FrozenMembrane.ofData? m.toData = some m :=
-  FrozenMembrane.ofData_toData m
+#guard confined sampleConfinedLog == true
+#guard classify sampleConfinedLog false == .ReplayedDeterministic
+#guard classify sampleAmbientLog false == .ReconstructedApproximate
+#guard classify sampleForgedLog false == .ReconstructedApproximate
+#guard classify sampleAmbientLog true == .Live
+#guard (witnessChainOf sampleReceiptHash sampleConfinedLog).length == 2
+#guard (witnessChainOf sampleReceiptHash sampleAmbientLog).length == 1
 
-example (m : LiveMembrane) : LiveMembrane.ofData? m.toData = some m :=
-  LiveMembrane.ofData_toData m
+def weldChairViewer : MembraneViewer :=
+  { held := [.read, .write, .grant]
+    permits := fun n => n == "vote" || n == "resolve"
+    activeNames := ["vote", "resolve"] }
 
--- `membraneSlot` admits a well-formed `FrozenMembrane` when its dependency digest and
--- capability boundary hold, and blocks/rejects a membrane with a mismatched digest or missing cap.
-#guard (membraneSlot 202 [.read, .write]).usable (fun _ => true) demoFrozenBase == true
-#guard (membraneSlot 999 [.read, .write]).usable (fun _ => true) demoFrozenBase == false
-#guard (membraneSlot 202 [.read, .control]).usable (fun _ => true) demoFrozenBase == false
+def weldMemberViewer : MembraneViewer :=
+  { held := [.read, .write]
+    permits := fun n => n == "vote"
+    activeNames := ["vote"] }
 
-example :
-    (membraneSlot 202 [.read, .write]).read (fun _ => true) (some demoFrozenBase) =
-      .usable demoFrozenBase
-        [(.depDigestValid 202, true),
-         (.capBoundaryHolds .read, true),
-         (.capBoundaryHolds .write, true)] := rfl
+def weldVoteAff : CellAffordance Nat :=
+  { required := [.write], effect := 1, name := "vote" }
 
-example :
-    (membraneSlot 999 [.read, .write]).read (fun _ => true) (some demoFrozenBase) =
-      .rejected demoFrozenBase :=
-  membraneSlot_rejected_of_bad_depDigest (fun _ => true) 999 [.read, .write] demoFrozenBase rfl
+def weldResolveAff : CellAffordance Nat :=
+  { required := [.grant], effect := 2, name := "resolve" }
 
-example :
-    (membraneSlot 202 [.read, .control]).read (fun _ => true) (some demoFrozenBase) =
-      .rejected demoFrozenBase :=
-  membraneSlot_rejected_of_missing_cap (fun _ => true) 202 [.read, .control] demoFrozenBase rfl
+def weldSturdyref : Sturdyref Nat :=
+  { uri := "obend://weld/surface"
+    surface := [weldVoteAff, weldResolveAff]
+    log := sampleConfinedLog
+    lineage := weldChairViewer
+    reachable := false }
 
--- Valid `rehydrateAndStep` satisfies `membraneRehydrationLaw`.
-#guard evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase (rehydrateAndStep demoFrozenBase 1) == true
-#guard evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase (rehydrateAndStep demoFrozenBase 0) == true
-#guard evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenTamperedDigest == false
-#guard evalMembraneRehydrationLaw demoMembraneFacts
-  { demoFrozenBase with capDigest := 0 }
-  { demoFrozenBase with capDigest := 999 } == false
-#guard evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenRegressedEpoch == false
+#guard (Membrane.reshare weldChairViewer weldMemberViewer).isSome == true
+#guard (Membrane.reshare weldMemberViewer weldChairViewer).isNone == true
+#guard (rehydrateSturdyref weldSturdyref weldChairViewer).1.length == 2
+#guard (rehydrateSturdyref weldSturdyref weldMemberViewer).1.length == 1
+#guard (rehydrateSturdyref weldSturdyref weldMemberViewer).2 == .ReplayedDeterministic
 
-example (fm : FrozenMembrane) (delta : Nat) :
-    evalMembraneRehydrationLaw demoMembraneFacts fm (rehydrateAndStep fm delta) = true :=
-  rehydrate_satisfies_law demoMembraneFacts fm delta
+example (log : InteractionLog) :
+    classify log false = .ReplayedDeterministic ↔ confined log = true :=
+  replayedDeterministic_iff_confined log
 
--- `#tooth` probes for `membraneRehydrationLaw`.
-theorem test_membrane_tampered_digest_rejected :
-    evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenTamperedDigest = false := rfl
+theorem weld_confined_replays (log : InteractionLog) (hc : confined log = true) :
+    classify log false = .ReplayedDeterministic := by
+  unfold classify
+  simp [hc]
 
-theorem test_membrane_regressed_epoch_rejected :
-    evalMembraneRehydrationLaw demoMembraneFacts demoFrozenBase demoFrozenRegressedEpoch = false := rfl
+theorem weld_amplifying_reshare_none (holder delegate : MembraneViewer)
+    (hamp : fireGate delegate.held holder.held = false) :
+    Membrane.reshare holder delegate = none := by
+  unfold Membrane.reshare
+  simp [hamp]
 
-#tooth test_membrane_tampered_digest_rejected by mutation
-  membraneRehydrationLaw := LawExpr.monotone "epoch"
+#tooth weld_confined_replays by mutation
+  Obend.Vault.Rehydration.classify := fun _ _ => Rehydration.ReconstructedApproximate
 
-#tooth test_membrane_regressed_epoch_rejected by mutation
-  membraneRehydrationLaw := LawExpr.writeOnce "capDigest"
+#tooth weld_amplifying_reshare_none by mutation
+  Obend.Vault.Rehydration.Membrane.reshare := fun _ d => some d
 
 -- ============================================================================
 -- 2. Consensus Simplex BFT Inner-System Weld Tests
 -- ============================================================================
 
--- Roundtrip check for `Cert.toData` / `Cert.ofData?` and `SimplexState.toData` / `SimplexState.ofData?`.
-#guard Cert.ofData? demoSimplexCert.toData == some demoSimplexCert
-#guard Cert.ofData? (.natural 0) == none
-#guard SimplexState.ofData? demoSimplexBase.toData == some demoSimplexBase
-#guard SimplexState.ofData? (stepSimplexState demoSimplexBase 1 1 demoSimplexCert).toData ==
-  some (stepSimplexState demoSimplexBase 1 1 demoSimplexCert)
-#guard SimplexState.ofData? (.record []) == none
+def demoSimplexConfig : Config :=
+  { parties := 4, faults := 1, timeout := 100, pumpBudget := 64, backoffCap := 3 }
 
-example (c : Cert) : Cert.ofData? c.toData = some c :=
-  Cert.ofData_toData c
+def badSimplexConfig : Config :=
+  { parties := 5, faults := 1, timeout := 100, pumpBudget := 64, backoffCap := 3 }
 
-example (s : SimplexState) : SimplexState.ofData? s.toData = some s :=
-  SimplexState.ofData_toData s
+#guard demoSimplexConfig.wellFormed == true
+#guard badSimplexConfig.wellFormed == false
+#guard demoSimplexConfig.quorum == 3
+#guard viewTimeout 100 0 3 == 100
+#guard viewTimeout 100 2 3 == 400
+#guard viewTimeout 100 5 3 == 800
 
--- Valid Simplex transition satisfies `simplexViewMonotoneLaw` and `simplexQuorumLaw`.
-#guard evalSimplexLaw demoSimplexFacts demoSimplexBase
-  (stepSimplexState demoSimplexBase 2 1 demoSimplexCert) == true
-#guard evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexViewRegressed == false
-#guard evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexUnderQuorum == false
-#guard evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexLoweredThreshold == false
+def demoProtocol : Protocol where
+  committee := [0, 1, 2, 3]
+  f := 1
+  faulty := fun n => n == 3
+  nodup := by decide
+  size := rfl
+  faultBound := by decide
 
-example :
-    evalSimplexLawExpr demoSimplexFacts (some demoSimplexBase.toData)
-      (stepSimplexState demoSimplexBase 2 1 demoSimplexCert).toData simplexViewMonotoneLaw = true ∧
-    evalSimplexLawExpr demoSimplexFacts (some demoSimplexBase.toData)
-      (stepSimplexState demoSimplexBase 2 1 demoSimplexCert).toData simplexQuorumLaw = true ∧
-    evalSimplexLaw demoSimplexFacts demoSimplexBase
-      (stepSimplexState demoSimplexBase 2 1 demoSimplexCert) = true :=
-  simplex_step_respects_law demoSimplexFacts demoSimplexBase 2 1 demoSimplexCert (by decide)
+def demoSentFinalized : Sent :=
+  [ ⟨0, 1, .finalize, .block [.block 1 42]⟩
+  , ⟨1, 1, .finalize, .block [.block 1 42]⟩
+  , ⟨2, 1, .finalize, .block [.block 1 42]⟩ ]
 
--- `#tooth` probes for `simplexViewMonotoneLaw` and `simplexQuorumLaw`.
-theorem test_simplex_view_regression_rejected :
-    evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexViewRegressed = false := rfl
+def demoFinCert : FinCert :=
+  { view := 1, chain := [.block 1 42], signers := [0, 1, 2] }
 
-theorem test_simplex_under_quorum_rejected :
-    evalSimplexLaw demoSimplexFacts demoSimplexBase demoSimplexUnderQuorum = false := rfl
+def demoUnderQuorumFinCert : FinCert :=
+  { view := 1, chain := [.block 1 42], signers := [0, 1] }
 
-#tooth test_simplex_view_regression_rejected by mutation
-  simplexViewMonotoneLaw := LawExpr.monotone "finalizedHeight"
+#guard demoFinCert.checks demoProtocol demoSentFinalized == true
+#guard demoUnderQuorumFinCert.checks demoProtocol demoSentFinalized == false
 
-#tooth test_simplex_under_quorum_rejected by mutation
-  simplexQuorumLaw := LawExpr.monotone "finalizedHeight"
+example (base views cap : Nat) :
+    viewTimeout base views cap ≤ base * 2 ^ cap :=
+  exponential_backoff_timing base views cap
+
+#tooth Obend.Consensus.Simplex.exponential_backoff_timing by mutation
+  Obend.Consensus.Simplex.viewTimeout := fun base views _ => base * (2 ^ views)
+
+theorem weld_under_quorum_finCert_rejected (P : Protocol) (sent : Sent) (c : FinCert)
+    (hshort : c.signers.length < P.quorum) :
+    c.checks P sent = false := by
+  unfold FinCert.checks
+  have hdec : decide (P.quorum ≤ c.signers.length) = false :=
+    decide_eq_false (Nat.not_le.mpr hshort)
+  rw [hdec, Bool.and_false, Bool.false_and]
+
+#tooth weld_under_quorum_finCert_rejected by mutation
+  Obend.Consensus.SimplexProtocol.FinCert.checks := fun _ _ _ => true
 
 -- ============================================================================
 -- 3. Hybrid Flowpipe Judge (`"hybrid-flowpipe@1"`) Inner-System Weld Tests
@@ -256,14 +262,14 @@ theorem test_forged_prototype_provenance_false :
 -- 5. Axiom Audit (`0 sorryAx`, `0 Classical.choice`)
 -- ============================================================================
 
-#print axioms FrozenMembrane.ofData_toData
-#print axioms LiveMembrane.ofData_toData
-#print axioms rehydrate_satisfies_law
-#print axioms membraneCellContract
-#print axioms Cert.ofData_toData
-#print axioms SimplexState.ofData_toData
-#print axioms simplex_step_respects_law
-#print axioms simplexCellContract
+#print axioms replayedDeterministic_iff_confined
+#print axioms reshare_chain_attenuates
+#print axioms rehydrateSturdyref_reshare_monotone
+#print axioms fireReactive_iff
+#print axioms honest_quorum_intersection
+#print axioms qc_same_view_unique
+#print axioms exponential_backoff_timing
+#print axioms FinCert.unique_per_height_reach
 #print axioms HybridProblem.ofData_toData
 #print axioms HybridCert.ofData_toData
 #print axioms hybridFlowpipeFormat

@@ -40,11 +40,12 @@ example : dfaFormat.trust = .kernel := rfl
 example : dfaConfinementCheck 1 defaultDfaQuery goodDfaCert = .ok :=
   goodDfaCert_accepted
 
-example : dfaFormat.checkBytes 1 "default" "good" = .ok := rfl
+#guard match dfaFormat.checkBytes 1 (encodeDfaQuery defaultDfaQuery) (encodeDfaCert goodDfaCert) with
+  | .ok => true | _ => false
 
-example (h : dfaFormat.checkBytes 1 "default" "good" = .ok) :
-    ∃ o c, dfaFormat.decodeObj "default" = .ok o ∧
-      dfaFormat.decodeCert "good" = .ok c ∧
+example (h : dfaFormat.checkBytes 1 (encodeDfaQuery defaultDfaQuery) (encodeDfaCert goodDfaCert) = .ok) :
+    ∃ o c, dfaFormat.decodeObj (encodeDfaQuery defaultDfaQuery) = .ok o ∧
+      dfaFormat.decodeCert (encodeDfaCert goodDfaCert) = .ok c ∧
       dfaFormat.judge.Meaning o c :=
   dfaFormat.checkBytes_sound h
 
@@ -65,9 +66,8 @@ example : dfaConfinementCheck 1 defaultDfaQuery badCert =
     .refused (.injectionDetected "{{") [] :=
   badCert_refused
 
-example : dfaFormat.checkBytes 1 "default" "bad" =
-    .refused (.judge (.injectionDetected "{{")) [] :=
-  rfl
+#guard match dfaFormat.checkBytes 1 (encodeDfaQuery defaultDfaQuery) (encodeDfaCert badCert) with
+  | .refused (.judge (.injectionDetected "{{")) [] => true | _ => false
 
 -- Negative edge cases: tampered digest, non-accepted state, final state mismatch
 def tamperedDigestDfaCert : DfaConfinementCert :=
@@ -134,7 +134,8 @@ example : cfgCompactFormat.trust = .kernel := rfl
 example : cfgCompactCheck 1 sampleCfgQuery goodCfgCert = .ok :=
   goodCfgCert_accepted
 
-example : cfgCompactFormat.checkBytes 1 "default" "good" = .ok := rfl
+#guard match cfgCompactFormat.checkBytes 1 (encodeCfgQuery sampleCfgQuery) (encodeCfgCert goodCfgCert) with
+  | .ok => true | _ => false
 
 theorem goodCfgCert_sound_derivation :
     PushdownReplay transcriptCfg goodCfgCert.rules sampleCfgQuery.input [.nonterminal transcriptCfg.start] ∧
@@ -324,7 +325,8 @@ example : dclutchHoardFormat.trust = .kernel := rfl
 example : dclutchHoardCheck 1 sampleHoardState goodHoardClearingCert = .ok :=
   goodHoardClearingCert_accepted
 
-example : dclutchHoardFormat.checkBytes 1 "default" "good" = .ok := rfl
+#guard match dclutchHoardFormat.checkBytes 1 (encodeHoardState sampleHoardState) (encodeJointClearingCert goodHoardClearingCert) with
+  | .ok => true | _ => false
 
 theorem sampleHoardState_invariant : HoardCollateralInvariant sampleHoardState :=
   (hoardCollateralValid_iff sampleHoardState).mp rfl
@@ -486,16 +488,16 @@ example : verifyDfaTraceRows confinementDfa 7 0 ["hello", "world"]
   buildDfaTrace_valid confinementDfa 7 ["hello", "world"]
 
 -- 5.3 Constructive wire encoders/decoders (`encodeDfaCert`, `encodeCfgCert`, `encodeHoardState`)
-example : decodeDfaCert (encodeDfaCert goodDfaCert) = .ok goodDfaCert := rfl
-example : decodeDfaCert "tampered-digest" = .ok tamperedDigestDfaCert := rfl
-example : dfaFormat.checkBytes 1 "7:0:1" (encodeDfaCert goodDfaCert) = .ok := rfl
+#guard match decodeDfaCert (encodeDfaCert goodDfaCert) with | .ok c => c == goodDfaCert | .error _ => false
+#guard match decodeDfaCert (encodeDfaCert tamperedDigestDfaCert) with | .ok c => c == tamperedDigestDfaCert | .error _ => false
+#guard match dfaFormat.checkBytes 1 (encodeDfaQuery defaultDfaQuery) (encodeDfaCert goodDfaCert) with | .ok => true | _ => false
 
-example : decodeCfgCert (encodeCfgCert goodCfgCert) = .ok goodCfgCert := rfl
-example : cfgCompactFormat.checkBytes 1 "nested" "rEnvelope,rArray,rArray,rString" = .ok := rfl
+#guard match decodeCfgCert (encodeCfgCert goodCfgCert) with | .ok c => c == goodCfgCert | .error _ => false
+#guard match cfgCompactFormat.checkBytes 1 (encodeCfgQuery nestedCfgQuery) (encodeCfgCert nestedCfgCert) with | .ok => true | _ => false
 
-example : decodeHoardState (encodeHoardState sampleHoardState) = .ok sampleHoardState := rfl
-example : decodeHoardState (encodeHoardState threeOutcomeHoardState) = .ok threeOutcomeHoardState := rfl
-example : dclutchHoardFormat.checkBytes 1 "3:5:5,5,5" "three-outcome" = .ok := rfl
+#guard match decodeHoardState (encodeHoardState sampleHoardState) with | .ok s => s == sampleHoardState | .error _ => false
+#guard match decodeHoardState (encodeHoardState threeOutcomeHoardState) with | .ok s => s == threeOutcomeHoardState | .error _ => false
+#guard match dclutchHoardFormat.checkBytes 1 (encodeHoardState threeOutcomeHoardState) (encodeJointClearingCert threeOutcomeMintCert) with | .ok => true | _ => false
 
 -- 5.4 `Obend.Slot.Protocol` spine bridge (`PromptProt`, `protToPromptTemplate_roundtrip`, `slot_protocol_confinement`)
 def samplePromptProt : PromptProt () :=

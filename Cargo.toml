@@ -3,5 +3,7 @@ members = [
     "crates/obend-sandbox",
     "crates/obend-ffi",
     "crates/obend-gui",
+    "crates/obend-crypto-exec",
+    "crates/obend-sel4-verifier",
 ]
 resolver = "2"

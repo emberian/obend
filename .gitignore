@@ -39,7 +39,8 @@ hardware/rust-ffi/target/
 **/target/
 **/__pycache__/
 *.pyc
-.agents/
+.agents/*
+!.agents/skills/
 aa.html
 t.out
 astra/

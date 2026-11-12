@@ -23,3 +23,6 @@ public import Obend.Crypto.Sumcheck
 public import Obend.Crypto.PCS
 public import Obend.Crypto.DualSpine
 public import Obend.Crypto.SameOpening
+public import Obend.Crypto.FastRing
+public import Obend.Crypto.PikkuFoldLayered
+public import Obend.Crypto.CanopyReduce

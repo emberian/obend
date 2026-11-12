@@ -1,12 +1,12 @@
 module
 public import Obend.Hardware.DprStutter
-public import Obend.ClusterGov.LucidEnvelope
+public import Obend.ClusterGov.PhysicalEnvelope
 import all Obend.Hardware.DprStutter
-import all Obend.ClusterGov.LucidEnvelope
+import all Obend.ClusterGov.PhysicalEnvelope
 import Obend.Tactic.Tooth
 import all Obend.Judge.SvenvsCorrigibility
 meta import all Obend.Hardware.DprStutter
-meta import all Obend.ClusterGov.LucidEnvelope
+meta import all Obend.ClusterGov.PhysicalEnvelope
 meta import all Obend.Trailblaze.ClusterGov
 import all Obend.Crypto.Transcript
 import all Obend.Digest.Cshake256.Spec
@@ -15,9 +15,9 @@ import all Obend.Digest.Cshake256.Seam
 
 public section
 set_option pp.maxSteps 2000
-namespace Obend.Tests.DprStutterAndLucidGov
+namespace Obend.Tests.DprStutterAndEnvelopeGov
 
-open Obend.Hardware.DprStutter Obend.ClusterGov.LucidEnvelope
+open Obend.Hardware.DprStutter Obend.ClusterGov.PhysicalEnvelope
 open Obend.Trailblaze.ClusterGov Obend.Crypto
 
 -- LUTs exercise both truth-table extraction and the switch-matrix PIP indices.
@@ -100,7 +100,7 @@ example : Obend.Category.StutterSimulates abstractNeighborStepSys dprFabricStepS
 def payload : ByteArray := "swarm-job-output".toUTF8
 def receipt : JudgedReceipt :=
   { context := validClusterStepCtx,
-    stateHash := hashBytes "OBEND.LUCID.STATE/v1" payload,
+    stateHash := hashBytes "OBEND.ENVELOPE.STATE/v1" payload,
     provenOps := 7500000, epoch := 7, jobId := 42, host := "hbox".toUTF8 }
 def log : JudgedReceiptLog := commitReceiptLog #[receipt] 0 7
 def opening : ReceiptInclusionProof := ⟨0, #[]⟩
@@ -155,11 +155,11 @@ example : 100 - bandCalibration.eHi receipt.provenOps = 0 := rfl
 example : (makeFabulousRackReceipt ⟨"rack-1".toUTF8, 7, receipt.context.step⟩ true).receiptBytes.size = 32 :=
   (makeFabulousRackReceipt ⟨"rack-1".toUTF8, 7, receipt.context.step⟩ true).size32
 
-def authority : LucidAuthority := ⟨log, hardware, challenge, bandCalibration, 0⟩
-def evidence : LucidEvidence := ⟨packet, opening, claim, 100, pages, 40⟩
+def authority : EnvelopeAuthority := ⟨log, hardware, challenge, bandCalibration, 0⟩
+def evidence : EnvelopeEvidence := ⟨packet, opening, claim, 100, pages, 40⟩
 
-theorem lucid_admitted : checkLucidEnvelope authority evidence = true := by
-  simp only [checkLucidEnvelope, authority, evidence]
+theorem envelope_admitted : checkPhysicalEnvelope authority evidence = true := by
+  simp only [checkPhysicalEnvelope, authority, evidence]
   rw [admitted_packet, sealed_page]
   simp [checkEnergyEnvelope, residualEnergy, bandCalibration, claim, packet, log, opening,
     challenge, receipt, commitReceiptLog]
@@ -242,9 +242,9 @@ theorem recovery_witness (s : Bool) : CWithin plantStep recovery atHome 1 s := b
   exact ⟨1, by decide, rfl⟩
 
 example : ∀ ctrl, Invariant plantStep atHome
-    (enveloped (lucidPolicy authority (fun _ _ => evidence) plantPolicy 1 ⟨100, 20, 40, 10⟩) recovery ctrl)
+    (enveloped (envelopePolicy authority (fun _ _ => evidence) plantPolicy 1 ⟨100, 20, 40, 10⟩) recovery ctrl)
     (fun s => atHome s ∧ CWithin plantStep recovery atHome 1 s) := by
-  apply lucidEnvelope_corrigibility_safe plantStep atHome atHome atHome recovery
+  apply physicalEnvelope_corrigibility_safe plantStep atHome atHome atHome recovery
     authority (fun _ _ => evidence) plantPolicy 1 ⟨100, 20, 40, 10⟩
   · intro s hs
     exact ⟨hs, recovery_witness s⟩
@@ -272,7 +272,7 @@ def testMerkleSiblings : Nat → Array ByteArray → Nat → Array ByteArray
 #print axioms sealedVramOpening_sound
 #print axioms energyConservation_bounds_hidden_ops
 #print axioms fabulousRackReceipt_at_most_two_states
-#print axioms lucidEnvelope_corrigibility_safe
+#print axioms physicalEnvelope_corrigibility_safe
 #print axioms auditSwarmComputeMeter_sound_iff
 
 -- Interpreter execution uses the verified cSHAKE Array/UInt64 path. It is
@@ -281,7 +281,7 @@ set_option interpreter.prefer_native false in
 #eval do
   unless checkCommitBeforeForward log packet opening do throw (IO.userError "receipt gate")
   unless verifySealedVram hardware challenge claim 100 pages do throw (IO.userError "sealed VRAM")
-  unless checkLucidEnvelope authority evidence do throw (IO.userError "Lucid envelope")
+  unless checkPhysicalEnvelope authority evidence do throw (IO.userError "physical envelope")
   unless auditSwarmComputeMeter log bandCalibration 0 #[cleanRow] == SwarmMeterResult.clean ⟨1, 40, 1234⟩ do
     throw (IO.userError "swarm meter")
   unless released.phase == DprPhase.active && observedBoundaryPort released do throw (IO.userError "DPR release")
@@ -300,6 +300,6 @@ set_option interpreter.prefer_native false in
     throw (IO.userError "forged page accepted")
   if verifySealedVram pinned { probeChallenge with sealedRoot := ByteArray.empty } probeClaim 100 proofs then
     throw (IO.userError "unsealed root accepted")
-  IO.println "DPR / Lucid integration: receipt, 8-of-16 VRAM, forged-page rejection, envelope, meter and hot-swap passed"
+  IO.println "DPR / physical-envelope integration: receipt, 8-of-16 VRAM, forged-page rejection, envelope, meter and hot-swap passed"
 
-end Obend.Tests.DprStutterAndLucidGov
+end Obend.Tests.DprStutterAndEnvelopeGov

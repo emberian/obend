@@ -23,6 +23,13 @@ subsystems = [
   "Repair",
   "Crypto",
   "Trailblaze",
+  "Polis",
+  "SymbolicZk",
+  "ClusterGov",
+  "Codec",
+  "Logic",
+  "Equiv",
+  "Tactic",
 ]
 
 entry_points = [
@@ -132,7 +139,7 @@ description = "Whole-book link specialization (`LinkSpecialize`) and `GPaco` up-
 
 [[apex]]
 id = "logic-super-refines-frame"
-subsystem = "Leaf"
+subsystem = "Logic"
 module = "Obend.Logic.SuperRefines"
 theorem = "superClaim_sound"
 description = "Vertical `super.m` unfolding (`SuperRefines`) and `SupportSheaf` overlay transport preserve open-recursive claims across outer overrides."
@@ -534,26 +541,271 @@ module = "Obend.Trailblaze.CathedralApex"
 theorem = "apex_cathedral_zkstripe_to_clustergov_sound"
 description = "End-to-end Cathedral composition from `ZkStripe` VPA call-tree audit through `Reasons` and `HyperLaw2NonInterference` to Ozaki schedule-invariant AI cluster steps."
 
+[[apex]]
+id = "trailblaze-polis-deos-trace"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.Polis"
+theorem = "apex_polis_deos_trace_safe"
+description = "Multi-turn Polis DeOS trace safety across revocation accumulation, Verkle UMem transitions, Blum memory checking, and seL4 Microkit SPSC isolation."
+
+[[apex]]
+id = "trailblaze-polis-blum-memory"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.PolisBlum"
+theorem = "verifyBlumMemory_sound"
+description = "Offline Blum memory-checking verifier implies exact read-follows-latest-write consistency over sorted online/offline memory logs."
+
+[[apex]]
+id = "trailblaze-cathedral-trace-sound"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.CathedralApex"
+theorem = "checkCathedralTrace_sound"
+description = "Multi-turn Cathedral governance trace verifier enforces domain-bound ZkStripe call-tree audits, physical energy envelopes, and 2-state FPGA receipts."
+
+[[apex]]
+id = "trailblaze-zkstripe-calltree-audit"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.ZkStripe"
+theorem = "apex_zkstripe_calltree_audit"
+description = "Domain-bound recursive HTTPS call-tree commitment binding and string-aware ByteArray VPA audit across all session hops."
+
+[[apex]]
+id = "trailblaze-verifiable-cluster-step"
+subsystem = "Trailblaze"
+module = "Obend.Trailblaze.ClusterGov"
+theorem = "apex_verifiable_ai_cluster_step"
+description = "Schedule-invariant Ozaki radix-slice all-reduce collectives and lower-curve physical energy conservation bounding covert operations."
+
+[[apex]]
+id = "judge-reflective-kernel-hotswap"
+subsystem = "Judge"
+module = "Obend.Judge.ReflectiveGate"
+theorem = "kernel_hot_swap_safe"
+description = "Reflective kernel hot-swap gate preserves safety invariants across unbounded kernel upgrades without Löb diagonalization Collapse."
+
+[[apex]]
+id = "judge-certifier-ratchet-self-improvement"
+subsystem = "Judge"
+module = "Obend.Judge.CertifierRatchet"
+theorem = "prover_then_unbounded_policy_self_improvement_is_safe"
+description = "Frozen-checker certifier ratchet composes unbounded untrusted prover swaps with unbounded proof-carrying policy self-improvement."
+
+[[apex]]
+id = "hardware-silicon-ouroboros-unconditional"
+subsystem = "Hardware"
+module = "Obend.Hardware.SiliconOuroboros"
+theorem = "recursive_silicon_ouroboros_unconditional"
+description = "Recursive hardware self-optimization (`SiliconOuroboros`) preserves clock-accurate safety, root recovery, and neighbor isolation across unbounded ICAP DPR generations."
+
+[[apex]]
+id = "hardware-dpr-stutter-isolation"
+subsystem = "Hardware"
+module = "Obend.Hardware.DprStutter"
+theorem = "dpr_preserves_neighbor_tiles_stutter"
+description = "Clamped ICAP dynamic partial reconfiguration stutter-simulates isolated neighbor tile steps and quarantines CRC/PIP-corrupt bitstreams."
+
+[[apex]]
+id = "hardware-hvm-batch-confluence"
+subsystem = "Hardware"
+module = "Obend.Hardware.HvmConfluence"
+theorem = "batch_schedule_invariant"
+description = "Disjoint interaction-net redex batches converge schedule-invariantly to identical normal forms while Delta-net steps preserve linear memory invariants."
+
+[[apex]]
+id = "vault-lsafe-redaction-confinement"
+subsystem = "Vault"
+module = "Obend.Vault.Lsafe"
+theorem = "lsafe_redaction_confinement"
+description = "2-bit string-aware lexer and VPA redaction confinement guarantees structural non-interference and commuting sharded fork-merge retention."
+
+[[apex]]
+id = "crypto-fast-ring-negacyclic"
+subsystem = "Crypto"
+module = "Obend.Crypto.FastRing"
+theorem = "negacyclicMulFast_eq_spec"
+description = "Executable Goldilocks negacyclic cyclotomic ring multiplication refines integer polynomial quotient specification."
+
+[[apex]]
+id = "crypto-pikkufold-layered-msis"
+subsystem = "Crypto"
+module = "Obend.Crypto.PikkuFoldLayered"
+theorem = "akitaFoldRounds_complete"
+description = "Multi-round Akita/PikkuFold layered lattice witness folding preserves modular linear relations with bounded infinity-norm growth."
+
+[[apex]]
+id = "crypto-canopy-commit-reduce"
+subsystem = "Crypto"
+module = "Obend.Crypto.CanopyReduce"
+theorem = "verifyCanopyCommitAndReduce_complete"
+description = "Subtree-cached Canopy Merkle commitment and linear row-folding reduction completeness with injective signed canonical encoding."
+
+[[apex]]
+id = "repair-delta-lens-renew"
+subsystem = "Repair"
+module = "Obend.Repair.DeltaLensRenew"
+theorem = "renewIntentionAcrossLens"
+description = "Disjoint Clarke `DeltaLens` lifts and renews `Intention` and `SuperClaimCert` obligations across orthogonal state edits."
+
+[[apex]]
+id = "polis-evidenced-ocap-attenuation"
+subsystem = "Polis"
+module = "Obend.Polis.EvidencedOcap"
+theorem = "accepts_stable"
+description = "PCA evidenced object capabilities enforce monotone attenuation, non-additive seal/unseal amplification, and Kleene 3-valued caveat stability."
+
+[[apex]]
+id = "polis-zk-biscuit-revocation"
+subsystem = "Polis"
+module = "Obend.Polis.ZkBiscuit"
+theorem = "bindTurn_pins_revokedSet"
+description = "Domain-framed ZK-Biscuit capability lineage binds full public turn inputs and ancestor revocation sets into Fiat–Shamir transcripts."
+
+[[apex]]
+id = "polis-verkle-umem-binding"
+subsystem = "Polis"
+module = "Obend.Polis.VerkleUmem"
+theorem = "verifyUpdate_binds"
+description = "Wide-arity Verkle universal memory (`UMem`) opening and update verifiers cryptographically bind address-value transitions."
+
+[[apex]]
+id = "polis-captp-resolve-once"
+subsystem = "Polis"
+module = "Obend.Polis.CapTP"
+theorem = "guardedHole_resolve_at_most_once"
+description = "Oracle-free CapTP `GuardedHole` promise resolution and nullifier pushout refuse replay and resolve each pending capability at most once."
+
+[[apex]]
+id = "polis-houyhnhnm-turn-refinement"
+subsystem = "Polis"
+module = "Obend.Polis.HouyhnhnmTurn"
+theorem = "cipherclerk_zero_reexec_sound"
+description = "Houyhnhnm symbolic-collapse turn refinement, zero-re-execution verification, and reversible checkpoint rollback."
+
+[[apex]]
+id = "polis-houyhnhnm-monitor-tower"
+subsystem = "Polis"
+module = "Obend.Polis.HouyhnhnmMonitor"
+theorem = "wrapMonitor_tower_sound"
+description = "Reflective Houyhnhnm monitor tower detects forged subsystem verdicts and false recovery claims."
+
+[[apex]]
+id = "symboliczk-linmem-sound"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.LinMem"
+theorem = "linmem_sound"
+description = "Linear memory (`LinMem`) multiset/timestamp checker implies unique allocation, single consumption, and non-omission."
+
+[[apex]]
+id = "symboliczk-cam-unify-congruence"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.CamUnifyArith"
+theorem = "checkedForest_congruence_sound"
+description = "64-bit `ExprCAM` canonical pool interning, spanning proof-forest congruence closure, and `LinMem` cycle rejection."
+
+[[apex]]
+id = "symboliczk-ranked-wfs-sound"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.RankedFixpointArith"
+theorem = "checkRankedWFS_sound"
+description = "Stage-ranked well-founded fixpoint arithmetic checker certifies true/undefined stratification and refutes positive self-supporting cycles."
+
+[[apex]]
+id = "symboliczk-semiring-datalog-fast"
+subsystem = "SymbolicZk"
+module = "Obend.SymbolicZk.SemiringDatalog"
+theorem = "lookupFast_tpFast_eq_tpSpec"
+description = "Sorted-array semi-naive provenance-semiring Datalog evaluation refines mathematical immediate-consequence semantics and homomorphically lifts to Goldilocks."
+
+[[apex]]
+id = "clustergov-physical-envelope-corrigibility"
+subsystem = "ClusterGov"
+module = "Obend.ClusterGov.PhysicalEnvelope"
+theorem = "physicalEnvelope_corrigibility_safe"
+description = "Physical cluster governance envelope binds commit-before-forward NIC receipts, challenge-derived sealed VRAM openings, energy meters, and `svenvs` corrigibility."
+
+[[apex]]
+id = "codec-detcbor-injective"
+subsystem = "Codec"
+module = "Obend.Codec.DetCbor"
+theorem = "encodeDetCbor_injective"
+description = "RFC 8949 Deterministic CBOR `ByteArray` encoder/decoder refines formal grammar, rejects non-canonical encodings, and proves injectivity."
+
+[[apex]]
+id = "logic-guarded-lob-fixpoint"
+subsystem = "Logic"
+module = "Obend.Logic.GuardedLob"
+theorem = "fix_lob"
+description = "Step-indexed Guarded Löb (`▷P → P ⊢ P`), C4 MRO linearization, sorted `EpochBook` change-certificate preservation, and choice-free `AsmCore4` quotients."
+
+[[apex]]
+id = "logic-multiturn-safewp-adequacy"
+subsystem = "Logic"
+module = "Obend.Logic.MultiTurnHoare"
+theorem = "safeWP_adequacy"
+description = "Multi-turn `SafeWP` program logic adequacy over open-world `.perform` interaction traces and recursive actor loops."
+
+[[apex]]
+id = "logic-separation-hoare-frame"
+subsystem = "Logic"
+module = "Obend.Logic.SeparationFrame"
+theorem = "hoare_sep_frame"
+description = "Lawful PCM separation logic (`SepProp`), sorted `HeapExec` local frame rule, `ConservedValue` accounting, and `AuthCamera` frame-preserving updates."
+
+[[apex]]
+id = "equiv-clairvoyant-book-sound"
+subsystem = "Equiv"
+module = "Obend.Equiv.ClairvoyantBook"
+theorem = "scExpr_toCore4_clairvoyant_sound"
+description = "Clairvoyant call-by-need book evaluation and `ScExpr` lowering to `Core4` preserve cost-bounded observational convergence."
+
+[[apex]]
+id = "tactic-data-refinement-sorted-set"
+subsystem = "Tactic"
+module = "Obend.Tactic.DataRefinement"
+theorem = "sortedArray_mergeFast"
+description = "Verified `DataRefinement` framework, `refine_exec` transport tactic, `SortedArraySet` merge-scan operations, and `FaceIdeal3` cubical boundary lattice."
+
+[[apex]]
+id = "tactic-program-logic-sep-cancel"
+subsystem = "Tactic"
+module = "Obend.Tactic.ProgramLogic"
+theorem = "sepNice_eq_sepAll"
+description = "Kernel-proof-producing `sep_cancel` AC spatial canceller, symbolic `wp_step` stepper, and `gpaco_step` coinductive automation."
+
+[[apex]]
+id = "tactic-symbolic-cert-perm"
+subsystem = "Tactic"
+module = "Obend.Tactic.SymbolicCert"
+theorem = "checkSymPermWitness_sound"
+description = "Verified computational reflection certificates for `bool_spec_iff`, `before_rank` DAG/lexicographic chains, and `perm_cert` symbolic list permutations."
+
+[[apex]]
+id = "tactic-claim-audit-verdict"
+subsystem = "Tactic"
+module = "Obend.Tactic.ClaimAudit"
+theorem = "AuditVerdict.ofViolations_isOk_iff"
+description = "5-law kernel `Environment`/`Expr` claim-contract auditor (`#audit_claim_contract`) refusing axiom bypasses, projection cosplay, vacuous premises, and uncosted weakenings."
+
 # ==============================================================================
-# Planned Wave 4+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
+# Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
 
 [[planned_apex]]
-id = "pillar1-core5-r2ltt-super-refines"
-pillar = "Pillar 1: Obend.Core5"
+id = "pillar1-core-r2ltt-super-refines"
+pillar = "Pillar 1: Obend.Core"
 subsystem = "Core"
-target_module = "Obend.Core5.Proofs.Adequacy"
-target_theorem = "core5_r2ltt_intention_renew_sound"
-wave = "Wave 4B"
+target_module = "Obend.Core.Proofs.Adequacy"
+target_theorem = "core_r2ltt_intention_renew_sound"
+wave = "Wave 5"
 description = "Realizability 2-Level Type Theory (`CofibLUT16`) + Clarke `DeltaLens` `Intention.renew` frame-preserving adequacy."
 
 [[planned_apex]]
-id = "pillar2-hdlv2-ospc-4tile-dpi"
-pillar = "Pillar 2: Obend.Hardware.HdlV2"
+id = "pillar2-hdl-ospc-4tile-dpi"
+pillar = "Pillar 2: Obend.Hardware.HDL"
 subsystem = "Hardware"
-target_module = "Obend.Hardware.HdlV2.OspcProver"
+target_module = "Obend.Hardware.OspcProver"
 target_theorem = "ospc_4tile_fabulous_ecp5_refines_spec"
-wave = "Wave 4B"
+wave = "Wave 5"
 description = "Clock-domain-indexed `RtlSignal dom iv w` + OSPC 4-Tile prover refined through `FABulous`/ECP5 bitstream decoder and isolated `obend-hw-dpi`."
 
 [[planned_apex]]

@@ -5,7 +5,7 @@ public import Obend.Judge.SvenvsCorrigibility
 import all Obend.Judge.SvenvsCorrigibility
 
 public section
-namespace Obend.ClusterGov.LucidEnvelope
+namespace Obend.ClusterGov.PhysicalEnvelope
 
 open Obend.Trailblaze.ClusterGov Obend.Crypto
 
@@ -40,7 +40,7 @@ structure JudgedReceipt where
 def stepHash (r : JudgedReceipt) : ByteArray := hashBytes "OBEND.ARIADNE.STEP/v1" (stepBytes r.context.step)
 
 def receiptDigest (r : JudgedReceipt) : ByteArray :=
-  hashBytes "OBEND.LUCID.RECEIPT/v1"
+  hashBytes "OBEND.ENVELOPE.RECEIPT/v1"
     (encodeFrame (stepHash r) r.stateHash (encodeFrame (natBytes r.provenOps) (natBytes r.epoch)
       (encodeFrame (natBytes r.jobId) r.host ByteArray.empty)))
 
@@ -51,9 +51,9 @@ def checkJudgedReceipt (r : JudgedReceipt) : Bool :=
     r.provenOps = r.context.step.flopsUsed ∧ r.context.step.flopsUsed ≤ r.context.step.flopsCap)
 
 def nodeDigest (left right : ByteArray) : ByteArray :=
-  hashBytes "OBEND.LUCID.NODE/v1" (encodeFrame left right ByteArray.empty)
+  hashBytes "OBEND.ENVELOPE.NODE/v1" (encodeFrame left right ByteArray.empty)
 
-def emptyDigest : ByteArray := hashBytes "OBEND.LUCID.EMPTY/v1" ByteArray.empty
+def emptyDigest : ByteArray := hashBytes "OBEND.ENVELOPE.EMPTY/v1" ByteArray.empty
 
 /-- Complete binary tree, padded with domain-separated empty leaves. Depth is
 verifier-owned; the entry count is checked before any receipt is admitted. -/
@@ -110,7 +110,7 @@ def checkCommitBeforeForward (log : JudgedReceiptLog) (pkt : EgressPacket)
   | none => false
   | some r => verifyReceiptInclusion log proof &&
       decide (pkt.pktStateHash = r.stateHash ∧
-        hashBytes "OBEND.LUCID.STATE/v1" pkt.pktPayload = pkt.pktStateHash)
+        hashBytes "OBEND.ENVELOPE.STATE/v1" pkt.pktPayload = pkt.pktStateHash)
 
 /-- Constructive witness into the actual committed array, existing judgment,
 compute cap, matching state bytes, and a recomputed cSHAKE Merkle opening. -/
@@ -120,7 +120,7 @@ theorem commitBeforeForward_sound (log : JudgedReceiptLog) (pkt : EgressPacket)
       r.context.step.flopsUsed ≤ r.context.step.flopsCap ∧
       r.provenOps = r.context.step.flopsUsed ∧ r.epoch = log.epoch ∧
       pkt.pktStateHash = r.stateHash ∧
-      hashBytes "OBEND.LUCID.STATE/v1" pkt.pktPayload = pkt.pktStateHash ∧
+      hashBytes "OBEND.ENVELOPE.STATE/v1" pkt.pktPayload = pkt.pktStateHash ∧
       climbMerkle (receiptDigest r) proof.index proof.siblings = logRoot log := by
   unfold checkCommitBeforeForward at h
   cases he : log.entries[proof.index]? with
@@ -136,8 +136,8 @@ nontrivial Sable/Ozaki/Reasons-judged Ariadne context. -/
 theorem checkCommitBeforeForward_inhabited (payload host : ByteArray) (epoch job : Nat) :
     ∃ (log : JudgedReceiptLog) (proof : ReceiptInclusionProof),
       checkCommitBeforeForward log
-        ⟨payload, hashBytes "OBEND.LUCID.STATE/v1" payload⟩ proof = true := by
-  let r : JudgedReceipt := ⟨validClusterStepCtx, hashBytes "OBEND.LUCID.STATE/v1" payload,
+        ⟨payload, hashBytes "OBEND.ENVELOPE.STATE/v1" payload⟩ proof = true := by
+  let r : JudgedReceipt := ⟨validClusterStepCtx, hashBytes "OBEND.ENVELOPE.STATE/v1" payload,
     7500000, epoch, job, host⟩
   let log : JudgedReceiptLog := commitReceiptLog #[r] 0 epoch
   let proof : ReceiptInclusionProof := ⟨0, #[]⟩
@@ -201,7 +201,7 @@ structure VramChallenge where
   sealedRoot : ByteArray
 
 def vramTranscript (challenge : VramChallenge) (claim : LocationClaim) : Transcript .relationBound :=
-  bindRelation "OBEND.LUCID.VRAM/v1"
+  bindRelation "OBEND.ENVELOPE.VRAM/v1"
     (encodeFrame claim.vramMerkleRoot claim.hardwareId (stepHash claim.receipt))
     (natBytes challenge.logEpoch) (Transcript.newUnseeded challenge.epochNonce)
 
@@ -253,7 +253,7 @@ structure VramPageOpening where
   proof : ReceiptInclusionProof
 
 def pageDigest (index : Nat) (page : ByteArray) : ByteArray :=
-  hashBytes "OBEND.LUCID.PAGE/v1" (encodeFrame (natBytes index) page ByteArray.empty)
+  hashBytes "OBEND.ENVELOPE.PAGE/v1" (encodeFrame (natBytes index) page ByteArray.empty)
 
 def verifyVramPage (policy : HardwareClassPolicy) (claim : LocationClaim)
     (offset : Nat) (opening : VramPageOpening) : Bool :=
@@ -367,7 +367,7 @@ structure RackContext where
 /-- Public commitment, not an unauthenticated claim to be a MAC. The local
 verifier owns the fixed context; the private witness never enters these bytes. -/
 def rackReceiptBytes (ctx : RackContext) (verdict : Bool) : ByteArray :=
-  hashBytes "OBEND.LUCID.RACK.VERDICT/v1"
+  hashBytes "OBEND.ENVELOPE.RACK.VERDICT/v1"
     (encodeFrame ctx.rackId (natBytes ctx.epoch)
       (encodeFrame (stepBytes ctx.step) ⟨#[if verdict then 1 else 0]⟩ ByteArray.empty))
 
@@ -392,7 +392,7 @@ theorem fabulousRackReceipt_at_most_two_states (ctx : RackContext) (verdict : Bo
   · exact Or.inl rfl
   · exact Or.inr rfl
 
-structure LucidEvidence where
+structure EnvelopeEvidence where
   packet : EgressPacket
   inclusion : ReceiptInclusionProof
   location : LocationClaim
@@ -400,7 +400,7 @@ structure LucidEvidence where
   pages : Array VramPageOpening
   energyMeter : Nat
 
-structure LucidAuthority where
+structure EnvelopeAuthority where
   log : JudgedReceiptLog
   hardware : HardwareClassPolicy
   challenge : VramChallenge
@@ -409,7 +409,7 @@ structure LucidAuthority where
 
 /-- Tie all three envelopes to the same committed step/state/epoch. A local
 decoy cannot substitute a different receipted workload in the other gates. -/
-def checkLucidEnvelope (authority : LucidAuthority) (e : LucidEvidence) : Bool :=
+def checkPhysicalEnvelope (authority : EnvelopeAuthority) (e : EnvelopeEvidence) : Bool :=
   checkCommitBeforeForward authority.log e.packet e.inclusion &&
   verifySealedVram authority.hardware authority.challenge e.location e.measuredRtt e.pages &&
   checkEnergyEnvelope authority.calibration e.location.receipt e.energyMeter authority.maxResidual &&
@@ -431,27 +431,27 @@ structure BarrierTiming where
 
 /-- All physical evidence participates in the actual Svenvs policy. Timing is
 an admission condition, not evidence of a safe plant by itself. -/
-def lucidPolicy {S A : Type} (authority : LucidAuthority) (evidence : S → A → LucidEvidence)
+def envelopePolicy {S A : Type} (authority : EnvelopeAuthority) (evidence : S → A → EnvelopeEvidence)
     (plantPolicy : Policy S A) (B : Nat) (timing : BarrierTiming) : Policy S A :=
   fun s a => decide (timing.lDetect + timing.lProve + timing.lActuate ≤ B * timing.tau) &&
-    checkLucidEnvelope authority (evidence s a) && plantPolicy s a
+    checkPhysicalEnvelope authority (evidence s a) && plantPolicy s a
 
 /-- Plant safety and bounded recovery are preserved along every selected run.
 The plant policy must preserve BOTH invariants, and the fallback must too;
 receipt validity and a positive timing margin cannot replace these obligations. -/
-theorem lucidEnvelope_corrigibility_safe {S A : Type}
+theorem physicalEnvelope_corrigibility_safe {S A : Type}
     (step : S → A → S) (init safe home : S → Prop) (recov : S → A)
-    (authority : LucidAuthority) (evidence : S → A → LucidEvidence)
+    (authority : EnvelopeAuthority) (evidence : S → A → EnvelopeEvidence)
     (plantPolicy : Policy S A) (B : Nat) (timing : BarrierTiming)
     (initial : InitSafe init (fun s => safe s ∧ CWithin step recov home B s))
     (sound : SoundPolicy step (fun s => safe s ∧ CWithin step recov home B s) plantPolicy)
     (shield : SafeShield step (fun s => safe s ∧ CWithin step recov home B s) recov) :
     ∀ ctrl, Invariant step init
-      (enveloped (lucidPolicy authority evidence plantPolicy B timing) recov ctrl)
+      (enveloped (envelopePolicy authority evidence plantPolicy B timing) recov ctrl)
       (fun s => safe s ∧ CWithin step recov home B s) := by
   apply safety_preservation initial _ shield
   intro s a hs ha
-  simp only [lucidPolicy, Bool.and_eq_true] at ha
+  simp only [envelopePolicy, Bool.and_eq_true] at ha
   exact sound s a hs ha.2
 
 structure SwarmJobRow where
@@ -547,4 +547,4 @@ theorem auditSwarmComputeMeter_sound_iff (log : JudgedReceiptLog) (cal : EnergyC
     simp only [Array.findSome?_eq_none_iff, checkMeterRow_iff, SwarmMeterSpec, Array.mem_def]
   cases h : rows.findSome? (checkMeterRow log cal maxResidual) <;> simp_all
 
-end Obend.ClusterGov.LucidEnvelope
+end Obend.ClusterGov.PhysicalEnvelope

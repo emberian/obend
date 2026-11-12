@@ -41,6 +41,122 @@ open Obend.Vault.Rehydration
 
 set_option autoImplicit false
 
+/-! ## 0. Concrete Council & Attestation Test Fixtures -/
+
+/-- Demo hash function for concrete receipt-chain replay checks. -/
+def demoReceiptHash (r : WitnessReceipt) : Nat :=
+  r.prevHash + r.oldCommit + r.newCommit + r.effectsHash + 1
+
+/-- A genuine attested root (both `v4Complete` and `quorum` hold). -/
+def goodRoot : AttestedRoot := { root := 42, v4Complete := true, quorum := true }
+
+/-- A structurally invalid attested root (complete, but missing quorum). -/
+def badRoot : AttestedRoot := { root := 42, v4Complete := true, quorum := false }
+
+/-- A confined interaction log of two genuine attested turns. -/
+def confinedLog : InteractionLog := [.attested goodRoot, .attested goodRoot]
+
+/-- An unconfined interaction log containing an ambient reach outside the membrane. -/
+def ambientLog : InteractionLog := [.attested goodRoot, .ambient]
+
+/-- An unconfined interaction log containing a structurally invalid attestation. -/
+def forgedLog : InteractionLog := [.attested goodRoot, .attested badRoot]
+
+/-- Lookup a natural number field inside a `Core.Data.record`. -/
+def lookupNatField (key : String) : Data → Option Nat
+  | .record fields =>
+    match fields.lookup key with
+    | some (.natural n) => some n
+    | _                 => none
+  | _ => none
+
+/-- Council vote transition gate on `Core.Data`: status remains `1` (PENDING) and tally increments by `1`. -/
+def voteTransitionGate : TransitionGate where
+  pre  := fun d => lookupNatField "status" d == some 1
+  post := fun d => lookupNatField "status" d == some 1
+  link := fun old new =>
+    match lookupNatField "tally" old, lookupNatField "tally" new with
+    | some a, some b => b == a + 1
+    | _,      _      => false
+
+/-- Council resolve transition gate on `Core.Data`: status moves `1 → 2` (PENDING → RESOLVED)
+    and tally crosses the quorum threshold `3`. -/
+def resolveTransitionGate : TransitionGate where
+  pre  := fun d => lookupNatField "status" d == some 1
+  post := fun d => lookupNatField "status" d == some 2
+  link := fun old new =>
+    match lookupNatField "tally" old, lookupNatField "tally" new with
+    | some a, some b => decide (a < 3) && decide (3 ≤ b)
+    | _,      _      => false
+
+/-- Demo effect type for reactive council affordances. -/
+inductive CouncilEffect where
+  | castBallot (proposalId : Nat)
+  | resolveProposal (proposalId : Nat)
+  | inspectTally (proposalId : Nat)
+deriving DecidableEq, Repr
+
+def councilEffectDigest : CouncilEffect → Nat
+  | .castBallot n      => 3 * n
+  | .resolveProposal n => 3 * n + 1
+  | .inspectTally n    => 3 * n + 2
+
+def demoFireCtx : FireCtx CouncilEffect where
+  effectDigest := councilEffectDigest
+  prevDigest   := 9
+  preCommit    := 100
+  postCommit   := 110
+
+def voteAff : CellAffordance CouncilEffect :=
+  { required := [.write], effect := .castBallot 1, name := "vote" }
+
+def resolveAff : CellAffordance CouncilEffect :=
+  { required := [.grant], effect := .resolveProposal 1, name := "resolve" }
+
+def tallyViewAff : CellAffordance CouncilEffect :=
+  { required := [.read], effect := .inspectTally 1, name := "tally" }
+
+def voteReactiveBtn : ReactiveAffordance CouncilEffect :=
+  { aff := voteAff, gate := voteTransitionGate, openHeight := 10, closeHeight := 20 }
+
+def resolveReactiveBtn : ReactiveAffordance CouncilEffect :=
+  { aff := resolveAff, gate := resolveTransitionGate, openHeight := 10, closeHeight := 30 }
+
+def statePend0 : Data := .record [("status", .natural 1), ("tally", .natural 0)]
+def statePend1 : Data := .record [("status", .natural 1), ("tally", .natural 1)]
+def statePend2 : Data := .record [("status", .natural 1), ("tally", .natural 2)]
+def stateResolved3 : Data := .record [("status", .natural 2), ("tally", .natural 3)]
+
+def councilSurface : AffordanceSurface CouncilEffect :=
+  [voteAff, resolveAff, tallyViewAff]
+
+def chairViewer : MembraneViewer where
+  held        := [.read, .write, .grant]
+  permits     := fun n => n == "vote" || n == "resolve" || n == "tally"
+  activeNames := ["vote", "resolve", "tally"]
+
+def memberViewer : MembraneViewer where
+  held        := [.read, .write]
+  permits     := fun n => n == "vote" || n == "tally"
+  activeNames := ["vote", "tally"]
+
+def trusteeViewer : MembraneViewer where
+  held        := [.read]
+  permits     := fun n => n == "tally"
+  activeNames := ["tally"]
+
+def guestViewer : MembraneViewer where
+  held        := [.read]
+  permits     := fun _ => false
+  activeNames := []
+
+def councilSturdyref : Sturdyref CouncilEffect where
+  uri       := "dregg://council/proposal-1"
+  surface   := councilSurface
+  log       := confinedLog
+  lineage   := chairViewer
+  reachable := false
+
 /-! ## 1. Pillar 1 Verification: Derived `Rehydration` Liveness-Type & Replay Chain Coverage -/
 
 /-- Incomplete v4 receipt root (`v4Complete = false`, `quorum = true`). -/
@@ -127,29 +243,7 @@ theorem pillar2_membrane_reshare_and_sturdyref_suite :
     (rehydrateSturdyref { councilSturdyref with reachable := true } guestViewer).2 = .Live := by
   decide
 
-/-! ## 3. Pillar 3 Verification: Functorial Rerender Square & Frustum-Snapshot Re-Expansion -/
-
-theorem pillar3_rerender_square_and_snapshot_suite :
-    -- Determinism and idempotence
-    projectFor [.read, .write] (projectFor [.read, .write] councilSurface) =
-      projectFor [.read, .write] councilSurface ∧
-    -- Commuting square on `projectFor`
-    projectFor [.read, .write] (stepContent bumpProposalId councilSurface) =
-      stepContent bumpProposalId (projectFor [.read, .write] councilSurface) ∧
-    -- Commuting square on `projectMembrane`
-    projectMembrane memberViewer (stepContent bumpProposalId councilSurface) =
-      stepContent bumpProposalId (projectMembrane memberViewer councilSurface) ∧
-    -- Button count stability across content step
-    (projectFor [.read, .write] (stepContent bumpProposalId councilSurface)).length =
-      (projectFor [.read, .write] councilSurface).length ∧
-    -- Snapshot roundtrip & per-viewer attenuated re-expansion
-    rehydrate (snapshot councilSurface) [.read] = [tallyViewAff] ∧
-    rehydrate (snapshot councilSurface) [.read, .write] = [voteAff, tallyViewAff] ∧
-    rehydrate (snapshot councilSurface) [.read, .write, .grant] = councilSurface ∧
-    rehydrate (snapshot councilSurface) [.read] ≠ rehydrate (snapshot councilSurface) [.read, .write] := by
-  decide
-
-/-! ## 4. Pillar 4 Verification: 3-Dimensional `ReactiveAffordance` & 6 Cross-Polarity Teeth -/
+/-! ## 3. Pillar 4 Verification: 3-Dimensional `ReactiveAffordance` & 6 Cross-Polarity Teeth -/
 
 theorem pillar4_reactive_affordance_3d_suite :
     -- Positive corner: member votes inside window [10, 20] on valid 0 -> 1 tally increment
@@ -296,12 +390,6 @@ def membraneShowsIgnorePermits {φ : Type} (viewer : MembraneViewer) (aff : Cell
 
 #tooth Obend.Vault.Rehydration.membrane_two_viewers_distinct by mutation Obend.Vault.Rehydration.membraneShows := membraneShowsIgnorePermits
 
-/-- 8. Broken `stepContent` that clears the `required` gate when stepping affordance content. -/
-def stepContentCorruptGate {φ : Type} (f : φ → φ) (affs : List (CellAffordance φ)) : List (CellAffordance φ) :=
-  affs.map (fun a => { a with required := [], effect := f a.effect })
-
-#tooth Obend.Vault.Rehydration.rerender_square by mutation Obend.Vault.Rehydration.stepContent := stepContentCorruptGate
-
 /-! ## 6. Axiom Hygiene Verification (`0 sorryAx`, `0` Custom Axioms) -/
 
 -- Pillar 1: Derived `Rehydration` Liveness-Type & Replay Coverage
@@ -312,6 +400,7 @@ def stepContentCorruptGate {φ : Type} (f : φ → φ) (affs : List (CellAfforda
 #print axioms Obend.Vault.Rehydration.invalidAttestation_not_replayed
 #print axioms Obend.Vault.Rehydration.invalidAttestation_not_replayed_of_flags
 #print axioms Obend.Vault.Rehydration.chain_tamper_evident
+#print axioms Obend.Vault.Rehydration.chain_tamper_evident_or
 #print axioms Obend.Vault.Rehydration.replayFold_wellLinked
 #print axioms Obend.Vault.Rehydration.rootOf_isSome_iff_witnessed
 #print axioms Obend.Vault.Rehydration.witnessChain_wellLinked
@@ -320,8 +409,6 @@ def stepContentCorruptGate {φ : Type} (f : φ → φ) (affs : List (CellAfforda
 #print axioms Obend.Vault.Rehydration.unconfined_chain_drops_interactions
 #print axioms Obend.Vault.Rehydration.ambient_chain_drops_the_reach
 #print axioms Obend.Vault.Rehydration.replayedDeterministic_replays
-#print axioms Obend.Vault.Rehydration.replayedDeterministic_replays_satisfiable
-#print axioms Obend.Vault.Rehydration.replays_coverage_needs_confinement
 
 -- Pillar 2: `Sturdyref`, Per-Viewer `Membrane`, and Chained Reshare Attenuation
 #print axioms Obend.Vault.Rehydration.mem_projectMembrane
@@ -338,26 +425,6 @@ def stepContentCorruptGate {φ : Type} (f : φ → φ) (affs : List (CellAfforda
 #print axioms Obend.Vault.Rehydration.rehydrateSturdyref_liveness_iff_confined
 #print axioms Obend.Vault.Rehydration.rehydrateSturdyref_attenuates_both
 #print axioms Obend.Vault.Rehydration.rehydrateSturdyref_reshare_monotone
-#print axioms Obend.Vault.Rehydration.viewerOfMandate_attenuates
-#print axioms Obend.Vault.Rehydration.rehydrateVaultCells_root_invariant
-#print axioms Obend.Vault.Rehydration.rehydrateVaultCells_fog_noninterference
-#print axioms Obend.Vault.Rehydration.trustOfAttestedRoot_checked_iff
-#print axioms Obend.Vault.Rehydration.trustOfInteraction_checked_iff_witnessed
-#print axioms Obend.Vault.Rehydration.confined_iff_no_attested_support
-
--- Pillar 3: Functorial Rerender Square & Frustum-Snapshot Per-Viewer Re-Expansion
-#print axioms Obend.Vault.Rehydration.projectFor_monotone
-#print axioms Obend.Vault.Rehydration.projectFor_all_fireable
-#print axioms Obend.Vault.Rehydration.rerender_deterministic
-#print axioms Obend.Vault.Rehydration.rerender_idempotent
-#print axioms Obend.Vault.Rehydration.stepContent_gate
-#print axioms Obend.Vault.Rehydration.rerender_square
-#print axioms Obend.Vault.Rehydration.rerender_membrane_square
-#print axioms Obend.Vault.Rehydration.rerender_after_step_authorized
-#print axioms Obend.Vault.Rehydration.rerender_monotone
-#print axioms Obend.Vault.Rehydration.snapshot_roundtrip
-#print axioms Obend.Vault.Rehydration.snapshot_roundtrip_attenuated
-#print axioms Obend.Vault.Rehydration.snapshot_reexpansion_monotone
 
 -- Pillar 4: 3-Dimensional `ReactiveAffordance` & 6 Cross-Polarity Teeth
 #print axioms Obend.Vault.Rehydration.transitionOK_iff
@@ -378,7 +445,6 @@ def stepContentCorruptGate {φ : Type} (f : φ → φ) (affs : List (CellAfforda
 -- Master Suite Theorems
 #print axioms Obend.Tests.Rehydration.pillar1_liveness_and_replay_suite
 #print axioms Obend.Tests.Rehydration.pillar2_membrane_reshare_and_sturdyref_suite
-#print axioms Obend.Tests.Rehydration.pillar3_rerender_square_and_snapshot_suite
 #print axioms Obend.Tests.Rehydration.pillar4_reactive_affordance_3d_suite
 
 end Obend.Tests.Rehydration
