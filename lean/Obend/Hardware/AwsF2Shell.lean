@@ -230,11 +230,13 @@ theorem validateF2CorePortBindings_sound (cfg : F2WrapperConfig) (coreMod : RtlM
       b.width = p.2 ∧ boundF2ShellPort cfg .shToCl p.1 = b.shellPortName) ∧
     (∀ o ∈ coreMod.outputs, ∃ b ∈ cfg.portBindings, b.dir = .clToSh ∧ b.clSignalName = o.name ∧
       b.width = o.width ∧ b.shellPortName ≠ "cl_sh_flr_done" ∧ boundF2ShellPort cfg .clToSh o.name = b.shellPortName) := by
-  simp only [validateF2CorePortBindings, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hValid
-  rcases hValid with ⟨⟨⟨⟨⟨hW, hRtl⟩, hDom⟩, hNd⟩, hIn⟩, hOut⟩
-  refine ⟨hW, hRtl, hDom, hNd, fun p hp => ?_, fun o ho => ?_⟩
-  · obtain ⟨b, hM, hD, hN, hWd, _, hB⟩ := checkF2CorePort_sound (hIn p hp); exact ⟨b, hM, hD, hN, hWd, hB⟩
-  · obtain ⟨b, hM, hD, hN, hWd, hFlr, hB⟩ := checkF2CorePort_sound (hOut o ho); exact ⟨b, hM, hD, hN, hWd, hFlr rfl, hB⟩
+  unfold validateF2CorePortBindings at hValid
+  rcases Bool.and_eq_true_iff.mp hValid with ⟨h1, hOut⟩; rcases Bool.and_eq_true_iff.mp h1 with ⟨h2, hIn⟩
+  rcases Bool.and_eq_true_iff.mp h2 with ⟨h3, hNd⟩; rcases Bool.and_eq_true_iff.mp h3 with ⟨h4, hDom⟩
+  rcases Bool.and_eq_true_iff.mp h4 with ⟨hW, hRtl⟩
+  refine ⟨hW, hRtl, of_decide_eq_true hDom, of_decide_eq_true hNd, fun p hp => ?_, fun o ho => ?_⟩
+  · obtain ⟨b, hM, hD, hN, hWd, _, hB⟩ := checkF2CorePort_sound (List.all_eq_true.mp hIn p hp); exact ⟨b, hM, hD, hN, hWd, hB⟩
+  · obtain ⟨b, hM, hD, hN, hWd, hFlr, hB⟩ := checkF2CorePort_sound (List.all_eq_true.mp hOut o ho); exact ⟨b, hM, hD, hN, hWd, hFlr rfl, hB⟩
 /-- Named port connections of the `u_core` instance: `clk`/`rst` (the single-domain ports `emitModuleSV` emits),
 then every core input and output tied to its bound shell port. -/
 def f2CoreConnections (cfg : F2WrapperConfig) (coreMod : RtlModule) : List String :=

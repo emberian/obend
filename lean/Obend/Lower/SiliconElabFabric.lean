@@ -1369,7 +1369,7 @@ private theorem cuckooStep_ramReg {b : Nat} (hb : b < 8) (ins : Nat → BitVec 6
   unfold stepMemModule; dsimp only [cuckooSiliconElabMemModule, evalSyncRamReadNext, evalRtlExpr, List.map, List.foldl]
   rcases (by omega : b = 0 ∨ b = 1 ∨ b = 2 ∨ b = 3 ∨ b = 4 ∨ b = 5 ∨ b = 6 ∨ b = 7) with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact hTru64 _
 
-private theorem cuckooZ4_rejects_sorry_or_mvar (st : MemState) (ins : Nat → BitVec 64)
+theorem cuckooZ4_rejects_sorry_or_mvar (st : MemState) (ins : Nat → BitVec 64)
     (hIn4 : ins 4 = 0#64) (hLatch : (ins 7 >>> 2) &&& 1#64 = 1#64) (hBad : st.regs 7 = 1#64 ∨ st.regs 8 = 1#64) :
     (stepMemModule cuckooSiliconElabMemModule false ins st).regs 9 ≠ 1#64 := by
   rw [cuckooStep_coreReg (by decide)]

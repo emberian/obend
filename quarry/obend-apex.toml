@@ -1303,6 +1303,34 @@ module = "Obend.Hardware.Device.DriftDiffusion"
 theorem = "ddFormat_sound"
 description = "Scharfetter-Gummel quasi-Fermi drift-diffusion TCAD byte Judge (`devsim-qfermi@1`) proving parsed wire equilibrium, Poisson residual bounds, and current continuity."
 
+[[apex]]
+id = "hardware-yosys-lec-syncram-qf-aufbv-miter"
+subsystem = "Hardware"
+module = "Obend.Hardware.YosysLec"
+theorem = "lecMemScript_holds_iff"
+description = "Universal `QF_AUFBV` synchronous RAM array LEC miter soundness (`lecMemScript_holds_iff`) relating `RtlMemModule` next-state register/array transitions to SMT-LIB `SmtArr`/`SmtMemBV` assignments."
+
+[[apex]]
+id = "lower-cuckoo-syncram-elab-whnf-simulation"
+subsystem = "Lower"
+module = "Obend.Lower.SiliconElabFabric"
+theorem = "cuckooElabRtl_simulates_stepCamWhnf"
+description = "Cycle-accurate 8-bank `SyncRam` 2-choice Cuckoo `ExprCAM` hardware simulation (`cuckooElabRtl_simulates_stepCamWhnf`) matching software `stepCamWhnf` beta reduction in 4 clock cycles."
+
+[[apex]]
+id = "lower-cuckoo-offline-memacc-spill-sound"
+subsystem = "Lower"
+module = "Obend.Lower.SiliconElabFabric"
+theorem = "offlineMemCheck_spill_sound"
+description = "128-bit `GoldilocksExt2` Schwartz-Zippel offline memory-checking multiset accumulator (`offlineMemCheck_spill_sound`) authenticating spilled Cuckoo `ExprCAM` reads against DRAM."
+
+[[apex]]
+id = "lower-cuckoo-z4-rejects-sorry-or-mvar"
+subsystem = "Lower"
+module = "Obend.Lower.SiliconElabFabric"
+theorem = "cuckooZ4_rejects_sorry_or_mvar"
+description = "Hardware Zone-4 kernel gate refusal (`cuckooZ4_rejects_sorry_or_mvar`) proving `cuckooSiliconElabMemModule` refuses acceptance whenever `sorry` or unresolved metavariable flags are latched."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
