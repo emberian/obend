@@ -1,0 +1,14 @@
+[workspace]
+
+[package]
+name = "obend-crypto-exec"
+version = "0.1.0"
+edition = "2024"
+description = "High-performance no_std+alloc native Rust execution engine for Obend's 2026 Dual-Track Crypto Spine & RFC 8949 Deterministic CBOR"
+license = "Apache-2.0"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
