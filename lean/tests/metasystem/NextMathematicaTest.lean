@@ -84,6 +84,10 @@ example := @emitAndAccum_preserves_invariant
 example := @applyEqSatRule_preserves_consistency
 example := @saturateHyperEGraph_preserves_consistency
 example := @extractMinCost_improves_cost
+example := @extractMinCostHypergraph_sound
+example := @saturate_and_extract_preserves_eval
+example := @saturate_and_extract_preserves_eval_ssa
+example := @optimizeAdjointHypergraph_sound_universal
 example := goldenDiamondAdjoint_eqSat_strict_cost_reduction
 example := @optimizeAdjointHypergraph_preserves_cotangents
 example := @eqSat_preserves_eval_and_adjoint
@@ -93,7 +97,10 @@ example := pontryagin_flowpipe_adjoint_eqSat_sound
 #print axioms tmExpCertified_models
 #print axioms gradReverse_agrees_with_dual
 #print axioms picard_step_encloses_trajectory
+#print axioms verifyTrajectorySafety_sound
+#print axioms picardOperator_contraction
 #print axioms compileGraphAdjoint_dag_sound
+#print axioms saturate_and_extract_preserves_eval
 #print axioms eqSat_preserves_eval_and_adjoint
 #print axioms eqSat_pipelined_rtl_sound
 #print axioms pontryagin_flowpipe_adjoint_eqSat_sound

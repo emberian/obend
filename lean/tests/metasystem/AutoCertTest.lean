@@ -48,6 +48,7 @@ open Obend.Judge.SOS (Poly)
 open Obend.Analysis
   (CanonicalRat polyVarPow polyConst SosLyapunovProblem SosLyapunovCert
    goldenSosProblem goldenSosCert badSosCert
+   renderSosLyapunovProblemJson renderSosLyapunovCertJson
    decodeSosLyapunovProblem decodeSosLyapunovCert sosLyapunovFormat)
 open Obend.Hardware.HDL (RtlModule)
 open Obend.Hardware.Judge
@@ -176,19 +177,25 @@ theorem taylor_model_negative_refusals :
 theorem sos_lyapunov_synthesizes_and_checks :
     synthesizeSosLyapunovCert goldenSosProblem = some goldenSosCert ∧
     sosLyapunovFormat.checkBytes 0
+      (renderSosLyapunovProblemJson goldenSosProblem) (renderSosLyapunovCertJson goldenSosCert) = Verdict.ok ∧
+    autoSosLyapunovFormat.checkBytes 0
       (encodeSosLyapunovProblem goldenSosProblem) (encodeSosLyapunovCert goldenSosCert) = Verdict.ok :=
   ⟨by decide +kernel,
+   verdict_eq_ok_of_isOk (by decide +kernel),
    verdict_eq_ok_of_isOk (by decide +kernel)⟩
 
-/-- Exercise the structured JSON wire encoder/decoder path (`encodeSosLyapunovProblemJson` /
-    `encodeSosLyapunovCertJson`) through `decodeSosLyapunovProblem`, `decodeSosLyapunovCert`,
-    and `sosLyapunovFormat.checkBytes`. -/
+/-- Exercise the full general AST JSON wire encoder/decoder path (`renderSosLyapunovProblemJson` /
+    `renderSosLyapunovCertJson`) through `decodeSosLyapunovProblem`, `decodeSosLyapunovCert`,
+    and `sosLyapunovFormat.checkBytes`, alongside `autoSosLyapunovFormat` structured JSON. -/
 def checkStructuredSosJsonRoundtrip : Bool :=
-  let probJson := encodeSosLyapunovProblemJson goldenSosProblem
-  let certJson := encodeSosLyapunovCertJson goldenSosCert
-  (decodeSosLyapunovProblem probJson).isOk &&
-  (decodeSosLyapunovCert certJson).isOk &&
-  (sosLyapunovFormat.checkBytes 0 probJson certJson).isOk
+  let probJson := renderSosLyapunovProblemJson goldenSosProblem
+  let certJson := renderSosLyapunovCertJson goldenSosCert
+  let autoProbJson := encodeSosLyapunovProblemJson goldenSosProblem
+  let autoCertJson := encodeSosLyapunovCertJson goldenSosCert
+  (decodeSosLyapunovProblem probJson == .ok goldenSosProblem) &&
+  (decodeSosLyapunovCert certJson == .ok goldenSosCert) &&
+  (sosLyapunovFormat.checkBytes 0 probJson certJson).isOk &&
+  (autoSosLyapunovFormat.checkBytes 0 autoProbJson autoCertJson).isOk
 
 #guard checkStructuredSosJsonRoundtrip == true
 

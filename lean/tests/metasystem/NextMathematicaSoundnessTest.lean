@@ -2,8 +2,11 @@ import Obend.Tactic.Tooth
 import Obend.Analysis.RealAnalysis
 import Obend.Analysis.TaylorModel
 import Obend.Analysis.Flowpipe
+import Obend.Analysis.Hybrid
+import Obend.Analysis.SosLyapunov
 import Obend.Analysis.Groebner
 import Obend.Analysis.Diff
+import Obend.Analysis.EqSatHypergraph
 import Obend.Judge.RealAnalysis
 import Obend.Hardware.OpenHypergraph
 
@@ -407,7 +410,197 @@ theorem test_pipelined_rtl_has_stage_regs :
     fun name _ => { name := name, inputNames := [], wires := [], regs := [], outputs := [] }
 
 -- ============================================================================
--- 5. Axiom Audit (`0 sorryAx`)
+-- 5. Shard S3 Mathematical Closures (`TaylorModel`, `Flowpipe`, `Hybrid`, `SosLyapunov`, `EqSatHypergraph`)
+-- ============================================================================
+
+-- 5.1 Unconditional Certified `AnalyticModel` at Arbitrary Series Order (`SeriesOrder extra`)
+example (extra : Nat) (dom1 dom2 : Obend.Analysis.Interval)
+    (h1 : Obend.Analysis.Interval.subset dom1 expValidDomain = true)
+    (h2 : Obend.Analysis.Interval.subset dom2 ln1pValidDomain = true) :
+    TaylorModel.Models (AnalyticModel.expFn (R := SeriesOrder extra)) (tmExpCertified dom1) ∧
+    TaylorModel.Models (AnalyticModel.sinFn (R := SeriesOrder extra)) (tmSinCertified dom1) ∧
+    TaylorModel.Models (AnalyticModel.cosFn (R := SeriesOrder extra)) (tmCosCertified dom1) ∧
+    TaylorModel.Models (AnalyticModel.ln1pFn (R := SeriesOrder extra)) (tmLn1pCertified dom2) ∧
+    TaylorModel.Models (AnalyticModel.sqrt1pFn (R := SeriesOrder extra)) (tmSqrt1pCertified dom2) :=
+  ⟨ tmExpCertified_models (SeriesOrder extra) dom1 h1
+  , tmSinCertified_models (SeriesOrder extra) dom1 h1
+  , tmCosCertified_models (SeriesOrder extra) dom1 h1
+  , tmLn1pCertified_models (SeriesOrder extra) dom2 h2
+  , tmSqrt1pCertified_models (SeriesOrder extra) dom2 h2 ⟩
+
+example := @expCauchyEnclosure_encloses_higher_orders
+example := @sqrtRationalEnclosure_brackets_square
+
+#guard
+  let r := sqrtRationalEnclosure 6 2
+  decide (r.lo * r.lo ≤ 2 ∧ 2 ≤ r.hi * r.hi)
+
+-- 5.2 Picard Contraction, $K$-Step Trajectory Safety & `odeSafetyCellContract` (`Flowpipe.lean`)
+example := @picardOperator_self_maps_apriori
+example := @picardOperator_contraction
+example := @iteratePicardOperator_geometric_decay
+example := @picardOperator_unique_fixed_point
+example := @verifyTrajectorySafety_sound
+example := @picardIteratedTrajectory_safety_sound
+example := @odeSafetyCellContract_refuses_unsafe_ode
+example := odeSafetyCellContract_enforces_flowpipe_step
+
+/-- Concrete 2D `coupledOscillatorOde` 3-step trajectory safety for arbitrary Picard iteration order `m`. -/
+theorem test_coupledOscillator_picard_safety
+    (m : Nat) (rho0 : String → CanonicalRat)
+    (hInit : BoxMem rho0 [("x", ⟨0, CanonicalRat.mk 1 5⟩), ("v", ⟨0, CanonicalRat.mk 1 5⟩)]) :
+    let initBox : List (String × Obend.Analysis.Interval) :=
+      [("x", ⟨0, CanonicalRat.mk 1 5⟩), ("v", ⟨0, CanonicalRat.mk 1 5⟩)]
+    let safeBounds : List (String × Obend.Analysis.Interval) :=
+      [("x", ⟨-2, 2⟩), ("v", ⟨-2, 2⟩)]
+    ∃ tube,
+      runFlowpipe coupledOscillatorOde initBox 3 = some tube ∧
+      tube.length = 4 ∧
+      (∀ k, k ≤ 3 →
+        BoxMem (buildTaylorPicardDiscrete coupledOscillatorOde m rho0 k) (tube.getD k []) ∧
+        BoxMem (buildTaylorPicardDiscrete coupledOscillatorOde m rho0 k) safeBounds) ∧
+      (∀ k, k < 3 → ∀ τ ∈ Obend.Analysis.Interval.mk 0 coupledOscillatorOde.dt,
+        BoxMem (buildTaylorPicardTrajectory coupledOscillatorOde m rho0 k τ) safeBounds) :=
+  picardIteratedTrajectory_safety_sound
+    coupledOscillatorOde
+    [("x", ⟨0, CanonicalRat.mk 1 5⟩), ("v", ⟨0, CanonicalRat.mk 1 5⟩)]
+    [("x", ⟨-2, 2⟩), ("v", ⟨-2, 2⟩)]
+    3 m rho0
+    (by decide)
+    (Obend.Analysis.Interval.ofPoint_mem 0)
+    (by decide)
+    (by decide +kernel)
+    hInit
+
+-- 5.3 Multi-Hop `HybridTrajectorySafe` & Non-Preset Custom Automaton JSON AST Codec (`Hybrid.lean`)
+def customConverterAutomaton : HybridAutomaton where
+  modes :=
+    [ { modeId := "boost"
+      , ode := { fields := [("V", .sub (.const 12) (.var "V"))]
+               , dt := CanonicalRat.mk 1 4
+               , remainderPad := ⟨0, 0⟩ }
+      , invariantBounds := [("V", ⟨4, 11⟩)] }
+    , { modeId := "buck"
+      , ode := { fields := [("V", .sub (.const 5) (.var "V"))]
+               , dt := CanonicalRat.mk 1 4
+               , remainderPad := ⟨0, 0⟩ }
+      , invariantBounds := [("V", ⟨4, 11⟩)] } ]
+  jumps :=
+    [ { fromMode := "boost"
+      , toMode := "buck"
+      , guardBounds := [("V", ⟨6, 11⟩)]
+      , resetMap := { resets := [("V", 1, 0)] } } ]
+  safeEnvelope := [("V", ⟨3, 12⟩)]
+
+def customConverterProblem : HybridProblem where
+  automaton := customConverterAutomaton
+  varName   := "V"
+  initMode  := "boost"
+  initLo    := 6
+  initHi    := 7
+  unsafeLo  := 13
+  unsafeHi  := 20
+
+def customConverterCert : HybridCert where
+  schedule          := [.flowStep, .jumpTo "buck", .flowStep]
+  expectedFinalMode := "buck"
+  claimedSteps      := 3
+
+theorem test_customConverter_hybridTrajectorySafe :
+    HybridTrajectorySafe customConverterProblem customConverterCert :=
+  verifyFlowpipe_sound customConverterProblem customConverterCert (by decide +kernel)
+
+#guard
+  let probStr := renderHybridProblemJson customConverterProblem
+  let certStr := renderHybridCertJson customConverterCert
+  let okValid :=
+    match hybridFlowpipeFormat.checkBytes 0 probStr certStr with
+    | .ok => true
+    | _ => false
+  let okEmpty :=
+    match hybridFlowpipeFormat.checkBytes 0 "{}" "{}" with
+    | .ok => true
+    | _ => false
+  (decodeHybridProblem probStr == .ok customConverterProblem) &&
+  (decodeHybridCert certStr == .ok customConverterCert) &&
+  okValid && !okEmpty
+
+-- 5.4 Custom Non-Preset `SosLyapunovProblem` & $L^\top D L$ Gram-Matrix JSON AST Codec (`SosLyapunov.lean`)
+def customAnisotropicLyapunovSpec : SosLyapunovSpec where
+  dim         := 2
+  vectorField := [Poly.neg x0Poly, Poly.scale (-2) x1Poly]
+  domainIneqs := []
+  lyapunovV   := Poly.add (Poly.scale 2 (Poly.sqr x0Poly)) (Poly.scale 3 (Poly.sqr x1Poly))
+  radialEps   := 1
+  decayGamma  := 2
+
+def customAnisotropicLyapunovWitness : SosLyapunovWitness where
+  posDefCert :=
+    { monoidIndices := []
+    , sigma0        := { terms := [(1, x0Poly), (2, x1Poly)] }
+    , coneTerms     := []
+    , idealTerms    := [] }
+  lieDecayCert :=
+    { monoidIndices := []
+    , sigma0        := { terms := [(6, x1Poly)] }
+    , coneTerms     := []
+    , idealTerms    := [] }
+
+def customAnisotropicSosProblem : SosLyapunovProblem where
+  lyapunov := customAnisotropicLyapunovSpec
+  cbf      := goldenCbfSpec2D
+  dae      := goldenCircleDaeSpec
+
+def customAnisotropicSosCert : SosLyapunovCert where
+  lyapunovWitness := customAnisotropicLyapunovWitness
+  cbfWitness      := goldenCbfWitness2D
+  daeWitness      := goldenCircleDaeWitness
+
+theorem test_customAnisotropic_sos_semantic_sound :
+    customAnisotropicSosProblem.SemanticMeaning :=
+  checkSosLyapunovProblem_sound 0 customAnisotropicSosProblem customAnisotropicSosCert (by decide +kernel)
+
+#guard
+  let probJson := renderSosLyapunovProblemJson customAnisotropicSosProblem
+  let certJson := renderSosLyapunovCertJson customAnisotropicSosCert
+  let gramJsonStr :=
+    "{\"gramDiag\":[1,2],\"gramBasis\":[{\"op\":\"var\",\"index\":0},{\"op\":\"var\",\"index\":1}],\"gramFactors\":[[1,0],[0,1]]}"
+  let gramDecodedOk :=
+    match sosJsonParse gramJsonStr >>= decodeSOSPolyJson with
+    | .ok sos => (Poly.sub sos.expand (Poly.add (Poly.sqr x0Poly) (Poly.scale 2 (Poly.sqr x1Poly)))).isZero
+    | .error _ => false
+  let okValid :=
+    match sosLyapunovFormat.checkBytes 0 probJson certJson with
+    | .ok => true
+    | _ => false
+  (decodeSosLyapunovProblem probJson == .ok customAnisotropicSosProblem) &&
+  (decodeSosLyapunovCert certJson == .ok customAnisotropicSosCert) &&
+  okValid &&
+  gramDecodedOk
+
+-- 5.5 Universal Acyclic Hypergraph Equality Saturation & Extraction Soundness (`EqSatHypergraph.lean`)
+example := @extractMinCostHypergraph_sound
+example := @saturate_and_extract_preserves_eval
+example := @saturate_and_extract_preserves_eval_ssa
+example := @optimizeAdjointHypergraph_sound_universal
+example := @pruneDeadEdges_sound
+
+theorem test_universal_adjoint_eqSat_benchmarks (initEnv : Nat → Int) :
+    evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph) initEnv =
+      evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph) initEnv ∧
+    evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel coupledOscillatorStepHypergraph) initEnv =
+      evalHypergraphComb (compileGraphAdjoint coupledOscillatorStepHypergraph) initEnv ∧
+    evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel rnea2LinkCostHypergraph) initEnv =
+      evalHypergraphComb (compileGraphAdjoint rnea2LinkCostHypergraph) initEnv ∧
+    evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel statorCoupledLossHypergraph) initEnv =
+      evalHypergraphComb (compileGraphAdjoint statorCoupledLossHypergraph) initEnv :=
+  ⟨ optimizeAdjointHypergraph_sound_universal defaultRtlCostModel goldenDiamondHypergraph initEnv (by decide)
+  , optimizeAdjointHypergraph_sound_universal defaultRtlCostModel coupledOscillatorStepHypergraph initEnv (by decide)
+  , optimizeAdjointHypergraph_sound_universal defaultRtlCostModel rnea2LinkCostHypergraph initEnv (by decide)
+  , optimizeAdjointHypergraph_sound_universal defaultRtlCostModel statorCoupledLossHypergraph initEnv (by decide) ⟩
+
+-- ============================================================================
+-- 6. Axiom Audit (`0 sorryAx`)
 -- ============================================================================
 
 #print axioms Obend.Analysis.Interval.add_mem
@@ -424,6 +617,23 @@ theorem test_pipelined_rtl_has_stage_regs :
 #print axioms Obend.Analysis.tmExpCertified_models
 #print axioms Obend.Analysis.tmSinCertified_models
 #print axioms Obend.Analysis.tmCosCertified_models
+#print axioms Obend.Analysis.tmLn1pCertified_models
+#print axioms Obend.Analysis.tmSqrt1pCertified_models
+#print axioms Obend.Analysis.expCauchyEnclosure_encloses_higher_orders
+#print axioms Obend.Analysis.sqrtRationalEnclosure_brackets_square
+#print axioms Obend.Analysis.picardOperator_contraction
+#print axioms Obend.Analysis.picardOperator_unique_fixed_point
+#print axioms Obend.Analysis.verifyTrajectorySafety_sound
+#print axioms Obend.Analysis.picardIteratedTrajectory_safety_sound
+#print axioms Obend.Analysis.odeSafetyCellContract_refuses_unsafe_ode
+#print axioms Obend.Analysis.odeSafetyCellContract_enforces_flowpipe_step
+#print axioms Obend.Analysis.verifyFlowpipe_sound
+#print axioms Obend.Analysis.checkSosLyapunovProblem_sound
+#print axioms Obend.Analysis.sosLyapunovFormat_refuses_empty_json
+#print axioms Obend.Analysis.extractMinCostHypergraph_sound
+#print axioms Obend.Analysis.saturate_and_extract_preserves_eval
+#print axioms Obend.Analysis.saturate_and_extract_preserves_eval_ssa
+#print axioms Obend.Analysis.optimizeAdjointHypergraph_sound_universal
 #print axioms Obend.Analysis.evalDualInterval_sound
 #print axioms Obend.Analysis.meanValueEnclosure_sound
 #print axioms Obend.Analysis.evalOdeField_sound
