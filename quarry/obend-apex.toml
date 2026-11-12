@@ -941,6 +941,138 @@ theorem = "incrementalVerkleSnapshot_eq_fullCommit"
 description = "O(1) dirty-chunk `ChunkedWorld` COW snapshots match monolithic Ajtai/Dual Verkle commitments with idempotent torn-tail WAL crash recovery."
 
 # ==============================================================================
+# Wave 5/6A Batch 2 — Frustum Living Screenshots, Transclusion, PrivatePredicates,
+# CoReceipts, Regex/VPA/JSON, VerifiableCredentials, SafePhysicalShield, RF/PDE,
+# Poseidon2/DarkBazaar, BinaryTower256/DECO/CallTree, PrepaidLease & SurviveFire
+# ==============================================================================
+
+[[apex]]
+id = "vault-frustum-membrane-regraft-atomic"
+subsystem = "Vault"
+module = "Obend.Vault.FrustumMembrane"
+theorem = "regraftFrustum_atomic_conserving"
+description = "Capability-gated frustum living screenshots enforce severed-upstream interposition, atomic conserving world regraft, and path-independent membrane negotiation."
+
+[[apex]]
+id = "vault-transclusion-provenance-faithful"
+subsystem = "Vault"
+module = "Obend.Vault.TransclusionAndMirror"
+theorem = "transclusion_provenance_faithful"
+description = "256-bit receipt-chained transclusion enforces observed finalized reads, refuses authority amplification, and prevents unverified mirrors from claiming self-verification."
+
+[[apex]]
+id = "polis-private-predicate-3p-discharge"
+subsystem = "Polis"
+module = "Obend.Polis.PrivatePredicate"
+theorem = "privPred_conservation_sound"
+description = "Zero-knowledge private range/membership predicates and AEAD-sealed third-party caveat tickets enforce freshness, parent-tail binding, and value conservation."
+
+[[apex]]
+id = "polis-joint-coreceipt-closed-sound"
+subsystem = "Polis"
+module = "Obend.Polis.JointCoReceipt"
+theorem = "composeCoReceipts_closed_sound"
+description = "Cross-vat linear await/fulfill port wiring composes joint `zkpromise` co-receipts while refusing cyclic wiring, double-fills, and revoked lineages."
+
+[[apex]]
+id = "judge-symbolic-regex-committed-bisim"
+subsystem = "Judge"
+module = "Obend.Judge.SymbolicRegexBisim"
+theorem = "verifyCommittedBisim_sound_or_collision"
+description = "Brzozowski/Antimirov symbolic regex derivative bisimulation and counterexample search cryptographically bound to committed 256-bit expression digests."
+
+[[apex]]
+id = "judge-vpa-complement-json-redaction"
+subsystem = "Judge"
+module = "Obend.Judge.VpaComplementAndJson"
+theorem = "jsonRedaction_confinement"
+description = "Visibly pushdown automata Boolean closure, streaming JSON redaction confinement, canonical DetCBOR JSON commitments, and domain-separated Merkle span proofs."
+
+[[apex]]
+id = "polis-verifiable-credentials-inner-verifier"
+subsystem = "Polis"
+module = "Obend.Polis.VerifiableCredentials"
+theorem = "verifiableCredentialInnerVerifier_sound"
+description = "Selective-disclosure verifiable credentials refuse forged omission negatives and compile ex-post compliance receipts into inner-verifier capability gates."
+
+[[apex]]
+id = "hardware-safe-physical-shield-continuous-tube"
+subsystem = "Hardware"
+module = "Obend.Hardware.SafePhysicalShield"
+theorem = "continuous_plant_trace_safe_all_t"
+description = "Sampled RTL physical safety shield with inter-sample tube enclosure guarantees continuous-time plant safety across all timestamps and fail-closed OTA upgrades."
+
+[[apex]]
+id = "hardware-switched-cap-rf-cordic-error"
+subsystem = "Hardware"
+module = "Obend.Hardware.SwitchedCapRf"
+theorem = "cordicAtan2_error_lt_4000_urad"
+description = "Switched-capacitor Tayloe quadrature front-end passive charge transfer and integer CORDIC phase bound (< 4000 urad) welded to SDR FT8 tone slicing."
+
+[[apex]]
+id = "analysis-hyperbolic-pde-fvm-cert"
+subsystem = "Analysis"
+module = "Obend.Analysis.HyperbolicPdeCert"
+theorem = "check_sound"
+description = "Symmetric-hyperbolic finite-volume (`hyperbolic-fvm@1`) certificate Judge proving eigensystem fluctuation consistency, CFL bounds, and discrete energy decay."
+
+[[apex]]
+id = "crypto-poseidon2-goldilocks-bijective"
+subsystem = "Crypto"
+module = "Obend.Crypto.Poseidon2Goldilocks"
+theorem = "poseidon2Perm12_bijective"
+description = "Width-12 Goldilocks Poseidon2 permutation ($x^7$ S-box, MDS external/internal rounds) bijectivity and injective 56-bit-limb sponge padding."
+
+[[apex]]
+id = "crypto-darkbazaar-sable-rlwe-clearing"
+subsystem = "Crypto"
+module = "Obend.Crypto.DarkBazaar"
+theorem = "validDarkBazaarTrace_conserves_and_safe"
+description = "Pillar-4 DarkBazaar multi-epoch clearing composes Sable quantized witnesses, RLWE homomorphic batch aggregation, smudged threshold decryption, and nullifier replay refusal."
+
+[[apex]]
+id = "crypto-binary-tower256-ghash-roots"
+subsystem = "Crypto"
+module = "Obend.Crypto.BinaryTower256"
+theorem = "ghashDiff_roots_bound"
+description = "Wiedemann tower $\\mathbb{F}_{2^{2^k}}$ (`BitVec` `Simulates` refinement through $\\mathbb{F}_{2^{256}}$), multiplicative inverses, and GHASH forgery root bound."
+
+[[apex]]
+id = "judge-deco-https-calltree-verify"
+subsystem = "Judge"
+module = "Obend.Judge.DecoAndCallTree"
+theorem = "callTreeVerify_sound_or_collision"
+description = "256-bit DECO selective-disclosure TLS session attestations with nonce/intent replay refusal and multi-hop HTTPS call-tree dataflow provenance verification."
+
+[[apex]]
+id = "polis-prepaid-lease-fork-conservation"
+subsystem = "Polis"
+module = "Obend.Polis.PrepaidLeaseAndFork"
+theorem = "multi_fork_tree_conservation"
+description = "256-bit committed `PrepaidLease` metered draw conservation and sovereign `ConfinedSession.forkTwo` attenuation refusing egress/capability amplification."
+
+[[apex]]
+id = "polis-grain-custody-host-mmr-completeness"
+subsystem = "Polis"
+module = "Obend.Polis.GrainCustodyHost"
+theorem = "host_cannot_omit_committed_turn_or_collision"
+description = "Archive-first `GrainCustodyHost` one-ahead crash recovery, idempotent settlement WAL without double-charging, and Ariadne ingress MMR non-omission."
+
+[[apex]]
+id = "vault-survive-fire-por-resurrection"
+subsystem = "Vault"
+module = "Obend.Vault.SurviveFirePor"
+theorem = "resurrectWorldFromAuthenticShards_exact"
+description = "GF(256) Reed-Solomon $k$-of-$n$ Proof-of-Retrievability shards, $(t-1)$-private Shamir secret custody, and exact Vault world resurrection under enclave compromise."
+
+[[apex]]
+id = "vault-portable-continuation-migration"
+subsystem = "Vault"
+module = "Obend.Vault.PortableContinuation"
+theorem = "migrationHistory_preserves_home_or_collision"
+description = "Canonical DetCBOR `HomeArchive` export/import tombstones stale source hosts, refuses replay, and preserves pages, membranes, and balances across migrations."
+
+# ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
 

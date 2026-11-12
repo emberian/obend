@@ -33,6 +33,9 @@ public import Obend.Judge.Computational
 public import Obend.Judge.SvenvsCorrigibility
 public import Obend.Judge.CertifierRatchet
 public import Obend.Judge.ReflectiveGate
+public import Obend.Judge.SymbolicRegexBisim
+public import Obend.Judge.VpaComplementAndJson
+public import Obend.Judge.DecoAndCallTree
 public import Obend.Receipt
 public import Obend.Reasons
 public import Obend.Reasons.UnifiedEquilibrium
@@ -52,6 +55,10 @@ public import Obend.Vault
 public import Obend.Vault.Lsafe
 public import Obend.Vault.IrreversibleOutbox
 public import Obend.Vault.VerkleSnapshotBridge
+public import Obend.Vault.FrustumMembrane
+public import Obend.Vault.TransclusionAndMirror
+public import Obend.Vault.SurviveFirePor
+public import Obend.Vault.PortableContinuation
 public import Obend.Codec.DetCbor
 public import Obend.Consensus
 public import Obend.Consensus.SimplexLiveness
@@ -59,6 +66,8 @@ public import Obend.ClusterGov.PhysicalEnvelope
 public import Obend.Hardware
 public import Obend.Hardware.AwsF2Shell
 public import Obend.Hardware.CircuitDae
+public import Obend.Hardware.SafePhysicalShield
+public import Obend.Hardware.SwitchedCapRf
 public import Obend.Hardware.DprStutter
 public import Obend.Hardware.SiliconOuroboros
 public import Obend.Hardware.HvmConfluence
@@ -99,6 +108,7 @@ public import Obend.Analysis.Equitable
 public import Obend.Analysis.QuantumWalk
 public import Obend.Analysis.EqSatHypergraph
 public import Obend.Analysis.Hybrid
+public import Obend.Analysis.HyperbolicPdeCert
 public import Obend.Category
 public import Obend.Repair
 public import Obend.Repair.DeriveConfig
@@ -109,6 +119,9 @@ public import Obend.Tactic.ProgramLogic
 public import Obend.Tactic.SymbolicCert
 public import Obend.Tactic.ClaimAudit
 public import Obend.Crypto
+public import Obend.Crypto.Poseidon2Goldilocks
+public import Obend.Crypto.DarkBazaar
+public import Obend.Crypto.BinaryTower256
 public import Obend.Polis.EvidencedOcap
 public import Obend.Polis.ZkBiscuit
 public import Obend.Polis.VerkleUmem
@@ -118,6 +131,11 @@ public import Obend.Polis.HouyhnhnmMonitor
 public import Obend.Polis.ZoeSeatSettlement
 public import Obend.Polis.GrainPowerbox
 public import Obend.Polis.EpistemicVouchMarket
+public import Obend.Polis.VerifiableCredentials
+public import Obend.Polis.PrivatePredicate
+public import Obend.Polis.JointCoReceipt
+public import Obend.Polis.PrepaidLeaseAndFork
+public import Obend.Polis.GrainCustodyHost
 public import Obend.SymbolicZk.SemiringDatalog
 public import Obend.SymbolicZk.RankedFixpointArith
 public import Obend.SymbolicZk.CamUnifyArith
