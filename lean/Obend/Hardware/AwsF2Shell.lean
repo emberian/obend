@@ -1,22 +1,10 @@
 module
 /-
-# Obend.Hardware.AwsF2Shell — Authentic AWS EC2 F2 (`VU47P`) Shell, Embedded `FABulous` BAR0 Hot-Swap, RapidWright Hard Macros & EDA Signoff `Judge`s
-
-Formalizes the cloud-FPGA and open-PDK physical implementation verification layer:
-1. **Authentic AWS EC2 F2 (`xcvu47p-fsvh2892-2-e`) `cl_ports.vh` Shell Interface & Wrapper**:
-   512-bit AXI4 MM `sh_cl_dma_pcis_*` & `cl_sh_pcim_*`, 32-bit AXI4-Lite `ocl_cl_*` (BAR0) &
-   `sda_cl_*` (BAR4), 32-channel `cl_hbm_axi4`, `clk_main_a0` (250 MHz) + active-low `rst_main_n`,
-   refusing nonexistent fictional AXI-Stream ports (`sh_pcis_h2c_tdata`) and customer `ICAP`.
-2. **Embedded `FABulous` eFPGA PCIe BAR0 Hot-Swap Controller (`f2FabulousOverlayStep`)**:
-   Verified BAR0 AXI-Lite frame loader + freeze-isolate-authenticate-commit controller inside a
-   single static F2 AFI (`< 50 µs` swap, 256-bit `HashBytes.Hash` binding + CRC-64/`0xFAB` decode).
-3. **Pre-Placed UltraScale+ / RapidWright Locked Macro & `XDC` Emitter**:
-   Maps verified `PnrCertificate` coordinates onto `VU47P` `SLR0..2` (`SLICE_X*Y*`, `A6LUT..H6LUT`,
-   `AFF..HFF`, `DSP48E2_X*Y*`, `URAM288_X*Y*`, `IS_LOC_FIXED`, `IS_BEL_FIXED`, `CONTAIN_ROUTING`).
-4. **Untrusted EDA Signoff Ingestion `Judge`s (`vivadoPostRouteStaJudge` & `openPdkSignoffJudge`)**:
-   `"vivado-sta@1"` (`[FF, TT, SS]` WNS/WHS + clock uncertainty + Laguna SLR crossing penalties) &
-   `"openpdk-drc-sta@1"` (OpenSTA `[FF, TT, SS]` + Sky130 `130nm` / ASAP7 `7nm` multi-layer DRC +
-   4-sided via enclosure + two-sided synthesized-netlist-pin to OpenROAD-DEF-port bijection).
+# Obend.Hardware.AwsF2Shell — AWS EC2 F2 (`VU47P`) shell, `FABulous` BAR0 hot-swap, RapidWright macros, EDA signoff judges
+1. `cl_ports.vh` shell wrapper (`xcvu47p-fsvh2892-2-e`): duplicate-free port bindings, exact core port correspondence, wired `u_core`.
+2. Embedded `FABulous` eFPGA PCIe BAR0 hot-swap controller (`f2FabulousOverlayStep`), 256-bit frame digest binding.
+3. Pre-placed UltraScale+ / RapidWright locked macro and `XDC` emitter over verified `PnrCertificate` coordinates.
+4. Untrusted signoff judges `"vivado-sta@1"` and `"openpdk-drc-sta@1"` with token-wire byte codecs (`vivadoStaByteJudge`, `openpdkDrcStaByteJudge`).
 -/
 public import Obend.Core.Digest
 public import Obend.Judge.Class
@@ -28,34 +16,25 @@ public import Obend.Hardware.PlaceRoute
 public import Obend.Hardware.DRC
 public import Obend.Hardware.DprStutter
 public section
-
 namespace Obend.Hardware.AwsF2Shell
 open Obend.Category Obend.Hardware.Process Obend.Hardware.HDL
 open Obend.Hardware.Synth Obend.Hardware.PlaceRoute Obend.Hardware.DRC Obend.Hardware.DprStutter
-
 set_option autoImplicit false
 
 /-! ## 1. Authentic AWS EC2 F2 (`xcvu47p-fsvh2892-2-e`) `cl_ports.vh` Shell Interface & Wrapper -/
-
 @[expose] def awsF2TargetDevice : String := "xcvu47p-fsvh2892-2-e"
 @[expose] def awsF2MainClockPeriodPs : Nat := 4000
-
 inductive SlrId where | slr0 | slr1 | slr2 deriving DecidableEq, Repr, Inhabited
-
 def SlrId.toIndex : SlrId → Nat | .slr0 => 0 | .slr1 => 1 | .slr2 => 2
 def SlrId.toString : SlrId → String | .slr0 => "SLR0" | .slr1 => "SLR1" | .slr2 => "SLR2"
-
 def slrDistance (a b : SlrId) : Nat :=
   let ia := a.toIndex; let ib := b.toIndex
   if ia ≤ ib then ib - ia else ia - ib
-
 inductive F2PortDir where | shToCl | clToSh deriving DecidableEq, Repr
-
 inductive F2InterfaceGroup where
   | clkReset | flrMgmt | dmaPcisAxi4 | pcimAxi4
   | oclAxi4LiteBar0 | sdaAxi4LiteBar4 | appPfIrq | hbmAxi4 | hbmApb
   deriving DecidableEq, Repr
-
 structure F2ShellPortSpec where
   name : String
   dir : F2PortDir
@@ -63,125 +42,50 @@ structure F2ShellPortSpec where
   group : F2InterfaceGroup
   activeLow : Bool := false
   deriving DecidableEq, Repr
-
 /-- Canonical AWS EC2 F2 HDK v2 `cl_ports.vh` port table (`xcvu47p-fsvh2892-2-e`). -/
 def canonicalAwsF2ClPorts : List F2ShellPortSpec :=
-  [ { name := "clk_main_a0",             dir := .shToCl, width := 1,    group := .clkReset }
-  , { name := "rst_main_n",              dir := .shToCl, width := 1,    group := .clkReset, activeLow := true }
-  , { name := "clk_hbm_ref",             dir := .shToCl, width := 1,    group := .clkReset }
-  , { name := "sh_cl_flr_assert",        dir := .shToCl, width := 1,    group := .flrMgmt }
-  , { name := "cl_sh_flr_done",          dir := .clToSh, width := 1,    group := .flrMgmt }
-  , { name := "sh_cl_dma_pcis_awid",     dir := .shToCl, width := 16,   group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_awaddr",   dir := .shToCl, width := 64,   group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_awlen",    dir := .shToCl, width := 8,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_awsize",   dir := .shToCl, width := 3,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_awvalid",  dir := .shToCl, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_awready",  dir := .clToSh, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_wdata",    dir := .shToCl, width := 512,  group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_wstrb",    dir := .shToCl, width := 64,   group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_wlast",    dir := .shToCl, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_wvalid",   dir := .shToCl, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_wready",   dir := .clToSh, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_bid",      dir := .clToSh, width := 16,   group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_bresp",    dir := .clToSh, width := 2,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_bvalid",   dir := .clToSh, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_bready",   dir := .shToCl, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_arid",     dir := .shToCl, width := 16,   group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_araddr",   dir := .shToCl, width := 64,   group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_arlen",    dir := .shToCl, width := 8,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_arsize",   dir := .shToCl, width := 3,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_arvalid",  dir := .shToCl, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_arready",  dir := .clToSh, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_rid",      dir := .clToSh, width := 16,   group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_rdata",    dir := .clToSh, width := 512,  group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_rresp",    dir := .clToSh, width := 2,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_rlast",    dir := .clToSh, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_pcis_rvalid",   dir := .clToSh, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "sh_cl_dma_pcis_rready",   dir := .shToCl, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_wr_full",       dir := .clToSh, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_dma_rd_full",       dir := .clToSh, width := 1,    group := .dmaPcisAxi4 }
-  , { name := "cl_sh_pcim_awid",         dir := .clToSh, width := 16,   group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_awaddr",       dir := .clToSh, width := 64,   group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_awlen",        dir := .clToSh, width := 8,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_awsize",       dir := .clToSh, width := 3,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_awvalid",      dir := .clToSh, width := 1,    group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_awready",      dir := .shToCl, width := 1,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_wdata",        dir := .clToSh, width := 512,  group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_wstrb",        dir := .clToSh, width := 64,   group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_wlast",        dir := .clToSh, width := 1,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_wvalid",       dir := .clToSh, width := 1,    group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_wready",       dir := .shToCl, width := 1,    group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_bid",          dir := .shToCl, width := 16,   group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_bresp",        dir := .shToCl, width := 2,    group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_bvalid",       dir := .shToCl, width := 1,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_bready",       dir := .clToSh, width := 1,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_arid",         dir := .clToSh, width := 16,   group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_araddr",       dir := .clToSh, width := 64,   group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_arlen",        dir := .clToSh, width := 8,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_arsize",       dir := .clToSh, width := 3,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_arvalid",      dir := .clToSh, width := 1,    group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_arready",      dir := .shToCl, width := 1,    group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_rid",          dir := .shToCl, width := 16,   group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_rdata",        dir := .shToCl, width := 512,  group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_rresp",        dir := .shToCl, width := 2,    group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_rlast",        dir := .shToCl, width := 1,    group := .pcimAxi4 }
-  , { name := "sh_cl_pcim_rvalid",       dir := .shToCl, width := 1,    group := .pcimAxi4 }
-  , { name := "cl_sh_pcim_rready",       dir := .clToSh, width := 1,    group := .pcimAxi4 }
-  , { name := "ocl_cl_awaddr",           dir := .shToCl, width := 32,   group := .oclAxi4LiteBar0 }
-  , { name := "ocl_cl_awvalid",          dir := .shToCl, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "cl_ocl_awready",          dir := .clToSh, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "ocl_cl_wdata",            dir := .shToCl, width := 32,   group := .oclAxi4LiteBar0 }
-  , { name := "ocl_cl_wstrb",            dir := .shToCl, width := 4,    group := .oclAxi4LiteBar0 }
-  , { name := "ocl_cl_wvalid",           dir := .shToCl, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "cl_ocl_wready",           dir := .clToSh, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "cl_ocl_bresp",            dir := .clToSh, width := 2,    group := .oclAxi4LiteBar0 }
-  , { name := "cl_ocl_bvalid",           dir := .clToSh, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "ocl_cl_bready",           dir := .shToCl, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "ocl_cl_araddr",           dir := .shToCl, width := 32,   group := .oclAxi4LiteBar0 }
-  , { name := "ocl_cl_arvalid",          dir := .shToCl, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "cl_ocl_arready",          dir := .clToSh, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "cl_ocl_rdata",            dir := .clToSh, width := 32,   group := .oclAxi4LiteBar0 }
-  , { name := "cl_ocl_rresp",            dir := .clToSh, width := 2,    group := .oclAxi4LiteBar0 }
-  , { name := "cl_ocl_rvalid",           dir := .clToSh, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "ocl_cl_rready",           dir := .shToCl, width := 1,    group := .oclAxi4LiteBar0 }
-  , { name := "sda_cl_awaddr",           dir := .shToCl, width := 32,   group := .sdaAxi4LiteBar4 }
-  , { name := "sda_cl_awvalid",          dir := .shToCl, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sda_awready",          dir := .clToSh, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "sda_cl_wdata",            dir := .shToCl, width := 32,   group := .sdaAxi4LiteBar4 }
-  , { name := "sda_cl_wstrb",            dir := .shToCl, width := 4,    group := .sdaAxi4LiteBar4 }
-  , { name := "sda_cl_wvalid",           dir := .shToCl, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sda_wready",           dir := .clToSh, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sda_bresp",            dir := .clToSh, width := 2,    group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sda_bvalid",           dir := .clToSh, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "sda_cl_bready",           dir := .shToCl, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "sda_cl_araddr",           dir := .shToCl, width := 32,   group := .sdaAxi4LiteBar4 }
-  , { name := "sda_cl_arvalid",          dir := .shToCl, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sda_arready",          dir := .clToSh, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sda_rdata",            dir := .clToSh, width := 32,   group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sda_rresp",            dir := .clToSh, width := 2,    group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sda_rvalid",           dir := .clToSh, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "sda_cl_rready",           dir := .shToCl, width := 1,    group := .sdaAxi4LiteBar4 }
-  , { name := "cl_sh_apppf_irq_req",     dir := .clToSh, width := 16,   group := .appPfIrq }
-  , { name := "sh_cl_apppf_irq_ack",     dir := .shToCl, width := 16,   group := .appPfIrq }
-  , { name := "cl_hbm_axi4_awaddr",      dir := .clToSh, width := 1088, group := .hbmAxi4 }
-  , { name := "cl_hbm_axi4_wdata",       dir := .clToSh, width := 8192, group := .hbmAxi4 }
-  , { name := "cl_hbm_axi4_rdata",       dir := .shToCl, width := 8192, group := .hbmAxi4 }
-  , { name := "cl_hbm_axi4_ch_enable",   dir := .clToSh, width := 32,   group := .hbmAxi4 }
-  , { name := "hbm_apb_paddr_0",         dir := .clToSh, width := 22,   group := .hbmApb }
-  , { name := "hbm_apb_pwdata_0",        dir := .clToSh, width := 32,   group := .hbmApb }
-  , { name := "hbm_apb_prdata_0",        dir := .shToCl, width := 32,   group := .hbmApb }
-  , { name := "hbm_apb_paddr_1",         dir := .clToSh, width := 22,   group := .hbmApb }
-  , { name := "hbm_apb_pwdata_1",        dir := .clToSh, width := 32,   group := .hbmApb }
-  , { name := "hbm_apb_prdata_1",        dir := .shToCl, width := 32,   group := .hbmApb }
-  , { name := "cl_sh_hbm_stat_int",      dir := .clToSh, width := 8,    group := .hbmApb } ]
-
+  [ ⟨"clk_main_a0", .shToCl, 1, .clkReset, false⟩, ⟨"rst_main_n", .shToCl, 1, .clkReset, true⟩, ⟨"clk_hbm_ref", .shToCl, 1, .clkReset, false⟩
+  , ⟨"sh_cl_flr_assert", .shToCl, 1, .flrMgmt, false⟩, ⟨"cl_sh_flr_done", .clToSh, 1, .flrMgmt, false⟩, ⟨"sh_cl_dma_pcis_awid", .shToCl, 16, .dmaPcisAxi4, false⟩
+  , ⟨"sh_cl_dma_pcis_awaddr", .shToCl, 64, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_awlen", .shToCl, 8, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_awsize", .shToCl, 3, .dmaPcisAxi4, false⟩
+  , ⟨"sh_cl_dma_pcis_awvalid", .shToCl, 1, .dmaPcisAxi4, false⟩, ⟨"cl_sh_dma_pcis_awready", .clToSh, 1, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_wdata", .shToCl, 512, .dmaPcisAxi4, false⟩
+  , ⟨"sh_cl_dma_pcis_wstrb", .shToCl, 64, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_wlast", .shToCl, 1, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_wvalid", .shToCl, 1, .dmaPcisAxi4, false⟩
+  , ⟨"cl_sh_dma_pcis_wready", .clToSh, 1, .dmaPcisAxi4, false⟩, ⟨"cl_sh_dma_pcis_bid", .clToSh, 16, .dmaPcisAxi4, false⟩, ⟨"cl_sh_dma_pcis_bresp", .clToSh, 2, .dmaPcisAxi4, false⟩
+  , ⟨"cl_sh_dma_pcis_bvalid", .clToSh, 1, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_bready", .shToCl, 1, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_arid", .shToCl, 16, .dmaPcisAxi4, false⟩
+  , ⟨"sh_cl_dma_pcis_araddr", .shToCl, 64, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_arlen", .shToCl, 8, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_arsize", .shToCl, 3, .dmaPcisAxi4, false⟩
+  , ⟨"sh_cl_dma_pcis_arvalid", .shToCl, 1, .dmaPcisAxi4, false⟩, ⟨"cl_sh_dma_pcis_arready", .clToSh, 1, .dmaPcisAxi4, false⟩, ⟨"cl_sh_dma_pcis_rid", .clToSh, 16, .dmaPcisAxi4, false⟩
+  , ⟨"cl_sh_dma_pcis_rdata", .clToSh, 512, .dmaPcisAxi4, false⟩, ⟨"cl_sh_dma_pcis_rresp", .clToSh, 2, .dmaPcisAxi4, false⟩, ⟨"cl_sh_dma_pcis_rlast", .clToSh, 1, .dmaPcisAxi4, false⟩
+  , ⟨"cl_sh_dma_pcis_rvalid", .clToSh, 1, .dmaPcisAxi4, false⟩, ⟨"sh_cl_dma_pcis_rready", .shToCl, 1, .dmaPcisAxi4, false⟩, ⟨"cl_sh_dma_wr_full", .clToSh, 1, .dmaPcisAxi4, false⟩
+  , ⟨"cl_sh_dma_rd_full", .clToSh, 1, .dmaPcisAxi4, false⟩, ⟨"cl_sh_pcim_awid", .clToSh, 16, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_awaddr", .clToSh, 64, .pcimAxi4, false⟩
+  , ⟨"cl_sh_pcim_awlen", .clToSh, 8, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_awsize", .clToSh, 3, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_awvalid", .clToSh, 1, .pcimAxi4, false⟩
+  , ⟨"sh_cl_pcim_awready", .shToCl, 1, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_wdata", .clToSh, 512, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_wstrb", .clToSh, 64, .pcimAxi4, false⟩
+  , ⟨"cl_sh_pcim_wlast", .clToSh, 1, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_wvalid", .clToSh, 1, .pcimAxi4, false⟩, ⟨"sh_cl_pcim_wready", .shToCl, 1, .pcimAxi4, false⟩
+  , ⟨"sh_cl_pcim_bid", .shToCl, 16, .pcimAxi4, false⟩, ⟨"sh_cl_pcim_bresp", .shToCl, 2, .pcimAxi4, false⟩, ⟨"sh_cl_pcim_bvalid", .shToCl, 1, .pcimAxi4, false⟩
+  , ⟨"cl_sh_pcim_bready", .clToSh, 1, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_arid", .clToSh, 16, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_araddr", .clToSh, 64, .pcimAxi4, false⟩
+  , ⟨"cl_sh_pcim_arlen", .clToSh, 8, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_arsize", .clToSh, 3, .pcimAxi4, false⟩, ⟨"cl_sh_pcim_arvalid", .clToSh, 1, .pcimAxi4, false⟩
+  , ⟨"sh_cl_pcim_arready", .shToCl, 1, .pcimAxi4, false⟩, ⟨"sh_cl_pcim_rid", .shToCl, 16, .pcimAxi4, false⟩, ⟨"sh_cl_pcim_rdata", .shToCl, 512, .pcimAxi4, false⟩
+  , ⟨"sh_cl_pcim_rresp", .shToCl, 2, .pcimAxi4, false⟩, ⟨"sh_cl_pcim_rlast", .shToCl, 1, .pcimAxi4, false⟩, ⟨"sh_cl_pcim_rvalid", .shToCl, 1, .pcimAxi4, false⟩
+  , ⟨"cl_sh_pcim_rready", .clToSh, 1, .pcimAxi4, false⟩, ⟨"ocl_cl_awaddr", .shToCl, 32, .oclAxi4LiteBar0, false⟩, ⟨"ocl_cl_awvalid", .shToCl, 1, .oclAxi4LiteBar0, false⟩
+  , ⟨"cl_ocl_awready", .clToSh, 1, .oclAxi4LiteBar0, false⟩, ⟨"ocl_cl_wdata", .shToCl, 32, .oclAxi4LiteBar0, false⟩, ⟨"ocl_cl_wstrb", .shToCl, 4, .oclAxi4LiteBar0, false⟩
+  , ⟨"ocl_cl_wvalid", .shToCl, 1, .oclAxi4LiteBar0, false⟩, ⟨"cl_ocl_wready", .clToSh, 1, .oclAxi4LiteBar0, false⟩, ⟨"cl_ocl_bresp", .clToSh, 2, .oclAxi4LiteBar0, false⟩
+  , ⟨"cl_ocl_bvalid", .clToSh, 1, .oclAxi4LiteBar0, false⟩, ⟨"ocl_cl_bready", .shToCl, 1, .oclAxi4LiteBar0, false⟩, ⟨"ocl_cl_araddr", .shToCl, 32, .oclAxi4LiteBar0, false⟩
+  , ⟨"ocl_cl_arvalid", .shToCl, 1, .oclAxi4LiteBar0, false⟩, ⟨"cl_ocl_arready", .clToSh, 1, .oclAxi4LiteBar0, false⟩, ⟨"cl_ocl_rdata", .clToSh, 32, .oclAxi4LiteBar0, false⟩
+  , ⟨"cl_ocl_rresp", .clToSh, 2, .oclAxi4LiteBar0, false⟩, ⟨"cl_ocl_rvalid", .clToSh, 1, .oclAxi4LiteBar0, false⟩, ⟨"ocl_cl_rready", .shToCl, 1, .oclAxi4LiteBar0, false⟩
+  , ⟨"sda_cl_awaddr", .shToCl, 32, .sdaAxi4LiteBar4, false⟩, ⟨"sda_cl_awvalid", .shToCl, 1, .sdaAxi4LiteBar4, false⟩, ⟨"cl_sda_awready", .clToSh, 1, .sdaAxi4LiteBar4, false⟩
+  , ⟨"sda_cl_wdata", .shToCl, 32, .sdaAxi4LiteBar4, false⟩, ⟨"sda_cl_wstrb", .shToCl, 4, .sdaAxi4LiteBar4, false⟩, ⟨"sda_cl_wvalid", .shToCl, 1, .sdaAxi4LiteBar4, false⟩
+  , ⟨"cl_sda_wready", .clToSh, 1, .sdaAxi4LiteBar4, false⟩, ⟨"cl_sda_bresp", .clToSh, 2, .sdaAxi4LiteBar4, false⟩, ⟨"cl_sda_bvalid", .clToSh, 1, .sdaAxi4LiteBar4, false⟩
+  , ⟨"sda_cl_bready", .shToCl, 1, .sdaAxi4LiteBar4, false⟩, ⟨"sda_cl_araddr", .shToCl, 32, .sdaAxi4LiteBar4, false⟩, ⟨"sda_cl_arvalid", .shToCl, 1, .sdaAxi4LiteBar4, false⟩
+  , ⟨"cl_sda_arready", .clToSh, 1, .sdaAxi4LiteBar4, false⟩, ⟨"cl_sda_rdata", .clToSh, 32, .sdaAxi4LiteBar4, false⟩, ⟨"cl_sda_rresp", .clToSh, 2, .sdaAxi4LiteBar4, false⟩
+  , ⟨"cl_sda_rvalid", .clToSh, 1, .sdaAxi4LiteBar4, false⟩, ⟨"sda_cl_rready", .shToCl, 1, .sdaAxi4LiteBar4, false⟩, ⟨"cl_sh_apppf_irq_req", .clToSh, 16, .appPfIrq, false⟩
+  , ⟨"sh_cl_apppf_irq_ack", .shToCl, 16, .appPfIrq, false⟩, ⟨"cl_hbm_axi4_awaddr", .clToSh, 1088, .hbmAxi4, false⟩, ⟨"cl_hbm_axi4_wdata", .clToSh, 8192, .hbmAxi4, false⟩
+  , ⟨"cl_hbm_axi4_rdata", .shToCl, 8192, .hbmAxi4, false⟩, ⟨"cl_hbm_axi4_ch_enable", .clToSh, 32, .hbmAxi4, false⟩, ⟨"hbm_apb_paddr_0", .clToSh, 22, .hbmApb, false⟩
+  , ⟨"hbm_apb_pwdata_0", .clToSh, 32, .hbmApb, false⟩, ⟨"hbm_apb_prdata_0", .shToCl, 32, .hbmApb, false⟩, ⟨"hbm_apb_paddr_1", .clToSh, 22, .hbmApb, false⟩
+  , ⟨"hbm_apb_pwdata_1", .clToSh, 32, .hbmApb, false⟩, ⟨"hbm_apb_prdata_1", .shToCl, 32, .hbmApb, false⟩, ⟨"cl_sh_hbm_stat_int", .clToSh, 8, .hbmApb, false⟩ ]
 def isForbiddenFictionalOrIcapPort (portName : String) : Bool :=
   portName == "sh_pcis_h2c_tdata" || portName == "sh_pcis_h2c_tvalid" ||
   portName == "sh_pcis_h2c_tready" || portName == "cl_pcis_c2h_tdata" ||
   portName == "cl_pcis_c2h_tvalid" || portName == "sh_pcis_c2h_tready" ||
   portName == "icap_clk" || portName == "icap_csib" ||
   portName == "icap_rdwrb" || portName == "icap_i" || portName == "icap_o"
-
 structure F2PortBinding where
   shellPortName : String
   clSignalName : String
@@ -189,7 +93,6 @@ structure F2PortBinding where
   width : Nat
   activeLow : Bool := false
   deriving DecidableEq, Repr
-
 structure F2WrapperConfig where
   clModuleName : String
   targetDevice : String := awsF2TargetDevice
@@ -198,11 +101,9 @@ structure F2WrapperConfig where
   hbmChannelsUsed : Nat := 32
   portBindings : List F2PortBinding
   deriving DecidableEq, Repr
-
 def findAwsF2ShellPort? (nm : String) : List F2ShellPortSpec → Option F2ShellPortSpec
   | [] => none
   | p :: rest => if p.name == nm then some p else findAwsF2ShellPort? nm rest
-
 private theorem findAwsF2ShellPort_mem {nm : String} {ports : List F2ShellPortSpec} {spec : F2ShellPortSpec}
     (hFind : findAwsF2ShellPort? nm ports = some spec) : spec ∈ ports ∧ spec.name = nm := by
   induction ports with
@@ -212,18 +113,18 @@ private theorem findAwsF2ShellPort_mem {nm : String} {ports : List F2ShellPortSp
     · rename_i hEq; injection hFind with hSpec; subst hSpec
       exact ⟨List.Mem.head _, beq_iff_eq.mp hEq⟩
     · obtain ⟨hMem, hNm⟩ := ih hFind; exact ⟨List.Mem.tail _ hMem, hNm⟩
-
 def checkSingleF2PortBinding (b : F2PortBinding) : Bool :=
   (!isForbiddenFictionalOrIcapPort b.shellPortName) &&
   match findAwsF2ShellPort? b.shellPortName canonicalAwsF2ClPorts with
   | none => false
   | some spec => (spec.dir == b.dir) && (spec.width == b.width) && (spec.activeLow == b.activeLow)
-
+/-- Device, reset polarity, ICAP and HBM gates, every binding canonical in `cl_ports.vh`, and no shell port
+or CL signal bound twice (a doubly bound shell port is a multi-driver net or an ambiguous tap). -/
 @[expose] def validateF2WrapperPortBinding (cfg : F2WrapperConfig) : Bool :=
   (cfg.targetDevice == awsF2TargetDevice) && cfg.rstActiveLow && (!cfg.usesCustomerIcap) &&
   decide (cfg.hbmChannelsUsed ≤ 32) && (!cfg.portBindings.isEmpty) &&
-  cfg.portBindings.all checkSingleF2PortBinding
-
+  cfg.portBindings.all checkSingleF2PortBinding &&
+  decide (cfg.portBindings.map (·.shellPortName)).Nodup && decide (cfg.portBindings.map (·.clSignalName)).Nodup
 def defaultAwsF2WrapperConfig : F2WrapperConfig where
   clModuleName := "cl_obend_f2"
   portBindings :=
@@ -233,17 +134,19 @@ def defaultAwsF2WrapperConfig : F2WrapperConfig where
     , { shellPortName := "cl_sh_flr_done",        clSignalName := "flr_done",       dir := .clToSh, width := 1 }
     , { shellPortName := "sh_cl_dma_pcis_wdata",  clSignalName := "dma_pcis_wdata", dir := .shToCl, width := 512 }
     , { shellPortName := "cl_sh_dma_pcis_rdata",  clSignalName := "dma_pcis_rdata", dir := .clToSh, width := 512 }
+    , { shellPortName := "sh_cl_dma_pcis_awaddr", clSignalName := "a",              dir := .shToCl, width := 64 }
+    , { shellPortName := "sh_cl_dma_pcis_araddr", clSignalName := "b",              dir := .shToCl, width := 64 }
+    , { shellPortName := "cl_sh_pcim_awaddr",     clSignalName := "y",              dir := .clToSh, width := 64 }
     , { shellPortName := "ocl_cl_awaddr",         clSignalName := "bar0_awaddr",    dir := .shToCl, width := 32 }
     , { shellPortName := "ocl_cl_wdata",          clSignalName := "bar0_wdata",     dir := .shToCl, width := 32 }
     , { shellPortName := "cl_ocl_rdata",          clSignalName := "bar0_rdata",     dir := .clToSh, width := 32 }
     , { shellPortName := "cl_hbm_axi4_ch_enable", clSignalName := "hbm_ch_en",      dir := .clToSh, width := 32 } ]
-
 example : validateF2WrapperPortBinding defaultAwsF2WrapperConfig = true := by decide +kernel
-
 theorem validateF2WrapperPortBinding_sound (cfg : F2WrapperConfig)
     (hValid : validateF2WrapperPortBinding cfg = true) :
     cfg.targetDevice = awsF2TargetDevice ∧ cfg.rstActiveLow = true ∧
     cfg.usesCustomerIcap = false ∧ cfg.hbmChannelsUsed ≤ 32 ∧ cfg.portBindings ≠ [] ∧
+    (cfg.portBindings.map (·.shellPortName)).Nodup ∧ (cfg.portBindings.map (·.clSignalName)).Nodup ∧
     ∀ b ∈ cfg.portBindings,
       isForbiddenFictionalOrIcapPort b.shellPortName = false ∧
       ∃ spec ∈ canonicalAwsF2ClPorts,
@@ -251,9 +154,9 @@ theorem validateF2WrapperPortBinding_sound (cfg : F2WrapperConfig)
         spec.width = b.width ∧ spec.activeLow = b.activeLow := by
   simp only [validateF2WrapperPortBinding, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true',
     decide_eq_true_eq, List.all_eq_true] at hValid
-  rcases hValid with ⟨⟨⟨⟨⟨hDev, hRst⟩, hNoIcap⟩, hHbm⟩, hNonEmpty⟩, hAll⟩
+  rcases hValid with ⟨⟨⟨⟨⟨⟨⟨hDev, hRst⟩, hNoIcap⟩, hHbm⟩, hNonEmpty⟩, hAll⟩, hNdS⟩, hNdC⟩
   have hNeNil : cfg.portBindings ≠ [] := by intro hNil; rw [hNil] at hNonEmpty; cases hNonEmpty
-  refine ⟨hDev, hRst, hNoIcap, hHbm, hNeNil, fun b hb => ?_⟩
+  refine ⟨hDev, hRst, hNoIcap, hHbm, hNeNil, hNdS, hNdC, fun b hb => ?_⟩
   have hbOk := hAll b hb; unfold checkSingleF2PortBinding at hbOk
   simp only [Bool.and_eq_true, Bool.not_eq_true'] at hbOk
   rcases hbOk with ⟨hNotForb, hMatch⟩
@@ -263,7 +166,6 @@ theorem validateF2WrapperPortBinding_sound (cfg : F2WrapperConfig)
     rw [hFind] at hMatch; simp only [Bool.and_eq_true, beq_iff_eq] at hMatch
     obtain ⟨hMem, hNm⟩ := findAwsF2ShellPort_mem hFind
     exact ⟨hNotForb, spec, hMem, hNm, hMatch.1.1, hMatch.1.2, hMatch.2⟩
-
 theorem fictional_pcis_stream_port_refused (cfg : F2WrapperConfig) (clSig : String) (d : F2PortDir) (w : Nat) :
     validateF2WrapperPortBinding
       { cfg with portBindings := { shellPortName := "sh_pcis_h2c_tdata", clSignalName := clSig, dir := d, width := w } :: cfg.portBindings } = false ∧
@@ -271,28 +173,125 @@ theorem fictional_pcis_stream_port_refused (cfg : F2WrapperConfig) (clSig : Stri
   refine ⟨?_, ?_⟩
   · unfold validateF2WrapperPortBinding checkSingleF2PortBinding isForbiddenFictionalOrIcapPort; simp
   · unfold validateF2WrapperPortBinding; simp
-
+/-- First binding of direction `d` whose CL-side signal is `nm`. -/
+def findF2Binding? (d : F2PortDir) (nm : String) : List F2PortBinding → Option F2PortBinding
+  | [] => none
+  | b :: rest => if b.dir == d && b.clSignalName == nm then some b else findF2Binding? d nm rest
+private theorem findF2Binding_mem {d : F2PortDir} {nm : String} {bs : List F2PortBinding} {b : F2PortBinding}
+    (hFind : findF2Binding? d nm bs = some b) : b ∈ bs ∧ b.dir = d ∧ b.clSignalName = nm := by
+  induction bs with
+  | nil => cases hFind
+  | cons p rest ih =>
+    unfold findF2Binding? at hFind; split at hFind
+    · rename_i hEq; injection hFind with hB; subst hB
+      simp only [Bool.and_eq_true, beq_iff_eq] at hEq; exact ⟨List.Mem.head _, hEq.1, hEq.2⟩
+    · obtain ⟨hMem, hRest⟩ := ih hFind; exact ⟨List.Mem.tail _ hMem, hRest⟩
+/-- The shell port a core port `nm` of direction `d` is wired to (`validateF2CorePortBindings` makes it resolve). -/
+def boundF2ShellPort (cfg : F2WrapperConfig) (d : F2PortDir) (nm : String) : String :=
+  match findF2Binding? d nm cfg.portBindings with | some b => b.shellPortName | none => "/* unbound */"
+/-- Core port `nm` (direction `d`, width `w`) has a binding of exactly that width; an output may not drive
+`cl_sh_flr_done`, which the wrapper itself assigns. -/
+def checkF2CorePort (cfg : F2WrapperConfig) (d : F2PortDir) (nm : String) (w : Nat) : Bool :=
+  match findF2Binding? d nm cfg.portBindings with
+  | some b => (b.width == w) && (d != .clToSh || b.shellPortName != "cl_sh_flr_done")
+  | none => false
+/-- A core's input ports as `(name, width)` in declaration order. -/
+def coreInputPorts (m : RtlModule) : List (String × Nat) := m.inputNames.zipIdx.map fun p => (p.1, inputWidth m p.2)
+theorem coreInputPorts_names (m : RtlModule) : (coreInputPorts m).map (·.1) = m.inputNames := by
+  simp [coreInputPorts, List.map_map, Function.comp_def, List.zipIdx_map_fst]
+/-- The wrapper validates, the core passes the emission gate `checkRtlModuleW` and has at most one clock domain
+(the wrapper supplies `clk_main_a0` only), port names are distinct from each other and from `clk`/`rst`, and every
+core input (output) has an `.shToCl` (`.clToSh`) binding of its exact width. -/
+def validateF2CorePortBindings (cfg : F2WrapperConfig) (coreMod : RtlModule) : Bool :=
+  validateF2WrapperPortBinding cfg && checkRtlModuleW coreMod && decide ((moduleDomains coreMod).length ≤ 1) &&
+  decide ("clk" :: "rst" :: (coreMod.inputNames ++ coreMod.outputs.map (·.name))).Nodup &&
+  (coreInputPorts coreMod).all (fun p => checkF2CorePort cfg .shToCl p.1 p.2) &&
+  coreMod.outputs.all (fun o => checkF2CorePort cfg .clToSh o.name o.width)
+example : validateF2CorePortBindings defaultAwsF2WrapperConfig
+    { name := "core", inputNames := ["a", "b"], wires := [], regs := [], outputs := [{ name := "y", expr := .inputPort 0 }] } = true := by
+  decide +kernel
+private theorem checkF2CorePort_sound {cfg : F2WrapperConfig} {d : F2PortDir} {nm : String} {w : Nat}
+    (h : checkF2CorePort cfg d nm w = true) :
+    ∃ b ∈ cfg.portBindings, b.dir = d ∧ b.clSignalName = nm ∧ b.width = w ∧
+      (d = .clToSh → b.shellPortName ≠ "cl_sh_flr_done") ∧ boundF2ShellPort cfg d nm = b.shellPortName := by
+  unfold checkF2CorePort at h; unfold boundF2ShellPort
+  cases hF : findF2Binding? d nm cfg.portBindings with
+  | none => rw [hF] at h; cases h
+  | some b =>
+    rw [hF] at h; simp only [Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨hM, hD, hN⟩ := findF2Binding_mem hF
+    exact ⟨b, hM, hD, hN, h.1, fun hd hs => by simp [hd, hs] at h, rfl⟩
+theorem validateF2CorePortBindings_sound (cfg : F2WrapperConfig) (coreMod : RtlModule)
+    (hValid : validateF2CorePortBindings cfg coreMod = true) :
+    validateF2WrapperPortBinding cfg = true ∧ checkRtlModuleW coreMod = true ∧ (moduleDomains coreMod).length ≤ 1 ∧
+    ("clk" :: "rst" :: (coreMod.inputNames ++ coreMod.outputs.map (·.name))).Nodup ∧
+    (∀ p ∈ coreInputPorts coreMod, ∃ b ∈ cfg.portBindings, b.dir = .shToCl ∧ b.clSignalName = p.1 ∧
+      b.width = p.2 ∧ boundF2ShellPort cfg .shToCl p.1 = b.shellPortName) ∧
+    (∀ o ∈ coreMod.outputs, ∃ b ∈ cfg.portBindings, b.dir = .clToSh ∧ b.clSignalName = o.name ∧
+      b.width = o.width ∧ b.shellPortName ≠ "cl_sh_flr_done" ∧ boundF2ShellPort cfg .clToSh o.name = b.shellPortName) := by
+  simp only [validateF2CorePortBindings, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hValid
+  rcases hValid with ⟨⟨⟨⟨⟨hW, hRtl⟩, hDom⟩, hNd⟩, hIn⟩, hOut⟩
+  refine ⟨hW, hRtl, hDom, hNd, fun p hp => ?_, fun o ho => ?_⟩
+  · obtain ⟨b, hM, hD, hN, hWd, _, hB⟩ := checkF2CorePort_sound (hIn p hp); exact ⟨b, hM, hD, hN, hWd, hB⟩
+  · obtain ⟨b, hM, hD, hN, hWd, hFlr, hB⟩ := checkF2CorePort_sound (hOut o ho); exact ⟨b, hM, hD, hN, hWd, hFlr rfl, hB⟩
+/-- Named port connections of the `u_core` instance: `clk`/`rst` (the single-domain ports `emitModuleSV` emits),
+then every core input and output tied to its bound shell port. -/
+def f2CoreConnections (cfg : F2WrapperConfig) (coreMod : RtlModule) : List String :=
+  ["    .clk(clk_main_a0)", "    .rst(rst_core_sync)"] ++
+  (coreInputPorts coreMod).map (fun p => "    ." ++ p.1 ++ "(" ++ boundF2ShellPort cfg .shToCl p.1 ++ ")") ++
+  coreMod.outputs.map (fun o => "    ." ++ o.name ++ "(" ++ boundF2ShellPort cfg .clToSh o.name ++ ")")
+/-- The core module's SystemVerilog, then the CL wrapper module instantiating it as `u_core` on the shell ports. -/
 def emitAwsF2ClWrapperSV (cfg : F2WrapperConfig) (coreMod : RtlModule) : Option String :=
-  if validateF2WrapperPortBinding cfg then
-    let header :=
-      "// Verified AWS EC2 F2 Custom Logic Shell Wrapper (" ++ cfg.targetDevice ++ ")\n" ++
-      "module " ++ cfg.clModuleName ++ " (\n  `include \"cl_ports.vh\"\n);\n" ++
-      "  wire rst_core_sync = ~rst_main_n;\n  assign cl_sh_flr_done = sh_cl_flr_assert;\n"
-    some (header ++ "endmodule\n\n" ++ emitModuleSV coreMod)
+  if validateF2CorePortBindings cfg coreMod then
+    some (emitModuleSV coreMod ++ ("\n// Verified AWS EC2 F2 Custom Logic Shell Wrapper (" ++ cfg.targetDevice ++ ")\n" ++
+      ("module " ++ cfg.clModuleName ++ " (\n  `include \"cl_ports.vh\"\n);\n" ++
+       "  wire rst_core_sync = ~rst_main_n;\n  assign cl_sh_flr_done = sh_cl_flr_assert;\n" ++
+       "  " ++ coreMod.name ++ " u_core (\n" ++ String.intercalate ",\n" (f2CoreConnections cfg coreMod) ++ "\n  );\n" ++
+       "endmodule\n")))
   else none
+/-- **The emitted wrapper instantiates the wired core.** An emitted text is the core module followed by the CL
+module, whose body before `endmodule` is the `u_core` instance; every core input and output is connected, by name,
+to a canonical `cl_ports.vh` shell port of the same direction and width. -/
+theorem emitAwsF2ClWrapperSV_instantiates_wired_core (cfg : F2WrapperConfig) (coreMod : RtlModule) (sv : String)
+    (hEmit : emitAwsF2ClWrapperSV cfg coreMod = some sv) :
+    validateF2CorePortBindings cfg coreMod = true ∧
+    (∃ glue : String, sv = emitModuleSV coreMod ++ (glue ++
+      ("module " ++ cfg.clModuleName ++ " (\n  `include \"cl_ports.vh\"\n);\n" ++
+       "  wire rst_core_sync = ~rst_main_n;\n  assign cl_sh_flr_done = sh_cl_flr_assert;\n" ++
+       "  " ++ coreMod.name ++ " u_core (\n" ++ String.intercalate ",\n" (f2CoreConnections cfg coreMod) ++ "\n  );\n" ++
+       "endmodule\n"))) ∧
+    (∀ p ∈ coreInputPorts coreMod, ∃ b ∈ cfg.portBindings, ∃ spec ∈ canonicalAwsF2ClPorts,
+      spec.name = b.shellPortName ∧ spec.dir = .shToCl ∧ spec.width = p.2 ∧ b.clSignalName = p.1 ∧
+      ("    ." ++ p.1 ++ "(" ++ b.shellPortName ++ ")") ∈ f2CoreConnections cfg coreMod) ∧
+    (∀ o ∈ coreMod.outputs, ∃ b ∈ cfg.portBindings, ∃ spec ∈ canonicalAwsF2ClPorts,
+      spec.name = b.shellPortName ∧ spec.dir = .clToSh ∧ spec.width = o.width ∧ b.clSignalName = o.name ∧
+      ("    ." ++ o.name ++ "(" ++ b.shellPortName ++ ")") ∈ f2CoreConnections cfg coreMod) := by
+  unfold emitAwsF2ClWrapperSV at hEmit
+  split at hEmit
+  · rename_i hV; injection hEmit with hSv; subst hSv
+    obtain ⟨hW, _, _, _, hIn, hOut⟩ := validateF2CorePortBindings_sound cfg coreMod hV
+    have hCanon := (validateF2WrapperPortBinding_sound cfg hW).2.2.2.2.2.2.2
+    refine ⟨hV, ⟨_, rfl⟩, fun p hp => ?_, fun o ho => ?_⟩
+    · obtain ⟨b, hM, hD, hN, hWd, hB⟩ := hIn p hp
+      obtain ⟨_, spec, hS, hSn, hSd, hSw, _⟩ := hCanon b hM
+      refine ⟨b, hM, spec, hS, hSn, hSd.trans hD, hSw.trans hWd, hN, ?_⟩
+      rw [← hB]; unfold f2CoreConnections
+      exact List.mem_append_left _ (List.mem_append_right _ (List.mem_map.mpr ⟨p, hp, rfl⟩))
+    · obtain ⟨b, hM, hD, hN, hWd, _, hB⟩ := hOut o ho
+      obtain ⟨_, spec, hS, hSn, hSd, hSw, _⟩ := hCanon b hM
+      refine ⟨b, hM, spec, hS, hSn, hSd.trans hD, hSw.trans hWd, hN, ?_⟩
+      rw [← hB]; unfold f2CoreConnections
+      exact List.mem_append_right _ (List.mem_map.mpr ⟨o, ho, rfl⟩)
+  · cases hEmit
 
 /-! ## 2. Embedded `FABulous` eFPGA PCIe BAR0 Hot-Swap Controller (`f2FabulousOverlayStep`) -/
-
 def packU64LE : Nat → Nat → List UInt8
   | 0, _ => []
   | k + 1, v => UInt8.ofNat (v % 256) :: packU64LE k (v / 256)
-
 def unpackU64LE : List UInt8 → Nat
   | [] => 0
   | b :: rest => b.toNat + 256 * unpackU64LE rest
-
 def packU64Bytes (v : Nat) : List UInt8 := packU64LE 8 v
-
 private theorem unpackU64LE_packU64LE : ∀ (k v : Nat), v < 256 ^ k → unpackU64LE (packU64LE k v) = v
   | 0, v, hv => by simp [Nat.pow_zero] at hv; subst hv; rfl
   | k + 1, v, hv => by
@@ -302,24 +301,19 @@ private theorem unpackU64LE_packU64LE : ∀ (k v : Nat), v < 256 ^ k → unpackU
     have h8 : (2 : Nat) ^ 8 = 256 := by decide
     simp only [packU64LE, unpackU64LE, UInt8.toNat_ofNat', h8, ih]
     omega
-
 private theorem packU64LE_length : ∀ (k v : Nat), (packU64LE k v).length = k
   | 0, _ => rfl
   | k + 1, v => by simp [packU64LE, packU64LE_length k]
-
 private theorem packU64Bytes_length (v : Nat) : (packU64Bytes v).length = 8 := packU64LE_length 8 v
-
 private theorem packU64Bytes_injective {a b : Nat} (ha : a < 2 ^ 64) (hb : b < 2 ^ 64)
     (hEq : packU64Bytes a = packU64Bytes b) : a = b := by
   have hPow : (2 : Nat) ^ 64 = 256 ^ 8 := by decide
   have h := congrArg unpackU64LE hEq
   rwa [packU64Bytes, packU64Bytes, unpackU64LE_packU64LE 8 a (hPow ▸ ha),
        unpackU64LE_packU64LE 8 b (hPow ▸ hb)] at h
-
 def serializeTileFrameListBytes : List TileFrame → List UInt8
   | [] => []
   | f :: rest => packU64Bytes f.payload.toNat ++ packU64Bytes f.crc.toNat ++ serializeTileFrameListBytes rest
-
 private theorem list_append_eq_of_len_eq {α : Type} {l₁ l₂ r₁ r₂ : List α}
     (hLen : l₁.length = l₂.length) (hEq : l₁ ++ r₁ = l₂ ++ r₂) : l₁ = l₂ ∧ r₁ = r₂ := by
   induction l₁ generalizing l₂ with
@@ -332,7 +326,6 @@ private theorem list_append_eq_of_len_eq {α : Type} {l₁ l₂ r₁ r₂ : List
       simp only [List.cons_append, List.cons.injEq] at hEq
       obtain ⟨hxs, hrs⟩ := ih hLen hEq.2
       rw [hEq.1, hxs]; exact ⟨rfl, hrs⟩
-
 private theorem serializeTileFrameListBytes_injective :
     ∀ (xs ys : List TileFrame),
       xs.length = ys.length → serializeTileFrameListBytes xs = serializeTileFrameListBytes ys → xs = ys
@@ -349,12 +342,9 @@ private theorem serializeTileFrameListBytes_injective :
     have hc : x.crc = y.crc := BitVec.eq_of_toNat_eq (packU64Bytes_injective x.crc.isLt y.crc.isLt hCrcEq)
     have hxy : x = y := by cases x; cases y; simp_all
     rw [hxy, serializeTileFrameListBytes_injective xs ys hLen hTail]
-
 def serializeTileFramesBytes (frames : Array TileFrame) : List UInt8 :=
   packU64Bytes frames.size ++ serializeTileFrameListBytes frames.toList
-
 example : (#[] : Array TileFrame).size < 2 ^ 64 := by decide
-
 theorem serializeTileFramesBytes_injective {f₁ f₂ : Array TileFrame}
     (h1 : f₁.size < 2 ^ 64) (h2 : f₂.size < 2 ^ 64)
     (hEq : serializeTileFramesBytes f₁ = serializeTileFramesBytes f₂) : f₁ = f₂ := by
@@ -362,10 +352,8 @@ theorem serializeTileFramesBytes_injective {f₁ f₂ : Array TileFrame}
   obtain ⟨hSzBytes, hBody⟩ := list_append_eq_of_len_eq (by rw [packU64Bytes_length, packU64Bytes_length]) hEq
   have hSz : f₁.size = f₂.size := packU64Bytes_injective h1 h2 hSzBytes
   exact Array.ext' (serializeTileFrameListBytes_injective f₁.toList f₂.toList (by simpa using hSz) hBody)
-
 def digestTileFrames256 (H : Obend.Digest.HashBytes.Hash) (frames : Array TileFrame) : BitVec 256 :=
   BitVec.ofNat 256 (Obend.Digest.HashBytes.ofBE (H (serializeTileFramesBytes frames)))
-
 /-- **256-Bit Bitstream Digest Commitment Binding (`serializeTileFramesBytes_binding`, `0 Classical`)**. -/
 theorem serializeTileFramesBytes_binding
     (H : Obend.Digest.HashBytes.Hash) (f₁ f₂ : Array TileFrame)
@@ -382,9 +370,7 @@ theorem serializeTileFramesBytes_binding
     have hToNat := congrArg BitVec.toNat hDig
     simp only [digestTileFrames256, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hW1, Nat.mod_eq_of_lt hW2] at hToNat
     exact ⟨serializeTileFramesBytes f₁, serializeTileFramesBytes f₂, hBytesNe, hToNat⟩
-
 inductive F2OverlayPhase where | active | frozenIsolated | quarantined deriving DecidableEq, Repr, Inhabited
-
 structure F2FabulousOverlayState where
   fabric : DprFabric
   overlayPhase : F2OverlayPhase
@@ -392,7 +378,6 @@ structure F2FabulousOverlayState where
   expectedDigest256 : BitVec 256
   bar0CyclesSpent : Nat
   deriving DecidableEq, Repr, Inhabited
-
 inductive F2Bar0Action where
   | rstMainLow
   | bar0FreezeIsolate
@@ -401,10 +386,8 @@ inductive F2Bar0Action where
   | bar0AuthenticateCommit
   | datapathCompute
   deriving DecidableEq, Repr
-
 def bar0HotSwapCycles (numTiles : Nat) : Nat := 4 + 32 + 32 * numTiles + 8
 @[expose] def bar0HotSwapLatencyNs (numTiles : Nat) : Nat := 4 * bar0HotSwapCycles numTiles
-
 /-- Step the embedded `FABulous` eFPGA BAR0 hot-swap controller by one transaction / clock edge. -/
 @[expose] def f2FabulousOverlayStep
     (H : Obend.Digest.HashBytes.Hash) (st : F2FabulousOverlayState) (act : F2Bar0Action) :
@@ -456,47 +439,38 @@ def bar0HotSwapCycles (numTiles : Nat) : Nat := 4 + 32 + 32 * numTiles + 8
   | .datapathCompute =>
     let fab1 := administer st.fabric .compute
     { st with fabric := { fab1 with neighbors := nextNeighbors } }
-
 def runF2Bar0Schedule (H : Obend.Digest.HashBytes.Hash) (st : F2FabulousOverlayState) :
     List F2Bar0Action → F2FabulousOverlayState
   | [] => st
   | a :: rest => runF2Bar0Schedule H (f2FabulousOverlayStep H st a) rest
-
 structure F2OverlayEvent where
   action : F2Bar0Action
   inputs : Array Bool
   boundary : Bool
-
 def f2OverlayStepSys (H : Obend.Digest.HashBytes.Hash) :
     StepSystem F2FabulousOverlayState F2OverlayEvent NeighborState where
   observe s := s.fabric.neighbors
   step s ev s' :=
     ev.inputs = s.fabric.inputs ∧ ev.boundary = observedBoundaryPort s.fabric ∧
     s' = f2FabulousOverlayStep H s ev.action
-
 def f2NeighborStepSys : StepSystem NeighborState F2OverlayEvent NeighborState where
   observe := id
   step n ev n' := n' = tickNeighbors ev.inputs ev.boundary n
-
 private theorem observedBoundaryPort_of_ne_active (s : DprFabric) (h : s.phase ≠ .active) :
     observedBoundaryPort s = s.clampedOut := by
   have hEq : ({ s with sram := s.sram } : DprFabric) = s := by cases s; rfl
   have h1 := (clampedPortStable s s.sram h).1
   rwa [hEq] at h1
-
 private theorem f2FabulousOverlayStep_neighbors
     (H : Obend.Digest.HashBytes.Hash) (st : F2FabulousOverlayState) (act : F2Bar0Action) :
     (f2FabulousOverlayStep H st act).fabric.neighbors =
       tickNeighbors st.fabric.inputs (observedBoundaryPort st.fabric) st.fabric.neighbors := by
   cases act <;> unfold f2FabulousOverlayStep <;> dsimp only
   all_goals repeat (first | rfl | split)
-
 def F2OverlayIsolationInv (st : F2FabulousOverlayState) : Prop :=
   st.overlayPhase ≠ .active →
     st.fabric.phase ≠ .active ∧ observedBoundaryPort st.fabric = st.fabric.clampedOut
-
 example : F2OverlayIsolationInv (default : F2FabulousOverlayState) := fun h => absurd rfl h
-
 theorem f2FabulousOverlayStep_preserves_isolationInv
     (H : Obend.Digest.HashBytes.Hash) (st : F2FabulousOverlayState) (act : F2Bar0Action)
     (hInv : F2OverlayIsolationInv st) :
@@ -537,7 +511,6 @@ theorem f2FabulousOverlayStep_preserves_isolationInv
     split
     · rename_i hAct; intro hOv; exact absurd hAct (hInv hOv).1
     · rename_i hNotAct; intro _; exact ⟨hNotAct, observedBoundaryPort_of_ne_active _ hNotAct⟩
-
 /-- **Multi-Turn Arbitrary-Trace Safety (`f2OverlayTrace_sound`)**. -/
 theorem f2OverlayTrace_sound
     (H : Obend.Digest.HashBytes.Hash) {s₀ sₙ : F2FabulousOverlayState} {trace : List F2OverlayEvent}
@@ -552,13 +525,11 @@ theorem f2OverlayTrace_sound
     refine ⟨StepTrace.cons (s₂ := (f2FabulousOverlayStep H s₁ ev.action).fabric.neighbors) ?_ hNeighborRest, hFinalInv⟩
     change (f2FabulousOverlayStep H s₁ ev.action).fabric.neighbors = tickNeighbors ev.inputs ev.boundary s₁.fabric.neighbors
     rw [hIn, hBnd]; exact f2FabulousOverlayStep_neighbors H s₁ ev.action
-
 example (H : Obend.Digest.HashBytes.Hash) :
     let s₀ : F2FabulousOverlayState := default
     let ev : F2OverlayEvent := { action := .bar0FreezeIsolate, inputs := s₀.fabric.inputs, boundary := observedBoundaryPort s₀.fabric }
     StepTrace (f2OverlayStepSys H) s₀ [ev] (f2FabulousOverlayStep H s₀ .bar0FreezeIsolate) ∧ F2OverlayIsolationInv s₀ :=
   ⟨.cons ⟨rfl, rfl, rfl⟩ (.nil _), fun h => absurd rfl h⟩
-
 /-- **Master PCIe BAR0 `FABulous` Hot-Swap Theorem (`f2_pcie_fabulous_hotswap_stutter_safe`)**. -/
 theorem f2_pcie_fabulous_hotswap_stutter_safe (H : Obend.Digest.HashBytes.Hash) :
     StutterSimulates f2NeighborStepSys (f2OverlayStepSys H)
@@ -652,27 +623,21 @@ theorem f2_pcie_fabulous_hotswap_stutter_safe (H : Obend.Digest.HashBytes.Hash) 
            observedBoundaryPort_of_ne_active s4.fabric (by rw [hs4.2.1]; simp)⟩
 
 /-! ## 3. Pre-Placed UltraScale+ / RapidWright Locked Macro & `XDC` Emitter -/
-
 inductive Vu47pSiteKind where | sliceL | dsp48e2 | uram288 deriving DecidableEq, Repr
-
 def Vu47pSiteKind.prefixStr : Vu47pSiteKind → String
   | .sliceL => "SLICE" | .dsp48e2 => "DSP48E2" | .uram288 => "URAM288"
-
 inductive UltraScaleBelPin where
   | lut6 (slot : Fin 8) | ff (slot : Fin 8) | dspAlu | uramBase
   deriving DecidableEq, Repr
-
 def slotChar (s : Fin 8) : Char :=
   match s.val with
   | 0 => 'A' | 1 => 'B' | 2 => 'C' | 3 => 'D'
   | 4 => 'E' | 5 => 'F' | 6 => 'G' | _ => 'H'
-
 def UltraScaleBelPin.toBelName : UltraScaleBelPin → String
   | .lut6 s => String.ofList [slotChar s, '6', 'L', 'U', 'T']
   | .ff s => String.ofList [slotChar s, 'F', 'F']
   | .dspAlu => "DSP_ALU"
   | .uramBase => "URAM288_BASE"
-
 private theorem slotChar_injective {s₁ s₂ : Fin 8} (h : slotChar s₁ = slotChar s₂) : s₁ = s₂ := by
   rcases s₁ with ⟨v₁, hv₁⟩; rcases s₂ with ⟨v₂, hv₂⟩
   have h1 : v₁ = 0 ∨ v₁ = 1 ∨ v₁ = 2 ∨ v₁ = 3 ∨ v₁ = 4 ∨ v₁ = 5 ∨ v₁ = 6 ∨ v₁ = 7 := by omega
@@ -680,17 +645,14 @@ private theorem slotChar_injective {s₁ s₂ : Fin 8} (h : slotChar s₁ = slot
   rcases h1 with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
     rcases h2 with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
     first | rfl | cases h
-
 theorem UltraScaleBelPin.toBelName_injective {p₁ p₂ : UltraScaleBelPin}
     (h : p₁.toBelName = p₂.toBelName) : p₁ = p₂ := by
   have hL := congrArg String.toList h
   cases p₁ <;> cases p₂ <;> simp [UltraScaleBelPin.toBelName] at hL <;> try rfl
   · exact congrArg UltraScaleBelPin.lut6 (slotChar_injective hL)
   · exact congrArg UltraScaleBelPin.ff (slotChar_injective hL)
-
 def slrOfTileY (tileY : Nat) : SlrId :=
   if tileY < 86 then .slr0 else if tileY < 172 then .slr1 else .slr2
-
 structure RapidWrightCellPlacement where
   cellId : Nat
   cellName : String
@@ -703,16 +665,12 @@ structure RapidWrightCellPlacement where
   isLocFixed : Bool := true
   isBelFixed : Bool := true
   deriving DecidableEq, Repr
-
 def RapidWrightCellPlacement.siteName (p : RapidWrightCellPlacement) : String :=
   p.siteKind.prefixStr ++ "_X" ++ toString p.siteX ++ "Y" ++ toString p.siteY
-
 def RapidWrightCellPlacement.belName (p : RapidWrightCellPlacement) : String := p.belPin.toBelName
-
 def RapidWrightCellPlacement.physKey (p : RapidWrightCellPlacement) :
     Vu47pSiteKind × Nat × Nat × UltraScaleBelPin :=
   (p.siteKind, p.siteX, p.siteY, p.belPin)
-
 def mapPlacedCellToRapidWright (bc : BelCell) (pc : PlacedCell) : RapidWrightCellPlacement :=
   let subSlot : Fin 8 := ⟨pc.belSlot % 8, by omega⟩
   match bc.kind with
@@ -728,15 +686,12 @@ def mapPlacedCellToRapidWright (bc : BelCell) (pc : PlacedCell) : RapidWrightCel
     { cellId := pc.cellId, cellName := bc.dstName, slr := slrOfTileY pc.tileY,
       siteKind := .sliceL, siteX := pc.tileX * 32 + pc.belSlot / 8, siteY := pc.tileY,
       belPin := .lut6 subSlot, lutInit := pc.lutInit }
-
 def zipMapRapidWright : List BelCell → List PlacedCell → List RapidWrightCellPlacement
   | bc :: bcs, pc :: pcs => mapPlacedCellToRapidWright bc pc :: zipMapRapidWright bcs pcs
   | _, _ => []
-
 @[expose] def mapPnrCertToRapidWright (net : BelNetlist) (cert : PnrCertificate) :
     List RapidWrightCellPlacement :=
   zipMapRapidWright net.cells cert.placedCells
-
 private theorem zipMapRapidWright_length (bcs : List BelCell) (pcs : List PlacedCell)
     (hEq : pcs.length = bcs.length) : (zipMapRapidWright bcs pcs).length = pcs.length := by
   induction bcs generalizing pcs with
@@ -747,7 +702,6 @@ private theorem zipMapRapidWright_length (bcs : List BelCell) (pcs : List Placed
     | cons pc prest =>
       simp only [List.length_cons, Nat.add_right_cancel_iff] at hEq
       simp [zipMapRapidWright, ih prest hEq]
-
 private theorem zipMapRapidWright_getElem (bcs : List BelCell) (pcs : List PlacedCell)
     (hEq : pcs.length = bcs.length) (i : Nat) (hi : i < (zipMapRapidWright bcs pcs).length) :
     (zipMapRapidWright bcs pcs)[i]'hi =
@@ -766,19 +720,15 @@ private theorem zipMapRapidWright_getElem (bcs : List BelCell) (pcs : List Place
       | succ k =>
         simp only [zipMapRapidWright, List.length_cons] at hi
         exact ih prest hEq k (by omega)
-
 @[expose] def checkPlacedBelSlotsBounded (cells : List PlacedCell) : Bool :=
   cells.all (fun c => decide (c.belSlot < 256))
-
 private theorem checkPlacedBelSlotsBounded_getElem {cells : List PlacedCell}
     (hB : checkPlacedBelSlotsBounded cells = true) (i : Nat) (hi : i < cells.length) :
     cells[i].belSlot < 256 := by
   simp only [checkPlacedBelSlotsBounded, List.all_eq_true, decide_eq_true_eq] at hB
   exact hB cells[i] (List.getElem_mem hi)
-
 example : checkPnrCertificate validAdderBelNetlist corner7nm_SS 5000 validAdderPnrCert = true ∧
     checkPlacedBelSlotsBounded validAdderPnrCert.placedCells = true := by decide +kernel
-
 /-- **Universal RapidWright Locked-Placement Collision Freedom (`rapidWrightPlacement_collision_free`)**. -/
 theorem rapidWrightPlacement_collision_free
     (net : BelNetlist) (corner : ProcessCorner) (clockPeriodPs : Nat) (cert : PnrCertificate)
@@ -846,7 +796,6 @@ theorem rapidWrightPlacement_collision_free
         have hTX : cert.placedCells[i].tileX = cert.placedCells[j].tileX := by omega
         have hBS : cert.placedCells[i].belSlot = cert.placedCells[j].belSlot := by omega
         rw [hTX, hY, hBS]
-
 @[expose] def emitRapidWrightMacroJson (macroName : String) (pblockName : String)
     (cells : List RapidWrightCellPlacement) : String :=
   let entries := cells.map (fun c =>
@@ -856,7 +805,6 @@ theorem rapidWrightPlacement_collision_free
   "{\n  \"schema\": \"obend.rapidwright.hardmacro.v1\",\n  \"device\": \"" ++ awsF2TargetDevice ++
   "\",\n  \"macroName\": \"" ++ macroName ++ "\",\n  \"pblock\": \"" ++ pblockName ++
   "\",\n  \"containRouting\": true,\n  \"cells\": [\n" ++ String.intercalate ",\n" entries ++ "\n  ]\n}\n"
-
 @[expose] def emitUltraScalePblockXdc (pblockName : String) (slr : SlrId)
     (cells : List RapidWrightCellPlacement) : String :=
   let header :=
@@ -872,9 +820,7 @@ theorem rapidWrightPlacement_collision_free
   header ++ String.intercalate "\n" locks ++ "\n"
 
 /-! ## 4. Untrusted EDA Signoff Ingestion `Judge`s (`"vivado-sta@1"` & `"openpdk-drc-sta@1"`) -/
-
 def vivadoPostRouteStaFormatId : String := "vivado-sta@1"
-
 structure VivadoPostRoutePath where
   pathName : String
   srcSlr : SlrId
@@ -886,7 +832,6 @@ structure VivadoPostRoutePath where
   holdSlackReportedFfPs : Int
   ttArrivalPs : Nat
   deriving DecidableEq, Repr
-
 structure VivadoStaSignoffObj where
   targetDevice : String := awsF2TargetDevice
   clockPeriodPs : Nat := awsF2MainClockPeriodPs
@@ -894,21 +839,17 @@ structure VivadoStaSignoffObj where
   sllCrossingPenaltyPs : Nat := 680
   paths : List VivadoPostRoutePath
   deriving DecidableEq, Repr
-
 structure VivadoStaCert where
   worstSetupSlackPs : Int
   worstHoldSlackPs : Int
   maxSlrCrossings : Nat
   deriving DecidableEq, Repr
-
 inductive VivadoStaRefusal where
   | unsupportedDevice | emptyTimingPaths | setupViolationSS
   | holdViolationFF | ttCornerViolation | certSummaryMismatch
   deriving DecidableEq, Repr
-
 def vivadoStaRefutes : VivadoStaRefusal → Bool
   | .certSummaryMismatch => false | _ => true
-
 def VivadoStaMeaning (o : VivadoStaSignoffObj) (c : VivadoStaCert) : Prop :=
   o.targetDevice = awsF2TargetDevice ∧ o.paths ≠ [] ∧
   0 ≤ c.worstSetupSlackPs ∧ 0 ≤ c.worstHoldSlackPs ∧
@@ -921,25 +862,20 @@ def VivadoStaMeaning (o : VivadoStaSignoffObj) (c : VivadoStaCert) : Prop :=
     p.ttArrivalPs + o.clockUncertaintyPs +
       slrDistance p.srcSlr p.dstSlr * o.sllCrossingPenaltyPs ≤ o.clockPeriodPs ∧
     slrDistance p.srcSlr p.dstSlr ≤ c.maxSlrCrossings
-
 def checkVivadoSetupSS (o : VivadoStaSignoffObj) (p : VivadoPostRoutePath) : Bool :=
   decide (p.setupArrivalSsPs + o.clockUncertaintyPs +
     slrDistance p.srcSlr p.dstSlr * o.sllCrossingPenaltyPs ≤ o.clockPeriodPs) &&
   decide (0 ≤ p.setupSlackReportedSsPs)
-
 def checkVivadoHoldFF (o : VivadoStaSignoffObj) (p : VivadoPostRoutePath) : Bool :=
   decide (p.holdReqFfPs + o.clockUncertaintyPs ≤ p.holdArrivalFfPs) &&
   decide (0 ≤ p.holdSlackReportedFfPs)
-
 def checkVivadoTtCorner (o : VivadoStaSignoffObj) (p : VivadoPostRoutePath) : Bool :=
   decide (p.ttArrivalPs + o.clockUncertaintyPs +
     slrDistance p.srcSlr p.dstSlr * o.sllCrossingPenaltyPs ≤ o.clockPeriodPs)
-
 def checkVivadoCertBounds (c : VivadoStaCert) (p : VivadoPostRoutePath) : Bool :=
   decide (c.worstSetupSlackPs ≤ p.setupSlackReportedSsPs) &&
   decide (c.worstHoldSlackPs ≤ p.holdSlackReportedFfPs) &&
   decide (slrDistance p.srcSlr p.dstSlr ≤ c.maxSlrCrossings)
-
 def checkVivadoStaSignoff (grade : Nat) (o : VivadoStaSignoffObj) (c : VivadoStaCert) :
     Obend.Judge.Verdict VivadoStaRefusal :=
   if grade < o.paths.length + 1 then .uncovered
@@ -951,7 +887,6 @@ def checkVivadoStaSignoff (grade : Nat) (o : VivadoStaSignoffObj) (c : VivadoSta
   else if !(decide (0 ≤ c.worstSetupSlackPs) && decide (0 ≤ c.worstHoldSlackPs) &&
             o.paths.all (checkVivadoCertBounds c)) then .refused .certSummaryMismatch [3]
   else .ok
-
 /-- Verified `Obend.Judge` instance for untrusted Vivado UltraScale+ post-route STA (`"vivado-sta@1"`). -/
 @[instance_reducible] instance vivadoPostRouteStaJudge :
     Obend.Judge VivadoStaSignoffObj VivadoStaCert where
@@ -1039,49 +974,40 @@ def checkVivadoStaSignoff (grade : Nat) (o : VivadoStaSignoffObj) (c : VivadoSta
     · exact absurd rfl hDecided
     · rename_i hNotLt; have hNotLt' : ¬ (r' < o.paths.length + 1) := by omega
       simp only [hNotLt, hNotLt', ↓reduceIte]
-
 def sampleVivadoStaObj : VivadoStaSignoffObj where
   paths :=
     [ { pathName := "slr0_to_slr1_reg", srcSlr := .slr0, dstSlr := .slr1,
         setupArrivalSsPs := 2950, setupSlackReportedSsPs := 335,
         holdArrivalFfPs := 190, holdReqFfPs := 110, holdSlackReportedFfPs := 45,
         ttArrivalPs := 2400 } ]
-
 def sampleVivadoStaCert : VivadoStaCert where
   worstSetupSlackPs := 335
   worstHoldSlackPs := 45
   maxSlrCrossings := 1
-
 example : vivadoPostRouteStaJudge.Fragment sampleVivadoStaObj ∧
     vivadoPostRouteStaJudge.check 8 sampleVivadoStaObj sampleVivadoStaCert = .ok := by
   refine ⟨?_, ?_⟩
   · change sampleVivadoStaObj.paths.length ≤ 4096; decide +kernel
   · change checkVivadoStaSignoff 8 sampleVivadoStaObj sampleVivadoStaCert = .ok; decide +kernel
-
 def openPdkSignoffFormatId : String := "openpdk-drc-sta@1"
-
 inductive OpenPdkNode where | sky130 | asap7 deriving DecidableEq, Repr
-
 structure LayerDrcRule where
   layerId : Nat
   layerName : String
   minWidthNm : Nat
   minSpacingNm : Nat
   deriving DecidableEq, Repr
-
 structure ViaEnclosureRule where
   viaLayerId : Nat
   metalLayerId : Nat
   minEnclosureNm : Nat
   deriving DecidableEq, Repr
-
 structure OpenPdkRuleDeck where
   node : OpenPdkNode
   nodeNm : Nat
   layerRules : List LayerDrcRule
   viaRules : List ViaEnclosureRule
   deriving DecidableEq, Repr
-
 def sky130PdkDeck : OpenPdkRuleDeck where
   node := .sky130
   nodeNm := 130
@@ -1093,7 +1019,6 @@ def sky130PdkDeck : OpenPdkRuleDeck where
   viaRules :=
     [ { viaLayerId := 10, metalLayerId := 1, minEnclosureNm := 55 }
     , { viaLayerId := 11, metalLayerId := 2, minEnclosureNm := 55 } ]
-
 def asap7PdkDeck : OpenPdkRuleDeck where
   node := .asap7
   nodeNm := 7
@@ -1104,7 +1029,6 @@ def asap7PdkDeck : OpenPdkRuleDeck where
   viaRules :=
     [ { viaLayerId := 10, metalLayerId := 1, minEnclosureNm := 4 }
     , { viaLayerId := 11, metalLayerId := 2, minEnclosureNm := 4 } ]
-
 structure OpenStaCornerSummary where
   pathGroup : String
   ffWnsPs : Int
@@ -1114,7 +1038,6 @@ structure OpenStaCornerSummary where
   ssWnsPs : Int
   ssWhsPs : Int
   deriving DecidableEq, Repr
-
 structure OpenPdkSignoffObj where
   deck : OpenPdkRuleDeck
   netlistPins : List String
@@ -1123,39 +1046,32 @@ structure OpenPdkSignoffObj where
   viaCuts : List (LayoutBox2D × LayoutBox2D)
   cornerReports : List OpenStaCornerSummary
   deriving DecidableEq, Repr
-
 structure OpenPdkSignoffCert where
   pinToDefIdx : List Nat
   defToPinIdx : List Nat
   minWnsPs : Int
   minWhsPs : Int
   deriving DecidableEq, Repr
-
 inductive OpenPdkRefusal where
   | emptyReportsOrLayout | multiCornerStaViolation | metalWidthOrLayerViolation
   | metalSpacingViolation | viaEnclosureViolation | pinDefCountMismatch
   | bijectionOrSlackCertInvalid
   deriving DecidableEq, Repr
-
 def openPdkRefutes : OpenPdkRefusal → Bool
   | .bijectionOrSlackCertInvalid => false | _ => true
-
 def lookupLayerRule? (layerId : Nat) : List LayerDrcRule → Option LayerDrcRule
   | [] => none
   | r :: rest => if r.layerId == layerId then some r else lookupLayerRule? layerId rest
-
 def lookupViaRule? (viaLayerId metalLayerId : Nat) : List ViaEnclosureRule → Option ViaEnclosureRule
   | [] => none
   | r :: rest =>
     if (r.viaLayerId == viaLayerId) && (r.metalLayerId == metalLayerId) then some r
     else lookupViaRule? viaLayerId metalLayerId rest
-
 def MetalShapeWidthSafe (deck : OpenPdkRuleDeck) (b : LayoutBox2D) : Prop :=
   b.xMinNm < b.xMaxNm ∧ b.yMinNm < b.yMaxNm ∧
   ∃ r : LayerDrcRule,
     lookupLayerRule? b.layerId deck.layerRules = some r ∧
     r.minWidthNm ≤ b.xMaxNm - b.xMinNm ∧ r.minWidthNm ≤ b.yMaxNm - b.yMinNm
-
 def MetalPairSpacingSafe (deck : OpenPdkRuleDeck) (s₁ s₂ : Nat × LayoutBox2D) : Prop :=
   s₁.2.layerId = s₂.2.layerId → s₁.1 ≠ s₂.1 →
   ∃ r : LayerDrcRule,
@@ -1164,7 +1080,6 @@ def MetalPairSpacingSafe (deck : OpenPdkRuleDeck) (s₁ s₂ : Nat × LayoutBox2
      s₂.2.xMaxNm + max r.minSpacingNm 1 ≤ s₁.2.xMinNm ∨
      s₁.2.yMaxNm + max r.minSpacingNm 1 ≤ s₂.2.yMinNm ∨
      s₂.2.yMaxNm + max r.minSpacingNm 1 ≤ s₁.2.yMinNm)
-
 def ViaCutEnclosureSafe (deck : OpenPdkRuleDeck) (vp : LayoutBox2D × LayoutBox2D) : Prop :=
   vp.1.xMinNm < vp.1.xMaxNm ∧ vp.1.yMinNm < vp.1.yMaxNm ∧
   vp.2.xMinNm < vp.2.xMaxNm ∧ vp.2.yMinNm < vp.2.yMaxNm ∧
@@ -1174,7 +1089,6 @@ def ViaCutEnclosureSafe (deck : OpenPdkRuleDeck) (vp : LayoutBox2D × LayoutBox2
     vp.1.xMaxNm + vr.minEnclosureNm ≤ vp.2.xMaxNm ∧
     vp.2.yMinNm + vr.minEnclosureNm ≤ vp.1.yMinNm ∧
     vp.1.yMaxNm + vr.minEnclosureNm ≤ vp.2.yMaxNm
-
 def OpenPdkSignoffMeaning (o : OpenPdkSignoffObj) (c : OpenPdkSignoffCert) : Prop :=
   o.cornerReports ≠ [] ∧ o.metalShapes ≠ [] ∧ o.netlistPins.length = o.defPorts.length ∧
   0 ≤ c.minWnsPs ∧ 0 ≤ c.minWhsPs ∧
@@ -1189,22 +1103,18 @@ def OpenPdkSignoffMeaning (o : OpenPdkSignoffObj) (c : OpenPdkSignoffCert) : Pro
   (∀ i : Nat, i < o.netlistPins.length →
     ∃ j : Nat, j < o.defPorts.length ∧
       c.pinToDefIdx[i]? = some j ∧ c.defToPinIdx[j]? = some i ∧ o.netlistPins[i]? = o.defPorts[j]?)
-
 def checkCornerNonneg (cr : OpenStaCornerSummary) : Bool :=
   decide (0 ≤ cr.ffWnsPs) && decide (0 ≤ cr.ffWhsPs) &&
   decide (0 ≤ cr.ttWnsPs) && decide (0 ≤ cr.ttWhsPs) &&
   decide (0 ≤ cr.ssWnsPs) && decide (0 ≤ cr.ssWhsPs)
-
 def checkCornerCertFloor (c : OpenPdkSignoffCert) (cr : OpenStaCornerSummary) : Bool :=
   decide (c.minWnsPs ≤ cr.ffWnsPs) && decide (c.minWnsPs ≤ cr.ttWnsPs) && decide (c.minWnsPs ≤ cr.ssWnsPs) &&
   decide (c.minWhsPs ≤ cr.ffWhsPs) && decide (c.minWhsPs ≤ cr.ttWhsPs) && decide (c.minWhsPs ≤ cr.ssWhsPs)
-
 def checkShapeWidthB (deck : OpenPdkRuleDeck) (s : Nat × LayoutBox2D) : Bool :=
   decide (s.2.xMinNm < s.2.xMaxNm) && decide (s.2.yMinNm < s.2.yMaxNm) &&
   match lookupLayerRule? s.2.layerId deck.layerRules with
   | none => false
   | some r => decide (r.minWidthNm ≤ s.2.xMaxNm - s.2.xMinNm) && decide (r.minWidthNm ≤ s.2.yMaxNm - s.2.yMinNm)
-
 def checkShapePairSpacingB (deck : OpenPdkRuleDeck) (s₁ s₂ : Nat × LayoutBox2D) : Bool :=
   if !(s₁.2.layerId == s₂.2.layerId) || (s₁.1 == s₂.1) then true
   else match lookupLayerRule? s₁.2.layerId deck.layerRules with
@@ -1213,7 +1123,6 @@ def checkShapePairSpacingB (deck : OpenPdkRuleDeck) (s₁ s₂ : Nat × LayoutBo
       let sep := max r.minSpacingNm 1
       decide (s₁.2.xMaxNm + sep ≤ s₂.2.xMinNm) || decide (s₂.2.xMaxNm + sep ≤ s₁.2.xMinNm) ||
       decide (s₁.2.yMaxNm + sep ≤ s₂.2.yMinNm) || decide (s₂.2.yMaxNm + sep ≤ s₁.2.yMinNm)
-
 def checkViaCutB (deck : OpenPdkRuleDeck) (vp : LayoutBox2D × LayoutBox2D) : Bool :=
   decide (vp.1.xMinNm < vp.1.xMaxNm) && decide (vp.1.yMinNm < vp.1.yMaxNm) &&
   decide (vp.2.xMinNm < vp.2.xMaxNm) && decide (vp.2.yMinNm < vp.2.yMaxNm) &&
@@ -1224,22 +1133,18 @@ def checkViaCutB (deck : OpenPdkRuleDeck) (vp : LayoutBox2D × LayoutBox2D) : Bo
     decide (vp.1.xMaxNm + vr.minEnclosureNm ≤ vp.2.xMaxNm) &&
     decide (vp.2.yMinNm + vr.minEnclosureNm ≤ vp.1.yMinNm) &&
     decide (vp.1.yMaxNm + vr.minEnclosureNm ≤ vp.2.yMaxNm)
-
 def checkPinBijectionAt (o : OpenPdkSignoffObj) (c : OpenPdkSignoffCert) (i : Nat) : Bool :=
   match c.pinToDefIdx[i]? with
   | none => false
   | some j => decide (j < o.defPorts.length) && (c.defToPinIdx[j]? == some i) && (o.netlistPins[i]? == o.defPorts[j]?)
-
 def checkOpenPdkCertValid (o : OpenPdkSignoffObj) (c : OpenPdkSignoffCert) : Bool :=
   decide (0 ≤ c.minWnsPs) && decide (0 ≤ c.minWhsPs) &&
   o.cornerReports.all (checkCornerCertFloor c) &&
   (c.pinToDefIdx.length == o.netlistPins.length) &&
   (c.defToPinIdx.length == o.defPorts.length) &&
   (List.range o.netlistPins.length).all (checkPinBijectionAt o c)
-
 def openPdkRequiredGrade (o : OpenPdkSignoffObj) : Nat :=
   o.cornerReports.length + o.metalShapes.length + o.viaCuts.length + o.netlistPins.length + 1
-
 def checkOpenPdkSignoff (grade : Nat) (o : OpenPdkSignoffObj) (c : OpenPdkSignoffCert) :
     Obend.Judge.Verdict OpenPdkRefusal :=
   if grade < openPdkRequiredGrade o then .uncovered
@@ -1252,14 +1157,12 @@ def checkOpenPdkSignoff (grade : Nat) (o : OpenPdkSignoffObj) (c : OpenPdkSignof
   else if !(o.netlistPins.length == o.defPorts.length) then .refused .pinDefCountMismatch [4]
   else if !(checkOpenPdkCertValid o c) then .refused .bijectionOrSlackCertInvalid [5]
   else .ok
-
 private theorem checkShapeWidthB_iff (deck : OpenPdkRuleDeck) (s : Nat × LayoutBox2D) :
     checkShapeWidthB deck s = true ↔ MetalShapeWidthSafe deck s.2 := by
   unfold checkShapeWidthB MetalShapeWidthSafe
   cases lookupLayerRule? s.2.layerId deck.layerRules with
   | none => simp
   | some r => simp [Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
 private theorem checkShapePairSpacingB_iff (deck : OpenPdkRuleDeck) (s₁ s₂ : Nat × LayoutBox2D) :
     checkShapePairSpacingB deck s₁ s₂ = true ↔ MetalPairSpacingSafe deck s₁ s₂ := by
   unfold checkShapePairSpacingB MetalPairSpacingSafe
@@ -1292,14 +1195,12 @@ private theorem checkShapePairSpacingB_iff (deck : OpenPdkRuleDeck) (s₁ s₂ :
   · have hCond : (!(s₁.2.layerId == s₂.2.layerId) || (s₁.1 == s₂.1)) = true := by
       simp [beq_eq_false_iff_ne.mpr hLayer]
     rw [hCond]; simp [hLayer]
-
 private theorem checkViaCutB_iff (deck : OpenPdkRuleDeck) (vp : LayoutBox2D × LayoutBox2D) :
     checkViaCutB deck vp = true ↔ ViaCutEnclosureSafe deck vp := by
   unfold checkViaCutB ViaCutEnclosureSafe
   cases lookupViaRule? vp.1.layerId vp.2.layerId deck.viaRules with
   | none => simp
   | some vr => simp [Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
 /-- Verified `Obend.Judge` instance for OpenROAD / OpenSTA / Sky130 / ASAP7 signoff (`"openpdk-drc-sta@1"`). -/
 @[instance_reducible] instance openPdkSignoffJudge :
     Obend.Judge OpenPdkSignoffObj OpenPdkSignoffCert where
@@ -1419,7 +1320,6 @@ private theorem checkViaCutB_iff (deck : OpenPdkRuleDeck) (vp : LayoutBox2D × L
     · exact absurd rfl hDecided
     · rename_i hNotLt; have hNotLt' : ¬ (r' < openPdkRequiredGrade o) := by omega
       simp only [hNotLt, hNotLt', ↓reduceIte]
-
 def sampleSky130SignoffObj : OpenPdkSignoffObj where
   deck := sky130PdkDeck
   netlistPins := ["clk", "rst_n", "y_out"]
@@ -1433,19 +1333,16 @@ def sampleSky130SignoffObj : OpenPdkSignoffObj where
   cornerReports :=
     [ { pathGroup := "reg2reg", ffWnsPs := 420, ffWhsPs := 45,
         ttWnsPs := 290, ttWhsPs := 60, ssWnsPs := 115, ssWhsPs := 85 } ]
-
 def sampleSky130SignoffCert : OpenPdkSignoffCert where
   pinToDefIdx := [2, 0, 1]
   defToPinIdx := [1, 2, 0]
   minWnsPs := 115
   minWhsPs := 45
-
 example : openPdkSignoffJudge.Fragment sampleSky130SignoffObj ∧
     openPdkSignoffJudge.check 20 sampleSky130SignoffObj sampleSky130SignoffCert = .ok := by
   refine ⟨?_, ?_⟩
   · change openPdkRequiredGrade sampleSky130SignoffObj ≤ 16384; decide +kernel
   · change checkOpenPdkSignoff 20 sampleSky130SignoffObj sampleSky130SignoffCert = .ok; decide +kernel
-
 /-- **Geometric Disjointness Corollary (`openPdkSignoff_same_layer_disjoint`)**. -/
 theorem openPdkSignoff_same_layer_disjoint
     {r : Nat} {o : OpenPdkSignoffObj} {c : OpenPdkSignoffCert}
@@ -1462,5 +1359,130 @@ theorem openPdkSignoff_same_layer_disjoint
   have hPos : 1 ≤ max rule.minSpacingNm 1 := Nat.le_max_right _ _
   rcases hSep with hL | hR | hB | hT <;> omega
 
+/-! ## 5. Token-wire byte codecs for `"vivado-sta@1"` and `"openpdk-drc-sta@1"`
+
+The wire is whitespace-separated tokens: decimal naturals, integers with an optional `-`, names without
+whitespace, and lists as a count followed by that many items. A decoder accepts only a wire it consumes whole. -/
+
+def wireTokens : List Char → List Char → List (List Char)
+  | [], cur => if cur.isEmpty then [] else [cur.reverse]
+  | c :: cs, cur =>
+    if c == ' ' || c == '\n' then (if cur.isEmpty then wireTokens cs [] else cur.reverse :: wireTokens cs [])
+    else wireTokens cs (c :: cur)
+def tokNatGo : List Char → Nat → Option Nat
+  | [], acc => some acc
+  | c :: cs, acc => if c.isDigit then tokNatGo cs (acc * 10 + (c.toNat - 48)) else none
+def tokNat (t : List Char) : Option Nat := if t.isEmpty then none else tokNatGo t 0
+def tokInt : List Char → Option Int
+  | '-' :: t => (tokNat t).map fun n => -(n : Int)
+  | t => (tokNat t).map Int.ofNat
+abbrev WireRd (α : Type) := StateT (List (List Char)) Option α
+def rdNat : WireRd Nat := fun ts => match ts with | t :: ts => (tokNat t).map (·, ts) | [] => none
+def rdInt : WireRd Int := fun ts => match ts with | t :: ts => (tokInt t).map (·, ts) | [] => none
+def rdStr : WireRd String := fun ts => match ts with | t :: ts => some (String.ofList t, ts) | [] => none
+def rdMany {α : Type} (item : WireRd α) : Nat → WireRd (List α)
+  | 0 => pure []
+  | n + 1 => do let x ← item; let xs ← rdMany item n; pure (x :: xs)
+def rdList {α : Type} (item : WireRd α) : WireRd (List α) := do let n ← rdNat; rdMany item n
+def runWireRd {α : Type} (what : String) (r : WireRd α) (s : String) : Except String α :=
+  match r (wireTokens s.toList []) with
+  | some (x, []) => .ok x
+  | _ => .error ("malformed " ++ what ++ " token wire")
+/-- An accepted wire is one the reader consumed to its last token. -/
+theorem runWireRd_consumes_all {α : Type} (what : String) (r : WireRd α) (s : String) (x : α)
+    (h : runWireRd what r s = .ok x) : r (wireTokens s.toList []) = some (x, []) := by
+  unfold runWireRd at h; split at h
+  · rename_i y hEq; injection h with hxy; rw [hEq, hxy]
+  · cases h
+def wireOfTokens (ts : List String) : String := " ".intercalate ts
+def rdSlr : WireRd SlrId := do
+  match (← rdNat) with | 0 => pure .slr0 | 1 => pure .slr1 | 2 => pure .slr2 | _ => failure
+def rdVivadoPath : WireRd VivadoPostRoutePath := do
+  pure ⟨← rdStr, ← rdSlr, ← rdSlr, ← rdNat, ← rdInt, ← rdNat, ← rdNat, ← rdInt, ← rdNat⟩
+def decodeVivadoStaObj : String → Except String VivadoStaSignoffObj :=
+  runWireRd "vivado-sta object" do pure ⟨← rdStr, ← rdNat, ← rdNat, ← rdNat, ← rdList rdVivadoPath⟩
+def decodeVivadoStaCert : String → Except String VivadoStaCert :=
+  runWireRd "vivado-sta certificate" do pure ⟨← rdInt, ← rdInt, ← rdNat⟩
+def encodeVivadoStaObj (o : VivadoStaSignoffObj) : String :=
+  wireOfTokens ([o.targetDevice, toString o.clockPeriodPs, toString o.clockUncertaintyPs,
+    toString o.sllCrossingPenaltyPs, toString o.paths.length] ++ o.paths.flatMap fun p =>
+      [p.pathName, toString p.srcSlr.toIndex, toString p.dstSlr.toIndex, toString p.setupArrivalSsPs,
+       toString p.setupSlackReportedSsPs, toString p.holdArrivalFfPs, toString p.holdReqFfPs,
+       toString p.holdSlackReportedFfPs, toString p.ttArrivalPs])
+def encodeVivadoStaCert (c : VivadoStaCert) : String :=
+  wireOfTokens [toString c.worstSetupSlackPs, toString c.worstHoldSlackPs, toString c.maxSlrCrossings]
+/-- Registered byte format `"vivado-sta@1"`; the planted report has a fast-corner hold violation. -/
+def vivadoStaByteJudge : Obend.Judge.Format where
+  name := "vivado-sta"
+  version := "1"
+  Obj := VivadoStaSignoffObj
+  Cert := VivadoStaCert
+  judge := vivadoPostRouteStaJudge
+  decodeObj := decodeVivadoStaObj
+  decodeCert := decodeVivadoStaCert
+  trust := .kernel
+  regime := .decidable
+  bad := ({ paths := [⟨"hold_short", .slr0, .slr0, 2950, 335, 100, 110, 45, 2400⟩] }, sampleVivadoStaCert)
+  badGrade := 8
+  bad_refused := ⟨.holdViolationFF, [1], by
+    change checkVivadoStaSignoff 8 { paths := [⟨"hold_short", .slr0, .slr0, 2950, 335, 100, 110, 45, 2400⟩] } _ = _
+    decide +kernel⟩
+def rdBox : WireRd LayoutBox2D := do pure ⟨← rdNat, ← rdNat, ← rdNat, ← rdNat, ← rdNat⟩
+def rdLayerRule : WireRd LayerDrcRule := do pure ⟨← rdNat, ← rdStr, ← rdNat, ← rdNat⟩
+def rdViaRule : WireRd ViaEnclosureRule := do pure ⟨← rdNat, ← rdNat, ← rdNat⟩
+def rdCorner : WireRd OpenStaCornerSummary := do pure ⟨← rdStr, ← rdInt, ← rdInt, ← rdInt, ← rdInt, ← rdInt, ← rdInt⟩
+def rdShape : WireRd (Nat × LayoutBox2D) := do pure (← rdNat, ← rdBox)
+def rdViaCut : WireRd (LayoutBox2D × LayoutBox2D) := do pure (← rdBox, ← rdBox)
+def rdPdkDeck : WireRd OpenPdkRuleDeck := do
+  let node : OpenPdkNode ← (do match (← rdNat) with | 0 => pure .sky130 | 1 => pure .asap7 | _ => failure)
+  pure ⟨node, ← rdNat, ← rdList rdLayerRule, ← rdList rdViaRule⟩
+def decodeOpenPdkSignoffObj : String → Except String OpenPdkSignoffObj :=
+  runWireRd "openpdk-drc-sta object" do
+    pure ⟨← rdPdkDeck, ← rdList rdStr, ← rdList rdStr, ← rdList rdShape, ← rdList rdViaCut, ← rdList rdCorner⟩
+def decodeOpenPdkSignoffCert : String → Except String OpenPdkSignoffCert :=
+  runWireRd "openpdk-drc-sta certificate" do pure ⟨← rdList rdNat, ← rdList rdNat, ← rdInt, ← rdInt⟩
+def boxTokens (b : LayoutBox2D) : List String :=
+  [toString b.layerId, toString b.xMinNm, toString b.yMinNm, toString b.xMaxNm, toString b.yMaxNm]
+def listTokens {α : Type} (item : α → List String) (xs : List α) : List String :=
+  toString xs.length :: xs.flatMap item
+def encodeOpenPdkSignoffObj (o : OpenPdkSignoffObj) : String :=
+  wireOfTokens ([(match o.deck.node with | .sky130 => "0" | .asap7 => "1"), toString o.deck.nodeNm] ++
+    listTokens (fun r => [toString r.layerId, r.layerName, toString r.minWidthNm, toString r.minSpacingNm]) o.deck.layerRules ++
+    listTokens (fun r => [toString r.viaLayerId, toString r.metalLayerId, toString r.minEnclosureNm]) o.deck.viaRules ++
+    listTokens (fun s => [s]) o.netlistPins ++ listTokens (fun s => [s]) o.defPorts ++
+    listTokens (fun s => toString s.1 :: boxTokens s.2) o.metalShapes ++
+    listTokens (fun v => boxTokens v.1 ++ boxTokens v.2) o.viaCuts ++
+    listTokens (fun c => [c.pathGroup, toString c.ffWnsPs, toString c.ffWhsPs, toString c.ttWnsPs,
+      toString c.ttWhsPs, toString c.ssWnsPs, toString c.ssWhsPs]) o.cornerReports)
+def encodeOpenPdkSignoffCert (c : OpenPdkSignoffCert) : String :=
+  wireOfTokens (listTokens (fun n => [toString n]) c.pinToDefIdx ++ listTokens (fun n => [toString n]) c.defToPinIdx ++
+    [toString c.minWnsPs, toString c.minWhsPs])
+/-- The clean Sky130 layout with its second `met1` shape moved to 50 nm from the first (rule: 140 nm). -/
+def sky130SpacingViolationObj : OpenPdkSignoffObj :=
+  { sampleSky130SignoffObj with
+    metalShapes := [(0, ⟨1, 0, 0, 200, 200⟩), (1, ⟨1, 250, 0, 450, 200⟩)] }
+/-- Registered byte format `"openpdk-drc-sta@1"`; the planted layout violates `met1` spacing. -/
+def openpdkDrcStaByteJudge : Obend.Judge.Format where
+  name := "openpdk-drc-sta"
+  version := "1"
+  Obj := OpenPdkSignoffObj
+  Cert := OpenPdkSignoffCert
+  judge := openPdkSignoffJudge
+  decodeObj := decodeOpenPdkSignoffObj
+  decodeCert := decodeOpenPdkSignoffCert
+  trust := .kernel
+  regime := .decidable
+  bad := (sky130SpacingViolationObj, sampleSky130SignoffCert)
+  badGrade := 20
+  bad_refused := ⟨.metalSpacingViolation, [2], by
+    change checkOpenPdkSignoff 20 sky130SpacingViolationObj sampleSky130SignoffCert = _; decide +kernel⟩
+/-- Accepted `"vivado-sta@1"` bytes decode to a report and summary for which the STA meaning holds. -/
+theorem vivadoStaByteJudge_sound {r : Nat} {obj cert : String} (h : vivadoStaByteJudge.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeVivadoStaObj obj = .ok o ∧ decodeVivadoStaCert cert = .ok c ∧ VivadoStaMeaning o c :=
+  vivadoStaByteJudge.checkBytes_sound h
+/-- Accepted `"openpdk-drc-sta@1"` bytes decode to a layout and certificate for which the signoff meaning holds. -/
+theorem openpdkDrcStaByteJudge_sound {r : Nat} {obj cert : String} (h : openpdkDrcStaByteJudge.checkBytes r obj cert = .ok) :
+    ∃ o c, decodeOpenPdkSignoffObj obj = .ok o ∧ decodeOpenPdkSignoffCert cert = .ok c ∧ OpenPdkSignoffMeaning o c :=
+  openpdkDrcStaByteJudge.checkBytes_sound h
 end Obend.Hardware.AwsF2Shell
 end
