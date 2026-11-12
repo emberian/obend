@@ -517,12 +517,20 @@ def outerSlice (tbl : List F) (suffix : List Bool) : RoundPoly F :=
   let hi := mleEval tbl (𝟙 :: suffix.map (bitElem (R := F)))
   ⟨[lo, hi ⊞ lo]⟩
 
-set_option maxHeartbeats 800000 in
 theorem outerSlice_eval (tbl : List F) (suffix : List Bool) (r : F) :
     (outerSlice tbl suffix).eval r = mleEval tbl (r :: suffix.map (bitElem (R := F))) := by
-  rw [outerSlice, RoundPoly.eval_linear]
-  rw [← mleEval_foldFirstVar, ← mleEval_foldFirstVar, ← mleEval_foldFirstVar]
-  exact (innerProd_foldFirstVar_linear (R := F) r _ tbl).symm
+  let pts := suffix.map (bitElem (R := F))
+  let ones := (hypercube pts.length).map (eqPoly pts)
+  have h0 : mleEval tbl (𝟘 :: pts) = innerProd (foldFirstVar tbl 𝟘) ones :=
+    (mleEval_foldFirstVar tbl 𝟘 pts).symm
+  have h1 : mleEval tbl (𝟙 :: pts) = innerProd (foldFirstVar tbl 𝟙) ones :=
+    (mleEval_foldFirstVar tbl 𝟙 pts).symm
+  have hr : innerProd (foldFirstVar tbl r) ones = mleEval tbl (r :: pts) :=
+    mleEval_foldFirstVar tbl r pts
+  refine Eq.trans ?_ hr
+  refine Eq.trans (RoundPoly.eval_linear _ _ r) ?_
+  rw [h0, h1]
+  exact (innerProd_foldFirstVar_linear (R := F) r ones tbl).symm
 
 def outerAnchor (tbl : List F) (n : Nat) : Option (List Bool) :=
   (hypercube n).find? (fun bs => decide (mleEval tbl (bs.map (bitElem (R := F))) ≠ 𝟘))

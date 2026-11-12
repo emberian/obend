@@ -1121,6 +1121,55 @@ module = "Obend.Hardware.Gpu.StencilTile"
 theorem = "compileStencilGlobal_emitted_sound"
 description = "Workgroup halo-tiled stencil refinement (`tiledHaloStencil_eq_spec`, strict HBM read savings `tiledHbmReads_lt_global`) and verified emitted GPU kernel lowering."
 
+[[apex]]
+id = "core-cubical-2ltt-ghost-erasure"
+subsystem = "Core"
+module = "Obend.Core.Cubical2LTT"
+theorem = "realizer_stage_erases_zero_ghosts"
+description = "Realizability 2-Level Type Theory (`StageGrade`) runtime erasure drops zero-grade fibrant ghost premises and preserves `AdapTT` fused cast semantics."
+
+[[apex]]
+id = "core-cubical-hcom-deltalens-superrefines"
+subsystem = "Core"
+module = "Obend.Core.Cubical2LTT"
+theorem = "hcom_repairs_broken_commuting_square"
+description = "Cavallo-Sattler `CofibLUT16` open-box Kan `hcomFill2` + `DeltaLens` + `SuperRefines` square repair preserving orthogonal `superClaimCheck` certificates."
+
+[[apex]]
+id = "crypto-binary-spartan-shout"
+subsystem = "Crypto"
+module = "Obend.Crypto.BinarySpartanAndShout"
+theorem = "binarySpartan_verify_sound_or_schwartzZippel"
+description = "Wiedemann `GF(2^128)` Binary Spartan R1CS sumcheck soundness (`binaryShout_onehot_lookup_sound`, strict binary-code UDR proximity refusal, and sparse inner sumcheck)."
+
+[[apex]]
+id = "vault-exp-verkle-openhash-snapshot"
+subsystem = "Vault"
+module = "Obend.Vault.ExpVerkleAndOpenHash"
+theorem = "verifyExpVerkleOpening_binds_or_collision"
+description = "Exponential-arity Verkle forest (`O(log log N)` opening depth) + elastic bounded-probe open-addressed hash table (`verifyAbsenceCert_sound`, `ChunkedWorld` snapshot refusal)."
+
+[[apex]]
+id = "hardware-symplectic-vehicle-6dof"
+subsystem = "Hardware"
+module = "Obend.Hardware.SymplecticVehicle6Dof"
+theorem = "se3Vehicle6DofJudge_sound"
+description = "Exact rational Cayley `SO(3)`/`SE(3)` symplectic 6-DOF vehicle mechanics, SPD composite inertia, propellant/staging momentum conservation, and multi-turn `Judge` certificate."
+
+[[apex]]
+id = "hardware-wddl-power-glitch-immunity"
+subsystem = "Hardware"
+module = "Obend.Hardware.GlitchAndTempestSafe"
+theorem = "power_glitch_immunity_multi_turn_sound"
+description = "4-state WDDL dual-rail `RtlModule` sticky quarantine + multi-turn trace immunity against PDN voltage-droop / clock-glitch instruction skips (`singleRail_powerGlitch_skips_auth_check`)."
+
+[[apex]]
+id = "hardware-pcb-tempest-emc-judge"
+subsystem = "Hardware"
+module = "Obend.Hardware.GlitchAndTempestSafe"
+theorem = "checkTempestGlitchEmc_sound"
+description = "Multi-GHz coupled-PCB TEMPEST/EMC certificate (`balanced_wddl_zero_secret_dependent_power_and_cm`, `masked_dualRail_exact_mutual_info_zero`, `imperfect_pcb_tempest_snr_below_noise_floor`)."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
@@ -1129,8 +1178,8 @@ description = "Workgroup halo-tiled stencil refinement (`tiledHaloStencil_eq_spe
 id = "pillar1-core-r2ltt-super-refines"
 pillar = "Pillar 1: Obend.Core"
 subsystem = "Core"
-target_module = "Obend.Core.Proofs.Adequacy"
-target_theorem = "core_r2ltt_intention_renew_sound"
+target_module = "Obend.Core.Cubical2LTT"
+target_theorem = "hcom_repairs_broken_commuting_square"
 wave = "Wave 5"
 description = "Realizability 2-Level Type Theory (`CofibLUT16`) + Clarke `DeltaLens` `Intention.renew` frame-preserving adequacy."
 

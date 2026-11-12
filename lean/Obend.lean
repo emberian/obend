@@ -59,6 +59,7 @@ public import Obend.Vault.FrustumMembrane
 public import Obend.Vault.TransclusionAndMirror
 public import Obend.Vault.SurviveFirePor
 public import Obend.Vault.PortableContinuation
+public import Obend.Vault.ExpVerkleAndOpenHash
 public import Obend.Codec.DetCbor
 public import Obend.Consensus
 public import Obend.Consensus.SimplexLiveness
@@ -66,8 +67,10 @@ public import Obend.ClusterGov.PhysicalEnvelope
 public import Obend.Hardware
 public import Obend.Hardware.AwsF2Shell
 public import Obend.Hardware.CircuitDae
+public import Obend.Hardware.GlitchAndTempestSafe
 public import Obend.Hardware.SafePhysicalShield
 public import Obend.Hardware.SwitchedCapRf
+public import Obend.Hardware.SymplecticVehicle6Dof
 public import Obend.Hardware.PipelinedRiscCore
 public import Obend.Hardware.PipelinedRisc
 public import Obend.Hardware.PipelinedZkCrypto
@@ -118,6 +121,7 @@ public import Obend.Category
 public import Obend.Repair
 public import Obend.Repair.DeriveConfig
 public import Obend.Repair.DeltaLensRenew
+public import Obend.Core.Cubical2LTT
 public import Obend.Tactic.Compositional
 public import Obend.Tactic.DataRefinement
 public import Obend.Tactic.ProgramLogic
@@ -127,6 +131,7 @@ public import Obend.Crypto
 public import Obend.Crypto.Poseidon2Goldilocks
 public import Obend.Crypto.DarkBazaar
 public import Obend.Crypto.BinaryTower256
+public import Obend.Crypto.BinarySpartanAndShout
 public import Obend.Polis.EvidencedOcap
 public import Obend.Polis.ZkBiscuit
 public import Obend.Polis.VerkleUmem

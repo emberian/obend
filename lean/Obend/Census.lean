@@ -140,6 +140,7 @@ import Obend.Consensus.SimplexLiveness
 import Obend.Consensus.SimplexProtocol
 import Obend.Consensus.SimplexTrace
 import Obend.Crypto
+import Obend.Crypto.BinarySpartanAndShout
 import Obend.Crypto.BinaryTower256
 import Obend.Crypto.CanopyReduce
 import Obend.Crypto.DarkBazaar
@@ -162,6 +163,7 @@ import Obend.Core.Check
 import Obend.Core.Checkpoint
 import Obend.Core.Code
 import Obend.Core.Collect
+import Obend.Core.Cubical2LTT
 import Obend.Core.Data
 import Obend.Core.Digest
 import Obend.Core.EquiRecursiveAgreement
@@ -378,6 +380,7 @@ import Obend.Hardware.Device.Wafer
 import Obend.Hardware.FSM
 import Obend.Hardware.Fabric
 import Obend.Hardware.GeometryCAM
+import Obend.Hardware.GlitchAndTempestSafe
 import Obend.Hardware.Gpu.CollectiveImport
 import Obend.Hardware.Gpu.CollectiveWorkBuild
 import Obend.Hardware.Gpu.NttCorrect
@@ -413,6 +416,7 @@ import Obend.Hardware.SafePhysicalShield
 import Obend.Hardware.Silicon
 import Obend.Hardware.SiliconOuroboros
 import Obend.Hardware.SwitchedCapRf
+import Obend.Hardware.SymplecticVehicle6Dof
 import Obend.Hardware.Synth
 import Obend.Hardware.TapeoutPipeline
 import Obend.Hardware.ThermalPassivity
@@ -703,6 +707,7 @@ import Obend.Vault.Cli
 import Obend.Vault.Cost
 import Obend.Vault.DecodeCache
 import Obend.Vault.Escrow
+import Obend.Vault.ExpVerkleAndOpenHash
 import Obend.Vault.Form
 import Obend.Vault.FormCheck
 import Obend.Vault.FormCheckCache
