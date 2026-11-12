@@ -475,11 +475,14 @@ import Obend.Law.Proofs.Typing
 import Obend.Law.Run
 import Obend.Law.Std
 import Obend.Law.Syntax
+import Obend.Leaf.BytecodeRegisterJit
 import Obend.Leaf.Emit
 import Obend.Leaf.Flatten
 import Obend.Leaf.Futamura
 import Obend.Leaf.LinkSpecialize
 import Obend.Leaf.Residual
+import Obend.Leaf.SelfApplicableMix
+import Obend.Leaf.SelfApplicableMixCore
 import Obend.Leaf.Specialize
 import Obend.Leaf.Static
 import Obend.Leaf.UpTo

@@ -5,15 +5,15 @@ module
 End-to-end execution, `#guard` witnesses, `Core4` demand-machine bridge checks, `#tooth` mutation
 sensitivity kills, and zero-axiom imported-tree verification (`#assert_axioms_tree`) for:
 - `Obend.Leaf.SelfApplicableMixCore` & `Obend.Leaf.SelfApplicableMix`
-- `Obend.Leaf.VerifiedBytecodeJit`
+- `Obend.Leaf.BytecodeRegisterJit`
 -/
 public import Obend.Leaf.SelfApplicableMix
-public import Obend.Leaf.VerifiedBytecodeJit
+public import Obend.Leaf.BytecodeRegisterJit
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms
 meta import all Obend.Leaf.SelfApplicableMixCore
 meta import all Obend.Leaf.SelfApplicableMix
-meta import all Obend.Leaf.VerifiedBytecodeJit
+meta import all Obend.Leaf.BytecodeRegisterJit
 meta import all Obend.Leaf.Flatten
 meta import all Obend.Leaf.Static
 meta import all Obend.Core.RangeSafe
@@ -128,7 +128,7 @@ import all Obend.Leaf.Served
 import all Obend.Leaf.Specialize
 import all Obend.Leaf.Static
 import all Obend.Leaf.UpTo
-import all Obend.Leaf.VerifiedBytecodeJit
+import all Obend.Leaf.BytecodeRegisterJit
 import all Obend.Logic.Claim
 import all Obend.Logic.LateBinding
 import all Obend.Lower.Lower
@@ -157,7 +157,7 @@ open Obend.Core.RangeSafe
 open Obend.Core.Machine
 open Obend.Core.MachineFast
 open Obend.Leaf.SelfApplicableMix
-open Obend.Leaf.VerifiedBytecodeJit
+open Obend.Leaf.BytecodeRegisterJit
 
 set_option autoImplicit false
 set_option maxRecDepth 200000
@@ -275,7 +275,7 @@ def affineInterp : MixProg :=
      | none => false)
   | none => false
 
-/-! ## 4. `VerifiedBytecodeJit`: Dictionary-Stripped `sumTo 30000`, Range Refusal & C99 Emission -/
+/-! ## 4. `BytecodeRegisterJit`: Dictionary-Stripped `sumTo 30000`, Range Refusal & C99 Emission -/
 
 -- Clearing `EXPERT-compiler-runtime` §2.3: `sumTo 30000 = 450,015,000` executes to completion cleanly!
 #guard runSumToBytecode 30000 == some 450015000
@@ -309,8 +309,8 @@ def branchingDictExpr : Term :=
 #guard execBytecode #[.ret 9] #[42] 5 == none
 
 -- Standalone bounds-checked C99 emitter check:
-#guard ((emitVerifiedC99 sumToLoopCode).splitOn "uint64_t obend_bytecode_jit_run").length == 2
-#guard ((emitVerifiedC99 sumToLoopCode).splitOn "goto L0;").length == 2
+#guard ((emitRegisterBytecodeC99 sumToLoopCode).splitOn "uint64_t obend_bytecode_jit_run").length == 2
+#guard ((emitRegisterBytecodeC99 sumToLoopCode).splitOn "goto L0;").length == 2
 
 /-! ## 5. Mutation-Sensitivity Witnesses (`#tooth`) & Zero-Axiom Tree Audit (`#assert_axioms_tree`) -/
 
@@ -327,13 +327,13 @@ def branchingDictExpr : Term :=
   Obend.Leaf.SelfApplicableMix.lowerMixToCore4 :=
     fun _ => Obend.Core.Term.Term.lam (Obend.Core.Term.Term.inject "none" (Obend.Core.Term.Term.nat 0))
 
-#tooth Obend.Leaf.VerifiedBytecodeJit.compileExprToBytecode_sound by mutation
-  Obend.Leaf.VerifiedBytecodeJit.compileExprToBytecode :=
-    fun _ _ _ _ => some (#[Obend.Leaf.VerifiedBytecodeJit.ByteInstr.ret 0], 1, 1)
+#tooth Obend.Leaf.BytecodeRegisterJit.compileExprToBytecode_sound by mutation
+  Obend.Leaf.BytecodeRegisterJit.compileExprToBytecode :=
+    fun _ _ _ _ => some (#[Obend.Leaf.BytecodeRegisterJit.ByteInstr.ret 0], 1, 1)
 
-#tooth Obend.Leaf.VerifiedBytecodeJit.specializeAndCompileLoop_sound by mutation
-  Obend.Leaf.VerifiedBytecodeJit.specializeAndCompileLoop :=
-    fun _ _ _ _ => some (#[Obend.Leaf.VerifiedBytecodeJit.ByteInstr.ret 0], 2, 1)
+#tooth Obend.Leaf.BytecodeRegisterJit.specializeAndCompileLoop_sound by mutation
+  Obend.Leaf.BytecodeRegisterJit.specializeAndCompileLoop :=
+    fun _ _ _ _ => some (#[Obend.Leaf.BytecodeRegisterJit.ByteInstr.ret 0], 2, 1)
 
 #assert_axioms_tree
 

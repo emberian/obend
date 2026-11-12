@@ -1254,6 +1254,20 @@ module = "Obend.Geometry.DiracDoubleCat"
 theorem = "doubleCat_interchange_law"
 description = "Acausal finite-dimensional Dirac structures (`D = D^perp`), Brayton-Moser resistive port-Hamiltonian closure, and `MultiscaleOpenDouble` Eckmann-Hilton interchange with telegrapher-to-MNA coarse-graining."
 
+[[apex]]
+id = "leaf-self-applicable-mix-futamura3-cogen"
+subsystem = "Leaf"
+module = "Obend.Leaf.SelfApplicableMix"
+theorem = "futamura3_self_self_cogen_sound"
+description = "Genuine Jones-Gomard-Sestoft 1st/2nd/3rd Futamura projections over self-applicable `mixProg : MixProg` with `Core4` simulation and machine completeness (`lowerMixToCore4_sound`)."
+
+[[apex]]
+id = "leaf-bytecode-register-jit-loop-specializer"
+subsystem = "Leaf"
+module = "Obend.Leaf.BytecodeRegisterJit"
+theorem = "specializeAndCompileLoop_sound"
+description = "Dictionary-erasing static specializer (`specializeDictTerm`) + range-safe flat `Array ByteInstr` / `Array UInt64` register loop compiler and bounds-checked C99 emitter."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

@@ -89,6 +89,9 @@ public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
 public import Obend.Leaf.LinkSpecialize
 public import Obend.Leaf.Futamura
+public import Obend.Leaf.SelfApplicableMixCore
+public import Obend.Leaf.SelfApplicableMix
+public import Obend.Leaf.BytecodeRegisterJit
 public import Obend.Logic.SuperRefines
 public import Obend.Logic.GuardedLob
 public import Obend.Logic.MultiTurnHoare

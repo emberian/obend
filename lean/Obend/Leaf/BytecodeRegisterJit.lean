@@ -1,6 +1,6 @@
 module
 /-
-# `Obend.Leaf.VerifiedBytecodeJit` — Flat Register Bytecode VM, Dictionary Erasure & Range-Safe Loop Compiler
+# `Obend.Leaf.BytecodeRegisterJit` — Flat Register Bytecode VM, Dictionary Erasure & Range-Safe Loop Compiler
 
 Clears `review/EXPERT-compiler-runtime-20261103.md` §2.3 (typeclass dictionary-passing overhead in
 tight numerical loops):
@@ -13,7 +13,7 @@ tight numerical loops):
    relocatable register-allocating compiler over the `Obend.Core.RangeSafe` scalar/control fragment
    (`.nat`, `.boolean`, `.bound`, `let`, `.binary`, `.ifBool`, `.ifZero`) proved sound (`SimulatesBytecode`)
    against unspecialized `Core4` `Evaluates` with `< 2^64` overflow/underflow certification.
-4. **Countdown Loop Specializer & C99 Emitter (`specializeAndCompileLoop`, `emitVerifiedC99`)**:
+4. **Countdown Loop Specializer & C99 Emitter (`specializeAndCompileLoop`, `emitRegisterBytecodeC99`)**:
    strips `HAdd.hAdd` dictionary records from loop bodies, compiles to tight register loops, executes
    `sumTo 30000 = 450,015,000` cleanly, and emits standalone bounds-checked C99.
 -/
@@ -30,7 +30,7 @@ import all Obend.Leaf.Flatten
 import all Obend.Leaf.Static
 
 public section
-namespace Obend.Leaf.VerifiedBytecodeJit
+namespace Obend.Leaf.BytecodeRegisterJit
 
 open Obend.Core.Term
 open Obend.Core.RangeSafe
@@ -1482,7 +1482,7 @@ private def renderC99Instr (nInstrs pc : Nat) (ins : ByteInstr) : String :=
   s!"L{pc}:\n" ++ fuelChk ++ body
 
 /-- Emit standalone bounds-checked C99 executing `code` with exact `execBytecode` semantics. -/
-def emitVerifiedC99 (code : Array ByteInstr) : String :=
+def emitRegisterBytecodeC99 (code : Array ByteInstr) : String :=
   let hdr :=
     "#include <stdint.h>\n#include <stddef.h>\n\n" ++
     "uint64_t obend_bytecode_jit_run(uint64_t *regs, size_t n_regs, uint64_t fuel, int *ok) {\n"
@@ -1493,5 +1493,5 @@ def emitVerifiedC99 (code : Array ByteInstr) : String :=
     return acc
   hdr ++ blocks ++ "L_oob:\n  *ok = 0;\n  return 0ULL;\n}\n"
 
-end Obend.Leaf.VerifiedBytecodeJit
+end Obend.Leaf.BytecodeRegisterJit
 end
