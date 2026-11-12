@@ -258,7 +258,7 @@ example : checkFresh ⟨[js "n"], []⟩ plantedAttestation = false := by decide 
 -- A mask check that does not ask the hidden span to return to the machine state.
 #tooth checkMask_run by mutation Obend.Judge.spanConfined := fun _ _ _ => true
 -- A node preimage that drops the attestation and the children.
-#tooth treeRoot_binds by mutation nodePreimage := fun h _ => encList [encInt (kindTag h.kind)]
+#tooth nodePreimage_injective by mutation nodePreimage := fun h _ => encList [encInt (kindTag h.kind)]
 -- A tag check that accepts every tag.
 #tooth deco_ghash_forgery_keys_bound by mutation tagVerifies := fun _ _ => true
 
@@ -272,5 +272,58 @@ example : checkFresh ⟨[js "n"], []⟩ plantedAttestation = false := by decide 
 #print axioms encList_injective
 #print axioms callTreeVerify_sound_or_collision
 #assert_axioms_tree
+
+
+theorem subtree_trailing_bytes_refused :
+    checkSubtreeRoot (respView ("{\"subtree_root\":\"" ++ zeros ++ "\"}false")) zeroRoot = false := by
+  decide +kernel
+theorem subtree_key_name_refused :
+    checkSubtreeRoot (respView ("{\"subtree_root_suffix\":\"" ++ zeros ++ "\"}")) zeroRoot = false := by
+  decide +kernel
+theorem subtree_trailing_mask_refused :
+    checkSubtreeRoot ⟨⟨3, ByteArray.empty⟩,
+      [.opened httpHead [], .opened (js ("{\"subtree_root\":\"" ++ zeros ++ "\"}")) [],
+       .masked (js "*")]⟩ zeroRoot = false := by decide +kernel
+example : checkSubtreeRoot ⟨⟨4, ByteArray.empty⟩,
+    [.opened httpHead [], .opened (js ("{\"subtree_root\":\"" ++ zeros ++ "\",\"secret\":\"")) [],
+     .masked (js "****"), .opened (js "\"}") []]⟩ zeroRoot = true := by decide +kernel
+def skipMaskedSlots : Scan → List SpanSlot → Scan
+  | s, [] => s
+  | s, .opened b _ :: rest => skipMaskedSlots (b.data.toList.foldl scanByte s) rest
+  | s, .masked _ :: rest => skipMaskedSlots { s with clean := false } rest
+#tooth subtree_trailing_mask_refused by mutation scanSlots := skipMaskedSlots
+#tooth subtree_trailing_bytes_refused by
+  mutation topLevelMembers := fun body => (scanSlots Scan.init body).found
+#tooth tagVerifies_lengths by mutation tagVerifies := fun _ _ => true
+#tooth FaithfulOpenings.checked by mutation checkOpenings := fun _ _ => false
+#tooth checkDataflowEdge_iff by mutation checkDataflowEdge := fun _ _ => true
+
+#tooth checkHop_iff by mutation checkHop := fun _ _ _ _ => true
+
+/-- Stress tests on `checkSubtreeRoot`: `\\"` escaped backslashes before quotes, valid vs lone
+UTF-16 surrogate pairs, and truncated raw UTF-8 sequences in sibling fields. -/
+theorem subtree_lexer_edge_cases :
+    checkSubtreeRoot (respView ("{\"note\":\"foo\\\\\",\"subtree_root\":\"" ++ zeros ++ "\"}")) zeroRoot = true ∧
+    checkSubtreeRoot (respView ("{\"note\":\"foo\\\\\\\"subtree_root\\\":\\\"" ++ zeros ++ "\\\"\"}")) zeroRoot = false ∧
+    checkSubtreeRoot (respView ("{\"emoji\":\"\\uD834\\uDD1E\",\"subtree_root\":\"" ++ zeros ++ "\"}")) zeroRoot = true ∧
+    checkSubtreeRoot (respView ("{\"emoji\":\"\\uD834\",\"subtree_root\":\"" ++ zeros ++ "\"}")) zeroRoot = false ∧
+    checkSubtreeRoot (respView ("{\"emoji\":\"\\uDEAD\",\"subtree_root\":\"" ++ zeros ++ "\"}")) zeroRoot = false ∧
+    checkSubtreeRoot ⟨⟨2, ByteArray.empty⟩, [.opened httpHead [],
+      .opened ⟨("{\"bad\":\"".toByteArray.data.toList ++ [0xe2, 0x82] ++
+        ("\",\"subtree_root\":\"" ++ zeros ++ "\"}").toByteArray.data.toList).toArray⟩ []]⟩
+      zeroRoot = false := by
+  decide +kernel
+
+#tooth subtree_lexer_edge_cases by
+  mutation scanByte := fun s b => { s with st := Obend.Judge.VpaJson.stepJson s.st b }
+
+example : ∃ k, callTreeJudge.refutes k = true := ⟨.invalidExecution, rfl⟩
+theorem planted_tree_has_no_meaning : ∀ w, ¬ CallTreeSpec plantedClaim w := by
+  intro w hm
+  have hh := hm.hops
+  change (false = true ∧ _) ∧ _ at hh
+  cases hh.1.1
+#print axioms treeRoot_binds
+#print axioms FaithfulOpenings.checked
 
 end Obend.Tests.BinaryTowerDecoCallTree

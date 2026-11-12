@@ -179,6 +179,9 @@ structure UnifiedDeosSpine where
   seatBook   : Book
   invReg     : InvitationRegistry
   seats      : List Seat
+  holders    : List (AccountId × BitVec 256) := []
+  epoch      : Nat := 0
+  epochKeys  : List (BitVec 256) := []
 
 /-- Check that an atomic `VaultTurn` and typed-account `FloorBook` batch are jointly admissible on `S`:
     1. `turn.readPins` holds against `S.store` (`admitFootprint` succeeds — no TOCTOU),
@@ -211,7 +214,7 @@ def stepUnifiedTurn (S : UnifiedDeosSpine) (stateAssets : List String)
 /-- `stepUnifiedTurn` accepts: the empty turn with no postings, on any spine with an empty store,
     an empty floor book and no seats. -/
 example (w : Obend.Vault.Replay.World) (b : Book) (r : InvitationRegistry) (occ : Obend.Core.Data.Data) :
-    (stepUnifiedTurn ⟨w, emptyStore, FloorBook.empty, b, r, []⟩ []
+    (stepUnifiedTurn { world := w, store := emptyStore, floorBook := FloorBook.empty, seatBook := b, invReg := r, seats := [] } []
       { turnId := ByteArray.empty, readPins := [], writeCells := [], occasion := occ,
         agree := fun _ h => (nomatch h), balanced := fun _ => rfl } []).isSome = true := rfl
 
@@ -237,15 +240,21 @@ theorem stepUnifiedTurn_refuses_stale_pin
 open Obend.Polis.ZoeSeatSettlement in
 /-- The spine's ledger components as a Zoe host, with the holder commitments and epoch that Zoe
     keeps beside them. -/
-def UnifiedDeosSpine.zoeHost (S : UnifiedDeosSpine) (holders : List (AccountId × BitVec 256))
-    (epoch : Nat) : ZoeHost :=
+def UnifiedDeosSpine.zoeHost (S : UnifiedDeosSpine) : ZoeHost :=
   { floorBook := S.floorBook, seatBook := S.seatBook, invReg := S.invReg, seats := S.seats,
-    holders := holders, epoch := epoch }
+    holders := S.holders, epoch := S.epoch, epochKeys := S.epochKeys }
 
 open Obend.Polis.ZoeSeatSettlement in
 /-- Write a Zoe host's ledger back into the spine; world and store are untouched. -/
 def UnifiedDeosSpine.withZoeHost (S : UnifiedDeosSpine) (h : ZoeHost) : UnifiedDeosSpine :=
-  { S with floorBook := h.floorBook, seatBook := h.seatBook, invReg := h.invReg, seats := h.seats }
+  { S with
+    floorBook := h.floorBook, seatBook := h.seatBook, invReg := h.invReg, seats := h.seats
+    holders := h.holders, epoch := h.epoch, epochKeys := h.epochKeys }
+
+open Obend.Polis.ZoeSeatSettlement in
+/-- Persistence includes the clock authority and holder registry. -/
+theorem UnifiedDeosSpine.zoeHost_writeback (S : UnifiedDeosSpine) (h : ZoeHost) :
+    (S.withZoeHost h).zoeHost = h := by cases h; rfl
 
 open Obend.Polis.ZoeSeatSettlement in
 /-- **Zoe traces run on the spine.** From a spine whose ledger satisfies `ZoeInv`, any
@@ -255,16 +264,16 @@ open Obend.Polis.ZoeSeatSettlement in
     refused on their account), with world and store untouched and `ZoeInv` kept for the next
     trace. -/
 theorem unifiedDeos_zoe_trace_on_spine (H : Obend.Digest.HashBytes.Hash) (guest : GuestContract)
-    (S : UnifiedDeosSpine) (holders : List (AccountId × BitVec 256)) (epoch : Nat)
+    (S : UnifiedDeosSpine)
     (turns : List ZoeTurn) (f : ZoeHost)
-    (hInv : ZoeInv (S.zoeHost holders epoch))
-    (hTrace : ValidZoeTrace H guest (S.zoeHost holders epoch) turns f) :
+    (hInv : ZoeInv (S.zoeHost))
+    (hTrace : ValidZoeTrace H guest (S.zoeHost) turns f) :
     FloorsHold (S.withZoeHost f).floorBook ∧
     (∀ ast : AssetId, (S.withZoeHost f).floorBook.assetSum ast = S.floorBook.assetSum ast) ∧
     (S.withZoeHost f).seats.all
       (fun s => safeAt (S.withZoeHost f).seatBook s.account s.proposal) = true ∧
     (S.withZoeHost f).world = S.world ∧ (S.withZoeHost f).store = S.store ∧
-    ZoeInv ((S.withZoeHost f).zoeHost f.holders f.epoch) := by
+    ZoeInv ((S.withZoeHost f).zoeHost) := by
   obtain ⟨hf, hsum, _⟩ := trace_invariant H guest turns _ f hInv hTrace
   have hf' := hf
   unfold ZoeInv at hf'

@@ -1,7 +1,6 @@
 module
 /-
 # Obend.Polis.EpistemicVouchMarket — stake-bonded vouching, cut-bounded trust, judged slashing
-
 Principals bond collateral and stake it on other principals or on claims.
 1. **Trust capacity.** The vouch graph is a capacitated network; trust from a root to a target is
    the minimum cut between them (`effectiveTrustCapacity`). Evidence of trust is a packing of
@@ -20,15 +19,12 @@ Principals bond collateral and stake it on other principals or on claims.
 -/
 public import Obend.Judge.Class
 public import Obend.Logic.SeparationFrame
-public import Obend.Digest.HashBytes
+public import Obend.Consensus.SimplexProtocol
 public import Obend.Digest.Cshake256.Spec
-
 public section
 namespace Obend.Polis.EpistemicVouchMarket
 set_option autoImplicit false
-
 open Obend.Logic (ConservedValue deltaAt)
-
 /-! ## 1. Sums over lists -/
 /-- `Σ f a` over a list. -/
 def sumBy {α : Type} (f : α → Nat) : List α → Nat
@@ -52,7 +48,6 @@ theorem sumBy_congr {α : Type} {f g : α → Nat} {l : List α} (h : ∀ a ∈ 
     sumBy f l = sumBy g l :=
   Nat.le_antisymm (sumBy_le fun a ha => Nat.le_of_eq (h a ha))
     (sumBy_le fun a ha => Nat.le_of_eq (h a ha).symm)
-
 theorem sumBy_filter {α : Type} (p : α → Bool) (f : α → Nat) :
     ∀ l : List α, sumBy f (l.filter p) = sumBy (fun a => if p a then f a else 0) l
   | [] => rfl
@@ -63,39 +58,32 @@ theorem sumBy_map {α β : Type} (g : β → α) (f : α → Nat) :
     ∀ l : List β, sumBy f (l.map g) = sumBy (fun b => f (g b)) l
   | [] => rfl
   | b :: l => by simp [sumBy, sumBy_map g f l]
-
 theorem ite_some {α : Type} {c : Prop} [Decidable c] {a b : α}
     (h : (if c then some a else none) = some b) : c ∧ a = b := by
   split at h
   · exact ⟨‹c›, Option.some.inj h⟩
   · cases h
-
 /-! ## 2. The vouch network, cuts, and packings of vouch chains -/
 /-- A node of the vouch graph: a principal, or a claim named by its 256-bit digest. -/
 inductive TrustNode where
   | principal (id : Nat)
   | claim (digest : BitVec 256)
   deriving DecidableEq
-
 /-- A capacitated edge: `cap` is what the voucher `src` loses if `dst` is refuted. -/
 structure CapEdge where
   (src dst : TrustNode)
   cap : Nat
   deriving DecidableEq
-
 /-- What an edge contributes to the cut whose root side is `side`. -/
 def crossing (side : TrustNode → Bool) (e : CapEdge) : Nat :=
   if side e.src && !side e.dst then e.cap else 0
-
 /-- The capacity leaving the root side. -/
 def cutCapacity (net : List CapEdge) (side : TrustNode → Bool) : Nat := sumBy (crossing side) net
-
 /-- Draw `a` units from the edge at index `i`: the edge, and the network with that capacity spent. -/
 def drawEdge (a : Nat) : List CapEdge → Nat → Option (CapEdge × List CapEdge)
   | [], _ => none
   | e :: es, 0 => if a ≤ e.cap then some (e, { e with cap := e.cap - a } :: es) else none
   | e :: es, i + 1 => (drawEdge a es i).map fun x => (x.1, e :: x.2)
-
 /-- Push `a` units along a chain of edge indices starting at `cur`: each edge must leave the node
 the previous one entered. Returns the residual network and the node reached. -/
 def pushChain (a : Nat) : List CapEdge → TrustNode → List Nat → Option (List CapEdge × TrustNode)
@@ -104,7 +92,6 @@ def pushChain (a : Nat) : List CapEdge → TrustNode → List Nat → Option (Li
     match drawEdge a net i with
     | some (e, net') => if e.src = cur then pushChain a net' e.dst rest else none
     | none => none
-
 /-- The value of a packing of vouch chains from `r` to `c`: every chain runs from `r` to `c` and
 draws its amount from the capacity the earlier chains left. `none` when some chain is not such a
 walk or overdraws an edge. -/
@@ -114,12 +101,10 @@ def packingValue (r c : TrustNode) : List CapEdge → List (Nat × List Nat) →
     match pushChain a net r chain with
     | some (net', fin) => if fin = c then (packingValue r c net' rest).map (a + ·) else none
     | none => none
-
 theorem crossing_spend (side : TrustNode → Bool) (e : CapEdge) {a : Nat} (h : a ≤ e.cap) :
     crossing side { e with cap := e.cap - a } +
       (if (side e.src && !side e.dst) = true then a else 0) = crossing side e := by
   simp only [crossing]; split <;> omega
-
 theorem drawEdge_cut (side : TrustNode → Bool) (a : Nat) :
     ∀ {net : List CapEdge} {i : Nat} {e : CapEdge} {net' : List CapEdge},
       drawEdge a net i = some (e, net') →
@@ -141,7 +126,6 @@ theorem drawEdge_cut (side : TrustNode → Bool) (a : Nat) :
     have ih := drawEdge_cut side a hx
     simp only [cutCapacity, sumBy] at ih ⊢
     omega
-
 theorem pushChain_cut (side : TrustNode → Bool) (a : Nat) :
     ∀ {chain : List Nat} {net : List CapEdge} {cur : TrustNode} {net' : List CapEdge}
       {fin : TrustNode}, pushChain a net cur chain = some (net', fin) →
@@ -168,7 +152,6 @@ theorem pushChain_cut (side : TrustNode → Bool) (a : Nat) :
         | true => have := hstep hdst hfin; split at hcut <;> omega
         | false => simp only [hcur, hdst, Bool.not_false, Bool.and_self, ↓reduceIte] at hcut; omega
       · cases h
-
 /-- **Weak duality.** No packing of vouch chains from `r` to `c` is worth more than a cut that
 separates them: every chain crosses the cut, and what it draws there is gone. -/
 theorem vouchPacking_le_cut (r c : TrustNode) (side : TrustNode → Bool) (hr : side r = true)
@@ -191,7 +174,6 @@ theorem vouchPacking_le_cut (r c : TrustNode) (side : TrustNode → Bool) (hr : 
         have := (pushChain_cut side a hp).2 hr (hfin ▸ hc)
         omega
       · cases h
-
 /-! ### The minimum cut -/
 def memB {α : Type} [DecidableEq α] (v : α) : List α → Bool
   | [] => false
@@ -199,7 +181,6 @@ def memB {α : Type} [DecidableEq α] (v : α) : List α → Bool
 theorem memB_iff {α : Type} [DecidableEq α] {v : α} : ∀ {l : List α}, memB v l = true ↔ v ∈ l
   | [] => by simp [memB]
   | w :: ws => by simp [memB, memB_iff (l := ws)]
-
 def addNode (v : TrustNode) (l : List TrustNode) : List TrustNode := if memB v l then l else v :: l
 theorem mem_addNode_self (v : TrustNode) (l : List TrustNode) : v ∈ addNode v l := by
   unfold addNode; split
@@ -210,7 +191,6 @@ theorem mem_addNode_of_mem (v : TrustNode) {w : TrustNode} {l : List TrustNode} 
   unfold addNode; split
   · exact h
   · exact List.mem_cons_of_mem _ h
-
 /-- The endpoints of a network, each once. -/
 def nodesOf : List CapEdge → List TrustNode
   | [] => []
@@ -223,7 +203,6 @@ theorem mem_nodesOf : ∀ {net : List CapEdge} {e : CapEdge}, e ∈ net →
     · exact ⟨mem_addNode_self _ _, mem_addNode_of_mem _ (mem_addNode_self _ _)⟩
     · exact ⟨mem_addNode_of_mem _ (mem_addNode_of_mem _ (mem_nodesOf h).1),
         mem_addNode_of_mem _ (mem_addNode_of_mem _ (mem_nodesOf h).2)⟩
-
 /-- Every sublist. -/
 def subsets : List TrustNode → List (List TrustNode)
   | [] => [[]]
@@ -233,11 +212,9 @@ theorem filter_mem_subsets (p : TrustNode → Bool) : ∀ l : List TrustNode, l.
   | v :: vs => by
     have ih := filter_mem_subsets p vs
     cases hp : p v <;> simp [List.filter, hp, subsets, ih]
-
 /-- The root side that holds `r`, the listed nodes, and never `c`. -/
 def rootSide (r c : TrustNode) (S : List TrustNode) (v : TrustNode) : Bool :=
   decide (v = r) || (!decide (v = c) && memB v S)
-
 def minOf : Nat → List Nat → Nat
   | m, [] => m
   | m, x :: xs => minOf (min m x) xs
@@ -258,19 +235,16 @@ theorem minOf_attained : ∀ (xs : List Nat) (m : Nat), minOf m xs = m ∨ minOf
       · exact Or.inl (by rw [minOf, h, Nat.min_eq_left hle])
       · exact Or.inr (by rw [minOf, h, Nat.min_eq_right hle]; exact List.mem_cons_self)
     · exact Or.inr (List.mem_cons_of_mem _ h)
-
 /-- **Trust capacity**: the least capacity of a cut between the root `r` and the target `c`, over
 every set of the network's nodes. The specification; `certifyTrustCapacity` is how it is run. -/
 def effectiveTrustCapacity (net : List CapEdge) (r c : TrustNode) : Nat :=
   minOf (cutCapacity net (rootSide r c []))
     ((subsets (nodesOf net)).map fun S => cutCapacity net (rootSide r c S))
-
 theorem rootSide_root (r c : TrustNode) (S : List TrustNode) : rootSide r c S r = true := by
   simp [rootSide]
 theorem rootSide_target {r c : TrustNode} (h : r ≠ c) (S : List TrustNode) :
     rootSide r c S c = false := by
   simp [rootSide, Ne.symm h]
-
 /-- The capacity is below every cut, listed or not. -/
 theorem effectiveTrustCapacity_le_cut (net : List CapEdge) (r c : TrustNode)
     (side : TrustNode → Bool) (hr : side r = true) (hc : side c = false) :
@@ -292,7 +266,6 @@ theorem effectiveTrustCapacity_le_cut (net : List CapEdge) (r c : TrustNode)
       simp only [crossing, agree _ (mem_nodesOf he).1, agree _ (mem_nodesOf he).2]
   rw [← key]
   exact minOf_le_mem _ (List.mem_map_of_mem (filter_mem_subsets side _))
-
 /-- The capacity is the capacity of some cut. -/
 theorem effectiveTrustCapacity_attained (net : List CapEdge) {r c : TrustNode} (h : r ≠ c) :
     ∃ side : TrustNode → Bool, side r = true ∧ side c = false ∧
@@ -302,14 +275,12 @@ theorem effectiveTrustCapacity_attained (net : List CapEdge) {r c : TrustNode} (
   · exact ⟨rootSide r c [], rootSide_root r c [], rootSide_target h [], heq.symm⟩
   · obtain ⟨S, _, hS⟩ := List.mem_map.1 hmem
     exact ⟨rootSide r c S, rootSide_root r c S, rootSide_target h S, hS⟩
-
 /-- Every packing of vouch chains is worth at most the trust capacity. -/
 theorem vouchPacking_le_effective {net : List CapEdge} {r c : TrustNode} (h : r ≠ c)
     {packing : List (Nat × List Nat)} {v : Nat} (hp : packingValue r c net packing = some v) :
     v ≤ effectiveTrustCapacity net r c := by
   obtain ⟨side, hr, hc, heq⟩ := effectiveTrustCapacity_attained net h
   rw [← heq]; exact vouchPacking_le_cut r c side hr hc hp
-
 /-- The certificate checker: a packing and a root side of the same value. One pass over the
 packing and one over the edges, where the specification visits every subset of the nodes. -/
 def certifyTrustCapacity (net : List CapEdge) (r c : TrustNode) (packing : List (Nat × List Nat))
@@ -318,7 +289,6 @@ def certifyTrustCapacity (net : List CapEdge) (r c : TrustNode) (packing : List 
   else match packingValue r c net packing with
     | some v => if v = cutCapacity net (rootSide r c S) then some v else none
     | none => none
-
 /-- **Certified capacity is exact**: an accepted certificate's value is the minimum cut. -/
 theorem certifyTrustCapacity_exact {net : List CapEdge} {r c : TrustNode}
     {packing : List (Nat × List Nat)} {S : List TrustNode} {v : Nat}
@@ -338,16 +308,13 @@ theorem certifyTrustCapacity_exact {net : List CapEdge} {r c : TrustNode}
           (hw ▸ effectiveTrustCapacity_le_cut net r c _ (rootSide_root r c S) (rootSide_target hrc S))
           (vouchPacking_le_effective hrc hp)
       · cases h
-
 /-! ### Sybil regions -/
 /-- The capacity entering a region `A` from outside it. -/
 def externalInflow (net : List CapEdge) (A : TrustNode → Bool) : Nat :=
   sumBy (fun e => if !A e.src && A e.dst then e.cap else 0) net
-
 /-- The network with every edge that touches `A` removed. -/
 def honestSubnet (net : List CapEdge) (A : TrustNode → Bool) : List CapEdge :=
   net.filter fun e => !A e.src && !A e.dst
-
 /-- **Splitting an identity buys no trust.** Let `A` be any region that does not hold the root:
 any number of pseudonyms, with any edges leaving its nodes (rings of mutual vouches, self-vouches,
 any stated capacity to any target). If the capacity entering `A` from outside is at most `S`, a
@@ -376,14 +343,12 @@ theorem sybilSplit_non_amplifying (net : List CapEdge) {r c : TrustNode} (A : Tr
         intro s t a b cap; cases s <;> cases t <;> cases a <;> cases b <;> simp
       exact split _ _ _ _ _
     omega
-
 /-! ## 3. Books: one indexed list of balances, moved only by transfers -/
 /-- The balance at account `a`; an account past the end holds nothing. -/
 def bal : List Nat → Nat → Nat
   | [], _ => 0
   | x :: _, 0 => x
   | _ :: xs, a + 1 => bal xs a
-
 def credit : List Nat → Nat → Nat → List Nat
   | [], 0, v => [v]
   | [], a + 1, v => 0 :: credit [] a v
@@ -393,13 +358,10 @@ def debit : List Nat → Nat → Nat → List Nat
   | [], _, _ => []
   | x :: xs, 0, v => (x - v) :: xs
   | x :: xs, a + 1, v => x :: debit xs a v
-
 /-- Every unit the book holds. -/
 def bookTotal (L : List Nat) : Nat := sumBy (fun x => x) L
-
 /-- Move `v` units from account `s` to account `d`. -/
 def transfer (L : List Nat) (s d v : Nat) : List Nat := credit (debit L s v) d v
-
 theorem bal_credit : ∀ (L : List Nat) (a v b : Nat),
     bal (credit L a v) b = bal L b + if b = a then v else 0
   | [], 0, _, 0 => by simp [credit, bal]
@@ -433,7 +395,6 @@ theorem bookTotal_debit : ∀ (L : List Nat) (a v : Nat), v ≤ bal L a →
   | _ :: xs, a + 1, v, h => by
     have := bookTotal_debit xs a v (by simpa only [bal] using h)
     simp only [debit, bookTotal, sumBy] at this ⊢; omega
-
 theorem bal_transfer (L : List Nat) (s d v a : Nat) :
     bal (transfer L s d v) a = (bal L a - if a = s then v else 0) + if a = d then v else 0 := by
   rw [transfer, bal_credit, bal_debit]
@@ -446,13 +407,11 @@ theorem bal_transfer_dst {L : List Nat} {s d v : Nat} (h : s ≠ d) :
 theorem bal_transfer_ge {L : List Nat} {s d v a : Nat} (hs : a ≠ s) :
     bal L a ≤ bal (transfer L s d v) a := by
   simp only [bal_transfer, hs, ↓reduceIte]; split <;> omega
-
 /-- A covered transfer loses and makes nothing. -/
 theorem bookTotal_transfer {L : List Nat} {s d v : Nat} (h : v ≤ bal L s) :
     bookTotal (transfer L s d v) = bookTotal L := by
   have := bookTotal_debit L s v h
   rw [transfer, bookTotal_credit]; omega
-
 /-- `L'` is `L` plus a conserved value: a sparse vector of account deltas that sum to zero
 (`Obend.Logic.ConservedValue`), under which no balance goes below zero. -/
 def BookDelta (L L' : List Nat) : Prop :=
@@ -467,7 +426,6 @@ theorem BookDelta.trans {L₁ L₂ L₃ : List Nat} (h₁ : BookDelta L₁ L₂)
   have := Obend.Logic.deltaAt_addDeltaLists c₁.wf c₂.wf a
   show (bal L₃ a : Int) = bal L₁ a + deltaAt (Obend.Logic.addDeltaLists c₁.entries c₂.entries) a
   rw [this, e₂, e₁]; omega
-
 /-- A covered transfer is the two-account conserved value `ConservedValue.transfer`. -/
 theorem bookDelta_transfer {L : List Nat} {s d v : Nat} (h : v ≤ bal L s) :
     BookDelta L (transfer L s d v) :=
@@ -482,18 +440,15 @@ theorem bookDelta_transfer {L : List Nat} {s d v : Nat} (h : v ≤ bal L s) :
     · by_cases h2 : a = d
       · subst h2; simp only [eq_self, h1, ↓reduceIte]; omega
       · simp only [h1, h2, ↓reduceIte]; omega⟩
-
 /-- The treasury's account, a principal's free account, and its bonded account. -/
 def treasuryAcct : Nat := 0
 def freeAcct (p : Nat) : Nat := 2 * p + 1
 def bondAcct (p : Nat) : Nat := 2 * p + 2
-
 theorem bond_ne_free (u h : Nat) : bondAcct u ≠ freeAcct h := by unfold bondAcct freeAcct; omega
 theorem bond_ne_treasury (u : Nat) : bondAcct u ≠ treasuryAcct := by unfold bondAcct; exact nofun
 theorem free_ne_treasury (h : Nat) : freeAcct h ≠ treasuryAcct := by unfold freeAcct; exact nofun
 theorem bondAcct_ne {u w : Nat} (h : u ≠ w) : bondAcct u ≠ bondAcct w := by unfold bondAcct; omega
 theorem freeAcct_ne {u w : Nat} (h : u ≠ w) : freeAcct u ≠ freeAcct w := by unfold freeAcct; omega
-
 /-! ## 4. Vouches, the vouching genealogy of a claim, and the market's state -/
 /-- A vouch: `voucher` stakes `stake` on `target`, loses `lossBps` basis points of it if the
 target is refuted, and cannot take it back before `unlockEpoch`. -/
@@ -1464,17 +1419,24 @@ def tallyDigest (o : TallyClaim) : BitVec 256 :=
 
 /-- **A name binds its tally.** Two framed tallies with one name are equal, or their framed bytes
 are a collision of cSHAKE256 under the tally domain. -/
-theorem tallyDigest_binding {o₁ o₂ : TallyClaim} (h₁ : TallyFramed o₁) (h₂ : TallyFramed o₂)
-    (h : tallyDigest o₁ = tallyDigest o₂) : o₁ = o₂ ∨ Collision (cshake256Bytes tallyDomain) :=
-  if hp : tallyPreimage o₁ = tallyPreimage o₂ then .inl (by
+def tallyDigest_extract {o₁ o₂ : TallyClaim} (h₁ : TallyFramed o₁) (h₂ : TallyFramed o₂)
+    (h : tallyDigest o₁ = tallyDigest o₂) : PSum (PLift (o₁ = o₂))
+      (CollisionPair (cshake256Bytes tallyDomain)
+        (fun x => x = tallyPreimage o₁ ∨ x = tallyPreimage o₂)) :=
+  extractBinding _ _ _ (fun hp => by
     have hl := flatMap_be_injective h₁ h₂ hp
     cases o₁; cases o₂; simp_all)
-  else .inr ⟨_, _, hp, by
+  (by
     have hb : ∀ x, ofBE (cshake256Bytes tallyDomain x) < 2 ^ 256 := fun x => by
       simpa using ofBE_lt (cshake256Bytes tallyDomain x)
     have hn := congrArg BitVec.toNat h
     simp only [tallyDigest, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb _)] at hn
-    exact hn⟩
+    exact hn)
+
+theorem tallyDigest_binding {o₁ o₂ : TallyClaim} (h₁ : TallyFramed o₁) (h₂ : TallyFramed o₂)
+    (h : tallyDigest o₁ = tallyDigest o₂) : o₁ = o₂ ∨ CollisionAmong (cshake256Bytes tallyDomain)
+      (fun x => x = tallyPreimage o₁ ∨ x = tallyPreimage o₂) :=
+  bindingResult (tallyDigest_extract h₁ h₂ h)
 example : TallyFramed ⟨[1, 2], 4⟩ := by unfold TallyFramed; decide
 
 /-- A market over tallies: window 2, cooldown 3, fee 1, a quarter to the hunter, horizon 1. -/

@@ -1,7 +1,6 @@
 module
 /-
 # Obend.Polis.ZoeSeatSettlement — ZoE seat settlement on the ledger spine
-
 Offers, seats and exits are `Obend.Ledger.Seat`'s (`Proposal`, `Seat`, `admitOffer` with its
 donation guard and one-time invitations, `exitSeat`, `checkBatchReallocSafe`), run on the seat
 `Book`, and every leg they move is also posted to the typed `FloorBook` through
@@ -12,37 +11,27 @@ lists. A seat's holder is a 256-bit commitment opened by its preimage. `ValidZoe
 public import Obend.Logic.SeparationFrame
 public import Obend.Polis.CapTP
 public import Obend.Ledger.Seat
-public import Obend.Digest.HashBytes
+public import Obend.Consensus.SimplexProtocol
 public import Obend.Digest.Cshake256.Spec
 import all Obend.Polis.CapTP
-
 public section
 namespace Obend.Polis.ZoeSeatSettlement
-
 /-! ## 1. `AssetBundle`: sorted, positive, 64-bit amounts with a checked linear merge -/
-
 abbrev AssetBrand := Nat
 abbrev SeatId := Nat
 abbrev Entry := AssetBrand × UInt64
-
 def Canonical (xs : List Entry) : Prop :=
   xs.Pairwise (fun a b => a.1 < b.1) ∧ ∀ p ∈ xs, 0 < p.2.toNat
-
 structure AssetBundle where
   entries : Array Entry
   canonical : Canonical entries.toList
-
 def amountList : List Entry → AssetBrand → Nat
   | [], _ => 0
   | (k, v) :: xs, b => (if k = b then v.toNat else 0) + amountList xs b
-
 def AssetBundle.amountSpec (a : AssetBundle) : AssetBrand → Nat := amountList a.entries.toList
-
 def AssetBundle.empty : AssetBundle := ⟨#[], by simp [Canonical]⟩
-
 def AssetBundle.singleton (b : AssetBrand) (v : UInt64) (hv : 0 < v.toNat) : AssetBundle :=
   ⟨#[(b, v)], by simpa [Canonical] using hv⟩
-
 theorem amountList_zero {xs : List Entry} {b : Nat}
     (h : ∀ p ∈ xs, p.1 ≠ b) : amountList xs b = 0 := by
   induction xs with
@@ -50,7 +39,6 @@ theorem amountList_zero {xs : List Entry} {b : Nat}
   | cons p xs ih =>
     simp only [amountList, h p (by simp), ↓reduceIte, Nat.zero_add]
     exact ih (fun p hp => h p (by simp [hp]))
-
 theorem amountList_lookup {xs : List Entry} (hs : xs.Pairwise (fun a b => a.1 < b.1)) (b : Nat) :
     amountList xs b = ((xs.find? (fun p => p.1 == b)).map (fun p => p.2.toNat)).getD 0 := by
   induction xs with
@@ -61,11 +49,9 @@ theorem amountList_lookup {xs : List Entry} (hs : xs.Pairwise (fun a b => a.1 < 
     · have hz : amountList xs b = 0 := amountList_zero (fun q hq => by have := hp q hq; simp only [AssetBrand] at *; omega)
       simp [amountList, hb, hz]
     · simp [amountList, hb, ih ht]
-
 def AssetBundle.amountOf (a : AssetBundle) (b : AssetBrand) : Nat :=
   ((CapTP.search Prod.fst a.entries b (a.entries.size + 1) 0 a.entries.size).map
     (fun p => p.2.toNat)).getD 0
-
 theorem AssetBundle.amountOf_eq_spec (a : AssetBundle) (b : AssetBrand) :
     a.amountOf b = a.amountSpec b := by
   have hs : CapTP.SortedBy Prod.fst a.entries := by
@@ -74,10 +60,8 @@ theorem AssetBundle.amountOf_eq_spec (a : AssetBundle) (b : AssetBrand) :
       (by simpa using hj) hij
   rw [amountOf, CapTP.search_eq_spec _ _ hs, amountSpec, amountList_lookup a.canonical.1]
   rfl
-
 def AssetBundle.bundleLeq (a b : AssetBundle) : Bool :=
   a.entries.all (fun p => decide (p.2.toNat ≤ b.amountOf p.1))
-
 theorem amountList_member {xs : List Entry} (hs : xs.Pairwise (fun a b => a.1 < b.1))
     {p : Entry} (hp : p ∈ xs) : amountList xs p.1 = p.2.toNat := by
   induction xs with
@@ -89,7 +73,6 @@ theorem amountList_member {xs : List Entry} (hs : xs.Pairwise (fun a b => a.1 < 
       simp [amountList, hz]
     · have hne : q.1 ≠ p.1 := by have := hq p hp; simp only [AssetBrand] at *; omega
       simp [amountList, hne, ih ht hp]
-
 theorem AssetBundle.bundleLeq_iff_forall_brand (a b : AssetBundle) :
     a.bundleLeq b = true ↔ ∀ k, a.amountSpec k ≤ b.amountSpec k := by
   simp only [bundleLeq, ← Array.all_toList, List.all_eq_true, decide_eq_true_eq, amountOf_eq_spec]
@@ -104,7 +87,6 @@ theorem AssetBundle.bundleLeq_iff_forall_brand (a b : AssetBundle) :
   · intro h p hp
     have hm : p ∈ a.entries.toList := by simpa using hp
     simpa [amountSpec, amountList_member a.canonical.1 hm] using h p.1
-
 /-- Linear merge; the sum is checked in the unbounded domain before conversion. -/
 def mergeAmounts : List Entry → List Entry → Option (List Entry)
   | [], ys => some ys
@@ -116,7 +98,6 @@ def mergeAmounts : List Entry → List Entry → Option (List Entry)
       (mergeAmounts xs ys).map ((x.1, UInt64.ofNat (x.2.toNat + y.2.toNat)) :: ·)
     else none
 termination_by xs ys => xs.length + ys.length
-
 theorem mergeAmounts_sum : ∀ {xs ys zs : List Entry}, mergeAmounts xs ys = some zs →
     ∀ b, amountList zs b = amountList xs b + amountList ys b
   | [], _, _, h, b => by simp only [mergeAmounts, Option.some.injEq] at h; subst h; simp [amountList]
@@ -138,7 +119,6 @@ theorem mergeAmounts_sum : ∀ {xs ys zs : List Entry}, mergeAmounts xs ys = som
           split <;> (simp only [AssetBrand] at *; omega)
         · cases h
 termination_by xs ys _ _ _ => xs.length + ys.length
-
 theorem mergeAmounts_keys : ∀ {xs ys zs : List Entry}, mergeAmounts xs ys = some zs →
     ∀ p ∈ zs, (∃ q ∈ xs, q.1 = p.1) ∨ (∃ q ∈ ys, q.1 = p.1)
   | [], _, _, h, p, hp => by simp only [mergeAmounts, Option.some.injEq] at h; subst h; exact .inr ⟨p, hp, rfl⟩
@@ -168,7 +148,6 @@ theorem mergeAmounts_keys : ∀ {xs ys zs : List Entry}, mergeAmounts xs ys = so
             · exact .inr ⟨q, by simp [hq], hk⟩
         · cases h
 termination_by xs ys _ _ _ _ => xs.length + ys.length
-
 theorem mergeAmounts_canonical : ∀ {xs ys zs : List Entry}, Canonical xs → Canonical ys →
     mergeAmounts xs ys = some zs → Canonical zs
   | [], _, _, _, hy, h => by simp only [mergeAmounts, Option.some.injEq] at h; subst h; exact hy
@@ -220,12 +199,10 @@ theorem mergeAmounts_canonical : ∀ {xs ys zs : List Entry}, Canonical xs → C
             · exact pz p hp
         · cases h
 termination_by xs ys _ _ _ _ => xs.length + ys.length
-
 def AssetBundle.addChecked (a b : AssetBundle) : Option AssetBundle :=
   match h : mergeAmounts a.entries.toList b.entries.toList with
   | none => none
   | some zs => some ⟨zs.toArray, by simpa using mergeAmounts_canonical a.canonical b.canonical h⟩
-
 theorem AssetBundle.addChecked_sum {a b c : AssetBundle} (h : a.addChecked b = some c) :
     ∀ k, c.amountSpec k = a.amountSpec k + b.amountSpec k := by
   unfold addChecked at h
@@ -233,11 +210,8 @@ theorem AssetBundle.addChecked_sum {a b c : AssetBundle} (h : a.addChecked b = s
   · cases h
   · cases h
     exact mergeAmounts_sum ‹_›
-
-
 theorem amountList_tail_le (x : Entry) (xs : List Entry) (b : Nat) :
     amountList xs b ≤ amountList (x :: xs) b := by simp [amountList]
-
 theorem mergeAmounts_complete : ∀ (xs ys : List Entry),
     (∀ k, amountList xs k + amountList ys k < 2^64) →
     ∃ zs, mergeAmounts xs ys = some zs
@@ -265,7 +239,6 @@ theorem mergeAmounts_complete : ∀ (xs ys : List Entry),
             (amountList_tail_le y ys k)) (hb k))
         exact ⟨(x.1, UInt64.ofNat (x.2.toNat + y.2.toNat)) :: zs, by simp [hz]⟩
 termination_by xs ys _ => xs.length + ys.length
-
 theorem amountList_bound {xs : List Entry} (hc : Canonical xs) (k : Nat) :
     amountList xs k < 2^64 := by
   by_cases hk : ∃ p ∈ xs, p.1 = k
@@ -274,7 +247,6 @@ theorem amountList_bound {xs : List Entry} (hc : Canonical xs) (k : Nat) :
     exact p.2.toNat_lt
   · rw [amountList_zero (by grind : ∀ p ∈ xs, p.1 ≠ k)]
     decide
-
 theorem amountList_ext : ∀ {xs ys : List Entry}, Canonical xs → Canonical ys →
     (∀ k, amountList xs k = amountList ys k) → xs = ys
   | [], [], _, _, _ => rfl
@@ -316,11 +288,9 @@ theorem amountList_ext : ∀ {xs ys : List Entry}, Canonical xs → Canonical ys
         simp only [amountList, hk, hv] at this
         omega)
     rw [Prod.ext hk hv, ht]
-
 theorem AssetBundle.ext {a b : AssetBundle} (h : ∀ k, a.amountSpec k = b.amountSpec k) : a = b := by
   have he := Array.ext' (amountList_ext a.canonical b.canonical h)
   cases a; cases b; cases he; rfl
-
 theorem AssetBundle.addChecked_eq_some_iff_no_overflow_and_sum (a b c : AssetBundle) :
     a.addChecked b = some c ↔
       (∀ k, a.amountSpec k + b.amountSpec k < 2^64) ∧
@@ -339,24 +309,18 @@ theorem AssetBundle.addChecked_eq_some_iff_no_overflow_and_sum (a b c : AssetBun
       apply ext
       intro k
       exact (mergeAmounts_sum hw k).trans (hs k).symm
-
-
 /-! ## 2. `AssetBundle` is the executable refinement of `Obend.Ledger.Proposal`'s asset lists -/
-
 open Obend.Ledger
-open Obend.Digest.HashBytes (be ofBE Hash Collision be_injective ofBE_lt)
-
+open Obend.Digest.HashBytes (be ofBE Hash CollisionAmong CollisionPair extractBinding bindingResult be_injective ofBE_lt)
 /-- The ledger reading of a bundle: a `give` or `want` list of `Obend.Ledger.Proposal`. -/
 def AssetBundle.toPairs (a : AssetBundle) : List (AssetId × Nat) :=
   a.entries.toList.map (fun p => (p.1, p.2.toNat))
-
 theorem assetAmountSum_cons (a : AssetId) (n : Nat) (xs : List (AssetId × Nat)) (k : AssetId) :
     assetAmountSum ((a, n) :: xs) k = (if a = k then n else 0) + assetAmountSum xs k := by
   unfold assetAmountSum
   by_cases h : a = k
   · subst h; simp
   · simp [h]
-
 theorem assetAmountSum_pairs (xs : List Entry) (k : AssetId) :
     assetAmountSum (xs.map (fun p => (p.1, p.2.toNat))) k = amountList xs k := by
   induction xs with
@@ -364,42 +328,35 @@ theorem assetAmountSum_pairs (xs : List Entry) (k : AssetId) :
   | cons p xs ih =>
     obtain ⟨b, v⟩ := p
     simp only [List.map_cons, assetAmountSum_cons, ih, amountList]
-
 /-- **Refinement.** The bundle's binary search returns what the ledger's `assetAmountSum` adds up
 over the proposal list the bundle stands for. -/
 theorem AssetBundle.toPairs_amount (a : AssetBundle) (k : AssetId) :
     assetAmountSum a.toPairs k = a.amountOf k := by
   rw [amountOf_eq_spec]
   exact assetAmountSum_pairs a.entries.toList k
-
 /-- A canonical bundle names each asset once, which is what `Proposal.assetsNodupB` asks. -/
 theorem AssetBundle.toPairs_nodup (a : AssetBundle) : (a.toPairs.map Prod.fst).Nodup := by
   unfold AssetBundle.toPairs List.Nodup
   rw [List.map_map, List.pairwise_map]
   exact a.canonical.1.imp (fun h => Nat.ne_of_lt h)
-
 /-- The executable bundle order is the ledger's per-asset order on the lists. -/
 theorem AssetBundle.bundleLeq_iff_ledger (a b : AssetBundle) :
     a.bundleLeq b = true ↔ ∀ k, assetAmountSum a.toPairs k ≤ assetAmountSum b.toPairs k := by
   simp only [bundleLeq_iff_forall_brand, toPairs_amount, amountOf_eq_spec]
-
 /-- The checked linear merge adds the ledger amounts asset by asset. -/
 theorem AssetBundle.addChecked_ledger {a b c : AssetBundle} (h : a.addChecked b = some c)
     (k : AssetId) :
     assetAmountSum c.toPairs k = assetAmountSum a.toPairs k + assetAmountSum b.toPairs k := by
   simp only [toPairs_amount, amountOf_eq_spec]
   exact addChecked_sum h k
-
 /-- The ledger proposal whose `give` and `want` are the two bundles. -/
 def bundleProposal (give want : AssetBundle) (exit : ExitRule) (donate : Bool := false) :
     Proposal :=
   { give := give.toPairs, want := want.toPairs, exit := exit, donate := donate }
-
 theorem bundleProposal_assetsNodup (g w : AssetBundle) (e : ExitRule) (d : Bool) :
     (bundleProposal g w e d).assetsNodupB = true := by
   unfold Proposal.assetsNodupB bundleProposal
   exact decide_eq_true ⟨g.toPairs_nodup, w.toPairs_nodup⟩
-
 /-- A canonical bundle holds no zero entry, so the ledger's zero-want test (the one its donation
 guard reads) is emptiness of the `want` bundle. -/
 theorem bundleProposal_wantsNothing_iff (g w : AssetBundle) (e : ExitRule) (d : Bool) :
@@ -416,58 +373,47 @@ theorem bundleProposal_wantsNothing_iff (g w : AssetBundle) (e : ExitRule) (d : 
       exact absurd h.1 (Nat.ne_of_gt hp)
   · intro h
     simp [h]
-
 /-! ## 3. Two books, one set of legs: `FloorBook.admitBatch` gates, the seat `Book` mirrors -/
-
 /-- The typed `FloorBook` address of a `Book` coordinate: ordinary accounts are users, the
 protected band is seats, and the band above it is the issuer wells (`issuerWellAccount`). -/
 def addrOf (a : AccountId) : AccountAddr :=
   if a < protectedBase then .user a
   else if a < 2 * protectedBase then .seat (a - protectedBase)
   else .issuerWell (a - 2 * protectedBase)
-
 theorem addrOf_injective {a b : Nat} (h : addrOf a = addrOf b) : a = b := by
   unfold addrOf at h
   by_cases ha1 : a < protectedBase <;> by_cases ha2 : a < 2 * protectedBase <;>
     by_cases hb1 : b < protectedBase <;> by_cases hb2 : b < 2 * protectedBase <;>
     simp [ha1, ha2, hb1, hb2, AccountAddr.user, AccountAddr.seat, AccountAddr.issuerWell] at h <;>
     omega
-
 theorem addrOf_inj {a b : AccountId} : addrOf a = addrOf b ↔ a = b :=
   ⟨addrOf_injective, fun h => by rw [h]⟩
-
 theorem addrOf_seat_kind {a : AccountId} (hlo : protectedBase ≤ a) (hhi : a < 2 * protectedBase) :
     (addrOf a).kind ≠ .issuerWell := by
   unfold addrOf
   rw [ite_eq_right (Nat.not_lt.mpr hlo), ite_eq_left hhi]
   intro h; cases h
-
 theorem addrOf_user_kind {a : AccountId} (h : a < protectedBase) :
     (addrOf a).kind ≠ .issuerWell := by
   unfold addrOf
   rw [ite_eq_left h]
   intro h; cases h
-
 /-- The same leg on the typed book. -/
 def typedPosting (p : ResourcePosting) : TypedPosting :=
   ⟨addrOf p.source, addrOf p.destination, p.asset, p.amount⟩
-
 /-- The seat `Book` and the `FloorBook` hold the same balance at every coordinate. -/
 def BooksAgree (fb : FloorBook) (b : Book) : Prop :=
   ∀ (a : AccountId) (ast : AssetId), b.balance a ast = fb.balance (addrOf a) ast
-
 /-- Post one list of legs to both books. The `FloorBook` decides: a leg that would take its
 source below its floor refuses the whole batch, and then neither book moves. -/
 def postBoth (fb : FloorBook) (b : Book) (ps : List ResourcePosting) : Option (FloorBook × Book) :=
   (fb.admitBatch (ps.map typedPosting)).map (fun fb' => (fb', applyPostings b ps))
-
 theorem admitPosting_eq {fb fb' : FloorBook} {p : TypedPosting}
     (h : fb.admitPosting p = some fb') : fb' = fb.applyRaw p := by
   unfold FloorBook.admitPosting at h
   split at h
   · injection h with h; exact h.symm
   · cases h
-
 theorem agree_applyPosting {fb : FloorBook} {b : Book} (hag : BooksAgree fb b)
     (p : ResourcePosting) : BooksAgree (fb.applyRaw (typedPosting p)) (b.applyPosting p) := by
   intro a ast
@@ -475,7 +421,6 @@ theorem agree_applyPosting {fb : FloorBook} {b : Book} (hag : BooksAgree fb b)
   simp only [typedPosting, addrOf_inj]
   by_cases hast : ast = p.asset <;> by_cases hs : a = p.source <;>
     by_cases hd : a = p.destination <;> simp [hast, hs, hd]
-
 theorem admitBatch_agree : ∀ (ps : List ResourcePosting) {fb fb' : FloorBook} {b : Book},
     BooksAgree fb b → fb.admitBatch (ps.map typedPosting) = some fb' →
     BooksAgree fb' (applyPostings b ps)
@@ -492,13 +437,11 @@ theorem admitBatch_agree : ∀ (ps : List ResourcePosting) {fb fb' : FloorBook} 
       rw [admitPosting_eq hstep]
       exact agree_applyPosting hag p
     · cases h
-
 theorem applyPostings_globalAssetSum (ps : List ResourcePosting) (b : Book) (ast : AssetId) :
     (applyPostings b ps).globalAssetSum ast = b.globalAssetSum ast := by
   induction ps generalizing b with
   | nil => rfl
   | cons p rest ih => rw [applyPostings_cons, ih, Book.applyPosting_conserves_global]
-
 /-- **Posting to both books is sound.** The floors still hold, the books still agree, and every
 asset's total is what it was, in the `FloorBook` (`assetSum`) and in the seat `Book`. -/
 theorem postBoth_sound {fb fb' : FloorBook} {b b' : Book} {ps : List ResourcePosting}
@@ -510,21 +453,18 @@ theorem postBoth_sound {fb fb' : FloorBook} {b b' : Book} {ps : List ResourcePos
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj heq
   obtain ⟨hfl', hsum⟩ := FloorBook.admitBatch_preserves_floors _ hfl hadm
   exact ⟨hfl', admitBatch_agree ps hag hadm, hsum, applyPostings_globalAssetSum ps b, rfl⟩
-
 theorem giveEscrow_endpoints {offerer seatAcc : AccountId} {p : Proposal} {q : ResourcePosting}
     (hq : q ∈ giveEscrowPostings offerer seatAcc p) :
     q.source = offerer ∧ q.destination = seatAcc := by
   unfold giveEscrowPostings at hq
   obtain ⟨⟨x, amt⟩, _, rfl⟩ := List.mem_map.mp hq
   exact ⟨rfl, rfl⟩
-
 theorem payout_endpoints {b : Book} {account payee : AccountId} {assets : List AssetId}
     {q : ResourcePosting} (hq : q ∈ payoutPostings b account payee assets) :
     q.source = account ∧ q.destination = payee := by
   unfold payoutPostings at hq
   obtain ⟨x, _, rfl⟩ := List.mem_map.mp hq
   exact ⟨rfl, rfl⟩
-
 /-- What escrowing a proposal's `give` does to the seat `Book`: the offeror loses, and the seat
 gains, the ledger's per-asset sum of the list. -/
 theorem escrow_balance (src dst : AccountId) (hne : src ≠ dst) (p : Proposal) (b : Book)
@@ -549,25 +489,19 @@ theorem escrow_balance (src dst : AccountId) (hne : src ≠ dst) (p : Proposal) 
         · simp [h1, h2]
     · have h3' : ¬ ast = x := fun h => h3 h.symm
       simp [h3, h3']
-
 /-! ## 4. Holder capabilities: a 256-bit commitment in the host, opened by its preimage -/
-
 /-- The domain tag of holder commitments: `obend.polis.zoe.holder.v1`. -/
 def zoeHolderDomain : List UInt8 :=
   [0x6f, 0x62, 0x65, 0x6e, 0x64, 0x2e, 0x70, 0x6f, 0x6c, 0x69, 0x73, 0x2e, 0x7a, 0x6f, 0x65, 0x2e,
     0x68, 0x6f, 0x6c, 0x64, 0x65, 0x72, 0x2e, 0x76, 0x31]
-
 /-- The deployed hash: cSHAKE256 customized by the holder domain. -/
 def zoeHash : Hash := Obend.Digest.Cshake256.cshake256Bytes zoeHolderDomain
-
 theorem zoeHash_length (x : List UInt8) : (zoeHash x).length = 32 :=
   Obend.Digest.Cshake256.cshake256Bytes_length _ _
-
 /-- The bytes a holder commits to: the domain tag, the seat id in an eight-byte frame, the
 capability's length in an eight-byte frame, the capability. -/
 def holderPreimage (seatId : Nat) (cap : List UInt8) : List UInt8 :=
   zoeHolderDomain ++ (be 8 seatId ++ (be 8 cap.length ++ cap))
-
 theorem holderPreimage_injective {s₁ s₂ : Nat} {c₁ c₂ : List UInt8}
     (h₁ : s₁ < 256 ^ 8) (h₂ : s₂ < 256 ^ 8)
     (h : holderPreimage s₁ c₁ = holderPreimage s₂ c₂) : s₁ = s₂ ∧ c₁ = c₂ := by
@@ -575,28 +509,28 @@ theorem holderPreimage_injective {s₁ s₂ : Nat} {c₁ c₂ : List UInt8}
   obtain ⟨hs, hrest⟩ := List.append_inj (List.append_cancel_left h) (by simp)
   obtain ⟨_, hc⟩ := List.append_inj hrest (by simp)
   exact ⟨be_injective h₁ h₂ hs, hc⟩
-
 /-- The commitment the host stores for a seat: 256 bits of `H` over the framed preimage. -/
 def holderCommit (H : Hash) (seatId : Nat) (cap : List UInt8) : BitVec 256 :=
   BitVec.ofNat 256 (ofBE (H (holderPreimage seatId cap)))
-
 /-- **A commitment binds its seat and capability.** Two openings of one commitment are the same
 seat and the same capability, or their framed bytes are a collision of `H`. -/
-theorem holderCommit_binding {H : Hash} (hlen : ∀ x, (H x).length = 32) {s₁ s₂ : Nat}
+def holderCommit_extract {H : Hash} (hlen : ∀ x, (H x).length = 32) {s₁ s₂ : Nat}
     {c₁ c₂ : List UInt8} (h₁ : s₁ < 256 ^ 8) (h₂ : s₂ < 256 ^ 8)
-    (h : holderCommit H s₁ c₁ = holderCommit H s₂ c₂) : (s₁ = s₂ ∧ c₁ = c₂) ∨ Collision H :=
-  if hp : holderPreimage s₁ c₁ = holderPreimage s₂ c₂ then
-    .inl (holderPreimage_injective h₁ h₂ hp)
-  else .inr ⟨_, _, hp, by
+    (h : holderCommit H s₁ c₁ = holderCommit H s₂ c₂) : PSum (PLift (s₁ = s₂ ∧ c₁ = c₂))
+      (CollisionPair H (fun x => x = holderPreimage s₁ c₁ ∨ x = holderPreimage s₂ c₂)) :=
+  extractBinding H _ _ (holderPreimage_injective h₁ h₂) (by
     have hb : ∀ x, ofBE (H x) < 2 ^ 256 := fun x => by
       have hlt := ofBE_lt (H x)
       rwa [hlen x, (by decide : (256 : Nat) ^ 32 = 2 ^ 256)] at hlt
     have hn := congrArg BitVec.toNat h
     simp only [holderCommit, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb _)] at hn
-    exact hn⟩
-
+    exact hn)
+theorem holderCommit_binding {H : Hash} (hlen : ∀ x, (H x).length = 32) {s₁ s₂ : Nat}
+    {c₁ c₂ : List UInt8} (h₁ : s₁ < 256 ^ 8) (h₂ : s₂ < 256 ^ 8)
+    (h : holderCommit H s₁ c₁ = holderCommit H s₂ c₂) : (s₁ = s₂ ∧ c₁ = c₂) ∨
+      CollisionAmong H (fun x => x = holderPreimage s₁ c₁ ∨ x = holderPreimage s₂ c₂) :=
+  bindingResult (holderCommit_extract hlen h₁ h₂ h)
 /-! ## 5. The host over the ledger spine, and its turns -/
-
 /-- The settlement host. `floorBook`, `seatBook`, `invReg` and `seats` are the ledger components
 of `Obend.Vault.UnifiedDeosSpine`, by name and type; `seats` holds the live seats. `holders` maps
 a live seat's account to the commitment of its holder capability. -/
@@ -607,10 +541,9 @@ structure ZoeHost where
   seats     : List Seat := []
   holders   : List (AccountId × BitVec 256) := []
   epoch     : Nat := 0
+  epochKeys : List (BitVec 256) := []
   deriving DecidableEq
-
 def initHost : ZoeHost := {}
-
 /-- Why a turn is refused. -/
 inductive ZoeRefusal where
   /-- `Ledger.admitOffer` refused: the donation guard, the invitation, or the offeror's balance -/
@@ -626,6 +559,7 @@ inductive ZoeRefusal where
   | noSuchSeat
   /-- the presented capability does not open the seat's commitment -/
   | wrongHolder
+  | epochUnauthorized
   | exitNotAllowed
   | payoutRefused
   | guestDeclined
@@ -633,18 +567,15 @@ inductive ZoeRefusal where
   | reallocUnsafe
   | reallocFloorRefused
   deriving DecidableEq, Repr
-
 /-- A guest contract sees identity-blind `SeatView`s and proposes legs between seats. -/
 abbrev GuestContract := List SeatView → Option BatchRealloc
-
 inductive ZoeTurn where
   | mintInvitation (instanceId : Nat) (description : String)
   | enterOffer (invId : Nat) (offerer payee : AccountId) (seatId : SeatId) (proposal : Proposal)
       (holderCommit : BitVec 256)
   | invokeGuestContract (seatAccounts : List AccountId)
   | exitSeat (seatId : SeatId) (capPreimage : List UInt8)
-  | advanceEpoch
-
+  | advanceEpoch (capPreimage : List UInt8)
 /-- **Entering an offer.** `Ledger.admitOffer` runs on the seat `Book` (donation guard, one-time
 invitation, balance), and the same escrow legs must pass `FloorBook.admitBatch` out of the
 offeror's typed account. Nothing reaches a seat that was not debited from an account. -/
@@ -668,10 +599,8 @@ def enterOffer (h : ZoeHost) (invId : Nat) (offerer payee : AccountId) (seatId :
           else .error .offerUnsafe
     else .error .seatOccupied
   else .error .notOrdinary
-
 def guestInput (h : ZoeHost) (accts : List AccountId) : List SeatView :=
   (h.seats.filter (fun s => accts.contains s.account)).map Seat.view
-
 /-- **Reallocation.** The guest's legs stay among the invoked seats, pass
 `Ledger.checkBatchReallocSafe` over every live seat, and pass `FloorBook.admitBatch`. -/
 def reallocStep (guest : GuestContract) (h : ZoeHost) (accts : List AccountId) :
@@ -685,11 +614,9 @@ def reallocStep (guest : GuestContract) (h : ZoeHost) (accts : List AccountId) :
       | none => .error .reallocFloorRefused
       | some (fb', b') => .ok { h with floorBook := fb', seatBook := b' }
     else .error .reallocUnsafe
-
 def exitAllowed : ExitRule → Nat → Bool
   | .onDemand, _ => true
   | .afterDeadline due, epoch => decide (due ≤ epoch)
-
 /-- **Exit.** The presented capability must open the seat's stored commitment and the exit rule
 must allow it; then `Ledger.exitSeat`'s sweep pays the whole seat to the payee in both books. -/
 def exitSeatStep (H : Hash) (h : ZoeHost) (seatId : SeatId) (cap : List UInt8) :
@@ -709,6 +636,10 @@ def exitSeatStep (H : Hash) (h : ZoeHost) (seatId : SeatId) (cap : List UInt8) :
             holders := h.holders.filter (fun e => e.1 != s.account) }
       else .error .exitNotAllowed
     else .error .wrongHolder
+/-- Clock tokens occupy a separate domain from seat-holder capabilities. -/
+def epochCommit (H : Hash) (epoch : Nat) (cap : List UInt8) : BitVec 256 :=
+  BitVec.ofNat 256 (ofBE (H (0x45 ::
+    (Obend.Crypto.encodeListField (Obend.Crypto.leb128 epoch) ++ Obend.Crypto.encodeListField cap))))
 
 def stepZoeHost (H : Hash) (guest : GuestContract) (h : ZoeHost) :
     ZoeTurn → Except ZoeRefusal ZoeHost
@@ -717,14 +648,34 @@ def stepZoeHost (H : Hash) (guest : GuestContract) (h : ZoeHost) :
     enterOffer h invId offerer payee seatId p commit
   | .invokeGuestContract accts => reallocStep guest h accts
   | .exitSeat seatId cap => exitSeatStep H h seatId cap
-  | .advanceEpoch => .ok { h with epoch := h.epoch + 1 }
-
+  | .advanceEpoch cap =>
+    match h.epochKeys with
+    | key :: rest =>
+      if key = epochCommit H (h.epoch + 1) cap then
+        .ok { h with epoch := h.epoch + 1, epochKeys := rest }
+      else .error .epochUnauthorized
+    | [] => .error .epochUnauthorized
+/-- Every successful tick consumes the next epoch-specific authorization. -/
+theorem advanceEpoch_authorized {H : Hash} {guest : GuestContract} {h f : ZoeHost}
+    {cap : List UInt8} (he : stepZoeHost H guest h (.advanceEpoch cap) = .ok f) :
+    h.epochKeys = epochCommit H (h.epoch + 1) cap :: f.epochKeys ∧ f.epoch = h.epoch + 1 := by
+  simp only [stepZoeHost] at he
+  split at he
+  · split at he
+    · rename_i hk; cases he; exact ⟨by simp_all, rfl⟩
+    · cases he
+  · cases he
+/-- No exit rule in this host can permanently delegate recovery to a stalled guest. -/
+theorem exitAllowed_eventually (rule : ExitRule) : ∃ due, ∀ epoch, due ≤ epoch →
+    exitAllowed rule epoch = true := by
+  cases rule with
+  | onDemand => exact ⟨0, fun _ _ => rfl⟩
+  | afterDeadline due => exact ⟨due, fun _ h => decide_eq_true h⟩
 /-- The atomic application boundary retains the entire old state on failure. -/
 def applyZoeTurn (H : Hash) (guest : GuestContract) (h : ZoeHost) (t : ZoeTurn) : ZoeHost :=
   match stepZoeHost H guest h t with
   | .ok f => f
   | .error _ => h
-
 def runZoe (H : Hash) (guest : GuestContract) : ZoeHost → List ZoeTurn → ZoeHost
   | h, [] => h
   | h, t :: ts => runZoe H guest (applyZoeTurn H guest h t) ts
@@ -918,9 +869,13 @@ theorem step_preserves (H : Hash) (guest : GuestContract) {h f : ZoeHost} {t : Z
   | mintInvitation inst desc =>
     cases he
     exact ⟨⟨hfl, hag, hnd, hbd, hsafe⟩, fun _ => rfl, fun _ => rfl⟩
-  | advanceEpoch =>
-    cases he
-    exact ⟨⟨hfl, hag, hnd, hbd, hsafe⟩, fun _ => rfl, fun _ => rfl⟩
+  | advanceEpoch cap =>
+    simp only [stepZoeHost] at he
+    split at he
+    · split at he
+      · cases he; exact ⟨⟨hfl, hag, hnd, hbd, hsafe⟩, fun _ => rfl, fun _ => rfl⟩
+      · cases he
+    · cases he
   | enterOffer invId offerer payee seatId p commit =>
     obtain ⟨s, hacc, hpay, hprop, ho, hp, hsid, hfresh, _, hseats, _, _, _, hpost, hsf⟩ :=
       enterOffer_ok (show enterOffer h invId offerer payee seatId p commit = .ok f from he)
@@ -1121,7 +1076,8 @@ that exits the seat is `cap₀`, or the two framed openings are a collision of `
 theorem exit_requires_holder_preimage {H : Hash} (hlen : ∀ x, (H x).length = 32)
     {h f : ZoeHost} {seatId : SeatId} {cap cap₀ : List UInt8} (hsid : seatId < 256 ^ 8)
     (hstored : h.holders.lookup (protectedBase + seatId) = some (holderCommit H seatId cap₀))
-    (he : exitSeatStep H h seatId cap = .ok f) : cap = cap₀ ∨ Collision H := by
+    (he : exitSeatStep H h seatId cap = .ok f) : cap = cap₀ ∨ CollisionAmong H
+      (fun x => x = holderPreimage seatId cap ∨ x = holderPreimage seatId cap₀) := by
   obtain ⟨s, hfind, hcap, _, _, _, _, _, _⟩ := exitSeatStep_ok he
   have hacc : s.account = protectedBase + seatId := by
     simpa using List.find?_some hfind
@@ -1185,7 +1141,8 @@ theorem premature_exit_refused (H : Hash) (h : ZoeHost) (seatId : SeatId) (cap :
 /-- The contract a refused turn broke. Minting an invitation and advancing the epoch break none. -/
 def ZoeStepViolation (H : Hash) (guest : GuestContract) (h : ZoeHost) : ZoeTurn → Prop
   | .mintInvitation _ _ => False
-  | .advanceEpoch => False
+  | .advanceEpoch cap =>
+    h.epochKeys.head? ≠ some (epochCommit H (h.epoch + 1) cap)
   | .exitSeat seatId cap => ExitViolation H h seatId cap
   | .invokeGuestContract accts =>
     match guest (guestInput h accts) with
@@ -1212,7 +1169,15 @@ theorem zoeStep_skip_implies_violation (H : Hash) (guest : GuestContract) (h : Z
   rintro ⟨e, he⟩
   cases t with
   | mintInvitation inst desc => cases he
-  | advanceEpoch => cases he
+  | advanceEpoch cap =>
+    simp only [stepZoeHost] at he
+    cases hk : h.epochKeys with
+    | nil => simp [ZoeStepViolation, hk]
+    | cons key rest =>
+      simp only [hk] at he
+      split at he
+      · cases he
+      · simpa [ZoeStepViolation, hk] using ‹key ≠ epochCommit H (h.epoch + 1) cap›
   | exitSeat seatId cap => exact (exitSeatStep_refused_iff H h seatId cap).mp ⟨e, he⟩
   | invokeGuestContract accts =>
     have he : reallocStep guest h accts = .error e := he

@@ -160,7 +160,21 @@ theorem outboxBlock_canonical {view : Nat} (hv : view < 256 ^ 8) (nullifierId : 
 
 /-- Constructive 256-bit cSHAKE256 commitment binding (`0 Classical.choice`):
     equal `effectCommitNat` values either come from identical `(nullifierId, cls, payload)` triples
-    or exhibit an explicit SP 800-185 cSHAKE256 `HashBytes.Collision`! -/
+    or return the exact pair of colliding SP 800-185 cSHAKE256 preimages. -/
+def effectCommitNat_extract
+    {id₁ id₂ : Nat} {cls₁ cls₂ : EffectClass} {p₁ p₂ : ByteArray}
+    (hid₁ : id₁ < OutboxBound64) (hid₂ : id₂ < OutboxBound64)
+    (hp₁ : p₁.data.toList.length < OutboxBound64)
+    (hp₂ : p₂.data.toList.length < OutboxBound64)
+    (hCommitEq : effectCommitNat id₁ cls₁ p₁ = effectCommitNat id₂ cls₂ p₂) :
+    PSum (PLift (id₁ = id₂ ∧ cls₁ = cls₂ ∧ p₁ = p₂))
+      (HashBytes.CollisionPair (cshake256Bytes outboxEffectDomain.data.toList)
+        (fun x => x = encodeEffectPreimage id₁ cls₁ p₁ ∨ x = encodeEffectPreimage id₂ cls₂ p₂)) := by
+  apply HashBytes.extractBinding _ _ _ (encodeEffectPreimage_injective hid₁ hid₂ hp₁ hp₂)
+  unfold effectCommitNat at hCommitEq
+  rw [effectCommitBytes_eq_spec, effectCommitBytes_eq_spec] at hCommitEq
+  exact hCommitEq
+
 theorem effectCommitNat_binding
     {id₁ id₂ : Nat} {cls₁ cls₂ : EffectClass} {p₁ p₂ : ByteArray}
     (hid₁ : id₁ < OutboxBound64) (hid₂ : id₂ < OutboxBound64)
@@ -168,14 +182,9 @@ theorem effectCommitNat_binding
     (hp₂ : p₂.data.toList.length < OutboxBound64)
     (hCommitEq : effectCommitNat id₁ cls₁ p₁ = effectCommitNat id₂ cls₂ p₂) :
     (id₁ = id₂ ∧ cls₁ = cls₂ ∧ p₁ = p₂) ∨
-      HashBytes.Collision (cshake256Bytes outboxEffectDomain.data.toList) := by
-  if hPre : encodeEffectPreimage id₁ cls₁ p₁ = encodeEffectPreimage id₂ cls₂ p₂ then
-    exact .inl (encodeEffectPreimage_injective hid₁ hid₂ hp₁ hp₂ hPre)
-  else
-    refine .inr ⟨_, _, hPre, ?_⟩
-    unfold effectCommitNat at hCommitEq
-    rw [effectCommitBytes_eq_spec, effectCommitBytes_eq_spec] at hCommitEq
-    exact hCommitEq
+      HashBytes.CollisionAmong (cshake256Bytes outboxEffectDomain.data.toList)
+        (fun x => x = encodeEffectPreimage id₁ cls₁ p₁ ∨ x = encodeEffectPreimage id₂ cls₂ p₂) :=
+  HashBytes.bindingResult (effectCommitNat_extract hid₁ hid₂ hp₁ hp₂ hCommitEq)
 
 /-! ## 2. `seL4` Microkit SPSC Copy-Before-Verify Ring & Escrow Compensation Carriers -/
 
@@ -1044,7 +1053,9 @@ theorem dispatched_payload_bound_to_finalized_commit
       a.chain.getLast? = some (.block a.view
         (effectCommitNat a.nullifierId .irreversibleActuation other)) →
       other = a.dispatchedPayload ∨
-        HashBytes.Collision (cshake256Bytes outboxEffectDomain.data.toList) := by
+        HashBytes.CollisionAmong (cshake256Bytes outboxEffectDomain.data.toList)
+          (fun x => x = encodeEffectPreimage a.nullifierId .irreversibleActuation a.dispatchedPayload ∨
+            x = encodeEffectPreimage a.nullifierId .irreversibleActuation other) := by
   have hInitB : ∀ a ∈ st₀.dispatchedActuations,
       a.nullifierId ≤ st₀.highWaterNullifier ∧ Finalized P sent₀ a.view a.chain := by
     rw [hClean]; intro _ h; cases h

@@ -124,11 +124,12 @@ theorem cU64_dec_exact {bs rest : Log.Bytes} {v : UInt64} (h : cU64.dec bs = som
   | some p =>
     obtain ⟨n, r⟩ := p
     rw [hd] at h
-    by_cases hn : n < 2 ^ 64
-    · simp only [hn, ite_true, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+    if hn : n < 2 ^ 64 then
+      simp only [hn, ite_true, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
       rw [UInt64.toNat_ofNat', Nat.mod_eq_of_lt hn]
-    · simp [hn] at h
+    else
+      simp [hn] at h
 
 /-- Wire injectivity without aliasing: two encoded naturals that decode to one `UInt64` are equal. -/
 theorem cU64_wire_injective {n m : Nat} {r₁ r₂ t₁ t₂ : Log.Bytes} {v : UInt64}
@@ -215,14 +216,18 @@ def decodeHomeArchiveCbor (bytes : ByteArray) : Option HomeArchive := do
   if encodeHomeArchiveCbor a = bytes then some a else none
 
 /-- CBOR's 64-bit byte-string length limit is an explicit wire-format bound. -/
-def HomeArchiveFits (a : HomeArchive) : Prop := CanonicalCbor (archiveCbor a) = true
+def HomeArchiveFits (a : HomeArchive) : Prop := WithinWidth (archiveCbor a) = true
 
 instance (a : HomeArchive) : Decidable (HomeArchiveFits a) :=
-  inferInstanceAs (Decidable (CanonicalCbor (archiveCbor a) = true))
+  inferInstanceAs (Decidable (WithinWidth (archiveCbor a) = true))
+
+theorem archiveCbor_canonical_of_fits (a : HomeArchive) (h : HomeArchiveFits a) :
+    CanonicalCbor (archiveCbor a) = true := by
+  simpa [HomeArchiveFits, CanonicalCbor, WithinWidth, archiveCbor, wfVal, wfList] using h
 
 theorem decodeHomeArchiveCbor_encode (a : HomeArchive) (h : HomeArchiveFits a) :
     decodeHomeArchiveCbor (encodeHomeArchiveCbor a) = some a := by
-  have hc := decodeDetCbor_encodeDetCbor (archiveCbor a) h
+  have hc := decodeDetCbor_encodeDetCbor (archiveCbor a) (archiveCbor_canonical_of_fits a h)
   have hr : cArchive.decodeExactArray (cArchive.encodeArray a) = some a := by
     rw [FastCodec.decodeExactArray_eq, FastCodec.encodeArray_eq, FastCodec.decodeExact_enc]
   unfold decodeHomeArchiveCbor
@@ -233,9 +238,13 @@ theorem decodeHomeArchiveCbor_encode (a : HomeArchive) (h : HomeArchiveFits a) :
 theorem encodeHomeArchiveCbor_injective (a b : HomeArchive)
     (ha : HomeArchiveFits a) (hb : HomeArchiveFits b)
     (he : encodeHomeArchiveCbor a = encodeHomeArchiveCbor b) : a = b := by
-  have h := congrArg decodeHomeArchiveCbor he
-  rw [decodeHomeArchiveCbor_encode a ha, decodeHomeArchiveCbor_encode b hb] at h
-  exact Option.some.inj h
+  have hc := encodeDetCbor_injective (archiveCbor a) (archiveCbor b) ha hb he
+  simp only [archiveCbor, CborVal.array.injEq, List.cons.injEq, CborVal.bytes.injEq,
+    true_and, and_true] at hc
+  have hd := congrArg cArchive.decodeExactArray hc
+  rw [FastCodec.decodeExactArray_eq, FastCodec.encodeArray_eq, FastCodec.decodeExact_enc,
+      FastCodec.decodeExactArray_eq, FastCodec.encodeArray_eq, FastCodec.decodeExact_enc] at hd
+  exact Option.some.inj hd
 
 def archiveDigest (a : HomeArchive) : Digest256 :=
   hash256 "obend.home.archive.v1" (encodeHomeArchiveCbor a)
@@ -387,9 +396,10 @@ theorem double_import_or_stale_epoch_refused (key genesis : Digest256) (host : N
       s.archive.migrationEpoch ≤ r.latestCommittedEpoch) :
     importHomeArchive key genesis host r s = .error .nonceConsumed ∨
     importHomeArchive key genesis host r s = .error .staleEpoch := by
-  by_cases hn : s.archive.transferNonce ∈ r.consumed
-  · left; simp [importHomeArchive, hn]
-  · right
+  if hn : s.archive.transferNonce ∈ r.consumed then
+    left; simp [importHomeArchive, hn]
+  else
+    right
     have he := h.resolve_left hn
     simp [importHomeArchive, hn, he]
 
@@ -406,14 +416,15 @@ theorem tombstoned_source_refused (host expectedEpoch : Nat) (r : MigrationRegis
 
 /-- Digest binding returns the concrete cSHAKE preimages that collided. -/
 def archiveCollision (a b : HomeArchive) (ha : HomeArchiveFits a) (hb : HomeArchiveFits b)
-    (hne : a ≠ b) (he : archiveDigest a = archiveDigest b) : CshakeCollision :=
-  ⟨"obend.home.archive.v1", ⟨encodeHomeArchiveCbor a, encodeHomeArchiveCbor b,
-    fun h => hne (encodeHomeArchiveCbor_injective a b ha hb h), congrArg Subtype.val he⟩⟩
+    (hne : a ≠ b) (he : archiveDigest a = archiveDigest b) :
+    CshakePair "obend.home.archive.v1" (encodeHomeArchiveCbor a) (encodeHomeArchiveCbor b) :=
+  ⟨fun h => hne (encodeHomeArchiveCbor_injective a b ha hb h), congrArg Subtype.val he⟩
 
 /-- All fields, including nonce, epoch, destination, allowances and balances, are bound. -/
 def archiveDigest_binding (a b : HomeArchive)
     (ha : HomeArchiveFits a) (hb : HomeArchiveFits b) (hne : a ≠ b) :
-    PSum (archiveDigest a ≠ archiveDigest b) CshakeCollision :=
+    PSum (archiveDigest a ≠ archiveDigest b)
+      (CshakePair "obend.home.archive.v1" (encodeHomeArchiveCbor a) (encodeHomeArchiveCbor b)) :=
   if he : archiveDigest a = archiveDigest b then .inr (archiveCollision a b ha hb hne he)
   else .inl he
 
@@ -508,9 +519,10 @@ theorem importHomeArchive_authentic (key genesis : Digest256) (host : Nat)
       s.memberTag = memberAuthenticationTag key s.archive := by
     simpa only [Bool.or_eq_true, bne_iff_ne, not_or, Decidable.not_not, and_assoc] using hauth
   refine ⟨he.2.1.symm.trans he.1, ?_⟩
-  by_cases hf : HomeArchiveFits s.archive
-  · exact hf
-  · simp only [hf, decide_false, Bool.not_false, Bool.true_or, not_true_eq_false] at hhome
+  if hf : HomeArchiveFits s.archive then
+    exact hf
+  else
+    simp only [hf, decide_false, Bool.not_false, Bool.true_or, not_true_eq_false] at hhome
 
 /-- Mutating any archive field either prevents state admission or constructs a concrete
 collision. The comparison is against the permit installed when the source was tombstoned. -/
@@ -519,7 +531,9 @@ def tampered_homeArchive_refused_or_collision (key genesis : Digest256) (host : 
     (permit : TransferPermit) (hp : r.pending = some permit)
     (hcommit : permit.digest = archiveDigest original) (hfit : HomeArchiveFits original)
     (hneq : submitted.archive ≠ original) :
-    PSum (∃ reason, importHomeArchive key genesis host r submitted = .error reason) CshakeCollision :=
+    PSum (∃ reason, importHomeArchive key genesis host r submitted = .error reason)
+      (CshakePair "obend.home.archive.v1" (encodeHomeArchiveCbor submitted.archive)
+        (encodeHomeArchiveCbor original)) :=
   match he : importHomeArchive key genesis host r submitted with
   | .error reason => .inl ⟨reason, rfl⟩
   | .ok out =>
@@ -563,12 +577,39 @@ theorem stale_source_slot_refused (host epoch : Nat) (r : MigrationRegistry) (ho
   unfold admitHomeMutation
   cases r.active <;> simp only [he, and_false, ite_false]
 
+/-- The archive installed by a permit; all metadata is determined by the registry and permit. -/
+def originArchive (home : SovereignHome) (r : MigrationRegistry) (p : TransferPermit) : HomeArchive :=
+  ⟨r.memberId, p.source, p.target, p.epoch, p.nonce, home⟩
+
+def archivePreimage (a : HomeArchive) : List UInt8 := (encodeHomeArchiveCbor a).data.toList
+
+def archiveHash := Obend.Digest.Cshake256.cshake256Bytes "obend.home.archive.v1".toUTF8.data.toList
+
+/-- Exactly the submitted and provenance preimages compared at an import. -/
+def importPreimages (home : SovereignHome) (r : MigrationRegistry) (s : SignedHomeArchive) :
+    List (List UInt8) :=
+  archivePreimage s.archive :: (r.pending.toList.map fun p => archivePreimage (originArchive home r p))
+
+/-- Finite comparison transcript of the executable history, including hostile submissions. -/
+def migrationPreimages (home : SovereignHome) (key : Digest256) :
+    MigrationRegistry → List MigrationEvent → List (List UInt8)
+  | _, [] => []
+  | r, .export target epoch nonce :: es =>
+    match exportHomeArchive key r target epoch nonce with
+    | .ok (_, mid) => migrationPreimages home key mid es
+    | .error _ => []
+  | r, .importArchive host genesis s :: es =>
+    importPreimages home r s ++ (match importHomeArchive key genesis host r s with
+    | .ok mid => migrationPreimages home key mid es
+    | .error _ => [])
+
 /-- While authority is in transit, the registry keeps the commitment of the same home.
 The archive witness is logical provenance, not data copied into the runtime registry. -/
 structure HomeOrigin (home : SovereignHome) (r : MigrationRegistry) : Prop where
   active : ∀ live, r.active = some live → live.home = home
   pending : ∀ permit, r.pending = some permit →
-    ∃ archive, archive.home = home ∧ HomeArchiveFits archive ∧ archiveDigest archive = permit.digest
+    HomeArchiveFits (originArchive home r permit) ∧
+      archiveDigest (originArchive home r permit) = permit.digest
 
 theorem export_preserves_origin (home : SovereignHome) (key : Digest256)
     (r frozen : MigrationRegistry) (target epoch : Nat) (nonce : Digest256) (signed : SignedHomeArchive)
@@ -584,31 +625,50 @@ theorem export_preserves_origin (home : SovereignHome) (key : Digest256)
   split at h <;> try contradiction
   rename_i hfits
   have hf : HomeArchiveFits ⟨r.memberId, live.hostId, target, epoch, nonce, live.home⟩ := by
-    by_cases hf : HomeArchiveFits ⟨r.memberId, live.hostId, target, epoch, nonce, live.home⟩
-    · exact hf
-    · simp only [hf, decide_false, Bool.not_false, not_true_eq_false] at hfits
+    if hf : HomeArchiveFits ⟨r.memberId, live.hostId, target, epoch, nonce, live.home⟩ then
+      exact hf
+    else
+      simp only [hf, decide_false, Bool.not_false, not_true_eq_false] at hfits
   cases h
   constructor
   · intro other ho; cases ho
   · intro permit hp
     cases hp
-    exact ⟨_, origin.active live hlive, hf, rfl⟩
+    have he := origin.active live hlive
+    constructor
+    · simpa only [originArchive, ← he] using hf
+    · simp only [originArchive, ← he]
 
-theorem import_preserves_origin_or_collision (home : SovereignHome) (key genesis : Digest256)
+/-- Executable collision pair, with membership in this import's finite comparison transcript. -/
+structure ArchiveCollisionOn (inputs : List (List UInt8)) : Type where
+  left : List UInt8
+  right : List UInt8
+  left_mem : left ∈ inputs
+  right_mem : right ∈ inputs
+  distinct : left ≠ right
+  sameDigest : Obend.Digest.HashBytes.ofBE (archiveHash left) =
+    Obend.Digest.HashBytes.ofBE (archiveHash right)
+theorem ArchiveCollisionOn.toCollisionAmong {inputs : List (List UInt8)} (w : ArchiveCollisionOn inputs) :
+    Obend.Digest.HashBytes.CollisionAmong archiveHash (fun x => x ∈ inputs) :=
+  ⟨w.left, w.right, w.left_mem, w.right_mem, w.distinct, w.sameDigest⟩
+
+def extractImportOriginBreak (home : SovereignHome) (key genesis : Digest256)
     (host : Nat) (r out : MigrationRegistry) (signed : SignedHomeArchive)
     (origin : HomeOrigin home r)
     (h : importHomeArchive key genesis host r signed = .ok out) :
-    HomeOrigin home out ∨ Nonempty CshakeCollision := by
+    PSum (HomeOrigin home out) (ArchiveCollisionOn (importPreimages home r signed)) := by
   cases hp : r.pending with
   | none =>
     simp only [importHomeArchive, hp] at h
     split at h <;> try contradiction
     split at h <;> contradiction
   | some permit =>
-    obtain ⟨original, hhome, hfit, hcommit⟩ := origin.pending permit hp
+    let original := originArchive home r permit
+    have hhome : original.home = home := rfl
+    obtain ⟨hfit, hcommit⟩ := origin.pending permit hp
     have facts := importHomeArchive_authentic key genesis host r out signed permit hp h
-    by_cases he : signed.archive = original
-    · left
+    if he : signed.archive = original then
+      apply PSum.inl
       have effect := importHomeArchive_effect key genesis host r out signed h
       constructor
       · intro live hlive
@@ -618,29 +678,56 @@ theorem import_preserves_origin_or_collision (home : SovereignHome) (key genesis
       · intro other ho
         rw [effect.2.2.1] at ho
         cases ho
-    · right
-      exact ⟨archiveCollision signed.archive original facts.2 hfit he (facts.1.trans hcommit.symm)⟩
+    else
+      apply PSum.inr
+      let pair := archiveCollision signed.archive original facts.2 hfit he
+        (facts.1.trans hcommit.symm)
+      refine ⟨archivePreimage signed.archive, archivePreimage original,
+        by simp [importPreimages], by simp [importPreimages, hp, original], ?_, ?_⟩
+      · intro hpre; apply pair.distinct
+        exact byteArrayList_injective hpre
+      · exact congrArg (fun x : ByteArray => Obend.Digest.HashBytes.ofBE x.data.toList) pair.sameDigest
+
+theorem import_preserves_origin_or_collision (home : SovereignHome) (key genesis : Digest256)
+    (host : Nat) (r out : MigrationRegistry) (signed : SignedHomeArchive)
+    (origin : HomeOrigin home r) (h : importHomeArchive key genesis host r signed = .ok out) :
+    HomeOrigin home out ∨ Obend.Digest.HashBytes.CollisionAmong archiveHash
+      (fun x => x ∈ importPreimages home r signed) :=
+  match extractImportOriginBreak home key genesis host r out signed origin h with
+  | .inl ho => .inl ho
+  | .inr w => .inr w.toCollisionAmong
 
 /-- Arbitrary accepted migration traces preserve the complete source home, including its
 escrow value and mandate allowances, unless they furnish a cSHAKE collision. -/
 theorem migrationHistory_preserves_home_or_collision (home : SovereignHome) (key : Digest256)
     (r out : MigrationRegistry) (events : List MigrationEvent)
     (history : ValidMigrationHistory key r events out) (origin : HomeOrigin home r) :
-    HomeOrigin home out ∨ Nonempty CshakeCollision := by
+    HomeOrigin home out ∨ Obend.Digest.HashBytes.CollisionAmong archiveHash
+      (fun x => x ∈ migrationPreimages home key r events) := by
   induction history with
   | nil => exact Or.inl origin
   | @exportStep r mid out target epoch nonce signed events step tail ih =>
-    exact ih (export_preserves_origin home key r mid target epoch nonce signed origin step)
+    simpa only [migrationPreimages, step] using
+      ih (export_preserves_origin home key r mid target epoch nonce signed origin step)
   | @importStep r mid out host genesis archive events step tail ih =>
     rcases import_preserves_origin_or_collision home key genesis host r mid archive origin step with ho | hc
-    · exact ih ho
-    · exact Or.inr hc
+    · rcases ih ho with ho' | hc
+      · exact .inl ho'
+      · exact .inr (hc.mono (by
+          intro x hx
+          simp only [migrationPreimages, step]
+          exact List.mem_append_right _ hx))
+    · exact .inr (hc.mono (by
+        intro x hx
+        simp only [migrationPreimages, step]
+        exact List.mem_append_left _ hx))
 
 theorem migrationHistory_balance_conserved_or_collision (home : SovereignHome) (key : Digest256)
     (r out : MigrationRegistry) (events : List MigrationEvent)
     (history : ValidMigrationHistory key r events out) (origin : HomeOrigin home r)
     (live : LiveHome) (hlive : out.active = some live) :
-    totalBalance live.home = totalBalance home ∨ Nonempty CshakeCollision := by
+    totalBalance live.home = totalBalance home ∨ Obend.Digest.HashBytes.CollisionAmong archiveHash
+      (fun x => x ∈ migrationPreimages home key r events) := by
   rcases migrationHistory_preserves_home_or_collision home key r out events history origin with ho | hc
   · exact Or.inl (congrArg totalBalance (ho.active live hlive))
   · exact Or.inr hc
@@ -690,7 +777,8 @@ theorem migrationHistory_continues_replay_or_collision (home : SovereignHome) (k
       Replay.Reachable ⟨live.home.world, S.log⟩ ∧
       ∀ b : Log.Bytes, (⟨live.home.world, S.log⟩ : Replay.Session).admit Replay.logHash
           Replay.deployed b = S.admit Replay.logHash Replay.deployed b) ∨
-    Nonempty CshakeCollision := by
+    Obend.Digest.HashBytes.CollisionAmong archiveHash
+      (fun x => x ∈ migrationPreimages home key r events) := by
   rcases migrationHistory_preserves_home_or_collision home key r out events history origin with ho | hc
   · left
     have hlw : live.home.world = S.world := (congrArg SovereignHome.world (ho.active live hlive)).trans hw
@@ -755,7 +843,8 @@ theorem migratedHome_passes_wal_check_or_collision (pp : Obend.Crypto.AjtaiParam
     {tornTail : Log.Bytes} (htorn : UncommittedWalTail Replay.logHash
       (Log.lastHash Replay.logHash Rehydration.genesisSentinel S.log) tornTail) :
     checkHomeAgainstWal pp hCols live.home
-      (Log.encodeAll Replay.logHash S.log ++ tornTail) = true ∨ Nonempty CshakeCollision := by
+      (Log.encodeAll Replay.logHash S.log ++ tornTail) = true ∨ Obend.Digest.HashBytes.CollisionAmong archiveHash
+      (fun x => x ∈ migrationPreimages home key r events) := by
   rcases migrationHistory_preserves_home_or_collision home key r out events history origin with ho | hc
   · left
     have hlw : live.home.world = S.world := (congrArg SovereignHome.world (ho.active live hlive)).trans hw
@@ -776,7 +865,7 @@ def snapshotRoot_binds_verkleRoot {pp : Obend.Crypto.AjtaiParams} {hCols : pp.co
     fun hwf => by rw [snapshotWF_verkleRoot_eq_fullCommit hwf]; exact fullVerkleCommitChunks_size _
   match extractSnapshotRootBreak (by rw [hs.1]; decide) (by rw [ht.1]; decide) (hsz hs) (hsz ht) h with
   | .inl heq => .inl heq.2
-  | .inr col => .inr col
+  | .inr col => .inr col.val
 
 open VerkleSnapshotBridge in
 /-- **Soundness of the WAL check.** A home that passes has the 256-bit `VerkleUmem` root of the

@@ -59,7 +59,7 @@ open Obend.Consensus.SimplexProtocol
 open Obend.Consensus.SimplexTrace (entryNotarizedB chainNotarizedB voteRuleB voteRuleB_sound)
 open Obend.Digest
 open Obend.Digest.Cshake256.Native (bytesOfList bytesOfList_toList)
-open Obend.Judge.Computational (AssumptionSet BreakWitness HashCollisionWitness ComputationalJudge)
+
 
 set_option autoImplicit false
 
@@ -366,7 +366,7 @@ def classifySignedMsg (S : SignatureScheme) (K : KeyDirectory) (P : Protocol)
     (hOracle : HonestSigningOracle P seen honestOracleLog (sm :: rest)) :
     PSum (PLift (Step P seen (sm.msg :: seen) ∧
                  (checkHonestProtocolRule P seen sm.msg = false → P.faulty sm.msg.sender = true)))
-         (EufCmaForgeryWitness S K P honestOracleLog) :=
+         ({ w : EufCmaForgeryWitness S K P honestOracleLog // w.forgedMsg = sm }) :=
   have hMsg := verifySignedMsg_dest hVer
   if hFaulty : P.faulty sm.msg.sender = true then
     .inl ⟨⟨Step.inject seen sm.msg hFaulty, fun _ => hFaulty⟩⟩
@@ -376,13 +376,13 @@ def classifySignedMsg (S : SignatureScheme) (K : KeyDirectory) (P : Protocol)
       .inl ⟨⟨checkHonestProtocolRule_step hHonest hRule, fun hF => by rw [hRule] at hF; cases hF⟩⟩
     else
       .inr
-        { forgedMsg := sm
-          honestTarget := hHonest
-          canonical := hMsg.2.1
-          sigWidth32 := hMsg.2.2.1
-          sigAccepted := hMsg.2.2.2
-          unqueriedMsg := fun hIn =>
-            hRule (by simpa using hOracle [] sm rest rfl hHonest hIn) }
+        ⟨{ forgedMsg := sm
+           honestTarget := hHonest
+           canonical := hMsg.2.1
+           sigWidth32 := hMsg.2.2.1
+           sigAccepted := hMsg.2.2.2
+           unqueriedMsg := fun hIn =>
+            hRule (by simpa using hOracle [] sm rest rfl hHonest hIn) }, rfl⟩
 
 /-- The extractor's walk over `SignedSent`, oldest message first (`0 Classical.choice`). -/
 def extractForgedVoteSignatureAux
@@ -393,7 +393,7 @@ def extractForgedVoteSignatureAux
       verifySignedSentAux S K P.committee seen tr = true →
       HonestSigningOracle P seen honestOracleLog tr →
       PSum (AuthenticatedReachWitness P S K seen tr)
-           (EufCmaForgeryWitness S K P honestOracleLog)
+           ({ w : EufCmaForgeryWitness S K P honestOracleLog // w.forgedMsg ∈ tr })
   | seen, [], hReach, _, _ =>
     .inl
       { reach := by simpa using hReach
@@ -407,7 +407,7 @@ def extractForgedVoteSignatureAux
       simp only [Bool.and_eq_true] at hVer
       exact ⟨hVer.1.2, hVer.2⟩
     match classifySignedMsg S K P honestOracleLog seen sm rest hVerParts.1 hOracle with
-    | .inr forgery => .inr forgery
+    | .inr forgery => .inr ⟨forgery.val, by rw [forgery.property]; exact List.mem_cons_self⟩
     | .inl ⟨⟨hStep, hInj⟩⟩ =>
       have hOracleRest : HonestSigningOracle P (sm.msg :: seen) honestOracleLog rest := by
         intro pre sm' suf hEqRest hHon' hIn'
@@ -416,7 +416,7 @@ def extractForgedVoteSignatureAux
         simpa [List.reverse_cons, List.append_assoc] using hRes
       match extractForgedVoteSignatureAux S K P honestOracleLog
               (sm.msg :: seen) rest (Reach.step hReach hStep) hVerParts.2 hOracleRest with
-      | .inr forgery => .inr forgery
+      | .inr forgery => .inr ⟨forgery.val, List.mem_cons_of_mem sm forgery.property⟩
       | .inl wRest =>
         have hMsg := verifySignedMsg_dest hVerParts.1
         .inl
@@ -452,7 +452,7 @@ def extractForgedVoteSignature
                  AuthenticatedReachWitness P S K [] tr))
          (EufCmaForgeryWitness S K P honestOracleLog) :=
   match extractForgedVoteSignatureAux S K P honestOracleLog [] tr Reach.nil hVer hOracle with
-  | .inr forgery => .inr forgery
+  | .inr forgery => .inr forgery.val
   | .inl w =>
     have hReachProj : Reach P (projectSignedSent tr) := by
       simpa [projectSignedSent] using w.reach
@@ -560,16 +560,25 @@ theorem KeyDirectory.derive_honestSlotKeys (H : HashBytes.Hash) (maxBytes L : Na
   rw [slotSigPreimage_length, hSalt]
   omega
 
+/-- The two concrete slot preimages involved in a purported signature. -/
+def forgedSlotPreimage (sm : SignedSimplexMsg) : List UInt8 :=
+  slotSigPreimage ((0x01 : UInt8) :: (signableByteArray sm.msg).data.toList) sm.signature
+def registeredSlotPreimage (log : List Msg) (salt : NodeId → Nat → Kind → ByteArray)
+    (m : Msg) : List UInt8 :=
+  slotSigPreimage (slotContent (honestSlotMsg log m.sender m.view m.kind))
+    (salt m.sender m.view m.kind)
+
 /-- **A forgery against any honest validator is a hash collision.** The forged signature opens
     the validator's slot key to a message outside its signing log; the key was made from the
     slot's own content (another message, or the empty slot). The two preimages differ and hash
-    alike: a `HashCollisionWitness`, computed without `Classical.choice`. -/
+    alike: a scoped `CollisionPair`, computed without `Classical.choice`. -/
 def forgedSignature_reduces_to_hashCollision
     (H : HashBytes.Hash) (maxBytes : Nat) (K : KeyDirectory) (P : Protocol) (log : List Msg)
     (salt : NodeId → Nat → Kind → ByteArray)
     (hKeys : HonestSlotKeys H maxBytes K P log salt)
     (w : EufCmaForgeryWitness (commitSlotSigScheme H maxBytes) K P log) :
-    BreakWitness (.hashCollision256 H maxBytes) :=
+    HashBytes.CollisionPair H (fun x => x = forgedSlotPreimage w.forgedMsg ∨
+      x = registeredSlotPreimage log salt w.forgedMsg.msg) :=
   let m := w.forgedMsg.msg
   let forgedPre :=
     slotSigPreimage ((0x01 : UInt8) :: (signableByteArray m).data.toList) w.forgedMsg.signature
@@ -617,10 +626,10 @@ def forgedSignature_reduces_to_hashCollision
       exact w.unqueriedMsg (hmq ▸ List.mem_of_find?_eq_some hq)
   ({ msgA := forgedPre
      msgB := honestPre
-     lenA := hAcc.2.1
-     lenB := hSlot.2.2.1
+     memA := .inl rfl
+     memB := .inr rfl
      distinct := hDistinct
-     sameDigest := hSame } : HashCollisionWitness H maxBytes)
+     sameDigest := hSame } : HashBytes.CollisionPair H _)
 
 /-- Statement object for `signedSimplexCompJudge`: the committee, its key directory, the honest
     validators' signing log and salts, and the signed trace under judgment. -/
@@ -631,43 +640,30 @@ structure SignedSlotTraceObj where
   salt      : NodeId → Nat → Kind → ByteArray
   trace     : SignedSent
 
-/-- **`ComputationalJudge` for signed Simplex traces.** `verify` is `verifySignedSent` under the
-    slot commitment scheme. When the honest validators sign by the rule and their slot keys are
-    commitments (`rewindValid`), an accepted trace is a `Reach` run in which only faulty senders
-    inject, or `H` is broken by an explicit collision. -/
-@[instance_reducible] def signedSimplexCompJudge (H : HashBytes.Hash) (maxBytes : Nat) :
-    ComputationalJudge SignedSlotTraceObj Unit where
-  Clause := Unit
-  Meaning o :=
-    Reach o.proto (projectSignedSent o.trace) ∧ Inv o.proto (projectSignedSent o.trace) ∧
-      AuthenticatedReachWitness o.proto (commitSlotSigScheme H maxBytes) o.keys [] o.trace
-  Witness o :=
-    PLift (Reach o.proto (projectSignedSent o.trace) ∧ Inv o.proto (projectSignedSent o.trace) ∧
-      AuthenticatedReachWitness o.proto (commitSlotSigScheme H maxBytes) o.keys [] o.trace)
-  witnessSound w := w.down
-  assumptions := .hashCollision256 H maxBytes
-  soundnessErr := (0, 1)
-  den_pos := by decide
-  verify _ o _ :=
-    if verifySignedSent (commitSlotSigScheme H maxBytes) o.keys o.proto.committee o.trace
-    then .ok else .refused () []
-  mono _ _ := rfl
-  RewindBundle _ _ := PUnit
-  rewindValid _ o _ _ :=
-    HonestSigningOracle o.proto [] o.honestLog o.trace ∧
-    HonestSlotKeys H maxBytes o.keys o.proto o.honestLog o.salt
-  extractOrBreak {_ o _} _ hOk hRew :=
-    have hVer :
-        verifySignedSent (commitSlotSigScheme H maxBytes) o.keys o.proto.committee o.trace = true := by
-      split at hOk
-      · assumption
-      · cases hOk
-    match extractForgedVoteSignature (commitSlotSigScheme H maxBytes) o.keys o.proto
-            o.honestLog o.trace hVer hRew.1 with
-    | .inl w => .inl w
-    | .inr forgery =>
-      .inr (forgedSignature_reduces_to_hashCollision H maxBytes o.keys o.proto
-              o.honestLog o.salt hRew.2 forgery)
+/-- Finite scope: only the received openings and their registered slot preimages. -/
+def slotTracePreimages (o : SignedSlotTraceObj) : List (List UInt8) :=
+  o.trace.flatMap fun sm => [forgedSlotPreimage sm, registeredSlotPreimage o.honestLog o.salt sm.msg]
+
+/-- Constructive signed-trace judgment. The generic ComputationalJudge assumption language
+has no finite-transcript hash constructor; return the actual collision instead of assuming
+impossible injectivity over every byte string of length at most `maxBytes`. -/
+def signedSimplexCompJudge (H : HashBytes.Hash) (maxBytes : Nat) (o : SignedSlotTraceObj)
+    (hVer : verifySignedSent (commitSlotSigScheme H maxBytes) o.keys o.proto.committee o.trace = true)
+    (hOracle : HonestSigningOracle o.proto [] o.honestLog o.trace)
+    (hKeys : HonestSlotKeys H maxBytes o.keys o.proto o.honestLog o.salt) :
+    PSum (AuthenticatedReachWitness o.proto (commitSlotSigScheme H maxBytes) o.keys [] o.trace)
+      (HashBytes.CollisionPair H (fun x => x ∈ slotTracePreimages o)) :=
+  match extractForgedVoteSignatureAux (commitSlotSigScheme H maxBytes) o.keys o.proto
+      o.honestLog [] o.trace Reach.nil hVer hOracle with
+  | .inl w => .inl w
+  | .inr ⟨w, hw⟩ =>
+    let c := forgedSignature_reduces_to_hashCollision H maxBytes o.keys o.proto
+      o.honestLog o.salt hKeys w
+    have inScope : ∀ x, (x = forgedSlotPreimage w.forgedMsg ∨
+        x = registeredSlotPreimage o.honestLog o.salt w.forgedMsg.msg) → x ∈ slotTracePreimages o := by
+      intro x hx
+      exact List.mem_flatMap.2 ⟨w.forgedMsg, hw, by simpa using hx⟩
+    .inr ⟨c.msgA, c.msgB, inScope _ c.memA, inScope _ c.memB, c.distinct, c.sameDigest⟩
 
 /-! ## 4. Honest quorum cardinality -/
 
@@ -1385,7 +1381,7 @@ private def sampleFin (n : NodeId) : Msg := ⟨n, 1, .finalize, .block sampleBlo
 private def sampleEquivocation : Msg := ⟨3, 1, .vote, .block [.block 1 666]⟩
 
 private def sampleHash : HashBytes.Hash :=
-  fun bs => HashBytes.be 32 (bs.foldl (fun acc b => (acc * 131 + b.toNat + 1) % 65537) 1)
+  Obend.Digest.Cshake256.Fast.cshake256Fast simplexAuthDomainBytes
 
 private def sampleSalt : NodeId → Nat → Kind → ByteArray :=
   fun n _ _ => bytesOfList (List.replicate 32 (UInt8.ofNat (n + 1)))
@@ -1399,7 +1395,9 @@ private def sampleSigned (m : Msg) : SignedSimplexMsg := ⟨m, sampleSalt m.send
 example : HonestSlotKeys sampleHash 4096 (KeyDirectory.derive sampleHash sampleLog sampleSalt)
     sampleProto4 sampleLog sampleSalt :=
   KeyDirectory.derive_honestSlotKeys sampleHash 4096 200 sampleProto4 sampleLog sampleSalt
-    (fun bs => by simp [sampleHash, HashBytes.length_be]) (by decide +kernel)
+    (fun bs => by
+      rw [sampleHash, Obend.Digest.Cshake256.Fast.cshake256Fast_eq]
+      exact Obend.Digest.Cshake256.cshake256Bytes_length _ _) (by decide +kernel)
     (fun n v k => by simp [sampleSalt, bytesOfList_toList]) (by decide +kernel) (by decide)
 
 example : msgCanonical (sampleVote 2) = true := by decide +kernel

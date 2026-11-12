@@ -18,6 +18,8 @@ The kernel runs cSHAKE256 once per holder capability (through the proved fast pa
 each): `tableHash` is `zoeHash` read from that table, so no run below pays for a hash.
 -/
 public import Obend.Polis.ZoeSeatSettlement
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
 import all Obend.Polis.ZoeSeatSettlement
 import all Init.Data.List.Sort.Basic
 import Obend.Tactic.Tooth
@@ -157,7 +159,7 @@ def tableHash : Obend.Digest.HashBytes.Hash := fun pre =>
   else if pre = holderPreimage 1 capB then outB
   else if pre = holderPreimage 2 capC then outC
   else if pre = holderPreimage 0 capWrong then outWrong
-  else zoeHash pre
+  else cshake256Fast zoeHolderDomain pre
 
 /-- It is `zoeHash`: what holds of one below holds of the other. -/
 theorem tableHash_eq : tableHash = zoeHash := by
@@ -171,7 +173,7 @@ theorem tableHash_eq : tableHash = zoeHash := by
       · next h => rw [h, outC_eq]
       · split
         · next h => rw [h, outWrong_eq]
-        · rfl
+        · exact cshake256Fast_eq _ _
 
 /-- The three commitments, written out. -/
 def cA : BitVec 256 :=
@@ -194,7 +196,9 @@ def carol : AccountId := 3
 def seatOf (k : Nat) : AccountId := protectedBase + k
 
 /-- Alice holds 100 of asset 0, Bob 200 of asset 1, Carol 50 of asset 2. -/
-def genesis : ZoeHost := fundedHost [(alice, 0, 100), (bob, 1, 200), (carol, 2, 50)]
+def genesis : ZoeHost :=
+  { fundedHost [(alice, 0, 100), (bob, 1, 200), (carol, 2, 50)] with
+    epochKeys := (List.range 5).map (fun i => epochCommit tableHash (i + 1) [UInt8.ofNat (i + 42)]) }
 
 def aliceP : Proposal := bundleProposal a100 b200 .onDemand
 def bobP : Proposal := bundleProposal b200 c50 (.afterDeadline 5)
@@ -218,8 +222,9 @@ def minted : ZoeHost := runZoe tableHash otcGuest genesis mints
 def threeHost : ZoeHost := runZoe tableHash otcGuest minted offers
 def matchedHost : ZoeHost := runZoe tableHash otcGuest threeHost [.invokeGuestContract allSeats]
 
+theorem genesis_inv : ZoeInv genesis := fundedHost_invariant _
 theorem minted_inv : ZoeInv minted :=
-  (trace_invariant _ _ mints _ _ (fundedHost_invariant _)
+  (trace_invariant tableHash otcGuest mints genesis minted genesis_inv
     ((validZoeTrace_iff_run _ _ _ _ _).mpr rfl)).1
 theorem threeHost_inv : ZoeInv threeHost :=
   (trace_invariant _ _ offers _ _ minted_inv ((validZoeTrace_iff_run _ _ _ _ _).mpr rfl)).1
@@ -357,10 +362,27 @@ example : ExitViolation tableHash matchedHost 1 capB :=
   (exitSeatStep_refused_iff _ _ _ _).mp ⟨_, (by decide +kernel :
     exitSeatStep tableHash matchedHost 1 capB = .error .exitNotAllowed)⟩
 
+/-- Clock tokens are epoch specific and consumed; neither an outsider nor a replay advances time. -/
+example : stepZoeHost tableHash otcGuest genesis (.advanceEpoch [99]) =
+    .error .epochUnauthorized := by decide +kernel
+example : (runZoe tableHash otcGuest genesis [.advanceEpoch [42], .advanceEpoch [42]]).epoch = 1 := by
+  decide +kernel
+example : stepZoeHost tableHash otcGuest initHost (.advanceEpoch [42]) =
+    .error .epochUnauthorized := by rfl
+/-- A stalled guest cannot suppress a holder's deadline refund once the clock authority ticks. -/
+def refunded : ZoeHost := runZoe tableHash (fun _ => none) threeHost
+  [.invokeGuestContract allSeats, .advanceEpoch [42], .advanceEpoch [43], .advanceEpoch [44],
+   .advanceEpoch [45], .advanceEpoch [46], .exitSeat 1 capB]
+example : refunded.floorBook.balance (.user bob) 1 = 200 ∧
+    refunded.floorBook.balance (.user (seatOf 1)) 1 = 0 := by decide +kernel
+
+#tooth Obend.Polis.ZoeSeatSettlement.advanceEpoch_authorized by mutation
+  Obend.Polis.ZoeSeatSettlement.stepZoeHost := fun _ _ h _ => .ok { h with epoch := h.epoch + 1 }
+
 /-- Offers, the match, an early exit that is refused, five epochs, then every seat exits. -/
 def longTurns : List ZoeTurn :=
-  mints ++ offers ++ [.invokeGuestContract allSeats, .exitSeat 1 capB, .advanceEpoch,
-    .advanceEpoch, .advanceEpoch, .advanceEpoch, .advanceEpoch, .exitSeat 1 capB,
+  mints ++ offers ++ [.invokeGuestContract allSeats, .exitSeat 1 capB, .advanceEpoch [42],
+    .advanceEpoch [43], .advanceEpoch [44], .advanceEpoch [45], .advanceEpoch [46], .exitSeat 1 capB,
     .exitSeat 0 capA, .exitSeat 2 capC]
 def settled : ZoeHost := runZoe tableHash otcGuest genesis longTurns
 
@@ -384,14 +406,15 @@ example (guest : GuestContract) (turns : List ZoeTurn) (ast : AssetId) :
     FloorsHold (runZoe zoeHash guest genesis turns).floorBook ∧
       (runZoe zoeHash guest genesis turns).floorBook.assetSum ast =
         genesis.floorBook.assetSum ast :=
-  have h := zoe_offer_safety_unconditional zoeHash guest _ turns _
-    ((validZoeTrace_iff_run _ _ _ _ _).mpr rfl)
-  ⟨h.1, h.2.1 ast⟩
+  have h := trace_invariant zoeHash guest turns genesis _
+    (fundedHost_invariant _) ((validZoeTrace_iff_run _ _ _ _ _).mpr rfl)
+  ⟨h.1.1, h.2.1 ast⟩
 
 -- **Only the holder exits**, under the deployed hash: whatever capability exits Alice's seat is
 -- hers, or cSHAKE256 collides.
 example (cap : List UInt8) (f : ZoeHost) (he : exitSeatStep zoeHash matchedHost 0 cap = .ok f) :
-    cap = capA ∨ Collision zoeHash :=
+    cap = capA ∨ Obend.Digest.HashBytes.CollisionAmong zoeHash
+      (fun x => x = holderPreimage 0 cap ∨ x = holderPreimage 0 capA) :=
   exit_requires_holder_preimage zoeHash_length (by decide)
     (by rw [cA_eq]; decide +kernel) he
 -- Exit pays the payee, by the universal theorem.

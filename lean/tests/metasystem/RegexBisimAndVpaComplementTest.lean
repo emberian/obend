@@ -136,7 +136,8 @@ example : ¬ ∀ w, Matches w noDoubleBrace → Matches w noBrace :=
   searchCex_sound (q := ⟨noDoubleBrace, noBrace⟩) (depth := 1) (w := [0x7b]) (by decide +kernel)
 
 /-- The fragment is inhabited at the upgrade query: its exploration closes. -/
-example : symbolicRegexInclusionJudge.Fragment ⟨noBrace, noDoubleBrace⟩ := ⟨64, by decide +kernel⟩
+example : symbolicRegexInclusionJudge.Fragment ⟨noBrace, noDoubleBrace⟩ :=
+  exploreCloses_fragment (fuel := 64) (by decide +kernel)
 
 /-! ## 2. Separations -/
 
@@ -490,6 +491,59 @@ example : leafMsg (js "a") ≠ leafMsg (js "a\x00") := by decide +kernel
 -- A root digest that leaves the leaf count out.
 #tooth rootHash_binds by
   mutation rootHash := fun H tag _ t => H.hash tag (rootMsg (leafHash H tag (countSpan 0)) t)
+
+
+/-! Stage 1 + Carbon Stage 2: byte-level JSON & UTF-16 surrogate-pair boundary regressions.
+Both raw UTF-8 and `\uXXXX` escapes must denote Unicode scalar values; redaction cannot split a
+UTF-16 surrogate pair in half. Keys remain the documented unescaped subset. -/
+theorem json_utf8_and_escape_positive :
+    runFullJsonGrammar ⟨#[34, 0xc2, 0xa2, 0xe2, 0x82, 0xac, 0xf0, 0x9d, 0x84, 0x9e, 34]⟩ = true ∧
+    runFullJsonGrammar "\"\\uD834\\uDD1E\"".toByteArray = true ∧
+    runFullJsonGrammar "\"\\uD7FF\\uE000\"".toByteArray = true ∧
+    checkJsonRedaction "\"\\uD834\\uDD1E\"".toByteArray 1 13 mask = true ∧
+    runFullJsonGrammar ⟨#[34, 92, 92, 34]⟩ = true ∧
+    runFullJsonGrammar ⟨#[34, 92, 92, 92, 34, 34]⟩ = true := by decide +kernel
+
+theorem json_utf8_and_eof_refused :
+    runFullJsonGrammar ⟨#[34, 0xc2, 34]⟩ = false ∧
+    runFullJsonGrammar ⟨#[34, 0x80, 34]⟩ = false ∧
+    runFullJsonGrammar ⟨#[34, 0xc0, 0xaf, 34]⟩ = false ∧
+    runFullJsonGrammar ⟨#[34, 0xed, 0xa0, 0x80, 34]⟩ = false ∧
+    runFullJsonGrammar ⟨#[34, 0xf4, 0x90, 0x80, 0x80, 34]⟩ = false ∧
+    runFullJsonGrammar "\"\\uD834\"".toByteArray = false ∧
+    runFullJsonGrammar "\"\\uDEAD\"".toByteArray = false ∧
+    runFullJsonGrammar "\"\\uD834\\u0041\"".toByteArray = false ∧
+    checkJsonRedaction "\"\\uD834\\uDD1E\"".toByteArray 1 7 mask = false ∧
+    checkJsonRedaction "\"\\uD834\\uDD1E\"".toByteArray 7 13 mask = false ∧
+    runFullJsonGrammar ⟨#[34, 31, 34]⟩ = false ∧
+    runFullJsonGrammar ⟨#[34, 92]⟩ = false ∧
+    runFullJsonGrammar "\"\\u12\"".toByteArray = false ∧
+    runFullJsonGrammar "\"\\u12x4\"".toByteArray = false ∧
+    runFullJsonGrammar "{} true".toByteArray = false := by decide +kernel
+
+#tooth json_utf8_and_eof_refused by
+  mutation stepStr := fun _ b => if b == 0x22 then .close else .cont .normal
+#tooth json_utf8_and_eof_refused by
+  mutation stepStr := fun s b =>
+    match s with
+    | .normal => if b == 0x22 then .close else if b == 0x5c then .cont .esc else .cont .normal
+    | .esc => if isEscapeByte b then .cont .normal else if b == 0x75 then .cont (.hex 3) else .bad
+    | .hex n => if isHexDigit b then (match n with | 0 => .cont .normal | k + 1 => .cont (.hex k)) else .bad
+    | _ => .bad
+#tooth json_utf8_and_escape_positive by mutation stepStr := fun _ _ => .bad
+
+example : ∃ k, jsonSpanJudge.refutes k = true := ⟨.notTheSplice, rfl⟩
+example : ∃ k, symbolicRegexInclusionJudge.refutes k = true := ⟨.nullableMismatch, rfl⟩
+example : ¬ JsonSpanMeaning plantedJsonSpanClaim (jsonSpanCertOf plantedJsonSpanClaim) := by
+  obtain ⟨k, path, hk⟩ := plantedJsonSpan_refused
+  have href : k = .notTheSplice := by
+    have hbad : jsonSpanCheck plantedJsonSpanClaim (jsonSpanCertOf plantedJsonSpanClaim) =
+        .refused .notTheSplice [] := by decide +kernel
+    change jsonSpanCheck _ _ = _ at hk
+    rw [hbad] at hk
+    cases hk
+    rfl
+  exact jsonSpanJudge.refuted hk (href ▸ rfl) _
 
 /-! ## 7. The axiom census -/
 

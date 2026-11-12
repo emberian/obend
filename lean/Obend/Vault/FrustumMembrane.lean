@@ -1,47 +1,11 @@
 module
-/-
-# Obend.Vault.FrustumMembrane — the viewer's frustum, the living screenshot cut from it, and its return
-
-A viewer sees the cells its own capabilities reach, and nothing else.
-
-1. **The frustum.** A `World` is a finite ledger of cells: a public state, sealed slots (a secret and
-   a salt, shown only as a 32-byte cSHAKE256 commitment), a c-list, a gated affordance surface.
-   `Reach` specifies what a viewer may crawl; `World.canObserve` checks it (`canObserve_iff`, both
-   directions). `Frustum.project` keeps exactly the observable cells. `frustum_noninterference`:
-   worlds whose reachable cells have the same public face project to the same frustum, so a hidden
-   cell may be rewritten or deleted (`hidden_cell_mutation_invisible`) and a sealed slot's cleartext
-   may vary behind a fixed commitment (`frustum_committed_field_hides_value`); the commitment binds
-   the cleartext up to a named collision (`sealCommit_binds`).
-2. **The cut.** `Frustum.snip` takes a set of cells out of a frustum; every capability crossing its
-   edge becomes a `BoundaryPin` (`snip_reifies_cut`) with one of four faces: severed to a 256-bit
-   snapshot, its liveness read off the witness log (`sever_promotes_replayed_deterministic`);
-   attenuated through `Membrane.reshare` to the residual `NExpr.peval` leaves, which reads nothing
-   of the backing cell (`attenuate_peval_hides_backing_slots`) and evaluates as the original did
-   (`attenuate_preserves_public_semantics`); interposed onto a local stand-in; or tethered live.
-   Turns against the screenshot write upstream only through a tethered pin carrying `write`
-   (`interposed_frustum_never_touches_severed_upstream`, for every list of turns).
-3. **The return.** `regraftFrustum` lands the edited interior on the world as it is now, refusing a
-   stale interior cell, a moved severed pin, a write the viewer lacks, an unbalanced conserved field;
-   what it admits lands whole, leaves every other cell alone and conserves each declared field
-   (`regraftFrustum_atomic_conserving`, `regraft_boundary_fresh_or_collision`).
-4. **Replay and negotiation.** A confined trace replays the same under every environment
-   (`confined_replay_env_independent`); one ambient step breaks that (`ambient_replay_env_dependent`).
-   `negotiate` is the meet of what is held and what is asked (`negotiate_confers`): the greatest
-   capability below both (`negotiated_attenuates`), never retargeted or widened by the ask
-   (`deputy_confers_no_unheld_target`), the same in any order or grouping
-   (`negotiation_path_independent`).
-
-The reachability checker is a kernel-reducible list saturation, quadratic in the ledger.
--/
+/- Capability reachability, sealed-slot binding and ideal-oracle salt hiding, living screenshot
+cuts, confined replay and atomic conserving regraft. ROM hiding is separate from cSHAKE binding. -/
 public import Obend.Vault.Form
 public import Obend.Polis.VerkleUmem
-
 public section
-
 namespace Obend.Vault.FrustumMembrane
-
 set_option autoImplicit false
-
 open Obend.Core.Data (Data)
 open Obend.Spec.Law (Facts)
 open Obend.Vault (natAt)
@@ -54,32 +18,25 @@ open Obend.Crypto (cshake32ByteArray cshake32ByteArray_size encodeListField
 open Obend.Digest.Cshake256 (cshake256Bytes)
 open Obend.Digest.HashBytes (CollisionAmong)
 open Obend.Polis (cshake32_binds)
-
 /-! ## 1. Sealed slots: a secret shown only as its commitment -/
-
 /-- The cleartext of a sealed slot, held by the cell's owner. -/
 structure SealedSlot where
   secret : List UInt8
   salt : List UInt8
 deriving DecidableEq, Repr
-
 /-- Customization string of the sealed-slot hash. -/
 def sealCustomization : List UInt8 := "OBEND.VAULT.FRUSTUM.SEAL/v1".toUTF8.data.toList
-
 /-- What is hashed: the secret and the salt, each length-framed. -/
 def sealPreimage (s : SealedSlot) : List UInt8 :=
   encodeListField s.secret ++ encodeListField s.salt
-
 /-- The 32-byte commitment a frustum shows in place of a sealed slot. -/
 def sealCommit (s : SealedSlot) : ByteArray := cshake32ByteArray sealCustomization (sealPreimage s)
-
 theorem sealPreimage_injective {s₁ s₂ : SealedSlot} (h : sealPreimage s₁ = sealPreimage s₂) :
     s₁ = s₂ := by
   unfold sealPreimage at h
   obtain ⟨h1, h2⟩ := encodeListField_prefix_inj h
   obtain ⟨h3, _⟩ := encodeListField_prefix_inj (r₁ := []) (r₂ := []) (by simpa using h2)
   cases s₁; cases s₂; simp_all
-
 theorem sealCommit_size (s : SealedSlot) : (sealCommit s).size = 32 :=
   cshake32ByteArray_size _ _
 /-- Equal commitments hide equal slots, or these two preimages collide under the seal hash. -/
@@ -87,17 +44,13 @@ theorem sealCommit_binds {s₁ s₂ : SealedSlot} (h : sealCommit s₁ = sealCom
     s₁ = s₂ ∨ CollisionAmong (cshake256Bytes sealCustomization)
       (fun x => x = sealPreimage s₁ ∨ x = sealPreimage s₂) :=
   (cshake32_binds sealCustomization h).imp sealPreimage_injective id
-
 /-! ## 2. The world, and what a viewer may reach -/
-
 abbrev CellId := String
-
 /-- A capability: a target cell and the rights held over it. -/
 structure Cap where
   target : CellId
   rights : List Auth
 deriving DecidableEq, Repr
-
 /-- A cell as its owner holds it. -/
 structure CellRecord where
   state : Data
@@ -105,7 +58,6 @@ structure CellRecord where
   caps : List Cap := []
   surface : List (GatedAffordance Unit) := []
   epoch : Nat := 0
-
 /-- The public face of a cell: its sealed slots are commitments. A frustum reads only this. -/
 structure CellPub where
   state : Data
@@ -113,23 +65,18 @@ structure CellPub where
   caps : List Cap
   surface : List (GatedAffordance Unit)
   epoch : Nat
-
 def CellRecord.pub (r : CellRecord) : CellPub :=
   { state := r.state, sealed := r.sealed.map fun e => (e.1, sealCommit e.2), caps := r.caps,
     surface := r.surface, epoch := r.epoch }
-
 /-- A finite ledger of cells: every cell that exists is listed in `ids`. -/
 structure World where
   ids : List CellId
   facts : Facts
   cell : CellId → Option CellRecord
   covered : ∀ c, (cell c).isSome = true → c ∈ ids
-
 def World.pub (w : World) (c : CellId) : Option CellPub := (w.cell c).map CellRecord.pub
-
 theorem World.mem_ids_of_pub {w : World} {c : CellId} (h : (w.pub c).isSome = true) : c ∈ w.ids :=
   w.covered c (by simpa [World.pub] using h)
-
 theorem mem_keys_of_lookup {β : Type} : ∀ (l : List (CellId × β)) (c : CellId),
     (l.lookup c).isSome = true → c ∈ l.map (·.1)
   | [], _, h => by simp at h
@@ -139,32 +86,26 @@ theorem mem_keys_of_lookup {β : Type} : ∀ (l : List (CellId × β)) (c : Cell
     · have hne : (c == k) = false := by simpa using hk
       simp only [List.lookup, hne] at h
       exact List.mem_cons_of_mem _ (mem_keys_of_lookup rest c h)
-
 /-- A world from a list of cells; the first entry for an id is the cell. -/
 def World.ofList (facts : Facts) (cells : List (CellId × CellRecord)) : World :=
   { ids := cells.map (·.1), facts := facts, cell := fun c => cells.lookup c,
     covered := mem_keys_of_lookup cells }
-
 /-- A capability lets its holder crawl to its target only if it carries `read`. -/
 def capObserves (cap : Cap) : Bool := cap.rights.contains Auth.read
-
 /-- One step of the crawl: `c` holds a read-bearing capability to `d`, and `d` is on the ledger. -/
 def Edge (w : World) (c d : CellId) : Prop :=
   ∃ p cap, w.pub c = some p ∧ cap ∈ p.caps ∧ capObserves cap = true ∧ cap.target = d ∧
     (w.pub d).isSome = true
-
 theorem Edge.source_live {w : World} {c d : CellId} (e : Edge w c d) : (w.pub c).isSome = true := by
   obtain ⟨p, _, hp, _⟩ := e
   simp [hp]
 theorem Edge.target_live {w : World} {c d : CellId} (e : Edge w c d) : (w.pub d).isSome = true := by
   obtain ⟨_, _, _, _, _, _, hd⟩ := e
   exact hd
-
 /-- **The specification of the frustum's extent**: the cells a viewer's capabilities reach. -/
 inductive Reach (w : World) : CellId → CellId → Prop where
   | refl {c : CellId} : (w.pub c).isSome = true → Reach w c c
   | head {c m d : CellId} : Edge w c m → Reach w m d → Reach w c d
-
 theorem Reach.source_live {w : World} {c d : CellId} (h : Reach w c d) : (w.pub c).isSome = true := by
   cases h with
   | refl h => exact h
@@ -173,22 +114,18 @@ theorem Reach.target_live {w : World} {c d : CellId} (h : Reach w c d) : (w.pub 
   induction h with
   | refl h => exact h
   | head _ _ ih => exact ih
-
 theorem Reach.trans {w : World} {a b c : CellId} (h₁ : Reach w a b) (h₂ : Reach w b c) :
     Reach w a c := by
   induction h₁ with
   | refl _ => exact h₂
   | head e _ ih => exact .head e (ih h₂)
-
 theorem Reach.tail {w : World} {a b c : CellId} (h : Reach w a b) (e : Edge w b c) : Reach w a c :=
   h.trans (.head e (.refl e.target_live))
-
 /-- A walk of `n` steps through cells of `live`. -/
 inductive WalkIn (w : World) (live : List CellId) : CellId → CellId → Nat → Prop where
   | here {c : CellId} : c ∈ live → WalkIn w live c c 0
   | cons {c m d : CellId} {n : Nat} :
       c ∈ live → Edge w c m → WalkIn w live m d n → WalkIn w live c d (n + 1)
-
 theorem WalkIn.head_mem {w : World} {live : List CellId} {c d : CellId} {n : Nat}
     (h : WalkIn w live c d n) : c ∈ live := by
   cases h <;> assumption
@@ -197,14 +134,12 @@ theorem WalkIn.mono {w : World} {l l' : List CellId} {c d : CellId} {n : Nat}
   induction h with
   | here hc => exact .here (hs _ hc)
   | cons hc e _ ih => exact .cons (hs _ hc) e ih
-
 theorem Reach.walk {w : World} {c d : CellId} (h : Reach w c d) : ∃ n, WalkIn w w.ids c d n := by
   induction h with
   | refl hc => exact ⟨0, .here (World.mem_ids_of_pub hc)⟩
   | head e _ ih =>
     obtain ⟨n, hn⟩ := ih
     exact ⟨n + 1, .cons (World.mem_ids_of_pub e.source_live) e hn⟩
-
 /-- A walk either avoids `x`, ends at `x`, or continues from a successor of `x` without it. -/
 theorem WalkIn.avoid {w : World} {l : List CellId} {c d : CellId} {n : Nat} (x : CellId)
     (h : WalkIn w l c d n) :
@@ -222,7 +157,6 @@ theorem WalkIn.avoid {w : World} {l : List CellId} {c d : CellId} {n : Nat} (x :
       · exact .inl ⟨k + 1, .cons (List.mem_filter.mpr ⟨hc, by simpa using hx⟩) e hk⟩
     · exact .inr (.inl hd)
     · exact .inr (.inr hrest)
-
 /-- A walk through `live` can be shortened below the size of `live`. -/
 theorem WalkIn.short {w : World} : ∀ (m : Nat) (l : List CellId) (c d : CellId) (n : Nat),
     l.length ≤ m → WalkIn w l c d n → ∃ k, k < m ∧ WalkIn w l c d k
@@ -243,13 +177,11 @@ theorem WalkIn.short {w : World} : ∀ (m : Nat) (l : List CellId) (c d : CellId
       exact ⟨0, by omega, .here hc⟩
     · obtain ⟨k', hk', hw⟩ := WalkIn.short m _ x' d k (by omega) hk
       exact ⟨k' + 1, by omega, .cons hc e (hw.mono hsub)⟩
-
 /-- The successors of a cell on the ledger. -/
 def World.succs (w : World) (c : CellId) : List CellId :=
   match w.pub c with
   | some p => ((p.caps.filter capObserves).map (·.target)).filter fun d => (w.pub d).isSome
   | none => []
-
 theorem mem_succs {w : World} {c d : CellId} : d ∈ w.succs c ↔ Edge w c d := by
   unfold World.succs Edge
   cases hp : w.pub c with
@@ -262,12 +194,10 @@ theorem mem_succs {w : World} {c d : CellId} : d ∈ w.succs c ↔ Edge w c d :=
     · rintro ⟨p', cap, hp', hcap, hobs, rfl, hd⟩
       cases hp'
       exact ⟨⟨cap, ⟨hcap, hobs⟩, rfl⟩, hd⟩
-
 /-- Append the elements of the second list not already present. -/
 def addNew : List CellId → List CellId → List CellId
   | acc, [] => acc
   | acc, x :: xs => if acc.contains x then addNew acc xs else addNew (acc ++ [x]) xs
-
 theorem mem_addNew {y : CellId} : ∀ (xs acc : List CellId), y ∈ addNew acc xs ↔ y ∈ acc ∨ y ∈ xs
   | [], acc => by simp [addNew]
   | x :: xs, acc => by
@@ -280,10 +210,8 @@ theorem mem_addNew {y : CellId} : ∀ (xs acc : List CellId), y ∈ addNew acc x
         fun h => h.elim .inl fun h => h.elim (fun e => .inl (e ▸ hx)) .inr⟩
     · rw [mem_addNew xs (acc ++ [x]), List.mem_append, List.mem_singleton, List.mem_cons]
       exact or_assoc
-
 /-- One round: the set, and every successor of a member. -/
 def World.expand (w : World) (S : List CellId) : List CellId := addNew S (S.flatMap w.succs)
-
 theorem mem_expand {w : World} {S : List CellId} {y : CellId} :
     y ∈ w.expand S ↔ y ∈ S ∨ ∃ c, c ∈ S ∧ Edge w c y := by
   unfold World.expand
@@ -295,16 +223,13 @@ theorem mem_expand {w : World} {S : List CellId} {y : CellId} :
   · rintro (h | ⟨c, hc, hy⟩)
     · exact .inl h
     · exact .inr ⟨c, hc, mem_succs.mpr hy⟩
-
 def World.saturate (w : World) : Nat → List CellId → List CellId
   | 0, S => S
   | n + 1, S => w.saturate n (w.expand S)
-
 theorem subset_saturate {w : World} : ∀ (n : Nat) (S : List CellId) (y : CellId),
     y ∈ S → y ∈ w.saturate n S
   | 0, _, _, h => h
   | n + 1, S, y, h => subset_saturate n (w.expand S) y (mem_expand.mpr (.inl h))
-
 theorem saturate_sound {w : World} : ∀ (n : Nat) (S : List CellId) (y : CellId),
     y ∈ w.saturate n S → y ∈ S ∨ ∃ c m, c ∈ S ∧ Edge w c m ∧ Reach w m y
   | 0, _, _, h => .inl h
@@ -316,7 +241,6 @@ theorem saturate_sound {w : World} : ∀ (n : Nat) (S : List CellId) (y : CellId
     · rcases mem_expand.mp hc with hc | ⟨c₀, hc₀, e₀⟩
       · exact .inr ⟨c, m, hc, e, hr⟩
       · exact .inr ⟨c₀, c, hc₀, e₀, .head e hr⟩
-
 theorem saturate_complete {w : World} {l : List CellId} {c d : CellId} {k : Nat}
     (h : WalkIn w l c d k) :
     ∀ (n : Nat) (S : List CellId), c ∈ S → k ≤ n → d ∈ w.saturate n S := by
@@ -327,14 +251,11 @@ theorem saturate_complete {w : World} {l : List CellId} {c d : CellId} {k : Nat}
     cases n with
     | zero => omega
     | succ n => exact ih n (w.expand S) (mem_expand.mpr (.inr ⟨_, hc, e⟩)) (by omega)
-
 /-- The cells a viewer may crawl: its own cell, saturated along read-bearing capabilities. -/
 def World.visible (w : World) (viewer : CellId) : List CellId :=
   if (w.pub viewer).isSome then w.saturate w.ids.length [viewer] else []
-
 /-- **The frustum's extent, as a check.** -/
 def World.canObserve (w : World) (viewer c : CellId) : Bool := (w.visible viewer).contains c
-
 /-- **The check is the specification**: nothing unreachable is observed, nothing reachable missed. -/
 theorem canObserve_iff {w : World} {viewer c : CellId} :
     w.canObserve viewer c = true ↔ Reach w viewer c := by
@@ -358,9 +279,7 @@ theorem canObserve_iff {w : World} {viewer c : CellId} :
     obtain ⟨k, hk, hw⟩ := WalkIn.short w.ids.length w.ids viewer c n (Nat.le_refl _) hn
     have hmem := saturate_complete hw w.ids.length [viewer] (by simp) (by omega)
     simpa using hmem
-
 /-! ## 3. The projection -/
-
 /-- What a viewer holds of one cell; `lit` names the affordances it may fire now. -/
 structure CellView where
   state : Data
@@ -368,34 +287,27 @@ structure CellView where
   caps : List Cap
   lit : List String
   epoch : Nat
-
 /-- A viewer's view of the world. -/
 structure Frustum where
   viewer : CellId
   cells : List (CellId × CellView)
-
 /-- The rights the viewer's own c-list holds over `d`. Reading a cell confers none of its rights. -/
 def World.heldOn (w : World) (viewer d : CellId) : List Auth :=
   match w.pub viewer with
   | some p => (p.caps.filter (·.target == d)).flatMap (·.rights)
   | none => []
-
 def viewCell (facts : Facts) (held : List Auth) (p : CellPub) : CellView :=
   { state := p.state, sealed := p.sealed, caps := p.caps,
     lit := (projectGatedFor held facts none p.state p.surface).map (·.aff.name),
     epoch := p.epoch }
-
 /-- What the viewer sees of `c`: nothing unless it may observe it. -/
 def World.look (w : World) (viewer c : CellId) : Option CellView :=
   if w.canObserve viewer c then (w.pub c).map (viewCell w.facts (w.heldOn viewer c)) else none
-
 /-- **Project the world through the viewer's authority.** -/
 def Frustum.project (w : World) (viewer : CellId) : Frustum :=
   { viewer := viewer, cells := w.ids.filterMap fun c => (w.look viewer c).map fun v => (c, v) }
-
 /-- Read one cell through a frustum. -/
 def Frustum.reflect (f : Frustum) (c : CellId) : Option CellView := f.cells.lookup c
-
 theorem lookup_filterMap_keyed {β : Type} (g : CellId → Option β) (c : CellId) :
     ∀ ids : List CellId,
       (ids.filterMap fun x => (g x).map fun v => (x, v)).lookup c = if c ∈ ids then g c else none
@@ -420,7 +332,6 @@ theorem lookup_filterMap_keyed {β : Type} (g : CellId → Option β) (c : CellI
         rw [List.filterMap_cons_some (b := (x, v)) (by simp [hg])]
         simp only [List.lookup, hne, ih]
         simp [hx]
-
 theorem reflect_project (w : World) (viewer c : CellId) :
     (Frustum.project w viewer).reflect c = w.look viewer c := by
   unfold Frustum.reflect Frustum.project
@@ -432,7 +343,6 @@ theorem reflect_project (w : World) (viewer c : CellId) :
     cases hp : w.pub c with
     | none => simp
     | some p => exact absurd (World.mem_ids_of_pub (by simp [hp])) hc
-
 /-- **An unreachable cell is absent**: reading it through the frustum finds nothing. -/
 theorem frustum_unobservable_absent {w : World} {viewer c : CellId} (h : ¬ Reach w viewer c) :
     (Frustum.project w viewer).reflect c = none := by
@@ -443,14 +353,12 @@ theorem frustum_unobservable_absent {w : World} {viewer c : CellId} (h : ¬ Reac
     | false => rfl
     | true => exact absurd (canObserve_iff.mp hb) h
   simp [hno]
-
 /-- **A reachable cell is present**, with its public face seen through the viewer's rights. -/
 theorem frustum_observable_present {w : World} {viewer c : CellId} {r : CellRecord}
     (h : Reach w viewer c) (hc : w.cell c = some r) :
     (Frustum.project w viewer).reflect c = some (viewCell w.facts (w.heldOn viewer c) r.pub) := by
   rw [reflect_project]
   simp [World.look, canObserve_iff.mpr h, World.pub, hc]
-
 /-- A sealed slot of a reachable cell is shown as its commitment, and as nothing else. -/
 theorem frustum_sealed_slot_shows_commitment {w : World} {viewer c : CellId} {r : CellRecord}
     (h : Reach w viewer c) (hc : w.cell c = some r) :
@@ -565,9 +473,8 @@ theorem hidden_cell_mutation_invisible {w : World} {viewer h : CellId}
     · simp [World.pub, World.erase, hch] at hc
     · simpa [World.pub, World.erase, hch] using hc
 
-/-- **A sealed slot hides its value.** Replace a cell's sealed cleartext, secret and salt, by any
-other with the same commitments: every viewer's frustum, even one reaching the cell, is unchanged. -/
-theorem frustum_committed_field_hides_value (w : World) (viewer h : CellId) (r : CellRecord)
+/-- Projection respects equality of commitments. This algebraic lemma asserts no secrecy. -/
+theorem frustum_equal_commitments_project_eq (w : World) (viewer h : CellId) (r : CellRecord)
     (sealed' : List (String × SealedSlot))
     (hcommit : sealed'.map (fun e => (e.1, sealCommit e.2)) =
       r.sealed.map (fun e => (e.1, sealCommit e.2))) :
@@ -583,6 +490,106 @@ theorem frustum_committed_field_hides_value (w : World) (viewer h : CellId) (r :
       | some _ => simp [World.pub, World.set, hw, CellRecord.pub, hcommit]
     · simp [World.pub, World.set, hch]
   exact ⟨rfl, rfl, fun c _ => hpub c, fun c hc => by rw [← hpub c]; exact hc⟩
+
+/-- Uniform salt coins: exactly 2^256 choices, encoded as 32 bytes. -/
+abbrev SaltCoin := Fin (2 ^ 256)
+def saltedPreimage (secret : List UInt8) (salt : SaltCoin) : List UInt8 :=
+  sealPreimage ⟨secret, Obend.Digest.HashBytes.be 32 salt.val⟩
+theorem saltedPreimage_injective (secret : List UInt8) {a b : SaltCoin}
+    (h : saltedPreimage secret a = saltedPreimage secret b) : a = b := by
+  have hs := congrArg SealedSlot.salt (sealPreimage_injective h)
+  apply Fin.ext
+  exact Obend.Digest.HashBytes.be_injective (by simpa using a.isLt) (by simpa using b.isLt) hs
+
+/-- Lazy random-oracle execution, with a fixed public commitment and fixed random reply tape.
+The adversary sees the entire transcript. Repeated queries reuse their first answer. Neither
+`next` nor `coins` receives the secret salt. Programming changes only the challenge preimage. -/
+abbrev ROTranscript := List (List UInt8 × BitVec 256)
+def lazyRO (next : ROTranscript → List UInt8) (coins : Nat → BitVec 256)
+    (program : Option (List UInt8 × BitVec 256)) : Nat → ROTranscript → ROTranscript
+  | 0, _ => []
+  | q + 1, seen =>
+    let x := next seen
+    let y := match program with
+      | some (target, commitment) => if x = target then commitment
+          else (seen.lookup x).getD (coins seen.length)
+      | none => (seen.lookup x).getD (coins seen.length)
+    (x, y) :: lazyRO next coins program q (seen ++ [(x, y)])
+theorem lazyRO_length (next : ROTranscript → List UInt8) (coins : Nat → BitVec 256)
+    (program : Option (List UInt8 × BitVec 256)) (q : Nat) (seen : ROTranscript) :
+    (lazyRO next coins program q seen).length = q := by
+  induction q generalizing seen with
+  | zero => rfl
+  | succ q ih => simp only [lazyRO, List.length_cons, ih]
+
+/-- The programmed and unprogrammed transcripts coincide until the first challenge query. -/
+theorem lazyRO_program_unseen (next : ROTranscript → List UInt8) (coins : Nat → BitVec 256)
+    (target : List UInt8) (commitment : BitVec 256) (q : Nat) (seen : ROTranscript)
+    (h : target ∉ (lazyRO next coins none q seen).map Prod.fst) :
+    lazyRO next coins (some (target, commitment)) q seen = lazyRO next coins none q seen := by
+  induction q generalizing seen with
+  | zero => rfl
+  | succ q ih =>
+    simp only [lazyRO, List.map_cons, List.mem_cons, not_or] at h
+    simp only [lazyRO, Ne.symm h.1, ite_false]
+    rw [ih _ h.2]
+
+/-- Exact bad-coin set for a fixed adaptive oracle execution. Uniform salt selects from all
+2^256 coins; counting needs no measure theory and no collision-resistance premise. -/
+def hitSalts (secret : List UInt8) (queries : List (List UInt8)) : List SaltCoin :=
+  (List.finRange (2 ^ 256)).filter fun salt => queries.any (fun x => decide (x = saltedPreimage secret salt))
+/-- Constructive subset counting using decidable byte-string equality. -/
+private theorem distinct_subset_length {xs ys : List (List UInt8)}
+    (hn : xs.Nodup) (hs : xs ⊆ ys) : xs.length ≤ ys.length := by
+  induction xs generalizing ys with
+  | nil => exact Nat.zero_le _
+  | cons x xs ih =>
+    obtain ⟨hx, ht⟩ := List.nodup_cons.mp hn
+    have hm := hs (List.mem_cons_self)
+    have sub : xs ⊆ ys.eraseP (fun z => decide (z = x)) := by
+      intro y hy
+      have hne : ¬decide (y = x) = true := fun he => hx (of_decide_eq_true he ▸ hy)
+      exact (List.mem_eraseP_of_neg (p := fun z => decide (z = x)) hne).mpr (hs (.tail _ hy))
+    have hi := ih ht sub
+    have hl : (ys.eraseP (fun z => decide (z = x))).length = ys.length - 1 :=
+      List.length_eraseP_of_mem hm (decide_eq_true rfl)
+    have hp := List.length_pos_of_mem hm
+    simp only [List.length_cons]; omega
+
+theorem hitSalts_bound (secret : List UInt8) (queries : List (List UInt8)) :
+    (hitSalts secret queries).length ≤ queries.length := by
+  have hn : ((hitSalts secret queries).map (saltedPreimage secret)).Nodup := by
+    rw [List.Nodup, List.pairwise_map]
+    have hf : (hitSalts secret queries).Nodup :=
+      List.Pairwise.filter _ (List.nodup_finRange (n := 2 ^ 256))
+    exact hf.imp (fun hab he => hab (saltedPreimage_injective secret he))
+  have hs : (hitSalts secret queries).map (saltedPreimage secret) ⊆ queries := by
+    intro x hx
+    obtain ⟨salt, hm, rfl⟩ := List.mem_map.mp hx
+    obtain ⟨_, hx, he⟩ := List.any_eq_true.mp (List.mem_filter.mp hm).2
+    exact of_decide_eq_true he ▸ hx
+  simpa only [List.length_map] using distinct_subset_length hn hs
+
+/-- ROM salt hiding: for every fixed public commitment and adaptive Q-query adversary/reply
+coins, at most Q of the 2^256 uniform salts can distinguish programming the secret's seal.
+This is an ideal-oracle theorem, not a claim that deterministic cSHAKE is a random oracle. -/
+theorem frustum_committed_field_hides_value (secret : List UInt8)
+    (next : ROTranscript → List UInt8) (coins : Nat → BitVec 256)
+    (commitment : BitVec 256) (Q : Nat) :
+    (List.finRange (2 ^ 256)).length = 2 ^ 256 ∧
+    (hitSalts secret ((lazyRO next coins none Q []).map Prod.fst)).length ≤ Q ∧
+    ∀ salt : SaltCoin, salt ∉ hitSalts secret ((lazyRO next coins none Q []).map Prod.fst) →
+      lazyRO next coins (some (saltedPreimage secret salt, commitment)) Q [] =
+        lazyRO next coins none Q [] := by
+  refine ⟨by simp, ?_, ?_⟩
+  · simpa only [List.length_map, lazyRO_length] using
+      hitSalts_bound secret ((lazyRO next coins none Q []).map Prod.fst)
+  · intro salt hs
+    apply lazyRO_program_unseen
+    intro hm
+    apply hs
+    exact List.mem_filter.mpr ⟨by simp, List.any_eq_true.mpr
+      ⟨saltedPreimage secret salt, hm, decide_eq_true rfl⟩⟩
 
 /-! ## 4. The cut: boundary pins and their four faces -/
 

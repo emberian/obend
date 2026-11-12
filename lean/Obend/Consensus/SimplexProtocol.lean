@@ -48,6 +48,35 @@ public import Obend.Digest.HashBytes
 
 public section
 
+/- Constructive collision evidence scoped to the actual finite transcript inputs. -/
+namespace Obend.Digest.HashBytes
+structure CollisionPair (H : Hash) (S : List UInt8 → Prop) where
+  msgA : List UInt8
+  msgB : List UInt8
+  memA : S msgA
+  memB : S msgB
+  distinct : msgA ≠ msgB
+  sameDigest : ofBE (H msgA) = ofBE (H msgB)
+
+theorem CollisionPair.toCollisionAmong {H : Hash} {S : List UInt8 → Prop}
+    (w : CollisionPair H S) : CollisionAmong H S :=
+  ⟨w.msgA, w.msgB, w.memA, w.memB, w.distinct, w.sameDigest⟩
+
+/-- Decide equality of these preimages, retaining the concrete pair on collision. -/
+def extractBinding (H : Hash) (a b : List UInt8) {P : Prop}
+    (inj : a = b → P) (eq : ofBE (H a) = ofBE (H b)) :
+    PSum (PLift P) (CollisionPair H (fun x => x = a ∨ x = b)) :=
+  if h : a = b then .inl ⟨inj h⟩
+  else .inr ⟨a, b, .inl rfl, .inr rfl, h, eq⟩
+
+theorem bindingResult {H : Hash} {a b : List UInt8} {P : Prop}
+    (w : PSum (PLift P) (CollisionPair H (fun x => x = a ∨ x = b))) :
+    P ∨ CollisionAmong H (fun x => x = a ∨ x = b) :=
+  match w with
+  | .inl h => .inl h.down
+  | .inr c => .inr c.toCollisionAmong
+end Obend.Digest.HashBytes
+
 namespace Obend.Consensus.SimplexProtocol
 
 open Obend.Consensus.Simplex (NodeId honest_quorum_intersection list_filter_add_card

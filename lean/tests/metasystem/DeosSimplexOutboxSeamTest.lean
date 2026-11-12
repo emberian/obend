@@ -68,7 +68,7 @@ def sealTurn (raw : List LocalTurn) : ByteArray × List LocalTurn :=
 def book0 : FloorBook :=
   (FloorBook.empty.applyRaw ⟨.issuerWell 0, .user 0, 0, 10⟩).applyRaw ⟨.issuerWell 0, .user 1, 0, 10⟩
 
-def ledger0 : LedgerState := ⟨book0, 0, RevokedSet.empty⟩
+def ledger0 : LedgerState := ⟨book0, 0, RevokedSet.empty, 0⟩
 
 theorem floorsHold_book0 : FloorsHold book0 :=
   (FloorBook.admitBatch_preserves_floors (fb := .empty) (fb' := book0)
@@ -77,19 +77,19 @@ theorem floorsHold_book0 : FloorsHold book0 :=
 
 /-- Vat 0 pays vat 1 one unit. -/
 def turn1Raw : List LocalTurn :=
-  [⟨0, .empty, .empty, 10, -1, 9⟩, ⟨1, .empty, .empty, 10, 1, 11⟩]
+  [⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 1, 11, 0, 0, 0⟩]
 /-- On the ledger the first turn leaves, vat 1 pays four back. -/
 def turn2Raw : List LocalTurn :=
-  [⟨0, .empty, .empty, 9, 4, 13⟩, ⟨1, .empty, .empty, 11, -4, 7⟩]
+  [⟨0, .empty, .empty, 9, 4, 13, 0, 0, 0⟩, ⟨1, .empty, .empty, 11, -4, 7, 0, 0, 0⟩]
 /-- Vat 0 named twice. Each leg is valid, each `pre` is the ledger's, the half-edges sum to zero. -/
 def dupVatRaw : List LocalTurn :=
-  [⟨0, .empty, .empty, 10, -1, 9⟩, ⟨0, .empty, .empty, 10, -1, 9⟩, ⟨1, .empty, .empty, 10, 2, 12⟩]
+  [⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩, ⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 2, 12, 0, 0, 0⟩]
 /-- Vat 0 says it held a thousand. A joint turn on its own; only the ledger knows better. -/
 def unboundPreRaw : List LocalTurn :=
-  [⟨0, .empty, .empty, 1000, -900, 100⟩, ⟨1, .empty, .empty, 10, 900, 910⟩]
+  [⟨0, .empty, .empty, 1000, -900, 100, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 900, 910, 0, 0, 0⟩]
 /-- Vat 0 pays eleven of its ten. -/
 def overdraftRaw : List LocalTurn :=
-  [⟨0, .empty, .empty, 10, -11, -1⟩, ⟨1, .empty, .empty, 10, 11, 21⟩]
+  [⟨0, .empty, .empty, 10, -11, -1, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 11, 21, 0, 0, 0⟩]
 
 def stepSealed (raw : List LocalTurn) : Option LedgerState :=
   stepJoint 2 ledger0 (sealTurn raw).1 (sealTurn raw).2
@@ -101,7 +101,7 @@ def stepSealed (raw : List LocalTurn) : Option LedgerState :=
     some (13, 7, 20, 0)
 #guard (runTrace 2 ledger0 [sealTurn turn1Raw, sealTurn turn1Raw]).isNone
 #guard (runTrace 2 ledger0 [sealTurn turn2Raw]).isNone
-#guard ((stepSealed [⟨0, .empty, .empty, 10, -2, 8⟩, ⟨1, .empty, .empty, 10, 2, 12⟩]).map fun s =>
+#guard ((stepSealed [⟨0, .empty, .empty, 10, -2, 8, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 2, 12, 0, 0, 0⟩]).map fun s =>
   (s.balances 0, s.balances 1)) == some (8, 12)
 #guard (stepSealed dupVatRaw).isNone
 #guard !vatsDistinct (sealTurn dupVatRaw).2
@@ -170,9 +170,11 @@ theorem turn1_applies : ∃ s', stepSealed turn1Raw = some s' ∧ s'.balances 0 
       simpa [ledger0, RevokedSet.empty] using (RevokedSet.contains_iff _ _).1 h
   have hpre : (sealTurn turn1Raw).2.all
       (fun t => decide (t.vat < 2) && decide (t.pre = ledger0.balances t.vat)) = true := by decide
+  have hdomain : (sealTurn turn1Raw).2.all
+      (fun t => decide (t.asset = ledger0.asset ∧ t.epoch = ledger0.epoch)) = true := by decide
   obtain ⟨s', hs⟩ := stepJoint_complete (s := ledger0) floorsHold_book0
     (shared := (sealTurn turn1Raw).1) (legs := (sealTurn turn1Raw).2) (n := 2)
-    (by simp only [stepOk, hj, hnew, hpre, Bool.not_false, Bool.and_self]) (by
+    (by simp only [stepOk, hj, hnew, hpre, hdomain, Bool.not_false, Bool.and_self]) (by
       intro t ht f hf
       simp only [sealTurn, turn1Raw, List.map_cons, List.map_nil, List.mem_cons,
         List.not_mem_nil, or_false] at ht
@@ -329,8 +331,8 @@ theorem zoe_trace_on_spine (w : Obend.Vault.Replay.World) (H : Obend.Digest.Hash
     (∀ ast : AssetId, f.floorBook.assetSum ast = minted.floorBook.assetSum ast) ∧
     f.seats.all (fun s => safeAt f.seatBook s.account s.proposal) = true :=
   have r := unifiedDeos_zoe_trace_on_spine H guest
-    ⟨w, Obend.Vault.emptyStore, minted.floorBook, minted.seatBook, minted.invReg, minted.seats⟩
-    minted.holders minted.epoch turns f minted_inv ht
+    ⟨w, Obend.Vault.emptyStore, minted.floorBook, minted.seatBook, minted.invReg, minted.seats,
+      minted.holders, minted.epoch, minted.epochKeys⟩ turns f minted_inv ht
   ⟨r.1, r.2.1, r.2.2.1⟩
 
 -- Move the seat `Book` without asking the `FloorBook`: offers funded from thin air.
@@ -574,9 +576,14 @@ theorem honest_keys : HonestSlotKeys sigHash 4096 keys proto4 signLog saltOf :=
 
 /-- **Any accepted forgery against the three honest validators is a cSHAKE256 collision.** -/
 theorem any_forgery_is_a_collision (w : EufCmaForgeryWitness scheme keys proto4 signLog) :
-    HashBytes.Collision sigHash :=
-  HashCollisionWitness.toCollision (H := sigHash) (maxBytes := 4096)
-    (forgedSignature_reduces_to_hashCollision sigHash 4096 keys proto4 signLog saltOf honest_keys w)
+    HashBytes.CollisionAmong sigHash (fun x => x = forgedSlotPreimage w.forgedMsg ∨
+      x = registeredSlotPreimage signLog saltOf w.forgedMsg.msg) :=
+  (forgedSignature_reduces_to_hashCollision sigHash 4096 keys proto4 signLog saltOf honest_keys w).toCollisionAmong
+
+#tooth Obend.Consensus.Finality.chainDigest_binds by mutation
+  Obend.Consensus.SimplexProtocol.Entry.encode := fun _ => []
+#tooth Obend.Vault.UnifiedDeos.UnifiedDeosSpine.zoeHost_writeback by mutation
+  Obend.Vault.UnifiedDeos.UnifiedDeosSpine.withZoeHost := fun S _ => S
 
 /-! ### The durable host dispatches once -/
 

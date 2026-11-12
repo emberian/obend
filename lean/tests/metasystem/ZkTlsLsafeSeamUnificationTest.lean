@@ -108,9 +108,9 @@ meta def viewOf (spans : List ByteArray) (masks : List (Nat × ByteArray)) : Tra
           (spanMerkleProof cshakeHasher spanTag spans i).siblings⟩
 
 meta def mkAttestation (k : Tower128) (hdr : SessionHeader) (req resp : TranscriptView)
-    (ct : List Tower128) (len : Tower128) : DecoAttestation :=
-  let a0 : DecoAttestation := ⟨hdr, req, resp, ct, len, towerZero 7⟩
-  { a0 with ghashTag := ghashAuth k (commitBlocks (recordCommit a0)) ct len }
+    (ct : List Tower128) (_len : Tower128) : DecoAttestation :=
+  let a0 : DecoAttestation := ⟨hdr, req, resp, ct, recordLengthBlock ct, towerZero 7⟩
+  { a0 with ghashTag := ghashAuth k (commitBlocks (recordCommit a0)) ct a0.lenBlock }
 
 meta def notary : ByteArray := js "notary-1"
 meta def stripeHost : ByteArray := js "api.stripe.com"
@@ -209,6 +209,32 @@ meta def isOk {α : Type} : Obend.Judge.Verdict α → Bool
    ⟨[js "POST /v1/pay HTTP/1.1\r\nHost: api.stripe.com\r\n\r\n", js "{\"amount\":\"", js "4200",
      js "\",\"key\":\"", js "sk_live_98", js "\"}"], settleResp⟩]) == .refused .unfaithfulOpening []
 
+
+-- A sender recomputing GHASH over a false length block still cannot authenticate it.
+meta def badLengthAttestation : DecoAttestation :=
+  let a := { settlement with lenBlock := towerZero 7 }
+  { a with ghashTag := ghashAuth key1 (commitBlocks (recordCommit a)) a.ctBlocks a.lenBlock }
+#guard !tagVerifies key1 badLengthAttestation
+#guard !checkDecoAttestation paymentPolicy ⟨[], []⟩ badLengthAttestation
+-- Distinct records must have distinct session nonces and intents across the whole trace.
+#guard !checkDecoTrace decoPolicy ⟨[], []⟩
+  [settlement, mkAttestation key1 { settlement.header with paymentIntentId := js "new-intent" }
+    settlement.request settlement.response settlement.ctBlocks settlement.lenBlock]
+#guard checkDecoTrace decoPolicy ⟨[], []⟩ [settlement, recorder]
+
+-- Nonempty GHASH-bound premise at the real record commitment: key 0 is a common
+-- root, while key 1 separates the two ciphertext polynomials (L = 4).
+meta def boundA : DecoAttestation :=
+  mkAttestation (towerZero 7) settlement.header settlement.request settlement.response
+    [towerZero 7] (recordLengthBlock [towerZero 7])
+meta def boundB : DecoAttestation :=
+  mkAttestation (towerZero 7) settlement.header settlement.request settlement.response
+    [towerOne 7] (recordLengthBlock [towerOne 7])
+#guard (ghashMessage boundA).length == 4 && (ghashMessage boundB).length == 4
+#guard boundA.ghashTag == boundB.ghashTag
+#guard tagVerifies (towerZero 7) boundA && tagVerifies (towerZero 7) boundB
+#guard ghashPoly (towerOne 7) (ghashMessage boundA) != ghashPoly (towerOne 7) (ghashMessage boundB)
+
 /-! ## 4. Lsafe: one edge about the tree opens by its own path -/
 
 /-- "This host attested this subtree root": one edge per attested hop. -/
@@ -276,7 +302,7 @@ example (q : CallTreeClaim) (w : CallTreeWitness) (pol : Obend.Trailblaze.ZkStri
     (hj : callTreeJudge.check 0 q w = .ok)
     (ha : Obend.Trailblaze.ZkStripe.auditZkStripeCallTree pol
       (Obend.Trailblaze.ZkStripe.sessionOfCallTree q.tree) = .ok ()) :
-    (∀ t', treeRoot t' = q.expectedRoot → t' = q.tree ∨ CallTreeCollision) ∧
+    (∀ t', treeRoot t' = q.expectedRoot → t' = q.tree ∨ Nonempty CallTreeCollision) ∧
       OpeningsParse (treeAttestations q.tree) w ∧
       ∀ h ∈ treeHops q.tree, Obend.Trailblaze.ZkStripe.matchesBytes pol.allowedRequestRe
         (viewBytes h.attestation.request.slots) = true :=
@@ -349,7 +375,7 @@ open Obend.Judge.SymbolicRegex in
 #tooth checkPolicy_iff by mutation checkPolicy := fun _ _ => true
 
 -- A children root that does not read the children.
-#tooth treeRoot_binds by mutation mrootC := fun _ => hash256 "none" []
+#tooth mrootC_eq by mutation mrootC := fun _ => hash256 "none" []
 
 -- An edge opening that does not compare the climbed digest with the graph digest.
 #tooth Obend.Vault.Lsafe.verifyKgEdgeOpening_binding by
@@ -362,6 +388,12 @@ open Obend.Judge.SymbolicRegex in
 -- An organ audit that admits every hop.
 #tooth Obend.Trailblaze.ZkStripe.apex_zkstripe_calltree_audit by
   mutation Obend.Trailblaze.ZkStripe.auditNodes := fun _ _ => .ok ()
+
+-- Semantic template confinement witness & mutation tooth.
+example : Obend.Judge.tlsnTranscriptJudge.Fragment Obend.Judge.validTlsnQuery :=
+  .lit (.slot (by decide +kernel) (.lit (.nil _)))
+#tooth Obend.Judge.SlotsInValueString.checked by
+  mutation Obend.Judge.slotsConfined := fun _ _ => false
 
 #print axioms treeRoot_binds
 #print axioms checkOpening_parses

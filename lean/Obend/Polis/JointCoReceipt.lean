@@ -1,11 +1,9 @@
 module
 /-
 # Obend.Polis.JointCoReceipt — joint turns across vats, and receipts that compose along promises
-
 A turn that touches several vats leaves one local receipt in each. This module says when those
 receipts are one turn, how a turn moves a `FloorBook`, and how receipts with open promise ports
 compose into one.
-
 1. Sorted tables: `tableOk (sortByKey …)` is key distinctness; lookup is CapTP's binary search.
 2. `LocalTurn`, `JointTurn`: a local receipt checks its own arithmetic (`post = pre + half`, neither
    balance negative) and commits to a turn digest. A joint turn is the pullback of the receipts over
@@ -21,8 +19,8 @@ compose into one.
    `stepJoint_conserves`, `stepJoint_no_overdraft`, the three refusals, and the lifts over
    `ValidJointTrace` (`jointTrace_conserves_total_balance`, `jointTrace_no_overdraft`,
    `jointTrace_preserves_floors`, `jointTrace_no_replay`).
-4. `jointTurn_committed_conservation_sound`: conservation read from 256-bit commitments, through
-   `Obend.Polis.PrivatePredicate`.
+4. `jointTurn_committed_conservation_sound`: cSHAKE opening correspondence and natural-number
+   conservation checked together; no external blinding-balance premise.
 5. `CoReceipt`: a receipt with typed open ports. An `AwaitPort` is a promise hole (a CapTP pending
    id, a 32-byte commitment to the awaited payload, a `DistPred` guard, and the root grant and rights
    its resolver must show); a `FulfillPort` resolves one, carrying a delegation chain.
@@ -34,31 +32,26 @@ compose into one.
    a joint turn in which every hole is filled exactly once by an authorized, unrevoked, causally
    earlier resolver.
 -/
+public import Obend.Consensus.SimplexProtocol
 public import Obend.Polis.PrivatePredicate
 public import Obend.Polis.CapTP
 public import Obend.Polis.ZkBiscuit
 public import Obend.Ledger.Floors
 import all Obend.Polis.CapTP
-
 public section
 namespace Obend.Polis.JointCoReceipt
-
 open Obend.Polis
 open Obend.Polis.PrivatePredicate
 open Obend.Crypto
 open Obend.Digest.Cshake256
 open Obend.Digest.HashBytes
 open Obend.Ledger (FloorBook FloorsHold AccountAddr AccountKind TypedPosting AssetId)
-
 set_option autoImplicit false
-
 /-! ## 1. Sorted tables -/
-
 /-- Strictly ascending, checked on neighbours. -/
 def ascending : List Nat → Bool
   | a :: b :: rest => decide (a < b) && ascending (b :: rest)
   | _ => true
-
 theorem ascending_cons {a : Nat} : ∀ {l : List Nat}, ascending (a :: l) = true →
     (∀ x, x ∈ l → a < x) ∧ ascending l = true
   | [], _ => ⟨fun _ hx => (by cases hx), by rfl⟩
@@ -69,11 +62,9 @@ theorem ascending_cons {a : Nat} : ∀ {l : List Nat}, ascending (a :: l) = true
     rcases List.mem_cons.1 hx with rfl | hx
     · exact h.1
     · exact Nat.lt_trans h.1 (hlt x hx)
-
 theorem ascending_pairwise : ∀ l : List Nat, ascending l = true → l.Pairwise (· < ·)
   | [], _ => .nil
   | _ :: l, h => .cons (ascending_cons h).1 (ascending_pairwise l (ascending_cons h).2)
-
 theorem ascending_of_pairwise : ∀ l : List Nat, l.Pairwise (· < ·) → ascending l = true
   | [], _ => by rfl
   | [_], _ => by rfl
@@ -81,32 +72,23 @@ theorem ascending_of_pairwise : ∀ l : List Nat, l.Pairwise (· < ·) → ascen
     obtain ⟨ha, hl⟩ := List.pairwise_cons.1 h
     simp only [ascending, Bool.and_eq_true, decide_eq_true_eq]
     exact ⟨ha b (by simp), ascending_of_pairwise (b :: l) hl⟩
-
 section Table
-
 variable {α : Type} (key : α → Nat)
-
 /-- A table in key order: one merge sort. -/
 def sortByKey (l : List α) : Array α :=
   (l.mergeSort (fun a b => decide (key a ≤ key b))).toArray
-
 /-- The table's keys strictly ascend: no key occurs twice. One pass. -/
 def tableOk (A : Array α) : Bool := ascending (A.toList.map key)
-
 /-- Find the entry with key `k` by CapTP's binary search. -/
 def lookup (A : Array α) (k : Nat) : Option α := CapTP.search key A k (A.size + 1) 0 A.size
-
 theorem sortByKey_perm (l : List α) : (sortByKey key l).toList.Perm l := by
   simpa only [sortByKey, List.toList_toArray] using
     List.mergeSort_perm l (fun a b => decide (key a ≤ key b))
-
 theorem tableOk_pairwise {A : Array α} (h : tableOk key A = true) :
     A.toList.Pairwise (fun a b => key a < key b) :=
   List.pairwise_map.1 (ascending_pairwise _ h)
-
 theorem tableOk_nodup {A : Array α} (h : tableOk key A = true) : (A.toList.map key).Nodup :=
   (ascending_pairwise _ h).imp (fun hlt => Nat.ne_of_lt hlt)
-
 theorem pairwise_key_unique : ∀ {l : List α}, l.Pairwise (fun a b => key a < key b) →
     ∀ {x y : α}, x ∈ l → y ∈ l → key x = key y → x = y
   | [], _, _, _, hx, _, _ => by cases hx
@@ -119,7 +101,6 @@ theorem pairwise_key_unique : ∀ {l : List α}, l.Pairwise (fun a b => key a < 
     · have := ha x hx'
       omega
     · exact pairwise_key_unique hl hx' hy' hk
-
 /-- On a table that passed `tableOk`, the binary search is the list search. -/
 theorem lookup_eq_find {A : Array α} (h : tableOk key A = true) (k : Nat) :
     lookup key A k = A.toList.find? (fun x => key x == k) := by
@@ -129,12 +110,10 @@ theorem lookup_eq_find {A : Array α} (h : tableOk key A = true) (k : Nat) :
       (by simpa using hj) hij
     simpa using this
   rw [lookup, CapTP.search_eq_spec key A hs k, CapTP.findSpec]
-
 theorem lookup_some {A : Array α} (h : tableOk key A = true) {k : Nat} {x : α}
     (hx : lookup key A k = some x) : x ∈ A.toList ∧ key x = k := by
   rw [lookup_eq_find key h] at hx
   exact ⟨List.mem_of_find?_eq_some hx, by simpa using List.find?_some hx⟩
-
 theorem lookup_of_mem {A : Array α} (h : tableOk key A = true) {x : α} (hx : x ∈ A.toList) :
     lookup key A (key x) = some x := by
   rw [lookup_eq_find key h]
@@ -146,7 +125,6 @@ theorem lookup_of_mem {A : Array α} (h : tableOk key A = true) {x : α} (hx : x
     have hy := List.mem_of_find?_eq_some hf
     have hk : key y = key x := by simpa using List.find?_some hf
     rw [pairwise_key_unique key (tableOk_pairwise key h) hy hx hk]
-
 /-- **The sort-and-scan check is key distinctness.** A list's sorted table strictly ascends exactly
 when no key occurs twice in the list. -/
 theorem tableOk_sortByKey_iff (l : List α) :
@@ -164,18 +142,13 @@ theorem tableOk_sortByKey_iff (l : List α) :
       simpa only [sortByKey, List.toList_toArray, decide_eq_true_eq] using hs
     exact ascending_of_pairwise _ (List.pairwise_map.2
       ((hle.and (List.pairwise_map.1 hnd)).imp fun hab => Nat.lt_of_le_of_ne hab.1 hab.2))
-
 end Table
-
 theorem nodup_of_map_nodup {α β : Type} (f : α → β) {l : List α} (h : (l.map f).Nodup) :
     l.Nodup :=
   (List.pairwise_map.1 h).imp (fun hne heq => hne (congrArg f heq))
-
 /-! ## 2. Local receipts and the joint turn -/
-
 /-- A vat. -/
 abbrev VatId := Nat
-
 /-- One vat's receipt of a turn: the turn digest it commits to, a 32-byte commitment to its local
 effects, and its balance before, its half-edge, and its balance after. -/
 structure LocalTurn where
@@ -185,74 +158,73 @@ structure LocalTurn where
   pre : Int
   half : Int
   post : Int
-
+  asset : AssetId := 0
+  epoch : Nat := 0
+  nonce : Nat := 0
 /-- The receipt's own arithmetic: the balance after is the balance before plus the half-edge, and
 neither balance is negative. -/
 def LocalTurn.valid (t : LocalTurn) : Bool :=
   decide (t.post = t.pre + t.half) && decide (0 ≤ t.pre) && decide (0 ≤ t.post)
-
 theorem LocalTurn.valid_iff (t : LocalTurn) :
     t.valid = true ↔ t.post = t.pre + t.half ∧ 0 ≤ t.pre ∧ 0 ≤ t.post := by
   simp only [LocalTurn.valid, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
 /-- What a leg contributes to the turn digest: the vat, its effects commitment, and its balance
 before, half-edge and balance after, each length-prefixed. -/
 def LocalTurn.legBytes (t : LocalTurn) : List UInt8 :=
   encodeFields [leb128 t.vat, t.body.data.toList, encodeInt t.pre, encodeInt t.half,
-    encodeInt t.post]
-
+    encodeInt t.post, leb128 t.asset, leb128 t.epoch, leb128 t.nonce]
 theorem LocalTurn.legBytes_inj {a b : LocalTurn} (h : a.legBytes = b.legBytes) :
-    a.vat = b.vat ∧ a.body = b.body ∧ a.pre = b.pre ∧ a.half = b.half ∧ a.post = b.post := by
+    a.vat = b.vat ∧ a.body = b.body ∧ a.pre = b.pre ∧ a.half = b.half ∧ a.post = b.post ∧
+      a.asset = b.asset ∧ a.epoch = b.epoch ∧ a.nonce = b.nonce := by
   have hf := encodeFields_injective _ _ h
   simp only [List.cons.injEq, and_true] at hf
   have hint : ∀ {x y : Int}, encodeInt x = encodeInt y → x = y := fun {x y} e =>
     (encodeInt_prefix_inj (r₁ := []) (r₂ := []) (by rw [List.append_nil, List.append_nil, e])).1
   exact ⟨(leb128_prefix_inj (r₁ := []) (r₂ := [])
       (by rw [List.append_nil, List.append_nil, hf.1])).1,
-    byteArray_eq_of_toList_eq hf.2.1, hint hf.2.2.1, hint hf.2.2.2.1, hint hf.2.2.2.2⟩
-
+    byteArray_eq_of_toList_eq hf.2.1, hint hf.2.2.1, hint hf.2.2.2.1, hint hf.2.2.2.2.1,
+    (leb128_prefix_inj (r₁ := []) (r₂ := []) (by simpa using hf.2.2.2.2.2.1)).1,
+    (leb128_prefix_inj (r₁ := []) (r₂ := []) (by simpa using hf.2.2.2.2.2.2.1)).1,
+    (leb128_prefix_inj (r₁ := []) (r₂ := []) (by simpa using hf.2.2.2.2.2.2.2)).1⟩
 /-- Two receipts of one turn with the same leg bytes are the same receipt. -/
 theorem LocalTurn.eq_of_legBytes {a b : LocalTurn} (hid : a.turnId = b.turnId)
     (h : a.legBytes = b.legBytes) : a = b := by
-  obtain ⟨h1, h2, h3, h4, h5⟩ := LocalTurn.legBytes_inj h
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := LocalTurn.legBytes_inj h
   clear h
   cases a; cases b
   simp_all
-
 /-- Everything a receipt says: the turn digest it names, then its leg bytes. -/
 def LocalTurn.receiptBytes (t : LocalTurn) : List UInt8 :=
   encodeFields [t.turnId.data.toList, t.legBytes]
-
 theorem LocalTurn.receiptBytes_inj {a b : LocalTurn} (h : a.receiptBytes = b.receiptBytes) :
     a = b := by
   have hf := encodeFields_injective _ _ h
   simp only [List.cons.injEq, and_true] at hf
   exact LocalTurn.eq_of_legBytes (byteArray_eq_of_toList_eq hf.1) hf.2
-
 /-- Customization string of the receipt digest. -/
 def receiptCustomization : List UInt8 := "OBEND.POLIS.CORECEIPT/v1".toUTF8.data.toList
-
 /-- The 32-byte digest of one vat's receipt. -/
 def coReceiptDigest (t : LocalTurn) : ByteArray :=
   cshake32ByteArray receiptCustomization t.receiptBytes
-
 /-- **The receipt digest binds the whole receipt**: vat, turn digest, effects commitment, balance
 before, half-edge and balance after. Equal digests come from equal receipts, or the two receipts'
 bytes collide. -/
+def coReceiptDigest_extract {a b : LocalTurn} (h : coReceiptDigest a = coReceiptDigest b) :
+    PSum (PLift (a = b)) (CollisionPair (cshake256Bytes receiptCustomization)
+      (fun x => x = a.receiptBytes ∨ x = b.receiptBytes)) :=
+  extractBinding _ _ _ LocalTurn.receiptBytes_inj (by
+    have hl := congrArg (fun b : ByteArray => b.data.toList) h
+    simp only [coReceiptDigest, cshake32ByteArray, Native.bytesOfList_toList] at hl
+    exact congrArg ofBE hl)
 theorem coReceiptDigest_binds {a b : LocalTurn} (h : coReceiptDigest a = coReceiptDigest b) :
     a = b ∨ CollisionAmong (cshake256Bytes receiptCustomization)
-      (fun x => x = a.receiptBytes ∨ x = b.receiptBytes) := by
-  rcases cshake32_binds receiptCustomization h with hp | hc
-  · exact .inl (LocalTurn.receiptBytes_inj hp)
-  · exact .inr hc
-
+      (fun x => x = a.receiptBytes ∨ x = b.receiptBytes) :=
+  bindingResult (coReceiptDigest_extract h)
 /-- Customization string of the turn digest. -/
 def turnCustomization : List UInt8 := "OBEND.POLIS.JOINTTURN/v1".toUTF8.data.toList
-
 /-- The digest of a forest of legs, each length-prefixed. -/
 def forestDigest (legs : List (List UInt8)) : ByteArray :=
   cshake32ByteArray turnCustomization (encodeFields legs)
-
 /-- One digest names one forest, or the two forests collide. -/
 theorem forestDigest_binds {a b : List (List UInt8)} (h : forestDigest a = forestDigest b) :
     a = b ∨ CollisionAmong (cshake256Bytes turnCustomization)
@@ -260,10 +232,8 @@ theorem forestDigest_binds {a b : List (List UInt8)} (h : forestDigest a = fores
   rcases cshake32_binds turnCustomization h with hp | hc
   · exact .inl (encodeFields_injective _ _ hp)
   · exact .inr hc
-
 /-- The turn digest of a list of local receipts. -/
 def turnDigest (legs : List LocalTurn) : ByteArray := forestDigest (legs.map LocalTurn.legBytes)
-
 /-- Receipts naming one turn digest, with the same leg bytes in order, are the same receipts. -/
 theorem legs_eq_of_legBytes (tid : ByteArray) : ∀ (l₁ l₂ : List LocalTurn),
     (∀ t, t ∈ l₁ → t.turnId = tid) → (∀ t, t ∈ l₂ → t.turnId = tid) →
@@ -276,14 +246,12 @@ theorem legs_eq_of_legBytes (tid : ByteArray) : ∀ (l₁ l₂ : List LocalTurn)
     rw [LocalTurn.eq_of_legBytes ((h₁ a (by simp)).trans (h₂ b (by simp)).symm) h.1,
       legs_eq_of_legBytes tid l₁ l₂ (fun t ht => h₁ t (by simp [ht]))
         (fun t ht => h₂ t (by simp [ht])) h.2]
-
 /-- **The pullback over the turn digest.** Every leg commits to `tid`, and `tid` is the digest of
 exactly these legs: a receipt is a receipt of this turn and of no other. -/
 structure SharedTurnId (legs : List LocalTurn) where
   tid : ByteArray
   agree : ∀ t, t ∈ legs → t.turnId = tid
   pinned : tid = turnDigest legs
-
 /-- A joint turn: receipts that are each valid and non-negative, agree on the turn, come from
 distinct vats, and conserve between them. -/
 structure JointTurn where
@@ -293,20 +261,16 @@ structure JointTurn where
   nonneg : ∀ t, t ∈ legs → 0 ≤ t.pre ∧ 0 ≤ t.post
   distinct : (legs.map (·.vat)).Nodup
   balanced : (legs.map (·.half)).sum = 0
-
 /-- No vat has two legs: one sort and one scan. -/
 def vatsDistinct (legs : List LocalTurn) : Bool :=
   tableOk (fun t : LocalTurn => t.vat) (sortByKey (fun t : LocalTurn => t.vat) legs)
-
 theorem vatsDistinct_iff (legs : List LocalTurn) :
     vatsDistinct legs = true ↔ (legs.map (·.vat)).Nodup :=
   tableOk_sortByKey_iff _ legs
-
 /-- The checker for a joint turn. -/
 def checkJoint (shared : ByteArray) (legs : List LocalTurn) : Bool :=
   legs.all (·.valid) && vatsDistinct legs && legs.all (fun t => decide (t.turnId = shared)) &&
     decide (shared = turnDigest legs) && decide ((legs.map (·.half)).sum = 0)
-
 /-- **The checker accepts exactly the joint turns.** -/
 theorem checkJoint_iff (shared : ByteArray) (legs : List LocalTurn) :
     checkJoint shared legs = true ↔ ∃ j : JointTurn, j.legs = legs ∧ j.shared.tid = shared := by
@@ -322,7 +286,6 @@ theorem checkJoint_iff (shared : ByteArray) (legs : List LocalTurn) :
       LocalTurn.valid_iff]
     exact ⟨⟨⟨⟨fun t ht => ⟨j.valid t ht, j.nonneg t ht⟩, (vatsDistinct_iff _).2 j.distinct⟩,
       j.shared.agree⟩, j.shared.pinned⟩, j.balanced⟩
-
 theorem sum_post_eq : ∀ legs : List LocalTurn, (∀ t, t ∈ legs → t.post = t.pre + t.half) →
     (legs.map (·.post)).sum = (legs.map (·.pre)).sum + (legs.map (·.half)).sum
   | [], _ => by simp
@@ -331,13 +294,11 @@ theorem sum_post_eq : ∀ legs : List LocalTurn, (∀ t, t ∈ legs → t.post =
     have ih := sum_post_eq ts (fun x hx => h x (by simp [hx]))
     simp only [List.map_cons, List.sum_cons, ih, ht]
     omega
-
 /-- **A joint turn conserves the total balance** of the vats it touches. -/
 theorem jointTurn_conserves_total_balance (j : JointTurn) :
     (j.legs.map (·.post)).sum = (j.legs.map (·.pre)).sum := by
   rw [sum_post_eq j.legs j.valid, j.balanced]
   omega
-
 /-- What the checker establishes: conservation, distinct vats, no negative balance, and every leg
 naming the digest of this forest. -/
 theorem jointTurn_sound (shared : ByteArray) (legs : List LocalTurn)
@@ -348,7 +309,6 @@ theorem jointTurn_sound (shared : ByteArray) (legs : List LocalTurn)
   obtain ⟨j, rfl, rfl⟩ := (checkJoint_iff shared legs).1 h
   exact ⟨jointTurn_conserves_total_balance j, j.distinct, j.nonneg,
     fun t ht => (j.shared.agree t ht).trans j.shared.pinned⟩
-
 /-- **The turn digest binds the forest.** Two joint turns with one digest have the same legs (every
 field of each, in order), or their forests collide. A leg cannot be moved into another turn, and
 neither its `pre` nor its `post` can be restated. -/
@@ -363,7 +323,6 @@ theorem sharedTurnId_binds_forest (j₁ j₂ : JointTurn) (h : j₁.shared.tid =
   · exact .inl (legs_eq_of_legBytes j₁.shared.tid _ _ j₁.shared.agree
       (fun t ht => (j₂.shared.agree t ht).trans h.symm) he)
   · exact .inr hc
-
 /-- **Local receipts are not enough.** Two receipts, each valid on its own and naming one turn, that
 mint a unit between them; and two receipts whose half-edges cancel but which belong to different
 turns. Neither pair is a joint turn under any digest: the product of the vats' own judgements is
@@ -373,9 +332,9 @@ theorem tensor_not_final :
         ∀ shared, checkJoint shared [a, b] = false) ∧
       (∃ a b : LocalTurn, a.valid = true ∧ b.valid = true ∧ a.half + b.half = 0 ∧
         ∀ shared, checkJoint shared [a, b] = false) := by
-  refine ⟨⟨⟨0, .empty, .empty, 0, 1, 1⟩, ⟨1, .empty, .empty, 0, 1, 1⟩, by decide, by decide, rfl,
+  refine ⟨⟨⟨0, .empty, .empty, 0, 1, 1, 0, 0, 0⟩, ⟨1, .empty, .empty, 0, 1, 1, 0, 0, 0⟩, by decide, by decide, rfl,
       fun shared => ?_⟩,
-    ⟨⟨0, ⟨#[0]⟩, .empty, 0, 1, 1⟩, ⟨1, ⟨#[1]⟩, .empty, 1, -1, 0⟩, by decide, by decide,
+    ⟨⟨0, ⟨#[0]⟩, .empty, 0, 1, 1, 0, 0, 0⟩, ⟨1, ⟨#[1]⟩, .empty, 1, -1, 0, 0, 0, 0⟩, by decide, by decide,
       by decide, fun shared => ?_⟩⟩
   · refine Bool.eq_false_iff.2 (fun h => ?_)
     obtain ⟨j, hl, _⟩ := (checkJoint_iff _ _).1 h
@@ -385,25 +344,19 @@ theorem tensor_not_final :
   · refine Bool.eq_false_iff.2 (fun h => ?_)
     obtain ⟨j, hl, _⟩ := (checkJoint_iff _ _).1 h
     have h12 : (⟨#[0]⟩ : ByteArray) = ⟨#[1]⟩ :=
-      (j.shared.agree ⟨0, ⟨#[0]⟩, .empty, 0, 1, 1⟩ (by rw [hl]; simp)).trans
-        (j.shared.agree ⟨1, ⟨#[1]⟩, .empty, 1, -1, 0⟩ (by rw [hl]; simp)).symm
+      (j.shared.agree ⟨0, ⟨#[0]⟩, .empty, 0, 1, 1, 0, 0, 0⟩ (by rw [hl]; simp)).trans
+        (j.shared.agree ⟨1, ⟨#[1]⟩, .empty, 1, -1, 0, 0, 0, 0⟩ (by rw [hl]; simp)).symm
     exact absurd h12 (by decide)
-
 /-! ## 3. Many turns: a floor book and its spent digests -/
-
 /-- Balances by vat: the reading of a floor book's user accounts in one asset. -/
 abbrev Ledger := VatId → Int
-
 /-- Apply one half-edge. -/
 def applyLeg (L : Ledger) (t : LocalTurn) : Ledger :=
   fun v => if v = t.vat then L v + t.half else L v
-
 /-- Apply the half-edges of a turn. -/
 def applyLegs (L : Ledger) (legs : List LocalTurn) : Ledger := legs.foldl applyLeg L
-
 /-- The total over a set of vats. -/
 def total (vats : List VatId) (L : Ledger) : Int := (vats.map L).sum
-
 theorem total_applyLeg_of_not_mem (L : Ledger) (t : LocalTurn) : ∀ vats : List VatId,
     t.vat ∉ vats → total vats (applyLeg L t) = total vats L
   | [], _ => by rfl
@@ -413,7 +366,6 @@ theorem total_applyLeg_of_not_mem (L : Ledger) (t : LocalTurn) : ∀ vats : List
     have hval : applyLeg L t v = L v := by simp [applyLeg, hv]
     simp only [total, List.map_cons, List.sum_cons] at ih ⊢
     rw [ih, hval]
-
 theorem total_applyLeg (L : Ledger) (t : LocalTurn) : ∀ vats : List VatId, vats.Nodup →
     t.vat ∈ vats → total vats (applyLeg L t) = total vats L + t.half
   | [], _, h => by cases h
@@ -434,7 +386,6 @@ theorem total_applyLeg (L : Ledger) (t : LocalTurn) : ∀ vats : List VatId, vat
       simp only [total, List.map_cons, List.sum_cons] at ih ⊢
       rw [ih, hval]
       omega
-
 theorem total_applyLegs (vats : List VatId) (hnd : vats.Nodup) :
     ∀ (legs : List LocalTurn) (L : Ledger), (∀ t, t ∈ legs → t.vat ∈ vats) →
       total vats (applyLegs L legs) = total vats L + (legs.map (·.half)).sum
@@ -445,7 +396,6 @@ theorem total_applyLegs (vats : List VatId) (hnd : vats.Nodup) :
     rw [ih, total_applyLeg L t vats hnd (h t (by simp))]
     simp only [List.map_cons, List.sum_cons]
     omega
-
 theorem applyLegs_eq_sum : ∀ (legs : List LocalTurn) (L : Ledger) (v : VatId),
     applyLegs L legs v = L v + (legs.map (fun t => if v = t.vat then t.half else 0)).sum
   | [], L, v => by simp [applyLegs]
@@ -454,7 +404,6 @@ theorem applyLegs_eq_sum : ∀ (legs : List LocalTurn) (L : Ledger) (v : VatId),
     simp only [applyLegs, List.foldl_cons, List.map_cons, List.sum_cons] at ih ⊢
     rw [ih]
     by_cases hv : v = t.vat <;> simp only [applyLeg, hv, ↓reduceIte] <;> omega
-
 theorem applyLegs_of_not_mem : ∀ (legs : List LocalTurn) (L : Ledger) (v : VatId),
     v ∉ legs.map (·.vat) → applyLegs L legs v = L v
   | [], _, _, _ => by rfl
@@ -465,7 +414,6 @@ theorem applyLegs_of_not_mem : ∀ (legs : List LocalTurn) (L : Ledger) (v : Vat
     simp only [applyLegs, List.foldl_cons] at ih ⊢
     rw [ih]
     simp [applyLeg, hv]
-
 /-- With distinct vats, a turn moves each of its vats by exactly that vat's half-edge. -/
 theorem applyLegs_of_mem : ∀ (legs : List LocalTurn) (L : Ledger), (legs.map (·.vat)).Nodup →
     ∀ t, t ∈ legs → applyLegs L legs t.vat = L t.vat + t.half
@@ -481,26 +429,21 @@ theorem applyLegs_of_mem : ∀ (legs : List LocalTurn) (L : Ledger), (legs.map (
     · have hne : t.vat ≠ a.vat := fun e => hnd.1 (by rw [← e]; exact List.mem_map_of_mem ht')
       rw [applyLegs_of_mem ts _ hnd.2 t ht']
       simp [applyLeg, hne]
-
 /-- A leg's outflow: a typed posting from the vat's user account into the clearing account. -/
 def debitPosting (clearing : AccountAddr) (asset : AssetId) (t : LocalTurn) : TypedPosting :=
   ⟨.user t.vat, clearing, asset, (-t.half).toNat⟩
-
 /-- A leg's inflow, as a typed posting from the clearing account to the vat's user account. -/
 def creditPosting (clearing : AccountAddr) (asset : AssetId) (t : LocalTurn) : TypedPosting :=
   ⟨clearing, .user t.vat, asset, t.half.toNat⟩
-
 /-- The typed postings of a turn: every outflow into the clearing account, then every inflow out
 of it, so the clearing account never dips below where it began. -/
 def turnPostings (clearing : AccountAddr) (asset : AssetId) (legs : List LocalTurn) :
     List TypedPosting :=
   legs.map (debitPosting clearing asset) ++ legs.map (creditPosting clearing asset)
-
 /-- What one posting adds to one account. -/
 def postingNet (addr : AccountAddr) (asset : AssetId) (p : TypedPosting) : Int :=
   (if addr = p.destination ∧ asset = p.asset then (p.amount : Int) else 0) -
     (if addr = p.source ∧ asset = p.asset then (p.amount : Int) else 0)
-
 /-- An admitted batch is the raw application of its postings. -/
 theorem admitBatch_eq_foldl : ∀ (ps : List TypedPosting) (fb fb' : FloorBook),
     FloorBook.admitBatch fb ps = some fb' → fb' = ps.foldl FloorBook.applyRaw fb
@@ -517,7 +460,6 @@ theorem admitBatch_eq_foldl : ∀ (ps : List TypedPosting) (fb fb' : FloorBook),
       rw [List.foldl_cons, ← h₁]
       exact admitBatch_eq_foldl ps fb₁ fb' h
     · cases h
-
 theorem balance_foldl_applyRaw (addr : AccountAddr) (asset : AssetId) :
     ∀ (ps : List TypedPosting) (fb : FloorBook),
       (ps.foldl FloorBook.applyRaw fb).balance addr asset =
@@ -527,7 +469,6 @@ theorem balance_foldl_applyRaw (addr : AccountAddr) (asset : AssetId) :
     rw [List.foldl_cons, balance_foldl_applyRaw addr asset ps, FloorBook.balance_applyRaw]
     simp only [List.map_cons, List.sum_cons, postingNet]
     omega
-
 theorem sum_map_append_map {α β : Type} (f : β → Int) (g h : α → β) : ∀ l : List α,
     ((l.map g ++ l.map h).map f).sum = (l.map (fun x => f (g x) + f (h x))).sum
   | [] => by simp
@@ -536,7 +477,6 @@ theorem sum_map_append_map {α β : Type} (f : β → Int) (g h : α → β) : �
     simp only [List.map_cons, List.map_append, List.sum_cons, List.sum_append,
       List.cons_append] at ih ⊢
     omega
-
 /-- A leg's two postings move its own vat's account by its half-edge and no other vat's. -/
 theorem legPostings_net (clearing : AccountAddr) (hc : clearing.kind ≠ .user) (asset : AssetId)
     (v : VatId) (t : LocalTurn) :
@@ -548,7 +488,6 @@ theorem legPostings_net (clearing : AccountAddr) (hc : clearing.kind ≠ .user) 
     ⟨fun h => by simpa [AccountAddr.user] using h, fun h => by rw [h]⟩
   simp only [postingNet, debitPosting, creditPosting, hne, huser, and_true, ↓reduceIte]
   by_cases hv : v = t.vat <;> simp only [hv, ↓reduceIte] <;> omega
-
 theorem turnPostings_net (clearing : AccountAddr) (hc : clearing.kind ≠ .user) (asset : AssetId)
     (v : VatId) (legs : List LocalTurn) :
     ((turnPostings clearing asset legs).map (postingNet (.user v) asset)).sum =
@@ -556,7 +495,6 @@ theorem turnPostings_net (clearing : AccountAddr) (hc : clearing.kind ≠ .user)
   rw [turnPostings, sum_map_append_map]
   exact congrArg List.sum
     (List.map_congr_left fun t _ => legPostings_net clearing hc asset v t)
-
 theorem admitBatch_append : ∀ (ps qs : List TypedPosting) (fb : FloorBook),
     FloorBook.admitBatch fb (ps ++ qs) =
       (FloorBook.admitBatch fb ps).bind (FloorBook.admitBatch · qs)
@@ -566,14 +504,12 @@ theorem admitBatch_append : ∀ (ps qs : List TypedPosting) (fb : FloorBook),
     cases FloorBook.admitPosting fb p with
     | none => simp
     | some fb₁ => exact admitBatch_append ps qs fb₁
-
 theorem minBalance?_foldl_applyRaw (addr : AccountAddr) (asset : AssetId) :
     ∀ (ps : List TypedPosting) (fb : FloorBook),
       (ps.foldl FloorBook.applyRaw fb).minBalance? addr asset = fb.minBalance? addr asset
   | [], _ => by rw [List.foldl_nil]
   | p :: ps, fb => by
     rw [List.foldl_cons, minBalance?_foldl_applyRaw addr asset ps, FloorBook.minBalance?_applyRaw]
-
 /-- A posting between two accounts is admitted when its source stays at or above its floor. -/
 theorem admitPosting_of_floor (fb : FloorBook) (p : TypedPosting) (hsd : p.source ≠ p.destination)
     (h : ∀ f, fb.minBalance? p.source p.asset = some f →
@@ -589,7 +525,6 @@ theorem admitPosting_of_floor (fb : FloorBook) (p : TypedPosting) (hsd : p.sourc
     have hd : decide (f ≤ (fb.applyRaw p).balance p.source p.asset) = true :=
       decide_eq_true (by have := h f hm; rw [hb]; omega)
     simp [hd]
-
 theorem debits_admitted (c : AccountAddr) (hc : c.kind ≠ .user) (a : AssetId) :
     ∀ (legs : List LocalTurn) (fb : FloorBook), (legs.map (·.vat)).Nodup →
       (∀ t, t ∈ legs → ∀ f, fb.minBalance? (.user t.vat) a = some f →
@@ -611,7 +546,6 @@ theorem debits_admitted (c : AccountAddr) (hc : c.kind ≠ .user) (a : AssetId) 
         simp only [debitPosting, hne, huc x.vat, false_and, ↓reduceIte]
         omega)
     exact ⟨fb', by rw [List.map_cons, FloorBook.admitBatch, hp]; exact hfb'⟩
-
 theorem credits_admitted (c : AccountAddr) (hc : c.kind ≠ .user) (a : AssetId) :
     ∀ (legs : List LocalTurn) (fb : FloorBook),
       (∀ f, fb.minBalance? c a = some f →
@@ -634,7 +568,6 @@ theorem credits_admitted (c : AccountAddr) (hc : c.kind ≠ .user) (a : AssetId)
         simp only [creditPosting, hcu, false_and, and_self, ↓reduceIte]
         omega)
     exact ⟨fb', by rw [List.map_cons, FloorBook.admitBatch, hp]; exact hfb'⟩
-
 /-- What the outflows of a turn leave in its clearing account. -/
 theorem debits_net_clearing (c : AccountAddr) (hc : c.kind ≠ .user) (a : AssetId) :
     ∀ legs : List LocalTurn, ((legs.map (debitPosting c a)).map (postingNet c a)).sum =
@@ -646,7 +579,6 @@ theorem debits_net_clearing (c : AccountAddr) (hc : c.kind ≠ .user) (a : Asset
     simp only [List.map_cons, List.sum_cons, postingNet, debitPosting, hcu, false_and, and_self,
       ↓reduceIte]
     omega
-
 /-- **The floors are the only reason a book refuses a turn's postings.** On a book whose floors
 hold, the postings of legs with distinct vats and half-edges summing to zero are admitted, provided
 no vat is taken below its configured floor. -/
@@ -669,41 +601,51 @@ theorem turnPostings_admitted (c : AccountAddr) (hc : c.kind ≠ .user) (a : Ass
     rw [hf₁, balance_foldl_applyRaw, debits_net_clearing c hc a, hbal]
     omega)
   exact ⟨fb₂, by rw [turnPostings, admitBatch_append, h₁]; exact h₂⟩
-
 /-- The ledger: a floor book, the asset the vats' balances are held in, and the turn digests
 already applied, as a sorted set of their 256-bit readings. -/
 structure LedgerState where
   book : FloorBook
   asset : AssetId
   seen : RevokedSet
-
+  epoch : Nat := 0
 /-- A vat's balance is its user account's balance in the book. -/
 def LedgerState.balances (s : LedgerState) : Ledger :=
   fun v => s.book.balance (.user v) s.asset
-
 /-- The 256-bit reading of a turn digest. -/
 def turnKey (shared : ByteArray) : Nat := ofBE shared.data.toList
-
 /-- The escrow account a turn clears through, named by the turn's digest. -/
 def turnClearing (shared : ByteArray) : AccountAddr := .escrow (turnKey shared)
-
 theorem turnClearing_kind (shared : ByteArray) : (turnClearing shared).kind ≠ .user := by
   simp [turnClearing, AccountAddr.escrow]
-
 /-- The guard of a step: the turn checks, is new, touches only vats of the ledger, and every
 leg's `pre` is that vat's balance in the book. -/
 def stepOk (n : Nat) (s : LedgerState) (shared : ByteArray) (legs : List LocalTurn) : Bool :=
   checkJoint shared legs && !s.seen.contains (turnKey shared) &&
+    legs.all (fun t => decide (t.asset = s.asset ∧ t.epoch = s.epoch)) &&
     legs.all (fun t => decide (t.vat < n) && decide (t.pre = s.balances t.vat))
-
 /-- Apply one joint turn: under the guard, the book admits the turn's postings floor by floor. -/
 def stepJoint (n : Nat) (s : LedgerState) (shared : ByteArray) (legs : List LocalTurn) :
     Option LedgerState :=
   if stepOk n s shared legs then
     (s.book.admitBatch (turnPostings (turnClearing shared) s.asset legs)).map
-      fun book => ⟨book, s.asset, s.seen.insert (turnKey shared)⟩
+      fun book => ⟨book, s.asset, s.seen.insert (turnKey shared), s.epoch⟩
   else none
-
+/-- Accepted legs belong to this asset and epoch, not merely a matching balance. -/
+theorem stepJoint_domain {n : Nat} {s f : LedgerState} {tid : ByteArray}
+    {legs : List LocalTurn} (h : stepJoint n s tid legs = some f) :
+    ∀ t ∈ legs, t.asset = s.asset ∧ t.epoch = s.epoch := by
+  unfold stepJoint at h
+  split at h
+  · rename_i hc
+    simp only [stepOk, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hc
+    exact hc.1.2
+  · cases h
+/-- A failed batch publishes no intermediate debit and spends no replay key. -/
+def applyJoint (n : Nat) (s : LedgerState) (shared : ByteArray) (legs : List LocalTurn) : LedgerState :=
+  (stepJoint n s shared legs).getD s
+theorem applyJoint_rollback {n : Nat} {s : LedgerState} {shared : ByteArray} {legs : List LocalTurn}
+    (h : stepJoint n s shared legs = none) : applyJoint n s shared legs = s := by
+  simp [applyJoint, h]
 /-- Apply a sequence of joint turns. -/
 def runTrace (n : Nat) : LedgerState → List (ByteArray × List LocalTurn) → Option LedgerState
   | s, [] => some s
@@ -711,20 +653,17 @@ def runTrace (n : Nat) : LedgerState → List (ByteArray × List LocalTurn) → 
     match stepJoint n s shared legs with
     | some s' => runTrace n s' rest
     | none => none
-
 /-- A sequence of joint turns, each applied to the ledger the last one left. -/
 def ValidJointTrace (n : Nat) :
     LedgerState → List (ByteArray × List LocalTurn) → LedgerState → Prop
   | s, [], s' => s' = s
   | s, (shared, legs) :: rest, s' =>
     ∃ s₁, stepJoint n s shared legs = some s₁ ∧ ValidJointTrace n s₁ rest s'
-
 theorem validJointTrace_cons {n : Nat} {s s' : LedgerState} {shared : ByteArray}
     {legs : List LocalTurn} {rest : List (ByteArray × List LocalTurn)} :
     ValidJointTrace n s ((shared, legs) :: rest) s' ↔
       ∃ s₁, stepJoint n s shared legs = some s₁ ∧ ValidJointTrace n s₁ rest s' := by
   simp only [ValidJointTrace]
-
 /-- **`runTrace` runs exactly the valid traces.** -/
 theorem runTrace_eq_some_iff (n : Nat) (trace : List (ByteArray × List LocalTurn)) :
     ∀ s s' : LedgerState, runTrace n s trace = some s' ↔ ValidJointTrace n s trace s' := by
@@ -740,7 +679,6 @@ theorem runTrace_eq_some_iff (n : Nat) (trace : List (ByteArray × List LocalTur
     cases hs : stepJoint n s shared legs with
     | none => simp
     | some s₁ => simp [ih]
-
 theorem stepJoint_eq_some {n : Nat} {s s' : LedgerState} {shared : ByteArray}
     {legs : List LocalTurn} (h : stepJoint n s shared legs = some s') :
     checkJoint shared legs = true ∧ s.seen.contains (turnKey shared) = false ∧
@@ -757,9 +695,8 @@ theorem stepJoint_eq_some {n : Nat} {s s' : LedgerState} {shared : ByteArray}
     | some book =>
       rw [hb] at h
       cases h
-      exact ⟨hc.1.1, hc.1.2, hc.2, rfl, rfl, rfl⟩
+      exact ⟨hc.1.1.1, hc.1.1.2, hc.2, rfl, rfl, rfl⟩
   · cases h
-
 /-- **A step is the turn's half-edges on the book's balances.** -/
 theorem stepJoint_balances {n : Nat} {s s' : LedgerState} {shared : ByteArray}
     {legs : List LocalTurn} (h : stepJoint n s shared legs = some s') (v : VatId) :
@@ -770,7 +707,6 @@ theorem stepJoint_balances {n : Nat} {s s' : LedgerState} {shared : ByteArray}
     s.asset v legs]
   simp only [LedgerState.balances]
   rw [ha, hf, balance_foldl_applyRaw]
-
 /-- **Receipts and ledger agree.** After a step every touched vat holds its receipt's `post`, and
 every other vat holds what it held. -/
 theorem stepJoint_post_balance {n : Nat} {s s' : LedgerState} {shared : ByteArray}
@@ -783,7 +719,6 @@ theorem stepJoint_post_balance {n : Nat} {s s' : LedgerState} {shared : ByteArra
   · rw [stepJoint_balances h, applyLegs_of_mem _ _ j.distinct t ht, ← (hv t ht).2,
       j.valid t ht]
   · rw [stepJoint_balances h, applyLegs_of_not_mem _ _ _ hv']
-
 /-- **A step conserves the ledger's total.** -/
 theorem stepJoint_conserves {n : Nat} {s s' : LedgerState} {shared : ByteArray}
     {legs : List LocalTurn} (h : stepJoint n s shared legs = some s') :
@@ -794,7 +729,6 @@ theorem stepJoint_conserves {n : Nat} {s s' : LedgerState} {shared : ByteArray}
   rw [hb, total_applyLegs (List.range n) List.nodup_range j.legs s.balances
     (fun t ht => List.mem_range.2 (hv t ht).1), j.balanced]
   omega
-
 /-- **A step conserves the total over the vats it touches**: the sum of `pre`, then of `post`. -/
 theorem stepJoint_conserves_active {n : Nat} {s s' : LedgerState} {shared : ByteArray}
     {legs : List LocalTurn} (h : stepJoint n s shared legs = some s') :
@@ -810,7 +744,6 @@ theorem stepJoint_conserves_active {n : Nat} {s s' : LedgerState} {shared : Byte
     simp only [total, List.map_map]
     exact congrArg List.sum (List.map_congr_left fun t ht => (stepJoint_post_balance h).1 t ht)
   exact ⟨hpre, hpost, by rw [hpost, hpre, jointTurn_conserves_total_balance j]⟩
-
 /-- **A step overdraws no vat.** -/
 theorem stepJoint_no_overdraft {n : Nat} {s s' : LedgerState} {shared : ByteArray}
     {legs : List LocalTurn} (h : stepJoint n s shared legs = some s') (v : VatId)
@@ -823,7 +756,6 @@ theorem stepJoint_no_overdraft {n : Nat} {s s' : LedgerState} {shared : ByteArra
     exact (j.nonneg t ht).2
   · rw [(stepJoint_post_balance h).2 v hm]
     exact hv
-
 /-- **A step is an admitted batch on the floor book.** The book admits the turn's typed postings
 and the new ledger holds the result; from floors that hold, the floors still hold (no user account
 is negative), every asset's sum is unchanged, and the vats moved by exactly the half-edges. -/
@@ -838,7 +770,6 @@ theorem stepJoint_refines_floorBook {n : Nat} {s s' : LedgerState} {shared : Byt
   exact ⟨hb, hfl', hsum, stepJoint_balances h, fun v =>
     Obend.Ledger.nonIssuer_balance_nonneg_of_floorsHold hfl' (.user v) s'.asset
       (by simp [AccountAddr.user])⟩
-
 /-- **The step is complete.** On a book whose floors hold, a turn that passes the guard is applied
 unless it takes a vat below a floor the book configures: guard and floors are the only refusals. -/
 theorem stepJoint_complete {n : Nat} {s : LedgerState} {shared : ByteArray}
@@ -848,7 +779,7 @@ theorem stepJoint_complete {n : Nat} {s : LedgerState} {shared : ByteArray}
   have hok' := hok
   simp only [stepOk, Bool.and_eq_true, Bool.not_eq_true', List.all_eq_true,
     decide_eq_true_eq] at hok'
-  obtain ⟨j, hl, _⟩ := (checkJoint_iff shared legs).1 hok'.1.1
+  obtain ⟨j, hl, _⟩ := (checkJoint_iff shared legs).1 hok'.1.1.1
   obtain ⟨fb', hfb'⟩ := turnPostings_admitted (turnClearing shared) (turnClearing_kind shared)
     s.asset s.book hfl legs (hl ▸ j.distinct) (hl ▸ j.balanced) (fun t ht f hf => by
       have h1 := hmin t ht f hf
@@ -856,15 +787,13 @@ theorem stepJoint_complete {n : Nat} {s : LedgerState} {shared : ByteArray}
       have h3 := j.valid t (hl ▸ ht)
       simp only [LedgerState.balances] at h2
       omega)
-  exact ⟨⟨fb', s.asset, s.seen.insert (turnKey shared)⟩, by
+  exact ⟨⟨fb', s.asset, s.seen.insert (turnKey shared), s.epoch⟩, by
     simp only [stepJoint, hok, ↓reduceIte, hfb', Option.map_some]⟩
-
 /-- **A replayed turn is refused.** -/
 theorem replayed_turn_refused (n : Nat) (s : LedgerState) (shared : ByteArray)
     (legs : List LocalTurn) (h : s.seen.contains (turnKey shared) = true) :
     stepJoint n s shared legs = none := by
   simp [stepJoint, stepOk, h]
-
 /-- **A vat named twice is refused**: no leg's half-edge is counted in the sum and then
 overwritten on the ledger. -/
 theorem duplicate_vat_refused (n : Nat) (s : LedgerState) (shared : ByteArray)
@@ -875,7 +804,6 @@ theorem duplicate_vat_refused (n : Nat) (s : LedgerState) (shared : ByteArray)
   | some s' =>
     obtain ⟨j, hl, _⟩ := (checkJoint_iff shared legs).1 (stepJoint_eq_some hs).1
     exact absurd (hl ▸ j.distinct) h
-
 /-- **A `pre` that is not the vat's balance is refused**: a turn cannot restate what a vat held. -/
 theorem unbound_pre_refused (n : Nat) (s : LedgerState) (shared : ByteArray)
     (legs : List LocalTurn) (t : LocalTurn) (ht : t ∈ legs) (h : t.pre ≠ s.balances t.vat) :
@@ -883,7 +811,6 @@ theorem unbound_pre_refused (n : Nat) (s : LedgerState) (shared : ByteArray)
   cases hs : stepJoint n s shared legs with
   | none => rfl
   | some s' => exact absurd ((stepJoint_eq_some hs).2.2.1 t ht).2 h
-
 /-- **An overdraft is refused**: no leg leaves its vat below zero. -/
 theorem overdraft_refused (n : Nat) (s : LedgerState) (shared : ByteArray)
     (legs : List LocalTurn) (t : LocalTurn) (ht : t ∈ legs) (h : t.post < 0) :
@@ -894,7 +821,6 @@ theorem overdraft_refused (n : Nat) (s : LedgerState) (shared : ByteArray)
     obtain ⟨j, hl, _⟩ := (checkJoint_iff shared legs).1 (stepJoint_eq_some hs).1
     have := (j.nonneg t (hl ▸ ht)).2
     omega
-
 /-- What every step preserves, every valid trace preserves. -/
 theorem jointTrace_lift {n : Nat} (R : LedgerState → LedgerState → Prop) (hrefl : ∀ s, R s s)
     (htrans : ∀ a b c, R a b → R b c → R a c)
@@ -912,7 +838,6 @@ theorem jointTrace_lift {n : Nat} (R : LedgerState → LedgerState → Prop) (hr
     intro s s' h
     obtain ⟨s₁, hs, hr⟩ := validJointTrace_cons.1 h
     exact htrans _ _ _ (hstep _ _ _ _ hs) (ih _ _ hr)
-
 /-- **Conservation over any number of turns.** A trace of joint turns leaves the ledger's total
 where it was, and never forgets a digest it has applied. -/
 theorem jointTrace_conserves_total_balance (n : Nat) (trace : List (ByteArray × List LocalTurn))
@@ -927,7 +852,6 @@ theorem jointTrace_conserves_total_balance (n : Nat) (trace : List (ByteArray ×
     (fun _ _ _ _ hs => ⟨stepJoint_conserves hs, fun k hk => by
       rw [(stepJoint_eq_some hs).2.2.2.2.2]
       exact (RevokedSet.contains_insert _ _ _).2 (.inr hk)⟩) trace s s' h
-
 /-- **No overdraft over any number of turns**: a vat not negative before is not negative after. -/
 theorem jointTrace_no_overdraft (n : Nat) (trace : List (ByteArray × List LocalTurn))
     (s s' : LedgerState) (h : ValidJointTrace n s trace s') :
@@ -935,7 +859,6 @@ theorem jointTrace_no_overdraft (n : Nat) (trace : List (ByteArray × List Local
   jointTrace_lift (fun s s' => ∀ v, 0 ≤ s.balances v → 0 ≤ s'.balances v) (fun _ _ hv => hv)
     (fun _ _ _ hab hbc v hv => hbc v (hab v hv))
     (fun _ _ _ _ hs v hv => stepJoint_no_overdraft hs v hv) trace s s' h
-
 /-- **A trace keeps the book's floors.** From floors that hold, any number of joint turns leaves
 floors that hold, every asset's sum over all accounts unchanged, and no vat negative. -/
 theorem jointTrace_preserves_floors (n : Nat) (trace : List (ByteArray × List LocalTurn))
@@ -954,7 +877,6 @@ theorem jointTrace_preserves_floors (n : Nat) (trace : List (ByteArray × List L
   exact ⟨hR.1, hR.2, fun v =>
     Obend.Ledger.nonIssuer_balance_nonneg_of_floorsHold hR.1 (.user v) s'.asset
       (by simp [AccountAddr.user])⟩
-
 /-- Every turn of a valid trace was new when the trace began. -/
 theorem jointTrace_fresh (n : Nat) (trace : List (ByteArray × List LocalTurn)) :
     ∀ s s' : LedgerState, ValidJointTrace n s trace s' →
@@ -974,7 +896,6 @@ theorem jointTrace_fresh (n : Nat) (trace : List (ByteArray × List LocalTurn)) 
       | true =>
         rw [hseen, (RevokedSet.contains_insert _ _ _).2 (.inr hc)] at h1
         cases h1
-
 /-- **No turn digest is applied twice in a trace.** -/
 theorem jointTrace_no_replay (n : Nat) (s s' : LedgerState) (shared : ByteArray)
     (legs legs' : List LocalTurn) (rest : List (ByteArray × List LocalTurn))
@@ -985,9 +906,7 @@ theorem jointTrace_no_replay (n : Nat) (s s' : LedgerState) (shared : ByteArray)
     jointTrace_fresh n rest s₁ s' hr (shared, legs') hm
   rw [(stepJoint_eq_some hs).2.2.2.2.2, RevokedSet.contains_insert_self] at h1
   cases h1
-
 /-! ## 4. The joint turn over commitments -/
-
 /-- A leg whose half-edge is hidden: its direction and a 256-bit commitment to its magnitude. -/
 structure CommittedLeg where
   vat : VatId
@@ -1019,66 +938,61 @@ def debits (legs : List CommittedLeg) : List (BitVec 256) :=
 def credits (legs : List CommittedLeg) : List (BitVec 256) :=
   (legs.filter (·.credit)).map (·.commitment)
 
-/-- The checker for a joint turn over commitments: the pullback over the digest of the committed
-forest, and the debit commitments balancing the credit commitments. -/
-def checkJointCommitted (shared : ByteArray) (legs : List CommittedLeg) : Bool :=
+/-- cSHAKE commits to both the amount and the blinding at their full 256-bit widths.
+The affine ring commitment is not a binding cryptographic commitment and is not used here. -/
+def openingPreimage (o : Opening) : List UInt8 := encodeFields [be 32 o.value.toNat, be 32 o.blind.toNat]
+def openingCommit (o : Opening) : BitVec 256 :=
+  BitVec.ofNat 256 (ofBE (cshake256Bytes "OBEND.JOINT.OPENING/v1".toUTF8.toList (openingPreimage o)))
+
+/-- An opening is bound at full width, with an explicit pair if cSHAKE collides. -/
+def openingCommit_extract (a b : Opening) (h : openingCommit a = openingCommit b) :
+    PSum (PLift (a = b)) (CollisionPair (cshake256Bytes "OBEND.JOINT.OPENING/v1".toUTF8.toList)
+      (fun x => x = openingPreimage a ∨ x = openingPreimage b)) := by
+  apply extractBinding _ (openingPreimage a) (openingPreimage b)
+  · intro he
+    have hf := encodeFields_injective _ _ he
+    simp only [List.cons.injEq, and_true] at hf
+    have bound (v : BitVec 256) : v.toNat < 256 ^ 32 := by
+      simpa using v.isLt
+    have hv := BitVec.eq_of_toNat_eq (be_injective (bound a.value) (bound b.value) hf.1)
+    have hb := BitVec.eq_of_toNat_eq (be_injective (bound a.blind) (bound b.blind) hf.2)
+    cases a; cases b; simp_all
+  · have hn := congrArg BitVec.toNat h
+    have hb (x : List UInt8) : ofBE (cshake256Bytes "OBEND.JOINT.OPENING/v1".toUTF8.toList x) < 2 ^ 256 := by
+      have hlt := ofBE_lt (cshake256Bytes "OBEND.JOINT.OPENING/v1".toUTF8.toList x)
+      rwa [cshake256Bytes_length, (by decide : (256 : Nat) ^ 32 = 2 ^ 256)] at hlt
+    simpa only [openingCommit, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb _)] using hn
+
+/-- Audited openings are supplied to the verifier. This is transparent settlement, with no
+zero-knowledge claim: both correspondence and integer conservation are checked, not premises. -/
+def checkJointCommitted (shared : ByteArray) (legs : List CommittedLeg)
+    (dOpen cOpen : List Opening) : Bool :=
   legs.all (fun t => decide (t.turnId = shared)) &&
     decide (shared = forestDigest (legs.map CommittedLeg.legBytes)) &&
-    homCheck (debits legs) (credits legs)
+    decide ((legs.map (·.vat)).Nodup) &&
+    decide (debits legs = dOpen.map openingCommit) && decide (credits legs = cOpen.map openingCommit) &&
+    decide (natSum (dOpen.map (·.value)) = natSum (cOpen.map (·.value)))
 
-theorem checkJointCommitted_iff (shared : ByteArray) (legs : List CommittedLeg) :
-    checkJointCommitted shared legs = true ↔
-      (∀ t, t ∈ legs → t.turnId = shared) ∧
-        shared = forestDigest (legs.map CommittedLeg.legBytes) ∧
-        bvSum (debits legs) = bvSum (credits legs) := by
-  simp only [checkJointCommitted, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq,
-    homCheck_iff, and_assoc]
-
-/-- **Conservation of hidden half-edges.** If the committed checker passes, the debit and credit
-commitments open to `dOpen` and `cOpen` with equal blinding totals, and neither value total wraps,
-then the hidden debits and credits are equal as natural numbers and every leg names the digest of
-this committed forest. The checker read commitments only. -/
-theorem jointTurn_committed_conservation_sound (key : CommitKey) (shared : ByteArray)
+theorem jointTurn_committed_conservation_sound (shared : ByteArray)
     (legs : List CommittedLeg) (dOpen cOpen : List Opening)
-    (hcheck : checkJointCommitted shared legs = true)
-    (hd : debits legs = dOpen.map (Opening.commit key))
-    (hc : credits legs = cOpen.map (Opening.commit key))
-    (hblind : blindSum dOpen = blindSum cOpen)
-    (hdw : natSum (dOpen.map (·.value)) < 2 ^ 256) (hcw : natSum (cOpen.map (·.value)) < 2 ^ 256) :
+    (hcheck : checkJointCommitted shared legs dOpen cOpen = true) :
     natSum (dOpen.map (·.value)) = natSum (cOpen.map (·.value)) ∧
+      debits legs = dOpen.map openingCommit ∧ credits legs = cOpen.map openingCommit ∧
+      (legs.map (·.vat)).Nodup ∧
       ∀ t, t ∈ legs → t.turnId = forestDigest (legs.map CommittedLeg.legBytes) := by
-  obtain ⟨ha, hp, hs⟩ := (checkJointCommitted_iff shared legs).1 hcheck
-  refine ⟨(private_conservation_nat_sum key dOpen cOpen hblind hdw hcw).1 ?_,
-    fun t ht => (ha t ht).trans hp⟩
-  rw [homCheck_iff, ← hd, ← hc]
-  exact hs
+  simp only [checkJointCommitted, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hcheck
+  obtain ⟨⟨⟨⟨⟨ha, hp⟩, hnd⟩, hd⟩, hc⟩, hs⟩ := hcheck
+  exact ⟨hs, hd, hc, hnd, fun t ht => (ha t ht).trans hp⟩
 
-/-- The premises of `jointTurn_committed_conservation_sound` are met together: a debit and a credit
-of `5` under blinding `7`. -/
+/-- Actual cSHAKE commitments inhabit the checked path. -/
 theorem jointTurn_committed_inhabited :
-    ∃ (key : CommitKey) (shared : ByteArray) (legs : List CommittedLeg) (dOpen cOpen : List Opening),
-      checkJointCommitted shared legs = true ∧ debits legs = dOpen.map (Opening.commit key) ∧
-        credits legs = cOpen.map (Opening.commit key) ∧ blindSum dOpen = blindSum cOpen ∧
-        legs.length = 2 := by
-  refine ⟨demoKey,
-    forestDigest [CommittedLeg.legBytes ⟨0, .empty, false, Opening.commit demoKey ⟨5#256, 7#256⟩⟩,
-      CommittedLeg.legBytes ⟨1, .empty, true, Opening.commit demoKey ⟨5#256, 7#256⟩⟩],
-    [⟨0, forestDigest [CommittedLeg.legBytes ⟨0, .empty, false, Opening.commit demoKey ⟨5#256, 7#256⟩⟩,
-        CommittedLeg.legBytes ⟨1, .empty, true, Opening.commit demoKey ⟨5#256, 7#256⟩⟩], false,
-        Opening.commit demoKey ⟨5#256, 7#256⟩⟩,
-      ⟨1, forestDigest [CommittedLeg.legBytes ⟨0, .empty, false, Opening.commit demoKey ⟨5#256, 7#256⟩⟩,
-        CommittedLeg.legBytes ⟨1, .empty, true, Opening.commit demoKey ⟨5#256, 7#256⟩⟩], true,
-        Opening.commit demoKey ⟨5#256, 7#256⟩⟩],
-    [⟨5#256, 7#256⟩], [⟨5#256, 7#256⟩], ?_, ?_, ?_, rfl, rfl⟩
-  · rw [checkJointCommitted_iff]
-    refine ⟨?_, ?_, ?_⟩
-    · intro t ht
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at ht
-      rcases ht with rfl | rfl <;> rfl
-    · simp only [List.map_cons, List.map_nil, CommittedLeg.legBytes]
-    · simp [debits, credits]
-  · simp [debits]
-  · simp [credits]
+    ∃ shared legs, checkJointCommitted shared legs [⟨5#256, 7#256⟩] [⟨5#256, 7#256⟩] = true ∧
+      legs.length = 2 := by
+  let c := openingCommit ⟨5#256, 7#256⟩
+  let raw : List CommittedLeg := [⟨0, .empty, false, c⟩, ⟨1, .empty, true, c⟩]
+  let tid := forestDigest (raw.map CommittedLeg.legBytes)
+  refine ⟨tid, [⟨0, tid, false, c⟩, ⟨1, tid, true, c⟩], ?_, rfl⟩
+  simp [checkJointCommitted, debits, credits, tid, raw, CommittedLeg.legBytes, c]
 
 /-! ## 5. Receipts with open ports -/
 
@@ -1407,11 +1321,56 @@ theorem composeCoReceipts_closed_sound (env : WireEnv) (shared : ByteArray) (rs 
       have hport : f.port = w.port := UInt64.toNat_inj.1 hk
       exact ⟨a, f, ha, hf, hport, wire_checked env rs hlin hw ha hb hf hwm hport⟩
 
+/-- Promise settlement publishes a batch only after all ports close. An abort, missing leg,
+invalid wire, or failed posting retains the complete ledger, including the clearing account. -/
+def settleCoReceipts (env : WireEnv) (n : Nat) (s : LedgerState) (shared : ByteArray)
+    (rs : List CoReceipt) : LedgerState :=
+  match composeCoReceipts env shared rs with
+  | none => s
+  | some c => if c.openAwaits.isEmpty && c.dangling.isEmpty then applyJoint n s shared c.legs else s
+
+theorem settleCoReceipts_open_rollback {env : WireEnv} {n : Nat} {s : LedgerState}
+    {shared : ByteArray} {rs : List CoReceipt} {c : Composite}
+    (h : composeCoReceipts env shared rs = some c)
+    (ho : c.openAwaits ≠ [] ∨ c.dangling ≠ []) : settleCoReceipts env n s shared rs = s := by
+  simp only [settleCoReceipts, h]
+  rcases ho with ho | ho <;> simp [ho]
+
+/-- Conservation includes refused attempts and selectively withheld legs. -/
+theorem settleCoReceipts_preserves (env : WireEnv) (n : Nat) (s : LedgerState)
+    (shared : ByteArray) (rs : List CoReceipt) (hf : FloorsHold s.book) :
+    FloorsHold (settleCoReceipts env n s shared rs).book ∧
+      ∀ a, (settleCoReceipts env n s shared rs).book.assetSum a = s.book.assetSum a := by
+  unfold settleCoReceipts
+  split
+  · exact ⟨hf, fun _ => rfl⟩
+  · split
+    · unfold applyJoint
+      cases hs : stepJoint n s shared _ with
+      | none => exact ⟨hf, fun _ => rfl⟩
+      | some f => exact ⟨(stepJoint_refines_floorBook hf hs).2.1,
+          (stepJoint_refines_floorBook hf hs).2.2.1⟩
+    · exact ⟨hf, fun _ => rfl⟩
+def runSettlements (env : WireEnv) (n : Nat) :
+    LedgerState → List (ByteArray × List CoReceipt) → LedgerState
+  | s, [] => s
+  | s, (tid, rs) :: rest => runSettlements env n (settleCoReceipts env n s tid rs) rest
+theorem runSettlements_preserves (env : WireEnv) (n : Nat)
+    (attempts : List (ByteArray × List CoReceipt)) (s : LedgerState) (hf : FloorsHold s.book) :
+    FloorsHold (runSettlements env n s attempts).book ∧
+      ∀ a, (runSettlements env n s attempts).book.assetSum a = s.book.assetSum a := by
+  induction attempts generalizing s with
+  | nil => exact ⟨hf, fun _ => rfl⟩
+  | cons e rest ih =>
+    have hs := settleCoReceipts_preserves env n s e.1 e.2 hf
+    have hr := ih _ hs.1
+    exact ⟨hr.1, fun a => (hr.2 a).trans (hs.2 a)⟩
+
 /-! ## 6. A closed diagram -/
 
 /-- A leg of the witness diagram: a vat that held ten units. -/
 def demoLeg (vat : VatId) (half : Int) (tid : ByteArray) : LocalTurn :=
-  ⟨vat, tid, .empty, 10, half, 10 + half⟩
+  ⟨vat, tid, .empty, 10, half, 10 + half, 0, 0, 0⟩
 
 /-- The root grant the witness resolver holds: right `1`, no caveat. -/
 def demoGrant : Block := ⟨1, .const true, .empty, .empty⟩

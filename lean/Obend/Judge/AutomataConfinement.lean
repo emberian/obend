@@ -5,14 +5,15 @@ The four judges/bridges below connect token policies and collateral-preserving c
 `Judge.Format`, `Slot.Protocol`, `Core.Term`, and `Leaf.Book`. Operational bodies are sealed;
 the exported equations and soundness/completeness theorems form their proof interface.
 -/
-
 public import Lean.Data.Json
 public import Obend.Judge.Class
+public import Obend.Digest.Cshake256
+public import Obend.Digest.HashBytes
+public import Obend.Codec.DetCbor
 public import Obend.Judge.Clearing
 public import Obend.Slot.Protocol
 public import Obend.Core.Term
 public import Obend.Leaf.Emit
-
 public section
 namespace Obend.Judge
 open Lean (Json toJson)
@@ -20,9 +21,7 @@ open Obend.Core.Term
 open Obend.Slot.Protocol
 open Obend.Leaf
 set_option autoImplicit false
-
 /-! ## Pillar A: Brzozowski / Table-DFA Trace & Complement Confinement -/
-
 /-- Reserved control tokens (handlebars delimiters and role-header markers) forbidden in untrusted slots. -/
 def forbiddenControlTokens : List String :=
   ["{{", "}}", "<|system|>", "<|assistant|>"]
@@ -72,7 +71,6 @@ theorem brzozowskiMatches_complement (r : BrzozowskiRegex) (tokens : List String
     brzozowskiMatches (.complement r) tokens = !brzozowskiMatches r tokens := by
   induction tokens generalizing r <;> simp_all [brzozowskiMatches, BrzozowskiRegex.deriv,
     BrzozowskiRegex.nullable]
-
 structure TableDfa where
   start : Nat
   accepting : List Nat
@@ -80,7 +78,6 @@ structure TableDfa where
   stateDefaults : List (Nat × Nat) := []
   defaultSink : Nat := 0
   deriving DecidableEq, Repr
-
 @[expose] def TableDfa.step (d : TableDfa) (q : Nat) (tok : String) : Nat :=
   match d.transitions.lookup (q, tok) with
   | some next => next
@@ -123,7 +120,6 @@ def brzozowskiAccepts (d : TableDfa) (states : List Nat) (tokens : List String) 
 theorem brzozowskiRun_singleton (d : TableDfa) (q : Nat) (tokens : List String) :
     brzozowskiRun d [q] tokens = [dfaClassifyFrom d q tokens] := by
   induction tokens generalizing q <;> simp_all [brzozowskiRun, brzozowskiStep, dfaClassifyFrom]
-
 theorem brzozowskiAccepts_singleton_eq (d : TableDfa) (tokens : List String) :
     brzozowskiAccepts d [d.start] tokens = dfaAccepts d tokens := by
   unfold brzozowskiAccepts dfaAccepts dfaClassify
@@ -135,7 +131,6 @@ def TableDfa.complement (d : TableDfa) (numStates : Nat := 2) : TableDfa :=
 theorem dfaClassifyFrom_complement (d : TableDfa) (numStates q : Nat) (tokens : List String) :
     dfaClassifyFrom (d.complement numStates) q tokens = dfaClassifyFrom d q tokens := by
   induction tokens generalizing q <;> simp_all [dfaClassifyFrom, TableDfa.step, TableDfa.complement]
-
 theorem dfaClassify_complement (d : TableDfa) (numStates : Nat) (tokens : List String) :
     dfaClassify (d.complement numStates) tokens = dfaClassify d tokens :=
   dfaClassifyFrom_complement d numStates d.start tokens
@@ -151,33 +146,31 @@ theorem dfaAccepts_complement_iff (d : TableDfa) (numStates : Nat) (tokens : Lis
     (hBound : dfaClassify d tokens < numStates) :
     dfaAccepts (d.complement numStates) tokens = true ↔ dfaAccepts d tokens = false := by
   rw [dfaAccepts_complement_eq d numStates tokens hBound, Bool.not_eq_true']
-/-- Deterministic token encoding for rolling AIR trace commitments (0 axioms, collision-free on vocabulary). -/
-def tokenCode (s : String) : Nat :=
-  ([ ("{{", 101), ("}}", 102), ("<|system|>", 103), ("<|assistant|>", 104),
-     ("hello", 201), ("world", 202), ("injected_prompt", 203), ("alpha", 204),
-     ("bravo", 205), ("charlie", 206), ("delta", 207), ("foo", 208), ("bar", 209),
-     ("baz", 210), ("summarize", 211), ("the", 212), ("quarterly", 213), ("report", 214),
-     ("ignore", 215), ("override", 216), ("clean", 217), ("argument", 218),
-     ("first", 219), ("question", 220), ("safe", 221), ("arg3", 222), ("arg4", 223)
-   ].lookup s).getD (s.utf8ByteSize + 300)
-def compressDigest (acc x : Nat) : Nat := (acc * 1000003 + x + 97) % 1000000007
-def dfaEntryDigest (state : Nat) (tok : String) (next : Nat) : Nat :=
-  compressDigest (compressDigest (compressDigest state (tokenCode tok)) next) 0
-def runningDigestFrom (d : TableDfa) (seed : Nat) (q : Nat) : List String → Nat
+/-- Full-width cSHAKE256 transcript commitments; never a vocabulary-dependent token code. -/
+def traceHash (domain : String) (bs : List UInt8) : BitVec 256 :=
+  BitVec.ofNat 256 (Obend.Digest.HashBytes.ofBE
+    (Obend.Digest.Cshake256.cshake256Bytes domain.toUTF8.data.toList bs))
+def tokenCode (s : String) : BitVec 256 := traceHash "Obend.dfa.token/v1" s.toUTF8.data.toList
+def compressDigest (acc x : BitVec 256) : BitVec 256 :=
+  traceHash "Obend.dfa.chain/v1"
+    (Obend.Digest.HashBytes.be 32 acc.toNat ++ Obend.Digest.HashBytes.be 32 x.toNat)
+def dfaEntryDigest (state : Nat) (tok : String) (next : Nat) : BitVec 256 :=
+  traceHash "Obend.dfa.row/v1" (Obend.Codec.DetCbor.encodeDetCbor
+    (.array [.bytes (toString state).toUTF8, .bytes tok.toUTF8, .bytes (toString next).toUTF8])).data.toList
+def runningDigestFrom (d : TableDfa) (seed : BitVec 256) (q : Nat) : List String → BitVec 256
   | [] => seed
   | tok :: rest =>
     let next := d.step q tok
     let entry := dfaEntryDigest q tok next
     runningDigestFrom d (compressDigest seed entry) next rest
-
-def runningDigest (d : TableDfa) (seed : Nat) (tokens : List String) : Nat :=
+def runningDigest (d : TableDfa) (seed : BitVec 256) (tokens : List String) : BitVec 256 :=
   runningDigestFrom d seed d.start tokens
-@[simp] theorem runningDigestFrom_nil (d : TableDfa) (seed q : Nat) :
+@[simp] theorem runningDigestFrom_nil (d : TableDfa) (seed : BitVec 256) (q : Nat) :
     runningDigestFrom d seed q [] = seed := by exact id rfl
-@[simp] theorem runningDigestFrom_cons (d : TableDfa) (seed q : Nat) (tok : String) (rest : List String) :
+@[simp] theorem runningDigestFrom_cons (d : TableDfa) (seed : BitVec 256) (q : Nat) (tok : String) (rest : List String) :
     runningDigestFrom d seed q (tok :: rest) =
       runningDigestFrom d (compressDigest seed (dfaEntryDigest q tok (d.step q tok))) (d.step q tok) rest := by exact id rfl
-theorem runningDigestFrom_append (d : TableDfa) (seed q : Nat) (xs ys : List String) :
+theorem runningDigestFrom_append (d : TableDfa) (seed : BitVec 256) (q : Nat) (xs ys : List String) :
     runningDigestFrom d seed q (xs ++ ys) =
       runningDigestFrom d (runningDigestFrom d seed q xs) (dfaClassifyFrom d q xs) ys := by
   induction xs generalizing seed q with
@@ -189,10 +182,10 @@ structure DfaTraceRow where
   state : Nat
   sym : String
   next : Nat
-  entryHash : Nat
-  running : Nat
+  entryHash : BitVec 256
+  running : BitVec 256
   deriving DecidableEq, Repr
-def buildDfaTraceFrom (d : TableDfa) (seed : Nat) (q : Nat) : List String → List DfaTraceRow
+def buildDfaTraceFrom (d : TableDfa) (seed : BitVec 256) (q : Nat) : List String → List DfaTraceRow
   | [] => []
   | tok :: rest =>
     let next := d.step q tok
@@ -200,32 +193,31 @@ def buildDfaTraceFrom (d : TableDfa) (seed : Nat) (q : Nat) : List String → Li
     let run' := compressDigest seed entry
     { state := q, sym := tok, next := next, entryHash := entry, running := run' } ::
       buildDfaTraceFrom d run' next rest
-def buildDfaTrace (d : TableDfa) (seed : Nat) (tokens : List String) : List DfaTraceRow :=
+def buildDfaTrace (d : TableDfa) (seed : BitVec 256) (tokens : List String) : List DfaTraceRow :=
   buildDfaTraceFrom d seed d.start tokens
-def verifyDfaTraceRows (d : TableDfa) (seed : Nat) (q : Nat) : List String → List DfaTraceRow → Bool
+def verifyDfaTraceRows (d : TableDfa) (seed : BitVec 256) (q : Nat) : List String → List DfaTraceRow → Bool
   | [], [] => true
   | tok :: restToks, row :: restRows =>
     let next := d.step q tok
     let entry := dfaEntryDigest q tok next
     let run' := compressDigest seed entry
     (row.state == q) &&
-    (tokenCode row.sym == tokenCode tok) &&
+    (row.sym == tok) &&
     (row.next == next) &&
     (row.entryHash == entry) &&
     (row.running == run') &&
     verifyDfaTraceRows d run' next restToks restRows
   | _, _ => false
-
-theorem buildDfaTraceFrom_length (d : TableDfa) (seed q : Nat) (tokens : List String) :
+theorem buildDfaTraceFrom_length (d : TableDfa) (seed : BitVec 256) (q : Nat) (tokens : List String) :
     (buildDfaTraceFrom d seed q tokens).length = tokens.length := by
   induction tokens generalizing seed q <;> simp_all [buildDfaTraceFrom]
-theorem buildDfaTrace_length (d : TableDfa) (seed : Nat) (tokens : List String) :
+theorem buildDfaTrace_length (d : TableDfa) (seed : BitVec 256) (tokens : List String) :
     (buildDfaTrace d seed tokens).length = tokens.length :=
   buildDfaTraceFrom_length d seed d.start tokens
-theorem buildDfaTraceFrom_valid (d : TableDfa) (seed q : Nat) (tokens : List String) :
+theorem buildDfaTraceFrom_valid (d : TableDfa) (seed : BitVec 256) (q : Nat) (tokens : List String) :
     verifyDfaTraceRows d seed q tokens (buildDfaTraceFrom d seed q tokens) = true := by
   induction tokens generalizing seed q <;> simp_all [buildDfaTraceFrom, verifyDfaTraceRows]
-theorem buildDfaTrace_valid (d : TableDfa) (seed : Nat) (tokens : List String) :
+theorem buildDfaTrace_valid (d : TableDfa) (seed : BitVec 256) (tokens : List String) :
     verifyDfaTraceRows d seed d.start tokens (buildDfaTrace d seed tokens) = true :=
   buildDfaTraceFrom_valid d seed d.start tokens
 /-- Complement confinement DFA (`confinementDfa`): - State `0` is the clean, accepting state. - State `1` is the absorbing injection-trap state. -/
@@ -240,7 +232,6 @@ def confinementDfa : TableDfa where
   ]
   stateDefaults := [(0, 0), (1, 1)]
   defaultSink := 1
-
 theorem confinementDfa_step_trap (tok : String) :
     confinementDfa.step 1 tok = 1 := by
   unfold TableDfa.step confinementDfa
@@ -260,7 +251,6 @@ theorem confinementDfa_step_zero (tok : String) :
   generalize (tok == "<|system|>") = b3
   generalize (tok == "<|assistant|>") = b4
   cases b1 <;> cases b2 <;> cases b3 <;> cases b4 <;> rfl
-
 theorem confinementDfa_classifyFrom_zero (tokens : List String) :
     dfaClassifyFrom confinementDfa 0 tokens =
       if tokens.any isControlToken then 1 else 0 := by
@@ -270,14 +260,12 @@ theorem confinementDfa_classifyFrom_zero (tokens : List String) :
     cases hctrl : isControlToken tok
     · simp [dfaClassifyFrom_cons, confinementDfa_step_zero, hctrl, ih]
     · simp [dfaClassifyFrom_cons, confinementDfa_step_zero, hctrl, confinementDfa_classifyFrom_trap]
-
 theorem dfaAccepts_confinementDfa_eq (tokens : List String) :
     dfaAccepts confinementDfa tokens = !(tokens.any isControlToken) := by
   unfold dfaAccepts dfaClassify
   change [0].contains (dfaClassifyFrom confinementDfa 0 tokens) = !(tokens.any isControlToken)
   rw [confinementDfa_classifyFrom_zero]
   cases tokens.any isControlToken <;> rfl
-
 theorem list_any_eq_false_iff {α : Type} (p : α → Bool) (l : List α) :
     l.any p = false ↔ ∀ x ∈ l, p x = false := by
   simp only [List.any_eq_false, Bool.not_eq_true]
@@ -295,22 +283,21 @@ theorem injectionFree_iff_controlTokens_nil (tokens : List String) :
   (filter_isControlToken_eq_nil_iff tokens).symm
 structure DfaConfinementQuery where
   dfa : TableDfa
-  tableSeed : Nat
+  tableSeed : BitVec 256
   expectedFinalState : Nat
   requireInjectionFree : Bool := true
   deriving DecidableEq, Repr
 structure DfaConfinementCert where
   tokens : List String
-  claimedDigest : Nat
+  claimedDigest : BitVec 256
   deriving DecidableEq, Repr
 inductive DfaRefusal where
   | expectedStateNotAccepting (expected : Nat)
   | injectionDetected (offendingToken : String)
   | notAccepted (reachedState : Nat)
   | finalStateMismatch (reached expected : Nat)
-  | digestMismatch (computed claimed : Nat)
+  | digestMismatch (computed claimed : BitVec 256)
   deriving DecidableEq, Repr
-
 def verifyDfaConfinement (q : DfaConfinementQuery) (c : DfaConfinementCert) :
     Except DfaRefusal Unit := if !q.dfa.accepting.contains q.expectedFinalState then
     .error (.expectedStateNotAccepting q.expectedFinalState)
@@ -327,13 +314,11 @@ def verifyDfaConfinement (q : DfaConfinementQuery) (c : DfaConfinementCert) :
         match runningDigest q.dfa q.tableSeed c.tokens == c.claimedDigest with
         | false => .error (.digestMismatch (runningDigest q.dfa q.tableSeed c.tokens) c.claimedDigest)
         | true => .ok ()
-
 def DfaConfinementMeaning (q : DfaConfinementQuery) (c : DfaConfinementCert) : Prop :=
   dfaAccepts q.dfa c.tokens = true ∧
   dfaClassify q.dfa c.tokens = q.expectedFinalState ∧
   runningDigest q.dfa q.tableSeed c.tokens = c.claimedDigest ∧
   (q.requireInjectionFree = true → InjectionFree c.tokens)
-
 theorem verifyDfaConfinement_sound {q : DfaConfinementQuery} {c : DfaConfinementCert}
     (h : verifyDfaConfinement q c = .ok ()) :
     DfaConfinementMeaning q c := by
@@ -356,7 +341,6 @@ theorem verifyDfaConfinement_sound {q : DfaConfinementQuery} {c : DfaConfinement
               cases h1
             · rfl
     · cases h
-
 theorem DfaConfinementMeaning.expected_accepting {q : DfaConfinementQuery}
     {c : DfaConfinementCert} (h : DfaConfinementMeaning q c) :
     q.dfa.accepting.contains q.expectedFinalState = true := by
@@ -418,9 +402,12 @@ def goodDfaCert : DfaConfinementCert where
 def badCert : DfaConfinementCert where
   tokens := ["hello", "{{", "injected_prompt"]
   claimedDigest := runningDigest confinementDfa 7 ["hello", "{{", "injected_prompt"]
-example : verifyDfaConfinement defaultDfaQuery goodDfaCert = .ok () := by exact id rfl
+theorem goodDfaCert_valid : verifyDfaConfinement defaultDfaQuery goodDfaCert = .ok () := by
+  apply (verifyDfaConfinement_iff _ _).2
+  exact ⟨rfl, rfl, rfl, fun _ => (injectionFree_iff_dfaAccepts _).2 rfl⟩
 theorem goodDfaCert_accepted :
-    dfaConfinementCheck 1 defaultDfaQuery goodDfaCert = .ok := by exact id rfl
+    dfaConfinementCheck 1 defaultDfaQuery goodDfaCert = .ok := by
+  simp only [dfaConfinementCheck, goodDfaCert_valid]
 theorem badCert_refused :
     dfaConfinementCheck 1 defaultDfaQuery badCert =
       .refused (.injectionDetected "{{") [] := by exact id rfl
@@ -452,24 +439,28 @@ def tableDfaOfJson (j : Json) : Except String TableDfa := do
 def encodeDfaQuery (q : DfaConfinementQuery) : String :=
   Json.compress <| Json.mkObj
     [ ("dfa", tableDfaToJson q.dfa)
-    , ("tableSeed", toJson q.tableSeed)
+    , ("tableSeed", toJson q.tableSeed.toNat)
     , ("expectedFinalState", toJson q.expectedFinalState)
     , ("requireInjectionFree", toJson q.requireInjectionFree) ]
 def encodeDfaCert (c : DfaConfinementCert) : String :=
   Json.compress <| Json.mkObj
     [ ("tokens", Json.arr (c.tokens.map Json.str).toArray)
-    , ("claimedDigest", toJson c.claimedDigest) ]
+    , ("claimedDigest", toJson c.claimedDigest.toNat) ]
 def decodeDfaQuery (s : String) : Except String DfaConfinementQuery := do
   let j ← Json.parse s
   let dfa ← tableDfaOfJson (← j.getObjVal? "dfa")
-  let tableSeed ← j.getObjValAs? Nat "tableSeed"
+  let seed ← j.getObjValAs? Nat "tableSeed"
+  if seed ≥ 2 ^ 256 then throw "tableSeed exceeds 256 bits"
+  let tableSeed := BitVec.ofNat 256 seed
   let expectedFinalState ← j.getObjValAs? Nat "expectedFinalState"
   let requireInjectionFree ← j.getObjValAs? Bool "requireInjectionFree"
   pure { dfa, tableSeed, expectedFinalState, requireInjectionFree }
 def decodeDfaCert (s : String) : Except String DfaConfinementCert := do
   let j ← Json.parse s
   let tokens ← (← (← j.getObjVal? "tokens").getArr?).toList.mapM (·.getStr?)
-  let claimedDigest ← j.getObjValAs? Nat "claimedDigest"
+  let digest ← j.getObjValAs? Nat "claimedDigest"
+  if digest ≥ 2 ^ 256 then throw "claimedDigest exceeds 256 bits"
+  let claimedDigest := BitVec.ofNat 256 digest
   pure { tokens, claimedDigest }
 @[expose] def dfaFormat : Judge.Format where
   name := "dfa-confinement"
@@ -478,14 +469,12 @@ def decodeDfaCert (s : String) : Except String DfaConfinementCert := do
   Cert := DfaConfinementCert
   decodeObj := decodeDfaQuery
   decodeCert := decodeDfaCert
-  trust := .kernel
+  trust := .compiled
   regime := .decidable
   bad := (defaultDfaQuery, badCert)
   badGrade := 1
   bad_refused := ⟨_, _, badCert_refused⟩
-
 /-! ## Pillar B: $O(\text{tokens})$ Compact Pushdown CFG Replay Certificate -/
-
 inductive CfgSym where
   | terminal (tok : String)
   | nonterminal (nt : String)
@@ -503,7 +492,6 @@ inductive CfgProduces (g : CfgGrammar) : List CfgSym → List CfgSym → Prop wh
       CfgProduces g (.nonterminal r.lhs :: stk) (r.rhs ++ stk)
   | under (s : CfgSym) {u v : List CfgSym} :
       CfgProduces g u v → CfgProduces g (s :: u) (s :: v)
-
 inductive CfgDerives (g : CfgGrammar) : List CfgSym → List CfgSym → Prop where
   | refl (u : List CfgSym) : CfgDerives g u u
   | step {u v w : List CfgSym} : CfgProduces g u v → CfgDerives g v w → CfgDerives g u w
@@ -522,7 +510,6 @@ inductive PushdownReplay (g : CfgGrammar) :
       (hr : r ∈ g.rules) :
       PushdownReplay g rs input (r.rhs ++ stk) →
       PushdownReplay g (r :: rs) input (.nonterminal r.lhs :: stk)
-
 theorem pushdownReplay_derives {g : CfgGrammar} {rs : List CfgRule} {input : List String}
     {stk : List CfgSym} (h : PushdownReplay g rs input stk) :
     CfgDerives g stk (input.map .terminal) := by
@@ -544,7 +531,6 @@ inductive CfgRefusal where
   | unknownRule (rule : CfgRule)
   | stepBudgetExhausted
   deriving DecidableEq, Repr
-
 /-- Executable $O(|rs| + |input|)$ pushdown replay loop, structurally recursive on the exact step bound `steps = rs.length + input.length + 1`. -/
 def replayCfgCompactAux (g : CfgGrammar) :
     Nat → List CfgRule → List String → List CfgSym → Except CfgRefusal Unit
@@ -573,7 +559,6 @@ def replayCfgCompactAux (g : CfgGrammar) :
           match decide (r ∈ g.rules) with
           | true => replayCfgCompactAux g steps restRules input (r.rhs ++ restStk)
           | false => .error (.unknownRule r)
-
 def replayCfgCompact (g : CfgGrammar) (rs : List CfgRule) (input : List String) :
     Except CfgRefusal Unit :=
   replayCfgCompactAux g (rs.length + input.length + 1) rs input [.nonterminal g.start]
@@ -604,7 +589,6 @@ theorem replayCfgCompactAux_sound (g : CfgGrammar) :
         have hMem' : r ∈ g.rules := of_decide_eq_true hMem
         rw [← hLhs']
         exact .rule hMem' (replayCfgCompactAux_sound g steps restRules input (r.rhs ++ stk) h)
-
 theorem replayCfgCompactAux_complete (g : CfgGrammar) {rs : List CfgRule} {input : List String}
     {stk : List CfgSym} (h : PushdownReplay g rs input stk) :
     ∀ (steps : Nat), rs.length + input.length < steps →
@@ -621,14 +605,12 @@ theorem replayCfgCompactAux_complete (g : CfgGrammar) {rs : List CfgRule} {input
     cases steps with
     | zero => omega
     | succ k => simpa [replayCfgCompactAux, hr] using ih k (by simp_all; omega)
-
 theorem replayCfgCompact_sound (g : CfgGrammar) (rs : List CfgRule) (input : List String)
     (h : replayCfgCompact g rs input = .ok ()) :
     PushdownReplay g rs input [.nonterminal g.start] ∧
     CfgDerives g [.nonterminal g.start] (input.map .terminal) := by
   have hReplay := replayCfgCompactAux_sound g (rs.length + input.length + 1) rs input [.nonterminal g.start] h
   exact ⟨hReplay, pushdownReplay_derives hReplay⟩
-
 theorem replayCfgCompact_complete (g : CfgGrammar) {rs : List CfgRule} {input : List String}
     (h : PushdownReplay g rs input [.nonterminal g.start]) :
     replayCfgCompact g rs input = .ok () :=
@@ -665,7 +647,6 @@ private theorem replayCfgCompactAux_ne_noStart (g : CfgGrammar) (steps : Nat)
   | succ steps ih =>
     unfold replayCfgCompactAux
     split <;> (repeat first | split | apply ih | intro h; cases h)
-
 theorem PushdownReplay.start_production {g : CfgGrammar} {rs : List CfgRule}
     {input : List String} (h : PushdownReplay g rs input [.nonterminal g.start]) :
     g.rules.any (fun r => r.lhs == g.start) = true := by
@@ -676,7 +657,6 @@ theorem PushdownReplay.start_production {g : CfgGrammar} {rs : List CfgRule}
   | @rule r rs input stk hr hp =>
     simp only [List.cons.injEq, CfgSym.nonterminal.injEq] at he
     exact List.any_eq_true.mpr ⟨r, hr, beq_iff_eq.mpr he.1.symm⟩
-
 instance cfgCompactJudge : Judge CfgCompactQuery CfgCompactCert where
   Clause := CfgRefusal
   Meaning := CfgCompactMeaning
@@ -703,7 +683,6 @@ instance cfgCompactJudge : Judge CfgCompactQuery CfgCompactCert where
     simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
     cases hv : replayCfgCompact q.grammar c.rules q.input <;> simp_all
     exact replayCfgCompactAux_ne_noStart _ _ _ _ _ _ hv
-
   Fragment _ := True
   complete := by
     intro q _ ⟨c, hc, _⟩
@@ -788,9 +767,7 @@ def decodeCfgCert (s : String) : Except String CfgCompactCert := do
   bad := (sampleCfgQuery, badCfgCert)
   badGrade := 1
   bad_refused := ⟨_, _, badCfgCert_refused⟩
-
 /-! ## Pillar C: Structured Prompt & Transcript Slot Confinement -/
-
 inductive Seg where
   | lit (tokens : List String)
   | slot (name : String)
@@ -821,7 +798,6 @@ theorem allSlotsCleanB_iff (b : String → List String) (T : PromptTemplate) :
     cases seg with
     | lit _ => rfl
     | slot name => exact (injectionFree_iff_dfaAccepts (b name)).mp (h name hmem)
-
 theorem slot_confinement (b : String → List String) (T : PromptTemplate)
     (hClean : AllSlotsClean b T) :
     controlTokens (renderPrompt b T) = controlTokens (litOnly T) := by
@@ -841,7 +817,6 @@ theorem slot_confinement (b : String → List String) (T : PromptTemplate)
         (injectionFree_iff_controlTokens_nil (b name)).mp hSlotFree
       simp only [renderPrompt, litOnly, controlTokens_append]
       rw [hSlotNil, List.nil_append, hRec]
-
 theorem slot_confinement_count (b : String → List String) (T : PromptTemplate)
     (hClean : AllSlotsClean b T) :
     (controlTokens (renderPrompt b T)).length = (controlTokens (litOnly T)).length := by
@@ -876,9 +851,7 @@ theorem injected_slot_breaks_confinement :
     revert hB
     decide
   · decide
-
 /-! ### Bridges to `Obend.Slot.Protocol`, `Obend.Leaf.Book`, and `Obend.Core.Term` -/
-
 inductive PromptOp : Unit → Type where
   | emitLit (tokens : List String) : PromptOp ()
   | emitSlot (name : String) : PromptOp ()
@@ -898,7 +871,6 @@ def promptTemplateAlg : Algebra promptSig PromptHole PromptRes (fun _ => PromptT
     | .emitLit ts => .lit ts :: k ()
     | .emitSlot name => .slot name :: k ()
   hole := fun name => [.slot name]
-
 def protToPromptTemplate {i : Unit} (P : PromptProt i) : PromptTemplate := fold promptTemplateAlg P
 def promptTemplateToProt : PromptTemplate → PromptProt ()
   | [] => .ret []
@@ -916,7 +888,6 @@ theorem protToPromptTemplate_roundtrip (T : PromptTemplate) :
     | slot name =>
       change Seg.slot name :: protToPromptTemplate (promptTemplateToProt rest) = Seg.slot name :: rest
       rw [ih]
-
 def slotBindingToSubst (b : String → List String) : Subst promptSig PromptHole PromptRes :=
   fun () name => some (.ret (b name))
 theorem slot_protocol_confinement (P : PromptProt ()) (b : String → List String)
@@ -948,15 +919,12 @@ def termToPromptTemplate : Term → PromptTemplate
   | .perform plan => termToPromptTemplate plan
   | .done value => termToPromptTemplate value
   | _ => []
-
 theorem term_slot_confinement (t : Term) (b : String → List String)
     (hClean : AllSlotsClean b (termToPromptTemplate t)) :
     controlTokens (renderPrompt b (termToPromptTemplate t)) =
       controlTokens (litOnly (termToPromptTemplate t)) :=
   slot_confinement b (termToPromptTemplate t) hClean
-
 /-! ## Pillar D: `dclutch` Liquidation-Cascade-Free Hoard Complete-Set & Joint KKT Clearing Judge -/
-
 structure HoardMarketState where
   outcomes : Nat
   hoard : Nat
@@ -995,7 +963,6 @@ private theorem list_map_sub_add_cancel (xs : List Nat) (qty : Nat)
   induction xs with
   | nil => rfl
   | cons x rest ih => simp_all [List.all_cons, Nat.sub_add_cancel]
-
 theorem mergeCompleteSet_splitCompleteSet_cancel (s : HoardMarketState) (qty : Nat) :
     mergeCompleteSet (splitCompleteSet s qty) qty = s := by
   cases s with
@@ -1010,7 +977,6 @@ theorem splitCompleteSet_mergeCompleteSet_cancel (s : HoardMarketState) (qty : N
   | mk outcomes hoard supply =>
     simp only [mergeCompleteSet, splitCompleteSet, Nat.sub_add_cancel hCan.1,
       list_map_sub_add_cancel supply qty hCan.2]
-
 theorem supplyAt_map (xs : List Nat) (f : Nat → Nat) (i : Nat) (hi : i < xs.length) :
     (xs.map f)[i]?.getD 0 = f (xs[i]?.getD 0) := by
   simp [hi]
@@ -1022,7 +988,6 @@ private theorem hoard_map_preserves (s : HoardMarketState) (f : Nat → Nat)
   change (s.supply.map f)[i]?.getD 0 ≤ f s.hoard
   rw [supplyAt_map _ _ _ (by simpa [h.1] using hi)]
   exact hf _ _ (h.2 i hi)
-
 theorem splitCompleteSet_preserves_invariant (s : HoardMarketState) (qty : Nat)
     (hInv : HoardCollateralInvariant s) :
     HoardCollateralInvariant (splitCompleteSet s qty) :=
@@ -1043,9 +1008,7 @@ theorem applyCompleteSetDelta_preserves_invariant (s : HoardMarketState) (sets :
   cases decide (0 ≤ sets)
   · exact mergeCompleteSet_preserves_invariant s (-sets).toNat hInv
   · exact splitCompleteSet_preserves_invariant s sets.toNat hInv
-
 /-! ### $N$-Outcome Simplex KKT Joint Clearing (`DClutch.JointClearing`) -/
-
 def sumOutcomes : Nat → (Nat → Int) → Int
   | 0, _ => 0
   | n + 1, f => f 0 + sumOutcomes n (fun i => f (i + 1))
@@ -1056,7 +1019,6 @@ theorem sumOutcomes_congr {n : Nat} {f g : Nat → Int}
   | succ n ih =>
     simp only [sumOutcomes]
     rw [h 0 (by omega), ih (fun i hi => h (i + 1) (by omega))]
-
 theorem sumOutcomes_add (n : Nat) (f g : Nat → Int) :
     sumOutcomes n (fun i => f i + g i) = sumOutcomes n f + sumOutcomes n g := by
   induction n generalizing f g with
@@ -1065,7 +1027,6 @@ theorem sumOutcomes_add (n : Nat) (f g : Nat → Int) :
     simp only [sumOutcomes]
     rw [ih]
     omega
-
 theorem sumOutcomes_mul_left (n : Nat) (c : Int) (f : Nat → Int) :
     sumOutcomes n (fun i => c * f i) = c * sumOutcomes n f := by
   induction n generalizing f with
@@ -1073,7 +1034,6 @@ theorem sumOutcomes_mul_left (n : Nat) (c : Int) (f : Nat → Int) :
   | succ n ih =>
     simp only [sumOutcomes]
     rw [ih, Int.mul_add]
-
 theorem sumOutcomes_mul_right (n : Nat) (f : Nat → Int) (c : Int) :
     sumOutcomes n (fun i => f i * c) = sumOutcomes n f * c := by
   rw [Int.mul_comm, ← sumOutcomes_mul_left]
@@ -1136,13 +1096,11 @@ def JointOrder.validFor (o : JointOrder) (outcomeCount : Nat) : Bool :=
   o.receivePerLot.length == outcomeCount &&
   o.deliverPerLot.length == outcomeCount &&
   decide (0 < o.quantity)
-
 def jointFillAdmissible (c : JointClearingCert) (f : JointFill) : Bool :=
   f.order.validFor c.outcomeCount &&
   decide (f.lots ≤ f.order.quantity) &&
   (f.lots == 0 || decide (f.order.perLotDebit c ≤ f.order.limit)) &&
   (f.lots == f.order.quantity || decide (f.order.limit ≤ f.order.perLotDebit c))
-
 /-- Full KKT simplex clearing predicate (`DClutch.JointClearing.Clearing.valid`). -/
 def jointClearingValid (c : JointClearingCert) : Bool :=
   decide (0 < c.outcomeCount) &&
@@ -1162,7 +1120,6 @@ structure JointCertified (c : JointClearingCert) : Prop where
   distinct : (c.fills.map fun f => f.order.orderId).Nodup
   covered : ∀ i, i < c.outcomeCount → c.net i ≤ c.sets
   slack : ∀ i, i < c.outcomeCount → c.price i = 0 ∨ c.net i = c.sets
-
 theorem jointCertified_of_valid (c : JointClearingCert) (h : jointClearingValid c = true) :
     JointCertified c := by
   simp only [jointClearingValid, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h
@@ -1176,7 +1133,6 @@ theorem jointCertified_of_valid (c : JointClearingCert) (h : jointClearingValid 
     have := List.all_eq_true.mp hrange i (List.mem_range.mpr hi)
     simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at this
     exact this.2
-
 theorem prices_sum_to_scale (c : JointClearingCert) (h : jointClearingValid c = true) :
     c.prices.sum = c.scale := (jointCertified_of_valid c h).simplex
 theorem prices_total (c : JointClearingCert) (h : jointClearingValid c = true) :
@@ -1192,7 +1148,6 @@ theorem filled_at_or_better (c : JointClearingCert) (h : jointClearingValid c = 
   rcases hf.1.2 with hz | hle
   · omega
   · exact hle
-
 theorem partial_fill_is_marginal (c : JointClearingCert) (h : jointClearingValid c = true)
     (f : JointFill) (mem : f ∈ c.fills) (partialFill : f.lots < f.order.quantity) :
     f.order.limit ≤ f.order.perLotDebit c := by
@@ -1201,7 +1156,6 @@ theorem partial_fill_is_marginal (c : JointClearingCert) (h : jointClearingValid
   rcases hf.2 with hq | hle
   · omega
   · exact hle
-
 theorem fill_kkt_surplus_optimal (c : JointClearingCert) (h : jointClearingValid c = true)
     (f : JointFill) (mem : f ∈ c.fills) (lots' : Nat) (hCap : lots' ≤ f.order.quantity) :
     (f.order.limit - f.order.perLotDebit c) * (lots' : Int) ≤
@@ -1232,14 +1186,12 @@ theorem fill_kkt_surplus_optimal (c : JointClearingCert) (h : jointClearingValid
     · have heq : f.order.limit - f.order.perLotDebit c = 0 := by omega
       rw [heq]
       simp only [Int.zero_mul, Int.le_refl]
-
 theorem fill_quote_expands (c : JointClearingCert) (f : JointFill) :
     f.order.perLotDebit c * (f.lots : Int) =
       sumOutcomes c.outcomeCount (fun i => c.price i * f.contribution i) := by
   unfold JointOrder.perLotDebit JointFill.contribution
   rw [← sumOutcomes_mul_right]
   exact sumOutcomes_congr (fun i _ => Int.mul_assoc _ _ _)
-
 theorem collectedQuote_exchange (c : JointClearingCert) (fills : List JointFill) :
     collectedQuote c fills =
       sumOutcomes c.outcomeCount (fun i => c.price i * netFlowAt fills i) := by
@@ -1254,7 +1206,6 @@ theorem collectedQuote_exchange (c : JointClearingCert) (fills : List JointFill)
       (g := fun i => c.price i * f.contribution i + c.price i * (rest.map fun g => g.contribution i).sum)
       (fun i _ => Int.mul_add _ _ _)]
     rw [sumOutcomes_add, fill_quote_expands]
-
 theorem collectedQuote_funds_sets (c : JointClearingCert) (h : jointClearingValid c = true) :
     collectedQuote c c.fills = (c.scale : Int) * c.sets := by
   rw [collectedQuote_exchange]
@@ -1266,9 +1217,7 @@ theorem collectedQuote_funds_sets (c : JointClearingCert) (h : jointClearingVali
     · rw [hn, Int.mul_comm]
   unfold JointClearingCert.net at pointwise
   rw [sumOutcomes_congr pointwise, sumOutcomes_mul_left, prices_total c h, Int.mul_comm]
-
 /-! ### Bridge to `Obend.Judge.Clearing` (`Order`, `Side`, `Order.crosses`) -/
-
 def clearingOrderToJointOrder (id : Nat) (o : Order) : JointOrder :=
   match o.side with
   | .bid =>
@@ -1283,7 +1232,6 @@ def clearingOrderToJointOrder (id : Nat) (o : Order) : JointOrder :=
       deliverPerLot := [o.qty, 0]
       quantity := 1
       limit := -(o.total : Int) }
-
 theorem clearingOrder_crosses_iff_debit_le_limit (id p0 p1 : Nat) (o : Order) :
     o.crosses p0 = true ↔
       (clearingOrderToJointOrder id o).perLotDebit
@@ -1303,7 +1251,6 @@ inductive DclutchHoardRefusal where
   | invalidKktClearing
   | quoteBackingMismatch (collected expected : Int)
   deriving DecidableEq, Repr
-
 def verifyDclutchHoardClearing (s : HoardMarketState) (c : JointClearingCert) :
     Except DclutchHoardRefusal Unit := match hoardCollateralValid s with
   | false => .error .hoardInvariantViolated
@@ -1320,14 +1267,12 @@ def verifyDclutchHoardClearing (s : HoardMarketState) (c : JointClearingCert) :
           match decide (collectedQuote c c.fills = (c.scale : Int) * c.sets) with
           | false => .error (.quoteBackingMismatch (collectedQuote c c.fills) ((c.scale : Int) * c.sets))
           | true => .ok ()
-
 def DclutchHoardMeaning (s : HoardMarketState) (c : JointClearingCert) : Prop :=
   HoardCollateralInvariant s ∧
   HoardCollateralInvariant (applyCompleteSetDelta s c.sets) ∧
   c.prices.sum = c.scale ∧
   collectedQuote c c.fills = (c.scale : Int) * c.sets ∧
   (∀ f ∈ c.fills, 0 < f.lots → f.order.perLotDebit c ≤ f.order.limit)
-
 theorem verifyDclutchHoardClearing_sound {s : HoardMarketState} {c : JointClearingCert}
     (h : verifyDclutchHoardClearing s c = .ok ()) :
     DclutchHoardMeaning s c := by
@@ -1350,6 +1295,14 @@ def dclutchHoardCheck (_ : Nat) (s : HoardMarketState) (c : JointClearingCert) :
     Verdict DclutchHoardRefusal := match verifyDclutchHoardClearing s c with
   | .ok () => .ok
   | .error r => .refused r []
+/-- A no-trade clearing exists for every nonempty outcome space: unit prices, no fills. -/
+def idleHoardCert (n : Nat) : JointClearingCert := ⟨n, n, List.replicate n 1, [], 0⟩
+theorem idleHoardCert_valid (s : HoardMarketState) (hn : 0 < s.outcomes)
+    (hs : HoardCollateralInvariant s) : verifyDclutchHoardClearing s (idleHoardCert s.outcomes) = .ok () := by
+  have hall : (List.range s.outcomes).all (fun _ => true) = true :=
+    List.all_eq_true.2 (fun _ _ => rfl)
+  simp [verifyDclutchHoardClearing, (hoardCollateralValid_iff s).2 hs,
+    idleHoardCert, jointClearingValid, hn, JointClearingCert.net, netFlowAt, collectedQuote, hall]
 instance dclutchHoardJudge : Judge HoardMarketState JointClearingCert where
   Clause := DclutchHoardRefusal
   Meaning := DclutchHoardMeaning
@@ -1379,12 +1332,12 @@ instance dclutchHoardJudge : Judge HoardMarketState JointClearingCert where
         · cases h
         · cases h5 : decide (collectedQuote c c.fills = (c.scale : Int) * c.sets) <;> rw [h5] at h <;> cases h
       · cases h
-  Fragment s := ∃ c, verifyDclutchHoardClearing s c = .ok ()
+  Fragment s := 0 < s.outcomes
   complete := by
-    intro _ ⟨c, hc⟩ _
-    refine ⟨c, 0, ?_⟩
+    intro s hn ⟨_, hm⟩
+    refine ⟨idleHoardCert s.outcomes, 0, ?_⟩
     unfold dclutchHoardCheck
-    rw [hc]
+    rw [idleHoardCert_valid s hn hm.1]
   mono := by intro _ _ _ _ _ _; rfl
 def sampleHoardState : HoardMarketState :=
   { outcomes := 2, hoard := 10, supply := [10, 10] }
@@ -1394,7 +1347,6 @@ def mkOutcomeBuy (id outcome qty : Nat) (limit : Int) (width : Nat) : JointOrder
   deliverPerLot := List.replicate width 0
   quantity := qty
   limit := limit
-
 def goodHoardClearingCert : JointClearingCert where
   outcomeCount := 2
   scale := 100
@@ -1413,7 +1365,6 @@ def badHoardClearingCert : JointClearingCert where
     { order := mkOutcomeBuy 2 1 1 60 2, lots := 1 }
   ]
   sets := 1
-
 example : verifyDclutchHoardClearing sampleHoardState goodHoardClearingCert = .ok () := by exact id rfl
 theorem goodHoardClearingCert_accepted :
     dclutchHoardCheck 1 sampleHoardState goodHoardClearingCert = .ok := by exact id rfl
@@ -1480,6 +1431,5 @@ def decodeJointClearingCert (s : String) : Except String JointClearingCert := do
   bad := (sampleHoardState, badHoardClearingCert)
   badGrade := 1
   bad_refused := ⟨_, _, badHoardClearingCert_refused⟩
-
 end Obend.Judge
 end

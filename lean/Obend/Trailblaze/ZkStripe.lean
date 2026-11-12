@@ -302,89 +302,122 @@ theorem callTreeDigest_size {H : Hash} {t : HttpsSessionNode}
   simpa [callTreeDigest, ByteArray.size] using hw
 
 mutual
-theorem callTreeDigest_binding_aux (H : Hash) (t₁ t₂ : HttpsSessionNode)
-    (hCan₁ : checkCanonicalSessionTree H t₁ = true)
-    (hCan₂ : checkCanonicalSessionTree H t₂ = true)
-    (hEq : ofBE (callTreeDigestBytes H t₁) = ofBE (callTreeDigestBytes H t₂)) :
-    t₁ = t₂ ∨ Collision H := by
-  cases t₁ with
-  | mk h₁ d₁ req₁ resp₁ kids₁ =>
-    cases t₂ with
-    | mk h₂ d₂ req₂ resp₂ kids₂ =>
-      simp only [checkCanonicalSessionTree, Bool.and_eq_true, decide_eq_true_eq] at hCan₁ hCan₂
-      rcases hCan₁ with ⟨⟨⟨⟨hd₁, hreq₁⟩, hresp₁⟩, _⟩, hkids₁⟩
-      rcases hCan₂ with ⟨⟨⟨⟨hd₂, hreq₂⟩, hresp₂⟩, _⟩, hkids₂⟩
-      let pre₁ : List UInt8 :=
-        sessionNodePreimage h₁ d₁ req₁ resp₁ (callTreeChildrenDigestBytes H kids₁)
-      let pre₂ : List UInt8 :=
-        sessionNodePreimage h₂ d₂ req₂ resp₂ (callTreeChildrenDigestBytes H kids₂)
-      change ofBE (H pre₁) = ofBE (H pre₂) at hEq
-      if hPre : pre₁ = pre₂ then
-        obtain ⟨hNotaryEq, hDomEq, hReqEq, hRespEq, hKidsBytes⟩ :=
-          sessionNodePreimage_inj hd₁ hd₂ hreq₁ hreq₂ hresp₁ hresp₂ hPre
-        rcases callTreeChildrenDigestBytes_binding_aux H kids₁ kids₂ hkids₁ hkids₂ hKidsBytes with
-          hKidsEq | hCol
-        · subst hNotaryEq hDomEq hReqEq hRespEq hKidsEq
-          exact Or.inl rfl
-        · exact Or.inr hCol
-      else
-        exact Or.inr ⟨pre₁, pre₂, hPre, hEq⟩
-termination_by structural t₁
-
-theorem callTreeChildrenDigestBytes_binding_aux (H : Hash)
-    (ns₁ ns₂ : List HttpsSessionNode)
-    (hCan₁ : checkCanonicalSessionChildren H ns₁ = true)
-    (hCan₂ : checkCanonicalSessionChildren H ns₂ = true)
-    (hEq : callTreeChildrenDigestBytes H ns₁ = callTreeChildrenDigestBytes H ns₂) :
-    ns₁ = ns₂ ∨ Collision H := by
-  cases ns₁ with
-  | nil =>
-    cases ns₂ with
-    | nil => exact Or.inl rfl
-    | cons c₂ cs₂ =>
-      simp only [callTreeChildrenDigestBytes, List.cons.injEq] at hEq
-      exact absurd hEq.1 (by decide)
-  | cons c₁ cs₁ =>
-    cases ns₂ with
-    | nil =>
-      simp only [callTreeChildrenDigestBytes, List.cons.injEq] at hEq
-      exact absurd hEq.1 (by decide)
-    | cons c₂ cs₂ =>
-      simp only [checkCanonicalSessionChildren, Bool.and_eq_true] at hCan₁ hCan₂
-      rcases hCan₁ with ⟨hc₁, hcs₁⟩
-      rcases hCan₂ with ⟨hc₂, hcs₂⟩
-      have hcd₁ : (callTreeDigestBytes H c₁).length < 2 ^ 32 := by
-        rw [canonical_digest_width hc₁]; decide
-      have hcd₂ : (callTreeDigestBytes H c₂).length < 2 ^ 32 := by
-        rw [canonical_digest_width hc₂]; decide
-      simp only [callTreeChildrenDigestBytes, List.cons.injEq] at hEq
-      obtain ⟨hChildDigestEq, hRestEq⟩ := frameBytes_append_inj hcd₁ hcd₂ hEq.2
-      rcases callTreeDigest_binding_aux H c₁ c₂ hc₁ hc₂ (congrArg ofBE hChildDigestEq) with
-        hCEq | hCol
-      · rcases callTreeChildrenDigestBytes_binding_aux H cs₁ cs₂ hcs₁ hcs₂ hRestEq with
-          hCsEq | hCol
-        · subst hCEq hCsEq
-          exact Or.inl rfl
-        · exact Or.inr hCol
-      · exact Or.inr hCol
-termination_by structural ns₁
+/-- The finite list of messages actually hashed by this tree. -/
+def treePreimages (H : Hash) : HttpsSessionNode → List (List UInt8)
+  | .mk k d req resp cs =>
+    sessionNodePreimage k d req resp (callTreeChildrenDigestBytes H cs) :: childrenPreimages H cs
+termination_by structural t => t
+def childrenPreimages (H : Hash) : List HttpsSessionNode → List (List UInt8)
+  | [] => []
+  | t :: ts => treePreimages H t ++ childrenPreimages H ts
+termination_by structural ts => ts
 end
 
-/-- **Digest bytes bind.** Two canonical trees with one digest are one tree (every hop's notary
-key, domain, request, response and children), or the hash collides. -/
+/-- Executable evidence: exact equal output bytes, between messages from the compared trees. -/
+structure TreeHashCollision (H : Hash) (inputs : List (List UInt8)) where
+  left : List UInt8
+  right : List UInt8
+  left_mem : left ∈ inputs
+  right_mem : right ∈ inputs
+  ne : left ≠ right
+  eq : H left = H right
+
+def TreeHashCollision.weaken {H : Hash} {xs ys : List (List UInt8)}
+    (c : TreeHashCollision H xs) (h : ∀ x ∈ xs, x ∈ ys) : TreeHashCollision H ys :=
+  ⟨c.left, c.right, h _ c.left_mem, h _ c.right_mem, c.ne, c.eq⟩
+
+mutual
+def callTreeDigest_binding_aux (H : Hash) (t₁ t₂ : HttpsSessionNode)
+    (hCan₁ : checkCanonicalSessionTree H t₁ = true)
+    (hCan₂ : checkCanonicalSessionTree H t₂ = true)
+    (hEq : callTreeDigestBytes H t₁ = callTreeDigestBytes H t₂) :
+    PSum (t₁ = t₂) (TreeHashCollision H (treePreimages H t₁ ++ treePreimages H t₂)) := by
+  cases t₁ with
+  | mk k₁ d₁ req₁ resp₁ cs₁ =>
+    cases t₂ with
+    | mk k₂ d₂ req₂ resp₂ cs₂ =>
+      simp only [checkCanonicalSessionTree, Bool.and_eq_true, decide_eq_true_eq] at hCan₁ hCan₂
+      obtain ⟨⟨⟨⟨hd₁, hr₁⟩, hs₁⟩, _⟩, hc₁⟩ := hCan₁
+      obtain ⟨⟨⟨⟨hd₂, hr₂⟩, hs₂⟩, _⟩, hc₂⟩ := hCan₂
+      let p₁ := sessionNodePreimage k₁ d₁ req₁ resp₁ (callTreeChildrenDigestBytes H cs₁)
+      let p₂ := sessionNodePreimage k₂ d₂ req₂ resp₂ (callTreeChildrenDigestBytes H cs₂)
+      if hp : p₁ = p₂ then
+        obtain ⟨hk, hd, hr, hs, hc⟩ := sessionNodePreimage_inj hd₁ hd₂ hr₁ hr₂ hs₁ hs₂ hp
+        match callTreeChildrenDigestBytes_binding_aux H cs₁ cs₂ hc₁ hc₂ hc with
+        | .inl he => exact .inl (by rw [hk, hd, hr, hs, he])
+        | .inr c => exact .inr (c.weaken (by
+            intro x hx
+            simp only [treePreimages, List.mem_append, List.mem_cons] at *
+            rcases hx with hx | hx
+            · exact Or.inl (Or.inr hx)
+            · exact Or.inr (Or.inr hx)))
+      else
+        exact .inr ⟨p₁, p₂, by simp [treePreimages, p₁], by simp [treePreimages, p₂], hp, hEq⟩
+termination_by structural t₁
+
+def callTreeChildrenDigestBytes_binding_aux (H : Hash) (xs ys : List HttpsSessionNode)
+    (hx : checkCanonicalSessionChildren H xs = true)
+    (hy : checkCanonicalSessionChildren H ys = true)
+    (he : callTreeChildrenDigestBytes H xs = callTreeChildrenDigestBytes H ys) :
+    PSum (xs = ys) (TreeHashCollision H (childrenPreimages H xs ++ childrenPreimages H ys)) := by
+  cases xs with
+  | nil =>
+    cases ys with
+    | nil => exact .inl rfl
+    | cons b bs => simp [callTreeChildrenDigestBytes] at he
+  | cons a as =>
+    cases ys with
+    | nil => simp [callTreeChildrenDigestBytes] at he
+    | cons b bs =>
+      simp only [checkCanonicalSessionChildren, Bool.and_eq_true] at hx hy
+      have ha : (callTreeDigestBytes H a).length < 2 ^ 32 := by rw [canonical_digest_width hx.1]; decide
+      have hb : (callTreeDigestBytes H b).length < 2 ^ 32 := by rw [canonical_digest_width hy.1]; decide
+      have he' := (List.cons.inj he).2
+      obtain ⟨hhead, htail⟩ := frameBytes_append_inj ha hb he'
+      match callTreeDigest_binding_aux H a b hx.1 hy.1 hhead with
+      | .inr c => exact .inr (c.weaken (by
+          intro x hx
+          simp only [childrenPreimages, List.mem_append] at *
+          rcases hx with hx | hx
+          · exact Or.inl (Or.inl hx)
+          · exact Or.inr (Or.inl hx)))
+      | .inl hab =>
+        match callTreeChildrenDigestBytes_binding_aux H as bs hx.2 hy.2 htail with
+        | .inl ht => exact .inl (by rw [hab, ht])
+        | .inr c => exact .inr (c.weaken (by
+            intro x hx
+            simp only [childrenPreimages, List.mem_append] at *
+            rcases hx with hx | hx
+            · exact Or.inl (Or.inr hx)
+            · exact Or.inr (Or.inr hx)))
+termination_by structural xs
+end
+
+/-- Compare preimages constructively; the collision branch retains both exact messages. -/
+def extractCallTreeCollision (H : Hash) (t₁ t₂ : HttpsSessionNode)
+    (h₁ : checkCanonicalSessionTree H t₁ = true) (h₂ : checkCanonicalSessionTree H t₂ = true)
+    (he : callTreeDigestBytes H t₁ = callTreeDigestBytes H t₂) :
+    PSum (t₁ = t₂) (TreeHashCollision H (treePreimages H t₁ ++ treePreimages H t₂)) :=
+  callTreeDigest_binding_aux H t₁ t₂ h₁ h₂ he
+
+/-- Binding is scoped to the finite union of messages hashed by the two trees. -/
 theorem callTreeDigestBytes_binding (H : Hash) (t₁ t₂ : HttpsSessionNode)
     (hCan₁ : checkCanonicalSessionTree H t₁ = true)
     (hCan₂ : checkCanonicalSessionTree H t₂ = true)
     (hEq : callTreeDigestBytes H t₁ = callTreeDigestBytes H t₂) :
-    t₁ = t₂ ∨ Collision H :=
-  callTreeDigest_binding_aux H t₁ t₂ hCan₁ hCan₂ (congrArg ofBE hEq)
+    t₁ = t₂ ∨ Obend.Digest.HashBytes.CollisionAmong H
+      (fun x => x ∈ treePreimages H t₁ ++ treePreimages H t₂) :=
+  match extractCallTreeCollision H t₁ t₂ hCan₁ hCan₂ hEq with
+  | .inl h => Or.inl h
+  | .inr c => Or.inr ⟨c.left, c.right, c.left_mem, c.right_mem, c.ne, congrArg ofBE c.eq⟩
 
-/-- **The 256-bit digest binds.** -/
+/-- **The 256-bit digest binds** within the finite preimage union of the two trees. -/
 theorem callTreeDigest_binding (H : Hash) (t₁ t₂ : HttpsSessionNode)
     (hCan₁ : checkCanonicalSessionTree H t₁ = true)
     (hCan₂ : checkCanonicalSessionTree H t₂ = true)
     (hEq : callTreeDigest H t₁ = callTreeDigest H t₂) :
-    t₁ = t₂ ∨ Collision H := by
+    t₁ = t₂ ∨ Obend.Digest.HashBytes.CollisionAmong H
+      (fun x => x ∈ treePreimages H t₁ ++ treePreimages H t₂) := by
   have hb : callTreeDigestBytes H t₁ = callTreeDigestBytes H t₂ := by
     have hl := congrArg (fun d : CallTreeDigest => d.bytes.data.toList) hEq
     simpa [callTreeDigest] using hl
@@ -413,10 +446,12 @@ mutual
 /-- Count total notarized HTTPS hops in a `CallTree`. -/
 def callTreeHopCount : HttpsSessionNode → Nat
   | .mk _ _ _ _ kids => 1 + callTreeChildrenHopCount kids
+termination_by structural t => t
 
 def callTreeChildrenHopCount : List HttpsSessionNode → Nat
   | [] => 0
   | c :: cs => callTreeHopCount c + callTreeChildrenHopCount cs
+termination_by structural ts => ts
 end
 
 /-! ## §3. The audit -/
@@ -455,10 +490,12 @@ def extractCallTreeFacts (pol : ZkStripePolicy) : HttpsSessionNode → List Stri
   | .mk key domain req resp kids =>
     (if hopPasses pol key domain req resp then ["hop_verified:" ++ domain] else []) ++
       extractChildrenFacts pol kids
+termination_by structural t => t
 
 def extractChildrenFacts (pol : ZkStripePolicy) : List HttpsSessionNode → List String
   | [] => []
   | c :: cs => extractCallTreeFacts pol c ++ extractChildrenFacts pol cs
+termination_by structural ts => ts
 end
 
 def buildCallTreeProgram (pol : ZkStripePolicy) (root : HttpsSessionNode) :
@@ -480,6 +517,7 @@ def auditNodes (pol : ZkStripePolicy) : HttpsSessionNode → Except ZkStripeRefu
       .error (.responseRegexViolation domain)
     else
       auditChildren pol kids
+termination_by structural t => t
 
 def auditChildren (pol : ZkStripePolicy) :
     List HttpsSessionNode → Except ZkStripeRefusal Unit
@@ -488,6 +526,7 @@ def auditChildren (pol : ZkStripePolicy) :
     match auditNodes pol c with
     | .error e => .error e
     | .ok () => auditChildren pol cs
+termination_by structural ts => ts
 end
 
 /-- **The audit**: every hop, then the policy program's support for the target conclusion. -/
@@ -629,15 +668,20 @@ def checkDualPcsReceiptEnvelope (pol : ZkStripePolicy)
   decide (rcpt.committedTreeRoot.bytes.size = 32) &&
   decide (32 ≤ rcpt.proofBytes.length)
 
+/-- Cryptographic verification is supplied by the TLS/PCS adapter. Envelope shape is not proof. -/
+structure ZkStripeVerifiers where
+  notary : Hash → List (BitVec 256) → MpcTlsNotaryAttestation → Bool
+  receipt : Hash → ZkStripePolicy → DualPcsCallTreeReceipt → Bool
+
 /-- The external cryptographic obligations of the organ, as existential extractions:
 1. `mpcTlsNotarySignatureOrigin`: an accepted attestation under a trusted key comes from a
    canonical session with that notary key and that digest;
 2. `dualPcsWitnessExtraction`: an accepted receipt has a canonical tree with its root and notary
    that passes the audit. -/
-class ZkStripeObligations : Prop where
+class ZkStripeObligations (verify : ZkStripeVerifiers) : Prop where
   mpcTlsNotarySignatureOrigin :
     ∀ (H : Hash) (trustedKeys : List (BitVec 256)) (att : MpcTlsNotaryAttestation),
-      checkMpcTlsNotaryEnvelope trustedKeys att = true →
+      checkMpcTlsNotaryEnvelope trustedKeys att = true → verify.notary H trustedKeys att = true →
       ∃ session : HttpsSessionNode,
         checkCanonicalSessionTree H session = true ∧
         session.notaryKey ∈ trustedKeys ∧
@@ -646,13 +690,22 @@ class ZkStripeObligations : Prop where
         att.signatureBytes.length = 64
   dualPcsWitnessExtraction :
     ∀ (H : Hash) (pol : ZkStripePolicy) (rcpt : DualPcsCallTreeReceipt),
-      checkDualPcsReceiptEnvelope pol rcpt = true →
+      checkDualPcsReceiptEnvelope pol rcpt = true → verify.receipt H pol rcpt = true →
       ∃ tree : HttpsSessionNode,
         checkCanonicalSessionTree H tree = true ∧
         callTreeDigest H tree = rcpt.committedTreeRoot ∧
         tree.notaryKey = rcpt.notaryKey ∧
         32 ≤ rcpt.proofBytes.length ∧
         auditZkStripeCallTree pol tree = .ok ()
+
+  /-- Adapters must accept a real cSHAKE256 notary transcript, not refuse universally. -/
+  notaryInhabited : ∃ keys att,
+    checkMpcTlsNotaryEnvelope keys att = true ∧
+    verify.notary (Obend.Digest.Cshake256.cshake256Bytes []) keys att = true
+  /-- The PCS adapter likewise has an accepted instance at the deployment hash. -/
+  receiptInhabited : ∃ pol rcpt,
+    checkDualPcsReceiptEnvelope pol rcpt = true ∧
+    verify.receipt (Obend.Digest.Cshake256.cshake256Bytes []) pol rcpt = true
 
 /-- **The organ's audit theorem.** When the audit admits a canonical tree under a policy whose
 request expression is `.inter reqSchema (.compl forbiddenSecretRe)`, then at every hop the policy
@@ -671,7 +724,8 @@ theorem apex_zkstripe_calltree_audit
         matchesBytes forbiddenSecretRe node.redactedRequest = false) ∧
       Obend.Reasons.statusIn (Obend.Reasons.wf (buildCallTreeProgram pol tree))
         pol.targetConclusion = .supported ∧
-      (tree = otherTree ∨ Collision H) := by
+      (tree = otherTree ∨ Obend.Digest.HashBytes.CollisionAmong H
+        (fun x => x ∈ treePreimages H tree ++ treePreimages H otherTree)) := by
   obtain ⟨hAllHops, hSupported⟩ := auditZkStripeCallTree_all_hops_sound hAudit
   refine ⟨?_, hSupported, callTreeDigest_binding H tree otherTree hCan₁ hCan₂ hSameDigest⟩
   intro node hMem
@@ -936,6 +990,16 @@ example : checkCanonicalSessionTree fastMerkleHash validFourHopCallTree = true :
 
 example : callTreeDigest fastMerkleHash validFourHopCallTree ≠
     callTreeDigest fastMerkleHash spoofedDomainCallTree := by
+  decide +kernel
+
+/-- The binding premise is inhabited at the deployment hash, without reducing SHAKE in the kernel. -/
+theorem cshake_callTree_binding_inhabited :
+    ∃ t : HttpsSessionNode,
+      checkCanonicalSessionTree (Obend.Digest.Cshake256.cshake256Bytes []) t = true ∧
+      callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t =
+        callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t := by
+  refine ⟨.mk fixtureNotaryKey "api.stripe.com" [71, 69, 84] [123, 125] [], ?_, rfl⟩
+  simp [checkCanonicalSessionTree, checkCanonicalSessionChildren, utf8Bytes]
   decide +kernel
 
 /-- The organ's end-to-end smoke check. -/

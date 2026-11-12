@@ -334,7 +334,7 @@ theorem lagrangeInterpolate_exact (xs coeffs : List GF256) (distinct : xs.Nodup)
   | nil => have hc : coeffs = [] := List.length_eq_zero_iff.mp hlen; subst hc; rfl
   | cons a xs ih =>
     cases coeffs with
-    | nil => simp at hlen
+    | nil => exact False.elim (Nat.noConfusion hlen)
     | cons c cs =>
       obtain ⟨ha, hxs⟩ := List.nodup_cons.mp distinct
       simp only [lagrangeInterpolatePoly]
@@ -478,6 +478,24 @@ def hash256 (domain : String) (b : ByteArray) : Digest256 :=
 structure CshakeCollision where
   domain : String
   collision : Lsafe.HashCollision Lsafe.cshakeHasher domain
+
+/-- Constructive collision on exactly the two inputs supplied by this protocol call. -/
+structure CshakePair (domain : String) (a b : ByteArray) : Type where
+  distinct : a ≠ b
+  sameDigest : Lsafe.cshakeHasher.hash domain a = Lsafe.cshakeHasher.hash domain b
+
+theorem byteArrayList_injective {a b : ByteArray} (h : a.data.toList = b.data.toList) : a = b := by
+  cases a; cases b; congr 1; exact Array.toList_inj.mp h
+
+theorem CshakePair.toCollisionAmong {domain : String} {a b : ByteArray}
+    (w : CshakePair domain a b) :
+    Obend.Digest.HashBytes.CollisionAmong
+      (Obend.Digest.Cshake256.cshake256Bytes domain.toUTF8.data.toList)
+      (fun x => x = a.data.toList ∨ x = b.data.toList) := by
+  refine ⟨a.data.toList, b.data.toList, .inl rfl, .inr rfl, ?_, ?_⟩
+  · intro h; apply w.distinct
+    exact byteArrayList_injective h
+  · exact congrArg (fun x : ByteArray => Obend.Digest.HashBytes.ofBE x.data.toList) w.sameDigest
 
 open ChunkedWorld
 
@@ -856,14 +874,15 @@ def transitionCommitment (r : VaultTransitionReceipt) : Digest256 :=
 balances, or the two payload encodings are an explicit cSHAKE collision. -/
 def transitionCommitment_binding (a b : VaultTransitionReceipt)
     (h : transitionCommitment a = transitionCommitment b) :
-    PSum (a.payload = b.payload) CshakeCollision :=
+    PSum (a.payload = b.payload) (CshakePair transitionTag
+      (cTransitionPayload.encodeArray a.payload) (cTransitionPayload.encodeArray b.payload)) :=
   if he : cTransitionPayload.encodeArray a.payload = cTransitionPayload.encodeArray b.payload then
     .inl (by
       have hd := congrArg (fun ba => cTransitionPayload.decodeExact ba.data.toList) he
       rw [FastCodec.encodeArray_eq, FastCodec.encodeArray_eq,
         FastCodec.decodeExact_enc, FastCodec.decodeExact_enc] at hd
       exact Option.some.inj hd)
-  else .inr ⟨transitionTag, ⟨_, _, he, congrArg Subtype.val h⟩⟩
+  else .inr ⟨he, congrArg Subtype.val h⟩
 
 /-- Independent transfer semantics, with ordinary integer conservation equations. -/
 def ValidVaultTransition (before : CustodyBalances) (amount : Nat) (after : CustodyBalances) : Prop :=
@@ -913,7 +932,9 @@ def acceptedReceipt_binding (sa sb : CustodyState) (a b : VaultTransitionReceipt
     (ha : checkKernelTransitionReceipt sa a = true) (hb : checkKernelTransitionReceipt sb b = true)
     (h : a.commitment = b.commitment) :
     PSum (a = b ∧ sa.vaultId = sb.vaultId ∧ sa.mandateId = sb.mandateId ∧
-      sa.receiptHead = sb.receiptHead ∧ sa.epoch = sb.epoch) CshakeCollision :=
+      sa.receiptHead = sb.receiptHead ∧ sa.epoch = sb.epoch ∧ sa.balances = sb.balances)
+      (CshakePair transitionTag (cTransitionPayload.encodeArray a.payload)
+        (cTransitionPayload.encodeArray b.payload)) :=
   have pa := checkKernelTransitionReceipt_sound sa a ha
   have pb := checkKernelTransitionReceipt_sound sb b hb
   match transitionCommitment_binding a b (pa.2.2.2.1 ▸ pb.2.2.2.1 ▸ h) with
@@ -921,14 +942,40 @@ def acceptedReceipt_binding (sa sb : CustodyState) (a b : VaultTransitionReceipt
   | .inl hp => .inl (by
       simp only [VaultTransitionReceipt.payload, Prod.mk.injEq] at hp
       obtain ⟨hv, hm, hprev, he, hamt, haft⟩ := hp
-      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
       · cases a; cases b
         dsimp only at hv hm hprev he hamt haft h
         subst hv hm hprev he hamt haft h; rfl
       · rw [← pa.2.2.2.2.1, ← pb.2.2.2.2.1, hv]
       · rw [← pa.2.2.2.2.2, ← pb.2.2.2.2.2, hm]
       · rw [← pa.2.1, ← pb.2.1, hprev]
-      · have h1 := pa.2.2.1; have h2 := pb.2.2.1; omega)
+      · have h1 := pa.2.2.1; have h2 := pb.2.2.1; omega
+      · have hsa := pa.1; have hsb := pb.1
+        unfold ValidVaultTransition at hsa hsb
+        rw [← hamt, ← haft] at hsb
+        have hs : sa.balances.source = sb.balances.source := by omega
+        have hd : sa.balances.destination = sb.balances.destination := by omega
+        have ha : sa.balances.allowance = sb.balances.allowance := by omega
+        have ext (x y : CustodyBalances) (hs : x.source = y.source)
+            (hd : x.destination = y.destination) (ha : x.allowance = y.allowance) : x = y := by
+          cases x; cases y; simp_all
+        exact ext _ _ hs hd ha)
+
+/-- A shared accepted commitment binds the entire receipt and pre-state, on this exact pair. -/
+theorem verifyReceipt_binding_or_collision (sa sb : CustodyState) (a b : VaultTransitionReceipt)
+    (ha : checkKernelTransitionReceipt sa a = true) (hb : checkKernelTransitionReceipt sb b = true)
+    (h : a.commitment = b.commitment) :
+    (a = b ∧ sa = sb) ∨ Obend.Digest.HashBytes.CollisionAmong
+      (Obend.Digest.Cshake256.cshake256Bytes transitionTag.toUTF8.data.toList)
+      (fun x => x = (cTransitionPayload.encodeArray a.payload).data.toList ∨
+        x = (cTransitionPayload.encodeArray b.payload).data.toList) := by
+  cases acceptedReceipt_binding sa sb a b ha hb h with
+  | inr w => exact .inr w.toCollisionAmong
+  | inl he =>
+    obtain ⟨hr, hv, hm, hp, ht, hb⟩ := he
+    refine .inl ⟨hr, ?_⟩
+    cases sa; cases sb
+    simp_all
 
 /-- Enclave quotes, including forged quotes after key compromise, do not grant admission. -/
 structure CustodyTurn where
@@ -1189,6 +1236,13 @@ theorem checkKernelTransitionReceipt_complete (s : CustodyState) (amount : Nat)
     checkKernelTransitionReceipt s (makeTransitionReceipt s amount) = true := by
   simp only [checkKernelTransitionReceipt, makeTransitionReceipt, transitionCommitment,
     VaultTransitionReceipt.payload, hs, ha, decide_true, Bool.and_self]
+
+/-- Real cSHAKE256 inhabits admission with a nonzero, conserving transfer. -/
+theorem custodyReceipt_inhabited : ∃ s r, r.amount = 7 ∧ checkKernelTransitionReceipt s r = true := by
+  let d := hash256 "obend.custody.inhabited" ⟨#[1, 2, 3]⟩
+  let s : CustodyState := ⟨d, d, ⟨20, 3, 15⟩, 0, d⟩
+  exact ⟨s, makeTransitionReceipt s 7, rfl,
+    checkKernelTransitionReceipt_complete s 7 (by decide) (by decide)⟩
 
 /-- Array indexing gives a linear pass in the payload size for fixed k. -/
 def encodeShardBytesExec (bytes : List UInt8) (k : Nat) (x : GF256) : ByteArray :=

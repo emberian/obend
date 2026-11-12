@@ -1,54 +1,10 @@
 module
 /-
-# Obend.Vault.TransclusionAndMirror — a quote that cites its receipt, and a render that says who checked
-
-1. **Transclusion.** A source cell's history is a chain of finalized receipts. A receipt's header
-   carries the digest of its predecessor, its height, and a commitment of each field: the
-   `FrustumMembrane` seal of a `SealedSlot` whose secret is the framed name and value and whose salt
-   is the field's own 256-bit salt. The receipt's own digest is cSHAKE256 of the framed header. A
-   `Transclusion` cites a receipt by digest and height and opens one field: its bytes and its salt.
-   `admitTransclusion` checks the citation against the headers a reader holds, by digest, and
-   refuses an opening whose salt is not 256 bits before it compares anything.
-   * `transclusion_is_observed_finalized_read`: an admitted quote cites a receipt in the finalized
-     chain; what the source has staged and not finalized cannot be cited and changes no admission.
-   * `transclusion_provenance_faithful`: the admitted opening, bytes and salt, is the slot the
-     source finalized in that field at the cited receipt, or two receipts of the chain collide, or
-     the two sealed slots do.
-   * `transclusion_forge_refused`: beside an admitted quote, an opening of the same citation whose
-     commitment differs is refused with `digestMismatch`; an unsalted one is never admitted
-     (`transclusion_unsalted_refused`); any different bytes or salt are refused or are a collision
-     (`transclusion_lying_opening_refused_or_collides`,
-     `transclusion_wrong_salt_refused_or_collides`). Whether a commitment conceals a guessable value
-     rests on cSHAKE256 under a secret salt, and is not a theorem here.
-   * `transclusion_no_amplify`: a document that transcludes, any number of times, holds over the
-     source exactly what it held; a write it could not make before is still refused.
-   * `transclusion_stable_under_source_advance`: after the source finalizes any further turns, the
-     same citation is admitted with the same bytes, dated against the new head: on a linked chain
-     the staleness grows by the number of turns and is reported, never hidden.
-
-2. **A frustum of a notebook.** A viewer holds the cells of a reactive notebook it may see, and in
-   place of the redacted cells the commitments of what they publish, with openings of the symbols
-   its own cells read. `evalSnip` checks every opening as `admitTransclusion` does and evaluates.
-   * `snip_preserves_receipts`: the viewer computes each visible cell's values and 256-bit receipt
-     exactly as the whole notebook does.
-   * `snip_tampered_refused_or_collides`: any openings `evalSnip` admits against the owner's
-     boundary are the owner's, with the same results, or two sealed slots collide.
-   * `snip_edit_preserves_cone_and_receipts`: when no redacted cell reads a visible one, an edit to
-     a visible cell dirties the same cells and recomputes the same receipts on both sides, against
-     an unchanged boundary.
-   * `notebook_cut_is_boundary`: with each cell at its `cellAddress` in a membrane frustum, the pins
-     `Frustum.snip` makes are exactly the reads of a redacted cell by a visible one, and the
-     commitments shown at a pin's target are the sealed boundary.
-
-3. **The mirror badge.** A render of an object is made by some party after some of the
-   `VerificationGate`s ran on the reader's side. `classifyMirrorRender` gives the only badge the
-   outcomes support: `selfVerifiedLocal` when every gate passed, a refusal naming a gate that
-   failed, and otherwise `untrustedOriginMirror` listing every skipped gate with the canonical
-   `obend://` address at which the reader can check for itself. `verifyMirrorBadge` validates a
-   badge someone else produced. `serverMirror_never_claims_selfVerified` and
-   `serverMirror_reports_all_skipped_gates` hold of both. Two gates are computed here:
-   `chainGate` (the headers link by digest and height, as every chain `SourceCell.advance` builds
-   does: `advance_linked`) and `transclusionGate`.
+Salted transclusion and receipt provenance, verified notebook boundaries, and canonical mirror
+badges. Source headers frame predecessor, height and named field commitments. Notebook snips
+preserve snapshots for any visible set; edits reuse a boundary only under downstream closure.
+Admission checks graph acyclicity as well as every boundary opening. The mirror badge is exactly
+the classification of the reader's own gate outcomes, including the ordered skipped-gate list.
 -/
 public import Obend.Vault.FrustumMembrane
 public import Obend.Doc.ReactiveNotebook
@@ -830,12 +786,14 @@ def snipEnv (openings : List BoundaryOpening) : Doc.Reactive.Environment :=
 inductive SnipRefusal where
   | opening (symbol : String) (why : TransclusionRefusal)
   | unopened (symbol : String)
+  | invalidDag
 deriving DecidableEq, Repr
 
 /-- **Evaluate a snipped notebook**, or say why not. Every opening is checked against the boundary
 as a transclusion's is against a receipt; every symbol a cell reads that the boundary commits must
 be opened. -/
 def evalSnip (k : CellKernel) (n : NotebookSnip) : Except SnipRefusal (List CachedCell) :=
+  if checkNotebookDag n.cells = false then .error .invalidDag else
   match n.openings.findSome? (fun o =>
       (openingRefusal n.boundary o.symbol o.slot).map (SnipRefusal.opening o.symbol)) with
   | some why => .error why
@@ -844,6 +802,11 @@ def evalSnip (k : CellKernel) (n : NotebookSnip) : Except SnipRefusal (List Cach
         (n.boundary.lookup s).isSome && !n.openings.any (fun o => o.symbol == s)) with
     | some s => .error (.unopened s)
     | none => .ok (evalSchedule k n.cells (snipEnv n.openings))
+
+/-- A malformed or cyclic snip is refused before any boundary or kernel work. -/
+theorem evalSnip_refuses_invalidDag (k : CellKernel) (n : NotebookSnip)
+    (h : checkNotebookDag n.cells = false) : evalSnip k n = .error .invalidDag := by
+  simp only [evalSnip, h, ite_true]
 
 /-- **Snip a notebook for a viewer of `V`**: the visible cells, the sealed boundary of the redacted
 ones, and openings of exactly the boundary symbols the visible cells read. -/
@@ -883,6 +846,8 @@ theorem evalSnip_ok {k : CellKernel} {n : NotebookSnip} {out : List CachedCell}
   unfold evalSnip at h
   split at h
   · cases h
+  split at h
+  · cases h
   · rename_i hbad
     split at h
     · cases h
@@ -904,6 +869,7 @@ theorem evalSnip_ok {k : CellKernel} {n : NotebookSnip} {out : List CachedCell}
 
 /-- A snip whose openings verify and cover its reads is evaluated. -/
 theorem evalSnip_of_checks {k : CellKernel} {n : NotebookSnip}
+    (hdag : checkNotebookDag n.cells = true)
     (hopen : ∀ o ∈ n.openings, n.boundary.lookup o.symbol = some (fieldCommit o.symbol o.slot) ∧
       o.salt.length = 32)
     (hcov : ∀ c ∈ n.cells, ∀ s ∈ c.reads, (n.boundary.lookup s).isSome = true →
@@ -928,7 +894,7 @@ theorem evalSnip_of_checks {k : CellKernel} {n : NotebookSnip}
       rw [hany] at hbad'
       exact absurd hbad'.2 (by decide)
   unfold evalSnip
-  rw [h₁, h₂]
+  simp only [hdag, Bool.true_eq_false, ite_false, h₁, h₂]
 
 /-- The seal preimages a boundary check compares: the owner's slots and the supplied openings. -/
 def boundaryPreimages (salt : String → List UInt8) (redacted : List CachedCell)
@@ -1046,7 +1012,7 @@ theorem snip_preserves_receipts (k : CellKernel) (salt : String → List UInt8) 
     by_cases hm : s ∈ boundarySymbols (redactCache V (evalFromScratch k cs).cells)
     · exact hm
     · simp [hm] at hsome'
-  rw [evalSnip_of_checks hopen hcov']
+  rw [evalSnip_of_checks (checkNotebookDag_snip V cs hdag) hopen hcov']
   exact congrArg Except.ok (snip_preserves_evaluation k V cs _ hdag
     (owned_openings_agree salt (fun o ho => (hown o ho).1) hcov))
 
@@ -1343,11 +1309,14 @@ def classifyMirrorRender (outcomes : VerificationGate → GateOutcome) (kind : S
 /-- **Validate a badge someone else produced** against what the reader's machine ran. -/
 def verifyMirrorBadge (outcomes : VerificationGate → GateOutcome) (kind : String)
     (address : ByteArray) (r : MirrorRender) : Bool :=
-  decide (address.size = 32) && decide (r.upgrade = ⟨kind, address⟩) &&
-    VerificationGate.all.all (fun g => outcomes g != .failed) &&
-    match r.tier with
-    | .selfVerifiedLocal => VerificationGate.all.all fun g => outcomes g == .passed
-    | .untrustedOriginMirror => decide (r.skipped = skippedGates outcomes)
+  match classifyMirrorRender outcomes kind address with
+  | .ok expected => decide (expected = r)
+  | .error _ => false
+
+theorem verifyMirrorBadge_iff (outcomes : VerificationGate → GateOutcome) (kind : String)
+    (address : ByteArray) (r : MirrorRender) :
+    verifyMirrorBadge outcomes kind address r = true ↔ classifyMirrorRender outcomes kind address = .ok r := by
+  cases h : classifyMirrorRender outcomes kind address <;> simp [verifyMirrorBadge, h]
 
 theorem mem_skippedGates {outcomes : VerificationGate → GateOutcome} {g : VerificationGate} :
     g ∈ skippedGates outcomes ↔ outcomes g = .skipped := by
@@ -1383,40 +1352,32 @@ theorem classify_verifies {outcomes : VerificationGate → GateOutcome} {kind : 
     {address : ByteArray} {r : MirrorRender}
     (h : classifyMirrorRender outcomes kind address = .ok r) :
     verifyMirrorBadge outcomes kind address r = true := by
-  obtain ⟨hsize, hnf, hup, hsk, htier⟩ := classify_ok h
-  unfold verifyMirrorBadge
-  simp only [hsize, hup, decide_true, Bool.true_and, Bool.and_eq_true, List.all_eq_true]
-  refine ⟨fun g _ => by simpa using hnf g, ?_⟩
-  cases ht : r.tier with
-  | selfVerifiedLocal =>
-    simp only [List.all_eq_true]
-    intro g _
-    have hnone := htier.mp ht
-    have hns : outcomes g ≠ .skipped := fun hg => by
-      have := mem_skippedGates.mpr hg
-      rw [hnone] at this
-      simp at this
-    have hnfg := hnf g
-    cases hg : outcomes g <;> simp_all
-  | untrustedOriginMirror => simpa using hsk
+  exact (verifyMirrorBadge_iff _ _ _ _).mpr h
 
 /-- A badge the validator accepts as self-verified: every gate passed on the reader's side. -/
 theorem badge_selfVerified_all_passed {outcomes : VerificationGate → GateOutcome} {kind : String}
     {address : ByteArray} {r : MirrorRender} (h : verifyMirrorBadge outcomes kind address r = true)
     (htier : r.tier = .selfVerifiedLocal) (g : VerificationGate) : outcomes g = .passed := by
-  unfold verifyMirrorBadge at h
-  simp only [htier, Bool.and_eq_true, List.all_eq_true, beq_iff_eq] at h
-  exact h.2 g (VerificationGate.mem_all g)
+  obtain ⟨_, hnf, _, _, ht⟩ := classify_ok ((verifyMirrorBadge_iff _ _ _ _).mp h)
+  have hnone := ht.mp htier
+  have hns : outcomes g ≠ .skipped := fun hg => by
+    have hm := mem_skippedGates.mpr hg
+    rw [hnone] at hm
+    cases hm
+  cases hg : outcomes g <;> simp_all
 
 /-- A badge the validator accepts as an untrusted mirror lists exactly the skipped gates and carries
 the object's own 32-byte address. -/
 theorem badge_untrusted_lists_skipped {outcomes : VerificationGate → GateOutcome} {kind : String}
     {address : ByteArray} {r : MirrorRender} (h : verifyMirrorBadge outcomes kind address r = true)
     (htier : r.tier = .untrustedOriginMirror) :
-    r.skipped = skippedGates outcomes ∧ r.upgrade = ⟨kind, address⟩ ∧ address.size = 32 := by
-  unfold verifyMirrorBadge at h
-  simp only [htier, Bool.and_eq_true, decide_eq_true_eq] at h
-  exact ⟨h.2, h.1.1.2, h.1.1.1⟩
+    r.skipped = skippedGates outcomes ∧ r.upgrade = ⟨kind, address⟩ ∧ address.size = 32 ∧
+      r.skipped ≠ [] := by
+  have hc := classify_ok ((verifyMirrorBadge_iff _ _ _ _).mp h)
+  refine ⟨hc.2.2.2.1, hc.2.2.1, hc.1, ?_⟩
+  intro hnil
+  have ht := hc.2.2.2.2.mpr (hc.2.2.2.1 ▸ hnil)
+  simp [htier] at ht
 
 /-- **A render made without running every gate never bears `selfVerifiedLocal`.** Of the
 classifier's badge and of any badge the validator accepts: if some gate did not pass on the
@@ -1445,7 +1406,7 @@ theorem serverMirror_reports_all_skipped_gates (outcomes : VerificationGate → 
     (htier : r.tier = .untrustedOriginMirror) :
     r.skipped = skippedGates outcomes ∧ (∀ g, outcomes g = .skipped ↔ g ∈ r.skipped) ∧
     r.upgrade = ⟨kind, address⟩ ∧ address.size = 32 := by
-  obtain ⟨hsk, hup, hsize⟩ :=
+  obtain ⟨hsk, hup, hsize, _⟩ :=
     badge_untrusted_lists_skipped (h.elim id classify_verifies) htier
   exact ⟨hsk, fun g => by rw [hsk]; exact mem_skippedGates.symm, hup, hsize⟩
 

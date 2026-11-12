@@ -300,8 +300,29 @@ run_cmd do
     let disallowed := axs.toList.filter (!allowed.contains ·)
     unless disallowed.isEmpty do
       bad := bad.push (c, disallowed)
+  -- Type-valued collision programs are audited too, not only theorem declarations.
+  for c in [``extractCallTreeCollision, ``callTreeDigest_binding_aux,
+      ``callTreeChildrenDigestBytes_binding_aux,
+      ``Obend.Judge.DecoAndCallTree.treeRoot_binds,
+      ``Obend.Judge.DecoAndCallTree.treeRoots_binds,
+      ``Obend.Judge.DecoAndCallTree.mrootC_binds,
+      ``Obend.Vault.Lsafe.edgesCollision] do
+    let axs ← liftCoreM <| collectAxioms c
+    let disallowed := axs.toList.filter (!allowed.contains ·)
+    unless disallowed.isEmpty do
+      bad := bad.push (c, disallowed)
   unless bad.isEmpty do
     throwError m!"Constructive axiom gate failed (Classical.choice, sorryAx, or custom axiom found): {bad.toList}"
+
+
+example : ∃ t : HttpsSessionNode,
+    checkCanonicalSessionTree (Obend.Digest.Cshake256.cshake256Bytes []) t = true ∧
+    callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t =
+      callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t := cshake_callTree_binding_inhabited
+#tooth callTreeDigestBytes_binding by
+  mutation sessionNodePreimage := fun _ _ req resp kids => req ++ resp ++ kids
+#print axioms extractCallTreeCollision
+#print axioms callTreeDigestBytes_binding
 
 end Obend.Tests.Metasystem.TrailblazeZkStripeGovTest
 end

@@ -30,11 +30,11 @@ public import Obend.Run.HyperLaw
 public section
 namespace Obend.Trailblaze.CathedralApex
 
-open Obend.Digest.HashBytes (Hash ofBE be Collision)
+open Obend.Digest.HashBytes (Hash ofBE be CollisionAmong)
 open Obend.Run.HyperLaw (HyperLaw2NonInterference checkHyperLaw2NonInterference
   checkHyperLaw2NonInterference_sound)
 open Obend.Trailblaze.ZkStripe (HttpsSessionNode ZkStripePolicy ZkStripeRefusal
-  HopAudited allSessionNodes checkCanonicalSessionTree callTreeDigestBytes callTreeDigest
+  HopAudited allSessionNodes treePreimages checkCanonicalSessionTree callTreeDigestBytes callTreeDigest
   callTreeDigestBytes_binding auditZkStripeCallTree verifyZkStripeCallTree
   auditZkStripeCallTree_ok_imp_verify auditZkStripeCallTree_all_hops_sound)
 open Obend.Trailblaze.ClusterGov (AriadneStep PhysicalEnergyEnvelope
@@ -240,7 +240,9 @@ theorem apex_cathedral_zkstripe_to_clustergov_sound
       (∀ hop ∈ allSessionNodes turn.batchCallTree, HopAudited turn.zkPolicy hop) ∧
       callTreeDigestBytes turn.hashFn turn.batchCallTree = turn.committedTreeDigestBytes ∧
       callTreeDigest turn.hashFn turn.batchCallTree = turn.clusterCtx.step.batchCallTreeRoot ∧
-      (turn.batchCallTree = otherTree ∨ Collision turn.hashFn) ∧
+      (turn.batchCallTree = otherTree ∨ CollisionAmong turn.hashFn
+        (fun x => x ∈ treePreimages turn.hashFn turn.batchCallTree ++
+          treePreimages turn.hashFn otherTree)) ∧
       2 * (intDot turn.clusterCtx.sampleWeights turn.clusterCtx.sampleActs).natAbs <
         turn.clusterCtx.tensorBound.modulusP ∧
       decodeSignedModP turn.clusterCtx.tensorBound.modulusP
@@ -282,7 +284,10 @@ theorem apex_cathedral_zkstripe_to_clustergov_sound
         have hBytesEq :
             callTreeDigestBytes turn.hashFn turn.batchCallTree = turn.committedTreeDigestBytes :=
           of_decide_eq_true hBytesDec
-        have hBind : turn.batchCallTree = otherTree ∨ Collision turn.hashFn :=
+        have hBind :
+            turn.batchCallTree = otherTree ∨ CollisionAmong turn.hashFn
+              (fun x => x ∈ treePreimages turn.hashFn turn.batchCallTree ++
+                treePreimages turn.hashFn otherTree) :=
           callTreeDigestBytes_binding turn.hashFn turn.batchCallTree otherTree
             hCan hOtherCan (hBytesEq.trans hOtherBytes.symm)
         cases hWeldDec : decide

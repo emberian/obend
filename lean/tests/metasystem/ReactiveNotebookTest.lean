@@ -303,6 +303,21 @@ example (k : CellKernel) : RecomputeExecution k clockEdit
 #tooth recomputeTable_refines by mutation
   dirtyTree := fun _ _ _ => false
 
+/-- The concrete cSHAKE receipt extractor returns equality on self-comparison. -/
+theorem receipt_extractor_self (c : ReactiveCell) (env : Environment) :
+    extractReceiptBreak arithmeticRun (c₁ := c) (c₂ := c) (a := env) (b := env) rfl =
+      .inl ⟨rfl, rfl, rfl⟩ := by
+  unfold extractReceiptBreak
+  simp [extractReceiptPreimageBreak]
+
+/-- Ordered support and the entire AST, not just outputs, determine the preimage. -/
+theorem receipt_preimage_orders_inputs :
+    cellReceiptPreimage (⟨1, .obendCode, ["a", "b"], ["out"], [], ""⟩ : ReactiveCell) [2, 3] [5] ≠
+      cellReceiptPreimage (⟨1, .obendCode, ["b", "a"], ["out"], [], ""⟩ : ReactiveCell) [3, 2] [5] := by decide
+#tooth cellReceiptPreimage_injective by mutation
+  cellReceiptPreimage := fun _ inputs values => frameList frameInt inputs ++ frameList frameInt values
+#print axioms extractReceiptBreak
+
 #print axioms checkNotebookDag_acyclic_sound
 #print axioms incrementalRecompute_eq_fromScratch
 #print axioms untouchedCells_preserve_receipts

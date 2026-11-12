@@ -85,7 +85,8 @@ def out_of_range_opening_collides {pp : Obend.Crypto.AjtaiParams} {hCols : pp.co
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s) {c j : Nat} (hc : numChunks ≤ c)
     {a : List Int} {v : UInt64} {w : DualChunkSlotOpening}
     (h : verifyDualChunkOpening pp hCols s.snapshotRoot a c j v w = true) :
-    HashCollisionWitness Obend.Polis.treeHash verkleMaxPreimageBytes :=
+    PathCollision [snapshotRootPreimage w.chunkCount w.verkleRoot]
+      [snapshotRootPreimage s.chunks.size s.verkleRoot] :=
   match extractSnapshotIndexBreak hwf h with
   | .inl hin => absurd hin.1 (Nat.not_lt.2 hc)
   | .inr col => col
@@ -186,13 +187,15 @@ def homeSeam : SovereignHome :=
 whose live slot holds the genesis home has that home's origin; so the live home passes the WAL
 check against the empty log (or a collision exists). -/
 theorem genesis_home_passes_wal_check (key : Digest256) :
-    checkHomeAgainstWal defaultChunkAjtaiParams defaultChunkAjtaiParams_cols homeSeam [] = true ∨
-      Nonempty CshakeCollision :=
-  migratedHome_passes_wal_check_or_collision defaultChunkAjtaiParams defaultChunkAjtaiParams_cols homeSeam key
+    checkHomeAgainstWal defaultChunkAjtaiParams defaultChunkAjtaiParams_cols homeSeam [] = true := by
+  have h := migratedHome_passes_wal_check_or_collision defaultChunkAjtaiParams defaultChunkAjtaiParams_cols homeSeam key
     ⟨7, 0, some ⟨1, homeSeam.receiptGenesis, 0, homeSeam⟩, none, [], []⟩ _ [] (.nil _)
     ⟨fun _ hl => by cases hl; rfl, fun _ hp => by cases hp⟩
     ⟨Replay.genesis, []⟩ Log.Reachable.genesis rfl ⟨1, homeSeam.receiptGenesis, 0, homeSeam⟩ rfl
     (tornTail := []) (.inl rfl)
+  rcases h with h | ⟨a, b, ha, _⟩
+  · exact h
+  · simp [migrationPreimages] at ha
 
 -- A home whose world minted one unit does not match the empty WAL.
 #guard !checkHomeAgainstWal defaultChunkAjtaiParams defaultChunkAjtaiParams_cols
@@ -220,10 +223,14 @@ theorem receipt_refused_under_other_mandate (s : CustodyState) (amount : Nat) (o
 theorem receipt_commitment_binds_vault_and_mandate (sa sb : CustodyState)
     (a b : VaultTransitionReceipt) (ha : checkKernelTransitionReceipt sa a = true)
     (hb : checkKernelTransitionReceipt sb b = true) (h : a.commitment = b.commitment) :
-    (sa.vaultId = sb.vaultId ∧ sa.mandateId = sb.mandateId ∧ a = b) ∨ Nonempty CshakeCollision :=
+    (sa.vaultId = sb.vaultId ∧ sa.mandateId = sb.mandateId ∧ a = b) ∨
+      Obend.Digest.HashBytes.CollisionAmong
+        (Obend.Digest.Cshake256.cshake256Bytes transitionTag.toUTF8.data.toList)
+        (fun x => x = (cTransitionPayload.encodeArray a.payload).data.toList ∨
+          x = (cTransitionPayload.encodeArray b.payload).data.toList) :=
   match acceptedReceipt_binding sa sb a b ha hb h with
   | .inl e => .inl ⟨e.2.1, e.2.2.1, e.1⟩
-  | .inr c => .inr ⟨c⟩
+  | .inr c => .inr c.toCollisionAmong
 
 -- The pre-repair check (no vault or mandate comparison) admits the foreign receipt.
 #tooth Obend.Tests.Metasystem.VaultMembraneNotebookSeamTest.receipt_refused_in_other_vault by mutation
@@ -306,10 +313,10 @@ example (a : Obend.Doc.AtomId) : atomOfAddress (cellAddress a) = some a :=
 
 /-! ### A frustum of a notebook -/
 
-private def lit (n : Int) : Instruction := ⟨.literal, n⟩
-private def input (n : Nat) : Instruction := ⟨.input, n⟩
-private def add : Instruction := ⟨.add, 0⟩
-private def mul : Instruction := ⟨.mul, 0⟩
+def lit (n : Int) : Instruction := ⟨.literal, n⟩
+def input (n : Nat) : Instruction := ⟨.input, n⟩
+def add : Instruction := ⟨.add, 0⟩
+def mul : Instruction := ⟨.mul, 0⟩
 
 /-- Cell 1 holds a rate its owner does not show. Cells 2 and 3 are downstream of it. -/
 def ledger : List ReactiveCell := [
@@ -412,6 +419,74 @@ example : dirtyCone ledger 2 = [2, 3] := by decide
 -- an edit to cell 1 misses cell 3.
 example : frustumClosed [1, 3] ledger = false := by decide
 example : dirtyCone (snipCells [1, 3] ledger) 1 = [1] ∧ dirtyCone ledger 1 = [1, 2, 3] := by decide
+
+/-! Adversarial four-node diamond: A -> {B,C} -> D. -/
+def diamond : List ReactiveCell := [
+  ⟨1, .obendCode, [], ["A"], [[lit 2]], "A"⟩,
+  ⟨2, .obendCode, ["A"], ["B"], [[input 0, lit 1, add]], "B"⟩,
+  ⟨3, .obendCode, ["A"], ["C"], [[input 0, lit 2, mul]], "C"⟩,
+  ⟨4, .obendCode, ["B", "C"], ["D"], [[input 0, input 1, add]], "D"⟩]
+def diamondEdit : NotebookAction := ⟨1, [[lit 10]]⟩
+theorem diamond_dag : checkNotebookDag diamond = true := by decide
+theorem diamond_order (k : CellKernel) :
+    RecomputeExecution k diamondEdit (evalFromScratch k diamond).cells (fun _ => 0) []
+      (editCellAndRecompute k (evalFromScratch k diamond) diamondEdit).cells [1, 2, 3, 4] :=
+  recompute_execution k diamondEdit _ _ []
+theorem diamond_fresh_values (hash : List UInt8 → BitVec 256) :
+    (editCellAndRecompute ⟨arithmeticRun, hash⟩ (evalFromScratch ⟨arithmeticRun, hash⟩ diamond)
+      diamondEdit).cells.map (fun c => c.result.values) = [[10], [11], [20], [31]] := by rfl
+
+theorem diamond_mediated_cut : frustumClosed [1, 4] diamond = false ∧
+    dirtyCone (snipCells [1, 4] diamond) 1 = [1] ∧ dirtyCone diamond 1 = [1, 2, 3, 4] := by decide
+
+/-- A snapshot snip is faithful, but editing across a hidden intermediary keeps D stale.
+This concrete counterexample is why downstream closure is required for boundary reuse. -/
+theorem diamond_stale_boundary (hash : List UInt8 → BitVec 256) :
+    (recompute ⟨arithmeticRun, hash⟩ diamondEdit
+      (snipCache [1, 4] (evalFromScratch ⟨arithmeticRun, hash⟩ diamond).cells)
+      (snipEnv (snipNotebook ⟨arithmeticRun, hash⟩ symbolSalt [1, 4] diamond).openings) []).map
+        (fun c => c.result.values) = [[10], [7]] := by rfl
+
+theorem diamond_closed_cut (k : CellKernel) :
+    recompute k ⟨2, [[input 0, lit 10, add]]⟩ (snipCache [2, 4] (evalFromScratch k diamond).cells)
+      (snipEnv (snipNotebook k symbolSalt [2, 4] diamond).openings) [] =
+    snipCache [2, 4] (editCellAndRecompute k (evalFromScratch k diamond)
+      ⟨2, [[input 0, lit 10, add]]⟩).cells :=
+  (snip_edit_preserves_cone_and_receipts k symbolSalt [2, 4] diamond _ diamond_dag
+    (by decide) (by decide)).2.2
+
+def cyclicSnip : NotebookSnip := ⟨[
+  ⟨1, .obendCode, ["B"], ["A"], [[input 0]], ""⟩,
+  ⟨2, .obendCode, ["A"], ["B"], [[input 0]], ""⟩], [], []⟩
+theorem cyclic_snip_refused (k : CellKernel) : evalSnip k cyclicSnip = .error .invalidDag :=
+  evalSnip_refuses_invalidDag k cyclicSnip (by decide)
+theorem self_loop_snip_refused (k : CellKernel) :
+    evalSnip k ⟨[⟨1, .obendCode, ["A"], ["A"], [[input 0]], ""⟩], [], []⟩ = .error .invalidDag :=
+  evalSnip_refuses_invalidDag k _ (by decide)
+
+#tooth Obend.Tests.Metasystem.VaultMembraneNotebookSeamTest.diamond_fresh_values by mutation
+  Obend.Doc.Reactive.reuseOrEval := fun _ _ old _ _ => old
+#tooth Obend.Tests.Metasystem.VaultMembraneNotebookSeamTest.diamond_mediated_cut by mutation
+  Obend.Doc.Reactive.frustumClosed := fun _ _ => true
+#tooth Obend.Tests.Metasystem.VaultMembraneNotebookSeamTest.cyclic_snip_refused by mutation
+  Obend.Doc.Reactive.checkNotebookDag := fun _ => true
+#tooth Obend.Tests.Metasystem.VaultMembraneNotebookSeamTest.self_loop_snip_refused by mutation
+  Obend.Doc.Reactive.checkNotebookDag := fun _ => true
+
+#guard (editCellAndRecompute scientificKernel (evalFromScratch scientificKernel diamond) diamondEdit) ==
+  evalFromScratch scientificKernel (applyEdit diamondEdit diamond)
+#guard (match evalSnip scientificKernel (snipNotebook scientificKernel symbolSalt [1, 4] diamond) with
+  | .ok out => out == snipCache [1, 4] (evalFromScratch scientificKernel diamond).cells
+  | .error _ => false)
+#guard (match evalSnip scientificKernel cyclicSnip with | .error .invalidDag => true | _ => false)
+
+/-- A self-verified badge cannot invent skipped gates. -/
+theorem mirror_invented_skip_refused : verifyMirrorBadge (fun _ => .passed) "page" genesisDigest
+    ⟨.selfVerifiedLocal, [.proofSignature], ⟨"page", genesisDigest⟩⟩ = false := by decide
+example : verifyMirrorBadge (fun _ => .passed) "page" genesisDigest
+    ⟨.selfVerifiedLocal, [], ⟨"page", genesisDigest⟩⟩ = true := classify_verifies (by rfl)
+#tooth Obend.Tests.Metasystem.VaultMembraneNotebookSeamTest.mirror_invented_skip_refused by mutation
+  Obend.Vault.TransclusionAndMirror.verifyMirrorBadge := fun _ _ _ _ => true
 
 /-! ### The same cut, in the membrane -/
 

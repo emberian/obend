@@ -4,6 +4,8 @@ public import Obend.Polis.JointCoReceipt
 public import Obend.Ledger.Floors
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
 import all Obend.Polis.PrivatePredicate
 import all Obend.Polis.JointCoReceipt
 meta import all Obend.Polis.PrivatePredicate
@@ -328,7 +330,7 @@ def sealTurn (raw : List LocalTurn) : ByteArray × List LocalTurn :=
 def book0 : FloorBook :=
   (FloorBook.empty.applyRaw ⟨.issuerWell 0, .user 0, 0, 10⟩).applyRaw ⟨.issuerWell 0, .user 1, 0, 10⟩
 
-def ledger0 : LedgerState := ⟨book0, 0, RevokedSet.empty⟩
+def ledger0 : LedgerState := ⟨book0, 0, RevokedSet.empty, 0⟩
 
 theorem floorsHold_book0 : FloorsHold book0 :=
   (FloorBook.admitBatch_preserves_floors (fb := .empty) (fb' := book0)
@@ -337,7 +339,7 @@ theorem floorsHold_book0 : FloorsHold book0 :=
 
 /-- A second turn, on the ledger the first one leaves: vat 1 pays four back. -/
 def turn2 : ByteArray × List LocalTurn :=
-  sealTurn [⟨0, .empty, .empty, 9, 4, 13⟩, ⟨1, .empty, .empty, 11, -4, 7⟩]
+  sealTurn [⟨0, .empty, .empty, 9, 4, 13, 0, 0, 0⟩, ⟨1, .empty, .empty, 11, -4, 7, 0, 0, 0⟩]
 
 #guard ((runTrace 2 ledger0 [(demoShared, legs0)]).map fun s =>
   (s.balances 0, s.balances 1, total (List.range 2) s.balances)) == some (9, 11, 20)
@@ -351,19 +353,19 @@ def turn2 : ByteArray × List LocalTurn :=
 
 /-- Vat 0 named twice. Each leg is valid, each `pre` is the ledger's, the half-edges sum to zero. -/
 def dupVatRaw : List LocalTurn :=
-  [⟨0, .empty, .empty, 10, -1, 9⟩, ⟨0, .empty, .empty, 10, -1, 9⟩, ⟨1, .empty, .empty, 10, 2, 12⟩]
+  [⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩, ⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 2, 12, 0, 0, 0⟩]
 /-- Vat 0 says it held a thousand. A joint turn on its own; only the ledger knows better. -/
 def unboundPreRaw : List LocalTurn :=
-  [⟨0, .empty, .empty, 1000, -900, 100⟩, ⟨1, .empty, .empty, 10, 900, 910⟩]
+  [⟨0, .empty, .empty, 1000, -900, 100, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 900, 910, 0, 0, 0⟩]
 /-- Vat 0 pays eleven of its ten. -/
 def overdraftRaw : List LocalTurn :=
-  [⟨0, .empty, .empty, 10, -11, -1⟩, ⟨1, .empty, .empty, 10, 11, 21⟩]
+  [⟨0, .empty, .empty, 10, -11, -1, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 11, 21, 0, 0, 0⟩]
 
 def stepSealed (raw : List LocalTurn) : Option LedgerState :=
   stepJoint 2 ledger0 (sealTurn raw).1 (sealTurn raw).2
 
 -- The honest neighbour of each exploit is applied; the exploit is refused, by the check it breaks.
-#guard ((stepSealed [⟨0, .empty, .empty, 10, -2, 8⟩, ⟨1, .empty, .empty, 10, 2, 12⟩]).map fun s =>
+#guard ((stepSealed [⟨0, .empty, .empty, 10, -2, 8, 0, 0, 0⟩, ⟨1, .empty, .empty, 10, 2, 12, 0, 0, 0⟩]).map fun s =>
   (s.balances 0, s.balances 1)) == some (8, 12)
 #guard (stepSealed dupVatRaw).isNone
 #guard !vatsDistinct (sealTurn dupVatRaw).2
@@ -374,12 +376,12 @@ def stepSealed (raw : List LocalTurn) : Option LedgerState :=
 #guard !(sealTurn overdraftRaw).2.all (·.valid)
 
 -- The digests read `pre`, `post` and the turn: none can be restated under the same digest.
-#guard turnDigest [⟨0, .empty, .empty, 10, -1, 9⟩] != turnDigest [⟨0, .empty, .empty, 11, -1, 9⟩]
-#guard turnDigest [⟨0, .empty, .empty, 10, -1, 9⟩] != turnDigest [⟨0, .empty, .empty, 10, -1, 8⟩]
-#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9⟩ != coReceiptDigest ⟨0, .empty, .empty, 11, -1, 9⟩
-#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9⟩ != coReceiptDigest ⟨0, .empty, .empty, 10, -1, 8⟩
-#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9⟩ != coReceiptDigest ⟨0, tailA, .empty, 10, -1, 9⟩
-#guard (coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9⟩).size == 32
+#guard turnDigest [⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩] != turnDigest [⟨0, .empty, .empty, 11, -1, 9, 0, 0, 0⟩]
+#guard turnDigest [⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩] != turnDigest [⟨0, .empty, .empty, 10, -1, 8, 0, 0, 0⟩]
+#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩ != coReceiptDigest ⟨0, .empty, .empty, 11, -1, 9, 0, 0, 0⟩
+#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩ != coReceiptDigest ⟨0, .empty, .empty, 10, -1, 8, 0, 0, 0⟩
+#guard coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩ != coReceiptDigest ⟨0, tailA, .empty, 10, -1, 9, 0, 0, 0⟩
+#guard (coReceiptDigest ⟨0, .empty, .empty, 10, -1, 9, 0, 0, 0⟩).size == 32
 
 -- The three refusals, for every digest and every ledger.
 example (n : Nat) (s : LedgerState) (shared : ByteArray) (a b : LocalTurn) (h : a.vat = b.vat) :
@@ -406,8 +408,9 @@ theorem demo_step_applies : ∃ s', stepJoint 2 ledger0 demoShared legs0 = some 
       simpa [ledger0, RevokedSet.empty] using (RevokedSet.contains_iff _ _).1 h
   have hpre : legs0.all
       (fun t => decide (t.vat < 2) && decide (t.pre = ledger0.balances t.vat)) = true := by decide
+  have hdomain : legs0.all (fun t => decide (t.asset = ledger0.asset ∧ t.epoch = ledger0.epoch)) = true := by decide
   refine stepJoint_complete (s := ledger0) floorsHold_book0
-    (by simp only [stepOk, hj, hnew, hpre, Bool.not_false, Bool.and_self]) ?_
+    (by simp only [stepOk, hj, hnew, hpre, hdomain, Bool.not_false, Bool.and_self]) ?_
   intro t ht f hf
   simp only [legs0, demoDiagram, List.map_cons, List.map_nil, List.mem_cons, List.not_mem_nil,
     or_false] at ht
@@ -438,13 +441,13 @@ example (trace : List (ByteArray × List LocalTurn)) (s s' : LedgerState)
 
 -- Commitments instead of cleartext half-edges.
 def cLeg (vat : VatId) (credit : Bool) (tid : ByteArray) : CommittedLeg :=
-  ⟨vat, tid, credit, (⟨5#256, 7#256⟩ : Opening).commit demoKey⟩
+  ⟨vat, tid, credit, openingCommit ⟨5#256, 7#256⟩⟩
 def cShared : ByteArray :=
   forestDigest ([cLeg 0 false .empty, cLeg 1 true .empty].map CommittedLeg.legBytes)
 
-#guard checkJointCommitted cShared [cLeg 0 false cShared, cLeg 1 true cShared]
-#guard !checkJointCommitted cShared [cLeg 0 false cShared, cLeg 1 false cShared]
-#guard !checkJointCommitted cShared [cLeg 0 false cShared]
+#guard checkJointCommitted cShared [cLeg 0 false cShared, cLeg 1 true cShared] [⟨5#256, 7#256⟩] [⟨5#256, 7#256⟩]
+#guard !checkJointCommitted cShared [cLeg 0 false cShared, cLeg 1 false cShared] [⟨5#256, 7#256⟩] [⟨5#256, 7#256⟩]
+#guard !checkJointCommitted cShared [cLeg 0 false cShared] [⟨5#256, 7#256⟩] [⟨5#256, 7#256⟩]
 
 -- The two-vat diagram closes: vat 0 resolves the promise vat 1 awaits.
 def closedPorts (c : Option Composite) : Option (Nat × Nat) :=
@@ -501,6 +504,52 @@ example (env : WireEnv) (shared : ByteArray) (a b : CoReceipt) (f g : FulfillPor
   cyclic_wiring_refused env shared [a, b]
     ⟨a, .trans (.step (by simp) (by simp) ⟨f, hf, w, hw, hfw⟩)
       (.step (by simp) (by simp) ⟨g, hg, v, hv, hgv⟩)⟩
+
+-- A later debit fails its configured floor after an earlier debit would have succeeded.
+def threeBook : FloorBook := book0.applyRaw ⟨.issuerWell 0, .user 2, 0, 10⟩
+def floorLedger : LedgerState :=
+  ⟨{ threeBook with nonIssuerMin := [((.user 1, 0), 10)] }, 0, RevokedSet.empty, 0⟩
+def lateFailure := sealTurn
+  [demoLeg 0 (-1) .empty, demoLeg 1 (-1) .empty, demoLeg 2 2 .empty]
+#guard checkJoint lateFailure.1 lateFailure.2
+#guard stepOk 3 floorLedger lateFailure.1 lateFailure.2
+#guard (stepJoint 3 floorLedger lateFailure.1 lateFailure.2).isNone
+#guard (applyJoint 3 floorLedger lateFailure.1 lateFailure.2).book == floorLedger.book
+#guard !(applyJoint 3 floorLedger lateFailure.1 lateFailure.2).seen.contains (turnKey lateFailure.1)
+
+-- Selective aborts publish no debit, clearing balance, or replay key.
+def settlementAttempts : List (ByteArray × List CoReceipt) :=
+  [(demoShared, [payer]), (demoShared, [payee .tt 1]),
+   (demoShared, [payer, payee .ff 1]), (demoShared, demoDiagram),
+   (demoShared, demoDiagram)]
+#guard let s := runSettlements demoEnv 2 ledger0 settlementAttempts
+  (s.balances 0, s.balances 1, s.book.balance (turnClearing demoShared) 0,
+    s.book.assetSum 0) == (9, 11, 0, 0)
+#guard let s := settleCoReceipts demoEnv 2 ledger0 demoShared [payer]
+  (s.balances 0, s.balances 1, s.seen.contains (turnKey demoShared)) == (10, 10, false)
+def otherAsset : LedgerState :=
+  ⟨(book0.applyRaw ⟨.issuerWell 1, .user 0, 1, 10⟩).applyRaw ⟨.issuerWell 1, .user 1, 1, 10⟩,
+    1, RevokedSet.empty, 0⟩
+#guard legs0.all (fun t => decide (t.vat < 2) && decide (t.pre = otherAsset.balances t.vat))
+#guard !stepOk 2 otherAsset demoShared legs0
+#guard !stepOk 2 { ledger0 with epoch := 1 } demoShared legs0
+#guard coReceiptDigest (demoLeg 0 (-1) demoShared) !=
+  coReceiptDigest { demoLeg 0 (-1) demoShared with nonce := 1 }
+#guard !checkJointCommitted cShared [cLeg 0 false cShared, cLeg 1 true cShared]
+  [⟨6#256, 7#256⟩] [⟨6#256, 7#256⟩]
+#guard !checkJointCommitted cShared [cLeg 0 false cShared, cLeg 1 true cShared]
+  [⟨5#256, 8#256⟩] [⟨5#256, 7#256⟩]
+example : FloorsHold (runSettlements demoEnv 2 ledger0 settlementAttempts).book ∧
+    ∀ a, (runSettlements demoEnv 2 ledger0 settlementAttempts).book.assetSum a = book0.assetSum a :=
+  runSettlements_preserves demoEnv 2 settlementAttempts ledger0 floorsHold_book0
+
+#tooth Obend.Polis.JointCoReceipt.stepJoint_domain by mutation
+  Obend.Polis.JointCoReceipt.stepOk := fun _ _ _ _ => true
+#tooth Obend.Polis.JointCoReceipt.runSettlements_preserves by mutation
+  Obend.Polis.JointCoReceipt.settleCoReceipts := fun _ _ s _ _ =>
+    { s with book := s.book.applyRaw ⟨.user 0, .user 1, s.asset, 100⟩ }
+#tooth Obend.Polis.JointCoReceipt.jointTurn_committed_conservation_sound by mutation
+  Obend.Polis.JointCoReceipt.checkJointCommitted := fun _ _ _ _ => true
 
 -- ============================================================================
 -- 5. Teeth

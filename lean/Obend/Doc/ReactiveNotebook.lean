@@ -371,21 +371,34 @@ def cellReceiptCustomization : List UInt8 := "OBEND.DOC.NOTEBOOK.RECEIPT/v1".toU
 def cshakeReceipt (preimage : List UInt8) : BitVec 256 :=
   BitVec.ofNat 256 (ofBE (cshake256Bytes cellReceiptCustomization preimage))
 
-/-- Equal receipts are of equal preimages, or these two preimages collide under the receipt hash. -/
-theorem cshakeReceipt_binds {p₁ p₂ : List UInt8} (h : cshakeReceipt p₁ = cshakeReceipt p₂) :
-    p₁ = p₂ ∨ CollisionAmong (cshake256Bytes cellReceiptCustomization)
-      (fun x => x = p₁ ∨ x = p₂) := by
-  by_cases hp : p₁ = p₂
-  · exact .inl hp
-  · refine .inr ⟨p₁, p₂, .inl rfl, .inr rfl, hp, ?_⟩
+/-- A Type-valued witness whose two messages are pinned to this comparison. -/
+structure ReceiptCollision (p q : List UInt8) : Type where
+  distinct : p ≠ q
+  sameDigest : ofBE (cshake256Bytes cellReceiptCustomization p) =
+    ofBE (cshake256Bytes cellReceiptCustomization q)
+
+def extractReceiptPreimageBreak {p₁ p₂ : List UInt8}
+    (h : cshakeReceipt p₁ = cshakeReceipt p₂) : PSum (p₁ = p₂) (ReceiptCollision p₁ p₂) :=
+  if hp : p₁ = p₂ then .inl hp else .inr ⟨hp, by
     have hw : (256 : Nat) ^ 32 = 2 ^ 256 := by decide
     have h₁ := ofBE_lt (cshake256Bytes cellReceiptCustomization p₁)
     have h₂ := ofBE_lt (cshake256Bytes cellReceiptCustomization p₂)
     rw [cshake256Bytes_length, hw] at h₁ h₂
     have hn := congrArg BitVec.toNat h
     simp only [cshakeReceipt, BitVec.toNat_ofNat] at hn
-    rw [Nat.mod_eq_of_lt h₁, Nat.mod_eq_of_lt h₂] at hn
-    exact hn
+    rwa [Nat.mod_eq_of_lt h₁, Nat.mod_eq_of_lt h₂] at hn⟩
+
+theorem ReceiptCollision.toCollisionAmong {p q : List UInt8} (w : ReceiptCollision p q) :
+    CollisionAmong (cshake256Bytes cellReceiptCustomization) (fun x => x = p ∨ x = q) :=
+  ⟨p, q, .inl rfl, .inr rfl, w.distinct, w.sameDigest⟩
+
+/-- Equal receipts bind precisely the two preimages compared. -/
+theorem cshakeReceipt_binds {p₁ p₂ : List UInt8} (h : cshakeReceipt p₁ = cshakeReceipt p₂) :
+    p₁ = p₂ ∨ CollisionAmong (cshake256Bytes cellReceiptCustomization)
+      (fun x => x = p₁ ∨ x = p₂) :=
+  match extractReceiptPreimageBreak h with
+  | .inl he => .inl he
+  | .inr w => .inr w.toCollisionAmong
 
 /-- The executable kernel can only see the ordered restriction to declared reads. -/
 structure CellKernel where
@@ -427,6 +440,19 @@ theorem receipt_binds (run : ProjectionKind → List Instruction → List Int �
       x = cellReceiptPreimage c₁ (restrict c₁ a) (evalCell ⟨run, cshakeReceipt⟩ c₁ a).values ∨
       x = cellReceiptPreimage c₂ (restrict c₂ b) (evalCell ⟨run, cshakeReceipt⟩ c₂ b).values) :=
   (cshakeReceipt_binds h).imp cellReceiptPreimage_injective id
+
+/-- Constructive semantic receipt binding; the right branch retains the exact pair. -/
+def extractReceiptBreak (run : ProjectionKind → List Instruction → List Int → Int)
+    {c₁ c₂ : ReactiveCell} {a b : Environment}
+    (h : (evalCell ⟨run, cshakeReceipt⟩ c₁ a).receipt = (evalCell ⟨run, cshakeReceipt⟩ c₂ b).receipt) :
+    PSum (c₁ = c₂ ∧ restrict c₁ a = restrict c₂ b ∧
+      (evalCell ⟨run, cshakeReceipt⟩ c₁ a).values = (evalCell ⟨run, cshakeReceipt⟩ c₂ b).values)
+      (ReceiptCollision
+        (cellReceiptPreimage c₁ (restrict c₁ a) (evalCell ⟨run, cshakeReceipt⟩ c₁ a).values)
+        (cellReceiptPreimage c₂ (restrict c₂ b) (evalCell ⟨run, cshakeReceipt⟩ c₂ b).values)) :=
+  match extractReceiptPreimageBreak h with
+  | .inl he => .inl (cellReceiptPreimage_injective he)
+  | .inr w => .inr w
 
 theorem evalCell_frame (k : CellKernel) (c : ReactiveCell) (a b : Environment)
     (h : ∀ s ∈ c.reads, a s = b s) : evalCell k c a = evalCell k c b := by
@@ -1241,6 +1267,25 @@ cell as it was (`redact_schedule_edit`). `Vault.TransclusionAndMirror` seals the
 /-- The cells of a schedule a viewer holds. -/
 def snipCells (V : List CellId) (cs : List ReactiveCell) : List ReactiveCell :=
   cs.filter fun c => V.contains c.id
+
+/-- Removing cells from an admitted schedule cannot introduce a cycle or duplicate export. -/
+theorem checkNotebookDag_snip (V : List CellId) (cs : List ReactiveCell)
+    (h : checkNotebookDag cs = true) : checkNotebookDag (snipCells V cs) = true := by
+  have hc := h
+  simp only [checkNotebookDag, uniqueExports, scheduleCheck, Bool.and_eq_true,
+    decide_eq_true_eq, List.all_eq_true] at hc
+  have sub : ((snipCells V cs).flatMap ReactiveCell.defs).Sublist (cs.flatMap ReactiveCell.defs) := by
+    clear h hc
+    induction cs with
+    | nil => exact .refl _
+    | cons c cs ih =>
+      unfold snipCells at *
+      rw [List.filter_cons]
+      split
+      · exact List.Sublist.append (.refl _) ih
+      · exact ih.trans (List.sublist_append_right _ _)
+  exact checkNotebookDag_complete _ (List.Pairwise.filter _ hc.2.1) (sub.nodup hc.1)
+    (fun p hp u hu => hc.2.2 p (List.mem_filter.mp hp).1 u (List.mem_filter.mp hu).1)
 
 /-- The cached cells a viewer holds. -/
 def snipCache (V : List CellId) (xs : List CachedCell) : List CachedCell :=

@@ -274,7 +274,7 @@ example (sealed' : List (String × SealedSlot))
       bobRecord.sealed.map (fun e => (e.1, sealCommit e.2))) :
     Frustum.project (world.set "bob" { bobRecord with sealed := sealed' }) "alice" =
       Frustum.project (world.set "bob" bobRecord) "alice" :=
-  frustum_committed_field_hides_value world "alice" "bob" bobRecord sealed' h
+  frustum_equal_commitments_project_eq world "alice" "bob" bobRecord sealed' h
 
 -- The sealed slot is shown as 32 bytes, the commitment of the secret and the salt.
 #guard (((Frustum.project world "alice").reflect "bob").map fun v => v.sealed.map (·.2)) ==
@@ -708,6 +708,25 @@ example (kind : String) (address : ByteArray) (r : MirrorRender)
 /-! ## 6. The axiom census -/
 
 #assert_axioms_tree
+
+/-- The ideal-oracle theorem counts every 256-bit salt, even for adaptive queries. -/
+example (secret : List UInt8) (next : ROTranscript → List UInt8) (coins : Nat → BitVec 256)
+    (commitment : BitVec 256) (Q : Nat) :
+    (hitSalts secret ((lazyRO next coins none Q []).map Prod.fst)).length ≤ Q :=
+  (frustum_committed_field_hides_value secret next coins commitment Q).2.1
+
+/-- Repeated queries receive the same answer despite a different next random tape entry. -/
+theorem lazyRO_reuses_answer : lazyRO (fun _ => [7]) (fun i => BitVec.ofNat 256 i) none 2 [] =
+    [([7], 0), ([7], 0)] := by decide
+/-- A planted challenge query really hits the programmed value. -/
+theorem lazyRO_program_hit : lazyRO (fun _ => [7]) (fun _ => 0) (some ([7], 9)) 1 [] =
+    [([7], 9)] := by decide
+#tooth Obend.Vault.FrustumMembrane.saltedPreimage_injective by mutation
+  Obend.Vault.FrustumMembrane.saltedPreimage := fun secret _ => sealPreimage ⟨secret, []⟩
+#tooth Obend.Vault.FrustumMembrane.lazyRO_program_unseen by mutation
+  Obend.Vault.FrustumMembrane.lazyRO := fun _ _ program _ _ =>
+    match program with | none => [] | some p => [p]
+#print axioms frustum_committed_field_hides_value
 
 end Obend.Tests.Metasystem.FrustumLivingScreenshotTest
 

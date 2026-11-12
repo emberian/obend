@@ -129,6 +129,21 @@ def slotsConfined : VpaJson.JState → List Seg → Bool
   | st, .lit ts :: rest => slotsConfined (VpaJson.specRunJson (litBytes ts) st) rest
   | st, .slot _ :: rest => decide (st.mode = .str false .normal) && slotsConfined st rest
 
+/-- Semantic template confinement: every slot appears at a machine state inside a plain value string. -/
+inductive SlotsInValueString : VpaJson.JState → List Seg → Prop
+  | nil (st) : SlotsInValueString st []
+  | lit {st ts rest} : SlotsInValueString (VpaJson.specRunJson (litBytes ts) st) rest →
+      SlotsInValueString st (.lit ts :: rest)
+  | slot {st name rest} : st.mode = .str false .normal → SlotsInValueString st rest →
+      SlotsInValueString st (.slot name :: rest)
+
+theorem SlotsInValueString.checked {st : VpaJson.JState} {segs : List Seg}
+    (h : SlotsInValueString st segs) : slotsConfined st segs = true := by
+  induction h with
+  | nil => rfl
+  | lit _ ih => exact ih
+  | slot hm _ ih => simp [slotsConfined, hm, ih]
+
 /-- **Selective-disclosure confinement.** When every slot is confined, every string-safe filling
 of the slots drives the machine exactly as the literals alone do: what is hidden reaches nothing
 the grammar reads. -/
@@ -273,6 +288,16 @@ theorem tlsnTranscriptPolicy_sound {q : TlsnTranscriptQuery} {c : TlsnTranscript
     exact ⟨by unfold VpaJson.runFullJsonGrammar; rw [hr]; exact h7,
       by unfold VpaJson.jsonObjectKeys; rw [hr]⟩
 
+/-- Every admitted byte class excludes quotes, backslashes, controls and non-ASCII bytes. -/
+theorem verifyTlsnTranscriptPolicy_masks_safe {q : TlsnTranscriptQuery} {c : TlsnTranscriptCert}
+    (h : verifyTlsnTranscriptPolicy q c = .ok) :
+    c.slotCount = q.spans.length ∧
+    ∀ sp ∈ q.spans, ∀ b, byteMatchesMask sp.byteClassMask b = true →
+      VpaJson.isSafeMaskByte b = true := by
+  refine ⟨(tlsnTranscriptPolicy_sound h).count, ?_⟩
+  intro sp hs b hb
+  exact safe_of_matches_safe_mask (tlsnTranscriptPolicy_sound h |>.classes sp hs) hb
+
 /-- A span tree commitment to the eight hidden bytes of the sample query. -/
 def validTlsnCommitment : ByteArray :=
   VpaJson.leafHash cshakeHasher VpaJson.spanTag "hunter2!".toByteArray
@@ -342,16 +367,17 @@ instance tlsnTranscriptJudge : Judge TlsnTranscriptQuery TlsnTranscriptCert wher
         cases hmask
       · repeat' split at h
         all_goals cases h <;> cases hk
-  Fragment q := slotsConfined VpaJson.JState.init q.segs = true
+  Fragment q := SlotsInValueString VpaJson.JState.init q.segs
   complete := by
     rintro q hfrag ⟨c, hm⟩
+    have hc := hfrag.checked
     refine ⟨c, 0, (verifyTlsnTranscriptPolicy_iff q c).2 ⟨?_, List.all_eq_true.2 hm.classes,
-      List.all_eq_true.2 fun sp hsp => by simpa using hm.wide sp hsp, hm.count, hm.aligned, hfrag,
+      List.all_eq_true.2 fun sp hsp => by simpa using hm.wide sp hsp, hm.count, hm.aligned, hc,
       ?_, hm.policy, hm.committed⟩⟩
     · cases hs : q.spans with
       | nil => exact absurd hs hm.nonempty
       | cons _ _ => rfl
-    · have hr := tlsn_filled_document q.segs [] hfrag (fun _ h => by cases h)
+    · have hr := tlsn_filled_document q.segs [] hc (fun _ h => by cases h)
       have hv := (hm.confined [] (fun _ h => by cases h)).1
       unfold VpaJson.runFullJsonGrammar at hv
       rw [hr] at hv

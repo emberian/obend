@@ -1280,9 +1280,16 @@ instance symbolicRegexInclusionJudge : Judge InclusionQuery Pairs where
         obtain ⟨i, _, hi⟩ := Judge.deepen_some _ hw
         exact searchCex_sound hi hm
       · cases h
-  Fragment q := ∃ fuel, exploreCloses fuel q = true
+  Fragment q := ∃ fuel,
+    (nrm q.lhs, nrm q.rhs) ∈ emitBisimPairs fuel q.lhs q.rhs ∧
+    ∀ pq ∈ emitBisimPairs fuel q.lhs q.rhs, ∀ b : UInt8,
+      (nrm (der b pq.1), nrm (der b pq.2)) ∈ emitBisimPairs fuel q.lhs q.rhs
   complete := by
-    rintro q ⟨fuel, hc⟩ ⟨_, hi⟩
+    rintro q ⟨fuel, hroot, hclosed⟩ ⟨_, hi⟩
+    have hc : exploreCloses fuel q = true := by
+      simp only [exploreCloses, bisimOk, memSim, closedAt, Bool.and_eq_true,
+        Bool.true_and, List.all_eq_true, decide_eq_true_eq]
+      exact ⟨hroot, fun pq hp b _ => hclosed pq hp b⟩
     refine ⟨emitBisimPairs fuel q.lhs q.rhs, 0, ?_⟩
     simp only [inclusionCheck, emit_accepted_of_incl hc hi, ↓reduceIte]
   mono := by
@@ -1295,6 +1302,17 @@ instance symbolicRegexInclusionJudge : Judge InclusionQuery Pairs where
       cases hd : Judge.deepen (searchCex q) r with
       | some w => rw [Judge.deepen_mono _ hd le]
       | none => rw [hd] at h; simp at h
+
+/-- Finite exploration supplies the semantic fragment through minterm coverage. -/
+theorem exploreCloses_fragment {fuel : Nat} {q : InclusionQuery}
+    (h : exploreCloses fuel q = true) : symbolicRegexInclusionJudge.Fragment q := by
+  obtain ⟨hr, hc⟩ := bisimOk_parts h
+  refine ⟨fuel, of_decide_eq_true hr, fun pq hp b => ?_⟩
+  obtain ⟨c, hcm, hsame⟩ := classesOf_covers (emitBisimPairs fuel q.lhs q.rhs) b
+  have sub := atoms_subset_pairAtoms hp
+  rw [der_factors_over_minterm pq.1 (fun a ha => hsame a (sub.1 a ha)),
+    der_factors_over_minterm pq.2 (fun a ha => hsame a (sub.2 a ha))]
+  exact of_decide_eq_true (List.all_eq_true.1 (hc pq hp).2 c hcm)
 
 /-! ## 8. Witnesses: the checkers accept something and refuse something -/
 

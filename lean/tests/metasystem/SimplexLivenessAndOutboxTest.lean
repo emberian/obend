@@ -335,10 +335,32 @@ theorem launched7_finalizes (evs : List NetEvent) (s : NetState)
   have r := gst_honest_leader_finalizes launched7_ok h (show 0 + 2 * 1 < s.time by omega)
   ⟨r.2.2.1, fun n hn => (r.2.1 n hn).2⟩
 
+/-- Pre-GST equivocation exposes the missing faulty-view recovery rule: two block votes
+and one dummy vote survive GST without a quorum, and vote-once forbids the rescuing dummy votes. -/
+def byzantineLeader : Protocol := ⟨[3, 0, 1, 2], 1, (· == 3), by decide, by decide, by decide⟩
+def splitCfg : NetConfig := ⟨100, 1, 5⟩
+def splitA : Msg := prop byzantineLeader 1 [wide 1 10]
+def splitB : Msg := prop byzantineLeader 1 [wide 1 20]
+def splitVotes : List Msg :=
+  [⟨0, 1, .vote, .block [wide 1 10]⟩, ⟨1, 1, .vote, .block [wide 1 20]⟩, ⟨2, 1, .vote, .dummy 1⟩]
+def splitRun : List NetEvent :=
+  [0, 1, 2].map (fun n => .enter n 1 []) ++
+  [.inject splitA, .inject splitB, .deliver 0 splitA, .send ⟨0, 1, .vote, .block [wide 1 10]⟩,
+   .deliver 1 splitB, .send ⟨1, 1, .vote, .block [wide 1 20]⟩] ++ List.replicate 5 .tick ++
+  [.send ⟨2, 1, .vote, .dummy 1⟩] ++ deliverTo [0, 1, 2] (splitA :: splitB :: splitVotes) ++
+  List.replicate 100 .tick
+example : (runNet byzantineLeader splitCfg netEmpty splitRun).map (fun s =>
+    (s.time, decide (NotarizedDummy byzantineLeader s.sent 1),
+      decide (NotarizedBlock byzantineLeader s.sent 1 [wide 1 10]),
+      decide (NotarizedBlock byzantineLeader s.sent 1 [wide 1 20]),
+      (netStep byzantineLeader splitCfg s (.send ⟨0, 1, .vote, .dummy 1⟩)).isNone,
+      (netStep byzantineLeader splitCfg s (.enter 0 2 [.dummy 1])).isNone)) =
+    some (105, false, false, false, true, true) := by decide +kernel
+
 /-! ## 2. Slot-key signatures -/
 
-def toyHash : HashBytes.Hash :=
-  fun bs => HashBytes.be 32 (bs.foldl (fun acc b => (acc * 131 + b.toNat + 1) % 65537) 1)
+def realHash : HashBytes.Hash :=
+  Cshake256.Fast.cshake256Fast simplexAuthDomainBytes
 
 /-- A hash with one output: every opening of every slot key is accepted under it. -/
 def constHash : HashBytes.Hash := fun _ => HashBytes.be 32 7
@@ -362,23 +384,14 @@ theorem honestKeys (H : HashBytes.Hash) (hH : ∀ bs, (H bs).length = 32) :
   KeyDirectory.derive_honestSlotKeys H 4096 200 proto4 signLog saltOf hH (by decide +kernel)
     (fun n v k => by simp [saltOf, bytesOfList_toList]) (by decide +kernel) (by decide)
 
-/-- Under `toyHash` the honest trace verifies; the forged and the replayed signature do not. -/
-example :
-    verifySignedSent (commitSlotSigScheme toyHash 4096) (KeyDirectory.derive toyHash signLog saltOf)
+/-- Under real cSHAKE the honest trace verifies; forgery and signature replay are refused. -/
+theorem real_signatures :
+    verifySignedSent (commitSlotSigScheme realHash 4096) (KeyDirectory.derive realHash signLog saltOf)
       proto4.committee (signLog.map sign) = true ∧
-    verifySignedMsg (commitSlotSigScheme toyHash 4096) (KeyDirectory.derive toyHash signLog saltOf)
+    verifySignedMsg (commitSlotSigScheme realHash 4096) (KeyDirectory.derive realHash signLog saltOf)
       proto4.committee forgedVote = false ∧
-    verifySignedMsg (commitSlotSigScheme toyHash 4096) (KeyDirectory.derive toyHash signLog saltOf)
+    verifySignedMsg (commitSlotSigScheme realHash 4096) (KeyDirectory.derive realHash signLog saltOf)
       proto4.committee replayedSig = false := by
-  decide +kernel
-
-/-- The judge accepts the honest trace. -/
-example :
-    (match (signedSimplexCompJudge toyHash 4096).verify 0
-        ⟨proto4, KeyDirectory.derive toyHash signLog saltOf, signLog, saltOf, signLog.map sign⟩ ()
-      with
-     | .ok => true
-     | _ => false) = true := by
   decide +kernel
 
 def isForgery {α : Sort _} {β : Sort _} : PSum α β → Bool
@@ -414,9 +427,79 @@ theorem constHash_collides : HashBytes.Collision constHash := by
     rw [h] at hf
     cases hf
   | inr w =>
-    exact HashCollisionWitness.toCollision (H := constHash) (maxBytes := 4096)
-      (forgedSignature_reduces_to_hashCollision constHash 4096 _ proto4 signLog saltOf
-        (honestKeys constHash (fun _ => by simp [constHash, HashBytes.length_be])) w)
+    exact (forgedSignature_reduces_to_hashCollision constHash 4096 _ proto4 signLog saltOf
+        (honestKeys constHash (fun _ => by simp [constHash, HashBytes.length_be])) w).toCollisionAmong.global
+
+theorem signed_oracle : HonestSigningOracle proto4 [] signLog (signLog.map sign) := by
+  intro pre sm suf he hon _
+  change [sign (prop proto4 1 blockA), sign ⟨0, 1, .vote, .block blockA⟩,
+    sign ⟨1, 1, .vote, .block blockA⟩, sign ⟨2, 1, .vote, .block blockA⟩,
+    sign ⟨3, 1, .vote, .block [wide 1 666]⟩] = pre ++ sm :: suf at he
+  cases pre with
+  | nil =>
+    simp only [List.nil_append, List.cons.injEq] at he
+    obtain ⟨rfl, rfl⟩ := he
+    decide +kernel
+  | cons x pre =>
+    simp only [List.cons_append, List.cons.injEq] at he
+    obtain ⟨rfl, he⟩ := he
+    cases pre with
+    | nil =>
+      simp only [List.nil_append, List.cons.injEq] at he
+      obtain ⟨rfl, rfl⟩ := he
+      decide +kernel
+    | cons x pre =>
+      simp only [List.cons_append, List.cons.injEq] at he
+      obtain ⟨rfl, he⟩ := he
+      cases pre with
+      | nil =>
+        simp only [List.nil_append, List.cons.injEq] at he
+        obtain ⟨rfl, rfl⟩ := he
+        decide +kernel
+      | cons x pre =>
+        simp only [List.cons_append, List.cons.injEq] at he
+        obtain ⟨rfl, he⟩ := he
+        cases pre with
+        | nil =>
+          simp only [List.nil_append, List.cons.injEq] at he
+          obtain ⟨rfl, rfl⟩ := he
+          decide +kernel
+        | cons x pre =>
+          simp only [List.cons_append, List.cons.injEq] at he
+          obtain ⟨rfl, he⟩ := he
+          cases pre with
+          | nil =>
+            simp only [List.nil_append, List.cons.injEq] at he
+            obtain ⟨rfl, rfl⟩ := he
+            cases hon.2
+          | cons x pre =>
+            simp only [List.cons_append, List.cons.injEq] at he
+            obtain ⟨rfl, he⟩ := he
+            cases pre <;> cases he
+
+def honestObj : SignedSlotTraceObj :=
+  ⟨proto4, KeyDirectory.derive realHash signLog saltOf, signLog, saltOf, signLog.map sign⟩
+def honestJudgment := signedSimplexCompJudge realHash 4096 honestObj real_signatures.1 signed_oracle
+  (honestKeys realHash (fun bs => by
+    rw [realHash, Cshake256.Fast.cshake256Fast_eq]
+    exact Cshake256.cshake256Bytes_length _ _))
+example : isForgery honestJudgment = false := by decide +kernel
+
+/-- The finite judge actually returns a pair drawn from the rejected trace's slot scope. -/
+def forgedObj : SignedSlotTraceObj :=
+  ⟨proto4, KeyDirectory.derive constHash signLog saltOf, signLog, saltOf, [forgedVote]⟩
+def finiteJudgment := signedSimplexCompJudge constHash 4096 forgedObj forged_ver forged_oracle
+  (honestKeys constHash (fun _ => by simp [constHash, HashBytes.length_be]))
+def collisionBranch {A B : Sort _} : PSum A B → Bool
+  | .inl _ => false
+  | .inr _ => true
+example : collisionBranch finiteJudgment = true := by decide +kernel
+example : HashBytes.CollisionAmong constHash (fun x => x ∈ slotTracePreimages forgedObj) := by
+  cases h : finiteJudgment with
+  | inl w =>
+    have hc : collisionBranch finiteJudgment = true := by decide +kernel
+    rw [h] at hc; cases hc
+  | inr c => exact c.toCollisionAmong
 
 /-! ## 3. The irreversible outbox -/
 
@@ -582,7 +665,9 @@ theorem turns_safe :
       a.chain.getLast? = some (.block a.view
         (effectCommitNat a.nullifierId .irreversibleActuation other)) →
       other = a.dispatchedPayload ∨
-        HashBytes.Collision (Cshake256.cshake256Bytes outboxEffectDomain.data.toList)) ∧
+        HashBytes.CollisionAmong (Cshake256.cshake256Bytes outboxEffectDomain.data.toList)
+          (fun x => x = encodeEffectPreimage a.nullifierId .irreversibleActuation a.dispatchedPayload ∨
+            x = encodeEffectPreimage a.nullifierId .irreversibleActuation other)) ∧
     (∀ a ∈ st3.dispatchedActuations, ∀ (P' : Protocol) (sent : Sent) (req : OutboxEffectReq),
       req.effectClass ≠ .idempotentRead → req.nullifierId = a.nullifierId →
       stepOutbox P' sampleValidPartition sent st3 req = none) := by

@@ -494,6 +494,20 @@ example :
 #print axioms baseProof_binding_collision
 #print axioms cshake_baseProof_binding
 
+
+-- A real cSHAKE graph with a nonempty edge and its accepted single-edge opening.
+theorem cshake_kg_opening_inhabited :
+    ∃ es : Array KgEdge, es.size = 1 ∧
+      verifyKgEdgeOpening cshakeHasher (edgesDigest cshakeHasher es) ⟨7, "ab".toByteArray, "c".toByteArray⟩
+        (openKgEdge cshakeHasher es 0) = true := by
+  refine ⟨#[⟨7, "ab".toByteArray, "c".toByteArray⟩], rfl, ?_⟩
+  exact verifyKgEdgeOpening_complete cshakeHasher _ 0 (by decide)
+theorem kg_field_boundary_distinct :
+    (KgEdge.key ⟨7, "ab".toByteArray, "c".toByteArray⟩) ≠
+      (KgEdge.key ⟨7, "a".toByteArray, "bc".toByteArray⟩) := by decide +kernel
+#tooth kg_field_boundary_distinct by mutation KgEdge.key := fun e => e.subj ++ e.obj
+#print axioms edgesCollision
+
 end Obend.Tests.Metasystem.GuardedLobDetCborLsafeTest
 
 end

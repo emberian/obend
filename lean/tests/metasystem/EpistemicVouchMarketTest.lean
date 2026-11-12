@@ -21,6 +21,8 @@ Exercises `Obend.Polis.EpistemicVouchMarket`:
 public import Obend.Polis.EpistemicVouchMarket
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
 import all Obend.Polis.EpistemicVouchMarket
 import all Obend.Logic.SeparationFrame
 import all Obend.Judge.Class
@@ -168,7 +170,8 @@ theorem tableMarket_eq : tableMarket = tallyMarket := by
 theorem tallies_framed : TallyFramed falseTally ∧ TallyFramed trueTally := by
   unfold TallyFramed; decide +kernel
 example (h : tallyDigest falseTally = tallyDigest trueTally) :
-    Obend.Digest.HashBytes.Collision (cshake256Bytes tallyDomain) :=
+    Obend.Digest.HashBytes.CollisionAmong (cshake256Bytes tallyDomain)
+      (fun x => x = tallyPreimage falseTally ∨ x = tallyPreimage trueTally) :=
   (tallyDigest_binding tallies_framed.1 tallies_framed.2 h).resolve_left (by decide +kernel)
 
 -- The judge: accepts the true tally, refutes the false one, and decides neither below the grade.
@@ -351,6 +354,12 @@ example (st : MarketState) (turns : List (MarketTurn TallyClaim Unit))
   obtain ⟨st', _, hs, _⟩ := post_cooldown_unbond_succeeds (Cert := Unit)
     (trace_preserves_inv h (marketInv_genesis tableMarket _)) hr hexp
   rw [hs]; rfl
+
+/-- The Type-valued binding extractor has an executable equality branch. -/
+example : (match tallyDigest_extract (o₁ := ⟨[1, 2], 3⟩) (o₂ := ⟨[1, 2], 3⟩)
+    (by unfold TallyFramed; decide) (by unfold TallyFramed; decide) rfl with | .inl _ => true | .inr _ => false) = true := by decide +kernel
+#tooth Obend.Polis.EpistemicVouchMarket.tallyDigest_binding by mutation
+  Obend.Polis.EpistemicVouchMarket.tallyPreimage := fun _ => []
 
 /-! ## 4. Teeth -/
 

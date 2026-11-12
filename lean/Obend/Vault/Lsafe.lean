@@ -201,12 +201,15 @@ def jsonToCbor : JVal → CborVal
   | .str s => .text s
   | .arr xs => .array (jsonListToCbor xs)
   | .obj kvs => .map (jsonMembersToCbor kvs)
+termination_by structural v => v
 def jsonListToCbor : List JVal → List CborVal
   | [] => []
   | x :: xs => jsonToCbor x :: jsonListToCbor xs
+termination_by structural xs => xs
 def jsonMembersToCbor : List (ByteArray × JVal) → List (CborVal × CborVal)
   | [] => []
   | kv :: rest => (.text kv.1, jsonToCbor kv.2) :: jsonMembersToCbor rest
+termination_by structural kvs => kvs
 end
 
 mutual
@@ -219,18 +222,21 @@ def cborToJson : CborVal → Option JVal
   | .text s => some (.str s)
   | .array xs => (cborListToJson xs).map .arr
   | .map kvs => (cborMembersToJson kvs).map .obj
+termination_by structural v => v
 def cborListToJson : List CborVal → Option (List JVal)
   | [] => some []
   | x :: xs =>
     match cborToJson x, cborListToJson xs with
     | some v, some vs => some (v :: vs)
     | _, _ => none
+termination_by structural xs => xs
 def cborMembersToJson : List (CborVal × CborVal) → Option (List (ByteArray × JVal))
   | [] => some []
   | (k, v) :: rest =>
     match k, cborToJson v, cborMembersToJson rest with
     | .text s, some jv, some r => some ((s, jv) :: r)
     | _, _, _ => none
+termination_by structural kvs => kvs
 end
 
 mutual
@@ -241,17 +247,20 @@ theorem cborToJson_jsonToCbor : ∀ v : JVal, cborToJson (jsonToCbor v) = some v
   | .str _ => by simp [jsonToCbor, cborToJson]
   | .arr xs => by simp [jsonToCbor, cborToJson, cborListToJson_jsonListToCbor xs]
   | .obj kvs => by simp [jsonToCbor, cborToJson, cborMembersToJson_jsonMembersToCbor kvs]
+termination_by structural v => v
 theorem cborListToJson_jsonListToCbor : ∀ xs : List JVal,
     cborListToJson (jsonListToCbor xs) = some xs
   | [] => by simp [jsonListToCbor, cborListToJson]
   | x :: xs => by
     simp [jsonListToCbor, cborListToJson, cborToJson_jsonToCbor x, cborListToJson_jsonListToCbor xs]
+termination_by structural xs => xs
 theorem cborMembersToJson_jsonMembersToCbor : ∀ kvs : List (ByteArray × JVal),
     cborMembersToJson (jsonMembersToCbor kvs) = some kvs
   | [] => by simp [jsonMembersToCbor, cborMembersToJson]
   | kv :: rest => by
     simp [jsonMembersToCbor, cborMembersToJson, cborToJson_jsonToCbor kv.2,
       cborMembersToJson_jsonMembersToCbor rest]
+termination_by structural kvs => kvs
 end
 
 theorem jsonToCbor_injective {a b : JVal} (h : jsonToCbor a = jsonToCbor b) : a = b :=

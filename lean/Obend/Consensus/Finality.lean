@@ -320,16 +320,22 @@ theorem chainDigest_eq_spec (c : Chain) :
 /-- **The chain digest binds the finalized blocks at their full width**: two chains whose blocks
     are canonical (8-byte views, 256-bit payloads) and whose digests agree carry the same blocks,
     or the two serializations are a cSHAKE256 collision. -/
+def chainDigest_extract {c₁ c₂ : Chain}
+    (h₁ : c₁.blocks.all Entry.canonical = true) (h₂ : c₂.blocks.all Entry.canonical = true)
+    (hEq : chainDigest c₁ = chainDigest c₂) :
+    PSum (PLift (c₁.blocks = c₂.blocks))
+      (Obend.Digest.HashBytes.CollisionPair (cshake256Bytes simplexChainDomain.data.toList)
+        (fun x => x = c₁.blocks.flatMap Entry.encode ∨ x = c₂.blocks.flatMap Entry.encode)) :=
+  Obend.Digest.HashBytes.extractBinding _ _ _ (encodeEntries_injective h₁ h₂) (by
+    rw [← chainDigest_eq_spec, ← chainDigest_eq_spec, hEq])
+
 theorem chainDigest_binds {c₁ c₂ : Chain}
     (h₁ : c₁.blocks.all Entry.canonical = true) (h₂ : c₂.blocks.all Entry.canonical = true)
     (hEq : chainDigest c₁ = chainDigest c₂) :
     c₁.blocks = c₂.blocks ∨
-      Obend.Digest.HashBytes.Collision (cshake256Bytes simplexChainDomain.data.toList) := by
-  if hPre : c₁.blocks.flatMap Entry.encode = c₂.blocks.flatMap Entry.encode then
-    exact .inl (encodeEntries_injective h₁ h₂ hPre)
-  else
-    refine .inr ⟨_, _, hPre, ?_⟩
-    rw [← chainDigest_eq_spec, ← chainDigest_eq_spec, hEq]
+      Obend.Digest.HashBytes.CollisionAmong (cshake256Bytes simplexChainDomain.data.toList)
+        (fun x => x = c₁.blocks.flatMap Entry.encode ∨ x = c₂.blocks.flatMap Entry.encode) :=
+  Obend.Digest.HashBytes.bindingResult (chainDigest_extract h₁ h₂ hEq)
 
 /-- Domain-separated cSHAKE256 fold of `(chainDigest || vaultStateRoot)` for `.collapsed`. -/
 def foldCollapsedRoot (cDigest vaultRoot : Digest) : Digest :=

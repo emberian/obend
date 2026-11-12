@@ -309,4 +309,32 @@ example : ∃ epochs S snap, epochs.length = 2 ∧
 #tooth Obend.Vault.VerkleSnapshotBridge.walCrashReplay_restores_verkle_consistent_world by mutation
   Obend.Vault.VerkleSnapshotBridge.recoverWalBytes := fun rawDisk => rawDisk
 
+/-- The exact SIS alternative cannot be supplied by an unrelated matrix kernel vector. -/
+theorem exact_zero_difference_not_break (pp : Obend.Crypto.AjtaiParams) (w : DualChunkSlotOpening) :
+    ¬ SISBreakOn pp (diffLimbs w w) := by
+  have hz : ∀ xs : List Int,
+      Obend.Judge.Computational.vecInfNorm (Obend.Crypto.vecSub xs xs) = 0 := by
+    intro xs
+    induction xs with
+    | nil => rfl
+    | cons x xs ih => simp [Obend.Crypto.vecSub, Obend.Judge.Computational.vecInfNorm, ih]
+  intro h
+  have hn := hz (wordsToLimbs w.chunkSlotsList)
+  exact Nat.lt_irrefl 0 (hn ▸ h.1)
+
+/-- Honest openings against the real cSHAKE tree inhabit both verifier premises. -/
+example (w : Obend.Vault.ChunkedWorld.World) :
+    ∃ (s : AuthenticatedWorldSnapshot) (opening : DualChunkSlotOpening),
+      verifyDualChunkOpening defaultChunkAjtaiParams defaultChunkAjtaiParams_cols
+      s.snapshotRoot (s.ajtaiChunkRoots.getD 0 []) 0 0 (s.readSlot 0 0) opening = true := by
+  let s := buildAuthenticatedSnapshot defaultChunkAjtaiParams defaultChunkAjtaiParams_cols w
+  exact ⟨s, openDualSnapshotSlot s 0 0,
+    openDualSnapshotSlot_valid (pp := defaultChunkAjtaiParams)
+      (hCols := defaultChunkAjtaiParams_cols) (s := s)
+      (buildAuthenticatedSnapshot_wf defaultChunkAjtaiParams defaultChunkAjtaiParams_cols w)
+      (by decide) (by decide)⟩
+#print axioms extractSnapshotRootBreak
+#print axioms extractSnapshotIndexBreak
+#print axioms extractDualChunkOpeningBreak
+
 end Obend.Tests.Metasystem.VerkleSnapshotBridgeTest

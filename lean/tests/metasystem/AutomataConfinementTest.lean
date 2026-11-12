@@ -1,6 +1,9 @@
 module
 
 public import Obend.Tactic.Tooth
+public meta import Obend.Digest.HashBytes
+public meta import Obend.Digest.Cshake256
+public meta import Obend.Codec.DetCbor
 public import Obend.Judge.AutomataConfinement
 import all Obend.Judge.Class
 import all Obend.Judge.AutomataConfinement
@@ -34,7 +37,7 @@ open Obend.Judge
 example : dfaFormat.name = "dfa-confinement" := by exact id rfl
 example : dfaFormat.version = "1" := by exact id rfl
 example : dfaFormat.regime = .decidable := by exact id rfl
-example : dfaFormat.trust = .kernel := by exact id rfl
+example : dfaFormat.trust = .compiled := by exact id rfl
 
 -- Positive certificate acceptance & byte-boundary acceptance
 example : dfaConfinementCheck 1 defaultDfaQuery goodDfaCert = .ok :=
@@ -72,9 +75,8 @@ example : dfaConfinementCheck 1 defaultDfaQuery badCert =
 def tamperedDigestDfaCert : DfaConfinementCert :=
   { goodDfaCert with claimedDigest := 999 }
 
-theorem tamperedDigestDfaCert_refused :
-    dfaConfinementCheck 1 defaultDfaQuery tamperedDigestDfaCert =
-      .refused (.digestMismatch (runningDigest confinementDfa 7 ["hello", "world"]) 999) [] := by exact id rfl
+#guard match dfaConfinementCheck 1 defaultDfaQuery tamperedDigestDfaCert with
+  | .refused (.digestMismatch _ 999) [] => true | _ => false
 
 def nonInjectionFreeQuery : DfaConfinementQuery :=
   { defaultDfaQuery with requireInjectionFree := false }
@@ -111,11 +113,10 @@ def brokenConfinementDfa : TableDfa where
 #tooth Obend.Judge.badCert_refused
   by mutation Obend.Judge.confinementDfa := brokenConfinementDfa
 
--- Mutation 2: Breaking `compressDigest` to return constant 999 breaks `tamperedDigestDfaCert_refused`.
-def brokenCompressDigest (_ _ : Nat) : Nat := 999
+-- A verifier that drops the committed transcript cannot establish the declared meaning.
+#tooth verifyDfaConfinement_sound by
+  mutation verifyDfaConfinement := fun _ _ => .ok ()
 
-#tooth Obend.Tests.Metasystem.AutomataConfinementTest.tamperedDigestDfaCert_refused
-  by mutation Obend.Judge.compressDigest := brokenCompressDigest
 
 
 /-! ## 2. Pillar B Tests: $O(\text{tokens})$ Compact Pushdown CFG Replay Certificate -/
@@ -446,15 +447,9 @@ def brokenVerifyDclutchHoardClearing (_ : HoardMarketState) (_ : JointClearingCe
 
 /-! ## 5. Extended Edge-Case, Codec, Spine-Bridge & Regression Tests -/
 
--- 5.1 Collision-resistant `tokenCode` and `runningDigest` on equal-length non-preset tokens
-example :
-    tokenCode "alpha" ≠ tokenCode "bravo" := by
-  decide
-
-theorem runningDigest_distinct_equal_length :
-    runningDigest confinementDfa 7 ["alpha"] ≠
-      runningDigest confinementDfa 7 ["bravo"] := by
-  decide
+-- Equal-length unknown tokens, including the former length-code collision.
+#guard tokenCode "unlisted-a" != tokenCode "unlisted-b"
+#guard runningDigest confinementDfa 7 ["unlisted-a"] != runningDigest confinementDfa 7 ["unlisted-b"]
 
 -- 5.2 `TableDfa.classify`, `TableDfa.complement`, `brzozowskiAccepts_singleton_eq`, and `buildDfaTrace_valid`
 example : confinementDfa.classify ["hello", "world"] = 0 := by exact id rfl
@@ -651,6 +646,32 @@ def brokenVerifyDfaConfinement (_ : DfaConfinementQuery) (_ : DfaConfinementCert
 #print axioms Obend.Judge.clearingOrder_crosses_iff_debit_le_limit
 #print axioms Obend.Judge.verifyDclutchHoardClearing_sound
 #print axioms Obend.Judge.dclutchHoardFormat
+
+
+-- The old tokenCode fallback gave both of these tokens code 310.
+theorem aliased_trace_token_refused :
+    verifyDfaTraceRows confinementDfa 7 0 ["unlisted-a"]
+      [⟨0, "unlisted-b", 0, dfaEntryDigest 0 "unlisted-a" 0,
+        compressDigest 7 (dfaEntryDigest 0 "unlisted-a" 0)⟩] = false := by
+  simp only [verifyDfaTraceRows,
+    show ("unlisted-b" == "unlisted-a") = false by decide, Bool.and_false, Bool.false_and]
+#tooth aliased_trace_token_refused by mutation verifyDfaTraceRows := fun _ _ _ _ _ => true
+#tooth idleHoardCert_valid by mutation idleHoardCert := fun n => ⟨n, 0, [], [], 0⟩
+example : ∃ k, dclutchHoardJudge.refutes k = true := ⟨.hoardInvariantViolated, rfl⟩
+theorem bad_hoard_refutes_every_certificate :
+    ∀ c, ¬ DclutchHoardMeaning ⟨2, 0, [1, 0]⟩ c := by
+  intro c hm
+  have h := hm.1.2 0 (by decide)
+  change 1 ≤ 0 at h
+  omega
+example : dclutchHoardCheck 0 ⟨2, 0, [1, 0]⟩ (idleHoardCert 2) =
+    .refused .hoardInvariantViolated [] := by decide +kernel
+example : dclutchHoardJudge.Fragment ⟨3, 0, [0, 0, 0]⟩ := by
+  change 0 < 3
+  decide +kernel
+example : verifyDclutchHoardClearing ⟨3, 0, [0, 0, 0]⟩ (idleHoardCert 3) = .ok () := by rfl
+#guard (decodeDfaCert ("{\"tokens\":[],\"claimedDigest\":" ++ toString (2^256 : Nat) ++ "}")).isOk == false
+#print axioms idleHoardCert_valid
 
 end Obend.Tests.Metasystem.AutomataConfinementTest
 end

@@ -371,6 +371,24 @@ private def initialRegistry : MigrationRegistry :=
     (cU64.dec (ChunkedWorld.cNat.enc (2 ^ 64 - 1)) = some (UInt64.ofNat (2 ^ 64 - 1), [])))
   IO.println "canonical archive migration, re-genesis, replay and tampering checks passed"
 
+/-- The finite transcript of an empty history contains no possible collision. -/
+theorem empty_migration_has_no_collision (home : SovereignHome) (key : Digest256)
+    (r : MigrationRegistry) : ¬ Obend.Digest.HashBytes.CollisionAmong archiveHash
+      (fun x => x ∈ migrationPreimages home key r []) := by
+  rintro ⟨a, b, ha, _⟩
+  cases ha
+
+#tooth verifyReceipt_binding_or_collision by mutation
+  VaultTransitionReceipt.payload := fun r =>
+    (r.previous, r.previous, r.previous, r.epoch, r.amount, r.after)
+#tooth import_preserves_origin_or_collision by mutation
+  importHomeArchive := fun _ _ _ r _ => .ok r
+#print axioms extractImportOriginBreak
+#print axioms archiveDigest_binding
+#print axioms acceptedReceipt_binding
+#print axioms verifyReceipt_binding_or_collision
+#print axioms custodyReceipt_inhabited
+
 #print axioms gfMul_inv_cancel
 #print axioms lagrangeInterpolate_exact
 #print axioms resurrectFromAnyKShards_exact

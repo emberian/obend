@@ -575,6 +575,7 @@ theorem stageB_zkstripe_calltree_sealed
     (hCan₁ : checkCanonicalSessionTree H tree = true)
     (hCan₂ : checkCanonicalSessionTree H otherTree = true)
     (hSameDigest : callTreeDigest H tree = callTreeDigest H otherTree)
+    (hNonPig : Obend.Crypto.NonPigeonholeSISParams ajtaiPp)
     (hDualSurvival :
       (∀ v : Nat, ajtaiPp.cols = 4 * (2 ^ v) →
         ¬ Obend.Crypto.BoundedCollision dualHash.eval (Obend.Crypto.merkleMaxPreimageBytes v)) ∨
@@ -585,8 +586,10 @@ theorem stageB_zkstripe_calltree_sealed
       matchesBytes forbiddenSecretRe node.redactedRequest = false) ∧
     Obend.Reasons.statusIn (Obend.Reasons.wf (buildCallTreeProgram pol tree))
       pol.targetConclusion = .supported ∧
-    (tree = otherTree ∨ Obend.Digest.HashBytes.Collision H) ∧
-    Obend.Crypto.BindingSound (Obend.Crypto.canopyAjtaiDualPCS dualHash ajtaiPp) ∧
+    (tree = otherTree ∨ Obend.Digest.HashBytes.CollisionAmong H
+      (fun x => x ∈ treePreimages H tree ++ treePreimages H otherTree)) ∧
+    (Obend.Crypto.NonPigeonholeSISParams ajtaiPp ∧
+      Obend.Crypto.BindingSound (Obend.Crypto.canopyAjtaiDualPCS dualHash ajtaiPp)) ∧
     ((g₁ = g₂ ∧ hops₁ = hops₂) ∨
       Obend.Digest.HashBytes.CollisionAmong Obend.Polis.lineageHash
         (fun x => Obend.Polis.LineageHashed g₁ hops₁ x ∨
@@ -598,7 +601,7 @@ theorem stageB_zkstripe_calltree_sealed
     Obend.Crypto.canopyAjtaiDualPCS_sound_of_hash_or_sis dualHash ajtaiPp hDualSurvival
   have hLin :=
     Obend.Polis.lineageOf_binds hSameLineage
-  exact ⟨hZk.1, hZk.2.1, hZk.2.2, hDual, hLin⟩
+  exact ⟨hZk.1, hZk.2.1, hZk.2.2, ⟨hNonPig, hDual⟩, hLin⟩
 
 /-- Constructive Stage-B Dual-Spine witness extractor (`0 Classical.choice`) accompanying
     `stageB_zkstripe_calltree_sealed`: maps any `DualForgery` to a concrete `PSum` of a

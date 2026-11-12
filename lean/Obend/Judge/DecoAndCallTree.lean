@@ -171,18 +171,7 @@ theorem encInt_injective (n m : Nat) (h : encInt n = encInt m) : n = m := by
 abbrev Hash256 := { b : ByteArray // b.size = 32 }
 
 def hash256 (domain : String) (input : List UInt8) : Hash256 :=
-  ⟨cshake32ByteArray domain.toUTF8.data.toList input, cshake32ByteArray_size _ _⟩
-
-/-- Collision evidence retains both distinct preimages and every output byte. -/
-def CshakeCollision (domain : String) : Prop :=
-  ∃ a b : List UInt8, a ≠ b ∧ cshake256Bytes domain.toUTF8.data.toList a =
-    cshake256Bytes domain.toUTF8.data.toList b
-
-theorem hash256_collision (domain : String) (a b : List UInt8)
-    (hne : a ≠ b) (heq : hash256 domain a = hash256 domain b) : CshakeCollision domain := by
-  refine ⟨a, b, hne, ?_⟩
-  have h := congrArg (fun h : Hash256 => h.val.data.toList) heq
-  simpa only [hash256, cshake32ByteArray, Native.bytesOfList_toList] using h
+  ⟨cshakeHasher.hash domain ⟨input.toArray⟩, cshakeHasher.size_eq _ _⟩
 
 theorem map_injective_of_injective {α β : Type} (f : α → β)
     (hf : ∀ a b, f a = f b → a = b) (as bs : List α) (h : as.map f = bs.map f) : as = bs := by
@@ -414,15 +403,18 @@ def scanByte (s : Scan) (b : UInt8) : Scan :=
     | _, _ => { s with st := stepJson s.st b }
   else { s with st := stepJson s.st b }
 
-/-- Opened slots are read; a masked slot spoils the member being read. -/
+/-- Opened slots are read; masks must be safe inside a value string and spoil that member. -/
 def scanSlots : Scan → List SpanSlot → Scan
   | s, [] => s
   | s, .opened b _ :: rest => scanSlots (b.data.toList.foldl scanByte s) rest
-  | s, .masked _ :: rest => scanSlots { s with clean := false } rest
+  | s, .masked m :: rest =>
+    let st' := if spanConfined s.st [] m.data.toList then s.st else Obend.Judge.VpaJson.failJ s.st
+    scanSlots { s with clean := false, st := st' } rest
 
 /-- **The depth-1 string members of a body** that were read entirely from opened bytes. -/
 def topLevelMembers (body : List SpanSlot) : List (ByteArray × ByteArray) :=
-  (scanSlots Scan.init body).found
+  let scan := scanSlots Scan.init body
+  if jsonAccepting scan.st then scan.found else []
 
 /-- Lowercase hex encoding of every digest byte, including leading zeros. -/
 def hexDigit (n : Nat) : UInt8 := UInt8.ofNat (if n < 10 then 48 + n else 87 + n)
@@ -515,10 +507,19 @@ def commitBlocks (c : Hash256) : List Tower128 :=
 def ghashMessage (a : DecoAttestation) : List Tower128 :=
   commitBlocks (recordCommit a) ++ a.ctBlocks ++ [a.lenBlock]
 
-/-- **The tag check**: `ghashAuth` under the key, over the record commitment as authenticated data
-and the ciphertext blocks, is the attested tag. -/
+/-- GCM length block: 256 AD bits followed by the ciphertext bit length, each 64-bit BE. -/
+def recordLengthBlock (ct : List Tower128) : Tower128 :=
+  blockOfBytes (Obend.Digest.HashBytes.be 8 256 ++ Obend.Digest.HashBytes.be 8 (128 * ct.length))
+
+/-- Authenticate the canonical AD/ciphertext boundary; lengths must not wrap at 64 bits. -/
 def tagVerifies (key : Tower128) (a : DecoAttestation) : Bool :=
-  decide (ghashAuth key (commitBlocks (recordCommit a)) a.ctBlocks a.lenBlock = a.ghashTag)
+  decide (128 * a.ctBlocks.length < 2 ^ 64) && decide (a.lenBlock = recordLengthBlock a.ctBlocks) &&
+    decide (ghashAuth key (commitBlocks (recordCommit a)) a.ctBlocks a.lenBlock = a.ghashTag)
+
+theorem tagVerifies_lengths {key : Tower128} {a : DecoAttestation} (h : tagVerifies key a = true) :
+    128 * a.ctBlocks.length < 2 ^ 64 ∧ a.lenBlock = recordLengthBlock a.ctBlocks := by
+  simp only [tagVerifies, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h.1
 
 /-- **Forgery needs a root.** If two attestations whose GHASH polynomials differ carry one tag,
 the keys under which both verify are roots of the difference: at most `L` of them. -/
@@ -529,8 +530,9 @@ theorem deco_ghash_forgery_keys_bound (a b : DecoAttestation) (L : Nat) (keys : 
     (hok : ∀ H ∈ keys, tagVerifies H a = true ∧ tagVerifies H b = true) : keys.length ≤ L := by
   refine ghashDiff_roots_bound _ _ L keys ha hb hnd hne fun H hH => ?_
   obtain ⟨h1, h2⟩ := hok H hH
-  have e1 : ghashPoly H (ghashMessage a) = a.ghashTag := of_decide_eq_true h1
-  have e2 : ghashPoly H (ghashMessage b) = b.ghashTag := of_decide_eq_true h2
+  simp only [tagVerifies, Bool.and_eq_true, decide_eq_true_eq] at h1 h2
+  have e1 : ghashPoly H (ghashMessage a) = a.ghashTag := h1.2
+  have e2 : ghashPoly H (ghashMessage b) = b.ghashTag := h2.2
   rw [e1, e2, htag]
 
 /-- The verifier's side: its GHASH key for each of its nonces, the notaries and hosts it accepts,
@@ -581,6 +583,7 @@ def checkPolicy (p : DecoPolicy) (a : DecoAttestation) : Bool :=
 /-- The session is authenticated under the verifier's key for its nonce, and in policy. -/
 def PolicyMeaning (p : DecoPolicy) (a : DecoAttestation) : Prop :=
   (∃ key, sessionKey p a.header.verifierNonce = some key ∧
+    128 * a.ctBlocks.length < 2 ^ 64 ∧ a.lenBlock = recordLengthBlock a.ctBlocks ∧
     ghashAuth key (commitBlocks (recordCommit a)) a.ctBlocks a.lenBlock = a.ghashTag) ∧
   a.header.notary ∈ p.notaries ∧ a.header.host ∈ p.hosts ∧
   p.minTime ≤ a.header.time ∧ a.header.time ≤ p.maxTime ∧
@@ -769,6 +772,10 @@ def mrootC (children : List Hash256) : Hash256 :=
   ⟨(spanMerkleRoot cshakeHasher childrenTag (children.map Subtype.val)).top,
     cshakeHasher.size_eq _ _⟩
 
+/-- The children commitment is exactly the span-tree commitment to the complete root list. -/
+theorem mrootC_eq (rs : List Hash256) :
+    (mrootC rs).val = (spanMerkleRoot cshakeHasher childrenTag (rs.map Subtype.val)).top := by exact id rfl
+
 mutual
 def treeRoot : HttpsCallTree → Hash256
   | .node h cs => hash256 nodeDomain (nodePreimage h (mrootC (treeRoots cs)))
@@ -780,21 +787,22 @@ termination_by structural ts => ts
 end
 
 /-- A collision of the node hash, or of the children tree. -/
-def CallTreeCollision : Prop :=
-  CshakeCollision nodeDomain ∨ Nonempty (HashCollision cshakeHasher childrenTag)
+inductive CallTreeCollision where
+  | node (evidence : HashCollision cshakeHasher nodeDomain)
+  | children (evidence : HashCollision cshakeHasher childrenTag)
 
-theorem mrootC_binds {r₁ r₂ : List Hash256} (h : mrootC r₁ = mrootC r₂) :
-    r₁ = r₂ ∨ Nonempty (HashCollision cshakeHasher childrenTag) := by
+def mrootC_binds {r₁ r₂ : List Hash256} (h : mrootC r₁ = mrootC r₂) :
+    PSum (r₁ = r₂) (HashCollision cshakeHasher childrenTag) := by
   by_cases hv : r₁.map Subtype.val = r₂.map Subtype.val
-  · exact Or.inl (map_injective_of_injective Subtype.val (fun _ _ => Subtype.ext) _ _ hv)
-  · exact Or.inr ⟨Obend.Vault.Lsafe.spanRootCollision cshakeHasher childrenTag hv
-      (congrArg Subtype.val h)⟩
+  · exact .inl (map_injective_of_injective Subtype.val (fun _ _ => Subtype.ext) _ _ hv)
+  · exact .inr (Obend.Vault.Lsafe.spanRootCollision cshakeHasher childrenTag hv
+      (congrArg Subtype.val h))
 
 mutual
 /-- **Tree roots bind.** Two trees with one root are one tree (every hop, every field, every
 child), or the node hash or the children tree collides. -/
-theorem treeRoot_binds (t₁ t₂ : HttpsCallTree) (h : treeRoot t₁ = treeRoot t₂) :
-    t₁ = t₂ ∨ CallTreeCollision := by
+def treeRoot_binds (t₁ t₂ : HttpsCallTree) (h : treeRoot t₁ = treeRoot t₂) :
+    PSum (t₁ = t₂) CallTreeCollision := by
   cases t₁ with
   | node h₁ cs₁ =>
     cases t₂ with
@@ -805,18 +813,21 @@ theorem treeRoot_binds (t₁ t₂ : HttpsCallTree) (h : treeRoot t₁ = treeRoot
       · obtain ⟨hh, hr⟩ := nodePreimage_injective _ _ _ _ hp
         rcases mrootC_binds hr with hrs | hc
         · rcases treeRoots_binds cs₁ cs₂ hrs with hcs | hc
-          · exact Or.inl (by rw [hh, hcs])
-          · exact Or.inr hc
-        · exact Or.inr (Or.inr hc)
-      · exact Or.inr (Or.inl (hash256_collision _ _ _ hp h))
+          · exact .inl (by rw [hh, hcs])
+          · exact .inr hc
+        · exact .inr (.children hc)
+      · exact .inr (.node ⟨⟨(nodePreimage h₁ (mrootC (treeRoots cs₁))).toArray⟩,
+          ⟨(nodePreimage h₂ (mrootC (treeRoots cs₂))).toArray⟩,
+          fun he => hp (congrArg (fun b : ByteArray => b.data.toList) he),
+          congrArg Subtype.val h⟩)
 termination_by structural t₁
 
-theorem treeRoots_binds (ts₁ ts₂ : List HttpsCallTree) (h : treeRoots ts₁ = treeRoots ts₂) :
-    ts₁ = ts₂ ∨ CallTreeCollision := by
+def treeRoots_binds (ts₁ ts₂ : List HttpsCallTree) (h : treeRoots ts₁ = treeRoots ts₂) :
+    PSum (ts₁ = ts₂) CallTreeCollision := by
   cases ts₁ with
   | nil =>
     cases ts₂ with
-    | nil => exact Or.inl rfl
+    | nil => exact .inl rfl
     | cons _ _ => simp [treeRoots] at h
   | cons t₁ r₁ =>
     cases ts₂ with
@@ -825,9 +836,9 @@ theorem treeRoots_binds (ts₁ ts₂ : List HttpsCallTree) (h : treeRoots ts₁ 
       simp only [treeRoots, List.cons.injEq] at h
       rcases treeRoot_binds t₁ t₂ h.1 with ht | hc
       · rcases treeRoots_binds r₁ r₂ h.2 with hr | hc
-        · exact Or.inl (by rw [ht, hr])
-        · exact Or.inr hc
-      · exact Or.inr hc
+        · exact .inl (by rw [ht, hr])
+        · exact .inr hc
+      · exact .inr hc
 termination_by structural ts₁
 end
 
@@ -867,6 +878,47 @@ def checkHop (p : CallTreePolicy) (h : HttpsHop) (root : Hash256) (leaf : Bool) 
       decide (h.attestation.header.host ∈ p.recorders) &&
       checkSubtreeRoot h.attestation.response root
 
+/-- The hop contract, independent of the verifier's control flow. -/
+def HopMeaning (p : CallTreePolicy) (h : HttpsHop) (root : Hash256) (leaf : Bool) : Prop :=
+  match h.kind with
+  | .localComputation =>
+    (∀ s ∈ h.attestation.request.slots, ∃ b path, s = .opened b path) ∧
+    (∀ s ∈ h.attestation.response.slots, ∃ b path, s = .opened b path) ∧
+    runLocalOp p.localOp (viewDoc h.attestation.request) = viewDoc h.attestation.response
+  | .leafHttpsHop => leaf = true ∧ DecoRelation p.deco p.ledger h.attestation
+  | .recursiveHttpsCallee => DecoRelation p.deco p.ledger h.attestation ∧
+    h.attestation.header.host ∈ p.recorders ∧
+    ∃ head body, h.attestation.response.slots = head :: body ∧
+      (subtreeKey, (⟨(hex64 root).toArray⟩ : ByteArray)) ∈ topLevelMembers body
+
+theorem allOpened_iff (ss : List SpanSlot) :
+    allOpened ss = true ↔ ∀ s ∈ ss, ∃ b path, s = .opened b path := by
+  simp only [allOpened, List.all_eq_true]
+  constructor
+  · intro h s hs
+    cases s with
+    | opened b path => exact ⟨b, path, rfl⟩
+    | masked m => have hx := h _ hs; cases hx
+  · intro h s hs
+    obtain ⟨b, path, rfl⟩ := h s hs
+    rfl
+
+theorem checkHop_iff (p : CallTreePolicy) (h : HttpsHop) (root : Hash256) (leaf : Bool) :
+    checkHop p h root leaf = true ↔ HopMeaning p h root leaf := by
+  cases hk : h.kind <;>
+    simp only [checkHop, HopMeaning, hk, Bool.and_eq_true, decide_eq_true_eq, allOpened_iff,
+      checkDecoAttestation_iff_relation, checkSubtreeRoot_iff, and_assoc]
+
+mutual
+def TreeMeaning (p : CallTreePolicy) : HttpsCallTree → Prop
+  | .node h cs => HopMeaning p h (mrootC (treeRoots cs)) cs.isEmpty ∧ ForestMeaning p cs
+termination_by structural t => t
+def ForestMeaning (p : CallTreePolicy) : List HttpsCallTree → Prop
+  | [] => True
+  | t :: ts => TreeMeaning p t ∧ ForestMeaning p ts
+termination_by structural ts => ts
+end
+
 mutual
 def checkTree (p : CallTreePolicy) : HttpsCallTree → Bool
   | .node h cs => checkHop p h (mrootC (treeRoots cs)) cs.isEmpty && checkForest p cs
@@ -875,6 +927,20 @@ def checkForest (p : CallTreePolicy) : List HttpsCallTree → Bool
   | [] => true
   | t :: ts => checkTree p t && checkForest p ts
 termination_by structural ts => ts
+end
+
+mutual
+theorem checkTree_iff (p : CallTreePolicy) (t : HttpsCallTree) :
+    checkTree p t = true ↔ TreeMeaning p t := by
+  cases t with
+  | node h cs => simp only [checkTree, TreeMeaning, Bool.and_eq_true, checkHop_iff, checkForest_iff p cs]
+termination_by structural t
+theorem checkForest_iff (p : CallTreePolicy) (ts : List HttpsCallTree) :
+    checkForest p ts = true ↔ ForestMeaning p ts := by
+  cases ts with
+  | nil => exact ⟨fun _ => trivial, fun _ => rfl⟩
+  | cons t ts => simp only [checkForest, ForestMeaning, Bool.and_eq_true, checkTree_iff p t, checkForest_iff p ts]
+termination_by structural ts
 end
 
 mutual
@@ -916,6 +982,33 @@ def checkDataflowEdge (nodes : Array HttpsHop) (e : DataflowEdge) : Bool :=
       slotOpenedAs dst.attestation.request.slots e.dstSlot e.bytes
   | _, _ => false
 
+/-- A flow names actual public bytes, with a nonempty payload on both endpoints. -/
+def OpenedSlot (slots : List SpanSlot) (i : Nat) (bytes : ByteArray) : Prop :=
+  ∃ path, slots[i]? = some (.opened bytes path) ∧ 0 < bytes.size
+
+theorem slotOpenedAs_iff (slots : List SpanSlot) (i : Nat) (bytes : ByteArray) :
+    slotOpenedAs slots i bytes = true ↔ OpenedSlot slots i bytes := by
+  cases hs : slots[i]? with
+  | none => simp [slotOpenedAs, OpenedSlot, hs]
+  | some slot =>
+    cases slot with
+    | masked m => simp [slotOpenedAs, OpenedSlot, hs]
+    | opened b path => simp [slotOpenedAs, OpenedSlot, hs]
+
+def DataflowMeaning (nodes : Array HttpsHop) (e : DataflowEdge) : Prop :=
+  match nodes[e.fromNode]?, nodes[e.toNode]? with
+  | some src, some dst => e.fromNode < e.toNode ∧
+      src.kind ≠ .localComputation ∧ dst.kind ≠ .localComputation ∧
+      OpenedSlot src.attestation.response.slots e.srcSlot e.bytes ∧
+      OpenedSlot dst.attestation.request.slots e.dstSlot e.bytes
+  | _, _ => False
+
+theorem checkDataflowEdge_iff (nodes : Array HttpsHop) (e : DataflowEdge) :
+    checkDataflowEdge nodes e = true ↔ DataflowMeaning nodes e := by
+  cases hs : nodes[e.fromNode]? <;> cases hd : nodes[e.toNode]? <;>
+    simp [checkDataflowEdge, DataflowMeaning, hs, hd, Bool.and_eq_true,
+      slotOpenedAs_iff, and_assoc]
+
 /-- **The public verification of a call tree.** -/
 def callTreeVerify (p : CallTreePolicy) (tree : HttpsCallTree) (expected : Hash256)
     (edges : List DataflowEdge) : Bool :=
@@ -932,14 +1025,14 @@ theorem callTreeVerify_sound_or_collision (p : CallTreePolicy) (tree : HttpsCall
     ∀ other : HttpsCallTree, treeRoot other = expected →
       (other = tree ∧ checkTree p other = true ∧
         ∃ final, ValidDecoTrace p.deco p.ledger (treeAttestations other) final) ∨
-      CallTreeCollision := by
+      Nonempty CallTreeCollision := by
   intro h other ho
   simp only [callTreeVerify, Bool.and_eq_true, decide_eq_true_eq] at h
   obtain ⟨⟨⟨hroot, htree⟩, htrace⟩, _⟩ := h
   rcases treeRoot_binds other tree (ho.trans hroot.symm) with he | hc
   · subst he
     exact Or.inl ⟨rfl, htree, (checkDecoTrace_iff _ _ _).1 htrace⟩
-  · exact Or.inr hc
+  · exact Or.inr ⟨hc⟩
 
 /-! ## The judge: public claim, private openings -/
 
@@ -985,16 +1078,56 @@ theorem checkOpenings_parse : ∀ (as : List DecoAttestation) (ws : List HopOpen
     simp only [checkOpenings, Bool.and_eq_true] at h
     exact ⟨checkOpening_parses h.1.1, checkOpening_parses h.1.2, checkOpenings_parse as ws h.2⟩
 
+/-- Real spans agree slot by slot: public bytes are equal; hidden bytes stay inside
+one value string without cutting an escape or a UTF-8 sequence. -/
+inductive FaithfulSlots : JState → List SpanSlot → List ByteArray → Prop
+  | nil (st) : FaithfulSlots st [] []
+  | opened {st b sibs slots spans} : FaithfulSlots (specRunJson b.data.toList st) slots spans →
+      FaithfulSlots st (.opened b sibs :: slots) (b :: spans)
+  | masked {st m b slots spans} : st.mode = .str false .normal →
+      Obend.Judge.VpaJson.walkInterior st b.data.toList = some st →
+      (∀ x ∈ m.data.toList, Obend.Judge.VpaJson.isSafeMaskByte x = true) →
+      FaithfulSlots st slots spans → FaithfulSlots st (.masked m :: slots) (b :: spans)
+
+def FaithfulView (v : TranscriptView) (spans : List ByteArray) : Prop :=
+  spanMerkleRoot cshakeHasher spanTag spans = v.root ∧
+    ∃ head sibs body rest, v.slots = .opened head sibs :: body ∧ spans = head :: rest ∧
+      FaithfulSlots JState.init body rest
+
+inductive FaithfulOpenings : List DecoAttestation → List HopOpening → Prop
+  | nil : FaithfulOpenings [] []
+  | cons {a as w ws} : FaithfulView a.request w.request → FaithfulView a.response w.response →
+      FaithfulOpenings as ws → FaithfulOpenings (a :: as) (w :: ws)
+
+theorem FaithfulSlots.checked {st slots spans} (h : FaithfulSlots st slots spans) :
+    checkMask st slots spans = true := by
+  induction h with
+  | nil => rfl
+  | opened _ ih => simpa only [checkMask, decide_true, Bool.true_and] using ih
+  | masked hm hw hs _ ih =>
+    simp only [checkMask, spanConfined, Bool.and_eq_true, decide_eq_true_eq]
+    exact ⟨⟨⟨hm, hw⟩, List.all_eq_true.2 hs⟩, ih⟩
+
+theorem FaithfulView.checked {v spans} (h : FaithfulView v spans) : checkOpening v spans = true := by
+  obtain ⟨hr, head, sibs, body, rest, hv, rfl, hs⟩ := h
+  simp only [checkOpening, hr, decide_true, Bool.true_and, hv]
+  exact hs.checked
+
+theorem FaithfulOpenings.checked {as ws} (h : FaithfulOpenings as ws) : checkOpenings as ws = true := by
+  induction h with
+  | nil => rfl
+  | cons hq hr _ ih => simp only [checkOpenings, hq.checked, hr.checked, ih, Bool.and_self]
+
 /-- **What an accepted call tree means.** The root binds this tree and no other; its sessions
 replay as one ledger trace (authenticated, in policy, no nonce or intent twice); every hop is
 admitted with its callee links; the required flows are opened on both sides; and every real
 transcript parses as its redacted view. -/
 structure CallTreeSpec (q : CallTreeClaim) (w : CallTreeWitness) : Prop where
   rooted : treeRoot q.tree = q.expectedRoot
-  bound : ∀ t', treeRoot t' = q.expectedRoot → t' = q.tree ∨ CallTreeCollision
+  bound : ∀ t', treeRoot t' = q.expectedRoot → t' = q.tree ∨ Nonempty CallTreeCollision
   trace : ∃ final, ValidDecoTrace q.policy.deco q.policy.ledger (treeAttestations q.tree) final
-  hops : checkTree q.policy q.tree = true
-  flows : ∀ e ∈ q.requiredEdges, checkDataflowEdge (treeHops q.tree).toArray e = true
+  hops : TreeMeaning q.policy q.tree
+  flows : ∀ e ∈ q.requiredEdges, DataflowMeaning (treeHops q.tree).toArray e
   faithful : OpeningsParse (treeAttestations q.tree) w
 
 inductive CallTreeRefusal where
@@ -1013,7 +1146,8 @@ def callTreeCheck (q : CallTreeClaim) (w : CallTreeWitness) : Judge.Verdict Call
 theorem callTreeSpec_verify {q : CallTreeClaim} {w : CallTreeWitness} (h : CallTreeSpec q w) :
     callTreeVerify q.policy q.tree q.expectedRoot q.requiredEdges = true := by
   simp only [callTreeVerify, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
-  exact ⟨⟨⟨h.rooted, h.hops⟩, (checkDecoTrace_iff _ _ _).2 h.trace⟩, h.flows⟩
+  exact ⟨⟨⟨h.rooted, (checkTree_iff _ _).2 h.hops⟩, (checkDecoTrace_iff _ _ _).2 h.trace⟩,
+    fun e he => (checkDataflowEdge_iff _ _).2 (h.flows e he)⟩
 
 /-- **The call tree judge.** A failed public verification refutes the claim under every opening;
 completeness is claimed on the claims that have a faithful opening. -/
@@ -1035,8 +1169,10 @@ instance callTreeJudge : Obend.Judge CallTreeClaim CallTreeWitness where
         have hv2 := hv'
         simp only [callTreeVerify, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hv2
         obtain ⟨⟨⟨hroot, htree⟩, htrace⟩, hflows⟩ := hv2
-        exact ⟨hroot, fun t' ht' => treeRoot_binds t' q.tree (ht'.trans hroot.symm),
-          (checkDecoTrace_iff _ _ _).1 htrace, htree, hflows,
+        exact ⟨hroot, fun t' ht' => match treeRoot_binds t' q.tree (ht'.trans hroot.symm) with
+          | .inl he => Or.inl he | .inr hc => Or.inr ⟨hc⟩,
+          (checkDecoTrace_iff _ _ _).1 htrace, (checkTree_iff _ _).1 htree,
+          fun e he => (checkDataflowEdge_iff _ _).1 (hflows e he),
           checkOpenings_parse _ _ (by simpa using ho)⟩
   refutes k := decide (k = .invalidExecution)
   refuted := by
@@ -1049,12 +1185,12 @@ instance callTreeJudge : Obend.Judge CallTreeClaim CallTreeWitness where
       rw [callTreeSpec_verify hm] at hv
       cases hv
     · split at h <;> cases h
-  Fragment q := ∃ w, checkOpenings (treeAttestations q.tree) w = true
+  Fragment q := ∃ w, FaithfulOpenings (treeAttestations q.tree) w
   complete := by
     rintro q ⟨w, hw⟩ ⟨_, hm⟩
     refine ⟨w, 0, ?_⟩
     show callTreeCheck q w = .ok
-    simp [callTreeCheck, callTreeSpec_verify hm, hw]
+    simp [callTreeCheck, callTreeSpec_verify hm, hw.checked]
   mono := by intro _ _ _ _ _ _; rfl
 
 /-! ## The byte format `deco-calltree@1`

@@ -346,4 +346,18 @@ def sampleGate0 : QuorumBoundFinalityGate :=
 #print axioms advanceQuorumBoundGate_formQC_sound
 #print axioms quorum_final_gates_unique_per_height
 
+
+#tooth verifyTlsnTranscriptPolicy_masks_safe by
+  mutation verifyTlsnTranscriptPolicy := fun _ _ => .ok
+example : ∃ k, tlsnTranscriptJudge.refutes k = true := ⟨.spanMaskAllowsDelimiter, rfl⟩
+example : ∀ c, ¬ TlsnTranscriptMeaning badTlsnQuery c := by
+  intro c hm
+  have h := hm.classes _ List.mem_cons_self
+  have hf : maskExcludesDelimiters 3 = false := by decide +kernel
+  change maskExcludesDelimiters 3 = true at h
+  rw [hf] at h
+  cases h
+example : TlsnTranscriptMeaning validTlsnQuery validTlsnCert := tlsnTranscriptPolicy_sound validTlsn_accepted
+#print axioms verifyTlsnTranscriptPolicy_masks_safe
+
 end Obend.Tests.VaultTurnAndPolicyTest
