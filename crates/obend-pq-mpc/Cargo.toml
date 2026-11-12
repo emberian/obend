@@ -1,0 +1,15 @@
+[package]
+name = "obend-pq-mpc"
+version = "0.1.0"
+edition = "2024"
+description = "Clean-room no_std+alloc post-quantum threshold hash-based signature MPC suite (leanSPHINCS, SLH-DSA, leanSig, RSS, BinaryTower256 & Poseidon2Goldilocks)"
+license = "Apache-2.0"
+
+[workspace]
+
+[features]
+default = []
+std = ["obend-crypto-exec/std"]
+
+[dependencies]
+obend-crypto-exec = { path = "../obend-crypto-exec", default-features = false }
