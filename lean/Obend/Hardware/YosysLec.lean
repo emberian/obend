@@ -38,7 +38,8 @@ registers are zero-extended into the 64-bit carrier.
 -/
 public import Obend.Hardware.HDL
 public import Obend.Hardware.VerilateRunner
-@[expose] public section
+import all Obend.Hardware.HDL
+public section
 
 namespace Obend.Hardware.YosysLec
 open Obend.Hardware.HDL Obend.Hardware.VerilateRunner
@@ -59,11 +60,11 @@ against `VerilateRunner.emitExprSmt2` and against committed files. -/
 
 inductive SmtVar where
   | inp | wire | reg
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 inductive SmtBinOp where
   | add | sub | mul | and | or | xor | shl | lshr | ashr | udiv | urem
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 mutual
 inductive SmtBV : Nat → Type where
@@ -660,20 +661,16 @@ in which one domain latches while the others hold. -/
 theorem foldRegs_other (inputs wenv regState : Nat → BitVec 64) (rst : Bool) (i : Nat) :
     ∀ (l : List RegSpec) (st : Nat → BitVec 64), (∀ r ∈ l, r.regIdx ≠ i) →
       l.foldl (fun (nextSt : Nat → BitVec 64) r =>
-          let v := match r.resetKind with
-            | .resetFree => evalRtlExpr inputs wenv regState r.nextExpr
-            | .syncReset initVal => if rst then initVal else evalRtlExpr inputs wenv regState r.nextExpr
-          fun j => if j == r.regIdx then v else nextSt j) st i = st i := by
+          fun j => if j == r.regIdx then regNextValue rst inputs wenv regState r else nextSt j) st i = st i := by
   intro l
   induction l with
   | nil => intro st _; rfl
   | cons a rest ih =>
     intro st h
-    simp only [List.foldl_cons]
-    rw [ih _ (fun r hr => h r (List.mem_cons_of_mem _ hr))]
-    have : (i == a.regIdx) = false := by
+    rw [List.foldl_cons, ih _ (fun r hr => h r (List.mem_cons_of_mem _ hr))]
+    have hne : (i == a.regIdx) = false := by
       have := h a List.mem_cons_self; simp [Ne.symm this]
-    simp [this]
+    simp only [hne]; rfl
 
 /-- With distinct register indices, `stepModuleRegs` at a register's slot is that register's
 `regNextValue`. -/
@@ -681,30 +678,25 @@ theorem stepModuleRegs_at (m : RtlModule) (rst : Bool) (inputs regState : Nat �
     (hnd : (m.regs.map (·.regIdx)).Nodup) (r : RegSpec) (hr : r ∈ m.regs) :
     stepModuleRegs m rst inputs regState r.regIdx =
       regNextValue rst inputs (evalWireTable inputs regState m.wires) regState r := by
-  unfold stepModuleRegs
-  simp only
+  rw [stepModuleRegs_eq_foldl_next]
   generalize evalWireTable inputs regState m.wires = wenv
   generalize regState = st0 at *
   revert hnd hr
   generalize m.regs = l
   intro hnd hr
   suffices ∀ (st : Nat → BitVec 64), l.foldl (fun (nextSt : Nat → BitVec 64) r =>
-          let v := match r.resetKind with
-            | .resetFree => evalRtlExpr inputs wenv st0 r.nextExpr
-            | .syncReset initVal => if rst then initVal else evalRtlExpr inputs wenv st0 r.nextExpr
-          fun j => if j == r.regIdx then v else nextSt j) st r.regIdx =
+          fun j => if j == r.regIdx then regNextValue rst inputs wenv st0 r else nextSt j) st r.regIdx =
         regNextValue rst inputs wenv st0 r from this st0
   induction l with
   | nil => simp at hr
   | cons a rest ih =>
     intro st
     simp only [List.map_cons, List.nodup_cons, List.mem_map] at hnd
-    simp only [List.foldl_cons]
+    rw [List.foldl_cons]
     rcases List.mem_cons.mp hr with h | h
     · subst h
       rw [foldRegs_other inputs wenv st0 rst r.regIdx rest _ (fun x hx he => hnd.1 ⟨x, hx, he⟩)]
-      simp only [beq_self_eq_true, ite_true, regNextValue]
-      cases r.resetKind <;> rfl
+      simp only [beq_self_eq_true, ite_true]
     · exact ih hnd.2 h _
 
 /-- A `w`-bit port value, zero-extended, is the port view `truncToWidth w` of a 64-bit value
@@ -750,7 +742,7 @@ theorem lecScript_unsat_of_step (m : RtlModule) (hw : checkWidths m = true)
       unfold checkPortWidths at hp
       simp only [Bool.and_eq_true, List.all_eq_true] at hp
       have := hp.2 o ho
-      simp only [validWidth, Bool.and_eq_true, decide_eq_true_eq] at this
+      simp only [decide_eq_true_eq] at this
       exact this.2
     have := (List.map_inj_left.mp hout) o ho
     simp only [Prod.mk.injEq, true_and] at this
@@ -758,6 +750,488 @@ theorem lecScript_unsat_of_step (m : RtlModule) (hw : checkWidths m = true)
   · have hrst : resetPortOf m r = "rst" := by
       unfold resetPortOf; simp [show ¬ (moduleDomains m).length > 1 by omega]
     rw [hreg r hr, stepModuleRegs_at m _ _ _ hnd r hr, hrst]
+
+/-! ## Synchronous RAM Array Miters (`QF_AUFBV`: `SmtArr`, `SmtMemBV`, `LecMemScript`, `lecMemScript_holds_iff`)
+
+For `m : RtlMemModule` with synchronous clocked `SyncRamSpec` banks (`emitMemModuleSV m`), Yosys's
+`write_smt2` emits:
+- `(define-fun |<mod>_m <ram.name>| ((state |<mod>_s|)) (Array (_ BitVec A) (_ BitVec D)) ...)`
+  for each memory array in `s` (`next = false`) and `s1` (`next = true`);
+- `(define-fun |<mod>_n <ram.rdataName>| ((state |<mod>_s|)) (_ BitVec D) ...)`
+  (or `Bool` when `D = 1`) for each synchronous registered read-data latch.
+
+`lecMemScript m` builds the `QF_AUFBV` miter comparing:
+1. every combinational output in `s` against `evalRtlExpr`;
+2. every core register in `s1` against `regNextValue`;
+3. every RAM registered read-data latch `ram.rdataName` in `s1` against
+   `(select (|<mod>_m <name>| s) raddr)` (`.readFirst`) or write-forwarded
+   `(ite we (ite (= waddr raddr) wdata (select ...)) (select ...))` (`.writeFirst`);
+4. every RAM array `(|<mod>_m <name>| s1)` against
+   `(ite we (store (|<mod>_m <name>| s) waddr wdata) (|<mod>_m <name>| s))`. -/
+
+/-- SMT-LIB2 `QF_AUFBV` array term of sort `(Array (_ BitVec aw) (_ BitVec dw))`. -/
+inductive SmtArr : Nat → Nat → Type where
+  | yosysMem (mod name : String) (next : Bool) (aw dw : Nat) : SmtArr aw dw
+  | store {aw dw : Nat} (arr : SmtArr aw dw) (idx : SmtBV aw) (val : SmtBV dw) : SmtArr aw dw
+  | iteArr {aw dw : Nat} (c : SmtBool) (t f : SmtArr aw dw) : SmtArr aw dw
+
+/-- SMT-LIB2 bitvector term extended with `(select arr idx)` over `SmtArr`. -/
+inductive SmtMemBV : Nat → Type where
+  | ofBV {w : Nat} (t : SmtBV w) : SmtMemBV w
+  | select {aw dw : Nat} (arr : SmtArr aw dw) (idx : SmtBV aw) : SmtMemBV dw
+  | iteMem {w : Nat} (c : SmtBool) (t f : SmtMemBV w) : SmtMemBV w
+
+/-- SMT-LIB2 array semantics over Yosys's array valuation `mem : Bool → String → Nat → Nat`. -/
+def SmtArr.eval (env : SmtEnv) (mem : Bool → String → Nat → Nat) :
+    {aw dw : Nat} → SmtArr aw dw → BitVec aw → BitVec dw
+  | _, dw, .yosysMem _ name next _ _, q => BitVec.ofNat dw (mem next name q.toNat)
+  | _, _, .store arr idx val, q =>
+    if q == idx.eval env then val.eval env else arr.eval env mem q
+  | _, _, .iteArr c t f, q =>
+    if c.eval env then t.eval env mem q else f.eval env mem q
+
+/-- SMT-LIB2 bitvector semantics extended with `(select arr idx)`. -/
+def SmtMemBV.eval (env : SmtEnv) (mem : Bool → String → Nat → Nat) :
+    {w : Nat} → SmtMemBV w → BitVec w
+  | _, .ofBV t => t.eval env
+  | _, .select arr idx => arr.eval env mem (idx.eval env)
+  | _, .iteMem c t f => if c.eval env then t.eval env mem else f.eval env mem
+
+/-- SMT-LIB2 printer for `QF_AUFBV` array terms. -/
+def SmtArr.print (pfx : String) : {aw dw : Nat} → SmtArr aw dw → String
+  | _, _, .yosysMem mod name next _ _ => s!"(|{mod}_m {name}| {if next then "s1" else "s"})"
+  | _, _, .store arr idx val => s!"(store {arr.print pfx} {idx.print pfx} {val.print pfx})"
+  | _, _, .iteArr c t f => s!"(ite {c.print pfx} {t.print pfx} {f.print pfx})"
+
+/-- SMT-LIB2 printer for bitvector terms containing `(select ...)`. -/
+def SmtMemBV.print (pfx : String) : {w : Nat} → SmtMemBV w → String
+  | _, .ofBV t => t.print pfx
+  | _, .select arr idx => s!"(select {arr.print pfx} {idx.print pfx})"
+  | _, .iteMem c t f => s!"(ite {c.print pfx} {t.print pfx} {f.print pfx})"
+
+/-- Registered RAM read-data latch obligation in `s1`. -/
+structure RamReadObl where
+  name : String
+  w    : Nat
+  rtl  : SmtBV w
+  spec : SmtMemBV w
+
+/-- Extensional RAM array transition obligation in `s1` (`(= rtl_mem spec_mem)` in `QF_AUFBV`). -/
+structure RamArrObl where
+  name : String
+  aw   : Nat
+  dw   : Nat
+  rtl  : SmtArr aw dw
+  spec : SmtArr aw dw
+
+/-- Complete `QF_AUFBV` LEC script for an `RtlMemModule`. -/
+structure LecMemScript where
+  base     : LecScript
+  ramReads : List RamReadObl
+  ramArrs  : List RamArrObl
+
+/-- Model assignment z3 may choose for `QF_AUFBV`: `LecAssign` plus Yosys's memory arrays in `s` and `s1`. -/
+structure LecMemAssign where
+  core : LecAssign
+  mem  : Bool → String → Nat → Nat
+
+/-- Lift Yosys's memory array `|<mod>_m <ram.name>|` in state `s` to the 64-bit word carrier used by `HDL.lean`. -/
+def LecMemAssign.memVal (Y : LecMemAssign) (ram : SyncRamSpec) (addr : BitVec 64) : BitVec 64 :=
+  (BitVec.ofNat ram.dataWidth (Y.mem false ram.name (addr.toNat % 2 ^ ram.addrWidth))).setWidth 64
+
+/-- Satisfiability predicate of `S : LecMemScript` under assignment `Y : LecMemAssign`:
+both Yosys invariants/transitions hold and at least one output, core register, RAM readout latch,
+or RAM memory array disagrees. -/
+def LecMemScript.holds (S : LecMemScript) (Y : LecMemAssign) : Prop :=
+  let E := S.base.env Y.core
+  Y.core.h = true ∧ Y.core.t = true ∧
+  ¬ ((∀ o ∈ S.base.outputs, o.rtl.eval E = o.spec.eval E) ∧
+     (∀ r ∈ S.base.regs, r.rtl.eval E = r.spec.eval E) ∧
+     (∀ rr ∈ S.ramReads, rr.rtl.eval E = rr.spec.eval E Y.mem) ∧
+     (∀ ra ∈ S.ramArrs, ∀ idx : BitVec ra.aw, ra.rtl.eval E Y.mem idx = ra.spec.eval E Y.mem idx))
+
+/-- Render `S : LecMemScript` as SMT-LIB2 `QF_AUFBV` text to append after Yosys `write_smt2`. -/
+def LecMemScript.print (S : LecMemScript) : String :=
+  let B := S.base
+  let mod := B.mod
+  let states :=
+    [ s!"(declare-const s |{mod}_s|)"
+    , s!"(declare-const s1 |{mod}_s|)"
+    , s!"(assert (|{mod}_h| s))"
+    , s!"(assert (|{mod}_t| s s1))" ]
+  let inDefs := B.inputs.map fun (i, t) => s!"(define-fun in_{i} () (_ BitVec 64) {t.print "spec_"})"
+  let regDefs := B.slots.map fun (k, t?) =>
+    match t? with
+    | some t => s!"(define-fun r_{k} () (_ BitVec 64) {t.print "spec_"})"
+    | none => s!"(declare-const r_{k} (_ BitVec 64))"
+  let wireDefs := B.wires.map fun (i, t) => s!"(define-fun spec_w_{i} () (_ BitVec 64) {t.print "spec_"})"
+  let outDefs := B.outputs.flatMap fun o =>
+    [ s!"(define-fun |rtl_out_{o.name}| () (_ BitVec {o.w}) {o.rtl.print "spec_"})"
+    , s!"(define-fun |spec_out_{o.name}| () (_ BitVec {o.w}) {o.spec.print "spec_"})"
+    , s!"(define-fun |lec_out_{o.name}| () Bool (= |rtl_out_{o.name}| |spec_out_{o.name}|))" ]
+  let regObls := B.regs.flatMap fun r =>
+    [ s!"(define-fun |rtl_next_{r.name}| () (_ BitVec {r.w}) {r.rtl.print "spec_"})"
+    , s!"(define-fun |spec_next_{r.name}| () (_ BitVec {r.w}) {r.spec.print "spec_"})"
+    , s!"(define-fun |lec_next_{r.name}| () Bool (= |rtl_next_{r.name}| |spec_next_{r.name}|))" ]
+  let ramReadObls := S.ramReads.flatMap fun rr =>
+    [ s!"(define-fun |rtl_rdata_{rr.name}| () (_ BitVec {rr.w}) {rr.rtl.print "spec_"})"
+    , s!"(define-fun |spec_rdata_{rr.name}| () (_ BitVec {rr.w}) {rr.spec.print "spec_"})"
+    , s!"(define-fun |lec_rdata_{rr.name}| () Bool (= |rtl_rdata_{rr.name}| |spec_rdata_{rr.name}|))" ]
+  let ramArrObls := S.ramArrs.flatMap fun ra =>
+    let arrSort := s!"(Array (_ BitVec {ra.aw}) (_ BitVec {ra.dw}))"
+    [ s!"(define-fun |rtl_mem_{ra.name}| () {arrSort} {ra.rtl.print "spec_"})"
+    , s!"(define-fun |spec_mem_{ra.name}| () {arrSort} {ra.spec.print "spec_"})"
+    , s!"(define-fun |lec_mem_{ra.name}| () Bool (= |rtl_mem_{ra.name}| |spec_mem_{ra.name}|))" ]
+  let obls :=
+    B.outputs.map (fun o => s!"|lec_out_{o.name}|") ++
+    B.regs.map (fun r => s!"|lec_next_{r.name}|") ++
+    S.ramReads.map (fun rr => s!"|lec_rdata_{rr.name}|") ++
+    S.ramArrs.map (fun ra => s!"|lec_mem_{ra.name}|")
+  let miter :=
+    if obls.isEmpty then "(assert false)"
+    else s!"(assert (not (and true {String.intercalate " " obls})))"
+  let cexTerms :=
+    B.inputs.map (fun (i, _) => s!"in_{i}") ++ B.resets.map (·.print "spec_") ++
+    B.slots.map (fun (k, _) => s!"r_{k}") ++
+    B.outputs.flatMap (fun o => [s!"|lec_out_{o.name}|", s!"|rtl_out_{o.name}|", s!"|spec_out_{o.name}|"]) ++
+    B.regs.flatMap (fun r => [s!"|lec_next_{r.name}|", s!"|rtl_next_{r.name}|", s!"|spec_next_{r.name}|"]) ++
+    S.ramReads.flatMap (fun rr => [s!"|lec_rdata_{rr.name}|", s!"|rtl_rdata_{rr.name}|", s!"|spec_rdata_{rr.name}|"])
+  B.header ++
+  "\n; 1. Two states of Yosys's model, one transition apart\n" ++
+  String.intercalate "\n" states ++ "\n" ++
+  "\n; 2. Inputs, registers, and RAM readout latches of state s\n" ++
+  String.intercalate "\n" (inDefs ++ regDefs) ++ "\n" ++
+  "\n; 3. Lean's combinational wire model (smtOf)\n" ++
+  String.intercalate "\n" wireDefs ++ (if wireDefs.isEmpty then "" else "\n") ++
+  "\n; 4. Obligations: outputs at s, registers at s1, SyncRam read latches & QF_AUFBV arrays at s1\n" ++
+  String.intercalate "\n" (outDefs ++ regObls ++ ramReadObls ++ ramArrObls) ++ "\n" ++
+  "\n; 5. Miter\n" ++ miter ++ "\n(check-sat)\n" ++
+  "; --- counterexample (sent only after sat) ---\n" ++
+  s!"(get-value ({String.intercalate " " cexTerms}))\n"
+
+/-- Reset port name governing register `r` in `emitMemModuleSV m`. -/
+def memResetPortOf (m : RtlMemModule) (r : RegSpec) : String :=
+  if (memModuleDomains m).length > 1 then s!"rst_{r.domain.portSuffix}" else "rst"
+
+/-- Next-cycle term for core register `r` inside `m : RtlMemModule`. -/
+def memRegNextTerm (m : RtlMemModule) (r : RegSpec) : SmtBV 64 :=
+  match r.resetKind with
+  | .resetFree => smtOf r.nextExpr
+  | .syncReset v => .ite (.yosys m.core.name (memResetPortOf m r) false) (.lit v) (smtOf r.nextExpr)
+
+/-- Lookup register or RAM readout slot `k` (`0 .. nCore - 1` for core regs, `nCore + ramIdx` for RAM readouts). -/
+def memSlotOf (m : RtlMemModule) (k : Nat) : Option (String × Nat) :=
+  let nCore := m.core.regs.length
+  if k < nCore then (regOfSlot m.core k).map fun r => (r.name, r.width)
+  else
+    let ram? := m.rams.foldl (fun acc ram => if nCore + ram.ramIdx == k then some ram else acc) none
+    ram?.map fun ram => (ram.rdataName, ram.dataWidth)
+
+/-- SMT-LIB2 `QF_AUFBV` specification term for `ram`'s registered read-data latch in `s1`. -/
+def ramReadNextTerm (mod : String) (ram : SyncRamSpec) : SmtMemBV ram.dataWidth :=
+  let baseArr : SmtArr ram.addrWidth ram.dataWidth := .yosysMem mod ram.name false ram.addrWidth ram.dataWidth
+  let raddrBV : SmtBV ram.addrWidth := lowBitsTerm ram.addrWidth (smtOf ram.readAddrExpr)
+  let rawSel : SmtMemBV ram.dataWidth := .select baseArr raddrBV
+  match ram.mode with
+  | .readFirst => rawSel
+  | .writeFirst =>
+    let weBool : SmtBool := .distinct (lowBitsTerm 1 (smtOf ram.writeEnExpr)) (.bits 0#1)
+    let waddrBV : SmtBV ram.addrWidth := lowBitsTerm ram.addrWidth (smtOf ram.writeAddrExpr)
+    let wdataBV : SmtBV ram.dataWidth := lowBitsTerm ram.dataWidth (smtOf ram.writeDataExpr)
+    .iteMem weBool (.iteMem (.eq waddrBV raddrBV) (.ofBV wdataBV) rawSel) rawSel
+
+/-- SMT-LIB2 `QF_AUFBV` specification term for `ram`'s next-cycle memory array in `s1`. -/
+def ramNextArrTerm (mod : String) (ram : SyncRamSpec) : SmtArr ram.addrWidth ram.dataWidth :=
+  let baseArr : SmtArr ram.addrWidth ram.dataWidth := .yosysMem mod ram.name false ram.addrWidth ram.dataWidth
+  let weBool : SmtBool := .distinct (lowBitsTerm 1 (smtOf ram.writeEnExpr)) (.bits 0#1)
+  let waddrBV : SmtBV ram.addrWidth := lowBitsTerm ram.addrWidth (smtOf ram.writeAddrExpr)
+  let wdataBV : SmtBV ram.dataWidth := lowBitsTerm ram.dataWidth (smtOf ram.writeDataExpr)
+  .iteArr weBool (.store baseArr waddrBV wdataBV) baseArr
+
+/-- Construct the `QF_AUFBV` memory miter script for `m : RtlMemModule`. -/
+def lecMemScript (m : RtlMemModule) : LecMemScript :=
+  let mod := m.core.name
+  let nCore := m.core.regs.length
+  let maxCore := m.core.regs.foldl (fun acc r => max acc (r.regIdx + 1)) nCore
+  let nSlots := m.rams.foldl (fun acc ram => max acc (nCore + ram.ramIdx + 1)) maxCore
+  let domains := memModuleDomains m
+  let resets := if domains.length > 1 then domains.map fun d => s!"rst_{d.portSuffix}" else ["rst"]
+  { base :=
+      { mod := mod
+        header :=
+          s!"; Lean half of the QF_AUFBV memory LEC of {mod}: Obend.Hardware.YosysLec.emitYosysMemLecSmt2.\n" ++
+          s!"; Module: {mod} (inputs={m.core.inputNames.length}, wires={m.core.wires.length}, regs={m.core.regs.length}, rams={m.rams.length}, outputs={m.core.outputs.length})\n"
+        inputs := (List.range m.core.inputNames.length).map fun i => (i, inputTerm m.core i)
+        slots := (List.range nSlots).map fun k => (k, (memSlotOf m k).map fun (nm, w) => wordTerm mod nm w)
+        wires := m.core.wires.map fun w => (w.wireIdx, smtOf w.expr)
+        outputs := m.core.outputs.map fun o =>
+          { name := o.name, w := o.width, rtl := yosysBV mod o.name false o.width,
+            spec := lowBitsTerm o.width (smtOf o.expr) }
+        regs := m.core.regs.map fun r =>
+          { name := r.name, w := r.width, rtl := yosysBV mod r.name true r.width,
+            spec := lowBitsTerm r.width (memRegNextTerm m r) }
+        resets := if m.core.regs.isEmpty then [] else resets.map fun p => SmtBool.yosys mod p false }
+    ramReads := m.rams.map fun ram =>
+      { name := ram.rdataName
+        w := ram.dataWidth
+        rtl := yosysBV mod ram.rdataName true ram.dataWidth
+        spec := ramReadNextTerm mod ram }
+    ramArrs := m.rams.map fun ram =>
+      { name := ram.name
+        aw := ram.addrWidth
+        dw := ram.dataWidth
+        rtl := .yosysMem mod ram.name true ram.addrWidth ram.dataWidth
+        spec := ramNextArrTerm mod ram } }
+
+/-- Emit SMT-LIB2 LEC text for `m : RtlMemModule`.
+When `m.rams = []`, emits the exact byte-identical string `emitYosysLecSmt2 m.core`. -/
+def emitYosysMemLecSmt2 (m : RtlMemModule) : String :=
+  if m.rams.isEmpty then emitYosysLecSmt2 m.core else (lecMemScript m).print
+
+theorem emitYosysMemLecSmt2_empty (m : RtlModule) :
+    emitYosysMemLecSmt2 { core := m, rams := [] } = emitYosysLecSmt2 m := by rfl
+
+/-- Faithfulness gate for `lecMemScript m`: all core and RAM port expressions are `smtFaithful`
+and every `SyncRamSpec` has `addrWidth ≤ 64` and `dataWidth ≤ 64`. -/
+def memModuleFaithful (m : RtlMemModule) : Bool :=
+  moduleFaithful m.core &&
+  m.rams.all fun ram =>
+    decide (ram.addrWidth ≤ 64) && decide (ram.dataWidth ≤ 64) &&
+    smtFaithful ram.readAddrExpr && smtFaithful ram.writeEnExpr &&
+    smtFaithful ram.writeAddrExpr && smtFaithful ram.writeDataExpr
+
+/-- `checkMemWidths m = true` (run by `checkRtlMemModuleW`) implies `memModuleFaithful m = true`. -/
+theorem memModuleFaithful_of_checkMemWidths (m : RtlMemModule) (h : checkMemWidths m = true) :
+    memModuleFaithful m = true := by
+  obtain ⟨hw, hr, ho, hram⟩ := checkMemWidths_parts m h
+  simp only [memModuleFaithful, moduleFaithful, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq]
+  refine ⟨⟨⟨fun a ha => ?_, fun o ho' => ?_⟩, fun r hr' => ?_⟩, fun ram hram' => ?_⟩
+  · obtain ⟨w, hw', _⟩ := fitErrors_nil (hw a ha); exact inferWidthE_faithful _ _ w hw'
+  · obtain ⟨w, hw', _⟩ := fitErrors_nil (ho o ho').2; exact inferWidthE_faithful _ _ w hw'
+  · obtain ⟨w, hw', _⟩ := fitErrors_nil (hr r hr').2.1; exact inferWidthE_faithful _ _ w hw'
+  · obtain ⟨haw, hdw, hra, hwe, hwa, hwd⟩ := hram ram hram'
+    have haw64 : ram.addrWidth ≤ 64 := by
+      unfold validRamAddrWidth at haw; simp only [Bool.and_eq_true, decide_eq_true_eq] at haw; omega
+    have hdw64 : ram.dataWidth ≤ 64 := by
+      unfold validWidth at hdw; simp only [Bool.and_eq_true, decide_eq_true_eq] at hdw; exact hdw.2
+    obtain ⟨w1, hw1, _⟩ := fitErrors_nil hra
+    obtain ⟨w2, hw2, _⟩ := fitErrors_nil hwe
+    obtain ⟨w3, hw3, _⟩ := fitErrors_nil hwa
+    obtain ⟨w4, hw4, _⟩ := fitErrors_nil hwd
+    exact ⟨⟨⟨⟨⟨haw64, hdw64⟩, inferWidthE_faithful _ _ w1 hw1⟩,
+      inferWidthE_faithful _ _ w2 hw2⟩, inferWidthE_faithful _ _ w3 hw3⟩,
+      inferWidthE_faithful _ _ w4 hw4⟩
+
+private theorem setWidth_truncToWidth_self {w : Nat} (hw : w ≤ 64) (v : BitVec 64) :
+    (truncToWidth w v).setWidth w = v.setWidth w := by
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_setWidth, truncToWidth_toNat w hw, Nat.mod_mod, BitVec.toNat_setWidth]
+
+private theorem truncToWidth_beq_iff_setWidth {w : Nat} (hw : w ≤ 64) (a b : BitVec 64) :
+    (truncToWidth w a == truncToWidth w b) = (a.setWidth w == b.setWidth w) := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [beq_iff_eq, ← BitVec.toNat_inj, truncToWidth_toNat w hw, BitVec.toNat_setWidth]
+
+private theorem truncToWidth1_bne_zero (v : BitVec 64) :
+    (truncToWidth 1 v != 0#64) = (v.setWidth 1 != 0#1) := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [bne_iff_ne, ne_eq, ← BitVec.toNat_inj, truncToWidth_toNat 1 (by decide), BitVec.toNat_setWidth]
+  exact Iff.rfl
+
+private theorem memVal_select_eq (Y : LecMemAssign) (ram : SyncRamSpec)
+    (haw : ram.addrWidth ≤ 64) (hdw : ram.dataWidth ≤ 64) (vr : BitVec 64) :
+    BitVec.ofNat ram.dataWidth (Y.mem false ram.name (vr.setWidth ram.addrWidth).toNat) =
+      (truncToWidth ram.dataWidth (Y.memVal ram (truncToWidth ram.addrWidth vr))).setWidth ram.dataWidth := by
+  rw [setWidth_truncToWidth_self hdw]
+  unfold LecMemAssign.memVal
+  have haddr : (truncToWidth ram.addrWidth vr).toNat % 2 ^ ram.addrWidth = (vr.setWidth ram.addrWidth).toNat := by
+    rw [truncToWidth_toNat ram.addrWidth haw, Nat.mod_mod, BitVec.toNat_setWidth]
+  rw [haddr]
+  generalize BitVec.ofNat ram.dataWidth (Y.mem false ram.name (vr.setWidth ram.addrWidth).toNat) = x
+  apply BitVec.eq_of_toNat_eq
+  have hlt64 : x.toNat < 2 ^ 64 :=
+    Nat.lt_of_lt_of_le x.isLt (Nat.pow_le_pow_right (by decide) hdw)
+  rw [BitVec.toNat_setWidth, BitVec.toNat_setWidth, Nat.mod_eq_of_lt hlt64, Nat.mod_eq_of_lt x.isLt]
+
+private theorem setWidth64_beq_truncToWidth {aw : Nat} (haw : aw ≤ 64) (idx : BitVec aw) (vw : BitVec 64) :
+    (idx == vw.setWidth aw) = (idx.setWidth 64 == truncToWidth aw vw) := by
+  have hlt : idx.toNat < 2 ^ 64 :=
+    Nat.lt_of_lt_of_le idx.isLt (Nat.pow_le_pow_right (by decide) haw)
+  apply Bool.eq_iff_iff.mpr
+  simp only [beq_iff_eq, ← BitVec.toNat_inj, BitVec.toNat_setWidth, truncToWidth_toNat aw haw,
+    Nat.mod_eq_of_lt hlt]
+
+private theorem memVal_at_idx_eq (Y : LecMemAssign) (ram : SyncRamSpec)
+    (haw : ram.addrWidth ≤ 64) (hdw : ram.dataWidth ≤ 64) (idx : BitVec ram.addrWidth) :
+    BitVec.ofNat ram.dataWidth (Y.mem false ram.name idx.toNat) =
+      (Y.memVal ram (idx.setWidth 64)).setWidth ram.dataWidth := by
+  unfold LecMemAssign.memVal
+  apply BitVec.eq_of_toNat_eq
+  have hlt64 : idx.toNat < 2 ^ 64 :=
+    Nat.lt_of_lt_of_le idx.isLt (Nat.pow_le_pow_right (by decide) haw)
+  have hltD : (Y.mem false ram.name idx.toNat) % 2 ^ ram.dataWidth < 2 ^ 64 :=
+    Nat.lt_of_lt_of_le (Nat.mod_lt _ (Nat.two_pow_pos _)) (Nat.pow_le_pow_right (by decide) hdw)
+  rw [BitVec.toNat_setWidth, BitVec.toNat_setWidth, BitVec.toNat_setWidth,
+    Nat.mod_eq_of_lt hlt64, Nat.mod_eq_of_lt idx.isLt, BitVec.toNat_ofNat,
+    Nat.mod_eq_of_lt hltD, Nat.mod_mod]
+
+abbrev lecMemEnv (m : RtlMemModule) (Y : LecMemAssign) : SmtEnv :=
+  (lecMemScript m).base.env Y.core
+
+abbrev lecMemInp (m : RtlMemModule) (Y : LecMemAssign) : Nat → BitVec 64 :=
+  (lecMemScript m).base.inpVal Y.core
+
+abbrev lecMemReg (m : RtlMemModule) (Y : LecMemAssign) : Nat → BitVec 64 :=
+  (lecMemScript m).base.regVal Y.core
+
+abbrev lecMemWire (m : RtlMemModule) (Y : LecMemAssign) : Nat → BitVec 64 :=
+  evalWireTable (lecMemInp m Y) (lecMemReg m Y) m.core.wires
+
+/-- **Universal soundness of the `QF_AUFBV` memory miter (`lecMemScript_holds_iff`).**
+For every assignment `Y : LecMemAssign` z3 may choose, `(lecMemScript m).holds Y` holds iff
+both Yosys invariants/transitions hold (`Y.core.h = true ∧ Y.core.t = true`) and at least one
+output in `s`, core register in `s1`, synchronous RAM read-data latch in `s1` (`evalSyncRamReadNext`),
+or synchronous RAM array entry in `s1` (`stepSyncRamArray`) disagrees with Lean's cycle semantics! -/
+theorem lecMemScript_holds_iff (m : RtlMemModule) (hf : memModuleFaithful m = true) (Y : LecMemAssign) :
+    (lecMemScript m).holds Y ↔
+      Y.core.h = true ∧ Y.core.t = true ∧
+      ¬ ((∀ o ∈ m.core.outputs,
+            (yosysBV m.core.name o.name false o.width).eval (lecMemEnv m Y) =
+              (evalRtlExpr (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y) o.expr).setWidth o.width) ∧
+         (∀ r ∈ m.core.regs,
+            (yosysBV m.core.name r.name true r.width).eval (lecMemEnv m Y) =
+              (regNextValue (Y.core.bit false (memResetPortOf m r))
+                (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y) r).setWidth r.width) ∧
+         (∀ ram ∈ m.rams,
+            (yosysBV m.core.name ram.rdataName true ram.dataWidth).eval (lecMemEnv m Y) =
+              (evalSyncRamReadNext (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y)
+                (Y.memVal ram) ram).setWidth ram.dataWidth) ∧
+         (∀ ram ∈ m.rams, ∀ idx : BitVec ram.addrWidth,
+            BitVec.ofNat ram.dataWidth (Y.mem true ram.name idx.toNat) =
+              (stepSyncRamArray (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y)
+                (Y.memVal ram) ram (idx.setWidth 64)).setWidth ram.dataWidth)) := by
+  simp only [memModuleFaithful, moduleFaithful, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hf
+  obtain ⟨⟨⟨hw, ho⟩, hr⟩, hram⟩ := hf
+  have hwires : (lecMemEnv m Y).wire = lecMemWire m Y := by
+    show wireFold _ _ _ _ (m.core.wires.map fun w => (w.wireIdx, smtOf w.expr)) = _
+    exact wireFold_sound _ _ _ _ m.core.wires (List.all_eq_true.mpr hw)
+  have hsound : ∀ e, smtFaithful e = true → (smtOf e).eval (lecMemEnv m Y) =
+      evalRtlExpr (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y) e := by
+    intro e he; rw [smtOf_sound _ e he, hwires]; rfl
+  have hbit : (lecMemEnv m Y).bit = Y.core.bit := rfl
+  have hOut : (lecMemScript m).base.outputs = m.core.outputs.map fun o =>
+      { name := o.name, w := o.width, rtl := yosysBV m.core.name o.name false o.width,
+        spec := lowBitsTerm o.width (smtOf o.expr) } := rfl
+  have hReg : (lecMemScript m).base.regs = m.core.regs.map fun r =>
+      { name := r.name, w := r.width, rtl := yosysBV m.core.name r.name true r.width,
+        spec := lowBitsTerm r.width (memRegNextTerm m r) } := rfl
+  have hRR : (lecMemScript m).ramReads = m.rams.map fun ram =>
+      { name := ram.rdataName, w := ram.dataWidth,
+        rtl := yosysBV m.core.name ram.rdataName true ram.dataWidth,
+        spec := ramReadNextTerm m.core.name ram } := rfl
+  have hRA : (lecMemScript m).ramArrs = m.rams.map fun ram =>
+      { name := ram.name, aw := ram.addrWidth, dw := ram.dataWidth,
+        rtl := .yosysMem m.core.name ram.name true ram.addrWidth ram.dataWidth,
+        spec := ramNextArrTerm m.core.name ram } := rfl
+  unfold LecMemScript.holds
+  dsimp only
+  change Y.core.h = true ∧ Y.core.t = true ∧ _ ↔ _
+  apply and_congr Iff.rfl; apply and_congr Iff.rfl; apply not_congr
+  apply and_congr
+  · rw [hOut, List.forall_mem_map]
+    apply forall_congr'; intro o; apply imp_congr_right; intro hmem
+    change _ = (lowBitsTerm o.width (smtOf o.expr)).eval (lecMemEnv m Y) ↔ _
+    rw [lowBitsTerm_eval, hsound o.expr (ho o hmem)]
+  · apply and_congr
+    · rw [hReg, List.forall_mem_map]
+      apply forall_congr'; intro r; apply imp_congr_right; intro hmem
+      change _ = (lowBitsTerm r.width (memRegNextTerm m r)).eval (lecMemEnv m Y) ↔ _
+      rw [lowBitsTerm_eval]
+      have hn := hsound r.nextExpr (hr r hmem)
+      unfold memRegNextTerm regNextValue
+      cases r.resetKind with
+      | resetFree => rw [hn]
+      | syncReset v => simp only [SmtBV.eval, SmtBool.eval, hbit]; rw [hn]
+    · apply and_congr
+      · rw [hRR, List.forall_mem_map]
+        apply forall_congr'; intro ram; apply imp_congr_right; intro hmem
+        obtain ⟨⟨⟨⟨⟨haw, hdw⟩, hra⟩, hwe⟩, hwa⟩, hwd⟩ := hram ram hmem
+        change _ = (ramReadNextTerm m.core.name ram).eval (lecMemEnv m Y) Y.mem ↔ _
+        unfold ramReadNextTerm evalSyncRamReadNext
+        dsimp only
+        cases ram.mode with
+        | readFirst =>
+          simp only [SmtMemBV.eval, SmtArr.eval, lowBitsTerm_eval, hsound ram.readAddrExpr hra]
+          rw [memVal_select_eq Y ram haw hdw]
+        | writeFirst =>
+          simp only [SmtMemBV.eval, SmtArr.eval, SmtBool.eval, SmtBV.eval, lowBitsTerm_eval,
+            hsound ram.readAddrExpr hra, hsound ram.writeEnExpr hwe,
+            hsound ram.writeAddrExpr hwa, hsound ram.writeDataExpr hwd]
+          rw [← truncToWidth1_bne_zero, ← truncToWidth_beq_iff_setWidth haw,
+            memVal_select_eq Y ram haw hdw, ← setWidth_truncToWidth_self hdw]
+          cases (truncToWidth 1 (evalRtlExpr (lecMemInp m Y) (lecMemWire m Y)
+              (lecMemReg m Y) ram.writeEnExpr) != 0#64) <;>
+            cases (truncToWidth ram.addrWidth (evalRtlExpr (lecMemInp m Y) (lecMemWire m Y)
+              (lecMemReg m Y) ram.writeAddrExpr) ==
+              truncToWidth ram.addrWidth (evalRtlExpr (lecMemInp m Y) (lecMemWire m Y)
+                (lecMemReg m Y) ram.readAddrExpr)) <;> simp
+      · rw [hRA, List.forall_mem_map]
+        apply forall_congr'; intro ram; apply imp_congr_right; intro hmem
+        obtain ⟨⟨⟨⟨⟨haw, hdw⟩, _⟩, hwe⟩, hwa⟩, hwd⟩ := hram ram hmem
+        dsimp only
+        apply forall_congr'; intro idx
+        change BitVec.ofNat ram.dataWidth (Y.mem true ram.name idx.toNat) =
+          (ramNextArrTerm m.core.name ram).eval (lecMemEnv m Y) Y.mem idx ↔ _
+        unfold ramNextArrTerm stepSyncRamArray
+        dsimp only
+        simp only [SmtArr.eval, SmtBool.eval, SmtBV.eval, lowBitsTerm_eval,
+          hsound ram.writeEnExpr hwe, hsound ram.writeAddrExpr hwa, hsound ram.writeDataExpr hwd]
+        rw [← truncToWidth1_bne_zero, setWidth64_beq_truncToWidth haw,
+          memVal_at_idx_eq Y ram haw hdw, ← setWidth_truncToWidth_self hdw]
+        cases (truncToWidth 1 (evalRtlExpr (lecMemInp m Y) (lecMemWire m Y)
+            (lecMemReg m Y) ram.writeEnExpr) != 0#64)
+        · simp only [Bool.false_eq_true, ↓reduceIte]
+        · simp only [↓reduceIte]
+          cases (idx.setWidth 64 == truncToWidth ram.addrWidth (evalRtlExpr (lecMemInp m Y)
+            (lecMemWire m Y) (lecMemReg m Y) ram.writeAddrExpr))
+          · simp only [Bool.false_eq_true, ↓reduceIte]
+          · simp only [↓reduceIte]
+
+/-- Unsatisfiability corollary of `lecMemScript_holds_iff`: if Yosys's transition model agrees
+with Lean's outputs, registers, RAM readouts, and RAM array updates on every reachable transition,
+then `(lecMemScript m).holds Y` is refuted for every `Y` (`z3` must answer `unsat`). -/
+theorem lecMemScript_unsat_of_agree (m : RtlMemModule) (hf : memModuleFaithful m = true)
+    (hagree : ∀ Y : LecMemAssign, Y.core.h = true → Y.core.t = true →
+      (∀ o ∈ m.core.outputs,
+          (yosysBV m.core.name o.name false o.width).eval (lecMemEnv m Y) =
+            (evalRtlExpr (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y) o.expr).setWidth o.width) ∧
+      (∀ r ∈ m.core.regs,
+          (yosysBV m.core.name r.name true r.width).eval (lecMemEnv m Y) =
+            (regNextValue (Y.core.bit false (memResetPortOf m r))
+              (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y) r).setWidth r.width) ∧
+      (∀ ram ∈ m.rams,
+          (yosysBV m.core.name ram.rdataName true ram.dataWidth).eval (lecMemEnv m Y) =
+            (evalSyncRamReadNext (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y)
+              (Y.memVal ram) ram).setWidth ram.dataWidth) ∧
+      (∀ ram ∈ m.rams, ∀ idx : BitVec ram.addrWidth,
+          BitVec.ofNat ram.dataWidth (Y.mem true ram.name idx.toNat) =
+            (stepSyncRamArray (lecMemInp m Y) (lecMemWire m Y) (lecMemReg m Y)
+              (Y.memVal ram) ram (idx.setWidth 64)).setWidth ram.dataWidth)) :
+    ∀ Y, ¬ (lecMemScript m).holds Y := by
+  intro Y hY
+  rw [lecMemScript_holds_iff m hf Y] at hY
+  exact hY.2.2 (hagree Y hY.1 hY.2.1)
+
+/-- Constructive inhabitedness witness for `memModuleFaithful` and `lecMemScript_holds_iff`:
+a concrete synchronous BRAM `RtlMemModule` passing `checkMemWidths` and `memModuleFaithful`. -/
+theorem memModuleFaithful_inhabited :
+    ∃ m : RtlMemModule, m.rams ≠ [] ∧ checkMemWidths m = true ∧ memModuleFaithful m = true := by
+  obtain ⟨m, hne, hchk⟩ := checkRtlMemModuleW_inhabited
+  have hmw : checkMemWidths m = true := by
+    unfold checkRtlMemModuleW at hchk
+    simp only [Bool.and_eq_true] at hchk
+    exact hchk.2
+  exact ⟨m, hne, hmw, memModuleFaithful_of_checkMemWidths m hmw⟩
 
 end Obend.Hardware.YosysLec
 end
