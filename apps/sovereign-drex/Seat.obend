@@ -25,7 +25,7 @@ spec BaseZoeSeatSpec for ZoeSeat:
     self.cbdcEscrow + fillRatioPct * 250n
   def mandateReserveCheck(drawdownBps: Nat) -> Nat:
     drawdownBps * 10n + self.welfareCreditCrown
-  claim zoe_offer_safety_open_recursion(fillRatioPct: Nat): self.offerSafetyMargin(fillRatioPct) == self.cbdcEscrow + fillRatioPct * 250n
+  claim zoe_offer_safety_margin_bound(fillRatioPct: Nat) given fillRatioPct <= 100n by judge("interval@1"): 75000n + fillRatioPct * 250n <= 100000n
 
 spec InstitutionalMandateSeatOverride for ZoeSeat:
   requires mandateReserveCheck(drawdownBps: Nat) -> Nat

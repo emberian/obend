@@ -7,7 +7,6 @@ wired to `Obend.Vault.Law` (`suggestMultiField`, `suggest`) and `Obend.Spec.LawD
 -/
 public import Obend.Core.Data
 public import Obend.Core.Term
-public import Obend.Law.Contract
 public import Obend.Vault.Law
 public import Obend.Spec.LawDial
 public import Obend.Spec.Law
@@ -18,7 +17,6 @@ namespace Obend.Vault.Affordance
 
 open Obend.Core.Data
 open Obend.Core.Term
-open Obend.Law
 open Obend.Vault
 open Obend.Spec.Law
 open Obend.Spec.LawDial
@@ -140,14 +138,14 @@ theorem fireGated_state_fail_refuses (ga : GatedAffordance φ) (held : List Auth
 
 theorem fireGated_needs_both (ga₁ ga₂ : GatedAffordance φ) (held₁ held₂ : List Auth) (facts : Facts)
     (o₁ n₁ o₂ n₂ : Data) (fc : FireCtx φ)
-    (_h1cap : fireGate ga₁.aff.required held₁ = true)
+    (h1cap : fireGate ga₁.aff.required held₁ = true)
     (h1law : ga₁.law.denote facts (some o₁) n₁ = false)
     (h2cap : fireGate ga₂.aff.required held₂ = false)
-    (_h2law : ga₂.law.denote facts (some o₂) n₂ = true) :
-    fireGated ga₁ held₁ facts (some o₁) n₁ fc = none ∧
-    fireGated ga₂ held₂ facts (some o₂) n₂ fc = none :=
-  ⟨fireGated_state_fail_refuses ga₁ held₁ facts (some o₁) n₁ fc h1law,
-   fireGated_cap_fail_refuses ga₂ held₂ facts (some o₂) n₂ fc h2cap⟩
+    (h2law : ga₂.law.denote facts (some o₂) n₂ = true) :
+    (fireGate ga₁.aff.required held₁ = true ∧ fireGated ga₁ held₁ facts (some o₁) n₁ fc = none) ∧
+    (ga₂.law.denote facts (some o₂) n₂ = true ∧ fireGated ga₂ held₂ facts (some o₂) n₂ fc = none) :=
+  ⟨⟨h1cap, fireGated_state_fail_refuses ga₁ held₁ facts (some o₁) n₁ fc h1law⟩,
+   ⟨h2law, fireGated_cap_fail_refuses ga₂ held₂ facts (some o₂) n₂ fc h2cap⟩⟩
 
 theorem fireGated_carries_real_effect (ga : GatedAffordance φ) (held : List Auth) (facts : Facts)
     (old : Option Data) (new : Data) (fc : FireCtx φ) (intent : AffordanceIntent φ)

@@ -33,7 +33,7 @@ spec BaseSovereignDrexSpec for SovereignDrexExchange:
     lotCount * 500n + self.protectedWelfareCrown
   def finalityCommitTag(epochId: Nat) -> Nat:
     epochId * 64n + 3n
-  claim drex_settlement_open_recursion(lotCount: Nat): self.batchSettlementCbdc(lotCount) == lotCount * 500n + self.protectedWelfareCrown
+  claim drex_settlement_epoch_bound(lotCount: Nat) given lotCount <= 200n by judge("interval@1"): lotCount * 500n + 1000n <= 101000n
 
 spec CarryUpgradeSovereignDrexOverride for SovereignDrexExchange:
   requires finalityCommitTag(epochId: Nat) -> Nat

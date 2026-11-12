@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Apps.SovereignDrex — Flagship App #7: 4-Validator Sovereign `DReX` + `K-CARRY` Live Exchange & Consensus Engine
+# Obend.Apps.SovereignDrex — Flagship App #7: 4-Validator Sovereign `DReX` + `CheckedCarry` Exchange
 
 Connects the 4-module `.obend` sovereign multi-asset exchange package in `apps/sovereign-drex/`:
 1. `apps/sovereign-drex/Seat.obend` (`SovereignDrexSeat`: `BaseZoeSeatSpec` -> `InstitutionalMandateSeatOverride`)
@@ -8,28 +8,22 @@ Connects the 4-module `.obend` sovereign multi-asset exchange package in `apps/s
 3. `apps/sovereign-drex/BatchClearing.obend` (`SovereignDrexClearing`: `BaseBatchClearingSpec` -> `SovereignCarryClearingOverride`)
 4. `apps/sovereign-drex/SovereignDrexTop.obend` (`SovereignDrexTop`: `BaseSovereignDrexSpec` -> `CarryUpgradeSovereignDrexOverride`)
 
-directly to the mechanized sovereign vault, live `K-CARRY` upgrade, and 4-validator BFT consensus stack:
-- `Obend.Vault.Carry`:
-  * Registered external judge format `"world-carry@1"` (`worldCarryFormat`) with non-trivial JSON wire rejection (`worldCarryFormat_refuses_empty_json`, `sampleBadCarryPlan_refused`),
-  * Live world upgrade execution (`executeWorldCarry`) with total-book asset conservation (`carry_conserves_total_book`), `"forever"` crown preservation (`carry_preserves_forever_crowns`), and Agoric/Zoe offer-safety preservation (`carry_preserves_zoe_offer_safety`),
-- `Obend.Vault.Hyperedge`:
-  * State-bound half-edge conservation (`stateBoundTurn_conserves_actual_state_balances`) and unreported state-balance inflation refusal (`unreported_state_inflation_refused`),
-- `Obend.Vault.SovereignEngine`:
-  * Full oracle-validated turn gate (`checkOracleTurnValidAt`, `stepSovereignEngine`) with multi-asset conservation (`sovereignEngine_step_conserves_all_assets`), Zoe offer-safety + mandate enforcement (`sovereignEngine_enforces_zoe_and_mandates`), and stale-pin refusal (`stepSovereignEngine_oracleTurn_refuses_stale_pin`),
-- `Obend.Consensus.SovereignFinality`:
-  * Tier 1 disjoint fast-path commutativity (`tier1_disjoint_fast_path_commutes`),
-  * 4-validator ($N = 4, f = 1$, quorum $2f + 1 = 3$) Tier 2 Simplex quorum promotion & accountable slashing (`tier2_simplex_quorum_and_accountable_safety`),
-  * Durable BFT WAL crash-recovery anti-equivocation (`durable_recovery_prevents_equivocation`) and expose-once settlement externalization across crashes (`durable_expose_once_across_crashes`),
-- `Obend.Leaf.Static`, `Obend.Spec.CrossPackage`, `Obend.Hardware.HDL`, `Obend.Hardware.Synth`, `Obend.Hardware.Compiler`:
-  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), cross-package cone survival (`coneSupports_linkComposition_of_disjoint`), and verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`, `emitModuleSV`).
+directly to the unified DeOS vault, markets, checked carry, and 4-validator Simplex BFT consensus spine:
+- `Obend.Vault.UnifiedDeos`:
+  * `UnifiedDeosSpine` (`stepUnifiedTurn`, `unifiedDeos_ledger_and_turn_sound`, `stepUnifiedTurn_refuses_stale_pin`),
+  * `CheckedCarry` (`Plan.no_drop_at`, `worldAuthState_reroot_admissible_iff`, `world_revoke_refuses_carry`,
+    `TitleMigration.copied_title_grant_not_semantic_narrowing`),
+  * Multilateral `netting@1` (`nettingJudge`, `net_reduces_gross_exposure`, `settleNetting_agrees_with_gross`),
+  * `SimplexProtocol.FinCert` + `SimplexTrace` + `SimplexFinalityGate` (`quorum_final_gates_unique_per_height`),
+  * Durable WAL crash-recovery (`durable_recovery_prevents_equivocation`, `durable_expose_once_across_crashes`),
+- `Obend.Leaf.Static`, `Obend.Hardware.HDL`, `Obend.Hardware.Synth`, `Obend.Hardware.Compiler`:
+  * Vtable flattening (`flatten_sound`), `Leaf.Book` emission (`book_sound`), `compileBookToRtl` LEC, and
+    universally verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`).
 -/
 public import Lean
 public import Obend.Hardware.UserspacePhysical
 public import Obend.Hardware.Synth
-public import Obend.Vault.Carry
-public import Obend.Vault.Hyperedge
-public import Obend.Vault.SovereignEngine
-public import Obend.Consensus.SovereignFinality
+public import Obend.Vault.UnifiedDeos
 public import Obend.Leaf.Static
 public import Obend.Spec.CrossPackage
 public import Obend.Tactic.Tooth
@@ -37,12 +31,11 @@ public import Obend.Elab.Workbook
 public meta import Lean
 public meta import Obend.Hardware.UserspacePhysical
 public meta import Obend.Elab.Workbook
+
 @[expose] public section
 
 namespace Obend.Apps.SovereignDrex
 
-open Lean (Json toJson Name Ident Syntax TSyntax Quote quote mkIdent)
-open Lean.Elab.Command (CommandElabM elabCommand)
 open Obend.Core.Term
 open Obend.Equiv
 open Obend.Logic
@@ -50,29 +43,26 @@ open Obend.Leaf
 open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Slot
-open Obend.Slot.World
 open Obend.Slot.Protocol
 open Obend.Run.Control
 open Obend.Run.Shared
 open Obend.Run.Durable
 open Obend.Fold.Collapse
-open Obend.Spec.CrossPackage
+open Obend.Ledger
+open Obend.Judge
 open Obend.Vault
-open Obend.Consensus
+open Obend.Vault.CheckedCarry
+open Obend.Vault.UnifiedDeos
+open Obend.Consensus.Simplex
+open Obend.Consensus.SimplexProtocol
+open Obend.Consensus.SimplexTrace
 open Obend.Consensus.Finality
-open Obend.Consensus.SovereignFinality
 open Obend.Hardware.HDL
 open Obend.Hardware.Synth
 open Obend.Hardware.Compiler
-open Obend.Hardware.Accelerators
-open Obend.Hardware.UserspacePhysical
 
 set_option autoImplicit false
 set_option maxHeartbeats 800000
-
-/-! ## 0. `#import_obend` is `Obend.Elab.Workbook`'s (the one importer, 2026-11-04); this module
-only consumes the constants it emits (`<def>_comp`, `<def>_book`, `<def>_val`, `claim_*_{obj,just,holds}`,
-`laws_count`). -/
 
 /-! ## 1. Compile-Time Elaboration of `apps/sovereign-drex/*.obend` via `#import_obend` -/
 
@@ -81,9 +71,7 @@ only consumes the constants it emits (`<def>_comp`, `<def>_book`, `<def>_val`, `
 #import_obend "apps/sovereign-drex/BatchClearing.obend" as SovereignDrexClearing
 #import_obend "apps/sovereign-drex/SovereignDrexTop.obend" as SovereignDrexTop
 
-/-- Values the `#import_obend` elaboration of `SovereignDrexClearing, SovereignDrexOrderBook, SovereignDrexSeat, SovereignDrexTop` produced (an `example`, not a theorem:
-these are checks of concrete outputs; `accepted`/`_holds` conjuncts were removed 2026-11-04,
-the `_holds` theorems themselves are emitted by the importer). -/
+/-- Concrete value check of the elaborated `apps/sovereign-drex/*.obend` workbooks. -/
 example :
     SovereignDrexTop.laws_count = 6 ∧
     SovereignDrexSeat.institutionalSafetyAt80_val = .nat 95000 ∧
@@ -101,7 +89,7 @@ example :
     SovereignDrexTop.sovereignDrexEndToEndSafetyValid_val = .boolean true :=
   ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
-/-! ## 2. Vtable Flattening, `Leaf.Book` Emission, Cross-Package Cone Survival -/
+/-! ## 2. Vtable Flattening, `Leaf.Book` Emission & `compileBookToRtl` LEC -/
 
 theorem sovereignDrex_compositions_closed :
     SovereignDrexSeat.institutionalZoeSeat_comp.closedB = true ∧
@@ -133,9 +121,7 @@ theorem sovereignDrex_flatten_and_book_sound (m : String) :
          flatten_sound _ hc3 m, book_sound _ hc3 m,
          flatten_sound _ hc4 m, book_sound _ hc4 m⟩
 
-/-- The compiled `SovereignDrexTop.carryUpgradedSovereignDrex_book` and
-`SovereignDrexClearing.sovereignCarryClearing_book`: `checkRtlModule` and one input's outputs (a closed check;
-a GPU co-execution claim on an interpreter nobody ran was removed 2026-11-05). -/
+/-- LEC check of `compileBookToRtl` on `SovereignDrexTop` and `SovereignDrexClearing`. -/
 example :
     (match compileBookToRtl "sovereign_drex_top" SovereignDrexTop.carryUpgradedSovereignDrex_book,
            compileBookToRtl "sovereign_drex_clearing" SovereignDrexClearing.sovereignCarryClearing_book with
@@ -159,66 +145,56 @@ example :
      | _, _ => false) = true := by
   decide +kernel
 
-/-! ## 3. `"world-carry@1"` Live Upgrade, Forever-Crowns & State-Bound Half-Edges (`Carry.lean`, `Hyperedge.lean`) -/
+/-! ## 3. Checked Carry, Multilateral `netting@1` & State-Bound Half-Edges (`UnifiedDeos`) -/
 
-/-- **`sovereignDrex_world_carry_and_state_bound_hyperedge_sound`**:
-1. **Non-Trivial `"world-carry@1"` Wire Rejection (`worldCarryFormat_refuses_empty_json`, `sampleBadCarryPlan_refused`)**:
-   `Obend.Vault.worldCarryFormat.checkBytes 0 "{}" "{}"` refuses empty JSON with `.malformed`, and
-   `worldCarryJudge` refuses `sampleBadCarryPlan` for silently dropping `"cell.deprecated"`.
-2. **Universal `K-CARRY` Total-Book Conservation, `"forever"` Crown Preservation & Zoe Offer-Safety (`Carry.lean`)**:
-   For ANY `W W' : LiveWorld` and `plan : CarryPlan` with `executeWorldCarry W plan = .ok W'`:
-   - `W'.ledger.totalAsset a = W.ledger.totalAsset a` (`carry_conserves_total_book`),
-   - Every carried cell `c ∈ W.cells` (`applyCellCarry plan c = some c'`) carries verified narrowing/preservation
-     certificates and preserves `c.foreverCrown = true → c'.foreverCrown = true ∧ c'.invariant = c.invariant`
-     (`carry_preserves_forever_crowns`),
-   - Every active Zoe seat `s ∈ W.seats` is either preserved with `safeAt W'.ledger s.account s.proposal = true`
-     or refunded and closed with zero remaining escrow (`carry_preserves_zoe_offer_safety`).
-3. **State-Bound Half-Edge Conservation & Unreported Inflation Refusal (`Hyperedge.lean`)**:
-   - `stateBoundTurn_conserves_actual_state_balances` and `unreported_state_inflation_refused`. -/
-theorem sovereignDrex_world_carry_and_state_bound_hyperedge_sound
-    {W W' : LiveWorld} {plan : CarryPlan}
-    (hCarryOk : executeWorldCarry W plan = .ok W')
-    (a : Obend.Ledger.AssetId) :
-    Obend.Vault.worldCarryFormat.checkBytes 0 "{}" "{}" =
-      Judge.Verdict.refused (Judge.FormatClause.malformed "object: invalid LiveWorld JSON: missing required fields (epoch, cells)") [] ∧
-    worldCarryJudge.check 0 sampleValidLiveWorld sampleBadCarryPlan =
-      Judge.Verdict.refused (.silentCellDrop "cell.deprecated") [] ∧
-    W'.ledger.totalAsset a = W.ledger.totalAsset a ∧
-    (∀ {c c' : LiveCell}, c ∈ W.cells → applyCellCarry plan c = some c' →
-      (c'.law = c.law ∨
-        ∃ narrowsCert preservesCert,
-          Obend.Law.checkContractCert (.narrows c'.law c.law) narrowsCert = Obend.Law.CertVerdict.valid ∧
-          Obend.Law.checkContractCert (.preserves c'.law c'.invariant) preservesCert = Obend.Law.CertVerdict.valid) ∧
-      (c.foreverCrown = true → c'.foreverCrown = true ∧ c'.invariant = c.invariant)) ∧
-    (∀ {s : Obend.Ledger.Seat}, s ∈ W.seats →
-      (s ∈ W'.seats ∧ Obend.Ledger.safeAt W'.ledger s.account s.proposal = true) ∨
-      (s ∉ W'.seats ∧ ∀ ast ∈ W.assets, W'.ledger.balance s.account ast = 0)) ∧
+/-- **`sovereignDrex_carry_netting_and_hyperedge_sound`**:
+    1. Every `NoDrops` `CheckedCarry.Plan` maps every live source cell into `outputs`, `Replay.World`
+       rerooting preserves `AdmissibleCarry`, `Grants.revoke` refuses carried authority, and copied
+       numeric field grants fail `NoNewMeaning` (`copied_title_grant_not_semantic_narrowing`),
+    2. Every accepted `netting@1` batch (`nettingJudge.check grade qNet cNet = .ok`) reduces or preserves
+       gross exposure, preserves net positions, agrees with gross settlement on every `Book`, and
+       compiles to balanced `Register.Movement`s,
+    3. State-bound `VaultTurn`s conserve actual cell state balances (`stateBoundTurn_conserves_actual_state_balances`),
+       while unreported cell-balance inflation is strictly refused (`unreported_state_inflation_refused`). -/
+theorem sovereignDrex_carry_netting_and_hyperedge_sound
+    {source : List Cell} {rel : Cell → Cell → Prop}
+    (plan : CheckedCarry.Plan source rel) (hNoDrops : NoDrops plan)
+    (w : Obend.Vault.Replay.World) (g₁ s₁ g₂ s₂ : ByteArray) (req : CarryRequest)
+    (grade : Nat) (qNet : NettingQuery) (cNet : NettingCert)
+    (hNet : nettingJudge.check grade qNet cNet = .ok) :
+    (∀ i : Fin source.length, ∃ next ∈ plan.outputs, rel source[i] next) ∧
+    (AdmissibleCarry (worldAuthState w g₁ s₁) req ↔ AdmissibleCarry (worldAuthState w g₂ s₂) req) ∧
+    ¬ AdmissibleCarry (worldAuthState { w with grants := w.grants.revoke req.grantId } g₁ s₁) req ∧
+    ¬ TitleMigration.NoNewMeaning TitleMigration.oldGrant TitleMigration.copiedGrant ∧
+    grossExposure cNet.netTransfers ≤ grossExposure qNet.grossObligations ∧
+    (∀ (b : Obend.Ledger.Book) acc ast,
+      (settleObligations b cNet.netTransfers).balance acc ast =
+        (settleObligations b qNet.grossObligations).balance acc ast) ∧
+    (cNet.toMovements.map (·.debit)).sum = (cNet.toMovements.map (·.credit)).sum ∧
     (∀ (turn : VaultTurn) (assets : List String) (ast : String),
       ast ∈ assets →
       checkTurnStateBalancesBound assets turn = true →
-      (turn.writeCells.map (fun d => extractCellAssetBalance d.postState ast - extractCellAssetBalance d.preState ast)).foldl (· + ·) 0 = 0 ∧
       (turn.writeCells.map (fun d => extractCellAssetBalance d.postState ast)).foldl (· + ·) 0 =
         (turn.writeCells.map (fun d => extractCellAssetBalance d.preState ast)).foldl (· + ·) 0) ∧
-    (sumAssetDelta [unreportedInflationDelta] "USDC" = 0 ∧
-     cellStateBalanceDelta unreportedInflationDelta "USDC" = 900 ∧
-     checkDeltaMatchesStateBalances ["USDC"] unreportedInflationDelta = false) := by
-  refine ⟨Obend.Vault.worldCarryFormat_refuses_empty_json,
-          sampleBadCarryPlan_refused,
-          carry_conserves_total_book hCarryOk a,
-          fun hc hCarried =>
-            let hCrown := carry_preserves_forever_crowns hCarryOk hc hCarried
-            ⟨hCrown.1, hCrown.2.1⟩,
-          fun hs => carry_preserves_zoe_offer_safety hCarryOk hs,
+    checkDeltaMatchesStateBalances ["USDC"] unreportedInflationDelta = false := by
+  have hNetSpec : NettingSpec qNet cNet := nettingJudge.sound hNet
+  refine ⟨plan.noDrops_maps_all_cells hNoDrops,
+          worldAuthState_reroot_admissible_iff w g₁ s₁ g₂ s₂ req,
+          world_revoke_refuses_carry w g₁ s₁ req,
+          TitleMigration.copied_title_grant_not_semantic_narrowing,
+          net_reduces_gross_exposure hNetSpec,
+          fun b => (settleNetting_agrees_with_gross b hNetSpec).1,
+          cNet.toMovements_balanced,
           fun turn assets ast hMem hBound =>
-            stateBoundTurn_conserves_actual_state_balances turn assets ast hMem hBound,
-          unreported_state_inflation_refused⟩
+            (stateBoundTurn_conserves_actual_state_balances turn assets ast hMem hBound).2,
+          unreported_state_inflation_refused.2.2⟩
 
-/-! ## 4. Oracle Turn Gate (`checkOracleTurnValidAt`), Sovereign Engine & 4-Validator BFT Finality -/
+/-! ## 4. Unified DeOS Turn Gate & 4-Validator Simplex BFT Finality -/
 
 /-- 4-validator committee (`V0..V3`, $N = 4, f = 1$, quorum $2f + 1 = 3$) for `apps/sovereign-drex/`. -/
 def drexCommittee4 : List Nat := [0, 1, 2, 3]
 
-/-- Attested finality gate for Epoch 3 (`faults = 1`, `stateRoot = 118` matching `K-CARRY` pin digest). -/
+/-- Attested finality gate for Epoch 3 (`faults = 1`, `stateRoot = 118`). -/
 def drexAttestedGate : QuorumBoundFinalityGate :=
   { turnId        := 3
     currentTier   := .attested
@@ -227,7 +203,8 @@ def drexAttestedGate : QuorumBoundFinalityGate :=
     attestSigners := [0]
     qcSigners     := []
     qcDigest      := none
-    merkleRoot    := none }
+    merkleRoot    := none
+    committee     := drexCommittee4 }
 
 /-- Promoted `.quorum_final` gate signed by 3-of-4 validators `[0, 1, 2]` (`qcDigest = 227`). -/
 def drexQuorumFinalGate : QuorumBoundFinalityGate :=
@@ -237,94 +214,68 @@ def drexQuorumFinalGate : QuorumBoundFinalityGate :=
     qcDigest    := some 227 }
 
 /-- **`sovereignDrex_engine_and_bft_finality_sound`**:
-1. **Oracle-Validated Sovereign Engine Step (`checkOracleTurnValidAt`, `stepSovereignEngine`)**:
-   - Every admitted `stepSovereignEngine W tx = some W'` conserves all assets (`W'.ledger.totalAsset a = W.ledger.totalAsset a`),
-     preserves `DragonsExchangeInvariant`, and enforces Zoe offer safety across `W'.seats`,
-   - Every admitted `.executeOracleTurn cid env turn postings` necessarily passed `checkOracleTurnValidAt W turn = true`
-     (guaranteeing `(admitFootprint W.store turn.readPins).isOk = true` and `turn.conservedB = true`),
-   - Any stale read pin `(admitFootprint W.store turn.readPins).isOk = false` forces `checkOracleTurnValidAt W turn = false`
-     and `stepSovereignEngine W (.executeOracleTurn cid env turn postings) = none`.
-2. **4-Validator ($N = 4, f = 1$, Quorum $= 3$) Tier 1 & Tier 2 `SovereignFinality` (`SovereignFinality.lean`)**:
-   - Disjoint fast-path `VaultTurn`s commute and collapse to identical Merkle roots (`tier1_disjoint_fast_path_commutes`),
-   - `drexAttestedGate` promotes to `drexQuorumFinalGate` (`.quorum_final`, `admitsOp .quorum_final .stateWrite = true`)
-     under 3-of-4 signers `[0, 1, 2]`, and any conflicting 3-of-4 quorums `blockA ≠ blockB` on `drexCommittee4`
-     yield a constructive slashing receipt catching $\ge f + 1 = 2$ equivocating validators (`tier2_simplex_quorum_and_accountable_safety`). -/
+    1. Every admitted `stepUnifiedTurn S stateAssets turn postings = some S'` from a floor-valid
+       `FloorBook` preserves `FloorsHold` (all non-issuer floors ≥ 0), conserves per-asset supply,
+       realizes exact `Register.Reg` deltas, enforces ZoE `safeAt` across `S'.seats`, and refuses
+       stale read footprints (`stepUnifiedTurn_refuses_stale_pin`),
+    2. On `drexCommittee4` ($N = 4, f = 1$), `drexAttestedGate` promotes to `.quorum_final`, and
+       any two conflicting 3-of-4 quorums `blockA ≠ blockB` yield a constructive `SlashingReceipt`
+       catching `≥ 2` equivocating validators (`simplex_accountable_safety`),
+    3. Over any reachable `Reach P sent`, any two `.quorum_final` `SimplexFinalityGate`s
+       at the same chain height certify identical blocks and identical cSHAKE256 `chainDigest`s. -/
 theorem sovereignDrex_engine_and_bft_finality_sound
-    (W W' : SovereignWorldState) (tx : SovereignTransaction)
-    (hStep : stepSovereignEngine W tx = some W') :
-    (∀ a : Obend.Ledger.AssetId, W'.ledger.totalAsset a = W.ledger.totalAsset a) ∧
-    (DragonsExchangeInvariant W.dragons →
-      DragonsExchangeInvariant W'.dragons ∧ W'.dragons.balances = W.dragons.balances) ∧
-    (∀ s ∈ W'.seats, Obend.Ledger.safeAt W'.ledger s.account s.proposal = true) ∧
-    (∀ cid env turn postings W_out,
-      stepSovereignEngine W (.executeOracleTurn cid env turn postings) = some W_out →
-      checkOracleTurnValidAt W turn = true ∧
-      (admitFootprint W.store turn.readPins).isOk = true ∧
-      turn.conservedB = true) ∧
-    (∀ cid env turn postings,
-      (admitFootprint W.store turn.readPins).isOk = false →
-      checkOracleTurnValidAt W turn = false ∧
-      stepSovereignEngine W (.executeOracleTurn cid env turn postings) = none) ∧
+    {S S' : UnifiedDeosSpine} {stateAssets : List String}
+    {turn : VaultTurn} {postings : List TypedPosting}
+    (hFloors : FloorsHold S.floorBook)
+    (hStep : stepUnifiedTurn S stateAssets turn postings = some S') :
+    FloorsHold S'.floorBook ∧
+    (∀ ast : AssetId, S'.floorBook.assetSum ast = S.floorBook.assetSum ast) ∧
+    (∀ s ∈ S'.seats, safeAt S'.seatBook s.account s.proposal = true) ∧
+    (∀ staleTurn stalePostings,
+      (admitFootprint S.store staleTurn.readPins).isOk = false →
+      stepUnifiedTurn S stateAssets staleTurn stalePostings = none) ∧
     advanceQuorumBoundGate drexAttestedGate (.formQC 227 [0, 1, 2] 118) = some drexQuorumFinalGate ∧
-    (∀ (view blockA blockB : Nat) (votedA votedB : Nat → Bool),
-      blockA ≠ blockB →
-      3 ≤ (drexCommittee4.filter votedA).length →
-      3 ≤ (drexCommittee4.filter votedB).length →
-      let receipt := Obend.Consensus.Simplex.extractSlashingReceipt view blockA blockB drexCommittee4 votedA votedB
+    (∀ (sent : Sent) (view : Nat) (targetA targetB : Target),
+      targetA ≠ targetB →
+      3 ≤ (drexCommittee4.filter fun n => voted sent n view targetA).length →
+      3 ≤ (drexCommittee4.filter fun n => voted sent n view targetB).length →
+      let receipt := extractReceipt drexCommittee4 sent view targetA targetB
       drexQuorumFinalGate.currentTier = .quorum_final ∧
       admitsOp drexQuorumFinalGate.currentTier .stateWrite = true ∧
-      2 ≤ receipt.equivocatingVoters.length ∧
-      (∀ v ∈ receipt.equivocatingVoters, v ∈ drexCommittee4 ∧ votedA v = true ∧ votedB v = true)) := by
-  have hAssets := sovereignEngine_step_conserves_all_assets W W' tx hStep
-  have hZoe := sovereignEngine_enforces_zoe_and_mandates W W' tx hStep
-  have hOracleAdmit :
-      ∀ cid env turn postings W_out,
-        stepSovereignEngine W (.executeOracleTurn cid env turn postings) = some W_out →
-        checkOracleTurnValidAt W turn = true ∧
-        (admitFootprint W.store turn.readPins).isOk = true ∧
-        turn.conservedB = true := by
-    intro cid env turn postings W_out hOk
-    unfold stepSovereignEngine at hOk
-    split at hOk
-    · cases hOk
-    · cases hFind : W.contracts.find? (fun c => c.contractId == cid) with
-      | none => simp [hFind] at hOk
-      | some c =>
-        simp [hFind] at hOk
-        have hGate : checkOracleTurnValidAt W turn = true := hOk.1.1.1.1.2
-        have hUnf := hGate
-        unfold checkOracleTurnValidAt at hUnf
-        simp only [Bool.and_eq_true] at hUnf
-        exact ⟨hGate, hUnf.1.1, hUnf.1.2⟩
-  have hOracleRefuse :
-      ∀ cid env turn postings,
-        (admitFootprint W.store turn.readPins).isOk = false →
-        checkOracleTurnValidAt W turn = false ∧
-        stepSovereignEngine W (.executeOracleTurn cid env turn postings) = none := by
-    intro cid env turn postings hStale
-    refine ⟨?_, stepSovereignEngine_oracleTurn_refuses_stale_pin W cid env turn postings hStale⟩
-    unfold checkOracleTurnValidAt
-    rw [hStale]
-    rfl
+      receipt.checks sent = true ∧
+      2 ≤ receipt.signers.length ∧
+      (∀ v ∈ receipt.signers, v ∈ drexCommittee4 ∧ ¬ VoteOnce sent v view)) ∧
+    (∀ {P : Protocol} {sent : Sent},
+      Reach P sent →
+      ∀ {g₁ g₁' g₂ g₂' : SimplexFinalityGate} {c₁ c₂ : FinCert} {r₁ r₂ : ByteArray},
+        advanceSimplexGate P sent g₁ (.finalizeWithCert c₁ r₁) = some g₁' →
+        advanceSimplexGate P sent g₂ (.finalizeWithCert c₂ r₂) = some g₂' →
+        c₁.chain.height = c₂.chain.height →
+        c₁.chain.blocks = c₂.chain.blocks ∧ chainDigest c₁.chain = chainDigest c₂.chain) := by
+  have hSpine := unifiedDeos_ledger_and_turn_sound hFloors hStep
   have hGatePromote :
       advanceQuorumBoundGate drexAttestedGate (.formQC 227 [0, 1, 2] 118) = some drexQuorumFinalGate := by
     decide +kernel
-  have hCommLen : drexCommittee4.length ≤ 3 * drexAttestedGate.faults + 1 := by decide +kernel
-  refine ⟨hAssets.1, hAssets.2, hZoe.1, hOracleAdmit, hOracleRefuse, hGatePromote, ?_⟩
-  intro view blockA blockB votedA votedB hNe hQA hQB
-  have hT2 := tier2_simplex_quorum_and_accountable_safety
-    drexAttestedGate drexQuorumFinalGate 227 [0, 1, 2] 118 hGatePromote
-    view blockA blockB drexCommittee4 votedA votedB hNe hCommLen hQA hQB
-  exact ⟨hT2.1, hT2.2.1, hT2.2.2.2.2.2.1, hT2.2.2.2.2.2.2⟩
+  have hCommLen : drexCommittee4.length ≤ 3 * 1 + 1 := by decide +kernel
+  refine ⟨hSpine.2.1,
+          hSpine.2.2.1,
+          hSpine.2.2.2.2.2,
+          fun t ps hStale => (stepUnifiedTurn_refuses_stale_pin S stateAssets t ps hStale).2,
+          hGatePromote,
+          ?_,
+          @quorum_final_gates_unique_per_height⟩
+  intro sent view targetA targetB hNe hQA hQB
+  have hAcc := accountable drexCommittee4 1 sent view targetA targetB hCommLen hNe hQA hQB
+  exact ⟨rfl, rfl, hAcc.1, hAcc.2.1, hAcc.2.2⟩
 
 /-- **`sovereignDrex_durable_wal_crash_recovery_sound`**:
-Welds `tier1_disjoint_fast_path_commutes`, `durable_recovery_prevents_equivocation`, and
-`durable_expose_once_across_crashes` (`Obend.Consensus.SovereignFinality`):
-1. Disjoint `VaultTurn`s `T₁, T₂` commute on `VaultStore` and yield identical collapsed Merkle roots,
-2. After crashing (`crashSimplexHost`) and replaying the durable WAL (`recoverSimplexHost`) across
-   `crashes ≥ 1` failures, any previously voted view `v` rejects conflicting votes `b'` (`castVote restoredState v b' = restoredState`),
-3. Once a settlement effect `n` is exposed (`hstep ... s (.expose n) = .ok s₁`), post-crash recovery
-   retains `n ∈ s_rec.outbox` and refuses duplicate execution (`hstep ... s_rec (.expose n) = .error (.exposed n)`). -/
+    1. Disjoint `VaultTurn`s `T₁, T₂` remain mutually `ValidAt`, commute on `VaultStore`, and yield
+       identical collapsed Merkle roots,
+    2. After crashing (`crashSimplexHost`) and replaying the durable WAL (`recoverSimplexHost`),
+       any previously voted view `v` rejects conflicting votes `c'` (`castSimplexVote restoredState v c' = restoredState`),
+    3. Once a settlement effect `n` is exposed (`hstep ... s (.expose n) = .ok s₁`), post-crash recovery
+       across `extraCrashes + 1` crashes retains `n ∈ s_rec.outbox` and refuses duplicate execution
+       with `.error (.exposed n)`. -/
 theorem sovereignDrex_durable_wal_crash_recovery_sound
     {Ix : Type} {S : Sig Ix} {Hole : Ix → Type} {A : Ix → Type}
     {ι P Cred Cand Tok Fact Ob W : Type}
@@ -338,10 +289,10 @@ theorem sovereignDrex_durable_wal_crash_recovery_sound
     {i₀ : Ix}
     (J₀ : JCfg L S Hole A P Cand Fact Ob i₀)
     (s s₁ : DState L S Hole A P Cred Cand Fact Ob i₀)
-    (n crashes : Nat) (hc : 1 ≤ crashes)
+    (n extraCrashes : Nat)
     (h_exp : hstep L base sp au k J₀ s (.expose n) = .ok s₁)
-    (host : DurableSimplexHost) (v : Obend.Consensus.Simplex.View) (b' : Obend.Consensus.Simplex.Block)
-    (hv_voted : ((host.journaledViews.find? (fun vr => vr.number == v)).getD { number := v }).voted = true)
+    (host : DurableSimplexHost) (v : Nat) (c' : Chain)
+    (hv_voted : host.journaledVotes.any (fun jv => jv.view == v) = true)
     (H : Obend.Digest.HashBytes.Hash) (schema : List String) (val : StoreValuation)
     (store₀ : VaultStore) (T₁ T₂ : VaultTurn)
     (contracts : String → Option Obend.Law.CellContract)
@@ -349,35 +300,37 @@ theorem sovereignDrex_durable_wal_crash_recovery_sound
     (h_disj : DisjointTurns T₁ T₂)
     (h₁ : ValidAt store₀ T₁ contracts formats)
     (h₂ : ValidAt store₀ T₂ contracts formats) :
-    let restoredState : Obend.Consensus.Simplex.State :=
-      { self := host.self, deadline := host.deadline, views := host.journaledViews }
-    let trace : List (HEvent L S Hole A P Cred Cand Fact) := List.replicate crashes .crash ++ [.recover]
+    let restoredState : VolatileSimplexVoter :=
+      { self := host.self, deadline := host.deadline, votes := host.journaledVotes }
+    let trace : List (HEvent L S Hole A P Cred Cand Fact) :=
+      List.replicate (extraCrashes + 1) .crash ++ [.recover]
     let s_rec := runDurableTrace L base sp au k J₀ s₁ trace
+    ValidAt (applyTurn store₀ T₁) T₂ contracts formats ∧
+    ValidAt (applyTurn store₀ T₂) T₁ contracts formats ∧
     applyTurn (applyTurn store₀ T₁) T₂ = applyTurn (applyTurn store₀ T₂) T₁ ∧
     Obend.Fold.Collapse.collapseRoot H schema val (applyTurn (applyTurn store₀ T₁) T₂) =
       Obend.Fold.Collapse.collapseRoot H schema val (applyTurn (applyTurn store₀ T₂) T₁) ∧
     (recoverSimplexHost (crashSimplexHost host)).volatileState = some restoredState ∧
-    Obend.Consensus.Simplex.castVote restoredState v b' = restoredState ∧
+    castSimplexVote restoredState v c' = restoredState ∧
     n ∈ s_rec.outbox ∧
     n ∉ pending L s_rec ∧
     hstep L base sp au k J₀ s_rec (.expose n) = .error (.exposed n) := by
-  have hT1 := tier1_disjoint_fast_path_commutes H schema val store₀ T₁ T₂ contracts formats h_disj h₁ h₂
-  have hEqv := durable_recovery_prevents_equivocation L base sp au k J₀ s₁ crashes hc host v b' hv_voted
-  have hExpOnce := durable_expose_once_across_crashes L base sp au k J₀ s s₁ n crashes hc h_exp
-  exact ⟨hT1.2.2.1, hT1.2.2.2, hEqv.1, hEqv.2.2.1, hExpOnce.1, hExpOnce.2.1, hExpOnce.2.2.2⟩
+  have hBoth := disjoint_both_orders store₀ T₁ T₂ contracts formats h_disj h₁ h₂
+  have hComm := vaultTurn_disjoint_commutes store₀ T₁ T₂ h_disj
+  have hRoot :
+      Obend.Fold.Collapse.collapseRoot H schema val (applyTurn (applyTurn store₀ T₁) T₂) =
+        Obend.Fold.Collapse.collapseRoot H schema val (applyTurn (applyTurn store₀ T₂) T₁) := by
+    rw [hComm]
+  have hEqv := durable_recovery_prevents_equivocation host v c' hv_voted
+  have hExpOnce := durable_expose_once_across_crashes L base sp au k J₀ s s₁ n extraCrashes h_exp
+  exact ⟨hBoth.1, hBoth.2, hComm, hRoot, hEqv.1, hEqv.2.2, hExpOnce.1, hExpOnce.2.1, hExpOnce.2.2⟩
 
 /-! ## 5. Verified Synchronous Hardware Batch-Clearing & WAL Anti-Replay `RtlModule` -/
 
-/-- Complete verified synchronous `RtlModule` (`sovereign_drex_batch_top`) for Flagship App #7:
-1. Evaluates 3-of-4 BFT validator quorum (`vote_cnt >= 3`),
-2. Computes exact `BatchClearing.obend` `carryPinDigest` in BOTH base (`epoch * 32 + 4`) and
-   `K-CARRY`-upgraded (`(epoch * 32 + 6) + 16`) modes,
-3. Enforces `pin_fresh_ok` (`in_tx_pin_digest == carry_pin_digest`) so stale-pin transactions after
-   a live `K-CARRY` hot-upgrade are deterministically refused in 1 cycle,
-4. Enforces `epoch_monotone_ok` (`reg_last_committed_epoch <u in_epoch_id`) in `always_ff` WAL state
-   so replayed or out-of-order epochs after validator crash/recovery achieve **zero double-execution**,
-5. Enforces state-bound half-edge conservation (`in_delta_debit == in_delta_credit`), Zoe offer safety,
-   and `"forever"` welfare-crown preservation. -/
+/-- Synchronous `RtlModule` (`sovereign_drex_batch_top`) for Flagship App #7:
+    evaluates 3-of-4 BFT validator quorum, `BatchClearing.obend` `carryPinDigest` in both base and
+    carry-upgraded modes, `always_ff` WAL monotone-epoch anti-replay, half-edge balance conservation,
+    ZoE offer safety, and protected welfare-crown preservation. -/
 def sovereignDrexBatchTopRtlModule : RtlModule :=
   { name := "sovereign_drex_batch_top"
   , inputNames :=
@@ -479,17 +432,67 @@ def mkDrexRtlInputs
   | 10 => BitVec.ofNat 64 txPin
   | _  => 0#64
 
-/-- **`sovereignDrexBatchTopRtlModule_verified`**:
-Kernel-checked (`decide +kernel`) verification of `sovereignDrexBatchTopRtlModule`:
-1. Passes `checkRtlModule = true` and `checkBelNetlistValid (synthesizeModuleToBels ...) = true`,
-2. Base Epoch 3 (`carryEn = 0`) computes `out_carry_pin_digest = 100#64` (`3 * 32 + 4`, matching
-   `BatchClearing.baseBatchClearing().carryPinDigest(3)`) and admits the turn (`st1 = [1, 3]`),
-3. Replaying already-committed Epoch 3 (`epoch = 3`) is **refused** by the monotone WAL guard
-   (`out_epoch_monotone_ok = 0#64`, `out_turn_admitted = 0#64`, `st2 0 = 1#64` — zero double-execution!),
-4. After live `K-CARRY` upgrade (`carryEn = 1`) at Epoch 5, a stale-pin transaction carrying old base
-   pin `164` (`5 * 32 + 4`) is **refused** (`out_pin_fresh_ok = 0#64`, `out_turn_admitted = 0#64`),
-   whereas a fresh-pin transaction carrying `182` (`(5 * 32 + 6) + 16`) is **admitted** (`st4 = [2, 5]`). -/
-theorem sovereignDrexBatchTopRtlModule_verified :
+/-- Universal Hardware Anti-Replay & CBDC Conservation Theorem
+    (`sovereignDrexBatchTopRtlModule_epoch_replay_refused`):
+    For ALL input combinations `(lots, epoch, votes, carryEn, oldTotal, debit, credit, seatAfter, wantFloor, dropCrown, txPin)`
+    and ANY sequential register state `regSt : Nat → BitVec 64` where `epoch` does not strictly advance
+    `reg_last_committed_epoch` (`BitVec.ult (regSt 1) (BitVec.ofNat 64 epoch) = false`):
+    1. `out_turn_admitted = some 0#64` (turn admission is unconditionally blocked),
+    2. `out_new_cbdc_total = some (BitVec.ofNat 64 oldTotal)` (CBDC supply is unchanged),
+    3. Both `reg_wal_committed_count` (`regIdx = 0`) and `reg_last_committed_epoch` (`regIdx = 1`)
+       hold their exact pre-cycle values across `stepModuleRegs` (zero double-execution). -/
+theorem sovereignDrexBatchTopRtlModule_epoch_replay_refused
+    (lots epoch votes carryEn oldTotal debit credit seatAfter wantFloor dropCrown txPin : Nat)
+    (regSt : Nat → BitVec 64)
+    (hReplay : BitVec.ult (regSt 1) (BitVec.ofNat 64 epoch) = false) :
+    let ins := mkDrexRtlInputs lots epoch votes carryEn oldTotal debit credit seatAfter wantFloor dropCrown txPin
+    let outs := evalModuleOutputs sovereignDrexBatchTopRtlModule ins regSt
+    let nextSt := stepModuleRegs sovereignDrexBatchTopRtlModule false ins regSt
+    outs.lookup "out_turn_admitted" = some 0#64 ∧
+    outs.lookup "out_new_cbdc_total" = some (BitVec.ofNat 64 oldTotal) ∧
+    nextSt 0 = regSt 0 ∧
+    nextSt 1 = regSt 1 := by
+  dsimp only
+  have hTurnZero :
+      evalWireTable
+        (mkDrexRtlInputs lots epoch votes carryEn oldTotal debit credit seatAfter wantFloor dropCrown txPin)
+        regSt sovereignDrexBatchTopRtlModule.wires 15 = 0#64 := by
+    simp only [sovereignDrexBatchTopRtlModule, evalWireTable, List.foldl, evalRtlExpr,
+      evalAluOp, mkDrexRtlInputs, hReplay]
+    simp [BitVec.and_zero, BitVec.zero_and]
+  have hNewTotal :
+      evalWireTable
+        (mkDrexRtlInputs lots epoch votes carryEn oldTotal debit credit seatAfter wantFloor dropCrown txPin)
+        regSt sovereignDrexBatchTopRtlModule.wires 16 = BitVec.ofNat 64 oldTotal := by
+    simp only [sovereignDrexBatchTopRtlModule, evalWireTable, List.foldl, evalRtlExpr,
+      evalAluOp, mkDrexRtlInputs, hReplay]
+    simp [BitVec.and_zero, BitVec.zero_and]
+  have hRegs : sovereignDrexBatchTopRtlModule.regs =
+      [ { regIdx := 0, name := "reg_wal_committed_count", domain := .coreClk,
+          resetKind := .syncReset 0#64, isSynchronizer := false,
+          nextExpr := .mux (.wireRef 15) (.alu .add (.regRead 0) (.const 1#64)) (.regRead 0) }
+      , { regIdx := 1, name := "reg_last_committed_epoch", domain := .coreClk,
+          resetKind := .syncReset 0#64, isSynchronizer := false,
+          nextExpr := .mux (.wireRef 15) (.inputPort 1) (.regRead 1) } ] := rfl
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · unfold evalModuleOutputs
+    change some (evalWireTable _ regSt sovereignDrexBatchTopRtlModule.wires 15) = some 0#64
+    rw [hTurnZero]
+  · unfold evalModuleOutputs
+    change some (evalWireTable _ regSt sovereignDrexBatchTopRtlModule.wires 16) =
+      some (BitVec.ofNat 64 oldTotal)
+    rw [hNewTotal]
+  · rw [stepModuleRegs_eq_foldl_next, hRegs]
+    simp only [List.foldl, regNextValue, evalRtlExpr, hTurnZero]
+    rfl
+  · rw [stepModuleRegs_eq_foldl_next, hRegs]
+    simp only [List.foldl, regNextValue, evalRtlExpr, hTurnZero]
+    rfl
+
+/-- Concrete synthesis, netlist validity & 4-cycle waveform check (`checkRtlModule`,
+    `synthesizeModuleToBels`, base Epoch 3 admit, replay Epoch 3 refuse, stale-pin Epoch 5 refuse,
+    fresh-pin Epoch 5 admit). -/
+example :
     checkRtlModule sovereignDrexBatchTopRtlModule = true ∧
     checkBelNetlistValid (synthesizeModuleToBels sovereignDrexBatchTopRtlModule) = true ∧
     (let st0 : Nat → BitVec 64 := fun _ => 0#64
@@ -521,9 +524,6 @@ theorem sovereignDrexBatchTopRtlModule_verified :
 
 /-! ## 6. `#tooth` Mutation-Killing Guards -/
 
--- (2026-11-04) the tooth on the deleted `accepted` bundle is gone: a tooth on a fixture only
--- proved the fixture was sensitive to its own data.
-
 def brokenDrexRtlModule : RtlModule :=
   { name := "sovereign_drex_batch_top"
   , inputNames := ["in_lot_count"]
@@ -531,7 +531,7 @@ def brokenDrexRtlModule : RtlModule :=
   , regs := []
   , outputs := [{ name := "out_turn_admitted", expr := .const 1#64 }] }
 
-#tooth sovereignDrexBatchTopRtlModule_verified by mutation
+#tooth sovereignDrexBatchTopRtlModule_epoch_replay_refused by mutation
   sovereignDrexBatchTopRtlModule := brokenDrexRtlModule
 
 def brokenDrexCommittee4 : List Nat := [0, 1, 2, 3, 4, 5]
@@ -541,4 +541,3 @@ def brokenDrexCommittee4 : List Nat := [0, 1, 2, 3, 4, 5]
 
 end Obend.Apps.SovereignDrex
 end
-

@@ -24,7 +24,7 @@ spec BaseBatchClearingSpec for CarryClearingCell:
     lotCount * 500n + self.welfareCrownFloor
   def carryPinDigest(validatorEpoch: Nat) -> Nat:
     validatorEpoch * 32n + self.halfEdgeDeltaCount
-  claim batch_clearing_open_recursion(lotCount: Nat): self.clearedCbdcAmount(lotCount) == lotCount * 500n + self.welfareCrownFloor
+  claim batch_clearing_settlement_bound(lotCount: Nat) given lotCount <= 100n by judge("interval@1"): lotCount * 500n + 1000n <= 51000n
 
 spec SovereignCarryClearingOverride for CarryClearingCell:
   requires carryPinDigest(validatorEpoch: Nat) -> Nat

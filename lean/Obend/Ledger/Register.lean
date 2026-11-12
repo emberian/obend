@@ -770,6 +770,43 @@ theorem stitch_twice_refused {M : Type} [DecidableEq M] {Tok : Type} (main : (Na
   · rw [hn] at hc; cases hc
   · exact h
 
+/-! ## Signed Account Balance Readout & Balanced Transfer Movements -/
+
+/-- Signed credit-minus-debit delta applied to `a` by a list of `Movement`s. -/
+def linesAccountDelta (ls : List Movement) (a : String) : Int :=
+  (ls.map fun m => if m.account = a then (m.credit : Int) - m.debit else 0).sum
+
+/-- Signed credit-minus-debit delta applied to `a` by posting `p` (`= - p.net a`). -/
+def Posting.accountDelta (p : Posting) (a : String) : Int :=
+  linesAccountDelta p.lines a
+
+/-- Signed balance of account `a` across all postings in register `g` (credits minus debits). -/
+def Reg.accountBalance (g : Reg) (a : String) : Int :=
+  (g.postings.map (·.accountDelta a)).sum
+
+@[simp] theorem Reg.accountBalance_empty (a : String) :
+    (⟨[]⟩ : Reg).accountBalance a = 0 := rfl
+
+@[simp] theorem Reg.accountBalance_append (g : Reg) (p : Posting) (a : String) :
+    (⟨g.postings ++ [p]⟩ : Reg).accountBalance a = g.accountBalance a + p.accountDelta a := by
+  simp [Reg.accountBalance]
+
+/-- Canonical 2-line debit/credit movement pair moving `amount` from `src` to `dst`. -/
+def transferMovements (src dst : String) (amount : Nat) : List Movement :=
+  [⟨src, amount, 0⟩, ⟨dst, 0, amount⟩]
+
+theorem transferMovements_balanced (src dst : String) (amount : Nat) :
+    ((transferMovements src dst amount).map (·.debit)).sum =
+      ((transferMovements src dst amount).map (·.credit)).sum := by
+  simp [transferMovements]
+
+theorem transferMovements_delta (src dst a : String) (amount : Nat) :
+    linesAccountDelta (transferMovements src dst amount) a =
+      (if a = dst then (amount : Int) else 0) - (if a = src then (amount : Int) else 0) := by
+  unfold linesAccountDelta transferMovements
+  by_cases hs : src = a <;> by_cases hd : dst = a <;>
+    simp [hs, hd, eq_comm (a := a)] <;> omega
+
 end Obend.Ledger
 
 end

@@ -25,7 +25,7 @@ structure ToothSpec (α : Type) where
   negFixtures : List α
 
 def verifyDualPoleTooth {α : Type} (spec : ToothSpec α) : Bool :=
-  spec.eval spec.posFixture && spec.negFixtures.all (fun x => !spec.eval x)
+  spec.eval spec.posFixture && spec.negFixtures.all (fun (x : α) => !spec.eval x)
 
 theorem all_neg_eval_false {α : Type} (eval : α → Bool) :
     ∀ {xs : List α} {x : α},
@@ -42,11 +42,11 @@ theorem all_neg_eval_false {α : Type} (eval : α → Bool) :
 theorem verifyDualPoleTooth_sound {α : Type} (spec : ToothSpec α)
     (h : verifyDualPoleTooth spec = true) :
     spec.eval spec.posFixture = true ∧
-    spec.negFixtures.all (fun x => !spec.eval x) = true ∧
-    (∀ x ∈ spec.negFixtures, spec.eval x = false) := by
+    spec.negFixtures.all (fun (x : α) => !spec.eval x) = true ∧
+    (∀ (x : α), x ∈ spec.negFixtures → spec.eval x = false) := by
   unfold verifyDualPoleTooth at h
   simp only [Bool.and_eq_true] at h
-  exact ⟨h.1, h.2, fun x hx => all_neg_eval_false spec.eval h.2 hx⟩
+  exact ⟨h.1, h.2, fun (x : α) hx => all_neg_eval_false spec.eval h.2 hx⟩
 end Obend.Tactic.Tooth
 
 set_option autoImplicit false

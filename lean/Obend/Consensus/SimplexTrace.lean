@@ -350,15 +350,17 @@ def decodeTarget (j : Json) : Except String Target := do
     let arr ← (← j.getObjVal? "block").getArr?
     return .block (← arr.toList.mapM decodeEntry)
 
+def parseMsgKind (s : String) : Except String Kind :=
+  if s == "propose" then .ok .propose
+  else if s == "vote" then .ok .vote
+  else if s == "finalize" then .ok .finalize
+  else .error s!"unknown message kind {s}"
+
 def decodeMsg (j : Json) : Except String Msg := do
   let sender ← j.getObjValAs? Nat "sender"
   let view ← j.getObjValAs? Nat "view"
   let kindS ← j.getObjValAs? String "kind"
-  let kind ← match kindS with
-    | "propose" => pure Kind.propose
-    | "vote" => pure Kind.vote
-    | "finalize" => pure Kind.finalize
-    | other => throw s!"unknown message kind {other}"
+  let kind ← parseMsgKind kindS
   let target ← decodeTarget (← j.getObjVal? "target")
   pure { sender, view, kind, target }
 
