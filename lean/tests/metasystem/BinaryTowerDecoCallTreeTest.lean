@@ -4,6 +4,10 @@ public import Obend.Judge.DecoAndCallTree
 import all Init.Data.String.Defs
 import all Obend.Crypto.BinaryTower256
 import all Obend.Judge.DecoAndCallTree
+import all Obend.Codec.DetCbor
+import all Obend.Judge.SymbolicRegexBisim
+import all Obend.Judge.VpaComplementAndJson
+import all Obend.Vault.Lsafe
 import all Obend.Apps.ZkNtt.Goldilocks
 import all Obend.AssertAxioms
 import all Obend.Core.AliasExposure
@@ -148,6 +152,7 @@ import all Obend.Tactic.Tooth
 public section
 namespace Obend.Tests.BinaryTowerDecoCallTree
 open Obend.Crypto Obend.Crypto.BinaryTower256 Obend.Judge.DecoAndCallTree
+open Obend.Judge.VpaJson (JState jsonAccepting)
 set_option autoImplicit false
 set_option Elab.async false
 
@@ -189,259 +194,81 @@ example : encList [[1, 2], [3]] ≠ encList [[1], [2, 3]] := by
   have := encList_injective _ _ h
   contradiction
 
-/-- Bytes are literal fixtures; hash equality is proved symbolically, without evaluating the sponge in the kernel. -/
-def paymentRequest : ByteArray := "Authorization: Bearer sk_live_secret_99\r\n\r\npi_3Q9x77".toUTF8
-def paymentResponse : ByteArray := "HTTP/1.1 200 OK\r\n\r\n{\"id\":\"pi_3Q9x77\",\"status\":\"succeeded\",\"amount\":4200}".toUTF8
-def paymentRecord : SessionRecord :=
-  { host := "api.payments.example".toUTF8, notary := "notary-key-256".toUTF8,
-    time := 100, request := paymentRequest, response := paymentResponse,
-    ghashTag := towerOne 7, verifierNonce := "nonce-payment-1".toUTF8,
-    paymentIntentId := "pi_3Q9x77".toUTF8 }
-def zeroMask (b : ByteArray) : ByteArray := ⟨Array.replicate b.size 0⟩
-def paymentRequestMask : ByteArray :=
-  ⟨((List.replicate 22 (0 : UInt8)) ++ List.replicate 17 255 ++ List.replicate (paymentRequest.size - 39) 0).toArray⟩
-def payment : DecoAttestation :=
-  { record := paymentRecord, recordTranscriptCommit := recordCommit paymentRecord,
-    requestMask := paymentRequestMask, responseMask := zeroMask paymentResponse,
-    requestFacts := [⟨43, "pi_3Q9x77".toUTF8⟩],
-    responseFacts := [⟨26, "pi_3Q9x77".toUTF8⟩, ⟨47, "succeeded".toUTF8⟩] }
-def paymentPolicy : DecoPolicy :=
-  { authenticatedRecords := [paymentRecord], notaries := [paymentRecord.notary],
-    hosts := [paymentRecord.host], minTime := 90, maxTime := 110,
-    secretRequestOffsets := List.range 17 |>.map (· + 22) }
-def emptyLedger : SessionLedger := ⟨[], []⟩
+/-! ## Views, masks and depth-1 members, in the kernel (no hashing) -/
 
-example : checkMask paymentRecord.request payment.requestMask = true := by decide +kernel
-example : checkSpan paymentRecord.response payment.responseMask ⟨26, "pi_3Q9x77".toUTF8⟩ = true := by decide +kernel
-example : checkSpan paymentRecord.response payment.responseMask ⟨26, "pi_TAMPER".toUTF8⟩ = false := by decide +kernel
-example : checkSpan paymentRecord.request payment.requestMask ⟨22, "sk_live_secret_99".toUTF8⟩ = false := by decide +kernel
+def js (s : String) : ByteArray := s.toByteArray
+def httpHead : ByteArray := js "HTTP/1.1 200 OK\r\n\r\n"
 
-example : checkDecoAttestation paymentPolicy emptyLedger payment = true := by
-  unfold checkDecoAttestation payment
-  simp only [decide_true, Bool.true_and]
+/-- `{"note":"x\"y","k":"` · `secret` · `"}`: the hidden span sits in a value string. -/
+def bodySlots : List SpanSlot :=
+  [.opened (js "{\"note\":\"x\\\"y\",\"k\":\"") [], .masked (js "****"), .opened (js "\"}") []]
+def bodySpans : List ByteArray := [js "{\"note\":\"x\\\"y\",\"k\":\"", js "secret", js "\"}"]
+
+example : checkMask JState.init bodySlots bodySpans = true := by decide +kernel
+example : (bodyRun JState.init bodySlots).map jsonAccepting = some true := by decide +kernel
+-- A hidden span with an escape pair inside is confined; one that ends on the backslash is not.
+example : checkMask JState.init bodySlots
+    [js "{\"note\":\"x\\\"y\",\"k\":\"", js "se\\\"cret", js "\"}"] = true := by decide +kernel
+example : checkMask JState.init bodySlots
+    [js "{\"note\":\"x\\\"y\",\"k\":\"", js "secret\\", js "\"}"] = false := by decide +kernel
+-- A mask with a quote, and a mask placed in a key, are refused by the public run.
+example : bodyRun JState.init
+    [.opened (js "{\"k\":\"") [], .masked (js "a\"b"), .opened (js "\"}") []] = none := by
   decide +kernel
+example : bodyRun JState.init [.opened (js "{\"") [], .masked (js "k"), .opened (js "\":1}") []] =
+    none := by decide +kernel
 
-private theorem paymentRelation : DecoRelation paymentPolicy emptyLedger payment := by
-  apply (checkDecoAttestation_iff_relation _ _ _).mp
-  unfold checkDecoAttestation payment
-  simp only [decide_true, Bool.true_and]
-  decide +kernel
+/-- A 32-byte root whose hex is sixty-four zeros. -/
+def zeroRoot : Hash256 := ⟨⟨(List.replicate 32 (0 : UInt8)).toArray⟩, by decide⟩
+def zeros : String := "0000000000000000000000000000000000000000000000000000000000000000"
+def respView (body : String) : TranscriptView := ⟨⟨2, ByteArray.empty⟩, [.opened httpHead [], .opened (js body) []]⟩
 
-example : checkDecoTrace paymentPolicy emptyLedger [payment, payment] = false := by
-  have hr : checkDecoAttestation paymentPolicy (consume emptyLedger payment) payment = false :=
-    replay_nonce_rejected paymentPolicy (consume emptyLedger payment) (consume emptyLedger payment) []
-      (.nil _) payment (.head _)
-  simp only [checkDecoTrace, hr, Bool.false_and, Bool.and_false]
+example : checkSubtreeRoot (respView ("{\"subtree_root\":\"" ++ zeros ++ "\",\"n\":1}")) zeroRoot =
+    true := by decide +kernel
+example : topLevelMembers [.opened (js "{\"a\":\"x\",\"b\":{\"c\":\"y\"},\"d\":\"z\"}") []] =
+    [(js "d", js "z"), (js "a", js "x")] := by decide +kernel
+-- Not a member: nested in an object or an array, reflected inside a string value, another root,
+-- a value with an escape, a top-level array.
+example : checkSubtreeRoot (respView ("{\"data\":{\"subtree_root\":\"" ++ zeros ++ "\"}}")) zeroRoot =
+    false := by decide +kernel
+example : checkSubtreeRoot (respView ("{\"l\":[{\"subtree_root\":\"" ++ zeros ++ "\"}]}")) zeroRoot =
+    false := by decide +kernel
+example : checkSubtreeRoot
+    (respView ("{\"user_bio\":\"x\\\"subtree_root\\\":\\\"" ++ zeros ++ "\\\"\",\"n\":1}")) zeroRoot =
+    false := by decide +kernel
+example : checkSubtreeRoot (respView ("{\"subtree_root\":\"1000000000000000000000000000000000000000000000000000000000000000\"}")) zeroRoot =
+    false := by decide +kernel
+example : checkSubtreeRoot (respView ("[\"subtree_root\",\"" ++ zeros ++ "\"]")) zeroRoot =
+    false := by decide +kernel
+-- Not a member: the value is under a mask, whatever the mask spells.
+example : checkSubtreeRoot ⟨⟨4, ByteArray.empty⟩,
+    [.opened httpHead [], .opened (js "{\"subtree_root\":\"") [], .masked (js zeros),
+      .opened (js "\"}") []]⟩ zeroRoot = false := by decide +kernel
 
-example : checkFresh (consume emptyLedger payment) payment = false := by decide +kernel
-example : checkPolicy { paymentPolicy with minTime := 101 } payment = false := by decide +kernel
-example : checkPolicy { paymentPolicy with notaries := [] } payment = false := by decide +kernel
-example : checkPolicy { paymentPolicy with hosts := [] } payment = false := by decide +kernel
-
-example : bindAdv (shareRecord paymentRecord) = 0 := deco_sameOpening_bindAdv_zero _
-example : OpeningRelation (recordCommit paymentRecord) paymentRecord := by rfl
-
-/-- Three authenticated network hops under one deterministic orchestrator. -/
-def settlementRecord : SessionRecord :=
-  { paymentRecord with
-    request := "pi_3Q9x77".toUTF8, response := "settled".toUTF8,
-    verifierNonce := "nonce-settlement-3".toUTF8, paymentIntentId := "settlement:pi_3Q9x77".toUTF8 }
-def settlement : DecoAttestation :=
-  { record := settlementRecord, recordTranscriptCommit := recordCommit settlementRecord,
-    requestMask := zeroMask settlementRecord.request, responseMask := zeroMask settlementRecord.response,
-    requestFacts := [], responseFacts := [] }
-def settlementTree : HttpsCallTree := .node ⟨.leafHttpsHop, settlement, 0⟩ []
-def recursiveRecord : SessionRecord :=
-  { paymentRecord with
-    request := "pi_3Q9x77".toUTF8,
-    response := "HTTP/1.1 200 OK\r\n\r\n".toUTF8 ++ rootField (mrootC [treeRoot settlementTree]),
-    verifierNonce := "nonce-recorder-2".toUTF8, paymentIntentId := "recorder:pi_3Q9x77".toUTF8 }
-def recursiveAttestation : DecoAttestation :=
-  { record := recursiveRecord, recordTranscriptCommit := recordCommit recursiveRecord,
-    requestMask := zeroMask recursiveRecord.request, responseMask := zeroMask recursiveRecord.response,
-    requestFacts := [], responseFacts := [] }
-def recursiveTree : HttpsCallTree := .node ⟨.recursiveHttpsCallee, recursiveAttestation, 19⟩ [settlementTree]
-def orchestrator : DecoAttestation :=
-  { payment with record := { paymentRecord with request := "start".toUTF8, response := "scheduled".toUTF8 } }
-def threeHopTree : HttpsCallTree := .node ⟨.localComputation, orchestrator, 0⟩
-  [.node ⟨.leafHttpsHop, payment, 0⟩ [], recursiveTree]
-def threeHopPolicy : CallTreePolicy :=
-  { deco := { paymentPolicy with
-        authenticatedRecords := [paymentRecord, recursiveRecord, settlementRecord],
-        secretRequestOffsets := [] },
-    ledger := emptyLedger, recorders := [paymentRecord.host], localEval := fun _ => "scheduled".toUTF8 }
-def paymentEdge : DataflowEdge := ⟨1, 2, 26, 0, "pi_3Q9x77".toUTF8⟩
-def threeHopClaim : CallTreeClaim :=
-  ⟨threeHopPolicy, threeHopTree, treeRoot threeHopTree, [paymentEdge]⟩
-
-theorem zeroMask_size (bs : ByteArray) : (zeroMask bs).size = bs.size := by
-  change (Array.replicate bs.size (0 : UInt8)).size = bs.size
-  exact Array.size_replicate
-
-theorem zeroMask_get (bs : ByteArray) (i : Nat) (hi : i < bs.size) : (zeroMask bs)[i]! = 0 := by
-  have hm : i < (zeroMask bs).size := by rw [zeroMask_size]; exact hi
-  rw [getElem!_pos (zeroMask bs) i hm]
-  exact Array.getElem_replicate (by simpa only [Array.size_replicate] using hi)
-
-theorem checkMask_zero (bs : ByteArray) : checkMask bs (zeroMask bs) = true := by
-  apply (checkMask_iff _ _).mpr
-  exact ⟨(zeroMask_size bs).symm, fun i hi => Or.inl (zeroMask_get bs i hi)⟩
-
-theorem checkSpan_suffix (lead bs : ByteArray) (hn : 0 < bs.size) :
-    checkSpan (lead ++ bs) (zeroMask (lead ++ bs)) ⟨lead.size, bs⟩ = true := by
-  apply (checkSpan_iff _ _ _).mpr
-  refine ⟨hn, by simp, zeroMask_size _, ?_⟩
-  intro j hj
-  change j < bs.size at hj
-  have hfull : lead.size + j < (lead ++ bs).size := by rw [ByteArray.size_append]; omega
-  refine ⟨zeroMask_get _ _ hfull, ?_⟩
-  change (lead ++ bs)[lead.size + j]! = bs[j]!
-  rw [getElem!_pos (lead ++ bs) _ hfull, ByteArray.getElem_append_right (by omega)]
-  simp only [Nat.add_sub_cancel_left, getElem!_pos bs j hj]
-
-theorem prefix_get (lead bs : ByteArray) (i : Nat) (hi : i < lead.size) :
-    (lead ++ bs)[i]! = lead[i]! := by
-  have hfull : i < (lead ++ bs).size := by rw [ByteArray.size_append]; omega
-  rw [getElem!_pos (lead ++ bs) _ hfull, ByteArray.getElem_append_left hi, getElem!_pos lead i hi]
-
-def httpHeader : ByteArray := "HTTP/1.1 200 OK\r\n\r\n".toUTF8
-
-theorem bodyStart_header (bs : ByteArray) : bodyStart (httpHeader ++ bs) = some 19 := by
-  have hs : httpHeader.size = 19 := by decide +kernel
-  unfold bodyStart
-  rw [ByteArray.size_append, hs, List.range_add, List.find?_append]
-  have hf : (List.range 19).find? (fun i => decide (i + 4 ≤ (httpHeader ++ bs).size) &&
-      (httpHeader ++ bs)[i]! == 13 && (httpHeader ++ bs)[i+1]! == 10 &&
-      (httpHeader ++ bs)[i+2]! == 13 && (httpHeader ++ bs)[i+3]! == 10) = some 15 := by
-    have hg (i : Nat) (hi : i < 19) : (httpHeader ++ bs)[i]! = httpHeader[i]! :=
-      prefix_get _ _ _ (by rw [hs]; exact hi)
-    have hb (i : Nat) (hi : i ≤ 15) : decide (i + 4 ≤ (httpHeader ++ bs).size) = true := by
-      rw [ByteArray.size_append, hs]
-      exact decide_eq_true (by omega)
-    simp only [show List.range 19 = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18] from rfl,
-      List.find?_cons]
-    simp only [hg 0 (by decide), hg 1 (by decide), hg 2 (by decide), hg 3 (by decide),
-      hg 4 (by decide), hg 5 (by decide), hg 6 (by decide), hg 7 (by decide), hg 8 (by decide),
-      hg 9 (by decide), hg 10 (by decide), hg 11 (by decide), hg 12 (by decide), hg 13 (by decide),
-      hg 14 (by decide), hg 15 (by decide), hg 16 (by decide), hg 17 (by decide), hg 18 (by decide),
-      hb 0 (by decide), hb 1 (by decide), hb 2 (by decide), hb 3 (by decide),
-      hb 4 (by decide), hb 5 (by decide), hb 6 (by decide), hb 7 (by decide), hb 8 (by decide),
-      hb 9 (by decide), hb 10 (by decide), hb 11 (by decide), hb 12 (by decide), hb 13 (by decide),
-      hb 14 (by decide), hb 15 (by decide)]
-    rfl
-  simp only [ByteArray.size_append, hs] at hf
-  rw [hf]
-  rfl
-
-theorem rootField_size (root : Hash256) : (rootField root).size = 81 := by
-  change (("\"subtree_root\":\"".toUTF8.data.toList ++ hex64 root ++ "\"".toUTF8.data.toList).toArray).size = 81
-  rw [List.size_toArray, List.length_append, List.length_append, hex64_length]
-  decide +kernel
-
-private theorem recursiveRootAccepted :
-    checkSubtreeRoot recursiveAttestation 19 (mrootC [treeRoot settlementTree]) = true := by
-  apply (checkSubtreeRoot_iff _ _ _).mpr
-  refine ⟨19, bodyStart_header _, Nat.le_refl _, ?_⟩
-  apply (checkSpan_iff _ _ _).mp
-  have hs : httpHeader.size = 19 := by decide +kernel
-  have h := checkSpan_suffix httpHeader (rootField (mrootC [treeRoot settlementTree]))
-    (by rw [rootField_size]; decide)
-  rw [hs] at h
-  exact h
-
-example : checkDataflowEdge (treeHops threeHopTree).toArray paymentEdge = true := by decide +kernel
-example : checkDataflowEdge (treeHops threeHopTree).toArray { paymentEdge with dstOff := 1 } = false := by decide +kernel
-
-private theorem paymentRelationAt (ledger : SessionLedger) (hf : Fresh ledger payment) :
-    DecoRelation threeHopPolicy.deco ledger payment := by
-  obtain ⟨hc, _, _, hm, hr, hq, hs⟩ := paymentRelation
-  refine ⟨hc, hf, ?_, hm, hr, hq, hs⟩
-  refine ⟨.head _, .head _, .head _, ?_, ?_, ?_⟩
-  · decide +kernel
-  · decide +kernel
-  · intro i hi; cases hi
-
-private theorem settlementRelationAt (ledger : SessionLedger) (hf : Fresh ledger settlement) :
-    DecoRelation threeHopPolicy.deco ledger settlement := by
-  refine ⟨rfl, hf, ?_, (checkMask_iff _ _).mp (checkMask_zero _),
-    (checkMask_iff _ _).mp (checkMask_zero _), ?_, ?_⟩
-  · refine ⟨.tail _ (.tail _ (.head _)), .head _, .head _, ?_, ?_, ?_⟩
-    · decide +kernel
-    · decide +kernel
-    · intro i hi; cases hi
-  · intro s hs; cases hs
-  · intro s hs; cases hs
-
-private theorem recursiveRelationAt (ledger : SessionLedger) (hf : Fresh ledger recursiveAttestation) :
-    DecoRelation threeHopPolicy.deco ledger recursiveAttestation := by
-  refine ⟨rfl, hf, ?_, (checkMask_iff _ _).mp (checkMask_zero _),
-    (checkMask_iff _ _).mp (checkMask_zero _), ?_, ?_⟩
-  · refine ⟨.tail _ (.head _), .head _, .head _, ?_, ?_, ?_⟩
-    · decide +kernel
-    · decide +kernel
-    · intro i hi; cases hi
-  · intro s hs; cases hs
-  · intro s hs; cases hs
-
-private theorem threeHopMeaning :
-    CallTreeMeaning threeHopPolicy threeHopTree (treeRoot threeHopTree) [paymentEdge] := by
-  refine ⟨rfl, ?_, ?_, ?_⟩
-  · change _ ∧ (_ ∧ (_ ∧ True))
-    refine ⟨?_, ?_, ?_, trivial⟩
-    · rfl
-    · change (true = true ∧ DecoRelation _ _ payment) ∧ True
-      exact ⟨⟨rfl, paymentRelationAt _ (by apply (checkFresh_iff _ _).mp; decide +kernel)⟩, trivial⟩
-    · change (_ ∧ _ ∧ SubtreeRootMeaning recursiveAttestation 19 (mrootC [treeRoot settlementTree])) ∧
-        (((true = true ∧ DecoRelation _ _ settlement) ∧ True) ∧ True)
-      exact ⟨⟨recursiveRelationAt _ (by apply (checkFresh_iff _ _).mp; decide +kernel),
-        .head _, (checkSubtreeRoot_iff _ _ _).mp recursiveRootAccepted⟩,
-        ⟨⟨⟨rfl, settlementRelationAt _ (by apply (checkFresh_iff _ _).mp; decide +kernel)⟩, trivial⟩, trivial⟩⟩
-  · refine ⟨_, ValidDecoTrace.cons (paymentRelationAt _ ?_)
-        (ValidDecoTrace.cons (recursiveRelationAt _ ?_)
-          (ValidDecoTrace.cons (settlementRelationAt _ ?_) (ValidDecoTrace.nil _)))⟩ <;>
-      apply (checkFresh_iff _ _).mp <;> decide +kernel
-  · intro e he
-    have heq : e = paymentEdge := List.mem_singleton.mp he
-    subst e
-    apply (checkDataflowEdge_iff _ _).mp
-    decide +kernel
-
-example : callTreeVerify threeHopPolicy threeHopTree (treeRoot threeHopTree) [paymentEdge] = true :=
-  (callTreeVerify_iff _ _ _ _).mpr threeHopMeaning
-
-example : callTreeJudge.check 0 threeHopClaim ⟨0⟩ = .ok := by
-  change (if callTreeVerify threeHopPolicy threeHopTree (treeRoot threeHopTree) [paymentEdge] then _ else _) = _
-  rw [(callTreeVerify_iff _ _ _ _).mpr threeHopMeaning]
-  rfl
-
-#guard callTreeVerify threeHopPolicy threeHopTree (treeRoot threeHopTree) [paymentEdge]
-#guard !(checkSubtreeRoot recursiveAttestation 19 (recordCommit paymentRecord))
-#guard !(checkDataflowEdge (treeHops threeHopTree).toArray { paymentEdge with dstOff := 1 })
-#guard match callTreeJudge.check 0 threeHopClaim ⟨0⟩ with | .ok => true | _ => false
-#guard match callTreeJudge.check 0 { threeHopClaim with requiredEdges := [{ paymentEdge with dstOff := 1 }] } ⟨0⟩ with
-  | .refused _ [] => true | _ => false
-
-example : checkFresh ⟨[paymentRecord.verifierNonce], []⟩ payment = false := by decide +kernel
-example : checkFresh ⟨[], [paymentRecord.paymentIntentId]⟩ payment = false := by decide +kernel
+example : checkFresh ⟨[js "n"], []⟩ plantedAttestation = false := by decide +kernel
 
 #tooth checkDecoAttestation_iff_relation by mutation checkDecoAttestation := fun _ _ _ => true
 #tooth callTreeVerify_sound_or_collision by mutation callTreeVerify := fun _ _ _ _ => true
 #tooth towerScaleX_eq_mul by mutation towerScaleX := fun k _ => towerZero k
 #tooth towerKaratsuba_eq by mutation towerKaratsuba := fun k a b => towerAdd k a b
 #tooth towerMul_add_distrib by mutation towerMul := fun k _ _ => towerOne k
-#tooth checkSpan_iff by mutation checkSpan := fun _ _ _ => true
 #tooth checkFresh_iff by mutation checkFresh := fun _ _ => true
 #tooth checkPolicy_iff by mutation checkPolicy := fun _ _ => true
-#tooth checkSubtreeRoot_iff by mutation checkSubtreeRoot := fun _ _ _ => true
-#tooth checkDataflowEdge_iff by mutation checkDataflowEdge := fun _ _ => true
 #tooth encList_injective by mutation encList := fun _ => []
+-- A mask check that does not ask the hidden span to return to the machine state.
+#tooth checkMask_run by mutation Obend.Judge.spanConfined := fun _ _ _ => true
+-- A node preimage that drops the attestation and the children.
+#tooth treeRoot_binds by mutation nodePreimage := fun h _ => encList [encInt (kindTag h.kind)]
+-- A tag check that accepts every tag.
+#tooth deco_ghash_forgery_keys_bound by mutation tagVerifies := fun _ _ => true
 
 #print axioms towerMul_add_distrib
 #print axioms embedTower_injective
 #print axioms towerMul_inv
 #print axioms ghashDiff_roots_bound
 #print axioms checkDecoAttestation_iff_relation
-#print axioms deco_binds_disclosed_facts_or_collision
+#print axioms checkOpening_binds
+#print axioms treeRoot_binds
 #print axioms encList_injective
 #print axioms callTreeVerify_sound_or_collision
 #assert_axioms_tree

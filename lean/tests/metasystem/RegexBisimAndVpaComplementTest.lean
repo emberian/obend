@@ -32,6 +32,7 @@ public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms
 public import Obend.Judge.SymbolicRegexBisim
 public import Obend.Judge.VpaComplementAndJson
+public import Obend.Vault.Lsafe
 import all Obend.Core.Term
 import all Obend.Judge.Class
 import all Obend.Codec.DetCbor
@@ -54,7 +55,8 @@ public section
 namespace Obend.Tests.Metasystem.RegexBisimAndVpaComplementTest
 
 open Obend.Codec.DetCbor
-open Obend.Vault.Lsafe (Hasher cshakeHasher)
+open Obend.Vault.Lsafe (JVal jsonCborCommit cborToJson jsonToCbor cborToJson_jsonToCbor)
+open Obend.Judge.Commit (Hasher cshakeHasher spliceByteArray countSpan)
 open Obend.Judge.SymbolicRegex
 open Obend.Judge.VpaJson
 
@@ -336,12 +338,12 @@ def mask : ByteArray := js "****"
 
 example : runFullJsonGrammar secretDoc = true := by decide +kernel
 example : checkJsonRedaction secretDoc 25 33 mask = true := by decide +kernel
-example : redactJsonSpan secretDoc 25 33 mask = js "{\"user\":\"alice\",\"token\":\"****\"}" := by
+example : spliceByteArray secretDoc 25 33 mask = js "{\"user\":\"alice\",\"token\":\"****\"}" := by
   decide +kernel
 
 /-- The redacted document is valid and has the same keys, by the theorem. -/
-example : runFullJsonGrammar (redactJsonSpan secretDoc 25 33 mask) = true ∧
-    jsonObjectKeys (redactJsonSpan secretDoc 25 33 mask) = [[js "token", js "user"]] := by
+example : runFullJsonGrammar (spliceByteArray secretDoc 25 33 mask) = true ∧
+    jsonObjectKeys (spliceByteArray secretDoc 25 33 mask) = [[js "token", js "user"]] := by
   obtain ⟨h1, h2, _⟩ := jsonRedaction_preserves_valid_parse_and_keys
     (doc := secretDoc) (l := 25) (r := 33) (mask := mask) (by decide +kernel)
   rw [h1, h2]
@@ -358,13 +360,17 @@ example : checkJsonRedaction secretDoc 3 5 mask = false := by decide +kernel
 example : checkJsonRedaction secretDoc 25 99 mask = false := by decide +kernel
 /-- What the escape refusal protects: cutting between the backslash and its quote breaks the
 document. -/
-example : runFullJsonGrammar (redactJsonSpan secretDoc 25 28 mask) = false := by decide +kernel
+example : runFullJsonGrammar (spliceByteArray secretDoc 25 28 mask) = false := by decide +kernel
 
 /-- **Confinement, executed**: two documents that differ only in the secret redact to the same
 bytes, by the theorem. -/
-example : redactJsonSpan secretDoc 25 33 mask = redactJsonSpan otherDoc 25 48 mask :=
-  jsonRedaction_confinement mask (by decide +kernel) (by decide +kernel)
-example : checkJsonRedaction otherDoc 25 48 mask = true := by decide +kernel
+example : spliceByteArray secretDoc 25 33 mask = spliceByteArray otherDoc 25 48 mask ∧
+    runFullJsonGrammar secretDoc = runFullJsonGrammar otherDoc ∧
+    jsonObjectKeys secretDoc = jsonObjectKeys otherDoc :=
+  have h := jsonRedaction_confinement (doc₁ := secretDoc) (doc₂ := otherDoc) (l := 25) (r₁ := 33)
+    (r₂ := 48) (mask := mask) (by decide +kernel) (by decide +kernel) (by decide +kernel)
+    (by decide +kernel)
+  ⟨h.1, h.2.2.1, h.2.2.2⟩
 
 /-- An object with ascending keys commits; unsorted or repeated keys do not. -/
 def sortedObj : JVal := .obj [(js "a", .num (js "1")), (js "b", .arr [.null, .bool true, .str (js "x")])]
@@ -379,49 +385,56 @@ example : cborToJson (jsonToCbor sortedObj) = some sortedObj := cborToJson_jsonT
 
 /-- Five spans: the leaf level and the level above it are odd. -/
 def spans : List ByteArray := [js "alice", js "****", js "", js "edge:7->9", js "tail"]
-def root : SpanRoot := spanMerkleRoot toyHasher spans
+def root : SpanRoot := spanMerkleRoot toyHasher spanTag spans
 
 example : root.count = 5 ∧ root.top.size = 32 := by decide +kernel
-example : verifySpanMerkleInclusion toyHasher root (js "edge:7->9")
-    (spanMerkleProof toyHasher spans 3) = true := by decide +kernel
-example : verifySpanMerkleInclusion toyHasher root (js "tail")
-    (spanMerkleProof toyHasher spans 4) = true := by decide +kernel
+example : verifySpanMerkleInclusion toyHasher spanTag root (js "edge:7->9")
+    (spanMerkleProof toyHasher spanTag spans 3) = true := by decide +kernel
+example : verifySpanMerkleInclusion toyHasher spanTag root (js "tail")
+    (spanMerkleProof toyHasher spanTag spans 4) = true := by decide +kernel
 /-- Every index, by the completeness theorem. -/
 example (i : Nat) (hi : i < spans.length) :
-    verifySpanMerkleInclusion toyHasher root (spans[i]'hi) (spanMerkleProof toyHasher spans i) =
+    verifySpanMerkleInclusion toyHasher spanTag root (spans[i]'hi) (spanMerkleProof toyHasher spanTag spans i) =
       true :=
-  verifySpanMerkleInclusion_complete toyHasher spans i hi
+  verifySpanMerkleInclusion_complete toyHasher spanTag spans i hi
 
 -- `⌈log₂ 5⌉ = 3` siblings at most; the promoted last leaf needs one.
-example : (spanMerkleProof toyHasher spans 0).siblings.length = 3 ∧
-    (spanMerkleProof toyHasher spans 4).siblings.length = 1 := by decide +kernel
+example : (spanMerkleProof toyHasher spanTag spans 0).siblings.length = 3 ∧
+    (spanMerkleProof toyHasher spanTag spans 4).siblings.length = 1 := by decide +kernel
 
 -- Refused: a tampered span on an honest path, the honest span at another index, an index past
 -- the count, a path with a sibling dropped, and (for the promoted last leaf, whose path depends
 -- on the count) a root with another count.
-example : verifySpanMerkleInclusion toyHasher root (js "edge:7->8")
-    (spanMerkleProof toyHasher spans 3) = false := by decide +kernel
-example : verifySpanMerkleInclusion toyHasher root (js "edge:7->9")
-    ⟨2, (spanMerkleProof toyHasher spans 3).siblings⟩ = false := by decide +kernel
-example : verifySpanMerkleInclusion toyHasher root (js "tail")
-    ⟨5, (spanMerkleProof toyHasher spans 4).siblings⟩ = false := by decide +kernel
-example : verifySpanMerkleInclusion toyHasher root (js "edge:7->9")
-    ⟨3, (spanMerkleProof toyHasher spans 3).siblings.drop 1⟩ = false := by decide +kernel
-example : verifySpanMerkleInclusion toyHasher ⟨6, root.top⟩ (js "tail")
-    (spanMerkleProof toyHasher spans 4) = false := by decide +kernel
+example : verifySpanMerkleInclusion toyHasher spanTag root (js "edge:7->8")
+    (spanMerkleProof toyHasher spanTag spans 3) = false := by decide +kernel
+example : verifySpanMerkleInclusion toyHasher spanTag root (js "edge:7->9")
+    ⟨2, (spanMerkleProof toyHasher spanTag spans 3).siblings⟩ = false := by decide +kernel
+example : verifySpanMerkleInclusion toyHasher spanTag root (js "tail")
+    ⟨5, (spanMerkleProof toyHasher spanTag spans 4).siblings⟩ = false := by decide +kernel
+example : verifySpanMerkleInclusion toyHasher spanTag root (js "edge:7->9")
+    ⟨3, (spanMerkleProof toyHasher spanTag spans 3).siblings.drop 1⟩ = false := by decide +kernel
+example : verifySpanMerkleInclusion toyHasher spanTag ⟨6, root.top⟩ (js "tail")
+    (spanMerkleProof toyHasher spanTag spans 4) = false := by decide +kernel
+/-- The `top` binds the count: the first leaf has three siblings under five leaves and under
+eight, so its path climbs to the same tree top, and a root claiming eight leaves is still
+refused. -/
+example : verifySpanMerkleInclusion toyHasher spanTag ⟨8, root.top⟩ (js "alice")
+    (spanMerkleProof toyHasher spanTag spans 0) = false ∧
+    verifySpanMerkleInclusion toyHasher spanTag ⟨5, root.top⟩ (js "alice")
+      (spanMerkleProof toyHasher spanTag spans 0) = true := by decide +kernel
 /-- A span's length is in its leaf: a span and its extension by a zero byte have different
 leaf messages, as do a leaf and any node. -/
 example : leafMsg (js "a") ≠ leafMsg (js "a\x00") := by decide +kernel
 
 -- The cSHAKE256 tree, compiled.
-#guard verifySpanMerkleInclusion cshakeHasher
-  (spanMerkleRoot cshakeHasher ["alice".toByteArray, "****".toByteArray, "tail".toByteArray])
+#guard verifySpanMerkleInclusion cshakeHasher spanTag
+  (spanMerkleRoot cshakeHasher spanTag ["alice".toByteArray, "****".toByteArray, "tail".toByteArray])
   "tail".toByteArray
-  (spanMerkleProof cshakeHasher ["alice".toByteArray, "****".toByteArray, "tail".toByteArray] 2)
-#guard !verifySpanMerkleInclusion cshakeHasher
-  (spanMerkleRoot cshakeHasher ["alice".toByteArray, "****".toByteArray, "tail".toByteArray])
+  (spanMerkleProof cshakeHasher spanTag ["alice".toByteArray, "****".toByteArray, "tail".toByteArray] 2)
+#guard !verifySpanMerkleInclusion cshakeHasher spanTag
+  (spanMerkleRoot cshakeHasher spanTag ["alice".toByteArray, "****".toByteArray, "tail".toByteArray])
   "tale".toByteArray
-  (spanMerkleProof cshakeHasher ["alice".toByteArray, "****".toByteArray, "tail".toByteArray] 2)
+  (spanMerkleProof cshakeHasher spanTag ["alice".toByteArray, "****".toByteArray, "tail".toByteArray] 2)
 
 /-! ## 6. Mutation teeth -/
 
@@ -471,8 +484,12 @@ example : leafMsg (js "a") ≠ leafMsg (js "a\x00") := by decide +kernel
   mutation leafPrefix := 0x01
 
 -- A span verifier that does not compare the climbed digest with the root.
-#tooth verifySpanMerkleInclusion_binding by
-  mutation topMatches := fun _ _ => true
+#tooth verifySpanMerkleInclusion_top_binding by
+  mutation topMatches := fun _ _ _ _ => true
+
+-- A root digest that leaves the leaf count out.
+#tooth rootHash_binds by
+  mutation rootHash := fun H tag _ t => H.hash tag (rootMsg (leafHash H tag (countSpan 0)) t)
 
 /-! ## 7. The axiom census -/
 

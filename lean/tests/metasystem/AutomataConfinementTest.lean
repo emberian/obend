@@ -18,7 +18,7 @@ mutation-killing barriers, and `#print axioms` verification for all four pillars
 4. **Pillar D**: `dclutch` Liquidation-Cascade-Free Hoard Complete-Set & Joint KKT Clearing Judge (`HoardMarketState`, `splitCompleteSet`, `mergeCompleteSet`, `JointClearingCert`, `prices_sum_to_scale`, `filled_at_or_better`, `partial_fill_is_marginal`, `collectedQuote_funds_sets`, `dclutchHoardFormat`).
 -/
 
-@[expose] public section
+public section
 namespace Obend.Tests.Metasystem.AutomataConfinementTest
 
 open Obend
@@ -31,10 +31,10 @@ open Obend.Judge
 /-! ## 1. Pillar A Tests: Brzozowski / Table-DFA Trace & Complement Confinement -/
 
 -- Format metadata checks
-example : dfaFormat.name = "dfa-confinement" := rfl
-example : dfaFormat.version = "1" := rfl
-example : dfaFormat.regime = .decidable := rfl
-example : dfaFormat.trust = .kernel := rfl
+example : dfaFormat.name = "dfa-confinement" := by exact id rfl
+example : dfaFormat.version = "1" := by exact id rfl
+example : dfaFormat.regime = .decidable := by exact id rfl
+example : dfaFormat.trust = .kernel := by exact id rfl
 
 -- Positive certificate acceptance & byte-boundary acceptance
 example : dfaConfinementCheck 1 defaultDfaQuery goodDfaCert = .ok :=
@@ -55,8 +55,7 @@ def emptyDfaCert : DfaConfinementCert where
   claimedDigest := 7
 
 example :
-    dfaConfinementCheck 1 defaultDfaQuery emptyDfaCert = .ok :=
-  rfl
+    dfaConfinementCheck 1 defaultDfaQuery emptyDfaCert = .ok := by exact id rfl
 
 theorem empty_injectionFree : InjectionFree [] :=
   (injectionFree_iff_dfaAccepts []).mpr rfl
@@ -75,24 +74,21 @@ def tamperedDigestDfaCert : DfaConfinementCert :=
 
 theorem tamperedDigestDfaCert_refused :
     dfaConfinementCheck 1 defaultDfaQuery tamperedDigestDfaCert =
-      .refused (.digestMismatch (runningDigest confinementDfa 7 ["hello", "world"]) 999) [] :=
-  rfl
+      .refused (.digestMismatch (runningDigest confinementDfa 7 ["hello", "world"]) 999) [] := by exact id rfl
 
 def nonInjectionFreeQuery : DfaConfinementQuery :=
   { defaultDfaQuery with requireInjectionFree := false }
 
 example :
     dfaConfinementCheck 1 nonInjectionFreeQuery badCert =
-      .refused (.notAccepted 1) [] :=
-  rfl
+      .refused (.notAccepted 1) [] := by exact id rfl
 
 def mismatchedExpectedStateQuery : DfaConfinementQuery :=
   { defaultDfaQuery with expectedFinalState := 1 }
 
 theorem finalStateMismatch_refused :
     dfaConfinementCheck 1 mismatchedExpectedStateQuery goodDfaCert =
-      .refused (.finalStateMismatch 0 1) [] :=
-  rfl
+      .refused (.expectedStateNotAccepting 1) [] := by exact id rfl
 
 -- Monotonicity & non-triviality witnesses from `dfaFormat`
 example {g : Nat} (h : 1 ≤ g) :
@@ -125,10 +121,10 @@ def brokenCompressDigest (_ _ : Nat) : Nat := 999
 /-! ## 2. Pillar B Tests: $O(\text{tokens})$ Compact Pushdown CFG Replay Certificate -/
 
 -- Format metadata checks
-example : cfgCompactFormat.name = "cfg-compact" := rfl
-example : cfgCompactFormat.version = "1" := rfl
-example : cfgCompactFormat.regime = .decidable := rfl
-example : cfgCompactFormat.trust = .kernel := rfl
+example : cfgCompactFormat.name = "cfg-compact" := by exact id rfl
+example : cfgCompactFormat.version = "1" := by exact id rfl
+example : cfgCompactFormat.regime = .decidable := by exact id rfl
+example : cfgCompactFormat.trust = .kernel := by exact id rfl
 
 -- Positive certificate acceptance & soundness bridge
 example : cfgCompactCheck 1 sampleCfgQuery goodCfgCert = .ok :=
@@ -151,8 +147,7 @@ def nestedCfgCert : CfgCompactCert where
   rules := [rEnvelope, rArray, rArray, rString]
 
 theorem nestedCfgCert_accepted :
-    cfgCompactCheck 1 nestedCfgQuery nestedCfgCert = .ok :=
-  rfl
+    cfgCompactCheck 1 nestedCfgQuery nestedCfgCert = .ok := by exact id rfl
 
 -- Negative edge cases: missing rule, terminal mismatch, LHS mismatch, unknown rule, unconsumed input, unconsumed rules
 example : cfgCompactCheck 1 sampleCfgQuery badCfgCert =
@@ -165,16 +160,14 @@ def terminalMismatchCfgQuery : CfgCompactQuery where
 
 example :
     cfgCompactCheck 1 terminalMismatchCfgQuery goodCfgCert =
-      .refused (.terminalMismatch "\"ok\"" "{{") [] :=
-  rfl
+      .refused (.terminalMismatch "\"ok\"" "{{") [] := by exact id rfl
 
 def lhsMismatchCfgCert : CfgCompactCert where
   rules := [rArray]
 
 example :
     cfgCompactCheck 1 sampleCfgQuery lhsMismatchCfgCert =
-      .refused (.lhsMismatch "S" "Val") [] :=
-  rfl
+      .refused (.lhsMismatch "S" "Val") [] := by exact id rfl
 
 def forgedRule : CfgRule :=
   { lhs := "S", rhs := [.terminal "{{"] }
@@ -184,8 +177,7 @@ def unknownRuleCfgCert : CfgCompactCert where
 
 example :
     cfgCompactCheck 1 sampleCfgQuery unknownRuleCfgCert =
-      .refused (.unknownRule forgedRule) [] :=
-  rfl
+      .refused (.unknownRule forgedRule) [] := by exact id rfl
 
 def unconsumedInputCfgQuery : CfgCompactQuery where
   grammar := transcriptCfg
@@ -193,16 +185,14 @@ def unconsumedInputCfgQuery : CfgCompactQuery where
 
 example :
     cfgCompactCheck 1 unconsumedInputCfgQuery goodCfgCert =
-      .refused (.unconsumedInput ["extra"]) [] :=
-  rfl
+      .refused (.unconsumedInput ["extra"]) [] := by exact id rfl
 
 def unconsumedRulesCfgCert : CfgCompactCert where
   rules := [rEnvelope, rArray, rString, rString]
 
 theorem unconsumedRulesCfg_refused :
     cfgCompactCheck 1 sampleCfgQuery unconsumedRulesCfgCert =
-      .refused (.unconsumedRules 1) [] :=
-  rfl
+      .refused (.unconsumedRules 1) [] := by exact id rfl
 
 -- Pillar B `#tooth` mutation tests:
 -- Mutation 1: Emptying grammar rules breaks `goodCfgCert_accepted`.
@@ -260,8 +250,7 @@ def roleHeaderInjectionBinding : String → List String
   | _ => []
 
 example :
-    allSlotsCleanB roleHeaderInjectionBinding systemPromptTemplate = false :=
-  rfl
+    allSlotsCleanB roleHeaderInjectionBinding systemPromptTemplate = false := by exact id rfl
 
 theorem roleHeaderInjection_breaks_confinement :
     controlTokens (renderPrompt roleHeaderInjectionBinding systemPromptTemplate) ≠
@@ -316,10 +305,10 @@ def brokenControlTokens (tokens : List String) : List String := tokens
 /-! ## 4. Pillar D Tests: `dclutch` Hoard Complete-Set & Joint KKT Clearing Judge -/
 
 -- Format metadata checks
-example : dclutchHoardFormat.name = "dclutch-hoard-clearing" := rfl
-example : dclutchHoardFormat.version = "1" := rfl
-example : dclutchHoardFormat.regime = .decidable := rfl
-example : dclutchHoardFormat.trust = .kernel := rfl
+example : dclutchHoardFormat.name = "dclutch-hoard-clearing" := by exact id rfl
+example : dclutchHoardFormat.version = "1" := by exact id rfl
+example : dclutchHoardFormat.regime = .decidable := by exact id rfl
+example : dclutchHoardFormat.trust = .kernel := by exact id rfl
 
 -- Positive certificate acceptance & soundness bridge
 example : dclutchHoardCheck 1 sampleHoardState goodHoardClearingCert = .ok :=
@@ -358,12 +347,10 @@ def threeOutcomeMintCert : JointClearingCert where
   sets := 2
 
 example :
-    dclutchHoardCheck 1 threeOutcomeHoardState threeOutcomeMintCert = .ok :=
-  rfl
+    dclutchHoardCheck 1 threeOutcomeHoardState threeOutcomeMintCert = .ok := by exact id rfl
 
 theorem threeOutcomeMintCert_quote_funds_sets :
-    collectedQuote threeOutcomeMintCert threeOutcomeMintCert.fills = 200 :=
-  rfl
+    collectedQuote threeOutcomeMintCert threeOutcomeMintCert.fills = 200 := by exact id rfl
 
 -- Joint merge clearing certificate (`sets = -1`, burning 1 complete set from `sampleHoardState`)
 def mkOutcomeSell (id outcome qty : Nat) (minCredit : Int) (width : Nat) : JointOrder where
@@ -384,8 +371,7 @@ def goodHoardMergeCert : JointClearingCert where
   sets := -1
 
 theorem goodHoardMergeCert_accepted :
-    dclutchHoardCheck 1 sampleHoardState goodHoardMergeCert = .ok :=
-  rfl
+    dclutchHoardCheck 1 sampleHoardState goodHoardMergeCert = .ok := by exact id rfl
 
 -- Negative / refusal edge cases:
 -- 1. Off-simplex prices (`[50, 40]`, sum = 90 ≠ 100)
@@ -401,8 +387,7 @@ def undercollateralizedHoardState : HoardMarketState where
 
 theorem undercollateralizedHoardState_refused :
     dclutchHoardCheck 1 undercollateralizedHoardState goodHoardClearingCert =
-      .refused .hoardInvariantViolated [] :=
-  rfl
+      .refused .hoardInvariantViolated [] := by exact id rfl
 
 -- 3. Excessive merge (`sets = -20` when `hoard = 10`)
 def excessiveMergeCert : JointClearingCert :=
@@ -410,8 +395,7 @@ def excessiveMergeCert : JointClearingCert :=
 
 theorem excessiveMergeCert_refused :
     dclutchHoardCheck 1 sampleHoardState excessiveMergeCert =
-      .refused (.insufficientHoardForMerge 20 10) [] :=
-  rfl
+      .refused (.insufficientHoardForMerge 20 10) [] := by exact id rfl
 
 -- 4. Limit price violated (`perLotDebit = 50 > limit = 40`)
 def limitViolatedCert : JointClearingCert where
@@ -426,8 +410,7 @@ def limitViolatedCert : JointClearingCert where
 
 theorem limitViolatedCert_refused :
     dclutchHoardCheck 1 sampleHoardState limitViolatedCert =
-      .refused .invalidKktClearing [] :=
-  rfl
+      .refused .invalidKktClearing [] := by exact id rfl
 
 -- 5. Duplicate order IDs in fills
 def duplicateOrderIdCert : JointClearingCert where
@@ -442,8 +425,7 @@ def duplicateOrderIdCert : JointClearingCert where
 
 theorem duplicateOrderIdCert_refused :
     dclutchHoardCheck 1 sampleHoardState duplicateOrderIdCert =
-      .refused .invalidKktClearing [] :=
-  rfl
+      .refused .invalidKktClearing [] := by exact id rfl
 
 -- Pillar D `#tooth` mutation tests:
 -- Mutation 1: Falsifying `hoardCollateralValid` breaks `goodHoardClearingCert_accepted`.
@@ -475,13 +457,13 @@ theorem runningDigest_distinct_equal_length :
   decide
 
 -- 5.2 `TableDfa.classify`, `TableDfa.complement`, `brzozowskiAccepts_singleton_eq`, and `buildDfaTrace_valid`
-example : confinementDfa.classify ["hello", "world"] = 0 := rfl
+example : confinementDfa.classify ["hello", "world"] = 0 := by exact id rfl
 example : brzozowskiAccepts confinementDfa [0] ["hello", "world"] =
     dfaAccepts confinementDfa ["hello", "world"] :=
   brzozowskiAccepts_singleton_eq confinementDfa ["hello", "world"]
 
-example : dfaAccepts (confinementDfa.complement 2) ["hello", "{{"] = true := rfl
-example : dfaAccepts (confinementDfa.complement 2) ["hello", "world"] = false := rfl
+example : dfaAccepts (confinementDfa.complement 2) ["hello", "{{"] = true := by exact id rfl
+example : dfaAccepts (confinementDfa.complement 2) ["hello", "world"] = false := by exact id rfl
 
 example : verifyDfaTraceRows confinementDfa 7 0 ["hello", "world"]
     (buildDfaTrace confinementDfa 7 ["hello", "world"]) = true :=
@@ -580,8 +562,7 @@ def fourOutcomeMarginalCert : JointClearingCert where
   sets := 2
 
 theorem fourOutcomeMarginalCert_accepted :
-    dclutchHoardCheck 1 fourOutcomeHoardState fourOutcomeMarginalCert = .ok :=
-  rfl
+    dclutchHoardCheck 1 fourOutcomeHoardState fourOutcomeMarginalCert = .ok := by exact id rfl
 
 -- KKT surplus optimality on `fourOutcomeMarginalCert`
 example (f : JointFill) (hf : f ∈ fourOutcomeMarginalCert.fills) (lots' : Nat)
@@ -603,6 +584,42 @@ example (o : Order) :
       (clearingOrderToJointOrder 1 o).limit :=
   clearingOrder_crosses_iff_debit_le_limit 1 50 50 o
 
+
+/-! Object-level refusals exclude every certificate; ordinary certificate failures do not. -/
+theorem impossibleDfa_refutes (c : DfaConfinementCert) :
+    ¬ DfaConfinementMeaning mismatchedExpectedStateQuery c :=
+  dfaConfinementJudge.refuted (by exact id rfl :
+    dfaConfinementCheck 1 mismatchedExpectedStateQuery goodDfaCert =
+      .refused (.expectedStateNotAccepting 1) []) rfl c
+
+-- A reachable accepting target may still mismatch this particular certificate.
+example : dfaConfinementCheck 1
+    { mismatchedExpectedStateQuery with dfa := { confinementDfa with accepting := [0, 1] } }
+    goodDfaCert = .refused (.finalStateMismatch 0 1) [] := by exact id rfl
+example : dfaConfinementJudge.refutes (.finalStateMismatch 0 1) = false := by exact id rfl
+example : dfaConfinementJudge.refutes (.notAccepted 1) = false := by exact id rfl
+example : dfaConfinementJudge.refutes (.digestMismatch 0 1) = false := by exact id rfl
+example : dfaConfinementJudge.refutes (.injectionDetected "{{") = false := by exact id rfl
+example (q : DfaConfinementQuery) : dfaConfinementJudge.Fragment q := trivial
+
+def missingStartQuery : CfgCompactQuery :=
+  { grammar := { start := "S", rules := [rArray, rString] }, input := [] }
+
+theorem missingStart_refused : cfgCompactCheck 0 missingStartQuery goodCfgCert =
+    .refused (.noStartProduction "S") [] := by exact id rfl
+
+theorem missingStart_refutes (c : CfgCompactCert) : ¬ CfgCompactMeaning missingStartQuery c :=
+  cfgCompactJudge.refuted missingStart_refused rfl c
+
+example : cfgCompactJudge.refutes (.missingRuleFor "S") = false := by exact id rfl
+example (q : CfgCompactQuery) : cfgCompactJudge.Fragment q := trivial
+
+def brokenVerifyDfaConfinement (_ : DfaConfinementQuery) (_ : DfaConfinementCert) :
+    Except DfaRefusal Unit := .ok ()
+#tooth Obend.Judge.verifyDfaConfinement_iff
+  by mutation Obend.Judge.verifyDfaConfinement := brokenVerifyDfaConfinement
+#tooth missingStart_refused
+  by mutation Obend.Judge.cfgCompactCheck := fun _ _ _ => .ok
 
 /-! ## 6. Axiom Audit (`0 sorryAx`, `0 Classical.choice`) -/
 

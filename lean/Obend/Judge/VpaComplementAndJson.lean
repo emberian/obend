@@ -1,69 +1,51 @@
 module
 /-
-# Obend.Judge.VpaComplementAndJson — Boolean-closed visibly pushdown policies, the full JSON
-grammar under redaction, and Merkle inclusion of a single span
-
-The second and third parts close the two seams `Obend.Vault.Lsafe` names in its header: its
-skeleton machine is not a JSON validator, and a positive query has no inclusion path for one edge.
+# Obend.Judge.VpaComplementAndJson — Boolean-closed visibly pushdown policies, the JSON grammar
+under redaction, Merkle inclusion of a single span, and the span-disclosure judge
 
 **§1 Visibly pushdown automata (Alur and Madhusudan, STOC 2004).** The alphabet is tagged
-`call s`, `ret s`, `int a`, with a bracket sort `s` on calls and returns. A `DetVpa` has total
-transition functions; a call pushes its stack symbol with the call's sort, a return pops only a
-symbol pushed under the same sort (`sortMatch`), and an unmatched or mismatched return is the
-sink (`none`). Whether a run reaches the sink, and the sorts on its stack, depend on the word
-alone (`runFrom_skel`), which is why products are synchronized: `accepts_intersect` and
-`accepts_union` hold for every word, and `accepts_complement` on every well-matched word (off
-them both automata reject, since acceptance needs an empty stack: `accepts_wellMatched`).
-
-Emptiness is certified by a summary relation `sum ⊆ Q × Q` of (entry state, state) pairs
-closed under internal steps, under calls (the call target is an entry), and under returns
-through every summary of the call target. `verifyVpaEmpty_sound` is by an invariant on
-configurations (`Inv`): the state is summarized from an entry whose return chain down the stack
-stays inside the relation. `verifyVpaContainment` checks emptiness of `M₁ ∩ ¬M₂`;
-`verifyVpaContainment_sound` is `L(M₁) ⊆ L(M₂)`. `vpaContainmentJudge` means that inclusion; it
-refuses with a separating word found by bounded search, and its fragment is the queries that
-have a closed summary whose entry row at the initial state is exact.
+`call s`, `ret s`, `int a`. A `DetVpa` has total transitions; a return pops only a symbol pushed
+under its own sort, and an unmatched return is the sink. Liveness and the stack's sorts depend on
+the word alone (`runFrom_skel`), so products are synchronized: `accepts_intersect` and
+`accepts_union` on every word, `accepts_complement` on every well-matched word. Emptiness is
+certified by a summary relation closed under internal steps, calls and returns
+(`verifyVpaEmpty_sound`); `verifyVpaContainment_sound` is `L(M₁) ⊆ L(M₂)`. `vpaContainmentJudge`
+means that inclusion, refuses with a separating word, and is complete on queries with a closed
+summary whose initial row is exact.
 
 **§2 The JSON grammar (RFC 8259) in one pass.** `stepJson` reads one byte: values, the six
 structural characters in their places, strings with the eight short escapes and `\uXXXX` and no
-byte below `0x20`, numbers, the three literals, whitespace. A key may not contain a backslash,
-so two keys equal as bytes are equal as strings, and each object's keys are checked pairwise
-distinct when it closes (`json_object_keys_nodup`). `runFullJsonGrammar` is the cursor run over
-a `ByteArray`, equal to the list fold (`jsonRun_eq`).
+byte below `0x20`, numbers, the three literals, whitespace; a key holds no backslash and each
+object's keys are pairwise distinct (`json_object_keys_nodup`). `checkJsonRedaction doc l r mask`
+accepts a span that starts in a value string outside any escape, stays inside that string, ends in
+the starting machine state, and a mask of printable bytes without `"` or `\`.
+`jsonRedaction_preserves_valid_parse_and_keys`: the redacted document has the original's verdict,
+key sets and machine state at every cut after the span. `jsonRedaction_confinement`: two accepted
+redactions of documents that agree outside their spans give the same bytes and the same parse.
 
-`checkJsonRedaction doc l r mask` accepts a span that starts in a value string outside any
-escape, stays inside that string at every byte, returns to the starting machine state, and a
-mask of printable bytes without `"` or `\`. `jsonRedaction_preserves_valid_parse_and_keys`: the
-redacted document has the original's verdict and object key sets, and the same machine state at
-every cut after the span. `jsonRedaction_confinement`: two documents that agree outside their
-spans redact to the same bytes.
+**§3 Merkle inclusion of one span.** Leaves are `0x00 ‖ be8(len) ‖ span`, nodes `0x01 ‖ l ‖ r`,
+the root digest `0x02 ‖ leaf(count) ‖ top`, all under one customization string given as a
+parameter; an odd node is promoted. `rootHash_binds`: the 32-byte `top` binds the leaf count.
+`verifySpanMerkleInclusion_complete`, and `verifySpanMerkleInclusion_top_binding`: a span that
+verifies against a `top` is the span at that index, or two different messages have one digest.
 
-`JVal` is the value tree; `jsonToCbor` maps it into `Obend.Codec.DetCbor` and `jsonCborCommit`
-commits to it only when the image is canonical (so object keys are strictly ascending, hence
-unique: `jsonCborCommit_keys_nodup`). `jsonCborCommit_binding`: one digest, one value, or a
-collision.
-
-**§3 Merkle inclusion of one span.** Leaves are `0x00 ‖ be8(len) ‖ span`, nodes are
-`0x01 ‖ left ‖ right`, under one customization string; an odd node is promoted. The root records
-the leaf count. `verifySpanMerkleInclusion` climbs `⌈log₂ n⌉` siblings.
-`verifySpanMerkleInclusion_complete` and `verifySpanMerkleInclusion_binding` (the span is the one
-at that index, or two different messages have one digest); `leaf_as_node_collision` is the
-domain separation.
+**§4** `jsonSpanJudge` / `vpa-json-span@1`: a disclosed document is the splice, parses as the
+original, and the hidden span opens to the certificate's root.
 
 Not here: a declarative RFC 8259 grammar with a soundness theorem for `stepJson` (the machine is
-the definition; its rejections are exercised by vectors); a parser from bytes to `JVal`; UTF-8
-validity of strings in the grammar (the commitment checks it).
+the definition; its rejections are exercised by vectors); a parser from bytes to a value tree
+(`Obend.Vault.Lsafe` commits to one); UTF-8 validity of strings.
 -/
 public import Obend.Judge.Class
-public import Obend.Vault.Lsafe
+public import Obend.Judge.SymbolicRegexBisim
 
 public section
 
 namespace Obend.Judge.VpaJson
 
 open Obend.Codec.DetCbor
-open Obend.Vault.Lsafe (Hasher cshakeHasher HashCollision keysDistinctB keysDistinctB_sound
-  spliceByteArray spliceByteArray_toList)
+open Obend.Judge.Commit (Hasher cshakeHasher HashCollision keysDistinctB keysDistinctB_sound
+  spliceByteArray spliceByteArray_toList hexOf unhex natField countSpan countSpan_injective)
 
 set_option autoImplicit false
 
@@ -870,35 +852,13 @@ theorem startValue_closed (st : JState) (b : UInt8) : ClosedStep st (startValue 
 
 theorem stepJson_closed (st : JState) (b : UInt8) : ClosedStep st (stepJson st b) := by
   unfold stepJson
-  split
-  · split
-    · exact Or.inl rfl
-    · split <;> exact Or.inl rfl
-    · split <;> exact Or.inl rfl
-  · split
-    · exact Or.inl rfl
-    · split
-      · exact closeArray_closed st
-      · exact startValue_closed st b
-  · split
-    · exact Or.inl rfl
-    · split
-      · exact Or.inl rfl
-      · split
-        · exact closeObject_closed st
-        · exact Or.inl rfl
-  · split
-    · exact Or.inl rfl
-    · split <;> exact Or.inl rfl
-  · exact afterValue_closed st b
-  · split
-    · exact Or.inl rfl
-    · split
-      · exact afterValue_closed st b
-      · exact Or.inl rfl
-  · split
-    · split <;> exact Or.inl rfl
-    · exact Or.inl rfl
+  repeat' split
+  all_goals first
+    | exact Or.inl rfl
+    | exact closeArray_closed st
+    | exact closeObject_closed st
+    | exact afterValue_closed st b
+    | exact startValue_closed st b
 
 theorem specRunJson_closed_nodup : ∀ (bs : List UInt8) (st : JState),
     (∀ ks ∈ st.closed, ks.Nodup) → ∀ ks ∈ (specRunJson bs st).closed, ks.Nodup
@@ -955,10 +915,6 @@ def checkJsonRedaction (doc : ByteArray) (l r : Nat) (mask : ByteArray) : Bool :
       some (jsonStateAt doc l)) &&
     mask.data.toList.all isSafeMaskByte
 
-/-- **Redact**: replace the span by the mask. -/
-def redactJsonSpan (doc : ByteArray) (l r : Nat) (mask : ByteArray) : ByteArray :=
-  spliceByteArray doc l r mask
-
 /-- A safe byte inside a value string leaves the whole machine state unchanged. -/
 theorem stepJson_safe {st : JState} {b : UInt8} (hm : st.mode = .str false .normal)
     (hb : isSafeMaskByte b = true) : stepJson st b = st := by
@@ -1002,149 +958,41 @@ theorem redaction_core {doc : ByteArray} {l r : Nat} {mask : ByteArray}
   rw [hsplit, specRunJson_append, specRunJson_append, specRunJson_append, specRunJson_append,
     specRunJson_safe hmode _ hmask, walkInterior_run _ _ _ hwalk]
 
+/-- After an accepted redaction the whole run ends in the original's final state. -/
+theorem jsonRedaction_run {doc : ByteArray} {l r : Nat} {mask : ByteArray}
+    (h : checkJsonRedaction doc l r mask = true) :
+    jsonRun (spliceByteArray doc l r mask) = jsonRun doc := by
+  rw [jsonRun_eq, jsonRun_eq, spliceByteArray_toList, redaction_core h, List.take_append_drop]
+
 /-- **Redaction preserves the parse.** After an accepted redaction the document has the
 original's grammar verdict and the original's object key sets, and at every cut `j` bytes after
 the mask the machine (bracket stack included) is in the state the original was in `j` bytes
 after the span. -/
 theorem jsonRedaction_preserves_valid_parse_and_keys {doc : ByteArray} {l r : Nat}
     {mask : ByteArray} (h : checkJsonRedaction doc l r mask = true) :
-    runFullJsonGrammar (redactJsonSpan doc l r mask) = runFullJsonGrammar doc ∧
-      jsonObjectKeys (redactJsonSpan doc l r mask) = jsonObjectKeys doc ∧
+    runFullJsonGrammar (spliceByteArray doc l r mask) = runFullJsonGrammar doc ∧
+      jsonObjectKeys (spliceByteArray doc l r mask) = jsonObjectKeys doc ∧
       ∀ j, specRunJson (doc.data.toList.take l ++ mask.data.toList ++
           (doc.data.toList.drop r).take j) JState.init = jsonStateAt doc (r + j) := by
-  have hrun : jsonRun (redactJsonSpan doc l r mask) = jsonRun doc := by
-    rw [jsonRun_eq, jsonRun_eq, redactJsonSpan, spliceByteArray_toList, redaction_core h,
-      List.take_append_drop]
+  have hrun := jsonRedaction_run h
   refine ⟨by unfold runFullJsonGrammar; rw [hrun], by unfold jsonObjectKeys; rw [hrun], fun j => ?_⟩
   rw [redaction_core h, jsonStateAt_eq, List.take_add]
 
-/-- **Redaction confinement.** Two documents that agree before their spans and after them
-redact to the same bytes: the output is a function of the surroundings and the mask alone. -/
-theorem jsonRedaction_confinement {doc₁ doc₂ : ByteArray} {l r₁ r₂ : Nat} (mask : ByteArray)
+/-- **Redaction confinement.** Two documents whose redactions are both accepted and that agree
+outside their spans redact to the same bytes, so they have one final machine state, verdict and
+object key sets: what differs inside the spans reaches nothing the grammar reads. -/
+theorem jsonRedaction_confinement {doc₁ doc₂ : ByteArray} {l r₁ r₂ : Nat} {mask : ByteArray}
+    (h₁ : checkJsonRedaction doc₁ l r₁ mask = true) (h₂ : checkJsonRedaction doc₂ l r₂ mask = true)
     (hpre : doc₁.data.toList.take l = doc₂.data.toList.take l)
     (hpost : doc₁.data.toList.drop r₁ = doc₂.data.toList.drop r₂) :
-    redactJsonSpan doc₁ l r₁ mask = redactJsonSpan doc₂ l r₂ mask := by
-  apply byteArray_eq_of_toList
-  rw [redactJsonSpan, redactJsonSpan, spliceByteArray_toList, spliceByteArray_toList, hpre, hpost]
-
-/-! ### The value tree and its canonical commitment -/
-
-/-- A JSON value: numbers keep their literal bytes, strings and keys their content bytes. -/
-inductive JVal where
-  | null
-  | bool (b : Bool)
-  | num (lit : ByteArray)
-  | str (s : ByteArray)
-  | arr (xs : List JVal)
-  | obj (kvs : List (ByteArray × JVal))
-
-mutual
-/-- The image in deterministic CBOR: `null ↦ 0`, a number ↦ its literal as a byte string, a
-string ↦ text, an object ↦ a map with text keys in the order given. -/
-def jsonToCbor : JVal → CborVal
-  | .null => .uint 0
-  | .bool b => .simpleBool b
-  | .num lit => .bytes lit
-  | .str s => .text s
-  | .arr xs => .array (jsonListToCbor xs)
-  | .obj kvs => .map (jsonMembersToCbor kvs)
-def jsonListToCbor : List JVal → List CborVal
-  | [] => []
-  | x :: xs => jsonToCbor x :: jsonListToCbor xs
-def jsonMembersToCbor : List (ByteArray × JVal) → List (CborVal × CborVal)
-  | [] => []
-  | kv :: rest => (.text kv.1, jsonToCbor kv.2) :: jsonMembersToCbor rest
-end
-
-mutual
-/-- The inverse reading, where there is one. -/
-def cborToJson : CborVal → Option JVal
-  | .uint n => if n = 0 then some .null else none
-  | .nint _ => none
-  | .simpleBool b => some (.bool b)
-  | .bytes lit => some (.num lit)
-  | .text s => some (.str s)
-  | .array xs => (cborListToJson xs).map .arr
-  | .map kvs => (cborMembersToJson kvs).map .obj
-def cborListToJson : List CborVal → Option (List JVal)
-  | [] => some []
-  | x :: xs =>
-    match cborToJson x, cborListToJson xs with
-    | some v, some vs => some (v :: vs)
-    | _, _ => none
-def cborMembersToJson : List (CborVal × CborVal) → Option (List (ByteArray × JVal))
-  | [] => some []
-  | (k, v) :: rest =>
-    match k, cborToJson v, cborMembersToJson rest with
-    | .text s, some jv, some r => some ((s, jv) :: r)
-    | _, _, _ => none
-end
-
-mutual
-theorem cborToJson_jsonToCbor : ∀ v : JVal, cborToJson (jsonToCbor v) = some v
-  | .null => by simp [jsonToCbor, cborToJson]
-  | .bool _ => by simp [jsonToCbor, cborToJson]
-  | .num _ => by simp [jsonToCbor, cborToJson]
-  | .str _ => by simp [jsonToCbor, cborToJson]
-  | .arr xs => by simp [jsonToCbor, cborToJson, cborListToJson_jsonListToCbor xs]
-  | .obj kvs => by simp [jsonToCbor, cborToJson, cborMembersToJson_jsonMembersToCbor kvs]
-theorem cborListToJson_jsonListToCbor : ∀ xs : List JVal,
-    cborListToJson (jsonListToCbor xs) = some xs
-  | [] => by simp [jsonListToCbor, cborListToJson]
-  | x :: xs => by
-    simp [jsonListToCbor, cborListToJson, cborToJson_jsonToCbor x, cborListToJson_jsonListToCbor xs]
-theorem cborMembersToJson_jsonMembersToCbor : ∀ kvs : List (ByteArray × JVal),
-    cborMembersToJson (jsonMembersToCbor kvs) = some kvs
-  | [] => by simp [jsonMembersToCbor, cborMembersToJson]
-  | kv :: rest => by
-    simp [jsonMembersToCbor, cborMembersToJson, cborToJson_jsonToCbor kv.2,
-      cborMembersToJson_jsonMembersToCbor rest]
-end
-
-theorem jsonToCbor_injective {a b : JVal} (h : jsonToCbor a = jsonToCbor b) : a = b :=
-  Option.some.inj (by rw [← cborToJson_jsonToCbor a, ← cborToJson_jsonToCbor b, h])
-
-/-- The customization string of value commitments. -/
-def jsonTag : String := "obend.judge.json.cbor.v1"
-
-/-- **The commitment of a value**: the digest of its canonical CBOR, when the image is canonical
-(strings valid UTF-8, object keys strictly ascending by encoding). -/
-def jsonCborCommit (H : Hasher) (v : JVal) : Option ByteArray :=
-  if CanonicalCbor (jsonToCbor v) then some (H.hash jsonTag (encodeDetCbor (jsonToCbor v))) else none
-
-theorem jsonCborCommit_canonical {H : Hasher} {v : JVal} {d : ByteArray}
-    (h : jsonCborCommit H v = some d) :
-    CanonicalCbor (jsonToCbor v) = true ∧ d = H.hash jsonTag (encodeDetCbor (jsonToCbor v)) := by
-  unfold jsonCborCommit at h
-  split at h
-  · rename_i hc; exact ⟨hc, (Option.some.inj h).symm⟩
-  · cases h
-
-/-- **Value commitments bind**: two values with one commitment are equal, or their canonical
-encodings are two different messages with one digest. -/
-theorem jsonCborCommit_binding (H : Hasher) {v₁ v₂ : JVal} {d : ByteArray}
-    (h₁ : jsonCborCommit H v₁ = some d) (h₂ : jsonCborCommit H v₂ = some d) :
-    v₁ = v₂ ∨ ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash jsonTag m₁ = H.hash jsonTag m₂ := by
-  obtain ⟨c1, e1⟩ := jsonCborCommit_canonical h₁
-  obtain ⟨c2, e2⟩ := jsonCborCommit_canonical h₂
-  by_cases he : encodeDetCbor (jsonToCbor v₁) = encodeDetCbor (jsonToCbor v₂)
-  · exact Or.inl (jsonToCbor_injective (encodeDetCbor_injective_canonical _ _ c1 c2 he))
-  · exact Or.inr ⟨_, _, he, e1.symm.trans e2⟩
-
-theorem jsonMembersToCbor_keys : ∀ kvs : List (ByteArray × JVal),
-    (jsonMembersToCbor kvs).map (·.1) = kvs.map fun kv => CborVal.text kv.1
-  | [] => by simp [jsonMembersToCbor]
-  | kv :: rest => by simp [jsonMembersToCbor, jsonMembersToCbor_keys rest]
-
-/-- **A committed object has unique keys.** -/
-theorem jsonCborCommit_keys_nodup {H : Hasher} {kvs : List (ByteArray × JVal)} {d : ByteArray}
-    (h : jsonCborCommit H (.obj kvs) = some d) : (kvs.map (·.1)).Nodup := by
-  have hc := (jsonCborCommit_canonical h).1
-  simp only [jsonToCbor] at hc
-  have hn := canonicalMap_keys_nodup hc
-  rw [jsonMembersToCbor_keys, List.Nodup, List.pairwise_map] at hn
-  rw [List.Nodup, List.pairwise_map]
-  exact hn.imp fun hne heq => hne (by rw [heq])
+    spliceByteArray doc₁ l r₁ mask = spliceByteArray doc₂ l r₂ mask ∧ jsonRun doc₁ = jsonRun doc₂ ∧
+      runFullJsonGrammar doc₁ = runFullJsonGrammar doc₂ ∧ jsonObjectKeys doc₁ = jsonObjectKeys doc₂ := by
+  have he : spliceByteArray doc₁ l r₁ mask = spliceByteArray doc₂ l r₂ mask := by
+    apply byteArray_eq_of_toList
+    rw [spliceByteArray_toList, spliceByteArray_toList, hpre, hpost]
+  have hrun : jsonRun doc₁ = jsonRun doc₂ := by
+    rw [← jsonRedaction_run h₁, ← jsonRedaction_run h₂, he]
+  exact ⟨he, hrun, by unfold runFullJsonGrammar; rw [hrun], by unfold jsonObjectKeys; rw [hrun]⟩
 
 /-! ## 3. Merkle inclusion of a single span -/
 
@@ -1153,15 +1001,19 @@ def spanTag : String := "obend.judge.span.merkle.v1"
 /-- The first bytes of a leaf message and of a node message. -/
 def leafPrefix : UInt8 := 0x00
 def nodePrefix : UInt8 := 0x01
+def rootPrefix : UInt8 := 0x02
 
 /-- A leaf message: the prefix, the span's length in eight bytes, the span. -/
 def leafMsg (span : ByteArray) : ByteArray :=
   ⟨(leafPrefix :: (beNat 8 span.size ++ span.data.toList)).toArray⟩
+def pairMsg (pre : UInt8) (l r : ByteArray) : ByteArray :=
+  ⟨(pre :: (l.data.toList ++ r.data.toList)).toArray⟩
 /-- A node message: the prefix and the two children. -/
-def nodeMsg (l r : ByteArray) : ByteArray := ⟨(nodePrefix :: (l.data.toList ++ r.data.toList)).toArray⟩
+def nodeMsg (l r : ByteArray) : ByteArray := pairMsg nodePrefix l r
+def rootMsg (countDigest top : ByteArray) : ByteArray := pairMsg rootPrefix countDigest top
 
-def leafHash (H : Hasher) (span : ByteArray) : ByteArray := H.hash spanTag (leafMsg span)
-def nodeHash (H : Hasher) (l r : ByteArray) : ByteArray := H.hash spanTag (nodeMsg l r)
+def leafHash (H : Hasher) (tag : String) (span : ByteArray) : ByteArray := H.hash tag (leafMsg span)
+def nodeHash (H : Hasher) (tag : String) (l r : ByteArray) : ByteArray := H.hash tag (nodeMsg l r)
 
 theorem leafMsg_injective {a b : ByteArray} (h : leafMsg a = leafMsg b) : a = b := by
   have hl := congrArg (fun x : ByteArray => x.data.toList) h
@@ -1169,60 +1021,84 @@ theorem leafMsg_injective {a b : ByteArray} (h : leafMsg a = leafMsg b) : a = b 
   exact byteArray_eq_of_toList
     (List.append_inj hl (by rw [beNat_length, beNat_length])).2
 
-theorem nodeMsg_injective {a b c d : ByteArray} (h : nodeMsg a b = nodeMsg c d)
+theorem pairMsg_injective {pre : UInt8} {a b c d : ByteArray} (h : pairMsg pre a b = pairMsg pre c d)
     (hs : a.size = c.size) : a = c ∧ b = d := by
   have hl := congrArg (fun x : ByteArray => x.data.toList) h
-  simp only [nodeMsg, List.cons.injEq, true_and] at hl
+  simp only [pairMsg, List.cons.injEq, true_and] at hl
   obtain ⟨h1, h2⟩ := List.append_inj hl (by rw [toList_length, toList_length, hs])
   exact ⟨byteArray_eq_of_toList h1, byteArray_eq_of_toList h2⟩
+
+theorem nodeMsg_injective {a b c d : ByteArray} (h : nodeMsg a b = nodeMsg c d)
+    (hs : a.size = c.size) : a = c ∧ b = d := pairMsg_injective h hs
 
 /-- **Domain separation**: no leaf message is a node message. -/
 theorem leafMsg_ne_nodeMsg (span l r : ByteArray) : leafMsg span ≠ nodeMsg l r := by
   intro h
   have hl := congrArg (fun x : ByteArray => x.data.toList.head?) h
-  simp [leafMsg, nodeMsg, leafPrefix, nodePrefix] at hl
+  simp [leafMsg, nodeMsg, pairMsg, leafPrefix, nodePrefix] at hl
 
 /-- A span whose leaf digest is a node digest gives two different messages with one digest. -/
-theorem leaf_as_node_collision (H : Hasher) {span l r : ByteArray}
-    (h : leafHash H span = nodeHash H l r) :
-    ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash spanTag m₁ = H.hash spanTag m₂ :=
+theorem leaf_as_node_collision (H : Hasher) (tag : String) {span l r : ByteArray}
+    (h : leafHash H tag span = nodeHash H tag l r) :
+    ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash tag m₁ = H.hash tag m₂ :=
   ⟨leafMsg span, nodeMsg l r, leafMsg_ne_nodeMsg span l r, h⟩
 
 /-- One level up: adjacent pairs hashed, an odd last node promoted. -/
-def pairUp (H : Hasher) : List ByteArray → List ByteArray
-  | a :: b :: rest => nodeHash H a b :: pairUp H rest
+def pairUp (H : Hasher) (tag : String) : List ByteArray → List ByteArray
+  | a :: b :: rest => nodeHash H tag a b :: pairUp H tag rest
   | [a] => [a]
   | [] => []
 
 /-- The top of the tree over a level, at a fuel. -/
-def treeTop (H : Hasher) : Nat → List ByteArray → ByteArray
+def treeTop (H : Hasher) (tag : String) : Nat → List ByteArray → ByteArray
   | 0, lvl => lvl.headD ByteArray.empty
-  | f + 1, lvl => if lvl.length ≤ 1 then lvl.headD ByteArray.empty else treeTop H f (pairUp H lvl)
+  | f + 1, lvl => if lvl.length ≤ 1 then lvl.headD ByteArray.empty else treeTop H tag f (pairUp H tag lvl)
 
-/-- The committed root: the leaf count and the 32-byte top. -/
+/-- The committed root: the leaf count and the 32-byte top (the digest of count and tree top). -/
 structure SpanRoot where
   count : Nat
   top : ByteArray
   deriving DecidableEq
 
+def rootHash (H : Hasher) (tag : String) (count : Nat) (treeTop : ByteArray) : ByteArray :=
+  H.hash tag (rootMsg (leafHash H tag (countSpan count)) treeTop)
+
+/-- **The root binds the count**: one root digest, one count and one tree top, or a collision. -/
+theorem rootHash_binds (H : Hasher) (tag : String) {n₁ n₂ : Nat} {t₁ t₂ : ByteArray}
+    (h : rootHash H tag n₁ t₁ = rootHash H tag n₂ t₂) :
+    (n₁ = n₂ ∧ t₁ = t₂) ∨ ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash tag m₁ = H.hash tag m₂ := by
+  by_cases hm : rootMsg (leafHash H tag (countSpan n₁)) t₁ =
+      rootMsg (leafHash H tag (countSpan n₂)) t₂
+  · obtain ⟨hc, ht⟩ := pairMsg_injective hm ((H.size_eq _ _).trans (H.size_eq _ _).symm)
+    by_cases hl : leafMsg (countSpan n₁) = leafMsg (countSpan n₂)
+    · exact Or.inl ⟨countSpan_injective (leafMsg_injective hl), ht⟩
+    · exact Or.inr ⟨_, _, hl, hc⟩
+  · exact Or.inr ⟨_, _, hm, h⟩
+
 /-- **The root of a span set.** -/
-def spanMerkleRoot (H : Hasher) (spans : List ByteArray) : SpanRoot :=
-  ⟨spans.length, treeTop H spans.length (spans.map (leafHash H))⟩
+def spanMerkleRoot (H : Hasher) (tag : String) (spans : List ByteArray) : SpanRoot :=
+  ⟨spans.length, rootHash H tag spans.length (treeTop H tag spans.length (spans.map (leafHash H tag)))⟩
+
+/-- **Span roots of different lengths do not share a `top`**, short of a collision. -/
+theorem spanMerkleRoot_top_binds_count (H : Hasher) (tag : String) {s₁ s₂ : List ByteArray}
+    (h : (spanMerkleRoot H tag s₁).top = (spanMerkleRoot H tag s₂).top) :
+    s₁.length = s₂.length ∨ ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash tag m₁ = H.hash tag m₂ :=
+  (rootHash_binds H tag (n₁ := s₁.length) (n₂ := s₂.length) h).imp And.left id
 
 /-- Climb from a node at index `i` of a level of `n` nodes, consuming one sibling per level
 unless the node is a promoted last one. -/
-def climbSpan (H : Hasher) : Nat → Nat → Nat → ByteArray → List ByteArray → Option ByteArray
+def climbSpan (H : Hasher) (tag : String) : Nat → Nat → Nat → ByteArray → List ByteArray → Option ByteArray
   | 0, _, _, _, _ => none
   | f + 1, n, i, c, path =>
     if n ≤ 1 then (if path.isEmpty then some c else none)
-    else if i % 2 = 0 ∧ i + 1 = n then climbSpan H f ((n + 1) / 2) (i / 2) c path
+    else if i % 2 = 0 ∧ i + 1 = n then climbSpan H tag f ((n + 1) / 2) (i / 2) c path
     else
       match path with
       | [] => none
       | sib :: rest =>
         if sib.size = 32 then
-          climbSpan H f ((n + 1) / 2) (i / 2)
-            (if i % 2 = 0 then nodeHash H c sib else nodeHash H sib c) rest
+          climbSpan H tag f ((n + 1) / 2) (i / 2)
+            (if i % 2 = 0 then nodeHash H tag c sib else nodeHash H tag sib c) rest
         else none
 
 /-- An inclusion proof: the index and the siblings, leaf level first. -/
@@ -1230,39 +1106,39 @@ structure SpanProof where
   index : Nat
   siblings : List ByteArray
 
-/-- The climbed digest is the committed top. -/
-def topMatches (top computed : ByteArray) : Bool := decide (computed = top)
+def topMatches (H : Hasher) (tag : String) (root : SpanRoot) (computed : ByteArray) : Bool :=
+  decide (rootHash H tag root.count computed = root.top)
 
 /-- **Verify one span against a root.** -/
-def verifySpanMerkleInclusion (H : Hasher) (root : SpanRoot) (span : ByteArray) (p : SpanProof) :
+def verifySpanMerkleInclusion (H : Hasher) (tag : String) (root : SpanRoot) (span : ByteArray) (p : SpanProof) :
     Bool :=
   decide (p.index < root.count) &&
-    match climbSpan H root.count root.count p.index (leafHash H span) p.siblings with
-    | some c => topMatches root.top c
+    match climbSpan H tag root.count root.count p.index (leafHash H tag span) p.siblings with
+    | some c => topMatches H tag root c
     | none => false
 
-theorem pairUp_length (H : Hasher) : ∀ l : List ByteArray, (pairUp H l).length = (l.length + 1) / 2
+theorem pairUp_length (H : Hasher) (tag : String) : ∀ l : List ByteArray, (pairUp H tag l).length = (l.length + 1) / 2
   | [] => rfl
   | [_] => by simp [pairUp]
   | _ :: _ :: rest => by
-    simp only [pairUp, List.length_cons, pairUp_length H rest]
+    simp only [pairUp, List.length_cons, pairUp_length H tag rest]
     omega
 
-theorem pairUp_sizes (H : Hasher) : ∀ l : List ByteArray, (∀ y ∈ l, y.size = 32) →
-    ∀ y ∈ pairUp H l, y.size = 32
+theorem pairUp_sizes (H : Hasher) (tag : String) : ∀ l : List ByteArray, (∀ y ∈ l, y.size = 32) →
+    ∀ y ∈ pairUp H tag l, y.size = 32
   | [], _, _, hy => by cases hy
   | [a], h, y, hy => h y hy
   | a :: b :: rest, h, y, hy => by
     simp only [pairUp, List.mem_cons] at hy
     rcases hy with rfl | hy
     · exact H.size_eq _ _
-    · exact pairUp_sizes H rest (fun z hz => h z (by simp [hz])) y hy
+    · exact pairUp_sizes H tag rest (fun z hz => h z (by simp [hz])) y hy
 
 /-- Where the node at index `i` goes one level up: promoted, a left child, or a right child. -/
-theorem pairUp_get (H : Hasher) : ∀ (l : List ByteArray) (i : Nat) (x : ByteArray), l[i]? = some x →
-    (i % 2 = 0 ∧ i + 1 = l.length ∧ (pairUp H l)[i / 2]? = some x) ∨
-    (i % 2 = 0 ∧ ∃ y, l[i + 1]? = some y ∧ (pairUp H l)[i / 2]? = some (nodeHash H x y)) ∨
-    (i % 2 = 1 ∧ ∃ y, l[i - 1]? = some y ∧ (pairUp H l)[i / 2]? = some (nodeHash H y x))
+theorem pairUp_get (H : Hasher) (tag : String) : ∀ (l : List ByteArray) (i : Nat) (x : ByteArray), l[i]? = some x →
+    (i % 2 = 0 ∧ i + 1 = l.length ∧ (pairUp H tag l)[i / 2]? = some x) ∨
+    (i % 2 = 0 ∧ ∃ y, l[i + 1]? = some y ∧ (pairUp H tag l)[i / 2]? = some (nodeHash H tag x y)) ∨
+    (i % 2 = 1 ∧ ∃ y, l[i - 1]? = some y ∧ (pairUp H tag l)[i / 2]? = some (nodeHash H tag y x))
   | [], _, _, h => by simp at h
   | [a], i, x, h => by
     cases i with
@@ -1275,9 +1151,9 @@ theorem pairUp_get (H : Hasher) : ∀ (l : List ByteArray) (i : Nat) (x : ByteAr
     | i + 2, h =>
       have h' : rest[i]? = some x := by simpa using h
       have e2 : (i + 2) / 2 = i / 2 + 1 := by omega
-      have hp : (pairUp H (a :: b :: rest))[(i + 2) / 2]? = (pairUp H rest)[i / 2]? := by
+      have hp : (pairUp H tag (a :: b :: rest))[(i + 2) / 2]? = (pairUp H tag rest)[i / 2]? := by
         rw [e2]; rfl
-      rcases pairUp_get H rest i x h' with ⟨h1, h2, h3⟩ | ⟨h1, y, h2, h3⟩ | ⟨h1, y, h2, h3⟩
+      rcases pairUp_get H tag rest i x h' with ⟨h1, h2, h3⟩ | ⟨h1, y, h2, h3⟩ | ⟨h1, y, h2, h3⟩
       · exact Or.inl ⟨by omega, by simp only [List.length_cons]; omega, by rw [hp]; exact h3⟩
       · refine Or.inr (Or.inl ⟨by omega, y, ?_, by rw [hp]; exact h3⟩)
         simpa using h2
@@ -1288,10 +1164,10 @@ theorem pairUp_get (H : Hasher) : ∀ (l : List ByteArray) (i : Nat) (x : ByteAr
 
 /-- The lockstep argument: a climb that reaches the top of a level's tree started from that
 level's node at the index, or a node message collides. -/
-theorem climb_binds (H : Hasher) : ∀ (f : Nat) (lvl : List ByteArray) (i : Nat)
+theorem climb_binds (H : Hasher) (tag : String) : ∀ (f : Nat) (lvl : List ByteArray) (i : Nat)
     (c x : ByteArray) (path : List ByteArray), (∀ y ∈ lvl, y.size = 32) → c.size = 32 →
-    lvl[i]? = some x → climbSpan H f lvl.length i c path = some (treeTop H f lvl) →
-    c = x ∨ ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash spanTag m₁ = H.hash spanTag m₂
+    lvl[i]? = some x → climbSpan H tag f lvl.length i c path = some (treeTop H tag f lvl) →
+    c = x ∨ ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash tag m₁ = H.hash tag m₂
   | 0, _, _, _, _, _, _, _, _, h => by simp [climbSpan] at h
   | f + 1, lvl, i, c, x, path, hsz, hc, hx, h => by
     have hxs : x.size = 32 := hsz x (List.mem_of_getElem? hx)
@@ -1308,13 +1184,13 @@ theorem climb_binds (H : Hasher) : ∀ (f : Nat) (lvl : List ByteArray) (i : Nat
         · simp at h; exact Or.inl h
         · cases h
     · simp only [hn, ↓reduceIte] at h
-      have hlen := pairUp_length H lvl
-      have hsz' := pairUp_sizes H lvl hsz
-      rcases pairUp_get H lvl i x hx with ⟨h1, h2, h3⟩ | ⟨h1, y, h2, h3⟩ | ⟨h1, y, h2, h3⟩
+      have hlen := pairUp_length H tag lvl
+      have hsz' := pairUp_sizes H tag lvl hsz
+      rcases pairUp_get H tag lvl i x hx with ⟨h1, h2, h3⟩ | ⟨h1, y, h2, h3⟩ | ⟨h1, y, h2, h3⟩
       · have hp : i % 2 = 0 ∧ i + 1 = lvl.length := ⟨h1, h2⟩
         simp only [hp, and_self, ↓reduceIte] at h
         rw [← hlen] at h
-        exact climb_binds H f (pairUp H lvl) (i / 2) c x path hsz' hc h3 h
+        exact climb_binds H tag f (pairUp H tag lvl) (i / 2) c x path hsz' hc h3 h
       · have hy : i + 1 < lvl.length := (List.getElem?_eq_some_iff.1 h2).1
         have hp : ¬ (i % 2 = 0 ∧ i + 1 = lvl.length) := fun hh => by omega
         simp only [hp, ↓reduceIte] at h
@@ -1324,7 +1200,7 @@ theorem climb_binds (H : Hasher) : ∀ (f : Nat) (lvl : List ByteArray) (i : Nat
           split at h
           · rename_i hsib
             rw [← hlen] at h
-            rcases climb_binds H f (pairUp H lvl) (i / 2) _ _ rest hsz' (H.size_eq _ _) h3 h with
+            rcases climb_binds H tag f (pairUp H tag lvl) (i / 2) _ _ rest hsz' (H.size_eq _ _) h3 h with
               he | hcol
             · by_cases hm : nodeMsg c sib = nodeMsg x y
               · exact Or.inl (nodeMsg_injective hm (hc.trans hxs.symm)).1
@@ -1341,7 +1217,7 @@ theorem climb_binds (H : Hasher) : ∀ (f : Nat) (lvl : List ByteArray) (i : Nat
           split at h
           · rename_i hsib
             rw [← hlen] at h
-            rcases climb_binds H f (pairUp H lvl) (i / 2) _ _ rest hsz' (H.size_eq _ _) h3 h with
+            rcases climb_binds H tag f (pairUp H tag lvl) (i / 2) _ _ rest hsz' (H.size_eq _ _) h3 h with
               he | hcol
             · by_cases hm : nodeMsg sib c = nodeMsg y x
               · exact Or.inl (nodeMsg_injective hm (hsib.trans hys.symm)).2
@@ -1349,27 +1225,33 @@ theorem climb_binds (H : Hasher) : ∀ (f : Nat) (lvl : List ByteArray) (i : Nat
             · exact Or.inr hcol
           · cases h
 
-/-- **Inclusion proofs bind.** A span that verifies against the root of a span set at an index
-is the span at that index, or two different messages (two leaf messages, or two node messages)
-have one digest. -/
-theorem verifySpanMerkleInclusion_binding (H : Hasher) {spans : List ByteArray}
-    {span : ByteArray} {p : SpanProof}
-    (h : verifySpanMerkleInclusion H (spanMerkleRoot H spans) span p = true) :
+/-- **Inclusion proofs bind, by the `top` alone.** A span that verifies at an index against a root
+whose `top` is that of a span set, whatever count it claims, is that span, or a collision. -/
+theorem verifySpanMerkleInclusion_top_binding (H : Hasher) (tag : String) {spans : List ByteArray}
+    {root : SpanRoot} {span : ByteArray} {p : SpanProof}
+    (htop : root.top = (spanMerkleRoot H tag spans).top) :
+    verifySpanMerkleInclusion H tag root span p = true →
     spans[p.index]? = some span ∨
-      ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash spanTag m₁ = H.hash spanTag m₂ := by
-  simp only [verifySpanMerkleInclusion, spanMerkleRoot, Bool.and_eq_true] at h
+      ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash tag m₁ = H.hash tag m₂ := by
+  intro h
+  simp only [verifySpanMerkleInclusion, Bool.and_eq_true] at h
   obtain ⟨hidx', hm⟩ := h
-  have hidx : p.index < spans.length := of_decide_eq_true hidx'
   split at hm
   · rename_i c hcl
-    have hc : c = treeTop H spans.length (spans.map (leafHash H)) := of_decide_eq_true hm
+    have hr : rootHash H tag root.count c =
+        rootHash H tag spans.length (treeTop H tag spans.length (spans.map (leafHash H tag))) :=
+      (of_decide_eq_true hm).trans htop
+    rcases rootHash_binds H tag hr with ⟨hn, hc⟩ | hcol
+    case inr => exact Or.inr hcol
+    rw [hn] at hcl hidx'
+    have hidx : p.index < spans.length := of_decide_eq_true hidx'
     rw [hc] at hcl
-    have hlen : (spans.map (leafHash H)).length = spans.length := List.length_map _
-    have hget : (spans.map (leafHash H))[p.index]? = some (leafHash H (spans[p.index]'hidx)) := by
+    have hlen : (spans.map (leafHash H tag)).length = spans.length := List.length_map _
+    have hget : (spans.map (leafHash H tag))[p.index]? = some (leafHash H tag (spans[p.index]'hidx)) := by
       simp [List.getElem?_eq_getElem hidx]
-    have hcl' : climbSpan H spans.length (spans.map (leafHash H)).length p.index (leafHash H span)
-        p.siblings = some (treeTop H spans.length (spans.map (leafHash H))) := by rw [hlen]; exact hcl
-    rcases climb_binds H spans.length _ p.index _ _ p.siblings
+    have hcl' : climbSpan H tag spans.length (spans.map (leafHash H tag)).length p.index (leafHash H tag span)
+        p.siblings = some (treeTop H tag spans.length (spans.map (leafHash H tag))) := by rw [hlen]; exact hcl
+    rcases climb_binds H tag spans.length _ p.index _ _ p.siblings
         (fun y hy => by
           obtain ⟨s, _, rfl⟩ := List.mem_map.1 hy
           exact H.size_eq _ _)
@@ -1381,23 +1263,23 @@ theorem verifySpanMerkleInclusion_binding (H : Hasher) {spans : List ByteArray}
   · cases hm
 
 /-- The siblings on the way up from index `i`. -/
-def spanPath (H : Hasher) : Nat → List ByteArray → Nat → List ByteArray
+def spanPath (H : Hasher) (tag : String) : Nat → List ByteArray → Nat → List ByteArray
   | 0, _, _ => []
   | f + 1, lvl, i =>
     if lvl.length ≤ 1 then []
     else if i % 2 = 0 then
       match lvl[i + 1]? with
-      | some y => y :: spanPath H f (pairUp H lvl) (i / 2)
-      | none => spanPath H f (pairUp H lvl) (i / 2)
-    else lvl.getD (i - 1) ByteArray.empty :: spanPath H f (pairUp H lvl) (i / 2)
+      | some y => y :: spanPath H tag f (pairUp H tag lvl) (i / 2)
+      | none => spanPath H tag f (pairUp H tag lvl) (i / 2)
+    else lvl.getD (i - 1) ByteArray.empty :: spanPath H tag f (pairUp H tag lvl) (i / 2)
 
 /-- **The inclusion proof of the span at an index.** -/
-def spanMerkleProof (H : Hasher) (spans : List ByteArray) (i : Nat) : SpanProof :=
-  ⟨i, spanPath H spans.length (spans.map (leafHash H)) i⟩
+def spanMerkleProof (H : Hasher) (tag : String) (spans : List ByteArray) (i : Nat) : SpanProof :=
+  ⟨i, spanPath H tag spans.length (spans.map (leafHash H tag)) i⟩
 
-theorem climb_complete (H : Hasher) : ∀ (f : Nat) (lvl : List ByteArray) (i : Nat) (x : ByteArray),
+theorem climb_complete (H : Hasher) (tag : String) : ∀ (f : Nat) (lvl : List ByteArray) (i : Nat) (x : ByteArray),
     (∀ y ∈ lvl, y.size = 32) → lvl[i]? = some x → lvl.length ≤ f →
-    climbSpan H f lvl.length i x (spanPath H f lvl i) = some (treeTop H f lvl)
+    climbSpan H tag f lvl.length i x (spanPath H tag f lvl i) = some (treeTop H tag f lvl)
   | 0, lvl, i, x, _, hx, hf => by
     have : lvl = [] := List.length_eq_zero_iff.1 (by omega)
     subst this; simp at hx
@@ -1411,22 +1293,22 @@ theorem climb_complete (H : Hasher) : ∀ (f : Nat) (lvl : List ByteArray) (i : 
       match lvl, hx with
       | y :: _, hx => simp at hx; subst hx; rfl
     · simp only [hn, ↓reduceIte]
-      have hlen := pairUp_length H lvl
-      have hsz' := pairUp_sizes H lvl hsz
-      have hf' : (pairUp H lvl).length ≤ f := by rw [hlen]; omega
-      rcases pairUp_get H lvl i x hx with ⟨h1, h2, h3⟩ | ⟨h1, y, h2, h3⟩ | ⟨h1, y, h2, h3⟩
+      have hlen := pairUp_length H tag lvl
+      have hsz' := pairUp_sizes H tag lvl hsz
+      have hf' : (pairUp H tag lvl).length ≤ f := by rw [hlen]; omega
+      rcases pairUp_get H tag lvl i x hx with ⟨h1, h2, h3⟩ | ⟨h1, y, h2, h3⟩ | ⟨h1, y, h2, h3⟩
       · have hnone : lvl[i + 1]? = none := List.getElem?_eq_none (by omega)
         rw [ite_eq_left ⟨h1, h2⟩]
         simp only [h1, ↓reduceIte, hnone]
         rw [← hlen]
-        exact climb_complete H f (pairUp H lvl) (i / 2) x hsz' h3 hf'
+        exact climb_complete H tag f (pairUp H tag lvl) (i / 2) x hsz' h3 hf'
       · have hy : i + 1 < lvl.length := (List.getElem?_eq_some_iff.1 h2).1
         have hp : ¬ (i % 2 = 0 ∧ i + 1 = lvl.length) := fun hh => by omega
         have hys : y.size = 32 := hsz y (List.mem_of_getElem? h2)
         rw [ite_eq_right hp]
         simp only [h1, h2, hys, ↓reduceIte]
         rw [← hlen]
-        exact climb_complete H f (pairUp H lvl) (i / 2) _ hsz' h3 hf'
+        exact climb_complete H tag f (pairUp H tag lvl) (i / 2) _ hsz' h3 hf'
       · have hp : ¬ (i % 2 = 0 ∧ i + 1 = lvl.length) := fun hh => by omega
         have hodd : ¬ i % 2 = 0 := by omega
         have hys : y.size = 32 := hsz y (List.mem_of_getElem? h2)
@@ -1435,31 +1317,175 @@ theorem climb_complete (H : Hasher) : ∀ (f : Nat) (lvl : List ByteArray) (i : 
         rw [ite_eq_right hp]
         simp only [hodd, hgd, hys, ↓reduceIte]
         rw [← hlen]
-        exact climb_complete H f (pairUp H lvl) (i / 2) _ hsz' h3 hf'
+        exact climb_complete H tag f (pairUp H tag lvl) (i / 2) _ hsz' h3 hf'
 
 /-- **Completeness**: the honest proof of the span at any index verifies. -/
-theorem verifySpanMerkleInclusion_complete (H : Hasher) (spans : List ByteArray) (i : Nat)
+theorem verifySpanMerkleInclusion_complete (H : Hasher) (tag : String) (spans : List ByteArray) (i : Nat)
     (hi : i < spans.length) :
-    verifySpanMerkleInclusion H (spanMerkleRoot H spans) (spans[i]'hi)
-      (spanMerkleProof H spans i) = true := by
-  have hlen : (spans.map (leafHash H)).length = spans.length := List.length_map _
-  have hget : (spans.map (leafHash H))[i]? = some (leafHash H (spans[i]'hi)) := by
+    verifySpanMerkleInclusion H tag (spanMerkleRoot H tag spans) (spans[i]'hi)
+      (spanMerkleProof H tag spans i) = true := by
+  have hlen : (spans.map (leafHash H tag)).length = spans.length := List.length_map _
+  have hget : (spans.map (leafHash H tag))[i]? = some (leafHash H tag (spans[i]'hi)) := by
     simp [List.getElem?_eq_getElem hi]
-  have hcl := climb_complete H spans.length (spans.map (leafHash H)) i _
+  have hcl := climb_complete H tag spans.length (spans.map (leafHash H tag)) i _
     (fun y hy => by
       obtain ⟨s, _, rfl⟩ := List.mem_map.1 hy
       exact H.size_eq _ _) hget (Nat.le_of_eq hlen)
   rw [hlen] at hcl
-  simp only [verifySpanMerkleInclusion, spanMerkleRoot, spanMerkleProof, hi, decide_true,
-    Bool.true_and, hcl, topMatches]
+  simp [verifySpanMerkleInclusion, spanMerkleRoot, spanMerkleProof, hi, hcl, topMatches]
 
-/-- **The binding theorem at cSHAKE256.** -/
-theorem cshake_spanInclusion_binding {spans : List ByteArray} {span : ByteArray} {p : SpanProof}
-    (h : verifySpanMerkleInclusion cshakeHasher (spanMerkleRoot cshakeHasher spans) span p = true) :
-    spans[p.index]? = some span ∨
-      ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧
-        cshakeHasher.hash spanTag m₁ = cshakeHasher.hash spanTag m₂ :=
-  verifySpanMerkleInclusion_binding cshakeHasher h
+/-! ## 4. The span-disclosure judge and the byte format `vpa-json-span@1` -/
+
+/-- A disclosure claim: `redacted` is `doc` with the span `[l, r)` replaced by `mask`. -/
+structure JsonSpanClaim where
+  doc : ByteArray
+  l : Nat
+  r : Nat
+  mask : ByteArray
+  redacted : ByteArray
+
+/-- The certificate: a commitment to spans of the document and the opening of the hidden one. -/
+structure JsonSpanCert where
+  root : SpanRoot
+  proof : SpanProof
+
+def hiddenSpan (o : JsonSpanClaim) : ByteArray := o.doc.extract o.l o.r
+
+/-- The document as three spans: before the hidden span, the hidden span, after it. -/
+def spansOf (o : JsonSpanClaim) : List ByteArray :=
+  [o.doc.extract 0 o.l, hiddenSpan o, o.doc.extract o.r o.doc.size]
+
+def jsonSpanCertOf (o : JsonSpanClaim) : JsonSpanCert :=
+  ⟨spanMerkleRoot cshakeHasher spanTag (spansOf o), spanMerkleProof cshakeHasher spanTag (spansOf o) 1⟩
+
+/-- An accepted disclosure: the disclosed bytes are the splice and parse as the original does, and
+under every span set with the certificate's root the opened leaf is the hidden span (or collision). -/
+def JsonSpanMeaning (o : JsonSpanClaim) (c : JsonSpanCert) : Prop :=
+  o.redacted = spliceByteArray o.doc o.l o.r o.mask ∧
+    runFullJsonGrammar o.redacted = runFullJsonGrammar o.doc ∧
+    jsonObjectKeys o.redacted = jsonObjectKeys o.doc ∧
+    ∀ spans : List ByteArray, spanMerkleRoot cshakeHasher spanTag spans = c.root →
+      spans[c.proof.index]? = some (hiddenSpan o) ∨
+        ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ cshakeHasher.hash spanTag m₁ = cshakeHasher.hash spanTag m₂
+
+inductive JsonSpanRefusal where
+  /-- the disclosed bytes are not the document with the span replaced: refutes the claim -/
+  | notTheSplice
+  /-- the span is not confined to one value string, or the mask is not safe -/
+  | unconfined
+  /-- the opening does not reach the root -/
+  | unopened
+  deriving DecidableEq
+
+def jsonSpanCheck (o : JsonSpanClaim) (c : JsonSpanCert) : Judge.Verdict JsonSpanRefusal :=
+  if o.redacted ≠ spliceByteArray o.doc o.l o.r o.mask then .refused .notTheSplice []
+  else if checkJsonRedaction o.doc o.l o.r o.mask = false then .refused .unconfined [o.l, o.r]
+  else if verifySpanMerkleInclusion cshakeHasher spanTag c.root (hiddenSpan o) c.proof = false then
+    .refused .unopened [c.proof.index]
+  else .ok
+
+theorem jsonSpanCheck_ok {o : JsonSpanClaim} {c : JsonSpanCert} (h : jsonSpanCheck o c = .ok) :
+    o.redacted = spliceByteArray o.doc o.l o.r o.mask ∧
+      checkJsonRedaction o.doc o.l o.r o.mask = true ∧
+      verifySpanMerkleInclusion cshakeHasher spanTag c.root (hiddenSpan o) c.proof = true := by
+  unfold jsonSpanCheck at h
+  split at h
+  · cases h
+  · rename_i h1
+    split at h
+    · cases h
+    · rename_i h2
+      split at h
+      · cases h
+      · rename_i h3
+        exact ⟨Decidable.not_not.mp h1, by simpa using h2, by simpa using h3⟩
+
+/-- **The span-disclosure judge.** A splice mismatch refutes the claim under every certificate;
+completeness is claimed where the redaction check confines the span. -/
+instance jsonSpanJudge : Judge JsonSpanClaim JsonSpanCert where
+  Clause := JsonSpanRefusal
+  Meaning := JsonSpanMeaning
+  check _ := jsonSpanCheck
+  sound := by
+    intro _ o c h
+    obtain ⟨hs, hr, hi⟩ := jsonSpanCheck_ok h
+    obtain ⟨hv, hk, _⟩ := jsonRedaction_preserves_valid_parse_and_keys hr
+    refine ⟨hs, by rw [hs]; exact hv, by rw [hs]; exact hk, fun spans hroot => ?_⟩
+    rw [← hroot] at hi
+    exact verifySpanMerkleInclusion_top_binding cshakeHasher spanTag rfl hi
+  refutes k := decide (k = .notTheSplice)
+  refuted := by
+    intro _ o c k p h hk c' hm
+    have hk' : k = .notTheSplice := of_decide_eq_true hk
+    subst hk'
+    unfold jsonSpanCheck at h
+    split at h
+    · rename_i hne; exact hne hm.1
+    · split at h
+      · cases h
+      · split at h <;> cases h
+  Fragment o := checkJsonRedaction o.doc o.l o.r o.mask = true
+  complete := by
+    rintro o hfrag ⟨_, hm⟩
+    have hi : verifySpanMerkleInclusion cshakeHasher spanTag (jsonSpanCertOf o).root (hiddenSpan o)
+        (jsonSpanCertOf o).proof = true :=
+      verifySpanMerkleInclusion_complete cshakeHasher spanTag (spansOf o) 1 (by simp [spansOf])
+    refine ⟨jsonSpanCertOf o, 0, ?_⟩
+    show jsonSpanCheck o (jsonSpanCertOf o) = .ok
+    simp [jsonSpanCheck, hm.1, hfrag, hi]
+  mono := by intro _ _ _ _ _ _; rfl
+
+def encodeJsonSpanClaim (o : JsonSpanClaim) : String :=
+  ":".intercalate [hexOf o.doc, toString o.l, toString o.r, hexOf o.mask, hexOf o.redacted]
+
+def decodeJsonSpanClaim (s : String) : Except String JsonSpanClaim :=
+  match s.splitOn ":" with
+  | [d, l, r, m, x] =>
+    match unhex d, natField l, natField r, unhex m, unhex x with
+    | .ok d, .ok l, .ok r, .ok m, .ok x => .ok ⟨d, l, r, m, x⟩
+    | _, _, _, _, _ => .error "a span claim is hex:dec:dec:hex:hex"
+  | _ => .error "a span claim is five fields"
+
+def encodeJsonSpanCert (c : JsonSpanCert) : String :=
+  ":".intercalate (toString c.root.count :: hexOf c.root.top :: toString c.proof.index ::
+    c.proof.siblings.map hexOf)
+
+def decodeJsonSpanCert (s : String) : Except String JsonSpanCert :=
+  match s.splitOn ":" with
+  | n :: t :: i :: sibs =>
+    match natField n, unhex t, natField i, sibs.mapM unhex with
+    | .ok n, .ok t, .ok i, .ok ss => .ok ⟨⟨n, t⟩, ⟨i, ss⟩⟩
+    | _, _, _, _ => .error "a span certificate is dec:hex:dec then hex siblings"
+  | _ => .error "a span certificate has at least three fields"
+
+def plantedJsonSpanClaim : JsonSpanClaim := ⟨⟨#[]⟩, 0, 0, ⟨#[]⟩, ⟨#[0]⟩⟩
+
+theorem plantedJsonSpan_refused :
+    ∃ k p, jsonSpanJudge.check 0 plantedJsonSpanClaim (jsonSpanCertOf plantedJsonSpanClaim) =
+      .refused k p := by
+  have hne : plantedJsonSpanClaim.redacted ≠ spliceByteArray plantedJsonSpanClaim.doc
+      plantedJsonSpanClaim.l plantedJsonSpanClaim.r plantedJsonSpanClaim.mask := by
+    intro h
+    have hl := congrArg (fun b : ByteArray => b.data.toList.length) h
+    simp [plantedJsonSpanClaim, spliceByteArray_toList] at hl
+  refine ⟨.notTheSplice, [], ?_⟩
+  show jsonSpanCheck plantedJsonSpanClaim (jsonSpanCertOf plantedJsonSpanClaim) = _
+  unfold jsonSpanCheck
+  rw [ite_eq_left hne]
+
+/-- **The registered format** `vpa-json-span@1` (cSHAKE256 runs compiled). -/
+@[expose] def jsonSpanFormat : Judge.Format where
+  name := "vpa-json-span"
+  version := "1"
+  Obj := JsonSpanClaim
+  Cert := JsonSpanCert
+  decodeObj := decodeJsonSpanClaim
+  decodeCert := decodeJsonSpanCert
+  trust := .compiled
+  regime := .decidable
+  bad := (plantedJsonSpanClaim, jsonSpanCertOf plantedJsonSpanClaim)
+  badGrade := 0
+  bad_refused := plantedJsonSpan_refused
 
 end Obend.Judge.VpaJson
 

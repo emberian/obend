@@ -48,13 +48,213 @@ similarity `nrm` decides is not proved, so the fragment is stated by the explora
 pair table is a list scanned linearly, not a hashed table.
 -/
 public import Obend.Judge.Class
-public import Obend.Vault.Lsafe
+public import Obend.Codec.DetCbor
+public import Obend.Digest.Cshake256
+import all Obend.Codec.DetCbor
 
 public section
 
+/-! ## 0. Shared carriers: the tagged hasher, key distinctness, splicing
+
+The regular, the visibly pushdown and the vault layers commit with one hasher and check object
+keys with one sort; they live below all three (`Obend.Vault.Lsafe` re-exports them). -/
+
+namespace Obend.Judge.Commit
+
+open Obend.Codec.DetCbor
+
+set_option autoImplicit false
+
+/-- A tagged hash with 32-byte output. -/
+structure Hasher where
+  hash : String → ByteArray → ByteArray
+  size_eq : ∀ (tag : String) (m : ByteArray), (hash tag m).size = 32
+
+/-- cSHAKE256 with the tag as customization string. -/
+def cshakeHasher : Hasher where
+  hash tag m :=
+    ⟨(Obend.Digest.Cshake256.cshake256Bytes tag.toUTF8.data.toList m.data.toList).toArray⟩
+  size_eq tag m := by simp [ByteArray.size]
+
+/-- An explicit collision of a hasher at a tag: two different messages, one digest. -/
+structure HashCollision (H : Hasher) (tag : String) where
+  m₁ : ByteArray
+  m₂ : ByteArray
+  ne : m₁ ≠ m₂
+  eq : H.hash tag m₁ = H.hash tag m₂
+
+/-- A stable merge at a fuel; out of fuel it concatenates, which is still a permutation. -/
+def mergeFuel {α : Type} (le : α → α → Bool) : Nat → List α → List α → List α
+  | 0, xs, ys => xs ++ ys
+  | _ + 1, [], ys => ys
+  | _ + 1, x :: xs, [] => x :: xs
+  | f + 1, x :: xs, y :: ys =>
+    if le x y then x :: mergeFuel le f xs (y :: ys) else y :: mergeFuel le f (x :: xs) ys
+
+theorem mergeFuel_perm {α : Type} (le : α → α → Bool) :
+    ∀ (f : Nat) (xs ys : List α), (mergeFuel le f xs ys).Perm (xs ++ ys)
+  | 0, _, _ => List.Perm.refl _
+  | _ + 1, [], _ => List.Perm.refl _
+  | _ + 1, x :: xs, [] => by simp [mergeFuel]
+  | f + 1, x :: xs, y :: ys => by
+    simp only [mergeFuel]
+    split
+    · exact (mergeFuel_perm le f xs (y :: ys)).cons x
+    · exact ((mergeFuel_perm le f (x :: xs) ys).cons y).trans List.perm_middle.symm
+
+/-- Merge adjacent runs. -/
+def mergePass {α : Type} (le : α → α → Bool) : List (List α) → List (List α)
+  | a :: b :: rest => mergeFuel le (a.length + b.length) a b :: mergePass le rest
+  | l => l
+
+theorem mergePass_perm {α : Type} (le : α → α → Bool) :
+    ∀ (runs : List (List α)), (mergePass le runs).flatten.Perm runs.flatten
+  | [] => List.Perm.refl _
+  | [_] => List.Perm.refl _
+  | a :: b :: rest => by
+    simp only [mergePass, List.flatten_cons]
+    rw [← List.append_assoc]
+    exact (mergeFuel_perm le _ a b).append (mergePass_perm le rest)
+
+/-- Halve the runs until one is left. -/
+def mergeLoop {α : Type} (le : α → α → Bool) : Nat → List (List α) → List α
+  | 0, runs => runs.flatten
+  | _ + 1, [] => []
+  | _ + 1, [a] => a
+  | f + 1, a :: b :: rest => mergeLoop le f (mergePass le (a :: b :: rest))
+
+theorem mergeLoop_perm {α : Type} (le : α → α → Bool) :
+    ∀ (f : Nat) (runs : List (List α)), (mergeLoop le f runs).Perm runs.flatten
+  | 0, _ => List.Perm.refl _
+  | _ + 1, [] => List.Perm.refl _
+  | _ + 1, [a] => by simp [mergeLoop]
+  | f + 1, a :: b :: rest => by
+    simp only [mergeLoop]
+    exact (mergeLoop_perm le f _).trans (mergePass_perm le _)
+
+/-- **Bottom-up merge sort**, `O(n log n)` comparisons, structural (it reduces in the kernel). -/
+def sortBy {α : Type} (le : α → α → Bool) (l : List α) : List α :=
+  mergeLoop le (l.length + 1) (l.map fun x => [x])
+
+theorem flatten_singletons {α : Type} : ∀ (l : List α), (l.map fun x => [x]).flatten = l
+  | [] => rfl
+  | x :: xs => by simp [flatten_singletons xs]
+
+theorem sortBy_perm {α : Type} (le : α → α → Bool) (l : List α) : (sortBy le l).Perm l := by
+  have h := mergeLoop_perm le (l.length + 1) (l.map fun x => [x])
+  rw [flatten_singletons] at h
+  exact h
+
+/-- **Pairwise-distinct keys**: sort, then one pass checking each adjacent pair strictly
+ascending. No quadratic scan. -/
+def keysDistinctB (ks : List ByteArray) : Bool :=
+  sortedByKeyB id (sortBy (fun a b => !lexLtBytes b a) ks)
+
+theorem keysDistinctB_sound {ks : List ByteArray} (h : keysDistinctB ks = true) : ks.Nodup := by
+  have hs := sortedByKeyB_sound id _ h
+  have hn : (sortBy (fun a b => !lexLtBytes b a) ks).Nodup := by
+    refine hs.imp ?_
+    intro a b hab heq
+    rw [heq] at hab
+    simp only [id] at hab
+    rw [lexLtBytes_irrefl] at hab
+    cases hab
+  exact (sortBy_perm _ ks).nodup_iff.1 hn
+
+example : keysDistinctB ["b".toByteArray, "a".toByteArray] = true := by decide +kernel
+example : keysDistinctB ["b".toByteArray, "a".toByteArray, "b".toByteArray] = false := by
+  decide +kernel
+
+/-- Replace the span `[l, r)` of a document. -/
+def spliceByteArray (doc : ByteArray) (l r : Nat) (replacement : ByteArray) : ByteArray :=
+  doc.extract 0 l ++ replacement ++ doc.extract r doc.size
+
+theorem extract_toList (doc : ByteArray) (s e : Nat) :
+    (doc.extract s e).data.toList = (doc.data.toList.drop s).take (e - s) := by
+  rw [ByteArray.data_extract, Array.toList_extract]
+
+theorem spliceByteArray_toList (doc : ByteArray) (l r : Nat) (replacement : ByteArray) :
+    (spliceByteArray doc l r replacement).data.toList =
+      doc.data.toList.take l ++ replacement.data.toList ++ doc.data.toList.drop r := by
+  unfold spliceByteArray
+  rw [ByteArray.data_append, ByteArray.data_append, Array.toList_append, Array.toList_append,
+    extract_toList, extract_toList]
+  simp only [List.drop_zero, Nat.sub_zero]
+  rw [List.take_of_length_le (l := doc.data.toList.drop r)
+    (Nat.le_of_eq (by rw [List.length_drop, toList_length]))]
+
+/-- The base-256 digits of a count, least significant first, at a fuel. -/
+def countDigits : Nat → Nat → List UInt8
+  | 0, _ => []
+  | f + 1, n => if n = 0 then [] else UInt8.ofNat (n % 256) :: countDigits f (n / 256)
+
+def ofDigits : List UInt8 → Nat
+  | [] => 0
+  | b :: bs => b.toNat + 256 * ofDigits bs
+
+theorem ofDigits_countDigits : ∀ (f n : Nat), n ≤ f → ofDigits (countDigits f n) = n
+  | 0, n, h => by
+    have h0 : n = 0 := by omega
+    subst h0
+    rfl
+  | f + 1, n, h => by
+    unfold countDigits
+    by_cases hn : n = 0
+    · subst hn
+      rfl
+    · rw [ite_eq_right hn]
+      simp only [ofDigits]
+      rw [ofDigits_countDigits f (n / 256) (by omega), UInt8.toNat_ofNat']
+      have h8 : (2 : Nat) ^ 8 = 256 := by decide
+      rw [h8]
+      omega
+
+/-- The leaf count as a span: the framing of a leaf message binds it. -/
+def countSpan (n : Nat) : ByteArray := ⟨(countDigits n n).toArray⟩
+
+theorem countSpan_injective {a b : Nat} (h : countSpan a = countSpan b) : a = b := by
+  have hl : countDigits a a = countDigits b b := by
+    have := congrArg (fun x : ByteArray => x.data.toList) h
+    simpa [countSpan] using this
+  calc a = ofDigits (countDigits a a) := (ofDigits_countDigits a a (Nat.le_refl _)).symm
+    _ = ofDigits (countDigits b b) := by rw [hl]
+    _ = b := ofDigits_countDigits b b (Nat.le_refl _)
+
+/-- Lowercase hex of a byte string: the wire form of the byte formats. -/
+def hexOf (b : ByteArray) : String :=
+  b.data.toList.foldl (fun s x =>
+    (s.push (Char.ofNat (if x.toNat / 16 < 10 then 48 + x.toNat / 16 else 87 + x.toNat / 16))).push
+      (Char.ofNat (if x.toNat % 16 < 10 then 48 + x.toNat % 16 else 87 + x.toNat % 16))) ""
+
+def hexVal (c : Char) : Option Nat :=
+  if 48 ≤ c.toNat ∧ c.toNat ≤ 57 then some (c.toNat - 48)
+  else if 97 ≤ c.toNat ∧ c.toNat ≤ 102 then some (c.toNat - 87) else none
+
+def unhexChars : List Char → Option (List UInt8)
+  | [] => some []
+  | [_] => none
+  | a :: b :: rest =>
+    match hexVal a, hexVal b, unhexChars rest with
+    | some x, some y, some r => some (UInt8.ofNat (16 * x + y) :: r)
+    | _, _, _ => none
+
+/-- The byte string a lowercase hex string spells; odd lengths and other characters are refused. -/
+def unhex (s : String) : Except String ByteArray :=
+  match unhexChars s.toList with
+  | some l => .ok ⟨l.toArray⟩
+  | none => .error "not lowercase hex"
+
+/-- A decimal field. -/
+def natField (s : String) : Except String Nat :=
+  match s.toNat? with
+  | some n => .ok n
+  | none => .error "not a decimal number"
+
+end Obend.Judge.Commit
+
 namespace Obend.Judge.SymbolicRegex
 
-open Obend.Vault.Lsafe (Hasher cshakeHasher HashCollision)
+open Obend.Judge.Commit (Hasher cshakeHasher HashCollision hexOf unhex)
 
 set_option autoImplicit false
 
@@ -72,8 +272,11 @@ inductive PredRE where
   | star (r : PredRE)
   deriving DecidableEq
 
+/-- Complement, by its usual name. -/
+abbrev PredRE.compl (r : PredRE) : PredRE := .neg r
+
 /-- The byte lies in the closed interval. -/
-def inRange (lo hi b : UInt8) : Bool := decide (lo.toNat ≤ b.toNat) && decide (b.toNat ≤ hi.toNat)
+@[expose] def inRange (lo hi b : UInt8) : Bool := decide (lo.toNat ≤ b.toNat) && decide (b.toNat ≤ hi.toNat)
 
 /-- **The word semantics.** -/
 def Matches : List UInt8 → PredRE → Prop
@@ -103,7 +306,7 @@ def absenceOf (bad : PredRE) : PredRE := .neg (.cat tt (.cat bad tt))
 theorem matches_tt (w : List UInt8) : Matches w tt := by simp [tt, Matches]
 
 /-- Nullability: the empty word is in the language. -/
-def null : PredRE → Bool
+@[expose] def null : PredRE → Bool
   | .ff => false
   | .eps => true
   | .range _ _ => false
@@ -114,7 +317,7 @@ def null : PredRE → Bool
   | .star _ => true
 
 /-- The derivative by one byte. -/
-def der (c : UInt8) : PredRE → PredRE
+@[expose] def der (c : UInt8) : PredRE → PredRE
   | .ff => .ff
   | .eps => .ff
   | .range lo hi => if inRange lo hi c then .eps else .ff
@@ -224,7 +427,7 @@ theorem der_iff_matches_cons : ∀ (r : PredRE) (c : UInt8) (w : List UInt8),
       · exact hall x hx
 
 /-- **The matcher**: derive by each byte, then read nullability. -/
-def matchB : List UInt8 → PredRE → Bool
+@[expose] def matchB : List UInt8 → PredRE → Bool
   | [], r => null r
   | c :: w, r => matchB w (der c r)
 
@@ -1110,6 +1313,74 @@ example : searchCex ⟨anyByte, .eps⟩ 1 = some [0] := by decide +kernel
 example : searchCex ⟨.eps, anyByte⟩ 0 = some [] := by decide +kernel
 example : decRE (encRE (absenceOf (lit [123, 123]))) = some (absenceOf (lit [123, 123])) := by
   decide +kernel
+
+/-! ## 9. The byte format `sym-regex-bisim@1`
+
+An object is the two expressions' prefix codes in hex, joined by `:`; a certificate is the pairs'
+codes, flat, joined by `:` (empty for no pairs). -/
+
+def encodeInclusionQuery (q : InclusionQuery) : String :=
+  hexOf (encRE q.lhs) ++ ":" ++ hexOf (encRE q.rhs)
+
+def decodeREHex (s : String) : Except String PredRE :=
+  match unhex s with
+  | .error e => .error e
+  | .ok b =>
+    match decRE b with
+    | some r => .ok r
+    | none => .error "not an expression code"
+
+def decodeInclusionQuery (s : String) : Except String InclusionQuery :=
+  match s.splitOn ":" with
+  | [l, r] =>
+    match decodeREHex l, decodeREHex r with
+    | .ok l, .ok r => .ok ⟨l, r⟩
+    | .error e, _ => .error e
+    | _, .error e => .error e
+  | _ => .error "an inclusion query is two fields"
+
+def encodePairs (ps : Pairs) : String :=
+  ":".intercalate (ps.flatMap fun pq => [hexOf (encRE pq.1), hexOf (encRE pq.2)])
+
+def pairOff : List PredRE → Option Pairs
+  | [] => some []
+  | [_] => none
+  | p :: q :: rest => (pairOff rest).map ((p, q) :: ·)
+
+def decodePairs (s : String) : Except String Pairs :=
+  if s.isEmpty then .ok []
+  else
+    match (s.splitOn ":").mapM decodeREHex with
+    | .error e => .error e
+    | .ok rs =>
+      match pairOff rs with
+      | some ps => .ok ps
+      | none => .error "an odd number of expressions"
+
+/-- The planted refusal: `ε ⊆ any byte` under the empty certificate is refuted by the empty word. -/
+theorem plantedInclusion_refused :
+    ∃ k p, symbolicRegexInclusionJudge.check 0 (⟨.eps, anyByte⟩ : InclusionQuery) ([] : Pairs) =
+      .refused k p := by
+  have hb : bisimCheck [] PredRE.eps anyByte = false := by decide +kernel
+  obtain ⟨w, hw⟩ := Judge.deepen_isSome (searchCex ⟨.eps, anyByte⟩) (i := 0) (a := [])
+    (by decide +kernel)
+  refine ⟨if w.isEmpty then .nullableMismatch else .counterexample, w.map UInt8.toNat, ?_⟩
+  show inclusionCheck 0 ⟨.eps, anyByte⟩ [] = _
+  simp [inclusionCheck, hb, hw]
+
+/-- **The registered format** `sym-regex-bisim@1`. -/
+@[expose] def symRegexBisimFormat : Judge.Format where
+  name := "sym-regex-bisim"
+  version := "1"
+  Obj := InclusionQuery
+  Cert := Pairs
+  decodeObj := decodeInclusionQuery
+  decodeCert := decodePairs
+  trust := .kernel
+  regime := .decidable
+  bad := (⟨.eps, anyByte⟩, [])
+  badGrade := 0
+  bad_refused := plantedInclusion_refused
 
 end Obend.Judge.SymbolicRegex
 

@@ -6,9 +6,8 @@ End-to-end kernel verification, positive & negative smoke fixtures, `#tooth` mut
 barriers on universal soundness theorems, and zero-`Classical.choice` / zero-`sorryAx` axiom audits:
 
 1. **Organ O5 (`ZkStripe`)**:
-   - `PredRE` Brzozowski complement/intersection/De Morgan laws,
-   - Stateful 2-bit `(inString, escaped)` JSON VPA lexer + `ByteArray` `Exec` fast path (`Spec ↔ Exec`),
-   - Unconditional domain-bound `callTreeDigestBytes_binding` (`0` obligations, `0` `Classical`),
+   - policies are `Obend.Judge.SymbolicRegex.PredRE`: complement and intersection laws,
+   - 256-bit `callTreeDigest`, `callTreeDigestBytes_binding` (`0` obligations, `0` `Classical`),
    - Recursive multi-hop `allSessionNodes` / `auditNodes_all_hops_sound` (`silverZkStripeSmoke`).
 2. **Organ O6 (`ClusterGov`)**:
    - `Sable` $F_O$ overflow-free `intDot` / `intDotExec` exactness over `koalaBearPrime`,
@@ -24,6 +23,7 @@ public import Obend.Tactic.Tooth
 public import Obend.Trailblaze.ZkStripe
 public import Obend.Trailblaze.ClusterGov
 public import Obend.Trailblaze.CathedralApex
+import all Obend.Judge.SymbolicRegexBisim
 import all Obend.Trailblaze.ZkStripe
 import all Obend.Trailblaze.ClusterGov
 import all Obend.Trailblaze.CathedralApex
@@ -38,89 +38,46 @@ open Obend.Trailblaze.CathedralApex
 
 set_option autoImplicit false
 
-/-! ## §1. Organ O5 (`ZkStripe`) Kernel Checks: `PredRE`, String-Aware `VpaOver` & Domain-Bound `CallTree` -/
+/-! ## §1. Organ O5 (`ZkStripe`): policies over `SymbolicRegex.PredRE`, 256-bit digests -/
 
--- `PredRE` boolean complement (`compl`) and conjunction (`inter`) concrete checks
-example : matchesBytes (PredRE.forbidSubseq stripeLiveKeyPrefix) [71, 69, 84, 32, 47] = true := rfl
-example : matchesBytes (PredRE.forbidSubseq stripeLiveKeyPrefix) [71, 115, 107, 95, 49] = false := rfl
+-- Complement and intersection, on concrete requests.
+example : matchesBytes (forbidSubseq stripeLiveKeyPrefix) [71, 69, 84, 32, 47] = true := by decide
+example : matchesBytes (forbidSubseq stripeLiveKeyPrefix) [71, 115, 107, 95, 49] = false := by
+  decide
+example :
+    matchesBytes (.inter (startsWith httpGetPrefix) (forbidSubseq stripeLiveKeyPrefix))
+      [71, 69, 84, 32, 47, 118, 49] = true := by decide
+example :
+    matchesBytes (.inter (startsWith httpGetPrefix) (forbidSubseq stripeLiveKeyPrefix))
+      [80, 79, 83, 84, 32, 47, 118, 49] = false := by decide
+-- The organ's expressions are the judge's: no second regular-expression type.
+example : forbidSubseq stripeLiveKeyPrefix =
+    Obend.Judge.SymbolicRegex.absenceOf (Obend.Judge.SymbolicRegex.lit stripeLiveKeyPrefix) := rfl
+example (r : PredRE) (bs : List UInt8) :
+    matchesBytes r bs = true ↔ Obend.Judge.SymbolicRegex.Matches bs r := matchesBytes_iff r bs
 
-example :
-    matchesBytes
-      (.inter (.seq (PredRE.litBytes httpGetPrefix) (.star PredRE.anyByte))
-              (PredRE.forbidSubseq stripeLiveKeyPrefix))
-      [71, 69, 84, 32, 47, 118, 49] = true := rfl
-
-example :
-    matchesBytes
-      (.inter (.seq (PredRE.litBytes httpGetPrefix) (.star PredRE.anyByte))
-              (PredRE.forbidSubseq stripeLiveKeyPrefix))
-      [80, 79, 83, 84, 32, 47, 118, 49] = false := rfl
-
--- Stateful 2-bit `(inString, escaped)` JSON VPA lexer + `ByteArray` `Exec` fast path checks
-example : runJsonFramingVpa jsonFramingVpa [123, 91, 49, 44, 50, 93, 125] = true := rfl
-example : runJsonFramingVpa jsonFramingVpa [123, 91, 49, 125, 93] = false := rfl
-example : runJsonFramingVpa jsonFramingVpa [125, 123, 125] = false := rfl
-
--- String-aware delimiter confinement: unmatched `}` inside `"..."` is accepted (`Spec` & `Exec`)
-example :
-    runJsonFramingVpa jsonFramingVpa (utf8Bytes "{\"msg\":\"unmatched } inside string\"}") = true := by
-  decide
-example :
-    runJsonFramingVpaExec jsonFramingVpa ("{\"msg\":\"unmatched } inside string\"}".toByteArray) = true := by
-  decide
-
--- Escaped-quote delimiter smuggling `{"smuggle":"\"}` is refused (`none` / `false`) (`Spec` & `Exec`)
-example :
-    lexJsonBytesSpec false false (utf8Bytes "{\"smuggle\":\"\\\"}") = none := by
-  decide
-example :
-    lexJsonByteArrayExec ("{\"smuggle\":\"\\\"}".toByteArray) = none := by
-  decide
-example :
-    runJsonFramingVpa jsonFramingVpa (utf8Bytes "{\"smuggle\":\"\\\"}") = false := by
-  decide
-example :
-    runJsonFramingVpaExec jsonFramingVpa ("{\"smuggle\":\"\\\"}".toByteArray) = false := by
-  decide
-
--- Properly closed string with escaped quote + `}` (`{"smuggle":"\"}"}`) is accepted
-example :
-    runJsonFramingVpa jsonFramingVpa (utf8Bytes "{\"smuggle\":\"\\\"}\"}") = true := by
-  decide
-example :
-    runJsonFramingVpaExec jsonFramingVpa ("{\"smuggle\":\"\\\"}\"}".toByteArray) = true := by
-  decide
-
--- Escaped backslash `\\` + closing quote + unmatched `}` (`{"smuggle":"\\"}}`) is refused
-example :
-    runJsonFramingVpa jsonFramingVpa (utf8Bytes "{\"smuggle\":\"\\\\\"}}") = false := by
-  decide
-example :
-    runJsonFramingVpaExec jsonFramingVpa ("{\"smuggle\":\"\\\\\"}}".toByteArray) = false := by
-  decide
-
--- 4-hop `tlsn` `CallTree` full-tree audit & refusal checks
+-- The four-hop tree: admitted, canonical, a 32-byte digest; the planted faults refused by name.
 example : callTreeHopCount validFourHopCallTree = 4 := rfl
 example : (allSessionNodes validFourHopCallTree).length = 4 := rfl
 example : verifyZkStripeCallTree defaultZkStripePolicy validFourHopCallTree = true := by decide
 example : checkCanonicalSessionTree fastMerkleHash validFourHopCallTree = true := by decide
+example : (callTreeDigest fastMerkleHash validFourHopCallTree).bytes.size = 32 :=
+  callTreeDigest_size (by decide)
 example :
     auditZkStripeCallTree defaultZkStripePolicy leakedSecretCallTree =
       .error (.requestRegexViolation "registry.hf.co") := rfl
 example :
-    (match auditZkStripeCallTree defaultZkStripePolicy unbalancedVpaCallTree with
-     | .error e => e == .unbalancedFraming "cdn.dataset.org"
-     | .ok () => false) = true := by decide
+    auditZkStripeCallTree defaultZkStripePolicy leakedResponseCallTree =
+      .error (.responseRegexViolation "cdn.dataset.org") := rfl
 
--- Untrusted notary refusal check
 def untrustedNotaryTree : HttpsSessionNode :=
-  .mk 0xBAD0 "api.stripe.com" [71, 69, 84] [123, 125] []
+  .mk 0xBAD0#256 "api.stripe.com" [71, 69, 84] [123, 125] []
 
 example :
     auditZkStripeCallTree defaultZkStripePolicy untrustedNotaryTree =
-      .error (.untrustedNotary "api.stripe.com" 0xBAD0) := rfl
+      .error (.untrustedNotary "api.stripe.com") := rfl
 
--- Domain sensitivity: swapping `serverDomain` on hop 1 changes `callTreeDigestBytes` & `callTreeDigest`
+-- The digest reads every field: the domain of hop 1, one payload byte of hop 4, the notary key.
 example :
     (callTreeDigestBytes fastMerkleHash validFourHopCallTree !=
       callTreeDigestBytes fastMerkleHash spoofedDomainCallTree) = true := by decide
@@ -128,13 +85,12 @@ example :
     (callTreeDigest fastMerkleHash validFourHopCallTree !=
       callTreeDigest fastMerkleHash spoofedDomainCallTree) = true := by decide
 
--- Payload sensitivity: altering 1 payload byte in hop 4 changes the root `callTreeDigest`
 def mutatedHop4CallTree : HttpsSessionNode :=
-  .mk 0xA11CE "api.stripe.com" [71, 69, 84, 32, 47, 118, 49] [123, 49, 125] [
-    .mk 0xA11CE "auth.obend.org" [71, 69, 84, 32, 47, 116, 111, 107]
+  .mk fixtureNotaryKey "api.stripe.com" [71, 69, 84, 32, 47, 118, 49] (utf8Bytes "{\"v\":1}") [
+    .mk fixtureNotaryKey "auth.obend.org" [71, 69, 84, 32, 47, 116, 111, 107]
       (utf8Bytes "{\"tok\":\"ok}v1\"}") [
-      .mk 0xA11CE "registry.hf.co" [71, 69, 84, 32, 47, 109, 97, 110] [123, 125] [
-        .mk 0xA11CE "cdn.dataset.org" [71, 69, 84, 32, 47, 115, 104, 100] [91, 52, 51, 93] []
+      .mk fixtureNotaryKey "registry.hf.co" [71, 69, 84, 32, 47, 109, 97, 110] [123, 125] [
+        .mk fixtureNotaryKey "cdn.dataset.org" [71, 69, 84, 32, 47, 115, 104, 100] [91, 52, 51, 93] []
       ]
     ]
   ]
@@ -142,6 +98,10 @@ def mutatedHop4CallTree : HttpsSessionNode :=
 example :
     (callTreeDigest fastMerkleHash validFourHopCallTree !=
       callTreeDigest fastMerkleHash mutatedHop4CallTree) = true := by decide
+example :
+    (callTreeDigest fastMerkleHash (.mk fixtureNotaryKey "a" [71] [123, 125] []) !=
+      callTreeDigest fastMerkleHash (.mk (fixtureNotaryKey + 1) "a" [71] [123, 125] [])) = true := by
+  decide
 
 example : silverZkStripeSmoke = true := by decide
 
@@ -243,39 +203,28 @@ example : silverCathedralApexSmoke = true := by decide
 
 /-! ## §4. `#tooth` Mutation-Killing Barriers on Universal Soundness Theorems -/
 
--- `#tooth` Barrier 1: mutating `PredRE` `nullable` to `fun _ => true` breaks `matchesBytes_compl`
+-- Barrier 1: a matcher that says yes breaks the complement law.
 #tooth Obend.Trailblaze.ZkStripe.matchesBytes_compl by
-  mutation Obend.Trailblaze.ZkStripe.nullable := fun _ => true
+  mutation Obend.Trailblaze.ZkStripe.matchesBytes := fun _ _ => true
 
--- `#tooth` Barrier 2: mutating `stepVpa` to ignore stack pops breaks `runVpa_balanced_stack`
-#tooth Obend.Trailblaze.ZkStripe.runVpa_balanced_stack by
-  mutation Obend.Trailblaze.ZkStripe.stepVpa := fun _ q stk _ => some (q, stk)
+-- Barrier 2: a digest that does not read the tree breaks its binding.
+#tooth Obend.Trailblaze.ZkStripe.callTreeDigest_binding by
+  mutation Obend.Trailblaze.ZkStripe.callTreeDigest := fun _ _ => ⟨ByteArray.empty⟩
 
--- `#tooth` Barrier 3: mutating `lexJsonStep` to ignore backslash `\` (`92`) breaks `runJsonFramingVpa_rejects_escaped_quote_smuggle`
-#tooth Obend.Trailblaze.ZkStripe.runJsonFramingVpa_rejects_escaped_quote_smuggle by
-  mutation Obend.Trailblaze.ZkStripe.lexJsonStep := fun inString _ b =>
-    if inString then
-      if b == 34 then (false, false, .internal b) else (true, false, .internal b)
-    else
-      if b == 34 then (true, false, .internal b)
-      else if b == 123 then (false, false, .call 1 b)
-      else if b == 125 then (false, false, .ret 1 b)
-      else (false, false, .internal b)
+-- Barrier 3: an audit that admits every hop breaks the organ's theorem.
+#tooth Obend.Trailblaze.ZkStripe.apex_zkstripe_calltree_audit by
+  mutation Obend.Trailblaze.ZkStripe.auditNodes := fun _ _ => .ok ()
 
--- `#tooth` Barrier 4: mutating `sessionNodePreimage` to drop `domain` breaks `sessionNodePreimage_inj`
+-- Barrier 4: a preimage that drops the domain breaks its injectivity.
 #tooth Obend.Trailblaze.ZkStripe.sessionNodePreimage_inj by
   mutation Obend.Trailblaze.ZkStripe.sessionNodePreimage :=
-    fun notaryHash _ req resp childrenBytes =>
+    fun key _ req resp childrenBytes =>
       (0x01 : UInt8) ::
-      (be 8 notaryHash ++
+      (be 32 key.toNat ++
        (frameBytes [] ++
         (frameBytes req ++
          (frameBytes resp ++
           childrenBytes))))
-
--- `#tooth` Barrier 4b: mutating `frameBytes` to drop the 4-byte length prefix breaks `frameBytes_append_inj`
-#tooth Obend.Trailblaze.ZkStripe.frameBytes_append_inj by
-  mutation Obend.Trailblaze.ZkStripe.frameBytes := fun xs => xs
 
 -- `#tooth` Barrier 5: mutating `checkSableNoWrap` to `fun _ => true` breaks `sable_dot_exact_no_wrap`
 #tooth Obend.Trailblaze.ClusterGov.sable_dot_exact_no_wrap by
@@ -308,12 +257,10 @@ example : silverCathedralApexSmoke = true := by decide
 
 #print axioms Obend.Trailblaze.ZkStripe.matchesBytes_compl
 #print axioms Obend.Trailblaze.ZkStripe.matchesBytes_inter
-#print axioms Obend.Trailblaze.ZkStripe.matchesBytes_deMorgan_alt
-#print axioms Obend.Trailblaze.ZkStripe.runVpa_balanced_stack
-#print axioms Obend.Trailblaze.ZkStripe.lexJsonByteArrayExec_eq_spec
-#print axioms Obend.Trailblaze.ZkStripe.runJsonFramingVpaExec_eq_spec
-#print axioms Obend.Trailblaze.ZkStripe.runJsonFramingVpa_rejects_escaped_quote_smuggle
-#print axioms Obend.Trailblaze.ZkStripe.runJsonFramingVpa_string_escape_sound
+#print axioms Obend.Trailblaze.ZkStripe.matchesBytes_alt
+#print axioms Obend.Trailblaze.ZkStripe.callTreeDigest_size
+#print axioms Obend.Trailblaze.ZkStripe.audit_covers_callTree_hops
+#print axioms Obend.Trailblaze.ZkStripe.checkView_body_framed
 #print axioms Obend.Trailblaze.ZkStripe.utf8Bytes_injective
 #print axioms Obend.Trailblaze.ZkStripe.callTreeDigestBytes_binding
 #print axioms Obend.Trailblaze.ZkStripe.callTreeDigest_binding

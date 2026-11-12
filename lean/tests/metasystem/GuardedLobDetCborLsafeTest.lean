@@ -294,6 +294,24 @@ def slice : Array KgEdge := #[edgeA, edgeB]
 def graphDigest : ByteArray := edgesDigest toyHasher slice
 def authKey : ByteArray := hex [42]
 
+-- One edge opens to the graph digest by its own path; no other edge is presented.
+example : verifyKgEdgeOpening toyHasher graphDigest edgeB (openKgEdge toyHasher slice 1) = true ∧
+    evalOpenedKgQuery toyHasher graphDigest 7 (hex [1]) (hex [20])
+      (some (openKgEdge toyHasher slice 1)) = .entailed := by decide +kernel
+-- Refused: another edge on that path, the edge at another index, a claimed count of three, and
+-- no opening at all (undetermined, never refuted).
+example : verifyKgEdgeOpening toyHasher graphDigest ⟨7, hex [1], hex [21]⟩
+      (openKgEdge toyHasher slice 1) = false ∧
+    verifyKgEdgeOpening toyHasher graphDigest edgeB (openKgEdge toyHasher slice 0) = false ∧
+    verifyKgEdgeOpening toyHasher graphDigest edgeB
+      ⟨3, (openKgEdge toyHasher slice 1).proof⟩ = false ∧
+    evalOpenedKgQuery toyHasher graphDigest 7 (hex [1]) (hex [21])
+      (some (openKgEdge toyHasher slice 1)) = .undetermined ∧
+    evalOpenedKgQuery toyHasher graphDigest 7 (hex [1]) (hex [20]) none = .undetermined := by
+  decide +kernel
+-- The digest binds the count: the slice and its one-edge prefix have different digests.
+example : edgesDigest toyHasher slice ≠ edgesDigest toyHasher #[edgeA] := by decide +kernel
+
 def sliceToken : CompletenessToken :=
   let t : CompletenessToken := ⟨graphDigest, 7, hex [1], edgesDigest toyHasher slice, ByteArray.empty⟩
   { t with issuerTag32 := tokenMac toyHasher authKey t }
@@ -405,19 +423,34 @@ example :
   mutation isSafeRedactionByte := fun b =>
     decide (0x20 ≤ b.toNat) && decide (b.toNat ≤ 0x7e) && b != 0x22
 
--- Lsafe: a lexer that ignores `escaped`.
+-- Lsafe: a mask byte predicate that lets the quote and the backslash through.
 #tooth lsafe_redaction_confinement by
-  mutation stepLex2Bit := fun st b =>
-    if st.inString then (if b == 0x22 then ⟨false, false⟩ else ⟨true, false⟩)
-    else if b == 0x22 then ⟨true, false⟩
-    else ⟨false, false⟩
+  mutation Obend.Judge.VpaJson.isSafeMaskByte := fun b =>
+    decide (0x20 ≤ b.toNat) && decide (b.toNat ≤ 0x7e)
+
+-- Lsafe: a string machine that ignores the backslash.
+#tooth lsafe_redaction_confinement by
+  mutation Obend.Judge.VpaJson.stepStr := fun _ b =>
+    if b == 0x22 then .close else .cont .normal
 
 -- Lsafe: closing an object without the duplicate-key check.
 #tooth lsafe_object_keys_nodup by
-  mutation closeObj := fun stack =>
-    match stack with
-    | f :: rest => if f.isObj then some (rest, f.keys) else none
-    | [] => none
+  mutation Obend.Judge.VpaJson.closeObject := fun st =>
+    match st.stack with
+    | f :: rest =>
+      if f.isObj then { st with mode := .after, stack := rest, closed := f.keys :: st.closed }
+      else Obend.Judge.VpaJson.failJ st
+    | [] => Obend.Judge.VpaJson.failJ st
+
+-- Lsafe: an edge opening that does not compare the climbed digest with the graph digest.
+#tooth verifyKgEdgeOpening_binding by
+  mutation Obend.Judge.VpaJson.topMatches := fun _ _ _ _ => true
+
+-- Lsafe: a graph digest that leaves the edge count out.
+#tooth verifyKgEdgeOpening_binding by
+  mutation Obend.Judge.VpaJson.rootHash := fun H tag _ t =>
+    H.hash tag (Obend.Judge.VpaJson.rootMsg
+      (Obend.Judge.VpaJson.leafHash H tag (Obend.Judge.Commit.countSpan 0)) t)
 
 -- Lsafe: an evaluator that refutes wherever it does not entail, token or not.
 #tooth openWorld_without_token_never_refutes by

@@ -1,359 +1,286 @@
 module
 /-
-# Obend.Judge.TranscriptPolicy — TLSNotary Selective-Disclosure Byte Transcript Confinement (`WS-F`)
+# Obend.Judge.TranscriptPolicy — selective disclosure of a transcript, confined by the JSON machine
 
-Provides:
-1. `RedactedSpan`: Attested TLSNotary redacted byte span `{ offset, length, merkleCommitment, byteClassMask }`.
-2. `isStructuralDelimiterByte`, `maskExcludesDelimiters`, `byteMatchesMask`: Structural delimiter
-   classification covering `"`, `}`, `\r`, `\n`, `<`, `{`.
-3. `selective_disclosure_redaction_confinement`: Constructive proof (`0 sorryAx`, `0 Classical.choice`)
-   that if every redacted span is confined to a value slot (`Seg.slot`) and its attested `byteClassMask`
-   excludes structural delimiter bytes, then for every possible private byte sequence `secretBytes` of
-   length `length` matching `byteClassMask`, splicing `secretBytes` into the transcript yields the exact
-   same sequence of public structural tokens and control headers as the redacted public skeleton.
-4. `tlsnTranscriptFormat`: Registered `Obend.Judge.Format` (`"tlsn-transcript-policy@1"`) with `bad_refused`.
+A transcript template is a list of literal segments and slots (`Seg`); each slot is a span the
+prover keeps hidden, attested by a `RedactedSpan`: where it sits, a 32-byte commitment to the
+hidden bytes, and the class of bytes the notary attests they are drawn from.
+
+**Confinement is stateful.** `slotsConfined` runs `Obend.Judge.VpaJson.stepJson` over the
+template's literals and asks that every slot sits in a value string outside any escape
+(`mode = .str false .normal`). A byte class is admitted only if it excludes every byte that is not
+string-safe (`VpaJson.isSafeMaskByte`: printable ASCII without `"` and `\`). There is no stateless
+delimiter list: a hidden backslash before a literal closing quote, or a slot placed after a
+literal backslash, is refused by the machine state and the class, not by a table of bytes.
+
+`selective_disclosure_redaction_confinement`: under `slotsConfined`, every string-safe filling of
+the slots drives the machine exactly as the literals alone do, so the filled transcript has the
+skeleton's grammar verdict and object key sets (`tlsn_filled_document`). `spanConfined` is the
+core of `VpaJson.checkJsonRedaction` at a machine state (`checkJsonRedaction_eq_spanConfined`);
+`Obend.Judge.DecoAndCallTree` folds it over the spans of a committed transcript.
+
+`tlsnTranscriptJudge` / `tlsnTranscriptFormat` (`tlsn-transcript-policy@1`): the spans are
+non-empty, of admitted classes, with 32-byte commitments, aligned with the template's slots; the
+slots are confined; the skeleton is a JSON document; the policy automaton accepts the skeleton's
+tokens; and the certificate's root is the span tree over the commitments. Empty spans and an
+inadmissible class refute the claim under every certificate.
+
+Not here: transcripts that are not JSON documents (an HTTP head is handled in
+`DecoAndCallTree`); the notary's signature over the spans.
 -/
 public import Lean.Data.Json
 public import Obend.Judge.Class
 public import Obend.Judge.AutomataConfinement
+public import Obend.Judge.VpaComplementAndJson
 public import Obend.Core.Data
+import all Obend.Codec.DetCbor
+import all Obend.Judge.SymbolicRegexBisim
+import all Obend.Judge.VpaComplementAndJson
 
-@[expose] public section
+public section
 
 namespace Obend.Judge
 
 open Lean (Json toJson)
-open Obend.Core.Data (Data)
+open Obend.Judge.Commit (cshakeHasher hexOf unhex)
 
 set_option autoImplicit false
 
-/-! ## 1. TLSNotary Redacted Byte Spans & Character Class Masks -/
+/-! ## 1. Attested spans and byte classes -/
 
-/-- Attested TLSNotary redacted byte span within an HTTPS/JSON/Prompt transcript. -/
+/-- An attested redacted span: its offset and length in the transcript, the 32-byte commitment to
+the hidden bytes (their span-leaf digest), and the attested byte class. -/
 structure RedactedSpan where
   offset : Nat
   length : Nat
-  merkleCommitment : Nat
+  commitment : ByteArray
   byteClassMask : Nat
-  deriving DecidableEq, Repr, Inhabited
+  deriving DecidableEq
 
-/-- Structural delimiter bytes in HTTPS/JSON/Prompt transcripts:
-    `"` (34), `}` (125), `\r` (13), `\n` (10), `<` (60), `{` (123). -/
-def isStructuralDelimiterByte (b : Nat) : Bool :=
-  b == 34 || b == 125 || b == 13 || b == 10 || b == 60 || b == 123
+/-- Bit 1 of a class admits the string-safe bytes; bit 0 admits every other byte (the quote, the
+backslash, control bytes, bytes above `0x7e`). -/
+def byteMatchesMask (mask : Nat) (b : UInt8) : Bool :=
+  if VpaJson.isSafeMaskByte b then (mask / 2) % 2 == 1 else mask % 2 == 1
 
-/-- Check whether byte `b` is permitted by `byteClassMask`.
-    Bit 0 (`mask % 2 == 1`) permits structural delimiter bytes;
-    Bit 1 (`(mask / 2) % 2 == 1`) permits non-delimiter value bytes. -/
-def byteMatchesMask (mask b : Nat) : Bool :=
-  if isStructuralDelimiterByte b then
-    (mask % 2) == 1
-  else
-    ((mask / 2) % 2) == 1
+/-- The class admits string-safe bytes and nothing else. -/
+def maskExcludesDelimiters (mask : Nat) : Bool := mask % 2 == 0 && (mask / 2) % 2 == 1
 
-/-- Check that `byteClassMask` strictly excludes all structural delimiter bytes
-    (`"`, `}`, `\r`, `\n`, `<`, `{`) and permits safe value bytes. -/
-def maskExcludesDelimiters (mask : Nat) : Bool :=
-  (mask % 2) == 0 && ((mask / 2) % 2) == 1
-
-/-- Any byte matching a mask that excludes delimiters is guaranteed not to be a structural delimiter. -/
-theorem no_delimiter_of_matches_safe_mask {mask b : Nat}
-    (h_mask : maskExcludesDelimiters mask = true)
-    (h_match : byteMatchesMask mask b = true) :
-    isStructuralDelimiterByte b = false := by
-  unfold maskExcludesDelimiters at h_mask
-  unfold byteMatchesMask at h_match
-  cases hdel : isStructuralDelimiterByte b
+/-- A byte of an admitted class is string-safe. -/
+theorem safe_of_matches_safe_mask {mask : Nat} {b : UInt8}
+    (hm : maskExcludesDelimiters mask = true) (hb : byteMatchesMask mask b = true) :
+    VpaJson.isSafeMaskByte b = true := by
+  unfold byteMatchesMask at hb
+  cases hs : VpaJson.isSafeMaskByte b
+  · rw [hs] at hb
+    simp only [maskExcludesDelimiters, Bool.and_eq_true, beq_iff_eq] at hm
+    simp only [Bool.false_eq_true, ↓reduceIte, beq_iff_eq] at hb
+    rw [hm.1] at hb
+    cases hb
   · rfl
-  · rw [hdel] at h_match
-    simp only [Bool.and_eq_true, beq_iff_eq] at h_mask
-    simp only [↓reduceIte, beq_iff_eq] at h_match
-    rw [h_mask.1] at h_match
-    cases h_match
 
-/-! ## 2. Public Skeleton vs. Private Spliced Transcript Tokenization -/
+/-! ## 2. The confinement core, and templates on the machine -/
 
-/-- Convert a literal `String` into its list of UTF-8 byte codes constructively (`0 Classical.choice`). -/
-def stringToByteNats (s : String) : List Nat :=
-  s.toUTF8.toList.map UInt8.toNat
+/-- **The confinement core** at a machine state: the state is in a value string outside any
+escape, the hidden span walks inside that string back to the state, and the mask is string-safe. -/
+def spanConfined (st : VpaJson.JState) (span mask : List UInt8) : Bool :=
+  decide (st.mode = .str false .normal) && decide (VpaJson.walkInterior st span = some st) &&
+    mask.all VpaJson.isSafeMaskByte
 
-/-- Convert a list of literal strings into a flat byte list. -/
-def litTokensToBytes (ts : List String) : List Nat :=
-  (ts.map stringToByteNats).flatten
+/-- `checkJsonRedaction` is the core at the state the document reaches at the span's start. -/
+theorem checkJsonRedaction_eq_spanConfined (doc : ByteArray) (l r : Nat) (mask : ByteArray) :
+    VpaJson.checkJsonRedaction doc l r mask = (decide (l ≤ r) && decide (r ≤ doc.size) &&
+      spanConfined (VpaJson.jsonStateAt doc l) ((doc.data.toList.drop l).take (r - l))
+        mask.data.toList) := by
+  simp only [VpaJson.checkJsonRedaction, spanConfined, Bool.and_assoc]
 
-/-- Public placeholder bytes (`'*' = 42`) for a redacted span of length `len`. -/
-def redactedPlaceholderBytes (len : Nat) : List Nat :=
-  List.replicate len 42
+/-- A confined span and its mask both leave the machine where it was. -/
+theorem spanConfined_run {st : VpaJson.JState} {span mask : List UInt8}
+    (h : spanConfined st span mask = true) :
+    VpaJson.specRunJson span st = st ∧ VpaJson.specRunJson mask st = st := by
+  simp only [spanConfined, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact ⟨VpaJson.walkInterior_run _ _ _ h.1.2, VpaJson.specRunJson_safe h.1.1 _ h.2⟩
 
-/-- Extract the sequence of public structural tokens and control header delimiter bytes from a byte stream. -/
-def extractStructuralTokens (bytes : List Nat) : List Nat :=
-  bytes.filter isStructuralDelimiterByte
+/-- The bytes of a literal segment. -/
+def litBytes (ts : List String) : List UInt8 := ts.flatMap fun t => t.toByteArray.data.toList
 
-/-- Convert a structural delimiter byte code into its canonical single-character token string constructively. -/
-def delimiterByteToString (b : Nat) : String :=
-  if b == 34 then "\""
-  else if b == 125 then "}"
-  else if b == 13 then "\r"
-  else if b == 10 then "\n"
-  else if b == 60 then "<"
-  else if b == 123 then "{"
-  else "*"
+/-- The public placeholder of a hidden span: `*` repeated. -/
+def placeholder (len : Nat) : List UInt8 := List.replicate len 0x2a
 
-/-- Convert extracted structural delimiter byte codes into canonical single-character token strings. -/
-def structuralBytesToStrings (bytes : List Nat) : List String :=
-  (extractStructuralTokens bytes).map delimiterByteToString
+/-- The transcript a template renders to when its slots are filled in order. -/
+def renderWith : List Seg → List (List UInt8) → List UInt8
+  | [], _ => []
+  | .lit ts :: rest, fills => litBytes ts ++ renderWith rest fills
+  | .slot _ :: rest, [] => renderWith rest []
+  | .slot _ :: rest, f :: fills => f ++ renderWith rest fills
 
-theorem extractStructuralTokens_append (xs ys : List Nat) :
-    extractStructuralTokens (xs ++ ys) =
-      extractStructuralTokens xs ++ extractStructuralTokens ys := by
-  simp [extractStructuralTokens, List.filter_append]
+/-- The public skeleton: every slot holds its span's placeholder. -/
+def renderRedactedSkeleton (segs : List Seg) (spans : List RedactedSpan) : List UInt8 :=
+  renderWith segs (spans.map fun sp => placeholder sp.length)
 
-theorem extractStructuralTokens_nil_of_all_non_delim (bytes : List Nat)
-    (h : ∀ b ∈ bytes, isStructuralDelimiterByte b = false) :
-    extractStructuralTokens bytes = [] := by
-  induction bytes with
-  | nil => rfl
-  | cons b rest ih =>
-    have hb : isStructuralDelimiterByte b = false := h b (List.Mem.head rest)
-    have hrest : ∀ x ∈ rest, isStructuralDelimiterByte x = false :=
-      fun x hx => h x (List.Mem.tail b hx)
-    unfold extractStructuralTokens
-    simp only [List.filter, hb]
-    exact ih hrest
+/-- The machine over the literals alone; a slot leaves it where it is. -/
+def skeletonRun : VpaJson.JState → List Seg → VpaJson.JState
+  | st, [] => st
+  | st, .lit ts :: rest => skeletonRun (VpaJson.specRunJson (litBytes ts) st) rest
+  | st, .slot _ :: rest => skeletonRun st rest
 
-theorem extractStructuralTokens_placeholder (len : Nat) :
-    extractStructuralTokens (redactedPlaceholderBytes len) = [] := by
-  apply extractStructuralTokens_nil_of_all_non_delim
-  intro b hb
-  unfold redactedPlaceholderBytes at hb
-  have hb_eq : b = 42 := List.eq_of_mem_replicate hb
-  subst hb_eq
-  rfl
+/-- **Every slot sits in a value string outside any escape.** -/
+def slotsConfined : VpaJson.JState → List Seg → Bool
+  | _, [] => true
+  | st, .lit ts :: rest => slotsConfined (VpaJson.specRunJson (litBytes ts) st) rest
+  | st, .slot _ :: rest => decide (st.mode = .str false .normal) && slotsConfined st rest
 
-theorem extractStructuralTokens_secret_nil (span : RedactedSpan) (secretBytes : List Nat)
-    (h_mask : maskExcludesDelimiters span.byteClassMask = true)
-    (h_match : ∀ b ∈ secretBytes, byteMatchesMask span.byteClassMask b = true) :
-    extractStructuralTokens secretBytes = [] := by
-  apply extractStructuralTokens_nil_of_all_non_delim
-  intro b hb
-  exact no_delimiter_of_matches_safe_mask h_mask (h_match b hb)
-
-/-- Render the redacted public skeleton of a template `segs` where each `Seg.slot` is filled
-    with `redactedPlaceholderBytes span.length`. -/
-def renderRedactedSkeleton (segs : List Seg) (span : RedactedSpan) : List Nat :=
-  match segs with
-  | [] => []
-  | .lit ts :: rest => litTokensToBytes ts ++ renderRedactedSkeleton rest span
-  | .slot _ :: rest => redactedPlaceholderBytes span.length ++ renderRedactedSkeleton rest span
-
-/-- Render the full transcript by splicing private `secretBytes` into each `Seg.slot`. -/
-def spliceSecretIntoSlots (segs : List Seg) (secretBytes : List Nat) : List Nat :=
-  match segs with
-  | [] => []
-  | .lit ts :: rest => litTokensToBytes ts ++ spliceSecretIntoSlots rest secretBytes
-  | .slot _ :: rest => secretBytes ++ spliceSecretIntoSlots rest secretBytes
-
-/-- **Selective-Disclosure Redaction Confinement Theorem (`selective_disclosure_redaction_confinement`)**:
-    If every redacted span is confined to a value slot (`Seg.slot`) and its attested `byteClassMask`
-    excludes structural delimiter bytes (`"`, `}`, `\r`, `\n`, `<`, `{`), then for every possible
-    private byte sequence `secretBytes` matching `span.byteClassMask`, splicing `secretBytes` into
-    the transcript yields the exact same sequence of public structural tokens and control headers
-    as the redacted public skeleton! -/
-theorem selective_disclosure_redaction_confinement
-    (segs : List Seg) (span : RedactedSpan) (secretBytes : List Nat)
-    (h_mask : maskExcludesDelimiters span.byteClassMask = true)
-    (h_match : ∀ b ∈ secretBytes, byteMatchesMask span.byteClassMask b = true) :
-    extractStructuralTokens (spliceSecretIntoSlots segs secretBytes) =
-      extractStructuralTokens (renderRedactedSkeleton segs span) := by
+/-- **Selective-disclosure confinement.** When every slot is confined, every string-safe filling
+of the slots drives the machine exactly as the literals alone do: what is hidden reaches nothing
+the grammar reads. -/
+theorem selective_disclosure_redaction_confinement (segs : List Seg) :
+    ∀ (fills : List (List UInt8)) (st : VpaJson.JState), slotsConfined st segs = true →
+      (∀ f ∈ fills, f.all VpaJson.isSafeMaskByte = true) →
+      VpaJson.specRunJson (renderWith segs fills) st = skeletonRun st segs := by
   induction segs with
-  | nil => rfl
+  | nil => intro fills st _ _; rfl
   | cons seg rest ih =>
+    intro fills st hc hf
     cases seg with
     | lit ts =>
-      simp only [spliceSecretIntoSlots, renderRedactedSkeleton, extractStructuralTokens_append, ih]
-    | slot name =>
-      simp only [spliceSecretIntoSlots, renderRedactedSkeleton, extractStructuralTokens_append]
-      rw [extractStructuralTokens_secret_nil span secretBytes h_mask h_match]
-      rw [extractStructuralTokens_placeholder span.length]
-      exact ih
+      simp only [renderWith, skeletonRun, VpaJson.specRunJson_append]
+      exact ih fills _ hc hf
+    | slot n =>
+      simp only [slotsConfined, Bool.and_eq_true, decide_eq_true_eq] at hc
+      cases fills with
+      | nil =>
+        simp only [renderWith, skeletonRun]
+        exact ih [] st hc.2 hf
+      | cons f fills =>
+        simp only [renderWith, skeletonRun, VpaJson.specRunJson_append]
+        rw [VpaJson.specRunJson_safe hc.1 f (hf f List.mem_cons_self)]
+        exact ih fills st hc.2 fun g hg => hf g (List.mem_cons_of_mem _ hg)
 
-/-- Byte-offset length preservation when `secretBytes.length = span.length`. -/
-theorem spliceSecretIntoSlots_length_eq
-    (segs : List Seg) (span : RedactedSpan) (secretBytes : List Nat)
-    (h_len : secretBytes.length = span.length) :
-    (spliceSecretIntoSlots segs secretBytes).length =
-      (renderRedactedSkeleton segs span).length := by
-  induction segs with
-  | nil => rfl
-  | cons seg rest ih =>
-    cases seg with
-    | lit ts =>
-      simp [spliceSecretIntoSlots, renderRedactedSkeleton, ih]
-    | slot _ =>
-      simp [spliceSecretIntoSlots, renderRedactedSkeleton, redactedPlaceholderBytes, h_len, ih]
+/-- The filled transcript, as a document, ends in the skeleton's machine state: it has the
+skeleton's grammar verdict and object key sets. -/
+theorem tlsn_filled_document (segs : List Seg) (fills : List (List UInt8))
+    (hc : slotsConfined VpaJson.JState.init segs = true)
+    (hf : ∀ f ∈ fills, f.all VpaJson.isSafeMaskByte = true) :
+    VpaJson.jsonRun ⟨(renderWith segs fills).toArray⟩ = skeletonRun VpaJson.JState.init segs := by
+  rw [VpaJson.jsonRun_eq]
+  exact selective_disclosure_redaction_confinement segs fills _ hc hf
 
-/-- **Selective-Disclosure DFA Verdict Invariance (`selective_disclosure_dfa_verdict_invariant`)**:
-    Under the conditions of `selective_disclosure_redaction_confinement`, any `policyDfa : TableDfa`
-    evaluating the structural token stream returns the exact same acceptance verdict on the
-    spliced private transcript as on the redacted public skeleton. -/
-theorem selective_disclosure_dfa_verdict_invariant
-    (policyDfa : TableDfa) (segs : List Seg) (span : RedactedSpan) (secretBytes : List Nat)
-    (h_mask : maskExcludesDelimiters span.byteClassMask = true)
-    (h_match : ∀ b ∈ secretBytes, byteMatchesMask span.byteClassMask b = true) :
-    dfaAccepts policyDfa (structuralBytesToStrings (spliceSecretIntoSlots segs secretBytes)) =
-      dfaAccepts policyDfa (structuralBytesToStrings (renderRedactedSkeleton segs span)) := by
-  unfold structuralBytesToStrings
-  rw [selective_disclosure_redaction_confinement segs span secretBytes h_mask h_match]
-
-/-- Multi-slot redacted skeleton renderer indexed by slot name. -/
-def renderMultiSlotSkeleton (segs : List Seg) (spans : String → RedactedSpan) : List Nat :=
-  match segs with
+/-- The public token stream of a template: its literal tokens, and `*` for a slot. -/
+def skeletonTokens : List Seg → List String
   | [] => []
-  | .lit ts :: rest => litTokensToBytes ts ++ renderMultiSlotSkeleton rest spans
-  | .slot name :: rest => redactedPlaceholderBytes (spans name).length ++ renderMultiSlotSkeleton rest spans
+  | .lit ts :: rest => ts ++ skeletonTokens rest
+  | .slot _ :: rest => "*" :: skeletonTokens rest
 
-/-- Multi-slot secret splicer indexed by slot name. -/
-def spliceMultiSlotSecrets (segs : List Seg) (secrets : String → List Nat) : List Nat :=
-  match segs with
-  | [] => []
-  | .lit ts :: rest => litTokensToBytes ts ++ spliceMultiSlotSecrets rest secrets
-  | .slot name :: rest => secrets name ++ spliceMultiSlotSecrets rest secrets
+/-- The spans are the template's slots, in order, at their byte offsets in the skeleton. -/
+def spansAligned : Nat → List Seg → List RedactedSpan → Bool
+  | _, [], spans => spans.isEmpty
+  | off, .lit ts :: rest, spans => spansAligned (off + (litBytes ts).length) rest spans
+  | _, .slot _ :: _, [] => false
+  | off, .slot _ :: rest, sp :: spans =>
+    decide (sp.offset = off) && spansAligned (off + sp.length) rest spans
 
-/-- Multi-slot Selective-Disclosure Redaction Confinement Theorem. -/
-theorem selective_disclosure_redaction_confinement_multi
-    (segs : List Seg) (spans : String → RedactedSpan) (secrets : String → List Nat)
-    (h_masks : ∀ name, maskExcludesDelimiters (spans name).byteClassMask = true)
-    (h_matches : ∀ name, ∀ b ∈ secrets name, byteMatchesMask (spans name).byteClassMask b = true) :
-    extractStructuralTokens (spliceMultiSlotSecrets segs secrets) =
-      extractStructuralTokens (renderMultiSlotSkeleton segs spans) := by
-  induction segs with
-  | nil => rfl
-  | cons seg rest ih =>
-    cases seg with
-    | lit ts =>
-      simp only [spliceMultiSlotSecrets, renderMultiSlotSkeleton, extractStructuralTokens_append, ih]
-    | slot name =>
-      simp only [spliceMultiSlotSecrets, renderMultiSlotSkeleton, extractStructuralTokens_append]
-      rw [extractStructuralTokens_secret_nil (spans name) (secrets name) (h_masks name) (h_matches name)]
-      rw [extractStructuralTokens_placeholder (spans name).length]
-      exact ih
+/-! ## 3. The judge and the format `tlsn-transcript-policy@1` -/
 
-/-- Multi-slot byte-offset length preservation when `(secrets name).length = (spans name).length`. -/
-theorem spliceMultiSlotSecrets_length_eq
-    (segs : List Seg) (spans : String → RedactedSpan) (secrets : String → List Nat)
-    (h_lens : ∀ name, (secrets name).length = (spans name).length) :
-    (spliceMultiSlotSecrets segs secrets).length =
-      (renderMultiSlotSkeleton segs spans).length := by
-  induction segs with
-  | nil => rfl
-  | cons seg rest ih =>
-    cases seg with
-    | lit ts =>
-      simp [spliceMultiSlotSecrets, renderMultiSlotSkeleton, ih]
-    | slot name =>
-      simp [spliceMultiSlotSecrets, renderMultiSlotSkeleton, redactedPlaceholderBytes, h_lens name, ih]
-
-/-! ## 3. Registered Judge Format `tlsnTranscriptFormat` (`"tlsn-transcript-policy@1"`) -/
-
-/-- Query object for the TLSNotary selective-disclosure transcript policy judge. -/
 structure TlsnTranscriptQuery where
   segs : List Seg
   spans : List RedactedSpan
   policyDfa : TableDfa
-  deriving DecidableEq, Repr
+  deriving DecidableEq
 
-/-- Certificate for a TLSNotary transcript policy check. -/
+/-- The certificate: the slot count and the span tree over the spans' commitments. -/
 structure TlsnTranscriptCert where
   slotCount : Nat
-  merkleRoot : Nat
-  deriving DecidableEq, Repr
+  spanRoot : VpaJson.SpanRoot
+  deriving DecidableEq
 
-/-- Refusal clauses for `tlsnTranscriptJudge`. -/
 inductive TlsnTranscriptRefusal where
   | emptySpans
   | spanMaskAllowsDelimiter
+  | narrowCommitment
   | slotCountMismatch
+  | spanMisaligned
+  | slotOutsideValueString
+  | skeletonNotJson
   | policyDfaRejectedSkeleton
+  | spanRootMismatch
   deriving DecidableEq, Repr
 
-/-- Count the number of `.slot` segments in a transcript template. -/
-def countTranscriptSlots : List Seg → Nat
-  | [] => 0
-  | .lit _ :: rest => countTranscriptSlots rest
-  | .slot _ :: rest => 1 + countTranscriptSlots rest
+def spanCommitments (q : TlsnTranscriptQuery) : List ByteArray := q.spans.map (·.commitment)
 
-/-- Kernel verifier for TLSNotary selective-disclosure transcript policy confinement. -/
+/-- The span tree over a query's commitments, at cSHAKE256. -/
+def tlsnSpanRoot (q : TlsnTranscriptQuery) : VpaJson.SpanRoot :=
+  VpaJson.spanMerkleRoot cshakeHasher VpaJson.spanTag (spanCommitments q)
+
 def verifyTlsnTranscriptPolicy (q : TlsnTranscriptQuery) (c : TlsnTranscriptCert) :
     Judge.Verdict TlsnTranscriptRefusal :=
-  if q.spans.isEmpty then
-    .refused .emptySpans []
-  else if !q.spans.all (fun sp => maskExcludesDelimiters sp.byteClassMask) then
+  if q.spans.isEmpty then .refused .emptySpans []
+  else if q.spans.all (fun sp => maskExcludesDelimiters sp.byteClassMask) = false then
     .refused .spanMaskAllowsDelimiter []
-  else if c.slotCount != q.spans.length || c.slotCount != countTranscriptSlots q.segs then
-    .refused .slotCountMismatch []
-  else
-    let primarySpan := q.spans.headD default
-    let skeletonTokens := structuralBytesToStrings (renderRedactedSkeleton q.segs primarySpan)
-    if !dfaAccepts q.policyDfa skeletonTokens then
-      .refused .policyDfaRejectedSkeleton []
-    else
-      .ok
+  else if q.spans.all (fun sp => sp.commitment.size == 32) = false then
+    .refused .narrowCommitment []
+  else if c.slotCount ≠ q.spans.length then .refused .slotCountMismatch []
+  else if spansAligned 0 q.segs q.spans = false then .refused .spanMisaligned []
+  else if slotsConfined VpaJson.JState.init q.segs = false then .refused .slotOutsideValueString []
+  else if VpaJson.jsonAccepting (skeletonRun VpaJson.JState.init q.segs) = false then
+    .refused .skeletonNotJson []
+  else if dfaAccepts q.policyDfa (skeletonTokens q.segs) = false then
+    .refused .policyDfaRejectedSkeleton []
+  else if c.spanRoot ≠ tlsnSpanRoot q then .refused .spanRootMismatch []
+  else .ok
 
-/-- Declarative semantic meaning established by `verifyTlsnTranscriptPolicy`:
-    1. Non-empty redacted span list (`q.spans ≠ []`),
-    2. Every span's `byteClassMask` strictly excludes structural delimiter bytes,
-    3. `c.slotCount` matches both `q.spans.length` and `countTranscriptSlots q.segs`,
-    4. `q.policyDfa` accepts the rendered redacted skeleton. -/
-def TlsnTranscriptMeaning (q : TlsnTranscriptQuery) (c : TlsnTranscriptCert) : Prop :=
-  q.spans ≠ [] ∧
-  (∀ sp ∈ q.spans, maskExcludesDelimiters sp.byteClassMask = true) ∧
-  c.slotCount = q.spans.length ∧
-  c.slotCount = countTranscriptSlots q.segs ∧
-  dfaAccepts q.policyDfa
-    (structuralBytesToStrings (renderRedactedSkeleton q.segs (q.spans.headD default))) = true
+/-- What an accepted certificate establishes. `confined` is the semantic clause: every
+string-safe filling of the hidden spans is a JSON document with the skeleton's object keys. -/
+structure TlsnTranscriptMeaning (q : TlsnTranscriptQuery) (c : TlsnTranscriptCert) : Prop where
+  nonempty : q.spans ≠ []
+  classes : ∀ sp ∈ q.spans, maskExcludesDelimiters sp.byteClassMask = true
+  wide : ∀ sp ∈ q.spans, sp.commitment.size = 32
+  count : c.slotCount = q.spans.length
+  aligned : spansAligned 0 q.segs q.spans = true
+  confined : ∀ fills : List (List UInt8), (∀ f ∈ fills, f.all VpaJson.isSafeMaskByte = true) →
+    VpaJson.runFullJsonGrammar ⟨(renderWith q.segs fills).toArray⟩ = true ∧
+      VpaJson.jsonObjectKeys ⟨(renderWith q.segs fills).toArray⟩ =
+        (skeletonRun VpaJson.JState.init q.segs).closed
+  policy : dfaAccepts q.policyDfa (skeletonTokens q.segs) = true
+  committed : c.spanRoot = tlsnSpanRoot q
 
-theorem tlsnTranscriptPolicy_sound {q : TlsnTranscriptQuery} {c : TlsnTranscriptCert}
-    (h : verifyTlsnTranscriptPolicy q c = .ok) :
-    TlsnTranscriptMeaning q c := by
-  unfold verifyTlsnTranscriptPolicy at h
-  cases he : q.spans.isEmpty
-  · rw [he] at h
-    cases hall : q.spans.all (fun sp => maskExcludesDelimiters sp.byteClassMask)
-    · rw [hall] at h; cases h
-    · rw [hall] at h
-      cases hcnt : (c.slotCount != q.spans.length || c.slotCount != countTranscriptSlots q.segs)
-      · rw [hcnt] at h
-        dsimp only at h
-        cases hdfa : dfaAccepts q.policyDfa
-            (structuralBytesToStrings (renderRedactedSkeleton q.segs (q.spans.headD default)))
-        · rw [hdfa] at h; cases h
-        · simp only [Bool.or_eq_false_iff, bne_eq_false_iff_eq] at hcnt
-          exact ⟨List.isEmpty_eq_false_iff.mp he, List.all_eq_true.mp hall, hcnt.1, hcnt.2, hdfa⟩
-      · rw [hcnt] at h; cases h
-  · rw [he] at h; cases h
+/-- The checks an acceptance passed. -/
+theorem verifyTlsnTranscriptPolicy_iff (q : TlsnTranscriptQuery) (c : TlsnTranscriptCert) :
+    verifyTlsnTranscriptPolicy q c = .ok ↔
+      q.spans.isEmpty = false ∧
+        q.spans.all (fun sp => maskExcludesDelimiters sp.byteClassMask) = true ∧
+        q.spans.all (fun sp => sp.commitment.size == 32) = true ∧ c.slotCount = q.spans.length ∧
+        spansAligned 0 q.segs q.spans = true ∧ slotsConfined VpaJson.JState.init q.segs = true ∧
+        VpaJson.jsonAccepting (skeletonRun VpaJson.JState.init q.segs) = true ∧
+        dfaAccepts q.policyDfa (skeletonTokens q.segs) = true ∧ c.spanRoot = tlsnSpanRoot q := by
+  unfold verifyTlsnTranscriptPolicy
+  repeat' split
+  all_goals first
+    | (simp_all; done)
+    | (simp_all
+       intro hall
+       rename_i hex
+       obtain ⟨x, hx, hf⟩ := hex
+       have h' := hall x hx
+       simp_all)
 
-/-- Constructive `Judge` instance for TLSNotary transcript policy verification. -/
-instance tlsnTranscriptJudge : Judge TlsnTranscriptQuery TlsnTranscriptCert where
-  Clause := TlsnTranscriptRefusal
-  Meaning := TlsnTranscriptMeaning
-  check _ q c := verifyTlsnTranscriptPolicy q c
-  sound := by intro _ _ _ h; exact tlsnTranscriptPolicy_sound h
-  refutes _ := false
-  refuted := by
-    intro _ _ _ _ _ _ href
-    cases href
-  Fragment q := ∃ c, verifyTlsnTranscriptPolicy q c = .ok
-  complete := by
-    intro _ ⟨c, hc⟩ _
-    exact ⟨c, 0, hc⟩
-  mono := by
-    intro _ _ _ _ _ _
-    rfl
+theorem tlsnTranscriptPolicy_sound {q : TlsnTranscriptQuery} {c : TlsnTranscriptCert} :
+    verifyTlsnTranscriptPolicy q c = .ok → TlsnTranscriptMeaning q c := by
+  intro h
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩ := (verifyTlsnTranscriptPolicy_iff q c).1 h
+  refine ⟨fun he => ?_, List.all_eq_true.1 h2, fun sp hsp => ?_, h4, h5, fun fills hf => ?_, h8, h9⟩
+  · rw [he] at h1; cases h1
+  · simpa using List.all_eq_true.1 h3 sp hsp
+  · have hr := tlsn_filled_document q.segs fills h6 hf
+    exact ⟨by unfold VpaJson.runFullJsonGrammar; rw [hr]; exact h7,
+      by unfold VpaJson.jsonObjectKeys; rw [hr]⟩
 
-/-- Canonical valid TLSNotary transcript query. -/
+/-- A span tree commitment to the eight hidden bytes of the sample query. -/
+def validTlsnCommitment : ByteArray :=
+  VpaJson.leafHash cshakeHasher VpaJson.spanTag "hunter2!".toByteArray
+
+/-- Canonical valid query: `{"role":"user","secret":"` · slot · `"}`. -/
 def validTlsnQuery : TlsnTranscriptQuery where
   segs := [.lit ["{\"role\":\"user\",\"secret\":\""], .slot "secret", .lit ["\"}"]]
-  spans := [{ offset := 25, length := 8, merkleCommitment := 12345, byteClassMask := 2 }]
+  spans := [{ offset := 25, length := 8, commitment := validTlsnCommitment, byteClassMask := 2 }]
   policyDfa := {
     start := 0
     accepting := [0]
@@ -362,29 +289,79 @@ def validTlsnQuery : TlsnTranscriptQuery where
     defaultSink := 0
   }
 
-/-- Canonical valid TLSNotary transcript certificate. -/
-def validTlsnCert : TlsnTranscriptCert where
-  slotCount := 1
-  merkleRoot := 12345
+def validTlsnCert : TlsnTranscriptCert := ⟨1, tlsnSpanRoot validTlsnQuery⟩
 
-/-- Planted bad TLSNotary transcript query where `byteClassMask = 3` allows delimiter bytes (`"`). -/
+/-- **The sample is accepted**: the checker's premise is inhabited. -/
+theorem validTlsn_accepted : verifyTlsnTranscriptPolicy validTlsnQuery validTlsnCert = .ok := by
+  have hrun : skeletonRun VpaJson.JState.init validTlsnQuery.segs =
+      VpaJson.specRunJson (litBytes ["\"}"])
+        (VpaJson.specRunJson (litBytes ["{\"role\":\"user\",\"secret\":\""]) VpaJson.JState.init) :=
+    rfl
+  refine (verifyTlsnTranscriptPolicy_iff _ _).2 ⟨rfl, by decide +kernel, ?_, rfl, by decide +kernel,
+    by decide +kernel, by rw [hrun]; decide +kernel, by decide +kernel, rfl⟩
+  have hs : validTlsnCommitment.size = 32 := cshakeHasher.size_eq _ _
+  show (validTlsnCommitment.size == 32 && true) = true
+  rw [hs]
+  rfl
+
+/-- The planted bad query: a class that admits the quote and the backslash. -/
 def badTlsnQuery : TlsnTranscriptQuery :=
   { validTlsnQuery with
-    spans := [{ offset := 25, length := 8, merkleCommitment := 12345, byteClassMask := 3 }] }
+    spans := [{ offset := 25, length := 8, commitment := validTlsnCommitment, byteClassMask := 3 }] }
 
-/-- Planted bad TLSNotary transcript certificate. -/
 def badTlsnCert : TlsnTranscriptCert := validTlsnCert
 
 theorem badTlsn_refused :
-    tlsnTranscriptJudge.check 0 badTlsnQuery badTlsnCert =
-      .refused .spanMaskAllowsDelimiter [] := rfl
+    verifyTlsnTranscriptPolicy badTlsnQuery badTlsnCert = .refused .spanMaskAllowsDelimiter [] := by
+  have h1 : badTlsnQuery.spans.isEmpty = false := rfl
+  have h2 : badTlsnQuery.spans.all (fun sp => maskExcludesDelimiters sp.byteClassMask) = false := by
+    decide +kernel
+  unfold verifyTlsnTranscriptPolicy
+  simp only [h1, h2, Bool.false_eq_true, ↓reduceIte]
 
-/-- Encode `Seg` to `Lean.Json`. -/
+/-- **The transcript policy judge.** Empty spans and an inadmissible byte class refute the claim
+under every certificate; completeness is claimed on the templates whose slots are confined. -/
+instance tlsnTranscriptJudge : Judge TlsnTranscriptQuery TlsnTranscriptCert where
+  Clause := TlsnTranscriptRefusal
+  Meaning := TlsnTranscriptMeaning
+  check _ q c := verifyTlsnTranscriptPolicy q c
+  sound := by intro _ _ _ h; exact tlsnTranscriptPolicy_sound h
+  refutes
+    | .emptySpans => true
+    | .spanMaskAllowsDelimiter => true
+    | _ => false
+  refuted := by
+    intro _ q c k p h hk c' hm
+    unfold verifyTlsnTranscriptPolicy at h
+    split at h
+    · rename_i he
+      exact hm.nonempty (List.isEmpty_iff.1 he)
+    · split at h
+      · rename_i hmask
+        rw [List.all_eq_true.2 hm.classes] at hmask
+        cases hmask
+      · repeat' split at h
+        all_goals cases h <;> cases hk
+  Fragment q := slotsConfined VpaJson.JState.init q.segs = true
+  complete := by
+    rintro q hfrag ⟨c, hm⟩
+    refine ⟨c, 0, (verifyTlsnTranscriptPolicy_iff q c).2 ⟨?_, List.all_eq_true.2 hm.classes,
+      List.all_eq_true.2 fun sp hsp => by simpa using hm.wide sp hsp, hm.count, hm.aligned, hfrag,
+      ?_, hm.policy, hm.committed⟩⟩
+    · cases hs : q.spans with
+      | nil => exact absurd hs hm.nonempty
+      | cons _ _ => rfl
+    · have hr := tlsn_filled_document q.segs [] hfrag (fun _ h => by cases h)
+      have hv := (hm.confined [] (fun _ h => by cases h)).1
+      unfold VpaJson.runFullJsonGrammar at hv
+      rw [hr] at hv
+      exact hv
+  mono := by intro _ _ _ _ _ _; rfl
+
 def segToJson : Seg → Json
   | .lit ts => Json.mkObj [("lit", Json.arr (ts.map Json.str).toArray)]
   | .slot name => Json.mkObj [("slot", Json.str name)]
 
-/-- Parse `Seg` from `Lean.Json`. -/
 def segOfJson (j : Json) : Except String Seg := do
   match j.getObjVal? "lit" with
   | .ok arrJ =>
@@ -394,30 +371,27 @@ def segOfJson (j : Json) : Except String Seg := do
     let name ← j.getObjValAs? String "slot"
     pure (.slot name)
 
-/-- Encode `RedactedSpan` to `Lean.Json`. -/
+/-- A span on the wire; the commitment is lowercase hex. -/
 def redactedSpanToJson (sp : RedactedSpan) : Json :=
   Json.mkObj
     [ ("offset", toJson sp.offset)
     , ("length", toJson sp.length)
-    , ("merkleCommitment", toJson sp.merkleCommitment)
+    , ("commitment", Json.str (hexOf sp.commitment))
     , ("byteClassMask", toJson sp.byteClassMask) ]
 
-/-- Parse `RedactedSpan` from `Lean.Json`. -/
 def redactedSpanOfJson (j : Json) : Except String RedactedSpan := do
   let offset ← j.getObjValAs? Nat "offset"
   let length ← j.getObjValAs? Nat "length"
-  let merkleCommitment ← j.getObjValAs? Nat "merkleCommitment"
+  let commitment ← unhex (← j.getObjValAs? String "commitment")
   let byteClassMask ← j.getObjValAs? Nat "byteClassMask"
-  pure { offset, length, merkleCommitment, byteClassMask }
+  pure { offset, length, commitment, byteClassMask }
 
-/-- Encode `TlsnTranscriptQuery` as canonical JSON wire string. -/
 def encodeTlsnObj (q : TlsnTranscriptQuery) : String :=
   Json.compress <| Json.mkObj
     [ ("segs", Json.arr (q.segs.map segToJson).toArray)
     , ("spans", Json.arr (q.spans.map redactedSpanToJson).toArray)
     , ("policyDfa", tableDfaToJson q.policyDfa) ]
 
-/-- Parse `TlsnTranscriptQuery` from JSON wire string. -/
 def decodeTlsnObj (s : String) : Except String TlsnTranscriptQuery := do
   let j ← Json.parse s
   let segs ← (← (← j.getObjVal? "segs").getArr?).toList.mapM segOfJson
@@ -425,21 +399,22 @@ def decodeTlsnObj (s : String) : Except String TlsnTranscriptQuery := do
   let policyDfa ← tableDfaOfJson (← j.getObjVal? "policyDfa")
   pure { segs, spans, policyDfa }
 
-/-- Encode `TlsnTranscriptCert` as canonical JSON wire string. -/
 def encodeTlsnCert (c : TlsnTranscriptCert) : String :=
   Json.compress <| Json.mkObj
     [ ("slotCount", toJson c.slotCount)
-    , ("merkleRoot", toJson c.merkleRoot) ]
+    , ("spanCount", toJson c.spanRoot.count)
+    , ("spanTop", Json.str (hexOf c.spanRoot.top)) ]
 
-/-- Parse `TlsnTranscriptCert` from JSON wire string. -/
 def decodeTlsnCert (s : String) : Except String TlsnTranscriptCert := do
   let j ← Json.parse s
   let slotCount ← j.getObjValAs? Nat "slotCount"
-  let merkleRoot ← j.getObjValAs? Nat "merkleRoot"
-  pure { slotCount, merkleRoot }
+  let count ← j.getObjValAs? Nat "spanCount"
+  let top ← unhex (← j.getObjValAs? String "spanTop")
+  pure ⟨slotCount, ⟨count, top⟩⟩
 
-/-- Registered `Obend.Judge.Format` for `"tlsn-transcript-policy@1"` with `bad_refused` proved. -/
-def tlsnTranscriptFormat : Judge.Format where
+/-- **The registered format** `tlsn-transcript-policy@1`. The span root is cSHAKE256, which runs
+compiled. -/
+@[expose] def tlsnTranscriptFormat : Judge.Format where
   name := "tlsn-transcript-policy"
   version := "1"
   Obj := TlsnTranscriptQuery
@@ -447,7 +422,7 @@ def tlsnTranscriptFormat : Judge.Format where
   judge := tlsnTranscriptJudge
   decodeObj := decodeTlsnObj
   decodeCert := decodeTlsnCert
-  trust := .kernel
+  trust := .compiled
   regime := .decidable
   bad := (badTlsnQuery, badTlsnCert)
   badGrade := 0

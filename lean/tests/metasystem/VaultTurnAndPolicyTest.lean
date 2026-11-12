@@ -156,21 +156,41 @@ def isTlsnOk : Judge.Verdict TlsnTranscriptRefusal → Bool
 #tooth tlsnTranscriptPolicy_sound by mutation
   verifyTlsnTranscriptPolicy := fun _ _ => .ok
 
-def sampleSafeSpan : RedactedSpan :=
-  { offset := 25, length := 3, merkleCommitment := 12345, byteClassMask := 2 }
+-- Every filling of the hidden span from its attested byte class is a JSON document: the
+-- confinement is the machine's, for every secret, not a filter over a delimiter list.
+example (secret : List UInt8)
+    (h_match : ∀ sp ∈ validTlsnQuery.spans, ∀ b ∈ secret,
+      byteMatchesMask sp.byteClassMask b = true) :
+    VpaJson.runFullJsonGrammar ⟨(renderWith validTlsnQuery.segs [secret]).toArray⟩ = true := by
+  have m := tlsnTranscriptPolicy_sound validTlsn_accepted
+  obtain ⟨sp, hsp⟩ := List.exists_mem_of_ne_nil _ m.nonempty
+  refine (m.confined [secret] fun f hf => ?_).1
+  have hf' : f = secret := by simpa using hf
+  subst hf'
+  exact List.all_eq_true.2 fun b hb =>
+    safe_of_matches_safe_mask (m.classes sp hsp) (h_match sp hsp b hb)
 
-example (secretBytes : List Nat)
-    (h_match : ∀ b ∈ secretBytes, byteMatchesMask sampleSafeSpan.byteClassMask b = true) :
-    extractStructuralTokens
-      (spliceSecretIntoSlots validTlsnQuery.segs secretBytes) =
-    extractStructuralTokens
-      (renderRedactedSkeleton validTlsnQuery.segs sampleSafeSpan) :=
-  selective_disclosure_redaction_confinement
-    validTlsnQuery.segs
-    sampleSafeSpan
-    secretBytes
-    rfl
-    h_match
+-- A slot placed right after a literal backslash would let the first hidden byte complete an
+-- escape: refused by the machine state. So is a slot in a key, and a commitment that is not 32
+-- bytes.
+#guard verifyTlsnTranscriptPolicy
+  { validTlsnQuery with
+    segs := [.lit ["{\"role\":\"user\",\"secret\":\"\\"], .slot "secret", .lit ["\"}"]]
+    spans := [{ offset := 26, length := 8, commitment := validTlsnCommitment, byteClassMask := 2 }] }
+  validTlsnCert == .refused .slotOutsideValueString []
+#guard verifyTlsnTranscriptPolicy
+  { validTlsnQuery with
+    segs := [.lit ["{\""], .slot "key", .lit ["\":1}"]]
+    spans := [{ offset := 2, length := 8, commitment := validTlsnCommitment, byteClassMask := 2 }] }
+  validTlsnCert == .refused .slotOutsideValueString []
+#guard verifyTlsnTranscriptPolicy
+  { validTlsnQuery with
+    spans := [{ offset := 25, length := 8, commitment := ByteArray.empty, byteClassMask := 2 }] }
+  validTlsnCert == .refused .narrowCommitment []
+
+-- A confinement check that does not look at the machine state.
+#tooth selective_disclosure_redaction_confinement by mutation
+  slotsConfined := fun _ _ => true
 
 def samplePolicyDfa : TableDfa :=
   { start := 0

@@ -4,29 +4,35 @@ module
 
 Cards `K9` and `K10`. Three parts.
 
-**§1 Redaction confinement (`K9a`).** `stepLex2Bit` is the two-bit string/escape lexer.
-`stepLsafe` composes it with a bracket-stack skeleton machine that tracks, per open object, key
-versus value position and the keys seen, refuses a backslash inside a key (so two keys equal as
-bytes are equal as JSON strings), and checks at every `}` that the object's keys are pairwise
-distinct by a merge sort and one adjacent pass. `runLsafeVpa` accepts a document whose run ends
-outside any string with an empty stack and no refusal. `checkLsafeRedaction doc l r replacement`
-accepts a span that starts strictly inside a value string and whose old and new bytes are all
-`isSafeRedactionByte` (printable ASCII without `"`, `\`, `<`, `>`).
-
-`safeSpan_preserves_lexAndVpa`: a safe byte inside a value string leaves the whole machine state
-unchanged. `lsafe_redaction_confinement`: after an accepted redaction the spliced document is
-accepted, its machine state is the original state at `l` all through the replacement and the
-original state at `r + j` at every `j` after it, its final state is the original final state
-(so the object key sets are the same), and the replacement carries none of the six bytes.
+**§1 Redaction confinement (`K9a`).** The machine is `Obend.Judge.VpaJson.stepJson`, the RFC 8259
+grammar in one pass: `runLsafeVpa` is `runFullJsonGrammar` (values, separators, strings with their
+escapes, numbers, literals, unique keys in every object), and `checkLsafeRedaction doc l r
+replacement` is `checkJsonRedaction` on a document that passes the grammar, with a replacement of
+`isSafeRedactionByte` bytes (string-safe, and neither `<` nor `>`). The span may contain whole
+escape sequences; it may not cut one, so redacting the backslash of `\"` is refused.
+`lsafe_redaction_confinement`: after an accepted redaction the spliced document passes the
+grammar, its machine state is the original state at `l` all through the replacement and the
+original state at `r + j` at every `j` after it, its final state and object key sets are the
+original ones, and the replacement carries none of the six bytes.
 `lsafe_object_keys_nodup`: every object the machine closed has pairwise distinct keys.
+`jsonCborCommit` commits to a JSON value tree through `Obend.Codec.DetCbor`
+(`jsonCborCommit_binding`).
 
-**§2 Open-world completeness (`K9b`).** `evalOpenWorldKgQuery` answers `entailed` only for an
-edge found in an authenticated witness, `refuted` only under a `CompletenessToken` that verifies
-for exactly this graph, predicate and subject and commits to the witness, and `undetermined`
-otherwise. `openWorld_without_token_never_refutes`, `openWorld_invalid_token_never_refutes`,
-`completenessToken_refute_sound`, `openWorld_entailed_sound`, and
-`completenessToken_refute_binding` (against the issuer's own slice: absent there, or the two
-slices are a collision of the scoped-edges commitment).
+`spanRootCollision` computes, from two different span lists whose `VpaJson` span roots share a
+`top`, an explicit collision at the tag; no choice is used, so extractors built on it run.
+
+**§2 Open-world completeness (`K9b`).** `edgesDigest` is the `top` of the span tree over the
+edges' deterministic encodings under the graph tag; it binds the edge count. One edge opens to
+it by a logarithmic path (`KgEdgeOpening`, `verifyKgEdgeOpening`): `verifyKgEdgeOpening_complete`
+and `verifyKgEdgeOpening_binding`, and `evalOpenedKgQuery` answers `entailed` for an opened edge
+and never refutes (`openedKgQuery_entailed_sound`, `openedKgQuery_complete`).
+`evalOpenWorldKgQuery` answers `entailed` only for an edge found in an authenticated witness,
+`refuted` only under a `CompletenessToken` that verifies for exactly this graph, predicate and
+subject and commits to the witness, and `undetermined` otherwise
+(`openWorld_without_token_never_refutes`, `openWorld_invalid_token_never_refutes`,
+`completenessToken_refute_sound`, `openWorld_entailed_sound`,
+`completenessToken_refute_binding`). `edgesCollision` is the explicit collision of two different
+within-width edge arrays with one digest.
 
 **§3 Forget while forked (`K10`).** A vault of 16 buckets under a depth-4 Merkle tree.
 `forgetHistoricalBase` keeps only the base root and is total: an open fork does not block it.
@@ -38,381 +44,85 @@ of the bucket hash or of the node hash; `baseProof_binding_collision` states it.
 `merge3Bucket_lookup` is the three-way merge's law per key.
 
 The hash is a parameter (`Hasher`: a tagged hash with 32-byte output); `cshakeHasher` is
-cSHAKE256 with the tag as customization, and `cshake_baseProof_binding` is the binding theorem
-at it. Canonical bytes for hashing are `Obend.Codec.DetCbor`.
+cSHAKE256 with the tag as customization. Both, the key sort and the splice live in
+`Obend.Judge.Commit` (below the JSON machine) and are re-exported here.
 
-What is not here: the skeleton machine is not a JSON validator (it does not check scalars,
-separators between values, or that a key is followed by a colon before the object closes);
-`keysDistinctB` is proved sound, not complete; a positive query presents the whole edge set or a
-tokened slice, with no Merkle inclusion path for a single edge; the token's tag is a keyed hash
-under a shared secret, not a signature; buckets are fixed at 16.
+What is not here: `keysDistinctB` is proved sound, not complete; a refutation still presents the
+tokened slice whole (absence has no logarithmic proof here: the leaves are not required sorted in
+the tree); the token's tag is a keyed hash under a shared secret, not a signature; buckets are
+fixed at 16.
 -/
 
 public import Obend.Codec.DetCbor
 public import Obend.Digest.Cshake256
+public import Obend.Judge.VpaComplementAndJson
+import all Obend.Codec.DetCbor
+import all Obend.Judge.SymbolicRegexBisim
+import all Obend.Judge.VpaComplementAndJson
 
 public section
 
 namespace Obend.Vault.Lsafe
 
+export Obend.Judge.Commit (Hasher cshakeHasher HashCollision mergeFuel mergeFuel_perm mergePass
+  mergePass_perm mergeLoop mergeLoop_perm sortBy flatten_singletons sortBy_perm keysDistinctB
+  keysDistinctB_sound spliceByteArray extract_toList spliceByteArray_toList)
+
 open Obend.Codec.DetCbor
+open Obend.Judge.VpaJson
+open Obend.Judge.Commit (countSpan countSpan_injective)
 
 set_option autoImplicit false
 
-/-! ## 1. The two-bit lexer, the skeleton machine, and redaction confinement -/
+/-! ## 1. Redaction confinement over the JSON grammar
 
-/-- The lexer state: inside a string literal, and whether the previous byte was an unconsumed
-backslash. -/
-structure LexState2Bit where
-  inString : Bool
-  escaped : Bool
-  deriving DecidableEq, Repr
-
-/-- One byte of the string/escape lexer. An escaped byte is consumed: it neither closes the
-string nor starts an escape. -/
-def stepLex2Bit (st : LexState2Bit) (b : UInt8) : LexState2Bit :=
-  if st.inString then
-    if st.escaped then ⟨true, false⟩
-    else if b == 0x5c then ⟨true, true⟩
-    else if b == 0x22 then ⟨false, false⟩
-    else ⟨true, false⟩
-  else if b == 0x22 then ⟨true, false⟩
-  else ⟨false, false⟩
-
-/-- A stable merge at a fuel; out of fuel it concatenates, which is still a permutation. -/
-def mergeFuel {α : Type} (le : α → α → Bool) : Nat → List α → List α → List α
-  | 0, xs, ys => xs ++ ys
-  | _ + 1, [], ys => ys
-  | _ + 1, x :: xs, [] => x :: xs
-  | f + 1, x :: xs, y :: ys =>
-    if le x y then x :: mergeFuel le f xs (y :: ys) else y :: mergeFuel le f (x :: xs) ys
-
-theorem mergeFuel_perm {α : Type} (le : α → α → Bool) :
-    ∀ (f : Nat) (xs ys : List α), (mergeFuel le f xs ys).Perm (xs ++ ys)
-  | 0, _, _ => List.Perm.refl _
-  | _ + 1, [], _ => List.Perm.refl _
-  | _ + 1, x :: xs, [] => by simp [mergeFuel]
-  | f + 1, x :: xs, y :: ys => by
-    simp only [mergeFuel]
-    split
-    · exact (mergeFuel_perm le f xs (y :: ys)).cons x
-    · exact ((mergeFuel_perm le f (x :: xs) ys).cons y).trans List.perm_middle.symm
-
-/-- Merge adjacent runs. -/
-def mergePass {α : Type} (le : α → α → Bool) : List (List α) → List (List α)
-  | a :: b :: rest => mergeFuel le (a.length + b.length) a b :: mergePass le rest
-  | l => l
-
-theorem mergePass_perm {α : Type} (le : α → α → Bool) :
-    ∀ (runs : List (List α)), (mergePass le runs).flatten.Perm runs.flatten
-  | [] => List.Perm.refl _
-  | [_] => List.Perm.refl _
-  | a :: b :: rest => by
-    simp only [mergePass, List.flatten_cons]
-    rw [← List.append_assoc]
-    exact (mergeFuel_perm le _ a b).append (mergePass_perm le rest)
-
-/-- Halve the runs until one is left. -/
-def mergeLoop {α : Type} (le : α → α → Bool) : Nat → List (List α) → List α
-  | 0, runs => runs.flatten
-  | _ + 1, [] => []
-  | _ + 1, [a] => a
-  | f + 1, a :: b :: rest => mergeLoop le f (mergePass le (a :: b :: rest))
-
-theorem mergeLoop_perm {α : Type} (le : α → α → Bool) :
-    ∀ (f : Nat) (runs : List (List α)), (mergeLoop le f runs).Perm runs.flatten
-  | 0, _ => List.Perm.refl _
-  | _ + 1, [] => List.Perm.refl _
-  | _ + 1, [a] => by simp [mergeLoop]
-  | f + 1, a :: b :: rest => by
-    simp only [mergeLoop]
-    exact (mergeLoop_perm le f _).trans (mergePass_perm le _)
-
-/-- **Bottom-up merge sort**, `O(n log n)` comparisons, structural (it reduces in the kernel). -/
-def sortBy {α : Type} (le : α → α → Bool) (l : List α) : List α :=
-  mergeLoop le (l.length + 1) (l.map fun x => [x])
-
-theorem flatten_singletons {α : Type} : ∀ (l : List α), (l.map fun x => [x]).flatten = l
-  | [] => rfl
-  | x :: xs => by simp [flatten_singletons xs]
-
-theorem sortBy_perm {α : Type} (le : α → α → Bool) (l : List α) : (sortBy le l).Perm l := by
-  have h := mergeLoop_perm le (l.length + 1) (l.map fun x => [x])
-  rw [flatten_singletons] at h
-  exact h
-
-/-- **Pairwise-distinct keys**: sort, then one pass checking each adjacent pair strictly
-ascending. No quadratic scan. -/
-def keysDistinctB (ks : List ByteArray) : Bool :=
-  sortedByKeyB id (sortBy (fun a b => !lexLtBytes b a) ks)
-
-theorem keysDistinctB_sound {ks : List ByteArray} (h : keysDistinctB ks = true) : ks.Nodup := by
-  have hs := sortedByKeyB_sound id _ h
-  have hn : (sortBy (fun a b => !lexLtBytes b a) ks).Nodup := by
-    refine hs.imp ?_
-    intro a b hab heq
-    rw [heq] at hab
-    simp only [id] at hab
-    rw [lexLtBytes_irrefl] at hab
-    cases hab
-  exact (sortBy_perm _ ks).nodup_iff.1 hn
-
-/-- An open bracket: an object or an array; for an object, whether the cursor is in value
-position (after its `:`), and the keys read so far. -/
-structure Frame where
-  isObj : Bool
-  inValue : Bool
-  keys : List ByteArray
-  deriving DecidableEq
-
-/-- The machine state: lexer, bracket stack, the key being read, the key sets of the objects
-already closed, and whether nothing has been refused. -/
-structure LsafeState where
-  lex : LexState2Bit
-  stack : List Frame
-  curKey : ByteArray
-  closed : List (List ByteArray)
-  ok : Bool
-  deriving DecidableEq
-
-def LsafeState.init : LsafeState := ⟨⟨false, false⟩, [], ByteArray.empty, [], true⟩
-
-/-- The innermost open bracket is an object in key position. -/
-def atKey (stack : List Frame) : Bool :=
-  match stack with
-  | f :: _ => f.isObj && !f.inValue
-  | [] => false
-
-def pushKey (k : ByteArray) : List Frame → List Frame
-  | f :: rest => { f with keys := k :: f.keys } :: rest
-  | [] => []
-
-/-- Close an object: its keys must be pairwise distinct. -/
-def closeObj : List Frame → Option (List Frame × List ByteArray)
-  | f :: rest => if f.isObj && keysDistinctB f.keys then some (rest, f.keys) else none
-  | [] => none
-
-/-- Every structural byte except `}`; other bytes leave the stack alone. -/
-def structuralOther (b : UInt8) (stack : List Frame) : Option (List Frame) :=
-  if b == 0x7b then some (⟨true, false, []⟩ :: stack)
-  else if b == 0x5b then some (⟨false, true, []⟩ :: stack)
-  else if b == 0x5d then
-    match stack with
-    | f :: rest => if f.isObj then none else some rest
-    | [] => none
-  else if b == 0x3a then
-    match stack with
-    | f :: rest => if f.isObj && !f.inValue then some ({ f with inValue := true } :: rest) else none
-    | [] => none
-  else if b == 0x2c then
-    match stack with
-    | f :: rest =>
-      if f.isObj then (if f.inValue then some ({ f with inValue := false } :: rest) else none)
-      else some (f :: rest)
-    | [] => none
-  else some stack
-
-/-- **One byte of the composed machine.** Structural bytes act only outside strings. Inside a
-key string the byte is collected (a backslash is refused); inside a value string nothing but the
-lexer moves. -/
-def stepLsafe (st : LsafeState) (b : UInt8) : LsafeState :=
-  if st.lex.inString then
-    if atKey st.stack then
-      if (stepLex2Bit st.lex b).inString then
-        { st with lex := stepLex2Bit st.lex b, curKey := st.curKey.push b,
-                  ok := st.ok && b != 0x5c }
-      else
-        { st with lex := stepLex2Bit st.lex b, stack := pushKey st.curKey st.stack,
-                  curKey := ByteArray.empty }
-    else { st with lex := stepLex2Bit st.lex b }
-  else if b == 0x7d then
-    match closeObj st.stack with
-    | some (stack', ks) =>
-      { st with lex := stepLex2Bit st.lex b, stack := stack', closed := ks :: st.closed }
-    | none => { st with lex := stepLex2Bit st.lex b, ok := false }
-  else
-    match structuralOther b st.stack with
-    | some stack' => { st with lex := stepLex2Bit st.lex b, stack := stack' }
-    | none => { st with lex := stepLex2Bit st.lex b, ok := false }
-
-/-- The reasoning-tier run: fold the machine over a byte list. -/
-def specRun (bs : List UInt8) (st : LsafeState) : LsafeState := bs.foldl stepLsafe st
-
-/-- The execution-tier run over the span `[i, e)` of a buffer, by cursor. -/
-def runSpan (doc : ByteArray) : Nat → Nat → Nat → LsafeState → LsafeState
-  | 0, _, _, st => st
-  | fuel + 1, i, e, st =>
-    if i < e then runSpan doc fuel (i + 1) e (stepLsafe st (byteAt doc i)) else st
-
-theorem runSpan_eq (doc : ByteArray) : ∀ (fuel i e : Nat) (st : LsafeState),
-    e ≤ doc.size → e - i ≤ fuel →
-    runSpan doc fuel i e st = specRun ((doc.data.toList.drop i).take (e - i)) st
-  | 0, i, e, st, _, hf => by
-    have hi : ¬ i < e := by omega
-    rw [slice_nil doc i e hi]
-    rfl
-  | fuel + 1, i, e, st, he, hf => by
-    unfold runSpan
-    by_cases hi : i < e
-    · rw [ite_eq_left hi, slice_cons doc i e hi he]
-      exact runSpan_eq doc fuel (i + 1) e _ he (by omega)
-    · rw [ite_eq_right hi, slice_nil doc i e hi]
-      rfl
+The machine is `Obend.Judge.VpaJson.stepJson`: values, structural characters in their places,
+strings with the short escapes and `\uXXXX`, numbers, literals, unique keys per object. -/
 
 /-- The machine state after the first `i` bytes of a document. -/
-def stateAt (doc : ByteArray) (i : Nat) : LsafeState :=
-  runSpan doc (min i doc.size) 0 (min i doc.size) LsafeState.init
-
-theorem stateAt_eq (doc : ByteArray) (i : Nat) :
-    stateAt doc i = specRun (doc.data.toList.take i) LsafeState.init := by
-  unfold stateAt
-  rw [runSpan_eq doc _ 0 _ _ (Nat.min_le_right _ _) (by omega)]
-  simp only [List.drop_zero, Nat.sub_zero]
-  by_cases h : i ≤ doc.size
-  · rw [Nat.min_eq_left h]
-  · have h1 : doc.data.toList.length ≤ i := by rw [toList_length]; omega
-    rw [Nat.min_eq_right (by omega), List.take_of_length_le h1,
-      List.take_of_length_le (Nat.le_of_eq (toList_length doc))]
+def stateAt (doc : ByteArray) (i : Nat) : JState := jsonStateAt doc i
 
 /-- The machine state after the whole document. -/
-def lsafeRun (doc : ByteArray) : LsafeState := stateAt doc doc.size
+def lsafeRun (doc : ByteArray) : JState := jsonRun doc
 
-theorem lsafeRun_eq (doc : ByteArray) : lsafeRun doc = specRun doc.data.toList LsafeState.init := by
-  rw [lsafeRun, stateAt_eq, List.take_of_length_le (Nat.le_of_eq (toList_length doc))]
-
-/-- A final state is accepting: nothing refused, every bracket closed, outside any string. -/
-def accepting (st : LsafeState) : Bool :=
-  st.ok && st.stack.isEmpty && !st.lex.inString && !st.lex.escaped
-
-/-- **The document skeleton check**: balanced brackets, strings closed, no duplicate key in any
-object, no backslash in a key. -/
-def runLsafeVpa (doc : ByteArray) : Bool := accepting (lsafeRun doc)
+/-- **The document check**: one RFC 8259 value with unique keys in every object. -/
+def runLsafeVpa (doc : ByteArray) : Bool := runFullJsonGrammar doc
 
 /-- The key sets of the objects of a document, innermost-closed first. -/
-def objectKeysOf (doc : ByteArray) : List (List ByteArray) := (lsafeRun doc).closed
+def objectKeysOf (doc : ByteArray) : List (List ByteArray) := jsonObjectKeys doc
 
-/-- **A byte a redaction may remove or write**: printable ASCII, and none of `"` (closes the
-string), `\` (byte 92: eats the closing quote), `<` and `>` (tag breakout). Carriage return
-and line feed are below `0x20` and are refused by the range. -/
-def isSafeRedactionByte (b : UInt8) : Bool :=
-  decide (0x20 ≤ b.toNat) && decide (b.toNat ≤ 0x7e) && b != 0x22 && b != 0x5c && b != 0x0d &&
-    b != 0x0a && b != 0x3e && b != 0x3c
+/-- **A byte a redaction may write**: a mask byte (printable ASCII without `"` and `\`) that is
+neither `<` nor `>` (tag breakout). Carriage return and line feed are below `0x20`. -/
+def isSafeRedactionByte (b : UInt8) : Bool := isSafeMaskByte b && b != 0x3c && b != 0x3e
 
 theorem isSafeRedactionByte_spec {b : UInt8} (h : isSafeRedactionByte b = true) :
-    b ≠ 0x22 ∧ b ≠ 0x5c ∧ b ≠ 0x0d ∧ b ≠ 0x0a ∧ b ≠ 0x3c ∧ b ≠ 0x3e := by
+    isSafeMaskByte b = true ∧
+      b ≠ 0x22 ∧ b ≠ 0x5c ∧ b ≠ 0x0d ∧ b ≠ 0x0a ∧ b ≠ 0x3c ∧ b ≠ 0x3e := by
   simp only [isSafeRedactionByte, Bool.and_eq_true, bne_iff_ne, ne_eq] at h
-  exact ⟨h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.2, h.1.2⟩
+  obtain ⟨⟨hm, h3c⟩, h3e⟩ := h
+  have hm' := hm
+  simp only [isSafeMaskByte, Bool.and_eq_true, decide_eq_true_eq, bne_iff_ne, ne_eq] at hm'
+  obtain ⟨⟨⟨h20, _⟩, h22⟩, h5c⟩ := hm'
+  refine ⟨hm, h22, h5c, ?_, ?_, h3c, h3e⟩
+  · intro h0d; rw [h0d] at h20; exact absurd h20 (by decide)
+  · intro h0a; rw [h0a] at h20; exact absurd h20 (by decide)
 
-/-- Every byte of the span `[i, e)` is safe. -/
-def allSafeSpan (doc : ByteArray) : Nat → Nat → Nat → Bool
-  | 0, i, e => decide (e ≤ i)
-  | fuel + 1, i, e =>
-    if i < e then isSafeRedactionByte (byteAt doc i) && allSafeSpan doc fuel (i + 1) e else true
-
-theorem allSafeSpan_eq (doc : ByteArray) : ∀ (fuel i e : Nat), e ≤ doc.size → e - i ≤ fuel →
-    allSafeSpan doc fuel i e =
-      ((doc.data.toList.drop i).take (e - i)).all isSafeRedactionByte
-  | 0, i, e, _, hf => by
-    have hi : ¬ i < e := by omega
-    rw [slice_nil doc i e hi]
-    simp [allSafeSpan]
-    omega
-  | fuel + 1, i, e, he, hf => by
-    unfold allSafeSpan
-    by_cases hi : i < e
-    · rw [ite_eq_left hi, slice_cons doc i e hi he, List.all_cons,
-        allSafeSpan_eq doc fuel (i + 1) e he (by omega)]
-    · rw [ite_eq_right hi, slice_nil doc i e hi]
-      rfl
-
-/-- Strictly inside a value string: in a string, not after a backslash, not in key position. -/
-def InValueString (st : LsafeState) : Prop :=
-  st.lex = ⟨true, false⟩ ∧ atKey st.stack = false
-
-def inValueStringB (st : LsafeState) : Bool :=
-  st.lex.inString && !st.lex.escaped && !atKey st.stack
-
-theorem inValueString_of_B {st : LsafeState} (h : inValueStringB st = true) : InValueString st := by
-  obtain ⟨⟨s, e⟩, stack, curKey, closed, ok⟩ := st
-  simp only [inValueStringB, Bool.and_eq_true, Bool.not_eq_true'] at h
-  obtain ⟨⟨hs, he⟩, hk⟩ := h
-  subst hs
-  subst he
-  exact ⟨rfl, hk⟩
-
-/-- **The redaction check.** The span `[l, r)` lies in the document, the document passes the
-skeleton check, the span starts strictly inside a value string, and every byte removed and every
-byte written is safe. Linear in the document and the replacement. -/
+/-- **The redaction check.** The document passes the grammar, the span `[l, r)` starts in a value
+string outside any escape, stays inside that string at every byte and ends in the starting
+machine state (so it cuts no escape sequence), and every byte written is safe. -/
 def checkLsafeRedaction (doc : ByteArray) (l r : Nat) (replacement : ByteArray) : Bool :=
-  decide (l ≤ r) && decide (r ≤ doc.size) && runLsafeVpa doc && inValueStringB (stateAt doc l) &&
-    allSafeSpan doc (r - l) l r && allSafeSpan replacement replacement.size 0 replacement.size
-
-/-- Replace the span `[l, r)` of a document. -/
-def spliceByteArray (doc : ByteArray) (l r : Nat) (replacement : ByteArray) : ByteArray :=
-  doc.extract 0 l ++ replacement ++ doc.extract r doc.size
-
-theorem extract_toList (doc : ByteArray) (s e : Nat) :
-    (doc.extract s e).data.toList = (doc.data.toList.drop s).take (e - s) := by
-  rw [ByteArray.data_extract, Array.toList_extract]
-
-theorem spliceByteArray_toList (doc : ByteArray) (l r : Nat) (replacement : ByteArray) :
-    (spliceByteArray doc l r replacement).data.toList =
-      doc.data.toList.take l ++ replacement.data.toList ++ doc.data.toList.drop r := by
-  unfold spliceByteArray
-  rw [ByteArray.data_append, ByteArray.data_append, Array.toList_append, Array.toList_append,
-    extract_toList, extract_toList]
-  simp only [List.drop_zero, Nat.sub_zero]
-  rw [List.take_of_length_le (l := doc.data.toList.drop r)
-    (Nat.le_of_eq (by rw [List.length_drop, toList_length]))]
-
-theorem stepLex2Bit_safe {b : UInt8} (h : isSafeRedactionByte b = true) :
-    stepLex2Bit ⟨true, false⟩ b = ⟨true, false⟩ := by
-  obtain ⟨h22, h5c, _⟩ := isSafeRedactionByte_spec h
-  have e1 : (b == 0x5c) = false := by simpa using h5c
-  have e2 : (b == 0x22) = false := by simpa using h22
-  simp [stepLex2Bit, e1, e2]
-
-/-- **The key invariant.** A safe byte read strictly inside a value string changes nothing:
-not the lexer, not the stack, not the collected keys. -/
-theorem safeSpan_preserves_lexAndVpa_step {st : LsafeState} {b : UInt8} (hv : InValueString st)
-    (h : isSafeRedactionByte b = true) : stepLsafe st b = st := by
-  obtain ⟨lex, stack, curKey, closed, ok⟩ := st
-  obtain ⟨hlex, hk⟩ := hv
-  simp only at hlex hk
-  subst hlex
-  simp [stepLsafe, hk, stepLex2Bit_safe h]
-
-/-- The same over any run of safe bytes: the state is identically the starting state. -/
-theorem safeSpan_preserves_lexAndVpa {st : LsafeState} (hv : InValueString st) :
-    ∀ (bs : List UInt8), bs.all isSafeRedactionByte = true → specRun bs st = st
-  | [], _ => rfl
-  | b :: bs, h => by
-    simp only [List.all_cons, Bool.and_eq_true] at h
-    simp only [specRun, List.foldl_cons]
-    rw [safeSpan_preserves_lexAndVpa_step hv h.1]
-    exact safeSpan_preserves_lexAndVpa hv bs h.2
-
-theorem specRun_append (xs ys : List UInt8) (st : LsafeState) :
-    specRun (xs ++ ys) st = specRun ys (specRun xs st) := by
-  simp [specRun, List.foldl_append]
+  runFullJsonGrammar doc && checkJsonRedaction doc l r replacement &&
+    replacement.data.toList.all isSafeRedactionByte
 
 theorem checkLsafeRedaction_parts {doc replacement : ByteArray} {l r : Nat}
     (h : checkLsafeRedaction doc l r replacement = true) :
-    l ≤ r ∧ r ≤ doc.size ∧ runLsafeVpa doc = true ∧ InValueString (stateAt doc l) ∧
-      ((doc.data.toList.drop l).take (r - l)).all isSafeRedactionByte = true ∧
-      replacement.data.toList.all isSafeRedactionByte = true := by
-  simp only [checkLsafeRedaction, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨⟨⟨⟨⟨hlr, hr⟩, hrun⟩, hin⟩, hold⟩, hnew⟩ := h
-  refine ⟨hlr, hr, hrun, inValueString_of_B hin, ?_, ?_⟩
-  · rw [← allSafeSpan_eq doc (r - l) l r hr (Nat.le_refl _)]
-    exact hold
-  · rw [allSafeSpan_eq replacement _ 0 _ (Nat.le_refl _) (by omega)] at hnew
-    simp only [List.drop_zero, Nat.sub_zero] at hnew
-    rw [List.take_of_length_le (Nat.le_of_eq (toList_length replacement))] at hnew
-    exact hnew
+    runFullJsonGrammar doc = true ∧ checkJsonRedaction doc l r replacement = true ∧
+      ∀ x ∈ replacement.data.toList, isSafeRedactionByte x = true := by
+  simp only [checkLsafeRedaction, Bool.and_eq_true, List.all_eq_true] at h
+  exact ⟨h.1.1, h.1.2, h.2⟩
 
 /-- **Redaction confinement.** After an accepted redaction:
-1. the spliced document passes the skeleton check;
+1. the spliced document passes the grammar;
 2. at every offset `j` after the replacement the machine is in the state the original was in
    at `r + j`, so the suffix makes exactly the original transitions;
 3. all through the replacement the machine is in the original state at `l`;
@@ -429,133 +139,274 @@ theorem lsafe_redaction_confinement {doc replacement : ByteArray} {l r : Nat}
       x ≠ 0x22 ∧ x ≠ 0x5c ∧ x ≠ 0x0d ∧ x ≠ 0x0a ∧ x ≠ 0x3c ∧ x ≠ 0x3e) ∧
     objectKeysOf (spliceByteArray doc l r replacement) = objectKeysOf doc ∧
     lsafeRun (spliceByteArray doc l r replacement) = lsafeRun doc := by
-  obtain ⟨hlr, hr, hrun, hin, hold, hnew⟩ := checkLsafeRedaction_parts h
+  obtain ⟨hgram, hred, hsafe⟩ := checkLsafeRedaction_parts h
+  obtain ⟨hv, hk, hcut⟩ := jsonRedaction_preserves_valid_parse_and_keys hred
+  obtain ⟨hlr, hr, hmode⟩ : l ≤ r ∧ r ≤ doc.size ∧ (jsonStateAt doc l).mode = .str false .normal := by
+    have h' := hred
+    simp only [checkJsonRedaction, Bool.and_eq_true, decide_eq_true_eq] at h'
+    exact ⟨h'.1.1.1.1, h'.1.1.1.2, h'.1.1.2⟩
   have hL := toList_length doc
   have hR := toList_length replacement
   have hS := spliceByteArray_toList doc l r replacement
   have hlenl : (doc.data.toList.take l).length = l := by rw [List.length_take, hL]; omega
-  have hSl : stateAt doc l = specRun (doc.data.toList.take l) LsafeState.init := stateAt_eq doc l
-  rw [hSl] at hin
-  -- the original state at `r + j`
-  have hdoc : ∀ j, stateAt doc (r + j) =
-      specRun ((doc.data.toList.drop r).take j)
-        (specRun (doc.data.toList.take l) LsafeState.init) := by
-    intro j
-    have hsplit : doc.data.toList.take (r + j) =
-        doc.data.toList.take l ++ ((doc.data.toList.drop l).take (r - l) ++
-          (doc.data.toList.drop r).take j) := by
-      have e1 : r + j = l + ((r - l) + j) := by omega
-      rw [e1, List.take_add, List.take_add, List.drop_drop]
-      have e2 : l + (r - l) = r := by omega
-      rw [e2]
-    rw [stateAt_eq, hsplit, specRun_append, specRun_append,
-      safeSpan_preserves_lexAndVpa hin _ hold]
-  -- the spliced state inside the replacement
-  have hmid : ∀ j, j ≤ replacement.size →
-      stateAt (spliceByteArray doc l r replacement) (l + j) =
-        specRun (doc.data.toList.take l) LsafeState.init := by
-    intro j hj
-    have hsplit : (spliceByteArray doc l r replacement).data.toList.take (l + j) =
-        doc.data.toList.take l ++ replacement.data.toList.take j := by
-      rw [hS, List.append_assoc, List.take_add, List.take_left' hlenl, List.drop_left' hlenl,
-        List.take_append_of_le_length (by rw [hR]; exact hj)]
-    have hsafe : (replacement.data.toList.take j).all isSafeRedactionByte = true := by
-      rw [List.all_eq_true] at hnew ⊢
-      exact fun x hx => hnew x (List.mem_of_mem_take hx)
-    rw [stateAt_eq, hsplit, specRun_append, safeSpan_preserves_lexAndVpa hin _ hsafe]
-  -- the spliced state after the replacement
-  have hsuf : ∀ j, stateAt (spliceByteArray doc l r replacement) (l + replacement.size + j) =
-      stateAt doc (r + j) := by
-    intro j
+  have hmask : replacement.data.toList.all isSafeMaskByte = true :=
+    List.all_eq_true.2 fun x hx => (isSafeRedactionByte_spec (hsafe x hx)).1
+  refine ⟨?_, ?_, ?_, fun x hx => (isSafeRedactionByte_spec (hsafe x hx)).2, hk, jsonRedaction_run hred⟩
+  · unfold runLsafeVpa
+    rw [hv]
+    exact hgram
+  · intro j
     have hlen2 : (doc.data.toList.take l ++ replacement.data.toList).length =
         l + replacement.size := by rw [List.length_append, hlenl, hR]
     have hsplit : (spliceByteArray doc l r replacement).data.toList.take
         (l + replacement.size + j) =
-        doc.data.toList.take l ++ (replacement.data.toList ++
-          (doc.data.toList.drop r).take j) := by
-      rw [hS, List.take_add, List.take_left' hlen2, List.drop_left' hlen2, List.append_assoc]
-    rw [stateAt_eq, hsplit, specRun_append, specRun_append,
-      safeSpan_preserves_lexAndVpa hin _ hnew, hdoc j]
-  have hfinal : lsafeRun (spliceByteArray doc l r replacement) = lsafeRun doc := by
-    have hsz : (spliceByteArray doc l r replacement).size =
-        l + replacement.size + (doc.size - r) := by
-      rw [← toList_length, hS, List.length_append, List.length_append, hlenl, hR,
-        List.length_drop, hL]
-    have hd : doc.size = r + (doc.size - r) := by omega
-    unfold lsafeRun
-    rw [hsz, hsuf (doc.size - r), ← hd]
-  refine ⟨?_, hsuf, ?_, ?_, ?_, hfinal⟩
-  · unfold runLsafeVpa
-    rw [hfinal]
-    exact hrun
+        doc.data.toList.take l ++ replacement.data.toList ++ (doc.data.toList.drop r).take j := by
+      rw [hS, List.take_add, List.take_left' hlen2, List.drop_left' hlen2]
+    unfold stateAt
+    rw [jsonStateAt_eq, hsplit, hcut j]
   · intro j hj
-    rw [hmid j hj, hSl]
-  · intro x hx
-    exact isSafeRedactionByte_spec (List.all_eq_true.1 hnew x hx)
-  · unfold objectKeysOf
-    rw [hfinal]
-
-theorem closeObj_distinct {stack stack' : List Frame} {ks : List ByteArray}
-    (h : closeObj stack = some (stack', ks)) : keysDistinctB ks = true := by
-  cases stack with
-  | nil => cases h
-  | cons f rest =>
-    simp only [closeObj] at h
-    split at h
-    · rename_i hc
-      simp only [Option.some.injEq, Prod.mk.injEq] at h
-      rw [← h.2]
-      simp only [Bool.and_eq_true] at hc
-      exact hc.2
-    · cases h
-
-theorem stepLsafe_closed_nodup (st : LsafeState) (b : UInt8)
-    (hinv : ∀ ks ∈ st.closed, ks.Nodup) : ∀ ks ∈ (stepLsafe st b).closed, ks.Nodup := by
-  unfold stepLsafe
-  split
-  · split
-    · split <;> exact hinv
-    · exact hinv
-  · split
-    · split
-      · rename_i stack' ks hc
-        intro ks' hk
-        rcases List.mem_cons.1 hk with rfl | hk
-        · exact keysDistinctB_sound (closeObj_distinct hc)
-        · exact hinv _ hk
-      · exact hinv
-    · split <;> exact hinv
-
-theorem specRun_closed_nodup : ∀ (bs : List UInt8) (st : LsafeState),
-    (∀ ks ∈ st.closed, ks.Nodup) → ∀ ks ∈ (specRun bs st).closed, ks.Nodup
-  | [], _, h => h
-  | b :: bs, st, h => specRun_closed_nodup bs _ (stepLsafe_closed_nodup st b h)
+    have hsplit : (spliceByteArray doc l r replacement).data.toList.take (l + j) =
+        doc.data.toList.take l ++ replacement.data.toList.take j := by
+      rw [hS, List.append_assoc, List.take_add, List.take_left' hlenl, List.drop_left' hlenl,
+        List.take_append_of_le_length (by rw [hR]; exact hj)]
+    have hpre : (replacement.data.toList.take j).all isSafeMaskByte = true := by
+      rw [List.all_eq_true] at hmask ⊢
+      exact fun x hx => hmask x (List.mem_of_mem_take hx)
+    unfold stateAt
+    rw [jsonStateAt_eq, hsplit, specRunJson_append, ← jsonStateAt_eq,
+      specRunJson_safe hmode _ hpre]
 
 /-- **No duplicate key.** Every object the machine closed has pairwise distinct keys. -/
-theorem lsafe_object_keys_nodup (doc : ByteArray) : ∀ ks ∈ objectKeysOf doc, ks.Nodup := by
-  unfold objectKeysOf
-  rw [lsafeRun_eq]
-  exact specRun_closed_nodup _ _ (fun _ hk => by cases hk)
+theorem lsafe_object_keys_nodup (doc : ByteArray) : ∀ ks ∈ objectKeysOf doc, ks.Nodup :=
+  json_object_keys_nodup doc
 
-/-! ## 2. Open-world queries and completeness tokens -/
+/-! ### The value tree and its canonical commitment -/
 
-/-- A tagged hash with 32-byte output. -/
-structure Hasher where
-  hash : String → ByteArray → ByteArray
-  size_eq : ∀ (tag : String) (m : ByteArray), (hash tag m).size = 32
+/-- A JSON value: numbers keep their literal bytes, strings and keys their content bytes. -/
+inductive JVal where
+  | null
+  | bool (b : Bool)
+  | num (lit : ByteArray)
+  | str (s : ByteArray)
+  | arr (xs : List JVal)
+  | obj (kvs : List (ByteArray × JVal))
 
-/-- cSHAKE256 with the tag as customization string. -/
-def cshakeHasher : Hasher where
-  hash tag m :=
-    ⟨(Obend.Digest.Cshake256.cshake256Bytes tag.toUTF8.data.toList m.data.toList).toArray⟩
-  size_eq tag m := by simp [ByteArray.size]
+mutual
+/-- The image in deterministic CBOR: `null ↦ 0`, a number ↦ its literal as a byte string, a
+string ↦ text, an object ↦ a map with text keys in the order given. -/
+def jsonToCbor : JVal → CborVal
+  | .null => .uint 0
+  | .bool b => .simpleBool b
+  | .num lit => .bytes lit
+  | .str s => .text s
+  | .arr xs => .array (jsonListToCbor xs)
+  | .obj kvs => .map (jsonMembersToCbor kvs)
+def jsonListToCbor : List JVal → List CborVal
+  | [] => []
+  | x :: xs => jsonToCbor x :: jsonListToCbor xs
+def jsonMembersToCbor : List (ByteArray × JVal) → List (CborVal × CborVal)
+  | [] => []
+  | kv :: rest => (.text kv.1, jsonToCbor kv.2) :: jsonMembersToCbor rest
+end
 
-/-- An explicit collision of a hasher at a tag: two different messages, one digest. -/
-structure HashCollision (H : Hasher) (tag : String) where
-  m₁ : ByteArray
-  m₂ : ByteArray
-  ne : m₁ ≠ m₂
-  eq : H.hash tag m₁ = H.hash tag m₂
+mutual
+/-- The inverse reading, where there is one. -/
+def cborToJson : CborVal → Option JVal
+  | .uint n => if n = 0 then some .null else none
+  | .nint _ => none
+  | .simpleBool b => some (.bool b)
+  | .bytes lit => some (.num lit)
+  | .text s => some (.str s)
+  | .array xs => (cborListToJson xs).map .arr
+  | .map kvs => (cborMembersToJson kvs).map .obj
+def cborListToJson : List CborVal → Option (List JVal)
+  | [] => some []
+  | x :: xs =>
+    match cborToJson x, cborListToJson xs with
+    | some v, some vs => some (v :: vs)
+    | _, _ => none
+def cborMembersToJson : List (CborVal × CborVal) → Option (List (ByteArray × JVal))
+  | [] => some []
+  | (k, v) :: rest =>
+    match k, cborToJson v, cborMembersToJson rest with
+    | .text s, some jv, some r => some ((s, jv) :: r)
+    | _, _, _ => none
+end
+
+mutual
+theorem cborToJson_jsonToCbor : ∀ v : JVal, cborToJson (jsonToCbor v) = some v
+  | .null => by simp [jsonToCbor, cborToJson]
+  | .bool _ => by simp [jsonToCbor, cborToJson]
+  | .num _ => by simp [jsonToCbor, cborToJson]
+  | .str _ => by simp [jsonToCbor, cborToJson]
+  | .arr xs => by simp [jsonToCbor, cborToJson, cborListToJson_jsonListToCbor xs]
+  | .obj kvs => by simp [jsonToCbor, cborToJson, cborMembersToJson_jsonMembersToCbor kvs]
+theorem cborListToJson_jsonListToCbor : ∀ xs : List JVal,
+    cborListToJson (jsonListToCbor xs) = some xs
+  | [] => by simp [jsonListToCbor, cborListToJson]
+  | x :: xs => by
+    simp [jsonListToCbor, cborListToJson, cborToJson_jsonToCbor x, cborListToJson_jsonListToCbor xs]
+theorem cborMembersToJson_jsonMembersToCbor : ∀ kvs : List (ByteArray × JVal),
+    cborMembersToJson (jsonMembersToCbor kvs) = some kvs
+  | [] => by simp [jsonMembersToCbor, cborMembersToJson]
+  | kv :: rest => by
+    simp [jsonMembersToCbor, cborMembersToJson, cborToJson_jsonToCbor kv.2,
+      cborMembersToJson_jsonMembersToCbor rest]
+end
+
+theorem jsonToCbor_injective {a b : JVal} (h : jsonToCbor a = jsonToCbor b) : a = b :=
+  Option.some.inj (by rw [← cborToJson_jsonToCbor a, ← cborToJson_jsonToCbor b, h])
+
+/-- The customization string of value commitments. -/
+def jsonTag : String := "obend.judge.json.cbor.v1"
+
+/-- **The commitment of a value**: the digest of its canonical CBOR, when the image is canonical
+(strings valid UTF-8, object keys strictly ascending by encoding). -/
+def jsonCborCommit (H : Hasher) (v : JVal) : Option ByteArray :=
+  if CanonicalCbor (jsonToCbor v) then some (H.hash jsonTag (encodeDetCbor (jsonToCbor v))) else none
+
+theorem jsonCborCommit_canonical {H : Hasher} {v : JVal} {d : ByteArray}
+    (h : jsonCborCommit H v = some d) :
+    CanonicalCbor (jsonToCbor v) = true ∧ d = H.hash jsonTag (encodeDetCbor (jsonToCbor v)) := by
+  unfold jsonCborCommit at h
+  split at h
+  · rename_i hc; exact ⟨hc, (Option.some.inj h).symm⟩
+  · cases h
+
+/-- **Value commitments bind**: two values with one commitment are equal, or their canonical
+encodings are two different messages with one digest. -/
+theorem jsonCborCommit_binding (H : Hasher) {v₁ v₂ : JVal} {d : ByteArray}
+    (h₁ : jsonCborCommit H v₁ = some d) (h₂ : jsonCborCommit H v₂ = some d) :
+    v₁ = v₂ ∨ ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash jsonTag m₁ = H.hash jsonTag m₂ := by
+  obtain ⟨c1, e1⟩ := jsonCborCommit_canonical h₁
+  obtain ⟨c2, e2⟩ := jsonCborCommit_canonical h₂
+  by_cases he : encodeDetCbor (jsonToCbor v₁) = encodeDetCbor (jsonToCbor v₂)
+  · exact Or.inl (jsonToCbor_injective (encodeDetCbor_injective_canonical _ _ c1 c2 he))
+  · exact Or.inr ⟨_, _, he, e1.symm.trans e2⟩
+
+theorem jsonMembersToCbor_keys : ∀ kvs : List (ByteArray × JVal),
+    (jsonMembersToCbor kvs).map (·.1) = kvs.map fun kv => CborVal.text kv.1
+  | [] => by simp [jsonMembersToCbor]
+  | kv :: rest => by simp [jsonMembersToCbor, jsonMembersToCbor_keys rest]
+
+/-- **A committed object has unique keys.** -/
+theorem jsonCborCommit_keys_nodup {H : Hasher} {kvs : List (ByteArray × JVal)} {d : ByteArray}
+    (h : jsonCborCommit H (.obj kvs) = some d) : (kvs.map (·.1)).Nodup := by
+  have hc := (jsonCborCommit_canonical h).1
+  simp only [jsonToCbor] at hc
+  have hn := canonicalMap_keys_nodup hc
+  rw [jsonMembersToCbor_keys, List.Nodup, List.pairwise_map] at hn
+  rw [List.Nodup, List.pairwise_map]
+  exact hn.imp fun hne heq => hne (by rw [heq])
+
+/-! ### Span roots bind the whole list, computably
+
+`Obend.Judge.VpaJson` proves that one span opens to a root or a collision exists. Here the
+collision is computed: from two different span lists whose roots share a `top`, an explicit pair
+of messages. No choice is used, so the extractor runs. -/
+
+/-- Two span lists with one list of leaf digests: the first difference is a leaf collision. -/
+def leafListCollision (H : Hasher) (tag : String) : (s₁ s₂ : List ByteArray) → s₁ ≠ s₂ →
+    s₁.map (leafHash H tag) = s₂.map (leafHash H tag) → HashCollision H tag
+  | [], [], hne, _ => absurd rfl hne
+  | [], _ :: _, _, h => by simp at h
+  | _ :: _, [], _, h => by simp at h
+  | a :: r, b :: s, hne, h =>
+    have h' : leafHash H tag a :: r.map (leafHash H tag) =
+        leafHash H tag b :: s.map (leafHash H tag) := h
+    if hm : leafMsg a = leafMsg b then
+      leafListCollision H tag r s (fun hrs => hne (by rw [leafMsg_injective hm, hrs]))
+        (List.cons.inj h').2
+    else ⟨leafMsg a, leafMsg b, hm, (List.cons.inj h').1⟩
+
+/-- Two different levels of one length with one image under `pairUp`: a node collision. -/
+def pairUpCollision (H : Hasher) (tag : String) : (l₁ l₂ : List ByteArray) →
+    l₁.length = l₂.length → (∀ y ∈ l₁, y.size = 32) → (∀ y ∈ l₂, y.size = 32) → l₁ ≠ l₂ →
+    pairUp H tag l₁ = pairUp H tag l₂ → HashCollision H tag
+  | [], [], _, _, _, hne, _ => absurd rfl hne
+  | [a], [b], _, _, _, hne, h => absurd (show [a] = [b] from h) hne
+  | a :: b :: r, c :: d :: s, hlen, h₁, h₂, hne, h =>
+    have h' : nodeHash H tag a b :: pairUp H tag r = nodeHash H tag c d :: pairUp H tag s := h
+    if hm : nodeMsg a b = nodeMsg c d then
+      pairUpCollision H tag r s (Nat.succ.inj (Nat.succ.inj hlen))
+        (fun y hy => h₁ y (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hy)))
+        (fun y hy => h₂ y (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hy)))
+        (fun hrs => hne (by
+          obtain ⟨hac, hbd⟩ := nodeMsg_injective hm
+            ((h₁ a List.mem_cons_self).trans (h₂ c List.mem_cons_self).symm)
+          rw [hac, hbd, hrs]))
+        (List.cons.inj h').2
+    else ⟨nodeMsg a b, nodeMsg c d, hm, (List.cons.inj h').1⟩
+  | [], _ :: _, hlen, _, _, _, _ => absurd hlen (Nat.succ_ne_zero _).symm
+  | _ :: _, [], hlen, _, _, _, _ => absurd hlen (Nat.succ_ne_zero _)
+  | [_], _ :: _ :: _, hlen, _, _, _, _ => absurd (Nat.succ.inj hlen) (Nat.succ_ne_zero _).symm
+  | _ :: _ :: _, [_], hlen, _, _, _, _ => absurd (Nat.succ.inj hlen) (Nat.succ_ne_zero _)
+
+theorem small_levels_eq : ∀ {l₁ l₂ : List ByteArray}, l₁.length = l₂.length → l₁.length ≤ 1 →
+    l₁.headD ByteArray.empty = l₂.headD ByteArray.empty → l₁ = l₂
+  | [], [], _, _, _ => rfl
+  | [a], [b], _, _, h => congrArg (fun x => [x]) (show a = b from h)
+  | [], _ :: _, hlen, _, _ => absurd hlen (Nat.succ_ne_zero _).symm
+  | [_], [], hlen, _, _ => absurd hlen (Nat.succ_ne_zero _)
+  | [_], _ :: _ :: _, hlen, _, _ => absurd (Nat.succ.inj hlen) (Nat.succ_ne_zero _).symm
+  | _ :: _ :: _, _, _, hs, _ => absurd (Nat.le_of_succ_le_succ hs) (Nat.not_succ_le_zero _)
+
+/-- Two different levels of one length, within the fuel, with one tree top: a node collision. -/
+def treeTopCollision (H : Hasher) (tag : String) : (f : Nat) → (l₁ l₂ : List ByteArray) →
+    l₁.length = l₂.length → l₁.length ≤ f → (∀ y ∈ l₁, y.size = 32) → (∀ y ∈ l₂, y.size = 32) →
+    l₁ ≠ l₂ → treeTop H tag f l₁ = treeTop H tag f l₂ → HashCollision H tag
+  | 0, l₁, l₂, hlen, hf, _, _, hne, _ =>
+    absurd (by
+      have e1 : l₁ = [] := List.length_eq_zero_iff.1 (by omega)
+      have e2 : l₂ = [] := List.length_eq_zero_iff.1 (by omega)
+      rw [e1, e2]) hne
+  | f + 1, l₁, l₂, hlen, hf, h₁, h₂, hne, h =>
+    if hs : l₁.length ≤ 1 then
+      absurd (small_levels_eq hlen hs (by
+        have hs2 : l₂.length ≤ 1 := by rw [← hlen]; exact hs
+        simpa only [treeTop, hs, hs2, ↓reduceIte] using h)) hne
+    else if hp : pairUp H tag l₁ = pairUp H tag l₂ then
+      pairUpCollision H tag l₁ l₂ hlen h₁ h₂ hne hp
+    else
+      treeTopCollision H tag f (pairUp H tag l₁) (pairUp H tag l₂)
+        (by rw [pairUp_length, pairUp_length, hlen]) (by rw [pairUp_length]; omega)
+        (pairUp_sizes H tag l₁ h₁) (pairUp_sizes H tag l₂ h₂) hp
+        (by
+          have hs2 : ¬ l₂.length ≤ 1 := by rw [← hlen]; exact hs
+          simpa only [treeTop, hs, hs2, ↓reduceIte] using h)
+
+theorem leafHashes_size (H : Hasher) (tag : String) (s : List ByteArray) :
+    ∀ y ∈ s.map (leafHash H tag), y.size = 32 := fun y hy => by
+  obtain ⟨x, _, rfl⟩ := List.mem_map.1 hy
+  exact H.size_eq _ _
+
+/-- **Span roots bind the whole list.** Two different span lists whose roots have one `top`
+give an explicit collision at the tag: of two root messages, of two count leaves, of two span
+leaves, or of two nodes. -/
+def spanRootCollision (H : Hasher) (tag : String) {s₁ s₂ : List ByteArray} (hne : s₁ ≠ s₂)
+    (h : (spanMerkleRoot H tag s₁).top = (spanMerkleRoot H tag s₂).top) : HashCollision H tag :=
+  if hm : rootMsg (leafHash H tag (countSpan s₁.length))
+        (treeTop H tag s₁.length (s₁.map (leafHash H tag))) =
+      rootMsg (leafHash H tag (countSpan s₂.length))
+        (treeTop H tag s₂.length (s₂.map (leafHash H tag))) then
+    if hl : leafMsg (countSpan s₁.length) = leafMsg (countSpan s₂.length) then
+      have hn : s₁.length = s₂.length := countSpan_injective (leafMsg_injective hl)
+      if hleaves : s₁.map (leafHash H tag) = s₂.map (leafHash H tag) then
+        leafListCollision H tag s₁ s₂ hne hleaves
+      else
+        treeTopCollision H tag s₁.length (s₁.map (leafHash H tag)) (s₂.map (leafHash H tag))
+          (by simp [hn]) (by simp) (leafHashes_size H tag s₁) (leafHashes_size H tag s₂) hleaves
+          (by
+            have ht := (pairMsg_injective hm ((H.size_eq _ _).trans (H.size_eq _ _).symm)).2
+            rw [← hn] at ht
+            exact ht)
+    else
+      ⟨leafMsg (countSpan s₁.length), leafMsg (countSpan s₂.length), hl,
+        (pairMsg_injective hm ((H.size_eq _ _).trans (H.size_eq _ _).symm)).1⟩
+  else ⟨_, _, hm, h⟩
+
+/-! ## 2. Open-world queries, completeness tokens, and single-edge openings -/
+
 
 def graphTag : String := "obend.vault.lsafe.graph.v1"
 def completeTag : String := "obend.vault.lsafe.complete.v1"
@@ -574,9 +425,14 @@ def KgEdge.key (e : KgEdge) : ByteArray := encodeDetCbor e.toCbor
 
 def edgesCbor (es : Array KgEdge) : CborVal := .array (es.toList.map KgEdge.toCbor)
 
-/-- The commitment to an edge array: the tagged hash of its deterministic encoding. -/
+/-- The leaves of an edge array: each edge's deterministic encoding. -/
+def edgeLeaves (es : Array KgEdge) : List ByteArray := es.toList.map KgEdge.key
+
+/-- **The commitment to an edge array**: the `top` of the span tree over the edges' encodings
+under the graph tag (leaf, node and root messages are domain-separated by their first byte). It
+binds the edge count, and one edge opens to it by a logarithmic path. -/
 def edgesDigest (H : Hasher) (es : Array KgEdge) : ByteArray :=
-  H.hash graphTag (encodeDetCbor (edgesCbor es))
+  (spanMerkleRoot H graphTag (edgeLeaves es)).top
 
 inductive QueryVerdict where
   | entailed
@@ -778,19 +634,131 @@ theorem toCbor_injective : ∀ {a b : List KgEdge},
       rfl
     rw [hx, toCbor_injective hrest]
 
+theorem KgEdge.key_injective {x y : KgEdge} (hx : WithinWidth x.toCbor = true)
+    (hy : WithinWidth y.toCbor = true) (h : x.key = y.key) : x = y := by
+  have hc := encodeDetCbor_injective _ _ hx hy h
+  have hl := toCbor_injective (a := [x]) (b := [y]) (by simp [hc])
+  simpa using hl
+
+theorem edge_width_of_mem {es : Array KgEdge} (h : WithinWidth (edgesCbor es) = true) {e : KgEdge}
+    (he : e ∈ es.toList) : WithinWidth e.toCbor = true := by
+  simp only [WithinWidth, edgesCbor, wfVal, Bool.and_eq_true] at h
+  exact wfList_mem h.2 (List.mem_map.2 ⟨e, he, rfl⟩)
+
+theorem keys_injective : ∀ {a b : List KgEdge}, (∀ x ∈ a, WithinWidth x.toCbor = true) →
+    (∀ y ∈ b, WithinWidth y.toCbor = true) → a.map KgEdge.key = b.map KgEdge.key → a = b
+  | [], [], _, _, _ => rfl
+  | [], _ :: _, _, _, h => by cases h
+  | _ :: _, [], _, _, h => by cases h
+  | x :: xs, y :: ys, ha, hb, h => by
+    simp only [List.map_cons, List.cons.injEq] at h
+    rw [KgEdge.key_injective (ha x List.mem_cons_self) (hb y List.mem_cons_self) h.1,
+      keys_injective (fun z hz => ha z (List.mem_cons_of_mem _ hz))
+        (fun z hz => hb z (List.mem_cons_of_mem _ hz)) h.2]
+
 /-- Two different edge arrays with one commitment, both within width, are an explicit
-collision of the hash itself. -/
+collision of the hash at the graph tag, computed by `spanRootCollision`. -/
 def edgesCollision (H : Hasher) {e₁ e₂ : Array KgEdge} (hne : e₁ ≠ e₂)
     (h₁ : WithinWidth (edgesCbor e₁) = true) (h₂ : WithinWidth (edgesCbor e₂) = true)
-    (heq : edgesDigest H e₁ = edgesDigest H e₂) : HashCollision H graphTag where
-  m₁ := encodeDetCbor (edgesCbor e₁)
-  m₂ := encodeDetCbor (edgesCbor e₂)
-  ne := by
-    intro hm
-    have hc := encodeDetCbor_injective _ _ h₁ h₂ hm
-    simp only [edgesCbor, CborVal.array.injEq] at hc
-    exact hne (Array.toList_inj.1 (toCbor_injective hc))
-  eq := heq
+    (heq : edgesDigest H e₁ = edgesDigest H e₂) : HashCollision H graphTag :=
+  spanRootCollision H graphTag
+    (fun hl => hne (Array.toList_inj.1 (keys_injective (fun _ hx => edge_width_of_mem h₁ hx)
+      (fun _ hy => edge_width_of_mem h₂ hy) hl))) heq
+
+/-! ### Single-edge openings -/
+
+/-- The opening of one edge: the edge count the digest binds and the inclusion path. -/
+structure KgEdgeOpening where
+  count : Nat
+  proof : SpanProof
+
+/-- **Verify one edge against a graph digest**, in `⌈log₂ count⌉` hashes. -/
+def verifyKgEdgeOpening (H : Hasher) (graphDigest32 : ByteArray) (e : KgEdge)
+    (o : KgEdgeOpening) : Bool :=
+  verifySpanMerkleInclusion H graphTag ⟨o.count, graphDigest32⟩ e.key o.proof
+
+/-- The honest opening of the edge at an index. -/
+def openKgEdge (H : Hasher) (es : Array KgEdge) (i : Nat) : KgEdgeOpening :=
+  ⟨es.size, spanMerkleProof H graphTag (edgeLeaves es) i⟩
+
+/-- **Completeness**: the honest opening of every committed edge verifies. -/
+theorem verifyKgEdgeOpening_complete (H : Hasher) (es : Array KgEdge) (i : Nat) (hi : i < es.size) :
+    verifyKgEdgeOpening H (edgesDigest H es) es[i] (openKgEdge H es i) = true := by
+  have hl : i < (edgeLeaves es).length := by simp [edgeLeaves]; exact hi
+  have h := verifySpanMerkleInclusion_complete H graphTag (edgeLeaves es) i hl
+  have hroot : (⟨es.size, edgesDigest H es⟩ : SpanRoot) =
+      spanMerkleRoot H graphTag (edgeLeaves es) := by
+    simp [spanMerkleRoot, edgesDigest, edgeLeaves]
+  have hleaf : (edgeLeaves es)[i]'hl = es[i].key := by simp [edgeLeaves]
+  unfold verifyKgEdgeOpening openKgEdge
+  rw [hroot, ← hleaf]
+  exact h
+
+/-- **Openings bind.** An edge that opens to the digest of an edge array is, as an encoding, the
+leaf at the opened index, whatever count the opening claims; or the hash collides at the graph
+tag. -/
+theorem verifyKgEdgeOpening_binding (H : Hasher) {es : Array KgEdge} {e : KgEdge}
+    {o : KgEdgeOpening} : verifyKgEdgeOpening H (edgesDigest H es) e o = true →
+    (edgeLeaves es)[o.proof.index]? = some e.key ∨
+      ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash graphTag m₁ = H.hash graphTag m₂ :=
+  verifySpanMerkleInclusion_top_binding H graphTag (root := ⟨o.count, edgesDigest H es⟩) rfl
+
+/-- Within width the opened edge is an edge of the array. -/
+theorem verifyKgEdgeOpening_mem (H : Hasher) {es : Array KgEdge} {e : KgEdge} {o : KgEdgeOpening}
+    (hes : WithinWidth (edgesCbor es) = true) (he : WithinWidth e.toCbor = true) :
+    verifyKgEdgeOpening H (edgesDigest H es) e o = true →
+    e ∈ es.toList ∨ ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash graphTag m₁ = H.hash graphTag m₂ := by
+  intro h
+  rcases verifyKgEdgeOpening_binding H h with hk | hc
+  · obtain ⟨x, hx, hxe⟩ := List.mem_map.1 (List.mem_of_getElem? hk)
+    rw [← KgEdge.key_injective (edge_width_of_mem hes hx) he hxe]
+    exact Or.inl hx
+  · exact Or.inr hc
+
+/-- **The opened query.** Entailed: the queried edge opens to the graph digest by a single-edge
+inclusion path, with no other edge presented. Otherwise undetermined: a missing or failing
+opening is not falsity, and this evaluator never refutes. -/
+def evalOpenedKgQuery (H : Hasher) (graphDigest32 : ByteArray) (predId : UInt64)
+    (subj targetObj : ByteArray) (opening? : Option KgEdgeOpening) : QueryVerdict :=
+  match opening? with
+  | some o =>
+    if verifyKgEdgeOpening H graphDigest32 ⟨predId, subj, targetObj⟩ o then .entailed
+    else .undetermined
+  | none => .undetermined
+
+theorem openedKgQuery_never_refutes (H : Hasher) (g : ByteArray) (p : UInt64) (s o : ByteArray)
+    (opening? : Option KgEdgeOpening) : evalOpenedKgQuery H g p s o opening? ≠ .refuted := by
+  unfold evalOpenedKgQuery
+  split
+  · split <;> exact fun h => by cases h
+  · exact fun h => by cases h
+
+/-- **An opened entailment is sound.** The edge is an edge of every within-width array with that
+digest, or the hash collides at the graph tag. -/
+theorem openedKgQuery_entailed_sound (H : Hasher) {es : Array KgEdge} {p : UInt64}
+    {s o : ByteArray} {opening? : Option KgEdgeOpening}
+    (hes : WithinWidth (edgesCbor es) = true)
+    (he : WithinWidth (KgEdge.toCbor ⟨p, s, o⟩) = true) :
+    evalOpenedKgQuery H (edgesDigest H es) p s o opening? = .entailed →
+    (⟨p, s, o⟩ : KgEdge) ∈ es.toList ∨
+      ∃ m₁ m₂ : ByteArray, m₁ ≠ m₂ ∧ H.hash graphTag m₁ = H.hash graphTag m₂ := by
+  intro h
+  unfold evalOpenedKgQuery at h
+  split at h
+  · split at h
+    · rename_i hv
+      exact verifyKgEdgeOpening_mem H hes he hv
+    · cases h
+  · cases h
+
+example : WithinWidth (edgesCbor #[⟨7, ⟨#[1]⟩, ⟨#[2]⟩⟩, ⟨7, ⟨#[1]⟩, ⟨#[3]⟩⟩]) = true := by decide +kernel
+
+/-- **Every committed edge is entailed by its honest opening.** -/
+theorem openedKgQuery_complete (H : Hasher) (es : Array KgEdge) (i : Nat) (hi : i < es.size) :
+    evalOpenedKgQuery H (edgesDigest H es) es[i].predId es[i].subj es[i].obj
+      (some (openKgEdge H es i)) = .entailed := by
+  have h := verifyKgEdgeOpening_complete H es i hi
+  simp only [evalOpenedKgQuery, h, ↓reduceIte]
 
 /-! ## 3. Forgetting the historical base while a fork is open -/
 
