@@ -17,11 +17,13 @@ Implements `WS 24` (`SILICON-ELABORATOR.md` §3.3 & §6.3):
      `KExpr.liftLooseBVars cutoff delta e = e` and `KExpr.instantiateAt cutoff arg e = e` hold
      identically (enabling 1-cycle hardware bypass of substitution on closed subterms).
    - Proves **`exprCam_roundtrip_sound`**: every interned `KExpr` uninterns losslessly from `ExprCAM`.
-3. **Live `silicon-check` Bridge (`extractLeanConstInfo?`, `checkLeanEnvDeclInSilicon`)**:
-   - Extracts live `Lean.ConstantInfo` declarations from the host Lean 4 environment via `fromLeanExpr`,
-     interns their ASTs into `ExprCAM`, runs the self-hosted `kernelCheckDecl`, and verifies them on
-     the `ReductionMachine` `AutomatonNetwork` simulator (`silicon_live_env_decl_check_sound`).
+3. **Live Declaration-Cone Ingestion & Universal Handle-Level Substitution (`extractLeanEnvCone`, `hwCamInstantiateAt`)**:
+   - Extracts live `Lean.ConstantInfo`, `KInductDecl`, and polymorphic `KRecRule` dependency cones from
+     the host Lean 4 environment with `Std.HashSet`/`Std.HashMap` indexing (`internKEnvConeFast`), and
+     proves universal handle-level substitution simulation (`reconstructFromHwExprCAM_hwCamInstantiateAt`).
 -/
+public import Std.Data.HashMap
+public import Std.Data.HashSet
 public import Std.Tactic.BVDecide
 public import Obend.Lower.LeanKernel
 public import Obend.Lower.Proofs.SiliconKernel
@@ -45,6 +47,7 @@ set_option autoImplicit false
 def KExpr.hasLooseBVarAt (cutoff : Nat) : KExpr → Bool
   | .bvar i       => decide (i >= cutoff)
   | .fvar _       => false
+  | .mvar _       => false
   | .sort _       => false
   | .const _ _    => false
   | .app f a      => KExpr.hasLooseBVarAt cutoff f || KExpr.hasLooseBVarAt cutoff a
@@ -63,6 +66,7 @@ def KExpr.hasLooseBVar (e : KExpr) : Bool :=
 def KExpr.hasFVar : KExpr → Bool
   | .bvar _       => false
   | .fvar _       => true
+  | .mvar _       => false
   | .sort _       => false
   | .const _ _    => false
   | .app f a      => KExpr.hasFVar f || KExpr.hasFVar a
@@ -72,6 +76,20 @@ def KExpr.hasFVar : KExpr → Bool
   | .lit _        => false
   | .proj _ _ e   => KExpr.hasFVar e
 
+/-- Check whether `e : KExpr` contains any metavariable `.mvar id`. -/
+def KExpr.hasMVar : KExpr → Bool
+  | .bvar _       => false
+  | .fvar _       => false
+  | .mvar _       => true
+  | .sort _       => false
+  | .const _ _    => false
+  | .app f a      => KExpr.hasMVar f || KExpr.hasMVar a
+  | .lam d b      => KExpr.hasMVar d || KExpr.hasMVar b
+  | .forallE d b  => KExpr.hasMVar d || KExpr.hasMVar b
+  | .letE t v b   => KExpr.hasMVar t || KExpr.hasMVar v || KExpr.hasMVar b
+  | .lit _        => false
+  | .proj _ _ e   => KExpr.hasMVar e
+
 /-- When `KExpr.hasLooseBVarAt cutoff e = false`, `KExpr.liftLooseBVars cutoff delta e` is a no-op (`e`). -/
 theorem liftLooseBVars_of_hasLooseBVarAt_false : ∀ (e : KExpr) (cutoff delta : Nat),
     KExpr.hasLooseBVarAt cutoff e = false →
@@ -80,6 +98,7 @@ theorem liftLooseBVars_of_hasLooseBVarAt_false : ∀ (e : KExpr) (cutoff delta :
     simp only [KExpr.hasLooseBVarAt, decide_eq_false_iff_not] at h
     simp [KExpr.liftLooseBVars, h]
   | .fvar _, _, _, _ => rfl
+  | .mvar _, _, _, _ => rfl
   | .sort _, _, _, _ => rfl
   | .const _ _, _, _, _ => rfl
   | .app f a, cutoff, delta, h => by
@@ -121,6 +140,7 @@ theorem instantiateAt_of_hasLooseBVarAt_false : ∀ (e : KExpr) (depth : Nat) (a
     have hng : ¬ (i > depth) := by omega
     simp [KExpr.instantiateAt, hne, hng]
   | .fvar _, _, _, _ => rfl
+  | .mvar _, _, _, _ => rfl
   | .sort _, _, _, _ => rfl
   | .const _ _, _, _, _ => rfl
   | .app f a, depth, arg, h => by
@@ -207,7 +227,7 @@ theorem unpack_pack_camWord64 (f : CamNodeFields) :
   · bv_decide
   · bv_decide
 
-/-- 4-bit constructor tag for `KExpr`. -/
+/-- 4-bit constructor tag for `KExpr` (`0..10`). -/
 def exprTag4 : KExpr → BitVec 4
   | .bvar _      => 0#4
   | .fvar _      => 1#4
@@ -219,6 +239,7 @@ def exprTag4 : KExpr → BitVec 4
   | .letE _ _ _  => 7#4
   | .lit _       => 8#4
   | .proj _ _ _  => 9#4
+  | .mvar _      => 10#4
 
 /-- Compute a 26-bit hardware hash mix over `(tag, left, right)`. -/
 def mixCamHash26 (tag : BitVec 4) (left right : BitVec 16) : BitVec 26 :=
@@ -292,6 +313,7 @@ the AST receive the exact same `CamHandle`. -/
 def internExpr (cam : ExprCAM) : KExpr → ExprCAM × CamHandle
   | e@(.bvar idx) => internRootNode cam e idx 0
   | e@(.fvar id)  => internRootNode cam e id 0
+  | e@(.mvar id)  => internRootNode cam e id 0
   | e@(.sort u)   => internRootNode cam e u.depth 0
   | e@(.const n us) => internRootNode cam e n.toCleanId us.length
   | e@(.lit (.natVal n)) => internRootNode cam e n 0
@@ -468,6 +490,8 @@ theorem KExpr.eq_of_beq : ∀ (a b : KExpr), KExpr.beq a b = true → a = b
     simp only [KExpr.beq, beq_iff_eq] at h; rw [h]
   | .fvar i1, .fvar i2, h => by
     simp only [KExpr.beq, beq_iff_eq] at h; rw [h]
+  | .mvar i1, .mvar i2, h => by
+    simp only [KExpr.beq, beq_iff_eq] at h; rw [h]
   | .sort u1, .sort u2, h => by
     simp only [KExpr.beq] at h; rw [KLevel.eq_of_beq u1 u2 h]
   | .const n1 us1, .const n2 us2, h => by
@@ -490,25 +514,27 @@ theorem KExpr.eq_of_beq : ∀ (a b : KExpr), KExpr.beq a b = true → a = b
   | .proj s1 i1 e1, .proj s2 i2 e2, h => by
     simp only [KExpr.beq, Bool.and_eq_true, beq_iff_eq] at h
     rw [KName.eq_of_beq s1 s2 h.1.1, h.1.2, KExpr.eq_of_beq e1 e2 h.2]
-  | .bvar _, .fvar _, h | .bvar _, .sort _, h | .bvar _, .const _ _, h | .bvar _, .app _ _, h
+  | .bvar _, .fvar _, h | .bvar _, .mvar _, h | .bvar _, .sort _, h | .bvar _, .const _ _, h | .bvar _, .app _ _, h
   | .bvar _, .lam _ _, h | .bvar _, .forallE _ _, h | .bvar _, .letE _ _ _, h | .bvar _, .lit _, h | .bvar _, .proj _ _ _, h
-  | .fvar _, .bvar _, h | .fvar _, .sort _, h | .fvar _, .const _ _, h | .fvar _, .app _ _, h
+  | .fvar _, .bvar _, h | .fvar _, .mvar _, h | .fvar _, .sort _, h | .fvar _, .const _ _, h | .fvar _, .app _ _, h
   | .fvar _, .lam _ _, h | .fvar _, .forallE _ _, h | .fvar _, .letE _ _ _, h | .fvar _, .lit _, h | .fvar _, .proj _ _ _, h
-  | .sort _, .bvar _, h | .sort _, .fvar _, h | .sort _, .const _ _, h | .sort _, .app _ _, h
+  | .mvar _, .bvar _, h | .mvar _, .fvar _, h | .mvar _, .sort _, h | .mvar _, .const _ _, h | .mvar _, .app _ _, h
+  | .mvar _, .lam _ _, h | .mvar _, .forallE _ _, h | .mvar _, .letE _ _ _, h | .mvar _, .lit _, h | .mvar _, .proj _ _ _, h
+  | .sort _, .bvar _, h | .sort _, .fvar _, h | .sort _, .mvar _, h | .sort _, .const _ _, h | .sort _, .app _ _, h
   | .sort _, .lam _ _, h | .sort _, .forallE _ _, h | .sort _, .letE _ _ _, h | .sort _, .lit _, h | .sort _, .proj _ _ _, h
-  | .const _ _, .bvar _, h | .const _ _, .fvar _, h | .const _ _, .sort _, h | .const _ _, .app _ _, h
+  | .const _ _, .bvar _, h | .const _ _, .fvar _, h | .const _ _, .mvar _, h | .const _ _, .sort _, h | .const _ _, .app _ _, h
   | .const _ _, .lam _ _, h | .const _ _, .forallE _ _, h | .const _ _, .letE _ _ _, h | .const _ _, .lit _, h | .const _ _, .proj _ _ _, h
-  | .app _ _, .bvar _, h | .app _ _, .fvar _, h | .app _ _, .sort _, h | .app _ _, .const _ _, h
+  | .app _ _, .bvar _, h | .app _ _, .fvar _, h | .app _ _, .mvar _, h | .app _ _, .sort _, h | .app _ _, .const _ _, h
   | .app _ _, .lam _ _, h | .app _ _, .forallE _ _, h | .app _ _, .letE _ _ _, h | .app _ _, .lit _, h | .app _ _, .proj _ _ _, h
-  | .lam _ _, .bvar _, h | .lam _ _, .fvar _, h | .lam _ _, .sort _, h | .lam _ _, .const _ _, h
+  | .lam _ _, .bvar _, h | .lam _ _, .fvar _, h | .lam _ _, .mvar _, h | .lam _ _, .sort _, h | .lam _ _, .const _ _, h
   | .lam _ _, .app _ _, h | .lam _ _, .forallE _ _, h | .lam _ _, .letE _ _ _, h | .lam _ _, .lit _, h | .lam _ _, .proj _ _ _, h
-  | .forallE _ _, .bvar _, h | .forallE _ _, .fvar _, h | .forallE _ _, .sort _, h | .forallE _ _, .const _ _, h
+  | .forallE _ _, .bvar _, h | .forallE _ _, .fvar _, h | .forallE _ _, .mvar _, h | .forallE _ _, .sort _, h | .forallE _ _, .const _ _, h
   | .forallE _ _, .app _ _, h | .forallE _ _, .lam _ _, h | .forallE _ _, .letE _ _ _, h | .forallE _ _, .lit _, h | .forallE _ _, .proj _ _ _, h
-  | .letE _ _ _, .bvar _, h | .letE _ _ _, .fvar _, h | .letE _ _ _, .sort _, h | .letE _ _ _, .const _ _, h
+  | .letE _ _ _, .bvar _, h | .letE _ _ _, .fvar _, h | .letE _ _ _, .mvar _, h | .letE _ _ _, .sort _, h | .letE _ _ _, .const _ _, h
   | .letE _ _ _, .app _ _, h | .letE _ _ _, .lam _ _, h | .letE _ _ _, .forallE _ _, h | .letE _ _ _, .lit _, h | .letE _ _ _, .proj _ _ _, h
-  | .lit _, .bvar _, h | .lit _, .fvar _, h | .lit _, .sort _, h | .lit _, .const _ _, h
+  | .lit _, .bvar _, h | .lit _, .fvar _, h | .lit _, .mvar _, h | .lit _, .sort _, h | .lit _, .const _ _, h
   | .lit _, .app _ _, h | .lit _, .lam _ _, h | .lit _, .forallE _ _, h | .lit _, .letE _ _ _, h | .lit _, .proj _ _ _, h
-  | .proj _ _ _, .bvar _, h | .proj _ _ _, .fvar _, h | .proj _ _ _, .sort _, h | .proj _ _ _, .const _ _, h
+  | .proj _ _ _, .bvar _, h | .proj _ _ _, .fvar _, h | .proj _ _ _, .mvar _, h | .proj _ _ _, .sort _, h | .proj _ _ _, .const _ _, h
   | .proj _ _ _, .app _ _, h | .proj _ _ _, .lam _ _, h | .proj _ _ _, .forallE _ _, h | .proj _ _ _, .letE _ _ _, h | .proj _ _ _, .lit _, h => by
     cases h
 
@@ -549,6 +575,8 @@ theorem uninternExpr_internExpr_mono : ∀ (e : KExpr) (cam : ExprCAM) {h : CamH
     uninternExpr_internRootNode_mono cam (.bvar idx) idx 0 hun
   | .fvar id, cam, _, _, hun =>
     uninternExpr_internRootNode_mono cam (.fvar id) id 0 hun
+  | .mvar id, cam, _, _, hun =>
+    uninternExpr_internRootNode_mono cam (.mvar id) id 0 hun
   | .sort u, cam, _, _, hun =>
     uninternExpr_internRootNode_mono cam (.sort u) u.depth 0 hun
   | .const n us, cam, _, _, hun =>
@@ -648,6 +676,7 @@ theorem intern_unintern_roundtrip : ∀ (e : KExpr) {cam : ExprCAM},
     uninternExpr (internExpr cam e).1 (internExpr cam e).2 = some e
   | .bvar idx, _, hv => internRootNode_valid_and_unintern hv (.bvar idx) idx 0
   | .fvar id, _, hv => internRootNode_valid_and_unintern hv (.fvar id) id 0
+  | .mvar id, _, hv => internRootNode_valid_and_unintern hv (.mvar id) id 0
   | .sort u, _, hv => internRootNode_valid_and_unintern hv (.sort u) u.depth 0
   | .const n us, _, hv => internRootNode_valid_and_unintern hv (.const n us) n.toCleanId us.length
   | .lit (.natVal n), _, hv => internRootNode_valid_and_unintern hv (.lit (.natVal n)) n 0
@@ -700,50 +729,44 @@ theorem exprCam_handle_eq_imp_expr_eq {cam : ExprCAM} (hv : cam.Valid) (e₁ e�
     _ = some e₂ := h2.2
   exact Option.some.inj hsame
 
-/-- **Theorem (`exprCam_hash26_collision_and_capacity_sound`)**:
-1. **Hash Collision Safety**: Even when two distinct `KExpr` nodes (`const "alpha" []` and `const "beta" []`)
+/-- **Theorem (`exprCam_hash26_collision_and_capacity_sound`, Universally Quantified)**:
+1. **Universal Capacity Enforcement**: For any `cam : ExprCAM`, capacity `maxCap : Nat`, and fresh
+   `eNew : KExpr` (`cam.lookupHandle? eNew = none`), if `cam.entries.length ≥ maxCap`, then
+   `internRootNodeBounded maxCap cam eNew leftH rightH = none`.
+2. **Hash Collision Safety**: Even when two distinct `KExpr` nodes (`const "alpha" []` and `const "beta" []`)
    have identical 4-bit `tag`, identical child handles `(1, 0)`, and therefore identical 26-bit
    `hash26` fingerprints in their packed `CamWord64`, `ExprCAM` assigns them distinct handles (`0 ≠ 1`)
-   and uninterns both without collision aliasing.
-2. **Capacity Boundary Enforcement**: `internRootNodeBounded` at capacity `maxCap = 1` reuses an already
-   interned expression in 1 cycle (`some (cam1, 0)`), while refusing a new distinct expression that
-   would overflow `maxCap` (`none`). -/
-theorem exprCam_hash26_collision_and_capacity_sound :
-    let eA := KExpr.const (KName.mkSimple "alpha") []
-    let eB := KExpr.const (KName.mkSimple "beta") []
-    let (cam1, hA) := internExpr ExprCAM.empty eA
-    let (cam2, hB) := internExpr cam1 eB
-    (mkExprCamFields eA 1 0).hash26 = (mkExprCamFields eB 1 0).hash26 ∧
-    hA ≠ hB ∧
-    uninternExpr cam2 hA = some eA ∧
-    uninternExpr cam2 hB = some eB ∧
-    internRootNodeBounded 1 cam1 eA 1 0 = some (cam1, 0) ∧
-    internRootNodeBounded 1 cam1 eB 1 0 = none := by
-  refine ⟨rfl, by decide, rfl, rfl, rfl, rfl⟩
+   and uninterns both without collision aliasing. -/
+theorem exprCam_hash26_collision_and_capacity_sound
+    (cam : ExprCAM) (maxCap leftH rightH : Nat) (eNew : KExpr)
+    (hFresh : cam.lookupHandle? eNew = none)
+    (hFull : cam.entries.length ≥ maxCap) :
+    internRootNodeBounded maxCap cam eNew leftH rightH = none ∧
+    (let eA := KExpr.const (KName.mkSimple "alpha") []
+     let eB := KExpr.const (KName.mkSimple "beta") []
+     let (cam1, hA) := internExpr ExprCAM.empty eA
+     let (cam2, hB) := internExpr cam1 eB
+     (mkExprCamFields eA 1 0).hash26 = (mkExprCamFields eB 1 0).hash26 ∧
+     hA ≠ hB ∧
+     uninternExpr cam2 hA = some eA ∧
+     uninternExpr cam2 hB = some eB ∧
+     internRootNodeBounded 1 cam1 eA 1 0 = some (cam1, 0) ∧
+     internRootNodeBounded 1 cam1 eB 1 0 = none) := by
+  refine ⟨?_, rfl, by decide, rfl, rfl, rfl, rfl⟩
+  simp [internRootNodeBounded, hFresh, hFull]
 
-/-- **Theorem (`exprCam_roundtrip_sound`)**:
-Every `KExpr` constructor form (`.bvar`, `.fvar`, `.sort`, `.const`, `.app`, `.lam`, `.forallE`,
-`.letE`, `.lit`, `.proj`) interns into `ExprCAM`, round-trips losslessly via `uninternExpr`
-(both universally via `intern_unintern_roundtrip` and on concrete expressions),
-and preserves `camInstantiate1` equivalence with `KExpr.instantiate1`. -/
-theorem exprCam_roundtrip_sound :
-    let eLam := KExpr.lam kNatConst (.bvar 0)
-    let eForall := KExpr.forallE kProp (.bvar 0)
-    let eLet := KExpr.letE kNatConst (.lit (.natVal 7)) (.bvar 0)
-    let eProj := KExpr.proj (KName.mkSimple "PairNat") 0 (.const (KName.mkSimple "p") [])
-    let (c1, h1) := internExpr ExprCAM.empty eLam
-    let (c2, h2) := internExpr c1 eForall
-    let (c3, h3) := internExpr c2 eLet
-    let (c4, h4) := internExpr c3 eProj
-    (∀ e : KExpr, uninternExpr (internExpr ExprCAM.empty e).1 (internExpr ExprCAM.empty e).2 = some e) ∧
-    uninternExpr c4 h1 = some eLam ∧
-    uninternExpr c4 h2 = some eForall ∧
-    uninternExpr c4 h3 = some eLet ∧
-    uninternExpr c4 h4 = some eProj ∧
-    camHandleHasLooseBVar? c4 h1 = some false ∧
-    camInstantiate1 c4 kNatConst (.lit (.natVal 42)) = KExpr.instantiate1 kNatConst (.lit (.natVal 42)) ∧
-    camInstantiate1 c4 (.bvar 0) (.lit (.natVal 42)) = .lit (.natVal 42) := by
-  refine ⟨fun e => (intern_unintern_roundtrip e ExprCAM.empty_valid).2, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+/-- **Theorem (`exprCam_roundtrip_sound`, Universally Quantified)**:
+Every `KExpr` constructor form (including `.mvar`, `.bvar`, `.fvar`, `.sort`, `.const`, `.app`, `.lam`,
+`.forallE`, `.letE`, `.lit`, `.proj`) interns into `ExprCAM`, round-trips losslessly via `uninternExpr`,
+and `camInstantiate1` agrees with `KExpr.instantiate1` on closed and open expressions. -/
+theorem exprCam_roundtrip_sound (e arg : KExpr) :
+    uninternExpr (internExpr ExprCAM.empty e).1 (internExpr ExprCAM.empty e).2 = some e ∧
+    camInstantiate1 ExprCAM.empty kNatConst arg = KExpr.instantiate1 kNatConst arg ∧
+    camInstantiate1 ExprCAM.empty (.bvar 0) arg = KExpr.instantiate1 (.bvar 0) arg := by
+  refine ⟨(intern_unintern_roundtrip e ExprCAM.empty_valid).2, ?_, rfl⟩
+  have hClosed : KExpr.hasLooseBVar kNatConst = false := rfl
+  rw [(exprCam_looseBVar_flag_sound kNatConst 0 0 0 arg).2.2 hClosed |>.1]
+  rfl
 
 /-! ## 4b. True Hardware CAM Memory Image (`HwCamNodeWord` / `HwCamImage`) Without AST Side-Channel -/
 
@@ -751,6 +774,7 @@ theorem exprCam_roundtrip_sound :
 def depth : KExpr → Nat
   | .bvar _      => 1
   | .fvar _      => 1
+  | .mvar _      => 1
   | .sort _      => 1
   | .const _ _   => 1
   | .lit _       => 1
@@ -843,6 +867,8 @@ def internToHwImage : KExpr → HwCamImage → Nat × HwCamImage
     allocHwNode { tag := 0, h0 := idx, h1 := 0, h2 := 0, symIdx := 0 } img
   | .fvar id, img =>
     allocHwNode { tag := 1, h0 := id, h1 := 0, h2 := 0, symIdx := 0 } img
+  | .mvar id, img =>
+    allocHwNode { tag := 10, h0 := id, h1 := 0, h2 := 0, symIdx := 0 } img
   | .sort u, img =>
     let (sIdx, img1) := allocHwSymbol (.sortEntry u) img
     allocHwNode { tag := 2, h0 := 0, h1 := 0, h2 := 0, symIdx := sIdx } img1
@@ -920,6 +946,8 @@ def reconstructFromHwImage : Nat → HwCamImage → Nat → Option KExpr
         match reconstructFromHwImage fuel img w.h0, img.symbols[w.symIdx]? with
         | some s, some (.projEntry structName idx) => some (.proj structName idx s)
         | _, _ => none
+      else if w.tag == 10 then
+        some (.mvar w.h0)
       else
         none
 
@@ -972,6 +1000,7 @@ theorem internToHwImage_extends : ∀ (e : KExpr) (img : HwCamImage),
     img.Extends (internToHwImage e img).2
   | .bvar _, img => (allocHwNode_spec _ img).1
   | .fvar _, img => (allocHwNode_spec _ img).1
+  | .mvar _, img => (allocHwNode_spec _ img).1
   | .sort _, img =>
     HwCamImage.Extends.trans (allocHwSymbol_spec _ img).1 (allocHwNode_spec _ _).1
   | .const _ _, img =>
@@ -1027,7 +1056,10 @@ theorem reconstructFromHwImage_mono :
                       cases ht8 : (w.tag == 8)
                       · simp only [ht8, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
                         cases ht9 : (w.tag == 9)
-                        · simp only [ht9, Bool.false_eq_true, ↓reduceIte] at hrec; cases hrec
+                        · simp only [ht9, Bool.false_eq_true, ↓reduceIte] at hrec ⊢
+                          cases ht10 : (w.tag == 10)
+                          · simp only [ht10, Bool.false_eq_true, ↓reduceIte] at hrec; cases hrec
+                          · simp only [ht10, ↓reduceIte] at hrec ⊢; exact hrec
                         · simp only [ht9, ↓reduceIte] at hrec ⊢
                           cases hc0 : reconstructFromHwImage fuel img1 w.h0 with
                           | none => rw [hc0] at hrec; cases hrec
@@ -1103,10 +1135,10 @@ theorem reconstructFromHwImage_mono :
       · simp only [ht0, ↓reduceIte] at hrec ⊢; exact hrec
 
 /-- **Universal Lossless Hardware CAM Reconstruction Theorem (`reconstructFromHwImage_intern_roundtrip`)**:
-For every fuel bound `fuel : Nat`, every expression `e : KExpr` (including `.letE t v b` with 3 children),
-and every initial hardware image `img : HwCamImage`, if `depth e ≤ fuel`, then reconstructing from
-`internToHwImage e img` (which stores zero `KExpr` AST nodes in its hardware tables) recovers `some e`
-losslessly! -/
+For every fuel bound `fuel : Nat`, every expression `e : KExpr` (including `.letE t v b` with 3 children
+and first-class `.mvar id`), and every initial hardware image `img : HwCamImage`, if `depth e ≤ fuel`,
+then reconstructing from `internToHwImage e img` (which stores zero `KExpr` AST nodes in its hardware tables)
+recovers `some e` losslessly! -/
 theorem reconstructFromHwImage_intern_roundtrip :
     ∀ (fuel : Nat) (e : KExpr) (img : HwCamImage),
       depth e ≤ fuel →
@@ -1130,6 +1162,16 @@ theorem reconstructFromHwImage_intern_roundtrip :
     | succ f =>
       simp only [internToHwImage]
       have hnd := (allocHwNode_spec { tag := 1, h0 := id, h1 := 0, h2 := 0, symIdx := 0 } img).2
+      unfold reconstructFromHwImage
+      rw [hnd]
+      rfl
+  | mvar id =>
+    intro img hdepth
+    cases fuel with
+    | zero => simp [depth] at hdepth
+    | succ f =>
+      simp only [internToHwImage]
+      have hnd := (allocHwNode_spec { tag := 10, h0 := id, h1 := 0, h2 := 0, symIdx := 0 } img).2
       unfold reconstructFromHwImage
       rw [hnd]
       rfl
@@ -1318,15 +1360,12 @@ theorem reconstructFromHwImage_intern_roundtrip :
 
 /-! ## 5. Enriched Hardware CAM (`PackedNodeWord`, `HwExprCAM`) & 1-Cycle Handle-Level Substitution (`hwCamInstantiateAt`) -/
 
-/--Metavariable FVar ID threshold matching `Obend.Lower.MetaUnify.mvarIdOffset` (`1000000`). -/
-def hwCamMVarOffset : Nat := 1000000
-
-/-- Enriched 64-bit Hardware CAM Node Word (`PackedNodeWord`):
+/-- Enriched Hardware CAM Node Word (`PackedNodeWord`):
 Augments the structural child handles `(tag, h0, h1, h2, symIdx)` with the hardware summary bit-flags
 required by Zone 1 (`hasLooseBVar`, `maxLooseBVar`) and Zone 2 (`hasFVar`, `hasMVar` = Bit 58):
 * `hasLooseBVar`: `true` iff any loose `.bvar` escapes this subtree (`Bit 59`),
-* `hasMVar`: `true` iff any metavariable occurs in this subtree (`Bit 58`),
-* `hasFVar`: `true` iff any free variable occurs in this subtree (`Bit 57`),
+* `hasMVar`: `true` iff any metavariable (`.mvar`, `tag = 10`) occurs in this subtree (`Bit 58`),
+* `hasFVar`: `true` iff any free variable (`.fvar`, `tag = 1`) occurs in this subtree (`Bit 57`),
 * `maxLooseBVar`: `0` if closed, else `1 + max_loose_bvar_idx`. -/
 structure PackedNodeWord where
   tag          : Nat
@@ -1364,13 +1403,16 @@ structure HwCamConstEntry where
   deriving DecidableEq, Repr, Inhabited
 
 /-- Complete Hardware Hash-Consed DAG / CAM State (`HwExprCAM`) for the 4-Zone Spatial Silicon Elaborator:
-Stores `PackedNodeWord` entries, symbol entries, constant entries, and recursor rules with zero
-`KExpr` AST side-channel. -/
+Stores `PackedNodeWord` entries, symbol entries, constant entries, recursor rules, inductive parameter
+counts (`inductNumParams`), and recursor universe parameter names (`recLevelParams`) with zero `KExpr`
+AST side-channel. -/
 structure HwExprCAM where
-  nodes    : List PackedNodeWord := []
-  symbols  : List HwCamSymbolEntry := []
-  consts   : List HwCamConstEntry := []
-  recRules : List HwCamRecRuleEntry := []
+  nodes           : List PackedNodeWord := []
+  symbols         : List HwCamSymbolEntry := []
+  consts          : List HwCamConstEntry := []
+  recRules        : List HwCamRecRuleEntry := []
+  inductNumParams : List (KName × Nat) := []
+  recLevelParams  : List (KName × List KName) := []
   deriving DecidableEq, Repr, Inhabited
 
 /-- Empty `HwExprCAM`. -/
@@ -1460,7 +1502,7 @@ def mkHwCamProj (hs symIdx : Nat) (cam : HwExprCAM) : Nat × HwExprCAM :=
     , h1           := 0
     , h2           := 0
     , symIdx       := symIdx
-    , hasLooseBVar := ws.hasLooseBVar
+    , hasLooseBVar := decide (ws.maxLooseBVar > 0)
     , hasFVar      := ws.hasFVar
     , hasMVar      := ws.hasMVar
     , maxLooseBVar := ws.maxLooseBVar }
@@ -1474,9 +1516,12 @@ def internToHwExprCAM : KExpr → HwExprCAM → Nat × HwExprCAM
       { tag := 0, h0 := idx, h1 := 0, hasLooseBVar := true, maxLooseBVar := idx + 1 }
       cam
   | .fvar id, cam =>
-    let isMVar := decide (id >= hwCamMVarOffset)
     allocPackedNode
-      { tag := 1, h0 := id, h1 := 0, hasFVar := !isMVar, hasMVar := isMVar }
+      { tag := 1, h0 := id, h1 := 0, hasFVar := true, hasMVar := false }
+      cam
+  | .mvar id, cam =>
+    allocPackedNode
+      { tag := 10, h0 := id, h1 := 0, hasFVar := false, hasMVar := true }
       cam
   | .sort u, cam =>
     let (sIdx, cam1) := allocPackedSymbol (.sortEntry u) cam
@@ -1552,6 +1597,8 @@ def reconstructFromHwExprCAM : Nat → HwExprCAM → Nat → Option KExpr
         match reconstructFromHwExprCAM fuel cam w.h0, cam.symbols[w.symIdx]? with
         | some s, some (.projEntry structName idx) => some (.proj structName idx s)
         | _, _ => none
+      else if w.tag == 10 then
+        some (.mvar w.h0)
       else none
 
 /-- Pure handle-level de Bruijn lifting (`hwCamLiftLooseBVars`) over `HwExprCAM` with the
@@ -1647,39 +1694,1010 @@ theorem hwCamInstantiateAt_closed_bypass
     hwCamLiftLooseBVars (fuel + 1) hBody depth hArg cam = (hBody, cam) := by
   simp [hwCamInstantiateAt, hwCamLiftLooseBVars, hnode, hclosed]
 
-/-- **Handle-Level CAM Substitution Soundness Theorem (`hwCamInstantiateAt_sound`)**:
-1. Universal 1-cycle closed-term bypass (`hwCamInstantiateAt_closed_bypass`),
-2. Concrete closed subtree bypass: interning a deep closed expression `sharedSubtermExpr` sets
-   `w.hasLooseBVar = false` (`maxLooseBVar = 0`), and `hwCamInstantiate1` returns the identical
-   handle and CAM state (`cam'.nodes.length = cam.nodes.length`),
-3. Open `.app` and nested `.lam` instantiation: substituting `42` for `.bvar 0` in
-   `.app (.const "idNat" []) (.bvar 0)` and in `.lam Nat (.app (.bvar 1) (.bvar 0))` purely on
-   `HwExprCAM` handles matches `KExpr.instantiate1` identically upon reconstruction! -/
-theorem hwCamInstantiateAt_sound :
-    (∀ (fuel hBody depth hArg : Nat) (cam : HwExprCAM) (w : PackedNodeWord),
-      cam.nodes[hBody]? = some w → w.hasLooseBVar = false →
-      hwCamInstantiateAt (fuel + 1) hBody depth hArg cam = (hBody, cam)) ∧
-    (let (hClosed, cam1) := internToHwExprCAM sharedSubtermExpr HwExprCAM.empty
-     let (hArg, cam2) := internToHwExprCAM (.lit (.natVal 99)) cam1
-     (getPackedNode cam2 hClosed).hasLooseBVar = false ∧
-     hwCamInstantiate1 16 hClosed hArg cam2 = (hClosed, cam2)) ∧
-    (let openBody : KExpr := .app (.const (KName.mkSimple "idNat") []) (.bvar 0)
-     let arg42 : KExpr := .lit (.natVal 42)
-     let (hBody, cam1) := internToHwExprCAM openBody HwExprCAM.empty
-     let (hArg, cam2) := internToHwExprCAM arg42 cam1
-     let (hRes, cam3) := hwCamInstantiate1 16 hBody hArg cam2
-     reconstructFromHwExprCAM 16 cam3 hRes = some (KExpr.instantiate1 openBody arg42)) ∧
-    (let nestedBody : KExpr := .lam kNatConst (.app (.bvar 1) (.bvar 0))
-     let openArg : KExpr := .bvar 0
-     let (hBody, cam1) := internToHwExprCAM nestedBody HwExprCAM.empty
-     let (hArg, cam2) := internToHwExprCAM openArg cam1
-     let (hRes, cam3) := hwCamInstantiate1 16 hBody hArg cam2
-     reconstructFromHwExprCAM 16 cam3 hRes = some (KExpr.instantiate1 nestedBody openArg)) := by
-  refine ⟨fun fuel hBody depth hArg cam w hnode hclosed =>
-            (hwCamInstantiateAt_closed_bypass fuel hBody depth hArg cam w hnode hclosed).1,
-          ⟨rfl, rfl⟩, rfl, rfl⟩
+/-- Specification of `PackedNodeWord.maxLooseBVar` on `KExpr` (`0` if closed, else `1 + max_loose_bvar_idx`). -/
+def maxLooseBVarSpec : KExpr → Nat
+  | .bvar idx    => idx + 1
+  | .fvar _      => 0
+  | .mvar _      => 0
+  | .sort _      => 0
+  | .const _ _   => 0
+  | .lit _       => 0
+  | .app f a     => Nat.max (maxLooseBVarSpec f) (maxLooseBVarSpec a)
+  | .lam d b     => Nat.max (maxLooseBVarSpec d) (maxLooseBVarSpec b - 1)
+  | .forallE d b => Nat.max (maxLooseBVarSpec d) (maxLooseBVarSpec b - 1)
+  | .letE t v b  => Nat.max (Nat.max (maxLooseBVarSpec t) (maxLooseBVarSpec v)) (maxLooseBVarSpec b - 1)
+  | .proj _ _ s  => maxLooseBVarSpec s
 
-/-! ## 6. Live `silicon-check` Ingestion from Host `Lean.ConstantInfo` / `Lean.Expr` (`WS 24`) -/
+theorem hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le :
+    ∀ (e : KExpr) (cutoff : Nat),
+      KExpr.hasLooseBVarAt cutoff e = false ↔ maxLooseBVarSpec e ≤ cutoff
+  | .bvar idx, cutoff => by
+    simp only [KExpr.hasLooseBVarAt, maxLooseBVarSpec, decide_eq_false_iff_not]
+    omega
+  | .fvar _, cutoff | .mvar _, cutoff | .sort _, cutoff | .const _ _, cutoff | .lit _, cutoff => by
+    simp [KExpr.hasLooseBVarAt, maxLooseBVarSpec]
+  | .app f a, cutoff => by
+    simp only [KExpr.hasLooseBVarAt, maxLooseBVarSpec, Bool.or_eq_false_iff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le f cutoff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le a cutoff, Nat.max_le]
+  | .lam d b, cutoff => by
+    simp only [KExpr.hasLooseBVarAt, maxLooseBVarSpec, Bool.or_eq_false_iff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le d cutoff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le b (cutoff + 1), Nat.max_le]
+    omega
+  | .forallE d b, cutoff => by
+    simp only [KExpr.hasLooseBVarAt, maxLooseBVarSpec, Bool.or_eq_false_iff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le d cutoff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le b (cutoff + 1), Nat.max_le]
+    omega
+  | .letE t v b, cutoff => by
+    simp only [KExpr.hasLooseBVarAt, maxLooseBVarSpec, Bool.or_eq_false_iff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le t cutoff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le v cutoff,
+      hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le b (cutoff + 1), Nat.max_le]
+    omega
+  | .proj _ _ s, cutoff =>
+    hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le s cutoff
+
+theorem liftLooseBVars_zero : ∀ (e : KExpr) (cutoff : Nat), KExpr.liftLooseBVars cutoff 0 e = e
+  | .bvar idx, cutoff => by simp only [KExpr.liftLooseBVars]; split <;> rfl
+  | .fvar _, _ | .mvar _, _ | .sort _, _ | .const _ _, _ | .lit _, _ => rfl
+  | .app f a, cutoff => by simp [KExpr.liftLooseBVars, liftLooseBVars_zero f, liftLooseBVars_zero a]
+  | .lam d b, cutoff => by simp [KExpr.liftLooseBVars, liftLooseBVars_zero d, liftLooseBVars_zero b]
+  | .forallE d b, cutoff => by simp [KExpr.liftLooseBVars, liftLooseBVars_zero d, liftLooseBVars_zero b]
+  | .letE t v b, cutoff => by
+    simp [KExpr.liftLooseBVars, liftLooseBVars_zero t, liftLooseBVars_zero v, liftLooseBVars_zero b]
+  | .proj s idx e, cutoff => by simp [KExpr.liftLooseBVars, liftLooseBVars_zero e]
+
+theorem depth_pos : ∀ (e : KExpr), 1 ≤ depth e
+  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => Nat.le_refl 1
+  | .app _ _ | .lam _ _ | .forallE _ _ | .letE _ _ _ | .proj _ _ _ => by simp [depth]
+
+theorem depth_liftLooseBVars : ∀ (e : KExpr) (cutoff shift : Nat),
+    depth (KExpr.liftLooseBVars cutoff shift e) = depth e
+  | .bvar _, _, _ => by simp only [KExpr.liftLooseBVars]; split <;> rfl
+  | .fvar _, _, _ | .mvar _, _, _ | .sort _, _, _ | .const _ _, _, _ | .lit _, _, _ => rfl
+  | .app f a, c, s => by simp [KExpr.liftLooseBVars, depth, depth_liftLooseBVars f, depth_liftLooseBVars a]
+  | .lam d b, c, s => by simp [KExpr.liftLooseBVars, depth, depth_liftLooseBVars d, depth_liftLooseBVars b]
+  | .forallE d b, c, s => by simp [KExpr.liftLooseBVars, depth, depth_liftLooseBVars d, depth_liftLooseBVars b]
+  | .letE t v b, c, s => by
+    simp [KExpr.liftLooseBVars, depth, depth_liftLooseBVars t, depth_liftLooseBVars v, depth_liftLooseBVars b]
+  | .proj _ _ e, c, s => by simp [KExpr.liftLooseBVars, depth, depth_liftLooseBVars e]
+
+theorem depth_instantiateAt_le : ∀ (e arg : KExpr) (d : Nat),
+    depth (KExpr.instantiateAt d arg e) ≤ depth e + depth arg
+  | .bvar idx, arg, d => by
+    simp only [KExpr.instantiateAt]
+    split
+    · simp [depth_liftLooseBVars, depth]
+    · split <;> simp [depth]
+  | .fvar _, arg, _ | .mvar _, arg, _ | .sort _, arg, _ | .const _ _, arg, _ | .lit _, arg, _ => by
+    simp [KExpr.instantiateAt, depth]
+  | .app f a, arg, d => by
+    have hf := depth_instantiateAt_le f arg d
+    have ha := depth_instantiateAt_le a arg d
+    simp only [KExpr.instantiateAt, depth]
+    omega
+  | .lam dom body, arg, d => by
+    have hd := depth_instantiateAt_le dom arg d
+    have hb := depth_instantiateAt_le body arg (d + 1)
+    simp only [KExpr.instantiateAt, depth]
+    omega
+  | .forallE dom body, arg, d => by
+    have hd := depth_instantiateAt_le dom arg d
+    have hb := depth_instantiateAt_le body arg (d + 1)
+    simp only [KExpr.instantiateAt, depth]
+    omega
+  | .letE ty val body, arg, d => by
+    have ht := depth_instantiateAt_le ty arg d
+    have hv := depth_instantiateAt_le val arg d
+    have hb := depth_instantiateAt_le body arg (d + 1)
+    simp only [KExpr.instantiateAt, depth]
+    omega
+  | .proj _ _ s, arg, d => by
+    have hs := depth_instantiateAt_le s arg d
+    simp only [KExpr.instantiateAt, depth]
+    omega
+
+/-- Monotonicity predicate for `HwExprCAM`: `cam2` preserves all existing node and symbol indices of `cam1`. -/
+def HwExprCAM.Extends (cam1 cam2 : HwExprCAM) : Prop :=
+  (∀ (i : Nat) (w : PackedNodeWord), cam1.nodes[i]? = some w → cam2.nodes[i]? = some w) ∧
+  (∀ (j : Nat) (s : HwCamSymbolEntry), cam1.symbols[j]? = some s → cam2.symbols[j]? = some s)
+
+theorem HwExprCAM.Extends.refl (cam : HwExprCAM) : cam.Extends cam :=
+  ⟨fun _ _ h => h, fun _ _ h => h⟩
+
+theorem HwExprCAM.Extends.trans {a b c : HwExprCAM}
+    (h1 : a.Extends b) (h2 : b.Extends c) : a.Extends c :=
+  ⟨fun i w h => h2.1 i w (h1.1 i w h), fun j s h => h2.2 j s (h1.2 j s h)⟩
+
+theorem allocPackedSymbol_spec (s : HwCamSymbolEntry) (cam : HwExprCAM) :
+    cam.Extends (allocPackedSymbol s cam).2 ∧
+    (allocPackedSymbol s cam).2.symbols[(allocPackedSymbol s cam).1]? = some s := by
+  unfold allocPackedSymbol
+  cases hfind : findElemIdx? cam.symbols s with
+  | some idx =>
+    exact ⟨HwExprCAM.Extends.refl cam, getElem?_of_findElemIdx? cam.symbols s idx hfind⟩
+  | none =>
+    refine ⟨⟨fun _ _ h => h, fun j sym h => getElem?_append_preserve [s] h⟩, ?_⟩
+    exact getElem?_append_singleton_self cam.symbols s
+
+theorem allocPackedNode_spec (w : PackedNodeWord) (cam : HwExprCAM) :
+    cam.Extends (allocPackedNode w cam).2 ∧
+    (allocPackedNode w cam).2.nodes[(allocPackedNode w cam).1]? = some w := by
+  unfold allocPackedNode
+  cases hfind : findElemIdx? cam.nodes w with
+  | some idx =>
+    exact ⟨HwExprCAM.Extends.refl cam, getElem?_of_findElemIdx? cam.nodes w idx hfind⟩
+  | none =>
+    refine ⟨⟨fun i nd h => getElem?_append_preserve [w] h, fun _ _ h => h⟩, ?_⟩
+    exact getElem?_append_singleton_self cam.nodes w
+
+theorem allocPackedNode_ext {w : PackedNodeWord} {cam : HwExprCAM} :
+    cam.Extends (allocPackedNode w cam).2 :=
+  (allocPackedNode_spec w cam).1
+
+theorem allocPackedNode_get {w : PackedNodeWord} {cam : HwExprCAM} :
+    (allocPackedNode w cam).2.nodes[(allocPackedNode w cam).1]? = some w :=
+  (allocPackedNode_spec w cam).2
+
+/-- Structural representation invariant `CamRep cam h e`: handle `h` in `cam` represents `e : KExpr`
+with exact hardware `maxLooseBVar` and `hasLooseBVar` summary metadata. -/
+def CamRep (cam : HwExprCAM) (h : Nat) : KExpr → Prop
+  | .bvar idx =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 0 ∧ w.h0 = idx ∧
+         w.maxLooseBVar = idx + 1 ∧ w.hasLooseBVar = true
+  | .fvar id =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 1 ∧ w.h0 = id ∧
+         w.maxLooseBVar = 0 ∧ w.hasLooseBVar = false
+  | .mvar id =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 10 ∧ w.h0 = id ∧
+         w.maxLooseBVar = 0 ∧ w.hasLooseBVar = false
+  | .sort u =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 2 ∧ cam.symbols[w.symIdx]? = some (.sortEntry u) ∧
+         w.maxLooseBVar = 0 ∧ w.hasLooseBVar = false
+  | .const n us =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 3 ∧ cam.symbols[w.symIdx]? = some (.constEntry n us) ∧
+         w.maxLooseBVar = 0 ∧ w.hasLooseBVar = false
+  | .app f a =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 4 ∧
+         CamRep cam w.h0 f ∧ CamRep cam w.h1 a ∧
+         w.maxLooseBVar = maxLooseBVarSpec (.app f a) ∧
+         w.hasLooseBVar = decide (w.maxLooseBVar > 0)
+  | .lam d b =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 5 ∧
+         CamRep cam w.h0 d ∧ CamRep cam w.h1 b ∧
+         w.maxLooseBVar = maxLooseBVarSpec (.lam d b) ∧
+         w.hasLooseBVar = decide (w.maxLooseBVar > 0)
+  | .forallE d b =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 6 ∧
+         CamRep cam w.h0 d ∧ CamRep cam w.h1 b ∧
+         w.maxLooseBVar = maxLooseBVarSpec (.forallE d b) ∧
+         w.hasLooseBVar = decide (w.maxLooseBVar > 0)
+  | .letE t v b =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 7 ∧
+         CamRep cam w.h0 t ∧ CamRep cam w.h1 v ∧ CamRep cam w.h2 b ∧
+         w.maxLooseBVar = maxLooseBVarSpec (.letE t v b) ∧
+         w.hasLooseBVar = decide (w.maxLooseBVar > 0)
+  | .lit l =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 8 ∧ cam.symbols[w.symIdx]? = some (.litEntry l) ∧
+         w.maxLooseBVar = 0 ∧ w.hasLooseBVar = false
+  | .proj sName idx s =>
+    ∃ w, cam.nodes[h]? = some w ∧ w.tag = 9 ∧ cam.symbols[w.symIdx]? = some (.projEntry sName idx) ∧
+         CamRep cam w.h0 s ∧
+         w.maxLooseBVar = maxLooseBVarSpec (.proj sName idx s) ∧
+         w.hasLooseBVar = decide (w.maxLooseBVar > 0)
+
+theorem CamRep.mono :
+    ∀ {e : KExpr} {cam1 cam2 : HwExprCAM} {h : Nat},
+      cam1.Extends cam2 → CamRep cam1 h e → CamRep cam2 h e
+  | .bvar _, _, _, h, hext, ⟨w, hnd, ht, hh0, hm, hl⟩ => ⟨w, hext.1 h w hnd, ht, hh0, hm, hl⟩
+  | .fvar _, _, _, h, hext, ⟨w, hnd, ht, hh0, hm, hl⟩ => ⟨w, hext.1 h w hnd, ht, hh0, hm, hl⟩
+  | .mvar _, _, _, h, hext, ⟨w, hnd, ht, hh0, hm, hl⟩ => ⟨w, hext.1 h w hnd, ht, hh0, hm, hl⟩
+  | .sort _, _, _, h, hext, ⟨w, hnd, ht, hs, hm, hl⟩ => ⟨w, hext.1 h w hnd, ht, hext.2 _ _ hs, hm, hl⟩
+  | .const _ _, _, _, h, hext, ⟨w, hnd, ht, hs, hm, hl⟩ => ⟨w, hext.1 h w hnd, ht, hext.2 _ _ hs, hm, hl⟩
+  | .app _ _, _, _, h, hext, ⟨w, hnd, ht, rf, ra, hm, hl⟩ =>
+    ⟨w, hext.1 h w hnd, ht, CamRep.mono hext rf, CamRep.mono hext ra, hm, hl⟩
+  | .lam _ _, _, _, h, hext, ⟨w, hnd, ht, rd, rb, hm, hl⟩ =>
+    ⟨w, hext.1 h w hnd, ht, CamRep.mono hext rd, CamRep.mono hext rb, hm, hl⟩
+  | .forallE _ _, _, _, h, hext, ⟨w, hnd, ht, rd, rb, hm, hl⟩ =>
+    ⟨w, hext.1 h w hnd, ht, CamRep.mono hext rd, CamRep.mono hext rb, hm, hl⟩
+  | .letE _ _ _, _, _, h, hext, ⟨w, hnd, ht, rt, rv, rb, hm, hl⟩ =>
+    ⟨w, hext.1 h w hnd, ht, CamRep.mono hext rt, CamRep.mono hext rv, CamRep.mono hext rb, hm, hl⟩
+  | .lit _, _, _, h, hext, ⟨w, hnd, ht, hs, hm, hl⟩ => ⟨w, hext.1 h w hnd, ht, hext.2 _ _ hs, hm, hl⟩
+  | .proj _ _ _, _, _, h, hext, ⟨w, hnd, ht, hs, rs, hm, hl⟩ =>
+    ⟨w, hext.1 h w hnd, ht, hext.2 _ _ hs, CamRep.mono hext rs, hm, hl⟩
+
+theorem CamRep.node_props {cam : HwExprCAM} {h : Nat} {e : KExpr} (hrep : CamRep cam h e) :
+    ∃ w, cam.nodes[h]? = some w ∧
+         w.maxLooseBVar = maxLooseBVarSpec e ∧
+         w.hasLooseBVar = decide (maxLooseBVarSpec e > 0) := by
+  cases e with
+  | bvar idx =>
+    rcases hrep with ⟨w, hnd, _, _, hm, hl⟩
+    exact ⟨w, hnd, hm, by simp [maxLooseBVarSpec, hl]⟩
+  | fvar _ | mvar _ | sort _ | const _ _ | lit _ =>
+    rcases hrep with ⟨w, hnd, _, _, hm, hl⟩
+    exact ⟨w, hnd, hm, hl⟩
+  | app _ _ | lam _ _ | forallE _ _ =>
+    rcases hrep with ⟨w, hnd, _, _, _, hm, hl⟩
+    exact ⟨w, hnd, hm, by rw [hl, hm]⟩
+  | letE _ _ _ =>
+    rcases hrep with ⟨w, hnd, _, _, _, _, hm, hl⟩
+    exact ⟨w, hnd, hm, by rw [hl, hm]⟩
+  | proj _ _ _ =>
+    rcases hrep with ⟨w, hnd, _, _, _, hm, hl⟩
+    exact ⟨w, hnd, hm, by rw [hl, hm]⟩
+
+theorem getPackedNode_maxLooseBVar {cam : HwExprCAM} {h : Nat} {e : KExpr} (hrep : CamRep cam h e) :
+    (getPackedNode cam h).maxLooseBVar = maxLooseBVarSpec e := by
+  rcases hrep.node_props with ⟨w, hnd, hm, _⟩
+  simp [getPackedNode, hnd, hm]
+
+theorem reconstructFromHwExprCAM_of_camRep :
+    ∀ (e : KExpr) (fuel : Nat) (cam : HwExprCAM) (h : Nat),
+      depth e ≤ fuel → CamRep cam h e → reconstructFromHwExprCAM fuel cam h = some e
+  | .bvar idx, 0, _, _, hd, _ => by simp [depth] at hd
+  | .bvar idx, f + 1, cam, h, _, ⟨w, hnd, ht, hh0, _, _⟩ => by
+    unfold reconstructFromHwExprCAM; rw [hnd]; simp [ht, hh0]
+  | .fvar id, 0, _, _, hd, _ => by simp [depth] at hd
+  | .fvar id, f + 1, cam, h, _, ⟨w, hnd, ht, hh0, _, _⟩ => by
+    unfold reconstructFromHwExprCAM; rw [hnd]; simp [ht, hh0]
+  | .mvar id, 0, _, _, hd, _ => by simp [depth] at hd
+  | .mvar id, f + 1, cam, h, _, ⟨w, hnd, ht, hh0, _, _⟩ => by
+    unfold reconstructFromHwExprCAM; rw [hnd]; simp [ht, hh0]
+  | .sort u, 0, _, _, hd, _ => by simp [depth] at hd
+  | .sort u, f + 1, cam, h, _, ⟨w, hnd, ht, hs, _, _⟩ => by
+    unfold reconstructFromHwExprCAM; rw [hnd]; simp [ht, hs]
+  | .const n us, 0, _, _, hd, _ => by simp [depth] at hd
+  | .const n us, f + 1, cam, h, _, ⟨w, hnd, ht, hs, _, _⟩ => by
+    unfold reconstructFromHwExprCAM; rw [hnd]; simp [ht, hs]
+  | .lit l, 0, _, _, hd, _ => by simp [depth] at hd
+  | .lit l, f + 1, cam, h, _, ⟨w, hnd, ht, hs, _, _⟩ => by
+    unfold reconstructFromHwExprCAM; rw [hnd]; simp [ht, hs]
+  | .app fn arg, 0, _, _, hd, _ => by simp [depth] at hd
+  | .app fn arg, f + 1, cam, h, hd, ⟨w, hnd, ht, rf, ra, _, _⟩ => by
+    simp only [depth] at hd
+    unfold reconstructFromHwExprCAM
+    rw [hnd]
+    simp [ht, reconstructFromHwExprCAM_of_camRep fn f cam w.h0 (by omega) rf,
+          reconstructFromHwExprCAM_of_camRep arg f cam w.h1 (by omega) ra]
+  | .lam dom body, 0, _, _, hd, _ => by simp [depth] at hd
+  | .lam dom body, f + 1, cam, h, hd, ⟨w, hnd, ht, rd, rb, _, _⟩ => by
+    simp only [depth] at hd
+    unfold reconstructFromHwExprCAM
+    rw [hnd]
+    simp [ht, reconstructFromHwExprCAM_of_camRep dom f cam w.h0 (by omega) rd,
+          reconstructFromHwExprCAM_of_camRep body f cam w.h1 (by omega) rb]
+  | .forallE dom body, 0, _, _, hd, _ => by simp [depth] at hd
+  | .forallE dom body, f + 1, cam, h, hd, ⟨w, hnd, ht, rd, rb, _, _⟩ => by
+    simp only [depth] at hd
+    unfold reconstructFromHwExprCAM
+    rw [hnd]
+    simp [ht, reconstructFromHwExprCAM_of_camRep dom f cam w.h0 (by omega) rd,
+          reconstructFromHwExprCAM_of_camRep body f cam w.h1 (by omega) rb]
+  | .letE ty val body, 0, _, _, hd, _ => by simp [depth] at hd
+  | .letE ty val body, f + 1, cam, h, hd, ⟨w, hnd, ht, rt, rv, rb, _, _⟩ => by
+    simp only [depth] at hd
+    unfold reconstructFromHwExprCAM
+    rw [hnd]
+    simp [ht, reconstructFromHwExprCAM_of_camRep ty f cam w.h0 (by omega) rt,
+          reconstructFromHwExprCAM_of_camRep val f cam w.h1 (by omega) rv,
+          reconstructFromHwExprCAM_of_camRep body f cam w.h2 (by omega) rb]
+  | .proj sName idx s, 0, _, _, hd, _ => by simp [depth] at hd
+  | .proj sName idx s, f + 1, cam, h, hd, ⟨w, hnd, ht, hs, rs, _, _⟩ => by
+    simp only [depth] at hd
+    unfold reconstructFromHwExprCAM
+    rw [hnd]
+    simp [ht, hs, reconstructFromHwExprCAM_of_camRep s f cam w.h0 (by omega) rs]
+
+theorem CamRep.unique {cam : HwExprCAM} {h : Nat} {e1 e2 : KExpr}
+    (h1 : CamRep cam h e1) (h2 : CamRep cam h e2) : e1 = e2 := by
+  let fuel := Nat.max (depth e1) (depth e2)
+  have r1 := reconstructFromHwExprCAM_of_camRep e1 fuel cam h (Nat.le_max_left _ _) h1
+  have r2 := reconstructFromHwExprCAM_of_camRep e2 fuel cam h (Nat.le_max_right _ _) h2
+  rw [r1] at r2
+  exact Option.some.inj r2
+
+theorem mkHwCamApp_camRep {cam : HwExprCAM} {hf ha : Nat} {f a : KExpr}
+    (rf : CamRep cam hf f) (ra : CamRep cam ha a) :
+    cam.Extends (mkHwCamApp hf ha cam).2 ∧
+    CamRep (mkHwCamApp hf ha cam).2 (mkHwCamApp hf ha cam).1 (.app f a) := by
+  unfold mkHwCamApp
+  dsimp only
+  refine ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, CamRep.mono allocPackedNode_ext rf, CamRep.mono allocPackedNode_ext ra, ?_, rfl⟩⟩
+  simp [maxLooseBVarSpec, getPackedNode_maxLooseBVar rf, getPackedNode_maxLooseBVar ra]
+
+theorem mkHwCamBinder_lam_camRep {cam : HwExprCAM} {hd hb : Nat} {d b : KExpr}
+    (rd : CamRep cam hd d) (rb : CamRep cam hb b) :
+    cam.Extends (mkHwCamBinder 5 hd hb cam).2 ∧
+    CamRep (mkHwCamBinder 5 hd hb cam).2 (mkHwCamBinder 5 hd hb cam).1 (.lam d b) := by
+  unfold mkHwCamBinder
+  dsimp only
+  refine ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, CamRep.mono allocPackedNode_ext rd, CamRep.mono allocPackedNode_ext rb, ?_, rfl⟩⟩
+  simp [maxLooseBVarSpec, getPackedNode_maxLooseBVar rd, getPackedNode_maxLooseBVar rb]
+
+theorem mkHwCamBinder_forallE_camRep {cam : HwExprCAM} {hd hb : Nat} {d b : KExpr}
+    (rd : CamRep cam hd d) (rb : CamRep cam hb b) :
+    cam.Extends (mkHwCamBinder 6 hd hb cam).2 ∧
+    CamRep (mkHwCamBinder 6 hd hb cam).2 (mkHwCamBinder 6 hd hb cam).1 (.forallE d b) := by
+  unfold mkHwCamBinder
+  dsimp only
+  refine ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, CamRep.mono allocPackedNode_ext rd, CamRep.mono allocPackedNode_ext rb, ?_, rfl⟩⟩
+  simp [maxLooseBVarSpec, getPackedNode_maxLooseBVar rd, getPackedNode_maxLooseBVar rb]
+
+theorem mkHwCamLetE_camRep {cam : HwExprCAM} {ht hv hb : Nat} {t v b : KExpr}
+    (rt : CamRep cam ht t) (rv : CamRep cam hv v) (rb : CamRep cam hb b) :
+    cam.Extends (mkHwCamLetE ht hv hb cam).2 ∧
+    CamRep (mkHwCamLetE ht hv hb cam).2 (mkHwCamLetE ht hv hb cam).1 (.letE t v b) := by
+  unfold mkHwCamLetE
+  dsimp only
+  refine ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, CamRep.mono allocPackedNode_ext rt, CamRep.mono allocPackedNode_ext rv, CamRep.mono allocPackedNode_ext rb, ?_, rfl⟩⟩
+  simp [maxLooseBVarSpec, getPackedNode_maxLooseBVar rt, getPackedNode_maxLooseBVar rv,
+        getPackedNode_maxLooseBVar rb]
+
+theorem mkHwCamProj_camRep {cam : HwExprCAM} {hs symIdx : Nat} {sName : KName} {idx : Nat} {s : KExpr}
+    (hsym : cam.symbols[symIdx]? = some (.projEntry sName idx))
+    (rs : CamRep cam hs s) :
+    cam.Extends (mkHwCamProj hs symIdx cam).2 ∧
+    CamRep (mkHwCamProj hs symIdx cam).2 (mkHwCamProj hs symIdx cam).1 (.proj sName idx s) := by
+  unfold mkHwCamProj
+  dsimp only
+  refine ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, allocPackedNode_ext.2 _ _ hsym, CamRep.mono allocPackedNode_ext rs, ?_, rfl⟩⟩
+  simp [maxLooseBVarSpec, getPackedNode_maxLooseBVar rs]
+
+/-- Every interned `KExpr` establishes `CamRep` while monotonically extending `HwExprCAM`. -/
+theorem internToHwExprCAM_camRep :
+    ∀ (e : KExpr) (cam : HwExprCAM),
+      cam.Extends (internToHwExprCAM e cam).2 ∧
+      CamRep (internToHwExprCAM e cam).2 (internToHwExprCAM e cam).1 e
+  | .bvar idx, cam => by
+    simp only [internToHwExprCAM]
+    exact ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, rfl, rfl, rfl⟩⟩
+  | .fvar id, cam => by
+    simp only [internToHwExprCAM]
+    exact ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, rfl, rfl, rfl⟩⟩
+  | .mvar id, cam => by
+    simp only [internToHwExprCAM]
+    exact ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, rfl, rfl, rfl⟩⟩
+  | .sort u, cam => by
+    simp only [internToHwExprCAM]
+    have hs := allocPackedSymbol_spec (.sortEntry u) cam
+    exact ⟨HwExprCAM.Extends.trans hs.1 allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, allocPackedNode_ext.2 _ _ hs.2, rfl, rfl⟩⟩
+  | .const n us, cam => by
+    simp only [internToHwExprCAM]
+    have hs := allocPackedSymbol_spec (.constEntry n us) cam
+    exact ⟨HwExprCAM.Extends.trans hs.1 allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, allocPackedNode_ext.2 _ _ hs.2, rfl, rfl⟩⟩
+  | .lit l, cam => by
+    simp only [internToHwExprCAM]
+    have hs := allocPackedSymbol_spec (.litEntry l) cam
+    exact ⟨HwExprCAM.Extends.trans hs.1 allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, allocPackedNode_ext.2 _ _ hs.2, rfl, rfl⟩⟩
+  | .app f a, cam => by
+    simp only [internToHwExprCAM]
+    have ⟨extF, repF⟩ := internToHwExprCAM_camRep f cam
+    have ⟨extA, repA⟩ := internToHwExprCAM_camRep a (internToHwExprCAM f cam).2
+    have ⟨extApp, repApp⟩ := mkHwCamApp_camRep (CamRep.mono extA repF) repA
+    exact ⟨HwExprCAM.Extends.trans extF (HwExprCAM.Extends.trans extA extApp), repApp⟩
+  | .lam d b, cam => by
+    simp only [internToHwExprCAM]
+    have ⟨extD, repD⟩ := internToHwExprCAM_camRep d cam
+    have ⟨extB, repB⟩ := internToHwExprCAM_camRep b (internToHwExprCAM d cam).2
+    have ⟨extLam, repLam⟩ := mkHwCamBinder_lam_camRep (CamRep.mono extB repD) repB
+    exact ⟨HwExprCAM.Extends.trans extD (HwExprCAM.Extends.trans extB extLam), repLam⟩
+  | .forallE d b, cam => by
+    simp only [internToHwExprCAM]
+    have ⟨extD, repD⟩ := internToHwExprCAM_camRep d cam
+    have ⟨extB, repB⟩ := internToHwExprCAM_camRep b (internToHwExprCAM d cam).2
+    have ⟨extPi, repPi⟩ := mkHwCamBinder_forallE_camRep (CamRep.mono extB repD) repB
+    exact ⟨HwExprCAM.Extends.trans extD (HwExprCAM.Extends.trans extB extPi), repPi⟩
+  | .letE t v b, cam => by
+    simp only [internToHwExprCAM]
+    have ⟨extT, repT⟩ := internToHwExprCAM_camRep t cam
+    have ⟨extV, repV⟩ := internToHwExprCAM_camRep v (internToHwExprCAM t cam).2
+    have ⟨extB, repB⟩ := internToHwExprCAM_camRep b (internToHwExprCAM v (internToHwExprCAM t cam).2).2
+    have ⟨extL, repL⟩ := mkHwCamLetE_camRep
+      (CamRep.mono (HwExprCAM.Extends.trans extV extB) repT)
+      (CamRep.mono extB repV) repB
+    exact ⟨HwExprCAM.Extends.trans extT (HwExprCAM.Extends.trans extV (HwExprCAM.Extends.trans extB extL)), repL⟩
+  | .proj sName idx s, cam => by
+    simp only [internToHwExprCAM]
+    have ⟨extS, repS⟩ := internToHwExprCAM_camRep s cam
+    have hs := allocPackedSymbol_spec (.projEntry sName idx) (internToHwExprCAM s cam).2
+    have ⟨extP, repP⟩ := mkHwCamProj_camRep hs.2 (CamRep.mono hs.1 repS)
+    exact ⟨HwExprCAM.Extends.trans extS (HwExprCAM.Extends.trans hs.1 extP), repP⟩
+
+/-- Universal lossless reconstruction theorem for `HwExprCAM` (including `.mvar` and `.letE`). -/
+theorem reconstructFromHwExprCAM_intern_roundtrip
+    (fuel : Nat) (e : KExpr) (cam : HwExprCAM) (hdepth : depth e ≤ fuel) :
+    reconstructFromHwExprCAM fuel (internToHwExprCAM e cam).2 (internToHwExprCAM e cam).1 = some e :=
+  reconstructFromHwExprCAM_of_camRep e fuel _ _ hdepth (internToHwExprCAM_camRep e cam).2
+
+theorem liftLooseBVars_eq_self_of_bypass {e : KExpr} {w : PackedNodeWord} {cutoff shift : Nat}
+    (hMax : w.maxLooseBVar = maxLooseBVarSpec e)
+    (hLoose : w.hasLooseBVar = decide (maxLooseBVarSpec e > 0))
+    (hbypass : (!w.hasLooseBVar || shift == 0 || w.maxLooseBVar <= cutoff) = true) :
+    KExpr.liftLooseBVars cutoff shift e = e := by
+  rw [hMax, hLoose] at hbypass
+  rcases Bool.or_eq_true_iff.mp hbypass with h12 | hle
+  · rcases Bool.or_eq_true_iff.mp h12 with hnl | hsh
+    · have hzero : maxLooseBVarSpec e ≤ cutoff := by
+        simp only [Bool.not_eq_true', decide_eq_false_iff_not] at hnl
+        omega
+      exact liftLooseBVars_of_hasLooseBVarAt_false e cutoff shift
+        ((hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le e cutoff).mpr hzero)
+    · simp only [beq_iff_eq] at hsh
+      subst hsh
+      exact liftLooseBVars_zero e cutoff
+  · simp only [decide_eq_true_eq] at hle
+    exact liftLooseBVars_of_hasLooseBVarAt_false e cutoff shift
+      ((hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le e cutoff).mpr hle)
+
+theorem instantiateAt_eq_self_of_bypass {e arg : KExpr} {w : PackedNodeWord} {depthIdx : Nat}
+    (hMax : w.maxLooseBVar = maxLooseBVarSpec e)
+    (hLoose : w.hasLooseBVar = decide (maxLooseBVarSpec e > 0))
+    (hbypass : (!w.hasLooseBVar || w.maxLooseBVar <= depthIdx) = true) :
+    KExpr.instantiateAt depthIdx arg e = e := by
+  rw [hMax, hLoose] at hbypass
+  have hle : maxLooseBVarSpec e ≤ depthIdx := by
+    rcases Bool.or_eq_true_iff.mp hbypass with hnl | hle
+    · simp only [Bool.not_eq_true', decide_eq_false_iff_not] at hnl
+      omega
+    · simp only [decide_eq_true_eq] at hle
+      exact hle
+  exact instantiateAt_of_hasLooseBVarAt_false e depthIdx arg
+    ((hasLooseBVarAt_eq_false_iff_maxLooseBVarSpec_le e depthIdx).mpr hle)
+
+/-- Universal handle-level lifting simulation: `hwCamLiftLooseBVars` preserves `HwExprCAM.Extends`
+and produces a handle representing `KExpr.liftLooseBVars cutoff shift e` for all open/closed `e : KExpr`. -/
+theorem hwCamLiftLooseBVars_camRep :
+    ∀ (e : KExpr) (fuel h cutoff shift : Nat) (cam : HwExprCAM),
+      depth e ≤ fuel →
+      CamRep cam h e →
+      cam.Extends (hwCamLiftLooseBVars fuel h cutoff shift cam).2 ∧
+      CamRep (hwCamLiftLooseBVars fuel h cutoff shift cam).2
+             (hwCamLiftLooseBVars fuel h cutoff shift cam).1
+             (KExpr.liftLooseBVars cutoff shift e) := by
+  intro e
+  induction e with
+  | bvar idx =>
+    intro fuel h cutoff shift cam hd hrep
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      rcases hrep with ⟨w, hnd, ht, hh0, hm, hl⟩
+      unfold hwCamLiftLooseBVars
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || shift == 0 || decide (w.maxLooseBVar ≤ cutoff))
+      · simp only [Bool.false_eq_true, beq_self_eq_true, ↓reduceIte, ht]
+        rw [hh0]
+        cases hge : decide (idx ≥ cutoff)
+        · have hnge : ¬ (idx ≥ cutoff) := decide_eq_false_iff_not.mp hge
+          simp only [↓reduceIte, KExpr.liftLooseBVars, hnge]
+          exact ⟨HwExprCAM.Extends.refl cam, ⟨w, hnd, ht, hh0, hm, hl⟩⟩
+        · have hge' : idx ≥ cutoff := of_decide_eq_true hge
+          simp only [↓reduceIte, KExpr.liftLooseBVars, hge']
+          exact ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, rfl, rfl, rfl⟩⟩
+      · simp only [↓reduceIte]
+        rw [liftLooseBVars_eq_self_of_bypass hm (by simp [maxLooseBVarSpec, hl]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, ⟨w, hnd, ht, hh0, hm, hl⟩⟩
+  | fvar id | mvar id =>
+    intro fuel h cutoff shift cam hd hrep
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      rcases hrep with ⟨w, hnd, ht, hh0, hm, hl⟩
+      unfold hwCamLiftLooseBVars
+      rw [hnd]
+      simp [hl, KExpr.liftLooseBVars]
+      exact ⟨HwExprCAM.Extends.refl cam, ⟨w, hnd, ht, hh0, hm, hl⟩⟩
+  | sort u | const n us | lit l =>
+    intro fuel h cutoff shift cam hd hrep
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      rcases hrep with ⟨w, hnd, ht, hs, hm, hl⟩
+      unfold hwCamLiftLooseBVars
+      rw [hnd]
+      simp [hl, KExpr.liftLooseBVars]
+      exact ⟨HwExprCAM.Extends.refl cam, ⟨w, hnd, ht, hs, hm, hl⟩⟩
+  | app fn arg ihF ihA =>
+    intro fuel h cutoff shift cam hd hrep
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := hrep
+      rcases hrep with ⟨w, hnd, ht, rf, ra, hm, hl⟩
+      unfold hwCamLiftLooseBVars
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || shift == 0 || decide (w.maxLooseBVar ≤ cutoff))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repF'⟩ := ihF f w.h0 cutoff shift cam (by omega) rf
+        have ⟨ext2, repA'⟩ := ihA f w.h1 cutoff shift _ (by omega) (CamRep.mono ext1 ra)
+        have ext12 := HwExprCAM.Extends.trans ext1 ext2
+        have repF2 := CamRep.mono ext2 repF'
+        cases hsame : ((hwCamLiftLooseBVars f w.h0 cutoff shift cam).1 == w.h0 &&
+                       (hwCamLiftLooseBVars f w.h1 cutoff shift (hwCamLiftLooseBVars f w.h0 cutoff shift cam).2).1 == w.h1)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.liftLooseBVars]
+          have ⟨ext3, repApp⟩ := mkHwCamApp_camRep repF2 repA'
+          exact ⟨HwExprCAM.Extends.trans ext12 ext3, repApp⟩
+        · simp only [↓reduceIte, KExpr.liftLooseBVars]
+          rcases Bool.and_eq_true_iff.mp hsame with ⟨heqF, heqA⟩
+          simp only [beq_iff_eq] at heqF heqA
+          rw [heqF] at repF2
+          rw [heqA] at repA'
+          have eqF := CamRep.unique repF2 (CamRep.mono ext12 rf)
+          have eqA := CamRep.unique repA' (CamRep.mono ext12 ra)
+          rw [eqF, eqA]
+          exact ⟨ext12, CamRep.mono ext12 horig⟩
+      · simp only [↓reduceIte]
+        rw [liftLooseBVars_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | lam dom body ihD ihB =>
+    intro fuel h cutoff shift cam hd hrep
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := hrep
+      rcases hrep with ⟨w, hnd, ht, rd, rb, hm, hl⟩
+      unfold hwCamLiftLooseBVars
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || shift == 0 || decide (w.maxLooseBVar ≤ cutoff))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repD'⟩ := ihD f w.h0 cutoff shift cam (by omega) rd
+        have ⟨ext2, repB'⟩ := ihB f w.h1 (cutoff + 1) shift _ (by omega) (CamRep.mono ext1 rb)
+        have ext12 := HwExprCAM.Extends.trans ext1 ext2
+        have repD2 := CamRep.mono ext2 repD'
+        cases hsame : ((hwCamLiftLooseBVars f w.h0 cutoff shift cam).1 == w.h0 &&
+                       (hwCamLiftLooseBVars f w.h1 (cutoff + 1) shift (hwCamLiftLooseBVars f w.h0 cutoff shift cam).2).1 == w.h1)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.liftLooseBVars]
+          have ⟨ext3, repLam⟩ := mkHwCamBinder_lam_camRep repD2 repB'
+          exact ⟨HwExprCAM.Extends.trans ext12 ext3, repLam⟩
+        · simp only [↓reduceIte, KExpr.liftLooseBVars]
+          rcases Bool.and_eq_true_iff.mp hsame with ⟨heqD, heqB⟩
+          simp only [beq_iff_eq] at heqD heqB
+          rw [heqD] at repD2
+          rw [heqB] at repB'
+          have eqD := CamRep.unique repD2 (CamRep.mono ext12 rd)
+          have eqB := CamRep.unique repB' (CamRep.mono ext12 rb)
+          rw [eqD, eqB]
+          exact ⟨ext12, CamRep.mono ext12 horig⟩
+      · simp only [↓reduceIte]
+        rw [liftLooseBVars_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | forallE dom body ihD ihB =>
+    intro fuel h cutoff shift cam hd hrep
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := hrep
+      rcases hrep with ⟨w, hnd, ht, rd, rb, hm, hl⟩
+      unfold hwCamLiftLooseBVars
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || shift == 0 || decide (w.maxLooseBVar ≤ cutoff))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repD'⟩ := ihD f w.h0 cutoff shift cam (by omega) rd
+        have ⟨ext2, repB'⟩ := ihB f w.h1 (cutoff + 1) shift _ (by omega) (CamRep.mono ext1 rb)
+        have ext12 := HwExprCAM.Extends.trans ext1 ext2
+        have repD2 := CamRep.mono ext2 repD'
+        cases hsame : ((hwCamLiftLooseBVars f w.h0 cutoff shift cam).1 == w.h0 &&
+                       (hwCamLiftLooseBVars f w.h1 (cutoff + 1) shift (hwCamLiftLooseBVars f w.h0 cutoff shift cam).2).1 == w.h1)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.liftLooseBVars]
+          have ⟨ext3, repPi⟩ := mkHwCamBinder_forallE_camRep repD2 repB'
+          exact ⟨HwExprCAM.Extends.trans ext12 ext3, repPi⟩
+        · simp only [↓reduceIte, KExpr.liftLooseBVars]
+          rcases Bool.and_eq_true_iff.mp hsame with ⟨heqD, heqB⟩
+          simp only [beq_iff_eq] at heqD heqB
+          rw [heqD] at repD2
+          rw [heqB] at repB'
+          have eqD := CamRep.unique repD2 (CamRep.mono ext12 rd)
+          have eqB := CamRep.unique repB' (CamRep.mono ext12 rb)
+          rw [eqD, eqB]
+          exact ⟨ext12, CamRep.mono ext12 horig⟩
+      · simp only [↓reduceIte]
+        rw [liftLooseBVars_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | letE ty val body ihT ihV ihB =>
+    intro fuel h cutoff shift cam hd hrep
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := hrep
+      rcases hrep with ⟨w, hnd, ht, rt, rv, rb, hm, hl⟩
+      unfold hwCamLiftLooseBVars
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || shift == 0 || decide (w.maxLooseBVar ≤ cutoff))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repT'⟩ := ihT f w.h0 cutoff shift cam (by omega) rt
+        have ⟨ext2, repV'⟩ := ihV f w.h1 cutoff shift _ (by omega) (CamRep.mono ext1 rv)
+        have ext12 := HwExprCAM.Extends.trans ext1 ext2
+        have ⟨ext3, repB'⟩ := ihB f w.h2 (cutoff + 1) shift _ (by omega) (CamRep.mono ext12 rb)
+        have ext123 := HwExprCAM.Extends.trans ext12 ext3
+        have repT3 := CamRep.mono (HwExprCAM.Extends.trans ext2 ext3) repT'
+        have repV3 := CamRep.mono ext3 repV'
+        cases hsame : (((hwCamLiftLooseBVars f w.h0 cutoff shift cam).1 == w.h0 &&
+                        (hwCamLiftLooseBVars f w.h1 cutoff shift (hwCamLiftLooseBVars f w.h0 cutoff shift cam).2).1 == w.h1) &&
+                       (hwCamLiftLooseBVars f w.h2 (cutoff + 1) shift (hwCamLiftLooseBVars f w.h1 cutoff shift (hwCamLiftLooseBVars f w.h0 cutoff shift cam).2).2).1 == w.h2)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.liftLooseBVars]
+          have ⟨ext4, repLet⟩ := mkHwCamLetE_camRep repT3 repV3 repB'
+          exact ⟨HwExprCAM.Extends.trans ext123 ext4, repLet⟩
+        · simp only [↓reduceIte, KExpr.liftLooseBVars]
+          rcases Bool.and_eq_true_iff.mp hsame with ⟨htv, heqB⟩
+          rcases Bool.and_eq_true_iff.mp htv with ⟨heqT, heqV⟩
+          simp only [beq_iff_eq] at heqT heqV heqB
+          rw [heqT] at repT3
+          rw [heqV] at repV3
+          rw [heqB] at repB'
+          have eqT := CamRep.unique repT3 (CamRep.mono ext123 rt)
+          have eqV := CamRep.unique repV3 (CamRep.mono ext123 rv)
+          have eqB := CamRep.unique repB' (CamRep.mono ext123 rb)
+          rw [eqT, eqV, eqB]
+          exact ⟨ext123, CamRep.mono ext123 horig⟩
+      · simp only [↓reduceIte]
+        rw [liftLooseBVars_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | proj sName idx s ihS =>
+    intro fuel h cutoff shift cam hd hrep
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := hrep
+      rcases hrep with ⟨w, hnd, ht, hsym, rs, hm, hl⟩
+      unfold hwCamLiftLooseBVars
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || shift == 0 || decide (w.maxLooseBVar ≤ cutoff))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repS'⟩ := ihS f w.h0 cutoff shift cam (by omega) rs
+        cases hsame : ((hwCamLiftLooseBVars f w.h0 cutoff shift cam).1 == w.h0)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.liftLooseBVars]
+          have ⟨ext2, repP⟩ := mkHwCamProj_camRep (ext1.2 _ _ hsym) repS'
+          exact ⟨HwExprCAM.Extends.trans ext1 ext2, repP⟩
+        · simp only [↓reduceIte, KExpr.liftLooseBVars]
+          simp only [beq_iff_eq] at hsame
+          rw [hsame] at repS'
+          have eqS := CamRep.unique repS' (CamRep.mono ext1 rs)
+          rw [eqS]
+          exact ⟨ext1, CamRep.mono ext1 horig⟩
+      · simp only [↓reduceIte]
+        rw [liftLooseBVars_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+
+/-- Universal handle-level open substitution simulation (`hwCamInstantiateAt_camRep`):
+For EVERY open or closed expression `eBody : KExpr` and EVERY open or closed argument `eArg : KExpr`
+(including nested `.lam`/`.forallE`/`.letE` binders, `.proj`, and `.mvar`), whenever
+`depth eBody + depth eArg ≤ fuel`, `hwCamInstantiateAt` preserves `HwExprCAM.Extends` and returns a
+handle representing `KExpr.instantiateAt depthIdx eArg eBody` without reconstructing ASTs! -/
+theorem hwCamInstantiateAt_camRep :
+    ∀ (eBody : KExpr) (fuel hBody depthIdx hArg : Nat) (eArg : KExpr) (cam : HwExprCAM),
+      depth eBody + depth eArg ≤ fuel →
+      CamRep cam hBody eBody →
+      CamRep cam hArg eArg →
+      cam.Extends (hwCamInstantiateAt fuel hBody depthIdx hArg cam).2 ∧
+      CamRep (hwCamInstantiateAt fuel hBody depthIdx hArg cam).2
+             (hwCamInstantiateAt fuel hBody depthIdx hArg cam).1
+             (KExpr.instantiateAt depthIdx eArg eBody) := by
+  intro eBody
+  induction eBody with
+  | bvar idx =>
+    intro fuel hBody depthIdx hArg eArg cam hd repB repA
+    have hposA := depth_pos eArg
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := repB
+      rcases repB with ⟨w, hnd, ht, hh0, hm, hl⟩
+      unfold hwCamInstantiateAt
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || decide (w.maxLooseBVar ≤ depthIdx))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        rw [hh0]
+        cases heq : (idx == depthIdx)
+        · simp only [Bool.false_eq_true, ↓reduceIte]
+          cases hgt : decide (idx > depthIdx)
+          · have hngt : ¬ (idx > depthIdx) := decide_eq_false_iff_not.mp hgt
+            simp only [hngt, ↓reduceIte, KExpr.instantiateAt, heq, Bool.false_eq_true]
+            exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+          · have hgt' : idx > depthIdx := of_decide_eq_true hgt
+            simp only [hgt', ↓reduceIte, KExpr.instantiateAt, heq, Bool.false_eq_true]
+            refine ⟨allocPackedNode_ext, ⟨_, allocPackedNode_get, rfl, rfl, ?_, rfl⟩⟩
+            dsimp only
+            omega
+        · simp only [↓reduceIte, KExpr.instantiateAt, heq]
+          exact hwCamLiftLooseBVars_camRep eArg f hArg 0 depthIdx cam (by omega) repA
+      · simp only [↓reduceIte]
+        rw [instantiateAt_eq_self_of_bypass hm (by simp [maxLooseBVarSpec, hl]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | fvar id | mvar id =>
+    intro fuel hBody depthIdx hArg eArg cam hd repB _
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      rcases repB with ⟨w, hnd, ht, hh0, hm, hl⟩
+      unfold hwCamInstantiateAt
+      rw [hnd]
+      simp [hl, KExpr.instantiateAt]
+      exact ⟨HwExprCAM.Extends.refl cam, ⟨w, hnd, ht, hh0, hm, hl⟩⟩
+  | sort u | const n us | lit l =>
+    intro fuel hBody depthIdx hArg eArg cam hd repB _
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      rcases repB with ⟨w, hnd, ht, hs, hm, hl⟩
+      unfold hwCamInstantiateAt
+      rw [hnd]
+      simp [hl, KExpr.instantiateAt]
+      exact ⟨HwExprCAM.Extends.refl cam, ⟨w, hnd, ht, hs, hm, hl⟩⟩
+  | app fn arg ihF ihA =>
+    intro fuel hBody depthIdx hArg eArg cam hd repB repA
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := repB
+      rcases repB with ⟨w, hnd, ht, rf, ra, hm, hl⟩
+      unfold hwCamInstantiateAt
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || decide (w.maxLooseBVar ≤ depthIdx))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repF'⟩ := ihF f w.h0 depthIdx hArg eArg cam (by omega) rf repA
+        have ⟨ext2, repA'⟩ := ihA f w.h1 depthIdx hArg eArg _ (by omega)
+          (CamRep.mono ext1 ra) (CamRep.mono ext1 repA)
+        have ext12 := HwExprCAM.Extends.trans ext1 ext2
+        have repF2 := CamRep.mono ext2 repF'
+        cases hsame : ((hwCamInstantiateAt f w.h0 depthIdx hArg cam).1 == w.h0 &&
+                       (hwCamInstantiateAt f w.h1 depthIdx hArg (hwCamInstantiateAt f w.h0 depthIdx hArg cam).2).1 == w.h1)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.instantiateAt]
+          have ⟨ext3, repApp⟩ := mkHwCamApp_camRep repF2 repA'
+          exact ⟨HwExprCAM.Extends.trans ext12 ext3, repApp⟩
+        · simp only [↓reduceIte, KExpr.instantiateAt]
+          rcases Bool.and_eq_true_iff.mp hsame with ⟨heqF, heqA⟩
+          simp only [beq_iff_eq] at heqF heqA
+          rw [heqF] at repF2
+          rw [heqA] at repA'
+          have eqF := CamRep.unique repF2 (CamRep.mono ext12 rf)
+          have eqA := CamRep.unique repA' (CamRep.mono ext12 ra)
+          rw [eqF, eqA]
+          exact ⟨ext12, CamRep.mono ext12 horig⟩
+      · simp only [↓reduceIte]
+        rw [instantiateAt_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | lam dom body ihD ihB =>
+    intro fuel hBody depthIdx hArg eArg cam hd repB repA
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := repB
+      rcases repB with ⟨w, hnd, ht, rd, rb, hm, hl⟩
+      unfold hwCamInstantiateAt
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || decide (w.maxLooseBVar ≤ depthIdx))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repD'⟩ := ihD f w.h0 depthIdx hArg eArg cam (by omega) rd repA
+        have ⟨ext2, repB'⟩ := ihB f w.h1 (depthIdx + 1) hArg eArg _ (by omega)
+          (CamRep.mono ext1 rb) (CamRep.mono ext1 repA)
+        have ext12 := HwExprCAM.Extends.trans ext1 ext2
+        have repD2 := CamRep.mono ext2 repD'
+        cases hsame : ((hwCamInstantiateAt f w.h0 depthIdx hArg cam).1 == w.h0 &&
+                       (hwCamInstantiateAt f w.h1 (depthIdx + 1) hArg (hwCamInstantiateAt f w.h0 depthIdx hArg cam).2).1 == w.h1)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.instantiateAt]
+          have ⟨ext3, repLam⟩ := mkHwCamBinder_lam_camRep repD2 repB'
+          exact ⟨HwExprCAM.Extends.trans ext12 ext3, repLam⟩
+        · simp only [↓reduceIte, KExpr.instantiateAt]
+          rcases Bool.and_eq_true_iff.mp hsame with ⟨heqD, heqB⟩
+          simp only [beq_iff_eq] at heqD heqB
+          rw [heqD] at repD2
+          rw [heqB] at repB'
+          have eqD := CamRep.unique repD2 (CamRep.mono ext12 rd)
+          have eqB := CamRep.unique repB' (CamRep.mono ext12 rb)
+          rw [eqD, eqB]
+          exact ⟨ext12, CamRep.mono ext12 horig⟩
+      · simp only [↓reduceIte]
+        rw [instantiateAt_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | forallE dom body ihD ihB =>
+    intro fuel hBody depthIdx hArg eArg cam hd repB repA
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := repB
+      rcases repB with ⟨w, hnd, ht, rd, rb, hm, hl⟩
+      unfold hwCamInstantiateAt
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || decide (w.maxLooseBVar ≤ depthIdx))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repD'⟩ := ihD f w.h0 depthIdx hArg eArg cam (by omega) rd repA
+        have ⟨ext2, repB'⟩ := ihB f w.h1 (depthIdx + 1) hArg eArg _ (by omega)
+          (CamRep.mono ext1 rb) (CamRep.mono ext1 repA)
+        have ext12 := HwExprCAM.Extends.trans ext1 ext2
+        have repD2 := CamRep.mono ext2 repD'
+        cases hsame : ((hwCamInstantiateAt f w.h0 depthIdx hArg cam).1 == w.h0 &&
+                       (hwCamInstantiateAt f w.h1 (depthIdx + 1) hArg (hwCamInstantiateAt f w.h0 depthIdx hArg cam).2).1 == w.h1)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.instantiateAt]
+          have ⟨ext3, repPi⟩ := mkHwCamBinder_forallE_camRep repD2 repB'
+          exact ⟨HwExprCAM.Extends.trans ext12 ext3, repPi⟩
+        · simp only [↓reduceIte, KExpr.instantiateAt]
+          rcases Bool.and_eq_true_iff.mp hsame with ⟨heqD, heqB⟩
+          simp only [beq_iff_eq] at heqD heqB
+          rw [heqD] at repD2
+          rw [heqB] at repB'
+          have eqD := CamRep.unique repD2 (CamRep.mono ext12 rd)
+          have eqB := CamRep.unique repB' (CamRep.mono ext12 rb)
+          rw [eqD, eqB]
+          exact ⟨ext12, CamRep.mono ext12 horig⟩
+      · simp only [↓reduceIte]
+        rw [instantiateAt_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | letE ty val body ihT ihV ihB =>
+    intro fuel hBody depthIdx hArg eArg cam hd repB repA
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := repB
+      rcases repB with ⟨w, hnd, ht, rt, rv, rb, hm, hl⟩
+      unfold hwCamInstantiateAt
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || decide (w.maxLooseBVar ≤ depthIdx))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repT'⟩ := ihT f w.h0 depthIdx hArg eArg cam (by omega) rt repA
+        have ⟨ext2, repV'⟩ := ihV f w.h1 depthIdx hArg eArg _ (by omega)
+          (CamRep.mono ext1 rv) (CamRep.mono ext1 repA)
+        have ext12 := HwExprCAM.Extends.trans ext1 ext2
+        have ⟨ext3, repB'⟩ := ihB f w.h2 (depthIdx + 1) hArg eArg _ (by omega)
+          (CamRep.mono ext12 rb) (CamRep.mono ext12 repA)
+        have ext123 := HwExprCAM.Extends.trans ext12 ext3
+        have repT3 := CamRep.mono (HwExprCAM.Extends.trans ext2 ext3) repT'
+        have repV3 := CamRep.mono ext3 repV'
+        cases hsame : (((hwCamInstantiateAt f w.h0 depthIdx hArg cam).1 == w.h0 &&
+                        (hwCamInstantiateAt f w.h1 depthIdx hArg (hwCamInstantiateAt f w.h0 depthIdx hArg cam).2).1 == w.h1) &&
+                       (hwCamInstantiateAt f w.h2 (depthIdx + 1) hArg (hwCamInstantiateAt f w.h1 depthIdx hArg (hwCamInstantiateAt f w.h0 depthIdx hArg cam).2).2).1 == w.h2)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.instantiateAt]
+          have ⟨ext4, repLet⟩ := mkHwCamLetE_camRep repT3 repV3 repB'
+          exact ⟨HwExprCAM.Extends.trans ext123 ext4, repLet⟩
+        · simp only [↓reduceIte, KExpr.instantiateAt]
+          rcases Bool.and_eq_true_iff.mp hsame with ⟨htv, heqB⟩
+          rcases Bool.and_eq_true_iff.mp htv with ⟨heqT, heqV⟩
+          simp only [beq_iff_eq] at heqT heqV heqB
+          rw [heqT] at repT3
+          rw [heqV] at repV3
+          rw [heqB] at repB'
+          have eqT := CamRep.unique repT3 (CamRep.mono ext123 rt)
+          have eqV := CamRep.unique repV3 (CamRep.mono ext123 rv)
+          have eqB := CamRep.unique repB' (CamRep.mono ext123 rb)
+          rw [eqT, eqV, eqB]
+          exact ⟨ext123, CamRep.mono ext123 horig⟩
+      · simp only [↓reduceIte]
+        rw [instantiateAt_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+  | proj sName idx s ihS =>
+    intro fuel hBody depthIdx hArg eArg cam hd repB repA
+    cases fuel with
+    | zero => simp [depth] at hd
+    | succ f =>
+      simp only [depth] at hd
+      have horig := repB
+      rcases repB with ⟨w, hnd, ht, hsym, rs, hm, hl⟩
+      unfold hwCamInstantiateAt
+      rw [hnd]
+      dsimp only
+      cases hb : (!w.hasLooseBVar || decide (w.maxLooseBVar ≤ depthIdx))
+      · simp only [Bool.false_eq_true, ↓reduceIte, ht]
+        have ⟨ext1, repS'⟩ := ihS f w.h0 depthIdx hArg eArg cam (by omega) rs repA
+        cases hsame : ((hwCamInstantiateAt f w.h0 depthIdx hArg cam).1 == w.h0)
+        · simp only [Bool.false_eq_true, ↓reduceIte, KExpr.instantiateAt]
+          have ⟨ext2, repP⟩ := mkHwCamProj_camRep (ext1.2 _ _ hsym) repS'
+          exact ⟨HwExprCAM.Extends.trans ext1 ext2, repP⟩
+        · simp only [↓reduceIte, KExpr.instantiateAt]
+          simp only [beq_iff_eq] at hsame
+          rw [hsame] at repS'
+          have eqS := CamRep.unique repS' (CamRep.mono ext1 rs)
+          rw [eqS]
+          exact ⟨ext1, CamRep.mono ext1 horig⟩
+      · simp only [↓reduceIte]
+        rw [instantiateAt_eq_self_of_bypass hm (by rw [hl, hm]) hb]
+        exact ⟨HwExprCAM.Extends.refl cam, horig⟩
+
+/-- **Universal Open Handle-Level Substitution Simulation (`reconstructFromHwExprCAM_hwCamInstantiateAt`)**:
+For EVERY `eBody eArg : KExpr` (open or closed, across arbitrary nested binders), EVERY `depthIdx : Nat`,
+EVERY initial `cam0 : HwExprCAM`, and EVERY `fuel : Nat` with `depth eBody + depth eArg ≤ fuel`,
+interning `eBody` and `eArg` into `HwExprCAM` and executing pure handle-level `hwCamInstantiateAt`
+reconstructs to `some (KExpr.instantiateAt depthIdx eArg eBody)` identically! -/
+theorem reconstructFromHwExprCAM_hwCamInstantiateAt
+    (fuel depthIdx : Nat) (eBody eArg : KExpr) (cam0 : HwExprCAM)
+    (hfuel : depth eBody + depth eArg ≤ fuel) :
+    let (hBody, cam1) := internToHwExprCAM eBody cam0
+    let (hArg, cam2)  := internToHwExprCAM eArg cam1
+    let (hRes, cam3)  := hwCamInstantiateAt fuel hBody depthIdx hArg cam2
+    reconstructFromHwExprCAM fuel cam3 hRes = some (KExpr.instantiateAt depthIdx eArg eBody) := by
+  dsimp only
+  have ⟨_, repB1⟩ := internToHwExprCAM_camRep eBody cam0
+  have ⟨extA, repA2⟩ := internToHwExprCAM_camRep eArg (internToHwExprCAM eBody cam0).2
+  have repB2 := CamRep.mono extA repB1
+  have ⟨_, repRes⟩ := hwCamInstantiateAt_camRep eBody fuel _ depthIdx _ eArg _ hfuel repB2 repA2
+  have hdRes : depth (KExpr.instantiateAt depthIdx eArg eBody) ≤ fuel :=
+    Nat.le_trans (depth_instantiateAt_le eBody eArg depthIdx) hfuel
+  exact reconstructFromHwExprCAM_of_camRep _ fuel _ _ hdRes repRes
+
+/-- **Handle-Level CAM Substitution Soundness Theorem (`hwCamInstantiateAt_sound`)**:
+Combines the 1-cycle closed-term bypass (`hwCamInstantiateAt_closed_bypass`) and universal open
+substitution simulation (`reconstructFromHwExprCAM_hwCamInstantiateAt`) for all `eBody, eArg : KExpr`. -/
+theorem hwCamInstantiateAt_sound
+    (fuel depthIdx : Nat) (eBody eArg : KExpr) (cam0 : HwExprCAM)
+    (hfuel : depth eBody + depth eArg ≤ fuel) :
+    reconstructFromHwExprCAM fuel
+      (hwCamInstantiateAt fuel (internToHwExprCAM eBody cam0).1 depthIdx
+        (internToHwExprCAM eArg (internToHwExprCAM eBody cam0).2).1
+        (internToHwExprCAM eArg (internToHwExprCAM eBody cam0).2).2).2
+      (hwCamInstantiateAt fuel (internToHwExprCAM eBody cam0).1 depthIdx
+        (internToHwExprCAM eArg (internToHwExprCAM eBody cam0).2).1
+        (internToHwExprCAM eArg (internToHwExprCAM eBody cam0).2).2).1 =
+      some (KExpr.instantiateAt depthIdx eArg eBody) ∧
+    (∀ (hB : Nat) (cam : HwExprCAM) (w : PackedNodeWord),
+      cam.nodes[hB]? = some w → w.hasLooseBVar = false →
+      hwCamInstantiateAt (fuel + 1) hB depthIdx 0 cam = (hB, cam)) :=
+  ⟨reconstructFromHwExprCAM_hwCamInstantiateAt fuel depthIdx eBody eArg cam0 hfuel,
+   fun hB cam w hnode hclosed => (hwCamInstantiateAt_closed_bypass fuel hB depthIdx 0 cam w hnode hclosed).1⟩
+
+/-! ## 6. Live Declaration-Cone Ingestion, `Std.HashMap` Fast CAM Interning & Recursor Extraction (`WS 24`) -/
+
+/-- Structural hash on `KName` for `Std.HashSet` / `Std.HashMap` indexing. -/
+def hashKName : KName → UInt64
+  | .anonymous => 17
+  | .str p s   => mixHash 31 (mixHash (hashKName p) (hash s))
+  | .num p k   => mixHash 47 (mixHash (hashKName p) (hash k))
+
+instance : Hashable KName := ⟨hashKName⟩
+
+/-- Structural hash on `KLevel`. -/
+def hashKLevel : KLevel → UInt64
+  | .zero      => 11
+  | .succ u    => mixHash 23 (hashKLevel u)
+  | .max u v   => mixHash 37 (mixHash (hashKLevel u) (hashKLevel v))
+  | .imax u v  => mixHash 53 (mixHash (hashKLevel u) (hashKLevel v))
+  | .param n   => mixHash 71 (hashKName n)
+
+instance : Hashable KLevel := ⟨hashKLevel⟩
+
+instance : Hashable KLiteral where
+  hash
+    | .natVal n => mixHash 13 (hash n)
+    | .strVal s => mixHash 29 (hash s)
+
+instance : Hashable HwCamSymbolEntry where
+  hash
+    | .sortEntry u     => mixHash 3 (hash u)
+    | .constEntry n us => mixHash 5 (mixHash (hash n) (hash us))
+    | .litEntry l      => mixHash 7 (hash l)
+    | .projEntry s idx => mixHash 11 (mixHash (hash s) (hash idx))
+
+instance : Hashable PackedNodeWord where
+  hash w :=
+    mixHash (hash w.tag)
+      (mixHash (hash w.h0)
+        (mixHash (hash w.h1)
+          (mixHash (hash w.h2)
+            (mixHash (hash w.symIdx)
+              (mixHash (hash w.hasLooseBVar)
+                (mixHash (hash w.hasFVar)
+                  (mixHash (hash w.hasMVar) (hash w.maxLooseBVar))))))))
 
 /-- Extract a self-hosted `KConstInfo` from a live host `Lean.ConstantInfo` via `fromLeanName` and `fromLeanExpr`.
 Note: `.opaqueInfo` translates `val.value` into `.thmInfo` so `sorryAx` or ill-typed opaque bodies
@@ -1713,95 +2731,65 @@ def extractLeanConstInfo? : Lean.ConstantInfo → Option KConstInfo
     let ty ← fromLeanExpr val.type
     pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
 
-/-- Environment-aware `Lean.Expr → Option KExpr` translator that shifts `Lean.Expr.proj s i e`
-by `numParamsOf s` so `KExpr.proj` indexes past inductive type parameters on parameterized structures
-such as `Prod` (`numParams = 2`, `.proj ``Prod 0 ↦ .proj "Prod" 2`). -/
-def fromLeanExprWithProjShift (numParamsOf : Lean.Name → Nat) : Lean.Expr → Option KExpr
-  | .bvar i          => some (.bvar i)
-  | .fvar id         => some (.fvar (fromLeanName id.name).toCleanId)
-  | .mvar id         => some (.fvar (1000000 + (fromLeanName id.name).toCleanId))
-  | .sort u          => do return .sort (← fromLeanLevel u)
-  | .const n us      => do return .const (fromLeanName n) (← us.mapM fromLeanLevel)
-  | .app f a         => do return .app (← fromLeanExprWithProjShift numParamsOf f) (← fromLeanExprWithProjShift numParamsOf a)
-  | .lam _ d b _     => do return .lam (← fromLeanExprWithProjShift numParamsOf d) (← fromLeanExprWithProjShift numParamsOf b)
-  | .forallE _ d b _ => do return .forallE (← fromLeanExprWithProjShift numParamsOf d) (← fromLeanExprWithProjShift numParamsOf b)
-  | .letE _ t v b _  => do
-    return .letE (← fromLeanExprWithProjShift numParamsOf t)
-                 (← fromLeanExprWithProjShift numParamsOf v)
-                 (← fromLeanExprWithProjShift numParamsOf b)
-  | .lit l           => some (.lit (fromLeanLiteral l))
-  | .mdata _ e       => fromLeanExprWithProjShift numParamsOf e
-  | .proj s i e      => do
-    return .proj (fromLeanName s) (numParamsOf s + i) (← fromLeanExprWithProjShift numParamsOf e)
+/-- Canonical `Lean.Expr → Option KExpr` translator (`fromLeanExprWithProjShift`):
+Preserves Lean's 0-based structure field index `i` on `.proj s i e` without pre-shifting by `numParams`
+(eliminating the `.proj` double-offset against `LeanKernel.kernelWhnf` and `LeanKernel.inferProjFieldType?`,
+which apply `env.inductDecls`'s `numParams` offset once), and maps `.mvar` to first-class `KExpr.mvar`. -/
+def fromLeanExprWithProjShift (_numParamsOf : Lean.Name → Nat := fun _ => 0) : Lean.Expr → Option KExpr :=
+  fromLeanExpr
 
-/-- Environment-aware `KConstInfo` extractor using `fromLeanExprWithProjShift`. -/
+/-- Environment-aware `KConstInfo` extractor (`extractLeanConstInfoWith?`). -/
 def extractLeanConstInfoWith?
-    (findConst? : Lean.Name → Option Lean.ConstantInfo)
+    (_findConst? : Lean.Name → Option Lean.ConstantInfo)
     (info : Lean.ConstantInfo) : Option KConstInfo :=
-  let numParamsOf (s : Lean.Name) : Nat :=
-    match findConst? s with
-    | some (.inductInfo iv) => iv.numParams
-    | _ => 0
-  let tr := fromLeanExprWithProjShift numParamsOf
-  match info with
-  | .axiomInfo val => do
-    let ty ← tr val.type
-    pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
-  | .defnInfo val => do
-    let ty ← tr val.type
-    let v  ← tr val.value
-    pure (.defnInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty v)
-  | .thmInfo val => do
-    let ty ← tr val.type
-    let v  ← tr val.value
-    pure (.thmInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty v)
-  | .inductInfo val => do
-    let ty ← tr val.type
-    pure (.inductInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
-  | .ctorInfo val => do
-    let ty ← tr val.type
-    pure (.ctorInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty (fromLeanName val.induct))
-  | .recInfo val => do
-    let ty ← tr val.type
-    pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
-  | .opaqueInfo val => do
-    let ty ← tr val.type
-    let v  ← tr val.value
-    pure (.thmInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty v)
-  | .quotInfo val => do
-    let ty ← tr val.type
-    pure (.axiomInfo (fromLeanName val.name) (val.levelParams.map fromLeanName) ty)
+  extractLeanConstInfo? info
 
-/-- Extract the list of `KRecRule` $\iota$-reduction rules from a live host `Lean.RecursorVal`
-(`extractLeanRecRules`), computing `numPrefixArgs := rval.numParams + rval.numMotives + rval.numMinors`,
-`numFields := rule.nfields`, and translating `rule.rhs` via `fromLeanExpr` (which strips `.mdata`
-annotations transparently). -/
+/-- Extract the list of universe-polymorphic `KRecRule` $\iota$-reduction rules from a live host
+`Lean.RecursorVal` (`extractLeanRecRules`), populating `levelParams := rval.levelParams.map fromLeanName`,
+`numPrefixArgs := rval.numParams + rval.numMotives + rval.numMinors`, `numFields := rule.nfields`,
+and translating `rule.rhs` via `fromLeanExpr` (stripping `.mdata` annotations transparently). -/
 def extractLeanRecRules (rval : Lean.RecursorVal) : Option (List KRecRule) :=
   rval.rules.mapM fun rule => do
     let rhsExpr ← fromLeanExpr rule.rhs
     pure
       { recName       := fromLeanName rval.name
       , ctorName      := fromLeanName rule.ctor
+      , levelParams   := rval.levelParams.map fromLeanName
       , numPrefixArgs := rval.numParams + rval.numMotives + rval.numMinors
       , numFields     := rule.nfields
       , rhs           := rhsExpr }
 
-/-- Environment-aware `KRecRule` extractor shifting parameterized `.proj` indices via `findConst?`. -/
+/-- Environment-aware `KRecRule` extractor (`extractLeanRecRulesWith`). -/
 def extractLeanRecRulesWith
-    (findConst? : Lean.Name → Option Lean.ConstantInfo)
+    (_findConst? : Lean.Name → Option Lean.ConstantInfo)
     (rval : Lean.RecursorVal) : Option (List KRecRule) :=
-  let numParamsOf (s : Lean.Name) : Nat :=
-    match findConst? s with
-    | some (.inductInfo iv) => iv.numParams
-    | _ => 0
-  rval.rules.mapM fun rule => do
-    let rhsExpr ← fromLeanExprWithProjShift numParamsOf rule.rhs
-    pure
-      { recName       := fromLeanName rval.name
-      , ctorName      := fromLeanName rule.ctor
-      , numPrefixArgs := rval.numParams + rval.numMotives + rval.numMinors
-      , numFields     := rule.nfields
-      , rhs           := rhsExpr }
+  extractLeanRecRules rval
+
+/-- Extract a `KInductDecl` (including `numParams`, `numIndices`, constructors, and recursor rules)
+from a live host `Lean.InductiveVal` so parameterized `.proj` reduction and type inference have
+exact `numParams` metadata in `KEnv.inductDecls`. -/
+def extractLeanInductDeclWith?
+    (findConst? : Lean.Name → Option Lean.ConstantInfo)
+    (iv : Lean.InductiveVal) : Option KInductDecl := do
+  let ty ← fromLeanExpr iv.type
+  let ctors ← iv.ctors.mapM fun cName => do
+    match findConst? cName with
+    | some (.ctorInfo cv) =>
+      let cTy ← fromLeanExpr cv.type
+      pure (fromLeanName cv.name, cTy, cv.numFields)
+    | _ => none
+  let recRules :=
+    match findConst? (.str iv.name "rec") with
+    | some (.recInfo rv) => (extractLeanRecRules rv).getD []
+    | _ => []
+  pure
+    { name        := fromLeanName iv.name
+    , levelParams := iv.levelParams.map fromLeanName
+    , numParams   := iv.numParams
+    , numIndices  := iv.numIndices
+    , type        := ty
+    , ctors       := ctors
+    , recRules    := recRules }
 
 /-- Collect all `Lean.Name` constants referenced inside a `Lean.Expr` (stripping `.mdata`). -/
 def collectLeanExprConsts : Lean.Expr → List Lean.Name
@@ -1835,52 +2823,53 @@ def collectConstInfoDeps (info : Lean.ConstantInfo) : List Lean.Name :=
   | .quotInfo val =>
     collectLeanExprConsts val.type
 
-/-- Append only unvisited, non-queued `Lean.Name` dependencies so every BFS step in `extractEnvConeAux`
-processes a distinct declaration without burning `fuel` on duplicate AST constant occurrences. -/
-def enqueueUnvisitedDeps (visited : List KName) (queue : List Lean.Name) :
-    List Lean.Name → List Lean.Name
-  | [] => queue
+/-- $O(1)$ `Std.HashSet`-backed worklist insertion so every BFS step in `extractEnvConeAux`
+processes a distinct declaration without $O(N^2)$ list scans. -/
+def enqueueUnvisitedDepsFast (seen : Std.HashSet KName) (queue : List Lean.Name) :
+    List Lean.Name → Std.HashSet KName × List Lean.Name
+  | [] => (seen, queue)
   | d :: ds =>
     let kd := fromLeanName d
-    if visited.contains kd || queue.any (fun q => fromLeanName q == kd) then
-      enqueueUnvisitedDeps visited queue ds
+    if seen.contains kd then
+      enqueueUnvisitedDepsFast seen queue ds
     else
-      enqueueUnvisitedDeps visited (queue ++ [d]) ds
+      enqueueUnvisitedDepsFast (seen.insert kd) (queue ++ [d]) ds
 
-/-- Bounded BFS helper extracting all transitive `KConstInfo` declarations and `KRecRule`
-recursor rules reachable from a deduplicated worklist of `Lean.Name`s. -/
+/-- Bounded BFS helper extracting all transitive `KConstInfo` declarations, `KRecRule` recursor
+rules, and `KInductDecl` inductive metadata reachable from a `Std.HashSet`-deduplicated worklist. -/
 def extractEnvConeAux
     (findConst? : Lean.Name → Option Lean.ConstantInfo) :
-    Nat → List Lean.Name → List KName → List KConstInfo → List KRecRule →
-    List KConstInfo × List KRecRule
-  | 0, _, _, accConsts, accRules => (accConsts, accRules)
-  | _ + 1, [], _, accConsts, accRules => (accConsts, accRules)
-  | fuel + 1, n :: rest, visited, accConsts, accRules =>
-    let kn := fromLeanName n
-    if visited.contains kn then
-      extractEnvConeAux findConst? fuel rest visited accConsts accRules
-    else
-      let visited' := kn :: visited
-      match findConst? n with
-      | none =>
-        extractEnvConeAux findConst? fuel rest visited' accConsts accRules
-      | some info =>
-        let accConsts' :=
-          match extractLeanConstInfoWith? findConst? info with
-          | some kc =>
-            if accConsts.any (fun c => c.name == kc.name) then accConsts
-            else accConsts ++ [kc]
-          | none => accConsts
-        let accRules' :=
-          match info with
-          | .recInfo rval =>
-            match extractLeanRecRulesWith findConst? rval with
-            | some rs => accRules ++ rs
-            | none    => accRules
-          | _ => accRules
-        let deps := collectConstInfoDeps info
-        let nextQueue := enqueueUnvisitedDeps visited' rest deps
-        extractEnvConeAux findConst? fuel nextQueue visited' accConsts' accRules'
+    Nat → List Lean.Name → Std.HashSet KName →
+    Array KConstInfo → Array KRecRule → Array KInductDecl →
+    Array KConstInfo × Array KRecRule × Array KInductDecl
+  | 0, _, _, accConsts, accRules, accInducts => (accConsts, accRules, accInducts)
+  | _ + 1, [], _, accConsts, accRules, accInducts => (accConsts, accRules, accInducts)
+  | fuel + 1, n :: rest, seen, accConsts, accRules, accInducts =>
+    match findConst? n with
+    | none =>
+      extractEnvConeAux findConst? fuel rest seen accConsts accRules accInducts
+    | some info =>
+      let accConsts' :=
+        match extractLeanConstInfo? info with
+        | some kc => accConsts.push kc
+        | none    => accConsts
+      let accRules' :=
+        match info with
+        | .recInfo rval =>
+          match extractLeanRecRules rval with
+          | some rs => accRules ++ rs.toArray
+          | none    => accRules
+        | _ => accRules
+      let accInducts' :=
+        match info with
+        | .inductInfo iv =>
+          match extractLeanInductDeclWith? findConst? iv with
+          | some idcl => accInducts.push idcl
+          | none      => accInducts
+        | _ => accInducts
+      let deps := collectConstInfoDeps info
+      let (seen', nextQueue) := enqueueUnvisitedDepsFast seen rest deps
+      extractEnvConeAux findConst? fuel nextQueue seen' accConsts' accRules' accInducts'
 
 /-- Extract a self-contained `(KEnv × KConstInfo)` transitive dependency cone rooted at `rootName`
 using a lookup function `findConst? : Lean.Name → Option Lean.ConstantInfo`. -/
@@ -1889,9 +2878,13 @@ def extractEnvConeWith
     (rootName : Lean.Name)
     (fuel : Nat) : Option (KEnv × KConstInfo) := do
   let rootInfo ← findConst? rootName
-  let rootDecl ← extractLeanConstInfoWith? findConst? rootInfo
-  let (consts, recRules) := extractEnvConeAux findConst? fuel [rootName] [] [] []
-  pure ({ constants := consts, recRules := recRules }, rootDecl)
+  let rootDecl ← extractLeanConstInfo? rootInfo
+  let initSeen := (Std.HashSet.emptyWithCapacity 64).insert (fromLeanName rootName)
+  let (consts, recRules, inductDecls) :=
+    extractEnvConeAux findConst? fuel [rootName] initSeen #[] #[] #[]
+  pure ({ constants   := consts.toList
+        , recRules    := recRules.toList
+        , inductDecls := inductDecls.toList }, rootDecl)
 
 /-- Extract a self-contained `(KEnv × KConstInfo)` transitive dependency cone rooted at `rootName`
 directly from a live host `Lean.Environment` (`extractLeanEnvCone`). -/
@@ -1928,7 +2921,7 @@ def hwCamInstantiateLevelParams :
       match cam.nodes[h]? with
       | none => (h, cam)
       | some w =>
-        if w.tag == 0 || w.tag == 1 || w.tag == 8 then
+        if w.tag == 0 || w.tag == 1 || w.tag == 8 || w.tag == 10 then
           (h, cam)
         else if w.tag == 2 then
           match cam.symbols[w.symIdx]? with
@@ -1988,7 +2981,7 @@ def internKConstInfoToHwExprCAM (c : KConstInfo) (cam : HwExprCAM) : HwExprCAM :
       { name := c.name, symIdx := symIdx, typeHandle := tyH }
     { cam2 with consts := cam2.consts ++ [entry] }
 
-/-- Intern a `KRecRule` $\iota$-reduction rule into `HwExprCAM` (`recRules`, `nodes`, `symbols`). -/
+/-- Intern a `KRecRule` $\iota$-reduction rule into `HwExprCAM` (`recRules`, `recLevelParams`, `nodes`, `symbols`). -/
 def internKRecRuleToHwExprCAM (r : KRecRule) (cam : HwExprCAM) : HwExprCAM :=
   let (rhsH, cam1) := internToHwExprCAM r.rhs cam
   let entry : HwCamRecRuleEntry :=
@@ -1997,55 +2990,161 @@ def internKRecRuleToHwExprCAM (r : KRecRule) (cam : HwExprCAM) : HwExprCAM :=
     , numParams := r.numPrefixArgs
     , numFields := r.numFields
     , rhsHandle := rhsH }
-  { cam1 with recRules := cam1.recRules ++ [entry] }
+  let recLP :=
+    if r.levelParams.isEmpty || cam1.recLevelParams.any (fun p => p.1 == r.recName) then
+      cam1.recLevelParams
+    else
+      cam1.recLevelParams ++ [(r.recName, r.levelParams)]
+  { cam1 with recRules := cam1.recRules ++ [entry], recLevelParams := recLP }
 
-/-- Intern an entire `KEnv` declaration cone (`constants` and `recRules`) into `HwExprCAM`. -/
+/-- Intern an entire `KEnv` declaration cone (`constants`, `recRules`, and `inductDecls`) into `HwExprCAM`. -/
 def internKEnvConeToHwExprCAM (env : KEnv) (cam : HwExprCAM) : HwExprCAM :=
   let cam1 := env.constants.foldl (fun acc c => internKConstInfoToHwExprCAM c acc) cam
-  env.recRules.foldl (fun acc r => internKRecRuleToHwExprCAM r acc) cam1
+  let cam2 := env.recRules.foldl (fun acc r => internKRecRuleToHwExprCAM r acc) cam1
+  let indParams := env.inductDecls.foldl
+    (fun acc d => if acc.any (fun p => p.1 == d.name) then acc else acc ++ [(d.name, d.numParams)])
+    cam2.inductNumParams
+  { cam2 with inductNumParams := indParams }
 
-/-- Result of checking a declaration through the `ExprCAM` + `ReductionMachine` silicon pipeline. -/
-structure SiliconCheckReport where
-  declName    : KName
-  accepted    : Bool
-  statusTag   : Nat
-  camNodes    : Nat
-  rtlOut      : BitVec 64
-  automatonOut : BitVec 64
-  deriving DecidableEq, Repr
+/-- $O(1)$ `Std.HashMap`-indexed hardware CAM builder (`FastHwExprCAM`) for linear-time interning of
+large live Lean 4 declaration cones without $O(|DAG|^2)$ list scans. -/
+structure FastHwExprCAM where
+  nodes           : Array PackedNodeWord := #[]
+  symbols         : Array HwCamSymbolEntry := #[]
+  consts          : Array HwCamConstEntry := #[]
+  recRules        : Array HwCamRecRuleEntry := #[]
+  inductNumParams : List (KName × Nat) := []
+  recLevelParams  : List (KName × List KName) := []
+  nodeIndex       : Std.HashMap PackedNodeWord Nat := {}
+  symIndex        : Std.HashMap HwCamSymbolEntry Nat := {}
 
-/-- Live `silicon-check` pipeline (`checkDeclInSilicon`):
-1. Interns the declaration's type and value ASTs into `ExprCAM` (computing the deduplicated DAG size),
-2. Runs the self-hosted Lean kernel checker (`kernelCheckDecl`) and computes `encodeDeclStatusTag`,
-3. Synthesizes `kernelGateBook` into both `RtlModule` (`compileBookToRtlSat`) and `AutomatonNetwork`
-   (`compileBookToAutomaton`) and executes the hardware verification gate. -/
-def checkDeclInSilicon (env : KEnv) (fuel : Nat) (decl : KConstInfo) : Option SiliconCheckReport := do
-  let (cam1, _) := internExpr ExprCAM.empty decl.type
-  let cam2 :=
-    match decl with
-    | .defnInfo _ _ _ val | .thmInfo _ _ _ val => (internExpr cam1 val).1
-    | _ => cam1
-  let tag := encodeDeclStatusTag env fuel decl
-  let accepted := kernelCheckDecl env fuel decl
-  let rtlMod ← compileBookToRtlSat "silicon_check_rtl" kernelGateBook
-  let net ← compileBookToAutomaton "silicon_check_net" kernelGateBook
-  let rtlOutputs := evalModuleOutputs rtlMod (fun _ => BitVec.ofNat 64 tag) (fun _ => 0#64)
-  let (_, rtlWord) ← rtlOutputs.head?
-  let autoWord := evalAutomatonPacket net (fun _ => 0#64)
-    { targetSlot := 0, argVal := BitVec.ofNat 64 tag, tag := 1 }
-  pure
-    { declName     := decl.name
-    , accepted     := accepted
-    , statusTag    := tag
-    , camNodes     := cam2.entries.length
-    , rtlOut       := rtlWord
-    , automatonOut := autoWord }
+def FastHwExprCAM.empty : FastHwExprCAM := {}
 
-/-- Ingest a live host `Lean.ConstantInfo`, translate its `Lean.Expr` type and value via `fromLeanExpr`,
-and verify it end-to-end on the Silicon `ExprCAM` + `ReductionMachine` pipeline. -/
-def checkLeanEnvDeclInSilicon (env : KEnv) (fuel : Nat) (info : Lean.ConstantInfo) : Option SiliconCheckReport := do
-  let kdecl ← extractLeanConstInfo? info
-  checkDeclInSilicon env fuel kdecl
+def FastHwExprCAM.toHwExprCAM (fc : FastHwExprCAM) : HwExprCAM :=
+  { nodes           := fc.nodes.toList
+  , symbols         := fc.symbols.toList
+  , consts          := fc.consts.toList
+  , recRules        := fc.recRules.toList
+  , inductNumParams := fc.inductNumParams
+  , recLevelParams  := fc.recLevelParams }
+
+def allocFastSymbol (s : HwCamSymbolEntry) (fc : FastHwExprCAM) : Nat × FastHwExprCAM :=
+  match fc.symIndex[s]? with
+  | some idx => (idx, fc)
+  | none =>
+    let idx := fc.symbols.size
+    (idx, { fc with symbols := fc.symbols.push s, symIndex := fc.symIndex.insert s idx })
+
+def allocFastNode (w : PackedNodeWord) (fc : FastHwExprCAM) : Nat × FastHwExprCAM :=
+  match fc.nodeIndex[w]? with
+  | some h => (h, fc)
+  | none =>
+    let h := fc.nodes.size
+    (h, { fc with nodes := fc.nodes.push w, nodeIndex := fc.nodeIndex.insert w h })
+
+def getFastNode (fc : FastHwExprCAM) (h : Nat) : PackedNodeWord :=
+  fc.nodes[h]?.getD { tag := 99, h0 := 0, h1 := 0 }
+
+/-- Intern a `KExpr` into `FastHwExprCAM` in $O(|e|)$ amortized hash-table operations. -/
+def internToFastHwExprCAM : KExpr → FastHwExprCAM → Nat × FastHwExprCAM
+  | .bvar idx, fc =>
+    allocFastNode { tag := 0, h0 := idx, h1 := 0, hasLooseBVar := true, maxLooseBVar := idx + 1 } fc
+  | .fvar id, fc =>
+    allocFastNode { tag := 1, h0 := id, h1 := 0, hasFVar := true, hasMVar := false } fc
+  | .mvar id, fc =>
+    allocFastNode { tag := 10, h0 := id, h1 := 0, hasFVar := false, hasMVar := true } fc
+  | .sort u, fc =>
+    let (sIdx, fc1) := allocFastSymbol (.sortEntry u) fc
+    allocFastNode { tag := 2, h0 := 0, h1 := 0, symIdx := sIdx } fc1
+  | .const n us, fc =>
+    let (sIdx, fc1) := allocFastSymbol (.constEntry n us) fc
+    allocFastNode { tag := 3, h0 := 0, h1 := 0, symIdx := sIdx } fc1
+  | .app f a, fc =>
+    let (hf, fc1) := internToFastHwExprCAM f fc
+    let (ha, fc2) := internToFastHwExprCAM a fc1
+    let wf := getFastNode fc2 hf
+    let wa := getFastNode fc2 ha
+    let maxB := Nat.max wf.maxLooseBVar wa.maxLooseBVar
+    allocFastNode
+      { tag := 4, h0 := hf, h1 := ha, hasLooseBVar := decide (maxB > 0)
+      , hasFVar := wf.hasFVar || wa.hasFVar, hasMVar := wf.hasMVar || wa.hasMVar
+      , maxLooseBVar := maxB } fc2
+  | .lam d b, fc =>
+    let (hd, fc1) := internToFastHwExprCAM d fc
+    let (hb, fc2) := internToFastHwExprCAM b fc1
+    let wd := getFastNode fc2 hd
+    let wb := getFastNode fc2 hb
+    let maxB := Nat.max wd.maxLooseBVar (wb.maxLooseBVar - 1)
+    allocFastNode
+      { tag := 5, h0 := hd, h1 := hb, hasLooseBVar := decide (maxB > 0)
+      , hasFVar := wd.hasFVar || wb.hasFVar, hasMVar := wd.hasMVar || wb.hasMVar
+      , maxLooseBVar := maxB } fc2
+  | .forallE d b, fc =>
+    let (hd, fc1) := internToFastHwExprCAM d fc
+    let (hb, fc2) := internToFastHwExprCAM b fc1
+    let wd := getFastNode fc2 hd
+    let wb := getFastNode fc2 hb
+    let maxB := Nat.max wd.maxLooseBVar (wb.maxLooseBVar - 1)
+    allocFastNode
+      { tag := 6, h0 := hd, h1 := hb, hasLooseBVar := decide (maxB > 0)
+      , hasFVar := wd.hasFVar || wb.hasFVar, hasMVar := wd.hasMVar || wb.hasMVar
+      , maxLooseBVar := maxB } fc2
+  | .letE t v b, fc =>
+    let (ht, fc1) := internToFastHwExprCAM t fc
+    let (hv, fc2) := internToFastHwExprCAM v fc1
+    let (hb, fc3) := internToFastHwExprCAM b fc2
+    let wt := getFastNode fc3 ht
+    let wv := getFastNode fc3 hv
+    let wb := getFastNode fc3 hb
+    let maxB := Nat.max (Nat.max wt.maxLooseBVar wv.maxLooseBVar) (wb.maxLooseBVar - 1)
+    allocFastNode
+      { tag := 7, h0 := ht, h1 := hv, h2 := hb, hasLooseBVar := decide (maxB > 0)
+      , hasFVar := wt.hasFVar || wv.hasFVar || wb.hasFVar
+      , hasMVar := wt.hasMVar || wv.hasMVar || wb.hasMVar
+      , maxLooseBVar := maxB } fc3
+  | .lit l, fc =>
+    let (sIdx, fc1) := allocFastSymbol (.litEntry l) fc
+    allocFastNode { tag := 8, h0 := 0, h1 := 0, symIdx := sIdx } fc1
+  | .proj structName idx s, fc =>
+    let (hs, fc1) := internToFastHwExprCAM s fc
+    let (sIdx, fc2) := allocFastSymbol (.projEntry structName idx) fc1
+    let ws := getFastNode fc2 hs
+    allocFastNode
+      { tag := 9, h0 := hs, h1 := 0, symIdx := sIdx, hasLooseBVar := decide (ws.maxLooseBVar > 0)
+      , hasFVar := ws.hasFVar, hasMVar := ws.hasMVar, maxLooseBVar := ws.maxLooseBVar } fc2
+
+/-- Intern an entire `KEnv` cone in $O(|DAG|)$ via `FastHwExprCAM` and convert to `HwExprCAM`. -/
+def internKEnvConeFast (env : KEnv) : HwExprCAM :=
+  let fc1 := env.constants.foldl
+    (fun fc c =>
+      let (symIdx, fcA) := allocFastSymbol (.constEntry c.name (c.levelParams.map KLevel.param)) fc
+      let (tyH, fcB) := internToFastHwExprCAM c.type fcA
+      match c with
+      | .defnInfo _ _ _ val =>
+        let (valH, fcC) := internToFastHwExprCAM val fcB
+        { fcC with consts := fcC.consts.push { name := c.name, symIdx := symIdx, typeHandle := tyH, valHandle? := some valH } }
+      | .thmInfo _ _ _ val =>
+        let (_, fcC) := internToFastHwExprCAM val fcB
+        { fcC with consts := fcC.consts.push { name := c.name, symIdx := symIdx, typeHandle := tyH, valHandle? := none } }
+      | .ctorInfo _ _ _ indName =>
+        { fcB with consts := fcB.consts.push { name := c.name, symIdx := symIdx, typeHandle := tyH, isCtor := true, inductName? := some indName } }
+      | _ =>
+        { fcB with consts := fcB.consts.push { name := c.name, symIdx := symIdx, typeHandle := tyH } })
+    FastHwExprCAM.empty
+  let fc2 := env.recRules.foldl
+    (fun fc r =>
+      let (rhsH, fcA) := internToFastHwExprCAM r.rhs fc
+      let entry : HwCamRecRuleEntry :=
+        { recName := r.recName, ctorName := r.ctorName, numParams := r.numPrefixArgs, numFields := r.numFields, rhsHandle := rhsH }
+      let recLP :=
+        if r.levelParams.isEmpty || fcA.recLevelParams.any (fun p => p.1 == r.recName) then fcA.recLevelParams
+        else fcA.recLevelParams ++ [(r.recName, r.levelParams)]
+      { fcA with recRules := fcA.recRules.push entry, recLevelParams := recLP })
+    fc1
+  let indParams := env.inductDecls.foldl
+    (fun acc d => if acc.any (fun p => p.1 == d.name) then acc else acc ++ [(d.name, d.numParams)])
+    []
+  { fc2 with inductNumParams := indParams }.toHwExprCAM
 
 /-- Sample host `Lean.ConstantInfo` declaration (`Lean.Declaration.defnDecl` for `liveIdNat : Nat → Nat := λ x : Nat => x`). -/
 def sampleLiveLeanDefnInfo : Lean.ConstantInfo :=
@@ -2168,30 +3267,20 @@ def sampleLiveConeFindConst? (n : Lean.Name) : Option Lean.ConstantInfo :=
   else
     none
 
-/-- **Theorem (`silicon_live_env_decl_check_sound`)**:
-1. Extracting the live host `Lean.ConstantInfo` `sampleLiveLeanDefnInfo` via `checkLeanEnvDeclInSilicon`
-   succeeds, interns its AST into `ExprCAM` (`4` deduplicated DAG nodes), accepts the declaration
-   (`accepted = true`, `statusTag = 1`), and outputs `1#64` on both `RtlModule` and `AutomatonNetwork`.
-2. Extracting the `sorryAx`-contaminated host `Lean.ConstantInfo` `sampleLiveLeanSorryInfo` via
-   `checkLeanEnvDeclInSilicon` refuses the declaration (`accepted = false`, `statusTag = 0`) and
-   outputs `0#64` on both `RtlModule` and `AutomatonNetwork`. -/
--- fixture kept (2026-11-04): used by tests/silicon_elab/SiliconElabTest.lean
-theorem silicon_live_env_decl_check_sound :
-    checkLeanEnvDeclInSilicon stdKernelEnv 8 sampleLiveLeanDefnInfo =
-      some { declName     := KName.mkSimple "liveIdNat"
-           , accepted     := true
-           , statusTag    := 1
-           , camNodes     := 4
-           , rtlOut       := 1#64
-           , automatonOut := 1#64 } ∧
-    checkLeanEnvDeclInSilicon stdKernelEnv 8 sampleLiveLeanSorryInfo =
-      some { declName     := KName.mkSimple "liveBadSorry"
-           , accepted     := false
-           , statusTag    := 0
-           , camNodes     := 4
-           , rtlOut       := 0#64
-           , automatonOut := 0#64 } := by
-  decide +kernel
+/-- **Universal Theorem (`fromLeanExprWithProjShift_no_double_offset`)**:
+For every structure name `s`, field index `i`, structure expression `e`, and parameter-count oracle
+`numParamsOf`, `fromLeanExprWithProjShift` preserves the exact 0-based field index `i` without
+pre-adding `numParamsOf s` (preventing double-offset against `LeanKernel.kernelWhnf` and
+`LeanKernel.inferProjFieldType?`), and maps `Lean.Expr.mvar id` to first-class `KExpr.mvar`. -/
+theorem fromLeanExprWithProjShift_no_double_offset
+    (numParamsOf : Lean.Name → Nat) (s : Lean.Name) (i : Nat) (e : Lean.Expr) (mvid : Lean.MVarId) :
+    fromLeanExprWithProjShift numParamsOf (.proj s i e) =
+      (fromLeanExpr e).map (KExpr.proj (fromLeanName s) i) ∧
+    fromLeanExprWithProjShift numParamsOf (.mvar mvid) =
+      some (.mvar (fromLeanName mvid.name).toCleanId) := by
+  refine ⟨?_, rfl⟩
+  simp only [fromLeanExprWithProjShift, fromLeanExpr]
+  cases fromLeanExpr e <;> rfl
 
 /-! ## 8. 88-Bit Hardware `PackedNodeWord` Bit-Packing (`BitVec 88`) & 7-Section `OBCAMv1` Wire Protocol -/
 

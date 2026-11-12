@@ -90,6 +90,7 @@ inductive KLiteral where
 inductive KExpr where
   | bvar (idx : Nat)
   | fvar (id : Nat)
+  | mvar (id : Nat)
   | sort (u : KLevel)
   | const (name : KName) (us : List KLevel)
   | app (fn arg : KExpr)
@@ -237,6 +238,7 @@ theorem decodeLiteralTerm_lowerT : ∀ (lit : KLiteral),
 def exprToLExpr : KExpr → LExpr
   | .bvar i        => .inject "bvar" [("idx", .lit i)]
   | .fvar id       => .inject "fvar" [("id", .lit id)]
+  | .mvar id       => .inject "mvar" [("id", .lit id)]
   | .sort u        => .inject "sort" [("u", levelToLExpr u)]
   | .const n us    => .inject "const" [("name", nameToLExpr n), ("us", levelListToLExpr us)]
   | .app f a       => .inject "app" [("fn", exprToLExpr f), ("arg", exprToLExpr a)]
@@ -253,6 +255,7 @@ def lowerExpr (e : KExpr) : Term := lowerT (exprToLExpr e)
 def decodeExprTerm : Term → Option KExpr
   | .inject "bvar" (.record [("idx", .nat i)]) => some (.bvar i)
   | .inject "fvar" (.record [("id", .nat id)]) => some (.fvar id)
+  | .inject "mvar" (.record [("id", .nat id)]) => some (.mvar id)
   | .inject "sort" (.record [("u", u)]) => do
     return .sort (← decodeLevelTerm u)
   | .inject "const" (.record [("name", n), ("us", us)]) => do
@@ -276,6 +279,8 @@ theorem decodeExprTerm_lowerT : ∀ (e : KExpr),
   | .bvar _ => by
     simp [exprToLExpr, lowerT, decodeExprTerm]
   | .fvar _ => by
+    simp [exprToLExpr, lowerT, decodeExprTerm]
+  | .mvar _ => by
     simp [exprToLExpr, lowerT, decodeExprTerm]
   | .sort u => by
     simp [exprToLExpr, lowerT, decodeExprTerm, decodeLevelTerm_lowerT u]
@@ -435,11 +440,11 @@ def toLeanLiteral : KLiteral → Lean.Literal
   cases l <;> rfl
 
 /-- Convert a host `Lean.Expr` into `Option KExpr` (stripping `.mdata` annotations transparently
-and mapping `.fvar` to `< 1000000` and `.mvar` to `1000000 + id` matching `mvarIdOffset` / `hwCamMVarOffset`). -/
+and mapping `.fvar` and `.mvar` to their respective first-class `KExpr.fvar` and `KExpr.mvar` constructors). -/
 def fromLeanExpr : Lean.Expr → Option KExpr
   | .bvar i          => some (.bvar i)
   | .fvar id         => some (.fvar (fromLeanName id.name).toCleanId)
-  | .mvar id         => some (.fvar (1000000 + (fromLeanName id.name).toCleanId))
+  | .mvar id         => some (.mvar (fromLeanName id.name).toCleanId)
   | .sort u          => do return .sort (← fromLeanLevel u)
   | .const n us      => do return .const (fromLeanName n) (← us.mapM fromLeanLevel)
   | .app f a         => do return .app (← fromLeanExpr f) (← fromLeanExpr a)
@@ -453,15 +458,11 @@ def fromLeanExpr : Lean.Expr → Option KExpr
 @[simp] theorem fromLeanExpr_mdata (md : Lean.MData) (e : Lean.Expr) :
     fromLeanExpr (.mdata md e) = fromLeanExpr e := rfl
 
-/-- Convert a `KExpr` back to a host `Lean.Expr` (mapping `.fvar id` with `id >= 1000000` to `.mvar`
-and `id < 1000000` to `.fvar`). -/
+/-- Convert a `KExpr` back to a host `Lean.Expr` (preserving first-class `.fvar` and `.mvar` disjointly). -/
 def toLeanExpr : KExpr → Lean.Expr
   | .bvar i      => .bvar i
-  | .fvar id     =>
-    if id >= 1000000 then
-      .mvar ⟨Lean.Name.mkNum .anonymous (id - 1000000)⟩
-    else
-      .fvar ⟨Lean.Name.mkNum .anonymous id⟩
+  | .fvar id     => .fvar ⟨Lean.Name.mkNum .anonymous id⟩
+  | .mvar id     => .mvar ⟨Lean.Name.mkNum .anonymous id⟩
   | .sort u      => .sort (toLeanLevel u)
   | .const n us  => .const (toLeanName n) (us.map toLeanLevel)
   | .app f a     => .app (toLeanExpr f) (toLeanExpr a)
@@ -471,18 +472,9 @@ def toLeanExpr : KExpr → Lean.Expr
   | .lit l       => .lit (toLeanLiteral l)
   | .proj s i e  => .proj (toLeanName s) i (toLeanExpr e)
 
-/-- Well-formed variable ID bound (`< 2000000`: `< 1000000` for `.fvar` and `1000000..1999999` for `.mvar`). -/
+/-- With first-class `KExpr.mvar`, all `Nat` variable IDs on `.fvar` and `.mvar` are disjoint and unconditionally valid. -/
 def KExpr.validVarIds : KExpr → Bool
-  | .bvar _      => true
-  | .fvar id     => decide (id < 2000000)
-  | .sort _      => true
-  | .const _ _   => true
-  | .app f a     => f.validVarIds && a.validVarIds
-  | .lam d b     => d.validVarIds && b.validVarIds
-  | .forallE d b => d.validVarIds && b.validVarIds
-  | .letE t v b  => t.validVarIds && v.validVarIds && b.validVarIds
-  | .lit _       => true
-  | .proj _ _ e  => e.validVarIds
+  | _ => true
 
 theorem mapM_fromLeanLevel_toLeanLevel :
     ∀ (us : List KLevel), (us.map toLeanLevel).mapM fromLeanLevel = some us
@@ -490,41 +482,32 @@ theorem mapM_fromLeanLevel_toLeanLevel :
   | u :: us => by
     simp [fromLeanLevel_toLeanLevel, mapM_fromLeanLevel_toLeanLevel us]
 
-theorem fromLeanExpr_toLeanExpr :
-    ∀ (e : KExpr), e.validVarIds = true → fromLeanExpr (toLeanExpr e) = some e
-  | .bvar _, _ => rfl
-  | .fvar id, h => by
-    simp only [KExpr.validVarIds, decide_eq_true_eq] at h
-    unfold toLeanExpr
-    by_cases hGe : id >= 1000000
-    · simp only [hGe, ↓reduceIte, fromLeanExpr, Lean.Name.mkNum, fromLeanName,
-        KName.toCleanId, KName.toCleanIdAux]
-      have hAdd : 1000000 + (id - 1000000) = id := by omega
-      rw [hAdd]
-    · simp only [hGe, ↓reduceIte, fromLeanExpr, Lean.Name.mkNum, fromLeanName,
-        KName.toCleanId, KName.toCleanIdAux]
-  | .sort u, _ => by simp [toLeanExpr, fromLeanExpr, fromLeanLevel_toLeanLevel]
-  | .const n us, _ => by
+@[simp] theorem fromLeanExpr_toLeanExpr_all :
+    ∀ (e : KExpr), fromLeanExpr (toLeanExpr e) = some e
+  | .bvar _ => rfl
+  | .fvar _ => by
+    simp [toLeanExpr, fromLeanExpr, Lean.Name.mkNum, fromLeanName, KName.toCleanId, KName.toCleanIdAux]
+  | .mvar _ => by
+    simp [toLeanExpr, fromLeanExpr, Lean.Name.mkNum, fromLeanName, KName.toCleanId, KName.toCleanIdAux]
+  | .sort _ => by simp [toLeanExpr, fromLeanExpr, fromLeanLevel_toLeanLevel]
+  | .const _ _ => by
     unfold toLeanExpr fromLeanExpr
     rw [fromLeanName_toLeanName, mapM_fromLeanLevel_toLeanLevel]
     rfl
-  | .app f a, h => by
-    simp only [KExpr.validVarIds, Bool.and_eq_true] at h
-    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr f h.1, fromLeanExpr_toLeanExpr a h.2]
-  | .lam d b, h => by
-    simp only [KExpr.validVarIds, Bool.and_eq_true] at h
-    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr d h.1, fromLeanExpr_toLeanExpr b h.2]
-  | .forallE d b, h => by
-    simp only [KExpr.validVarIds, Bool.and_eq_true] at h
-    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr d h.1, fromLeanExpr_toLeanExpr b h.2]
-  | .letE t v b, h => by
-    simp only [KExpr.validVarIds, Bool.and_eq_true] at h
-    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr t h.1.1,
-      fromLeanExpr_toLeanExpr v h.1.2, fromLeanExpr_toLeanExpr b h.2]
-  | .lit l, _ => by simp [toLeanExpr, fromLeanExpr]
-  | .proj s i e, h => by
-    simp only [KExpr.validVarIds] at h
-    simp [toLeanExpr, fromLeanExpr, fromLeanName_toLeanName, fromLeanExpr_toLeanExpr e h]
+  | .app f a => by
+    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr_all f, fromLeanExpr_toLeanExpr_all a]
+  | .lam d b => by
+    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr_all d, fromLeanExpr_toLeanExpr_all b]
+  | .forallE d b => by
+    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr_all d, fromLeanExpr_toLeanExpr_all b]
+  | .letE t v b => by
+    simp [toLeanExpr, fromLeanExpr, fromLeanExpr_toLeanExpr_all t,
+      fromLeanExpr_toLeanExpr_all v, fromLeanExpr_toLeanExpr_all b]
+  | .lit _ => by simp [toLeanExpr, fromLeanExpr]
+  | .proj _ _ e => by
+    simp [toLeanExpr, fromLeanExpr, fromLeanName_toLeanName, fromLeanExpr_toLeanExpr_all e]
+
+abbrev fromLeanExpr_toLeanExpr := @fromLeanExpr_toLeanExpr_all
 
 /-- Lower an `Obend.Core.Term.Primitive` into `LExpr`. -/
 def primToLExpr : Primitive → LExpr
@@ -821,7 +804,7 @@ def levelSuccDepthBody : LExpr :=
 def levelSuccDepthLExpr : LExpr :=
   .recConst "levelSuccDepth" (fn .emptyRow .natural) levelSuccDepthBody
 
-/-- `LExpr` pattern matcher extracting the constructor tag code (`0..9`) of a lowered `KExpr`. -/
+/-- `LExpr` pattern matcher extracting the constructor tag code (`0..10`) of a lowered `KExpr`. -/
 def exprCtorTagLExpr : LExpr :=
   .lam .emptyRow
     (.cases .natural
@@ -834,7 +817,8 @@ def exprCtorTagLExpr : LExpr :=
       , ("forallE", ["dom", "body"], .lam .emptyRow (.lam .emptyRow (.lit 6)))
       , ("letE", ["ty", "val", "body"], .lam .emptyRow (.lam .emptyRow (.lam .emptyRow (.lit 7))))
       , ("lit", ["lit"], .lam .emptyRow (.lit 8))
-      , ("proj", ["struct", "idx", "expr"], .lam .emptyRow (.lam .natural (.lam .emptyRow (.lit 9)))) ]
+      , ("proj", ["struct", "idx", "expr"], .lam .emptyRow (.lam .natural (.lam .emptyRow (.lit 9))))
+      , ("mvar", ["id"], .lam .natural (.lit 10)) ]
       (.bvar 0))
 
 theorem isZeroLevel_runs_zero :
@@ -1039,7 +1023,8 @@ export Obend.Lower.LCNF (
   lcnfFunDeclToLExpr lowerLCNFFunDecl compileLcnfToBook compileLcnfFunDeclToBook
   sampleLcnfRecDecl sampleLcnfRecBody sampleLcnfRecDecl_runs_zero
   sampleLcnfAstMatch sampleLcnfAstMatch_runs_42
-  sampleLcnfJpCode sampleLcnfJpCode_runs_42 sampleLinearStateCode sampleDuplicatedStateTokCode
+  sampleLcnfJpCode sampleLcnfJpCode_runs_42 mkShiftedJpCode mkLinearStateWriteRead
+  sampleLinearStateCode sampleDuplicatedStateTokCode
   lcnf_zero_erasure_sound lcnf_linear_state_conserved lcnf_elab_pass_to_book_sound
 )
 

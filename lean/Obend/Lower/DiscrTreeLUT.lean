@@ -1,26 +1,26 @@
 module
 /-
-# Obend.Lower.DiscrTreeLUT — `DiscrTree` $\to$ Zone-3 eFPGA LUT Compiler & Synthesizable `ExprCAM` + `SiliconKernel` SystemVerilog
+# Obend.Lower.DiscrTreeLUT — Polish-Prefix `DiscrTree` Radix Tries, `SlotGuardReg` Gating & Multi-Rule Priority TCAM Synthesis
 
 Implements `WS 28` Stage 5 & 6 (`SILICON-ELABORATOR.md` §5.2–7):
-1. **Path-Indexed `DiscrTree` Tries (`DiscrPath`, `exprToDiscrPath`, `DiscrTreeEntry`, `DiscrTreeTrie`, `queryDiscrTrie`)**:
-   - Extracts preorder `DiscrPath := List DiscrTreeKey` keys from `KExpr` terms for both `@[simp]`
-     rewrite rules and `SynthInstance` typeclass instances.
-   - Matches candidate rules along exact key edges and wildcard `.star` edges.
-2. **Zone-3 eFPGA `AutomatonTile` LUT Pipelines
-   (`SlotGuardReg`, `compileDiscrTreeEpochToTile`, `discrTree_lut_compile_sound`)**:
-   - Each `Environment` epoch compiles into a single-cycle Zone-3 `AutomatonTile` match pipeline
-     guarded by `SlotGuardReg` (`specSlot`, `moved_pin_blocks` of `Obend.Leaf.Specialize`).
-   - Proves **`discrTree_lut_compile_sound`**: multi-key trie indexing, glitch-free `ICAP` DPR
-     reconfiguration between environment epochs, and 1-cycle `SlotGuardReg` fallback
-     (`moved_pin_blocks`) when an environment pin mutates.
-3. **Synthesizable SystemVerilog for `ExprCAM` + `SiliconKernel` + `DiscrTreeLUT`
-   (`exprCamKernelLutRtlModule`, `emitExprCamKernelLutSV`, `exprCam_siliconKernel_sv_cosim_sound`)**:
-   - Constructs a verified synchronous/combinational `RtlModule` combining 64-bit `ExprCAM` handle/word
-     matching, `looseBVar` bit-59 extraction, `SiliconKernel` declaration verification, and
-     `SlotGuardReg`-gated Zone-3 LUT evaluation.
-   - Emits synthesizable SystemVerilog-2012 via `emitModuleSV` and proves **`exprCam_siliconKernel_sv_cosim_sound`**
-     against live Lean declarations exported by `extractLeanConstInfo?` (`0 sorryAx`).
+1. **Arity-Indexed Polish-Prefix `DiscrTree` Keys & Multi-Subterm Wildcard Skipping
+   (`DiscrTreeKey`, `DiscrPath`, `exprToDiscrPath`, `skipSubterms`, `matchDiscrPath`)**:
+   - Encodes every head symbol with its exact application spine arity (`DiscrTreeKey.arity`),
+     yielding a prefix-free Polish-prefix (`Łukasiewicz`) path code (`exprToDiscrPath_prefix_free`,
+     `exprToDiscrPath_app_arity_noncollision`).
+   - Wildcard `.star` edges skip complete multi-token subterm encodings via `skipSubterms`
+     (`skipSubterms_exprToDiscrPath`).
+2. **Branched Radix `DiscrTrieNode` Completeness & Priority Ordering
+   (`DiscrTrieNode`, `insertDiscrTrieNode`, `queryDiscrTrieNode`)**:
+   - Proves universal candidate completeness (`queryDiscrTrieNode_insert_mem_of_matchDiscrPath`,
+     `queryDiscrTrieNode_insert_mem`) and insertion-order-independent priority sorting across
+     wildcard `.star` and exact compound subterm branches
+     (`queryDiscrTrieNode_star_and_exact_priority_sound`).
+3. **Zone-3 `SlotGuardReg` Epoch/Pin Gating & Multi-Rule Priority TCAM Synthesis
+   (`SlotGuardReg`, `mkSlotGuardFromTile`, `evalSlotGuardedDiscrTile`, `compileDiscrTrieToRtl`)**:
+   - Guards specialized `AutomatonTile`s with `specSlot` pin hygiene (`evalSlotGuardedDiscrTile_moved_pin_blocks`).
+   - Synthesizes verified priority-encoder TCAM `RtlModule`s (`compileDiscrTrieToRtl_dag_valid`,
+     `compileDiscrTrieToRtl_matches_first_rule`).
 -/
 public import Obend.Lower.MetaUnify
 public import Obend.Lower.Proofs.SiliconKernel
@@ -46,44 +46,248 @@ open Obend.Hardware.Compiler
 open Obend.Hardware.ReductionMachine
 set_option autoImplicit false
 
-/-! ## 1. Preorder `DiscrTree` Path Extraction & Multi-Key Trie Lookup (`DiscrPath`, `DiscrTreeTrie`) -/
+/-! ## 1. Arity-Indexed Polish-Prefix `DiscrTree` Keys & Subterm Skipping -/
 
-/-- A preorder sequence of `DiscrTreeKey` tokens indexing a deep `KExpr` pattern in a `DiscrTree`. -/
+/-- Preorder discrimination-tree key token (`Lean.Meta.DiscrTree.Key`) carrying exact subterm arity
+so that `DiscrPath` forms a self-delimiting Polish-prefix code without application prefix collisions. -/
+inductive DiscrTreeKey where
+  | const (name : KName) (arity : Nat)
+  | fvar  (id : Nat) (arity : Nat)
+  | lit   (val : KLiteral)
+  | sort
+  | arrow
+  | proj  (structName : KName) (idx : Nat) (arity : Nat)
+  | star
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Exact number of Polish-prefix child subterms immediately following a `DiscrTreeKey` token. -/
+def DiscrTreeKey.arity : DiscrTreeKey → Nat
+  | .const _ a  => a
+  | .fvar _ a   => a
+  | .lit _      => 0
+  | .sort       => 0
+  | .arrow      => 2
+  | .proj _ _ a => a + 1
+  | .star       => 0
+
+/-- Structural equality on `DiscrTreeKey`. -/
+def DiscrTreeKey.beq : DiscrTreeKey → DiscrTreeKey → Bool
+  | .const n1 a1, .const n2 a2     => KName.beq n1 n2 && (a1 == a2)
+  | .fvar i1 a1, .fvar i2 a2       => (i1 == i2) && (a1 == a2)
+  | .lit l1, .lit l2               => KLiteral.beq l1 l2
+  | .sort, .sort                   => true
+  | .arrow, .arrow                 => true
+  | .proj s1 i1 a1, .proj s2 i2 a2 => KName.beq s1 s2 && (i1 == i2) && (a1 == a2)
+  | .star, .star                   => true
+  | _, _                           => false
+
+instance : BEq DiscrTreeKey := ⟨DiscrTreeKey.beq⟩
+
+@[simp] theorem DiscrTreeKey.beq_refl (k : DiscrTreeKey) : (k == k) = true := by
+  cases k <;> simp [BEq.beq, DiscrTreeKey.beq, KName.beq_refl, KLiteral.beq_refl]
+
+theorem KName.eq_of_beq : ∀ {n1 n2 : KName}, KName.beq n1 n2 = true → n1 = n2
+  | .anonymous, .anonymous, _ => rfl
+  | .str p1 s1, .str p2 s2, h => by
+    simp only [KName.beq, Bool.and_eq_true, beq_iff_eq] at h
+    rw [h.1, KName.eq_of_beq h.2]
+  | .num p1 i1, .num p2 i2, h => by
+    simp only [KName.beq, Bool.and_eq_true, beq_iff_eq] at h
+    rw [h.1, KName.eq_of_beq h.2]
+
+theorem KLiteral.eq_of_beq : ∀ {l1 l2 : KLiteral}, KLiteral.beq l1 l2 = true → l1 = l2
+  | .natVal n1, .natVal n2, h => by
+    simp only [KLiteral.beq, beq_iff_eq] at h
+    rw [h]
+  | .strVal s1, .strVal s2, h => by
+    simp only [KLiteral.beq, beq_iff_eq] at h
+    rw [h]
+
+theorem DiscrTreeKey.eq_of_beq : ∀ {k1 k2 : DiscrTreeKey}, (k1 == k2) = true → k1 = k2
+  | .const n1 a1, .const n2 a2, h => by
+    simp only [BEq.beq, DiscrTreeKey.beq, Bool.and_eq_true, decide_eq_true_eq] at h
+    rw [KName.eq_of_beq h.1, h.2]
+  | .fvar i1 a1, .fvar i2 a2, h => by
+    simp only [BEq.beq, DiscrTreeKey.beq, Bool.and_eq_true, decide_eq_true_eq] at h
+    rw [h.1, h.2]
+  | .lit l1, .lit l2, h => by
+    simp only [BEq.beq, DiscrTreeKey.beq] at h
+    rw [KLiteral.eq_of_beq h]
+  | .sort, .sort, _ => rfl
+  | .arrow, .arrow, _ => rfl
+  | .proj s1 i1 a1, .proj s2 i2 a2, h => by
+    simp only [BEq.beq, DiscrTreeKey.beq, Bool.and_eq_true, decide_eq_true_eq] at h
+    rw [KName.eq_of_beq h.1.1, h.1.2, h.2]
+  | .star, .star, _ => rfl
+
+/-- A preorder Polish-prefix sequence of `DiscrTreeKey` tokens indexing a deep `KExpr` pattern. -/
 abbrev DiscrPath := List DiscrTreeKey
 
-/-- Extract a bounded preorder `DiscrPath` from a `KExpr` (treating metavariables, loose bound
-variables, and free variables as wildcard `.star` keys, just as in `Lean.Meta.DiscrTree`). -/
+/-- Extract a bounded Polish-prefix `DiscrPath` from a `KExpr`, encoding each spine head with its
+exact argument count (`args.length`) so nested applications of distinct arities never collide.
+Metavariables (`.mvar`), loose bound variables (`.bvar`), lambdas, dependent Pis, and `let`s
+index as wildcard `.star` tokens. -/
 def exprToDiscrPath : Nat → KExpr → DiscrPath
   | 0, _ => [.star]
   | fuel + 1, e =>
-    if (isMVarExpr? e).isSome then
+    let (hd, args) := decomposeAppSpine e
+    match hd with
+    | .const n _ =>
+      .const n args.length :: args.flatMap (exprToDiscrPath fuel)
+    | .fvar id =>
+      .fvar id args.length :: args.flatMap (exprToDiscrPath fuel)
+    | .proj s idx st =>
+      .proj s idx args.length :: (exprToDiscrPath fuel st ++ args.flatMap (exprToDiscrPath fuel))
+    | .lit l =>
+      if args.isEmpty then [.lit l] else [.star]
+    | .sort _ =>
+      if args.isEmpty then [.sort] else [.star]
+    | .forallE d b =>
+      if args.isEmpty && !KExpr.hasLooseBVar b then
+        .arrow :: (exprToDiscrPath fuel d ++ exprToDiscrPath fuel b)
+      else
+        [.star]
+    | .mvar _ | .bvar _ | .lam _ _ | .letE _ _ _ | .app _ _ =>
       [.star]
-    else
-      match e with
-      | .bvar _ | .fvar _ | .sort _ => [.star]
-      | .const n _ => [.const n]
-      | .lit l => [.lit l]
-      | .app (.const n _) a =>
-        .app n :: exprToDiscrPath fuel a
-      | .app (.app (.const n _) a1) a2 =>
-        .app n :: (exprToDiscrPath fuel a1 ++ exprToDiscrPath fuel a2)
-      | .app f a =>
-        exprToDiscrPath fuel f ++ exprToDiscrPath fuel a
-      | .lam _ _ | .forallE _ _ | .letE _ _ _ | .proj _ _ _ => [.star]
 
-/-- Check whether a rule's pattern path `patPath` matches a query path `qPath` (where `.star` in
-`patPath` matches any single key token in `qPath`). -/
+/-- Skip `n` complete Polish-prefix subterms from the front of `DiscrPath`, returning the remaining
+suffix `some rem` (or `none` if the token stream ends prematurely). -/
+def skipSubterms : Nat → DiscrPath → Option DiscrPath
+  | 0, qs => some qs
+  | _n + 1, [] => none
+  | n + 1, q :: qs => skipSubterms (q.arity + n) qs
+
+private theorem skipSubterms_flatMap_aux
+    {fuel : Nat}
+    (ih : ∀ (sub : KExpr) (m : Nat) (r : DiscrPath),
+      skipSubterms (m + 1) (exprToDiscrPath fuel sub ++ r) = skipSubterms m r) :
+    ∀ (args : List KExpr) (n : Nat) (rest : DiscrPath),
+      skipSubterms (args.length + n) (args.flatMap (exprToDiscrPath fuel) ++ rest) =
+        skipSubterms n rest
+  | [], _n, _rest => by
+    simp
+  | a :: as, n, rest => by
+    have hLen : (a :: as).length + n = (as.length + n) + 1 := by
+      simp [List.length_cons]
+      omega
+    rw [List.flatMap_cons, List.append_assoc, hLen, ih a (as.length + n),
+      skipSubterms_flatMap_aux ih as n rest]
+
+/-- **Theorem (`skipSubterms_exprToDiscrPath`)**:
+Every `exprToDiscrPath fuel e` is a self-delimiting Polish-prefix subterm: skipping `n + 1`
+subterms from `exprToDiscrPath fuel e ++ rest` consumes `exprToDiscrPath fuel e` in its entirety
+and continues skipping `n` subterms from `rest`. -/
+theorem skipSubterms_exprToDiscrPath :
+    ∀ (fuel : Nat) (e : KExpr) (n : Nat) (rest : DiscrPath),
+      skipSubterms (n + 1) (exprToDiscrPath fuel e ++ rest) = skipSubterms n rest
+  | 0, _, n, rest => by
+    simp [exprToDiscrPath, skipSubterms, DiscrTreeKey.arity]
+  | fuel + 1, e, n, rest => by
+    unfold exprToDiscrPath
+    rcases hSp : decomposeAppSpine e with ⟨hd, args⟩
+    simp only []
+    have ih := fun sub m r => skipSubterms_exprToDiscrPath fuel sub m r
+    cases hd with
+    | const nm us =>
+      simp only [List.cons_append, skipSubterms, DiscrTreeKey.arity]
+      exact skipSubterms_flatMap_aux ih args n rest
+    | fvar id =>
+      simp only [List.cons_append, skipSubterms, DiscrTreeKey.arity]
+      exact skipSubterms_flatMap_aux ih args n rest
+    | proj s idx st =>
+      simp only [List.cons_append, List.append_assoc, skipSubterms, DiscrTreeKey.arity]
+      have hArity : (args.length + 1) + n = (args.length + n) + 1 := by omega
+      rw [hArity, ih st (args.length + n), skipSubterms_flatMap_aux ih args n rest]
+    | lit l =>
+      cases hEmp : args.isEmpty <;> simp [skipSubterms, DiscrTreeKey.arity]
+    | sort u =>
+      cases hEmp : args.isEmpty <;> simp [skipSubterms, DiscrTreeKey.arity]
+    | forallE d b =>
+      dsimp only
+      cases hArr : (args.isEmpty && !KExpr.hasLooseBVar b) with
+      | false =>
+        simp [skipSubterms, DiscrTreeKey.arity]
+      | true =>
+        simp only [↓reduceIte, List.cons_append, List.append_assoc, skipSubterms, DiscrTreeKey.arity]
+        have hArity : 2 + n = (n + 1) + 1 := by omega
+        rw [hArity, ih d (n + 1), ih b n]
+    | mvar _ | bvar _ | lam _ _ | letE _ _ _ | app _ _ =>
+      simp [skipSubterms, DiscrTreeKey.arity]
+
+/-- **Theorem (`exprToDiscrPath_prefix_free`)**:
+`exprToDiscrPath fuel` is a prefix-free code: if `exprToDiscrPath fuel e1 ++ rest1 =
+exprToDiscrPath fuel e2 ++ rest2`, then the suffixes `rest1 = rest2` and the subterm paths
+`exprToDiscrPath fuel e1 = exprToDiscrPath fuel e2` agree identically. -/
+theorem exprToDiscrPath_prefix_free
+    (fuel : Nat) (e1 e2 : KExpr) (rest1 rest2 : DiscrPath)
+    (hEq : exprToDiscrPath fuel e1 ++ rest1 = exprToDiscrPath fuel e2 ++ rest2) :
+    exprToDiscrPath fuel e1 = exprToDiscrPath fuel e2 ∧ rest1 = rest2 := by
+  have hSkip := congrArg (skipSubterms 1) hEq
+  rw [skipSubterms_exprToDiscrPath fuel e1 0 rest1,
+      skipSubterms_exprToDiscrPath fuel e2 0 rest2] at hSkip
+  simp only [skipSubterms, Option.some.injEq] at hSkip
+  subst hSkip
+  exact ⟨List.append_inj_left' hEq rfl, rfl⟩
+
+/-- **Theorem (`exprToDiscrPath_app_arity_noncollision`)**:
+For any positive fuel `fuel + 1`, head symbols `h, c`, universe lists `us1, us2`, and subterms `a, b`,
+the binary application `h (c a) b` (`.const h 2 :: ...`) and unary nested application `h (c a b)`
+(`.const h 1 :: ...`) have strictly distinct `DiscrPath` encodings — both at the root and when
+embedded inside an outer context `ctx (...)`. -/
+theorem exprToDiscrPath_app_arity_noncollision
+    (fuel : Nat) (ctx h c : KName) (usCtx us1 us2 : List KLevel) (a b : KExpr) :
+    let eBinary := KExpr.app (.app (.const h us1) (.app (.const c us2) a)) b
+    let eUnary  := KExpr.app (.const h us1) (.app (.app (.const c us2) a) b)
+    exprToDiscrPath (fuel + 1) eBinary ≠ exprToDiscrPath (fuel + 1) eUnary ∧
+    exprToDiscrPath (fuel + 2) (.app (.const ctx usCtx) eBinary) ≠
+      exprToDiscrPath (fuel + 2) (.app (.const ctx usCtx) eUnary) := by
+  refine ⟨?_, ?_⟩
+  · intro hEq
+    simp [exprToDiscrPath, decomposeAppSpine] at hEq
+  · intro hEq
+    simp [exprToDiscrPath, decomposeAppSpine] at hEq
+
+/-- Check whether a rule's pattern path `patPath` matches a query path `qPath`, where `.star` in
+`patPath` matches any complete Polish-prefix subterm (`q :: qs` skipped via `skipSubterms q.arity qs`). -/
 def matchDiscrPath : DiscrPath → DiscrPath → Bool
   | [], [] => true
-  | .star :: ps, _ :: qs => matchDiscrPath ps qs
+  | .star :: ps, q :: qs =>
+    match skipSubterms q.arity qs with
+    | some qRem => matchDiscrPath ps qRem
+    | none      => false
   | p :: ps, q :: qs => (p == q) && matchDiscrPath ps qs
   | _, _ => false
 
 @[simp] theorem matchDiscrPath_refl : ∀ (p : DiscrPath), matchDiscrPath p p = true
   | [] => rfl
   | k :: ks => by
-    unfold matchDiscrPath
-    cases k <;> simp [BEq.beq, DiscrTreeKey.beq, KName.beq_refl, KLiteral.beq_refl, matchDiscrPath_refl ks]
+    cases k <;> simp [matchDiscrPath, skipSubterms, DiscrTreeKey.arity, matchDiscrPath_refl ks]
+
+theorem exprToDiscrPath_ne_nil : ∀ (fuel : Nat) (e : KExpr), exprToDiscrPath fuel e ≠ []
+  | 0, _ => by simp [exprToDiscrPath]
+  | fuel + 1, e => by
+    unfold exprToDiscrPath
+    rcases decomposeAppSpine e with ⟨hd, args⟩
+    cases hd with
+    | const _ _ | fvar _ | proj _ _ _ => simp
+    | lit _ | sort _ => cases h : args.isEmpty <;> simp [h]
+    | forallE d b => cases h : (args.isEmpty && !KExpr.hasLooseBVar b) <;> simp [h]
+    | mvar _ | bvar _ | lam _ _ | letE _ _ _ | app _ _ => simp
+
+/-- Every `exprToDiscrPath fuel e` is matched by a single `.star` wildcard token followed by any
+matching suffix (`matchDiscrPath (.star :: ps) (exprToDiscrPath fuel e ++ qs) = matchDiscrPath ps qs`). -/
+theorem matchDiscrPath_star_exprToDiscrPath
+    (fuel : Nat) (e : KExpr) (ps qs : DiscrPath) :
+    matchDiscrPath (.star :: ps) (exprToDiscrPath fuel e ++ qs) = matchDiscrPath ps qs := by
+  have hSkip := skipSubterms_exprToDiscrPath fuel e 0 qs
+  cases hPath : exprToDiscrPath fuel e with
+  | nil => exact False.elim (exprToDiscrPath_ne_nil fuel e hPath)
+  | cons q qTail =>
+    have hSkip' : skipSubterms 1 ((q :: qTail) ++ qs) = some qs := by
+      rw [← hPath]
+      simpa [skipSubterms] using hSkip
+    simp only [List.cons_append, skipSubterms, Nat.add_zero] at hSkip'
+    simp [matchDiscrPath, hSkip']
 
 /-- Kind of elaborator rule stored in a Zone-3 `DiscrTreeTrie`. -/
 inductive DiscrRuleKind where
@@ -114,39 +318,7 @@ def queryDiscrTrie (trie : DiscrTreeTrie) (depth : Nat) (target : KExpr) : List 
 def queryBestDiscrEntry? (trie : DiscrTreeTrie) (depth : Nat) (target : KExpr) : Option DiscrTreeEntry :=
   (queryDiscrTrie trie depth target).head?
 
-/-! ## 1b. True Branched Radix `DiscrTree` Trie (`DiscrTrieNode`, `insertDiscrTrieNode`, `queryDiscrTrieNode`) -/
-
-@[simp] theorem DiscrTreeKey.beq_refl (k : DiscrTreeKey) : (k == k) = true := by
-  cases k <;> simp [BEq.beq, DiscrTreeKey.beq, KName.beq_refl, KLiteral.beq_refl]
-
-theorem KName.eq_of_beq : ∀ {n1 n2 : KName}, KName.beq n1 n2 = true → n1 = n2
-  | .anonymous, .anonymous, _ => rfl
-  | .str p1 s1, .str p2 s2, h => by
-    simp only [KName.beq, Bool.and_eq_true, beq_iff_eq] at h
-    rw [h.1, KName.eq_of_beq h.2]
-  | .num p1 i1, .num p2 i2, h => by
-    simp only [KName.beq, Bool.and_eq_true, beq_iff_eq] at h
-    rw [h.1, KName.eq_of_beq h.2]
-
-theorem KLiteral.eq_of_beq : ∀ {l1 l2 : KLiteral}, KLiteral.beq l1 l2 = true → l1 = l2
-  | .natVal n1, .natVal n2, h => by
-    simp only [KLiteral.beq, beq_iff_eq] at h
-    rw [h]
-  | .strVal s1, .strVal s2, h => by
-    simp only [KLiteral.beq, beq_iff_eq] at h
-    rw [h]
-
-theorem DiscrTreeKey.eq_of_beq : ∀ {k1 k2 : DiscrTreeKey}, (k1 == k2) = true → k1 = k2
-  | .const n1, .const n2, h => by
-    simp only [BEq.beq, DiscrTreeKey.beq] at h
-    rw [KName.eq_of_beq h]
-  | .app n1, .app n2, h => by
-    simp only [BEq.beq, DiscrTreeKey.beq] at h
-    rw [KName.eq_of_beq h]
-  | .lit l1, .lit l2, h => by
-    simp only [BEq.beq, DiscrTreeKey.beq] at h
-    rw [KLiteral.eq_of_beq h]
-  | .star, .star, _ => rfl
+/-! ## 2. Branched Radix `DiscrTree` Trie (`DiscrTrieNode`, `insertDiscrTrieNode`, `queryDiscrTrieNode`) -/
 
 /-- Priority score of a `DiscrTreeEntry` for priority-sorted leaf rule lists. -/
 def DiscrTreeEntry.priority : DiscrTreeEntry → Nat
@@ -206,7 +378,7 @@ theorem mem_mergeRulesByPriority_left (ys : List DiscrTreeEntry) (x : DiscrTreeE
 /-- Inductive branched radix discrimination trie node (`Lean.Meta.DiscrTree.Trie`):
 * `leafRules`: priority-ordered candidate rules terminating at this node,
 * `children`: outgoing key edges `(edgeKey, childNode)` branching on `DiscrTreeKey` tokens
-  (including both exact `.const` / `.app` / `.lit` keys and wildcard `.star` keys). -/
+  (including both exact arity-keyed edges and wildcard `.star` subterm edges). -/
 inductive DiscrTrieNode where
   | mk (leafRules : List DiscrTreeEntry) (children : List (DiscrTreeKey × DiscrTrieNode))
   deriving Repr, Inhabited
@@ -245,62 +417,141 @@ def insertDiscrTrieNode : DiscrPath → DiscrTreeEntry → DiscrTrieNode → Dis
 def buildDiscrTrieNode (entries : List DiscrTreeEntry) : DiscrTrieNode :=
   entries.foldl (fun trie entry => insertDiscrTrieNode entry.path entry trie) .empty
 
-/-- Explore all outgoing child edges in `children` that match query key `k` either by exact key
-equality (`ek == k`) or via a `.star` wildcard branch (`ek == .star`), merging matching branch
-results in descending priority order via `mergeRulesByPriority`. -/
-def queryChildrenWith (queryK : DiscrTrieNode → List DiscrTreeEntry) (k : DiscrTreeKey) :
+/-- Explore all outgoing child edges in `children`:
+* `.star` edges consume the full Polish-prefix subterm headed by `qKey` via `queryStar`,
+* non-`.star` edges matching `qKey` (`ek == qKey`) step to the immediate tail via `queryExact`,
+merging all matching branch results in descending priority order via `mergeRulesByPriority`. -/
+def queryChildrenWith
+    (queryExact : DiscrTrieNode → List DiscrTreeEntry)
+    (queryStar  : DiscrTrieNode → List DiscrTreeEntry)
+    (qKey : DiscrTreeKey) :
     List (DiscrTreeKey × DiscrTrieNode) → List DiscrTreeEntry
   | [] => []
   | (ek, child) :: rest =>
-    if ek == k || ek == .star then
-      mergeRulesByPriority (queryK child) (queryChildrenWith queryK k rest)
+    let restRes := queryChildrenWith queryExact queryStar qKey rest
+    if ek == .star then
+      mergeRulesByPriority (queryStar child) restRes
+    else if ek == qKey then
+      mergeRulesByPriority (queryExact child) restRes
     else
-      queryChildrenWith queryK k rest
+      restRes
 
-/-- Query a branched radix `DiscrTrieNode` along `DiscrPath`, exploring both exact key edges
-(`ek == k`) and wildcard `.star` branches (`ek == .star`) at every trie level and returning
-candidates merged in descending priority order. -/
-def queryDiscrTrieNode : DiscrTrieNode → DiscrPath → List DiscrTreeEntry
-  | .mk rules _, [] => rules
-  | .mk _ children, k :: ks =>
-    queryChildrenWith (fun child => queryDiscrTrieNode child ks) k children
+mutual
+  /-- Query a branched radix `DiscrTrieNode` along a Polish-prefix `DiscrPath`, exploring both exact
+  key edges (`ek == qKey`) and multi-token subterm wildcard branches (`ek == .star` via `skipSubterms`)
+  at every trie level by structural recursion on `DiscrTrieNode`. -/
+  def queryDiscrTrieNode : DiscrTrieNode → DiscrPath → List DiscrTreeEntry
+    | .mk rules _, [] => rules
+    | .mk _ children, qKey :: qRest =>
+      queryDiscrChildren qKey qRest (skipSubterms qKey.arity qRest) children
 
-theorem mem_queryChildrenWith_modifyOrInsertChild_match
-    (queryK : DiscrTrieNode → List DiscrTreeEntry)
+  /-- Structurally recursive child-list traversal for `queryDiscrTrieNode`. -/
+  def queryDiscrChildren (qKey : DiscrTreeKey) (qRest : DiscrPath) (qRem? : Option DiscrPath) :
+      List (DiscrTreeKey × DiscrTrieNode) → List DiscrTreeEntry
+    | [] => []
+    | (ek, child) :: rest =>
+      let restRes := queryDiscrChildren qKey qRest qRem? rest
+      if ek == .star then
+        match qRem? with
+        | some qRem => mergeRulesByPriority (queryDiscrTrieNode child qRem) restRes
+        | none      => mergeRulesByPriority [] restRes
+      else if ek == qKey then
+        mergeRulesByPriority (queryDiscrTrieNode child qRest) restRes
+      else
+        restRes
+end
+
+theorem queryDiscrChildren_eq_queryChildrenWith
+    (qKey : DiscrTreeKey) (qRest : DiscrPath) (qRem? : Option DiscrPath) :
+    ∀ (children : List (DiscrTreeKey × DiscrTrieNode)),
+      queryDiscrChildren qKey qRest qRem? children =
+        queryChildrenWith
+          (fun child => queryDiscrTrieNode child qRest)
+          (match qRem? with
+           | some qRem => fun child => queryDiscrTrieNode child qRem
+           | none      => fun _ => [])
+          qKey children
+  | [] => rfl
+  | (ek, child) :: rest => by
+    simp only [queryDiscrChildren, queryChildrenWith,
+      queryDiscrChildren_eq_queryChildrenWith qKey qRest qRem? rest]
+    cases qRem? <;> rfl
+
+theorem mem_queryChildrenWith_modifyOrInsertChild_star
+    (queryExact queryStar : DiscrTrieNode → List DiscrTreeEntry)
+    (upd : DiscrTrieNode → DiscrTrieNode)
+    (qKey : DiscrTreeKey)
+    (entry : DiscrTreeEntry)
+    (hUpd : ∀ n : DiscrTrieNode, entry ∈ queryStar (upd n)) :
+    ∀ (children : List (DiscrTreeKey × DiscrTrieNode)),
+      entry ∈ queryChildrenWith queryExact queryStar qKey (modifyOrInsertChild .star upd children)
+  | [] => by
+    simp [modifyOrInsertChild, queryChildrenWith]
+    exact mem_mergeRulesByPriority_left [] entry (queryStar (upd .empty)) (hUpd .empty)
+  | (ek, child) :: rest => by
+    simp only [modifyOrInsertChild]
+    cases hek : ek == .star
+    · simp only [Bool.false_eq_true, ↓reduceIte, queryChildrenWith, hek]
+      split
+      · exact mem_mergeRulesByPriority_right
+          (queryChildrenWith queryExact queryStar qKey (modifyOrInsertChild .star upd rest))
+          entry
+          (mem_queryChildrenWith_modifyOrInsertChild_star queryExact queryStar upd qKey entry hUpd rest)
+          (queryExact child)
+      · exact mem_queryChildrenWith_modifyOrInsertChild_star queryExact queryStar upd qKey entry hUpd rest
+    · have hekEq : ek = .star := DiscrTreeKey.eq_of_beq hek
+      subst hekEq
+      simp only [↓reduceIte, queryChildrenWith, DiscrTreeKey.beq_refl]
+      exact mem_mergeRulesByPriority_left
+        (queryChildrenWith queryExact queryStar qKey rest)
+        entry
+        (queryStar (upd child))
+        (hUpd child)
+
+theorem mem_queryChildrenWith_modifyOrInsertChild_exact
+    (queryExact queryStar : DiscrTrieNode → List DiscrTreeEntry)
     (upd : DiscrTrieNode → DiscrTrieNode)
     (patKey qKey : DiscrTreeKey)
     (entry : DiscrTreeEntry)
-    (hKeyMatch : (patKey == qKey || patKey == .star) = true)
-    (hUpd : ∀ n : DiscrTrieNode, entry ∈ queryK (upd n)) :
+    (hNotStar : (patKey == .star) = false)
+    (hKeyEq : (patKey == qKey) = true)
+    (hUpd : ∀ n : DiscrTrieNode, entry ∈ queryExact (upd n)) :
     ∀ (children : List (DiscrTreeKey × DiscrTrieNode)),
-      entry ∈ queryChildrenWith queryK qKey (modifyOrInsertChild patKey upd children)
+      entry ∈ queryChildrenWith queryExact queryStar qKey (modifyOrInsertChild patKey upd children)
   | [] => by
-    simp [modifyOrInsertChild, queryChildrenWith, hKeyMatch]
-    exact mem_mergeRulesByPriority_left [] entry (queryK (upd .empty)) (hUpd .empty)
+    simp [modifyOrInsertChild, queryChildrenWith, hNotStar, hKeyEq]
+    exact mem_mergeRulesByPriority_left [] entry (queryExact (upd .empty)) (hUpd .empty)
   | (ek, child) :: rest => by
     simp only [modifyOrInsertChild]
     cases hek : ek == patKey
     · simp only [Bool.false_eq_true, ↓reduceIte, queryChildrenWith]
       split
       · exact mem_mergeRulesByPriority_right
-          (queryChildrenWith queryK qKey (modifyOrInsertChild patKey upd rest))
+          (queryChildrenWith queryExact queryStar qKey (modifyOrInsertChild patKey upd rest))
           entry
-          (mem_queryChildrenWith_modifyOrInsertChild_match queryK upd patKey qKey entry hKeyMatch hUpd rest)
-          (queryK child)
-      · exact mem_queryChildrenWith_modifyOrInsertChild_match queryK upd patKey qKey entry hKeyMatch hUpd rest
+          (mem_queryChildrenWith_modifyOrInsertChild_exact queryExact queryStar upd patKey qKey entry hNotStar hKeyEq hUpd rest)
+          (queryStar child)
+      · split
+        · exact mem_mergeRulesByPriority_right
+            (queryChildrenWith queryExact queryStar qKey (modifyOrInsertChild patKey upd rest))
+            entry
+            (mem_queryChildrenWith_modifyOrInsertChild_exact queryExact queryStar upd patKey qKey entry hNotStar hKeyEq hUpd rest)
+            (queryExact child)
+        · exact mem_queryChildrenWith_modifyOrInsertChild_exact queryExact queryStar upd patKey qKey entry hNotStar hKeyEq hUpd rest
     · have hekEq : ek = patKey := DiscrTreeKey.eq_of_beq hek
       subst hekEq
-      simp only [↓reduceIte, queryChildrenWith, hKeyMatch]
+      simp only [↓reduceIte, queryChildrenWith, hNotStar, Bool.false_eq_true, hKeyEq]
       exact mem_mergeRulesByPriority_left
-        (queryChildrenWith queryK qKey rest)
+        (queryChildrenWith queryExact queryStar qKey rest)
         entry
-        (queryK (upd child))
+        (queryExact (upd child))
         (hUpd child)
 
 /-- **Theorem (`queryDiscrTrieNode_insert_mem_of_matchDiscrPath`)**:
 Whenever a rule pattern path `patPath` matches a query path `qPath` (`matchDiscrPath patPath qPath = true`,
-supporting both `.star` wildcard tokens in `patPath` and exact key equality), inserting `(patPath, entry)`
-into `node` guarantees `entry ∈ queryDiscrTrieNode (insertDiscrTrieNode patPath entry node) qPath`. -/
+supporting both multi-token `.star` subterm skipping via `skipSubterms` and exact key equality),
+inserting `(patPath, entry)` into `node` guarantees
+`entry ∈ queryDiscrTrieNode (insertDiscrTrieNode patPath entry node) qPath`. -/
 theorem queryDiscrTrieNode_insert_mem_of_matchDiscrPath :
     ∀ (patPath qPath : DiscrPath) (entry : DiscrTreeEntry) (node : DiscrTrieNode),
       matchDiscrPath patPath qPath = true →
@@ -312,52 +563,174 @@ theorem queryDiscrTrieNode_insert_mem_of_matchDiscrPath :
     simp [matchDiscrPath] at hMatch
   | patKey :: _, [], _, _, hMatch => by
     cases patKey <;> simp [matchDiscrPath] at hMatch
+  | .star :: patRest, qKey :: qRest, entry, .mk rules children, hMatch => by
+    simp only [matchDiscrPath] at hMatch
+    cases hSkip : skipSubterms qKey.arity qRest with
+    | none =>
+      rw [hSkip] at hMatch
+      cases hMatch
+    | some qRem =>
+      rw [hSkip] at hMatch
+      simp only [insertDiscrTrieNode, queryDiscrTrieNode, queryDiscrChildren_eq_queryChildrenWith, hSkip]
+      exact mem_queryChildrenWith_modifyOrInsertChild_star
+        (fun child => queryDiscrTrieNode child qRest)
+        (fun child => queryDiscrTrieNode child qRem)
+        (insertDiscrTrieNode patRest entry)
+        qKey
+        entry
+        (fun n => queryDiscrTrieNode_insert_mem_of_matchDiscrPath patRest qRem entry n hMatch)
+        children
   | patKey :: patRest, qKey :: qRest, entry, .mk rules children, hMatch => by
-    simp only [insertDiscrTrieNode, queryDiscrTrieNode]
-    have hStep : (patKey == qKey || patKey == .star) = true ∧ matchDiscrPath patRest qRest = true := by
-      cases patKey <;> simp [matchDiscrPath, BEq.beq, DiscrTreeKey.beq] at hMatch ⊢ <;> exact hMatch
-    exact mem_queryChildrenWith_modifyOrInsertChild_match
-      (fun child => queryDiscrTrieNode child qRest)
-      (insertDiscrTrieNode patRest entry)
-      patKey
-      qKey
-      entry
-      hStep.1
-      (fun n => queryDiscrTrieNode_insert_mem_of_matchDiscrPath patRest qRest entry n hStep.2)
-      children
+    cases hStar : patKey == .star with
+    | true =>
+      have hEqStar : patKey = .star := DiscrTreeKey.eq_of_beq hStar
+      subst hEqStar
+      simp only [matchDiscrPath] at hMatch
+      cases hSkip : skipSubterms qKey.arity qRest with
+      | none =>
+        rw [hSkip] at hMatch
+        cases hMatch
+      | some qRem =>
+        rw [hSkip] at hMatch
+        simp only [insertDiscrTrieNode, queryDiscrTrieNode, queryDiscrChildren_eq_queryChildrenWith, hSkip]
+        exact mem_queryChildrenWith_modifyOrInsertChild_star
+          (fun child => queryDiscrTrieNode child qRest)
+          (fun child => queryDiscrTrieNode child qRem)
+          (insertDiscrTrieNode patRest entry)
+          qKey
+          entry
+          (fun n => queryDiscrTrieNode_insert_mem_of_matchDiscrPath patRest qRem entry n hMatch)
+          children
+    | false =>
+      have hStep : (patKey == qKey) = true ∧ matchDiscrPath patRest qRest = true := by
+        cases patKey <;> simp [BEq.beq, DiscrTreeKey.beq] at hStar <;>
+          simp [matchDiscrPath, BEq.beq, DiscrTreeKey.beq] at hMatch ⊢ <;> exact hMatch
+      simp only [insertDiscrTrieNode, queryDiscrTrieNode, queryDiscrChildren_eq_queryChildrenWith]
+      cases hSkip : skipSubterms qKey.arity qRest with
+      | some qRem =>
+        exact mem_queryChildrenWith_modifyOrInsertChild_exact
+          (fun child => queryDiscrTrieNode child qRest)
+          (fun child => queryDiscrTrieNode child qRem)
+          (insertDiscrTrieNode patRest entry)
+          patKey qKey entry hStar hStep.1
+          (fun n => queryDiscrTrieNode_insert_mem_of_matchDiscrPath patRest qRest entry n hStep.2)
+          children
+      | none =>
+        exact mem_queryChildrenWith_modifyOrInsertChild_exact
+          (fun child => queryDiscrTrieNode child qRest)
+          (fun _ => [])
+          (insertDiscrTrieNode patRest entry)
+          patKey qKey entry hStar hStep.1
+          (fun n => queryDiscrTrieNode_insert_mem_of_matchDiscrPath patRest qRest entry n hStep.2)
+          children
 
 /-- **Theorem (`queryDiscrTrieNode_insert_mem`)**:
 Inserting `(path, entry)` into any branched radix trie node `node` guarantees that querying the
-updated trie along `path` returns `entry` (`entry ∈ queryDiscrTrieNode (insertDiscrTrieNode path entry node) path`). -/
+updated trie along `path` returns `entry`. -/
 theorem queryDiscrTrieNode_insert_mem
     (path : DiscrPath) (entry : DiscrTreeEntry) (node : DiscrTrieNode) :
     entry ∈ queryDiscrTrieNode (insertDiscrTrieNode path entry node) path :=
   queryDiscrTrieNode_insert_mem_of_matchDiscrPath path path entry node (matchDiscrPath_refl path)
 
-/-- **Theorem (`queryDiscrTrieNode_star_and_exact_priority_sound`)**:
-When both a lower-priority wildcard `.star` rule (`lutTag = 101`, `priority = 4`) and a higher-priority
-exact-key rule (`lutTag = 303`, `priority = 50`) match the same query path `[.app "scaleAdd", .lit 10]`,
-`queryDiscrTrieNode` returns `[303, 101]` (highest priority first) regardless of whether the `.star`
-rule was inserted before or after the exact-key rule. -/
-theorem queryDiscrTrieNode_star_and_exact_priority_sound :
-    let rWild : DiscrTreeEntry :=
-      { ruleName := KName.mkSimple "simp_scale_wild"
-      , path     := [.app (KName.mkSimple "scaleAdd"), .star]
-      , lutTag   := 101
-      , kind     := .simpLemma (.lit (.natVal 42)) 4 2 }
-    let rExact : DiscrTreeEntry :=
-      { ruleName := KName.mkSimple "simp_scale_exact10"
-      , path     := [.app (KName.mkSimple "scaleAdd"), .lit (.natVal 10)]
-      , lutTag   := 303
-      , kind     := .simpLemma (.lit (.natVal 500)) 50 0 }
-    let qPath : DiscrPath := [.app (KName.mkSimple "scaleAdd"), .lit (.natVal 10)]
-    let trieWildFirst := buildDiscrTrieNode [rWild, rExact]
-    let trieExactFirst := buildDiscrTrieNode [rExact, rWild]
-    (queryDiscrTrieNode trieWildFirst qPath).map (·.lutTag) = [303, 101] ∧
-    (queryDiscrTrieNode trieExactFirst qPath).map (·.lutTag) = [303, 101] :=
-  ⟨rfl, rfl⟩
+theorem queryDiscrTrieNode_singleton :
+    ∀ (path : DiscrPath) (entry : DiscrTreeEntry),
+      queryDiscrTrieNode (insertDiscrTrieNode path entry .empty) path = [entry]
+  | [], entry => by
+    simp [DiscrTrieNode.empty, insertDiscrTrieNode, queryDiscrTrieNode, insertRuleByPriority]
+  | k :: ks, entry => by
+    have hIH : queryDiscrTrieNode (insertDiscrTrieNode ks entry (.mk [] [])) ks = [entry] :=
+      queryDiscrTrieNode_singleton ks entry
+    simp only [DiscrTrieNode.empty, insertDiscrTrieNode, modifyOrInsertChild, queryDiscrTrieNode,
+      queryDiscrChildren_eq_queryChildrenWith]
+    cases hStar : k == .star with
+    | true =>
+      have hk : k = .star := DiscrTreeKey.eq_of_beq hStar
+      subst hk
+      simp [DiscrTreeKey.arity, skipSubterms, queryChildrenWith, mergeRulesByPriority,
+        insertRuleByPriority, hIH]
+    | false =>
+      have hRefl : (k == k) = true := DiscrTreeKey.beq_refl k
+      cases skipSubterms k.arity ks <;>
+        simp [queryChildrenWith, hStar, hRefl, mergeRulesByPriority, insertRuleByPriority, hIH]
 
-/-! ## 2. `DiscrTree` Epochs to Zone-3 `AutomatonTile` LUTs -/
+private theorem exprToDiscrPath_star_head_nil :
+    ∀ (fuel : Nat) (e : KExpr) (qs : DiscrPath),
+      exprToDiscrPath fuel e = .star :: qs → qs = []
+  | 0, _, qs, h => by
+    simp [exprToDiscrPath] at h
+    exact h
+  | fuel + 1, e, qs, h => by
+    unfold exprToDiscrPath at h
+    rcases hSp : decomposeAppSpine e with ⟨hd, args⟩
+    rw [hSp] at h
+    cases hd with
+    | const _ _ | fvar _ | proj _ _ _ => simp at h
+    | lit _ | sort _ =>
+      cases hEmp : args.isEmpty <;> simp [hEmp] at h
+      exact h
+    | forallE d b =>
+      cases hArr : (args.isEmpty && !KExpr.hasLooseBVar b) <;> simp [hArr] at h
+      exact h
+    | mvar _ | bvar _ | lam _ _ | letE _ _ _ | app _ _ =>
+      simp at h
+      exact h
+
+/-- **Theorem (`queryDiscrTrieNode_star_and_exact_priority_sound`)**:
+For *any* head symbol `fn`, fuel `fuel`, arbitrary (possibly deeply nested) argument `arg : KExpr`,
+wildcard rule `rWild` indexed at `[.const fn 1, .star]`, and exact rule `rExact` indexed at
+`exprToDiscrPath (fuel + 1) (.app (.const fn []) arg)` with `rExact.priority > rWild.priority`,
+querying `buildDiscrTrieNode` on `exprToDiscrPath (fuel + 1) (.app (.const fn []) arg)` returns
+`[rExact, rWild]` (highest priority first) regardless of insertion order. -/
+theorem queryDiscrTrieNode_star_and_exact_priority_sound
+    (fn : KName) (fuel : Nat) (arg : KExpr)
+    (rWild rExact : DiscrTreeEntry)
+    (hWildPath : rWild.path = [.const fn 1, .star])
+    (hExactPath : rExact.path = exprToDiscrPath (fuel + 1) (.app (.const fn []) arg))
+    (hPrio : rExact.priority > rWild.priority) :
+    let qPath := exprToDiscrPath (fuel + 1) (.app (.const fn []) arg)
+    queryDiscrTrieNode (buildDiscrTrieNode [rWild, rExact]) qPath = [rExact, rWild] ∧
+    queryDiscrTrieNode (buildDiscrTrieNode [rExact, rWild]) qPath = [rExact, rWild] := by
+  have hQPath : exprToDiscrPath (fuel + 1) (.app (.const fn []) arg) =
+      .const fn 1 :: exprToDiscrPath fuel arg := by
+    simp [exprToDiscrPath, decomposeAppSpine]
+  have hConstNotStar : (DiscrTreeKey.const fn 1 == .star) = false := rfl
+  have hConstRefl : (DiscrTreeKey.const fn 1 == .const fn 1) = true :=
+    DiscrTreeKey.beq_refl (.const fn 1)
+  have hLeExact : rWild.priority ≤ rExact.priority := by omega
+  have hNotLeWild : ¬ (rExact.priority ≤ rWild.priority) := by omega
+  have hSkipSub := skipSubterms_exprToDiscrPath fuel arg 0 []
+  cases hSub : exprToDiscrPath fuel arg with
+  | nil => exact False.elim (exprToDiscrPath_ne_nil fuel arg hSub)
+  | cons qKey qRest =>
+    have hSkip' : skipSubterms qKey.arity qRest = some [] := by
+      have htmp : skipSubterms 1 ((qKey :: qRest) ++ []) = some [] := by
+        rw [← hSub]
+        simpa [skipSubterms] using hSkipSub
+      simpa [skipSubterms] using htmp
+    cases hStar : qKey == .star with
+    | true =>
+      have hqEq : qKey = .star := DiscrTreeKey.eq_of_beq hStar
+      subst hqEq
+      have hNil : qRest = [] := exprToDiscrPath_star_head_nil fuel arg qRest hSub
+      subst hNil
+      simp [buildDiscrTrieNode, hWildPath, hExactPath, hQPath, hSub, DiscrTrieNode.empty,
+        insertDiscrTrieNode, modifyOrInsertChild, queryDiscrTrieNode, queryDiscrChildren,
+        hConstNotStar, hConstRefl,
+        DiscrTreeKey.arity, skipSubterms, insertRuleByPriority, mergeRulesByPriority,
+        hLeExact, hNotLeWild]
+    | false =>
+      have hStarSym : (.star == qKey) = false := by
+        cases qKey <;> simp [BEq.beq, DiscrTreeKey.beq] at hStar ⊢
+      have hQRefl : (qKey == qKey) = true := DiscrTreeKey.beq_refl qKey
+      have hSing : queryDiscrTrieNode (insertDiscrTrieNode qRest rExact (.mk [] [])) qRest = [rExact] :=
+        queryDiscrTrieNode_singleton qRest rExact
+      simp [buildDiscrTrieNode, hWildPath, hExactPath, hQPath, hSub, DiscrTrieNode.empty,
+        insertDiscrTrieNode, modifyOrInsertChild, queryDiscrTrieNode, queryDiscrChildren,
+        hConstNotStar, hConstRefl,
+        hSkip', hStar, hStarSym, hQRefl, hSing, insertRuleByPriority, mergeRulesByPriority,
+        hLeExact, hNotLeWild]
+
+/-! ## 3. Zone-3 `SlotGuardReg` Epoch & `LeafPin` Gating -/
 
 /-- Hardware `SlotGuardReg` (`SILICON-ELABORATOR.md` §5.3) binding a Zone-3 `AutomatonTile` to a
 pinned `Environment` epoch and `LeafPin` support list. -/
@@ -369,36 +742,26 @@ structure SlotGuardReg where
   specializedTile : AutomatonTile
   fallbackTile    : AutomatonTile
 
-/-- Compile a `DiscrTree` epoch's linear/affine rewrite action `(gain, offset)` into a `LiteMethodBody`
-(`λ x => gain * x + offset`) for single-cycle Zone-3 `AutomatonTile` LUT synthesis. -/
-def discrTreeEpochLutBody (gain offset : Nat) : LExpr :=
-  .natBin .add
-    (.natBin .mul (.bvar 0) (.lit gain))
-    (.lit offset)
-
-/-- Synthesize a Zone-3 `AutomatonTile` for a `DiscrTree` epoch `(epochName, gain, offset)`. -/
-def compileDiscrTreeEpochToTile (epochName : String) (gain offset : Nat) : AutomatonTile :=
-  (compileLiteMethodToTile epochName (discrTreeEpochLutBody gain offset)).getD incAutomatonTile
-
-/-- Construct a `SlotGuardReg` for a `DiscrTree` epoch `(slotName, epoch, gain, offset)`:
-binds the `Candidate.book` of `leanComposition slotName specTerm`
-and pairs the specialized Zone-3 LUT tile with the resident fallback tile (`kernelGateTile`). -/
-def mkDiscrTreeSlotGuard (slotName : String) (epoch gain offset : Nat) : SlotGuardReg :=
-  let specTerm := .lam (lowerLiteScalar (discrTreeEpochLutBody gain offset))
+/-- Construct a `SlotGuardReg` binding a specialized Zone-3 `AutomatonTile` and resident fallback
+`AutomatonTile` to `leanComposition slotName specTerm` at `epoch`. -/
+def mkSlotGuardFromTile
+    (slotName : String)
+    (epoch : Nat)
+    (specTerm : Term)
+    (specializedTile fallbackTile : AutomatonTile) : SlotGuardReg :=
   let comp := leanComposition slotName specTerm
   let cand : Candidate := .book slotName comp
-  let tile := compileDiscrTreeEpochToTile slotName gain offset
   { slotName        := slotName
   , pinnedEpoch     := epoch
   , composition     := comp
   , candidate       := cand
-  , specializedTile := tile
-  , fallbackTile    := kernelGateTile }
+  , specializedTile := specializedTile
+  , fallbackTile    := fallbackTile }
 
-/-- Evaluate a `ReductionPacket` through a `SlotGuardReg`-protected Zone-3 tile:
+/-- Evaluate a packet through a `SlotGuardReg`-protected Zone-3 tile:
 if the live `LeafView` satisfies all pinned `Supports` (`specSlot.usable (holdsAt view) guard.candidate`)
-and `pktEpoch == guard.pinnedEpoch`, executes the single-cycle specialized Zone-3 LUT tile;
-otherwise (`moved_pin_blocks`), routes in 1 cycle to the resident fallback tile! -/
+and `pktEpoch == guard.pinnedEpoch`, executes the single-cycle specialized Zone-3 tile;
+otherwise (`moved_pin_blocks`), routes in 1 cycle to `guard.fallbackTile`. -/
 def evalSlotGuardedDiscrTile
     (guard : SlotGuardReg)
     (view : LeafView)
@@ -412,236 +775,49 @@ def evalSlotGuardedDiscrTile
     , isolated := false, skidHeldOutput := 0#64 }
   (pinOk, evalReconfigTile rstate (fun _ => 0#64) (fun _ => 0#64) argVal)
 
-/-- Sample Epoch-1 `DiscrTreeTrie` containing:
-1. `@[simp]` lemma `simp_scale_4_plus_2 : scaleAdd x ↦ 4 * x + 2` indexed at `[.app "scaleAdd", .star]`,
-2. Typeclass instance `instAddNat : Add Nat` indexed at `[.app "Add", .const "Nat"]`. -/
-def sampleEpoch1DiscrTrie : DiscrTreeTrie where
-  epoch := 1
-  entries :=
-    [ { ruleName := KName.mkSimple "simp_scale_4_plus_2"
-      , path     := [.app (KName.mkSimple "scaleAdd"), .star]
-      , lutTag   := 101
-      , kind     := .simpLemma (.lit (.natVal 42)) 4 2 }
-    , { ruleName := KName.mkSimple "instAddNat"
-      , path     := [.app (KName.mkSimple "Add"), .const (KName.mkSimple "Nat")]
-      , lutTag   := 202
-      , kind     := .synthInstance (KName.mkSimple "Add") (.const (KName.mkSimple "instAddNat") []) 100 } ]
+/-- **Theorem (`evalSlotGuardedDiscrTile_moved_pin_blocks`)**:
+Whenever any pinned `LeafPin` `p ∈ guard.candidate.supports` mutates in `view`
+(`holdsAt view p = false`), `specSlot.usable (holdsAt view) guard.candidate = false` and
+`evalSlotGuardedDiscrTile` immediately rejects the specialized fast path (`(evalSlotGuardedDiscrTile ...).1 = false`)
+and evaluates `guard.fallbackTile` in 1 cycle. -/
+theorem evalSlotGuardedDiscrTile_moved_pin_blocks
+    (guard : SlotGuardReg) (view : LeafView) (p : LeafPin)
+    (pktEpoch : Nat) (argVal : BitVec 64)
+    (hp : p ∈ guard.candidate.supports)
+    (hDead : holdsAt view p = false) :
+    specSlot.usable (holdsAt view) guard.candidate = false ∧
+    (evalSlotGuardedDiscrTile guard view pktEpoch argVal).1 = false := by
+  have hMemDead : p ∈ specSlot.dead (holdsAt view) guard.candidate :=
+    (mem_dead_iff _ _ _ _).2 ⟨hp, hDead⟩
+  have hUsableFalse : specSlot.usable (holdsAt view) guard.candidate = false := by
+    unfold Slot.usable
+    cases hd : specSlot.dead (holdsAt view) guard.candidate with
+    | nil => rw [hd] at hMemDead; cases hMemDead
+    | cons _ _ => simp [List.isEmpty]
+  refine ⟨hUsableFalse, ?_⟩
+  simp [evalSlotGuardedDiscrTile, hUsableFalse]
 
-/-- Sample Epoch-1 `SlotGuardReg` (`pinnedEpoch = 1`, `gain = 4`, `offset = 2`). -/
-def sampleEpoch1Guard : SlotGuardReg :=
-  mkDiscrTreeSlotGuard "discrEpoch" 1 4 2
+/-! ## 4. Multi-Rule Priority TCAM Synthesis (`compileDiscrTrieToRtl`) -/
 
-/-- Sample Epoch-2 `SlotGuardReg` (`pinnedEpoch = 2`, `gain = 6`, `offset = 10`). -/
-def sampleEpoch2Guard : SlotGuardReg :=
-  mkDiscrTreeSlotGuard "discrEpoch" 2 6 10
-
-/-- Pinned `LeafView` at Epoch 1 supporting `sampleEpoch1Guard.composition`. -/
-def epoch1LeafView : LeafView :=
-  viewOf 1 "discrEpoch" sampleEpoch1Guard.composition
-
-/-- Mutated `LeafView` at Epoch 2 supporting `sampleEpoch2Guard.composition`. -/
-def epoch2LeafView : LeafView :=
-  viewOf 2 "discrEpoch" sampleEpoch2Guard.composition
-
-/-- **Theorem (`discrTree_lut_compile_sound`)**:
-1. **Wildcard & Exact Preorder `DiscrTree` Trie Indexing**:
-   - Querying `sampleEpoch1DiscrTrie` on `scaleAdd 10` matches `[.app "scaleAdd", .star]` and returns
-     `simp_scale_4_plus_2` (`lutTag = 101`),
-   - Querying `sampleEpoch1DiscrTrie` on `Add Nat` matches `[.app "Add", .const "Nat"]` and returns
-     `instAddNat` (`lutTag = 202`),
-   - Querying `sampleEpoch1DiscrTrie` on `Add Bool` returns `none` (negative pole).
-2. **Zone-3 LUT execution**:
-   - At `epoch1LeafView`, `evalSlotGuardedDiscrTile sampleEpoch1Guard` selects the specialized Zone-3
-     `AutomatonTile` (`true`) and computes `4 * 10 + 2 = 42#64` in 1 hardware cycle.
-3. **Glitch-Free `ICAP` DPR Epoch Upgrade & 1-Cycle `moved_pin_blocks` Fallback**:
-   - When the environment advances to `epoch2LeafView` (`discrEpoch = 2`), `moved_pin_blocks`
-     immediately invalidates `sampleEpoch1Guard.candidate` (`specSlot.usable = false`), and
-     `evalSlotGuardedDiscrTile` falls back in 1 cycle (`false`),
-   - Hot-swapping `sampleEpoch2Guard.specializedTile` into tile `0` via `runTileGlitchFreeDpr`
-     preserves neighbor tile `1` and executes the new Epoch-2 LUT rule (`6 * 10 + 10 = 70#64`). -/
--- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean, a proof in this file
-theorem discrTree_lut_compile_sound :
-    let qSimp := KExpr.app (.const (KName.mkSimple "scaleAdd") []) (.lit (.natVal 10))
-    let qAddNat := KExpr.app (.const (KName.mkSimple "Add") []) kNatConst
-    let qAddBool := KExpr.app (.const (KName.mkSimple "Add") []) kBoolConst
-    let initTile0 : ReconfigTileState :=
-      { tileId := 0, tileX := 0, tileY := 0
-      , activeTile := sampleEpoch1Guard.specializedTile, frameDigest := 0x4002#64
-      , isolated := false, skidHeldOutput := 42#64 }
-    let residentTile1 : ReconfigTileState :=
-      { tileId := 1, tileX := 1, tileY := 0
-      , activeTile := kernelGateTile, frameDigest := 0xCAFE#64
-      , isolated := false, skidHeldOutput := 1#64 }
-    let icapFrame2 : IcapBitstreamFrame :=
-      { targetTileId := 0
-      , newTile := sampleEpoch2Guard.specializedTile
-      , expectedDigest := 0x600A#64
-      , computedDigest := 0x600A#64 }
-    let afterTile0 := runTileGlitchFreeDpr icapFrame2 initTile0
-    let afterTile1 := runTileGlitchFreeDpr icapFrame2 residentTile1
-    -- 1. Preorder DiscrTree trie positive & negative poles
-    (queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qSimp).map (·.lutTag) = some 101 ∧
-    (queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qAddNat).map (·.lutTag) = some 202 ∧
-    queryBestDiscrEntry? sampleEpoch1DiscrTrie 4 qAddBool = none ∧
-    -- 2. Zone-3 single-cycle LUT execution
-    evalSlotGuardedDiscrTile sampleEpoch1Guard epoch1LeafView 1 10#64 = (true, 42#64) ∧
-    -- 3. moved_pin_blocks 1-cycle invalidation on epoch mutation + ICAP DPR upgrade to Epoch 2
-    specSlot.usable (holdsAt epoch2LeafView) sampleEpoch1Guard.candidate = false ∧
-    (evalSlotGuardedDiscrTile sampleEpoch1Guard epoch2LeafView 2 10#64).1 = false ∧
-    evalSlotGuardedDiscrTile sampleEpoch2Guard epoch2LeafView 2 10#64 = (true, 70#64) ∧
-    afterTile0.isolated = false ∧
-    evalReconfigTile afterTile0 (fun _ => 0#64) (fun _ => 0#64) 10#64 = 70#64 ∧
-    afterTile1 = residentTile1 := by
-  exact ⟨rfl, rfl, rfl, by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel, rfl, rfl, rfl⟩
-
-/-! ## 3. Synthesizable SystemVerilog Co-Simulation Module for `ExprCAM` + `SiliconKernel` + `DiscrTreeLUT` -/
-
-/-- Unified hardware co-simulation `RtlModule` (`exprCamKernelLutRtlModule`) combining:
-* Inputs:
-  - `in_0` (`cam_word_a`): 64-bit packed `ExprCAM` node word A (`[63:60] tag | [59] looseBVar | [58] hasFVar | [57:32] hash | [31:16] left | [15:0] right`),
-  - `in_1` (`cam_word_b`): 64-bit packed `ExprCAM` node word B,
-  - `in_2` (`decl_status_tag`): `SiliconKernel` declaration status tag (`1` = kernel-verified clean declaration, `0` = `sorryAx`, `2` = type/defEq mismatch, `3` = universe error),
-  - `in_3` (`pkt_epoch`): incoming packet `Environment` epoch tag,
-  - `in_4` (`pinned_epoch`): `SlotGuardReg` pinned `Environment` epoch tag,
-  - `in_5` (`lut_arg`): 64-bit input operand for the Zone-3 `DiscrTree` LUT pipeline (`4 * x + 2`).
-* Outputs:
-  - `out_cam_eq`: `1#64` iff `cam_word_a == cam_word_b` (1-cycle 64-bit `ExprCAM` structural match),
-  - `out_loose_bvar_a`: bit 59 (`looseBVar` hardware flag) extracted from `cam_word_a`,
-  - `out_kernel_accept`: `1#64` iff `decl_status_tag == 1` (`SiliconKernel` acceptance verdict),
-  - `out_epoch_guard_ok`: `1#64` iff `pkt_epoch == pinned_epoch` (`SlotGuardReg` hit),
-  - `out_lut_result`: if `out_epoch_guard_ok == 1`, outputs specialized Zone-3 LUT result `4 * lut_arg + 2`,
-    else outputs `out_kernel_accept` (1-cycle fallback to resident `.machine` kernel gate). -/
-def exprCamKernelLutRtlModule : RtlModule where
-  name := "obend_exprcam_silicon_kernel_lut"
-  inputNames :=
-    [ "cam_word_a"
-    , "cam_word_b"
-    , "decl_status_tag"
-    , "pkt_epoch"
-    , "pinned_epoch"
-    , "lut_arg" ]
-  wires :=
-    [ { wireIdx := 0
-      , name    := "w_cam_eq"
-      , expr    := .alu .eq (.inputPort 0) (.inputPort 1) }
-    , { wireIdx := 1
-      , name    := "w_loose_bvar_a"
-      , expr    := .alu .bitAnd (.alu .lshr (.inputPort 0) (.const 59#64)) (.const 1#64) }
-    , { wireIdx := 2
-      , name    := "w_kernel_accept"
-      , expr    := .alu .eq (.inputPort 2) (.const 1#64) }
-    , { wireIdx := 3
-      , name    := "w_epoch_guard_ok"
-      , expr    := .alu .eq (.inputPort 3) (.inputPort 4) }
-    , { wireIdx := 4
-      , name    := "w_lut_scaled"
-      , expr    := .alu .add (.alu .mul (.inputPort 5) (.const 4#64)) (.const 2#64) }
-    , { wireIdx := 5
-      , name    := "w_lut_or_fallback"
-      , expr    := .mux (.wireRef 3) (.wireRef 4) (.wireRef 2) } ]
-  regs :=
-    [ { regIdx         := 0
-      , name           := "r_last_accepted"
-      , domain         := .coreClk
-      , resetKind      := .syncReset 0#64
-      , isSynchronizer := false
-      , nextExpr       := .wireRef 2 }
-    , { regIdx         := 1
-      , name           := "r_last_lut_out"
-      , domain         := .coreClk
-      , resetKind      := .resetFree
-      , isSynchronizer := false
-      , nextExpr       := .wireRef 5 } ]
-  outputs :=
-    [ { name := "out_cam_eq",         expr := .wireRef 0 }
-    , { name := "out_loose_bvar_a",   expr := .wireRef 1 }
-    , { name := "out_kernel_accept",  expr := .wireRef 2 }
-    , { name := "out_epoch_guard_ok", expr := .wireRef 3 }
-    , { name := "out_lut_result",     expr := .wireRef 5 } ]
-
-/-- Emit synthesizable SystemVerilog-2012 for `exprCamKernelLutRtlModule`. -/
-def emitExprCamKernelLutSV : String :=
-  emitModuleSV exprCamKernelLutRtlModule
-
-/-- Build the 6-port input vector `(camWordA, camWordB, statusTag, pktEpoch, pinnedEpoch, lutArg)`
-for `exprCamKernelLutRtlModule`. -/
-def mkCosimInputs
-    (camWordA camWordB : BitVec 64)
-    (statusTag pktEpoch pinnedEpoch lutArg : Nat) : Nat → BitVec 64
-  | 0 => camWordA
-  | 1 => camWordB
-  | 2 => BitVec.ofNat 64 statusTag
-  | 3 => BitVec.ofNat 64 pktEpoch
-  | 4 => BitVec.ofNat 64 pinnedEpoch
-  | 5 => BitVec.ofNat 64 lutArg
-  | _ => 0#64
-
-/-- **Theorem (`exprCam_siliconKernel_sv_cosim_sound`)**:
-1. **Topological DAG & Static CDC Signoff**:
-   `checkRtlModule exprCamKernelLutRtlModule = true`,
-   `exprCamKernelLutRtlModule.name = "obend_exprcam_silicon_kernel_lut"`, and
-   `exprCamKernelLutRtlModule.outputs.length = 5`.
-2. **Live `Lean.ConstantInfo` Acceptance & `ExprCAM` Bit-Exact Co-Simulation**:
-   - On `sampleLiveLeanDefnInfo` (`liveIdNat : Nat → Nat := λ x : Nat => x`), `extractLeanConstInfo?`
-     succeeds, `encodeDeclStatusTag` is `1`, a loose `.bvar 0` node packs with bit 59 = `1`, and
-     `evalModuleOutputs exprCamKernelLutRtlModule` produces:
-     `out_cam_eq = 1#64`, `out_loose_bvar_a = 1#64`, `out_kernel_accept = 1#64`,
-     `out_epoch_guard_ok = 1#64`, and `out_lut_result = 42#64` (`4 * 10 + 2`).
-3. **Live `sorryAx` Refusal & Epoch Mismatch Fallback**:
-   - On `sampleLiveLeanSorryInfo` (`liveBadSorry` contaminated with `sorryAx`) and a mismatched
-     environment epoch (`pktEpoch = 2 ≠ pinnedEpoch = 1`) with distinct `ExprCAM` words,
-     `evalModuleOutputs exprCamKernelLutRtlModule` produces:
-     `out_cam_eq = 0#64`, `out_loose_bvar_a = 0#64`, `out_kernel_accept = 0#64`,
-     `out_epoch_guard_ok = 0#64`, and `out_lut_result = 0#64` (1-cycle fallback to `out_kernel_accept`). -/
--- fixture kept (2026-11-04): consumed by a proof in this file
-theorem exprCam_siliconKernel_sv_cosim_sound :
-    let wBVar0 := mkExprCamWord64 (.bvar 0) 0 0
-    let wNatConst := mkExprCamWord64 kNatConst 1 0
-    let tagValid :=
-      match extractLeanConstInfo? sampleLiveLeanDefnInfo with
-      | some d => encodeDeclStatusTag stdKernelEnv 8 d
-      | none   => 0
-    let tagSorry :=
-      match extractLeanConstInfo? sampleLiveLeanSorryInfo with
-      | some d => encodeDeclStatusTag stdKernelEnv 8 d
-      | none   => 99
-    let insValid := mkCosimInputs wBVar0 wBVar0 tagValid 1 1 10
-    let insSorry := mkCosimInputs wNatConst wBVar0 tagSorry 2 1 10
-    checkRtlModule exprCamKernelLutRtlModule = true ∧
-    exprCamKernelLutRtlModule.name = "obend_exprcam_silicon_kernel_lut" ∧
-    exprCamKernelLutRtlModule.outputs.length = 5 ∧
-    tagValid = 1 ∧
-    tagSorry = 0 ∧
-    evalModuleOutputs exprCamKernelLutRtlModule insValid (fun _ => 0#64) =
-      [ ("out_cam_eq", 1#64)
-      , ("out_loose_bvar_a", 1#64)
-      , ("out_kernel_accept", 1#64)
-      , ("out_epoch_guard_ok", 1#64)
-      , ("out_lut_result", 42#64) ] ∧
-    evalModuleOutputs exprCamKernelLutRtlModule insSorry (fun _ => 0#64) =
-      [ ("out_cam_eq", 0#64)
-      , ("out_loose_bvar_a", 0#64)
-      , ("out_kernel_accept", 0#64)
-      , ("out_epoch_guard_ok", 0#64)
-      , ("out_lut_result", 0#64) ] := by
-  decide +kernel
-
-/-! ## 4. Multi-Rule Priority TCAM Synthesis (`compileDiscrTrieToRtl`, `compileDiscrTrieToRtl_dag_valid`, `compileDiscrTrieToRtl_matches_first_rule`) -/
+/-- Synthesize a combinational priority-encoder `.mux` cascade (`RtlExpr`) for a priority-ordered list
+of `(patternTag, gain, offset)` rules over `inputPort tagPort` and `inputPort argPort`. -/
+def compileDiscrRulesExprAt (tagPort argPort : Nat) : List (Nat × Nat × Nat) → RtlExpr
+  | [] => .const 0#64
+  | (patTag, gain, offset) :: rest =>
+    let cond := .alu .eq (.inputPort tagPort) (.const (BitVec.ofNat 64 patTag))
+    let action :=
+      .alu .add
+        (.alu .mul (.inputPort argPort) (.const (BitVec.ofNat 64 gain)))
+        (.const (BitVec.ofNat 64 offset))
+    .mux cond action (compileDiscrRulesExprAt tagPort argPort rest)
 
 /-- Synthesize a combinational priority-encoder `.mux` cascade (`RtlExpr`) for a priority-ordered list
 of `(patternTag, gain, offset)` rules:
 * Compares `inputPort 0` (`in_tag`) against `BitVec.ofNat 64 patternTag`,
-* When matched, computes `gain * inputPort 1 + offset` (`inputPort 1 * gain + offset`),
+* When matched, computes `inputPort 1 * gain + offset`,
 * Otherwise falls through to the next lower-priority rule (defaulting to `0#64` on `[]`). -/
-def compileDiscrRulesExpr : List (Nat × Nat × Nat) → RtlExpr
-  | [] => .const 0#64
-  | (patTag, gain, offset) :: rest =>
-    let cond := .alu .eq (.inputPort 0) (.const (BitVec.ofNat 64 patTag))
-    let action :=
-      .alu .add
-        (.alu .mul (.inputPort 1) (.const (BitVec.ofNat 64 gain)))
-        (.const (BitVec.ofNat 64 offset))
-    .mux cond action (compileDiscrRulesExpr rest)
+abbrev compileDiscrRulesExpr (rules : List (Nat × Nat × Nat)) : RtlExpr :=
+  compileDiscrRulesExprAt 0 1 rules
 
 /-- Pure reference specification for evaluating a priority-ordered list of `(patternTag, gain, offset)`
 TCAM rules on `(inTag, inArg)`. -/
@@ -669,7 +845,7 @@ theorem checkExprDAG_compileDiscrRulesExpr : ∀ (rules : List (Nat × Nat × Na
     checkExprDAG 2 0 0 (compileDiscrRulesExpr rules) = true
   | [] => rfl
   | (_, _, _) :: rest => by
-    simp [compileDiscrRulesExpr, checkExprDAG, checkExprDAG_compileDiscrRulesExpr rest]
+    simp [compileDiscrRulesExpr, compileDiscrRulesExprAt, checkExprDAG, checkExprDAG_compileDiscrRulesExpr rest]
 
 /-- **Theorem (`compileDiscrTrieToRtl_dag_valid`)**:
 For every module name `name` and every priority-ordered rule list `rules`, `compileDiscrTrieToRtl name rules`
@@ -686,7 +862,7 @@ theorem evalRtlExpr_compileDiscrRulesExpr
         evalDiscrRulesSpec (inputs 0) (inputs 1) rules
   | [] => rfl
   | (patTag, gain, offset) :: rest => by
-    simp only [compileDiscrRulesExpr, evalRtlExpr, evalAluOp, evalDiscrRulesSpec,
+    simp only [compileDiscrRulesExpr, compileDiscrRulesExprAt, evalRtlExpr, evalAluOp, evalDiscrRulesSpec,
       evalRtlExpr_compileDiscrRulesExpr inputs wires regs rest]
     by_cases hEq : (inputs 0 == BitVec.ofNat 64 patTag) = true <;> simp [hEq]
 
@@ -720,5 +896,3 @@ theorem compileDiscrTrieToRtl_matches_first_rule
 
 end Obend.Lower.DiscrTreeLUT
 end
-
-

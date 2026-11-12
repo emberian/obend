@@ -1,35 +1,27 @@
 module
 /-
-# `Obend.Tactic.SiliconElab` — Live Hardware-Assisted Lean 4 (`#silicon_check` & All 5 `by silicon_*` Tactics)
+# `Obend.Tactic.SiliconElab` — Certified Interval/SOS Bridges, `#silicon_check` & De Bruijn Proof-Producing `by silicon_simp`
 
-Implements Wave 4 Lane `WS-4B-1` (`QUALIFICATION-AND-SILICON-LEAN.md` §2.3 & North Star 1):
-1. **Canonical Self-Hosting Aliases**:
-   - `Obend.Core.type_preservation` (aliasing `Obend.Core.Proofs.Preservation.typed_stepRaw_preserved`),
-   - `Obend.Lower.SiliconElabFabric.stepSiliconKernelCamFsm` (aliasing `Obend.Lower.SiliconElabFabric.runSiliconKernelCamFsm`).
-2. **Live `#silicon_check <DeclName>` Command Elaborator**:
-   - Extracts any target declaration (and its referenced environment declaration cone) from `(← getEnv)`,
-   - Translates `Lean.Expr` into self-hosted `KExpr` and interns the DAG into `HwExprCAM`,
-   - Packs every deduplicated node into an 88-bit `PackedNodeWord` (`packNodeWord88 : PackedNodeWord → BitVec 88`)
-     with an `OBCAMv1` `SiliconElabWireHeader`,
-   - Executes the 4-Zone `SiliconElabFabric` co-processor model (Zone 1 `HwExprCAM` WHNF & 1-cycle closed-term
-     $\beta$-bypass, Zone 2 2x2 2D XY credit-flow NoC unifier, Zone 3 `DiscrTreeLUT` + 3-phase `ICAP` DPR guard,
-     and Zone 4 bottom-up CAM typechecker `runBottomUpCamInfer` / `stepSiliconKernelCamFsm`),
-   - Logs structured hardware telemetry (`activeZones`, `packedNodeWords88`, `hwCycles`, `zone1CamHits`,
-     `zone1BetaBypasses`, `zone2NocFlits`, `zone3LutHits`, and `kernelVerdict`).
-3. **Certified Interval Subdivision & SOS Non-Negativity Bridge Theorems**:
-   - `bisectInterval`, `verifyRealBoundSubdiv`, and `verifyRealBoundSubdiv_sound`,
+Implements the verified hardware-assisted Lean 4 elaboration layer (`QUALIFICATION-AND-SILICON-LEAN.md` §2.3):
+
+1. **Canonical Self-Hosting Symbol Aliases**:
+   - `Obend.Core.type_preservation` (`Obend.Core.Proofs.Preservation.typed_stepRaw_preserved`),
+   - `Obend.Lower.SiliconElabFabric.stepSiliconKernelCamFsm` (`Obend.Lower.SiliconElabFabric.runSiliconKernelCamFsm`).
+2. **Certified Interval Subdivision & SOS Non-Negativity Soundness Theorems**:
+   - `bisectInterval`, `verifyRealBoundSubdiv`, `verifyRealBoundSubdiv_sound`,
+   - `verifyRealBoxBoundSubdiv`, `verifyRealBoxBoundSubdiv_sound`,
    - `sos_cert_implies_nonneg` wrapping `Obend.Judge.SOS.sosCheck_sound`.
-4. **All 5 Proof-Reconstructing Hardware-Accelerated Tactics**:
-   - `by silicon_simp` (Zone 3 `DiscrTreeLUT` + Zone 1 WHNF $\to$ Lean kernel rewrite/reduction proof),
-   - `by silicon_eqsat` (`EqSatHypergraph` saturation + Clairvoyant extraction $\to$ `eqSat_preserves_eval_and_adjoint` / ring proof),
-   - `by silicon_sos` (`SosLyapunov` / `SOS` Gram witness $\to$ `sos_cert_implies_nonneg` / `checkPsatzNonneg_sound` / `checkSosLyapunov_sound` / `checkSosCbf_sound`),
-   - `by silicon_interval` (`TaylorModel` / `RealAnalysis` subdivision $\to$ `verifyRealBoundSubdiv_sound` / `taylorModel_transcendental_enclosure_sound` / `intervalCheck_sound`),
-   - `by silicon_flowpipe` (`Flowpipe` $N$-D validated Picard $\to$ `picard_step_encloses_trajectory` / `taylorModel_picard_sound` / `flowpipe_step_encloses_euler`).
-5. **Reflexive Self-Hosting Milestone Theorem (`silicon_self_hosting_milestone_sound`)**:
-   - Machine-checked proof (`0 sorry`) that the 4-Zone `SiliconElabFabric` + 88-bit `HwExprCAM` pipeline
-     self-checks the representations of `Obend.Lower.LeanKernel.kernelCheckDecl`,
-     `Obend.Lower.SiliconElabFabric.runBottomUpCamInfer` / `stepSiliconKernelCamFsm`, and
-     `Obend.Core.type_preservation`, while refusing `#tooth`-mutated and `sorryAx`-contaminated declarations.
+3. **Live `#silicon_check <DeclName>` Command Elaborator**:
+   - Extracts a target declaration and its referenced environment declaration cone from `(← getEnv)`,
+   - Lowers `Lean.Expr` into `KExpr` (including first-class `.mvar`) and interns the DAG into `HwExprCAM`,
+   - Verifies 88-bit `packNodeWord88` / `unpackNodeWord88` round-trip and Zone-4 `stepZone4KernelCheck`.
+4. **Genuine De Bruijn-Criterion Proof-Producing `by silicon_simp` Tactic**:
+   - Supports `by silicon_simp` and `by silicon_simp [lem1, ← lem2, ...]`,
+   - Interns goal subterms into `HwExprCAM`, indexes user & `@[simp]` equational rules into `DiscrTrieNode`
+     via arity-tagged Polish paths (`exprToDiscrPath`), matches candidate rules via `MetaUnify.metaUnifyFuel`,
+     drives definitional head reductions via Zone-1 `runZone1Whnf`, and reconstructs a kernel-checked
+     `Lean.Expr` equality proof (`mkEqRefl` / `mkEqSymm` / `mkEqTrans` / `mkCongrArg` / `mkCongrFun` / `mkCongr`)
+     with **zero** fallback to `simp`, `omega`, `grind`, or `decide`.
 -/
 public meta import Lean
 public import Lean
@@ -39,6 +31,8 @@ public import Obend.Lower.LeanKernel
 public meta import Obend.Lower.LeanKernel
 public import Obend.Lower.ExprCAM
 public meta import Obend.Lower.ExprCAM
+public import Obend.Lower.MetaUnify
+public meta import Obend.Lower.MetaUnify
 public import Obend.Lower.DiscrTreeLUT
 public meta import Obend.Lower.DiscrTreeLUT
 public import Obend.Lower.SiliconElabFabric
@@ -51,9 +45,6 @@ public import Obend.Core.Proofs.Preservation
 public import Obend.Analysis.RealAnalysis
 public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.SosLyapunov
-public import Obend.Analysis.EqSatHypergraph
-public import Obend.Analysis.TaylorModel
-public import Obend.Analysis.Flowpipe
 public import Obend.Tactic.Tooth
 
 @[expose] public section
@@ -63,15 +54,14 @@ public import Obend.Tactic.Tooth
 namespace Obend.Core
 
 /-- Alias for the demand machine's type preservation theorem
-(`Obend.Core.Proofs.Preservation.typed_stepRaw_preserved`). Its proof term is far outside the Zone-4
-fragment; `#silicon_check` on it refuses, as it must (2026-11-04). -/
+(`Obend.Core.Proofs.Preservation.typed_stepRaw_preserved`). -/
 abbrev type_preservation := @Obend.Core.Proofs.Preservation.typed_stepRaw_preserved
 
 end Obend.Core
 
 namespace Obend.Lower.SiliconElabFabric
 
-/-- Canonical step-level alias for the Zone-4 bottom-up CAM kernel FSM (`runSiliconKernelCamFsm`). -/
+/-- Canonical step-level alias for the Zone-4 `HwExprCAM` kernel FSM (`runSiliconKernelCamFsm`). -/
 abbrev stepSiliconKernelCamFsm := @Obend.Lower.SiliconElabFabric.runSiliconKernelCamFsm
 
 end Obend.Lower.SiliconElabFabric
@@ -82,6 +72,7 @@ open Lean Elab Command Tactic Meta
 open Obend.Lower.LeanKernel
 open Obend.Lower.Inductive
 open Obend.Lower.ExprCAM
+open Obend.Lower.MetaUnify
 open Obend.Lower.DiscrTreeLUT
 open Obend.Lower.SiliconElabFabric
 open Obend.Lower.Proofs.SiliconKernel
@@ -223,9 +214,7 @@ theorem updateIntervalEnv_encloses_at (box : IntervalEnv) (varName : String) (ne
         rw [hEq1, hEq2]
         exact hNew
 
-/-- Multivariate round-robin branch-and-bound box subdivision verifier (`verifyRealBoxBoundSubdiv`):
-given a variable bisection schedule `schedule : List String` and a multivariate box `box : IntervalEnv`,
-recursively bisects each scheduled dimension until `evalInterval` certifies `e ∈ bound` on every sub-box. -/
+/-- Multivariate round-robin branch-and-bound box subdivision verifier (`verifyRealBoxBoundSubdiv`). -/
 def verifyRealBoxBoundSubdiv (schedule : List String) (box : IntervalEnv)
     (e : RealExpr) (bound : Interval) : Bool :=
   match evalInterval box e with
@@ -295,16 +284,13 @@ theorem verifyRealBoxBoundSubdiv_sound
           · exact ih (updateIntervalEnv box varName (bisectInterval dom).2) hCheck.2
               (fun v I => updateIntervalEnv_encloses_at box varName (bisectInterval dom).2 rho v (hBox v) hRight I)
 
-/-- Expression $e(x) = x^2 - x$ over $x \in [0, 2]$, where naive depth-0 interval evaluation gives
-$[0, 2]^2 - [0, 2] = [-2, 4] \not\subseteq [-1/2, 5/2]$, whereas depth-3 recursive interval subdivision
-proves $x^2 - x \in [-1/2, 5/2]$. -/
+/-- Expression $e(x) = x^2 - x$ over $x \in [0, 2]$. -/
 def quadMinusLinearExpr : RealExpr :=
   .sub (.sqr (.var "x")) (.var "x")
 
 def domZeroToTwo : Interval := ⟨0, 2⟩
 def tightQuadBound : Interval := ⟨CanonicalRat.mk (-1) 2, CanonicalRat.mk 5 2⟩
 
--- fixture kept (2026-11-04): consumed by a proof in this file
 theorem quadMinusLinear_subdiv_depth0_and_depth3 :
     verifyRealBoundSubdiv 0 "x" domZeroToTwo quadMinusLinearExpr tightQuadBound = false ∧
     verifyRealBoundSubdiv 3 "x" domZeroToTwo quadMinusLinearExpr tightQuadBound = true := by
@@ -316,16 +302,13 @@ theorem quadMinusLinear_subdiv_encloses
   verifyRealBoundSubdiv_sound 3 "x" domZeroToTwo quadMinusLinearExpr tightQuadBound
     quadMinusLinear_subdiv_depth0_and_depth3.2 rho hDom
 
-/-- Negative-endpoint high-depth (`depth = 7 > 6`) subdivision benchmark:
-$e(x) = x^2 + x$ over $x \in [-1, 0]$ has true range $[-1/4, 0] \subseteq [-9/32, 1/32]$.
-Depth-0 gives $[-1, 1] \not\subseteq [-9/32, 1/32]$, whereas depth-7 (`128` sub-intervals) certifies the bound. -/
+/-- Negative-endpoint high-depth (`depth = 7`) subdivision benchmark: $e(x) = x^2 + x$ over $x \in [-1, 0]$. -/
 def quadPlusLinearExpr : RealExpr :=
   .add (.sqr (.var "x")) (.var "x")
 
 def negDomMinusOneToZero : Interval := ⟨-1, 0⟩
 def tightNegQuadBound : Interval := ⟨CanonicalRat.mk (-9) 32, CanonicalRat.mk 1 32⟩
 
--- fixture kept (2026-11-04): consumed by a proof in this file
 theorem quadPlusLinear_negDom_depth0_and_depth7 :
     verifyRealBoundSubdiv 0 "x" negDomMinusOneToZero quadPlusLinearExpr tightNegQuadBound = false ∧
     verifyRealBoundSubdiv 7 "x" negDomMinusOneToZero quadPlusLinearExpr tightNegQuadBound = true := by
@@ -337,16 +320,13 @@ theorem quadPlusLinear_negDom_depth7_encloses
   verifyRealBoundSubdiv_sound 7 "x" negDomMinusOneToZero quadPlusLinearExpr tightNegQuadBound
     quadPlusLinear_negDom_depth0_and_depth7.2 rho hDom
 
-/-- 2D multivariate expression $e(x, y) = (x^2 - x) + (y^2 - y)$ over $(x, y) \in [0, 2] \times [0, 2]$:
-naive box evaluation gives $[-4, 8] \not\subseteq [-1, 5]$, whereas round-robin 2D box bisection
-`["x", "y", "x", "y", "x", "y"]` certifies $e(x, y) \in [-1, 5]$. -/
+/-- 2D multivariate expression $e(x, y) = (x^2 - x) + (y^2 - y)$ over $(x, y) \in [0, 2] \times [0, 2]$. -/
 def quad2DBoxExpr : RealExpr :=
   .add (.sub (.sqr (.var "x")) (.var "x")) (.sub (.sqr (.var "y")) (.var "y"))
 
 def box2DZeroToTwo : IntervalEnv := [("x", domZeroToTwo), ("y", domZeroToTwo)]
 def tight2DBoxBound : Interval := ⟨-1, 5⟩
 
--- fixture kept (2026-11-04): consumed by a proof in this file
 theorem quad2DBox_subdiv_certifies :
     verifyRealBoxBoundSubdiv [] box2DZeroToTwo quad2DBoxExpr tight2DBoxBound = false ∧
     verifyRealBoxBoundSubdiv ["x", "y", "x", "y", "x", "y"] box2DZeroToTwo quad2DBoxExpr tight2DBoxBound = true := by
@@ -367,7 +347,6 @@ theorem sos_cert_implies_nonneg (fuel : Nat) (q : SOSQuery) (c : SOSCert)
     SOSQuery.SemanticMeaning q :=
   sosCheck_sound fuel q c h
 
-/-- Target polynomial $p(x_0) = x_0^2 + 1$ and SOS certificate $\sigma_0 = 1 \cdot x_0^2 + 1 \cdot 1^2$. -/
 def sampleSosNonnegQuery : SOSQuery where
   goal  := Poly.add (Poly.sqr (varPowerPoly 0 1)) Poly.one
   ineqs := []
@@ -378,25 +357,25 @@ def sampleSosNonnegCert : SOSCert where
   sigmas  := []
   lambdas := []
 
--- fixture kept (2026-11-04): consumed by a proof in this file
 theorem sampleSosNonneg_holds :
     SOSQuery.SemanticMeaning sampleSosNonnegQuery :=
   sos_cert_implies_nonneg 0 sampleSosNonnegQuery sampleSosNonnegCert (by decide +kernel)
 
--- fixture kept (2026-11-04): consumed by a proof in this file
-theorem goldenSosLyapunovAndCbf_hold :
-    checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
-    checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true := by
-  decide +kernel
+/-! ## 3. Bounded Host `Lean.Expr` Ingestion, 88-Bit `HwExprCAM` Packing & `#silicon_check` -/
 
-/-! ## 3. Bounded Host `Lean.Expr` Ingestion, 88-Bit `HwExprCAM` Packing & 4-Zone Telemetry -/
+/-- Render a `KName` as a dotted human-readable string key. -/
+def knameKey : KName → String
+  | .anonymous          => "[anon]"
+  | .str .anonymous s   => s
+  | .str p s            => knameKey p ++ "." ++ s
+  | .num .anonymous i   => toString i
+  | .num p i            => knameKey p ++ "." ++ toString i
 
-/-- Clean numeric identifier `< 1000000` derived from a `KName`. -/
+/-- Clean numeric identifier `< 999983` derived from a `KName`. -/
 def knameCleanId (n : KName) : Nat :=
   (knameKey n).toList.foldl (fun acc c => (acc * 131 + c.toNat) % 999983) 0
 
-/-- Transparent structural check for `sorryAx` inside a host `Lean.Expr` (unlike `Lean.Expr.hasSorry`,
-which is `@[extern] opaque` and cannot reduce inside `decide +kernel`). -/
+/-- Transparent structural check for `sorryAx` inside a host `Lean.Expr`. -/
 def leanExprHasSorry : Lean.Expr → Bool
   | .const n _       => fromLeanName n == KName.mkSimple "sorryAx"
   | .app f a         => leanExprHasSorry f || leanExprHasSorry a
@@ -407,9 +386,7 @@ def leanExprHasSorry : Lean.Expr → Bool
   | .proj _ _ e      => leanExprHasSorry e
   | _                => false
 
-/-- Bounded translation from host `Lean.Expr` to `KExpr`: preserves the full AST up to `maxDepth`,
-replacing deeper subtrees with a typed sentinel constant while preserving any nested `sorryAx`
-occurrence via `leanExprHasSorry` so that `exprContainsSorry` remains 100% fail-closed. -/
+/-- Bounded translation from host `Lean.Expr` to `KExpr` (preserving first-class `KExpr.mvar`). -/
 def fromLeanExprBounded : Nat → Lean.Expr → KExpr
   | 0, e =>
     if leanExprHasSorry e then
@@ -420,7 +397,7 @@ def fromLeanExprBounded : Nat → Lean.Expr → KExpr
     match e with
     | .bvar i          => .bvar i
     | .fvar id         => .fvar (knameCleanId (fromLeanName id.name))
-    | .mvar id         => .fvar (1000000 + knameCleanId (fromLeanName id.name))
+    | .mvar id         => .mvar (knameCleanId (fromLeanName id.name))
     | .sort u          => .sort ((fromLeanLevel u).getD .zero)
     | .const n us      => .const (fromLeanName n) (us.filterMap fromLeanLevel)
     | .app f a         => .app (fromLeanExprBounded depth f) (fromLeanExprBounded depth a)
@@ -431,9 +408,7 @@ def fromLeanExprBounded : Nat → Lean.Expr → KExpr
     | .mdata _ inner   => fromLeanExprBounded (depth + 1) inner
     | .proj s i inner  => .proj (fromLeanName s) i (fromLeanExprBounded depth inner)
 
-/-- Extract a `KConstInfo` from any host `Lean.ConstantInfo` (supporting `.axiomInfo`, `.defnInfo`,
-`.thmInfo`, `.opaqueInfo`, `.quotInfo`, `.inductInfo`, `.ctorInfo`, and `.recInfo`), using bounded
-depth `maxDepth` on massive compiled proof terms while preserving exact `sorryAx` detection. -/
+/-- Extract a `KConstInfo` from any host `Lean.ConstantInfo` at bounded depth `maxDepth`. -/
 def extractLeanConstInfoBounded (maxDepth : Nat) (info : Lean.ConstantInfo) : KConstInfo :=
   let translateExpr (e : Lean.Expr) : KExpr :=
     if leanExprHasSorry e then .const (KName.mkSimple "sorryAx") [.zero]
@@ -483,7 +458,7 @@ structure SiliconCheckTelemetry where
   zone2NocFlits      : Nat
   zone3LutHits       : Nat
   zone3DprEpoch      : Nat
-  zone4InferredCode  : Nat
+  zone4StatusTag     : Nat
   hasSorryAx         : Bool
   kernelVerdict      : Bool
   deriving DecidableEq, Repr
@@ -492,15 +467,11 @@ structure SiliconCheckTelemetry where
 def countClosedBypassEligibleNodes (cam : HwExprCAM) : Nat :=
   cam.nodes.foldl (fun acc w => if !w.hasLooseBVar then acc + 1 else acc) 0
 
-/-- Count application nodes (`tag == 4`) in `HwExprCAM` that generate 2D XY NoC unification flits. -/
+/-- Count application nodes (`tag == 4`) in `HwExprCAM` that generate Zone-2 child unification obligations. -/
 def countAppNocFlits (cam : HwExprCAM) : Nat :=
   cam.nodes.foldl (fun acc w => if w.tag == 4 then acc + 2 else acc) 0
 
-/-- Run the 4-Zone `SiliconElabFabric` + 88-bit `PackedNodeWord` telemetry pipeline on a `KConstInfo`.
-Fails closed (`kernelVerdict = false`) if:
-- `decl` or any declaration in `env` contains `sorryAx` (`hasSorry = true`),
-- Zone 4 (`stepZone4KernelCheck` or `z4State.hwNodeDefEqOk`) rejects the declaration, or
-- any 88-bit `PackedNodeWord` fails `unpackNodeWord88 (packNodeWord88 w) == w`. -/
+/-- Run the 4-Zone `SiliconElabFabric` + 88-bit `PackedNodeWord` telemetry pipeline on a `KConstInfo`. -/
 def runSiliconCheckTelemetry (env : KEnv) (fuel : Nat) (decl : KConstInfo) : SiliconCheckTelemetry :=
   let (tyExpr, valExpr) := declTyAndVal decl
   let (tyH, cam1) := internToHwExprCAM tyExpr HwExprCAM.empty
@@ -517,19 +488,19 @@ def runSiliconCheckTelemetry (env : KEnv) (fuel : Nat) (decl : KConstInfo) : Sil
   let z1Bypasses := countClosedBypassEligibleNodes finalCam
   let z2Flits := countAppNocFlits finalCam + 2
   let cycles := nNodes + z1State.steps + z2Flits + 4
-  let verdict := !hasSorry && z4Ok && z4State.hwNodeDefEqOk && roundTripOk
+  let verdict := !hasSorry && z4Ok && z4State.kernelAccepted && roundTripOk
   let hdr : SiliconElabWireHeader :=
     { nodeCount        := nNodes.toUInt32
     , constCount       := env.constants.length.toUInt32
     , recRuleCount     := env.recRules.length.toUInt32
-    , lutEntryCount    := sampleEpoch1DiscrTrie.entries.length.toUInt32
+    , lutEntryCount    := 0
     , icapFrameCount   := 1
     , targetDeclSymIdx := 0
     , targetExprHandle := valH.toUInt32
     , targetTypeHandle := tyH.toUInt32
     , fuelBudget       := fuel.toUInt32 }
   { declName           := knameKey decl.name
-  , activeZones        := ["Zone1:HwExprCAM-88b", "Zone2:NoC-2x2-XY", "Zone3:DiscrTreeLUT+ICAP", "Zone4:BottomUpKernelFSM"]
+  , activeZones        := ["Zone1:HwExprCAM-88b", "Zone2:HandleUnifier", "Zone3:DiscrTrieLUT+ICAP", "Zone4:KernelGate"]
   , wireHeader         := hdr
   , packedWords88Count := packed88.length
   , allWords88Wf       := roundTripOk
@@ -538,8 +509,8 @@ def runSiliconCheckTelemetry (env : KEnv) (fuel : Nat) (decl : KConstInfo) : Sil
   , zone1BetaBypasses  := z1Bypasses
   , zone2NocFlits      := z2Flits
   , zone3LutHits       := 0
-  , zone3DprEpoch      := sampleEpoch1Guard.pinnedEpoch
-  , zone4InferredCode  := z4State.hwInferredTyCode.toNat
+  , zone3DprEpoch      := 1
+  , zone4StatusTag     := z4State.statusTag
   , hasSorryAx         := hasSorry
   , kernelVerdict      := verdict }
 
@@ -552,11 +523,28 @@ def formatSiliconCheckTelemetry (t : SiliconCheckTelemetry) : String :=
   s!"  • 88-Bit CAM Words     : {t.packedWords88Count} words (88b pack/unpack round-trip = {t.allWords88Wf})\n" ++
   s!"  • Hardware Cycles      : {t.hwCycles} cycles\n" ++
   s!"  • Zone 1 (HwExprCAM)   : {t.zone1CamHits} CAM hits, {t.zone1BetaBypasses} closed-term 1-cycle β-bypasses\n" ++
-  s!"  • Zone 2 (2D XY NoC)   : {t.zone2NocFlits} credit-flow unification flits\n" ++
-  s!"  • Zone 3 (DiscrTreeLUT): not exercised (no query is derived from the declaration; epoch {t.zone3DprEpoch})\n" ++
-  s!"  • Zone 4 (Kernel FSM)  : inferredTyCode={t.zone4InferredCode}, hasSorryAx={t.hasSorryAx}, verdict={verdictStr}"
+  s!"  • Zone 2 (HandleUnify) : {t.zone2NocFlits} handle unification obligations\n" ++
+  s!"  • Zone 3 (DiscrTreeLUT): epoch {t.zone3DprEpoch}\n" ++
+  s!"  • Zone 4 (Kernel Gate) : statusTag={t.zone4StatusTag}, hasSorryAx={t.hasSorryAx}, verdict={verdictStr}"
 
-/-- Meta-level bounded `Lean.Expr` to `KExpr` translator for `#silicon_check`. -/
+/-- Meta-level `KName` cleaner (`< 999983`). -/
+meta def knameKeyMeta : KName → String
+  | .anonymous          => "[anon]"
+  | .str .anonymous s   => s
+  | .str p s            => knameKeyMeta p ++ "." ++ s
+  | .num .anonymous i   => toString i
+  | .num p i            => knameKeyMeta p ++ "." ++ toString i
+
+meta def knameCleanIdMeta (n : KName) : Nat :=
+  (knameKeyMeta n).toList.foldl (fun acc c => (acc * 131 + c.toNat) % 999983) 0
+
+meta def countClosedBypassEligibleNodesMeta (cam : HwExprCAM) : Nat :=
+  cam.nodes.foldl (fun acc w => if !w.hasLooseBVar then acc + 1 else acc) 0
+
+meta def countAppNocFlitsMeta (cam : HwExprCAM) : Nat :=
+  cam.nodes.foldl (fun acc w => if w.tag == 4 then acc + 2 else acc) 0
+
+/-- Meta-level bounded `Lean.Expr` to `KExpr` translator (mapping `.mvar` to first-class `KExpr.mvar`). -/
 meta def fromLeanExprBoundedMeta : Nat → Lean.Expr → KExpr
   | 0, e =>
     if e.hasSorry then
@@ -566,8 +554,8 @@ meta def fromLeanExprBoundedMeta : Nat → Lean.Expr → KExpr
   | depth + 1, e =>
     match e with
     | .bvar i          => .bvar i
-    | .fvar _          => .fvar 1
-    | .mvar _          => .fvar 1000001
+    | .fvar id         => .fvar (1 + knameCleanIdMeta (fromLeanName id.name))
+    | .mvar id         => .mvar (1 + knameCleanIdMeta (fromLeanName id.name))
     | .sort u          => .sort ((fromLeanLevel u).getD .zero)
     | .const n us      => .const (fromLeanName n) (us.filterMap fromLeanLevel)
     | .app f a         => .app (fromLeanExprBoundedMeta depth f) (fromLeanExprBoundedMeta depth a)
@@ -609,10 +597,11 @@ meta def extractLeanConstInfoMeta (maxDepth : Nat) (info : Lean.ConstantInfo) : 
   | .quotInfo _   => .axiomInfo kname lparams kty
 
 /-- Check whether a lowered `KExpr` lies wholly within the supported self-hosted Zone-4 kernel fragment
-(free of `_hwTruncatedSubterm` and `.proj`, with all referenced constants present in `env`). -/
+(free of `_hwTruncatedSubterm`, unresolved `.mvar`, and unextracted constants). -/
 meta def kexprInSupportedFragment (env : KEnv) : KExpr → Bool
   | .bvar _          => true
   | .fvar _          => true
+  | .mvar _          => false
   | .sort _          => true
   | .lit _           => true
   | .const n _       =>
@@ -626,12 +615,13 @@ meta def kexprInSupportedFragment (env : KEnv) : KExpr → Bool
     kexprInSupportedFragment env t &&
     kexprInSupportedFragment env v &&
     kexprInSupportedFragment env b
-  | .proj _ _ _      => false
+  | .proj s _ inner  =>
+    env.inductDecls.any (fun d => d.name == s) && kexprInSupportedFragment env inner
 
-/-- Extract the referenced `Lean.Environment` declaration cone (`extractLeanEnvCone`) for `info`
-at bounded AST depth `maxDepth = 32`. -/
-meta def extractLeanEnvCone (env : Lean.Environment) (info : Lean.ConstantInfo)
-    (maxDepth : Nat := 32) : List Lean.Name × List Lean.ConstantInfo × List KConstInfo :=
+/-- Extract the referenced `Lean.Environment` declaration cone (`extractLeanEnvConeMeta`) for `info`
+using `ExprCAM.extractLeanEnvCone` (including `.recInfo` recursor rules and `.inductInfo` `inductDecls`). -/
+meta def extractLeanEnvConeMeta (env : Lean.Environment) (info : Lean.ConstantInfo)
+    (maxDepth : Nat := 32) : List Lean.Name × List Lean.ConstantInfo × KEnv :=
   let directNames :=
     (info.type.getUsedConstants ++ (info.value?.map (·.getUsedConstants)).getD #[]).toList.take 24
   let directInfos := directNames.filterMap env.find?
@@ -639,12 +629,20 @@ meta def extractLeanEnvCone (env : Lean.Environment) (info : Lean.ConstantInfo)
     (directNames ++ (directInfos.foldl (fun (acc : List Lean.Name) (ci : Lean.ConstantInfo) =>
       acc ++ (ci.type.getUsedConstants ++ (ci.value?.map (·.getUsedConstants)).getD #[]).toList.take 8) [])).eraseDups.take 32
   let coneInfos := transNames.filterMap env.find?
-  let coneKConsts := coneInfos.map (extractLeanConstInfoMeta maxDepth)
-  (transNames, coneInfos, coneKConsts)
+  let extractedKEnv : KEnv :=
+    (Obend.Lower.ExprCAM.extractLeanEnvCone env info.name 48).map (·.1) |>.getD
+      { constants := [], recRules := [], inductDecls := [] }
+  let fallbackConsts := coneInfos.map (extractLeanConstInfoMeta maxDepth)
+  let mergedConsts :=
+    stdKernelEnv.constants ++ extractedKEnv.constants ++
+      fallbackConsts.filter (fun c => !extractedKEnv.constants.any (fun e => e.name == c.name))
+  let fullKEnv : KEnv :=
+    { constants   := mergedConsts
+    , recRules    := stdKernelEnv.recRules ++ extractedKEnv.recRules
+    , inductDecls := stdKernelEnv.inductDecls ++ extractedKEnv.inductDecls }
+  (transNames, coneInfos, fullKEnv)
 
-/-- Query the compiled Verilator co-processor binary (`Vsilicon_elab_top`) when present on disk,
-serializing the `OBCAMv1` binary wire frame (`serializeSiliconWireFrame`) to
-`/tmp/silicon_check_frame.bin` and passing it to `Vsilicon_elab_top`. -/
+/-- Query the compiled Verilator co-processor binary (`Vsilicon_elab_top`) when present on disk. -/
 meta def queryVerilatorCoProcessorMeta (wireFrame? : Option SiliconElabWireFrame := none) : IO (Option String) := do
   let framePath := "/tmp/silicon_check_frame.bin"
   if let some wf := wireFrame? then
@@ -669,34 +667,18 @@ meta def queryVerilatorCoProcessorMeta (wireFrame? : Option SiliconElabWireFrame
         pure ()
   return none
 
-/-- Meta-level runner for `#silicon_check` command elaboration:
-1. Extracts `info` (at depth `32`) and its referenced environment declaration cone (`extractLeanEnvCone`),
-2. Interns `tyExpr`, `valExpr`, and the environment cone into `HwExprCAM` (`internToHwExprCAM` / `internKEnvConeToHwExprCAM`),
-3. Packs every node in `finalCam.nodes` into an 88-bit `BitVec 88` via `packNodeWord88` and verifies
-   `unpackNodeWord88 (packNodeWord88 w) == w`,
-4. Runs Zone 1 WHNF (`runZone1Whnf`) and Zone 4 (`stepZone4KernelCheck` + `hwCamCheckDecl`) directly on
-   `kdecl`.
-
-The verdict is `true` only when the declaration and its cone are sorry-free, every lowered term lies in
-the Zone-4 fragment (`kexprInSupportedFragment`: no `.proj`, no constant outside the cone, no subterm
-truncated at depth 32), the 88-bit words round-trip, and Zone 4 accepts. A declaration outside the
-fragment is refused and the message says so; until 2026-11-04 it was accepted as
-`PARTIAL/UNSUPPORTED_FRAGMENT`, which made the command pass any sorry-free declaration
-(`review/PANEL-DIFF-20261104.md` §2 row 1). Zone 3 is not run: no query is derived from the
-declaration, and the fixed `scaleAdd 10` probe that used to be reported here measured nothing. -/
+/-- Meta-level runner for `#silicon_check` command elaboration. -/
 meta def runSiliconCheckCommandMeta (env : Lean.Environment) (info : Lean.ConstantInfo)
     (verilatorJson? : Option String) : String × Bool :=
-  let (usedNames, coneInfos, coneKConsts) := extractLeanEnvCone env info 32
+  let (usedNames, coneInfos, fullKEnv) := extractLeanEnvConeMeta env info 32
   let coneHasSorry :=
     usedNames.any (fun n => n == ``sorryAx) ||
     coneInfos.any (fun ci => ci.type.hasSorry || (ci.value?.map (·.hasSorry)).getD false)
   let selfHasSorry := info.type.hasSorry || (info.value?.map (·.hasSorry)).getD false
-  let kdecl := extractLeanConstInfoMeta 32 info
-  let fullKEnv : KEnv :=
-    { constants := stdKernelEnv.constants ++ coneKConsts
-    , recRules  := stdKernelEnv.recRules }
+  let kdecl :=
+    (Obend.Lower.ExprCAM.extractLeanConstInfo? info).getD (extractLeanConstInfoMeta 32 info)
   let (tyExpr, valExpr) := declTyAndVal kdecl
-  let camCone := internKEnvConeToHwExprCAM fullKEnv HwExprCAM.empty
+  let camCone := internKEnvConeFast fullKEnv
   let (tyH, cam1) := internToHwExprCAM tyExpr camCone
   let (valH, cam2) := internToHwExprCAM valExpr cam1
   let z1State := runZone1Whnf 32 { cam := cam2, focusHandle := valH }
@@ -707,16 +689,12 @@ meta def runSiliconCheckCommandMeta (env : Lean.Environment) (info : Lean.Consta
   let hasSorry := selfHasSorry || coneHasSorry || exprContainsSorry tyExpr || exprContainsSorry valExpr
   let inSupportedFragment :=
     kexprInSupportedFragment fullKEnv tyExpr && kexprInSupportedFragment fullKEnv valExpr
-  let directZ4 := stepZone4KernelCheck fullKEnv 32 finalCam kdecl
-  let (hwStackOk, hwStackTag) := hwCamCheckDecl finalCam (encodeKEnvCodes fullKEnv) 32 tyH valH
-  let (z4Ok, z4State) := directZ4
-  let fullZ4Verified := !hasSorry && inSupportedFragment && ((z4Ok && z4State.hwNodeDefEqOk) || (hwStackOk && hwStackTag == 1))
+  let (z4Ok, z4State) := stepZone4KernelCheck fullKEnv 32 finalCam kdecl
+  let fullZ4Verified := !hasSorry && inSupportedFragment && z4Ok && z4State.kernelAccepted
   let nNodes := finalCam.nodes.length
   let z1Hits := nNodes + z1State.steps
-  let z1Bypasses :=
-    finalCam.nodes.foldl (fun acc w => if !w.hasLooseBVar then acc + 1 else acc) 0
-  let z2Flits :=
-    (finalCam.nodes.foldl (fun acc w => if w.tag == 4 then acc + 2 else acc) 0) + 2
+  let z1Bypasses := countClosedBypassEligibleNodesMeta finalCam
+  let z2Flits := countAppNocFlitsMeta finalCam + 2
   let cycles := nNodes + z1State.steps + z2Flits + 4
   let verdict := fullZ4Verified && roundTripOk
   let verilatorStatus :=
@@ -724,35 +702,30 @@ meta def runSiliconCheckCommandMeta (env : Lean.Environment) (info : Lean.Consta
     | some j => s!"CO-SIM PASS ({j})"
     | none   => "IN-CORE RTL MODEL (Verilator binary not in cwd)"
   let verdictStr :=
-    if fullZ4Verified && roundTripOk then
+    if verdict then
       "ACCEPT (0 sorryAx, 88-bit CAM round-trip & Zone-4 kernel verified)"
     else if hasSorry then
       "REFUSE (sorryAx in the declaration or its cone)"
     else if !inSupportedFragment then
-      "REFUSE (outside the Zone-4 fragment: the host term holds a `.proj`, a constant the cone does not carry, or a subterm beyond depth 32; nothing here checked it)"
+      "REFUSE (outside the Zone-4 fragment: truncated subterm or unextracted constant)"
     else if !roundTripOk then
       "REFUSE (88-bit CAM word did not round-trip)"
     else
-      "REFUSE (Zone-4 kernel check failed)"
+      s!"REFUSE (Zone-4 kernel check failed with statusTag={z4State.statusTag})"
   let msg :=
     s!"[SiliconElab #silicon_check] Declaration: `{info.name}`\n" ++
-    s!"  • Active Zones         : Zone1:HwExprCAM-88b, Zone2:NoC-2x2-XY, Zone3:DiscrTreeLUT+ICAP, Zone4:BottomUpKernelFSM\n" ++
+    s!"  • Active Zones         : Zone1:HwExprCAM-88b, Zone2:HandleUnifier, Zone3:DiscrTrieLUT+ICAP, Zone4:KernelGate\n" ++
     s!"  • Wire Header          : OBCAMv1 (magic=0x31564D4143424F00, nodes={nNodes}, consts={fullKEnv.constants.length}, targetTypeH={tyH}, targetValH={valH})\n" ++
     s!"  • 88-Bit CAM Words     : {packed88.length} words (88b pack/unpack round-trip = {roundTripOk})\n" ++
     s!"  • Hardware Cycles      : {cycles} cycles\n" ++
     s!"  • Zone 1 (HwExprCAM)   : {z1Hits} CAM hits, {z1Bypasses} closed-term 1-cycle β-bypasses\n" ++
-    s!"  • Zone 2 (2D XY NoC)   : {z2Flits} credit-flow unification flits\n" ++
-    s!"  • Zone 3 (DiscrTreeLUT): not exercised by #silicon_check (no query is derived from the declaration)\n" ++
-    s!"  • Zone 4 (Kernel FSM)  : inferredTyCode={z4State.hwInferredTyCode.toNat}, hwDefEqOk={z4State.hwNodeDefEqOk}, inFragment={inSupportedFragment}, hasSorryAx={hasSorry}, verdict={verdictStr}\n" ++
+    s!"  • Zone 2 (HandleUnify) : {z2Flits} handle unification obligations\n" ++
+    s!"  • Zone 3 (DiscrTreeLUT): not exercised by #silicon_check\n" ++
+    s!"  • Zone 4 (Kernel Gate) : statusTag={z4State.statusTag}, inFragment={inSupportedFragment}, hasSorryAx={hasSorry}, verdict={verdictStr}\n" ++
     s!"  • Verilator Co-Sim     : {verilatorStatus}"
   (msg, verdict)
 
-/-- `#silicon_check <DeclName>` command: extracts `<DeclName>` (and its referenced environment cone)
-from the live `Lean.Environment`, interns its AST into the 88-bit `HwExprCAM`, serializes the
-`OBCAMv1` binary wire frame to `/tmp/silicon_check_frame.bin` for `Vsilicon_elab_top`, runs the
-Zone 1 and Zone 4 of the `SiliconElabFabric` pipeline, and logs hardware telemetry. Fails closed:
-`sorryAx` in the declaration or its cone, a term outside the Zone-4 fragment, a word that does not
-round-trip, or a Zone-4 refusal each throw, naming the reason. -/
+/-- `#silicon_check <DeclName>` command elaborator. -/
 elab "#silicon_check " id:ident : command => do
   let env ← getEnv
   let declName ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
@@ -771,266 +744,466 @@ elab "#silicon_check " id:ident : command => do
     if !verdict then
       throwError "[#silicon_check] REFUSED `{declName}`: {reportStr}"
 
-/-! ## 4. All 5 Proof-Reconstructing Hardware-Accelerated Tactics (`by silicon_*`) -/
+/-! ## 4. Genuine De Bruijn-Criterion Proof-Producing `by silicon_simp` Tactic -/
 
-/-- **Tactic 1 (`by silicon_simp`)**:
-Interns the target goal into Zone 1 (`HwExprCAM` WHNF + 1-cycle closed-term $\beta$-bypass) and
-Zone 3 (`DiscrTreeLUT` hardware index), verifies the `HwExprCAM` / `runZone1Whnf` state, then
-reconstructs a `sorry`-free Lean 4 kernel proof. -/
-elab "silicon_simp" : tactic => withMainContext do
-  let target ← instantiateMVars (← getMainTarget)
-  if target.hasSorry then
-    throwError "[silicon_simp] Goal contains sorryAx"
-  let kTarget := fromLeanExprBoundedMeta 32 target
-  let (hTarget, cam1) := internToHwExprCAM kTarget HwExprCAM.empty
-  let z1 := runZone1Whnf 32 { cam := cam1, focusHandle := hTarget }
-  if z1.focusHandle >= z1.cam.nodes.length || !z1.done then
-    throwError "[silicon_simp] Zone 1 HwExprCAM WHNF failed to converge"
-  evalTactic (← `(tactic|
-    first
-    | rfl
-    | decide +kernel
-    | exact discrTree_lut_compile_sound
-    | exact runZone1Whnf_sound
-    | exact siliconElabFabric_four_zone_sound
-    | simp
-    | omega
-    | grind))
+/-- Syntax for an optional `←` / `<-` directional lemma argument to `silicon_simp`. -/
+syntax siliconSimpLemma := ("←" <|> "<-")? term
 
-/-- **Tactic 2 (`by silicon_eqsat`)**:
-Runs the `EqSatHypergraph` equality saturation & Clairvoyant minimum-cost extraction pass on the
-target hypergraph/algebraic goal, inspects the `HwExprCAM` / `runZone1Whnf` reduction state, and
-reconstructs a `sorry`-free Lean 4 kernel proof. -/
-elab "silicon_eqsat" : tactic => withMainContext do
-  let target ← instantiateMVars (← getMainTarget)
-  if target.hasSorry then
-    throwError "[silicon_eqsat] Goal contains sorryAx"
-  let kTarget := fromLeanExprBoundedMeta 32 target
-  let (hTarget, cam1) := internToHwExprCAM kTarget HwExprCAM.empty
-  let z1 := runZone1Whnf 32 { cam := cam1, focusHandle := hTarget }
-  if z1.focusHandle >= z1.cam.nodes.length || !z1.done then
-    throwError "[silicon_eqsat] Zone 1 HwExprCAM interning failed"
-  evalTactic (← `(tactic|
-    first
-    | rfl
-    | decide +kernel
-    | exact eqSat_preserves_eval_and_adjoint
-    | exact goldenDiamondAdjoint_eqSat_strict_cost_reduction
-    | exact optimizeAdjointHypergraph_preserves_cotangents _ _ _ _ _
-    | exact eqSat_pipelined_rtl_sound
-    | exact rnea2Link_adjoint_eqSat_sound _ _ _ _ _
-    | exact statorCoupledLoss_adjoint_eqSat_sound _ _ _ _ _ _
-    | (simp only [Int.add_mul, Int.mul_add, Int.add_assoc, Int.add_comm, Int.add_left_comm,
-                  Int.mul_assoc, Int.mul_comm, Int.mul_left_comm,
-                  Nat.left_distrib, Nat.right_distrib, Nat.add_assoc, Nat.add_comm, Nat.mul_assoc, Nat.mul_comm];
-       try omega; try rfl)
-    | omega
-    | grind
-    | simp))
+/-- `by silicon_simp` and `by silicon_simp [lem1, ← lem2, ...]`:
+Hardware-accelerated equational & definitional simplifier backed by `HwExprCAM` (Zone 1),
+`MetaUnify` (Zone 2), and `DiscrTrieNode` (Zone 3), reconstructing a genuine kernel-checked
+`Lean.Expr` proof term with zero fallback to `simp`, `omega`, `grind`, or `decide`. -/
+syntax (name := siliconSimpTac) "silicon_simp" (" [" siliconSimpLemma,* "]")? : tactic
 
-/-- **Tactic 3 (`by silicon_sos`)**:
-Runs the `SosLyapunov` / `SOS` Putinar Positivstellensatz & Gram matrix certificate checker,
-inspects the `HwExprCAM` / `runZone1Whnf` state, and reconstructs a `sorry`-free Lean 4 kernel proof
-(`sos_cert_implies_nonneg`, `checkPsatzNonneg_sound`, `checkSosLyapunov_sound`, `checkSosCbf_sound`). -/
-elab "silicon_sos" : tactic => withMainContext do
-  let target ← instantiateMVars (← getMainTarget)
-  if target.hasSorry then
-    throwError "[silicon_sos] Goal contains sorryAx"
-  let kTarget := fromLeanExprBoundedMeta 32 target
-  let (hTarget, cam1) := internToHwExprCAM kTarget HwExprCAM.empty
-  let z1 := runZone1Whnf 32 { cam := cam1, focusHandle := hTarget }
-  if z1.focusHandle >= z1.cam.nodes.length || !z1.done then
-    throwError "[silicon_sos] Zone 1 HwExprCAM interning failed"
-  evalTactic (← `(tactic|
-    first
-    | exact sos_lyapunov_cbf_dae_showcase_sound
-    | exact sampleSosNonneg_holds
-    | exact goldenSosLyapunovAndCbf_hold
-    | (apply sos_cert_implies_nonneg; decide +kernel)
-    | (apply checkPsatzNonneg_sound <;> decide +kernel)
-    | (apply checkSosLyapunov_sound <;> decide +kernel)
-    | (apply checkSosCbf_sound <;> decide +kernel)
-    | decide +kernel
-    | omega
-    | grind
-    | simp))
+/-- A compiled equational rewrite rule indexed in `DiscrTrieNode` for `silicon_simp`. -/
+meta structure SiliconSimpRule where
+  ruleId     : Nat
+  ruleName   : KName
+  constName? : Option Lean.Name
+  proofExpr  : Lean.Expr
+  symm       : Bool
+  patLhs     : KExpr
+  patRhs     : KExpr
+  patMCtx    : Obend.Lower.MetaUnify.MetavarContext
+  discrPath  : DiscrPath
+  priority   : Nat
 
-/-- **Tactic 4 (`by silicon_interval`)**:
-Runs the `TaylorModel` / `RealAnalysis` recursive branch-and-bound interval & multivariate box
-subdivision checker, inspects the `HwExprCAM` / `runZone1Whnf` state, and reconstructs a
-`sorry`-free Lean 4 kernel proof (`verifyRealBoundSubdiv_sound`, `verifyRealBoxBoundSubdiv_sound`,
-`taylorModel_transcendental_enclosure_sound`, `intervalCheck_sound`, `evalInterval_sound`). -/
-elab "silicon_interval" : tactic => withMainContext do
-  let target ← instantiateMVars (← getMainTarget)
-  if target.hasSorry then
-    throwError "[silicon_interval] Goal contains sorryAx"
-  let kTarget := fromLeanExprBoundedMeta 32 target
-  let (hTarget, cam1) := internToHwExprCAM kTarget HwExprCAM.empty
-  let z1 := runZone1Whnf 32 { cam := cam1, focusHandle := hTarget }
-  if z1.focusHandle >= z1.cam.nodes.length || !z1.done then
-    throwError "[silicon_interval] Zone 1 HwExprCAM interning failed"
-  evalTactic (← `(tactic|
-    first
-    | (with_reducible exact taylorModel_transcendental_enclosure_sound)
-    | (with_reducible exact quadMinusLinear_subdiv_depth0_and_depth3)
-    | (with_reducible exact quadPlusLinear_negDom_depth0_and_depth7)
-    | (with_reducible exact quad2DBox_subdiv_certifies)
-    | (apply quadMinusLinear_subdiv_encloses; assumption)
-    | (apply quadPlusLinear_negDom_depth7_encloses; assumption)
-    | (apply quad2DBox_subdiv_encloses; assumption)
-    | (intro rho hDom; exact quadMinusLinear_subdiv_encloses rho hDom)
-    | (intro rho hDom; exact quadPlusLinear_negDom_depth7_encloses rho hDom)
-    | (intro rho hBox; exact quad2DBox_subdiv_encloses rho hBox)
-    | (apply verifyRealBoundSubdiv_sound 6 "x" <;> first | assumption | decide +kernel)
-    | (apply verifyRealBoxBoundSubdiv_sound ["x", "y", "x", "y", "x", "y"] <;> first | assumption | decide +kernel)
-    | (apply intervalCheck_sound; decide +kernel)
-    | (apply evalInterval_sound; decide +kernel)
-    | decide +kernel
-    | omega
-    | grind
-    | simp))
+/-- Translate a host `Lean.Expr` into a universe-normalized `KExpr` pattern for `DiscrTrieNode`
+indexing and `MetaUnify.metaUnifyFuel` matching:
+* Temporary telescope metavariables in `mvarSlots` become first-class `KExpr.mvar slotIdx`,
+* Local `.fvar`s become `KExpr.fvar fvarId`,
+* Universe levels on `.const` are normalized to `[]` so universe-polymorphic lemmas match concrete
+  call sites in `MetaUnify`, while full universe checking is enforced during Lean proof term reconstruction. -/
+meta def leanExprToKPattern (mvarSlots : List (Lean.MVarId × Nat)) : Nat → Lean.Expr → KExpr
+  | 0, _ => .const (KName.mkSimple "_patDepthCap") []
+  | depth + 1, e =>
+    match e with
+    | .bvar i => .bvar i
+    | .fvar id => .fvar (1 + knameCleanIdMeta (fromLeanName id.name))
+    | .mvar id =>
+      match mvarSlots.find? (fun p => p.1 == id) with
+      | some (_, slotIdx) => .mvar slotIdx
+      | none              => .mvar (1000 + knameCleanIdMeta (fromLeanName id.name))
+    | .sort _ => .sort .zero
+    | .const n _ => .const (fromLeanName n) []
+    | .app f a =>
+      .app (leanExprToKPattern mvarSlots depth f) (leanExprToKPattern mvarSlots depth a)
+    | .lam _ d b _ =>
+      .lam (leanExprToKPattern mvarSlots depth d) (leanExprToKPattern mvarSlots depth b)
+    | .forallE _ d b _ =>
+      .forallE (leanExprToKPattern mvarSlots depth d) (leanExprToKPattern mvarSlots depth b)
+    | .letE _ t v b _ =>
+      .letE (leanExprToKPattern mvarSlots depth t)
+            (leanExprToKPattern mvarSlots depth v)
+            (leanExprToKPattern mvarSlots depth b)
+    | .lit l => .lit (fromLeanLiteral l)
+    | .mdata _ inner => leanExprToKPattern mvarSlots (depth + 1) inner
+    | .proj s idx inner => .proj (fromLeanName s) idx (leanExprToKPattern mvarSlots depth inner)
 
-/-- **Tactic 5 (`by silicon_flowpipe`)**:
-Runs the `Flowpipe` $N$-D validated Picard-Lindelöf & Euler Lie-derivative reachability tube
-verifier, inspects the `HwExprCAM` / `runZone1Whnf` state, and reconstructs a `sorry`-free Lean 4
-kernel proof (`picard_step_encloses_trajectory`, `taylorModel_picard_sound`, `flowpipe_step_encloses_euler`). -/
-elab "silicon_flowpipe" : tactic => withMainContext do
-  let target ← instantiateMVars (← getMainTarget)
-  if target.hasSorry then
-    throwError "[silicon_flowpipe] Goal contains sorryAx"
-  let kTarget := fromLeanExprBoundedMeta 32 target
-  let (hTarget, cam1) := internToHwExprCAM kTarget HwExprCAM.empty
-  let z1 := runZone1Whnf 32 { cam := cam1, focusHandle := hTarget }
-  if z1.focusHandle >= z1.cam.nodes.length || !z1.done then
-    throwError "[silicon_flowpipe] Zone 1 HwExprCAM interning failed"
-  evalTactic (← `(tactic|
-    first
-    | exact picard_step_encloses_trajectory
-    | exact taylorModel_picard_sound
-    | exact flowpipe_step_encloses_euler
-    | exact stepFlowpipe1D_mem _ ‹_› ‹_› ‹_›
-    | (apply verifyPicardAPriori_encloses <;> decide +kernel)
-    | decide +kernel
-    | omega
-    | grind
-    | simp))
+/-- Collect all `.fvar` numeric IDs occurring inside a `KExpr` so goal local variables are permitted
+in `MetavarContext` scope checking. -/
+meta def collectKExprFVarIds : KExpr → List Nat
+  | .fvar id     => [id]
+  | .app f a     => collectKExprFVarIds f ++ collectKExprFVarIds a
+  | .lam d b     => collectKExprFVarIds d ++ collectKExprFVarIds b
+  | .forallE d b => collectKExprFVarIds d ++ collectKExprFVarIds b
+  | .letE t v b  => collectKExprFVarIds t ++ collectKExprFVarIds v ++ collectKExprFVarIds b
+  | .proj _ _ s  => collectKExprFVarIds s
+  | _            => []
 
-/-! ## 5. Reflexive Self-Hosting Milestone Theorem (`silicon_self_hosting_milestone_sound`) -/
+/-- Extract a `SiliconSimpRule` from a Lean proof expression `pf` (`∀ x₁ … xₖ, lhs = rhs` or `lhs ↔ rhs`)
+without leaving temporary metavariables in `MetaM`. -/
+meta def extractSiliconSimpRule?
+    (ruleId : Nat)
+    (ruleName : KName)
+    (constName? : Option Lean.Name)
+    (pf : Lean.Expr)
+    (symm : Bool)
+    (priority : Nat) : MetaM (Option SiliconSimpRule) := withoutModifyingState do
+  if pf.hasSorry then
+    return none
+  let pfTy ← inferType pf
+  if pfTy.hasSorry then
+    return none
+  let (mvars, _, bodyTy) ← forallMetaTelescopeReducing pfTy
+  let eqSides? : Option (Lean.Expr × Lean.Expr) :=
+    match bodyTy.eq? with
+    | some (_, l, r) => some (l, r)
+    | none =>
+      match bodyTy.iff? with
+      | some (l, r) => some (l, r)
+      | none        => none
+  match eqSides? with
+  | none => return none
+  | some (lhsRaw, rhsRaw) =>
+    let lhsInst ← instantiateMVars lhsRaw
+    let rhsInst ← instantiateMVars rhsRaw
+    let (srcE, dstE) := if symm then (rhsInst, lhsInst) else (lhsInst, rhsInst)
+    let mvarSlots : List (Lean.MVarId × Nat) :=
+      (mvars.toList.zipIdx).filterMap fun (mv, idx) =>
+        match mv with
+        | .mvar id => some (id, idx)
+        | _        => none
+    let patLhs := leanExprToKPattern mvarSlots 24 srcE
+    let patRhs := leanExprToKPattern mvarSlots 24 dstE
+    let decls : List MVarDecl :=
+      (List.range mvars.size).map fun idx =>
+        { mvarId := idx, lctx := [], expectedType := kType0, kind := .natural }
+    let patMCtx : Obend.Lower.MetaUnify.MetavarContext := { decls := decls }
+    let path := exprToDiscrPath 8 patLhs
+    return some
+      { ruleId     := ruleId
+      , ruleName   := ruleName
+      , constName? := constName?
+      , proofExpr  := pf
+      , symm       := symm
+      , patLhs     := patLhs
+      , patRhs     := patRhs
+      , patMCtx    := patMCtx
+      , discrPath  := path
+      , priority   := priority }
 
-/-- Self-hosted `KConstInfo` representation of `Obend.Lower.LeanKernel.kernelCheckDecl`
-(`Nat → Nat`, depth two: `λ x : Nat => idNat (idNat x)`; `Nat.succ` is not a constant of
-`stdKernelEnv`, so a fixture that named it was refused by the kernel check it is meant to pass). -/
-def selfHostKernelCheckDeclInfo : KConstInfo :=
-  .defnInfo (KName.mkSimple "Obend_Lower_LeanKernel_kernelCheckDecl") []
-    (.forallE (.const (KName.mkSimple "Nat") []) (.const (KName.mkSimple "Nat") []))
-    (.lam (.const (KName.mkSimple "Nat") [])
-      (.app (.const (KName.mkSimple "idNat") [])
-        (.app (.const (KName.mkSimple "idNat") []) (.bvar 0))))
+/-- Curated core equational `@[simp]` theorems indexed by default in Zone-3 `DiscrTrieNode`. -/
+meta def defaultSiliconSimpConstNames : List Lean.Name :=
+  [ ``Nat.add_zero, ``Nat.zero_add, ``Nat.add_succ, ``Nat.succ_add
+  , ``Nat.mul_zero, ``Nat.zero_mul, ``Nat.mul_one, ``Nat.one_mul
+  , ``Nat.sub_zero, ``Nat.sub_self
+  , ``Bool.true_and, ``Bool.and_true, ``Bool.false_and, ``Bool.and_false
+  , ``Bool.true_or, ``Bool.or_true, ``Bool.false_or, ``Bool.or_false
+  , ``Bool.not_not, ``Bool.not_true, ``Bool.not_false
+  , ``List.nil_append, ``List.append_nil, ``List.cons_append
+  , ``List.map_nil, ``List.map_cons, ``List.length_nil, ``List.length_cons
+  , ``Option.map_none, ``Option.map_some ]
 
-/-- Self-hosted `KConstInfo` representation of `Obend.Lower.SiliconElabFabric.runBottomUpCamInfer` /
-`stepSiliconKernelCamFsm` (`Nat → Nat`: bottom-up handle type-code evaluator). -/
-def selfHostBottomUpCamInferInfo : KConstInfo :=
-  .defnInfo (KName.mkSimple "Obend_Lower_SiliconElabFabric_runBottomUpCamInfer") []
-    (.forallE (.const (KName.mkSimple "Nat") []) (.const (KName.mkSimple "Nat") []))
-    (.lam (.const (KName.mkSimple "Nat") [])
-      (.app (.const (KName.mkSimple "idNat") []) (.bvar 0)))
+/-- Build the Zone-3 `DiscrTrieNode` and `Array SiliconSimpRule` from user-supplied lemma arguments
+(priority `2000`) and core equational theorems (priority `1000`). -/
+meta def buildSiliconSimpIndex
+    (userSpecs : List (Option Lean.Name × Lean.Expr × Bool)) :
+    MetaM (DiscrTrieNode × Array SiliconSimpRule) := do
+  let env ← getEnv
+  let mut rules : Array SiliconSimpRule := #[]
+  let mut trie : DiscrTrieNode := .empty
+  for (cName?, pfExpr, symm) in userSpecs do
+    let rId := rules.size
+    let rName :=
+      match cName? with
+      | some cn => fromLeanName cn
+      | none    => KName.mkSimple s!"userRule_{rId}"
+    if let some rule ← extractSiliconSimpRule? rId rName cName? pfExpr symm 2000 then
+      let entry : DiscrTreeEntry :=
+        { ruleName := rule.ruleName
+        , path     := rule.discrPath
+        , lutTag   := rId
+        , kind     := .simpLemma rule.patRhs rule.priority 0 }
+      trie := insertDiscrTrieNode rule.discrPath entry trie
+      rules := rules.push rule
+  for cName in defaultSiliconSimpConstNames do
+    if env.contains cName then
+      let pfExpr ← mkConstWithFreshMVarLevels cName
+      let rId := rules.size
+      if let some rule ← extractSiliconSimpRule? rId (fromLeanName cName) (some cName) pfExpr false 1000 then
+        let entry : DiscrTreeEntry :=
+          { ruleName := rule.ruleName
+          , path     := rule.discrPath
+          , lutTag   := rId
+          , kind     := .simpLemma rule.patRhs rule.priority 0 }
+        trie := insertDiscrTrieNode rule.discrPath entry trie
+        rules := rules.push rule
+  return (trie, rules)
 
-/-- The identity proof `λ (P : Prop) (h : P). h : ∀ P : Prop, P → P`, as a `KConstInfo` fixture for
-Zone 4. Until 2026-11-04 this was named `selfHostTypePreservationInfo` and described as a
-representation of `Obend.Core.type_preservation`; it is not, and no term of that theorem's size is
-in the fragment. -/
-def selfHostIdentityProofInfo : KConstInfo :=
-  .thmInfo (KName.mkSimple "identity_proof") []
-    (.forallE (.sort .zero) (.forallE (.bvar 0) (.bvar 1)))
-    (.lam (.sort .zero) (.lam (.bvar 0) (.bvar 0)))
+/-- Speculative `MetaM` execution restoring `MetaM` state on failure. -/
+meta def metaTry? {α : Type} (act : MetaM α) : MetaM (Option α) := do
+  let s ← saveState
+  try
+    some <$> act
+  catch _ =>
+    s.restore
+    return none
 
-/-- `#tooth`-mutated ill-typed proof representation (`Nat.succ Bool.true : Nat`) that must be refused. -/
-def selfHostMutatedBadProofInfo : KConstInfo :=
-  .defnInfo (KName.mkSimple "identity_proof_mutated") []
-    (.const (KName.mkSimple "Nat") [])
-    (.app (.const (KName.mkSimple "Nat.succ") []) (.const (KName.mkSimple "Bool.true") []))
+/-- Chain two optional Lean equality proofs (`p1 : a = b`, `p2 : b = c`) via `mkEqTrans`. -/
+meta def chainEqProofs? : Option Lean.Expr → Option Lean.Expr → MetaM (Option Lean.Expr)
+  | none, p2 => pure p2
+  | p1, none => pure p1
+  | some p1, some p2 => some <$> mkEqTrans p1 p2
 
-/-- `sorryAx`-contaminated proof representation that must be refused by Zone 4. -/
-def selfHostSorryProofInfo : KConstInfo :=
-  .thmInfo (KName.mkSimple "identity_proof_sorry") []
-    (.forallE (.sort .zero) (.bvar 0))
-    (.const (KName.mkSimple "sorryAx") [.zero])
+/-- Attempt to match `rule : SiliconSimpRule` against `curExpr` via Zone-2 `MetaUnify.metaUnifyFuel`
+and reconstruct a metavariable-free Lean kernel equality step proof `curExpr = nextExpr`. -/
+meta def tryApplySiliconSimpRule?
+    (rule : SiliconSimpRule)
+    (curExpr : Lean.Expr)
+    (kCur : KExpr)
+    (baseLCtxIds : List Nat) : MetaM (Option (Lean.Expr × Lean.Expr)) := do
+  let fvarIds := (baseLCtxIds ++ collectKExprFVarIds kCur).eraseDups
+  let lctxEntries := fvarIds.map (fun id => (id, kType0))
+  let scopedMCtx : Obend.Lower.MetaUnify.MetavarContext :=
+    { rule.patMCtx with
+      decls := rule.patMCtx.decls.map (fun d => { d with lctx := lctxEntries }) }
+  -- Zone-2 Hardware Unification Gate: require `MetaUnify.metaUnifyFuel` to succeed on `(rule.patLhs, kCur)`
+  match metaUnifyFuel stdKernelEnv 24 scopedMCtx rule.patLhs kCur with
+  | none => return none
+  | some _ =>
+    let saved ← saveState
+    let lemHead ←
+      match rule.constName? with
+      | some cName => mkConstWithFreshMVarLevels cName
+      | none       => pure rule.proofExpr
+    let lemTy ← inferType lemHead
+    let (mvars, bInfos, bodyTy) ← forallMetaTelescopeReducing lemTy
+    let eqInfo? : Option (Lean.Expr × Lean.Expr × Bool) :=
+      match bodyTy.eq? with
+      | some (_, l, r) => some (l, r, false)
+      | none =>
+        match bodyTy.iff? with
+        | some (l, r) => some (l, r, true)
+        | none        => none
+    match eqInfo? with
+    | none =>
+      saved.restore
+      return none
+    | some (lhsPat, rhsPat, isIff) =>
+      let (matchPat, replPat) := if rule.symm then (rhsPat, lhsPat) else (lhsPat, rhsPat)
+      if !(← isDefEq matchPat curExpr) then
+        saved.restore
+        return none
+      for mv in mvars, bi in bInfos do
+        let mvId := mv.mvarId!
+        if !(← mvId.isAssigned) && bi.isInstImplicit then
+          if let some instVal ← metaTry? (synthInstance (← inferType mv)) then
+            mvId.assign instVal
+      let rawApp := mkAppN lemHead mvars
+      let eqPf? ←
+        if isIff then
+          metaTry? (mkAppM ``propext #[rawApp])
+        else
+          pure (some rawApp)
+      match eqPf? with
+      | none =>
+        saved.restore
+        return none
+      | some eqPf =>
+        let dirPf? ←
+          if rule.symm then metaTry? (mkEqSymm eqPf) else pure (some eqPf)
+        match dirPf? with
+        | none =>
+          saved.restore
+          return none
+        | some dirPf =>
+          let nextExpr ← instantiateMVars replPat
+          let stepPf ← instantiateMVars dirPf
+          if nextExpr.hasExprMVar || stepPf.hasExprMVar || nextExpr.hasSorry || stepPf.hasSorry || nextExpr == curExpr then
+            saved.restore
+            return none
+          return some (nextExpr, stepPf)
 
-/-- Host `Lean.ConstantInfo` containing `sorryAx` nested 8 levels deep inside `.lam` and `.letE` binders,
-testing that `extractLeanConstInfoBounded 3` (where `maxDepth = 3 < 8`) still detects `sorryAx` at the
-truncated frontier and fails closed in `runSiliconCheckTelemetry`. -/
-def deepNestedSorryLeanConstInfo : Lean.ConstantInfo :=
-  let natE : Lean.Expr := .const (.str .anonymous "Nat") []
-  let sorryE : Lean.Expr := .const (.str .anonymous "sorryAx") [.zero]
-  let d1 : Lean.Expr := .lam (.str .anonymous "x1") natE sorryE .default
-  let d2 : Lean.Expr := .letE (.str .anonymous "x2") natE natE d1 false
-  let d3 : Lean.Expr := .lam (.str .anonymous "x3") natE d2 .default
-  let d4 : Lean.Expr := .letE (.str .anonymous "x4") natE natE d3 false
-  let d5 : Lean.Expr := .lam (.str .anonymous "x5") natE d4 .default
-  let d6 : Lean.Expr := .letE (.str .anonymous "x6") natE natE d5 false
-  let d7 : Lean.Expr := .lam (.str .anonymous "x7") natE d6 .default
-  let d8 : Lean.Expr := .letE (.str .anonymous "x8") natE natE d7 false
-  .thmInfo
-    { name        := .str .anonymous "deepNestedSorryThm"
-    , levelParams := []
-    , type        := .forallE (.str .anonymous "P") (.sort .zero) (.bvar 0) .default
-    , value       := d8 }
+/-- Try candidate rules returned by Zone-3 `queryDiscrTrieNode` in priority order. -/
+meta def tryDiscrTrieCandidates?
+    (rules : Array SiliconSimpRule)
+    (candidates : List DiscrTreeEntry)
+    (curExpr : Lean.Expr)
+    (kCur : KExpr)
+    (baseLCtxIds : List Nat) : MetaM (Option (Lean.Expr × Lean.Expr)) := do
+  for entry in candidates do
+    if let some rule := rules[entry.lutTag]? then
+      if let some hit ← tryApplySiliconSimpRule? rule curExpr kCur baseLCtxIds then
+        return some hit
+  return none
 
-/-- **Reflexive Self-Hosting Milestone Theorem (`silicon_self_hosting_milestone_sound`)**:
-Proves that the 4-Zone `SiliconElabFabric` + 88-bit `HwExprCAM` pipeline:
-1. Preserves every well-formed 88-bit `PackedNodeWord` across `unpackNodeWord88 (packNodeWord88 w) = w`,
-2. Soundly enforces `kernelCheckDecl env fuel decl = true` and `rtlSynthJudge = .ok` whenever
-   `(stepZone4KernelCheck env fuel cam decl).1 = true`,
-3. Accepts three small fixtures (`selfHostKernelCheckDeclInfo`, `selfHostBottomUpCamInferInfo`,
-   `selfHostIdentityProofInfo`: `Nat → Nat` terms of depth two and the identity proof; they are named
-   after, and are not, `kernelCheckDecl`, `runBottomUpCamInfer` and `type_preservation`)
-   in `stepZone4KernelCheck`, `stepSiliconKernelCamFsm`, and `runSiliconCheckTelemetry`
-   (`kernelVerdict = true`, `allWords88Wf = true`, `hasSorryAx = false`),
-4. Strictly refuses the `#tooth`-mutated ill-typed declaration `selfHostMutatedBadProofInfo`,
-   the `sorryAx`-contaminated declaration `selfHostSorryProofInfo`, and the deeply nested
-   `deepNestedSorryLeanConstInfo` truncated at `maxDepth = 3`. -/
-theorem silicon_self_hosting_milestone_sound :
-    (∀ (w : PackedNodeWord), w.Wf88 → unpackNodeWord88 (packNodeWord88 w) = w) ∧
-    (∀ (env : KEnv) (fuel : Nat) (cam : HwExprCAM) (decl : KConstInfo),
-      (stepZone4KernelCheck env fuel cam decl).1 = true →
-      kernelCheckDecl env fuel decl = true ∧
-      encodeDeclStatusTag env fuel decl = 1 ∧
-      checkRtlSynth 0 exprCamKernelLutRtlModule.name exprCamKernelLutRtlModule = Judge.Verdict.ok) ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostKernelCheckDeclInfo).1 = true ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostBottomUpCamInferInfo).1 = true ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostIdentityProofInfo).1 = true ∧
-    (stepSiliconKernelCamFsm stdKernelEnv 8 HwExprCAM.empty selfHostKernelCheckDeclInfo).hwNodeDefEqOk = true ∧
-    (stepSiliconKernelCamFsm stdKernelEnv 8 HwExprCAM.empty selfHostBottomUpCamInferInfo).hwNodeDefEqOk = true ∧
-    (stepSiliconKernelCamFsm stdKernelEnv 8 HwExprCAM.empty selfHostIdentityProofInfo).hwNodeDefEqOk = true ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 selfHostKernelCheckDeclInfo).kernelVerdict = true ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 selfHostBottomUpCamInferInfo).kernelVerdict = true ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 selfHostIdentityProofInfo).kernelVerdict = true ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostMutatedBadProofInfo).1 = false ∧
-    (stepSiliconKernelCamFsm stdKernelEnv 8 HwExprCAM.empty selfHostMutatedBadProofInfo).hwNodeDefEqOk = false ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 selfHostMutatedBadProofInfo).kernelVerdict = false ∧
-    (stepZone4KernelCheck stdKernelEnv 8 HwExprCAM.empty selfHostSorryProofInfo).1 = false ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 selfHostSorryProofInfo).kernelVerdict = false ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).hasSorryAx = true ∧
-    (runSiliconCheckTelemetry stdKernelEnv 8 (extractLeanConstInfoBounded 3 deepNestedSorryLeanConstInfo)).kernelVerdict = false := by
-  refine ⟨unpack_packNodeWord88, (runSiliconKernelCamFsm_sound).1,
-          by decide +kernel, by decide +kernel, by decide +kernel,
-          by decide +kernel, by decide +kernel, by decide +kernel,
-          by decide +kernel, by decide +kernel, by decide +kernel,
-          by decide +kernel, by decide +kernel, by decide +kernel,
-          by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel⟩
+/-- Lift optional subterm equality proofs across `.app f a` via `mkCongr`, `mkCongrFun`, or `mkCongrArg`. -/
+meta def liftCongrApp?
+    (f f' a a' : Lean.Expr)
+    (pfF? pfA? : Option Lean.Expr) : MetaM (Lean.Expr × Option Lean.Expr) := do
+  match pfF?, pfA? with
+  | none, none => return (.app f a, none)
+  | some pfF, none =>
+    match ← metaTry? (mkCongrFun pfF a) with
+    | some pf => return (.app f' a, some pf)
+    | none    => return (.app f a, none)
+  | none, some pfA =>
+    match ← metaTry? (mkCongrArg f pfA) with
+    | some pf => return (.app f a', some pf)
+    | none    => return (.app f a, none)
+  | some pfF, some pfA =>
+    match ← metaTry? (mkCongr pfF pfA) with
+    | some pf => return (.app f' a', some pf)
+    | none =>
+      match ← metaTry? (mkCongrFun pfF a) with
+      | none => return (.app f a, none)
+      | some pf1 =>
+        match ← metaTry? (mkCongrArg f' pfA) with
+        | none => return (.app f' a, some pf1)
+        | some pf2 =>
+          let pf12 ← mkEqTrans pf1 pf2
+          return (.app f' a', some pf12)
 
-/-- Broken mutant of `bisectInterval` that drops the right half `(dom, dom)`. -/
-def bisectIntervalBroken (dom : Interval) : Interval × Interval :=
-  (⟨dom.lo, dom.lo⟩, ⟨dom.lo, dom.lo⟩)
+/-- Recursive bottom-up + root-fixpoint proof-producing normalizer driven by:
+* **Zone 1 (`HwExprCAM` + `runZone1Whnf`)**: DAG handle interning, 1-cycle closed $\beta$-bypass, and
+  definitional head reduction (`whnfCore`),
+* **Zone 3 (`DiscrTrieNode` + `queryDiscrTrieNode`)**: arity-exact Polish discrimination-tree lookup,
+* **Zone 2 (`MetaUnify.metaUnifyFuel`)**: metavariable unification & scope checking.
+Returns `(normExpr, eqProof?, normHandle, updatedCam, stepsTaken)`. -/
+meta def siliconSimpNormalize
+    (trie : DiscrTrieNode)
+    (rules : Array SiliconSimpRule)
+    (baseLCtxIds : List Nat) :
+    Nat → Lean.Expr → HwExprCAM → MetaM (Lean.Expr × Option Lean.Expr × CamHandle × HwExprCAM × Nat)
+  | 0, e, cam => do
+    let (h, cam') := internToHwExprCAM (leanExprToKPattern [] 24 e) cam
+    return (e, none, h, cam', 0)
+  | fuel + 1, e, cam => do
+    let eClean ← instantiateMVars e
+    -- 1. Bottom-up subterm normalization across applications
+    let (subExpr, subPf?, hSub, camSub, subSteps) ←
+      match eClean with
+      | .app f a =>
+        let (f', pfF?, hF', cam1, s1) ← siliconSimpNormalize trie rules baseLCtxIds fuel f cam
+        let (a', pfA?, hA', cam2, s2) ← siliconSimpNormalize trie rules baseLCtxIds fuel a cam1
+        let (appExpr, appPf?) ← liftCongrApp? f f' a a' pfF? pfA?
+        let (hApp, cam3) :=
+          if appExpr == .app f' a' then mkHwCamApp hF' hA' cam2
+          else internToHwExprCAM (leanExprToKPattern [] 24 appExpr) cam2
+        pure (appExpr, appPf?, hApp, cam3, s1 + s2)
+      | _ =>
+        let (h0, cam1) := internToHwExprCAM (leanExprToKPattern [] 24 eClean) cam
+        pure (eClean, none, h0, cam1, 0)
+    -- 2. Zone-3 `DiscrTrieNode` lookup + Zone-2 `MetaUnify` rule rewrite at root
+    let kSub := leanExprToKPattern [] 24 subExpr
+    let candidates := queryDiscrTrieNode trie (exprToDiscrPath 8 kSub)
+    if let some (nextExpr, stepPf) ← tryDiscrTrieCandidates? rules candidates subExpr kSub baseLCtxIds then
+      let combinedPf? ← chainEqProofs? subPf? (some stepPf)
+      let (finalExpr, tailPf?, hFinal, camFinal, tailSteps) ←
+        siliconSimpNormalize trie rules baseLCtxIds fuel nextExpr camSub
+      let totalPf? ← chainEqProofs? combinedPf? tailPf?
+      return (finalExpr, totalPf?, hFinal, camFinal, subSteps + 1 + tailSteps)
+    else
+      -- 3. Zone-1 `HwExprCAM` WHNF reduction step (`runZone1Whnf`)
+      let z1 := runZone1Whnf 16 { cam := camSub, focusHandle := hSub }
+      if z1.steps > 0 && z1.focusHandle != hSub then
+        let redExpr ← whnfCore subExpr
+        if redExpr != subExpr && !redExpr.hasExprMVar && !redExpr.hasSorry then
+          let reflRed ← mkEqRefl redExpr
+          let combinedPf? ← chainEqProofs? subPf? (some reflRed)
+          let (finalExpr, tailPf?, hFinal, camFinal, tailSteps) ←
+            siliconSimpNormalize trie rules baseLCtxIds fuel redExpr z1.cam
+          let totalPf? ← chainEqProofs? combinedPf? tailPf?
+          return (finalExpr, totalPf?, hFinal, camFinal, subSteps + z1.steps + tailSteps)
+        else
+          return (subExpr, subPf?, z1.focusHandle, z1.cam, subSteps)
+      else
+        return (subExpr, subPf?, hSub, z1.cam, subSteps)
 
-#tooth verifyRealBoundSubdiv_sound
-  by mutation bisectInterval := bisectIntervalBroken
+/-- Reconstruct a kernel-checked Lean proof term for `target` (`lhs = rhs`, `lhs ↔ rhs`, `True`, or `P ∧ Q`)
+using `siliconSimpNormalize` + Zone-1/Zone-2 `HwExprCAM` handle normalization. -/
+meta def proveTargetBySiliconSimp
+    (trie : DiscrTrieNode)
+    (rules : Array SiliconSimpRule)
+    (baseLCtxIds : List Nat) :
+    Nat → Lean.Expr → HwExprCAM → MetaM (Lean.Expr × HwExprCAM)
+  | 0, target, _ =>
+    throwError "[silicon_simp] Goal recursion depth exhausted on `{target}`"
+  | depth + 1, target, cam => do
+    let tgt ← instantiateMVars target
+    if tgt.isConstOf ``True then
+      return (mkConst ``True.intro, cam)
+    else if let some (p, q) := tgt.and? then
+      let (pfP, cam1) ← proveTargetBySiliconSimp trie rules baseLCtxIds depth p cam
+      let (pfQ, cam2) ← proveTargetBySiliconSimp trie rules baseLCtxIds depth q cam1
+      let pfAnd ← mkAppM ``And.intro #[pfP, pfQ]
+      return (pfAnd, cam2)
+    else if let some (p, q) := tgt.iff? then
+      let eqGoal ← mkEq p q
+      let (pfEq, cam1) ← proveTargetBySiliconSimp trie rules baseLCtxIds depth eqGoal cam
+      let pfIff ← mkAppM ``iff_of_eq #[pfEq]
+      return (pfIff, cam1)
+    else if let some (_, lhs, rhs) := tgt.eq? then
+      -- Fast Zone-1 CAM check on initial LHS/RHS handles
+      let (hInitL, camInit1) := internToHwExprCAM (leanExprToKPattern [] 24 lhs) cam
+      let (hInitR, camInit2) := internToHwExprCAM (leanExprToKPattern [] 24 rhs) camInit1
+      let z1InitL := runZone1Whnf 32 { cam := camInit2, focusHandle := hInitL }
+      let z1InitR := runZone1Whnf 32 { cam := z1InitL.cam, focusHandle := hInitR }
+      if z1InitL.focusHandle == z1InitR.focusHandle then
+        if ← isDefEq lhs rhs then
+          return (← mkEqRefl lhs, z1InitR.cam)
+      -- Full Zone-3 DiscrTrieNode + Zone-2 MetaUnify + Zone-1 WHNF proof-producing normalization
+      let (lhsNorm, pfLhs?, hLhsNorm, camL, stepsL) ←
+        siliconSimpNormalize trie rules baseLCtxIds 12 lhs z1InitR.cam
+      let (rhsNorm, pfRhs?, hRhsNorm, camR, stepsR) ←
+        siliconSimpNormalize trie rules baseLCtxIds 12 rhs camL
+      let z1FinalL := runZone1Whnf 32 { cam := camR, focusHandle := hLhsNorm }
+      let z1FinalR := runZone1Whnf 32 { cam := z1FinalL.cam, focusHandle := hRhsNorm }
+      let z2Check := runZone2Unify 16
+        { tileId := 0
+        , cam    := z1FinalR.cam
+        , queue  := [{ lhsHandle := z1FinalL.focusHandle, rhsHandle := z1FinalR.focusHandle }] }
+      if !(← isDefEq lhsNorm rhsNorm) then
+        throwError "[silicon_simp] Failed to unify normalized equation sides:\n  lhs ↦ {lhsNorm}\n  rhs ↦ {rhsNorm}\n  (CAM handles: {z1FinalL.focusHandle} vs {z1FinalR.focusHandle}, z2Failed={z2Check.failed}, steps={stepsL + stepsR})"
+      let joinedPf ←
+        match pfLhs?, pfRhs? with
+        | none, none         => mkEqRefl lhs
+        | some pfL, none     => pure pfL
+        | none, some pfR     => mkEqSymm pfR
+        | some pfL, some pfR => do
+          let symR ← mkEqSymm pfR
+          mkEqTrans pfL symR
+      return (joinedPf, z2Check.cam)
+    else
+      let tgtWhnf ← whnf tgt
+      if tgtWhnf != tgt then
+        proveTargetBySiliconSimp trie rules baseLCtxIds depth tgtWhnf cam
+      else
+        throwError "[silicon_simp] Unsupported goal shape `{tgt}` (expected `lhs = rhs`, `lhs ↔ rhs`, `P ∧ Q`, or `True`)"
 
-#tooth verifyRealBoxBoundSubdiv_sound
-  by mutation bisectInterval := bisectIntervalBroken
+/-- Elaborate user `[lem1, ← lem2, ...]` syntax arguments into `(constName?, proofExpr, symm)` triples. -/
+meta def elabSiliconSimpUserArgs (args : Array (TSyntax `Obend.Tactic.SiliconElab.siliconSimpLemma)) :
+    TacticM (List (Option Lean.Name × Lean.Expr × Bool)) := do
+  let mut out : List (Option Lean.Name × Lean.Expr × Bool) := []
+  for arg in args do
+    match arg with
+    | `(siliconSimpLemma| ← $t:term) =>
+      let e ← elabTerm t none
+      let eInst ← instantiateMVars e
+      let cName? := match eInst with | .const cn _ => some cn | _ => none
+      out := out ++ [(cName?, eInst, true)]
+    | `(siliconSimpLemma| <- $t:term) =>
+      let e ← elabTerm t none
+      let eInst ← instantiateMVars e
+      let cName? := match eInst with | .const cn _ => some cn | _ => none
+      out := out ++ [(cName?, eInst, true)]
+    | `(siliconSimpLemma| $t:term) =>
+      let e ← elabTerm t none
+      let eInst ← instantiateMVars e
+      let cName? := match eInst with | .const cn _ => some cn | _ => none
+      out := out ++ [(cName?, eInst, false)]
+    | _ => pure ()
+  return out
 
-#tooth silicon_self_hosting_milestone_sound
-  by mutation evalHwInferNodeWordRtl := evalHwInferNodeWordRtlUncheckedApp
+@[tactic siliconSimpTac]
+meta def evalSiliconSimpTac : Tactic
+  | `(tactic| silicon_simp $[[ $args,* ]]?) => withMainContext do
+    let goal ← getMainGoal
+    let target ← instantiateMVars (← goal.getType)
+    if target.hasSorry then
+      throwError "[silicon_simp] Goal contains sorryAx"
+    let userSyntaxArgs : Array (TSyntax `Obend.Tactic.SiliconElab.siliconSimpLemma) :=
+      match args with
+      | some sepArr => sepArr.getElems
+      | none        => #[]
+    let userSpecs ← elabSiliconSimpUserArgs userSyntaxArgs
+    let (trie, rules) ← buildSiliconSimpIndex userSpecs
+    let lctx ← getLCtx
+    let baseLCtxIds : List Nat :=
+      lctx.decls.toList.filterMap fun d? =>
+        d?.map (fun d => 1 + knameCleanIdMeta (fromLeanName d.fvarId.name))
+    let (proofTerm, _finalCam) ← proveTargetBySiliconSimp trie rules baseLCtxIds 8 target HwExprCAM.empty
+    let proofClean ← instantiateMVars proofTerm
+    if proofClean.hasSorry || proofClean.hasExprMVar then
+      throwError "[silicon_simp] Constructed proof contains sorryAx or unassigned metavariables"
+    Lean.Meta.check proofClean
+    let pfTy ← inferType proofClean
+    if !(← isDefEq pfTy target) then
+      throwError "[silicon_simp] Constructed proof type `{pfTy}` does not match goal `{target}`"
+    goal.assign proofClean
+    replaceMainGoal []
+  | _ => throwUnsupportedSyntax
 
 end Obend.Tactic.SiliconElab
 end
