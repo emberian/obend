@@ -20,6 +20,7 @@ Umbrella module re-exporting Obend's dual-assumption cryptographic commitment an
 public import Obend.Crypto.Multilinear
 public import Obend.Crypto.Transcript
 public import Obend.Crypto.Sumcheck
+public import Obend.Crypto.GameSoundness
 public import Obend.Crypto.PCS
 public import Obend.Crypto.DualSpine
 public import Obend.Crypto.SameOpening

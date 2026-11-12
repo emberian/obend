@@ -145,6 +145,7 @@ public import Obend.Tactic.SymbolicCert
 public import Obend.Tactic.SymDiffAndFlux
 public import Obend.Tactic.ClaimAudit
 public import Obend.Crypto
+public import Obend.Crypto.GameSoundness
 public import Obend.Crypto.Poseidon2Goldilocks
 public import Obend.Crypto.DarkBazaar
 public import Obend.Crypto.BinaryTower256

@@ -149,6 +149,7 @@ import Obend.Crypto.CanopyReduce
 import Obend.Crypto.DarkBazaar
 import Obend.Crypto.DualSpine
 import Obend.Crypto.FastRing
+import Obend.Crypto.GameSoundness
 import Obend.Crypto.Multilinear
 import Obend.Crypto.PCS
 import Obend.Crypto.PikkuFoldLayered

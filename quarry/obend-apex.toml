@@ -1552,6 +1552,52 @@ theorem = "orderedPresentationInvariant"
 description = "Universal presentation-order bijection invariance (`orderedPresentationInvariant`) proving C4 specification linearization and refusal semantics commute with arbitrary identifier renamings."
 
 # ==============================================================================
+# 24. `Crypto` Game-Based Soundness — SSProve/Maurer Reductions, `LazyRO` & Joint HVZK `DualSpine`
+# ==============================================================================
+
+[[apex]]
+id = "crypto-game-lazy-ro-birthday-bound"
+subsystem = "Crypto"
+module = "Obend.Crypto.GameSoundness"
+theorem = "lazyRO_collision_prob_le_birthday"
+description = "Stateful lazy random oracle constructive birthday bound (`lazyRO_collision_prob_le_birthday`) bounding query collision probability over exact rational distributions."
+
+[[apex]]
+id = "crypto-game-binding-le-msis-advantage"
+subsystem = "Crypto"
+module = "Obend.Crypto.GameSoundness"
+theorem = "binding_advantage_le_msis_advantage"
+description = "Uniform-CRS compressing commitment binding reduction (`binding_advantage_le_msis_advantage`) bounding double-opening advantage by the Module-SIS game advantage without false deterministic pigeonhole assumptions."
+
+[[apex]]
+id = "crypto-game-dual-zk-requires-both-hiding"
+subsystem = "Crypto"
+module = "Obend.Crypto.GameSoundness"
+theorem = "dual_zk_requires_both_hiding"
+description = "Conjunctive dual-spine privacy composition (`dual_zk_requires_both_hiding`) proving joint simulator statistical zero-knowledge requires hiding on both commitment spines."
+
+[[apex]]
+id = "crypto-dualspine-masked-ajtai-statistical-zk"
+subsystem = "Crypto"
+module = "Obend.Crypto.DualSpine"
+theorem = "maskedAjtai_statistical_zk"
+description = "Joint `(t, z)` honest-verifier statistical zero-knowledge (`maskedAjtai_statistical_zk`) for masked lattice Ajtai openings replacing cleartext witness openings."
+
+[[apex]]
+id = "crypto-dualspine-masked-fork-le-msis"
+subsystem = "Crypto"
+module = "Obend.Crypto.DualSpine"
+theorem = "maskedTranscriptFork_advantage_le_msis"
+description = "2-special-soundness transcript-forking game reduction (`maskedTranscriptFork_advantage_le_msis`) bounding masked Ajtai opening forgery advantage by Module-SIS game advantage."
+
+[[apex]]
+id = "crypto-sameopening-mlwe-hiding-le-two-mlwe-adv"
+subsystem = "Crypto"
+module = "Obend.Crypto.SameOpening"
+theorem = "mlweBlindedCommit_hiding_le_two_mlweAdv"
+description = "Hybrid game-hopping MLWE blinded-commitment hiding bound (`mlweBlindedCommit_hiding_le_two_mlweAdv`) bounding distinguishing advantage by twice the Module-LWE game advantage."
+
+# ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================
 
