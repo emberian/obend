@@ -163,6 +163,52 @@ sed 's/^state: running$/state: reported/' lanes/lane-sdr.md > ../sdr-report.md &
 refused: lanes/lane-sdr: refused by lanes/_kind: states (the kind of lanes/, an ancestor of lanes/lane-sdr): `new.state in ["briefed", "running", "reported", "merged"]` does not hold; the line `state: briefed` would pass (the page has `state: `)
 ```
 
+A fork declared `--for MEMBER` attributes that fork's writes to that member when it rejoins, checking
+each touched page against that member's standing grants at the tip rather than unconditionally granting
+owner authority. Granted write standing on `lanes/lane-sdr` only, `sdr-scoped` may merge its note on its
+own lane while its unauthorized edit to `lanes/lane-cost` is refused at `obend merge`:
+
+```sh
+cd swarm && obend grant sdr-own --for lane-sdr --grant lanes/lane-sdr
+obend branch ../forks/sdr-scoped --for lane-sdr
+cd ../forks/sdr-scoped && printf '\nScoped note from lane-sdr.\n' >> lanes/lane-sdr.md && printf 'Unauthorized edit from lane-sdr.\n' >> lanes/lane-cost.md
+obend open | grep -E 'lane-sdr|lane-cost'
+obend since ../../swarm
+```
+
+```text
+granted sdr-own to lane-sdr (read, write on lanes/lane-sdr)
+forked sdr-scoped (for lane-sdr): a copy of this vault, declared here until it merges
+lanes/lane-cost: v4 written
+lanes/lane-sdr: v2 written
+since sdr-scoped left ../../swarm:
+  no page moved at the tip
+a merge of sdr-scoped now would land 1 page(s) and say:
+  lanes/lane-cost: not merged: lane-sdr wrote lanes/lane-cost, which is owner's, relying on no live sturdyref that grants it
+nothing landed; nothing written at the tip
+```
+
+```sh refused
+cd swarm && obend merge ../forks/sdr-scoped
+```
+
+```text
+lanes/lane-sdr: merged from sdr-scoped
+rendered lanes/lane-sdr.md
+QUESTS: [[lanes/lane-lecscript]] (link) is missing: lanes/lane-lecscript has no version
+work: performed 0, retained 0 of 1
+lanes/lane-cost: not merged: lane-sdr wrote lanes/lane-cost, which is owner's, relying on no live sturdyref that grants it
+```
+
+```sh
+cd swarm && tail -1 lanes/lane-sdr.md && tail -1 lanes/lane-cost.md
+```
+
+```text
+Scoped note from lane-sdr.
+Edited from lane-holetyping's fork.
+```
+
 A merge keeps a refused write. In the real day, lane-hvm2's fork was declared before lane-fabric3's
 page was born; lane-fabric3's `merged` write was refused (no gate); when lane-hvm2's fork merged back,
 the merge re-rendered lane-fabric3's page from the store, the refused text in its file was lost, and no
@@ -274,33 +320,22 @@ root's transcript shows no census run of its own). Each is recorded as the merge
 with its lane commit, the dev commit it landed at, the gate that passed, the dev commit the gate passed
 on (`gate_dev:`) and `gated: after`; DEV lists it. Written in a fork, the five writes land in the
 fork's open as one turn (each needs the others: DEV's row reads the lane merged, the lane's merge
-reads DEV listing it), but the merge replays a fork's writes one page at a time, each against what it
-read there, and refuses every one of them, each waiting on another:
-
-```sh refused
-cd swarm && obend fork ../forks/gates > /dev/null && cd ../forks/gates && sh "$OBEND_ROOT/lean/tests/vault/swarm/tools/gates.sh" && obend open | grep -c ' written\| new page'
-cd ../../swarm && obend merge ../forks/gates > /dev/null 2> ../gates.err; e=$?; python3 "$OBEND_ROOT/lean/tests/vault/swarm/tools/prefix.py" 110 ../gates.err >&2; exit $e
-```
-
-```text
-5
-DEV: not merged: its write at gates read lanes/lane-fabric as it was there (ancestor 1 → none, bytes 648 → 462
-lanes/lane-docs: not merged: its write at gates read DEV as it was there (bytes 1657 → 1515, lines 38 → 34, li
-lanes/lane-fabric: not merged: its write at gates read DEV as it was there (bytes 1657 → 1515, lines 38 → 34, 
-lanes/lane-fabric3: not merged: its write at gates read DEV as it was there (bytes 1657 → 1515, lines 38 → 34,
-lanes/lane-lecscript: not merged: its write at gates read DEV as it was there (bytes 1657 → 1515, lines 38 → 3
-```
-
-Written in the vault itself, the same five writes are judged together and land at once; DEV holds every
-merge on dev, and git agrees:
+reads DEV listing it), and `obend merge` replays the coupled turn atomically at the tip so DEV holds
+every merge on dev and git agrees:
 
 ```sh
-cd swarm && sh tools/gates.sh && obend open | grep -c ' written\| new page'
+cd swarm && obend fork ../forks/gates > /dev/null && cd ../forks/gates && sh "$OBEND_ROOT/lean/tests/vault/swarm/tools/gates.sh" && obend open | grep -c ' written\| new page'
+cd ../../swarm && obend merge ../forks/gates | grep -E 'merged from gates|imported from gates'
 grep -E '^(state|gate_dev|gated):' lanes/lane-docs.md; python3 tools/check_dev.py . "$OBEND_ROOT" 0ae6ed8 9177beb
 ```
 
 ```text
 5
+DEV: merged from gates
+lanes/lane-docs: merged from gates
+lanes/lane-fabric: merged from gates
+lanes/lane-fabric3: merged from gates
+lanes/lane-lecscript: merged from gates
 state: "merged"
 gate_dev: "021a0b0"
 gated: "after"
@@ -478,6 +513,6 @@ cd swarm && obend forget eod --abandon lane-sdr --retire report-cost && obend lo
 ```
 
 ```text
-forgot 45 records (1079900 bytes) under the retention contract eod, retiring report-cost, abandoning lane-sdr: the log is one checkpoint record of 440776 bytes
-log: 1 records, 440776 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 45
+forgot 49 records (1492650 bytes) under the retention contract eod, retiring report-cost, abandoning lane-sdr: the log is one checkpoint record of 441303 bytes
+log: 1 records, 441303 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 49
 ```

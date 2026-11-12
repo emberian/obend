@@ -173,9 +173,10 @@ def withVaultLock {α : Type} (dir : System.FilePath) (act : IO α) : IO α := d
   lk.lock
   try act finally lk.unlock
 
-/-- A vault: a directory with a log, a checkpoint or a world from before the log. -/
+/-- A vault: a directory with a log, a checkpoint, a sharded world root, or a world from before the log. -/
 def isVault (dir : System.FilePath) : IO Bool := do
-  return (← (logPath dir).pathExists) || (← (checkpointPath dir).pathExists) || (← (worldPath dir).pathExists)
+  return (← (logPath dir).pathExists) || (← (checkpointPath dir).pathExists) ||
+    (← (ChunkedWorld.rootPath dir).pathExists) || (← (worldPath dir).pathExists)
 
 /-- The environment the vault's pages name (`environment: PATH` in a frontmatter; a kind page's, as
 a rule), read from PATH relative to the vault: the census's file, its `#` lines dropped
@@ -267,12 +268,18 @@ def decodeWorldOnce (bs : Bytes) : IO (Option Replay.World) := do
   decodedWorld.set (some entry)
   return entry.result
 
-/-- Authenticate a checkpoint's bytes against the log before decoding them. `holdsAt_bind` says
-this is exactly `holdsAt logHash decodeWorld`, with its decoder result retained for the writer. -/
-def holdCheckpoint (ck : Checkpoint) (bs : ByteArray) : IO (Option Replay.World) := do
+/-- Authenticate a checkpoint's bytes against the log before decoding them. Sharded manifests load
+from `.obend/world/shards/*.json` with per-bucket `DecodeCache` and `cSHAKE256` authentication; legacy
+monolithic checkpoints fall back to `decodeWorldOnce`. -/
+def holdCheckpoint (dir : System.FilePath) (ck : Checkpoint) (bs : ByteArray) : IO (Option Replay.World) := do
   match holdsAt logHash some ck bs with
   | none => return none
-  | some wb => decodeWorldOnce wb
+  | some wb =>
+    let wArr : ByteArray := ⟨wb.toArray⟩
+    if ChunkedWorld.sliceEq wArr 0 ChunkedWorld.manifestPrefixArray then
+      ChunkedWorld.loadShardedWorld dir wArr
+    else
+      decodeWorldOnce wb
 
 /-- A checkpoint's file: `obend-checkpoint 1 COUNT START STOP ANCHOR BASE`, a newline, the world's bytes.
 `BASE` is the length of the log's checkpoint record when it starts with one, else 0 (a checkpoint
@@ -325,18 +332,22 @@ structure Head where
 
 /-- The digest of a world, as `obend log` says it: the first 16 hex digits of its commitment. -/
 def worldDigest (w : Replay.World) : String :=
-  String.ofList ((hex (be 32 (dig logHash (encodeWorld w)))).toList.take 16)
+  let (_, c, _) := ChunkedWorld.manifestAndCommit w none
+  String.ofList ((hex (be 32 c)).toList.take 16)
 
-/-- The world's bytes as a record committed to them (`c`): in this binary's encoding, or in the one
-before histories were written as growth (a record an earlier binary wrote); none when neither. -/
+/-- The world's bytes as a record committed to them (`c`): in the sharded manifest encoding, in the
+monolithic growth-history JSON encoding, or in the full-history JSON encoding; none when none match. -/
 def committedAs (w : Replay.World) (c : Nat) : Option (Bytes × Nat) :=
+  let (wm, cm, _) := ChunkedWorld.manifestAndCommit w none
+  if c == cm then some (wm, c) else
   let wb := encodeWorld w
   if c == dig logHash wb then some (wb, c) else
   let wl := encodeWorldFull w
   if c == dig logHash wl then some (wl, c) else none
 
 /-- **Write a checkpoint** of the head's world, anchored to the log's last record, after checking that
-the world's bytes decode to the world (`checkpoint_is_cache`'s premise). -/
+the world's bytes decode to the world (`checkpoint_is_cache` / `sharded_checkpoint_is_cache`).
+Writes ONLY dirty shard buckets under `.obend/world/shards/`, then `root.json`, then `.obend/checkpoint`. -/
 def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := Obend.Vault.Cost.phase "write" do
   if h.count == 0 then return
   -- a log that is its checkpoint record alone needs no checkpoint (and the record's anchor is the
@@ -345,13 +356,33 @@ def saveCheckpoint (dir : System.FilePath) (h : Head) : IO Unit := Obend.Vault.C
   -- after a forget the checkpoint record holds the world: a checkpoint is written again only once the
   -- records after it outweigh it
   if h.base && h.size < 2 * h.baseSize then return
-  let wb := match h.known with
-    | some (wb, _) => wb
-    | none => encodeWorld h.world
-  if (← decodeWorldOnce wb) != some h.world then
-    IO.eprintln "checkpoint not written: the world's bytes do not decode to the world (the log stays the truth)"
-    return
-  writeAtomically (checkpointPath dir) (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, wb⟩ (if h.base then h.baseSize else 0))
+  let isSharded := match h.known with
+    | some (kb, _) => ChunkedWorld.sliceEq ⟨kb.toArray⟩ 0 ChunkedWorld.manifestPrefixArray
+    | none => true
+  if !isSharded then
+    let wb := match h.known with
+      | some (wb, _) => wb
+      | none => encodeWorld h.world
+    if (← decodeWorldOnce wb) != some h.world then
+      IO.eprintln "checkpoint not written: the world's bytes do not decode to the world (the log stays the truth)"
+      return
+    writeAtomically (checkpointPath dir)
+      (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, wb⟩ (if h.base then h.baseSize else 0))
+  else
+    let mList ← match h.known with
+      | some (kb, _) => pure kb
+      | none => do
+        let (wb, _) ← ChunkedWorld.commitWorldManifest dir h.world
+        pure wb
+    match ← ChunkedWorld.writeShardedWorld dir h.prev h.world (some ⟨mList.toArray⟩) with
+    | none =>
+      IO.eprintln "checkpoint not written: the world's bytes do not decode to the world (the log stays the truth)"
+      return
+    | some (active, needPrune) =>
+      writeAtomically (checkpointPath dir)
+        (checkpointBytes ⟨h.count, h.lastStart, h.size, h.prev, mList⟩ (if h.base then h.baseSize else 0))
+      if needPrune then
+        ChunkedWorld.pruneObsoleteShards dir active
 
 /-- The test-only write barrier (`OBEND_TEST_TEAR=N:K:PATH`): appending record `N`, write its first `K`
 bytes (`all`: the whole record, and stop before its files are written), create `PATH` and wait to be
@@ -396,8 +427,10 @@ def commitTurnRaw (dir : System.FilePath) (h : Head) (t : Turn) : IO (Except Str
     let h' ← Obend.Vault.Cost.phase "land" do
       let oldC ← match h.known with
         | some (_, c) => pure c
-        | none => pure (dig logHash (encodeWorld h.world))
-      let (wb, newC) ← Obend.Vault.Cost.compute fun _ => let wb := encodeWorld w'; (wb, dig logHash wb)
+        | none => do
+          let (_, c) ← ChunkedWorld.commitWorldManifest dir h.world
+          pure c
+      let (wb, newC) ← ChunkedWorld.commitWorldManifest dir w'
       let r : Record := ⟨⟨h.prev, oldC, newC, dig logHash b⟩, b⟩
       let bs := encodeRecord logHash r
       appendRecord dir (h.count + 1) bs
@@ -466,14 +499,14 @@ def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.pha
   let held ← match ck? with
     | none => pure none
     | some ck => do
-      let w ← holdCheckpoint (SegmentLog.localCheckpoint ck offset) window
+      let w ← holdCheckpoint dir (SegmentLog.localCheckpoint ck offset) window
       pure (w.map (ck, ·))
   let (offset, bs, held) ← if held.isNone && offset != 0 then do
       let all ← SegmentLog.readAll logHash dir
       let held ← match ck? with
         | none => pure none
         | some ck => do
-          let w ← holdCheckpoint ck all
+          let w ← holdCheckpoint dir ck all
           pure (w.map (ck, ·))
       pure (0, all, held)
     else pure (offset, window, held)
@@ -523,7 +556,9 @@ def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.pha
       if qs.isEmpty then pure (some (ck.world, r.receipt.newCommit))
       else pure (committedAs world r.receipt.newCommit)
     | some r, none => pure (committedAs world r.receipt.newCommit)
-    | none, _ => pure (some (encodeWorld world, dig logHash (encodeWorld world)))
+    | none, _ => do
+      let (wb, c) ← ChunkedWorld.commitWorldManifest dir world
+      pure (some (wb, c))
   if last?.isSome && known.isNone then
     throw (IO.userError ("the log's replay does not reach the world record " ++ toString count ++
       " commits to: the log was written by another step (relinking is not done here)"))
@@ -588,6 +623,25 @@ def readWorld (dir : System.FilePath) : IO Replay.World := withVaultLock dir do
   if !(← (logPath dir).pathExists) then
     if let some w ← legacyWorld dir then return w
   return (← recoverLog dir).head.world
+
+/-- Demand-load `NonStoreMeta` (`members`, `grants`, `outstanding`, `reasons`, etc.) without opening
+any of the `128` shard files when the log ends at a valid sharded checkpoint (`ChunkedWorld.metaOnly_sound`). -/
+def readMetaWorld (dir : System.FilePath) : IO Replay.World := do
+  let fast ← withVaultLock dir do
+    let key ← vaultKey dir
+    let stamp ← logStamp dir
+    if let some (_, _, r) := (← recoveries.get).find? (fun (k, n, _) => k == key && n == stamp) then
+      return some r.head.world
+    let some (ck, _) ← readCheckpoint dir | return none
+    let total ← SegmentLog.size logHash dir
+    if !(ck.start ≤ ck.stop && ck.stop == total) then return none
+    let window ← SegmentLog.readRange logHash dir ck.start total
+    match holdsAt logHash some (SegmentLog.localCheckpoint ck ck.start) window with
+    | none => return none
+    | some wb => return ChunkedWorld.loadManifestMetaOnly ⟨wb.toArray⟩
+  match fast with
+  | some w => return w
+  | none => readWorld dir
 
 def loadStore (dir : System.FilePath) : IO Store := return (← readWorld dir).store
 
@@ -685,6 +739,8 @@ def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
     if ← (newLogPath dir).pathExists then IO.FS.removeFile (newLogPath dir)
     forgetRecovery dir
     if ← (checkpointPath dir).pathExists then IO.FS.removeFile (checkpointPath dir)
+    if ← (ChunkedWorld.rootPath dir).pathExists then IO.FS.removeFile (ChunkedWorld.rootPath dir)
+    ChunkedWorld.pruneObsoleteShards dir []
     return { world := h.world, prev := h.prev, count := 1, size := rb.length, lastStart := 0, base := true,
              baseSize := rb.length }
 
@@ -1313,13 +1369,13 @@ def reasonsRun (dir : System.FilePath) : List String → Option (IO UInt32)
     | .ok _ => IO.println ("  " ++ name ++ ": admissible now"); return 0
     | .error e => IO.println ("  " ++ e); return 0
   | ["admit", name] => some do
-    let w ← readWorld dir
+    let w ← readMetaWorld dir
     match w.reasons.admit name with
     | .ok a => IO.println (name ++ ": admitted (" ++ a.because ++ " is supported by " ++
         ((w.reasons.standing a.because).getD "observation or assumption") ++ ")"); return 0
     | .error e => IO.eprintln e; return 1
   | ["status"] => some do
-    let w ← readWorld dir
+    let w ← readMetaWorld dir
     for x in w.reasons.atoms do IO.println (w.reasons.line x)
     for a in w.reasons.base.actions do
       IO.println (match w.reasons.admit a.name with
@@ -1328,10 +1384,53 @@ def reasonsRun (dir : System.FilePath) : List String → Option (IO UInt32)
             (w.reasons.status a.because).text ++ ")")
     return 0
   | ["why", x] => some do
-    let w ← readWorld dir
+    let w ← readMetaWorld dir
     IO.println (w.reasons.line x)
     return 0
   | _ => none
+
+def forkMetaPath (forkDir : System.FilePath) : System.FilePath :=
+  forkDir / ".obend" / "fork.json"
+
+def writeForkMeta (forkDir : System.FilePath) (name : String) (who? : Option String) : IO Unit := do
+  match who? with
+  | none => pure ()
+  | some who =>
+    if who == "" || who == "owner" then pure () else
+      let j := Lean.Json.mkObj [("name", Lean.Json.str name), ("for", Lean.Json.str who)]
+      Obend.Vault.Cost.writeFile (forkMetaPath forkDir) (j.pretty ++ "\n")
+
+def readForkMember (tipWorld : Replay.World) (label : String) (forkDir : System.FilePath) :
+    IO (Option String) := do
+  if let some m := tipWorld.forkMembers.lookup label then
+    return some m
+  let fp := forkMetaPath forkDir
+  if !(← fp.pathExists) then return none
+  match Lean.Json.parse (← Obend.Vault.Cost.readFile fp) with
+  | .ok j => return (j.getObjValAs? String "for").toOption
+  | .error _ => return none
+
+def runForkCmd (dir : System.FilePath) (other : String) (rest : List String) : IO UInt32 := do
+  let (forWho, rest) := flag "--for" rest
+  unless rest.isEmpty do return ← fail "fork DIR [--for MEMBER]"
+  if forWho == some "" then return ← fail "fork --for MEMBER: empty member name"
+  let _ ← openDir dir false
+  let name := (System.FilePath.mk other).fileName.getD other
+  if ← (System.FilePath.mk other).pathExists then return ← fail ("refused: " ++ other ++ " exists")
+  -- A selector and its segment generation must be copied from one locked snapshot.
+  withLog dir fun h => do
+    match ← commitTurn dir h (.forked name forWho) with
+    | .error e => fail e
+    | .ok (h', _) =>
+      writeExports dir h'.world
+      saveCheckpoint dir h'
+      copyVault dir other
+      writeForkMeta (System.FilePath.mk other) name forWho
+      let whoNote := match forWho with
+        | some m => if m == "" || m == "owner" then "" else " (for " ++ m ++ ")"
+        | none => ""
+      IO.println ("forked " ++ name ++ whoNote ++ ": a copy of this vault, declared here until it merges")
+      return 0
 
 /-- Run a vault command in `dir`. `none` when the arguments are not a vault command. -/
 def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
@@ -1365,7 +1464,8 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
           pure (some (ds.contains a))
         | none => pure none
       | .error _ => pure none
-    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches (some ow.reasons)) V with
+    let forMember ← Obend.Vault.Cost.phase "read" (readForkMember w0 label (System.FilePath.mk other))
+    match ← finishTurn dir (.merged label ow.store false (some ow.grants) ow.landed reaches (some ow.reasons) forMember) V with
     | .ok (_, .merged s' notes, rendered) =>
       -- a write of the other side the tip did not land is a refused write of this merge
       -- (here's own writes the merge left unsettled are refusals of their pages, said by `finishTurn`)
@@ -1441,7 +1541,8 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         IO.println ("  " ++ x ++ ": here " ++ (here.drop (x.length + 2)) ++ "; at the tip, with yours joined: " ++
           (there.drop (x.length + 2)))
     -- the merge, stepped in memory
-    let t : Replay.Turn := .merged label me.store false (some me.grants) me.landed none (some me.reasons)
+    let forMember ← readForkMember w label dir
+    let t : Replay.Turn := .merged label me.store false (some me.grants) me.landed none (some me.reasons) forMember
     match Replay.stepTurn w t with
     | .error e => IO.println ("a merge of " ++ label ++ " would be refused: " ++ e)
     | .ok (w1, o) =>
@@ -1498,7 +1599,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         ", ".intercalate (parsed.map fun (v, p) => v ++ " " ++ p)); return 0
     | .error e => fail e
   | ["member", "list"] => some do
-    let s ← loadStore dir
+    let s := (← readMetaWorld dir).store
     for m in s.members do
       IO.println (m.name ++ ": " ++ ", ".intercalate (m.grants.map fun (v, p) => v ++ " " ++ p))
     return 0
@@ -1656,7 +1757,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
     | .error e => fail e
     | .ok () => IO.println ("revoked " ++ id); return 0
   | ["grants"] => some do
-    let w ← readWorld dir
+    let w ← readMetaWorld dir
     for g in w.grants.standing do
       IO.println (g.id ++ ": " ++ g.grant.holder ++ " (" ++ Obend.Vault.Form.showAuths g.grant.held ++ " on " ++
         ", ".intercalate g.grant.patterns ++ ")" ++ (if w.grants.revoked.contains g.id then ", revoked" else ""))
@@ -1670,7 +1771,7 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         (if w.outstanding.isEmpty then "nothing outstanding" else toString w.outstanding.length ++ " outstanding"))
       return 0
   | ["obligations"] => some do
-    let w ← readWorld dir
+    let w ← readMetaWorld dir
     if w.outstanding.isEmpty then IO.println "nothing outstanding"
     for o in w.outstanding do
       IO.println (o.form ++ ": intent " ++ o.intent ++ " (" ++ fillText o.fill ++ ") sent to " ++ o.vault ++
@@ -1708,20 +1809,9 @@ def run (dir : System.FilePath) (args : List String) : Option (IO UInt32) :=
         (if abandon.isEmpty then "" else ", abandoning " ++ ", ".intercalate abandon) ++
         ": the log is one checkpoint record of " ++ toString b' ++ " bytes")
       return 0
-  | ["fork", other] => some do
-    let _ ← openDir dir false
-    let name := (System.FilePath.mk other).fileName.getD other
-    if ← (System.FilePath.mk other).pathExists then return ← fail ("refused: " ++ other ++ " exists")
-    -- A selector and its segment generation must be copied from one locked snapshot.
-    withLog dir fun h => do
-      match ← commitTurn dir h (.forked name) with
-      | .error e => fail e
-      | .ok (h', _) =>
-        writeExports dir h'.world
-        saveCheckpoint dir h'
-        copyVault dir other
-        IO.println ("forked " ++ name ++ ": a copy of this vault, declared here until it merges")
-        return 0
+  | "fork" :: other :: rest => some (runForkCmd dir other rest)
+  | "branch" :: other :: rest =>
+    if other == "resolve" then none else some (runForkCmd dir other rest)
   | ["transport", name] => some do
     let _ ← openDir dir false
     let w ← readWorld dir

@@ -2995,6 +2995,139 @@ def Store.writeText (s : Store) (page : String) (w : PageWrite) : Except String 
   | none => .ok s
   | some (G, a) => s.writeSince page w.poster w.versions.dropLast G a
 
+theorem prepareFrom_page {cur : Option (Graph × Nat)} {es : List Entry} {p : Page} {G' : Graph}
+    {added : List (AtomId × String)} {who : Actor} {turn : Nat} {poster : String} {env : Environment}
+    {pr : Prepared} (h : prepareFrom cur es p G' added who turn poster env = .ok pr) :
+    pr.p = p ∧ pr.G' = G' := by
+  unfold prepareFrom at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first
+    | (cases h; exact ⟨rfl, rfl⟩)
+    | cases h
+    | skip
+  all_goals (simp only [Except.ok.injEq] at h; subst h; exact ⟨rfl, rfl⟩)
+
+/-- Prepare every page write of a branch turn from its page's state in `s`, appending any
+intermediate branch versions (`w.versions.dropLast`) before preparing the final version `G`
+under actor `who`. -/
+def prepareTexts (s : Store) (who : Actor) :
+    List (String × PageWrite) → Except String (List Prepared)
+  | [] => .ok []
+  | (page, w) :: rest =>
+    match s.page? page with
+    | none => .error (page ++ ": no such page")
+    | some p =>
+      match w.versions.getLast? with
+      | none => .error (page ++ ": empty write")
+      | some (G, a) =>
+        let mids := w.versions.dropLast
+        let p' := { p with history := p.history ++ mids.map (·.1), authors := p.authors ++ mids.flatMap (·.2) }
+        match prepareFrom (p.current.map fun G0 => (G0, p.history.length - 1)) s.entries p' G a who s.turn
+            (w.poster.getD who.name) s.environment with
+        | .error e => .error (page ++ ": " ++ e)
+        | .ok pr =>
+          match prepareTexts s who rest with
+          | .error e => .error e
+          | .ok prs => .ok (pr :: prs)
+
+theorem prepareTexts_names {s : Store} {who : Actor} :
+    ∀ {ws : List (String × PageWrite)} {prs : List Prepared},
+      prepareTexts s who ws = .ok prs → prs.map (·.p.name) = ws.map (·.1)
+  | [], prs, h => by simp only [prepareTexts, Except.ok.injEq] at h; subst h; rfl
+  | (page, w) :: rest, prs, h => by
+    simp only [prepareTexts] at h
+    cases hp : s.page? page with
+    | none => rw [hp] at h; cases h
+    | some p =>
+      rw [hp] at h
+      have hpn : p.name = page := by simpa [Store.page?] using List.find?_some hp
+      cases hl : w.versions.getLast? with
+      | none => rw [hl] at h; cases h
+      | some ga =>
+        obtain ⟨G, a⟩ := ga
+        rw [hl] at h
+        dsimp only at h
+        split at h
+        · cases h
+        · rename_i pr hpr
+          split at h
+          · cases h
+          · rename_i prs' hprs
+            simp only [Except.ok.injEq] at h
+            subst h
+            have hp' := (prepareFrom_page hpr).1
+            simp [hp', hpn, prepareTexts_names hprs]
+
+/-- Land prepared branch writes onto `s` all at once, one turn later. -/
+def Store.landTexts (s : Store) (prs : List Prepared) : Store :=
+  { s with
+    pages := s.pages.map fun q => match prs.find? (·.p.name == q.name) with
+      | some pr => pr.p.withChange pr.change
+      | none => q
+    turn := s.turn + 1 }
+
+theorem landTexts_frame (s : Store) (prs : List Prepared) (n : String) (hn : ∀ pr ∈ prs, pr.p.name ≠ n) :
+    (s.landTexts prs).page? n = s.page? n := by
+  unfold Store.page? Store.landTexts
+  simp only
+  rw [find?_map_page s _ (fun q => by
+    cases hf : prs.find? (·.p.name == q.name) with
+    | none => rfl
+    | some pr =>
+      have hq : pr.p.name = q.name := by simpa using List.find?_some hf
+      simp [Page.withChange, hq]) n]
+  cases hq : s.pages.find? (·.name == n) with
+  | none => rfl
+  | some q =>
+    have hqn : q.name = n := by simpa using List.find?_some hq
+    have hnone : prs.find? (·.p.name == q.name) = none := by
+      rw [List.find?_eq_none]
+      intro pr hpr hc
+      simp only [beq_iff_eq] at hc
+      exact hn pr hpr (hc.trans hqn)
+    simp [hnone]
+
+/-- **A multi-page (or actor-attributed) branch turn lands once**: every page write in `ws` is
+prepared against `s` under `who`, judged together at the turn's tip (`tipOf prs`) with cites
+resolved against `turnEntries`, and landed atomically (`Store.landTexts`). -/
+def Store.writeTexts (s : Store) (ws : List (String × PageWrite)) (who : Actor := .owner) :
+    Except String Store :=
+  if ws.isEmpty then .ok s
+  else if (ws.map (·.1)).eraseDups.length != ws.length then
+    .error "duplicate page in multi-page branch write"
+  else
+    match prepareTexts s who ws with
+    | .error e => .error e
+    | .ok prs =>
+      let res := if prs.length ≤ 1 then s.entries else turnEntries s.entries (prs.map fun pr => (pr.p, pr.G', []))
+      let over := if prs.length ≤ 1 then [] else tipOf prs
+      match judgeAll s.entries res over prs with
+      | .error e => .error e
+      | .ok () => .ok (s.landTexts prs)
+
+theorem writeTexts_page?_ne {s s' : Store} {ws : List (String × PageWrite)} {who : Actor} {n : String}
+    (hn : n ∉ ws.map (·.1)) (h : s.writeTexts ws who = .ok s') : s'.page? n = s.page? n := by
+  unfold Store.writeTexts at h
+  split at h
+  · simp only [Except.ok.injEq] at h; subst h; rfl
+  · split at h
+    · cases h
+    · cases hp : prepareTexts s who ws with
+      | error e => rw [hp] at h; cases h
+      | ok prs =>
+        rw [hp] at h
+        dsimp only at h
+        split at h
+        · cases h
+        · simp only [Except.ok.injEq] at h
+          subst h
+          apply landTexts_frame
+          intro pr hpr heq
+          apply hn
+          rw [← prepareTexts_names hp]
+          exact heq ▸ List.mem_map_of_mem hpr
+
 /-! ### Merge -/
 
 /-- The merge of two versions of a page: their union where they agree on every atom both store. -/

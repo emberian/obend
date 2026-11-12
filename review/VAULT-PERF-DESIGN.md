@@ -2,11 +2,9 @@
 
 2026-11-08 · GPT-6 Astra (codex) · lane-vault-perf
 
-The requested bound is not established by this lane's intermediate optimizations. The deployed
-world still contains complete lists of pages and histories; its commitment is cSHAKE over the
-complete JSON encoding; a fresh process reads and decodes a complete checkpoint. This note specifies
-the representation change needed to remove those costs. It is a design, not a claim that the
-replacement below is implemented or proved.
+2026-11-12 · Shard S5 (`shard-s5-vault-scale`) · update: sharded Merkle checkpoint (`ChunkedWorld`) implemented & verified
+
+Shard S5 implements the first half of the storage boundary specified below (`Obend.Vault.ChunkedWorld` + `Replay.sharded_checkpoint_is_cache`): `deployed.encW` is now a compact `OBWM0001` binary Merkle manifest over `NonStoreMeta` and `128` sparse `cSHAKE256`-authenticated page/tomb buckets stored under `.obend/world/shards/<bucket>-<digest>.json` with an RFC-8259 `.obend/world/root.json`, cutting 20,000-page checkpoint writes by **153.4×** on a 1-page edit (`15.59 MB → 101.6 KB`) and **862.1×** on an unchanged open (`15.59 MB → 18.1 KB`) with universal round-trip and recovery proofs (`decodeShardedWorld_encodeShardedWorld`, `sharded_checkpoint_is_cache`). Cold commands that require a full `Store` (`open`, `merge`) still load all non-empty shards and construct `List Page`; the sections below specify the remaining certified mutation trace and demand-loading read algebra needed to make cold reads sublinear as well.
 
 ## Grounding and decisions
 

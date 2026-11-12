@@ -48,7 +48,7 @@ cd alice && obend log | head -2
 
 ```text
 log: 52 records, 11901 bytes, each following the one before it from the genesis sentinel
-logical log: 11901 bytes; checkpoint: 3960 bytes
+logical log: 11901 bytes; checkpoint: 994 bytes
 ```
 
 ## 2. Refused while something needs the prefix
@@ -98,7 +98,7 @@ ls -l .obend/log.new | awk '{print $5}'; obend log | tail -2
 
 ```text
 300
-world d4c73969f0d645b9: as record 56 commits to it
+world db28819ce9c6e47f: as record 56 commits to it
 one world
 ```
 
@@ -113,13 +113,13 @@ cd alice && obend open && obend log
 recovered: an interrupted forget's new log (300 bytes) dropped; the log stands
 recovered: the forget at record 56 was whole and the log was not compacted: compacted to one checkpoint record
 nothing changed
-log: 2 records, 4511 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest d17eb0c332fd7b08), ending at receipt 2bddb961b3bb2975
+log: 2 records, 4511 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest b946b1c1f43b3e6a), ending at receipt b7c25a0a7c5cbbd3
 logical log: 4511 bytes; checkpoint: 0 bytes
 last record: 2 (open), bytes 4294 to 4511
 checkpoint: none; the world is replayed from genesis
-world d4c73969f0d645b9: replayed from genesis
-world d4c73969f0d645b9: the checkpoint and the records after it
-world d4c73969f0d645b9: as record 2 commits to it
+world db28819ce9c6e47f: replayed from genesis
+world db28819ce9c6e47f: the checkpoint and the records after it
+world db28819ce9c6e47f: as record 2 commits to it
 one world
 ```
 
@@ -137,16 +137,16 @@ cd alice && printf -- "---\nbalance: 5\n---\n# Carol\n\nAfter the forget.\n" > l
 
 ```text
 ledger/carol: v7 written
-log: 3 records, 4799 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest d17eb0c332fd7b08), ending at receipt 2bddb961b3bb2975
+log: 3 records, 4799 bytes, each following the one before it from the genesis sentinel through a checkpoint record: 56 forgotten records (prefix digest b946b1c1f43b3e6a), ending at receipt b7c25a0a7c5cbbd3
 logical log: 4799 bytes; checkpoint: 0 bytes
   record 1 (compacted): bytes 0 to 4294
   record 2 (open): bytes 4294 to 4511
   record 3 (open): bytes 4511 to 4799
 last record: 3 (open), bytes 4511 to 4799
 checkpoint: none; the world is replayed from genesis
-world f86bab377a0458dc: replayed from genesis
-world f86bab377a0458dc: the checkpoint and the records after it
-world f86bab377a0458dc: as record 3 commits to it
+world cebefe18bca569a5: replayed from genesis
+world cebefe18bca569a5: the checkpoint and the records after it
+world cebefe18bca569a5: as record 3 commits to it
 one world
 ```
 

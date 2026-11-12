@@ -231,6 +231,10 @@ structure BTurn where
   /-- the page's law lines as the write leaves them, when it changes them (a vault's page carries
   its laws in its text): a law-changing write, settled before every other write at the tip -/
   lawKey : Option String := none
+  /-- the texts of a multi-page (or actor-attributed) branch turn (`text = none`), paired with cell names -/
+  texts : List (String × PageWrite) := []
+  /-- the store actor under whose standing `texts` are prepared and judged -/
+  actorRef : Actor := .owner
 
 /-- A write that changes a page's law lines. -/
 def BTurn.isLaw (t : BTurn) : Bool := t.lawKey.isSome
@@ -447,6 +451,18 @@ def judgeWrite (c : Config) (t : BTurn) : Except Refusal (Option Store) :=
         if Obend.Law.termEq x.term d.postState.term then .ok (some s')
         else .error (.store d.cell "its turn does not say the state its text lands")
       | none => .error (.store d.cell "its text lands no page")
+  | some s, none, ds@(d₀ :: _) =>
+    if t.texts.map (·.1) == ds.map (·.cell) then
+      match s.writeTexts t.texts t.actorRef with
+      | .error m =>
+        let pg := d₀.cell
+        .error (.store pg (dropPage pg m))
+      | .ok s' =>
+        if ds.all (fun d => match vaultStates s' d.cell with
+            | some x => Obend.Law.termEq x.term d.postState.term
+            | none => false) then .ok (some s')
+        else .error (.store d₀.cell "its turn does not say the states its texts land")
+    else .error (.store (t.writes.headD "") "a write in a vault carries its text, for one page")
   | some _, _, _ => .error (.store (t.writes.headD "") "a write in a vault carries its text, for one page")
   | none, _, _ =>
     match t.turn.writeCells.findSome? (coneRefusal c.book (applyTurn c.store t.turn)
@@ -860,6 +876,63 @@ theorem tip_refuses_iff_store_refuses {c : Config} {o : String} {t : BTurn} {s :
   rw [hv, ht, hw]
   simp only [hm]
 
+/-- **Multi-page turn landed at the tip is landed in the store.** In a vault, a multi-page (or
+actor-attributed) branch turn (`t.text = none`, `t.texts` matching `t.turn.writeCells`) whose
+authority and external pins hold is admitted at the tip if and only if `Store.writeTexts` lands
+at the states its turn declares, reaching the exact store `Store.writeTexts` produces. -/
+theorem tip_lands_texts_iff_store_lands {c : Config} {o : String} {t : BTurn} {s s' : Store}
+    {d₀ : CellDelta} {ds : List CellDelta}
+    (hv : c.vault = some s) (ht : t.text = none) (hw : t.turn.writeCells = d₀ :: ds)
+    (hm : t.texts.map (·.1) = (d₀ :: ds).map (·.cell))
+    (hpre : preRefusal c t = none) :
+    (∃ c', admitWrite c o t = .ok c' ∧ c'.vault = some s') ↔
+      s.writeTexts t.texts t.actorRef = .ok s' ∧
+      ∀ d ∈ d₀ :: ds, (vaultStates s' d.cell).map Data.term = some d.postState.term := by
+  have hm_beq : (t.texts.map (·.1) == (d₀ :: ds).map (·.cell)) = true := beq_iff_eq.2 hm
+  unfold admitWrite judgeWrite
+  rw [hpre]
+  simp only
+  rw [hv, ht, hw]
+  simp only [hm_beq, ↓reduceIte]
+  cases hs : s.writeTexts t.texts t.actorRef with
+  | error m => simp
+  | ok s'' =>
+    simp only
+    by_cases hall : ((d₀ :: ds).all fun d => match vaultStates s'' d.cell with
+        | some x => Obend.Law.termEq x.term d.postState.term
+        | none => false) = true
+    · simp only [hall, ↓reduceIte]
+      constructor
+      · rintro ⟨_, h, hv'⟩
+        cases h
+        simp only [Option.some.injEq] at hv'
+        subst hv'
+        refine ⟨rfl, fun d hd => ?_⟩
+        have h1 := List.all_eq_true.1 hall d hd
+        cases hx : vaultStates s'' d.cell with
+        | none => rw [hx] at h1; cases h1
+        | some x =>
+          rw [hx] at h1
+          simp [Obend.Law.termEq_sound_local h1]
+      · rintro ⟨hok, _⟩
+        cases hok
+        exact ⟨_, rfl, rfl⟩
+    · simp only [hall, Bool.false_eq_true, ↓reduceIte]
+      constructor
+      · rintro ⟨_, h, _⟩; cases h
+      · rintro ⟨hok, hd⟩
+        cases hok
+        exfalso
+        apply hall
+        rw [List.all_eq_true]
+        intro d hmem
+        have hdt := hd d hmem
+        cases hx : vaultStates s' d.cell with
+        | none => simp [hx] at hdt
+        | some x =>
+          simp only [hx, Option.map_some, Option.some.injEq] at hdt
+          exact hdt ▸ Obend.Law.termEq_refl_local _
+
 /-- What the authority check passing says: every sturdyref relied on is live, and every page written
 is the actor's or granted by a sturdyref relied on. -/
 theorem authRefusal_none {a : Authority} {book : LawBook} {t : BTurn} (h : authRefusal a book t = none) :
@@ -1078,11 +1151,41 @@ theorem writeText_consents {s s' : Store} {page : String} {w : PageWrite}
         · rename_i hj
           exact ⟨p, pr, rfl, hpr, hj⟩
 
+/-- **A store's consent to a multi-page (or actor-attributed) branch turn**: every page write in
+`ws` prepared against `s` under `who`, and judged together at the turn's tip (`judgeAll`). -/
+def TextsConsent (s : Store) (ws : List (String × PageWrite)) (who : Actor) : Prop :=
+  ws ≠ [] ∧ ∃ prs, prepareTexts s who ws = .ok prs ∧
+    let res := if prs.length ≤ 1 then s.entries else turnEntries s.entries (prs.map fun pr => (pr.p, pr.G', []))
+    let over := if prs.length ≤ 1 then [] else tipOf prs
+    judgeAll s.entries res over prs = .ok ()
+
+theorem writeTexts_consents {s s' : Store} {ws : List (String × PageWrite)} {who : Actor}
+    (hne : ws ≠ []) (h : s.writeTexts ws who = .ok s') : TextsConsent s ws who := by
+  unfold Store.writeTexts at h
+  have hemp : ws.isEmpty = false := List.isEmpty_eq_false_iff.2 hne
+  rw [hemp] at h
+  simp only [Bool.false_eq_true, ↓reduceIte] at h
+  split at h
+  · cases h
+  · cases hp : prepareTexts s who ws with
+    | error e => rw [hp] at h; cases h
+    | ok prs =>
+      rw [hp] at h
+      dsimp only at h
+      cases hj : judgeAll s.entries
+          (if prs.length ≤ 1 then s.entries else turnEntries s.entries (prs.map fun pr => (pr.p, pr.G', [])))
+          (if prs.length ≤ 1 then [] else tipOf prs) prs with
+      | error e => rw [hj] at h; cases h
+      | ok u => exact ⟨hne, prs, hp, hj⟩
+
 /-- **What consent to a write is**, at the configuration it is judged at: in a vault, the store's
-consent to its text (`TextConsents`); otherwise the consent of every page of its cone (`Consents`). -/
+consent to its text (`TextConsents` or multi-page `TextsConsent`); otherwise the consent of every
+page of its cone (`Consents`). -/
 def WriteConsents (c c' : Config) (t : BTurn) : Prop :=
   match c.vault with
-  | some s => ∃ w d, t.text = some w ∧ t.turn.writeCells = [d] ∧ TextConsents s d.cell w.poster w.versions
+  | some s =>
+    (∃ w d, t.text = some w ∧ t.turn.writeCells = [d] ∧ TextConsents s d.cell w.poster w.versions) ∨
+    (t.text = none ∧ t.texts.map (·.1) = t.turn.writeFootprint ∧ TextsConsent s t.texts t.actorRef)
   | none => ∀ d ∈ t.turn.writeCells, Consents c.book c'.store (factsAt c.history.length) d
 
 theorem write_consents {s s' : Store} {p : Page} {G : Graph} {a : List (AtomId × String)} {po : Option String}
@@ -1114,8 +1217,23 @@ theorem admitWrite_consents {c c' : Config} {o : String} {t : BTurn} (h : admitW
   · rename_i s w d hv ht hw
     rw [hv]
     cases hs : s.writeText d.cell w with
-    | ok s' => exact ⟨w, d, ht, hw, writeText_consents hs⟩
+    | ok s' => exact .inl ⟨w, d, ht, hw, writeText_consents hs⟩
     | error m => rw [hs] at hj; cases hj
+  · rename_i s d₀ ds hv ht hw
+    rw [hv]
+    split at hj
+    · rename_i hm
+      have hmap : t.texts.map (·.1) = (d₀ :: ds).map (·.cell) := beq_iff_eq.1 hm
+      have hne : t.texts ≠ [] := by
+        intro hnil
+        rw [hnil] at hmap
+        cases hmap
+      cases hs : s.writeTexts t.texts t.actorRef with
+      | error m => rw [hs] at hj; cases hj
+      | ok s' =>
+        refine .inr ⟨ht, ?_, writeTexts_consents hne hs⟩
+        simpa [VaultTurn.writeFootprint, hw] using hmap
+    · cases hj
   · cases hj
   · rename_i hv
     rw [hv]
@@ -2660,6 +2778,41 @@ theorem admitWrite_agrees {c c' : Config} {o : String} {t : BTurn} (hc : Agrees 
             rw [hfr]
             exact hc s hv x
         · cases hj
+  · rename_i s d₀ ds hv ht hw
+    split at hj
+    · rename_i hm
+      have hmap : t.texts.map (·.1) = (d₀ :: ds).map (·.cell) := beq_iff_eq.1 hm
+      cases hs : s.writeTexts t.texts t.actorRef with
+      | error m => rw [hs] at hj; cases hj
+      | ok s' =>
+        rw [hs] at hj
+        simp only at hj
+        split at hj
+        · rename_i hall
+          cases hj
+          dsimp only
+          by_cases hxm : x ∈ t.turn.writeFootprint
+          · have hxd : x ∈ (d₀ :: ds).map (·.cell) := by
+              simpa [VaultTurn.writeFootprint, hw] using hxm
+            obtain ⟨d, hd, rfl⟩ := List.mem_map.1 hxd
+            rw [applyTurn_write c.store t.turn d (by rw [hw]; exact hd)]
+            have hd_all := List.all_eq_true.1 hall d hd
+            cases hx : vaultStates v' d.cell with
+            | none => rw [hx] at hd_all; cases hd_all
+            | some y =>
+              rw [hx] at hd_all
+              simp [Obend.Law.termEq_sound_local hd_all]
+          · rw [applyTurn_frame_of_not_mem _ _ _ hxm]
+            have hnot_texts : x ∉ t.texts.map (·.1) := by
+              rw [hmap]
+              simpa [VaultTurn.writeFootprint, hw] using hxm
+            have hfr : vaultStates v' x = vaultStates s x := by
+              unfold vaultStates
+              rw [writeTexts_page?_ne hnot_texts hs]
+            rw [hfr]
+            exact hc s hv x
+        · cases hj
+    · cases hj
   · cases hj
   · rename_i hv
     split at hj

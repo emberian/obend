@@ -149,6 +149,16 @@ def lawKeyOf (bp : List Graph) (G : Graph) : Option String :=
   else some ("\n".intercalate ((lawLines new).map fun (n, v) => n ++ ": " ++ v) ++ "\nkind: " ++
     (kindLine new).getD "")
 
+/-- Optional member authority attribution for an incoming fork (`--for MEMBER` at `obend fork` /
+`obend branch`). When `actor = "owner"` (default), all writes run under owner authority; when
+attributed to a member, the fork's writes carry `actor`, rely on the capabilities in `tipAuth`
+returned by `reliesOf`, and are prepared/judged under `actorRef` at the tip. -/
+structure ForkAuth where
+  actor : String := "owner"
+  tipAuth : Authority := {}
+  reliesOf : String → Bool → List String := fun _ _ => []
+  actorRef : Actor := .owner
+
 /-- A side's write of a page: from its base state to its state now, its read pins the pages its laws
 over links read, at the side's states, and its text the versions it wrote since the base. -/
 def writeOf (s : Store) (label name : String) (bp : List Graph) (G : Graph) : BTurn :=
@@ -159,6 +169,24 @@ def writeOf (s : Store) (label name : String) (bp : List Graph) (G : Graph) : BT
     text := some { versions := versionsSince s label name bp },
     lawKey := lawKeyOf bp G }
 
+/-- A side's write of a page under `ForkAuth` attribution. -/
+def writeOfAuth (s : Store) (label name : String) (bp : List Graph) (G : Graph)
+    (auth : ForkAuth := {}) : BTurn :=
+  if auth.actor == "owner" then
+    writeOf s label name bp G
+  else
+    let pins := if hasLinkLaws s.entries name G then pinsAt s.entries (linksAt s.entries name G) else []
+    let lk := lawKeyOf bp G
+    let pw : PageWrite := { versions := versionsSince s label name bp }
+    { label := name, actor := auth.actor,
+      turn := writeTurn name (stateAt bp) (pageState G ((liveHistory s name).length - 1)) pins
+        (requestAt auth.actor 0),
+      relies := auth.reliesOf name lk.isSome,
+      text := none,
+      lawKey := lk,
+      texts := [(name, pw)],
+      actorRef := auth.actorRef }
+
 /-- A side's writes in an order its own pins hold in: a write that pins a page the side also wrote
 comes after that write (`fuel` bounds the passes; what is left is appended as it stands). -/
 def orderWrites : Nat → List BTurn → List BTurn
@@ -167,6 +195,152 @@ def orderWrites : Nat → List BTurn → List BTurn
     match ws.partition fun w => w.turn.readPins.all fun p => !(ws.any fun w' => w'.label != w.label && w'.writes.contains p.cell) with
     | ([], rest) => rest
     | (ready, rest) => ready ++ orderWrites fuel rest
+
+def turnSingleText? (t : BTurn) : Option (String × PageWrite) :=
+  match t.text, t.texts, t.turn.writeCells with
+  | some pw, _, [d] => some (d.cell, pw)
+  | none, [(c, pw)], [d] => if c == d.cell then some (c, pw) else none
+  | _, _, _ => none
+
+def trySingleAt (auth : Authority) (book : LawBook) (s : Store) (t : BTurn) : Option Store :=
+  let cfg : Config := { store := vaultStates s, book := book, auth := auth, vault := some s }
+  match admitWrite cfg "" t with
+  | .ok cfg' => cfg'.vault
+  | .error _ => none
+
+def simSingleRound (auth : Authority) (book : LawBook) :
+    Store → List BTurn → Store × List BTurn × List BTurn
+  | s, [] => (s, [], [])
+  | s, t :: rest =>
+    match trySingleAt auth book s t with
+    | some s' =>
+      let (s'', ok, rem) := simSingleRound auth book s' rest
+      (s'', t :: ok, rem)
+    | none =>
+      let (s'', ok, rem) := simSingleRound auth book s rest
+      (s'', ok, t :: rem)
+
+def simSingles (auth : Authority) (book : LawBook) :
+    Nat → Store → List BTurn → Store × List BTurn × List BTurn
+  | 0, s, pending => (s, [], pending)
+  | fuel + 1, s, pending =>
+    let (s', ok, rem) := simSingleRound auth book s pending
+    if ok.isEmpty || rem.isEmpty then (s', ok, rem)
+    else
+      let (s'', ok2, rem2) := simSingles auth book fuel s' rem
+      (s'', ok ++ ok2, rem2)
+
+def pruneExternalStale (st : VaultStore) : Nat → List BTurn → List BTurn
+  | 0, cand => cand
+  | fuel + 1, cand =>
+    let cells := cand.flatMap BTurn.writes
+    let keep := cand.filter fun t =>
+      let extPins := t.turn.readPins.filter (fun p => !cells.contains p.cell) ++
+        t.turn.writeCells.map (fun d => ⟨d.cell, some d.preState⟩)
+      (Footprint.firstStale? st extPins).isNone
+    if keep.length == cand.length then keep
+    else pruneExternalStale st fuel keep
+
+def mkCoupledTurn (grp : List BTurn) (sAfter : Store) (actor : String) (actorRef : Actor) :
+    Option BTurn :=
+  if grp.length < 2 then none else
+  let cells := grp.flatMap BTurn.writes
+  let texts := grp.filterMap turnSingleText?
+  if texts.length != grp.length then none else
+  let extPins : Footprint :=
+    (grp.flatMap fun t => t.turn.readPins.filter fun p => !cells.contains p.cell).foldl
+      (fun acc p => if acc.any (·.cell == p.cell) then acc else acc ++ [p]) []
+  let legs : List (String × Data × Data) :=
+    grp.flatMap fun t => t.turn.writeCells.map fun d =>
+      (d.cell, d.preState, (vaultStates sAfter d.cell).getD d.postState)
+  match VaultTurn.ofWitnessLegs ByteArray.empty extPins legs (requestAt actor 0) [] with
+  | none => none
+  | some vt =>
+    let lk : Option String :=
+      let keys := grp.filterMap (·.lawKey)
+      if keys.isEmpty then none else some ("\n---\n".intercalate keys)
+    some
+      { label := " + ".intercalate (grp.map (·.label))
+        actor := actor
+        turn := vt
+        relies := (grp.flatMap (·.relies)).eraseDups
+        text := none
+        lawKey := lk
+        texts := texts
+        actorRef := actorRef }
+
+def findCoupledGroup (s : Store) (actor : String) (actorRef : Actor) :
+    Nat → List BTurn → Option (BTurn × Store × List String)
+  | 0, _ => none
+  | _ + 1, [] => none
+  | _ + 1, [_] => none
+  | fuel + 1, cand0 =>
+    let cand := pruneExternalStale (vaultStates s) cand0.length cand0
+    if cand.length < 2 then none else
+    let texts := cand.filterMap turnSingleText?
+    if texts.length != cand.length then none else
+    match s.writeTexts texts actorRef with
+    | .ok sAfter =>
+      (mkCoupledTurn cand sAfter actor actorRef).map fun bt =>
+        (bt, sAfter, cand.flatMap BTurn.writes)
+    | .error _ =>
+      let prs := texts.filterMap fun tw =>
+        match prepareTexts s actorRef [tw] with
+        | .ok [pr] => some pr
+        | _ => none
+      let res := turnEntries s.entries (prs.map fun pr => (pr.p, pr.G', []))
+      let over := tipOf prs
+      let keep := cand.filter fun t =>
+        match t.writes.head? >>= fun c => prs.find? (·.p.name == c) with
+        | some pr => (judgePrepared s.entries res pr over).toBool
+        | none => false
+      if keep.length ≥ 2 && keep.length < cand.length then
+        findCoupledGroup s actor actorRef fuel keep
+      else none
+
+def hasForwardReadPin : List BTurn → Bool
+  | [] => false
+  | t :: rest =>
+    (t.turn.readPins.any fun p => rest.any fun w => w.writes.contains p.cell) || hasForwardReadPin rest
+
+def storeHasBacklinkLaw (s : Store) : Bool :=
+  s.pages.any fun p =>
+    match p.current with
+    | none => false
+    | some G => (lawLines (settled G)).any fun (_, v) => (v.splitOn "linked_by").length > 1
+
+/-- Sound fast-path check: a list of topologically ordered single-page writes can contain a
+mutually coupled multi-page turn only if `pending.length ≥ 2` and at least one write births an
+unborn page, edits a `_kind` page, introduces or faces a `linked_by` backlink law, or retains a
+forward/cyclic `readPin` after `orderWrites`. When none holds, single-page replay in `orderWrites`
+order is already complete and skips pre-simulation in `plan`. -/
+def mayHaveCoupledGroup (hasBacklinks : Bool) (s : Store) (pending : List BTurn) : Bool :=
+  if pending.length < 2 then false
+  else
+    hasBacklinks ||
+    hasForwardReadPin pending ||
+    pending.any fun t =>
+      (match t.lawKey with | some lk => (lk.splitOn "linked_by").length > 1 | none => false) ||
+      t.writes.any fun c =>
+        c == "_kind" || c.endsWith "/_kind" ||
+        match s.page? c with
+        | some p => p.history.isEmpty
+        | none => true
+
+def scheduleFreeWrites (auth : Authority) (book : LawBook) (actor : String) (actorRef : Actor) :
+    Nat → Store → List BTurn → Store × List BTurn
+  | 0, s, pending => (s, pending)
+  | fuel + 1, s, pending =>
+    let (s1, ok1, rem1) := simSingles auth book pending.length s pending
+    if rem1.length < 2 then (s1, ok1 ++ rem1)
+    else
+      let authOk := rem1.filter fun t => (authRefusal auth book t).isNone
+      match findCoupledGroup s1 actor actorRef authOk.length authOk with
+      | none => (s1, ok1 ++ rem1)
+      | some (coupled, s2, usedCells) =>
+        let rem2 := rem1.filter fun t => !t.writes.any (usedCells.contains ·)
+        let (s3, restOut) := scheduleFreeWrites auth book actor actorRef fuel s2 rem2
+        (s3, ok1 ++ [coupled] ++ restOut)
 
 /-- A side's acts since the base: a write of every page whose history moved past it. A page's laws
 are lines of its text, so a change of them is a write like any other, judged by the store. -/
@@ -343,15 +517,67 @@ def frontFix (H : Obend.Digest.HashBytes.Hash) (es : List Entry) (name : String)
   | _, _, _ => M0
 
 /-- **Read two stores as two branches of their base.** Pages `skip` names (another merge's: the
-ledger's register) are left out: at the base as here holds them, acted on by neither side. -/
-def plan (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String) (skip : String → Bool := fun _ => false) : Plan :=
+ledger's register) are left out: at the base as here holds them, acted on by neither side.
+Coupled non-clashing writes on a branch (whose link/backlink laws require them to land together)
+are grouped into atomic multi-page `BTurn`s, and forks attributed to a member (`auth`) carry that
+member's authority to the tip. -/
+def plan (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
+    (skip : String → Bool := fun _ => false) (auth : ForkAuth := {}) : Plan :=
   let names := namesOf here other
-  let baseOf := baseOfPlan here other skip
   -- the book names each page's owner; its laws are the store's, judged by the store's own write
   let book : LawBook := names.map fun n => (n, ⟨"owner", [], [], []⟩)
+  let unauthClash : String → Bool := fun n =>
+    if skip n || auth.actor == "owner" then false
+    else
+      let sp := sharedPrefix (historyIn here n) (historyIn other n)
+      let hh := liveHistory here n
+      let ho := liveHistory other n
+      !hh.isEmpty && hh != sp && !ho.isEmpty && ho != sp &&
+        match ho.getLast? with
+        | some G => (authRefusal auth.tipAuth book (writeOfAuth other label n sp G auth)).isSome
+        | none => false
+  let baseOf := baseOfPlan here other (fun n => skip n || unauthClash n)
   let store : VaultStore := baseStates names baseOf
   let receipts := baseReceipts names baseOf
   let live := names.filter (!skip ·)
+  let baseSto := baseStore here other names baseOf
+  let movedL := live.filter fun n =>
+    let h := liveHistory here n
+    !h.isEmpty && h != baseOf n
+  let rightBaseOf : String → List Graph := fun n =>
+    if unauthClash n then sharedPrefix (historyIn here n) (historyIn other n) else baseOf n
+  let movedR := live.filter fun n =>
+    let h := liveHistory other n
+    !h.isEmpty && h != rightBaseOf n
+  let clashSet := movedL.filter (movedR.contains ·)
+  let freeNamesL := movedL.filter (!clashSet.contains ·)
+  let freeNamesR := movedR.filter (!clashSet.contains ·)
+  let clashL := clashSet.filterMap fun n => (liveHistory here n).getLast?.map (writeOf here "" n (baseOf n))
+  let clashR := clashSet.filterMap fun n => (liveHistory other n).getLast?.map (fun G => writeOfAuth other label n (baseOf n) G auth)
+  let rawFreeL := freeNamesL.filterMap fun n => (liveHistory here n).getLast?.map (writeOf here "" n (baseOf n))
+  let rawFreeR := freeNamesR.filterMap fun n => (liveHistory other n).getLast?.map (fun G => writeOfAuth other label n (rightBaseOf n) G auth)
+  let ordFreeL := orderWrites rawFreeL.length rawFreeL
+  let ordFreeR := orderWrites rawFreeR.length rawFreeR
+  let hasBacklinks := (ordFreeL.length ≥ 2 || ordFreeR.length ≥ 2) && storeHasBacklinkLaw baseSto
+  let needL := mayHaveCoupledGroup hasBacklinks baseSto ordFreeL
+  let needR := mayHaveCoupledGroup hasBacklinks baseSto ordFreeR ||
+    (ordFreeR.length ≥ 2 && ordFreeL.any fun t =>
+      match t.lawKey with | some lk => (lk.splitOn "linked_by").length > 1 | none => false)
+  let (sAfterLeft, schedFreeL) :=
+    if needL then
+      scheduleFreeWrites auth.tipAuth book "owner" .owner ordFreeL.length baseSto ordFreeL
+    else if needR then
+      let (s1, _, _) := simSingles auth.tipAuth book ordFreeL.length baseSto ordFreeL
+      (s1, ordFreeL)
+    else
+      (baseSto, ordFreeL)
+  let (_, schedFreeR) :=
+    if needR then
+      scheduleFreeWrites auth.tipAuth book auth.actor auth.actorRef ordFreeR.length sAfterLeft ordFreeR
+    else
+      (sAfterLeft, ordFreeR)
+  let leftTurns := orderWrites (schedFreeL ++ clashL).length (schedFreeL ++ clashL)
+  let rightTurns := orderWrites (schedFreeR ++ clashR).length (schedFreeR ++ clashR)
   let who : String → AtomId → String := fun c => ((here.page? c).map Page.who).getD fun _ => "owner"
   -- each page both sides hold, merged once (its state and its write both read it)
   let mergedAll : List (String × Option Graph) := names.filterMap fun c =>
@@ -370,9 +596,9 @@ def plan (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
         { versions := versionsSince here "" c (baseOf c) ++
             [(M, addedFrom label (other.page? c) (liveHistory here c).getLast? M)] } }
   { names, baseOf, text,
-    base := { store, book, history := receipts, vault := some (baseStore here other names baseOf) },
-    left := ⟨"here", receipts, actsOf here "" live baseOf⟩,
-    right := ⟨label, receipts, actsOf other label live baseOf⟩ }
+    base := { store, book, auth := auth.tipAuth, history := receipts, vault := some baseSto },
+    left := ⟨"here", receipts, leftTurns.map Act.write⟩,
+    right := ⟨label, receipts, rightTurns.map Act.write⟩ }
 
 /-! ## The store the tip leaves -/
 
@@ -448,9 +674,10 @@ def resolveHint (k : Nat) : String :=
 /-- **Merge another replica's store into this one** (`label` names it). The two stores are read as
 branches of their base (`plan`) and merged at the tip (`Branch.merge`, with `mergePage` as the text
 merge); the store the tip reached is the store the merge leaves. -/
-def mergeVault (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String) (skip : String → Bool := fun _ => false) :
+def mergeVault (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
+    (skip : String → Bool := fun _ => false) (auth : ForkAuth := {}) :
     Store × List String :=
-  let P := plan H here other label skip
+  let P := plan H here other label skip auth
   match Branch.merge P.base P.left P.right P.text with
   | .error e => (here, ["not merged: " ++ e])
   | .ok m =>
@@ -459,7 +686,7 @@ def mergeVault (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : S
     let leftWrites := (writesOf P.left.acts).flatMap BTurn.writes
     let unsettled := leftWrites.filter fun n => !landedLeft.contains n
     let why : String → String := fun n =>
-      match m.refused.find? (fun r => r.2.1 == n || r.2.1.startsWith (n ++ " + ")) with
+      match m.refused.find? (fun r => (r.2.1.splitOn " + ").contains n) with
       | some (_, _, r) => "not settled at the merge with " ++ label ++ ": " ++ r.text
       | none =>
         match m.conflicts.find? (fun c => match c with
@@ -471,7 +698,10 @@ def mergeVault (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : S
     let kept := m.conflicts.filterMap pageConflict
     let s1 := keepPending here unsettled { s0 with conflicts := s0.conflicts ++ kept }
     let notes0 := unsettled.map fun n => n ++ ": here's write was " ++ why n
-    let notes1 := (m.landed.filter fun x => x.1 != .left).filterMap fun x => (actPage x.2).map fun n =>
+    let actPages : Act → List String
+      | .write t => t.writes
+      | _ => []
+    let notes1 := (m.landed.filter fun x => x.1 != .left).flatMap fun x => (actPages x.2).map fun n =>
       let secs := ((s1.page? n).bind (·.current)).map (fun G => (sections G).length) |>.getD 0
       n ++ (if (here.page? n).isNone then ": imported from " ++ label else ": merged from " ++ label) ++
         (if secs = 0 then "" else ", " ++ toString secs ++ " section(s) to select")
@@ -625,19 +855,21 @@ theorem baseStore_states (here other : Store) (baseOf : String → List Graph) :
   rw [find?_states hall, hany]
 
 /-- **A merge's base agrees**: the store of states it starts from is the vault's base store. -/
-theorem plan_agrees (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String) (skip : String → Bool) :
-    Agrees (plan H here other label skip).base := by
+theorem plan_agrees (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
+    (skip : String → Bool) (auth : ForkAuth := {}) :
+    Agrees (plan H here other label skip auth).base := by
   intro v hv x
-  simp only [plan, Option.some.injEq] at hv
+  simp only [plan, Option.some.injEq] at hv ⊢
   subst hv
-  show (baseStates (namesOf here other) (baseOfPlan here other skip) x).map Obend.Core.Data.Data.term = _
   rw [baseStore_states]
 
 /-- **After a vault merge the store's page versions and the vault's agree**: the tip's state of every
 page is the state of the tip store's page at its current version. -/
-theorem mergeVault_agrees (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String) (skip : String → Bool) {m : Merged}
-    (h : Branch.merge (plan H here other label skip).base (plan H here other label skip).left
-      (plan H here other label skip).right (plan H here other label skip).text = .ok m) : Agrees m.tip :=
-  merge_vault_agrees h (plan_agrees H here other label skip)
+theorem mergeVault_agrees (H : Obend.Digest.HashBytes.Hash) (here other : Store) (label : String)
+    (skip : String → Bool) (auth : ForkAuth := {}) {m : Merged}
+    (h : Branch.merge (plan H here other label skip auth).base (plan H here other label skip auth).left
+      (plan H here other label skip auth).right (plan H here other label skip auth).text = .ok m) :
+    Agrees m.tip :=
+  merge_vault_agrees h (plan_agrees H here other label skip auth)
 
 end Obend.Vault.Merge
