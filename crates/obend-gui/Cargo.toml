@@ -2,17 +2,10 @@
 name = "obend-gui"
 version = "0.1.0"
 edition = "2021"
-description = "Lightweight notebook runner and interactive CAD projection previewer for Obend"
+description = "Streaming VCD/STL/NGC artifact parsers and PIDE ObendSession elaboration client for Objective Bend"
 license = "Apache-2.0"
 
 [dependencies]
 obend-ffi = { path = "../obend-ffi" }
-obend-fpga-hal = { path = "../obend-fpga-hal" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-clap = { version = "4.5", features = ["derive"] }
-colored = "2.1"
-
-[[bin]]
-name = "obend-gui"
-path = "src/main.rs"

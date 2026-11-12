@@ -3,18 +3,21 @@ module
 # `Obend.Tactic.DocsCensus` — `Obend.Intention` & `Obend.Slot` Markdown Governance Gate
 
 Instantiates `Obend.Intention` and `Obend.Slot` (`lean/Obend/Intention.lean`, `lean/Obend/Slot.lean`)
-over `DocEnvWorld := Lean.Environment × RepoFsSnapshot` so that every canonical markdown
-specification document (`AMBITION.md`, `README.md`, `PLAN.md`, `METATHEORY.md`,
-`SILICON-ELABORATOR.md`, `QUALIFICATION-AND-SILICON-LEAN.md`) is
-governed by a real `Slot` whose `supports` pin:
-1. every Lean module path (`lean/Obend/.../*.lean` / `Obend/.../*.lean`) cited in the doc,
-2. every review/ledger path (`review/*.md`) cited in the doc,
-3. every `Obend.<Sub>` subsystem root cited in the doc, and
+over `DocEnvWorld := Lean.Environment × RepoFsSnapshot` so that every root architecture
+markdown document (`README.md`, `AMBITION.md`, `THESIS.md`, `DESIGN.md`, `PLAN.md`,
+`HARDWARE.md`, `METATHEORY.md`, `GROUNDING.md`, `PHYSICAL.md`, `SILICON-ELABORATOR.md`,
+`QUALIFICATION-AND-SILICON-LEAN.md`, `DEOS-CONTRACTS-CONSENSUS.md`, `NEXT-MATHEMATICA.md`)
+is governed by a `Slot` whose `supports` pin:
+1. every Lean module or directory path (`lean/Obend/...`, `Obend/.../*.lean`, and backticked
+   relative `.lean` / repo paths) cited in the doc,
+2. every review path (`review/*.md`) cited in the doc,
+3. every `Obend.<Sub>` subsystem root cited in the doc,
 4. every backticked `Obend.*` theorem, definition, type, or module constant cited in the doc
-   (verified against `Lean.Environment` via `env.contains constName`), and
-5. (2026-11-04) every backticked bare identifier (`lower_sound`, `Interval.add_mem`), resolved
-   exactly or as the trailing components of a constant; a small allowlist covers tactic names.
-   The governed set is the root documents; the frontier and hardware documents are reported only.
+   (verified against `Lean.Environment`),
+5. every backticked bare `snake_case` or qualified `Upper.member` identifier, resolved
+   against `Lean.Environment` constants and modules, and
+6. every fenced `inductive <Name>` constructor block (`| ctor ...`), verified against an
+   `InductiveVal` in `Lean.Environment` owning every listed constructor.
 -/
 
 public import Lean
@@ -31,44 +34,44 @@ namespace Obend.Tactic.DocsCensus
 open Lean Elab Command
 open Obend.Slot
 
-/-- The six founding and synthesis markdown documents governed by full `DocEnvWorld` slots
-(pinning `.lean` paths, `review/*.md` paths, and backticked `Obend.*` constants in `Lean.Environment`).
-`review/DECISIONS-LEDGER.md` was listed until 2026-11-04; it is an untracked file of a suspended
-lane, not a source of truth, and a clean checkout does not have it. -/
+/-- All thirteen root architecture and specification markdown documents governed by `DocEnvWorld`
+slots (pinning file paths, `Obend.*` names, bare/qualified identifiers, and fenced `inductive`
+constructor blocks). -/
 def canonicalGovernedDocs : List String :=
-  [ "AMBITION.md"
-  , "README.md"
-  , "PLAN.md"
-  , "METATHEORY.md"
-  , "SILICON-ELABORATOR.md"
-  , "QUALIFICATION-AND-SILICON-LEAN.md"
-  ]
-
-/-- The ten top-level specification markdown documents. -/
-def topLevelMarkdownDocs : List String :=
-  [ "AMBITION.md"
-  , "README.md"
+  [ "README.md"
+  , "AMBITION.md"
+  , "THESIS.md"
   , "DESIGN.md"
   , "PLAN.md"
+  , "HARDWARE.md"
   , "METATHEORY.md"
+  , "GROUNDING.md"
   , "PHYSICAL.md"
   , "SILICON-ELABORATOR.md"
   , "QUALIFICATION-AND-SILICON-LEAN.md"
-  , "NEXT-MATHEMATICA.md"
   , "DEOS-CONTRACTS-CONSENSUS.md"
+  , "NEXT-MATHEMATICA.md"
   ]
+
+/-- All thirteen top-level root markdown documents. -/
+def topLevelMarkdownDocs : List String :=
+  canonicalGovernedDocs
 
 /-- Characters permitted inside a candidate module path or dotted identifier token. -/
 def isTokenChar (c : Char) : Bool :=
   c.isAlphanum || c == '_' || c == '/' || c == '.'
 
-/-- Characters permitted inside a `review/*.md` path token (including hyphens `-`). -/
+/-- Characters permitted inside a `review/*.md` or repo-relative path token (including `-`). -/
 def isReviewPathChar (c : Char) : Bool :=
   c.isAlphanum || c == '_' || c == '-' || c == '/' || c == '.'
 
 /-- Characters permitted inside a dotted Lean constant identifier (`Obend.Foo.bar'`). -/
 def isLeanIdentChar (c : Char) : Bool :=
   c.isAlphanum || c == '_' || c == '\'' || c == '.'
+
+/-- Characters permitted inside a single Lean constructor or declaration identifier. -/
+def isSimpleIdentChar (c : Char) : Bool :=
+  c.isAlphanum || c == '_' || c == '\''
 
 /-- Generic tokenizer splitting `cs` into maximal runs satisfying `pred`. -/
 def tokenizeCharsBy (pred : Char → Bool) (cs : List Char) (cur : List Char) (acc : List (List Char)) :
@@ -111,9 +114,20 @@ def charsStartsWith (pre : List Char) (cs : List Char) : Bool :=
 def charsEndsWith (suf : List Char) (cs : List Char) : Bool :=
   charsStartsWith suf.reverse cs.reverse
 
-/-- Strip trailing `.` characters from a character list. -/
+/-- Pure substring test on `List Char`. -/
+def charsContainsSublist (needle : List Char) : List Char → Bool
+  | [] => needle.isEmpty
+  | cs@(_ :: rest) => charsStartsWith needle cs || charsContainsSublist needle rest
+
+/-- Strip trailing `.` and `/` characters from a character list. -/
 def stripTrailingDotChars (cs : List Char) : List Char :=
   (cs.reverse.dropWhile (· == '.')).reverse
+
+/-- Strip `#L...` or `:line` anchors and trailing `.` / `/` from a backticked path span. -/
+def stripPathAnchorChars (cs : List Char) : List Char :=
+  let noHash := cs.takeWhile (· != '#')
+  let noColon := noHash.takeWhile (· != ':')
+  (noColon.reverse.dropWhile (fun c => c == '.' || c == '/')).reverse
 
 /-- Join a list of path components with `"/"` (`@[expose]`-friendly for kernel reduction). -/
 def joinWithSlash : List String → String
@@ -146,6 +160,64 @@ def tokenCharsToObendLeanPath? (raw : List Char) : Option String :=
 /-- Extract all `Obend/.../*.lean` file paths referenced in markdown text `content`. -/
 def extractObendLeanPaths (content : String) : List String :=
   (tokenizeChars content.toList [] []).filterMap tokenCharsToObendLeanPath?
+
+/-- Extract inline single-backtick spans (never crossing a newline `\n` or triple-backtick fence)
+from a character list, structurally recursive on the input `List Char`. -/
+def extractInlineBacktickSpansAux : List Char → Bool → Option (List Char) → List (List Char) → List (List Char)
+  | [], _, _, acc => acc.reverse
+  | '\n' :: rest, _, _, acc =>
+      extractInlineBacktickSpansAux rest false none acc
+  | _ :: rest, true, _, acc =>
+      extractInlineBacktickSpansAux rest true none acc
+  | '`' :: '`' :: '`' :: rest, false, none, acc =>
+      extractInlineBacktickSpansAux rest true none acc
+  | '`' :: rest, false, none, acc =>
+      extractInlineBacktickSpansAux rest false (some []) acc
+  | '`' :: rest, false, some cur, acc =>
+      extractInlineBacktickSpansAux rest false none (cur.reverse :: acc)
+  | c :: rest, false, some cur, acc =>
+      extractInlineBacktickSpansAux rest false (some (c :: cur)) acc
+  | _ :: rest, false, none, acc =>
+      extractInlineBacktickSpansAux rest false none acc
+
+/-- Extract all inline backticked character spans from `content`. -/
+def extractInlineBacktickSpans (content : String) : List (List Char) :=
+  extractInlineBacktickSpansAux content.toList false none []
+
+/-- Extract backticked `lean/Obend/...` or `Obend/...` module/directory paths (including directory
+or module stems without `.lean` and relative `<Sub>/.../*.lean` paths). -/
+def spanToBacktickObendPath? (sp : List Char) : Option String :=
+  if sp.any (fun c => c == ' ' || c == '*' || c == '<' || c == '>' || c == '{' || c == '}') then
+    none
+  else
+    let clean := stripPathAnchorChars sp
+    if clean.isEmpty || !clean.all isReviewPathChar then
+      none
+    else
+      let parts := splitCharsOn '/' clean [] []
+      if parts.any (fun p => p == "" || p == "." || p == "..") then
+        none
+      else
+        match parts with
+        | "lean" :: "Obend" :: rest =>
+            if rest.isEmpty then none else some (joinWithSlash ("Obend" :: rest))
+        | "Obend" :: rest =>
+            if rest.isEmpty then none else some (joinWithSlash ("Obend" :: rest))
+        | "Obend.lean" :: [] =>
+            some "Obend.lean"
+        | "lean" :: "Obend.lean" :: [] =>
+            some "Obend.lean"
+        | head :: rest =>
+            if !rest.isEmpty && charsEndsWith ['.','l','e','a','n'] clean &&
+               head != "lean" && head != "tests" && head != "crates" then
+              some (joinWithSlash ("Obend" :: head :: rest))
+            else
+              none
+        | [] => none
+
+/-- Extract all backticked `lean/Obend/...` and `Obend/...` paths from `content`. -/
+def extractBacktickObendPaths (content : String) : List String :=
+  (extractInlineBacktickSpans content).filterMap spanToBacktickObendPath?
 
 /-- Extract normalized `review/*.md` relative paths from a single token character list. -/
 def tokenCharsToReviewMdPath? (raw : List Char) : Option String :=
@@ -184,29 +256,6 @@ def tokenCharsToObendDottedRoot? (raw : List Char) : Option String :=
 def extractObendDottedRoots (content : String) : List String :=
   (tokenizeChars content.toList [] []).filterMap tokenCharsToObendDottedRoot?
 
-/-- Extract inline single-backtick spans (never crossing a newline `\n` or triple-backtick fence)
-from a character list, structurally recursive on the input `List Char`. -/
-def extractInlineBacktickSpansAux : List Char → Bool → Option (List Char) → List (List Char) → List (List Char)
-  | [], _, _, acc => acc.reverse
-  | '\n' :: rest, _, _, acc =>
-      extractInlineBacktickSpansAux rest false none acc
-  | _ :: rest, true, _, acc =>
-      extractInlineBacktickSpansAux rest true none acc
-  | '`' :: '`' :: '`' :: rest, false, none, acc =>
-      extractInlineBacktickSpansAux rest true none acc
-  | '`' :: rest, false, none, acc =>
-      extractInlineBacktickSpansAux rest false (some []) acc
-  | '`' :: rest, false, some cur, acc =>
-      extractInlineBacktickSpansAux rest false none (cur.reverse :: acc)
-  | c :: rest, false, some cur, acc =>
-      extractInlineBacktickSpansAux rest false (some (c :: cur)) acc
-  | _ :: rest, false, none, acc =>
-      extractInlineBacktickSpansAux rest false none acc
-
-/-- Extract all inline backticked character spans from `content`. -/
-def extractInlineBacktickSpans (content : String) : List (List Char) :=
-  extractInlineBacktickSpansAux content.toList false none []
-
 /-- Convert a candidate token inside backticks to a normalized `Obend.*` constant/module string. -/
 def tokenCharsToObendConst? (raw : List Char) : Option String :=
   let tok := stripTrailingDotChars raw
@@ -230,6 +279,105 @@ def extractBacktickObendConsts (content : String) : List String :=
     let toks := (tokenizeCharsBy isLeanIdentChar sp [] []).filterMap tokenCharsToObendConst?
     acc ++ toks) []
 
+/-! ## Fenced `inductive <Name>` Constructor Block Extraction -/
+
+/-- Trim leading spaces, tabs, and carriage returns from a `List Char`. -/
+def dropLeadingWs : List Char → List Char :=
+  List.dropWhile (fun c => c == ' ' || c == '\t' || c == '\r')
+
+/-- Strip a `--` line comment from a character list. -/
+def stripLineComment : List Char → List Char
+  | [] => []
+  | '-' :: '-' :: _ => []
+  | c :: rest => c :: stripLineComment rest
+
+/-- Extract constructor names from a `|`-prefixed line inside an `inductive` declaration
+(supports both one-per-line `| hole (idx : Nat)` and inline `| erased | affine | linear`). -/
+def parseCtorSegments (segs : List String) : List String :=
+  segs.filterMap fun seg =>
+    let cs := dropLeadingWs seg.toList
+    let ident := cs.takeWhile isSimpleIdentChar
+    match ident with
+    | [] => none
+    | c :: _ =>
+        if c.isAlpha || c == '_' then some (String.ofList ident) else none
+
+/-- Parse fenced markdown blocks for `inductive <Name>` declarations and their `| <ctor>` arms. -/
+def extractFencedInductiveBlocksAux :
+    List String → Bool → Bool → Option (String × List String) → List (String × List String) →
+      List (String × List String)
+  | [], _, _, cur, acc =>
+      let acc' := match cur with
+        | some (nm, ctors) => if ctors.isEmpty then acc else (nm, ctors) :: acc
+        | none => acc
+      acc'.reverse
+  | line :: rest, inFence, inComment, cur, acc =>
+      let trimmed := dropLeadingWs line.toList
+      if charsStartsWith ['`','`','`'] trimmed then
+        let acc' := match cur with
+          | some (nm, ctors) => if ctors.isEmpty then acc else (nm, ctors) :: acc
+          | none => acc
+        extractFencedInductiveBlocksAux rest (!inFence) false none acc'
+      else if !inFence then
+        extractFencedInductiveBlocksAux rest false false none acc
+      else if inComment then
+        let stillComment := !charsContainsSublist ['-','/'] trimmed
+        extractFencedInductiveBlocksAux rest true stillComment cur acc
+      else if charsStartsWith ['/','-'] trimmed then
+        let stillComment := !charsContainsSublist ['-','/'] (trimmed.drop 2)
+        extractFencedInductiveBlocksAux rest true stillComment cur acc
+      else
+        let uncommented := dropLeadingWs (stripLineComment trimmed)
+        if uncommented.isEmpty then
+          extractFencedInductiveBlocksAux rest true false cur acc
+        else if charsStartsWith ['i','n','d','u','c','t','i','v','e',' '] uncommented then
+          let acc' := match cur with
+            | some (nm, ctors) => if ctors.isEmpty then acc else (nm, ctors) :: acc
+            | none => acc
+          let afterKw := dropLeadingWs (uncommented.drop 10)
+          let nameChars := afterKw.takeWhile isLeanIdentChar
+          let indName := String.ofList (stripTrailingDotChars nameChars)
+          if indName.isEmpty then
+            extractFencedInductiveBlocksAux rest true false none acc'
+          else
+            -- Also check if single-line `inductive Foo := | a | b` or `where | a | b` has `|` on same line
+            let afterName := afterKw.drop nameChars.length
+            let inlineCtors :=
+              match afterName.dropWhile (· != '|') with
+              | '|' :: tail => parseCtorSegments (splitCharsOn '|' tail [] [])
+              | _ => []
+            extractFencedInductiveBlocksAux rest true false (some (indName, inlineCtors)) acc'
+        else
+          match cur with
+          | none =>
+              extractFencedInductiveBlocksAux rest true false none acc
+          | some (indName, ctors) =>
+              match uncommented with
+              | '|' :: '>' :: _ =>
+                  extractFencedInductiveBlocksAux rest true false (some (indName, ctors)) acc
+              | '|' :: '|' :: _ =>
+                  extractFencedInductiveBlocksAux rest true false (some (indName, ctors)) acc
+              | '|' :: tail =>
+                  let newCtors := parseCtorSegments (splitCharsOn '|' tail [] [])
+                  extractFencedInductiveBlocksAux rest true false (some (indName, ctors ++ newCtors)) acc
+              | _ =>
+                  if charsStartsWith ['d','e','r','i','v','i','n','g'] uncommented ||
+                     charsStartsWith ['s','t','r','u','c','t','u','r','e',' '] uncommented ||
+                     charsStartsWith ['d','e','f',' '] uncommented ||
+                     charsStartsWith ['t','h','e','o','r','e','m',' '] uncommented ||
+                     charsStartsWith ['a','b','b','r','e','v',' '] uncommented ||
+                     charsStartsWith ['n','a','m','e','s','p','a','c','e',' '] uncommented ||
+                     charsStartsWith ['e','n','d'] uncommented then
+                    let acc' := if ctors.isEmpty then acc else (indName, ctors) :: acc
+                    extractFencedInductiveBlocksAux rest true false none acc'
+                  else
+                    extractFencedInductiveBlocksAux rest true false (some (indName, ctors)) acc
+
+/-- Extract `(inductiveName, constructorNames)` pairs from fenced code blocks in `content`. -/
+def extractFencedInductiveBlocks (content : String) : List (String × List String) :=
+  let lines := splitCharsOn '\n' content.toList [] []
+  extractFencedInductiveBlocksAux lines false false none []
+
 /-- Convert a dotted `Obend.*` string into a hierarchical `Lean.Name`. -/
 def stringToLeanName (s : String) : Lean.Name :=
   (splitCharsOn '.' s.toList [] []).foldl Lean.Name.str Lean.Name.anonymous
@@ -247,7 +395,7 @@ def dedupList {α : Type} [BEq α] : List α → List α
 structure RepoFsSnapshot where
   /-- Markdown specification files `(relPath, content)` present on disk. -/
   docs        : List (String × String)
-  /-- Existing `Obend/.../*.lean` module relative paths under `lean/`. -/
+  /-- Existing `Obend/...` module or directory relative paths under `lean/`. -/
   leanPaths   : List String
   /-- Existing `review/*.md` ledger/review relative paths at repo root. -/
   reviewPaths : List String
@@ -261,22 +409,22 @@ abbrev DocEnvWorld := Lean.Environment × RepoFsSnapshot
 
 /-- A support fact cited by a markdown specification document pin in `DocEnvWorld`:
     1. `docExists docPath`: the markdown document itself exists on disk.
-    2. `leanPathExists relPath`: the cited `Obend/.../*.lean` module path exists on disk.
-    3. `reviewPathExists relPath`: the cited `review/*.md` ledger/review path exists on disk.
+    2. `leanPathExists relPath`: the cited `Obend/...` module or directory path exists on disk.
+    3. `reviewPathExists relPath`: the cited `review/*.md` path exists on disk.
     4. `subsystemExists sub`: the cited `Obend.<Sub>` subsystem root exists on disk.
-    5. `constExists constName`: the backticked `Obend.*` constant or module exists in `Lean.Environment`. -/
+    5. `constExists constName`: the backticked `Obend.*` constant or module exists in `Lean.Environment`.
+    6. `inductiveCtorsExist indName ctors`: if `indName` names an inductive in `Lean.Environment`,
+       every `ctor ∈ ctors` is a constructor of `indName`. -/
 inductive DocFact where
   | docExists (docPath : String)
   | leanPathExists (relPath : String)
   | reviewPathExists (relPath : String)
   | subsystemExists (sub : String)
   | constExists (constName : Lean.Name)
+  | inductiveCtorsExist (indName : Lean.Name) (ctors : List String)
   deriving DecidableEq, Repr
 
-/-- Evaluate whether a `DocFact` support holds in `w : DocEnvWorld`.
-    For `.constExists n`, checks `w.1.contains n` (a theorem/definition/type constant in
-    `Lean.Environment`), `w.1.header.moduleNames.contains n` (an imported module in
-    `Lean.Environment`), or a 2-component `Obend.<Sub>` subsystem root. -/
+/-- Evaluate whether a `DocFact` support holds in `w : DocEnvWorld`. -/
 def holdsDocFact (w : DocEnvWorld) : DocFact → Bool
   | .docExists doc => w.2.docs.any (fun p => p.1 == doc)
   | .leanPathExists p => w.2.leanPaths.contains p
@@ -288,6 +436,15 @@ def holdsDocFact (w : DocEnvWorld) : DocFact → Bool
       match n with
       | .str (.str .anonymous "Obend") sub => w.2.subsystems.contains sub
       | _ => false
+  | .inductiveCtorsExist indName ctors =>
+      match w.1.find? indName with
+      | some (.inductInfo iv) =>
+          let actual := iv.ctors.filterMap fun c =>
+            match c.components.reverse with
+            | last :: _ => some last.toString
+            | [] => none
+          ctors.all (fun c => actual.contains c)
+      | _ => false
 
 /-- A pinned markdown document selection carrying its target path and extracted `DocFact` supports. -/
 structure DocPin where
@@ -297,12 +454,18 @@ structure DocPin where
 
 /-- Extract the complete deduplicated support list of `DocFact`s cited by `docPath` with `content`. -/
 def extractDocSupports (docPath : String) (content : String) : List DocFact :=
-  let leanFacts := (dedupList (extractObendLeanPaths content)).map DocFact.leanPathExists
+  let allLeanPaths := dedupList (extractObendLeanPaths content ++ extractBacktickObendPaths content)
+  let leanFacts := allLeanPaths.map DocFact.leanPathExists
   let reviewFacts := (dedupList (extractReviewMdPaths content)).map DocFact.reviewPathExists
   let subFacts := (dedupList (extractObendDottedRoots content)).map DocFact.subsystemExists
   let constFacts := (dedupList (extractBacktickObendConsts content)).map
     (fun c => DocFact.constExists (stringToLeanName c))
-  DocFact.docExists docPath :: (leanFacts ++ reviewFacts ++ subFacts ++ constFacts)
+  let indFacts := (extractFencedInductiveBlocks content).filterMap fun (nm, ctors) =>
+    if charsStartsWith ['O','b','e','n','d','.'] nm.toList then
+      some (DocFact.inductiveCtorsExist (stringToLeanName nm) ctors)
+    else
+      none
+  DocFact.docExists docPath :: (leanFacts ++ reviewFacts ++ subFacts ++ constFacts ++ indFacts)
 
 /-- Construct the candidate `DocPin` for `docPath` from `w : DocEnvWorld`. -/
 def candidateDocPin (w : DocEnvWorld) (docPath : String) : DocPin :=
@@ -364,7 +527,7 @@ theorem docSlot_usable_iff (w : DocEnvWorld) (docPath : String) :
     (docIntention.current_iff w (candidateDocPin w docPath))
 
 /-- A document pin is stale at `w : DocEnvWorld` iff reading `docSlot docPath` returns `.blocked`
-naming the exact missing files or missing `Obend.*` constants. -/
+naming the exact missing files, constants, or constructors. -/
 theorem docSlot_stale_iff_blocked (w : DocEnvWorld) (docPath : String) :
     docIntention.current w (candidateDocPin w docPath) = false ↔
       (docSlot docPath).read (holdsDocFact w) (some (candidateDocPin w docPath)) =
@@ -372,7 +535,7 @@ theorem docSlot_stale_iff_blocked (w : DocEnvWorld) (docPath : String) :
           ((candidateDocPin w docPath).supports.filter fun f => !holdsDocFact w f) :=
   docIntention.stale_iff_blocked rfl w
 
-/-! ## Filesystem Resolution & Legacy `#check_docs_census` / Full `#docs_census` Elaborators -/
+/-! ## Filesystem Resolution & `#check_docs_census` / `#docs_census` Elaborators -/
 
 /-- Resolve a repository-root relative path whether invoked from `lean/` or the repo root. -/
 def resolveRepoFile (relPath : String) : IO (Option System.FilePath) := do
@@ -385,14 +548,21 @@ def resolveRepoFile (relPath : String) : IO (Option System.FilePath) := do
       return some c
   return none
 
-/-- Verify that a relative `Obend/.../*.lean` path exists under `lean/`. -/
+/-- Verify that a relative `Obend/...` path (`.lean` module or directory/module stem) exists under `lean/`. -/
 def obendLeanPathExists (relObendPath : String) : IO Bool := do
-  let candidates : List System.FilePath :=
+  let baseCandidates : List System.FilePath :=
     [ System.FilePath.mk relObendPath
     , System.FilePath.mk ("lean/" ++ relObendPath)
     , System.FilePath.mk ("../lean/" ++ relObendPath)
     ]
-  for c in candidates do
+  let stemCandidates : List System.FilePath :=
+    if charsEndsWith ['.','l','e','a','n'] relObendPath.toList then []
+    else
+      [ System.FilePath.mk (relObendPath ++ ".lean")
+      , System.FilePath.mk ("lean/" ++ relObendPath ++ ".lean")
+      , System.FilePath.mk ("../lean/" ++ relObendPath ++ ".lean")
+      ]
+  for c in baseCandidates ++ stemCandidates do
     if ← c.pathExists then
       return true
   return false
@@ -450,7 +620,7 @@ def runDocsCensus (docs : List String := topLevelMarkdownDocs) : IO CensusReport
         missingDocs := missingDocs ++ [doc]
     | some path =>
         let content ← IO.FS.readFile path
-        let paths := extractObendLeanPaths content
+        let paths := dedupList (extractObendLeanPaths content ++ extractBacktickObendPaths content)
         let reviews := extractReviewMdPaths content
         let roots := extractObendDottedRoots content
         for p in paths do
@@ -480,14 +650,26 @@ def runDocsCensus (docs : List String := topLevelMarkdownDocs) : IO CensusReport
 /-! ## Meta-Phase Snapshot Builder & `#check_docs_census` / `#docs_census` Commands -/
 
 meta def metaCanonicalGovernedDocs : List String :=
-  [ "AMBITION.md"
-  , "README.md"
+  [ "README.md"
+  , "AMBITION.md"
+  , "THESIS.md"
   , "DESIGN.md"
   , "PLAN.md"
+  , "HARDWARE.md"
   , "METATHEORY.md"
-  , "THESIS.md"
   , "GROUNDING.md"
+  , "PHYSICAL.md"
+  , "SILICON-ELABORATOR.md"
+  , "QUALIFICATION-AND-SILICON-LEAN.md"
+  , "DEOS-CONTRACTS-CONSENSUS.md"
+  , "NEXT-MATHEMATICA.md"
   ]
+
+meta def metaTopLevelMarkdownDocs : List String :=
+  metaCanonicalGovernedDocs
+
+/-- Every root architecture document is directly governed; none are downgraded to warning-only. -/
+meta def metaReportedDocs : List String := []
 
 meta def metaIsTokenChar (c : Char) : Bool :=
   c.isAlphanum || c == '_' || c == '/' || c == '.'
@@ -497,6 +679,9 @@ meta def metaIsReviewPathChar (c : Char) : Bool :=
 
 meta def metaIsLeanIdentChar (c : Char) : Bool :=
   c.isAlphanum || c == '_' || c == '\'' || c == '.'
+
+meta def metaIsSimpleIdentChar (c : Char) : Bool :=
+  c.isAlphanum || c == '_' || c == '\''
 
 meta def metaTokenizeCharsBy (pred : Char → Bool) (cs : List Char) (cur : List Char)
     (acc : List (List Char)) : List (List Char) :=
@@ -534,8 +719,17 @@ meta def metaCharsStartsWith (pre : List Char) (cs : List Char) : Bool :=
 meta def metaCharsEndsWith (suf : List Char) (cs : List Char) : Bool :=
   metaCharsStartsWith suf.reverse cs.reverse
 
+meta def metaCharsContainsSublist (needle : List Char) : List Char → Bool
+  | [] => needle.isEmpty
+  | cs@(_ :: rest) => metaCharsStartsWith needle cs || metaCharsContainsSublist needle rest
+
 meta def metaStripTrailingDotChars (cs : List Char) : List Char :=
   (cs.reverse.dropWhile (· == '.')).reverse
+
+meta def metaStripPathAnchorChars (cs : List Char) : List Char :=
+  let noHash := cs.takeWhile (· != '#')
+  let noColon := noHash.takeWhile (· != ':')
+  (noColon.reverse.dropWhile (fun c => c == '.' || c == '/')).reverse
 
 meta def metaJoinWithSlash : List String → String
   | [] => ""
@@ -564,6 +758,82 @@ meta def metaTokenCharsToObendLeanPath? (raw : List Char) : Option String :=
 
 meta def metaExtractObendLeanPaths (content : String) : List String :=
   (metaTokenizeChars content.toList [] []).filterMap metaTokenCharsToObendLeanPath?
+
+meta def metaExtractInlineBacktickSpansAux :
+    List Char → Bool → Option (List Char) → List (List Char) → List (List Char)
+  | [], _, _, acc => acc.reverse
+  | '\n' :: rest, _, _, acc =>
+      metaExtractInlineBacktickSpansAux rest false none acc
+  | _ :: rest, true, _, acc =>
+      metaExtractInlineBacktickSpansAux rest true none acc
+  | '`' :: '`' :: '`' :: rest, false, none, acc =>
+      metaExtractInlineBacktickSpansAux rest true none acc
+  | '`' :: rest, false, none, acc =>
+      metaExtractInlineBacktickSpansAux rest false (some []) acc
+  | '`' :: rest, false, some cur, acc =>
+      metaExtractInlineBacktickSpansAux rest false none (cur.reverse :: acc)
+  | c :: rest, false, some cur, acc =>
+      metaExtractInlineBacktickSpansAux rest false (some (c :: cur)) acc
+  | _ :: rest, false, none, acc =>
+      metaExtractInlineBacktickSpansAux rest false none acc
+
+meta def metaSpanToBacktickObendPath? (sp : List Char) : Option String :=
+  if sp.any (fun c => c == ' ' || c == '*' || c == '<' || c == '>' || c == '{' || c == '}') then
+    none
+  else
+    let clean := metaStripPathAnchorChars sp
+    if clean.isEmpty || !clean.all metaIsReviewPathChar then
+      none
+    else
+      let parts := metaSplitCharsOn '/' clean [] []
+      if parts.any (fun p => p == "" || p == "." || p == "..") then
+        none
+      else
+        match parts with
+        | "lean" :: "Obend" :: rest =>
+            if rest.isEmpty then none else some (metaJoinWithSlash ("Obend" :: rest))
+        | "Obend" :: rest =>
+            if rest.isEmpty then none else some (metaJoinWithSlash ("Obend" :: rest))
+        | "Obend.lean" :: [] =>
+            some "Obend.lean"
+        | "lean" :: "Obend.lean" :: [] =>
+            some "Obend.lean"
+        | head :: rest =>
+            if !rest.isEmpty && metaCharsEndsWith ['.','l','e','a','n'] clean &&
+               head != "lean" && head != "tests" && head != "crates" then
+              some (metaJoinWithSlash ("Obend" :: head :: rest))
+            else
+              none
+        | [] => none
+
+meta def metaExtractBacktickObendPaths (content : String) : List String :=
+  let spans := metaExtractInlineBacktickSpansAux content.toList false none []
+  spans.filterMap metaSpanToBacktickObendPath?
+
+/-- Extract repo-relative backticked paths rooted at `crates/` or `lean/tests/` so broken crate
+or test file citations are also caught at compile time. -/
+meta def metaSpanToBacktickRepoPath? (sp : List Char) : Option String :=
+  if sp.any (fun c => c == ' ' || c == '*' || c == '<' || c == '>' || c == '{' || c == '}') then
+    none
+  else
+    let clean := metaStripPathAnchorChars sp
+    if clean.isEmpty || !clean.all metaIsReviewPathChar then
+      none
+    else
+      let parts := metaSplitCharsOn '/' clean [] []
+      if parts.any (fun p => p == "" || p == "." || p == "..") then
+        none
+      else
+        match parts with
+        | "crates" :: rest =>
+            if rest.isEmpty then none else some (metaJoinWithSlash ("crates" :: rest))
+        | "lean" :: "tests" :: rest =>
+            if rest.isEmpty then none else some (metaJoinWithSlash ("lean" :: "tests" :: rest))
+        | _ => none
+
+meta def metaExtractBacktickRepoPaths (content : String) : List String :=
+  let spans := metaExtractInlineBacktickSpansAux content.toList false none []
+  spans.filterMap metaSpanToBacktickRepoPath?
 
 meta def metaTokenCharsToReviewMdPath? (raw : List Char) : Option String :=
   let tok := metaStripTrailingDotChars raw
@@ -598,24 +868,6 @@ meta def metaTokenCharsToObendDottedRoot? (raw : List Char) : Option String :=
 meta def metaExtractObendDottedRoots (content : String) : List String :=
   (metaTokenizeChars content.toList [] []).filterMap metaTokenCharsToObendDottedRoot?
 
-meta def metaExtractInlineBacktickSpansAux :
-    List Char → Bool → Option (List Char) → List (List Char) → List (List Char)
-  | [], _, _, acc => acc.reverse
-  | '\n' :: rest, _, _, acc =>
-      metaExtractInlineBacktickSpansAux rest false none acc
-  | _ :: rest, true, _, acc =>
-      metaExtractInlineBacktickSpansAux rest true none acc
-  | '`' :: '`' :: '`' :: rest, false, none, acc =>
-      metaExtractInlineBacktickSpansAux rest true none acc
-  | '`' :: rest, false, none, acc =>
-      metaExtractInlineBacktickSpansAux rest false (some []) acc
-  | '`' :: rest, false, some cur, acc =>
-      metaExtractInlineBacktickSpansAux rest false none (cur.reverse :: acc)
-  | c :: rest, false, some cur, acc =>
-      metaExtractInlineBacktickSpansAux rest false (some (c :: cur)) acc
-  | _ :: rest, false, none, acc =>
-      metaExtractInlineBacktickSpansAux rest false none acc
-
 meta def metaTokenCharsToObendConst? (raw : List Char) : Option String :=
   let tok := metaStripTrailingDotChars raw
   if metaCharsStartsWith ['O','b','e','n','d','.'] tok &&
@@ -637,66 +889,158 @@ meta def metaExtractBacktickObendConsts (content : String) : List String :=
     let toks := (metaTokenizeCharsBy metaIsLeanIdentChar sp [] []).filterMap metaTokenCharsToObendConst?
     acc ++ toks) []
 
-/-- Documents whose bare identifiers are resolved and reported, without failing the build: the
-design frontiers that name planned theorems and the hardware/RTL documents that name Verilog
-signals, RPC methods and CLI flags in backticks. -/
-meta def metaReportedDocs : List String :=
-  [ "PHYSICAL.md"
-  , "SILICON-ELABORATOR.md"
-  , "QUALIFICATION-AND-SILICON-LEAN.md"
-  , "NEXT-MATHEMATICA.md"
-  , "DEOS-CONTRACTS-CONSENSUS.md"
-  ]
+meta def metaDropLeadingWs : List Char → List Char :=
+  List.dropWhile (fun c => c == ' ' || c == '\t' || c == '\r')
 
-/-- Backticked snake_case tokens that are not Lean constants but are legitimately written in
-backticks: tactics and commands this tree defines, Lean tactics, and `f.eq_def`. -/
+meta def metaStripLineComment : List Char → List Char
+  | [] => []
+  | '-' :: '-' :: _ => []
+  | c :: rest => c :: metaStripLineComment rest
+
+meta def metaParseCtorSegments (segs : List String) : List String :=
+  segs.filterMap fun seg =>
+    let cs := metaDropLeadingWs seg.toList
+    let ident := cs.takeWhile metaIsSimpleIdentChar
+    match ident with
+    | [] => none
+    | c :: _ =>
+        if c.isAlpha || c == '_' then some (String.ofList ident) else none
+
+meta def metaExtractFencedInductiveBlocksAux :
+    List String → Bool → Bool → Option (String × List String) → List (String × List String) →
+      List (String × List String)
+  | [], _, _, cur, acc =>
+      let acc' := match cur with
+        | some (nm, ctors) => if ctors.isEmpty then acc else (nm, ctors) :: acc
+        | none => acc
+      acc'.reverse
+  | line :: rest, inFence, inComment, cur, acc =>
+      let trimmed := metaDropLeadingWs line.toList
+      if metaCharsStartsWith ['`','`','`'] trimmed then
+        let acc' := match cur with
+          | some (nm, ctors) => if ctors.isEmpty then acc else (nm, ctors) :: acc
+          | none => acc
+        metaExtractFencedInductiveBlocksAux rest (!inFence) false none acc'
+      else if !inFence then
+        metaExtractFencedInductiveBlocksAux rest false false none acc
+      else if inComment then
+        let stillComment := !metaCharsContainsSublist ['-','/'] trimmed
+        metaExtractFencedInductiveBlocksAux rest true stillComment cur acc
+      else if metaCharsStartsWith ['/','-'] trimmed then
+        let stillComment := !metaCharsContainsSublist ['-','/'] (trimmed.drop 2)
+        metaExtractFencedInductiveBlocksAux rest true stillComment cur acc
+      else
+        let uncommented := metaDropLeadingWs (metaStripLineComment trimmed)
+        if uncommented.isEmpty then
+          metaExtractFencedInductiveBlocksAux rest true false cur acc
+        else if metaCharsStartsWith ['i','n','d','u','c','t','i','v','e',' '] uncommented then
+          let acc' := match cur with
+            | some (nm, ctors) => if ctors.isEmpty then acc else (nm, ctors) :: acc
+            | none => acc
+          let afterKw := metaDropLeadingWs (uncommented.drop 10)
+          let nameChars := afterKw.takeWhile metaIsLeanIdentChar
+          let indName := String.ofList (metaStripTrailingDotChars nameChars)
+          if indName.isEmpty then
+            metaExtractFencedInductiveBlocksAux rest true false none acc'
+          else
+            let afterName := afterKw.drop nameChars.length
+            let inlineCtors :=
+              match afterName.dropWhile (· != '|') with
+              | '|' :: tail => metaParseCtorSegments (metaSplitCharsOn '|' tail [] [])
+              | _ => []
+            metaExtractFencedInductiveBlocksAux rest true false (some (indName, inlineCtors)) acc'
+        else
+          match cur with
+          | none =>
+              metaExtractFencedInductiveBlocksAux rest true false none acc
+          | some (indName, ctors) =>
+              match uncommented with
+              | '|' :: '>' :: _ =>
+                  metaExtractFencedInductiveBlocksAux rest true false (some (indName, ctors)) acc
+              | '|' :: '|' :: _ =>
+                  metaExtractFencedInductiveBlocksAux rest true false (some (indName, ctors)) acc
+              | '|' :: tail =>
+                  let newCtors := metaParseCtorSegments (metaSplitCharsOn '|' tail [] [])
+                  metaExtractFencedInductiveBlocksAux rest true false (some (indName, ctors ++ newCtors)) acc
+              | _ =>
+                  if metaCharsStartsWith ['d','e','r','i','v','i','n','g'] uncommented ||
+                     metaCharsStartsWith ['s','t','r','u','c','t','u','r','e',' '] uncommented ||
+                     metaCharsStartsWith ['d','e','f',' '] uncommented ||
+                     metaCharsStartsWith ['t','h','e','o','r','e','m',' '] uncommented ||
+                     metaCharsStartsWith ['a','b','b','r','e','v',' '] uncommented ||
+                     metaCharsStartsWith ['n','a','m','e','s','p','a','c','e',' '] uncommented ||
+                     metaCharsStartsWith ['e','n','d'] uncommented then
+                    let acc' := if ctors.isEmpty then acc else (indName, ctors) :: acc
+                    metaExtractFencedInductiveBlocksAux rest true false none acc'
+                  else
+                    metaExtractFencedInductiveBlocksAux rest true false (some (indName, ctors)) acc
+
+meta def metaExtractFencedInductiveBlocks (content : String) : List (String × List String) :=
+  let lines := metaSplitCharsOn '\n' content.toList [] []
+  metaExtractFencedInductiveBlocksAux lines false false none []
+
+/-- Backticked `snake_case` tokens that are tactics or Lean commands legitimately cited in docs. -/
 meta def metaBareIdentAllowlist : List String :=
   [ "obend_law", "obend_unfold", "obend_split", "obend_tooth", "native_decide", "bv_decide",
     "norm_num", "eq_def", "f.eq_def", "decide_kernel", "import_obend", "obend_decl",
-    "assert_axioms_tree", "assert_compiled", "docs_census", "always_ff", "always_comb" ]
+    "assert_axioms_tree", "assert_compiled", "docs_census", "check_docs_census",
+    "census_environment", "always_ff", "always_comb", "no_sorry_ax" ]
 
-/-- A bare identifier worth resolving: `[a-z][A-Za-z0-9]*(_[A-Za-z0-9]+)+`, optionally dotted
-(`Foo.bar_baz`), optionally primed. Anything else in backticks (paths, flags, prose) is not. -/
+/-- Non-Obend stdlib namespace roots excluded from `Upper.member` qualified-identifier checks. -/
+meta def metaStdlibPrefixes : List String :=
+  [ "Lean", "Std", "IO", "System", "List", "Array", "ByteArray", "String", "Substring",
+    "Option", "Except", "BitVec", "Nat", "Int", "Bool", "Char", "UInt8", "UInt16",
+    "UInt32", "UInt64", "USize", "Float", "Json", "Task", "Mutex", "Promise" ]
+
+/-- File extensions excluded from `Upper.ext` qualified-identifier checks (`Cargo.toml`, `Replay.lean`). -/
+meta def metaFileExtensions : List String :=
+  [ "lean", "md", "rs", "toml", "lock", "json", "c", "h", "py", "sh", "so", "dylib", "a",
+    "v", "sv", "wgsl", "vcd", "stl", "ngc", "obend", "obnb", "txt", "bin", "pcf", "asc", "il" ]
+
+/-- A bare or qualified identifier worth resolving against `Lean.Environment`:
+1. `snake_case` tokens `[a-z][A-Za-z0-9']*(_[A-Za-z0-9']+)+` (optionally dotted), or
+2. qualified `Upper.member` tokens (`Replay.World`, `Term.hole`, `Quantity.linear`) that are not
+   filenames (`Foo.lean`) or Lean stdlib namespaces (`List.map`). -/
 meta def metaBareIdentToken? (raw : List Char) : Option String :=
   let tok := metaStripTrailingDotChars raw
   if tok.isEmpty then none
   else
     let parts := metaSplitCharsOn '.' tok [] []
-    match parts.getLast? with
-    | none => none
-    | some last =>
-      let lc := last.toList
-      match lc with
-      | [] => none
-      | c :: _ =>
-        if !(c.isLower) then none
-        else if !(lc.contains '_') then none
-        else if !(lc.all fun ch => ch.isAlphanum || ch == '_' || ch == '\'') then none
-        else if parts.any (·.isEmpty) then none
-        else some (String.ofList tok)
+    if parts.any (fun p => p.isEmpty || !p.toList.all metaIsSimpleIdentChar) then
+      none
+    else
+      match parts, parts.getLast? with
+      | _, none => none
+      | first :: _ :: _, some last =>
+          let fc := first.toList
+          let lc := last.toList
+          match fc, lc with
+          | f0 :: _, l0 :: _ =>
+              if first == "Obend" || metaStdlibPrefixes.contains first || metaFileExtensions.contains last then
+                none
+              else if l0.isLower && lc.contains '_' then
+                some (String.ofList tok)
+              else if f0.isUpper && (l0.isAlpha || l0 == '_') then
+                some (String.ofList tok)
+              else
+                none
+          | _, _ => none
+      | [_], some last =>
+          let lc := last.toList
+          match lc with
+          | c :: _ =>
+              if c.isLower && lc.contains '_' then some (String.ofList tok) else none
+          | [] => none
+      | [], _ => none
 
 meta def metaExtractBareIdents (content : String) : List String :=
   let spans := metaExtractInlineBacktickSpansAux content.toList false none []
   spans.foldl (fun acc sp =>
-    -- a span that is one token, not a phrase with spaces or operators
     if sp.any (fun c => c == ' ' || c == '(' || c == ':' || c == '/' || c == '-' || c == '@') then acc
     else
       match metaBareIdentToken? sp with
       | some t => if (t.splitOn ".").head? == some "Obend" then acc else acc ++ [t]
       | none => acc) []
-
-meta def metaTopLevelMarkdownDocs : List String :=
-  [ "AMBITION.md"
-  , "README.md"
-  , "DESIGN.md"
-  , "PLAN.md"
-  , "METATHEORY.md"
-  , "PHYSICAL.md"
-  , "SILICON-ELABORATOR.md"
-  , "QUALIFICATION-AND-SILICON-LEAN.md"
-  , "NEXT-MATHEMATICA.md"
-  , "DEOS-CONTRACTS-CONSENSUS.md"
-  ]
 
 meta def metaStringToLeanName (s : String) : Lean.Name :=
   (metaSplitCharsOn '.' s.toList [] []).foldl Lean.Name.str Lean.Name.anonymous
@@ -718,12 +1062,19 @@ meta def metaResolveRepoFile (relPath : String) : IO (Option System.FilePath) :=
   return none
 
 meta def metaObendLeanPathExists (relObendPath : String) : IO Bool := do
-  let candidates : List System.FilePath :=
+  let baseCandidates : List System.FilePath :=
     [ System.FilePath.mk relObendPath
     , System.FilePath.mk ("lean/" ++ relObendPath)
     , System.FilePath.mk ("../lean/" ++ relObendPath)
     ]
-  for c in candidates do
+  let stemCandidates : List System.FilePath :=
+    if metaCharsEndsWith ['.','l','e','a','n'] relObendPath.toList then []
+    else
+      [ System.FilePath.mk (relObendPath ++ ".lean")
+      , System.FilePath.mk ("lean/" ++ relObendPath ++ ".lean")
+      , System.FilePath.mk ("../lean/" ++ relObendPath ++ ".lean")
+      ]
+  for c in baseCandidates ++ stemCandidates do
     if ← c.pathExists then
       return true
   return false
@@ -760,7 +1111,8 @@ meta def metaRunDocsCensus (docs : List String := metaTopLevelMarkdownDocs) :
         missingDocs := missingDocs ++ [doc]
     | some path =>
         let content ← IO.FS.readFile path
-        let paths := metaExtractObendLeanPaths content
+        let paths := metaDedupList (metaExtractObendLeanPaths content ++ metaExtractBacktickObendPaths content)
+        let repoPaths := metaDedupList (metaExtractBacktickRepoPaths content)
         let reviews := metaExtractReviewMdPaths content
         let roots := metaExtractObendDottedRoots content
         for p in paths do
@@ -768,6 +1120,11 @@ meta def metaRunDocsCensus (docs : List String := metaTopLevelMarkdownDocs) :
           unless ← metaObendLeanPathExists p do
             if !missingPaths.contains (doc, p) then
               missingPaths := missingPaths ++ [(doc, p)]
+        for rp in repoPaths do
+          pathsChecked := pathsChecked + 1
+          if (← metaResolveRepoFile rp).isNone then
+            if !missingPaths.contains (doc, rp) then
+              missingPaths := missingPaths ++ [(doc, rp)]
         for rv in reviews do
           pathsChecked := pathsChecked + 1
           unless ← metaReviewMdPathExists rv do
@@ -780,25 +1137,67 @@ meta def metaRunDocsCensus (docs : List String := metaTopLevelMarkdownDocs) :
               missingRoots := missingRoots ++ [(doc, r)]
   return (docs.length, pathsChecked, rootsChecked, missingDocs, missingPaths, missingRoots)
 
-/-- Every constant name's trailing-component suffixes of length 1 and 2 (`lower_sound`,
-`Lower.lower_sound`), so a bare token in a document resolves the way a reader resolves it. -/
+/-- Trailing-component suffixes (length 1, 2, and 3) of every constant and imported `Obend` module
+in `env`, so bare and qualified tokens (`lower_sound`, `Replay.World`, `Doc.Structured`) resolve
+against the environment. -/
 meta def metaConstantSuffixes (env : Lean.Environment) : Std.HashSet String := Id.run do
   let mut set : Std.HashSet String := {}
   for (constant, _) in env.constants.map₁.toList do
     if constant.isInternal then continue
     match constant.components.reverse with
-    | last :: rest =>
-      set := set.insert last.toString
-      if let penult :: _ := rest then
-        set := set.insert (penult.toString ++ "." ++ last.toString)
+    | c1 :: rest =>
+      set := set.insert c1.toString
+      if let c2 :: rest2 := rest then
+        set := set.insert (c2.toString ++ "." ++ c1.toString)
+        if let c3 :: _ := rest2 then
+          set := set.insert (c3.toString ++ "." ++ c2.toString ++ "." ++ c1.toString)
+    | [] => pure ()
+  for modName in env.header.moduleNames.toList do
+    match modName.components.reverse with
+    | c1 :: rest =>
+      set := set.insert c1.toString
+      if let c2 :: rest2 := rest then
+        set := set.insert (c2.toString ++ "." ++ c1.toString)
+        if let c3 :: _ := rest2 then
+          set := set.insert (c3.toString ++ "." ++ c2.toString ++ "." ++ c1.toString)
     | [] => pure ()
   return set
+
+/-- Map from inductive full/suffix names (`Obend.Core.Term.Term`, `Term.Term`, `Term`, `Quantity`)
+to the constructor lists of matching `InductiveVal` declarations in `env`. -/
+meta def metaInductiveCtorIndex (env : Lean.Environment) : Std.HashMap String (List (List String)) := Id.run do
+  let mut idx : Std.HashMap String (List (List String)) := {}
+  for (constant, cinfo) in env.constants.map₁.toList do
+    if constant.isInternal then continue
+    match cinfo with
+    | .inductInfo iv =>
+        let ctors := iv.ctors.filterMap fun c =>
+          match c.components.reverse with
+          | last :: _ => some last.toString
+          | [] => none
+        let mut keys : List String := [constant.toString]
+        match constant.components.reverse with
+        | c1 :: rest =>
+            if !keys.contains c1.toString then keys := keys ++ [c1.toString]
+            if let c2 :: rest2 := rest then
+              let k2 := c2.toString ++ "." ++ c1.toString
+              if !keys.contains k2 then keys := keys ++ [k2]
+              if let c3 :: _ := rest2 then
+                let k3 := c3.toString ++ "." ++ c2.toString ++ "." ++ c1.toString
+                if !keys.contains k3 then keys := keys ++ [k3]
+        | [] => pure ()
+        for k in keys do
+          let prev := idx.getD k []
+          idx := idx.insert k (ctors :: prev)
+    | _ => pure ()
+  return idx
 
 /-- Evaluate an `Obend.Slot.Slot` (`Slot String String`) for each markdown document in `docs`
 against `(env : Lean.Environment)` and the live repository filesystem snapshot. -/
 meta def metaRunSlotDocsCensus (env : Lean.Environment) (docs : List String := metaCanonicalGovernedDocs) :
     IO (Nat × Nat × Nat × List (String × List String)) := do
   let suffixes := metaConstantSuffixes env
+  let indIdx := metaInductiveCtorIndex env
   let mut totalPaths := 0
   let mut totalConsts := 0
   let mut blockedSlots : List (String × List String) := []
@@ -808,48 +1207,71 @@ meta def metaRunSlotDocsCensus (env : Lean.Environment) (docs : List String := m
         blockedSlots := blockedSlots ++ [(doc, [s!"docExists:{doc}"])]
     | some path =>
         let content ← IO.FS.readFile path
-        let leanPaths := metaDedupList (metaExtractObendLeanPaths content)
+        let leanPaths := metaDedupList (metaExtractObendLeanPaths content ++ metaExtractBacktickObendPaths content)
+        let repoPaths := metaDedupList (metaExtractBacktickRepoPaths content)
         let reviewPaths := metaDedupList (metaExtractReviewMdPaths content)
         let subs := metaDedupList (metaExtractObendDottedRoots content)
         let consts := metaDedupList (metaExtractBacktickObendConsts content)
         let bare := metaDedupList (metaExtractBareIdents content)
-        totalPaths := totalPaths + leanPaths.length + reviewPaths.length
-        totalConsts := totalConsts + consts.length + bare.length
+        let indBlocks := metaExtractFencedInductiveBlocks content
+        totalPaths := totalPaths + leanPaths.length + repoPaths.length + reviewPaths.length
+        totalConsts := totalConsts + consts.length + bare.length + indBlocks.length
         let mut holdsMap : List (String × Bool) := [(s!"doc:{doc}", true)]
         let mut supportKeys : List String := [s!"doc:{doc}"]
         for p in leanPaths do
           let k := s!"leanPath:{p}"
           let ok ← metaObendLeanPathExists p
-          supportKeys := supportKeys ++ [k]
-          holdsMap := holdsMap ++ [(k, ok)]
+          if !supportKeys.contains k then
+            supportKeys := supportKeys ++ [k]
+            holdsMap := holdsMap ++ [(k, ok)]
+        for rp in repoPaths do
+          let k := s!"repoPath:{rp}"
+          let ok := (← metaResolveRepoFile rp).isSome
+          if !supportKeys.contains k then
+            supportKeys := supportKeys ++ [k]
+            holdsMap := holdsMap ++ [(k, ok)]
         for rv in reviewPaths do
           let k := s!"reviewPath:{rv}"
           let ok ← metaReviewMdPathExists rv
-          supportKeys := supportKeys ++ [k]
-          holdsMap := holdsMap ++ [(k, ok)]
+          if !supportKeys.contains k then
+            supportKeys := supportKeys ++ [k]
+            holdsMap := holdsMap ++ [(k, ok)]
         for s in subs do
           let k := s!"subsystem:{s}"
           let ok ← metaObendSubsystemExists s
-          supportKeys := supportKeys ++ [k]
-          holdsMap := holdsMap ++ [(k, ok)]
+          if !supportKeys.contains k then
+            supportKeys := supportKeys ++ [k]
+            holdsMap := holdsMap ++ [(k, ok)]
         for c in consts do
           let k := s!"const:{c}"
           let n := metaStringToLeanName c
           let subOk ← match metaSplitCharsOn '.' c.toList [] [] with
             | ["Obend", sub] => metaObendSubsystemExists sub
             | _ => pure false
-          let ok := env.contains n || env.header.moduleNames.contains n || subOk
-          supportKeys := supportKeys ++ [k]
-          holdsMap := holdsMap ++ [(k, ok)]
-        -- Bare identifiers (`lower_sound`, `Interval.add_mem`): the exact name, or a constant whose
-        -- trailing components are the token (`Obend.Lower.lower_sound`). Until 2026-11-04 only
-        -- `Obend.`-prefixed tokens were checked, and 113 cited theorem names dangled unseen.
+          let ok := env.contains n || env.header.moduleNames.contains n || suffixes.contains c || subOk
+          if !supportKeys.contains k then
+            supportKeys := supportKeys ++ [k]
+            holdsMap := holdsMap ++ [(k, ok)]
         for b in bare do
           let k := s!"ident:{b}"
           let n := metaStringToLeanName b
           let ok := metaBareIdentAllowlist.contains b || env.contains n || suffixes.contains b
-          supportKeys := supportKeys ++ [k]
-          holdsMap := holdsMap ++ [(k, ok)]
+          if !supportKeys.contains k then
+            supportKeys := supportKeys ++ [k]
+            holdsMap := holdsMap ++ [(k, ok)]
+        for (indName, ctors) in indBlocks do
+          let candidates := indIdx.getD indName []
+          for ctor in ctors do
+            let k := s!"ctor:{indName}.{ctor}"
+            let ok := candidates.any (fun actual => actual.contains ctor)
+            if !supportKeys.contains k then
+              supportKeys := supportKeys ++ [k]
+              holdsMap := holdsMap ++ [(k, ok)]
+          let blockKey := s!"inductive:{indName}"
+          let blockOk := candidates.any (fun actual => ctors.all (fun c => actual.contains c))
+          if !supportKeys.contains blockKey then
+            supportKeys := supportKeys ++ [blockKey]
+            holdsMap := holdsMap ++ [(blockKey, blockOk)]
         let slot : Obend.Slot.Slot String String := {
           supports := fun _ => supportKeys
           judge := fun cand => cand == doc
@@ -868,9 +1290,9 @@ meta def metaRunSlotDocsCensus (env : Lean.Environment) (docs : List String := m
             blockedSlots := blockedSlots ++ [(doc, ["empty"])]
   return (docs.length, totalPaths, totalConsts, blockedSlots)
 
-/-- `#check_docs_census` — compile-time gate verifying that all top-level markdown
-documents exist and every `Obend/.../*.lean` path, `review/*.md` path, and `Obend.<Sub>.*`
-subsystem referenced in them resolves to an existing file or subsystem. -/
+/-- `#check_docs_census` — compile-time gate verifying that all thirteen root markdown
+documents exist and every `lean/Obend/...`, `Obend/.../*.lean`, backticked repo path,
+`review/*.md` path, and `Obend.<Sub>.*` subsystem referenced in them resolves cleanly. -/
 elab "#check_docs_census" : command => do
   let (docsChecked, pathsChecked, rootsChecked, missingDocs, missingPaths, missingRoots) ← liftIO metaRunDocsCensus
   unless missingDocs.isEmpty && missingPaths.isEmpty && missingRoots.isEmpty do
@@ -878,31 +1300,20 @@ elab "#check_docs_census" : command => do
   logInfo m!"#check_docs_census: {docsChecked} markdown docs verified; {pathsChecked} path references and {rootsChecked} Obend.* subsystem references resolve cleanly (0 stale references)."
 
 /-- `#docs_census` — `Obend.Intention` + `Obend.Slot` compile-time gate over `DocEnvWorld`
-verifying that all governed markdown docs (`AMBITION.md`, `README.md`, `PLAN.md`, `METATHEORY.md`,
-`SILICON-ELABORATOR.md`, `QUALIFICATION-AND-SILICON-LEAN.md`) have
-`.usable` slots with 0 missing `.lean`/`review/*.md` files and 0 missing `Obend.*` constants in
-`Lean.Environment`. -/
+verifying that all thirteen root architecture markdown docs have `.usable` slots with zero missing
+files, zero missing `Obend.*` or bare/qualified identifiers, and zero hallucinated `inductive`
+constructors in `Lean.Environment`. -/
 elab "#docs_census" : command => do
   let env ← getEnv
   let (_, _, _, reported) ← liftIO (metaRunSlotDocsCensus env metaReportedDocs)
   unless reported.isEmpty do
-    logWarning m!"#docs_census: {reported.length} reported (non-governed) doc(s) cite names the environment does not have: {reported}"
+    logWarning m!"#docs_census: {reported.length} reported doc(s) cite names the environment does not have: {reported}"
   let (docsChecked, totalPaths, totalConsts, blockedSlots) ← liftIO (metaRunSlotDocsCensus env)
   unless blockedSlots.isEmpty do
-    throwError m!"#docs_census FAIL: {blockedSlots.length} governed doc slot(s) blocked on missing files, modules or constants (paths, `Obend.*` names and bare identifiers in backticks are all supports): {blockedSlots}"
-  logInfo m!"#docs_census: {docsChecked} governed markdown docs usable ({totalPaths} path supports, {totalConsts} constant and identifier supports, none dead)."
+    throwError m!"#docs_census FAIL: {blockedSlots.length} governed doc slot(s) blocked on missing files, modules, identifiers, or inductive constructors: {blockedSlots}"
+  logInfo m!"#docs_census: {docsChecked} governed markdown docs usable ({totalPaths} path supports, {totalConsts} constant/identifier/inductive supports, none dead)."
 
-/-! ## The environment, written for the vaults (2026-11-04)
-
-`#census_environment PATH` writes the names a document may cite, one per line: every constant of
-the package (a module under `Obend`; not internal; no `_tooth` or `_native` component, as
-`Obend.AssertAxioms.theoremCensus` reads them) and the tactics and commands of
-`metaBareIdentAllowlist`, sorted; lines starting with `#` are provenance. A vault whose kind page
-says `environment: PATH` reads it as the set a backticked name resolves against
-(`Obend.Vault.Page.backtickNames`, `unresolvedNames`), by this module's rule for a bare identifier: a
-full name, or the last one or two components of one (`metaConstantSuffixes`). The census writes it
-to `.lake/build/census/environment.txt` (`Obend/Census.lean`, tier 2, the whole tree);
-`tests/decisions/Environment.lean` writes the tier-1 library's to the same path. -/
+/-! ## Environment Snapshot Export (`#census_environment`) -/
 
 /-- The package's constant names, sorted. -/
 meta def metaEnvironmentNames (env : Lean.Environment) : Array String := Id.run do
@@ -916,7 +1327,7 @@ meta def metaEnvironmentNames (env : Lean.Environment) : Array String := Id.run 
     names := names.push constant.toString
   return names.qsort (fun a b => a < b)
 
-/-- Write the environment to `path`; the number of constant names written. -/
+/-- Write the environment to `path`; returns the number of constant names written. -/
 meta def metaWriteEnvironment (env : Lean.Environment) (path : String) : IO Nat := do
   let names := metaEnvironmentNames env
   let modules := (env.header.moduleNames.filter (·.getRoot == `Obend)).size
@@ -926,7 +1337,7 @@ meta def metaWriteEnvironment (env : Lean.Environment) (path : String) : IO Nat 
   IO.FS.writeFile path (header ++ allow ++ String.join (names.toList.map (· ++ "\n")))
   return names.size
 
-/-- `#census_environment "PATH"`: write the names the loaded environment has for the vaults to
+/-- `#census_environment "PATH"`: write the names the loaded environment has for vaults to
 resolve cites against. -/
 elab "#census_environment " path:str : command => do
   let env ← getEnv
@@ -937,6 +1348,18 @@ set_option maxRecDepth 20000 in
 theorem extractObendLeanPaths_sample :
     extractObendLeanPaths "Obend/Leaf/Futamura.lean lean/Obend/Spec/CrossPackage.lean" =
       ["Obend/Leaf/Futamura.lean", "Obend/Spec/CrossPackage.lean"] := rfl
+
+set_option maxRecDepth 20000 in
+theorem extractBacktickObendPaths_sample :
+    extractBacktickObendPaths "See `lean/Obend/Core/Term.lean` and `lean/Obend/Hardware/Gpu`." =
+      ["Obend/Core/Term.lean", "Obend/Hardware/Gpu"] := rfl
+
+set_option maxRecDepth 20000 in
+theorem extractFencedInductiveBlocks_sample :
+    extractFencedInductiveBlocks
+      "```lean\ninductive Quantity where\n  | erased | affine | linear | unrestricted\ninductive Reuse where\n  | once\n  | reusable\n```" =
+      [("Quantity", ["erased", "affine", "linear", "unrestricted"]),
+       ("Reuse", ["once", "reusable"])] := rfl
 
 set_option maxRecDepth 20000 in
 example :
@@ -952,10 +1375,6 @@ set_option maxRecDepth 20000 in
 example :
     extractBacktickObendConsts "Check `Obend.Run.HyperLaw.oracle7Judge` and `Obend.Core.Nominal.kinded_refuses`." =
       ["Obend.Run.HyperLaw.oracle7Judge", "Obend.Core.Nominal.kinded_refuses"] := rfl
-
--- `#check_docs_census` and `#docs_census` are run by `Obend/Census.lean` (tier 2, before a merge), not
--- here: a library build (`lake build`, tier 1) does not read the root documents, and a stale document
--- must stop a merge, not the library (2026-11-04).
 
 end Obend.Tactic.DocsCensus
 

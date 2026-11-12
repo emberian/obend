@@ -1,81 +1,74 @@
-# Hardware: the program (2026-11-05)
+# Hardware, FPGA, and GPU Architecture
 
-The hardware tier's ambition is the one the deleted November modules gestured at and did not
-reach: Objective Bend programs lowered, with proofs, to things that run on silicon, and silicon that
-is itself an obend object. The reduction machine (`Hardware/ReductionMachine`: a Leaf book on a
-spatial grid of interaction-net tiles) and the silicon elaborator (`Lower/SiliconElabFabric`: Lean's
-kernel operations as zones of that grid) are the targets. An iCE40 MAC is not a target; it is the
-first Verilated model that happens to be a chip.
+Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`) compiles functional specifications, open hypergraphs, and array kernels to synthesizable RTL, interaction nets, FABulous FPGA bitstreams, WGSL compute shaders, and validated AMD RDNA2 machine code.
 
-What changed since the FPGA review (`review/EXPERT-fpga-silicon-20261103.md`) asked whether this is
-a verified model in Lean or an image on a board: both, because every rung below is now an external
-tool flow someone else maintains, and the only thing nobody has is the proof spine from a
-dependently typed source to the bitstream. That spine is what we build. We write no EDA.
+---
 
-## The chain
+## 1. Synchronous RTL and Yosys Logic Equivalence (`lean/Obend/Hardware/YosysLec.lean`)
 
-Each rung names the external artifact it produces, the theorem over it, and the gate that can go
-red. A rung is not claimed until its gate runs in `verify_*.sh` against the artifact.
+`lean/Obend/Hardware/Types.lean` and `lean/Obend/Hardware/HDL.lean` model synchronous register-transfer designs (`RtlModule`, `RtlExpr`, `WireAssign`, `RegSpec`, `OutputPort`, `ClkDomain`) evaluated over 64-bit bitvectors (`evalWireTable`, `stepModuleRegs`).
 
-| rung | from → to | external artifact | theorem | gate |
-|---|---|---|---|---|
-| 0 | Lean fragment → Core4 | none | `Obend.Lower.Fragment.lower_sound` (have) | tests |
-| 1 | Core4 → Leaf book | none | `Obend.Leaf.Emit.book_sound` (have) | tests |
-| 2 | Leaf book → HVM2 net | HVM2's IR, run by `hvm` (C and CUDA) | `lowerBookToHvm_sound`: the net's normal form denotes `evalBook` | `hvm run` on the emitted net agrees with `evalBook` on a vector set; a planted wrong rule fails |
-| 3 | Leaf book → `RtlModule` with widths | none | `lower_to_rtl_sat_sound` restated over `BitVec w` per port | width-check pass refuses a mismatched slice; emitted SV declares `logic [w-1:0]` |
-| 4 | `RtlModule` → SystemVerilog | Yosys netlist | emitter faithfulness, by `obend verilate` (have) | **EQY** proves the emitted SV against a Yosys-synthesized copy; the old hand-typed `*_lec.smt2` are gone |
-| 5 | SV → eFPGA bitstream | FABulous fabric and bitstream | tile semantics of FABulous's primitive library proved in Lean; `hwBitstream_usable_sound` over that tile | the bitstream's frames are checked against the Lean tile model; DPR is FABulous's frame loader |
-| 6 | bitstream → board | ECP5 (prjtrellis, nextpnr, openFPGALoader), then AWS F2 against `cl_ports.vh` | none new; rung 4 and 5 compose | a signed turn enters, the board answers, the answer matches `runModuleTrace` |
-| 7 | tile → wafer | wafer.space GF180 quarter slot, or Tiny Tapeout IHP/sky130 | the physics in `Hardware/Device/` answers for the tile's corners | measured silicon against the enclosure, with withdrawal conditions |
+`Obend.Hardware.YosysLec` (`lean/Obend/Hardware/YosysLec.lean`) bridges Lean's operational RTL semantics to external synthesis verification:
+- Translates `RtlModule` combinational wires and next-state register equations into typed SMT-LIB2 bitvector formulas (`SmtBV`, `SmtBool`, `OutObl`, `RegObl`, `LecScript`).
+- `moduleFaithful_of_checkWidths` verifies port and register width bounds (`checkWidths`).
+- `lecScript_holds_iff`, `lecScript_unsat_of_agree`, and `lecScript_unsat_of_step` prove that unsatisfiability of the emitted SMT miter script guarantees exact step-by-step equivalence with `stepModuleRegs`.
+- `Obend.Hardware.Judge` (`lean/Obend/Hardware/Judge.lean`) exposes RTL synthesis equivalence in `Obend.Judge.registry` as `rtl-synth@1` (`rtlSynthFormat`).
 
-The reduction machine rides rungs 2 to 6: `automaton_simulates_book` becomes a theorem about the HVM2
-net first (where it runs today, on a GPU) and about the FABulous tile second. The silicon elaborator's
-zones are books lowered through the same chain, which is what makes `by silicon_whnf` honest.
+---
 
-## The GPU rungs (2026-11-05)
+## 2. Interaction-Net Lowering (`lean/Obend/Hardware/Hvm`)
 
-`review/GPU-PROGRAM-20261105.md` is the program: GPU is a theory, a device is a model of it, programs are
-open hypergraphs over its signature, the memory model is a sheaf condition on the scope site, and the
-devices are base points of one fibration. Its rungs have the same grammar as the table above; the first
-has landed.
+For graph-reduction workloads, `lean/Obend/Hardware/Hvm.lean` lowers `Obend.Leaf.Book` definitions to interaction combinator nets (`lean/Obend/Hardware/Hvm/Inet.lean`, `lean/Obend/Hardware/Hvm/Model.lean`, `lean/Obend/Hardware/Hvm/Net.lean`, `lean/Obend/Hardware/Hvm/Lower.lean`):
+- `comp_reduces` and `main_reduces` (`lean/Obend/Hardware/Hvm/Net.lean`) prove fuel-indexed reduction soundness from functional intermediate definitions (`FExp`, `FDef`) to active redex nets (`Cfg`, `HTree`).
+- `lowerBookToHvm_sound` (`lean/Obend/Hardware/Hvm/Lower.lean`) proves that compiling an `Obend.Leaf.Book` into an `HvmBook` preserves evaluation over scalar arguments.
 
-| rung | from → to | external artifact | theorem | gate |
-|---|---|---|---|---|
-| G1 | Fused/layered `ArrayGraph` with checked liveness-based buffer reuse; `ArrayKernel` indexed multi-output maps, register code and uniform shared-memory phases → WGSL | wgpu on RX 6750 XT / RADV; ec-gpu Stockham design; named Plonky3 Goldilocks CPU baseline | `lowerArrayToGpu_sound` with executable `layoutOk` and live-value representation; `BlockLower.checkedProgram_sound` for every admitted source program; limb arithmetic and reduction refine the existing word/field specs | `verify_gpu.sh`: regenerated bytes, exact device results, planted arithmetic faults and real ISA extraction. Register radix-4 NTTs use 3 / 2 / 3 dispatches at 2^10 / 2^16 / 2^20. Current source paths, universal NTT value theorem and collective measurements: [GPU-COLLECTIVES-20261108](review/GPU-COLLECTIVES-20261108.md) |
-| G1s (landed 2026-11-06: `Obend.Hardware.Square`, `hardware/gpu/square/`) | the same graph → the GPU program of G1 and a combinational `RtlModule`: one single-assignment lowering, `compileArrayGraphToRtl` (module wire `i` the `i`-th element definition, a slot array recording each array wire's current definition, a map's `ElemProg` run symbolically per element and folds using shared accumulator wires), with the scalar graphs as its one-element instance (`compileHypergraphToRtl g = compileArrayGraphToRtl (ofScalar g)`); the pipelined module as a third corner | the emitted SystemVerilog under `hardware/gpu/square/sv/`, run by Verilator and read by Yosys (the LEC of `hardware/lec/lec.sh`, z3); the card | `compileArrayGraphToRtl_sound` (for every well-formed graph, the module's ports are `evalGraph` from the ports' environment, flattened), `rtl_eq_gpu_array` (the GPU program from any buffer holding that environment shows the same words), the scalar corollaries `compileHypergraphToRtl_sound` and `rtl_eq_gpu`, `compileHypergraphToRtlPipelined_sound` and `pipelined_eq_comb`; RTL requires `ArrayGraph.wf`, and GPU equality additionally requires checked `layoutOk` and a live-entry representation | `hardware/gpu/square/verify_square.sh` on the shared graphs, each named in `squarePlan` for what it exercises: the `.sv` regenerates byte for byte, the HDL model's `expected.tsv` equals the array model's byte for byte, the LEC is unsat and its bit flip sat (EQY against the synthesized netlist is opt-in: it finished on none of these within an hour), Verilator agrees with `evalModuleOutputs` on every vector, the card agrees with `expected.tsv`, and a swapped operator the LEC refutes is caught by Verilator |
-| G2 | the dumped RDNA2 programs → the wave model (`Obend.Hardware.Gpu.Rdna2`) | AMD's machine-readable ISA XML (`hardware/gpu/rdna2/`), RADV's dumps with machine code and resource lines (`hardware/gpu/isa/`), LLVM 19's disassembler, gem5's Vega `execute` bodies (`rdna2/gem5_ref.cpp`, `gem5_vectors.tsv`) | a decoder generated from the XML and never typed (`Decode`); a wave64 semantics for the instructions RADV emits, each citing the manual and checked against its gem5 twin (`Semantics`); at the instruction level `mulHi_mulLo`, `addCo_spec`, `addCi_spec`, `subCo_spec`; `Schedule.certifySchedule_sound` and `Certified.certifyDump_sound`: a dump the certificate accepts, with residuals that hold, computes on the model what the emitted schedule (elementwise stages and LDS block collectives, `ArrayEmit.evalActions`) and `evalGraph` compute, for every input; `Block.certifyBlock_eval` for the NTT's block program (symbolic execution over the generic model, `Sym.wave_sound`; translation validation per stored dword up to proved residuals, `Equiv`, `Residuals`, `Lift`); the waits as the checked hypothesis that the model's memory is the device's (`Certified.certifyDump`, pinned per graph in `Obend.Teeth.Hardware.Rdna2Runs`) | `hardware/gpu/isa_check.sh`: generated modules byte-identical; the decoder equals `llvm-mc` on every instruction of every dump; every named bit flipped changes the decoding; diamond's programs give `expected.tsv` on the model (smoke) and a planted store flip is caught; the gem5 vectors replay; every dump's waits cover its loads (`Waitcnt`, LLVM's `SIInsertWaitcnts` rules) and a removed wait is refused; `Residuals.lean` is the generator's bytes, every dump is certified with its time and memory (the 2^20-point NTT included: its dispatches checked group by group, every wave on its own task, in 1.6 GB), and a planted store flip is refused. Passed 2026-11-08 on hbox |
-| G4 (landed 2026-11-06: `Obend.Hardware.Gpu.Memory`, `hardware/gpu/litmus/`) | the WGSL memory model (the Vulkan model specialized to WGSL's event classes, `locord = loc ∩ hb`) → sections of a presheaf on the scope site (threads, workgroups, the device; a coverage in Johnstone's sense) with the device's gluing as the verdict | GPUHarbor's litmus kernels (MP, SB, LB, IRIW, 2+2W, the coherence tests, the barrier tests; device and workgroup scope) run with its tuned stress on hbox's RX 6750 XT under RADV and AMDVLK, hbox's UHD 770 under ANV and the Mac's M2 Max under Metal, the tables under `hardware/gpu/litmus/results/`; Dartagnan under `cat/vulkan.cat` as the referent, every shape and outcome as a `.litmus` with its verdict | `DispatchProtocol.checkProgram_not_racy` and `SourceProtocol.checkProgram_read_sequential` connect admitted workgroup protocols to the existing race/visibility verdict for every input memory (host initial values remain a boundary); `allowed_iff_glues`: the decidable checker answers exactly whether an outcome is the restriction of a consistent section over the device, for every shape; `cover_stable`, `cover_le` (the coverage), `restrictObs_comp`; that sections restrict along scope inclusion is checked on the suite, not proved (named open) | `hardware/gpu/verify_litmus.sh`: Dartagnan and the checker agree on every outcome; every class a device showed is allowed; every allowed weak class is shown on some device or recorded as the device being stronger; planted `dropCoherence`, `dropBarrierSync` and `sequential` each fail; the restriction check |
+---
 
-The G1 frontend now includes checked Leaf/Core4 array members, shape/element typing, and
-reduce/scan with segmented forms. `ArrayMember.Plan.source_to_gpu_encoded` composes `book_sound`
-with source compilation and GPU lowering; `ArrayTyping.GraphTyping.wf` derives graph validity.
-Field and SOAC fixtures use that source path; field programs reuse `GoldilocksSource` through checked structural reification. All array folds now compile to admitted `ArrayKernel` collectives: compact shared trees within workgroups and a pruned reduce-then-scan hierarchy across workgroups. `CollectiveBuildCorrect.build_correct` proves their segmented fold values, `ArrayEmitCorrect.compile_runProgram` composes the scheduled actions, and `CollectiveWorkBuild.build_work` bounds the actual emitted work linearly.
+## 3. FABulous FPGA Bitstream and Readback Verification (`lean/Obend/Hardware/Fabulous`)
 
-The sole NTT construction is `Gpu.Ntt` in the block source fragment. `BlockCoreProgram` elaborates indexed workgroup maps, lexical register tiles and shared phases into Core4 bounded loops; `BlockPlan.Plan.source_to_gpu_encoded` composes this source interpretation with the general block lowering. `NttSource.compile` uses that same checked plan. `Ntt.nttBlockProgram_dft` proves that the actual source equals the Goldilocks DFT for every supported size and arbitrary input words; `NttSource.source_to_gpu_dft_encoded` composes that result with Core4 and the admitted GPU lowering. `GoldilocksSourceCorrect.glMul_sound` closes the shared builder-to-field multiplication theorem. The finite direct-DFT checks and their naive evaluator have been removed; the independent recursive NTT remains an external regression oracle. An actual catgrad MLP with an explicit integer adaptation is compared against catgrad's interpreter on the GPU. The preceding integration evidence remains in [`review/GPU-INTEGRATION-20261107.md`](review/GPU-INTEGRATION-20261107.md); the collective measurements are retained under [`hardware/gpu/collectives/results`](hardware/gpu/collectives/results). New frontend device coverage is RADV, not an extension of the older cross-driver claim.
+Rather than trusting place-and-route and bitstream packing tools blindly, `lean/Obend/Hardware/Fabulous` verifies configured FPGA fabric behavior directly from configuration bit patterns:
 
-## Standing on
+- **Switch-Matrix & Tile Semantics (`lean/Obend/Hardware/Fabulous/Tile.lean`, `lean/Obend/Hardware/Fabulous/LUT4ABSwitchMatrix.lean`, `lean/Obend/Hardware/Fabulous/WIOSwitchMatrix.lean`)**: Parses tile configuration maps (`SwitchMatrix`, `TileModel`) and proves programmable interconnect multiplexer soundness (`pip_sound`).
+- **Bitstream Readback Certificates (`lean/Obend/Hardware/Fabulous/Readback.lean`, `lean/Obend/Hardware/Fabulous/Bitstream.lean`)**: `Cert` (`GateCert`, `FlopCert`, `Entry`) checks routing hops and LUT4/FF configuration bits against a physical bitstream `Bits`; `Cert.required_ofF` establishes netlist realization on the tile `Grid`.
+- **End-to-End iCEstick MAC8 Proof (`lean/Obend/Hardware/Fabulous/Mac8.lean`, `lean/Obend/Hardware/Fabulous/Mac8Cert.lean`)**: Verifies the complete 8-bit multiply-accumulate (`iceStickMac8`) bitstream (`mac8Cert`) from reset through arbitrary clock cycles (`mac8_reset_realizes`, `mac8_step_realizes`, `mac8_fabric_realizes_module`, `mac8_fabric_realizes_module_from_reset`).
 
-- HVM2 (HigherOrderCO, paper in repo; HVM3 and Bend active 2025-11): the parallel evaluator for
-  interaction combinators. Our lowering targets its IR; we do not write an evaluator.
-- YosysHQ EQY and SBY: equivalence and property checking. LEC means EQY.
-- Lakeroad (ASPLOS 2024) and its equality-saturation successor (2024): technology mapping by program
-  synthesis. `Hardware/Synth` and `TechMap` become checkers of its certificate, not mappers.
-- Kami (ICFP 2017), Kôika (PLDI 2020), "Making Concurrent Hardware Verification Sequential" (2025),
-  SilverOak/Cava: the guarded-rule compilation theorems `Hardware/Rules` and `HDL` should instance.
-- FABulous (FPGA-Research): silicon-proven eFPGA generator with a tapeout flow (FOSDEM 2026).
-- OpenROAD and LibreLane; the agentic-EDA survey (arXiv 2512.23189) for what certificate each
-  agent step must emit to `Judge`.
-- wafer.space (GF180MCU quarter slot, 1000 dies, $2-3K) and Tiny Tapeout (IHP 130nm, sky130 via
-  ChipFoundry, several runs a year).
+---
 
-## What is not done by us
+## 4. Square Open-Hypergraph Compiler (`lean/Obend/Hardware/Square.lean`)
 
-Place and route, synthesis heuristics, timing analysis engines, a process design kit, a NoC IP, an
-evaluator. Each is an untrusted producer whose witness a small checker in `Obend.Judge` validates,
-as the November orientation said and the November modules did not do.
+`Obend.Hardware.Square` (`lean/Obend/Hardware/Square.lean`, `lean/Obend/Hardware/OpenHypergraph.lean`) compiles strict symmetric monoidal open hypergraphs (`StrictOpenHypergraph`) simultaneously to synchronous RTL and GPU kernels:
+- `compileHypergraphToRtl_sound` proves RTL wire evaluation matches hypergraph denotation (`evalGraph_ofScalar`).
+- `rtl_eq_gpu` proves exact output agreement between the compiled RTL module and the lowered GPU kernel program.
+- `pipelined_eq_comb` proves that retimed/pipelined hypergraph stages compute the exact same function after pipeline fill latency as combinational evaluation.
 
-## First three lanes (2026-11-05)
+---
 
-1. Widths and clocks in `RtlExpr` (rung 3).
-2. Leaf book to HVM2 (rung 2).
-3. EQY as the LEC in every `verify_*.sh` (rung 4).
+## 5. GPU Kernels, Vulkan Memory Model, RDNA2 Validation, and ZKP/Collectives
+
+### 5.1 WGSL Emission and Vulkan Scope Presheaves (`lean/Obend/Hardware/Gpu.lean`, `lean/Obend/Hardware/Gpu/Memory.lean`)
+
+- **Kernel & Stage IR (`lean/Obend/Hardware/Gpu.lean`, `lean/Obend/Hardware/ArrayKernel.lean`)**: Lowers typed array and block programs (`ArrayKernel.Program`, `GpuStage`, `GpuProgram`) to multi-stage WebGPU WGSL shaders (`emitStageWgsl`) and host dispatch manifests (`emitPlanJson`), enforcing linear output ownership (`lean/Obend/Hardware/ArrayKernelOwnership.lean`, `lean/Obend/Hardware/ArrayKernelUnique.lean`).
+- **Scoped Memory Presheaf (`lean/Obend/Hardware/Gpu/Memory.lean`)**: Formalizes Vulkan/WebGPU memory scopes (`Space`, `Shape`, `Obj`) as a presheaf (`Shape.restrict`, `restrict_device`, `restrictObs_comp`), proving that a candidate execution outcome is permitted by the memory model iff local scope observations glue consistently (`allowed_iff_glues`).
+
+### 5.2 AMD RDNA2 Binary Translation Validator (`lean/Obend/Hardware/Gpu/Rdna2`)
+
+To eliminate shader-compiler bugs between WGSL/kernel IR and GPU silicon, `lean/Obend/Hardware/Gpu/Rdna2` validates compiled AMD RDNA2 (gfx1030) machine binaries directly:
+- **Instruction Decoder & Symbolic Semantics (`lean/Obend/Hardware/Gpu/Rdna2/Decode.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Semantics.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Waitcnt.lean`)**: Decodes scalar, vector, LDS, and `s_waitcnt` encodings (`lean/Obend/Hardware/Gpu/Rdna2/Insts/C0.lean`–`lean/Obend/Hardware/Gpu/Rdna2/Insts/C12.lean`) into wavefront machine transitions.
+- **Translation Validation (`lean/Obend/Hardware/Gpu/Rdna2/Certified.lean`, `lean/Obend/Hardware/Gpu/Rdna2/CertSound.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Schedule.lean`)**:
+  - `certifyDump_sound`: proves a disassembled RDNA2 binary implements an `ArrayGraph`.
+  - `certifyBlockDump_sound`: proves workgroup block-kernel equivalence including shared LDS memory (`parseDumpLds`).
+  - `certifySchedule_sound`: proves end-to-end correctness of multi-dispatch host schedules (`Schedule`).
+
+### 5.3 Workgroup Blelloch Collectives and Stockham Goldilocks NTT
+
+- **Blelloch Scans & Reductions (`lean/Obend/Hardware/Gpu/CollectiveBuildCorrect.lean`, `lean/Obend/Hardware/Gpu/CollectiveCorrect.lean`)**: Proves workgroup upsweep/downsweep scan and tree-reduction value correctness and memory framing (`scanGroup_value`, `scanGroup_frame`, `reduceGroup_value`, `reduceGroup_frame`).
+- **Stockham Goldilocks NTT (`lean/Obend/Hardware/Gpu/Ntt.lean`, `lean/Obend/Hardware/Gpu/NttEndToEnd.lean`, `lean/Obend/Hardware/Gpu/GoldilocksSourceCorrect.lean`)**: Verifies 64-bit Goldilocks prime ($p = 2^{64} - 2^{32} + 1$) modular multiplication (`glMul_sound`) and multi-stage Stockham DIF/DIT number-theoretic transforms (`nttBlockProgram`, `encoded_dft_of_uploads`).
+
+---
+
+## 6. Verified Silicon Applications (`lean/Obend/Apps`, `crates/obend-gui`)
+
+- **`Obend.Apps.ObendRisc` (`lean/Obend/Apps/ObendRisc.lean`)**: 64-bit RISC processor RTL (`obendRiscCpuRtlModule`) with proved decode/wire non-interference and privilege-trap preemption (`risc_base_opcode_non_interference`, `risc_privilege_trap_preempts_base_and_ext`).
+- **`Obend.Apps.ZkNtt` (`lean/Obend/Apps/ZkNtt.lean`, `lean/Obend/Apps/ZkNtt/Goldilocks.lean`)**: Hardware Goldilocks NTT butterfly and Fiat–Shamir sumcheck transcript coprocessor (`zkNttCoprocRtlModule`).
+- **`Obend.Apps.SdrFt8Rx` (`lean/Obend/Apps/SdrFt8.lean`, `lean/Obend/Apps/SdrFt8Rx.lean`)**: Numerically controlled oscillator and quadrature FT8 receiver pipeline with proved phasor error and $\ge 63\,\text{dB}$ image-rejection ratio (`nco_phasor_error`, `sdr_irr_ge_63dB`).
+- **Waveform & Geometry Inspection (`crates/obend-gui`)**: Streaming `.vcd` value-change-dump parser (`VcdWaveform`), binary/ASCII `.stl` mesh parser (`StlMesh`), and `.ngc` RS-274 G-code parser (`NgcToolpath`) in `crates/obend-gui/src/apps.rs`.

@@ -1,144 +1,66 @@
-# Objective Bend (`obend`)
+# Obend
 
-> **Draft, 2026-11-04.** This README was rewritten by an agent lane in the project's research
-> frame (`AMBITION.md`); ember has said the previous one was not in their voice, and this one is
-> not either. It is a draft for ember to voice. It names only what the built `obend` binary does
-> today, with the commands that were run to check it.
+Obend is a formally verified programming language, local-first document and vault substrate, certificate-checking judgment registry, and hardware/GPU compilation stack implemented in Lean 4 (`lean/Obend`) with a thin Rust host workspace (`crates/`).
 
-Objective Bend is a research project into what follows from a few design decisions taken
-together: programs as open objects other hands extend without forking (`self`/`super`/`fix`),
-laws as readable lines judged at the moment of a write and inherited along kinds, deferred
-decisions as slots with withdrawable supports, answers labelled by the regime that established
-them, and a kernel that re-executes rather than trusts. The calculus and its metatheory are in
-Lean 4 under `lean/Obend/`; the CLI is `lean/.lake/build/bin/obend`. What the project is and is
-not is in `AMBITION.md`; what is proved and what is open is in `THESIS.md`.
+Every semantic layer — from extrinsic linear/graded row typing and open-recursive specialization to append-only vault replay, double-entry ledger conservation, Simplex consensus trace verification, FABulous FPGA bitstream readback, and RDNA2 GPU binary translation validation — is defined once as an executable model in Lean 4 and paired with kernel-checked soundness and refusal proofs.
 
-## What runs today
+---
 
-### A vault of markdown
+## Architecture Overview
 
-A folder of `.md` files, Obsidian-shaped: one page per file, `[[wikilinks]]`, `![[embeds]]`,
-`[[Page#^block]]` quotes, frontmatter. `obend open` reads it as a world kept beside it in
-`.obend/world.json` and never changes the shape of your notes.
+| Layer | Lean Modules / Host Crates | Primary Guarantees |
+| :--- | :--- | :--- |
+| **Core Calculus & Typing** | `lean/Obend/Core/Term.lean`, `lean/Obend/Core/Ty.lean`, `lean/Obend/Core/Check.lean`, `lean/Obend/Core/Bidirectional.lean`, `lean/Obend/Core/Machine.lean` | Extrinsic graded/linear (`Quantity`, `Reuse`) bidirectional checker (`checkAgainst_sound`) over Amadio–Cardelli equi-recursive and canonical finite rows (`finite_field_commute`, `finite_field_shadow`), paired with type preservation (`step_preserves_typing`, `checked_runBounded_no_refusal`). |
+| **Intentions, Slots & Leaf** | `lean/Obend/Intention.lean`, `lean/Obend/Slot.lean`, `lean/Obend/Slot/Protocol.lean`, `lean/Obend/Leaf/Flatten.lean`, `lean/Obend/Leaf/Emit.lean`, `lean/Obend/Leaf/Residual.lean`, `lean/Obend/Leaf/Specialize.lean` | Explicit dependency pinning (`current_iff_usable`, `stale_iff_blocked`), open-recursive prototype flattening (`flatten_sound`, `book_sound`), residual super-reference elimination (`vtable_clean`, `no_residual_super`), and Futamura book specialization (`specSlot`, `moved_pin_blocks`). |
+| **Patch-Graph Documents** | `lean/Obend/Doc/Graph.lean`, `lean/Obend/Doc/Merge.lean`, `lean/Obend/Doc/Section.lean`, `lean/Obend/Doc/Structured.lean` | Pijul-style directed atom graphs (`IsPushout`), commutative 3-way cell merges (`mergeKeyedCells3_commutative`), citation drift refusal (`SourceMoves`), and lossless structured `.obnb` cell round-trips (`projection_preservation`, `stale_pin_invalidates`). |
+| **Live Vault, Reasons & Ledger** | `lean/Obend/Vault/Replay.lean`, `lean/Obend/Vault/Form.lean`, `lean/Obend/Vault/FormCheck.lean`, `lean/Obend/Vault/Transport.lean`, `lean/Obend/Vault/Retention.lean`, `lean/Obend/Vault/Merge.lean`, `lean/Obend/Reasons.lean`, `lean/Obend/Ledger/Register.lean`, `lean/Obend/Ledger/Report.lean` | Hash-chained log replay (`state_eq_replay_log`, `checkpoint_is_cache`), residual authorization membranes (`eval_fill_eq_subst_residual`, `admit_no_amplification`), single-pass form checking (`rechecked_zero`), capability handoff (`handoff_no_absence`), right-to-forget log compaction (`state_eq_replay_compacted`), Van Gelder 3-valued justification (`gamma_least`, `no_conclusion_from_cycles`), and double-entry conservation (`vault_conserved`, `trial_balance_binds`). |
+| **Judges, Genealogy & Consensus** | `lean/Obend/Judge.lean`, `lean/Obend/Judge/Class.lean`, `lean/Obend/Judge/Lrat.lean`, `lean/Obend/Judge/RealAnalysis.lean`, `lean/Obend/Judge/Genealogy.lean`, `lean/Obend/Consensus/SimplexProtocol.lean`, `lean/Obend/Consensus/SimplexTrace.lean` | Graded `Judge` interface with byte-decoded formats (`Obend.Judge.registry`), self-judged succession (`succession_sound`, `lob_cost_necessary`), and Byzantine Simplex safety and trace checking (`finalized_consistent`, `accountable`, `checkTrace_sound`). |
+| **Hardware, GPU & Physical** | `lean/Obend/Hardware/YosysLec.lean`, `lean/Obend/Hardware/Hvm/Lower.lean`, `lean/Obend/Hardware/Fabulous/Mac8.lean`, `lean/Obend/Hardware/Square.lean`, `lean/Obend/Hardware/Gpu.lean`, `lean/Obend/Hardware/Gpu/Memory.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Certified.lean`, `lean/Obend/Hardware/Device/DriftDiffusion.lean`, `lean/Obend/Hardware/GeometryCAM.lean` | RTL-to-SMT Yosys LEC (`lecScript_unsat_of_step`), interaction-net lowering (`lowerBookToHvm_sound`), FABulous iCEstick MAC8 bitstream readback (`mac8_fabric_realizes_module`), hypergraph-to-RTL/GPU compilation (`rtl_eq_gpu`), Vulkan scope presheaf (`allowed_iff_glues`), RDNA2 ISA binary validation (`certifyDump_sound`), Blelloch scans (`scanGroup_value`), Stockham Goldilocks NTT (`encoded_dft_of_uploads`), 1D drift-diffusion (`ddFormat_sound`), and CAM gouge checking (`fidget_toolpath_no_gouge_continuous`). |
+| **FFI Bridge & Rust Host** | `lean/Obend/FFI/Bridge.lean`, `crates/obend-ffi`, `crates/obend-sandbox`, `crates/obend-gui` | Stateful C ABI backed by `Obend.Vault.Replay.Session`, `.obend` elaboration via `Obend.Spec`, `Obend.Judge.registry` witness verification, Linux `bwrap` / macOS SBPL sandboxing, and streaming `.vcd`, `.stl`, `.ngc` parsers plus PIDE session client. |
 
-```sh
-cd my-notes
-obend open                      # every page a version; dangling links named
-obend status [PAGE]             # each page, each cite and whether it holds
+---
+
+## Repository Layout
+
+- `lean/Obend/` — Verified Lean 4 core, language front-end (`Spec`, `Elab`, `Law`), document graph (`Doc`), durable vault (`Vault`, `Reasons`, `Ledger`, `Consensus`), certificate registry (`Judge`), Lean-to-silicon lowering (`Lower`), and hardware/GPU/device stacks (`Hardware`, `Apps`).
+- `lean/c/obend_bridge.c` — Thin C ABI shim exporting `lean/Obend/FFI/Bridge.lean` entrypoints into `libobend_Obend.so`.
+- `crates/obend-ffi/` — Safe Rust bindings over the Lean C ABI (`Session`, `Receipt`), linking directly against the compiled Lean shared library.
+- `crates/obend-sandbox/` — Confinement primitives (`LaunchGate`, `GrainExecutor`, `CpuMeter`, Linux `bwrap`, macOS Seatbelt SBPL) for untrusted external solvers and toolchains.
+- `crates/obend-gui/` — Rust library providing streaming `.vcd` waveform, `.stl` mesh, and `.ngc` G-code parsers (`apps`) alongside an asynchronous PIDE session client (`ObendSession`) over `obend-ffi`.
+
+---
+
+## Building and Testing
+
+Build the Lean 4 library and shared FFI artifact from `lean/`:
+
+```bash
+cd lean
+lake build Obend
+lake build Obend:shared
 ```
 
-A page's frontmatter may carry laws, `law NAME: EXPR`, over its measures (`words`, `lines`,
-`bytes`, `links`, `embeds`, `quotes`, `dangling`, `sections`, `version`; `unresolved`, the
-backticked names the page cites that the library does not have, where a kind page names the
-census's list as its `environment:`), over the write itself (`deletions`, `insertions`:
-`new.deletions == 0` is append-only, line by line; `unresolvedInserted`: `== 0` says the lines a
-write adds cite no name the library lacks) and its numeric fields; a folder's
-`_kind.md` carries laws for every page in it; a law that reads `linked.date` instead of `new.date`
-is judged at every page the page links to, when either is written; `law appendOnly per ##:
-new.deletions == 0` is judged at every `## ` row of the page, on the row's own measures, and a
-refusal names the row. A frontmatter word is a label
-(`new.decider in ["ember", "lane"]`), and `new.poster` is the member whose text a write is. An edit
-that breaks a law is
-refused by name, with
-the value that would pass, and the file keeps what you typed:
+Run the Rust workspace test suite against the compiled Lean shared library:
 
-```
-Beta: refused by its law short: `new.words <= 20` does not hold; words = 20 would pass (this write has words = 27)
+```bash
+cargo test --workspace
 ```
 
-Members post without overwriting (`obend member add scout --grant post:Alpha`, `obend post`,
-`obend select`); the owner's `obend post PAGE ROW.md --into "Heading"` adds a row to a section,
-judged like any write and leaving the file alone when refused (the project's own decisions ledger,
-`review/DECISIONS-20261031.md`, is kept this way under `review/ledger/_kind.md`,
-`lean/tests/decisions/LEDGER.md`); a copy edited offline merges back as a branch, settled at the tip, a page both sides edited by pushout (`obend merge ../laptop`); a quote
-whose source moved is marked `{behind}` in your file and re-grounded with `obend recite`; a file
-you delete is a page deleted, a file you rename is the page renamed. The whole of it, run and
-checked line by line: `lean/tests/vault/WALKTHROUGH.md`.
+Compile-time metatheoretic and documentation integrity gates live in `lean/Obend/AssertAxioms.lean`, `lean/Obend/AssertCompiled.lean`, `lean/Obend/Tactic/Tooth.lean`, and `lean/Obend/Tactic/DocsCensus.lean` (`#check_docs_census`, `#docs_census`, `#census_environment`).
 
-### A ledger in a vault
+---
 
-A register folder whose `_kind.md` carries the laws every posting must keep (`balanced`,
-`solvent`, `sealed`) makes the vault a double-entry ledger: documents are pages, posting is a
-write judged by those laws, a wrong posting is reversed and never edited, a period closes once,
-and every posting has a receipt anyone re-judges without the books.
+## Documentation Map
 
-```sh
-obend ledger post invoices/INV-1       # posted as P-0001, receipt .obend/receipts/P-0001.json
-obend verify .obend/receipts/P-0001.json
-obend ledger status | obend ledger reverse P-0001 | obend ledger close 11
-obend report trial-balance 11
-```
-
-Walkthrough: `lean/tests/ledger/WALKTHROUGH.md`.
-
-### Programs and packages
-
-The language (`.obend`): records, sums, functions, lazy fields, and specs that layer over a
-record through `self` and `super`, closed by `fix`. The tutorial's programs are under
-`lean/tests/obend-source/tutorial/`.
-
-```sh
-obend run lean/tests/obend-source/tutorial/ch4-late-binding.obend raisedTotal   # result: 16
-obend check FILE.obend                 # every declaration's type, one JSON line each
-obend check DIR | obend run DIR ENTRY  # a directory of .obend files as one package
-obend run --package WORKSPACE.json     # packages extending packages they did not write
-```
-
-A refusal names what would pass: `refused (competing-protocol): … is implemented by kit/pdf and
-by kit/html, neither package extending the other; a package extending both decides by
-implementing it`. Packages declare laws over their objects' state; a write is judged by every
-package's laws in precedence order (`obend judge`), and a recorded turn re-derives at the records
-it was made at or is stale by name (`obend admit`).
-
-### Claims, receipts and the leaf
-
-```sh
-obend check --obligations PKG --object ENTRY        # a program's claims, at the object they are about
-obend prove PKG SPEC.CLAIM --object ENTRY --out r.json
-obend verify r.json                                 # re-judged with no producer state
-obend ground PKG ENTRY 7                            # ok, or refuted: runs to false
-obend emit PKG --object ENTRY --out book.json --call twice 3
-obend specialize PKG --object ENTRY --book book.json --call twice 3
-```
-
-`prove` certifies what re-execution and late binding reach (a method equals its unfolding under
-the layers that are there), refutes a claim by a ground instance that runs to false, and says
-`unchecked` for everything else; it does not do arithmetic or induction. `obend analyze impact
-CELL@PIN --world DIR` says which dependents of a page or cell a change reaches.
-
-### Hardware and analysis
-
-`lean/Obend/Hardware/` and `lean/Obend/Analysis/` are studies of what the same primitives carry
-(RTL emission and a tapeout pipeline, interval and Taylor-model judges, consensus). They are
-reached from Lean (`#import_obend`, the `Obend/Apps/*.lean` fixtures) and are described in
-`PHYSICAL.md`, `SILICON-ELABORATOR.md` and `NEXT-MATHEMATICA.md`, which say what is proved and
-what is a worked example. The application directories under `apps/` are fixtures for those
-studies; each is a directory of `.obend` modules you can `obend check apps/NAME` and whose claims
-you can list and prove with the commands above.
-
-## Building
-
-```sh
-cd lean && lake build obend          # the CLI
-python3 tests/vault/walkthrough.py   # then the conformance runners, each under a minute:
-python3 tests/ledger/walkthrough.py
-python3 tests/run-obend-source.py tests/run-workspace.py tests/run-logic.py tests/run-leaf.py tests/run-receipts.py
-```
-
-The Rust crates (`crates/`) are an FFI session over the Lean library, a sandbox, a node
-simulator of the consensus theorems, and `obend-gui`, an HTTP workbench whose notebook format
-is a prototype; they are not part of the workflows above.
-
-## Layout
-
-| Directory | Contents |
-| :--- | :--- |
-| `lean/Obend/` | the calculus (`Core`), specs and laws (`Spec`, `Law`), slots and kinds, documents and vaults (`Doc`, `Vault`, `Ledger`), claims (`Logic`), the leaf (`Leaf`), judges and receipts, the studies (`Analysis`, `Hardware`, `Consensus`, `Lower`), the CLI (`Main.lean`) |
-| `lean/tests/` | the walkthroughs and conformance runners; `obend-source/` holds the tutorial, the probes and the stranger and three-package workspaces |
-| `stdlib/`, `apps/` | `.obend` programs: a small standard library and the eight study fixtures |
-| `crates/` | Rust: FFI, sandbox, node simulator, workbench |
-| `review/` | decisions and the expert reports that drive the current work |
-
-## License
-
-AGPL-3.0 — Ember Arlynx ([ember.software](https://ember.software)).
+- `AMBITION.md` — System scope and unifying architectural principles.
+- `THESIS.md` — Contextual `Intention` and `Slot` discipline across code, documents, vaults, and hardware.
+- `DESIGN.md` — Complete technical design: `Core.Term`, `Core.Ty`, rows, `Slot`/`Leaf`, `Doc`, `Vault`, `Reasons`, `Ledger`, `Judge`, `Hardware`/`Gpu`, and `FFI`.
+- `METATHEORY.md` — Soundness theorems, observational improvement, Van Gelder fixpoints, and `#tooth` mutation verification.
+- `GROUNDING.md` — Byte-level format decoders, cryptographic digests, log replay, and physical/silicon semantic models.
+- `PLAN.md` — Subsystem boundaries, dataflow pipelines, and verification gates.
+- `HARDWARE.md` — RTL, Yosys LEC, HVM lowering, FABulous MAC8 bitstream readback, Square hypergraphs, WGSL, Vulkan memory scopes, RDNA2 binary validation, Blelloch collectives, and Goldilocks NTT.
+- `PHYSICAL.md` — Certified interval/Taylor/SOS/hybrid analysis, `devsim-dd1d@1` Sky130 diode drift-diffusion, `cam-gouge@1` CNC toolpath verification, and SDR FT8 receiver proofs.
+- `SILICON-ELABORATOR.md` — Lean kernel checking and elaboration nodes lowered to `Obend` books and RTL (`Obend.Lower.LeanKernel`, `Obend.Lower.Proofs.SiliconKernel`).
+- `QUALIFICATION-AND-SILICON-LEAN.md` — Trust base qualification, `#tooth` falsifiability, `#assert_axioms_tree`, and `#docs_census`.
+- `DEOS-CONTRACTS-CONSENSUS.md` — Durable `Vault` state, `Form` membranes, `Transport`, `Retention`, `Reasons`, `Ledger`, `Judge.Genealogy`, and `SimplexProtocol` / `SimplexTrace`.
+- `NEXT-MATHEMATICA.md` — Structured `.obnb` documents, `Doc.Structured` lossless projections, certified symbolic algebra (`AutoCert`), and interactive FFI sessions.

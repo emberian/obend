@@ -1,8 +1,5 @@
-// The Lean library `obend-ffi` links is shared; `obend-ffi`'s own rpath flags do not reach a
-// dependent's binaries, so this crate's executables and test binaries take the directories
-// `obend-ffi` publishes (`links = "obend_bridge"`) as rpaths. Under the opt-in stub the
-// variables are absent and nothing is added. (Until 2026-11-04 this script searched for the
-// library itself, a second copy of `obend-ffi`'s search that could disagree with it.)
+// Propagate the Lean shared library rpath flags exported by `obend-ffi` (`links = "obend_bridge"`)
+// to dependent test binaries in `obend-gui`.
 fn main() {
     println!("cargo:rerun-if-env-changed=DEP_OBEND_BRIDGE_LIB_DIR");
     println!("cargo:rerun-if-env-changed=DEP_OBEND_BRIDGE_LEAN_LIB_DIR");
