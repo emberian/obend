@@ -6,7 +6,6 @@ open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open ArrayKernel ArrayBuild GoldilocksSource GoldilocksSourceCorrect NttFieldCorrect
 open BlockNtt RegisterValues PhaseArithmetic
 set_option autoImplicit false
-set_option maxHeartbeats 800000
 
 /-- Allocated register values before canonicalization may be arbitrary words. -/
 structure RawValue (st : Build) (env : Nat → Word) (r value : Nat) : Prop where

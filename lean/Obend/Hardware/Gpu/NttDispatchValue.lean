@@ -10,7 +10,6 @@ open Obend.Hardware.Gpu.NttBatchCorrect Obend.Hardware.Gpu.NttDispatchCorrect
 open Obend.Hardware.Gpu.NttGroupValue Obend.Hardware.Gpu.NttGroupFrame
 open Obend.Hardware.Gpu.BlockLower Obend.Hardware.Gpu.PhaseSemantics
 set_option autoImplicit false
-set_option maxHeartbeats 800000
 
 theorem groups_good (p : Program) (d : Dispatch) (groups : List Nat) (mem : Memory)
     (hg : Good p mem) : Good p (groups.foldl (fun m g => evalGroup d g m) mem) := by

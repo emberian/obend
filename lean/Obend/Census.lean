@@ -353,6 +353,9 @@ import Obend.Hardware.Fabric
 import Obend.Hardware.FabuBlox
 import Obend.Hardware.FluidThermal
 import Obend.Hardware.GeometryCAM
+import Obend.Hardware.Gpu.CollectiveImport
+import Obend.Hardware.Gpu.CollectiveWorkBuild
+import Obend.Hardware.Gpu.NttCorrect
 import Obend.Hardware.HDL
 import Obend.Hardware.Hvm
 import Obend.Hardware.Hvm.Model

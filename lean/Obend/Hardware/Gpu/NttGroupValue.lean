@@ -11,7 +11,6 @@ open Obend.Hardware.Gpu.NttDispatchGeometry Obend.Hardware.Gpu.NttPackedValue
 open Obend.Hardware.Gpu.BlockLower Obend.Hardware.Gpu.PhaseSemantics
 open Obend.Hardware.Gpu.GoldilocksSource
 set_option autoImplicit false
-set_option maxHeartbeats 800000
 
 def tileInput (total bits logP src G : Nat) (initial : Memory) : Nat → Nat :=
   preparedInput (2^total) (2^bits) (2^logP) G true

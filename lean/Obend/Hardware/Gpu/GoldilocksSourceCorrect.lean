@@ -10,7 +10,6 @@ open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open Obend.Hardware.ArrayBuild Obend.Hardware.Gpu.GoldilocksSource
 open Obend.Apps.ZkNtt
 set_option autoImplicit false
-set_option maxHeartbeats 800000
 set_option maxRecDepth 4096
 
 

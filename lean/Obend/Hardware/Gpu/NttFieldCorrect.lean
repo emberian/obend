@@ -8,7 +8,6 @@ open Obend.Hardware.ArrayBuild Obend.Hardware.ArrayKernel
 open Obend.Hardware.Gpu.GoldilocksSource Obend.Hardware.Gpu.GoldilocksSourceCorrect
 open Obend.Hardware.Gpu.Ntt.BlockNtt Obend.Apps.ZkNtt
 set_option autoImplicit false
-set_option maxHeartbeats 800000
 
 /-- A canonical field value in an allocated register of the actual builder. -/
 structure FieldValue (st : Build) (env : Nat → Word) (r value : Nat) : Prop where

@@ -8,7 +8,6 @@ open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 open ArrayKernel ArrayBuild GoldilocksSource GoldilocksSourceCorrect NttFieldCorrect
 open BlockNtt RegisterValues
 set_option autoImplicit false
-set_option maxHeartbeats 800000
 
 /-- The actual source register array represents these canonical field values. -/
 def RegValues (st : Build) (env : Nat → Word) (regs : Array Nat) (values : Nat → Nat) : Prop :=

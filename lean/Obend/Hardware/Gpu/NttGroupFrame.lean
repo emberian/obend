@@ -8,7 +8,6 @@ open Obend.Hardware.Gpu.NttBatchCorrect Obend.Hardware.Gpu.NttDispatchCorrect
 open Obend.Hardware.Gpu.NttDispatchGeometry Obend.Hardware.Gpu.BlockLower
 open Obend.Hardware.Gpu.PhaseSemantics
 set_option autoImplicit false
-set_option maxHeartbeats 800000
 
 /-- A packed phase's device stores belong only to the original groups packed
 into its own workgroup. Shared-row writes cannot alias a device destination. -/
