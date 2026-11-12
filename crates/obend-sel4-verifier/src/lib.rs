@@ -4,16 +4,25 @@
 //!
 //! Canopy shared-cap openings and PikkuFold projection/fold arithmetic are subprotocols,
 //! not a complete PCS, lattice commitment scheme, or arbitrary-computation SNARK.
-//! `RelationVerifier` is the explicit application-proof boundary. The concrete
-//! `IdentityRelation` proves only canonical no-op transitions. Do not install an
-//! unchecked implementation for private turns. No binary-size or seL4 deployment
-//! claim follows from host tests of this library.
+//! `RelationVerifier` is the explicit application-proof boundary, with three
+//! implementations: `IdentityRelation` (canonical no-op transitions only),
+//! `CanopyPikkuRelation` (the two subprotocols over one transcript), and
+//! `DeosTurnRelationVerifier` (module `deos`), which adds what a state-advancing
+//! DeOS turn needs: instance-bound Fiat-Shamir, a `ZkBiscuit` attenuation lineage
+//! with a nullifier checked against a fixed window, signed `Seat` conservation, and
+//! the binding of the Canopy opening to the PikkuFold claim. It checks those
+//! relations over the receipt it is given; it is not a succinct argument for hidden
+//! state. Do not install an unchecked implementation for private turns. No
+//! binary-size or seL4 deployment claim follows from host tests of this library.
 
 #[cfg(test)]
 extern crate std;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{cell::UnsafeCell, marker::PhantomData, mem::MaybeUninit};
+
+mod deos;
+pub use deos::*;
 
 pub type Digest = [u8; 32];
 const RATE: usize = 136;
@@ -132,6 +141,11 @@ impl Sponge {
             *b = (self.lanes[self.pos / 8] >> (8 * (self.pos % 8))) as u8;
             self.pos += 1;
         }
+    }
+    fn digest(self) -> Digest {
+        let mut out = [0; 32];
+        self.finish(4, &mut out);
+        out
     }
 }
 fn customized(custom: &[u8]) -> Sponge {
@@ -396,17 +410,13 @@ pub fn canopy_leaf(row: &[Goldilocks]) -> Digest {
     for x in row {
         s.absorb(&x.0.to_be_bytes());
     }
-    let mut out = [0; 32];
-    s.finish(4, &mut out);
-    out
+    s.digest()
 }
 pub fn canopy_parent(left: &Digest, right: &Digest) -> Digest {
     let mut s = customized(b"obend.canopy.node.v1");
     s.absorb(left);
     s.absorb(right);
-    let mut out = [0; 32];
-    s.finish(4, &mut out);
-    out
+    s.digest()
 }
 pub fn canopy_root(depth: u32, cap_height: u32, cap: &[Digest]) -> Digest {
     let mut s = customized(b"obend.canopy.cap.v1");
@@ -416,9 +426,7 @@ pub fn canopy_root(depth: u32, cap_height: u32, cap: &[Digest]) -> Digest {
     for d in cap {
         s.absorb(d);
     }
-    let mut out = [0; 32];
-    s.finish(4, &mut out);
-    out
+    s.digest()
 }
 /// Counts every invocation, including leaf hashing. Shared-cap root is one cSHAKE.
 /// Returns (shared-cap, naive), where naive authenticates each query to a binary root.
@@ -720,6 +728,40 @@ pub struct CanopyPikkuRelation<
     pub beta: u64,
 }
 
+impl<const COLS: usize, const DEG: usize, const LAYERS: usize, const W: usize>
+    CanopyPikkuRelation<COLS, DEG, LAYERS, W>
+{
+    /// The batched `Canopy` opening of `r` against `root`, on the caller's transcript.
+    fn canopy<const CAP: usize, const Q: usize, const BOT: usize>(
+        &self,
+        tr: &mut Transcript<RelationBound>,
+        root: &Digest,
+        r: &CanopyPikkuReceipt<CAP, Q, BOT, COLS, W>,
+    ) -> bool {
+        let poly_refs: [&[Goldilocks]; COLS] = core::array::from_fn(|i| &self.polynomials[i][..]);
+        let query_views: [CanopyQuery<'_>; Q] = core::array::from_fn(|i| CanopyQuery {
+            index: r.queries[i].index,
+            row: &r.queries[i].row,
+            path: &r.queries[i].path,
+        });
+        let opening = CanopyBatchOpening {
+            depth: r.depth,
+            cap_height: r.cap_height,
+            cap: &r.cap,
+            queries: &query_views,
+            iacc: r.iacc,
+        };
+        verify_canopy(tr, root, &poly_refs, &opening)
+    }
+    /// The Kronecker ternary projection of the folded witness is the claimed one.
+    fn projects<const CAP: usize, const Q: usize, const BOT: usize>(
+        &self,
+        r: &CanopyPikkuReceipt<CAP, Q, BOT, COLS, W>,
+    ) -> bool {
+        let mut scratch = r.folded;
+        kronecker_ternary(&mut scratch, &self.kronecker_factors) == Some(r.claimed_proj)
+    }
+}
 impl<
         const CAP: usize,
         const Q: usize,
@@ -741,30 +783,10 @@ impl<
             return false;
         }
         let mut tr = pi.transcript();
-        if tr.squeeze() != *challenge0 {
-            return false;
-        }
-        let poly_refs: [&[Goldilocks]; COLS] = core::array::from_fn(|i| &self.polynomials[i][..]);
-        let query_views: [CanopyQuery<'_>; Q] = core::array::from_fn(|i| CanopyQuery {
-            index: r.queries[i].index,
-            row: &r.queries[i].row,
-            path: &r.queries[i].path,
-        });
-        let opening = CanopyBatchOpening {
-            depth: r.depth,
-            cap_height: r.cap_height,
-            cap: &r.cap,
-            queries: &query_views,
-            iacc: r.iacc,
-        };
-        if !verify_canopy(&mut tr, &pi.post_state_root, &poly_refs, &opening) {
-            return false;
-        }
-        if !verify_pikku(&mut tr, &r.w1, &r.w2, &r.folded, self.beta) {
-            return false;
-        }
-        let mut scratch = r.folded;
-        kronecker_ternary(&mut scratch, &self.kronecker_factors) == Some(r.claimed_proj)
+        tr.squeeze() == *challenge0
+            && self.canopy(&mut tr, &pi.post_state_root, r)
+            && verify_pikku(&mut tr, &r.w1, &r.w2, &r.folded, self.beta)
+            && self.projects(r)
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
