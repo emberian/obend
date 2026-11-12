@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Analysis.VerifiedSimplicialFem — CAD-Conforming Simplicial FEEC, Prager–Synge Continuum PDE Error Certificates & Thomson–Dirichlet Capacitance Brackets
+# Obend.Analysis.SimplicialFeecFem — CAD-Conforming Simplicial FEEC, Prager–Synge Continuum PDE Error Certificates & Thomson–Dirichlet Capacitance Brackets
 
 End-to-end verified finite element exterior calculus (`FEEC`) and continuum elliptic PDE
 certification over exact rational arithmetic (`Rat`), bridging constructive solid geometry
@@ -21,7 +21,7 @@ public import Obend.Judge.Class
 
 public section
 
-namespace Obend.Analysis.VerifiedSimplicialFem
+namespace Obend.Analysis.SimplicialFeecFem
 
 open Obend.Hardware.GeometryCAM
 
@@ -1480,5 +1480,5 @@ theorem feecFragment_inhabited_for_tol (tolSq : Rat) (hTol : 0 ≤ tolSq) :
   unfold Judge.Fragment feecPragerSyngeJudge FeecDecidableFragment; dsimp only
   exact ⟨by decide +kernel, by decide +kernel, hTol⟩
 
-end Obend.Analysis.VerifiedSimplicialFem
+end Obend.Analysis.SimplicialFeecFem
 end

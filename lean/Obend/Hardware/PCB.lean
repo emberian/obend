@@ -10,14 +10,14 @@ module
    drill aspect ratio and via annular-ring registration (`dfm_via_breakout_impossible`), acute-angle
    acid-trap refusal, solder-mask sliver prevention, and stackup copper-balance thieving.
 3. **FEM-Bracketed Coupled Differential $(\mathbf{L}, \mathbf{C})$, Return-Path & 2D PDN Multiphysics:**
-   Welds `Obend.Analysis.VerifiedSimplicialFem` Thomson–Dirichlet two-sided capacitance brackets into
+   Welds `Obend.Analysis.SimplicialFeecFem` Thomson–Dirichlet two-sided capacitance brackets into
    guaranteed odd/even/differential/common-mode impedance intervals, DFM corner impedance and
    capacitive-skew mode-conversion bounds (`dfm_differential_zdiff_and_skew_sound`), split
    return-plane slot inductance refusal (`checkHighSpeedReturnPathContinuity`), $\lambda_{\min}/20$
    stitching-via Faraday fence shielding, and continuous-band 2D plane-pair PDN target impedance.
 -/
-public import Obend.Analysis.VerifiedSimplicialFem
-import all Obend.Analysis.VerifiedSimplicialFem
+public import Obend.Analysis.SimplicialFeecFem
+import all Obend.Analysis.SimplicialFeecFem
 import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.Accelerators
 
@@ -25,7 +25,7 @@ public section
 
 namespace Obend.Hardware.PCB
 
-open Obend.Analysis.VerifiedSimplicialFem
+open Obend.Analysis.SimplicialFeecFem
 
 set_option autoImplicit false
 
@@ -529,7 +529,7 @@ def coupledDiffSampleExtraction : CoupledFemExtraction2D where
 example : checkCoupledFemExtraction coupledDiffSampleExtraction = true := by decide +kernel
 
 /-- **FEM-Bracketed Coupled Differential $(\mathbf{L}, \mathbf{C})$ Soundness (`coupledFem_thomsonDirichlet_impedance_brackets_sound`)**:
-Welds `Obend.Analysis.VerifiedSimplicialFem.thomsonDirichlet_capacitance_bracket` on the even and odd
+Welds `Obend.Analysis.SimplicialFeecFem.thomsonDirichlet_capacitance_bracket` on the even and odd
 eigenmodes of $\mathbf{C} = \begin{bmatrix} C_{11} & -C_m \\ -C_m & C_{22} \end{bmatrix}$ into certified
 two-sided continuum brackets on $C_{\text{even}}, C_{\text{odd}}$, mutual coupling $C_m = (C_{\text{odd}} - C_{\text{even}})/2 > 0$,
 and squared impedances $Z_{\text{odd}}^2, Z_{\text{diff}}^2 = (2 Z_{\text{odd}})^2, Z_{\text{comm}}^2 = (Z_{\text{even}}/2)^2$. -/

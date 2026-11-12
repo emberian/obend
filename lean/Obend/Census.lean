@@ -112,6 +112,7 @@ import Obend.Analysis.QuantumWalk
 import Obend.Analysis.RealAnalysis
 import Obend.Analysis.Replay
 import Obend.Analysis.Setup
+import Obend.Analysis.SimplicialFeecFem
 import Obend.Analysis.SosLyapunov
 import Obend.Analysis.TaylorModel
 import Obend.Analysis.Worlds

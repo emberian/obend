@@ -5,7 +5,7 @@ module
 End-to-end positive witnesses, planted-fault refusal & refutation witnesses, inhabitedness
 certificates, `#tooth` mutation-killing probes (`≥ 6`, 10 total), and `#assert_axioms_tree`
 soundness audit across:
-1. `Obend.Analysis.VerifiedSimplicialFem`:
+1. `Obend.Analysis.SimplicialFeecFem`:
    - 2D triangular & 3D tetrahedral CAD-conforming meshes bridged to `GeometryCAM.FRepExpr`,
    - Whitney $W^0$ ($P_1$) stiffness matrix assembly & Dirichlet-connected SPD,
    - $H(\mathrm{div})$ Raviart–Thomas ($RT_0$) element-wise & global Green's identity,
@@ -20,17 +20,17 @@ soundness audit across:
      & capacitive-imbalance mode-conversion bounds, split return-plane slot inductance penalty,
      $\lambda_{\min}/20$ stitching-via Faraday fence, and continuous-band 2D plane-pair PDN impedance.
 -/
-public import Obend.Analysis.VerifiedSimplicialFem
+public import Obend.Analysis.SimplicialFeecFem
 public import Obend.Hardware.PCB
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms
-meta import all Obend.Analysis.VerifiedSimplicialFem
+meta import all Obend.Analysis.SimplicialFeecFem
 meta import all Obend.Hardware.PCB
 meta import all Obend.Hardware.GeometryCAM
 meta import all Obend.Hardware.Accelerators
 meta import all Obend.Hardware.HDL
 import all Obend.Hardware.PCB
-import all Obend.Analysis.VerifiedSimplicialFem
+import all Obend.Analysis.SimplicialFeecFem
 import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.Accelerators
 import all Obend.Hardware.HDL
@@ -42,7 +42,7 @@ import all Obend.AssertAxioms
 namespace Obend.Tests.Metasystem.VerifiedFemAndPcbTest
 
 open Obend.Hardware.GeometryCAM
-open Obend.Analysis.VerifiedSimplicialFem
+open Obend.Analysis.SimplicialFeecFem
 open Obend.Hardware.PCB
 
 set_option autoImplicit false
@@ -344,32 +344,32 @@ def checkTriElementSkipOrientation (verts : List Point2Q) (maxAspectRatio : Rat)
   decide (t.i0 < verts.length) &&
   decide (sumEdgeLenSq2D v0 v1 v2 ≤ maxAspectRatio) &&
   t.eps.isSpdB
-#tooth Obend.Analysis.VerifiedSimplicialFem.checkMeshConformingAndCadValid_sound by mutation
-  Obend.Analysis.VerifiedSimplicialFem.checkTriElementValid := checkTriElementSkipOrientation
+#tooth Obend.Analysis.SimplicialFeecFem.checkMeshConformingAndCadValid_sound by mutation
+  Obend.Analysis.SimplicialFeecFem.checkTriElementValid := checkTriElementSkipOrientation
 
 /-- Tooth 2: Omitting 3D tetrahedral positive-volume check breaks `tetMeshOriented_sound`. -/
 def checkTetMeshSkipVolume (m : SimplexMesh3D) : Bool :=
   !m.tets.isEmpty && decide (0 < m.verts.length)
-#tooth Obend.Analysis.VerifiedSimplicialFem.tetMeshOriented_sound by mutation
-  Obend.Analysis.VerifiedSimplicialFem.checkTetMeshOriented := checkTetMeshSkipVolume
+#tooth Obend.Analysis.SimplicialFeecFem.tetMeshOriented_sound by mutation
+  Obend.Analysis.SimplicialFeecFem.checkTetMeshOriented := checkTetMeshSkipVolume
 
 /-- Tooth 3: Breaking shared-edge affine weighting breaks `p1_shared_edge_trace_continuous`. -/
 def p1EdgeTraceBiased (uh : List Rat) (a b : Nat) (s : Rat) : Rat :=
   (1 - s) * uh.getD a 0 + 2 * s * uh.getD b 0
-#tooth Obend.Analysis.VerifiedSimplicialFem.p1_shared_edge_trace_continuous by mutation
-  Obend.Analysis.VerifiedSimplicialFem.p1EdgeTrace := p1EdgeTraceBiased
+#tooth Obend.Analysis.SimplicialFeecFem.p1_shared_edge_trace_continuous by mutation
+  Obend.Analysis.SimplicialFeecFem.p1EdgeTrace := p1EdgeTraceBiased
 
 /-- Tooth 4: Dropping spatial dimension factor `2` in $\operatorname{div}(a + b x) = 2b$ breaks Green's identity! -/
 def rt0DivWrongDim (σ : Rt0ElementFlux2D) : Rat := σ.b
-#tooth Obend.Analysis.VerifiedSimplicialFem.rt0_elem_greens_identity_p2 by mutation
-  Obend.Analysis.VerifiedSimplicialFem.rt0Div := rt0DivWrongDim
+#tooth Obend.Analysis.SimplicialFeecFem.rt0_elem_greens_identity_p2 by mutation
+  Obend.Analysis.SimplicialFeecFem.rt0Div := rt0DivWrongDim
 
 /-- Tooth 5: Inflating dual capacitance lower bound by `+ 1` breaks `thomsonDirichlet_capacitance_bracket`. -/
 def capacitanceLowerBoundInflated (mesh : SimplexMesh2D) (uh : List Rat) (flux : List Rt0ElementFlux2D) : Rat :=
   let q := dualNetElectrodeCharge mesh uh flux
   (q * q) / dualComplementaryEnergy mesh flux + 1
-#tooth Obend.Analysis.VerifiedSimplicialFem.thomsonDirichlet_capacitance_bracket by mutation
-  Obend.Analysis.VerifiedSimplicialFem.capacitanceLowerBound := capacitanceLowerBoundInflated
+#tooth Obend.Analysis.SimplicialFeecFem.thomsonDirichlet_capacitance_bracket by mutation
+  Obend.Analysis.SimplicialFeecFem.capacitanceLowerBound := capacitanceLowerBoundInflated
 
 /-- Tooth 6: Omitting regional copper thieving balance check breaks `checkCopperDensityBalanced_sound`. -/
 def checkCopperDensitySkipRegion (maxDeltaPermille : Nat) (symPairs : List (Nat × Nat)) (regionTiles : List Nat) : Bool :=

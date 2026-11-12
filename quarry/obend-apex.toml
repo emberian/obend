@@ -1226,6 +1226,20 @@ module = "Obend.SymbolicZk.StencilRolloutStark"
 theorem = "verifyZkPdeRolloutReceipt_sound_or_dualBreak"
 description = "Range-safe Q32 GPU Maxwell stencil rollout bounded within rational PDE error tube and attested by Goldilocks/DualSpine PIOP receipt with constructive `PSum` collision/SIS extractor."
 
+[[apex]]
+id = "analysis-simplicial-feec-prager-synge"
+subsystem = "Analysis"
+module = "Obend.Analysis.SimplicialFeecFem"
+theorem = "checkFeecPragerSynge_sound"
+description = "2D/3D CAD-conforming simplicial FEEC FEM (`FRepExpr`), Whitney P1 + Raviart-Thomas RT0 Green's equilibration, constant-free Prager-Synge continuum error bound, and Thomson-Dirichlet brackets."
+
+[[apex]]
+id = "hardware-pcb-coupled-fem-dfm-envelopes"
+subsystem = "Hardware"
+module = "Obend.Hardware.PCB"
+theorem = "coupledFem_thomsonDirichlet_impedance_brackets_sound"
+description = "Coupled differential PCB impedance brackets welded to Thomson-Dirichlet FEEC FEM, IPC-2221 DFM etch/drill/registration envelopes, Faraday stitching-via fence, and 2D PDN target impedance."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

@@ -119,6 +119,7 @@ public import Obend.Analysis.EqSatHypergraph
 public import Obend.Analysis.Hybrid
 public import Obend.Analysis.HyperbolicPdeCert
 public import Obend.Analysis.PdeSexprAndApprox
+public import Obend.Analysis.SimplicialFeecFem
 public import Obend.Category
 public import Obend.Repair
 public import Obend.Repair.DeriveConfig
