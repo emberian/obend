@@ -1434,5 +1434,51 @@ theorem checkSpecializesProg_inhabited :
     ∃ p : MixProg, checkSpecializesProg 4 p .nil p = true :=
   ⟨{ entry := .sym .entry, procs := [{ name := .sym .entry, body := .dVar }] }, by decide⟩
 
+/-- Recursive static-loop & branch unroller (`d^s`): exercises `sIf` + recursive `sCall`
+    inside `mixProg`, specializing exponent `s` into straight-line dynamic multiplications. -/
+def unrollPowInterp : MixProg :=
+  { entry := .sym .entry
+  , procs :=
+      [ { name := .sym .entry, body := .sCall (.sym .eval) .var .dVar }
+      , { name := .sym .eval
+        , body :=
+            .sIf (.unary .isZero .var)
+              (.dLit (.num 1))
+              (.dBin .mul .dVar
+                (.sCall (.sym .eval) (.bin .sub .var (.lit (.num 1))) .dVar)) } ] }
+
+/-- Two-level affine interpreter (`scale * d + bias` from static pair `(scale, bias)`). -/
+def affineTwoLevelInterp : MixProg :=
+  { entry := .sym .entry
+  , procs :=
+      [ { name := .sym .entry
+        , body := .dBin .add (.dBin .mul (.dLift (.unary .fst .var)) .dVar)
+                             (.dLift (.unary .snd .var)) } ] }
+
+set_option maxRecDepth 200000 in
+/-- Kernel specialization witness for recursive `sCall` + `sIf` loop unrolling (`x^5`). -/
+theorem unrollPowInterp_specializes_5 (x : Nat) :
+    ∃ target : MixProg,
+      runMixSpecialize 400 unrollPowInterp (.num 5) = some target ∧
+      checkSpecializesProg 20 unrollPowInterp (.num 5) target = true ∧
+      hasStaticConstruct target = false ∧
+      target.procs.length = 1 ∧
+      evalMix 20 target .nil (.num x) = some (.num (x * (x * (x * (x * (x * 1)))))) := by
+  have h1 : (match runMixSpecialize 400 unrollPowInterp (.num 5) with
+      | some t => checkSpecializesProg 20 unrollPowInterp (.num 5) t &&
+                  !hasStaticConstruct t && (t.procs.length == 1)
+      | none => false) = true := by decide
+  cases hr : runMixSpecialize 400 unrollPowInterp (.num 5) with
+  | none => rw [hr] at h1; cases h1
+  | some target =>
+    rw [hr] at h1; simp only [Bool.and_eq_true, Bool.not_eq_true', beq_iff_eq] at h1
+    refine ⟨target, rfl, h1.1.1, h1.1.2, h1.2, ?_⟩
+    have hDec : runMixSpecialize 400 unrollPowInterp (.num 5) =
+        some { entry := .sym .entry
+             , procs := [{ name := .sym .entry
+                         , body := .dBin .mul .dVar (.dBin .mul .dVar (.dBin .mul .dVar
+                             (.dBin .mul .dVar (.dBin .mul .dVar (.dLit (.num 1)))))) }] } := by decide
+    rw [hr] at hDec; injection hDec with hEq; subst hEq; rfl
+
 end Obend.Leaf.SelfApplicableMix
 end

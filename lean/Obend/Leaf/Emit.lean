@@ -39,7 +39,10 @@ the hash collides.
 public import Obend.Leaf.Flatten
 public import Obend.Core.Ty
 public import Obend.Core.Brand
-@[expose] public section
+import all Obend.Core.Code
+import all Obend.Leaf.UpTo
+import all Obend.Leaf.Flatten
+public section
 namespace Obend.Leaf
 open Obend.Core.Term
 open Obend.Core.Ty (Ty Quantity Reuse)
@@ -56,12 +59,12 @@ inductive DefKind where
   deriving DecidableEq, Repr
 
 /-- The kind of a vtable entry: a λ is a method; anything else is computed, and gets a cell. -/
-def kindOf : Term → DefKind
+@[expose] def kindOf : Term → DefKind
   | .lam _ => .method
   | _ => .cell
 
 /-- The member names a body reads as `self.m`, `self` at index `d`. -/
-def selfReads (d : Nat) : Term → List String
+@[expose] def selfReads (d : Nat) : Term → List String
   | .hole _ σ => (σ.attach.map fun ⟨t, _⟩ => selfReads d t).flatten
   | .bound _ => []
   | .lam b => selfReads (d + 1) b
@@ -110,25 +113,25 @@ inductive BookItem where
 structure Book where
   items : List BookItem
 
-def BookItem.def? : BookItem → Option LeafDef
+@[expose] def BookItem.def? : BookItem → Option LeafDef
   | .slot d => some d
   | .static _ _ => none
 
-def BookItem.static? : BookItem → Option (String × Term)
+@[expose] def BookItem.static? : BookItem → Option (String × Term)
   | .slot _ => none
   | .static m v => some (m, v)
 
 /-- One definition per slot, in slot order. -/
-def Book.defs (B : Book) : List LeafDef := B.items.filterMap BookItem.def?
+@[expose] def Book.defs (B : Book) : List LeafDef := B.items.filterMap BookItem.def?
 
 /-- The slot table: member names in slot order. -/
-def Book.slots (B : Book) : List String := B.defs.map (·.member)
+@[expose] def Book.slots (B : Book) : List String := B.defs.map (·.member)
 
 /-- The static members (the kind's brand), with their values under `self`. -/
-def Book.statics (B : Book) : List (String × Term) := B.items.filterMap BookItem.static?
+@[expose] def Book.statics (B : Book) : List (String × Term) := B.items.filterMap BookItem.static?
 
 /-- The definition of a vtable entry at a slot. -/
-def emitDef (slots : List String) (i : Nat) (f : String × Term) : LeafDef where
+@[expose] def emitDef (slots : List String) (i : Nat) (f : String × Term) : LeafDef where
   member := f.1
   slot := i
   kind := kindOf f.2
@@ -142,36 +145,36 @@ def emitDefs (slots : List String) : Nat → List (String × Term) → List Leaf
   | i, f :: rest => emitDef slots i f :: emitDefs slots (i + 1) rest
 
 /-- The entries: the brand static, every other member the next slot. -/
-def emitItems (slots : List String) : Nat → List (String × Term) → List BookItem
+@[expose] def emitItems (slots : List String) : Nat → List (String × Term) → List BookItem
   | _, [] => []
   | i, f :: rest =>
     if Obend.Core.Brand.isBrand f.1 then .static f.1 f.2 :: emitItems slots i rest
     else .slot (emitDef slots i f) :: emitItems slots (i + 1) rest
 
 /-- The members that take a slot. -/
-def slotted (vt : List (String × Term)) : List (String × Term) := vt.filter fun f => !Obend.Core.Brand.isBrand f.1
+abbrev slotted (vt : List (String × Term)) : List (String × Term) := vt.filter fun f => !Obend.Core.Brand.isBrand f.1
 
 /-- **The emitter.** -/
-def emitVtable (vt : List (String × Term)) : Book :=
+abbrev emitVtable (vt : List (String × Term)) : Book :=
   { items := emitItems ((slotted vt).map (·.1)) 0 vt }
 
 /-- The book of a composition: its vtable, emitted. -/
-def emit (C : Composition) : Book := emitVtable C.vtable
+@[expose] def emit (C : Composition) : Book := emitVtable C.vtable
 
 /-- How the dispatcher calls a definition, under its two binders (`self` at 1). -/
-def LeafDef.call (d : LeafDef) : Term :=
+abbrev LeafDef.call (d : LeafDef) : Term :=
   match d.kind with
   | .method => .app (d.code.rename (· + 2)) (.bound 1)
   | .cell => .app (.app (d.code.rename (· + 2)) (.bound 1)) (.record [])
 
 /-- The dispatcher's entry for an item: a slot's call, or the static value. -/
-def BookItem.entry : BookItem → String × Term
+abbrev BookItem.entry : BookItem → String × Term
   | .slot d => (d.member, d.call)
   | .static m v => (m, v.rename Nat.succ)
 
 /-- **The dispatcher**: the book linked into one term, `fix (λself. λ_. {m = def self, …}) {}`, with
 the static members answered from the book's metadata. -/
-def Book.link (B : Book) : Term :=
+@[expose] def Book.link (B : Book) : Term :=
   .fix (.lam (.lam (.record (B.items.map BookItem.entry)))) (.record [])
 
 /-! ## The book computes the vtable -/
@@ -280,7 +283,7 @@ theorem emit_slot (C : Composition) (k : Nat) (d : LeafDef) (h : (emit C).defs[k
 
 /-- A well-formed book: every definition is closed, so no definition names another and the
 dispatcher is the only place they meet. -/
-def Book.closedB (B : Book) : Bool := B.defs.all fun d => Obend.Law.closedB d.code
+abbrev Book.closedB (B : Book) : Bool := B.defs.all fun d => Obend.Law.closedB d.code
 
 /-! ## Escaping-`self` syntactic guard (`checkNoEscapingSelf`) & `reads` frame soundness -/
 
@@ -822,11 +825,11 @@ theorem emit_typed (C : Composition) (row : List (String × Ty)) (d : LeafDef) (
 
 /-- A layer as a term: exactly what the emitter reads of it (its key, its fields, its shape). The
 spec metadata and the compose step's metadata are not read: the vtable has no reflection. -/
-def _root_.Obend.Logic.Layer.code (L : Layer) : Term :=
+abbrev _root_.Obend.Logic.Layer.code (L : Layer) : Term :=
   .record [("name", .label L.name), ("fields", .record L.fields), ("flat", .boolean L.flat)]
 
 /-- A composition as a term: its layers in order, outermost first, and its seed. -/
-def _root_.Obend.Logic.Composition.code (C : Composition) : Term :=
+abbrev _root_.Obend.Logic.Composition.code (C : Composition) : Term :=
   .record [("layers", .record (C.layers.map fun L => (L.name, L.code))), ("seed", .record C.seed)]
 
 /-- What the flattening reads of a layer. -/
@@ -860,22 +863,257 @@ theorem emit_congr {C C' : Composition} (h : C.code = C'.code) : emit C = emit C
   unfold emit Composition.vtable Composition.flatRaw
   rw [hs, h.2]
 
-/-- **The book is a function of the composition's content address**: two compositions with one
-address under a short hash have one book, or the hash collides. -/
-theorem emit_of_digest {H : Obend.Digest.HashBytes.Hash} (hH : Obend.Core.Code.Short H) {C C' : Composition}
-    (h : Obend.Core.Code.addressWith H C.code = Obend.Core.Code.addressWith H C'.code) :
-    emit C = emit C' ∨ Obend.Digest.HashBytes.Collision H := by
-  rcases Obend.Core.Code.addressWith_binds hH h with e | c
-  · exact .inl (emit_congr e)
+def charsPreimages (H : Obend.Digest.HashBytes.Hash) : List Char → List (List UInt8)
+  | [] => [Obend.Core.Digest.preimage 6 0]
+  | c :: cs =>
+    let r := Obend.Core.Code.charsDigest H cs
+    Obend.Core.Digest.preimage 7 (Obend.Core.Digest.digestWith H c.toNat r) ::
+    Obend.Core.Digest.preimage c.toNat r ::
+    charsPreimages H cs
+
+def textPreimages (H : Obend.Digest.HashBytes.Hash) (s : String) : List (List UInt8) :=
+  charsPreimages H s.toList
+
+mutual
+def dataPreimages (H : Obend.Digest.HashBytes.Hash) : Obend.Core.Data.Data → List (List UInt8)
+  | .natural n => [Obend.Core.Digest.preimage 0 n]
+  | .boolean b => [Obend.Core.Digest.preimage 1 (if b then 1 else 0)]
+  | .label s => Obend.Core.Digest.preimage 2 (Obend.Core.Code.textDigest H s) :: textPreimages H s
+  | .record fs => Obend.Core.Digest.preimage 3 (Obend.Core.Code.fieldsDigest H fs) :: fieldsPreimages H fs
+  | .variant l p =>
+    let dl := Obend.Core.Code.textDigest H l
+    let dp := Obend.Core.Code.dataDigest H p
+    Obend.Core.Digest.preimage 4 (Obend.Core.Digest.digestWith H dl dp) ::
+    Obend.Core.Digest.preimage dl dp ::
+    (textPreimages H l ++ dataPreimages H p)
+def fieldsPreimages (H : Obend.Digest.HashBytes.Hash) : List (String × Obend.Core.Data.Data) → List (List UInt8)
+  | [] => [Obend.Core.Digest.preimage 8 0]
+  | (n, d) :: rest =>
+    let dn := Obend.Core.Code.textDigest H n
+    let dd := Obend.Core.Code.dataDigest H d
+    let dr := Obend.Core.Code.fieldsDigest H rest
+    Obend.Core.Digest.preimage 9 (Obend.Core.Digest.digestWith H dn (Obend.Core.Digest.digestWith H dd dr)) ::
+    Obend.Core.Digest.preimage dn (Obend.Core.Digest.digestWith H dd dr) ::
+    Obend.Core.Digest.preimage dd dr ::
+    (textPreimages H n ++ dataPreimages H d ++ fieldsPreimages H rest)
+end
+
+/-- Finite list of all Merkle preimages hashed when computing `addressWith H t`. -/
+def codePreimages (H : Obend.Digest.HashBytes.Hash) (t : Term) : List (List UInt8) :=
+  dataPreimages H (Obend.Core.Code.quote t)
+
+private theorem node_binds_among {H : Obend.Digest.HashBytes.Hash} {a b a' b' : Nat}
+    (l₁ l₂ : List (List UInt8))
+    (h : Obend.Core.Digest.digestWith H a b = Obend.Core.Digest.digestWith H a' b')
+    (ha : Obend.Core.Digest.Admissible a) (ha' : Obend.Core.Digest.Admissible a')
+    (hp1 : Obend.Core.Digest.preimage a b ∈ l₁)
+    (hp2 : Obend.Core.Digest.preimage a' b' ∈ l₂) :
+    (a = a' ∧ b = b') ∨ Obend.Digest.HashBytes.CollisionAmong H (fun x => x ∈ l₁ ∨ x ∈ l₂) := by
+  rcases Obend.Core.Digest.binds_or_collides H ha ha' h with e | c
+  · exact .inl e
+  · exact .inr (c.mono fun x hx => by rcases hx with rfl | rfl; exact .inl hp1; exact .inr hp2)
+
+private theorem charsDigest_binds_among {H : Obend.Digest.HashBytes.Hash} (hH : Obend.Core.Code.Short H) :
+    ∀ {cs cs' : List Char}, Obend.Core.Code.charsDigest H cs = Obend.Core.Code.charsDigest H cs' →
+      cs = cs' ∨ Obend.Digest.HashBytes.CollisionAmong H (fun x => x ∈ charsPreimages H cs ∨ x ∈ charsPreimages H cs')
+  | [], [], _ => .inl rfl
+  | [], c' :: cs', h => by
+    simp only [Obend.Core.Code.charsDigest] at h
+    rcases node_binds_among (charsPreimages H []) (charsPreimages H (c' :: cs')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [charsPreimages]) (by simp [charsPreimages]) with ⟨e, _⟩ | c
+    · simp at e
+    · exact .inr c
+  | c :: cs, [], h => by
+    simp only [Obend.Core.Code.charsDigest] at h
+    rcases node_binds_among (charsPreimages H (c :: cs)) (charsPreimages H []) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [charsPreimages]) (by simp [charsPreimages]) with ⟨e, _⟩ | c
+    · simp at e
+    · exact .inr c
+  | c :: cs, c' :: cs', h => by
+    simp only [Obend.Core.Code.charsDigest] at h
+    rcases node_binds_among (charsPreimages H (c :: cs)) (charsPreimages H (c' :: cs')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [charsPreimages]) (by simp [charsPreimages]) with ⟨_, e⟩ | col
+    · rcases node_binds_among (charsPreimages H (c :: cs)) (charsPreimages H (c' :: cs')) e
+          (Obend.Core.Code.char_admissible c) (Obend.Core.Code.char_admissible c')
+          (by simp [charsPreimages]) (by simp [charsPreimages]) with ⟨ec, er⟩ | col
+      · rcases charsDigest_binds_among hH er with rfl | col
+        · exact .inl (by rw [Char.toNat_inj.1 ec])
+        · exact .inr (col.mono fun x hx => by
+            rcases hx with hx | hx
+            · exact .inl (by simp [charsPreimages, hx])
+            · exact .inr (by simp [charsPreimages, hx]))
+      · exact .inr col
+    · exact .inr col
+
+private theorem textDigest_binds_among {H : Obend.Digest.HashBytes.Hash} (hH : Obend.Core.Code.Short H) {s s' : String}
+    (h : Obend.Core.Code.textDigest H s = Obend.Core.Code.textDigest H s') :
+    s = s' ∨ Obend.Digest.HashBytes.CollisionAmong H (fun x => x ∈ textPreimages H s ∨ x ∈ textPreimages H s') := by
+  rcases charsDigest_binds_among hH h with e | c
+  · exact .inl (String.toList_inj.1 e)
   · exact .inr c
 
-/-- The same under the deployed cSHAKE256 (`digest_of_quote`). -/
+private theorem off_diag_binds_among {H : Obend.Digest.HashBytes.Hash} {t t' b b' : Nat}
+    (d d' : Obend.Core.Data.Data)
+    (ht : t < 2 ^ 256) (ht' : t' < 2 ^ 256) (hne : t ≠ t')
+    (h : Obend.Core.Digest.digestWith H t b = Obend.Core.Digest.digestWith H t' b')
+    (hp1 : Obend.Core.Digest.preimage t b ∈ dataPreimages H d)
+    (hp2 : Obend.Core.Digest.preimage t' b' ∈ dataPreimages H d') :
+    d = d' ∨ Obend.Digest.HashBytes.CollisionAmong H (fun x => x ∈ dataPreimages H d ∨ x ∈ dataPreimages H d') := by
+  rcases node_binds_among (dataPreimages H d) (dataPreimages H d') h
+      (Obend.Core.Code.small_admissible ht) (Obend.Core.Code.small_admissible ht') hp1 hp2 with ⟨e, _⟩ | c
+  · exact absurd e hne
+  · exact .inr c
+
+mutual
+private theorem dataDigest_binds_among {H : Obend.Digest.HashBytes.Hash} (hH : Obend.Core.Code.Short H) :
+    ∀ (d d' : Obend.Core.Data.Data), Obend.Core.Code.dataDigest H d = Obend.Core.Code.dataDigest H d' →
+      d = d' ∨ Obend.Digest.HashBytes.CollisionAmong H (fun x => x ∈ dataPreimages H d ∨ x ∈ dataPreimages H d')
+  | .natural n, .natural n', h => by
+    simp only [Obend.Core.Code.dataDigest] at h
+    rcases node_binds_among (dataPreimages H (.natural n)) (dataPreimages H (.natural n')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [dataPreimages]) (by simp [dataPreimages]) with ⟨_, e⟩ | c
+    · exact .inl (by rw [e])
+    · exact .inr c
+  | .boolean b, .boolean b', h => by
+    simp only [Obend.Core.Code.dataDigest] at h
+    rcases node_binds_among (dataPreimages H (.boolean b)) (dataPreimages H (.boolean b')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [dataPreimages]) (by simp [dataPreimages]) with ⟨_, e⟩ | c
+    · left; cases b <;> cases b' <;> simp_all
+    · exact .inr c
+  | .label s, .label s', h => by
+    simp only [Obend.Core.Code.dataDigest] at h
+    rcases node_binds_among (dataPreimages H (.label s)) (dataPreimages H (.label s')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [dataPreimages]) (by simp [dataPreimages]) with ⟨_, e⟩ | c
+    · rcases textDigest_binds_among hH e with rfl | c
+      · exact .inl rfl
+      · exact .inr (c.mono fun x hx => by
+          rcases hx with hx | hx
+          · exact .inl (by simp [dataPreimages, hx])
+          · exact .inr (by simp [dataPreimages, hx]))
+    · exact .inr c
+  | .record fs, .record fs', h => by
+    simp only [Obend.Core.Code.dataDigest] at h
+    rcases node_binds_among (dataPreimages H (.record fs)) (dataPreimages H (.record fs')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [dataPreimages]) (by simp [dataPreimages]) with ⟨_, e⟩ | c
+    · rcases fieldsDigest_binds_among hH fs fs' e with rfl | c
+      · exact .inl rfl
+      · exact .inr (c.mono fun x hx => by
+          rcases hx with hx | hx
+          · exact .inl (by simp [dataPreimages, hx])
+          · exact .inr (by simp [dataPreimages, hx]))
+    · exact .inr c
+  | .variant l p, .variant l' p', h => by
+    simp only [Obend.Core.Code.dataDigest] at h
+    rcases node_binds_among (dataPreimages H (.variant l p)) (dataPreimages H (.variant l' p')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [dataPreimages]) (by simp [dataPreimages]) with ⟨_, e⟩ | c
+    · rcases node_binds_among (dataPreimages H (.variant l p)) (dataPreimages H (.variant l' p')) e
+          (Obend.Core.Code.textDigest_admissible hH _) (Obend.Core.Code.textDigest_admissible hH _)
+          (by simp [dataPreimages]) (by simp [dataPreimages]) with ⟨el, ep⟩ | c
+      · rcases textDigest_binds_among hH el with rfl | c
+        · rcases dataDigest_binds_among hH p p' ep with rfl | c
+          · exact .inl rfl
+          · exact .inr (c.mono fun x hx => by
+              rcases hx with hx | hx
+              · exact .inl (by simp [dataPreimages, hx])
+              · exact .inr (by simp [dataPreimages, hx]))
+        · exact .inr (c.mono fun x hx => by
+            rcases hx with hx | hx
+            · exact .inl (by simp [dataPreimages, hx])
+            · exact .inr (by simp [dataPreimages, hx]))
+      · exact .inr c
+    · exact .inr c
+  | .natural _, .boolean _, h | .natural _, .label _, h
+  | .natural _, .record _, h  | .natural _, .variant _ _, h
+  | .boolean _, .natural _, h | .boolean _, .label _, h
+  | .boolean _, .record _, h  | .boolean _, .variant _ _, h
+  | .label _,   .natural _, h | .label _,   .boolean _, h
+  | .label _,   .record _, h  | .label _,   .variant _ _, h
+  | .record _,  .natural _, h | .record _,  .boolean _, h
+  | .record _,  .label _, h   | .record _,  .variant _ _, h
+  | .variant _ _, .natural _, h | .variant _ _, .boolean _, h
+  | .variant _ _, .label _, h   | .variant _ _, .record _, h => by
+    simp only [Obend.Core.Code.dataDigest] at h
+    exact off_diag_binds_among _ _ (by decide) (by decide) (by decide) h
+      (by simp [dataPreimages]) (by simp [dataPreimages])
+private theorem fieldsDigest_binds_among {H : Obend.Digest.HashBytes.Hash} (hH : Obend.Core.Code.Short H) :
+    ∀ (fs fs' : List (String × Obend.Core.Data.Data)),
+      Obend.Core.Code.fieldsDigest H fs = Obend.Core.Code.fieldsDigest H fs' →
+      fs = fs' ∨ Obend.Digest.HashBytes.CollisionAmong H (fun x => x ∈ fieldsPreimages H fs ∨ x ∈ fieldsPreimages H fs')
+  | [], [], _ => .inl rfl
+  | [], kv' :: rest', h => by
+    simp only [Obend.Core.Code.fieldsDigest] at h
+    rcases node_binds_among (fieldsPreimages H []) (fieldsPreimages H (kv' :: rest')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [fieldsPreimages]) (by simp [fieldsPreimages]) with ⟨e, _⟩ | c
+    · simp at e
+    · exact .inr c
+  | kv :: rest, [], h => by
+    simp only [Obend.Core.Code.fieldsDigest] at h
+    rcases node_binds_among (fieldsPreimages H (kv :: rest)) (fieldsPreimages H []) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [fieldsPreimages]) (by simp [fieldsPreimages]) with ⟨e, _⟩ | c
+    · simp at e
+    · exact .inr c
+  | (n, d) :: rest, (n', d') :: rest', h => by
+    simp only [Obend.Core.Code.fieldsDigest] at h
+    rcases node_binds_among (fieldsPreimages H ((n, d) :: rest)) (fieldsPreimages H ((n', d') :: rest')) h
+        (Obend.Core.Code.small_admissible (by decide)) (Obend.Core.Code.small_admissible (by decide))
+        (by simp [fieldsPreimages]) (by simp [fieldsPreimages]) with ⟨_, e⟩ | c
+    · rcases node_binds_among (fieldsPreimages H ((n, d) :: rest)) (fieldsPreimages H ((n', d') :: rest')) e
+          (Obend.Core.Code.textDigest_admissible hH _) (Obend.Core.Code.textDigest_admissible hH _)
+          (by simp [fieldsPreimages]) (by simp [fieldsPreimages]) with ⟨en, e⟩ | c
+      · rcases node_binds_among (fieldsPreimages H ((n, d) :: rest)) (fieldsPreimages H ((n', d') :: rest')) e
+            (Obend.Core.Code.dataDigest_admissible hH _) (Obend.Core.Code.dataDigest_admissible hH _)
+            (by simp [fieldsPreimages]) (by simp [fieldsPreimages]) with ⟨ed, er⟩ | c
+        · rcases textDigest_binds_among hH en with rfl | c
+          · rcases dataDigest_binds_among hH d d' ed with rfl | c
+            · rcases fieldsDigest_binds_among hH rest rest' er with rfl | c
+              · exact .inl rfl
+              · exact .inr (c.mono fun x hx => by
+                  rcases hx with hx | hx
+                  · exact .inl (by simp [fieldsPreimages, hx])
+                  · exact .inr (by simp [fieldsPreimages, hx]))
+            · exact .inr (c.mono fun x hx => by
+                rcases hx with hx | hx
+                · exact .inl (by simp [fieldsPreimages, hx])
+                · exact .inr (by simp [fieldsPreimages, hx]))
+          · exact .inr (c.mono fun x hx => by
+              rcases hx with hx | hx
+              · exact .inl (by simp [fieldsPreimages, hx])
+              · exact .inr (by simp [fieldsPreimages, hx]))
+        · exact .inr c
+      · exact .inr c
+    · exact .inr c
+end
+
+/-- **The book is a function of the composition's content address**: two compositions with one
+address under a short hash have one book, or `H` collides on the finite set of Merkle preimages
+hashed for `C.code` and `C'.code`. -/
+theorem emit_of_digest {H : Obend.Digest.HashBytes.Hash} (hH : Obend.Core.Code.Short H) {C C' : Composition}
+    (h : Obend.Core.Code.addressWith H C.code = Obend.Core.Code.addressWith H C'.code) :
+    emit C = emit C' ∨
+      Obend.Digest.HashBytes.CollisionAmong H
+        (fun x => x ∈ codePreimages H C.code ∨ x ∈ codePreimages H C'.code) := by
+  rcases dataDigest_binds_among hH (Obend.Core.Code.quote C.code) (Obend.Core.Code.quote C'.code) h with e | c
+  · exact .inl (emit_congr (Obend.Core.Code.quote_injective e))
+  · exact .inr c
+
+/-- The same under the deployed cSHAKE256. -/
 theorem emit_of_address {C C' : Composition}
     (h : Obend.Core.Code.address C.code = Obend.Core.Code.address C'.code) :
-    emit C = emit C' ∨ Obend.Digest.HashBytes.Collision Obend.Core.Digest.deployed := by
-  rcases Obend.Core.Code.digest_of_quote h with e | c
-  · exact .inl (emit_congr e)
-  · exact .inr c
+    emit C = emit C' ∨
+      Obend.Digest.HashBytes.CollisionAmong Obend.Core.Digest.deployed
+        (fun x => x ∈ codePreimages Obend.Core.Digest.deployed C.code ∨
+                  x ∈ codePreimages Obend.Core.Digest.deployed C'.code) :=
+  emit_of_digest Obend.Core.Code.deployed_short h
 
 /-- Read a layer back from its code (no metadata: the code does not carry it). -/
 def layerOfCode : Term → Option Layer
@@ -894,11 +1132,11 @@ def compositionOfCode : Term → Option Composition
 /-- The layer read back has the same code. -/
 def _root_.Obend.Logic.Layer.erase (L : Layer) : Layer := { name := L.name, metadata := .record [], fields := L.fields, flat := L.flat }
 
-theorem layerOfCode_code (L : Layer) : layerOfCode L.code = some L.erase := rfl
+theorem layerOfCode_code (L : Layer) : layerOfCode L.code = some L.erase := by rfl
 
 theorem mapM_layerOfCode : ∀ ls : List Layer,
     (ls.map fun L => (L.name, L.code)).mapM (layerOfCode ·.2) = some (ls.map Layer.erase)
-  | [] => rfl
+  | [] => by rfl
   | L :: ls => by simp [List.mapM_cons, layerOfCode_code, mapM_layerOfCode ls]
 
 /-- **A recorded book's composition reads back with the same code**, so it emits the same book. -/

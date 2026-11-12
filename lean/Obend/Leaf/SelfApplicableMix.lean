@@ -117,6 +117,33 @@ theorem futamura3_self_self_cogen_sound
     · intro interp qCompiler; exact (hSem (quoteProg interp) qCompiler).symm
     · intro _ _ _ _ _ hCompCert srcVal qTarget; exact ((checkSpecializesProg_sound hCompCert).2 srcVal qTarget).symm
 
+/-- **Full End-to-End 3rd Futamura Object-Semantic Chain (`futamura3_end_to_end_object_sound`)**:
+    Chains `cogenProg = mix(⌜mix⌝, ⌜mix⌝)` → `compilerProg = cogen(⌜interp⌝)` →
+    `target = compiler(srcVal)` all the way down to object-program dynamic evaluation `evalMix`. -/
+theorem futamura3_end_to_end_object_sound
+    (fuelCogenGen kdCogen fuelRunCogen kdComp fuelComp kdTarget : Nat)
+    (cogenProg interp compilerProg target : MixProg) (srcVal : MixVal)
+    (hCogen : runMixSpecialize fuelCogenGen mixProg (quoteProg mixProg) = some cogenProg)
+    (hCogenCert : checkSpecializesProg kdCogen mixProg (quoteProg mixProg) cogenProg = true)
+    (hGenComp : evalMix fuelRunCogen cogenProg .nil (quoteProg interp) = some (quoteProg compilerProg))
+    (hCompCert : checkSpecializesProg kdComp mixProg (quoteProg interp) compilerProg = true)
+    (hGenTarget : evalMix fuelComp compilerProg .nil srcVal = some (quoteProg target))
+    (hTargetCert : checkSpecializesProg kdTarget interp srcVal target = true) :
+    evalMix fuelCogenGen mixProg (quoteProg mixProg) (quoteProg mixProg) = some (quoteProg cogenProg) ∧
+    hasStaticConstruct cogenProg = false ∧
+    hasStaticConstruct compilerProg = false ∧
+    hasStaticConstruct target = false ∧
+    (∃ fuelMix, evalMix fuelMix mixProg (quoteProg interp) srcVal = some (quoteProg target)) ∧
+    (∀ (d v : MixVal),
+      (∃ fuel, evalMix fuel interp srcVal d = some v) ↔
+      (∃ targetFuel, evalMix targetFuel target .nil d = some v)) := by
+  obtain ⟨hCgEv, hCgStrip, _, hCgComp⟩ := futamura3_self_self_cogen_sound fuelCogenGen kdCogen cogenProg hCogen hCogenCert
+  obtain ⟨hCpStrip, _⟩ := checkSpecializesProg_sound hCompCert
+  obtain ⟨hTgStrip, hTgSem⟩ := checkSpecializesProg_sound hTargetCert
+  exact ⟨hCgEv, hCgStrip, hCpStrip, hTgStrip,
+    (hCgComp fuelRunCogen kdComp interp compilerProg hGenComp hCompCert srcVal (quoteProg target)).mp ⟨fuelComp, hGenTarget⟩,
+    hTgSem⟩
+
 /-! ## 2. Object Source Language (`ObjSrc`), `objInterp`, & Inhabitedness of Futamura 1/2/3 -/
 
 inductive ObjSrc where

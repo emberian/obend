@@ -38,7 +38,12 @@ public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
 public import Obend.Leaf.Served
 public import Obend.Lower.Proofs.Book
-@[expose] public section
+import all Obend.Leaf.UpTo
+import all Obend.Leaf.Flatten
+import all Obend.Leaf.Emit
+import all Obend.Leaf.Specialize
+import all Obend.Leaf.Served
+public section
 
 namespace Obend.Leaf.Static
 open Obend.Core.Term
@@ -53,12 +58,12 @@ set_option autoImplicit false
 /-! ## 1. The one-step folds: a literal at the head of a redex (`resolveApp`, `resolveGet`, `resolveSplit`, `resolveCase`, `resolveIfBool`, `resolveIfZero`, `resolveBinary`) -/
 
 /-- Statically β-reduce an application when the function is a literal λ-abstraction. -/
-def resolveApp : Term → Term → Term
+@[expose] def resolveApp : Term → Term → Term
   | .lam b, a => instantiate b a
   | f, a => .app f a
 
 /-- Statically resolve a record destructor when the target is a literal record containing `names`. -/
-def resolveSplit : Term → List String → Term → Term
+abbrev resolveSplit : Term → List String → Term → Term
   | .record fs, names, f =>
     match splitValues fs names with
     | some vs => applyAll f vs
@@ -66,7 +71,7 @@ def resolveSplit : Term → List String → Term → Term
   | g, names, f => .split g names f
 
 /-- Statically resolve a constructor `case` when the scrutinee is a literal `.inject tag payload`. -/
-def resolveCase : Term → List (String × Term) → Term
+abbrev resolveCase : Term → List (String × Term) → Term
   | .inject tag payload, arms =>
     match arms.find? (·.1 == tag) with
     | some (_, body) => instantiate body payload
@@ -74,19 +79,19 @@ def resolveCase : Term → List (String × Term) → Term
   | sc, arms => .case sc arms
 
 /-- Statically resolve a Boolean conditional when the condition is a literal `.boolean b`. -/
-def resolveIfBool : Term → Term → Term → Term
+@[expose] def resolveIfBool : Term → Term → Term → Term
   | .boolean true, x, _ => x
   | .boolean false, _, y => y
   | c, x, y => .ifBool c x y
 
 /-- Statically resolve a natural-number conditional when the scrutinee is a literal `.nat n`. -/
-def resolveIfZero : Term → Term → Term → Term
+abbrev resolveIfZero : Term → Term → Term → Term
   | .nat 0, z, _ => z
   | .nat (n + 1), _, s => instantiate s (.nat n)
   | v, z, s => .ifZero v z s
 
 /-- Statically fold a binary primitive operation when both operands are literals in the domain of `op`. -/
-def resolveBinary (op : Primitive) (l r : Term) : Term :=
+@[expose] def resolveBinary (op : Primitive) (l r : Term) : Term :=
   match primitiveResult op l r with
   | some res => res
   | none => .binary op l r
@@ -173,7 +178,7 @@ theorem ahead_resolveBinary (op : Primitive) {l l' r r' : Term}
 /-! ## 2. One bottom-up pass, and four of them (`dataPinPass`, `dataPinSpecialize`) -/
 
 /-- One bottom-up pass of static data-pin specialization over a `Core4` `Term`. -/
-def dataPinPass : Term → Term
+@[expose] def dataPinPass : Term → Term
   | .hole n σ => .hole n (σ.map dataPinPass)
   | .bound i => .bound i
   | .lam b => .lam (dataPinPass b)
@@ -272,7 +277,7 @@ decreasing_by
     | (have := List.sizeOf_lt_of_mem member; omega)
 
 /-- Iterate `dataPinPass` `k` times. -/
-def dataPinSteps : Nat → Term → Term
+@[expose] def dataPinSteps : Nat → Term → Term
   | 0, t => t
   | k + 1, t => dataPinPass (dataPinSteps k t)
 
@@ -287,7 +292,7 @@ theorem bequiv_dataPinSteps : ∀ (k : Nat) (t : Term), t ≈b dataPinSteps k t
 /-- Four passes of `dataPinPass`. Four is a budget, not a fixpoint: a term may still hold folds after it. Every
 β-redex whose function is a literal λ is reduced regardless of how often the bound variable occurs, so the result
 can duplicate work on the demand machine; nothing here bounds that. -/
-def dataPinSpecialize (t : Term) : Term :=
+@[expose] def dataPinSpecialize (t : Term) : Term :=
   dataPinSteps 4 t
 
 theorem bequiv_dataPinSpecialize (t : Term) : t ≈b dataPinSpecialize t :=
@@ -331,11 +336,11 @@ theorem envLookup_folds (env : EnvPinTable) (name : String) (val : Term)
 /-! ## 4. A term applied to a static argument, folded, as a candidate of the specialization slot -/
 
 /-- `f` applied to the static argument `a`, folded: the residual of `f` at `a`. -/
-def staticApply (f a : Term) : Term :=
+abbrev staticApply (f a : Term) : Term :=
   dataPinSpecialize (.app f a)
 
 /-- The residual as a one-layer composition under `memberName` (`Obend.Lower.leanComposition`). -/
-def staticApplyComposition (memberName : String) (f a : Term) : Composition :=
+abbrev staticApplyComposition (memberName : String) (f a : Term) : Composition :=
   leanComposition memberName (staticApply f a)
 
 /-- The book of that composition. -/
@@ -343,7 +348,7 @@ def staticApplyBook (memberName : String) (f a : Term) : Book :=
   emit (staticApplyComposition memberName f a)
 
 /-- The residual book as a candidate of `specSlot`. -/
-def staticApplyCandidate (memberName : String) (f a : Term) : Candidate :=
+abbrev staticApplyCandidate (memberName : String) (f a : Term) : Candidate :=
   .book memberName (staticApplyComposition memberName f a)
 
 /-- The residual is `≈b` the application; when its composition is closed the emitted book's member is
@@ -390,6 +395,11 @@ theorem staticApply_slot_sound
     unfold staticApplyCandidate at hunusable ⊢
     rw [specialize_choice, hunusable]
     rfl
+
+/-- Inhabitedness witness for `staticApply_slot_sound`. -/
+theorem staticApplyComposition_inhabited :
+    (staticApplyComposition "id" (.lam (.bound 0)) (.nat 7)).closedB = true := by
+  decide +kernel
 
 /-! ## 5. Books and pins as `Core4` terms (`encodeBookTerm`, `decodeBookTerm?`) -/
 
@@ -667,23 +677,23 @@ term literally runs `dataPinPass` on every definition body inside the `Book`. -/
 `Obend.Leaf.Specialize`), then fold every definition -/
 
 /-- A definition's `code` under `pins`: the pinned `self.m` reads substituted, then the four passes. -/
-def specializeDefCode (pins : List LeafPin) (code : Term) : Term :=
+abbrev specializeDefCode (pins : List LeafPin) (code : Term) : Term :=
   dataPinSpecialize (substPinsInCode pins code)
 
 /-- Specialize a `LeafDef` against `pins`. -/
-def specializeLeafDef (slots : List String) (pins : List LeafPin) (d : LeafDef) : LeafDef :=
+abbrev specializeLeafDef (slots : List String) (pins : List LeafPin) (d : LeafDef) : LeafDef :=
   { d with
     code := specializeDefCode pins d.code
     reads := residualSlotReads slots pins d }
 
 /-- Specialize a `BookItem` against `pins`. -/
-def specializeBookItem (slots : List String) (pins : List LeafPin) : BookItem → BookItem
+abbrev specializeBookItem (slots : List String) (pins : List LeafPin) : BookItem → BookItem
   | .slot d => .slot (specializeLeafDef slots pins d)
   | .static m v => .static m (dataPinSpecialize v)
 
 /-- **The book specializer**: every definition's pinned `self.m` reads substituted and folded, its
 `reads` recomputed; every static folded. With `pins = []` this is the folder on each definition. -/
-def specializeBook (B : Book) (pins : List LeafPin) : Book :=
+@[expose] def specializeBook (B : Book) (pins : List LeafPin) : Book :=
   { items := B.items.map (specializeBookItem B.slots pins) }
 
 theorem specializeBook_eq_mapBookCode_bindBookPins (B : Book) (pins : List LeafPin) :
@@ -698,7 +708,7 @@ theorem specializeBook_eq_mapBookCode_bindBookPins (B : Book) (pins : List LeafP
 
 /-- Extract a canonical pin entry `(member, value)` from a `BookItem` when the item is a static
 member or a self-independent cell/method. -/
-def itemPinEntry : BookItem → Option (String × Term)
+abbrev itemPinEntry : BookItem → Option (String × Term)
   | .static m v => some (m, v)
   | .slot d =>
     match d.kind, d.code with
@@ -709,11 +719,11 @@ def itemPinEntry : BookItem → Option (String × Term)
     | _, _ => none
 
 /-- The canonical `LeafPin` list of a `Book`'s self-independent cells, methods, and statics. -/
-def bookCanonicalPins (B : Book) : List LeafPin :=
+@[expose] def bookCanonicalPins (B : Book) : List LeafPin :=
   (B.items.filterMap itemPinEntry).map fun (m, v) => ⟨.layer m, v⟩
 
 /-- Look up the raw code of member `m` in `B`. -/
-def lookupBookCode (B : Book) (m : String) : Option Term :=
+@[expose] def lookupBookCode (B : Book) (m : String) : Option Term :=
   match B.defs.find? (·.member == m) with
   | some d => some d.code
   | none => (B.statics.find? (·.1 == m)).map (·.2)
@@ -727,7 +737,7 @@ def evalBookUnderPins (B : Book) (pins : List LeafPin) (m : String) : Option Ter
 
 /-- The code of member `m` of `B`, with its `self` reads resolved against `bookCanonicalPins B` and
 folded when it has any (`d.reads` non-empty), as it stands otherwise. A syntactic normal form, not a run. -/
-def evalBook (B : Book) (m : String) : Option Term :=
+@[expose] def evalBook (B : Book) (m : String) : Option Term :=
   match B.defs.find? (·.member == m) with
   | some d =>
     if d.reads.isEmpty then
@@ -751,7 +761,7 @@ theorem specializeDefCode_congr_of_agree {pins1 pins2 : List LeafPin} (code : Te
   simp only [specializeDefCode, substPinsInCode_congr_of_agree code h]
 
 /-- `evalBook B m` applied to `self := {}` and `x`, folded. Syntactic; the machine is not run. -/
-def evalBookAt (B : Book) (m : String) (x : Term) : Option Term :=
+@[expose] def evalBookAt (B : Book) (m : String) (x : Term) : Option Term :=
   (evalBook B m).map (fun c => dataPinSpecialize (.app (.app c (.record [])) x))
 
 /-- `evalBookUnderPins B pins m` applied to `self := {}` and `x`, folded. Syntactic. -/
@@ -759,7 +769,7 @@ def evalBookUnderPinsAt (B : Book) (pins : List LeafPin) (m : String) (x : Term)
   (evalBookUnderPins B pins m).map (fun c => dataPinSpecialize (.app (.app c (.record [])) x))
 
 /-- The code of `m` in `B_res` applied to `self := {}` and `x`, folded. Syntactic. -/
-def evalResidualBookAt (B_res : Book) (m : String) (x : Term) : Option Term :=
+abbrev evalResidualBookAt (B_res : Book) (m : String) (x : Term) : Option Term :=
   (lookupBookCode B_res m).map (fun c => dataPinSpecialize (.app (.app c (.record [])) x))
 
 /-- The empty base `LeafView` with no declared layer cells. -/
@@ -909,7 +919,7 @@ theorem evalResidualBookAt_specializeBook (B : Book) (pins : List LeafPin) (m : 
    agrees with `bookCanonicalPins B` on `extractReadMembersCode d.code`, and if `d` already had
    no `self` reads (`d.reads.isEmpty = true`), `d.code` is already normalized under `specializeDefCode pins`.
 2. If `m` is a static entry `(m, v)`, `dataPinSpecialize v` is a fixed point of `dataPinSpecialize`. -/
-def HoldsForBookMember (B : Book) (pins : List LeafPin) (m : String) : Prop :=
+abbrev HoldsForBookMember (B : Book) (pins : List LeafPin) (m : String) : Prop :=
   (∀ d : LeafDef, B.defs.find? (·.member == m) = some d →
     (residualSlotReads B.slots pins d).isEmpty = true ∧
     AgreeOnMembers (extractReadMembersCode d.code) (pinListEnv pins) (pinListEnv (bookCanonicalPins B)) ∧
@@ -981,7 +991,7 @@ theorem specializeDefCode_bequiv_and_halts (pins : List LeafPin) (code selfArg x
 /-! ## 9. Boolean equality on optional terms, for `decide`d fixtures -/
 
 /-- Boolean equality on `Option Term` via `Obend.Law.termEq`. -/
-def optTermEq : Option Term → Option Term → Bool
+@[expose] def optTermEq : Option Term → Option Term → Bool
   | some a, some b => Obend.Law.termEq a b
   | none, none => true
   | _, _ => false
@@ -989,6 +999,10 @@ def optTermEq : Option Term → Option Term → Bool
 theorem optTermEq_sound {x y : Option Term} (h : optTermEq x y = true) : x = y := by
   cases x <;> cases y <;> simp [optTermEq] at h ⊢
   exact Obend.Law.termEq_sound h
+
+/-- Inhabitedness witness for `optTermEq_sound`. -/
+theorem optTermEq_inhabited : optTermEq (some (.nat 42)) (some (.nat 42)) = true := by
+  decide +kernel
 
 
 /-! ## 10. Folding a whole book, and what it does to the link
@@ -1151,12 +1165,12 @@ theorem specialized_usable_sound {k : Nat} {name : String} {C C' : Composition} 
     (emit C').link ≈b (specializeBook (emit C') pins).link ∧
     (C'.closedB = true → ∀ m, .get (specializeBook (emit C) pins).link m ≈b .get C'.object m) := by
   obtain ⟨hj, hall⟩ := (usable_iff _ _ _).1 h
-  have ho := hall ⟨.object name, C.code⟩ (by simp [specSlot, Candidate.supports])
+  have ho := hall ⟨.object name, C.code⟩ (by simp [Candidate.supports])
   rw [holdsAt_eq] at ho
-  simp only [viewOf, beq_self_eq_true, ite_true] at ho
+  simp only [beq_self_eq_true, ite_true] at ho
   have e : emit C = emit C' := emit_congr (termEq_sound' ho).symm
   have hjudge : specializedJudgeB (emit C) pins = true := by
-    simp only [specSlot, Candidate.judge, Bool.and_eq_true] at hj
+    simp only [Candidate.judge, Bool.and_eq_true] at hj
     exact hj.2
   refine ⟨e, e ▸ link_bequiv_specializeBook (emit C) pins hjudge, fun hc m => ?_⟩
   rw [e]
@@ -1187,10 +1201,10 @@ theorem specialized_moved_pin_blocks {v : LeafView} {name : String} {C : Composi
     ∃ d, specSlot.read (holdsAt v) (some (.specialized name C pins)) = .blocked (.specialized name C pins) d ∧
       p ∈ d ∧ ∀ q, q ∈ d ↔ q ∈ (Candidate.specialized name C pins).supports ∧ holdsAt v q = false := by
   have hmem : p ∈ specSlot.dead (holdsAt v) (.specialized name C pins) := (mem_dead_iff _ _ _ _).2 ⟨hp, hd⟩
+  have hjudge : (Candidate.specialized name C pins).judge = true := hj
   have hread : ∃ d, specSlot.read (holdsAt v) (some (.specialized name C pins)) =
       .blocked (.specialized name C pins) d ∧ p ∈ d := by
-    unfold Slot.read
-    simp only [hj, ite_true]
+    simp only [Slot.read, hjudge, ite_true]
     cases hdd : specSlot.dead (holdsAt v) (.specialized name C pins) with
     | nil => rw [hdd] at hmem; cases hmem
     | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩

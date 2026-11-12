@@ -17,7 +17,7 @@ closing over a set of pairs whose one-step unfolding is checked once.
 `bequiv_of_joins` is the conclusion.
 -/
 public import Obend.Logic.Claim
-@[expose] public section
+public section
 namespace Obend.Leaf
 open Obend.Core.Term
 open Obend.Equiv
@@ -69,7 +69,7 @@ inductive Joins (B : Term → Term → Prop) : Term → Term → Prop where
       Joins B (.split g names f) (.split g' names f')
 
 /-- Every pair of `B` is closed, so substitution leaves it alone. -/
-def ClosedPairs (B : Term → Term → Prop) : Prop := ∀ {o f : Term}, B o f → Closed o ∧ Closed f
+@[expose] def ClosedPairs (B : Term → Term → Prop) : Prop := ∀ {o f : Term}, B o f → Closed o ∧ Closed f
 
 /-- A base: closed pairs, each side taking at least one step to terms the relation joins. -/
 structure Base (B : Term → Term → Prop) : Prop where

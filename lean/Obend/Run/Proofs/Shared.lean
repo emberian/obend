@@ -35,6 +35,8 @@ import all Obend.Run.Shared
 import all Obend.Run.Fold
 import all Obend.Run.Proofs.Invariant
 import all Obend.Run.Proofs.Control
+import all Obend.Receipt
+import all Obend.Receipt.Merkle
 
 namespace Obend.Run.Shared
 
@@ -515,10 +517,184 @@ public theorem member_receipt_checks [DecidableEq Fact] {i₀ : Ix} (O : ι → 
   Obend.Receipt.issue_checks Obend.Receipt.Merkle.deployed_bounded (members L base sp O (.run i)) (viewReading L base keys)
     (viewReading_coherent keys) hs root rowDigest law pinsOf a r hk q t p
 
+/-- Exact finite list of Merkle internal-node preimages hashed by `Merkle.root H l`. -/
+private def merkleRootPreimages (H : Obend.Digest.HashBytes.Hash) (l : List Nat) : List (List UInt8) :=
+  if l.length < 2 then []
+  else
+    Obend.Core.Digest.preimage
+      (Obend.Receipt.Merkle.root H (l.take (l.length / 2)))
+      (Obend.Receipt.Merkle.root H (l.drop (l.length / 2))) ::
+      merkleRootPreimages H (l.take (l.length / 2)) ++
+      merkleRootPreimages H (l.drop (l.length / 2))
+termination_by l.length
+decreasing_by all_goals simp only [List.length_take, List.length_drop]; omega
+
+/-- Exact finite list of leaf preimages hashed by `Merkle.leaves H vs`. -/
+private def merkleLeafPreimages (vs : List Nat) : List (List UInt8) :=
+  (List.range vs.length).map fun j => Obend.Core.Digest.preimage j (vs.getD j 0)
+
+/-- Exact finite preimage domain hashed when committing `dated H L base keys d`. -/
+public def datedViewPreimages {ι W Tok Fact : Type} [DecidableEq Tok]
+    (H : Obend.Digest.HashBytes.Hash) (L : Ledger ι W Tok) (base : W → View Tok Fact)
+    (keys : List (Fact ⊕ Tok)) (d : L.Rec) : List (List UInt8) :=
+  let vs := (viewReading L base keys).C.values d
+  merkleRootPreimages H (Obend.Receipt.Merkle.leaves H vs) ++ merkleLeafPreimages vs
+
+private theorem merkleRoot_eq_or_collides {H : Obend.Digest.HashBytes.Hash}
+    (hb : Obend.Receipt.Merkle.Bounded H) :
+    ∀ (l₁ l₂ : List Nat),
+      l₁.length = l₂.length →
+      (∀ x ∈ l₁, x < 2 ^ 256) → (∀ x ∈ l₂, x < 2 ^ 256) →
+      Obend.Receipt.Merkle.root H l₁ = Obend.Receipt.Merkle.root H l₂ →
+      l₁ = l₂ ∨ Obend.Digest.HashBytes.CollisionAmong H
+        (fun x => x ∈ merkleRootPreimages H l₁ ∨ x ∈ merkleRootPreimages H l₂) := by
+  intro l₁
+  induction l₁ using (measure List.length).wf.induction with
+  | h l₁ ih =>
+    intro l₂ hlen hl₁ hl₂ hroot
+    by_cases h2 : l₁.length < 2
+    · have h2' : l₂.length < 2 := hlen ▸ h2
+      have hr₁ : Obend.Receipt.Merkle.root H l₁ = l₁.headD 0 := by
+        rw [Obend.Receipt.Merkle.root]; simp [h2]
+      have hr₂ : Obend.Receipt.Merkle.root H l₂ = l₂.headD 0 := by
+        rw [Obend.Receipt.Merkle.root]; simp [h2']
+      rw [hr₁, hr₂] at hroot
+      cases l₁ with
+      | nil => cases l₂ with | nil => exact .inl rfl | cons _ _ => simp at hlen
+      | cons a as =>
+        cases as with
+        | cons _ _ => simp at h2; omega
+        | nil =>
+          cases l₂ with
+          | nil => simp at hlen
+          | cons b bs =>
+            cases bs with
+            | cons _ _ => simp at hlen
+            | nil => simp at hroot; exact .inl (congrArg (· :: []) hroot)
+    · have h2' : ¬ l₂.length < 2 := hlen ▸ h2
+      have hk : l₁.length / 2 < l₁.length := by omega
+      have hne₁ : l₁.take (l₁.length / 2) ≠ [] := by
+        intro h; rw [List.take_eq_nil_iff] at h
+        rcases h with hk0 | rfl
+        · omega
+        · simp at h2
+      have hne₂ : l₂.take (l₂.length / 2) ≠ [] := by
+        intro h; rw [List.take_eq_nil_iff] at h
+        rcases h with hk0 | rfl
+        · omega
+        · simp at h2'
+      have hlt₁ := Obend.Receipt.Merkle.root_lt hb _ (fun x hx => hl₁ x (List.mem_of_mem_take hx)) hne₁
+      have hlt₂ := Obend.Receipt.Merkle.root_lt hb _ (fun x hx => hl₂ x (List.mem_of_mem_take hx)) hne₂
+      have hroot' := hroot
+      have hr₁ : Obend.Receipt.Merkle.root H l₁ =
+          Obend.Core.Digest.digestWith H
+            (Obend.Receipt.Merkle.root H (l₁.take (l₁.length / 2)))
+            (Obend.Receipt.Merkle.root H (l₁.drop (l₁.length / 2))) := by
+        conv => lhs; rw [Obend.Receipt.Merkle.root]
+        simp [h2]
+      have hr₂ : Obend.Receipt.Merkle.root H l₂ =
+          Obend.Core.Digest.digestWith H
+            (Obend.Receipt.Merkle.root H (l₂.take (l₂.length / 2)))
+            (Obend.Receipt.Merkle.root H (l₂.drop (l₂.length / 2))) := by
+        conv => lhs; rw [Obend.Receipt.Merkle.root]
+        simp [h2']
+      rw [hr₁, hr₂] at hroot'
+      have hp₁ : merkleRootPreimages H l₁ =
+          Obend.Core.Digest.preimage
+            (Obend.Receipt.Merkle.root H (l₁.take (l₁.length / 2)))
+            (Obend.Receipt.Merkle.root H (l₁.drop (l₁.length / 2))) ::
+            merkleRootPreimages H (l₁.take (l₁.length / 2)) ++
+            merkleRootPreimages H (l₁.drop (l₁.length / 2)) := by
+        conv => lhs; rw [merkleRootPreimages]
+        simp [h2]
+      have hp₂ : merkleRootPreimages H l₂ =
+          Obend.Core.Digest.preimage
+            (Obend.Receipt.Merkle.root H (l₂.take (l₂.length / 2)))
+            (Obend.Receipt.Merkle.root H (l₂.drop (l₂.length / 2))) ::
+            merkleRootPreimages H (l₂.take (l₂.length / 2)) ++
+            merkleRootPreimages H (l₂.drop (l₂.length / 2)) := by
+        conv => lhs; rw [merkleRootPreimages]
+        simp [h2']
+      rcases Obend.Core.Digest.binds_or_collides H
+          (Obend.Core.Digest.admissible_of_lt hlt₁)
+          (Obend.Core.Digest.admissible_of_lt hlt₂) hroot' with ⟨heqL, heqR⟩ | hcol
+      · have hRelL : (l₁.take (l₁.length / 2)).length < l₁.length := by rw [List.length_take]; omega
+        have ihL := ih (l₁.take (l₁.length / 2)) hRelL
+          (l₂.take (l₂.length / 2)) (by simp [List.length_take, hlen])
+          (fun x hx => hl₁ x (List.mem_of_mem_take hx))
+          (fun x hx => hl₂ x (List.mem_of_mem_take hx)) heqL
+        rcases ihL with hEqTake | hColL
+        · have hRelR : (l₁.drop (l₁.length / 2)).length < l₁.length := by rw [List.length_drop]; omega
+          have ihR := ih (l₁.drop (l₁.length / 2)) hRelR
+            (l₂.drop (l₂.length / 2)) (by simp [List.length_drop, hlen])
+            (fun x hx => hl₁ x (List.mem_of_mem_drop hx))
+            (fun x hx => hl₂ x (List.mem_of_mem_drop hx)) heqR
+          rcases ihR with hEqDrop | hColR
+          · left
+            calc l₁ = l₁.take (l₁.length / 2) ++ l₁.drop (l₁.length / 2) := (List.take_append_drop _ _).symm
+              _ = l₂.take (l₂.length / 2) ++ l₂.drop (l₂.length / 2) := by rw [hEqTake, hEqDrop]
+              _ = l₂ := List.take_append_drop _ _
+          · refine .inr (hColR.mono fun x hx => ?_)
+            rw [hp₁, hp₂]
+            rcases hx with hx | hx
+            · exact .inl (List.mem_cons_of_mem _ (List.mem_append_right _ hx))
+            · exact .inr (List.mem_cons_of_mem _ (List.mem_append_right _ hx))
+        · refine .inr (hColL.mono fun x hx => ?_)
+          rw [hp₁, hp₂]
+          rcases hx with hx | hx
+          · exact .inl (List.mem_cons_of_mem _ (List.mem_append_left _ hx))
+          · exact .inr (List.mem_cons_of_mem _ (List.mem_append_left _ hx))
+      · refine .inr (hcol.mono fun x hx => ?_)
+        rw [hp₁, hp₂]
+        rcases hx with rfl | rfl
+        · exact .inl List.mem_cons_self
+        · exact .inr List.mem_cons_self
+
+private theorem leaves_values_eq_or_collides {H : Obend.Digest.HashBytes.Hash}
+    {vs₁ vs₂ : List Nat} (hlen : vs₁.length = vs₂.length) (hs : vs₁.length < 2 ^ 256)
+    (hLeaves : Obend.Receipt.Merkle.leaves H vs₁ = Obend.Receipt.Merkle.leaves H vs₂) :
+    vs₁ = vs₂ ∨ Obend.Digest.HashBytes.CollisionAmong H
+      (fun x => x ∈ merkleLeafPreimages vs₁ ∨ x ∈ merkleLeafPreimages vs₂) := by
+  suffices hPref : ∀ m (hm : m ≤ vs₁.length),
+      (∀ j (hj₁ : j < m), vs₁[j]'(Nat.lt_of_lt_of_le hj₁ hm) =
+        vs₂[j]'(hlen ▸ Nat.lt_of_lt_of_le hj₁ hm)) ∨
+      Obend.Digest.HashBytes.CollisionAmong H
+        (fun x => x ∈ merkleLeafPreimages vs₁ ∨ x ∈ merkleLeafPreimages vs₂) by
+    rcases hPref vs₁.length (Nat.le_refl _) with hAll | hCol
+    · exact .inl (List.ext_getElem hlen fun j hj₁ _ => hAll j hj₁)
+    · exact .inr hCol
+  intro m hm
+  induction m with
+  | zero => exact .inl fun _ hj => nomatch hj
+  | succ k ih =>
+    rcases ih (Nat.le_of_lt hm) with hPrev | hCol
+    · have hk₁ : k < vs₁.length := hm
+      have hk₂ : k < vs₂.length := hlen ▸ hm
+      have hGet := congrArg (fun l => l[k]?) hLeaves
+      simp only [Obend.Receipt.Merkle.leaves, List.getElem?_mapIdx,
+        List.getElem?_eq_some_iff.mpr ⟨hk₁, rfl⟩, List.getElem?_eq_some_iff.mpr ⟨hk₂, rfl⟩,
+        Option.map_some, Option.some.injEq, Obend.Receipt.Merkle.leaf] at hGet
+      have hkAdm := Obend.Core.Digest.admissible_of_lt (Nat.lt_trans hk₁ hs)
+      rcases Obend.Core.Digest.binds_or_collides H hkAdm hkAdm hGet with ⟨_, hVal⟩ | hCol
+      · left
+        intro j hj
+        rcases Nat.lt_succ_iff_lt_or_eq.mp hj with hlt | rfl
+        · exact hPrev j hlt
+        · exact hVal
+      · refine .inr (hCol.mono fun x hx => ?_)
+        rcases hx with rfl | rfl
+        · left
+          simp only [merkleLeafPreimages, List.mem_map, List.mem_range]
+          exact ⟨k, hk₁, by simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hk₁]⟩
+        · right
+          simp only [merkleLeafPreimages, List.mem_map, List.mem_range]
+          exact ⟨k, hk₂, by simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hk₂]⟩
+    · exact .inr hCol
+
 omit [DecidableEq Cand] in
 /-- **The verdict of a member's receipt is the ledger view's**: at any record whose committed view has
 the receipt's dated root, the runner's row has the receipt's verdict and post root, or cSHAKE256
-collides. The view the row read is a checked support. -/
+collides on the exact finite Merkle preimage set of the two views (`datedViewPreimages`). -/
 public theorem member_receipt_dated_verdict [DecidableEq Fact] {i₀ : Ix} (O : ι → Open S Hole A Tok Fact Ob i₀) (i : ι)
     (keys : List (Fact ⊕ Tok)) (hs : keys.length < 2 ^ 256)
     {Cell Pin : Type} (root : Obend.Run.Rest S Hole A Tok Fact → Obend.Receipt.Digest)
@@ -533,11 +709,44 @@ public theorem member_receipt_dated_verdict [DecidableEq Fact] {i₀ : Ix} (O : 
         (Obend.Receipt.issue (members L base sp O (.run i)) N a r q t p).verdict ∧
       Obend.Receipt.postOf (members L base sp O (.run i)) N (d, a.2) r =
         (Obend.Receipt.issue (members L base sp O (.run i)) N a r q t p).post) ∨
-      Obend.Digest.HashBytes.Collision Obend.Core.Digest.deployed := by
+      Obend.Digest.HashBytes.CollisionAmong Obend.Core.Digest.deployed
+        (fun x => x ∈ datedViewPreimages Obend.Core.Digest.deployed L base keys a.1 ∨
+                  x ∈ datedViewPreimages Obend.Core.Digest.deployed L base keys d) := by
   intro N
-  obtain ⟨hc, hmt⟩ := member_receipt_checks (sp := sp) O i keys hs root rowDigest law pinsOf a r hk q t p
-  exact Obend.Receipt.dated_verdict Obend.Receipt.Merkle.deployed_bounded _ N (viewReading L base keys)
-    (viewReading_coherent keys) a r hm d (by exact hd) hc hmt
+  let H := Obend.Core.Digest.deployed
+  let vs₁ := (viewReading L base keys).C.values a.1
+  let vs₂ := (viewReading L base keys).C.values d
+  have hvsLen₁ : vs₁.length = keys.length := by simp [vs₁, viewReading, Obend.Receipt.Merkle.Commit.values]
+  have hvsLen₂ : vs₂.length = keys.length := by simp [vs₂, viewReading, Obend.Receipt.Merkle.Commit.values]
+  have hlLen : (Obend.Receipt.Merkle.leaves H vs₁).length = (Obend.Receipt.Merkle.leaves H vs₂).length := by
+    simp [Obend.Receipt.Merkle.leaves_length, hvsLen₁, hvsLen₂]
+  rcases merkleRoot_eq_or_collides Obend.Receipt.Merkle.deployed_bounded
+      (Obend.Receipt.Merkle.leaves H vs₁) (Obend.Receipt.Merkle.leaves H vs₂) hlLen
+      (Obend.Receipt.Merkle.leaves_small Obend.Receipt.Merkle.deployed_bounded vs₁)
+      (Obend.Receipt.Merkle.leaves_small Obend.Receipt.Merkle.deployed_bounded vs₂) hd with hLeaves | hColR
+  · rcases leaves_values_eq_or_collides (hvsLen₁.trans hvsLen₂.symm) (hvsLen₁ ▸ hs) hLeaves with hVals | hColL
+    · left
+      apply Obend.Receipt.receipt_sufficient (members L base sp O (.run i)) N a r hm d
+      intro o ho
+      simp only [Obend.Receipt.issue, Obend.Fold.Admission.openings, List.mem_map] at ho
+      obtain ⟨f, hfRead, rfl⟩ := ho
+      obtain ⟨idx, hidx, rfl⟩ := List.mem_iff_getElem.mp (hk f hfRead)
+      have hValAt := congrArg (fun l => l[idx]?) hVals
+      simp only [vs₁, vs₂, Obend.Receipt.Merkle.Commit.values, List.getElem?_map,
+        List.getElem?_eq_getElem hidx, Option.map_some, Option.some.injEq, viewReading] at hValAt
+      show Obend.Run.hostLook (localHost L base) d keys[idx] =
+        Obend.Run.hostLook (localHost L base) a.1 keys[idx]
+      cases hA : Obend.Run.hostLook (localHost L base) a.1 keys[idx] <;>
+        cases hD : Obend.Run.hostLook (localHost L base) d keys[idx] <;>
+        simp [hA, hD] at hValAt ⊢
+    · refine .inr (hColL.mono fun x hx => ?_)
+      rcases hx with hx | hx
+      · exact .inl (List.mem_append_right _ hx)
+      · exact .inr (List.mem_append_right _ hx)
+  · refine .inr (hColR.mono fun x hx => ?_)
+    rcases hx with hx | hx
+    · exact .inl (List.mem_append_left _ hx)
+    · exact .inr (List.mem_append_left _ hx)
 
 /-! ## Consensus time -/
 

@@ -303,14 +303,31 @@ def branchingDictExpr : Term :=
     execBytecode code r2 fuelBound == some 20
   | none => false
 
--- Negative range-safety & VM bounds refusal guards (overflow, underflow, OOB register):
+-- Negative range-safety & VM bounds/fault refusal guards (overflow, underflow, OOB reg, OOB jump, infinite loop, div/mod 0):
 #guard checkRangeSafeBytecode [] (.binary .add (.nat (2 ^ 64 - 1)) (.nat 1)) == false
 #guard checkRangeSafeBytecode [] (.binary .subtract (.nat 0) (.nat 1)) == false
+#guard checkRangeSafeBytecode [Interval.mkNat 0 100, Interval.mkNat 0 100] (.binary .multiply (.bound 0) (.nat (2 ^ 63))) == false
 #guard execBytecode #[.ret 9] #[42] 5 == none
+#guard execBytecode #[.jz 0 99] #[0] 5 == none
+#guard execBytecode #[.jmp 0] #[42] 10 == none
+#guard execBytecode #[.binOp .div 0 0 1, .ret 0] #[42, 0] 5 == some 0
+#guard execBytecode #[.binOp .mod 0 0 1, .ret 0] #[42, 0] 5 == some 42
 
--- Standalone bounds-checked C99 emitter check:
+-- Recursive static-call + static-branch unrolling witness (`unrollPowInterp` specialized at `5` computes `3^5 = 243`):
+example :
+    ∃ target : MixProg,
+      runMixSpecialize 400 unrollPowInterp (.num 5) = some target ∧
+      checkSpecializesProg 20 unrollPowInterp (.num 5) target = true ∧
+      hasStaticConstruct target = false ∧
+      target.procs.length = 1 ∧
+      evalMix 20 target .nil (.num 3) = some (.num 243) :=
+  unrollPowInterp_specializes_5 3
+
+-- Standalone NULL-safe & bounds-checked C99 emitter check:
 #guard ((emitRegisterBytecodeC99 sumToLoopCode).splitOn "uint64_t obend_bytecode_jit_run").length == 2
 #guard ((emitRegisterBytecodeC99 sumToLoopCode).splitOn "goto L0;").length == 2
+#guard ((emitRegisterBytecodeC99 sumToLoopCode).splitOn "if (ok != NULL)").length >= 3
+#guard ((emitRegisterBytecodeC99 sumToLoopCode).splitOn "if (regs == NULL && n_regs > 0U)").length == 2
 
 /-! ## 5. Mutation-Sensitivity Witnesses (`#tooth`) & Zero-Axiom Tree Audit (`#assert_axioms_tree`) -/
 
@@ -321,6 +338,15 @@ def branchingDictExpr : Term :=
   Obend.Leaf.SelfApplicableMix.checkSpecializesProg := fun _ _ _ _ => true
 
 #tooth Obend.Leaf.SelfApplicableMix.futamura1_target_sound by mutation
+  Obend.Leaf.SelfApplicableMix.runMixSpecialize := fun _ p _ => some p
+
+#tooth Obend.Leaf.SelfApplicableMix.futamura2_self_application_compiler_sound by mutation
+  Obend.Leaf.SelfApplicableMix.runMixSpecialize := fun _ p _ => some p
+
+#tooth Obend.Leaf.SelfApplicableMix.futamura3_self_self_cogen_sound by mutation
+  Obend.Leaf.SelfApplicableMix.runMixSpecialize := fun _ p _ => some p
+
+#tooth Obend.Leaf.SelfApplicableMix.futamura3_end_to_end_object_sound by mutation
   Obend.Leaf.SelfApplicableMix.runMixSpecialize := fun _ p _ => some p
 
 #tooth Obend.Leaf.SelfApplicableMix.lowerMixToCore4_sound by mutation

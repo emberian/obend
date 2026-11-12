@@ -25,7 +25,11 @@ with the folder: `B.link ≈b (specializeBook B pins).link`, and makes it the pr
 public import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
-@[expose] public section
+import all Obend.Leaf.UpTo
+import all Obend.Leaf.Flatten
+import all Obend.Leaf.Emit
+import all Obend.Leaf.Specialize
+public section
 namespace Obend.Leaf.Served
 open Obend.Core.Term
 open Obend.Equiv
@@ -36,15 +40,15 @@ set_option autoImplicit false
 /-! ## The hypotheses -/
 
 /-- The read of `m` from the dispatcher of `B` and the term `v` meet: both run to one term. -/
-def Meets (B : Book) (m : String) (v : Term) : Prop :=
+@[expose] def Meets (B : Book) (m : String) (v : Term) : Prop :=
   ∃ w, Steps (.get B.link m) w ∧ Steps v w
 
 /-- `B` serves `pins`: every pin's code is closed and meets the read of its member. -/
-def Served (B : Book) (pins : List LeafPin) : Prop :=
+@[expose] def Served (B : Book) (pins : List LeafPin) : Prop :=
   ∀ p ∈ pins, Closed p.code ∧ Meets B p.cell.key p.code
 
 /-- Every definition's code is a lambda, as `emit` writes them. -/
-def LamCodes (B : Book) : Prop := ∀ d ∈ B.defs, ∃ inner, d.code = .lam inner
+@[expose] def LamCodes (B : Book) : Prop := ∀ d ∈ B.defs, ∃ inner, d.code = .lam inner
 
 /-- The one base pair: the book's link and the bound book's link. -/
 def Pair (B : Book) (pins : List LeafPin) (o f : Term) : Prop :=

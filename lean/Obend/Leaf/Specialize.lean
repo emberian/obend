@@ -35,7 +35,10 @@ not a mechanism in the machine.
 -/
 public import Obend.Leaf.Emit
 public import Obend.Slot.Selection
-@[expose] public section
+import all Obend.Leaf.UpTo
+import all Obend.Leaf.Flatten
+import all Obend.Leaf.Emit
+public section
 namespace Obend.Leaf
 open Obend.Core.Term
 open Obend.Equiv
@@ -84,22 +87,22 @@ instance : World LeafView LeafPin where
   ver_step _ _ _ h := .inr h
 
 /-- Winning provenance layer name for member `m` in a stack of layers (outermost first). -/
-def provLayers : List Layer → String → String
+@[expose] def provLayers : List Layer → String → String
   | [], _ => "seed"
   | L :: rest, m => if L.provides m then L.name else if L.flat then L.name else provLayers rest m
 
 /-- Provenance layer of member `m` in composition `C`. -/
-def _root_.Obend.Logic.Composition.provenance (C : Composition) (m : String) : String :=
+abbrev _root_.Obend.Logic.Composition.provenance (C : Composition) (m : String) : String :=
   provLayers C.layers m
 
 /-- Resolved symbolic unfolding of member `m` in composition `C` (under 1 `self` binder at index 0). -/
-def _root_.Obend.Logic.Composition.symUnfold (C : Composition) (m : String) : Term :=
+abbrev _root_.Obend.Logic.Composition.symUnfold (C : Composition) (m : String) : Term :=
   match (flatRow C.seed C.layers).find? (·.1 == m) with
   | some (_, b) => resolve b
   | none => .label "missing"
 
 /-- Split a reversed character list at the first `'.'` delimiter. -/
-def splitBeforeFirstDot : List Char → Option (List Char × List Char)
+@[expose] def splitBeforeFirstDot : List Char → Option (List Char × List Char)
   | [] => none
   | c :: cs =>
     if c == '.' then
@@ -108,7 +111,7 @@ def splitBeforeFirstDot : List Char → Option (List Char × List Char)
       (splitBeforeFirstDot cs).map fun (pre, post) => (c :: pre, post)
 
 /-- Split a scoped layer-member key `"provLayer.member"` at its last `'.'` into `(provLayer, member)`. -/
-def splitScopedLayerKey (k : String) : Option (String × String) :=
+abbrev splitScopedLayerKey (k : String) : Option (String × String) :=
   match splitBeforeFirstDot k.toList.reverse with
   | some (revMember, revProv) =>
     some (String.ofList revProv.reverse, String.ofList revMember.reverse)
@@ -117,7 +120,7 @@ def splitScopedLayerKey (k : String) : Option (String × String) :=
 /-- Resolve `.layer k` in `viewOf`: first checks whole-layer declarations `C.layers`, then resolves
 fine-grained per-member provenance keys `provLayer ++ "." ++ m` to `C.symUnfold m` when
 `C.provenance m == provLayer`. -/
-def resolveLayerDecl (C : Composition) (k : String) : Option Term :=
+@[expose] def resolveLayerDecl (C : Composition) (k : String) : Option Term :=
   match (C.layers.find? (·.name == k)).map Layer.code with
   | some c => some c
   | none =>
@@ -128,7 +131,7 @@ def resolveLayerDecl (C : Composition) (k : String) : Option Term :=
 
 /-- The view a program's object gives: each of its layers under its key, each member under its
 provenance-scoped key `provLayer ++ "." ++ m`, and its composition under its name. -/
-def viewOf (clock : Nat) (name : String) (C : Composition) : LeafView where
+abbrev viewOf (clock : Nat) (name : String) (C : Composition) : LeafView where
   clock := clock
   decl
     | .layer k => resolveLayerDecl C k
@@ -136,18 +139,18 @@ def viewOf (clock : Nat) (name : String) (C : Composition) : LeafView where
 
 /-- The read-support cone of a slot `member` in composition `C`: `member` itself together with
 all `self`-fields read by its unfolded body `C.symUnfold member` (and 1-hop transitive reads). -/
-def slotReadCone (C : Composition) (member : String) : List String :=
+abbrev slotReadCone (C : Composition) (member : String) : List String :=
   let direct := selfReads 0 (C.symUnfold member)
   let twoHop := (direct.map (fun r => selfReads 0 (C.symUnfold r))).flatten
   member :: (direct ++ twoHop)
 
 /-- Pin a single member `m` to its winning provenance layer and symbolic unfolding
 `⟨.layer (C.provenance m ++ "." ++ m), C.symUnfold m⟩`. -/
-def memberConePin (C : Composition) (m : String) : LeafPin :=
+abbrev memberConePin (C : Composition) (m : String) : LeafPin :=
   ⟨.layer (C.provenance m ++ "." ++ m), C.symUnfold m⟩
 
 /-- Fine-grained per-slot support pins for a read-support `cone` of composition `C`. -/
-def coneSupports (C : Composition) (cone : List String) : List LeafPin :=
+abbrev coneSupports (C : Composition) (cone : List String) : List LeafPin :=
   cone.map (memberConePin C)
 
 theorem holdsAt_eq (v : LeafView) (p : LeafPin) :
@@ -163,19 +166,19 @@ theorem holdsAt_eq (v : LeafView) (p : LeafPin) :
 /-! ## Dependency Support Extraction & Conservatism (`extractReadMembers`, `AgreeOnMembers`, `extractReadMembers_conservative`) -/
 
 /-- String key of a `LeafCell`. -/
-def LeafCell.key : LeafCell → String
+abbrev LeafCell.key : LeafCell → String
   | .layer k => k
   | .object n => n
 
 /-- Helper for `.get g m` in `extractReadMembersAt`: when `g = .bound i` with `i == d`,
 records member `m`; otherwise returns the reads of `g`. -/
-def extractMemberGet (d : Nat) : Term → List String → String → List String
+abbrev extractMemberGet (d : Nat) : Term → List String → String → List String
   | .bound i, _, m => if i == d then [m] else []
   | _, gReads, _ => gReads
 
 /-- Extract all member names read from the target binder at de Bruijn depth `d`
 (`.get (.bound i) m` with `i == d`), traversing all subterms. -/
-def extractReadMembersAt (d : Nat) : Term → List String
+@[expose] def extractReadMembersAt (d : Nat) : Term → List String
   | .hole _ σ => (σ.map (extractReadMembersAt d)).flatten
   | .bound _ => []
   | .lam b => extractReadMembersAt (d + 1) b
@@ -211,7 +214,7 @@ decreasing_by
 
 /-- Extract all member names read via `.get (.bound 0) m` (adjusting binder depth under `.lam`,
 `.ifZero`, and `.case`) across a `Term`. -/
-def extractReadMembers (t : Term) : List String :=
+@[expose] def extractReadMembers (t : Term) : List String :=
   extractReadMembersAt 0 t
 
 /-- Alias for `extractReadMembers`. -/
@@ -288,7 +291,7 @@ decreasing_by
 
 /-- Two member environments `env1` and `env2` agree on `ms` when every member name `m ∈ ms`
 has the identical binding in both environments. -/
-def AgreeOnMembers (ms : List String) (env1 env2 : String → Option Term) : Prop :=
+abbrev AgreeOnMembers (ms : List String) (env1 env2 : String → Option Term) : Prop :=
   ∀ m ∈ ms, env1 m = env2 m
 
 theorem AgreeOnMembers.refl (ms : List String) (env : String → Option Term) :
@@ -324,7 +327,7 @@ theorem mem_flatten_map {α β : Type} {l : List α} (f : α → List β) {x : �
 
 /-- Helper for `.get g m` in `substMemberEnvAt`: when `g = .bound i` with `i == d`,
 substitutes `env m` if present; otherwise keeps `.get g' m`. -/
-def resolveMemberGet (d : Nat) (env : String → Option Term) : Term → Term → String → Term
+abbrev resolveMemberGet (d : Nat) (env : String → Option Term) : Term → Term → String → Term
   | .bound i, _, m =>
     if i == d then
       match env m with
@@ -335,7 +338,7 @@ def resolveMemberGet (d : Nat) (env : String → Option Term) : Term → Term �
   | _, g', m => .get g' m
 
 /-- Substitute pinned member values from `env` for `.get (.bound i) m` reads at de Bruijn depth `d`. -/
-def substMemberEnvAt (d : Nat) (env : String → Option Term) : Term → Term
+@[expose] def substMemberEnvAt (d : Nat) (env : String → Option Term) : Term → Term
   | .hole n σ => .hole n (σ.map (substMemberEnvAt d env))
   | .bound i => .bound i
   | .lam b => .lam (substMemberEnvAt (d + 1) env b)
@@ -370,7 +373,7 @@ decreasing_by
     | (rename_i hmem; have := sizeOf_snd_lt_of_mem hmem; omega)
 
 /-- Specialize a `Term` by resolving `.get (.bound 0) m` reads against member environment `env`. -/
-def substMemberEnv (env : String → Option Term) (t : Term) : Term :=
+abbrev substMemberEnv (env : String → Option Term) (t : Term) : Term :=
   substMemberEnvAt 0 env t
 
 /-- Evaluate `t` under member environment `env` using `fuel` steps of `Obend.Law.run`. -/
@@ -532,7 +535,7 @@ theorem extractReadMembers_conservative {t : Term} {env1 env2 : String → Optio
     fun v => by rw [heq], fun o => by rw [heq]⟩
 
 /-- Mutate a single member `k` in a member environment `env`. -/
-def mutateMemberEnv (env : String → Option Term) (k : String) (v : Option Term) : String → Option Term :=
+abbrev mutateMemberEnv (env : String → Option Term) (k : String) (v : Option Term) : String → Option Term :=
   fun m => if m == k then v else env m
 
 theorem agreeOnMembers_mutate_outside {ms : List String} (env : String → Option Term)
@@ -564,11 +567,11 @@ def viewLayerEnv (v : LeafView) : String → Option Term :=
   fun m => v.decl (.layer m)
 
 /-- Member environment induced by a list of `LeafPin` supports. -/
-def pinListEnv (pins : List LeafPin) : String → Option Term :=
+abbrev pinListEnv (pins : List LeafPin) : String → Option Term :=
   fun m => (pins.find? (fun p => p.cell.key == m)).map (·.code)
 
 /-- A support list `pins` covers member names `ms` when every `m ∈ ms` has a layer pin in `pins`. -/
-def SupportsCoverMembers (pins : List LeafPin) (ms : List String) : Prop :=
+abbrev SupportsCoverMembers (pins : List LeafPin) (ms : List String) : Prop :=
   ∀ m ∈ ms, ∃ code, LeafPin.mk (.layer m) code ∈ pins
 
 /-- If `pins` cover `ms` and all `pins` hold in both `v1` and `v2`, then `viewLayerEnv v1`
@@ -621,17 +624,17 @@ conditions are what `specializedJudgeB` decides, by running the dispatcher (`Obe
 at a view is not enough (`Obend.Teeth.Leaf.StaticTeeth`, the counterexample). -/
 
 /-- Extract the member names read via `self` inside a definition `code` (matching `substPinsInCode`). -/
-def extractReadMembersCode : Term → List String
+@[expose] def extractReadMembersCode : Term → List String
   | .lam inner => extractReadMembersAt 0 inner
   | other => extractReadMembersAt 0 other
 
 /-- Substitute pinned member values from `pins` for `self.m` reads inside a definition's `code`. -/
-def substPinsInCode (pins : List LeafPin) : Term → Term
+@[expose] def substPinsInCode (pins : List LeafPin) : Term → Term
   | .lam inner => .lam (substMemberEnvAt 0 (pinListEnv pins) inner)
   | other => substMemberEnvAt 0 (pinListEnv pins) other
 
 /-- Compute the residual slot indices still read through `self` after binding `pins`. -/
-def residualSlotReads (slots : List String) (pins : List LeafPin) (d : LeafDef) : List Nat :=
+@[expose] def residualSlotReads (slots : List String) (pins : List LeafPin) (d : LeafDef) : List Nat :=
   let pinnedCode := substPinsInCode pins d.code
   let bodyForReads := match d.kind, pinnedCode with
     | .method, .lam b => b
@@ -702,7 +705,7 @@ inductive Candidate where
 - `.slotBook`: only the member's read-support cone (`coneSupports comp (slotReadCone comp member)`);
 - `.specialized`: as `.book`; the pins it folded under are judged against the book, not pinned on the world;
 - `.machine`: none. -/
-def Candidate.supports : Candidate → List LeafPin
+@[expose] def Candidate.supports : Candidate → List LeafPin
   | .book name C => ⟨.object name, C.code⟩ :: C.layers.map fun L => ⟨.layer L.name, L.code⟩
   | .slotBook _ member C _ => coneSupports C (slotReadCone C member)
   | .specialized name C _ => ⟨.object name, C.code⟩ :: C.layers.map fun L => ⟨.layer L.name, L.code⟩
@@ -710,21 +713,21 @@ def Candidate.supports : Candidate → List LeafPin
 
 /-- A book or slotBook is admitted for compositions in the scope of `flatten_sound`; a specialized book
 when, besides, its dispatcher serves every pin it folded under (`specializedJudgeB`); the machine always. -/
-def Candidate.judge : Candidate → Bool
+@[expose] def Candidate.judge : Candidate → Bool
   | .book _ C => C.closedB
   | .slotBook _ _ C _ => C.closedB
   | .specialized _ C pins => C.closedB && specializedJudgeB (emit C) pins
   | .machine => true
 
 /-- **The specialization slot.** -/
-def specSlot : Slot LeafPin Candidate := ⟨Candidate.supports, Candidate.judge⟩
+abbrev specSlot : Slot LeafPin Candidate := ⟨Candidate.supports, Candidate.judge⟩
 
 /-- The order a chooser gives: the book first, the machine as the fallback. -/
-def specOrder (name : String) (C : Composition) : List Candidate := [.book name C, .machine]
+abbrev specOrder (name : String) (C : Composition) : List Candidate := [.book name C, .machine]
 
 /-- **The machine is always usable.** -/
 theorem machine_usable (v : LeafView) : specSlot.usable (holdsAt v) .machine = true := by
-  simp [Slot.usable, Slot.dead, specSlot, Candidate.supports, Candidate.judge]
+  simp [Slot.usable, Slot.dead, Candidate.supports, Candidate.judge]
 
 /-- **A usable book is the book of the view's composition**: the view's object has the code the book
 pinned, so it emits the same book, and (when that object is closed, as an elaborated program's is)
@@ -733,11 +736,18 @@ theorem book_usable_sound {k : Nat} {name : String} {C C' : Composition}
     (h : specSlot.usable (holdsAt (viewOf k name C')) (.book name C) = true) :
     emit C = emit C' ∧ (C'.closedB = true → ∀ m, .get (emit C).link m ≈b .get C'.object m) := by
   obtain ⟨_, hall⟩ := (usable_iff _ _ _).1 h
-  have ho := hall ⟨.object name, C.code⟩ (by simp [specSlot, Candidate.supports])
+  have ho := hall ⟨.object name, C.code⟩ (by simp [Candidate.supports])
   rw [holdsAt_eq] at ho
-  simp only [viewOf, beq_self_eq_true, ite_true] at ho
+  simp only [beq_self_eq_true, ite_true] at ho
   have e : emit C = emit C' := emit_congr (termEq_sound' ho).symm
   exact ⟨e, fun hc m => e ▸ book_sound C' hc m⟩
+
+/-- Inhabitedness witness for `book_usable_sound`. -/
+theorem book_usable_inhabited :
+    let C : Composition :=
+      ⟨{ name := "base", metadata := .record [], fields := [("id", .lam (.bound 0))], flat := true }, [], []⟩
+    specSlot.usable (holdsAt (viewOf 0 "idObj" C)) (.book "idObj" C) = true := by
+  decide +kernel
 
 /-- **Incumbent-first, at the order `[book, machine]`**: a stored book is kept exactly while it is
 usable; otherwise the machine is selected. `incumbent_choice`, applied. -/
@@ -761,10 +771,8 @@ theorem moved_pin_blocks {v : LeafView} {name : String} {C : Composition} (hj : 
     ∃ d, specSlot.read (holdsAt v) (some (.book name C)) = .blocked (.book name C) d ∧ p ∈ d ∧
       ∀ q, q ∈ d ↔ q ∈ (Candidate.book name C).supports ∧ holdsAt v q = false := by
   have hmem : p ∈ specSlot.dead (holdsAt v) (.book name C) := (mem_dead_iff _ _ _ _).2 ⟨hp, hd⟩
-  have hjudge : specSlot.judge (.book name C) = true := hj
   have hread : ∃ d, specSlot.read (holdsAt v) (some (.book name C)) = .blocked (.book name C) d ∧ p ∈ d := by
-    unfold Slot.read
-    simp only [hjudge, ite_true]
+    simp only [Slot.read, Candidate.judge, hj, ite_true]
     cases hdd : specSlot.dead (holdsAt v) (.book name C) with
     | nil => rw [hdd] at hmem; cases hmem
     | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩
@@ -782,11 +790,9 @@ theorem slotBook_moved_pin_blocks {v : LeafView} {name member : String} {C : Com
       ∀ q, q ∈ d ↔ q ∈ (Candidate.slotBook name member C defItem).supports ∧ holdsAt v q = false := by
   have hmem : p ∈ specSlot.dead (holdsAt v) (.slotBook name member C defItem) :=
     (mem_dead_iff _ _ _ _).2 ⟨hp, hd⟩
-  have hjudge : specSlot.judge (.slotBook name member C defItem) = true := hj
   have hread : ∃ d, specSlot.read (holdsAt v) (some (.slotBook name member C defItem)) =
       .blocked (.slotBook name member C defItem) d ∧ p ∈ d := by
-    unfold Slot.read
-    simp only [hjudge, ite_true]
+    simp only [Slot.read, Candidate.judge, hj, ite_true]
     cases hdd : specSlot.dead (holdsAt v) (.slotBook name member C defItem) with
     | nil => rw [hdd] at hmem; cases hmem
     | cons g t => exact ⟨g :: t, rfl, hdd ▸ hmem⟩

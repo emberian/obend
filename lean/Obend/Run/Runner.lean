@@ -382,6 +382,190 @@ def Drive.state {St : Type} {i : Ix} : Drive S Hole A Tok Fact Ob V St i → St
   | .refused _ _ s => s
   | .fuel _ s => s
 
+/-! ## Array-Backed Fast Handler Driver (`View.maskArray`, `driveFast`, `driveFast_eq_drive`) -/
+
+/-- Array-backed spent-token mask (`O(1)` contiguous scan, avoiding linked-list `t ∈ spent`). -/
+def View.maskArray {Tok Fact : Type} [DecidableEq Tok] (v : View Tok Fact) (spent : Array Tok) :
+    View Tok Fact :=
+  ⟨v.holds, fun t => v.live t && !spent.any (fun x => decide (t = x))⟩
+
+private theorem list_any_eq_decide_mem {Tok : Type} [DecidableEq Tok] (t : Tok) :
+    ∀ l : List Tok, l.any (fun x => decide (t = x)) = decide (t ∈ l)
+  | [] => rfl
+  | x :: xs => by
+    simp only [List.any_cons, list_any_eq_decide_mem t xs, List.mem_cons]
+    by_cases h : t = x <;> simp [h]
+
+/-- `View.maskArray` agrees identically with `View.mask` on `spent.toList`. -/
+public theorem maskArray_eq_mask {Tok Fact : Type} [DecidableEq Tok]
+    (v : View Tok Fact) (spent : Array Tok) :
+    View.maskArray v spent = View.mask v spent.toList := by
+  cases v
+  simp only [View.maskArray, View.mask, View.mk.injEq, true_and]
+  funext t
+  rw [← Array.any_toList, list_any_eq_decide_mem]
+
+private def pushConsumed {Tok : Type} (spent : Array Tok) : Option Tok → Array Tok
+  | some t => spent.push t
+  | none => spent
+
+private theorem pushConsumed_toList {Tok : Type} (spent : Array Tok) (opt : Option Tok) :
+    (pushConsumed spent opt).toList = spent.toList ++ opt.toList := by
+  cases opt <;> simp [pushConsumed]
+
+private def materializeCfg {Tok Fact Ob V : Type} {i : Ix}
+    (base : Cfg S Hole A Tok Fact Ob V i)
+    (res : Σ j, Prot S Hole A j)
+    (ans : Array (Entry S))
+    (spent : Array Tok)
+    (log : Array (Event S Hole A Fact V)) : Cfg S Hole A Tok Fact Ob V i :=
+  { base with
+    obj := { base.obj with hist := ⟨ans.toList, none⟩ }
+    spent := spent.toList
+    res := res
+    log := log.toList
+    ended := none }
+
+/-- Inner linear-allocation loop for `driveFast`, accumulating `ans`, `spent`, and `log` via `Array.push`
+    instead of quadratic `List` appends (`++ [x]`) and bypassing redundant `follow` equality checks. -/
+private def driveFastLoop {St : Type} (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob)
+    (H : Handler S (fun _ => St)) {i : Ix} (base : Cfg S Hole A Tok Fact Ob V i) :
+    Nat → (Σ j, Prot S Hole A j) → Array (Entry S) → Array Tok →
+      Array (Event S Hole A Fact V) → St → Drive S Hole A Tok Fact Ob V St i
+  | 0, res, ans, spent, log, s =>
+    .fuel (materializeCfg base res ans spent log) s
+  | n + 1, res, ans, spent, log, s =>
+    match res with
+    | ⟨j, .call op k⟩ =>
+      let cur := materializeCfg base ⟨j, .call op k⟩ ans spent log
+      let v := View.maskArray (host.view base.world) spent
+      if dispatchGuard sp v op then
+        match decisionDead cur.obj base.cites v with
+        | [] =>
+          let spent' := pushConsumed spent (sp.consumes op)
+          let log₁ := log.push (.dispatch ⟨j, op⟩)
+          let ⟨r, s'⟩ := H.handle op s
+          let e : Entry S := ⟨j, op, r⟩
+          driveFastLoop host sp H base n ⟨S.next op r, k r⟩
+            (ans.push e) spent' (log₁.push (.respond e)) s'
+        | d =>
+          .refused cur (.unsupported ⟨j, op⟩ (owner cur.obj) d) s
+      else
+        let m := missingOf sp v op
+        .refused cur (.unadmitted ⟨j, op⟩ m.1 m.2) s
+    | _ =>
+      .halted (materializeCfg base res ans spent log) s
+
+/-- Accelerated handler-driven runner replacing $O(N^2)$ `spent`/`log`/`answered` list appends
+    with $O(1)$ `Array.push` buffers and contiguous `View.maskArray` lookups. -/
+def driveFast {St : Type} (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob)
+    (H : Handler S (fun _ => St)) {i : Ix} (n : Nat)
+    (c : Cfg S Hole A Tok Fact Ob V i) (s : St) : Drive S Hole A Tok Fact Ob V St i :=
+  match c.ended, c.obj.hist.inflight with
+  | none, none =>
+    driveFastLoop host sp H c n c.res c.obj.hist.answered.toArray c.spent.toArray c.log.toArray s
+  | _, _ => drive host sp H n c s
+
+private theorem driveFastLoop_eq_drive {St : Type} (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob)
+    (H : Handler S (fun _ => St)) {i : Ix} (base : Cfg S Hole A Tok Fact Ob V i) :
+    ∀ (n : Nat) (res : Σ j, Prot S Hole A j) (ans : Array (Entry S))
+      (spent : Array Tok) (log : Array (Event S Hole A Fact V)) (s : St),
+      driveFastLoop host sp H base n res ans spent log s =
+        drive host sp H n (materializeCfg base res ans spent log) s
+  | 0, res, ans, spent, log, s => rfl
+  | n + 1, res, ans, spent, log, s => by
+    rcases H with ⟨hFn⟩
+    cases res with
+    | mk j p =>
+      cases p with
+      | ret a => rfl
+      | hole h => rfl
+      | call op k =>
+        have hCurEnd : closedBy (materializeCfg base ⟨j, .call op k⟩ ans spent log) = none := rfl
+        have hCurWait : awaiting (materializeCfg base ⟨j, .call op k⟩ ans spent log).obj.hist = none := rfl
+        have hCurRes : (materializeCfg base ⟨j, .call op k⟩ ans spent log).res = ⟨j, .call op k⟩ := rfl
+        have hcites : base.cites = (materializeCfg base ⟨j, .call op k⟩ ans spent log).cites := rfl
+        have hv : View.maskArray (host.view base.world) spent =
+            (materializeCfg base ⟨j, .call op k⟩ ans spent log).admitView host := by
+          simp [materializeCfg, Cfg.admitView, maskArray_eq_mask]
+        simp only [driveFastLoop, hv]
+        generalize hCurDef : materializeCfg base ⟨j, .call op k⟩ ans spent log = cur at *
+        rw [hcites]
+        by_cases hg : dispatchGuard sp (cur.admitView host) op = true
+        · simp only [hg, ↓reduceIte]
+          cases hd : decisionDead cur.obj cur.cites (cur.admitView host) with
+          | cons x xs =>
+            have hRunDisp : run host sp cur (.dispatch ⟨j, op⟩) =
+                .error (.unsupported ⟨j, op⟩ (owner cur.obj) (x :: xs)) := by
+              simp only [run, hCurEnd, hCurWait, hCurRes, ↓reduceIte, hg, hd]
+            unfold drive
+            simp only [hCurRes, hRunDisp]
+          | nil =>
+            cases hH : hFn op s with
+            | mk r s' =>
+              dsimp only at *
+              have hRunDisp : run host sp cur (.dispatch ⟨j, op⟩) =
+                  .ok { cur with
+                    obj := { cur.obj with hist := ⟨cur.obj.hist.answered, some ⟨j, op⟩⟩ }
+                    spent := spendOn sp cur.spent op
+                    log := cur.log ++ [.dispatch ⟨j, op⟩] } := by
+                simp only [run, hCurEnd, hCurWait, hCurRes, ↓reduceIte, hg, hd]
+              have hFollow : follow (⟨j, .call op k⟩ : Σ j, Prot S Hole A j) ⟨j, op, r⟩ =
+                  some ⟨S.next op r, k r⟩ := by
+                simp [follow]
+              have hRunResp : run host sp
+                  { cur with
+                    obj := { cur.obj with hist := ⟨cur.obj.hist.answered, some ⟨j, op⟩⟩ }
+                    spent := spendOn sp cur.spent op
+                    log := cur.log ++ [.dispatch ⟨j, op⟩] }
+                  (.respond ⟨j, op, r⟩) =
+                  .ok (materializeCfg base ⟨S.next op r, k r⟩
+                    (ans.push ⟨j, op, r⟩) (pushConsumed spent (sp.consumes op))
+                    ((log.push (.dispatch ⟨j, op⟩)).push (.respond ⟨j, op, r⟩))) := by
+                subst hCurDef
+                simp [run, closedBy, materializeCfg, hFollow, spendOn, pushConsumed_toList,
+                  List.append_assoc]
+              unfold drive
+              rw [hCurRes]
+              dsimp only
+              rw [hRunDisp]
+              dsimp only [Handler.handle]
+              rw [hH]
+              dsimp only
+              rw [hRunResp]
+              exact driveFastLoop_eq_drive host sp ⟨hFn⟩ base n ⟨S.next op r, k r⟩
+                (ans.push ⟨j, op, r⟩) (pushConsumed spent (sp.consumes op))
+                ((log.push (.dispatch ⟨j, op⟩)).push (.respond ⟨j, op, r⟩)) s'
+        · have hgF : dispatchGuard sp (cur.admitView host) op = false := Bool.eq_false_iff.mpr hg
+          have hRunDisp : run host sp cur (.dispatch ⟨j, op⟩) =
+              .error (.unadmitted ⟨j, op⟩
+                (missingOf sp (cur.admitView host) op).1
+                (missingOf sp (cur.admitView host) op).2) := by
+            simp only [run, hCurEnd, hCurWait, hCurRes, ↓reduceIte, hgF, Bool.false_eq_true]
+          unfold drive
+          simp only [hCurRes, hRunDisp, hgF, Bool.false_eq_true, ↓reduceIte]
+
+/-- **Exact Refinement (`driveFast_eq_drive`)**: `driveFast` produces the exact same `Drive` outcome,
+    configuration, log, spent-token list, and handler state as `drive` on all inputs. -/
+public theorem driveFast_eq_drive {St : Type} (host : Host V Tok Fact) (sp : Spec S Tok Fact Ob)
+    (H : Handler S (fun _ => St)) {i : Ix} (n : Nat)
+    (c : Cfg S Hole A Tok Fact Ob V i) (s : St) :
+    driveFast host sp H n c s = drive host sp H n c s := by
+  unfold driveFast
+  cases hend : c.ended with
+  | some _ => rfl
+  | none =>
+    cases hinf : c.obj.hist.inflight with
+    | some _ => rfl
+    | none =>
+      rw [driveFastLoop_eq_drive]
+      have hMat : materializeCfg c c.res c.obj.hist.answered.toArray c.spent.toArray c.log.toArray = c := by
+        rcases c with ⟨⟨tpl, Ω, σ, Γ, Δ, Q, Φ, ⟨ans, inf⟩⟩, world, spent, res, log, ended, cites⟩
+        simp only at hend hinf
+        subst hend hinf
+        simp [materializeCfg]
+      rw [hMat]
+
 /-! ## Replanning
 
 A replan event carries a decision; the runner judges the event, not who proposed it. Decisions are

@@ -253,12 +253,15 @@ through any interleaving of submissions, exposures, crashes and recoveries, two 
 consume one token are one effect, with one receipt identity. -/
 public theorem exposed_once (hs₀ : L.spent d₀ = []) (hg₀ : L.grants d₀ = [])
     {s : DState L S Hole A P Cred Cand Fact Ob i₀} (h : HReachable L base sp au k (JCfg.init L d₀ O stored₀) s)
-    {n m : Nat} (_hn : n ∈ s.outbox) (_hm : m ∈ s.outbox) {i j : ι} {o o' : Σ i, S.Op i} {t : Tok}
+    {n m : Nat} (hn : n ∈ s.outbox) (hm : m ∈ s.outbox) {i j : ι} {o o' : Σ i, S.Op i} {t : Tok}
     (hio : s.journal[n]? = some (.dispatch i o)) (hjo : s.journal[m]? = some (.dispatch j o'))
-    (ht : (sp i).consumes o.2 = some t) (ht' : (sp j).consumes o'.2 = some t) : n = m ∧ i = j :=
+    (ht : (sp i).consumes o.2 = some t) (ht' : (sp j).consumes o'.2 = some t) : n = m ∧ i = j := by
+  obtain ⟨_, _, hn'⟩ := exposure_journaled h n hn
+  obtain ⟨_, _, hm'⟩ := exposure_journaled h m hm
+  rw [hio] at hn'; rw [hjo] at hm'; cases hn'; cases hm'
   have hnm := nodup_flatMap_pos (consumedBy L sp) s.journal (t := t) (journal_once hs₀ hg₀ h) hio hjo
     (by simp [consumedBy, ht]) (by simp [consumedBy, ht'])
-  ⟨hnm, by subst hnm; rw [hio] at hjo; cases hjo; rfl⟩
+  exact ⟨hnm, by subst hnm; rw [hio] at hjo; cases hjo; rfl⟩
 
 end
 

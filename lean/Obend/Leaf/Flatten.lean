@@ -22,7 +22,8 @@ Scope: compositions whose object and flattening are closed (`Composition.closedB
 layer shapes Elaborate emits (`extend super {defs}` and the flat delegating record).
 -/
 public import Obend.Leaf.UpTo
-@[expose] public section
+import all Obend.Leaf.UpTo
+public section
 namespace Obend.Leaf
 open Obend.Core.Term
 open Obend.Equiv
@@ -32,25 +33,25 @@ set_option autoImplicit false
 /-! ## The vtable -/
 
 /-- A layer body (under `self` at 1, `super` at 0) moved under one binder, `self`, with `super := sup`. -/
-def toSelf (sup : Term) : Nat → Term
+@[expose] def toSelf (sup : Term) : Nat → Term
   | 0 => sup
   | 1 => .bound 0
   | k + 2 => .bound (k + 1)
 
 /-- The flattened row of a suffix of the stack (outermost first): each entry under one binder,
 `self`; a layer's `super` is the literal record of the flattened row beneath it. -/
-def flatRow (seed : List (String × Term)) : List Layer → List (String × Term)
+@[expose] def flatRow (seed : List (String × Term)) : List Layer → List (String × Term)
   | [] => mapFields (·.rename Nat.succ) seed
   | L :: rest =>
     let fs := mapFields (·.substitute (toSelf (.record (flatRow seed rest)))) L.fields
     if L.flat then fs else extendFields (flatRow seed rest) fs
 
 /-- `fix (λself. λ_. {vtable}) {}`: the object whose `self` is its own vtable. -/
-def flatObject (vt : List (String × Term)) : Term :=
+@[expose] def flatObject (vt : List (String × Term)) : Term :=
   .fix (.lam (.lam (.record (mapFields (·.rename Nat.succ) vt)))) (.record [])
 
 /-- A vtable with `self := X`. -/
-def instRow (X : Term) (vt : List (String × Term)) : List (String × Term) := mapFields (instantiate · X) vt
+@[expose] def instRow (X : Term) (vt : List (String × Term)) : List (String × Term) := mapFields (instantiate · X) vt
 
 /-! ## Static resolution of fields of literal records -/
 
@@ -61,7 +62,7 @@ theorem sizeOf_snd_lt_of_mem {l : List (String × Term)} {x : String × Term} (h
   omega
 
 /-- `get g p`, the field read statically when `g` is a literal record listing `p`. -/
-def resolveGet : Term → String → Term
+@[expose] def resolveGet : Term → String → Term
   | .record fs, p =>
     match fs.find? (·.1 == p) with
     | some (_, b) => b
@@ -70,7 +71,7 @@ def resolveGet : Term → String → Term
 
 /-- Every `get {fs} p` whose record is literal (after resolution) and lists `p` is replaced by the
 entry: the static form of `super.p`, whose provider `flatRow_find` names. -/
-def resolve : Term → Term
+@[expose] def resolve : Term → Term
   | .hole n σ => .hole n (σ.map resolve)
   | .bound i => .bound i
   | .lam b => .lam (resolve b)
@@ -292,16 +293,16 @@ theorem row_joins {B : Term → Term → Prop} (hB : ClosedPairs B) {O F : Term}
 
 
 /-- The flattened row of the whole stack, before static resolution. -/
-def _root_.Obend.Logic.Composition.flatRaw (C : Composition) : List (String × Term) := flatRow C.seed C.layers
+@[expose] def _root_.Obend.Logic.Composition.flatRaw (C : Composition) : List (String × Term) := flatRow C.seed C.layers
 
 /-- **The vtable**: the flattened row with every `super.p` read statically. -/
-def _root_.Obend.Logic.Composition.vtable (C : Composition) : List (String × Term) := mapFields resolve C.flatRaw
+@[expose] def _root_.Obend.Logic.Composition.vtable (C : Composition) : List (String × Term) := mapFields resolve C.flatRaw
 
 /-- **The flattened object**: `self` is the vtable. -/
-def _root_.Obend.Logic.Composition.flatten (C : Composition) : Term := flatObject C.vtable
+@[expose] def _root_.Obend.Logic.Composition.flatten (C : Composition) : Term := flatObject C.vtable
 
 /-- The scope of `flatten_sound`: the object and its unresolved flattening are closed. -/
-def _root_.Obend.Logic.Composition.closedB (C : Composition) : Bool :=
+@[expose] def _root_.Obend.Logic.Composition.closedB (C : Composition) : Bool :=
   Obend.Law.closedB C.object && Obend.Law.closedB (flatObject C.flatRaw)
 
 /-- The one base pair: the object and its flattening. -/

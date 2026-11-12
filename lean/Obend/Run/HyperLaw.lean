@@ -64,7 +64,7 @@ theorem checkLowEquiv_sound {World Obs : Type} [DecidableEq Obs]
 
 /-- Lift a raw-world `LowView` to a shared ledger record (`Obend.Run.Shared.Ledger`), observing
     both the low projection of the raw world and the public sequence of committed grants. -/
-@[expose] def LowView.ofSharedLedger {ι W Tok Obs : Type}
+def LowView.ofSharedLedger {ι W Tok Obs : Type}
     (L : Obend.Run.Shared.Ledger ι W Tok) (rawView : LowView W Obs) :
     LowView L.Rec (Obs × List (Obend.Run.Shared.Grant ι Tok)) where
   observe d := (rawView.observe (L.raw d), L.grants d)
@@ -139,26 +139,28 @@ structure SecWorld where
   deriving DecidableEq, Repr
 
 /-- The low observer sees only `lowOut`, never `highIn`. -/
-@[expose] def secLowView : LowView SecWorld Nat where
+def secLowView : LowView SecWorld Nat where
   observe w := w.lowOut
 
 /-- A safe 2-trace where `highIn` differs (`0` vs `1`) but `lowOut` evolves identically (`10 → 11`). -/
-@[expose] def safeTracePair : List (SecWorld × SecWorld) :=
+def safeTracePair : List (SecWorld × SecWorld) :=
   [(⟨10, 0⟩, ⟨10, 1⟩), (⟨11, 0⟩, ⟨11, 1⟩)]
 
 /-- A leaking 2-trace where `highIn` (`0` vs `1`) flows into `lowOut` at step 1 (`10 → 0` vs `10 → 1`). -/
-@[expose] def leakingTracePair : List (SecWorld × SecWorld) :=
+def leakingTracePair : List (SecWorld × SecWorld) :=
   [(⟨10, 0⟩, ⟨10, 1⟩), (⟨0, 0⟩, ⟨1, 1⟩)]
 
 example :
     checkLowEquiv secLowView ⟨10, 0⟩ ⟨10, 1⟩ = true ∧
-    checkHyperLaw2NonInterference secLowView safeTracePair = true := ⟨rfl, rfl⟩
+    checkHyperLaw2NonInterference secLowView safeTracePair = true := by
+  exact ⟨rfl, rfl⟩
 
 theorem leaking_trace_refused :
-    checkHyperLaw2NonInterference secLowView leakingTracePair = false := rfl
+    checkHyperLaw2NonInterference secLowView leakingTracePair = false := by
+  rfl
 
--- Mutating the per-step low-equivalence guard to ignore leaks causes the leaking trace to pass.
-#tooth leaking_trace_refused by mutation checkHyperLaw2Step :=
+-- Mutating the per-step low-equivalence guard to ignore leaks breaks `checkHyperLaw2NonInterference_sound`.
+#tooth checkHyperLaw2NonInterference_sound by mutation checkHyperLaw2Step :=
   fun {_ _} [_] _ _ => true
 
 
@@ -184,15 +186,15 @@ structure ModalRule where
 abbrev ModalProgram := List ModalRule
 
 /-- Lower a `ModalRule` to an `Obend.Reasons.Rule` (`concl ← pos, not neg`). -/
-@[expose] def ModalRule.toReasonsRule (r : ModalRule) : Obend.Reasons.Rule :=
+def ModalRule.toReasonsRule (r : ModalRule) : Obend.Reasons.Rule :=
   { name := r.head, concl := r.head, pos := r.posBody, neg := r.negBody }
 
 /-- Lower a `ModalProgram` to an `Obend.Reasons.Program` (`facts := []`). -/
-@[expose] def ModalProgram.toReasonsProgram (prog : ModalProgram) : Obend.Reasons.Program :=
+def ModalProgram.toReasonsProgram (prog : ModalProgram) : Obend.Reasons.Program :=
   { facts := [], rules := prog.map ModalRule.toReasonsRule }
 
 /-- Set inclusion `xs ⊆ ys` on `FactSet`. -/
-@[expose] def factSetSubset (xs ys : FactSet) : Bool :=
+def factSetSubset (xs ys : FactSet) : Bool :=
   xs.all (fun a => ys.contains a)
 
 /-- Extensional set equivalence on `FactSet` (a `#tooth` mutation target):
@@ -202,7 +204,7 @@ abbrev ModalProgram := List ModalRule
 
 theorem factSetSubset_iff_sub (xs ys : FactSet) :
     factSetSubset xs ys = true ↔ Obend.Reasons.Sub xs ys := by
-  simp [factSetSubset, Obend.Reasons.Sub, List.all_eq_true, List.contains_iff_mem]
+  simp [factSetSubset, Obend.Reasons.Sub, List.all_eq_true]
 
 theorem checkFactSetEquiv_iff_same (xs ys : FactSet) :
     checkFactSetEquiv xs ys = true ↔ Obend.Reasons.Same xs ys := by
@@ -216,16 +218,16 @@ theorem checkFactSetEquiv_iff_same (xs ys : FactSet) :
     2. `candidate` is minimal among all Herbrand pre-fixpoints of that reduct
        (`∀ I, Sub (T P candidate I) I → Sub candidate I`). -/
 def IsStableEquilibrium (prog : ModalProgram) (candidate : FactSet) : Prop :=
-  let P := prog.toReasonsProgram
+  let P := ModalProgram.toReasonsProgram prog
   Obend.Reasons.Sub (Obend.Reasons.T P candidate candidate) candidate ∧
     ∀ I : FactSet, Obend.Reasons.Sub (Obend.Reasons.T P candidate I) I →
       Obend.Reasons.Sub candidate I
 
 /-- `Obend.Reasons.gamma` characterizes `IsStableEquilibrium` up to extensional membership (`Same`). -/
 theorem gamma_same_iff_stableEquilibrium (prog : ModalProgram) (candidate : FactSet) :
-    Obend.Reasons.Same (Obend.Reasons.gamma prog.toReasonsProgram candidate) candidate ↔
+    Obend.Reasons.Same (Obend.Reasons.gamma (ModalProgram.toReasonsProgram prog) candidate) candidate ↔
       IsStableEquilibrium prog candidate := by
-  let P := prog.toReasonsProgram
+  let P := ModalProgram.toReasonsProgram prog
   constructor
   · intro hSame
     refine ⟨?_, ?_⟩
@@ -250,30 +252,112 @@ theorem gamma_same_iff_stableEquilibrium (prog : ModalProgram) (candidate : Fact
 
 /-- Refusal clauses for the Gelfond–Lifschitz modal equilibrium judge. -/
 inductive GLEquilibriumClause where
+  /-- Single-rule odd negative cycle `p ← ¬□p` admits NO stable equilibrium for any candidate. -/
+  | unsatisfiableOddLoop (atom : Atom)
   /-- The candidate fact set does not match `Γ(candidate)` (the least model of its GL reduct). -/
   | unstableEquilibrium (leastModel : FactSet) (candidate : FactSet)
   deriving DecidableEq, Repr
 
+/-- Detect a single-rule odd negative self-loop `[⟨p, [], [d]⟩]` with `p = d`. -/
+@[expose] def findOddSelfLoop? (prog : ModalProgram) : Option Atom :=
+  match prog with
+  | [] => none
+  | r :: rs =>
+    if rs.isEmpty && r.posBody.isEmpty then
+      match r.negBody with
+      | [] => none
+      | d :: ds => if ds.isEmpty && (r.head == d) then some r.head else none
+    else none
+
+/-- Refuting clauses of `GLEquilibriumClause`: `unsatisfiableOddLoop` refutes ALL candidates. -/
+@[expose] def glRefutes : GLEquilibriumClause → Bool
+  | .unsatisfiableOddLoop _ => true
+  | .unstableEquilibrium _ _ => false
+
+theorem oddSelfLoop_no_equilibrium (p : Atom) (cand : FactSet) :
+    ¬ IsStableEquilibrium [⟨p, [], [p]⟩] cand := by
+  rintro ⟨hClosed, hMin⟩
+  by_cases hp : p ∈ cand
+  · have hNoFire : Obend.Reasons.fires cand [] { name := p, concl := p, pos := [], neg := [p] } = false := by
+      simp [Obend.Reasons.fires, hp]
+    have hPreNil : Obend.Reasons.Sub
+        (Obend.Reasons.T (ModalProgram.toReasonsProgram [⟨p, [], [p]⟩]) cand []) [] := by
+      intro x hx
+      simp [ModalProgram.toReasonsProgram, ModalRule.toReasonsRule, Obend.Reasons.T, hNoFire] at hx
+    exact List.not_mem_nil (hMin [] hPreNil p hp)
+  · have hFire : Obend.Reasons.fires cand cand { name := p, concl := p, pos := [], neg := [p] } = true := by
+      simp [Obend.Reasons.fires, hp]
+    have hpInT : p ∈ Obend.Reasons.T (ModalProgram.toReasonsProgram [⟨p, [], [p]⟩]) cand cand := by
+      simp [ModalProgram.toReasonsProgram, ModalRule.toReasonsRule, Obend.Reasons.T, hFire]
+    exact hp (hClosed p hpInT)
+
 /-- Total deterministic checker for Gelfond–Lifschitz modal `□` epistemic equilibrium (`G5` Design D),
-    computed via `Obend.Reasons.gamma`. -/
+    detecting unsatisfiable odd negative self-loops and checking `Γ(candidate) = candidate`. -/
 @[expose] def checkGLEquilibrium (prog : ModalProgram) (candidate : FactSet) :
     Judge.Verdict GLEquilibriumClause :=
-  let least := Obend.Reasons.gamma prog.toReasonsProgram candidate
-  if checkFactSetEquiv least candidate then
-    .ok
-  else
-    .refused (.unstableEquilibrium least candidate) []
+  match findOddSelfLoop? prog with
+  | some p => .refused (.unsatisfiableOddLoop p) []
+  | none =>
+    let least := Obend.Reasons.gamma (ModalProgram.toReasonsProgram prog) candidate
+    if checkFactSetEquiv least candidate then
+      .ok
+    else
+      .refused (.unstableEquilibrium least candidate) []
 
 /-- Soundness of `checkGLEquilibrium`: `.ok` establishes declarative `IsStableEquilibrium prog candidate`. -/
 theorem checkGLEquilibrium_sound {prog : ModalProgram} {candidate : FactSet}
     (hok : checkGLEquilibrium prog candidate = .ok) :
     IsStableEquilibrium prog candidate := by
   unfold checkGLEquilibrium at hok
-  dsimp only at hok
-  by_cases hEq : checkFactSetEquiv (Obend.Reasons.gamma prog.toReasonsProgram candidate) candidate = true
-  · exact (gamma_same_iff_stableEquilibrium prog candidate).mp
-      ((checkFactSetEquiv_iff_same _ _).mp hEq)
-  · simp [hEq] at hok
+  cases hOdd : findOddSelfLoop? prog with
+  | some p => simp [hOdd] at hok
+  | none =>
+    simp only [hOdd] at hok
+    by_cases hEq : checkFactSetEquiv (Obend.Reasons.gamma (ModalProgram.toReasonsProgram prog) candidate) candidate = true
+    · exact (gamma_same_iff_stableEquilibrium prog candidate).mp
+        ((checkFactSetEquiv_iff_same _ _).mp hEq)
+    · simp [hEq] at hok
+
+/-- Refusal soundness of `checkGLEquilibrium`: any refuting clause rules out ALL stable equilibria. -/
+theorem checkGLEquilibrium_refuted {prog : ModalProgram} {cand : FactSet}
+    {c : GLEquilibriumClause} {path : List Nat}
+    (href : checkGLEquilibrium prog cand = .refused c path) (hc : glRefutes c = true) :
+    ∀ cand' : FactSet, ¬ IsStableEquilibrium prog cand' := by
+  unfold checkGLEquilibrium at href
+  cases hOdd : findOddSelfLoop? prog with
+  | some p =>
+    simp only [hOdd, Judge.Verdict.refused.injEq] at href
+    obtain ⟨rfl, _⟩ := href
+    cases prog with
+    | nil => simp [findOddSelfLoop?] at hOdd
+    | cons r rs =>
+      cases rs with
+      | cons _ _ => simp [findOddSelfLoop?] at hOdd
+      | nil =>
+        rcases r with ⟨hd, pos, neg⟩
+        cases pos with
+        | cons _ _ => simp [findOddSelfLoop?] at hOdd
+        | nil =>
+          cases neg with
+          | nil => simp [findOddSelfLoop?] at hOdd
+          | cons d ds =>
+            cases ds with
+            | cons _ _ => simp [findOddSelfLoop?] at hOdd
+            | nil =>
+              simp only [findOddSelfLoop?, List.isEmpty_nil, Bool.true_and, ↓reduceIte] at hOdd
+              by_cases hpd : (hd == d) = true
+              · simp only [hpd, ↓reduceIte, Option.some.injEq] at hOdd
+                have heq : hd = d := beq_iff_eq.mp hpd
+                subst heq hOdd
+                exact oddSelfLoop_no_equilibrium hd
+              · simp [hpd] at hOdd
+  | none =>
+    simp only [hOdd] at href
+    split at href
+    · cases href
+    · simp only [Judge.Verdict.refused.injEq] at href
+      obtain ⟨rfl, _⟩ := href
+      cases hc
 
 /-- Completeness of `checkGLEquilibrium`: any `candidate` satisfying `IsStableEquilibrium`
     is accepted. -/
@@ -281,11 +365,15 @@ theorem checkGLEquilibrium_complete {prog : ModalProgram} {candidate : FactSet}
     (hEqm : IsStableEquilibrium prog candidate) :
     checkGLEquilibrium prog candidate = .ok := by
   have hSame := (gamma_same_iff_stableEquilibrium prog candidate).mpr hEqm
-  have hEq : checkFactSetEquiv (Obend.Reasons.gamma prog.toReasonsProgram candidate) candidate = true :=
+  have hEq : checkFactSetEquiv (Obend.Reasons.gamma (ModalProgram.toReasonsProgram prog) candidate) candidate = true :=
     (checkFactSetEquiv_iff_same _ _).mpr hSame
   unfold checkGLEquilibrium
-  dsimp only
-  simp [hEq]
+  cases hOdd : findOddSelfLoop? prog with
+  | none => simp [hEq]
+  | some p =>
+    exfalso
+    exact checkGLEquilibrium_refuted (prog := prog) (cand := candidate) (c := .unsatisfiableOddLoop p)
+      (path := []) (by simp [checkGLEquilibrium, hOdd]) rfl candidate hEqm
 
 /-- **`glEquilibriumJudge`**: `Obend.Judge` instance for Gelfond–Lifschitz modal `□` epistemic equilibrium. -/
 @[expose, instance_reducible] def glEquilibriumJudge : Obend.Judge ModalProgram FactSet where
@@ -293,8 +381,8 @@ theorem checkGLEquilibrium_complete {prog : ModalProgram} {candidate : FactSet}
   Meaning := IsStableEquilibrium
   check := fun _ prog cand => checkGLEquilibrium prog cand
   sound := checkGLEquilibrium_sound
-  refutes _ := false
-  refuted _ h := by cases h
+  refutes := glRefutes
+  refuted href hc cand' := checkGLEquilibrium_refuted href hc cand'
   Fragment _ := True
   complete _ := by
     rintro ⟨cand, hEqm⟩
@@ -305,45 +393,57 @@ instance : Obend.Judge ModalProgram FactSet := glEquilibriumJudge
 
 /-! ### Self-Defeating Modal Fixture (`p ← ¬□p`), Stratified Default Fixture & `#tooth` Witness -/
 
-/-- The classic self-defeating unstratified modal program `p ← ¬□p`:
-    - If `candidate = []`, `¬□p` holds so `Γ([]) = ["p"] ≠ []`.
-    - If `candidate = ["p"]`, `¬□p` fails so `Γ(["p"]) = [] ≠ ["p"]`.
-    Hence `selfDefeatingModalProg` has no stable equilibrium and must be refused on both candidates. -/
-@[expose] def selfDefeatingModalProg : ModalProgram :=
+/-- The classic self-defeating unstratified modal program `p ← ¬□p` (unsatisfiable odd loop). -/
+def selfDefeatingModalProg : ModalProgram :=
   [⟨"p", [], ["p"]⟩]
+
+/-- Two-rule unstable modal program where candidate `["p"]` fails `Γ(["p"]) = ["p"]`. -/
+def unstableTwoRuleProg : ModalProgram :=
+  [⟨"q", [], []⟩, ⟨"p", ["q"], ["p"]⟩]
 
 /-- A well-founded default modal program: `fly ← bird ∧ ¬□abnormal`, `bird ← ⊤`.
     Its unique stable epistemic equilibrium is `["bird", "fly"]`. -/
-@[expose] def defaultBirdProg : ModalProgram :=
+def defaultBirdProg : ModalProgram :=
   [⟨"bird", [], []⟩, ⟨"fly", ["bird"], ["abnormal"]⟩]
 
 example :
-    checkGLEquilibrium defaultBirdProg ["bird", "fly"] = .ok := rfl
+    checkGLEquilibrium defaultBirdProg ["bird", "fly"] = .ok := by
+  rfl
 
 theorem self_defeating_modal_refused_on_p :
     checkGLEquilibrium selfDefeatingModalProg ["p"] =
-      .refused (.unstableEquilibrium [] ["p"]) [] := rfl
+      .refused (.unsatisfiableOddLoop "p") [] := by
+  rfl
 
 theorem self_defeating_modal_refused_on_empty :
     checkGLEquilibrium selfDefeatingModalProg [] =
-      .refused (.unstableEquilibrium ["p"] []) [] := rfl
+      .refused (.unsatisfiableOddLoop "p") [] := by
+  rfl
 
--- Mutating the fixed-point equivalence check to `true` causes the unstable self-defeating
--- candidate `["p"]` for `p ← ¬□p` to be falsely accepted as `.ok`.
-#tooth self_defeating_modal_refused_on_p by mutation checkFactSetEquiv :=
+theorem unstable_two_rule_refused_on_p :
+    checkGLEquilibrium unstableTwoRuleProg ["p"] =
+      .refused (.unstableEquilibrium ["q"] ["q", "p"].tail) [] := by
+  rfl
+
+-- Mutating the fixed-point equivalence check to `true` breaks `checkGLEquilibrium_sound`.
+#tooth checkGLEquilibrium_sound by mutation checkFactSetEquiv :=
   fun _ _ => true
+
+-- Mutating `findOddSelfLoop?` to claim even `defaultBirdProg` is an odd loop breaks `checkGLEquilibrium_refuted`.
+#tooth checkGLEquilibrium_refuted by mutation findOddSelfLoop? :=
+  fun _ => some "bird"
 
 /-! ### Structural JSON Wire Codecs & Registered `glEquilibriumFormat` (`gl-equilibrium@1`) -/
 
 open Lean (Json) in
-@[expose] def modalRuleToJson (r : ModalRule) : Json :=
+def modalRuleToJson (r : ModalRule) : Json :=
   Json.mkObj
     [ ("head", Json.str r.head)
     , ("pos", Json.arr (r.posBody.map Json.str).toArray)
     , ("neg", Json.arr (r.negBody.map Json.str).toArray) ]
 
 open Lean (Json) in
-@[expose] def modalRuleOfJson (j : Json) : Except String ModalRule := do
+def modalRuleOfJson (j : Json) : Except String ModalRule := do
   let head ← (j.getObjVal? "head") >>= Json.getStr?
   let posArr ← (j.getObjVal? "pos") >>= Json.getArr?
   let negArr ← (j.getObjVal? "neg") >>= Json.getArr?
@@ -352,21 +452,21 @@ open Lean (Json) in
   return { head, posBody, negBody }
 
 open Lean (Json) in
-@[expose] def encodeModalProgram (prog : ModalProgram) : String :=
+def encodeModalProgram (prog : ModalProgram) : String :=
   (Json.mkObj [("rules", Json.arr (prog.map modalRuleToJson).toArray)]).compress
 
 open Lean (Json) in
-@[expose] def decodeModalProgram (s : String) : Except String ModalProgram := do
+def decodeModalProgram (s : String) : Except String ModalProgram := do
   let j ← Json.parse s
   let arr ← (j.getObjVal? "rules") >>= Json.getArr?
   arr.toList.mapM modalRuleOfJson
 
 open Lean (Json) in
-@[expose] def encodeFactSet (facts : FactSet) : String :=
+def encodeFactSet (facts : FactSet) : String :=
   (Json.mkObj [("facts", Json.arr (facts.map Json.str).toArray)]).compress
 
 open Lean (Json) in
-@[expose] def decodeFactSet (s : String) : Except String FactSet := do
+def decodeFactSet (s : String) : Except String FactSet := do
   let j ← Json.parse s
   let arr ← (j.getObjVal? "facts") >>= Json.getArr?
   arr.toList.mapM Json.getStr?
@@ -384,7 +484,7 @@ open Lean (Json) in
   regime := .decidable
   bad := (selfDefeatingModalProg, ["p"])
   badGrade := 0
-  bad_refused := ⟨GLEquilibriumClause.unstableEquilibrium [] ["p"], [], rfl⟩
+  bad_refused := ⟨GLEquilibriumClause.unsatisfiableOddLoop "p", [], self_defeating_modal_refused_on_p⟩
 
 end Obend.Run.HyperLaw
 end

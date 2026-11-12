@@ -63,18 +63,11 @@ inductive ByteInstr where
 /-- Total 64-bit semantics of `ByteBinOp`, matching `Core.Term.primitiveResult` on `< 2^64` inputs. -/
 @[expose] def evalByteBinOp (op : ByteBinOp) (a b : UInt64) : UInt64 :=
   match op with
-  | .add => a + b
-  | .sub => a - b
-  | .mul => a * b
-  | .div => if b == 0 then 0 else a / b
-  | .mod => if b == 0 then a else a % b
-  | .eq => if a == b then 1 else 0
-  | .lt => if a < b then 1 else 0
-  | .le => if a ≤ b then 1 else 0
+  | .add => a + b | .sub => a - b | .mul => a * b
+  | .div => if b == 0 then 0 else a / b | .mod => if b == 0 then a else a % b
+  | .eq => if a == b then 1 else 0 | .lt => if a < b then 1 else 0 | .le => if a ≤ b then 1 else 0
   | .conj => if a != 0 && b != 0 then 1 else 0
-  | .bitAnd => a &&& b
-  | .bitOr => a ||| b
-  | .bitXor => a ^^^ b
+  | .bitAnd => a &&& b | .bitOr => a ||| b | .bitXor => a ^^^ b
 
 /-- Single-instruction transition returning either `.inl (nextPc, nextRegs)` or `.inr result`.
     Out-of-bounds register indices deterministically refuse (`none`). -/
@@ -165,23 +158,14 @@ theorem specializeDictTerm_evaluates_scalar_iff
 
 /-- `Core4` primitives lowered directly to `ByteBinOp`. -/
 @[expose] def compilePrimOp : Primitive → Option ByteBinOp
-  | .add => some .add
-  | .subtract => some .sub
-  | .multiply => some .mul
-  | .divide => some .div
-  | .modulo => some .mod
-  | .equal => some .eq
-  | .less => some .lt
-  | .lessEqual => some .le
-  | .conjunction => some .conj
-  | .bitAnd => some .bitAnd
-  | .bitOr => some .bitOr
-  | .bitXor => some .bitXor
+  | .add => some .add | .subtract => some .sub | .multiply => some .mul
+  | .divide => some .div | .modulo => some .mod | .equal => some .eq
+  | .less => some .lt | .lessEqual => some .le | .conjunction => some .conj
+  | .bitAnd => some .bitAnd | .bitOr => some .bitOr | .bitXor => some .bitXor
   | _ => none
 
 /-- Allowed primitive predicate for 64-bit bytecode range certification. -/
-@[expose] def isBytecodePrim (op : Primitive) : Bool :=
-  (compilePrimOp op).isSome
+@[expose] def isBytecodePrim (op : Primitive) : Bool := (compilePrimOp op).isSome
 
 /-- Certify that all intermediate and output values of `t` fit in `< 2^64` with zero underflow. -/
 @[expose] def checkRangeSafeBytecode (Γ : List Interval) (t : Term) : Bool :=
@@ -190,10 +174,8 @@ theorem specializeDictTerm_evaluates_scalar_iff
 /-- Relocatable expression compiler emitting `(frag, dstReg, maxRegs, fuelBound)` at `basePc`. -/
 def compileExprAt (basePc : Nat) (regMap : List Nat) (nextReg : Nat) :
     Term → Option (Array ByteInstr × Nat × Nat × Nat)
-  | .nat n =>
-    some (#[.loadImm nextReg (UInt64.ofNat n)], nextReg, nextReg + 1, 1)
-  | .boolean b =>
-    some (#[.loadImm nextReg (if b then 1 else 0)], nextReg, nextReg + 1, 1)
+  | .nat n => some (#[.loadImm nextReg (UInt64.ofNat n)], nextReg, nextReg + 1, 1)
+  | .boolean b => some (#[.loadImm nextReg (if b then 1 else 0)], nextReg, nextReg + 1, 1)
   | .bound idx =>
     match regMap[idx]? with
     | some r => if r < nextReg then some (#[], r, nextReg, 0) else none
@@ -1448,50 +1430,42 @@ theorem runSumToBytecode_30000 :
 
 private def renderC99BinOp (op : ByteBinOp) (lhs rhs : String) : String :=
   match op with
-  | .add => s!"({lhs} + {rhs})"
-  | .sub => s!"({lhs} - {rhs})"
-  | .mul => s!"({lhs} * {rhs})"
-  | .div => s!"(({rhs} == 0ULL) ? 0ULL : ({lhs} / {rhs}))"
-  | .mod => s!"(({rhs} == 0ULL) ? {lhs} : ({lhs} % {rhs}))"
-  | .eq => s!"(({lhs} == {rhs}) ? 1ULL : 0ULL)"
-  | .lt => s!"(({lhs} < {rhs}) ? 1ULL : 0ULL)"
-  | .le => s!"(({lhs} <= {rhs}) ? 1ULL : 0ULL)"
+  | .add => s!"({lhs} + {rhs})" | .sub => s!"({lhs} - {rhs})" | .mul => s!"({lhs} * {rhs})"
+  | .div => s!"(({rhs} == 0ULL) ? 0ULL : ({lhs} / {rhs}))" | .mod => s!"(({rhs} == 0ULL) ? {lhs} : ({lhs} % {rhs}))"
+  | .eq => s!"(({lhs} == {rhs}) ? 1ULL : 0ULL)" | .lt => s!"(({lhs} < {rhs}) ? 1ULL : 0ULL)" | .le => s!"(({lhs} <= {rhs}) ? 1ULL : 0ULL)"
   | .conj => s!"((({lhs} != 0ULL) && ({rhs} != 0ULL)) ? 1ULL : 0ULL)"
-  | .bitAnd => s!"({lhs} & {rhs})"
-  | .bitOr => s!"({lhs} | {rhs})"
-  | .bitXor => s!"({lhs} ^ {rhs})"
+  | .bitAnd => s!"({lhs} & {rhs})" | .bitOr => s!"({lhs} | {rhs})" | .bitXor => s!"({lhs} ^ {rhs})"
 
 private def renderC99Instr (nInstrs pc : Nat) (ins : ByteInstr) : String :=
-  let fuelChk := "  if (fuel == 0ULL) { *ok = 0; return 0ULL; } fuel--;\n"
+  let fail := "{ if (ok != NULL) *ok = 0; return 0ULL; }"
+  let fuelChk := s!"  if (fuel == 0ULL) {fail} fuel--;\n"
   let body := match ins with
     | .loadImm dst imm =>
-      s!"  if ({dst}ULL >= n_regs) \{ *ok = 0; return 0ULL; }\n  regs[{dst}] = {imm.toNat}ULL;\n"
+      s!"  if ({dst}ULL >= n_regs) {fail}\n  regs[{dst}] = {imm.toNat}ULL;\n"
     | .mov dst src =>
-      s!"  if ({dst}ULL >= n_regs || {src}ULL >= n_regs) \{ *ok = 0; return 0ULL; }\n  regs[{dst}] = regs[{src}];\n"
+      s!"  if ({dst}ULL >= n_regs || {src}ULL >= n_regs) {fail}\n  regs[{dst}] = regs[{src}];\n"
     | .binOp op dst lhs rhs =>
       let expr := renderC99BinOp op s!"regs[{lhs}]" s!"regs[{rhs}]"
-      s!"  if ({dst}ULL >= n_regs || {lhs}ULL >= n_regs || {rhs}ULL >= n_regs) \{ *ok = 0; return 0ULL; }\n  regs[{dst}] = {expr};\n"
+      s!"  if ({dst}ULL >= n_regs || {lhs}ULL >= n_regs || {rhs}ULL >= n_regs) {fail}\n  regs[{dst}] = {expr};\n"
     | .jz cond target =>
       let tgt := if target < nInstrs then s!"L{target}" else "L_oob"
-      s!"  if ({cond}ULL >= n_regs) \{ *ok = 0; return 0ULL; }\n  if (regs[{cond}] == 0ULL) goto {tgt};\n"
-    | .jmp target =>
-      let tgt := if target < nInstrs then s!"L{target}" else "L_oob"
-      s!"  goto {tgt};\n"
+      s!"  if ({cond}ULL >= n_regs) {fail}\n  if (regs[{cond}] == 0ULL) goto {tgt};\n"
+    | .jmp target => s!"  goto {if target < nInstrs then s!"L{target}" else "L_oob"};\n"
     | .ret src =>
-      s!"  if ({src}ULL >= n_regs) \{ *ok = 0; return 0ULL; }\n  *ok = 1;\n  return regs[{src}];\n"
+      s!"  if ({src}ULL >= n_regs) {fail}\n  if (ok != NULL) *ok = 1;\n  return regs[{src}];\n"
   s!"L{pc}:\n" ++ fuelChk ++ body
 
-/-- Emit standalone bounds-checked C99 executing `code` with exact `execBytecode` semantics. -/
+/-- Emit standalone NULL-safe & bounds-checked C99 executing `code` with exact `execBytecode` semantics. -/
 def emitRegisterBytecodeC99 (code : Array ByteInstr) : String :=
   let hdr :=
     "#include <stdint.h>\n#include <stddef.h>\n\n" ++
-    "uint64_t obend_bytecode_jit_run(uint64_t *regs, size_t n_regs, uint64_t fuel, int *ok) {\n"
+    "uint64_t obend_bytecode_jit_run(uint64_t *regs, size_t n_regs, uint64_t fuel, int *ok) {\n" ++
+    "  if (regs == NULL && n_regs > 0U) { if (ok != NULL) *ok = 0; return 0ULL; }\n"
   let blocks := Id.run do
     let mut acc := ""
-    for h : i in [0:code.size] do
-      acc := acc ++ renderC99Instr code.size i code[i]
+    for h : i in [0:code.size] do acc := acc ++ renderC99Instr code.size i code[i]
     return acc
-  hdr ++ blocks ++ "L_oob:\n  *ok = 0;\n  return 0ULL;\n}\n"
+  hdr ++ blocks ++ "L_oob:\n  if (ok != NULL) *ok = 0;\n  return 0ULL;\n}\n"
 
 end Obend.Leaf.BytecodeRegisterJit
 end

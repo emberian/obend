@@ -37,8 +37,20 @@ at `lawHost`/`lawSpec`), and:
 public import Obend.Run.Spec
 public import Obend.Law.Proofs.Machine
 public import Obend.Run.Proofs.Invariant
+public import Obend.Judge.Class
+public import Obend.Tactic.Tooth
 import all Obend.Run.Runner
 import all Obend.Run.Spec
+import all Obend.Judge.Class
+import all Obend.Law.Syntax
+import all Obend.Law.Run
+import all Obend.Law.Machine
+import all Obend.Law.Inherit
+import all Obend.Law.Claim
+import all Obend.Core.Data
+import all Obend.Core.Machine
+import all Obend.Core.MachineFast
+import all Obend.Core.TermTraverse
 public section
 
 namespace Obend.Run
@@ -287,6 +299,246 @@ public theorem dispatch_future_refused [DecidableEq Tok] [DecidableEq (Σ i, S.O
   · simp only [missingOf, List.mem_filter, Bool.not_eq_true']
     refine ⟨by simp [lawSpec, lawRequires], ?_⟩
     simp only [Cfg.admitView, mask_holds, lawHost_holds_embed, hcur]
+
+/-! ## Standalone `Obend.Judge` Instance for Consensus-Sealed Multi-Ancestor Law Submissions -/
+
+/-- A consensus-sealed effective-law write submission problem: C4 ancestor precedence list `lin`,
+    ledger `consensus`, `old` state, `new` state, and submitter `sub`. -/
+structure LawSubmissionProblem where
+  lin : List (String × Term)
+  consensus : Consensus
+  old : Data
+  new : Data
+  sub : Submission
+
+/-- Refusal clauses for `lawSubmissionJudge`. -/
+inductive LawJudgeClause where
+  | openAncestors
+  | futureSubmission (claimed current : Nat)
+  | refusedByClause (ancestor reason : String)
+  deriving DecidableEq, Repr
+
+/-- Semantic admission meaning for `lawSubmissionJudge`: `sub` seals at `consensus` and every
+    ancestor law in `lin` (hence `effective lin`) admits the transition `(old, new, rq)`. -/
+def LawSubmissionAdmitted (q : LawSubmissionProblem) (_ : Unit) : Prop :=
+  ∃ rq, sealAt q.consensus q.sub = .ok rq ∧
+    Admits (effective q.lin) q.old q.new rq ∧
+    ∀ p ∈ q.lin, Admits p.2 q.old q.new rq
+
+private def lawSubLimits (k : Nat) : Limits := ⟨(k + 1) * 64, (k + 1) * 64⟩
+private def lawSubBudget (k : Nat) : Budget := ⟨(k + 1) * 64, (k + 1) * 64, (k + 1) * 64⟩
+
+private def lawSubProbe (q : LawSubmissionProblem) (rq : Data) (k : Nat) : Option Blame :=
+  judgeEffective (fun _ => true) (lawSubLimits k) (lawSubBudget k) (effective q.lin) q.old q.new rq
+
+/-- Resource-indexed effective-law submission checker with iterative deepening. -/
+def checkLawSubmission (k : Nat) (q : LawSubmissionProblem) (_ : Unit) :
+    Obend.Judge.Verdict LawJudgeClause :=
+  if q.lin.all (fun p => closedB p.2) then
+    match sealAt q.consensus q.sub with
+    | .error (.futureHeight claimed cur) => .refused (.futureSubmission claimed cur) []
+    | .ok rq =>
+      match Obend.Judge.deepen (lawSubProbe q rq) k with
+      | some .ok => .ok
+      | some (.refusedBy name why) =>
+        .refused (.refusedByClause name why) [q.lin.findIdx (fun p => p.1 == name)]
+      | none => .uncovered
+  else .refused .openAncestors []
+
+/-- Refuting clauses of `LawJudgeClause`: both future-height claims and ancestor refusals refute `LawSubmissionAdmitted`. -/
+def lawSubmissionRefutes : LawJudgeClause → Bool
+  | .openAncestors => false
+  | .futureSubmission _ _ => true
+  | .refusedByClause _ _ => true
+
+public theorem checkLawSubmission_sound {k : Nat} {q : LawSubmissionProblem}
+    (hok : checkLawSubmission k q () = .ok) :
+    LawSubmissionAdmitted q () := by
+  unfold checkLawSubmission at hok
+  split at hok
+  · rename_i hAll
+    have hc : ∀ p ∈ q.lin, closedB p.2 = true := List.all_eq_true.mp hAll
+    cases hs : sealAt q.consensus q.sub with
+    | error err => rw [hs] at hok; cases err; cases hok
+    | ok rq =>
+      rw [hs] at hok; dsimp only at hok
+      cases hd : Obend.Judge.deepen (lawSubProbe q rq) k with
+      | none => rw [hd] at hok; cases hok
+      | some bl =>
+        rw [hd] at hok
+        cases bl with
+        | refusedBy _ _ => cases hok
+        | ok =>
+          obtain ⟨i, _, hi⟩ := Obend.Judge.deepen_some (lawSubProbe q rq) hd
+          have hall := (Obend.Law.judgeEffective_names hc).1 hi
+          exact ⟨rq, hs, (Obend.Law.effective_law_eval hc q.old q.new rq).2 hall, hall⟩
+  · cases hok
+
+public theorem checkLawSubmission_refuted {k : Nat} {q : LawSubmissionProblem}
+    {c : LawJudgeClause} {path : List Nat}
+    (href : checkLawSubmission k q () = .refused c path)
+    (hcRef : lawSubmissionRefutes c = true) :
+    ¬ LawSubmissionAdmitted q () := by
+  unfold checkLawSubmission at href
+  split at href
+  · rename_i hAll
+    have hc : ∀ p ∈ q.lin, closedB p.2 = true := List.all_eq_true.mp hAll
+    cases hs : sealAt q.consensus q.sub with
+    | error err =>
+      rw [hs] at href; cases err
+      rintro ⟨rq, hsOk, _⟩; rw [hs] at hsOk; cases hsOk
+    | ok rq =>
+      rw [hs] at href; dsimp only at href
+      cases hd : Obend.Judge.deepen (lawSubProbe q rq) k with
+      | none => rw [hd] at href; cases href
+      | some bl =>
+        rw [hd] at href
+        cases bl with
+        | ok => cases href
+        | refusedBy name why =>
+          obtain ⟨i, _, hi⟩ := Obend.Judge.deepen_some (lawSubProbe q rq) hd
+          obtain ⟨pre, L, post, hlin, _, hL⟩ := (Obend.Law.judgeEffective_names hc).2 name why hi
+          rintro ⟨rq', hsOk, _, hall⟩
+          rw [hs] at hsOk; injection hsOk with hEq; subst hEq
+          have hMem : (name, L) ∈ q.lin := by rw [hlin]; simp
+          exact Obend.Law.refusesAs_not_admits hL (hall (name, L) hMem)
+  · simp only [Obend.Judge.Verdict.refused.injEq] at href
+    obtain ⟨rfl, _⟩ := href; cases hcRef
+
+/-- Honest `Obend.Judge` instance for consensus-sealed C4 multi-ancestor law submissions. -/
+instance lawSubmissionJudge : Obend.Judge LawSubmissionProblem Unit where
+  Clause := LawJudgeClause
+  Meaning := LawSubmissionAdmitted
+  check := checkLawSubmission
+  sound := checkLawSubmission_sound
+  refutes := lawSubmissionRefutes
+  refuted href hcRef _ := checkLawSubmission_refuted href hcRef
+  Fragment q := ∀ p ∈ q.lin, closedB p.2 = true
+  complete {q} hc := by
+    rintro ⟨_, rq, hs, _, hall⟩
+    have hAllB : q.lin.all (fun p => closedB p.2) = true := List.all_eq_true.mpr hc
+    obtain ⟨L₀, t₀, b₀, hRun⟩ := (Obend.Law.judgeEffective_complete hc).1 hall
+    let K := L₀.heap + L₀.stack + t₀ + b₀
+    have hK : lawSubProbe q rq K = some .ok :=
+      hRun (lawSubLimits K) (lawSubBudget K)
+        ⟨by simp only [lawSubLimits, K]; omega, by simp only [lawSubLimits, K]; omega⟩
+        (by simp only [lawSubBudget, K]; omega)
+        (by simp only [lawSubBudget]; omega)
+        (by simp only [lawSubBudget, K]; omega)
+    obtain ⟨bl, hd⟩ := Obend.Judge.deepen_isSome (lawSubProbe q rq) hK
+    cases bl with
+    | ok => exact ⟨(), K, by simp [checkLawSubmission, hAllB, hs, hd]⟩
+    | refusedBy name why =>
+      exfalso
+      obtain ⟨i, _, hi⟩ := Obend.Judge.deepen_some (lawSubProbe q rq) hd
+      obtain ⟨pre, L, post, hlin, _, hL⟩ := (Obend.Law.judgeEffective_names hc).2 name why hi
+      have hMem : (name, L) ∈ q.lin := by rw [hlin]; simp
+      exact Obend.Law.refusesAs_not_admits hL (hall (name, L) hMem)
+  mono {k k' q _} hle hne := by
+    unfold checkLawSubmission at hne ⊢
+    by_cases hAllB : q.lin.all (fun p => closedB p.2) = true
+    · simp only [hAllB, ↓reduceIte] at hne ⊢
+      cases hs : sealAt q.consensus q.sub with
+      | error err => cases err; rfl
+      | ok rq =>
+        simp only [hs] at hne ⊢
+        cases hd : Obend.Judge.deepen (lawSubProbe q rq) k with
+        | none => rw [hd] at hne; exact absurd rfl hne
+        | some bl => rw [Obend.Judge.deepen_mono (lawSubProbe q rq) hd hle]
+    · simp [hAllB]
+
+/-- Concrete closed monotone-counter law: refuses when `new < old` with `"decreased"`, else `ok`. -/
+def monotoneCounterLaw : Term :=
+  .lam (.lam (.lam
+    (.ifBool (.binary .less (.bound 1) (.bound 2))
+      (.inject "refused" (.label "decreased"))
+      (.inject "ok" (.record [])))))
+
+/-- Demo consensus-height submission builder for `lawSubmissionJudge` inhabitedness checks. -/
+def demoSubmission (seen : Option Nat) : Submission :=
+  { agent := "alice", principal := "alice", notBefore := 0, validUntil := 100
+  , occasion := .variant "write" (.record []), subject := none, caller := none
+  , turn := 0, seen := seen }
+
+/-- Concrete inhabitedness witnesses for `lawSubmissionJudge` (admission, clause refusal, future-height refusal). -/
+public theorem lawSubmissionJudge_inhabited :
+    let okProb : LawSubmissionProblem :=
+      ⟨[("monotone", monotoneCounterLaw)], ⟨5⟩, .natural 10, .natural 15, demoSubmission (some 5)⟩
+    let badWriteProb : LawSubmissionProblem :=
+      ⟨[("monotone", monotoneCounterLaw)], ⟨5⟩, .natural 10, .natural 3, demoSubmission (some 5)⟩
+    let futureProb : LawSubmissionProblem :=
+      ⟨[("monotone", monotoneCounterLaw)], ⟨5⟩, .natural 10, .natural 15, demoSubmission (some 99)⟩
+    lawSubmissionJudge.Fragment okProb ∧
+    (∃ k, checkLawSubmission k okProb () = .ok) ∧
+    (∃ k, checkLawSubmission k badWriteProb () = .refused (.refusedByClause "monotone" "decreased") [0]) ∧
+    checkLawSubmission 0 futureProb () = .refused (.futureSubmission 99 5) [] := by
+  intro okProb badWriteProb futureProb
+  have hClosed : closedB monotoneCounterLaw = true := by decide +kernel
+  have hFrag : lawSubmissionJudge.Fragment okProb := by
+    intro p hp; simp [okProb] at hp; subst hp; exact hClosed
+  let rq := (demoSubmission (some 5)).request ⟨5⟩
+  have hSeal : sealAt ⟨5⟩ (demoSubmission (some 5)) = .ok rq := rfl
+  have hAdmLaw : Admits monotoneCounterLaw (.natural 10) (.natural 15) rq :=
+    Obend.Law.admits_of_run 20 (by decide +kernel)
+  have hAdmOk : LawSubmissionAdmitted okProb () := by
+    have hall : ∀ p ∈ okProb.lin, Admits p.2 okProb.old okProb.new rq := by
+      intro p hp; simp [okProb] at hp; subst hp; exact hAdmLaw
+    exact ⟨rq, hSeal, (Obend.Law.effective_law_eval hFrag okProb.old okProb.new rq).2 hall, hall⟩
+  obtain ⟨⟨⟩, kOk, hkOk⟩ := lawSubmissionJudge.complete hFrag ⟨(), hAdmOk⟩
+  have hEvRef : Obend.Law.Refuses monotoneCounterLaw (.natural 10) (.natural 3) rq "decreased" :=
+    Obend.Law.refuses_of_run 20 (by decide +kernel)
+  have hRefAs : RefusesAs monotoneCounterLaw (.natural 10) (.natural 3) rq "decreased" :=
+    Obend.Law.refuses_refusesAs hEvRef
+  have hFragBad : ∀ p ∈ badWriteProb.lin, closedB p.2 = true := hFrag
+  obtain ⟨L₀, t₀, b₀, hRunRef⟩ :=
+    (Obend.Law.judgeEffective_complete hFragBad (o := .natural 10) (n := .natural 3) (rq := rq)).2
+      [] "monotone" monotoneCounterLaw [] "decreased" rfl (by intro _ h; cases h) hRefAs
+  let K := L₀.heap + L₀.stack + t₀ + b₀
+  have hProbeRef : lawSubProbe badWriteProb rq K = some (.refusedBy "monotone" "decreased") :=
+    hRunRef (lawSubLimits K) (lawSubBudget K)
+      ⟨by simp only [lawSubLimits, K]; omega, by simp only [lawSubLimits, K]; omega⟩
+      (by simp only [lawSubBudget, K]; omega)
+      (by simp only [lawSubBudget]; omega)
+      (by simp only [lawSubBudget, K]; omega)
+  obtain ⟨bl, hdRef⟩ := Obend.Judge.deepen_isSome (lawSubProbe badWriteProb rq) hProbeRef
+  have hbl : bl = .refusedBy "monotone" "decreased" := by
+    obtain ⟨i, _, hi⟩ := Obend.Judge.deepen_some (lawSubProbe badWriteProb rq) hdRef
+    cases bl with
+    | ok =>
+      have hall := (Obend.Law.judgeEffective_names hFragBad).1 hi
+      exact absurd (hall ("monotone", monotoneCounterLaw) (by simp [badWriteProb]))
+        (Obend.Law.refusesAs_not_admits hRefAs)
+    | refusedBy nm wy =>
+      obtain ⟨pre, L, post, hlin, _, hL⟩ := (Obend.Law.judgeEffective_names hFragBad).2 nm wy hi
+      cases pre with
+      | nil =>
+        simp [badWriteProb] at hlin
+        rcases hlin with ⟨⟨rfl, rfl⟩, _⟩
+        obtain ⟨w', hEv', hw'⟩ := hL
+        have heq := Obend.Law.evaluates_unique hEvRef hEv'
+        injection heq with _ hpay
+        subst hpay
+        have hwy := Obend.Law.evaluates_value (.label "decreased") hw'
+        injection hwy with hstr
+        subst hstr; rfl
+      | cons _ ps =>
+        have hlen := congrArg List.length hlin
+        simp [badWriteProb] at hlen
+  subst hbl
+  have hAllB : badWriteProb.lin.all (fun p => closedB p.2) = true := List.all_eq_true.mpr hFragBad
+  have hkBad : checkLawSubmission K badWriteProb () = .refused (.refusedByClause "monotone" "decreased") [0] := by
+    simp [checkLawSubmission, badWriteProb, hAllB, hSeal, hdRef]
+  have hFut : checkLawSubmission 0 futureProb () = .refused (.futureSubmission 99 5) [] := by
+    have hAllF : futureProb.lin.all (fun p => closedB p.2) = true := List.all_eq_true.mpr hFrag
+    simp [checkLawSubmission, futureProb, hAllF]
+    rfl
+  exact ⟨hFrag, ⟨kOk, hkOk⟩, ⟨K, hkBad⟩, hFut⟩
+
+#tooth checkLawSubmission_sound by mutation
+  checkLawSubmission := fun _ _ _ => .ok
+
+#tooth checkLawSubmission_refuted by mutation
+  checkLawSubmission := fun _ _ _ => .refused (.futureSubmission 1 0) []
 
 end Obend.Run
 

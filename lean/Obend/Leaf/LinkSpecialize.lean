@@ -38,6 +38,12 @@ public import Obend.Paco.GPaco
 public import Obend.Leaf.Static
 public import Obend.Leaf.Served
 public import Obend.Law.Proofs.Run
+import all Obend.Leaf.UpTo
+import all Obend.Leaf.Flatten
+import all Obend.Leaf.Emit
+import all Obend.Leaf.Specialize
+import all Obend.Leaf.Served
+import all Obend.Leaf.Static
 
 public section
 

@@ -12,7 +12,7 @@ Closes Gap `G1` (`PLAN.md` Part III & `METATHEORY.md` §3.1):
 -/
 public import Obend.Core.Proofs.TickCost
 public import Obend.Judge.Class
-@[expose] public section
+public section
 
 namespace Obend.Run.Ticks
 open Obend.Core.Machine (Limits State Outcome RuntimeValue runBounded)
@@ -21,7 +21,7 @@ open Obend.Equiv (CV)
 set_option autoImplicit false
 
 /-- Single-pass $O(k)$ bounded execution extracting a finished `(RuntimeValue × State)`. -/
-def deepenBounded (L : Limits) (s : State) (k : Nat) : Option (RuntimeValue × State) :=
+@[expose] def deepenBounded (L : Limits) (s : State) (k : Nat) : Option (RuntimeValue × State) :=
   match runBounded L k s with
   | .finished v s' => some (v, s')
   | _ => none

@@ -14,7 +14,9 @@ vtable contains no record literal of that shape (`vtable_clean`): every super ro
 flattened suffix rows (`suffixNames`).
 -/
 public import Obend.Leaf.Flatten
-@[expose] public section
+import all Obend.Leaf.UpTo
+import all Obend.Leaf.Flatten
+public section
 namespace Obend.Leaf
 open Obend.Core.Term
 open Obend.Equiv
@@ -22,7 +24,7 @@ open Obend.Logic
 set_option autoImplicit false
 
 /-- `t` contains a record literal whose field names `bad` accepts. -/
-def recordBad (bad : List String → Bool) : Term → Bool
+@[expose] def recordBad (bad : List String → Bool) : Term → Bool
   | .hole _ σ => σ.attach.any fun x => recordBad bad x.1
   | .bound _ | .nat _ | .boolean _ | .label _ => false
   | .lam b | .reflect b | .metadata b | .project b | .inject _ b | .perform b | .done b | .get b _ =>
@@ -44,7 +46,7 @@ decreasing_by
        first | (have := List.sizeOf_lt_of_mem h; omega) | (have := sizeOf_snd_lt_of_mem h; omega))
 
 /-- Every `super` (index `d`, moving under binders) is `get super p` with `p` among `ns`. -/
-def superOnlyProjected (ns : List String) (d : Nat) : Term → Bool
+@[expose] def superOnlyProjected (ns : List String) (d : Nat) : Term → Bool
   | .hole _ σ => σ.attach.all fun x => superOnlyProjected ns d x.1
   | .bound i => i != d
   | .nat _ | .boolean _ | .label _ => true
@@ -433,17 +435,17 @@ decreasing_by
 /-! ## The vtable -/
 
 /-- Every layer projects `super` only, at members of the flattened row beneath it. -/
-def superOnlyProjectedRow (seed : List (String × Term)) : List Layer → Bool
+@[expose] def superOnlyProjectedRow (seed : List (String × Term)) : List Layer → Bool
   | [] => true
   | L :: rest => L.fields.all (fun f => superOnlyProjected ((flatRow seed rest).map Prod.fst) 0 f.2) &&
       superOnlyProjectedRow seed rest
 
 /-- No layer body and no seed term writes a record literal of a flagged shape itself. -/
-def cleanRow (bad : List String → Bool) (seed : List (String × Term)) (ls : List Layer) : Bool :=
+@[expose] def cleanRow (bad : List String → Bool) (seed : List (String × Term)) (ls : List Layer) : Bool :=
   seed.all (fun f => !recordBad bad f.2) && ls.all fun L => L.fields.all fun f => !recordBad bad f.2
 
 /-- The name lists of the flattened suffix rows: the shapes a `super` row literal has. -/
-def suffixNames (seed : List (String × Term)) : List Layer → List (List String)
+@[expose] def suffixNames (seed : List (String × Term)) : List Layer → List (List String)
   | [] => [(flatRow seed []).map Prod.fst]
   | L :: rest => ((flatRow seed (L :: rest)).map Prod.fst) :: suffixNames seed rest
 
