@@ -611,4 +611,153 @@ theorem ghashDiff_roots_bound (bs₁ bs₂ : List Tower128) (L : Nat) (keys : Li
   rw [hf] at hb
   exact hb
 
+/-!
+## NIST SP 800-38D GHASH in its own representation
+
+`ghashPoly` above runs over the binary tower. GCM's GHASH (NIST SP 800-38D §6.3–6.4; McGrew & Viega, "The
+Galois/Counter Mode of Operation") runs over `GF(2)[x] / (1 + x + x² + x⁷ + x¹²⁸)` with a reflected bit order: in
+a 128-bit block, the leftmost bit (the most significant bit of the first byte) is the coefficient of `x⁰`.
+`ghashBlockToGF128` is that reflection; `gf128Mul` multiplies in the polynomial basis (bit `i` is `xⁱ`);
+`nistGhashMul` is the block product, and `nistGhash` the chained hash `Y ← (Y ⊕ X)·H`.
+-/
+
+/-- A GHASH block to its polynomial: block bit `i`, counted from the left, becomes the coefficient of `xⁱ`. -/
+def ghashBlockToGF128 (b : BitVec 128) : BitVec 128 := b.reverse
+
+/-- A polynomial back to its GHASH block. -/
+def gf128ToGhashBlock (p : BitVec 128) : BitVec 128 := p.reverse
+
+theorem gf128ToGhashBlock_ghashBlockToGF128 (b : BitVec 128) : gf128ToGhashBlock (ghashBlockToGF128 b) = b := by
+  unfold gf128ToGhashBlock ghashBlockToGF128; ext i hi; simp
+
+theorem ghashBlockToGF128_gf128ToGhashBlock (p : BitVec 128) : ghashBlockToGF128 (gf128ToGhashBlock p) = p := by
+  unfold gf128ToGhashBlock ghashBlockToGF128; ext i hi; simp
+
+theorem ghashBlockToGF128_xor (a b : BitVec 128) :
+    ghashBlockToGF128 (a ^^^ b) = ghashBlockToGF128 a ^^^ ghashBlockToGF128 b := by
+  unfold ghashBlockToGF128; ext i hi; simp [BitVec.getElem_reverse, BitVec.getMsbD_xor]
+
+theorem gf128ToGhashBlock_xor (a b : BitVec 128) :
+    gf128ToGhashBlock (a ^^^ b) = gf128ToGhashBlock a ^^^ gf128ToGhashBlock b := by
+  unfold gf128ToGhashBlock; ext i hi; simp [BitVec.getElem_reverse, BitVec.getMsbD_xor]
+
+private theorem xor_xor_cancel (x y c : BitVec 128) : (x ^^^ c) ^^^ (y ^^^ c) = x ^^^ y := by
+  have h : (x ^^^ c) ^^^ (y ^^^ c) = x ^^^ y ^^^ (c ^^^ c) := by ac_rfl
+  rw [h, BitVec.xor_self, BitVec.xor_zero]
+
+private theorem xor_xor_cancel' (x y c : BitVec 128) : (c ^^^ x) ^^^ (c ^^^ y) = x ^^^ y := by
+  have h : (c ^^^ x) ^^^ (c ^^^ y) = x ^^^ y ^^^ (c ^^^ c) := by ac_rfl
+  rw [h, BitVec.xor_self, BitVec.xor_zero]
+
+/-- Multiply by `x`: shift up, and replace an overflowing `x¹²⁸` by `x⁷ + x² + x + 1` (`0x87`). -/
+def gf128MulX (a : BitVec 128) : BitVec 128 := (a <<< 1) ^^^ (if a.msb then 0x87#128 else 0#128)
+
+theorem gf128MulX_xor (a b : BitVec 128) : gf128MulX (a ^^^ b) = gf128MulX a ^^^ gf128MulX b := by
+  unfold gf128MulX
+  rw [BitVec.shiftLeft_xor_distrib, BitVec.msb_xor]
+  cases a.msb <;> cases b.msb <;> simp <;>
+    first | ac_rfl | rw [xor_xor_cancel] | rw [xor_xor_cancel']
+
+/-- Shift-and-add: `Σᵢ bᵢ · xⁱ · a` over the low `n` bits of `b`. -/
+def gf128MulFuel : Nat → BitVec 128 → BitVec 128 → BitVec 128
+  | 0, _, _ => 0#128
+  | n + 1, a, b => (if b.getLsbD 0 then a else 0#128) ^^^ gf128MulFuel n (gf128MulX a) (b >>> 1)
+
+/-- The product in `GF(2)[x] / (1 + x + x² + x⁷ + x¹²⁸)`, polynomial basis. -/
+def gf128Mul (a b : BitVec 128) : BitVec 128 := gf128MulFuel 128 a b
+
+theorem gf128MulFuel_xor_left (n : Nat) (a a' b : BitVec 128) :
+    gf128MulFuel n (a ^^^ a') b = gf128MulFuel n a b ^^^ gf128MulFuel n a' b := by
+  induction n generalizing a a' b with
+  | zero => simp [gf128MulFuel]
+  | succ n ih =>
+    simp only [gf128MulFuel, gf128MulX_xor, ih]
+    cases b.getLsbD 0 <;> simp <;> ac_rfl
+
+theorem gf128MulFuel_xor_right (n : Nat) (a b b' : BitVec 128) :
+    gf128MulFuel n a (b ^^^ b') = gf128MulFuel n a b ^^^ gf128MulFuel n a b' := by
+  induction n generalizing a b b' with
+  | zero => simp [gf128MulFuel]
+  | succ n ih =>
+    simp only [gf128MulFuel, BitVec.ushiftRight_xor_distrib, ih, BitVec.getLsbD_xor]
+    cases b.getLsbD 0 <;> cases b'.getLsbD 0 <;> simp <;>
+      first | ac_rfl | rw [xor_xor_cancel] | rw [xor_xor_cancel']
+
+/-- **`x¹²⁸ = x⁷ + x² + x + 1`, at every split of the exponent**: `xⁱ · x¹²⁸⁻ⁱ = 0x87` for each `i < 128`. -/
+theorem gf128Mul_pow_split (i : Fin 128) :
+    gf128Mul (1#128 <<< i.val) (gf128MulX (1#128 <<< (127 - i.val))) = 0x87#128 := by
+  revert i; decide +kernel
+
+/-- The GHASH block product `X · Y` of SP 800-38D §6.3: reflect, multiply in the polynomial basis, reflect back. -/
+def nistGhashMul (x y : BitVec 128) : BitVec 128 :=
+  gf128ToGhashBlock (gf128Mul (ghashBlockToGF128 x) (ghashBlockToGF128 y))
+
+/-- The reflection carries the block product to the polynomial product. -/
+theorem ghashBlockToGF128_nistGhashMul (x y : BitVec 128) :
+    ghashBlockToGF128 (nistGhashMul x y) = gf128Mul (ghashBlockToGF128 x) (ghashBlockToGF128 y) :=
+  ghashBlockToGF128_gf128ToGhashBlock _
+
+private theorem gf128MulFuel_zero_right (n : Nat) (a : BitVec 128) : gf128MulFuel n a 0#128 = 0#128 := by
+  induction n generalizing a with
+  | zero => rfl
+  | succ n ih => simp [gf128MulFuel, ih]
+
+/-- The block `80 00 … 00` is the polynomial `1`: the identity of the GHASH block product. -/
+theorem nistGhashMul_one (x : BitVec 128) : nistGhashMul x 0x80000000000000000000000000000000#128 = x := by
+  have h1 : ghashBlockToGF128 0x80000000000000000000000000000000#128 = 1#128 := by decide +kernel
+  have e : ∀ a : BitVec 128, gf128Mul a 1#128 =
+      (if (1#128).getLsbD 0 then a else 0#128) ^^^ gf128MulFuel 127 (gf128MulX a) (1#128 >>> 1) := fun _ => rfl
+  have z : (1#128 : BitVec 128) >>> 1 = 0#128 := by decide
+  have o : (1#128 : BitVec 128).getLsbD 0 = true := by decide
+  rw [nistGhashMul, h1, e, z, o, gf128MulFuel_zero_right]
+  simp [gf128ToGhashBlock_ghashBlockToGF128]
+
+theorem nistGhashMul_xor_left (x x' y : BitVec 128) :
+    nistGhashMul (x ^^^ x') y = nistGhashMul x y ^^^ nistGhashMul x' y := by
+  simp only [nistGhashMul, gf128Mul, ghashBlockToGF128_xor, gf128MulFuel_xor_left, gf128ToGhashBlock_xor]
+
+theorem nistGhashMul_xor_right (x y y' : BitVec 128) :
+    nistGhashMul x (y ^^^ y') = nistGhashMul x y ^^^ nistGhashMul x y' := by
+  simp only [nistGhashMul, gf128Mul, ghashBlockToGF128_xor, gf128MulFuel_xor_right, gf128ToGhashBlock_xor]
+
+/-- `GHASH_H(X₁ ‖ … ‖ Xₘ)` of SP 800-38D §6.4: `Y₀ = 0`, `Yᵢ = (Yᵢ₋₁ ⊕ Xᵢ) · H`. -/
+def nistGhash (h : BitVec 128) (blocks : List (BitVec 128)) : BitVec 128 :=
+  blocks.foldl (fun y x => nistGhashMul (y ^^^ x) h) 0#128
+
+private theorem nistGhash_foldl_xor (h : BitVec 128) (xs : List (BitVec 128)) :
+    ∀ (ys : List (BitVec 128)) (y y' : BitVec 128), xs.length = ys.length →
+      (List.zipWith (· ^^^ ·) xs ys).foldl (fun y x => nistGhashMul (y ^^^ x) h) (y ^^^ y') =
+        xs.foldl (fun y x => nistGhashMul (y ^^^ x) h) y ^^^ ys.foldl (fun y x => nistGhashMul (y ^^^ x) h) y' := by
+  induction xs with
+  | nil => intro ys y y' hl; cases ys with
+    | nil => rfl
+    | cons _ _ => cases hl
+  | cons x xs ih =>
+    intro ys y y' hl
+    cases ys with
+    | nil => cases hl
+    | cons x' ys =>
+      simp only [List.zipWith_cons_cons, List.foldl_cons]
+      have e : y ^^^ y' ^^^ (x ^^^ x') = (y ^^^ x) ^^^ (y' ^^^ x') := by ac_rfl
+      rw [e, nistGhashMul_xor_left]
+      exact ih ys _ _ (by simpa using hl)
+
+/-- **GHASH is linear in the message**: the hash of the block-wise XOR of two equally long messages is the XOR
+of their hashes. This is the linearity a GCM forgery bound divides by the key's root count. -/
+theorem nistGhash_xor (h : BitVec 128) (xs ys : List (BitVec 128)) (hl : xs.length = ys.length) :
+    nistGhash h (List.zipWith (· ^^^ ·) xs ys) = nistGhash h xs ^^^ nistGhash h ys := by
+  have := nistGhash_foldl_xor h xs ys 0#128 0#128 hl
+  simpa [nistGhash] using this
+
+/-! McGrew–Viega / SP 800-38D AES-128 test cases 1 and 2 (`K = 0`, `IV = 0`): `H = 66e94bd4…342b2e`. Case 1 hashes
+the single length block `0` to `0`. Case 2 has `C = 0388dace…b2fe78` and length block `0x80`: `X₁ = C·H =
+5e2ec746…53deb7` and `GHASH = f38cbb1a…b0f885`. -/
+
+example : nistGhash 0x66e94bd4ef8a2c3b884cfa59ca342b2e#128 [0#128] = 0#128 := by decide +kernel
+example : nistGhashMul 0x0388dace60b6a392f328c2b971b2fe78#128 0x66e94bd4ef8a2c3b884cfa59ca342b2e#128 =
+    0x5e2ec746917062882c85b0685353deb7#128 := by decide +kernel
+example : nistGhash 0x66e94bd4ef8a2c3b884cfa59ca342b2e#128
+    [0x0388dace60b6a392f328c2b971b2fe78#128, 0x00000000000000000000000000000080#128] =
+    0xf38cbb1ad69223dcc3457ae5b6b0f885#128 := by decide +kernel
+
 end Obend.Crypto.BinaryTower256

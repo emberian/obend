@@ -1103,6 +1103,180 @@ pub fn verify_eq_weighted_sumcheck_ext2(
     })
 }
 
+// ---------------------------------------------------------------------------------------------
+// Width-12 Goldilocks Poseidon2 permutation and 256-bit sponge: the executable twin of
+// `Obend.Crypto.Poseidon2Goldilocks` (`poseidon2Perm12`, `poseidon2Hash32`). Every function below
+// mirrors the Lean definition of the same name; the unit tests pin the byte-identical vectors.
+// ---------------------------------------------------------------------------------------------
+
+/// One SplitMix64 output step (Steele, Lea & Flood, OOPSLA 2014; Vigna's `splitmix64.c`):
+/// `Obend.Crypto.splitMix64Mix`.
+#[inline]
+pub const fn splitmix64_mix(x: u64) -> u64 {
+    let z0 = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let z1 = (z0 ^ (z0 >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    let z2 = (z1 ^ (z1 >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z2 ^ (z2 >> 31)
+}
+
+/// Domain IV of the round-constant generator, ASCII `POS2_GL1` (`poseidon2ConstIV`).
+pub const POSEIDON2_CONST_IV: u64 = 0x504F_5332_5F47_4C31;
+
+/// External rounds on each side of the internal rounds (`R_F = 8` in total).
+pub const POSEIDON2_HALF_EXTERNAL_ROUNDS: u64 = 4;
+
+/// Internal rounds (`R_P = 22`).
+pub const POSEIDON2_INTERNAL_ROUNDS: u64 = 22;
+
+/// `poseidon2ConstWord`: `(tag, round, lane)` absorbed into the IV, one SplitMix64 step after each.
+#[inline]
+pub const fn poseidon2_const_word(tag: u64, round: u64, lane: u64) -> u64 {
+    splitmix64_mix(splitmix64_mix(splitmix64_mix(POSEIDON2_CONST_IV ^ tag) ^ round) ^ lane)
+}
+
+/// `poseidon2ConstAt`: the round-constant word reduced modulo `p`.
+#[inline]
+pub const fn poseidon2_const_at(tag: u64, round: u64, lane: u64) -> Goldilocks {
+    Goldilocks::from_u64_reduced(poseidon2_const_word(tag, round, lane))
+}
+
+/// The width-12 sponge state: lanes `0..8` are the rate, lanes `8..12` the 256-bit capacity.
+pub type Poseidon2State12 = [Goldilocks; 12];
+
+/// `sbox7`: `x ↦ x^7` by four multiplications.
+#[inline]
+pub const fn poseidon2_sbox7(x: Goldilocks) -> Goldilocks {
+    let x2 = x.const_mul(x);
+    let x3 = x2.const_mul(x);
+    let x4 = x2.const_mul(x2);
+    x3.const_mul(x4)
+}
+
+/// `applyM4`: the MDS circulant `circ(2, 3, 1, 1)` on one 4-lane block.
+#[inline]
+fn poseidon2_apply_m4(b: [Goldilocks; 4]) -> [Goldilocks; 4] {
+    let s = (b[0] + b[1]) + (b[2] + b[3]);
+    [
+        s + (b[0] + Goldilocks::TWO * b[1]),
+        s + (b[1] + Goldilocks::TWO * b[2]),
+        s + (b[2] + Goldilocks::TWO * b[3]),
+        s + (b[3] + Goldilocks::TWO * b[0]),
+    ]
+}
+
+/// `applyME`: the external layer `circ(2·M4, M4, M4)`.
+pub fn poseidon2_apply_me(st: &mut Poseidon2State12) {
+    let y0 = poseidon2_apply_m4([st[0], st[1], st[2], st[3]]);
+    let y1 = poseidon2_apply_m4([st[4], st[5], st[6], st[7]]);
+    let y2 = poseidon2_apply_m4([st[8], st[9], st[10], st[11]]);
+    for i in 0..4 {
+        let s = (y0[i] + y1[i]) + y2[i];
+        st[i] = y0[i] + s;
+        st[4 + i] = y1[i] + s;
+        st[8 + i] = y2[i] + s;
+    }
+}
+
+/// `applyMI`: the internal layer `1·1ᵀ + diag(-2, 1, 2, 4, …, 1024)`.
+pub fn poseidon2_apply_mi(st: &mut Poseidon2State12) {
+    let mut s = Goldilocks::ZERO;
+    for x in st.iter() {
+        s += *x;
+    }
+    st[0] = (Goldilocks::TWO * st[0]).const_neg() + s;
+    st[1] += s;
+    let mut d = Goldilocks::TWO;
+    for x in st.iter_mut().skip(2) {
+        *x = d * *x + s;
+        d = d + d;
+    }
+}
+
+/// `externalRound`: add twelve round constants, `x^7` on every lane, then `M_E`.
+pub fn poseidon2_external_round(tag: u64, round: u64, st: &mut Poseidon2State12) {
+    for (lane, x) in st.iter_mut().enumerate() {
+        *x = poseidon2_sbox7(*x + poseidon2_const_at(tag, round, lane as u64));
+    }
+    poseidon2_apply_me(st);
+}
+
+/// `internalRound`: add the round constant to lane 0, `x^7` on lane 0 only, then `M_I`.
+pub fn poseidon2_internal_round(round: u64, st: &mut Poseidon2State12) {
+    st[0] = poseidon2_sbox7(st[0] + poseidon2_const_at(1, round, 0));
+    poseidon2_apply_mi(st);
+}
+
+/// `poseidon2Perm12`: `M_E`, four external rounds (tag 0), 22 internal rounds (tag 1), four external
+/// rounds (tag 2).
+pub fn poseidon2_perm12(st: &mut Poseidon2State12) {
+    poseidon2_apply_me(st);
+    for r in 0..POSEIDON2_HALF_EXTERNAL_ROUNDS {
+        poseidon2_external_round(0, r, st);
+    }
+    for r in 0..POSEIDON2_INTERNAL_ROUNDS {
+        poseidon2_internal_round(r, st);
+    }
+    for r in 0..POSEIDON2_HALF_EXTERNAL_ROUNDS {
+        poseidon2_external_round(2, r, st);
+    }
+}
+
+/// `bytesToLimbs56`: append the `0x01` delimiter, zero-pad to a multiple of seven bytes, and read each
+/// seven-byte chunk big-endian as a limb below `2^56`.
+pub fn bytes_to_limbs56(msg: &[u8]) -> Vec<Goldilocks> {
+    let mut marked: Vec<u8> = Vec::with_capacity(msg.len() + 7);
+    marked.extend_from_slice(msg);
+    marked.push(0x01);
+    while marked.len() % 7 != 0 {
+        marked.push(0x00);
+    }
+    marked
+        .chunks_exact(7)
+        .map(|chunk| Goldilocks(chunk.iter().fold(0u64, |acc, byte| (acc << 8) | *byte as u64)))
+        .collect()
+}
+
+/// `poseidon2Pad`: multi-rate `10*1` padding to a positive multiple of eight limbs. The start marker is
+/// `1`, the end marker `2^56`; when both land in one lane it holds `2^56 + 1`.
+pub fn poseidon2_pad(limbs: &mut Vec<Goldilocks>) {
+    let z = (8 - (limbs.len() + 1) % 8) % 8;
+    if z == 0 {
+        limbs.push(Goldilocks((1u64 << 56) + 1));
+    } else {
+        limbs.push(Goldilocks::ONE);
+        limbs.extend(core::iter::repeat(Goldilocks::ZERO).take(z - 1));
+        limbs.push(Goldilocks(1u64 << 56));
+    }
+}
+
+/// `poseidon2InitState`: zero rate, capacity `(8, 4, 32, "POS2_GL1")`.
+pub const POSEIDON2_INIT_STATE: Poseidon2State12 = {
+    let mut st = [Goldilocks::ZERO; 12];
+    st[8] = Goldilocks(8);
+    st[9] = Goldilocks(4);
+    st[10] = Goldilocks(32);
+    st[11] = Goldilocks(POSEIDON2_CONST_IV);
+    st
+};
+
+/// `poseidon2Hash32`: frame, pad, absorb eight limbs per permutation, squeeze lanes `0..4` big-endian.
+pub fn poseidon2_hash32(msg: &[u8]) -> [u8; 32] {
+    let mut limbs = bytes_to_limbs56(msg);
+    poseidon2_pad(&mut limbs);
+    let mut st = POSEIDON2_INIT_STATE;
+    for block in limbs.chunks_exact(8) {
+        for (lane, limb) in block.iter().enumerate() {
+            st[lane] += *limb;
+        }
+        poseidon2_perm12(&mut st);
+    }
+    let mut out = [0u8; 32];
+    for lane in 0..4 {
+        out[8 * lane..8 * lane + 8].copy_from_slice(&st[lane].to_be_bytes());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1258,5 +1432,104 @@ mod tests {
         .unwrap();
         assert_eq!(w_claim, w_ver);
         assert_eq!(mle_eval_base_at_ext2(&tbl, &w_ver.point).unwrap(), w_ver.expected_val);
+    }
+
+    #[test]
+    fn test_poseidon2_splitmix64_reference_stream() {
+        // Vigna's `splitmix64.c` from state 0.
+        assert_eq!(splitmix64_mix(0), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(splitmix64_mix(0x9E37_79B9_7F4A_7C15), 0x6E78_9E6A_A1B9_65F4);
+        assert_eq!(splitmix64_mix(0x3C6E_F372_FE94_F82A), 0x06C4_5D18_8009_454F);
+    }
+
+    #[test]
+    fn test_poseidon2_round_constants_match_lean() {
+        // `poseidon2ConstWord` at (0,0,0), (1,0,0), (1,1,0), (1,2,0), (2,3,11).
+        assert_eq!(poseidon2_const_word(0, 0, 0), 18276600331543306333);
+        assert_eq!(poseidon2_const_word(1, 0, 0), 17812178848501694915);
+        assert_eq!(poseidon2_const_word(1, 1, 0), 2688800452358182541);
+        assert_eq!(poseidon2_const_word(1, 2, 0), 4196640518521023400);
+        assert_eq!(poseidon2_const_word(2, 3, 11), 7448626387614558066);
+        // The internal constants are not an arithmetic progression (`poseidon2ConstAt_not_affine`).
+        let c0 = poseidon2_const_at(1, 0, 0);
+        let c1 = poseidon2_const_at(1, 1, 0);
+        let c2 = poseidon2_const_at(1, 2, 0);
+        assert_ne!(c1 - c0, c2 - c1);
+    }
+
+    #[test]
+    fn test_poseidon2_perm12_matches_lean() {
+        let mut zero = [Goldilocks::ZERO; 12];
+        poseidon2_perm12(&mut zero);
+        let expected_zero: [u64; 12] = [
+            444626622888223479, 10486189390627733761, 5399253379101132897, 5052010181030417489,
+            6267397916963039069, 9245911245446346418, 9661705423445490201, 787089484585814203,
+            14953692268052641311, 11458212182116269477, 16934754160153525625, 6948793053817514326,
+        ];
+        assert_eq!(zero.map(Goldilocks::to_canonical_u64), expected_zero);
+
+        let mut counting = [Goldilocks::ZERO; 12];
+        for (i, x) in counting.iter_mut().enumerate() {
+            *x = Goldilocks::from_u64_reduced(i as u64);
+        }
+        poseidon2_perm12(&mut counting);
+        let expected_counting: [u64; 12] = [
+            12427618818045938679, 15603055080602884714, 13440107678219667309, 8886947539732114456,
+            14710374340000099479, 10111918623281920586, 1604190142837255372, 14400339433171367428,
+            13181657164602338457, 12801330883977696413, 8886499513080244401, 2541968083255470153,
+        ];
+        assert_eq!(counting.map(Goldilocks::to_canonical_u64), expected_counting);
+    }
+
+    #[test]
+    fn test_poseidon2_framing_and_padding_match_lean() {
+        let mut limbs = bytes_to_limbs56(&[0x01, 0x02, 0x03]);
+        assert_eq!(limbs, vec![Goldilocks(283686901645312)]);
+        poseidon2_pad(&mut limbs);
+        let padded: Vec<u64> = limbs.iter().map(|x| x.to_canonical_u64()).collect();
+        assert_eq!(padded, vec![283686901645312, 1, 0, 0, 0, 0, 0, 72057594037927936]);
+        // Seven limbs: start and end marker share the eighth lane.
+        let mut seven = vec![Goldilocks::ZERO; 7];
+        poseidon2_pad(&mut seven);
+        assert_eq!(seven.len(), 8);
+        assert_eq!(seven[7].to_canonical_u64(), (1u64 << 56) + 1);
+        assert_eq!(
+            POSEIDON2_INIT_STATE.map(Goldilocks::to_canonical_u64),
+            [0, 0, 0, 0, 0, 0, 0, 0, 8, 4, 32, 5786935522006354993]
+        );
+    }
+
+    #[test]
+    fn test_poseidon2_hash32_matches_lean() {
+        assert_eq!(
+            poseidon2_hash32(&[]),
+            [
+                138, 190, 114, 201, 171, 117, 245, 165, 115, 111, 42, 219, 119, 171, 10, 76, 186, 173, 182,
+                128, 209, 69, 108, 220, 169, 239, 117, 130, 81, 43, 90, 65
+            ]
+        );
+        assert_eq!(
+            poseidon2_hash32(&[0x00]),
+            [
+                233, 139, 182, 115, 89, 72, 21, 126, 245, 149, 62, 120, 26, 254, 106, 209, 111, 96, 153, 251,
+                141, 207, 186, 100, 74, 174, 87, 99, 85, 43, 117, 48
+            ]
+        );
+        assert_eq!(
+            poseidon2_hash32(&[0x01, 0x02, 0x03]),
+            [
+                196, 180, 177, 170, 216, 21, 133, 248, 62, 149, 42, 39, 133, 17, 81, 112, 144, 59, 209, 93,
+                95, 26, 110, 112, 237, 219, 50, 120, 128, 103, 142, 202
+            ]
+        );
+        // 65 bytes: ten message limbs, two rate blocks.
+        let long: Vec<u8> = (0u8..65).collect();
+        assert_eq!(
+            poseidon2_hash32(&long),
+            [
+                39, 156, 89, 149, 6, 55, 81, 19, 223, 99, 122, 54, 228, 229, 22, 100, 172, 170, 142, 201, 25,
+                219, 70, 102, 137, 73, 207, 135, 141, 48, 175, 71
+            ]
+        );
     }
 }

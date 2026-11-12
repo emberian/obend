@@ -3,6 +3,9 @@ import Obend.Hardware.TapeoutPipeline
 import Obend.Hardware.Tpu.CryptoSystolic
 import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
 import Obend.Hardware.Gpu.Rdna2.DppShuffle
+import Obend.Crypto.Poseidon2Goldilocks
+import Obend.Crypto.BinaryTower256
+import Obend.Crypto.DarkBazaar
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
@@ -15,6 +18,8 @@ import Obend.Tactic.Tooth
    the RTL and a geometry defect in the placement are refused while every `TapeoutConfig` sample input is clean.
 3. Accelerators: TPU allocation bounds and validated GEMM/Bailey tile layouts; RDNA2 kernels checked from their
    machine words; the DPP16 modifier dword against LLVM MC encodings.
+4. Crypto: SplitMix64 Poseidon2 round constants and the vectors shared with the Rust twin
+   (`crates/obend-crypto-exec/src/goldilocks.rs`); NIST SP 800-38D GHASH; the statistical smudging bound.
 -/
 
 namespace Obend.Tests.Seam4aFpgaTapeoutCryptoTest
@@ -321,5 +326,114 @@ open Obend.Hardware.Gpu.Rdna2 Obend.Hardware.Gpu.Rdna2.Async Obend.Hardware.Gpu.
   by mutation Obend.Hardware.Gpu.Rdna2.Dpp.verifyDppWordShuffle := fun _ _ src _ => some src
 
 end Rdna2
+
+/-! ## 4. Poseidon2 constants and vectors, NIST GHASH, smudging -/
+section Crypto
+open Obend.Crypto Obend.Apps.ZkNtt
+
+-- SplitMix64 reference stream from state 0 (Vigna, `splitmix64.c`).
+theorem splitMix64_reference_stream :
+    splitMix64Mix 0 = 0xE220A8397B1DCDAF ∧ splitMix64Mix 0x9E3779B97F4A7C15 = 0x6E789E6AA1B965F4 ∧
+    splitMix64Mix 0x3C6EF372FE94F82A = 0x06C45D188009454F := by decide
+/-- Number of set bits. -/
+def popcount64 (x : UInt64) : Nat := (List.range 64).countP fun i => (x >>> i.toUInt64) &&& 1 == 1
+-- Avalanche: flipping any single input bit of `0` flips between 20 and 44 of the 64 output bits.
+#guard (List.range 64).all fun i =>
+  let flipped := popcount64 (splitMix64Mix 0 ^^^ splitMix64Mix (1 <<< i.toUInt64))
+  20 ≤ flipped && flipped ≤ 44
+-- Round-constant words shared with `test_poseidon2_round_constants_match_lean`.
+theorem poseidon2_const_words :
+    [poseidon2ConstWord 0 0 0, poseidon2ConstWord 1 0 0, poseidon2ConstWord 1 1 0, poseidon2ConstWord 1 2 0,
+     poseidon2ConstWord 2 3 11] =
+    [18276600331543306333, 17812178848501694915, 2688800452358182541, 4196640518521023400,
+     7448626387614558066] := by decide
+-- All 48 + 22 + 48 round constants are distinct.
+#guard (((List.range 4).flatMap fun r => (List.range 12).map fun l => (poseidon2ConstAt 0 r l).val) ++
+  ((List.range 22).map fun r => (poseidon2ConstAt 1 r 0).val) ++
+  ((List.range 4).flatMap fun r => (List.range 12).map fun l => (poseidon2ConstAt 2 r l).val)).eraseDups.length == 118
+
+/-- The state `0, 1, …, 11`. -/
+def countingState : Poseidon2State12 :=
+  ⟨⟨Goldilocks.ofNat 0, Goldilocks.ofNat 1, Goldilocks.ofNat 2, Goldilocks.ofNat 3⟩,
+   ⟨Goldilocks.ofNat 4, Goldilocks.ofNat 5, Goldilocks.ofNat 6, Goldilocks.ofNat 7⟩,
+   ⟨Goldilocks.ofNat 8, Goldilocks.ofNat 9, Goldilocks.ofNat 10, Goldilocks.ofNat 11⟩⟩
+
+-- The vectors of `test_poseidon2_perm12_matches_lean` and `test_poseidon2_hash32_matches_lean`.
+theorem poseidon2Perm12_zero_kat :
+    (poseidon2Perm12 ⟨lane4Zero, lane4Zero, lane4Zero⟩).toList.map (·.val) =
+    [444626622888223479, 10486189390627733761, 5399253379101132897, 5052010181030417489, 6267397916963039069,
+     9245911245446346418, 9661705423445490201, 787089484585814203, 14953692268052641311, 11458212182116269477,
+     16934754160153525625, 6948793053817514326] := by decide +kernel
+theorem poseidon2Perm12_counting_kat :
+    (poseidon2Perm12 countingState).toList.map (·.val) =
+    [12427618818045938679, 15603055080602884714, 13440107678219667309, 8886947539732114456, 14710374340000099479,
+     10111918623281920586, 1604190142837255372, 14400339433171367428, 13181657164602338457, 12801330883977696413,
+     8886499513080244401, 2541968083255470153] := by decide +kernel
+theorem poseidon2Hash32_empty_kat : poseidon2Hash32 [] =
+    [138, 190, 114, 201, 171, 117, 245, 165, 115, 111, 42, 219, 119, 171, 10, 76, 186, 173, 182, 128, 209, 69, 108,
+     220, 169, 239, 117, 130, 81, 43, 90, 65] := by decide +kernel
+theorem poseidon2Hash32_zero_byte_kat : poseidon2Hash32 [0x00] =
+    [233, 139, 182, 115, 89, 72, 21, 126, 245, 149, 62, 120, 26, 254, 106, 209, 111, 96, 153, 251, 141, 207, 186,
+     100, 74, 174, 87, 99, 85, 43, 117, 48] := by decide +kernel
+theorem poseidon2Hash32_three_byte_kat : poseidon2Hash32 [0x01, 0x02, 0x03] =
+    [196, 180, 177, 170, 216, 21, 133, 248, 62, 149, 42, 39, 133, 17, 81, 112, 144, 59, 209, 93, 95, 26, 110, 112,
+     237, 219, 50, 120, 128, 103, 142, 202] := by decide +kernel
+theorem poseidon2Hash32_two_block_kat : poseidon2Hash32 ((List.range 65).map UInt8.ofNat) =
+    [39, 156, 89, 149, 6, 55, 81, 19, 223, 99, 122, 54, 228, 229, 22, 100, 172, 170, 142, 201, 25, 219, 70, 102,
+     137, 73, 207, 135, 141, 48, 175, 71] := by decide +kernel
+#guard (poseidon2PadBytes [0x01, 0x02, 0x03]).map (·.val) == [283686901645312, 1, 0, 0, 0, 0, 0, 72057594037927936]
+#guard poseidon2Perm12Inv (poseidon2Perm12 countingState) == countingState
+
+-- Without the mixing step the internal constants are `v, v + 1, v + 2`: an arithmetic progression.
+#tooth Obend.Crypto.poseidon2ConstAt_not_affine by mutation Obend.Crypto.splitMix64Mix := fun x => x
+-- An affine generator.
+#tooth Obend.Crypto.poseidon2ConstAt_not_affine
+  by mutation Obend.Crypto.poseidon2ConstAt := fun _ round _ => Goldilocks.ofNat (5 + 3 * round)
+
+open Obend.Crypto.BinaryTower256 in
+/-- McGrew–Viega / SP 800-38D AES-128 test case 2: `H`, `C`, the length block, `X₁` and `GHASH`. -/
+theorem nist_gcm_test_case_2_ghash :
+    nistGhashMul 0x0388dace60b6a392f328c2b971b2fe78#128 0x66e94bd4ef8a2c3b884cfa59ca342b2e#128 =
+      0x5e2ec746917062882c85b0685353deb7#128 ∧
+    nistGhash 0x66e94bd4ef8a2c3b884cfa59ca342b2e#128 [0x0388dace60b6a392f328c2b971b2fe78#128, 0x80#128] =
+      0xf38cbb1ad69223dcc3457ae5b6b0f885#128 := by decide +kernel
+open Obend.Crypto.BinaryTower256 in
+-- The block `80 00 … 00` is the polynomial `1`, the identity of the block product; `40 00 … 00` is `x`.
+#guard ghashBlockToGF128 0x80000000000000000000000000000000#128 == 1#128 &&
+  nistGhashMul 0x0388dace60b6a392f328c2b971b2fe78#128 0x80000000000000000000000000000000#128 ==
+    0x0388dace60b6a392f328c2b971b2fe78#128 &&
+  ghashBlockToGF128 0x40000000000000000000000000000000#128 == 2#128
+open Obend.Crypto.BinaryTower256 in
+-- The product is commutative and associative on the test-case blocks.
+#guard
+  let h := 0x66e94bd4ef8a2c3b884cfa59ca342b2e#128
+  let c := 0x0388dace60b6a392f328c2b971b2fe78#128
+  let t := 0xf38cbb1ad69223dcc3457ae5b6b0f885#128
+  nistGhashMul h c == nistGhashMul c h && nistGhashMul (nistGhashMul h c) t == nistGhashMul h (nistGhashMul c t)
+
+-- Dropping the reduction by `x⁷ + x² + x + 1`.
+#tooth Obend.Crypto.BinaryTower256.gf128Mul_pow_split
+  by mutation Obend.Crypto.BinaryTower256.gf128MulX := fun a => a <<< 1
+-- Dropping the bit reflection.
+#tooth Obend.Crypto.BinaryTower256.nistGhashMul_one
+  by mutation Obend.Crypto.BinaryTower256.ghashBlockToGF128 := fun b => b
+
+/-- A configuration whose smudging range is `2^44`. -/
+def smudgeCfg : ThresholdDecryptConfig :=
+  { params := ⟨4, 2 ^ 54, 256⟩, quorum := 3, encNoiseBound := 8, smudgeBound := 2 ^ 43, secBits := 40 }
+-- Sensitivity 16 is covered (16 · 2^40 = 2^44 ≤ 2^44 + 1); sensitivity 17 is not.
+#guard checkRenyiSmudgeSecurity smudgeCfg 16
+#guard checkRenyiSmudgeSecurity smudgeCfg 17 == false
+#guard smudgedOverlapMass 5 10 13 == 8        -- [5, 15] ∩ [8, 18] = [8, 15]
+#guard smudgedOverlapMass 5 10 30 == 0        -- disjoint ranges
+
+#tooth Obend.Crypto.renyiSmudgingBound_sound
+  by mutation Obend.Crypto.checkRenyiSmudgeSecurity := fun _ _ => true
+-- A bound that forgets `secBits`.
+#tooth Obend.Crypto.renyiSmudgingBound_sound
+  by mutation Obend.Crypto.checkRenyiSmudgeSecurity :=
+    fun cfg seatSensitivity => decide (seatSensitivity ≤ 2 * cfg.smudgeBound + 1)
+
+end Crypto
 
 end Obend.Tests.Seam4aFpgaTapeoutCryptoTest

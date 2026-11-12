@@ -854,12 +854,52 @@ private theorem internalRound_internalRoundInv (rc : Goldilocks) (st : Poseidon2
      (applyMIInv st).b1, (applyMIInv st).b2⟩ = st
   rw [internalRound_step_cancel rc (applyMIInv st), applyMI_applyMIInv]
 
-/-- Domain-separated SplitMix64-derived canonical round constant generator over `Goldilocks`
-    (produces distinct non-zero constants across all external and internal round indices). -/
+/-- One SplitMix64 output step (Steele, Lea & Flood, "Fast Splittable Pseudorandom Number Generators",
+    OOPSLA 2014; Vigna's reference `splitmix64.c`): add the golden gamma, then the xor-shift-multiply finalizer.
+    From state `0` the reference stream is `0xE220A8397B1DCDAF, 0x6E789E6AA1B965F4, 0x06C45D188009454F`. -/
+def splitMix64Mix (x : UInt64) : UInt64 :=
+  let z0 := x + 0x9E3779B97F4A7C15
+  let z1 := (z0 ^^^ (z0 >>> 30)) * 0xBF58476D1CE4E5B9
+  let z2 := (z1 ^^^ (z1 >>> 27)) * 0x94D049BB133111EB
+  z2 ^^^ (z2 >>> 31)
+
+example : splitMix64Mix 0 = 0xE220A8397B1DCDAF ∧ splitMix64Mix 0x9E3779B97F4A7C15 = 0x6E789E6AA1B965F4 ∧
+    splitMix64Mix 0x3C6EF372FE94F82A = 0x06C45D188009454F := by decide
+
+/-- Domain IV of the round-constant generator: ASCII `POS2_GL1`. -/
+def poseidon2ConstIV : UInt64 := 0x504F53325F474C31
+
+/-- The 64-bit round-constant word: `(tag, round, lane)` absorbed one at a time into the IV, a SplitMix64 step
+    after each. `tag` is `0` for the initial external rounds, `1` for the internal rounds, `2` for the terminal. -/
+def poseidon2ConstWord (tag round lane : Nat) : UInt64 :=
+  splitMix64Mix (splitMix64Mix (splitMix64Mix (poseidon2ConstIV ^^^ UInt64.ofNat tag) ^^^ UInt64.ofNat round) ^^^
+    UInt64.ofNat lane)
+
+/-- Round constant: the SplitMix64 word reduced modulo `p` (a word in `[p, 2^64)` has probability `2^-32`). -/
 def poseidon2ConstAt (tag round lane : Nat) : Goldilocks :=
-  let seed := (0x9E3779B97F4A7C15 * (tag + 1) + 0xBF58476D1CE4E5B9 * (round + 1) +
-               0x94D049BB133111EB * (lane + 1) + 0x517CC1B727220A95) % (2 ^ 64)
-  Goldilocks.ofNat (seed + 1)
+  Goldilocks.ofNat (poseidon2ConstWord tag round lane).toNat
+
+/-- **The round-constant generator is not affine in the round index.** No field elements `a`, `b` make
+    `a + b·r` reproduce the internal round constants: the first three are not in arithmetic progression. (The
+    generator this replaces was `a + b·r` modulo `2^64`.) -/
+theorem poseidon2ConstAt_not_affine (a b : Goldilocks) :
+    ¬ ∀ r : Nat, poseidon2ConstAt 1 r 0 = Goldilocks.add a (Goldilocks.mul b (Goldilocks.ofNat r)) := by
+  intro h
+  have key : ((poseidon2ConstAt 1 0 0).val + (poseidon2ConstAt 1 2 0).val) % goldilocksPrime ≠
+      (2 * (poseidon2ConstAt 1 1 0).val) % goldilocksPrime := by decide +kernel
+  have h0 := congrArg Goldilocks.val (h 0)
+  have h1 := congrArg Goldilocks.val (h 1)
+  have h2 := congrArg Goldilocks.val (h 2)
+  rw [Goldilocks.add_val, Goldilocks.mul_val] at h0 h1 h2
+  have o0 : (Goldilocks.ofNat 0).val = 0 := by decide
+  have o1 : (Goldilocks.ofNat 1).val = 1 := by decide
+  have o2 : (Goldilocks.ofNat 2).val = 2 := by decide
+  rw [o0] at h0; rw [o1] at h1; rw [o2] at h2
+  apply key; rw [h0, h1, h2]
+  have ha := a.isLt
+  have hb := b.isLt
+  simp only [goldilocksPrime] at *
+  omega
 
 def poseidon2ExtRoundConst (tag round : Nat) : Poseidon2State12 :=
   ⟨⟨poseidon2ConstAt tag round 0, poseidon2ConstAt tag round 1,
@@ -1245,6 +1285,27 @@ theorem poseidon2Hash32_length (msg : List UInt8) :
     (poseidon2Hash32 msg).length = 32 := by
   unfold poseidon2Hash32 squeeze32Bytes
   simp [length_be]
+
+/-! Known answers, byte-identical to `poseidon2_perm12` and `poseidon2_hash32` in
+`crates/obend-crypto-exec/src/goldilocks.rs`: the permutation of the zero state, and the digests of `[]`, `[0x00]`,
+`[0x01, 0x02, 0x03]` and the 65 bytes `0x00 … 0x40` (two rate blocks). -/
+
+example : (poseidon2Perm12 ⟨lane4Zero, lane4Zero, lane4Zero⟩).toList.map (·.val) =
+    [444626622888223479, 10486189390627733761, 5399253379101132897, 5052010181030417489, 6267397916963039069,
+     9245911245446346418, 9661705423445490201, 787089484585814203, 14953692268052641311, 11458212182116269477,
+     16934754160153525625, 6948793053817514326] := by decide +kernel
+example : poseidon2Hash32 [] =
+    [138, 190, 114, 201, 171, 117, 245, 165, 115, 111, 42, 219, 119, 171, 10, 76, 186, 173, 182, 128, 209, 69, 108,
+     220, 169, 239, 117, 130, 81, 43, 90, 65] := by decide +kernel
+example : poseidon2Hash32 [0x00] =
+    [233, 139, 182, 115, 89, 72, 21, 126, 245, 149, 62, 120, 26, 254, 106, 209, 111, 96, 153, 251, 141, 207, 186,
+     100, 74, 174, 87, 99, 85, 43, 117, 48] := by decide +kernel
+example : poseidon2Hash32 [0x01, 0x02, 0x03] =
+    [196, 180, 177, 170, 216, 21, 133, 248, 62, 149, 42, 39, 133, 17, 81, 112, 144, 59, 209, 93, 95, 26, 110, 112,
+     237, 219, 50, 120, 128, 103, 142, 202] := by decide +kernel
+example : poseidon2Hash32 ((List.range 65).map UInt8.ofNat) =
+    [39, 156, 89, 149, 6, 55, 81, 19, 223, 99, 122, 54, 228, 229, 22, 100, 172, 170, 142, 201, 25, 219, 70, 102,
+     137, 73, 207, 135, 141, 48, 175, 71] := by decide +kernel
 
 /-- Bundled `Hash32` instance plugging `poseidon2Hash32` directly into `CanopyMerklePCS` / `evalDigest32`. -/
 @[expose] def poseidon2CanopyHash32 : Hash32 where
