@@ -11,6 +11,7 @@ public import Obend.Core.Bidirectional
 public import Obend.Core.Packet
 public import Obend.Core.Machine
 public import Obend.Core.MachineFast
+public import Obend.Core.MachineReify
 public import Obend.Core.Data
 public import Obend.Core.Checkpoint
 public import Obend.Core.Collect
@@ -153,6 +154,10 @@ public import Obend.Polis.VerkleUmem
 public import Obend.Polis.CapTP
 public import Obend.Polis.HouyhnhnmTurn
 public import Obend.Polis.HouyhnhnmMonitor
+public import Obend.Metatheory.PinsAndQuiescence
+public import Obend.Metatheory.SponsorAndMigration
+public import Obend.Metatheory.StratifiedCut
+public import Obend.Metatheory.LiveEvolutionAndLink
 public import Obend.Polis.ZoeSeatSettlement
 public import Obend.Polis.GrainPowerbox
 public import Obend.Polis.EpistemicVouchMarket

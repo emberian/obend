@@ -24,6 +24,7 @@ subsystems = [
   "Crypto",
   "Trailblaze",
   "Polis",
+  "Metatheory",
   "SymbolicZk",
   "ClusterGov",
   "Codec",
@@ -1358,6 +1359,62 @@ subsystem = "Leaf"
 module = "Obend.Leaf.SelfApplicableMixCore"
 theorem = "unrollPowInterp_specializes_5"
 description = "Non-identity recursive `mix` specialization (`unrollPowInterp_specializes_5`) unrolling a loop-based exponentiation interpreter at static `n = 5` into straight-line multiplication."
+
+[[apex]]
+id = "core-machine-reify-dag-sound"
+subsystem = "Core"
+module = "Obend.Core.MachineReify"
+theorem = "reifyMachineDag_sound"
+description = "DAG-preserving `reifyMachineDag` (`reifyMachineDag_sound`) handling cyclic `.fix` knots via finite-set visited tables and preserving diamond sharing in `O(d)` size."
+
+[[apex]]
+id = "vault-form-peval-redacted-zero-secret-leak"
+subsystem = "Vault"
+module = "Obend.Vault.Form"
+theorem = "pevalRedacted_zero_secret_leak"
+description = "Secret-redacted partial evaluation (`pevalRedacted_zero_secret_leak`) eliminating `subN` constant underflow side-channels and dynamic `.field (.hole h) f` secret-page bypasses."
+
+[[apex]]
+id = "polis-houyhnhnm-monitor-trace-cap-confined"
+subsystem = "Polis"
+module = "Obend.Polis.HouyhnhnmMonitor"
+theorem = "monitorTrace_cap_confined"
+description = "Multi-turn `ValidMonitorTrace` capability confinement (`monitorTrace_cap_confined`) proving sticky `inHoneypot` permanently suppresses parent `committedEffects` across all future turns."
+
+[[apex]]
+id = "polis-houyhnhnm-honeypot-indistinguishable"
+subsystem = "Polis"
+module = "Obend.Polis.HouyhnhnmMonitor"
+theorem = "virtualized_honeypot_indistinguishable_to_guest"
+description = "Virtualized pin-interposition honeypot full abstraction (`virtualized_honeypot_indistinguishable_to_guest`) proving guest-carrier observational indistinguishability alongside irreversible outer taint."
+
+[[apex]]
+id = "metatheory-pins-horizon-quiescence"
+subsystem = "Metatheory"
+module = "Obend.Metatheory.PinsAndQuiescence"
+theorem = "foldHorizon_quiescent_and_observer_invariant"
+description = "Horizon contraction & coarse-vs-fine observer invariance (`foldHorizon_quiescent_and_observer_invariant`) across quiescent pin boundaries."
+
+[[apex]]
+id = "metatheory-sponsor-regime-migration"
+subsystem = "Metatheory"
+module = "Obend.Metatheory.SponsorAndMigration"
+theorem = "migrateRegime_preserves_semantics_and_full_abstraction"
+description = "Live cross-regime migration (`migrateRegime_preserves_semantics_and_full_abstraction`) preserving operational semantics and observational full abstraction under sponsor tower confinement."
+
+[[apex]]
+id = "metatheory-stratified-cut-blind-spots-closed"
+subsystem = "Metatheory"
+module = "Obend.Metatheory.StratifiedCut"
+theorem = "distributed_cut_blind_spots_closed"
+description = "7-regime (`C0_LocalInline` through `C6_PhysicalPassivity`) stratified distributed cut soundness (`distributed_cut_blind_spots_closed`) closing cross-regime boundary blind spots."
+
+[[apex]]
+id = "metatheory-schema-morphism-blocks-confused-deputy"
+subsystem = "Metatheory"
+module = "Obend.Metatheory.LiveEvolutionAndLink"
+theorem = "schemaMorphism_blocks_confused_deputy_caveat_drop"
+description = "Cambria `SchemaMorphism` live evolution safety (`schemaMorphism_blocks_confused_deputy_caveat_drop`) preventing contravariant caveat drops and confused-deputy escalation across live upgrades."
 
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)

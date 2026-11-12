@@ -190,6 +190,7 @@ import Obend.Core.Invariant
 import Obend.Core.LegacyAgreement
 import Obend.Core.Machine
 import Obend.Core.MachineFast
+import Obend.Core.MachineReify
 import Obend.Core.MachineTyping
 import Obend.Core.Nominal
 import Obend.Core.Packet
@@ -539,6 +540,10 @@ import Obend.Lower.Syntax
 import Obend.Lower.Transport
 import Obend.Lower.Typing
 import Obend.Main
+import Obend.Metatheory.LiveEvolutionAndLink
+import Obend.Metatheory.PinsAndQuiescence
+import Obend.Metatheory.SponsorAndMigration
+import Obend.Metatheory.StratifiedCut
 import Obend.OS.Sel4MicrokitKernel
 import Obend.OS.Sel4MicrokitKernelCore
 import Obend.Paco.GPaco
