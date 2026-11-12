@@ -1086,6 +1086,27 @@ module = "Obend.Hardware.PipelinedRisc"
 theorem = "pipelinedRiscRtl_step_refines"
 description = "Synthesizable `RtlModule` netlist for the 5-stage forwarding RISC processor cycle-accurately refines `stepPipeline` across every architectural and pipeline latch."
 
+[[apex]]
+id = "hardware-pipelined-gl-butterfly-latency4"
+subsystem = "Hardware"
+module = "Obend.Hardware.PipelinedZkCrypto"
+theorem = "pipelinedGlButterfly_latency4_sound"
+description = "4-stage pipelined Goldilocks NTT butterfly `RtlModule` closes 333 MHz 7nm SS timing and produces exact `(u + omega*v, u - omega*v) mod p` at II=1, latency=4."
+
+[[apex]]
+id = "hardware-wiedemann-binary-tower-inv"
+subsystem = "Hardware"
+module = "Obend.Hardware.PipelinedZkCrypto"
+theorem = "towerMul_inv"
+description = "Recursive Wiedemann binary tower `GF(2^(2^k))` commutative field multiplication and constructive Fermat/Itoh-Tsujii inversion (`towerMul k a (towerInv k a) = 1`)."
+
+[[apex]]
+id = "hardware-gf2-64-tower-mul-rtl"
+subsystem = "Hardware"
+module = "Obend.Hardware.PipelinedZkCrypto"
+theorem = "gf2_64TowerMulRtl_eq_towerMul"
+description = "Synthesizable Karatsuba-cascaded `GF(2^64)` Wiedemann binary tower multiplier `RtlModule` evaluates identically to `towerMul 6`."
+
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)
 # ==============================================================================

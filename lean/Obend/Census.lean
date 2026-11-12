@@ -399,6 +399,7 @@ import Obend.Hardware.PCB
 import Obend.Hardware.Photonics
 import Obend.Hardware.PipelinedRisc
 import Obend.Hardware.PipelinedRiscCore
+import Obend.Hardware.PipelinedZkCrypto
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.Process
 import Obend.Hardware.QuantumMatter
