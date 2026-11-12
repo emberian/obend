@@ -1,7 +1,8 @@
 module
 public import Obend.Doc.Structured
 public import Obend.Slot.SupportSheaf
-public import Obend.Spec.Sha256
+public import Obend.Vault.FrustumMembrane
+public import Std.Data.String.ToNat
 public import Std.Data.TreeMap.Lemmas
 public import Std.Data.TreeSet.Lemmas
 
@@ -11,15 +12,58 @@ and lossless JSON. IDs encode the supplied topological schedule; body edits reta
 Use `admitNotebook` at ingress. Cache copies take constant time per object; publishing cached exports
 and reading inputs use balanced tables. Total sweep work is O((cells + bindings) log symbols), plus
 kernel and receipt work for dirty cells only. The executable refinements are selected by `csimp`.
+
+A cell is a `Doc.Graph` atom: `CellId` is `AtomId`, and `cellAddress` is its one address in a
+`FrustumMembrane` world (`atomOfAddress` inverts it, and accepts nothing else). A receipt is the
+256-bit cSHAKE256 of the cell, its inputs and its outputs, every field length-framed, under its own
+customization (`receipt_binds`). `Vault.TransclusionAndMirror` snips a viewer's frustum out of a
+notebook.
 -/
 public section
 namespace Obend.Doc.Reactive
 open Lean (Json)
+open Obend.Vault.FrustumMembrane (utf8_injective)
+open Obend.Crypto (leb128 leb128_prefix_inj encodeListField encodeListField_prefix_inj)
+open Obend.Digest.Cshake256 (cshake256Bytes cshake256Bytes_length)
+open Obend.Digest.HashBytes (CollisionAmong ofBE ofBE_lt)
 set_option autoImplicit false
 
-abbrev CellId := Nat
+/-- A notebook cell is an atom of the document graph. -/
+abbrev CellId := AtomId
 abbrev SymbolName := String
 abbrev Environment := SymbolName → Int
+
+/-- **The address of an atom in a membrane world**: its decimal numeral. -/
+def cellAddress (a : CellId) : Obend.Vault.FrustumMembrane.CellId := Nat.repr a
+
+/-- The atom a membrane cell id addresses. Only the canonical numeral of an atom is an address. -/
+def atomOfAddress (s : Obend.Vault.FrustumMembrane.CellId) : Option CellId :=
+  match s.toNat? with
+  | some a => if Nat.repr a = s then some a else none
+  | none => none
+
+theorem atomOfAddress_cellAddress (a : CellId) : atomOfAddress (cellAddress a) = some a := by
+  simp [atomOfAddress, cellAddress]
+
+/-- A membrane id that addresses an atom is that atom's address: the two id spaces correspond one
+to one on the image of `cellAddress`. -/
+theorem cellAddress_of_atomOfAddress {s : Obend.Vault.FrustumMembrane.CellId} {a : CellId}
+    (h : atomOfAddress s = some a) : cellAddress a = s := by
+  unfold atomOfAddress at h
+  cases hn : s.toNat? with
+  | none => simp [hn] at h
+  | some n =>
+    simp only [hn] at h
+    by_cases hr : Nat.repr n = s
+    · simp only [hr, ↓reduceIte, Option.some.injEq] at h
+      rw [← h]
+      exact hr
+    · simp [hr] at h
+
+theorem cellAddress_injective {a b : CellId} (h : cellAddress a = cellAddress b) : a = b := by
+  have ha := atomOfAddress_cellAddress a
+  rw [h, atomOfAddress_cellAddress] at ha
+  exact (Option.some.inj ha).symm
 
 /-- Integer and fixed-unit arithmetic. Inputs index the declared support, never the world. -/
 inductive Opcode where
@@ -230,10 +274,123 @@ theorem notebook_roundtrip_obnb_json (nb : ReactiveNotebook) :
   simp [encodeNotebookObnbJson, decodeNotebookObnbJson, jsonFields, list_json_roundtrip,
     bind, Except.bind, pure, Except.pure]
 
+/-! Receipt preimages. Every field is self-delimiting, so the preimage determines the cell, its
+inputs and its outputs (`cellReceiptPreimage_injective`). -/
+
+/-- A self-delimiting encoder: equal encodings, whatever follows them, are of equal values. -/
+def Framed {α : Type} (enc : α → List UInt8) : Prop :=
+  ∀ a b r₁ r₂, enc a ++ r₁ = enc b ++ r₂ → a = b ∧ r₁ = r₂
+
+/-- Each element tagged and framed; the list closed by a zero tag. -/
+def frameList {α : Type} (enc : α → List UInt8) : List α → List UInt8
+  | [] => [0]
+  | x :: xs => 1 :: (enc x ++ frameList enc xs)
+
+theorem frameList_framed {α : Type} {enc : α → List UInt8} (h : Framed enc) :
+    Framed (frameList enc) := by
+  intro a
+  induction a with
+  | nil =>
+    intro b r₁ r₂ e
+    cases b with
+    | nil => exact ⟨rfl, by simpa [frameList] using e⟩
+    | cons y ys => simp [frameList] at e
+  | cons x xs ih =>
+    intro b r₁ r₂ e
+    cases b with
+    | nil => simp [frameList] at e
+    | cons y ys =>
+      simp only [frameList, List.cons_append, List.cons.injEq, true_and, List.append_assoc] at e
+      obtain ⟨hxy, e₁⟩ := h _ _ _ _ e
+      obtain ⟨hrest, e₂⟩ := ih _ _ _ e₁
+      exact ⟨by rw [hxy, hrest], e₂⟩
+
+/-- Integers as naturals: non-negatives even, negatives odd. -/
+def intCode : Int → Nat
+  | .ofNat n => 2 * n
+  | .negSucc n => 2 * n + 1
+
+theorem intCode_injective {a b : Int} (h : intCode a = intCode b) : a = b := by
+  cases a <;> cases b <;> simp only [intCode] at h <;> first | omega | (congr 1; omega)
+
+def frameInt (v : Int) : List UInt8 := leb128 (intCode v)
+def frameStr (s : String) : List UInt8 := encodeListField (Obend.Vault.FrustumMembrane.utf8 s)
+def frameInstr (i : Instruction) : List UInt8 := leb128 (opcodeTag i.op) ++ frameInt i.arg
+
+theorem frameInt_framed : Framed frameInt := fun _ _ _ _ e =>
+  ⟨intCode_injective (leb128_prefix_inj e).1, (leb128_prefix_inj e).2⟩
+
+theorem frameInt_injective {a b : Int} (h : frameInt a = frameInt b) : a = b :=
+  (frameInt_framed a b [] [] (by simpa using h)).1
+
+theorem frameStr_framed : Framed frameStr := fun _ _ _ _ e =>
+  ⟨utf8_injective (encodeListField_prefix_inj e).1, (encodeListField_prefix_inj e).2⟩
+
+theorem opcodeTag_injective {a b : Opcode} (h : opcodeTag a = opcodeTag b) : a = b := by
+  cases a <;> cases b <;> first | rfl | simp [opcodeTag] at h
+
+theorem frameInstr_framed : Framed frameInstr := by
+  intro a b r₁ r₂ e
+  simp only [frameInstr, List.append_assoc] at e
+  obtain ⟨ho, e₁⟩ := leb128_prefix_inj e
+  obtain ⟨ha, e₂⟩ := frameInt_framed _ _ _ _ e₁
+  obtain ⟨op₁, arg₁⟩ := a
+  obtain ⟨op₂, arg₂⟩ := b
+  have h₁ : op₁ = op₂ := opcodeTag_injective ho
+  have h₂ : arg₁ = arg₂ := ha
+  exact ⟨by rw [h₁, h₂], e₂⟩
+
+/-- What a receipt hashes: the cell's id, kind, reads, exports, code and note, then the inputs it
+read and the outputs it computed, each framed. -/
+def cellReceiptPreimage (c : ReactiveCell) (inputs values : List Int) : List UInt8 :=
+  leb128 c.id ++ (frameStr c.kind.toLabel ++ (frameList frameStr c.reads ++
+    (frameList frameStr c.defs ++ (frameList (frameList frameInstr) c.body ++
+      (frameStr c.note ++ (frameList frameInt inputs ++ frameList frameInt values))))))
+
+theorem cellReceiptPreimage_injective {c₁ c₂ : ReactiveCell} {i₁ i₂ v₁ v₂ : List Int}
+    (h : cellReceiptPreimage c₁ i₁ v₁ = cellReceiptPreimage c₂ i₂ v₂) :
+    c₁ = c₂ ∧ i₁ = i₂ ∧ v₁ = v₂ := by
+  unfold cellReceiptPreimage at h
+  obtain ⟨hid, h⟩ := leb128_prefix_inj h
+  obtain ⟨hk, h⟩ := frameStr_framed _ _ _ _ h
+  obtain ⟨hr, h⟩ := frameList_framed frameStr_framed _ _ _ _ h
+  obtain ⟨hd, h⟩ := frameList_framed frameStr_framed _ _ _ _ h
+  obtain ⟨hb, h⟩ := frameList_framed (frameList_framed frameInstr_framed) _ _ _ _ h
+  obtain ⟨hn, h⟩ := frameStr_framed _ _ _ _ h
+  obtain ⟨hi, h⟩ := frameList_framed frameInt_framed _ _ _ _ h
+  obtain ⟨hv, _⟩ := frameList_framed frameInt_framed _ _ [] [] (by simpa using h)
+  cases c₁
+  cases c₂
+  simp only [ReactiveCell.mk.injEq]
+  exact ⟨⟨hid, ProjectionKind.toLabel_injective hk, hr, hd, hb, hn⟩, hi, hv⟩
+
+/-- Customization string of the notebook receipt hash. -/
+def cellReceiptCustomization : List UInt8 := "OBEND.DOC.NOTEBOOK.RECEIPT/v1".toUTF8.data.toList
+
+/-- The 256-bit receipt of a preimage: all 32 bytes of cSHAKE256 under the receipt customization. -/
+def cshakeReceipt (preimage : List UInt8) : BitVec 256 :=
+  BitVec.ofNat 256 (ofBE (cshake256Bytes cellReceiptCustomization preimage))
+
+/-- Equal receipts are of equal preimages, or these two preimages collide under the receipt hash. -/
+theorem cshakeReceipt_binds {p₁ p₂ : List UInt8} (h : cshakeReceipt p₁ = cshakeReceipt p₂) :
+    p₁ = p₂ ∨ CollisionAmong (cshake256Bytes cellReceiptCustomization)
+      (fun x => x = p₁ ∨ x = p₂) := by
+  by_cases hp : p₁ = p₂
+  · exact .inl hp
+  · refine .inr ⟨p₁, p₂, .inl rfl, .inr rfl, hp, ?_⟩
+    have hw : (256 : Nat) ^ 32 = 2 ^ 256 := by decide
+    have h₁ := ofBE_lt (cshake256Bytes cellReceiptCustomization p₁)
+    have h₂ := ofBE_lt (cshake256Bytes cellReceiptCustomization p₂)
+    rw [cshake256Bytes_length, hw] at h₁ h₂
+    have hn := congrArg BitVec.toNat h
+    simp only [cshakeReceipt, BitVec.toNat_ofNat] at hn
+    rw [Nat.mod_eq_of_lt h₁, Nat.mod_eq_of_lt h₂] at hn
+    exact hn
+
 /-- The executable kernel can only see the ordered restriction to declared reads. -/
 structure CellKernel where
   run : ProjectionKind → List Instruction → List Int → Int
-  hash : Json → BitVec 256
+  hash : List UInt8 → BitVec 256
 
 def arithmeticStep (inputs : List Int) (stack : List Int) (i : Instruction) : List Int :=
   let a := stack.headD 0
@@ -249,20 +406,27 @@ def arithmeticStep (inputs : List Int) (stack : List Int) (i : Instruction) : Li
 def arithmeticRun (_kind : ProjectionKind) (code : List Instruction) (inputs : List Int) : Int :=
   (code.foldl (arithmeticStep inputs) []).headD 0
 
-/-- All eight SHA-256 words are retained. No truncated digest or collision claim is used. -/
-def shaReceipt (j : Json) : BitVec 256 :=
-  (Obend.Spec.Sha256.digest j.compress.toUTF8).foldl
-    (fun acc w => (acc <<< 32) ||| BitVec.ofNat 256 w.toNat) 0
-
-def scientificKernel : CellKernel := ⟨arithmeticRun, shaReceipt⟩
+def scientificKernel : CellKernel := ⟨arithmeticRun, cshakeReceipt⟩
 
 def restrict (c : ReactiveCell) (env : Environment) : List Int := c.reads.map env
 
 def evalCell (k : CellKernel) (c : ReactiveCell) (env : Environment) : CellResult :=
   let inputs := restrict c env
   let values := c.defs.zipIdx.map fun (_, i) => k.run c.kind (c.body[i]?.getD []) inputs
-  ⟨values, k.hash (.arr #[.str "obnb-cell-receipt-1", cellJson c,
-    listJson intJson inputs, listJson intJson values])⟩
+  ⟨values, k.hash (cellReceiptPreimage c inputs values)⟩
+
+/-- **A receipt binds the cell, the inputs it read and the outputs it computed.** Under the cSHAKE256
+receipt, two evaluations with one receipt are of the same cell on the same inputs with the same
+outputs, or their two preimages collide. -/
+theorem receipt_binds (run : ProjectionKind → List Instruction → List Int → Int)
+    {c₁ c₂ : ReactiveCell} {a b : Environment}
+    (h : (evalCell ⟨run, cshakeReceipt⟩ c₁ a).receipt = (evalCell ⟨run, cshakeReceipt⟩ c₂ b).receipt) :
+    (c₁ = c₂ ∧ restrict c₁ a = restrict c₂ b ∧
+      (evalCell ⟨run, cshakeReceipt⟩ c₁ a).values = (evalCell ⟨run, cshakeReceipt⟩ c₂ b).values) ∨
+    CollisionAmong (cshake256Bytes cellReceiptCustomization) (fun x =>
+      x = cellReceiptPreimage c₁ (restrict c₁ a) (evalCell ⟨run, cshakeReceipt⟩ c₁ a).values ∨
+      x = cellReceiptPreimage c₂ (restrict c₂ b) (evalCell ⟨run, cshakeReceipt⟩ c₂ b).values) :=
+  (cshakeReceipt_binds h).imp cellReceiptPreimage_injective id
 
 theorem evalCell_frame (k : CellKernel) (c : ReactiveCell) (a b : Environment)
     (h : ∀ s ∈ c.reads, a s = b s) : evalCell k c a = evalCell k c b := by
@@ -873,8 +1037,7 @@ def evalCellExec (k : CellKernel) (c : ReactiveCell) (env : Environment) : CellR
   let inputs := restrict c env
   let bodies := c.body.toArray
   let values := c.defs.zipIdx.map fun (_, i) => k.run c.kind (bodies[i]?.getD []) inputs
-  ⟨values, k.hash (.arr #[.str "obnb-cell-receipt-1", cellJson c,
-    listJson intJson inputs, listJson intJson values])⟩
+  ⟨values, k.hash (cellReceiptPreimage c inputs values)⟩
 @[csimp] theorem evalCell_eq_exec : evalCell = evalCellExec := by
   funext k c env; simp [evalCell, evalCellExec]
 
@@ -1069,5 +1232,146 @@ theorem untouchedCells_receipt_lookup (k : CellKernel) (nb : ReactiveNotebook)
   rw [show (editCellAndRecompute k nb a).cells = recompute k a nb.cells (fun _ => 0) [] from rfl]
   rw [recompute_lookup_untouched k a nb.cells _ [] i]
   simpa only [dirtyCone, coneScan_edit] using h
+
+/-! The part of a notebook a viewer holds: the cells whose ids are in `V`, in schedule order. An
+edit to a visible cell, when no redacted cell reads a visible one (`frustumClosed`), dirties the
+same cells with or without the redacted ones (`dirtyCone_snip`) and leaves every redacted cached
+cell as it was (`redact_schedule_edit`). `Vault.TransclusionAndMirror` seals the boundary. -/
+
+/-- The cells of a schedule a viewer holds. -/
+def snipCells (V : List CellId) (cs : List ReactiveCell) : List ReactiveCell :=
+  cs.filter fun c => V.contains c.id
+
+/-- The cached cells a viewer holds. -/
+def snipCache (V : List CellId) (xs : List CachedCell) : List CachedCell :=
+  xs.filter fun x => V.contains x.cell.id
+
+/-- The cached cells a viewer does not hold. -/
+def redactCache (V : List CellId) (xs : List CachedCell) : List CachedCell :=
+  xs.filter fun x => !V.contains x.cell.id
+
+/-- No redacted cell reads a symbol a visible cell exports: the visible set is closed downstream. -/
+def frustumClosed (V : List CellId) (cs : List ReactiveCell) : Bool :=
+  decide (∀ p ∈ cs, p.id ∈ V → ∀ u ∈ cs, dependency p u → u.id ∈ V)
+
+theorem evalSchedule_cells (k : CellKernel) (cs : List ReactiveCell) (env : Environment) :
+    (evalSchedule k cs env).map CachedCell.cell = cs := by
+  induction cs generalizing env with
+  | nil => rfl
+  | cons c cs ih => simp only [evalSchedule, List.map_cons, ih]
+
+theorem evalSchedule_cell_mem {k : CellKernel} {cs : List ReactiveCell} {env : Environment}
+    {x : CachedCell} (hx : x ∈ evalSchedule k cs env) : x.cell ∈ cs := by
+  have hm : x.cell ∈ (evalSchedule k cs env).map CachedCell.cell := List.mem_map.mpr ⟨x, hx, rfl⟩
+  rwa [evalSchedule_cells] at hm
+
+theorem redactCache_cell_mem {k : CellKernel} {V : List CellId} {cs : List ReactiveCell}
+    {env : Environment} {x : CachedCell}
+    (hx : x ∈ redactCache V (evalSchedule k cs env)) : x.cell ∈ cs :=
+  evalSchedule_cell_mem (List.mem_filter.mp hx).1
+
+theorem cacheLookup_snipCache (V : List CellId) {i : CellId} (hi : i ∈ V) (xs : List CachedCell) :
+    cacheLookup (snipCache V xs) i = cacheLookup xs i := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+    unfold snipCache at ih ⊢
+    rw [List.filter_cons]
+    by_cases hx : x.cell.id = i
+    · have hc : V.contains x.cell.id = true := by rw [hx]; simpa using hi
+      simp only [hc, ↓reduceIte]
+      simp only [cacheLookup, hx, ↓reduceIte]
+    · split
+      · simp only [cacheLookup, hx, ↓reduceIte]
+        exact ih
+      · simp only [cacheLookup, hx, ↓reduceIte]
+        exact ih
+
+theorem coneScan_snip (V : List CellId) (target : CellId) (ht : target ∈ V)
+    (cs : List ReactiveCell) (changed : List SymbolName)
+    (hcl : ∀ p ∈ cs, p.id ∈ V → ∀ u ∈ cs, dependency p u → u.id ∈ V)
+    (hred : ∀ u ∈ cs, u.id ∉ V → ∀ s ∈ u.reads, s ∉ changed) :
+    coneScan target (snipCells V cs) changed = coneScan target cs changed := by
+  induction cs generalizing changed with
+  | nil => rfl
+  | cons c cs ih =>
+    have hcl' : ∀ p ∈ cs, p.id ∈ V → ∀ u ∈ cs, dependency p u → u.id ∈ V :=
+      fun p hp hv u hu => hcl p (.tail _ hp) hv u (.tail _ hu)
+    by_cases hv : c.id ∈ V
+    · have hs : snipCells V (c :: cs) = c :: snipCells V cs := by simp [snipCells, hv]
+      have hnext : ∀ u ∈ cs, u.id ∉ V → ∀ s ∈ u.reads, s ∉ nextChanged target changed c := by
+        intro u hu huv s hsu hmem
+        unfold nextChanged at hmem
+        split at hmem
+        · rcases List.mem_append.mp hmem with h | h
+          · exact huv (hcl c (.head _) hv u (.tail _ hu) ⟨s, h, hsu⟩)
+          · exact hred u (.tail _ hu) huv s hsu h
+        · exact hred u (.tail _ hu) huv s hsu hmem
+      rw [hs]
+      simp only [coneScan, ih _ hcl' hnext]
+    · have hs : snipCells V (c :: cs) = snipCells V cs := by simp [snipCells, hv]
+      have hd : isDirty target changed c = false := by
+        simp only [isDirty, Bool.or_eq_false_iff, decide_eq_false_iff_not, List.any_eq_false]
+        exact ⟨fun h => hv (by rw [h]; exact ht),
+          fun s hsr => by simpa using hred c (.head _) hv s hsr⟩
+      rw [hs, ih changed hcl' (fun u hu => hred u (.tail _ hu))]
+      simp [coneScan, hd, nextChanged]
+
+/-- **A visible edit has the same cone in the snipped notebook.** When the visible set is closed
+downstream, the cells an edit to a visible cell dirties are the same list on both sides, and all of
+them are visible. -/
+theorem dirtyCone_snip (V : List CellId) (cs : List ReactiveCell) (target : CellId)
+    (hclosed : frustumClosed V cs = true) (ht : target ∈ V) :
+    dirtyCone (snipCells V cs) target = dirtyCone cs target ∧
+    ∀ i ∈ dirtyCone cs target, i ∈ V := by
+  have h : dirtyCone (snipCells V cs) target = dirtyCone cs target :=
+    coneScan_snip V target ht cs [] (of_decide_eq_true hclosed) (fun _ _ _ _ _ => List.not_mem_nil)
+  refine ⟨h, fun i hi => ?_⟩
+  rw [← h] at hi
+  obtain ⟨c, hc, rfl⟩ := coneScan_member target _ [] i hi
+  simpa using (List.mem_filter.mp hc).2
+
+theorem redact_schedule_edit (k : CellKernel) (V : List CellId) (a : NotebookAction)
+    (ht : a.target ∈ V) (cs : List ReactiveCell) (e e' : Environment) (changed : List SymbolName)
+    (hcl : ∀ p ∈ cs, p.id ∈ V → ∀ u ∈ cs, dependency p u → u.id ∈ V)
+    (hred : ∀ u ∈ cs, u.id ∉ V → ∀ s ∈ u.reads, s ∉ changed)
+    (hag : AgreeOutside changed e e') :
+    redactCache V (evalSchedule k (applyEdit a cs) e') = redactCache V (evalSchedule k cs e) := by
+  induction cs generalizing e e' changed with
+  | nil => rfl
+  | cons c cs ih =>
+    have hcl' : ∀ p ∈ cs, p.id ∈ V → ∀ u ∈ cs, dependency p u → u.id ∈ V :=
+      fun p hp hv u hu => hcl p (.tail _ hp) hv u (.tail _ hu)
+    by_cases hv : c.id ∈ V
+    · have h₁ : redactCache V (evalSchedule k (applyEdit a (c :: cs)) e') =
+          redactCache V (evalSchedule k (applyEdit a cs)
+            (publish (editCell a c) (evalCell k (editCell a c) e') e')) := by
+        simp [redactCache, evalSchedule, applyEdit, hv]
+      have h₂ : redactCache V (evalSchedule k (c :: cs) e) =
+          redactCache V (evalSchedule k cs (publish c (evalCell k c e) e)) := by
+        simp [redactCache, evalSchedule, hv]
+      rw [h₁, h₂]
+      refine ih _ _ (c.defs ++ changed) hcl' ?_
+        (publish_frame c (editCell a c) _ _ e e' (editCell_defs a c).symm changed hag)
+      intro u hu huv s hsu hmem
+      rcases List.mem_append.mp hmem with h | h
+      · exact huv (hcl c (.head _) hv u (.tail _ hu) ⟨s, h, hsu⟩)
+      · exact hred u (.tail _ hu) huv s hsu h
+    · have hne : c.id ≠ a.target := fun h => hv (by rw [h]; exact ht)
+      have hedit : editCell a c = c := by simp [editCell, hne]
+      have hr : evalCell k c e = evalCell k c e' :=
+        evalCell_frame k c e e' (fun s hs => hag s (hred c (.head _) hv s hs))
+      have h₁ : redactCache V (evalSchedule k (applyEdit a (c :: cs)) e') =
+          ⟨c, evalCell k c e'⟩ :: redactCache V (evalSchedule k (applyEdit a cs)
+            (publish c (evalCell k c e') e')) := by
+        simp [redactCache, evalSchedule, applyEdit, hedit, hv]
+      have h₂ : redactCache V (evalSchedule k (c :: cs) e) =
+          ⟨c, evalCell k c e'⟩ ::
+            redactCache V (evalSchedule k cs (publish c (evalCell k c e') e)) := by
+        simp [redactCache, evalSchedule, hr, hv]
+      rw [h₁, h₂]
+      congr 1
+      exact ih _ _ changed hcl' (fun u hu => hred u (.tail _ hu))
+        (publish_same c _ e e' changed hag)
 
 end Obend.Doc.Reactive

@@ -18,7 +18,7 @@ forged dual openings, and torn `OBL1` write-ahead log crash-recovery traces:
    - Real multi-epoch `Replay.deployed` session (`opened` + `member` + `wrote`) with mid-header,
      mid-payload, and 1-byte-short-of-seal torn trailing WAL bytes recovered idempotently to the
      exact committed epoch's `ChunkedWorld` and 256-bit `VerkleUmem` root.
-3. Five `#tooth` mutation kills guarding `digestLimbs256_injective`,
+3. Seven `#tooth` mutation kills guarding `digestLimbs256_injective`,
    `incrementalVerkleSnapshot_eq_fullCommit`, `cowBranch_shares_unchanged_verkleSubtrees`
    (both COW unmodified subtree sharing and dual-assumption `Module-SIS` binding), and
    `walCrashReplay_restores_verkle_consistent_world`.
@@ -115,18 +115,18 @@ def honestDual42_0 : DualChunkSlotOpening := openDualSnapshotSlot cowBranchA 42 
 def ajtaiRoot42 : List Int := cowBranchA.ajtaiChunkRoots.getD 42 []
 
 #guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
-  cowBranchA.verkleRoot ajtaiRoot42 42 0 0xFEDCBA9876543210 honestDual42_0 == true
+  cowBranchA.snapshotRoot ajtaiRoot42 42 0 0xFEDCBA9876543210 honestDual42_0 == true
 
 -- Forgery 1: wrong claimed value against honest witness.
 #guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
-  cowBranchA.verkleRoot ajtaiRoot42 42 0 0xFEDCBA9876543211 honestDual42_0 == false
+  cowBranchA.snapshotRoot ajtaiRoot42 42 0 0xFEDCBA9876543211 honestDual42_0 == false
 
 -- Forgery 2: forged chunkSlotsList matching forged value, original Verkle path & Ajtai root.
 def forgedSlotsDual : DualChunkSlotOpening :=
   { honestDual42_0 with chunkSlotsList := (sampleChunk42.setSlot 0 0xFEDCBA9876543211).slots.toList }
 
 #guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
-  cowBranchA.verkleRoot ajtaiRoot42 42 0 0xFEDCBA9876543211 forgedSlotsDual == false
+  cowBranchA.snapshotRoot ajtaiRoot42 42 0 0xFEDCBA9876543211 forgedSlotsDual == false
 
 -- Forgery 3: tampered 32-byte sibling tag at level 0.
 def tamperedPathDual : DualChunkSlotOpening :=
@@ -134,7 +134,7 @@ def tamperedPathDual : DualChunkSlotOpening :=
   { honestDual42_0 with verklePath := honestDual42_0.verklePath.setIfInBounds 0 lvl0 }
 
 #guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
-  cowBranchA.verkleRoot ajtaiRoot42 42 0 0xFEDCBA9876543210 tamperedPathDual == false
+  cowBranchA.snapshotRoot ajtaiRoot42 42 0 0xFEDCBA9876543210 tamperedPathDual == false
 
 -- Forgery 4: ill-sized non-32-byte sibling tag rejected by `checkWellSizedVerklePath`.
 def shortTagDual : DualChunkSlotOpening :=
@@ -142,12 +142,30 @@ def shortTagDual : DualChunkSlotOpening :=
   { honestDual42_0 with verklePath := honestDual42_0.verklePath.setIfInBounds 0 lvl0 }
 
 #guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
-  cowBranchA.verkleRoot ajtaiRoot42 42 0 0xFEDCBA9876543210 shortTagDual == false
+  cowBranchA.snapshotRoot ajtaiRoot42 42 0 0xFEDCBA9876543210 shortTagDual == false
 
 -- Forgery 5: tampered Ajtai syndrome rejected even when Verkle opening is intact.
 def wrongAjtaiRoot : List Int := ajtaiRoot42.map (· + 1)
 #guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
-  cowBranchA.verkleRoot wrongAjtaiRoot 42 0 0xFEDCBA9876543210 honestDual42_0 == false
+  cowBranchA.snapshotRoot wrongAjtaiRoot 42 0 0xFEDCBA9876543210 honestDual42_0 == false
+
+-- Forgery 6 (`[HIGH-04]`): chunk index `42 + 2^60` has `slotAddr` equal to chunk 42's modulo `2^64`,
+-- so chunk 42's honest proof would authenticate it; the index bound refuses it.
+#guard slotAddr (42 + 2 ^ 60) 0 == slotAddr 42 0
+#guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
+  cowBranchA.snapshotRoot ajtaiRoot42 (42 + 2 ^ 60) 0 0xFEDCBA9876543210 honestDual42_0 == false
+
+-- Forgery 7: claiming a larger chunk count to admit the wrapped index changes the snapshot root.
+def inflatedCountDual : DualChunkSlotOpening := { honestDual42_0 with chunkCount := 2 ^ 60 }
+#guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
+  cowBranchA.snapshotRoot ajtaiRoot42 42 0 0xFEDCBA9876543210 inflatedCountDual == false
+#guard snapshotRootTag (2 ^ 60) cowBranchA.verkleRoot != cowBranchA.snapshotRoot
+
+-- Forgery 8: a count with `16 * chunkCount > 2^64` is refused even against its own root.
+def overflowCountDual : DualChunkSlotOpening := { honestDual42_0 with chunkCount := 2 ^ 60 + 43 }
+#guard verifyDualChunkOpening ppDefault defaultChunkAjtaiParams_cols
+  (snapshotRootTag (2 ^ 60 + 43) cowBranchA.verkleRoot) ajtaiRoot42 (42 + 2 ^ 60) 0
+  0xFEDCBA9876543210 overflowCountDual == false
 
 /-! ## 4. Multi-Epoch `Replay.deployed` Torn-Write WAL Crash Recovery & Idempotence -/
 
@@ -223,7 +241,7 @@ example : ∃ epochs S snap, epochs.length = 2 ∧
     ValidSnapshotTrace ppDefault defaultChunkAjtaiParams_cols bumpMintedMachine Replay.genesis epochs S snap :=
   validSnapshotTrace_multiEpoch_inhabited
 
-/-! ## 6. `#tooth` Mutation Kills (`≥ 4` Required; 5 Provided) -/
+/-! ## 6. `#tooth` Mutation Kills -/
 
 -- Tooth 1: Narrowing `digestLimbs256` to zero out the 4th 64-bit limb breaks 256-bit injectivity.
 #tooth Obend.Vault.VerkleSnapshotBridge.digestLimbs256_injective by mutation
@@ -255,14 +273,37 @@ example : ∃ epochs S snap, epochs.length = 2 ∧
 
 -- Tooth 4: Omitting the Ajtai modular commitment check in `verifyDualChunkOpening` breaks dual-assumption SIS extraction.
 #tooth Obend.Vault.VerkleSnapshotBridge.cowBranch_shares_unchanged_verkleSubtrees by mutation
-  Obend.Vault.VerkleSnapshotBridge.verifyDualChunkOpening := fun _pp _hCols verkleRoot _ajtaiRoot c j val w =>
+  Obend.Vault.VerkleSnapshotBridge.verifyDualChunkOpening := fun _pp _hCols snapshotRoot _ajtaiRoot c j val w =>
     if hlen : w.chunkSlotsList.length = 16 then
       if hj : j < 16 then
-        (w.chunkSlotsList[j]'(by omega) == val) &&
-        checkWellSizedVerklePath w.verklePath &&
-        Obend.Polis.verifyOpening verkleRoot (slotAddr c j) val w.verklePath
+        ((w.chunkSlotsList[j]'(by omega) == val) &&
+         checkWellSizedVerklePath w.verklePath &&
+         Obend.Polis.verifyOpening w.verkleRoot (slotAddr c j) val w.verklePath) &&
+        (decide (c < w.chunkCount) && decide (chunkSlots * w.chunkCount ≤ 2 ^ 64) &&
+         w.verkleRoot.size == 32 &&
+         decide (snapshotRootTag w.chunkCount w.verkleRoot = snapshotRoot))
       else false
     else false
+
+-- Tooth 6 (`[HIGH-04]`): dropping the `c < chunkCount` index bound lets `c + 2^60` alias `c`.
+#tooth Obend.Vault.VerkleSnapshotBridge.verifyDualChunkOpening_addr_exact by mutation
+  Obend.Vault.VerkleSnapshotBridge.verifyDualChunkOpening := fun pp hCols snapshotRoot ajtaiRoot c j val w =>
+    if hlen : w.chunkSlotsList.length = 16 then
+      if hj : j < 16 then
+        ((w.chunkSlotsList[j]'(by omega) == val) &&
+         checkWellSizedVerklePath w.verklePath &&
+         Obend.Polis.verifyOpening w.verkleRoot (slotAddr c j) val w.verklePath &&
+         decide (Obend.Crypto.ajtaiCommit pp (wordsToLimbs w.chunkSlotsList)
+           (by rw [wordsToLimbs_length, hlen, hCols]) = ajtaiRoot)) &&
+        (decide (chunkSlots * w.chunkCount ≤ 2 ^ 64) && w.verkleRoot.size == 32 &&
+         decide (snapshotRootTag w.chunkCount w.verkleRoot = snapshotRoot))
+      else false
+    else false
+
+-- Tooth 7: dropping the chunk count from the snapshot-root preimage breaks root binding.
+#tooth Obend.Vault.VerkleSnapshotBridge.snapshotRootPreimage_injective by mutation
+  Obend.Vault.VerkleSnapshotBridge.snapshotRootPreimage := fun _n verkleRoot =>
+    2 :: Obend.Polis.encodeFields [verkleRoot.data.toList]
 
 -- Tooth 5: Failing to truncate uncommitted trailing bytes in `recoverWalBytes` breaks crash-replay consistency.
 #tooth Obend.Vault.VerkleSnapshotBridge.walCrashReplay_restores_verkle_consistent_world by mutation

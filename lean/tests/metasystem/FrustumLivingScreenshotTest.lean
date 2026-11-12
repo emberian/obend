@@ -109,6 +109,7 @@ import all Obend.Doc.Backlinks
 import all Obend.Doc.Graph
 import all Obend.Doc.Merge
 import all Obend.Doc.Patch
+import all Obend.Doc.ReactiveNotebook
 import all Obend.Doc.Render
 import all Obend.Doc.Section
 import all Obend.Doc.Structured
@@ -153,6 +154,7 @@ import all Obend.Logic.Obligation
 import all Obend.Logic.Program
 import all Obend.Logic.Receipt
 import all Obend.Logic.Rewrite
+import all Obend.Logic.SuperRefines
 import all Obend.Polis.VerkleUmem
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
@@ -173,6 +175,7 @@ import all Obend.Slot.Proofs.Protocol
 import all Obend.Slot.Proofs.ProtocolTyping
 import all Obend.Slot.Protocol
 import all Obend.Slot.Selection
+import all Obend.Slot.SupportSheaf
 import all Obend.Slot.World
 import all Obend.Spec.C4
 import all Obend.Spec.DataWire
@@ -475,14 +478,18 @@ example (t : CellId) (a : Auth) (ctx : NegCtx) :
 
 /-! ## 4. Transclusion and the mirror badge -/
 
+/-- A 256-bit salt. -/
+def saltOf (b : UInt8) : List UInt8 := List.replicate 32 b
+
 def src : SourceCell :=
-  (SourceCell.mk [] []).advance [[("title", [7]), ("body", [1, 2])], [("title", [8])]]
+  (SourceCell.mk [] []).advance
+    [[("title", ⟨[7], saltOf 1⟩), ("body", ⟨[1, 2], saltOf 2⟩)], [("title", ⟨[8], saltOf 3⟩)]]
 
 def firstDigest : ByteArray := (src.observed.head?.map receiptDigest).getD genesisDigest
 
 /-- A truthful quote of the first receipt's title, and a forged one. -/
-def truthful : Transclusion := ⟨firstDigest, 0, "title", [7]⟩
-def forged : Transclusion := { truthful with quote := [99] }
+def truthful : Transclusion := ⟨firstDigest, 0, "title", ⟨[7], saltOf 1⟩⟩
+def forged : Transclusion := { truthful with opening := ⟨[99], saltOf 1⟩ }
 
 def quoted (r : Except TransclusionRefusal DatedQuote) : Option DatedQuote :=
   match r with
@@ -500,7 +507,12 @@ def refused (r : Except TransclusionRefusal DatedQuote) : Option TransclusionRef
 -- The head's title is 8; the quote still says 7 and says how old it is.
 #guard (quoted (admitTransclusion src.observed truthful)).map (·.staleness) == some 1
 -- What the source has staged cannot be cited.
-#guard refused (admitTransclusion (src.stage [("title", [99])]).observed forged) ==
+#guard refused (admitTransclusion (src.stage [("title", ⟨[99], saltOf 1⟩)]).observed forged) ==
+  some .digestMismatch
+-- The right bytes with no salt, and under another field's salt.
+#guard refused (admitTransclusion src.observed { truthful with opening := ⟨[7], []⟩ }) ==
+  some (.saltWidth 0)
+#guard refused (admitTransclusion src.observed { truthful with opening := ⟨[7], saltOf 2⟩ }) ==
   some .digestMismatch
 -- A citation of a receipt that is not in the chain, a wrong height, an absent field.
 #guard refused (admitTransclusion src.observed { truthful with cited := genesisDigest }) ==
@@ -511,36 +523,43 @@ def refused (r : Except TransclusionRefusal DatedQuote) : Option TransclusionRef
   some .fieldAbsent
 -- Three turns later the same citation is admitted with the same bytes, three receipts staler.
 #guard quoted (admitTransclusion
-    (src.advance [[("title", [9])], [("title", [10])], [("title", [11])]]).observed truthful) ==
+    (src.advance [[("title", ⟨[9], saltOf 4⟩)], [("title", ⟨[10], saltOf 5⟩)],
+      [("title", ⟨[11], saltOf 6⟩)]]).observed truthful) ==
   some ⟨[7], 0, 4⟩
 
 /-- However the source advances, the admitted quote is admitted again, dated against the new head. -/
 example (d : DatedQuote) (h : admitTransclusion src.observed truthful = .ok d)
-    (more : List (List (String × List UInt8))) :
+    (more : List (List (String × SealedSlot))) :
     admitTransclusion (src.advance more).observed truthful =
       .ok { d with headHeight := d.headHeight + more.length } :=
   (transclusion_stable_under_source_advance h more).1
 
-/-- The admitted bytes are the bytes any receipt with the cited digest holds, or a collision. -/
+/-- The admitted opening, bytes and salt, is the slot any receipt with the cited digest holds, or a
+collision. -/
 example (d : DatedQuote) (h : admitTransclusion src.observed truthful = .ok d) (r₀ : Receipt)
     (hr₀ : r₀ ∈ src.finalized) (hcite : receiptDigest r₀.header = truthful.cited)
-    (v : List UInt8) (hv : r₀.fields.lookup "title" = some v) :
-    [7] = v ∨
+    (v : SealedSlot) (hv : r₀.fields.lookup "title" = some v) :
+    (⟨[7], saltOf 1⟩ : SealedSlot) = v ∨
       CollisionAmong (cshake256Bytes receiptCustomization)
         (fun x => ∃ hd, hd ∈ src.observed ∧ x = receiptPreimage hd) ∨
-      CollisionAmong (cshake256Bytes fieldCustomization)
-        (fun x => x = fieldPreimage "title" [7] ∨ x = fieldPreimage "title" v) :=
+      CollisionAmong (cshake256Bytes sealCustomization)
+        (fun x => x = sealPreimage (fieldSlot "title" ⟨[7], saltOf 1⟩) ∨
+          x = sealPreimage (fieldSlot "title" v)) :=
   (transclusion_provenance_faithful h hr₀ hcite hv).2
 
-/-- The forged quote is refused, or `[99]` and `[7]` collide under the field hash. -/
+/-- The forged quote is refused, or the slots of `[99]` and `[7]` collide under the seal hash. -/
 example (d : DatedQuote) (h : admitTransclusion src.observed truthful = .ok d) :
     admitTransclusion src.observed forged = .error .digestMismatch ∨
-      CollisionAmong (cshake256Bytes fieldCustomization)
-        (fun x => x = fieldPreimage "title" [99] ∨ x = fieldPreimage "title" [7]) :=
-  transclusion_lying_value_refused_or_collides h rfl rfl rfl (by decide)
+      CollisionAmong (cshake256Bytes sealCustomization)
+        (fun x => x = sealPreimage (fieldSlot "title" ⟨[99], saltOf 1⟩) ∨
+          x = sealPreimage (fieldSlot "title" ⟨[7], saltOf 1⟩)) :=
+  (transclusion_lying_opening_refused_or_collides (forged := forged) h rfl rfl rfl
+    (by decide)).elim .inl
+    fun h' => h'.elim
+      (fun hw => absurd (by decide : forged.opening.salt.length = 32) hw.1) .inr
 
 /-- A reader with `read` alone: however much it quotes, the source refuses its writes. -/
-example (ts : List Transclusion) (fields : List (String × List UInt8)) :
+example (ts : List Transclusion) (fields : List (String × SealedSlot)) :
     serveSource (Document.transcludeAll ⟨[.read], []⟩ src.observed ts) src (.write fields) = none :=
   (transclusion_no_amplify ⟨[.read], []⟩ src ts).2.2.1 (by decide) fields
 
@@ -658,7 +677,7 @@ example (kind : String) (address : ByteArray) (r : MirrorRender)
       if h.height = t.height then
         match h.commits.lookup t.field with
         | none => .error .fieldAbsent
-        | some _ => .ok ⟨t.quote, t.height, chain.length - 1⟩
+        | some _ => .ok ⟨t.opening.secret, t.height, chain.length - 1⟩
       else .error (.heightMismatch h.height)
 
 -- A transclusion hands the document `write` over its source.

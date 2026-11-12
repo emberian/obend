@@ -10,7 +10,8 @@ Systematic byte-field erasure coding, constructive threshold interpolation, and 
 Merkle retrievability proofs. World recovery is bound to the manifest produced by
 `makeFireManifest`; the collision alternative contains unequal cSHAKE messages.
 The challenge bound counts the full finite sample space, without a random-oracle assumption.
-Custody receipts judge conserved two-account transfers and cumulative mandate depletion.
+Custody receipts judge conserved two-account transfers and cumulative mandate depletion; each
+receipt commits to the 256-bit vault and mandate identifiers it was issued under.
 -/
 namespace Obend.Vault.SurviveFirePor
 set_option autoImplicit false
@@ -811,13 +812,19 @@ structure CustodyBalances where
   allowance : Nat
   deriving DecidableEq, Repr
 
+/-- Custody of one vault under one mandate: both identifiers are full-width and fixed for the
+whole receipt chain. -/
 structure CustodyState where
+  vaultId : Digest256
+  mandateId : Digest256
   balances : CustodyBalances
   epoch : Nat
   receiptHead : Digest256
   deriving DecidableEq
 
 structure VaultTransitionReceipt where
+  vaultId : Digest256
+  mandateId : Digest256
   previous : Digest256
   epoch : Nat
   amount : Nat
@@ -830,10 +837,33 @@ def cCustodyBalances : FastCodec CustodyBalances :=
     (fun (s, d, a) => some ⟨s, d, a⟩) (by intro b; cases b; rfl)
     (cPair cNat (cPair cNat cNat))
 
+/-- Everything a receipt commits to: vault, mandate, chain link, epoch, amount, resulting balances. -/
+abbrev TransitionPayload := Digest256 × Digest256 × Digest256 × Nat × Nat × CustodyBalances
+
+def VaultTransitionReceipt.payload (r : VaultTransitionReceipt) : TransitionPayload :=
+  (r.vaultId, r.mandateId, r.previous, r.epoch, r.amount, r.after)
+
+/-- Each identifier and digest is length-framed by `cDigest256`; naturals are self-delimiting. -/
+def cTransitionPayload : FastCodec TransitionPayload :=
+  cPair cDigest256 (cPair cDigest256 (cPair cDigest256 (cPair cNat (cPair cNat cCustodyBalances))))
+
+def transitionTag : String := "obend.custody.transition.v2"
+
 def transitionCommitment (r : VaultTransitionReceipt) : Digest256 :=
-  hash256 "obend.custody.transition.v1"
-    ((cPair cDigest256 (cPair cNat (cPair cNat cCustodyBalances))).encodeArray
-      (r.previous, r.epoch, r.amount, r.after))
+  hash256 transitionTag (cTransitionPayload.encodeArray r.payload)
+
+/-- Equal transition commitments carry the same vault, mandate, chain link, epoch, amount and
+balances, or the two payload encodings are an explicit cSHAKE collision. -/
+def transitionCommitment_binding (a b : VaultTransitionReceipt)
+    (h : transitionCommitment a = transitionCommitment b) :
+    PSum (a.payload = b.payload) CshakeCollision :=
+  if he : cTransitionPayload.encodeArray a.payload = cTransitionPayload.encodeArray b.payload then
+    .inl (by
+      have hd := congrArg (fun ba => cTransitionPayload.decodeExact ba.data.toList) he
+      rw [FastCodec.encodeArray_eq, FastCodec.encodeArray_eq,
+        FastCodec.decodeExact_enc, FastCodec.decodeExact_enc] at hd
+      exact Option.some.inj hd)
+  else .inr ⟨transitionTag, ⟨_, _, he, congrArg Subtype.val h⟩⟩
 
 /-- Independent transfer semantics, with ordinary integer conservation equations. -/
 def ValidVaultTransition (before : CustodyBalances) (amount : Nat) (after : CustodyBalances) : Prop :=
@@ -851,18 +881,54 @@ def checkKernelTransitionReceipt (state : CustodyState) (r : VaultTransitionRece
     decide (r.after = ⟨state.balances.source - r.amount,
       state.balances.destination + r.amount, state.balances.allowance - r.amount⟩) &&
     decide (r.previous = state.receiptHead) && decide (r.epoch = state.epoch + 1) &&
-    decide (r.commitment = transitionCommitment r)
+    decide (r.commitment = transitionCommitment r) &&
+    decide (r.vaultId = state.vaultId) && decide (r.mandateId = state.mandateId)
 
 theorem checkKernelTransitionReceipt_sound (state : CustodyState) (r : VaultTransitionReceipt)
     (h : checkKernelTransitionReceipt state r = true) :
     ValidVaultTransition state.balances r.amount r.after ∧ r.previous = state.receiptHead ∧
-      r.epoch = state.epoch + 1 ∧ r.commitment = transitionCommitment r := by
+      r.epoch = state.epoch + 1 ∧ r.commitment = transitionCommitment r ∧
+      r.vaultId = state.vaultId ∧ r.mandateId = state.mandateId := by
   simp only [checkKernelTransitionReceipt, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨⟨⟨⟨⟨hs, ha⟩, he⟩, hp⟩, ht⟩, hc⟩ := h
-  refine ⟨?_, hp, ht, hc⟩
+  obtain ⟨⟨⟨⟨⟨⟨⟨hs, ha⟩, he⟩, hp⟩, ht⟩, hc⟩, hv⟩, hm⟩ := h
+  refine ⟨?_, hp, ht, hc, hv, hm⟩
   unfold ValidVaultTransition
   rw [he]
   exact ⟨Nat.sub_add_cancel hs, rfl, Nat.sub_add_cancel ha⟩
+
+/-- A receipt issued under another vault or another mandate is refused, whatever else it says. -/
+theorem checkKernelTransitionReceipt_refuses_foreign (state : CustodyState)
+    (r : VaultTransitionReceipt) (h : r.vaultId ≠ state.vaultId ∨ r.mandateId ≠ state.mandateId) :
+    checkKernelTransitionReceipt state r = false := by
+  cases hc : checkKernelTransitionReceipt state r with
+  | false => rfl
+  | true =>
+    obtain ⟨_, _, _, _, hv, hm⟩ := checkKernelTransitionReceipt_sound state r hc
+    exact absurd h (by simp [hv, hm])
+
+/-- **Receipt binding over `(vaultId, mandateId, …)`.** One receipt commitment accepted by two
+custody states names one vault, one mandate, one chain position and one transfer, or exhibits an
+explicit cSHAKE collision. A receipt cannot be replayed into a different vault or mandate. -/
+def acceptedReceipt_binding (sa sb : CustodyState) (a b : VaultTransitionReceipt)
+    (ha : checkKernelTransitionReceipt sa a = true) (hb : checkKernelTransitionReceipt sb b = true)
+    (h : a.commitment = b.commitment) :
+    PSum (a = b ∧ sa.vaultId = sb.vaultId ∧ sa.mandateId = sb.mandateId ∧
+      sa.receiptHead = sb.receiptHead ∧ sa.epoch = sb.epoch) CshakeCollision :=
+  have pa := checkKernelTransitionReceipt_sound sa a ha
+  have pb := checkKernelTransitionReceipt_sound sb b hb
+  match transitionCommitment_binding a b (pa.2.2.2.1 ▸ pb.2.2.2.1 ▸ h) with
+  | .inr collision => .inr collision
+  | .inl hp => .inl (by
+      simp only [VaultTransitionReceipt.payload, Prod.mk.injEq] at hp
+      obtain ⟨hv, hm, hprev, he, hamt, haft⟩ := hp
+      refine ⟨?_, ?_, ?_, ?_, ?_⟩
+      · cases a; cases b
+        dsimp only at hv hm hprev he hamt haft h
+        subst hv hm hprev he hamt haft h; rfl
+      · rw [← pa.2.2.2.2.1, ← pb.2.2.2.2.1, hv]
+      · rw [← pa.2.2.2.2.2, ← pb.2.2.2.2.2, hm]
+      · rw [← pa.2.1, ← pb.2.1, hprev]
+      · have h1 := pa.2.2.1; have h2 := pb.2.2.1; omega)
 
 /-- Enclave quotes, including forged quotes after key compromise, do not grant admission. -/
 structure CustodyTurn where
@@ -872,7 +938,8 @@ structure CustodyTurn where
 
 def admitCustodyTurn (state : CustodyState) (turn : CustodyTurn) : Option CustodyState :=
   if checkKernelTransitionReceipt state turn.receipt then
-    some ⟨turn.receipt.after, turn.receipt.epoch, turn.receipt.commitment⟩ else none
+    some ⟨state.vaultId, state.mandateId, turn.receipt.after, turn.receipt.epoch,
+      turn.receipt.commitment⟩ else none
 
 inductive ValidCustodyTrace : CustodyState → List CustodyTurn → CustodyState → Prop where
   | nil (state) : ValidCustodyTrace state [] state
@@ -884,7 +951,8 @@ def invalidTransitionCount (state : CustodyState) : List CustodyTurn → Nat
   | [] => 0
   | turn :: turns =>
     (if ValidVaultTransition state.balances turn.receipt.amount turn.receipt.after then 0 else 1) +
-      invalidTransitionCount ⟨turn.receipt.after, turn.receipt.epoch, turn.receipt.commitment⟩ turns
+      invalidTransitionCount ⟨state.vaultId, state.mandateId, turn.receipt.after,
+        turn.receipt.epoch, turn.receipt.commitment⟩ turns
 
 /-- Across arbitrary accumulated states and arbitrary quotes, every admitted transfer is valid. -/
 theorem enclave_compromise_admits_zero_invalid_transitions
@@ -910,6 +978,28 @@ theorem enclave_compromise_admits_zero_invalid_transitions
         omega
       · dsimp only at ih
         omega
+    · contradiction
+
+/-- Across any accumulated custody trace the vault and mandate never change, and every admitted
+receipt in the trace was issued under exactly that vault and that mandate. -/
+theorem validCustodyTrace_binds_vault_and_mandate (state final : CustodyState)
+    (turns : List CustodyTurn) (h : ValidCustodyTrace state turns final) :
+    final.vaultId = state.vaultId ∧ final.mandateId = state.mandateId ∧
+      ∀ turn ∈ turns, turn.receipt.vaultId = state.vaultId ∧
+        turn.receipt.mandateId = state.mandateId := by
+  induction h with
+  | nil => exact ⟨rfl, rfl, fun _ hm => nomatch hm⟩
+  | @cons state next final turn turns step tail ih =>
+    unfold admitCustodyTurn at step
+    split at step
+    · rename_i hc
+      cases step
+      obtain ⟨_, _, _, _, hv, hm⟩ := checkKernelTransitionReceipt_sound state turn.receipt hc
+      refine ⟨ih.1, ih.2.1, ?_⟩
+      intro t ht
+      rcases List.mem_cons.1 ht with rfl | ht'
+      · exact ⟨hv, hm⟩
+      · exact ih.2.2 t ht'
     · contradiction
 
 def treeLeaves (messages : List ByteArray) : List ByteArray := messages.map (fun b => (merkleLeaf b).val)
@@ -1089,7 +1179,7 @@ def resurrectFromAnyKShards_exact (root salt : Digest256) (w : World) (k n : Nat
 
 /-- Construct a receipt by executing the transfer and then committing its complete payload. -/
 def makeTransitionReceipt (s : CustodyState) (amount : Nat) : VaultTransitionReceipt :=
-  let r : VaultTransitionReceipt := ⟨s.receiptHead, s.epoch + 1, amount,
+  let r : VaultTransitionReceipt := ⟨s.vaultId, s.mandateId, s.receiptHead, s.epoch + 1, amount,
     ⟨s.balances.source - amount, s.balances.destination + amount, s.balances.allowance - amount⟩,
     s.receiptHead⟩
   { r with commitment := transitionCommitment r }
@@ -1098,7 +1188,7 @@ theorem checkKernelTransitionReceipt_complete (s : CustodyState) (amount : Nat)
     (hs : amount ≤ s.balances.source) (ha : amount ≤ s.balances.allowance) :
     checkKernelTransitionReceipt s (makeTransitionReceipt s amount) = true := by
   simp only [checkKernelTransitionReceipt, makeTransitionReceipt, transitionCommitment,
-    hs, ha, decide_true, Bool.and_self]
+    VaultTransitionReceipt.payload, hs, ha, decide_true, Bool.and_self]
 
 /-- Array indexing gives a linear pass in the payload size for fixed k. -/
 def encodeShardBytesExec (bytes : List UInt8) (k : Nat) (x : GF256) : ByteArray :=

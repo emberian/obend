@@ -1,9 +1,9 @@
 module
 public import Obend.Doc.ReactiveNotebook
-import all Obend.Doc.ReactiveNotebook
+meta import Obend.Doc.ReactiveNotebook
 import Obend.Tactic.Tooth
 import Obend.AssertAxioms
-import all Obend.Tactic.Tooth
+import all Obend.Apps.ZkNtt.Goldilocks
 import all Obend.AssertAxioms
 import all Obend.Core.AliasExposure
 import all Obend.Core.Assumptions
@@ -72,13 +72,21 @@ import all Obend.Core.TypeGraph
 import all Obend.Core.TypeGraphAlias
 import all Obend.Core.TypeGraphHead
 import all Obend.Core.TypeGraphResource
+import all Obend.Crypto.Multilinear
+import all Obend.Crypto.Transcript
 import all Obend.Digest.Cshake256
 import all Obend.Digest.Cshake256.Fast
 import all Obend.Digest.Cshake256.Seam
 import all Obend.Digest.Cshake256.Spec
 import all Obend.Digest.HashBytes
+import all Obend.Doc
+import all Obend.Doc.Backlinks
 import all Obend.Doc.Graph
+import all Obend.Doc.Merge
 import all Obend.Doc.Patch
+import all Obend.Doc.ReactiveNotebook
+import all Obend.Doc.Render
+import all Obend.Doc.Section
 import all Obend.Doc.Structured
 import all Obend.Elab.Work
 import all Obend.Equiv.Ahead
@@ -91,9 +99,12 @@ import all Obend.Fold
 import all Obend.Intention
 import all Obend.Judge.Class
 import all Obend.Judge.Clearing
+import all Obend.Judge.Computational
 import all Obend.Judge.Lrat
 import all Obend.Kind
+import all Obend.Kind.Proofs
 import all Obend.Law.Claim
+import all Obend.Law.Contract
 import all Obend.Law.Inherit
 import all Obend.Law.Machine
 import all Obend.Law.Proofs.Claim
@@ -102,6 +113,7 @@ import all Obend.Law.Proofs.Inherit
 import all Obend.Law.Proofs.Machine
 import all Obend.Law.Proofs.Run
 import all Obend.Law.Proofs.Std
+import all Obend.Law.Proofs.Typing
 import all Obend.Law.Run
 import all Obend.Law.Std
 import all Obend.Law.Syntax
@@ -114,8 +126,11 @@ import all Obend.Logic.Frame
 import all Obend.Logic.Ground
 import all Obend.Logic.LateBinding
 import all Obend.Logic.Obligation
+import all Obend.Logic.Program
+import all Obend.Logic.Receipt
 import all Obend.Logic.Rewrite
 import all Obend.Logic.SuperRefines
+import all Obend.Polis.VerkleUmem
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
 import all Obend.Run.Control
@@ -139,10 +154,23 @@ import all Obend.Slot.SupportSheaf
 import all Obend.Slot.World
 import all Obend.Spec.C4
 import all Obend.Spec.DataWire
+import all Obend.Spec.Law
+import all Obend.Spec.LawCompile
+import all Obend.Spec.LawDial
 import all Obend.Spec.Proofs.C4
-import all Obend.Spec.Sha256
+import all Obend.Spec.Proofs.LawCompile
 import all Obend.Tactic.Cases
 import all Obend.Tactic.MonadicReduction
+import all Obend.Tactic.Tooth
+import all Obend.Vault.Affordance
+import all Obend.Vault.Form
+import all Obend.Vault.FrustumMembrane
+import all Obend.Vault.Hyperedge
+import all Obend.Vault.Index
+import all Obend.Vault.Law
+import all Obend.Vault.Page
+import all Obend.Vault.Rehydration
+import all Obend.Vault.Store
 
 public section
 namespace Obend.Doc.Reactive.Tests
@@ -179,13 +207,13 @@ example : dirtyCone scientificNotebook 99 = [] := by decide
 example : checkNotebookDag (applyEdit clockEdit scientificNotebook) = true := by decide
 
 /-- This checks the concrete diamond values while allowing every full-width receipt function. -/
-theorem diamond_values (hash : Json → BitVec 256) :
+theorem diamond_values (hash : List UInt8 → BitVec 256) :
     ((editCellAndRecompute ⟨arithmeticRun, hash⟩
       (evalFromScratch ⟨arithmeticRun, hash⟩ scientificNotebook) clockEdit).cells.map
         (fun c => c.result.values)) = [[], [200, 1000], [200, 200], [4800], [1], [42]] := by
   rfl
 
-theorem original_values (hash : Json → BitVec 256) :
+theorem original_values (hash : List UInt8 → BitVec 256) :
     ((evalFromScratch ⟨arithmeticRun, hash⟩ scientificNotebook).cells.map
       (fun c => c.result.values)) = [[], [100, 1000], [200, 100], [9800], [1], [42]] := by rfl
 
@@ -237,7 +265,7 @@ example (k : CellKernel) (actions : List NotebookAction) :
   runNotebookSession_eq_fromScratch k scientificNotebook actions
 
 /-- Nonempty, reachable environment changes: supply edits propagate through the full diamond. -/
-theorem trace_values (hash : Json → BitVec 256) :
+theorem trace_values (hash : List UInt8 → BitVec 256) :
     ((runNotebookSession ⟨arithmeticRun, hash⟩
       (evalFromScratch ⟨arithmeticRun, hash⟩ scientificNotebook)
       [clockEdit, supplyEdit, policyEdit]).cells.map (fun c => c.result.values)) =
@@ -281,7 +309,7 @@ example (k : CellKernel) : RecomputeExecution k clockEdit
 #print axioms notebook_roundtrip_obnb_json
 #assert_axioms_tree
 
-/- Run the real SHA-256 backend and JSON parser, beyond the symbolic codec proof. -/
+/- Run the real cSHAKE256 receipt and JSON parser, beyond the symbolic codec proof. -/
 #eval do
   if checkNotebookDag scientificNotebook ≠ true then throw (IO.userError "admission failed")
   let old := evalFromScratch scientificKernel scientificNotebook
@@ -298,6 +326,6 @@ example (k : CellKernel) : RecomputeExecution k clockEdit
   if (new.cells[4]?.map (fun (c : CachedCell) => c.result.receipt)) ≠
       (old.cells[4]?.map (fun (c : CachedCell) => c.result.receipt)) then
     throw (IO.userError "law receipt changed")
-  IO.println "reactive notebook: diamond, SHA-256 receipts and JSON text roundtrip passed"
+  IO.println "reactive notebook: diamond, cSHAKE256 receipts and JSON text roundtrip passed"
 
 end Obend.Doc.Reactive.Tests

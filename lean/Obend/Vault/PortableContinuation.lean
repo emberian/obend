@@ -1,6 +1,8 @@
 module
 public import Obend.Vault.SurviveFirePor
 import all Obend.Vault.SurviveFirePor
+public import Obend.Vault.VerkleSnapshotBridge
+import all Obend.Vault.VerkleSnapshotBridge
 public import Obend.Vault.Mandate
 public import Obend.Vault.Escrow
 public import Obend.Polis.CapTP
@@ -14,6 +16,10 @@ tag is keyed cSHAKE authentication. One-shot authority depends on the shared lin
 this module proves its state machine, not a distributed consensus implementation.
 CBOR's finite length range is explicit in `HomeArchiveFits`. Accepted migration histories
 preserve the source home, or identify an actual collision of its archive commitment.
+Bearer secrets are 256 bits wide and `cU64` refuses every wire natural `≥ 2^64`.
+The migrated world is the world `Vault.Replay` serves (`Replay.World` abbreviates
+`ChunkedWorld.World`); the last section connects its three representations: the portable
+archive, the sharded checkpoint, and the authenticated Verkle snapshot recovered from the WAL.
 -/
 namespace Obend.Vault.PortableContinuation
 set_option autoImplicit false
@@ -37,16 +43,22 @@ def PortableMandate.toMandate (m : PortableMandate) : Mandate.Mandate :=
   ⟨m.id, m.grant, m.principal, m.target, m.rights, m.budget, m.cells, m.expiresAt,
     ⟨fun method => m.methods.contains method⟩⟩
 
+/-- A sturdy reference carried across hosts. `swissNum` is the full 256-bit bearer secret. -/
 structure SturdyMembraneEntry where
-  swissNum : UInt64
+  swissNum : Digest256
   mandate : PortableMandate
   expectedNonce : UInt64
   expiresAt : Nat
   revoked : Bool
   deriving DecidableEq
 
+/-- The 64-bit key of CapTP's sorted swiss table: the leading eight bytes of the secret. It locates
+an entry; it does not authenticate a bearer (`SovereignHome.lookupMembrane` compares all 32 bytes). -/
+def swissLocator (d : Digest256) : UInt64 :=
+  UInt64.ofNat (Obend.Digest.HashBytes.ofBE (d.val.data.toList.take 8))
+
 def SturdyMembraneEntry.toSturdyEntry (e : SturdyMembraneEntry) : Obend.Polis.CapTP.SturdyEntry :=
-  ⟨e.swissNum, e.mandate.toMandate, e.expectedNonce, e.expiresAt, e.revoked⟩
+  ⟨swissLocator e.swissNum, e.mandate.toMandate, e.expectedNonce, e.expiresAt, e.revoked⟩
 
 /-- Both escrow legs are serializable; natural-valued amounts cannot be negative. -/
 structure EscrowSnapshot where
@@ -91,8 +103,43 @@ structure HomeArchive where
   home : SovereignHome
   deriving DecidableEq
 
+/-- Canonical `UInt64` codec. Decoding refuses every natural `≥ 2^64`; it never reduces one
+modulo `2^64`, so `n + 2^64` is not a second encoding of `n`. -/
 def cU64 : FastCodec UInt64 :=
-  cMap UInt64.toNat (fun n => some (UInt64.ofNat n)) (by intro n; simp) cNat
+  cMap UInt64.toNat (fun n => if n < 2 ^ 64 then some (UInt64.ofNat n) else none)
+    (by intro n; simp [n.toNat_lt]) cNat
+
+theorem cU64_dec_refuses_overflow (n : Nat) (h : 2 ^ 64 ≤ n) (rest : Log.Bytes) :
+    cU64.dec (cNat.enc n ++ rest) = none := by
+  have hr := cNat.roundtrip n rest
+  have hn : ¬ n < 2 ^ 64 := by omega
+  simp [cU64, cMap, rawMap, hr, hn]
+
+/-- A decoded `UInt64` is exactly the natural on the wire. -/
+theorem cU64_dec_exact {bs rest : Log.Bytes} {v : UInt64} (h : cU64.dec bs = some (v, rest)) :
+    cNat.dec bs = some (v.toNat, rest) := by
+  simp only [cU64, cMap, rawMap] at h
+  cases hd : cNat.dec bs with
+  | none => rw [hd] at h; cases h
+  | some p =>
+    obtain ⟨n, r⟩ := p
+    rw [hd] at h
+    by_cases hn : n < 2 ^ 64
+    · simp only [hn, ite_true, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      rw [UInt64.toNat_ofNat', Nat.mod_eq_of_lt hn]
+    · simp [hn] at h
+
+/-- Wire injectivity without aliasing: two encoded naturals that decode to one `UInt64` are equal. -/
+theorem cU64_wire_injective {n m : Nat} {r₁ r₂ t₁ t₂ : Log.Bytes} {v : UInt64}
+    (h₁ : cU64.dec (cNat.enc n ++ r₁) = some (v, t₁))
+    (h₂ : cU64.dec (cNat.enc m ++ r₂) = some (v, t₂)) : n = m := by
+  have e₁ := cU64_dec_exact h₁
+  have e₂ := cU64_dec_exact h₂
+  rw [cNat.roundtrip] at e₁ e₂
+  have a₁ := (Prod.mk.inj (Option.some.inj e₁)).1
+  have a₂ := (Prod.mk.inj (Option.some.inj e₂)).1
+  omega
 
 def cPrincipal : FastCodec Mandate.Principal :=
   cMap (fun p => (p.name, p.id)) (fun (n, i) => some ⟨n, i⟩)
@@ -125,7 +172,7 @@ def cPortableMandate : FastCodec PortableMandate :=
 def cSturdyMembraneEntry : FastCodec SturdyMembraneEntry :=
   cMap (fun e => (e.swissNum, e.mandate, e.expectedNonce, e.expiresAt, e.revoked))
     (fun (s, m, n, e, r) => some ⟨s, m, n, e, r⟩) (by intro e; cases e; rfl)
-    (cPair cU64 (cPair cPortableMandate (cPair cU64 (cPair cNat cBool))))
+    (cPair cDigest256 (cPair cPortableMandate (cPair cU64 (cPair cNat cBool))))
 
 def cLegStatus : FastCodec Escrow.LegStatus :=
   cMap (fun s => match s with | .empty => 0 | .deposited => 1 | .consumed => 2)
@@ -214,6 +261,26 @@ def checkReceiptChain : Digest256 → List ReceiptLink → Digest256 → Bool
   | head, [], expected => decide (head = expected)
   | head, r :: rs, expected => decide (r.previous = head) &&
       decide (r.next = receiptLinkDigest r) && checkReceiptChain r.next rs expected
+
+/-- Bearer lookup by the full 256-bit secret. -/
+def SovereignHome.lookupMembrane (h : SovereignHome) (secret : Digest256) :
+    Option SturdyMembraneEntry :=
+  h.membranes.find? fun e => decide (e.swissNum = secret)
+
+/-- A granted lookup names a membrane of the home whose whole secret was presented: sharing the
+64-bit `swissLocator` with some entry grants nothing. -/
+theorem lookupMembrane_sound {h : SovereignHome} {secret : Digest256} {e : SturdyMembraneEntry}
+    (hf : h.lookupMembrane secret = some e) : e ∈ h.membranes ∧ e.swissNum = secret := by
+  have hf' : h.membranes.find? (fun e => decide (e.swissNum = secret)) = some e := hf
+  have hd : decide (e.swissNum = secret) = true :=
+    List.find?_some (p := fun (x : SturdyMembraneEntry) => decide (x.swissNum = secret)) hf'
+  exact ⟨List.mem_of_find?_eq_some hf', of_decide_eq_true hd⟩
+
+theorem lookupMembrane_refuses_unknown_secret {h : SovereignHome} {secret : Digest256}
+    (hno : ∀ e ∈ h.membranes, e.swissNum ≠ secret) : h.lookupMembrane secret = none := by
+  cases hf : h.lookupMembrane secret with
+  | none => rfl
+  | some e => exact absurd (lookupMembrane_sound hf).2 (hno e (lookupMembrane_sound hf).1)
 
 def checkHome (h : SovereignHome) : Bool :=
   checkReceiptChain h.receiptGenesis h.receipts h.receiptChainHead &&
@@ -577,5 +644,155 @@ theorem migrationHistory_balance_conserved_or_collision (home : SovereignHome) (
   rcases migrationHistory_preserves_home_or_collision home key r out events history origin with ho | hc
   · exact Or.inl (congrArg totalBalance (ho.active live hlive))
   · exact Or.inr hc
+
+/-! ## The replayed world, its portable archive, its sharded checkpoint and its snapshot
+
+`Vault.Replay.World` is an abbreviation of `ChunkedWorld.World`: the world a home carries is
+already the type the log replays, so there is no conversion between the two to prove. What a
+migration has to connect is the world's representations and the session it continues. -/
+
+open VerkleSnapshotBridge in
+/-- Project a portable archive to the sharded checkpoint form `Replay.decodeCheckpointWorld` reads. -/
+def archiveToSharded (bytes : ByteArray) : Option ShardedWorld :=
+  (decodeHomeArchiveCbor bytes).map fun a => encodeShardedWorld a.home.world
+
+/-- Rehydrate the replay world of a sharded checkpoint. -/
+def rehydrateWorld (s : ShardedWorld) : Option Replay.World :=
+  match decodeShardedWorld s with
+  | .ok w => some w
+  | .error _ => none
+
+/-- Archive → sharded checkpoint → world is lossless on every archive that fits CBOR. -/
+theorem archive_sharded_rehydrate (a : HomeArchive) (h : HomeArchiveFits a) :
+    (archiveToSharded (encodeHomeArchiveCbor a)).bind rehydrateWorld = some a.home.world := by
+  simp [archiveToSharded, rehydrateWorld, decodeHomeArchiveCbor_encode a h,
+    decodeShardedWorld_encodeShardedWorld]
+
+/-- The checkpoint decoder of the deployed replay machine reads the migrated world back from the
+manifest it commits to, given a store holding the shards of the projected archive. -/
+theorem archive_checkpoint_rehydrate (a : HomeArchive) (store : String → Option Log.Bytes)
+    (hstore : ∀ k sb, (k, sb) ∈ (encodeShardedWorld a.home.world).shards → store k = some sb) :
+    Replay.decodeCheckpointWorld store (Replay.deployed.encW a.home.world) = some a.home.world := by
+  have hm := decodeManifestWith_manifestBytes a.home.world store hstore
+  change Replay.decodeCheckpointWorld store (manifestBytes a.home.world) = _
+  simp [Replay.decodeCheckpointWorld, hm]
+
+/-- **Migration continues the replay session.** If the source home carried the world of a
+reachable `Replay` session, then after any accepted migration history the live home's world is the
+replay of that session's log, the session over the migrated world is reachable, and it admits
+every next turn exactly as the source would have; or the history exhibits a cSHAKE collision. -/
+theorem migrationHistory_continues_replay_or_collision (home : SovereignHome) (key : Digest256)
+    (r out : MigrationRegistry) (events : List MigrationEvent)
+    (history : ValidMigrationHistory key r events out) (origin : HomeOrigin home r)
+    (S : Replay.Session) (hS : Replay.Reachable S) (hw : home.world = S.world)
+    (live : LiveHome) (hlive : out.active = some live) :
+    (live.home.world = Log.replay Replay.deployed Replay.genesis S.log ∧
+      Replay.Reachable ⟨live.home.world, S.log⟩ ∧
+      ∀ b : Log.Bytes, (⟨live.home.world, S.log⟩ : Replay.Session).admit Replay.logHash
+          Replay.deployed b = S.admit Replay.logHash Replay.deployed b) ∨
+    Nonempty CshakeCollision := by
+  rcases migrationHistory_preserves_home_or_collision home key r out events history origin with ho | hc
+  · left
+    have hlw : live.home.world = S.world := (congrArg SovereignHome.world (ho.active live hlive)).trans hw
+    have hSeq : (⟨live.home.world, S.log⟩ : Replay.Session) = S := by cases S; simp_all
+    exact ⟨hlw.trans (Replay.state_eq_replay_log hS), hSeq ▸ hS, fun b => by rw [hSeq]⟩
+  · exact Or.inr hc
+
+open VerkleSnapshotBridge in
+/-- Crash recovery from the session's WAL bytes (with any uncommitted tail) rebuilds exactly the
+authenticated snapshot of a world equal to the one the session serves. -/
+theorem walRecovery_snapshot_of_session (pp : Obend.Crypto.AjtaiParams) (hCols : pp.cols = 64)
+    (S : Replay.Session) (hS : Replay.Reachable S) (w : Replay.World) (hw : w = S.world)
+    {tornTail : Log.Bytes} (htorn : UncommittedWalTail Replay.logHash
+      (Log.lastHash Replay.logHash Rehydration.genesisSentinel S.log) tornTail) :
+    (recoverWalSnapshot pp hCols Replay.deployed Replay.genesis
+      (Log.encodeAll Replay.logHash S.log ++ tornTail)).snapshot =
+        buildAuthenticatedSnapshot pp hCols w := by
+  obtain ⟨hlinked, hwf⟩ := Log.log_sound hS
+  have hparse := Log.parseFrom_encodeAll Replay.logHash S.log Rehydration.genesisSentinel
+    hlinked hwf tornTail
+  have htail := (parseFrom_uncommittedWalTail Replay.logHash _ htorn).1
+  unfold recoverWalSnapshot; dsimp only
+  rw [hparse, htail, List.append_nil, hw, Replay.state_eq_replay_log hS]
+
+open VerkleSnapshotBridge in
+/-- Destination-side check: the home's world has the snapshot root of the world the WAL replays to. -/
+def checkHomeAgainstWal (pp : Obend.Crypto.AjtaiParams) (hCols : pp.cols = 64)
+    (home : SovereignHome) (wal : Log.Bytes) : Bool :=
+  decide ((buildAuthenticatedSnapshot pp hCols home.world).snapshotRoot =
+    (recoverWalSnapshot pp hCols Replay.deployed Replay.genesis wal).snapshot.snapshotRoot)
+
+open VerkleSnapshotBridge in
+/-- The snapshot WAL recovery builds is the snapshot of the replay of the parsed records. -/
+theorem recoverWalSnapshot_snapshot (pp : Obend.Crypto.AjtaiParams) (hCols : pp.cols = 64)
+    (wal : Log.Bytes) :
+    (recoverWalSnapshot pp hCols Replay.deployed Replay.genesis wal).snapshot =
+      buildAuthenticatedSnapshot pp hCols (Log.replay Replay.deployed Replay.genesis
+        (Log.parseFrom Replay.logHash Rehydration.genesisSentinel wal).1) := by
+  unfold recoverWalSnapshot; dsimp only
+
+open VerkleSnapshotBridge in
+theorem checkHomeAgainstWal_iff (pp : Obend.Crypto.AjtaiParams) (hCols : pp.cols = 64)
+    (home : SovereignHome) (wal : Log.Bytes) :
+    checkHomeAgainstWal pp hCols home wal = true ↔
+      (buildAuthenticatedSnapshot pp hCols home.world).snapshotRoot =
+        (buildAuthenticatedSnapshot pp hCols (Log.replay Replay.deployed Replay.genesis
+          (Log.parseFrom Replay.logHash Rehydration.genesisSentinel wal).1)).snapshotRoot := by
+  unfold checkHomeAgainstWal
+  rw [recoverWalSnapshot_snapshot]
+  exact decide_eq_true_iff
+
+open VerkleSnapshotBridge in
+/-- **Completeness across migration.** After any accepted migration history of a home that carried
+a reachable session's world, the live home passes the WAL check against that session's log, torn
+tail or not; or the history exhibits a cSHAKE collision. -/
+theorem migratedHome_passes_wal_check_or_collision (pp : Obend.Crypto.AjtaiParams)
+    (hCols : pp.cols = 64) (home : SovereignHome) (key : Digest256)
+    (r out : MigrationRegistry) (events : List MigrationEvent)
+    (history : ValidMigrationHistory key r events out) (origin : HomeOrigin home r)
+    (S : Replay.Session) (hS : Replay.Reachable S) (hw : home.world = S.world)
+    (live : LiveHome) (hlive : out.active = some live)
+    {tornTail : Log.Bytes} (htorn : UncommittedWalTail Replay.logHash
+      (Log.lastHash Replay.logHash Rehydration.genesisSentinel S.log) tornTail) :
+    checkHomeAgainstWal pp hCols live.home
+      (Log.encodeAll Replay.logHash S.log ++ tornTail) = true ∨ Nonempty CshakeCollision := by
+  rcases migrationHistory_preserves_home_or_collision home key r out events history origin with ho | hc
+  · left
+    have hlw : live.home.world = S.world := (congrArg SovereignHome.world (ho.active live hlive)).trans hw
+    unfold checkHomeAgainstWal
+    rw [walRecovery_snapshot_of_session pp hCols S hS live.home.world hlw htorn]
+    exact decide_eq_true rfl
+  · exact Or.inr hc
+
+open VerkleSnapshotBridge in
+/-- Two well-formed snapshots with one snapshot root have one 256-bit `VerkleUmem` root, or their
+two snapshot-root headers are a named `treeHash` collision. -/
+def snapshotRoot_binds_verkleRoot {pp : Obend.Crypto.AjtaiParams} {hCols : pp.cols = 64}
+    {s t : AuthenticatedWorldSnapshot} (hs : SnapshotWF pp hCols s) (ht : SnapshotWF pp hCols t)
+    (h : s.snapshotRoot = t.snapshotRoot) :
+    PSum (s.verkleRoot = t.verkleRoot)
+      (Obend.Judge.Computational.HashCollisionWitness Obend.Polis.treeHash verkleMaxPreimageBytes) :=
+  have hsz : ∀ {u : AuthenticatedWorldSnapshot}, SnapshotWF pp hCols u → u.verkleRoot.size = 32 :=
+    fun hwf => by rw [snapshotWF_verkleRoot_eq_fullCommit hwf]; exact fullVerkleCommitChunks_size _
+  match extractSnapshotRootBreak (by rw [hs.1]; decide) (by rw [ht.1]; decide) (hsz hs) (hsz ht) h with
+  | .inl heq => .inl heq.2
+  | .inr col => .inr col
+
+open VerkleSnapshotBridge in
+/-- **Soundness of the WAL check.** A home that passes has the 256-bit `VerkleUmem` root of the
+world the WAL replays to, or the two snapshot-root headers are a named `treeHash` collision. -/
+def checkHomeAgainstWal_sound (pp : Obend.Crypto.AjtaiParams) (hCols : pp.cols = 64)
+    (home : SovereignHome) (wal : Log.Bytes) (h : checkHomeAgainstWal pp hCols home wal = true) :
+    PSum (fullVerkleCommitWorld home.world = fullVerkleCommitWorld
+        (Log.replay Replay.deployed Replay.genesis
+          (Log.parseFrom Replay.logHash Rehydration.genesisSentinel wal).1))
+      (Obend.Judge.Computational.HashCollisionWitness Obend.Polis.treeHash verkleMaxPreimageBytes) :=
+  match snapshotRoot_binds_verkleRoot (buildAuthenticatedSnapshot_wf pp hCols home.world)
+      (buildAuthenticatedSnapshot_wf pp hCols (Log.replay Replay.deployed Replay.genesis
+        (Log.parseFrom Replay.logHash Rehydration.genesisSentinel wal).1))
+      ((checkHomeAgainstWal_iff pp hCols home wal).1 h) with
+  | .inl heq => .inl ((buildAuthenticatedSnapshot_verkleRoot pp hCols home.world).symm.trans
+      (heq.trans (buildAuthenticatedSnapshot_verkleRoot pp hCols _)))
+  | .inr col => .inr col
 
 end Obend.Vault.PortableContinuation

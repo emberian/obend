@@ -1,19 +1,13 @@
 module
 public import Obend.Vault.SurviveFirePor
 public import Obend.Vault.PortableContinuation
-import all Obend.Vault.SurviveFirePor
-import all Obend.Vault.PortableContinuation
-meta import all Obend.Vault.SurviveFirePor
-meta import all Obend.Vault.PortableContinuation
-meta import all Obend.Vault.ChunkedWorld
-import Obend.Tactic.Tooth
-import Obend.AssertAxioms
-import all Obend.Tactic.Tooth
-import all Obend.AssertAxioms
 
 -- Private proof bodies are required by the complete axiom census.
+import Obend.AssertAxioms
+import Obend.Tactic.Tooth
 import all Obend.Analysis.Coverage
 import all Obend.Apps.ZkNtt.Goldilocks
+import all Obend.AssertAxioms
 import all Obend.Codec.DetCbor
 import all Obend.Core.AliasExposure
 import all Obend.Core.Assumptions
@@ -91,7 +85,10 @@ import all Obend.Core.TypeGraph
 import all Obend.Core.TypeGraphAlias
 import all Obend.Core.TypeGraphHead
 import all Obend.Core.TypeGraphResource
+import all Obend.Crypto.DualSpine
 import all Obend.Crypto.Multilinear
+import all Obend.Crypto.PCS
+import all Obend.Crypto.Sumcheck
 import all Obend.Crypto.Transcript
 import all Obend.Digest.Cshake256
 import all Obend.Digest.Cshake256.Fast
@@ -155,6 +152,7 @@ import all Obend.Logic.Program
 import all Obend.Logic.Receipt
 import all Obend.Logic.Rewrite
 import all Obend.Polis.CapTP
+import all Obend.Polis.VerkleUmem
 import all Obend.Reasons
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
@@ -189,12 +187,16 @@ import all Obend.Spec.Proofs.C4
 import all Obend.Spec.Proofs.LawCompile
 import all Obend.Tactic.Cases
 import all Obend.Tactic.MonadicReduction
+import all Obend.Tactic.Tooth
 import all Obend.Vault.Affordance
+import all Obend.Vault.Branch
+import all Obend.Vault.ChunkedWorld
 import all Obend.Vault.Cost
 import all Obend.Vault.DecodeCache
 import all Obend.Vault.Escrow
 import all Obend.Vault.Form
 import all Obend.Vault.FormCheck
+import all Obend.Vault.FormCheckCache
 import all Obend.Vault.Hyperedge
 import all Obend.Vault.Index
 import all Obend.Vault.Json
@@ -203,11 +205,20 @@ import all Obend.Vault.Log
 import all Obend.Vault.LogBytes
 import all Obend.Vault.Lsafe
 import all Obend.Vault.Mandate
+import all Obend.Vault.Merge
 import all Obend.Vault.Page
+import all Obend.Vault.PortableContinuation
 import all Obend.Vault.Rehydration
+import all Obend.Vault.Replay
 import all Obend.Vault.Retention
+import all Obend.Vault.SegmentLog
 import all Obend.Vault.Store
+import all Obend.Vault.SurviveFirePor
 import all Obend.Vault.Transport
+import all Obend.Vault.VerkleSnapshotBridge
+meta import all Obend.Vault.ChunkedWorld
+meta import all Obend.Vault.PortableContinuation
+meta import all Obend.Vault.SurviveFirePor
 
 public section
 namespace Obend.Tests.SurviveFireAndContinuation
@@ -299,9 +310,15 @@ private def polynomials : SharingPolynomial := fun i => [secret i, BitVec.ofNat 
   let observed := fun x => shares x ⟨0, by decide⟩
   must "every candidate secret has a distinct consistent last share" ((List.range 256).all fun i =>
     lastShareToSecret [1] observed 2 (secretToLastShare [1] observed 2 (BitVec.ofNat 8 i)) == BitVec.ofNat 8 i)
-  let state : CustodyState := ⟨⟨20, 3, 15⟩, 0, rootKey⟩
+  let state : CustodyState := ⟨genesisB, salt, ⟨20, 3, 15⟩, 0, rootKey⟩
   let good := makeTransitionReceipt state 7
   must "kernel judged transfer accepted" (checkKernelTransitionReceipt state good)
+  must "receipt replayed into another vault refused"
+    (!checkKernelTransitionReceipt { state with vaultId := rootKey } good)
+  must "receipt replayed under another mandate refused"
+    (!checkKernelTransitionReceipt { state with mandateId := rootKey } good)
+  must "relabelled receipt changes its commitment" (decide
+    (transitionCommitment { good with vaultId := rootKey } ≠ good.commitment))
   let forged := { good with after := ⟨13, 1000, 8⟩ }
   must "forged enclave quotes do not admit minting" (decide
     (admitCustodyTurn state ⟨forged, List.replicate 3 salt⟩ = none))
@@ -309,8 +326,12 @@ private def polynomials : SharingPolynomial := fun i => [secret i, BitVec.ofNat 
 
 private def mandate : PortableMandate :=
   ⟨4, .root ⟨"member", 7⟩ "vault", ⟨"agent", 8⟩, "vault", [.read, .call], 30, [1, 2], 100, [9, 10]⟩
+private def swissSecret : Digest256 := ⟨⟨(List.replicate 32 0x63).toArray⟩, by decide⟩
+/-- Same leading eight bytes as `swissSecret` (same `swissLocator`), different remaining 24. -/
+private def swissAlias : Digest256 :=
+  ⟨⟨(List.replicate 8 (0x63 : UInt8) ++ List.replicate 24 0x00).toArray⟩, by decide⟩
 private def home : SovereignHome :=
-  ⟨world, [⟨99, mandate, 5, 100, false⟩], [mandate],
+  ⟨world, [⟨swissSecret, mandate, 5, 100, false⟩], [mandate],
     [⟨.deposited, .deposited, 9, 4, 0, 0, 0, 0⟩], rootKey, [], rootKey⟩
 private def initialRegistry : MigrationRegistry :=
   ⟨7, 0, some ⟨1, rootKey, 17, home⟩, none, [], []⟩
@@ -339,6 +360,15 @@ private def initialRegistry : MigrationRegistry :=
   must "arbitrary next hop preserves full home" (decide (third.active.map (·.home) = some home))
   must "old nonce remains consumed after another hop" (decide
     (importHomeArchive rootKey genesisB 2 third signed = .error .nonceConsumed))
+  must "256-bit bearer secret survives two hops" (decide
+    ((third.active.bind fun l => l.home.lookupMembrane swissSecret).isSome))
+  must "locator alias of the bearer secret refused"
+    (swissLocator swissAlias == swissLocator swissSecret &&
+      decide (home.lookupMembrane swissAlias = none))
+  must "cU64 refuses 5 + 2^64 on decode" (decide
+    (cU64.dec (ChunkedWorld.cNat.enc (5 + 2 ^ 64)) = none))
+  must "cU64 accepts 2^64 - 1" (decide
+    (cU64.dec (ChunkedWorld.cNat.enc (2 ^ 64 - 1)) = some (UInt64.ofNat (2 ^ 64 - 1), [])))
   IO.println "canonical archive migration, re-genesis, replay and tampering checks passed"
 
 #print axioms gfMul_inv_cancel

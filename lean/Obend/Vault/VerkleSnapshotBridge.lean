@@ -1,21 +1,18 @@
 module
 /-
-# Obend.Vault.VerkleSnapshotBridge — Pillar-3 COW `ChunkedWorld` ↔ `VerkleUmem` & Crash-Safe WAL Spine
+# Obend.Vault.VerkleSnapshotBridge — COW `ChunkedWorld` ↔ `VerkleUmem` & Crash-Safe WAL Spine
 
-Welds `Obend.Vault.ChunkedWorld` ($O(1)$ copy-on-write chunk tables) to `Obend.Polis.VerkleUmem`
-(64-bit 16-ary `cSHAKE256` commitment tree and stateless point openings), `Obend.Crypto.DualSpine`
-(Ajtai `Module-SIS` chunk commitments), and `Obend.Vault.Log` / `Obend.Vault.Replay` (`OBL1` WAL):
-1. **Full-Width 256-Bit Embedding (`digestLimbs256_injective`)**: Lossless `4 × UInt64` shard and
-   manifest digests across $K = 256$ chunks of $B = 16$ slots ($N = 4{,}096$ leaves).
-2. **Incremental Single-Chunk Verkle Update (`updateChunkVerkleRoot`, `incrementalVerkleSnapshot_eq_fullCommit`)**:
-   Recomputes only the dirty chunk tag, its 16-chunk group tag, and the $O(\log K)$ spine, matching
-   both `fullVerkleCommitChunks` and the $2^{64}$-key `ExtRam` specification.
-3. **$O(1)$ COW Branching & Dual Binding (`cowBranch_shares_unchanged_verkleSubtrees`)**: Unmodified
-   chunks share subtrees, Ajtai roots, and level-0 openings; dual openings bind up to
-   `BoundedCollision treeHash 529` and `ModuleSISHard pp 131070` (`0 Classical` `PSum` extractor).
-4. **Crash-Safe Torn-Write WAL Recovery (`walCrashReplay_restores_verkle_consistent_world`)**:
-   Truncating uncommitted trailing WAL bytes and replaying committed frames is idempotent and
-   restores the exact world and 256-bit `VerkleUmem` root across multi-epoch `ValidSnapshotTrace`s.
+Welds `Vault.ChunkedWorld` chunk tables to `Polis.VerkleUmem` (16-ary `cSHAKE256` tree, stateless
+openings), `Crypto.DualSpine` (Ajtai `Module-SIS` chunk commitments) and the `OBL1` WAL:
+1. `digestLimbs256_injective`: lossless `4 × UInt64` digests across 256 chunks of 16 slots.
+2. `incrementalVerkleSnapshot_eq_fullCommit`: a one-chunk update rehashes $O(\log K)$ nodes and
+   matches `fullVerkleCommitChunks` and the $2^{64}$-key `ExtRam` specification.
+3. `cowBranch_shares_unchanged_verkleSubtrees`: COW forks share untouched subtrees; dual openings
+   bind up to `BoundedCollision treeHash 529` and `ModuleSISHard pp 131070` (`PSum` extractor).
+4. `verifyDualChunkOpening_addr_exact`, `extractSnapshotIndexBreak`: the snapshot root frames the
+   chunk count and openings check `c < chunkCount`, so no index aliases another modulo `2^64`.
+5. `walCrashReplay_restores_verkle_consistent_world`: truncating a torn WAL tail and replaying is
+   idempotent and restores the world and its root across multi-epoch `ValidSnapshotTrace`s.
 -/
 public import Obend.Vault.ChunkedWorld
 public import Obend.Vault.Replay
@@ -69,12 +66,13 @@ def ChunkData.setSlot (chunk : ChunkData) (j : Nat) (v : UInt64) : ChunkData :=
 /-- Map `(chunkIdx, slotIdx)` (`c < 256`, `j < 16`) to its 64-bit `VerkleUmem` key `16 * c + j`. -/
 @[expose] def slotAddr (c j : Nat) : UInt64 := UInt64.ofNat (c * chunkSlots + j)
 
+/-- `slotAddr` is exact (no `2^64` wraparound) whenever `c < n` for a chunk count `16 * n ≤ 2^64`. -/
+theorem slotAddr_toNat_of_bound {c j n : Nat} (hc : c < n) (hn : chunkSlots * n ≤ 2 ^ 64)
+    (hj : j < chunkSlots) : (slotAddr c j).toNat = c * chunkSlots + j := by
+  unfold slotAddr chunkSlots at *; rw [UInt64.toNat_ofNat']; exact Nat.mod_eq_of_lt (by omega)
 theorem slotAddr_toNat {c j : Nat} (hc : c < numChunks) (hj : j < chunkSlots) :
-    (slotAddr c j).toNat = c * chunkSlots + j := by
-  unfold slotAddr numChunks chunkSlots at *; rw [UInt64.toNat_ofNat']; exact Nat.mod_eq_of_lt (by omega)
-
-private theorem foldl_be_inj : ∀ (xs ys : List UInt8) (a₁ a₂ : Nat),
-    xs.length = ys.length →
+    (slotAddr c j).toNat = c * chunkSlots + j := slotAddr_toNat_of_bound hc (by decide) hj
+private theorem foldl_be_inj : ∀ (xs ys : List UInt8) (a₁ a₂ : Nat), xs.length = ys.length →
     xs.foldl (fun a b => a * 256 + b.toNat) a₁ = ys.foldl (fun a b => a * 256 + b.toNat) a₂ →
     a₁ = a₂ ∧ xs = ys
   | [], [], a₁, a₂, _, h => ⟨h, rfl⟩
@@ -87,9 +85,7 @@ private theorem foldl_be_inj : ∀ (xs ys : List UInt8) (a₁ a₂ : Nat),
     have hy : y.toNat < 256 := y.toNat_lt
     have hxy : x = y := UInt8.toNat_inj.1 (by omega)
     exact ⟨by omega, by rw [hxy, htail]⟩
-
-private theorem uint64_ofBE_8_inj {xs ys : List UInt8}
-    (hx : xs.length = 8) (hy : ys.length = 8)
+private theorem uint64_ofBE_8_inj {xs ys : List UInt8} (hx : xs.length = 8) (hy : ys.length = 8)
     (heq : UInt64.ofNat (ofBE xs) = UInt64.ofNat (ofBE ys)) : xs = ys := by
   have hpow : 256 ^ 8 = 2 ^ 64 := by decide
   have hxlt : ofBE xs < 2 ^ 64 := by have := ofBE_lt xs; rw [hx, hpow] at this; exact this
@@ -102,15 +98,13 @@ private theorem uint64_ofBE_8_inj {xs ys : List UInt8}
 
 /-- Split a 32-byte (256-bit) digest into four big-endian 64-bit `UInt64` limbs without truncation. -/
 def digestLimbs256 (d : List UInt8) : UInt64 × UInt64 × UInt64 × UInt64 :=
-  (UInt64.ofNat (ofBE (d.take 8)),
-   UInt64.ofNat (ofBE ((d.drop 8).take 8)),
+  (UInt64.ofNat (ofBE (d.take 8)), UInt64.ofNat (ofBE ((d.drop 8).take 8)),
    UInt64.ofNat (ofBE ((d.drop 16).take 8)),
    UInt64.ofNat (ofBE ((d.drop 24).take 8)))
 
 /-- **Full-Width 256-Bit Carrier Injectivity (`digestLimbs256_injective`)**:
     Two 32-byte digests with equal `4 × UInt64` limb tuples are byte-for-byte identical. -/
-theorem digestLimbs256_injective {d₁ d₂ : List UInt8}
-    (h₁ : d₁.length = 32) (h₂ : d₂.length = 32)
+theorem digestLimbs256_injective {d₁ d₂ : List UInt8} (h₁ : d₁.length = 32) (h₂ : d₂.length = 32)
     (heq : digestLimbs256 d₁ = digestLimbs256 d₂) : d₁ = d₂ := by
   unfold digestLimbs256 at heq
   simp only [Prod.mk.injEq] at heq
@@ -154,7 +148,6 @@ def materializeWorldChunks (w : ChunkedWorld.World) : Array ChunkData :=
     if c < ChunkedWorld.numBuckets then worldBucketChunk w c
     else if c = ChunkedWorld.numBuckets then worldManifestChunk w
     else zeroChunk).toArray
-
 theorem materializeWorldChunks_size (w : ChunkedWorld.World) :
     (materializeWorldChunks w).size = numChunks := by simp [materializeWorldChunks]
 
@@ -162,13 +155,10 @@ theorem materializeWorldChunks_size (w : ChunkedWorld.World) :
 
 private theorem leafTag_size (v : UInt64) : (leafTag v).size = 32 := by
   unfold leafTag tagOf; exact cshake32ByteArray_size treeCustomization (leafPreimage v)
-
 private theorem nodeTag_size (children : List ByteArray) : (nodeTag children).size = 32 := by
   unfold nodeTag tagOf; exact cshake32ByteArray_size treeCustomization (nodePreimage children)
-
 private theorem getD_lt {α : Type} (xs : Array α) (i : Nat) (d : α) (hi : i < xs.size) :
     xs.getD i d = xs[i]'hi := by unfold Array.getD; simp [hi]
-
 private theorem map_const_range (n : Nat) (x : ByteArray) :
     (List.range n).map (fun _ => x) = List.replicate n x := by
   apply List.ext_getElem (by simp); intro _ _ _; simp
@@ -177,17 +167,14 @@ private theorem map_const_range (n : Nat) (x : ByteArray) :
 def zeroTreeTag : Nat → ByteArray
   | 0 => leafTag 0
   | lvl + 1 => nodeTag (List.replicate 16 (zeroTreeTag lvl))
-
 theorem zeroTreeTag_size : ∀ (lvl : Nat), (zeroTreeTag lvl).size = 32
   | 0 => leafTag_size 0
   | lvl + 1 => nodeTag_size (List.replicate 16 (zeroTreeTag lvl))
 
 /-- Level-1 `VerkleUmem` subtree tag of a 16-slot `ChunkData`. -/
 def chunkSubtreeTag (c : ChunkData) : ByteArray := nodeTag (c.slots.toList.map leafTag)
-
 theorem chunkSubtreeTag_size (c : ChunkData) : (chunkSubtreeTag c).size = 32 :=
   nodeTag_size (c.slots.toList.map leafTag)
-
 theorem chunkSubtreeTag_zero : chunkSubtreeTag zeroChunk = zeroTreeTag 1 := by
   unfold chunkSubtreeTag zeroChunk zeroTreeTag chunkSlots
   exact congrArg nodeTag (by simp [Array.toList_replicate, zeroTreeTag])
@@ -195,7 +182,6 @@ theorem chunkSubtreeTag_zero : chunkSubtreeTag zeroChunk = zeroTreeTag 1 := by
 /-- Extract the 16 chunk roots belonging to group `g < 16`. -/
 def groupChunkTags (chunkRoots : Array ByteArray) (g : Nat) : List ByteArray :=
   (List.range 16).map fun d => chunkRoots.getD (g * 16 + d) (zeroTreeTag 1)
-
 private theorem groupChunkTags_getElem (cr : Array ByteArray) (g d : Nat) (hd : d < 16) :
     (groupChunkTags cr g)[d]'(by simp [groupChunkTags]; exact hd) =
       cr.getD (g * 16 + d) (zeroTreeTag 1) := by
@@ -210,7 +196,6 @@ def liftSpineFrom : Nat → Nat → ByteArray → ByteArray
   | _, 0, cur => cur
   | lvl, steps + 1, cur =>
     liftSpineFrom (lvl + 1) steps (nodeTag (cur :: List.replicate 15 (zeroTreeTag lvl)))
-
 theorem liftSpineFrom_size : ∀ (lvl steps : Nat) (cur : ByteArray),
     cur.size = 32 → (liftSpineFrom lvl steps cur).size = 32
   | _, 0, _, hcur => hcur
@@ -231,7 +216,6 @@ def fullVerkleCommitChunks (chunks : Array ChunkData) : ByteArray :=
 /-- Full scratch Verkle root of a `ChunkedWorld.World`. -/
 def fullVerkleCommitWorld (w : ChunkedWorld.World) : ByteArray :=
   fullVerkleCommitChunks (materializeWorldChunks w)
-
 theorem fullVerkleCommitChunks_size (chunks : Array ChunkData) :
     (fullVerkleCommitChunks chunks).size = 32 := by
   unfold fullVerkleCommitChunks liftActiveToRoot; dsimp only
@@ -246,15 +230,11 @@ theorem fullVerkleCommitChunks_size (chunks : Array ChunkData) :
 def specExtRamTreeTag (ram : ExtRam) : Nat → Nat → ByteArray
   | 0, pfx => if pfx < 2 ^ 64 then leafTag (ram (UInt64.ofNat pfx)) else leafTag 0
   | lvl + 1, pfx => nodeTag ((List.range 16).map fun d => specExtRamTreeTag ram lvl (pfx * 16 + d))
-
-private theorem specExtRamTreeTag_zero (ram : ExtRam) (pfx : Nat) :
-    specExtRamTreeTag ram 0 pfx =
+private theorem specExtRamTreeTag_zero (ram : ExtRam) (pfx : Nat) : specExtRamTreeTag ram 0 pfx =
       if pfx < 2 ^ 64 then leafTag (ram (UInt64.ofNat pfx)) else leafTag 0 := rfl
-
 private theorem specExtRamTreeTag_succ (ram : ExtRam) (lvl pfx : Nat) :
     specExtRamTreeTag ram (lvl + 1) pfx =
       nodeTag ((List.range 16).map fun d => specExtRamTreeTag ram lvl (pfx * 16 + d)) := rfl
-
 private theorem specExtRamTreeTag_zero_above (chunks : Array ChunkData) :
     ∀ (lvl pfx : Nat), totalSlots ≤ pfx * 16 ^ lvl →
       specExtRamTreeTag (chunksToExtRam chunks) lvl pfx = zeroTreeTag lvl
@@ -279,7 +259,6 @@ private theorem specExtRamTreeTag_zero_above (chunks : Array ChunkData) :
     apply specExtRamTreeTag_zero_above chunks lvl (pfx * 16 + d)
     rw [Nat.pow_succ, Nat.mul_comm (16 ^ lvl) 16, ← Nat.mul_assoc] at hge
     exact Nat.le_trans hge (Nat.mul_le_mul_right (16 ^ lvl) (by omega))
-
 private theorem chunkSlots_toList_eq_range (c : ChunkData) :
     c.slots.toList.map leafTag = (List.range 16).map (fun j => leafTag (c.getSlot j)) := by
   have hlen : c.slots.toList.length = 16 := by rw [Array.length_toList, c.size_eq]; rfl
@@ -288,14 +267,11 @@ private theorem chunkSlots_toList_eq_range (c : ChunkData) :
   simp only [List.getElem_map, List.getElem_range]
   have hjb : j < c.slots.size := by rw [c.size_eq]; simp at hj2; exact hj2
   unfold ChunkData.getSlot; rw [getD_lt c.slots j 0 hjb]; simp
-
 private theorem specExtRamTreeTag_lvl3 (chunks : Array ChunkData) :
-    specExtRamTreeTag (chunksToExtRam chunks) 3 0 =
-      nodeTag ((List.range numGroups).map fun g =>
+    specExtRamTreeTag (chunksToExtRam chunks) 3 0 = nodeTag ((List.range numGroups).map fun g =>
         groupSubtreeTag (((List.range numChunks).map fun c =>
           chunkSubtreeTag (chunks.getD c zeroChunk)).toArray) g) := by
-  have hlvl1 : ∀ c < numChunks,
-      specExtRamTreeTag (chunksToExtRam chunks) 1 c =
+  have hlvl1 : ∀ c < numChunks, specExtRamTreeTag (chunksToExtRam chunks) 1 c =
         chunkSubtreeTag (chunks.getD c zeroChunk) := by
     intro c hc
     rw [specExtRamTreeTag_succ]; unfold chunkSubtreeTag; rw [chunkSlots_toList_eq_range]
@@ -326,7 +302,6 @@ private theorem specExtRamTreeTag_lvl3 (chunks : Array ChunkData) :
     chunkSubtreeTag (chunks.getD c zeroChunk)).toArray
   have hsz : arr.size = numChunks := by simp [arr]
   rw [getD_lt arr (g * 16 + d) (zeroTreeTag 1) (by rw [hsz]; exact hclt)]; simp [arr]
-
 private theorem liftSpineFrom_eq_specExtRam (chunks : Array ChunkData) :
     ∀ (steps lvl : Nat), 3 ≤ lvl →
       liftSpineFrom lvl steps (specExtRamTreeTag (chunksToExtRam chunks) lvl 0) =
@@ -355,9 +330,8 @@ private theorem liftSpineFrom_eq_specExtRam (chunks : Array ChunkData) :
     have hadd : lvl + 1 + steps = lvl + (steps + 1) := by omega
     rwa [hadd] at heq
 
-/-- **`fullVerkleCommitChunks` Equals the Full 16-Level `ExtRam` `VerkleUmem` Root**:
-    Materializing the $4{,}096$ chunk slots produces the exact 16-level `VerkleUmem` root of
-    `chunksToExtRam chunks` over the full $2^{64}$ address space. -/
+/-- **`fullVerkleCommitChunks` Equals the 16-Level `ExtRam` Root**: materializing the 4,096 chunk
+    slots gives the `VerkleUmem` root of `chunksToExtRam chunks` over the $2^{64}$ address space. -/
 theorem fullVerkleCommitChunks_eq_specExtRamRoot (chunks : Array ChunkData) :
     fullVerkleCommitChunks chunks = specExtRamTreeTag (chunksToExtRam chunks) 16 0 := by
   unfold fullVerkleCommitChunks liftActiveToRoot; dsimp only
@@ -371,7 +345,6 @@ def decomposeUInt64Limbs (u : UInt64) : List Int :=
   let n := u.toNat
   [(((n % 65536) : Nat) : Int), ((((n / 65536) % 65536) : Nat) : Int),
    ((((n / 4294967296) % 65536) : Nat) : Int), (((n / 281474976710656) : Nat) : Int)]
-
 theorem decomposeUInt64Limbs_injective {u₁ u₂ : UInt64}
     (h : decomposeUInt64Limbs u₁ = decomposeUInt64Limbs u₂) : u₁ = u₂ := by
   unfold decomposeUInt64Limbs at h
@@ -380,7 +353,6 @@ theorem decomposeUInt64Limbs_injective {u₁ u₂ : UInt64}
   have hb1 : u₁.toNat < 2 ^ 64 := u₁.toNat_lt
   have hb2 : u₂.toNat < 2 ^ 64 := u₂.toNat_lt
   exact UInt64.toNat_inj.1 (by omega)
-
 theorem decomposeUInt64Limbs_short (u : UInt64) :
     ∀ z ∈ decomposeUInt64Limbs u, z.natAbs ≤ 65535 := by
   intro z hz; have hb : u.toNat < 2 ^ 64 := u.toNat_lt
@@ -389,7 +361,6 @@ theorem decomposeUInt64Limbs_short (u : UInt64) :
 
 /-- Flatten a list of `UInt64` words into `4 * words.length` short 16-bit integer limbs. -/
 def wordsToLimbs (words : List UInt64) : List Int := words.flatMap decomposeUInt64Limbs
-
 theorem wordsToLimbs_length (words : List UInt64) :
     (wordsToLimbs words).length = 4 * words.length := by
   unfold wordsToLimbs
@@ -398,14 +369,11 @@ theorem wordsToLimbs_length (words : List UInt64) :
   | cons u us ih =>
     simp only [List.flatMap_cons, decomposeUInt64Limbs,
       List.cons_append, List.nil_append, List.length_cons, ih]; omega
-
-theorem wordsToLimbs_short (words : List UInt64) :
-    ShortNormBound 65535 (wordsToLimbs words) := by
+theorem wordsToLimbs_short (words : List UInt64) : ShortNormBound 65535 (wordsToLimbs words) := by
   unfold ShortNormBound; apply Obend.Crypto.normInf_le_of_forall
   intro z hz; unfold wordsToLimbs at hz
   obtain ⟨u, _, hzu⟩ := List.mem_flatMap.1 hz
   exact decomposeUInt64Limbs_short u z hzu
-
 theorem wordsToLimbs_injective : ∀ {l₁ l₂ : List UInt64},
     wordsToLimbs l₁ = wordsToLimbs l₂ → l₁ = l₂
   | [], [], _ => rfl
@@ -421,10 +389,8 @@ theorem wordsToLimbs_injective : ∀ {l₁ l₂ : List UInt64},
 
 /-- Convert a 16-slot `ChunkData` to its 64-coordinate short Ajtai witness (`‖w‖_∞ ≤ 65535`). -/
 def chunkToLimbs (c : ChunkData) : List Int := wordsToLimbs c.slots.toList
-
 theorem chunkToLimbs_length (c : ChunkData) : (chunkToLimbs c).length = 64 := by
   unfold chunkToLimbs; rw [wordsToLimbs_length, Array.length_toList, c.size_eq]; rfl
-
 theorem chunkToLimbs_short (c : ChunkData) : Short 64 65535 (chunkToLimbs c) :=
   ⟨chunkToLimbs_length c, wordsToLimbs_short c.slots.toList⟩
 
@@ -465,7 +431,6 @@ structure AuthenticatedWorldSnapshot where
   (∀ g : Nat, g < numGroups → s.groupRoots.getD g ByteArray.empty = groupSubtreeTag s.chunkRoots g) ∧
   s.activeRoot = nodeTag s.groupRoots.toList ∧ s.verkleRoot = liftActiveToRoot s.activeRoot ∧
   (∀ c : Nat, c < numChunks → s.ajtaiChunkRoots.getD c [] = ajtaiChunkCommit pp hCols (s.chunks.getD c zeroChunk))
-
 private theorem snapshotWF_with_world {pp : AjtaiParams} {hCols : pp.cols = 64}
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s) (w' : ChunkedWorld.World) :
     SnapshotWF pp hCols { s with world := w' } := hwf
@@ -480,11 +445,9 @@ def buildSnapshotFromChunks (pp : AjtaiParams) (hCols : pp.cols = 64)
   let aRoots := ((List.range numChunks).map fun c => ajtaiChunkCommit pp hCols (normChunks.getD c zeroChunk)).toArray
   { world := w, branchGen := gen, chunks := normChunks, chunkRoots := cRoots,
     groupRoots := gRoots, activeRoot := act, verkleRoot := liftActiveToRoot act, ajtaiChunkRoots := aRoots }
-
 /-- Build the canonical `AuthenticatedWorldSnapshot` of `w : ChunkedWorld.World`. -/
 def buildAuthenticatedSnapshot (pp : AjtaiParams) (hCols : pp.cols = 64) (w : ChunkedWorld.World) :
     AuthenticatedWorldSnapshot := buildSnapshotFromChunks pp hCols w (materializeWorldChunks w) 0
-
 theorem buildSnapshotFromChunks_wf (pp : AjtaiParams) (hCols : pp.cols = 64)
     (w : ChunkedWorld.World) (chunks : Array ChunkData) (gen : Nat) :
     SnapshotWF pp hCols (buildSnapshotFromChunks pp hCols w chunks gen) := by
@@ -493,11 +456,9 @@ theorem buildSnapshotFromChunks_wf (pp : AjtaiParams) (hCols : pp.cols = 64)
   · intro c hc; rw [getD_lt _ c ByteArray.empty (by simp; exact hc)]; simp
   · intro g hg; rw [getD_lt _ g ByteArray.empty (by simp; exact hg)]; simp
   · intro c hc; rw [getD_lt _ c [] (by simp; exact hc)]; simp
-
 theorem buildAuthenticatedSnapshot_wf (pp : AjtaiParams) (hCols : pp.cols = 64) (w : ChunkedWorld.World) :
     SnapshotWF pp hCols (buildAuthenticatedSnapshot pp hCols w) :=
   buildSnapshotFromChunks_wf pp hCols w (materializeWorldChunks w) 0
-
 theorem snapshotWF_verkleRoot_eq_fullCommit {pp : AjtaiParams} {hCols : pp.cols = 64}
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s) :
     s.verkleRoot = fullVerkleCommitChunks s.chunks := by
@@ -512,7 +473,6 @@ theorem snapshotWF_verkleRoot_eq_fullCommit {pp : AjtaiParams} {hCols : pp.cols 
   apply List.ext_getElem (by simp [hgsz]); intro g _ hg2
   have hglt : g < numGroups := by simp at hg2; exact hg2
   rw [Array.getElem_toList, ← getD_lt s.groupRoots g ByteArray.empty (by rw [hgsz]; exact hglt), hgEq g hglt]; simp
-
 theorem buildAuthenticatedSnapshot_verkleRoot (pp : AjtaiParams) (hCols : pp.cols = 64) (w : ChunkedWorld.World) :
     (buildAuthenticatedSnapshot pp hCols w).verkleRoot = fullVerkleCommitWorld w := by
   rw [snapshotWF_verkleRoot_eq_fullCommit (buildAuthenticatedSnapshot_wf pp hCols w)]
@@ -521,9 +481,8 @@ theorem buildAuthenticatedSnapshot_verkleRoot (pp : AjtaiParams) (hCols : pp.col
   intro c _ hc2
   rw [List.getElem_toArray, List.getElem_map, List.getElem_range, getD_lt (materializeWorldChunks w) c zeroChunk hc2]
 
-/-- **Incremental Single-Chunk Verkle Update (`updateChunkVerkleRoot`)**:
-    Updates 1 dirty chunk `c < 256` (`B = 16` slots) by recomputing **only** its chunk tag, its
-    16-chunk group tag, its $O(\log K)$ upper spine, and its Ajtai chunk commitment. -/
+/-- **Incremental Single-Chunk Update**: recomputes only dirty chunk `c`'s tag, its 16-chunk group
+    tag, the $O(\log K)$ upper spine, and its Ajtai chunk commitment. -/
 def updateChunkVerkleRoot (pp : AjtaiParams) (hCols : pp.cols = 64)
     (s : AuthenticatedWorldSnapshot) (c : Nat) (_hc : c < numChunks)
     (newChunk : ChunkData) : AuthenticatedWorldSnapshot :=
@@ -536,32 +495,27 @@ def updateChunkVerkleRoot (pp : AjtaiParams) (hCols : pp.cols = 64)
   let aRoots' := s.ajtaiChunkRoots.setIfInBounds c (ajtaiChunkCommit pp hCols newChunk)
   { s with chunks := chunks', chunkRoots := cRoots', groupRoots := gRoots',
            activeRoot := act', verkleRoot := liftActiveToRoot act', ajtaiChunkRoots := aRoots' }
-
 private theorem getD_setIfInBounds_eq {α : Type} (xs : Array α) (i : Nat) (v d : α)
     (hi : i < xs.size) : (xs.setIfInBounds i v).getD i d = v := by unfold Array.getD; simp [hi]
-
 private theorem getD_setIfInBounds_ne {α : Type} (xs : Array α) (i j : Nat) (v d : α)
     (hne : j ≠ i) : (xs.setIfInBounds i v).getD j d = xs.getD j d := by
   unfold Array.getD
   by_cases hj : j < xs.size
   · simp [hj, Ne.symm hne]
   · simp [hj]
-
 theorem updateChunkVerkleRoot_wf {pp : AjtaiParams} {hCols : pp.cols = 64}
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s)
     (c : Nat) (hc : c < numChunks) (newChunk : ChunkData) :
     SnapshotWF pp hCols (updateChunkVerkleRoot pp hCols s c hc newChunk) := by
   obtain ⟨hcsz, hrsz, hgsz, hasz, hcEq, hgEq, _, _, haEq⟩ := hwf
   unfold SnapshotWF updateChunkVerkleRoot; dsimp only
-  refine ⟨by simp [hcsz], by simp [hrsz], by simp [hgsz], by simp [hasz],
-    ?_, ?_, rfl, rfl, ?_⟩
+  refine ⟨by simp [hcsz], by simp [hrsz], by simp [hgsz], by simp [hasz], ?_, ?_, rfl, rfl, ?_⟩
   · intro c' hc'
     by_cases heq : c' = c
     · subst heq
       rw [getD_setIfInBounds_eq _ _ _ _ (by rw [hrsz]; exact hc),
           getD_setIfInBounds_eq _ _ _ _ (by rw [hcsz]; exact hc)]
-    · rw [getD_setIfInBounds_ne _ _ _ _ _ heq,
-          getD_setIfInBounds_ne _ _ _ _ _ heq, hcEq c' hc']
+    · rw [getD_setIfInBounds_ne _ _ _ _ _ heq, getD_setIfInBounds_ne _ _ _ _ _ heq, hcEq c' hc']
   · intro g' hg'
     have hglt : c / 16 < numGroups := by unfold numChunks numGroups at *; omega
     by_cases hgeq : g' = c / 16
@@ -577,13 +531,10 @@ theorem updateChunkVerkleRoot_wf {pp : AjtaiParams} {hCols : pp.cols = 64}
     · subst heq
       rw [getD_setIfInBounds_eq _ _ _ _ (by rw [hasz]; exact hc),
           getD_setIfInBounds_eq _ _ _ _ (by rw [hcsz]; exact hc)]
-    · rw [getD_setIfInBounds_ne _ _ _ _ _ heq,
-          getD_setIfInBounds_ne _ _ _ _ _ heq, haEq c' hc']
+    · rw [getD_setIfInBounds_ne _ _ _ _ _ heq, getD_setIfInBounds_ne _ _ _ _ _ heq, haEq c' hc']
 
-/-- **Headline Theorem 1 (`incrementalVerkleSnapshot_eq_fullCommit`)**:
-    Updating any dirty chunk `c < 256` via `updateChunkVerkleRoot` ($O(\log K)$ node hashes)
-    preserves `SnapshotWF`, yields a 32-byte root, and produces the **exact same** `VerkleUmem`
-    root as `fullVerkleCommitChunks` and `specExtRamTreeTag`. -/
+/-- **Headline Theorem 1**: `updateChunkVerkleRoot` on any chunk `c < 256` preserves `SnapshotWF`,
+    yields a 32-byte root, and equals `fullVerkleCommitChunks` and `specExtRamTreeTag`. -/
 theorem incrementalVerkleSnapshot_eq_fullCommit {pp : AjtaiParams} {hCols : pp.cols = 64}
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s)
     (c : Nat) (hc : c < numChunks) (newChunk : ChunkData) :
@@ -596,7 +547,6 @@ theorem incrementalVerkleSnapshot_eq_fullCommit {pp : AjtaiParams} {hCols : pp.c
   have hfull := snapshotWF_verkleRoot_eq_fullCommit hwf'
   refine ⟨hwf', ?_, hfull, hfull.trans (fullVerkleCommitChunks_eq_specExtRamRoot _)⟩
   rw [hfull]; exact fullVerkleCommitChunks_size _
-
 private def syncStep (pp : AjtaiParams) (hCols : pp.cols = 64)
     (target : Array ChunkData) (acc : AuthenticatedWorldSnapshot) (c : Nat) :
     AuthenticatedWorldSnapshot :=
@@ -611,7 +561,6 @@ def syncSnapshotWorld (pp : AjtaiParams) (hCols : pp.cols = 64)
     (s : AuthenticatedWorldSnapshot) (w' : ChunkedWorld.World) : AuthenticatedWorldSnapshot :=
   let s1 := (List.range numChunks).foldl (syncStep pp hCols (materializeWorldChunks w')) s
   { s1 with world := w' }
-
 private theorem syncStep_props {pp : AjtaiParams} {hCols : pp.cols = 64}
     (target : Array ChunkData) {acc : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols acc)
     (idx : Nat) :
@@ -634,17 +583,14 @@ private theorem syncStep_props {pp : AjtaiParams} {hCols : pp.cols = 64}
         exact getD_setIfInBounds_ne acc.chunks idx c _ zeroChunk hne
   · rename_i hnc
     exact ⟨hwf, fun h => (hnc h).elim, fun _ _ => rfl⟩
-
 private theorem syncFold_preserves {pp : AjtaiParams} {hCols : pp.cols = 64}
     (target : Array ChunkData) (idxs : List Nat) :
-    ∀ (acc : AuthenticatedWorldSnapshot),
-      SnapshotWF pp hCols acc →
+    ∀ (acc : AuthenticatedWorldSnapshot), SnapshotWF pp hCols acc →
       SnapshotWF pp hCols (idxs.foldl (syncStep pp hCols target) acc) ∧
       (∀ c ∈ idxs, c < numChunks →
         (idxs.foldl (syncStep pp hCols target) acc).chunks.getD c zeroChunk =
           target.getD c zeroChunk) ∧
-      (∀ c, c ∉ idxs →
-        (idxs.foldl (syncStep pp hCols target) acc).chunks.getD c zeroChunk =
+      (∀ c, c ∉ idxs → (idxs.foldl (syncStep pp hCols target) acc).chunks.getD c zeroChunk =
           acc.chunks.getD c zeroChunk) := by
   induction idxs with
   | nil =>
@@ -668,7 +614,6 @@ private theorem syncFold_preserves {pp : AjtaiParams} {hCols : pp.cols = 64}
       have hnotIdx : c ≠ idx := fun e => hnot (List.mem_cons.2 (.inl e))
       have hnotRest : c ∉ rest := fun hm => hnot (List.mem_cons.2 (.inr hm))
       rw [hOut2 c hnotRest, hNe1 c hnotIdx]
-
 theorem syncSnapshotWorld_wf_and_eq_fullCommit {pp : AjtaiParams} {hCols : pp.cols = 64}
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s) (w' : ChunkedWorld.World) :
     let s' := syncSnapshotWorld pp hCols s w'
@@ -695,7 +640,6 @@ theorem syncSnapshotWorld_wf_and_eq_fullCommit {pp : AjtaiParams} {hCols : pp.co
 /-- Read slot `(c, j)` of `s` (`0` out of bounds). -/
 def AuthenticatedWorldSnapshot.readSlot (s : AuthenticatedWorldSnapshot) (c j : Nat) : UInt64 :=
   (s.chunks.getD c zeroChunk).getSlot j
-
 /-- Build the 16-level `Obend.Polis.verifyOpening` sibling path for slot `(c, j)`. -/
 def openSnapshotSlot (s : AuthenticatedWorldSnapshot) (c j : Nat) : Array (Array ByteArray) :=
   let chunk := s.chunks.getD c zeroChunk
@@ -704,7 +648,6 @@ def openSnapshotSlot (s : AuthenticatedWorldSnapshot) (c j : Nat) : Array (Array
   let sib2 := (s.groupRoots.toList.eraseIdx (c / 16)).toArray
   let upper := (List.range 13).map fun k => Array.replicate 15 (zeroTreeTag (3 + k))
   (sib0 :: sib1 :: sib2 :: upper).toArray
-
 private theorem insertAt_eraseIdx : ∀ (xs : List ByteArray) (n : Nat) (hn : n < xs.length),
     insertAt n (xs[n]'hn) (xs.eraseIdx n) = xs
   | [], _, hn => by simp at hn
@@ -713,7 +656,6 @@ private theorem insertAt_eraseIdx : ∀ (xs : List ByteArray) (n : Nat) (hn : n 
     simp only [List.eraseIdx_cons_succ, List.getElem_cons_succ, insertAt,
       List.take_succ_cons, List.drop_succ_cons, List.cons_append]
     exact congrArg (x :: ·) (insertAt_eraseIdx xs n (Nat.lt_of_succ_lt_succ hn))
-
 private theorem eraseIdx_length_of_lt : ∀ (xs : List ByteArray) (n : Nat),
     n < xs.length → (xs.eraseIdx n).length = xs.length - 1
   | [], _, hn => by simp at hn
@@ -722,10 +664,8 @@ private theorem eraseIdx_length_of_lt : ∀ (xs : List ByteArray) (n : Nat),
     have ih := eraseIdx_length_of_lt xs n (Nat.lt_of_succ_lt_succ hn)
     have hpos : 0 < xs.length := Nat.lt_of_le_of_lt (Nat.zero_le _) (Nat.lt_of_succ_lt_succ hn)
     simp only [List.eraseIdx_cons_succ, List.length_cons, ih]; omega
-
 private theorem climb_upper_zeroSpine (addr : UInt64) (haddr : addr.toNat < totalSlots) :
-    ∀ (steps lvl : Nat) (cur : ByteArray), 3 ≤ lvl →
-      List.foldlM (climbStep addr) (lvl, cur)
+    ∀ (steps lvl : Nat) (cur : ByteArray), 3 ≤ lvl → List.foldlM (climbStep addr) (lvl, cur)
         ((List.range steps).map fun k => Array.replicate 15 (zeroTreeTag (lvl + k))) =
         some (lvl + steps, liftSpineFrom lvl steps cur)
   | 0, lvl, cur, _ => by simp [liftSpineFrom]
@@ -750,9 +690,8 @@ private theorem climb_upper_zeroSpine (addr : UInt64) (haddr : addr.toNat < tota
       have hadd : lvl + 1 + steps = lvl + (steps + 1) := by omega
       rwa [hadd] at ih
 
-/-- **Snapshot Opening Completeness (`openSnapshotSlot_valid`)**:
-    Every slot `(c, j)` (`c < 256`, `j < 16`) in a well-formed `AuthenticatedWorldSnapshot`
-    produces a 16-level sibling path accepted by `Obend.Polis.verifyOpening`. -/
+/-- **Snapshot Opening Completeness**: every slot `(c, j)` (`c < 256`, `j < 16`) of a well-formed
+    snapshot has a 16-level sibling path accepted by `Obend.Polis.verifyOpening`. -/
 theorem openSnapshotSlot_valid {pp : AjtaiParams} {hCols : pp.cols = 64}
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s)
     {c j : Nat} (hc : c < numChunks) (hj : j < chunkSlots) :
@@ -823,17 +762,14 @@ theorem openSnapshotSlot_valid {pp : AjtaiParams} {hCols : pp.cols = 64}
         exact climb_upper_zeroSpine (slotAddr c j) haddrTot 13 3 s.activeRoot (by decide)
 
 /-! ## 5. $O(1)$ COW Snapshot Forking, Subtree Sharing & Dual-Track Binding -/
-
 /-- Fork `s` in $O(1)$ by bumping `branchGen` while structurally sharing all persistent arrays. -/
 def cowForkSnapshot (s : AuthenticatedWorldSnapshot) : AuthenticatedWorldSnapshot :=
   { s with branchGen := s.branchGen + 1 }
-
 /-- Fork `s` and apply a COW update to a single dirty chunk `c < 256` (`O(\log K)` hashes). -/
 def cowUpdateChunk (pp : AjtaiParams) (hCols : pp.cols = 64)
     (s : AuthenticatedWorldSnapshot) (c : Nat) (hc : c < numChunks)
     (newChunk : ChunkData) : AuthenticatedWorldSnapshot :=
   updateChunkVerkleRoot pp hCols (cowForkSnapshot s) c hc newChunk
-
 /-- Rebind a pre-branch slot opening's level-0 intra-chunk sibling witness (`prePath[0]`) onto
     `postBranch`'s updated upper spine (`levels 1..15`) without reading `postBranch.chunks[c']`. -/
 def rebindPreBranchChunkOpening (prePath : Array (Array ByteArray))
@@ -843,38 +779,98 @@ def rebindPreBranchChunkOpening (prePath : Array (Array ByteArray))
   let sib2 := (postBranch.groupRoots.toList.eraseIdx (c' / 16)).toArray
   let upper := (List.range 13).map fun k => Array.replicate 15 (zeroTreeTag (3 + k))
   (sib0 :: sib1 :: sib2 :: upper).toArray
-
 /-- Every sibling tag at every level of `path` has arity `15` and exact byte width `32`. -/
 def checkWellSizedVerklePath (path : Array (Array ByteArray)) : Bool :=
   path.size == 16 &&
   path.toList.all fun sibs => sibs.size == 15 && sibs.toList.all fun b => b.size == 32
 
-/-- Stateless dual-authenticated opening of slot `(c, j)` against `(verkleRoot, ajtaiChunkRoot)`. -/
+/-- Two distinct bounded preimages under one `tagOf` are a named `treeHash` collision. -/
+private def mkTagCollision {p q : List UInt8} (hp : p.length ≤ verkleMaxPreimageBytes)
+    (hq : q.length ≤ verkleMaxPreimageBytes) (hne : p ≠ q) (h : tagOf p = tagOf q) :
+    HashCollisionWitness treeHash verkleMaxPreimageBytes where
+  msgA := p
+  msgB := q
+  lenA := hp
+  lenB := hq
+  distinct := hne
+  sameDigest := by
+    have hl : (tagOf p).data.toList = (tagOf q).data.toList := congrArg (fun b => b.data.toList) h
+    simp only [tagOf, cshake32ByteArray, Obend.Digest.Cshake256.Native.bytesOfList_toList] at hl
+    exact congrArg ofBE hl
+
+/-- Snapshot-root header preimage: tag byte `2` (leaves are `0`, nodes `1`), then the length-framed
+    8-byte chunk count and the length-framed 32-byte `VerkleUmem` root. -/
+def snapshotRootPreimage (n : Nat) (verkleRoot : ByteArray) : List UInt8 :=
+  2 :: encodeFields [be 8 n, verkleRoot.data.toList]
+
+/-- The snapshot root: the chunk count `n` and the Verkle root under one `treeHash` tag. -/
+def snapshotRootTag (n : Nat) (verkleRoot : ByteArray) : ByteArray :=
+  tagOf (snapshotRootPreimage n verkleRoot)
+
+/-- The snapshot root of `s`, committing to its own chunk count. -/
+def AuthenticatedWorldSnapshot.snapshotRoot (s : AuthenticatedWorldSnapshot) : ByteArray :=
+  snapshotRootTag s.chunks.size s.verkleRoot
+theorem snapshotRootPreimage_injective {n₁ n₂ : Nat} {r₁ r₂ : ByteArray}
+    (hn₁ : n₁ < 2 ^ 64) (hn₂ : n₂ < 2 ^ 64)
+    (h : snapshotRootPreimage n₁ r₁ = snapshotRootPreimage n₂ r₂) : n₁ = n₂ ∧ r₁ = r₂ := by
+  simp only [snapshotRootPreimage, List.cons.injEq, true_and] at h
+  have hf := encodeFields_injective _ _ h
+  simp only [List.cons.injEq, and_true] at hf
+  have h8 : (2 : Nat) ^ 64 = 256 ^ 8 := by decide
+  exact ⟨Obend.Digest.HashBytes.be_injective (h8 ▸ hn₁) (h8 ▸ hn₂) hf.1,
+    (List.cons.inj (map_toList_injective [r₁] [r₂] (congrArg (fun x => [x]) hf.2))).1⟩
+
+/-- **Snapshot-Root Binding (`0 Classical`)**: equal snapshot roots commit to the same chunk count
+    and Verkle root, or their two header preimages are a named `treeHash` collision. -/
+def extractSnapshotRootBreak {n₁ n₂ : Nat} {r₁ r₂ : ByteArray}
+    (hn₁ : n₁ < 2 ^ 64) (hn₂ : n₂ < 2 ^ 64) (hr₁ : r₁.size = 32) (hr₂ : r₂.size = 32)
+    (h : snapshotRootTag n₁ r₁ = snapshotRootTag n₂ r₂) :
+    PSum (n₁ = n₂ ∧ r₁ = r₂) (HashCollisionWitness treeHash verkleMaxPreimageBytes) :=
+  have hlen : ∀ (n : Nat) (r : ByteArray), r.size = 32 →
+      (snapshotRootPreimage n r).length ≤ verkleMaxPreimageBytes := by
+    intro n r hr
+    have hr' : r.data.toList.length = 32 := by rw [Array.length_toList]; exact hr
+    have h8 : (leb128 8).length = 1 := by decide
+    have h32 : (leb128 32).length = 1 := by decide
+    simp [snapshotRootPreimage, encodeFields, encodeListField, hr', h8, h32, verkleMaxPreimageBytes]
+  if heq : n₁ = n₂ ∧ r₁ = r₂ then .inl heq
+  else .inr (mkTagCollision (hlen n₁ r₁ hr₁) (hlen n₂ r₂ hr₂)
+    (fun hp => heq (snapshotRootPreimage_injective hn₁ hn₂ hp)) h)
+
+/-- Stateless dual-authenticated opening of slot `(c, j)` against `(snapshotRoot, ajtaiChunkRoot)`:
+    the chunk's slots, the Verkle path, and the opened snapshot-root header `(chunkCount, verkleRoot)`. -/
 structure DualChunkSlotOpening where
   chunkSlotsList : List UInt64
   verklePath : Array (Array ByteArray)
+  chunkCount : Nat
+  verkleRoot : ByteArray
   deriving DecidableEq
 
-/-- Stateless dual verifier checking chunk membership, well-sized Verkle path, and Ajtai syndrome. -/
+/-- Stateless dual verifier: chunk membership, well-sized Verkle path, Ajtai syndrome, the opened
+    snapshot-root header, and the index bound `c < chunkCount` with `16 * chunkCount ≤ 2^64`, so
+    `slotAddr c j` never wraps (an index `c + 2^60` is refused, not aliased to `c`). -/
 def verifyDualChunkOpening (pp : AjtaiParams) (hCols : pp.cols = 64)
-    (verkleRoot : ByteArray) (ajtaiRoot : List Int)
+    (snapshotRoot : ByteArray) (ajtaiRoot : List Int)
     (c j : Nat) (val : UInt64) (w : DualChunkSlotOpening) : Bool :=
   if hlen : w.chunkSlotsList.length = 16 then
     if hj : j < 16 then
       let hw : (wordsToLimbs w.chunkSlotsList).length = pp.cols := by
         rw [wordsToLimbs_length, hlen, hCols]
-      (w.chunkSlotsList[j]'(by omega) == val) &&
-      checkWellSizedVerklePath w.verklePath &&
-      verifyOpening verkleRoot (slotAddr c j) val w.verklePath &&
-      decide (ajtaiCommit pp (wordsToLimbs w.chunkSlotsList) hw = ajtaiRoot)
+      ((w.chunkSlotsList[j]'(by omega) == val) &&
+       checkWellSizedVerklePath w.verklePath &&
+       verifyOpening w.verkleRoot (slotAddr c j) val w.verklePath &&
+       decide (ajtaiCommit pp (wordsToLimbs w.chunkSlotsList) hw = ajtaiRoot)) &&
+      (decide (c < w.chunkCount) && decide (chunkSlots * w.chunkCount ≤ 2 ^ 64) &&
+       w.verkleRoot.size == 32 &&
+       decide (snapshotRootTag w.chunkCount w.verkleRoot = snapshotRoot))
     else false
   else false
-
 /-- Produce the honest `DualChunkSlotOpening` for slot `(c, j)` of `s`. -/
 def openDualSnapshotSlot (s : AuthenticatedWorldSnapshot) (c j : Nat) : DualChunkSlotOpening where
   chunkSlotsList := (s.chunks.getD c zeroChunk).slots.toList
   verklePath := openSnapshotSlot s c j
-
+  chunkCount := s.chunks.size
+  verkleRoot := s.verkleRoot
 private theorem all_32_of_eraseIdx : ∀ (xs : List ByteArray) (n : Nat),
     (∀ b ∈ xs, b.size = 32) → ∀ b ∈ xs.eraseIdx n, b.size = 32
   | [], _, _, _, hm => by cases hm
@@ -883,20 +879,21 @@ private theorem all_32_of_eraseIdx : ∀ (xs : List ByteArray) (n : Nat),
     rcases List.mem_cons.1 hb with heq | hb'
     · rw [heq]; exact h y (.head _)
     · exact all_32_of_eraseIdx xs n (fun z hz => h z (.tail _ hz)) b hb'
-
 theorem openDualSnapshotSlot_valid {pp : AjtaiParams} {hCols : pp.cols = 64}
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s)
     {c j : Nat} (hc : c < numChunks) (hj : j < chunkSlots) :
-    verifyDualChunkOpening pp hCols s.verkleRoot (s.ajtaiChunkRoots.getD c [])
+    verifyDualChunkOpening pp hCols s.snapshotRoot (s.ajtaiChunkRoots.getD c [])
       c j (s.readSlot c j) (openDualSnapshotSlot s c j) = true := by
   have hopen := openSnapshotSlot_valid hwf hc hj
-  obtain ⟨_, hrsz, hgsz, _, hcEq, hgEq, _, _, haEq⟩ := hwf
-  unfold verifyDualChunkOpening openDualSnapshotSlot
+  have hroot32 : s.verkleRoot.size = 32 := by
+    rw [snapshotWF_verkleRoot_eq_fullCommit hwf]; exact fullVerkleCommitChunks_size _
+  obtain ⟨hcsz, hrsz, hgsz, _, hcEq, hgEq, _, _, haEq⟩ := hwf
+  unfold verifyDualChunkOpening openDualSnapshotSlot AuthenticatedWorldSnapshot.snapshotRoot
   have hlen16 : ((s.chunks.getD c zeroChunk).slots.toList).length = 16 := by
     rw [Array.length_toList, (s.chunks.getD c zeroChunk).size_eq]; rfl
   have hj16 : j < 16 := hj
   simp only [hlen16, hj16, ↓reduceDIte, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq]
-  refine ⟨⟨⟨?_, ?_⟩, hopen⟩, ?_⟩
+  refine ⟨⟨⟨⟨?_, ?_⟩, hopen⟩, ?_⟩, ⟨⟨hcsz ▸ hc, by rw [hcsz]; decide⟩, hroot32⟩, trivial⟩
   · unfold AuthenticatedWorldSnapshot.readSlot ChunkData.getSlot
     have hjsz : j < (s.chunks.getD c zeroChunk).slots.size := by
       rw [(s.chunks.getD c zeroChunk).size_eq]; exact hj
@@ -942,7 +939,6 @@ theorem openDualSnapshotSlot_valid {pp : AjtaiParams} {hCols : pp.cols = 64}
       have hb' : b = zeroTreeTag (3 + k) := by simpa [Array.toList_replicate] using hb
       rw [hb']; exact zeroTreeTag_size _
   · rw [haEq c hc]; rfl
-
 private theorem encodeFields_32_length : ∀ (children : List ByteArray),
     (∀ b ∈ children, b.size = 32) →
     (encodeFields (children.map fun b => b.data.toList)).length = 33 * children.length
@@ -955,13 +951,11 @@ private theorem encodeFields_32_length : ∀ (children : List ByteArray),
       List.length_append, hb32, hleb32, List.length_cons]
     change 1 + 32 + (encodeFields (bs.map fun x => x.data.toList)).length = 33 * (bs.length + 1)
     omega
-
 private theorem nodePreimage_16_32_length {children : List ByteArray}
     (hlen : children.length = 16) (hall : ∀ b ∈ children, b.size = 32) :
     (nodePreimage children).length = verkleMaxPreimageBytes := by
   unfold nodePreimage verkleMaxPreimageBytes
   simp only [List.length_cons, encodeFields_32_length children hall, hlen]
-
 private theorem insertAt_15_length_and_32 (n : Nat) {cur : ByteArray} {sibs : List ByteArray}
     (hcur : cur.size = 32) (hsibsLen : sibs.length = 15) (hsibs32 : ∀ b ∈ sibs, b.size = 32) :
     (insertAt n cur sibs).length = 16 ∧ ∀ b ∈ insertAt n cur sibs, b.size = 32 := by
@@ -976,37 +970,23 @@ private theorem insertAt_15_length_and_32 (n : Nat) {cur : ByteArray} {sibs : Li
     · rcases List.mem_cons.1 hb2 with rfl | hb3
       · exact hcur
       · exact hsibs32 b (List.mem_of_mem_drop hb3)
-
 private def mkNodeCollisionWitness (n : Nat) {c₁ c₂ : ByteArray} {s₁ s₂ : Array ByteArray}
     (hc1 : c₁.size = 32) (hc2 : c₂.size = 32)
     (hw1 : s₁.size = 15 ∧ ∀ b ∈ s₁.toList, b.size = 32)
     (hw2 : s₂.size = 15 ∧ ∀ b ∈ s₂.toList, b.size = 32) (hne : c₁ ≠ c₂)
     (htag : nodeTag (insertAt n c₁ s₁.toList) = nodeTag (insertAt n c₂ s₂.toList)) :
-    HashCollisionWitness treeHash verkleMaxPreimageBytes where
-  msgA := nodePreimage (insertAt n c₁ s₁.toList)
-  msgB := nodePreimage (insertAt n c₂ s₂.toList)
-  lenA := by
-    obtain ⟨hl, ha⟩ := insertAt_15_length_and_32 n hc1
-      (by rw [Array.length_toList, hw1.1]) hw1.2
-    exact Nat.le_of_eq (nodePreimage_16_32_length hl ha)
-  lenB := by
-    obtain ⟨hl, ha⟩ := insertAt_15_length_and_32 n hc2
-      (by rw [Array.length_toList, hw2.1]) hw2.2
-    exact Nat.le_of_eq (nodePreimage_16_32_length hl ha)
-  distinct := by
-    intro hpre; simp only [nodePreimage, List.cons.injEq, true_and] at hpre
-    have hch := map_toList_injective _ _ (encodeFields_injective _ _ hpre)
-    have hszEq : s₁.toList.length = s₂.toList.length := by
-      rw [Array.length_toList, Array.length_toList, hw1.1, hw2.1]
-    exact hne (insertAt_inj hszEq hch).1
-  sameDigest := by
-    have hl : (nodeTag (insertAt n c₁ s₁.toList)).data.toList =
-        (nodeTag (insertAt n c₂ s₂.toList)).data.toList :=
-      congrArg (fun b => b.data.toList) htag
-    simp only [nodeTag, tagOf, cshake32ByteArray,
-      Obend.Digest.Cshake256.Native.bytesOfList_toList] at hl
-    exact congrArg ofBE hl
-
+    HashCollisionWitness treeHash verkleMaxPreimageBytes :=
+  mkTagCollision
+    (by obtain ⟨hl, ha⟩ := insertAt_15_length_and_32 n hc1 (by rw [Array.length_toList, hw1.1]) hw1.2
+        exact Nat.le_of_eq (nodePreimage_16_32_length hl ha))
+    (by obtain ⟨hl, ha⟩ := insertAt_15_length_and_32 n hc2 (by rw [Array.length_toList, hw2.1]) hw2.2
+        exact Nat.le_of_eq (nodePreimage_16_32_length hl ha))
+    (by intro hpre; simp only [nodePreimage, List.cons.injEq, true_and] at hpre
+        have hch := map_toList_injective _ _ (encodeFields_injective _ _ hpre)
+        have hszEq : s₁.toList.length = s₂.toList.length := by
+          rw [Array.length_toList, Array.length_toList, hw1.1, hw2.1]
+        exact hne (insertAt_inj hszEq hch).1)
+    htag
 private theorem climbStep_tail_some {addr : UInt64} {lvl : Nat} {c : ByteArray}
     {s : Array ByteArray} {t : List (Array ByteArray)} {out : Nat × ByteArray}
     (h : List.foldlM (climbStep addr) (lvl, c) (s :: t) = some out) :
@@ -1017,8 +997,7 @@ private theorem climbStep_tail_some {addr : UInt64} {lvl : Nat} {c : ByteArray}
   exact hr
 
 /-- Constructive (`0 Classical`) climb collision extractor over 32-byte well-sized sibling paths. -/
-private def extractClimbCollision (addr : UInt64) :
-    ∀ (p₁ p₂ : List (Array ByteArray)) (lvl : Nat)
+private def extractClimbCollision (addr : UInt64) : ∀ (p₁ p₂ : List (Array ByteArray)) (lvl : Nat)
       (c₁ c₂ : ByteArray) (out₁ out₂ : Nat × ByteArray),
       p₁.length = p₂.length → c₁.size = 32 → c₂.size = 32 →
       (∀ s ∈ p₁, s.size = 15 ∧ ∀ b ∈ s.toList, b.size = 32) →
@@ -1046,7 +1025,6 @@ private def extractClimbCollision (addr : UInt64) :
         out₁ out₂ (Nat.succ.inj hlen) (nodeTag_size _) (nodeTag_size _)
         (fun s hs => hw1 s (.tail _ hs)) (fun s hs => hw2 s (.tail _ hs))
         (climbStep_tail_some h₁) (climbStep_tail_some h₂) hout htag
-
 private theorem foldlM_climbStep_fst (addr : UInt64) :
     ∀ (ps : List (Array ByteArray)) (lvl : Nat) (cur : ByteArray) (out : Nat × ByteArray),
       List.foldlM (climbStep addr) (lvl, cur) ps = some out → out.1 = lvl + ps.length
@@ -1054,7 +1032,6 @@ private theorem foldlM_climbStep_fst (addr : UInt64) :
   | _ :: t, lvl, _, out, h => by
     have ih := foldlM_climbStep_fst addr t (lvl + 1) _ out (climbStep_tail_some h)
     simp only [List.length_cons]; omega
-
 private theorem verifyOpening_some16 {root : ByteArray} {addr val : UInt64}
     {path : Array (Array ByteArray)} (h : verifyOpening root addr val path = true) :
     path.size = 16 ∧
@@ -1064,78 +1041,108 @@ private theorem verifyOpening_some16 {root : ByteArray} {addr val : UInt64}
   have hn := foldlM_climbStep_fst addr path.toList 0 (leafTag val) (n, root) hc
   simp only [Nat.zero_add, Array.length_toList, hsz] at hn
   subst hn; exact ⟨hsz, hc⟩
-
 private theorem verifyDualChunkOpening_props {pp : AjtaiParams} {hCols : pp.cols = 64}
-    {verkleRoot : ByteArray} {ajtaiRoot : List Int} {c j : Nat}
+    {snapshotRoot : ByteArray} {ajtaiRoot : List Int} {c j : Nat}
     {v : UInt64} {w : DualChunkSlotOpening}
-    (hv : verifyDualChunkOpening pp hCols verkleRoot ajtaiRoot c j v w = true) :
+    (hv : verifyDualChunkOpening pp hCols snapshotRoot ajtaiRoot c j v w = true) :
     w.chunkSlotsList.length = 16 ∧
     j < 16 ∧
     w.chunkSlotsList.getD j 0 = v ∧
     checkWellSizedVerklePath w.verklePath = true ∧
-    verifyOpening verkleRoot (slotAddr c j) v w.verklePath = true ∧
-    ajtaiCommit pp (wordsToLimbs w.chunkSlotsList)
-      (by
-        unfold verifyDualChunkOpening at hv
-        by_cases hlen : w.chunkSlotsList.length = 16
-        · rw [wordsToLimbs_length, hlen, hCols]
-        · simp [hlen] at hv) = ajtaiRoot := by
+    verifyOpening w.verkleRoot (slotAddr c j) v w.verklePath = true ∧
+    (c < w.chunkCount ∧ chunkSlots * w.chunkCount ≤ 2 ^ 64 ∧ w.verkleRoot.size = 32 ∧
+      snapshotRootTag w.chunkCount w.verkleRoot = snapshotRoot) ∧
+    ∃ hw : (wordsToLimbs w.chunkSlotsList).length = pp.cols,
+      ajtaiCommit pp (wordsToLimbs w.chunkSlotsList) hw = ajtaiRoot := by
   unfold verifyDualChunkOpening at hv
   by_cases hlen : w.chunkSlotsList.length = 16
   · by_cases hj : j < 16
     · simp only [hlen, hj, ↓reduceDIte, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at hv
       have hget : w.chunkSlotsList.getD j 0 = v := by
         rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega)]
-        exact hv.1.1.1
-      exact ⟨hlen, hj, hget, hv.1.1.2, hv.1.2, hv.2⟩
+        exact hv.1.1.1.1
+      exact ⟨hlen, hj, hget, hv.1.1.1.2, hv.1.1.2,
+        ⟨hv.2.1.1.1, hv.2.1.1.2, hv.2.1.2, hv.2.2⟩,
+        ⟨by rw [wordsToLimbs_length, hlen, hCols], hv.1.2⟩⟩
     · simp [hlen, hj] at hv
   · simp [hlen] at hv
 
-/-- **Constructive Dual-Opening Extractor (`extractDualChunkOpeningBreak`, `0 Classical`)**:
-    Two accepted stateless dual openings of slot `(c, j)` either agree on the value (`v₁ = v₂`)
-    or constructively exhibit **both** a bounded `cSHAKE256` `HashCollisionWitness` (`≤ 529` bytes)
-    **and** a short `SISShortVecWitness` (`‖z‖_∞ ≤ 131070`). -/
+/-- What an accepted dual opening establishes about its opened snapshot-root header. -/
+theorem verifyDualChunkOpening_header {pp : AjtaiParams} {hCols : pp.cols = 64}
+    {snapshotRoot : ByteArray} {ajtaiRoot : List Int} {c j : Nat}
+    {v : UInt64} {w : DualChunkSlotOpening} :
+    verifyDualChunkOpening pp hCols snapshotRoot ajtaiRoot c j v w = true →
+    c < w.chunkCount ∧ chunkSlots * w.chunkCount ≤ 2 ^ 64 ∧ w.verkleRoot.size = 32 ∧
+    snapshotRootTag w.chunkCount w.verkleRoot = snapshotRoot :=
+  fun hv => (verifyDualChunkOpening_props hv).2.2.2.2.2.1
+
+/-- **No `UInt64` Wraparound (`verifyDualChunkOpening_addr_exact`)**: the key an accepted opening
+    authenticates is exactly `16 * c + j`; no other chunk index shares it modulo `2^64`. -/
+theorem verifyDualChunkOpening_addr_exact {pp : AjtaiParams} {hCols : pp.cols = 64}
+    {snapshotRoot : ByteArray} {ajtaiRoot : List Int} {c j : Nat}
+    {v : UInt64} {w : DualChunkSlotOpening} :
+    verifyDualChunkOpening pp hCols snapshotRoot ajtaiRoot c j v w = true →
+    (slotAddr c j).toNat = c * chunkSlots + j := fun hv =>
+  have hh := verifyDualChunkOpening_header hv
+  slotAddr_toNat_of_bound hh.1 hh.2.1 (verifyDualChunkOpening_props hv).2.1
+
+/-- **Chunk Index Bound (`0 Classical`)**: an opening accepted against a well-formed `s.snapshotRoot`
+    addresses a real chunk (`c < 256`) under `s.verkleRoot`, or the two headers collide. -/
+def extractSnapshotIndexBreak {pp : AjtaiParams} {hCols : pp.cols = 64}
+    {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s)
+    {ajtaiRoot : List Int} {c j : Nat} {v : UInt64} {w : DualChunkSlotOpening}
+    (hv : verifyDualChunkOpening pp hCols s.snapshotRoot ajtaiRoot c j v w = true) :
+    PSum (c < numChunks ∧ w.verkleRoot = s.verkleRoot)
+      (HashCollisionWitness treeHash verkleMaxPreimageBytes) :=
+  have hh := verifyDualChunkOpening_header hv
+  have hroot32 : s.verkleRoot.size = 32 := by
+    rw [snapshotWF_verkleRoot_eq_fullCommit hwf]; exact fullVerkleCommitChunks_size _
+  match extractSnapshotRootBreak (by have := hh.2.1; unfold chunkSlots at this; omega)
+      (by rw [hwf.1]; decide) hh.2.2.1 hroot32 hh.2.2.2 with
+  | .inl heq => .inl ⟨by have := hh.1; rw [heq.1, hwf.1] at this; exact this, heq.2⟩
+  | .inr col => .inr col
+
+/-- **Constructive Dual-Opening Extractor (`0 Classical`)**: two accepted dual openings of slot
+    `(c, j)` under one snapshot root agree on the value, or exhibit **both** a bounded `cSHAKE256`
+    `HashCollisionWitness` (`≤ 529` bytes) **and** a short `SISShortVecWitness` (`‖z‖_∞ ≤ 131070`). -/
 def extractDualChunkOpeningBreak (pp : AjtaiParams) (hCols : pp.cols = 64)
-    {verkleRoot : ByteArray} {ajtaiRoot : List Int} {c j : Nat}
+    {snapshotRoot : ByteArray} {ajtaiRoot : List Int} {c j : Nat}
     {v₁ v₂ : UInt64} {w₁ w₂ : DualChunkSlotOpening}
-    (hv₁ : verifyDualChunkOpening pp hCols verkleRoot ajtaiRoot c j v₁ w₁ = true)
-    (hv₂ : verifyDualChunkOpening pp hCols verkleRoot ajtaiRoot c j v₂ w₂ = true) :
-    PSum (v₁ = v₂)
-      (HashCollisionWitness treeHash verkleMaxPreimageBytes ×
+    (hv₁ : verifyDualChunkOpening pp hCols snapshotRoot ajtaiRoot c j v₁ w₁ = true)
+    (hv₂ : verifyDualChunkOpening pp hCols snapshotRoot ajtaiRoot c j v₂ w₂ = true) :
+    PSum (v₁ = v₂) (HashCollisionWitness treeHash verkleMaxPreimageBytes ×
        SISShortVecWitness pp.modulus 131070 pp.matrix) :=
   if heq : v₁ = v₂ then .inl heq
   else
     .inr (
       let p₁ := verifyDualChunkOpening_props hv₁
       let p₂ := verifyDualChunkOpening_props hv₂
+      let q₁ := verifyDualChunkOpening_header hv₁
+      let q₂ := verifyDualChunkOpening_header hv₂
       let hw1 : HashCollisionWitness treeHash verkleMaxPreimageBytes :=
+        match extractSnapshotRootBreak (by have := q₁.2.1; unfold chunkSlots at this; omega)
+            (by have := q₂.2.1; unfold chunkSlots at this; omega) q₁.2.2.1 q₂.2.2.1
+            (q₁.2.2.2.trans q₂.2.2.2.symm) with
+        | .inr col => col
+        | .inl hhdr =>
         if hleaf : leafTag v₁ = leafTag v₂ then
-          { msgA := leafPreimage v₁
-            msgB := leafPreimage v₂
-            lenA := by simp [leafPreimage, verkleMaxPreimageBytes]
-            lenB := by simp [leafPreimage, verkleMaxPreimageBytes]
-            distinct := by
-              intro hp; simp only [leafPreimage, List.cons.injEq, true_and] at hp
-              have h8 : (2 : Nat) ^ 64 = 256 ^ 8 := by decide
-              exact heq (UInt64.toNat_inj.1
-                (Obend.Digest.HashBytes.be_injective (h8 ▸ v₁.toNat_lt) (h8 ▸ v₂.toNat_lt) hp))
-            sameDigest := by
-              have hl : (leafTag v₁).data.toList = (leafTag v₂).data.toList :=
-                congrArg (fun b => b.data.toList) hleaf
-              simp only [leafTag, tagOf, cshake32ByteArray,
-                Obend.Digest.Cshake256.Native.bytesOfList_toList] at hl
-              exact congrArg ofBE hl }
+          mkTagCollision (by simp [leafPreimage, verkleMaxPreimageBytes])
+            (by simp [leafPreimage, verkleMaxPreimageBytes])
+            (by intro hp; simp only [leafPreimage, List.cons.injEq, true_and] at hp
+                have h8 : (2 : Nat) ^ 64 = 256 ^ 8 := by decide
+                exact heq (UInt64.toNat_inj.1
+                  (Obend.Digest.HashBytes.be_injective (h8 ▸ v₁.toNat_lt) (h8 ▸ v₂.toNat_lt) hp)))
+            hleaf
         else
           let op₁ := verifyOpening_some16 p₁.2.2.2.2.1
-          let op₂ := verifyOpening_some16 p₂.2.2.2.2.1
-          have hwsProp : ∀ {p : Array (Array ByteArray)},
-              checkWellSizedVerklePath p = true →
+          let op₂ := verifyOpening_some16 (hhdr.2 ▸ p₂.2.2.2.2.1)
+          have hwsProp : ∀ {p : Array (Array ByteArray)}, checkWellSizedVerklePath p = true →
               ∀ s ∈ p.toList, s.size = 15 ∧ ∀ b ∈ s.toList, b.size = 32 := by
             intro p hp s hs; unfold checkWellSizedVerklePath at hp
             simp only [Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at hp
             exact hp.2 s hs
           extractClimbCollision (slotAddr c j) w₁.verklePath.toList w₂.verklePath.toList 0
-            (leafTag v₁) (leafTag v₂) (16, verkleRoot) (16, verkleRoot)
+            (leafTag v₁) (leafTag v₂) (16, w₁.verkleRoot) (16, w₁.verkleRoot)
             (by rw [Array.length_toList, Array.length_toList, op₁.1, op₂.1])
             (leafTag_size v₁) (leafTag_size v₂)
             (hwsProp p₁.2.2.2.1) (hwsProp p₂.2.2.2.1) op₁.2 op₂.2 rfl hleaf
@@ -1151,16 +1158,16 @@ def extractDualChunkOpeningBreak (pp : AjtaiParams) (hCols : pp.cols = 64)
           (wordsToLimbs w₁.chunkSlotsList) (wordsToLimbs w₂.chunkSlotsList)
           huLen hvLen
           (wordsToLimbs_short w₁.chunkSlotsList) (wordsToLimbs_short w₂.chunkSlotsList)
-          hneLimbs (p₁.2.2.2.2.2.trans p₂.2.2.2.2.2.symm)
+          hneLimbs (by
+            obtain ⟨_, h₁⟩ := p₁.2.2.2.2.2.2
+            obtain ⟨_, h₂⟩ := p₂.2.2.2.2.2.2
+            exact h₁.trans h₂.symm)
       (hw1, hw2))
 
-/-- **Headline Theorem 2 (`cowBranch_shares_unchanged_verkleSubtrees`)**:
-    When snapshot `s` (`SnapshotWF pp hCols s`) is COW-forked and dirty chunk `c < 256` is
-    updated (`branched := cowUpdateChunk pp hCols s c hc newChunk`):
-    1. Every unmodified chunk `c' ≠ c` shares `ChunkData`, `chunkSubtreeTag`, Ajtai commitment,
-       and rebound pre-branch intra-chunk level-0 openings without rehashing chunk `c'`.
-    2. At every chunk `c''` and slot `j`, two accepted dual openings either agree (`v₁ = v₂`) or
-       simultaneously break `BoundedCollision treeHash 529` and `ModuleSISHard pp 131070`. -/
+/-- **Headline Theorem 2**: after a COW fork updating dirty chunk `c < 256`, (1) every chunk
+    `c' ≠ c` shares its `ChunkData`, subtree tag, Ajtai commitment and rebound level-0 openings
+    without rehashing; (2) two accepted dual openings of any slot against the branch's snapshot
+    root agree, or break both `BoundedCollision treeHash 529` and `ModuleSISHard pp 131070`. -/
 theorem cowBranch_shares_unchanged_verkleSubtrees {pp : AjtaiParams} {hCols : pp.cols = 64}
     {s : AuthenticatedWorldSnapshot} (hwf : SnapshotWF pp hCols s)
     (c : Nat) (hc : c < numChunks) (newChunk : ChunkData) :
@@ -1176,11 +1183,10 @@ theorem cowBranch_shares_unchanged_verkleSubtrees {pp : AjtaiParams} {hCols : pp
           openSnapshotSlot branched c' j ∧
         verifyOpening branched.verkleRoot (slotAddr c' j) (s.readSlot c' j)
           (rebindPreBranchChunkOpening (openSnapshotSlot s c' j) branched c') = true) ∧
-    (∀ (c'' j : Nat), c'' < numChunks →
-      ∀ (v₁ v₂ : UInt64) (w₁ w₂ : DualChunkSlotOpening),
-        verifyDualChunkOpening pp hCols branched.verkleRoot
+    (∀ (c'' j : Nat), c'' < numChunks → ∀ (v₁ v₂ : UInt64) (w₁ w₂ : DualChunkSlotOpening),
+        verifyDualChunkOpening pp hCols branched.snapshotRoot
           (branched.ajtaiChunkRoots.getD c'' []) c'' j v₁ w₁ = true →
-        verifyDualChunkOpening pp hCols branched.verkleRoot
+        verifyDualChunkOpening pp hCols branched.snapshotRoot
           (branched.ajtaiChunkRoots.getD c'' []) c'' j v₂ w₂ = true →
         v₁ = v₂ ∨
           (BoundedCollision treeHash verkleMaxPreimageBytes ∧ ¬ ModuleSISHard pp 131070)) := by
@@ -1297,7 +1303,6 @@ theorem tornRecordPrefix_is_uncommitted (Hb : Log.Bytes → Log.Bytes) (anchor :
   · subst hk0; exact .inl rfl
   · exact .inr ⟨.torn, Log.parseOne_torn Hb hwf (List.take_append_drop k _)
       (by rw [Ne, List.drop_eq_nil_iff]; omega)⟩
-
 theorem parseFrom_uncommittedWalTail (Hb : Log.Bytes → Log.Bytes) (anchor : Nat)
     {tail : Log.Bytes} (hu : UncommittedWalTail Hb anchor tail) :
     (Log.parseFrom Hb anchor tail).1 = [] ∧ (Log.parseFrom Hb anchor tail).2.1 = tail := by
@@ -1315,11 +1320,9 @@ structure WalRecoveryResult where
   droppedTail : Log.Bytes
   dropReason : Option Log.Drop
   deriving DecidableEq
-
 /-- Canonical WAL byte truncation: encodes committed `OBL1` frames and drops any uncommitted tail. -/
 def recoverWalBytes (rawDisk : Log.Bytes) : Log.Bytes :=
   Log.encodeAll Replay.logHash (Log.parseFrom Replay.logHash genesisSentinel rawDisk).1
-
 /-- Full WAL crash recovery over a world machine `M` (defaulting to `Replay.deployed`). -/
 def recoverWalSnapshot {O : Type} (pp : AjtaiParams) (hCols : pp.cols = 64)
     (M : Log.Machine ChunkedWorld.World O) (w0 : ChunkedWorld.World)
@@ -1367,11 +1370,9 @@ inductive ValidSnapshotTrace {O : Type} (pp : AjtaiParams) (hCols : pp.cols = 64
       S.admit Replay.logHash M turnBytes = .ok S' → S'.log = S.log ++ [rec] →
       ValidSnapshotTrace pp hCols M w0 (epochs ++ [⟨turnBytes, rec⟩])
         S' (syncSnapshotWorld pp hCols snap S'.world)
-
 /-- Specialization of `ValidSnapshotTrace` to `Replay.deployed`. -/
 abbrev DeployedSnapshotTrace (pp : AjtaiParams) (hCols : pp.cols = 64) (w0 : ChunkedWorld.World) :=
   ValidSnapshotTrace pp hCols Replay.deployed w0
-
 theorem validSnapshotTrace_invariants {O : Type} {pp : AjtaiParams} {hCols : pp.cols = 64}
     {M : Log.Machine ChunkedWorld.World O} {w0 : ChunkedWorld.World}
     {epochs : List SnapshotEpoch} {S : Log.Session ChunkedWorld.World}
@@ -1427,10 +1428,9 @@ theorem validSnapshotTrace_multiEpoch_inhabited :
   exact ⟨[⟨b1, r1⟩, ⟨b2, r2⟩], S2, _, rfl,
     ValidSnapshotTrace.commitEpoch (ValidSnapshotTrace.commitEpoch tr0 hadm1 rfl) hadm2 rfl⟩
 
-/-- **Headline Theorem 3 (`walCrashReplay_restores_verkle_consistent_world`)**:
-    Across **any** multi-epoch `ValidSnapshotTrace` and **any** uncommitted or torn trailing
-    WAL bytes `tornTail`, `recoverWalSnapshot` truncates `tornTail` cleanly, is strictly
-    idempotent, and restores the exact committed `ChunkedWorld` and 256-bit `VerkleUmem` root. -/
+/-- **Headline Theorem 3**: across any multi-epoch `ValidSnapshotTrace` and any uncommitted or
+    torn WAL tail, `recoverWalSnapshot` truncates the tail, is idempotent, and restores the exact
+    committed `ChunkedWorld` and 256-bit `VerkleUmem` root. -/
 theorem walCrashReplay_restores_verkle_consistent_world {O : Type}
     {pp : AjtaiParams} {hCols : pp.cols = 64}
     {M : Log.Machine ChunkedWorld.World O} {w0 : ChunkedWorld.World}
