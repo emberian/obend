@@ -61,4 +61,4 @@ set_option autoImplicit false
 #print axioms collapseTrace_semantic_determinism
 #print axioms foldTrace_filter_empty
 #print axioms collapseTrace_prune_empty
-#print axioms collapseRoot_binds
+#print axioms collapseRoot_binds_scoped

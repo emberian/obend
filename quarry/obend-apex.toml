@@ -33,6 +33,11 @@ subsystems = [
   "Tactic",
   "Law",
   "Doc",
+  "Slot",
+  "Receipt",
+  "Fold",
+  "Reasons",
+  "Kind",
 ]
 
 entry_points = [
@@ -297,10 +302,10 @@ description = "Modal Gelfond-Lifschitz equilibrium verifier certifies stable `Ob
 
 [[apex]]
 id = "receipt-merkle-batch-sound"
-subsystem = "Judge"
+subsystem = "Receipt"
 module = "Obend.Receipt.Merkle"
-theorem = "verifyMerkleBatchProof_binds"
-description = "Domain-separated batch Merkle opening verification cryptographically binds leaf payloads to the committed root."
+theorem = "verifyMerkleBatchProof_binds_scoped"
+description = "Domain-separated batch Merkle opening verification cryptographically binds leaf payloads to the committed root up to scoped preimage collision."
 
 [[apex]]
 id = "receipt-negotiation-minimal"
@@ -1499,6 +1504,52 @@ subsystem = "Crypto"
 module = "Obend.Crypto.ThresholdHashMpc"
 theorem = "pq_threshold_custody_multi_turn_safe"
 description = "Multi-turn post-quantum threshold custody safety (`pq_threshold_custody_multi_turn_safe`) enforcing one-time epoch latch uniqueness, quorum non-double-signing, and revoked-membrane blocking."
+
+# ==============================================================================
+# 23. `Slot`, `Receipt`, `Fold`, `Reasons` & `Kind` — Schelling Slot Realization, Blinded Multiproofs & Dialectical Blame
+# ==============================================================================
+
+[[apex]]
+id = "slot-budget-negotiate-converges-and-conserves"
+subsystem = "Slot"
+module = "Obend.Slot.Budget"
+theorem = "negotiateSlots_converges_and_conserves_budget"
+description = "Constructive arc-consistency + backtracking Schelling slot negotiation (`negotiateSlots_converges_and_conserves_budget`) guaranteeing local candidate audit, cross-slot compatibility, and deduplicated shared-resource budget conservation."
+
+[[apex]]
+id = "slot-budget-negotiate-complete-no-deadlock"
+subsystem = "Slot"
+module = "Obend.Slot.Budget"
+theorem = "negotiateSlots_complete_no_deadlock"
+description = "Deadlock-free completeness (`negotiateSlots_complete_no_deadlock`) proving constructive slot negotiation always finds a valid sheaf-gluing realizer whenever a well-formed feasible assignment exists."
+
+[[apex]]
+id = "receipt-merkle-multiproof-redaction-nonleakage"
+subsystem = "Receipt"
+module = "Obend.Receipt.Merkle"
+theorem = "blindedMultiproof_redaction_nonleakage"
+description = "Domain-separated 256-bit cSHAKE256 salted blinded Merkle multiproof redaction non-leakage (`blindedMultiproof_redaction_nonleakage`) simulating unqueried subtrees solely from 32-byte blinded commitments alongside constructive `extractMultiproofCollision`."
+
+[[apex]]
+id = "fold-collapse-horizon-redaction-nonleakage"
+subsystem = "Fold"
+module = "Obend.Fold.Collapse"
+theorem = "collapsedHorizon_redaction_nonleakage"
+description = "Consensus-trace horizon multiproof redaction non-leakage (`collapsedHorizon_redaction_nonleakage`) paired with constructive `Type`-valued `extractCollapsedHorizonCollision` and 32-byte `cshakeCollapsedHorizon_collision_binds`."
+
+[[apex]]
+id = "reasons-dialectical-audit-unique-equilibrium"
+subsystem = "Reasons"
+module = "Obend.Reasons.DialecticalBlame"
+theorem = "dialecticalAudit_unique_equilibrium"
+description = "Stratified dialectical audit unique equilibrium (`dialecticalAudit_unique_equilibrium`) welding `Reasons` provenance graphs into `UnifiedEquilibrium` with constructive `PSum` blame pinpointing."
+
+[[apex]]
+id = "kind-registry-ordered-presentation-invariant"
+subsystem = "Kind"
+module = "Obend.Kind.Registry"
+theorem = "orderedPresentationInvariant"
+description = "Universal presentation-order bijection invariance (`orderedPresentationInvariant`) proving C4 specification linearization and refusal semantics commute with arbitrary identifier renamings."
 
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)

@@ -26,7 +26,7 @@ public import Obend.Core.Digest
 public section
 namespace Obend.Receipt.Merkle
 open Obend.Core.Digest (digestWith Admissible admissible_of_lt binds_or_collides deployed digest_lt preimage lengthHash)
-open Obend.Digest.HashBytes (Hash Collision CollisionAmong be ofBE be_injective ofBE_lt)
+open Obend.Digest.HashBytes (Hash CollisionAmong be ofBE be_injective ofBE_lt)
 set_option autoImplicit false
 
 /-- A digest-sized natural: what every node of the tree is. -/
@@ -214,12 +214,6 @@ theorem leaf_binds_scoped {H : Hash} {j a b : Nat} (hj : j < 2 ^ 256) (h : leaf 
   · exact .inl hv
   · exact .inr c
 
-/-- **A leaf binds its value**: two leaves at one digest-sized position with one digest carry one
-value, or `H` collides. (`leaf` is not exposed; importers reason through this.) -/
-theorem leaf_binds {H : Hash} {j a b : Nat} (hj : j < 2 ^ 256) (h : leaf H j a = leaf H j b) :
-    a = b ∨ Collision H :=
-  (leaf_binds_scoped hj h).imp_right CollisionAmong.global
-
 /-- The leaves of a list of values. -/
 @[expose] def leaves (H : Hash) (vs : List Nat) : List Nat := vs.mapIdx fun j v => leaf H j v
 
@@ -283,13 +277,6 @@ theorem opens_binds_scoped {H : Hash} (hb : Bounded H) {o o' : Opening} {r : Nat
       rcases hm with hm | hm
       · exact .inl (.inr hm)
       · rw [hn, hi] at hm; exact .inr (.inr hm))
-
-/-- **Openings bind**: two openings of one position of one map that open against one root claim
-one value, or `H` has a collision. -/
-theorem opens_binds {H : Hash} (hb : Bounded H) {o o' : Opening} {r : Nat} (h : opens H o r = true)
-    (h' : opens H o' r = true) (hn : o.size = o'.size) (hi : o.index = o'.index) :
-    o.value = o'.value ∨ Collision H :=
-  (opens_binds_scoped hb h h' hn hi).imp_right CollisionAmong.global
 
 /-- **An opening against a view's root carries the view's value**, or `H` collides on the finite
 opening preimages. -/
@@ -484,18 +471,6 @@ theorem verifyMerkleBatchProof_binds_scoped {H : Hash} (hb : Bounded H) (l : Lis
       e.leafDigest (l.getD e.leafIndex 0) (root H l) hDigestSmall hLeafSmall hClimb hHonestClimb with hEq | hCol
   · left; rw [hEq, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]; rfl
   · exact .inr hCol
-
-/-- **Batch Cryptographic Binding (`verifyMerkleBatchProof_binds`)**:
-If `verifyMerkleBatchProof H batch (root H l) = true` for a tree of size `batch.treeSize = l.length`,
-then every entry `e ∈ batch.entries` with `e.leafIndex < l.length` binds to the true leaf
-`e.leafDigest = l[e.leafIndex]`, or `H` has a collision. -/
-theorem verifyMerkleBatchProof_binds {H : Hash} (hb : Bounded H) (l : List Nat)
-    (hl : ∀ x ∈ l, x < 2 ^ 256) {batch : MerkleBatchProof}
-    (hBatch : verifyMerkleBatchProof H batch (root H l) = true) (hSize : batch.treeSize = l.length)
-    {e : MerkleBatchEntry} (he : e ∈ batch.entries) (hi : e.leafIndex < l.length) :
-    e.leafDigest = l[e.leafIndex] ∨ Collision H :=
-  (verifyMerkleBatchProof_binds_scoped (H := H) (batch := batch) (e := e) hb l hl hBatch hSize he hi).imp_right
-    CollisionAmong.global
 
 /-! ## 256-Bit `cSHAKE256` Length-Framed Salted Blinded Merkle Multiproofs & Constructive Collision Extractors -/
 

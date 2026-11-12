@@ -89,7 +89,8 @@ theorem adv_collapsed_merkle_forgery_defeated {H : Hash} (hb : Bounded H)
     (h_sz : o.size = schema.length) (h_idx : o.index < schema.length)
     (h_key : schema[o.index]'h_idx = k) (h_forged : o.value ≠ val s k) :
     Collision H := by
-  have h_binds := collapseRoot_binds hb schema val s o k h_open h_sz h_idx h_key
+  have h_binds := (collapseRoot_binds_scoped hb schema val s o k h_open h_sz h_idx h_key).imp_right
+    Obend.Digest.HashBytes.CollisionAmong.global
   rcases h_binds with he | hcol
   · contradiction
   · exact hcol

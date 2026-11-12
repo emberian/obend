@@ -29,6 +29,7 @@ public import Obend.Slot.Budget
 public import Obend.Slot.SupportSheaf
 public import Obend.Intention
 public import Obend.Kind
+public import Obend.Kind.Registry
 public import Obend.Judge
 public import Obend.Judge.Computational
 public import Obend.Judge.SvenvsCorrigibility
@@ -40,6 +41,7 @@ public import Obend.Judge.DecoAndCallTree
 public import Obend.Receipt
 public import Obend.Reasons
 public import Obend.Reasons.UnifiedEquilibrium
+public import Obend.Reasons.DialecticalBlame
 public import Obend.Law
 public import Obend.Law.PointwiseRevise
 public import Obend.Law.AmendCli

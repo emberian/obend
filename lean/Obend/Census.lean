@@ -565,6 +565,7 @@ import Obend.Polis.VerkleUmem
 import Obend.Polis.ZkBiscuit
 import Obend.Polis.ZoeSeatSettlement
 import Obend.Reasons
+import Obend.Reasons.DialecticalBlame
 import Obend.Reasons.UnifiedEquilibrium
 import Obend.Receipt
 import Obend.Receipt.Cli

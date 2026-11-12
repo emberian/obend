@@ -20,9 +20,9 @@ open Obend.Doc.Reactive (CellId SymbolName Environment Opcode Instruction CellBo
   ReactiveCell CellResult CachedCell CellKernel scientificKernel evalCell evalCell_frame
   publish publish_frame publish_same AgreeOutside checkNotebookDag DependencyPath)
 open Obend.Core.Digest (digestWith deployed digest_lt)
-open Obend.Digest.HashBytes (Hash Collision)
-open Obend.Receipt.Merkle (Bounded deployed_bounded Opening mapRoot mapOpening opens
-  opens_complete opens_binds)
+open Obend.Digest.HashBytes (Hash CollisionAmong)
+open Obend.Receipt.Merkle (Bounded deployed_bounded Opening openingPreimages mapRoot mapOpening opens
+  opens_complete opens_binds_scoped)
 set_option autoImplicit false
 
 /-! ## 1. Literate Prose Sections & Transitive Wikilink / Transclusion Graph -/
@@ -1206,8 +1206,10 @@ theorem verifyRedactedWorkbook_binds_or_collides (rwb : RedactedWorkbook) {o o' 
     (h1 : opens deployed o rwb.merkleRoot = true)
     (h2 : opens deployed o' rwb.merkleRoot = true)
     (hSize : o.size = o'.size) (hIdx : o.index = o'.index) :
-    opens deployed o rwb.merkleRoot = true ∧ (o.value = o'.value ∨ Collision deployed) :=
-  ⟨h1, opens_binds deployed_bounded h1 h2 hSize hIdx⟩
+    opens deployed o rwb.merkleRoot = true ∧
+      (o.value = o'.value ∨
+        CollisionAmong deployed (fun m => m ∈ openingPreimages deployed o ++ openingPreimages deployed o')) :=
+  ⟨h1, opens_binds_scoped deployed_bounded h1 h2 hSize hIdx⟩
 inductive WorkbookTurn where
   | stepEdit (edit : WorkbookEdit)
   | scrubCell (cellKey : String) (viewEdit : ViewEdit)

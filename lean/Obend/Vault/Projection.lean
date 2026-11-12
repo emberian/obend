@@ -45,10 +45,10 @@ public import Obend.Digest.HashBytes
 namespace Obend.Vault.Projection
 
 open Obend.Core.Digest (digestWith Admissible admissible_of_lt binds_or_collides)
-open Obend.Digest.HashBytes (Hash Collision)
-open Obend.Receipt.Merkle (Small Bounded root path climb leaf leaves mapRoot Opening opens climb_path mapOpening opens_complete opens_binds
+open Obend.Digest.HashBytes (Hash Collision CollisionAmong)
+open Obend.Receipt.Merkle (Small Bounded root path climb leaf leaves mapRoot Opening opens climb_path mapOpening opens_complete opens_binds_scoped
   leaves_length leaves_small leaves_getD MerkleBatchEntry MerkleBatchProof verifyMerkleBatchProof verifySingleMerkleLeaf
-  verifyMerkleBatchProof_sound verifyMerkleBatchProof_honest verifyMerkleBatchProof_binds honestBatchEntry honestBatchProof leaf_binds)
+  verifyMerkleBatchProof_sound verifyMerkleBatchProof_honest verifyMerkleBatchProof_binds_scoped honestBatchEntry honestBatchProof leaf_binds_scoped)
 
 set_option autoImplicit false
 
@@ -459,14 +459,14 @@ theorem verifyBlindedMultiProof_binds {H : Hash} (hb : Bounded H) (cells : List 
     rw [← mapRoot, ← hroot]; exact h
   have hsz : (bmp.toBatch H).treeSize = (leaves H (vaultCommits H cells)).length := by
     simp [BlindedMultiProof.toBatch, hsize, hl]
-  have hbind := verifyMerkleBatchProof_binds hb (leaves H (vaultCommits H cells)) (leaves_small hb _)
-    hbatch hsz (List.mem_map_of_mem (f := BlindedOpening.toBatchEntry H) hbo) hi'
+  have hbind := (verifyMerkleBatchProof_binds_scoped hb (leaves H (vaultCommits H cells)) (leaves_small hb _)
+    hbatch hsz (List.mem_map_of_mem (f := BlindedOpening.toBatchEntry H) hbo) hi').imp_right CollisionAmong.global
   have hleaf : (leaves H (vaultCommits H cells))[bo.index] = leaf H bo.index (cellBlind H cells[bo.index]) := by
     simp [leaves, vaultCommits]
   simp only [BlindedOpening.toBatchEntry] at hbind
   rw [hleaf] at hbind
   rcases hbind with heq | hcoll
-  · exact leaf_binds (Nat.lt_trans hi hs) heq
+  · exact (leaf_binds_scoped (Nat.lt_trans hi hs) heq).imp_right CollisionAmong.global
   · exact .inr hcoll
 
 /-- **Zero Unblinded Data Exposure**: A hidden cell's projected representation cannot evaluate to its raw content. -/
@@ -544,7 +544,7 @@ theorem tampered_metadata_opening_refused {H : Hash} (hb : Bounded H)
     have hlen : j < (vaultCommits H cells).length := by
       simp [vaultCommits, hj]
     have h_honest := opens_complete hb (vaultCommits H cells) j hlen hjs
-    rcases opens_binds hb hver h_honest rfl rfl with hval_eq | hcoll
+    rcases (opens_binds_scoped hb hver h_honest rfl rfl).imp_right CollisionAmong.global with hval_eq | hcoll
     · dsimp only [mapOpening] at hval_eq
       rw [projectCell_commit_eq] at hval_eq
       have hget : (vaultCommits H cells).getD j 0 = cellBlind H (cells.getD j default) :=
@@ -585,7 +585,7 @@ theorem tampered_capMask_opening_refused {H : Hash} (hb : Bounded H)
     have hlen : j < (vaultCommits H cells).length := by
       simp [vaultCommits, hj]
     have h_honest := opens_complete hb (vaultCommits H cells) j hlen hjs
-    rcases opens_binds hb hver h_honest rfl rfl with hval_eq | hcoll
+    rcases (opens_binds_scoped hb hver h_honest rfl rfl).imp_right CollisionAmong.global with hval_eq | hcoll
     · dsimp only [mapOpening] at hval_eq
       rw [projectCell_commit_eq] at hval_eq
       have hget : (vaultCommits H cells).getD j 0 = cellBlind H (cells.getD j default) :=

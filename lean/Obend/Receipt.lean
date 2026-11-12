@@ -384,7 +384,7 @@ end Pins
 
 section Dated
 open Obend.Receipt.Merkle
-open Obend.Digest.HashBytes (Hash Collision CollisionAmong)
+open Obend.Digest.HashBytes (Hash CollisionAmong)
 variable {W Rest Row Fact Clause Cell Pin Key : Type}
 
 /-- **What a stranger checks of the dated root**: every opening proof opens against it. -/
@@ -466,19 +466,6 @@ theorem dated_verdict_scoped [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded 
   rcases openings_checked hb D hco w _ hd hc hmt with ho | c
   · exact .inl (receipt_sufficient A N a r hm w ho)
   · exact .inr c
-
-/-- **The receipt's verdict is the dated view's**: a receipt issued for a row, whose dated root is
-the root of world `w`'s view and whose openings pass the stranger's checks, has the verdict and the
-post root the row has at `w`, or the hash collides. -/
-theorem dated_verdict [BEq Key] [LawfulBEq Key] {H : Hash} (hb : Bounded H)
-    (A : Admission W Rest Row Fact Clause) (N : Naming W Rest Row Fact Cell Pin) (D : Reading W Fact Key)
-    (hco : D.Coherent A.look) (a : W × Rest) (r : Row) (hm : A.moves r = false)
-    {q : Shape} {t : List (String × Trust)} {p : Digest} (w : W)
-    (hd : (issue A N a r q t p).dated = D.C.dated H w) (hc : datedOpens H (issue A N a r q t p) = true)
-    (hmt : D.matched (issue A N a r q t p) = true) :
-    (Outcome.ofExcept (A.step (w, a.2) r) = (issue A N a r q t p).verdict ∧
-      postOf A N (w, a.2) r = (issue A N a r q t p).post) ∨ Collision H :=
-  (dated_verdict_scoped hb A N D hco a r hm w hd hc hmt).imp_right CollisionAmong.global
 
 /-- **A receipt the stranger accepts has the dated view's verdict**, for ANY receipt, not only an
 honestly issued one: when `recheck` passes at the stranger's view `w'` (which computes that the

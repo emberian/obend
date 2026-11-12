@@ -28,7 +28,7 @@ public section
 namespace Obend.Fold.Collapse
 
 open Obend.Core.Digest (digestWith deployed)
-open Obend.Digest.HashBytes (Hash Collision CollisionAmong)
+open Obend.Digest.HashBytes (Hash CollisionAmong)
 open Obend.Receipt.Merkle (Bounded root leaf leaves mapRoot Opening opens mapOpening Commit
   Digest256 SaltedLeaf256 defaultSaltedLeaf256 saltedTreeRoot256 BlindedMultiproof256
   strictlyAscendingInBounds buildBlindedMultiproof256 verifyBlindedMultiproof256
@@ -197,17 +197,6 @@ theorem collapseRoot_binds_scoped {H : Hash} (hb : Bounded H) (schema : List Str
   rcases hop with he | hcol
   · left; dsimp [hc] at he; rw [he, h_key]
   · exact .inr hcol
-
-/-- **Stranger-Checkable Collapsed Merkle Binding**: An opening that verifies against
-    `collapseRoot` carries the folded store's true value, or the hash collides. -/
-theorem collapseRoot_binds {H : Hash} (hb : Bounded H) (schema : List String) (val : StoreValuation)
-    (s : VaultStore) (o : Opening) (k : String)
-    (h_open : opens H o (collapseRoot H schema val s) = true)
-    (h_sz : o.size = schema.length) (h_idx : o.index < schema.length)
-    (h_key : schema[o.index] = k) :
-    o.value = val s k ∨ Collision H :=
-  (collapseRoot_binds_scoped hb schema val s o k h_open h_sz h_idx h_key).imp_right
-    Obend.Digest.HashBytes.CollisionAmong.global
 
 /-! ## 7. Integration with Obend.Fold.Admission -/
 
