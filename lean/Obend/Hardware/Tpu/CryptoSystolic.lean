@@ -684,15 +684,43 @@ def programSemaphoreCount (p : TpuProg) : Nat :=
     | .dma _ _ s | .wait s _ | .signal s _ => max n (s+1)
     | _ => n) 0
 
+/-- Blocks below 16 and lane permutations total on 128 lanes: what `stepBody` traps on at every allocation. -/
+def checkInstrShape : TpuInstr → Bool
+  | .loadVReg _ _ block | .storeVReg _ block _ => block < 16
+  | .permute _ _ lanes => lanes.size == 128 && lanes.all (· < 128)
+  | _ => true
+
+def emitPallasKernelBody (p : TpuProg) : String :=
+  pallasPrelude ++ "def kernel(hbm, vmem, smem, vreg, dma_sems, regular_sems):\n    pending = {}\n" ++
+  String.join (p.zipIdx |>.map fun (i,index) => emitPallasInstr index i) ++
+  "    assert all(not copies for copies in pending.values()), 'undrained DMA descriptors'\n"
+
 /-- A kernel-body emitter, to be passed refs allocated by pl.pallas_call or
 pl.kernel. It rejects hazardous or undrained programs before emitting the body.
 No claim of a verified Python/Mosaic compiler is made by this function. -/
 def emitPallasTpuKernel (p : TpuProg) : String :=
-  if checkDmaSemaphores (programSemaphoreCount p) p && checkPallasSemaphores p then
-    pallasPrelude ++ "def kernel(hbm, vmem, smem, vreg, dma_sems, regular_sems):\n    pending = {}\n" ++
-    String.join (p.zipIdx |>.map fun (i,index) => emitPallasInstr index i) ++
-    "    assert all(not copies for copies in pending.values()), 'undrained DMA descriptors'\n"
-  else "raise ValueError('TPU program has a DMA/semaphore hazard or mixed semaphore types')\n"
+  if checkDmaSemaphores (programSemaphoreCount p) p && checkPallasSemaphores p && p.all checkInstrShape then
+    emitPallasKernelBody p
+  else "raise ValueError('TPU program has a DMA/semaphore hazard, mixed semaphore types or an out-of-range block')\n"
+
+/-- The kernel body for explicit HBM, VMEM, scalar and VREG allocations: emitted only when every instruction is
+in bounds (`checkProgramBounds`, so `WellSized` holds of the freshly allocated core) and the DMA/semaphore
+analysis accepts. -/
+def emitCheckedPallasTpuKernel (hbmTiles vmemTiles scalarRegs vregCount : Nat) (p : TpuProg) : Option String :=
+  if checkProgramBounds hbmTiles vmemTiles scalarRegs vregCount (programSemaphoreCount p) p &&
+      checkDmaSemaphores (programSemaphoreCount p) p && checkPallasSemaphores p then
+    some (emitPallasKernelBody p)
+  else none
+
+theorem emitCheckedPallasTpuKernel_sound (hbmTiles vmemTiles scalarRegs vregCount : Nat) (p : TpuProg) (src : String)
+    (h : emitCheckedPallasTpuKernel hbmTiles vmemTiles scalarRegs vregCount p = some src) :
+    src = emitPallasKernelBody p ∧
+    WellSized (TpuCoreState.initial hbmTiles vmemTiles scalarRegs vregCount (programSemaphoreCount p)) p ∧
+    checkDmaSemaphores (programSemaphoreCount p) p = true := by
+  unfold emitCheckedPallasTpuKernel at h; split at h
+  · rename_i hc; simp only [Bool.and_eq_true] at hc; injection h with hs
+    exact ⟨hs.symm, checkProgramBounds_initial _ _ _ _ _ p hc.1.1, hc.1.2⟩
+  · cases h
 
 
 
@@ -739,5 +767,167 @@ def baileyNttProgram (dst input wr wc twiddle scratch : Nat) : TpuProg :=
   goldilocksPointwiseProgram (scratch+1) (scratch+1) twiddle ++
   goldilocksGemmProgram scratch wc (scratch+1) (scratch+2) ++
   [.transpose dst scratch]
+
+/-! Checked tile layouts. `goldilocksGemmProgram` and `baileyNttProgram` take raw tile indices; a layout that
+aliases the output or the scratch tiles with an input silently clobbers that input. The validators below refuse
+such layouts and out-of-range tiles, and their soundness theorems give the machine's bounds check and the
+preservation of every input tile by the synchronous run. -/
+
+/-- `i` stays inside `vmemTiles` tiles and `vregCount` VREGs, uses no DMA, semaphore or scalar register, and
+writes no tile of `prot`. -/
+def layoutInstrOk (vmemTiles vregCount : Nat) (prot : List Nat) : TpuInstr → Bool
+  | .mxu _ dst a b => dst < vmemTiles && a < vmemTiles && b < vmemTiles && prot.all (· != dst)
+  | .transpose dst src => dst < vmemTiles && src < vmemTiles && prot.all (· != dst)
+  | .vpu _ d a b => d < vregCount && a < vregCount && b < vregCount
+  | .loadVReg d tile blk => d < vregCount && tile < vmemTiles && blk < 16
+  | .storeVReg tile blk src => tile < vmemTiles && blk < 16 && src < vregCount && prot.all (· != tile)
+  | .fillVReg d _ => d < vregCount
+  | _ => false
+
+example : layoutInstrOk 4 2 [0, 1] (.mxu .unsigned8 2 0 1) = true := by decide
+
+theorem layoutInstrOk_sound (hbmSize vmemTiles smemSize vregCount semSize : Nat) (prot : List Nat) (i : TpuInstr)
+    (h : layoutInstrOk vmemTiles vregCount prot i = true) :
+    checkInstrBounds hbmSize vmemTiles smemSize vregCount semSize i = true ∧
+    ∀ t ∈ prot, i.mayWriteVmem t = false := by
+  cases i <;> simp_all [layoutInstrOk, checkInstrBounds, TpuInstr.mayWriteVmem]
+  all_goals exact fun t ht e => h.2 t ht e.symm
+
+/-- A program of `layoutInstrOk` instructions passes the bounds check at any HBM, scalar and semaphore sizes, and
+its synchronous run leaves every protected tile as it found it. -/
+theorem layoutProgramOk_sound (hbmSize vmemTiles smemSize vregCount semSize : Nat) (prot : List Nat) (p : TpuProg)
+    (h : p.all (layoutInstrOk vmemTiles vregCount prot) = true) :
+    checkProgramBounds hbmSize vmemTiles smemSize vregCount semSize p = true ∧
+    ∀ t ∈ prot, ∀ s : TpuCoreState, (runSync s p).vmem[t]? = s.vmem[t]? := by
+  have hi := fun i hi => layoutInstrOk_sound hbmSize vmemTiles smemSize vregCount semSize prot i
+    (List.all_eq_true.mp h i hi)
+  exact ⟨by unfold checkProgramBounds; exact List.all_eq_true.mpr fun i m => (hi i m).1,
+    fun t ht s => runSync_vmem_frame s p t fun i m => (hi i m).2 t ht⟩
+
+private theorem fillTile_ok {v r : Nat} {prot : List Nat} {dst : Nat} (val : UInt64) (hd : dst < v) (hr : 7 ≤ r)
+    (hp : prot.all (· != dst) = true) : (fillTileProgram dst val).all (layoutInstrOk v r prot) = true := by
+  have ⟨h0, h1, h2, h3, h4, h5, h6⟩ : 0 < r ∧ 1 < r ∧ 2 < r ∧ 3 < r ∧ 4 < r ∧ 5 < r ∧ 6 < r := by omega
+  simp [fillTileProgram, layoutInstrOk, *]
+
+private theorem bytePlane_ok {v r : Nat} {prot : List Nat} {dst src : Nat} (byte : Nat) (hd : dst < v) (hs : src < v)
+    (hr : 7 ≤ r) (hp : prot.all (· != dst) = true) :
+    (bytePlaneProgram dst src byte).all (layoutInstrOk v r prot) = true := by
+  have ⟨h0, h1, h2, h3, h4, h5, h6⟩ : 0 < r ∧ 1 < r ∧ 2 < r ∧ 3 < r ∧ 4 < r ∧ 5 < r ∧ 6 < r := by omega
+  simp [bytePlaneProgram, layoutInstrOk, *]
+
+private theorem radixAcc_ok {v r : Nat} {prot : List Nat} {acc term : Nat} (ha : acc < v) (ht : term < v)
+    (hr : 7 ≤ r) (hp : prot.all (· != acc) = true) :
+    (radixAccProgram acc term).all (layoutInstrOk v r prot) = true := by
+  have ⟨h0, h1, h2, h3, h4, h5, h6⟩ : 0 < r ∧ 1 < r ∧ 2 < r ∧ 3 < r ∧ 4 < r ∧ 5 < r ∧ 6 < r := by omega
+  simp [radixAccProgram, layoutInstrOk, *]
+
+private theorem pointwise_ok {v r : Nat} {prot : List Nat} {dst lhs rhs : Nat} (hd : dst < v) (hl : lhs < v)
+    (hrhs : rhs < v) (hr : 7 ≤ r) (hp : prot.all (· != dst) = true) :
+    (goldilocksPointwiseProgram dst lhs rhs).all (layoutInstrOk v r prot) = true := by
+  have ⟨h0, h1, h2, h3, h4, h5, h6⟩ : 0 < r ∧ 1 < r ∧ 2 < r ∧ 3 < r ∧ 4 < r ∧ 5 < r ∧ 6 < r := by omega
+  simp [goldilocksPointwiseProgram, layoutInstrOk, *]
+
+/-- The GEMM program is `layoutInstrOk` when its tiles are in range and no protected tile is the output or one of
+the four scratch tiles. -/
+theorem goldilocksGemm_layout_ok {v r : Nat} {prot : List Nat} {dst lhs rhs scratch : Nat}
+    (hd : dst < v) (hl : lhs < v) (hrhs : rhs < v) (hs : scratch + 3 < v) (hr : 7 ≤ r)
+    (hp : ∀ t, t = dst ∨ (scratch ≤ t ∧ t ≤ scratch + 3) → prot.all (· != t) = true) :
+    (goldilocksGemmProgram dst lhs rhs scratch).all (layoutInstrOk v r prot) = true := by
+  have p0 := hp dst (Or.inl rfl)
+  have p1 := hp scratch (Or.inr (by omega))
+  have p2 := hp (scratch + 1) (Or.inr (by omega))
+  have p3 := hp (scratch + 2) (Or.inr (by omega))
+  have p4 := hp (scratch + 3) (Or.inr (by omega))
+  have hmxu : layoutInstrOk v r prot (.mxu .unsigned8 (scratch + 2) scratch (scratch + 1)) = true := by
+    simp [layoutInstrOk, p3]; omega
+  simp [goldilocksGemmProgram, List.all_flatMap, hmxu,
+    fillTile_ok (0 : UInt64) hd hr p0, fillTile_ok (0 : UInt64) (show scratch + 3 < v by omega) hr p4,
+    fun b => bytePlane_ok (r := r) b (show scratch < v by omega) hl hr p1,
+    fun b => bytePlane_ok (r := r) b (show scratch + 1 < v by omega) hrhs hr p2,
+    radixAcc_ok (show scratch + 3 < v by omega) (show scratch + 2 < v by omega) hr p4,
+    radixAcc_ok hd (show scratch + 3 < v by omega) hr p0]
+
+/-- Output, inputs and the four scratch tiles in range, seven VREGs, and no aliasing: the output is neither input,
+and output and inputs lie outside `scratch … scratch + 3`. The two inputs may coincide (a square). -/
+def validateGemmTileLayout (vmemTiles vregCount dst lhs rhs scratch : Nat) : Bool :=
+  decide (dst < vmemTiles) && decide (lhs < vmemTiles) && decide (rhs < vmemTiles) &&
+  decide (scratch + 3 < vmemTiles) && decide (7 ≤ vregCount) && decide (dst ≠ lhs) && decide (dst ≠ rhs) &&
+  [dst, lhs, rhs].all fun t => decide (t < scratch ∨ scratch + 3 < t)
+
+example : validateGemmTileLayout 7 7 2 0 1 3 = true := by decide
+
+def goldilocksGemmChecked (vmemTiles vregCount dst lhs rhs scratch : Nat) : Option TpuProg :=
+  if validateGemmTileLayout vmemTiles vregCount dst lhs rhs scratch then
+    some (goldilocksGemmProgram dst lhs rhs scratch) else none
+
+/-- **A validated GEMM layout is in bounds and does not clobber its inputs**: the program passes
+`checkProgramBounds` at any HBM, scalar and semaphore sizes, and from every machine state its synchronous run
+leaves the `lhs` and `rhs` tiles unchanged. -/
+theorem validateGemmTileLayout_sound (hbmSize vmemTiles smemSize vregCount semSize dst lhs rhs scratch : Nat)
+    (h : validateGemmTileLayout vmemTiles vregCount dst lhs rhs scratch = true) :
+    checkProgramBounds hbmSize vmemTiles smemSize vregCount semSize (goldilocksGemmProgram dst lhs rhs scratch) = true ∧
+    ∀ s : TpuCoreState,
+      (runSync s (goldilocksGemmProgram dst lhs rhs scratch)).vmem[lhs]? = s.vmem[lhs]? ∧
+      (runSync s (goldilocksGemmProgram dst lhs rhs scratch)).vmem[rhs]? = s.vmem[rhs]? := by
+  simp only [validateGemmTileLayout, Bool.and_eq_true, decide_eq_true_eq, List.all_cons, List.all_nil,
+    Bool.and_true] at h
+  obtain ⟨⟨⟨⟨⟨⟨⟨hd, hl⟩, hr⟩, hs⟩, hreg⟩, hdl⟩, hdr⟩, hd', hl', hr'⟩ := h
+  have ok := goldilocksGemm_layout_ok (prot := [lhs, rhs]) hd hl hr hs hreg (by
+    intro t ht; rcases ht with rfl | ht <;> simp <;> omega)
+  have ⟨hb, hf⟩ := layoutProgramOk_sound hbmSize vmemTiles smemSize vregCount semSize [lhs, rhs] _ ok
+  exact ⟨hb, fun s => ⟨hf lhs (by simp) s, hf rhs (by simp) s⟩⟩
+
+theorem goldilocksGemmChecked_sound (hbmSize vmemTiles smemSize vregCount semSize dst lhs rhs scratch : Nat)
+    (p : TpuProg) (h : goldilocksGemmChecked vmemTiles vregCount dst lhs rhs scratch = some p) :
+    p = goldilocksGemmProgram dst lhs rhs scratch ∧
+    checkProgramBounds hbmSize vmemTiles smemSize vregCount semSize p = true ∧
+    ∀ s : TpuCoreState, (runSync s p).vmem[lhs]? = s.vmem[lhs]? ∧ (runSync s p).vmem[rhs]? = s.vmem[rhs]? := by
+  unfold goldilocksGemmChecked at h; split at h
+  · rename_i hv; injection h with hp; subst hp
+    exact ⟨rfl, validateGemmTileLayout_sound hbmSize vmemTiles smemSize vregCount semSize dst lhs rhs scratch hv⟩
+  · cases h
+
+/-- Output, the four input tiles and six scratch tiles in range, seven VREGs; output and inputs outside
+`scratch … scratch + 5`; the output is none of the inputs. -/
+def validateBaileyNttTileLayout (vmemTiles vregCount dst input wr wc twiddle scratch : Nat) : Bool :=
+  ([dst, input, wr, wc, twiddle].all fun t => decide (t < vmemTiles) && decide (t < scratch ∨ scratch + 5 < t)) &&
+  decide (scratch + 5 < vmemTiles) && decide (7 ≤ vregCount) &&
+  [input, wr, wc, twiddle].all fun t => decide (dst ≠ t)
+
+example : validateBaileyNttTileLayout 12 7 5 0 1 2 3 6 = true := by decide
+
+def baileyNttChecked (vmemTiles vregCount dst input wr wc twiddle scratch : Nat) : Option TpuProg :=
+  if validateBaileyNttTileLayout vmemTiles vregCount dst input wr wc twiddle scratch then
+    some (baileyNttProgram dst input wr wc twiddle scratch) else none
+
+/-- **A validated Bailey layout is in bounds and preserves the input, both root matrices and the twiddles.** -/
+theorem validateBaileyNttTileLayout_sound
+    (hbmSize vmemTiles smemSize vregCount semSize dst input wr wc twiddle scratch : Nat)
+    (h : validateBaileyNttTileLayout vmemTiles vregCount dst input wr wc twiddle scratch = true) :
+    checkProgramBounds hbmSize vmemTiles smemSize vregCount semSize
+      (baileyNttProgram dst input wr wc twiddle scratch) = true ∧
+    ∀ t ∈ [input, wr, wc, twiddle], ∀ s : TpuCoreState,
+      (runSync s (baileyNttProgram dst input wr wc twiddle scratch)).vmem[t]? = s.vmem[t]? := by
+  simp only [validateBaileyNttTileLayout, Bool.and_eq_true, decide_eq_true_eq, List.all_cons, List.all_nil,
+    Bool.and_true] at h
+  obtain ⟨⟨⟨⟨⟨hd, hd'⟩, ⟨hi, hi'⟩, ⟨hwr, hwr'⟩, ⟨hwc, hwc'⟩, htw, htw'⟩, hs⟩, hreg⟩, n1, n2, n3, n4⟩ := h
+  have hp : ∀ t, t = dst ∨ (scratch ≤ t ∧ t ≤ scratch + 5) → [input, wr, wc, twiddle].all (· != t) = true := by
+    intro t ht; rcases ht with rfl | ht <;> simp <;> omega
+  have g1 := goldilocksGemm_layout_ok (prot := [input, wr, wc, twiddle]) (dst := scratch) (lhs := wr)
+    (rhs := input) (scratch := scratch + 2) (v := vmemTiles) (by omega) hwr hi (by omega) hreg
+    (fun t ht => hp t (Or.inr (by omega)))
+  have g2 := goldilocksGemm_layout_ok (prot := [input, wr, wc, twiddle]) (dst := scratch) (lhs := wc)
+    (rhs := scratch + 1) (scratch := scratch + 2) (v := vmemTiles) (by omega) hwc (by omega) (by omega) hreg
+    (fun t ht => hp t (Or.inr (by omega)))
+  have pw := pointwise_ok (prot := [input, wr, wc, twiddle]) (dst := scratch + 1) (lhs := scratch + 1)
+    (rhs := twiddle) (v := vmemTiles) (by omega) (by omega) htw hreg (hp _ (Or.inr (by omega)))
+  have t1 : layoutInstrOk vmemTiles vregCount [input, wr, wc, twiddle] (.transpose (scratch + 1) scratch) = true := by
+    simp only [layoutInstrOk, hp (scratch + 1) (Or.inr (by omega)), Bool.and_true, Bool.and_eq_true,
+      decide_eq_true_eq]; omega
+  have t2 : layoutInstrOk vmemTiles vregCount [input, wr, wc, twiddle] (.transpose dst scratch) = true := by
+    simp only [layoutInstrOk, hp dst (Or.inl rfl), Bool.and_true, Bool.and_eq_true, decide_eq_true_eq]; omega
+  exact layoutProgramOk_sound hbmSize vmemTiles smemSize vregCount semSize [input, wr, wc, twiddle] _
+    (by simp [baileyNttProgram, g1, g2, pw, t1, t2])
+
 
 end Obend.Hardware.Tpu

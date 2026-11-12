@@ -210,6 +210,7 @@ def validateF2CorePortBindings (cfg : F2WrapperConfig) (coreMod : RtlModule) : B
 example : validateF2CorePortBindings defaultAwsF2WrapperConfig
     { name := "core", inputNames := ["a", "b"], wires := [], regs := [], outputs := [{ name := "y", expr := .inputPort 0 }] } = true := by
   decide +kernel
+example : checkF2CorePort defaultAwsF2WrapperConfig .shToCl "a" 64 = true := by decide +kernel
 private theorem checkF2CorePort_sound {cfg : F2WrapperConfig} {d : F2PortDir} {nm : String} {w : Nat}
     (h : checkF2CorePort cfg d nm w = true) :
     ∃ b ∈ cfg.portBindings, b.dir = d ∧ b.clSignalName = nm ∧ b.width = w ∧

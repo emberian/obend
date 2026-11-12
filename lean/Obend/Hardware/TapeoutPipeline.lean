@@ -620,6 +620,8 @@ def runArtifactBoundTapeoutSignoff (env : ProcessCornerEnvelope) (clockPeriodPs 
       checkArtifactBoundTapeout env clockPeriodPs deck nl pnr then
     some (derivePhysicalChecksFromBelNetlist env.slowCorner deck nl pnr)
   else none
+example : (runArtifactBoundTapeoutSignoff envelope7nm 2000 default7nmDrcDeck validAdderBelNetlist
+    (synthesizeGridPnrCert validAdderBelNetlist)).isSome = true := by decide +kernel
 theorem runArtifactBoundTapeoutSignoff_sound (env : ProcessCornerEnvelope) (clockPeriodPs : Nat) (deck : FoundryDrcDeck)
     (nl : BelNetlist) (pnr : PnrCertificate) (phys : ArtifactPhysicalChecks)
     (hOk : runArtifactBoundTapeoutSignoff env clockPeriodPs deck nl pnr = some phys) :

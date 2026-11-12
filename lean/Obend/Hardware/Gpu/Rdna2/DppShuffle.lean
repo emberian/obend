@@ -349,5 +349,140 @@ theorem waveButterfly_eq_spec (stage : Fin 6) (x twiddle : Lanes Nat) :
   funext i
   simp only [waveButterfly, waveButterflySpec, wavePartner_eq_xor]
 
+/-!
+## The DPP16 modifier dword
+
+A VOP1/VOP2 instruction selects DPP by `SRC0 = 0xFA`; its second dword then carries the real source and the
+control. Field positions are those of AMD's `VOP1_VOP_DPP16` / `VOP2_VOP_DPP16` encodings (`Encodings.lean`, bits
+32–63 of the instruction): `VSRC0` [7:0], `DPP_CTRL` [16:8], `FI` [18], `BOUND_CTRL` [19], the float `NEG`/`ABS`
+modifiers [23:20], `BANK_MASK` [27:24], `ROW_MASK` [31:28]. `DPP_CTRL` values are LLVM's `AMDGPU::DppCtrl`
+(`SIDefines.h`): quad permutations `0x00–0xFF`, `row_shl` `0x100 + k`, `row_shr` `0x110 + k`, `row_ror`
+`0x120 + k`, `wave_shl1` `0x130`, `wave_shr1` `0x138`, `row_mirror` `0x140`, `row_half_mirror` `0x141`,
+`row_bcast15` `0x142`, `row_bcast31` `0x143`. A word with bit 17 or a float modifier set is refused, since
+`DppCtrl` carries neither.
+-/
+
+/-- The marker `SRC0 = 0xFA` of the first dword. -/
+def dppSrc0Marker : Nat := 0xFA
+
+def encodeDppOp : DppOp → Nat
+  | .quad_perm a b c d => a.val + 4 * b.val + 16 * c.val + 64 * d.val
+  | .row_shl k => 0x100 + k.val
+  | .row_shr k => 0x110 + k.val
+  | .row_ror k => 0x120 + k.val
+  | .wave_shl1 => 0x130
+  | .wave_shr1 => 0x138
+  | .row_mirror => 0x140
+  | .row_half_mirror => 0x141
+  | .row_bcast15 => 0x142
+  | .row_bcast31 => 0x143
+
+def decodeDppOp (c : Nat) : Option DppOp :=
+  if c < 0x100 then
+    some (.quad_perm ⟨c % 4, Nat.mod_lt _ (by decide)⟩ ⟨c / 4 % 4, Nat.mod_lt _ (by decide)⟩
+      ⟨c / 16 % 4, Nat.mod_lt _ (by decide)⟩ ⟨c / 64 % 4, Nat.mod_lt _ (by decide)⟩)
+  else if c < 0x110 then some (.row_shl ⟨c % 16, Nat.mod_lt _ (by decide)⟩)
+  else if c < 0x120 then some (.row_shr ⟨c % 16, Nat.mod_lt _ (by decide)⟩)
+  else if c < 0x130 then some (.row_ror ⟨c % 16, Nat.mod_lt _ (by decide)⟩)
+  else if c = 0x130 then some .wave_shl1
+  else if c = 0x138 then some .wave_shr1
+  else if c = 0x140 then some .row_mirror
+  else if c = 0x141 then some .row_half_mirror
+  else if c = 0x142 then some .row_bcast15
+  else if c = 0x143 then some .row_bcast31
+  else none
+
+theorem encodeDppOp_lt (op : DppOp) : encodeDppOp op < 512 := by
+  cases op <;> simp only [encodeDppOp] <;> omega
+
+theorem decodeDppOp_encode (op : DppOp) : decodeDppOp (encodeDppOp op) = some op := by
+  cases op with
+  | quad_perm a b c d => revert a b c d; decide
+  | row_shl k => revert k; decide
+  | row_shr k => revert k; decide
+  | row_ror k => revert k; decide
+  | _ => rfl
+
+/-- The modifier dword as a number. -/
+def dppModifierNat (vsrc0 : Nat) (ctrl : DppCtrl) : Nat :=
+  vsrc0 % 256 + 256 * encodeDppOp ctrl.op + 262144 * ctrl.fetch_inactive.toNat + 524288 * ctrl.bound_ctrl.toNat +
+    16777216 * ctrl.bank_mask.toNat + 268435456 * ctrl.row_mask.toNat
+
+def encodeDppWord32 (vsrc0 : Nat) (ctrl : DppCtrl) : UInt32 := UInt32.ofNat (dppModifierNat vsrc0 ctrl)
+
+def decodeDppModifierNat (n : Nat) : Option (Nat × DppCtrl) :=
+  if n / 131072 % 2 = 0 ∧ n / 1048576 % 16 = 0 then
+    (decodeDppOp (n / 256 % 512)).map fun op =>
+      (n % 256, { op, row_mask := BitVec.ofNat 4 (n / 268435456 % 16), bank_mask := BitVec.ofNat 4 (n / 16777216 % 16)
+                , bound_ctrl := decide (n / 524288 % 2 = 1), fetch_inactive := decide (n / 262144 % 2 = 1) })
+  else none
+
+/-- Decode a DPP16 modifier dword to its source VGPR and control. -/
+def decodeDppModifierWord (w : UInt32) : Option (Nat × DppCtrl) := decodeDppModifierNat w.toNat
+
+private theorem dppFields (n x c f b bk rw : Nat) (hx : x < 256) (hc : c < 512) (hf : f < 2) (hb : b < 2)
+    (hbk : bk < 16) (hrw : rw < 16)
+    (hn : n = x + 256 * c + 262144 * f + 524288 * b + 16777216 * bk + 268435456 * rw) :
+    n % 256 = x ∧ n / 256 % 512 = c ∧ n / 131072 % 2 = 0 ∧ n / 262144 % 2 = f ∧ n / 524288 % 2 = b ∧
+    n / 1048576 % 16 = 0 ∧ n / 16777216 % 16 = bk ∧ n / 268435456 % 16 = rw ∧ n < 4294967296 := by
+  subst hn; refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> omega
+
+theorem dppModifierNat_lt (vsrc0 : Nat) (ctrl : DppCtrl) : dppModifierNat vsrc0 ctrl < 4294967296 :=
+  (dppFields _ (vsrc0 % 256) (encodeDppOp ctrl.op) ctrl.fetch_inactive.toNat ctrl.bound_ctrl.toNat
+    ctrl.bank_mask.toNat ctrl.row_mask.toNat (Nat.mod_lt _ (by decide)) (encodeDppOp_lt _) (Bool.toNat_lt _)
+    (Bool.toNat_lt _) ctrl.bank_mask.isLt ctrl.row_mask.isLt rfl).2.2.2.2.2.2.2.2
+
+/-- **Round trip of the modifier dword**: decoding an encoded source and control returns them. -/
+theorem decodeDppModifierWord_encode (vsrc0 : Nat) (ctrl : DppCtrl) :
+    decodeDppModifierWord (encodeDppWord32 vsrc0 ctrl) = some (vsrc0 % 256, ctrl) := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩ := dppFields (dppModifierNat vsrc0 ctrl) (vsrc0 % 256)
+    (encodeDppOp ctrl.op) ctrl.fetch_inactive.toNat ctrl.bound_ctrl.toNat ctrl.bank_mask.toNat ctrl.row_mask.toNat
+    (Nat.mod_lt _ (by decide)) (encodeDppOp_lt _) (Bool.toNat_lt _) (Bool.toNat_lt _) ctrl.bank_mask.isLt
+    ctrl.row_mask.isLt rfl
+  have hw : (encodeDppWord32 vsrc0 ctrl).toNat = dppModifierNat vsrc0 ctrl := by
+    simp only [encodeDppWord32, UInt32.toNat_ofNat']; exact Nat.mod_eq_of_lt h9
+  simp only [decodeDppModifierWord, decodeDppModifierNat, hw, h1, h2, h3, h4, h5, h6, h7, h8, decodeDppOp_encode,
+    and_self, ↓reduceIte, Option.map_some, BitVec.ofNat_toNat, BitVec.setWidth_eq]
+  cases ctrl with
+  | mk op rm bm bc fi => cases bc <;> cases fi <;> rfl
+
+/-- Decode the modifier dword, refuse anything outside RDNA2's DPP16 set, and route the 64 lanes of `src`. -/
+def verifyDppWordShuffle (w : UInt32) (exec : BitVec 64) (src old : Vector UInt32 64) : Option (Vector UInt32 64) :=
+  match decodeDppModifierWord w with
+  | some (_, ctrl) => if rdna2Supported ctrl.op then some (shuffleExec ctrl exec src old) else none
+  | none => none
+
+example : (verifyDppWordShuffle (encodeDppWord32 3 (fullCtrl .row_mirror)) allExec
+    (Vector.replicate 64 7) (Vector.replicate 64 0)).isSome = true := by
+  simp [verifyDppWordShuffle, decodeDppModifierWord_encode, rdna2Supported, fullCtrl]
+
+/-- **Lane footprint of an accepted modifier dword.** The word decodes to a supported control; a lane masked by
+EXEC, `ROW_MASK` or `BANK_MASK` keeps its old value; a written lane takes its routed source lane, or, when the
+source is invalid, zero under `BOUND_CTRL` and its old value otherwise. -/
+theorem verifyDppWordShuffle_sound (w : UInt32) (exec : BitVec 64) (src old out : Vector UInt32 64)
+    (h : verifyDppWordShuffle w exec src old = some out) :
+    ∃ vsrc0 ctrl, decodeDppModifierWord w = some (vsrc0, ctrl) ∧ rdna2Supported ctrl.op = true ∧
+      (∀ i : Lane, writesLane ctrl exec i = false → out.get i = old.get i) ∧
+      (∀ (i j : Lane), writesLane ctrl exec i = true → sourceLane ctrl exec i = some j → out.get i = src.get j) ∧
+      (∀ i : Lane, writesLane ctrl exec i = true → sourceLane ctrl exec i = none →
+        out.get i = if ctrl.bound_ctrl then 0 else old.get i) := by
+  unfold verifyDppWordShuffle at h
+  split at h
+  · rename_i v ctrl hd
+    split at h
+    · rename_i hs; injection h with ho; subst ho
+      refine ⟨v, ctrl, hd, hs, fun i hw => ?_, fun i j hw hj => ?_, fun i hw hn => ?_⟩
+      · rw [shuffleExec_eq_spec]; exact masked_holds 0 ctrl exec _ _ i hw
+      · rw [shuffleExec_eq_spec]; simp [shuffle, hw, hj]
+      · rw [shuffleExec_eq_spec]; exact invalid_source_behavior 0 ctrl exec _ _ i hw hn
+    · cases h
+  · cases h
+
+/-- An encoded supported control shuffles exactly as the lane specification says. -/
+theorem verifyDppWordShuffle_encode (vsrc0 : Nat) (ctrl : DppCtrl) (exec : BitVec 64) (src old : Vector UInt32 64)
+    (hs : rdna2Supported ctrl.op = true) :
+    verifyDppWordShuffle (encodeDppWord32 vsrc0 ctrl) exec src old = some (shuffleExec ctrl exec src old) := by
+  simp [verifyDppWordShuffle, decodeDppModifierWord_encode, hs]
+
 end Dpp
 end Obend.Hardware.Gpu.Rdna2

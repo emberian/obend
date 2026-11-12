@@ -1198,5 +1198,118 @@ theorem load_wait_use_inhabited :
 
 end ReadWaitUse
 
+/-! ## Machine words: decoding a straight-line kernel, its register footprint, and the word-level check -/
+
+/-- Decode a straight-line kernel with `decodeInst`, one instruction after another. `none` when a word decodes to
+no RDNA2 instruction. -/
+def decodeKernelWords : Nat → List UInt32 → Option (List Inst)
+  | _, [] => some []
+  | 0, _ :: _ => none
+  | fuel + 1, w :: rest =>
+    match decodeInst (w :: rest) with
+    | some (i, k) => if k = 0 then none else (decodeKernelWords fuel ((w :: rest).drop k)).map (i :: ·)
+    | none => none
+
+private theorem decodeInst_go_words (ws : List UInt32) (w0 : UInt32) (i : Inst) (k : Nat) :
+    ∀ es : List Encoding, decodeInst.go ws w0 es = some (i, k) → i.words = ws.take k := by
+  intro es
+  induction es with
+  | nil => intro h; simp [decodeInst.go] at h
+  | cons e es ih =>
+    intro h
+    simp only [decodeInst.go] at h
+    repeat' split at h
+    all_goals first
+      | exact ih h
+      | (simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; rfl)
+
+/-- The dwords a decoded instruction records are the ones it was decoded from. -/
+theorem decodeInst_words (ws : List UInt32) (i : Inst) (k : Nat) (h : decodeInst ws = some (i, k)) :
+    i.words = ws.take k := by
+  unfold decodeInst at h
+  split at h
+  · cases h
+  · exact decodeInst_go_words _ _ i k _ h
+
+/-- **A decoded kernel is its words**: concatenating the instructions' dwords gives back the input. -/
+theorem decodeKernelWords_words (fuel : Nat) (ws : List UInt32) (is : List Inst)
+    (h : decodeKernelWords fuel ws = some is) : is.flatMap (·.words) = ws := by
+  induction fuel generalizing ws is with
+  | zero =>
+    cases ws with
+    | nil => simp only [decodeKernelWords, Option.some.injEq] at h; subst h; rfl
+    | cons w rest => simp [decodeKernelWords] at h
+  | succ fuel ih =>
+    cases ws with
+    | nil => simp only [decodeKernelWords, Option.some.injEq] at h; subst h; rfl
+    | cons w rest =>
+      simp only [decodeKernelWords] at h
+      split at h
+      · rename_i i k hd
+        split at h
+        · cases h
+        · cases hr : decodeKernelWords fuel ((w :: rest).drop k) with
+          | none => rw [hr] at h; cases h
+          | some tail =>
+            rw [hr] at h; simp only [Option.map_some, Option.some.injEq] at h; subst h
+            rw [List.flatMap_cons, ih _ _ hr, decodeInst_words _ i k hd, List.take_append_drop]
+      · cases h
+
+/-- Every VGPR an instruction reads or writes is below `vgprCount`. -/
+def checkVgprFootprint (vgprCount : Nat) (is : List Inst) : Bool :=
+  is.all fun i => (i.access.reads ++ i.access.writes).all fun r =>
+    match r with
+    | .v n => n < vgprCount
+    | .s _ => true
+
+/-- What the host allocates and counts for a decoded kernel: VGPRs named, and accesses by memory class. -/
+structure KernelFootprint where
+  vgprs : List Nat
+  ldsAccesses : Nat
+  vectorLoads : Nat
+  vectorStores : Nat
+  scalarLoads : Nat
+  deriving Repr, DecidableEq
+
+def kernelFootprint (is : List Inst) : KernelFootprint where
+  vgprs := (is.flatMap fun i => (i.access.reads ++ i.access.writes).filterMap fun r =>
+    match r with
+    | .v n => some n
+    | .s _ => none).eraseDups
+  ldsAccesses := is.countP fun i => isDsLoad i || isDsStore i
+  vectorLoads := is.countP isVmemLoad
+  vectorStores := is.countP isVmemStore
+  scalarLoads := is.countP isSmemLoad
+
+/-- The word-level check: the words decode to a straight-line kernel, its VGPRs fit `vgprCount`, and the counter
+and store analysis `checkAsyncBlock` accepts it. -/
+def verifyAsyncTraceWords (vgprCount : Nat) (ws : List UInt32) : Bool :=
+  match decodeKernelWords ws.length ws with
+  | some is => checkVgprFootprint vgprCount is && checkAsyncBlock is
+  | none => false
+
+example : verifyAsyncTraceWords 0 [] = true := by decide
+
+/-- **Soundness of the word-level check.** Accepted words are a decoded kernel whose dwords are exactly the input
+and whose VGPRs lie below `vgprCount`; and every asynchronous execution of that kernel, under any retirement
+schedule and with the footprint contract `BlockWellFormed`, drains its queues and ends in the synchronous state. -/
+theorem decodeAndVerifyAsyncKernel_sound (vgprCount : Nat) (ws : List UInt32)
+    (h : verifyAsyncTraceWords vgprCount ws = true) :
+    ∃ is : List Inst, decodeKernelWords ws.length ws = some is ∧ is.flatMap (·.words) = ws ∧
+      (∀ i ∈ is, ∀ n, Reg.v n ∈ i.access.reads ++ i.access.writes → n < vgprCount) ∧
+      ∀ (s₀ : WaveState) (turns : List Turn) (sFinal : AsyncWaveState), turns.map (·.instruction) = is →
+        (∃ P, P (AsyncWaveState.init s₀) ∧ BlockWellFormed P is) →
+        run (AsyncWaveState.init s₀) turns = .ok sFinal →
+        sFinal.vmQueue = [] ∧ sFinal.lgkmQueue = [] ∧ sFinal.vsQueue = [] ∧ sFinal.toGWave = syncRun s₀ is := by
+  unfold verifyAsyncTraceWords at h
+  split at h
+  · rename_i is hd
+    simp only [Bool.and_eq_true] at h
+    refine ⟨is, hd, decodeKernelWords_words _ _ _ hd, fun i hi n hn => ?_, fun s₀ turns sFinal hT wf ex => ?_⟩
+    · have := List.all_eq_true.mp (List.all_eq_true.mp h.1 i hi) (.v n) hn
+      simpa using this
+    · subst hT; exact waitcnt_safe_async_refines_sync s₀ turns sFinal wf h.2 ex
+  · cases h
+
 end Async
 end Obend.Hardware.Gpu.Rdna2

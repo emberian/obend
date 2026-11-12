@@ -1,5 +1,8 @@
 import Obend.Hardware.AwsF2Shell
 import Obend.Hardware.TapeoutPipeline
+import Obend.Hardware.Tpu.CryptoSystolic
+import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
+import Obend.Hardware.Gpu.Rdna2.DppShuffle
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
@@ -10,6 +13,8 @@ import Obend.Tactic.Tooth
    the `"vivado-sta@1"` / `"openpdk-drc-sta@1"` token-wire codecs.
 2. Tapeout: artifact-bound physical signoff derived from the netlist and its PnR certificate; a timing defect in
    the RTL and a geometry defect in the placement are refused while every `TapeoutConfig` sample input is clean.
+3. Accelerators: TPU allocation bounds and validated GEMM/Bailey tile layouts; RDNA2 kernels checked from their
+   machine words; the DPP16 modifier dword against LLVM MC encodings.
 -/
 
 namespace Obend.Tests.Seam4aFpgaTapeoutCryptoTest
@@ -205,5 +210,116 @@ def referenceJson (render : SiliconTapeoutArtifact → String) : Option Lean.Jso
   (o.getObjValAs? Nat "logicLevels").toOption) == some 7
 
 end Tapeout
+
+/-! ## 3. TPU tile layouts and RDNA2 machine words -/
+section Tpu
+open Obend.Hardware.Tpu Obend.Crypto.Fast
+
+-- The layout of the existing GEMM test is accepted; aliasing and out-of-range layouts are refused.
+#guard validateGemmTileLayout 7 7 2 0 1 3
+#guard validateGemmTileLayout 7 7 2 0 0 3
+#guard validateGemmTileLayout 7 7 0 0 1 3 == false      -- dst = lhs
+#guard validateGemmTileLayout 7 7 1 0 1 3 == false      -- dst = rhs
+#guard validateGemmTileLayout 7 7 2 0 4 3 == false      -- rhs inside scratch
+#guard validateGemmTileLayout 7 7 5 0 1 3 == false      -- dst inside scratch
+#guard validateGemmTileLayout 6 7 2 0 1 3 == false      -- scratch + 3 out of range
+#guard validateGemmTileLayout 7 6 2 0 1 3 == false      -- six VREGs
+#guard goldilocksGemmChecked 7 7 2 0 1 3 == some (goldilocksGemmProgram 2 0 1 3)
+#guard (goldilocksGemmChecked 7 7 0 0 1 3).isNone
+#guard checkProgramBounds 0 7 0 7 0 (goldilocksGemmProgram 2 0 1 3)
+#guard checkProgramBounds 0 6 0 7 0 (goldilocksGemmProgram 2 0 1 3) == false
+#guard validateBaileyNttTileLayout 12 7 5 0 1 2 3 6
+#guard validateBaileyNttTileLayout 12 7 5 0 1 2 7 6 == false   -- twiddle inside scratch
+#guard validateBaileyNttTileLayout 12 7 0 0 1 2 3 6 == false   -- dst = input
+#guard validateBaileyNttTileLayout 11 7 5 0 1 2 3 6 == false   -- scratch + 5 out of range
+#guard (baileyNttChecked 12 7 5 0 1 2 3 6).isSome
+
+/-- Seven tiles of `p - 1`. -/
+def fullTiles : TpuCoreState :=
+  { TpuCoreState.initial 0 7 0 7 0 with
+    vmem := Array.replicate 7 (Sized.ofFn fun _ => UInt64.ofNat (Obend.Apps.ZkNtt.goldilocksPrime - 1)) }
+-- What the validator prevents: with `dst = lhs` the first seventeen instructions already zero the left input.
+#guard (runSync fullTiles ((goldilocksGemmProgram 0 0 1 3).take 17)).vmem[0]? != fullTiles.vmem[0]?
+#guard (runSync fullTiles ((goldilocksGemmProgram 2 0 1 3).take 17)).vmem[0]? == fullTiles.vmem[0]?
+
+-- The checked emitter needs the allocation; the plain emitter refuses an out-of-range block.
+#guard (emitCheckedPallasTpuKernel 0 7 0 7 (goldilocksGemmProgram 2 0 1 3 ++ [.finish])).isSome
+#guard (emitCheckedPallasTpuKernel 0 6 0 7 (goldilocksGemmProgram 2 0 1 3 ++ [.finish])).isNone
+#guard (emitPallasTpuKernel [.loadVReg 0 0 16, .finish]).startsWith "raise ValueError"
+#guard (emitPallasTpuKernel [.loadVReg 0 0 15, .finish]).startsWith "raise ValueError" == false
+
+/-- The pre-repair contract: bounds only, aliasing left to the caller. -/
+def validateGemmBoundsOnly (vmemTiles vregCount dst lhs rhs scratch : Nat) : Bool :=
+  decide (dst < vmemTiles) && decide (lhs < vmemTiles) && decide (rhs < vmemTiles) &&
+  decide (scratch + 3 < vmemTiles) && decide (7 ≤ vregCount)
+
+#tooth Obend.Hardware.Tpu.validateGemmTileLayout_sound
+  by mutation Obend.Hardware.Tpu.validateGemmTileLayout := validateGemmBoundsOnly
+#tooth Obend.Hardware.Tpu.validateBaileyNttTileLayout_sound
+  by mutation Obend.Hardware.Tpu.validateBaileyNttTileLayout := fun _ _ _ _ _ _ _ _ => true
+#tooth Obend.Hardware.Tpu.checkProgramBounds_sound
+  by mutation Obend.Hardware.Tpu.checkInstrBounds := fun _ _ _ _ _ _ => true
+#tooth Obend.Hardware.Tpu.runSync_vmem_frame
+  by mutation Obend.Hardware.Tpu.TpuInstr.mayWriteVmem := fun _ _ => false
+
+end Tpu
+
+section Rdna2
+open Obend.Hardware.Gpu.Rdna2 Obend.Hardware.Gpu.Rdna2.Async Obend.Hardware.Gpu.Rdna2.Dpp
+
+-- `s_load_dword s8, s[0:1], 0`; `s_waitcnt 0`; `s_mov_b32 s10, s8`: the load-wait-use block, from its words.
+#guard (decodeKernelWords 4 [0xf4000200, 0xfa000000, 0xbf8c0000, 0xbe8a0308]).map (·.map (·.name)) ==
+  some ["S_LOAD_DWORD", "S_WAITCNT", "S_MOV_B32"]
+#guard verifyAsyncTraceWords 0 [0xf4000200, 0xfa000000, 0xbf8c0000, 0xbe8a0308]
+-- Using `s8` before the wait is refused; so are a truncated load and a word that is no instruction.
+#guard verifyAsyncTraceWords 0 [0xf4000200, 0xfa000000, 0xbe8a0308] == false
+#guard verifyAsyncTraceWords 0 [0xf4000200] == false
+#guard verifyAsyncTraceWords 0 [0xffffffff] == false
+#guard ((decodeKernelWords 4 [0xf4000200, 0xfa000000, 0xbf8c0000, 0xbe8a0308]).map kernelFootprint).map
+  (fun f => (f.vgprs, f.scalarLoads, f.ldsAccesses)) == some ([], 1, 0)
+-- `v_mov_b32 v5, v70` names VGPR 70: inside a 128-VGPR allocation, outside a 64-VGPR one.
+#guard (decodeKernelWords 1 [0x7e0a0346]).map (·.map (·.name)) == some ["V_MOV_B32"]
+#guard ((decodeKernelWords 1 [0x7e0a0346]).map kernelFootprint).map (·.vgprs) == some [70, 5]
+#guard verifyAsyncTraceWords 128 [0x7e0a0346]
+#guard verifyAsyncTraceWords 64 [0x7e0a0346] == false
+
+#tooth Obend.Hardware.Gpu.Rdna2.Async.decodeAndVerifyAsyncKernel_sound
+  by mutation Obend.Hardware.Gpu.Rdna2.Async.verifyAsyncTraceWords := fun _ _ => true
+#tooth Obend.Hardware.Gpu.Rdna2.Async.decodeAndVerifyAsyncKernel_sound
+  by mutation Obend.Hardware.Gpu.Rdna2.Async.checkVgprFootprint := fun _ _ => true
+
+-- DPP16 modifier dwords from LLVM's MC tests (`llvm/test/MC/AMDGPU/dpp.s`), second dword little-endian:
+-- `v_mov_b32_dpp v0, v0 quad_perm:[0,2,1,1] row_mask:0xf bank_mask:0xf`  ; [0x00,0x58,0x00,0xff]
+-- `v_mov_b32_dpp v0, v0 row_shl:1 row_mask:0xf bank_mask:0xf`            ; [0x00,0x01,0x01,0xff]
+-- `v_mov_b32_dpp v0, v0 row_shr:1 row_mask:0xf bank_mask:0xf`            ; [0x00,0x11,0x01,0xff]
+-- `v_mov_b32_dpp v0, v0 row_mirror row_mask:0xf bank_mask:0xf`           ; [0x00,0x40,0x01,0xff]
+-- `v_mov_b32_dpp v0, v0 wave_shl:1 row_mask:0x0 bank_mask:0x0 bound_ctrl:0` ; [0x00,0x30,0x09,0x00]
+#guard decodeDppModifierWord 0xff005800 == some (0, { op := .quad_perm 0 2 1 1 })
+#guard decodeDppModifierWord 0xff010100 == some (0, { op := .row_shl 1 })
+#guard decodeDppModifierWord 0xff011100 == some (0, { op := .row_shr 1 })
+#guard decodeDppModifierWord 0xff014000 == some (0, { op := .row_mirror })
+#guard decodeDppModifierWord 0x00093000 ==
+  some (0, { op := .wave_shl1, row_mask := 0, bank_mask := 0, bound_ctrl := true })
+#guard encodeDppWord32 0 { op := .quad_perm 0 2 1 1 } == 0xff005800
+#guard encodeDppWord32 0 { op := .row_shr 1 } == 0xff011100
+#guard encodeDppWord32 0 { op := .wave_shl1, row_mask := 0, bank_mask := 0, bound_ctrl := true } == 0x00093000
+#guard encodeDppWord32 7 { op := .row_half_mirror, fetch_inactive := true } == 0xff054107
+-- Reserved bit 17, a float modifier, and an unassigned control code are refused.
+#guard (decodeDppModifierWord 0xff025800).isNone
+#guard (decodeDppModifierWord 0xff105800).isNone
+#guard (decodeDppModifierWord 0xff015000).isNone
+-- RDNA2 has no wave shift or row broadcast: the word decodes but the shuffle is refused.
+#guard (verifyDppWordShuffle 0x00093000 allExec (Vector.replicate 64 7) (Vector.replicate 64 0)).isNone
+#guard (verifyDppWordShuffle 0xff014200 allExec (Vector.replicate 64 7) (Vector.replicate 64 0)).isNone
+-- `row_mirror` on lanes `0..63` reverses each row of sixteen.
+#guard (verifyDppWordShuffle 0xff014000 allExec (Vector.ofFn fun i => i.val.toUInt32) (Vector.replicate 64 0)).map
+  (·.toList.take 18) == some [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 31, 30]
+
+#tooth Obend.Hardware.Gpu.Rdna2.Dpp.decodeDppModifierWord_encode
+  by mutation Obend.Hardware.Gpu.Rdna2.Dpp.encodeDppOp := fun _ => 0
+#tooth Obend.Hardware.Gpu.Rdna2.Dpp.verifyDppWordShuffle_sound
+  by mutation Obend.Hardware.Gpu.Rdna2.Dpp.verifyDppWordShuffle := fun _ _ src _ => some src
+
+end Rdna2
 
 end Obend.Tests.Seam4aFpgaTapeoutCryptoTest

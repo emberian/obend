@@ -1152,4 +1152,125 @@ theorem checkDmaSemaphores_async_refines_sync (s₀ : TpuCoreState) (p : TpuProg
   obtain ⟨b,hb⟩ := Option.isSome_iff_exists.mp checked
   exact initial.trace trace p legal project sized.bounds hb
 
+/-! Decidable allocation bounds for `WellSized`, and the VMEM frame of a synchronous run. -/
+
+def checkTileBound (hbmSize vmemSize : Nat) (a : TileAddr) : Bool :=
+  match a.space with
+  | .hbm => a.index < hbmSize
+  | .vmem => a.index < vmemSize
+
+/-- `InstrBound` against explicit resource sizes. -/
+def checkInstrBounds (hbmSize vmemSize smemSize vregSize semSize : Nat) : TpuInstr → Bool
+  | .dma src dst sem => checkTileBound hbmSize vmemSize src && checkTileBound hbmSize vmemSize dst && sem < semSize
+  | .wait sem _ | .signal sem _ => sem < semSize
+  | .mxu _ dst lhs rhs => dst < vmemSize && lhs < vmemSize && rhs < vmemSize
+  | .transpose dst src => dst < vmemSize && src < vmemSize
+  | .vpu _ dst lhs rhs => dst < vregSize && lhs < vregSize && rhs < vregSize
+  | .loadVReg dst tile block => dst < vregSize && tile < vmemSize && block < 16
+  | .storeVReg tile block src => tile < vmemSize && block < 16 && src < vregSize
+  | .permute dst src lanes => dst < vregSize && src < vregSize && lanes.size == 128 && lanes.all (· < 128)
+  | .fillVReg dst _ => dst < vregSize
+  | .scalar dst _ => dst < smemSize
+  | .finish => true
+
+/-- Every instruction of `p` stays inside the given HBM, VMEM, scalar, VREG and semaphore allocations. -/
+def checkProgramBounds (hbmSize vmemSize smemSize vregSize semSize : Nat) (p : TpuProg) : Bool :=
+  p.all (checkInstrBounds hbmSize vmemSize smemSize vregSize semSize)
+
+example : checkInstrBounds 1 3 0 1 1 (.transpose 2 0) = true := by decide
+example : checkProgramBounds 2 3 0 2 2 [.mxu .unsigned8 2 0 1, .loadVReg 1 2 15, .finish] = true := by decide
+
+theorem checkInstrBounds_sound (s : TpuCoreState) (i : TpuInstr)
+    (h : checkInstrBounds s.hbm.size s.vmem.size s.smem.size s.vreg.size s.semaphores.size i = true) :
+    InstrBound s i := by
+  cases i with
+  | dma src dst sem =>
+    cases src with | mk ss si => cases dst with | mk ds di =>
+      cases ss <;> cases ds <;> simp_all [checkInstrBounds, checkTileBound, InstrBound, tileBound]
+  | permute dst src lanes =>
+    simp_all [checkInstrBounds, InstrBound]
+    intro x hx; obtain ⟨i, hi, rfl⟩ := Array.mem_iff_getElem.mp hx; exact h.2 i hi
+  | _ => simp_all [checkInstrBounds, InstrBound]
+
+/-- **The decidable bounds check establishes `WellSized`** for a healthy state with no pending DMA, zero
+semaphores, and the sizes the check was run against. -/
+theorem checkProgramBounds_sound (s₀ : TpuCoreState) (p : TpuProg) (healthy : s₀.error = none) (empty : s₀.dma = [])
+    (zero : s₀.semaphores = Array.replicate s₀.semaphores.size 0)
+    (h : checkProgramBounds s₀.hbm.size s₀.vmem.size s₀.smem.size s₀.vreg.size s₀.semaphores.size p = true) :
+    WellSized s₀ p :=
+  ⟨healthy, empty, zero, fun i hi => checkInstrBounds_sound s₀ i (List.all_eq_true.mp h i hi)⟩
+
+theorem checkProgramBounds_initial (hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount : Nat) (p : TpuProg)
+    (h : checkProgramBounds hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount p = true) :
+    WellSized (TpuCoreState.initial hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount) p :=
+  checkProgramBounds_sound _ p rfl rfl (by simp [TpuCoreState.initial]) (by simpa [TpuCoreState.initial] using h)
+
+/-- From a freshly allocated core, a program that passes the bounds check and the DMA/semaphore analysis is
+fault-free under every legal retirement schedule and ends in the synchronous state. -/
+theorem checkedProgram_async_refines_sync (hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount : Nat)
+    (p : TpuProg) (trace : List TpuEvent)
+    (bounds : checkProgramBounds hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount p = true)
+    (checked : checkDmaSemaphores semaphoreCount p = true)
+    (legal : ValidTrace (TpuCoreState.initial hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount) trace)
+    (project : trace.filterMap TpuEvent.instruction? = p) :
+    (runEvents (TpuCoreState.initial hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount) trace).error = none ∧
+    runEvents (TpuCoreState.initial hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount) trace =
+      runSync (TpuCoreState.initial hbmTiles vmemTiles scalarRegs vectorRegs semaphoreCount) p :=
+  checkDmaSemaphores_async_refines_sync _ p trace (checkProgramBounds_initial _ _ _ _ _ p bounds)
+    (by simpa [TpuCoreState.initial] using checked) legal project
+
+/-- Whether running `i` synchronously may write VMEM tile `t`. A DMA or a wait may retire a descriptor into any
+tile; the MXU, the transposer and a VREG store write their destination. -/
+def TpuInstr.mayWriteVmem (t : Nat) : TpuInstr → Bool
+  | .dma _ _ _ | .wait _ _ => true
+  | .mxu _ dst _ _ | .transpose dst _ | .storeVReg dst _ _ => dst == t
+  | _ => false
+
+private theorem trap_vmem (s : TpuCoreState) (e : TpuTrap) : (trap s e).vmem = s.vmem := by
+  unfold trap; split <;> rfl
+
+private theorem writeTile_vmem_ne (s : TpuCoreState) (dst t : Nat) (v : Tile) (h : dst ≠ t) :
+    (writeTile s ⟨.vmem, dst⟩ v).vmem[t]? = s.vmem[t]? := by
+  simp only [writeTile]; split
+  · simp [h]
+  · rw [trap_vmem]
+
+/-- **VMEM frame of one synchronous step**: a tile the instruction cannot write is unchanged, fault or not. -/
+theorem stepSync_vmem_frame (s : TpuCoreState) (i : TpuInstr) (t : Nat) (h : i.mayWriteVmem t = false) :
+    (stepSync s i).vmem[t]? = s.vmem[t]? := by
+  have hAsync : ∀ j : TpuInstr, j.mayWriteVmem t = false → (stepAsync s j).vmem[t]? = s.vmem[t]? := by
+    intro j hj; unfold stepAsync; split
+    · rfl
+    · cases j with
+      | dma _ _ _ => simp [TpuInstr.mayWriteVmem] at hj
+      | wait _ _ => simp [TpuInstr.mayWriteVmem] at hj
+      | mxu m dst a b =>
+        have hne : dst ≠ t := by simpa [TpuInstr.mayWriteVmem] using hj
+        simp only [stepBody]; repeat' split
+        all_goals first | rw [trap_vmem] | exact writeTile_vmem_ne _ _ _ _ hne
+      | transpose dst src =>
+        have hne : dst ≠ t := by simpa [TpuInstr.mayWriteVmem] using hj
+        simp only [stepBody]; repeat' split
+        all_goals first | rw [trap_vmem] | exact writeTile_vmem_ne _ _ _ _ hne
+      | storeVReg dst blk src =>
+        have hne : dst ≠ t := by simpa [TpuInstr.mayWriteVmem] using hj
+        simp only [stepBody]; repeat' split
+        all_goals first | rw [trap_vmem] | exact writeTile_vmem_ne _ _ _ _ hne
+      | _ =>
+        simp only [stepBody]; repeat' split
+        all_goals first | rfl | rw [trap_vmem]
+  cases i with
+  | dma _ _ _ => simp [TpuInstr.mayWriteVmem] at h
+  | _ => exact hAsync _ h
+
+/-- **VMEM frame of a synchronous run**: a tile no instruction of the program can write is unchanged. -/
+theorem runSync_vmem_frame (s : TpuCoreState) (p : TpuProg) (t : Nat) (h : ∀ i ∈ p, i.mayWriteVmem t = false) :
+    (runSync s p).vmem[t]? = s.vmem[t]? := by
+  induction p generalizing s with
+  | nil => rfl
+  | cons i rest ih =>
+    simp only [runSync, List.foldl_cons]
+    exact (ih (stepSync s i) (fun j hj => h j (List.mem_cons_of_mem _ hj))).trans
+      (stepSync_vmem_frame s i t (h i List.mem_cons_self))
+
 end Obend.Hardware.Tpu
