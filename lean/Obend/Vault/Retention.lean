@@ -44,7 +44,7 @@ reach the horizon and is refused like any other. Bytes are `List UInt8`; a `Byte
 separate quest.
 -/
 public import Obend.Vault.Log
-@[expose] public section
+public section
 
 namespace Obend.Vault.Retention
 
@@ -211,18 +211,18 @@ deriving DecidableEq, Repr
 
 open Lean (Json toJson)
 
-def strsJson (xs : List String) : Json := Json.arr (xs.map Json.str).toArray
-def strsOf (j : Json) : Except String (List String) := do (← j.getArr?).toList.mapM fun e => e.getStr?
+@[expose] def strsJson (xs : List String) : Json := Json.arr (xs.map Json.str).toArray
+@[expose] def strsOf (j : Json) : Except String (List String) := do (← j.getArr?).toList.mapM fun e => e.getStr?
 
-def contractJson (c : Contract) : Json :=
+@[expose] def contractJson (c : Contract) : Json :=
   Json.mkObj [("name", Json.str c.name), ("retire", strsJson c.retire), ("abandon", strsJson c.abandon)]
 
-def contractOf (j : Json) : Except String Contract := do
+@[expose] def contractOf (j : Json) : Except String Contract := do
   return ⟨← j.getObjValAs? String "name", ← strsOf (← j.getObjVal? "retire"), ← strsOf (← j.getObjVal? "abandon")⟩
 
-def forkJson (b : Fork) : Json := Json.mkObj [("name", Json.str b.name), ("merged", toJson b.merged)]
+@[expose] def forkJson (b : Fork) : Json := Json.mkObj [("name", Json.str b.name), ("merged", toJson b.merged)]
 
-def forkOf (j : Json) : Except String Fork := do
+@[expose] def forkOf (j : Json) : Except String Fork := do
   return ⟨← j.getObjValAs? String "name", ← j.getObjValAs? Bool "merged"⟩
 
 end Obend.Vault.Retention

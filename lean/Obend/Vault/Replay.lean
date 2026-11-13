@@ -3285,7 +3285,11 @@ theorem transfer_inhabited :
     (.record [("badgeCap", .sealedCap 0 1), ("coReceipt", .sealedCap 1 2), ("epoch", .natural 9)])
   let table : CapTable := ⟨[⟨0, ⟨10, 1, [0xaa, 0xbb]⟩⟩, ⟨1, ⟨20, 2, [0xcc, 0xdd]⟩⟩]⟩
   let frame : CapSealFrame := ⟨42, 9, table, computeCapFrameSeal sampleIdentityHash sampleSealKey 9 42 table⟩
-  exact ⟨wire, frame, sampleCustodyEnv, by decide, by decide⟩
+  have hd : dehydrate sampleIdentityHash sampleSealKey 9 42 sampleCustodyEnv samplePlanVal =
+      .ok (wire, frame) := by rfl
+  exact ⟨wire, frame, _, hd,
+    (rehydrate_dehydrate_roundtrip sampleIdentityHash sampleSealKey 9 42
+      sampleCustodyEnv samplePlanVal hd).1⟩
 
 end Obend.Run.VaultDurableBridge
 
