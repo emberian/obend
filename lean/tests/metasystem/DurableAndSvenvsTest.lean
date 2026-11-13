@@ -49,8 +49,6 @@ import all Obend.Crypto.Transcript
 import all Obend.Judge.SvenvsCorrigibility
 
 public section
-set_option linter.unusedSimpArgs false
-set_option pp.maxSteps 120
 
 namespace Obend.Tests.DurableAndSvenvsTest
 
