@@ -1873,7 +1873,7 @@ structure Rdna2WavefrontDispatch where
 
 /-- Load each worker's slice vector into its own VGPR, one slice per lane.
 The accepted fragment is unsigned, exact 32-bit sums, at most 256 workers. -/
-def rdna2DispatchInput (d : Rdna2WavefrontDispatch) : Obend.Hardware.Gpu.Rdna2.WaveState :=
+@[expose] def rdna2DispatchInput (d : Rdna2WavefrontDispatch) : Obend.Hardware.Gpu.Rdna2.WaveState :=
   let initial : Obend.Hardware.Gpu.Rdna2.WaveState :=
     Obend.Hardware.Gpu.Rdna2.GWave.init {} 0 0
   (List.range d.workgroupSlices.size).foldl (fun st worker =>
@@ -1884,7 +1884,7 @@ def rdna2DispatchInput (d : Rdna2WavefrontDispatch) : Obend.Hardware.Gpu.Rdna2.W
 /-- Total decoder over AMD's generated encoding tables. A list search keeps its
 logical body reducible in the kernel; entries use the same reverse insertion order as `instIndex`. -/
 open Obend.Hardware.Gpu.Rdna2 in
-def decodeRdnaSliceInst (words : List UInt32) : Option (Obend.Hardware.Gpu.Rdna2.Inst × Nat) :=
+@[expose] def decodeRdnaSliceInst (words : List UInt32) : Option (Obend.Hardware.Gpu.Rdna2.Inst × Nat) :=
   match words with
   | [] => none
   | first :: _ =>
@@ -1906,7 +1906,7 @@ def decodeRdnaSliceInst (words : List UInt32) : Option (Obend.Hardware.Gpu.Rdna2
         | some (inst, ie) => some (⟨inst, enc, ie, fields, taken⟩, count)
         | none => none
 
-def decodeRdnaSliceProgram : Nat → List UInt32 → Option (List (Option Obend.Hardware.Gpu.Rdna2.Inst))
+@[expose] def decodeRdnaSliceProgram : Nat → List UInt32 → Option (List (Option Obend.Hardware.Gpu.Rdna2.Inst))
   | _, [] => some []
   | 0, _ :: _ => none
   | fuel + 1, words@(_ :: _) => do
@@ -1916,7 +1916,7 @@ def decodeRdnaSliceProgram : Nat → List UInt32 → Option (List (Option Obend.
 
 /-- Decode the supplied ISA and execute it with a bounded instruction budget.
 The result comes only from output VGPR 0; a failed decode, trap, or timeout refuses. -/
-def executeRdna2SliceReduction (d : Rdna2WavefrontDispatch) : Option (Array Int) :=
+@[expose] def executeRdna2SliceReduction (d : Rdna2WavefrontDispatch) : Option (Array Int) :=
   match decodeRdnaSliceProgram d.shaderIsaWords.size d.shaderIsaWords.toList with
   | none => none
   | some program =>
@@ -2026,10 +2026,8 @@ set_option maxRecDepth 100000 in
 set_option maxHeartbeats 8000000 in
 theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
     checkRdna2DispatchEnvelope d = true := by
-  have _hd : (decodeRdnaSliceProgram 1 [0xbf810000]).isSome = true := by decide +kernel
   exact ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, by
-    simp only [checkRdna2DispatchEnvelope, executeRdna2SliceReduction, rdna2DispatchInput,
-      decodeRdnaSliceProgram, decodeRdnaSliceInst, ← Array.all_toList]
+    simp only [checkRdna2DispatchEnvelope, ← Array.all_toList]
     decide +kernel⟩
 
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
