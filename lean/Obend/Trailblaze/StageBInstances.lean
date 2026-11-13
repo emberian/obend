@@ -3531,6 +3531,7 @@ theorem reduceDeltaPair_sound (net out : DeltaNet) (a b : Nat)
       | none => simp [hr] at h
       | some second =>
         rw [hr] at h
+        dsimp only at h
         split at h
         · rename_i hv
           cases h
@@ -4045,7 +4046,9 @@ theorem evalSettledDualTiles_eq_extract (frames : BitVec 32 × BitVec 32) (pt : 
   let comb : FabulousDualTileConfig :=
     ⟨{ cfg.loTile with ffEnable := false }, { cfg.hiTile with ffEnable := false }⟩
   have hi : checkCanonicalHiLut11 comb.hiTile.lut4Truth = true := by
-    exact (Bool.and_eq_true.mp hCan).2
+    have h := hCan
+    simp only [checkCanonicalDualFrames, Bool.and_eq_true] at h
+    exact h.2
   have hc := Obend.Trailblaze.StageB.compile_extract_combinational_dualTiles comb hi rfl rfl
   have he := evalDualFabulousCofib_eq_evalTernaryPoint
     (extractFaceIdealFromDualTiles comb) comb.loTile.pipMux comb.hiTile.pipMux pt
@@ -4395,8 +4398,8 @@ theorem stageB_leaf_book_deltanet_normal_form
         | .con id tag => id == reduced.rootPort.nodeId && reduced.symbols[tag.toNat]? == some (.literal value)
         | _ => false) = true := by
   have hn := hNormal
-  simp only [checkDeltaNormalForm, Bool.and_eq_true, List.isEmpty_eq_true] at hn
-  exact ⟨runDeltaReductions_sound _ _ _ hRun, hn.1.1, hn.1.2, hn.2⟩
+  simp only [checkDeltaNormalForm, Bool.and_eq_true] at hn
+  exact ⟨runDeltaReductions_sound _ _ _ hRun, hn.1.1, (by cases he : activePrincipalRedexes reduced <;> simp_all), hn.2⟩
 
 /-! ## §3. Unconditional Stage-B Sealed Organ Theorems (`0` `*Obligations` Binders!) -/
 
@@ -4638,28 +4641,34 @@ theorem stageB_clustergov_ozaki_step_sealed
         · rename_i hRttNeg
           split at hPhys
           · cases hPhys
-          · rename_i hResNeg
-            have hPos : 0 < pctx.physical.minHiddenOpMilliJ :=
-              of_decide_eq_true (bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hPosNeg))
-            have hRtt : pctx.physical.measuredRttMicros ≤ pctx.physical.authorityBudgetMicros :=
-              of_decide_eq_true (bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hRttNeg))
-            have hRes :
-                physicalResidualMilliJ pctx.physical ≤
-                  pctx.physical.minHiddenOpMilliJ * pctx.physical.hiddenOpsCap :=
-              of_decide_eq_true (bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hResNeg))
-            have hEnv : checkPhysicalEnergyEnvelope pctx.physical = true :=
-              decide_eq_true ⟨hPos, hRtt, hRes⟩
-            have hStepSound := apex_verifiable_ai_cluster_step pctx.base reduced workers' hBase hPerm
-            have hBaseId := apex_verifiable_ai_cluster_step pctx.base reduced pctx.base.workerSlices
-              hBase (List.Perm.refl _)
-            have hHidden :=
-              (energy_conservation_bounds_hidden_ops pctx.physical unaccountedOps hEnv).2.2.1 hEnergyLedger
-            obtain ⟨hWait, sched, progs, hComp, hProgs, _⟩ :=
-              Obend.Hardware.Gpu.Rdna2.certifyDump_sound gpuGraph gpuIsaDump hGpuCert
-            have hVerkle := Obend.Polis.verifyOpening_binds hVram₁ hVram₂
-            exact ⟨hStepSound.1, hStepSound.2.1, hStepSound.2.2.1.trans hBaseId.2.2.1.symm,
-                   hRtt, hHidden, hStepSound.2.2.2.2.2, hWait,
-                   ⟨sched, progs, hComp, hProgs⟩, hVerkle⟩
+          · rename_i hBaselineNeg
+            split at hPhys
+            · cases hPhys
+            · rename_i hResNeg
+              have hPos : 0 < pctx.physical.minHiddenOpMilliJ :=
+                of_decide_eq_true (bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hPosNeg))
+              have hRtt : pctx.physical.measuredRttMicros ≤ pctx.physical.authorityBudgetMicros :=
+                of_decide_eq_true (bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hRttNeg))
+              have hBaseline : pctx.physical.lowerCurveProvenMilliJ +
+                  pctx.physical.idleEnergyMilliJ ≤ pctx.physical.meterEnergyMilliJ :=
+                of_decide_eq_true (bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hBaselineNeg))
+              have hRes :
+                  physicalResidualMilliJ pctx.physical ≤
+                    pctx.physical.minHiddenOpMilliJ * pctx.physical.hiddenOpsCap :=
+                of_decide_eq_true (bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hResNeg))
+              have hEnv : checkPhysicalEnergyEnvelope pctx.physical = true :=
+                decide_eq_true ⟨hPos, hRtt, hBaseline, hRes⟩
+              have hStepSound := apex_verifiable_ai_cluster_step pctx.base reduced workers' hBase hPerm
+              have hBaseId := apex_verifiable_ai_cluster_step pctx.base reduced pctx.base.workerSlices
+                hBase (List.Perm.refl _)
+              have hHidden :=
+                (energy_conservation_bounds_hidden_ops pctx.physical unaccountedOps hEnv).2.2.1 hEnergyLedger
+              obtain ⟨hWait, sched, progs, hComp, hProgs, _⟩ :=
+                Obend.Hardware.Gpu.Rdna2.certifyDump_sound gpuGraph gpuIsaDump hGpuCert
+              have hVerkle := Obend.Polis.verifyOpening_binds hVram₁ hVram₂
+              exact ⟨hStepSound.1, hStepSound.2.1, hStepSound.2.2.1.trans hBaseId.2.2.1.symm,
+                     hRtt, hHidden, hStepSound.2.2.2.2.2, hWait,
+                     ⟨sched, progs, hComp, hProgs⟩, hVerkle⟩
 
 
 /-! ## §4. Unified 7-Organ Multi-Turn Cathedral Carrier & `stageB_cathedral_seven_organ_trace_sealed` -/
