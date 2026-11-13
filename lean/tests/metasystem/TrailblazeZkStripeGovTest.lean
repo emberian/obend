@@ -201,6 +201,61 @@ example :
 example : silverCathedralApexSmoke = true := by decide
 
 
+/-! Regression witnesses for P1-04 and P1-07. -/
+
+private def receiptTestHash : Obend.Digest.HashBytes.Hash := fun _ => List.replicate 32 0
+private def receiptTestStep : AriadneStep := ⟨1, 2, 3, 4, 5⟩
+private def canonicalTestReceipt : InRackFpgaReceipt :=
+  ⟨7, 1, true, 0#256, encodeReceipt256 0#256⟩
+
+example : checkInRackFpgaReceipt receiptTestHash 2 receiptTestStep canonicalTestReceipt = true :=
+  by decide
+
+-- Same digest, same size, different bytes: the original size-only check admitted this.
+example : checkInRackFpgaReceipt receiptTestHash 2 receiptTestStep
+    { canonicalTestReceipt with receiptPayloadBytes := encodeReceipt256 1#256 } = false :=
+  by decide
+
+example : (encodeReceipt256 1#256).data.toList =
+    List.replicate 31 (0 : UInt8) ++ [1] := by decide
+
+private def underMeteredEnvelope : PhysicalEnergyEnvelope := {
+  measuredRttMicros := 1
+  authorityBudgetMicros := 2
+  meterEnergyMilliJ := 9
+  lowerCurveProvenMilliJ := 8
+  idleEnergyMilliJ := 2
+  toleranceMilliJ := 0
+  minHiddenOpMilliJ := 1
+  hiddenOpsCap := 0
+}
+
+-- Truncating subtraction reports zero, but admission must still reject the envelope.
+example : physicalResidualMilliJ underMeteredEnvelope = 0 := by decide
+example : checkPhysicalEnergyEnvelope underMeteredEnvelope = false := by decide
+example : checkPhysicalEnergyEnvelope
+    { underMeteredEnvelope with meterEnergyMilliJ := 10 } = true := by decide
+example : checkPhysicalEnergyEnvelope
+    { underMeteredEnvelope with toleranceMilliJ := 100, hiddenOpsCap := 100 } = false := by decide
+example : auditPhysicalClusterStep ⟨validClusterStepCtx, underMeteredEnvelope⟩ =
+    .error (.energyBaselineUnderflow 9 10) := by decide
+
+#tooth Obend.Trailblaze.CathedralApex.encodeReceipt256_inj by
+  mutation Obend.Trailblaze.CathedralApex.encodeReceipt256 := fun _ => ByteArray.empty
+
+#tooth Obend.Trailblaze.CathedralApex.checkInRackFpgaReceipt_zero_covert_channel by
+  mutation Obend.Trailblaze.CathedralApex.checkInRackFpgaReceipt :=
+    fun H treeRoot step rcpt =>
+      rcpt.verdict && decide (rcpt.receiptPayloadBytes.data.size ≤ maxRackReceiptBytes) &&
+      decide (rcpt.verifierReceipt256 =
+        computeFpgaVerifierReceipt256 H rcpt.rackId rcpt.epoch treeRoot step true)
+
+#tooth Obend.Trailblaze.ClusterGov.checkPhysicalEnergyEnvelope_no_underflow by
+  mutation Obend.Trailblaze.ClusterGov.checkPhysicalEnergyEnvelope :=
+    fun env => decide (0 < env.minHiddenOpMilliJ ∧
+      env.measuredRttMicros ≤ env.authorityBudgetMicros ∧
+      physicalResidualMilliJ env ≤ env.minHiddenOpMilliJ * env.hiddenOpsCap)
+
 /-! ## §4. `#tooth` Mutation-Killing Barriers on Universal Soundness Theorems -/
 
 -- Barrier 1: a matcher that says yes breaks the complement law.

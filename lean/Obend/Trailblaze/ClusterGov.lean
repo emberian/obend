@@ -581,7 +581,15 @@ def physicalResidualMilliJ (env : PhysicalEnergyEnvelope) : Nat :=
 def checkPhysicalEnergyEnvelope (env : PhysicalEnergyEnvelope) : Bool :=
   decide (0 < env.minHiddenOpMilliJ ∧
     env.measuredRttMicros ≤ env.authorityBudgetMicros ∧
+    env.lowerCurveProvenMilliJ + env.idleEnergyMilliJ ≤ env.meterEnergyMilliJ ∧
     physicalResidualMilliJ env ≤ env.minHiddenOpMilliJ * env.hiddenOpsCap)
+
+/-- Accepted metering covers the baseline before tolerance is added or naturals
+are subtracted. Tolerance cannot conceal an under-metered baseline. -/
+theorem checkPhysicalEnergyEnvelope_no_underflow (env : PhysicalEnergyEnvelope)
+    (h : checkPhysicalEnergyEnvelope env = true) :
+    env.lowerCurveProvenMilliJ + env.idleEnergyMilliJ ≤ env.meterEnergyMilliJ := by
+  exact (of_decide_eq_true h).2.2.1
 
 /-- **Unconditional Lower-Curve Energy Conservation & Authority-Pinned RTT Theorem**:
     Whenever `checkPhysicalEnergyEnvelope env = true`:
@@ -606,7 +614,7 @@ theorem energy_conservation_bounds_hidden_ops
           (env.meterEnergyMilliJ + env.toleranceMilliJ) -
             env.lowerCurveProvenMilliJ - env.idleEnergyMilliJ)) := by
   have hDec := of_decide_eq_true hEnv
-  rcases hDec with ⟨hPos, hRtt, hRes⟩
+  rcases hDec with ⟨hPos, hRtt, _hBaseline, hRes⟩
   unfold physicalResidualMilliJ at hRes
   have hBound :
       env.minHiddenOpMilliJ * hiddenOps ≤
@@ -652,10 +660,10 @@ theorem upper_curve_subtraction_masks_covert_ops
   unfold checkPhysicalEnergyEnvelope physicalResidualMilliJ
   dsimp only
   rw [hRes]
-  cases hDec : decide (0 < eMin ∧ rtt ≤ authBudget ∧ eMin * covertOps ≤ eMin * 0)
-  · rfl
-  · have hBad := (of_decide_eq_true hDec).2.2
-    omega
+  apply decide_eq_false
+  intro h
+  have hBad := h.2.2.2
+  omega
 
 /-- Full cluster step audit context bundling `Sable`, `Ozaki`, `AriadneStep`, and `Reasons` policy. -/
 structure ClusterStepContext where
@@ -717,6 +725,7 @@ structure PhysicalClusterStepContext where
 inductive PhysicalClusterRefusal where
   | baseRefusal (err : ClusterGovRefusal)
   | zeroMinHiddenOpEnergy
+  | energyBaselineUnderflow (meterMilliJ baselineMilliJ : Nat)
   | rttBudgetExceeded (measuredMicros authorityBudgetMicros : Nat)
   | energyResidualExceeded (residualMilliJ maxAllowedMilliJ : Nat)
   deriving DecidableEq, Repr
@@ -733,6 +742,9 @@ def auditPhysicalClusterStep (pctx : PhysicalClusterStepContext) :
       .error .zeroMinHiddenOpEnergy
     else if !decide (env.measuredRttMicros ≤ env.authorityBudgetMicros) then
       .error (.rttBudgetExceeded env.measuredRttMicros env.authorityBudgetMicros)
+    else if !decide (env.lowerCurveProvenMilliJ + env.idleEnergyMilliJ ≤ env.meterEnergyMilliJ) then
+      .error (.energyBaselineUnderflow env.meterEnergyMilliJ
+        (env.lowerCurveProvenMilliJ + env.idleEnergyMilliJ))
     else
       let res := physicalResidualMilliJ env
       let cap := env.minHiddenOpMilliJ * env.hiddenOpsCap

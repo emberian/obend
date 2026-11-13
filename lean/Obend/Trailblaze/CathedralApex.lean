@@ -73,6 +73,24 @@ theorem beAcc_eq_be_append (w n : Nat) (acc : List UInt8) :
     rw [ih (n / 256) (UInt8.ofNat (n % 256) :: acc), List.append_assoc]
     rfl
 
+/-- Exact 32-byte big-endian wire encoding of a verifier receipt. -/
+def encodeReceipt256 (r : BitVec 256) : ByteArray :=
+  ⟨(beAcc 32 r.toNat []).toArray⟩
+
+@[simp] theorem encodeReceipt256_size (r : BitVec 256) :
+    (encodeReceipt256 r).data.size = 32 := by
+  simp [encodeReceipt256, beAcc_eq_be_append, Obend.Digest.HashBytes.length_be]
+
+/-- The wire encoding preserves every bit of the receipt. -/
+theorem encodeReceipt256_inj {a b : BitVec 256}
+    (h : encodeReceipt256 a = encodeReceipt256 b) : a = b := by
+  have hBytes := congrArg (fun bs : ByteArray => bs.data.toList) h
+  simp only [encodeReceipt256, Array.toList_toArray, beAcc_eq_be_append,
+    List.append_nil] at hBytes
+  have hPow : (2 : Nat) ^ 256 = 256 ^ 32 := by decide
+  exact BitVec.eq_of_toNat_eq
+    (Obend.Digest.HashBytes.be_injective (hPow ▸ a.isLt) (hPow ▸ b.isLt) hBytes)
+
 /-- Canonical 256-bit (`BitVec 256`) in-rack FPGA boolean verifier commitment over public rack/step
     anchors and single verdict bit (`0x01` = pass, `0x00` = fail); private witnesses and multi-MB
     SNARK proof transcripts never enter the preimage. -/
@@ -114,13 +132,49 @@ structure InRackFpgaReceipt where
   deriving DecidableEq
 
 /-- Verify that an `InRackFpgaReceipt` carries `verdict = true`, satisfies the 32-byte egress
-    ceiling `receiptPayloadBytes.data.size ≤ 32`, and matches `computeFpgaVerifierReceipt256`. -/
+    ceiling, matches `computeFpgaVerifierReceipt256`, and carries exactly its canonical bytes. -/
 def checkInRackFpgaReceipt (H : Hash) (treeRoot : Nat) (step : AriadneStep)
     (rcpt : InRackFpgaReceipt) : Bool :=
   rcpt.verdict &&
   decide (rcpt.receiptPayloadBytes.data.size ≤ maxRackReceiptBytes) &&
   decide (rcpt.verifierReceipt256 =
-    computeFpgaVerifierReceipt256 H rcpt.rackId rcpt.epoch treeRoot step true)
+    computeFpgaVerifierReceipt256 H rcpt.rackId rcpt.epoch treeRoot step true) &&
+  decide (rcpt.receiptPayloadBytes = encodeReceipt256 rcpt.verifierReceipt256)
+
+
+/-- Every computed receipt has an accepted canonical wire representation. -/
+theorem checkInRackFpgaReceipt_canonical_inhabited
+    (H : Hash) (rackId epoch treeRoot : Nat) (step : AriadneStep) :
+    let digest := computeFpgaVerifierReceipt256 H rackId epoch treeRoot step true
+    checkInRackFpgaReceipt H treeRoot step
+      ⟨rackId, epoch, true, digest, encodeReceipt256 digest⟩ = true := by
+  simp [checkInRackFpgaReceipt, maxRackReceiptBytes]
+
+/-- With public rack and epoch fixed, admission determines the entire receipt,
+including every payload byte. No prover-selected wire payload remains. -/
+theorem checkInRackFpgaReceipt_zero_covert_channel
+    (H : Hash) (treeRoot : Nat) (step : AriadneStep)
+    (r₁ r₂ : InRackFpgaReceipt)
+    (hRack : r₁.rackId = r₂.rackId) (hEpoch : r₁.epoch = r₂.epoch)
+    (h₁ : checkInRackFpgaReceipt H treeRoot step r₁ = true)
+    (h₂ : checkInRackFpgaReceipt H treeRoot step r₂ = true) : r₁ = r₂ := by
+  simp only [checkInRackFpgaReceipt, Bool.and_eq_true, decide_eq_true_eq] at h₁ h₂
+  rcases h₁ with ⟨⟨⟨hv₁, _⟩, hd₁⟩, hp₁⟩
+  rcases h₂ with ⟨⟨⟨hv₂, _⟩, hd₂⟩, hp₂⟩
+  have hDigest : r₁.verifierReceipt256 = r₂.verifierReceipt256 := by
+    rw [hd₁, hd₂, hRack, hEpoch]
+  have hPayload : r₁.receiptPayloadBytes = r₂.receiptPayloadBytes := by
+    rw [hp₁, hp₂, hDigest]
+  have hVerdict : r₁.verdict = r₂.verdict := hv₁.trans hv₂.symm
+  cases r₁
+  cases r₂
+  simp only at hRack hEpoch hVerdict hDigest hPayload
+  cases hRack
+  cases hEpoch
+  cases hVerdict
+  cases hDigest
+  cases hPayload
+  rfl
 
 
 /-! ## §2. Whole-System `CathedralGovernanceTurn` Carrier & Joint `Reasons` Program -/
@@ -342,7 +396,7 @@ theorem apex_cathedral_zkstripe_to_clustergov_sound
                 have hFpgaProps := hFpga
                 simp only [checkInRackFpgaReceipt, Bool.and_eq_true, decide_eq_true_eq]
                   at hFpgaProps
-                rcases hFpgaProps with ⟨⟨_, hPayloadLe⟩, hRcptEq⟩
+                rcases hFpgaProps with ⟨⟨⟨_, hPayloadLe⟩, hRcptEq⟩, _hCanonicalPayload⟩
                 cases hHL : checkHyperLaw2NonInterference clusterPublicView turn.scheduleTracePair
                 · rw [hHL] at hTurn; cases hTurn
                 · rw [hHL] at hTurn
@@ -532,7 +586,7 @@ def sampleCathedralTurn : CathedralGovernanceTurn :=
       epoch               := 1
       verdict             := true
       verifierReceipt256  := rcpt256
-      receiptPayloadBytes := ⟨(List.replicate 32 (0x01 : UInt8)).toArray⟩
+      receiptPayloadBytes := encodeReceipt256 rcpt256
     }
     scheduleTracePair := [
       (⟨[0, 0, 0], 10⟩, ⟨[0, 0, 0], 20⟩),
@@ -569,7 +623,7 @@ def sampleSecondCathedralTurn : CathedralGovernanceTurn :=
       epoch               := 2
       verdict             := true
       verifierReceipt256  := rcpt256
-      receiptPayloadBytes := ⟨(List.replicate 32 (0x02 : UInt8)).toArray⟩
+      receiptPayloadBytes := encodeReceipt256 rcpt256
     }
   }
 
