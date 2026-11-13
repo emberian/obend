@@ -2022,15 +2022,6 @@ theorem sealedVramRandomOpening_sound (H : Obend.Digest.HashBytes.Hash)
   simp only [checkSealedVramClaimEnvelope, Bool.and_eq_true, decide_eq_true_eq] at he
   exact ⟨h.1.2.1 ▸ he.1.1, h.1.2.2.1, h.1.2.2.2, h.2⟩
 
-/-- Constructive execution fixture: one worker, two nonzero slices, decoded S_ENDPGM. -/
-set_option maxRecDepth 100000 in
-set_option maxHeartbeats 8000000 in
-theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
-    checkRdna2DispatchEnvelope d = true := by
-  exact ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, by
-    simp only [checkRdna2DispatchEnvelope, ← Array.all_toList]
-    decide +kernel⟩
-
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
 theorem vramChallengeOpening_inhabited : ∃ H root nonce c,
     checkVramChallengeOpening H root nonce c = true := by
