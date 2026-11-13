@@ -25,6 +25,7 @@ public import Obend.Tactic.Tooth
 public import Obend.Leaf.Static
 public import Obend.Lower.LCNF
 import all Obend.Lower.LCNF
+import all Obend.Lower.Proofs.Complete
 public import Obend.Lower.Inductive
 import all Obend.Lower.Inductive
 public import Obend.Lower.LeanKernel
@@ -245,7 +246,74 @@ theorem phase2_lcnf_bridge_verified (addr val v1 v2 offset : Nat) :
 def brokenCheckLinearStateToken (_ : Nat) (_ : LcnfCode) : Option Nat :=
   some 2
 
+#tooth Obend.Lower.LCNF.lcnf_eval_cases_proj_sound by mutation
+  Obend.Lower.LCNF.evalLcnfCode := fun _ _ _ st _ => some (0, st)
+#tooth Obend.Lower.LCNF.lcnf_eval_cases_proj_sound by mutation
+  Obend.Lower.LCNF.evalLcnfCodeVal := fun _ _ _ st _ => some (.scalar 0, st)
+#tooth Obend.Lower.LCNF.lcnf_eval_cases_proj_sound by mutation
+  Obend.Lower.LCNF.evalLcnfArgVal := fun _ _ => some (.scalar 0)
+
+-- Recursive application rebinds self to the original, unsaturated lexical closure.
+example : Obend.Lower.LCNF.evalLcnfLetValueVal 32
+    [.closure [] [] Obend.Lower.LCNF.sampleLcnfRecDecl] [] []
+    (.app (.bvar 0) (.lit 2)) = some (.scalar 42, []) := by rfl
+
+#tooth Obend.Lower.LCNF.lcnf_eval_closure_sound by mutation
+  Obend.Lower.LCNF.evalLcnfCodeVal := fun _ _ _ st _ => some (.scalar 0, st)
+#tooth Obend.Lower.LCNF.lcnf_eval_invalid_refused by mutation
+  Obend.Lower.LCNF.evalLcnfCode := fun _ _ _ st _ => some (0, st)
+
 #tooth phase2_lcnf_bridge_verified by mutation checkLinearStateToken := brokenCheckLinearStateToken
+
+#tooth Obend.Lower.LCNF.evalLcnfCode_simulates_core4 by mutation
+  Obend.Lower.LCNF.evalLcnfCodeVal := fun _ _ _ st _ => some (.scalar 0, st)
+#tooth Obend.Lower.LCNF.evalLcnfCode_simulates_core4 by mutation
+  Obend.Lower.LCNF.compileLcnfToCore4 := fun _ => .nat 0
+
+-- Inhabitedness for the structural theorem includes aggregate dispatch and projection.
+example (x y : Nat) : PureBlock (casesProjCode x y) := by
+  apply PureBlock.letValue rfl
+  apply PureBlock.cases
+  intro arm h
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+  rcases h with rfl | rfl
+  · exact .ret _
+  · exact .letValue rfl (.ret _)
+
+example (x y : Nat) : PureBlock (namedProjCode "snd" x y) :=
+  .letValue rfl (.letValue rfl (.ret _))
+
+#print axioms evalLcnfCodeVal_simulates_ssteps
+#print axioms evalLcnfCode_simulates_core4
+
+-- Captured variables remain lexical even across intervening bindings.
+#tooth Obend.Lower.LCNF.lcnf_jp_lexical_capture_sound by mutation
+  Obend.Lower.LCNF.evalLcnfCodeVal := fun _ _ _ st _ => some (.scalar 0, st)
+#tooth Obend.Lower.LCNF.lcnf_jp_lexical_capture_sound by mutation
+  Obend.Lower.LCNF.compileLcnfToLExpr := fun _ => .lit 0
+
+example : evalLcnfCode 2 [] [] [] (.return (.boolLit true)) = none := by rfl
+example : evalLcnfCode 2 [] [] [] (.return (.stateTok 7)) = none := by rfl
+example : evalLcnfCodeBool 2 [] [] [] (.return (.boolLit true)) = some (true, []) := by rfl
+example : evalLcnfCodeBool 2 [] [] [] (.return (.lit 1)) = none := by rfl
+
+-- A same-named join at the jump site cannot replace the join captured by a body.
+example : evalLcnfCode 10 [] [] []
+    (.jpDecl 1 0 (.return (.lit 7))
+      (.jpDecl 0 0 (.jmp 1 [])
+        (.jpDecl 1 0 (.return (.lit 99)) (.jmp 0 [])))) = some (7, []) := by rfl
+
+-- Top-level function calls do not inherit local join points from their caller.
+example : evalLcnfCodeVal 10
+    [.closure [] [] { name := "noCallerJoins", numParams := 1, body := .jmp 0 [] }] [] []
+    (.jpDecl 0 0 (.return (.lit 99))
+      (.letValue (.app (.bvar 0) (.lit 1)) (.return (.bvar 0)))) = none := by rfl
+
+example : evalLcnfModule 32 sampleLcnfRecModule = some (42, []) :=
+  sampleLcnfRecModule_eval_agreed.1
+
+#print axioms lcnf_jp_lexical_capture_sound
+#print axioms sampleLcnfRecModule_eval_agreed
 
 /-! ## 4. Axiom Footprint Audit (`0 sorryAx`, `0 custom axioms`) -/
 

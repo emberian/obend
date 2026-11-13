@@ -1,23 +1,23 @@
 module
 public import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
 public import Obend.Hardware.Gpu.Rdna2.DppShuffle
+public import Obend.Hardware.Gpu.Rdna2.Certified
 -- The whole package import cone is opened privately for the axiom census.
 import all Obend.Hardware.Gpu.Rdna2.Spec
 import all Obend.Hardware.Gpu.Rdna2.Encodings
-import all Obend.Hardware.Gpu.Rdna2.Insts.C0
-import all Obend.Hardware.Gpu.Rdna2.Insts.C1
-import all Obend.Hardware.Gpu.Rdna2.Insts.C2
-import all Obend.Hardware.Gpu.Rdna2.Insts.C3
-import all Obend.Hardware.Gpu.Rdna2.Insts.C4
-import all Obend.Hardware.Gpu.Rdna2.Insts.C5
-import all Obend.Hardware.Gpu.Rdna2.Insts.C6
-import all Obend.Hardware.Gpu.Rdna2.Insts.C7
-import all Obend.Hardware.Gpu.Rdna2.Insts.C8
-import all Obend.Hardware.Gpu.Rdna2.Insts.C9
-import all Obend.Hardware.Gpu.Rdna2.Insts.C10
-import all Obend.Hardware.Gpu.Rdna2.Insts.C11
-import all Obend.Hardware.Gpu.Rdna2.Insts.C12
-import all Obend.Hardware.Gpu.Rdna2.Insts
+import all Obend.Hardware.Gpu.Rdna2.Insts.Scalar
+import all Obend.Hardware.Gpu.Rdna2.Insts.Vector
+import all Obend.Hardware.Gpu.Rdna2.Insts.Memory
+import all Obend.Hardware.Gpu.Rdna2.Certified
+import all Obend.Hardware.Gpu.Rdna2.Waitcnt
+import all Init.Data.Array.QSort.Basic
+import all Init.Data.String.Iterate
+import all Init.Data.String.Legacy
+import all Init.Data.String.Basic
+import all Init.Data.String.TakeDrop
+import all Init.Data.String.Slice
+import all Init.Data.String.Pattern.Basic
+import all Init.Data.String.Pattern.String
 import all Obend.Hardware.Gpu.Rdna2.Decode
 import all Obend.Hardware.Gpu.Rdna2.Semantics
 import all Obend.Hardware.HDL
@@ -135,10 +135,75 @@ import all Obend.Hardware.Gpu.Limbs
 import all Obend.Hardware.Gpu
 import all Obend.Hardware.Gpu.Rdna2.Host
 import all Obend.Hardware.Gpu.Rdna2.Check
-import all Obend.Hardware.Gpu.Rdna2.Waitcnt
 import all Obend.Hardware.Gpu.Rdna2.AsyncRefinement
 import all Obend.Apps.ZkNtt.Goldilocks
 import all Obend.Hardware.Gpu.Rdna2.DppShuffle
+
+-- Certification adds this private cone to the existing package-wide axiom census.
+import all Obend.Hardware.ArrayBuild
+import all Obend.Hardware.ArrayKernel
+import all Obend.Hardware.ArrayKernelOwnership
+import all Obend.Hardware.ArrayKernelUnique
+import all Obend.Hardware.ArrayTyping
+import all Obend.Hardware.Gpu.ArrayEmit
+import all Obend.Hardware.Gpu.ArrayEmitCorrect
+import all Obend.Hardware.Gpu.ArrayEncoding
+import all Obend.Hardware.Gpu.ArrayMember
+import all Obend.Hardware.Gpu.ArrayProduct
+import all Obend.Hardware.Gpu.ArrayPrograms
+import all Obend.Hardware.Gpu.ArrayReify
+import all Obend.Hardware.Gpu.ArraySchedule
+import all Obend.Hardware.Gpu.ArraySource
+import all Obend.Hardware.Gpu.ArraySourceCore
+import all Obend.Hardware.Gpu.BlockCore
+import all Obend.Hardware.Gpu.BlockEmit
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.BlockPlan
+import all Obend.Hardware.Gpu.CollectiveArena
+import all Obend.Hardware.Gpu.CollectiveArenaCorrect
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.CollectiveBuildCorrect
+import all Obend.Hardware.Gpu.CollectiveBuildFacts
+import all Obend.Hardware.Gpu.CollectiveCompose
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveExecute
+import all Obend.Hardware.Gpu.CollectiveHierarchy
+import all Obend.Hardware.Gpu.CollectiveReduceBuild
+import all Obend.Hardware.Gpu.CollectiveReduceExec
+import all Obend.Hardware.Gpu.CollectiveScanExec
+import all Obend.Hardware.Gpu.CollectiveTrace
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.FoldCore
+import all Obend.Hardware.Gpu.GoldilocksSource
+import all Obend.Hardware.Gpu.GoldilocksSourceCorrect
+import all Obend.Hardware.Gpu.LimbsGoldilocks
+import all Obend.Hardware.Gpu.LimbsShift
+import all Obend.Hardware.Gpu.Memory
+import all Obend.Hardware.Gpu.NttKernel
+import all Obend.Hardware.Gpu.NttSpec
+import all Obend.Hardware.Gpu.PhaseSemantics
+import all Obend.Hardware.Gpu.Rdna2.Block
+import all Obend.Hardware.Gpu.Rdna2.Cert
+import all Obend.Hardware.Gpu.Rdna2.CertSound
+import all Obend.Hardware.Gpu.Rdna2.Equiv
+import all Obend.Hardware.Gpu.Rdna2.Join
+import all Obend.Hardware.Gpu.Rdna2.Lift
+import all Obend.Hardware.Gpu.Rdna2.Lower
+import all Obend.Hardware.Gpu.Rdna2.Natural
+import all Obend.Hardware.Gpu.Rdna2.Residuals
+import all Obend.Hardware.Gpu.Rdna2.Schedule
+import all Obend.Hardware.Gpu.Rdna2.Sym
+import all Obend.Hardware.Gpu.Rdna2.Term
+import all Obend.Hardware.Gpu.SoacPrograms
+import all Obend.Hardware.Gpu.Source
+import all Obend.Hardware.Gpu.SourceElem
+import all Obend.Hardware.Gpu.SourceOps
+import all Obend.Hardware.Gpu.SourcePrograms
+import all Obend.Hardware.Gpu.SourceProtocol
+import all Obend.Hardware.Gpu.Workgroup
+import all Obend.Hardware.RtlFold
+import all Obend.Hardware.Square
+import all Obend.Hardware.SquareGraphs
 
 public section
 namespace Obend.Tests.Rdna2AsyncAndDpp
@@ -334,6 +399,108 @@ example (ts : List Turn) (s : AsyncWaveState)
 #tooth dppShuffleU64_eq_spec by mutation dppShuffleU64 := fun _ _ src _ => src
 #tooth dppWave64ReduceAdd_eq_sum by mutation dppWave64ReduceAdd := fun _ _ x => x
 #tooth invalid_source_behavior by mutation shuffle := fun _ _ _ _ old => old
+
+/-- Real decoding exercises branches, loops, both store classes, and SGPR wait masks. -/
+def storeCompletion (strict : Bool) (ws : List UInt32) : Bool :=
+  ((decodeProgram ws.toArray).bind (checkVscntProg strict)).toBool
+
+def globalStore : List UInt32 := [0xdc708000, 0x007f0200]
+def bufferStore : List UInt32 := [0xe0700000, 0x80040400]
+
+#guard (decodeInst globalStore).map (fun p => p.1.name) == some "GLOBAL_STORE_DWORD"
+#guard (decodeInst globalStore).map (fun p => p.1.enc.name) == some "ENC_FLAT_GLBL"
+#guard match decodeInst globalStore with
+  | some (i, _) => i.access.reads.contains (.v 2) &&
+      !(stepPending { vm := [[.v 2]], lgkm := [], smem := false } i).toBool
+  | none => false
+#guard (decodeInst bufferStore).map (fun p => p.1.name) == some "BUFFER_STORE_DWORD"
+#guard storeCompletion false (bufferStore ++ finish)
+#guard !storeCompletion true (bufferStore ++ finish)
+#guard !storeCompletion false (bufferStore ++ [0xbf8a0000] ++ finish) -- barrier
+#guard storeCompletion true (bufferStore ++ [0xbbfd0000, 0xbf8a0000] ++ finish)
+#guard !storeCompletion false (globalStore ++ finish)
+#guard storeCompletion true (globalStore ++ [0xbbfd0000] ++ finish)
+#guard !storeCompletion true (globalStore ++ [0xbb800000] ++ finish) -- non-null SDST refused
+#guard !storeCompletion true (globalStore ++ [0xbbfd0040] ++ finish) -- reserved SIMM16 refused
+#guard !storeCompletion true (globalStore ++ [0xbb800001] ++ finish)
+#guard !storeCompletion true (globalStore ++ [0xbbfd0001] ++ finish)
+#guard !acceptedBlock [⟨storeWords, [], []⟩, ⟨[0xbb800000], [], []⟩]
+#guard !acceptedBlock [⟨storeWords, [], []⟩, ⟨[0xbbfd0040], [], []⟩]
+-- These opcodes must decode before the standalone completion gate refuses them.
+def decodedRefusal (name : String) (ws : List UInt32) : Bool :=
+  match decodeInst ws with
+  | none => false
+  | some (i, _) => i.name == name && !(stepVscnt true {} i).toBool
+
+#guard decodedRefusal "GLOBAL_ATOMIC_ADD" [0xdcc88000, 0x007f0200]
+#guard decodedRefusal "IMAGE_STORE" [0xf0200100, 0x00000000]
+#guard decodedRefusal "TBUFFER_STORE_FORMAT_X" [0xe8040000, 0x80000000]
+#guard decodedRefusal "SCRATCH_STORE_DWORD" [0xdc704000, 0x007f0200]
+#guard decodedRefusal "S_SETPC_B64" [0xbe802000]
+#guard decodedRefusal "S_SWAPPC_B64" [0xbe802100]
+#guard decodedRefusal "S_RFE_B64" [0xbe802200]
+#guard decodedRefusal "S_CALL_B64" [0xbb000000]
+#guard decodedRefusal "S_TRAP" [0xbf920000]
+#guard decodedRefusal "S_CODE_END" [0xbf9f0000]
+
+#tooth stepVscnt_boundary_zero by mutation stepVscnt := fun _ p _ => .ok p
+#tooth canIssue_boundary_store_empty by mutation canIssue := fun _ _ => true
+
+-- Conditional edge skips the wait; the other path drains, but the join must refuse.
+#guard !storeCompletion true (globalStore ++ [0xbf840001, 0xbbfd0000] ++ finish)
+-- A clean predecessor reaches the exit first; the dirty predecessor must requeue it.
+#guard !storeCompletion true ([0xbf840003] ++ globalStore ++ [0xbf820001, 0xbbfd0000] ++ finish)
+#guard !storeCompletion false ([0xdc700000, 0x007f0200] ++ finish) -- flat_store_dword
+#guard storeCompletion true ([0xdc700000, 0x007f0200, 0xbbfd0000] ++ finish)
+-- Backedge accumulates pending stores; exit is checked after joining the loop state.
+#guard !storeCompletion true (globalStore ++ [0xbf84fffd] ++ finish)
+#guard storeCompletion true (globalStore ++ [0xbbfd0000, 0xbf84fffc] ++ finish)
+
+attribute [local cbv_opaque] instIndex
+attribute [local cbv_eval] instIndex_getD
+
+set_option maxRecDepth 65536 in
+set_option maxHeartbeats 8000000 in
+set_option cbv.maxSteps 10000000 in
+theorem awaitedGlobalStoreDump_vscnt_ok :
+    checkVscntDump awaitedGlobalStoreDump = true ∧
+    checkVscntBlockDump awaitedGlobalStoreDump = true := by cbv
+
+set_option maxRecDepth 65536 in
+set_option maxHeartbeats 8000000 in
+set_option cbv.maxSteps 10000000 in
+theorem unawaitedGlobalStoreDump_refused :
+    checkVscntDump unawaitedGlobalStoreDump = false ∧
+    checkVscntBlockDump unawaitedGlobalStoreDump = false ∧
+    ∀ g, certifyDump g unawaitedGlobalStoreDump = false := by
+  have hd : checkVscntDump unawaitedGlobalStoreDump = false := by cbv
+  have hb : checkVscntBlockDump unawaitedGlobalStoreDump = false := by cbv
+  refine ⟨hd, hb, ?_⟩
+  intro g
+  simp only [certifyDump, hd, Bool.and_false, Bool.false_and]
+
+
+#guard checkWaitcntDump awaitedGlobalStoreDump
+#guard checkWaitcntDump unawaitedGlobalStoreDump
+
+#tooth instIndex_getD by mutation instructionEntries := fun _ => []
+theorem unawaitedGlobalStoreDump_certify_refused (g : Obend.Hardware.ArrayHypergraph.ArrayGraph) :
+    certifyDump g unawaitedGlobalStoreDump = false :=
+  unawaitedGlobalStoreDump_refused.2.2 g
+
+theorem unawaitedGlobalStoreDump_certifyBlock_refused
+    (p : Obend.Hardware.ArrayKernel.Program) :
+    certifyBlockDump p unawaitedGlobalStoreDump = false := by
+  simp only [certifyBlockDump, unawaitedGlobalStoreDump_refused.2.1,
+    Bool.and_false, Bool.false_and]
+
+#tooth certifyBlockDump_vscnt by mutation certifyBlockDump := fun _ _ => true
+#tooth certifyDump_vscnt by mutation certifyDump := fun _ _ => true
+#print axioms CounterTrace.bounded
+#print axioms CounterTrace.vscnt_boundary_store_empty
+#print axioms canIssue_boundary_store_empty
+#print axioms awaitedGlobalStoreDump_vscnt_ok
+#print axioms unawaitedGlobalStoreDump_refused
 
 #assert_axioms_tree
 end Obend.Tests.Rdna2AsyncAndDpp

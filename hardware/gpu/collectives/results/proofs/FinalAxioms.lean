@@ -1,4 +1,4 @@
-import Obend.Hardware.Gpu.NttCorrect
+import Obend.Hardware.Gpu.NttKernel
 import Obend.Hardware.Gpu.CollectiveBuildCorrect
 import Obend.Hardware.Gpu.CollectiveWorkBuild
 import Obend.Hardware.Gpu.ArrayEmitCorrect

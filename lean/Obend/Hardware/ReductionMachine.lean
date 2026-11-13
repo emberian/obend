@@ -32,7 +32,7 @@ Port `ICAP` and Region Isolation Fences), connecting `Obend.Leaf.Emit`, `Obend.L
 public import Obend.Tactic.Tooth
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
-public import Obend.Lower.Lower
+public import Obend.Lower.Fragment
 public import Obend.Hardware.Compiler
 @[expose] public section
 

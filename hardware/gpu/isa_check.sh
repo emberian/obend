@@ -58,7 +58,7 @@ if run_stage 1; then
 echo "=== [1/7] the generated modules == gen_encodings.py on the committed XML ==="
 mkdir -p "${WORK}/gen"
 python3 -I "${SCRIPT_DIR}/rdna2/gen_encodings.py" "${SCRIPT_DIR}/rdna2/amdgpu_isa_rdna2.xml" "${WORK}/gen" | sed 's/^/  /'
-for f in Encodings.lean Insts.lean; do
+for f in Encodings.lean; do
   cmp "${WORK}/gen/${f}" "${REPO_ROOT}/lean/Obend/Hardware/Gpu/Rdna2/${f}" || { echo "[FAIL] ${f} differs from the generator's output" >&2; exit 1; }
 done
 diff -r "${WORK}/gen/Insts" "${REPO_ROOT}/lean/Obend/Hardware/Gpu/Rdna2/Insts" >/dev/null || { echo "[FAIL] Insts/ differs from the generator's output" >&2; exit 1; }
@@ -247,6 +247,18 @@ for d in "${DUMPS[@]}"; do
   [[ -n "${first}" ]] || { echo "[FAIL] ${g}: LDS reads but no wait after one" >&2; exit 1; }
   echo "  ${lds:-${first}}"
 done
+# Store completion must discriminate on a fully certified real kernel, while the
+# independent load-wait checker continues to accept the same-width mutation.
+"${RDNA2}" cert ntt-4 "${SCRIPT_DIR}/isa/ntt-4.txt"
+sed 's/bbfd0000/bf800000/g' "${SCRIPT_DIR}/isa/ntt-4.txt" > "${WORK}/ntt-4-no-vscnt.txt"
+"${RDNA2}" waitcnt "${WORK}/ntt-4-no-vscnt.txt"
+if "${RDNA2}" cert ntt-4 "${WORK}/ntt-4-no-vscnt.txt" > "${WORK}/vscnt-refusal" 2>&1; then
+  echo "[FAIL] ntt-4: a removed store wait was certified" >&2; exit 1
+fi
+grep -q 'unawaited vector store' "${WORK}/vscnt-refusal" || {
+  cat "${WORK}/vscnt-refusal" >&2; echo "[FAIL] ntt-4: wrong refusal cause" >&2; exit 1; }
+cat "${WORK}/vscnt-refusal"
+
 fi
 if run_stage 7; then
 echo "=== [7/7] the certificate: every graph's machine code computes the graph for every input ==="

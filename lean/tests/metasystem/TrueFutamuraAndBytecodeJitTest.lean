@@ -129,12 +129,8 @@ import all Obend.Leaf.UpTo
 import all Obend.Leaf.BytecodeRegisterJit
 import all Obend.Logic.Claim
 import all Obend.Logic.LateBinding
-import all Obend.Lower.Lower
+import all Obend.Lower.Fragment
 import all Obend.Lower.Proofs.Book
-import all Obend.Lower.Proofs.Sound
-import all Obend.Lower.Proofs.Subst
-import all Obend.Lower.Semantics
-import all Obend.Lower.Syntax
 import all Obend.Slot
 import all Obend.Slot.Core4
 import all Obend.Slot.Integrity

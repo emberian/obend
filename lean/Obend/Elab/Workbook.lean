@@ -36,8 +36,8 @@ public import Obend.Leaf.Flatten
 public meta import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit
 public meta import Obend.Leaf.Emit
-public import Obend.Lower.Syntax
-public meta import Obend.Lower.Syntax
+public import Obend.Lower.Fragment
+public meta import Obend.Lower.Fragment
 public import Obend.Lower.Transport
 public meta import Obend.Lower.Transport
 public import Obend.Lower.Proofs.Book

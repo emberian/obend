@@ -9,7 +9,7 @@ lowered application (`lower_sound_nat`); the composition's object reads the memb
 (`late_binding`); the book computes what the object computes (`book_sound`). So the book's member,
 applied to `n`, halts with `m`.
 -/
-public import Obend.Lower.Proofs.Sound
+public import Obend.Lower.Fragment
 public import Obend.Leaf.Emit
 @[expose] public section
 namespace Obend.Lower

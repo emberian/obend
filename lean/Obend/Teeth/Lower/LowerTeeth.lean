@@ -15,13 +15,8 @@ Covers all components of the `Lean-lite` → `Core4` → `Leaf.Book` → `Hardwa
 public import Obend.Tactic.Tooth
 import all Obend.Equiv.Ahead
 import all Obend.Equiv.Behaviour
-import all Obend.Lower.Syntax
-import all Obend.Lower.Semantics
-import all Obend.Lower.Lower
-import all Obend.Lower.Typing
+import all Obend.Lower.Fragment
 import all Obend.Lower.Judge
-import all Obend.Lower.Proofs.Subst
-import all Obend.Lower.Proofs.Sound
 import all Obend.Lower.Proofs.Complete
 import all Obend.Lower.Proofs.Book
 import all Obend.Lower.Proofs.Hardware
@@ -95,6 +90,7 @@ theorem transportCheck_all_clauses_exercised :
   have hdig_ne : (sourceDigest reflNatDecider + 1 == sourceDigest reflNatDecider) = false := by
     rw [beq_eq_false_iff_ne]
     omega
+  simp only [curry_cons, curry_nil] at h1 hill_check
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp [transportCheck, reflNatObj, reflNatCert, Obend.Logic.termEq_refl', h1, h2]
   · simp [transportCheck, reflNatObj, hterm_false]

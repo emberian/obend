@@ -1,6 +1,6 @@
 module
 public import Obend.Crypto.FastRing
-public import Obend.Hardware.Gpu.NttSum
+public import Obend.Hardware.Gpu.NttSpec
 public import Obend.Apps.ZkNtt.Goldilocks
 
 public section

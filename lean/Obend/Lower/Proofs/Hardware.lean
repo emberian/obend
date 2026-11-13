@@ -562,10 +562,10 @@ theorem multiCtorIota_hardware_bridge_sound (n defaultVal v : Nat) (xs : List Na
       some (.const (BitVec.ofNat 64 v)) := by
   have hIota := compileMultiCtorIota_sound n defaultVal v xs
   refine ⟨hIota.2.1, hIota.2.2.1, hIota.2.2.2.1, hIota.2.2.2.2.2.1, hIota.2.2.2.2.2.2, ?_, ?_⟩
-  · simp [inlineDict, inlinePass, optionNatToLExpr, lowerT, caseArm,
+  · simp [inlineDict, inlinePass, optionNatToLExpr, lowerT, caseArm_eq,
       Term.substitute, Term.rename,
       splitValues, applyAll, instantiate, compileTermSat]
-  · simp [inlineDict, inlinePass, optionNatToLExpr, lowerT, caseArm,
+  · simp [inlineDict, inlinePass, optionNatToLExpr, lowerT, caseArm_eq,
       Term.substitute, liftSubstitution, Term.rename, liftRename,
       splitValues, applyAll, instantiate, compileTermSat]
 

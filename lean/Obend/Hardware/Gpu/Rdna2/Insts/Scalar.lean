@@ -2,12 +2,661 @@
 -- (hardware/gpu/isa_check.sh regenerates and compares bytes).
 module
 public import Obend.Hardware.Gpu.Rdna2.Spec
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 
-/-- Instructions 576 to 671 of the XML, in document order. -/
-def instructionsChunk6 : List Instruction := [
+@[expose] def scalarChunk0 : List Instruction := [
+  ⟨"S_MOV_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 3,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 3,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_MOV_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 4,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 4,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_CMOV_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 5,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 5,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_CMOV_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 6,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 6,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_NOT_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 7,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 7,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_NOT_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 8,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 8,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_WQM_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 9,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 9,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_WQM_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 10,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 10,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_BREV_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 11,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 11,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_BREV_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 12,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 12,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_BCNT0_I32_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 13,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 13,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_BCNT0_I32_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 14,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 14,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_BCNT1_I32_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 15,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 15,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_BCNT1_I32_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 16,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 16,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_FF0_I32_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 17,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 17,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_FF0_I32_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 18,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 18,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_FF1_I32_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 19,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 19,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_FF1_I32_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 20,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 20,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_FLBIT_I32_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 21,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 21,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_FLBIT_I32_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 22,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 22,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_FLBIT_I32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 23,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 23,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_FLBIT_I32_I64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 24,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I64", 64, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 24,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I64", 64, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_SEXT_I32_I8", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 25,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I8", 8, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 25,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I8", 8, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_SEXT_I32_I16", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 26,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I16", 16, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 26,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_BITSET0_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 27,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 27,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_BITSET0_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 28,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 28,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_BITSET1_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 29,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 29,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_BITSET1_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 30,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 30,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_GETPC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 31,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"", "OPR_PC", "FMT_NUM_B64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_SETPC_B64", true, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 32,
+        [⟨"SSRC0", "OPR_SREG", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_PC", "FMT_NUM_B64", 64, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_SWAPPC_B64", true, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 33,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SREG", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_PC", "FMT_NUM_B64", 64, false, true, true, true⟩, ⟨"", "OPR_PC", "FMT_NUM_B64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_RFE_B64", true, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 34,
+        [⟨"SSRC0", "OPR_SREG", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_PC", "FMT_NUM_B64", 64, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_AND_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 36,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 36,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_OR_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 37,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 37,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_XOR_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 38,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 38,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN2_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 39,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 39,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ORN2_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 40,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 40,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_NAND_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 41,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 41,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_NOR_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 42,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 42,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_XNOR_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 43,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 43,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_QUADMASK_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 44,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 44,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_QUADMASK_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 45,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 45,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MOVRELS_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 46,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SREG", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_M0", "FMT_NUM_B32", 32, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MOVRELS_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 47,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SREG", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_M0", "FMT_NUM_B32", 32, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MOVRELD_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 48,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_M0", "FMT_NUM_B32", 32, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 48,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_M0", "FMT_NUM_B32", 32, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MOVRELD_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 49,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_M0", "FMT_NUM_B32", 32, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 49,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_M0", "FMT_NUM_B32", 32, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ABS_I32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 52,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 52,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN1_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 55,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 55,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ORN1_SAVEEXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 56,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 56,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN1_WREXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 57,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 57,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN2_WREXEC_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 58,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 58,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_BITREPLICATE_B64_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 59,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 59,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_AND_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 60,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 60,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_OR_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 61,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 61,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_XOR_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 62,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 62,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN2_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 63,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 63,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ORN2_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 64,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 64,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_NAND_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 65,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 65,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_NOR_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 66,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 66,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_XNOR_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 67,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 67,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN1_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 68,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 68,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ORN1_SAVEEXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 69,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 69,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN1_WREXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 70,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 70,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN2_WREXEC_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 71,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩,
+      ⟨"SOP1_INST_LITERAL", "has_lit_0", 71,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SDST_EXEC", "FMT_NUM_M64", 64, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MOVRELSD_2_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP1", "default", 73,
+        [⟨"SDST", "OPR_SREG", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SREG", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SDST_M0", "FMT_NUM_B32", 32, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ADD_U32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 0,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 0,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 0,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 0,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_SUB_U32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 1,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 1,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 1,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 1,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ADD_I32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 2,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 2,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 2,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 2,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_SUB_I32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 3,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 3,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 3,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 3,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ADDC_U32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 4,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 4,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 4,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 4,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_SUBB_U32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 5,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 5,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 5,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 5,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MIN_I32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 6,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 6,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 6,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 6,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MIN_U32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 7,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 7,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 7,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 7,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MAX_I32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 8,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 8,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 8,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 8,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_I32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_I32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_MAX_U32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 9,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 9,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 9,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 9,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_CSELECT_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 10,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 10,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 10,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 10,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_CSELECT_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 11,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 11,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 11,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 11,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_B64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_B64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_AND_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 14,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 14,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 14,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 14,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_AND_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 15,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 15,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 15,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 15,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_OR_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 16,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 16,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 16,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 16,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_OR_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 17,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 17,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 17,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 17,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_XOR_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 18,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 18,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 18,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 18,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_XOR_B64", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 19,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 19,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 19,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 19,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U64", 64, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U64", 64, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_ANDN2_B32", false, false, false, false,
+    [
+      ⟨"ENC_SOP2", "default", 20,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0", 20,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SSRC1", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_1", 20,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
+      ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 20,
+        [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
+    ]⟩,
   ⟨"S_ANDN2_B64", false, false, false, false,
     [
       ⟨"ENC_SOP2", "default", 21,
@@ -139,7 +788,10 @@ def instructionsChunk6 : List Instruction := [
         [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SSRC0", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩,
       ⟨"SOP2_INST_LITERAL", "has_lit_0_has_lit_1", 32,
         [⟨"SDST", "OPR_SDST", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SSRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"", "OPR_SSRC_SPECIAL_SCC", "FMT_NUM_B1", 1, false, true, true, true⟩]⟩
-    ]⟩,
+    ]⟩
+]
+
+@[expose] def scalarChunk1 : List Instruction := [
   ⟨"S_LSHR_B64", false, false, false, false,
     [
       ⟨"ENC_SOP2", "default", 33,
@@ -787,7 +1439,99 @@ def instructionsChunk6 : List Instruction := [
     [
       ⟨"ENC_SOPP", "default", 18,
         [⟨"SIMM16", "OPR_SIMM16", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_ICACHE_INV", false, false, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 19,
+        []⟩
+    ]⟩,
+  ⟨"S_INCPERFLEVEL", false, false, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 20,
+        [⟨"SIMM16", "OPR_SIMM16", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_DECPERFLEVEL", false, false, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 21,
+        [⟨"SIMM16", "OPR_SIMM16", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_TTRACEDATA", false, false, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 22,
+        [⟨"", "OPR_SDST_M0", "FMT_NUM_B32", 32, true, false, true, true⟩]⟩
+    ]⟩,
+  ⟨"S_CBRANCH_CDBGSYS", true, true, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 23,
+        [⟨"SIMM16", "OPR_LABEL", "FMT_NUM_I16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_CBRANCH_CDBGUSER", true, true, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 24,
+        [⟨"SIMM16", "OPR_LABEL", "FMT_NUM_I16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_CBRANCH_CDBGSYS_OR_USER", true, true, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 25,
+        [⟨"SIMM16", "OPR_LABEL", "FMT_NUM_I16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_CBRANCH_CDBGSYS_AND_USER", true, true, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 26,
+        [⟨"SIMM16", "OPR_LABEL", "FMT_NUM_I16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_ENDPGM_SAVED", false, false, true, false,
+    [
+      ⟨"ENC_SOPP", "default", 27,
+        []⟩
+    ]⟩,
+  ⟨"S_ENDPGM_ORDERED_PS_DONE", false, false, true, false,
+    [
+      ⟨"ENC_SOPP", "default", 30,
+        []⟩
+    ]⟩,
+  ⟨"S_CODE_END", true, false, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 31,
+        []⟩
+    ]⟩,
+  ⟨"S_INST_PREFETCH", false, false, false, true,
+    [
+      ⟨"ENC_SOPP", "default", 32,
+        [⟨"SIMM16", "OPR_SIMM16", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
     ]⟩
 ]
+
+@[expose] def scalarChunk2 : List Instruction := [
+  ⟨"S_CLAUSE", false, false, false, true,
+    [
+      ⟨"ENC_SOPP", "default", 33,
+        [⟨"SIMM16", "OPR_CLAUSE", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_WAITCNT_DEPCTR", false, false, false, true,
+    [
+      ⟨"ENC_SOPP", "default", 35,
+        [⟨"SIMM16", "OPR_WAITCNT_DEPCTR", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_ROUND_MODE", false, false, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 36,
+        [⟨"SIMM16", "OPR_SIMM16", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_DENORM_MODE", false, false, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 37,
+        [⟨"SIMM16", "OPR_SIMM16", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
+    ]⟩,
+  ⟨"S_TTRACEDATA_IMM", false, false, false, false,
+    [
+      ⟨"ENC_SOPP", "default", 40,
+        [⟨"SIMM16", "OPR_SIMM16", "FMT_NUM_B16", 16, true, false, false, true⟩]⟩
+    ]⟩
+]
+
+/-- The scalar family, preserving XML document order. -/
+@[expose] def scalarInstructions : List Instruction :=
+  scalarChunk0 ++ scalarChunk1 ++ scalarChunk2
 
 end Obend.Hardware.Gpu.Rdna2

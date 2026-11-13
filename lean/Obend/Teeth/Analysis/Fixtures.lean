@@ -8,7 +8,7 @@ push and not on every library build. Each carries the module it came from and wh
 file is tier 2: `lake build Teeth`; a plain file, so it sees every definition with its body.
 -/
 
-import Obend.Analysis.Format
+import Obend.Analysis.Impact
 import Obend.Analysis.QuantumWalk
 
 set_option autoImplicit false

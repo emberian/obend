@@ -32,10 +32,9 @@ Implements Stage 1 (`WS 23` / `SILICON-ELABORATOR.md` §3.2) of the Silicon Lean
      to `box` (`.record []`).
 -/
 public import Obend.Lower.Fragment
-public import Obend.Lower.Proofs.Sound
 public import Obend.Lower.Proofs.Book
 public import Obend.Lower.LCNF
-@[expose] public section
+public section
 
 namespace Obend.Lower.Inductive
 open Obend.Core.Term
@@ -52,10 +51,32 @@ inductive KName where
   | anonymous
   | str (parent : KName) (s : String)
   | num (parent : KName) (i : Nat)
-  deriving DecidableEq, Repr, Inhabited
+  deriving Repr, Inhabited
+
+/-- Public structural name equality for CAM symbol interning. Keep the recursive
+body available without importing the rest of this module's private implementation. -/
+@[expose] def KName.decEq : (a b : KName) → Decidable (a = b)
+  | .anonymous, .anonymous => isTrue rfl
+  | .str p s, .str q t =>
+    match KName.decEq p q with
+    | isFalse h => isFalse (fun e => h (KName.str.inj e).1)
+    | isTrue h =>
+      if hs : s = t then isTrue (by cases h; cases hs; rfl)
+      else isFalse (fun e => hs (KName.str.inj e).2)
+  | .num p i, .num q j =>
+    match KName.decEq p q with
+    | isFalse h => isFalse (fun e => h (KName.num.inj e).1)
+    | isTrue h =>
+      if hi : i = j then isTrue (by cases h; cases hi; rfl)
+      else isFalse (fun e => hi (KName.num.inj e).2)
+  | .anonymous, .str _ _ | .anonymous, .num _ _ | .str _ _, .anonymous |
+    .str _ _, .num _ _ | .num _ _, .anonymous | .num _ _, .str _ _ =>
+      isFalse (by intro h; cases h)
+
+instance : DecidableEq KName := KName.decEq
 
 /-- Construct a simple single-component `KName`. -/
-def KName.mkSimple (s : String) : KName := .str .anonymous s
+@[expose] def KName.mkSimple (s : String) : KName := .str .anonymous s
 
 /-- Structural height of a `KName`. -/
 def KName.height : KName → Nat
@@ -70,7 +91,55 @@ inductive KLevel where
   | max (l1 l2 : KLevel)
   | imax (l1 l2 : KLevel)
   | param (name : KName)
-  deriving DecidableEq, Repr, Inhabited
+  deriving Repr, Inhabited
+
+/-- Structural universe-level equality used by CAM symbol comparisons. -/
+@[expose] def KLevel.decEq : (a b : KLevel) → Decidable (a = b)
+  | .zero, .zero => isTrue rfl
+  | .succ a, .succ b =>
+    match KLevel.decEq a b with
+    | isTrue h => isTrue (by cases h; rfl)
+    | isFalse h => isFalse (fun e => h (KLevel.succ.inj e))
+  | .max a b, .max c d =>
+    match KLevel.decEq a c with
+    | isFalse h => isFalse (fun e => h (KLevel.max.inj e).1)
+    | isTrue h =>
+      match KLevel.decEq b d with
+      | isTrue h' => isTrue (by cases h; cases h'; rfl)
+      | isFalse h' => isFalse (fun e => h' (KLevel.max.inj e).2)
+  | .imax a b, .imax c d =>
+    match KLevel.decEq a c with
+    | isFalse h => isFalse (fun e => h (KLevel.imax.inj e).1)
+    | isTrue h =>
+      match KLevel.decEq b d with
+      | isTrue h' => isTrue (by cases h; cases h'; rfl)
+      | isFalse h' => isFalse (fun e => h' (KLevel.imax.inj e).2)
+  | .param n, .param m =>
+    if h : n = m then isTrue (by cases h; rfl)
+    else isFalse (fun e => h (KLevel.param.inj e))
+  | .zero, .succ _ |
+    .zero, .max _ _ |
+    .zero, .imax _ _ |
+    .zero, .param _ |
+    .succ _, .zero |
+    .succ _, .max _ _ |
+    .succ _, .imax _ _ |
+    .succ _, .param _ |
+    .max _ _, .zero |
+    .max _ _, .succ _ |
+    .max _ _, .imax _ _ |
+    .max _ _, .param _ |
+    .imax _ _, .zero |
+    .imax _ _, .succ _ |
+    .imax _ _, .max _ _ |
+    .imax _ _, .param _ |
+    .param _, .zero |
+    .param _, .succ _ |
+    .param _, .max _ _ |
+    .param _, .imax _ _ =>
+      isFalse (by intro h; cases h)
+
+instance : DecidableEq KLevel := KLevel.decEq
 
 /-- Structural depth of a `KLevel`. -/
 def KLevel.depth : KLevel → Nat
@@ -84,7 +153,19 @@ def KLevel.depth : KLevel → Nat
 inductive KLiteral where
   | natVal (n : Nat)
   | strVal (s : String)
-  deriving DecidableEq, Repr, Inhabited
+  deriving Repr, Inhabited
+
+/-- Literal equality is part of the CAM's public symbol-comparison boundary. -/
+@[expose] def KLiteral.decEq : (a b : KLiteral) → Decidable (a = b)
+  | .natVal n, .natVal m =>
+    if h : n = m then isTrue (by cases h; rfl)
+    else isFalse (fun e => h (KLiteral.natVal.inj e))
+  | .strVal s, .strVal t =>
+    if h : s = t then isTrue (by cases h; rfl)
+    else isFalse (fun e => h (KLiteral.strVal.inj e))
+  | .natVal _, .strVal _ | .strVal _, .natVal _ => isFalse (by intro h; cases h)
+
+instance : DecidableEq KLiteral := KLiteral.decEq
 
 /-- Self-hosted kernel expression (`Lean.Expr` / `Lean4Lean.VExpr`). -/
 inductive KExpr where
@@ -399,7 +480,8 @@ def KName.toCleanId (n : KName) : Nat :=
   n.toCleanIdAux
 
 theorem KName.toCleanId_num_exact (i : Nat) :
-    (KName.num .anonymous i).toCleanId = i := rfl
+    (KName.num .anonymous i).toCleanId = i := by
+  simp only [KName.toCleanId, KName.toCleanIdAux]
 
 /-- Convert a `KLevel` back to a host `Lean.Level`. -/
 def toLeanLevel : KLevel → Lean.Level
@@ -441,7 +523,7 @@ def toLeanLiteral : KLiteral → Lean.Literal
 
 /-- Convert a host `Lean.Expr` into `Option KExpr` (stripping `.mdata` annotations transparently
 and mapping `.fvar` and `.mvar` to their respective first-class `KExpr.fvar` and `KExpr.mvar` constructors). -/
-def fromLeanExpr : Lean.Expr → Option KExpr
+@[expose] def fromLeanExpr : Lean.Expr → Option KExpr
   | .bvar i          => some (.bvar i)
   | .fvar id         => some (.fvar (fromLeanName id.name).toCleanId)
   | .mvar id         => some (.mvar (fromLeanName id.name).toCleanId)
@@ -456,7 +538,8 @@ def fromLeanExpr : Lean.Expr → Option KExpr
   | .proj s i e      => do return .proj (fromLeanName s) i (← fromLeanExpr e)
 
 @[simp] theorem fromLeanExpr_mdata (md : Lean.MData) (e : Lean.Expr) :
-    fromLeanExpr (.mdata md e) = fromLeanExpr e := rfl
+    fromLeanExpr (.mdata md e) = fromLeanExpr e := by
+  simp only [fromLeanExpr]
 
 /-- Convert a `KExpr` back to a host `Lean.Expr` (preserving first-class `.fvar` and `.mvar` disjointly). -/
 def toLeanExpr : KExpr → Lean.Expr
@@ -1016,7 +1099,7 @@ theorem lower_inductive_sound
 export Obend.Lower.LCNF (
   LcnfQuantity LcnfParam LcnfArg LCNFArg LcnfLetValue LCNFLetValue LcnfAlt LcnfCode LCNFCode
   LcnfFunDecl LCNFFunDecl LcnfModule
-  eraseZeroQtyArgs evalLcnfArgNat readLinearStore writeLinearStore evalLcnfLetValue evalLcnfCode
+  eraseZeroQtyArgs readLinearStore writeLinearStore evalLcnfLetValue evalLcnfCode
   checkLinearLetValue checkLinearStateToken checkLinearArms
   lcnfArgToLExpr lcnfLetValueToLExpr wrapMinorBvars applyLcnfArgs
   compileLcnfToLExpr lcnfToLExpr lcnfArmsToLExpr compileLcnfToCore4 lowerLCNF
@@ -1073,7 +1156,7 @@ def natRecIotaLExpr : LExpr :=
   compileMultiCtorIota "natRecIota" .natural natIotaRules
 
 /-- Lower an `Option Nat` into 2-constructor algebraic `LExpr` (`"none"` / `"some"`). -/
-def optionNatToLExpr : Option Nat → LExpr
+@[expose] def optionNatToLExpr : Option Nat → LExpr
   | none   => .inject "none" []
   | some v => .inject "some" [("val", .lit v)]
 

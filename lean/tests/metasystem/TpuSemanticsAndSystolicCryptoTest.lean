@@ -4,11 +4,9 @@ public import Obend.Hardware.Tpu.CryptoSystolic
 public meta import Obend.Hardware.Tpu.Machine
 public meta import Obend.Hardware.Tpu.CryptoSystolic
 public meta import Obend.Crypto.FastRing
-public meta import Obend.Hardware.Gpu.NttSum
+public meta import Obend.Hardware.Gpu.NttSpec
 public meta import Obend.Crypto.Multilinear
 public meta import Obend.Apps.ZkNtt.Goldilocks
-public meta import Obend.Hardware.Gpu.NttRoots
-public meta import Obend.Hardware.Gpu.NttDFTSpec
 public meta import Obend.Crypto.DualSpine
 -- The axiom census needs implementation bodies throughout this import cone.
 import all Obend.Apps.ZkNtt.Goldilocks
@@ -16,7 +14,7 @@ import all Obend.Crypto.Multilinear
 import all Obend.AssertAxioms
 import all Obend.Tactic.Tooth
 import all Obend.Crypto.FastRing
-import all Obend.Hardware.Gpu.NttSum
+import all Obend.Hardware.Gpu.NttSpec
 import all Obend.Hardware.Tpu.Machine
 import all Obend.Hardware.HDL
 import all Obend.Core.Term
@@ -134,9 +132,6 @@ import all Obend.Hardware.Gpu.Limbs
 import all Obend.Hardware.Gpu.LimbsGoldilocks
 import all Obend.Hardware.Gpu.LimbsShift
 import all Obend.Hardware.Gpu.GoldilocksSource
-import all Obend.Hardware.Gpu.Ntt
-import all Obend.Hardware.Gpu.NttRoots
-import all Obend.Hardware.Gpu.NttDFTSpec
 import all Obend.Judge.Class
 import all Obend.Judge.Computational
 import all Obend.Crypto.Transcript
