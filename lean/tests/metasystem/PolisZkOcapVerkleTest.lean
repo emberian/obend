@@ -1,9 +1,12 @@
+module
 import all Obend.Polis.BlumRam
 import Obend.Polis.EvidencedOcap
 import Obend.Polis.ZkBiscuit
 import Obend.Polis.BlumRam
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
+
+public section
 
 /-!
 # `tests/metasystem/PolisZkOcapVerkleTest.lean`

@@ -1,6 +1,9 @@
+module
 import Obend.Tactic.Tooth
 import all Obend.Vault.Log
 import Obend.Vault.Log
+
+public section
 
 open Obend.Vault.SegmentLog
 

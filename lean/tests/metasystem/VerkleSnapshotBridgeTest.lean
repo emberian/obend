@@ -1,3 +1,4 @@
+module
 import all Obend.Polis.BlumRam
 import all Obend.Vault.Log
 import all Obend.Vault.WorldTree
@@ -6,6 +7,8 @@ import Obend.Vault.Replay
 import Obend.Vault.WorldTree
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
+
+public section
 
 /-!
 # `tests/metasystem/VerkleSnapshotBridgeTest.lean` — Pillar-3 COW `ChunkedWorld` ↔ `VerkleUmem` & WAL Suite
