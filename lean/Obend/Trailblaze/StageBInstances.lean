@@ -3446,12 +3446,12 @@ private def buildLeafExprSubNet (symbols : SymbolTable) (depth : Nat) : LeafExpr
     let tSub := buildLeafExprSubNet symbols depth target nextId
     let pId := tSub.nextId
     let eId := pId + 1
-    { root := ⟨pId, ⟨2, by decide⟩⟩
+    { root := ⟨pId, ⟨1, by decide⟩⟩
     , varPorts := tSub.varPorts
     , nodes := tSub.nodes ++ [.con pId (internSymbol symbols slotTag), .era eId]
     , wires := tSub.wires ++
         [ ⟨⟨pId, ⟨0, by decide⟩⟩, tSub.root⟩
-        , ⟨⟨pId, ⟨1, by decide⟩⟩, ⟨eId, ⟨0, by decide⟩⟩⟩ ]
+        , ⟨⟨pId, ⟨2, by decide⟩⟩, ⟨eId, ⟨0, by decide⟩⟩⟩ ]
     , nextId := pId + 2 }
   | .letBind val body, nextId =>
     let vSub := buildLeafExprSubNet symbols depth val nextId
@@ -3519,9 +3519,9 @@ def deltaAux (id : Nat) (slot : Fin 3) : PortEnd := ⟨id, slot⟩
 
 @[expose] def betaPrincipalPresent (net : DeltaNet) (a b : Nat) : Prop :=
   a ≠ b ∧
-  net.symbols[(internSymbol net.symbols 0).toNat]? = some (0 : DeltaTag) ∧
-  DeltaNetNode.con a (internSymbol net.symbols 0) ∈ net.nodes ∧
-  DeltaNetNode.con b (internSymbol net.symbols 0) ∈ net.nodes ∧
+  net.nodes.any (fun n => match n with
+    | .con id tag => id == a && decide (.con b tag ∈ net.nodes)
+    | _ => false) = true ∧
   (⟨deltaAux a 0, deltaAux b 0⟩ : DeltaWire) ∈ net.wires
 
 instance (net : DeltaNet) (a b : Nat) : Decidable (betaPrincipalPresent net a b) :=
@@ -3533,9 +3533,26 @@ def eraseBetaPair (net : DeltaNet) (a b : Nat) : DeltaNet :=
     wires := net.wires.filter (fun w =>
       w.lhs.nodeId != a && w.lhs.nodeId != b && w.rhs.nodeId != a && w.rhs.nodeId != b) }
 
+/-- Erasure removes an active pair or pushes two erasers onto a constructor's auxiliaries. -/
+def eraseDeltaPair (net : DeltaNet) (a b : Nat) : Option DeltaNet :=
+  if decide (a ≠ b ∧ .era a ∈ net.nodes ∧
+      (⟨deltaAux a 0, deltaAux b 0⟩ : DeltaWire) ∈ net.wires) then
+    if decide (.era b ∈ net.nodes) then some (eraseBetaPair net a b)
+    else if net.nodes.any (fun n => match n with | .con id _ => id == b | _ => false) then
+      match deltaNeighbor net (deltaAux b 1), deltaNeighbor net (deltaAux b 2) with
+      | some x, some y =>
+        let rest := eraseBetaPair net a b
+        some { rest with nodes := .era a :: .era b :: rest.nodes,
+          wires := ⟨deltaAux a 0, x⟩ :: ⟨deltaAux b 0, y⟩ :: rest.wires }
+      | _, _ => none
+    else none
+  else none
+
 /-- Graph interaction semantics: annihilate the active lambda/application pair and
 splice corresponding auxiliary wires. No source evaluator or target literal is used. -/
 inductive DeltaInteraction : DeltaNet → DeltaNet → Prop where
+  | erase {net out : DeltaNet} {a b : Nat}
+      (redex : eraseDeltaPair net a b = some out) : DeltaInteraction net out
   | beta {net first second : DeltaNet} {a b : Nat}
       (principal : betaPrincipalPresent net a b)
       (left : spliceDeltaPorts net (deltaAux a 1) (deltaAux b 1) = some first)
@@ -3553,7 +3570,10 @@ def reduceDeltaPair (net : DeltaNet) (a b : Nat) : Option DeltaNet :=
       | some second =>
         let out := eraseBetaPair second a b
         if checkNetPortLinearity out then some out else none
-  else none
+  else
+    match eraseDeltaPair net a b with
+    | some out => if checkNetPortLinearity out then some out else none
+    | none => none
 
 theorem reduceDeltaPair_sound (net out : DeltaNet) (a b : Nat)
     (h : reduceDeltaPair net a b = some out) :
@@ -3576,7 +3596,16 @@ theorem reduceDeltaPair_sound (net out : DeltaNet) (a b : Nat)
           cases h
           exact ⟨.beta hp hl hr, hv⟩
         · cases h
-  · cases h
+  · cases he : eraseDeltaPair net a b with
+    | none => simp [he] at h
+    | some result =>
+      rw [he] at h
+      dsimp only at h
+      split at h
+      · rename_i hv
+        cases h
+        exact ⟨.erase he, hv⟩
+      · cases h
 
 inductive DeltaNetSteps : DeltaNet → DeltaNet → Prop where
   | refl (net) : DeltaNetSteps net net

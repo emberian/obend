@@ -307,8 +307,8 @@ example : silverLeanFpgaSmoke = true := rfl
 example : internSymbol [.symbol "x", .symbol "y"] (.symbol "x") ≠
     internSymbol [.symbol "x", .symbol "y"] (.symbol "y") := by decide
 example : deltaTagBytes (.literal 32767) ≠ deltaTagBytes (.opcode 0) := by decide
-example : deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.lit 0) (.symbol "x"))) ≠
-    deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.lit 0) (.symbol "y"))) := by decide
+example : deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.symbol "x") (.lit 0))) ≠
+    deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.symbol "y") (.lit 0))) := by decide
 #tooth internSymbol_injective by
   mutation internSymbol := fun _ _ => 0
 
@@ -321,5 +321,21 @@ example : evalPipRoute (fun wire => wire == 3) (twoHopRoute 0) 2 = false ∧
     evalPipRoute (fun wire => wire == 3) (twoHopRoute 3) 5 = true := by decide
 #tooth multiNetPip_routing_sound by
   mutation checkMultiNetPipDisjoint := fun _ => true
+
+def literalMemberBook : Obend.Leaf.Book := ⟨[.static "answer" (.nat 42)]⟩
+def memberReductionTrace : List (Nat × Nat) := [(7, 6), (8, 3), (8, 4), (3, 5)]
+def reducedMemberNet : DeltaNet :=
+  (runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
+    memberReductionTrace).getD (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
+example : runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
+    memberReductionTrace = some reducedMemberNet := by decide
+example : checkDeltaNormalForm reducedMemberNet 42 = true := by decide
+example : checkDeltaNormalForm reducedMemberNet 43 = false := by decide
+example : DeltaNetSteps (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer") reducedMemberNet :=
+  runDeltaReductions_sound _ _ _ (by decide)
+#tooth Obend.Trailblaze.StageB.stageB_leaf_book_deltanet_normal_form by
+  mutation checkDeltaNormalForm := fun _ _ => true
+#tooth lowerTermToLeafExpr_split_field_sensitive by
+  mutation stringToDeltaTag := fun _ => .symbol ""
 
 end Obend.Tests.TrailblazePolisFpgaTest
