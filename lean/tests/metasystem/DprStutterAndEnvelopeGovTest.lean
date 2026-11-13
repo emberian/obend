@@ -7,7 +7,7 @@ import Obend.Tactic.Tooth
 import all Obend.Judge.SvenvsCorrigibility
 meta import all Obend.Hardware.DprStutter
 meta import all Obend.ClusterGov.PhysicalEnvelope
-meta import all Obend.Trailblaze.ClusterGov
+meta import all Obend.Trailblaze.CathedralApex
 import all Obend.Crypto.Transcript
 import all Obend.Digest.Cshake256.Spec
 import all Obend.Digest.Cshake256.Fast

@@ -30,7 +30,7 @@ import all Obend.Consensus.Finality
 import all Obend.Judge.Computational
 meta import all Obend.Consensus.SimplexLiveness
 meta import all Obend.Vault.IrreversibleOutbox
-meta import all Obend.Trailblaze.Polis
+meta import all Obend.Trailblaze.StageBInstances
 meta import all Obend.Consensus.SimplexProtocol
 meta import all Obend.Consensus.SimplexTrace
 meta import all Obend.Consensus.Finality

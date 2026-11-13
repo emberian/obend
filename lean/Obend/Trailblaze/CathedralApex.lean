@@ -1923,8 +1923,8 @@ def executeRdna2SliceReduction (d : Rdna2WavefrontDispatch) : Option (Array Int)
     let final := Obend.Hardware.Gpu.Rdna2.run program.toArray (d.shaderIsaWords.size * 4 + 1)
       (rdna2DispatchInput d)
     if final.halted && !final.err.isSome then
-      some ((List.range (ozakiSliceSumExec d.workgroupSlices).size).toArray.map
-        (fun lane => Int.ofNat (Obend.Hardware.Gpu.Rdna2.readVgpr final 0 lane).toNat))
+      some (((List.range (ozakiSliceSumExec d.workgroupSlices).size).map
+        (fun lane => Int.ofNat (Obend.Hardware.Gpu.Rdna2.readVgpr final 0 lane).toNat)).toArray)
     else none
 
 /-- Admission compares actual decoded execution, the reported result, and exact Ozaki sums. -/
@@ -2026,6 +2026,7 @@ set_option maxRecDepth 100000 in
 set_option maxHeartbeats 8000000 in
 theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
     checkRdna2DispatchEnvelope d = true := by
+  have _hd : (decodeRdnaSliceProgram 1 [0xbf810000]).isSome = true := by decide +kernel
   exact ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, by
     simp only [checkRdna2DispatchEnvelope, ← Array.all_toList]
     decide +kernel⟩

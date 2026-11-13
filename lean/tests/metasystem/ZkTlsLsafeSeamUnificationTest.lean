@@ -42,7 +42,7 @@ public meta import Obend.Judge.SymbolicRegexBisim
 public meta import Obend.Judge.VpaComplementAndJson
 public meta import Obend.Judge.DecoAndCallTree
 public meta import Obend.Vault.Lsafe
-public meta import Obend.Trailblaze.ZkStripe
+public meta import Obend.Trailblaze.CathedralApex
 
 public section
 
