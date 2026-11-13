@@ -85,7 +85,7 @@ def encodeReceipt256 (r : BitVec 256) : ByteArray :=
 theorem encodeReceipt256_inj {a b : BitVec 256}
     (h : encodeReceipt256 a = encodeReceipt256 b) : a = b := by
   have hBytes := congrArg (fun bs : ByteArray => bs.data.toList) h
-  simp only [encodeReceipt256, Array.toList_toArray, beAcc_eq_be_append,
+  simp only [encodeReceipt256, List.toList_toArray, beAcc_eq_be_append,
     List.append_nil] at hBytes
   have hPow : (2 : Nat) ^ 256 = 256 ^ 32 := by decide
   exact BitVec.eq_of_toNat_eq
@@ -148,7 +148,8 @@ theorem checkInRackFpgaReceipt_canonical_inhabited
     let digest := computeFpgaVerifierReceipt256 H rackId epoch treeRoot step true
     checkInRackFpgaReceipt H treeRoot step
       ⟨rackId, epoch, true, digest, encodeReceipt256 digest⟩ = true := by
-  simp [checkInRackFpgaReceipt, maxRackReceiptBytes]
+  simp [checkInRackFpgaReceipt, maxRackReceiptBytes, encodeReceipt256,
+    beAcc_eq_be_append, Obend.Digest.HashBytes.length_be]
 
 /-- With public rack and epoch fixed, admission determines the entire receipt,
 including every payload byte. No prover-selected wire payload remains. -/
