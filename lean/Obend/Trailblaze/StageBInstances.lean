@@ -4741,6 +4741,34 @@ theorem stageB_clustergov_ozaki_step_sealed
 
 /-! ## §4. Unified 7-Organ Multi-Turn Cathedral Carrier & `stageB_cathedral_seven_organ_trace_sealed` -/
 
+/-- Canonical Organ O1 `Mandate` + `Invocation` witness for non-vacuous 7-organ execution. -/
+def canonicalStageBMandate : Obend.Vault.Mandate.Mandate where
+  id        := 1
+  grant     := .root ⟨"cathedral-coordinator", 1⟩ "cathedral.apex"
+  principal := ⟨"cathedral-coordinator", 1⟩
+  target    := "cathedral.apex"
+  rights    := [.read, .write, .call]
+  budget    := 100
+  cells     := [0, 1]
+  expiresAt := 100
+  caveat    := Obend.Vault.Mandate.Caveat.any
+
+def canonicalStageBInvocation : Obend.Vault.Mandate.Invocation where
+  principal    := ⟨"cathedral-coordinator", 1⟩
+  target       := "cathedral.apex"
+  requiredAuth := [.call]
+  cost         := 10
+  cell         := 0
+  epoch        := 1
+  method       := 1
+
+def canonicalStageBBiscuitRoot : Obend.Polis.Block where
+  rights  := 0x0F
+  caveat  := .const true
+  holder  := ByteArray.mk #[0xAA]
+  channel := ByteArray.mk #[0x01, 0x02]
+
+
 /-- Unified 7-organ Cathedral turn coupling:
     - **O1 (`VaultLedger`)**: `Obend.Vault.Mandate.Mandate` + `Invocation` authorization,
     - **O2 (`RepairSpine`)**: `SilverWorkflow.toJudge` across `Polis` + `LeanFpga` + `CathedralApex`,
@@ -4749,6 +4777,7 @@ theorem stageB_clustergov_ozaki_step_sealed
     - **O5 (`ZkStripe`)** & **O6 (`ClusterGov`)**: `CathedralGovernanceTurn`,
     - **O7 (`LeanFpga`)**: `LeanFpgaTurn`. -/
 structure StageBSevenOrganTurn where
+  newRevocations : List Nat := []
   vaultMandate    : Obend.Vault.Mandate.Mandate
   vaultInvocation : Obend.Vault.Mandate.Invocation
   polisTurn       : ConcretePolisTurn
@@ -4768,7 +4797,9 @@ structure StageBSevenOrganState where
   polisState     : PolisSessionState deosCapPCA.Code
   cathedralState : CathedralTraceState
   remVaultBudget : Nat
-  deriving DecidableEq
+  vaultMandate : Obend.Vault.Mandate.Mandate := canonicalStageBMandate
+  biscuitRoot : Obend.Polis.Block := canonicalStageBBiscuitRoot
+  biscuitRevoked : Obend.Polis.RevokedSet := Obend.Polis.RevokedSet.empty
 
 /-- Check Organ O1 + Organ O4 authorization on a single `StageBSevenOrganTurn`. -/
 def checkTurnMandateAndBiscuit (turn : StageBSevenOrganTurn) : Bool :=
@@ -4778,11 +4809,47 @@ def checkTurnMandateAndBiscuit (turn : StageBSevenOrganTurn) : Bool :=
   | none => false
   | some acc => Obend.Polis.authorize acc turn.requiredRights
 
+/-- Revocations accumulate before this turn's authorization. Authority is owned by the state. -/
+def sessionRevocations (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn) : Obend.Polis.RevokedSet :=
+  turn.newRevocations.foldl Obend.Polis.RevokedSet.insert st.biscuitRevoked
+
+def checkPinnedSessionAuthority (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn) : Bool :=
+  decide (st.remVaultBudget ≤ st.vaultMandate.budget) &&
+  Obend.Vault.Mandate.checkInvocation st.vaultMandate turn.vaultInvocation &&
+  match Obend.Polis.foldChain (sessionRevocations st turn) turn.biscuitEnv st.biscuitRoot turn.biscuitHops with
+  | none => false
+  | some acc => Obend.Polis.authorize acc turn.requiredRights
+
+theorem checkPinnedSessionAuthority_revoked_prefix
+    (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn)
+    (pre ext : Array Obend.Polis.Block)
+    (hHops : turn.biscuitHops = pre ++ ext)
+    (hRevoked : st.biscuitRevoked.contains
+      (Obend.Polis.credNul (Obend.Polis.lineageOf st.biscuitRoot pre.toList)) = true) :
+    checkPinnedSessionAuthority st turn = false := by
+  have hPersist := Obend.Polis.RevokedSet.contains_foldl_insert st.biscuitRevoked
+    turn.newRevocations _ hRevoked
+  have hNone : Obend.Polis.foldChain (sessionRevocations st turn) turn.biscuitEnv
+      st.biscuitRoot turn.biscuitHops = none := by
+    cases hf : Obend.Polis.foldChain (sessionRevocations st turn) turn.biscuitEnv
+        st.biscuitRoot turn.biscuitHops with
+    | none => rfl
+    | some acc =>
+      rw [hHops] at hf
+      have hlive := (Obend.Polis.foldChain_prefix_live _ _ _ pre ext acc hf).1
+      change (!((sessionRevocations st turn).contains _)) = true at hlive
+      change (sessionRevocations st turn).contains _ = true at hPersist
+      rw [hPersist] at hlive
+      cases hlive
+  simp [checkPinnedSessionAuthority, hNone]
+
 /-- Constructive named refusal for a 7-organ multi-turn Cathedral transition. -/
 def refuseStageBCathedralStep
     (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn) : Option String :=
   if !checkTurnMandateAndBiscuit turn then
     some "refused: vault-mandate-or-zkbiscuit-unauthorized"
+  else if !checkPinnedSessionAuthority st turn then
+    some "refused: pinned-session-authority"
   else if !decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) then
     some "refused: vault-budget-exhausted"
   else if !checkLeanFpgaTurn turn.fpgaTurn then
@@ -4800,6 +4867,8 @@ def stepStageBCathedral
     (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn) : Option StageBSevenOrganState :=
   if !checkTurnMandateAndBiscuit turn then
     none
+  else if !checkPinnedSessionAuthority st turn then
+    none
   else if !decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) then
     none
   else if !checkLeanFpgaTurn turn.fpgaTurn then
@@ -4811,8 +4880,28 @@ def stepStageBCathedral
       some
         { polisState     := polisNext
         , cathedralState := cathNext
-        , remVaultBudget := st.remVaultBudget - turn.vaultInvocation.cost }
+        , remVaultBudget := st.remVaultBudget - turn.vaultInvocation.cost
+        , vaultMandate := st.vaultMandate, biscuitRoot := st.biscuitRoot
+        , biscuitRevoked := sessionRevocations st turn }
     | _, _ => none
+
+theorem stepStageBCathedral_authority_persistent
+    (st next : StageBSevenOrganState) (turn : StageBSevenOrganTurn)
+    (h : stepStageBCathedral st turn = some next) :
+    next.vaultMandate = st.vaultMandate ∧ next.biscuitRoot = st.biscuitRoot ∧
+    next.biscuitRevoked = sessionRevocations st turn := by
+  unfold stepStageBCathedral at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · cases hp : stepPolisSession st.polisState turn.polisTurn <;>
+            cases hc : stepCathedralTrace st.cathedralState turn.cathedralTurn <;>
+            simp_all
 
 /-- Replay an arbitrary-length multi-turn 7-organ Cathedral trace `List StageBSevenOrganTurn`. -/
 def runStageBCathedralTrace
@@ -4822,6 +4911,42 @@ def runStageBCathedralTrace
     match stepStageBCathedral init t with
     | none => none
     | some st' => runStageBCathedralTrace st' ts
+
+/-- Every prefix preserves pinned authority and every already revoked identifier. -/
+theorem runStageBCathedralTrace_authority_persistent
+    (init final : StageBSevenOrganState) (turns : List StageBSevenOrganTurn)
+    (h : runStageBCathedralTrace init turns = some final) :
+    final.vaultMandate = init.vaultMandate ∧ final.biscuitRoot = init.biscuitRoot ∧
+    ∀ id, init.biscuitRevoked.contains id = true → final.biscuitRevoked.contains id = true := by
+  induction turns generalizing init with
+  | nil => cases h; exact ⟨rfl, rfl, fun _ hi => hi⟩
+  | cons turn rest ih =>
+    unfold runStageBCathedralTrace at h
+    cases hs : stepStageBCathedral init turn with
+    | none => rw [hs] at h; cases h
+    | some next =>
+      rw [hs] at h
+      obtain ⟨hm, hr, hv⟩ := stepStageBCathedral_authority_persistent init next turn hs
+      obtain ⟨im, ir, iv⟩ := ih next h
+      refine ⟨im.trans hm, ir.trans hr, ?_⟩
+      intro id hi
+      apply iv
+      rw [hv]
+      exact Obend.Polis.RevokedSet.contains_foldl_insert _ _ _ hi
+
+/-- Revocation cannot be bypassed after any number of intervening accepted turns. -/
+theorem stageB_revocation_non_bypass
+    (init later : StageBSevenOrganState) (prefix : List StageBSevenOrganTurn)
+    (turn : StageBSevenOrganTurn) (pre ext : Array Obend.Polis.Block)
+    (hRun : runStageBCathedralTrace init prefix = some later)
+    (hHops : turn.biscuitHops = pre ++ ext)
+    (hRevoked : init.biscuitRevoked.contains
+      (Obend.Polis.credNul (Obend.Polis.lineageOf init.biscuitRoot pre.toList)) = true) :
+    checkPinnedSessionAuthority later turn = false := by
+  obtain ⟨_, hr, hmono⟩ := runStageBCathedralTrace_authority_persistent init later prefix hRun
+  apply checkPinnedSessionAuthority_revoked_prefix later turn pre ext hHops
+  rw [hr]
+  exact hmono _ hRevoked
 
 /-- Cumulative Organ O1 `Mandate` cost across a multi-turn 7-organ trace. -/
 def totalSevenOrganVaultCost : List StageBSevenOrganTurn → Nat
@@ -4835,50 +4960,31 @@ theorem stepStageBCathedral_skip_implies_violation
     (hSkip : stepStageBCathedral st turn = none) :
     (refuseStageBCathedralStep st turn).isSome = true ∧
     (checkTurnMandateAndBiscuit turn = false ∨
+     checkPinnedSessionAuthority st turn = false ∨
      st.remVaultBudget < turn.vaultInvocation.cost ∨
      checkLeanFpgaTurn turn.fpgaTurn = false ∨
      stepPolisSession st.polisState turn.polisTurn = none ∨
      stepCathedralTrace st.cathedralState turn.cathedralTurn = none) := by
-  unfold stepStageBCathedral at hSkip
-  unfold refuseStageBCathedralStep
-  cases hMB : checkTurnMandateAndBiscuit turn with
-  | false =>
-    exact ⟨rfl, Or.inl rfl⟩
-  | true =>
-    rw [hMB] at hSkip
-    simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
-    cases hVB : decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) with
-    | false =>
-      have hLt : st.remVaultBudget < turn.vaultInvocation.cost := by
-        have hNotLe := of_decide_eq_false hVB
-        omega
-      exact ⟨rfl, Or.inr (Or.inl hLt)⟩
-    | true =>
-      rw [hVB] at hSkip
-      simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
-      cases hFpga : checkLeanFpgaTurn turn.fpgaTurn with
-      | false =>
-        exact ⟨rfl, Or.inr (Or.inr (Or.inl rfl))⟩
-      | true =>
-        rw [hFpga] at hSkip
-        simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
-        cases hPol : stepPolisSession st.polisState turn.polisTurn with
-        | none =>
-          exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inl rfl)))⟩
-        | some pNext =>
-          rw [hPol] at hSkip
-          cases hCath : stepCathedralTrace st.cathedralState turn.cathedralTurn with
-          | none =>
-            exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inr rfl)))⟩
-          | some cNext =>
-            rw [hCath] at hSkip
-            cases hSkip
+  unfold stepStageBCathedral refuseStageBCathedralStep at *
+  cases hMB : checkTurnMandateAndBiscuit turn <;>
+    cases hPin : checkPinnedSessionAuthority st turn <;>
+    cases hCost : decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) <;>
+    cases hFpga : checkLeanFpgaTurn turn.fpgaTurn <;>
+    simp_all only [Bool.not_true, Bool.not_false, Bool.true_eq_false, Bool.false_eq_true,
+      ↓reduceIte, Option.isSome_some, or_true, true_or, or_self]
+  · have := of_decide_eq_false hCost
+    omega
+  · have := of_decide_eq_false hCost
+    omega
+  · cases hPol : stepPolisSession st.polisState turn.polisTurn <;>
+      cases hCath : stepCathedralTrace st.cathedralState turn.cathedralTurn <;> simp_all
 
 /-- Converse step completeness: every 7-organ turn satisfying O1–O7 gates advances `stepStageBCathedral`. -/
 theorem stepStageBCathedral_complete
     (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn)
     (polisNext : PolisSessionState deosCapPCA.Code)
     (cathNext : CathedralTraceState)
+    (hPinned : checkPinnedSessionAuthority st turn = true)
     (hMB : checkTurnMandateAndBiscuit turn = true)
     (hVB : turn.vaultInvocation.cost ≤ st.remVaultBudget)
     (hFpga : checkLeanFpgaTurn turn.fpgaTurn = true)
@@ -4888,9 +4994,11 @@ theorem stepStageBCathedral_complete
       some
         { polisState     := polisNext
         , cathedralState := cathNext
-        , remVaultBudget := st.remVaultBudget - turn.vaultInvocation.cost } := by
+        , remVaultBudget := st.remVaultBudget - turn.vaultInvocation.cost
+        , vaultMandate := st.vaultMandate, biscuitRoot := st.biscuitRoot
+        , biscuitRevoked := sessionRevocations st turn } := by
   unfold stepStageBCathedral
-  rw [hMB, decide_eq_true hVB, hFpga, hPol, hCath]
+  rw [hMB, hPinned, decide_eq_true hVB, hFpga, hPol, hCath]
   rfl
 
 private theorem runStageBCathedralTrace_decompose
@@ -4923,43 +5031,48 @@ private theorem runStageBCathedralTrace_decompose
       | true =>
         rw [hMB] at hStep
         simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
-        cases hVB : decide (t.vaultInvocation.cost ≤ init.remVaultBudget) with
-        | false => rw [hVB] at hStep; cases hStep
+        cases hPinned : checkPinnedSessionAuthority init t with
+        | false => rw [hPinned] at hStep; cases hStep
         | true =>
-          rw [hVB] at hStep
+          rw [hPinned] at hStep
           simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
-          have hCostLe : t.vaultInvocation.cost ≤ init.remVaultBudget := of_decide_eq_true hVB
-          cases hFpga : checkLeanFpgaTurn t.fpgaTurn with
-          | false => rw [hFpga] at hStep; cases hStep
+          cases hVB : decide (t.vaultInvocation.cost ≤ init.remVaultBudget) with
+          | false => rw [hVB] at hStep; cases hStep
           | true =>
-            rw [hFpga] at hStep
+            rw [hVB] at hStep
             simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
-            cases hPol : stepPolisSession init.polisState t.polisTurn with
-            | none => rw [hPol] at hStep; cases hStep
-            | some pNext =>
-              rw [hPol] at hStep
-              cases hCath : stepCathedralTrace init.cathedralState t.cathedralTurn with
-              | none => rw [hCath] at hStep; cases hStep
-              | some cNext =>
-                rw [hCath] at hStep
-                injection hStep with hSt₁Eq
-                subst hSt₁Eq
-                obtain ⟨ihPol, ihCath, ihVault, ihAll⟩ := ih _ hRun
-                refine ⟨?_, ?_, ?_, ?_⟩
-                · unfold ValidTrace runPolisTrace
-                  dsimp only [List.map]
-                  rw [hPol]
-                  exact ihPol
-                · unfold runCathedralTrace
-                  dsimp only [List.map]
-                  rw [hCath]
-                  exact ihCath
-                · dsimp only [totalSevenOrganVaultCost] at ihVault ⊢
-                  omega
-                · intro u hu
-                  rcases List.mem_cons.mp hu with rfl | huRest
-                  · exact ⟨hMB, hFpga⟩
-                  · exact ihAll u huRest
+            have hCostLe : t.vaultInvocation.cost ≤ init.remVaultBudget := of_decide_eq_true hVB
+            cases hFpga : checkLeanFpgaTurn t.fpgaTurn with
+            | false => rw [hFpga] at hStep; cases hStep
+            | true =>
+              rw [hFpga] at hStep
+              simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
+              cases hPol : stepPolisSession init.polisState t.polisTurn with
+              | none => rw [hPol] at hStep; cases hStep
+              | some pNext =>
+                rw [hPol] at hStep
+                cases hCath : stepCathedralTrace init.cathedralState t.cathedralTurn with
+                | none => rw [hCath] at hStep; cases hStep
+                | some cNext =>
+                  rw [hCath] at hStep
+                  injection hStep with hSt₁Eq
+                  subst hSt₁Eq
+                  obtain ⟨ihPol, ihCath, ihVault, ihAll⟩ := ih _ hRun
+                  refine ⟨?_, ?_, ?_, ?_⟩
+                  · unfold ValidTrace runPolisTrace
+                    dsimp only [List.map]
+                    rw [hPol]
+                    exact ihPol
+                  · unfold runCathedralTrace
+                    dsimp only [List.map]
+                    rw [hCath]
+                    exact ihCath
+                  · dsimp only [totalSevenOrganVaultCost] at ihVault ⊢
+                    omega
+                  · intro u hu
+                    rcases List.mem_cons.mp hu with rfl | huRest
+                    · exact ⟨hMB, hFpga⟩
+                    · exact ihAll u huRest
 
 private theorem checkPolisTurn_microkitIsolation
     {P : PCA} {A B : Assembly P} {turn : PolisTurn A B}
@@ -5213,33 +5326,6 @@ theorem stageB_cathedral_seven_organ_trace_sealed
 
 /-! ## §5. Constructive Non-Vacuity & Multi-Turn Inhabitedness Witnesses -/
 
-/-- Canonical Organ O1 `Mandate` + `Invocation` witness for non-vacuous 7-organ execution. -/
-def canonicalStageBMandate : Obend.Vault.Mandate.Mandate where
-  id        := 1
-  grant     := .root ⟨"cathedral-coordinator", 1⟩ "cathedral.apex"
-  principal := ⟨"cathedral-coordinator", 1⟩
-  target    := "cathedral.apex"
-  rights    := [.read, .write, .call]
-  budget    := 100
-  cells     := [0, 1]
-  expiresAt := 100
-  caveat    := Obend.Vault.Mandate.Caveat.any
-
-def canonicalStageBInvocation : Obend.Vault.Mandate.Invocation where
-  principal    := ⟨"cathedral-coordinator", 1⟩
-  target       := "cathedral.apex"
-  requiredAuth := [.call]
-  cost         := 10
-  cell         := 0
-  epoch        := 1
-  method       := 1
-
-def canonicalStageBBiscuitRoot : Obend.Polis.Block where
-  rights  := 0x0F
-  caveat  := .const true
-  holder  := ByteArray.mk #[0xAA]
-  channel := ByteArray.mk #[0x01, 0x02]
-
 /-- First constructive 7-organ turn witness inhabiting `stepStageBCathedral` and `runStageBCathedralTrace`. -/
 def sampleStageBSevenOrganTurn1 : StageBSevenOrganTurn where
   vaultMandate    := canonicalStageBMandate
@@ -5305,7 +5391,8 @@ theorem foldChain_emptyRevoked_oneHop
     genuine multi-turn 7-organ Cathedral trace across any initial `Mandate` vault budget
     `initVaultBudget ≥ 25` (`lean/uninhabited-premise-risk` witness). -/
 theorem runStageBCathedralTrace_two_turn_inhabited
-    (initVaultBudget : Nat) (hVault : 25 ≤ initVaultBudget) :
+    (initVaultBudget : Nat) (hVault : 25 ≤ initVaultBudget)
+    (hPinnedBudget : initVaultBudget ≤ 100) :
     ∃ final : StageBSevenOrganState,
       runStageBCathedralTrace
         { sampleStageBInitState with remVaultBudget := initVaultBudget }
@@ -5373,20 +5460,38 @@ theorem runStageBCathedralTrace_two_turn_inhabited
   have hVB₂ : sampleStageBSevenOrganTurn2.vaultInvocation.cost ≤ initVaultBudget - 10 := by
     change 15 ≤ initVaultBudget - 10
     omega
+  have hPin₁ : checkPinnedSessionAuthority
+      { sampleStageBInitState with remVaultBudget := initVaultBudget } sampleStageBSevenOrganTurn1 = true := by
+    unfold checkPinnedSessionAuthority sessionRevocations sampleStageBSevenOrganTurn1 sampleStageBInitState
+    dsimp only [List.foldl_nil]
+    rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
+    simp [canonicalStageBMandate, hPinnedBudget, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
+      Obend.Vault.Mandate.Caveat.any, Obend.Polis.authorize, Obend.Polis.subMask,
+      canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3]
+  have hPin₂ : checkPinnedSessionAuthority
+      { polisState := p₁, cathedralState := c₁, remVaultBudget := initVaultBudget - 10 }
+      sampleStageBSevenOrganTurn2 = true := by
+    unfold checkPinnedSessionAuthority sessionRevocations sampleStageBSevenOrganTurn2
+    dsimp only [List.foldl_nil]
+    rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
+    have hb : initVaultBudget - 10 ≤ 100 := by omega
+    simp [canonicalStageBMandate, hb, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
+      Obend.Vault.Mandate.Caveat.any, Obend.Polis.authorize, Obend.Polis.subMask,
+      canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3]
   have hStep₁ :
       stepStageBCathedral
         { sampleStageBInitState with remVaultBudget := initVaultBudget }
         sampleStageBSevenOrganTurn1 =
         some { polisState := p₁, cathedralState := c₁, remVaultBudget := initVaultBudget - 10 } :=
     stepStageBCathedral_complete _ sampleStageBSevenOrganTurn1 p₁ c₁
-      hBisc₁ hVB₁ rfl hPol₁ hCath₁
+      hPin₁ hBisc₁ hVB₁ rfl hPol₁ hCath₁
   have hStep₂ :
       stepStageBCathedral
         { polisState := p₁, cathedralState := c₁, remVaultBudget := initVaultBudget - 10 }
         sampleStageBSevenOrganTurn2 =
         some { polisState := p₂, cathedralState := c₂, remVaultBudget := (initVaultBudget - 10) - 15 } :=
     stepStageBCathedral_complete _ sampleStageBSevenOrganTurn2 p₂ c₂
-      hBisc₂ hVB₂ rfl hPol₂ hCath₂
+      hPin₂ hBisc₂ hVB₂ rfl hPol₂ hCath₂
   have hSub : (initVaultBudget - 10) - 15 = initVaultBudget - 25 := by omega
   refine ⟨{ polisState := p₂, cathedralState := c₂, remVaultBudget := (initVaultBudget - 10) - 15 },
           ?_, hSub, rfl, rfl⟩

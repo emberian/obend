@@ -193,7 +193,7 @@ example :
       final.remVaultBudget = 25 ∧
       final.cathedralState.weightsRoot = 0x55556666 ∧
       final.cathedralState.lastEpoch = 2 :=
-  runStageBCathedralTrace_two_turn_inhabited 50 (by decide)
+  runStageBCathedralTrace_two_turn_inhabited 50 (by decide) (by decide)
 
 private theorem sampleStageBTurn1_mb_ok :
     checkTurnMandateAndBiscuit sampleStageBSevenOrganTurn1 = true := by
