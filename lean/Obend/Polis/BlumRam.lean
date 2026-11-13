@@ -1385,11 +1385,29 @@ def sortMemOpsFuel : Nat → List MemOp → List MemOp
 def sortMemOpsByAddrTime (online : List MemOp) : List MemOp :=
   sortMemOpsFuel online.length online
 
+/-- Linear comparison of canonical sorted arrays; every operation field participates. -/
+def checkSortedBagEqExec (a b : Array MemOp) : Bool := a == b
+
+theorem checkSortedBagEqExec_toList (a b : Array MemOp) :
+    checkSortedBagEqExec a b = (a.toList == b.toList) := by
+  by_cases h : a = b
+  · subst b; simp [checkSortedBagEqExec]
+  · have ht : a.toList ≠ b.toList := fun he => h (Array.toList_inj.mp he)
+    exact (beq_false_of_ne h).trans (beq_false_of_ne ht).symm
+
+theorem checkSortedBagEqExec_counts (a b : Array MemOp)
+    (h : checkSortedBagEqExec a b = true) :
+    ∀ op, countMemOp op a.toList = countMemOp op b.toList := by
+  have he : a = b := beq_iff_eq.mp h
+  subst b
+  intro op
+  rfl
+
 /-- Fast $O(N \log N)$ `Array MemOp` Blum memory verifier (`Exec`): replaces $O(N^2)$ `countMemOp`
     bag scanning with single-pass `Array` checks and `sortMemOpsByAddrTime online.toList == offline.toList`. -/
 def verifyBlumMemoryFast (online offline : Array MemOp) : Bool :=
   checkChronologicalLogExec online &&
-  (sortMemOpsByAddrTime online.toList == offline.toList) &&
+  checkSortedBagEqExec (sortMemOpsByAddrTime online.toList).toArray offline &&
   checkLocalReadWriteConsistencyExec offline
 
 /-- Alias for `verifyBlumMemoryFast` (`Exec` fast path). -/
@@ -1939,6 +1957,7 @@ theorem checkBagPermutation_counts_eq (online offline : List MemOp) (op : MemOp)
 theorem verifyBlumMemoryFast_eq_verifyBlumMemory (online offline : Array MemOp) :
     verifyBlumMemoryFast online offline = verifyBlumMemory online.toList offline.toList := by
   unfold verifyBlumMemoryFast verifyBlumMemory
+  rw [checkSortedBagEqExec_toList, List.toList_toArray]
   rw [checkChronologicalLogExec_eq_spec, checkLocalReadWriteConsistencyExec_eq_spec]
   cases hChrono : checkChronologicalLog online.toList
   · rfl

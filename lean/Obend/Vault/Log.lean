@@ -1498,8 +1498,9 @@ def encodeRecordExec (Hb : Bytes → Bytes) (r : Record) : ByteArray :=
   LogBytes.encodeRecordBytes Hb r
 
 theorem encodeRecordExec_toList_eq_encodeRecord (Hb : Bytes → Bytes) (r : Record) :
-    (encodeRecordExec Hb r).data.toList = encodeRecord Hb r :=
-  LogBytes.encode_bytes_eq Hb r
+    (encodeRecordExec Hb r).data.toList = encodeRecord Hb r := by
+  rw [encodeRecordExec]
+  exact LogBytes.encode_bytes_eq Hb r
 
 /-- Append each record directly into one byte-array accumulator. -/
 def encodeAllExecFrom (Hb : Bytes → Bytes) (acc : ByteArray) : List Record → ByteArray
