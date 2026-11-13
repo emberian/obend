@@ -41,6 +41,7 @@ open Obend.Digest.Cshake256
 
 /-! Kernel mutation checks and axiom audits for the imported contracts. -/
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.KleenePred3.accepts_not3 by mutation
   Obend.Polis.KleenePred3.not3 := fun p =>
     match p with
@@ -48,6 +49,7 @@ open Obend.Digest.Cshake256
     | .false3 => .true3
     | .unbound3 => .true3
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.Caveat.accepts_stable by mutation
   Obend.Polis.KleenePred3.not3 := fun p =>
     match p with
@@ -55,6 +57,7 @@ open Obend.Digest.Cshake256
     | .false3 => .true3
     | .unbound3 => .true3
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.amplify_superadditive by mutation
   Obend.Polis.authorityStep := fun _ acc c =>
     match c with
@@ -62,47 +65,61 @@ open Obend.Digest.Cshake256
     | .sealBox _ p => acc ||| p
     | .unsealer _ => acc
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.CombTerm.abst_eval by mutation
   Obend.Polis.CombTerm.lamCode := @lamCodeNoIdentity
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.attenuate_monotone_rights by mutation
   Obend.Polis.attenuationOk := fun _ _ => true
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.revoke_ancestor_kills_cone by mutation
   Obend.Polis.lineageLive := fun _ _ => true
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.revoke_channel_kills by mutation
   Obend.Polis.channelLive := fun _ _ => true
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.RevokedSet.contains_iff by mutation
   Obend.Polis.RevokedSet.contains := fun s x => searchAux s.keys x s.keys.size 0 (s.keys.size / 2)
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.pinned_injective by mutation
   Obend.Polis.FullPinnedPublicInputs.ioBytes := fun pi =>
     encodeFrame pi.turnHash pi.capRoot ByteArray.empty
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.pinned_injective by mutation
   Obend.Polis.FullPinnedPublicInputs.relBytes := fun _ => ByteArray.empty
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.bindTurn_binds_or_collides by mutation
   Obend.Polis.FullPinnedPublicInputs.ioBytes := fun pi =>
     encodeFrame pi.turnHash pi.capRoot ByteArray.empty
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.verifyFastBlumArray_sound by mutation
   Obend.Polis.offReadOk := fun _ _ => true
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.verifyFastBlumArray_sound by mutation
   Obend.Polis.offOrder := fun _ _ => true
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.verifyFastBlumArray_sound by mutation
   Obend.Polis.permStep := fun _ _ i _ => some (i + 1)
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.verifyFastBlumArray_reads_last_write by mutation
   Obend.Polis.offReadOk := fun _ _ => true
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.verifyOpening_binds by mutation
   Obend.Polis.insertAt := fun _ _ sibs => sibs
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.verifyOpening_inhabited by mutation
   Obend.Polis.verifyOpening := fun _ _ _ _ => false
 
@@ -198,21 +215,13 @@ def partialEnv : Nat → KleenePred3
 #guard Caveat.eval partialEnv (.or (.atom 0) (.atom 2)) == .true3
 #guard Caveat.eval partialEnv (.and (.atom 1) (.atom 2)) == .false3
 
--- Tooth 1: let negation turn "unbound" into "true".
-
-
-
-
 -- A sealed box that opens without its unsealer.
-
 
 /-- Bracket abstraction that forgets the bound variable. -/
 def lamCodeNoIdentity {P : PCA} (x : Nat) (ρ : Nat → P.Code) : CombTerm P → P.Code
   | .var n => P.k1 (ρ n)
   | .const c => P.k1 c
   | .ap t u => P.s2 (lamCodeNoIdentity x ρ t) (lamCodeNoIdentity x ρ u)
-
-
 
 -- ============================================================================
 -- 2. `ZkBiscuit`: revoked set, chain fold, cone revocation, pinned inputs
@@ -303,22 +312,7 @@ def inputsCap : FullPinnedPublicInputs := { inputsA with capRoot := bytes [2, 3]
 #guard (bindTurn inputsA seedTr).transcript.state != (bindTurn inputsTurn seedTr).transcript.state
 #guard (bindTurn inputsA seedTr).transcript.state != (bindTurn inputsCap seedTr).transcript.state
 
--- Tooth 2: accept a hop without checking that it narrows; skip the lineage revocation check.
-
-
-
-
-
-
 -- A search that only looks at the left half.
-
-
--- Tooth 3: leave the revoked root, or the verifier key, out of what is bound.
-
-
-
-
-
 
 -- ============================================================================
 -- 3. `VerkleUmem`: RAM replay, the offline memory checker, the hash tree
@@ -415,18 +409,6 @@ example (r : ByteArray) (addr v₁ v₂ : UInt64) (p₁ p₂ : Array (Array Byte
         (fun x => OpeningHashed addr v₁ p₁ x ∨ OpeningHashed addr v₂ p₂ x) :=
   verifyOpening_binds h₁ h₂
 
--- Tooth 4: skip read consistency; skip the `(addr, clk)` order; skip the lookup in `online`.
-
-
-
-
-
-
-
-
 -- A node hash that drops the running tag.
-
-
-
 
 end Obend.Tests.PolisZkOcapVerkleTest

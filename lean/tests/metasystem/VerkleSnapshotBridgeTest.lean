@@ -59,6 +59,7 @@ set_option autoImplicit false
 
 /-! Kernel mutation checks and axiom audits for the imported contracts. -/
 
+#guard_msgs (drop info) in
 #tooth Obend.Vault.VerkleSnapshotBridge.digestLimbs256_injective by mutation
   Obend.Vault.VerkleSnapshotBridge.digestLimbs256 := fun d =>
     (UInt64.ofNat (Obend.Digest.HashBytes.ofBE (d.take 8)),
@@ -66,6 +67,7 @@ set_option autoImplicit false
      UInt64.ofNat (Obend.Digest.HashBytes.ofBE ((d.drop 16).take 8)),
      0)
 
+#guard_msgs (drop info) in
 #tooth Obend.Vault.VerkleSnapshotBridge.incrementalVerkleSnapshot_eq_fullCommit by mutation
   Obend.Vault.VerkleSnapshotBridge.updateChunkVerkleRoot := fun pp hCols s c _hc newChunk =>
     let chunks' := s.chunks.setIfInBounds c newChunk
@@ -79,11 +81,13 @@ set_option autoImplicit false
       verkleRoot := liftActiveToRoot act'
       ajtaiChunkRoots := aRoots' }
 
+#guard_msgs (drop info) in
 #tooth Obend.Vault.VerkleSnapshotBridge.cowBranch_shares_unchanged_verkleSubtrees by mutation
   Obend.Vault.VerkleSnapshotBridge.cowUpdateChunk := fun pp hCols s c hc newChunk =>
     let s1 := updateChunkVerkleRoot pp hCols (cowForkSnapshot s) c hc newChunk
     updateChunkVerkleRoot pp hCols s1 0 (by decide) newChunk
 
+#guard_msgs (drop info) in
 #tooth Obend.Vault.VerkleSnapshotBridge.cowBranch_shares_unchanged_verkleSubtrees by mutation
   Obend.Vault.VerkleSnapshotBridge.verifyDualChunkOpening := fun _pp _hCols snapshotRoot _ajtaiRoot c j val w =>
     if hlen : w.chunkSlotsList.length = 16 then
@@ -97,6 +101,7 @@ set_option autoImplicit false
       else false
     else false
 
+#guard_msgs (drop info) in
 #tooth Obend.Vault.VerkleSnapshotBridge.verifyDualChunkOpening_addr_exact by mutation
   Obend.Vault.VerkleSnapshotBridge.verifyDualChunkOpening := fun pp hCols snapshotRoot ajtaiRoot c j val w =>
     if hlen : w.chunkSlotsList.length = 16 then
@@ -111,23 +116,30 @@ set_option autoImplicit false
       else false
     else false
 
+#guard_msgs (drop info) in
 #tooth Obend.Vault.VerkleSnapshotBridge.snapshotRootPreimage_injective by mutation
   Obend.Vault.VerkleSnapshotBridge.snapshotRootPreimage := fun _n verkleRoot =>
     2 :: Obend.Polis.encodeFields [verkleRoot.data.toList]
 
+#guard_msgs (drop info) in
 #tooth Obend.Vault.VerkleSnapshotBridge.walCrashReplay_restores_verkle_consistent_world by mutation
   Obend.Vault.VerkleSnapshotBridge.recoverWalBytes := fun rawDisk => rawDisk
 
+#guard_msgs (drop info) in
 #tooth Obend.Polis.verifyOpening_binds by mutation
   Obend.Polis.insertAt := fun _ _ siblings => siblings
 
+#guard_msgs (drop info) in
 #tooth Obend.Vault.ExpVerkleAndOpenHash.verifyExpVerkleOpening_multiLevel by mutation
   Obend.Vault.ExpVerkleAndOpenHash.verifyExpVerkleOpening := fun _ _ _ _ _ => true
 
+#guard_msgs (drop info) in
 #print axioms extractSnapshotRootBreak
 
+#guard_msgs (drop info) in
 #print axioms extractSnapshotIndexBreak
 
+#guard_msgs (drop info) in
 #print axioms extractDualChunkOpeningBreak
 
 /-! ## 1. Single-Chunk Incremental `VerkleUmem` Update vs Full Scratch Commit -/
@@ -335,29 +347,6 @@ example : ∃ epochs S snap, epochs.length = 2 ∧
     ValidSnapshotTrace ppDefault defaultChunkAjtaiParams_cols bumpMintedMachine Replay.genesis epochs S snap :=
   validSnapshotTrace_multiEpoch_inhabited
 
-/-! ## 6. `#tooth` Mutation Kills -/
-
--- Tooth 1: Narrowing `digestLimbs256` to zero out the 4th 64-bit limb breaks 256-bit injectivity.
-
-
--- Tooth 2: Skipping the level-2 `groupRoots` update in `updateChunkVerkleRoot` breaks equivalence with `fullVerkleCommitChunks`.
-
-
--- Tooth 3: Clobbering unmodified chunk 0 during `cowUpdateChunk` breaks unmodified subtree sharing.
-
-
--- Tooth 4: Omitting the Ajtai modular commitment check in `verifyDualChunkOpening` breaks dual-assumption SIS extraction.
-
-
--- Tooth 6 (`[HIGH-04]`): dropping the `c < chunkCount` index bound lets `c + 2^60` alias `c`.
-
-
--- Tooth 7: dropping the chunk count from the snapshot-root preimage breaks root binding.
-
-
--- Tooth 5: Failing to truncate uncommitted trailing bytes in `recoverWalBytes` breaks crash-replay consistency.
-
-
 /-- The exact SIS alternative cannot be supplied by an unrelated matrix kernel vector. -/
 theorem exact_zero_difference_not_break (pp : Obend.Crypto.AjtaiParams) (w : DualChunkSlotOpening) :
     ¬ SISBreakOn pp (diffLimbs w w) := by
@@ -382,12 +371,5 @@ example (w : Obend.Vault.ChunkedWorld.World) :
       (hCols := defaultChunkAjtaiParams_cols) (s := s)
       (buildAuthenticatedSnapshot_wf defaultChunkAjtaiParams defaultChunkAjtaiParams_cols w)
       (by decide) (by decide)⟩
-
-
-
-
-
-
-
 
 end Obend.Tests.Metasystem.VerkleSnapshotBridgeTest

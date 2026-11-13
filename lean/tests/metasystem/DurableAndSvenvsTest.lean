@@ -67,76 +67,107 @@ set_option autoImplicit false
 
 /-! Kernel mutation checks and axiom audits for the imported contracts. -/
 
+#guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.rehydrate_binds_sealKey_epoch_or_collision by mutation
   Obend.Run.VaultDurableBridge.capFramePreimage := fun _ epoch nonce tbl =>
     Obend.Crypto.leb128 epoch.toNat ++ encodeCapTableBytes nonce tbl
 
+#guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.stale_epoch_refused by mutation
   Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun Hb key _ frame =>
     decide (key.size = 32 ∧ frame.sealBytes =
       computeCapFrameSeal Hb key frame.epoch frame.nonce frame.table)
 
+#guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.rehydrate_restores_nodup_slots by mutation
   Obend.Run.VaultDurableBridge.duplicateSlot := fun _ => none
 
+#guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip by mutation
   Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ _ _ => false
 
+#guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.forged_cap_index_refused by mutation
   Obend.Run.VaultDurableBridge.rehydrateVal := fun _ _ avail => .ok (.natural 0, avail, [])
 
+#guard_msgs (drop info) in
 #tooth Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal by mutation
   Obend.Judge.SvenvsCorrigibility.floorsContainAll := fun _ _ _ => true
 
+#guard_msgs (drop info) in
 #tooth Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe by mutation
   Obend.Judge.SvenvsCorrigibility.PcaEnvelope.select := fun _ pcc s => (pcc s).1
 
+#guard_msgs (drop info) in
 #print axioms Obend.Core.Ty.custody_isTransferable_not_isData
 
+#guard_msgs (drop info) in
 #print axioms Obend.Core.Ty.isTransferable_forbids_higher_order
 
+#guard_msgs (drop info) in
 #print axioms Obend.Run.VaultDurableBridge.segmented_append_rotates_across_boundary
 
+#guard_msgs (drop info) in
 #print axioms Obend.Run.VaultDurableBridge.parseFrom_committed_with_torn_frame
 
+#guard_msgs (drop info) in
 #print axioms Obend.Run.VaultDurableBridge.segmentedStep_refines_durable
 
+#guard_msgs (drop info) in
 #print axioms Obend.Run.VaultDurableBridge.segmented_torn_crash_recover_idempotent
 
+#guard_msgs (drop info) in
 #print axioms Obend.Run.VaultDurableBridge.segmented_exposed_once
 
+#guard_msgs (drop info) in
 #print axioms Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip
 
+#guard_msgs (drop info) in
 #print axioms Obend.Run.VaultDurableBridge.transfer_conserves_custody_exact
 
+#guard_msgs (drop info) in
 #print axioms Obend.Run.VaultDurableBridge.forged_cap_index_refused
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.safe_weakening_iff
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.authority_monotone
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.maxpol_transparent_run
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.override_iff_burned_bridge
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.angelic_recoverability_insufficient
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.self_mod_preserves_latency_B
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.disjoint_homes_empty_floor
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.spec_negotiation_safe
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.meta_amendment_safe
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.bedrock_is_eternal
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.pca_strictly_subsumes_static_shield
 
+#guard_msgs (drop info) in
 #print axioms Obend.Judge.SvenvsCorrigibility.nondisclosure_is_inert
 
 -- ============================================================================
@@ -793,12 +824,6 @@ theorem authority_epoch_slots_refused :
     forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
   decide
 
-
-
-
-
-
-
 -- Full-width natural identifiers have distinct encodings past the former 64-bit wrap boundary.
 example : encodeCapTableBytes 0 ⟨[⟨0, ⟨1, 2, []⟩⟩]⟩ ≠
     encodeCapTableBytes 0 ⟨[⟨0, ⟨1 + 2^64, 2, []⟩⟩]⟩ := by decide
@@ -890,43 +915,6 @@ example (ctrl : Nat → Nat) :
     enveloped (maxPol bridgeStep (CWithin bridgeStep bridgeRecov bridgeHome 3)) bridgeRecov ctrl 2 ≠ ctrl 2 ↔
       ¬ CWithin bridgeStep bridgeRecov bridgeHome 3 (bridgeStep 2 (ctrl 2)) :=
   override_iff_burned_bridge 3 ctrl bridgeHome_parked ⟨2, by omega, rfl⟩
-
--- ============================================================================
--- 4. Universal `#tooth` Mutation Verification & `#print axioms` Audit
--- ============================================================================
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 end Obend.Tests.DurableAndSvenvsTest
 
