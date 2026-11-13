@@ -3107,6 +3107,40 @@ structure DeltaNet where
   wires    : List DeltaWire
   deriving DecidableEq, Repr
 
+/-- Length-framed symbol encoding preserves the constructor namespace and every payload. -/
+def deltaTagBytes (tag : DeltaTag) : List UInt8 :=
+  let (kind, payload) : UInt8 × String := match tag with
+    | .opcode n => (0, toString n.toNat)
+    | .primitive n => (1, toString n.toNat)
+    | .literal n => (2, toString n)
+    | .symbol name => (3, name)
+    | .label name => (4, name)
+    | .hole n => (5, toString n)
+  kind :: Obend.Trailblaze.ZkStripe.frameBytes payload.toUTF8.data.toList
+
+def deltaPortBytes (p : PortEnd) : List UInt8 :=
+  Obend.Trailblaze.ZkStripe.frameBytes (toString p.nodeId).toUTF8.data.toList ++
+    [UInt8.ofNat p.portSlot.val]
+
+/-- All graph fields, including the symbol table, are committed with length framing. -/
+def deltaNetBytes (net : DeltaNet) : List UInt8 :=
+  let frame := Obend.Trailblaze.ZkStripe.frameBytes
+  let nodeBytes := fun n : DeltaNetNode =>
+    let (kind, payload) : UInt8 × Nat := match n with
+      | .era _ => (0, 0)
+      | .con _ tag => (1, tag.toNat)
+      | .dup _ label => (2, label.toNat)
+      | .replicator _ level => (3, level.toNat)
+    kind :: (frame (toString n.nodeId).toUTF8.data.toList ++
+      frame (toString payload).toUTF8.data.toList)
+  frame net.netName.toUTF8.data.toList ++ frame (deltaPortBytes net.rootPort) ++
+    frame (net.symbols.flatMap (fun tag => frame (deltaTagBytes tag))) ++
+    frame (net.nodes.flatMap (fun n => frame (nodeBytes n))) ++
+    frame (net.wires.flatMap (fun w => frame (deltaPortBytes w.lhs) ++ frame (deltaPortBytes w.rhs)))
+
+def deltaNetDigest (H : Obend.Digest.HashBytes.Hash) (net : DeltaNet) : List UInt8 :=
+  H (deltaNetBytes net)
+
 /-- Render a `PortEnd` as a deterministic HVM2 wire variable identifier. -/
 def renderPortVar (p : PortEnd) : String :=
   "w" ++ toString p.nodeId ++ "_" ++ toString p.portSlot.val
@@ -3131,7 +3165,7 @@ def emitHvmNetText (net : DeltaNet) : String :=
   let header := "@" ++ net.netName ++ " = " ++ renderPortVar net.rootPort
   let nodeLines := net.nodes.map (fun n => "  & " ++ emitNodeEquation net.symbols n)
   let wireLines := net.wires.map (fun w => "  & " ++ renderPortVar w.lhs ++ " ~ " ++ renderPortVar w.rhs)
-  String.intercalate "\n" (header :: (nodeLines ++ wireLines))
+  String.intercalate "\n" (("// framed graph " ++ reprStr (deltaNetBytes net)) :: header :: (nodeLines ++ wireLines))
 
 /-- Flatten all ports declared across `net.nodes`. -/
 def declaredPorts (net : DeltaNet) : List PortEnd :=
@@ -3483,7 +3517,7 @@ def spliceDeltaPorts (net : DeltaNet) (p q : PortEnd) : Option DeltaNet :=
 
 def deltaAux (id : Nat) (slot : Fin 3) : PortEnd := ⟨id, slot⟩
 
-def betaPrincipalPresent (net : DeltaNet) (a b : Nat) : Prop :=
+@[expose] def betaPrincipalPresent (net : DeltaNet) (a b : Nat) : Prop :=
   a ≠ b ∧
   net.symbols[(internSymbol net.symbols 0).toNat]? = some (0 : DeltaTag) ∧
   DeltaNetNode.con a (internSymbol net.symbols 0) ∈ net.nodes ∧
