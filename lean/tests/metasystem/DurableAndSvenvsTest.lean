@@ -484,11 +484,14 @@ def stepCapDiskFor (Hb : Bytes → Bytes) :=
   segmentedStep capLedger capBaseView (fun _ => capSpec) (fun _ => capAuth) (fun _ => capCtl)
     Hb capCodec capJ₀
 
-def stepCapDisk := stepCapDiskFor sampleIdentityHash
+/-- Byte-valued log-hash fixture; capability seals use the separate 256-bit fixture. -/
+def journalFixtureHash (bs : Bytes) : Bytes := bs ++ List.replicate 32 0x5a
+
+def stepCapDisk := stepCapDiskFor journalFixtureHash
 
 def traceCapDisk :=
   runSegmentedTrace capLedger capBaseView (fun _ => capSpec) (fun _ => capAuth) (fun _ => capCtl)
-    sampleIdentityHash capCodec capJ₀
+    journalFixtureHash capCodec capJ₀
 
 def aliceEv : CapJEv := .dispatch false ⟨false, ()⟩
 def bobEv : CapJEv := .dispatch true ⟨false, ()⟩
@@ -706,7 +709,7 @@ theorem segmented_rollover_crash_recovery_e2e_for (Hb : Bytes → Bytes) :
     (fun _ => capCtl) Hb capCodec testSegCap testSegCap_pos rfl rfl
     hReachRec hRecDisk hn List.mem_cons_self hio rfl ht rfl
 
-/-- Instantiation at `sampleIdentityHash`. -/
+/-- Instantiation at `journalFixtureHash`. -/
 theorem segmented_rollover_crash_recovery_e2e :
     ∃ (disk₁ disk₂ crashed recovered :
         SegmentedDState capLedger capSig capHole (fun _ => Unit) Unit Unit Empty Empty false)
@@ -720,13 +723,13 @@ theorem segmented_rollover_crash_recovery_e2e :
       stepCapDisk crashed (.submit (.world 1)) = .error .dirtyTailNeedsRecovery ∧
       stepCapDisk crashed .recover = .ok recovered ∧
       recovered = disk₂ ∧
-      recoverJournalAndOutbox sampleIdentityHash capCodec recovered = some ([aliceEv], [0]) ∧
+      recoverJournalAndOutbox journalFixtureHash capCodec recovered = some ([aliceEv], [0]) ∧
       stepCapDisk recovered (.submit bobEv) = .error (.host (.joint (.taken () false 0))) ∧
       stepCapDisk recovered (.expose 0) = .error (.host (.exposed 0)) ∧
       (∀ {n : Nat}, n ∈ ([0] : List Nat) → ∀ {buyer : Bool} {o : Σ b, capSig.Op b},
         ([aliceEv] : List CapJEv)[n]? = some (.dispatch buyer o) →
         capSpec.consumes o.2 = some () → n = 0 ∧ buyer = false) :=
-  segmented_rollover_crash_recovery_e2e_for sampleIdentityHash
+  segmented_rollover_crash_recovery_e2e_for journalFixtureHash
 
 -- ============================================================================
 -- 2. Capability-Carrying `.perform` Plans (`Ty.isTransferable` + `CapTable`)
@@ -792,6 +795,7 @@ def tamperedSealRejected : Bool :=
     | _ => false
   | .error _ => false
 
+set_option maxRecDepth 8192 in
 theorem test_forged_and_tampered_refused :
     forgedIndexRejected = true ∧
     tamperedSealRejected = true ∧
@@ -833,6 +837,7 @@ def duplicateSlotsRejected : Bool :=
   | .error (.missingOrDuplicateSlot 101) => true
   | _ => false
 
+set_option maxRecDepth 8192 in
 theorem authority_epoch_slots_refused :
     forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
   simp [forgedAuthorityRejected, staleEpochRejected, duplicateSlotsRejected, dehydrate, sampleSealKey,
