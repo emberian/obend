@@ -2028,7 +2028,8 @@ theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
     checkRdna2DispatchEnvelope d = true := by
   have _hd : (decodeRdnaSliceProgram 1 [0xbf810000]).isSome = true := by decide +kernel
   exact ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, by
-    simp only [checkRdna2DispatchEnvelope, ← Array.all_toList]
+    simp only [checkRdna2DispatchEnvelope, executeRdna2SliceReduction, rdna2DispatchInput,
+      decodeRdnaSliceProgram, decodeRdnaSliceInst, ← Array.all_toList]
     decide +kernel⟩
 
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
