@@ -766,7 +766,9 @@ theorem cap_transfer_roundtrip_passes :
     yieldPlanTy.isPlan = false ∧
     TVal.conforms yieldPlanVal yieldPlanTy = true ∧
     checkCapTransferRoundtrip = true :=
-  ⟨by decide, by decide, by decide, by decide⟩
+  by
+  refine ⟨by decide, by decide, by decide, ?_⟩
+  simp [checkCapTransferRoundtrip, dehydrate, sampleSealKey, ByteArray.size, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
 def forgedIndexRejected : Bool :=
   match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
@@ -791,7 +793,9 @@ theorem test_forged_and_tampered_refused :
     dehydrate sampleIdentityHash sampleSealKey 9 1 ⟨[⟨101, 7, [1]⟩]⟩
       (.record [("a", .cap 101 7), ("b", .cap 101 7)]) = .error (.missingOrDuplicateSlot 101) ∧
     dehydrate sampleIdentityHash sampleSealKey 9 1 yieldCustodyEnv (.natural 0) = .error (.droppedCustody 101) :=
-  ⟨by decide, by decide, rfl, rfl⟩
+  by
+  refine ⟨?_, ?_, rfl, rfl⟩ <;>
+    simp [forgedIndexRejected, tamperedSealRejected, dehydrate, sampleSealKey, ByteArray.size, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
 /-- A seal made by one authority must fail under a different host key. -/
 def forgedAuthorityRejected : Bool :=
@@ -822,7 +826,7 @@ def duplicateSlotsRejected : Bool :=
 
 theorem authority_epoch_slots_refused :
     forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
-  decide
+  simp [forgedAuthorityRejected, staleEpochRejected, duplicateSlotsRejected, dehydrate, sampleSealKey, ByteArray.size, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
 -- Full-width natural identifiers have distinct encodings past the former 64-bit wrap boundary.
 example : encodeCapTableBytes 0 ⟨[⟨0, ⟨1, 2, []⟩⟩]⟩ ≠
