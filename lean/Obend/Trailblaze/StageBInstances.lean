@@ -4968,7 +4968,7 @@ theorem stageB_revocation_non_bypass
       (Obend.Polis.credNul (Obend.Polis.lineageOf init.biscuitRoot pre.toList)) = true) :
     checkPinnedSessionAuthority later turn = false := by
   obtain ⟨_, hr, hmono⟩ := runStageBCathedralTrace_authority_persistent init later history hRun
-  apply checkPinnedSessionAuthority_revoked_history later turn pre ext hHops
+  apply checkPinnedSessionAuthority_revoked_prefix later turn pre ext hHops
   rw [hr]
   exact hmono _ hRevoked
 
