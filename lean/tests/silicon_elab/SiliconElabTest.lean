@@ -323,7 +323,7 @@ def brokenVerifyHybridScheduleSafety
 #print axioms Obend.Analysis.hybrid_flowpipe_safety_admits_contract
 #print axioms Obend.Vault.PhysicalProjection.physical_projection_deterministic
 #print axioms Obend.Vault.PhysicalProjection.physical_cnc_abbe_projection_sound
-#print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_projection_sound
+#print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_fixture
 #print axioms Obend.Vault.PhysicalProjection.physical_projection_doc_noninterference
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_residual_dpr_specialize_sound

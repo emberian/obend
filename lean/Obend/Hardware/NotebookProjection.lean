@@ -920,14 +920,10 @@ theorem physical_cnc_abbe_projection_sound (spec : CncToolpathViewportSpec) :
     rnea_gyroscopic_coriolis_power_zero spec.twist spec.momentum,
     by decide +kernel⟩
 
-/-- **Theorem (`physical_openusd_lifecycle_projection_sound`)**:
-1. Non-destructive OpenUSD `relocates` round-trips any `src ++ suffix` path (`usd_relocate_roundtrip_exact`),
-   `AffineForm1D` self-subtraction cancels noise symbols to `[0, 0]` (`affine_sub_self_exact_zero`),
-   and any verified `timeSamples` chain preserves `checkPartLifecycleInvariant` at `finalUsdState`.
-2. On `goldenOpenUsdViewportSpec` and `goldenStatorMultiphysicsSpec`, both the OpenUSD lifecycle
-   track and the coupled `thermalCoolingOde` continuous flowpipe are certified safe. -/
--- fixture kept (2026-11-04): used by tests/silicon_elab/SiliconElabTest.lean
-theorem physical_openusd_lifecycle_projection_sound :
+/-- The concrete OpenUSD and stator fixtures satisfy relocation, affine cancellation,
+    lifecycle, trajectory, and closed-program checks. Universal contracts are supplied by
+    `usd_relocate_roundtrip_exact` and `affine_sub_self_exact_zero`. -/
+theorem physical_openusd_lifecycle_fixture :
     let usd := goldenOpenUsdViewportSpec
     let stator := goldenStatorMultiphysicsSpec
     applyUsdRelocate usd.relocateDst usd.relocateSrc

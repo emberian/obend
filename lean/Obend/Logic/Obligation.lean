@@ -343,13 +343,12 @@ theorem lratPlantedBad_refused :
 
 def decodeLratObj (s : String) : Except String Obend.Judge.Lrat.Cnf :=
   match s with
-  | "[[1],[-1]]" | "p cnf 1 2\n1 0\n-1 0\n" | "contradiction" => .ok lratContradictionCnf
+  | "[[1],[-1]]" | "p cnf 1 2\n1 0\n-1 0\n" => .ok lratContradictionCnf
   | _ => Obend.Judge.Lrat.parseDimacs s
 
 def decodeLratCert (s : String) : Except String Obend.Judge.Lrat.Cert :=
   match s with
-  | "[{\"id\":3,\"clause\":[],\"hints\":[1,2]}]" | "3 0 1 2 0\n" | "valid" => .ok lratValidRefutationCert
-  | "[]" | "planted" => .ok lratPlantedBadCert
+  | "[{\"id\":3,\"clause\":[],\"hints\":[1,2]}]" | "3 0 1 2 0\n" => .ok lratValidRefutationCert
   | _ => Obend.Judge.Lrat.parseCert s
 
 /-- **The registered format `lrat@1` with kernel-exposed checker and decoders.** -/
@@ -393,9 +392,9 @@ theorem badClearing_refused :
 /-- Decode a `ClearingQuery` from JSON for `clearing@1`. -/
 def decodeClearingObj (s : String) : Except String Obend.Judge.ClearingQuery :=
   match s with
-  | "{\"market\":{\"currency\":0,\"goods\":1,\"epsilon\":0},\"orders\":[],\"transfers\":[]}" | "valid" =>
+  | "{\"market\":{\"currency\":0,\"goods\":1,\"epsilon\":0},\"orders\":[],\"transfers\":[]}" =>
     .ok validClearingQuery
-  | "{\"market\":{\"currency\":0,\"goods\":0,\"epsilon\":0},\"orders\":[],\"transfers\":[]}" | "bad" =>
+  | "{\"market\":{\"currency\":0,\"goods\":0,\"epsilon\":0},\"orders\":[],\"transfers\":[]}" =>
     .ok badClearingQuery
   | _ => do
     let j ← Json.parse s
@@ -426,9 +425,9 @@ def decodeClearingObj (s : String) : Except String Obend.Judge.ClearingQuery :=
 /-- Decode a clearing `Certificate` from JSON for `clearing@1`. -/
 def decodeClearingCert (s : String) : Except String Obend.Judge.Certificate :=
   match s with
-  | "{\"price\":10,\"potentialBid\":0,\"potentialAsk\":0,\"slacks\":[]}" | "valid" =>
+  | "{\"price\":10,\"potentialBid\":0,\"potentialAsk\":0,\"slacks\":[]}" =>
     .ok validClearingCert
-  | "{\"price\":0,\"potentialBid\":0,\"potentialAsk\":0,\"slacks\":[]}" | "bad" =>
+  | "{\"price\":0,\"potentialBid\":0,\"potentialAsk\":0,\"slacks\":[]}" =>
     .ok badClearingCert
   | _ => do
     let j ← Json.parse s
@@ -565,32 +564,24 @@ theorem badWorldCarry_refused :
   change checkWorldCarrySpec badWorldCarrySpec badWorldCarryWitness = .refused .silentCellDrop []
   decide +kernel
 
-def decodeWorldCarryObj (s : String) : Except String WorldCarrySpec :=
-  match s with
-  | "valid" => .ok validWorldCarrySpec
-  | "bad" => .ok badWorldCarrySpec
-  | _ => do
-    let j ← Json.parse s
-    let totalBook ← j.getObjValAs? Nat "totalBook"
-    let cellsArr ← (← j.getObjVal? "cells").getArr?
-    let cells ← cellsArr.toList.mapM fun cJson => do
-      let cid ← cJson.getObjValAs? String "id"
-      let bal ← cJson.getObjValAs? Nat "balance"
-      pure (cid, bal)
-    pure { cells, totalBook }
+def decodeWorldCarryObj (s : String) : Except String WorldCarrySpec := do
+  let j ← Json.parse s
+  let totalBook ← j.getObjValAs? Nat "totalBook"
+  let cellsArr ← (← j.getObjVal? "cells").getArr?
+  let cells ← cellsArr.toList.mapM fun cJson => do
+    let cid ← cJson.getObjValAs? String "id"
+    let bal ← cJson.getObjValAs? Nat "balance"
+    pure (cid, bal)
+  pure { cells, totalBook }
 
-def decodeWorldCarryCert (s : String) : Except String WorldCarryWitness :=
-  match s with
-  | "valid" => .ok validWorldCarryWitness
-  | "bad" => .ok badWorldCarryWitness
-  | _ => do
-    let j ← Json.parse s
-    let postBook ← j.getObjValAs? Nat "postBook"
-    let carriedArr ← (← j.getObjVal? "carriedCells").getArr?
-    let carriedCells ← carriedArr.toList.mapM (fun x => x.getStr?)
-    let dropsArr ← (← j.getObjVal? "namedDrops").getArr?
-    let namedDrops ← dropsArr.toList.mapM (fun x => x.getStr?)
-    pure { carriedCells, namedDrops, postBook }
+def decodeWorldCarryCert (s : String) : Except String WorldCarryWitness := do
+  let j ← Json.parse s
+  let postBook ← j.getObjValAs? Nat "postBook"
+  let carriedArr ← (← j.getObjVal? "carriedCells").getArr?
+  let carriedCells ← carriedArr.toList.mapM (fun x => x.getStr?)
+  let dropsArr ← (← j.getObjVal? "namedDrops").getArr?
+  let namedDrops ← dropsArr.toList.mapM (fun x => x.getStr?)
+  pure { carriedCells, namedDrops, postBook }
 
 /-- **The registered format `world-carry@1` for live world K-CARRY migrations.** -/
 def worldCarryFormat : Judge.Format where

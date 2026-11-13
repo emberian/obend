@@ -517,7 +517,7 @@ theorem sessionMonitor_catches_unbound_root (c : TurnCommitments) (st : Houyhnhn
     checkCredentialEval pol (receiptView s rc.witness) rc.witness &&
     decide (s.tableCommitment = commitTable P (complianceTable pol (receiptView s rc.witness) rc.witness))
 
-private def verifyDualSumcheckPIOPAlwaysTrue
+private def mutantDualSumcheckPIOPAlwaysTrue
     {_R : Type} [Obend.Crypto.CommRingOps _R] [DecidableEq _R]
     [Obend.Crypto.TranscriptChallenge _R] [Obend.Crypto.TranscriptEncode _R]
     (_P₁ _P₂ : Obend.Crypto.MultilinearPCS _R)
@@ -528,7 +528,7 @@ private def verifyDualSumcheckPIOPAlwaysTrue
 
 -- Standalone PIOP compliance soundness without `checkCredentialEval` pre-check.
 #tooth deployedDualSumcheckPIOP_compliance_sound by mutation
-  Obend.Crypto.verifyDualSumcheckPIOP := verifyDualSumcheckPIOPAlwaysTrue
+  Obend.Crypto.verifyDualSumcheckPIOP := mutantDualSumcheckPIOPAlwaysTrue
 
 -- An inner verifier that accepts every proof.
 #tooth execTurnSymbolic_vc_sound by mutation verifiableCredentialInnerVerifier :=

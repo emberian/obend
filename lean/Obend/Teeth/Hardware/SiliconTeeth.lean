@@ -224,9 +224,9 @@ def stepRetimedMacDropC (st : RetimedMacState) (a b c : BitVec 64) : RetimedMacS
 #tooth Obend.Hardware.Retiming.leiserson_saxe_shift_sound by mutation Obend.Hardware.Retiming.stepRetimedMac := stepRetimedMacDropC
 
 /-- 15. Broken `checkAllCombPathsMeetDelay` in `Obend.Hardware.Retiming` that ignores multi-hop combinational arrival bounds. -/
-def checkAllCombPathsAcceptAll (_cert : RetimingCert) (_maxDelay : Nat) (_edges : List SyncEdge) : Bool := true
+def mutantCheckAllCombPathsAcceptAll (_cert : RetimingCert) (_maxDelay : Nat) (_edges : List SyncEdge) : Bool := true
 
-#tooth Obend.Hardware.Retiming.checkAllCombPathsMeetDelay_sound by mutation Obend.Hardware.Retiming.checkAllCombPathsMeetDelay := checkAllCombPathsAcceptAll
+#tooth Obend.Hardware.Retiming.checkAllCombPathsMeetDelay_sound by mutation Obend.Hardware.Retiming.checkAllCombPathsMeetDelay := mutantCheckAllCombPathsAcceptAll
 
 /-- 16. Broken `encodeBitstreamFrame` in `Obend.Hardware.PlaceRoute` that drops `lutInit` when packing `frameData`. -/
 def encodeBitstreamFrameDropLut (cfg : TileFrameConfig) : BitstreamFrame where
@@ -236,9 +236,9 @@ def encodeBitstreamFrameDropLut (cfg : TileFrameConfig) : BitstreamFrame where
 #tooth Obend.Hardware.PlaceRoute.bitstream_decode_roundtrip_sound by mutation Obend.Hardware.PlaceRoute.encodeBitstreamFrame := encodeBitstreamFrameDropLut
 
 /-- 17. Broken `checkPlacementInjective` in `Obend.Hardware.PlaceRoute` that accepts colliding BEL placements. -/
-def checkPlacementInjectiveAcceptAll (_cells : List PlacedCell) : Bool := true
+def mutantCheckPlacementInjectiveAcceptAll (_cells : List PlacedCell) : Bool := true
 
-#tooth Obend.Hardware.PlaceRoute.checkPnrCertificate_sound by mutation Obend.Hardware.PlaceRoute.checkPlacementInjective := checkPlacementInjectiveAcceptAll
+#tooth Obend.Hardware.PlaceRoute.checkPnrCertificate_sound by mutation Obend.Hardware.PlaceRoute.checkPlacementInjective := mutantCheckPlacementInjectiveAcceptAll
 
 /-- 18. Broken `checkTrenchFillVoidFree` in `Obend.Hardware.DRC` that ignores top-corner bread-loafing pinch-off. -/
 def checkTrenchFillIgnoreOverhang (spec : TrenchFillSpec) : Bool :=
@@ -262,17 +262,17 @@ def ptm8BrokenAsAbba4 (p0 gx cxx pitch : Int) : Int :=
 #tooth Obend.Hardware.Analog.chiralityBalanced2D_cancels_full_hessian by mutation Obend.Hardware.Analog.chiralityBalanced2DMismatch := Obend.Hardware.Analog.crossCoupledQuad2DMismatch
 
 /-- 22. Broken `checkRtlSynth` in `Obend.Hardware.Judge` that accepts any `RtlModule` without checking `checkRtlModule`. -/
-def checkRtlSynthAcceptAll (_grade : Nat) (_expectedName : String) (_m : RtlModule) : Obend.Judge.Verdict HwClause :=
+def mutantCheckRtlSynthAcceptAll (_grade : Nat) (_expectedName : String) (_m : RtlModule) : Obend.Judge.Verdict HwClause :=
   .ok
 
-#tooth Obend.Hardware.Judge.badLoopRtlModule_refused by mutation Obend.Hardware.Judge.checkRtlSynth := checkRtlSynthAcceptAll
+#tooth Obend.Hardware.Judge.badLoopRtlModule_refused by mutation Obend.Hardware.Judge.checkRtlSynth := mutantCheckRtlSynthAcceptAll
 
 /-- 23. Broken `checkLogicInterface` in `Obend.Hardware.Datasheet` that forgets to verify `noiseMarginHigh`. -/
-def checkLogicInterfaceIgnoreHigh (drv rcv : LogicFamilySpec) (_pullupBoostMv minMarginMv : Int) : Bool :=
+def mutantCheckLogicInterfaceIgnoreHigh (drv rcv : LogicFamilySpec) (_pullupBoostMv minMarginMv : Int) : Bool :=
   decide (minMarginMv ≤ noiseMarginLow drv rcv) &&
   decide (drv.volMaxMv < rcv.vihMinMv)
 
-#tooth Obend.Hardware.Datasheet.checkLogicInterface_guarantees_valid_thresholds by mutation Obend.Hardware.Datasheet.checkLogicInterface := checkLogicInterfaceIgnoreHigh
+#tooth Obend.Hardware.Datasheet.checkLogicInterface_guarantees_valid_thresholds by mutation Obend.Hardware.Datasheet.checkLogicInterface := mutantCheckLogicInterfaceIgnoreHigh
 
 /-- 24. Broken `evalInaOutputUv` in `Obend.Hardware.Circuits` that forgets to apply `trimCmCancel`. -/
 def evalInaOutputUvNoTrim (p : InaParams) (vDiffUv vCmUv deltaTC : Int) : Int :=

@@ -33,7 +33,7 @@ probes, and `#print axioms` (`0 sorryAx`) across:
      `spatialPower_propagateSerialChainTwists_append`.
 4. `Obend.Vault.PhysicalProjection`:
    - `physical_projection_deterministic`, `physical_cnc_abbe_projection_sound`,
-     `physical_openusd_lifecycle_projection_sound`, `physical_projection_doc_noninterference`.
+     `physical_openusd_lifecycle_fixture`, `physical_projection_doc_noninterference`.
 -/
 
 @[expose] public section
@@ -170,7 +170,7 @@ theorem test_physical_projections_verified (spec : CncToolpathViewportSpec) :
        (Obend.Hardware.OpenUSD.finalUsdState usd.initSample usd.timeSamples) = true ∧
      Obend.Analysis.verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true ∧
      (Obend.Leaf.emit Obend.Hardware.UserspacePhysical.lcDrivesStatorUsdComp).closedB = true) :=
-  ⟨physical_cnc_abbe_projection_sound spec, physical_openusd_lifecycle_projection_sound⟩
+  ⟨physical_cnc_abbe_projection_sound spec, physical_openusd_lifecycle_fixture⟩
 
 /-! ## 4. `#tooth` Mutation-Killing Probes & `#print axioms` Verification (`0 sorryAx`) -/
 
@@ -207,7 +207,7 @@ def propagateSerialChainTwistsBroken : List SpatialTwist6D → SpatialTwist6D
 #print axioms Obend.Hardware.Kinematics.propagateSerialChainTwists_zipWith_add
 #print axioms Obend.Vault.PhysicalProjection.physical_projection_deterministic
 #print axioms Obend.Vault.PhysicalProjection.physical_cnc_abbe_projection_sound
-#print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_projection_sound
+#print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_fixture
 
 end Obend.Tests.Metasystem.CoupledMultiphysicsTest
 end
