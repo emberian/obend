@@ -25,6 +25,7 @@ import all Obend.Judge.SymbolicRegexBisim
 import all Obend.Trailblaze.CathedralApex
 
 public section
+set_option maxErrors 1
 namespace Obend.Tests.Metasystem.TrailblazeZkStripeGovTest
 
 open Obend.Digest.HashBytes (be)
