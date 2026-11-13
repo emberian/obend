@@ -24,7 +24,7 @@ under `#guard`.
 public import Obend.Tactic.Tooth
 public import Obend.Vault.Lsafe
 public import Obend.Judge.DecoAndCallTree
-public import Obend.Trailblaze.ZkStripe
+public import Obend.Trailblaze.CathedralApex
 import all Obend.Codec.DetCbor
 import all Obend.Crypto.BinaryTower256
 import all Obend.Judge.Class
@@ -33,7 +33,7 @@ import all Obend.Judge.VpaComplementAndJson
 import all Obend.Judge.TranscriptPolicy
 import all Obend.Judge.DecoAndCallTree
 import all Obend.Vault.Lsafe
-import all Obend.Trailblaze.ZkStripe
+import all Obend.Trailblaze.CathedralApex
 import all Obend.Tactic.Tooth
 public meta import Obend.Digest.Cshake256
 public meta import Obend.Crypto.BinaryTower256

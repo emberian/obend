@@ -43,7 +43,7 @@ import Obend.Hardware.Kinematics
 import Obend.SymbolicZk.CamUnifyArith
 import Obend.SymbolicZk.RankedFixpointArith
 import Obend.SymbolicZk.SemiringDatalog
-import Obend.Trailblaze.LeanFpga
+import Obend.Trailblaze.StageBInstances
 
 set_option autoImplicit false
 

@@ -28,13 +28,8 @@ public import Lean
 public import Obend.AssertAxioms
 public import Obend.Tactic.Tooth
 public import Obend.Trailblaze.StageBInstances
-import all Obend.Trailblaze.PolisBlum
-import all Obend.Trailblaze.Polis
-import all Obend.Trailblaze.LeanFpga
-import all Obend.Trailblaze.ZkStripe
-import all Obend.Trailblaze.ClusterGov
-import all Obend.Trailblaze.CathedralApex
 import all Obend.Trailblaze.StageBInstances
+import all Obend.Trailblaze.CathedralApex
 
 public section
 
@@ -52,7 +47,6 @@ set_option autoImplicit false
 
 /-! ## §1. Compile-Time `MetaM` `forallTelescope` Zero-`Obligations` Gate -/
 
-#check @instStageBPolisObligations
 #check @instStageBLeanFpgaObligations
 #check @stageB_polis_deos_trace_sealed
 #check @stageB_lean_fpga_rung2_to_rung5_sealed
@@ -101,7 +95,6 @@ run_cmd do
 
 /-! ## §2. Constructive Kernel Axiom Gate & Closed-Theorem Census Gate -/
 
-#print axioms Obend.Trailblaze.StageB.instStageBPolisObligations
 #print axioms Obend.Trailblaze.StageB.instStageBLeanFpgaObligations
 #print axioms Obend.Trailblaze.StageB.stageB_sel4_smmu_dma_noninterference
 #print axioms Obend.Trailblaze.StageB.stageB_tulva_renyi_smudging_hiding
@@ -121,7 +114,6 @@ run_cmd do
   -- Gate 2A: Strict constructive (`[propext, Quot.sound]`, `0 Classical.choice`, `0 _native`)
   let strictConstructive : List Name := [``propext, ``Quot.sound]
   let zeroClassicalRequired : List Name := [
-    ``Obend.Trailblaze.StageB.instStageBPolisObligations,
     ``Obend.Trailblaze.StageB.instStageBLeanFpgaObligations,
     ``Obend.Trailblaze.StageB.stageB_sel4_smmu_dma_noninterference,
     ``Obend.Trailblaze.StageB.stageB_tulva_renyi_smudging_hiding,

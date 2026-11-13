@@ -1,33 +1,2064 @@
 module
-/-
-# Obend.Trailblaze.CathedralApex — End-to-End Composition: `ZkStripe` → `Reasons` → `HyperLaw` → `ClusterGov`
-
-Whole-system interface composition module verifying unconditionally in Lean's kernel (`0 sorry`,
-`0` custom `axiom`s, `0` `Classical.choice`, and **`0` Stage-A `[...Obligations]` hypotheses**)
-that Organ O5 (`Obend.Trailblaze.ZkStripe`), `Obend.Reasons`, `Obend.Run.HyperLaw`, and Organ O6
-(`Obend.Trailblaze.ClusterGov`) compose across exact types:
-
-1. **Domain-Bound Multi-Hop `CallTree` Commitment Weld (`0` Obligations)**:
-   Wires `callTreeDigestBytes` (`List UInt8`) and `callTreeDigest` directly to
-   `AriadneStep.batchCallTreeRoot`, invoking `ZkStripe.callTreeDigestBytes_binding` to bind the
-   entire multi-hop HTTPS session tree (including every hop's `serverDomain`) up to `Collision H`,
-   while certifying `HopAudited` (`PredRE` + string-aware `ByteArray` VPA framing) across every
-   `hop ∈ allSessionNodes turn.batchCallTree`.
-2. **Overflow-Free Inference, Exact Collectives & Physical Energy Conservation**:
-   Composes `Sable` $F_O$ modular dot-product exactness (`intDotExec` / `intDot`), `Ozaki`
-   schedule-invariant `Array Int` collectives under `HyperLaw2NonInterference`, and
-   `PhysicalEnergyEnvelope` authority-pinned RTT & lower-curve shadow-FLOP bounds.
-3. **32-Byte (`BitVec 256`) In-Rack FPGA Boolean Verifier Receipt**:
-   Enforces `verifierReceipt256 : BitVec 256` and `receiptPayloadBytes.data.size ≤ 32`, replacing
-   multi-megabyte (18.8 MB) raw SNARK proof egress across the rack boundary with a deterministic
-   2-state boolean verifier commitment (`fpgaVerifierReceipt256_at_most_two_states`).
--/
-public import Obend.Trailblaze.ZkStripe
-public import Obend.Trailblaze.ClusterGov
+/-! Authenticated call-tree and cluster-governance composition. -/
+public import Obend.Judge.Class
 public import Obend.Reasons
+public import Obend.Digest.HashBytes
+public import Obend.Judge.SymbolicRegexBisim
+public import Obend.Judge.VpaComplementAndJson
+public import Obend.Judge.DecoAndCallTree
+import all Obend.Codec.DetCbor
+import all Obend.Judge.SymbolicRegexBisim
+import all Obend.Judge.VpaComplementAndJson
+import all Obend.Judge.DecoAndCallTree
 public import Obend.Run.HyperLaw
 
 public section
+
+
+namespace Obend.Trailblaze
+set_option autoImplicit false
+
+/-! ## 2. Executable Silver Workflows & `SilverSound` -/
+
+/-- Executable Trailblazer workflow class pairing a live runner `runValid`, constructive named
+    refusal `refuseInvalid`, declarative domain invariant `Spec`, and completeness domain `CompleteOn`. -/
+class SilverWorkflow (W : Type) where
+  /-- Independent declarative domain specification established by accepted runs. -/
+  Spec : W → Prop
+  /-- Admissible workflow domain on which `runValid` decides `Spec` completely. -/
+  CompleteOn : W → Prop
+  /-- Live executable Silver check (`true` iff the workflow succeeds end-to-end). -/
+  runValid : W → Bool
+  /-- Constructive named refusal (`none` when admitted, `some clauseName` when refused). -/
+  refuseInvalid : W → Option String
+  /-- Exact alignment between boolean acceptance and absence of named refusal. -/
+  refuse_iff : ∀ w : W, runValid w = true ↔ refuseInvalid w = none
+  /-- `SilverSound` law: every accepted Silver run satisfies `Spec`. -/
+  silverSound : ∀ w : W, runValid w = true → Spec w
+  /-- Every accepted Silver run belongs to the completeness domain `CompleteOn`. -/
+  silverCompleteDomain : ∀ w : W, runValid w = true → CompleteOn w
+  /-- Completeness law: every `CompleteOn` workflow input satisfying `Spec` is accepted by `runValid`. -/
+  silverComplete : ∀ w : W, CompleteOn w → Spec w → runValid w = true
+
+/-- Standalone propositional statement of the `SilverSound` law for workflow carrier `W`. -/
+def SilverSound (W : Type) [wf : SilverWorkflow W] : Prop :=
+  ∀ w : W, wf.runValid w = true → wf.Spec w
+
+/-- Every `SilverWorkflow` instance constructively inhabits `SilverSound`. -/
+theorem silverWorkflow_satisfies_silverSound
+    (W : Type) [wf : SilverWorkflow W] (w : W)
+    (hRun : wf.runValid w = true) :
+    wf.Spec w :=
+  wf.silverSound w hRun
+
+/-- Every admitted `SilverWorkflow` input produces `none` from `refuseInvalid`. -/
+theorem SilverWorkflow.admitted_no_refusal
+    {W : Type} [wf : SilverWorkflow W] (w : W)
+    (hRun : wf.runValid w = true) :
+    wf.refuseInvalid w = none :=
+  (wf.refuse_iff w).mp hRun
+
+/-- Every rejected `SilverWorkflow` input (`runValid w = false`) produces an explicit named refusal string. -/
+theorem SilverWorkflow.rejected_names_clause
+    {W : Type} [wf : SilverWorkflow W] (w : W)
+    (hRej : wf.runValid w = false) :
+    ∃ reason : String, wf.refuseInvalid w = some reason := by
+  cases hOpt : wf.refuseInvalid w with
+  | none =>
+    have hValid : wf.runValid w = true := (wf.refuse_iff w).mpr hOpt
+    rw [hValid] at hRej
+    cases hRej
+  | some reason =>
+    exact ⟨reason, rfl⟩
+
+/-- Product composition of two `SilverWorkflow`s: runs both checks, preserves completeness domains,
+    and reports the first named refusal. -/
+@[instance_reducible] def SilverWorkflow.prod (W₁ W₂ : Type)
+    [wf₁ : SilverWorkflow W₁] [wf₂ : SilverWorkflow W₂] :
+    SilverWorkflow (W₁ × W₂) where
+  Spec := fun p => wf₁.Spec p.1 ∧ wf₂.Spec p.2
+  CompleteOn := fun p => wf₁.CompleteOn p.1 ∧ wf₂.CompleteOn p.2
+  runValid := fun p => wf₁.runValid p.1 && wf₂.runValid p.2
+  refuseInvalid := fun p =>
+    match wf₁.refuseInvalid p.1 with
+    | some r => some r
+    | none => wf₂.refuseInvalid p.2
+  refuse_iff := by
+    intro ⟨w₁, w₂⟩
+    simp only [Bool.and_eq_true]
+    constructor
+    · rintro ⟨h₁, h₂⟩
+      rw [(wf₁.refuse_iff w₁).mp h₁]
+      exact (wf₂.refuse_iff w₂).mp h₂
+    · intro hNone
+      cases hOpt₁ : wf₁.refuseInvalid w₁ with
+      | some r =>
+        rw [hOpt₁] at hNone
+        cases hNone
+      | none =>
+        rw [hOpt₁] at hNone
+        exact ⟨(wf₁.refuse_iff w₁).mpr hOpt₁, (wf₂.refuse_iff w₂).mpr hNone⟩
+  silverSound := by
+    intro ⟨w₁, w₂⟩ hBoth
+    simp only [Bool.and_eq_true] at hBoth
+    exact ⟨wf₁.silverSound w₁ hBoth.1, wf₂.silverSound w₂ hBoth.2⟩
+  silverCompleteDomain := by
+    intro ⟨w₁, w₂⟩ hBoth
+    simp only [Bool.and_eq_true] at hBoth
+    exact ⟨wf₁.silverCompleteDomain w₁ hBoth.1, wf₂.silverCompleteDomain w₂ hBoth.2⟩
+  silverComplete := by
+    intro ⟨w₁, w₂⟩ ⟨hDom₁, hDom₂⟩ ⟨hSpec₁, hSpec₂⟩
+    simp only [Bool.and_eq_true]
+    exact ⟨wf₁.silverComplete w₁ hDom₁ hSpec₁, wf₂.silverComplete w₂ hDom₂ hSpec₂⟩
+
+/-- Lift any `SilverWorkflow W` into a grade-monotone, genuinely refuting `Obend.Judge W Unit`
+    whose `Fragment` is inhabited by every admitted workflow turn. -/
+@[instance_reducible] def SilverWorkflow.toJudge (W : Type) [wf : SilverWorkflow W] : Obend.Judge W Unit where
+  Clause := String
+  Meaning := fun w _cert => wf.CompleteOn w ∧ wf.Spec w
+  check := fun _grade w _cert =>
+    match wf.refuseInvalid w with
+    | none => .ok
+    | some clause => .refused clause []
+  sound := by
+    intro _r w _c hOk
+    cases hOpt : wf.refuseInvalid w with
+    | none =>
+      have hRun : wf.runValid w = true := (wf.refuse_iff w).mpr hOpt
+      exact ⟨wf.silverCompleteDomain w hRun, wf.silverSound w hRun⟩
+    | some clause =>
+      rw [hOpt] at hOk
+      cases hOk
+  refutes := fun _clause => true
+  refuted := by
+    intro _r w _c clause _p hCheck _hRef _c' ⟨hDom, hSpec⟩
+    have hRun : wf.runValid w = true := wf.silverComplete w hDom hSpec
+    have hNone : wf.refuseInvalid w = none := (wf.refuse_iff w).mp hRun
+    rw [hNone] at hCheck
+    cases hCheck
+  Fragment := fun w => wf.CompleteOn w ∧ wf.Spec w
+  complete := by
+    intro w ⟨hDom, hSpec⟩ _hEx
+    have hRun : wf.runValid w = true := wf.silverComplete w hDom hSpec
+    have hNone : wf.refuseInvalid w = none := (wf.refuse_iff w).mp hRun
+    refine ⟨(), 0, ?_⟩
+    rw [hNone]
+  mono := by
+    intro _r _r' _o _c _hle _hDec
+    rfl
+
+/-- Every admitted `SilverWorkflow` input inhabits `(SilverWorkflow.toJudge W).Fragment`. -/
+theorem SilverWorkflow.admitted_in_judge_fragment
+    {W : Type} [wf : SilverWorkflow W] (w : W)
+    (hRun : wf.runValid w = true) :
+    (SilverWorkflow.toJudge W).Fragment w :=
+  ⟨wf.silverCompleteDomain w hRun, wf.silverSound w hRun⟩
+
+/-- Every rejected `SilverWorkflow` input inside `CompleteOn` refutes `Spec`. -/
+theorem SilverWorkflow.rejected_refutes_spec
+    {W : Type} [wf : SilverWorkflow W] (w : W)
+    (hRej : wf.runValid w = false)
+    (hDom : wf.CompleteOn w) :
+    ¬ wf.Spec w := by
+  intro hSpec
+  have hRun : wf.runValid w = true := wf.silverComplete w hDom hSpec
+  rw [hRun] at hRej
+  cases hRej
+
+end Obend.Trailblaze
+
+
+namespace Obend.Trailblaze.ZkStripe
+
+open Obend.Digest.HashBytes (Hash ofBE be length_be be_injective Collision)
+open Obend.Judge.SymbolicRegex (Matches matchB matchB_iff lit anyByte absenceOf)
+open Obend.Judge.VpaJson (runFullJsonGrammar)
+
+export Obend.Judge.SymbolicRegex (PredRE)
+
+set_option autoImplicit false
+
+/-! ## §1. Policies are `SymbolicRegex.PredRE` -/
+
+/-- **The policy matcher**: `SymbolicRegex.matchB`, expression first. -/
+def matchesBytes (r : PredRE) (bs : List UInt8) : Bool := matchB bs r
+
+/-- The matcher decides the denotational semantics. -/
+theorem matchesBytes_iff (r : PredRE) (bs : List UInt8) :
+    matchesBytes r bs = true ↔ Matches bs r := matchB_iff bs r
+
+/-- **Complement is exact**, on every byte string. -/
+theorem matchesBytes_compl (r : PredRE) (bs : List UInt8) :
+    matchesBytes (.compl r) bs = !matchesBytes r bs := by
+  rw [Bool.eq_iff_iff, matchesBytes_iff, Bool.not_eq_true', ← Bool.not_eq_true, matchesBytes_iff]
+  show Matches bs (.neg r) ↔ ¬ Matches bs r
+  simp only [Matches]
+
+/-- **Intersection is conjunction**, on every byte string. -/
+theorem matchesBytes_inter (r₁ r₂ : PredRE) (bs : List UInt8) :
+    matchesBytes (.inter r₁ r₂) bs = (matchesBytes r₁ bs && matchesBytes r₂ bs) := by
+  rw [Bool.eq_iff_iff, Bool.and_eq_true, matchesBytes_iff, matchesBytes_iff, matchesBytes_iff]
+  simp only [Matches]
+
+/-- **Union is disjunction**, on every byte string. -/
+theorem matchesBytes_alt (r₁ r₂ : PredRE) (bs : List UInt8) :
+    matchesBytes (.alt r₁ r₂) bs = (matchesBytes r₁ bs || matchesBytes r₂ bs) := by
+  rw [Bool.eq_iff_iff, Bool.or_eq_true, matchesBytes_iff, matchesBytes_iff, matchesBytes_iff]
+  simp only [Matches]
+
+/-- The bytes begin with `pre`. -/
+def startsWith (pre : List UInt8) : PredRE := .cat (lit pre) (.star anyByte)
+
+/-- No factor of the bytes is `pat`. -/
+def forbidSubseq (pat : List UInt8) : PredRE := absenceOf (lit pat)
+
+/-! ## §2. Session nodes, 256-bit digests, binding -/
+
+/-- Kernel-reducible, `0`-axiom UTF-8 byte projection of `s : String` (`s.toByteArray.data.toList`). -/
+def utf8Bytes (s : String) : List UInt8 :=
+  s.toByteArray.data.toList
+
+/-- `utf8Bytes` is unconditionally injective (`0` axioms: pure `String.ofByteArray` structure
+    eta + proof irrelevance on `ByteArray.IsValidUTF8`). -/
+theorem utf8Bytes_injective {s₁ s₂ : String} (h : utf8Bytes s₁ = utf8Bytes s₂) : s₁ = s₂ := by
+  cases s₁ with
+  | ofByteArray b₁ v₁ =>
+    cases s₂ with
+    | ofByteArray b₂ v₂ =>
+      cases b₁ with
+      | mk a₁ =>
+        cases b₂ with
+        | mk a₂ =>
+          cases a₁ with
+          | mk l₁ =>
+            cases a₂ with
+            | mk l₂ =>
+              change l₁ = l₂ at h
+              subst h
+              rfl
+
+/-- A hop of a notarized HTTPS call tree as the audit sees it: the notary's 32-byte key, the
+server domain, the redacted request and response bytes, and the downstream sessions. -/
+inductive HttpsSessionNode where
+  | mk
+    (notaryKey        : BitVec 256)
+    (serverDomain     : String)
+    (redactedRequest  : List UInt8)
+    (redactedResponse : List UInt8)
+    (children         : List HttpsSessionNode)
+
+mutual
+def decEqHttpsSessionNode (a b : HttpsSessionNode) : Decidable (a = b) :=
+  match a, b with
+  | .mk h₁ d₁ req₁ resp₁ cs₁, .mk h₂ d₂ req₂ resp₂ cs₂ =>
+    if hh : h₁ = h₂ then
+      if hd : d₁ = d₂ then
+        if hreq : req₁ = req₂ then
+          if hresp : resp₁ = resp₂ then
+            match decEqHttpsSessionChildren cs₁ cs₂ with
+            | isTrue hcs => isTrue (by subst hh hd hreq hresp hcs; rfl)
+            | isFalse hncs => isFalse (by intro hEq; cases hEq; exact hncs rfl)
+          else isFalse (by intro hEq; cases hEq; exact hresp rfl)
+        else isFalse (by intro hEq; cases hEq; exact hreq rfl)
+      else isFalse (by intro hEq; cases hEq; exact hd rfl)
+    else isFalse (by intro hEq; cases hEq; exact hh rfl)
+termination_by structural a
+
+def decEqHttpsSessionChildren (xs ys : List HttpsSessionNode) : Decidable (xs = ys) :=
+  match xs, ys with
+  | [], [] => isTrue rfl
+  | [], _ :: _ => isFalse (by intro h; cases h)
+  | _ :: _, [] => isFalse (by intro h; cases h)
+  | x :: xs', y :: ys' =>
+    match decEqHttpsSessionNode x y with
+    | isTrue hx =>
+      match decEqHttpsSessionChildren xs' ys' with
+      | isTrue hxs => isTrue (by subst hx hxs; rfl)
+      | isFalse hnxs => isFalse (by intro h; cases h; exact hnxs rfl)
+    | isFalse hnx => isFalse (by intro h; cases h; exact hnx rfl)
+termination_by structural xs
+end
+
+instance : DecidableEq HttpsSessionNode := decEqHttpsSessionNode
+
+namespace HttpsSessionNode
+
+def notaryKey : HttpsSessionNode → BitVec 256
+  | .mk k _ _ _ _ => k
+
+def serverDomain : HttpsSessionNode → String
+  | .mk _ d _ _ _ => d
+
+def redactedRequest : HttpsSessionNode → List UInt8
+  | .mk _ _ req _ _ => req
+
+def redactedResponse : HttpsSessionNode → List UInt8
+  | .mk _ _ _ resp _ => resp
+
+def children : HttpsSessionNode → List HttpsSessionNode
+  | .mk _ _ _ _ cs => cs
+
+end HttpsSessionNode
+
+/-- Length-prefixed canonical framing (`len:4 ‖ payload`) for byte slices inside Merkle nodes. -/
+def frameBytes (xs : List UInt8) : List UInt8 :=
+  be 4 xs.length ++ xs
+
+/-- **Prefix-Free Framing Injectivity**: Two 32-bit length-prefixed slices (`len < 2^32 = 256^4`)
+    followed by arbitrary suffixes are equal iff both the slices and suffixes match identically. -/
+theorem frameBytes_append_inj {xs ys rest₁ rest₂ : List UInt8}
+    (hxs : xs.length < 2 ^ 32) (hys : ys.length < 2 ^ 32)
+    (hEq : frameBytes xs ++ rest₁ = frameBytes ys ++ rest₂) :
+    xs = ys ∧ rest₁ = rest₂ := by
+  have hPow : (2 : Nat) ^ 32 = 256 ^ 4 := by decide
+  unfold frameBytes at hEq
+  rw [List.append_assoc, List.append_assoc] at hEq
+  have hLenBe : (be 4 xs.length).length = (be 4 ys.length).length := by
+    rw [length_be, length_be]
+  obtain ⟨hBeEq, hTailEq⟩ := List.append_inj hEq hLenBe
+  have hLenEq : xs.length = ys.length :=
+    be_injective (hPow ▸ hxs) (hPow ▸ hys) hBeEq
+  exact List.append_inj hTailEq hLenEq
+
+/-- The preimage of one hop: a domain byte, then the notary key's 32 bytes, then the domain's
+UTF-8 bytes, the request and the response (each length-framed), then the children's framed
+digests. -/
+def sessionNodePreimage (notaryKey : BitVec 256) (domain : String)
+    (req resp childrenBytes : List UInt8) : List UInt8 :=
+  (0x01 : UInt8) ::
+  (be 32 notaryKey.toNat ++
+   (frameBytes (utf8Bytes domain) ++
+    (frameBytes req ++
+     (frameBytes resp ++
+      childrenBytes))))
+
+/-- **The preimage determines every field.** -/
+theorem sessionNodePreimage_inj
+    {k₁ k₂ : BitVec 256} {d₁ d₂ : String}
+    {req₁ req₂ resp₁ resp₂ kidsBytes₁ kidsBytes₂ : List UInt8}
+    (hd₁ : (utf8Bytes d₁).length < 2 ^ 32) (hd₂ : (utf8Bytes d₂).length < 2 ^ 32)
+    (hreq₁ : req₁.length < 2 ^ 32) (hreq₂ : req₂.length < 2 ^ 32)
+    (hresp₁ : resp₁.length < 2 ^ 32) (hresp₂ : resp₂.length < 2 ^ 32)
+    (hPre : sessionNodePreimage k₁ d₁ req₁ resp₁ kidsBytes₁ =
+            sessionNodePreimage k₂ d₂ req₂ resp₂ kidsBytes₂) :
+    k₁ = k₂ ∧ d₁ = d₂ ∧ req₁ = req₂ ∧ resp₁ = resp₂ ∧ kidsBytes₁ = kidsBytes₂ := by
+  unfold sessionNodePreimage at hPre
+  have hBody := (List.cons.inj hPre).2
+  have hPow : (2 : Nat) ^ 256 = 256 ^ 32 := by decide
+  have hBeLen : (be 32 k₁.toNat).length = (be 32 k₂.toNat).length := by rw [length_be, length_be]
+  obtain ⟨hBeK, hRest1⟩ := List.append_inj hBody hBeLen
+  have hKey : k₁ = k₂ :=
+    BitVec.eq_of_toNat_eq (be_injective (hPow ▸ k₁.isLt) (hPow ▸ k₂.isLt) hBeK)
+  obtain ⟨hDomBytes, hRest2⟩ := frameBytes_append_inj hd₁ hd₂ hRest1
+  obtain ⟨hReqEq, hRest3⟩ := frameBytes_append_inj hreq₁ hreq₂ hRest2
+  obtain ⟨hRespEq, hKidsBytes⟩ := frameBytes_append_inj hresp₁ hresp₂ hRest3
+  exact ⟨hKey, utf8Bytes_injective hDomBytes, hReqEq, hRespEq, hKidsBytes⟩
+
+mutual
+/-- Domain-bound recursive Merkle commitment bytes of an `HttpsSessionNode` over byte hash `H`:
+    commits the notary key, `serverDomain` UTF-8 bytes, `redactedRequest` bytes,
+    `redactedResponse` bytes, and framed child session subtree digests. -/
+def callTreeDigestBytes (H : Hash) (n : HttpsSessionNode) : List UInt8 :=
+  match n with
+  | .mk key domain req resp kids =>
+    H (sessionNodePreimage key domain req resp (callTreeChildrenDigestBytes H kids))
+termination_by structural n
+
+def callTreeChildrenDigestBytes (H : Hash) (ns : List HttpsSessionNode) : List UInt8 :=
+  match ns with
+  | [] => [(0x00 : UInt8)]
+  | c :: cs =>
+    (0x02 : UInt8) :: (frameBytes (callTreeDigestBytes H c) ++ callTreeChildrenDigestBytes H cs)
+termination_by structural ns
+end
+
+/-- **A 256-bit call-tree digest**: the bytes of the hash output (32 of them on a canonical tree). -/
+structure CallTreeDigest where
+  bytes : ByteArray
+  deriving DecidableEq
+
+/-- The big-endian reading of `2^k` bytes, by halves: five levels for a digest, so it stays
+shallow under reduction. -/
+def readHalves : Nat → List UInt8 → Nat
+  | 0, l => (l.headD 0).toNat
+  | k + 1, l => readHalves k (l.take (2 ^ k)) * 256 ^ (2 ^ k) + readHalves k (l.drop (2 ^ k))
+
+/-- The big-endian reading of the 32 bytes, for welding to a lineage field that is a natural. -/
+def CallTreeDigest.toNat (d : CallTreeDigest) : Nat := readHalves 5 d.bytes.data.toList
+
+instance : Coe CallTreeDigest Nat := ⟨CallTreeDigest.toNat⟩
+
+/-- **The digest of a call tree.** -/
+def callTreeDigest (H : Hash) (node : HttpsSessionNode) : CallTreeDigest :=
+  ⟨⟨(callTreeDigestBytes H node).toArray⟩⟩
+
+mutual
+/-- **Canonical**: at every hop slice lengths below `2^32` and a node digest exactly 32 bytes
+wide. -/
+def checkCanonicalSessionTree (H : Hash) (n : HttpsSessionNode) : Bool :=
+  match n with
+  | .mk key domain req resp kids =>
+    decide ((utf8Bytes domain).length < 2 ^ 32) &&
+    decide (req.length < 2 ^ 32) &&
+    decide (resp.length < 2 ^ 32) &&
+    decide ((H (sessionNodePreimage key domain req resp
+      (callTreeChildrenDigestBytes H kids))).length = 32) &&
+    checkCanonicalSessionChildren H kids
+termination_by structural n
+
+def checkCanonicalSessionChildren (H : Hash) (ns : List HttpsSessionNode) : Bool :=
+  match ns with
+  | [] => true
+  | c :: cs => checkCanonicalSessionTree H c && checkCanonicalSessionChildren H cs
+termination_by structural ns
+end
+
+def CanonicalSessionTree (H : Hash) (t : HttpsSessionNode) : Prop :=
+  checkCanonicalSessionTree H t = true
+
+/-- **A canonical tree's digest is 256 bits.** -/
+theorem canonical_digest_width {H : Hash} {t : HttpsSessionNode}
+    (h : checkCanonicalSessionTree H t = true) : (callTreeDigestBytes H t).length = 32 := by
+  cases t with
+  | mk k d req resp kids =>
+    simp only [checkCanonicalSessionTree, Bool.and_eq_true, decide_eq_true_eq] at h
+    simpa only [callTreeDigestBytes] using h.1.2
+
+theorem callTreeDigest_size {H : Hash} {t : HttpsSessionNode}
+    (h : checkCanonicalSessionTree H t = true) : (callTreeDigest H t).bytes.size = 32 := by
+  have hw := canonical_digest_width h
+  simpa [callTreeDigest, ByteArray.size] using hw
+
+mutual
+/-- The finite list of messages actually hashed by this tree. -/
+def treePreimages (H : Hash) : HttpsSessionNode → List (List UInt8)
+  | .mk k d req resp cs =>
+    sessionNodePreimage k d req resp (callTreeChildrenDigestBytes H cs) :: childrenPreimages H cs
+termination_by structural t => t
+def childrenPreimages (H : Hash) : List HttpsSessionNode → List (List UInt8)
+  | [] => []
+  | t :: ts => treePreimages H t ++ childrenPreimages H ts
+termination_by structural ts => ts
+end
+
+/-- Executable evidence: exact equal output bytes, between messages from the compared trees. -/
+structure TreeHashCollision (H : Hash) (inputs : List (List UInt8)) where
+  left : List UInt8
+  right : List UInt8
+  left_mem : left ∈ inputs
+  right_mem : right ∈ inputs
+  ne : left ≠ right
+  eq : H left = H right
+
+def TreeHashCollision.weaken {H : Hash} {xs ys : List (List UInt8)}
+    (c : TreeHashCollision H xs) (h : ∀ x ∈ xs, x ∈ ys) : TreeHashCollision H ys :=
+  ⟨c.left, c.right, h _ c.left_mem, h _ c.right_mem, c.ne, c.eq⟩
+
+mutual
+def callTreeDigest_binding_aux (H : Hash) (t₁ t₂ : HttpsSessionNode)
+    (hCan₁ : checkCanonicalSessionTree H t₁ = true)
+    (hCan₂ : checkCanonicalSessionTree H t₂ = true)
+    (hEq : callTreeDigestBytes H t₁ = callTreeDigestBytes H t₂) :
+    PSum (t₁ = t₂) (TreeHashCollision H (treePreimages H t₁ ++ treePreimages H t₂)) := by
+  cases t₁ with
+  | mk k₁ d₁ req₁ resp₁ cs₁ =>
+    cases t₂ with
+    | mk k₂ d₂ req₂ resp₂ cs₂ =>
+      simp only [checkCanonicalSessionTree, Bool.and_eq_true, decide_eq_true_eq] at hCan₁ hCan₂
+      obtain ⟨⟨⟨⟨hd₁, hr₁⟩, hs₁⟩, _⟩, hc₁⟩ := hCan₁
+      obtain ⟨⟨⟨⟨hd₂, hr₂⟩, hs₂⟩, _⟩, hc₂⟩ := hCan₂
+      let p₁ := sessionNodePreimage k₁ d₁ req₁ resp₁ (callTreeChildrenDigestBytes H cs₁)
+      let p₂ := sessionNodePreimage k₂ d₂ req₂ resp₂ (callTreeChildrenDigestBytes H cs₂)
+      if hp : p₁ = p₂ then
+        obtain ⟨hk, hd, hr, hs, hc⟩ := sessionNodePreimage_inj hd₁ hd₂ hr₁ hr₂ hs₁ hs₂ hp
+        match callTreeChildrenDigestBytes_binding_aux H cs₁ cs₂ hc₁ hc₂ hc with
+        | .inl he => exact .inl (by rw [hk, hd, hr, hs, he])
+        | .inr c => exact .inr (c.weaken (by
+            intro x hx
+            simp only [treePreimages, List.mem_append, List.mem_cons] at *
+            rcases hx with hx | hx
+            · exact Or.inl (Or.inr hx)
+            · exact Or.inr (Or.inr hx)))
+      else
+        exact .inr ⟨p₁, p₂, by simp [treePreimages, p₁], by simp [treePreimages, p₂], hp, hEq⟩
+termination_by structural t₁
+
+def callTreeChildrenDigestBytes_binding_aux (H : Hash) (xs ys : List HttpsSessionNode)
+    (hx : checkCanonicalSessionChildren H xs = true)
+    (hy : checkCanonicalSessionChildren H ys = true)
+    (he : callTreeChildrenDigestBytes H xs = callTreeChildrenDigestBytes H ys) :
+    PSum (xs = ys) (TreeHashCollision H (childrenPreimages H xs ++ childrenPreimages H ys)) := by
+  cases xs with
+  | nil =>
+    cases ys with
+    | nil => exact .inl rfl
+    | cons b bs => simp [callTreeChildrenDigestBytes] at he
+  | cons a as =>
+    cases ys with
+    | nil => simp [callTreeChildrenDigestBytes] at he
+    | cons b bs =>
+      simp only [checkCanonicalSessionChildren, Bool.and_eq_true] at hx hy
+      have ha : (callTreeDigestBytes H a).length < 2 ^ 32 := by rw [canonical_digest_width hx.1]; decide
+      have hb : (callTreeDigestBytes H b).length < 2 ^ 32 := by rw [canonical_digest_width hy.1]; decide
+      have he' := (List.cons.inj he).2
+      obtain ⟨hhead, htail⟩ := frameBytes_append_inj ha hb he'
+      match callTreeDigest_binding_aux H a b hx.1 hy.1 hhead with
+      | .inr c => exact .inr (c.weaken (by
+          intro x hx
+          simp only [childrenPreimages, List.mem_append] at *
+          rcases hx with hx | hx
+          · exact Or.inl (Or.inl hx)
+          · exact Or.inr (Or.inl hx)))
+      | .inl hab =>
+        match callTreeChildrenDigestBytes_binding_aux H as bs hx.2 hy.2 htail with
+        | .inl ht => exact .inl (by rw [hab, ht])
+        | .inr c => exact .inr (c.weaken (by
+            intro x hx
+            simp only [childrenPreimages, List.mem_append] at *
+            rcases hx with hx | hx
+            · exact Or.inl (Or.inr hx)
+            · exact Or.inr (Or.inr hx)))
+termination_by structural xs
+end
+
+/-- Compare preimages constructively; the collision branch retains both exact messages. -/
+def extractCallTreeCollision (H : Hash) (t₁ t₂ : HttpsSessionNode)
+    (h₁ : checkCanonicalSessionTree H t₁ = true) (h₂ : checkCanonicalSessionTree H t₂ = true)
+    (he : callTreeDigestBytes H t₁ = callTreeDigestBytes H t₂) :
+    PSum (t₁ = t₂) (TreeHashCollision H (treePreimages H t₁ ++ treePreimages H t₂)) :=
+  callTreeDigest_binding_aux H t₁ t₂ h₁ h₂ he
+
+/-- Binding is scoped to the finite union of messages hashed by the two trees. -/
+theorem callTreeDigestBytes_binding (H : Hash) (t₁ t₂ : HttpsSessionNode)
+    (hCan₁ : checkCanonicalSessionTree H t₁ = true)
+    (hCan₂ : checkCanonicalSessionTree H t₂ = true)
+    (hEq : callTreeDigestBytes H t₁ = callTreeDigestBytes H t₂) :
+    t₁ = t₂ ∨ Obend.Digest.HashBytes.CollisionAmong H
+      (fun x => x ∈ treePreimages H t₁ ++ treePreimages H t₂) :=
+  match extractCallTreeCollision H t₁ t₂ hCan₁ hCan₂ hEq with
+  | .inl h => Or.inl h
+  | .inr c => Or.inr ⟨c.left, c.right, c.left_mem, c.right_mem, c.ne, congrArg ofBE c.eq⟩
+
+/-- **The 256-bit digest binds** within the finite preimage union of the two trees. -/
+theorem callTreeDigest_binding (H : Hash) (t₁ t₂ : HttpsSessionNode)
+    (hCan₁ : checkCanonicalSessionTree H t₁ = true)
+    (hCan₂ : checkCanonicalSessionTree H t₂ = true)
+    (hEq : callTreeDigest H t₁ = callTreeDigest H t₂) :
+    t₁ = t₂ ∨ Obend.Digest.HashBytes.CollisionAmong H
+      (fun x => x ∈ treePreimages H t₁ ++ treePreimages H t₂) := by
+  have hb : callTreeDigestBytes H t₁ = callTreeDigestBytes H t₂ := by
+    have hl := congrArg (fun d : CallTreeDigest => d.bytes.data.toList) hEq
+    simpa [callTreeDigest] using hl
+  exact callTreeDigestBytes_binding H t₁ t₂ hCan₁ hCan₂ hb
+
+mutual
+/-- Pre-order traversal collecting every `HttpsSessionNode` hop in a `CallTree`. -/
+def allSessionNodes (n : HttpsSessionNode) : List HttpsSessionNode :=
+  match n with
+  | .mk h d req resp kids => .mk h d req resp kids :: allChildrenSessionNodes kids
+termination_by structural n
+
+def allChildrenSessionNodes (ns : List HttpsSessionNode) : List HttpsSessionNode :=
+  match ns with
+  | [] => []
+  | c :: cs => allSessionNodes c ++ allChildrenSessionNodes cs
+termination_by structural ns
+end
+
+theorem root_mem_allSessionNodes (tree : HttpsSessionNode) :
+    tree ∈ allSessionNodes tree := by
+  cases tree
+  simp [allSessionNodes]
+
+mutual
+/-- Count total notarized HTTPS hops in a `CallTree`. -/
+def callTreeHopCount : HttpsSessionNode → Nat
+  | .mk _ _ _ _ kids => 1 + callTreeChildrenHopCount kids
+termination_by structural t => t
+
+def callTreeChildrenHopCount : List HttpsSessionNode → Nat
+  | [] => 0
+  | c :: cs => callTreeHopCount c + callTreeChildrenHopCount cs
+termination_by structural ts => ts
+end
+
+/-! ## §3. The audit -/
+
+/-- The audit policy: the notary keys trusted, the request and response expressions, and the
+rules and target of the `Obend.Reasons` program over the verified hops. -/
+structure ZkStripePolicy where
+  trustedNotaryKeys   : List (BitVec 256)
+  allowedRequestRe    : PredRE
+  allowedResponseRe   : PredRE
+  policyRules         : List Obend.Reasons.Rule
+  targetConclusion    : String
+
+inductive ZkStripeRefusal where
+  | untrustedNotary (domain : String)
+  | nonCanonicalBounds (domain : String)
+  | requestRegexViolation (domain : String)
+  | responseRegexViolation (domain : String)
+  | policyUnsupported (conclusion : String) (status : Obend.Reasons.Status)
+  deriving DecidableEq, Repr
+
+def checkHopCanonicalBounds (domain : String) (req resp : List UInt8) : Bool :=
+  decide ((utf8Bytes domain).length < 2 ^ 32) &&
+  decide (req.length < 2 ^ 32) &&
+  decide (resp.length < 2 ^ 32)
+
+/-- A hop passes: trusted notary, canonical widths, both expressions. -/
+def hopPasses (pol : ZkStripePolicy) (key : BitVec 256) (domain : String) (req resp : List UInt8) :
+    Bool :=
+  decide (key ∈ pol.trustedNotaryKeys) && checkHopCanonicalBounds domain req resp &&
+    matchesBytes pol.allowedRequestRe req && matchesBytes pol.allowedResponseRe resp
+
+mutual
+/-- One fact `"hop_verified:<domain>"` per hop that passes. -/
+def extractCallTreeFacts (pol : ZkStripePolicy) : HttpsSessionNode → List String
+  | .mk key domain req resp kids =>
+    (if hopPasses pol key domain req resp then ["hop_verified:" ++ domain] else []) ++
+      extractChildrenFacts pol kids
+termination_by structural t => t
+
+def extractChildrenFacts (pol : ZkStripePolicy) : List HttpsSessionNode → List String
+  | [] => []
+  | c :: cs => extractCallTreeFacts pol c ++ extractChildrenFacts pol cs
+termination_by structural ts => ts
+end
+
+def buildCallTreeProgram (pol : ZkStripePolicy) (root : HttpsSessionNode) :
+    Obend.Reasons.Program where
+  facts := extractCallTreeFacts pol root
+  rules := pol.policyRules
+
+mutual
+/-- Check every hop, naming the first clause that fails. -/
+def auditNodes (pol : ZkStripePolicy) : HttpsSessionNode → Except ZkStripeRefusal Unit
+  | .mk key domain req resp kids =>
+    if !decide (key ∈ pol.trustedNotaryKeys) then
+      .error (.untrustedNotary domain)
+    else if !checkHopCanonicalBounds domain req resp then
+      .error (.nonCanonicalBounds domain)
+    else if !matchesBytes pol.allowedRequestRe req then
+      .error (.requestRegexViolation domain)
+    else if !matchesBytes pol.allowedResponseRe resp then
+      .error (.responseRegexViolation domain)
+    else
+      auditChildren pol kids
+termination_by structural t => t
+
+def auditChildren (pol : ZkStripePolicy) :
+    List HttpsSessionNode → Except ZkStripeRefusal Unit
+  | [] => .ok ()
+  | c :: cs =>
+    match auditNodes pol c with
+    | .error e => .error e
+    | .ok () => auditChildren pol cs
+termination_by structural ts => ts
+end
+
+/-- **The audit**: every hop, then the policy program's support for the target conclusion. -/
+def auditZkStripeCallTree (pol : ZkStripePolicy) (root : HttpsSessionNode) :
+    Except ZkStripeRefusal Unit :=
+  match auditNodes pol root with
+  | .error e => .error e
+  | .ok () =>
+    let prog := buildCallTreeProgram pol root
+    let st := Obend.Reasons.statusIn (Obend.Reasons.wf prog) pol.targetConclusion
+    if st == .supported then
+      .ok ()
+    else
+      .error (.policyUnsupported pol.targetConclusion st)
+
+def verifyZkStripeCallTree (pol : ZkStripePolicy) (root : HttpsSessionNode) : Bool :=
+  (auditZkStripeCallTree pol root).isOk
+
+theorem auditZkStripeCallTree_ok_imp_verify {pol : ZkStripePolicy} {root : HttpsSessionNode}
+    (h : auditZkStripeCallTree pol root = .ok ()) :
+    verifyZkStripeCallTree pol root = true := by
+  simp [verifyZkStripeCallTree, h, Except.isOk, Except.toBool]
+
+/-- What the audit certifies of one hop. -/
+structure HopAudited (pol : ZkStripePolicy) (node : HttpsSessionNode) : Prop where
+  trustedNotary    : node.notaryKey ∈ pol.trustedNotaryKeys
+  canonicalDomain  : (utf8Bytes node.serverDomain).length < 2 ^ 32
+  canonicalReqLen  : node.redactedRequest.length < 2 ^ 32
+  canonicalRespLen : node.redactedResponse.length < 2 ^ 32
+  requestMatches   : matchesBytes pol.allowedRequestRe node.redactedRequest = true
+  responseMatches  : matchesBytes pol.allowedResponseRe node.redactedResponse = true
+
+mutual
+/-- **Every hop is audited**, not only the root. -/
+theorem auditNodes_all_hops_sound {pol : ZkStripePolicy} {tree : HttpsSessionNode}
+    (hOk : auditNodes pol tree = .ok ()) :
+    ∀ node ∈ allSessionNodes tree, HopAudited pol node := by
+  cases tree with
+  | mk key domain req resp kids =>
+    unfold auditNodes at hOk
+    cases hNotary : decide (key ∈ pol.trustedNotaryKeys)
+    · rw [hNotary] at hOk; cases hOk
+    · rw [hNotary] at hOk
+      simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+      cases hCanBool : checkHopCanonicalBounds domain req resp
+      · rw [hCanBool] at hOk; cases hOk
+      · rw [hCanBool] at hOk
+        simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+        have hCanProps := hCanBool
+        simp only [checkHopCanonicalBounds, Bool.and_eq_true, decide_eq_true_eq] at hCanProps
+        rcases hCanProps with ⟨⟨hDom, hReqLen⟩, hRespLen⟩
+        cases hReq : matchesBytes pol.allowedRequestRe req
+        · rw [hReq] at hOk; cases hOk
+        · rw [hReq] at hOk
+          simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+          cases hResp : matchesBytes pol.allowedResponseRe resp
+          · rw [hResp] at hOk; cases hOk
+          · rw [hResp] at hOk
+            simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+            intro node hMem
+            simp only [allSessionNodes, List.mem_cons] at hMem
+            rcases hMem with rfl | hInKids
+            · exact {
+                trustedNotary    := of_decide_eq_true hNotary
+                canonicalDomain  := hDom
+                canonicalReqLen  := hReqLen
+                canonicalRespLen := hRespLen
+                requestMatches   := hReq
+                responseMatches  := hResp
+              }
+            · exact auditChildren_all_hops_sound hOk node hInKids
+termination_by structural tree
+
+theorem auditChildren_all_hops_sound {pol : ZkStripePolicy} {kids : List HttpsSessionNode}
+    (hOk : auditChildren pol kids = .ok ()) :
+    ∀ node ∈ allChildrenSessionNodes kids, HopAudited pol node := by
+  cases kids with
+  | nil =>
+    intro node hMem
+    cases hMem
+  | cons c cs =>
+    unfold auditChildren at hOk
+    cases hC : auditNodes pol c with
+    | error e => rw [hC] at hOk; cases hOk
+    | ok u =>
+      rw [hC] at hOk
+      intro node hMem
+      simp only [allChildrenSessionNodes, List.mem_append] at hMem
+      rcases hMem with hInC | hInCs
+      · exact auditNodes_all_hops_sound hC node hInC
+      · exact auditChildren_all_hops_sound hOk node hInCs
+termination_by structural kids
+end
+
+theorem auditZkStripeCallTree_all_hops_sound {pol : ZkStripePolicy} {tree : HttpsSessionNode}
+    (hAudit : auditZkStripeCallTree pol tree = .ok ()) :
+    (∀ node ∈ allSessionNodes tree, HopAudited pol node) ∧
+      Obend.Reasons.statusIn (Obend.Reasons.wf (buildCallTreeProgram pol tree))
+        pol.targetConclusion = .supported := by
+  unfold auditZkStripeCallTree at hAudit
+  cases hNodes : auditNodes pol tree with
+  | error e => rw [hNodes] at hAudit; cases hAudit
+  | ok u =>
+    rw [hNodes] at hAudit
+    simp only at hAudit
+    cases hSt : (Obend.Reasons.statusIn (Obend.Reasons.wf (buildCallTreeProgram pol tree))
+        pol.targetConclusion == .supported)
+    · rw [hSt] at hAudit; cases hAudit
+    · exact ⟨auditNodes_all_hops_sound hNodes, beq_iff_eq.mp hSt⟩
+
+theorem auditNodes_root_props {pol : ZkStripePolicy} {tree : HttpsSessionNode}
+    (hOk : auditNodes pol tree = .ok ()) :
+    HopAudited pol tree :=
+  auditNodes_all_hops_sound hOk tree (root_mem_allSessionNodes tree)
+
+/-- A succinct receipt envelope for a redacted call tree: 256-bit digests. -/
+structure DualPcsCallTreeReceipt where
+  committedTreeRoot : CallTreeDigest
+  notaryKey         : BitVec 256
+  proofBytes        : List UInt8
+  deriving DecidableEq
+
+/-- A notary's attestation envelope over a session digest. -/
+structure MpcTlsNotaryAttestation where
+  notaryKey      : BitVec 256
+  sessionDigest  : CallTreeDigest
+  signatureBytes : List UInt8
+  deriving DecidableEq
+
+def checkMpcTlsNotaryEnvelope (trustedNotaryKeys : List (BitVec 256))
+    (att : MpcTlsNotaryAttestation) : Bool :=
+  decide (att.notaryKey ∈ trustedNotaryKeys) &&
+  decide (att.sessionDigest.bytes.size = 32) &&
+  decide (att.signatureBytes.length == 64)
+
+def checkDualPcsReceiptEnvelope (pol : ZkStripePolicy)
+    (rcpt : DualPcsCallTreeReceipt) : Bool :=
+  decide (rcpt.notaryKey ∈ pol.trustedNotaryKeys) &&
+  decide (rcpt.committedTreeRoot.bytes.size = 32) &&
+  decide (32 ≤ rcpt.proofBytes.length)
+
+/-- Cryptographic verification is supplied by the TLS/PCS adapter. Envelope shape is not proof. -/
+structure ZkStripeVerifiers where
+  notary : Hash → List (BitVec 256) → MpcTlsNotaryAttestation → Bool
+  receipt : Hash → ZkStripePolicy → DualPcsCallTreeReceipt → Bool
+
+/-- **The organ's audit theorem.** When the audit admits a canonical tree under a policy whose
+request expression is `.inter reqSchema (.compl forbiddenSecretRe)`, then at every hop the policy
+holds and the request matches no forbidden pattern; the target conclusion is supported in the
+well-founded model; and the 256-bit digest binds the tree. -/
+theorem apex_zkstripe_calltree_audit
+    (H : Hash) (reqSchema forbiddenSecretRe : PredRE)
+    (pol : ZkStripePolicy) (tree otherTree : HttpsSessionNode)
+    (hReqPolicy : pol.allowedRequestRe = .inter reqSchema (.compl forbiddenSecretRe))
+    (hAudit : auditZkStripeCallTree pol tree = .ok ())
+    (hCan₁ : checkCanonicalSessionTree H tree = true)
+    (hCan₂ : checkCanonicalSessionTree H otherTree = true)
+    (hSameDigest : callTreeDigest H tree = callTreeDigest H otherTree) :
+    (∀ node ∈ allSessionNodes tree,
+        HopAudited pol node ∧
+        matchesBytes forbiddenSecretRe node.redactedRequest = false) ∧
+      Obend.Reasons.statusIn (Obend.Reasons.wf (buildCallTreeProgram pol tree))
+        pol.targetConclusion = .supported ∧
+      (tree = otherTree ∨ Obend.Digest.HashBytes.CollisionAmong H
+        (fun x => x ∈ treePreimages H tree ++ treePreimages H otherTree)) := by
+  obtain ⟨hAllHops, hSupported⟩ := auditZkStripeCallTree_all_hops_sound hAudit
+  refine ⟨?_, hSupported, callTreeDigest_binding H tree otherTree hCan₁ hCan₂ hSameDigest⟩
+  intro node hMem
+  have hHop := hAllHops node hMem
+  have hReq := hHop.requestMatches
+  rw [hReqPolicy, matchesBytes_inter, matchesBytes_compl, Bool.and_eq_true,
+      Bool.not_eq_true'] at hReq
+  exact ⟨hHop, hReq.2⟩
+
+/-! ## §4. The audit carrier of a `DecoAndCallTree` call tree
+
+The organ runs no grammar of its own: response framing is checked once, where the transcript is
+committed. `DecoAndCallTree.checkView` asks that the redacted body of every attested hop passes
+`VpaJson`'s RFC 8259 machine, with every mask confined in a value string. -/
+
+open Obend.Judge.DecoAndCallTree (HttpsCallTree HttpsHop viewBytes treeHops forestHops)
+
+/-- A host as a domain string, byte by byte (an ASCII host reads as itself). -/
+def domainOf (host : ByteArray) : String :=
+  host.data.toList.foldl (fun s b => s.push (Char.ofNat b.toNat)) ""
+
+/-- A notary identifier as a 256-bit key: the big-endian reading of its bytes. -/
+def notaryKeyOf (notary : ByteArray) : BitVec 256 := BitVec.ofNat 256 (ofBE notary.data.toList)
+
+/-- One hop as the audit sees it: the notary, the host, the whole redacted request, and the
+redacted response body (the slots after the HTTP head). -/
+def sessionOfHop (h : HttpsHop) (children : List HttpsSessionNode) : HttpsSessionNode :=
+  .mk (notaryKeyOf h.attestation.header.notary) (domainOf h.attestation.header.host)
+    (viewBytes h.attestation.request.slots) (viewBytes h.attestation.response.slots.tail) children
+
+mutual
+/-- **The audit carrier of a call tree**: the same tree, each hop projected. -/
+def sessionOfCallTree : HttpsCallTree → HttpsSessionNode
+  | .node h cs => sessionOfHop h (sessionsOfForest cs)
+termination_by structural t => t
+def sessionsOfForest : List HttpsCallTree → List HttpsSessionNode
+  | [] => []
+  | t :: ts => sessionOfCallTree t :: sessionsOfForest ts
+termination_by structural ts => ts
+end
+
+/-- What the audit reads of a session node. -/
+def auditedView (n : HttpsSessionNode) : List UInt8 × List UInt8 :=
+  (n.redactedRequest, n.redactedResponse)
+
+/-- What the audit reads of a hop. -/
+def hopView (h : HttpsHop) : List UInt8 × List UInt8 :=
+  (viewBytes h.attestation.request.slots, viewBytes h.attestation.response.slots.tail)
+
+mutual
+/-- The audited nodes are the projections of the tree's hops, in preorder. -/
+theorem allSessionNodes_sessionOfCallTree (t : HttpsCallTree) :
+    (allSessionNodes (sessionOfCallTree t)).map auditedView = (treeHops t).map hopView := by
+  cases t with
+  | node h cs =>
+    have ih := allChildren_sessionsOfForest cs
+    show auditedView (sessionOfHop h (sessionsOfForest cs)) ::
+        (allChildrenSessionNodes (sessionsOfForest cs)).map auditedView =
+      hopView h :: (forestHops cs).map hopView
+    rw [ih]
+    rfl
+termination_by structural t
+
+theorem allChildren_sessionsOfForest (ts : List HttpsCallTree) :
+    (allChildrenSessionNodes (sessionsOfForest ts)).map auditedView =
+      (forestHops ts).map hopView := by
+  cases ts with
+  | nil => rfl
+  | cons t ts =>
+    have ih₁ := allSessionNodes_sessionOfCallTree t
+    have ih₂ := allChildren_sessionsOfForest ts
+    show (allSessionNodes (sessionOfCallTree t) ++
+        allChildrenSessionNodes (sessionsOfForest ts)).map auditedView =
+      (treeHops t ++ forestHops ts).map hopView
+    rw [List.map_append, List.map_append, ih₁, ih₂]
+termination_by structural ts
+end
+
+/-- **An admitted call tree is audited hop by hop.** If the audit admits the carrier of a
+`DecoAndCallTree` tree, every hop of that tree has a redacted request matching the request
+expression and a redacted response body matching the response expression. -/
+theorem audit_covers_callTree_hops {pol : ZkStripePolicy} {t : HttpsCallTree}
+    (hAudit : auditZkStripeCallTree pol (sessionOfCallTree t) = .ok ()) :
+    ∀ h ∈ treeHops t,
+      matchesBytes pol.allowedRequestRe (viewBytes h.attestation.request.slots) = true ∧
+      matchesBytes pol.allowedResponseRe (viewBytes h.attestation.response.slots.tail) = true := by
+  intro h hh
+  have hmem : hopView h ∈ (allSessionNodes (sessionOfCallTree t)).map auditedView := by
+    rw [allSessionNodes_sessionOfCallTree]
+    exact List.mem_map.2 ⟨h, hh, rfl⟩
+  obtain ⟨n, hn, he⟩ := List.mem_map.1 hmem
+  have ha := (auditZkStripeCallTree_all_hops_sound hAudit).1 n hn
+  simp only [auditedView, hopView, Prod.mk.injEq] at he
+  exact ⟨he.1 ▸ ha.requestMatches, he.2 ▸ ha.responseMatches⟩
+
+/-- **The framing the organ relies on.** A view admitted by `DecoAndCallTree.checkView` has a
+redacted body that is empty or one RFC 8259 document: the audited response bytes of an attested
+hop are JSON because the transcript layer checked them, with the string and escape state the
+masks are confined by. -/
+theorem checkView_body_framed {v : Obend.Judge.DecoAndCallTree.TranscriptView}
+    (h : Obend.Judge.DecoAndCallTree.checkView v = true) :
+    v.slots.tail = [] ∨ runFullJsonGrammar ⟨(viewBytes v.slots.tail).toArray⟩ = true := by
+  obtain ⟨root, slots⟩ := v
+  simp only [Obend.Judge.DecoAndCallTree.checkView, Bool.and_eq_true] at h
+  obtain ⟨_, hm⟩ := h
+  cases slots with
+  | nil => simp at hm
+  | cons slot body =>
+    cases slot with
+    | masked m => simp at hm
+    | opened head sibs =>
+      simp only [Bool.and_eq_true] at hm
+      obtain ⟨_, hb⟩ := hm
+      cases hrun : Obend.Judge.DecoAndCallTree.bodyRun Obend.Judge.VpaJson.JState.init body with
+      | none => rw [hrun] at hb; cases hb
+      | some st =>
+        rw [hrun] at hb
+        simp only [Bool.or_eq_true, List.isEmpty_iff] at hb
+        rcases hb with he | hacc
+        · exact Or.inl he
+        · right
+          have hst := Obend.Judge.DecoAndCallTree.bodyRun_viewBytes body _ _ hrun
+          show Obend.Judge.VpaJson.jsonAccepting (Obend.Judge.VpaJson.jsonRun _) = true
+          rw [Obend.Judge.VpaJson.jsonRun_eq]
+          show Obend.Judge.VpaJson.jsonAccepting
+            (Obend.Judge.VpaJson.specRunJson (viewBytes body) _) = true
+          rw [hst]
+          exact hacc
+
+/-! ## §5. A four-hop call tree and its planted faults -/
+
+/-- 4-byte-strided structural mixer (`termination_by structural`) so 130+-byte Merkle & FPGA
+    receipt preimages reduce in `O(N/4)` WHNF stack depth well inside default `maxRecDepth`. -/
+def hashMixBytes4 : List UInt8 → Nat
+  | [] => 0x5A3C9E11
+  | [b0] => Nat.xor 0x5A3C9E11 (b0.toBitVec.toNat + 1)
+  | [b0, b1] =>
+    Nat.xor 0x5A3C9E11 (b0.toBitVec.toNat * 256 + b1.toBitVec.toNat + 2)
+  | [b0, b1, b2] =>
+    Nat.xor 0x5A3C9E11
+      (b0.toBitVec.toNat * 65536 + b1.toBitVec.toNat * 256 + b2.toBitVec.toNat + 3)
+  | b0 :: b1 :: b2 :: b3 :: bs =>
+    let word :=
+      b0.toBitVec.toNat * 16777216 + b1.toBitVec.toNat * 65536 +
+        b2.toBitVec.toNat * 256 + b3.toBitVec.toNat
+    Nat.xor (hashMixBytes4 bs + 0x9E37) word
+termination_by structural bs => bs
+
+/-- The same mixer in 16-byte strides, falling back to 4-byte strides on the tail: a preimage of
+a few hundred bytes reduces in a few dozen steps, so nested digests stay inside the default
+recursion depth under `decide`. -/
+def hashMixBytes16 : List UInt8 → Nat
+  | b0 :: b1 :: b2 :: b3 :: b4 :: b5 :: b6 :: b7 :: b8 :: b9 :: b10 :: b11 :: b12 :: b13 :: b14 ::
+      b15 :: bs =>
+    Nat.xor (hashMixBytes16 bs + 0x9E37)
+      ((((((((((((((((b0.toNat * 256 + b1.toNat) * 256 + b2.toNat) * 256 + b3.toNat) * 256 +
+        b4.toNat) * 256 + b5.toNat) * 256 + b6.toNat) * 256 + b7.toNat) * 256 + b8.toNat) * 256 +
+        b9.toNat) * 256 + b10.toNat) * 256 + b11.toNat) * 256 + b12.toNat) * 256 + b13.toNat) *
+        256 + b14.toNat) * 256 + b15.toNat) % 4294967291)
+  | bs => hashMixBytes4 bs
+termination_by structural bs => bs
+
+/-- One 4-byte word of the fixture hash: the mix, offset by the word's index. -/
+def mixWord (i : Nat) (h : Nat) : List UInt8 :=
+  [UInt8.ofNat ((h + i * 2654435761) / 16777216), UInt8.ofNat ((h + i * 2654435761) / 65536),
+   UInt8.ofNat ((h + i * 2654435761) / 256), UInt8.ofNat (h + i * 2654435761)]
+
+/-- A 32-byte structural hash for kernel fixtures: one pass over the input, eight words. It is
+not a cryptographic hash; the theorems hold for every `Hash`, and deployments instantiate
+cSHAKE256. -/
+def fastMerkleHash : Hash := fun bs =>
+  mixWord 0 (hashMixBytes16 bs) ++ mixWord 1 (hashMixBytes16 bs) ++ mixWord 2 (hashMixBytes16 bs) ++
+    mixWord 3 (hashMixBytes16 bs) ++ mixWord 4 (hashMixBytes16 bs) ++ mixWord 5 (hashMixBytes16 bs) ++
+    mixWord 6 (hashMixBytes16 bs) ++ mixWord 7 (hashMixBytes16 bs)
+
+/-- The fixture notary key. -/
+def fixtureNotaryKey : BitVec 256 :=
+  0xA11CE000000000000000000000000000000000000000000000000000000A11CE#256
+
+/-- The forbidden live secret prefix `sk_`. -/
+def stripeLiveKeyPrefix : List UInt8 := [115, 107, 95]
+
+/-- The required request prefix `GET`. -/
+def httpGetPrefix : List UInt8 := [71, 69, 84]
+
+/-- The fixture policy: the fixture notary; requests begin with `GET` and nowhere contain `sk_`;
+responses nowhere contain `sk_`; the four hops support `calltree_admitted`. -/
+def defaultZkStripePolicy : ZkStripePolicy where
+  trustedNotaryKeys   := [fixtureNotaryKey]
+  allowedRequestRe    := .inter (startsWith httpGetPrefix) (forbidSubseq stripeLiveKeyPrefix)
+  allowedResponseRe   := forbidSubseq stripeLiveKeyPrefix
+  policyRules := [
+    { name  := "admit_four_hop_calltree"
+      concl := "calltree_admitted"
+      pos   := ["hop_verified:api.stripe.com", "hop_verified:auth.obend.org",
+                "hop_verified:registry.hf.co", "hop_verified:cdn.dataset.org"]
+      neg   := ["emergency_freeze"] }
+  ]
+  targetConclusion := "calltree_admitted"
+
+/-- Four hops; hop 2's response has an unmatched `}` inside a string. -/
+def validFourHopCallTree : HttpsSessionNode :=
+  .mk fixtureNotaryKey "api.stripe.com" [71, 69, 84, 32, 47, 118, 49] (utf8Bytes "{\"v\":1}") [
+    .mk fixtureNotaryKey "auth.obend.org" [71, 69, 84, 32, 47, 116, 111, 107]
+      (utf8Bytes "{\"tok\":\"ok}v1\"}") [
+      .mk fixtureNotaryKey "registry.hf.co" [71, 69, 84, 32, 47, 109, 97, 110] [123, 125] [
+        .mk fixtureNotaryKey "cdn.dataset.org" [71, 69, 84, 32, 47, 115, 104, 100] [91, 52, 50, 93] []
+      ]
+    ]
+  ]
+
+/-- Planted fault 1: `sk_` in hop 3's request. -/
+def leakedSecretCallTree : HttpsSessionNode :=
+  .mk fixtureNotaryKey "api.stripe.com" [71, 69, 84, 32, 47, 118, 49] (utf8Bytes "{\"v\":1}") [
+    .mk fixtureNotaryKey "auth.obend.org" [71, 69, 84, 32, 47, 116, 111, 107] [123, 125] [
+      .mk fixtureNotaryKey "registry.hf.co" [71, 69, 84, 32, 115, 107, 95, 57] [123, 125] []
+    ]
+  ]
+
+/-- Planted fault 2: `sk_` in hop 4's response. -/
+def leakedResponseCallTree : HttpsSessionNode :=
+  .mk fixtureNotaryKey "api.stripe.com" [71, 69, 84, 32, 47, 118, 49] (utf8Bytes "{\"v\":1}") [
+    .mk fixtureNotaryKey "auth.obend.org" [71, 69, 84, 32, 47, 116, 111, 107] [123, 125] [
+      .mk fixtureNotaryKey "registry.hf.co" [71, 69, 84, 32, 47, 109, 97, 110] [123, 125] [
+        .mk fixtureNotaryKey "cdn.dataset.org" [71, 69, 84, 32, 47, 115, 104, 100]
+          (utf8Bytes "{\"k\":\"sk_9\"}") []
+      ]
+    ]
+  ]
+
+/-- Planted fault 3: only hop 1's domain differs. -/
+def spoofedDomainCallTree : HttpsSessionNode :=
+  match validFourHopCallTree with
+  | .mk h _ req resp kids => .mk h "evil.stripe.io" req resp kids
+
+private def decEqExceptUnit (a b : Except ZkStripeRefusal Unit) : Decidable (a = b) :=
+  match a, b with
+  | .ok (), .ok () => isTrue rfl
+  | .ok (), .error _ => isFalse (by intro h; cases h)
+  | .error _, .ok () => isFalse (by intro h; cases h)
+  | .error e₁, .error e₂ =>
+    if he : e₁ = e₂ then isTrue (by subst he; rfl)
+    else isFalse (by intro h; cases h; exact he rfl)
+
+example : auditNodes defaultZkStripePolicy validFourHopCallTree = .ok () := by
+  letI : DecidableEq (Except ZkStripeRefusal Unit) := decEqExceptUnit
+  decide
+
+example : auditChildren defaultZkStripePolicy validFourHopCallTree.children = .ok () := by
+  letI : DecidableEq (Except ZkStripeRefusal Unit) := decEqExceptUnit
+  decide
+
+example : auditZkStripeCallTree defaultZkStripePolicy validFourHopCallTree = .ok () := by
+  letI : DecidableEq (Except ZkStripeRefusal Unit) := decEqExceptUnit
+  decide
+
+example : verifyZkStripeCallTree defaultZkStripePolicy validFourHopCallTree = true := by
+  decide +kernel
+
+example : checkCanonicalSessionTree fastMerkleHash validFourHopCallTree = true := by
+  decide +kernel
+
+example : callTreeDigest fastMerkleHash validFourHopCallTree ≠
+    callTreeDigest fastMerkleHash spoofedDomainCallTree := by
+  decide +kernel
+
+/-- The binding premise is inhabited at the deployment hash, without reducing SHAKE in the kernel. -/
+theorem cshake_callTree_binding_inhabited :
+    ∃ t : HttpsSessionNode,
+      checkCanonicalSessionTree (Obend.Digest.Cshake256.cshake256Bytes []) t = true ∧
+      callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t =
+        callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t := by
+  refine ⟨.mk fixtureNotaryKey "api.stripe.com" [71, 69, 84] [123, 125] [], ?_, rfl⟩
+  simp [checkCanonicalSessionTree, checkCanonicalSessionChildren, utf8Bytes]
+  decide +kernel
+
+/-- The organ's end-to-end smoke check. -/
+def silverZkStripeSmoke : Bool :=
+  let hopCountOk := callTreeHopCount validFourHopCallTree == 4
+  let validAdmitted := verifyZkStripeCallTree defaultZkStripePolicy validFourHopCallTree
+  let canonicalOk := checkCanonicalSessionTree fastMerkleHash validFourHopCallTree
+  let wide := (callTreeDigest fastMerkleHash validFourHopCallTree).bytes.size == 32
+  let domainBoundOk :=
+    callTreeDigest fastMerkleHash validFourHopCallTree !=
+      callTreeDigest fastMerkleHash spoofedDomainCallTree
+  let leakRefused :=
+    match auditZkStripeCallTree defaultZkStripePolicy leakedSecretCallTree with
+    | .error e => e == .requestRegexViolation "registry.hf.co"
+    | .ok () => false
+  let responseLeakRefused :=
+    match auditZkStripeCallTree defaultZkStripePolicy leakedResponseCallTree with
+    | .error e => e == .responseRegexViolation "cdn.dataset.org"
+    | .ok () => false
+  hopCountOk && validAdmitted && canonicalOk && wide && domainBoundOk &&
+    leakRefused && responseLeakRefused
+
+example : silverZkStripeSmoke = true := by
+  decide +kernel
+
+end Obend.Trailblaze.ZkStripe
+
+
+namespace Obend.Trailblaze.ClusterGov
+
+open Obend.Run.HyperLaw (LowView HyperLaw2NonInterference checkHyperLaw2NonInterference
+  checkHyperLaw2NonInterference_sound checkHyperLaw2Step checkLowEquiv)
+
+set_option autoImplicit false
+
+/-! ## §1. Overflow-Free Integer Dot-Product, `Array Int` `Exec` Fast Path & Centered $\mathbb{F}_p$ Reconstruction -/
+
+/-- KoalaBear 31-bit prime `p = 2^31 - 2^24 + 1` (`2130706433`) for wrap-free integer inference. -/
+def koalaBearPrime : Nat := 2130706433
+
+/-- Certified integer dot-product / linear layer envelope over prime field modulus `modulusP`. -/
+structure IntTensorBound where
+  dim          : Nat
+  maxAbsWeight : Nat
+  maxAbsAct    : Nat
+  modulusP     : Nat
+  deriving DecidableEq, Repr
+
+/-- Wrap-freedom guard: `2 * dim * maxAbsWeight * maxAbsAct < modulusP` guarantees
+    every signed accumulator `z` lies strictly inside `(-modulusP / 2, modulusP / 2)`. -/
+def checkSableNoWrap (b : IntTensorBound) : Bool :=
+  decide (2 * b.dim * b.maxAbsWeight * b.maxAbsAct < b.modulusP)
+
+/-- Exact integer inner product `∑ᵢ wᵢ xᵢ` (`List Int` specification). -/
+def intDot : List Int → List Int → Int
+  | [], _ => 0
+  | _, [] => 0
+  | w :: ws, x :: xs => w * x + intDot ws xs
+
+/-- Structural index loop for the `Array Int` inner-product `Exec` fast path. -/
+def intDotExecLoop (ws xs : Array Int) (idx : Nat) : Nat → Int → Int
+  | 0, acc => acc
+  | rem + 1, acc =>
+    if hw : idx < ws.size then
+      if hx : idx < xs.size then
+        intDotExecLoop ws xs (idx + 1) rem (acc + ws[idx] * xs[idx])
+      else
+        acc
+    else
+      acc
+termination_by structural rem => rem
+
+/-- Tight `Array Int` inner-product `Exec` fast path (`O(min |ws| |xs|)` with zero list allocation). -/
+def intDotExec (ws xs : Array Int) : Int :=
+  intDotExecLoop ws xs 0 (min ws.size xs.size) 0
+
+theorem intDotExecLoop_eq_intDot (ws xs : Array Int) (idx rem : Nat)
+    (hRem : idx + rem = min ws.size xs.size) (acc : Int) :
+    intDotExecLoop ws xs idx rem acc =
+      acc + intDot (ws.toList.drop idx) (xs.toList.drop idx) := by
+  induction rem generalizing idx acc with
+  | zero =>
+    have hMin : min ws.size xs.size = idx := by omega
+    unfold intDotExecLoop
+    if hW : idx < ws.size then
+      have hX : xs.toList.length ≤ idx := by
+        rw [Array.length_toList]
+        omega
+      have hDropX : xs.toList.drop idx = [] := List.drop_eq_nil_of_le hX
+      rw [hDropX]
+      cases ws.toList.drop idx <;> simp [intDot]
+    else
+      have hWLe : ws.toList.length ≤ idx := by
+        rw [Array.length_toList]
+        omega
+      have hDropW : ws.toList.drop idx = [] := List.drop_eq_nil_of_le hWLe
+      rw [hDropW]
+      simp [intDot]
+  | succ r ih =>
+    have hW : idx < ws.size := by omega
+    have hX : idx < xs.size := by omega
+    have hWL : idx < ws.toList.length := by rw [Array.length_toList]; exact hW
+    have hXL : idx < xs.toList.length := by rw [Array.length_toList]; exact hX
+    have hDropW : ws.toList.drop idx = ws[idx] :: ws.toList.drop (idx + 1) := by
+      rw [List.drop_eq_getElem_cons hWL]; rfl
+    have hDropX : xs.toList.drop idx = xs[idx] :: xs.toList.drop (idx + 1) := by
+      rw [List.drop_eq_getElem_cons hXL]; rfl
+    unfold intDotExecLoop
+    simp only [hW, hX, ↓reduceDIte]
+    have hNext : (idx + 1) + r = min ws.size xs.size := by omega
+    rw [ih (idx + 1) hNext (acc + ws[idx] * xs[idx]), hDropW, hDropX]
+    dsimp only [intDot]
+    omega
+
+/-- **`Spec ↔ Exec` Dot-Product Equivalence**: `intDotExec ws xs` computes the exact same integer
+    inner product as `intDot ws.toList xs.toList`. -/
+theorem intDotExec_eq_intDot (ws xs : Array Int) :
+    intDotExec ws xs = intDot ws.toList xs.toList := by
+  unfold intDotExec
+  have h := intDotExecLoop_eq_intDot ws xs 0 (min ws.size xs.size) (Nat.zero_add _) 0
+  simpa using h
+
+/-- Canonical residue embedding into `[0, p)` modulo `p`. -/
+def embedModP (p : Nat) (z : Int) : Int :=
+  z % (p : Int)
+
+/-- Centered signed representative reconstruction from a field residue modulo `p`. -/
+def decodeSignedModP (p : Nat) (r : Int) : Int :=
+  if decide (2 * (r % (p : Int)) < (p : Int)) then
+    r % (p : Int)
+  else
+    r % (p : Int) - (p : Int)
+
+/-- Declarative L∞ bound on an integer vector. -/
+def VecAbsBounded (bound : Nat) (xs : List Int) : Prop :=
+  ∀ x ∈ xs, x.natAbs ≤ bound
+
+/-- Executable boolean L∞ bound checker on an integer vector. -/
+def checkVecAbsBounded (bound : Nat) (xs : List Int) : Bool :=
+  xs.all (fun x => decide (x.natAbs ≤ bound))
+
+theorem checkVecAbsBounded_sound {bound : Nat} {xs : List Int}
+    (h : checkVecAbsBounded bound xs = true) :
+    VecAbsBounded bound xs := by
+  intro x hx
+  have hAll := List.all_eq_true.mp h x hx
+  exact of_decide_eq_true hAll
+
+/-- Cauchy–Schwarz / L1–L∞ accumulator bound: `|∑ᵢ wᵢ xᵢ| ≤ dim * maxW * maxX`. -/
+theorem intDot_natAbs_le (ws xs : List Int) (dim maxW maxX : Nat)
+    (hLen : ws.length ≤ dim)
+    (hW : VecAbsBounded maxW ws)
+    (hX : VecAbsBounded maxX xs) :
+    (intDot ws xs).natAbs ≤ dim * maxW * maxX := by
+  induction ws generalizing xs dim with
+  | nil =>
+    simp [intDot]
+  | cons w wsRest ih =>
+    cases xs with
+    | nil => simp [intDot]
+    | cons x xsRest =>
+      cases dim with
+      | zero =>
+        simp at hLen
+      | succ d =>
+        have hw : w.natAbs ≤ maxW := hW w (List.mem_cons_self ..)
+        have hx : x.natAbs ≤ maxX := hX x (List.mem_cons_self ..)
+        have hProd : (w * x).natAbs ≤ maxW * maxX := by
+          rw [Int.natAbs_mul]
+          exact Nat.mul_le_mul hw hx
+        have hTailLen : wsRest.length ≤ d := by
+          simp at hLen
+          omega
+        have hTail : (intDot wsRest xsRest).natAbs ≤ d * maxW * maxX :=
+          ih xsRest d hTailLen
+            (fun u hu => hW u (List.mem_cons_of_mem _ hu))
+            (fun v hv => hX v (List.mem_cons_of_mem _ hv))
+        have hTri : (w * x + intDot wsRest xsRest).natAbs ≤
+            (w * x).natAbs + (intDot wsRest xsRest).natAbs :=
+          Int.natAbs_add_le (w * x) (intDot wsRest xsRest)
+        have hStep : (d + 1) * maxW * maxX = maxW * maxX + d * maxW * maxX := by
+          rw [Nat.succ_mul, Nat.add_mul, Nat.add_comm]
+        dsimp only [intDot]
+        omega
+
+/-- **Centered Modular Exactness**: Any integer `z` with `2 * |z| < p` embeds into `ℤ/pℤ` and
+    reconstructs via `decodeSignedModP` to `z` with zero wraparound error. -/
+theorem decodeSignedModP_embedModP_exact (p : Nat) (z : Int)
+    (hNoWrap : 2 * z.natAbs < p) :
+    decodeSignedModP p (embedModP p z) = z := by
+  unfold decodeSignedModP embedModP
+  if hz : 0 ≤ z then
+    have hLtP : z < (p : Int) := by omega
+    have hMod1 : z % (p : Int) = z := Int.emod_eq_of_lt hz hLtP
+    rw [hMod1, hMod1]
+    have hTwoLt : 2 * z < (p : Int) := by omega
+    have hDec : decide (2 * z < (p : Int)) = true := decide_eq_true hTwoLt
+    rw [hDec]
+    rfl
+  else
+    have hPosShift : 0 ≤ z + (p : Int) := by omega
+    have hLtShift : z + (p : Int) < (p : Int) := by omega
+    have hModNeg : z % (p : Int) = z + (p : Int) := by
+      have hAddMod : (z + (p : Int) * 1) % (p : Int) = z % (p : Int) :=
+        Int.add_mul_emod_self_left z (p : Int) 1
+      rw [Int.mul_one] at hAddMod
+      rw [← hAddMod]
+      exact Int.emod_eq_of_lt hPosShift hLtShift
+    rw [hModNeg, Int.emod_eq_of_lt hPosShift hLtShift]
+    have hNotLt : ¬ (2 * (z + (p : Int)) < (p : Int)) := by omega
+    have hDecFalse : decide (2 * (z + (p : Int)) < (p : Int)) = false :=
+      decide_eq_false hNotLt
+    rw [hDecFalse]
+    change (z + (p : Int)) - (p : Int) = z
+    omega
+
+/-- **Modular Injectivity on the No-Wrap Envelope**: Distinct integers inside `(-p/2, p/2)`
+    never collide modulo `p`. -/
+theorem embedModP_injective_of_no_wrap {p : Nat} {z₁ z₂ : Int}
+    (h₁ : 2 * z₁.natAbs < p) (h₂ : 2 * z₂.natAbs < p)
+    (hEq : embedModP p z₁ = embedModP p z₂) :
+    z₁ = z₂ := by
+  have e₁ := decodeSignedModP_embedModP_exact p z₁ h₁
+  have e₂ := decodeSignedModP_embedModP_exact p z₂ h₂
+  rw [← e₁, ← e₂, hEq]
+
+/-- **Overflow-Free Dot-Product Exactness Theorem (`sable_dot_exact_no_wrap`)**:
+    Whenever `checkSableNoWrap b = true`, every weight vector `ws` and activation vector `xs`
+    within `b` satisfies `2 * |⟨ws, xs⟩| < b.modulusP` and exact modular round-trip reconstruction. -/
+theorem sable_dot_exact_no_wrap (b : IntTensorBound) (ws xs : List Int)
+    (hGuard : checkSableNoWrap b = true)
+    (hLen : ws.length ≤ b.dim)
+    (hW : VecAbsBounded b.maxAbsWeight ws)
+    (hX : VecAbsBounded b.maxAbsAct xs) :
+    2 * (intDot ws xs).natAbs < b.modulusP ∧
+      decodeSignedModP b.modulusP (embedModP b.modulusP (intDot ws xs)) = intDot ws xs := by
+  have hBoundLt : 2 * b.dim * b.maxAbsWeight * b.maxAbsAct < b.modulusP :=
+    of_decide_eq_true hGuard
+  have hAbsLe : (intDot ws xs).natAbs ≤ b.dim * b.maxAbsWeight * b.maxAbsAct :=
+    intDot_natAbs_le ws xs b.dim b.maxAbsWeight b.maxAbsAct hLen hW hX
+  have hTwoMul :
+      2 * (b.dim * b.maxAbsWeight * b.maxAbsAct) =
+        2 * b.dim * b.maxAbsWeight * b.maxAbsAct := by
+    simp [Nat.mul_assoc]
+  have hStrict : 2 * (intDot ws xs).natAbs < b.modulusP := by
+    have hMulLe := Nat.mul_le_mul_left 2 hAbsLe
+    omega
+  exact ⟨hStrict, decodeSignedModP_embedModP_exact b.modulusP (intDot ws xs) hStrict⟩
+
+/-- `Array Int` `Exec` corollary of `sable_dot_exact_no_wrap`. -/
+theorem sable_dotExec_exact_no_wrap (b : IntTensorBound) (ws xs : Array Int)
+    (hGuard : checkSableNoWrap b = true)
+    (hLen : ws.size ≤ b.dim)
+    (hW : VecAbsBounded b.maxAbsWeight ws.toList)
+    (hX : VecAbsBounded b.maxAbsAct xs.toList) :
+    2 * (intDotExec ws xs).natAbs < b.modulusP ∧
+      decodeSignedModP b.modulusP (embedModP b.modulusP (intDotExec ws xs)) =
+        intDot ws.toList xs.toList := by
+  rw [intDotExec_eq_intDot]
+  have hLenList : ws.toList.length ≤ b.dim := by rw [Array.length_toList]; exact hLen
+  exact sable_dot_exact_no_wrap b ws.toList xs.toList hGuard hLenList hW hX
+
+
+/-! ## §2. Bit-Exact Integer-Sliced Collectives (`Ozaki`), `Array` `Exec` Fast Path & `HyperLaw2` -/
+
+/-- Componentwise exact integer addition on fixed-radix mantissa slices (zero-extended). -/
+def sliceVecAdd : List Int → List Int → List Int
+  | [], ys => ys
+  | x :: xs, [] => x :: xs
+  | x :: xs, y :: ys => (x + y) :: sliceVecAdd xs ys
+
+@[simp] theorem sliceVecAdd_nil_left (ys : List Int) :
+    sliceVecAdd [] ys = ys := by
+  cases ys <;> rfl
+
+@[simp] theorem sliceVecAdd_nil_right (xs : List Int) :
+    sliceVecAdd xs [] = xs := by
+  cases xs <;> rfl
+
+/-- Commutativity of integer-slice vector addition. -/
+theorem sliceVecAdd_comm (xs ys : List Int) :
+    sliceVecAdd xs ys = sliceVecAdd ys xs := by
+  induction xs generalizing ys with
+  | nil => simp
+  | cons x xs' ih =>
+    cases ys with
+    | nil => rfl
+    | cons y ys' =>
+      dsimp only [sliceVecAdd]
+      rw [Int.add_comm, ih ys']
+
+/-- Associativity of integer-slice vector addition (fails for IEEE-754 floats!). -/
+theorem sliceVecAdd_assoc (xs ys zs : List Int) :
+    sliceVecAdd (sliceVecAdd xs ys) zs = sliceVecAdd xs (sliceVecAdd ys zs) := by
+  induction xs generalizing ys zs with
+  | nil => rfl
+  | cons x xs' ih =>
+    cases ys with
+    | nil => rfl
+    | cons y ys' =>
+      cases zs with
+      | nil => rfl
+      | cons z zs' =>
+        dsimp only [sliceVecAdd]
+        rw [Int.add_assoc, ih ys' zs']
+
+/-- Multi-worker integer-slice reduction across GPU workers (`List` specification). -/
+def ozakiSliceSum (workers : List (List Int)) : List Int :=
+  workers.foldr sliceVecAdd []
+
+/-- Structural index loop for componentwise `Array Int` slice addition (zero-extended). -/
+def sliceVecAddExecLoop (xs ys : Array Int) (idx : Nat) : Nat → Array Int → Array Int
+  | 0, acc => acc
+  | rem + 1, acc =>
+    if hx : idx < xs.size then
+      if hy : idx < ys.size then
+        sliceVecAddExecLoop xs ys (idx + 1) rem (acc.push (xs[idx] + ys[idx]))
+      else
+        sliceVecAddExecLoop xs ys (idx + 1) rem (acc.push xs[idx])
+    else if hy : idx < ys.size then
+      sliceVecAddExecLoop xs ys (idx + 1) rem (acc.push ys[idx])
+    else
+      acc
+termination_by structural rem => rem
+
+/-- Tight `Array Int` `Exec` fast path for componentwise integer-slice addition. -/
+def sliceVecAddExec (xs ys : Array Int) : Array Int :=
+  let n := max xs.size ys.size
+  sliceVecAddExecLoop xs ys 0 n (Array.emptyWithCapacity n)
+
+theorem sliceVecAddExecLoop_eq_spec (xs ys : Array Int) (idx rem : Nat)
+    (hRem : idx + rem = max xs.size ys.size) (acc : Array Int) :
+    (sliceVecAddExecLoop xs ys idx rem acc).toList =
+      acc.toList ++ sliceVecAdd (xs.toList.drop idx) (ys.toList.drop idx) := by
+  induction rem generalizing idx acc with
+  | zero =>
+    have hXLe : xs.toList.length ≤ idx := by rw [Array.length_toList]; omega
+    have hYLe : ys.toList.length ≤ idx := by rw [Array.length_toList]; omega
+    rw [List.drop_eq_nil_of_le hXLe, List.drop_eq_nil_of_le hYLe]
+    simp [sliceVecAddExecLoop, sliceVecAdd]
+  | succ r ih =>
+    have hNext : (idx + 1) + r = max xs.size ys.size := by omega
+    unfold sliceVecAddExecLoop
+    if hx : idx < xs.size then
+      have hxL : idx < xs.toList.length := by rw [Array.length_toList]; exact hx
+      have hDropX : xs.toList.drop idx = xs[idx] :: xs.toList.drop (idx + 1) := by
+        rw [List.drop_eq_getElem_cons hxL]; rfl
+      if hy : idx < ys.size then
+        have hyL : idx < ys.toList.length := by rw [Array.length_toList]; exact hy
+        have hDropY : ys.toList.drop idx = ys[idx] :: ys.toList.drop (idx + 1) := by
+          rw [List.drop_eq_getElem_cons hyL]; rfl
+        simp only [hx, hy, ↓reduceDIte]
+        rw [ih (idx + 1) hNext (acc.push (xs[idx] + ys[idx])), hDropX, hDropY]
+        simp [Array.toList_push, sliceVecAdd, List.append_assoc]
+      else
+        have hyLe : ys.toList.length ≤ idx := by rw [Array.length_toList]; omega
+        have hyLeNext : ys.toList.length ≤ idx + 1 := by omega
+        have hDropY : ys.toList.drop idx = [] := List.drop_eq_nil_of_le hyLe
+        have hDropYNext : ys.toList.drop (idx + 1) = [] := List.drop_eq_nil_of_le hyLeNext
+        simp only [hx, hy, ↓reduceDIte]
+        rw [ih (idx + 1) hNext (acc.push xs[idx]), hDropX, hDropY, hDropYNext]
+        simp [Array.toList_push, sliceVecAdd, List.append_assoc]
+    else
+      have hy : idx < ys.size := by omega
+      have hyL : idx < ys.toList.length := by rw [Array.length_toList]; exact hy
+      have hDropY : ys.toList.drop idx = ys[idx] :: ys.toList.drop (idx + 1) := by
+        rw [List.drop_eq_getElem_cons hyL]; rfl
+      have hxLe : xs.toList.length ≤ idx := by rw [Array.length_toList]; omega
+      have hxLeNext : xs.toList.length ≤ idx + 1 := by omega
+      have hDropX : xs.toList.drop idx = [] := List.drop_eq_nil_of_le hxLe
+      have hDropXNext : xs.toList.drop (idx + 1) = [] := List.drop_eq_nil_of_le hxLeNext
+      simp only [hx, hy, ↓reduceDIte]
+      rw [ih (idx + 1) hNext (acc.push ys[idx]), hDropX, hDropXNext, hDropY]
+      simp [Array.toList_push, sliceVecAdd, List.append_assoc]
+
+/-- **`Spec ↔ Exec` Slice Addition Equivalence**: `sliceVecAddExec` refines `sliceVecAdd`. -/
+theorem sliceVecAddExec_eq_sliceVecAdd (xs ys : Array Int) :
+    (sliceVecAddExec xs ys).toList = sliceVecAdd xs.toList ys.toList := by
+  unfold sliceVecAddExec
+  have h := sliceVecAddExecLoop_eq_spec xs ys 0 (max xs.size ys.size) (Nat.zero_add _)
+    (Array.emptyWithCapacity (max xs.size ys.size))
+  simpa using h
+
+/-- Structural worker loop for `ozakiSliceSumExec`. -/
+def ozakiSliceSumExecLoop (workers : Array (Array Int)) (idx : Nat) :
+    Nat → Array Int → Array Int
+  | 0, acc => acc
+  | rem + 1, acc =>
+    if hw : idx < workers.size then
+      ozakiSliceSumExecLoop workers (idx + 1) rem (sliceVecAddExec acc workers[idx])
+    else
+      acc
+termination_by structural rem => rem
+
+/-- Tight `Array (Array Int)` `Exec` fast path for multi-worker Ozaki slice reduction. -/
+def ozakiSliceSumExec (workers : Array (Array Int)) : Array Int :=
+  ozakiSliceSumExecLoop workers 0 workers.size #[]
+
+theorem ozakiSliceSumExecLoop_eq_spec (workers : Array (Array Int)) (idx rem : Nat)
+    (hRem : idx + rem = workers.size) (acc : Array Int) :
+    (ozakiSliceSumExecLoop workers idx rem acc).toList =
+      sliceVecAdd acc.toList (ozakiSliceSum ((workers.toList.drop idx).map Array.toList)) := by
+  induction rem generalizing idx acc with
+  | zero =>
+    have hLe : workers.toList.length ≤ idx := by rw [Array.length_toList]; omega
+    rw [List.drop_eq_nil_of_le hLe]
+    simp [ozakiSliceSumExecLoop, ozakiSliceSum]
+  | succ r ih =>
+    have hw : idx < workers.size := by omega
+    have hwL : idx < workers.toList.length := by rw [Array.length_toList]; exact hw
+    have hDrop : workers.toList.drop idx = workers[idx] :: workers.toList.drop (idx + 1) := by
+      rw [List.drop_eq_getElem_cons hwL]; rfl
+    have hNext : (idx + 1) + r = workers.size := by omega
+    unfold ozakiSliceSumExecLoop
+    simp only [hw, ↓reduceDIte]
+    rw [ih (idx + 1) hNext (sliceVecAddExec acc workers[idx]),
+        sliceVecAddExec_eq_sliceVecAdd, hDrop]
+    dsimp only [List.map, ozakiSliceSum, List.foldr]
+    rw [sliceVecAdd_assoc]
+
+/-- **`Spec ↔ Exec` Multi-Worker Ozaki Equivalence**: `ozakiSliceSumExec` over `Array (Array Int)`
+    produces the exact same integer slice vector as `ozakiSliceSum`. -/
+theorem ozakiSliceSumExec_eq_ozakiSliceSum (workers : Array (Array Int)) :
+    (ozakiSliceSumExec workers).toList = ozakiSliceSum (workers.toList.map Array.toList) := by
+  unfold ozakiSliceSumExec
+  have h := ozakiSliceSumExecLoop_eq_spec workers 0 workers.size (Nat.zero_add _) #[]
+  simpa using h
+
+theorem ozakiSliceSum_append (w₁ w₂ : List (List Int)) :
+    ozakiSliceSum (w₁ ++ w₂) = sliceVecAdd (ozakiSliceSum w₁) (ozakiSliceSum w₂) := by
+  induction w₁ with
+  | nil => rfl
+  | cons s rest ih =>
+    dsimp only [List.cons_append, ozakiSliceSum, List.foldr] at ih ⊢
+    rw [ih, sliceVecAdd_assoc]
+
+/-- **Worker-Order / Permutation Invariance (`ozakiSliceSum_perm`)**:
+    Permuting GPU worker arrival order leaves `ozakiSliceSum` bit-for-bit identical. -/
+theorem ozakiSliceSum_perm {w₁ w₂ : List (List Int)}
+    (hPerm : List.Perm w₁ w₂) :
+    ozakiSliceSum w₁ = ozakiSliceSum w₂ := by
+  induction hPerm with
+  | nil => rfl
+  | cons s _ ih =>
+    dsimp only [ozakiSliceSum, List.foldr] at ih ⊢
+    rw [ih]
+  | swap s₁ s₂ rest =>
+    dsimp only [ozakiSliceSum, List.foldr]
+    rw [← sliceVecAdd_assoc, sliceVecAdd_comm s₂ s₁, sliceVecAdd_assoc]
+  | trans _ _ ih₁ ih₂ =>
+    exact ih₁.trans ih₂
+
+/-- Arbitrary binary AllReduce reduction tree schedule (ring, butterfly, straggler tree). -/
+inductive AllReduceTree where
+  | empty : AllReduceTree
+  | leaf (slices : List Int) : AllReduceTree
+  | node (left right : AllReduceTree) : AllReduceTree
+  deriving DecidableEq, Repr
+
+/-- Reduce an `AllReduceTree` according to its exact parenthesization / tree topology. -/
+def evalAllReduceTree : AllReduceTree → List Int
+  | .empty => []
+  | .leaf s => s
+  | .node l r => sliceVecAdd (evalAllReduceTree l) (evalAllReduceTree r)
+
+/-- Left-to-right leaf frontier of an `AllReduceTree`. -/
+def flattenAllReduceTree : AllReduceTree → List (List Int)
+  | .empty => []
+  | .leaf s => [s]
+  | .node l r => flattenAllReduceTree l ++ flattenAllReduceTree r
+
+/-- **Tree-Topology / Re-Association Invariance (`ozaki_tree_schedule_invariant`)**:
+    Every binary reduction tree over a sequence of GPU worker slices computes the exact same
+    slice vector as canonical `ozakiSliceSum`. -/
+theorem ozaki_tree_schedule_invariant (t : AllReduceTree) :
+    evalAllReduceTree t = ozakiSliceSum (flattenAllReduceTree t) := by
+  induction t with
+  | empty => rfl
+  | leaf s =>
+    dsimp only [evalAllReduceTree, flattenAllReduceTree, ozakiSliceSum, List.foldr]
+    rw [sliceVecAdd_nil_right]
+  | node l r ihl ihr =>
+    dsimp only [evalAllReduceTree, flattenAllReduceTree]
+    rw [ihl, ihr, ozakiSliceSum_append]
+
+/-- Reconstruct an exact scaled integer from radix-`B` Ozaki slices (`s₀ + B·s₁ + B²·s₂ + …`). -/
+def evalRadixSlices (radix : Int) : List Int → Int
+  | [] => 0
+  | s :: ss => s + radix * evalRadixSlices radix ss
+
+/-- `sliceVecAdd` is an exact homomorphism for radix evaluation at any radix `B`. -/
+theorem evalRadixSlices_sliceVecAdd (radix : Int) (xs ys : List Int) :
+    evalRadixSlices radix (sliceVecAdd xs ys) =
+      evalRadixSlices radix xs + evalRadixSlices radix ys := by
+  induction xs generalizing ys with
+  | nil => simp [evalRadixSlices]
+  | cons x xs' ih =>
+    cases ys with
+    | nil => simp [evalRadixSlices]
+    | cons y ys' =>
+      dsimp only [sliceVecAdd, evalRadixSlices]
+      rw [ih ys', Int.mul_add]
+      omega
+
+/-- Multi-tenant cluster AllReduce world: `publicReducedSlices` is visible to low-security
+    tenant outputs while `secretScheduleTag` records high-security co-tenant scheduling decisions. -/
+structure ClusterReduceWorld where
+  publicReducedSlices : List Int
+  secretScheduleTag   : Nat
+  deriving DecidableEq, Repr
+
+/-- Low-security observer sees only the reduced slice vector, never the secret schedule tag. -/
+def clusterPublicView : LowView ClusterReduceWorld (List Int) where
+  observe w := w.publicReducedSlices
+
+/-- Execute one cluster collective step from a tree schedule `t` and secret co-tenant tag `sec`. -/
+def runScheduledAllReduce (t : AllReduceTree) (sec : Nat) : ClusterReduceWorld where
+  publicReducedSlices := evalAllReduceTree t
+  secretScheduleTag   := sec
+
+/-- **Covert-Channel Closure Theorem (`ozaki_closes_schedule_covert_channel`)**:
+    For any two AllReduce tree schedules `t₁, t₂` whose worker leaves are permutations of each
+    other (`List.Perm (flattenAllReduceTree t₁) (flattenAllReduceTree t₂)`), varying the secret
+    co-tenant schedule tag (`sec₁` vs `sec₂`) and tree parenthesization preserves `HyperLaw2`
+    observational non-interference (`HyperLaw2NonInterference clusterPublicView`). -/
+theorem ozaki_closes_schedule_covert_channel
+    (init₁ init₂ : ClusterReduceWorld)
+    (t₁ t₂ : AllReduceTree) (sec₁ sec₂ : Nat)
+    (hPerm : List.Perm (flattenAllReduceTree t₁) (flattenAllReduceTree t₂)) :
+    HyperLaw2NonInterference clusterPublicView
+      [(init₁, init₂), (runScheduledAllReduce t₁ sec₁, runScheduledAllReduce t₂ sec₂)] := by
+  apply checkHyperLaw2NonInterference_sound
+  dsimp only [checkHyperLaw2NonInterference]
+  cases checkLowEquiv clusterPublicView init₁ init₂
+  · rfl
+  · simp only [List.all_cons, List.all_nil, Bool.and_true, checkHyperLaw2Step, checkLowEquiv,
+      clusterPublicView, runScheduledAllReduce]
+    rw [ozaki_tree_schedule_invariant t₁, ozaki_tree_schedule_invariant t₂,
+        ozakiSliceSum_perm hPerm]
+    exact decide_eq_true rfl
+
+
+/-! ## §3. `AriadneStep` Lineage, Authority-Pinned RTT & Lower-Curve Energy Conservation -/
+
+/-- Lineage & compute-cap commitment for one verifiable AI training/inference step (`AriadneStep`). -/
+structure AriadneStep where
+  prevWeightsRoot   : Nat
+  batchCallTreeRoot : Nat
+  nextWeightsRoot   : Nat
+  flopsUsed         : Nat
+  flopsCap          : Nat
+  deriving DecidableEq, Repr
+
+/-- Authority-pinned physical round-trip latency and lower-curve metered energy envelope:
+    - `authorityBudgetMicros` is pinned by the verifier hardware class (never prover-chosen;
+      `proverClaimedBudgetMicros` is untrusted metadata ignored by acceptance).
+    - `lowerCurveProvenMilliJ` (`E_lo`) and `idleEnergyMilliJ` (`E_idle`) credit only the minimum
+      physically necessary energy of proven compute, preventing upper-curve subtraction masking.
+    - `minHiddenOpMilliJ` (`e_min > 0`) bounds unproved shadow FLOPs via metered residual energy. -/
+structure PhysicalEnergyEnvelope where
+  measuredRttMicros         : Nat
+  authorityBudgetMicros     : Nat
+  proverClaimedBudgetMicros : Nat := 0
+  meterEnergyMilliJ         : Nat
+  lowerCurveProvenMilliJ    : Nat
+  idleEnergyMilliJ          : Nat
+  toleranceMilliJ           : Nat
+  minHiddenOpMilliJ         : Nat
+  hiddenOpsCap              : Nat
+  deriving DecidableEq, Repr
+
+/-- Metered residual energy above the proven lower curve and idle baseline:
+    `meter + η - E_lo - E_idle`. -/
+def physicalResidualMilliJ (env : PhysicalEnergyEnvelope) : Nat :=
+  (env.meterEnergyMilliJ + env.toleranceMilliJ) - env.lowerCurveProvenMilliJ - env.idleEnergyMilliJ
+
+/-- Executable verifier check for `PhysicalEnergyEnvelope`: enforces positive `minHiddenOpMilliJ`,
+    authority-pinned RTT `measuredRttMicros ≤ authorityBudgetMicros`, and residual energy ceiling
+    `physicalResidualMilliJ env ≤ minHiddenOpMilliJ * hiddenOpsCap`. -/
+def checkPhysicalEnergyEnvelope (env : PhysicalEnergyEnvelope) : Bool :=
+  decide (0 < env.minHiddenOpMilliJ ∧
+    env.measuredRttMicros ≤ env.authorityBudgetMicros ∧
+    env.lowerCurveProvenMilliJ + env.idleEnergyMilliJ ≤ env.meterEnergyMilliJ ∧
+    physicalResidualMilliJ env ≤ env.minHiddenOpMilliJ * env.hiddenOpsCap)
+
+/-- Accepted metering covers the baseline before tolerance is added or naturals
+are subtracted. Tolerance cannot conceal an under-metered baseline. -/
+theorem checkPhysicalEnergyEnvelope_no_underflow (env : PhysicalEnergyEnvelope)
+    (h : checkPhysicalEnergyEnvelope env = true) :
+    env.lowerCurveProvenMilliJ + env.idleEnergyMilliJ ≤ env.meterEnergyMilliJ := by
+  exact (of_decide_eq_true h).2.2.1
+
+/-- **Unconditional Lower-Curve Energy Conservation & Authority-Pinned RTT Theorem**:
+    Whenever `checkPhysicalEnergyEnvelope env = true`:
+    1. `env.measuredRttMicros ≤ env.authorityBudgetMicros`, and mutating the prover's claimed
+       RTT budget never alters verifier acceptance;
+    2. For any unproved shadow operation count `hiddenOps` satisfying metered energy conservation
+       `e_min * hiddenOps ≤ meter + η - E_lo - E_idle`, `hiddenOps ≤ env.hiddenOpsCap`;
+    3. Equivalently, any shadow FLOP count `hiddenOps > env.hiddenOpsCap` strictly violates
+       metered physical energy conservation. -/
+theorem energy_conservation_bounds_hidden_ops
+    (env : PhysicalEnergyEnvelope) (hiddenOps : Nat)
+    (hEnv : checkPhysicalEnergyEnvelope env = true) :
+    env.measuredRttMicros ≤ env.authorityBudgetMicros ∧
+      (∀ claimed : Nat,
+        checkPhysicalEnergyEnvelope { env with proverClaimedBudgetMicros := claimed } = true) ∧
+      (env.minHiddenOpMilliJ * hiddenOps ≤
+        (env.meterEnergyMilliJ + env.toleranceMilliJ) -
+          env.lowerCurveProvenMilliJ - env.idleEnergyMilliJ →
+        hiddenOps ≤ env.hiddenOpsCap) ∧
+      (env.hiddenOpsCap < hiddenOps →
+        ¬ (env.minHiddenOpMilliJ * hiddenOps ≤
+          (env.meterEnergyMilliJ + env.toleranceMilliJ) -
+            env.lowerCurveProvenMilliJ - env.idleEnergyMilliJ)) := by
+  have hDec := of_decide_eq_true hEnv
+  rcases hDec with ⟨hPos, hRtt, _hBaseline, hRes⟩
+  unfold physicalResidualMilliJ at hRes
+  have hBound :
+      env.minHiddenOpMilliJ * hiddenOps ≤
+        (env.meterEnergyMilliJ + env.toleranceMilliJ) -
+          env.lowerCurveProvenMilliJ - env.idleEnergyMilliJ →
+      hiddenOps ≤ env.hiddenOpsCap := by
+    intro hPhys
+    have hChain : env.minHiddenOpMilliJ * hiddenOps ≤ env.minHiddenOpMilliJ * env.hiddenOpsCap :=
+      Nat.le_trans hPhys hRes
+    exact Nat.le_of_mul_le_mul_left hChain hPos
+  refine ⟨hRtt, fun _ => hEnv, hBound, ?_⟩
+  intro hGt hPhys
+  have hLe := hBound hPhys
+  omega
+
+/-- **Universal Upper-Curve vs Lower-Curve Subtraction Theorem**:
+    For any proven lower-curve energy `eLo`, positive per-op energy `0 < eMin`, and positive covert
+    shadow operation count `0 < covertOps`: subtracting an inflated upper calibration curve
+    `eHi = eLo + eMin * covertOps` from `meter = eHi` masks the entire `eMin * covertOps` covert
+    budget (`eHi - eHi = 0`), whereas `PhysicalEnergyEnvelope` subtracting `lowerCurveProvenMilliJ = eLo`
+    exposes `physicalResidualMilliJ env = eMin * covertOps` and refuses `hiddenOpsCap = 0`. -/
+theorem upper_curve_subtraction_masks_covert_ops
+    (eLo covertOps eMin rtt authBudget : Nat)
+    (hMin : 0 < eMin) (hCovert : 0 < covertOps) :
+    let eHi := eLo + eMin * covertOps
+    let env : PhysicalEnergyEnvelope := {
+      measuredRttMicros      := rtt
+      authorityBudgetMicros  := authBudget
+      meterEnergyMilliJ      := eHi
+      lowerCurveProvenMilliJ := eLo
+      idleEnergyMilliJ       := 0
+      toleranceMilliJ        := 0
+      minHiddenOpMilliJ      := eMin
+      hiddenOpsCap           := 0
+    }
+    eHi - eHi = 0 ∧
+    physicalResidualMilliJ env = eMin * covertOps ∧
+    checkPhysicalEnergyEnvelope env = false := by
+  dsimp only
+  have hRes : (eLo + eMin * covertOps + 0) - eLo - 0 = eMin * covertOps := by omega
+  have hPosProd : 0 < eMin * covertOps := Nat.mul_pos hMin hCovert
+  refine ⟨Nat.sub_self _, hRes, ?_⟩
+  unfold checkPhysicalEnergyEnvelope physicalResidualMilliJ
+  dsimp only
+  rw [hRes]
+  apply decide_eq_false
+  intro h
+  have hBad := h.2.2.2
+  omega
+
+/-- Full cluster step audit context bundling `Sable`, `Ozaki`, `AriadneStep`, and `Reasons` policy. -/
+structure ClusterStepContext where
+  tensorBound   : IntTensorBound
+  sampleWeights : List Int
+  sampleActs    : List Int
+  workerSlices  : List (List Int)
+  step          : AriadneStep
+  govProgram    : Obend.Reasons.Program
+  targetConcl   : String
+
+/-- Named refusal diagnostic for `ClusterGov` step auditing. -/
+inductive ClusterGovRefusal where
+  | sableModulusWrap (twoMaxAcc modulusP : Nat)
+  | dimExceeded (actualLen maxDim : Nat)
+  | weightBoundExceeded
+  | activationBoundExceeded
+  | flopsCapExceeded (flopsUsed flopsCap : Nat)
+  | missingBatchCallTreeRoot
+  | policyUnsupported (conclusion : String) (status : Obend.Reasons.Status)
+  deriving DecidableEq, Repr
+
+/-- Deterministic `ClusterGov` step auditor: checks `Sable` no-wrap envelope, vector norms,
+    `flopsCap` ceiling, non-zero `batchCallTreeRoot` lineage, and `Obend.Reasons.wf` admission,
+    returning the canonical `ozakiSliceSum` collective output on `.ok`. -/
+def auditClusterStep (ctx : ClusterStepContext) :
+    Except ClusterGovRefusal (List Int) :=
+  let twoMax := 2 * ctx.tensorBound.dim * ctx.tensorBound.maxAbsWeight * ctx.tensorBound.maxAbsAct
+  if !checkSableNoWrap ctx.tensorBound then
+    .error (.sableModulusWrap twoMax ctx.tensorBound.modulusP)
+  else if !decide (ctx.sampleWeights.length ≤ ctx.tensorBound.dim) then
+    .error (.dimExceeded ctx.sampleWeights.length ctx.tensorBound.dim)
+  else if !checkVecAbsBounded ctx.tensorBound.maxAbsWeight ctx.sampleWeights then
+    .error .weightBoundExceeded
+  else if !checkVecAbsBounded ctx.tensorBound.maxAbsAct ctx.sampleActs then
+    .error .activationBoundExceeded
+  else if !decide (ctx.step.flopsUsed ≤ ctx.step.flopsCap) then
+    .error (.flopsCapExceeded ctx.step.flopsUsed ctx.step.flopsCap)
+  else if ctx.step.batchCallTreeRoot == 0 then
+    .error .missingBatchCallTreeRoot
+  else
+    let st := Obend.Reasons.statusIn (Obend.Reasons.wf ctx.govProgram) ctx.targetConcl
+    if st == .supported then
+      .ok (ozakiSliceSum ctx.workerSlices)
+    else
+      .error (.policyUnsupported ctx.targetConcl st)
+
+/-- Boolean decision wrapper for `auditClusterStep`. -/
+def verifyClusterStep (ctx : ClusterStepContext) : Bool :=
+  (auditClusterStep ctx).isOk
+
+/-- Extended physical + algebraic cluster step context pairing `ClusterStepContext` with
+    `PhysicalEnergyEnvelope`. -/
+structure PhysicalClusterStepContext where
+  base     : ClusterStepContext
+  physical : PhysicalEnergyEnvelope
+
+/-- Named refusal diagnostic for `auditPhysicalClusterStep`. -/
+inductive PhysicalClusterRefusal where
+  | baseRefusal (err : ClusterGovRefusal)
+  | zeroMinHiddenOpEnergy
+  | energyBaselineUnderflow (meterMilliJ baselineMilliJ : Nat)
+  | rttBudgetExceeded (measuredMicros authorityBudgetMicros : Nat)
+  | energyResidualExceeded (residualMilliJ maxAllowedMilliJ : Nat)
+  deriving DecidableEq, Repr
+
+/-- Audit both algebraic `ClusterStepContext` invariants and physical RTT/energy conservation,
+    returning the unboxed `Array Int` `ozakiSliceSumExec` collective result. -/
+def auditPhysicalClusterStep (pctx : PhysicalClusterStepContext) :
+    Except PhysicalClusterRefusal (Array Int) :=
+  match auditClusterStep pctx.base with
+  | .error e => .error (.baseRefusal e)
+  | .ok _ =>
+    let env := pctx.physical
+    if !decide (0 < env.minHiddenOpMilliJ) then
+      .error .zeroMinHiddenOpEnergy
+    else if !decide (env.measuredRttMicros ≤ env.authorityBudgetMicros) then
+      .error (.rttBudgetExceeded env.measuredRttMicros env.authorityBudgetMicros)
+    else if !decide (env.lowerCurveProvenMilliJ + env.idleEnergyMilliJ ≤ env.meterEnergyMilliJ) then
+      .error (.energyBaselineUnderflow env.meterEnergyMilliJ
+        (env.lowerCurveProvenMilliJ + env.idleEnergyMilliJ))
+    else
+      let res := physicalResidualMilliJ env
+      let cap := env.minHiddenOpMilliJ * env.hiddenOpsCap
+      if !decide (res ≤ cap) then
+        .error (.energyResidualExceeded res cap)
+      else
+        .ok (ozakiSliceSumExec (pctx.base.workerSlices.map List.toArray).toArray)
+
+
+/-! ## §4. Hardware & Sealed-VRAM Stage-A Obligations (`ClusterGovObligations`) & Apex Theorem -/
+
+/-- RDNA2 GFX1030 compute shader wavefront dispatch trace for collective/tensor reduction. -/
+structure Rdna2WavefrontDispatch where
+  shaderIsaWords  : Array UInt32
+  waveSize        : Nat
+  workgroupSlices : Array (Array Int)
+  hwReducedOut    : Array Int
+  statusTrap      : Bool
+  deriving DecidableEq, Repr
+
+/-- Structural validity check on an `Rdna2WavefrontDispatch`. -/
+def checkRdna2DispatchEnvelope (d : Rdna2WavefrontDispatch) : Bool :=
+  (d.waveSize == 32 || d.waveSize == 64) &&
+  decide (0 < d.shaderIsaWords.size) &&
+  !d.statusTrap &&
+  decide (0 < d.workgroupSlices.size)
+
+/-- Verifier-challenged sealed-VRAM Merkle page-opening claim over `BitVec 256` roots. -/
+structure SealedVramOpeningClaim where
+  sealedRoot256     : BitVec 256
+  challengeSeed256  : BitVec 256
+  totalPages        : Nat
+  sampledOffsets    : Array Nat
+  openedPageDigests : Array (BitVec 256)
+  deriving DecidableEq, Repr
+
+/-- Structural validity check on a `SealedVramOpeningClaim`. -/
+def checkSealedVramClaimEnvelope (c : SealedVramOpeningClaim) : Bool :=
+  decide (0 < c.totalPages) &&
+  decide (8 ≤ c.sampledOffsets.size) &&
+  decide (c.sampledOffsets.size = c.openedPageDigests.size) &&
+  c.sampledOffsets.all (fun idx => decide (idx < c.totalPages))
+
+/-- **Organ O6 Unconditional Apex Step Theorem (`apex_verifiable_ai_cluster_step`)**:
+    With **zero open obligations** and **zero `Classical.choice`**, whenever
+    `auditClusterStep ctx = .ok reducedSlices`, Lean's kernel establishes:
+    1. Exact `Sable` $F_O$ modular dot-product round-trip (`decodeSignedModP ... = intDot ...`)
+       matching `intDotExec`,
+    2. Permutation-invariant bit-exact `Ozaki` collective output (`ozakiSliceSum workers' = reducedSlices`),
+    3. Enforced `flopsUsed ≤ flopsCap` compute cap and non-zero `batchCallTreeRoot` lineage, and
+    4. Supported `Obend.Reasons.wf` governance judgment. -/
+theorem apex_verifiable_ai_cluster_step
+    (ctx : ClusterStepContext) (reducedSlices : List Int)
+    (workers' : List (List Int))
+    (hAudit : auditClusterStep ctx = .ok reducedSlices)
+    (hPerm : List.Perm ctx.workerSlices workers') :
+    2 * (intDot ctx.sampleWeights ctx.sampleActs).natAbs < ctx.tensorBound.modulusP ∧
+      decodeSignedModP ctx.tensorBound.modulusP
+        (embedModP ctx.tensorBound.modulusP (intDot ctx.sampleWeights ctx.sampleActs)) =
+        intDot ctx.sampleWeights ctx.sampleActs ∧
+      ozakiSliceSum workers' = reducedSlices ∧
+      ctx.step.flopsUsed ≤ ctx.step.flopsCap ∧
+      ctx.step.batchCallTreeRoot ≠ 0 ∧
+      Obend.Reasons.statusIn (Obend.Reasons.wf ctx.govProgram) ctx.targetConcl = .supported := by
+  unfold auditClusterStep at hAudit
+  cases hSable : checkSableNoWrap ctx.tensorBound
+  · rw [hSable] at hAudit; cases hAudit
+  · rw [hSable] at hAudit
+    simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hAudit
+    cases hDimDec : decide (ctx.sampleWeights.length ≤ ctx.tensorBound.dim)
+    · rw [hDimDec] at hAudit; cases hAudit
+    · rw [hDimDec] at hAudit
+      simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hAudit
+      have hDim : ctx.sampleWeights.length ≤ ctx.tensorBound.dim := of_decide_eq_true hDimDec
+      cases hW : checkVecAbsBounded ctx.tensorBound.maxAbsWeight ctx.sampleWeights
+      · rw [hW] at hAudit; cases hAudit
+      · rw [hW] at hAudit
+        simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hAudit
+        cases hX : checkVecAbsBounded ctx.tensorBound.maxAbsAct ctx.sampleActs
+        · rw [hX] at hAudit; cases hAudit
+        · rw [hX] at hAudit
+          simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hAudit
+          cases hFlopsDec : decide (ctx.step.flopsUsed ≤ ctx.step.flopsCap)
+          · rw [hFlopsDec] at hAudit; cases hAudit
+          · rw [hFlopsDec] at hAudit
+            simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hAudit
+            have hFlops : ctx.step.flopsUsed ≤ ctx.step.flopsCap := of_decide_eq_true hFlopsDec
+            cases hBatchZero : (ctx.step.batchCallTreeRoot == 0)
+            · rw [hBatchZero] at hAudit
+              simp only [Bool.false_eq_true, ↓reduceIte] at hAudit
+              have hBatchNe : ctx.step.batchCallTreeRoot ≠ 0 := by
+                intro hEq0
+                have hTrue : (ctx.step.batchCallTreeRoot == 0) = true := beq_iff_eq.mpr hEq0
+                exact Bool.false_ne_true (hBatchZero.symm.trans hTrue)
+              cases hSt : (Obend.Reasons.statusIn (Obend.Reasons.wf ctx.govProgram)
+                  ctx.targetConcl == .supported)
+              · rw [hSt] at hAudit; cases hAudit
+              · rw [hSt] at hAudit
+                simp only [↓reduceIte] at hAudit
+                injection hAudit with hOut
+                have hExact := sable_dot_exact_no_wrap ctx.tensorBound
+                  ctx.sampleWeights ctx.sampleActs hSable hDim
+                  (checkVecAbsBounded_sound hW)
+                  (checkVecAbsBounded_sound hX)
+                have hPermEq : ozakiSliceSum workers' = reducedSlices := by
+                  rw [← ozakiSliceSum_perm hPerm, hOut]
+                exact ⟨hExact.1, hExact.2, hPermEq, hFlops, hBatchNe, beq_iff_eq.mp hSt⟩
+            · rw [hBatchZero] at hAudit; cases hAudit
+
+
+/-! ## §5. Concrete Cluster Governance Fixtures & Silver Smoke Runner -/
+
+/-- Valid KoalaBear (`p = 2130706433`) 4-dim tensor bound (`2 * 4 * 1024 * 1024 = 8,388,608 < p`). -/
+def defaultKoalaBound : IntTensorBound where
+  dim          := 4
+  maxAbsWeight := 1024
+  maxAbsAct    := 1024
+  modulusP     := koalaBearPrime
+
+/-- Valid `ClusterStepContext` within `Sable` no-wrap bounds and `flopsCap = 10_000_000`. -/
+def validClusterStepCtx : ClusterStepContext where
+  tensorBound   := {
+    dim          := 4
+    maxAbsWeight := 1024
+    maxAbsAct    := 1024
+    modulusP     := 2130706433
+  }
+  sampleWeights := [512, -256, 128, -64]
+  sampleActs    := [300, 400, -500, 100]
+  workerSlices  := [[100, -20, 3], [50, 40, -1], [-30, 10, 5]]
+  step := {
+    prevWeightsRoot   := 0x11112222
+    batchCallTreeRoot := 0x9999AAAA
+    nextWeightsRoot   := 0x33334444
+    flopsUsed         := 7500000
+    flopsCap          := 10000000
+  }
+  govProgram := {
+    facts := ["cluster_quorum_signed", "corrigibility_watchdog_armed"]
+    rules := [{
+      name  := "admit_training_step"
+      concl := "step_admitted"
+      pos   := ["cluster_quorum_signed", "corrigibility_watchdog_armed"]
+      neg   := ["kill_switch_tripped"]
+    }]
+  }
+  targetConcl := "step_admitted"
+
+/-- Default authority-pinned `PhysicalEnergyEnvelope` for rack-local cluster verification:
+    `measuredRttMicros = 1200 ≤ 3000 = authorityBudgetMicros`, residual energy
+    `(450 + 10) - 400 - 40 = 20 ≤ 5 * 4 = 20` mJ (`hiddenOpsCap = 4`). -/
+def defaultPhysicalEnvelope : PhysicalEnergyEnvelope where
+  measuredRttMicros         := 1200
+  authorityBudgetMicros     := 3000
+  proverClaimedBudgetMicros := 999999
+  meterEnergyMilliJ         := 450
+  lowerCurveProvenMilliJ    := 400
+  idleEnergyMilliJ          := 40
+  toleranceMilliJ           := 10
+  minHiddenOpMilliJ         := 5
+  hiddenOpsCap              := 4
+
+/-- Planted bad context #1: `Sable` modulus wraparound (`2 * 4 * 50000 * 10000 = 4,000,000,000 ≥ p`). -/
+def wrapOverflowClusterCtx : ClusterStepContext :=
+  { validClusterStepCtx with
+    tensorBound := {
+      dim          := 4
+      maxAbsWeight := 50000
+      maxAbsAct    := 10000
+      modulusP     := koalaBearPrime
+    } }
+
+/-- Planted bad context #2: `flopsUsed` (`12,500,000`) breaches `flopsCap` (`10,000,000`). -/
+def flopsBreachClusterCtx : ClusterStepContext :=
+  { validClusterStepCtx with
+    step := { validClusterStepCtx.step with flopsUsed := 12500000 } }
+
+/-- Executable Silver end-to-end smoke runner for Organ O6 (`ClusterGov`). -/
+def silverClusterGovSmoke : Bool :=
+  let validOk :=
+    match auditClusterStep validClusterStepCtx with
+    | .ok slices => slices == [120, 30, 7]
+    | .error _ => false
+  let execDotOk :=
+    intDotExec #[512, -256, 128, -64] #[300, 400, -500, 100] == -19200
+  let execOzakiOk :=
+    ozakiSliceSumExec #[#[100, -20, 3], #[50, 40, -1], #[-30, 10, 5]] == #[120, 30, 7]
+  let physOk := checkPhysicalEnergyEnvelope defaultPhysicalEnvelope
+  let physRelayRefused :=
+    !checkPhysicalEnergyEnvelope { defaultPhysicalEnvelope with measuredRttMicros := 52000 }
+  let physEnergyRefused :=
+    !checkPhysicalEnergyEnvelope { defaultPhysicalEnvelope with meterEnergyMilliJ := 500 }
+  let treeLeft : AllReduceTree :=
+    .node (.node (.leaf [100, -20, 3]) (.leaf [50, 40, -1])) (.leaf [-30, 10, 5])
+  let treeRight : AllReduceTree :=
+    .node (.leaf [-30, 10, 5]) (.node (.leaf [100, -20, 3]) (.leaf [50, 40, -1]))
+  let hyperLawOk :=
+    checkHyperLaw2NonInterference clusterPublicView
+      [(⟨[0, 0, 0], 1⟩, ⟨[0, 0, 0], 2⟩),
+       (runScheduledAllReduce treeLeft 1, runScheduledAllReduce treeRight 2)]
+  let wrapRefused :=
+    match auditClusterStep wrapOverflowClusterCtx with
+    | .error e => e == .sableModulusWrap 4000000000 koalaBearPrime
+    | .ok _ => false
+  let flopsRefused :=
+    match auditClusterStep flopsBreachClusterCtx with
+    | .error e => e == .flopsCapExceeded 12500000 10000000
+    | .ok _ => false
+  validOk && execDotOk && execOzakiOk && physOk && physRelayRefused && physEnergyRefused &&
+    hyperLawOk && wrapRefused && flopsRefused
+
+example : checkVecAbsBounded 1024 [512, -256, 128, -64] = true := rfl
+
+example : silverClusterGovSmoke = true := by
+  decide
+
+end Obend.Trailblaze.ClusterGov
+
+
 namespace Obend.Trailblaze.CathedralApex
 
 open Obend.Digest.HashBytes (Hash ofBE be CollisionAmong)
@@ -224,7 +2255,7 @@ def buildCathedralProgram (turn : CathedralGovernanceTurn) : Obend.Reasons.Progr
 /-- Audit an end-to-end `CathedralGovernanceTurn`, returning
     `(verifierReceipt256, reducedSlicesExec)` when every organ, physical envelope, 32-byte FPGA
     receipt, and cross-organ digest weld succeeds, or a named `CathedralTurnRefusal`. -/
-@[expose] def auditCathedralTurn (turn : CathedralGovernanceTurn) :
+def auditCathedralTurn (turn : CathedralGovernanceTurn) :
     Except CathedralTurnRefusal (BitVec 256 × Array Int) :=
   match auditZkStripeCallTree turn.zkPolicy turn.batchCallTree with
   | .error zErr => .error (.zkStripeRefused zErr)
@@ -260,7 +2291,7 @@ def buildCathedralProgram (turn : CathedralGovernanceTurn) : Obend.Reasons.Progr
                 .error (.cathedralPolicyUnsupported turn.cathedralTarget st)
 
 /-- Total boolean decision gate for `CathedralGovernanceTurn`. -/
-@[expose] def checkCathedralTurn (turn : CathedralGovernanceTurn) : Bool :=
+def checkCathedralTurn (turn : CathedralGovernanceTurn) : Bool :=
   (auditCathedralTurn turn).isOk
 
 
@@ -475,7 +2506,7 @@ def runCathedralTrace (init : CathedralTraceState) :
     | some st' => runCathedralTrace st' ts
 
 /-- Boolean decision gate for multi-turn cathedral governance traces. -/
-@[expose] def checkCathedralTrace (init : CathedralTraceState)
+def checkCathedralTrace (init : CathedralTraceState)
     (turns : List CathedralGovernanceTurn) : Bool :=
   (runCathedralTrace init turns).isSome
 
@@ -760,4 +2791,5 @@ def silverCathedralApexSmoke : Bool :=
   validOk && multiTurnOk && replayEpochRefused && weldRefused && egressRefused
 
 end Obend.Trailblaze.CathedralApex
+
 end

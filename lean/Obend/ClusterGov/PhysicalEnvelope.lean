@@ -1,5 +1,5 @@
 module
-public import Obend.Trailblaze.ClusterGov
+public import Obend.Trailblaze.CathedralApex
 public import Obend.Crypto.Transcript
 public import Obend.Hardware.SafePhysicalShield
 import all Obend.Hardware.SafePhysicalShield

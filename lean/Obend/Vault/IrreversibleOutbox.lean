@@ -41,7 +41,7 @@ Implements Obend Pillar 6 (`Firmament` microkernel irreversible outbox settlemen
 
 public import Obend.Consensus.SimplexProtocol
 public import Obend.Consensus.Finality
-public import Obend.Trailblaze.Polis
+public import Obend.Trailblaze.StageBInstances
 public import Obend.Digest.Cshake256.Seam
 public import Obend.Digest.HashBytes
 

@@ -1,7 +1,4 @@
-import Obend.Trailblaze.Obligations
-import Obend.Trailblaze.PolisBlum
-import Obend.Trailblaze.Polis
-import Obend.Trailblaze.LeanFpga
+import Obend.Trailblaze.StageBInstances
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
@@ -47,7 +44,6 @@ open Obend.Trailblaze.LeanFpga
 -- 1. `Obligations`, Non-Empty `Judge.Fragment` & Genuine Refutation
 -- ============================================================================
 
-#check @checkManifestWellFormed_sound
 #check @silverWorkflow_satisfies_silverSound
 #check @SilverWorkflow.prod
 #check @SilverWorkflow.toJudge

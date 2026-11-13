@@ -20,12 +20,8 @@ barriers on universal soundness theorems, and zero-`Classical.choice` / zero-`so
 -/
 public import Lean
 public import Obend.Tactic.Tooth
-public import Obend.Trailblaze.ZkStripe
-public import Obend.Trailblaze.ClusterGov
 public import Obend.Trailblaze.CathedralApex
 import all Obend.Judge.SymbolicRegexBisim
-import all Obend.Trailblaze.ZkStripe
-import all Obend.Trailblaze.ClusterGov
 import all Obend.Trailblaze.CathedralApex
 
 public section
@@ -237,8 +233,9 @@ example : checkPhysicalEnergyEnvelope
     { underMeteredEnvelope with meterEnergyMilliJ := 10 } = true := by decide
 example : checkPhysicalEnergyEnvelope
     { underMeteredEnvelope with toleranceMilliJ := 100, hiddenOpsCap := 100 } = false := by decide
-example : auditPhysicalClusterStep ⟨validClusterStepCtx, underMeteredEnvelope⟩ =
-    .error (.energyBaselineUnderflow 9 10) := by decide
+example : (match auditPhysicalClusterStep ⟨validClusterStepCtx, underMeteredEnvelope⟩ with
+    | .error (.energyBaselineUnderflow 9 10) => true
+    | _ => false) = true := by decide
 
 #tooth Obend.Trailblaze.CathedralApex.encodeReceipt256_inj by
   mutation Obend.Trailblaze.CathedralApex.encodeReceipt256 := fun _ => ByteArray.empty

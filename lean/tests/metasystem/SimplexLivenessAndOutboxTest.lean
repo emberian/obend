@@ -23,7 +23,7 @@ public import Obend.AssertAxioms
 
 import all Obend.Consensus.SimplexLiveness
 import all Obend.Vault.IrreversibleOutbox
-import all Obend.Trailblaze.Polis
+import all Obend.Trailblaze.StageBInstances
 import all Obend.Consensus.SimplexProtocol
 import all Obend.Consensus.SimplexTrace
 import all Obend.Consensus.Finality
@@ -172,8 +172,6 @@ import all Obend.Spec.Proofs.C4
 import all Obend.Tactic.Cases
 import all Obend.Tactic.MonadicReduction
 import all Obend.Tactic.Tooth
-import all Obend.Trailblaze.Obligations
-import all Obend.Trailblaze.PolisBlum
 import all Obend.Vault.Hyperedge
 
 public section

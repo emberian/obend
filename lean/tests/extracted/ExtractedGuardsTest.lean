@@ -9,7 +9,7 @@ These same checks are also executed natively in `lake exe obend-test` (`lean/too
 import all Obend.Core.FiniteBisimulation
 import all Obend.Leaf.BytecodeRegisterJit
 import all Obend.Leaf.SelfApplicableMix
-import all Obend.Trailblaze.LeanFpga
+import all Obend.Trailblaze.StageBInstances
 
 public section
 
