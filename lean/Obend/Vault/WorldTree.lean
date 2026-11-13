@@ -99,11 +99,11 @@ deriving DecidableEq
 def logHash (b : Bytes) : Bytes :=
   Obend.Digest.Cshake256.cshake256Bytes "obend-log".toUTF8.toList b
 
-def appendByteArray (a b : ByteArray) : ByteArray :=
-  let rec go (i : Nat) (acc : ByteArray) : ByteArray :=
-    if h : i < b.size then go (i + 1) (acc.push (b[i]'h)) else acc
-  termination_by b.size - i
-  go 0 a
+def appendByteArray.go (b : ByteArray) (i : Nat) (acc : ByteArray) : ByteArray :=
+  if h : i < b.size then appendByteArray.go b (i + 1) (acc.push (b[i]'h)) else acc
+termination_by b.size - i
+
+def appendByteArray (a b : ByteArray) : ByteArray := appendByteArray.go b 0 a
 
 theorem appendByteArray_go_eq (b : ByteArray) (i : Nat) (acc : ByteArray) :
     (appendByteArray.go b i acc).data.toList = acc.data.toList ++ b.data.toList.drop i := by
@@ -736,14 +736,16 @@ def cRec {α : Type} (depth : α → Nat) (step : RawCodec α → RawCodec α)
 
 /-! ### `Obend.Core.Data` -/
 
+mutual
 def dataDepth : Data → Nat
   | .natural _ | .boolean _ | .label _ => 1
   | .variant _ p => dataDepth p + 1
-  | .record fs => dataFieldsDepth fs + 1
-where
-  dataFieldsDepth : List (String × Data) → Nat
-    | [] => 0
-    | (_, d) :: rest => max (dataDepth d) (dataFieldsDepth rest)
+  | .record fs => dataDepth.dataFieldsDepth fs + 1
+
+def dataDepth.dataFieldsDepth : List (String × Data) → Nat
+  | [] => 0
+  | (_, d) :: rest => max (dataDepth d) (dataDepth.dataFieldsDepth rest)
+end
 
 theorem dataDepth_mem_fields :
     ∀ (fs : List (String × Data)) (p : String × Data), p ∈ fs →
@@ -875,30 +877,30 @@ theorem isPrefixDec_append_drop {α : Type} [DecidableEq α] :
     simp [isPrefixDec_append_drop xs ys hp]
 
 /-- Delta-growth encoding of `Page.history`, avoiding quadratic size blow-up on multi-version pages. -/
+def encodeHistorySteps.go (prev : Graph) : List Graph → List (Bool × Graph)
+  | [] => []
+  | G :: rest =>
+    if isPrefixDec prev.atoms G.atoms && isPrefixDec prev.dead G.dead && isPrefixDec prev.edges G.edges then
+      (true, ⟨G.atoms.drop prev.atoms.length, G.dead.drop prev.dead.length, G.edges.drop prev.edges.length⟩) ::
+        encodeHistorySteps.go G rest
+    else
+      (false, G) :: encodeHistorySteps.go G rest
+
 def encodeHistorySteps : List Graph → List (Bool × Graph)
   | [] => []
-  | G :: rest => (false, G) :: go G rest
-where
-  go (prev : Graph) : List Graph → List (Bool × Graph)
-    | [] => []
-    | G :: rest =>
-      if isPrefixDec prev.atoms G.atoms && isPrefixDec prev.dead G.dead && isPrefixDec prev.edges G.edges then
-        (true, ⟨G.atoms.drop prev.atoms.length, G.dead.drop prev.dead.length, G.edges.drop prev.edges.length⟩) ::
-          go G rest
-      else
-        (false, G) :: go G rest
+  | G :: rest => (false, G) :: encodeHistorySteps.go G rest
+
+def decodeHistorySteps.go (prev : Graph) : List (Bool × Graph) → Option (List Graph)
+  | [] => some []
+  | (false, G) :: rest => (decodeHistorySteps.go G rest).map (G :: ·)
+  | (true, d) :: rest =>
+    let G : Graph := ⟨prev.atoms ++ d.atoms, prev.dead ++ d.dead, prev.edges ++ d.edges⟩
+    (decodeHistorySteps.go G rest).map (G :: ·)
 
 def decodeHistorySteps : List (Bool × Graph) → Option (List Graph)
   | [] => some []
   | (true, _) :: _ => none
-  | (false, G) :: rest => (go G rest).map (G :: ·)
-where
-  go (prev : Graph) : List (Bool × Graph) → Option (List Graph)
-    | [] => some []
-    | (false, G) :: rest => (go G rest).map (G :: ·)
-    | (true, d) :: rest =>
-      let G : Graph := ⟨prev.atoms ++ d.atoms, prev.dead ++ d.dead, prev.edges ++ d.edges⟩
-      (go G rest).map (G :: ·)
+  | (false, G) :: rest => (decodeHistorySteps.go G rest).map (G :: ·)
 
 theorem decodeHistorySteps_go :
     ∀ (prev : Graph) (gs : List Graph),
@@ -1714,19 +1716,19 @@ theorem partitionAll_getElem (es : List (Nat × Page)) (b : Nat) (hb : b < numBu
     ↓reduceIte, Option.getD_some, List.append_nil, Option.map_some, List.reverse_reverse]
 
 /-- Runtime `Array`-backed reassembler proved equivalent to `reassemble`. -/
+def reassembleFromArray.go : Nat → Nat → Array (List (Nat × Page)) → Option (List Page)
+  | _, 0, a =>
+    if bucketIndices.all (fun b => (a[b]?.getD []).isEmpty) then some [] else none
+  | k, rem + 1, a =>
+    match bucketIndices.find? (fun b => match a[b]?.getD [] with | (i, _) :: _ => i == k | [] => false) with
+    | none => none
+    | some b =>
+      match a[b]?.getD [] with
+      | (_, p) :: rest => (reassembleFromArray.go (k + 1) rem (a.set! b rest)).map (p :: ·)
+      | [] => none
+
 def reassembleFromArray (total : Nat) (arr : Array (List (Nat × Page))) : Option (List Page) :=
-  if arr.size != numBuckets then none else
-  let rec go : Nat → Nat → Array (List (Nat × Page)) → Option (List Page)
-    | _, 0, a =>
-      if bucketIndices.all (fun b => (a[b]?.getD []).isEmpty) then some [] else none
-    | k, rem + 1, a =>
-      match bucketIndices.find? (fun b => match a[b]?.getD [] with | (i, _) :: _ => i == k | [] => false) with
-      | none => none
-      | some b =>
-        match a[b]?.getD [] with
-        | (_, p) :: rest => (go (k + 1) rem (a.set! b rest)).map (p :: ·)
-        | [] => none
-  go 0 total arr
+  if arr.size != numBuckets then none else reassembleFromArray.go 0 total arr
 
 theorem reassembleFromArray_go_eq :
     ∀ (rem k : Nat) (arr : Array (List (Nat × Page))), arr.size = numBuckets →
@@ -1839,14 +1841,14 @@ theorem unhexAscii_hexAscii : ∀ (bs : Bytes), unhexAsciiBytes (hexAsciiBytes b
     have hb : b.toNat / 16 * 16 + b.toNat % 16 = b.toNat := by omega
     rw [hb]; exact UInt8.ofNat_toNat
 
-def pushHexArray (acc : ByteArray) (raw : ByteArray) : ByteArray :=
-  let rec go (i : Nat) (out : ByteArray) : ByteArray :=
-    if h : i < raw.size then
-      let b := raw[i]'h
-      go (i + 1) ((out.push (hexByteHi b)).push (hexByteLo b))
-    else out
-  termination_by raw.size - i
-  go 0 acc
+def pushHexArray.go (raw : ByteArray) (i : Nat) (out : ByteArray) : ByteArray :=
+  if h : i < raw.size then
+    let b := raw[i]'h
+    pushHexArray.go raw (i + 1) ((out.push (hexByteHi b)).push (hexByteLo b))
+  else out
+termination_by raw.size - i
+
+def pushHexArray (acc : ByteArray) (raw : ByteArray) : ByteArray := pushHexArray.go raw 0 acc
 
 theorem pushHexArray_go_eq (raw : ByteArray) (i : Nat) (out : ByteArray) :
     (pushHexArray.go raw i out).data.toList =

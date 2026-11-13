@@ -3276,6 +3276,17 @@ example : TVal.conforms samplePlanVal
       .emptyRow)) = true := by decide
 example : sampleRoundtripCheck = true := by decide
 
+/-- Constructive two-capability transfer with a real authority context and distinct live slots. -/
+theorem transfer_inhabited :
+    ∃ wire frame env,
+      dehydrate sampleIdentityHash sampleSealKey 9 42 sampleCustodyEnv samplePlanVal = .ok (wire, frame) ∧
+      rehydrate sampleIdentityHash sampleSealKey 9 wire frame = .ok (samplePlanVal, env) := by
+  let wire : DataWire := .variant "transferSturdyref"
+    (.record [("badgeCap", .sealedCap 0 1), ("coReceipt", .sealedCap 1 2), ("epoch", .natural 9)])
+  let table : CapTable := ⟨[⟨0, ⟨10, 1, [0xaa, 0xbb]⟩⟩, ⟨1, ⟨20, 2, [0xcc, 0xdd]⟩⟩]⟩
+  let frame : CapSealFrame := ⟨42, 9, table, computeCapFrameSeal sampleIdentityHash sampleSealKey 9 42 table⟩
+  exact ⟨wire, frame, sampleCustodyEnv, by decide, by decide⟩
+
 end Obend.Run.VaultDurableBridge
 
 namespace Obend.Vault.VerkleSnapshotBridge
