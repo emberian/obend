@@ -10,6 +10,8 @@ import all Obend.Codec.DetCbor
 import all Obend.Judge.SymbolicRegexBisim
 import all Obend.Judge.VpaComplementAndJson
 import all Obend.Judge.DecoAndCallTree
+public import Obend.Hardware.Gpu.Rdna2.Semantics
+import all Obend.Hardware.Gpu.Rdna2.Semantics
 public import Obend.Run.HyperLaw
 
 public section
@@ -1849,7 +1851,7 @@ def auditPhysicalClusterStep (pctx : PhysicalClusterStepContext) :
         .ok (ozakiSliceSumExec (pctx.base.workerSlices.map List.toArray).toArray)
 
 
-/-! ## §4. Hardware & Sealed-VRAM Stage-A Obligations (`ClusterGovObligations`) & Apex Theorem -/
+/-! ## §4. Executed hardware and challenged sealed-VRAM openings -/
 
 /-- RDNA2 GFX1030 compute shader wavefront dispatch trace for collective/tensor reduction. -/
 structure Rdna2WavefrontDispatch where
@@ -1860,28 +1862,122 @@ structure Rdna2WavefrontDispatch where
   statusTrap      : Bool
   deriving DecidableEq, Repr
 
-/-- Structural validity check on an `Rdna2WavefrontDispatch`. -/
+/-- Load each worker's slice vector into its own VGPR, one slice per lane.
+The accepted fragment is unsigned, exact 32-bit sums, at most 256 workers. -/
+def rdna2DispatchInput (d : Rdna2WavefrontDispatch) : Obend.Hardware.Gpu.Rdna2.WaveState :=
+  let initial : Obend.Hardware.Gpu.Rdna2.WaveState :=
+    Obend.Hardware.Gpu.Rdna2.GWave.init {} 0 0
+  (List.range d.workgroupSlices.size).foldl (fun st worker =>
+    (List.range d.waveSize).foldl (fun wave lane =>
+      Obend.Hardware.Gpu.Rdna2.writeVgpr wave worker lane
+        (UInt32.ofNat ((d.workgroupSlices[worker]?.getD #[])[lane]?.getD 0).toNat)) st) initial
+
+/-- Decode the supplied ISA and execute it with a bounded instruction budget.
+The result comes only from output VGPR 0; a failed decode, trap, or timeout refuses. -/
+def executeRdna2SliceReduction (d : Rdna2WavefrontDispatch) : Option (Array Int) :=
+  match Obend.Hardware.Gpu.Rdna2.decodeProgram d.shaderIsaWords with
+  | .error _ => none
+  | .ok program =>
+    let final := Obend.Hardware.Gpu.Rdna2.run program (d.shaderIsaWords.size * 4 + 1)
+      (rdna2DispatchInput d)
+    if final.halted && !final.err.isSome then
+      some ((List.range (ozakiSliceSumExec d.workgroupSlices).size).toArray.map
+        (fun lane => Int.ofNat (Obend.Hardware.Gpu.Rdna2.readVgpr final 0 lane).toNat))
+    else none
+
+/-- Admission compares actual decoded execution, the reported result, and exact Ozaki sums. -/
 def checkRdna2DispatchEnvelope (d : Rdna2WavefrontDispatch) : Bool :=
   (d.waveSize == 32 || d.waveSize == 64) &&
-  decide (0 < d.shaderIsaWords.size) &&
-  !d.statusTrap &&
-  decide (0 < d.workgroupSlices.size)
+  decide (0 < d.shaderIsaWords.size ∧ 0 < d.workgroupSlices.size ∧
+    d.workgroupSlices.size ≤ 256) && !d.statusTrap &&
+  d.workgroupSlices.all (fun row => decide (row.size ≤ d.waveSize) &&
+    row.all (fun x => decide (0 ≤ x ∧ x < 4294967296))) &&
+  (ozakiSliceSumExec d.workgroupSlices).all (fun x => decide (0 ≤ x ∧ x < 4294967296)) &&
+  decide (executeRdna2SliceReduction d = some d.hwReducedOut ∧
+    d.hwReducedOut = ozakiSliceSumExec d.workgroupSlices)
 
-/-- Verifier-challenged sealed-VRAM Merkle page-opening claim over `BitVec 256` roots. -/
-structure SealedVramOpeningClaim where
-  sealedRoot256     : BitVec 256
-  challengeSeed256  : BitVec 256
-  totalPages        : Nat
-  sampledOffsets    : Array Nat
-  openedPageDigests : Array (BitVec 256)
+theorem rdna2Wavefront_simulates_ozaki_sound (d : Rdna2WavefrontDispatch)
+    (h : checkRdna2DispatchEnvelope d = true) :
+    executeRdna2SliceReduction d = some d.hwReducedOut ∧
+    d.hwReducedOut.toList = ozakiSliceSum (d.workgroupSlices.toList.map Array.toList) := by
+  simp only [checkRdna2DispatchEnvelope, Bool.and_eq_true, decide_eq_true_eq] at h
+  refine ⟨h.2.1, ?_⟩
+  rw [h.2.2, ozakiSliceSumExec_eq_ozakiSliceSum]
+
+/-- Binary Merkle inclusion path, ordered from leaf to root. -/
+structure VramPagePath where
+  siblings : List (BitVec 256)
   deriving DecidableEq, Repr
 
-/-- Structural validity check on a `SealedVramOpeningClaim`. -/
+def vramHash (H : Obend.Digest.HashBytes.Hash) (bytes : List UInt8) : BitVec 256 :=
+  BitVec.ofNat 256 (Obend.Digest.HashBytes.ofBE (H bytes))
+
+def vramRootFromPath (H : Obend.Digest.HashBytes.Hash) (offset : Nat)
+    (page : BitVec 256) (siblings : List (BitVec 256)) : BitVec 256 :=
+  (siblings.foldl (fun (state : Nat × BitVec 256) sibling =>
+    let pair := if state.1 % 2 = 0 then (state.2, sibling) else (sibling, state.2)
+    (state.1 / 2, vramHash H (0x01 ::
+      (Obend.Digest.HashBytes.be 32 pair.1.toNat ++ Obend.Digest.HashBytes.be 32 pair.2.toNat))))
+    (offset, page)).2
+
+/-- The verifier supplies the pinned root and nonce separately from this prover claim. -/
+structure SealedVramOpeningClaim where
+  sealedRoot256 : BitVec 256
+  challengeSeed256 : BitVec 256
+  totalPages : Nat
+  sampledOffsets : Array Nat
+  openedPageDigests : Array (BitVec 256)
+  paths : Array VramPagePath
+  treeDepth : Nat
+  deriving DecidableEq, Repr
+
+def deriveVramSeed (H : Obend.Digest.HashBytes.Hash) (root nonce : BitVec 256)
+    (pages depth : Nat) : BitVec 256 :=
+  vramHash H (0x02 :: (Obend.Digest.HashBytes.be 32 root.toNat ++
+    Obend.Digest.HashBytes.be 32 nonce.toNat ++
+    ZkStripe.frameBytes (toString pages).toUTF8.data.toList ++
+    ZkStripe.frameBytes (toString depth).toUTF8.data.toList))
+
+def deriveVramOffsets (H : Obend.Digest.HashBytes.Hash) (seed : BitVec 256)
+    (pages count : Nat) : Array Nat :=
+  (List.range count).toArray.map (fun i =>
+    (vramHash H (0x03 :: (Obend.Digest.HashBytes.be 32 seed.toNat ++
+      ZkStripe.frameBytes (toString i).toUTF8.data.toList))).toNat % pages)
+
 def checkSealedVramClaimEnvelope (c : SealedVramOpeningClaim) : Bool :=
-  decide (0 < c.totalPages) &&
-  decide (8 ≤ c.sampledOffsets.size) &&
-  decide (c.sampledOffsets.size = c.openedPageDigests.size) &&
+  decide (c.sealedRoot256 ≠ 0 ∧ 0 < c.totalPages ∧ c.totalPages ≤ 2^c.treeDepth ∧
+    8 ≤ c.sampledOffsets.size ∧ c.sampledOffsets.size = c.openedPageDigests.size ∧
+    c.paths.size = c.sampledOffsets.size) &&
   c.sampledOffsets.all (fun idx => decide (idx < c.totalPages))
+
+def checkVramChallengeOpening (H : Obend.Digest.HashBytes.Hash)
+    (pinnedRoot nonce : BitVec 256) (c : SealedVramOpeningClaim) : Bool :=
+  checkSealedVramClaimEnvelope c &&
+  decide (c.sealedRoot256 = pinnedRoot ∧
+    c.challengeSeed256 = deriveVramSeed H pinnedRoot nonce c.totalPages c.treeDepth ∧
+    c.sampledOffsets = deriveVramOffsets H c.challengeSeed256 c.totalPages c.sampledOffsets.size) &&
+  (List.range c.sampledOffsets.size).all (fun i =>
+    let offset := c.sampledOffsets[i]!
+    let page := c.openedPageDigests[i]!
+    let path := c.paths[i]?.getD ⟨[]⟩
+    decide (path.siblings.length = c.treeDepth ∧
+      vramRootFromPath H offset page path.siblings = pinnedRoot))
+
+theorem sealedVramRandomOpening_sound (H : Obend.Digest.HashBytes.Hash)
+    (root nonce : BitVec 256) (c : SealedVramOpeningClaim)
+    (h : checkVramChallengeOpening H root nonce c = true) :
+    root ≠ 0 ∧
+    c.challengeSeed256 = deriveVramSeed H root nonce c.totalPages c.treeDepth ∧
+    c.sampledOffsets = deriveVramOffsets H c.challengeSeed256 c.totalPages c.sampledOffsets.size ∧
+    ∀ i ∈ List.range c.sampledOffsets.size,
+      (c.paths[i]?.getD ⟨[]⟩).siblings.length = c.treeDepth ∧
+      vramRootFromPath H c.sampledOffsets[i]! c.openedPageDigests[i]!
+        (c.paths[i]?.getD ⟨[]⟩).siblings = root := by
+  simp only [checkVramChallengeOpening, Bool.and_eq_true, decide_eq_true_eq,
+    List.all_eq_true] at h
+  have he := h.1.1
+  simp only [checkSealedVramClaimEnvelope, Bool.and_eq_true, decide_eq_true_eq] at he
+  exact ⟨h.1.2.1 ▸ he.1.1, h.1.2.2.1, h.1.2.2.2, h.2⟩
 
 /-- **Organ O6 Unconditional Apex Step Theorem (`apex_verifiable_ai_cluster_step`)**:
     With **zero open obligations** and **zero `Classical.choice`**, whenever

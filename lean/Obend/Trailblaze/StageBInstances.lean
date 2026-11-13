@@ -15,6 +15,7 @@ public import Obend.Hardware.Hvm.Model
 public import Obend.Hardware.Gpu.Rdna2.Certified
 
 public section
+set_option maxErrors 3
 
 
 namespace Obend.Trailblaze.Polis
@@ -3059,8 +3060,11 @@ theorem internSymbol_injective (table : SymbolTable) (a b : DeltaTag)
   have hab : table.idxOf a = table.idxOf b := by omega
   have ea := symbolAt_index table a ha
   have eb := symbolAt_index table b hb
-  rw [hab] at ea
-  exact ea.symm.trans eb
+  have ea' : table[table.idxOf a]? = some a := by
+    simpa only [List.getElem?_eq_getElem haLt, ea]
+  have eb' : table[table.idxOf b]? = some b := by
+    simpa only [List.getElem?_eq_getElem hbLt, eb]
+  exact Option.some.inj (ea'.symm.trans ((congrArg (fun i => table[i]?) hab).trans eb'))
 
 /-- Salvadori `Δ`-Net (`arXiv:2505.20314`) hardware interaction-net node kinds:
     - `era`: 1-port eraser (`portSlot = 0`),
@@ -3527,6 +3531,7 @@ theorem reduceDeltaPair_sound (net out : DeltaNet) (a b : Nat)
     | none => simp [hl] at h
     | some first =>
       rw [hl] at h
+      dsimp only at h
       cases hr : spliceDeltaPorts first (deltaAux a 2) (deltaAux b 2) with
       | none => simp [hr] at h
       | some second =>
