@@ -2028,6 +2028,10 @@ set_option cbv.maxSteps 10000000 in
 theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
     checkRdna2DispatchEnvelope d = true := by
   refine ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, ?_⟩
+  simp only [checkRdna2DispatchEnvelope, Bool.and_eq_true, decide_eq_true_eq, ← Array.all_toList]
+  repeat' apply And.intro
+  all_goals try decide +kernel
+  unfold executeRdna2SliceReduction
   cbv
 
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
