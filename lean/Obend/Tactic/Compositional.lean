@@ -183,19 +183,16 @@ def ofSoundCheck {Obj Cert Clause : Type}
     (Meaning : Obj → Cert → Prop)
     (step : Nat → Obj → Cert → Verdict Clause)
     (step_sound : ∀ {r : Nat} {o : Obj} {c : Cert}, step r o c = .ok → Meaning o c)
-    (Fragment : Obj → Prop := fun _ => False)
+    (Fragment : Obj → Prop)
     (step_no_false_reject :
       ∀ {r : Nat} {o : Obj} {c : Cert} {k : Clause} {p : List Nat},
-        Fragment o → Meaning o c → step r o c ≠ .refused k p := by
-      intro _ _ _ _ _ hf _; cases hf)
+        Fragment o → Meaning o c → step r o c ≠ .refused k p)
     (step_complete :
-      ∀ {o : Obj}, Fragment o → (∃ c, Meaning o c) → ∃ c r, step r o c = .ok := by
-      intro _ hf _; cases hf)
-    (refutes : Clause → Bool := fun _ => false)
+      ∀ {o : Obj}, Fragment o → (∃ c, Meaning o c) → ∃ c r, step r o c = .ok)
+    (refutes : Clause → Bool)
     (step_refutes :
       ∀ {r : Nat} {o : Obj} {c : Cert} {k : Clause} {p : List Nat},
-        step r o c = .refused k p → refutes k = true → ∀ c', ¬ Meaning o c' := by
-      intro _ _ _ _ _ _ href; cases href) :
+        step r o c = .refused k p → refutes k = true → ∀ c', ¬ Meaning o c') :
     Judge Obj Cert where
   Clause := Clause
   Meaning := Meaning

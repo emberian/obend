@@ -3,7 +3,7 @@ module
 # Obend.Teeth.Hardware.SiliconTeeth — Refusal Poles, HDL/Compiler/EDA/AMS Verification & `#tooth` Mutations
 
 Tests both the positive and negative poles of `Obend.Hardware` across surviving hardware & physical
-modules (`Silicon`, `Process`, `Fabric`, `HDL`, `Types`, `Compiler`, `Synth`,
+modules (`Silicon`, `Process`, `HDL`, `Types`, `Compiler`, `Synth`,
 `Retiming`, `PlaceRoute`, `DRC`, `Analog`, `Datasheet`, `Circuits`, `Device.Wafer`, `Photonics`,
 `PCB`, `ReductionMachine`, `DSP`, `AgenticEDA`, `Magnetics`, `CurrentLoop`, `ThermalPassivity`,
 `Accelerators`, `GeometryCAM`, `Kinematics`, `OpenUSD`, `UserspacePhysical`, `OpenHypergraph`,
@@ -11,7 +11,6 @@ modules (`Silicon`, `Process`, `Fabric`, `HDL`, `Types`, `Compiler`, `Synth`,
 -/
 public import Obend.Tactic.Tooth
 public import Obend.Teeth.Leaf.ReviewTeeth
-public import Obend.Hardware.Fabric
 public import Obend.Apps.SiliconKernelVerilator
 import all Obend.Apps.SiliconKernelVerilator
 import all Obend.Lower.Inductive
@@ -21,7 +20,7 @@ import all Obend.Lower.DiscrTreeLUT
 import all Obend.Lower.SiliconElabFabric
 import all Obend.Hardware.Silicon
 import all Obend.Hardware.Process
-import all Obend.Hardware.Fabric
+import all Obend.Hardware.NotebookProjection
 import all Obend.Hardware.HDL
 import all Obend.Hardware.Types
 import all Obend.Hardware.Compiler
@@ -32,6 +31,7 @@ import all Obend.Hardware.DRC
 import all Obend.Hardware.Analog
 import all Obend.Hardware.Datasheet
 import all Obend.Hardware.Circuits
+import all Obend.Hardware.Device.Sky130Diode
 import all Obend.Hardware.Device.Wafer
 import all Obend.Hardware.Photonics
 import all Obend.Hardware.PCB
@@ -55,7 +55,7 @@ import all Obend.Hardware.Judge
 
 namespace Obend.Teeth.Hardware
 open Obend.Core.Term Obend.Logic Obend.Leaf Obend.Slot Obend.Slot.World
-open Obend.Hardware.Silicon Obend.Hardware.Process Obend.Hardware.Fabric
+open Obend.Hardware.Silicon Obend.Hardware.Process
 open Obend.Hardware.HDL Obend.Hardware.Types
 open Obend.Hardware.Compiler Obend.Hardware.Synth Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.DRC Obend.Hardware.Analog
@@ -70,12 +70,16 @@ open Obend.Hardware.Codec Obend.Hardware.Judge
 open Obend.Teeth.Leaf.Review (comp overridden view deadCells)
 set_option autoImplicit false
 
-/-! ## 1. Negative-Pole Refusal Checks Across All Hardware Subsystems -/
+private def erasedRouteFrameBytes (_ : PnrCertificate) : List UInt8 := []
 
-/-- `QuantityDuplicated.obend` (`affine x` used twice in `x + x`) is refused by the wire-fanout checker. -/
-theorem duplicated_affine_refused :
-    checkNetlistMult quantityDuplicatedInputs quantityDuplicatedNet = false :=
-  rfl
+#tooth Obend.Vault.HardwareProjection.pnrRouteFrameDigest_binding by mutation
+  Obend.Vault.HardwareProjection.pnrRouteFrameBytes := erasedRouteFrameBytes
+
+
+#tooth Obend.Hardware.Device.sky130Diode_full_recipe_inhabited by mutation
+  Obend.Hardware.Device.sky130DiodeRecipe := fun pWellDose _ => [.implant .boron 160 pWellDose]
+
+/-! ## 1. Negative-Pole Refusal Checks Across All Hardware Subsystems -/
 
 /-- Overclocking SkyWater 130nm CMOS (`requiredPeriodPs = 2350 ps`) to 500 MHz (`2000 ps`) is refused. -/
 theorem sky130_overclock_500mhz_refused :
@@ -153,36 +157,6 @@ example :
     | none => false) = true := by
   decide +kernel
 
-/-! ## 3. 3-Tier Hardware Specialization Slot Deoptimization (`bitstream` → `book` → `machine`) -/
-
-def reviewBitstream7nm : HwCandidate :=
-  .bitstream "twiceOfThree" (comp 1) corner7nm_SS 2000 obendStageCritPath
-
-def reviewBitstream130nmOverclock : HwCandidate :=
-  .bitstream "twiceOfThree" (comp 1) corner130nm_SS 2000 obendStageCritPath
-
-def hwDeadCells : Reading LeafPin HwCandidate → List LeafCell
-  | .blocked _ d => d.map (·.cell)
-  | _ => []
-
-/-- At 500 MHz (`2000 ps`) on 7nm FinFET SS, the `ReviewMember` bitstream is admitted and usable. -/
-example :
-    hwSpecSlot.usable (holdsAt (view (comp 1) 0)) reviewBitstream7nm = true := by
-  decide +kernel
-
-/-- When `Override` is composed last, the 7nm bitstream is blocked naming `.object "twiceOfThree"`. -/
-example :
-    hwDeadCells (hwSpecSlot.read (holdsAt (view overridden 1)) (some reviewBitstream7nm)) =
-      [.object "twiceOfThree"] := by
-  decide +kernel
-
-/-- When overclocked to 500 MHz (`2000 ps`) on 130nm CMOS, the `.bitstream` candidate fails
-`checkTimingSignoff` (`usable = false`), while the software `.book` candidate remains usable! -/
-example :
-    hwSpecSlot.usable (holdsAt (view (comp 1) 0)) reviewBitstream130nmOverclock = false ∧
-    hwSpecSlot.usable (holdsAt (view (comp 1) 0)) (.book "twiceOfThree" (comp 1)) = true := by
-  decide +kernel
-
 /-! ## 4. `#tooth` Kernel Mutation Checks Across Surviving & Repaired Hardware Modules -/
 
 /-- 1. Broken 2-stage Laguna crossing that copies `d` straight into both `s1` and `s2`. -/
@@ -212,25 +186,6 @@ def readBypassRAMNoBypass {w : Nat} (st : BypassRAMState w) : Option (BitVec w) 
 
 -- 4. Broken `CARRY8` LUT2 configuration that programs `LUT2_INIT_AND` (`0x8`) instead of `LUT2_INIT_XOR` (`0x6`).
 #tooth Obend.Hardware.Process.carryBel_eq_fullAdderSpec by mutation Obend.Hardware.Process.LUT2_INIT_XOR := LUT2_INIT_AND
-
-/-- 5. Broken `DeosCounter` + `Vault.Law` register bank that allows overwriting non-zero `cfgTag` (`writeOnce` omitted). -/
-def stepDeosHwNoWriteOnce (st : DeosHwState) : DeosCmd → DeosHwState
-  | .inc d => { st with count := st.count + d, lastAccepted := true }
-  | .dec d => { st with count := st.count - d, lastAccepted := true }
-  | .reset hasCred =>
-    if hasCred then { st with count := 0, lastAccepted := true }
-    else { st with lastAccepted := false }
-  | .writeTag tag => { st with cfgTag := tag, lastAccepted := true }
-
-#tooth Obend.Hardware.Fabric.deosHw_writeOnce_immutable by mutation Obend.Hardware.Fabric.stepDeosHw := stepDeosHwNoWriteOnce
-
-/-- 6. Broken `HwCandidate.supports` that omits the object composition pin from `.bitstream`. -/
-def hwSupportsLayersOnly : HwCandidate → List LeafPin
-  | .bitstream _ C _ _ _ => C.layers.map fun L => ⟨.layer L.name, L.code⟩
-  | .book name C         => ⟨.object name, C.code⟩ :: C.layers.map fun L => ⟨.layer L.name, L.code⟩
-  | .machine             => []
-
-#tooth Obend.Hardware.Fabric.hwBitstream_usable_sound by mutation Obend.Hardware.Fabric.HwCandidate.supports := hwSupportsLayersOnly
 
 /-- 7. Broken CDC checker that allows any cross-clock register read without checking `dstReg.isSynchronizer`. -/
 def checkRegCdcPermissive (allRegs : List RegSpec) (dstReg : RegSpec) : Bool :=
@@ -278,9 +233,9 @@ def stepRetimedMacDropC (st : RetimedMacState) (a b c : BitVec 64) : RetimedMacS
 #tooth Obend.Hardware.Retiming.leiserson_saxe_shift_sound by mutation Obend.Hardware.Retiming.stepRetimedMac := stepRetimedMacDropC
 
 /-- 15. Broken `checkAllCombPathsMeetDelay` in `Obend.Hardware.Retiming` that ignores multi-hop combinational arrival bounds. -/
-def checkAllCombPathsAcceptAll (_cert : RetimingCert) (_maxDelay : Nat) (_edges : List SyncEdge) : Bool := true
+def mutantCheckAllCombPathsAcceptAll (_cert : RetimingCert) (_maxDelay : Nat) (_edges : List SyncEdge) : Bool := true
 
-#tooth Obend.Hardware.Retiming.checkAllCombPathsMeetDelay_sound by mutation Obend.Hardware.Retiming.checkAllCombPathsMeetDelay := checkAllCombPathsAcceptAll
+#tooth Obend.Hardware.Retiming.checkAllCombPathsMeetDelay_sound by mutation Obend.Hardware.Retiming.checkAllCombPathsMeetDelay := mutantCheckAllCombPathsAcceptAll
 
 /-- 16. Broken `encodeBitstreamFrame` in `Obend.Hardware.PlaceRoute` that drops `lutInit` when packing `frameData`. -/
 def encodeBitstreamFrameDropLut (cfg : TileFrameConfig) : BitstreamFrame where
@@ -290,9 +245,9 @@ def encodeBitstreamFrameDropLut (cfg : TileFrameConfig) : BitstreamFrame where
 #tooth Obend.Hardware.PlaceRoute.bitstream_decode_roundtrip_sound by mutation Obend.Hardware.PlaceRoute.encodeBitstreamFrame := encodeBitstreamFrameDropLut
 
 /-- 17. Broken `checkPlacementInjective` in `Obend.Hardware.PlaceRoute` that accepts colliding BEL placements. -/
-def checkPlacementInjectiveAcceptAll (_cells : List PlacedCell) : Bool := true
+def mutantCheckPlacementInjectiveAcceptAll (_cells : List PlacedCell) : Bool := true
 
-#tooth Obend.Hardware.PlaceRoute.checkPnrCertificate_sound by mutation Obend.Hardware.PlaceRoute.checkPlacementInjective := checkPlacementInjectiveAcceptAll
+#tooth Obend.Hardware.PlaceRoute.checkPnrCertificate_sound by mutation Obend.Hardware.PlaceRoute.checkPlacementInjective := mutantCheckPlacementInjectiveAcceptAll
 
 /-- 18. Broken `checkTrenchFillVoidFree` in `Obend.Hardware.DRC` that ignores top-corner bread-loafing pinch-off. -/
 def checkTrenchFillIgnoreOverhang (spec : TrenchFillSpec) : Bool :=
@@ -316,17 +271,17 @@ def ptm8BrokenAsAbba4 (p0 gx cxx pitch : Int) : Int :=
 #tooth Obend.Hardware.Analog.chiralityBalanced2D_cancels_full_hessian by mutation Obend.Hardware.Analog.chiralityBalanced2DMismatch := Obend.Hardware.Analog.crossCoupledQuad2DMismatch
 
 /-- 22. Broken `checkRtlSynth` in `Obend.Hardware.Judge` that accepts any `RtlModule` without checking `checkRtlModule`. -/
-def checkRtlSynthAcceptAll (_grade : Nat) (_expectedName : String) (_m : RtlModule) : Obend.Judge.Verdict HwClause :=
+def mutantCheckRtlSynthAcceptAll (_grade : Nat) (_expectedName : String) (_m : RtlModule) : Obend.Judge.Verdict HwClause :=
   .ok
 
-#tooth Obend.Hardware.Judge.badLoopRtlModule_refused by mutation Obend.Hardware.Judge.checkRtlSynth := checkRtlSynthAcceptAll
+#tooth Obend.Hardware.Judge.badLoopRtlModule_refused by mutation Obend.Hardware.Judge.checkRtlSynth := mutantCheckRtlSynthAcceptAll
 
 /-- 23. Broken `checkLogicInterface` in `Obend.Hardware.Datasheet` that forgets to verify `noiseMarginHigh`. -/
-def checkLogicInterfaceIgnoreHigh (drv rcv : LogicFamilySpec) (_pullupBoostMv minMarginMv : Int) : Bool :=
+def mutantCheckLogicInterfaceIgnoreHigh (drv rcv : LogicFamilySpec) (_pullupBoostMv minMarginMv : Int) : Bool :=
   decide (minMarginMv ≤ noiseMarginLow drv rcv) &&
   decide (drv.volMaxMv < rcv.vihMinMv)
 
-#tooth Obend.Hardware.Datasheet.checkLogicInterface_guarantees_valid_thresholds by mutation Obend.Hardware.Datasheet.checkLogicInterface := checkLogicInterfaceIgnoreHigh
+#tooth Obend.Hardware.Datasheet.checkLogicInterface_guarantees_valid_thresholds by mutation Obend.Hardware.Datasheet.checkLogicInterface := mutantCheckLogicInterfaceIgnoreHigh
 
 /-- 24. Broken `evalInaOutputUv` in `Obend.Hardware.Circuits` that forgets to apply `trimCmCancel`. -/
 def evalInaOutputUvNoTrim (p : InaParams) (vDiffUv vCmUv deltaTC : Int) : Int :=
@@ -588,3 +543,20 @@ def runVerilatorCoSimModelAcceptMutant : Obend.Apps.SiliconKernelVerilator.Veril
   by mutation Obend.Apps.SiliconKernelVerilator.runVerilatorCoSimModel := runVerilatorCoSimModelAcceptMutant
 
 end Obend.Teeth.Hardware
+
+open Obend.Vault.HardwareProjection in
+#tooth pnrLayoutToData_binds_routedNets_and_bitstreamFrames by
+  mutation pnrLayoutToData := fun c =>
+    Obend.Core.Data.Data.record [("net_count", .natural c.routedNets.length),
+      ("frames", dataSeq bitstreamFrameToData c.bitstreamFrames)]
+
+open Obend.Vault.HardwareProjection in
+#tooth pnrLayoutToData_binds_routedNets_and_bitstreamFrames by
+  mutation pnrLayoutToData := fun c =>
+    Obend.Core.Data.Data.record [("nets", dataSeq routedNetToData c.routedNets),
+      ("frame_count", .natural c.bitstreamFrames.length)]
+
+open Obend.Hardware.Device in
+#tooth sky130Diode_recipe_implant_inhabited by
+  mutation sky130DiodeRecipe := fun _ nPlusDose =>
+    [.implant .boron 160 1.3e13, .implant .arsenic 50 nPlusDose]

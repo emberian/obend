@@ -34,7 +34,8 @@ two Mathlib-free typeclasses:
 
 public import Obend.Slot
 public import Obend.Intention
-public import Obend.Logic.SuperRefines
+public import Obend.Logic.Obligation
+import all Obend.Logic.Obligation
 
 public section
 
@@ -59,12 +60,12 @@ class SupportSheaf (W : Type) (Fact : outParam Type) (Obj : Type) where
     (∀ f ∈ supports x, holds w₁ f = holds w₂ f) → usable w₁ x = usable w₂ x
 
 /-- Dead supports of `x` at world `w`: those cited in `supports x` where `holds w` is `false`. -/
-@[expose] def deadSupports {W Fact Obj : Type} [S : SupportSheaf W Fact Obj]
+def deadSupports {W Fact Obj : Type} [S : SupportSheaf W Fact Obj]
     (w : W) (x : Obj) : List Fact :=
   (S.supports x).filter fun f => !S.holds w f
 
 /-- Evidence table pairing each cited support of `x` with its Boolean truth value at `w`. -/
-@[expose] def supportEvidence {W Fact Obj : Type} [S : SupportSheaf W Fact Obj]
+def supportEvidence {W Fact Obj : Type} [S : SupportSheaf W Fact Obj]
     (w : W) (x : Obj) : List (Fact × Bool) :=
   (S.supports x).map fun f => (f, S.holds w f)
 
@@ -236,7 +237,7 @@ structure KeyedDelta (K V : Type) where
   decide (w.lookup f.key = f.expected)
 
 /-- Apply one `(K × Option V)` edit to a `KeyedWorld`. -/
-@[expose] def applyKeyedEdit {K V : Type} [DecidableEq K]
+def applyKeyedEdit {K V : Type} [DecidableEq K]
     (e : K × Option V) (w : KeyedWorld K V) : KeyedWorld K V :=
   ⟨fun k => if k = e.1 then e.2 else w.lookup k⟩
 
@@ -247,7 +248,7 @@ structure KeyedDelta (K V : Type) where
 
 /-- $O(|δ| \cdot |\text{supports}|)$ pushforward of a `SlotFill S` across `KeyedDelta`:
 returns `.ok x` when no edit touches a cited key, or `.error badKey` naming the first touched key. -/
-@[expose] def transportSlotFill {K V Cand : Type} [DecidableEq K]
+def transportSlotFill {K V Cand : Type} [DecidableEq K]
     (S : Obend.Slot.Slot (KeyedFact K V) Cand)
     (δ : KeyedDelta K V) (x : SlotFill S) : Except K (SlotFill S) :=
   match δ.edits.findSome? (fun e =>
@@ -403,12 +404,12 @@ inductive RegOp where
   deriving DecidableEq, Repr
 
 /-- Package locus mutated by a `RegOp`. -/
-@[expose] def RegOp.pkg : RegOp → String
+def RegOp.pkg : RegOp → String
   | .publish name _ => name
   | .yank name => name
 
 /-- Apply one `RegOp` to `RegWorld`. -/
-@[expose] def applyRegOp (op : RegOp) (w : RegWorld) : RegWorld :=
+def applyRegOp (op : RegOp) (w : RegWorld) : RegWorld :=
   match op with
   | .publish name entry => ⟨fun k => if k = name then some entry else w.entries k⟩
   | .yank name => ⟨fun k => if k = name then none else w.entries k⟩
@@ -432,7 +433,7 @@ inductive RegRepairErr where
 - untouched package (`name ≠ p.target`): zero-cost identity `.ok p`,
 - compatible publish (`entry.major = p.major`): active rebinding `.ok { p with locked := entry }`,
 - incompatible major or yank: explicit refusal `.error ...`. -/
-@[expose] def stepRegPin (op : RegOp) (p : RegPin) : Except RegRepairErr RegPin :=
+def stepRegPin (op : RegOp) (p : RegPin) : Except RegRepairErr RegPin :=
   match op with
   | .publish name entry =>
     if name = p.target then
@@ -444,11 +445,11 @@ inductive RegRepairErr where
     else .ok p
 
 /-- Coalgebraic pushforward of `RegPin` across a composite `RegDelta`. -/
-@[expose] def transportRegPin (δ : RegDelta) (p : RegPin) : Except RegRepairErr RegPin :=
+def transportRegPin (δ : RegDelta) (p : RegPin) : Except RegRepairErr RegPin :=
   δ.ops.foldlM (fun cur op => stepRegPin op cur) p
 
 /-- Usability of `RegPin` in `RegWorld`: matches `(registryIntention.slot (p.target, p.major)).usable`. -/
-@[expose] def regPinUsable (w : RegWorld) (p : RegPin) : Bool :=
+def regPinUsable (w : RegWorld) (p : RegPin) : Bool :=
   decide (p.locked.major = p.major) && registryIntention.holds w ⟨p.target, p.locked⟩
 
 theorem regHolds_foldl_unchanged (f : RegFact) :
@@ -530,7 +531,9 @@ instance regPinRepairableSheaf :
   transport_disjoint_fastpath δ p hnot := by
     apply transportRegPin_disjoint_ops p δ.ops
     exact hnot ⟨p.target, p.locked⟩ (by simp [registryIntention])
-  transport_comp δ₂ δ₁ p := foldlM_except_append (fun cur op => stepRegPin op cur) δ₁.ops δ₂.ops p
+  transport_comp δ₂ δ₁ p := by
+    unfold transportRegPin
+    exact foldlM_except_append (fun cur op => stepRegPin op cur) δ₁.ops δ₂.ops p
 
 /-- **Active Coalgebraic Pushforward Soundness (`regPin_transport_sound`)**:
 Even when `δ` mutates `p.target` (non-disjoint compatible minor bump!), if `regPinUsable w p = true`
@@ -603,16 +606,16 @@ structure PointedComp where
   seed   : List (String × Term)
 
 /-- Underlying `Composition` of a `PointedComp`. -/
-@[expose] def PointedComp.toComp (P : PointedComp) : Composition :=
+def PointedComp.toComp (P : PointedComp) : Composition :=
   match P.above with
   | [] => ⟨P.target, P.below, P.seed⟩
   | top :: rest => ⟨top, rest ++ (P.target :: P.below), P.seed⟩
 
 /-- Index of `P.target` in `P.toComp.layers` (counting from outermost `0`). -/
-@[expose] def PointedComp.layerIdx (P : PointedComp) : Nat := P.above.length
+def PointedComp.layerIdx (P : PointedComp) : Nat := P.above.length
 
 /-- Build the `ClaimObj` for `claim` of `arity` at `P.target` in `P`. -/
-@[expose] def PointedComp.claimObj (P : PointedComp) (claim : Term) (arity : Nat) : ClaimObj :=
+def PointedComp.claimObj (P : PointedComp) (claim : Term) (arity : Nat) : ClaimObj :=
   ⟨P.toComp, P.layerIdx, claim, arity⟩
 
 theorem PointedComp.toComp_layers (P : PointedComp) :
@@ -760,7 +763,7 @@ structure OverlayDelta where
   steps : List OverlayStep
 
 /-- Prepend a single `OverlayStep` onto `PointedComp.above`. -/
-@[expose] def applyOverlayStep (s : OverlayStep) (P : PointedComp) : PointedComp :=
+def applyOverlayStep (s : OverlayStep) (P : PointedComp) : PointedComp :=
   { P with above := s.layer :: P.above }
 
 /-- Apply an `OverlayDelta` sequentially to a `PointedComp`. -/
@@ -769,7 +772,7 @@ structure OverlayDelta where
 
 /-- Receiver-qualified loci mutated by one `OverlayStep`:
 ONLY `(.selfReceiver, m)` for `m` provided by `s.layer` — NEVER `(.superReceiver, _)`! -/
-@[expose] def stepChangedLoci (s : OverlayStep) : List (ReceiverKind × String) :=
+def stepChangedLoci (s : OverlayStep) : List (ReceiverKind × String) :=
   s.layer.fields.map fun kv => (.selfReceiver, kv.1)
 
 /-- Refusal reason when an `OverlayDelta` overrides a member cited in `cert.selfSupports`. -/
@@ -780,7 +783,7 @@ inductive SuperTransportErr where
 /-- $O(1)$-per-support pushforward of `SuperClaimCert` across `OverlayDelta`:
 checks ONLY `cert.selfSupports` against `s.layer.provides` (ignoring `cert.superSupports` completely,
 since outer layers never affect `P.below`!), returning `.ok cert` unchanged when disjoint. -/
-@[expose] def transportSuperCert (δ : OverlayDelta) (cert : SuperClaimCert) :
+def transportSuperCert (δ : OverlayDelta) (cert : SuperClaimCert) :
     Except SuperTransportErr SuperClaimCert :=
   match δ.steps.findSome? (fun s =>
       (cert.selfSupports.find? (fun sp => s.layer.provides sp.member)).map
@@ -1072,7 +1075,7 @@ theorem regPin_majorBreak_refused :
   rfl
 
 /-- Concrete `PointedComp` at `"Refined"` (`above = []`, `target = verticalRefinedLayer`, `below = [verticalBaseLayer]`). -/
-@[expose] def verticalPointedOrigin : PointedComp where
+def verticalPointedOrigin : PointedComp where
   above  := []
   target := verticalRefinedLayer
   below  := [verticalBaseLayer]
@@ -1080,20 +1083,20 @@ theorem regPin_majorBreak_refused :
 
 /-- Non-flat `OverlayDelta` prepending `auditWrapperLayer` (which overrides `"apply"`, cited in
 `superSupports`, while leaving `"scale"` in `selfSupports` untouched!). -/
-@[expose] def auditOverlayDelta : OverlayDelta where
+def auditOverlayDelta : OverlayDelta where
   steps := [⟨auditWrapperLayer, rfl⟩]
 
 /-- Conflicting `OverlayDelta` overriding `"scale"` (which IS cited in `selfSupports`). -/
-@[expose] def scaleOverrideLayer : Layer where
+def scaleOverrideLayer : Layer where
   name := "ScaleOverride"
   metadata := .inject "declared" (.record [("name", .label "ScaleOverride")])
   fields := [("scale", .nat 99)]
 
-@[expose] def conflictingScaleOverlayDelta : OverlayDelta where
+def conflictingScaleOverlayDelta : OverlayDelta where
   steps := [⟨scaleOverrideLayer, rfl⟩]
 
 /-- Mint the vertical open-recursion certificate at `verticalPointedOrigin`. -/
-@[expose] def verticalOpenRecCert : SuperClaimCert :=
+def verticalOpenRecCert : SuperClaimCert :=
   mkSuperClaimCert 15
     (verticalPointedOrigin.claimObj verticalOpenRecClaimObj.claim verticalOpenRecClaimObj.arity)
     verticalOpenRecSteps
@@ -1127,6 +1130,7 @@ theorem transportSuperCert_verticalOpenRecCert (δ : OverlayDelta) :
     rw [find_map_support_member, hmem]
     cases h : s.layer.provides "scale" <;> simp [List.find?, h]
   rw [hfun]
+  rfl
 
 /-- Concrete inhabited witness for `superCert_transport_sound`:
 `auditOverlayDelta` overrides `"apply"` (in `superSupports`), yet `disjoint (changed δ) (supports cert)`

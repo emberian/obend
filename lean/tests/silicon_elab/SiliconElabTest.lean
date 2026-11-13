@@ -33,7 +33,7 @@ import all Obend.Analysis.Flowpipe
 import all Obend.Analysis.TaylorModel
 import all Obend.Analysis.Groebner
 import all Obend.Analysis.Hybrid
-import all Obend.Vault.PhysicalProjection
+import all Obend.Hardware.NotebookProjection
 public import Obend.Lower.ExprCAM
 public import Obend.Lower.MetaUnify
 public import Obend.Lower.DiscrTreeLUT
@@ -43,7 +43,7 @@ public import Obend.Analysis.Flowpipe
 public import Obend.Analysis.TaylorModel
 public import Obend.Analysis.Groebner
 public import Obend.Analysis.Hybrid
-public import Obend.Vault.PhysicalProjection
+public import Obend.Hardware.NotebookProjection
 @[expose] public section
 
 namespace Obend.Tests.SiliconElab
@@ -323,7 +323,7 @@ def brokenVerifyHybridScheduleSafety
 #print axioms Obend.Analysis.hybrid_flowpipe_safety_admits_contract
 #print axioms Obend.Vault.PhysicalProjection.physical_projection_deterministic
 #print axioms Obend.Vault.PhysicalProjection.physical_cnc_abbe_projection_sound
-#print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_projection_sound
+#print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_fixture
 #print axioms Obend.Vault.PhysicalProjection.physical_projection_doc_noninterference
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_kernel_5stage_check_sound
 #print axioms Obend.Lower.Proofs.SiliconKernel.silicon_elab_residual_dpr_specialize_sound

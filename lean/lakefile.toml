@@ -48,7 +48,7 @@ globs = [
 [[lean_lib]]
 name = "Tests"
 srcDir = "tests"
-globs = ["metasystem.+", "silicon_elab.+", "rehydration.+", "vault.+", "Run.+", "Crypto.+", "extracted.+"]
+globs = ["metasystem.+", "silicon_elab.+", "rehydration.+", "vault.+", "Run.+", "Crypto.+", "extracted.+", "m5.HardwareProjectionTest", "m5.Milestone5Challenger1StressTest"]
 
 # Tier 2A (2026-11-12): compiled native runtime test runner exercising `@[csimp]` fast paths
 # (`lake exe obend-test`, milliseconds suite runtime, ~2 MB runtime heap over `libLean` init).

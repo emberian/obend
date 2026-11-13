@@ -1,7 +1,8 @@
 module
 /- Cubical Kan carriers, ternary cofibration classifiers, staged erasure, and gain-aware adapter fusion.
 CofibLUT16 is retained as a legacy vertex classifier; CofibCube27 includes generic interior faces. -/
-public import Obend.Logic.SuperRefines
+public import Obend.Logic.Obligation
+import all Obend.Logic.Obligation
 public import Obend.Category.GradedLogic
 public import Obend.Category.Refines
 public import Obend.Repair.DeltaLensRenew

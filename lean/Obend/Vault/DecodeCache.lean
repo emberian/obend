@@ -1,4 +1,5 @@
 module
+import all Obend.Vault.Log
 /-
 # Exact-input decoder reuse
 
@@ -7,7 +8,7 @@ unchanged open these are the same bytes. Retain one decoder result with its proo
 next input as a ByteArray (the runtime's byte comparison), before parsing and rebuilding a world.
 There is no claim that a decoded world has a canonical encoding: equality is of the inputs.
 -/
-public import Obend.Vault.LogBytes
+public import Obend.Vault.Log
 @[expose] public section
 
 namespace Obend.Vault.DecodeCache

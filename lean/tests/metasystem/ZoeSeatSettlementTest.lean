@@ -17,10 +17,10 @@ Exercises `Obend.Polis.ZoeSeatSettlement` on the ledger spine (`Obend.Ledger.Sea
 The kernel runs cSHAKE256 once per holder capability (through the proved fast path, about 3 s
 each): `tableHash` is `zoeHash` read from that table, so no run below pays for a hash.
 -/
-public import Obend.Polis.ZoeSeatSettlement
+public import Obend.Ledger.Seat
 import all Obend.Consensus.Simplex
 import all Obend.Consensus.SimplexProtocol
-import all Obend.Polis.ZoeSeatSettlement
+import all Obend.Ledger.Seat
 import all Init.Data.List.Sort.Basic
 import Obend.Tactic.Tooth
 import Obend.AssertAxioms
@@ -493,3 +493,56 @@ run_cmd do
 #assert_axioms_tree
 
 end Obend.Polis.ZoeSeatSettlement.Test
+
+#tooth Obend.Ledger.admitOffer_ensures_safeAt by
+  mutation Obend.Ledger.admitOffer := fun reg b _ offerer payee seatAcc hp hd p =>
+    .ok (reg, b, { account := seatAcc, h_protected := hp, offerer := offerer, payee := payee, h_payee_diff := hd, proposal := p })
+
+example (t : Obend.Ledger.SeatTableExec) (a : Obend.Ledger.AccountId) :
+    Obend.Ledger.lookupSeatExec t a = Obend.Ledger.lookupSeatSpec t.entries.toList a :=
+  Obend.Ledger.lookupSeatExec_eq_lookupSpec t a
+
+#tooth Obend.Ledger.lookupSeatExec_eq_lookupSpec by
+  mutation Obend.Ledger.lookupSeatExec := fun _ _ => none
+
+namespace Obend.Ledger.AdmissionTests
+
+def exchangeProposal : Proposal :=
+  { give := [(0, 5)], want := [(1, 1)], exit := .onDemand }
+
+def liveInvitation : InvitationRegistry :=
+  (InvitationRegistry.empty.mint 0 "exchange").1
+
+/-- The five-unit deposit cannot repair a pre-existing one-unit seat deficit. -/
+theorem indebted_seat_refused :
+    admitOffer liveInvitation
+      ((Book.empty.setBalance 0 0 5).setBalance protectedBase 0 (-1))
+      0 0 0 protectedBase (Nat.le_refl _) (by decide) exchangeProposal =
+      .error .offerUnsafeAtAdmission := by decide +kernel
+
+#tooth indebted_seat_refused by
+  mutation safeAt := fun _ _ _ => true
+
+end Obend.Ledger.AdmissionTests
+
+namespace IndexBuilderAudit
+open Obend.Ledger
+
+def invitations : List (Nat × Invitation) :=
+  [(2, ⟨2, 4, "first"⟩), (9, ⟨9, 4, "last"⟩)]
+
+theorem indexed_invitation_found :
+    lookupInvitationsExec invitations 9 = some ⟨9, 4, "last"⟩ := by decide +kernel
+
+example : (InvitationTableExec.ofInvitations invitations).isSome = true := by decide +kernel
+example : lookupInvitationsExec (invitations.reverse ++ invitations) 2 = some ⟨2, 4, "first"⟩ := by
+  rw [lookupInvitationsExec_eq_spec]
+  decide +kernel
+
+#tooth indexed_invitation_found by mutation
+  Obend.Ledger.lookupInvitationExec := fun _ _ => none
+
+#tooth Obend.Ledger.lookupSeatsExec_eq_spec by mutation
+  Obend.Ledger.lookupSeatExec := fun _ _ => none
+
+end IndexBuilderAudit

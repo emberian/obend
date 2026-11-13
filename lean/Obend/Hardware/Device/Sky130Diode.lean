@@ -48,6 +48,10 @@ negative. Tolerances: residuals `10⁻¹²` of their term scale (measured floor 
 brackets `10⁻⁹`, Deal–Grove residual `10⁻¹²`.
 -/
 public import Obend.Hardware.Device.DriftDiffusion
+import all Obend.Hardware.Device.Wafer
+import all Obend.Hardware.Device.Constants
+import all Obend.Hardware.Device.Enclosure
+import all Obend.Analysis.RealAnalysis
 public section
 
 namespace Obend.Hardware.Device
@@ -82,6 +86,72 @@ def sky130DiodeSpec (pWellDose biasV : CanonicalRat) (xCm : List CanonicalRat) :
   tolRel := 1.0e-12
   mobDelta := 1.0e-9
   dealGroveTol := 1.0e-12
+
+/-- Every physical quantity supplied to the reconstructed process has its required sign. -/
+def sky130ProcessStepValid : ProcessStep → Prop
+  | .implant _ energy dose => 0 < energy ∧ 0 < dose
+  | .anneal temp time | .oxidize _ temp time => 0 < temp ∧ 0 ≤ time
+  | .deposit _ thickness | .etch _ thickness | .etchSilicon thickness => 0 ≤ thickness
+  | .strip _ => True
+
+theorem sky130DiodeRecipe_wellFormed :
+    (∀ step ∈ sky130DiodeRecipe 1.3e13, sky130ProcessStepValid step) ∧
+    (∀ step ∈ sky130DiodeRecipe 2.6e13, sky130ProcessStepValid step) := by
+  simp [sky130DiodeRecipe, sky130ProcessStepValid] <;> decide +kernel
+
+/-- The first process step really implants different total boron doses in the wafer model. -/
+theorem sky130Diode_implant_doses_distinct :
+    ∃ a b : WaferState,
+      (WaferState.bare sky130Background).implant .boron 160 1.3e13 = some a ∧
+      (WaferState.bare sky130Background).implant .boron 160 2.6e13 = some b ∧
+      a.dose .boron ≠ b.dose .boron := by
+  let a := ((WaferState.bare sky130Background).implant .boron 160 1.3e13).getD
+    (WaferState.bare sky130Background)
+  let b := ((WaferState.bare sky130Background).implant .boron 160 2.6e13).getD
+    (WaferState.bare sky130Background)
+  refine ⟨a, b, ?_, ?_, ?_⟩
+  · rfl
+  · rfl
+  · decide +kernel
+
+/-- Executing the first step of the actual two recipes preserves their distinct boron doses. -/
+theorem sky130Diode_recipe_implant_inhabited :
+    ∃ a b : WaferState,
+      runRecipe silicon300K.kBEv 1.0e-12 (WaferState.bare sky130Background)
+        ((sky130DiodeRecipe 1.3e13).take 1) [] = some a ∧
+      runRecipe silicon300K.kBEv 1.0e-12 (WaferState.bare sky130Background)
+        ((sky130DiodeRecipe 2.6e13).take 1) [] = some b ∧
+      a.dose .boron ≠ b.dose .boron := by
+  obtain ⟨a, b, ha, hb, hne⟩ := sky130Diode_implant_doses_distinct
+  refine ⟨a, b, ?_, ?_, hne⟩
+  · simp [sky130DiodeRecipe, runRecipe, ha]
+  · simp [sky130DiodeRecipe, runRecipe, hb]
+
+/-- Both validated process variants exist, rather than a conditional theorem with empty premises. -/
+theorem sky130DiodeRecipe_inhabited : ∃ recipe : List ProcessStep,
+    recipe ≠ [] ∧ ∀ step ∈ recipe, sky130ProcessStepValid step :=
+  ⟨sky130DiodeRecipe 1.3e13, by decide +kernel, sky130DiodeRecipe_wellFormed.1⟩
+
+/-- Thermal certificates for every anneal and oxidation of the complete recipe.
+These rational enclosures are checked by `runRecipe`, including the oxide thickness. -/
+def sky130DiodeRecipeCert : List StepCert := [.none, .anneal ⟨(139704938757218601236302167221 / 10000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (127285124165727245985789941611 / 10000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (73600496760766682802736643049 / 50000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (200374792411516841735175946103 / 100000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat)⟩, .oxidize ⟨(5575484527671213387676064621 / 500000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (131817414959506352512546157943 / 500000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (116086813682635911112065876419 / 125000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), ⟨(460459479144644233432335136009 / 500000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (36477130156731821541168838789 / 50000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (132620830368882962238209899491 / 2000000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (491587617609310379103390940267 / 5000000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat)⟩⟩, .none, .anneal ⟨(460459479144644233432335136009 / 500000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (36477130156731821541168838789 / 50000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (132620830368882962238209899491 / 2000000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat), (491587617609310379103390940267 / 5000000000000000000000000000000000000000000000 : Obend.Analysis.CanonicalRat)⟩, .none, .none]
+
+/-- The complete seven-step process produces both acceptor and donor implants with
+positive variance and dose, and the final metal contact. -/
+theorem sky130Diode_full_recipe_inhabited :
+    ∃ prof : WaferState,
+      runRecipe silicon300K.kBEv 1.0e-12 (WaferState.bare sky130Background)
+        (sky130DiodeRecipe 1.3e13) sky130DiodeRecipeCert = some prof ∧
+      0 < prof.dose .boron ∧ 0 < prof.dose .arsenic ∧
+      (∀ g ∈ prof.dopants, 0 < g.doseCm2 ∧ 0 < g.varCm2) ∧
+      prof.films = [⟨.metal, 5.0e-5⟩] := by
+  let result := runRecipe silicon300K.kBEv 1.0e-12 (WaferState.bare sky130Background)
+    (sky130DiodeRecipe 1.3e13) sky130DiodeRecipeCert
+  have hr : result.isSome = true := by decide +kernel
+  refine ⟨result.getD (WaferState.bare sky130Background), ?_, ?_⟩
+  · change result = _
+    cases h : result <;> simp_all
+  · decide +kernel
 
 end Obend.Hardware.Device
 end

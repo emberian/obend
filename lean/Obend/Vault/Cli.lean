@@ -1,4 +1,6 @@
 module
+import all Obend.Vault.Log
+import all Obend.Vault.Replay
 /-
 # Obend.Vault.Cli — `obend open` and the vault commands
 
@@ -129,9 +131,9 @@ it (`new.unresolved`, `new.unresolvedInserted`); a named file that is not there 
 public import Obend.Vault.Replay
 public import Obend.Vault.FormCheck
 public import Obend.Vault.Cost
-public import Obend.Vault.LogBytes
+public import Obend.Vault.Log
 public import Obend.Vault.DecodeCache
-public import Obend.Vault.SegmentLog
+public import Obend.Vault.Log
 public section
 
 namespace Obend.Vault.Cli
@@ -518,7 +520,7 @@ def recoverLogRead (dir : System.FilePath) : IO Recovery := Obend.Vault.Cost.pha
         "dropped (it does not hold against the log); the world is replayed from genesis")
     | none, none => (genesis, Rehydration.genesisSentinel, 0, 0, "none; the world is replayed from genesis")
   let (qs, stop, why) := if from_ == 0 then parseLogAt logHash anchorOfTurn bs
-    else parseFromAt logHash anchor bs (from_ - offset)
+    else Log.parseSegmentExec logHash anchor bs (from_ - offset)
   let tail := (bs.extract stop bs.size).data.toList
   let (isBase, baseSize) ← if from_ == 0 then
       pure (match qs.head? with
@@ -729,20 +731,20 @@ def compactLog (dir : System.FilePath) (h : Head) : IO Head := do
   | .ok (w', _, r) =>
     if w' != h.world then
       throw (IO.userError "not compacted: the world's bytes do not decode to the world (the log stays as it is)")
-    let rb := encodeRecord logHash r
+    let rb := Log.encodeRecordExec logHash r
     match ← compactTear dir with
     | some (k, barrier) =>
-      Obend.Vault.Cost.writeBinFile (newLogPath dir) ⟨(rb.take k).toArray⟩
+      Obend.Vault.Cost.writeBinFile (newLogPath dir) (rb.extract 0 k)
       waitToBeStopped barrier
     | none => pure ()
-    SegmentLog.replace logHash dir ⟨rb.toArray⟩
+    SegmentLog.replace logHash dir rb
     if ← (newLogPath dir).pathExists then IO.FS.removeFile (newLogPath dir)
     forgetRecovery dir
     if ← (checkpointPath dir).pathExists then IO.FS.removeFile (checkpointPath dir)
     if ← (ChunkedWorld.rootPath dir).pathExists then IO.FS.removeFile (ChunkedWorld.rootPath dir)
     ChunkedWorld.pruneObsoleteShards dir []
-    return { world := h.world, prev := h.prev, count := 1, size := rb.length, lastStart := 0, base := true,
-             baseSize := rb.length }
+    return { world := h.world, prev := h.prev, count := 1, size := rb.size, lastStart := 0, base := true,
+             baseSize := rb.size }
 
 /-- **Open a vault's log for a command**: adopt a world from before the log as its first record; drop a
 torn tail by name; redo the files of a turn whose record is whole but whose files may not be; write

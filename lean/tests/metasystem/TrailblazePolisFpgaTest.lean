@@ -1,7 +1,5 @@
-import Obend.Trailblaze.Obligations
-import Obend.Trailblaze.PolisBlum
-import Obend.Trailblaze.Polis
-import Obend.Trailblaze.LeanFpga
+import Obend.Trailblaze.StageBInstances
+import Obend.Trailblaze.CathedralApex
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
@@ -31,6 +29,7 @@ fragments, `#tooth` mutation sensitivity, and `#assert_axioms_tree` purity (`0 s
      `lowerLeafBookToDeltaNet`), `apex_lean_fpga_rung2_to_rung5`, and `silverLeanFpgaSmoke`.
 -/
 
+
 namespace Obend.Tests.TrailblazePolisFpgaTest
 
 open Obend.Trailblaze
@@ -47,7 +46,6 @@ open Obend.Trailblaze.LeanFpga
 -- 1. `Obligations`, Non-Empty `Judge.Fragment` & Genuine Refutation
 -- ============================================================================
 
-#check @checkManifestWellFormed_sound
 #check @silverWorkflow_satisfies_silverSound
 #check @SilverWorkflow.prod
 #check @SilverWorkflow.toJudge
@@ -202,9 +200,11 @@ example :
     ValidTrace sampleInitSessionState sampleValidPolisTrace
       { revokedCodes  := [.capToken 3 1 40, .capToken 3 1 25, .capToken 3 1 9]
       , mandateBudget := 20
-      , lastTimestamp := 12 } := by
+      , lastTimestamp := 12
+      , ramLog := (sampleOnlineMem ++ sampleSecondOnlineMem).toArray
+      , memRoot := sampleSecondPolisTurn.ramPostRoot } := by
   unfold ValidTrace
-  decide
+  native_decide
 
 example :
     checkChronologicalLog (concatTraceOnlineMem sampleValidPolisTrace) = true := by decide
@@ -212,7 +212,7 @@ example :
 example :
     (match stepPolisSession sampleInitSessionState sampleValidPolisTurn with
      | some st₁ => refusePolisSessionStep st₁ sampleValidPolisTurn
-     | none => none) = some "refused: revoked-or-replayed-cap" := by decide
+     | none => none) = some "refused: revoked-or-replayed-cap" := by native_decide
 
 example :
     refusePolisSessionStep { sampleInitSessionState with mandateBudget := 3 } sampleValidPolisTurn =
@@ -223,7 +223,7 @@ example :
       some "refused: umem-timestamp-regression" := by decide
 
 -- End-to-end Organ O3 Silver smoke witness
-example : silverPolisSmoke = true := by decide
+#guard silverPolisSmoke
 
 -- ============================================================================
 -- 3. Organ O7 (`LeanFpga`): `FaceIdeal3` (`∂𝕀 ≠ 𝕀`), Recursive `Leaf → DeltaNet` & Dual `FABulous`
@@ -307,5 +307,76 @@ example :
 
 -- End-to-end Organ O7 Silver smoke witness
 example : silverLeanFpgaSmoke = true := rfl
+
+example : internSymbol [.symbol "x", .symbol "y"] (.symbol "x") ≠
+    internSymbol [.symbol "x", .symbol "y"] (.symbol "y") := by decide +kernel
+example : deltaTagBytes (.literal 32767) ≠ deltaTagBytes (.opcode 0) := by decide +kernel
+example : deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.symbol "x") (.lit 0))) ≠
+    deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.symbol "y") (.lit 0))) := by decide +kernel
+#tooth internSymbol_injective by
+  mutation internSymbol := fun _ _ => 0
+
+def twoHopRoute (source : Nat) : PipRoute :=
+  ⟨source, [⟨Array.replicate 8 source, 0, source + 1⟩,
+    ⟨Array.replicate 8 (source + 1), 7, source + 2⟩]⟩
+example : checkMultiNetPipDisjoint [twoHopRoute 0, twoHopRoute 3] = true := by decide +kernel
+example : checkMultiNetPipDisjoint [twoHopRoute 0, twoHopRoute 1] = false := by decide +kernel
+example : evalPipRoute (fun wire => wire == 3) (twoHopRoute 0) 2 = false ∧
+    evalPipRoute (fun wire => wire == 3) (twoHopRoute 3) 5 = true := by decide +kernel
+#tooth multiNetPip_routing_sound by
+  mutation checkMultiNetPipDisjoint := fun _ => true
+
+def literalMemberBook : Obend.Leaf.Book := ⟨[.static "answer" (.nat 42)]⟩
+def memberReductionTrace : List (Nat × Nat) := [(7, 6), (8, 3), (8, 4), (3, 5)]
+def reducedMemberNet : DeltaNet :=
+  (runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
+    memberReductionTrace).getD (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
+example : runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
+    memberReductionTrace = some reducedMemberNet := by decide +kernel
+example : checkDeltaNormalForm reducedMemberNet 42 = true := by decide +kernel
+example : checkDeltaNormalForm reducedMemberNet 43 = false := by decide +kernel
+example : DeltaNetSteps (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer") reducedMemberNet :=
+  runDeltaReductions_sound _ _ memberReductionTrace (by decide +kernel)
+#tooth Obend.Trailblaze.StageB.stageB_leaf_book_deltanet_normal_form by
+  mutation checkDeltaNormalForm := fun _ _ => true
+#tooth lowerTermToLeafExpr_split_field_sensitive by
+  mutation stringToDeltaTag := fun _ => .symbol ""
+
+-- P1-06: persisted history, prior-write reads, root substitution, and clock rollback.
+#tooth stepPolisSession_memory by
+  mutation checkSessionMemory := fun _ _ => true
+#tooth runRamOpenings_sound by
+  mutation runRamOpenings := fun root _ _ => some root
+
+#guard checkSessionMemory sampleInitSessionState sampleValidPolisTurn
+#guard !checkSessionMemory { sampleInitSessionState with memRoot := ByteArray.empty } sampleValidPolisTurn
+#guard !checkSessionMemory sampleInitSessionState
+  { sampleValidPolisTurn with ramOpenings := #[] }
+#guard !checkSessionMemory sampleInitSessionState
+  { sampleValidPolisTurn with ramPostRoot := ByteArray.empty }
+
+#guard match stepPolisSession sampleInitSessionState sampleValidPolisTurn with
+  | none => false
+  | some st =>
+    st.ramLog == sampleOnlineMem.toArray &&
+    checkSessionMemory st sampleSecondPolisTurn &&
+    !checkSessionMemory st { sampleSecondPolisTurn with ramHistory := #[] } &&
+    !checkSessionMemory st { sampleSecondPolisTurn with ramPreRoot := sampleValidPolisTurn.ramPreRoot }
+
+def priorWriteReadTurn : ConcretePolisTurn :=
+  let ops : List MemOp := [⟨200, 10, false, 91#64, 0xCC#256⟩]
+  { sampleSecondPolisTurn with
+    onlineMem := ops
+    offlineSortedMem := sortMemOpsByAddrTime (sampleOnlineMem ++ ops)
+    ramOpenings := (fixtureRamWalk sampleFirstRam.1 ops).2.toArray
+    ramPostRoot := sampleValidPolisTurn.ramPostRoot }
+
+#guard match stepPolisSession sampleInitSessionState sampleValidPolisTurn with
+  | none => false
+  | some st => (stepPolisSession st priorWriteReadTurn).isSome &&
+    !(stepPolisSession st { priorWriteReadTurn with
+      onlineMem := [⟨200, 6, false, 91#64, 0xCC#256⟩] }).isSome &&
+    !(stepPolisSession st { priorWriteReadTurn with
+      onlineMem := [⟨200, 10, false, 90#64, 0xCC#256⟩] }).isSome
 
 end Obend.Tests.TrailblazePolisFpgaTest

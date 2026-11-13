@@ -1,4 +1,8 @@
 module
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Polis.CapTP
+import all Obend.Vault.Mandate
 public import Obend.Law.AmendCli
 public import Obend.AssertAxioms
 public import Obend.Tactic.Tooth
@@ -130,7 +134,6 @@ import all Obend.Logic.Program
 import all Obend.Logic.Receipt
 import all Obend.Logic.Rewrite
 import all Obend.Logic.SeparationFrame
-import all Obend.Logic.SuperRefines
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
 import all Obend.Run.Control

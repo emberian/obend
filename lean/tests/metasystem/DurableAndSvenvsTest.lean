@@ -1,4 +1,7 @@
 module
+import all Obend.Polis.BlumRam
+import all Obend.Vault.Log
+import all Obend.Vault.WorldTree
 /-
 # `tests/metasystem/DurableAndSvenvsTest.lean` — End-to-End Verification of Chasm C4 (`VaultDurableBridge` & `SvenvsCorrigibility`)
 
@@ -25,7 +28,7 @@ Exercises end-to-end across concrete instances and universal `#tooth` mutation c
      Tier-1 meta-amendment, and operator `revert`, instantiating `habitat_bedrock_is_eternal`,
      `override_iff_burned_bridge`, `PcaEnvelope` / `embodiedTurnSelect`, and universal `#tooth` checks.
 -/
-public import Obend.Run.VaultDurableBridge
+public import Obend.Vault.Replay
 public import Obend.Judge.SvenvsCorrigibility
 public import Obend.Judge.Genealogy
 public import Obend.Tactic.Tooth
@@ -41,7 +44,8 @@ import all Obend.Slot
 import all Obend.Receipt
 import all Obend.Vault.Rehydration
 import all Obend.Core.Data
-import all Obend.Run.VaultDurableBridge
+import all Obend.Vault.Replay
+import all Obend.Crypto.Transcript
 import all Obend.Judge.SvenvsCorrigibility
 
 public section
@@ -59,6 +63,111 @@ open Obend.Judge.Genealogy (Habitat Gate Exec)
 open Obend.Judge.SvenvsCorrigibility
 
 set_option autoImplicit false
+
+/-! Kernel mutation checks and axiom audits for the imported contracts. -/
+
+#guard_msgs (drop info) in
+#tooth Obend.Run.VaultDurableBridge.rehydrate_binds_sealKey_epoch_or_collision by mutation
+  Obend.Run.VaultDurableBridge.capFramePreimage := fun _ epoch nonce tbl _ =>
+    Obend.Crypto.leb128 epoch.toNat ++ encodeCapTableBytes nonce tbl
+
+#guard_msgs (drop info) in
+#tooth Obend.Run.VaultDurableBridge.stale_epoch_refused by mutation
+  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun Hb key _ frame wire =>
+    decide (key.size = 32 ∧ frame.sealBytes =
+      computeCapFrameSeal Hb key frame.epoch frame.nonce frame.table wire)
+
+#guard_msgs (drop info) in
+#tooth Obend.Run.VaultDurableBridge.rehydrate_restores_nodup_slots by mutation
+  Obend.Run.VaultDurableBridge.duplicateSlot := fun _ => none
+
+#guard_msgs (drop info) in
+#tooth Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip by mutation
+  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ _ _ _ => false
+
+#guard_msgs (drop info) in
+#tooth Obend.Run.VaultDurableBridge.forged_cap_index_refused by mutation
+  Obend.Run.VaultDurableBridge.rehydrateVal := fun _ _ avail => .ok (.natural 0, avail, [])
+
+#guard_msgs (drop info) in
+#tooth Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal by mutation
+  Obend.Judge.SvenvsCorrigibility.floorsContainAll := fun _ _ _ => true
+
+#guard_msgs (drop info) in
+#tooth Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe by mutation
+  Obend.Judge.SvenvsCorrigibility.PcaEnvelope.select := fun _ pcc s => (pcc s).1
+
+#guard_msgs (drop info) in
+#print axioms Obend.Core.Ty.custody_isTransferable_not_isData
+
+#guard_msgs (drop info) in
+#print axioms Obend.Core.Ty.isTransferable_forbids_higher_order
+
+#guard_msgs (drop info) in
+#print axioms Obend.Run.VaultDurableBridge.segmented_append_rotates_across_boundary
+
+#guard_msgs (drop info) in
+#print axioms Obend.Run.VaultDurableBridge.parseFrom_committed_with_torn_frame
+
+#guard_msgs (drop info) in
+#print axioms Obend.Run.VaultDurableBridge.segmentedStep_refines_durable
+
+#guard_msgs (drop info) in
+#print axioms Obend.Run.VaultDurableBridge.segmented_torn_crash_recover_idempotent
+
+#guard_msgs (drop info) in
+#print axioms Obend.Run.VaultDurableBridge.segmented_exposed_once
+
+#guard_msgs (drop info) in
+#print axioms Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip
+
+#guard_msgs (drop info) in
+#print axioms Obend.Run.VaultDurableBridge.transfer_conserves_custody_exact
+
+#guard_msgs (drop info) in
+#print axioms Obend.Run.VaultDurableBridge.forged_cap_index_refused
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.safe_weakening_iff
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.authority_monotone
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.maxpol_transparent_run
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.override_iff_burned_bridge
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.angelic_recoverability_insufficient
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.self_mod_preserves_latency_B
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.disjoint_homes_empty_floor
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.spec_negotiation_safe
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.meta_amendment_safe
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.bedrock_is_eternal
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.pca_strictly_subsumes_static_shield
+
+#guard_msgs (drop info) in
+#print axioms Obend.Judge.SvenvsCorrigibility.nondisclosure_is_inert
 
 -- ============================================================================
 -- 1. Concrete Two-Buyer Segmented Disk Log with Torn-Tail Crash & Rollover
@@ -373,11 +482,14 @@ def stepCapDiskFor (Hb : Bytes → Bytes) :=
   segmentedStep capLedger capBaseView (fun _ => capSpec) (fun _ => capAuth) (fun _ => capCtl)
     Hb capCodec capJ₀
 
-def stepCapDisk := stepCapDiskFor sampleIdentityHash
+/-- Byte-valued log-hash fixture; capability seals use the separate 256-bit fixture. -/
+def journalFixtureHash (bs : Bytes) : Bytes := bs ++ List.replicate 32 0x5a
+
+def stepCapDisk := stepCapDiskFor journalFixtureHash
 
 def traceCapDisk :=
   runSegmentedTrace capLedger capBaseView (fun _ => capSpec) (fun _ => capAuth) (fun _ => capCtl)
-    sampleIdentityHash capCodec capJ₀
+    journalFixtureHash capCodec capJ₀
 
 def aliceEv : CapJEv := .dispatch false ⟨false, ()⟩
 def bobEv : CapJEv := .dispatch true ⟨false, ()⟩
@@ -595,7 +707,7 @@ theorem segmented_rollover_crash_recovery_e2e_for (Hb : Bytes → Bytes) :
     (fun _ => capCtl) Hb capCodec testSegCap testSegCap_pos rfl rfl
     hReachRec hRecDisk hn List.mem_cons_self hio rfl ht rfl
 
-/-- Instantiation at `sampleIdentityHash`. -/
+/-- Instantiation at `journalFixtureHash`. -/
 theorem segmented_rollover_crash_recovery_e2e :
     ∃ (disk₁ disk₂ crashed recovered :
         SegmentedDState capLedger capSig capHole (fun _ => Unit) Unit Unit Empty Empty false)
@@ -609,13 +721,13 @@ theorem segmented_rollover_crash_recovery_e2e :
       stepCapDisk crashed (.submit (.world 1)) = .error .dirtyTailNeedsRecovery ∧
       stepCapDisk crashed .recover = .ok recovered ∧
       recovered = disk₂ ∧
-      recoverJournalAndOutbox sampleIdentityHash capCodec recovered = some ([aliceEv], [0]) ∧
+      recoverJournalAndOutbox journalFixtureHash capCodec recovered = some ([aliceEv], [0]) ∧
       stepCapDisk recovered (.submit bobEv) = .error (.host (.joint (.taken () false 0))) ∧
       stepCapDisk recovered (.expose 0) = .error (.host (.exposed 0)) ∧
       (∀ {n : Nat}, n ∈ ([0] : List Nat) → ∀ {buyer : Bool} {o : Σ b, capSig.Op b},
         ([aliceEv] : List CapJEv)[n]? = some (.dispatch buyer o) →
         capSpec.consumes o.2 = some () → n = 0 ∧ buyer = false) :=
-  segmented_rollover_crash_recovery_e2e_for sampleIdentityHash
+  segmented_rollover_crash_recovery_e2e_for journalFixtureHash
 
 -- ============================================================================
 -- 2. Capability-Carrying `.perform` Plans (`Ty.isTransferable` + `CapTable`)
@@ -640,11 +752,11 @@ def yieldCustodyEnv : CustodyEnv :=
   ⟨[⟨101, 7, [0xde, 0xad]⟩, ⟨202, 11, [0xbe, 0xef]⟩]⟩
 
 def checkCapTransferRoundtrip : Bool :=
-  match dehydrate sampleIdentityHash 99 yieldCustodyEnv yieldPlanVal with
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .ok (wire, frame) =>
     match DataWire.ofData? wire.toData with
     | some wireDecoded =>
-      match rehydrate sampleIdentityHash wireDecoded frame with
+      match rehydrate sampleIdentityHash sampleSealKey 9 wireDecoded frame with
       | .ok (v', env') =>
         v' == yieldPlanVal && env' == yieldCustodyEnv && frame.table.entries.length == 2
       | .error _ => false
@@ -655,33 +767,91 @@ theorem cap_transfer_roundtrip_passes :
     yieldPlanTy.isTransferablePlan = true ∧
     yieldPlanTy.isPlan = false ∧
     TVal.conforms yieldPlanVal yieldPlanTy = true ∧
-    checkCapTransferRoundtrip = true :=
-  ⟨by decide, by decide, by decide, by decide⟩
+    checkCapTransferRoundtrip = true := by
+  refine ⟨by decide, by decide, by decide, ?_⟩
+  simp [checkCapTransferRoundtrip, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data,
+    yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate,
+    CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
+    sampleIdentityHash, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex,
+    DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?,
+    dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide +kernel
 
 def forgedIndexRejected : Bool :=
-  match dehydrate sampleIdentityHash 99 yieldCustodyEnv yieldPlanVal with
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .ok (_, frame) =>
-    match rehydrate sampleIdentityHash (.sealedCap 2 7) frame with
-    | .error (.forgedCapIndex 2) => true
-    | _ => false
-  | .error _ => false
-
-def tamperedSealRejected : Bool :=
-  match dehydrate sampleIdentityHash 99 yieldCustodyEnv yieldPlanVal with
-  | .ok (wire, frame) =>
-    let tampered := { frame with nonce := frame.nonce + 1 }
-    match rehydrate sampleIdentityHash wire tampered with
+    match rehydrate sampleIdentityHash sampleSealKey 9 (.sealedCap 2 7) frame with
     | .error .unsealedFrame => true
     | _ => false
   | .error _ => false
 
+def tamperedSealRejected : Bool :=
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
+  | .ok (wire, frame) =>
+    let tampered := { frame with nonce := frame.nonce + 1 }
+    match rehydrate sampleIdentityHash sampleSealKey 9 wire tampered with
+    | .error .unsealedFrame => true
+    | _ => false
+  | .error _ => false
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8192 in
 theorem test_forged_and_tampered_refused :
     forgedIndexRejected = true ∧
     tamperedSealRejected = true ∧
-    dehydrate sampleIdentityHash 1 ⟨[⟨101, 7, [1]⟩]⟩
+    dehydrate sampleIdentityHash sampleSealKey 9 1 ⟨[⟨101, 7, [1]⟩]⟩
       (.record [("a", .cap 101 7), ("b", .cap 101 7)]) = .error (.missingOrDuplicateSlot 101) ∧
-    dehydrate sampleIdentityHash 1 yieldCustodyEnv (.natural 0) = .error (.droppedCustody 101) :=
-  ⟨by decide, by decide, rfl, rfl⟩
+    dehydrate sampleIdentityHash sampleSealKey 9 1 yieldCustodyEnv (.natural 0) = .error (.droppedCustody 101) := by
+  refine ⟨?_, ?_, rfl, rfl⟩ <;>
+    simp [forgedIndexRejected, tamperedSealRejected, dehydrate, sampleSealKey, ByteArray.size,
+      -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot,
+      duplicateSlot, rehydrate, CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
+    sampleIdentityHash, indexedFromBool, rehydrateVal, rehydrateFields,
+      takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?,
+      dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide +kernel
+
+/-- A seal made by one authority must fail under a different host key. -/
+def forgedAuthorityRejected : Bool :=
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
+  | .error _ => false
+  | .ok (wire, frame) =>
+    match rehydrate sampleIdentityHash (⟨(List.replicate 32 (0x5b : UInt8)).toArray⟩ : ByteArray) 9 wire frame with
+    | .error .unsealedFrame => true
+    | _ => false
+
+def staleEpochRejected : Bool :=
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
+  | .error _ => false
+  | .ok (wire, frame) =>
+    match rehydrate sampleIdentityHash sampleSealKey 10 wire frame with
+    | .error .unsealedFrame => true
+    | _ => false
+
+/-- Even a correctly sealed table cannot restore two capabilities in one slot. -/
+def duplicateSlotsRejected : Bool :=
+  let tbl : CapTable := ⟨[⟨0, ⟨101, 7, [1]⟩⟩, ⟨1, ⟨101, 8, [2]⟩⟩]⟩
+  let frame : CapSealFrame := ⟨99, 9, tbl,
+    computeCapFrameSeal sampleIdentityHash sampleSealKey 9 99 tbl
+      (.record [("a", .sealedCap 0 7), ("b", .sealedCap 1 8)])⟩
+  match rehydrate sampleIdentityHash sampleSealKey 9
+    (.record [("a", .sealedCap 0 7), ("b", .sealedCap 1 8)]) frame with
+  | .error (.missingOrDuplicateSlot 101) => true
+  | _ => false
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8192 in
+theorem authority_epoch_slots_refused :
+    forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
+  simp [forgedAuthorityRejected, staleEpochRejected, duplicateSlotsRejected, dehydrate, sampleSealKey,
+    ByteArray.size, -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields,
+    takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
+    sampleIdentityHash, indexedFromBool, rehydrateVal,
+    rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
+    DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq,
+    tvalFieldsBeq] <;> decide +kernel
+
+-- Full-width natural identifiers have distinct encodings past the former 64-bit wrap boundary.
+example : encodeCapTableBytes 0 ⟨[⟨0, ⟨1, 2, []⟩⟩]⟩ ≠
+    encodeCapTableBytes 0 ⟨[⟨0, ⟨1 + 2^64, 2, []⟩⟩]⟩ := by decide
 
 -- ============================================================================
 -- 3. `Genealogy.Habitat` Governed by 3-Tier `SpecNeg` + $B$-Corrigibility + `PcaEnvelope`
@@ -771,47 +941,28 @@ example (ctrl : Nat → Nat) :
       ¬ CWithin bridgeStep bridgeRecov bridgeHome 3 (bridgeStep 2 (ctrl 2)) :=
   override_iff_burned_bridge 3 ctrl bridgeHome_parked ⟨2, by omega, rfl⟩
 
--- ============================================================================
--- 4. Universal `#tooth` Mutation Verification & `#print axioms` Audit
--- ============================================================================
-
-#tooth Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip by mutation
-  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ => false
-
-#tooth Obend.Run.VaultDurableBridge.forged_cap_index_refused by mutation
-  Obend.Run.VaultDurableBridge.rehydrateVal := fun _ _ avail => .ok (.natural 0, avail, [])
-
-#tooth Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal by mutation
-  Obend.Judge.SvenvsCorrigibility.floorsContainAll := fun _ _ _ => true
-
-#tooth Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe by mutation
-  Obend.Judge.SvenvsCorrigibility.PcaEnvelope.select := fun _ pcc s => (pcc s).1
-
-#print axioms Obend.Core.Ty.custody_isTransferable_not_isData
-#print axioms Obend.Core.Ty.isTransferable_forbids_higher_order
-#print axioms Obend.Run.VaultDurableBridge.segmented_append_rotates_across_boundary
-#print axioms Obend.Run.VaultDurableBridge.parseFrom_committed_with_torn_frame
-#print axioms Obend.Run.VaultDurableBridge.segmentedStep_refines_durable
-#print axioms Obend.Run.VaultDurableBridge.segmented_torn_crash_recover_idempotent
-#print axioms Obend.Run.VaultDurableBridge.segmented_exposed_once
-#print axioms Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip
-#print axioms Obend.Run.VaultDurableBridge.transfer_conserves_custody_exact
-#print axioms Obend.Run.VaultDurableBridge.forged_cap_index_refused
-#print axioms Obend.Judge.SvenvsCorrigibility.safe_weakening_iff
-#print axioms Obend.Judge.SvenvsCorrigibility.authority_monotone
-#print axioms Obend.Judge.SvenvsCorrigibility.maxpol_transparent_run
-#print axioms Obend.Judge.SvenvsCorrigibility.override_iff_burned_bridge
-#print axioms Obend.Judge.SvenvsCorrigibility.angelic_recoverability_insufficient
-#print axioms Obend.Judge.SvenvsCorrigibility.self_mod_preserves_latency_B
-#print axioms Obend.Judge.SvenvsCorrigibility.disjoint_homes_empty_floor
-#print axioms Obend.Judge.SvenvsCorrigibility.spec_negotiation_safe
-#print axioms Obend.Judge.SvenvsCorrigibility.meta_amendment_safe
-#print axioms Obend.Judge.SvenvsCorrigibility.bedrock_is_eternal
-#print axioms Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal
-#print axioms Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe
-#print axioms Obend.Judge.SvenvsCorrigibility.pca_strictly_subsumes_static_shield
-#print axioms Obend.Judge.SvenvsCorrigibility.nondisclosure_is_inert
-
 end Obend.Tests.DurableAndSvenvsTest
 
 end
+
+namespace WireTamperAudit
+open Obend.Run.VaultDurableBridge
+
+def payloadTamperRefused : Bool :=
+  match dehydrate sampleIdentityHash sampleSealKey 9 1 ⟨[]⟩ (.natural 7) with
+  | .error _ => false
+  | .ok (_, frame) => match rehydrate sampleIdentityHash sampleSealKey 9 (.natural 8) frame with
+    | .error .unsealedFrame => true
+    | _ => false
+
+set_option maxRecDepth 8192 in
+theorem payload_tamper_refused : payloadTamperRefused = true := by
+  simp [payloadTamperRefused, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data,
+    dehydrateVal, duplicateSlot, rehydrate, CapSealFrame.sealValid,
+    computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
+    sampleIdentityHash] <;> decide +kernel
+
+#tooth payload_tamper_refused by mutation
+  Obend.Run.VaultDurableBridge.dataWireBytes := fun _ => []
+
+end WireTamperAudit

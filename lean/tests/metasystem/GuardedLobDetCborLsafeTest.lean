@@ -24,7 +24,7 @@ public import Obend.Tactic.Tooth
 public import Obend.Logic.GuardedLob
 public import Obend.Codec.DetCbor
 public import Obend.Vault.Lsafe
-import all Obend.Logic.SuperRefines
+import all Obend.Logic.Obligation
 import all Obend.Logic.GuardedLob
 import all Obend.Codec.DetCbor
 import all Obend.Vault.Lsafe

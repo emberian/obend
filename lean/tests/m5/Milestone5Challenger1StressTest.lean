@@ -1,16 +1,17 @@
+module
 import Obend.Doc.Structured
 import Obend.Doc.Graph
 import Obend.Doc.Patch
 import Obend.Core.Data
-import Obend.Vault.HardwareProjection
+import all Obend.Hardware.NotebookProjection
 import Obend.Hardware.HDL
 import Obend.Hardware.Synth
 import Obend.Hardware.Process
 import Obend.Hardware.PlaceRoute
 import Obend.Hardware.DRC
 import Obend.Hardware.Circuits
-import Obend.Hardware.Fabric
-import Obend.Vault.Json
+import all Obend.Vault.Json
+meta import Obend.Vault.Json
 import Lean.Data.Json
 
 open Obend.Doc
@@ -30,7 +31,7 @@ set_option autoImplicit false
 /-!
 # Milestone 5 Challenger 1: Empirical Adversarial Stress Test Suite
 Adversarially tests Features 34, 35, 36:
-1. Feature 34: ProjectionKind 10 variants pairwise distinctness, decider, wire codecs, category disjointness, and fuzzing.
+1. Feature 34: ProjectionKind 16 variants pairwise distinctness, decider, wire codecs, category disjointness, and fuzzing.
 2. Feature 35: StructuredCell, .obnb codecs, deep AST nesting, corrupt hex/receipts, pin invalidation matrix, document CRDT.
 3. Feature 36: Read-only hardware projections, complex RTL DAG verification, multi-corner STA timing closure/violations, multi-layer DRC violations, WaferSpace signoff.
 -/
@@ -39,7 +40,7 @@ namespace Obend.Challenger.M5
 
 /-! ## 1. Feature 34: ProjectionKind Stress & Fuzzing -/
 
--- Test 1.1: Pairwise distinctness of all 10 variants
+-- Test 1.1: Pairwise distinctness of all 16 variants
 def test_projection_kind_pairwise_distinct : Bool :=
   let all := ProjectionKind.all
   all.all fun a =>
@@ -49,7 +50,7 @@ def test_projection_kind_pairwise_distinct : Bool :=
 
 #guard test_projection_kind_pairwise_distinct == true
 
--- Test 1.2: Roundtrip through toLabel / ofLabel for all 10 variants
+-- Test 1.2: Roundtrip through toLabel / ofLabel for all 16 variants
 def test_projection_kind_roundtrip_all : Bool :=
   ProjectionKind.all.all fun k =>
     match ProjectionKind.ofLabel (ProjectionKind.toLabel k) with
@@ -89,10 +90,10 @@ def test_projection_kind_partition_disjointness : Bool :=
   let hw := all.filter ProjectionKind.isHardware
   let exe := all.filter ProjectionKind.isExecutable
   let ctr := all.filter ProjectionKind.isContractual
-  -- Counts must be exactly 3 each
-  (hw.length == 3) &&
-  (exe.length == 3) &&
-  (ctr.length == 3) &&
+  -- Counts must be exactly 5 each
+  (hw.length == 5) &&
+  (exe.length == 5) &&
+  (ctr.length == 5) &&
   -- Mutual disjointness
   (hw.all fun k => !ProjectionKind.isExecutable k && !ProjectionKind.isContractual k) &&
   (exe.all fun k => !ProjectionKind.isHardware k && !ProjectionKind.isContractual k) &&
@@ -101,8 +102,8 @@ def test_projection_kind_partition_disjointness : Bool :=
   (!ProjectionKind.isHardware .prose) &&
   (!ProjectionKind.isExecutable .prose) &&
   (!ProjectionKind.isContractual .prose) &&
-  -- Total accounted for is 3 + 3 + 3 + 1 = 10
-  (hw.length + exe.length + ctr.length + 1 == 10)
+  -- Total accounted for is 5 + 5 + 5 + 1 = 16
+  (hw.length + exe.length + ctr.length + 1 == 16)
 
 #guard test_projection_kind_partition_disjointness == true
 
@@ -337,7 +338,7 @@ def test_document_graph_multi_cell_retrieval : Bool :=
   }
   let patch := documentToPatch doc
   let G := Graph.empty.apply patch
-  -- Verify all 10 cells are found with correct IDs and kinds
+  -- Verify all 16 cells are found with correct IDs and kinds
   let allFound := cells.all fun c =>
     match findCellById G c.id with
     | some c' => c'.id == c.id && c'.kind == c.kind
@@ -345,7 +346,7 @@ def test_document_graph_multi_cell_retrieval : Bool :=
   -- Verify nonexistent cell ID returns none
   let noneOk := (findCellById G "nonexistent_id").isNone
   -- Verify Graph size
-  let atomCountOk := G.atoms.length == 10
+  let atomCountOk := G.atoms.length == cells.length
   allFound && noneOk && atomCountOk
 
 #guard test_document_graph_multi_cell_retrieval == true

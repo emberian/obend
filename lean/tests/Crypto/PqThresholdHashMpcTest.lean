@@ -12,10 +12,12 @@ Verifies `ThresholdMpcUcGames`, `PqHashSignatures`, and `ThresholdHashMpc`:
 -/
 public import Obend.Crypto.ThresholdMpcUcGames
 public import Obend.Crypto.PqHashSignatures
-public import Obend.Crypto.ThresholdHashMpc
+public import Obend.Polis.PqThresholdCustody
+import all Obend.Polis.PqThresholdCustody
+import all Obend.Crypto.ThresholdHashMpc
 meta import Obend.Crypto.ThresholdMpcUcGames
 meta import Obend.Crypto.PqHashSignatures
-meta import Obend.Crypto.ThresholdHashMpc
+meta import Obend.Polis.PqThresholdCustody
 import all Init.Data.String.Defs
 import all Init.Data.ByteArray.Basic
 import all Init.Data.Array.Basic
@@ -26,7 +28,6 @@ import all Init.Data.List.Basic
 import all Init.Data.List.Impl
 import all Obend.Crypto.ThresholdMpcUcGames
 import all Obend.Crypto.PqHashSignatures
-import all Obend.Crypto.ThresholdHashMpc
 import all Obend.Crypto.BinaryTower256
 import all Obend.Crypto.Poseidon2Goldilocks
 import all Obend.Crypto.Sumcheck

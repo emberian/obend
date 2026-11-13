@@ -1,4 +1,7 @@
 module
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Logic.SeparationFrame
 public import Obend.Core.GradedSessionMetatheory
 public import Obend.Spec.BidirectionalSurfaceElab
 import all Init.Data.String.Defs
@@ -125,7 +128,6 @@ import all Obend.Logic.Ground
 import all Obend.Logic.LateBinding
 import all Obend.Logic.Obligation
 import all Obend.Logic.Rewrite
-import all Obend.Logic.SuperRefines
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
 import all Obend.Repair.DeltaLensRenew

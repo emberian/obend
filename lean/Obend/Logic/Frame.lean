@@ -22,11 +22,12 @@ unfold to are the certificate's **supports** (`supports`, `Support.holds`); a co
 re-provides one of them withdraws it by name (`Obend.Logic.Obligation`).
 -/
 public import Obend.Logic.Rewrite
-@[expose] public section
+public section
 namespace Obend.Logic
 open Obend.Core.Term
 open Obend.Core.Data (Data)
 open Obend.Equiv
+open Obend.Core.TermTraverse (encode)
 set_option autoImplicit false
 
 /-- A claim of a layer of a composition: its code `λself. λsuper. λp₁ … λpₖ. body` and `k`. -/
@@ -39,29 +40,29 @@ structure ClaimObj where
 namespace ClaimObj
 
 /-- `self`'s index in the claim's body. -/
-def self (o : ClaimObj) : Nat := o.arity + 1
+@[expose] def self (o : ClaimObj) : Nat := o.arity + 1
 
 /-- The claim's body, and the sides of its `==`. -/
-def sides (o : ClaimObj) : Option (EqKind × Term × Term) := (unlams (o.arity + 2) o.claim).bind equationSides
+@[expose] def sides (o : ClaimObj) : Option (EqKind × Term × Term) := (unlams (o.arity + 2) o.claim).bind equationSides
 
 /-- What the meaning needs of the composition, decided: the claim, the object, the claim's `super`,
 the composition's operands and seed are closed; the object and the `super` ask no metadata. -/
-def wellFormed (o : ClaimObj) : Bool :=
+@[expose] def wellFormed (o : ClaimObj) : Bool :=
   Obend.Law.closedB o.claim && Obend.Law.closedB o.comp.object && Obend.Law.closedB (o.comp.superAt o.layer) &&
     Obend.Law.closedB (composeTerm o.comp.top o.comp.below) && Obend.Law.closedB (.record o.comp.seed) &&
     !observes o.comp.object && !observes (o.comp.superAt o.layer) && decide (o.layer < o.comp.layers.length)
 
 /-- The arguments a data instance gives the claim: `self`, `super`, the data. -/
-def args (o : ClaimObj) (ds : List Data) : List Term := o.comp.object :: o.comp.superAt o.layer :: ds.map Data.term
+@[expose] def args (o : ClaimObj) (ds : List Data) : List Term := o.comp.object :: o.comp.superAt o.layer :: ds.map Data.term
 
 end ClaimObj
 
 /-- What `self.m` unfolds to with `self` the variable `s`: the provider's name and body. -/
-def symUnfold (C : Composition) (s : Nat) (m : String) : Option (String × Term) :=
+@[expose] def symUnfold (C : Composition) (s : Nat) (m : String) : Option (String × Term) :=
   (unfoldIn (.bound s) C.seed C.layers.length C.layers m).map fun (j, u) => (layerName C.layers j, u)
 
 /-- The claim judge's resolver: only `self.m` unfolds. -/
-def claimResolver (C : Composition) (s : Nat) : Resolver := fun X m =>
+@[expose] def claimResolver (C : Composition) (s : Nat) : Resolver := fun X m =>
   match X with
   | .bound i => if i == s then symUnfold C s m else none
   | _ => none
@@ -69,6 +70,10 @@ def claimResolver (C : Composition) (s : Nat) : Resolver := fun X m =>
 inductive ClaimClause where
   /-- the claim or composition is not closed, or asks metadata, or the layer is missing -/
   | illFormed
+  /-- The object itself is malformed, independently of its certificate. -/
+  | malformedObject
+  /-- Closed scalar literals denote different completed observations. -/
+  | groundMismatch
   /-- the claim's body is not an elaborated `==` -/
   | notAnEquation
   /-- the derivation was refused -/
@@ -76,7 +81,7 @@ inductive ClaimClause where
   deriving DecidableEq, Repr
 
 /-- A rewrite verdict as a claim verdict (`Judge.Verdict.map`, with its body visible to the kernel). -/
-def liftVerdict : Judge.Verdict RClause → Judge.Verdict ClaimClause
+@[expose] def liftVerdict : Judge.Verdict RClause → Judge.Verdict ClaimClause
   | .ok => .ok
   | .refused c p => .refused (.rewrite c) p
   | .uncovered => .uncovered
@@ -84,17 +89,36 @@ def liftVerdict : Judge.Verdict RClause → Judge.Verdict ClaimClause
 theorem liftVerdict_ok {v : Judge.Verdict RClause} (h : liftVerdict v = .ok) : v = .ok := by
   cases v <;> simp_all [liftVerdict]
 
+/-- Exactly the ground observations supported by the partial equation semantics. -/
+def groundLiteral : Term → Option Observation
+  | .nat n => some (.natural n)
+  | .boolean b => some (.boolean b)
+  | .label s => some (.label s)
+  | _ => none
+
+def groundMismatch (arity : Nat) (l r : Term) : Bool :=
+  arity == 0 && match groundLiteral l, groundLiteral r with
+    | some a, some b => decide (a ≠ b)
+    | _, _ => false
+
+@[simp] theorem groundMismatch_refl (arity : Nat) (t : Term) :
+    groundMismatch arity t t = false := by
+  unfold groundMismatch
+  cases groundLiteral t <;> simp
+
 /-- **The claim checker.** -/
-def claimCheck (k : Nat) (o : ClaimObj) (steps : List RStep) : Judge.Verdict ClaimClause :=
+@[expose] def claimCheck (k : Nat) (o : ClaimObj) (steps : List RStep) : Judge.Verdict ClaimClause :=
   if o.wellFormed then
     match o.sides with
-    | some (_, l, r) => liftVerdict (rewriteWith (claimResolver o.comp o.self) k l r steps)
+    | some (_, l, r) =>
+      if groundMismatch o.arity l r then .refused .groundMismatch []
+      else liftVerdict (rewriteWith (claimResolver o.comp o.self) k l r steps)
     | none => .refused .notAnEquation []
   else .refused .illFormed []
 
 /-- What an accepted claim derivation establishes: at every instance of the arity, the two sides,
 with `self`, `super` and the data substituted, have the same completed runs. -/
-def claimMeaning (o : ClaimObj) : Prop :=
+@[expose] def claimMeaning (o : ClaimObj) : Prop :=
   match o.sides with
   | some (_, l, r) => ∀ ds : List Data, ds.length = o.arity →
       HoldsEq (l.substitute (argSubst (o.args ds))) (r.substitute (argSubst (o.args ds)))
@@ -158,6 +182,9 @@ theorem claim_sound {k : Nat} {o : ClaimObj} {steps : List RStep} (h : claimChec
     unfold claimMeaning
     split at h
     · rename_i kind l r hs
+      split at h
+      · cases h
+      rename_i hground
       intro ds hl
       obtain ⟨_, hO, hS, _, _, hoO, hoS⟩ := wellFormed_parts hw
       have hfree : SubstFree (argSubst (o.args ds)) := argSubst_obsFree (by
@@ -249,6 +276,10 @@ theorem claim_frame {k : Nat} {o : ClaimObj} {steps : List RStep} (h : claimChec
     rw [hside]
     split at h
     · rename_i kind l r hs
+      split at h
+      · cases h
+      rename_i hg
+      simp only [show ({ o with comp := C', layer := j' } : ClaimObj).arity = o.arity from rfl, hg, ite_false]
       change liftVerdict (rewriteWith (claimResolver C' o.self) k l r steps) = .ok
       unfold rewriteWith at h ⊢
       rw [replay_frame steps (R := claimResolver C' o.self) (R' := claimResolver o.comp o.self) (by
@@ -263,6 +294,197 @@ theorem claim_frame {k : Nat} {o : ClaimObj} {steps : List RStep} (h : claimChec
       exact h
     · cases h
   · cases h
+
+theorem liftVerdict_ne {v : Judge.Verdict RClause} (h : liftVerdict v ≠ .uncovered) : v ≠ .uncovered := by
+  cases v <;> simp_all [liftVerdict]
+
+
+/-! ## 1. Symbolic Unfolding of `super.m` and `superClaimResolver` -/
+
+/-- Symbolic unfolding of `super.m` at layer `layer` of `C`, keeping dynamic `self` bound to
+`.bound selfIdx` (open recursion) while resolving `m` in the inherited suffix `C.layers.drop (layer + 1)`. -/
+@[expose] def superSymUnfold (C : Composition) (selfIdx layer : Nat) (m : String) :
+    Option (String × Term) :=
+  let ls := C.layers.drop (layer + 1)
+  (unfoldIn (.bound selfIdx) C.seed ls.length ls m).map fun (j, u) => (layerName ls j, u)
+
+/-- Vertical + horizontal claim resolver:
+- `.bound selfIdx` (`self`) unfolds through the whole composition `C` (`symUnfold`),
+- `.bound (selfIdx - 1)` (`super`, at index `o.arity` when `selfIdx = o.arity + 1`) unfolds through
+  the layers strictly below `layer` (`superSymUnfold`), keeping dynamic `self` at `.bound selfIdx`. -/
+@[expose] def superClaimResolver (C : Composition) (selfIdx layer : Nat) : Resolver := fun X m =>
+  match X with
+  | .bound i =>
+    if i == selfIdx then symUnfold C selfIdx m
+    else if selfIdx > 0 && i == selfIdx - 1 then superSymUnfold C selfIdx layer m
+    else none
+  | _ => none
+
+/-! ## 2. Soundness (`superClaimResolver_sound`, `superClaim_sound`, `superClaim_holds`) -/
+
+/-- `argSubst (o.args ds)` maps `o.arity` (`o.self - 1`) to `o.comp.superAt o.layer`. -/
+theorem argSubst_super (o : ClaimObj) (ds : List Data) (hl : ds.length = o.arity) :
+    argSubst (o.args ds) o.arity = o.comp.superAt o.layer := by
+  simp only [argSubst, ClaimObj.args, List.length_cons, List.length_map, hl]
+  have hlt : o.arity < o.arity + 1 + 1 := by omega
+  simp [hlt]
+
+/-- Every non-empty suffix `next :: rest = (top :: below).drop k` of a closed `composeTerm`
+is itself closed. -/
+theorem closed_composeTerm_drop :
+    ∀ (top : Layer) (below : List Layer),
+      Closed (composeTerm top below) →
+      ∀ (k : Nat) (next : Layer) (rest : List Layer),
+        (top :: below).drop k = next :: rest → Closed (composeTerm next rest)
+  | top, below, hct, 0, next, rest, hdrop => by
+    simp only [List.drop_zero, List.cons.injEq] at hdrop
+    rcases hdrop with ⟨rfl, rfl⟩
+    exact hct
+  | _, [], _, _ + 1, _, _, hdrop => by
+    simp at hdrop
+  | top, b0 :: bs, hct, k + 1, next, rest, hdrop => by
+    have hct' := hct
+    unfold Closed Obend.Core.TermTraverse.Scoped Obend.Core.Traverse.Tree.Scoped at hct'
+    simp only [composeTerm, composeWith, composeStep, encode, Obend.Core.Traverse.Tree.All] at hct'
+    have hmix := hct' (.node .mix [encode (composeWith Layer.term b0 bs), encode top.term])
+      (by simp)
+    simp only [Obend.Core.Traverse.Tree.All] at hmix
+    have hsub : Closed (composeTerm b0 bs) :=
+      hmix (encode (composeWith Layer.term b0 bs)) (by simp)
+    exact closed_composeTerm_drop b0 bs hsub k next rest hdrop
+
+theorem superBelow_subst_argSubst (o : ClaimObj) (hw : o.wellFormed = true)
+    (ds : List Data) (hl : ds.length = o.arity) :
+    (superBelow (.bound o.self) o.comp.seed (o.comp.layers.drop (o.layer + 1))).substitute
+        (argSubst (o.args ds)) =
+      o.comp.superAt o.layer := by
+  obtain ⟨_, _, _, hct, hseed, _, _⟩ := wellFormed_parts hw
+  unfold Composition.superAt
+  cases hdrop : o.comp.layers.drop (o.layer + 1) with
+  | nil =>
+    simp only [superBelow]
+    exact closed_subst hseed _
+  | cons next rest =>
+    have hcNext : Closed (composeTerm next rest) :=
+      closed_composeTerm_drop o.comp.top o.comp.below hct (o.layer + 1) next rest hdrop
+    simp only [superBelow, Term.substitute, closed_subst hcNext, closed_subst hseed,
+      argSubst_self o ds hl]
+
+/-- **Resolver Soundness (`superClaimResolver_sound`)**:
+Both `self.m` and `super.m` unfoldings in `superClaimResolver` soundly step under
+`argSubst (o.args ds)` for every data tuple `ds` of length `o.arity`. -/
+theorem superClaimResolver_sound (o : ClaimObj) (hw : o.wellFormed = true)
+    (ds : List Data) (hl : ds.length = o.arity) :
+    RSound (superClaimResolver o.comp o.self o.layer) (argSubst (o.args ds)) := by
+  obtain ⟨_, _, _, hct, hseed, _, _⟩ := wellFormed_parts hw
+  intro X m layer u h
+  cases X with
+  | bound i =>
+    simp only [superClaimResolver] at h
+    by_cases hself : (i == o.self) = true
+    · simp only [hself, ite_true] at h
+      have hi : i = o.self := beq_iff_eq.1 hself
+      subst hi
+      obtain ⟨⟨j, u'⟩, hu, e⟩ := Option.map_eq_some_iff.1 h
+      cases e
+      have hs := steps_substitute (argSubst (o.args ds))
+        (unfoldIn_steps (.bound o.self) o.comp.seed m _ o.comp.layers hu)
+      have e1 : (Term.get (superBelow (.bound o.self) o.comp.seed o.comp.layers) m).substitute
+          (argSubst (o.args ds)) =
+          .get (superBelow o.comp.object o.comp.seed o.comp.layers) m := by
+        simp only [Composition.layers, superBelow, Term.substitute, closed_subst hct,
+          closed_subst hseed, argSubst_self o ds hl]
+      rw [e1] at hs
+      simp only [Term.substitute, argSubst_self o ds hl]
+      exact steps_trans (object_get o.comp m) hs
+    · simp only [hself, Bool.false_eq_true, ite_false] at h
+      by_cases hsup : (decide (o.self > 0) && (i == o.self - 1)) = true
+      · simp only [hsup, ite_true] at h
+        simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hsup
+        have hi : i = o.arity := by
+          have : o.self = o.arity + 1 := rfl
+          omega
+        subst hi
+        obtain ⟨⟨j, u'⟩, hu, e⟩ := Option.map_eq_some_iff.1 h
+        cases e
+        let ls := o.comp.layers.drop (o.layer + 1)
+        have hs := steps_substitute (argSubst (o.args ds))
+          (unfoldIn_steps (.bound o.self) o.comp.seed m ls.length ls hu)
+        have e2 : (Term.get (superBelow (.bound o.self) o.comp.seed ls) m).substitute
+            (argSubst (o.args ds)) =
+            .get (o.comp.superAt o.layer) m := by
+          simp only [ls, Term.substitute, superBelow_subst_argSubst o hw ds hl]
+        rw [e2] at hs
+        simpa only [Term.substitute, argSubst_super o ds hl] using hs
+      · simp [hsup] at h
+  | _ => simp [superClaimResolver] at h
+
+/-! ## 3. Exact Receiver-Traced Supports & `T3_super_claim_frame` -/
+
+-- Monotonicity of `replay` / `apply` under resolver extension (`∀ X m v, R X m = some v → R' X m = some v`).
+mutual
+theorem replay_of_resolver_extends {R R' : Resolver}
+    (hext : ∀ X m v, R X m = some v → R' X m = some v) :
+    ∀ (steps : List RStep) {t t' : Term},
+      replay R steps t = .ok t' → replay R' steps t = .ok t'
+  | [], _, _, h => h
+  | s :: rest, t, t', h => by
+    simp only [replay] at h ⊢
+    cases ha : apply R s t with
+    | error p => rw [ha] at h; cases h
+    | ok u =>
+      rw [ha] at h
+      simp only [apply_of_resolver_extends hext s ha] at h ⊢
+      cases hr : replay R rest u with
+      | error p => rw [hr] at h; cases h
+      | ok v =>
+        rw [hr] at h
+        simp only [replay_of_resolver_extends hext rest hr] at h ⊢
+        exact h
+
+theorem apply_of_resolver_extends {R R' : Resolver}
+    (hext : ∀ X m v, R X m = some v → R' X m = some v) :
+    ∀ (s : RStep) {t t' : Term},
+      apply R s t = .ok t' → apply R' s t = .ok t'
+  | .run _, _, _, h => h
+  | .assoc _, _, _, h => h
+  | .composeAssoc _, _, _, h => h
+  | .lateBinding m lay, t, t', h => by
+    simp only [apply] at h ⊢
+    cases t with
+    | get X m' =>
+      simp only [unfoldAt] at h ⊢
+      by_cases hm : (m' == m) = true
+      · simp only [hm, ite_true] at h ⊢
+        cases hR : R X m with
+        | none => rw [hR] at h; cases h
+        | some pair =>
+          rw [hR] at h
+          simp only [hext X m pair hR] at h ⊢
+          exact h
+      · simp [hm] at h
+    | _ => simp [unfoldAt] at h
+  | .congr ctx a inner, t, t', h => by
+    simp only [apply] at h ⊢
+    split at h
+    · rename_i hc
+      simp only [hc, ite_true]
+      cases hr : replay R inner a with
+      | error p => rw [hr] at h; cases h
+      | ok a' =>
+        rw [hr] at h
+        simp only [replay_of_resolver_extends hext inner hr] at h ⊢
+        exact h
+    · cases h
+  | .trans first second, t, t', h => by
+    simp only [apply] at h ⊢
+    cases hr1 : replay R first t with
+    | error p => rw [hr1] at h; cases h
+    | ok u =>
+      rw [hr1] at h
+      simp only [replay_of_resolver_extends hext first hr1] at h ⊢
+      exact replay_of_resolver_extends hext second h
+end
 
 end Obend.Logic
 end

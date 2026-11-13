@@ -1,4 +1,26 @@
 module
+import all Obend.Vault.Log
+import all Obend.Vault.WorldTree
+public import Obend.Vault.Log
+public import Obend.Vault.Json
+public import Obend.Ledger.Commit
+public import Obend.Vault.Form
+public import Obend.Vault.FormCheckCache
+public import Obend.Vault.Transport
+public import Obend.Vault.Retention
+public import Obend.Vault.Merge
+public import Obend.Vault.WorldTree
+public import Obend.Digest.Cshake256
+public import Obend.Reasons
+public import Obend.Run.Durable
+public import Obend.Run.Proofs.Durable
+public import Obend.Core.Ty
+public import Obend.Core.Data
+import all Obend.Run.Durable
+import all Obend.Core.Data
+
+public section
+
 /-
 # Obend.Vault.Replay — the deployed entry's world is the replay of its log
 
@@ -54,18 +76,6 @@ cache (`checkpoint_is_cache`). The theorems are `Obend.Vault.Log`'s at the deplo
 Out of scope: migration-time relinking (replaying a log under a changed step); a log is replayed by
 the step that wrote it.
 -/
-public import Obend.Vault.Log
-public import Obend.Vault.Json
-public import Obend.Ledger.Commit
-public import Obend.Vault.Form
-public import Obend.Vault.FormCheckCache
-public import Obend.Vault.Transport
-public import Obend.Vault.Retention
-public import Obend.Vault.Merge
-public import Obend.Vault.ChunkedWorld
-public import Obend.Digest.Cshake256
-public import Obend.Reasons
-@[expose] public section
 
 namespace Obend.Vault.Replay
 
@@ -1302,7 +1312,7 @@ def deployed : Machine World Outcome where
   encW := ChunkedWorld.manifestBytes
 
 /-- The world before any turn. -/
-def genesis : World := {}
+@[expose] def genesis : World := {}
 
 /-- A process's session over a vault: the world it serves and the records it appended. -/
 abbrev Session := Log.Session World
@@ -1413,6 +1423,7 @@ theorem judge_by_identity (w : World) (name digest : String) (hops : List Grant)
       | .error e => .error e
       | .ok (w', o, l) => .ok ({ w' with landed := w.landed ++ [{ l with intent := i }] }, o) := by
   simp only [stepTurn, judgeTurn, h]
+  cases judgeNew w name digest hops a <;> rfl
 
 theorem judge_content_alike (w : World) (name digest : String) (hops : List Grant) (a : Assignment) {i j : String}
     (hi : Transport.duplicateOf w.landed i = none) (hj : Transport.duplicateOf w.landed j = none) :
@@ -1786,5 +1797,1799 @@ theorem late_correction_refused (w : World) :
   · simp only [lateMerge, hab, hc]
 
 end Obend.Vault.Replay
+
+/-
+# Obend.Run.VaultDurableBridge — Segmented Disk Log → `Run.Durable` Simulation & `Transferable` Plans
+
+1. **Part A (`SegmentLog` → `Run.Durable`):** Forward simulation (`SegmentedSimInv`,
+   `segmentedStep_refines_durable`) between fixed-width `SegmentLog` disk blocks of `OBL1` frames
+   and `Run.Durable`, proving multi-segment rotation (`segmented_append_rotates_across_boundary`),
+   torn-tail crash recovery (`parseFrom_committed_with_torn_frame`,
+   `segmented_torn_crash_recover_idempotent`), and `segmented_exposed_once`.
+2. **Part B (`Ty.isTransferable` + `CapTable` Sealing Across `.perform`):** Extends `Ty.isData` /
+   `Ty.isPlan` with `.custody` leaves while forbidding higher-order types, and proves exact linear
+   capability dehydration/rehydration round-trip (`rehydrate_dehydrate_roundtrip`), custody
+   conservation (`transfer_conserves_custody_exact`), and deterministic forgery/tamper refusals.
+-/
+
+
+set_option autoImplicit false
+
+/-! ## Part B.1 — `Ty.isTransferable` on `Obend.Core.Ty` -/
+
+namespace Obend.Core.Ty
+
+/-- First-order transferable types: `Ty.isData` extended with linear `.custody` leaves. -/
+def Ty.isTransferable : Ty → Bool
+  | .natural | .label | .boolean | .emptyRow | .custody _ => true
+  | .field _ member tail => member.isTransferable && tail.isTransferable
+  | .variant row => row.isTransferable
+  | _ => false
+
+/-- A capability-carrying Plan is a variant sum over `isTransferable` action payloads. -/
+def Ty.isTransferablePlan : Ty → Bool
+  | .variant row => row.isTransferable
+  | _ => false
+
+theorem isData_imp_isTransferable : ∀ (ty : Ty), ty.isData = true → ty.isTransferable = true
+  | .natural, _ | .label, _ | .boolean, _ | .emptyRow, _ => rfl
+  | .field _ member tail, h => by
+    simp only [Ty.isData, Bool.and_eq_true] at h
+    simp [Ty.isTransferable, isData_imp_isTransferable member h.1, isData_imp_isTransferable tail h.2]
+  | .variant row, h => by
+    simp only [Ty.isData] at h; simp [Ty.isTransferable, isData_imp_isTransferable row h]
+
+theorem isPlan_imp_isTransferablePlan (ty : Ty) (h : ty.isPlan = true) :
+    ty.isTransferablePlan = true := by
+  cases ty with
+  | variant row => exact isData_imp_isTransferable row h
+  | _ => cases h
+
+/-- `.custody id` is `isTransferable` (crosses `.perform` via `CapTable`) but not pure `isData`. -/
+theorem custody_isTransferable_not_isData (id : Nat) :
+    (Ty.custody id).isTransferable = true ∧ (Ty.custody id).isData = false := ⟨rfl, rfl⟩
+
+/-- `isTransferable` forbids closures, activities, prototypes, specifications, and rigid variables. -/
+theorem isTransferable_forbids_higher_order (ty : Ty) (h : ty.isTransferable = true) :
+    ty.isComputation = false ∧ (∀ r q d c, ty ≠ .arrow r q d c) ∧
+    (∀ s t, ty ≠ .prototype s t) ∧ (∀ m e, ty ≠ .specification m e) ∧
+    (∀ idx, ty ≠ .variable idx) := by
+  cases ty <;> simp_all [Ty.isTransferable, Ty.isComputation]
+
+end Obend.Core.Ty
+
+namespace Obend.Run.VaultDurableBridge
+
+open Obend.Core.Ty (Ty)
+open Obend.Core.Data (Data)
+open Obend.Vault.Log (Bytes Record Drop encodeRecord encodeAll parseOne parseFrom
+  Linked lastHash dig dig_lt Hr be unbe bound magic)
+open Obend.Vault.Rehydration (WitnessReceipt genesisSentinel)
+open Obend.Vault.SegmentLog (capacity split split_join)
+open Obend.Slot Obend.Slot.Protocol Obend.Run.Control Obend.Run.Shared Obend.Run.Durable
+
+/-! ## Part A — Segmented Disk Log (`SegmentLog`) Refines `Run.Durable` -/
+
+/-- Canonical little-endian variable-length byte encoding of `Nat` (`[]` for `0`). -/
+def encodeNatLE : Nat → Bytes
+  | 0 => []
+  | n + 1 => UInt8.ofNat ((n + 1) % 256) :: encodeNatLE ((n + 1) / 256)
+termination_by n => n
+
+/-- Inverse decoder for `encodeNatLE`. -/
+def decodeNatLE : Bytes → Nat
+  | [] => 0
+  | b :: bs => b.toNat + 256 * decodeNatLE bs
+
+@[simp] theorem decodeNatLE_encodeNatLE (n : Nat) : decodeNatLE (encodeNatLE n) = n := by
+  induction n using Nat.strongRecOn with
+  | ind k ih =>
+    cases k with
+    | zero => simp [encodeNatLE, decodeNatLE]
+    | succ m =>
+      rw [encodeNatLE]; simp only [decodeNatLE, UInt8.toNat_ofNat']
+      rw [ih ((m + 1) / 256) (by omega)]; omega
+
+/-- A committed durable log entry persisted on disk (`journal` append or `outbox` exposure). -/
+inductive DiskEntry (Ev : Type) where
+  | journalAppend (ev : Ev)
+  | outboxExpose (pos : Nat)
+  deriving DecidableEq, Repr
+
+/-- Verified byte-level wire codec for domain joint events `Ev`. -/
+structure EventWireCodec (Ev : Type) where
+  encodeEv : Ev → Bytes
+  decodeEv : Bytes → Option Ev
+  decode_encodeEv : ∀ (ev : Ev), decodeEv (encodeEv ev) = some ev
+
+/-- Inhabited canonical `EventWireCodec` for `Nat` payloads. -/
+def natEventCodec : EventWireCodec Nat where
+  encodeEv := encodeNatLE
+  decodeEv := fun bs => some (decodeNatLE bs)
+  decode_encodeEv := fun ev => congrArg some (decodeNatLE_encodeNatLE ev)
+
+/-- Encode `DiskEntry Ev` with a 1-byte tag prefix (`0x01` = journal, `0x02` = outbox). -/
+def encodeDiskEntry {Ev : Type} (codec : EventWireCodec Ev) : DiskEntry Ev → Bytes
+  | .journalAppend ev => (1 : UInt8) :: codec.encodeEv ev
+  | .outboxExpose pos => (2 : UInt8) :: encodeNatLE pos
+
+/-- Decode `DiskEntry Ev` from payload bytes. -/
+def decodeDiskEntry {Ev : Type} (codec : EventWireCodec Ev) : Bytes → Option (DiskEntry Ev)
+  | 1 :: rest => (codec.decodeEv rest).map .journalAppend
+  | 2 :: rest => some (.outboxExpose (decodeNatLE rest))
+  | _ => none
+
+@[simp] theorem decodeDiskEntry_encodeDiskEntry {Ev : Type} (codec : EventWireCodec Ev)
+    (e : DiskEntry Ev) : decodeDiskEntry codec (encodeDiskEntry codec e) = some e := by
+  cases e with
+  | journalAppend ev => simp [encodeDiskEntry, decodeDiskEntry, codec.decode_encodeEv]
+  | outboxExpose pos => simp [encodeDiskEntry, decodeDiskEntry]
+
+/-- Left-to-right fold of decoded `DiskEntry` records into `(journal, outbox)`. -/
+def foldDiskEntries {Ev : Type} (codec : EventWireCodec Ev) :
+    List Record → List Ev → List Nat → Option (List Ev × List Nat)
+  | [], j, o => some (j, o)
+  | r :: rs, j, o =>
+    match decodeDiskEntry codec r.payload with
+    | some (.journalAppend ev) => foldDiskEntries codec rs (j ++ [ev]) o
+    | some (.outboxExpose pos) => foldDiskEntries codec rs j (o ++ [pos])
+    | none => none
+
+/-- Decode a committed `List Record` into `(journal, outbox)`. -/
+def decodeDurableRecords {Ev : Type} (codec : EventWireCodec Ev)
+    (rs : List Record) : Option (List Ev × List Nat) :=
+  foldDiskEntries codec rs [] []
+
+theorem foldDiskEntries_snoc {Ev : Type} (codec : EventWireCodec Ev) :
+    ∀ (rs : List Record) (r : Record) (j : List Ev) (o : List Nat) (j' : List Ev) (o' : List Nat),
+      foldDiskEntries codec rs j o = some (j', o') →
+      foldDiskEntries codec (rs ++ [r]) j o =
+        match decodeDiskEntry codec r.payload with
+        | some (.journalAppend ev) => some (j' ++ [ev], o')
+        | some (.outboxExpose pos) => some (j', o' ++ [pos])
+        | none => none
+  | [], r, _, _, _, _, h => by
+    simp only [foldDiskEntries, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h; simp only [List.nil_append, foldDiskEntries]
+    cases decodeDiskEntry codec r.payload with
+    | none => rfl
+    | some entry => cases entry <;> rfl
+  | x :: xs, r, j, o, j', o', h => by
+    simp only [foldDiskEntries] at h
+    cases hd : decodeDiskEntry codec x.payload with
+    | none => rw [hd] at h; cases h
+    | some entry =>
+      rw [hd] at h
+      cases entry with
+      | journalAppend ev =>
+        simp only [List.cons_append, foldDiskEntries, hd]
+        exact foldDiskEntries_snoc codec xs r (j ++ [ev]) o j' o' h
+      | outboxExpose pos =>
+        simp only [List.cons_append, foldDiskEntries, hd]
+        exact foldDiskEntries_snoc codec xs r j (o ++ [pos]) j' o' h
+
+/-- Construct a well-formed, hash-chained `Vault.Log.Record` following `prev`. -/
+def mkChainedRecord (Hb : Bytes → Bytes) (prev : Nat) (payload : Bytes) : Record :=
+  let d := dig Hb payload
+  ⟨⟨prev, prev, d, d⟩, payload⟩
+
+theorem mkChainedRecord_wf (Hb : Bytes → Bytes) {prev : Nat} (hp : prev < bound)
+    {payload : Bytes} (hlen : payload.length < 256 ^ 4) :
+    (mkChainedRecord Hb prev payload).WF Hb :=
+  ⟨hp, hp, dig_lt Hb payload, rfl, hlen⟩
+
+theorem mkChainedRecord_prevHash (Hb : Bytes → Bytes) (prev : Nat) (payload : Bytes) :
+    (mkChainedRecord Hb prev payload).receipt.prevHash = prev := by
+  rfl
+
+theorem mkChainedRecord_payload (Hb : Bytes → Bytes) (prev : Nat) (payload : Bytes) :
+    (mkChainedRecord Hb prev payload).payload = payload := by
+  rfl
+
+/-- Append raw frame bytes into fixed-capacity physical disk segments via `SegmentLog.split`. -/
+def appendSegmentedBytes (segCap : Nat) (hCap : 0 < segCap) (segments : List Bytes) (bs : Bytes) :
+    List Bytes :=
+  split segCap hCap (segments.flatten ++ bs)
+
+theorem appendSegmentedBytes_flatten (segCap : Nat) (hCap : 0 < segCap)
+    (segments : List Bytes) (bs : Bytes) :
+    (appendSegmentedBytes segCap hCap segments bs).flatten = segments.flatten ++ bs :=
+  split_join segCap hCap (segments.flatten ++ bs)
+
+/-- **Segment Boundary Rotation**: pushing total bytes past `segCap` rotates into `≥ 2` segments. -/
+theorem segmented_append_rotates_across_boundary (segCap : Nat) (hCap : 0 < segCap)
+    (segments : List Bytes) (bs : Bytes) (hCross : segCap < (segments.flatten ++ bs).length) :
+    2 ≤ (appendSegmentedBytes segCap hCap segments bs).length ∧
+    ∃ seg0 rest,
+      appendSegmentedBytes segCap hCap segments bs = seg0 :: rest ∧
+      seg0.length = segCap ∧ rest ≠ [] := by
+  unfold appendSegmentedBytes
+  generalize segments.flatten ++ bs = total at hCross
+  rw [split]
+  have hne : total.isEmpty = false := by
+    cases h : total.isEmpty with
+    | false => rfl
+    | true => rw [List.isEmpty_iff.mp h] at hCross; simp at hCross
+  simp only [hne, Bool.false_eq_true, ↓reduceIte]; rw [split]
+  have hrem_pos : 0 < (total.drop segCap).length := by simp only [List.length_drop]; omega
+  have hrem_ne : (total.drop segCap).isEmpty = false := by
+    cases h : (total.drop segCap).isEmpty with
+    | false => rfl
+    | true => rw [List.isEmpty_iff.mp h] at hrem_pos; simp at hrem_pos
+  simp only [hrem_ne, Bool.false_eq_true, ↓reduceIte]
+  refine ⟨by simp, total.take segCap, _, rfl, ?_, by simp⟩
+  simp only [List.length_take]; omega
+
+/-- Any empty or `parseOne`-rejected trailing bytes are discarded cleanly by `parseFrom`. -/
+theorem parseFrom_committed_with_rejected_tail (Hb : Bytes → Bytes) (rs : List Record)
+    (hl : Linked Hb genesisSentinel rs) (hwf : ∀ r ∈ rs, r.WF Hb) (tail : Bytes)
+    (hRej : tail = [] ∨ ∃ d, parseOne Hb (some (lastHash Hb genesisSentinel rs)) tail = .error d) :
+    (parseFrom Hb genesisSentinel (encodeAll Hb rs ++ tail)).1 = rs := by
+  rw [Obend.Vault.Log.parseFrom_encodeAll Hb rs genesisSentinel hl hwf tail]
+  rcases hRej with rfl | ⟨d, hd⟩
+  · simp [Obend.Vault.Log.parseFrom_nil]
+  · by_cases hne : tail = []
+    · subst hne; simp [Obend.Vault.Log.parseFrom_nil]
+    · rw [Obend.Vault.Log.parseFrom_error Hb hne hd]; simp
+
+/-- **Torn-Frame Crash Recovery**: any torn in-flight frame `k < length` is truncated to `rs`. -/
+theorem parseFrom_committed_with_torn_frame (Hb : Bytes → Bytes) (segCap : Nat) (hCap : 0 < segCap)
+    (rs : List Record) (hl : Linked Hb genesisSentinel rs) (hwf : ∀ r ∈ rs, r.WF Hb)
+    (r_inflight : Record) (hwf_in : r_inflight.WF Hb)
+    (k : Nat) (hk : k < (encodeRecord Hb r_inflight).length) :
+    let crashedSegs := split segCap hCap (encodeAll Hb rs ++ (encodeRecord Hb r_inflight).take k)
+    (parseFrom Hb genesisSentinel crashedSegs.flatten).1 = rs := by
+  dsimp only; rw [split_join]
+  apply parseFrom_committed_with_rejected_tail Hb rs hl hwf
+  by_cases hk0 : k = 0
+  · subst hk0; exact .inl (by simp)
+  · exact .inr ⟨.torn, Obend.Vault.Log.parseOne_torn Hb hwf_in
+      (List.take_append_drop k (encodeRecord Hb r_inflight))
+      (by rw [Ne, List.drop_eq_nil_iff]; omega)⟩
+
+/-- Necessity witness: a 5-byte torn `OBL1` header is non-empty garbage flagged as `some .torn`. -/
+theorem torn_header_flagged_as_torn (Hb : Bytes → Bytes) :
+    let r := mkChainedRecord Hb genesisSentinel [42]
+    let tornBytes := (encodeRecord Hb r).take 5
+    tornBytes ≠ [] ∧ parseFrom Hb genesisSentinel tornBytes = ([], tornBytes, some .torn) := by
+  dsimp only
+  have hwf : (mkChainedRecord Hb genesisSentinel [42]).WF Hb :=
+    mkChainedRecord_wf Hb (by decide) (by decide)
+  have hne : ((encodeRecord Hb (mkChainedRecord Hb genesisSentinel [42])).take 5) ≠ [] := by
+    intro h; have := congrArg List.length h
+    rw [List.length_take, Obend.Vault.Log.encodeRecord_length] at this
+    simp only [mkChainedRecord, List.length_singleton, List.length_nil] at this; omega
+  have htorn : parseOne Hb (some genesisSentinel)
+      ((encodeRecord Hb (mkChainedRecord Hb genesisSentinel [42])).take 5) = .error .torn :=
+    Obend.Vault.Log.parseOne_torn Hb hwf (List.take_append_drop 5 _) (by
+      rw [Ne, List.drop_eq_nil_iff, Obend.Vault.Log.encodeRecord_length]
+      simp only [mkChainedRecord, List.length_singleton]; omega)
+  exact ⟨hne, Obend.Vault.Log.parseFrom_error Hb hne htorn⟩
+
+/-! ### Segmented Durable Host & Forward Simulation to `Obend.Run.Durable` -/
+
+section Simulation
+variable {Ix : Type} {S : Sig Ix} {Hole : Ix → Type} {A : Ix → Type} {i₀ : Ix}
+variable {ι P Cred Cand Tok Fact Ob W : Type}
+variable [DecidableEq ι] [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] [DecidableEq Tok]
+variable [DecidableEq Cand] [DecidableEq (Σ i, S.Op i)]
+
+/-- Physical host state backed by `Vault.SegmentLog` fixed-width disk blocks plus volatile memory. -/
+structure SegmentedDState (L : Ledger ι W Tok) (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type)
+    (P Cand Fact Ob : Type) (i₀ : Ix) where
+  segCap : Nat
+  segCap_pos : 0 < segCap
+  segments : List Bytes
+  mem : Option (JCfg L S Hole A P Cand Fact Ob i₀)
+
+/-- Initial segmented host state at block width `segCap`. -/
+def SegmentedDState.init (L : Ledger ι W Tok) (segCap : Nat) (hCap : 0 < segCap)
+    (J₀ : JCfg L S Hole A P Cand Fact Ob i₀) : SegmentedDState L S Hole A P Cand Fact Ob i₀ :=
+  ⟨segCap, hCap, [], some J₀⟩
+
+/-- Default 64 KiB `SegmentLog.capacity` initial state. -/
+def SegmentedDState.initDefault (L : Ledger ι W Tok) (J₀ : JCfg L S Hole A P Cand Fact Ob i₀) :
+    SegmentedDState L S Hole A P Cand Fact Ob i₀ :=
+  SegmentedDState.init L capacity (by decide) J₀
+
+/-- Segmented host events, extending `.crash` with torn/unfsynced trailing frames on disk. -/
+inductive SegmentedHEvent (L : Ledger ι W Tok) (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type)
+    (P Cred Cand Fact : Type) where
+  | submit (ev : JEv L S Hole A P Cred Cand Fact)
+  | expose (n : Nat)
+  | tornCrash (r_inflight : Record) (k : Nat)
+  | cleanCrash
+  | recover
+
+/-- Map a physical `SegmentedHEvent` to its abstract `Obend.Run.Durable.HEvent` counterpart. -/
+def SegmentedHEvent.toAbstract {L : Ledger ι W Tok} :
+    SegmentedHEvent L S Hole A P Cred Cand Fact → HEvent L S Hole A P Cred Cand Fact
+  | .submit ev => .submit ev
+  | .expose n => .expose n
+  | .tornCrash _ _ | .cleanCrash => .crash
+  | .recover => .recover
+
+/-- Refusals of the segmented disk host. -/
+inductive SegmentedRefusal (ι Tok : Type) (S : Sig Ix) (Hole : Ix → Type) (P Cand Fact : Type) where
+  | host (r : HRefusal ι Tok S Hole P Cand Fact)
+  | frameTooLarge
+  | dirtyTailNeedsRecovery
+  | invalidTornSpec
+
+/-- Decode `(journal, outbox)` from the physical segment list of `disk`. -/
+def recoverJournalAndOutbox {L : Ledger ι W Tok} (Hb : Bytes → Bytes)
+    (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (disk : SegmentedDState L S Hole A P Cand Fact Ob i₀) :
+    Option (List (JEv L S Hole A P Cred Cand Fact) × List Nat) :=
+  decodeDurableRecords codec (parseFrom Hb genesisSentinel disk.segments.flatten).1
+
+/-- One physical step of the segmented durable host (submit/rotate, expose, crash/tear, recover). -/
+def segmentedStep (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (J₀ : JCfg L S Hole A P Cand Fact Ob i₀)
+    (disk : SegmentedDState L S Hole A P Cand Fact Ob i₀)
+    (hev : SegmentedHEvent L S Hole A P Cred Cand Fact) :
+    Except (SegmentedRefusal ι Tok S Hole P Cand Fact) (SegmentedDState L S Hole A P Cand Fact Ob i₀) :=
+  let parsed := parseFrom Hb genesisSentinel disk.segments.flatten
+  let rs := parsed.1
+  let tail := parsed.2.1
+  match hev with
+  | .submit ev =>
+    if !tail.isEmpty then .error .dirtyTailNeedsRecovery else
+    match disk.mem with
+    | none => .error (.host .down)
+    | some J =>
+      let payload := encodeDiskEntry codec (.journalAppend ev)
+      if payload.length < 256 ^ 4 then
+        match jrun L base sp au k J ev with
+        | .ok J' =>
+          let newRec := mkChainedRecord Hb (lastHash Hb genesisSentinel rs) payload
+          let segs' := appendSegmentedBytes disk.segCap disk.segCap_pos disk.segments (encodeRecord Hb newRec)
+          .ok ⟨disk.segCap, disk.segCap_pos, segs', some J'⟩
+        | .error r => .error (.host (.joint r))
+      else .error .frameTooLarge
+  | .expose n =>
+    if !tail.isEmpty then .error .dirtyTailNeedsRecovery else
+    match decodeDurableRecords codec rs with
+    | none => .error (.host .corrupt)
+    | some (journal, outbox) =>
+      match journal[n]? with
+      | some (.dispatch _ _) =>
+        if n ∈ outbox then .error (.host (.exposed n)) else
+        let payload := encodeDiskEntry codec (.outboxExpose n)
+        if payload.length < 256 ^ 4 then
+          let newRec := mkChainedRecord Hb (lastHash Hb genesisSentinel rs) payload
+          let segs' := appendSegmentedBytes disk.segCap disk.segCap_pos disk.segments (encodeRecord Hb newRec)
+          .ok ⟨disk.segCap, disk.segCap_pos, segs', disk.mem⟩
+        else .error .frameTooLarge
+      | _ => .error (.host (.notDispatch n))
+  | .cleanCrash => .ok ⟨disk.segCap, disk.segCap_pos, disk.segments, none⟩
+  | .tornCrash r_in bytesWritten =>
+    if r_in.receipt.prevHash < bound ∧ r_in.receipt.oldCommit < bound ∧
+        r_in.receipt.newCommit < bound ∧ r_in.receipt.effectsHash = dig Hb r_in.payload ∧
+        r_in.payload.length < 256 ^ 4 ∧ bytesWritten < (encodeRecord Hb r_in).length then
+      let crashedSegs := split disk.segCap disk.segCap_pos
+        (encodeAll Hb rs ++ (encodeRecord Hb r_in).take bytesWritten)
+      .ok ⟨disk.segCap, disk.segCap_pos, crashedSegs, none⟩
+    else .error .invalidTornSpec
+  | .recover =>
+    match disk.mem with
+    | some _ => .error (.host .up)
+    | none =>
+      match decodeDurableRecords codec rs with
+      | none => .error (.host .corrupt)
+      | some (journal, _) =>
+        match replay L base sp au k J₀ journal with
+        | some J => .ok ⟨disk.segCap, disk.segCap_pos, split disk.segCap disk.segCap_pos (encodeAll Hb rs), some J⟩
+        | none => .error (.host .corrupt)
+
+/-- Forward simulation relation coupling `SegmentedDState` on disk to `Obend.Run.Durable.DState`. -/
+def SegmentedSimInv (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (J₀ : JCfg L S Hole A P Cand Fact Ob i₀)
+    (disk : SegmentedDState L S Hole A P Cand Fact Ob i₀)
+    (s : DState L S Hole A P Cred Cand Fact Ob i₀) : Prop :=
+  ∃ committedRecords : List Record,
+    Linked Hb genesisSentinel committedRecords ∧
+    (∀ r ∈ committedRecords, r.WF Hb) ∧
+    (∃ tail : Bytes,
+      disk.segments = split disk.segCap disk.segCap_pos (encodeAll Hb committedRecords ++ tail) ∧
+      (tail = [] ∨ ∃ d, parseOne Hb (some (lastHash Hb genesisSentinel committedRecords)) tail = .error d) ∧
+      (disk.mem.isSome = true → tail = [])) ∧
+    decodeDurableRecords codec committedRecords = some (s.journal, s.outbox) ∧
+    disk.mem = s.mem ∧ HReachable L base sp au k J₀ s
+
+theorem segmentedSimInv_init (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (segCap : Nat) (hCap : 0 < segCap) (J₀ : JCfg L S Hole A P Cand Fact Ob i₀) :
+    SegmentedSimInv L base sp au k Hb codec J₀ (SegmentedDState.init L segCap hCap J₀) (DState.init L J₀) :=
+  ⟨[], trivial, by simp, ⟨[], by simp [SegmentedDState.init, split, encodeAll], .inl rfl, fun _ => rfl⟩,
+    rfl, by rfl, .init⟩
+
+omit [DecidableEq ι] [DecidableEq Ix] [(i : Ix) → DecidableEq (Hole i)]
+  [DecidableEq Tok] [DecidableEq Cand] [DecidableEq ((i : Ix) × S.Op i)] in
+theorem segmented_parseFrom_rs {L : Ledger ι W Tok}
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    {disk : SegmentedDState L S Hole A P Cand Fact Ob i₀} {rs : List Record} {tail : Bytes}
+    {journal : List (JEv L S Hole A P Cred Cand Fact)} {outbox : List Nat}
+    (hLinked : Linked Hb genesisSentinel rs) (hWf : ∀ r ∈ rs, r.WF Hb)
+    (hSegs : disk.segments = split disk.segCap disk.segCap_pos (encodeAll Hb rs ++ tail))
+    (hRej : tail = [] ∨ ∃ d, parseOne Hb (some (lastHash Hb genesisSentinel rs)) tail = .error d)
+    (hDec : decodeDurableRecords codec rs = some (journal, outbox)) :
+    (parseFrom Hb genesisSentinel disk.segments.flatten).1 = rs ∧
+    recoverJournalAndOutbox Hb codec disk = some (journal, outbox) := by
+  have hp1 : (parseFrom Hb genesisSentinel disk.segments.flatten).1 = rs := by
+    rw [hSegs, split_join]; exact parseFrom_committed_with_rejected_tail Hb rs hLinked hWf tail hRej
+  exact ⟨hp1, by unfold recoverJournalAndOutbox; rw [hp1]; exact hDec⟩
+
+omit [DecidableEq ι] [DecidableEq Ix] [(i : Ix) → DecidableEq (Hole i)]
+  [DecidableEq Tok] [DecidableEq Cand] [DecidableEq ((i : Ix) × S.Op i)] in
+theorem segmented_clean_tail_flatten {L : Ledger ι W Tok} (Hb : Bytes → Bytes)
+    {disk : SegmentedDState L S Hole A P Cand Fact Ob i₀} {rs : List Record} {tail : Bytes}
+    (hLinked : Linked Hb genesisSentinel rs) (hWf : ∀ r ∈ rs, r.WF Hb)
+    (hSegs : disk.segments = split disk.segCap disk.segCap_pos (encodeAll Hb rs ++ tail))
+    (hRej : tail = [] ∨ ∃ d, parseOne Hb (some (lastHash Hb genesisSentinel rs)) tail = .error d)
+    (hEmpty : (parseFrom Hb genesisSentinel disk.segments.flatten).2.1.isEmpty = true) :
+    disk.segments.flatten = encodeAll Hb rs := by
+  have hflat : disk.segments.flatten = encodeAll Hb rs ++ tail := by rw [hSegs, split_join]
+  rw [hflat, Obend.Vault.Log.parseFrom_encodeAll Hb rs genesisSentinel hLinked hWf tail] at hEmpty
+  rcases hRej with rfl | ⟨d, hd⟩
+  · simpa using hflat
+  · by_cases hne : tail = []
+    · subst hne; simpa using hflat
+    · rw [Obend.Vault.Log.parseFrom_error Hb hne hd] at hEmpty
+      exact absurd (List.isEmpty_iff.mp hEmpty) hne
+
+/-- **Forward Simulation Step**: every accepted `segmentedStep` refines `Durable.hstep`. -/
+theorem segmentedStep_refines_durable
+    (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (J₀ : JCfg L S Hole A P Cand Fact Ob i₀)
+    {disk disk' : SegmentedDState L S Hole A P Cand Fact Ob i₀}
+    {s : DState L S Hole A P Cred Cand Fact Ob i₀}
+    (hev : SegmentedHEvent L S Hole A P Cred Cand Fact)
+    (hSim : SegmentedSimInv L base sp au k Hb codec J₀ disk s)
+    (hStep : segmentedStep L base sp au k Hb codec J₀ disk hev = .ok disk') :
+    ∃ s', hstep L base sp au k J₀ s hev.toAbstract = .ok s' ∧
+      SegmentedSimInv L base sp au k Hb codec J₀ disk' s' := by
+  rcases hSim with ⟨rs, hLinked, hWf, ⟨tail, hSegs, hRej, hClean⟩, hDec, hMem, hReach⟩
+  have ⟨hp_rs, _⟩ := segmented_parseFrom_rs Hb codec hLinked hWf hSegs hRej hDec
+  cases hev with
+  | submit ev =>
+    simp only [segmentedStep, SegmentedHEvent.toAbstract] at hStep ⊢; rw [hp_rs] at hStep
+    cases htail_emp : (parseFrom Hb genesisSentinel disk.segments.flatten).2.1.isEmpty with
+    | false => simp [htail_emp] at hStep
+    | true =>
+      simp only [htail_emp, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
+      have hflat_clean := segmented_clean_tail_flatten Hb hLinked hWf hSegs hRej htail_emp
+      cases hmem : disk.mem with
+      | none => rw [hmem] at hStep; cases hStep
+      | some J =>
+        rw [hmem] at hStep; dsimp only at hStep; split at hStep
+        · rename_i hlen
+          cases hj : jrun L base sp au k J ev with
+          | error r => rw [hj] at hStep; cases hStep
+          | ok J' =>
+            rw [hj] at hStep; simp only [Except.ok.injEq] at hStep; subst hStep
+            have hs_mem : s.mem = some J := hMem.symm.trans hmem
+            have hhstep : hstep L base sp au k J₀ s (.submit ev) =
+                .ok ⟨s.journal ++ [ev], s.outbox, some J'⟩ := by unfold hstep; simp [hs_mem, hj]
+            refine ⟨⟨s.journal ++ [ev], s.outbox, some J'⟩, hhstep, ?_⟩
+            let prev := lastHash Hb genesisSentinel rs
+            let payload := encodeDiskEntry codec (.journalAppend ev)
+            let newRec := mkChainedRecord Hb prev payload
+            have hrec_wf : newRec.WF Hb :=
+              mkChainedRecord_wf Hb (Obend.Vault.Log.lastHash_lt Hb (by decide) rs) hlen
+            refine ⟨rs ++ [newRec],
+              (Obend.Vault.Log.Linked_append Hb genesisSentinel rs [newRec]).mpr ⟨hLinked, rfl, trivial⟩,
+              fun r hr => ?_, ⟨[], ?_, .inl rfl, fun _ => rfl⟩, ?_, rfl, .step (.submit ev) hReach hhstep⟩
+            · rcases List.mem_append.mp hr with hr | hr
+              · exact hWf r hr
+              · simp only [List.mem_singleton] at hr; subst hr; exact hrec_wf
+            · simp only [appendSegmentedBytes, hflat_clean, Obend.Vault.Log.encodeAll_append,
+                encodeAll, List.append_nil]; rfl
+            · unfold decodeDurableRecords
+              rw [foldDiskEntries_snoc codec rs newRec [] [] s.journal s.outbox hDec]
+              simp [newRec, mkChainedRecord, payload]
+        · cases hStep
+  | expose n =>
+    simp only [segmentedStep, SegmentedHEvent.toAbstract] at hStep ⊢; rw [hp_rs] at hStep
+    cases htail_emp : (parseFrom Hb genesisSentinel disk.segments.flatten).2.1.isEmpty with
+    | false => simp [htail_emp] at hStep
+    | true =>
+      simp only [htail_emp, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
+      have hflat_clean := segmented_clean_tail_flatten Hb hLinked hWf hSegs hRej htail_emp
+      rw [hDec] at hStep; dsimp only at hStep; split at hStep
+      · rename_i i o hjn
+        split at hStep
+        · cases hStep
+        · rename_i hnot_out
+          split at hStep
+          · rename_i hlen
+            simp only [Except.ok.injEq] at hStep; subst hStep
+            have hhstep : hstep L base sp au k J₀ s (.expose n) =
+                .ok ⟨s.journal, s.outbox ++ [n], disk.mem⟩ := by
+              unfold hstep; simp [hjn, hnot_out, hMem]
+            refine ⟨⟨s.journal, s.outbox ++ [n], disk.mem⟩, hhstep, ?_⟩
+            let prev := lastHash Hb genesisSentinel rs
+            let payload := encodeDiskEntry codec (.outboxExpose n)
+            let newRec := mkChainedRecord Hb prev payload
+            have hrec_wf : newRec.WF Hb :=
+              mkChainedRecord_wf Hb (Obend.Vault.Log.lastHash_lt Hb (by decide) rs) hlen
+            refine ⟨rs ++ [newRec],
+              (Obend.Vault.Log.Linked_append Hb genesisSentinel rs [newRec]).mpr ⟨hLinked, rfl, trivial⟩,
+              fun r hr => ?_, ⟨[], ?_, .inl rfl, fun _ => rfl⟩, ?_, rfl, .step (.expose n) hReach hhstep⟩
+            · rcases List.mem_append.mp hr with hr | hr
+              · exact hWf r hr
+              · simp only [List.mem_singleton] at hr; subst hr; exact hrec_wf
+            · simp only [appendSegmentedBytes, hflat_clean, Obend.Vault.Log.encodeAll_append,
+                encodeAll, List.append_nil]; rfl
+            · unfold decodeDurableRecords
+              rw [foldDiskEntries_snoc codec rs newRec [] [] s.journal s.outbox hDec]
+              simp [newRec, mkChainedRecord, payload]
+          · cases hStep
+      · cases hStep
+  | cleanCrash =>
+    simp only [segmentedStep, SegmentedHEvent.toAbstract, Except.ok.injEq] at hStep ⊢; subst hStep
+    have hhstep : hstep L base sp au k J₀ s .crash = .ok ⟨s.journal, s.outbox, none⟩ := rfl
+    exact ⟨⟨s.journal, s.outbox, none⟩, hhstep,
+      ⟨rs, hLinked, hWf, ⟨tail, hSegs, hRej, fun h => by simp at h⟩,
+        hDec, rfl, .step .crash hReach hhstep⟩⟩
+  | tornCrash r_in bytesWritten =>
+    simp only [segmentedStep, SegmentedHEvent.toAbstract] at hStep ⊢; rw [hp_rs] at hStep
+    split at hStep
+    · rename_i hspec
+      simp only [Except.ok.injEq] at hStep; subst hStep
+      obtain ⟨h0, h1, h2, h3, h4, hk_lt⟩ := hspec
+      have hwf_in : r_in.WF Hb := ⟨h0, h1, h2, h3, h4⟩
+      have hhstep : hstep L base sp au k J₀ s .crash = .ok ⟨s.journal, s.outbox, none⟩ := rfl
+      have hrej' : (encodeRecord Hb r_in).take bytesWritten = [] ∨
+          ∃ d, parseOne Hb (some (lastHash Hb genesisSentinel rs))
+            ((encodeRecord Hb r_in).take bytesWritten) = .error d := by
+        by_cases hb0 : bytesWritten = 0
+        · subst hb0; exact .inl (by simp)
+        · exact .inr ⟨.torn, Obend.Vault.Log.parseOne_torn Hb hwf_in
+            (List.take_append_drop bytesWritten _) (by rw [Ne, List.drop_eq_nil_iff]; omega)⟩
+      exact ⟨⟨s.journal, s.outbox, none⟩, hhstep,
+        ⟨rs, hLinked, hWf, ⟨(encodeRecord Hb r_in).take bytesWritten, rfl, hrej', fun h => by simp at h⟩,
+          hDec, rfl, .step .crash hReach hhstep⟩⟩
+    · cases hStep
+  | recover =>
+    simp only [segmentedStep, SegmentedHEvent.toAbstract] at hStep ⊢; rw [hp_rs] at hStep
+    cases hmem : disk.mem with
+    | some _ => rw [hmem] at hStep; cases hStep
+    | none =>
+      rw [hmem, hDec] at hStep; dsimp only at hStep
+      cases hrep : replay L base sp au k J₀ s.journal with
+      | none => rw [hrep] at hStep; cases hStep
+      | some J =>
+        rw [hrep] at hStep; simp only [Except.ok.injEq] at hStep; subst hStep
+        have hs_mem : s.mem = none := hMem.symm.trans hmem
+        have hhstep : hstep L base sp au k J₀ s .recover = .ok ⟨s.journal, s.outbox, some J⟩ := by
+          unfold hstep; simp [hs_mem, hrep]
+        exact ⟨⟨s.journal, s.outbox, some J⟩, hhstep,
+          ⟨rs, hLinked, hWf, ⟨[], by simp, .inl rfl, fun _ => rfl⟩,
+            hDec, rfl, .step .recover hReach hhstep⟩⟩
+
+/-- Multi-step segmented trace execution (keeping state on refused steps). -/
+def runSegmentedTrace (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (J₀ : JCfg L S Hole A P Cand Fact Ob i₀) :
+    SegmentedDState L S Hole A P Cand Fact Ob i₀ →
+    List (SegmentedHEvent L S Hole A P Cred Cand Fact) → SegmentedDState L S Hole A P Cand Fact Ob i₀
+  | disk, [] => disk
+  | disk, e :: es =>
+    match segmentedStep L base sp au k Hb codec J₀ disk e with
+    | .ok disk' => runSegmentedTrace L base sp au k Hb codec J₀ disk' es
+    | .error _ => runSegmentedTrace L base sp au k Hb codec J₀ disk es
+
+/-- Reachable physical segmented states from `SegmentedDState.init`. -/
+inductive SegmentedReachable (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (segCap : Nat) (hCap : 0 < segCap) (J₀ : JCfg L S Hole A P Cand Fact Ob i₀) :
+    SegmentedDState L S Hole A P Cand Fact Ob i₀ → Prop
+  | init : SegmentedReachable L base sp au k Hb codec segCap hCap J₀ (SegmentedDState.init L segCap hCap J₀)
+  | step {d d' : SegmentedDState L S Hole A P Cand Fact Ob i₀}
+      (hev : SegmentedHEvent L S Hole A P Cred Cand Fact) :
+      SegmentedReachable L base sp au k Hb codec segCap hCap J₀ d →
+      segmentedStep L base sp au k Hb codec J₀ d hev = .ok d' →
+      SegmentedReachable L base sp au k Hb codec segCap hCap J₀ d'
+
+theorem runSegmentedTrace_reachable
+    (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (segCap : Nat) (hCap : 0 < segCap) (J₀ : JCfg L S Hole A P Cand Fact Ob i₀)
+    {disk : SegmentedDState L S Hole A P Cand Fact Ob i₀}
+    (hReach : SegmentedReachable L base sp au k Hb codec segCap hCap J₀ disk) :
+    ∀ (es : List (SegmentedHEvent L S Hole A P Cred Cand Fact)),
+      SegmentedReachable L base sp au k Hb codec segCap hCap J₀
+        (runSegmentedTrace L base sp au k Hb codec J₀ disk es)
+  | [] => hReach
+  | e :: es => by
+    simp only [runSegmentedTrace]
+    cases hs : segmentedStep L base sp au k Hb codec J₀ disk e with
+    | ok disk' => exact runSegmentedTrace_reachable L base sp au k Hb codec segCap hCap J₀ (.step e hReach hs) es
+    | error _ => exact runSegmentedTrace_reachable L base sp au k Hb codec segCap hCap J₀ hReach es
+
+theorem segmentedReachable_simulates_durable
+    (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (segCap : Nat) (hCap : 0 < segCap) (J₀ : JCfg L S Hole A P Cand Fact Ob i₀)
+    {disk : SegmentedDState L S Hole A P Cand Fact Ob i₀}
+    (hReach : SegmentedReachable L base sp au k Hb codec segCap hCap J₀ disk) :
+    ∃ s, SegmentedSimInv L base sp au k Hb codec J₀ disk s := by
+  induction hReach with
+  | init => exact ⟨DState.init L J₀, segmentedSimInv_init L base sp au k Hb codec segCap hCap J₀⟩
+  | step hev _ hs ih =>
+    obtain ⟨s, hSim⟩ := ih
+    obtain ⟨s', _, hSim'⟩ := segmentedStep_refines_durable L base sp au k Hb codec J₀ hev hSim hs
+    exact ⟨s', hSim'⟩
+
+/-- **Torn-Tail Crash Recovery Idempotence**: `.tornCrash` followed by `.recover` restores `disk`. -/
+theorem segmented_torn_crash_recover_idempotent
+    (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (J₀ : JCfg L S Hole A P Cand Fact Ob i₀)
+    {disk : SegmentedDState L S Hole A P Cand Fact Ob i₀}
+    {s : DState L S Hole A P Cred Cand Fact Ob i₀} {J : JCfg L S Hole A P Cand Fact Ob i₀}
+    (hSim : SegmentedSimInv L base sp au k Hb codec J₀ disk s) (hUp : disk.mem = some J)
+    (r_in : Record) (hwf_in : r_in.WF Hb)
+    (bytesWritten : Nat) (hk : bytesWritten < (encodeRecord Hb r_in).length) :
+    ∃ crashed recovered,
+      segmentedStep L base sp au k Hb codec J₀ disk (.tornCrash r_in bytesWritten) = .ok crashed ∧
+      segmentedStep L base sp au k Hb codec J₀ crashed .recover = .ok recovered ∧
+      recovered = disk ∧
+      recoverJournalAndOutbox Hb codec recovered = some (s.journal, s.outbox) := by
+  rcases hSim with ⟨rs, hLinked, hWf, ⟨tail, hSegs, hRej, hClean⟩, hDec, hMem, hReach⟩
+  have ⟨hp_rs, hrec_jo⟩ := segmented_parseFrom_rs Hb codec hLinked hWf hSegs hRej hDec
+  obtain ⟨h0, h1, h2, h3, h4⟩ := hwf_in
+  have hcrash : segmentedStep L base sp au k Hb codec J₀ disk (.tornCrash r_in bytesWritten) =
+      .ok ⟨disk.segCap, disk.segCap_pos,
+        split disk.segCap disk.segCap_pos (encodeAll Hb rs ++ (encodeRecord Hb r_in).take bytesWritten),
+        none⟩ := by
+    unfold segmentedStep; dsimp only; rw [hp_rs]
+    split
+    · rfl
+    · rename_i hneg; exact absurd ⟨h0, h1, h2, h3, h4, hk⟩ hneg
+  obtain ⟨J', hrep, _, hm_inv⟩ := (hreach_inv hReach).replays
+  have hs_mem : s.mem = some J := hMem.symm.trans hUp
+  have hJ_eq : J' = J := by
+    rcases hm_inv with hm_inv | hm_inv <;> rw [hm_inv] at hs_mem <;> cases hs_mem; rfl
+  subst hJ_eq
+  have htail_nil : tail = [] := hClean (by simp [hUp])
+  subst htail_nil
+  have hdisk_segs : disk.segments = split disk.segCap disk.segCap_pos (encodeAll Hb rs) := by
+    simpa using hSegs
+  have hrec : segmentedStep L base sp au k Hb codec J₀
+      ⟨disk.segCap, disk.segCap_pos,
+        split disk.segCap disk.segCap_pos (encodeAll Hb rs ++ (encodeRecord Hb r_in).take bytesWritten),
+        none⟩ .recover = .ok disk := by
+    unfold segmentedStep; dsimp only
+    rw [parseFrom_committed_with_torn_frame Hb disk.segCap disk.segCap_pos
+      rs hLinked hWf r_in ⟨h0, h1, h2, h3, h4⟩ bytesWritten hk, hDec]
+    dsimp only; rw [hrep]
+    cases disk with
+    | mk sc scp segs m => dsimp only at hUp hdisk_segs ⊢; subst hUp; rw [← hdisk_segs]
+  exact ⟨_, disk, hcrash, hrec, rfl, hrec_jo⟩
+
+/-- **Keystone Chasm 3A Theorem (`segmented_exposed_once`)**: across arbitrary multi-segment
+    rotations and torn-tail crash-restart cycles, each linear token `t` is exposed at most once. -/
+theorem segmented_exposed_once
+    (L : Ledger ι W Tok) (base : W → View Tok Fact) (sp : ι → Spec S Tok Fact Ob)
+    (au : ι → Authority P Cred) (k : ι → (j : Ix) → Hole j → SlotCtl S Hole A P Fact Cand j)
+    (Hb : Bytes → Bytes) (codec : EventWireCodec (JEv L S Hole A P Cred Cand Fact))
+    (segCap : Nat) (hCap : 0 < segCap)
+    {d₀ : L.Rec} {O : ι → Open S Hole A Tok Fact Ob i₀}
+    {stored₀ : ι → (j : Ix) → Hole j → Option Cand}
+    (hs₀ : L.spent d₀ = []) (hg₀ : L.grants d₀ = [])
+    {disk : SegmentedDState L S Hole A P Cand Fact Ob i₀}
+    (hReach : SegmentedReachable L base sp au k Hb codec segCap hCap (JCfg.init L d₀ O stored₀) disk)
+    {journal : List (JEv L S Hole A P Cred Cand Fact)} {outbox : List Nat}
+    (hDisk : recoverJournalAndOutbox Hb codec disk = some (journal, outbox))
+    {n m : Nat} (hn : n ∈ outbox) (hm : m ∈ outbox)
+    {i j : ι} {o o' : Σ i, S.Op i} {t : Tok}
+    (hio : journal[n]? = some (.dispatch i o)) (hjo : journal[m]? = some (.dispatch j o'))
+    (ht : (sp i).consumes o.2 = some t) (ht' : (sp j).consumes o'.2 = some t) :
+    n = m ∧ i = j := by
+  obtain ⟨s, hSim⟩ := segmentedReachable_simulates_durable L base sp au k Hb codec segCap hCap
+    (JCfg.init L d₀ O stored₀) hReach
+  rcases hSim with ⟨rs, hLinked, hWf, ⟨tail, hSegs, hRej, _⟩, hDec, _, hAbsReach⟩
+  have ⟨_, hrec⟩ := segmented_parseFrom_rs Hb codec hLinked hWf hSegs hRej hDec
+  rw [hrec] at hDisk; simp only [Option.some.injEq, Prod.mk.injEq] at hDisk
+  obtain ⟨rfl, rfl⟩ := hDisk
+  exact exposed_once hs₀ hg₀ hAbsReach hn hm hio hjo ht ht'
+
+end Simulation
+
+/-! ## Part B.2 — Linear Capability-Carrying Plans (`TVal`, `DataWire`, `CapTable`, `CapSealFrame`) -/
+
+/-- Live runtime transferable value (`Core.Data` extended with linear `.cap slotId custodyId`). -/
+inductive TVal where
+  | natural (value : Nat)
+  | boolean (value : Bool)
+  | label (value : String)
+  | record (fields : List (String × TVal))
+  | variant (tag : String) (payload : TVal)
+  | cap (slotId : Nat) (custodyId : Nat)
+  deriving Repr
+
+mutual
+def tvalBeq : TVal → TVal → Bool
+  | .natural a, .natural b => a == b
+  | .boolean a, .boolean b => a == b
+  | .label a, .label b => a == b
+  | .record fa, .record fb => tvalFieldsBeq fa fb
+  | .variant ta pa, .variant tb pb => ta == tb && tvalBeq pa pb
+  | .cap sa ca, .cap sb cb => sa == sb && ca == cb
+  | _, _ => false
+
+def tvalFieldsBeq : List (String × TVal) → List (String × TVal) → Bool
+  | [], [] => true
+  | (ka, va) :: ra, (kb, vb) :: rb => ka == kb && tvalBeq va vb && tvalFieldsBeq ra rb
+  | _, _ => false
+end
+
+instance : BEq TVal := ⟨tvalBeq⟩
+
+mutual
+def tvalOfData : Data → TVal
+  | .natural n => .natural n
+  | .boolean b => .boolean b
+  | .label s => .label s
+  | .record fs => .record (tvalOfDataFields fs)
+  | .variant tag p => .variant tag (tvalOfData p)
+
+def tvalOfDataFields : List (String × Data) → List (String × TVal)
+  | [] => []
+  | (k, v) :: rest => (k, tvalOfData v) :: tvalOfDataFields rest
+end
+
+/-- Embed pure `Obend.Core.Data.Data` into `TVal`. -/
+def TVal.ofData (d : Data) : TVal := tvalOfData d
+
+mutual
+def tvalCapSlots : TVal → List Nat
+  | .natural _ | .boolean _ | .label _ => []
+  | .cap slotId _ => [slotId]
+  | .variant _ p => tvalCapSlots p
+  | .record fs => tvalCapSlotsFields fs
+
+def tvalCapSlotsFields : List (String × TVal) → List Nat
+  | [] => []
+  | (_, v) :: rest => tvalCapSlots v ++ tvalCapSlotsFields rest
+end
+
+/-- Collect all capability `slotId`s referenced in `v` in left-to-right order. -/
+def TVal.capSlots (v : TVal) : List Nat := tvalCapSlots v
+
+mutual
+def tvalConforms : TVal → Ty → Bool
+  | .natural _, .natural | .boolean _, .boolean | .label _, .label => true
+  | .cap _ cid, .custody expectedId => cid == expectedId
+  | .record fields, row =>
+    fields.length == (Obend.Core.Data.rowNames row).length &&
+    (fields.map Prod.fst).eraseDups.length == fields.length &&
+    tvalConformsFields fields row
+  | .variant tag payload, .variant row =>
+    match Obend.Core.Data.rowMember row tag with
+    | some member => tvalConforms payload member
+    | none => false
+  | _, _ => false
+
+def tvalConformsFields : List (String × TVal) → Ty → Bool
+  | [], _ => true
+  | (name, val) :: rest, row =>
+    (match Obend.Core.Data.rowMember row name with
+      | some member => tvalConforms val member
+      | none => false) && tvalConformsFields rest row
+end
+
+/-- Type conformance of a `TVal` against a `Ty.isTransferable` type. -/
+def TVal.conforms (v : TVal) (ty : Ty) : Bool := tvalConforms v ty
+
+/-- Dehydrated wire skeleton: capability leaves replaced by descriptor indices into `CapTable`. -/
+inductive DataWire where
+  | natural (value : Nat)
+  | boolean (value : Bool)
+  | label (value : String)
+  | record (fields : List (String × DataWire))
+  | variant (tag : String) (payload : DataWire)
+  | sealedCap (capIndex : Nat) (custodyId : Nat)
+  deriving Repr
+
+mutual
+def dataWireBeq : DataWire → DataWire → Bool
+  | .natural a, .natural b => a == b
+  | .boolean a, .boolean b => a == b
+  | .label a, .label b => a == b
+  | .record fa, .record fb => dataWireFieldsBeq fa fb
+  | .variant ta pa, .variant tb pb => ta == tb && dataWireBeq pa pb
+  | .sealedCap ia ca, .sealedCap ib cb => ia == ib && ca == cb
+  | _, _ => false
+
+def dataWireFieldsBeq : List (String × DataWire) → List (String × DataWire) → Bool
+  | [], [] => true
+  | (ka, va) :: ra, (kb, vb) :: rb => ka == kb && dataWireBeq va vb && dataWireFieldsBeq ra rb
+  | _, _ => false
+end
+
+instance : BEq DataWire := ⟨dataWireBeq⟩
+
+mutual
+def dataWireToData : DataWire → Data
+  | .natural n => .variant "wire.nat" (.natural n)
+  | .boolean b => .variant "wire.bool" (.boolean b)
+  | .label s => .variant "wire.label" (.label s)
+  | .record fs => .variant "wire.rec" (.record (dataWireFieldsToData fs))
+  | .variant tag p => .variant "wire.var" (.record [("tag", .label tag), ("payload", dataWireToData p)])
+  | .sealedCap idx cid => .variant "wire.cap" (.record [("idx", .natural idx), ("cid", .natural cid)])
+
+def dataWireFieldsToData : List (String × DataWire) → List (String × Data)
+  | [] => []
+  | (k, v) :: rest => (k, dataWireToData v) :: dataWireFieldsToData rest
+end
+
+/-- Lower `DataWire` bijectively to pure first-order `Obend.Core.Data.Data`. -/
+def DataWire.toData (w : DataWire) : Data := dataWireToData w
+
+mutual
+def dataWireOfData? : Data → Option DataWire
+  | .variant "wire.nat" (.natural n) => some (.natural n)
+  | .variant "wire.bool" (.boolean b) => some (.boolean b)
+  | .variant "wire.label" (.label s) => some (.label s)
+  | .variant "wire.rec" (.record fs) => (dataWireFieldsOfData? fs).map .record
+  | .variant "wire.var" (.record [("tag", .label tag), ("payload", p)]) =>
+    (dataWireOfData? p).map (.variant tag)
+  | .variant "wire.cap" (.record [("idx", .natural idx), ("cid", .natural cid)]) =>
+    some (.sealedCap idx cid)
+  | _ => none
+
+def dataWireFieldsOfData? : List (String × Data) → Option (List (String × DataWire))
+  | [] => some []
+  | (k, v) :: rest =>
+    match dataWireOfData? v, dataWireFieldsOfData? rest with
+    | some wv, some wrest => some ((k, wv) :: wrest)
+    | _, _ => none
+end
+
+/-- Parse pure `Obend.Core.Data.Data` back into `DataWire`. -/
+def DataWire.ofData? (d : Data) : Option DataWire := dataWireOfData? d
+
+mutual
+theorem dataWireOfData_toData : ∀ (w : DataWire), dataWireOfData? (dataWireToData w) = some w
+  | .natural _ | .boolean _ | .label _ | .sealedCap _ _ => rfl
+  | .record fs => by simp [dataWireToData, dataWireOfData?, dataWireFieldsOfData_toData fs]
+  | .variant tag p => by simp [dataWireToData, dataWireOfData?, dataWireOfData_toData p]
+
+theorem dataWireFieldsOfData_toData :
+    ∀ (fs : List (String × DataWire)), dataWireFieldsOfData? (dataWireFieldsToData fs) = some fs
+  | [] => rfl
+  | (k, v) :: rest => by
+    simp [dataWireFieldsToData, dataWireFieldsOfData?,
+      dataWireOfData_toData v, dataWireFieldsOfData_toData rest]
+end
+
+/-- Bijective round-trip of `DataWire` through pure `Obend.Core.Data.Data`. -/
+theorem DataWire.ofData_toData (w : DataWire) : DataWire.ofData? w.toData = some w :=
+  dataWireOfData_toData w
+
+/-- Live unforgeable linear capability token held in a `CustodyEnv`. -/
+structure CapToken where
+  slotId : Nat
+  custodyId : Nat
+  badge : Bytes
+  deriving DecidableEq, Repr
+
+/-- Linear custody environment owning live capability tokens. -/
+structure CustodyEnv where
+  tokens : List CapToken
+  deriving DecidableEq, Repr
+
+/-- One sealed entry inside a `CapTable`. -/
+structure SealedCapEntry where
+  index : Nat
+  token : CapToken
+  deriving DecidableEq, Repr
+
+/-- Linear Capability Export/Import Table indexing extracted capabilities `0 .. n-1`. -/
+structure CapTable where
+  entries : List SealedCapEntry
+  deriving DecidableEq, Repr
+
+/-- Canonical, unbounded identifiers: no reduction modulo a machine word. -/
+def encodeCapTableBytes (nonce : Nat) (tbl : CapTable) : Bytes :=
+  Obend.Crypto.leb128 nonce ++ Obend.Crypto.leb128 tbl.entries.length ++
+    (tbl.entries.flatMap fun e =>
+      Obend.Crypto.leb128 e.index ++ Obend.Crypto.leb128 e.token.slotId ++
+      Obend.Crypto.leb128 e.token.custodyId ++ Obend.Crypto.encodeListField e.token.badge)
+
+/-- Canonical data codec preserves constructor tags, payloads, field order and cap positions. -/
+def dataWireBytes (wire : DataWire) : Bytes :=
+  Obend.Vault.ChunkedWorld.cData.enc wire.toData
+
+theorem dataWireBytes_injective {a b : DataWire} (h : dataWireBytes a = dataWireBytes b) : a = b := by
+  have ha := Obend.Vault.ChunkedWorld.cData.roundtrip a.toData []
+  have hb := Obend.Vault.ChunkedWorld.cData.roundtrip b.toData []
+  change Obend.Vault.ChunkedWorld.cData.enc a.toData =
+    Obend.Vault.ChunkedWorld.cData.enc b.toData at h
+  rw [h] at ha
+  have hd := (Prod.mk.inj (Option.some.inj (ha.symm.trans hb))).1
+  have hw := congrArg DataWire.ofData? hd
+  simpa only [DataWire.ofData_toData, Option.some.injEq] using hw
+
+/-- Unbounded length framing, shared with the transcript encoding. -/
+def frameBytes (bs : Bytes) : Bytes := Obend.Crypto.encodeListField bs
+
+/-- The authority key stays at the host; only its domain-bound seal crosses the wire. -/
+def capFramePreimage (sealKey : ByteArray) (epoch : UInt64) (nonce : Nat) (tbl : CapTable) (wire : DataWire) : Bytes :=
+  "OBEND.VAULT.CAP_SEAL/v2".toUTF8.data.toList ++
+    Obend.Crypto.encodeListField sealKey.data.toList ++ Obend.Crypto.leb128 epoch.toNat ++
+    frameBytes (dataWireBytes wire) ++ encodeCapTableBytes nonce tbl
+
+/-- A full-width seal; security is conditional on the keyed host hash, never on a fixture hash. -/
+def computeCapFrameSeal (Hb : Bytes → BitVec 256) (sealKey : ByteArray)
+    (epoch : UInt64) (nonce : Nat) (tbl : CapTable) (wire : DataWire) : BitVec 256 :=
+  Hb (capFramePreimage sealKey epoch nonce tbl wire)
+
+structure CapSealFrame where
+  nonce : Nat
+  epoch : UInt64
+  table : CapTable
+  sealBytes : BitVec 256
+  deriving DecidableEq, Repr
+
+/-- Authenticate under the caller's authority and current epoch. -/
+def CapSealFrame.sealValid (Hb : Bytes → BitVec 256) (sealKey : ByteArray)
+    (expectedEpoch : UInt64) (frame : CapSealFrame) (wire : DataWire) : Bool :=
+  decide (sealKey.size = 32 ∧ frame.epoch = expectedEpoch ∧
+    frame.sealBytes = computeCapFrameSeal Hb sealKey frame.epoch frame.nonce frame.table wire)
+
+/-- Return the first repeated slot, rather than allowing capability shadowing. -/
+def duplicateSlot : List Nat → Option Nat
+  | [] => none
+  | x :: xs => if x ∈ xs then some x else duplicateSlot xs
+
+theorem duplicateSlot_eq_none_iff (slots : List Nat) :
+    duplicateSlot slots = none ↔ slots.Nodup := by
+  induction slots with
+  | nil => simp [duplicateSlot]
+  | cons x xs ih =>
+    by_cases hx : x ∈ xs
+    · simp [duplicateSlot, hx]
+    · simp [duplicateSlot, hx, ih]
+
+/-- Check consecutive 0-based indices starting at `start`. -/
+def indexedFromBool (start : Nat) : List SealedCapEntry → Bool
+  | [] => true
+  | e :: es => (e.index == start) && indexedFromBool (start + 1) es
+
+/-- Deterministic refusals of `dehydrate` / `rehydrate`. -/
+inductive TransferRefusal where
+  | missingOrDuplicateSlot (slotId : Nat)
+  | custodyIdMismatch (idOrIdx expected actual : Nat)
+  | droppedCustody (slotId : Nat)
+  | unsealedFrame
+  | invalidSealKey
+  | malformedCapTable
+  | forgedCapIndex (capIndex : Nat)
+  | duplicateCapIndex (capIndex : Nat)
+  | droppedSealedCap (capIndex : Nat)
+  deriving DecidableEq, Repr
+
+/-- Linearly extract and remove the first `CapToken` with `slotId` from `ts`. -/
+def takeCapAtSlot (slotId : Nat) : List CapToken → Option (CapToken × List CapToken)
+  | [] => none
+  | t :: ts =>
+    if t.slotId == slotId then some (t, ts)
+    else (takeCapAtSlot slotId ts).map fun (found, rest) => (found, t :: rest)
+
+theorem takeCapAtSlot_spec {slotId : Nat} {ts rest : List CapToken} {found : CapToken}
+    (h : takeCapAtSlot slotId ts = some (found, rest)) :
+    found.slotId = slotId ∧ ts.Perm (found :: rest) := by
+  induction ts generalizing rest found with
+  | nil => cases h
+  | cons t ts ih =>
+    simp only [takeCapAtSlot] at h; split at h
+    · rename_i heq
+      simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+      exact ⟨beq_iff_eq.mp heq, List.Perm.refl _⟩
+    · cases hrec : takeCapAtSlot slotId ts with
+      | none => rw [hrec] at h; cases h
+      | some pair =>
+        obtain ⟨f', r'⟩ := pair; rw [hrec] at h
+        simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+        obtain ⟨hid, hp⟩ := ih hrec
+        exact ⟨hid, (hp.cons t).trans (List.Perm.swap f' t r')⟩
+
+/-- Linearly extract and remove the `SealedCapEntry` at `capIndex` from `es`. -/
+def takeSealedAtIndex (capIndex : Nat) : List SealedCapEntry → Option (SealedCapEntry × List SealedCapEntry)
+  | [] => none
+  | e :: es =>
+    if e.index == capIndex then some (e, es)
+    else (takeSealedAtIndex capIndex es).map fun (found, rest) => (found, e :: rest)
+
+theorem takeSealedAtIndex_perm {capIndex : Nat} {es rest : List SealedCapEntry} {found : SealedCapEntry}
+    (h : takeSealedAtIndex capIndex es = some (found, rest)) :
+    found.index = capIndex ∧ es.Perm (found :: rest) := by
+  induction es generalizing rest found with
+  | nil => cases h
+  | cons e es ih =>
+    simp only [takeSealedAtIndex] at h; split at h
+    · rename_i heq
+      simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+      exact ⟨beq_iff_eq.mp heq, List.Perm.refl _⟩
+    · cases hrec : takeSealedAtIndex capIndex es with
+      | none => rw [hrec] at h; cases h
+      | some pair =>
+        obtain ⟨f', r'⟩ := pair; rw [hrec] at h
+        simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+        obtain ⟨hid, hp⟩ := ih hrec
+        exact ⟨hid, (hp.cons e).trans (List.Perm.swap f' e r')⟩
+
+mutual
+def dehydrateVal (nextIdx : Nat) :
+    TVal → List CapToken → Except TransferRefusal (DataWire × List CapToken × List SealedCapEntry)
+  | .natural n, rem => .ok (.natural n, rem, [])
+  | .boolean b, rem => .ok (.boolean b, rem, [])
+  | .label s, rem => .ok (.label s, rem, [])
+  | .cap slotId custodyId, rem =>
+    match takeCapAtSlot slotId rem with
+    | none => .error (.missingOrDuplicateSlot slotId)
+    | some (tok, rem') =>
+      if tok.custodyId == custodyId then .ok (.sealedCap nextIdx custodyId, rem', [⟨nextIdx, tok⟩])
+      else .error (.custodyIdMismatch slotId custodyId tok.custodyId)
+  | .variant tag p, rem =>
+    match dehydrateVal nextIdx p rem with
+    | .ok (wp, rem', ep) => .ok (.variant tag wp, rem', ep)
+    | .error e => .error e
+  | .record fs, rem =>
+    match dehydrateFields nextIdx fs rem with
+    | .ok (wfs, rem', efs) => .ok (.record wfs, rem', efs)
+    | .error e => .error e
+
+def dehydrateFields (nextIdx : Nat) :
+    List (String × TVal) → List CapToken →
+      Except TransferRefusal (List (String × DataWire) × List CapToken × List SealedCapEntry)
+  | [], rem => .ok ([], rem, [])
+  | (k, v) :: rest, rem =>
+    match dehydrateVal nextIdx v rem with
+    | .error e => .error e
+    | .ok (wv, rem₁, e₁) =>
+      match dehydrateFields (nextIdx + e₁.length) rest rem₁ with
+      | .error e => .error e
+      | .ok (wrest, rem₂, e₂) => .ok ((k, wv) :: wrest, rem₂, e₁ ++ e₂)
+end
+
+/-- **Dehydrate on `.perform` yield**: extracts linear capabilities into `(DataWire, CapSealFrame)`. -/
+def dehydrate (Hb : Bytes → BitVec 256) (sealKey : ByteArray) (epoch : UInt64)
+    (nonce : Nat) (env : CustodyEnv) (v : TVal) :
+    Except TransferRefusal (DataWire × CapSealFrame) :=
+  if sealKey.size ≠ 32 then .error .invalidSealKey else
+  match dehydrateVal 0 v env.tokens with
+  | .error e => .error e
+  | .ok (wire, [], entries) =>
+    match duplicateSlot (entries.map (·.token.slotId)) with
+    | some slot => .error (.missingOrDuplicateSlot slot)
+    | none =>
+      let tbl : CapTable := ⟨entries⟩
+      .ok (wire, ⟨nonce, epoch, tbl, computeCapFrameSeal Hb sealKey epoch nonce tbl wire⟩)
+  | .ok (_, leftover :: _, _) => .error (.droppedCustody leftover.slotId)
+
+mutual
+def rehydrateVal (boundLen : Nat) :
+    DataWire → List SealedCapEntry → Except TransferRefusal (TVal × List SealedCapEntry × List CapToken)
+  | .natural n, avail => .ok (.natural n, avail, [])
+  | .boolean b, avail => .ok (.boolean b, avail, [])
+  | .label s, avail => .ok (.label s, avail, [])
+  | .sealedCap idx custodyId, avail =>
+    if idx ≥ boundLen then .error (.forgedCapIndex idx) else
+    match takeSealedAtIndex idx avail with
+    | none => .error (.duplicateCapIndex idx)
+    | some (entry, avail') =>
+      if entry.token.custodyId == custodyId then
+        .ok (.cap entry.token.slotId custodyId, avail', [entry.token])
+      else .error (.custodyIdMismatch idx custodyId entry.token.custodyId)
+  | .variant tag wp, avail =>
+    match rehydrateVal boundLen wp avail with
+    | .ok (p, avail', toks) => .ok (.variant tag p, avail', toks)
+    | .error e => .error e
+  | .record wfs, avail =>
+    match rehydrateFields boundLen wfs avail with
+    | .ok (fs, avail', toks) => .ok (.record fs, avail', toks)
+    | .error e => .error e
+
+def rehydrateFields (boundLen : Nat) :
+    List (String × DataWire) → List SealedCapEntry →
+      Except TransferRefusal (List (String × TVal) × List SealedCapEntry × List CapToken)
+  | [], avail => .ok ([], avail, [])
+  | (k, wv) :: wrest, avail =>
+    match rehydrateVal boundLen wv avail with
+    | .error e => .error e
+    | .ok (v, avail₁, t₁) =>
+      match rehydrateFields boundLen wrest avail₁ with
+      | .error e => .error e
+      | .ok (rest, avail₂, t₂) => .ok ((k, v) :: rest, avail₂, t₁ ++ t₂)
+end
+
+/-- **Rehydrate on `.perform` resume**: verifies seal, reconstructs `(TVal, CustodyEnv)` linearly. -/
+def rehydrate (Hb : Bytes → BitVec 256) (sealKey : ByteArray) (expectedEpoch : UInt64)
+    (wire : DataWire) (frame : CapSealFrame) : Except TransferRefusal (TVal × CustodyEnv) :=
+  if !frame.sealValid Hb sealKey expectedEpoch wire then .error .unsealedFrame
+  else if !indexedFromBool 0 frame.table.entries then .error .malformedCapTable
+  else
+    match duplicateSlot (frame.table.entries.map (·.token.slotId)) with
+    | some slot => .error (.missingOrDuplicateSlot slot)
+    | none =>
+      match rehydrateVal frame.table.entries.length wire frame.table.entries with
+      | .error e => .error e
+      | .ok (v, [], imported) => .ok (v, ⟨imported⟩)
+      | .ok (_, leftover :: _, _) => .error (.droppedSealedCap leftover.index)
+
+/-! ### Round-Trip & Strict Linear Custody Conservation Proofs -/
+
+theorem indexedFromBool_append :
+    ∀ (e₁ e₂ : List SealedCapEntry) (start : Nat),
+      indexedFromBool start e₁ = true → indexedFromBool (start + e₁.length) e₂ = true →
+      indexedFromBool start (e₁ ++ e₂) = true
+  | [], e₂, start, _, h₂ => by simpa using h₂
+  | x :: xs, e₂, start, h₁, h₂ => by
+    simp only [indexedFromBool, List.cons_append, Bool.and_eq_true] at h₁ ⊢
+    have hlen : start + (x :: xs).length = (start + 1) + xs.length := by simp [List.length_cons]; omega
+    rw [hlen] at h₂; exact ⟨h₁.1, indexedFromBool_append xs e₂ (start + 1) h₁.2 h₂⟩
+
+mutual
+theorem dehydrateVal_spec :
+    ∀ (v : TVal) (nextIdx : Nat) (rem rem' : List CapToken) (wire : DataWire)
+      (entries : List SealedCapEntry),
+      dehydrateVal nextIdx v rem = .ok (wire, rem', entries) →
+      indexedFromBool nextIdx entries = true ∧
+      rem.Perm (entries.map SealedCapEntry.token ++ rem') ∧
+      entries.map (fun e => e.token.slotId) = tvalCapSlots v ∧
+      ∀ (boundLen : Nat) (tailAvail : List SealedCapEntry),
+        nextIdx + entries.length ≤ boundLen →
+        rehydrateVal boundLen wire (entries ++ tailAvail) =
+          .ok (v, tailAvail, entries.map SealedCapEntry.token)
+  | .natural _, _, _, _, _, _, h => by
+    simp only [dehydrateVal, Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+    exact ⟨rfl, List.Perm.refl _, rfl, fun _ _ _ => rfl⟩
+  | .boolean _, _, _, _, _, _, h => by
+    simp only [dehydrateVal, Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+    exact ⟨rfl, List.Perm.refl _, rfl, fun _ _ _ => rfl⟩
+  | .label _, _, _, _, _, _, h => by
+    simp only [dehydrateVal, Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+    exact ⟨rfl, List.Perm.refl _, rfl, fun _ _ _ => rfl⟩
+  | .cap slotId custodyId, nextIdx, rem, _, _, _, h => by
+    simp only [dehydrateVal] at h
+    cases ht : takeCapAtSlot slotId rem with
+    | none => rw [ht] at h; cases h
+    | some pair =>
+      obtain ⟨tok, r₁⟩ := pair; rw [ht] at h; dsimp only at h; split at h
+      · rename_i hcid
+        simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+        obtain ⟨hslot, hperm⟩ := takeCapAtSlot_spec ht
+        refine ⟨by simp [indexedFromBool], hperm, by simp [tvalCapSlots, hslot], ?_⟩
+        intro boundLen tailAvail hle; simp only [List.length_singleton] at hle
+        have hnot_ge : ¬ (nextIdx ≥ boundLen) := by omega
+        simp [rehydrateVal, hnot_ge, takeSealedAtIndex, hcid, hslot]
+      · cases h
+  | .variant tag p, nextIdx, rem, _, _, _, h => by
+    simp only [dehydrateVal] at h
+    cases hd : dehydrateVal nextIdx p rem with
+    | error e => rw [hd] at h; cases h
+    | ok res =>
+      obtain ⟨wp, r₁, ep⟩ := res; rw [hd] at h
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+      obtain ⟨hind, hperm, hslots, hrehyd⟩ := dehydrateVal_spec p nextIdx rem r₁ wp ep hd
+      refine ⟨hind, hperm, by simpa [tvalCapSlots] using hslots, ?_⟩
+      intro boundLen tailAvail hle; simp [rehydrateVal, hrehyd boundLen tailAvail hle]
+  | .record fs, nextIdx, rem, _, _, _, h => by
+    simp only [dehydrateVal] at h
+    cases hd : dehydrateFields nextIdx fs rem with
+    | error e => rw [hd] at h; cases h
+    | ok res =>
+      obtain ⟨wfs, r₁, efs⟩ := res; rw [hd] at h
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+      obtain ⟨hind, hperm, hslots, hrehyd⟩ := dehydrateFields_spec fs nextIdx rem r₁ wfs efs hd
+      refine ⟨hind, hperm, by simpa [tvalCapSlots] using hslots, ?_⟩
+      intro boundLen tailAvail hle; simp [rehydrateVal, hrehyd boundLen tailAvail hle]
+
+theorem dehydrateFields_spec :
+    ∀ (fs : List (String × TVal)) (nextIdx : Nat) (rem rem' : List CapToken)
+      (wfs : List (String × DataWire)) (entries : List SealedCapEntry),
+      dehydrateFields nextIdx fs rem = .ok (wfs, rem', entries) →
+      indexedFromBool nextIdx entries = true ∧
+      rem.Perm (entries.map SealedCapEntry.token ++ rem') ∧
+      entries.map (fun e => e.token.slotId) = tvalCapSlotsFields fs ∧
+      ∀ (boundLen : Nat) (tailAvail : List SealedCapEntry),
+        nextIdx + entries.length ≤ boundLen →
+        rehydrateFields boundLen wfs (entries ++ tailAvail) =
+          .ok (fs, tailAvail, entries.map SealedCapEntry.token)
+  | [], _, _, _, _, _, h => by
+    simp only [dehydrateFields, Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+    exact ⟨rfl, List.Perm.refl _, rfl, fun _ _ _ => rfl⟩
+  | (k, v) :: rest, nextIdx, rem, _, _, _, h => by
+    simp only [dehydrateFields] at h
+    cases hd1 : dehydrateVal nextIdx v rem with
+    | error e => rw [hd1] at h; cases h
+    | ok res1 =>
+      obtain ⟨wv, rem₁, e₁⟩ := res1; rw [hd1] at h; dsimp only at h
+      cases hd2 : dehydrateFields (nextIdx + e₁.length) rest rem₁ with
+      | error e => rw [hd2] at h; cases h
+      | ok res2 =>
+        obtain ⟨wrest, rem₂, e₂⟩ := res2; rw [hd2] at h
+        simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+        obtain ⟨hi1, hp1, hs1, hr1⟩ := dehydrateVal_spec v nextIdx rem rem₁ wv e₁ hd1
+        obtain ⟨hi2, hp2, hs2, hr2⟩ := dehydrateFields_spec rest (nextIdx + e₁.length) rem₁ rem₂ wrest e₂ hd2
+        have hperm_all : rem.Perm ((e₁ ++ e₂).map SealedCapEntry.token ++ rem₂) := by
+          rw [List.map_append, List.append_assoc]; exact hp1.trans (hp2.append_left _)
+        refine ⟨indexedFromBool_append e₁ e₂ nextIdx hi1 hi2, hperm_all, ?_, ?_⟩
+        · simp [tvalCapSlotsFields, List.map_append, hs1, hs2]
+        · intro boundLen tailAvail hle; rw [List.length_append] at hle; rw [List.append_assoc]
+          simp [rehydrateFields, hr1 boundLen (e₂ ++ tailAvail) (by omega),
+            hr2 boundLen tailAvail (by omega), List.map_append]
+end
+
+mutual
+theorem rehydrateVal_perm :
+    ∀ (boundLen : Nat) (wire : DataWire) (avail avail' : List SealedCapEntry)
+      (v : TVal) (toks : List CapToken),
+      rehydrateVal boundLen wire avail = .ok (v, avail', toks) →
+      (avail.map SealedCapEntry.token).Perm (toks ++ avail'.map SealedCapEntry.token)
+  | _, .natural _, _, _, _, _, h => by
+    simp only [rehydrateVal, Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+    exact List.Perm.refl _
+  | _, .boolean _, _, _, _, _, h => by
+    simp only [rehydrateVal, Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+    exact List.Perm.refl _
+  | _, .label _, _, _, _, _, h => by
+    simp only [rehydrateVal, Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+    exact List.Perm.refl _
+  | _, .sealedCap idx _, avail, _, _, _, h => by
+    simp only [rehydrateVal] at h; split at h
+    · cases h
+    · cases ht : takeSealedAtIndex idx avail with
+      | none => rw [ht] at h; cases h
+      | some pair =>
+        obtain ⟨entry, av₁⟩ := pair; rw [ht] at h; dsimp only at h; split at h
+        · simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+          simpa using (takeSealedAtIndex_perm ht).2.map SealedCapEntry.token
+        · cases h
+  | boundLen, .variant _ wp, avail, _, _, _, h => by
+    simp only [rehydrateVal] at h
+    cases hr : rehydrateVal boundLen wp avail with
+    | error e => rw [hr] at h; cases h
+    | ok res =>
+      obtain ⟨p, av₁, t₁⟩ := res; rw [hr] at h
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+      exact rehydrateVal_perm boundLen wp avail av₁ p t₁ hr
+  | boundLen, .record wfs, avail, _, _, _, h => by
+    simp only [rehydrateVal] at h
+    cases hr : rehydrateFields boundLen wfs avail with
+    | error e => rw [hr] at h; cases h
+    | ok res =>
+      obtain ⟨fs, av₁, t₁⟩ := res; rw [hr] at h
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+      exact rehydrateFields_perm boundLen wfs avail av₁ fs t₁ hr
+
+theorem rehydrateFields_perm :
+    ∀ (boundLen : Nat) (wfs : List (String × DataWire)) (avail avail' : List SealedCapEntry)
+      (fs : List (String × TVal)) (toks : List CapToken),
+      rehydrateFields boundLen wfs avail = .ok (fs, avail', toks) →
+      (avail.map SealedCapEntry.token).Perm (toks ++ avail'.map SealedCapEntry.token)
+  | _, [], _, _, _, _, h => by
+    simp only [rehydrateFields, Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+    exact List.Perm.refl _
+  | boundLen, (_, wv) :: wrest, avail, _, _, _, h => by
+    simp only [rehydrateFields] at h
+    cases hr1 : rehydrateVal boundLen wv avail with
+    | error e => rw [hr1] at h; cases h
+    | ok res1 =>
+      obtain ⟨v, av₁, t₁⟩ := res1; rw [hr1] at h; dsimp only at h
+      cases hr2 : rehydrateFields boundLen wrest av₁ with
+      | error e => rw [hr2] at h; cases h
+      | ok res2 =>
+        obtain ⟨rest, av₂, t₂⟩ := res2; rw [hr2] at h
+        simp only [Except.ok.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl, rfl⟩ := h
+        rw [List.append_assoc]
+        exact (rehydrateVal_perm boundLen wv avail av₁ v t₁ hr1).trans
+          ((rehydrateFields_perm boundLen wrest av₁ av₂ rest t₂ hr2).append_left t₁)
+end
+
+/-- Successful dehydration exposes both the linear extraction and the authority checks. -/
+theorem dehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : UInt64}
+    {nonce : Nat} {src : CustodyEnv} {v : TVal} {wire : DataWire} {frame : CapSealFrame}
+    (h : dehydrate Hb key epoch nonce src v = .ok (wire, frame)) :
+    key.size = 32 ∧ dehydrateVal 0 v src.tokens = .ok (wire, [], frame.table.entries) ∧
+    duplicateSlot (frame.table.entries.map (·.token.slotId)) = none ∧
+    frame.nonce = nonce ∧ frame.epoch = epoch ∧
+    frame.sealBytes = computeCapFrameSeal Hb key epoch nonce frame.table wire := by
+  unfold dehydrate at h
+  split at h
+  · cases h
+  · rename_i hk
+    cases hd : dehydrateVal 0 v src.tokens with
+    | error e => simp [hd] at h
+    | ok res =>
+      obtain ⟨w, rem, entries⟩ := res
+      cases rem with
+      | cons t ts => simp [hd] at h
+      | nil =>
+        cases hs : duplicateSlot (entries.map (·.token.slotId)) with
+        | some slot => simp [hd, hs] at h
+        | none =>
+          simp only [hd, hs, Except.ok.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨by simpa using hk, rfl, by simp only [hs], rfl, rfl, rfl⟩
+
+/-- Successful restore authenticates the epoch and consumes every sealed token once. -/
+theorem rehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : UInt64}
+    {wire : DataWire} {frame : CapSealFrame} {v : TVal} {env : CustodyEnv}
+    (h : rehydrate Hb key epoch wire frame = .ok (v, env)) :
+    frame.sealValid Hb key epoch wire = true ∧
+    duplicateSlot (frame.table.entries.map (·.token.slotId)) = none ∧
+    rehydrateVal frame.table.entries.length wire frame.table.entries = .ok (v, [], env.tokens) := by
+  unfold rehydrate at h
+  split at h
+  · cases h
+  · rename_i hs
+    have hs' : frame.sealValid Hb key epoch wire = true := by simpa using hs
+    split at h
+    · cases h
+    · cases hd : duplicateSlot (frame.table.entries.map (·.token.slotId)) with
+      | some slot => simp [hd] at h
+      | none =>
+        rw [hd] at h
+        cases hr : rehydrateVal frame.table.entries.length wire frame.table.entries with
+        | error e => simp [hr] at h
+        | ok res =>
+          obtain ⟨vr, rem, imported⟩ := res
+          cases rem with
+          | cons e es => simp [hr] at h
+          | nil =>
+            simp only [hr, Except.ok.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            exact ⟨hs', by simp only [hd], by simp only [hr]⟩
+
+theorem rehydrate_dehydrate_roundtrip (Hb : Bytes → BitVec 256) (key : ByteArray)
+    (epoch : UInt64) (nonce : Nat) (srcEnv : CustodyEnv) (v : TVal)
+    {wire : DataWire} {frame : CapSealFrame}
+    (hDehyd : dehydrate Hb key epoch nonce srcEnv v = .ok (wire, frame)) :
+    rehydrate Hb key epoch wire frame = .ok (v, ⟨frame.table.entries.map SealedCapEntry.token⟩) ∧
+    (frame.table.entries.map SealedCapEntry.token).Perm srcEnv.tokens := by
+  obtain ⟨hk, hd, hn, hnonce, hepoch, hseal⟩ := dehydrate_ok_inv hDehyd
+  obtain ⟨hind, hp, _, hr⟩ := dehydrateVal_spec v 0 srcEnv.tokens [] wire frame.table.entries hd
+  rw [List.append_nil] at hp
+  have hs : frame.sealValid Hb key epoch wire = true := by
+    simp [CapSealFrame.sealValid, hk, hepoch, hnonce, hseal]
+  have hr' := hr frame.table.entries.length [] (by omega)
+  rw [List.append_nil] at hr'
+  exact ⟨by simp [rehydrate, hs, hind, hn, hr'], hp.symm⟩
+
+theorem transfer_conserves_custody_exact (Hb : Bytes → BitVec 256) (key : ByteArray)
+    (epoch : UInt64) (nonce : Nat)
+    (srcEnv dstEnv : CustodyEnv) (v v' : TVal) (wire wire' : DataWire) (frame : CapSealFrame)
+    (hDehyd : dehydrate Hb key epoch nonce srcEnv v = .ok (wire, frame))
+    (hRehyd : rehydrate Hb key epoch wire' frame = .ok (v', dstEnv)) :
+    dstEnv.tokens.Perm srcEnv.tokens ∧
+    dstEnv.tokens.length = srcEnv.tokens.length ∧
+    (∀ tok : CapToken, dstEnv.tokens.count tok = srcEnv.tokens.count tok) ∧
+    (srcEnv.tokens.map CapToken.slotId).Perm v.capSlots ∧
+    ((srcEnv.tokens.map CapToken.slotId).Nodup → v.capSlots.Nodup) := by
+  have hd := (dehydrate_ok_inv hDehyd).2.1
+  have hr := (rehydrate_ok_inv hRehyd).2.2
+  obtain ⟨_, hp, hslots, _⟩ := dehydrateVal_spec v 0 srcEnv.tokens [] wire frame.table.entries hd
+  have hq := rehydrateVal_perm frame.table.entries.length wire' frame.table.entries [] v' dstEnv.tokens hr
+  simp only [List.map_nil, List.append_nil] at hp hq
+  have hboth := hq.symm.trans hp.symm
+  have hslot : (srcEnv.tokens.map CapToken.slotId).Perm v.capSlots := by
+    have hm := hp.map CapToken.slotId
+    simpa only [List.map_map, Function.comp_def, hslots, TVal.capSlots] using hm
+  exact ⟨hboth, hboth.length_eq, fun tok => hboth.count_eq tok,
+    hslot, fun hnd => hslot.nodup_iff.mp hnd⟩
+
+theorem rehydrate_restores_nodup_slots {Hb : Bytes → BitVec 256} {key : ByteArray}
+    {epoch : UInt64} {wire : DataWire} {frame : CapSealFrame} {v : TVal} {env : CustodyEnv}
+    (h : rehydrate Hb key epoch wire frame = .ok (v, env)) :
+    (env.tokens.map (·.slotId)).Nodup := by
+  obtain ⟨_, hn, hr⟩ := rehydrate_ok_inv h
+  have hp := rehydrateVal_perm frame.table.entries.length wire frame.table.entries [] v env.tokens hr
+  simp only [List.map_nil, List.append_nil] at hp
+  have hm := hp.map CapToken.slotId
+  have nd := (duplicateSlot_eq_none_iff _).mp hn
+  exact hm.nodup_iff.mp (by simpa only [List.map_map, Function.comp_def] using nd)
+
+/-- Binding reduction for two authority contexts accepting the same full-width seal.
+This is a collision reduction, not an unconditional MAC-unforgeability assertion. -/
+theorem rehydrate_binds_sealKey_epoch_or_collision
+    {Hb : Bytes → BitVec 256} {key₁ key₂ : ByteArray} {epoch₁ epoch₂ : UInt64}
+    {wire₁ wire₂ : DataWire} {frame₁ frame₂ : CapSealFrame}
+    {v₁ v₂ : TVal} {env₁ env₂ : CustodyEnv}
+    (h₁ : rehydrate Hb key₁ epoch₁ wire₁ frame₁ = .ok (v₁, env₁))
+    (h₂ : rehydrate Hb key₂ epoch₂ wire₂ frame₂ = .ok (v₂, env₂))
+    (hseal : frame₁.sealBytes = frame₂.sealBytes) :
+    (key₁ = key₂ ∧ epoch₁ = epoch₂ ∧ wire₁ = wire₂) ∨
+      ∃ a b : Bytes, a ≠ b ∧ Hb a = Hb b := by
+  have hs₁ := (rehydrate_ok_inv h₁).1
+  have hs₂ := (rehydrate_ok_inv h₂).1
+  simp only [CapSealFrame.sealValid, decide_eq_true_eq] at hs₁ hs₂
+  have he : computeCapFrameSeal Hb key₁ frame₁.epoch frame₁.nonce frame₁.table wire₁ =
+      computeCapFrameSeal Hb key₂ frame₂.epoch frame₂.nonce frame₂.table wire₂ :=
+    hs₁.2.2.symm.trans (hseal.trans hs₂.2.2)
+  by_cases hp : capFramePreimage key₁ frame₁.epoch frame₁.nonce frame₁.table wire₁ =
+      capFramePreimage key₂ frame₂.epoch frame₂.nonce frame₂.table wire₂
+  · unfold capFramePreimage frameBytes at hp
+    simp only [List.append_assoc, List.append_cancel_left_eq] at hp
+    obtain ⟨hk, ht⟩ := Obend.Crypto.encodeListField_prefix_inj hp
+    obtain ⟨hepoch, ht⟩ := Obend.Crypto.leb128_prefix_inj ht
+    obtain ⟨hw, _⟩ := Obend.Crypto.encodeListField_prefix_inj ht
+    exact .inl ⟨Obend.Crypto.byteArray_eq_of_toList_eq hk,
+      hs₁.2.1.symm.trans ((UInt64.toNat_inj.mp hepoch).trans hs₂.2.1),
+      dataWireBytes_injective hw⟩
+  · exact .inr ⟨_, _, hp, he⟩
+
+theorem forged_cap_index_refused (Hb : Bytes → BitVec 256) (key : ByteArray)
+    (epoch : UInt64) (frame : CapSealFrame) (idx custodyId : Nat)
+    (hSeal : frame.sealValid Hb key epoch (.sealedCap idx custodyId) = true) (hIdx : indexedFromBool 0 frame.table.entries = true)
+    (hSlots : duplicateSlot (frame.table.entries.map (·.token.slotId)) = none)
+    (hForged : idx ≥ frame.table.entries.length) :
+    rehydrate Hb key epoch (.sealedCap idx custodyId) frame = .error (.forgedCapIndex idx) := by
+  simp [rehydrate, hSeal, hIdx, hSlots, rehydrateVal, hForged]
+
+theorem unsealed_frame_refused (Hb : Bytes → BitVec 256) (key : ByteArray) (epoch : UInt64)
+    (wire : DataWire) (frame : CapSealFrame) (hBad : frame.sealValid Hb key epoch wire = false) :
+    rehydrate Hb key epoch wire frame = .error .unsealedFrame := by simp [rehydrate, hBad]
+
+theorem stale_epoch_refused (Hb : Bytes → BitVec 256) (key : ByteArray) (epoch : UInt64)
+    (wire : DataWire) (frame : CapSealFrame) (h : frame.epoch ≠ epoch) :
+    rehydrate Hb key epoch wire frame = .error .unsealedFrame := by
+  simp [rehydrate, CapSealFrame.sealValid, h]
+
+theorem duplicate_cap_slot_refused (Hb : Bytes → BitVec 256) (key : ByteArray)
+    (epoch : UInt64) (nonce slotId cid : Nat) (badge : Bytes) (hk : key.size = 32) :
+    let env : CustodyEnv := ⟨[⟨slotId, cid, badge⟩]⟩
+    let dupPlan : TVal := .record [("first", .cap slotId cid), ("second", .cap slotId cid)]
+    dehydrate Hb key epoch nonce env dupPlan = .error (.missingOrDuplicateSlot slotId) := by
+  simp [dehydrate, hk, dehydrateVal, dehydrateFields, takeCapAtSlot]
+
+theorem dropped_custody_refused (Hb : Bytes → BitVec 256) (key : ByteArray)
+    (epoch : UInt64) (nonce slotId cid : Nat) (badge : Bytes) (hk : key.size = 32) :
+    let env : CustodyEnv := ⟨[⟨slotId, cid, badge⟩]⟩
+    dehydrate Hb key epoch nonce env (.natural 7) = .error (.droppedCustody slotId) := by
+  simp [dehydrate, hk, dehydrateVal]
+
+/-! ### Inhabited Module Witnesses -/
+
+/-- Non-cryptographic fixture covering every input byte; never a production authority. -/
+def sampleIdentityHash (bs : Bytes) : BitVec 256 :=
+  BitVec.ofNat 256 (bs.foldl (fun h b => h * 257 + b.toNat) 0)
+
+def sampleSealKey : ByteArray := ⟨(List.replicate 32 (0x5a : UInt8)).toArray⟩
+
+def samplePlanVal : TVal :=
+  .variant "transferSturdyref"
+    (.record [("badgeCap", .cap 10 1), ("coReceipt", .cap 20 2), ("epoch", .natural 9)])
+
+def sampleCustodyEnv : CustodyEnv := ⟨[⟨10, 1, [0xaa, 0xbb]⟩, ⟨20, 2, [0xcc, 0xdd]⟩]⟩
+
+def sampleRoundtripCheck : Bool :=
+  match dehydrate sampleIdentityHash sampleSealKey 9 42 sampleCustodyEnv samplePlanVal with
+  | .ok (wire, frame) =>
+    DataWire.ofData? wire.toData == some wire &&
+    frame.sealValid sampleIdentityHash sampleSealKey 9 wire &&
+    indexedFromBool 0 frame.table.entries &&
+    match rehydrate sampleIdentityHash sampleSealKey 9 wire frame with
+    | .ok (v', env') => v' == samplePlanVal && env' == sampleCustodyEnv
+    | .error _ => false
+  | .error _ => false
+
+example : (Ty.variant (.field "badgeCap" (.custody 1) (.field "epoch" .natural .emptyRow))).isTransferablePlan = true := by decide
+example : (Ty.variant (.field "badgeCap" (.custody 1) (.field "epoch" .natural .emptyRow))).isPlan = false := by decide
+example : TVal.conforms samplePlanVal
+    (.variant (.field "transferSturdyref"
+      (.field "badgeCap" (.custody 1) (.field "coReceipt" (.custody 2) (.field "epoch" .natural .emptyRow)))
+      .emptyRow)) = true := by decide
+example : sampleRoundtripCheck = true := by
+  simp [sampleRoundtripCheck, dehydrate, sampleSealKey, ByteArray.size, samplePlanVal, sampleCustodyEnv,
+    dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot,
+    rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields,
+    takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
+    DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?,
+    dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
+
+/-- Constructive two-capability transfer with a real authority context and distinct live slots. -/
+theorem transfer_inhabited :
+    ∃ wire frame env,
+      dehydrate sampleIdentityHash sampleSealKey 9 42 sampleCustodyEnv samplePlanVal = .ok (wire, frame) ∧
+      rehydrate sampleIdentityHash sampleSealKey 9 wire frame = .ok (samplePlanVal, env) := by
+  let wire : DataWire := .variant "transferSturdyref"
+    (.record [("badgeCap", .sealedCap 0 1), ("coReceipt", .sealedCap 1 2), ("epoch", .natural 9)])
+  let table : CapTable := ⟨[⟨0, ⟨10, 1, [0xaa, 0xbb]⟩⟩, ⟨1, ⟨20, 2, [0xcc, 0xdd]⟩⟩]⟩
+  let frame : CapSealFrame := ⟨42, 9, table, computeCapFrameSeal sampleIdentityHash sampleSealKey 9 42 table wire⟩
+  have hd : dehydrate sampleIdentityHash sampleSealKey 9 42 sampleCustodyEnv samplePlanVal =
+      .ok (wire, frame) := by
+    simp [dehydrate, sampleSealKey, ByteArray.size, sampleCustodyEnv, samplePlanVal,
+      dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, wire, frame, table]
+  exact ⟨wire, frame, _, hd,
+    (rehydrate_dehydrate_roundtrip sampleIdentityHash sampleSealKey 9 42
+      sampleCustodyEnv samplePlanVal hd).1⟩
+
+end Obend.Run.VaultDurableBridge
+
+namespace Obend.Vault.VerkleSnapshotBridge
+open Obend.Digest.HashBytes (Hash be ofBE ofBE_lt)
+open Obend.Judge.Computational (HashCollisionWitness SISShortVecWitness)
+open Obend.Crypto (AjtaiParams NonPigeonholeSISParams ModuleSISHard BoundedCollision
+  cshake32ByteArray cshake32ByteArray_size encodeListField leb128 Short ShortNormBound
+  ajtaiCommit extractShortDiffSISWitness inhabitedAjtaiParams inhabitedAjtaiParams_sisHard)
+open Obend.Polis (ExtRam treeCustomization treeHash tagOf leafPreimage nodePreimage
+  leafTag nodeTag nibbleAt insertAt insertAt_inj climbStep climb verifyOpening
+  encodeFields encodeFields_injective map_toList_injective)
+open Obend.Vault
+open Obend.Vault.Rehydration (genesisSentinel)
+set_option autoImplicit false
+/-! ## 6. Crash-Safe Torn-Write WAL Recovery Idempotence & Multi-Epoch `ValidSnapshotTrace` -/
+private theorem unbe_take32_lt_bound (s : Log.Bytes) : Log.unbe (s.take 32) < Log.bound := by
+  unfold Log.bound
+  exact Nat.lt_of_lt_of_le (Log.unbe_lt (s.take 32))
+    (Nat.pow_le_pow_right (by decide) (List.length_take_le 32 s))
+/-- Every `OBL1` record accepted by `Log.parseOne` is automatically well-formed (`Record.WF Hb`). -/
+theorem parseOne_ok_wf (Hb : Log.Bytes → Log.Bytes) {prev : Option Nat}
+    {bs rest : Log.Bytes} {r : Log.Record}
+    (h : Log.parseOne Hb prev bs = .ok (r, rest)) : r.WF Hb := by
+  have heff := (Log.parseOne_ok_inv Hb h).2.1
+  unfold Log.parseOne at h
+  cases e1 : Log.takeN 136 bs with
+  | none => rw [e1] at h; cases h
+  | some x =>
+    obtain ⟨hd, tl⟩ := x
+    rw [e1] at h; dsimp only at h
+    split at h
+    · cases h
+    · cases e2 : Log.takeN (Log.unbe ((hd.drop 4).take 4) + 32) tl with
+      | none => rw [e2] at h; cases h
+      | some y =>
+        obtain ⟨bd, tl'⟩ := y
+        rw [e2] at h; dsimp only at h
+        split at h
+        · cases h
+        · split at h
+          · cases h
+          · split at h
+            · cases h
+            · cases h
+              refine ⟨unbe_take32_lt_bound _, unbe_take32_lt_bound _, unbe_take32_lt_bound _, heff, ?_⟩
+              have hlen4 : Log.unbe ((hd.drop 4).take 4) < 256 ^ 4 :=
+                Nat.lt_of_lt_of_le (Log.unbe_lt ((hd.drop 4).take 4))
+                  (Nat.pow_le_pow_right (by decide) (List.length_take_le 4 _))
+              exact Nat.lt_of_le_of_lt (List.length_take_le _ _) hlen4
+/-- Every record parsed from any raw byte sequence by `Log.parseFrom` satisfies `Record.WF Hb`. -/
+theorem parseFrom_wf (Hb : Log.Bytes → Log.Bytes) (prev : Nat) (bs : Log.Bytes) :
+    ∀ r ∈ (Log.parseFrom Hb prev bs).1, r.WF Hb := by
+  induction h : bs.length using Nat.strongRecOn generalizing prev bs with
+  | ind n ih =>
+    by_cases hne : bs = []
+    · subst hne; simp [Log.parseFrom_nil]
+    · cases hp : Log.parseOne Hb (some prev) bs with
+      | error d => rw [Log.parseFrom_error Hb hne hp]; simp
+      | ok x =>
+        obtain ⟨r, rest⟩ := x; rw [Log.parseFrom_ok Hb hp]
+        intro y hy
+        rcases List.mem_cons.1 hy with rfl | hy'
+        · exact parseOne_ok_wf Hb hp
+        · exact ih rest.length (h ▸ Log.parseOne_rest Hb hp) (Log.Hr Hb r.receipt) rest rfl y hy'
+/-- **Open-World WAL Frame Filter Completeness (`walDrop_complete_iff_invalid_frame`)**:
+    `Log.parseFrom` drops a non-empty suffix iff `Log.parseOne` rejects it at the ending anchor. -/
+theorem walDrop_complete_iff_invalid_frame (Hb : Log.Bytes → Log.Bytes) (prev : Nat) (bs : Log.Bytes) :
+    let parsed := Log.parseFrom Hb prev bs
+    parsed.2.1 ≠ [] ↔ ∃ d : Log.Drop, parsed.2.2 = some d ∧
+      Log.parseOne Hb (some (Log.lastHash Hb prev parsed.1)) parsed.2.1 = .error d := by
+  induction h : bs.length using Nat.strongRecOn generalizing prev bs with
+  | ind n ih =>
+    by_cases hne : bs = []
+    · subst hne; simp [Log.parseFrom_nil]
+    · cases hp : Log.parseOne Hb (some prev) bs with
+      | error d => rw [Log.parseFrom_error Hb hne hp]; simp [Log.lastHash, hne, hp]
+      | ok x =>
+        obtain ⟨r, rest⟩ := x
+        have ih' := ih rest.length (h ▸ Log.parseOne_rest Hb hp) (Log.Hr Hb r.receipt) rest rfl
+        rw [Log.parseFrom_ok Hb hp]; simpa [Log.lastHash] using ih'
+/-- Trailing WAL bytes lacking a valid linked commit frame at `anchor`. -/
+def UncommittedWalTail (Hb : Log.Bytes → Log.Bytes) (anchor : Nat)
+    (tail : Log.Bytes) : Prop :=
+  tail = [] ∨ ∃ d : Log.Drop, Log.parseOne Hb (some anchor) tail = .error d
+/-- Any proper byte prefix `(encodeRecord Hb r).take k` satisfies `UncommittedWalTail`. -/
+theorem tornRecordPrefix_is_uncommitted (Hb : Log.Bytes → Log.Bytes) (anchor : Nat)
+    {r : Log.Record} (hwf : r.WF Hb) {k : Nat} (hk : k < (Log.encodeRecord Hb r).length) :
+    UncommittedWalTail Hb anchor ((Log.encodeRecord Hb r).take k) := by
+  by_cases hk0 : k = 0
+  · subst hk0; exact .inl rfl
+  · exact .inr ⟨.torn, Log.parseOne_torn Hb hwf (List.take_append_drop k _)
+      (by rw [Ne, List.drop_eq_nil_iff]; omega)⟩
+theorem parseFrom_uncommittedWalTail (Hb : Log.Bytes → Log.Bytes) (anchor : Nat)
+    {tail : Log.Bytes} (hu : UncommittedWalTail Hb anchor tail) :
+    (Log.parseFrom Hb anchor tail).1 = [] ∧ (Log.parseFrom Hb anchor tail).2.1 = tail := by
+  rcases hu with rfl | ⟨d, hd⟩
+  · simp [Log.parseFrom_nil]
+  · by_cases hne : tail = []
+    · subst hne; simp [Log.parseFrom_nil]
+    · rw [Log.parseFrom_error Hb hne hd]; exact ⟨rfl, rfl⟩
+/-- Outcome of crash-safe WAL recovery. -/
+structure WalRecoveryResult where
+  cleanDisk : Log.Bytes
+  snapshot : AuthenticatedWorldSnapshot
+  committedCount : Nat
+  droppedTail : Log.Bytes
+  dropReason : Option Log.Drop
+  deriving DecidableEq
+/-- Canonical WAL byte truncation: encodes committed `OBL1` frames and drops any uncommitted tail. -/
+def recoverWalBytes (rawDisk : Log.Bytes) : Log.Bytes :=
+  Log.encodeAll Replay.logHash (Log.parseFrom Replay.logHash genesisSentinel rawDisk).1
+/-- Full WAL crash recovery over a world machine `M` (defaulting to `Replay.deployed`). -/
+def recoverWalSnapshot {O : Type} (pp : AjtaiParams) (hCols : pp.cols = 64)
+    (M : Log.Machine ChunkedWorld.World O) (w0 : ChunkedWorld.World)
+    (rawDisk : Log.Bytes) : WalRecoveryResult :=
+  let parsed := Log.parseFrom Replay.logHash genesisSentinel rawDisk
+  { cleanDisk := Log.encodeAll Replay.logHash parsed.1
+    snapshot := buildAuthenticatedSnapshot pp hCols (Log.replay M w0 parsed.1)
+    committedCount := parsed.1.length, droppedTail := parsed.2.1, dropReason := parsed.2.2 }
+/-- Re-parsing the encoded records recovered by `Log.parseFrom` yields `(qs, [], none)`. -/
+theorem parseFrom_encodeAll_recovered (Hb : Log.Bytes → Log.Bytes) (prev : Nat) (rawDisk : Log.Bytes) :
+    Log.parseFrom Hb prev (Log.encodeAll Hb (Log.parseFrom Hb prev rawDisk).1) =
+      ((Log.parseFrom Hb prev rawDisk).1, [], none) := by
+  let qs := (Log.parseFrom Hb prev rawDisk).1
+  simpa [qs, List.append_nil, Log.parseFrom_nil] using
+    Log.parseFrom_encodeAll Hb qs prev (Log.parseFrom_sound Hb prev rawDisk).1
+      (parseFrom_wf Hb prev rawDisk) []
+/-- **Unconditional Byte-Level WAL Truncation Idempotence (`recoverWalBytes_idempotent`)**. -/
+theorem recoverWalBytes_idempotent (rawDisk : Log.Bytes) :
+    recoverWalBytes (recoverWalBytes rawDisk) = recoverWalBytes rawDisk := by
+  unfold recoverWalBytes; rw [parseFrom_encodeAll_recovered]
+/-- **Unconditional Snapshot WAL Recovery Idempotence (`walCrashRecovery_idempotent`)**. -/
+theorem walCrashRecovery_idempotent {O : Type} (pp : AjtaiParams) (hCols : pp.cols = 64)
+    (M : Log.Machine ChunkedWorld.World O) (w0 : ChunkedWorld.World) (rawDisk : Log.Bytes) :
+    recoverWalSnapshot pp hCols M w0 (recoverWalSnapshot pp hCols M w0 rawDisk).cleanDisk =
+      { recoverWalSnapshot pp hCols M w0 rawDisk with droppedTail := [], dropReason := none } := by
+  unfold recoverWalSnapshot; dsimp only; rw [parseFrom_encodeAll_recovered]
+/-- One admitted epoch turn in a multi-epoch snapshot trace. -/
+structure SnapshotEpoch where
+  turnBytes : Log.Bytes
+  record : Log.Record
+  deriving DecidableEq
+/-- **Multi-Epoch Snapshot & WAL Trace Invariant (`ValidSnapshotTrace`)**. -/
+inductive ValidSnapshotTrace {O : Type} (pp : AjtaiParams) (hCols : pp.cols = 64)
+    (M : Log.Machine ChunkedWorld.World O) (w0 : ChunkedWorld.World) :
+    List SnapshotEpoch → Log.Session ChunkedWorld.World → AuthenticatedWorldSnapshot → Prop where
+  | genesis : ValidSnapshotTrace pp hCols M w0 [] ⟨w0, []⟩ (buildAuthenticatedSnapshot pp hCols w0)
+  | commitEpoch {epochs : List SnapshotEpoch} {S S' : Log.Session ChunkedWorld.World}
+      {snap : AuthenticatedWorldSnapshot} {turnBytes : Log.Bytes} {rec : Log.Record} :
+      ValidSnapshotTrace pp hCols M w0 epochs S snap →
+      S.admit Replay.logHash M turnBytes = .ok S' → S'.log = S.log ++ [rec] →
+      ValidSnapshotTrace pp hCols M w0 (epochs ++ [⟨turnBytes, rec⟩])
+        S' (syncSnapshotWorld pp hCols snap S'.world)
+/-- Specialization of `ValidSnapshotTrace` to `Replay.deployed`. -/
+abbrev DeployedSnapshotTrace (pp : AjtaiParams) (hCols : pp.cols = 64) (w0 : ChunkedWorld.World) :=
+  ValidSnapshotTrace pp hCols Replay.deployed w0
+theorem validSnapshotTrace_invariants {O : Type} {pp : AjtaiParams} {hCols : pp.cols = 64}
+    {M : Log.Machine ChunkedWorld.World O} {w0 : ChunkedWorld.World}
+    {epochs : List SnapshotEpoch} {S : Log.Session ChunkedWorld.World}
+    {snap : AuthenticatedWorldSnapshot}
+    (htr : ValidSnapshotTrace pp hCols M w0 epochs S snap) :
+    Log.Reachable Replay.logHash M w0 S ∧ S.log.length = epochs.length ∧
+    SnapshotWF pp hCols snap ∧ snap.world = S.world ∧
+    snap.verkleRoot = fullVerkleCommitWorld S.world := by
+  induction htr with
+  | genesis =>
+    exact ⟨.genesis, rfl, buildAuthenticatedSnapshot_wf pp hCols w0, rfl,
+      buildAuthenticatedSnapshot_verkleRoot pp hCols w0⟩
+  | @commitEpoch epochs S S' snap turnBytes rec _ hadm hlog ih =>
+    obtain ⟨hreach, hlen, hwf, _, _⟩ := ih
+    obtain ⟨hwf', hw', hroot'⟩ := syncSnapshotWorld_wf_and_eq_fullCommit hwf S'.world
+    refine ⟨.admit hreach hadm, ?_, hwf', hw', hroot'⟩
+    rw [hlog, List.length_append, List.length_append, hlen]; rfl
+
+/-- Pure multi-epoch deterministic machine witnessing non-vacuity of `ValidSnapshotTrace`. -/
+def bumpMintedMachine : Log.Machine ChunkedWorld.World Unit where
+  step w bs := .ok ({ w with minted := w.minted + bs.length + 1 }, ())
+  encW := ChunkedWorld.manifestBytes
+
+/-- **Multi-Epoch Trace Inhabitedness Witness (`validSnapshotTrace_multiEpoch_inhabited`)**. -/
+theorem validSnapshotTrace_multiEpoch_inhabited :
+    ∃ (epochs : List SnapshotEpoch) (S : Log.Session ChunkedWorld.World)
+      (snap : AuthenticatedWorldSnapshot), epochs.length = 2 ∧
+      ValidSnapshotTrace defaultChunkAjtaiParams defaultChunkAjtaiParams_cols
+        bumpMintedMachine Replay.genesis epochs S snap := by
+  let S0 : Log.Session ChunkedWorld.World := ⟨Replay.genesis, []⟩
+  let b1 : Log.Bytes := [0x01]
+  let b2 : Log.Bytes := [0x02, 0x03]
+  let w1 : ChunkedWorld.World := { Replay.genesis with minted := 2 }
+  let r1 : Log.Record := ⟨⟨Log.lastHash Replay.logHash genesisSentinel [],
+    Log.dig Replay.logHash (ChunkedWorld.manifestBytes Replay.genesis),
+    Log.dig Replay.logHash (ChunkedWorld.manifestBytes w1), Log.dig Replay.logHash b1⟩, b1⟩
+  let S1 : Log.Session ChunkedWorld.World := ⟨w1, [r1]⟩
+  let w2 : ChunkedWorld.World := { w1 with minted := 5 }
+  let r2 : Log.Record := ⟨⟨Log.lastHash Replay.logHash genesisSentinel [r1],
+    Log.dig Replay.logHash (ChunkedWorld.manifestBytes w1),
+    Log.dig Replay.logHash (ChunkedWorld.manifestBytes w2), Log.dig Replay.logHash b2⟩, b2⟩
+  let S2 : Log.Session ChunkedWorld.World := ⟨w2, [r1, r2]⟩
+  have ha1 := Log.admit_of_step Replay.logHash bumpMintedMachine (w := Replay.genesis) (w' := w1)
+    (o := ()) (prev := Log.lastHash Replay.logHash genesisSentinel []) (b := b1) (by decide) rfl rfl
+  have hadm1 : S0.admit Replay.logHash bumpMintedMachine b1 = .ok S1 := by
+    unfold Log.Session.admit S0; dsimp only; rw [ha1]; rfl
+  have ha2 := Log.admit_of_step Replay.logHash bumpMintedMachine (w := w1) (w' := w2)
+    (o := ()) (prev := Log.lastHash Replay.logHash genesisSentinel [r1]) (b := b2) (by decide) rfl rfl
+  have hadm2 : S1.admit Replay.logHash bumpMintedMachine b2 = .ok S2 := by
+    unfold Log.Session.admit S1; dsimp only; rw [ha2]; rfl
+  have tr0 := ValidSnapshotTrace.genesis (pp := defaultChunkAjtaiParams)
+    (hCols := defaultChunkAjtaiParams_cols) (M := bumpMintedMachine) (w0 := Replay.genesis)
+  exact ⟨[⟨b1, r1⟩, ⟨b2, r2⟩], S2, _, rfl,
+    ValidSnapshotTrace.commitEpoch (ValidSnapshotTrace.commitEpoch tr0 hadm1 rfl) hadm2 rfl⟩
+
+/-- **Headline Theorem 3**: across any multi-epoch `ValidSnapshotTrace` and any uncommitted or
+    torn WAL tail, `recoverWalSnapshot` truncates the tail, is idempotent, and restores the exact
+    committed `ChunkedWorld` and 256-bit `VerkleUmem` root. -/
+theorem walCrashReplay_restores_verkle_consistent_world {O : Type}
+    {pp : AjtaiParams} {hCols : pp.cols = 64}
+    {M : Log.Machine ChunkedWorld.World O} {w0 : ChunkedWorld.World}
+    {epochs : List SnapshotEpoch} {S : Log.Session ChunkedWorld.World}
+    {snap : AuthenticatedWorldSnapshot}
+    (htr : ValidSnapshotTrace pp hCols M w0 epochs S snap) {tornTail : Log.Bytes}
+    (htorn : UncommittedWalTail Replay.logHash
+      (Log.lastHash Replay.logHash genesisSentinel S.log) tornTail) :
+    let crashDisk := Log.encodeAll Replay.logHash S.log ++ tornTail
+    let out := recoverWalSnapshot pp hCols M w0 crashDisk
+    out.cleanDisk = Log.encodeAll Replay.logHash S.log ∧
+    out.committedCount = epochs.length ∧ out.droppedTail = tornTail ∧
+    recoverWalBytes (recoverWalBytes crashDisk) = out.cleanDisk ∧
+    (recoverWalSnapshot pp hCols M w0 out.cleanDisk).cleanDisk = out.cleanDisk ∧
+    (recoverWalSnapshot pp hCols M w0 out.cleanDisk).snapshot = out.snapshot ∧
+    SnapshotWF pp hCols out.snapshot ∧ out.snapshot.world = S.world ∧
+    out.snapshot.verkleRoot = snap.verkleRoot ∧
+    out.snapshot.verkleRoot = fullVerkleCommitWorld S.world := by
+  obtain ⟨hreach, hlen, _, _, hsnapRoot⟩ := validSnapshotTrace_invariants htr
+  obtain ⟨hlinked, hwfLog⟩ := Log.log_sound hreach
+  have hparseEnc := Log.parseFrom_encodeAll Replay.logHash S.log genesisSentinel hlinked hwfLog tornTail
+  obtain ⟨htailRecs, htailRest⟩ := parseFrom_uncommittedWalTail Replay.logHash _ htorn
+  have hparseFull : (Log.parseFrom Replay.logHash genesisSentinel
+      (Log.encodeAll Replay.logHash S.log ++ tornTail)).1 = S.log := by
+    rw [hparseEnc, htailRecs, List.append_nil]
+  have hparseDrop : (Log.parseFrom Replay.logHash genesisSentinel
+      (Log.encodeAll Replay.logHash S.log ++ tornTail)).2.1 = tornTail := by
+    rw [hparseEnc]; exact htailRest
+  have hreplayEq : Log.replay M w0 S.log = S.world := (Log.state_eq_replay_log hreach).symm
+  have hidem := walCrashRecovery_idempotent pp hCols M w0 (Log.encodeAll Replay.logHash S.log ++ tornTail)
+  have hbytesIdem := recoverWalBytes_idempotent (Log.encodeAll Replay.logHash S.log ++ tornTail)
+  dsimp only
+  have hclean : (recoverWalSnapshot pp hCols M w0
+      (Log.encodeAll Replay.logHash S.log ++ tornTail)).cleanDisk =
+      Log.encodeAll Replay.logHash S.log := by unfold recoverWalSnapshot; dsimp only; rw [hparseFull]
+  have hcnt : (recoverWalSnapshot pp hCols M w0
+      (Log.encodeAll Replay.logHash S.log ++ tornTail)).committedCount = epochs.length := by
+    unfold recoverWalSnapshot; dsimp only; rw [hparseFull, hlen]
+  have hdrop : (recoverWalSnapshot pp hCols M w0
+      (Log.encodeAll Replay.logHash S.log ++ tornTail)).droppedTail = tornTail := by
+    unfold recoverWalSnapshot; dsimp only; exact hparseDrop
+  have hsnapEq : (recoverWalSnapshot pp hCols M w0
+      (Log.encodeAll Replay.logHash S.log ++ tornTail)).snapshot =
+      buildAuthenticatedSnapshot pp hCols S.world := by
+    unfold recoverWalSnapshot; dsimp only; rw [hparseFull, hreplayEq]
+  refine ⟨hclean, hcnt, hdrop, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hbytesIdem]; unfold recoverWalBytes; rw [hparseFull, hclean]
+  · rw [hidem]
+  · rw [hidem]
+  · rw [hsnapEq]; exact buildAuthenticatedSnapshot_wf pp hCols S.world
+  · rw [hsnapEq]; rfl
+  · rw [hsnapEq, buildAuthenticatedSnapshot_verkleRoot, hsnapRoot]
+  · rw [hsnapEq, buildAuthenticatedSnapshot_verkleRoot]
+
+end Obend.Vault.VerkleSnapshotBridge
 
 end

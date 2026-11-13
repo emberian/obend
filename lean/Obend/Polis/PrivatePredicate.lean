@@ -1,4 +1,5 @@
 module
+import all Obend.Polis.BlumRam
 /-
 # Obend.Polis.PrivatePredicate — first-order distributed predicates, cSHAKE256-bound conservation, AEAD discharge
 
@@ -9,7 +10,7 @@ module
 -/
 public import Obend.Crypto.Transcript
 public import Obend.Polis.EvidencedOcap
-public import Obend.Polis.VerkleUmem
+public import Obend.Polis.BlumRam
 
 public section
 namespace Obend.Polis.PrivatePredicate

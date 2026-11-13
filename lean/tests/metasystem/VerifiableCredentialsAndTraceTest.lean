@@ -26,7 +26,7 @@ import all Obend.Polis.EvidencedOcap
 import all Obend.Polis.HouyhnhnmMonitor
 import all Obend.Polis.HouyhnhnmTurn
 import all Obend.Polis.VerifiableCredentials
-import all Obend.Polis.VerkleUmem
+import all Obend.Polis.BlumRam
 import all Obend.Polis.ZkBiscuit
 import all Obend.Reasons
 import all Obend.Reasons.UnifiedEquilibrium
@@ -517,18 +517,18 @@ theorem sessionMonitor_catches_unbound_root (c : TurnCommitments) (st : Houyhnhn
     checkCredentialEval pol (receiptView s rc.witness) rc.witness &&
     decide (s.tableCommitment = commitTable P (complianceTable pol (receiptView s rc.witness) rc.witness))
 
-private def verifyDualSumcheckPIOPAlwaysTrue
-    {R : Type} [Obend.Crypto.CommRingOps R] [DecidableEq R]
-    [Obend.Crypto.TranscriptChallenge R] [Obend.Crypto.TranscriptEncode R]
-    (P₁ P₂ : Obend.Crypto.MultilinearPCS R)
-    [Obend.Crypto.TranscriptEncode P₁.Commitment] [Obend.Crypto.TranscriptEncode P₂.Commitment]
-    (_ : P₁.Params × P₂.Params) (_ _ : Nat) (_ : P₁.Commitment × P₂.Commitment)
-    (_ : R) (_ : List (Obend.Crypto.RoundPoly R)) (_ : P₁.OpeningProof × P₂.OpeningProof)
+private def mutantDualSumcheckPIOPAlwaysTrue
+    {_R : Type} [Obend.Crypto.CommRingOps _R] [DecidableEq _R]
+    [Obend.Crypto.TranscriptChallenge _R] [Obend.Crypto.TranscriptEncode _R]
+    (_P₁ _P₂ : Obend.Crypto.MultilinearPCS _R)
+    [Obend.Crypto.TranscriptEncode _P₁.Commitment] [Obend.Crypto.TranscriptEncode _P₂.Commitment]
+    (_ : _P₁.Params × _P₂.Params) (_ _ : Nat) (_ : _P₁.Commitment × _P₂.Commitment)
+    (_ : _R) (_ : List (Obend.Crypto.RoundPoly _R)) (_ : _P₁.OpeningProof × _P₂.OpeningProof)
     (_ : Obend.Crypto.Transcript .relationBound) : Bool := true
 
 -- Standalone PIOP compliance soundness without `checkCredentialEval` pre-check.
 #tooth deployedDualSumcheckPIOP_compliance_sound by mutation
-  Obend.Crypto.verifyDualSumcheckPIOP := verifyDualSumcheckPIOPAlwaysTrue
+  Obend.Crypto.verifyDualSumcheckPIOP := mutantDualSumcheckPIOPAlwaysTrue
 
 -- An inner verifier that accepts every proof.
 #tooth execTurnSymbolic_vc_sound by mutation verifiableCredentialInnerVerifier :=
