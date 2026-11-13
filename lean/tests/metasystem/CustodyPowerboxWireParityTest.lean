@@ -1,6 +1,6 @@
 module
 public import Obend.Polis.GrainCustodyHost
-import all Obend.Polis.PrepaidLeaseAndFork
+import all Obend.Vault.Escrow
 import all Obend.Polis.GrainCustodyHost
 import Obend.Tactic.Tooth
 import all Obend.Polis.GrainPowerbox

@@ -1,6 +1,7 @@
 module
+import all Obend.Vault.WorldTree
 public import Obend.Digest.Cshake256
-public import Obend.Vault.ChunkedWorld
+public import Obend.Vault.WorldTree
 public import Obend.Vault.Lsafe
 import all Obend.Vault.Lsafe
 

@@ -1,4 +1,9 @@
-import Obend.Vault.SegmentLog
+module
+import Obend.Tactic.Tooth
+import all Obend.Vault.Log
+import Obend.Vault.Log
+
+public section
 
 open Obend.Vault.SegmentLog
 
@@ -95,3 +100,23 @@ def main (args : List String) : IO Unit := do
   expect refused "corrupted index accepted"
   IO.FS.writeFile (selector dir) txt
   IO.println s!"segmented bytes: boundary reads, append, truncation, interrupted rollover, orphan replacement, index checksum; tail read {cost.read} bytes"
+
+-- The executable framing refines the specification for arbitrary records and windows.
+example (Hb : Obend.Vault.Log.Bytes → Obend.Vault.Log.Bytes)
+    (records : List Obend.Vault.Log.Record) :
+    (Obend.Vault.Log.encodeAllExec Hb records).data.toList = Obend.Vault.Log.encodeAll Hb records :=
+  Obend.Vault.Log.encodeAllExec_toList_eq_encodeAll Hb records
+
+example (Hb : Obend.Vault.Log.Bytes → Obend.Vault.Log.Bytes)
+    (prev off : Nat) (bytes : ByteArray) :
+    Obend.Vault.Log.parseFrom Hb prev (bytes.data.toList.drop off) =
+      ((Obend.Vault.Log.parseSegmentExec Hb prev bytes off).1,
+        bytes.data.toList.drop (Obend.Vault.Log.parseSegmentExec Hb prev bytes off).2.1,
+        (Obend.Vault.Log.parseSegmentExec Hb prev bytes off).2.2) :=
+  Obend.Vault.Log.parseExec_eq_parseSpec Hb prev bytes off
+
+#tooth Obend.Vault.Log.encodeAllExec_toList_eq_encodeAll by mutation
+  Obend.Vault.Log.encodeAllExecFrom := fun _ acc _ => acc
+
+#tooth Obend.Vault.Log.parseExec_eq_parseSpec by mutation
+  Obend.Vault.Log.parseSegmentExec := fun _ _ _ off => ([], off, none)

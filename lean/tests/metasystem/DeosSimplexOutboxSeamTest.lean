@@ -24,8 +24,8 @@ public import Obend.Polis.JointCoReceipt
 import all Obend.Polis.JointCoReceipt
 meta import all Obend.Polis.JointCoReceipt
 meta import all Obend.Ledger.Floors
-public import Obend.Polis.ZoeSeatSettlement
-import all Obend.Polis.ZoeSeatSettlement
+public import Obend.Ledger.Seat
+import all Obend.Ledger.Seat
 import all Obend.Ledger.Book
 import all Obend.Ledger.Seat
 import all Obend.Ledger.Register

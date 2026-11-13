@@ -1,6 +1,6 @@
 # Hardware, FPGA, and GPU Architecture
 
-Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`, `lean/Obend/Trailblaze/LeanFpga.lean`) compiles functional specifications, open hypergraphs, and array kernels to synthesizable RTL, interaction nets, FABulous FPGA bitstreams, WGSL compute shaders, and validated AMD RDNA2 machine code.
+Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`, `lean/Obend/Trailblaze/StageBInstances.lean`) compiles functional specifications, open hypergraphs, and array kernels to synthesizable RTL, interaction nets, FABulous FPGA bitstreams, WGSL compute shaders, and validated AMD RDNA2 machine code.
 
 ---
 
@@ -20,7 +20,7 @@ Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`, `lean/Obend/Tr
 
 For graph-reduction workloads, `lean/Obend/Hardware/Hvm.lean` lowers `Obend.Leaf.Book` definitions to interaction combinator nets (`lean/Obend/Hardware/Hvm/Inet.lean`, `lean/Obend/Hardware/Hvm/Model.lean`, `lean/Obend/Hardware/Hvm/Net.lean`, `lean/Obend/Hardware/Hvm/Lower.lean`):
 - `comp_reduces` and `main_reduces` (`lean/Obend/Hardware/Hvm/Net.lean`) prove fuel-indexed reduction soundness from functional intermediate definitions (`FExp`, `FDef`) to active redex nets (`Cfg`, `HTree`).
-- `lowerBookToHvm_sound` (`lean/Obend/Hardware/Hvm/Lower.lean`) proves that compiling an `Obend.Leaf.Book` into an `HvmBook` preserves evaluation over scalar arguments, complemented by `CofibLUT16` / linear delta-net FPGA synthesis in `lean/Obend/Trailblaze/LeanFpga.lean` (`apex_lean_fpga_rung2_to_rung5`).
+- `lowerBookToHvm_sound` (`lean/Obend/Hardware/Hvm/Lower.lean`) proves that compiling an `Obend.Leaf.Book` into an `HvmBook` preserves evaluation over scalar arguments, complemented by `CofibLUT16` / linear delta-net FPGA synthesis in `lean/Obend/Trailblaze/StageBInstances.lean` (`apex_lean_fpga_rung2_to_rung5`).
 
 ---
 

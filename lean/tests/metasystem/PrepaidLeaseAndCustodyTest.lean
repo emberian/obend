@@ -1,4 +1,4 @@
-import Obend.Polis.PrepaidLeaseAndFork
+import Obend.Vault.Escrow
 import Obend.Polis.GrainCustodyHost
 import Obend.Tactic.Tooth
 import Obend.AssertAxioms
@@ -210,3 +210,27 @@ theorem concrete_non_omission_unconditional :
 #print axioms host_cannot_omit_committed_turn_or_collision
 #assert_axioms_tree
 end Obend.Polis.Custody.Tests
+
+#tooth Obend.Vault.Escrow.escrowCellContract_conserves_funded_value by
+  mutation Obend.Vault.Escrow.escrowCondT := Obend.Law.trueT
+
+#tooth Obend.Vault.Escrow.escrowCellContract_refuses_unfunded_payout by
+  mutation Obend.Vault.Escrow.escrowBalanceT := fun _ => Obend.Law.trueT
+
+namespace Obend.Vault.Escrow.Tests
+
+def mintedPayout : EscrowState :=
+  { openedEscrow with paid := fun _ => 100 }
+
+example : escrowVerdictBool openedEscrow mintedPayout = false := by decide
+example : escrowVerdictBool openedEscrow
+    { openedEscrow with status := upd openedEscrow.status .A .deposited, amount := upd openedEscrow.amount .A 7 } = true := by decide
+
+end Obend.Vault.Escrow.Tests
+
+#tooth Obend.Vault.Escrow.escrowCellContract_refuses_skipped_deposit by
+  mutation Obend.Vault.Escrow.fundedLegT := fun _ _ _ _ => Obend.Law.trueT
+
+open Obend.Vault.Escrow in
+example : escrowVerdictBool openedEscrow
+    { status := fun _ => .consumed, amount := fun _ => 100, recv := fun _ => 100, paid := fun _ => 100 } = false := by decide

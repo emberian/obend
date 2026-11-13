@@ -26,7 +26,7 @@ import all Obend.Polis.EvidencedOcap
 import all Obend.Polis.HouyhnhnmMonitor
 import all Obend.Polis.HouyhnhnmTurn
 import all Obend.Polis.VerifiableCredentials
-import all Obend.Polis.VerkleUmem
+import all Obend.Polis.BlumRam
 import all Obend.Polis.ZkBiscuit
 import all Obend.Reasons
 import all Obend.Reasons.UnifiedEquilibrium
