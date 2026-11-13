@@ -599,6 +599,7 @@ inductive ZkStripeRefusal where
   | untrustedNotary (domain : String)
   | nonCanonicalBounds (domain : String)
   | requestRegexViolation (domain : String)
+  | malformedJson (domain : String)
   | responseRegexViolation (domain : String)
   | policyUnsupported (conclusion : String) (status : Obend.Reasons.Status)
   deriving DecidableEq, Repr
@@ -645,6 +646,8 @@ def auditNodes (pol : ZkStripePolicy) : HttpsSessionNode → Except ZkStripeRefu
       .error (.requestRegexViolation domain)
     else if !matchesBytes pol.allowedResponseRe resp then
       .error (.responseRegexViolation domain)
+    else if !runFullJsonGrammar ⟨resp.toArray⟩ then
+      .error (.malformedJson domain)
     else
       auditChildren pol kids
 termination_by structural t => t
@@ -688,6 +691,7 @@ structure HopAudited (pol : ZkStripePolicy) (node : HttpsSessionNode) : Prop whe
   canonicalRespLen : node.redactedResponse.length < 2 ^ 32
   requestMatches   : matchesBytes pol.allowedRequestRe node.redactedRequest = true
   responseMatches  : matchesBytes pol.allowedResponseRe node.redactedResponse = true
+  responseJson : runFullJsonGrammar ⟨node.redactedResponse.toArray⟩ = true
 
 mutual
 /-- **Every hop is audited**, not only the root. -/
@@ -716,18 +720,23 @@ theorem auditNodes_all_hops_sound {pol : ZkStripePolicy} {tree : HttpsSessionNod
           · rw [hResp] at hOk; cases hOk
           · rw [hResp] at hOk
             simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-            intro node hMem
-            simp only [allSessionNodes, List.mem_cons] at hMem
-            rcases hMem with rfl | hInKids
-            · exact {
-                trustedNotary    := of_decide_eq_true hNotary
-                canonicalDomain  := hDom
-                canonicalReqLen  := hReqLen
-                canonicalRespLen := hRespLen
-                requestMatches   := hReq
-                responseMatches  := hResp
-              }
-            · exact auditChildren_all_hops_sound hOk node hInKids
+            cases hJson : runFullJsonGrammar ⟨resp.toArray⟩
+            · rw [hJson] at hOk; cases hOk
+            · rw [hJson] at hOk
+              simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+              intro node hMem
+              simp only [allSessionNodes, List.mem_cons] at hMem
+              rcases hMem with rfl | hInKids
+              · exact {
+                  trustedNotary    := of_decide_eq_true hNotary
+                  canonicalDomain  := hDom
+                  canonicalReqLen  := hReqLen
+                  canonicalRespLen := hRespLen
+                  requestMatches   := hReq
+                  responseMatches  := hResp
+                  responseJson := hJson
+                }
+              · exact auditChildren_all_hops_sound hOk node hInKids
 termination_by structural tree
 
 theorem auditChildren_all_hops_sound {pol : ZkStripePolicy} {kids : List HttpsSessionNode}

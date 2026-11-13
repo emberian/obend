@@ -1381,7 +1381,7 @@ theorem TrackedMorphism.comp_assoc {P : PCA} {A B C D : Assembly P}
 
 /-- **Choice-Free Categorical Pullback `A ×_C B` in `Asm(P)`**:
     Carries pairs `(a, b)` with `f.map a = g.map b` realized by `P.pairCode ca cb`. -/
-def Assembly.trackedPullback {P : PairedPCA} {A B C : Assembly P.toPCA}
+@[expose] def Assembly.trackedPullback {P : PairedPCA} {A B C : Assembly P.toPCA}
     (f : TrackedMorphism A C) (g : TrackedMorphism B C) : Assembly P.toPCA where
   Carrier := { p : A.Carrier × B.Carrier // f.map p.1 = g.map p.2 }
   realizes := fun code w =>
