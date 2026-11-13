@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Spec.Proofs.C4Vectors — C4 linearization's published vectors and refusals
+# `extracted.C4VectorsTest` — C4 linearization's published vectors and refusals
 
 pommette.scm's precedence vectors and refusals, four DAG local orders, the refusals of an
 inconsistent graph, and the ordered-presentation invariance property

@@ -235,7 +235,6 @@ import Obend.Core.Proofs.Collect.Typing
 import Obend.Core.Proofs.Completeness
 import Obend.Core.Proofs.Conservation
 import Obend.Core.Proofs.DataSoundness
-import Obend.Core.Proofs.DigestChecks
 import Obend.Core.Proofs.EquiRecursiveBoundary
 import Obend.Core.Proofs.EquiRecursiveSubstitution
 import Obend.Core.Proofs.Force
@@ -339,9 +338,7 @@ import Obend.Elab.Gate
 import Obend.Elab.PdeSolverElab
 import Obend.Elab.Prepare
 import Obend.Elab.Proofs.AliasFree
-import Obend.Elab.Proofs.CoerceProbes
 import Obend.Elab.Proofs.PrepareChecks
-import Obend.Elab.Proofs.PrepareProbes
 import Obend.Elab.Proofs.Refines
 import Obend.Elab.Work
 import Obend.Elab.Workbook
@@ -637,11 +634,9 @@ import Obend.Spec.PackageLaw
 import Obend.Spec.Parse
 import Obend.Spec.Preview
 import Obend.Spec.Proofs.C4
-import Obend.Spec.Proofs.C4Vectors
 import Obend.Spec.Proofs.Contract
 import Obend.Spec.Proofs.Ecosystem
 import Obend.Spec.Proofs.FrontEndAdequacy
-import Obend.Spec.Proofs.Law
 import Obend.Spec.Proofs.LawCompile
 import Obend.Spec.Proofs.PackageLaw
 import Obend.Spec.Proofs.SpecificationClosure
@@ -696,6 +691,12 @@ import Obend.Teeth.Core.NominalTeeth
 import Obend.Teeth.Core.SpliceTeeth
 import Obend.Teeth.Core.SubstitutionTeeth
 import Obend.Teeth.Equiv.CostTeeth
+import Obend.Teeth.Extracted.AnalysisTeeth
+import Obend.Teeth.Extracted.AppsTeeth
+import Obend.Teeth.Extracted.CoreTeeth
+import Obend.Teeth.Extracted.DocVaultSlotTeeth
+import Obend.Teeth.Extracted.HardwareCryptoZkTeeth
+import Obend.Teeth.Extracted.RunLeafLowerTeeth
 import Obend.Teeth.Hardware.CliffordKernel
 import Obend.Teeth.Hardware.DeviceCertificates
 import Obend.Teeth.Hardware.DeviceFixtures

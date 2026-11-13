@@ -522,22 +522,5 @@ example :
      st4 0 = 2#64 ∧ st4 1 = 5#64) := by
   decide +kernel
 
-/-! ## 6. `#tooth` Mutation-Killing Guards -/
-
-def brokenDrexRtlModule : RtlModule :=
-  { name := "sovereign_drex_batch_top"
-  , inputNames := ["in_lot_count"]
-  , wires := []
-  , regs := []
-  , outputs := [{ name := "out_turn_admitted", expr := .const 1#64 }] }
-
-#tooth sovereignDrexBatchTopRtlModule_epoch_replay_refused by mutation
-  sovereignDrexBatchTopRtlModule := brokenDrexRtlModule
-
-def brokenDrexCommittee4 : List Nat := [0, 1, 2, 3, 4, 5]
-
-#tooth sovereignDrex_engine_and_bft_finality_sound by mutation
-  drexCommittee4 := brokenDrexCommittee4
-
 end Obend.Apps.SovereignDrex
 end

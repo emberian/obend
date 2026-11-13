@@ -455,10 +455,4 @@ theorem stale_tooth :
     (match create tooth "Mile" "Kilo" lawAdmit with | .error (.clash "Kilo") => true | _ => false) = true := by
   decide +kernel
 
-#tooth dispatch_sound by mutation dispatch := fun _ _ _ _ => .ok none
-#tooth effectiveOf_ok by mutation effectiveOf := fun _ _ => .ok lawAdmit
-#tooth create_carries by mutation create := fun _ k n l => .ok ⟨n, ⟨k, 0, []⟩, l, .natural 0⟩
--- A pin of the kind's own version alone (the pre-2026-11-01 pin) stays current when an ancestor moves.
-#tooth stale_tooth by mutation KindPin.lineage := fun p => [⟨p.name, p.version⟩]
-
 end Obend.Kind

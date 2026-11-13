@@ -2147,13 +2147,6 @@ theorem optimizeAdjointHypergraph_sound_universal
   saturate_and_extract_preserves_eval_ssa costModel (compileGraphAdjoint g)
     1 [ .mulOneRight, .scaleFuse, .fuseAddMulToMac ] initEnv hCheck
 
-/-- Broken `extractClassEdge` emitting a bogus constant `-1` for `#tooth` mutation verification. -/
-def extractClassEdgeBroken (_costModel : HyperCostModel) (c : EClass) : HyperEdge :=
-  { opIdx := c.origEdge.opIdx, op := .const (-1), srcWires := [], dstWire := c.classId }
-
-#tooth saturate_and_extract_preserves_eval by mutation
-  extractClassEdge := extractClassEdgeBroken
-
 /-- **Theorem (`goldenDiamondAdjoint_eqSat_strict_cost_reduction`)**:
 On `compileGraphAdjoint goldenDiamondHypergraph` ($f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$),
 `optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph`:
@@ -2177,13 +2170,6 @@ theorem goldenDiamondAdjoint_eqSat_strict_cost_reduction :
     evalHypergraphComb gOpt env = [87, 11, 11, 7, 7] ∧
     evalHypergraphLayeredSync gOpt env = [87, 11, 11, 7, 7] := by
   decide +kernel
-
-/-- Broken `pruneDeadEdges` that skips liveness pruning and leaves all dead cotangent edges intact. -/
-def pruneDeadEdgesBroken (_boundaryOut : List Nat) (edges : List HyperEdge) : List HyperEdge :=
-  edges
-
-#tooth goldenDiamondAdjoint_eqSat_strict_cost_reduction by mutation
-  pruneDeadEdges := pruneDeadEdgesBroken
 
 /-- Explicit 13-edge list of `compileGraphAdjoint goldenDiamondHypergraph`. -/
 def goldenDiamondAdjEdgesLiteral : List HyperEdge :=
@@ -2599,9 +2585,6 @@ theorem rnea2Link_adjoint_eqSat_sound
     List.foldl, List.map]
   grind
 
-#tooth rnea2Link_adjoint_eqSat_sound by mutation
-  pruneDeadEdges := pruneDeadEdgesBroken
-
 /-- Forward `HyperEdge` list for the Coupled LC Drives Stator Electro-Thermal-Magnetic Loss
 Hypergraph (`statorCoupledLossHypergraph`):
 * Boundary inputs `[0, 1, 2, 3]` = `(currentA, toothWidthUm, channelAspect, fcmlFreqKhz)`:
@@ -2779,9 +2762,6 @@ theorem statorCoupledLoss_adjoint_eqSat_sound
     evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp, statorCoupledLossAdjointEnv,
     List.foldl, List.map]
   grind
-
-#tooth statorCoupledLoss_adjoint_eqSat_sound by mutation
-  pruneDeadEdges := pruneDeadEdgesBroken
 
 end Obend.Analysis
 end

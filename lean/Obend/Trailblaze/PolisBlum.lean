@@ -1149,18 +1149,6 @@ theorem blum_write_then_read_sound
       simp only [↓reduceIte] at hRw
       exact ih (some hd.addr) hd.val hRw
 
-/-- Broken `checkLocalRwStep` mutant that forgets to check `op.val == expected` on reads. -/
-def checkLocalRwStepMutantIgnoreReadVal (curAddr : Option Nat) (lastVal : BitVec 64) : List MemOp → Bool
-  | [] => true
-  | op :: rest =>
-    if op.isWrite then
-      checkLocalRwStepMutantIgnoreReadVal (some op.addr) op.val rest
-    else
-      let expected := if curAddr == some op.addr then lastVal else 0#64
-      checkLocalRwStepMutantIgnoreReadVal (some op.addr) expected rest
-
-#tooth blum_write_then_read_sound by mutation checkLocalRwStep := checkLocalRwStepMutantIgnoreReadVal
-
 /-- Soundness of `verifyBlumMemory`: preserves transcript length, all per-operation multiplicities,
     chronological online ordering, `(addr, timestamp)` offline sorting, and local RAW consistency. -/
 theorem verifyBlumMemory_sound

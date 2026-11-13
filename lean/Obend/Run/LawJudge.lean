@@ -534,12 +534,6 @@ public theorem lawSubmissionJudge_inhabited :
     rfl
   exact ⟨hFrag, ⟨kOk, hkOk⟩, ⟨K, hkBad⟩, hFut⟩
 
-#tooth checkLawSubmission_sound by mutation
-  checkLawSubmission := fun _ _ _ => .ok
-
-#tooth checkLawSubmission_refuted by mutation
-  checkLawSubmission := fun _ _ _ => .refused (.futureSubmission 1 0) []
-
 end Obend.Run
 
 end

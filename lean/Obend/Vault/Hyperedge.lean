@@ -875,12 +875,6 @@ theorem unreported_state_inflation_refused :
     checkDeltaMatchesStateBalances ["USDC"] unreportedInflationDelta = false := by
   decide
 
-#tooth unreported_state_inflation_refused by mutation
-  checkDeltaMatchesStateBalances := fun _ _ => true
-
-#tooth stateBoundTurn_conserves_actual_state_balances by mutation
-  checkTurnStateBalancesBound := fun _ _ => true
-
 /-- **Derived Half-Edges Match State Balances (`deriveHalfEdgesFromState_sound`)**:
     When `d.halfEdges` is populated via `deriveHalfEdgesFromState d assets` for a duplicate-free
     asset list `assets`, `checkDeltaMatchesStateBalances assets` is guaranteed to return `true`. -/
@@ -914,9 +908,6 @@ theorem deriveHalfEdgesFromState_matches (d : CellDelta) (assets : List String)
   unfold cellAssetDelta deltaAsset
   simp only [find?_map_deriveHalfEdges h_nodup d ha]
   rfl
-
-#tooth deriveHalfEdgesFromState_matches by mutation
-  deriveHalfEdgesFromState := fun _ _ => []
 
 end Obend.Vault
 

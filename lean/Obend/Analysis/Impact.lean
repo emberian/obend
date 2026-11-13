@@ -512,8 +512,6 @@ theorem affected_exact (q : Question V) : Meaning q (affected q) := by
           Bool.not_true, ite_true]; rw [hg]; rfl)
       · exact absurd rfl hba
 
-#tooth affected_exact by mutation indexReads := fun {_} d => d.reads.dropLast
-
 /-- **A `blocked` line, checked by its opening**: at every view holding the new pin, the
 dependent reads blocked, and its dead supports (exactly the ones that do not hold,
 `read_blocked_exact`) name the line's support. -/

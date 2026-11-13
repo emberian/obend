@@ -3,7 +3,7 @@ module
 public import Obend.Elab.Coerce
 public meta import Obend.Elab.Coerce
 
-@[expose] public section
+public section
 namespace Obend.Elab.Proofs.CoerceProbes
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Bidirectional Obend.Elab.Coerce
 open Obend.Core.Proofs.BidirectionalCompleteness
@@ -11,7 +11,7 @@ open Obend.Core.Term (Term)
 
 def quantities : List Quantity := [.erased, .affine, .linear, .unrestricted]
 
-/-- Astra's η-wrapper experiment: `λx. f x` at a `q'` parameter, `f` an unrestricted reusable
+/-- η-wrapper probe: `λx. f x` at a `q'` parameter, `f` an unrestricted reusable
 `q → Nat` function in the context. -/
 def wrapperMeasured (q q' : Quantity) : Bool :=
   (checkAgainst ⟨.lam (.app (.bound 1) (.bound 0)),
@@ -19,8 +19,8 @@ def wrapperMeasured (q q' : Quantity) : Bool :=
     [⟨.arrow .reusable q .natural .natural, .unrestricted⟩]
     (.arrow .reusable q' .natural .natural)).toBool
 
--- The measured matrix, row by row. Astra's (and this checker's until `linear` separated from
--- `affine`, 2026-11-01) was [[F,T,T,T],[F,T,T,T],[F,T,T,T],[F,F,F,T]]. Exactly two cells change,
+-- The measured matrix, row by row. Until `linear` separated from `affine` (2026-11-01),
+-- the matrix was [[F,T,T,T],[F,T,T,T],[F,T,T,T],[F,F,F,T]]. Exactly two cells change,
 -- (erased, linear) and (affine, linear): a wrapper whose parameter is `linear` hands it to a callee
 -- that may drop it, and `argumentAllowed` now refuses a `linear` hypothesis as the argument of a
 -- non-`linear` parameter. Every other cell, (linear, affine) among them, is unchanged.
@@ -39,7 +39,7 @@ def wrapperMeasured (q q' : Quantity) : Bool :=
 -- and `wrapperAllowed` is that matrix
 #guard quantities.all fun q => quantities.all fun q' => wrapperMeasured q q' == wrapperAllowed q q'
 
-/-- Astra line 57's source row: a custody handle, a natural, and a once closure. -/
+/-- Multi-field custody source row: a custody handle, a natural, and a once closure. -/
 def custodyRow : Ty :=
   .field "handle" (.custody 0) (.field "tag" .natural
     (.field "extra" (.arrow .once .affine .natural .natural) .emptyRow))

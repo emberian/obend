@@ -2262,12 +2262,6 @@ theorem interaction_net_annihilation_zero_alloc_and_involutive
   · unfold stDup stepActivePair dupPair mkDupNode inetNodeToInertSlot inetNodeToInertKind
     simp [hFreeLen]
 
-/-- Broken `stepActivePair` that allocates a dummy BRAM slot on `CON-CON` annihilation. -/
-def stepActivePairBadAlloc (st : InteractionNetPeState) (_pair : ActivePair) : InteractionNetPeState :=
-  { st with allocCount := st.allocCount + 1 }
-
-#tooth interaction_net_annihilation_zero_alloc_and_involutive by mutation stepActivePair := stepActivePairBadAlloc
-
 /-- Lemma: if `st.activeQueue.any hasDupInPair = false` and `p ∈ st.activeQueue`, then `hasDupInPair p = false`. -/
 theorem hasDupInPair_false_of_hasDupNode_false
     (st : InteractionNetPeState) (p : ActivePair)
@@ -2323,12 +2317,6 @@ theorem affine_bendtt_net_zero_commutations
       first
       | exact hFree2 _ _
       | exact hFree2Plus1 _ _ _ rfl
-
-/-- Broken `stepActivePair` that spuriously increments `commutationCount` even on affine pairs. -/
-def stepActivePairSpuriousComm (st : InteractionNetPeState) (_pair : ActivePair) : InteractionNetPeState :=
-  { st with commutationCount := st.commutationCount + 1 }
-
-#tooth affine_bendtt_net_zero_commutations by mutation stepActivePair := stepActivePairSpuriousComm
 
 /-- Construct a `NocFlit` request packet injected at origin tile `(0, 0)` targeting Book compute
 tile `(1, 1)` for `targetSlot` with argument `argVal`. -/
@@ -2433,21 +2421,6 @@ theorem nocFabric_simulates_book
       deliverFlitsToFabric, deliverFlitToFabric, deliverFlitToTiles,
       stepNocRouter, stepNocFlitXy, NocFlit.atDest, mkBookNocRequest,
       evalTileRuleOnFlit, hfind]
-
-/-- Broken `mkBookNocRequest` that routes to `(0, 0)` instead of `(1, 1)` (bypassing multi-hop XY routing). -/
-def mkBookNocRequestLocal (targetSlot : Nat) (argVal : BitVec 64) (flitId : Nat) : NocFlit where
-  flitId     := flitId
-  kind       := .request
-  srcX       := 0
-  srcY       := 0
-  curX       := 0
-  curY       := 0
-  dstX       := 0
-  dstY       := 0
-  targetSlot := targetSlot
-  payload    := argVal
-
-#tooth nocFabric_simulates_book by mutation mkBookNocRequest := mkBookNocRequestLocal
 
 /-! ## 10. Synthesizable SystemVerilog-2012 Structural Macros (`emitNocRouterXySV`, `emitIcapDprTileSV`) -/
 

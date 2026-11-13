@@ -1562,9 +1562,6 @@ example :
     Interval.containsRat (evalTaylorModelRange (tmLn1pCertified ⟨-1, 0⟩)) 0 = false := by
   decide +kernel
 
-#tooth analyticModel_domain_guard_rejects_out_of_domain by mutation
-  Obend.Analysis.Interval.subset := fun _ _ => true
-
 end Obend.Analysis
 end
 

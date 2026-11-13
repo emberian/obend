@@ -423,9 +423,6 @@ theorem kindChain_of_kept (es : List Entry) (name : String) {old new : String} (
   simp only [lawsKept, Bool.and_eq_true, beq_iff_eq] at h
   simp only [kindChain, kindsFor, pageKind, h.2]
 
--- Comparing the law lines alone lets a write retarget its kind and be judged by the old kind's laws.
-#tooth lawsFor_of_kept by mutation lawsKept := fun old new => lawLines old == lawLines new
-
 /-- **A page's pin goes stale exactly when a kind it rests on is revised**, its blocked read naming
 the kinds that moved (`Obend.Kind.kind_stale_iff_blocked` at the vault's registry). -/
 theorem page_kind_stale_iff_blocked (ks : Obend.Kind.Kinds Laws) (p : Obend.Kind.KindPin) :
@@ -1229,7 +1226,6 @@ def judgePreparedFrom (es res : List Entry) (pr : Prepared) (over : List (String
       lackingNote laws law (unresolvedNames env (settled G')) (unresolvedInsertedNames env p.current G'))
   | .undecided why => throw ("undecided: " ++ why)
 
-
 /-- The scan semantics of a judgment. The indexed implementation below changes only its
 candidate enumeration; the laws, states, and first-refusal order are shared. -/
 def judgePrepared (es res : List Entry) (pr : Prepared) (over : List (String × Obend.Core.Data.Data)) :
@@ -1845,7 +1841,6 @@ def admitWritesIndexed (H : Hash) (res : List Entry) (s : Store) (pending : List
       | cons r refused => exact (admitWritesWithIndex_eq H res s [w] (r :: refused) _).symm
     | cons w' rest => exact (admitWritesWithIndex_eq H res s (w :: w' :: rest) refused _).symm
 
-
 /-- The folders enclosing a page name, counted. -/
 def depthOf (name : String) : Nat := (name.splitOn "/").length
 
@@ -1920,7 +1915,6 @@ def writesForIndexed (s : Store) (V : List (String × String)) : List (String ×
 @[csimp] theorem writesFor_eq_indexed : @writesFor = @writesForIndexed := by
   funext s V
   simp only [writesFor, writeOf, writesForIndexed, Index.first_pairs_lookup] <;> rfl
-
 
 def refusedAtIndexed (H : Hash) (res : List Entry) (s : Store) (V : List (String × String)) :
     List RefusedWrite :=
@@ -2146,7 +2140,6 @@ def settleIndexed (H : Hash) (s : Store) : Store :=
     { s1 with pages := s1.pages.map (remarkInWorld H (indexedWorld (Index.ofList Page.id s1.pages))) }
   rw [indexedWorld_pages s1]
   rfl
-
 
 theorem fixDangling_name (H : Hash) (s : Store) (p : Page) : (fixDangling H s p).name = p.name := by
   unfold fixDangling
@@ -2954,9 +2947,6 @@ theorem mem_writes {s : Store} {V : List (String × String)} {n t : String}
         exact ⟨hs, md, hl, he⟩
     · cases hwo
 
-#tooth open_idem by mutation writesFor := fun _ _ => []
-#tooth open_idem by mutation quiet := fun _ _ => false
-
 /-! ## The other commands
 
 Each takes the store as an open left it and returns the new store, or why it refused. -/
@@ -3203,8 +3193,6 @@ theorem select_section_zero_refused (s : Store) (who : Actor) (page : String) (i
       | some G => exact ⟨_, rfl⟩
     · exact ⟨_, rfl⟩
 
-#tooth select_section_zero_refused by mutation sectionAt := fun G k => (sections G)[k - 1]?
-
 /-- **A selection keeps its candidate**: every run the kept candidate shows is as it was. -/
 theorem select_keeps (G : Graph) (alts : List (AtomId × List Segment)) (i : Nat) {a : AtomId}
     {h : AtomId} {keep : List Segment} (hi : alts[i]? = some (h, keep)) (ha : a ∈ segAtoms keep) :
@@ -3232,10 +3220,6 @@ theorem post_needs_grant (H : Hash) (s : Store) (m : Member) (page text : String
     ∃ msg, postAs H s (.member m) page text = .error msg := by
   obtain ⟨p, hp⟩ := Option.isSome_iff_exists.1 hp
   simp [postAs, hp, Actor.may, hm, Actor.name]
-
-#tooth mergePage_pushout by mutation mergePage := fun A _ => some A
-#tooth select_needs_grant by mutation Actor.may := fun _ _ _ => true
-#tooth post_needs_grant by mutation Actor.may := fun _ _ _ => true
 
 /-! ### Birth under a kind -/
 

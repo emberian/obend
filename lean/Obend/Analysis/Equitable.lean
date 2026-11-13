@@ -2465,19 +2465,5 @@ theorem computeLagrangeProjector_2x2_and_3x3_universal
     exact ⟨⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩, ⟨by grind, by grind, by grind⟩⟩
   · decide +kernel
 
-/-- Broken `computeLagrangeDenominator` that adds instead of multiplying eigenvalue differences. -/
-def computeLagrangeDenominatorAddBug (eigs : List Int) (k : Nat) : Int :=
-  let lamK := listGetInt eigs k
-  (List.range eigs.length).foldl (fun acc j =>
-    if j == k then acc else acc + (lamK - listGetInt eigs j)) 0
-
-#tooth computeLagrangeProjector_2x2_and_3x3_universal by mutation computeLagrangeDenominator := computeLagrangeDenominatorAddBug
-
-/-- Broken `wlRefineStep` that always returns the constant zero coloring `fun _ => 0`. -/
-def wlRefineStepConstZeroBug (_A : IntMatrix) (_n : Nat) (_color : Nat → Nat) : Nat → Nat :=
-  fun _ => 0
-
-#tooth wlStabilize_fixedPoint_iff_equitable by mutation wlRefineStep := wlRefineStepConstZeroBug
-
 end Obend.Analysis
 end

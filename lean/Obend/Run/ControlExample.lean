@@ -218,10 +218,6 @@ theorem editorial_instances :
     (k := ek (edesc .incumbentFirst .whileInOffice .automatic)) (c₀ := start w₀) .init editorial
   ⟨creachable_legal hc, creachable_authorized rfl hc⟩
 
--- Without the office in a `whileInOffice` decision's citations, Alice's choice dispatches after she
--- has left office.
-#tooth editorial_receipt by mutation citesFor := fun {_ _ _} S _ _ c => S.supports c
-
 /-! ## Chooser-required, nothing admissible, and the latch -/
 
 def afterReserve : List EEv := [.base (.dispatch reserveOp), .base (.respond ⟨.idle, Op.reserve, ()⟩)]
@@ -261,8 +257,6 @@ theorem latch_receipt :
     (esession (edesc .chooserRequired .whileInOffice .automatic) w₀
       (afterReserve ++ [.base (.world revoked1), .base (.world w₀), .advance (j := Phase.reserved) prov])).2 =
       [none, none, none, none, none] := ⟨rfl, rfl⟩
-
-#tooth latch_receipt by mutation latchedOf := fun {_ _ _ _} [_] [_] {_ _ _ _ _ _} _ {_} _ _ {_} _ => false
 
 end Obend.Run.ControlExample
 

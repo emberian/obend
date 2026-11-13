@@ -2341,12 +2341,6 @@ theorem evalFRepGradBox_lipschitz_sound
   rw [hL, Int.add_mul, Int.add_mul]
   omega
 
-/-- Broken `computeCertifiedLipschitzBox` returning a constant `0` Lipschitz bound. -/
-def computeCertifiedLipschitzBoxBroken (_B : Box3D) (_e : FRepExpr) : Nat := 0
-
-#tooth evalFRepGradBox_lipschitz_sound by mutation
-  computeCertifiedLipschitzBox := computeCertifiedLipschitzBoxBroken
-
 /-- Positive scaling homogeneity of `frepIntAbs`. -/
 theorem frepIntAbs_scalePos (k : Nat) (z : Int) :
     frepIntAbs (Int.ofNat k * z) = Int.ofNat k * frepIntAbs z := by
@@ -2870,13 +2864,6 @@ theorem checkWall_sound (outer inner : FRepExpr) (tx ty tz d : Nat) (B : Box3D)
   · exact frep_octree_prune_interior_sound (b.grow tx ty tz) outer hl qx qy qz
       (Box3D.grow_contains b tx ty tz px py pz qx qy qz hb hd)
 
-/-- A wall test that ignores the growth: it accepts any box whose own points are inside `outer`. -/
-def wallLeafBroken (outer inner : FRepExpr) (_tx _ty _tz : Nat) (B : Box3D) : Bool :=
-  decide (0 < (evalFRepInterval B inner).lo) || decide ((evalFRepInterval B outer).hi ≤ 0)
-
-#tooth checkWall_sound by mutation
-  wallLeaf := wallLeafBroken
-
 /-! ## 8. Cutters as solids: ball end mill with shank on an integer tool axis
 
 A tool axis is an integer vector `(ux, uy, uz)` whose length `n` is an integer (`(0,0,1)`, `(3,0,4)`
@@ -2976,8 +2963,6 @@ def densifyPolyline : List (Int × Int × Int) → List (Int × Int × Int)
   | [] => []
   | [p] => [p]
   | p :: q :: rest => p :: (latticeSegment p q).dropLast ++ densifyPolyline (q :: rest)
-
-
 
 /-! ## 9. Continuous motion: rational points and rational tool positions
 

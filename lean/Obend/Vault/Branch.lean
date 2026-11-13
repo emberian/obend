@@ -2860,10 +2860,8 @@ theorem merge_vault_agrees {base : Config} {L R : Branch} {text : TextMerge} {m 
 /-! ## Teeth -/
 
 /- Removing the tip check (`authRefusal` always passing) loses `settled_at_tip`'s proof. -/
-#tooth settled_at_tip by mutation authRefusal := fun _ _ _ => none
 
 /- Judging every write on the store of states, the vault's store kept but not asked, loses the one
 judgment. -/
-#tooth tip_lands_iff_store_lands by mutation judgeWrite := fun c _ => .ok c.vault
 
 end Obend.Vault.Branch

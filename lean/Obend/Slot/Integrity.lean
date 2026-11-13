@@ -219,8 +219,6 @@ theorem slotFiller_integrity :
           exact ⟨h, fun c hc => by cases hc; simpa using hu⟩
     exact ⟨hsel.2, (select_error hsel.1).1, select_names hsel.1⟩
 
-#tooth slotFiller_integrity by mutation Slot.advance := fun _ _ _ _ => .error []
-
 /-- The slot's filler has REPAIR, as the corollary it is. -/
 theorem slotFiller_repair : Integrity.repair (slotFiller : Filler V Fact Cand) :=
   repair_of_contextual slotFiller_integrity.1
@@ -267,8 +265,6 @@ theorem select_reuse {S : Slot Fact Cand} {holds : Fact → Bool} {pre post : Li
   rw [List.filter_append, List.filter_eq_nil_iff.2 fun c' h => by simp [hpre c' h],
     List.filter_cons_of_pos hc]
   rfl
-
-#tooth select_reuse by mutation Slot.alternatives := fun _ _ _ => []
 
 /-! ## The floor -/
 
@@ -349,8 +345,6 @@ theorem toy_repair :
     slotFiller.fill toySlot 1 toyOrder = .ok .bob :=
   ⟨rfl, rfl, rfl⟩
 
-#tooth toy_repair by mutation toyOrder := []
-
 /-- The same, as transitions of the stored selection: Alice's selection is kept at height 0, moves to
 Bob at height 1, and Bob's is kept at height 0 although Alice comes first in the order. -/
 theorem toy_advance :
@@ -358,8 +352,6 @@ theorem toy_advance :
     slotAdvance.advance toySlot 1 toyOrder (some .alice) = .ok .bob ∧
     slotAdvance.advance toySlot 0 toyOrder (some .bob) = .ok .bob :=
   ⟨rfl, rfl, rfl⟩
-
-#tooth toy_advance by mutation toyOrder := []
 
 theorem toy_alice_dead : holdsAt (V := Nat) 1 Member.alice = false := by rfl
 
@@ -371,8 +363,6 @@ theorem not_integrity_credulousHoles :
   rw [toy_alice_dead] at this
   cases this
 
-#tooth not_integrity_credulousHoles by mutation Integrity.contextual := fun {_ _ _} [_] _ => True
-
 /-- FLOOR. Re-selecting at every view drops Bob's stored selection at height 0, where it is usable,
 for Alice, who comes first. -/
 theorem not_transition_churn : ¬ Integrity.incumbentTransition (churn : Advance Nat Member Member) := by
@@ -380,15 +370,11 @@ theorem not_transition_churn : ¬ Integrity.incumbentTransition (churn : Advance
   have := (h toySlot 0 toyOrder (some .bob)).1 .bob rfl rfl
   cases this
 
-#tooth not_transition_churn by mutation churn := slotAdvance
-
 /-- FLOOR. Keeping the stored selection keeps Alice's at height 1, where her grant is retired. -/
 theorem not_transition_sticky : ¬ Integrity.incumbentTransition (sticky : Advance Nat Member Member) := by
   intro h
   have := ((h toySlot 1 toyOrder (some .alice)).2.1 .alice rfl).1
   cases this
-
-#tooth not_transition_sticky by mutation sticky := slotAdvance
 
 /-- Astra's countermodel to replay without the prefix: candidate 0 cites `early`, candidate 1 cites
 `chosen`. With only `chosen` live the slot selects 1; once `early` is live too it selects 0, though

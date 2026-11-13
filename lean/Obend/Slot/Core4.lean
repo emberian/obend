@@ -167,10 +167,6 @@ theorem wide_record_refused_at_depth_grant (A : Ty) : judge 3 [] wideRecord A = 
   have : checkWork wideRecord = 1001 := wide_record_work.2
   simp [judge, this]
 
-#tooth extend_filling_admitted by mutation judge := fun _ _ _ _ => false
-#tooth extend_filling_budget_refused by mutation judge := fun _ Ψ t A =>
-  (Obend.Core.Bidirectional.checkAgainst t Ψ A).toBool
-
 /-- Supplied annotations can still disagree with a typed erased program. -/
 def wronglyAnnotated : AnnotatedTerm :=
   ⟨.app (.lam (.bound 0)) (.nat 1), fun _ => some ⟨.boolean, .boolean, .unrestricted, .reusable⟩, {}⟩

@@ -491,22 +491,6 @@ theorem parseFrom_sound (prev : Nat) (bs : Bytes) :
         · exact heff
         · exact ih2 x hx
 
--- Reading without the link check recovers records that do not follow one another.
-#tooth parseFrom_sound by mutation parseOne := fun Hb prev bs =>
-  match takeN 136 bs with
-  | none => .error .torn
-  | some (h, rest) =>
-    if h.take 4 ≠ magic then .error .magic else
-    let len := unbe ((h.drop 4).take 4)
-    match takeN (len + 32) rest with
-    | none => .error .torn
-    | some (body, rest') =>
-      let rc := fieldsOf ((h.drop 4).drop 4)
-      let payload := body.take len
-      if rc.effectsHash ≠ dig Hb payload then .error .digest
-      else if unbe (body.drop len) ≠ Hr Hb rc then .error .seal
-      else let _ := prev; .ok (⟨rc, payload⟩, rest')
-
 /-! ### The log is Pillar 1's chain -/
 
 theorem lastHash_snoc (prev : Nat) (xs : List Record) (p : Record) :

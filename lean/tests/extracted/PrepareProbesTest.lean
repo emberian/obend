@@ -3,7 +3,7 @@ module
 public import Obend.Elab.Prepare
 public meta import Obend.Elab.Prepare
 
-@[expose] public section
+public section
 
 namespace Obend.Elab.Proofs.PrepareProbes
 open Obend.Core.Ty Obend.Core.Check Obend.Core.Bidirectional Obend.Elab.Prepare

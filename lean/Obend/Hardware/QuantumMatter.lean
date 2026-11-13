@@ -1543,19 +1543,6 @@ theorem perturbative_disorder_leakage_bound
   simp only [Nat.mul_zero, Nat.zero_mul, Nat.le_zero] at hBound
   exact hBound
 
-/-- Broken `equitableBreakingScore` that always returns `0`. -/
-def equitableBreakingScoreConstZeroBug
-    (_dH : IntMatrix) (_n _r : Nat) (_part : List (List Nat)) (_Q_d : Nat → Nat → Int) : Nat := 0
-
-#tooth breakingScore_zero_iff_equitable by mutation equitableBreakingScore := equitableBreakingScoreConstZeroBug
-
-/-- Broken `evalDuhamelLeakageRecurrence` that omits the previous step accumulation term `opNorm * E_k`. -/
-def evalDuhamelLeakageRecurrenceDropPrevBug (opNorm epsBreak : Nat) : Nat → Nat
-  | 0 => 0
-  | k + 1 => epsBreak * (opNorm ^ k)
-
-#tooth perturbative_disorder_leakage_bound by mutation evalDuhamelLeakageRecurrence := evalDuhamelLeakageRecurrenceDropPrevBug
-
 /-! ## 8. True Planar 4-Mode Clements Photonic MZI Mesh (`evalPlanarClements4x4`, `planarClements4x4_conserves_optical_power`) -/
 
 /-- Evaluate a single **Planar Odd Nearest-Neighbor Layer** on a 4-mode waveguide array with
@@ -1627,16 +1614,6 @@ theorem planarClements4x4_conserves_optical_power
   have h2 := hBase.2.1 hUnit
   rw [hUnit, Int.one_mul] at h2
   exact h2
-
-/-- Broken `evalPlanarClements4x4` that zeroes out mode 1 in the odd layer (violating power conservation). -/
-def evalPlanarClements4x4LossyBug
-    (t kappa : Int)
-    (e0 e1 e2 e3 : ComplexField) :
-    ComplexField × ComplexField × ComplexField × ComplexField :=
-  let (m0, _m1, m2, m3) := evalPhotonicArray4LayerEven t kappa t kappa e0 e1 e2 e3
-  (m0, ⟨0, 0⟩, m2, m3)
-
-#tooth planarClements4x4_conserves_optical_power by mutation evalPlanarClements4x4 := evalPlanarClements4x4LossyBug
 
 /-! ## 9. Symmetric `StrictOpenHypergraph` Equitable Quotient Compression & `quotientHypergraphSlot` (`quotientOpenHypergraph_intertwines_eval_and_adjoint`, `quotientHypergraph_moved_pin_blocks`) -/
 
@@ -1987,23 +1964,6 @@ theorem quotientHypergraph_moved_pin_blocks
     simp [Slot.select, Slot.alternatives, hNotUsable, hFallbackUsable]
   refine ⟨hRead, hAdv, ?_⟩
   decide +kernel
-
-/-- Broken `quotientOpenHypergraph` that swaps cell weights $W_0$ and $W_1$. -/
-def quotientOpenHypergraphSwapWeightsBug (W0 W1 : Int) (op2 : OpticOp) : StrictOpenHypergraph :=
-  let cell0 := opticFwdHyperEdges (.scale W1) 0 1 2 4 ++ opticFwdHyperEdges op2 2 1 3 5
-  let cell1 := opticFwdHyperEdges (.scale W0) 6 7 8 10 ++ opticFwdHyperEdges op2 8 7 9 11
-  mkStrictOpenHypergraph 12
-    [0, 1, 6, 7]
-    [3, 9]
-    (reindexHyperEdges (cell0 ++ cell1))
-
-#tooth quotientOpenHypergraph_intertwines_eval_and_adjoint by mutation quotientOpenHypergraph := quotientOpenHypergraphSwapWeightsBug
-
-/-- Broken `QuotientHypergraphCandidate.supports` that drops all channel weight pins (`[]`). -/
-def quotientSupportsDropPinsBug : QuotientHypergraphCandidate → List LeafPin
-  | _ => []
-
-#tooth quotientHypergraph_moved_pin_blocks by mutation QuotientHypergraphCandidate.supports := quotientSupportsDropPinsBug
 
 end Obend.Hardware.QuantumMatter
 end

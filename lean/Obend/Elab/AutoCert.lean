@@ -1717,7 +1717,6 @@ theorem checkGroebnerJudge_sound (grade : Nat) (q : GroebnerQuery) (c : Groebner
       simp only [verifyGroebnerCert, Bool.and_eq_true] at hV
       exact checkPsatzNonneg_sound q.target q.ineqGens q.eqGens cert ρ hV.2 hIneqs hEqs
 
-
 /-- `checkGroebnerJudge_sound` for an ideal-membership query (`q.isNonneg = false`), without the
 `match` on the certificate: `verifyGroebnerCert` refuses a Positivstellensatz certificate on such a
 query (its branch begins `q.isNonneg && …`), so an accepted certificate is a membership one and the
@@ -1757,9 +1756,6 @@ theorem checkGroebnerJudge_refuses_unit_basis_on_empty_ideal (cert : IdealMember
     decide +kernel
   rw [hBasis] at hV
   exact Bool.false_ne_true hV.1.1.2
-
-#tooth checkGroebnerJudge_refuses_unit_basis_on_empty_ideal by mutation
-  checkGroebnerJudge := fun _ _ _ => .ok
 
 @[expose] instance groebnerJudge : Judge GroebnerQuery GroebnerCert where
   Clause := String

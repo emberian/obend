@@ -72,7 +72,7 @@ theorem rotlK_toBitVec (x : UInt64) (k j : Nat) (hk : 0 < k) (hk64 : k < 64) (hj
   have hkm : k % 64 = k := Nat.mod_eq_of_lt hk64
   have hne : k % 64 ≠ 0 := by omega
   have hk0 : k ≠ 0 := by omega
-  simp only [rotl, hne, if_false, hkm, hk0] at hr
+  simp only [rotl, hne, ite_false, hkm, hk0] at hr
   rw [← hr]
   have hjk : j = 64 - k := by omega
   subst hjk
@@ -80,7 +80,7 @@ theorem rotlK_toBitVec (x : UInt64) (k j : Nat) (hk : 0 < k) (hk64 : k < 64) (hj
 
 theorem bv_rotateLeft_zero (x : BitVec 64) : x.rotateLeft 0 = x := by
   have hr := rotl_toBitVec (UInt64.ofBitVec x) 0
-  simp only [rotl, Nat.zero_mod, if_true, UInt64.toBitVec_ofBitVec] at hr
+  simp only [rotl, Nat.zero_mod, ite_true, UInt64.toBitVec_ofBitVec] at hr
   exact hr.symm
 
 /-- Byte `j` of `b`, or zero past the end. -/
@@ -549,7 +549,7 @@ theorem foldl_setIfInBounds_getElem? {α : Type} (g : Nat → Nat) (f : Nat → 
           · subst hgt
             by_cases hlt : g x < a.size <;> simp [hlt]
           · have hb : (g x == t) = false := by simp [hgt]
-            simp only [hb, hgt, if_false]
+            simp only [hb, hgt, ite_false]
 
 theorem rhoPi_eq_fold (st : State) :
     rhoPi st = (List.range 25).foldl
@@ -652,17 +652,17 @@ theorem shl_byte (v : UInt8) (t : Nat) (ht : t < 8) :
 
 theorem getD_take_drop (l : List UInt8) (off q : Nat) (hq : q < 136) :
     ((l.drop off).take 136).getD q 0 = l.getD (off + q) 0 := by
-  simp only [List.getD_eq_getElem?_getD, List.getElem?_take, hq, if_true,
+  simp only [List.getD_eq_getElem?_getD, List.getElem?_take, hq, ite_true,
     List.getElem?_drop]
 
 theorem getD_data (b : ByteArray) (j : Nat) : b.data.toList.getD j 0 = byteOr0 b j := by
   unfold byteOr0
   by_cases h : j < b.size
-  · rw [dif_pos h, List.getD_eq_getElem?_getD, Array.getElem?_toList]
+  · simp only [h, ↓reduceDIte, List.getD_eq_getElem?_getD, Array.getElem?_toList]
     have h' : j < b.data.size := h
     rw [Array.getElem?_eq_getElem h']
     rfl
-  · rw [dif_neg h, List.getD_eq_getElem?_getD, Array.getElem?_toList]
+  · simp only [h, ↓reduceDIte, List.getD_eq_getElem?_getD, Array.getElem?_toList]
     have h' : ¬ j < b.data.size := h
     rw [Array.getElem?_eq_none (by omega)]
     rfl
@@ -692,8 +692,8 @@ theorem xorBlockS_toState (s : KState) (b : ByteArray) (off : Nat) :
     (xorBlockS s b off).toState = xorRateBlock s.toState ((b.data.toList.drop off).take 136) := by
   apply toState_ext _ _ (by simp [xorRateBlock]) <;>
     simp (config := { decide := true }) only [xorRateBlock, Array.getElem_ofFn, rateLanes,
-      xorBlockS, toState_getElem_0, toState_getElem_1, toState_getElem_2, toState_getElem_3, toState_getElem_4, toState_getElem_5, toState_getElem_6, toState_getElem_7, toState_getElem_8, toState_getElem_9, toState_getElem_10, toState_getElem_11, toState_getElem_12, toState_getElem_13, toState_getElem_14, toState_getElem_15, toState_getElem_16, toState_getElem_17, toState_getElem_18, toState_getElem_19, toState_getElem_20, toState_getElem_21, toState_getElem_22, toState_getElem_23, toState_getElem_24, toState_getD_0, toState_getD_1, toState_getD_2, toState_getD_3, toState_getD_4, toState_getD_5, toState_getD_6, toState_getD_7, toState_getD_8, toState_getD_9, toState_getD_10, toState_getD_11, toState_getD_12, toState_getD_13, toState_getD_14, toState_getD_15, toState_getD_16, toState_getD_17, toState_getD_18, toState_getD_19, toState_getD_20, toState_getD_21, toState_getD_22, toState_getD_23, toState_getD_24, UInt64.toBitVec_xor, laneAt_eq, Nat.reduceMul, Nat.add_zero, if_true,
-      if_false]
+      xorBlockS, toState_getElem_0, toState_getElem_1, toState_getElem_2, toState_getElem_3, toState_getElem_4, toState_getElem_5, toState_getElem_6, toState_getElem_7, toState_getElem_8, toState_getElem_9, toState_getElem_10, toState_getElem_11, toState_getElem_12, toState_getElem_13, toState_getElem_14, toState_getElem_15, toState_getElem_16, toState_getElem_17, toState_getElem_18, toState_getElem_19, toState_getElem_20, toState_getElem_21, toState_getElem_22, toState_getElem_23, toState_getElem_24, toState_getD_0, toState_getD_1, toState_getD_2, toState_getD_3, toState_getD_4, toState_getD_5, toState_getD_6, toState_getD_7, toState_getD_8, toState_getD_9, toState_getD_10, toState_getD_11, toState_getD_12, toState_getD_13, toState_getD_14, toState_getD_15, toState_getD_16, toState_getD_17, toState_getD_18, toState_getD_19, toState_getD_20, toState_getD_21, toState_getD_22, toState_getD_23, toState_getD_24, UInt64.toBitVec_xor, laneAt_eq, Nat.reduceMul, Nat.add_zero, ite_true,
+      ite_false]
 
 /-- Absorb `count` full rate blocks of `b`, starting at byte `off`. -/
 def absorbLoop (b : ByteArray) : Nat → Nat → KState → KState
@@ -757,8 +757,8 @@ theorem padBA_data (b : ByteArray) (suffix : UInt8) :
   rw [size_eq_length]
   dsimp only
   by_cases hc : rateBytes - b.data.toList.length % rateBytes = 1
-  · rw [if_pos hc, if_pos hc, push_data]
-  · rw [if_neg hc, if_neg hc, push_data, pushZeros_data, push_data]
+  · simp only [hc, ↓reduceIte, push_data]
+  · simp only [hc, ↓reduceIte, push_data, pushZeros_data]
 
 /-- The padded sponge over a byte array, before squeezing. -/
 def spongeS (b : ByteArray) (suffix : UInt8) : KState :=
@@ -845,8 +845,8 @@ theorem cshake256Fast_eq (customization input : List UInt8) :
     cshake256Fast customization input = cshake256Bytes customization input := by
   unfold cshake256Fast cshake256Bytes
   by_cases h : customization = []
-  · simp only [h, if_true, sponge_fast_eq, pushList_data, empty_data, List.nil_append]
-  · simp only [h, if_false, sponge_fast_eq, pushList_data, empty_data, List.nil_append]
+  · simp only [h, ite_true, sponge_fast_eq, pushList_data, empty_data, List.nil_append]
+  · simp only [h, ite_false, sponge_fast_eq, pushList_data, empty_data, List.nil_append]
 
 
 /-! ## Attachment -/
@@ -865,9 +865,5 @@ theorem cshake256Bytes_eq_fast : cshake256Bytes = cshake256Fast := by
   exact (cshake256Fast_eq customization input).symm
 
 end Obend.Digest.Cshake256.Fast
-
-/-! `squeeze_fast_eq` is choice-free; the census admits `Classical.choice`, so this exact set is kept. -/
-/-- info: 'Obend.Digest.Cshake256.Fast.squeeze_fast_eq' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms Obend.Digest.Cshake256.Fast.squeeze_fast_eq
 
 end

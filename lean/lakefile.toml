@@ -2,15 +2,16 @@ name = "obend"
 version = "0.0.1"
 defaultTargets = ["Obend"]
 
-# Two build tiers (2026-11-01; apps and tests moved to tier 2 on 2026-11-04). `lake build` builds
-# tier 1, the library: every definition and proof under `Obend/` except `Obend/Apps/`, `Obend/Teeth/` and
+# Three-way build split (2026-11-01; apps and tests moved to tier 2 on 2026-11-04; compiled native
+# runner `obend-test` and `Teeth.Extracted` split added 2026-11-12). `lake build` builds tier 1, the
+# library: every definition and proof under `Obend/` except `Obend/Apps/`, `Obend/Teeth/` and
 # `Obend/Stdlib.lean`. Each tier has a time budget per module, 60 s in tier 1 and 600 s in tier 2,
 # enforced by `tools/build.sh tier1|tier2` from Lake's own timings (review/DECISIONS-20261031.md,
 # 2026-11-04); the pre-push hook runs tier 1 through it.
-# Tier 2 is the teeth (`Obend/Teeth/`: evaluation fixtures, mutation teeth, the legacy leaves), the
-# applications (`Obend/Apps/`, concrete `.obend` programs elaborated at compile time), the test suites
-# under `tests/` (`Tests`) and the census (`Obend/Census.lean`); it is run before a merge on a build box
-# as `lake build Obend.Census Teeth Tests`. Nothing in tier 1 imports tier 2.
+# Tier 2A (`lake exe obend-test` and `Tests` under `tests/`) runs compiled native runtime suites
+# and extracted compile-time vector/axiom guards; Tier 2B (`Teeth`: `Obend/Teeth/`, `Obend/Apps/`,
+# `Obend/Stdlib.lean`, and `Obend/Census.lean`) runs on-demand mutation teeth and full-tree census.
+# Nothing in tier 1 imports tier 2.
 # Lake globs cannot exclude, so tier 1 names each top-level module and directory of `Obend/` except
 # `Teeth` and `Census`; the census refuses a module under `Obend/` that neither tier builds.
 [[lean_lib]]
@@ -42,13 +43,19 @@ globs = [
   "Obend.Apps.SiliconKernelVerilator", "Obend.Apps.SovereignDrex", "Obend.Apps.ZkNtt",
 ]
 
-# Tier 2, the test suites (2026-11-04). Until this target existed the 30 files under
-# `tests/{metasystem,silicon_elab,rehydration}` (308 theorems, 157 `#tooth` commands) belonged to no
-# build target and were never elaborated.
+# Tier 2A, the test suites (2026-11-04; `extracted.+` added 2026-11-12): compile-time integration,
+# axiom-guard, and relocated vector suites under `tests/{metasystem,silicon_elab,rehydration,vault,Run,Crypto,extracted}`.
 [[lean_lib]]
 name = "Tests"
 srcDir = "tests"
-globs = ["metasystem.+", "silicon_elab.+", "rehydration.+", "vault.+", "Run.+", "Crypto.+"]
+globs = ["metasystem.+", "silicon_elab.+", "rehydration.+", "vault.+", "Run.+", "Crypto.+", "extracted.+"]
+
+# Tier 2A (2026-11-12): compiled native runtime test runner exercising `@[csimp]` fast paths
+# (`lake exe obend-test`, milliseconds suite runtime, ~2 MB runtime heap over `libLean` init).
+[[lean_exe]]
+name = "obend-test"
+srcDir = "tools/test"
+root = "ObendTest"
 
 # Lane B (2026-10-30): the declaration-level obligation journal. `Journal.Export` walks the built
 # environment; `Journal.Journal` reads two exports as slots. The tool does not `needs` the `Obend`

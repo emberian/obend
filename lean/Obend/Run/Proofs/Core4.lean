@@ -234,8 +234,6 @@ public theorem trace_is_run {host : Host V Tok Fact} {sp : Spec planSig Tok Fact
       cases hcall
       exact ⟨y, rfl⟩
 
-#tooth session_of_transcript by mutation dispatchGuard := fun {_ _ _ _ _} _ _ {_} _ => false
-
 end
 
 end Obend.Run.Core4

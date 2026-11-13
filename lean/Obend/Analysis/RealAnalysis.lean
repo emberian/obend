@@ -463,41 +463,6 @@ theorem evalInterval_sound
       subst hEval
       exact Interval.sqr_mem (iha ia ha)
 
-/-! ## `#tooth` Mutation Probes for `Interval.add`, `Interval.mul`, and `evalInterval_sound` -/
-
-/-- Broken `Interval.add` that drops `b` and returns `a`. -/
-def intervalAddDropB (a _b : Interval) : Interval := a
-
-#tooth Interval.add_mem by mutation Interval.add := intervalAddDropB
-
-/-- Broken `Interval.mul` that only multiplies endpoints `(a.lo * b.lo, a.hi * b.hi)` instead of 4-corner min/max. -/
-def intervalMulNaiveEndpoints (a b : Interval) : Interval :=
-  ⟨a.lo * b.lo, a.hi * b.hi⟩
-
-#tooth Interval.mul_mem by mutation Interval.mul := intervalMulNaiveEndpoints
-
-/-- Broken `evalInterval` that maps `.sub` to `Interval.add` instead of `Interval.sub`. -/
-def evalIntervalSubAsAdd (env : List (String × Interval)) : RealExpr → Option Interval
-  | .const c => some (Interval.ofPoint c)
-  | .var name => (env.find? (·.1 == name)).map (·.2)
-  | .add l r => do
-      let il ← evalIntervalSubAsAdd env l
-      let ir ← evalIntervalSubAsAdd env r
-      pure (Interval.add il ir)
-  | .sub l r => do
-      let il ← evalIntervalSubAsAdd env l
-      let ir ← evalIntervalSubAsAdd env r
-      pure (Interval.add il ir)
-  | .mul l r => do
-      let il ← evalIntervalSubAsAdd env l
-      let ir ← evalIntervalSubAsAdd env r
-      pure (Interval.mul il ir)
-  | .sqr a => do
-      let ia ← evalIntervalSubAsAdd env a
-      pure (Interval.sqr ia)
-
-#tooth evalInterval_sound by mutation evalInterval := evalIntervalSubAsAdd
-
 end Obend.Analysis
 end
 

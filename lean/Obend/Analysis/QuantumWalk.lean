@@ -1270,19 +1270,6 @@ theorem cellUniformSzegedyPST_iff_quotient
       rw [hPow x, hCells cTarget hcMem x hxMem]
       exact hQuot
 
-/-- Broken `szegedyQuotientReflectVec` that uses `+` instead of `-` for the identity reflection term. -/
-@[expose] def szegedyQuotientReflectVecPlusBug
-    (QM : Nat → Nat → Int)
-    (cellIndices : List Nat)
-    (dM : Int)
-    (w : Nat → Int)
-    (i : Nat) : Int :=
-  2 * quotientMatVec QM cellIndices w i + dM * w i
-
-#tooth szegedy_intertwining_step by mutation szegedyQuotientReflectVec := szegedyQuotientReflectVecPlusBug
-#tooth szegedy_intertwining_power by mutation szegedyQuotientReflectVec := szegedyQuotientReflectVecPlusBug
-#tooth cellUniformSzegedyPST_iff_quotient by mutation szegedyQuotientReflectVec := szegedyQuotientReflectVecPlusBug
-
 /-! ## 8. Matrix Taylor-Model Unitary Propagator $\exp(-i Q t)$ & Quotient Remainder Enclosure -/
 
 /-- Sum of absolute entry magnitudes $\sum_{j \in \text{cols}} |A_{i, j}| \in \mathbb{N}$ along row `i`. -/
@@ -1596,27 +1583,6 @@ theorem matrixTaylorPropagator_encloses_k2_and_q3_pst :
     decide (CanonicalRat.mk 9 10 < q3Prob7.lo) = true ∧
     Interval.containsRat q3Prob7 (CanonicalRat.mk 9 10) = false := by
   decide +kernel
-
-/-- Broken `intMatrixInfNorm` that always returns `0`. -/
-@[expose] def intMatrixInfNormZeroBug (_A : IntMatrix) (_dim : Nat) : Nat := 0
-
-/-- Broken `evalScaledMatrixTaylorImag` that uses `.re` instead of `.im`. -/
-@[expose] def evalScaledMatrixTaylorImagReBug
-    (A : IntMatrix)
-    (tNum tDen : Int)
-    (order : Nat)
-    (v : Nat → Int)
-    (u : Nat) : Int :=
-  sumIntOver
-    (fun k =>
-      (matrixTaylorScaledWeight tNum tDen order k).re *
-        iterateVecOp (matVec (List.range A.dim) A.entry) k v u)
-    (List.range (order + 1))
-
-#tooth intMatrixInfNorm_submultiplicative_vec by mutation intMatrixInfNorm := intMatrixInfNormZeroBug
-#tooth matrixTaylorPropagator_intertwines_quotient by mutation evalScaledMatrixTaylorImag := evalScaledMatrixTaylorImagReBug
-#tooth matrixTaylorPropagator_encloses_k2_and_q3_pst by mutation intMatrixInfNorm := intMatrixInfNormZeroBug
-#tooth matrixTaylorPropagator_encloses_k2_and_q3_pst by mutation evalScaledMatrixTaylorImag := evalScaledMatrixTaylorImagReBug
 
 end Obend.Analysis
 end

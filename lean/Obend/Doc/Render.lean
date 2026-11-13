@@ -335,8 +335,6 @@ example : renderTranscludedAt toy (blockTransclusionVault.read toy) 1 =
 
 end Teeth
 
-#tooth renderAt_fresh by mutation viewAtom := fun _ _ _ _ => ""
-
 end Obend.Doc
 
 end

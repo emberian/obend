@@ -228,8 +228,6 @@ theorem stratified_unique_glStable {P : Reasons.Program} {stratum : String → N
       ∀ M, IsGLStableModel P M → Reasons.Same M (Reasons.wf P).1 :=
   totalWF_unique_glStable (stratified_implies_totalWF hstrat)
 
-/-! ## 4. Stable Equilibrium Certificate Judge (`"gl-equilibrium@1"`) & `#tooth` Witnesses -/
-
 /-- Canonical format identifier for Gelfond–Lifschitz stable equilibrium certificates. -/
 @[expose] def glEquilibriumFormat : String := "gl-equilibrium@1"
 
@@ -303,10 +301,6 @@ theorem oddLoop_refused_by_judge (grade : Nat) (p : String) (M : List String) :
     unifiedEquilibriumJudge.check grade (oddLoopProgram p) M ≠ .ok := by
   intro hok
   exact oddLoop_no_glStable p M (unifiedEquilibriumJudge.sound hok)
-
--- Mutation witnesses: breaking `checkGLStable` or `checkSameSet` is immediately caught by the kernel.
-#tooth oddLoop_refused_by_judge by mutation checkGLStable := fun _ _ => true
-#tooth checkGLStable_sound by mutation checkSameSet := fun _ _ => true
 
 /-- Competing mutual-defeat program `a ← not b`, `b ← not a`:
     its well-founded model declines to choose (`([], ["a", "b"])`), while both `["a"]` and `["b"]`

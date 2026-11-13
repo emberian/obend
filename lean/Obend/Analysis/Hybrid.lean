@@ -1227,9 +1227,6 @@ theorem verifyFlowpipe_sound :
       p.automaton p.varName p.unsafeInterval c.schedule
       p.initState c.expectedFinalMode modes segs hRun hMode0 hBox0 hExec
 
-#tooth verifyFlowpipe_sound by mutation
-  verifyFlowpipe := fun _ _ => true
-
 /-- Concrete valid and invalid hybrid flowpipe problem/certificate fixtures. -/
 @[expose] def demoHybridProblem : HybridProblem :=
   { automaton := thermostatLinearAutomaton
@@ -1270,9 +1267,6 @@ example :
     verifyFlowpipe
       { demoHybridProblem with initMode := "bogus", initLo := 20, initHi := 22 }
       { schedule := [], expectedFinalMode := "bogus", claimedSteps := 0 } = false := by decide +kernel
-
-#tooth badHybridCert_rejected by mutation
-  verifyFlowpipe := fun _ _ => true
 
 /-- Decision procedure returning `Obend.Judge.Verdict String` for `(HybridProblem, HybridCert)`. -/
 @[expose] def checkHybridFlowpipe (_grade : Nat) (p : HybridProblem) (c : HybridCert) : Obend.Judge.Verdict String :=

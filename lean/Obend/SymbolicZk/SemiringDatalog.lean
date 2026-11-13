@@ -237,8 +237,6 @@ def tpSpec {K : Type} [ProvenanceSemiringOps K] (p : Array GroundRule)
     (v : KRelationSpec K) (q : GroundTuple) : K :=
   p.foldl (fun w r => if r.head = q then add w (evalRuleSpec v r) else w) zero
 
-
-
 private theorem index_lt_of_key_lt {K : Type} [ProvenanceSemiringOps K] {t : SortedKTable K}
     (hw : t.WF) (i j : Fin t.entries.size) (h : TupleLt t.entries[i.val].1 t.entries[j.val].1) : i.val < j.val := by
   by_cases hij : i.val < j.val
@@ -883,9 +881,6 @@ theorem evalRuleDeltaFast_decomposition {K : Type} [LawfulProvenanceSemiring K] 
   rw [fstHom]
   simpa only [LawfulProvenanceSemiring.add_zero] using sumHom
 
-#tooth sumRows_merge by mutation mergeRows := fun xs _ => xs
-#tooth buildSorted_sum by mutation buildSorted := fun _ => ⟨#[]⟩
-
 /-- Symbolic lineage before quotienting by semiring equations. -/
 inductive ProvExpr (VarId : Type) where
   | zero | one | var (v : VarId)
@@ -1001,7 +996,5 @@ theorem evalProvGoldilocks_hom {V : Type} (env : V → Obend.Crypto.Goldilocks) 
 theorem evalPolynomial_hom {V : Type} (env : V → Obend.Crypto.Goldilocks) :
     ProvenanceHom (evalPolynomial env) :=
   ⟨rfl, rfl, evalPolynomial_add env, evalPolynomial_mul env⟩
-
-#tooth gap_absent by mutation verifyGapCert := fun _ _ _ => true
 
 end Obend.SymbolicZk.Datalog

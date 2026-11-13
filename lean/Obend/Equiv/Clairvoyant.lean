@@ -1442,9 +1442,6 @@ theorem clairvoyant_dead_let_elim_bEquiv_and_strictly_cheaper (deadExpr body : T
     fun v k_unpruned hcv => cv_of_cv_deadLetBind hcv,
     hev1, (evalClairvoyantMinCost_value_sound (.nat 42) 2).1⟩
 
-def deadLetBindBroken (deadExpr _body : Term) : Term := deadExpr
-#tooth Obend.Equiv.clairvoyant_dead_let_elim_bEquiv_and_strictly_cheaper by mutation
-  Obend.Equiv.deadLetBind := deadLetBindBroken
 @[simp] theorem deadLetBind_nat (deadExpr : Term) (n : Nat) :
     deadLetBind deadExpr (.nat n) = .app (.lam (.nat n)) deadExpr := by simp [deadLetBind, Term.rename]
 @[simp] theorem evalClairvoyantMinCost_nat (fuel n : Nat) :

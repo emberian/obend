@@ -130,8 +130,6 @@ theorem checkHyperLaw2NonInterference_complete {World Obs : Type} [DecidableEq O
       rw [hFalse]
       rfl
 
-/-! ### Concrete 2-Trace Non-Interference Fixture & `#tooth` Witness -/
-
 /-- A concrete two-level security world state with a public `lowOut` channel and secret `highIn`. -/
 structure SecWorld where
   lowOut : Nat
@@ -158,11 +156,6 @@ example :
 theorem leaking_trace_refused :
     checkHyperLaw2NonInterference secLowView leakingTracePair = false := by
   rfl
-
--- Mutating the per-step low-equivalence guard to ignore leaks breaks `checkHyperLaw2NonInterference_sound`.
-#tooth checkHyperLaw2NonInterference_sound by mutation checkHyperLaw2Step :=
-  fun {_ _} [_] _ _ => true
-
 
 /-! ## Part II — Design D (`glEquilibriumJudge`): Gelfond–Lifschitz Modal `□` Epistemic Equilibrium Judge -/
 
@@ -391,8 +384,6 @@ theorem checkGLEquilibrium_complete {prog : ModalProgram} {candidate : FactSet}
 
 instance : Obend.Judge ModalProgram FactSet := glEquilibriumJudge
 
-/-! ### Self-Defeating Modal Fixture (`p ← ¬□p`), Stratified Default Fixture & `#tooth` Witness -/
-
 /-- The classic self-defeating unstratified modal program `p ← ¬□p` (unsatisfiable odd loop). -/
 def selfDefeatingModalProg : ModalProgram :=
   [⟨"p", [], ["p"]⟩]
@@ -424,14 +415,6 @@ theorem unstable_two_rule_refused_on_p :
     checkGLEquilibrium unstableTwoRuleProg ["p"] =
       .refused (.unstableEquilibrium ["q"] ["q", "p"].tail) [] := by
   rfl
-
--- Mutating the fixed-point equivalence check to `true` breaks `checkGLEquilibrium_sound`.
-#tooth checkGLEquilibrium_sound by mutation checkFactSetEquiv :=
-  fun _ _ => true
-
--- Mutating `findOddSelfLoop?` to claim even `defaultBirdProg` is an odd loop breaks `checkGLEquilibrium_refuted`.
-#tooth checkGLEquilibrium_refuted by mutation findOddSelfLoop? :=
-  fun _ => some "bird"
 
 /-! ### Structural JSON Wire Codecs & Registered `glEquilibriumFormat` (`gl-equilibrium@1`) -/
 

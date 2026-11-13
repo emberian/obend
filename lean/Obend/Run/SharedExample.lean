@@ -179,15 +179,6 @@ theorem general_instances :
     (joint_reachable_ticket_exclusive rfl rfl h).1,
     (joint_once rfl rfl h).2⟩
 
--- Without the shared mask, Bob's commitment is admitted at his own view: two grants.
-#tooth alice_wins by mutation sharedLive := fun {_ _ _ _} [_] _ base d t => (base (Ledger.raw _ d)).live t
--- Durability is a field: a record whose abandonment erases the consumption fails the obligation the
--- structure consumes, so it is not a `Ledger` (and `nledger` cannot be rebuilt over it).
-#tooth ledgerAbandon_durable by mutation ledgerAbandon := fun d => ⟨d.raw, [], d.grants, d.height⟩
--- Without propagating the ledger's moves, Bob does not see Alice's commit.
-#tooth coupled_after_commit by mutation propagate :=
-  fun {_ _ _ _ _ _ _ _ _ _ _} _ {_} _ _ cs => .ok cs
-
 end Obend.Run.SharedExample
 
 end

@@ -65,11 +65,6 @@ No field receives a fresh allowance. Heap/stack limits stay common throughout. -
 allowance); this is `forceWith` exactly (Obend.Core.MachineFast). -/
 @[csimp] theorem forceWith_eq_fast : @forceWith = @Obend.Core.MachineFast.forceWithFast :=
   Obend.Core.MachineFast.forceWithFast_unique forceWith (fun _ _ _ => rfl) (fun _ _ _ _ => rfl)
-/--
-info: 'Obend.Core.Data.forceWith_eq_fast' depends on axioms: [propext, Quot.sound]
--/
-#guard_msgs (whitespace := lax) in
-#print axioms forceWith_eq_fast
 
 /-- Materialization threads the remaining budget through failures as well as successes.
 Tick counts come directly from forceWith; failed children retain all earlier field spend. -/

@@ -579,9 +579,6 @@ theorem read3_contradiction (σ : Setup V) (S : Slot Fact Cand) {c : Cand} {f : 
   have := σ.read3_sound S (some c) hv
   rw [h] at this; exact this
 
--- Tooth: a reading that calls every support known true is unsound; the bracket's proof is refused.
-#tooth read3_sound by mutation Setup.holds3 := fun {_ _} [_] [_] [_] _ _ => .known true
-
 end Setup
 
 end Obend.Analysis

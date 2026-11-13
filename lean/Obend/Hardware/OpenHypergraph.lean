@@ -285,7 +285,6 @@ def extractHyperEdgesAux
 def extractHyperEdges (g : StrictOpenHypergraph) : List HyperEdge :=
   extractHyperEdgesAux 0 g.ops g.sources.sizes.table g.sources.values.table g.targets.values.table
 
-
 /-- Evaluate a single `HyperEdge` against wire environment `env`, updating `e.dstWire`. -/
 def stepHyperEdge (env : Nat → Int) (e : HyperEdge) : Nat → Int :=
   let v := evalHypergraphOp e.op (e.srcWires.map env)
@@ -3360,27 +3359,6 @@ theorem layerHypergraphCsr_sound_and_agrees
       evalHypergraphLayeredCsr goldenDiamondHypergraph initEnv =
         evalHypergraphLayered goldenDiamondHypergraph initEnv := rfl
   refine ⟨hInd, hSync, hOutSync, by decide +kernel, hDiamondLay, hDiamondComb, by decide +kernel, by decide +kernel⟩
-
-/-- Broken `FiniteFunction.converse` that produces 0 segments. -/
-def converseEmptyBug (f : FiniteFunction) : IndexedCoproduct :=
-  IndexedCoproduct.fromSegments f.source []
-
-#tooth converse_wellFormed by mutation FiniteFunction.converse := converseEmptyBug
-#tooth mem_converse_segment_iff by mutation FiniteFunction.converse := converseEmptyBug
-#tooth operationAdjacencyCsr_sound by mutation FiniteFunction.converse := converseEmptyBug
-
-/-- Broken `IndexedCoproduct.flatmap` that drops all sub-segments and returns empty segments. -/
-def flatmapDropSegmentsBug (c : IndexedCoproduct) (sub : IndexedCoproduct) : IndexedCoproduct :=
-  IndexedCoproduct.fromSegments sub.values.target []
-
-#tooth flatmap_numSegments by mutation IndexedCoproduct.flatmap := flatmapDropSegmentsBug
-#tooth mem_flatmap_segment_iff by mutation IndexedCoproduct.flatmap := flatmapDropSegmentsBug
-#tooth operationAdjacencyCsr_sound by mutation IndexedCoproduct.flatmap := flatmapDropSegmentsBug
-
-/-- Broken `layerHypergraphCsr` that drops all wavefront stages. -/
-def layerHypergraphCsrEmptyBug (_g : StrictOpenHypergraph) : List (List HyperEdge) := []
-
-#tooth layerHypergraphCsr_sound_and_agrees by mutation layerHypergraphCsr := layerHypergraphCsrEmptyBug
 
 end Obend.Hardware.OpenHypergraph
 end

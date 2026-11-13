@@ -583,7 +583,6 @@ theorem cite_stale_iff_blocked (H : Hash) (W : World) (c : Cite) :
       ((cites H).slot c.ref).read (holds H W) (some c) = .blocked c ((citeFacts c).filter fun f => !holds H W f) :=
   (cites H).stale_iff_blocked rfl W
 
-
 /-! ### Teeth -/
 
 namespace Teeth
@@ -652,13 +651,6 @@ example : (sectionAt 1 1).read (holds toy conflicted) none = .empty := rfl
 example : Obend.Doc.Teeth.merged.source = "a<<<<<<<\nc=======\nd>>>>>>>\nb" := by decide
 
 end Teeth
-
-#tooth pinned_cite_stays by mutation citeFacts := fun c => [.current c]
-#tooth following_cite_behind by mutation citeFacts := fun c => [.verifies c]
-#tooth section_alternatives by mutation posted := fun _ _ _ => []
-#tooth identity_cite_stays by mutation citeFacts := fun c => [.current c]
-#tooth following_cite_stays by mutation quoted := fun _ _ => none
-#tooth recite_holds by mutation recite := fun _ _ c => c
 
 end Obend.Doc
 

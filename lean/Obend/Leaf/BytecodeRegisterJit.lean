@@ -1426,8 +1426,6 @@ theorem runSumToBytecode_30000 :
     have := sumCountdownSpec_twice 30000; omega
   simpa [hSpec] using runSumToBytecode_sound 30000 (Nat.le_refl 30000)
 
-#guard execBytecode sumToLoopCode #[0, 30000, 0, 0, 0, 0] 180002 == some 450015000
-
 private def renderC99BinOp (op : ByteBinOp) (lhs rhs : String) : String :=
   match op with
   | .add => s!"({lhs} + {rhs})" | .sub => s!"({lhs} - {rhs})" | .mul => s!"({lhs} * {rhs})"

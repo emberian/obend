@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Core.Proofs.DigestChecks — deployed-hash instances for `digest`
+# `extracted.DigestChecksTest` — deployed-hash instances for `digest`
 
 `Obend.Core.Digest` stays Init-only so the C transcription can link it; its compiled checks live
 here. The theorems there are kernel-checked over an arbitrary hash; the facts below that need the

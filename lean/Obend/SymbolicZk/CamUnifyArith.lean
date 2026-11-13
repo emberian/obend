@@ -97,8 +97,6 @@ theorem topologicalHeight_forbids_cyclic_mvar {p : CamDagPool} {tau : Array Nat}
     | trans _ _ h₁ h₂ => exact Nat.lt_trans h₂ h₁
   exact fun u hu => Nat.lt_irrefl (heightAt tau u) (descent hu)
 
-#tooth topologicalHeight_forbids_cyclic_mvar by mutation strictHeight := fun a b => decide (b ≤ a)
-
 /-- The finite graph's edges, oriented toward dependencies. -/
 def DagEdge (p : CamDagPool) (v u : Nat) : Prop := Child p u v ∨ Assigned p u v
 
@@ -456,8 +454,6 @@ example : checkProofForestExec #[(0,1)] ⟨#[1,1], #[1,0], #[1,1], #[0,0]⟩ = t
   have : u = 0 ∨ u = 1 := by omega
   rcases this with rfl | rfl <;> decide
 
-#tooth checkProofForestExec_sound by mutation strictHeight := fun a b => decide (b ≤ a)
-
 /-- Composition: the ranked forest transports only equalities justified by the
 checked congruence proof DAG, whose leaves refer to the committed seed table. -/
 theorem checkedForest_congruence_sound {pool : Array CamWord64} {seeds : Array (Nat × Nat)}
@@ -573,9 +569,6 @@ theorem ghostCycle_rejected_by_linMem (m : LinMem) (g h : Consumption)
     have gtime := (causal g hg).2
     have htime := (causal h hh).2
     omega
-
-#tooth linmem_sound by mutation bornBefore := fun _ => true
-#tooth ghostCycle_rejected_by_linMem by mutation bornBefore := fun _ => true
 
 example : checkLinMemExec ⟨#[⟨7, 0, 42⟩], #[], #[⟨⟨7, 0, 42⟩, 1⟩], #[]⟩ = true := by
   simp [checkLinMemExec, births, exits, sortCells, checkStrictKeys, bornBefore, Array.range_eq_range']

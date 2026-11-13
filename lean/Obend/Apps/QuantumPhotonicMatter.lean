@@ -749,25 +749,8 @@ theorem quantumPhotonicCoprocTopRtlModule_verified :
      st2 1 = 1#64) := by
   decide +kernel
 
-/-! ## 6. `#tooth` Mutation-Killing Guards -/
-
 -- (2026-11-04) the tooth on the deleted `accepted` bundle is gone: a tooth on a fixture only
 -- proved the fixture was sensitive to its own data.
-
-def brokenQ3PointSourceSeed : Nat → Nat := fun _ => 0
-
-#tooth quantumPhotonicMatter_wl_quotient_clements_and_cmt_sound by mutation
-  q3PointSourceSeed := brokenQ3PointSourceSeed
-
-def brokenQpmRtlModule : RtlModule :=
-  { name := "quantum_photonic_coproc_top"
-  , inputNames := ["in_batch_vectors"]
-  , wires := []
-  , regs := []
-  , outputs := [{ name := "out_artin_braid_verified", expr := .const 0#64 }] }
-
-#tooth quantumPhotonicCoprocTopRtlModule_verified by mutation
-  quantumPhotonicCoprocTopRtlModule := brokenQpmRtlModule
 
 end Obend.Apps.QuantumPhotonicMatter
 end

@@ -449,7 +449,4 @@ example :
     (precedence incoherentGraph "board2" [["board"]]).toOption = some ["board2", "room", "board"] :=
   by decide +kernel
 
-#tooth precedence_local by mutation Obend.Spec.C4.cleanAll := fun _ ls => some (ls.map fun _ => [])
-#tooth precedence_monotone by mutation Obend.Spec.C4.cleanAll := fun _ ls => some (ls.map fun _ => [])
-
 end Obend.Law

@@ -145,10 +145,6 @@ theorem brief_write_preserves_linked_box_law
       evalRoleLinkLaw facts law pages page .box :=
   (write_in_disjoint_role_preserves_role_law facts law pages page (by decide) newBriefs).2
 
--- Mutation witness: collapsing typed link roles back to untyped `links.map (·.target)` breaks isolation.
-#tooth write_in_disjoint_role_preserves_role_law by mutation
-  targetsInRole := fun _ links => links.map (·.target)
-
 /-- Project a referring page's state with an explicit `listed : 0 | 1` backlink indicator. -/
 @[expose] def stateWithListedFlag (listed : Bool) : Data → Data
   | .record fs =>
@@ -458,10 +454,6 @@ theorem telemetry_defeats_lane_dispatch_without_refusing_fact
     simp [boxDispatchRule, hs1Reg, hs1Unr, Reasons.Status.text, String.append_assoc]
   exact ⟨s₁, hingest, hs1Use, hs1Disp, hwhy⟩
 
--- Mutation witness: ignoring telemetry observations in `ingestTelemetryObservation` is caught immediately.
-#tooth telemetry_defeats_lane_dispatch_without_refusing_fact by mutation
-  ingestTelemetryObservation := fun s _ => .ok s
-
 /-! ## 3. Vault `_kind` Law Succession as a `Genealogy.Habitat` (`FINDINGS 19`, `Reground` `G4`) -/
 
 /-- Monotone Vault `_kind` doctrine floors (`PROCESS.md` `Reground` `G4`). -/
@@ -758,10 +750,6 @@ theorem vaultDoctrine_refuses_loosening
   split
   · next hok => exact absurd hok (hno [])
   · rfl
-
--- Mutation witness: waving through succession in `checkDoctrineSuccession` allows floor loosening and is caught.
-#tooth vaultDoctrine_refuses_loosening by mutation
-  checkDoctrineSuccession := fun _ _ _ => true
 
 /-! ## 4. Complete Multi-Field Constructive Repair via `LawDial` (`THESIS.md:56-57`) -/
 
@@ -2122,10 +2110,6 @@ theorem synthesizePassingDelta_none_unsat
   obtain ⟨delta, hsome⟩ := synthesizePassingDelta_complete hfrag hcap hsat
   rw [hnone] at hsome
   cases hsome
-
--- Mutation witness: dropping the `allLawsHold` soundness guard in `synthesizePassingDelta` is caught.
-#tooth synthesizePassingDelta_sound by mutation
-  allLawsHold := fun _ _ _ _ _ => true
 
 -- Concrete sanity checks ensuring every hypothesis ledger premise is positively inhabited:
 example :

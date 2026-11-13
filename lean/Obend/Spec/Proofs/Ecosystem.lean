@@ -256,8 +256,4 @@ example :
         | .ok _ => false) = true := by
   decide +kernel
 
-#tooth turn_pins_every_root by mutation covered := fun _ _ _ _ => none
-#tooth admit_refuses_moved by mutation admit := fun _ _ => .diverged
-#tooth stale_iff_blocked by mutation holds := fun _ _ => true
-
 end Obend.Spec.Ecosystem

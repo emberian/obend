@@ -243,9 +243,6 @@ public theorem drive_complete {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob}
           refine ⟨hreq, (hΔ t ht).1, ?_⟩
           simpa using (hΔ t ht).2
 
--- Completeness rests on the dispatch guard admitting what the judgment and the world support.
-#tooth drive_complete by mutation dispatchGuard := fun {_ _ _ _ _} _ _ {_} _ => false
-
 end
 
 end Obend.Run

@@ -600,7 +600,6 @@ def externalClaimBound (F : Judge.Format) (o : ClaimObj) (objStr : String) : Boo
   else
     F.bindsClaim o.claim o.arity objStr
 
-
 /-- Registry-backed obligation checker parameterized by a list of registered `Judge.Format`s. -/
 def obligationCheckWithJudges (formats : List Judge.Format) (k : Nat) (o : ClaimObj) (j : Justification) :
     Judge.Verdict ClaimClause :=
@@ -947,21 +946,6 @@ theorem verifyByBisimRefinement_sound {k : Nat} {baseObj : ClaimObj} {baseSteps 
   have h := href ds (hlen.trans harity.symm)
   rwa [hargs] at h
 
-/-- Mutated `ClaimObj.withLhs` that replaces the whole claim with `lhs'` without equation binders. -/
-def withLhsBroken (o : ClaimObj) (lhs' : Term) : ClaimObj :=
-  { o with claim := lhs' }
-
-/-- Mutated `verifyByBisimRefinement` that unconditionally accepts without running `claimCheck`. -/
-def verifyByBisimRefinementBroken (_k : Nat) (_baseObj : ClaimObj) (_baseSteps : List RStep) (_lhs' : Term) :
-    Judge.Verdict ClaimClause :=
-  .ok
-
-#tooth Obend.Logic.claimMeaning_of_bEquiv by mutation
-  Obend.Logic.ClaimObj.withLhs := withLhsBroken
-
-#tooth Obend.Logic.verifyByBisimRefinement_sound by mutation
-  Obend.Logic.verifyByBisimRefinement := verifyByBisimRefinementBroken
-
 /-- Well-formed false `ClaimObj` (`0 = 1`) for testing external judge claim binding. -/
 def falseExternalClaimObj : ClaimObj :=
   { comp := { top := { name := "test", metadata := .record [], fields := [] }, below := [], seed := [] }
@@ -978,9 +962,6 @@ theorem obligationCheck_refuses_false_external_claim :
       .refused .illFormed [] := by
   decide +kernel
 -- Named (not `example`) because the `#tooth` below replays it under a mutated `externalClaimBound`.
-
-#tooth Obend.Logic.obligationCheck_refuses_false_external_claim by mutation
-  Obend.Logic.externalClaimBound := fun _ _ _ => true
 
 end Obend.Logic
 end

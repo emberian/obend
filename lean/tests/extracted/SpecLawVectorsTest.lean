@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Spec.Proofs.Law — the law parser decides (compiled evaluation of string functions)
+# `extracted.SpecLawVectorsTest` — the law parser decides (compiled evaluation of string functions)
 
 The three compiled teeth of minidregg `Compiler/ObjectiveBendLaw.lean` (commit 092027a2): the
 tally law parses, precedence is `implies` < `or` < `and` < `not`, and six constructs outside the

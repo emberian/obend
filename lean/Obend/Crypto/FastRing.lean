@@ -357,9 +357,6 @@ theorem checkShort_iff (d β : Nat) (xs : Array Int) :
 theorem wrapSign_high (i k : Nat) (x : Int) (h : k < i) : wrapSign i k x = -x := by
   simp [wrapSign, Nat.not_le_of_lt h]
 
-#tooth checkShort_iff by mutation checkShort := fun _ _ _ => true
-#tooth wrapSign_high by mutation wrapSign := fun _ _ x => x
-
 theorem sumInt_mod (n : Nat) (q : Int) (f : Nat → Int) :
     sumInt n (fun i => f i % q) % q = sumInt n f % q := by
   induction n with
@@ -415,8 +412,6 @@ theorem canonicalGoldilocksOfUInt64_injective (x y : UInt64) (z : Goldilocks)
         (congrArg Goldilocks.val (Option.some.inj hy)).symm
     · contradiction
   · contradiction
-
-#tooth canonicalGoldilocksOfUInt64_injective by mutation canonicalGoldilocksOfUInt64 := fun _ => some Goldilocks.zero
 
 /- Goldilocks has v₂(p−1)=32. For d=2^s, X^d+1 has min(d,2^31)
 irreducible factors over this field; it is not an irreducible lattice ring.

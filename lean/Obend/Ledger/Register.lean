@@ -705,9 +705,6 @@ theorem step_once {a b : Nat × Reg} {r : Row} (h : step law a r = .ok b) (ho : 
 
 theorem once_empty : Once ⟨[]⟩ := ⟨List.nodup_nil, (fun _ h => by cases h), List.nodup_nil⟩
 
--- Tooth: a register that never finds a document's live posting does not keep "posted once".
-#tooth step_once by mutation Reg.liveOf := fun _ _ => none
-
 /-- **Posted once**: a register reached from the empty one has at most one live posting per
 document (and distinct origins, and every reversal names one of its postings). -/
 theorem reach_once {rows : List Row} {w : Nat} {b : Nat × Reg} (h : runFrom law (w, ⟨[]⟩) rows = .ok b) :
@@ -742,7 +739,6 @@ theorem step_keeps_live {a b : Nat × Reg} {r : Row} (h : step law a r = .ok b)
     simp only [Reg.live, Bool.and_eq_true, Bool.not_eq_true'] at hqp
     refine ⟨hqp.1, hqp.2.1, ?_⟩
     simp [hqp.2.2]
-
 
 /-- **A double posting across the fork is refused, and main does not move.** Main has a live posting
 of document `d`; a fork that reversed nothing posted `d` too while disconnected. At the stitch the

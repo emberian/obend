@@ -229,12 +229,6 @@ theorem changed :
     c₁.cfg.obj.σ .reserved () = some (plan .p1) ∧ final.cfg.obj.σ .reserved () = some (plan .p2) ∧
       final.cfg.world = ⟨false, false, false, true, 5⟩ := ⟨rfl, rfl, rfl⟩
 
--- Without the replan guard the three replans in flight are not refused by name (the cancellation
--- and the return to `p1` become `inconsistent`, and the same-first-call `planFlip` is ACCEPTED).
-#tooth receipt by mutation frozenHole := fun {_ _ _ _} [_] {_ _ _ _} _ => none
--- Without durable spending the capability the world calls live again is unspent.
-#tooth stayed by mutation spendOn := fun {_ _ _ _ _} _ spent {_} _ => spent
-
 /-- The run's log is `Legal`, by the general theorem. -/
 theorem script_legal : Legal host spec O₀ everything (fun _ _ => []) final.cfg.log :=
   creachable_legal (csession_reachable .init script)
@@ -260,8 +254,6 @@ theorem withdrawn_refused :
         some (.unadmitted (commitOp .p1) [.auth .p1, .beforeDeadline] none) ∧
       (drive host spec (env true) 3 (Cfg.init O₀ withdrawn) 0).state = 1 := ⟨rfl, rfl, rfl, rfl⟩
 
-#tooth withdrawn_refused by mutation dispatchGuard := fun {_ _ _ _ _} _ _ {_} _ => true
-
 /-- At a world where everything holds, the driven run is `interpret`'s. -/
 example :
     (drive host spec (env true) 3 c₀.cfg 0).result? =
@@ -273,8 +265,6 @@ theorem reserve_retry_refused :
     (nsession spec c₀ [.base (.dispatch reserveOp), .base (.dispatch reserveOp)]).2 =
       [none, some (.run (.busy reserveOp))] := by rfl
 
-#tooth reserve_retry_refused by mutation awaiting := fun {_ _} _ => none
-
 /-- **After abandonment, no new commitment**: the reservation is abandoned in flight; its late
 reply and a commitment on `p1` (admissible: every grant holds) are refused, naming the abandoned
 call. Without the guard the late reply would revive the plan and the commitment would go out. -/
@@ -282,8 +272,6 @@ theorem abandon_ends :
     (nsession spec c₀ [.base (.dispatch reserveOp), .base (.abandon reserveOp),
       .base (.respond ⟨.idle, Op.reserve, ()⟩), .base (.dispatch (commitOp .p1))]).2 =
       [none, none, some (.run (.abandoned reserveOp)), some (.run (.abandoned reserveOp))] := by rfl
-
-#tooth abandon_ends by mutation closedBy := fun {_ _ _ _ _ _ _ _ _} _ => none
 
 /-- The commitment to `p2` dispatched, its reply missing. -/
 def c₂ : NCfg :=
@@ -344,8 +332,6 @@ theorem decision_rechecked :
        some (.run (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1]))] :=
   by rfl
 
-#tooth decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
-
 /-- The initial plan's decision: provider `p1`, citing what the slot's `p1` cites. -/
 def initialCites : (j : Phase) → HoleN j → List Fact
   | .reserved, () => providers.supports (.prov .p1)
@@ -360,8 +346,6 @@ theorem initial_decision_rechecked :
       (opening ++ [.base (.dispatch (commitOp .p1))])).2 =
       [none, none, none, some (.run (.unsupported (commitOp .p1) (some ⟨.reserved, ()⟩) [.auth .p1]))] :=
   by rfl
-
-#tooth initial_decision_rechecked by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
 
 /-- The contrast: started without citations, the same run goes out. -/
 example :
@@ -431,8 +415,6 @@ def useOp : Σ i, sig.Op i := ⟨(), Op.use⟩
 theorem second_use_refused :
     (session host spec (Cfg.init O ()) [.dispatch useOp, .respond ⟨(), Op.use, ()⟩, .dispatch useOp]).2 =
       [none, none, some (.unadmitted useOp [] (some ()))] := by rfl
-
-#tooth second_use_refused by mutation spendOn := fun {_ _ _ _ _} _ spent {_} _ => spent
 
 end Obend.Run.Ticket
 

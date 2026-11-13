@@ -686,7 +686,6 @@ theorem spatialPower_propagateSerialChainTwists_append
       spatialPower f (propagateSerialChainTwists chain2) := by
   rw [propagateSerialChainTwists_append, spatialPower_bilinear_add_right]
 
-
 /-! ## 8. A five-axis post-processor with TCPM (`postNgc`) and the rotary-safety theorem
 
 The CAM side (`Obend.Hardware.GeometryCAM`) produces cutter locations: a tip point in the part frame
@@ -860,18 +859,6 @@ theorem postMoves_rotarySafe (cfg : PostConfig) :
       (movesRotarySafe_of_sameAxis _ p.axis _ (passMoves_axis cfg p)) hRest ?_
     intro m₁ m₂ h₁ h₂
     exact movePairSafe_of_clearRapid _ _ _ (passMoves_last cfg p m₁ h₁) (postMoves_head cfg ps m₂ h₂)
-
-/-- A post that unwinds the rotaries at cutting depth: it re-orients on the plunge feed instead of on
-the rapid above the first point. -/
-def passMovesBroken (cfg : PostConfig) (p : CamPass) : List NcMove :=
-  match p.pts with
-  | [] => []
-  | q :: rest =>
-    .rapid q.1 q.2.1 cfg.clearanceZ ⟨0, 0, 1, 1⟩ :: .feed q.1 q.2.1 q.2.2 p.axis cfg.plungeFeed ::
-      (rest.map fun r => NcMove.feed r.1 r.2.1 r.2.2 p.axis cfg.cutFeed)
-
-#tooth postMoves_rotarySafe by mutation
-  passMoves := passMovesBroken
 
 /-- Every emitted program starts with a rapid at the clearance plane (so the first motion after the
 tool change and `G43.4` is never a cut). -/

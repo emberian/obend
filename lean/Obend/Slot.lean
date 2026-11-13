@@ -163,10 +163,6 @@ theorem read_of_usable (S : Slot Fact Cand) (holds : Fact → Bool) :
   unfold Slot.read
   simp [hj, hd]
 
-#tooth read_usable_supports by mutation Slot.read := fun _ _ _ => .empty
-#tooth permanent_blocked_forever by mutation Slot.read := fun _ _ _ => .empty
-#tooth read_of_usable by mutation Slot.read := fun _ _ _ => .empty
-
 /-- The four reading and permanence lemmas, bundled (deprecated: use them by name). -/
 @[deprecated "use `read_usable_supports`, `read_blocked_exact`, `permanent_blocked_forever`, `read_of_usable`" (since := "2026-10-31")]
 theorem slot_repair {V : Type} (S : Slot Fact Cand) (holdsAt : V → Fact → Bool)

@@ -218,15 +218,6 @@ theorem futamura1_target_inhabited (x : Nat) :
                                (.dLit (.num 5))) }] } := by decide
     rw [hr1] at hDec; injection hDec with hTargetEq; subst hTargetEq; rfl
 
--- Inhabitedness witnesses confirming all premises of `futamura2` (standalone 6-proc compiler) and `futamura3` (standalone 13-proc cogen):
-#guard match runMixSpecialize 3000 mixProg (quoteProg objInterp) with
-  | some c => checkSpecializesProg 300 mixProg (quoteProg objInterp) c && !hasStaticConstruct c && c.procs.length == 6
-  | none => false
-
-#guard match runMixSpecialize 4000 mixProg (quoteProg mixProg) with
-  | some cg => checkSpecializesProg 280 mixProg (quoteProg mixProg) cg && !hasStaticConstruct cg && cg.procs.length == 13
-  | none => false
-
 /-! ## 3. Verified `Core4` Lowering (`lowerMixToCore4`, `lowerMixToCore4_sound`, `lowerMixToCore4_machine_complete`) -/
 
 /-- Canonical `Core4` representation of a `MixVal` datum. -/

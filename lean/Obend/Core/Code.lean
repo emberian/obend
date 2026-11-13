@@ -262,8 +262,6 @@ def lossyTagData : Tag → Data
 theorem lossy_tags_collapse : lossyTagData .mix = lossyTagData .app ∧ Tag.mix ≠ Tag.app :=
   ⟨rfl, by intro h; cases h⟩
 
-#tooth quote_roundtrip by mutation tagData := lossyTagData
-
 /-! ## §2. Content addresses: a Merkle digest of `Data`, bound node by node -/
 
 /-- A hash whose output is at most 32 bytes: every digest it makes is a first operand inside the

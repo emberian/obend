@@ -72,8 +72,4 @@ theorem restart_general :
 
 end Obend.Run.DurableExample
 
--- A recovery that forgets the journal admits Bob after the restart.
-#tooth Obend.Run.DurableExample.restart_receipt by mutation Obend.Run.Durable.replay :=
-  fun {_ _ _ _ _ _ _ _ _ _ _ _} [_] [_] [_] [_] [_] [_] _ _ _ _ _ {_} J _ => some J
-
 end

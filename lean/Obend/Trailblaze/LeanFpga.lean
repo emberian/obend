@@ -267,11 +267,6 @@ theorem varEq0_join_varEq1_ne_top (v : Fin 3) :
 
 end FaceIdeal3
 
--- Mutation guard: replacing `FaceIdeal3.varEq1` with Boolean complementation `~~~(varEq0 v).mask`
--- collapses `∂𝕀 = 𝕀` and is caught by `FaceIdeal3.varEq0_join_varEq1_ne_top`.
-#tooth FaceIdeal3.varEq0_join_varEq1_ne_top by
-  mutation FaceIdeal3.varEq1 := fun v => ⟨~~~(FaceIdeal3.varEq0 v).mask⟩
-
 /-! ## 2. Rung 2 (`HARDWARE.md`): Salvadori `Δ`-Net IR & Recursive `LeafExpr` / `Leaf.Book` Compiler -/
 
 /-- Port address `(nodeId, portSlot)` where `0` is principal, `1` is left auxiliary, and `2` is right auxiliary. -/
@@ -400,18 +395,6 @@ theorem checkNetPortLinearity_sound
   dsimp only at hLin
   simp only [Bool.and_eq_true, List.all_eq_true, beq_iff_eq, bne_iff_ne] at hLin
   exact ⟨hLin.2 p hNonRoot, hLin.1.1.1.2, hLin.1.1.2⟩
-
-/-- Broken `checkNetPortLinearity` mutant that omits the `countPort p eps == 1` degree-1 check. -/
-def checkNetPortLinearityMutantSkipDegree (net : DeltaNet) : Bool :=
-  let decls := declaredPorts net
-  let eps := wireEndpoints net.wires
-  !net.netName.isEmpty &&
-  checkDistinctDeltaNodeIds net.nodes &&
-  decls.contains net.rootPort &&
-  (countPort net.rootPort eps == 0) &&
-  net.wires.all (fun w => w.lhs != w.rhs)
-
-#tooth checkNetPortLinearity_sound by mutation checkNetPortLinearity := checkNetPortLinearityMutantSkipDegree
 
 /-- Detect active principal-to-principal interaction redexes (`lhs.portSlot = 0` and `rhs.portSlot = 0`). -/
 def activePrincipalRedexes (net : DeltaNet) : List DeltaWire :=
@@ -1302,7 +1285,6 @@ def silverLeanFpgaSmoke : Bool :=
   (refuseLeanFpgaTurn plantedCorruptFrameTurn == some "refused: noncanonical-fabulous-frame") &&
   (refuseLeanFpgaTurn plantedUnisolatedDprTurn == some "refused: dpr-fence-not-isolated")
 
-#guard !(emitHvmNetText sampleLinearDeltaNet).isEmpty
 example : checkNetPortLinearity sampleLinearDeltaNet = true := rfl
 example : checkNetPortLinearity sampleSharedLetNet = true := rfl
 example : checkNetPortLinearity sampleActiveBetaRedexNet = true := rfl

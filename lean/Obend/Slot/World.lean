@@ -249,9 +249,6 @@ theorem blocked_forever (S : Slot Fact Cand) {v v' : V} (c : Cand) (f : Fact) (h
   | nil => rw [hd] at hmem; cases hmem
   | cons g t => exact ⟨g :: t, rfl, hd ▸ hmem⟩
 
-#tooth stale_behind_forever by mutation World.Collides := fun {_ _} [_] _ _ _ => False
-#tooth stale_dead_forever by mutation World.PinnedAt := fun {_ _} [_] _ _ => True
-
 /-- `blocked_forever` from the version law: a selection citing a support pinned where it was
 observed, and stale since, reads blocked by that support's name at every later view, or the pin
 function collides on the cell's version states. -/

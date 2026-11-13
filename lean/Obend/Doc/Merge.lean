@@ -421,9 +421,6 @@ example : (merged.apply [.delete 4]).heads 1 = [3] := by decide
 
 end Teeth
 
-#tooth Graph.merge_isPushout by mutation Graph.merge := fun A _ => A
-#tooth Teeth.files_no_pushout by mutation Graph.File := fun _ => True
-
 /-! ## 3-Way Keyed Section/Cell LCA Merge & Conflict Localization -/
 
 /-- Outcome of merging a single cell/field value `vL` and `vR` over a common ancestor `base`. -/
@@ -728,9 +725,6 @@ theorem mergeKeyedCells3_disjoint_edits_no_conflicts
   · exact hNeLB hEqLB
   · exact hNeRB hEqRB
   · exact hNeLR hEqLR
-
-#tooth mergeCell3_commutative by mutation mergeCell3 := fun _ vL _ => .merged vL
-#tooth mergeCell3_disjoint_edits_succeed by mutation mergeCell3 := fun base _ _ => .merged base
 
 end Obend.Doc
 

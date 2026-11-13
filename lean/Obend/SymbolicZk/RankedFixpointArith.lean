@@ -50,8 +50,6 @@ theorem rankedGamma_sound {P : Program} {j m : List String} {rank : String → N
           ih (rank b) (by simpa [earlier, ha] using (hp b hb).2) b rfl (hp b hb).1, hn⟩
   exact fun a => ⟨grounded (rank a) a rfl, gamma_least P j m h.1 a⟩
 
-#tooth rankedGamma_sound by mutation earlier := fun a b => a ≤ b
-
 /-- A finite search has a least successful index; used only in witness existence proofs. -/
 theorem least_index {p : Nat → Prop} (h : ∃ n, p n) :
     ∃ n, p n ∧ ∀ k, p k → n ≤ k := by
@@ -208,12 +206,6 @@ theorem rankedWFS_sound {P : Program} {t u : List String} {c : SemanticRanks}
   have ht : Same t (wf P).1 := fun a => ⟨fun ha => (stages (c.stage a)).1 a ha (Nat.le_refl _), hleast a⟩
   exact ⟨ht, hu.trans (fun a => by rw [gamma_congr P ht]; rfl)⟩
 
-#tooth rankedWFS_sound by mutation earlier := fun a b => a ≤ b
-#tooth rankedWFS_sound by mutation noLater := fun _ _ => True
-#tooth rankedWFS_sound by mutation lexEarlier := fun s r s' r' => s ≤ s' ∨ r ≤ r'
-
-
-
 theorem rounds_sub_wf (P : Program) : ∀ k, Sub (rounds P k) (wf P).1 := by
   intro k
   induction k with
@@ -341,8 +333,6 @@ theorem rankedWFS_iff (P : Program) (t u : List String) :
     change ∀ a, a ∈ u ↔ a ∈ (wf P).2 at hu
     unfold RankedWFS at hc ⊢
     simpa only [Reasons.Sub, ht, hu, T_congr P hu ht] using hc
-
-
 
 /-- Facts are empty-body rules, so the universal blocker check cannot hide them. -/
 structure ArithRule where
@@ -717,8 +707,6 @@ theorem checkRankedWFS_sound {p : ArithProgram} {t u : Array Bool} {c : ArrayCer
       obtain ⟨hbm, hbr⟩ := hp b (by simpa using hb0)
       exact ⟨(mem_decodeBits u b).mpr hbm, by simpa using hbr⟩
 
-#tooth checkRankedWFS_sound by mutation earlier := fun a b => a ≤ b
-
 example : checkRankedWFS ⟨0, #[]⟩ #[] #[] ⟨#[], #[], #[], #[], #[], #[]⟩ = true := by
   simp [checkRankedWFS, WFProgram, checkClosure, Array.range_eq_range']
 
@@ -933,8 +921,6 @@ theorem missingCount_gate_sound (count : Nat) (head w z : Goldilocks)
   have hh := quadraticFiresGate_sound hgate
   exact ⟨hh.2.symm.trans hz, fun h => hh.1 (hz.mpr h)⟩
 
-#tooth quadraticFiresGate_sound by mutation quadraticFiresGate := fun _ _ _ _ => true
-
 example : checkRankedGLStable ⟨1, #[⟨0, #[], #[]⟩]⟩ #[true] #[0] #[0] = true := by
   simp only [checkRankedGLStable, checkRankedGamma, WFProgram, checkClosure, firesFast,
     Bool.and_eq_true, Array.all_eq_true_iff_forall_mem]
@@ -969,8 +955,5 @@ theorem evenCycle_cheating_fixpoint_rejected (c : SemanticRanks) :
       unfold earlier noLater at *
       omega
     · simp at hc
-
-#tooth evenCycle_cheating_fixpoint_rejected by mutation earlier := fun a b => a ≤ b
-#tooth evenCycle_cheating_fixpoint_rejected by mutation noLater := fun _ _ => True
 
 end Obend.SymbolicZk.Ranked

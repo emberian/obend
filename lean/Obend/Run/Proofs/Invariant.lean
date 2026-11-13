@@ -554,13 +554,6 @@ public theorem step_inv {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : 
   | respond e => exact inv_respond hI h
   | abandon o => exact inv_abandon hI h
 
--- Each guard is load-bearing in the induction step: the stored proof fails without it.
-#tooth step_inv by mutation dispatchGuard := fun {_ _ _ _ _} _ _ {_} _ => true
-#tooth step_inv by mutation spendOn := fun {_ _ _ _ _} _ spent {_} _ => spent
-#tooth step_inv by mutation frozenHole := fun {_ _ _ _} [_] {_ _ _ _} _ => none
-#tooth step_inv by mutation closedBy := fun {_ _ _ _ _ _ _ _ _} _ => none
-#tooth step_inv by mutation decisionDead := fun {_ _ _ _ _ _ _ _ _} _ _ _ => []
-
 /-- **The runner refines its specification**: every configuration reachable from `Cfg.init O v₀`
 satisfies the invariant. -/
 public theorem refines {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {i : Ix}
@@ -748,12 +741,6 @@ public theorem answered_replan_refused {host : Host V Tok Fact} {sp : Spec S Tok
   have hcl : closedBy c = none := hlive
   simp [run, hcl, hmine, hz, ho]
 
--- The no-new-commitment guard is what refuses a dispatch while a reply is missing.
-#tooth inflight_busy by mutation awaiting := fun {_ _} _ => none
--- Acceptance of a safe replacement rests on the replan's consistency check passing.
-#tooth replan_accepted by mutation nextIs := fun {_ _ _ _} [_] _ _ => false
-#tooth replace_then_dispatch by mutation dispatchGuard := fun {_ _ _ _ _} _ _ {_} _ => false
-
 /-! ## Abandonment: the ending a lost reply may have -/
 
 /-- **A call in flight can be abandoned** (and only the call in flight). -/
@@ -789,8 +776,6 @@ public theorem ended_frozen {host : Host V Tok Fact} {sp : Spec S Tok Fact Ob} {
   cases ev with
   | world v => exact absurd rfl (hev v)
   | _ => simp only [run, hcl]
-
-#tooth ended_frozen by mutation closedBy := fun {_ _ _ _ _ _ _ _ _} _ => none
 
 /-! ## A missing reply licenses no new commitment -/
 

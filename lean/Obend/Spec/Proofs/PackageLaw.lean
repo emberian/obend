@@ -102,6 +102,4 @@ theorem packages_tooth :
         | .error _ => false) = true := by
   decide +kernel
 
-#tooth package_law_eval by mutation packageClauses := fun _ _ => []
-
 end Obend.Spec.PackageLaw

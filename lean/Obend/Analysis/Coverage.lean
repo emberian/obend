@@ -202,8 +202,6 @@ theorem check_covers {R : Report Row Key Acc} {rootOf : List Row → D} {b : Boo
   obtain ⟨_, rfl⟩ := check_sound h
   exact ⟨fun r hr hs => covers R hr hs, fun k hk => only_selected R hk, run_total R b.rows⟩
 
-#tooth check_covers by mutation Report.run := fun R rows => rows.dropLast.foldl R.step ⟨[], R.init⟩
-
 /-- **Non-omission against the register a stranger holds**: of every list of rows whose root is the
 book's, an accepted report names every selected row, when the root binds. -/
 theorem check_binds {R : Report Row Key Acc} {rootOf : List Row → D} {b : Book Row D} {s : Said Key Acc}

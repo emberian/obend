@@ -1086,7 +1086,6 @@ def workbookScrubCellJsonCore (s : SessionState) (reqBytes : ByteArray) : Sessio
 @[export obend_ffi_ba_push] def ffiBaPush (ba : ByteArray) (b : UInt8) : ByteArray := ba.push b
 @[export obend_ffi_res_into_state] def ffiResIntoState (res : SessionState × ByteArray × Int32) : SessionState := res.1
 
-
 /-! ## What the bridge refuses, and what an acceptance means
 
 `turnProposeCore` does not touch `committedRoots` (`turnProposeCore_committedRoots_unchanged`),
@@ -1219,9 +1218,6 @@ theorem turnCommitCore_unproposed_tid_refused (tidBytes : ByteArray)
     · exact decide_eq_false (by omega)
   rw [hcond]
   constructor <;> first | rfl | trivial
-
-#tooth turnCommitCore_unproposed_tid_refused by mutation
-  turnCommitCore := fun s _ => (s, 0)
 
 /-- Every `turnCommitCore` step preserves `Obend.Vault.Replay.Reachable` on `s.replaySession`. -/
 theorem turnCommitCore_preserves_reachable {s : SessionState} (tidBytes : ByteArray)
@@ -1415,9 +1411,4 @@ theorem isHardwareProjectionFormat_cae_pde_formats :
 
 end Obend.FFI
 end
-
-
-
-
-
 

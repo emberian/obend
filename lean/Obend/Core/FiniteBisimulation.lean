@@ -524,11 +524,6 @@ theorem arity_mismatch_rejected : visitedSame arityMismatch 0 1 = false := by
   | true => exact False.elim (arity_mismatch_not_bisimilar
       ((visitedSame_iff _ _ _).mp result))
 
--- These evaluate the actual worklist, independently of the semantic proofs.
-#guard visitedSame differentPeriods 0 1
-#guard !(visitedSame reachableMismatch 0 1)
-#guard !(visitedSame arityMismatch 0 1)
-
 end Probes
 
 end Obend.Core.FiniteBisimulation

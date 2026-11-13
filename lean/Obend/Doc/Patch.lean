@@ -359,9 +359,6 @@ theorem isDead_apply_forward (G : Graph) (p : Patch) (hf : forward p = true) (a 
     | disconnect s d => simp [Op.forward] at hf
     | unsetField i n v => simp [Op.forward] at hf
 
--- Forgetting the deletions makes the theorem claim a delete leaves the atom alive.
-#tooth isDead_apply_forward by mutation deletes := fun _ => []
-
 /-- **A forward patch makes present what it adds and nothing else.** -/
 theorem present_apply_forward (G : Graph) (p : Patch) (hf : forward p = true) (a : AtomId) :
     (G.apply p).present a = (G.present a || (adds p).contains a) := by
@@ -437,10 +434,6 @@ example : ¬ ((base.apply [.connect 1 2]).apply (invert [.connect 1 2])).Same ba
   revert this; decide
 
 end Teeth
-
-#tooth apply_compose by mutation Patch.compose := fun p _ => p
-#tooth apply_invert by mutation Patch.invert := fun p => p
-#tooth apply_frame by mutation Op.touches := fun _ => []
 
 /-! ### Keyed Structured Cells (`Content.cell`) & Cell-Level Patching -/
 

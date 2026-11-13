@@ -201,10 +201,6 @@ example : ((Index.post (backlinks (vault.read toy) [1, 2]) 1
 
 end Teeth
 
-#tooth mem_backlinks by mutation Graph.citesOf := fun _ _ _ => []
-#tooth post_correct by mutation Index.post := fun I _ _ => I
-#tooth usable_unmoved by mutation citeFacts := fun _ => [.present 2]
-
 /-! ## Transitive `#^block` Citation Impact Closure (`impactedBacklinksFuel`) -/
 
 /-- Direct downstream cells in `deps` (where each entry `(citingCell, citedBlock)` records that
@@ -490,10 +486,6 @@ theorem impactedBacklinksFuel_fixedPoint_iff_reachable
     induction hReach with
     | refl => exact hRoot
     | step _ hEdge ih => exact hClosed _ _ hEdge ih
-
-#tooth impactedBacklinksFuel_mono by mutation impactedBacklinksFuel := fun fuel _ k =>
-  if fuel == 0 then [k] else []
-#tooth impactedBacklinksFuel_fixedPoint_sound by mutation impactStep := fun _ _ => []
 
 end Obend.Doc
 

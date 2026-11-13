@@ -452,20 +452,5 @@ theorem crossPackage_bEquiv_rebinds_slot_usable
   have hsem := crossPackage_bEquiv_override_preserves_semantics cert Frame htarget_base htarget_link
   exact ⟨hpin_m', hspec_us, htrans_us', hmean', hsem.2.1⟩
 
-/-- Mutated `rebindEquivPin` that leaves the stale pin untouched instead of re-pinning to `linkComposition C L`. -/
-def rebindEquivPinBroken {C : Composition} {L : Layer} {m : String}
-    (_cert : EquivOverrideCert C L m) (p : LeafPin) : LeafPin :=
-  p
-
-/-- Mutated `compContext` that drops `F` and returns `C` unchanged. -/
-def compContextBroken (C _F : Term) : Term :=
-  C
-
-#tooth Obend.Spec.CrossPackage.crossPackage_bEquiv_override_preserves_semantics by mutation
-  Obend.Spec.CrossPackage.compContext := compContextBroken
-
-#tooth Obend.Spec.CrossPackage.crossPackage_bEquiv_rebinds_slot_usable by mutation
-  Obend.Spec.CrossPackage.rebindEquivPin := rebindEquivPinBroken
-
 end Obend.Spec.CrossPackage
 end

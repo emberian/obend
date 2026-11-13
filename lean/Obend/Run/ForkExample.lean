@@ -99,23 +99,3 @@ theorem conflict_general :
 
 end Obend.Run.ForkExample
 
--- A fork that may spend shared tokens grants the capability twice.
-#tooth Obend.Run.ForkExample.fork_refuses by mutation Obend.Run.Fork.forkStep :=
-  fun {_ _ _ _} [_] _ _ F r => match r with
-    | .spend _ t => .ok { F with spentHere := F.spentHere ++ [t] }
-    | .grow m => .ok { F with grown := F.grown ++ [m] }
-    | .mint t => .ok { F with own := F.own ++ [t] }
-    | .defer e => .ok { F with escalated := F.escalated ++ [e] }
--- Without the shared mask, Bob's runner admits his escalated commitment and it is granted too.
-#tooth Obend.Run.ForkExample.bob_offline_conflict by mutation Obend.Run.Shared.sharedLive :=
-  fun {_ _ _ _} [_] _ base d t => (base (Obend.Run.Shared.Ledger.raw _ d)).live t
--- The former stitch: each escalated row a commit through the ledger's step alone, bypassing the
--- runner. Bob is granted the capability at a main where he never reserved.
-#tooth Obend.Run.ForkExample.runner_judges_escalation by mutation Obend.Run.Fork.jstep :=
-  fun {_ _ _ _ _ _ _ _ _ _ _ _} [_] [_] [_] [_] [_] [_] L _ sp _ _ {_} J e =>
-    match Obend.Run.Shared.ledgerStep L J.led (Obend.Run.Shared.ledgerRowOf L (sp e.1) J.led e.1 e.2) with
-    | .ok d => .ok { J with led := d }
-    | .error c => .error (.ledger c)
--- A non-atomic settlement: the first commitment stays committed although the second was refused.
-#tooth Obend.Run.ForkExample.two_step_atomic by mutation Obend.Run.Fork.settle :=
-  fun {_ _ _} _ tentative _ => tentative

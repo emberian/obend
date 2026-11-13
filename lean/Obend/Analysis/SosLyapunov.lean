@@ -1697,9 +1697,6 @@ theorem sosLyapunovFormat_refuses_empty_json :
   rw [decodeSosLyapunovProblem_refuses_empty_json]
   rfl
 
-#tooth sosLyapunovFormat_refuses_empty_json by mutation
-  decodeSosLyapunovProblem := fun _ => .ok goldenSosProblem
-
 /-- **Theorem (`sos_lyapunov_cbf_dae_showcase_sound`)**:
 Verifies that the 2D cubic nonlinear Lyapunov certificate, 2D disk Control Barrier Function certificate,
 Index-1 algebraic manifold DAE certificate, and unified `"sos-lyapunov-cbf@1"` judge all pass! -/

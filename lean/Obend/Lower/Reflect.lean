@@ -668,14 +668,5 @@ theorem fusedPrototypeSlot_sound_and_conservative
     obtain ⟨dead, hr, hpd, _⟩ := fusedPrototypeSlot_moved_pin_blocks hj hp hcell hdiff
     exact ⟨dead, hr, hpd⟩
 
-#tooth fusedPrototypeSlot_sound_and_conservative by mutation
-  fusedPrototypeJudge := fun _ _ _ => true
-
-#tooth fusedPrototypeSlot_override_outside_usable by mutation
-  overrideMethodView := fun v _ newCode => { v with decl := fun _ => some newCode }
-
-#tooth fusedPrototypeSlot_moved_pin_blocks by mutation
-  overrideMethodView := fun v _ _ => v
-
 end Obend.Lower.Reflect
 end

@@ -1603,20 +1603,5 @@ theorem etaDomCompat_fail_closed_sound
   unfold etaDomCompat
   rw [hNone]
 
-/-- Broken `etaDomCompat` that defaults `none ↦ true` (unsoundly permitting $\eta$-expansion
-against untyped free variables or ill-typed terms). -/
-@[expose] def etaDomCompatFailOpen (env : KEnv) (fuel : Nat)
-    (inferPrev : List KExpr → KExpr → Option KExpr)
-    (defEqPrev : List KExpr → KExpr → KExpr → Bool)
-    (ctx : List KExpr) (dom other : KExpr) : Bool :=
-  match inferPrev ctx other with
-  | some otherTy =>
-    match kernelWhnf env fuel otherTy with
-    | .forallE otherDom _ => defEqPrev ctx dom otherDom
-    | _ => false
-  | none => true
-
-#tooth etaDomCompat_fail_closed_sound by mutation etaDomCompat := etaDomCompatFailOpen
-
 end Obend.Lower.LeanKernel
 end
