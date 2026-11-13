@@ -402,6 +402,13 @@ theorem badClearing_refused :
     | .error r => .refused r []) = (.refused .marketMalformed [] : Judge.Verdict Obend.Judge.ClearingRefusal)
   decide +kernel
 
+/-- Decode the order-side tag inside a clearing order. -/
+def parseClearingSide (side : String) : Except String Obend.Judge.Side :=
+  match side with
+  | "bid" => .ok .bid
+  | "ask" => .ok .ask
+  | _ => .error s!"unknown side {side}"
+
 /-- Decode a `ClearingQuery` from JSON for `clearing@1`. -/
 def decodeClearingObj (s : String) : Except String Obend.Judge.ClearingQuery := do
   let j ← Json.parse s
@@ -413,10 +420,7 @@ def decodeClearingObj (s : String) : Except String Obend.Judge.ClearingQuery := 
   let orders ← ordersArr.toList.mapM fun oJson => do
     let account ← oJson.getObjValAs? Nat "account"
     let sideStr ← oJson.getObjValAs? String "side"
-    let side ← match sideStr with
-      | "bid" => pure Obend.Judge.Side.bid
-      | "ask" => pure Obend.Judge.Side.ask
-      | _ => throw s!"unknown side {sideStr}"
+    let side ← parseClearingSide sideStr
     let qty ← oJson.getObjValAs? Nat "qty"
     let total ← oJson.getObjValAs? Nat "total"
     pure { account, side, qty, total : Obend.Judge.Order }
@@ -1242,7 +1246,9 @@ theorem superClaimCheck_of_claimCheck {k : Nat} {o : ClaimObj} {steps : List RSt
 /-- **`superClaimJudge`**: Complete `Judge` instance for vertical-refinement claims. -/
 instance superClaimJudge : Judge ClaimObj (List RStep) where
   Clause := ClaimClause
-  Meaning o _ := o.wellFormed = true ∧ claimMeaning o
+  -- Structural admissibility accompanies the independent ground-equation semantics.
+  -- Bool's Prop coercion states the same admissibility as the base claim judge.
+  Meaning o _ := o.wellFormed ∧ claimMeaning o
   check := superClaimCheck
   sound := by
     intro k o steps h

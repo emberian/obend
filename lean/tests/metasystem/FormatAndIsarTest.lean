@@ -1,4 +1,5 @@
 import Obend.Tactic.Tooth
+import all Obend.Logic.Obligation
 import Obend.Vault.Escrow
 import Obend.Spec.Syntax
 import Obend.Spec.Parse
@@ -277,3 +278,15 @@ theorem sampleElaboratedCellContract_holds_top (d : Data) :
 #print axioms sampleContractProofTree_properties
 #print axioms sampleElaboratedCellContract_holds_top
 
+
+-- Wire decoders parse inputs beyond the old fixed fixtures and refuse preset aliases.
+#guard (decodeLratObj "[[2],[-2]]").toOption = some ⟨2, [[2], [-2]]⟩
+#guard (decodeLratObj "p cnf 2 2\n2 0\n-2 0\n").toOption = some ⟨2, [[2], [-2]]⟩
+#guard (decodeLratCert "[{\"id\":4,\"clause\":[],\"hints\":[1,2]}]").toOption =
+  some (.refutation [.add 4 [] [1, 2]])
+#guard (decodeLratObj "contradiction").isError
+#guard (decodeLratCert "valid").isError
+#guard (decodeClearingObj "valid").isError
+#guard (decodeClearingCert "bad").isError
+#guard (decodeWorldCarryObj "valid").isError
+#guard (decodeWorldCarryCert "bad").isError

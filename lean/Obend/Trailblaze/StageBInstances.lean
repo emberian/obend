@@ -9,6 +9,7 @@ public import Obend.Vault.Mandate
 public import Obend.Crypto.DualSpine
 public import Obend.Polis.ZkBiscuit
 public import Obend.Polis.BlumRam
+import all Obend.Polis.BlumRam
 public import Obend.Polis.CapTP
 public import Obend.Hardware.Fabulous.TileEval
 public import Obend.Hardware.Hvm.Model
