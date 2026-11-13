@@ -1498,7 +1498,7 @@ def encodeRecordExec (Hb : Bytes → Bytes) (r : Record) : ByteArray :=
   LogBytes.encodeRecordBytes Hb r
 
 theorem encodeRecordExec_toList_eq_encodeRecord (Hb : Bytes → Bytes) (r : Record) :
-    (encodeRecordExec Hb r).toList = encodeRecord Hb r :=
+    (encodeRecordExec Hb r).data.toList = encodeRecord Hb r :=
   LogBytes.encode_bytes_eq Hb r
 
 /-- Append each record directly into one byte-array accumulator. -/
@@ -1508,7 +1508,7 @@ def encodeAllExecFrom (Hb : Bytes → Bytes) (acc : ByteArray) : List Record →
       (pushList (pushList (pushList acc (headerOf r)) r.payload) (be 32 (Hr Hb r.receipt))) rs
 
 theorem encodeAllExecFrom_eq (Hb : Bytes → Bytes) (rs : List Record) (acc : ByteArray) :
-    (encodeAllExecFrom Hb acc rs).toList = acc.toList ++ encodeAll Hb rs := by
+    (encodeAllExecFrom Hb acc rs).data.toList = acc.data.toList ++ encodeAll Hb rs := by
   induction rs generalizing acc with
   | nil => simp [encodeAllExecFrom, encodeAll]
   | cons r rs ih => simp [encodeAllExecFrom, ih, encodeAll, encodeRecord,
@@ -1518,7 +1518,7 @@ def encodeAllExec (Hb : Bytes → Bytes) (rs : List Record) : ByteArray :=
   encodeAllExecFrom Hb .empty rs
 
 theorem encodeAllExec_toList_eq_encodeAll (Hb : Bytes → Bytes) (rs : List Record) :
-    (encodeAllExec Hb rs).toList = encodeAll Hb rs := by
+    (encodeAllExec Hb rs).data.toList = encodeAll Hb rs := by
   simpa [encodeAllExec] using encodeAllExecFrom_eq Hb rs .empty
 
 /-- Parse a loaded segment window at its byte offset, without traversing its prefix. -/
@@ -1526,9 +1526,9 @@ def parseSegmentExec (Hb : Bytes → Bytes) (prev : Nat) (bytes : ByteArray) (of
     List Record × Nat × Option Drop := LogBytes.parseFromAt Hb prev bytes offset
 
 theorem parseExec_eq_parseSpec (Hb : Bytes → Bytes) (prev : Nat) (bytes : ByteArray) (offset : Nat) :
-    parseFrom Hb prev (bytes.toList.drop offset) =
+    parseFrom Hb prev (bytes.data.toList.drop offset) =
       ((parseSegmentExec Hb prev bytes offset).1,
-        bytes.toList.drop (parseSegmentExec Hb prev bytes offset).2.1,
+        bytes.data.toList.drop (parseSegmentExec Hb prev bytes offset).2.1,
         (parseSegmentExec Hb prev bytes offset).2.2) :=
   LogBytes.parseFromAt_eq Hb prev bytes offset
 end Obend.Vault.Log

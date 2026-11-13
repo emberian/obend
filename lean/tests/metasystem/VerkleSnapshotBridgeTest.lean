@@ -345,4 +345,7 @@ example (w : Obend.Vault.ChunkedWorld.World) :
 #tooth Obend.Polis.verifyOpening_binds by mutation
   Obend.Polis.insertAt := fun _ _ siblings => siblings
 
+#tooth Obend.Vault.ExpVerkleAndOpenHash.verifyExpVerkleOpening_multiLevel by mutation
+  Obend.Vault.ExpVerkleAndOpenHash.verifyExpVerkleOpening := fun _ _ _ _ _ => true
+
 end Obend.Tests.Metasystem.VerkleSnapshotBridgeTest

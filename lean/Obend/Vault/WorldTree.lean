@@ -4075,6 +4075,18 @@ theorem cowBranch_shares_unchanged_verkleSubtrees {pp : AjtaiParams} {hCols : pp
     | inr hpair =>
       exact .inr ⟨hpair.1.toCollisionAmong, hpair.2.property ▸
         And.intro hpair.2.val.nonZero ⟨hpair.2.val.shortNorm, hpair.2.val.inKernel⟩⟩
+
+/-- A real dual-commitment snapshot admits a child-authenticated opening for every world. -/
+theorem snapshotOpening_inhabited (world : ChunkedWorld.World) :
+    ∃ (snapshot : AuthenticatedWorldSnapshot) (opening : DualChunkSlotOpening),
+      verifyDualChunkOpening defaultChunkAjtaiParams defaultChunkAjtaiParams_cols
+        snapshot.snapshotRoot (snapshot.ajtaiChunkRoots.getD 0 [])
+        0 0 (snapshot.readSlot 0 0) opening = true := by
+  let snapshot := buildAuthenticatedSnapshot defaultChunkAjtaiParams defaultChunkAjtaiParams_cols world
+  exact ⟨snapshot, openDualSnapshotSlot snapshot 0 0,
+    openDualSnapshotSlot_valid (buildAuthenticatedSnapshot_wf
+      defaultChunkAjtaiParams defaultChunkAjtaiParams_cols world) (by decide) (by decide)⟩
+
 end Obend.Vault.VerkleSnapshotBridge
 
 namespace Obend.Vault.ExpVerkleAndOpenHash
@@ -4608,41 +4620,37 @@ theorem capacity_step (k : Nat) : capacity (k + 1) = arity k * capacity k := by
     simp [Nat.pow_two]
 
 
-/-- Least exponential height, computed with integer logarithms rather than linear fuel.
-The two tiny cases avoid the conventional `log2 0 = 0` corner. -/
+/-- Canonical exponential height, with two child-authentication levels even for tiny forests. -/
 def expVerkleDepth (n : Nat) : Nat :=
-  if n ≤ 1 then 0 else if n ≤ 2 then 1 else (n - 1).log2.log2 + 2
+  if n ≤ 2 then 2 else (n - 1).log2.log2 + 2
 
 theorem expVerkleDepth_covers (n : Nat) : n ≤ capacity (expVerkleDepth n) := by
   unfold expVerkleDepth
   split
-  next h => simpa [capacity] using h
+  next h => simp only [capacity]; omega
   next h =>
-    split
-    next h2 => simpa [capacity] using h2
-    next h2 =>
-      have ha := Nat.lt_log2_self (n := n - 1)
-      have hb := Nat.lt_log2_self (n := (n - 1).log2)
-      have hc := Nat.pow_le_pow_right (n := 2) (by decide)
-        (show (n - 1).log2 + 1 ≤ 2 ^ ((n - 1).log2.log2 + 1) by omega)
-      simp only [capacity]
-      omega
+    have ha := Nat.lt_log2_self (n := n - 1)
+    have hb := Nat.lt_log2_self (n := (n - 1).log2)
+    have hc := Nat.pow_le_pow_right (n := 2) (by decide)
+      (show (n - 1).log2 + 1 ≤ 2 ^ ((n - 1).log2.log2 + 1) by omega)
+    simp only [capacity]
+    omega
 
-/-- Exact node-depth bound for the canonical height actually used by automatic openings. -/
+theorem expVerkleDepth_multiLevel (n : Nat) : 2 ≤ expVerkleDepth n := by
+  unfold expVerkleDepth; split <;> omega
+
+/-- The two-level minimum is the only overhead over the logarithmic depth bound. -/
 theorem expVerkle_depth_le_logLog (n k : Nat) (h : n ≤ 2 ^ (2 ^ k)) :
-    expVerkleDepth n ≤ k + 1 := by
+    expVerkleDepth n ≤ max 2 (k + 1) := by
   unfold expVerkleDepth
   split
   next => omega
-  next h1 =>
-    split
-    next => omega
-    next h2 =>
-      have hn : n - 1 ≠ 0 := by omega
-      have ha : (n - 1).log2 < 2 ^ k := (Nat.log2_lt hn).mpr (by omega)
-      have hb : 1 ≤ (n - 1).log2 := (Nat.le_log2 hn).mpr (by omega)
-      have hc : (n - 1).log2.log2 < k := (Nat.log2_lt (by omega)).mpr ha
-      omega
+  next h2 =>
+    have hn : n - 1 ≠ 0 := by omega
+    have ha : (n - 1).log2 < 2 ^ k := (Nat.log2_lt hn).mpr (by omega)
+    have hb : 1 ≤ (n - 1).log2 := (Nat.le_log2 hn).mpr (by omega)
+    have hc : (n - 1).log2.log2 < k := (Nat.log2_lt (by omega)).mpr ha
+    omega
 
 structure ExpVerkleSpec where
   entries : List Val
@@ -4832,6 +4840,34 @@ def verifyExpVerkleOpening (H : Hash256) (root : Digest) (idx : Nat) (v : Val)
     H (forestBytes p.count p.height p.treeRoot) = root) &&
   verifyNode H p.height 0 idx v p.treeRoot p.vectors
 
+/-- Accepted recursive openings include exactly one authenticated child vector per level. -/
+theorem verifyNode_path_length (H : Hash256) (height start idx : Nat) (v : Val)
+    (root : Digest) (path : List (Array Digest))
+    (h : verifyNode H height start idx v root path = true) : path.length = height := by
+  induction height generalizing start idx root path with
+  | zero =>
+    simp only [verifyNode, decide_eq_true_eq] at h
+    simp [h.2.1]
+  | succ k ih =>
+    cases path with
+    | nil => simp [verifyNode] at h
+    | cons children rest =>
+      simp only [verifyNode, Bool.and_eq_true] at h
+      cases hc : children[idx / capacity k]? with
+      | none => simp [hc] at h
+      | some child =>
+        have hr : verifyNode H k (start + idx / capacity k * capacity k)
+            (idx % capacity k) v child rest = true := by simpa [hc] using h.2
+        simp only [List.length_cons, ih _ _ _ _ hr]
+
+/-- No accepted opening can replace the authenticated multi-level path with a flat record. -/
+theorem verifyExpVerkleOpening_multiLevel (H : Hash256) (root : Digest) (idx : Nat)
+    (v : Val) (p : ExpVerkleProof) (h : verifyExpVerkleOpening H root idx v p = true) :
+    2 ≤ p.vectors.length := by
+  simp only [verifyExpVerkleOpening, Bool.and_eq_true, decide_eq_true_eq] at h
+  rw [verifyNode_path_length H _ _ _ _ _ _ h.2, h.1.2.2.1]
+  exact expVerkleDepth_multiLevel p.count
+
 private theorem range_get {n i : Nat} (h : i < (Array.range n).size) :
     (Array.range n)[i] = i :=
   Obend.Crypto.Fast.arrayOfFn_get (fun j : Fin n => j.val) ⟨i, by simpa only [Array.size_range] using h⟩
@@ -4890,8 +4926,16 @@ theorem every_index_opens (H : Hash256) (f : ExpVerkleForestExec) (idx : Nat)
   verifyExpVerkleOpening_complete H f _ idx _ (expVerkleDepth_covers _)
     (Array.getElem?_eq_getElem hi) rfl
 
+/-- Honest full-width hash openings inhabit the verifier, including its two-level minimum. -/
+theorem verifyExpVerkleOpening_inhabited (H : Hash256) :
+    ∃ root idx v proof, 2 ≤ proof.vectors.length ∧
+      verifyExpVerkleOpening H root idx v proof = true := by
+  let forest : ExpVerkleForestExec := ⟨#[0]⟩
+  have h := every_index_opens H forest 0 (by decide)
+  exact ⟨_, _, _, _, verifyExpVerkleOpening_multiLevel H _ _ _ _ h, h⟩
+
 theorem opening_depth_bound (H : Hash256) (f : ExpVerkleForestExec) (idx k : Nat)
-    (h : f.entries.size ≤ 2 ^ (2 ^ k)) : (openExpVerkle H f idx).vectors.length ≤ k + 1 := by
+    (h : f.entries.size ≤ 2 ^ (2 ^ k)) : (openExpVerkle H f idx).vectors.length ≤ max 2 (k + 1) := by
   simpa [openExpVerkle, proveExpVerkle, openAt_length] using expVerkle_depth_le_logLog _ k h
 
 theorem forest_commit_refines (H : Hash256) (f : ExpVerkleForestExec) (s : ExpVerkleSpec)
