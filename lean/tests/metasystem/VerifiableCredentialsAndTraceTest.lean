@@ -518,12 +518,12 @@ theorem sessionMonitor_catches_unbound_root (c : TurnCommitments) (st : Houyhnhn
     decide (s.tableCommitment = commitTable P (complianceTable pol (receiptView s rc.witness) rc.witness))
 
 private def verifyDualSumcheckPIOPAlwaysTrue
-    {R : Type} [Obend.Crypto.CommRingOps R] [DecidableEq R]
-    [Obend.Crypto.TranscriptChallenge R] [Obend.Crypto.TranscriptEncode R]
-    (P₁ P₂ : Obend.Crypto.MultilinearPCS R)
-    [Obend.Crypto.TranscriptEncode P₁.Commitment] [Obend.Crypto.TranscriptEncode P₂.Commitment]
-    (_ : P₁.Params × P₂.Params) (_ _ : Nat) (_ : P₁.Commitment × P₂.Commitment)
-    (_ : R) (_ : List (Obend.Crypto.RoundPoly R)) (_ : P₁.OpeningProof × P₂.OpeningProof)
+    {_R : Type} [Obend.Crypto.CommRingOps _R] [DecidableEq _R]
+    [Obend.Crypto.TranscriptChallenge _R] [Obend.Crypto.TranscriptEncode _R]
+    (_P₁ _P₂ : Obend.Crypto.MultilinearPCS _R)
+    [Obend.Crypto.TranscriptEncode _P₁.Commitment] [Obend.Crypto.TranscriptEncode _P₂.Commitment]
+    (_ : _P₁.Params × _P₂.Params) (_ _ : Nat) (_ : _P₁.Commitment × _P₂.Commitment)
+    (_ : _R) (_ : List (Obend.Crypto.RoundPoly _R)) (_ : _P₁.OpeningProof × _P₂.OpeningProof)
     (_ : Obend.Crypto.Transcript .relationBound) : Bool := true
 
 -- Standalone PIOP compliance soundness without `checkCredentialEval` pre-check.
