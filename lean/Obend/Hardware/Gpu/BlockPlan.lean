@@ -1,9 +1,8 @@
 module
-public import Obend.Hardware.Gpu.BlockCoreProgram
-public import Obend.Hardware.Gpu.BlockCoreEncoding
+public import Obend.Hardware.Gpu.BlockCore
 public import Obend.Hardware.Gpu.SourceProtocol
 public import Obend.Hardware.Gpu
-@[expose] public section
+public section
 
 /-! The block-level source fragment of Core4.
 
@@ -64,7 +63,7 @@ theorem check_source (p : Program) (plan : Plan) (h : check p = .ok plan) : plan
       · contradiction
   · contradiction
 
-def Plan.term (p : Plan) : Term := BlockCoreProgram.source p.source
+@[expose] def Plan.term (p : Plan) : Term := BlockCoreProgram.source p.source
 
 def observe (program memory : Term) (array index : Nat) : Term :=
   .app (.app (.app program memory) (.nat array)) (.nat index)

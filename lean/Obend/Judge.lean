@@ -34,7 +34,7 @@ public import Obend.Judge.RealAnalysis
 public import Obend.Run.HyperLaw
 public import Obend.Analysis.Hybrid
 public import Obend.Analysis.SosLyapunov
-public import Obend.Analysis.Format
+public import Obend.Analysis.Impact
 public import Obend.Lower.Judge
 public import Obend.Hardware.Judge
 public import Obend.Law.Contract

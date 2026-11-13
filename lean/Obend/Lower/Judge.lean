@@ -13,14 +13,13 @@ certificate means its term *is* the lowering of the source and so computes what 
 synthesis positions, computed from the source's types (`typeOf`); the checker's run is the test that
 they suffice (`lower_checks` says some annotation does, for every `LTyped` term).
 -/
-public import Obend.Lower.Proofs.Sound
-public import Obend.Lower.Typing
+public import Obend.Lower.Fragment
 public import Obend.Judge.Class
 public import Obend.Core.Code
 public import Obend.Spec.DataWire
 public import Obend.Law.Proofs.Claim
 public import Obend.Logic.Obligation
-@[expose] public section
+public section
 namespace Obend.Lower
 open Obend.Core.Term Obend.Core.Ty
 open Obend.Core.Data (Data)

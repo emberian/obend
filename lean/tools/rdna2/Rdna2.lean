@@ -26,7 +26,7 @@ import Obend.Hardware.Gpu.Rdna2.Cert
 import Obend.Hardware.SquareGraphs
 import Obend.Hardware.Gpu.Rdna2.Lift
 import Obend.Hardware.Gpu.Rdna2.Certified
-import Obend.Hardware.Gpu.Ntt
+import Obend.Hardware.Gpu.NttKernel
 
 open Obend.Hardware.Gpu.Rdna2
 
@@ -348,6 +348,7 @@ def cmdCertBlock (graph : String) (p : Obend.Hardware.ArrayKernel.Program) (isa 
     let why := match p.check with
       | .error e => s!"the block source is not admitted: {e}"
       | .ok () => if !checkWaitcntDump isa then "a load is not waited for (obend-rdna2 waitcnt)"
+        else if let .error e := checkVscntBlockDumpReport isa then e
         else match progsOf isa with
           | none => "a stage does not decode"
           | some progs => blockWhy p isa progs
@@ -393,6 +394,7 @@ def cmdCert (graph : String) (isaPath : String) (flip : Option String) : IO UInt
   | none =>
     let why := if !g.wf then "the graph is not well formed"
       else if !checkWaitcntDump isa then "a load is not waited for (obend-rdna2 waitcnt)"
+      else if let .error e := checkVscntDumpReport isa then e
       else match progsOf isa with
         | none => "a stage does not decode"
         | some progs => whyRefused p sched isa progs

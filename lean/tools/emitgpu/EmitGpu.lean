@@ -29,8 +29,7 @@ import Obend.Hardware.Gpu.BookImport
 import Obend.Hardware.Gpu.CollectiveImport
 import Obend.Hardware.Gpu.ArrayEmit
 import Obend.Hardware.Gpu.CatgradImport
-import Obend.Hardware.Gpu.Ntt
-import Obend.Hardware.Gpu.NttCorrect
+import Obend.Hardware.Gpu.NttKernel
 import Obend.Hardware.ArrayKernel
 import Obend.Hardware.Gpu.BlockEmit
 import Obend.Hardware.Gpu.LayoutChecks

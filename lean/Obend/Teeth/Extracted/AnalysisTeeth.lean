@@ -17,7 +17,6 @@ import all Obend.Analysis.Hybrid
 import all Obend.Analysis.Impact
 import all Obend.Analysis.QuantumWalk
 import all Obend.Analysis.RealAnalysis
-import all Obend.Analysis.Setup
 import all Obend.Analysis.SosLyapunov
 import all Obend.Analysis.TaylorModel
 import all Obend.Core.Brand
@@ -59,8 +58,7 @@ import all Obend.Logic.Frame
 import all Obend.Logic.Ground
 import all Obend.Logic.Obligation
 import all Obend.Lower.Judge
-import all Obend.Lower.Proofs.Sound
-import all Obend.Lower.Typing
+import all Obend.Lower.Fragment
 import all Obend.Receipt
 import all Obend.Slot
 import all Obend.Slot.World

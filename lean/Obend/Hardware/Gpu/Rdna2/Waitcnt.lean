@@ -25,12 +25,17 @@ the last `k` events (`applyWaitcnt`: `LB := UB - k`) and nothing on an out-of-or
 most-recent-first (`WaitcntBrackets::merge`, scores shifted to the new upper bound). The walk is a
 dataflow over the basic blocks to a fixpoint, as the pass does.
 
+The independent VS_CNT analysis joins bounded store counts across every reachable CFG edge.
+All stores must complete before barriers. Global/flat stores must also complete before kernel exit;
+block certification requires buffer stores to complete there too. Graph certification retains the
+RADV elementwise convention of allowing buffer stores at exit. Only S_WAITCNT_VSCNT drains VS_CNT.
+
 `hardware/gpu/isa_check.sh` stage 6 runs `checkWaitcntDump` on every dump and requires that a dump with
 one `s_waitcnt` replaced by `s_nop 0` (same width, so no branch moves) is refused.
 -/
 module
 public import Obend.Hardware.Gpu.Rdna2.Check
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 
@@ -50,13 +55,16 @@ instance : ToString Reg := ⟨Reg.toString⟩
 
 /-- The registers a source code names, `k` dwords wide: SGPRs, VCC, EXEC, M0 and VGPRs; inline constants
 and the literal name none (manual Tables 10 and 20). -/
-def regsOfCode (code k : Nat) : List Reg :=
+@[expose] def regsOfCode (code k : Nat) : List Reg :=
   if code ≤ 107 || code == 124 || code == 126 || code == 127 then (List.range k).map fun j => .s (code + j)
   else if 256 ≤ code && code ≤ 511 then (List.range k).map fun j => .v (code - 256 + j)
   else []
 
 def vregs (n k : Nat) : List Reg := (List.range k).map fun j => .v (n + j)
 def sregs (n k : Nat) : List Reg := (List.range k).map fun j => .s (n + j)
+
+@[cbv_eval] theorem vregs_eq (n k : Nat) : vregs n k = (List.range k).map (fun j => Reg.v (n+j)) := by rfl
+@[cbv_eval] theorem sregs_eq (n k : Nat) : sregs n k = (List.range k).map (fun j => Reg.s (n+j)) := by rfl
 
 structure Access where
   reads : List Reg
@@ -66,7 +74,7 @@ structure Access where
 /-- From the XML's operand list (field, type, size, Input/Output) and the decoded fields: VGPR fields by
 number, source fields by code, the implicit VCC of VOP2/VOPC, EXEC for V_CMPX and the branches, MUBUF's
 address VGPRs by IDXEN/OFFEN and resource quad, SMEM's base pair or quad. A VALU reads EXEC. -/
-def Inst.access (i : Inst) : Access := Id.run do
+@[expose] def Inst.access (i : Inst) : Access := Id.run do
   let fam := family i.enc.name
   let mut reads : List Reg := []
   let mut writes : List Reg := []
@@ -86,7 +94,7 @@ def Inst.access (i : Inst) : Access := Id.run do
                   else regsOfCode (i.field "VDST") k
       | "VSRC1" | "VSRC0" => vregs (i.field op.field) k
       | "VDATA" => vregs (i.field "VDATA") k
-      | "ADDR" | "DATA0" | "DATA1" => vregs (i.field op.field) k
+      | "ADDR" | "DATA" | "DATA0" | "DATA1" => vregs (i.field op.field) k
       | "VADDR" => vregs (i.field "VADDR") ((if i.field "IDXEN" == 1 then 1 else 0) + (if i.field "OFFEN" == 1 then 1 else 0))
       | "SRSRC" => sregs (4 * i.field "SRSRC") 4
       | "SBASE" => sregs (2 * i.field "SBASE") k
@@ -113,11 +121,11 @@ structure Pending where
   smem : Bool
   deriving Repr, DecidableEq
 
-def Pending.empty : Pending := { vm := [], lgkm := [], smem := false }
+@[expose] def Pending.empty : Pending := { vm := [], lgkm := [], smem := false }
 
 /-- `s_waitcnt` SIMM16 (manual 12.5): vmcnt `{[15:14],[3:0]}`, expcnt `[6:4]`, lgkmcnt `[13:8]`. -/
-def waitVm (simm : Nat) : Nat := (simm % 16) ||| (((simm >>> 14) % 4) <<< 4)
-def waitLgkm (simm : Nat) : Nat := (simm >>> 8) % 64
+@[expose] def waitVm (simm : Nat) : Nat := (simm % 16) ||| (((simm >>> 14) % 4) <<< 4)
+@[expose] def waitLgkm (simm : Nat) : Nat := (simm >>> 8) % 64
 
 /-- The oldest events that await no register (LDS writes) are dropped: a wait of `k` retires the oldest
 `n - k` events, and which of the register-carrying ones it retires does not depend on how many
@@ -143,22 +151,27 @@ def Pending.join (a b : Pending) : Pending :=
   { vm := joinEvents a.vm b.vm, lgkm := Events.trim (joinEvents a.lgkm b.lgkm), smem := a.smem || b.smem }
 
 /-- A register still awaited by some event. -/
-def Events.hits (es : Events) (r : Reg) : Bool := es.any (·.contains r)
+@[expose] def Events.hits (es : Events) (r : Reg) : Bool := es.any (·.contains r)
 
 /-! ## 3. One instruction -/
 
-def isVmemLoad (i : Inst) : Bool := i.enc.name == "ENC_MUBUF" && i.name.startsWith "BUFFER_LOAD"
-def isVmemStore (i : Inst) : Bool := i.enc.name == "ENC_MUBUF" && i.name.startsWith "BUFFER_STORE"
-def isSmemLoad (i : Inst) : Bool := i.enc.name == "ENC_SMEM" && (i.name.startsWith "S_LOAD" || i.name.startsWith "S_BUFFER_LOAD")
-def isDsLoad (i : Inst) : Bool := i.enc.name == "ENC_DS" && i.name.startsWith "DS_READ"
-def isDsStore (i : Inst) : Bool := i.enc.name == "ENC_DS" && i.name.startsWith "DS_WRITE"
+@[expose] def isVmemLoad (i : Inst) : Bool := i.enc.name == "ENC_MUBUF" && i.name.startsWith "BUFFER_LOAD"
+@[expose] def isVmemStore (i : Inst) : Bool := i.enc.name == "ENC_MUBUF" && i.name.startsWith "BUFFER_STORE"
+@[expose] def isSmemLoad (i : Inst) : Bool := i.enc.name == "ENC_SMEM" && (i.name.startsWith "S_LOAD" || i.name.startsWith "S_BUFFER_LOAD")
+@[expose] def isDsLoad (i : Inst) : Bool := i.enc.name == "ENC_DS" && i.name.startsWith "DS_READ"
+@[expose] def isDsStore (i : Inst) : Bool := i.enc.name == "ENC_DS" && i.name.startsWith "DS_WRITE"
+
+/-- Global and flat stores use VS_CNT, independently of VM_CNT. -/
+def isGlobalOrFlatStore (i : Inst) : Bool :=
+  (i.enc.name == "ENC_FLAT_GLBL" && i.name.startsWith "GLOBAL_STORE") ||
+  (i.enc.name == "ENC_FLAT" && i.name.startsWith "FLAT_STORE")
 
 /-- The families whose counters this module knows: scalar and vector ALU, SMEM loads, MUBUF loads and
-stores. Anything else (LDS, GDS, exports, images, flat, messages) is refused. -/
+stores, LDS reads/writes, and global/flat stores. Other memory families are refused. -/
 def knownFamily (i : Inst) : Bool :=
   let fam := family i.enc.name
   fam == "SOP1" || fam == "SOP2" || fam == "SOPC" || fam == "SOPP" || fam == "SOPK" || fam == "VOP1" || fam == "VOP2"
-    || fam == "VOPC" || fam == "VOP3" || isVmemLoad i || isVmemStore i || isSmemLoad i || isDsLoad i || isDsStore i
+    || fam == "VOPC" || fam == "VOP3" || isVmemLoad i || isVmemStore i || isSmemLoad i || isDsLoad i || isDsStore i || isGlobalOrFlatStore i
 
 /-- Check one instruction against the pending loads, then issue it. -/
 def stepPending (p : Pending) (i : Inst) : Except String Pending := do
@@ -263,5 +276,109 @@ def checkWaitcntDumpReport (isa : String) (nop : Option (Nat × Nat)) : Except S
   pure s!"{n} stages: every load is waited for before its destination is touched"
 
 def checkWaitcntDump (isa : String) : Bool := (checkWaitcntDumpReport isa none).toBool
+
+/-! ## 5. Vector-store completion over every reachable CFG path -/
+
+structure VsPending where
+  vsAll : Nat := 0
+  vsGlobal : Nat := 0
+  deriving BEq, Repr
+
+def VsPending.join (a b : VsPending) : VsPending :=
+  ⟨max a.vsAll b.vsAll, max a.vsGlobal b.vsGlobal⟩
+
+/-- Conservative supported operand domain: RDNA2 null SDST and an unreserved six-bit threshold. -/
+@[expose] def validVscntOperands (i : Inst) : Bool :=
+  i.field "SDST" == 125 && i.field "SIMM16" < 64
+
+def stepVscnt (requireAllStoresOnExit : Bool) (p : VsPending) (i : Inst) : Except String VsPending := do
+  if !knownFamily i then throw s!"{i.name}: counters of this family are not modelled"
+  if (i.inst.isBranch && i.enc.name != "ENC_SOPP") ||
+      ["S_CALL_B64", "S_RFE_B64", "S_TRAP", "S_CODE_END"].contains i.name ||
+      (i.inst.isTerminator && i.name != "S_ENDPGM") then
+    throw s!"{i.name}: unsupported control flow in vscnt analysis"
+  if i.name == "S_BARRIER" && p.vsAll != 0 then
+    throw "unawaited vector store before barrier"
+  if i.inst.isTerminator then
+    if p.vsGlobal != 0 then throw "unawaited global/flat store before kernel exit"
+    if requireAllStoresOnExit && p.vsAll != 0 then
+      throw "unawaited vector store before block-kernel exit"
+  if i.name == "S_WAITCNT_VSCNT" then
+    if !validVscntOperands i then throw "S_WAITCNT_VSCNT: requires null SDST and SIMM16 < 64"
+    let k := i.field "SIMM16"
+    return ⟨min p.vsAll k, min p.vsGlobal k⟩
+  if isGlobalOrFlatStore i then return ⟨min 63 (p.vsAll + 1), min 63 (p.vsGlobal + 1)⟩
+  if isVmemStore i then return { p with vsAll := min 63 (p.vsAll + 1) }
+  return p
+
+/-- A successful strict boundary check forces the incoming all-store count to zero,
+regardless of the outgoing state or the instruction's other fields. -/
+theorem stepVscnt_boundary_zero (p q : VsPending) (i : Inst)
+    (boundary : i.name = "S_BARRIER" ∨ i.inst.isTerminator = true)
+    (accepted : stepVscnt true p i = .ok q) : p.vsAll = 0 := by
+  by_cases dirty : p.vsAll = 0
+  · exact dirty
+  · rcases boundary with barrier | exit
+    all_goals simp [stepVscnt, *, bind, Except.bind, throw, throwThe, MonadExceptOf.throw] at accepted
+    all_goals repeat' (split at accepted <;> simp_all [bind, Except.bind, throw, throwThe, MonadExceptOf.throw])
+
+
+/-- Structural fuel also refuses malformed zero-width instructions and fallthrough outside code. -/
+def runVscntBlock (strict : Bool) (prog : Program) (leaders : List Nat) :
+    Nat → Nat → VsPending → Except String (VsPending × Nat × Option Inst)
+  | 0, _, _ => .error "vscnt block exceeded program size"
+  | fuel + 1, pc, p => do
+    let some (some i) := prog[pc]? | throw s!"dword {pc}: not an instruction"
+    let p' ← stepVscnt strict p i
+    let next := pc + i.words.length
+    if isBranch i || i.inst.isTerminator then return (p', next, some i)
+    if leaders.contains next then return (p', next, none)
+    runVscntBlock strict prog leaders fuel next p'
+
+/-- Monotone componentwise joins. Each reachable entry can increase at most 126 times;
+exhaustion refuses, never accepts an unfinished analysis. -/
+def vscntFixpoint (strict : Bool) (prog : Program) (leaders : List Nat) :
+    Nat → List (Nat × VsPending) → List Nat → Except String Unit
+  | _, _, [] => .ok ()
+  | 0, _, _ :: _ => .error "the vscnt dataflow did not converge"
+  | fuel + 1, entry, pc :: rest => do
+    let p := (entry.find? (·.1 == pc)).map (·.2) |>.getD {}
+    let (pOut, next, last) ← runVscntBlock strict prog leaders (prog.size + 1) pc p
+    let succs : List Nat := match last with
+      | some i => if i.inst.isTerminator then []
+        else if isUncondBranch i then [branchTarget (next - i.words.length) i]
+        else [branchTarget (next - i.words.length) i, next]
+      | none => [next]
+    let mut entries := entry
+    let mut work := rest
+    for s in succs do
+      let old := (entries.find? (·.1 == s)).map (·.2)
+      let new := match old with | some q => q.join pOut | none => pOut
+      if old != some new then
+        entries := (s, new) :: entries.filter (·.1 != s)
+        if !work.contains s then work := work ++ [s]
+    vscntFixpoint strict prog leaders fuel entries work
+
+def checkVscntProg (requireAllStoresOnExit : Bool) (prog : Program) : Except String Unit :=
+  let leaders := leadersOf prog
+  vscntFixpoint requireAllStoresOnExit prog leaders (128 * leaders.length + 1) [(0, {})] [0]
+
+def checkVscntDumpReport (isa : String) (requireAllStoresOnExit : Bool := false) : Except String String := do
+  let dumps := parseDump isa
+  if dumps.isEmpty then throw "no stages in vscnt dump"
+  for (ws, k) in dumps.zipIdx do
+    let prog ← match decodeProgram (ws.flatMap id) with
+      | .ok p => pure p
+      | .error e => throw s!"stage {k}: {e}"
+    match checkVscntProg requireAllStoresOnExit prog with
+    | .ok () => pure ()
+    | .error e => throw s!"stage {k}: {e}"
+  pure s!"{dumps.size} stages: vector stores completed at required boundaries"
+
+def checkVscntDump (isa : String) : Bool := (checkVscntDumpReport isa false).toBool
+
+def checkVscntBlockDumpReport (isa : String) : Except String String := checkVscntDumpReport isa true
+
+def checkVscntBlockDump (isa : String) : Bool := (checkVscntBlockDumpReport isa).toBool
 
 end Obend.Hardware.Gpu.Rdna2

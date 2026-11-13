@@ -14,8 +14,7 @@ public import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit
 public import Obend.Leaf.Specialize
 public import Obend.Slot.World
-public import Obend.Lower.Syntax
-public import Obend.Lower.Lower
+public import Obend.Lower.Fragment
 public import Obend.Lower.Transport
 public import Obend.Tactic.Tooth
 

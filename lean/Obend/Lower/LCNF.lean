@@ -22,14 +22,18 @@ representation into `Obend.Lower.LExpr`, `Obend.Core.Term`, and flat `Obend.Leaf
 3. **ANF Control Flow, Join Points & Lowering (`LcnfCode`, `evalLcnfCode`, `compileLcnfToLExpr`, `compileLcnfToCore4`, `compileLcnfToBook`)**:
    - Supports `letValue`, `jpDecl` (local join-point declarations), `jmp` (join-point jumps),
      `cases` (algebraic constructor dispatch), `ifBool`, `return`, and `unreach`.
-   - Proves `lcnf_zero_erasure_sound`, `lcnf_linear_state_conserved`, `lcnf_to_core4_sound`,
-     and `lcnf_elab_pass_to_book_sound`.
+   - Join points capture their declaration environment and lexical join scope.
+   - `evalLcnfModule` and `compileLcnfModuleToLExpr` bind closed recursive declarations.
+   - `evalLcnfCodeVal_simulates_ssteps` proves structural simulation on `PureBlock`,
+     with the closed scalar corollary `evalLcnfCode_simulates_core4`.
+   - Separate agreement theorems cover lexical join capture and recursive module calls.
+   - Scalar and Boolean result APIs are distinct; state tokens are not scalar results.
 -/
 public import Obend.Lower.Fragment
-public import Obend.Lower.Proofs.Sound
 public import Obend.Lower.Proofs.Book
+import Obend.Lower.Proofs.Complete
 
-@[expose] public section
+public section
 
 namespace Obend.Lower.LCNF
 
@@ -169,14 +173,6 @@ def eraseZeroQtyArgs : List LcnfParam → List LcnfArg → List LcnfArg
     (if p.qty == .zero then .erased else a) :: eraseZeroQtyArgs ps as
   | _ :: _, [] => []
 
-/-- Look up a scalar `Nat` value in an LCNF environment `env : List Nat`. -/
-def evalLcnfArgNat (env : List Nat) : LcnfArg → Nat
-  | .bvar i      => env.getD i 0
-  | .lit n       => n
-  | .boolLit b   => if b then 1 else 0
-  | .erased      => 0
-  | .stateTok id => id
-
 /-- Read a cell from the linear state store `st : List (Nat × Nat)`. -/
 def readLinearStore (st : List (Nat × Nat)) (addr : Nat) : Nat :=
   match st.find? (fun p => p.1 == addr) with
@@ -187,69 +183,138 @@ def readLinearStore (st : List (Nat × Nat)) (addr : Nat) : Nat :=
 def writeLinearStore (st : List (Nat × Nat)) (addr val : Nat) : List (Nat × Nat) :=
   (addr, val) :: st.filter (fun p => p.1 != addr)
 
-/-- Evaluate an `LcnfLetValue` in `(env, st)`, returning `(boundVal, st')`. -/
-def evalLcnfLetValue (env : List Nat) (st : List (Nat × Nat)) : LcnfLetValue → Nat × List (Nat × Nat)
-  | .arg a => (evalLcnfArgNat env a, st)
-  | .natOp op l r =>
-    let lv := evalLcnfArgNat env l
-    let rv := evalLcnfArgNat env r
-    let res := match op with
-      | .add => lv + rv
-      | .sub => lv - rv
-      | .mul => lv * rv
-      | .div => lv / rv
-      | .mod => lv % rv
-      | .beq => if lv == rv then 1 else 0
-      | .ble => if lv <= rv then 1 else 0
-    (res, st)
-  | .ctor _ fs =>
-    match fs with
-    | (_, a) :: _ => (evalLcnfArgNat env a, st)
-    | []          => (0, st)
-  | .record fs =>
-    match fs with
-    | (_, a) :: _ => (evalLcnfArgNat env a, st)
-    | []          => (0, st)
-  | .proj _ tgt => (evalLcnfArgNat env tgt, st)
-  | .app fn arg => (evalLcnfArgNat env fn + evalLcnfArgNat env arg, st)
-  | .stateRead _ addr =>
-    let a := evalLcnfArgNat env addr
-    (readLinearStore st a, st)
-  | .stateWrite _ addr val =>
-    let a := evalLcnfArgNat env addr
-    let v := evalLcnfArgNat env val
-    (v, writeLinearStore st a v)
+/-- Runtime values preserve constructor tags, named fields, and lexical closures. -/
+inductive LcnfVal where
+  | scalar (n : Nat)
+  | bool (b : Bool)
+  | erased
+  | stateTok (id : Nat)
+  | ctor (tag : String) (fields : List (String × LcnfVal))
+  | record (fields : List (String × LcnfVal))
+  | closure (env : List LcnfVal) (params : List LcnfVal) (decl : LcnfFunDecl)
 
-/-- Fuel-bounded operational evaluator for `LcnfCode` over scalar environment `env`,
-join-point table `jps : List (Nat × Nat × LcnfCode)`, and linear state store `st`. -/
-def evalLcnfCode : Nat → List Nat → List (Nat × Nat × LcnfCode) → List (Nat × Nat) → LcnfCode →
-    Option (Nat × List (Nat × Nat))
+/-- A join point closes over its declaration environment and lexical join-table suffix.
+The saved depth excludes the join itself: local joins are non-recursive. -/
+structure LcnfJpClosure where
+  jpId : Nat
+  numParams : Nat
+  declEnv : List LcnfVal
+  savedJpsDepth : Nat
+  jpBody : LcnfCode
+
+def evalLcnfArgVal (env : List LcnfVal) : LcnfArg → Option LcnfVal
+  | .bvar i => env[i]?
+  | .lit n => some (.scalar n)
+  | .boolLit b => some (.bool b)
+  | .erased => some .erased
+  | .stateTok id => some (.stateTok id)
+
+/-- The scalar API accepts only actual scalar results. -/
+def LcnfVal.toNat? : LcnfVal → Option Nat
+  | .scalar n => some n
+  | _ => none
+
+mutual
+/-- Fuel bounds both control flow and recursive closure applications. -/
+def evalLcnfLetValueVal : Nat → List LcnfVal → List LcnfJpClosure →
+    List (Nat × Nat) → LcnfLetValue → Option (LcnfVal × List (Nat × Nat))
   | 0, _, _, _, _ => none
-  | fuel' + 1, env, jps, st, c =>
+  | fuel + 1, env, _jps, st, v => do
+    match v with
+    | .arg a => return (← evalLcnfArgVal env a, st)
+    | .natOp op l r =>
+      let .scalar lv ← evalLcnfArgVal env l | none
+      let .scalar rv ← evalLcnfArgVal env r | none
+      let res := match op with
+        | .add => LcnfVal.scalar (lv + rv)
+        | .sub => .scalar (lv - rv)
+        | .mul => .scalar (lv * rv)
+        | .div => .scalar (lv / rv)
+        | .mod => .scalar (lv % rv)
+        | .beq => .bool (lv == rv)
+        | .ble => .bool (lv <= rv)
+      return (res, st)
+    | .ctor tag fs =>
+      let vals ← fs.mapM fun (name, a) => do return (name, ← evalLcnfArgVal env a)
+      return (.ctor tag vals, st)
+    | .record fs =>
+      let vals ← fs.mapM fun (name, a) => do return (name, ← evalLcnfArgVal env a)
+      return (.record vals, st)
+    | .proj field tgt =>
+      let .record fs ← evalLcnfArgVal env tgt | none
+      let (_, val) ← fs.find? (fun p => p.1 == field)
+      return (val, st)
+    | .app fn arg =>
+      let .closure cenv params decl ← evalLcnfArgVal env fn | none
+      let a ← evalLcnfArgVal env arg
+      let args := params ++ [a]
+      if args.length < decl.numParams then
+        return (.closure cenv args decl, st)
+      else if args.length == decl.numParams then
+        evalLcnfCodeVal fuel (args.reverse ++ [.closure cenv [] decl] ++ cenv) [] st decl.body
+      else none
+    | .stateRead tok addr =>
+      let .stateTok _ ← evalLcnfArgVal env tok | none
+      let .scalar a ← evalLcnfArgVal env addr | none
+      return (.scalar (readLinearStore st a), st)
+    | .stateWrite tok addr val =>
+      let .stateTok _ ← evalLcnfArgVal env tok | none
+      let .scalar a ← evalLcnfArgVal env addr | none
+      let .scalar v ← evalLcnfArgVal env val | none
+      return (.scalar v, writeLinearStore st a v)
+
+def evalLcnfCodeVal : Nat → List LcnfVal → List LcnfJpClosure →
+    List (Nat × Nat) → LcnfCode → Option (LcnfVal × List (Nat × Nat))
+  | 0, _, _, _, _ => none
+  | fuel + 1, env, jps, st, c => do
     match c with
-    | .return a => some (evalLcnfArgNat env a, st)
-    | .unreach  => none
+    | .return a => return (← evalLcnfArgVal env a, st)
+    | .unreach => none
     | .letValue v body =>
-      let (val, st') := evalLcnfLetValue env st v
-      evalLcnfCode fuel' (val :: env) jps st' body
-    | .jpDecl jpId numParams jpBody body =>
-      evalLcnfCode fuel' env ((jpId, numParams, jpBody) :: jps) st body
-    | .jmp jpId args =>
-      match jps.find? (fun entry => entry.1 == jpId) with
-      | some (_, _, jpBody) =>
-        let argVals := args.map (evalLcnfArgNat env)
-        evalLcnfCode fuel' (argVals ++ env) jps st jpBody
-      | none => none
+      let (val, st') ← evalLcnfLetValueVal fuel env jps st v
+      evalLcnfCodeVal fuel (val :: env) jps st' body
+    | .jpDecl id n jpBody body =>
+      evalLcnfCodeVal fuel env (⟨id, n, env, jps.length, jpBody⟩ :: jps) st body
+    | .jmp id args =>
+      let jp ← jps.find? (fun entry => entry.jpId == id)
+      if args.length != jp.numParams then none else do
+        let vals ← args.mapM (evalLcnfArgVal env)
+        evalLcnfCodeVal fuel (vals ++ jp.declEnv)
+          (jps.drop (jps.length - jp.savedJpsDepth)) st jp.jpBody
     | .ifBool cond t f =>
-      if evalLcnfArgNat env cond != 0 then
-        evalLcnfCode fuel' env jps st t
-      else
-        evalLcnfCode fuel' env jps st f
+      let .bool b ← evalLcnfArgVal env cond | none
+      evalLcnfCodeVal fuel env jps st (if b then t else f)
     | .cases scrut arms =>
-      let sv := evalLcnfArgNat env scrut
-      match arms with
-      | (_, _, body) :: _ => evalLcnfCode fuel' (sv :: env) jps st body
-      | [] => none
+      let .ctor tag fs ← evalLcnfArgVal env scrut | none
+      let (_, names, body) ← arms.find? (fun (armTag, _, _) => armTag == tag)
+      let vals ← Obend.Core.Term.splitValues fs names
+      evalLcnfCodeVal fuel (vals.reverse ++ env) jps st body
+end
+
+/-- Scalar compatibility view; structured or ill-typed results fail closed. -/
+def evalLcnfCode (fuel : Nat) (env : List Nat) (jps : List LcnfJpClosure)
+    (st : List (Nat × Nat)) (c : LcnfCode) : Option (Nat × List (Nat × Nat)) := do
+  let (val, st') ← evalLcnfCodeVal fuel (env.map LcnfVal.scalar) jps st c
+  return (← val.toNat?, st')
+
+/-- Boolean results have a separate view and are never coerced to natural numbers. -/
+def evalLcnfCodeBool (fuel : Nat) (env : List LcnfVal) (jps : List LcnfJpClosure)
+    (st : List (Nat × Nat)) (c : LcnfCode) : Option (Bool × List (Nat × Nat)) := do
+  let (.bool b, st') ← evalLcnfCodeVal fuel env jps st c | none
+  return (b, st')
+
+/-- Top-level declarations are closed recursive functions. Later declarations occupy
+lower de Bruijn indices, matching the nested let bindings in module compilation. -/
+def evalLcnfModule (fuel : Nat) (m : LcnfModule) : Option (Nat × List (Nat × Nat)) := do
+  let env := m.decls.foldl (fun env decl => .closure [] [] decl :: env) []
+  let (v, st) ← evalLcnfCodeVal fuel env [] [] m.entry
+  return (← v.toNat?, st)
+
+/-- Evaluate a scalar let value through the same structured evaluator. -/
+def evalLcnfLetValue (env : List Nat) (st : List (Nat × Nat)) (v : LcnfLetValue) :
+    Option (Nat × List (Nat × Nat)) := do
+  let (val, st') ← evalLcnfLetValueVal 1 (env.map LcnfVal.scalar) [] st v
+  return (← val.toNat?, st')
 
 /-- Static `.one`-quantity linear state-token checker (`checkLinearStateToken`):
 Given the current live state token `tokId : Nat`, verifies that:
@@ -421,7 +486,7 @@ def lcnfLetValueToLExpr (v : LcnfLetValue) : LExpr :=
 
 /-- Wrap an arm body `body : LExpr` in `k` curried `.lam .emptyRow` binders for the constructor's
 fields (matching `LExpr.cases` minor-premise convention). -/
-def wrapMinorBvars : Nat → LExpr → LExpr
+@[expose] def wrapMinorBvars : Nat → LExpr → LExpr
   | 0, body     => body
   | k + 1, body => .lam .emptyRow (wrapMinorBvars k body)
 
@@ -525,6 +590,22 @@ abbrev lowerLCNF := compileLcnfToCore4
 /-- Lower a recursive `LcnfFunDecl` into `LExpr` via `LExpr.recConst`. -/
 def lcnfFunDeclToLExpr (decl : LcnfFunDecl) : LExpr :=
   .recConst decl.name (fn .emptyRow .natural) (wrapMinorBvars decl.numParams (compileLcnfToLExpr decl.body))
+
+/-- Bind closed top-level declarations before compiling the module entry. -/
+def compileLcnfModuleToLExpr (m : LcnfModule) : LExpr :=
+  let rec bindDecls (ctx : LcnfLowerCtx) : List LcnfFunDecl → LExpr
+    | [] =>
+      if codeUsesState m.entry then
+        .letE (fn .natural .natural) emptyLinearStoreLExpr
+          (compileLcnfWithCtx { ctx.pushExtraBinder with stateIdx? := some 0 } m.entry)
+      else compileLcnfWithCtx ctx m.entry
+    | decl :: rest =>
+      .letE .emptyRow (lcnfFunDeclToLExpr decl) (bindDecls ctx.pushVar rest)
+  bindDecls {} m.decls
+
+/-- Module compilation through the existing verified Lower bridge. -/
+def compileLcnfModuleToCore4 (m : LcnfModule) : Term :=
+  lowerT (compileLcnfModuleToLExpr m)
 
 /-- Lower a recursive `LcnfFunDecl` directly to a `Core4` `Term`. -/
 def lowerLCNFFunDecl (decl : LcnfFunDecl) : Term :=
@@ -904,7 +985,7 @@ theorem lcnf_linear_state_conserved (addr val : Nat) :
     Evaluates (compileLcnfToCore4 (mkLinearStateWriteRead addr val)) (.nat val) := by
   have hSteps := mkLinearStateWriteRead_runs addr val
   refine ⟨rfl, rfl, ?_, hSteps, ?_⟩
-  · simp [mkLinearStateWriteRead, evalLcnfCode, evalLcnfLetValue, evalLcnfArgNat,
+  · simp [mkLinearStateWriteRead, evalLcnfCode, evalLcnfCodeVal, evalLcnfLetValueVal, evalLcnfArgVal, LcnfVal.toNat?,
           writeLinearStore, readLinearStore]
   · simpa [compileLcnfToCore4, lowerT] using lower_sound_nat hSteps
 
@@ -955,7 +1036,641 @@ theorem lcnf_elab_pass_to_book_sound (v1 v2 offset : Nat) :
   refine ⟨hJp, ?_, rfl, ?_⟩
   · simpa [compileLcnfToCore4, lowerT] using lower_sound_nat hJp
   · exact lean_to_book sampleLcnfRecDecl.name (lcnfFunDeclToLExpr sampleLcnfRecDecl) 0 42
-      (by decide +kernel) sampleLcnfRecDecl_runs_zero
+      (by
+        simp only [lcnfFunDeclToLExpr, lowerT, recSpec_eq]
+        decide +kernel) sampleLcnfRecDecl_runs_zero
+
+/-- Dispatch deliberately skips the first arm; subtraction observes both binder positions. -/
+def casesProjCode (x y : Nat) : LcnfCode :=
+  .letValue (.ctor "right" [("x", .lit x), ("y", .lit y)])
+    (.cases (.bvar 0)
+      [("left", [], .return (.lit 0)),
+       ("right", ["x", "y"],
+         .letValue (.natOp .sub (.bvar 1) (.bvar 0)) (.return (.bvar 0)))])
+
+def namedProjCode (field : String) (x y : Nat) : LcnfCode :=
+  .letValue (.record [("fst", .lit x), ("snd", .lit y)])
+    (.letValue (.proj field (.bvar 0)) (.return (.bvar 0)))
+
+def unmatchedCasesCode (x : Nat) : LcnfCode :=
+  .letValue (.ctor "absent" [("x", .lit x)])
+    (.cases (.bvar 0) [("right", ["x"], .return (.bvar 0))])
+
+theorem casesProjCode_runs (x y : Nat) :
+    SSteps (compileLcnfToLExpr (casesProjCode x y)) (.lit (x - y)) := by
+  change SSteps (.letE .emptyRow (.inject "right" [("x", .lit x), ("y", .lit y)])
+    (.cases .emptyRow
+      [("left", [], .lit 0), ("right", ["x", "y"],
+        .lam .emptyRow (.lam .emptyRow
+          (.letE .emptyRow (.natBin .sub (.bvar 1) (.bvar 0)) (.bvar 0))))]
+      (.bvar 0))) _
+  refine .next (.zeta _ _ _) ?_
+  simp only [LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, List.map_cons,
+    List.map_nil]
+  refine .next (.casesInject _ _ "right" _ ["x", "y"] _ [.lit x, .lit y] rfl rfl) ?_
+  simp only [LExpr.spine]
+  refine .next (.appFun _ (.beta _ _ _)) ?_
+  simp [LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  refine .next (.beta _ _ _) ?_
+  simp [LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single, LExpr.rename]
+  refine .next (.zeta _ _ _) ?_
+  simp only [LExpr.inst, LExpr.subst, LExpr.single]
+  exact .next (.binLit .sub x y) (.refl _)
+
+theorem namedProjCode_runs (x y : Nat) :
+    SSteps (compileLcnfToLExpr (namedProjCode "snd" x y)) (.lit y) := by
+  change SSteps (.letE .emptyRow (.record [("fst", .lit x), ("snd", .lit y)])
+    (.letE .emptyRow (.proj "snd" (.bvar 0)) (.bvar 0))) _
+  refine .next (.zeta _ _ _) ?_
+  simp only [LExpr.inst, LExpr.subst, LExpr.liftSubst, LExpr.single]
+  refine .next (.zeta _ _ _) ?_
+  simp only [LExpr.inst, LExpr.subst, LExpr.single]
+  exact .next (.projRecord "snd" _ (.lit y) rfl) (.refl _)
+
+/-- Tag dispatch, field order and named projection agree with both lowering semantics;
+missing tags and missing fields are refused by the scalar evaluator. -/
+theorem lcnf_eval_cases_proj_sound (x y : Nat) :
+    evalLcnfCode 8 [] [] [] (casesProjCode x y) = some (x - y, []) ∧
+    SSteps (compileLcnfToLExpr (casesProjCode x y)) (.lit (x - y)) ∧
+    Evaluates (compileLcnfToCore4 (casesProjCode x y)) (.nat (x - y)) ∧
+    evalLcnfCode 8 [] [] [] (unmatchedCasesCode x) = none ∧
+    evalLcnfCode 8 [] [] [] (namedProjCode "snd" x y) = some (y, []) ∧
+    Evaluates (compileLcnfToCore4 (namedProjCode "snd" x y)) (.nat y) ∧
+    evalLcnfCode 8 [] [] [] (namedProjCode "missing" x y) = none := by
+  refine ⟨rfl, casesProjCode_runs x y, ?_, rfl, rfl, ?_, rfl⟩
+  · simpa [compileLcnfToCore4, lowerT] using lower_sound_nat (casesProjCode_runs x y)
+  · simpa [compileLcnfToCore4, lowerT] using lower_sound_nat (namedProjCode_runs x y)
+
+/-- Curried closures retain captured values; the last argument occupies binder zero. -/
+theorem lcnf_eval_closure_sound (x y captured : Nat) :
+    let decl : LcnfFunDecl :=
+      { name := "capture", numParams := 2,
+        body := .letValue (.natOp .sub (.bvar 1) (.bvar 0))
+          (.letValue (.natOp .add (.bvar 0) (.bvar 4)) (.return (.bvar 0))) }
+    evalLcnfCodeVal 10 [.closure [.scalar captured] [] decl] [] []
+      (.letValue (.app (.bvar 0) (.lit x))
+        (.letValue (.app (.bvar 0) (.lit y)) (.return (.bvar 0)))) =
+      some (.scalar (x - y + captured), []) := by
+  rfl
+
+/-- Invalid runtime shapes and missing constructor fields cannot become scalar successes. -/
+theorem lcnf_eval_invalid_refused (n : Nat) :
+    evalLcnfCode 8 [] [] [] (.letValue (.app (.lit n) (.lit 1)) (.return (.bvar 0))) = none ∧
+    evalLcnfCode 8 [] [] [] (.letValue (.proj "x" (.lit n)) (.return (.bvar 0))) = none ∧
+    evalLcnfCode 8 [] [] [] (.letValue (.record [("x", .lit n)]) (.return (.bvar 0))) = none ∧
+    evalLcnfCode 8 [] [] [] (.cases (.lit n) [("right", [], .return (.lit 0))]) = none ∧
+    evalLcnfCode 8 [] [] []
+      (.letValue (.ctor "right" [("x", .lit n)])
+        (.cases (.bvar 0) [("right", ["missing"], .return (.bvar 0))])) = none := by
+  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+
+/-- A jump-site binding must not shadow a variable captured by the join declaration. -/
+def lexicalCaptureCode (captured shadowed arg : Nat) : LcnfCode :=
+  .letValue (.arg (.lit captured))
+    (.jpDecl 0 1
+      (.letValue (.natOp .add (.bvar 0) (.bvar 1)) (.return (.bvar 0)))
+      (.letValue (.arg (.lit shadowed)) (.jmp 0 [.lit arg])))
+
+theorem lexicalCaptureCode_runs (captured shadowed arg : Nat) :
+    SSteps (compileLcnfToLExpr (lexicalCaptureCode captured shadowed arg))
+      (.lit (arg + captured)) := by
+  change SSteps (.letE .emptyRow (.lit captured)
+    (.letE .emptyRow
+      (.lam .emptyRow (.letE .emptyRow (.natBin .add (.bvar 0) (.bvar 1)) (.bvar 0)))
+      (.letE .emptyRow (.lit shadowed) (.app (.bvar 1) (.lit arg))))) _
+  refine .next (.zeta _ _ _) ?_
+  simp [LExpr.inst, LExpr.subst, LExpr.single, LExpr.liftSubst, LExpr.rename, liftRename]
+  refine .next (.zeta _ _ _) ?_
+  simp [LExpr.inst, LExpr.subst, LExpr.single, LExpr.liftSubst, LExpr.rename, liftRename]
+  refine .next (.zeta _ _ _) ?_
+  simp [LExpr.inst, LExpr.subst, LExpr.single, LExpr.liftSubst, LExpr.rename, liftRename]
+  refine .next (.beta _ _ _) ?_
+  simp [LExpr.inst, LExpr.subst, LExpr.single, LExpr.liftSubst, LExpr.rename, liftRename]
+  refine .next (.zeta _ _ _) ?_
+  simp [LExpr.inst, LExpr.subst, LExpr.single]
+  exact .next (.binLit .add arg captured) (.refl _)
+
+/-- Evaluator and both compilation layers agree for every captured, shadowing, and
+argument value. The result is independent of the intervening binding. -/
+theorem lcnf_jp_lexical_capture_sound (captured shadowed arg : Nat) :
+    evalLcnfCode 8 [] [] [] (lexicalCaptureCode captured shadowed arg) =
+      some (arg + captured, []) ∧
+    SSteps (compileLcnfToLExpr (lexicalCaptureCode captured shadowed arg))
+      (.lit (arg + captured)) ∧
+    Evaluates (compileLcnfToCore4 (lexicalCaptureCode captured shadowed arg))
+      (.nat (arg + captured)) := by
+  refine ⟨rfl, lexicalCaptureCode_runs captured shadowed arg, ?_⟩
+  simpa [compileLcnfToCore4, lowerT] using lower_sound_nat (lexicalCaptureCode_runs captured shadowed arg)
+
+/-- Entry through the public module API, including two recursive self applications. -/
+def sampleLcnfRecModule : LcnfModule :=
+  { decls := [sampleLcnfRecDecl],
+    entry := .letValue (.app (.bvar 0) (.lit 2)) (.return (.bvar 0)) }
+
+set_option maxRecDepth 4096 in
+set_option maxHeartbeats 800000 in
+theorem sampleLcnfRecModule_runs :
+    SSteps (compileLcnfModuleToLExpr sampleLcnfRecModule) (.lit 42) := by
+  simp only [compileLcnfModuleToLExpr, sampleLcnfRecModule,
+    compileLcnfModuleToLExpr.bindDecls, lcnfFunDeclToLExpr, sampleLcnfRecDecl,
+    compileLcnfToLExpr, codeUsesState, letValueUsesState, compileLcnfWithCtx,
+    lcnfLetValueToLExprCtx, lcnfArgToLExprCtx, LcnfLowerCtx.pushVar,
+    LcnfLowerCtx.lookupVar, wrapMinorBvars, List.map_cons, List.map_nil,
+    List.getElem?_cons_zero, List.getElem?_cons_succ, List.getElem?_nil,
+    Bool.false_or, Bool.or_false, Bool.false_eq_true, ite_false, Nat.add_zero]
+  repeat
+    first
+    | exact .refl _
+    | (refine .next (.zeta _ _ _) ?_)
+    | (refine .next (.beta _ _ _) ?_)
+    | (refine .next (.appFun _ (.unfold _ _ _)) ?_)
+    | (refine .next (.boolRecTrue _ _ _) ?_)
+    | (refine .next (.boolRecFalse _ _ _) ?_)
+    | (refine .next (.boolRecMajor _ _ _ (.binLit _ _ _)) ?_)
+    | (refine .next (.boolRecMajor _ _ _ (.binLeft _ _ (.binLit _ _ _))) ?_)
+    | (refine .next (.boolRecMajor _ _ _ (.binLeft _ _ (.binLeft _ _ (.binLit _ _ _)))) ?_)
+    | simp [LExpr.inst, LExpr.subst, LExpr.single, LExpr.liftSubst,
+        LExpr.rename, liftRename, NatOp.eval]
+
+/-- The same closed recursive module evaluates to 42 through the interpreter,
+source reduction, and Core4. -/
+theorem sampleLcnfRecModule_eval_agreed :
+    evalLcnfModule 32 sampleLcnfRecModule = some (42, []) ∧
+    SSteps (compileLcnfModuleToLExpr sampleLcnfRecModule) (.lit 42) ∧
+    Evaluates (compileLcnfModuleToCore4 sampleLcnfRecModule) (.nat 42) := by
+  refine ⟨rfl, sampleLcnfRecModule_runs, ?_⟩
+  simpa [compileLcnfModuleToCore4, lowerT] using lower_sound_nat sampleLcnfRecModule_runs
+
+mutual
+/-- State-free runtime values are related to source expressions by weak-head
+reduction; record and constructor fields remain lazy, as in `SStep`. -/
+inductive LcnfValueRel : LcnfVal → LExpr → Prop where
+  | scalar {e : LExpr} (n : Nat) : SSteps e (.lit n) → LcnfValueRel (.scalar n) e
+  | bool {e : LExpr} (b : Bool) : SSteps e (.boolLit b) → LcnfValueRel (.bool b) e
+  | erased {e : LExpr} : SSteps e .erased → LcnfValueRel .erased e
+  | stateTok {e : LExpr} (id : Nat) : SSteps e (.lit id) → LcnfValueRel (.stateTok id) e
+  | record {e : LExpr} {vs : List (String × LcnfVal)} {es : List (String × LExpr)} :
+      SSteps e (.record es) → LcnfFieldsRel vs es → LcnfValueRel (.record vs) e
+  | ctor {e : LExpr} {tag : String} {vs : List (String × LcnfVal)} {es : List (String × LExpr)} :
+      SSteps e (.inject tag es) → LcnfFieldsRel vs es → LcnfValueRel (.ctor tag vs) e
+
+inductive LcnfFieldsRel : List (String × LcnfVal) → List (String × LExpr) → Prop where
+  | nil : LcnfFieldsRel [] []
+  | cons {v : String × LcnfVal} {e : String × LExpr}
+      {vs : List (String × LcnfVal)} {es : List (String × LExpr)} :
+      v.1 = e.1 → LcnfValueRel v.2 e.2 → LcnfFieldsRel vs es →
+      LcnfFieldsRel (v :: vs) (e :: es)
+end
+
+private theorem LcnfValueRel.steps {v : LcnfVal} {e e' : LExpr}
+    (hs : SSteps e e') (h : LcnfValueRel v e') : LcnfValueRel v e := by
+  cases h with
+  | scalar n h => exact .scalar n (ssteps_trans hs h)
+  | bool v h => exact .bool v (ssteps_trans hs h)
+  | erased h => exact .erased (ssteps_trans hs h)
+  | stateTok id h => exact .stateTok id (ssteps_trans hs h)
+  | record h fs => exact .record (ssteps_trans hs h) fs
+  | ctor h fs => exact .ctor (ssteps_trans hs h) fs
+
+private theorem LcnfValueRel.scalar_steps {n : Nat} {e : LExpr}
+    (h : LcnfValueRel (.scalar n) e) : SSteps e (.lit n) := by cases h with
+  | scalar _ hs => exact hs
+
+
+private theorem LcnfValueRel.bool_steps {b : Bool} {e : LExpr}
+    (h : LcnfValueRel (.bool b) e) : SSteps e (.boolLit b) := by cases h with
+  | bool _ hs => exact hs
+
+
+/-- Every runtime variable is represented by the corresponding substituted
+compiler variable. This invariant allows arbitrary source environments. -/
+def LcnfEnvRel (env : List LcnfVal) (ctx : LcnfLowerCtx) (σ : Nat → LExpr) : Prop :=
+  ∀ i v, env[i]? = some v → LcnfValueRel v (σ (ctx.lookupVar i))
+
+private theorem lookupVar_pushVar_zero (ctx : LcnfLowerCtx) :
+    ctx.pushVar.lookupVar 0 = 0 := by simp [LcnfLowerCtx.pushVar, LcnfLowerCtx.lookupVar]
+
+private theorem lookupVar_pushVar_succ (ctx : LcnfLowerCtx) (i : Nat) :
+    ctx.pushVar.lookupVar (i + 1) = ctx.lookupVar i + 1 := by
+  simp only [LcnfLowerCtx.pushVar, LcnfLowerCtx.lookupVar, List.getElem?_cons_succ,
+    List.getElem?_map]
+  cases ctx.varEnv[i]? <;> simp [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm]
+
+private theorem LcnfEnvRel.cons {env : List LcnfVal} {ctx : LcnfLowerCtx}
+    {σ : Nat → LExpr} {v : LcnfVal} {e : LExpr}
+    (h : LcnfEnvRel env ctx σ) (hv : LcnfValueRel v e) :
+    LcnfEnvRel (v :: env) ctx.pushVar (consSubst e σ) := by
+  intro i w hi
+  cases i with
+  | zero => simp only [List.getElem?_cons_zero, Option.some.injEq] at hi
+            subst w; simpa only [lookupVar_pushVar_zero, consSubst] using hv
+  | succ i => simpa only [lookupVar_pushVar_succ, consSubst] using h i w hi
+
+private theorem evalLcnfArgVal_rel {env : List LcnfVal} {ctx : LcnfLowerCtx}
+    {σ : Nat → LExpr} (h : LcnfEnvRel env ctx σ) (a : LcnfArg) (v : LcnfVal)
+    (hv : evalLcnfArgVal env a = some v) :
+    LcnfValueRel v ((lcnfArgToLExprCtx ctx a).subst σ) := by
+  cases a <;> simp only [evalLcnfArgVal, lcnfArgToLExprCtx, LExpr.subst] at hv ⊢
+  · exact h _ _ hv
+  all_goals cases hv
+  · exact .scalar _ (.refl _)
+  · exact .bool _ (.refl _)
+  · exact .erased (.refl _)
+  · exact .stateTok _ (.refl _)
+
+private theorem evalLcnfFields_rel {env : List LcnfVal} {ctx : LcnfLowerCtx}
+    {σ : Nat → LExpr} (h : LcnfEnvRel env ctx σ)
+    (fs : List (String × LcnfArg)) (vs : List (String × LcnfVal))
+    (hv : fs.mapM (fun x => (evalLcnfArgVal env x.2).bind (fun v => some (x.1, v))) = some vs) :
+    LcnfFieldsRel vs
+      (fs.map (fun f => (f.1, (lcnfArgToLExprCtx ctx f.2).subst σ))) := by
+  induction fs generalizing vs with
+  | nil => simp at hv; subst vs; exact .nil
+  | cons f fs ih =>
+    obtain ⟨name, a⟩ := f
+    cases ha : evalLcnfArgVal env a with
+    | none => simp [List.mapM_cons, ha] at hv
+    | some v =>
+      cases ht : fs.mapM (fun x => (evalLcnfArgVal env x.2).bind (fun v => some (x.1, v))) with
+      | none => simp [List.mapM_cons, ha, ht] at hv
+      | some rest =>
+        simp [List.mapM_cons, ha, ht] at hv
+        subst vs
+        exact .cons rfl (evalLcnfArgVal_rel h a v ha) (ih rest ht)
+
+private theorem LcnfValueRel.record_steps {vs : List (String × LcnfVal)} {e : LExpr}
+    (h : LcnfValueRel (.record vs) e) :
+    ∃ es, SSteps e (.record es) ∧
+      LcnfFieldsRel vs es := by cases h with
+  | record hs fs => exact ⟨_, hs, fs⟩
+
+
+private theorem LcnfValueRel.ctor_steps {tag : String} {vs : List (String × LcnfVal)} {e : LExpr}
+    (h : LcnfValueRel (.ctor tag vs) e) :
+    ∃ es, SSteps e (.inject tag es) ∧
+      LcnfFieldsRel vs es := by cases h with
+  | ctor hs fs => exact ⟨_, hs, fs⟩
+
+
+private theorem relatedFields_find {vs : List (String × LcnfVal)}
+    {es : List (String × LExpr)}
+    (h : LcnfFieldsRel vs es)
+    (name : String) (p : String × LcnfVal)
+    (hp : vs.find? (fun p => p.1 == name) = some p) :
+    ∃ e, es.find? (fun p => p.1 == name) = some (name, e) ∧ LcnfValueRel p.2 e := by
+  cases h with
+  | nil => simp at hp
+  | @cons v e vs es hname hval htail =>
+    by_cases hn : v.1 = name
+    · simp [List.find?, hn] at hp
+      subst p
+      exact ⟨e.2, by simp [List.find?, ← hname, hn]; exact Prod.ext (hname.symm.trans hn) rfl, hval⟩
+    · have hnb : (v.1 == name) = false := beq_eq_false_iff_ne.mpr hn
+      simp [List.find?, hnb] at hp
+      obtain ⟨r, hr, hv⟩ := relatedFields_find htail name p hp
+      exact ⟨r, by simpa [List.find?, ← hname, hnb] using hr, hv⟩
+termination_by vs.length
+
+/-- Supported state-free RHSs. Applications require a separate recursive-function
+logical relation and are intentionally outside this structural block theorem. -/
+def isPureLetValue : LcnfLetValue → Bool
+  | .arg _ | .natOp _ _ _ | .ctor _ _ | .record _ | .proj _ _ => true
+  | _ => false
+
+private theorem evalLcnfLetValueVal_rel (fuel : Nat) {env : List LcnfVal}
+    {ctx : LcnfLowerCtx} {σ : Nat → LExpr} (henv : LcnfEnvRel env ctx σ)
+    (jps : List LcnfJpClosure) (st st' : List (Nat × Nat))
+    (rhs : LcnfLetValue) (v : LcnfVal) (hp : isPureLetValue rhs = true)
+    (hv : evalLcnfLetValueVal fuel env jps st rhs = some (v, st')) :
+    st' = st ∧ LcnfValueRel v ((lcnfLetValueToLExprCtx ctx rhs).subst σ) := by
+  cases fuel with
+  | zero => simp [evalLcnfLetValueVal] at hv
+  | succ fuel =>
+    cases rhs with
+    | arg a =>
+      cases ha : evalLcnfArgVal env a <;> simp [evalLcnfLetValueVal, ha] at hv
+      rcases hv with ⟨rfl, rfl⟩
+      exact ⟨rfl, by simpa only [lcnfLetValueToLExprCtx] using evalLcnfArgVal_rel henv _ _ ha⟩
+    | natOp op l r =>
+      cases hl : evalLcnfArgVal env l with
+      | none => simp [evalLcnfLetValueVal, hl] at hv
+      | some lv =>
+        cases lv <;> simp [evalLcnfLetValueVal, hl] at hv
+        rename_i a
+        cases hr : evalLcnfArgVal env r with
+        | none => simp [hr] at hv
+        | some rv =>
+          cases rv <;> simp [hr] at hv
+          rename_i b
+          have sl := (evalLcnfArgVal_rel henv _ _ hl).scalar_steps
+          have sr := (evalLcnfArgVal_rel henv _ _ hr).scalar_steps
+          have steps := ssteps_trans
+            (ssteps_congr (fun e => .natBin op e ((lcnfArgToLExprCtx ctx r).subst σ))
+              (fun s => .binLeft op _ s) sl)
+            (ssteps_trans (ssteps_congr (fun e => .natBin op (.lit a) e)
+              (fun s => .binRight op a s) sr) (.next (.binLit op a b) (.refl _)))
+          cases op <;> simp at hv <;> rcases hv with ⟨rfl, rfl⟩
+          all_goals simp only [lcnfLetValueToLExprCtx, LExpr.subst]
+          all_goals refine ⟨by trivial, .steps steps ?_⟩
+          all_goals first | exact .scalar _ (.refl _) | exact .bool _ (.refl _)
+    | ctor tag fs =>
+      cases hf : fs.mapM (fun x => (evalLcnfArgVal env x.2).bind (fun v => some (x.1, v))) with
+      | none => simp [evalLcnfLetValueVal, hf] at hv
+      | some vs =>
+        simp [evalLcnfLetValueVal, hf] at hv
+        rcases hv with ⟨rfl, rfl⟩
+        refine ⟨rfl, ?_⟩
+        simpa only [lcnfLetValueToLExprCtx, LExpr.subst, List.map_map, Function.comp_def]
+          using LcnfValueRel.ctor (.refl _) (evalLcnfFields_rel henv fs vs hf)
+    | record fs =>
+      cases hf : fs.mapM (fun x => (evalLcnfArgVal env x.2).bind (fun v => some (x.1, v))) with
+      | none => simp [evalLcnfLetValueVal, hf] at hv
+      | some vs =>
+        simp [evalLcnfLetValueVal, hf] at hv
+        rcases hv with ⟨rfl, rfl⟩
+        refine ⟨rfl, ?_⟩
+        simpa only [lcnfLetValueToLExprCtx, LExpr.subst, List.map_map, Function.comp_def]
+          using LcnfValueRel.record (.refl _) (evalLcnfFields_rel henv fs vs hf)
+    | proj name tgt =>
+      cases ht : evalLcnfArgVal env tgt with
+      | none => simp [evalLcnfLetValueVal, ht] at hv
+      | some tv =>
+        cases tv <;> simp [evalLcnfLetValueVal, ht] at hv
+        rename_i fs
+        cases hf : fs.find? (fun p => p.1 == name) with
+        | none => simp [hf] at hv
+        | some p =>
+          simp [hf] at hv
+          rcases hv with ⟨rfl, rfl⟩
+          obtain ⟨es, hs, he⟩ := (evalLcnfArgVal_rel henv _ _ ht).record_steps
+          obtain ⟨e, hfind, hrel⟩ := relatedFields_find he name p hf
+          simp only [lcnfLetValueToLExprCtx, LExpr.subst]
+          exact ⟨by trivial, .steps (ssteps_trans
+            (ssteps_congr (.proj name) (fun s => .projTarget name s) hs)
+            (.next (.projRecord name es e hfind) (.refl _))) hrel⟩
+    | app _ _ | stateRead _ _ | stateWrite _ _ _ => cases hp
+
+/-- The block fragment proved below: scalar operations, aggregate construction
+and projection, Boolean branches, and constructor dispatch. No state or calls. -/
+inductive PureBlock : LcnfCode → Prop where
+  | ret (a : LcnfArg) : PureBlock (.return a)
+  | unreach : PureBlock .unreach
+  | letValue {v : LcnfLetValue} {body : LcnfCode} :
+      isPureLetValue v = true → PureBlock body → PureBlock (.letValue v body)
+  | ifBool {a : LcnfArg} {t f : LcnfCode} :
+      PureBlock t → PureBlock f → PureBlock (.ifBool a t f)
+  | cases {a : LcnfArg} {arms : List (String × List String × LcnfCode)} :
+      (∀ arm ∈ arms, PureBlock arm.2.2) → PureBlock (.cases a arms)
+
+private theorem pureLetValue_usesState (v : LcnfLetValue) (h : isPureLetValue v = true) :
+    letValueUsesState v = false := by cases v <;> cases h <;> rfl
+
+private theorem PureBlock.usesState {c : LcnfCode} (h : PureBlock c) :
+    codeUsesState c = false := by
+  induction h with
+  | ret => rfl
+  | unreach => rfl
+  | letValue hp _ ih => simp [codeUsesState, pureLetValue_usesState _ hp, ih]
+  | ifBool _ _ iht ihf => simp [codeUsesState, iht, ihf]
+  | @cases a arms hp ih =>
+    simp only [codeUsesState]
+    induction arms with
+    | nil => rfl
+    | cons arm rest ihr =>
+      simp only [armsUseState]
+      rw [ih arm (by simp), ihr (fun x hx => hp x (by simp [hx]))
+        (fun x hx => ih x (by simp [hx]))]
+      rfl
+
+/-- A list of runtime arguments paired with their lazy source representatives. -/
+inductive LcnfArgsRel : List LcnfVal → List LExpr → Prop where
+  | nil : LcnfArgsRel [] []
+  | cons {v : LcnfVal} {e : LExpr} {vs : List LcnfVal} {es : List LExpr} :
+      LcnfValueRel v e → LcnfArgsRel vs es → LcnfArgsRel (v :: vs) (e :: es)
+
+private theorem relatedFields_split {vs : List (String × LcnfVal)} {es : List (String × LExpr)}
+    (h : LcnfFieldsRel vs es) (names : List String) (vals : List LcnfVal)
+    (hv : splitValues vs names = some vals) :
+    ∃ exprs, splitValues es names = some exprs ∧ LcnfArgsRel vals exprs := by
+  induction names generalizing vals with
+  | nil => simp [splitValues] at hv; subst vals; exact ⟨[], rfl, .nil⟩
+  | cons name names ih =>
+    cases hf : vs.find? (fun p => p.1 == name) with
+    | none => simp [splitValues, hf] at hv
+    | some p =>
+      cases ht : splitValues vs names with
+      | none => simp [splitValues, hf, ht] at hv
+      | some rest =>
+        simp [splitValues, hf, ht] at hv
+        subst vals
+        obtain ⟨e, he, hr⟩ := relatedFields_find h name p hf
+        obtain ⟨exprs, hes, hrs⟩ := ih rest ht
+        exact ⟨e :: exprs, by simp [splitValues, he, hes], .cons hr hrs⟩
+
+private theorem LcnfArgsRel.length {vs : List LcnfVal} {es : List LExpr}
+    (h : LcnfArgsRel vs es) : vs.length = es.length := by
+  induction h with
+  | nil => rfl
+  | cons _ _ ih => simp [ih]
+
+private theorem sstep_spine {f g : LExpr} (h : SStep f g) (es : List LExpr) :
+    SStep (f.spine es) (g.spine es) := by
+  induction es generalizing f g with
+  | nil => exact h
+  | cons e es ih => exact ih (.appFun e h)
+
+private theorem pushVars_pushVar (ctx : LcnfLowerCtx) (n : Nat) :
+    ctx.pushVar.pushVars n = (ctx.pushVars n).pushVar := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simp only [LcnfLowerCtx.pushVars, ih]
+
+/-- Applying a curried minor extends the substitution in argument order; thus
+its final environment is the reverse of the source field list. -/
+private theorem minor_spine_subst (es : List LExpr) (body : LExpr) (σ : Nat → LExpr) :
+    SSteps (((wrapMinorBvars es.length body).subst σ).spine es)
+      (body.subst (es.foldl (fun σ e => consSubst e σ) σ)) := by
+  induction es generalizing body σ with
+  | nil => simp [wrapMinorBvars, LExpr.spine]; exact .refl _
+  | cons e es ih =>
+    simp only [List.length_cons, wrapMinorBvars, LExpr.subst, LExpr.spine]
+    have hb := ssteps_congr (fun f => f.spine es) (fun st => sstep_spine st es)
+      (SSteps.next (SStep.beta .emptyRow
+        ((wrapMinorBvars es.length body).subst (LExpr.liftSubst σ)) e) (.refl _))
+    rw [subst_liftSubst_inst] at hb
+    exact ssteps_trans hb (ih body (consSubst e σ))
+
+private theorem args_env_rel {vs : List LcnfVal} {es : List LExpr}
+    (h : LcnfArgsRel vs es) {env : List LcnfVal} {ctx : LcnfLowerCtx}
+    {σ : Nat → LExpr} (henv : LcnfEnvRel env ctx σ) :
+    LcnfEnvRel (vs.reverse ++ env) (ctx.pushVars vs.length)
+      (es.foldl (fun σ e => consSubst e σ) σ) := by
+  induction h generalizing env ctx σ with
+  | nil => simpa [LcnfLowerCtx.pushVars] using henv
+  | @cons v e vs es hv hs ih =>
+    have hi := ih (henv.cons hv)
+    simpa [List.reverse_cons, List.append_assoc, LcnfLowerCtx.pushVars, pushVars_pushVar] using hi
+
+private theorem splitValues_length {α : Type} {fields : List (String × α)}
+    {names : List String} {vals : List α} (h : splitValues fields names = some vals) :
+    vals.length = names.length := by
+  induction names generalizing vals with
+  | nil => simp [splitValues] at h; subst vals; rfl
+  | cons name names ih =>
+    cases hf : fields.find? (fun p => p.1 == name) with
+    | none => simp [splitValues, hf] at h
+    | some p =>
+      cases ht : splitValues fields names with
+      | none => simp [splitValues, hf, ht] at h
+      | some rest =>
+        simp [splitValues, hf, ht] at h
+        subst vals
+        simp [ih ht]
+
+private theorem compiled_arms_find (ctx : LcnfLowerCtx) (σ : Nat → LExpr)
+    (tag : String) (arms : List (String × List String × LcnfCode))
+    (p : String × List String × LcnfCode)
+    (h : arms.find? (fun arm => arm.1 == tag) = some p) :
+    p.1 = tag ∧
+    ((lcnfArmsWithCtx ctx arms).map (fun a => (a.1, a.2.1, a.2.2.subst σ))).find?
+      (fun arm => arm.1 == tag) =
+      some (tag, p.2.1, (wrapMinorBvars p.2.1.length
+        (compileLcnfWithCtx (ctx.pushVars p.2.1.length) p.2.2)).subst σ) := by
+  induction arms with
+  | nil => simp at h
+  | cons arm arms ih =>
+    obtain ⟨label, names, body⟩ := arm
+    cases ht : (label == tag) with
+    | false =>
+      simp [List.find?, ht] at h
+      simpa [lcnfArmsWithCtx, List.find?, ht] using ih h
+    | true =>
+      simp [List.find?, ht] at h
+      subst p
+      have he : label = tag := beq_iff_eq.mp ht
+      subst label
+      exact ⟨rfl, by simp [lcnfArmsWithCtx, List.find?]⟩
+
+private theorem compile_pureLet (ctx : LcnfLowerCtx) (v : LcnfLetValue)
+    (body : LcnfCode) (h : isPureLetValue v = true) :
+    compileLcnfWithCtx ctx (.letValue v body) =
+      .letE .emptyRow (lcnfLetValueToLExprCtx ctx v) (compileLcnfWithCtx ctx.pushVar body) := by
+  cases v <;> (try cases h) <;> rfl
+
+/-- Fuel induction connecting the actual evaluator to source reduction on the
+state-free block fragment. The environment relation permits arbitrary lazy
+representatives, so let-bound records and nested cases compose. -/
+theorem evalLcnfCodeVal_simulates_ssteps (fuel : Nat) (c : LcnfCode) (hp : PureBlock c)
+    (env : List LcnfVal) (ctx : LcnfLowerCtx) (σ : Nat → LExpr)
+    (henv : LcnfEnvRel env ctx σ) (jps : List LcnfJpClosure)
+    (st st' : List (Nat × Nat)) (v : LcnfVal)
+    (hv : evalLcnfCodeVal fuel env jps st c = some (v, st')) :
+    st' = st ∧ LcnfValueRel v ((compileLcnfWithCtx ctx c).subst σ) := by
+  induction fuel generalizing c env ctx σ jps st st' v with
+  | zero => simp [evalLcnfCodeVal] at hv
+  | succ fuel ih =>
+    cases hp with
+    | ret a =>
+      cases ha : evalLcnfArgVal env a <;> simp [evalLcnfCodeVal, ha] at hv
+      rcases hv with ⟨rfl, rfl⟩
+      exact ⟨rfl, by simpa only [compileLcnfWithCtx] using evalLcnfArgVal_rel henv _ _ ha⟩
+    | unreach => simp [evalLcnfCodeVal] at hv
+    | @letValue rhs body hr hb =>
+      cases he : evalLcnfLetValueVal fuel env jps st rhs with
+      | none => simp [evalLcnfCodeVal, he] at hv
+      | some result =>
+        obtain ⟨value, store⟩ := result
+        simp only [evalLcnfCodeVal, he, Option.bind_some] at hv
+        obtain ⟨hstore, hvalue⟩ := evalLcnfLetValueVal_rel fuel henv jps st store rhs value hr he
+        subst store
+        obtain ⟨hst, hbody⟩ := ih body hb (value :: env) ctx.pushVar
+          (consSubst ((lcnfLetValueToLExprCtx ctx rhs).subst σ) σ) (henv.cons hvalue)
+          jps st st' v hv
+        refine ⟨hst, ?_⟩
+        rw [compile_pureLet ctx rhs body hr]
+        simp only [LExpr.subst]
+        apply LcnfValueRel.steps (.next (.zeta _ _ _) (.refl _))
+        rw [subst_liftSubst_inst]
+        exact hbody
+    | @ifBool cond t f ht hf =>
+      cases ha : evalLcnfArgVal env cond with
+      | none => simp [evalLcnfCodeVal, ha] at hv
+      | some val =>
+        cases val <;> simp [evalLcnfCodeVal, ha] at hv
+        rename_i b
+        have hs := (evalLcnfArgVal_rel henv _ _ ha).bool_steps
+        have stepMajor := ssteps_congr
+          (fun e => .boolRec .emptyRow ((compileLcnfWithCtx ctx f).subst σ)
+            ((compileLcnfWithCtx ctx t).subst σ) e)
+          (fun s => .boolRecMajor _ _ _ s) hs
+        cases b
+        · obtain ⟨hst, hbody⟩ := ih f hf env ctx σ henv jps st st' v hv
+          refine ⟨hst, ?_⟩
+          simp only [compileLcnfWithCtx, LExpr.subst]
+          exact .steps (ssteps_trans stepMajor (.next (.boolRecFalse _ _ _) (.refl _))) hbody
+        · obtain ⟨hst, hbody⟩ := ih t ht env ctx σ henv jps st st' v hv
+          refine ⟨hst, ?_⟩
+          simp only [compileLcnfWithCtx, LExpr.subst]
+          exact .steps (ssteps_trans stepMajor (.next (.boolRecTrue _ _ _) (.refl _))) hbody
+    | @cases scrut arms harms =>
+      cases ha : evalLcnfArgVal env scrut with
+      | none => simp [evalLcnfCodeVal, ha] at hv
+      | some val =>
+        cases val <;> simp [evalLcnfCodeVal, ha] at hv
+        rename_i tag fs
+        cases hf : arms.find? (fun arm => arm.1 == tag) with
+        | none => simp [hf] at hv
+        | some arm =>
+          obtain ⟨label, names, body⟩ := arm
+          cases hvals : splitValues fs names with
+          | none => simp [hf, hvals] at hv
+          | some vals =>
+            simp [hf, hvals] at hv
+            obtain ⟨es, hs, hfields⟩ := (evalLcnfArgVal_rel henv _ _ ha).ctor_steps
+            obtain ⟨exprs, hexprs, hargs⟩ := relatedFields_split hfields names vals hvals
+            have hlen : vals.length = names.length := splitValues_length hvals
+            have helen : exprs.length = names.length := hargs.length.symm.trans hlen
+            have hpbody := harms (label, names, body) (List.mem_of_find?_eq_some hf)
+            have he := args_env_rel hargs henv
+            rw [hlen] at he
+            obtain ⟨hst, hbody⟩ := ih body hpbody (vals.reverse ++ env)
+              (ctx.pushVars names.length) (exprs.foldl (fun σ e => consSubst e σ) σ)
+              he jps st st' v hv
+            obtain ⟨_, hfind⟩ := compiled_arms_find ctx σ tag arms (label, names, body) hf
+            refine ⟨hst, ?_⟩
+            simp only [compileLcnfWithCtx, LExpr.subst]
+            apply LcnfValueRel.steps (ssteps_congr
+              (fun e => .cases .emptyRow
+                ((lcnfArmsWithCtx ctx arms).map (fun a => (a.1, a.2.1, a.2.2.subst σ))) e)
+              (fun s => .casesMajor _ _ s) hs)
+            apply LcnfValueRel.steps (.next (.casesInject _ _ tag es names _ exprs hfind hexprs) (.refl _))
+            have hminor := minor_spine_subst exprs (compileLcnfWithCtx (ctx.pushVars names.length) body) σ
+            rw [helen] at hminor
+            exact .steps hminor hbody
+
+/-- Closed scalar corollary for all fuel amounts and all supported blocks.
+Unreachable blocks have no successful evaluator run and require no false
+compiler-divergence claim. -/
+theorem evalLcnfCode_simulates_core4 (fuel : Nat) (c : LcnfCode) (n : Nat)
+    (hp : PureBlock c)
+    (hv : evalLcnfCode fuel [] [] [] c = some (n, [])) :
+    Evaluates (compileLcnfToCore4 c) (.nat n) := by
+  cases he : evalLcnfCodeVal fuel [] [] [] c with
+  | none => simp [evalLcnfCode, he] at hv
+  | some result =>
+    obtain ⟨v, st⟩ := result
+    cases v <;> simp [evalLcnfCode, he, LcnfVal.toNat?] at hv
+    rename_i m
+    rcases hv with ⟨hm, hst⟩
+    subst m
+    subst st
+    have henv : LcnfEnvRel [] {} LExpr.bvar := by intro i v h; simp at h
+    have hs := (evalLcnfCodeVal_simulates_ssteps fuel c hp [] {} LExpr.bvar
+      henv [] [] [] (.scalar n) he).2.scalar_steps
+    rw [LExpr.subst_bvar] at hs
+    have hc : SSteps (compileLcnfToLExpr c) (.lit n) := by
+      simpa [compileLcnfToLExpr, hp.usesState] using hs
+    simpa [compileLcnfToCore4, lowerT] using lower_sound_nat hc
 
 end Obend.Lower.LCNF
 end

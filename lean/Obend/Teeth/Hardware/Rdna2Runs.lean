@@ -132,6 +132,18 @@ def ntt4Isa : String := include_str "../../../../hardware/gpu/isa/ntt-4.txt"
 theorem ntt4_certified : certifyBlockNamed "ntt-4" ntt4Isa = true := by native_decide
 #assert_compiled ntt4_certified
 
+/-- Same-width deletion preserves every branch target. -/
+def ntt4NoVscntIsa : String := ntt4Isa.replace "bbfd0000" "bf800000"
+
+theorem ntt4_noVscnt_loads_ok : checkWaitcntDump ntt4NoVscntIsa = true := by native_decide
+#assert_compiled ntt4_noVscnt_loads_ok
+
+theorem ntt4_noVscnt_completion_refused : checkVscntBlockDump ntt4NoVscntIsa = false := by native_decide
+#assert_compiled ntt4_noVscnt_completion_refused
+
+theorem ntt4_noVscnt_certificate_refused : certifyBlockNamed "ntt-4" ntt4NoVscntIsa = false := by native_decide
+#assert_compiled ntt4_noVscnt_certificate_refused
+
 def ntt16Isa : String := include_str "../../../../hardware/gpu/isa/ntt-16.txt"
 
 theorem ntt16_certified : certifyBlockNamed "ntt-16" ntt16Isa = true := by native_decide

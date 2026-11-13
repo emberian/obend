@@ -19,34 +19,38 @@ interpolation word decodes but renders as `none`, which the gate reports rather 
 module
 public import Obend.Hardware.Gpu.Rdna2.Spec
 public import Obend.Hardware.Gpu.Rdna2.Encodings
-public import Obend.Hardware.Gpu.Rdna2.Insts
+public import Obend.Hardware.Gpu.Rdna2.Insts.Scalar
+public import Obend.Hardware.Gpu.Rdna2.Insts.Vector
+public import Obend.Hardware.Gpu.Rdna2.Insts.Memory
 public import Std.Data.HashMap
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
+
+@[expose] def instructions : List Instruction := scalarInstructions ++ vectorInstructions ++ memoryInstructions
 
 /-! ## 1. Fields -/
 
 /-- The dwords of an instruction as one number, the first dword lowest: bit `i` of the encoding is bit
 `i` of this number (the XML's `BitOffset` counts from the first dword's LSB). -/
-def wordsToNat (ws : List UInt32) : Nat := ws.foldr (fun w acc => (acc <<< 32) ||| w.toNat) 0
+@[expose] def wordsToNat (ws : List UInt32) : Nat := ws.foldr (fun w acc => (acc <<< 32) ||| w.toNat) 0
 
-def extractRange (n : Nat) (r : FieldRange) : Nat := (n >>> r.offset) % (2 ^ r.count)
+@[expose] def extractRange (n : Nat) (r : FieldRange) : Nat := (n >>> r.offset) % (2 ^ r.count)
 
 /-- A field's value: its ranges concatenated, the first range lowest (MUBUF's `OP` is bits 18..24 then
 bit 25). -/
-def fieldValue (n : Nat) (f : EncField) : Nat :=
+@[expose] def fieldValue (n : Nat) (f : EncField) : Nat :=
   (f.ranges.foldl (fun (acc : Nat × Nat) r => (acc.1 ||| (extractRange n r <<< acc.2), acc.2 + r.count)) (0, 0)).1
 
-def fieldsOf (e : Encoding) (ws : List UInt32) : List (String × Nat) :=
+@[expose] def fieldsOf (e : Encoding) (ws : List UInt32) : List (String × Nat) :=
   let n := wordsToNat ws
   e.fields.map fun f => (f.name, fieldValue n f)
 
-def lookupField (fs : List (String × Nat)) (name : String) : Option Nat :=
+@[expose] def lookupField (fs : List (String × Nat)) (name : String) : Option Nat :=
   (fs.find? (·.1 == name)).map (·.2)
 
 /-- The XML's condition expression over the fields read from the words. -/
-def Cond.eval (fs : List (String × Nat)) : Cond → Bool
+@[expose] def Cond.eval (fs : List (String × Nat)) : Cond → Bool
   | .lit b => b
   | .eq f v => lookupField fs f == some v
   | .ne f v => match lookupField fs f with | some x => x != v | none => false
@@ -66,9 +70,9 @@ structure Inst where
   words : List UInt32
   deriving Repr
 
-def Inst.name (i : Inst) : String := i.inst.name
-def Inst.field (i : Inst) (name : String) : Nat := (lookupField i.fields name).getD 0
-def Inst.field? (i : Inst) (name : String) : Option Nat := lookupField i.fields name
+@[expose] def Inst.name (i : Inst) : String := i.inst.name
+@[expose] def Inst.field (i : Inst) (name : String) : Nat := (lookupField i.fields name).getD 0
+@[expose] def Inst.field? (i : Inst) (name : String) : Option Nat := lookupField i.fields name
 
 /-- `(encoding name, opcode) ↦ the instruction entries with that encoding and opcode`. -/
 def instIndex : Std.HashMap (String × Nat) (List (Instruction × InstEncoding)) :=
@@ -76,7 +80,42 @@ def instIndex : Std.HashMap (String × Nat) (List (Instruction × InstEncoding))
     i.encodings.foldl (init := m) fun m ie =>
       m.insert (ie.encoding, ie.opcode) ((i, ie) :: (m.getD (ie.encoding, ie.opcode) []))
 
-/-- The encodings in decode order. -/
+/-- A proof view of one bucket of the executable index, in the same last-in-first-out order. -/
+def instructionEntries (key : String × Nat) : List (Instruction × InstEncoding) :=
+  instructions.foldl (fun acc i => i.encodings.foldl (fun acc ie =>
+    if (ie.encoding, ie.opcode) == key then (i, ie) :: acc else acc) acc) []
+
+private theorem indexEncodings_getD (ies : List InstEncoding) (i : Instruction)
+    (m : Std.HashMap (String × Nat) (List (Instruction × InstEncoding))) (key : String × Nat) :
+    (ies.foldl (fun m ie => m.insert (ie.encoding, ie.opcode)
+      ((i, ie) :: m.getD (ie.encoding, ie.opcode) [])) m).getD key [] =
+    ies.foldl (fun acc ie => if (ie.encoding, ie.opcode) == key then (i, ie) :: acc else acc)
+      (m.getD key []) := by
+  induction ies generalizing m with
+  | nil => rfl
+  | cons ie ies ih =>
+    simp only [List.foldl_cons, ih, Std.HashMap.getD_insert]
+    by_cases h : (ie.encoding, ie.opcode) = key
+    · simp [h]
+    · simp [h]
+
+private theorem indexInstructions_getD (is : List Instruction)
+    (m : Std.HashMap (String × Nat) (List (Instruction × InstEncoding))) (key : String × Nat) :
+    (is.foldl (fun m i => i.encodings.foldl (fun m ie => m.insert (ie.encoding, ie.opcode)
+      ((i, ie) :: m.getD (ie.encoding, ie.opcode) [])) m) m).getD key [] =
+    is.foldl (fun acc i => i.encodings.foldl (fun acc ie =>
+      if (ie.encoding, ie.opcode) == key then (i, ie) :: acc else acc) acc) (m.getD key []) := by
+  induction is generalizing m with
+  | nil => rfl
+  | cons i is ih => simp only [List.foldl_cons, ih, indexEncodings_getD]
+
+/-- The proof view is exactly the actual hash lookup, for every encoding/opcode key. -/
+theorem instIndex_getD (key : String × Nat) : instIndex.getD key [] = instructionEntries key := by
+  unfold instIndex instructionEntries
+  rw [indexInstructions_getD]
+  simp only [Std.HashMap.getD_empty]
+
+/-- The generator checks that XML document order is strictly increasing decode order. -/
 def encodingsInOrder : List Encoding :=
   encodings.toArray.qsort (fun a b => a.order < b.order) |>.toList
 
@@ -104,25 +143,51 @@ def decodeInst (ws : List UInt32) : Option (Inst × Nat) :=
           let hit := entries.find? fun (_, ie) =>
             match e.conditions.find? (·.name == ie.condition) with
             | some c => c.expr.eval fs
-            | none => false
+            -- An absent condition list denotes the unconditional default (e.g. FLAT_GLBL).
+            | none => e.conditions.isEmpty && ie.condition == "default"
           match hit with
           | some (i, ie) => some (⟨i, e, ie, fs, taken⟩, k)
           | none => go es
     go encodingsInOrder
 
+private theorem decodeInst_go_words (ws : List UInt32) (w0 : UInt32) (i : Inst) (k : Nat) :
+    ∀ es : List Encoding, decodeInst.go ws w0 es = some (i, k) → i.words = ws.take k := by
+  intro es
+  induction es with
+  | nil => intro h; simp [decodeInst.go] at h
+  | cons e es ih =>
+    intro h
+    simp only [decodeInst.go] at h
+    repeat' split at h
+    all_goals first
+      | exact ih h
+      | (simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; rfl)
+
+/-- The dwords a decoded instruction records are the ones it was decoded from. -/
+theorem decoded_words (ws : List UInt32) (i : Inst) (k : Nat) (h : decodeInst ws = some (i, k)) :
+    i.words = ws.take k := by
+  unfold decodeInst at h
+  split at h
+  · cases h
+  · exact decodeInst_go_words _ _ i k _ h
+
 /-- A whole program: `prog[d]` is the instruction starting at dword `d`, `none` inside a multi-dword
 instruction. Fails at the first dword the XML cannot read. -/
-def decodeProgram (ws : Array UInt32) : Except String (Array (Option Inst)) := Id.run do
-  let mut out : Array (Option Inst) := Array.replicate ws.size none
-  let mut d := 0
-  while d < ws.size do
-    match decodeInst (ws.extract d (min ws.size (d + 5))).toList with
-    | none => return .error s!"dword {d} (0x{hexOf ws[d]!.toNat 8}) decodes to no RDNA2 instruction"
-    | some (i, k) =>
-      out := out.set! d (some i)
-      d := d + k
-  return .ok out
+def decodeProgram (ws : Array UInt32) : Except String (Array (Option Inst)) :=
+  go ws.size 0 (Array.replicate ws.size none)
 where
+  /-- At least one dword is consumed per instruction; fuel makes termination kernel-visible. -/
+  go : Nat → Nat → Array (Option Inst) → Except String (Array (Option Inst))
+    | fuel, d, out =>
+      if d ≥ ws.size then .ok out else
+      match fuel with
+      | 0 => .error "decoder made no progress"
+      | fuel + 1 =>
+        match decodeInst (ws.extract d (min ws.size (d + 5))).toList with
+        | none => .error s!"dword {d} (0x{hexOf ws[d]!.toNat 8}) decodes to no RDNA2 instruction"
+        | some (i, k) =>
+          if k == 0 then .error "zero-width RDNA2 instruction"
+          else go fuel (d + k) (out.set! d (some i))
   hexOf (n : Nat) (width : Nat) : String :=
     let s := String.ofList (Nat.toDigits 16 n)
     "".pushn '0' (width - s.length) ++ s
@@ -174,7 +239,7 @@ def srcName (code : Nat) (bits : Nat) (lit : Option UInt32) : Option String :=
   else none
 
 /-- The families whose operands this renderer writes. -/
-def family (encName : String) : String :=
+@[expose] def family (encName : String) : String :=
   if encName.startsWith "ENC_" then (encName.drop 4).toString else (encName.takeWhile (· != '_')).toString
 
 /-- `_e32`/`_e64`: LLVM suffixes the 32-bit form when a VOP3 form of the instruction exists and the VOP3
@@ -204,8 +269,12 @@ def waitcntText (simm : Nat) : String :=
 
 def signed16 (n : Nat) : Int := if n ≥ 32768 then (n : Int) - 65536 else n
 
+@[cbv_eval] theorem signed16_eq (n : Nat) : signed16 n = (if n ≥ 32768 then (n : Int) - 65536 else (n : Int)) := by rfl
+
 /-- A signed 21-bit SMEM offset. -/
 def signed21 (n : Nat) : Int := if n ≥ 2 ^ 20 then (n : Int) - 2 ^ 21 else n
+
+@[cbv_eval] theorem signed21_eq (n : Nat) : signed21 n = (if n ≥ 2 ^ 20 then (n : Int) - 2 ^ 21 else (n : Int)) := by rfl
 
 def Inst.literal (i : Inst) : Option UInt32 :=
   match i.field? "LITERAL" with

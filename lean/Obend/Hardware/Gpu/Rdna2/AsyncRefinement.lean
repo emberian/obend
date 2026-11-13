@@ -175,6 +175,7 @@ def issue (s : AsyncWaveState) (i : Inst) (waitOrder : List Nat := []) : Except 
     let t ← wait s (i.field "SIMM16") waitOrder
     return { t with pc := t.pc + i.words.length }
   if i.name == "S_WAITCNT_VSCNT" then
+    if !validVscntOperands i then throw .incompleteWait
     let t ← drainVs (s.vsCnt - i.field "SIMM16") s
     return { t with pc := t.pc + i.words.length }
   if stale s i.access then throw .staleInFlightRead
@@ -427,7 +428,7 @@ def updateCounters (p : BlockCounters) (i : Inst) : BlockCounters :=
         smem := p.pending.smem && waitLgkm (i.field "SIMM16") != 0 }
       lgkmStore := p.lgkmStore && waitLgkm (i.field "SIMM16") != 0 }
   else if i.name == "S_WAITCNT_VSCNT" then
-    { p with vsCnt := min p.vsCnt (i.field "SIMM16") }
+    if validVscntOperands i then { p with vsCnt := min p.vsCnt (i.field "SIMM16") } else p
   else if isVmemLoad i then
     { p with pending := { p.pending with vm := p.pending.vm ++ [i.access.writes] } }
   else if isVmemStore i then { p with vsCnt := p.vsCnt + 1 }
@@ -441,6 +442,8 @@ def updateCounters (p : BlockCounters) (i : Inst) : BlockCounters :=
 
 def canIssue (p : BlockCounters) (i : Inst) : Bool :=
   !i.inst.isBranch &&
+  (i.name != "S_WAITCNT_VSCNT" || validVscntOperands i) &&
+  (!(i.name == "S_BARRIER" || i.inst.isTerminator) || p.vsCnt == 0) &&
   (if i.name == "S_WAITCNT" || i.name == "S_WAITCNT_VSCNT" then true else
     counterSafe p.pending i.access &&
     !(memoryInstruction i && (p.vsCnt != 0 || p.lgkmStore)) &&
@@ -603,15 +606,19 @@ private theorem issue_bounded (p : BlockCounters) (s t : AsyncWaveState) (i : In
   · simp only [issue, live, Bool.false_eq_true, ite_false, beq_iff_eq, hw] at h
     by_cases hz : i.name = "S_WAITCNT_VSCNT"
     · simp only [hz, ite_true] at h
-      cases he : drainVs (s.vsCnt - i.field "SIMM16") s with
-      | error e => simp [he, bind, Except.bind] at h
-      | ok u =>
-        simp only [he, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
-        subst t
-        have hc := drainVs_counts _ s u he
-        simp [Bounded, updateCounters, hz, AsyncWaveState.vmCnt,
-          AsyncWaveState.lgkmCnt, AsyncWaveState.vsCnt] at bound hc ⊢
-        omega
+      split at h
+      · contradiction
+      · rename_i valid
+        have valid : validVscntOperands i = true := by simpa using valid
+        cases he : drainVs (s.vsCnt - i.field "SIMM16") s with
+        | error e => simp [he, bind, Except.bind] at h
+        | ok u =>
+          simp only [he, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
+          subst t
+          have hc := drainVs_counts _ s u he
+          simp [Bounded, updateCounters, hz, valid, AsyncWaveState.vmCnt,
+            AsyncWaveState.lgkmCnt, AsyncWaveState.vsCnt] at bound hc ⊢
+          omega
     · simp only [hz, ite_false] at h
       rcases bound with ⟨boundVm, boundLgkm, boundVs⟩
       repeat' first | contradiction | split at h
@@ -622,6 +629,64 @@ private theorem issue_bounded (p : BlockCounters) (s t : AsyncWaveState) (i : In
       all_goals simp_all [Bounded, AsyncWaveState.vmCnt, AsyncWaveState.lgkmCnt,
         AsyncWaveState.vsCnt, List.length_append, memoryInstruction]
       all_goals omega
+
+/-- A fetched execution trace: each turn may retire arbitrary stores before issue.
+The caller supplies fetched instructions, so this relation also covers CFG paths. -/
+inductive CounterTrace : BlockCounters → AsyncWaveState → BlockCounters → AsyncWaveState → Prop
+  | refl (p s) : CounterTrace p s p s
+  | step {p s q t u v} (trace : CounterTrace p s q t) (turn : Turn)
+      (retire : schedule t turn.before = .ok u)
+      (live : (u.halted || u.err.isSome) = false)
+      (issued : issue u turn.instruction turn.waitOrder = .ok v) :
+      CounterTrace p s (updateCounters q turn.instruction) v
+
+/-- Numeric coverage is propagated through actual retirement and issue, for any
+number of turns and every permitted completion schedule. -/
+theorem CounterTrace.bounded {p q : BlockCounters} {s t : AsyncWaveState}
+    (trace : CounterTrace p s q t) (initial : Bounded p s) : Bounded q t := by
+  induction trace with
+  | refl => exact initial
+  | step trace turn retire live issued ih =>
+    have dec := schedule_decreases _ _ _ retire
+    have bound := ih
+    exact issue_bounded _ _ _ _ _ live
+      ⟨Nat.le_trans dec.1 bound.1, Nat.le_trans dec.2.1 bound.2.1,
+        Nat.le_trans dec.2.2 bound.2.2⟩ issued
+
+/-- An accepted barrier or exit has no outstanding asynchronous vector stores. -/
+theorem canIssue_boundary_store_empty (p : BlockCounters) (s : AsyncWaveState) (i : Inst)
+    (bound : Bounded p s) (boundary : i.name = "S_BARRIER" ∨ i.inst.isTerminator = true)
+    (accepted : canIssue p i = true) : s.vsQueue = [] := by
+  have zero : p.vsCnt = 0 := by
+    simp only [canIssue, Bool.and_eq_true] at accepted
+    have gate := accepted.1.2
+    rcases boundary with h | h <;> simpa [h] using gate
+  have h := bound.2.2
+  simp only [AsyncWaveState.vsCnt, zero, Nat.le_zero, List.length_eq_zero_iff] at h
+  exact h
+
+/-- Boundary safety holds after every finite fetched execution trace, not just
+one straight-line fixture. The static VS count is the `vsAll` component. -/
+theorem CounterTrace.boundary_store_empty {p q : BlockCounters} {s t : AsyncWaveState}
+    (trace : CounterTrace p s q t) (initial : Bounded p s) (i : Inst)
+    (boundary : i.name = "S_BARRIER" ∨ i.inst.isTerminator = true)
+    (accepted : canIssue q i = true) : t.vsQueue = [] :=
+  canIssue_boundary_store_empty q t i (trace.bounded initial) boundary accepted
+
+/-- Bridge from the CFG tracker's all-store component to the async queue. -/
+theorem vsPending_zero_store_empty (p : VsPending) (s : AsyncWaveState)
+    (covered : s.vsQueue.length ≤ p.vsAll) (drained : p.vsAll = 0) : s.vsQueue = [] := by
+  apply List.length_eq_zero_iff.mp
+  omega
+
+/-- The CFG checker and the execution model share the all-store bound. An accepted
+strict VS boundary after any fetched trace leaves no asynchronous stores in flight. -/
+theorem CounterTrace.vscnt_boundary_store_empty {p q : BlockCounters} {s t : AsyncWaveState}
+    (trace : CounterTrace p s q t) (initial : Bounded p s) (i : Inst) (out : VsPending)
+    (boundary : i.name = "S_BARRIER" ∨ i.inst.isTerminator = true)
+    (accepted : stepVscnt true ⟨q.vsCnt, 0⟩ i = .ok out) : t.vsQueue = [] := by
+  exact vsPending_zero_store_empty ⟨q.vsCnt, 0⟩ t (trace.bounded initial).2.2
+    (stepVscnt_boundary_zero _ out i boundary accepted)
 
 /-! ## Semantic footprint contracts and schedule-independent materialization -/
 
@@ -816,13 +881,17 @@ private theorem issue_settle (s t : AsyncWaveState) (i : Inst) (ns : List Nat)
   · simp only [hw, ite_false] at h
     by_cases hz : i.name = "S_WAITCNT_VSCNT"
     · simp only [hz, ite_true] at h
-      cases he : drainVs (s.vsCnt - i.field "SIMM16") s with
-      | error e => simp [he, bind, Except.bind] at h
-      | ok u =>
-        simp only [he, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
-        subst t
-        have hu := schedule_settle s u _ coherent ((drainVs_schedule _ s) ▸ he)
-        exact ⟨hu.1, by rw [settle_advance, hu.2, fp.wait_effect (Or.inr hz)]⟩
+      split at h
+      · contradiction
+      · rename_i valid
+        have valid : validVscntOperands i = true := by simpa using valid
+        cases he : drainVs (s.vsCnt - i.field "SIMM16") s with
+        | error e => simp [he, bind, Except.bind] at h
+        | ok u =>
+          simp only [he, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
+          subst t
+          have hu := schedule_settle s u _ coherent ((drainVs_schedule _ s) ▸ he)
+          exact ⟨hu.1, by rw [settle_advance, hu.2, fp.wait_effect (Or.inr hz)]⟩
     · simp only [hz, ite_false] at h
       split at h
       · contradiction
@@ -1065,16 +1134,16 @@ def fromTables (name encoding : String) (fields : List (String × Nat))
   return { inst := ins, enc, ie, fields, words }
 
 set_option maxRecDepth 65536 in
-def load : Inst := (fromTablesAt instructionsChunk4 94 5 "S_LOAD_DWORD" "ENC_SMEM"
+def load : Inst := (fromTablesAt memoryChunk4 94 5 "S_LOAD_DWORD" "ENC_SMEM"
   [("SDATA", 8), ("SBASE", 0), ("SOFFSET", 125), ("OFFSET", 0)]
   [0xf4000200, 0xfa000000]).get (by decide)
 
 set_option maxRecDepth 65536 in
-def waitAll : Inst := (fromTablesAt instructionsChunk6 89 2 "S_WAITCNT" "ENC_SOPP"
+def waitAll : Inst := (fromTablesAt scalarChunk1 77 2 "S_WAITCNT" "ENC_SOPP"
   [("SIMM16", 0)] [0xbf8c0000]).get (by decide)
 
 set_option maxRecDepth 65536 in
-def move : Inst := (fromTablesAt instructionsChunk5 12 0 "S_MOV_B32" "ENC_SOP1"
+def move : Inst := (fromTablesAt scalarChunk0 0 0 "S_MOV_B32" "ENC_SOP1"
   [("SDST", 10), ("SSRC0", 8)]
   [0xbe8a0308]).get (by decide)
 
@@ -1210,26 +1279,9 @@ def decodeKernelWords : Nat → List UInt32 → Option (List Inst)
     | some (i, k) => if k = 0 then none else (decodeKernelWords fuel ((w :: rest).drop k)).map (i :: ·)
     | none => none
 
-private theorem decodeInst_go_words (ws : List UInt32) (w0 : UInt32) (i : Inst) (k : Nat) :
-    ∀ es : List Encoding, decodeInst.go ws w0 es = some (i, k) → i.words = ws.take k := by
-  intro es
-  induction es with
-  | nil => intro h; simp [decodeInst.go] at h
-  | cons e es ih =>
-    intro h
-    simp only [decodeInst.go] at h
-    repeat' split at h
-    all_goals first
-      | exact ih h
-      | (simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; rfl)
-
-/-- The dwords a decoded instruction records are the ones it was decoded from. -/
+/-- Exported decoder contract; no private decoder implementation is imported. -/
 theorem decodeInst_words (ws : List UInt32) (i : Inst) (k : Nat) (h : decodeInst ws = some (i, k)) :
-    i.words = ws.take k := by
-  unfold decodeInst at h
-  split at h
-  · cases h
-  · exact decodeInst_go_words _ _ i k _ h
+    i.words = ws.take k := decoded_words ws i k h
 
 /-- **A decoded kernel is its words**: concatenating the instructions' dwords gives back the input. -/
 theorem decodeKernelWords_words (fuel : Nat) (ws : List UInt32) (is : List Inst)

@@ -25,8 +25,7 @@ module
      `ltyped_canonical_bool`) and unconditional converse simulation (`lower_complete_ltyped_nat`,
      `lower_complete_ltyped_bool`, `lower_iff_ltyped_nat`, `lower_iff_ltyped_bool`).
 -/
-public import Obend.Lower.Proofs.Sound
-public import Obend.Lower.Typing
+public import Obend.Lower.Fragment
 @[expose] public section
 namespace Obend.Lower
 open Obend.Core.Term
@@ -174,7 +173,7 @@ theorem canonicalNat_bin (op : NatOp) (hop : op.resultTy = .natural)
   obtain ⟨b, hb⟩ := hr
   have s1 := ssteps_congr (fun x => .natBin op x r) (fun s => .binLeft op r s) ha
   have s2 := ssteps_congr (fun y => .natBin op (.lit a) y) (fun s => .binRight op a s) hb
-  cases op <;> simp [NatOp.resultTy] at hop
+  cases op <;> simp [NatOp.resultTy_eq] at hop
   · exact ⟨a + b, ssteps_trans s1 (ssteps_trans s2 (.next (.binLit .add a b) (.refl _)))⟩
   · exact ⟨a - b, ssteps_trans s1 (ssteps_trans s2 (.next (.binLit .sub a b) (.refl _)))⟩
   · exact ⟨a * b, ssteps_trans s1 (ssteps_trans s2 (.next (.binLit .mul a b) (.refl _)))⟩
@@ -188,7 +187,7 @@ theorem canonicalBool_bin (op : NatOp) (hop : op.resultTy = .boolean)
   obtain ⟨b, hb⟩ := hr
   have s1 := ssteps_congr (fun x => .natBin op x r) (fun s => .binLeft op r s) ha
   have s2 := ssteps_congr (fun y => .natBin op (.lit a) y) (fun s => .binRight op a s) hb
-  cases op <;> simp [NatOp.resultTy] at hop
+  cases op <;> simp [NatOp.resultTy_eq] at hop
   · exact ⟨a == b, ssteps_trans s1 (ssteps_trans s2 (.next (.binLit .beq a b) (.refl _)))⟩
   · exact ⟨decide (a ≤ b), ssteps_trans s1 (ssteps_trans s2 (.next (.binLit .ble a b) (.refl _)))⟩
 
@@ -657,10 +656,10 @@ theorem redVariant_cases {R : Ty} (σ : Nat → LExpr) :
           some (label, names, minor) ∧
         splitValues fs names = some values ∧
         Red R (minor.spine values)
-  | [], [], _, _, _, _, _, _, hvar => False.elim hvar
+  | [], [], _, _, _, _, _, _, hvar => False.elim (by simpa only [armsRow_nil, RedVariant, RedBundle] using hvar)
   | [], _ :: _, _, _, h, _, _, _, _ | _ :: _, [], _, _, h, _, _, _, _ => by simp at h
   | (armLabel, names, M) :: arms, Ts :: sig, label, fs, hl, hlen, hnd, harms, hvar => by
-    simp only [armsRow, RedVariant, RedBundle] at hvar
+    simp only [armsRow_cons, RedVariant, RedBundle] at hvar
     by_cases h : armLabel = label
     · subst h
       simp only [ite_true] at hvar
@@ -729,14 +728,14 @@ theorem ltyped_reducible {Γ : List Ty} {e : LExpr} {T : Ty}
     simp only [LExpr.subst]
     have hl := ihl hne.1 hσ
     have hr := ihr hne.2 hσ
-    cases op
-    · exact canonicalNat_bin .add rfl hl hr
-    · exact canonicalNat_bin .sub rfl hl hr
-    · exact canonicalNat_bin .mul rfl hl hr
-    · exact canonicalNat_bin .div rfl hl hr
-    · exact canonicalNat_bin .mod rfl hl hr
-    · exact canonicalBool_bin .beq rfl hl hr
-    · exact canonicalBool_bin .ble rfl hl hr
+    cases op <;> simp only [NatOp.resultTy_eq] at *
+    · exact canonicalNat_bin .add (by simp) hl hr
+    · exact canonicalNat_bin .sub (by simp) hl hr
+    · exact canonicalNat_bin .mul (by simp) hl hr
+    · exact canonicalNat_bin .div (by simp) hl hr
+    · exact canonicalNat_bin .mod (by simp) hl hr
+    · exact canonicalBool_bin .beq (by simp) hl hr
+    · exact canonicalBool_bin .ble (by simp) hl hr
   | boolLit _ b =>
     simp only [LExpr.subst]
     exact canonicalBool_lit b

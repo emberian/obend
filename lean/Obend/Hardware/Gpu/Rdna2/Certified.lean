@@ -2,7 +2,8 @@
 # Obend.Hardware.Gpu.Rdna2.Certified — a dumped graph, certified
 
 `certifyDump g isa` is the check run once per artifact: the graph is well formed with a checked layout,
-every load is waited for before its destination is touched (`Waitcnt`), every stage of the dump `isa`
+every load is waited for before its destination is touched (`Waitcnt`), vector stores complete at
+barriers and global/flat stores complete before exit, every stage of the dump `isa`
 (`hardware/gpu/isa/<graph>.txt`, RADV's machine code) decodes, and `Schedule.certifySchedule` accepts the
 decoded programs against the schedule the emitter dispatches (`ArrayEmit.compile` of `lowerArrayToGpu g`:
 elementwise stages and block collectives), with the residuals of `Residuals` (generated, each proved).
@@ -26,8 +27,9 @@ public import Obend.Hardware.SquareGraphs
 public import Obend.Hardware.Gpu.Rdna2.Block
 public import Obend.Hardware.Gpu.Rdna2.Schedule
 public import Obend.Hardware.Gpu.ArrayEmitCorrect
-public import Obend.Hardware.Gpu.Ntt
-@[expose] public section
+public import Obend.Hardware.Gpu.NttKernel
+
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 open Obend.Hardware.Gpu Obend.Hardware.ArrayHypergraph Tm
@@ -43,7 +45,7 @@ open Schedule ArrayEmit in
 /-- The check of one dumped graph: well formed, a checked layout, the waits, and the schedule the emitter
 dispatches (`ArrayEmit.compile` of the lowering) certified against the decoded dump. -/
 def certifyDump (g : ArrayGraph) (isa : String) : Bool :=
-  g.wf && layoutOk g && checkWaitcntDump isa &&
+  g.wf && layoutOk g && checkWaitcntDump isa && checkVscntDump isa &&
     match compile (lowerArrayToGpu g), progsOf isa with
     | .ok sched, some progs => certifySchedule (lowerArrayToGpu g) sched (ldssOf isa) progs Residuals.all
     | _, _ => false
@@ -63,7 +65,7 @@ theorem certifyDump_sound (g : ArrayGraph) (isa : String) (h : certifyDump g isa
             = evalGraph g env := by
   unfold certifyDump at h
   simp only [Bool.and_eq_true] at h
-  obtain ⟨⟨⟨hwf, hlay⟩, hwait⟩, hc⟩ := h
+  obtain ⟨⟨⟨⟨hwf, hlay⟩, hwait⟩, _⟩, hc⟩ := h
   refine ⟨hwait, ?_⟩
   split at hc
   · rename_i sched progs hs hp
@@ -113,7 +115,7 @@ open Obend.Hardware.ArrayKernel Obend.Hardware.Gpu.BlockLower Block in
 /-- The check of one dumped block program: admitted, waited for, decoded, certified with each dispatch's
 LDS (the dump's resource line, in dwords). -/
 def certifyBlockDump (p : ArrayKernel.Program) (isa : String) : Bool :=
-  (match p.check with | .ok () => true | .error _ => false) && checkWaitcntDump isa &&
+  (match p.check with | .ok () => true | .error _ => false) && checkWaitcntDump isa && checkVscntBlockDump isa &&
     match progsOf isa with
     | some progs => certifyBlock p (ldssOf isa) progs Residuals.all
     | none => false
@@ -129,7 +131,7 @@ theorem certifyBlockDump_sound (p : ArrayKernel.Program) (isa : String) (h : cer
             wordAt m (bufferBase p a + i) = ((evalProgram p mem).getD a #[]).getD i 0#64 := by
   unfold certifyBlockDump at h
   simp only [Bool.and_eq_true] at h
-  obtain ⟨⟨hchk, hw⟩, hc⟩ := h
+  obtain ⟨⟨⟨hchk, hw⟩, _⟩, hc⟩ := h
   have hchk' : p.check = .ok () := by
     revert hchk; cases p.check with
     | ok u => intro _; rfl
@@ -146,5 +148,23 @@ def certifyBlockNamed (name : String) (isa : String) : Bool :=
   match Obend.Hardware.SquareGraphs.blockGraphs.find? (·.1 == name) with
   | some (_, n) => certifyBlockDump (Obend.Hardware.Gpu.Ntt.nttBlockProgram n) isa
   | none => false
+
+theorem certifyDump_vscnt (g : ArrayGraph) (isa : String) (h : certifyDump g isa = true) :
+    checkVscntDump isa = true := by
+  simp only [certifyDump, Bool.and_eq_true] at h
+  exact h.1.2
+
+theorem certifyBlockDump_vscnt (p : ArrayKernel.Program) (isa : String)
+    (h : certifyBlockDump p isa = true) : checkVscntBlockDump isa = true := by
+  simp only [certifyBlockDump, Bool.and_eq_true] at h
+  exact h.1.2
+
+/-- Real ENC_FLAT_GLBL global_store_dword v[0:1], v2, off, then endpgm. -/
+@[expose] def unawaitedGlobalStoreDump : String :=
+  "## stage 0\n\tglobal_store_dword v[0:1], v2, off\t; dc708000 007f0200\n\ts_endpgm\t; bf810000\n"
+
+@[expose] def awaitedGlobalStoreDump : String :=
+  "## stage 0\n\tglobal_store_dword v[0:1], v2, off\t; dc708000 007f0200\n\ts_waitcnt_vscnt null, 0x0\t; bbfd0000\n\ts_endpgm\t; bf810000\n"
+
 
 end Obend.Hardware.Gpu.Rdna2

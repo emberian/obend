@@ -1,7 +1,7 @@
 module
 public import Obend.Hardware.Tpu.Machine
 import all Obend.Hardware.Tpu.Machine
-public import Obend.Hardware.Gpu.NttDFTSpec
+public import Obend.Hardware.Gpu.NttSpec
 public import Obend.Crypto.PikkuFoldLayered
 public import Obend.Crypto.DualSpine
 import all Obend.Crypto.DualSpine
