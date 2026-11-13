@@ -1,4 +1,5 @@
 module
+public import Obend.Crypto.Transcript
 meta import all Obend.Crypto.Transcript
 import all Obend.Crypto.Transcript
 meta import all Obend.Polis.ZkBiscuit
@@ -7,11 +8,11 @@ meta import all Obend.Polis.EvidencedOcap
 import all Obend.Polis.EvidencedOcap
 meta import all Obend.Polis.BlumRam
 import all Obend.Polis.BlumRam
-import Obend.Polis.EvidencedOcap
-import Obend.Polis.ZkBiscuit
-import Obend.Polis.BlumRam
-import Obend.AssertAxioms
-import Obend.Tactic.Tooth
+public import Obend.Polis.EvidencedOcap
+public import Obend.Polis.ZkBiscuit
+public import Obend.Polis.BlumRam
+public import Obend.AssertAxioms
+public import Obend.Tactic.Tooth
 
 public section
 set_option Elab.async false

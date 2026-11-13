@@ -1,4 +1,8 @@
 module
+public import Obend.Polis.BlumRam
+public import Obend.Vault.Log
+public import Obend.Crypto.DualSpine
+public import Obend.Crypto.Transcript
 meta import all Obend.Crypto.Transcript
 import all Obend.Crypto.Transcript
 meta import all Obend.Crypto.DualSpine
@@ -11,10 +15,10 @@ import all Obend.Polis.BlumRam
 import all Obend.Vault.Log
 import all Obend.Vault.WorldTree
 import all Obend.Vault.Replay
-import Obend.Vault.Replay
-import Obend.Vault.WorldTree
-import Obend.AssertAxioms
-import Obend.Tactic.Tooth
+public import Obend.Vault.Replay
+public import Obend.Vault.WorldTree
+public import Obend.AssertAxioms
+public import Obend.Tactic.Tooth
 
 public section
 set_option Elab.async false
@@ -128,7 +132,7 @@ set_option autoImplicit false
 
 /-! ## 1. Single-Chunk Incremental `VerkleUmem` Update vs Full Scratch Commit -/
 
-def ppDefault := defaultChunkAjtaiParams
+abbrev ppDefault := defaultChunkAjtaiParams
 
 def snapGenesis : AuthenticatedWorldSnapshot :=
   buildAuthenticatedSnapshot ppDefault defaultChunkAjtaiParams_cols Replay.genesis

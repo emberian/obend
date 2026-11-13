@@ -48,6 +48,7 @@ import all Obend.Vault.Replay
 import all Obend.Judge.SvenvsCorrigibility
 
 public section
+set_option pp.maxSteps 80
 set_option Elab.async false
 
 namespace Obend.Tests.DurableAndSvenvsTest
@@ -766,22 +767,27 @@ def forgedAuthorityRejected : Bool :=
   match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .error _ => false
   | .ok (wire, frame) =>
-    rehydrate sampleIdentityHash (sampleSealKey.set! 0 0x5b) 9 wire frame == .error .unsealedFrame
+    match rehydrate sampleIdentityHash (sampleSealKey.set! 0 0x5b) 9 wire frame with
+    | .error .unsealedFrame => true
+    | _ => false
 
 def staleEpochRejected : Bool :=
   match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .error _ => false
   | .ok (wire, frame) =>
-    rehydrate sampleIdentityHash sampleSealKey 10 wire frame == .error .unsealedFrame
+    match rehydrate sampleIdentityHash sampleSealKey 10 wire frame with
+    | .error .unsealedFrame => true
+    | _ => false
 
 /-- Even a correctly sealed table cannot restore two capabilities in one slot. -/
 def duplicateSlotsRejected : Bool :=
   let tbl : CapTable := ⟨[⟨0, ⟨101, 7, [1]⟩⟩, ⟨1, ⟨101, 8, [2]⟩⟩]⟩
   let frame : CapSealFrame := ⟨99, 9, tbl,
     computeCapFrameSeal sampleIdentityHash sampleSealKey 9 99 tbl⟩
-  rehydrate sampleIdentityHash sampleSealKey 9
-    (.record [("a", .sealedCap 0 7), ("b", .sealedCap 1 8)]) frame ==
-      .error (.missingOrDuplicateSlot 101)
+  match rehydrate sampleIdentityHash sampleSealKey 9
+    (.record [("a", .sealedCap 0 7), ("b", .sealedCap 1 8)]) frame with
+  | .error (.missingOrDuplicateSlot 101) => true
+  | _ => false
 
 theorem authority_epoch_slots_refused :
     forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
