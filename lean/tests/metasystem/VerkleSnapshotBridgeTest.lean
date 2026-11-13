@@ -7,7 +7,6 @@ import Obend.Vault.WorldTree
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
-
 /-!
 # `tests/metasystem/VerkleSnapshotBridgeTest.lean` — Pillar-3 COW `ChunkedWorld` ↔ `VerkleUmem` & WAL Suite
 

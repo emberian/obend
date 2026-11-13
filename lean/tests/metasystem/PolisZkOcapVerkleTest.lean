@@ -5,11 +5,10 @@ import Obend.Polis.BlumRam
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
-
 /-!
 # `tests/metasystem/PolisZkOcapVerkleTest.lean`
 
-Runs `Obend.Polis.{EvidencedOcap, ZkBiscuit, VerkleUmem}` on concrete data and aims a `#tooth` at
+Runs `Obend.Polis.{EvidencedOcap, ZkBiscuit, BlumRam}` on concrete data and aims a `#tooth` at
 each headline theorem.
 
 * `#guard` lines evaluate the executable definitions (the fuel evaluator of `capPCA`, the authority
@@ -200,8 +199,6 @@ def partialEnv : Nat → KleenePred3
 #guard Caveat.eval partialEnv (.or (.atom 0) (.atom 2)) == .true3
 #guard Caveat.eval partialEnv (.and (.atom 1) (.atom 2)) == .false3
 
--- A sealed box that opens without its unsealer.
-
 /-- Bracket abstraction that forgets the bound variable. -/
 def lamCodeNoIdentity {P : PCA} (x : Nat) (ρ : Nat → P.Code) : CombTerm P → P.Code
   | .var n => P.k1 (ρ n)
@@ -211,7 +208,6 @@ def lamCodeNoIdentity {P : PCA} (x : Nat) (ρ : Nat → P.Code) : CombTerm P →
 #guard_msgs (drop info) in
 #tooth Obend.Polis.CombTerm.abst_eval by mutation
   Obend.Polis.CombTerm.lamCode := @lamCodeNoIdentity
-
 
 -- ============================================================================
 -- 2. `ZkBiscuit`: revoked set, chain fold, cone revocation, pinned inputs
@@ -301,8 +297,6 @@ def inputsCap : FullPinnedPublicInputs := { inputsA with capRoot := bytes [2, 3]
 #guard (bindTurn inputsA seedTr).transcript.state != (bindTurn inputsVk seedTr).transcript.state
 #guard (bindTurn inputsA seedTr).transcript.state != (bindTurn inputsTurn seedTr).transcript.state
 #guard (bindTurn inputsA seedTr).transcript.state != (bindTurn inputsCap seedTr).transcript.state
-
--- A search that only looks at the left half.
 
 -- ============================================================================
 -- 3. `VerkleUmem`: RAM replay, the offline memory checker, the hash tree
@@ -398,7 +392,5 @@ example (r : ByteArray) (addr v₁ v₂ : UInt64) (p₁ p₂ : Array (Array Byte
       Obend.Digest.HashBytes.CollisionAmong treeHash
         (fun x => OpeningHashed addr v₁ p₁ x ∨ OpeningHashed addr v₂ p₂ x) :=
   verifyOpening_binds h₁ h₂
-
--- A node hash that drops the running tag.
 
 end Obend.Tests.PolisZkOcapVerkleTest
