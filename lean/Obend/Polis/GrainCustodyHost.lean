@@ -1,7 +1,7 @@
 module
-public import Obend.Polis.PrepaidLeaseAndFork
+public import Obend.Vault.Escrow
 public import Obend.Polis.GrainPowerbox
-import all Obend.Polis.PrepaidLeaseAndFork
+import all Obend.Vault.Escrow
 
 public section
 namespace Obend.Polis.Custody
