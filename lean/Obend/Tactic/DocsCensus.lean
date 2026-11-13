@@ -27,7 +27,7 @@ public meta import Obend.Slot
 public import Obend.Intention
 public meta import Obend.Intention
 
-@[expose] public section
+public section
 
 namespace Obend.Tactic.DocsCensus
 
@@ -606,6 +606,9 @@ theorem censusReport_isClean_iff (r : CensusReport) :
     r.isClean = true ↔
       r.missingDocs = [] ∧ r.missingPaths = [] ∧ r.missingRoots = [] := by
   simp [CensusReport.isClean, List.isEmpty_iff, and_assoc]
+
+theorem censusReport_clean_inhabited : ∃ r : CensusReport, r.isClean = true :=
+  ⟨⟨1, 1, 1, [], [], []⟩, rfl⟩
 
 /-- Run the path and subsystem documentation census across `docs`. -/
 def runDocsCensus (docs : List String := topLevelMarkdownDocs) : IO CensusReport := do
@@ -1348,34 +1351,34 @@ elab "#census_environment " path:str : command => do
 set_option maxRecDepth 20000 in
 theorem extractObendLeanPaths_sample :
     extractObendLeanPaths "Obend/Leaf/Futamura.lean lean/Obend/Spec/CrossPackage.lean" =
-      ["Obend/Leaf/Futamura.lean", "Obend/Spec/CrossPackage.lean"] := rfl
+      ["Obend/Leaf/Futamura.lean", "Obend/Spec/CrossPackage.lean"] := by decide +kernel
 
 set_option maxRecDepth 20000 in
 theorem extractBacktickObendPaths_sample :
     extractBacktickObendPaths "See `lean/Obend/Core/Term.lean` and `lean/Obend/Hardware/Gpu`." =
-      ["Obend/Core/Term.lean", "Obend/Hardware/Gpu"] := rfl
+      ["Obend/Core/Term.lean", "Obend/Hardware/Gpu"] := by decide +kernel
 
 set_option maxRecDepth 20000 in
 theorem extractFencedInductiveBlocks_sample :
     extractFencedInductiveBlocks
       "```lean\ninductive Quantity where\n  | erased | affine | linear | unrestricted\ninductive Reuse where\n  | once\n  | reusable\n```" =
       [("Quantity", ["erased", "affine", "linear", "unrestricted"]),
-       ("Reuse", ["once", "reusable"])] := rfl
+       ("Reuse", ["once", "reusable"])] := by decide +kernel
 
 set_option maxRecDepth 20000 in
 example :
     extractReviewMdPaths "See review/DECISIONS-LEDGER.md and review/DECISIONS-20261031.md." =
-      ["review/DECISIONS-LEDGER.md", "review/DECISIONS-20261031.md"] := rfl
+      ["review/DECISIONS-LEDGER.md", "review/DECISIONS-20261031.md"] := by decide +kernel
 
 set_option maxRecDepth 20000 in
 theorem extractObendDottedRoots_sample :
     extractObendDottedRoots "Obend.Leaf.Futamura Obend.Spec.CrossPackage" =
-      ["Leaf", "Spec"] := rfl
+      ["Leaf", "Spec"] := by decide +kernel
 
 set_option maxRecDepth 20000 in
 example :
     extractBacktickObendConsts "Check `Obend.Run.HyperLaw.glEquilibriumJudge` and `Obend.Core.Nominal.kinded_refuses`." =
-      ["Obend.Run.HyperLaw.glEquilibriumJudge", "Obend.Core.Nominal.kinded_refuses"] := rfl
+      ["Obend.Run.HyperLaw.glEquilibriumJudge", "Obend.Core.Nominal.kinded_refuses"] := by decide +kernel
 
 end Obend.Tactic.DocsCensus
 

@@ -719,6 +719,14 @@ instance instJudgeModQuad : Judge ModQuadQuery BinNat :=
     modQuadStep_no_false_reject
     modQuadStep_complete
 
+def modQuadSoundJudge : Judge ModQuadQuery BinNat :=
+  Judge.ofSoundCheck modQuadMeaning modQuadStep modQuadStep_sound modQuadFragment
+    modQuadStep_no_false_reject modQuadStep_complete modQuadRefutes
+    (fun h hk _ => modQuadCounterexample_disjoint (modQuadStep_counterexample h hk))
+
+theorem modQuadFragment_inhabited : ∃ q, modQuadSoundJudge.Fragment q :=
+  ⟨⟨.zero, .zero⟩, by change (0 : Nat) ≤ 64; decide⟩
+
 /-- Genuine recursive bitstring wire encoder/decoder for `BinPos` & `BinNat` (zero hardcoded fixtures!). -/
 def encodeBinPosChars : BinPos → List Char
   | .one => ['1']

@@ -2,7 +2,6 @@ import Obend.Lower.DiscrTreeLUT
 import Obend.Lower.MetaUnify
 import Obend.Lower.Inductive
 import Obend.Lower.Proofs.Hardware
-import Obend.Hardware.Fabric
 
 /-!
 # End-to-End Test Suite: Arity-Tagged Polish `DiscrTrieNode`, Priority TCAM Synthesis, First-Class `.mvar` Miller Unification & Multi-Constructor Recursor Lowering
@@ -18,7 +17,6 @@ open Obend.Lower.ExprCAM
 open Obend.Lower.MetaUnify
 open Obend.Lower.DiscrTreeLUT
 open Obend.Hardware.HDL
-open Obend.Hardware.Fabric
 
 /-! ## 1. Arity-Tagged Polish `DiscrTrieNode` Insertion, Non-Collision & Wildcard `.star` Lookup -/
 
@@ -189,33 +187,5 @@ example :
     Evaluates (lowerT (.app nestedOptionListIotaLExpr (optionListToLExpr (some [10, 20, 30])))) (.nat 3) := by
   have h := multiCtorIota_hardware_bridge_sound 3 42 99 [10, 20, 30]
   exact ⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, nestedOptionListIota_eval none, h.2.2.2.2.1⟩
-
-/-! ## 5. Linear/Affine Wire-Fanout & Zero-Fork Elastic Handshake Verifier -/
-
-/-- info: (1, true, 0, false, 1) -/
-#guard_msgs in
-#eval
-  let netLinear : NetFanoutExpr := .add64 (.wire "x") (.wire "y")
-  let netDup    : NetFanoutExpr := .add64 (.wire "x") (.wire "x")
-  ( countSinkFanout "x" netLinear
-  , checkWireMult .linear (countSinkFanout "x" netLinear)
-  , requiredElasticForks "x" netLinear
-  , checkWireMult .linear (countSinkFanout "x" netDup)
-  , requiredElasticForks "x" netDup )
-
-example :
-    let netLinear : NetFanoutExpr := .add64 (.wire "x") (.wire "y")
-    let netDup    : NetFanoutExpr := .add64 (.wire "x") (.wire "x")
-    countSinkFanout "x" netLinear = 1 ∧
-    checkWireMult .linear (countSinkFanout "x" netLinear) = true ∧
-    requiredElasticForks "x" netLinear = 0 ∧
-    checkWireMult .linear (countSinkFanout "x" netDup) = false ∧
-    requiredElasticForks "x" netDup = 1 := by
-  decide +kernel
-
-example (w : String) (e : NetFanoutExpr)
-    (hok : checkWireMult .linear (countSinkFanout w e) = true) :
-    requiredElasticForks w e = 0 :=
-  linear_or_affine_wire_zero_elastic_forks w .linear e (Or.inl rfl) hok
 
 end Obend.Tests.SiliconElab

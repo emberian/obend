@@ -11,37 +11,38 @@ elaborator's own output is `tests/run-logic.py`).
 * The mutation of `Augmented` to `+ 2` keeps the derivation (the claim is about open recursion and
   never unfolds `review`), which is why the ground judge carries that tooth (`GroundTeeth`). -/
 public import Obend.Logic.Obligation
-@[expose] public section
+import all Obend.Logic.Frame
+public section
 open Obend.Core.Term Obend.Logic
 
 namespace Obend.Teeth.Logic.Review
 
-def specMeta (name : String) : Term := .inject "declared" (.record [("name", .label name)])
+@[expose] def specMeta (name : String) : Term := .inject "declared" (.record [("name", .label name)])
 
-def layer (name : String) (fields : List (String × Term)) : Layer :=
+@[expose] def layer (name : String) (fields : List (String × Term)) : Layer :=
   { name, metadata := specMeta name, fields }
 
 /-- `def review(value): value + 1`. -/
-def base : Layer := layer "ReviewBase.Base" [("review", .lam (.binary .add (.bound 0) (.nat 1)))]
+@[expose] def base : Layer := layer "ReviewBase.Base" [("review", .lam (.binary .add (.bound 0) (.nat 1)))]
 /-- `def twice(value): self.review(self.review(value))`. -/
-def twice : Layer := layer "ReviewMember.Twice" [("twice", .lam (.app (.get (.bound 2) "review") (.app (.get (.bound 2) "review") (.bound 0))))]
+@[expose] def twice : Layer := layer "ReviewMember.Twice" [("twice", .lam (.app (.get (.bound 2) "review") (.app (.get (.bound 2) "review") (.bound 0))))]
 /-- `def review(value): super.review(value) + n`. -/
-def augmented (n : Nat) : Layer := layer "ReviewMember.Augmented" [("review", .lam (.binary .add (.app (.get (.bound 1) "review") (.bound 0)) (.nat n)))]
+@[expose] def augmented (n : Nat) : Layer := layer "ReviewMember.Augmented" [("review", .lam (.binary .add (.app (.get (.bound 1) "review") (.bound 0)) (.nat n)))]
 /-- `def twice(value): value`. -/
-def override : Layer := layer "ReviewMember.Override" [("twice", .lam (.bound 0))]
+@[expose] def override : Layer := layer "ReviewMember.Override" [("twice", .lam (.bound 0))]
 /-- A layer that adds a member nobody reads. -/
-def unrelated : Layer := layer "ReviewMember.Unrelated" [("note", .nat 0)]
+@[expose] def unrelated : Layer := layer "ReviewMember.Unrelated" [("note", .nat 0)]
 
-def seed : List (String × Term) := [("review", .lam (.bound 0)), ("twice", .lam (.bound 0))]
+@[expose] def seed : List (String × Term) := [("review", .lam (.bound 0)), ("twice", .lam (.bound 0))]
 
 /-- `claim repeated(value: Nat): self.twice(value) == self.review(self.review(value))`. -/
-def repeated : Term :=
+@[expose] def repeated : Term :=
   .lam (.lam (.lam (.binary .equal (.app (.get (.bound 2) "twice") (.bound 0))
     (.app (.get (.bound 2) "review") (.app (.get (.bound 2) "review") (.bound 0))))))
 
-def object (n : Nat) : ClaimObj := ⟨⟨augmented n, [twice, base], seed⟩, 1, repeated, 1⟩
+@[expose] def object (n : Nat) : ClaimObj := ⟨⟨augmented n, [twice, base], seed⟩, 1, repeated, 1⟩
 
-def derivation : List RStep :=
+@[expose] def derivation : List RStep :=
   [.congr (.app (.bound 0) (.bound 1)) (.get (.bound 2) "twice") [.lateBinding "twice" "ReviewMember.Twice"],
    .run 1]
 
@@ -49,7 +50,7 @@ theorem accepted : claimCheck 4 (object 1) derivation = .ok := by decide +kernel
 
 example : claimCheck 4 (object 2) derivation = .ok := by decide +kernel
 
-def overridden : ClaimObj := ⟨⟨override, [augmented 1, twice, base], seed⟩, 2, repeated, 1⟩
+@[expose] def overridden : ClaimObj := ⟨⟨override, [augmented 1, twice, base], seed⟩, 2, repeated, 1⟩
 
 theorem frame_refused : claimCheck 4 overridden derivation = .refused (.rewrite .stepMismatch) [0, 0] := by
   decide +kernel

@@ -1,4 +1,5 @@
-import Obend.Vault.HardwareProjection
+module
+import all Obend.Hardware.NotebookProjection
 import Obend.Doc.Structured
 import Obend.Doc.Graph
 import Obend.Hardware.HDL
@@ -7,7 +8,6 @@ import Obend.Hardware.PlaceRoute
 import Obend.Hardware.DRC
 import Obend.Hardware.Synth
 import Obend.Hardware.Circuits
-import Obend.Hardware.Fabric
 
 open Obend.Vault.HardwareProjection
 open Obend.Doc
@@ -120,22 +120,11 @@ def test_project_cutline_drc : Bool :=
 
 #guard test_project_cutline_drc == true
 
--- Test 6: Zero Hardware Mutation (Requirement R6)
-def test_zero_hardware_mutation : Bool :=
-  let st0 : Obend.Hardware.Fabric.DeosHwState := { count := 42, cfgTag := 10, lastAccepted := true }
-  let m : Circuit := {
-    name       := "read_only_probe"
-    inputNames := []
-    wires      := []
-    regs       := []
-    outputs    := []
-  }
-  let _cell := projectCircuit "probe_cell" m
-  (st0.count == 42) &&
-  (st0.cfgTag == 10) &&
-  (st0.lastAccepted == true)
-
-#guard test_zero_hardware_mutation == true
+-- Test 6: Routing/frame projection retains a nonempty hardware payload.
+example : ∃ c : PnrCertificate, c.routedNets ≠ [] ∧ c.bitstreamFrames ≠ [] ∧
+    ∀ d, pnrLayoutToData c = pnrLayoutToData d →
+      c.routedNets = d.routedNets ∧ c.bitstreamFrames = d.bitstreamFrames :=
+  pnr_projection_inhabited
 
 -- Test 7: Document Graph Non-Interference
 def test_doc_atom_noninterference : Bool :=

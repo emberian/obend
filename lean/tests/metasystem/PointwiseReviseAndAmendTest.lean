@@ -130,7 +130,6 @@ import all Obend.Logic.Program
 import all Obend.Logic.Receipt
 import all Obend.Logic.Rewrite
 import all Obend.Logic.SeparationFrame
-import all Obend.Logic.SuperRefines
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
 import all Obend.Run.Control

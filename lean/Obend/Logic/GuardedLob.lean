@@ -46,7 +46,8 @@ the sorted-array search is repeated in `Obend.Codec.DetCbor` over byte keys and 
 home.
 -/
 
-public import Obend.Logic.SuperRefines
+public import Obend.Logic.Obligation
+import all Obend.Logic.Obligation
 public import Obend.Law.Proofs.Run
 
 public section

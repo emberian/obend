@@ -23,12 +23,12 @@ Integrates and verifies all four Chasm-C2 modules together:
 
 public import Obend.Paco.GPaco
 public import Obend.Leaf.LinkSpecialize
-public import Obend.Logic.SuperRefines
+public import Obend.Logic.Obligation
 public import Obend.Slot.SupportSheaf
 public import Obend.Tactic.Tooth
 import all Obend.Paco.GPaco
 import all Obend.Leaf.LinkSpecialize
-import all Obend.Logic.SuperRefines
+import all Obend.Logic.Obligation
 import all Obend.Slot.SupportSheaf
 
 public section
@@ -262,3 +262,19 @@ theorem capstone_pipeline_witness :
 end Obend.Tests.Metasystem.BookLinkAndSuperRefinesTest
 
 end
+
+open Obend.Logic in
+#tooth superClaim_sound by
+  mutation superClaimCheck := fun _ _ _ => .ok
+
+open Obend.Logic in
+#tooth claimCheck_illFormed by
+  mutation claimCheck := fun _ _ _ => .refused .illFormed []
+
+open Obend.Logic in
+#tooth obligationCheck_refuses_false_external_claim by
+  mutation externalClaimBound := fun _ _ _ => true
+
+open Obend.Logic in
+#tooth checkWorldCarrySpec_iff by
+  mutation checkWorldCarrySpec := fun _ _ => .ok

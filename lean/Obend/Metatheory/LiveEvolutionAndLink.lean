@@ -27,7 +27,8 @@ public import Obend.Digest.Cshake256
 public import Obend.Digest.HashBytes
 public import Obend.Core.Cubical2LTT
 public import Obend.Vault.CheckedCarry
-public import Obend.Logic.SuperRefines
+public import Obend.Logic.Obligation
+import all Obend.Logic.Obligation
 public import Obend.Metatheory.StratifiedCut
 
 public section

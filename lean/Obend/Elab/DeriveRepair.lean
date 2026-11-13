@@ -1,6 +1,6 @@
 module
 /-
-# Obend.Repair.DeriveConfig — the polynomial signature of an inductive type, derived
+# Obend.Elab.DeriveRepair — the polynomial signature of an inductive type, derived
 
 `Obend.Repair.AlgConfig` repairs along a pair of initial algebras of one polynomial `(A, B)`; there
 the polynomial of `UnaryNat` and both initial algebras are written by hand. Here they are read off
@@ -26,7 +26,7 @@ theorem of `AlgConfig` then applies: `cfg.forward`, `cfg.repair_by_instantiation
 `#check_scar_free_bridge cfg` walks the declarations: `D`'s side of `cfg` does not mention `C`,
 and `C`'s side does not mention `D`. The shape is shared; neither type is defined through the other.
 -/
-public import Lean
+public meta import Lean
 public import Obend.Repair.AlgConfig
 public section
 namespace Obend.Repair
@@ -55,6 +55,11 @@ theorem finCons_ext {X : Type u} {n : Nat} {x : X} {k : Fin n → X} {g : Fin (n
   match j with
   | ⟨0, _⟩ => rfl
   | ⟨_ + 1, _⟩ => rfl
+
+/-- A nonempty child tuple round-trips through the constructor decomposition. -/
+theorem finCons_inhabited : ∃ g : Fin 2 → Nat,
+    finCons 7 (finCons 11 finNil) = g ∧ g ⟨0, by decide⟩ = 7 ∧ g ⟨1, by decide⟩ = 11 :=
+  ⟨finCons 7 (finCons 11 finNil), rfl, rfl, rfl⟩
 
 /-! ## The derivation -/
 

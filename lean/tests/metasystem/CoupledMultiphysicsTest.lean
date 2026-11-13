@@ -4,13 +4,11 @@ public import Obend.Tactic.Tooth
 public import Obend.Hardware.Magnetics
 public import Obend.Hardware.ThermalPassivity
 public import Obend.Hardware.Kinematics
-public import Obend.Vault.HardwareProjection
-public import Obend.Vault.PhysicalProjection
+public import Obend.Hardware.NotebookProjection
+import all Obend.Hardware.NotebookProjection
 import all Obend.Hardware.Magnetics
 import all Obend.Hardware.ThermalPassivity
 import all Obend.Hardware.Kinematics
-import all Obend.Vault.HardwareProjection
-import all Obend.Vault.PhysicalProjection
 
 /-!
 # Metasystem Test Suite — Coupled Multi-Physics, $1/\Delta_e$ Courant $P_1$ FEMM, PRIMA Thermal Passivity & Featherstone Twist Chains (`WS-J`)

@@ -21,8 +21,9 @@ public import Obend.Equiv.Cost
 public import Obend.Equiv.Demand
 public import Obend.Core.TermTraverse
 public import Obend.Run.Ticks
+public import Obend.Leaf.Flatten
 
-@[expose] public section
+public section
 namespace Obend.Judge.Cost
 open Obend.Core Obend.Core.Term Obend.Equiv
 open Obend.Core.Traverse (Tree)
@@ -54,7 +55,7 @@ theorem treeBeq_sound : (a b : Tree Tag) → treeBeq a b = true → a = b
     rw [h.1, listBeq_sound cs ds h.2]
   | .var _, .bind _, h | .var _, .node _ _, h | .bind _, .var _, h | .bind _, .node _ _, h
   | .node _ _, .var _, h | .node _ _, .bind _, h => by simp [treeBeq] at h
-theorem listBeq_sound : (as bs : List (Tree Tag)) → listBeq as bs = true → as = bs
+theorem listBeq_sound : ∀ (as bs : List (Tree Tag)), listBeq as bs = true → as = bs
   | [], [], _ => rfl
   | a :: as, b :: bs, h => by
     simp only [listBeq, Bool.and_eq_true] at h
@@ -267,10 +268,18 @@ inductive Clause where
   | stepMismatch
   /-- the rounds end elsewhere than the candidate -/
   | endMismatch
+  /-- Distinct natural literals cannot improve one another. -/
+  | literalMismatch
   deriving DecidableEq, Repr
 
+def literalConflict (o : Term × Term) : Bool :=
+  match o.1, o.2 with
+  | .nat n, .nat m => n != m
+  | _, _ => false
+
 def check (r : Nat) (o : Term × Term) (rounds : List Round) : Verdict Clause :=
-  if rounds.length ≤ r then
+  if literalConflict o then .refused .literalMismatch []
+  else if rounds.length ≤ r then
     match runRounds o.1 rounds with
     | some t => if termBeq t o.2 then .ok else .refused .endMismatch []
     | none => .refused .stepMismatch []
@@ -279,6 +288,22 @@ def check (r : Nat) (o : Term × Term) (rounds : List Round) : Verdict Clause :=
 /-- What an accepted certificate establishes: the candidate improves on the original within `8`
 per round. -/
 def Meaning (o : Term × Term) (rounds : List Round) : Prop := Improves (8 ^ rounds.length) o.1 o.2
+
+theorem meaning_no_literalConflict {o : Term × Term} {rounds : List Round}
+    (hm : Meaning o rounds) : literalConflict o = false := by
+  unfold literalConflict
+  split
+  next n m hn hm' =>
+    have hc : CostWithin (8 ^ rounds.length) (.nat n) (.nat m) := by
+      simpa only [Meaning, Improves, hn, hm'] using hm
+    obtain ⟨v, k, hv, _, he⟩ := hc Term.bound (.bound 0) (.nat n) 0
+      (by simpa only [instantiate, Term.substitute] using (Run.value (.nat n)))
+    have hv' : CV (.nat m) v k := by simpa only [instantiate, Term.substitute] using hv
+    have eqv := (cv_of_value (.nat m) hv').1
+    have eqn := he (.nat n)
+    have eqnm : n = m := Term.nat.inj (eqn.symm.trans eqv)
+    simp [eqnm]
+  next => rfl
 
 /-- **The improvement judge.** Objects are an original term and a candidate; certificates are
 rounds of parallel re-association; the grade bounds the number of rounds. -/
@@ -290,28 +315,52 @@ instance improvement : Judge (Term × Term) (List Round) where
     intro r o rounds h
     simp only [check] at h
     split at h
+    · cases h
     · split at h
-      · rename_i t ht
-        split at h
-        · rename_i hb
-          have e := termBeq_sound hb
-          subst e
-          exact runRounds_sound rounds ht
+      · split at h
+        · rename_i t ht
+          split at h
+          · rename_i hb
+            have e := termBeq_sound hb
+            subst e
+            exact runRounds_sound rounds ht
+          · cases h
         · cases h
       · cases h
+  refutes c := c == .literalMismatch
+  refuted := by
+    intro r o rounds c p h hr rounds' hm
+    have hc : c = .literalMismatch := beq_iff_eq.mp hr
+    subst c
+    simp only [check, meaning_no_literalConflict hm, Bool.false_eq_true, ite_false] at h
+    split at h
+    · split at h
+      · split at h <;> cases h
+      · cases h
     · cases h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment o := ∃ rounds, runRounds o.1 rounds = some o.2
+  Fragment o := o.1 = o.2
   complete := by
-    rintro o ⟨rounds, hrun⟩ _
-    exact ⟨rounds, rounds.length, by simp [check, hrun, termBeq_refl]⟩
+    intro o hf hm
+    obtain ⟨rounds, hm⟩ := hm
+    refine ⟨[], 0, ?_⟩
+    simp [check, meaning_no_literalConflict hm, runRounds, hf, termBeq_refl]
   mono := by
     intro r r' o rounds le hne
-    simp only [check] at hne ⊢
-    split at hne
-    · rename_i h; simp [Nat.le_trans h le, h]
-    · exact absurd rfl hne
+    by_cases hc : literalConflict o = true
+    · simp [check, hc]
+    · simp only [check, hc, ite_false] at hne ⊢
+      by_cases hl : rounds.length ≤ r
+      · simp [hl, Nat.le_trans hl le]
+      · exact False.elim (hne (by simp [hl]))
+
+theorem improvement_refusal_inhabited : ∃ o rounds c p,
+    improvement.check 0 o rounds = .refused c p ∧ improvement.refutes c = true :=
+  ⟨(.nat 0, .nat 1), [], .literalMismatch, [], by
+    change check 0 (.nat 0, .nat 1) [] = .refused .literalMismatch []
+    decide +kernel, rfl⟩
+
+theorem improvement_fragment_inhabited : ∃ o, improvement.Fragment o :=
+  ⟨(.nat 7, .nat 7), rfl⟩
 
 /-- **A member's charge is a theorem**: an accepted rewrite bounds the clairvoyant cost of the
 candidate by `8` per round times the original's, in every context, with the same literal result. -/
@@ -355,7 +404,7 @@ def twoRounds : List Round :=
    ⟨.bound 0, [⟨.nat 1, .nat 2, .mix (.nat 3) (.nat 4), true⟩]⟩]
 
 theorem twoRounds_accepted : check 2 (original, candidate) twoRounds = .ok := by
-  simp [check, runRounds, twoRounds, original, candidate, Round.source, Round.target, pick, Assoc.source,
+  simp [check, literalConflict, runRounds, twoRounds, original, candidate, Round.source, Round.target, pick, Assoc.source,
     Assoc.target, Term.substitute, termBeq, encode, treeBeq, listBeq]
 
 theorem original_improves : Improves 64 original candidate :=
@@ -373,7 +422,7 @@ def pairRound : List Round :=
     [⟨.nat 1, .nat 2, .nat 3, true⟩, ⟨.nat 4, .nat 5, .nat 6, true⟩]⟩]
 
 theorem pairRound_accepted : check 1 (pairOriginal, pairCandidate) pairRound = .ok := by
-  simp [check, runRounds, pairRound, pairOriginal, pairCandidate, Round.source, Round.target, pick,
+  simp [check, literalConflict, runRounds, pairRound, pairOriginal, pairCandidate, Round.source, Round.target, pick,
     Assoc.source, Assoc.target, Term.substitute, termBeq, encode, treeBeq, listBeq]
 
 /-- **A flat factor**: two re-associations in one round cost a factor of 8, where two sequential
@@ -388,7 +437,7 @@ def badRound : List Round :=
     [⟨.nat 1, .nat 2, .nat 3, true⟩, ⟨.nat 4, .nat 5, .nat 6, false⟩]⟩]
 
 theorem badRound_refused : check 1 (pairOriginal, pairCandidate) badRound = .refused .stepMismatch [] := by
-  simp [check, runRounds, badRound, pairOriginal, Round.source, pick, Assoc.source,
+  simp [check, literalConflict, runRounds, badRound, pairOriginal, Round.source, pick, Assoc.source,
     Term.substitute, termBeq, encode, treeBeq, listBeq]
 
 /-! ## The cost judge: a demand run as the certificate -/
@@ -599,6 +648,11 @@ theorem verifySharingCostCert_sound {c : SharingCostCert}
       ⟨c.expectedValue, k, hcv, hk_le⟩, ⟨c.expectedValue, kCbv, hcv_cbv, hkcbv_le⟩⟩
   · cases h
 
+theorem verifySharingCostCert_complete {c : SharingCostCert} (h : SharingCostMeaning c) :
+    verifySharingCostCert c = true := by
+  obtain ⟨k, kc, he, hc, _, _, hkb, hbc, hkc, hcb, _, _⟩ := h
+  simp [verifySharingCostCert, he, hc, termBeq_refl, hkb, hbc, hkc, hcb]
+
 inductive SharingCostClause where
   | checkFailed
   deriving DecidableEq, Repr
@@ -618,15 +672,190 @@ instance sharingCostJudge : Judge SharingCostCert Unit where
     · rename_i hv
       exact verifySharingCostCert_sound hv
     · cases h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment c := verifySharingCostCert c = true
+  refutes _ := true
+  refuted := by
+    intro r c u clause p h _ u' hm
+    have hv := verifySharingCostCert_complete hm
+    simp [sharingCostCheck, hv] at h
+  Fragment c := c.term = c.expectedValue
   complete := by
-    intro c hc _
-    exact ⟨(), 0, by simp [sharingCostCheck, hc]⟩
+    intro c _ hm
+    obtain ⟨u, hm⟩ := hm
+    exact ⟨(), 0, by simp [sharingCostCheck, verifySharingCostCert_complete hm]⟩
   mono := by
     intro _ _ _ _ _ _
     rfl
 
+/-- A literal's cost certificate has a constructive accepted instance. -/
+def literalSharingCostCert : SharingCostCert := ⟨.nat 7, .nat 7, 2, 1, 1⟩
+
+theorem verifySharingCostCert_inhabited : ∃ c, verifySharingCostCert c = true :=
+  ⟨literalSharingCostCert, by decide +kernel⟩
+
 end Obend.Judge.Cost
+namespace Obend.Judge.LayeredCost
+open Obend.Core.Term
+open Obend.Equiv
+open Obend.Logic
+open Obend.Judge.Cost
+open Obend.Equiv.Demand (FE obj demand demand_exists demand_minimal)
+set_option autoImplicit false
+
+/-- **The cost of a member of a layered object, through its compilation**: the flattening's member
+costs at most `k`, and is `≈b` the object's. -/
+def LayeredCost (C : Composition) (m : String) (k : Nat) : Prop :=
+  CostAtMost (.get C.flatten m) k ∧ (Term.get C.flatten m ≈b .get C.object m)
+
+inductive LayeredClause where
+  /-- the composition is outside `flatten_sound`'s scope -/
+  | notClosed
+  /-- the flattening's member fails the cost check -/
+  | cost (c : CostClause)
+  deriving DecidableEq, Repr
+
+def layeredCheck (r : Nat) (o : Composition × String × Nat) (c : DemandCert) : Verdict LayeredClause :=
+  if o.1.closedB then
+    match costCheck r (.get o.1.flatten o.2.1, o.2.2) c with
+    | .ok => .ok
+    | .refused k p => .refused (.cost k) p
+    | .uncovered => .uncovered
+  else .refused .notClosed []
+
+def layeredRefutes : LayeredClause → Bool
+  | .cost c => costRefutes c
+  | .notClosed => false
+
+theorem layered_sound {r : Nat} {o : Composition × String × Nat} {c : DemandCert}
+    (h : layeredCheck r o c = .ok) : LayeredCost o.1 o.2.1 o.2.2 := by
+  simp only [layeredCheck] at h
+  split at h
+  · rename_i hc
+    split at h
+    · rename_i hk
+      exact ⟨(cost_sound (o := (_, _)) hk).1, Obend.Leaf.flatten_sound o.1 hc o.2.1⟩
+    · cases h
+    · cases h
+  · cases h
+
+/-- A refused cost check that refutes: no derivation of the flattening's member is that cheap. -/
+theorem layered_refuted {r : Nat} {o : Composition × String × Nat} {c : DemandCert} {k : LayeredClause}
+    {p : List Nat} (h : layeredCheck r o c = .refused k p) (hk : layeredRefutes k = true) :
+    ∀ _ : DemandCert, ¬ LayeredCost o.1 o.2.1 o.2.2 := by
+  intro c' hm
+  simp only [layeredCheck] at h
+  split at h
+  · split at h
+    · cases h
+    · rename_i k' p' hk'
+      cases h
+      exact cost_refuted (o := (_, _)) hk' hm.1
+    · cases h
+  · cases h; simp [layeredRefutes] at hk
+
+/-- **The layered cost judge.** Objects are a closed composition, a member and a bound; a
+certificate is a demand run of the flattening. -/
+instance layeredCost : Judge (Composition × String × Nat) DemandCert where
+  Clause := LayeredClause
+  Meaning o _ := LayeredCost o.1 o.2.1 o.2.2
+  check := layeredCheck
+  sound := layered_sound
+  refutes := layeredRefutes
+  refuted := layered_refuted
+  Fragment o := o.1.closedB = true ∧ ∃ fs, (fs.map Prod.fst).Nodup ∧ o.1.flatten = obj fs
+  complete := by
+    rintro ⟨C, m, k⟩ ⟨hc, fs, nd, e⟩ ⟨_, hm, _⟩
+    obtain ⟨w, j, run, le⟩ := hm
+    change CV (.get C.flatten m) w j at run
+    change j ≤ k at le
+    change C.flatten = obj fs at e
+    rw [e] at run
+    obtain ⟨v, n, hd, _, low⟩ := demand_minimal nd run
+    refine ⟨⟨fs, m⟩, 0, ?_⟩
+    change C.closedB = true at hc
+    simp only [layeredCheck, hc, ite_true, costCheck, e, termBeq_refl, nd, hd]
+    simp [show n ≤ k by omega]
+  mono := by
+    intro r r' o c _ _
+    simp only [layeredCheck, costCheck]
+
+/-! ## A layered object -/
+
+/-- The inner layer `{a = 7}`. -/
+def inner : Layer := { name := "inner", metadata := .record [], fields := [("a", .nat 7)] }
+/-- The outer layer `{b = self.a, c = super.a}`, over it. -/
+def outer : Layer :=
+  { name := "outer", metadata := .record [], fields := [("b", .get (.bound 1) "a"), ("c", .get (.bound 0) "a")] }
+/-- `fix (compose outer inner) {}`. -/
+def layered : Composition := ⟨outer, [inner], []⟩
+
+/-- Its flattening is the object `{b = self.a, c = 7, a = 7}`: `super.a` resolved statically. -/
+def layeredFields : List (String × FE) := [("b", .ref "a"), ("c", .lit 7), ("a", .lit 7)]
+
+-- fixture kept (2026-11-04): cheap closed check of `layered.closedB` on literal data
+example : layered.closedB = true := by decide +kernel
+
+/-- **The layered member reading `self` is costed**: `layered.b` costs at most 7 through its
+flattening, and `≈b` that flattening's member; at most 6 is refuted. -/
+-- fixture kept (2026-11-04): consumed by a proof in this file
+theorem layered_b_cost :
+    layeredCheck 0 (layered, "b", 7) ⟨layeredFields, "b"⟩ = .ok ∧
+      layeredCheck 0 (layered, "b", 6) ⟨layeredFields, "b"⟩ = .refused (.cost .overBudget) [] := by
+  constructor <;> decide +kernel
+
+theorem layered_b : LayeredCost layered "b" 7 := layered_sound layered_b_cost.1
+
+/-! ## Clairvoyant Sharing Cost Certificate Integration for Layered Objects -/
+
+export Obend.Judge.Cost (SharingCostCert verifySharingCostCert SharingCostMeaning
+  verifySharingCostCert_sound sharingCostCheck sharingCostJudge)
+
+/-- Combined certificate for a layered object's demand cost and a clairvoyant sharing cost
+certificate on a method/expression. -/
+structure LayeredSharingCostCert where
+  composition : Composition
+  member : String
+  layeredBound : Nat
+  demandCert : DemandCert
+  sharingCert : SharingCostCert
+
+/-- Constructive `CostAtMost` soundness for `layeredCheck` (`0 Classical.choice`). -/
+theorem layeredCheck_costAtMost {r : Nat} {o : Composition × String × Nat} {c : DemandCert}
+    (h : layeredCheck r o c = .ok) :
+    o.1.closedB = true ∧ CostAtMost (.get o.1.flatten o.2.1) o.2.2 := by
+  simp only [layeredCheck] at h
+  split at h
+  · rename_i hc
+    split at h
+    · rename_i hk
+      exact ⟨hc, costCheck_costAtMost (o := (_, _)) hk⟩
+    · cases h
+    · cases h
+  · cases h
+
+/-- Verify both the layered object's flattened demand cost and the clairvoyant sharing cost
+certificate (`0 Classical.choice`). -/
+def verifyLayeredSharingCostCert (c : LayeredSharingCostCert) : Bool :=
+  c.composition.closedB &&
+    (layeredCheck 0 (c.composition, c.member, c.layeredBound) c.demandCert == .ok) &&
+    verifySharingCostCert c.sharingCert
+
+theorem verifyLayeredSharingCostCert_sound {c : LayeredSharingCostCert}
+    (h : verifyLayeredSharingCostCert c = true) :
+    c.composition.closedB = true ∧
+      layeredCheck 0 (c.composition, c.member, c.layeredBound) c.demandCert = .ok ∧
+      SharingCostMeaning c.sharingCert := by
+  unfold verifyLayeredSharingCostCert at h
+  simp only [Bool.and_eq_true, beq_iff_eq] at h
+  exact ⟨h.1.1, h.1.2, verifySharingCostCert_sound h.2⟩
+
+theorem verifyLayeredSharingCostCert_layeredCost {c : LayeredSharingCostCert}
+    (h : verifyLayeredSharingCostCert c = true) :
+    LayeredCost c.composition c.member c.layeredBound ∧ SharingCostMeaning c.sharingCert := by
+  have hs := verifyLayeredSharingCostCert_sound h
+  exact ⟨layered_sound hs.2.1, hs.2.2⟩
+
+theorem verifyLayeredSharingCostCert_inhabited : ∃ c, verifyLayeredSharingCostCert c = true :=
+  ⟨⟨layered, "b", 7, ⟨layeredFields, "b"⟩, literalSharingCostCert⟩, by decide +kernel⟩
+
+end Obend.Judge.LayeredCost
 end

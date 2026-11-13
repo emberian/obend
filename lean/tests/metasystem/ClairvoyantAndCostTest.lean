@@ -1,3 +1,4 @@
+module
 /-
 # `tests/metasystem/ClairvoyantAndCostTest.lean` — Executable Clairvoyant Call-by-Need Oracle,
 # Sands Improvement Algebra, Fold Collapse Cost Reduction & Quantitative Sharing Cost Judge
@@ -19,13 +20,16 @@ End-to-end verification of `WS-K`:
    - `SharingCostCert`, `verifySharingCostCert`, `verifySharingCostCert_sound`, `sharingCostJudge`.
    - `LayeredSharingCostCert`, `verifyLayeredSharingCostCert`, `verifyLayeredSharingCostCert_sound`.
 -/
-import Obend.Equiv.Clairvoyant
-import Obend.Equiv.Ahead
-import Obend.Equiv.Improvement
-import Obend.Equiv.Cost
-import Obend.Fold.Collapse
-import Obend.Judge.Cost
-import Obend.Judge.LayeredCost
+import all Obend.Equiv.Clairvoyant
+import all Obend.Equiv.Ahead
+import all Obend.Equiv.Improvement
+import all Obend.Equiv.Cost
+import all Obend.Fold.Collapse
+import all Obend.Judge.Cost
+import all Obend.Core.Term
+import all Obend.Equiv.FareTests
+import all Obend.Equiv.CostTests
+import all Obend.Tactic.Tooth
 
 namespace Obend.Tests.ClairvoyantAndCostTest
 
@@ -102,7 +106,7 @@ theorem test_skip_app_sound (a : Term) :
     ∃ v' k', evalClairvoyantMinCost 2 (.app (.lam (.nat 99)) a) = some (v', k') ∧
       k' ≤ 2 ∧ CV (.app (.lam (.nat 99)) a) v' k' := by
   have hinst : instantiate (.nat 99) skipped = .nat 99 := by
-    simp [instantiate, Term.substitute]
+    exact Obend.Judge.Cost.termBeq_sound (by decide +kernel)
   have hskip : evalClairvoyantMinCost 1 (instantiate (.nat 99) skipped) = some (.nat 99, 0) := by
     rw [hinst]
     exact (evalClairvoyantMinCost_value_sound (.nat 99) 1).1
@@ -217,7 +221,7 @@ theorem test_beta_value_improves_cost :
     evalCBV 3 (instantiate body v) = some (.nat 15, 1) := by
   intro body v
   have hinst : instantiate body v = .binary .add (.nat 10) (.nat 5) := by
-    simp [body, v, instantiate, Term.substitute]
+    exact Obend.Judge.Cost.termBeq_sound (by decide +kernel)
   have hcv_inst : CV (instantiate body v) (.nat 15) 1 := by
     rw [hinst]
     have := Run.binary (op := .add) (Run.value (.nat 10)) (Run.value (.nat 5)) rfl
@@ -226,7 +230,7 @@ theorem test_beta_value_improves_cost :
   have hdem : ∀ w j, ¬ CV (instantiate body skipped) w j := by
     intro w j h
     have hskip_inst : instantiate body skipped = .binary .add skipped (.nat 5) := by
-      simp [body, instantiate, Term.substitute]
+      exact Obend.Judge.Cost.termBeq_sound (by decide +kernel)
     rw [hskip_inst] at h
     cases h with
     | value hv => cases hv
@@ -432,3 +436,15 @@ theorem test_verifyLayeredSharingCostCert_sound :
 #print axioms test_verifyLayeredSharingCostCert_sound
 
 end Obend.Tests.ClairvoyantAndCostTest
+
+open Obend.Judge.Cost in
+#tooth verifySharingCostCert_sound by
+  mutation verifySharingCostCert := fun _ => true
+
+open Obend.Judge.LayeredCost in
+#tooth verifyLayeredSharingCostCert_sound by
+  mutation verifyLayeredSharingCostCert := fun _ => true
+
+open Obend.Judge.Cost in
+#tooth meaning_no_literalConflict by
+  mutation literalConflict := fun _ => true

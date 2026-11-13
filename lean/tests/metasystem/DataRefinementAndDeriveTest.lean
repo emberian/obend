@@ -15,13 +15,13 @@ module
 6. `#tooth` mutations and the axiom audit.
 -/
 public import Obend.Tactic.DataRefinement
-public import Obend.Repair.DeriveConfig
+public import Obend.Elab.DeriveRepair
 public import Obend.Repair.DeltaLensRenew
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms
 import all Obend.Tactic.DataRefinement
 import all Obend.Repair.AlgConfig
-import all Obend.Repair.DeriveConfig
+import all Obend.Elab.DeriveRepair
 import all Obend.Repair.DeltaLensRenew
 public section
 namespace Obend.Tests.Metasystem.DataRefinementAndDeriveTest
