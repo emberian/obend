@@ -1,6 +1,7 @@
 module
 public import Obend.Hardware.DprStutter
 public import Obend.ClusterGov.PhysicalEnvelope
+import all Obend.Trailblaze.CathedralApex
 import all Obend.Hardware.DprStutter
 import all Obend.ClusterGov.PhysicalEnvelope
 import Obend.Tactic.Tooth

@@ -1,5 +1,6 @@
 module
 public import Obend.Trailblaze.CathedralApex
+import all Obend.Trailblaze.CathedralApex
 public import Obend.Crypto.Transcript
 public import Obend.Hardware.SafePhysicalShield
 import all Obend.Hardware.SafePhysicalShield

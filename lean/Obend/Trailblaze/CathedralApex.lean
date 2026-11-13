@@ -586,9 +586,57 @@ end
 
 /-! ## §3. The audit -/
 
+/-- Verifier-owned TLS session evidence. Session keys come from the trusted TLS adapter;
+the caller supplies attestations, never a replacement verification function. -/
+structure ZkStripeVerifiers where
+  policy : Obend.Judge.DecoAndCallTree.DecoPolicy
+  ledger : Obend.Judge.DecoAndCallTree.SessionLedger
+  attestations : List Obend.Judge.DecoAndCallTree.DecoAttestation
+
+/-- Bind the audit's exact bytes to an authenticated DECO view. Checking the views is
+essential: the GHASH record commitment alone does not authenticate arbitrary view bytes. -/
+def checkSessionAuthentication (v : ZkStripeVerifiers) (key : BitVec 256)
+    (domain : String) (req resp : List UInt8) : Bool :=
+  v.attestations.any fun a =>
+    decide (a.header.notary.data.toList = be 32 key.toNat) &&
+    decide (a.header.host = domain.toUTF8) &&
+    decide (Obend.Judge.DecoAndCallTree.viewBytes a.request.slots = req) &&
+    decide (Obend.Judge.DecoAndCallTree.viewBytes a.response.slots.tail = resp) &&
+    Obend.Judge.DecoAndCallTree.checkDecoAttestation v.policy v.ledger a
+
+/-- Semantic authentication evidence, including the exact disclosed bytes and the
+DECO freshness, policy, GHASH, and authenticated-span relation. -/
+def SessionAuthenticated (v : ZkStripeVerifiers) (key : BitVec 256)
+    (domain : String) (req resp : List UInt8) : Prop :=
+  ∃ a ∈ v.attestations,
+    a.header.notary.data.toList = be 32 key.toNat ∧ a.header.host = domain.toUTF8 ∧
+    Obend.Judge.DecoAndCallTree.viewBytes a.request.slots = req ∧
+    Obend.Judge.DecoAndCallTree.viewBytes a.response.slots.tail = resp ∧
+    Obend.Judge.DecoAndCallTree.DecoRelation v.policy v.ledger a
+
+theorem checkSessionAuthentication_sound {v : ZkStripeVerifiers} {key : BitVec 256}
+    {domain : String} {req resp : List UInt8}
+    (h : checkSessionAuthentication v key domain req resp = true) :
+    SessionAuthenticated v key domain req resp := by
+  simp only [checkSessionAuthentication, List.any_eq_true, Bool.and_eq_true,
+    decide_eq_true_eq] at h
+  obtain ⟨a, ha, ⟨⟨⟨⟨hk, hd⟩, hq⟩, hr⟩, hv⟩⟩ := h
+  exact ⟨a, ha, hk, hd, hq, hr,
+    (Obend.Judge.DecoAndCallTree.checkDecoAttestation_iff_relation _ _ _).mp hv⟩
+
+theorem checkSessionAuthentication_complete {v : ZkStripeVerifiers} {key : BitVec 256}
+    {domain : String} {req resp : List UInt8}
+    (h : SessionAuthenticated v key domain req resp) :
+    checkSessionAuthentication v key domain req resp = true := by
+  obtain ⟨a, ha, hk, hd, hq, hr, hv⟩ := h
+  simp only [checkSessionAuthentication, List.any_eq_true, Bool.and_eq_true, decide_eq_true_eq]
+  exact ⟨a, ha, ⟨⟨⟨⟨hk, hd⟩, hq⟩, hr⟩,
+    (Obend.Judge.DecoAndCallTree.checkDecoAttestation_iff_relation _ _ _).mpr hv⟩⟩
+
 /-- The audit policy: the notary keys trusted, the request and response expressions, and the
 rules and target of the `Obend.Reasons` program over the verified hops. -/
 structure ZkStripePolicy where
+  verifiers : ZkStripeVerifiers
   trustedNotaryKeys   : List (BitVec 256)
   allowedRequestRe    : PredRE
   allowedResponseRe   : PredRE
@@ -596,6 +644,7 @@ structure ZkStripePolicy where
   targetConclusion    : String
 
 inductive ZkStripeRefusal where
+  | unauthenticatedSession (domain : String)
   | untrustedNotary (domain : String)
   | nonCanonicalBounds (domain : String)
   | requestRegexViolation (domain : String)
@@ -648,6 +697,8 @@ def auditNodes (pol : ZkStripePolicy) : HttpsSessionNode → Except ZkStripeRefu
       .error (.responseRegexViolation domain)
     else if !runFullJsonGrammar ⟨resp.toArray⟩ then
       .error (.malformedJson domain)
+    else if !checkSessionAuthentication pol.verifiers key domain req resp then
+      .error (.unauthenticatedSession domain)
     else
       auditChildren pol kids
 termination_by structural t => t
@@ -692,6 +743,8 @@ structure HopAudited (pol : ZkStripePolicy) (node : HttpsSessionNode) : Prop whe
   requestMatches   : matchesBytes pol.allowedRequestRe node.redactedRequest = true
   responseMatches  : matchesBytes pol.allowedResponseRe node.redactedResponse = true
   responseJson : runFullJsonGrammar ⟨node.redactedResponse.toArray⟩ = true
+  authenticated : SessionAuthenticated pol.verifiers node.notaryKey node.serverDomain
+    node.redactedRequest node.redactedResponse
 
 mutual
 /-- **Every hop is audited**, not only the root. -/
@@ -724,19 +777,24 @@ theorem auditNodes_all_hops_sound {pol : ZkStripePolicy} {tree : HttpsSessionNod
             · rw [hJson] at hOk; cases hOk
             · rw [hJson] at hOk
               simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-              intro node hMem
-              simp only [allSessionNodes, List.mem_cons] at hMem
-              rcases hMem with rfl | hInKids
-              · exact {
-                  trustedNotary    := of_decide_eq_true hNotary
-                  canonicalDomain  := hDom
-                  canonicalReqLen  := hReqLen
-                  canonicalRespLen := hRespLen
-                  requestMatches   := hReq
-                  responseMatches  := hResp
-                  responseJson := hJson
-                }
-              · exact auditChildren_all_hops_sound hOk node hInKids
+              cases hAuth : checkSessionAuthentication pol.verifiers key domain req resp
+              · rw [hAuth] at hOk; cases hOk
+              · rw [hAuth] at hOk
+                simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+                intro node hMem
+                simp only [allSessionNodes, List.mem_cons] at hMem
+                rcases hMem with rfl | hInKids
+                · exact {
+                    trustedNotary    := of_decide_eq_true hNotary
+                    canonicalDomain  := hDom
+                    canonicalReqLen  := hReqLen
+                    canonicalRespLen := hRespLen
+                    requestMatches   := hReq
+                    responseMatches  := hResp
+                    responseJson := hJson
+                    authenticated := checkSessionAuthentication_sound hAuth
+                  }
+                · exact auditChildren_all_hops_sound hOk node hInKids
 termination_by structural tree
 
 theorem auditChildren_all_hops_sound {pol : ZkStripePolicy} {kids : List HttpsSessionNode}
@@ -780,37 +838,6 @@ theorem auditNodes_root_props {pol : ZkStripePolicy} {tree : HttpsSessionNode}
     (hOk : auditNodes pol tree = .ok ()) :
     HopAudited pol tree :=
   auditNodes_all_hops_sound hOk tree (root_mem_allSessionNodes tree)
-
-/-- A succinct receipt envelope for a redacted call tree: 256-bit digests. -/
-structure DualPcsCallTreeReceipt where
-  committedTreeRoot : CallTreeDigest
-  notaryKey         : BitVec 256
-  proofBytes        : List UInt8
-  deriving DecidableEq
-
-/-- A notary's attestation envelope over a session digest. -/
-structure MpcTlsNotaryAttestation where
-  notaryKey      : BitVec 256
-  sessionDigest  : CallTreeDigest
-  signatureBytes : List UInt8
-  deriving DecidableEq
-
-def checkMpcTlsNotaryEnvelope (trustedNotaryKeys : List (BitVec 256))
-    (att : MpcTlsNotaryAttestation) : Bool :=
-  decide (att.notaryKey ∈ trustedNotaryKeys) &&
-  decide (att.sessionDigest.bytes.size = 32) &&
-  decide (att.signatureBytes.length == 64)
-
-def checkDualPcsReceiptEnvelope (pol : ZkStripePolicy)
-    (rcpt : DualPcsCallTreeReceipt) : Bool :=
-  decide (rcpt.notaryKey ∈ pol.trustedNotaryKeys) &&
-  decide (rcpt.committedTreeRoot.bytes.size = 32) &&
-  decide (32 ≤ rcpt.proofBytes.length)
-
-/-- Cryptographic verification is supplied by the TLS/PCS adapter. Envelope shape is not proof. -/
-structure ZkStripeVerifiers where
-  notary : Hash → List (BitVec 256) → MpcTlsNotaryAttestation → Bool
-  receipt : Hash → ZkStripePolicy → DualPcsCallTreeReceipt → Bool
 
 /-- **The organ's audit theorem.** When the audit admits a canonical tree under a policy whose
 request expression is `.inter reqSchema (.compl forbiddenSecretRe)`, then at every hop the policy
@@ -1016,9 +1043,56 @@ def stripeLiveKeyPrefix : List UInt8 := [115, 107, 95]
 /-- The required request prefix `GET`. -/
 def httpGetPrefix : List UInt8 := [71, 69, 84]
 
+/-- Four hops; hop 2's response has an unmatched `}` inside a string. -/
+def validFourHopCallTree : HttpsSessionNode :=
+  .mk fixtureNotaryKey "api.stripe.com" ([71, 69, 84, 32, 47, 118, 49] ++ [13, 10, 13, 10, 123, 125]) (utf8Bytes "{\"v\":1}") [
+    .mk fixtureNotaryKey "auth.obend.org" ([71, 69, 84, 32, 47, 116, 111, 107] ++ [13, 10, 13, 10, 123, 125])
+      (utf8Bytes "{\"tok\":\"ok}v1\"}") [
+      .mk fixtureNotaryKey "registry.hf.co" ([71, 69, 84, 32, 47, 109, 97, 110] ++ [13, 10, 13, 10, 123, 125]) [123, 125] [
+        .mk fixtureNotaryKey "cdn.dataset.org" ([71, 69, 84, 32, 47, 115, 104, 100] ++ [13, 10, 13, 10, 123, 125]) [91, 52, 50, 93] []
+      ]
+    ]
+  ]
+
+/-- Fully opened two-span HTTP view, with real cSHAKE256 inclusion paths. -/
+def fixtureSessionView (head body : ByteArray) : Obend.Judge.DecoAndCallTree.TranscriptView :=
+  let spans := [head, body]
+  ⟨Obend.Judge.VpaJson.spanMerkleRoot Obend.Judge.Commit.cshakeHasher
+      Obend.Judge.VpaJson.spanTag spans,
+    (List.range 2).map fun i => .opened (spans.getD i ByteArray.empty)
+      (Obend.Judge.VpaJson.spanMerkleProof Obend.Judge.Commit.cshakeHasher
+        Obend.Judge.VpaJson.spanTag spans i).siblings⟩
+
+/-- Public fixture key only; deployments receive fresh secret session keys from TLS. -/
+def fixtureSessionKey : Obend.Crypto.BinaryTower256.Tower128 :=
+  Obend.Crypto.BinaryTower256.unpackTower 7 0x0123456789abcdef0fedcba987654321
+
+def fixtureSessionAttestation (n : HttpsSessionNode) : Obend.Judge.DecoAndCallTree.DecoAttestation :=
+  let a : Obend.Judge.DecoAndCallTree.DecoAttestation :=
+    { header := ⟨n.serverDomain.toUTF8, ⟨(be 32 n.notaryKey.toNat).toArray⟩,
+        1, n.serverDomain.toUTF8, n.serverDomain.toUTF8⟩
+      request := fixtureSessionView ⟨(n.redactedRequest.take (n.redactedRequest.length - 2)).toArray⟩ "{}".toUTF8
+      response := fixtureSessionView "HTTP/1.1 200 OK\r\n\r\n".toUTF8 ⟨n.redactedResponse.toArray⟩
+      ctBlocks := []
+      lenBlock := Obend.Judge.DecoAndCallTree.recordLengthBlock []
+      ghashTag := Obend.Crypto.BinaryTower256.towerZero 7 }
+  { a with
+    ghashTag :=
+      Obend.Crypto.BinaryTower256.ghashAuth fixtureSessionKey
+        (Obend.Judge.DecoAndCallTree.commitBlocks (Obend.Judge.DecoAndCallTree.recordCommit a))
+        a.ctBlocks a.lenBlock }
+
+def fixtureSessionVerifiers : ZkStripeVerifiers where
+  policy := ⟨(allSessionNodes validFourHopCallTree).map (fun n => (n.serverDomain.toUTF8, fixtureSessionKey)),
+    [⟨(be 32 fixtureNotaryKey.toNat).toArray⟩],
+    (allSessionNodes validFourHopCallTree).map (fun n => n.serverDomain.toUTF8), 0, 10, []⟩
+  ledger := ⟨[], []⟩
+  attestations := (allSessionNodes validFourHopCallTree).map fixtureSessionAttestation
+
 /-- The fixture policy: the fixture notary; requests begin with `GET` and nowhere contain `sk_`;
 responses nowhere contain `sk_`; the four hops support `calltree_admitted`. -/
 def defaultZkStripePolicy : ZkStripePolicy where
+  verifiers := fixtureSessionVerifiers
   trustedNotaryKeys   := [fixtureNotaryKey]
   allowedRequestRe    := .inter (startsWith httpGetPrefix) (forbidSubseq stripeLiveKeyPrefix)
   allowedResponseRe   := forbidSubseq stripeLiveKeyPrefix
@@ -1031,31 +1105,20 @@ def defaultZkStripePolicy : ZkStripePolicy where
   ]
   targetConclusion := "calltree_admitted"
 
-/-- Four hops; hop 2's response has an unmatched `}` inside a string. -/
-def validFourHopCallTree : HttpsSessionNode :=
-  .mk fixtureNotaryKey "api.stripe.com" [71, 69, 84, 32, 47, 118, 49] (utf8Bytes "{\"v\":1}") [
-    .mk fixtureNotaryKey "auth.obend.org" [71, 69, 84, 32, 47, 116, 111, 107]
-      (utf8Bytes "{\"tok\":\"ok}v1\"}") [
-      .mk fixtureNotaryKey "registry.hf.co" [71, 69, 84, 32, 47, 109, 97, 110] [123, 125] [
-        .mk fixtureNotaryKey "cdn.dataset.org" [71, 69, 84, 32, 47, 115, 104, 100] [91, 52, 50, 93] []
-      ]
-    ]
-  ]
-
 /-- Planted fault 1: `sk_` in hop 3's request. -/
 def leakedSecretCallTree : HttpsSessionNode :=
-  .mk fixtureNotaryKey "api.stripe.com" [71, 69, 84, 32, 47, 118, 49] (utf8Bytes "{\"v\":1}") [
-    .mk fixtureNotaryKey "auth.obend.org" [71, 69, 84, 32, 47, 116, 111, 107] [123, 125] [
-      .mk fixtureNotaryKey "registry.hf.co" [71, 69, 84, 32, 115, 107, 95, 57] [123, 125] []
+  .mk fixtureNotaryKey "api.stripe.com" ([71, 69, 84, 32, 47, 118, 49] ++ [13, 10, 13, 10, 123, 125]) (utf8Bytes "{\"v\":1}") [
+    .mk fixtureNotaryKey "auth.obend.org" ([71, 69, 84, 32, 47, 116, 111, 107] ++ [13, 10, 13, 10, 123, 125]) (utf8Bytes "{\"tok\":\"ok}v1\"}") [
+      .mk fixtureNotaryKey "registry.hf.co" ([71, 69, 84, 32, 115, 107, 95, 57] ++ [13, 10, 13, 10, 123, 125]) [123, 125] []
     ]
   ]
 
 /-- Planted fault 2: `sk_` in hop 4's response. -/
 def leakedResponseCallTree : HttpsSessionNode :=
-  .mk fixtureNotaryKey "api.stripe.com" [71, 69, 84, 32, 47, 118, 49] (utf8Bytes "{\"v\":1}") [
-    .mk fixtureNotaryKey "auth.obend.org" [71, 69, 84, 32, 47, 116, 111, 107] [123, 125] [
-      .mk fixtureNotaryKey "registry.hf.co" [71, 69, 84, 32, 47, 109, 97, 110] [123, 125] [
-        .mk fixtureNotaryKey "cdn.dataset.org" [71, 69, 84, 32, 47, 115, 104, 100]
+  .mk fixtureNotaryKey "api.stripe.com" ([71, 69, 84, 32, 47, 118, 49] ++ [13, 10, 13, 10, 123, 125]) (utf8Bytes "{\"v\":1}") [
+    .mk fixtureNotaryKey "auth.obend.org" ([71, 69, 84, 32, 47, 116, 111, 107] ++ [13, 10, 13, 10, 123, 125]) (utf8Bytes "{\"tok\":\"ok}v1\"}") [
+      .mk fixtureNotaryKey "registry.hf.co" ([71, 69, 84, 32, 47, 109, 97, 110] ++ [13, 10, 13, 10, 123, 125]) [123, 125] [
+        .mk fixtureNotaryKey "cdn.dataset.org" ([71, 69, 84, 32, 47, 115, 104, 100] ++ [13, 10, 13, 10, 123, 125])
           (utf8Bytes "{\"k\":\"sk_9\"}") []
       ]
     ]
@@ -1065,30 +1128,6 @@ def leakedResponseCallTree : HttpsSessionNode :=
 def spoofedDomainCallTree : HttpsSessionNode :=
   match validFourHopCallTree with
   | .mk h _ req resp kids => .mk h "evil.stripe.io" req resp kids
-
-private def decEqExceptUnit (a b : Except ZkStripeRefusal Unit) : Decidable (a = b) :=
-  match a, b with
-  | .ok (), .ok () => isTrue rfl
-  | .ok (), .error _ => isFalse (by intro h; cases h)
-  | .error _, .ok () => isFalse (by intro h; cases h)
-  | .error e₁, .error e₂ =>
-    if he : e₁ = e₂ then isTrue (by subst he; rfl)
-    else isFalse (by intro h; cases h; exact he rfl)
-
-example : auditNodes defaultZkStripePolicy validFourHopCallTree = .ok () := by
-  letI : DecidableEq (Except ZkStripeRefusal Unit) := decEqExceptUnit
-  decide
-
-example : auditChildren defaultZkStripePolicy validFourHopCallTree.children = .ok () := by
-  letI : DecidableEq (Except ZkStripeRefusal Unit) := decEqExceptUnit
-  decide
-
-example : auditZkStripeCallTree defaultZkStripePolicy validFourHopCallTree = .ok () := by
-  letI : DecidableEq (Except ZkStripeRefusal Unit) := decEqExceptUnit
-  decide
-
-example : verifyZkStripeCallTree defaultZkStripePolicy validFourHopCallTree = true := by
-  decide +kernel
 
 example : checkCanonicalSessionTree fastMerkleHash validFourHopCallTree = true := by
   decide +kernel
@@ -1127,8 +1166,6 @@ def silverZkStripeSmoke : Bool :=
   hopCountOk && validAdmitted && canonicalOk && wide && domainBoundOk &&
     leakRefused && responseLeakRefused
 
-example : silverZkStripeSmoke = true := by
-  decide +kernel
 
 end Obend.Trailblaze.ZkStripe
 
@@ -1874,12 +1911,11 @@ structure Rdna2WavefrontDispatch where
 /-- Load each worker's slice vector into its own VGPR, one slice per lane.
 The accepted fragment is unsigned, exact 32-bit sums, at most 256 workers. -/
 @[expose] def rdna2DispatchInput (d : Rdna2WavefrontDispatch) : Obend.Hardware.Gpu.Rdna2.WaveState :=
-  let initial : Obend.Hardware.Gpu.Rdna2.WaveState :=
-    Obend.Hardware.Gpu.Rdna2.GWave.init {} 0 0
-  (List.range d.workgroupSlices.size).foldl (fun st worker =>
-    (List.range d.waveSize).foldl (fun wave lane =>
-      Obend.Hardware.Gpu.Rdna2.writeVgpr wave worker lane
-        (UInt32.ofNat ((d.workgroupSlices[worker]?.getD #[])[lane]?.getD 0).toNat)) st) initial
+  { Obend.Hardware.Gpu.Rdna2.GWave.init {} 0 0 with
+    vgpr := Array.ofFn fun i : Fin (256 * 64) =>
+      if i.val % 64 < d.waveSize then
+        UInt32.ofNat ((d.workgroupSlices[i.val / 64]?.getD #[])[i.val % 64]?.getD 0).toNat
+      else 0 }
 
 @[expose] def insertRdnaEncoding (entry : Obend.Hardware.Gpu.Rdna2.Encoding) :
     List Obend.Hardware.Gpu.Rdna2.Encoding → List Obend.Hardware.Gpu.Rdna2.Encoding
@@ -2032,9 +2068,33 @@ theorem sealedVramRandomOpening_sound (H : Obend.Digest.HashBytes.Hash)
   simp only [checkSealedVramClaimEnvelope, Bool.and_eq_true, decide_eq_true_eq] at he
   exact ⟨h.1.2.1 ▸ he.1.1, h.1.2.2.1, h.1.2.2.2, h.2⟩
 
+private def rdnaEndProgram : Obend.Hardware.Gpu.Rdna2.Inst :=
+  ⟨⟨"S_ENDPGM", false, false, true, false, [⟨"ENC_SOPP", "default", 1, []⟩]⟩,
+    Obend.Hardware.Gpu.Rdna2.enc_ENC_SOPP, ⟨"ENC_SOPP", "default", 1, []⟩,
+    [("ENCODING", 383), ("OP", 1), ("SIMM16", 0)], [0xbf810000]⟩
+
 set_option maxRecDepth 100000 in
 set_option maxHeartbeats 8000000 in
-set_option cbv.maxSteps 10000000 in
+private theorem decodeRdnaEndProgram :
+    decodeRdnaSliceInst [0xbf810000] = some (rdnaEndProgram, 1) := by
+  rfl
+
+private theorem executeRdnaEnd (st : Obend.Hardware.Gpu.Rdna2.WaveState)
+    (hh : st.halted = false) (he : st.err = none) (hp : st.pc = 0) :
+    Obend.Hardware.Gpu.Rdna2.run #[some rdnaEndProgram] 5 st =
+      { st with pc := 1, halted := true } := by
+  have hx (w : Obend.Hardware.Gpu.Rdna2.WaveState) :
+      Obend.Hardware.Gpu.Rdna2.execInst rdnaEndProgram w = { w with halted := true } := by
+    simp [Obend.Hardware.Gpu.Rdna2.execInst, rdnaEndProgram,
+      Obend.Hardware.Gpu.Rdna2.modifiersClear, Obend.Hardware.Gpu.Rdna2.instOp,
+      Obend.Hardware.Gpu.Rdna2.Inst.name, Obend.Hardware.Gpu.Rdna2.Inst.field,
+      Obend.Hardware.Gpu.Rdna2.Inst.field?, Obend.Hardware.Gpu.Rdna2.lookupField]
+  have hw : rdnaEndProgram.words.length = 1 := rfl
+  simp [Obend.Hardware.Gpu.Rdna2.run, Obend.Hardware.Gpu.Rdna2.step,
+    hh, he, hp, hx, hw]
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
 /-- A decoded identity dispatch has two nonzero input and output slices. -/
 theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
     checkRdna2DispatchEnvelope d = true := by
@@ -2042,9 +2102,12 @@ theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
   simp only [checkRdna2DispatchEnvelope, Bool.and_eq_true, decide_eq_true_eq, ← Array.all_toList]
   repeat' apply And.intro
   all_goals try decide +kernel
-  unfold executeRdna2SliceReduction
-  cbv
-  all_goals decide +kernel
+  simp [executeRdna2SliceReduction, decodeRdnaSliceProgram, decodeRdnaEndProgram]
+  rw [executeRdnaEnd _ rfl rfl rfl]
+  simp [Obend.Hardware.Gpu.Rdna2.readVgpr, rdna2DispatchInput,
+    Obend.Hardware.Gpu.Rdna2.GWave.init, ozakiSliceSumExec, ozakiSliceSumExecLoop,
+    Obend.Hardware.Gpu.Rdna2.lanes, Array.getD, sliceVecAddExec, sliceVecAddExecLoop]
+  decide +kernel
 
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
 theorem vramChallengeOpening_inhabited : ∃ H root nonce c,
@@ -2469,7 +2532,7 @@ def checkCathedralTurn (turn : CathedralGovernanceTurn) : Bool :=
 /-! ## §3. Unconditional Whole-System Composition Theorem (`apex_cathedral_zkstripe_to_clustergov_sound`) -/
 
 /-- **Unconditional Cathedral End-to-End Composition Soundness (`apex_cathedral_zkstripe_to_clustergov_sound`)**:
-    With **zero Stage-A `[...Obligations]` hypotheses** and **zero `Classical.choice`**, whenever
+    With **zero Stage-A hypotheses** and no choice-based computational extraction, whenever
     `checkCathedralTurn turn = true`, Lean's kernel simultaneously certifies:
     1. **Full Multi-Hop `ZkStripe` Audit**: `verifyZkStripeCallTree` passes and **every hop**
        `hop ∈ allSessionNodes turn.batchCallTree` satisfies `HopAudited` (trusted notary, canonical

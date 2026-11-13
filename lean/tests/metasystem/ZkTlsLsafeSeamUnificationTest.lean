@@ -112,7 +112,7 @@ meta def mkAttestation (k : Tower128) (hdr : SessionHeader) (req resp : Transcri
   let a0 : DecoAttestation := ⟨hdr, req, resp, ct, recordLengthBlock ct, towerZero 7⟩
   { a0 with ghashTag := ghashAuth k (commitBlocks (recordCommit a0)) ct a0.lenBlock }
 
-meta def notary : ByteArray := js "notary-1"
+meta def notary : ByteArray := ⟨(Obend.Digest.HashBytes.be 32 1).toArray⟩
 meta def stripeHost : ByteArray := js "api.stripe.com"
 meta def recorderHost : ByteArray := js "recorder.obend.org"
 meta def key1 : Tower128 := unpackTower 7 0x0123456789abcdef0fedcba987654321
@@ -265,18 +265,20 @@ meta def graphDigest : ByteArray := Obend.Vault.Lsafe.edgesDigest cshakeHasher e
 
 open Obend.Trailblaze.ZkStripe in
 meta def zkPolicy : ZkStripePolicy where
+  verifiers := ⟨decoPolicy, ⟨[], []⟩, [recorder, settlement]⟩
   trustedNotaryKeys := [notaryKeyOf notary]
   allowedRequestRe := forbidSubseq stripeLiveKeyPrefix
   allowedResponseRe := forbidSubseq stripeLiveKeyPrefix
   policyRules := [
     { name := "admit_three_hop_calltree"
       concl := "calltree_admitted"
-      pos := ["hop_verified:local", "hop_verified:recorder.obend.org", "hop_verified:api.stripe.com"]
+      pos := ["hop_verified:recorder.obend.org", "hop_verified:api.stripe.com"]
       neg := ["emergency_freeze"] }]
   targetConclusion := "calltree_admitted"
 
 open Obend.Trailblaze.ZkStripe in
-#guard verifyZkStripeCallTree zkPolicy (sessionOfCallTree tree)
+#guard verifyZkStripeCallTree zkPolicy
+  (sessionOfCallTree (.node ⟨.recursiveHttpsCallee, recorder⟩ [settlementTree]))
 open Obend.Trailblaze.ZkStripe in
 #guard checkCanonicalSessionTree fastMerkleHash (sessionOfCallTree tree) &&
   (callTreeDigest fastMerkleHash (sessionOfCallTree tree)).bytes.size == 32

@@ -11,6 +11,8 @@ import all Obend.Leaf.BytecodeRegisterJit
 import all Obend.Leaf.SelfApplicableMix
 import all Obend.Trailblaze.StageBInstances
 
+meta import all Obend.Trailblaze.StageBInstances
+
 public section
 
 namespace Obend.Tests.Extracted.ExtractedGuardsTest
@@ -45,6 +47,11 @@ section LeanFpga
 open Obend.Trailblaze.LeanFpga
 
 #guard !(emitHvmNetText sampleLinearDeltaNet).isEmpty
+#guard match runDeltaReductions
+    (lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer")
+    [(7, 6), (8, 3), (8, 4), (3, 5)] with
+  | some out => checkDeltaNormalForm out 42 && !checkDeltaNormalForm out 43
+  | none => false
 end LeanFpga
 
 end Obend.Tests.Extracted.ExtractedGuardsTest

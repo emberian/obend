@@ -1,4 +1,3 @@
-module
 /-
 # SimplexLivenessAndOutboxTest — the signed wire, the timed network and the outbox, unit by unit
 
@@ -16,165 +15,154 @@ module
 4. `#tooth` witnesses and `#assert_axioms_tree`.
 -/
 
-public import Obend.Consensus.SimplexLiveness
-public import Obend.Vault.IrreversibleOutbox
-public import Obend.Tactic.Tooth
-public import Obend.AssertAxioms
+import Obend.Consensus.SimplexLiveness
+import Obend.Vault.IrreversibleOutbox
+import Obend.Tactic.Tooth
+import Obend.AssertAxioms
 
-import all Obend.Consensus.SimplexLiveness
-import all Obend.Vault.IrreversibleOutbox
-import all Obend.Trailblaze.StageBInstances
-import all Obend.Consensus.SimplexProtocol
-import all Obend.Consensus.SimplexTrace
-import all Obend.Consensus.Finality
-import all Obend.Judge.Computational
-meta import all Obend.Consensus.SimplexLiveness
-meta import all Obend.Vault.IrreversibleOutbox
-meta import all Obend.Trailblaze.StageBInstances
-meta import all Obend.Consensus.SimplexProtocol
-meta import all Obend.Consensus.SimplexTrace
-meta import all Obend.Consensus.Finality
-meta import all Obend.Judge.Computational
+import Obend.Trailblaze.StageBInstances
+import Obend.Trailblaze.CathedralApex
+import Obend.Consensus.SimplexProtocol
+import Obend.Consensus.SimplexTrace
+import Obend.Consensus.Finality
+import Obend.Judge.Computational
 
 -- Transitive package bodies for `#assert_axioms_tree`
-import all Obend.AssertAxioms
-import all Obend.Consensus.Simplex
-import all Obend.Core.AliasExposure
-import all Obend.Core.Assumptions
-import all Obend.Core.Bidirectional
-import all Obend.Core.Brand
-import all Obend.Core.Capacity
-import all Obend.Core.Check
-import all Obend.Core.Code
-import all Obend.Core.Data
-import all Obend.Core.Digest
-import all Obend.Core.EquiRecursiveAgreement
-import all Obend.Core.EquiRecursiveLookup
-import all Obend.Core.FieldCongruence
-import all Obend.Core.FiniteBisimulation
-import all Obend.Core.FinitePresentation
-import all Obend.Core.FiniteRowLaws
-import all Obend.Core.Invariant
-import all Obend.Core.Machine
-import all Obend.Core.MachineFast
-import all Obend.Core.MachineTyping
-import all Obend.Core.Nominal
-import all Obend.Core.Proofs.Adequacy.Birth
-import all Obend.Core.Proofs.Adequacy.CasesControl
-import all Obend.Core.Proofs.Adequacy.CasesEval
-import all Obend.Core.Proofs.Adequacy.CasesReturn
-import all Obend.Core.Proofs.Adequacy.Defs
-import all Obend.Core.Proofs.Adequacy.Graph
-import all Obend.Core.Proofs.Adequacy.Meaning
-import all Obend.Core.Proofs.Adequacy.Origins
-import all Obend.Core.Proofs.Adequacy.Progress
-import all Obend.Core.Proofs.Adequacy.Reach
-import all Obend.Core.Proofs.Adequacy.Run
-import all Obend.Core.Proofs.Adequacy.Safety
-import all Obend.Core.Proofs.Adequacy.SafetyRaw
-import all Obend.Core.Proofs.Adequacy.Scoped
-import all Obend.Core.Proofs.Adequacy.Sound
-import all Obend.Core.Proofs.Adequacy.Source
-import all Obend.Core.Proofs.Adequacy.StepRaw
-import all Obend.Core.Proofs.BidirectionalCompleteness
-import all Obend.Core.Proofs.Completeness
-import all Obend.Core.Proofs.DataSoundness
-import all Obend.Core.Proofs.GroundExecution
-import all Obend.Core.Proofs.Preservation.Base.Heads
-import all Obend.Core.Proofs.Preservation.Base.Insert
-import all Obend.Core.Proofs.Preservation.Base.Reusable
-import all Obend.Core.Proofs.Preservation.Base.Values
-import all Obend.Core.Proofs.Preservation.Base.Weaken
-import all Obend.Core.Proofs.StepCases
-import all Obend.Core.Proofs.Substitution.Defs
-import all Obend.Core.Proofs.Substitution.Uses
-import all Obend.Core.Proofs.TypedSubstitution
-import all Obend.Core.RecursiveAgreement
-import all Obend.Core.RecursiveRows
-import all Obend.Core.ResourceSemantics
-import all Obend.Core.RowCongruence
-import all Obend.Core.RowExposureInvariance
-import all Obend.Core.RowHit
-import all Obend.Core.RuntimeOrigins
-import all Obend.Core.Term
-import all Obend.Core.TermTraverse
-import all Obend.Core.Traverse
-import all Obend.Core.Ty
-import all Obend.Core.TypeGraph
-import all Obend.Core.TypeGraphAlias
-import all Obend.Core.TypeGraphHead
-import all Obend.Core.TypeGraphResource
-import all Obend.Digest.Cshake256
-import all Obend.Digest.Cshake256.Fast
-import all Obend.Digest.Cshake256.Seam
-import all Obend.Digest.Cshake256.Spec
-import all Obend.Digest.HashBytes
-import all Obend.Elab.Work
-import all Obend.Equiv.Ahead
-import all Obend.Equiv.Behaviour
-import all Obend.Equiv.Fields
-import all Obend.Equiv.Quote
-import all Obend.Equiv.Reduction
-import all Obend.Equiv.Simulation
-import all Obend.Fold
-import all Obend.Intention
-import all Obend.Judge.Class
-import all Obend.Judge.Clearing
-import all Obend.Judge.Lrat
-import all Obend.Kind
-import all Obend.Law.Claim
-import all Obend.Law.Contract
-import all Obend.Law.Inherit
-import all Obend.Law.Machine
-import all Obend.Law.Proofs.Claim
-import all Obend.Law.Proofs.Eval
-import all Obend.Law.Proofs.Inherit
-import all Obend.Law.Proofs.Machine
-import all Obend.Law.Proofs.Run
-import all Obend.Law.Proofs.Std
-import all Obend.Law.Run
-import all Obend.Law.Std
-import all Obend.Law.Syntax
-import all Obend.Ledger.Book
-import all Obend.Ledger.Floors
-import all Obend.Ledger.Register
-import all Obend.Ledger.Seat
-import all Obend.Logic.Claim
-import all Obend.Logic.Frame
-import all Obend.Logic.Ground
-import all Obend.Logic.LateBinding
-import all Obend.Logic.Obligation
-import all Obend.Logic.Program
-import all Obend.Logic.Receipt
-import all Obend.Logic.Rewrite
-import all Obend.Receipt
-import all Obend.Receipt.Merkle
-import all Obend.Run.Control
-import all Obend.Run.Fold
-import all Obend.Run.Fork
-import all Obend.Run.Proofs.Control
-import all Obend.Run.Proofs.Invariant
-import all Obend.Run.Proofs.Shared
-import all Obend.Run.Runner
-import all Obend.Run.Shared
-import all Obend.Run.Spec
-import all Obend.Slot
-import all Obend.Slot.Core4
-import all Obend.Slot.Integrity
-import all Obend.Slot.Proofs.Protocol
-import all Obend.Slot.Proofs.ProtocolTyping
-import all Obend.Slot.Protocol
-import all Obend.Slot.Selection
-import all Obend.Slot.World
-import all Obend.Spec.C4
-import all Obend.Spec.DataWire
-import all Obend.Spec.Proofs.C4
-import all Obend.Tactic.Cases
-import all Obend.Tactic.MonadicReduction
-import all Obend.Tactic.Tooth
-import all Obend.Vault.Hyperedge
+import Obend.Consensus.Simplex
+import Obend.Core.AliasExposure
+import Obend.Core.Assumptions
+import Obend.Core.Bidirectional
+import Obend.Core.Brand
+import Obend.Core.Capacity
+import Obend.Core.Check
+import Obend.Core.Code
+import Obend.Core.Data
+import Obend.Core.Digest
+import Obend.Core.EquiRecursiveAgreement
+import Obend.Core.EquiRecursiveLookup
+import Obend.Core.FieldCongruence
+import Obend.Core.FiniteBisimulation
+import Obend.Core.FinitePresentation
+import Obend.Core.FiniteRowLaws
+import Obend.Core.Invariant
+import Obend.Core.Machine
+import Obend.Core.MachineFast
+import Obend.Core.MachineTyping
+import Obend.Core.Nominal
+import Obend.Core.Proofs.Adequacy.Birth
+import Obend.Core.Proofs.Adequacy.CasesControl
+import Obend.Core.Proofs.Adequacy.CasesEval
+import Obend.Core.Proofs.Adequacy.CasesReturn
+import Obend.Core.Proofs.Adequacy.Defs
+import Obend.Core.Proofs.Adequacy.Graph
+import Obend.Core.Proofs.Adequacy.Meaning
+import Obend.Core.Proofs.Adequacy.Origins
+import Obend.Core.Proofs.Adequacy.Progress
+import Obend.Core.Proofs.Adequacy.Reach
+import Obend.Core.Proofs.Adequacy.Run
+import Obend.Core.Proofs.Adequacy.Safety
+import Obend.Core.Proofs.Adequacy.SafetyRaw
+import Obend.Core.Proofs.Adequacy.Scoped
+import Obend.Core.Proofs.Adequacy.Sound
+import Obend.Core.Proofs.Adequacy.Source
+import Obend.Core.Proofs.Adequacy.StepRaw
+import Obend.Core.Proofs.BidirectionalCompleteness
+import Obend.Core.Proofs.Completeness
+import Obend.Core.Proofs.DataSoundness
+import Obend.Core.Proofs.GroundExecution
+import Obend.Core.Proofs.Preservation.Base.Heads
+import Obend.Core.Proofs.Preservation.Base.Insert
+import Obend.Core.Proofs.Preservation.Base.Reusable
+import Obend.Core.Proofs.Preservation.Base.Values
+import Obend.Core.Proofs.Preservation.Base.Weaken
+import Obend.Core.Proofs.StepCases
+import Obend.Core.Proofs.Substitution.Defs
+import Obend.Core.Proofs.Substitution.Uses
+import Obend.Core.Proofs.TypedSubstitution
+import Obend.Core.RecursiveAgreement
+import Obend.Core.RecursiveRows
+import Obend.Core.ResourceSemantics
+import Obend.Core.RowCongruence
+import Obend.Core.RowExposureInvariance
+import Obend.Core.RowHit
+import Obend.Core.RuntimeOrigins
+import Obend.Core.Term
+import Obend.Core.TermTraverse
+import Obend.Core.Traverse
+import Obend.Core.Ty
+import Obend.Core.TypeGraph
+import Obend.Core.TypeGraphAlias
+import Obend.Core.TypeGraphHead
+import Obend.Core.TypeGraphResource
+import Obend.Digest.Cshake256
+import Obend.Digest.Cshake256.Fast
+import Obend.Digest.Cshake256.Seam
+import Obend.Digest.Cshake256.Spec
+import Obend.Digest.HashBytes
+import Obend.Elab.Work
+import Obend.Equiv.Ahead
+import Obend.Equiv.Behaviour
+import Obend.Equiv.Fields
+import Obend.Equiv.Quote
+import Obend.Equiv.Reduction
+import Obend.Equiv.Simulation
+import Obend.Fold
+import Obend.Intention
+import Obend.Judge.Class
+import Obend.Judge.Clearing
+import Obend.Judge.Lrat
+import Obend.Kind
+import Obend.Law.Claim
+import Obend.Law.Contract
+import Obend.Law.Inherit
+import Obend.Law.Machine
+import Obend.Law.Proofs.Claim
+import Obend.Law.Proofs.Eval
+import Obend.Law.Proofs.Inherit
+import Obend.Law.Proofs.Machine
+import Obend.Law.Proofs.Run
+import Obend.Law.Proofs.Std
+import Obend.Law.Run
+import Obend.Law.Std
+import Obend.Law.Syntax
+import Obend.Ledger.Book
+import Obend.Ledger.Floors
+import Obend.Ledger.Register
+import Obend.Ledger.Seat
+import Obend.Logic.Claim
+import Obend.Logic.Frame
+import Obend.Logic.Ground
+import Obend.Logic.LateBinding
+import Obend.Logic.Obligation
+import Obend.Logic.Program
+import Obend.Logic.Receipt
+import Obend.Logic.Rewrite
+import Obend.Receipt
+import Obend.Receipt.Merkle
+import Obend.Run.Control
+import Obend.Run.Fold
+import Obend.Run.Fork
+import Obend.Run.Proofs.Control
+import Obend.Run.Proofs.Invariant
+import Obend.Run.Proofs.Shared
+import Obend.Run.Runner
+import Obend.Run.Shared
+import Obend.Run.Spec
+import Obend.Slot
+import Obend.Slot.Core4
+import Obend.Slot.Integrity
+import Obend.Slot.Proofs.Protocol
+import Obend.Slot.Proofs.ProtocolTyping
+import Obend.Slot.Protocol
+import Obend.Slot.Selection
+import Obend.Slot.World
+import Obend.Spec.C4
+import Obend.Spec.DataWire
+import Obend.Spec.Proofs.C4
+import Obend.Tactic.Cases
+import Obend.Tactic.MonadicReduction
+import Obend.Vault.Hyperedge
 
-public section
 namespace Obend.Tests.SimplexLivenessAndOutbox
 
 open Obend.Consensus.Simplex (NodeId)
@@ -380,6 +368,7 @@ theorem honestKeys (H : HashBytes.Hash) (hH : ∀ bs, (H bs).length = 32) :
   KeyDirectory.derive_honestSlotKeys H 4096 200 proto4 signLog saltOf hH (by decide +kernel)
     (fun n v k => by simp [saltOf, bytesOfList_toList]) (by decide +kernel) (by decide)
 
+-- Compile the concrete cryptographic vectors; semantic soundness remains kernel-checked.
 /-- Under real cSHAKE the honest trace verifies; forgery and signature replay are refused. -/
 theorem real_signatures :
     verifySignedSent (commitSlotSigScheme realHash 4096) (KeyDirectory.derive realHash signLog saltOf)
@@ -388,7 +377,7 @@ theorem real_signatures :
       proto4.committee forgedVote = false ∧
     verifySignedMsg (commitSlotSigScheme realHash 4096) (KeyDirectory.derive realHash signLog saltOf)
       proto4.committee replayedSig = false := by
-  decide +kernel
+  native_decide
 
 def isForgery {α : Sort _} {β : Sort _} : PSum α β → Bool
   | .inl _ => false
@@ -479,7 +468,7 @@ def honestJudgment := signedSimplexCompJudge realHash 4096 honestObj real_signat
   (honestKeys realHash (fun bs => by
     rw [realHash, Cshake256.Fast.cshake256Fast_eq]
     exact Cshake256.cshake256Bytes_length _ _))
-example : isForgery honestJudgment = false := by decide +kernel
+example : isForgery honestJudgment = false := by native_decide
 
 /-- The finite judge actually returns a pair drawn from the rejected trace's slot scope. -/
 def forgedObj : SignedSlotTraceObj :=
@@ -511,7 +500,7 @@ def tampered : ByteArray := bytesOfList [0xFF, 0x00, 0xFF, 0x00]
 def commitA : Nat := 79817041280646677348372407200226764119291410642631118685939725383524999737416
 
 theorem commitA_eq : effectCommitNat 10 .irreversibleActuation payloadA = commitA := by
-  decide +kernel
+  native_decide
 
 def chainA : Chain := [.block 1 commitA]
 
@@ -610,7 +599,7 @@ example :
       (.invalidSpscChannel 7) = true ∧
     checkOutboxErr (audit [] initOutbox { reqEscrow with escrowBond? := some ⟨900, 25⟩ })
       (.underfundedEscrowBond 900 25 500) = true := by
-  decide +kernel
+  native_decide
 
 def st1 : OutboxState := (stepOutbox proto4 sampleValidPartition [] initOutbox reqRead).getD initOutbox
 def st2 : OutboxState := (stepOutbox proto4 sampleValidPartition [] st1 reqEscrow).getD initOutbox
@@ -618,13 +607,13 @@ def st3Mid : OutboxState := (stepOutbox proto4 sampleValidPartition sentA st2 re
 def st3 : OutboxState := (reconcileEscrowsWithCert proto4 sentA certA st3Mid).getD initOutbox
 
 theorem step1 : stepOutbox proto4 sampleValidPartition [] initOutbox reqRead = some st1 := by
-  decide +kernel
+  native_decide
 theorem step2 : stepOutbox proto4 sampleValidPartition [] st1 reqEscrow = some st2 := by
-  decide +kernel
+  native_decide
 theorem step3 : stepOutbox proto4 sampleValidPartition sentA st2 reqAct = some st3Mid := by
-  decide +kernel
+  native_decide
 theorem rec3 : reconcileEscrowsWithCert proto4 sentA certA st3Mid = some st3 := by
-  decide +kernel
+  native_decide
 
 /-- The orphaned escrow is rolled back (75 refunded, 25 compensation kept, total 500 conserved),
     the actuation went out once with the committed bytes, and its nullifier is spent. -/
@@ -633,9 +622,9 @@ example :
     st3.dispatchedActuations.map
       (fun a => (a.nullifierId, a.dispatchedPayload.data.toList)) = [(10, [0xDE, 0xAD, 0xBE, 0xEF])] ∧
     checkOutboxErr (audit sentA st3 reqAct) (.staleOrDuplicateNullifier 10 10) = true := by
-  decide +kernel
+  native_decide
 
--- Compare states by the kernel's evaluation above, not the elaborator's.
+-- Keep the checked concrete states opaque during the symbolic trace proof.
 attribute [irreducible] st1 st2 st3Mid st3
 
 def turns : List OutboxTurn :=
@@ -693,4 +682,3 @@ theorem turns_safe :
 #assert_axioms_tree
 
 end Obend.Tests.SimplexLivenessAndOutbox
-end
