@@ -20,6 +20,8 @@ import all Obend.Run.Durable
 import all Obend.Core.Data
 
 public section
+set_option pp.maxDepth 6
+set_option pp.maxSteps 200
 
 /-
 # Obend.Vault.Replay — the deployed entry's world is the replay of its log
@@ -3274,7 +3276,13 @@ example : TVal.conforms samplePlanVal
     (.variant (.field "transferSturdyref"
       (.field "badgeCap" (.custody 1) (.field "coReceipt" (.custody 2) (.field "epoch" .natural .emptyRow)))
       .emptyRow)) = true := by decide
-example : sampleRoundtripCheck = true := by decide
+example : sampleRoundtripCheck = true := by
+  simp [sampleRoundtripCheck, dehydrate, sampleSealKey, samplePlanVal, sampleCustodyEnv,
+    dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot,
+    rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields,
+    takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
+    DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?,
+    dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq]
 
 /-- Constructive two-capability transfer with a real authority context and distinct live slots. -/
 theorem transfer_inhabited :

@@ -4864,8 +4864,9 @@ theorem verifyNode_path_length (H : Hash256) (height start idx : Nat) (v : Val)
 
 /-- No accepted opening can replace the authenticated multi-level path with a flat record. -/
 theorem verifyExpVerkleOpening_multiLevel (H : Hash256) (root : Digest) (idx : Nat)
-    (v : Val) (p : ExpVerkleProof) (h : verifyExpVerkleOpening H root idx v p = true) :
-    2 ≤ p.vectors.length := by
+    (v : Val) (p : ExpVerkleProof) :
+    verifyExpVerkleOpening H root idx v p = true → 2 ≤ p.vectors.length := by
+  intro h
   simp only [verifyExpVerkleOpening, Bool.and_eq_true, decide_eq_true_eq] at h
   rw [verifyNode_path_length H _ _ _ _ _ _ h.2, h.1.2.2.1]
   exact expVerkleDepth_multiLevel p.count
