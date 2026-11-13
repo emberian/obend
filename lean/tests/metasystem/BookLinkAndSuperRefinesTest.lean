@@ -29,6 +29,7 @@ public import Obend.Tactic.Tooth
 import all Obend.Paco.GPaco
 import all Obend.Leaf.LinkSpecialize
 import all Obend.Logic.Obligation
+import all Obend.Logic.Frame
 import all Obend.Slot.SupportSheaf
 
 public section
@@ -278,3 +279,25 @@ open Obend.Logic in
 open Obend.Logic in
 #tooth checkWorldCarrySpec_iff by
   mutation checkWorldCarrySpec := fun _ _ => .ok
+
+namespace GroundClaimAudit
+open Obend.Logic
+
+def falseGroundClaim : ClaimObj :=
+  { reflexiveClaimObj with claim := .lam (.lam (.binary .equal (.nat 7) (.nat 8))) }
+
+theorem closed_ground_refused : claimCheck 0 falseGroundClaim [] = .refused .groundMismatch [] := by
+  decide +kernel
+
+example : claimJudge.Fragment falseGroundClaim := by
+  exact ⟨by decide +kernel, .nat, .nat 7, .nat 8, rfl,
+    .inr ⟨rfl, .natural 7, .natural 8, rfl, rfl⟩⟩
+
+example : ¬ claimMeaning falseGroundClaim := claimCheck_groundMismatch closed_ground_refused
+example : claimJudge.refutes .groundMismatch = true := rfl
+example : claimCheck 0 reflexiveClaimObj [] = .ok := by decide +kernel
+
+#tooth closed_ground_refused by mutation
+  Obend.Logic.groundMismatch := fun _ _ _ => false
+
+end GroundClaimAudit

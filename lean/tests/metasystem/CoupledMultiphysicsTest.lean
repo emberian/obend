@@ -9,6 +9,7 @@ import all Obend.Hardware.NotebookProjection
 import all Obend.Hardware.Magnetics
 import all Obend.Hardware.ThermalPassivity
 import all Obend.Hardware.Kinematics
+import all Obend.Hardware.Device.Sky130Diode
 
 /-!
 # Metasystem Test Suite — Coupled Multi-Physics, $1/\Delta_e$ Courant $P_1$ FEMM, PRIMA Thermal Passivity & Featherstone Twist Chains (`WS-J`)
@@ -36,7 +37,7 @@ probes, and `#print axioms` (`0 sorryAx`) across:
      `physical_openusd_lifecycle_fixture`, `physical_projection_doc_noninterference`.
 -/
 
-@[expose] public section
+public section
 namespace Obend.Tests.Metasystem.CoupledMultiphysicsTest
 
 open Obend.Core.Data
@@ -208,6 +209,15 @@ def propagateSerialChainTwistsBroken : List SpatialTwist6D → SpatialTwist6D
 #print axioms Obend.Vault.PhysicalProjection.physical_projection_deterministic
 #print axioms Obend.Vault.PhysicalProjection.physical_cnc_abbe_projection_sound
 #print axioms Obend.Vault.PhysicalProjection.physical_openusd_lifecycle_fixture
+
+example : ∃ prof : Obend.Hardware.Device.WaferState,
+    Obend.Hardware.Device.runRecipe Obend.Hardware.Device.silicon300K.kBEv 1.0e-12
+      (Obend.Hardware.Device.WaferState.bare Obend.Hardware.Device.sky130Background)
+      (Obend.Hardware.Device.sky130DiodeRecipe 1.3e13)
+      Obend.Hardware.Device.sky130DiodeRecipeCert = some prof ∧
+    0 < prof.dose .boron ∧ 0 < prof.dose .arsenic := by
+  obtain ⟨prof, hr, hp, hn, _⟩ := Obend.Hardware.Device.sky130Diode_full_recipe_inhabited
+  exact ⟨prof, hr, hp, hn⟩
 
 end Obend.Tests.Metasystem.CoupledMultiphysicsTest
 end

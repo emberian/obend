@@ -234,3 +234,9 @@ end Obend.Vault.Escrow.Tests
 open Obend.Vault.Escrow in
 example : escrowVerdictBool openedEscrow
     { status := fun _ => .consumed, amount := fun _ => 100, recv := fun _ => 100, paid := fun _ => 100 } = false := by decide
+
+#tooth Obend.Vault.Escrow.escrowCellContract_preserves_EscrowInv by
+  mutation Obend.Vault.Escrow.recvBalanceT := fun _ => Obend.Law.trueT
+
+example : Obend.Vault.Escrow.escrowVerdictBool Obend.Vault.Escrow.openedEscrow
+    { Obend.Vault.Escrow.openedEscrow with recv := fun _ => 7 } = false := by decide +kernel

@@ -72,6 +72,8 @@ inductive ClaimClause where
   | illFormed
   /-- The object itself is malformed, independently of its certificate. -/
   | malformedObject
+  /-- Closed scalar literals denote different completed observations. -/
+  | groundMismatch
   /-- the claim's body is not an elaborated `==` -/
   | notAnEquation
   /-- the derivation was refused -/
@@ -87,11 +89,30 @@ inductive ClaimClause where
 theorem liftVerdict_ok {v : Judge.Verdict RClause} (h : liftVerdict v = .ok) : v = .ok := by
   cases v <;> simp_all [liftVerdict]
 
+/-- Exactly the ground observations supported by the partial equation semantics. -/
+def groundLiteral : Term → Option Observation
+  | .nat n => some (.natural n)
+  | .boolean b => some (.boolean b)
+  | .label s => some (.label s)
+  | _ => none
+
+def groundMismatch (arity : Nat) (l r : Term) : Bool :=
+  arity == 0 && match groundLiteral l, groundLiteral r with
+    | some a, some b => decide (a ≠ b)
+    | _, _ => false
+
+@[simp] theorem groundMismatch_refl (arity : Nat) (t : Term) :
+    groundMismatch arity t t = false := by
+  unfold groundMismatch
+  cases groundLiteral t <;> simp
+
 /-- **The claim checker.** -/
 @[expose] def claimCheck (k : Nat) (o : ClaimObj) (steps : List RStep) : Judge.Verdict ClaimClause :=
   if o.wellFormed then
     match o.sides with
-    | some (_, l, r) => liftVerdict (rewriteWith (claimResolver o.comp o.self) k l r steps)
+    | some (_, l, r) =>
+      if groundMismatch o.arity l r then .refused .groundMismatch []
+      else liftVerdict (rewriteWith (claimResolver o.comp o.self) k l r steps)
     | none => .refused .notAnEquation []
   else .refused .illFormed []
 
@@ -161,6 +182,9 @@ theorem claim_sound {k : Nat} {o : ClaimObj} {steps : List RStep} (h : claimChec
     unfold claimMeaning
     split at h
     · rename_i kind l r hs
+      split at h
+      · cases h
+      rename_i hground
       intro ds hl
       obtain ⟨_, hO, hS, _, _, hoO, hoS⟩ := wellFormed_parts hw
       have hfree : SubstFree (argSubst (o.args ds)) := argSubst_obsFree (by
@@ -252,6 +276,10 @@ theorem claim_frame {k : Nat} {o : ClaimObj} {steps : List RStep} (h : claimChec
     rw [hside]
     split at h
     · rename_i kind l r hs
+      split at h
+      · cases h
+      rename_i hg
+      simp only [show ({ o with comp := C', layer := j' } : ClaimObj).arity = o.arity from rfl, hg, ite_false]
       change liftVerdict (rewriteWith (claimResolver C' o.self) k l r steps) = .ok
       unfold rewriteWith at h ⊢
       rw [replay_frame steps (R := claimResolver C' o.self) (R' := claimResolver o.comp o.self) (by

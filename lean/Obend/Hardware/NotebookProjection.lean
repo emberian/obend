@@ -303,50 +303,6 @@ def timingToData (corner : ProcessCorner) (path : TimingPath) (clockPeriodPs : N
     ("status", .label (if closed then "TIMING_CLOSED" else "TIMING_VIOLATION"))
   ]
 
-/-- Project physical PnR placement, routing, and bitstream into canonical `Core.Data`. -/
-def pnrLayoutToData (cert : PnrCertificate) : Data :=
-  .record [
-    ("kind", .label "gds_layout"),
-    ("type", .label "pnr_layout"),
-    ("design_name", .label cert.designName),
-    ("cell_count", .natural cert.placedCells.length),
-    ("net_count", .natural cert.routedNets.length),
-    ("frame_count", .natural cert.bitstreamFrames.length),
-    ("routed_nets", dataSeq routedNetToData cert.routedNets),
-    ("bitstream_frames", dataSeq bitstreamFrameToData cert.bitstreamFrames),
-    ("sink_cap_ff", .natural cert.sinkCapFf),
-    ("placement_injective", .boolean (checkPlacementInjective cert.placedCells)),
-    ("routing_disjoint", .boolean (checkRoutingDisjoint cert.routedNets)),
-    ("cells", .record (cert.placedCells.zipIdx.map fun (c, i) =>
-      (toString i, .record [
-        ("cell_id", .natural c.cellId),
-        ("tile_x", .natural c.tileX),
-        ("tile_y", .natural c.tileY),
-        ("bel_slot", .natural c.belSlot),
-        ("lut_init", .natural c.lutInit)
-      ]))),
-    ("tile_configs", .record (cert.expectedConfigs.zipIdx.map fun (cfg, i) =>
-      (toString i, .record [
-        ("tile_x", .natural cfg.tileX),
-        ("tile_y", .natural cfg.tileY),
-        ("bel_slot", .natural cfg.belSlot),
-        ("lut_init", .natural cfg.lutInit),
-        ("pip_mask", .natural cfg.pipMask)
-      ])))
-  ]
-
-/-- Equality of notebook layouts recovers every routed hop and every frame word. -/
-theorem pnrLayoutToData_binds_routedNets_and_bitstreamFrames {a b : PnrCertificate}
-    (h : pnrLayoutToData a = pnrLayoutToData b) :
-    a.routedNets = b.routedNets ∧ a.bitstreamFrames = b.bitstreamFrames := by
-  have he := Data.record.inj h
-  have hn : dataSeq routedNetToData a.routedNets = dataSeq routedNetToData b.routedNets := by
-    exact (Prod.mk.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj he).2).2).2).2).2).2).1).2
-  have hf : dataSeq bitstreamFrameToData a.bitstreamFrames = dataSeq bitstreamFrameToData b.bitstreamFrames := by
-    exact (Prod.mk.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj he).2).2).2).2).2).2).2).1).2
-  exact ⟨dataSeq_injective routedNetToData_injective hn,
-    dataSeq_injective bitstreamFrameToData_injective hf⟩
-
 open Obend.Receipt.Merkle (encodeFields encodeFields_injective leb128 leb128_injective)
 
 /-- Unbounded LEB128 length framing; no fixed-width truncation of lengths or natural fields. -/
@@ -429,6 +385,51 @@ theorem pnrRouteFrameDigest_binding (H : List UInt8 → BitVec 256) {a b : PnrCe
   by_cases he : pnrRouteFrameBytes a = pnrRouteFrameBytes b
   · exact .inl (pnrRouteFrameBytes_binding he)
   · exact .inr ⟨he, h⟩
+
+/-- Project physical PnR placement, routing, and bitstream into canonical `Core.Data`. -/
+def pnrLayoutToData (cert : PnrCertificate) : Data :=
+  .record [
+    ("kind", .label "gds_layout"),
+    ("type", .label "pnr_layout"),
+    ("design_name", .label cert.designName),
+    ("cell_count", .natural cert.placedCells.length),
+    ("net_count", .natural cert.routedNets.length),
+    ("frame_count", .natural cert.bitstreamFrames.length),
+    ("routed_nets", dataSeq routedNetToData cert.routedNets),
+    ("bitstream_frames", dataSeq bitstreamFrameToData cert.bitstreamFrames),
+    ("sink_cap_ff", .natural cert.sinkCapFf),
+    ("placement_injective", .boolean (checkPlacementInjective cert.placedCells)),
+    ("routing_disjoint", .boolean (checkRoutingDisjoint cert.routedNets)),
+    ("cells", .record (cert.placedCells.zipIdx.map fun (c, i) =>
+      (toString i, .record [
+        ("cell_id", .natural c.cellId),
+        ("tile_x", .natural c.tileX),
+        ("tile_y", .natural c.tileY),
+        ("bel_slot", .natural c.belSlot),
+        ("lut_init", .natural c.lutInit)
+      ]))),
+    ("tile_configs", .record (cert.expectedConfigs.zipIdx.map fun (cfg, i) =>
+      (toString i, .record [
+        ("tile_x", .natural cfg.tileX),
+        ("tile_y", .natural cfg.tileY),
+        ("bel_slot", .natural cfg.belSlot),
+        ("lut_init", .natural cfg.lutInit),
+        ("pip_mask", .natural cfg.pipMask)
+      ]))),
+    ("route_frame_commitment", dataSeq (fun b => .natural b.toNat) (pnrRouteFrameBytes cert))
+  ]
+
+/-- Equality of notebook layouts recovers every routed hop and every frame word. -/
+theorem pnrLayoutToData_binds_routedNets_and_bitstreamFrames {a b : PnrCertificate}
+    (h : pnrLayoutToData a = pnrLayoutToData b) :
+    a.routedNets = b.routedNets ∧ a.bitstreamFrames = b.bitstreamFrames := by
+  have he := Data.record.inj h
+  have hn : dataSeq routedNetToData a.routedNets = dataSeq routedNetToData b.routedNets := by
+    exact (Prod.mk.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj he).2).2).2).2).2).2).1).2
+  have hf : dataSeq bitstreamFrameToData a.bitstreamFrames = dataSeq bitstreamFrameToData b.bitstreamFrames := by
+    exact (Prod.mk.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj (List.cons.inj he).2).2).2).2).2).2).2).1).2
+  exact ⟨dataSeq_injective routedNetToData_injective hn,
+    dataSeq_injective bitstreamFrameToData_injective hf⟩
 
 /-- A nonempty routed layout supplies a constructive binding witness. -/
 def projectionWitness : PnrCertificate :=

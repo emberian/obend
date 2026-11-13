@@ -70,6 +70,15 @@ open Obend.Hardware.Codec Obend.Hardware.Judge
 open Obend.Teeth.Leaf.Review (comp overridden view deadCells)
 set_option autoImplicit false
 
+private def erasedRouteFrameBytes (_ : PnrCertificate) : List UInt8 := []
+
+#tooth Obend.Vault.HardwareProjection.pnrRouteFrameDigest_binding by mutation
+  Obend.Vault.HardwareProjection.pnrRouteFrameBytes := erasedRouteFrameBytes
+
+
+#tooth Obend.Hardware.Device.sky130Diode_full_recipe_inhabited by mutation
+  Obend.Hardware.Device.sky130DiodeRecipe := fun pWellDose _ => [.implant .boron 160 pWellDose]
+
 /-! ## 1. Negative-Pole Refusal Checks Across All Hardware Subsystems -/
 
 /-- Overclocking SkyWater 130nm CMOS (`requiredPeriodPs = 2350 ps`) to 500 MHz (`2000 ps`) is refused. -/

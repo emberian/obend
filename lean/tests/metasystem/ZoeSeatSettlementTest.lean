@@ -524,3 +524,25 @@ theorem indebted_seat_refused :
   mutation safeAt := fun _ _ _ => true
 
 end Obend.Ledger.AdmissionTests
+
+namespace IndexBuilderAudit
+open Obend.Ledger
+
+def invitations : List (Nat × Invitation) :=
+  [(2, ⟨2, 4, "first"⟩), (9, ⟨9, 4, "last"⟩)]
+
+theorem indexed_invitation_found :
+    lookupInvitationsExec invitations 9 = some ⟨9, 4, "last"⟩ := by decide +kernel
+
+example : (InvitationTableExec.ofInvitations invitations).isSome = true := by decide +kernel
+example : lookupInvitationsExec (invitations.reverse ++ invitations) 2 = some ⟨2, 4, "first"⟩ := by
+  rw [lookupInvitationsExec_eq_spec]
+  decide +kernel
+
+#tooth indexed_invitation_found by mutation
+  Obend.Ledger.lookupInvitationExec := fun _ _ => none
+
+#tooth Obend.Ledger.lookupSeatsExec_eq_spec by mutation
+  Obend.Ledger.lookupSeatExec := fun _ _ => none
+
+end IndexBuilderAudit

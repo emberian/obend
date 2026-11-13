@@ -18,6 +18,7 @@ quotations (`Data` on the wire, `Spec.DataWire`).
 -/
 public import Obend.Logic.Frame
 import all Obend.Logic.Frame
+import all Obend.Core.Term
 public import Obend.Logic.Ground
 public import Obend.Slot
 public import Obend.Spec.DataWire
@@ -44,10 +45,19 @@ theorem claimCheck_mono {k k' : Nat} {o : ClaimObj} {steps : List RStep} (le : k
       obtain ⟨_, l, r⟩ := x
       rw [hs] at hne
       simp only
-      rw [rewriteWith_mono le (liftVerdict_ne hne)]
+      by_cases hg : groundMismatch o.arity l r = true
+      · simp [hg]
+      · simp only [hg, ite_false] at hne ⊢
+        rw [rewriteWith_mono le (liftVerdict_ne hne)]
   · simp only [hw] at hne ⊢; rfl
 
-/-- Reflexive syntactic equations, independently of any checker or certificate. -/
+/-- Reflexive equations and closed scalar ground equations, independently of the checker. -/
+def claimFragment (o : ClaimObj) : Prop :=
+  o.wellFormed = true ∧ ∃ kind l r, o.sides = some (kind, l, r) ∧
+    (l = r ∨ (o.arity = 0 ∧ ∃ a b, groundLiteral l = some a ∧ groundLiteral r = some b))
+
+/-- The reflexive fragment remains available to judges whose external certificate semantics
+need not imply `claimMeaning`. -/
 def ClaimFragment (o : ClaimObj) : Prop :=
   o.wellFormed = true ∧ ∃ kind t, o.sides = some (kind, t, t)
 
@@ -55,6 +65,53 @@ theorem claimFragment_complete {o : ClaimObj} (h : ClaimFragment o) :
     claimCheck 0 o [] = .ok := by
   obtain ⟨hw, kind, t, hs⟩ := h
   simp [claimCheck, hw, hs, rewriteWith, replay, sizeList, termEq_refl', liftVerdict]
+
+theorem groundLiteral_semantics {t : Term} {a : Observation} (h : groundLiteral t = some a) :
+    Value t ∧ Observes t a ∧ ∀ σ, t.substitute σ = t := by
+  cases t <;> simp only [groundLiteral] at h <;> try cases h
+  all_goals exact ⟨by constructor, by constructor, fun _ => by simp [Term.substitute]⟩
+
+theorem groundLiteral_holdsEq {l r : Term} {a b : Observation}
+    (hl : groundLiteral l = some a) (hr : groundLiteral r = some b)
+    (hm : HoldsEq l r) : l = r := by
+  obtain ⟨vl, ol, _⟩ := groundLiteral_semantics hl
+  obtain ⟨vr, _, _⟩ := groundLiteral_semantics hr
+  obtain ⟨v, ev, ov⟩ := (hm a).mp ⟨l, ⟨.refl _, vl⟩, ol⟩
+  have he := evaluates_unique ev (⟨.refl _, vr⟩ : Evaluates r r)
+  subst v
+  cases ol <;> cases ov <;> rfl
+
+theorem groundClaimFragment_complete {o : ClaimObj} (h : claimFragment o) (hm : claimMeaning o) :
+    claimCheck 0 o [] = .ok := by
+  obtain ⟨hw, kind, l, r, hs, hf⟩ := h
+  have he : l = r := by
+    rcases hf with he | ⟨ha, a, b, hl, hr⟩
+    · exact he
+    · have hq := (show ∀ ds : List Data, ds.length = o.arity →
+          HoldsEq (l.substitute (argSubst (o.args ds))) (r.substitute (argSubst (o.args ds))) from by
+            simpa [claimMeaning, hs] using hm) [] (by simp [ha])
+      rw [(groundLiteral_semantics hl).2.2, (groundLiteral_semantics hr).2.2] at hq
+      exact groundLiteral_holdsEq hl hr hq
+  subst r
+  simp [claimCheck, hw, hs, rewriteWith, replay, sizeList, termEq_refl', liftVerdict]
+
+theorem groundMismatch_refutes {o : ClaimObj} {kind : EqKind} {l r : Term}
+    (hs : o.sides = some (kind, l, r)) (hg : groundMismatch o.arity l r = true) :
+    ¬ claimMeaning o := by
+  simp only [groundMismatch, Bool.and_eq_true, beq_iff_eq] at hg
+  obtain ⟨ha, hg⟩ := hg
+  cases hl : groundLiteral l <;> cases hr : groundLiteral r <;> simp only [hl, hr] at hg
+  all_goals try cases hg
+  rename_i a b
+  have hne : a ≠ b := of_decide_eq_true hg
+  intro hm
+  have hq := (show ∀ ds : List Data, ds.length = o.arity →
+      HoldsEq (l.substitute (argSubst (o.args ds))) (r.substitute (argSubst (o.args ds))) from by
+        simpa [claimMeaning, hs] using hm) [] (by simp [ha])
+  rw [(groundLiteral_semantics hl).2.2, (groundLiteral_semantics hr).2.2] at hq
+  have he := groundLiteral_holdsEq hl hr hq
+  subst r
+  exact hne (Option.some.inj (hl.symm.trans hr))
 
 theorem claimCheck_wellFormed {k : Nat} {o : ClaimObj} {steps : List RStep}
     (h : claimCheck k o steps = .ok) : o.wellFormed = true := by
@@ -72,23 +129,44 @@ theorem claimCheck_illFormed {k : Nat} {o : ClaimObj} {steps : List RStep} {p : 
   | some x =>
     obtain ⟨kind, l, r⟩ := x
     simp only [hs] at h
-    cases hv : rewriteWith (claimResolver o.comp o.self) k l r steps <;>
-      simp [hv, liftVerdict] at h
+    split at h
+    · cases h
+    · cases hv : rewriteWith (claimResolver o.comp o.self) k l r steps <;>
+        simp [hv, liftVerdict] at h
 
-/-- The claim judge refuses malformed objects and is complete on reflexive equations. -/
+theorem claimCheck_groundMismatch {k : Nat} {o : ClaimObj} {steps : List RStep} {p : List Nat}
+    (h : claimCheck k o steps = .refused .groundMismatch p) : ¬ claimMeaning o := by
+  unfold claimCheck at h
+  split at h
+  · cases hs : o.sides with
+    | none => simp [hs] at h
+    | some x =>
+      obtain ⟨kind, l, r⟩ := x
+      simp only [hs] at h
+      split at h
+      · exact groundMismatch_refutes hs ‹_›
+      · cases hv : rewriteWith (claimResolver o.comp o.self) k l r steps <;>
+          simp [hv, liftVerdict] at h
+  · cases h
+
+/-- Refuses malformed objects and semantically false closed ground equations. -/
 instance claimJudge : Judge ClaimObj (List RStep) where
   Clause := ClaimClause
   Meaning o _ := o.wellFormed = true ∧ claimMeaning o
   check := claimCheck
   sound h := ⟨claimCheck_wellFormed h, claim_sound h⟩
-  refutes k := k == .illFormed
+  refutes k := k == .illFormed || k == .groundMismatch
   refuted := by
     intro k o steps clause p h hk c hm
-    have : clause = .illFormed := beq_iff_eq.mp hk
-    subst clause
-    exact claimCheck_illFormed h hm.1
-  Fragment := ClaimFragment
-  complete := by intro o hf _; exact ⟨[], 0, claimFragment_complete hf⟩
+    simp only [Bool.or_eq_true, beq_iff_eq] at hk
+    rcases hk with rfl | rfl
+    · exact claimCheck_illFormed h hm.1
+    · exact claimCheck_groundMismatch h hm.2
+  Fragment := claimFragment
+  complete := by
+    intro o hf hm
+    obtain ⟨c, hc⟩ := hm
+    exact ⟨[], 0, groundClaimFragment_complete hf hc.2⟩
   mono := by intro k k' o steps le hne; exact claimCheck_mono le hne
 
 /-- A closed reflexive equation gives a constructive, nonempty fragment. -/
@@ -97,7 +175,7 @@ def reflexiveClaimObj : ClaimObj :=
     0, .lam (.lam (.binary .equal (.nat 0) (.nat 0))), 0⟩
 
 theorem claimJudge_fragment_inhabited : ∃ o, claimJudge.Fragment o := by
-  refine ⟨reflexiveClaimObj, ?_, .nat, .nat 0, rfl⟩
+  refine ⟨reflexiveClaimObj, ?_, .nat, .nat 0, .nat 0, rfl, .inl rfl⟩
   decide +kernel
 
 /-! ## Supports -/
@@ -855,14 +933,16 @@ theorem obligation_malformedObject_refutes (formats : List Judge.Format)
     exact obligation_malformedObject_refutes formats h
   Fragment := ClaimFragment
   complete := by
-    intro o hf _
+    intro o hf hm
     refine ⟨.byDerivation [], 0, ?_⟩
     simp only [obligationCheckWithJudges, hf.1, ite_true]
     exact claimFragment_complete hf
   mono := by intro k k' o j le hne; exact obligationWithJudges_mono formats le hne
 
 theorem obligationJudgeWith_fragment_inhabited (formats : List Judge.Format) :
-    ∃ o, (obligationJudgeWith formats).Fragment o := claimJudge_fragment_inhabited
+    ∃ o, (obligationJudgeWith formats).Fragment o := by
+  refine ⟨reflexiveClaimObj, ?_, .nat, .nat 0, rfl⟩
+  decide +kernel
 
 theorem obligationJudgeWith_refusal_inhabited (formats : List Judge.Format) :
     ∃ o j clause p, (obligationJudgeWith formats).check 0 o j = .refused clause p ∧
@@ -1219,7 +1299,9 @@ theorem superClaimCheck_of_claimCheck {k : Nat} {o : ClaimObj} {steps : List RSt
     | none => rw [hs] at h; cases h
     | some triple =>
       obtain ⟨kind, l, r⟩ := triple
-      rw [hs] at h
+      simp only [hs] at h
+      split at h
+      · cases h
       have hrw := liftVerdict_ok h
       have hrep := rewriteWith_ok hrw
       unfold rewriteWith at hrw ⊢
@@ -1272,7 +1354,7 @@ instance superClaimJudge : Judge ClaimObj (List RStep) where
         simp [hv, liftVerdict] at h
   Fragment := ClaimFragment
   complete := by
-    intro o hf _
+    intro o hf hm
     exact ⟨[], 0, superClaimCheck_of_claimCheck (claimFragment_complete hf)⟩
   mono := by intro k k' o steps le hne; exact superClaimCheck_mono le hne
 

@@ -122,6 +122,86 @@ theorem mint_preserves_spent (reg : InvitationRegistry) (inst : Nat) (desc : Str
 
 end InvitationRegistry
 
+/-- Linear adjacent-key validation; unsorted and duplicate inputs retain first-match semantics. -/
+def strictKeys {α : Type} (key : α → Nat) : List α → Bool
+  | [] | [_] => true
+  | a :: b :: rest => decide (key a < key b) && strictKeys key (b :: rest)
+
+theorem strictKeys_pairwise {α : Type} (key : α → Nat) :
+    ∀ xs, strictKeys key xs = true → xs.Pairwise (fun a b => key a < key b)
+  | [], _ => .nil
+  | [a], _ => by simp
+  | a :: b :: rest, h => by
+    simp only [strictKeys, Bool.and_eq_true, decide_eq_true_eq] at h
+    have ih := strictKeys_pairwise key (b :: rest) h.2
+    rw [List.pairwise_cons] at ih ⊢
+    refine ⟨?_, List.pairwise_cons.mpr ih⟩
+    intro x hx
+    rcases List.mem_cons.mp hx with rfl | hx
+    · exact h.1
+    · exact Nat.lt_trans h.1 (ih.1 x hx)
+
+theorem strictKeys_sorted {α : Type} (key : α → Nat) (xs : List α)
+    (h : strictKeys key xs = true) : Obend.Polis.CapTP.SortedBy key xs.toArray := by
+  intro i j hi hj hij
+  simpa using (List.pairwise_iff_getElem.mp (strictKeys_pairwise key xs h)
+    i j (by simpa using hi) (by simpa using hj) hij)
+
+/-- Invitations use the same verified binary-search implementation. -/
+structure InvitationTableExec where
+  entries : Array (Nat × Invitation)
+  sorted : Obend.Polis.CapTP.SortedBy Prod.fst entries
+
+def InvitationTableExec.ofInvitations (invitations : List (Nat × Invitation)) :
+    Option InvitationTableExec :=
+  if h : strictKeys Prod.fst invitations = true then
+    some ⟨invitations.toArray, strictKeys_sorted _ _ h⟩
+  else none
+
+def lookupInvitationExec (table : InvitationTableExec) (id : Nat) : Option Invitation :=
+  (Obend.Polis.CapTP.search Prod.fst table.entries id
+    (table.entries.size + 1) 0 table.entries.size).map Prod.snd
+
+theorem lookupInvitationExec_eq_spec (table : InvitationTableExec) (id : Nat) :
+    lookupInvitationExec table id =
+      (table.entries.toList.find? (fun p => p.1 == id)).map Prod.snd := by
+  unfold lookupInvitationExec
+  rw [Obend.Polis.CapTP.search_eq_spec _ _ table.sorted]
+  rfl
+
+def lookupInvitationsExec (invitations : List (Nat × Invitation)) (id : Nat) : Option Invitation :=
+  match InvitationTableExec.ofInvitations invitations with
+  | some table => lookupInvitationExec table id
+  | none => invitations.lookup id
+
+theorem lookupInvitationsExec_eq_spec (xs : List (Nat × Invitation)) (id : Nat) :
+    lookupInvitationsExec xs id = xs.lookup id := by
+  unfold lookupInvitationsExec InvitationTableExec.ofInvitations
+  by_cases hsorted : strictKeys Prod.fst xs = true
+  · simp only [hsorted, dite_true, lookupInvitationExec_eq_spec, List.toList_toArray]
+    clear hsorted
+    induction xs with
+    | nil => rfl
+    | cons x xs ih =>
+      obtain ⟨k, v⟩ := x
+      simp only [List.find?_cons, List.lookup_cons]
+      by_cases h : k = id
+      · simp [h]
+      · simpa only [Prod.fst, beq_eq_false_iff_ne.mpr h,
+          beq_eq_false_iff_ne.mpr (Ne.symm h), Bool.false_eq_true, ite_false] using ih
+  · simp [hsorted]
+
+def InvitationRegistry.spendExec (reg : InvitationRegistry) (invId : Nat) :
+    Option (InvitationRegistry × Invitation) :=
+  match lookupInvitationsExec reg.live invId with
+  | some inv => some ({ reg with live := InvitationRegistry.eraseAllKey invId reg.live }, inv)
+  | none => none
+
+@[csimp] theorem InvitationRegistry.spend_eq_exec :
+    @InvitationRegistry.spend = @InvitationRegistry.spendExec := by
+  funext reg invId
+  simp [InvitationRegistry.spend, InvitationRegistry.spendExec, lookupInvitationsExec_eq_spec]
+
 /-! ## 2. Proposals, Explicit `donate` Gift Guard & `Disclosure` -/
 
 inductive ExitRule where
@@ -405,6 +485,11 @@ structure SeatTableExec where
   entries : Array Seat
   sorted : Obend.Polis.CapTP.SortedBy Seat.account entries
 
+def SeatTableExec.ofSeats (seats : List Seat) : Option SeatTableExec :=
+  if h : strictKeys Seat.account seats = true then
+    some ⟨seats.toArray, strictKeys_sorted _ _ h⟩
+  else none
+
 def lookupSeatSpec (seats : List Seat) (account : AccountId) : Option Seat :=
   seats.find? (fun s => s.account == account)
 
@@ -416,6 +501,24 @@ theorem lookupSeatExec_eq_lookupSpec (table : SeatTableExec) (account : AccountI
     lookupSeatExec table account = lookupSeatSpec table.entries.toList account :=
   Obend.Polis.CapTP.search_eq_spec _ _ table.sorted account
 
+/-- Checked list entry point: sorted inputs use the index; other inputs keep the first match.
+Callers making repeated queries can retain the table returned by `ofSeats`. -/
+def lookupSeatsExec (seats : List Seat) (account : AccountId) : Option Seat :=
+  match SeatTableExec.ofSeats seats with
+  | some table => lookupSeatExec table account
+  | none => seats.find? (fun s => s.account == account)
+
+theorem lookupSeatsExec_eq_spec (seats : List Seat) (account : AccountId) :
+    lookupSeatsExec seats account = lookupSeatSpec seats account := by
+  unfold lookupSeatsExec SeatTableExec.ofSeats
+  by_cases h : strictKeys Seat.account seats = true
+  · simp [h, lookupSeatExec_eq_lookupSpec]
+  · simp [h, lookupSeatSpec]
+
+@[csimp] theorem lookupSeatSpec_eq_exec : @lookupSeatSpec = @lookupSeatsExec := by
+  funext seats account
+  exact (lookupSeatsExec_eq_spec seats account).symm
+
 def checkAllSeatsSafeExec (b : Book) (table : SeatTableExec) : Bool :=
   table.entries.all (fun s => safeAt b s.account s.proposal)
 
@@ -423,22 +526,6 @@ theorem checkAllSeatsSafeExec_eq_spec (b : Book) (table : SeatTableExec) :
     checkAllSeatsSafeExec b table =
       table.entries.toList.all (fun s => safeAt b s.account s.proposal) := by
   exact (Array.all_toList ..).symm
-
-/-- Invitations use the same verified binary-search implementation. -/
-structure InvitationTableExec where
-  entries : Array (Nat × Invitation)
-  sorted : Obend.Polis.CapTP.SortedBy Prod.fst entries
-
-def lookupInvitationExec (table : InvitationTableExec) (id : Nat) : Option Invitation :=
-  (Obend.Polis.CapTP.search Prod.fst table.entries id
-    (table.entries.size + 1) 0 table.entries.size).map Prod.snd
-
-theorem lookupInvitationExec_eq_spec (table : InvitationTableExec) (id : Nat) :
-    lookupInvitationExec table id =
-      (table.entries.toList.find? (fun p => p.1 == id)).map Prod.snd := by
-  unfold lookupInvitationExec
-  rw [Obend.Polis.CapTP.search_eq_spec _ _ table.sorted]
-  rfl
 
 /-! ## 4. World Collections & Distinct Seat Accounts -/
 
@@ -449,7 +536,7 @@ structure World where
   assets      : List AssetId := []
 
 def World.seat? (w : World) (acc : AccountId) : Option Seat :=
-  w.seats.find? (fun s => s.account == acc)
+  lookupSeatSpec w.seats acc
 
 theorem seats_find_mem (seats : List Seat) (hnodup : (seats.map Seat.account).Nodup) {s : Seat} (hmem : s ∈ seats) :
     seats.find? (fun x => x.account == s.account) = some s := by
@@ -1498,7 +1585,7 @@ def exitAllowed : ExitRule → Nat → Bool
 must allow it; then `Ledger.exitSeat`'s sweep pays the whole seat to the payee in both books. -/
 def exitSeatStep (H : Hash) (h : ZoeHost) (seatId : SeatId) (cap : List UInt8) :
     Except ZoeRefusal ZoeHost :=
-  match h.seats.find? (fun s => s.account == protectedBase + seatId) with
+  match lookupSeatSpec h.seats (protectedBase + seatId) with
   | none => .error .noSuchSeat
   | some s =>
     if h.holders.lookup s.account = some (holderCommit H seatId cap) then
@@ -1986,7 +2073,7 @@ theorem realloc_leaves_ordinary_untouched {guest : GuestContract} {h f : ZoeHost
 /-! ## 9. Refusal is complete -/
 
 def ExitViolation (H : Hash) (h : ZoeHost) (seatId : SeatId) (cap : List UInt8) : Prop :=
-  match h.seats.find? (fun s => s.account == protectedBase + seatId) with
+  match lookupSeatSpec h.seats (protectedBase + seatId) with
   | none => True
   | some s =>
     h.holders.lookup s.account ≠ some (holderCommit H seatId cap) ∨
@@ -1998,7 +2085,7 @@ def ExitViolation (H : Hash) (h : ZoeHost) (seatId : SeatId) (cap : List UInt8) 
 commitment, its exit rule does not allow it yet, or the `FloorBook` refuses the payout. -/
 theorem exitSeatStep_refused_iff (H : Hash) (h : ZoeHost) (seatId : SeatId) (cap : List UInt8) :
     (∃ e, exitSeatStep H h seatId cap = .error e) ↔ ExitViolation H h seatId cap := by
-  unfold exitSeatStep ExitViolation
+  unfold exitSeatStep ExitViolation lookupSeatSpec
   cases hf : h.seats.find? (fun s => s.account == protectedBase + seatId) with
   | none => simp
   | some s =>
@@ -2019,7 +2106,7 @@ theorem premature_exit_refused (H : Hash) (h : ZoeHost) (seatId : SeatId) (cap :
     (hw : s.proposal.exit = .afterDeadline due) (he : h.epoch < due) :
     ∃ e, exitSeatStep H h seatId cap = .error e := by
   refine (exitSeatStep_refused_iff H h seatId cap).mpr ?_
-  simp only [ExitViolation, hf]
+  simp only [ExitViolation, lookupSeatSpec, hf]
   exact .inr (.inl (by rw [hw]; exact decide_eq_false (Nat.not_le.mpr he)))
 
 /-- The contract a refused turn broke. Minting an invitation and advancing the epoch break none. -/

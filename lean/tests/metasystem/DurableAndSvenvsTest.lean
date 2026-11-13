@@ -68,14 +68,14 @@ set_option autoImplicit false
 
 #guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.rehydrate_binds_sealKey_epoch_or_collision by mutation
-  Obend.Run.VaultDurableBridge.capFramePreimage := fun _ epoch nonce tbl =>
+  Obend.Run.VaultDurableBridge.capFramePreimage := fun _ epoch nonce tbl _ =>
     Obend.Crypto.leb128 epoch.toNat ++ encodeCapTableBytes nonce tbl
 
 #guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.stale_epoch_refused by mutation
-  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun Hb key _ frame =>
+  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun Hb key _ frame wire =>
     decide (key.size = 32 ∧ frame.sealBytes =
-      computeCapFrameSeal Hb key frame.epoch frame.nonce frame.table)
+      computeCapFrameSeal Hb key frame.epoch frame.nonce frame.table wire)
 
 #guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.rehydrate_restores_nodup_slots by mutation
@@ -83,7 +83,7 @@ set_option autoImplicit false
 
 #guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip by mutation
-  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ _ _ => false
+  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ _ _ _ => false
 
 #guard_msgs (drop info) in
 #tooth Obend.Run.VaultDurableBridge.forged_cap_index_refused by mutation
@@ -771,16 +771,16 @@ theorem cap_transfer_roundtrip_passes :
   refine ⟨by decide, by decide, by decide, ?_⟩
   simp [checkCapTransferRoundtrip, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data,
     yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate,
-    CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes,
+    CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
     sampleIdentityHash, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex,
     DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?,
-    dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
+    dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide +kernel
 
 def forgedIndexRejected : Bool :=
   match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .ok (_, frame) =>
     match rehydrate sampleIdentityHash sampleSealKey 9 (.sealedCap 2 7) frame with
-    | .error (.forgedCapIndex 2) => true
+    | .error .unsealedFrame => true
     | _ => false
   | .error _ => false
 
@@ -793,6 +793,7 @@ def tamperedSealRejected : Bool :=
     | _ => false
   | .error _ => false
 
+set_option maxHeartbeats 2000000 in
 set_option maxRecDepth 8192 in
 theorem test_forged_and_tampered_refused :
     forgedIndexRejected = true ∧
@@ -803,10 +804,10 @@ theorem test_forged_and_tampered_refused :
   refine ⟨?_, ?_, rfl, rfl⟩ <;>
     simp [forgedIndexRejected, tamperedSealRejected, dehydrate, sampleSealKey, ByteArray.size,
       -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot,
-      duplicateSlot, rehydrate, CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes,
+      duplicateSlot, rehydrate, CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
     sampleIdentityHash, indexedFromBool, rehydrateVal, rehydrateFields,
       takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?,
-      dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
+      dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide +kernel
 
 /-- A seal made by one authority must fail under a different host key. -/
 def forgedAuthorityRejected : Bool :=
@@ -829,22 +830,24 @@ def staleEpochRejected : Bool :=
 def duplicateSlotsRejected : Bool :=
   let tbl : CapTable := ⟨[⟨0, ⟨101, 7, [1]⟩⟩, ⟨1, ⟨101, 8, [2]⟩⟩]⟩
   let frame : CapSealFrame := ⟨99, 9, tbl,
-    computeCapFrameSeal sampleIdentityHash sampleSealKey 9 99 tbl⟩
+    computeCapFrameSeal sampleIdentityHash sampleSealKey 9 99 tbl
+      (.record [("a", .sealedCap 0 7), ("b", .sealedCap 1 8)])⟩
   match rehydrate sampleIdentityHash sampleSealKey 9
     (.record [("a", .sealedCap 0 7), ("b", .sealedCap 1 8)]) frame with
   | .error (.missingOrDuplicateSlot 101) => true
   | _ => false
 
+set_option maxHeartbeats 2000000 in
 set_option maxRecDepth 8192 in
 theorem authority_epoch_slots_refused :
     forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
   simp [forgedAuthorityRejected, staleEpochRejected, duplicateSlotsRejected, dehydrate, sampleSealKey,
     ByteArray.size, -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields,
-    takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes,
+    takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
     sampleIdentityHash, indexedFromBool, rehydrateVal,
     rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
     DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq,
-    tvalFieldsBeq] <;> decide
+    tvalFieldsBeq] <;> decide +kernel
 
 -- Full-width natural identifiers have distinct encodings past the former 64-bit wrap boundary.
 example : encodeCapTableBytes 0 ⟨[⟨0, ⟨1, 2, []⟩⟩]⟩ ≠
@@ -941,3 +944,25 @@ example (ctrl : Nat → Nat) :
 end Obend.Tests.DurableAndSvenvsTest
 
 end
+
+namespace WireTamperAudit
+open Obend.Run.VaultDurableBridge
+
+def payloadTamperRefused : Bool :=
+  match dehydrate sampleIdentityHash sampleSealKey 9 1 ⟨[]⟩ (.natural 7) with
+  | .error _ => false
+  | .ok (_, frame) => match rehydrate sampleIdentityHash sampleSealKey 9 (.natural 8) frame with
+    | .error .unsealedFrame => true
+    | _ => false
+
+set_option maxRecDepth 8192 in
+theorem payload_tamper_refused : payloadTamperRefused = true := by
+  simp [payloadTamperRefused, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data,
+    dehydrateVal, duplicateSlot, rehydrate, CapSealFrame.sealValid,
+    computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
+    sampleIdentityHash] <;> decide +kernel
+
+#tooth payload_tamper_refused by mutation
+  Obend.Run.VaultDurableBridge.dataWireBytes := fun _ => []
+
+end WireTamperAudit

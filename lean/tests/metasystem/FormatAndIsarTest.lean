@@ -38,13 +38,12 @@ Covers:
 
 /-! ## Part 1: `Escrow.lean` Seam Closure & Non-Trivial `LawExpr` / `CellContract` Verification -/
 
-/-- `escrowKindCell` and `prepaidLeaseKindCell` enforce non-trivial laws, never `trivialLaw`. -/
+/-- The registered escrow kind uses the full proved contract. -/
 theorem escrow_and_lease_kinds_nontrivial :
-    escrowKindCell.law = escrowLaw ∧
+    escrowKindCell.law = escrowCellContract.law ∧
     prepaidLeaseKindCell.law = prepaidLeaseLaw ∧
-    escrowKindCell.law ≠ trivialLaw ∧
     prepaidLeaseKindCell.law ≠ trivialLaw := by
-  refine ⟨rfl, rfl, by decide, by decide⟩
+  exact ⟨rfl, rfl, by decide⟩
 
 def sampleFacts : Facts := ⟨some 1, some 2, 100, 1⟩
 
@@ -77,31 +76,50 @@ theorem escrowSettleOp : EscrowOp escrowAfterDepositB escrowSettledState :=
 
 /-- Valid deposit and settle transitions satisfy `escrowLaw` and are admitted by `escrowCellContract`. -/
 theorem escrow_valid_transitions_admitted :
-    escrowLaw.denote sampleFacts (some (escrowStateToData openedEscrow))
-      (escrowStateToData escrowAfterDepositA) = true ∧
-    escrowLaw.denote sampleFacts (some (escrowStateToData escrowAfterDepositB))
-      (escrowStateToData escrowSettledState) = true ∧
-    Admits escrowCellContract.law (escrowStateToData openedEscrow)
+    Admits escrowKindCell.law (escrowStateToData openedEscrow)
       (escrowStateToData escrowAfterDepositA) (reqOf "alice" "alice" 0 10 writeO sampleFacts) ∧
-    Admits escrowCellContract.law (escrowStateToData escrowAfterDepositB)
+    Admits escrowKindCell.law (escrowStateToData escrowAfterDepositB)
       (escrowStateToData escrowSettledState) (reqOf "alice" "alice" 0 10 writeO sampleFacts) :=
-  ⟨escrowOp_satisfies_escrowLaw sampleFacts escrowDepositAOp,
-   escrowOp_satisfies_escrowLaw sampleFacts escrowSettleOp,
-   (escrowOp_admitted_by_contract sampleFacts escrowDepositAOp "alice" "alice" 0 10 opened_inv).1,
-   (escrowOp_admitted_by_contract sampleFacts escrowSettleOp "alice" "alice" 0 10
-     (Op_preserves escrowDepositBOp (Op_preserves escrowDepositAOp opened_inv))).1⟩
+  ⟨escrowOp_satisfies_escrowLaw sampleFacts escrowDepositAOp "alice" "alice" 0 10 opened_inv,
+   escrowOp_satisfies_escrowLaw sampleFacts escrowSettleOp "alice" "alice" 0 10
+     (Op_preserves escrowDepositBOp (Op_preserves escrowDepositAOp opened_inv))⟩
 
 /-- Rolling back a settled escrow (`settled = 1`) to an unsettled state (`settled = 0`) is
     refused by `escrowLaw` and rejected by `escrowCellContract`. -/
 theorem escrow_rollback_settled_rejected :
-    escrowLaw.denote sampleFacts (some (escrowStateToData escrowSettledState))
-      (escrowStateToData openedEscrow) = false ∧
-    Refuses escrowCellContract.stepRel (escrowStateToData escrowSettledState)
-      (escrowStateToData openedEscrow) (reqOf "mallory" "mallory" 0 10 writeO sampleFacts) "escrowLaw" ∧
-    ¬ Admits escrowCellContract.law (escrowStateToData escrowSettledState)
+    ¬ Admits escrowKindCell.law (escrowStateToData escrowSettledState)
       (escrowStateToData openedEscrow) (reqOf "mallory" "mallory" 0 10 writeO sampleFacts) :=
   escrow_unsettled_rollback_refused sampleFacts escrowSettledState openedEscrow rfl rfl
     "mallory" "mallory" 0 10
+
+def skippedDeposit : EscrowState :=
+  { openedEscrow with status := fun _ => .consumed }
+
+def phantomRecv : EscrowState := { openedEscrow with recv := upd openedEscrow.recv .A 7 }
+
+theorem registered_skipped_deposit_refused :
+    ¬ Admits escrowKindCell.law (escrowStateToData openedEscrow)
+      (escrowStateToData skippedDeposit) (.record []) :=
+  escrowCellContract_refuses_skipped_deposit _ _ _ .A rfl rfl
+
+theorem registered_unfunded_payout_refused :
+    ¬ Admits escrowKindCell.law (escrowStateToData openedEscrow)
+      (escrowStateToData { openedEscrow with paid := fun _ => 7 }) (.record []) :=
+  escrowCellContract_refuses_unfunded_payout _ _ _ .A (by decide)
+
+theorem registered_phantom_recv_refused :
+    ¬ Admits escrowKindCell.law (escrowStateToData openedEscrow)
+      (escrowStateToData phantomRecv) (.record []) :=
+  escrowCellContract_refuses_phantom_recv _ _ _ (by decide)
+
+#tooth registered_skipped_deposit_refused by mutation
+  Obend.Vault.Escrow.escrowLaw := Obend.Law.law3 Obend.Law.okT
+
+#tooth registered_unfunded_payout_refused by mutation
+  Obend.Vault.Escrow.escrowLaw := Obend.Law.law3 Obend.Law.okT
+
+#tooth registered_phantom_recv_refused by mutation
+  Obend.Vault.Escrow.recvBalanceT := fun _ => Obend.Law.trueT
 
 def sampleLeaseTerms : LeaseTerms where
   rent   := 250
@@ -175,7 +193,7 @@ example :
       (leaseStateToData mutatedBudgetTerms leaseSt1) = false := by decide +kernel
 
 #tooth escrow_rollback_settled_rejected by mutation
-  Obend.Vault.Escrow.escrowLaw := Obend.Vault.Escrow.trivialLaw
+  Obend.Vault.Escrow.escrowLaw := Obend.Law.law3 Obend.Law.okT
 
 #tooth prepaidLease_planted_overdraw_rejected by mutation
   Obend.Vault.Escrow.prepaidLeaseLaw := Obend.Vault.Escrow.trivialLaw

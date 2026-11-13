@@ -1,6 +1,8 @@
 module
 public import Obend.Polis.GrainCustodyHost
 import all Obend.Vault.Escrow
+import all Obend.Vault.Replay
+import all Obend.Vault.WorldTree
 import all Obend.Polis.GrainCustodyHost
 import Obend.Tactic.Tooth
 import all Obend.Polis.GrainPowerbox
@@ -278,3 +280,30 @@ def host : GrainCustodyHost := ⟨signed, none, some changedVar⟩
 #print axioms multi_fork_tree_distinct
 #print axioms recovery_facts
 end Obend.Polis.Custody.WireTests
+
+namespace EqualCustodyPlacementAudit
+open Obend.Run.VaultDurableBridge
+
+def swappedPlacementRefused : Bool :=
+  let original : TVal := .record [("a", .cap 10 1), ("b", .cap 20 1)]
+  match dehydrate sampleIdentityHash sampleSealKey 9 1
+      ⟨[⟨10, 1, []⟩, ⟨20, 1, []⟩]⟩ original with
+  | .error _ => false
+  | .ok (_, frame) =>
+    match rehydrate sampleIdentityHash sampleSealKey 9
+        (.record [("a", .sealedCap 1 1), ("b", .sealedCap 0 1)]) frame with
+    | .error .unsealedFrame => true
+    | _ => false
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8192 in
+theorem equal_custody_placement_tamper_refused : swappedPlacementRefused = true := by
+  simp [swappedPlacementRefused, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data,
+    dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid,
+    computeCapFrameSeal, capFramePreimage, encodeCapTableBytes, frameBytes, dataWireBytes,
+    sampleIdentityHash] <;> decide +kernel
+
+#tooth equal_custody_placement_tamper_refused by mutation
+  Obend.Run.VaultDurableBridge.dataWireBytes := fun _ => []
+
+end EqualCustodyPlacementAudit

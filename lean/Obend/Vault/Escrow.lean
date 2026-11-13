@@ -419,12 +419,6 @@ def trivialLaw : LawExpr := .eqR .turn .turn
 @[expose] def inRange (field : String) (values : List Int) : LawExpr := .inC (.field field) values
 @[expose] def leField (left right : String) (offset : Int := 0) : LawExpr := .leROff (.field left) (.field right) offset
 
-/-- Non-trivial enforced `LawExpr` for `escrowKindCell`:
-    `monotone "settled" && inRange "statusA" [0, 1, 2] && inRange "statusB" [0, 1, 2]`. -/
-@[expose] def escrowLaw : LawExpr :=
-  .and (monotone "settled")
-    (.and (inRange "statusA" [0, 1, 2]) (inRange "statusB" [0, 1, 2]))
-
 /-- Non-trivial enforced `LawExpr` for `prepaidLeaseKindCell`:
     `monotone "dischargedCount" && monotone "drawn" && leField "drawn" "budget" 0 && writeOnce "budget" && writeOnce "rent"`. -/
 @[expose] def prepaidLeaseLaw : LawExpr :=
@@ -432,24 +426,6 @@ def trivialLaw : LawExpr := .eqR .turn .turn
     (.and (monotone "drawn")
       (.and (leField "drawn" "budget" 0)
         (.and (writeOnce "budget") (writeOnce "rent"))))
-
-def escrowKindCell : KindCell LawExpr where
-  name := "escrow"
-  version := 1
-  layout := ["termsDigest", "sideA_account", "sideA_asset", "sideA_amount", "sideA_status",
-             "sideB_account", "sideB_asset", "sideB_amount", "sideB_status", "timeout",
-             "settled", "statusA", "statusB"]
-  init := .record [
-    ("termsDigest", .natural 0),
-    ("sideA_amount", .natural 0),
-    ("sideB_amount", .natural 0),
-    ("timeout", .natural 0),
-    ("settled", .natural 0),
-    ("statusA", .natural 0),
-    ("statusB", .natural 0)
-  ]
-  law := escrowLaw
-  parents := []
 
 def prepaidLeaseKindCell : KindCell LawExpr where
   name := "prepaidLease"
@@ -529,9 +505,6 @@ def escrowSettledTag (st : EscrowState) : Nat :=
                 (.field "remaining" .natural
                   (.field "drawn" .natural .emptyRow))))))))
 
-@[simp] theorem escrowStateToData_fits (st : EscrowState) :
-    Fits escrowStateTy escrowLaw (escrowStateToData st) = true := rfl
-
 @[simp] theorem leaseStateToData_fits (t : LeaseTerms) (st : LeaseState) :
     Fits leaseStateTy prepaidLeaseLaw (leaseStateToData t st) = true := rfl
 
@@ -581,9 +554,19 @@ def inRange012T (x : Term) : Term :=
 def legPaidT (status amount paid : Term) : Term :=
   .ifBool (eqNat status (natT 2)) (eqNat paid amount) (eqNat paid (natT 0))
 
+/-- Received value is exactly paid value; an empty leg cannot receive anything. -/
+def recvBalanceT (state : Term) : Term :=
+  andT (eqNat (addNat (.get state "recvA") (.get state "recvB"))
+    (addNat (.get state "paidA") (.get state "paidB")))
+    (andT (.ifBool (eqNat (.get state "statusA") (natT 0))
+      (eqNat (.get state "recvA") (natT 0)) trueT)
+      (.ifBool (eqNat (.get state "statusB") (natT 0))
+        (eqNat (.get state "recvB") (natT 0)) trueT))
+
 def escrowBalanceT (state : Term) : Term :=
   andT (legPaidT (.get state "statusA") (.get state "sideA_amount") (.get state "paidA"))
-       (legPaidT (.get state "statusB") (.get state "sideB_amount") (.get state "paidB"))
+       (andT (legPaidT (.get state "statusB") (.get state "sideB_amount") (.get state "paidB"))
+         (recvBalanceT state))
 
 /-- Status validity and exact per-leg funded conservation. -/
 def escrowInvariant : Term :=
@@ -653,12 +636,14 @@ def fundedLegT (old new : Term) (status amount : String) : Term :=
       (eqNat (.get old amount) (.get new amount)))
 
 def escrowCondT : Term :=
-  andT (leNat (.get (.bound 2) "settled") (.get (.bound 1) "settled"))
+  andT (andT (leNat (.get (.bound 2) "recvA") (.get (.bound 1) "recvA"))
+    (leNat (.get (.bound 2) "recvB") (.get (.bound 1) "recvB")))
+  (andT (leNat (.get (.bound 2) "settled") (.get (.bound 1) "settled"))
     (andT (andT (leNat (.get (.bound 2) "paidA") (.get (.bound 1) "paidA"))
       (leNat (.get (.bound 2) "paidB") (.get (.bound 1) "paidB")))
       (andT (escrowBalanceT (.bound 1))
         (andT (fundedLegT (.bound 2) (.bound 1) "statusA" "sideA_amount")
-          (fundedLegT (.bound 2) (.bound 1) "statusB" "sideB_amount"))))
+          (fundedLegT (.bound 2) (.bound 1) "statusB" "sideB_amount")))))
 
 def escrowStepBody : Term := guard escrowCondT "escrowLaw" okT
 
@@ -679,6 +664,21 @@ def prepaidLeaseStepBody : Term := guard prepaidLeaseCondT "prepaidLeaseLaw" okT
 /-- Proof-carrying inductive `CellContract` for `SealedEscrow` with non-trivial `escrowInvariant` (`0 Classical.choice`). -/
 def escrowCellContract : CellContract :=
   mkGuardedStepCellContract escrowInvariant escrowInvariant_closed "escrowLaw" escrowStepBody
+
+/-- Registered admission uses the very same executable predicate as the proved contract. -/
+def escrowLaw : Term := escrowCellContract.law
+
+def escrowKindCell : KindCell Term where
+  name := "escrow"
+  version := 2
+  layout := ["settled", "statusA", "statusB", "sideA_amount", "sideB_amount",
+    "paidA", "paidB", "recvA", "recvB"]
+  init := escrowStateToData openedEscrow
+  law := escrowLaw
+  parents := []
+
+theorem escrowKindCell_admits_iff (old new req : Data) :
+    Admits escrowKindCell.law old new req ↔ Admits escrowCellContract.law old new req := Iff.rfl
 
 /-- Proof-carrying inductive `CellContract` for `PrepaidLease` with non-trivial `prepaidLeaseInvariant` (`0 Classical.choice`). -/
 def prepaidLeaseCellContract : CellContract :=
@@ -810,11 +810,34 @@ def fundedLegB (st st' : EscrowState) (side : Side) : Bool :=
     (if (st.status side).toNat == 0 then decide ((st'.status side).toNat ≤ 1)
       else st.amount side == st'.amount side)
 
+def recvBalanceB (st : EscrowState) : Bool :=
+  (recvTotal st == paidTotal st) &&
+    ((if (st.status .A).toNat == 0 then st.recv .A == 0 else true) &&
+     (if (st.status .B).toNat == 0 then st.recv .B == 0 else true))
+
+theorem recvBalanceB_iff (st : EscrowState) : recvBalanceB st = true ↔
+    recvTotal st = paidTotal st ∧ (∀ side, st.status side = .empty → st.recv side = 0) := by
+  simp only [recvBalanceB, Bool.and_eq_true, beq_iff_eq]
+  constructor
+  · intro h
+    refine ⟨h.1, ?_⟩
+    intro side hs
+    cases side
+    · simpa [hs, LegStatus.toNat] using h.2.1
+    · simpa [hs, LegStatus.toNat] using h.2.2
+  · rintro ⟨hb, hp⟩
+    refine ⟨hb, ?_, ?_⟩
+    · cases hs : st.status .A <;> simp [LegStatus.toNat]
+      exact hp .A hs
+    · cases hs : st.status .B <;> simp [LegStatus.toNat]
+      exact hp .B hs
+
 def escrowVerdictBool (st st' : EscrowState) : Bool :=
-  decide (escrowSettledTag st ≤ escrowSettledTag st') &&
+  (decide (st.recv .A ≤ st'.recv .A) && decide (st.recv .B ≤ st'.recv .B)) &&
+  (decide (escrowSettledTag st ≤ escrowSettledTag st') &&
     ((decide (st.paid .A ≤ st'.paid .A) && decide (st.paid .B ≤ st'.paid .B)) &&
-      ((legPaidB st' .A && legPaidB st' .B) &&
-        (fundedLegB st st' .A && fundedLegB st st' .B)))
+      ((legPaidB st' .A && (legPaidB st' .B && recvBalanceB st')) &&
+        (fundedLegB st st' .A && fundedLegB st st' .B))))
 
 theorem ev_legPaidT {status amount paid : Term} (s : LegStatus) (a p : Nat)
     (hs : Evaluates status (.nat s.toNat)) (ha : Evaluates amount (.nat a))
@@ -825,17 +848,40 @@ theorem ev_legPaidT {status amount paid : Term} (s : LegStatus) (a p : Nat)
   refine evaluates_ifBool (ev_eqNat hs (evaluates_self (.natural 2))) ?_
   cases s <;> first | exact ev_eqNat hp ha | exact ev_eqNat hp (evaluates_self (.natural 0))
 
+theorem ev_addNat {l r : Term} {a b : Nat}
+    (hl : Evaluates l (.nat a)) (hr : Evaluates r (.nat b)) :
+    Evaluates (addNat l r) (.nat (a + b)) := by
+  unfold addNat
+  refine evaluates_steps (steps_binaryLeft hl.1) ?_
+  refine evaluates_steps (steps_binaryRight (.natural a) hr.1) ?_
+  exact evaluates_step (.primitive .add _ _ _ (.natural a) (.natural b) rfl)
+    (evaluates_self (.natural _))
+
+theorem ev_recvBalanceT (st : EscrowState) :
+    Evaluates (recvBalanceT (escrowStateToData st).term) (.boolean (recvBalanceB st)) := by
+  unfold recvBalanceT recvBalanceB recvTotal paidTotal
+  refine ev_andT (ev_eqNat (ev_addNat (ev_get_nat rfl) (ev_get_nat rfl))
+    (ev_addNat (ev_get_nat rfl) (ev_get_nat rfl))) (ev_andT ?_ ?_)
+  all_goals
+    refine evaluates_ifBool (ev_eqNat (ev_get_nat rfl) (evaluates_self (.natural 0))) ?_
+    split
+    · exact ev_eqNat (ev_get_nat rfl) (evaluates_self (.natural 0))
+    · exact evaluates_self (.boolean true)
+
 theorem escrowStepBody_eval (st st' : EscrowState) (rq : Data) :
     Evaluates (escrowStepBody.substitute (lawEnv (escrowStateToData st).term (escrowStateToData st').term rq.term))
       (verdictOfBool "escrowLaw" (escrowVerdictBool st st')) := by
-  unfold escrowStepBody escrowCondT escrowBalanceT fundedLegT legPaidT
+  unfold escrowStepBody escrowCondT escrowBalanceT recvBalanceT fundedLegT legPaidT
   simp only [subst_guard, subst_okT, subst_andT, subst_leNat, subst_ifBool, subst_eqNat,
-    subst_natT, subst_trueT, subst_falseT, subst_get, subst_bound]
-  refine ev_guard_okT (ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl)) ?_)
+    subst_natT, subst_trueT, subst_falseT, subst_get, subst_bound, subst_addNat]
+  refine ev_guard_okT (ev_andT (ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))
+    (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))) ?_)
+  refine (ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl)) ?_)
   refine ev_andT (ev_andT (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))
     (ev_leNat (ev_get_nat rfl) (ev_get_nat rfl))) ?_
   refine ev_andT (ev_andT (ev_legPaidT _ _ _ (ev_get_nat rfl) (ev_get_nat rfl) (ev_get_nat rfl))
-    (ev_legPaidT _ _ _ (ev_get_nat rfl) (ev_get_nat rfl) (ev_get_nat rfl))) ?_
+    (ev_andT (ev_legPaidT _ _ _ (ev_get_nat rfl) (ev_get_nat rfl) (ev_get_nat rfl))
+      (ev_recvBalanceT st'))) ?_
   have leg (side : Side) (status amount : String)
       (ho : Evaluates (.get (escrowStateToData st).term status) (.nat (st.status side).toNat))
       (hn : Evaluates (.get (escrowStateToData st').term status) (.nat (st'.status side).toNat))
@@ -861,13 +907,16 @@ theorem escrowCellContract_conserves_funded_value (st st' : EscrowState) (req : 
     (h : Admits escrowCellContract.law (escrowStateToData st) (escrowStateToData st') req) :
     (∀ side, st'.paid side + locked st' side = entered st' side) ∧
     (∀ side, st.status side ≠ .empty → st'.amount side = st.amount side) ∧
-    paidTotal st' + lockedTotal st' = enteredTotal st' := by
+    paidTotal st' + lockedTotal st' = enteredTotal st' ∧
+    recvTotal st' = paidTotal st' ∧
+    (∀ side, st'.status side = .empty → st'.recv side = 0) := by
   have hs := guardedLaw_admits_imp_stepRel escrowInvariant_closed h
   have hv := (verdictOfBool_iff (escrowStepBody_eval st st' req)).1.1 hs
   simp only [escrowVerdictBool, Bool.and_eq_true] at hv
+  have hv := hv.2
   have hc : ∀ side, st'.paid side + locked st' side = entered st' side := by
     intro side
-    have hp : legPaidB st' side = true := by cases side <;> first | exact hv.2.2.1.1 | exact hv.2.2.1.2
+    have hp : legPaidB st' side = true := by cases side <;> first | exact hv.2.2.1.1 | exact hv.2.2.1.2.1
     unfold legPaidB at hp
     unfold locked entered
     cases he : st'.status side <;> simp [he] at hp ⊢ <;> omega
@@ -880,10 +929,32 @@ theorem escrowCellContract_conserves_funded_value (st st' : EscrowState) (req : 
     have heq := hf.2
     simp only [beq_eq_false_iff_ne.mpr hn0, Bool.false_eq_true, ↓reduceIte, beq_iff_eq] at heq
     exact heq.symm
-  · have ha := hc .A
+  · refine ⟨?_, (recvBalanceB_iff st').mp hv.2.2.1.2.2⟩
+    have ha := hc .A
     have hb := hc .B
     unfold paidTotal lockedTotal enteredTotal
     omega
+
+theorem escrowCellContract_preserves_EscrowInv (st st' : EscrowState) (req : Data)
+    (h : Admits escrowCellContract.law (escrowStateToData st) (escrowStateToData st') req) :
+    EscrowInv st' := by
+  have hc := escrowCellContract_conserves_funded_value st st' req h
+  exact ⟨hc.1, hc.2.2.2.1, hc.2.2.2.2⟩
+
+/-- Admission cannot erase either participant's already received credit. -/
+theorem escrowCellContract_recv_monotone (st st' : EscrowState) (req : Data)
+    (h : Admits escrowCellContract.law (escrowStateToData st) (escrowStateToData st') req) :
+    st.recv .A ≤ st'.recv .A ∧ st.recv .B ≤ st'.recv .B := by
+  have hs := guardedLaw_admits_imp_stepRel escrowInvariant_closed h
+  have hv := (verdictOfBool_iff (escrowStepBody_eval st st' req)).1.1 hs
+  simp only [escrowVerdictBool, Bool.and_eq_true, decide_eq_true_eq] at hv
+  exact hv.1
+
+theorem escrowCellContract_refuses_phantom_recv (st st' : EscrowState) (req : Data)
+    (hphantom : recvTotal st' ≠ paidTotal st') :
+    ¬ Admits escrowCellContract.law (escrowStateToData st) (escrowStateToData st') req := by
+  intro h
+  exact hphantom (escrowCellContract_preserves_EscrowInv st st' req h).balance
 
 /-- An empty leg must be funded before it can be consumed. -/
 theorem escrowCellContract_refuses_skipped_deposit (st st' : EscrowState) (req : Data)
@@ -893,6 +964,7 @@ theorem escrowCellContract_refuses_skipped_deposit (st st' : EscrowState) (req :
   have hs := guardedLaw_admits_imp_stepRel escrowInvariant_closed h
   have hv := (verdictOfBool_iff (escrowStepBody_eval st st' req)).1.1 hs
   simp only [escrowVerdictBool, Bool.and_eq_true] at hv
+  have hv := hv.2
   have hf : fundedLegB st st' side = true := by
     cases side <;> first | exact hv.2.2.2.1 | exact hv.2.2.2.2
   simp [fundedLegB, he, hc, LegStatus.toNat] at hf
@@ -946,23 +1018,25 @@ theorem holds_escrowInvariant (st : EscrowState) (h : EscrowInv st) :
     Holds escrowInvariant (escrowStateToData st) := by
   unfold Holds escrowInvariant
   refine evaluates_step (.beta _ (escrowStateToData st).term) ?_
-  unfold instantiate escrowBalanceT legPaidT inRange012T
+  unfold instantiate escrowBalanceT recvBalanceT legPaidT inRange012T
   simp only [subst_andT, subst_ifBool, subst_eqNat, subst_natT, subst_trueT, subst_falseT,
-    subst_get, subst_bound]
+    subst_get, subst_bound, subst_addNat]
   have hA := legPaidB_of_inv st h .A
   have hB := legPaidB_of_inv st h .B
+  have hr := (recvBalanceB_iff st).mpr ⟨h.balance, h.participate⟩
   have hev : Evaluates
       (andT (inRange012T (.get (escrowStateToData st).term "statusA"))
         (andT (inRange012T (.get (escrowStateToData st).term "statusB"))
           (escrowBalanceT (escrowStateToData st).term)))
       (.boolean (((st.status .A).toNat == 0 || ((st.status .A).toNat == 1 || (st.status .A).toNat == 2)) &&
         (((st.status .B).toNat == 0 || ((st.status .B).toNat == 1 || (st.status .B).toNat == 2)) &&
-          (legPaidB st .A && legPaidB st .B)))) :=
+          (legPaidB st .A && (legPaidB st .B && recvBalanceB st))))) :=
     ev_andT (ev_inRange012T (ev_get_nat rfl))
       (ev_andT (ev_inRange012T (ev_get_nat rfl))
         (ev_andT (ev_legPaidT _ _ _ (ev_get_nat rfl) (ev_get_nat rfl) (ev_get_nat rfl))
-          (ev_legPaidT _ _ _ (ev_get_nat rfl) (ev_get_nat rfl) (ev_get_nat rfl))))
-  simpa only [legStatus_inRange012, hA, hB, Bool.and_self, inRange012T, escrowBalanceT, legPaidT] using hev
+          (ev_andT (ev_legPaidT _ _ _ (ev_get_nat rfl) (ev_get_nat rfl) (ev_get_nat rfl))
+            (ev_recvBalanceT st))))
+  simpa only [legStatus_inRange012, hA, hB, hr, Bool.and_self, inRange012T, escrowBalanceT, recvBalanceT, legPaidT] using hev
 
 theorem holds_prepaidLeaseInvariant (t : LeaseTerms) (st : LeaseState)
     (hdrawn : st.drawn ≤ t.budget) (hrem : st.remaining ≤ t.budget) :
@@ -989,26 +1063,6 @@ theorem escrowSettledTag_eq_zero_of_not_consumed {st : EscrowState} {s : Side}
     simp [hA]
   · have hB : (st.status .B == .consumed) = false := beq_false_of_ne h
     simp [hB]
-
-/-- Every valid `EscrowOp` transition satisfies the non-trivial `escrowLaw`. -/
-theorem escrowOp_satisfies_escrowLaw (facts : Facts) {st st' : EscrowState}
-    (hop : EscrowOp st st') :
-    escrowLaw.denote facts (some (escrowStateToData st)) (escrowStateToData st') = true := by
-  have hzero : escrowSettledTag st = 0 := by
-    cases hop with
-    | deposit s amt hempty =>
-        exact escrowSettledTag_eq_zero_of_not_consumed (by rw [hempty]; decide)
-    | settle hA _ =>
-        exact escrowSettledTag_eq_zero_of_not_consumed (by rw [hA]; decide)
-    | reclaim s hdep =>
-        exact escrowSettledTag_eq_zero_of_not_consumed (by rw [hdep]; decide)
-  have hA := legStatus_in_range (st'.status .A)
-  have hB := legStatus_in_range (st'.status .B)
-  have hle : decide ((Int.ofNat (escrowSettledTag st) : Int) ≤ Int.ofNat (escrowSettledTag st')) = true :=
-    decide_eq_true (by rw [hzero]; simp only [Int.ofNat_eq_natCast]; omega)
-  simp only [escrowLaw, monotone, inRange, LawExpr.denote, LawRef.read,
-    Option.bind_some, escrowStateToData_field_settled, escrowStateToData_field_statusA,
-    escrowStateToData_field_statusB, hle, hA, hB, Bool.and_self]
 
 /-- Every valid `EscrowOp` transition is admitted by `escrowCellContract` (both `law` and `stepRel`)
     and preserves `escrowCellContract.invariant` (`0 Classical.choice`). -/
@@ -1052,8 +1106,16 @@ theorem escrowOp_admitted_by_contract (facts : Facts) {st st' : EscrowState}
       cases side <;> simp [fundedLegB, hA, hB, LegStatus.toNat]
     | reclaim s hdep =>
       cases s <;> cases side <;> simp [fundedLegB, upd, hdep, LegStatus.toNat] <;> split <;> simp_all
+  have hrecv : ∀ side, st.recv side ≤ st'.recv side := by
+    intro side
+    cases hop with
+    | deposit _ _ _ => exact Nat.le_refl _
+    | settle _ _ => exact Nat.le_add_right _ _
+    | reclaim s _ => cases s <;> cases side <;> dsimp [upd] <;> omega
+  have hr := (recvBalanceB_iff st').mpr
+    ⟨(Op_preserves hop hin).balance, (Op_preserves hop hin).participate⟩
   have hv : escrowVerdictBool st st' = true := by
-    simp only [escrowVerdictBool, hle, hpaidA, hpaidB, legPaidB_of_inv st' (Op_preserves hop hin), hfund, Bool.and_self]
+    simp only [escrowVerdictBool, decide_eq_true (hrecv .A), decide_eq_true (hrecv .B), hr, hle, hpaidA, hpaidB, legPaidB_of_inv st' (Op_preserves hop hin), hfund, Bool.and_self]
   have hstep : Admits escrowCellContract.stepRel (escrowStateToData st) (escrowStateToData st')
       (reqOf ag pr nb vu writeO facts) :=
     (verdictOfBool_iff (escrowStepBody_eval st st' _)).1.2 hv
@@ -1063,6 +1125,12 @@ theorem escrowOp_admitted_by_contract (facts : Facts) {st st' : EscrowState}
       (reqOf ag pr nb vu writeO facts) :=
     guardedLaw_admits_of_holds_and_step escrowInvariant_closed hinv hstep
   exact ⟨hlaw, hstep, hinv⟩
+
+theorem escrowOp_satisfies_escrowLaw (facts : Facts) {st st' : EscrowState}
+    (hop : EscrowOp st st') (ag pr : String) (nb vu : Nat) (hin : EscrowInv st) :
+    Admits escrowKindCell.law (escrowStateToData st) (escrowStateToData st')
+      (reqOf ag pr nb vu writeO facts) :=
+  (escrowOp_admitted_by_contract facts hop ag pr nb vu hin).1
 
 /-- A real funded deposit inhabits the strengthened executable contract. -/
 theorem escrowCellContract_inhabited (facts : Facts) :
@@ -1236,7 +1304,7 @@ theorem escrow_rollback_contract_refused (facts : Facts) (st st' : EscrowState)
   have hnotleNat : decide (escrowSettledTag st ≤ escrowSettledTag st') = false :=
     decide_eq_false (by rw [hset, hunset]; decide)
   have hv : escrowVerdictBool st st' = false := by
-    simp only [escrowVerdictBool, hnotleNat, Bool.false_and]
+    simp only [escrowVerdictBool, hnotleNat, Bool.false_and, Bool.and_false]
   have href : Refuses escrowCellContract.stepRel (escrowStateToData st) (escrowStateToData st')
       (reqOf ag pr nb vu writeO facts) "escrowLaw" :=
     (verdictOfBool_iff (escrowStepBody_eval st st' _)).2.2 hv
@@ -1249,23 +1317,13 @@ theorem escrow_rollback_contract_refused (facts : Facts) (st st' : EscrowState)
     exact absurd hlbl (by decide)
   exact ⟨href, hnotadm⟩
 
-/-- **Refusal Tooth 3 (Escrow `settled` Rollback)**:
-    Rolling back a settled escrow (`settled = 1`) to an unsettled state (`settled = 0`) is refused
-    by `escrowLaw` and rejected by `escrowCellContract`. -/
+/-- Registered kind admission refuses rollback through the same proved contract. -/
 theorem escrow_unsettled_rollback_refused (facts : Facts) (st st' : EscrowState)
     (hset : escrowSettledTag st = 1) (hunset : escrowSettledTag st' = 0)
     (ag pr : String) (nb vu : Nat) :
-    escrowLaw.denote facts (some (escrowStateToData st)) (escrowStateToData st') = false ∧
-    Refuses escrowCellContract.stepRel (escrowStateToData st) (escrowStateToData st')
-      (reqOf ag pr nb vu writeO facts) "escrowLaw" ∧
-    ¬ Admits escrowCellContract.law (escrowStateToData st) (escrowStateToData st')
-      (reqOf ag pr nb vu writeO facts) := by
-  have hnotle : decide ((Int.ofNat (escrowSettledTag st) : Int) ≤ Int.ofNat (escrowSettledTag st')) = false :=
-    decide_eq_false (by rw [hset, hunset]; decide)
-  have hden : escrowLaw.denote facts (some (escrowStateToData st)) (escrowStateToData st') = false := by
-    simp only [escrowLaw, monotone, inRange, LawExpr.denote, LawRef.read,
-      Option.bind_some, escrowStateToData_field_settled, hnotle, Bool.false_and]
-  exact ⟨hden, escrow_rollback_contract_refused facts st st' hset hunset ag pr nb vu⟩
+    ¬ Admits escrowKindCell.law (escrowStateToData st) (escrowStateToData st')
+      (reqOf ag pr nb vu writeO facts) :=
+  (escrow_rollback_contract_refused facts st st' hset hunset ag pr nb vu).2
 
 /-! ## 5. Coordination with Obend.Ledger.Book & VaultTurn -/
 

@@ -140,3 +140,14 @@ def test_doc_atom_noninterference : Bool :=
   (G1.label 3 == some hwCell)
 
 #guard test_doc_atom_noninterference == true
+
+namespace RouteFrameProjectionAudit
+open Obend.Vault.HardwareProjection
+open Obend.Core.Data
+
+example : match pnrLayoutToData projectionWitness with
+    | .record fs => (fs.find? (fun f => f.1 == "route_frame_commitment")).map Prod.snd =
+        some (dataSeq (fun b => .natural b.toNat) (pnrRouteFrameBytes projectionWitness))
+    | _ => False := by rfl
+
+end RouteFrameProjectionAudit

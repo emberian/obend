@@ -2712,16 +2712,33 @@ def encodeCapTableBytes (nonce : Nat) (tbl : CapTable) : Bytes :=
       Obend.Crypto.leb128 e.index ++ Obend.Crypto.leb128 e.token.slotId ++
       Obend.Crypto.leb128 e.token.custodyId ++ Obend.Crypto.encodeListField e.token.badge)
 
+/-- Canonical data codec preserves constructor tags, payloads, field order and cap positions. -/
+def dataWireBytes (wire : DataWire) : Bytes :=
+  Obend.Vault.ChunkedWorld.cData.enc wire.toData
+
+theorem dataWireBytes_injective {a b : DataWire} (h : dataWireBytes a = dataWireBytes b) : a = b := by
+  have ha := Obend.Vault.ChunkedWorld.cData.roundtrip a.toData []
+  have hb := Obend.Vault.ChunkedWorld.cData.roundtrip b.toData []
+  change Obend.Vault.ChunkedWorld.cData.enc a.toData =
+    Obend.Vault.ChunkedWorld.cData.enc b.toData at h
+  rw [h] at ha
+  have hd := (Prod.mk.inj (Option.some.inj (ha.symm.trans hb))).1
+  have hw := congrArg DataWire.ofData? hd
+  simpa only [DataWire.ofData_toData, Option.some.injEq] using hw
+
+/-- Unbounded length framing, shared with the transcript encoding. -/
+def frameBytes (bs : Bytes) : Bytes := Obend.Crypto.encodeListField bs
+
 /-- The authority key stays at the host; only its domain-bound seal crosses the wire. -/
-def capFramePreimage (sealKey : ByteArray) (epoch : UInt64) (nonce : Nat) (tbl : CapTable) : Bytes :=
-  "OBEND.VAULT.CAP_SEAL/v1".toUTF8.data.toList ++
+def capFramePreimage (sealKey : ByteArray) (epoch : UInt64) (nonce : Nat) (tbl : CapTable) (wire : DataWire) : Bytes :=
+  "OBEND.VAULT.CAP_SEAL/v2".toUTF8.data.toList ++
     Obend.Crypto.encodeListField sealKey.data.toList ++ Obend.Crypto.leb128 epoch.toNat ++
-    encodeCapTableBytes nonce tbl
+    frameBytes (dataWireBytes wire) ++ encodeCapTableBytes nonce tbl
 
 /-- A full-width seal; security is conditional on the keyed host hash, never on a fixture hash. -/
 def computeCapFrameSeal (Hb : Bytes → BitVec 256) (sealKey : ByteArray)
-    (epoch : UInt64) (nonce : Nat) (tbl : CapTable) : BitVec 256 :=
-  Hb (capFramePreimage sealKey epoch nonce tbl)
+    (epoch : UInt64) (nonce : Nat) (tbl : CapTable) (wire : DataWire) : BitVec 256 :=
+  Hb (capFramePreimage sealKey epoch nonce tbl wire)
 
 structure CapSealFrame where
   nonce : Nat
@@ -2732,9 +2749,9 @@ structure CapSealFrame where
 
 /-- Authenticate under the caller's authority and current epoch. -/
 def CapSealFrame.sealValid (Hb : Bytes → BitVec 256) (sealKey : ByteArray)
-    (expectedEpoch : UInt64) (frame : CapSealFrame) : Bool :=
+    (expectedEpoch : UInt64) (frame : CapSealFrame) (wire : DataWire) : Bool :=
   decide (sealKey.size = 32 ∧ frame.epoch = expectedEpoch ∧
-    frame.sealBytes = computeCapFrameSeal Hb sealKey frame.epoch frame.nonce frame.table)
+    frame.sealBytes = computeCapFrameSeal Hb sealKey frame.epoch frame.nonce frame.table wire)
 
 /-- Return the first repeated slot, rather than allowing capability shadowing. -/
 def duplicateSlot : List Nat → Option Nat
@@ -2864,7 +2881,7 @@ def dehydrate (Hb : Bytes → BitVec 256) (sealKey : ByteArray) (epoch : UInt64)
     | some slot => .error (.missingOrDuplicateSlot slot)
     | none =>
       let tbl : CapTable := ⟨entries⟩
-      .ok (wire, ⟨nonce, epoch, tbl, computeCapFrameSeal Hb sealKey epoch nonce tbl⟩)
+      .ok (wire, ⟨nonce, epoch, tbl, computeCapFrameSeal Hb sealKey epoch nonce tbl wire⟩)
   | .ok (_, leftover :: _, _) => .error (.droppedCustody leftover.slotId)
 
 mutual
@@ -2906,7 +2923,7 @@ end
 /-- **Rehydrate on `.perform` resume**: verifies seal, reconstructs `(TVal, CustodyEnv)` linearly. -/
 def rehydrate (Hb : Bytes → BitVec 256) (sealKey : ByteArray) (expectedEpoch : UInt64)
     (wire : DataWire) (frame : CapSealFrame) : Except TransferRefusal (TVal × CustodyEnv) :=
-  if !frame.sealValid Hb sealKey expectedEpoch then .error .unsealedFrame
+  if !frame.sealValid Hb sealKey expectedEpoch wire then .error .unsealedFrame
   else if !indexedFromBool 0 frame.table.entries then .error .malformedCapTable
   else
     match duplicateSlot (frame.table.entries.map (·.token.slotId)) with
@@ -3094,7 +3111,7 @@ theorem dehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : 
     key.size = 32 ∧ dehydrateVal 0 v src.tokens = .ok (wire, [], frame.table.entries) ∧
     duplicateSlot (frame.table.entries.map (·.token.slotId)) = none ∧
     frame.nonce = nonce ∧ frame.epoch = epoch ∧
-    frame.sealBytes = computeCapFrameSeal Hb key epoch nonce frame.table := by
+    frame.sealBytes = computeCapFrameSeal Hb key epoch nonce frame.table wire := by
   unfold dehydrate at h
   split at h
   · cases h
@@ -3117,14 +3134,14 @@ theorem dehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : 
 theorem rehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : UInt64}
     {wire : DataWire} {frame : CapSealFrame} {v : TVal} {env : CustodyEnv}
     (h : rehydrate Hb key epoch wire frame = .ok (v, env)) :
-    frame.sealValid Hb key epoch = true ∧
+    frame.sealValid Hb key epoch wire = true ∧
     duplicateSlot (frame.table.entries.map (·.token.slotId)) = none ∧
     rehydrateVal frame.table.entries.length wire frame.table.entries = .ok (v, [], env.tokens) := by
   unfold rehydrate at h
   split at h
   · cases h
   · rename_i hs
-    have hs' : frame.sealValid Hb key epoch = true := by simpa using hs
+    have hs' : frame.sealValid Hb key epoch wire = true := by simpa using hs
     split at h
     · cases h
     · cases hd : duplicateSlot (frame.table.entries.map (·.token.slotId)) with
@@ -3151,7 +3168,7 @@ theorem rehydrate_dehydrate_roundtrip (Hb : Bytes → BitVec 256) (key : ByteArr
   obtain ⟨hk, hd, hn, hnonce, hepoch, hseal⟩ := dehydrate_ok_inv hDehyd
   obtain ⟨hind, hp, _, hr⟩ := dehydrateVal_spec v 0 srcEnv.tokens [] wire frame.table.entries hd
   rw [List.append_nil] at hp
-  have hs : frame.sealValid Hb key epoch = true := by
+  have hs : frame.sealValid Hb key epoch wire = true := by
     simp [CapSealFrame.sealValid, hk, hepoch, hnonce, hseal]
   have hr' := hr frame.table.entries.length [] (by omega)
   rw [List.append_nil] at hr'
@@ -3199,34 +3216,36 @@ theorem rehydrate_binds_sealKey_epoch_or_collision
     (h₁ : rehydrate Hb key₁ epoch₁ wire₁ frame₁ = .ok (v₁, env₁))
     (h₂ : rehydrate Hb key₂ epoch₂ wire₂ frame₂ = .ok (v₂, env₂))
     (hseal : frame₁.sealBytes = frame₂.sealBytes) :
-    (key₁ = key₂ ∧ epoch₁ = epoch₂) ∨
+    (key₁ = key₂ ∧ epoch₁ = epoch₂ ∧ wire₁ = wire₂) ∨
       ∃ a b : Bytes, a ≠ b ∧ Hb a = Hb b := by
   have hs₁ := (rehydrate_ok_inv h₁).1
   have hs₂ := (rehydrate_ok_inv h₂).1
   simp only [CapSealFrame.sealValid, decide_eq_true_eq] at hs₁ hs₂
-  have he : computeCapFrameSeal Hb key₁ frame₁.epoch frame₁.nonce frame₁.table =
-      computeCapFrameSeal Hb key₂ frame₂.epoch frame₂.nonce frame₂.table :=
+  have he : computeCapFrameSeal Hb key₁ frame₁.epoch frame₁.nonce frame₁.table wire₁ =
+      computeCapFrameSeal Hb key₂ frame₂.epoch frame₂.nonce frame₂.table wire₂ :=
     hs₁.2.2.symm.trans (hseal.trans hs₂.2.2)
-  by_cases hp : capFramePreimage key₁ frame₁.epoch frame₁.nonce frame₁.table =
-      capFramePreimage key₂ frame₂.epoch frame₂.nonce frame₂.table
-  · unfold capFramePreimage at hp
+  by_cases hp : capFramePreimage key₁ frame₁.epoch frame₁.nonce frame₁.table wire₁ =
+      capFramePreimage key₂ frame₂.epoch frame₂.nonce frame₂.table wire₂
+  · unfold capFramePreimage frameBytes at hp
     simp only [List.append_assoc, List.append_cancel_left_eq] at hp
     obtain ⟨hk, ht⟩ := Obend.Crypto.encodeListField_prefix_inj hp
-    obtain ⟨hepoch, _⟩ := Obend.Crypto.leb128_prefix_inj ht
+    obtain ⟨hepoch, ht⟩ := Obend.Crypto.leb128_prefix_inj ht
+    obtain ⟨hw, _⟩ := Obend.Crypto.encodeListField_prefix_inj ht
     exact .inl ⟨Obend.Crypto.byteArray_eq_of_toList_eq hk,
-      hs₁.2.1.symm.trans ((UInt64.toNat_inj.mp hepoch).trans hs₂.2.1)⟩
+      hs₁.2.1.symm.trans ((UInt64.toNat_inj.mp hepoch).trans hs₂.2.1),
+      dataWireBytes_injective hw⟩
   · exact .inr ⟨_, _, hp, he⟩
 
 theorem forged_cap_index_refused (Hb : Bytes → BitVec 256) (key : ByteArray)
-    (epoch : UInt64) (frame : CapSealFrame)
-    (hSeal : frame.sealValid Hb key epoch = true) (hIdx : indexedFromBool 0 frame.table.entries = true)
+    (epoch : UInt64) (frame : CapSealFrame) (idx custodyId : Nat)
+    (hSeal : frame.sealValid Hb key epoch (.sealedCap idx custodyId) = true) (hIdx : indexedFromBool 0 frame.table.entries = true)
     (hSlots : duplicateSlot (frame.table.entries.map (·.token.slotId)) = none)
-    (idx custodyId : Nat) (hForged : idx ≥ frame.table.entries.length) :
+    (hForged : idx ≥ frame.table.entries.length) :
     rehydrate Hb key epoch (.sealedCap idx custodyId) frame = .error (.forgedCapIndex idx) := by
   simp [rehydrate, hSeal, hIdx, hSlots, rehydrateVal, hForged]
 
 theorem unsealed_frame_refused (Hb : Bytes → BitVec 256) (key : ByteArray) (epoch : UInt64)
-    (wire : DataWire) (frame : CapSealFrame) (hBad : frame.sealValid Hb key epoch = false) :
+    (wire : DataWire) (frame : CapSealFrame) (hBad : frame.sealValid Hb key epoch wire = false) :
     rehydrate Hb key epoch wire frame = .error .unsealedFrame := by simp [rehydrate, hBad]
 
 theorem stale_epoch_refused (Hb : Bytes → BitVec 256) (key : ByteArray) (epoch : UInt64)
@@ -3265,7 +3284,7 @@ def sampleRoundtripCheck : Bool :=
   match dehydrate sampleIdentityHash sampleSealKey 9 42 sampleCustodyEnv samplePlanVal with
   | .ok (wire, frame) =>
     DataWire.ofData? wire.toData == some wire &&
-    frame.sealValid sampleIdentityHash sampleSealKey 9 &&
+    frame.sealValid sampleIdentityHash sampleSealKey 9 wire &&
     indexedFromBool 0 frame.table.entries &&
     match rehydrate sampleIdentityHash sampleSealKey 9 wire frame with
     | .ok (v', env') => v' == samplePlanVal && env' == sampleCustodyEnv
@@ -3294,7 +3313,7 @@ theorem transfer_inhabited :
   let wire : DataWire := .variant "transferSturdyref"
     (.record [("badgeCap", .sealedCap 0 1), ("coReceipt", .sealedCap 1 2), ("epoch", .natural 9)])
   let table : CapTable := ⟨[⟨0, ⟨10, 1, [0xaa, 0xbb]⟩⟩, ⟨1, ⟨20, 2, [0xcc, 0xdd]⟩⟩]⟩
-  let frame : CapSealFrame := ⟨42, 9, table, computeCapFrameSeal sampleIdentityHash sampleSealKey 9 42 table⟩
+  let frame : CapSealFrame := ⟨42, 9, table, computeCapFrameSeal sampleIdentityHash sampleSealKey 9 42 table wire⟩
   have hd : dehydrate sampleIdentityHash sampleSealKey 9 42 sampleCustodyEnv samplePlanVal =
       .ok (wire, frame) := by
     simp [dehydrate, sampleSealKey, ByteArray.size, sampleCustodyEnv, samplePlanVal,
