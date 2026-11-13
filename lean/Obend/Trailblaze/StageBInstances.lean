@@ -3640,6 +3640,13 @@ example : (runDeltaReductions
     (lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer")
     [(7, 6), (8, 3), (8, 4)]).isSome = true := by decide +kernel
 
+example : let net := lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer"
+    let first := (reduceDeltaPair net 7 6).getD net
+    (eraseDeltaPair first 8 3).isSome = true := by decide +kernel
+example : let net := lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer"
+    let first := (reduceDeltaPair net 7 6).getD net
+    checkNetPortLinearity ((eraseDeltaPair first 8 3).getD net) = true := by decide +kernel
+
 theorem memberReduction_inhabited : ∃ out,
     runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer")
       [(7, 6), (8, 3), (8, 4), (3, 5)] = some out ∧ checkDeltaNormalForm out 42 = true := by
