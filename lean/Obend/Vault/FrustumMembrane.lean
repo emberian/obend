@@ -1,8 +1,9 @@
 module
+import all Obend.Polis.BlumRam
 /- Capability reachability, sealed-slot binding and ideal-oracle salt hiding, living screenshot
 cuts, confined replay and atomic conserving regraft. ROM hiding is separate from cSHAKE binding. -/
 public import Obend.Vault.Form
-public import Obend.Polis.VerkleUmem
+public import Obend.Polis.BlumRam
 public section
 namespace Obend.Vault.FrustumMembrane
 set_option autoImplicit false

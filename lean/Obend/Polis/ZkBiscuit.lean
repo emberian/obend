@@ -1,4 +1,5 @@
 module
+import all Obend.Polis.BlumRam
 /-
 # Obend.Polis.ZkBiscuit — attenuation chains folded into a constant-size accumulator, revocation, pinned inputs
 
@@ -25,7 +26,7 @@ and `authorize` is the constant-time check a verifier runs on that output.
    `pinned_injective` is unconditional; `bindTurn_binds_or_collides` is the hashed form.
 -/
 public import Obend.Polis.EvidencedOcap
-public import Obend.Polis.VerkleUmem
+public import Obend.Polis.BlumRam
 
 public section
 namespace Obend.Polis

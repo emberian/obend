@@ -1,6 +1,8 @@
+import all Obend.Polis.BlumRam
+import all Obend.Vault.Log
 import Obend.Polis.EvidencedOcap
 import Obend.Polis.ZkBiscuit
-import Obend.Polis.VerkleUmem
+import Obend.Polis.BlumRam
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
@@ -376,5 +378,8 @@ example (r : ByteArray) (addr v₁ v₂ : UInt64) (p₁ p₂ : Array (Array Byte
 -- A node hash that drops the running tag.
 #tooth Obend.Polis.verifyOpening_binds by mutation
   Obend.Polis.insertAt := fun _ _ sibs => sibs
+
+#tooth Obend.Polis.verifyOpening_inhabited by mutation
+  Obend.Polis.verifyOpening := fun _ _ _ _ => false
 
 end Obend.Tests.PolisZkOcapVerkleTest

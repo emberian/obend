@@ -1,4 +1,9 @@
-import Obend.Vault.VerkleSnapshotBridge
+import all Obend.Polis.BlumRam
+import all Obend.Vault.Log
+import all Obend.Vault.WorldTree
+import all Obend.Vault.Replay
+import Obend.Vault.Replay
+import Obend.Vault.WorldTree
 import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
@@ -336,5 +341,8 @@ example (w : Obend.Vault.ChunkedWorld.World) :
 #print axioms extractSnapshotRootBreak
 #print axioms extractSnapshotIndexBreak
 #print axioms extractDualChunkOpeningBreak
+
+#tooth Obend.Polis.verifyOpening_binds by mutation
+  Obend.Polis.insertAt := fun _ _ siblings => siblings
 
 end Obend.Tests.Metasystem.VerkleSnapshotBridgeTest

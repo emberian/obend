@@ -1,4 +1,5 @@
 module
+import all Obend.Vault.Log
 /-
 # Obend.Vault.Retention — the right to forget a prefix of the log, as a declared judgment
 
@@ -56,20 +57,6 @@ set_option autoImplicit false
 
 section Compact
 variable {W O : Type} (Hb : Bytes → Bytes) (M : Machine W O) (anchorOf : Bytes → Option Nat)
-
-/-- **Read a log that may be compacted**: when its first record follows genesis and its turn names an
-ANCHOR (`anchorOf`: a checkpoint record, standing for a forgotten prefix that ended at that receipt
-digest), the records after it follow the anchor; otherwise the log is read from genesis as ever
-(`parseFrom`). -/
-def parseLog (bs : Bytes) : List Record × Bytes × Option Drop :=
-  match parseOne Hb (some genesisSentinel) bs with
-  | .ok (r, rest) =>
-    match anchorOf r.payload with
-    | some a =>
-      let (qs, tail, why) := parseFrom Hb a rest
-      (r :: qs, tail, why)
-    | none => parseFrom Hb genesisSentinel bs
-  | .error _ => parseFrom Hb genesisSentinel bs
 
 /-- **Recover from a log that may be compacted**: replay what `parseLog` reads, from genesis. -/
 def recoverLog (w0 : W) (bs : Bytes) : Recovered W :=

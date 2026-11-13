@@ -1,4 +1,7 @@
 module
+import all Obend.Polis.BlumRam
+import all Obend.Vault.Log
+import all Obend.Vault.WorldTree
 /-
 # `tests/metasystem/DurableAndSvenvsTest.lean` — End-to-End Verification of Chasm C4 (`VaultDurableBridge` & `SvenvsCorrigibility`)
 
@@ -25,7 +28,7 @@ Exercises end-to-end across concrete instances and universal `#tooth` mutation c
      Tier-1 meta-amendment, and operator `revert`, instantiating `habitat_bedrock_is_eternal`,
      `override_iff_burned_bridge`, `PcaEnvelope` / `embodiedTurnSelect`, and universal `#tooth` checks.
 -/
-public import Obend.Run.VaultDurableBridge
+public import Obend.Vault.Replay
 public import Obend.Judge.SvenvsCorrigibility
 public import Obend.Judge.Genealogy
 public import Obend.Tactic.Tooth
@@ -41,7 +44,7 @@ import all Obend.Slot
 import all Obend.Receipt
 import all Obend.Vault.Rehydration
 import all Obend.Core.Data
-import all Obend.Run.VaultDurableBridge
+import all Obend.Vault.Replay
 import all Obend.Judge.SvenvsCorrigibility
 
 public section
@@ -640,11 +643,11 @@ def yieldCustodyEnv : CustodyEnv :=
   ⟨[⟨101, 7, [0xde, 0xad]⟩, ⟨202, 11, [0xbe, 0xef]⟩]⟩
 
 def checkCapTransferRoundtrip : Bool :=
-  match dehydrate sampleIdentityHash 99 yieldCustodyEnv yieldPlanVal with
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .ok (wire, frame) =>
     match DataWire.ofData? wire.toData with
     | some wireDecoded =>
-      match rehydrate sampleIdentityHash wireDecoded frame with
+      match rehydrate sampleIdentityHash sampleSealKey 9 wireDecoded frame with
       | .ok (v', env') =>
         v' == yieldPlanVal && env' == yieldCustodyEnv && frame.table.entries.length == 2
       | .error _ => false
@@ -659,18 +662,18 @@ theorem cap_transfer_roundtrip_passes :
   ⟨by decide, by decide, by decide, by decide⟩
 
 def forgedIndexRejected : Bool :=
-  match dehydrate sampleIdentityHash 99 yieldCustodyEnv yieldPlanVal with
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .ok (_, frame) =>
-    match rehydrate sampleIdentityHash (.sealedCap 2 7) frame with
+    match rehydrate sampleIdentityHash sampleSealKey 9 (.sealedCap 2 7) frame with
     | .error (.forgedCapIndex 2) => true
     | _ => false
   | .error _ => false
 
 def tamperedSealRejected : Bool :=
-  match dehydrate sampleIdentityHash 99 yieldCustodyEnv yieldPlanVal with
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .ok (wire, frame) =>
     let tampered := { frame with nonce := frame.nonce + 1 }
-    match rehydrate sampleIdentityHash wire tampered with
+    match rehydrate sampleIdentityHash sampleSealKey 9 wire tampered with
     | .error .unsealedFrame => true
     | _ => false
   | .error _ => false
@@ -678,9 +681,9 @@ def tamperedSealRejected : Bool :=
 theorem test_forged_and_tampered_refused :
     forgedIndexRejected = true ∧
     tamperedSealRejected = true ∧
-    dehydrate sampleIdentityHash 1 ⟨[⟨101, 7, [1]⟩]⟩
+    dehydrate sampleIdentityHash sampleSealKey 9 1 ⟨[⟨101, 7, [1]⟩]⟩
       (.record [("a", .cap 101 7), ("b", .cap 101 7)]) = .error (.missingOrDuplicateSlot 101) ∧
-    dehydrate sampleIdentityHash 1 yieldCustodyEnv (.natural 0) = .error (.droppedCustody 101) :=
+    dehydrate sampleIdentityHash sampleSealKey 9 1 yieldCustodyEnv (.natural 0) = .error (.droppedCustody 101) :=
   ⟨by decide, by decide, rfl, rfl⟩
 
 -- ============================================================================
@@ -776,7 +779,7 @@ example (ctrl : Nat → Nat) :
 -- ============================================================================
 
 #tooth Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip by mutation
-  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ => false
+  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ _ _ => false
 
 #tooth Obend.Run.VaultDurableBridge.forged_cap_index_refused by mutation
   Obend.Run.VaultDurableBridge.rehydrateVal := fun _ _ avail => .ok (.natural 0, avail, [])

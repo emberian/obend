@@ -1,4 +1,6 @@
 module
+import all Obend.Vault.Log
+import all Obend.Vault.Replay
 /-
 # Obend.Vault.Cli — `obend open` and the vault commands
 
@@ -129,9 +131,9 @@ it (`new.unresolved`, `new.unresolvedInserted`); a named file that is not there 
 public import Obend.Vault.Replay
 public import Obend.Vault.FormCheck
 public import Obend.Vault.Cost
-public import Obend.Vault.LogBytes
+public import Obend.Vault.Log
 public import Obend.Vault.DecodeCache
-public import Obend.Vault.SegmentLog
+public import Obend.Vault.Log
 public section
 
 namespace Obend.Vault.Cli

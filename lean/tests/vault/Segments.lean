@@ -1,4 +1,6 @@
-import Obend.Vault.SegmentLog
+import all Obend.Polis.BlumRam
+import all Obend.Vault.Log
+import Obend.Vault.Log
 
 open Obend.Vault.SegmentLog
 
