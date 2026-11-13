@@ -3633,6 +3633,13 @@ def checkDeltaNormalForm (net : DeltaNet) (value : Nat) : Bool :=
     | .con id tag => id == net.rootPort.nodeId && net.symbols[tag.toNat]? == some (.literal value)
     | _ => false)
 
+example : (runDeltaReductions
+    (lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer")
+    [(7, 6), (8, 3)]).isSome = true := by decide +kernel
+example : (runDeltaReductions
+    (lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer")
+    [(7, 6), (8, 3), (8, 4)]).isSome = true := by decide +kernel
+
 theorem memberReduction_inhabited : ∃ out,
     runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer")
       [(7, 6), (8, 3), (8, 4), (3, 5)] = some out ∧ checkDeltaNormalForm out 42 = true := by
@@ -4918,6 +4925,7 @@ theorem stepStageBCathedral_authority_persistent
         · cases hp : stepPolisSession st.polisState turn.polisTurn <;>
             cases hc : stepCathedralTrace st.cathedralState turn.cathedralTurn <;>
             simp_all
+          all_goals cases h; exact ⟨rfl, rfl, rfl⟩
 
 /-- Replay an arbitrary-length multi-turn 7-organ Cathedral trace `List StageBSevenOrganTurn`. -/
 def runStageBCathedralTrace
@@ -4952,15 +4960,15 @@ theorem runStageBCathedralTrace_authority_persistent
 
 /-- Revocation cannot be bypassed after any number of intervening accepted turns. -/
 theorem stageB_revocation_non_bypass
-    (init later : StageBSevenOrganState) (prefix : List StageBSevenOrganTurn)
+    (init later : StageBSevenOrganState) (history : List StageBSevenOrganTurn)
     (turn : StageBSevenOrganTurn) (pre ext : Array Obend.Polis.Block)
-    (hRun : runStageBCathedralTrace init prefix = some later)
+    (hRun : runStageBCathedralTrace init history = some later)
     (hHops : turn.biscuitHops = pre ++ ext)
     (hRevoked : init.biscuitRevoked.contains
       (Obend.Polis.credNul (Obend.Polis.lineageOf init.biscuitRoot pre.toList)) = true) :
     checkPinnedSessionAuthority later turn = false := by
-  obtain ⟨_, hr, hmono⟩ := runStageBCathedralTrace_authority_persistent init later prefix hRun
-  apply checkPinnedSessionAuthority_revoked_prefix later turn pre ext hHops
+  obtain ⟨_, hr, hmono⟩ := runStageBCathedralTrace_authority_persistent init later history hRun
+  apply checkPinnedSessionAuthority_revoked_history later turn pre ext hHops
   rw [hr]
   exact hmono _ hRevoked
 
