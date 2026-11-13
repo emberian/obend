@@ -2044,6 +2044,7 @@ theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
   all_goals try decide +kernel
   unfold executeRdna2SliceReduction
   cbv
+  all_goals decide +kernel
 
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
 theorem vramChallengeOpening_inhabited : ∃ H root nonce c,
