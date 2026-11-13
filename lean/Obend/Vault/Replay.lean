@@ -21,8 +21,8 @@ import all Obend.Core.Data
 
 public section
 set_option linter.unusedSimpArgs false
-set_option pp.maxDepth 6
-set_option pp.maxSteps 200
+set_option pp.maxDepth 3
+set_option pp.maxSteps 80
 
 /-
 # Obend.Vault.Replay — the deployed entry's world is the replay of its log
@@ -3278,7 +3278,7 @@ example : TVal.conforms samplePlanVal
       (.field "badgeCap" (.custody 1) (.field "coReceipt" (.custody 2) (.field "epoch" .natural .emptyRow)))
       .emptyRow)) = true := by decide
 example : sampleRoundtripCheck = true := by
-  simp [sampleRoundtripCheck, dehydrate, sampleSealKey, samplePlanVal, sampleCustodyEnv,
+  simp [sampleRoundtripCheck, dehydrate, sampleSealKey, ByteArray.size, samplePlanVal, sampleCustodyEnv,
     dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot,
     rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields,
     takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
@@ -3295,7 +3295,9 @@ theorem transfer_inhabited :
   let table : CapTable := ⟨[⟨0, ⟨10, 1, [0xaa, 0xbb]⟩⟩, ⟨1, ⟨20, 2, [0xcc, 0xdd]⟩⟩]⟩
   let frame : CapSealFrame := ⟨42, 9, table, computeCapFrameSeal sampleIdentityHash sampleSealKey 9 42 table⟩
   have hd : dehydrate sampleIdentityHash sampleSealKey 9 42 sampleCustodyEnv samplePlanVal =
-      .ok (wire, frame) := by rfl
+      .ok (wire, frame) := by
+    simp [dehydrate, sampleSealKey, ByteArray.size, sampleCustodyEnv, samplePlanVal,
+      dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, wire, frame, table]
   exact ⟨wire, frame, _, hd,
     (rehydrate_dehydrate_roundtrip sampleIdentityHash sampleSealKey 9 42
       sampleCustodyEnv samplePlanVal hd).1⟩
