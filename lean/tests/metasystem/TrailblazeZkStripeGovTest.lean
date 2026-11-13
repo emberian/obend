@@ -35,6 +35,100 @@ open Obend.Trailblaze.CathedralApex
 
 set_option autoImplicit false
 
+#check @Obend.Trailblaze.ZkStripe.callTreeDigestBytes_binding
+#check @Obend.Trailblaze.ZkStripe.auditNodes_all_hops_sound
+#check @Obend.Trailblaze.ZkStripe.apex_zkstripe_calltree_audit
+#check @Obend.Trailblaze.ClusterGov.intDotExec_eq_intDot
+#check @Obend.Trailblaze.ClusterGov.ozakiSliceSumExec_eq_ozakiSliceSum
+#check @Obend.Trailblaze.ClusterGov.energy_conservation_bounds_hidden_ops
+#check @Obend.Trailblaze.ClusterGov.apex_verifiable_ai_cluster_step
+#check @Obend.Trailblaze.CathedralApex.fpgaVerifierReceipt256_at_most_two_states
+#check @Obend.Trailblaze.CathedralApex.apex_cathedral_zkstripe_to_clustergov_sound
+#print axioms Obend.Trailblaze.ZkStripe.matchesBytes_compl
+#print axioms Obend.Trailblaze.ZkStripe.matchesBytes_inter
+#print axioms Obend.Trailblaze.ZkStripe.matchesBytes_alt
+#print axioms Obend.Trailblaze.ZkStripe.callTreeDigest_size
+#print axioms Obend.Trailblaze.ZkStripe.audit_covers_callTree_hops
+#print axioms Obend.Trailblaze.ZkStripe.checkView_body_framed
+#print axioms Obend.Trailblaze.ZkStripe.utf8Bytes_injective
+#print axioms Obend.Trailblaze.ZkStripe.callTreeDigestBytes_binding
+#print axioms Obend.Trailblaze.ZkStripe.callTreeDigest_binding
+#print axioms Obend.Trailblaze.ZkStripe.auditNodes_all_hops_sound
+#print axioms Obend.Trailblaze.ZkStripe.apex_zkstripe_calltree_audit
+#print axioms Obend.Trailblaze.ClusterGov.sable_dot_exact_no_wrap
+#print axioms Obend.Trailblaze.ClusterGov.intDotExec_eq_intDot
+#print axioms Obend.Trailblaze.ClusterGov.sable_dotExec_exact_no_wrap
+#print axioms Obend.Trailblaze.ClusterGov.ozakiSliceSumExec_eq_ozakiSliceSum
+#print axioms Obend.Trailblaze.ClusterGov.ozakiSliceSum_perm
+#print axioms Obend.Trailblaze.ClusterGov.ozaki_tree_schedule_invariant
+#print axioms Obend.Trailblaze.ClusterGov.ozaki_closes_schedule_covert_channel
+#print axioms Obend.Trailblaze.ClusterGov.energy_conservation_bounds_hidden_ops
+#print axioms Obend.Trailblaze.ClusterGov.upper_curve_subtraction_masks_covert_ops
+#print axioms Obend.Trailblaze.ClusterGov.apex_verifiable_ai_cluster_step
+#print axioms Obend.Trailblaze.CathedralApex.fpgaVerifierReceipt256_at_most_two_states
+#print axioms Obend.Trailblaze.CathedralApex.apex_cathedral_zkstripe_to_clustergov_sound
+#print axioms Obend.Trailblaze.CathedralApex.cathedralTrace_sound
+#print axioms Obend.Trailblaze.CathedralApex.checkCathedralTrace_sound
+#print axioms extractCallTreeCollision
+#print axioms callTreeDigestBytes_binding
+
+#tooth Obend.Trailblaze.CathedralApex.encodeReceipt256_inj by
+  mutation Obend.Trailblaze.CathedralApex.encodeReceipt256 := fun _ => ByteArray.empty
+
+#tooth Obend.Trailblaze.CathedralApex.checkInRackFpgaReceipt_zero_covert_channel by
+  mutation Obend.Trailblaze.CathedralApex.checkInRackFpgaReceipt :=
+    fun H treeRoot step rcpt =>
+      rcpt.verdict && decide (rcpt.receiptPayloadBytes.data.size ≤ maxRackReceiptBytes) &&
+      decide (rcpt.verifierReceipt256 =
+        computeFpgaVerifierReceipt256 H rcpt.rackId rcpt.epoch treeRoot step true)
+
+#tooth Obend.Trailblaze.ClusterGov.checkPhysicalEnergyEnvelope_no_underflow by
+  mutation Obend.Trailblaze.ClusterGov.checkPhysicalEnergyEnvelope :=
+    fun env => decide (0 < env.minHiddenOpMilliJ ∧
+      env.measuredRttMicros ≤ env.authorityBudgetMicros ∧
+      physicalResidualMilliJ env ≤ env.minHiddenOpMilliJ * env.hiddenOpsCap)
+
+#tooth Obend.Trailblaze.ZkStripe.matchesBytes_compl by
+  mutation Obend.Trailblaze.ZkStripe.matchesBytes := fun _ _ => true
+
+#tooth Obend.Trailblaze.ZkStripe.callTreeDigest_binding by
+  mutation Obend.Trailblaze.ZkStripe.callTreeDigest := fun _ _ => ⟨ByteArray.empty⟩
+
+#tooth Obend.Trailblaze.ZkStripe.apex_zkstripe_calltree_audit by
+  mutation Obend.Trailblaze.ZkStripe.auditNodes := fun _ _ => .ok ()
+
+#tooth Obend.Trailblaze.ZkStripe.sessionNodePreimage_inj by
+  mutation Obend.Trailblaze.ZkStripe.sessionNodePreimage :=
+    fun key _ req resp childrenBytes =>
+      (0x01 : UInt8) ::
+      (be 32 key.toNat ++
+       (frameBytes [] ++
+        (frameBytes req ++
+         (frameBytes resp ++
+          childrenBytes))))
+
+#tooth Obend.Trailblaze.ClusterGov.sable_dot_exact_no_wrap by
+  mutation Obend.Trailblaze.ClusterGov.checkSableNoWrap := fun _ => true
+
+#tooth Obend.Trailblaze.ClusterGov.energy_conservation_bounds_hidden_ops by
+  mutation Obend.Trailblaze.ClusterGov.checkPhysicalEnergyEnvelope := fun _ => true
+
+#tooth Obend.Trailblaze.CathedralApex.apex_cathedral_zkstripe_to_clustergov_sound by
+  mutation Obend.Trailblaze.CathedralApex.checkCathedralTurn := fun _ => true
+
+#tooth Obend.Trailblaze.CathedralApex.checkCathedralTrace_sound by
+  mutation Obend.Trailblaze.CathedralApex.checkCathedralTrace := fun _ _ => true
+
+#tooth callTreeDigestBytes_binding by
+  mutation sessionNodePreimage := fun _ _ req resp kids => req ++ resp ++ kids
+
+#tooth rdna2Wavefront_simulates_ozaki_sound by
+  mutation checkRdna2DispatchEnvelope := fun _ => true
+
+#tooth sealedVramRandomOpening_sound by
+  mutation checkVramChallengeOpening := fun _ _ _ _ => true
+
+
 /-! ## §1. Organ O5 (`ZkStripe`): policies over `SymbolicRegex.PredRE`, 256-bit digests -/
 
 -- Complement and intersection, on concrete requests.
@@ -238,101 +332,31 @@ example : (match auditPhysicalClusterStep ⟨validClusterStepCtx, underMeteredEn
     | .error (.energyBaselineUnderflow 9 10) => true
     | _ => false) = true := by decide
 
-#tooth Obend.Trailblaze.CathedralApex.encodeReceipt256_inj by
-  mutation Obend.Trailblaze.CathedralApex.encodeReceipt256 := fun _ => ByteArray.empty
 
-#tooth Obend.Trailblaze.CathedralApex.checkInRackFpgaReceipt_zero_covert_channel by
-  mutation Obend.Trailblaze.CathedralApex.checkInRackFpgaReceipt :=
-    fun H treeRoot step rcpt =>
-      rcpt.verdict && decide (rcpt.receiptPayloadBytes.data.size ≤ maxRackReceiptBytes) &&
-      decide (rcpt.verifierReceipt256 =
-        computeFpgaVerifierReceipt256 H rcpt.rackId rcpt.epoch treeRoot step true)
 
-#tooth Obend.Trailblaze.ClusterGov.checkPhysicalEnergyEnvelope_no_underflow by
-  mutation Obend.Trailblaze.ClusterGov.checkPhysicalEnergyEnvelope :=
-    fun env => decide (0 < env.minHiddenOpMilliJ ∧
-      env.measuredRttMicros ≤ env.authorityBudgetMicros ∧
-      physicalResidualMilliJ env ≤ env.minHiddenOpMilliJ * env.hiddenOpsCap)
 
 /-! ## §4. `#tooth` Mutation-Killing Barriers on Universal Soundness Theorems -/
 
 -- Barrier 1: a matcher that says yes breaks the complement law.
-#tooth Obend.Trailblaze.ZkStripe.matchesBytes_compl by
-  mutation Obend.Trailblaze.ZkStripe.matchesBytes := fun _ _ => true
 
 -- Barrier 2: a digest that does not read the tree breaks its binding.
-#tooth Obend.Trailblaze.ZkStripe.callTreeDigest_binding by
-  mutation Obend.Trailblaze.ZkStripe.callTreeDigest := fun _ _ => ⟨ByteArray.empty⟩
 
 -- Barrier 3: an audit that admits every hop breaks the organ's theorem.
-#tooth Obend.Trailblaze.ZkStripe.apex_zkstripe_calltree_audit by
-  mutation Obend.Trailblaze.ZkStripe.auditNodes := fun _ _ => .ok ()
 
 -- Barrier 4: a preimage that drops the domain breaks its injectivity.
-#tooth Obend.Trailblaze.ZkStripe.sessionNodePreimage_inj by
-  mutation Obend.Trailblaze.ZkStripe.sessionNodePreimage :=
-    fun key _ req resp childrenBytes =>
-      (0x01 : UInt8) ::
-      (be 32 key.toNat ++
-       (frameBytes [] ++
-        (frameBytes req ++
-         (frameBytes resp ++
-          childrenBytes))))
 
 -- `#tooth` Barrier 5: mutating `checkSableNoWrap` to `fun _ => true` breaks `sable_dot_exact_no_wrap`
-#tooth Obend.Trailblaze.ClusterGov.sable_dot_exact_no_wrap by
-  mutation Obend.Trailblaze.ClusterGov.checkSableNoWrap := fun _ => true
 
 -- `#tooth` Barrier 6: mutating `checkPhysicalEnergyEnvelope` to `fun _ => true` breaks `energy_conservation_bounds_hidden_ops`
-#tooth Obend.Trailblaze.ClusterGov.energy_conservation_bounds_hidden_ops by
-  mutation Obend.Trailblaze.ClusterGov.checkPhysicalEnergyEnvelope := fun _ => true
 
 -- `#tooth` Barrier 7: mutating `checkCathedralTurn` to `fun _ => true` breaks `apex_cathedral_zkstripe_to_clustergov_sound`
-#tooth Obend.Trailblaze.CathedralApex.apex_cathedral_zkstripe_to_clustergov_sound by
-  mutation Obend.Trailblaze.CathedralApex.checkCathedralTurn := fun _ => true
 
 -- `#tooth` Barrier 8: mutating `checkCathedralTrace` to `fun _ _ => true` breaks `checkCathedralTrace_sound`
-#tooth Obend.Trailblaze.CathedralApex.checkCathedralTrace_sound by
-  mutation Obend.Trailblaze.CathedralApex.checkCathedralTrace := fun _ _ => true
 
 
 /-! ## §5. Kernel Axiom Audit (`0 sorryAx`, `0 Classical.choice`, `0` custom `axiom`s) -/
 
-#check @Obend.Trailblaze.ZkStripe.callTreeDigestBytes_binding
-#check @Obend.Trailblaze.ZkStripe.auditNodes_all_hops_sound
-#check @Obend.Trailblaze.ZkStripe.apex_zkstripe_calltree_audit
-#check @Obend.Trailblaze.ClusterGov.intDotExec_eq_intDot
-#check @Obend.Trailblaze.ClusterGov.ozakiSliceSumExec_eq_ozakiSliceSum
-#check @Obend.Trailblaze.ClusterGov.energy_conservation_bounds_hidden_ops
-#check @Obend.Trailblaze.ClusterGov.apex_verifiable_ai_cluster_step
-#check @Obend.Trailblaze.CathedralApex.fpgaVerifierReceipt256_at_most_two_states
-#check @Obend.Trailblaze.CathedralApex.apex_cathedral_zkstripe_to_clustergov_sound
 
-#print axioms Obend.Trailblaze.ZkStripe.matchesBytes_compl
-#print axioms Obend.Trailblaze.ZkStripe.matchesBytes_inter
-#print axioms Obend.Trailblaze.ZkStripe.matchesBytes_alt
-#print axioms Obend.Trailblaze.ZkStripe.callTreeDigest_size
-#print axioms Obend.Trailblaze.ZkStripe.audit_covers_callTree_hops
-#print axioms Obend.Trailblaze.ZkStripe.checkView_body_framed
-#print axioms Obend.Trailblaze.ZkStripe.utf8Bytes_injective
-#print axioms Obend.Trailblaze.ZkStripe.callTreeDigestBytes_binding
-#print axioms Obend.Trailblaze.ZkStripe.callTreeDigest_binding
-#print axioms Obend.Trailblaze.ZkStripe.auditNodes_all_hops_sound
-#print axioms Obend.Trailblaze.ZkStripe.apex_zkstripe_calltree_audit
-#print axioms Obend.Trailblaze.ClusterGov.sable_dot_exact_no_wrap
-#print axioms Obend.Trailblaze.ClusterGov.intDotExec_eq_intDot
-#print axioms Obend.Trailblaze.ClusterGov.sable_dotExec_exact_no_wrap
-#print axioms Obend.Trailblaze.ClusterGov.ozakiSliceSumExec_eq_ozakiSliceSum
-#print axioms Obend.Trailblaze.ClusterGov.ozakiSliceSum_perm
-#print axioms Obend.Trailblaze.ClusterGov.ozaki_tree_schedule_invariant
-#print axioms Obend.Trailblaze.ClusterGov.ozaki_closes_schedule_covert_channel
-#print axioms Obend.Trailblaze.ClusterGov.energy_conservation_bounds_hidden_ops
-#print axioms Obend.Trailblaze.ClusterGov.upper_curve_subtraction_masks_covert_ops
-#print axioms Obend.Trailblaze.ClusterGov.apex_verifiable_ai_cluster_step
-#print axioms Obend.Trailblaze.CathedralApex.fpgaVerifierReceipt256_at_most_two_states
-#print axioms Obend.Trailblaze.CathedralApex.apex_cathedral_zkstripe_to_clustergov_sound
-#print axioms Obend.Trailblaze.CathedralApex.cathedralTrace_sound
-#print axioms Obend.Trailblaze.CathedralApex.checkCathedralTrace_sound
 
 -- Compile-time constructive axiom gate: refuses `Classical.choice`, `sorryAx`, `_native`, or custom axioms
 open Lean Elab Command in
@@ -372,10 +396,6 @@ example : ∃ t : HttpsSessionNode,
     checkCanonicalSessionTree (Obend.Digest.Cshake256.cshake256Bytes []) t = true ∧
     callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t =
       callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t := cshake_callTree_binding_inhabited
-#tooth callTreeDigestBytes_binding by
-  mutation sessionNodePreimage := fun _ _ req resp kids => req ++ resp ++ kids
-#print axioms extractCallTreeCollision
-#print axioms callTreeDigestBytes_binding
 
 /-- One-worker identity reduction executes S_ENDPGM and reads the loaded VGPR. -/
 def executedDispatch : Rdna2WavefrontDispatch :=
@@ -384,8 +404,6 @@ example : checkRdna2DispatchEnvelope executedDispatch = true := by decide
 example : checkRdna2DispatchEnvelope { executedDispatch with hwReducedOut := #[99, 11] } = false := by decide
 example : checkRdna2DispatchEnvelope { executedDispatch with shaderIsaWords := #[0xffffffff] } = false := by decide
 
-#tooth rdna2Wavefront_simulates_ozaki_sound by
-  mutation checkRdna2DispatchEnvelope := fun _ => true
 
 def openingHash : Obend.Digest.HashBytes.Hash := fun _ => Obend.Digest.HashBytes.be 32 1
 def validOpening : SealedVramOpeningClaim :=
@@ -394,8 +412,6 @@ example : checkVramChallengeOpening openingHash 1 42 validOpening = true := by d
 example : checkVramChallengeOpening openingHash 1 42 { validOpening with sealedRoot256 := 0 } = false := by decide
 example : checkVramChallengeOpening openingHash 1 42 { validOpening with challengeSeed256 := 2 } = false := by decide
 example : checkVramChallengeOpening openingHash 1 42 { validOpening with openedPageDigests := Array.replicate 8 2 } = false := by decide
-#tooth sealedVramRandomOpening_sound by
-  mutation checkVramChallengeOpening := fun _ _ _ _ => true
 
 end Obend.Tests.Metasystem.TrailblazeZkStripeGovTest
 end
