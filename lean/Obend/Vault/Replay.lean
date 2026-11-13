@@ -2714,7 +2714,7 @@ def encodeCapTableBytes (nonce : Nat) (tbl : CapTable) : Bytes :=
 
 /-- The authority key stays at the host; only its domain-bound seal crosses the wire. -/
 def capFramePreimage (sealKey : ByteArray) (epoch : UInt64) (nonce : Nat) (tbl : CapTable) : Bytes :=
-  "OBEND.VAULT.CAP_SEAL/v1".toUTF8.toList ++
+  "OBEND.VAULT.CAP_SEAL/v1".toUTF8.data.toList ++
     Obend.Crypto.encodeListField sealKey.data.toList ++ Obend.Crypto.leb128 epoch.toNat ++
     encodeCapTableBytes nonce tbl
 
