@@ -1,4 +1,7 @@
 module
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Logic.SeparationFrame
 public import Obend.Core.GradedSessionMetatheory
 public import Obend.Spec.BidirectionalSurfaceElab
 import all Init.Data.String.Defs

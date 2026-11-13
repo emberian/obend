@@ -1,4 +1,8 @@
 module
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Polis.CapTP
+import all Obend.Vault.Mandate
 public import Obend.Law.AmendCli
 public import Obend.AssertAxioms
 public import Obend.Tactic.Tooth
