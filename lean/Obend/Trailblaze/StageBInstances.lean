@@ -15,8 +15,6 @@ public import Obend.Hardware.Hvm.Model
 public import Obend.Hardware.Gpu.Rdna2.Certified
 
 public section
-set_option maxErrors 3
-set_option pp.maxDepth 4
 
 
 namespace Obend.Trailblaze.Polis

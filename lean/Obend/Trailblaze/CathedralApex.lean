@@ -15,7 +15,6 @@ import all Obend.Hardware.Gpu.Rdna2.Semantics
 public import Obend.Run.HyperLaw
 
 public section
-set_option pp.maxDepth 2
 
 
 namespace Obend.Trailblaze
@@ -1882,9 +1881,9 @@ The accepted fragment is unsigned, exact 32-bit sums, at most 256 workers. -/
       Obend.Hardware.Gpu.Rdna2.writeVgpr wave worker lane
         (UInt32.ofNat ((d.workgroupSlices[worker]?.getD #[])[lane]?.getD 0).toNat)) st) initial
 
+open Obend.Hardware.Gpu.Rdna2 in
 /-- Total decoder over AMD's generated encoding tables. A list search keeps its
 logical body reducible in the kernel; entries use the same reverse insertion order as `instIndex`. -/
-open Obend.Hardware.Gpu.Rdna2 in
 @[expose] def decodeRdnaSliceInst (words : List UInt32) : Option (Obend.Hardware.Gpu.Rdna2.Inst × Nat) :=
   match words with
   | [] => none
@@ -2021,6 +2020,15 @@ theorem sealedVramRandomOpening_sound (H : Obend.Digest.HashBytes.Hash)
   have he := h.1.1
   simp only [checkSealedVramClaimEnvelope, Bool.and_eq_true, decide_eq_true_eq] at he
   exact ⟨h.1.2.1 ▸ he.1.1, h.1.2.2.1, h.1.2.2.2, h.2⟩
+
+/-- Constructive execution fixture: one worker, two nonzero slices, decoded S_ENDPGM. -/
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
+theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
+    checkRdna2DispatchEnvelope d = true := by
+  exact ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, by
+    simp only [checkRdna2DispatchEnvelope, ← Array.all_toList]
+    decide +kernel⟩
 
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
 theorem vramChallengeOpening_inhabited : ∃ H root nonce c,
