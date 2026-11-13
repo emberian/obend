@@ -1532,6 +1532,15 @@ theorem parseExec_eq_parseSpec (Hb : Bytes → Bytes) (prev : Nat) (bytes : Byte
         bytes.data.toList.drop (parseSegmentExec Hb prev bytes offset).2.1,
         (parseSegmentExec Hb prev bytes offset).2.2) :=
   LogBytes.parseFromAt_eq Hb prev bytes offset
+
+/-- A committed nonempty turn inhabits the reachability premise of `log_sound`. -/
+theorem reachable_committed_inhabited :
+    ∃ (M : Machine Bytes Unit) (S : Session Bytes),
+      S.log.length = 1 ∧ Reachable (fun bytes => bytes) M [] S := by
+  let M : Machine Bytes Unit := ⟨fun world bytes => .ok (world ++ bytes, ()), fun world => world⟩
+  let S : Session Bytes := ⟨[1], [⟨⟨Obend.Vault.Rehydration.genesisSentinel, 0, 1, 1⟩, [1]⟩]⟩
+  exact ⟨M, S, rfl, Reachable.admit Reachable.genesis (b := [1]) (by rfl)⟩
+
 end Obend.Vault.Log
 
 end

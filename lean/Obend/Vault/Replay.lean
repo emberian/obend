@@ -1312,7 +1312,7 @@ def deployed : Machine World Outcome where
   encW := ChunkedWorld.manifestBytes
 
 /-- The world before any turn. -/
-def genesis : World := {}
+@[expose] def genesis : World := {}
 
 /-- A process's session over a vault: the world it serves and the records it appended. -/
 abbrev Session := Log.Session World
