@@ -3110,7 +3110,7 @@ theorem dehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : 
         | none =>
           simp only [hd, hs, Except.ok.injEq, Prod.mk.injEq] at h
           obtain ⟨rfl, rfl⟩ := h
-          exact ⟨by simpa using hk, hd, hs, rfl, rfl, rfl⟩
+          exact ⟨by simpa using hk, rfl, by simp only [hs], rfl, rfl, rfl⟩
 
 /-- Successful restore authenticates the epoch and consumes every sealed token once. -/
 theorem rehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : UInt64}
@@ -3139,7 +3139,7 @@ theorem rehydrate_ok_inv {Hb : Bytes → BitVec 256} {key : ByteArray} {epoch : 
           | nil =>
             simp only [hr, Except.ok.injEq, Prod.mk.injEq] at h
             obtain ⟨rfl, rfl⟩ := h
-            exact ⟨hs', hd, hr⟩
+            exact ⟨hs', by simp only [hd], by simp only [hr]⟩
 
 theorem rehydrate_dehydrate_roundtrip (Hb : Bytes → BitVec 256) (key : ByteArray)
     (epoch : UInt64) (nonce : Nat) (srcEnv : CustodyEnv) (v : TVal)
@@ -3174,7 +3174,7 @@ theorem transfer_conserves_custody_exact (Hb : Bytes → BitVec 256) (key : Byte
   have hboth := hq.symm.trans hp.symm
   have hslot : (srcEnv.tokens.map CapToken.slotId).Perm v.capSlots := by
     have hm := hp.map CapToken.slotId
-    simpa only [List.map_map, Function.comp_def, hslots] using hm
+    simpa only [List.map_map, Function.comp_def, hslots, TVal.capSlots] using hm
   exact ⟨hboth, hboth.length_eq, fun tok => hboth.count_eq tok,
     hslot, fun hnd => hslot.nodup_iff.mp hnd⟩
 
@@ -3283,7 +3283,7 @@ example : sampleRoundtripCheck = true := by
     rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields,
     takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
     DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?,
-    dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> rfl
+    dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
 /-- Constructive two-capability transfer with a real authority context and distinct live slots. -/
 theorem transfer_inhabited :
