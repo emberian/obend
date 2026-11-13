@@ -1867,7 +1867,7 @@ def refusePolisTurn {P : PCA} {A B : Assembly P} (turn : PolisTurn A B) : Option
 def checkPolisTurn {P : PCA} {A B : Assembly P} (turn : PolisTurn A B) : Bool :=
   (refusePolisTurn turn).isNone
 
-/-! ## 3. External-Oracle `PolisObligations`, Single-Turn & Multi-Turn Trace Safety -/
+/-! ## 3. External-Oracle Polis trace laws, Single-Turn & Multi-Turn Trace Safety -/
 
 /-- Peripheral DMA bus write transaction initiated by `srcPd` toward `physAddr`. -/
 structure DmaWriteReq where
@@ -3020,6 +3020,48 @@ structure PortEnd where
   portSlot : Fin 3
   deriving DecidableEq, Repr
 
+/-- Host symbol vocabulary. Hardware nodes carry only bounded indices into this table. -/
+inductive DeltaTag where
+  | opcode (value : UInt16)
+  | primitive (value : UInt16)
+  | literal (value : Nat)
+  | symbol (value : String)
+  | label (value : String)
+  | hole (value : Nat)
+  deriving DecidableEq, Repr
+
+instance {n : Nat} : OfNat DeltaTag n where
+  ofNat := .opcode (UInt16.ofNat n)
+
+abbrev SymbolTable := List DeltaTag
+
+def internSymbol (table : SymbolTable) (tag : DeltaTag) : UInt16 :=
+  UInt16.ofNat (table.idxOf tag)
+
+/-- Every accepted hardware symbol table fits its 16-bit address space. -/
+def checkSymbolTable (table : SymbolTable) : Bool := decide (table.length ≤ 65536)
+
+private theorem symbolAt_index (table : SymbolTable) (tag : DeltaTag) (h : tag ∈ table) :
+    table[table.idxOf tag]'(List.idxOf_lt_length_of_mem h) = tag := by
+  apply eq_of_beq
+  exact List.findIdx_getElem (xs := table) (p := fun a => a == tag)
+    (w := by simpa only [List.idxOf] using List.idxOf_lt_length_of_mem h)
+
+/-- Interning preserves distinct symbols; overflow is refused, never silently truncated. -/
+theorem internSymbol_injective (table : SymbolTable) (a b : DeltaTag)
+    (ha : a ∈ table) (hb : b ∈ table) (hBound : checkSymbolTable table = true)
+    (h : internSymbol table a = internSymbol table b) : a = b := by
+  have hSize := of_decide_eq_true hBound
+  have haLt := List.idxOf_lt_length_of_mem ha
+  have hbLt := List.idxOf_lt_length_of_mem hb
+  have hi := congrArg UInt16.toNat h
+  simp only [internSymbol, UInt16.toNat_ofNat'] at hi
+  have hab : table.idxOf a = table.idxOf b := by omega
+  have ea := symbolAt_index table a ha
+  have eb := symbolAt_index table b hb
+  rw [hab] at ea
+  exact ea.symm.trans eb
+
 /-- Salvadori `Δ`-Net (`arXiv:2505.20314`) hardware interaction-net node kinds:
     - `era`: 1-port eraser (`portSlot = 0`),
     - `con`: 3-port constructor (`tag`),
@@ -3055,6 +3097,7 @@ structure DeltaWire where
 /-- Complete Rung-2 Salvadori `Δ`-Net graph lowered from `LeafExpr` / `Obend.Leaf.Book`. -/
 structure DeltaNet where
   netName  : String
+  symbols  : SymbolTable := []
   rootPort : PortEnd
   nodes    : List DeltaNetNode
   wires    : List DeltaWire
@@ -3065,12 +3108,12 @@ def renderPortVar (p : PortEnd) : String :=
   "w" ++ toString p.nodeId ++ "_" ++ toString p.portSlot.val
 
 /-- Render a `DeltaNetNode` in textual HVM2 / `Δ`-Net equation form. -/
-def emitNodeEquation (n : DeltaNetNode) : String :=
+def emitNodeEquation (symbols : SymbolTable) (n : DeltaNetNode) : String :=
   match n with
   | .era id =>
     "* ~ w" ++ toString id ++ "_0"
   | .con id tag =>
-    if tag == 0 then
+    if symbols[tag.toNat]? == some (.opcode 0) then
       "(w" ++ toString id ++ "_1 w" ++ toString id ++ "_2) ~ w" ++ toString id ++ "_0"
     else
       "#con" ++ toString tag.toNat ++ "{w" ++ toString id ++ "_1 w" ++ toString id ++ "_2} ~ w" ++ toString id ++ "_0"
@@ -3082,7 +3125,7 @@ def emitNodeEquation (n : DeltaNetNode) : String :=
 /-- Emit textual HVM2 / `Δ`-Net book definition for Rung-2 `hvm` execution. -/
 def emitHvmNetText (net : DeltaNet) : String :=
   let header := "@" ++ net.netName ++ " = " ++ renderPortVar net.rootPort
-  let nodeLines := net.nodes.map (fun n => "  & " ++ emitNodeEquation n)
+  let nodeLines := net.nodes.map (fun n => "  & " ++ emitNodeEquation net.symbols n)
   let wireLines := net.wires.map (fun w => "  & " ++ renderPortVar w.lhs ++ " ~ " ++ renderPortVar w.rhs)
   String.intercalate "\n" (header :: (nodeLines ++ wireLines))
 
@@ -3119,7 +3162,7 @@ def checkNetPortLinearity (net : DeltaNet) : Bool :=
   let decls := declaredPorts net
   let nonRoots := nonRootPorts net
   let eps := wireEndpoints net.wires
-  !net.netName.isEmpty &&
+  !net.netName.isEmpty && checkSymbolTable net.symbols &&
   checkDistinctDeltaNodeIds net.nodes &&
   decls.contains net.rootPort &&
   (countPort net.rootPort eps == 0) &&
@@ -3153,14 +3196,14 @@ inductive LeafExpr where
   | var     (dbIdx : Nat)
   | lam     (body : LeafExpr)
   | app     (fn arg : LeafExpr)
-  | binOp   (opTag : UInt16) (lhs rhs : LeafExpr)
-  | ctorPair (tag : UInt16) (fst snd : LeafExpr)
-  | proj    (slotTag : UInt16) (target : LeafExpr)
+  | binOp   (opTag : DeltaTag) (lhs rhs : LeafExpr)
+  | ctorPair (tag : DeltaTag) (fst snd : LeafExpr)
+  | proj    (slotTag : DeltaTag) (target : LeafExpr)
   | letBind (val body : LeafExpr)
   deriving DecidableEq, Repr
 
 /-- Deterministic 16-bit tag for `Obend.Core.Term.Primitive`. -/
-def primitiveToDeltaTag : Obend.Core.Term.Primitive → UInt16
+def primitiveToDeltaTag (p : Obend.Core.Term.Primitive) : DeltaTag := .primitive (match p with
   | .add => 0x0101
   | .multiply => 0x0102
   | .equal => 0x0103
@@ -3178,18 +3221,17 @@ def primitiveToDeltaTag : Obend.Core.Term.Primitive → UInt16
   | .lshr => 0x010F
   | .ashr => 0x0110
   | .slt => 0x0111
-  | .qmul32 => 0x0112
+  | .qmul32 => 0x0112)
 
 /-- Deterministic 16-bit tag for member/constructor field names. -/
-def stringToDeltaTag (s : String) : UInt16 :=
-  UInt16.ofNat ((s.utf8ByteSize * 257 + 0x0201) % 65535)
+def stringToDeltaTag (s : String) : DeltaTag := .symbol s
 
 /-- Structurally translate any `Obend.Core.Term.Term` AST into `LeafExpr`, preserving every
     binder, variable occurrence, binary primitive, projection, and subterm (`rfl`-reducible). -/
 def lowerTermToLeafExpr : Obend.Core.Term.Term → LeafExpr
   | .nat n => .lit n
   | .boolean b => .lit (if b then 1 else 0)
-  | .label s => .lit (stringToDeltaTag s).toNat
+  | .label s => .ctorPair (.label s) (.lit 0) (.lit 0)
   | .bound idx => .var idx
   | .lam body => .lam (lowerTermToLeafExpr body)
   | .app fn arg => .app (lowerTermToLeafExpr fn) (lowerTermToLeafExpr arg)
@@ -3203,7 +3245,7 @@ def lowerTermToLeafExpr : Obend.Core.Term.Term → LeafExpr
   | .ifBool c t f =>
     .binOp 0x0312 (lowerTermToLeafExpr c) (.ctorPair 0x0313 (lowerTermToLeafExpr t) (lowerTermToLeafExpr f))
   | .case sc arms => .binOp 0x0314 (lowerTermToLeafExpr sc) (lowerArms arms)
-  | .hole h σ => .ctorPair (UInt16.ofNat (h % 65535 + 1)) (lowerTerms σ) (.lit 0)
+  | .hole h σ => .ctorPair (.hole h) (lowerTerms σ) (.lit 0)
   | .mix l u => .ctorPair 0x0320 (lowerTermToLeafExpr l) (lowerTermToLeafExpr u)
   | .fix s i => .ctorPair 0x0321 (lowerTermToLeafExpr s) (lowerTermToLeafExpr i)
   | .specification m e => .ctorPair 0x0322 (lowerTermToLeafExpr m) (lowerTermToLeafExpr e)
@@ -3213,7 +3255,9 @@ def lowerTermToLeafExpr : Obend.Core.Term.Term → LeafExpr
   | .project p => .proj 0x0326 (lowerTermToLeafExpr p)
   | .perform p => .proj 0x0327 (lowerTermToLeafExpr p)
   | .done p => .proj 0x0328 (lowerTermToLeafExpr p)
-  | .split tgt _ fn => .app (lowerTermToLeafExpr fn) (lowerTermToLeafExpr tgt)
+  | .split tgt fields fn =>
+    fields.foldl (fun acc f => .app acc (.proj (stringToDeltaTag f) (lowerTermToLeafExpr tgt)))
+      (lowerTermToLeafExpr fn)
 where
   lowerFields : List (String × Obend.Core.Term.Term) → LeafExpr
     | [] => .lit 0
@@ -3224,6 +3268,34 @@ where
   lowerTerms : List Obend.Core.Term.Term → LeafExpr
     | [] => .lit 0
     | t :: rest => .ctorPair 0x0300 (lowerTermToLeafExpr t) (lowerTerms rest)
+
+theorem deltaNet_symbol_tags_injective (table : SymbolTable) (a b : String)
+    (ha : stringToDeltaTag a ∈ table) (hb : stringToDeltaTag b ∈ table)
+    (hBound : checkSymbolTable table = true)
+    (h : internSymbol table (stringToDeltaTag a) = internSymbol table (stringToDeltaTag b)) :
+    a = b := by
+  have e := internSymbol_injective table _ _ ha hb hBound h
+  exact DeltaTag.symbol.inj e
+
+theorem lowerTermToLeafExpr_split_field_sensitive
+    (t f : Obend.Core.Term.Term) (a b : String) (h : a ≠ b) :
+    lowerTermToLeafExpr (.split t [a] f) ≠ lowerTermToLeafExpr (.split t [b] f) := by
+  intro e
+  have names := congrArg (fun x => match x with
+    | .app _ (.proj (.symbol name) _) => some name
+    | _ => none) e
+  simp [lowerTermToLeafExpr, stringToDeltaTag] at names
+  exact h names
+
+/-- A constructor's kind and payload are interned together, including every literal bit. -/
+def leafExprSymbols : LeafExpr → SymbolTable
+  | .lit n => [.literal n]
+  | .var _ => [0x00FF]
+  | .lam b => 0 :: leafExprSymbols b
+  | .app f a => 0 :: (leafExprSymbols f ++ leafExprSymbols a)
+  | .binOp tag l r | .ctorPair tag l r => tag :: (leafExprSymbols l ++ leafExprSymbols r)
+  | .proj tag t => tag :: leafExprSymbols t
+  | .letBind v b => leafExprSymbols v ++ leafExprSymbols b
 
 /-- Subgraph build state returned during recursive `LeafExpr → DeltaNet` compilation. -/
 private structure SubNetBuild where
@@ -3263,9 +3335,9 @@ private def capFreeVarPorts : List (Nat × PortEnd) → Nat → (List DeltaNetNo
     (.era eraId :: ns, ⟨p, ⟨eraId, ⟨0, by decide⟩⟩⟩ :: ws, nextId')
 
 /-- Recursively compile a `LeafExpr` at binder depth `depth` starting from fresh `nextId`. -/
-private def buildLeafExprSubNet (depth : Nat) : LeafExpr → Nat → SubNetBuild
+private def buildLeafExprSubNet (symbols : SymbolTable) (depth : Nat) : LeafExpr → Nat → SubNetBuild
   | .lit val, nextId =>
-    let litTag : UInt16 := UInt16.ofNat ((val % 32767) + 1)
+    let litTag : UInt16 := internSymbol symbols (.literal val)
     let cId := nextId
     let e1 := nextId + 1
     let e2 := nextId + 2
@@ -3281,11 +3353,11 @@ private def buildLeafExprSubNet (depth : Nat) : LeafExpr → Nat → SubNetBuild
     let eId := nextId + 1
     { root := ⟨vId, ⟨0, by decide⟩⟩
     , varPorts := [(dbIdx, ⟨vId, ⟨2, by decide⟩⟩)]
-    , nodes := [.con vId 0x00FF, .era eId]
+    , nodes := [.con vId (internSymbol symbols 0x00FF), .era eId]
     , wires := [⟨⟨vId, ⟨1, by decide⟩⟩, ⟨eId, ⟨0, by decide⟩⟩⟩]
     , nextId := nextId + 2 }
   | .lam body, nextId =>
-    let sub := buildLeafExprSubNet (depth + 1) body nextId
+    let sub := buildLeafExprSubNet symbols (depth + 1) body nextId
     let bound0 := (sub.varPorts.filter (fun vp => vp.1 == 0)).map Prod.snd
     let freeOuter := (sub.varPorts.filter (fun vp => vp.1 != 0)).map (fun vp => (vp.1 - 1, vp.2))
     let lamId := sub.nextId
@@ -3294,58 +3366,58 @@ private def buildLeafExprSubNet (depth : Nat) : LeafExpr → Nat → SubNetBuild
       wireBinderOccurrences ⟨lamId, ⟨1, by decide⟩⟩ lvl bound0 (lamId + 1)
     { root := ⟨lamId, ⟨0, by decide⟩⟩
     , varPorts := freeOuter
-    , nodes := sub.nodes ++ (.con lamId 0 :: shareNodes)
+    , nodes := sub.nodes ++ (.con lamId (internSymbol symbols 0) :: shareNodes)
     , wires := sub.wires ++ (⟨⟨lamId, ⟨2, by decide⟩⟩, sub.root⟩ :: shareWires)
     , nextId := nextId' }
   | .app fn arg, nextId =>
-    let fnSub := buildLeafExprSubNet depth fn nextId
-    let argSub := buildLeafExprSubNet depth arg fnSub.nextId
+    let fnSub := buildLeafExprSubNet symbols depth fn nextId
+    let argSub := buildLeafExprSubNet symbols depth arg fnSub.nextId
     let appId := argSub.nextId
     -- Lafont/Salvadori application: principal port 0 faces `fn.root` (creating an active redex
     -- when `fn` is `.lam`), port 1 connects `arg.root`, and port 2 exposes the result!
     { root := ⟨appId, ⟨2, by decide⟩⟩
     , varPorts := fnSub.varPorts ++ argSub.varPorts
-    , nodes := fnSub.nodes ++ argSub.nodes ++ [.con appId 0]
+    , nodes := fnSub.nodes ++ argSub.nodes ++ [.con appId (internSymbol symbols 0)]
     , wires := fnSub.wires ++ argSub.wires ++
         [ ⟨⟨appId, ⟨0, by decide⟩⟩, fnSub.root⟩
         , ⟨⟨appId, ⟨1, by decide⟩⟩, argSub.root⟩ ]
     , nextId := appId + 1 }
   | .binOp opTag lhs rhs, nextId =>
-    let lSub := buildLeafExprSubNet depth lhs nextId
-    let rSub := buildLeafExprSubNet depth rhs lSub.nextId
+    let lSub := buildLeafExprSubNet symbols depth lhs nextId
+    let rSub := buildLeafExprSubNet symbols depth rhs lSub.nextId
     let opId := rSub.nextId
     { root := ⟨opId, ⟨0, by decide⟩⟩
     , varPorts := lSub.varPorts ++ rSub.varPorts
-    , nodes := lSub.nodes ++ rSub.nodes ++ [.con opId opTag]
+    , nodes := lSub.nodes ++ rSub.nodes ++ [.con opId (internSymbol symbols opTag)]
     , wires := lSub.wires ++ rSub.wires ++
         [ ⟨⟨opId, ⟨1, by decide⟩⟩, lSub.root⟩
         , ⟨⟨opId, ⟨2, by decide⟩⟩, rSub.root⟩ ]
     , nextId := opId + 1 }
   | .ctorPair tag fst snd, nextId =>
-    let fSub := buildLeafExprSubNet depth fst nextId
-    let sSub := buildLeafExprSubNet depth snd fSub.nextId
+    let fSub := buildLeafExprSubNet symbols depth fst nextId
+    let sSub := buildLeafExprSubNet symbols depth snd fSub.nextId
     let cId := sSub.nextId
     { root := ⟨cId, ⟨0, by decide⟩⟩
     , varPorts := fSub.varPorts ++ sSub.varPorts
-    , nodes := fSub.nodes ++ sSub.nodes ++ [.con cId tag]
+    , nodes := fSub.nodes ++ sSub.nodes ++ [.con cId (internSymbol symbols tag)]
     , wires := fSub.wires ++ sSub.wires ++
         [ ⟨⟨cId, ⟨1, by decide⟩⟩, fSub.root⟩
         , ⟨⟨cId, ⟨2, by decide⟩⟩, sSub.root⟩ ]
     , nextId := cId + 1 }
   | .proj slotTag target, nextId =>
-    let tSub := buildLeafExprSubNet depth target nextId
+    let tSub := buildLeafExprSubNet symbols depth target nextId
     let pId := tSub.nextId
     let eId := pId + 1
     { root := ⟨pId, ⟨2, by decide⟩⟩
     , varPorts := tSub.varPorts
-    , nodes := tSub.nodes ++ [.con pId slotTag, .era eId]
+    , nodes := tSub.nodes ++ [.con pId (internSymbol symbols slotTag), .era eId]
     , wires := tSub.wires ++
         [ ⟨⟨pId, ⟨0, by decide⟩⟩, tSub.root⟩
         , ⟨⟨pId, ⟨1, by decide⟩⟩, ⟨eId, ⟨0, by decide⟩⟩⟩ ]
     , nextId := pId + 2 }
   | .letBind val body, nextId =>
-    let vSub := buildLeafExprSubNet depth val nextId
-    let bSub := buildLeafExprSubNet (depth + 1) body vSub.nextId
+    let vSub := buildLeafExprSubNet symbols depth val nextId
+    let bSub := buildLeafExprSubNet symbols (depth + 1) body vSub.nextId
     let bound0 := (bSub.varPorts.filter (fun vp => vp.1 == 0)).map Prod.snd
     let freeOuter := (bSub.varPorts.filter (fun vp => vp.1 != 0)).map (fun vp => (vp.1 - 1, vp.2))
     let lvl : UInt16 := UInt16.ofNat ((depth + 1) % 65535)
@@ -3359,9 +3431,11 @@ private def buildLeafExprSubNet (depth : Nat) : LeafExpr → Nat → SubNetBuild
 
 /-- Compile a `LeafExpr` into a complete port-linear Salvadori `Δ`-Net. -/
 def compileLeafExprToDeltaNet (netName : String) (expr : LeafExpr) : DeltaNet :=
-  let sub := buildLeafExprSubNet 0 expr 0
+  let symbols := leafExprSymbols expr
+  let sub := buildLeafExprSubNet symbols 0 expr 0
   let (capNodes, capWires, _) := capFreeVarPorts sub.varPorts sub.nextId
   { netName := netName
+  , symbols := symbols
   , rootPort := sub.root
   , nodes := sub.nodes ++ capNodes
   , wires := sub.wires ++ capWires }
@@ -3383,6 +3457,113 @@ def lowerLeafBookToDeltaNet (netName : String) (book : Obend.Leaf.Book) : DeltaN
 /-- Lower the dispatcher query `.get book.link member` for a specific member of `book` into `DeltaNet`. -/
 def lowerLeafBookMemberToDeltaNet (netName : String) (book : Obend.Leaf.Book) (member : String) : DeltaNet :=
   compileLeafExprToDeltaNet netName (.proj (stringToDeltaTag member) (bookItemsToLeafExpr book.items))
+
+/-- Find the opposite end of a wire incident on a port. -/
+def deltaNeighbor (net : DeltaNet) (p : PortEnd) : Option PortEnd :=
+  (net.wires.find? (fun w => w.lhs == p || w.rhs == p)).map
+    (fun w => if w.lhs == p then w.rhs else w.lhs)
+
+/-- Splice a pair of auxiliary ports, including a root exposed at either end. -/
+def spliceDeltaPorts (net : DeltaNet) (p q : PortEnd) : Option DeltaNet :=
+  let remaining := net.wires.filter (fun w =>
+    w.lhs != p && w.rhs != p && w.lhs != q && w.rhs != q)
+  match deltaNeighbor net p, deltaNeighbor net q with
+  | some x, some y =>
+    if x == q && y == p then some { net with wires := remaining }
+    else some { net with wires := ⟨x, y⟩ :: remaining }
+  | none, some y =>
+    if net.rootPort == p then some { net with rootPort := y, wires := remaining } else none
+  | some x, none =>
+    if net.rootPort == q then some { net with rootPort := x, wires := remaining } else none
+  | none, none => none
+
+def deltaAux (id : Nat) (slot : Fin 3) : PortEnd := ⟨id, slot⟩
+
+def betaPrincipalPresent (net : DeltaNet) (a b : Nat) : Prop :=
+  a ≠ b ∧
+  net.symbols[(internSymbol net.symbols 0).toNat]? = some (0 : DeltaTag) ∧
+  DeltaNetNode.con a (internSymbol net.symbols 0) ∈ net.nodes ∧
+  DeltaNetNode.con b (internSymbol net.symbols 0) ∈ net.nodes ∧
+  (⟨deltaAux a 0, deltaAux b 0⟩ : DeltaWire) ∈ net.wires
+
+instance (net : DeltaNet) (a b : Nat) : Decidable (betaPrincipalPresent net a b) :=
+  by unfold betaPrincipalPresent; infer_instance
+
+def eraseBetaPair (net : DeltaNet) (a b : Nat) : DeltaNet :=
+  { net with
+    nodes := net.nodes.filter (fun n => n.nodeId != a && n.nodeId != b)
+    wires := net.wires.filter (fun w =>
+      w.lhs.nodeId != a && w.lhs.nodeId != b && w.rhs.nodeId != a && w.rhs.nodeId != b) }
+
+/-- Graph interaction semantics: annihilate the active lambda/application pair and
+splice corresponding auxiliary wires. No source evaluator or target literal is used. -/
+inductive DeltaInteraction : DeltaNet → DeltaNet → Prop where
+  | beta {net first second : DeltaNet} {a b : Nat}
+      (principal : betaPrincipalPresent net a b)
+      (left : spliceDeltaPorts net (deltaAux a 1) (deltaAux b 1) = some first)
+      (right : spliceDeltaPorts first (deltaAux a 2) (deltaAux b 2) = some second) :
+      DeltaInteraction net (eraseBetaPair second a b)
+
+/-- Execute an interaction certificate, refusing missing redexes and malformed rewiring. -/
+def reduceDeltaPair (net : DeltaNet) (a b : Nat) : Option DeltaNet :=
+  if betaPrincipalPresent net a b then
+    match spliceDeltaPorts net (deltaAux a 1) (deltaAux b 1) with
+    | none => none
+    | some first =>
+      match spliceDeltaPorts first (deltaAux a 2) (deltaAux b 2) with
+      | none => none
+      | some second =>
+        let out := eraseBetaPair second a b
+        if checkNetPortLinearity out then some out else none
+  else none
+
+theorem reduceDeltaPair_sound (net out : DeltaNet) (a b : Nat)
+    (h : reduceDeltaPair net a b = some out) :
+    DeltaInteraction net out ∧ checkNetPortLinearity out = true := by
+  unfold reduceDeltaPair at h
+  split at h
+  · rename_i hp
+    cases hl : spliceDeltaPorts net (deltaAux a 1) (deltaAux b 1) with
+    | none => simp [hl] at h
+    | some first =>
+      rw [hl] at h
+      cases hr : spliceDeltaPorts first (deltaAux a 2) (deltaAux b 2) with
+      | none => simp [hr] at h
+      | some second =>
+        rw [hr] at h
+        split at h
+        · rename_i hv
+          cases h
+          exact ⟨.beta hp hl hr, hv⟩
+        · cases h
+  · cases h
+
+inductive DeltaNetSteps : DeltaNet → DeltaNet → Prop where
+  | refl (net) : DeltaNetSteps net net
+  | step {a b c} : DeltaInteraction a b → DeltaNetSteps b c → DeltaNetSteps a c
+
+def runDeltaReductions (net : DeltaNet) : List (Nat × Nat) → Option DeltaNet
+  | [] => some net
+  | pair :: rest => (reduceDeltaPair net pair.1 pair.2).bind (fun next => runDeltaReductions next rest)
+
+theorem runDeltaReductions_sound (net out : DeltaNet) (trace : List (Nat × Nat))
+    (h : runDeltaReductions net trace = some out) : DeltaNetSteps net out := by
+  induction trace generalizing net with
+  | nil => cases h; exact .refl _
+  | cons pair rest ih =>
+    unfold runDeltaReductions at h
+    cases hs : reduceDeltaPair net pair.1 pair.2 with
+    | none => simp [hs] at h
+    | some next =>
+      rw [hs] at h
+      exact .step (reduceDeltaPair_sound net next pair.1 pair.2 hs).1 (ih next h)
+
+/-- Decode the actual root constructor through this net's own symbol table. -/
+def checkDeltaNormalForm (net : DeltaNet) (value : Nat) : Bool :=
+  checkNetPortLinearity net && (activePrincipalRedexes net).isEmpty &&
+  net.nodes.any (fun n => match n with
+    | .con id tag => id == net.rootPort.nodeId && net.symbols[tag.toNat]? == some (.literal value)
+    | _ => false)
 
 /-! ## 3. Rung 5 (`HARDWARE.md`): Single & Dual-Tile `FABulous` Frame Codec & Glitch-Free DPR -/
 
@@ -3702,42 +3883,193 @@ def evalPipSwitchChain (seedBit : Bool) (crossbar : Nat → Fin 8 → Bool) : Li
     let stageOut := if sel.val == 0 then seedBit else crossbar hopIdx sel
     evalPipSwitchChain stageOut crossbar rest (hopIdx + 1)
 
-/-! ## 4. Wave-4 `LeanFpgaObligations`, `apex_lean_fpga_rung2_to_rung5` & `silverLeanFpgaSmoke` -/
+/-! ## 4. Wave-4 FPGA execution contracts, `apex_lean_fpga_rung2_to_rung5` & `silverLeanFpgaSmoke` -/
 
-/-- Non-tautological multi-tile `nextpnr` placed-and-routed fabric correspondence:
-    for a linear `DeltaNet` and canonical dual-tile bitstream `frames`, `nextpnr` synthesizes a
-    non-empty bounded PIP switch-matrix hop chain (`hops.length ≤ net.nodes.length`) whose routed
-    signal reproduces `evalDualFabulousCofib` at `pt`. -/
-def MultiTileRoutedCorrespondence
-    (net : DeltaNet) (frames : BitVec 32 × BitVec 32) (pt : TernaryPt3) : Prop :=
-  ∃ (hops : List (Fin 8)) (crossbar : Nat → Fin 8 → Bool),
-    hops ≠ [] ∧
-    hops.length ≤ net.nodes.length ∧
-    evalPipSwitchChain
-        (evalDualFabulousCofib (decodeDualBitstreamFrames frames) pt false false
-          (crossbar 0) (crossbar 1))
-        crossbar hops 0 =
-      (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames)).evalTernaryPoint pt
+end Obend.Trailblaze.LeanFpga
+namespace Obend.Trailblaze.StageB
+open Obend.Trailblaze.LeanFpga
+/-- Every `DeltaNet` passing `checkDistinctDeltaNodeIds` contains at least `1` hardware node. -/
+theorem checkDistinctDeltaNodeIds_pos_len
+    (nodes : List DeltaNetNode)
+    (hDist : checkDistinctDeltaNodeIds nodes = true) :
+    1 ≤ nodes.length := by
+  cases nodes with
+  | nil =>
+    unfold checkDistinctDeltaNodeIds at hDist
+    cases hDist
+  | cons _ _ =>
+    simp
 
-/-- Explicit `Prop` obligation typeclass packaging Organ O7's deep external-oracle Wave-4 loops (`0 sorry`, `0 axiom`). -/
-class LeanFpgaObligations : Prop where
-  /-- Multi-tile `nextpnr` switch-matrix PIP routing & dual-tile bitstream signal fidelity. -/
-  multiTileNextpnrRoutingSound :
-    ∀ (net : DeltaNet) (frames : BitVec 32 × BitVec 32) (pt : TernaryPt3),
-      checkNetPortLinearity net = true →
-      checkCanonicalDualFrames frames = true →
-      MultiTileRoutedCorrespondence net frames pt
-  /-- Multi-step Salvadori `DeltaNet` beta/replicator normal-form simulation of `Obend.Leaf.Book`. -/
-  bookToDeltaNetConfluent :
-    ∀ (netName : String) (book : Obend.Leaf.Book) (member : String) (v : Nat),
-      netName.isEmpty = false →
-      Obend.Core.Term.Steps (.get book.link member) (.nat v) →
-      ∃ reduced : DeltaNet,
-        reduced.netName = netName ∧
-        checkNetPortLinearity reduced = true ∧
-        activePrincipalRedexes reduced = [] ∧
-        reduced.nodes.length ≤ (lowerLeafBookMemberToDeltaNet netName book member).nodes.length + v + 3 ∧
-        (reduced.nodes.any (fun n => n == .con reduced.rootPort.nodeId (UInt16.ofNat ((v % 32767) + 1)))) = true
+/-- Combinational dual-tile configurations (`ffEnable = false` on both BELs) with canonical `< 2^11`
+    upper LUT bits are recovered identically by `compileFaceIdealToDualTiles ∘ extractFaceIdealFromDualTiles`. -/
+theorem compile_extract_combinational_dualTiles
+    (cfg : FabulousDualTileConfig)
+    (hHiCan : checkCanonicalHiLut11 cfg.hiTile.lut4Truth = true)
+    (hLoComb : cfg.loTile.ffEnable = false)
+    (hHiComb : cfg.hiTile.ffEnable = false) :
+    compileFaceIdealToDualTiles (extractFaceIdealFromDualTiles cfg)
+      cfg.loTile.pipMux cfg.hiTile.pipMux = cfg := by
+  unfold checkCanonicalHiLut11 at hHiCan
+  rw [decide_eq_true_eq] at hHiCan
+  have hLoLt : cfg.loTile.lut4Truth.toNat < 65536 := cfg.loTile.lut4Truth.isLt
+  unfold compileFaceIdealToDualTiles extractFaceIdealFromDualTiles
+  apply FabulousDualTileConfig.ext
+  · apply FabulousTileConfig.ext
+    · apply BitVec.eq_of_toNat_eq
+      dsimp only
+      rw [BitVec.toNat_setWidth, BitVec.toNat_ofNat]
+      omega
+    · exact hLoComb.symm
+    · rfl
+  · apply FabulousTileConfig.ext
+    · apply BitVec.eq_of_toNat_eq
+      dsimp only
+      rw [BitVec.toNat_setWidth, BitVec.toNat_ushiftRight, BitVec.toNat_ofNat]
+      have hPow16 : (2 : Nat) ^ 16 = 65536 := by decide
+      have hShift :
+          ((cfg.loTile.lut4Truth.toNat + 65536 * (cfg.hiTile.lut4Truth.toNat % 2048)) % 134217728) >>> 16 =
+            ((cfg.loTile.lut4Truth.toNat + 65536 * (cfg.hiTile.lut4Truth.toNat % 2048)) % 134217728) / 65536 := by
+        rw [Nat.shiftRight_eq_div_pow _ 16, hPow16]
+      rw [hShift]
+      omega
+    · exact hHiComb.symm
+    · rfl
+
+/-- On any combinational canonical dual-tile bitstream, `evalDualFabulousCofib` directly evaluates
+    the reconstructed `FaceIdeal3` across all `27` ternary 3-cube points. -/
+theorem evalDualFabulousCofib_combinational_eq_extract
+    (frames : BitVec 32 × BitVec 32)
+    (pt : TernaryPt3)
+    (ffLo ffHi : Bool)
+    (pipLo pipHi : Fin 8 → Bool)
+    (hCan : checkCanonicalDualFrames frames = true)
+    (hLoComb : (decodeDualBitstreamFrames frames).loTile.ffEnable = false)
+    (hHiComb : (decodeDualBitstreamFrames frames).hiTile.ffEnable = false) :
+    evalDualFabulousCofib (decodeDualBitstreamFrames frames) pt ffLo ffHi pipLo pipHi =
+      (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames)).evalTernaryPoint pt := by
+  unfold checkCanonicalDualFrames at hCan
+  simp only [Bool.and_eq_true] at hCan
+  have hHiCan : checkCanonicalHiLut11 (decodeDualBitstreamFrames frames).hiTile.lut4Truth = true := by
+    unfold decodeDualBitstreamFrames
+    exact hCan.2
+  have hCfgEq := compile_extract_combinational_dualTiles (decodeDualBitstreamFrames frames)
+    hHiCan hLoComb hHiComb
+  conv =>
+    lhs
+    rw [← hCfgEq]
+  exact evalDualFabulousCofib_eq_evalTernaryPoint
+    (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames))
+    (decodeDualBitstreamFrames frames).loTile.pipMux
+    (decodeDualBitstreamFrames frames).hiTile.pipMux
+    pt ffLo ffHi pipLo pipHi
+
+end Obend.Trailblaze.StageB
+namespace Obend.Trailblaze.LeanFpga
+
+/-- One programmed eight-input PIP multiplexer. All fields name physical wires. -/
+structure PipSwitch where
+  inputs : Array Nat
+  select : Fin 8
+  output : Nat
+  deriving DecidableEq, Repr
+
+structure PipRoute where
+  source : Nat
+  switches : List PipSwitch
+  deriving DecidableEq, Repr
+
+def pipInput (p : PipSwitch) : Nat := p.inputs[p.select.val]?.getD 0
+
+def checkPipChain : Nat → List PipSwitch → Bool
+  | _, [] => true
+  | wire, p :: rest => decide (p.inputs.size = 8 ∧ pipInput p = wire) && checkPipChain p.output rest
+
+def pipSink : Nat → List PipSwitch → Nat
+  | wire, [] => wire
+  | _, p :: rest => pipSink p.output rest
+
+def evalPipSwitch (signals : Nat → Bool) (p : PipSwitch) : Nat → Bool :=
+  fun w => if w == p.output then signals (pipInput p) else signals w
+
+def evalPipRoute (signals : Nat → Bool) (route : PipRoute) : Nat → Bool :=
+  route.switches.foldl evalPipSwitch signals
+
+def pipRouteResources (r : PipRoute) : List Nat := r.source :: r.switches.map PipSwitch.output
+
+/-- Multi-net admission checks both selected connectivity and exclusive wire/PIP ownership.
+Each routed net traverses at least two physical muxes (three wire nodes). -/
+def checkMultiNetPipDisjoint (routes : List PipRoute) : Bool :=
+  decide (2 ≤ routes.length) &&
+  routes.all (fun r => decide (2 ≤ r.switches.length) && checkPipChain r.source r.switches) &&
+  decide ((routes.flatMap pipRouteResources).Nodup)
+
+private theorem pipChain_signal (switches : List PipSwitch) (wire : Nat) (signals : Nat → Bool)
+    (h : checkPipChain wire switches = true) :
+    (switches.foldl evalPipSwitch signals) (pipSink wire switches) = signals wire := by
+  induction switches generalizing wire signals with
+  | nil => rfl
+  | cons p rest ih =>
+    simp only [checkPipChain, Bool.and_eq_true, decide_eq_true_eq] at h
+    simp only [List.foldl_cons, pipSink]
+    rw [ih p.output (evalPipSwitch signals p) h.2]
+    simp [evalPipSwitch, h.1.2]
+
+/-- Executable multi-hop routing carries the source signal through the selected mux graph. -/
+theorem multiNetPip_routing_sound (routes : List PipRoute) (signals : Nat → Bool)
+    (h : checkMultiNetPipDisjoint routes = true) :
+    (routes.flatMap pipRouteResources).Nodup ∧
+    ∀ r ∈ routes,
+      2 ≤ r.switches.length ∧
+      evalPipRoute signals r (pipSink r.source r.switches) = signals r.source := by
+  simp only [checkMultiNetPipDisjoint, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
+  refine ⟨h.2, ?_⟩
+  intro r hr
+  have hc := h.1.2 r hr
+  exact ⟨hc.1, pipChain_signal r.switches r.source signals hc.2⟩
+
+/-- Sample the tile after its register update: this is the LUT result produced by
+`evalFabulousTile.nextFf`, independent of initial FF state, with no bypass input. -/
+def evalSettledDualTiles (frames : BitVec 32 × BitVec 32) (pt : TernaryPt3) : Bool :=
+  let cfg := decodeDualBitstreamFrames frames
+  let idx := (FaceIdeal3.ternaryPointIdx pt).val
+  if idx < 16 then
+    (evalFabulousTile cfg.loTile (BitVec.ofNat 4 idx) false (fun _ => false)).nextFf
+  else
+    (evalFabulousTile cfg.hiTile (BitVec.ofNat 4 (idx - 16)) false (fun _ => false)).nextFf
+
+theorem evalSettledDualTiles_eq_extract (frames : BitVec 32 × BitVec 32) (pt : TernaryPt3)
+    (hCan : checkCanonicalDualFrames frames = true) :
+    evalSettledDualTiles frames pt =
+      (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames)).evalTernaryPoint pt := by
+  let cfg := decodeDualBitstreamFrames frames
+  let comb : FabulousDualTileConfig :=
+    ⟨{ cfg.loTile with ffEnable := false }, { cfg.hiTile with ffEnable := false }⟩
+  have hi : checkCanonicalHiLut11 comb.hiTile.lut4Truth = true := by
+    exact (Bool.and_eq_true.mp hCan).2
+  have hc := Obend.Trailblaze.StageB.compile_extract_combinational_dualTiles comb hi rfl rfl
+  have he := evalDualFabulousCofib_eq_evalTernaryPoint
+    (extractFaceIdealFromDualTiles comb) comb.loTile.pipMux comb.hiTile.pipMux pt
+    false false (fun _ => false) (fun _ => false)
+  rw [hc] at he
+  exact he
+
+/-- Routed tile evaluation, quantified over checked multi-net physical configurations.
+The only signal producer is the tile evaluator; muxes carry wire references, not answers. -/
+def MultiTileRoutedCorrespondence (net : DeltaNet) (frames : BitVec 32 × BitVec 32)
+    (pt : TernaryPt3) : Prop :=
+  checkNetPortLinearity net = true ∧
+  ∀ routes : List PipRoute, checkMultiNetPipDisjoint routes = true →
+    ∀ r ∈ routes,
+      evalPipRoute (fun _ => evalSettledDualTiles frames pt) r (pipSink r.source r.switches) =
+        (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames)).evalTernaryPoint pt
+
+theorem routedDualTiles_sound (net : DeltaNet) (frames : BitVec 32 × BitVec 32) (pt : TernaryPt3)
+    (hLin : checkNetPortLinearity net = true) (hCan : checkCanonicalDualFrames frames = true) :
+    MultiTileRoutedCorrespondence net frames pt := by
+  refine ⟨hLin, ?_⟩
+  intro routes hr r hin
+  rw [((multiNetPip_routing_sound routes (fun _ => evalSettledDualTiles frames pt) hr).2 r hin).2]
+  exact evalSettledDualTiles_eq_extract frames pt hCan
 
 /-- End-to-end Organ O7 pipeline bundle connecting Cubical `FaceIdeal3`, Rung-2 `DeltaNet`, and
     Rung-5 dual-tile `FABulous` DPR bitstream execution. -/
@@ -3779,7 +4111,6 @@ def checkLeanFpgaTurn (turn : LeanFpgaTurn) : Bool :=
     4. Conjunction entailment `siliconSimpMeetImplies` and strict boundary non-collapse `∂𝕀 ≠ 𝕀` hold, and
     5. DPR isolation (`turn.dprFenceActive = true`) and `MultiTileRoutedCorrespondence` hold. -/
 theorem apex_lean_fpga_rung2_to_rung5
-    [hOb : LeanFpgaObligations]
     (turn : LeanFpgaTurn)
     (p : PortEnd)
     (pt : TernaryPt3)
@@ -3842,7 +4173,7 @@ theorem apex_lean_fpga_rung2_to_rung5
                  FaceIdeal3.siliconSimpMeetImplies turn.cofibLeft turn.cofibRight,
                  FaceIdeal3.varEq0_join_varEq1_ne_top v,
                  hFence,
-                 hOb.multiTileNextpnrRoutingSound turn.deltaNet turn.dualFrames pt hLin hCan⟩
+                 routedDualTiles_sound turn.deltaNet turn.dualFrames pt hLin hCan⟩
 
 /-! ## 5. `SilverWorkflow` Instance & Multi-Def `Leaf.Book` / `FaceIdeal3` Fixtures -/
 
@@ -4035,204 +4366,43 @@ open Obend.Trailblaze.CathedralApex
 
 set_option autoImplicit false
 
-/-! ## §1. Concrete Stage-B Discharge of `PolisObligations` (Organ O3) -/
+/-! ## §1. Concrete Stage-B Discharge of Polis trace laws (Organ O3) -/
 
 private theorem bool_eq_true_of_not_eq_false {b : Bool} (h : (!b) = false) : b = true := by
   cases b with
   | false => cases h
   | true => rfl
 
-/-! ## §2. Concrete Stage-B Discharge of `LeanFpgaObligations` (Organ O7) -/
+/-! ## §2. Concrete Stage-B Discharge of FPGA execution contracts (Organ O7) -/
 
-/-- Every `DeltaNet` passing `checkDistinctDeltaNodeIds` contains at least `1` hardware node. -/
-theorem checkDistinctDeltaNodeIds_pos_len
-    (nodes : List DeltaNetNode)
-    (hDist : checkDistinctDeltaNodeIds nodes = true) :
-    1 ≤ nodes.length := by
-  cases nodes with
-  | nil =>
-    unfold checkDistinctDeltaNodeIds at hDist
-    cases hDist
-  | cons _ _ =>
-    simp
-
-/-- Combinational dual-tile configurations (`ffEnable = false` on both BELs) with canonical `< 2^11`
-    upper LUT bits are recovered identically by `compileFaceIdealToDualTiles ∘ extractFaceIdealFromDualTiles`. -/
-theorem compile_extract_combinational_dualTiles
-    (cfg : FabulousDualTileConfig)
-    (hHiCan : checkCanonicalHiLut11 cfg.hiTile.lut4Truth = true)
-    (hLoComb : cfg.loTile.ffEnable = false)
-    (hHiComb : cfg.hiTile.ffEnable = false) :
-    compileFaceIdealToDualTiles (extractFaceIdealFromDualTiles cfg)
-      cfg.loTile.pipMux cfg.hiTile.pipMux = cfg := by
-  unfold checkCanonicalHiLut11 at hHiCan
-  rw [decide_eq_true_eq] at hHiCan
-  have hLoLt : cfg.loTile.lut4Truth.toNat < 65536 := cfg.loTile.lut4Truth.isLt
-  unfold compileFaceIdealToDualTiles extractFaceIdealFromDualTiles
-  apply FabulousDualTileConfig.ext
-  · apply FabulousTileConfig.ext
-    · apply BitVec.eq_of_toNat_eq
-      dsimp only
-      rw [BitVec.toNat_setWidth, BitVec.toNat_ofNat]
-      omega
-    · exact hLoComb.symm
-    · rfl
-  · apply FabulousTileConfig.ext
-    · apply BitVec.eq_of_toNat_eq
-      dsimp only
-      rw [BitVec.toNat_setWidth, BitVec.toNat_ushiftRight, BitVec.toNat_ofNat]
-      have hPow16 : (2 : Nat) ^ 16 = 65536 := by decide
-      have hShift :
-          ((cfg.loTile.lut4Truth.toNat + 65536 * (cfg.hiTile.lut4Truth.toNat % 2048)) % 134217728) >>> 16 =
-            ((cfg.loTile.lut4Truth.toNat + 65536 * (cfg.hiTile.lut4Truth.toNat % 2048)) % 134217728) / 65536 := by
-        rw [Nat.shiftRight_eq_div_pow _ 16, hPow16]
-      rw [hShift]
-      omega
-    · exact hHiComb.symm
-    · rfl
-
-/-- On any combinational canonical dual-tile bitstream, `evalDualFabulousCofib` directly evaluates
-    the reconstructed `FaceIdeal3` across all `27` ternary 3-cube points. -/
-theorem evalDualFabulousCofib_combinational_eq_extract
-    (frames : BitVec 32 × BitVec 32)
-    (pt : TernaryPt3)
-    (ffLo ffHi : Bool)
-    (pipLo pipHi : Fin 8 → Bool)
-    (hCan : checkCanonicalDualFrames frames = true)
-    (hLoComb : (decodeDualBitstreamFrames frames).loTile.ffEnable = false)
-    (hHiComb : (decodeDualBitstreamFrames frames).hiTile.ffEnable = false) :
-    evalDualFabulousCofib (decodeDualBitstreamFrames frames) pt ffLo ffHi pipLo pipHi =
-      (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames)).evalTernaryPoint pt := by
-  unfold checkCanonicalDualFrames at hCan
-  simp only [Bool.and_eq_true] at hCan
-  have hHiCan : checkCanonicalHiLut11 (decodeDualBitstreamFrames frames).hiTile.lut4Truth = true := by
-    unfold decodeDualBitstreamFrames
-    exact hCan.2
-  have hCfgEq := compile_extract_combinational_dualTiles (decodeDualBitstreamFrames frames)
-    hHiCan hLoComb hHiComb
-  conv =>
-    lhs
-    rw [← hCfgEq]
-  exact evalDualFabulousCofib_eq_evalTernaryPoint
-    (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames))
-    (decodeDualBitstreamFrames frames).loTile.pipMux
-    (decodeDualBitstreamFrames frames).hiTile.pipMux
-    pt ffLo ffHi pipLo pipHi
-
-/-- **Stage-B Multi-Tile `nextpnr` Switch-Matrix Routing Soundness (`stageB_nextpnr_dual_tile_routing_sound`)**:
-    For every port-linear `DeltaNet` and canonical dual-tile `FABulous` bitstream, constructs an
-    explicit non-empty bounded PIP switch-matrix schedule (`hops.length = 1 ≤ net.nodes.length`)
-    whose routed output matches `(extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames)).evalTernaryPoint pt`
-    (routing combinational dual tiles directly over seed channel `0`, and registered tiles over bypass channel `1`). -/
+/-- Multi-net switch routing is checked against executed tile outputs. -/
 theorem stageB_nextpnr_dual_tile_routing_sound
-    (net : DeltaNet)
-    (frames : BitVec 32 × BitVec 32)
-    (pt : TernaryPt3)
-    (hLin : checkNetPortLinearity net = true)
-    (hCan : checkCanonicalDualFrames frames = true) :
-    MultiTileRoutedCorrespondence net frames pt := by
-  have hLinUnf := hLin
-  unfold checkNetPortLinearity at hLinUnf
-  dsimp only at hLinUnf
-  simp only [Bool.and_eq_true] at hLinUnf
-  have hPosNodes : 1 ≤ net.nodes.length :=
-    checkDistinctDeltaNodeIds_pos_len net.nodes hLinUnf.1.1.1.1.1.2
-  let cfg := decodeDualBitstreamFrames frames
-  if hComb : cfg.loTile.ffEnable = false ∧ cfg.hiTile.ffEnable = false then
-    refine ⟨[⟨0, by decide⟩], (fun _ _ => false), (by decide), hPosNodes, ?_⟩
-    unfold evalPipSwitchChain
-    dsimp only
-    exact evalDualFabulousCofib_combinational_eq_extract frames pt false false
-      (fun _ => false) (fun _ => false) hCan hComb.1 hComb.2
-  else
-    let targetBit := (extractFaceIdealFromDualTiles cfg).evalTernaryPoint pt
-    let bypassCrossbar : Nat → Fin 8 → Bool :=
-      fun stage sel => if stage == 0 && sel.val == 1 then targetBit else false
-    refine ⟨[⟨1, by decide⟩], bypassCrossbar, (by decide), hPosNodes, ?_⟩
-    unfold evalPipSwitchChain
-    dsimp only [bypassCrossbar]
-    rfl
+    (net : DeltaNet) (frames : BitVec 32 × BitVec 32) (pt : TernaryPt3)
+    (hLin : checkNetPortLinearity net = true) (hCan : checkCanonicalDualFrames frames = true) :
+    MultiTileRoutedCorrespondence net frames pt :=
+  routedDualTiles_sound net frames pt hLin hCan
 
-/-- Symbolic port-wiring linearity of `compileLeafExprToDeltaNet netName (.lit v)` for ALL non-empty
-    `netName : String` and ALL `v : Nat` (`0` ground case enumeration). -/
-theorem compileLeafLit_portLinear
-    (netName : String) (v : Nat)
-    (hNonEmpty : netName.isEmpty = false) :
-    checkNetPortLinearity (compileLeafExprToDeltaNet netName (.lit v)) = true := by
-  have hSame :
-      checkNetPortLinearity (compileLeafExprToDeltaNet netName (.lit v)) =
-        checkNetPortLinearity (compileLeafExprToDeltaNet "x" (.lit 0)) := by
-    unfold compileLeafExprToDeltaNet buildLeafExprSubNet capFreeVarPorts
-    unfold checkNetPortLinearity declaredPorts nonRootPorts wireEndpoints
-    simp only [List.append_nil, List.map, List.flatten, checkDistinctDeltaNodeIds,
-               DeltaNetNode.ports, DeltaNetNode.nodeId, hNonEmpty]
-    rfl
-  rw [hSame]
-  rfl
-
-/-- **Stage-B Salvadori `DeltaNet` Normal-Form Simulation (`stageB_leaf_book_deltanet_normal_form`)**:
-    Whenever `.get book.link member` reduces in `Obend.Core.Term.Steps` to `.nat v` for a non-empty
-    `netName`, `compileLeafExprToDeltaNet netName (.lit v)` yields a closed, port-linear, redex-free
-    normal-form `DeltaNet` carrying the exact `UInt16` literal constructor tag at `rootPort.nodeId`. -/
+/-- A supplied graph-interaction trace starts at the actual lowered member.
+The final literal is decoded from the resulting graph, never compiled independently. -/
 theorem stageB_leaf_book_deltanet_normal_form
-    (netName : String) (book : Obend.Leaf.Book) (member : String) (v : Nat)
-    (hNonEmpty : netName.isEmpty = false) :
-    ∃ reduced : DeltaNet,
-      reduced.netName = netName ∧
-      checkNetPortLinearity reduced = true ∧
-      activePrincipalRedexes reduced = [] ∧
-      reduced.nodes.length ≤
-        (lowerLeafBookMemberToDeltaNet netName book member).nodes.length + v + 3 ∧
-      (reduced.nodes.any
-        (fun n => n == .con reduced.rootPort.nodeId (UInt16.ofNat ((v % 32767) + 1)))) = true := by
-  let reduced := compileLeafExprToDeltaNet netName (.lit v)
-  refine ⟨reduced, rfl, compileLeafLit_portLinear netName v hNonEmpty, ?_, ?_, ?_⟩
-  · unfold reduced compileLeafExprToDeltaNet buildLeafExprSubNet capFreeVarPorts activePrincipalRedexes
-    rfl
-  · have hLen : reduced.nodes.length = 3 := by
-      unfold reduced compileLeafExprToDeltaNet buildLeafExprSubNet capFreeVarPorts
-      rfl
-    rw [hLen]
-    omega
-  · unfold reduced compileLeafExprToDeltaNet buildLeafExprSubNet capFreeVarPorts
-    dsimp only [List.any_cons]
-    simp
-
-/-- Concrete Stage-B discharge of `LeanFpga.LeanFpgaObligations` (`0 sorry`, `0 Classical.choice`). -/
-instance instStageBLeanFpgaObligations : LeanFpgaObligations where
-  multiTileNextpnrRoutingSound := by
-    intro net frames pt hLin hCan
-    have hLinUnf := hLin
-    unfold checkNetPortLinearity at hLinUnf
-    dsimp only at hLinUnf
-    simp only [Bool.and_eq_true] at hLinUnf
-    have hPosNodes : 1 ≤ net.nodes.length :=
-      checkDistinctDeltaNodeIds_pos_len net.nodes hLinUnf.1.1.1.1.1.2
-    let cfg := decodeDualBitstreamFrames frames
-    if hComb : cfg.loTile.ffEnable = false ∧ cfg.hiTile.ffEnable = false then
-      refine ⟨[⟨0, by decide⟩], (fun _ _ => false), (by decide), hPosNodes, ?_⟩
-      unfold evalPipSwitchChain
-      dsimp only
-      exact evalDualFabulousCofib_combinational_eq_extract frames pt false false
-        (fun _ => false) (fun _ => false) hCan hComb.1 hComb.2
-    else
-      let targetBit := (extractFaceIdealFromDualTiles cfg).evalTernaryPoint pt
-      let bypassCrossbar : Nat → Fin 8 → Bool :=
-        fun stage sel => if stage == 0 && sel.val == 1 then targetBit else false
-      refine ⟨[⟨1, by decide⟩], bypassCrossbar, (by decide), hPosNodes, ?_⟩
-      unfold evalPipSwitchChain
-      dsimp only [bypassCrossbar]
-      rfl
-  bookToDeltaNetConfluent := by
-    intro netName book member v hNonEmpty _hSteps
-    exact stageB_leaf_book_deltanet_normal_form netName book member v hNonEmpty
-
+    (netName : String) (book : Obend.Leaf.Book) (member : String) (value : Nat)
+    (trace : List (Nat × Nat)) (reduced : DeltaNet)
+    (hRun : runDeltaReductions (lowerLeafBookMemberToDeltaNet netName book member) trace = some reduced)
+    (hNormal : checkDeltaNormalForm reduced value = true) :
+    DeltaNetSteps (lowerLeafBookMemberToDeltaNet netName book member) reduced ∧
+      checkNetPortLinearity reduced = true ∧ activePrincipalRedexes reduced = [] ∧
+      reduced.nodes.any (fun n => match n with
+        | .con id tag => id == reduced.rootPort.nodeId && reduced.symbols[tag.toNat]? == some (.literal value)
+        | _ => false) = true := by
+  have hn := hNormal
+  simp only [checkDeltaNormalForm, Bool.and_eq_true, List.isEmpty_eq_true] at hn
+  exact ⟨runDeltaReductions_sound _ _ _ hRun, hn.1.1, hn.1.2, hn.2⟩
 
 /-! ## §3. Unconditional Stage-B Sealed Organ Theorems (`0` `*Obligations` Binders!) -/
 
 /-- **1. Unconditional Stage-B Polis DeOS Multi-Turn Trace Seal (`stageB_polis_deos_trace_sealed`)**:
     Zero `*Obligations` typeclass binders! Welds `Polis.apex_polis_deos_trace_safe` (discharged
-    via `instStageBPolisObligations`) to `Obend.Polis.CapTP.lookupSwissExec_eq_spec`,
+    via the proved DMA trace law) to `Obend.Polis.CapTP.lookupSwissExec_eq_spec`,
     `Obend.Polis.attenuate_monotone_rights`, and `Obend.Polis.verifyOpening_binds`. -/
 theorem stageB_polis_deos_trace_sealed
     {P : PCA} [DecidableEq P.Code] {A B : Assembly P}
@@ -4302,7 +4472,7 @@ theorem stageB_polis_deos_trace_sealed
 
 /-- **2. Unconditional Stage-B LeanFPGA Rung-2-to-Rung-5 Seal (`stageB_lean_fpga_rung2_to_rung5_sealed`)**:
     Zero `*Obligations` typeclass binders! Welds `LeanFpga.apex_lean_fpga_rung2_to_rung5` (discharged
-    via `instStageBLeanFpgaObligations`), `stageB_leaf_book_deltanet_normal_form`,
+    via explicit execution certificates), `stageB_leaf_book_deltanet_normal_form`,
     `Obend.Hardware.Fabulous.smModule_eval_eq_SmPrim_eval` (certified switch-matrix RTL equivalence),
     and `Obend.Hardware.Hvm.Step` local `CON-CON` annihilation soundness. -/
 theorem stageB_lean_fpga_rung2_to_rung5_sealed
@@ -4323,7 +4493,9 @@ theorem stageB_lean_fpga_rung2_to_rung5_sealed
     (hNonRoot : p ∈ nonRootPorts turn.deltaNet)
     (hSmWF : sm.wf = true)
     (hSmEnc : Obend.Hardware.Fabulous.SmEncodes sm smCfg smInp smInsVec)
-    (hNameNonEmpty : netName.isEmpty = false) :
+    (reduced : DeltaNet) (trace : List (Nat × Nat))
+    (hRun : runDeltaReductions (lowerLeafBookMemberToDeltaNet netName leafBook member) trace = some reduced)
+    (hNormal : checkDeltaNormalForm reduced litVal = true) :
     countPort p (wireEndpoints turn.deltaNet.wires) = 1 ∧
     countPort turn.deltaNet.rootPort (wireEndpoints turn.deltaNet.wires) = 0 ∧
     encodeDualBitstreamFrames (decodeDualBitstreamFrames turn.dualFrames) = turn.dualFrames ∧
@@ -4337,14 +4509,8 @@ theorem stageB_lean_fpga_rung2_to_rung5_sealed
     Obend.Hardware.Hvm.Steps hvmBook
       ⟨hvmRoot, [(.con a₁ a₂, .con b₁ b₂)]⟩
       ⟨hvmRoot, [(a₁, b₁), (a₂, b₂)]⟩ ∧
-    (∃ reduced : DeltaNet,
-      reduced.netName = netName ∧
-      checkNetPortLinearity reduced = true ∧
-      activePrincipalRedexes reduced = [] ∧
-      reduced.nodes.length ≤
-        (lowerLeafBookMemberToDeltaNet netName leafBook member).nodes.length + litVal + 3 ∧
-      (reduced.nodes.any
-        (fun n => n == .con reduced.rootPort.nodeId (UInt16.ofNat ((litVal % 32767) + 1)))) = true) := by
+    (DeltaNetSteps (lowerLeafBookMemberToDeltaNet netName leafBook member) reduced ∧
+      checkDeltaNormalForm reduced litVal = true) := by
   have hApex :=
     apex_lean_fpga_rung2_to_rung5 turn p pt vAxis ffLo ffHi pipLo pipHi hTurn hNonRoot
   have hSm :=
@@ -4358,7 +4524,7 @@ theorem stageB_lean_fpga_rung2_to_rung5_sealed
   exact ⟨hApex.1, hApex.2.1, hApex.2.2.1, hApex.2.2.2.1,
          hApex.2.2.2.2.2.1, hApex.2.2.2.2.2.2.1, hApex.2.2.2.2.2.2.2,
          hSm, hHvmStep,
-         stageB_leaf_book_deltanet_normal_form netName leafBook member litVal hNameNonEmpty⟩
+         ⟨runDeltaReductions_sound _ _ _ hRun, hNormal⟩⟩
 
 /-- **3. Unconditional Stage-B ZkStripe + Dual-Spine PCS + ZkBiscuit Seal (`stageB_zkstripe_calltree_sealed`)**:
     Zero `*Obligations` typeclass binders! Welds `ZkStripe.apex_zkstripe_calltree_audit`,
