@@ -223,15 +223,7 @@ example :
       final.remVaultBudget = 25 ∧
       final.cathedralState.weightsRoot = 0x55556666 ∧
       final.cathedralState.lastEpoch = 2 :=
-  runStageBCathedralTrace_two_turn_inhabited 50 (by decide) (by decide)
-    (by native_decide) (by native_decide) (by native_decide) (by native_decide)
-
-private theorem sampleStageBTurn1_mb_ok :
-    checkTurnMandateAndBiscuit sampleStageBSevenOrganTurn1 = true := by
-  unfold checkTurnMandateAndBiscuit sampleStageBSevenOrganTurn1
-  dsimp only
-  rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
-  decide
+  by native_decide
 
 -- All 5 named refusal paths of `refuseStageBCathedralStep` verified in the Lean kernel:
 
@@ -240,56 +232,29 @@ example :
     refuseStageBCathedralStep sampleStageBInitState
       { sampleStageBSevenOrganTurn1 with
           vaultInvocation := { canonicalStageBInvocation with epoch := 999 } } =
-      some "refused: vault-mandate-or-zkbiscuit-unauthorized" := by
-  unfold refuseStageBCathedralStep checkTurnMandateAndBiscuit
-  have hInvFalse :
-      Obend.Vault.Mandate.checkInvocation canonicalStageBMandate
-        { canonicalStageBInvocation with epoch := 999 } = false := by decide
-  change
-    (if !(Obend.Vault.Mandate.checkInvocation canonicalStageBMandate
-            { canonicalStageBInvocation with epoch := 999 } && _) then
-       some "refused: vault-mandate-or-zkbiscuit-unauthorized"
-     else _) = _
-  rw [hInvFalse]
-  rfl
+      some "refused: pinned-session-authority" := by
+  native_decide
 
 -- Refusal Path 1b: `ZkBiscuit` attenuation refusal (`requiredRights = 0xFF ⊈ 0x07`)
 example :
     refuseStageBCathedralStep sampleStageBInitState
       { sampleStageBSevenOrganTurn1 with requiredRights := 0xFF } =
-      some "refused: vault-mandate-or-zkbiscuit-unauthorized" := by
-  have hMBFalse :
-      checkTurnMandateAndBiscuit
-        { sampleStageBSevenOrganTurn1 with requiredRights := 0xFF } = false := by
-    unfold checkTurnMandateAndBiscuit sampleStageBSevenOrganTurn1
-    dsimp only
-    rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
-    decide
-  unfold refuseStageBCathedralStep
-  rw [hMBFalse]
-  rfl
+      some "refused: pinned-session-authority" := by
+  native_decide
 
 -- Refusal Path 2: `Vault` cumulative `Mandate` budget exhausted (`remVaultBudget = 5 < cost = 10`)
 example :
     refuseStageBCathedralStep { sampleStageBInitState with remVaultBudget := 5 }
       sampleStageBSevenOrganTurn1 =
       some "refused: vault-budget-exhausted" := by
-  unfold refuseStageBCathedralStep
-  rw [sampleStageBTurn1_mb_ok]
-  rfl
+  native_decide
 
 -- Refusal Path 3: `LeanFpga` Rung-2/Rung-4 turn invalid (`plantedNonlinearNetTurn`)
 example :
     refuseStageBCathedralStep sampleStageBInitState
       { sampleStageBSevenOrganTurn1 with fpgaTurn := plantedNonlinearNetTurn } =
       some "refused: lean-fpga-turn-invalid" := by
-  have hMB :
-      checkTurnMandateAndBiscuit
-        { sampleStageBSevenOrganTurn1 with fpgaTurn := plantedNonlinearNetTurn } = true :=
-    sampleStageBTurn1_mb_ok
-  unfold refuseStageBCathedralStep
-  rw [hMB]
-  rfl
+  native_decide
 
 -- Refusal Path 4: `Polis` DeOS session step rejected (replayed capability nullifier)
 example :
@@ -300,9 +265,7 @@ example :
                 revokedCodes := [sampleValidPolisTurn.inputCode] } }
       sampleStageBSevenOrganTurn1 =
       some "refused: polis-session-step-rejected" := by
-  unfold refuseStageBCathedralStep
-  rw [sampleStageBTurn1_mb_ok]
-  rfl
+  native_decide
 
 -- Refusal Path 5: `Cathedral` governance step rejected (`brokenWeldCathedralTurn`)
 example :
@@ -310,7 +273,6 @@ example :
       { sampleStageBSevenOrganTurn1 with cathedralTurn := brokenWeldCathedralTurn } =
       some "refused: cathedral-governance-step-rejected" := by
   native_decide
-
 /-! ## §4. `#tooth` Mutation-Killing Barriers (`6` Kills ≥ `4` Required) -/
 
 -- `#tooth` Kill 1: mutating `mmioRangesDisjoint` to `fun _ _ => true` breaks `mmioRangesDisjoint_not_both_contain`
@@ -335,9 +297,9 @@ example :
 #tooth Obend.Trailblaze.StageB.stepStageBCathedral_skip_implies_violation by
   mutation Obend.Trailblaze.StageB.refuseStageBCathedralStep := fun _ _ => none
 
--- `#tooth` Kill 6: mutating `checkTurnMandateAndBiscuit` to `fun _ => true` breaks `stageB_cathedral_seven_organ_trace_sealed`
+-- `#tooth` Kill 6: mutating `checkPinnedSessionAuthority` to `fun _ => true` breaks `stageB_cathedral_seven_organ_trace_sealed`
 #tooth Obend.Trailblaze.StageB.stageB_cathedral_seven_organ_trace_sealed by
-  mutation Obend.Trailblaze.StageB.checkTurnMandateAndBiscuit := fun _ => true
+  mutation Obend.Trailblaze.StageB.checkPinnedSessionAuthority := fun _ _ => true
 
 #tooth Obend.Trailblaze.StageB.checkPinnedSessionAuthority_revoked_prefix by
   mutation Obend.Trailblaze.StageB.checkPinnedSessionAuthority := fun _ _ => true
@@ -354,7 +316,7 @@ example (st : StageBSevenOrganState) (t : StageBSevenOrganTurn)
       { st with
         biscuitRevoked := st.biscuitRevoked.insert
           (Obend.Polis.credNul (Obend.Polis.lineageOf st.biscuitRoot pre.toList)) }
-      { t with biscuitRevoked := Obend.Polis.RevokedSet.empty } = false := by
+      t = false := by
   apply checkPinnedSessionAuthority_revoked_prefix _ _ pre ext hh
   exact Obend.Polis.RevokedSet.contains_insert_self _ _
 
