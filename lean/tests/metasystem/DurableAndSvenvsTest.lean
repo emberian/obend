@@ -48,6 +48,7 @@ import all Obend.Vault.Replay
 import all Obend.Judge.SvenvsCorrigibility
 
 public section
+set_option Elab.async false
 
 namespace Obend.Tests.DurableAndSvenvsTest
 
@@ -860,3 +861,10 @@ example (ctrl : Nat → Nat) :
 end Obend.Tests.DurableAndSvenvsTest
 
 end
+
+-- Temporary compact diagnostics for the broker's bounded output tail.
+run_cmd do
+  let errors := (← get).messages.toList.filter (fun msg => msg.severity == .error)
+  for msg in errors do
+    let flat := (← msg.data.toString).replace "\n" " "
+    Lean.logError m!"prior error line {msg.pos.line}: {String.ofList (flat.toList.take 700)}"

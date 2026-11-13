@@ -7,6 +7,7 @@ import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
 public section
+set_option Elab.async false
 
 /-!
 # `tests/metasystem/PolisZkOcapVerkleTest.lean`
@@ -385,3 +386,10 @@ example (r : ByteArray) (addr v₁ v₂ : UInt64) (p₁ p₂ : Array (Array Byte
   Obend.Polis.verifyOpening := fun _ _ _ _ => false
 
 end Obend.Tests.PolisZkOcapVerkleTest
+
+-- Temporary compact diagnostics for the broker's bounded output tail.
+run_cmd do
+  let errors := (← get).messages.toList.filter (fun msg => msg.severity == .error)
+  for msg in errors do
+    let flat := (← msg.data.toString).replace "\n" " "
+    Lean.logError m!"prior error line {msg.pos.line}: {String.ofList (flat.toList.take 700)}"

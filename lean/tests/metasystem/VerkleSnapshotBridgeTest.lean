@@ -9,6 +9,7 @@ import Obend.AssertAxioms
 import Obend.Tactic.Tooth
 
 public section
+set_option Elab.async false
 
 /-!
 # `tests/metasystem/VerkleSnapshotBridgeTest.lean` — Pillar-3 COW `ChunkedWorld` ↔ `VerkleUmem` & WAL Suite
@@ -352,3 +353,10 @@ example (w : Obend.Vault.ChunkedWorld.World) :
   Obend.Vault.ExpVerkleAndOpenHash.verifyExpVerkleOpening := fun _ _ _ _ _ => true
 
 end Obend.Tests.Metasystem.VerkleSnapshotBridgeTest
+
+-- Temporary compact diagnostics for the broker's bounded output tail.
+run_cmd do
+  let errors := (← get).messages.toList.filter (fun msg => msg.severity == .error)
+  for msg in errors do
+    let flat := (← msg.data.toString).replace "\n" " "
+    Lean.logError m!"prior error line {msg.pos.line}: {String.ofList (flat.toList.take 700)}"
