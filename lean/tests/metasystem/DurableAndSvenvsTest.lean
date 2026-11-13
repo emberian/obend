@@ -45,6 +45,7 @@ import all Obend.Receipt
 import all Obend.Vault.Rehydration
 import all Obend.Core.Data
 import all Obend.Vault.Replay
+import all Obend.Crypto.Transcript
 import all Obend.Judge.SvenvsCorrigibility
 
 public section
@@ -769,7 +770,8 @@ theorem cap_transfer_roundtrip_passes :
   refine ⟨by decide, by decide, by decide, ?_⟩
   simp [checkCapTransferRoundtrip, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data,
     yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate,
-    CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex,
+    CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes,
+    sampleIdentityHash, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex,
     DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?,
     dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
@@ -799,7 +801,8 @@ theorem test_forged_and_tampered_refused :
   refine ⟨?_, ?_, rfl, rfl⟩ <;>
     simp [forgedIndexRejected, tamperedSealRejected, dehydrate, sampleSealKey, ByteArray.size,
       -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot,
-      duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields,
+      duplicateSlot, rehydrate, CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes,
+    sampleIdentityHash, indexedFromBool, rehydrateVal, rehydrateFields,
       takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?,
       dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
@@ -834,7 +837,8 @@ theorem authority_epoch_slots_refused :
     forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
   simp [forgedAuthorityRejected, staleEpochRejected, duplicateSlotsRejected, dehydrate, sampleSealKey,
     ByteArray.size, -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields,
-    takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal,
+    takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, computeCapFrameSeal, capFramePreimage, encodeCapTableBytes,
+    sampleIdentityHash, indexedFromBool, rehydrateVal,
     rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
     DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq,
     tvalFieldsBeq] <;> decide
