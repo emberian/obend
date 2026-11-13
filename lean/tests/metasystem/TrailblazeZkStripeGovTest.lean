@@ -398,21 +398,41 @@ example : ∃ t : HttpsSessionNode,
     callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t =
       callTreeDigestBytes (Obend.Digest.Cshake256.cshake256Bytes []) t := cshake_callTree_binding_inhabited
 
+/-- A prover cannot substitute an unframed response body under otherwise permissive regexes. -/
+def unframedJsonTree : HttpsSessionNode :=
+  .mk fixtureNotaryKey "api.stripe.com" (utf8Bytes "GET /v1") (utf8Bytes "{oops") []
+example : auditNodes defaultZkStripePolicy unframedJsonTree =
+    .error (.malformedJson "api.stripe.com") := by decide +kernel
+
 /-- One-worker identity reduction executes S_ENDPGM and reads the loaded VGPR. -/
 def executedDispatch : Rdna2WavefrontDispatch :=
   ⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩
-example : checkRdna2DispatchEnvelope executedDispatch = true := by decide +kernel
-example : checkRdna2DispatchEnvelope { executedDispatch with hwReducedOut := #[99, 11] } = false := by decide +kernel
-example : checkRdna2DispatchEnvelope { executedDispatch with shaderIsaWords := #[0xffffffff] } = false := by decide +kernel
+example : checkRdna2DispatchEnvelope executedDispatch = true := by
+  simp only [checkRdna2DispatchEnvelope, checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
+  decide +kernel
+example : checkRdna2DispatchEnvelope { executedDispatch with hwReducedOut := #[99, 11] } = false := by
+  simp only [checkRdna2DispatchEnvelope, checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
+  decide +kernel
+example : checkRdna2DispatchEnvelope { executedDispatch with shaderIsaWords := #[0xffffffff] } = false := by
+  simp only [checkRdna2DispatchEnvelope, checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
+  decide +kernel
 
 
 def openingHash : Obend.Digest.HashBytes.Hash := fun _ => Obend.Digest.HashBytes.be 32 1
 def validOpening : SealedVramOpeningClaim :=
   ⟨1, 1, 1, Array.replicate 8 0, Array.replicate 8 1, Array.replicate 8 ⟨[]⟩, 0⟩
-example : checkVramChallengeOpening openingHash 1 42 validOpening = true := by decide +kernel
-example : checkVramChallengeOpening openingHash 1 42 { validOpening with sealedRoot256 := 0 } = false := by decide +kernel
-example : checkVramChallengeOpening openingHash 1 42 { validOpening with challengeSeed256 := 2 } = false := by decide +kernel
-example : checkVramChallengeOpening openingHash 1 42 { validOpening with openedPageDigests := Array.replicate 8 2 } = false := by decide +kernel
+example : checkVramChallengeOpening openingHash 1 42 validOpening = true := by
+  simp only [checkRdna2DispatchEnvelope, checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
+  decide +kernel
+example : checkVramChallengeOpening openingHash 1 42 { validOpening with sealedRoot256 := 0 } = false := by
+  simp only [checkRdna2DispatchEnvelope, checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
+  decide +kernel
+example : checkVramChallengeOpening openingHash 1 42 { validOpening with challengeSeed256 := 2 } = false := by
+  simp only [checkRdna2DispatchEnvelope, checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
+  decide +kernel
+example : checkVramChallengeOpening openingHash 1 42 { validOpening with openedPageDigests := Array.replicate 8 2 } = false := by
+  simp only [checkRdna2DispatchEnvelope, checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
+  decide +kernel
 
 end Obend.Tests.Metasystem.TrailblazeZkStripeGovTest
 end

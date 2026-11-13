@@ -1991,13 +1991,16 @@ theorem sealedVramRandomOpening_sound (H : Obend.Digest.HashBytes.Hash)
 /-- Constructive execution fixture: one worker, two nonzero slices, decoded S_ENDPGM. -/
 theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
     checkRdna2DispatchEnvelope d = true := by
-  exact ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, by decide +kernel⟩
+  exact ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, by
+    simp only [checkRdna2DispatchEnvelope, ← Array.all_toList]
+    decide +kernel⟩
 
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
 theorem vramChallengeOpening_inhabited : ∃ H root nonce c,
     checkVramChallengeOpening H root nonce c = true := by
   refine ⟨(fun _ => Obend.Digest.HashBytes.be 32 1), 1, 42,
     ⟨1, 1, 1, Array.replicate 8 0, Array.replicate 8 1, Array.replicate 8 ⟨[]⟩, 0⟩, ?_⟩
+  simp only [checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
   decide +kernel
 
 /-- **Organ O6 Unconditional Apex Step Theorem (`apex_verifiable_ai_cluster_step`)**:
