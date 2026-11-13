@@ -1,5 +1,5 @@
 module
-/-! Persistent Polis sessions and executable FPGA refinement. -/
+/- Persistent Polis sessions and executable FPGA refinement. -/
 public import Obend.Trailblaze.CathedralApex
 import all Obend.Trailblaze.CathedralApex
 public import Obend.Tactic.Tooth

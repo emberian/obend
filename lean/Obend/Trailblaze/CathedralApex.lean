@@ -1,5 +1,5 @@
 module
-/-! Authenticated call-tree and cluster-governance composition. -/
+/- Authenticated call-tree and cluster-governance composition. -/
 public import Obend.Judge.Class
 public import Obend.Reasons
 public import Obend.Digest.HashBytes
