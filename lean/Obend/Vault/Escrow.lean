@@ -18,12 +18,14 @@ public import Obend.Spec.LawCompile
 
 public import Obend.Vault.SurviveFirePor
 import all Obend.Vault.SurviveFirePor
-public import Obend.Vault.VerkleSnapshotBridge
-import all Obend.Vault.VerkleSnapshotBridge
+public import Obend.Vault.WorldTree
+public import Obend.Vault.Replay
+import all Obend.Vault.WorldTree
+import all Obend.Vault.Replay
 public import Obend.Vault.Mandate
 public import Obend.Polis.CapTP
 public import Obend.Codec.DetCbor
-public import Obend.Polis.VerkleUmem
+public import Obend.Polis.BlumRam
 public import Obend.Polis.GrainPowerbox
 
 public section

@@ -70,7 +70,7 @@ import all Obend.Law.Std
 import all Obend.Law.Syntax
 import all Obend.Polis.CapTP
 import all Obend.Polis.EvidencedOcap
-import all Obend.Polis.VerkleUmem
+import all Obend.Polis.BlumRam
 import all Obend.Polis.ZkBiscuit
 import all Obend.Run.Core4
 import all Obend.Run.Runner

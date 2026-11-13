@@ -26,10 +26,10 @@ public import Obend.Tactic.Tooth
 meta import Obend.Vault.TransclusionAndMirror
 meta import Obend.Doc.ReactiveNotebook
 meta import Obend.Vault.Escrow
-import all Obend.Vault.ChunkedWorld
+import all Obend.Vault.WorldTree
 import all Obend.Vault.Escrow
 import all Obend.Vault.SurviveFirePor
-import all Obend.Vault.VerkleSnapshotBridge
+import all Obend.Vault.Replay
 import all Obend.Tactic.Tooth
 import all Obend.Vault.FrustumMembrane
 import all Obend.Doc.ReactiveNotebook

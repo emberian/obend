@@ -79,8 +79,9 @@ theorem escrow_valid_transitions_admitted :
       (escrowStateToData escrowSettledState) (reqOf "alice" "alice" 0 10 writeO sampleFacts) :=
   ⟨escrowOp_satisfies_escrowLaw sampleFacts escrowDepositAOp,
    escrowOp_satisfies_escrowLaw sampleFacts escrowSettleOp,
-   (escrowOp_admitted_by_contract sampleFacts escrowDepositAOp "alice" "alice" 0 10).1,
-   (escrowOp_admitted_by_contract sampleFacts escrowSettleOp "alice" "alice" 0 10).1⟩
+   (escrowOp_admitted_by_contract sampleFacts escrowDepositAOp "alice" "alice" 0 10 opened_inv).1,
+   (escrowOp_admitted_by_contract sampleFacts escrowSettleOp "alice" "alice" 0 10
+     (Op_preserves escrowDepositBOp (Op_preserves escrowDepositAOp opened_inv))).1⟩
 
 /-- Rolling back a settled escrow (`settled = 1`) to an unsettled state (`settled = 0`) is
     refused by `escrowLaw` and rejected by `escrowCellContract`. -/

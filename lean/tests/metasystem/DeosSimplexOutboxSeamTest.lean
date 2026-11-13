@@ -36,9 +36,8 @@ import all Obend.Consensus.SimplexLiveness
 import all Obend.Consensus.Finality
 import all Obend.Vault.IrreversibleOutbox
 import all Obend.Vault.UnifiedDeos
-import all Obend.Trailblaze.Polis
-import all Obend.Trailblaze.PolisBlum
-import all Obend.Trailblaze.Obligations
+import all Obend.Trailblaze.StageBInstances
+import all Obend.Polis.BlumRam
 import all Obend.Judge.Computational
 import all Obend.Digest.HashBytes
 import all Obend.Digest.Cshake256.Spec
