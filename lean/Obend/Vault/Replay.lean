@@ -3250,7 +3250,7 @@ theorem dropped_custody_refused (Hb : Bytes → BitVec 256) (key : ByteArray)
 
 /-- Non-cryptographic fixture covering every input byte; never a production authority. -/
 def sampleIdentityHash (bs : Bytes) : BitVec 256 :=
-  bs.foldl (fun h b => h * 257 + BitVec.ofNat 256 b.toNat) 0
+  BitVec.ofNat 256 (bs.foldl (fun h b => h * 257 + b.toNat) 0)
 
 def sampleSealKey : ByteArray := ⟨(List.replicate 32 (0x5a : UInt8)).toArray⟩
 
@@ -3283,7 +3283,7 @@ example : sampleRoundtripCheck = true := by
     rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields,
     takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData,
     DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?,
-    dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq]
+    dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> rfl
 
 /-- Constructive two-capability transfer with a real authority context and distinct live slots. -/
 theorem transfer_inhabited :
