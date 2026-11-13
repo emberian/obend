@@ -1,4 +1,4 @@
-import Obend.Polis.PrepaidLeaseAndFork
+import Obend.Vault.Escrow
 import Obend.Polis.GrainCustodyHost
 import Obend.Tactic.Tooth
 import Obend.AssertAxioms
@@ -210,3 +210,9 @@ theorem concrete_non_omission_unconditional :
 #print axioms host_cannot_omit_committed_turn_or_collision
 #assert_axioms_tree
 end Obend.Polis.Custody.Tests
+
+#tooth Obend.Vault.Escrow.escrowCellContract_conserves_funded_value by
+  mutation Obend.Vault.Escrow.escrowCondT := Obend.Law.trueT
+
+#tooth Obend.Vault.Escrow.escrowCellContract_refuses_unfunded_payout by
+  mutation Obend.Vault.Escrow.escrowBalanceT := fun _ => Obend.Law.trueT

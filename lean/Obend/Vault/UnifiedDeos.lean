@@ -58,11 +58,11 @@ public import Obend.Consensus.SimplexTrace
 public import Obend.Consensus.Epistemic
 public import Obend.Consensus.Finality
 public import Obend.Vault.IrreversibleOutbox
-public import Obend.Polis.ZoeSeatSettlement
+public import Obend.Ledger.Seat
 public import Obend.Run.Durable
 public import Obend.Fold.Collapse
 import all Obend.Run.Durable
-import all Obend.Polis.ZoeSeatSettlement
+import all Obend.Ledger.Seat
 
 public section
 namespace Obend.Vault.UnifiedDeos

@@ -21,13 +21,13 @@ Kernel proofs here evaluate no hash: they instantiate the library's theorems. Ru
 cSHAKE256 are `#guard`s.
 -/
 public import Obend.Vault.TransclusionAndMirror
-public import Obend.Vault.PortableContinuation
+public import Obend.Vault.Escrow
 public import Obend.Tactic.Tooth
 meta import Obend.Vault.TransclusionAndMirror
 meta import Obend.Doc.ReactiveNotebook
 meta import Obend.Vault.PortableContinuation
 import all Obend.Vault.ChunkedWorld
-import all Obend.Vault.PortableContinuation
+import all Obend.Vault.Escrow
 import all Obend.Vault.SurviveFirePor
 import all Obend.Vault.VerkleSnapshotBridge
 import all Obend.Tactic.Tooth
