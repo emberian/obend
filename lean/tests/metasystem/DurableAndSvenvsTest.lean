@@ -64,6 +64,80 @@ open Obend.Judge.SvenvsCorrigibility
 
 set_option autoImplicit false
 
+/-! Kernel mutation checks and axiom audits for the imported contracts. -/
+
+#tooth Obend.Run.VaultDurableBridge.rehydrate_binds_sealKey_epoch_or_collision by mutation
+  Obend.Run.VaultDurableBridge.capFramePreimage := fun _ epoch nonce tbl =>
+    Obend.Crypto.leb128 epoch.toNat ++ encodeCapTableBytes nonce tbl
+
+#tooth Obend.Run.VaultDurableBridge.stale_epoch_refused by mutation
+  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun Hb key _ frame =>
+    decide (key.size = 32 ∧ frame.sealBytes =
+      computeCapFrameSeal Hb key frame.epoch frame.nonce frame.table)
+
+#tooth Obend.Run.VaultDurableBridge.rehydrate_restores_nodup_slots by mutation
+  Obend.Run.VaultDurableBridge.duplicateSlot := fun _ => none
+
+#tooth Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip by mutation
+  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ _ _ => false
+
+#tooth Obend.Run.VaultDurableBridge.forged_cap_index_refused by mutation
+  Obend.Run.VaultDurableBridge.rehydrateVal := fun _ _ avail => .ok (.natural 0, avail, [])
+
+#tooth Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal by mutation
+  Obend.Judge.SvenvsCorrigibility.floorsContainAll := fun _ _ _ => true
+
+#tooth Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe by mutation
+  Obend.Judge.SvenvsCorrigibility.PcaEnvelope.select := fun _ pcc s => (pcc s).1
+
+#print axioms Obend.Core.Ty.custody_isTransferable_not_isData
+
+#print axioms Obend.Core.Ty.isTransferable_forbids_higher_order
+
+#print axioms Obend.Run.VaultDurableBridge.segmented_append_rotates_across_boundary
+
+#print axioms Obend.Run.VaultDurableBridge.parseFrom_committed_with_torn_frame
+
+#print axioms Obend.Run.VaultDurableBridge.segmentedStep_refines_durable
+
+#print axioms Obend.Run.VaultDurableBridge.segmented_torn_crash_recover_idempotent
+
+#print axioms Obend.Run.VaultDurableBridge.segmented_exposed_once
+
+#print axioms Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip
+
+#print axioms Obend.Run.VaultDurableBridge.transfer_conserves_custody_exact
+
+#print axioms Obend.Run.VaultDurableBridge.forged_cap_index_refused
+
+#print axioms Obend.Judge.SvenvsCorrigibility.safe_weakening_iff
+
+#print axioms Obend.Judge.SvenvsCorrigibility.authority_monotone
+
+#print axioms Obend.Judge.SvenvsCorrigibility.maxpol_transparent_run
+
+#print axioms Obend.Judge.SvenvsCorrigibility.override_iff_burned_bridge
+
+#print axioms Obend.Judge.SvenvsCorrigibility.angelic_recoverability_insufficient
+
+#print axioms Obend.Judge.SvenvsCorrigibility.self_mod_preserves_latency_B
+
+#print axioms Obend.Judge.SvenvsCorrigibility.disjoint_homes_empty_floor
+
+#print axioms Obend.Judge.SvenvsCorrigibility.spec_negotiation_safe
+
+#print axioms Obend.Judge.SvenvsCorrigibility.meta_amendment_safe
+
+#print axioms Obend.Judge.SvenvsCorrigibility.bedrock_is_eternal
+
+#print axioms Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal
+
+#print axioms Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe
+
+#print axioms Obend.Judge.SvenvsCorrigibility.pca_strictly_subsumes_static_shield
+
+#print axioms Obend.Judge.SvenvsCorrigibility.nondisclosure_is_inert
+
 -- ============================================================================
 -- 1. Concrete Two-Buyer Segmented Disk Log with Torn-Tail Crash & Rollover
 -- ============================================================================
@@ -713,17 +787,11 @@ theorem authority_epoch_slots_refused :
     forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
   decide
 
-#tooth authority_epoch_slots_refused by mutation
-  Obend.Run.VaultDurableBridge.capFramePreimage := fun _ epoch nonce tbl =>
-    Obend.Crypto.leb128 epoch.toNat ++ encodeCapTableBytes nonce tbl
 
-#tooth authority_epoch_slots_refused by mutation
-  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun Hb key _ frame =>
-    decide (key.size = 32 ∧ frame.sealBytes =
-      computeCapFrameSeal Hb key frame.epoch frame.nonce frame.table)
 
-#tooth Obend.Run.VaultDurableBridge.rehydrate_restores_nodup_slots by mutation
-  Obend.Run.VaultDurableBridge.duplicateSlot := fun _ => none
+
+
+
 
 -- Full-width natural identifiers have distinct encodings past the former 64-bit wrap boundary.
 example : encodeCapTableBytes 0 ⟨[⟨0, ⟨1, 2, []⟩⟩]⟩ ≠
@@ -821,50 +889,39 @@ example (ctrl : Nat → Nat) :
 -- 4. Universal `#tooth` Mutation Verification & `#print axioms` Audit
 -- ============================================================================
 
-#tooth Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip by mutation
-  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun _ _ _ _ => false
 
-#tooth Obend.Run.VaultDurableBridge.forged_cap_index_refused by mutation
-  Obend.Run.VaultDurableBridge.rehydrateVal := fun _ _ avail => .ok (.natural 0, avail, [])
 
-#tooth Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal by mutation
-  Obend.Judge.SvenvsCorrigibility.floorsContainAll := fun _ _ _ => true
 
-#tooth Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe by mutation
-  Obend.Judge.SvenvsCorrigibility.PcaEnvelope.select := fun _ pcc s => (pcc s).1
 
-#print axioms Obend.Core.Ty.custody_isTransferable_not_isData
-#print axioms Obend.Core.Ty.isTransferable_forbids_higher_order
-#print axioms Obend.Run.VaultDurableBridge.segmented_append_rotates_across_boundary
-#print axioms Obend.Run.VaultDurableBridge.parseFrom_committed_with_torn_frame
-#print axioms Obend.Run.VaultDurableBridge.segmentedStep_refines_durable
-#print axioms Obend.Run.VaultDurableBridge.segmented_torn_crash_recover_idempotent
-#print axioms Obend.Run.VaultDurableBridge.segmented_exposed_once
-#print axioms Obend.Run.VaultDurableBridge.rehydrate_dehydrate_roundtrip
-#print axioms Obend.Run.VaultDurableBridge.transfer_conserves_custody_exact
-#print axioms Obend.Run.VaultDurableBridge.forged_cap_index_refused
-#print axioms Obend.Judge.SvenvsCorrigibility.safe_weakening_iff
-#print axioms Obend.Judge.SvenvsCorrigibility.authority_monotone
-#print axioms Obend.Judge.SvenvsCorrigibility.maxpol_transparent_run
-#print axioms Obend.Judge.SvenvsCorrigibility.override_iff_burned_bridge
-#print axioms Obend.Judge.SvenvsCorrigibility.angelic_recoverability_insufficient
-#print axioms Obend.Judge.SvenvsCorrigibility.self_mod_preserves_latency_B
-#print axioms Obend.Judge.SvenvsCorrigibility.disjoint_homes_empty_floor
-#print axioms Obend.Judge.SvenvsCorrigibility.spec_negotiation_safe
-#print axioms Obend.Judge.SvenvsCorrigibility.meta_amendment_safe
-#print axioms Obend.Judge.SvenvsCorrigibility.bedrock_is_eternal
-#print axioms Obend.Judge.SvenvsCorrigibility.habitat_bedrock_is_eternal
-#print axioms Obend.Judge.SvenvsCorrigibility.pca_enveloped_safe
-#print axioms Obend.Judge.SvenvsCorrigibility.pca_strictly_subsumes_static_shield
-#print axioms Obend.Judge.SvenvsCorrigibility.nondisclosure_is_inert
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 end Obend.Tests.DurableAndSvenvsTest
 
 end
-
--- Temporary compact diagnostics for the broker's bounded output tail.
-run_cmd do
-  let errors := (← get).messages.toList.filter (fun msg => msg.severity == .error)
-  for msg in errors do
-    let flat := (← msg.data.toString).replace "\n" " "
-    Lean.logError m!"prior error line {msg.pos.line}: {String.ofList (flat.toList.take 700)}"
