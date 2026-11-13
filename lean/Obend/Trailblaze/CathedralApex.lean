@@ -12,6 +12,9 @@ import all Obend.Judge.VpaComplementAndJson
 import all Obend.Judge.DecoAndCallTree
 public import Obend.Hardware.Gpu.Rdna2.Semantics
 import all Obend.Hardware.Gpu.Rdna2.Semantics
+import Init.Data.List.Sublist
+import Init.Data.String.Lemmas
+import all Init.Data.String.Legacy
 public import Obend.Run.HyperLaw
 
 public section
@@ -713,6 +716,68 @@ def auditChildren (pol : ZkStripePolicy) :
 termination_by structural ts => ts
 end
 
+open Obend.Judge.DecoAndCallTree in
+/-- Match the exact hop bytes and authenticate against the current, consumed ledger. -/
+def sessionMatch (v : ZkStripeVerifiers) (ledger : SessionLedger)
+    (n : HttpsSessionNode) (a : DecoAttestation) : Bool :=
+  decide (a.header.notary.data.toList = be 32 n.notaryKey.toNat) &&
+  decide (a.header.host = n.serverDomain.toUTF8) &&
+  decide (viewBytes a.request.slots = n.redactedRequest) &&
+  decide (viewBytes a.response.slots.tail = n.redactedResponse) &&
+  checkDecoAttestation v.policy ledger a
+
+open Obend.Judge.DecoAndCallTree in
+/-- Consume in pre-order: a child or sibling sees every earlier hop's nonce and intent. -/
+def consumeSessionNodes (v : ZkStripeVerifiers) : SessionLedger → List HttpsSessionNode →
+    Option SessionLedger
+  | ledger, [] => some ledger
+  | ledger, n :: ns => do
+    let a ← v.attestations.find? (sessionMatch v ledger n)
+    consumeSessionNodes v (consume ledger a) ns
+
+open Obend.Judge.DecoAndCallTree in
+theorem consumeSessionNodes_sound (v : ZkStripeVerifiers) (nodes : List HttpsSessionNode)
+    (initial final : SessionLedger) (h : consumeSessionNodes v initial nodes = some final) :
+    ∃ attestations, attestations.length = nodes.length ∧
+      ValidDecoTrace v.policy initial attestations final := by
+  induction nodes generalizing initial with
+  | nil => cases h; exact ⟨[], rfl, .nil _⟩
+  | cons n ns ih =>
+    unfold consumeSessionNodes at h
+    cases hf : v.attestations.find? (sessionMatch v initial n) with
+    | none => simp [hf] at h
+    | some a =>
+      rw [hf] at h
+      obtain ⟨rest, hlen, ht⟩ := ih (consume initial a) h
+      have hm := List.find?_some hf
+      simp only [sessionMatch, Bool.and_eq_true] at hm
+      exact ⟨a :: rest, by simp [hlen],
+        .cons ((checkDecoAttestation_iff_relation _ _ _).mp hm.2) ht⟩
+
+open Obend.Judge.DecoAndCallTree in
+/-- Every accepted pre-order suffix preserves consumed nonces and payment intents. -/
+theorem consumeSessionNodes_no_replay (v : ZkStripeVerifiers) (nodes : List HttpsSessionNode)
+    (initial final : SessionLedger) (h : consumeSessionNodes v initial nodes = some final)
+    (a : DecoAttestation) :
+    (a.header.verifierNonce ∈ initial.consumedNonces → checkDecoAttestation v.policy final a = false) ∧
+    (a.header.paymentIntentId ∈ initial.consumedIntents → checkDecoAttestation v.policy final a = false) := by
+  obtain ⟨as, _, ht⟩ := consumeSessionNodes_sound v nodes initial final h
+  exact ⟨replay_nonce_rejected _ _ _ as ht a, replay_intent_rejected _ _ _ as ht a⟩
+
+open Obend.Judge.DecoAndCallTree in
+/-- Acceptance preserves unique nonce and payment-intent histories at every hop. -/
+theorem consumeSessionNodes_unique (v : ZkStripeVerifiers) (nodes : List HttpsSessionNode)
+    (initial final : SessionLedger) (h : consumeSessionNodes v initial nodes = some final)
+    (hn : initial.consumedNonces.Nodup) (hi : initial.consumedIntents.Nodup) :
+    final.consumedNonces.Nodup ∧ final.consumedIntents.Nodup := by
+  obtain ⟨as, hlen, ht⟩ := consumeSessionNodes_sound v nodes initial final h
+  clear h hlen
+  induction ht with
+  | nil => exact ⟨hn, hi⟩
+  | cons hr _ ih =>
+    exact ih (List.nodup_cons.mpr ⟨hr.1.1, hn⟩)
+      (List.nodup_cons.mpr ⟨hr.1.2.1, hi⟩)
+
 /-- **The audit**: every hop, then the policy program's support for the target conclusion. -/
 def auditZkStripeCallTree (pol : ZkStripePolicy) (root : HttpsSessionNode) :
     Except ZkStripeRefusal Unit :=
@@ -722,9 +787,27 @@ def auditZkStripeCallTree (pol : ZkStripePolicy) (root : HttpsSessionNode) :
     let prog := buildCallTreeProgram pol root
     let st := Obend.Reasons.statusIn (Obend.Reasons.wf prog) pol.targetConclusion
     if st == .supported then
-      .ok ()
+      match consumeSessionNodes pol.verifiers pol.verifiers.ledger (allSessionNodes root) with
+      | some _ => .ok ()
+      | none => .error (.unauthenticatedSession root.serverDomain)
     else
       .error (.policyUnsupported pol.targetConclusion st)
+
+theorem auditZkStripeCallTree_consumes (pol : ZkStripePolicy) (root : HttpsSessionNode)
+    (h : auditZkStripeCallTree pol root = .ok ()) :
+    ∃ final, consumeSessionNodes pol.verifiers pol.verifiers.ledger (allSessionNodes root) = some final := by
+  unfold auditZkStripeCallTree at h
+  cases hn : auditNodes pol root with
+  | error e => simp [hn] at h
+  | ok u =>
+    cases u
+    rw [hn] at h
+    dsimp only at h
+    split at h
+    · cases hc : consumeSessionNodes pol.verifiers pol.verifiers.ledger (allSessionNodes root) with
+      | none => rw [hc] at h; cases h
+      | some final => exact ⟨final, rfl⟩
+    · cases h
 
 def verifyZkStripeCallTree (pol : ZkStripePolicy) (root : HttpsSessionNode) : Bool :=
   (auditZkStripeCallTree pol root).isOk
@@ -1067,10 +1150,10 @@ def fixtureSessionView (head body : ByteArray) : Obend.Judge.DecoAndCallTree.Tra
 def fixtureSessionKey : Obend.Crypto.BinaryTower256.Tower128 :=
   Obend.Crypto.BinaryTower256.unpackTower 7 0x0123456789abcdef0fedcba987654321
 
-def fixtureSessionAttestation (n : HttpsSessionNode) : Obend.Judge.DecoAndCallTree.DecoAttestation :=
+def fixtureSessionAttestation (n : HttpsSessionNode) (epoch : Nat := 0) : Obend.Judge.DecoAndCallTree.DecoAttestation :=
   let a : Obend.Judge.DecoAndCallTree.DecoAttestation :=
     { header := ⟨n.serverDomain.toUTF8, ⟨(be 32 n.notaryKey.toNat).toArray⟩,
-        1, n.serverDomain.toUTF8, n.serverDomain.toUTF8⟩
+        1, (n.serverDomain ++ toString epoch).toUTF8, (n.serverDomain ++ toString epoch).toUTF8⟩
       request := fixtureSessionView ⟨(n.redactedRequest.take (n.redactedRequest.length - 2)).toArray⟩ "{}".toUTF8
       response := fixtureSessionView "HTTP/1.1 200 OK\r\n\r\n".toUTF8 ⟨n.redactedResponse.toArray⟩
       ctBlocks := []
@@ -1082,17 +1165,17 @@ def fixtureSessionAttestation (n : HttpsSessionNode) : Obend.Judge.DecoAndCallTr
         (Obend.Judge.DecoAndCallTree.commitBlocks (Obend.Judge.DecoAndCallTree.recordCommit a))
         a.ctBlocks a.lenBlock }
 
-def fixtureSessionVerifiers : ZkStripeVerifiers where
-  policy := ⟨(allSessionNodes validFourHopCallTree).map (fun n => (n.serverDomain.toUTF8, fixtureSessionKey)),
+def fixtureSessionVerifiers (epoch : Nat := 0) : ZkStripeVerifiers where
+  policy := ⟨(allSessionNodes validFourHopCallTree).map (fun n => ((n.serverDomain ++ toString epoch).toUTF8, fixtureSessionKey)),
     [⟨(be 32 fixtureNotaryKey.toNat).toArray⟩],
     (allSessionNodes validFourHopCallTree).map (fun n => n.serverDomain.toUTF8), 0, 10, []⟩
   ledger := ⟨[], []⟩
-  attestations := (allSessionNodes validFourHopCallTree).map fixtureSessionAttestation
+  attestations := (allSessionNodes validFourHopCallTree).map (fun n => fixtureSessionAttestation n epoch)
 
 /-- The fixture policy: the fixture notary; requests begin with `GET` and nowhere contain `sk_`;
 responses nowhere contain `sk_`; the four hops support `calltree_admitted`. -/
 def defaultZkStripePolicy : ZkStripePolicy where
-  verifiers := fixtureSessionVerifiers
+  verifiers := fixtureSessionVerifiers 0
   trustedNotaryKeys   := [fixtureNotaryKey]
   allowedRequestRe    := .inter (startsWith httpGetPrefix) (forbidSubseq stripeLiveKeyPrefix)
   allowedResponseRe   := forbidSubseq stripeLiveKeyPrefix
@@ -1912,10 +1995,11 @@ structure Rdna2WavefrontDispatch where
 The accepted fragment is unsigned, exact 32-bit sums, at most 256 workers. -/
 @[expose] def rdna2DispatchInput (d : Rdna2WavefrontDispatch) : Obend.Hardware.Gpu.Rdna2.WaveState :=
   { Obend.Hardware.Gpu.Rdna2.GWave.init {} 0 0 with
-    vgpr := Array.ofFn fun i : Fin (256 * 64) =>
-      if i.val % 64 < d.waveSize then
-        UInt32.ofNat ((d.workgroupSlices[i.val / 64]?.getD #[])[i.val % 64]?.getD 0).toNat
-      else 0 }
+    vgpr := (((d.workgroupSlices.toList.take 256).flatMap fun (row : Array Int) =>
+      (List.range 64).map fun lane =>
+        if lane < d.waveSize then UInt32.ofNat (row[lane]?.getD 0).toNat
+        else (0 : UInt32)) ++ List.replicate ((256 - d.workgroupSlices.size) * 64) (0 : UInt32)).toArray }
+
 
 @[expose] def insertRdnaEncoding (entry : Obend.Hardware.Gpu.Rdna2.Encoding) :
     List Obend.Hardware.Gpu.Rdna2.Encoding → List Obend.Hardware.Gpu.Rdna2.Encoding
@@ -2079,43 +2163,110 @@ private theorem decodeRdnaEndProgram :
     decodeRdnaSliceInst [0xbf810000] = some (rdnaEndProgram, 1) := by
   rfl
 
-private theorem executeRdnaEnd (st : Obend.Hardware.Gpu.Rdna2.WaveState)
-    (hh : st.halted = false) (he : st.err = none) (hp : st.pc = 0) :
-    Obend.Hardware.Gpu.Rdna2.run #[some rdnaEndProgram] 5 st =
-      { st with pc := 1, halted := true } := by
-  have hx (w : Obend.Hardware.Gpu.Rdna2.WaveState) :
-      Obend.Hardware.Gpu.Rdna2.execInst rdnaEndProgram w = { w with halted := true } := by
-    simp [Obend.Hardware.Gpu.Rdna2.execInst, rdnaEndProgram,
-      Obend.Hardware.Gpu.Rdna2.modifiersClear, Obend.Hardware.Gpu.Rdna2.instOp,
-      Obend.Hardware.Gpu.Rdna2.Inst.name, Obend.Hardware.Gpu.Rdna2.Inst.field,
-      Obend.Hardware.Gpu.Rdna2.Inst.field?, Obend.Hardware.Gpu.Rdna2.lookupField]
-  have hw : rdnaEndProgram.words.length = 1 := rfl
-  simp [Obend.Hardware.Gpu.Rdna2.run, Obend.Hardware.Gpu.Rdna2.step,
-    hh, he, hp, hx, hw]
+private def rdnaAddProgram : Obend.Hardware.Gpu.Rdna2.Inst :=
+  ⟨⟨"V_ADD_NC_U32", false, false, false, false,
+    [
+      ⟨"ENC_VOP2", "default", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_INST_LITERAL", "has_lit", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_SDWA", "has_sdwa", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_SRC_SIMPLE", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_SRC_SIMPLE", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_DPP8", "has_dpp8", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_DPP16", "has_dpp16", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"ENC_VOP3", "default", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SRC1", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_0", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SRC1", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_1", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_0_has_lit_1", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+    Obend.Hardware.Gpu.Rdna2.enc_ENC_VOP2,
+    ⟨"ENC_VOP2", "default", 37,
+      [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩,
+       ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩,
+       ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+    [("ENCODING", 0), ("OP", 37), ("SRC0", 256), ("VDST", 0), ("VSRC1", 1)], [0x4a000300]⟩
 
 set_option maxRecDepth 100000 in
 set_option maxHeartbeats 8000000 in
-/-- A decoded identity dispatch has two nonzero input and output slices. -/
+private theorem decodeRdnaAddProgram :
+    decodeRdnaSliceInst [0x4a000300, 0xbf810000] = some (rdnaAddProgram, 1) := by rfl
+
+private theorem rdnaStartsWith_eval (s p : String) :
+    s.startsWith p = decide (p.toList <+: s.toList) := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [String.startsWith_string_iff, decide_eq_true_eq]
+
+private theorem rdnaDrop_eval (s : String) (n : Nat) :
+    (s.drop n).toString = String.ofList (s.toList.drop n) := by
+  rw [String.Slice.toString_eq]
+  apply String.toList_injective
+  exact String.toList_copy_drop.trans String.toList_ofList.symm
+
+attribute [local cbv_eval] rdnaStartsWith_eval rdnaDrop_eval
+
+/-- Two independent worker slices, added by V_ADD_NC_U32 v0, v0, v1. -/
+def rdna2AddDispatch : Rdna2WavefrontDispatch :=
+  ⟨#[0x4a000300, 0xbf810000], 32, #[#[3, 5], #[4, 6]], #[7, 11], false⟩
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
+/-- Real decoded addition produces an output different from either worker's input. -/
 theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
-    checkRdna2DispatchEnvelope d = true := by
-  refine ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, ?_⟩
+    checkRdna2DispatchEnvelope d = true ∧ 2 ≤ d.workgroupSlices.size ∧
+    d.hwReducedOut ≠ d.workgroupSlices[0]! ∧ d.hwReducedOut ≠ d.workgroupSlices[1]! := by
+  refine ⟨rdna2AddDispatch, ?_⟩
   simp only [checkRdna2DispatchEnvelope, Bool.and_eq_true, decide_eq_true_eq, ← Array.all_toList]
   repeat' apply And.intro
   all_goals try decide +kernel
-  simp [executeRdna2SliceReduction, decodeRdnaSliceProgram, decodeRdnaEndProgram]
-  rw [executeRdnaEnd _ rfl rfl rfl]
-  simp [Obend.Hardware.Gpu.Rdna2.readVgpr, rdna2DispatchInput,
-    Obend.Hardware.Gpu.Rdna2.GWave.init, ozakiSliceSumExec, ozakiSliceSumExecLoop,
-    Obend.Hardware.Gpu.Rdna2.lanes, Array.getD, sliceVecAddExec, sliceVecAddExecLoop]
-  decide +kernel
+  have hd : decodeRdnaSliceProgram rdna2AddDispatch.shaderIsaWords.size
+      rdna2AddDispatch.shaderIsaWords.toList = some [some rdnaAddProgram, some rdnaEndProgram] := by
+    change decodeRdnaSliceProgram 2 [0x4a000300, 0xbf810000] = _
+    simp only [decodeRdnaSliceProgram, decodeRdnaAddProgram, decodeRdnaEndProgram,
+      List.drop, List.replicate, List.nil_append, List.append_nil, Option.bind, pure]
+    rfl
+  rw [executeRdna2SliceReduction, hd]
+  set_option cbv.maxSteps 1000000 in cbv
 
-/-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
+/-- An injective byte-string test hash with a mixed 32-byte suffix. The VRAM
+projection reads that suffix, so changing either page or sibling changes this witness. -/
+def vramFixtureHash (xs : List UInt8) : List UInt8 := xs ++ ZkStripe.fastMerkleHash xs
+
+private theorem vramFixtureHash_injective (a b : List UInt8)
+    (h : vramFixtureHash a = vramFixtureHash b) : a = b := by
+  have hl := congrArg List.length h
+  have size (xs : List UInt8) : (ZkStripe.fastMerkleHash xs).length = 32 := by
+    simp [ZkStripe.fastMerkleHash, ZkStripe.mixWord]
+  simp only [vramFixtureHash, List.length_append, size] at hl
+  exact (List.append_inj h (by omega)).1
+
+def vramFixtureRoot : BitVec 256 := vramRootFromPath vramFixtureHash 0 1 [2]
+
+def vramOpeningFixture : SealedVramOpeningClaim :=
+  ⟨vramFixtureRoot, deriveVramSeed vramFixtureHash vramFixtureRoot 42 1 1, 1,
+    Array.replicate 8 0, Array.replicate 8 1, Array.replicate 8 ⟨[2]⟩, 1⟩
+
 theorem vramChallengeOpening_inhabited : ∃ H root nonce c,
+    (∀ a b, H a = H b → a = b) ∧ 1 ≤ c.treeDepth ∧
     checkVramChallengeOpening H root nonce c = true := by
-  refine ⟨(fun _ => Obend.Digest.HashBytes.be 32 1), 1, 42,
-    ⟨1, 1, 1, Array.replicate 8 0, Array.replicate 8 1, Array.replicate 8 ⟨[]⟩, 0⟩, ?_⟩
-  simp only [checkVramChallengeOpening, checkSealedVramClaimEnvelope, ← Array.all_toList]
-  decide +kernel
+  refine ⟨vramFixtureHash, vramFixtureRoot, 42, vramOpeningFixture,
+    vramFixtureHash_injective, by decide, ?_⟩
+  simp only [checkVramChallengeOpening, checkSealedVramClaimEnvelope,
+    Bool.and_eq_true, decide_eq_true_eq, ← Array.all_toList]
+  refine ⟨⟨⟨?_, ?_⟩, ⟨rfl, rfl, ?_⟩⟩, ?_⟩
+  · decide +kernel
+  · decide +kernel
+  · apply Array.toList_inj.mp
+    change (Array.replicate 8 0).toList =
+      (deriveVramOffsets vramFixtureHash _ 1 8).toList
+    simp only [deriveVramOffsets, Array.toList_map, Nat.mod_one]
+    decide +kernel
+  · decide +kernel
 
 /-- **Organ O6 Unconditional Apex Step Theorem (`apex_verifiable_ai_cluster_step`)**:
     With **zero open obligations** and **zero `Classical.choice`**, whenever
@@ -2294,6 +2445,8 @@ end Obend.Trailblaze.ClusterGov
 
 
 namespace Obend.Trailblaze.CathedralApex
+
+open Obend.Trailblaze.ZkStripe (consumeSessionNodes consumeSessionNodes_sound defaultZkStripePolicy fixtureSessionVerifiers)
 
 open Obend.Digest.HashBytes (Hash ofBE be CollisionAmong)
 open Obend.Run.HyperLaw (HyperLaw2NonInterference checkHyperLaw2NonInterference
@@ -2680,6 +2833,11 @@ theorem apex_cathedral_zkstripe_to_clustergov_sound
 
 /-! ## §4. Multi-Turn Cathedral Governance Trace (`List CathedralGovernanceTurn`) & Cumulative Invariants -/
 
+deriving instance DecidableEq for Obend.Judge.DecoAndCallTree.SessionLedger
+
+instance : Repr Obend.Judge.DecoAndCallTree.SessionLedger where
+  reprPrec l _ := repr (l.consumedNonces.map (·.data), l.consumedIntents.map (·.data))
+
 /-- Multi-turn governance state across sequential AI training/inference turns:
     tracks current model weight-lineage root, latest FPGA receipt epoch, cumulative proven FLOPs,
     remaining multi-turn FLOP budget, and remaining shadow-operation allowance. -/
@@ -2689,6 +2847,7 @@ structure CathedralTraceState where
   usedFlops          : Nat
   remFlopsBudget     : Nat
   remHiddenOpsBudget : Nat
+  decoLedger : Obend.Judge.DecoAndCallTree.SessionLedger := ⟨[], []⟩
   deriving DecidableEq, Repr
 
 /-- Total proven FLOPs across a multi-turn sequence `turns`. -/
@@ -2720,12 +2879,14 @@ def stepCathedralTrace (st : CathedralTraceState) (turn : CathedralGovernanceTur
      decide (st.lastEpoch < turn.fpgaReceipt.epoch) &&
      decide (turn.clusterCtx.step.flopsUsed ≤ st.remFlopsBudget) &&
      decide (turn.physicalEnvelope.hiddenOpsCap ≤ st.remHiddenOpsBudget) then
-    some {
+    (consumeSessionNodes turn.zkPolicy.verifiers st.decoLedger
+      (allSessionNodes turn.batchCallTree)).map fun ledger => {
       weightsRoot        := turn.clusterCtx.step.nextWeightsRoot
       lastEpoch          := turn.fpgaReceipt.epoch
       usedFlops          := st.usedFlops + turn.clusterCtx.step.flopsUsed
       remFlopsBudget     := st.remFlopsBudget - turn.clusterCtx.step.flopsUsed
       remHiddenOpsBudget := st.remHiddenOpsBudget - turn.physicalEnvelope.hiddenOpsCap
+      decoLedger := ledger
     }
   else
     none
@@ -2787,25 +2948,78 @@ theorem cathedralTrace_sound (init final : CathedralTraceState)
           decide (t.physicalEnvelope.hiddenOpsCap ≤ init.remHiddenOpsBudget))
       · rw [hCond] at hStep; cases hStep
       · rw [hCond] at hStep
-        simp only [↓reduceIte, Option.some.injEq] at hStep
-        simp only [Bool.and_eq_true, decide_eq_true_eq] at hCond
-        rcases hCond with ⟨⟨⟨⟨hTurnOk, hPrevRoot⟩, hEpochLt⟩, hFlopsLe⟩, hHidLe⟩
-        subst hStep
-        obtain ⟨hAllRest, hChainRest, hEpRestLe, hUsedEq, hConsEq, hRestFlopsLe, hRestHidLe⟩ :=
-          ih _ hRun
-        dsimp only at hEpRestLe hUsedEq hConsEq hRestFlopsLe hRestHidLe
-        refine ⟨?_, ⟨hPrevRoot, hEpochLt, hChainRest⟩, by omega, ?_, ?_, ?_, ?_⟩
-        · intro x hx
-          rcases List.mem_cons.mp hx with rfl | hxRest
-          · exact hTurnOk
-          · exact hAllRest x hxRest
-        · dsimp only [turnsTotalFlops]
-          omega
-        · omega
-        · dsimp only [turnsTotalFlops]
-          omega
-        · dsimp only [turnsTotalHiddenOpsCap]
-          omega
+        simp only [↓reduceIte] at hStep
+        cases hLedger : consumeSessionNodes t.zkPolicy.verifiers init.decoLedger
+            (allSessionNodes t.batchCallTree) with
+        | none => rw [hLedger] at hStep; cases hStep
+        | some ledger =>
+          rw [hLedger] at hStep
+          simp only [Option.map_some, Option.some.injEq] at hStep
+          simp only [Bool.and_eq_true, decide_eq_true_eq] at hCond
+          rcases hCond with ⟨⟨⟨⟨hTurnOk, hPrevRoot⟩, hEpochLt⟩, hFlopsLe⟩, hHidLe⟩
+          subst hStep
+          obtain ⟨hAllRest, hChainRest, hEpRestLe, hUsedEq, hConsEq, hRestFlopsLe, hRestHidLe⟩ :=
+            ih _ hRun
+          dsimp only at hEpRestLe hUsedEq hConsEq hRestFlopsLe hRestHidLe
+          refine ⟨?_, ⟨hPrevRoot, hEpochLt, hChainRest⟩, by omega, ?_, ?_, ?_, ?_⟩
+          · intro x hx
+            rcases List.mem_cons.mp hx with rfl | hxRest
+            · exact hTurnOk
+            · exact hAllRest x hxRest
+          · dsimp only [turnsTotalFlops]
+            omega
+          · omega
+          · dsimp only [turnsTotalFlops]
+            omega
+          · dsimp only [turnsTotalHiddenOpsCap]
+            omega
+
+
+/-- No accepted Cathedral turn can reset the persistent DECO history. -/
+theorem stepCathedralTrace_deco (st next : CathedralTraceState) (turn : CathedralGovernanceTurn)
+    (h : stepCathedralTrace st turn = some next) :
+    consumeSessionNodes turn.zkPolicy.verifiers st.decoLedger
+      (allSessionNodes turn.batchCallTree) = some next.decoLedger := by
+  unfold stepCathedralTrace at h
+  split at h
+  · cases hc : consumeSessionNodes turn.zkPolicy.verifiers st.decoLedger
+        (allSessionNodes turn.batchCallTree) with
+    | none => simp [hc] at h
+    | some ledger => simp only [hc, Option.map_some, Option.some.injEq] at h; cases h; rfl
+  · cases h
+
+/-- Nonces and intents persist across arbitrarily many Cathedral turns. -/
+theorem cathedralTrace_deco_history (initial final : CathedralTraceState)
+    (turns : List CathedralGovernanceTurn) (h : runCathedralTrace initial turns = some final) :
+    (∀ n ∈ initial.decoLedger.consumedNonces, n ∈ final.decoLedger.consumedNonces) ∧
+    (∀ n ∈ initial.decoLedger.consumedIntents, n ∈ final.decoLedger.consumedIntents) := by
+  induction turns generalizing initial with
+  | nil => cases h; exact ⟨fun _ h => h, fun _ h => h⟩
+  | cons turn rest ih =>
+    unfold runCathedralTrace at h
+    cases hs : stepCathedralTrace initial turn with
+    | none => simp [hs] at h
+    | some next =>
+      rw [hs] at h
+      obtain ⟨as, _, ht⟩ := consumeSessionNodes_sound _ _ _ _ (stepCathedralTrace_deco _ _ _ hs)
+      obtain ⟨hn, hi⟩ := ih next h
+      exact ⟨fun n hm => hn n (ht.nonces_mono n hm), fun n hm => hi n (ht.intents_mono n hm)⟩
+
+/-- Changing a later turn's verifier policy cannot resurrect a consumed nonce or intent. -/
+theorem cathedralTrace_replay_rejected (initial final : CathedralTraceState)
+    (turns : List CathedralGovernanceTurn) (h : runCathedralTrace initial turns = some final)
+    (policy : Obend.Judge.DecoAndCallTree.DecoPolicy)
+    (a : Obend.Judge.DecoAndCallTree.DecoAttestation)
+    (used : a.header.verifierNonce ∈ initial.decoLedger.consumedNonces ∨
+      a.header.paymentIntentId ∈ initial.decoLedger.consumedIntents) :
+    Obend.Judge.DecoAndCallTree.checkDecoAttestation policy final.decoLedger a = false := by
+  apply Bool.eq_false_iff.mpr
+  intro accepted
+  have fresh := ((Obend.Judge.DecoAndCallTree.checkDecoAttestation_iff_relation _ _ _).mp accepted).1
+  obtain ⟨hn, hi⟩ := cathedralTrace_deco_history initial final turns h
+  rcases used with used | used
+  · exact fresh.1 (hn _ used)
+  · exact fresh.2.1 (hi _ used)
 
 /-- Boolean-gate corollary of `cathedralTrace_sound` for `checkCathedralTrace init turns = true`. -/
 theorem checkCathedralTrace_sound (init : CathedralTraceState)
@@ -2883,6 +3097,7 @@ def sampleSecondCathedralTurn : CathedralGovernanceTurn :=
   let rcpt256 :=
     computeFpgaVerifierReceipt256 ZkStripe.fastMerkleHash 7 2 batchRoot step2 true
   { sampleCathedralTurn with
+    zkPolicy := { defaultZkStripePolicy with verifiers := fixtureSessionVerifiers 1 }
     clusterCtx  := { sampleCathedralTurn.clusterCtx with step := step2 }
     fpgaReceipt := {
       rackId              := 7
@@ -2951,12 +3166,16 @@ theorem checkCathedralTrace_complete (init st' : CathedralTraceState)
     (hEp : init.lastEpoch < t.fpgaReceipt.epoch)
     (hFlops : t.clusterCtx.step.flopsUsed ≤ init.remFlopsBudget)
     (hHid : t.physicalEnvelope.hiddenOpsCap ≤ init.remHiddenOpsBudget)
+    (ledger : Obend.Judge.DecoAndCallTree.SessionLedger)
+    (hLedger : consumeSessionNodes t.zkPolicy.verifiers init.decoLedger
+      (allSessionNodes t.batchCallTree) = some ledger)
     (hSt' : st' = {
       weightsRoot        := t.clusterCtx.step.nextWeightsRoot
       lastEpoch          := t.fpgaReceipt.epoch
       usedFlops          := init.usedFlops + t.clusterCtx.step.flopsUsed
       remFlopsBudget     := init.remFlopsBudget - t.clusterCtx.step.flopsUsed
       remHiddenOpsBudget := init.remHiddenOpsBudget - t.physicalEnvelope.hiddenOpsCap
+      decoLedger := ledger
     })
     (hRest : checkCathedralTrace st' ts = true) :
     runCathedralTrace init [] = some init ∧
@@ -2971,7 +3190,7 @@ theorem checkCathedralTrace_complete (init st' : CathedralTraceState)
   have hHidDec : decide (t.physicalEnvelope.hiddenOpsCap ≤ init.remHiddenOpsBudget) = true :=
     decide_eq_true hHid
   rw [hTurn, hPrevDec, hEpDec, hFlopsDec, hHidDec]
-  simp only [Bool.and_self, ↓reduceIte]
+  simp only [Bool.and_self, ↓reduceIte, hLedger, Option.map_some]
   rw [← hSt']
   exact hRest
 

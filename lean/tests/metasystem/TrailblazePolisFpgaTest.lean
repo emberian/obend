@@ -69,11 +69,11 @@ example : ∃ w : ConcretePolisTurn, polisJudge.Fragment w :=
   ⟨sampleValidPolisTurn, SilverWorkflow.admitted_in_judge_fragment sampleValidPolisTurn (by decide)⟩
 
 example : ∃ t : LeanFpgaTurn, fpgaJudge.Fragment t :=
-  ⟨sampleValidFpgaTurn, SilverWorkflow.admitted_in_judge_fragment sampleValidFpgaTurn rfl⟩
+  ⟨sampleValidFpgaTurn, SilverWorkflow.admitted_in_judge_fragment sampleValidFpgaTurn sampleValidFpgaTurn_admitted⟩
 
 example : ∃ p : ConcretePolisTurn × LeanFpgaTurn, jointJudge.Fragment p :=
   ⟨(sampleValidPolisTurn, sampleValidFpgaTurn),
-   SilverWorkflow.admitted_in_judge_fragment (sampleValidPolisTurn, sampleValidFpgaTurn) (by decide)⟩
+   SilverWorkflow.admitted_in_judge_fragment (sampleValidPolisTurn, sampleValidFpgaTurn) (by native_decide)⟩
 
 -- `refutes` returns `true` (not `false`) and rejected `CompleteOn` turns genuinely refute `Spec`
 example : polisJudge.refutes "refused: foc-hil-watchdog-leak" = true := rfl
@@ -88,8 +88,8 @@ example : ¬ SilverWorkflow.Spec plantedForgedBlumTurn :=
 example : ¬ SilverWorkflow.Spec plantedNonlinearNetTurn :=
   SilverWorkflow.rejected_refutes_spec plantedNonlinearNetTurn rfl rfl
 
-example : jointPolisFpgaWorkflow.runValid (sampleValidPolisTurn, sampleValidFpgaTurn) = true := by decide
-example : jointPolisFpgaWorkflow.refuseInvalid (sampleValidPolisTurn, sampleValidFpgaTurn) = none := by decide
+example : jointPolisFpgaWorkflow.runValid (sampleValidPolisTurn, sampleValidFpgaTurn) = true := by native_decide
+example : jointPolisFpgaWorkflow.refuseInvalid (sampleValidPolisTurn, sampleValidFpgaTurn) = none := by native_decide
 example :
     jointPolisFpgaWorkflow.refuseInvalid (plantedWatchdogLeakTurn, sampleValidFpgaTurn) =
       some "refused: foc-hil-watchdog-leak" := by decide
@@ -306,7 +306,7 @@ example :
   exact evalDualFabulousCofib_eq_evalTernaryPoint _ _ _ pt false false _ _
 
 -- End-to-end Organ O7 Silver smoke witness
-example : silverLeanFpgaSmoke = true := rfl
+example : silverLeanFpgaSmoke = true := silverLeanFpgaSmoke_passes
 
 example : internSymbol [.symbol "x", .symbol "y"] (.symbol "x") ≠
     internSymbol [.symbol "x", .symbol "y"] (.symbol "y") := by decide +kernel
@@ -378,5 +378,66 @@ def priorWriteReadTurn : ConcretePolisTurn :=
       onlineMem := [⟨200, 6, false, 91#64, 0xCC#256⟩] }).isSome &&
     !(stepPolisSession st { priorWriteReadTurn with
       onlineMem := [⟨200, 10, false, 90#64, 0xCC#256⟩] }).isSome
+
+-- Joint routing must preserve distinct source signals with all switches active.
+example : (([twoHopRoute 0, twoHopRoute 3].flatMap PipRoute.switches).foldl
+    evalPipSwitch (fun wire => wire == 3)) 2 = false ∧
+    (([twoHopRoute 0, twoHopRoute 3].flatMap PipRoute.switches).foldl
+    evalPipSwitch (fun wire => wire == 3)) 5 = true := by decide +kernel
+#tooth multiNetPip_joint_routing_sound by
+  mutation evalPipSwitch := fun signals _ => signals
+#tooth checkLeanFpgaTurn_routes by
+  mutation refuseLeanFpgaTurn := fun _ => none
+#tooth Obend.Trailblaze.StageB.stageB_nextpnr_dual_tile_routing_sound by
+  mutation evalPipSwitch := fun signals _ => signals
+
+#guard refuseLeanFpgaTurn { sampleValidFpgaTurn with routes := sampleValidFpgaTurn.routes.reverse } ==
+  some "refused: pip-frame-or-net-mapping"
+#guard refuseLeanFpgaTurn { sampleValidFpgaTurn with routes :=
+    [(sampleValidFpgaTurn.routes.headD ⟨0, []⟩), (sampleValidFpgaTurn.routes.headD ⟨0, []⟩)] } ==
+  some "refused: shared-or-invalid-pip-route"
+#guard refuseLeanFpgaTurn { sampleValidFpgaTurn with routes := (outputTileRoutes sampleLinearDeltaNet 0 0) } == some "refused: pip-frame-or-net-mapping"
+
+#tooth deltaNetBytes_injective by
+  mutation deltaNetBytes := fun _ => []
+#tooth deltaNetDigest_binding by
+  mutation deltaNetBytes := fun _ => []
+#tooth auditLeanFpgaTurn_digest_binding by
+  mutation auditLeanFpgaTurn := fun _ _ _ => true
+#tooth lowerTermToLeafExpr_split_target_sensitive by
+  mutation lowerTermToLeafExpr := fun t => match t with | .nat n => .lit n | _ => .lit 0
+
+example : lowerTermToLeafExpr (.split (.nat 1) [] (.nat 0)) ≠
+    lowerTermToLeafExpr (.split (.nat 2) [] (.nat 0)) := by decide +kernel
+example : lowerTermToLeafExpr (.record []) ≠ lowerTermToLeafExpr (.nat 0) ∧
+    lowerTermToLeafExpr (.record []) ≠ lowerTermToLeafExpr (.boolean false) := by decide +kernel
+example : lowerTermToLeafExpr (.inject "x" (.nat 7)) ≠
+    lowerTermToLeafExpr (.record [("x", .nat 7)]) := by decide +kernel
+#check identityApplication_normalizes
+#check identityBookMember_normalizes
+#check duplicatedApplication_normalizes
+#tooth identityApplication_normalizes by
+  mutation runDeltaReductions := fun _ _ => none
+#tooth duplicatedApplication_normalizes by
+  mutation duplicateDeltaLiteral := fun _ _ _ => none
+
+def distinctTilePoint : TernaryPt3 := (0, 1, 0)
+#guard tileWireSignals sampleValidFpgaTurn.deltaNet sampleValidFpgaTurn.dualFrames distinctTilePoint
+  (tileSourceWire sampleValidFpgaTurn.deltaNet 0)
+#guard !tileWireSignals sampleValidFpgaTurn.deltaNet sampleValidFpgaTurn.dualFrames distinctTilePoint
+  (tileSourceWire sampleValidFpgaTurn.deltaNet 1)
+#tooth checkLeanFpgaTurn_joint_routing by
+  mutation evalPipSwitch := fun signals _ => signals
+
+#guard auditLeanFpgaTurn Obend.Polis.treeHash
+  (sampleValidFpgaTurn.netDigest Obend.Polis.treeHash) sampleValidFpgaTurn
+#guard !auditLeanFpgaTurn Obend.Polis.treeHash [] sampleValidFpgaTurn
+#tooth lowerTermToLeafExpr_injective by
+  mutation lowerTermToLeafExpr := fun _ => .lit 0
+
+#guard refuseLeanFpgaTurn { sampleValidFpgaTurn with deltaNetCommitment := [] } ==
+  some "refused: delta-net-commitment-mismatch"
+#tooth checkLeanFpgaTurn_digest by
+  mutation refuseLeanFpgaTurn := fun _ => none
 
 end Obend.Tests.TrailblazePolisFpgaTest

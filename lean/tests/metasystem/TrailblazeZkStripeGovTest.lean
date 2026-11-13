@@ -467,15 +467,15 @@ example : checkVramChallengeOpening openingHash 1 42 { validOpening with openedP
 
 def forgedNotaryPolicy : ZkStripePolicy :=
   { defaultZkStripePolicy with
-    verifiers := { fixtureSessionVerifiers with
-      attestations := fixtureSessionVerifiers.attestations.map fun a =>
+    verifiers := { fixtureSessionVerifiers 0 with
+      attestations := (fixtureSessionVerifiers 0).attestations.map fun a =>
         { a with ghashTag := Obend.Crypto.BinaryTower256.towerZero 7 } } }
 #guard !verifyZkStripeCallTree forgedNotaryPolicy validFourHopCallTree
 
 def forgedChildNotaryPolicy : ZkStripePolicy :=
   { defaultZkStripePolicy with
-    verifiers := { fixtureSessionVerifiers with
-      attestations := fixtureSessionVerifiers.attestations.map fun a =>
+    verifiers := { fixtureSessionVerifiers 0 with
+      attestations := (fixtureSessionVerifiers 0).attestations.map fun a =>
         if a.header.host == "cdn.dataset.org".toUTF8 then
           { a with ghashTag := Obend.Crypto.BinaryTower256.towerZero 7 }
         else a } }
@@ -505,5 +505,45 @@ run_cmd do
       ``Obend.Trailblaze.ClusterGov.executeRdna2SliceReduction] do
       let info ← Lean.getConstInfo name
       discard <| (auditComputationalChoice (.const name (info.levelParams.map Lean.Level.param))).run {}
+
+-- Reusing a root as its own child must consume the same attestation twice.
+def duplicateNonceTree : HttpsSessionNode :=
+  match validFourHopCallTree with
+  | .mk key host req resp kids => .mk key host req resp (validFourHopCallTree :: kids)
+#guard !verifyZkStripeCallTree defaultZkStripePolicy duplicateNonceTree
+#tooth consumeSessionNodes_unique by
+  mutation sessionMatch := fun _ _ _ _ => true
+#tooth auditZkStripeCallTree_consumes by
+  mutation auditZkStripeCallTree := fun _ _ => .ok ()
+#tooth cathedralTrace_deco_history by
+  mutation stepCathedralTrace := fun st _ => some { st with decoLedger := ⟨[], []⟩ }
+
+-- Epoch and weights advance correctly; only the reused DECO sessions are invalid.
+#guard !checkCathedralTrace sampleInitTraceState
+  [sampleCathedralTurn, { sampleSecondCathedralTurn with zkPolicy := defaultZkStripePolicy }]
+#guard checkCathedralTrace sampleInitTraceState [sampleCathedralTurn, sampleSecondCathedralTurn]
+#guard checkRdna2DispatchEnvelope rdna2AddDispatch
+#guard executeRdna2SliceReduction rdna2AddDispatch == some #[7, 11]
+#guard !checkRdna2DispatchEnvelope { rdna2AddDispatch with hwReducedOut := #[3, 5] }
+#guard !checkRdna2DispatchEnvelope { rdna2AddDispatch with shaderIsaWords := #[0xbf810000] }
+#guard checkVramChallengeOpening vramFixtureHash vramFixtureRoot 42 vramOpeningFixture
+#guard !checkVramChallengeOpening vramFixtureHash vramFixtureRoot 42 { vramOpeningFixture with paths := Array.replicate 8 ⟨[]⟩ }
+#guard !checkVramChallengeOpening vramFixtureHash vramFixtureRoot 42 { vramOpeningFixture with paths := Array.replicate 8 ⟨[3]⟩ }
+
+#guard match auditZkStripeCallTree defaultZkStripePolicy duplicateNonceTree with
+  | .error (.unauthenticatedSession domain) => domain == "api.stripe.com"
+  | _ => false
+#guard checkCathedralTurn { sampleSecondCathedralTurn with zkPolicy := defaultZkStripePolicy }
+#guard match stepCathedralTrace sampleInitTraceState sampleCathedralTurn with
+  | none => false
+  | some st =>
+    (stepCathedralTrace st { sampleSecondCathedralTurn with zkPolicy := defaultZkStripePolicy }).isNone &&
+    (stepCathedralTrace { st with decoLedger := ⟨[], []⟩ }
+      { sampleSecondCathedralTurn with zkPolicy := defaultZkStripePolicy }).isSome
+#tooth cathedralTrace_replay_rejected by
+  mutation stepCathedralTrace := fun st _ => some { st with decoLedger := ⟨[], []⟩ }
+
+#guard !checkVramChallengeOpening vramFixtureHash vramFixtureRoot 42
+  { vramOpeningFixture with openedPageDigests := Array.replicate 8 3 }
 
 end Obend.Tests.Metasystem.TrailblazeZkStripeGovTest

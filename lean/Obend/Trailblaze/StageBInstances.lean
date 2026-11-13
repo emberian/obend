@@ -2109,39 +2109,113 @@ structure DeltaNet where
   wires    : List DeltaWire
   deriving DecidableEq, Repr
 
-/-- Length-framed symbol encoding preserves the constructor namespace and every payload. -/
-def deltaTagBytes (tag : DeltaTag) : List UInt8 :=
-  let (kind, payload) : UInt8 × String := match tag with
-    | .opcode n => (0, toString n.toNat)
-    | .primitive n => (1, toString n.toNat)
-    | .literal n => (2, toString n)
-    | .symbol name => (3, name)
-    | .label name => (4, name)
-    | .hole n => (5, toString n)
-  kind :: Obend.Trailblaze.ZkStripe.frameBytes payload.toUTF8.data.toList
+/-- Canonical binary payloads. Outer length frames distinguish all field boundaries. -/
+def deltaTagBytes : DeltaTag → List UInt8
+  | .opcode n => 0 :: Obend.Crypto.leb128 n.toNat
+  | .primitive n => 1 :: Obend.Crypto.leb128 n.toNat
+  | .literal n => 2 :: Obend.Crypto.leb128 n
+  | .symbol name => 3 :: ZkStripe.utf8Bytes name
+  | .label name => 4 :: ZkStripe.utf8Bytes name
+  | .hole n => 5 :: Obend.Crypto.leb128 n
+
+private theorem deltaNatBytes_injective {a b : Nat}
+    (h : Obend.Crypto.leb128 a = Obend.Crypto.leb128 b) : a = b :=
+  (Obend.Crypto.leb128_prefix_inj (r₁ := []) (r₂ := [])
+    (by simpa only [List.append_nil] using h)).1
+
+theorem deltaTagBytes_injective {a b : DeltaTag} (h : deltaTagBytes a = deltaTagBytes b) : a = b := by
+  cases a <;> cases b <;> simp [deltaTagBytes, ← UInt8.toNat_inj] at h
+  all_goals first
+    | exact congrArg _ (UInt16.toNat_inj.mp (deltaNatBytes_injective h))
+    | exact congrArg _ (deltaNatBytes_injective h)
+    | exact congrArg _ (ZkStripe.utf8Bytes_injective h)
 
 def deltaPortBytes (p : PortEnd) : List UInt8 :=
-  Obend.Trailblaze.ZkStripe.frameBytes (toString p.nodeId).toUTF8.data.toList ++
-    [UInt8.ofNat p.portSlot.val]
+  Obend.Polis.encodeFields [Obend.Crypto.leb128 p.nodeId, Obend.Crypto.leb128 p.portSlot.val]
 
-/-- All graph fields, including the symbol table, are committed with length framing. -/
+private theorem deltaPortBytes_injective {a b : PortEnd}
+    (h : deltaPortBytes a = deltaPortBytes b) : a = b := by
+  have h := Obend.Polis.encodeFields_injective _ _ h
+  simp only [List.cons.injEq, and_true] at h
+  have hn := deltaNatBytes_injective h.1
+  have hp := deltaNatBytes_injective h.2
+  cases a; cases b; simp_all [Fin.ext_iff]
+
+def deltaNodeBytes (n : DeltaNetNode) : List UInt8 :=
+  let (kind, payload) : UInt8 × Nat := match n with
+    | .era _ => (0, 0)
+    | .con _ tag => (1, tag.toNat)
+    | .dup _ label => (2, label.toNat)
+    | .replicator _ level => (3, level.toNat)
+  kind :: Obend.Polis.encodeFields [Obend.Crypto.leb128 n.nodeId, Obend.Crypto.leb128 payload]
+
+private theorem deltaNodeBytes_injective {a b : DeltaNetNode}
+    (h : deltaNodeBytes a = deltaNodeBytes b) : a = b := by
+  cases a <;> cases b <;> simp [deltaNodeBytes, DeltaNetNode.nodeId, ← UInt8.toNat_inj] at h
+  all_goals
+    have hf := Obend.Polis.encodeFields_injective _ _ h
+    simp only [List.cons.injEq, and_true] at hf
+    first
+    | exact congrArg DeltaNetNode.era (deltaNatBytes_injective hf)
+    | have hn := deltaNatBytes_injective hf.1
+      have hp := deltaNatBytes_injective hf.2
+      simp_all [UInt16.toNat_inj]
+
+def deltaWireBytes (w : DeltaWire) : List UInt8 :=
+  Obend.Polis.encodeFields [deltaPortBytes w.lhs, deltaPortBytes w.rhs]
+
+private theorem deltaWireBytes_injective {a b : DeltaWire}
+    (h : deltaWireBytes a = deltaWireBytes b) : a = b := by
+  have h := Obend.Polis.encodeFields_injective _ _ h
+  simp only [List.cons.injEq, and_true] at h
+  have hl := deltaPortBytes_injective h.1
+  have hr := deltaPortBytes_injective h.2
+  cases a; cases b; simp_all
+
+private theorem deltaListBytes_injective {α : Type} (f : α → List UInt8)
+    (hf : ∀ {a b}, f a = f b → a = b) (a b : List α)
+    (h : Obend.Polis.encodeFields (a.map f) = Obend.Polis.encodeFields (b.map f)) : a = b := by
+  have he := Obend.Polis.encodeFields_injective _ _ h
+  clear h
+  induction a generalizing b with
+  | nil => cases b <;> simp_all
+  | cons x xs ih =>
+    cases b with
+    | nil => simp_all
+    | cons y ys =>
+      simp only [List.map_cons, List.cons.injEq] at he
+      have hx := hf he.1
+      have hxs := ih ys he.2
+      cases hx; cases hxs; rfl
+
+/-- Every graph field uses the shared, injective binary length-frame codec. -/
 def deltaNetBytes (net : DeltaNet) : List UInt8 :=
-  let frame := Obend.Trailblaze.ZkStripe.frameBytes
-  let nodeBytes := fun n : DeltaNetNode =>
-    let (kind, payload) : UInt8 × Nat := match n with
-      | .era _ => (0, 0)
-      | .con _ tag => (1, tag.toNat)
-      | .dup _ label => (2, label.toNat)
-      | .replicator _ level => (3, level.toNat)
-    kind :: (frame (toString n.nodeId).toUTF8.data.toList ++
-      frame (toString payload).toUTF8.data.toList)
-  frame net.netName.toUTF8.data.toList ++ frame (deltaPortBytes net.rootPort) ++
-    frame (net.symbols.flatMap (fun tag => frame (deltaTagBytes tag))) ++
-    frame (net.nodes.flatMap (fun n => frame (nodeBytes n))) ++
-    frame (net.wires.flatMap (fun w => frame (deltaPortBytes w.lhs) ++ frame (deltaPortBytes w.rhs)))
+  Obend.Polis.encodeFields [ZkStripe.utf8Bytes net.netName, deltaPortBytes net.rootPort,
+    Obend.Polis.encodeFields (net.symbols.map deltaTagBytes),
+    Obend.Polis.encodeFields (net.nodes.map deltaNodeBytes),
+    Obend.Polis.encodeFields (net.wires.map deltaWireBytes)]
+
+theorem deltaNetBytes_injective {a b : DeltaNet} (h : deltaNetBytes a = deltaNetBytes b) : a = b := by
+  have h := Obend.Polis.encodeFields_injective _ _ h
+  simp only [List.cons.injEq, and_true] at h
+  have hn := ZkStripe.utf8Bytes_injective h.1
+  have hp := deltaPortBytes_injective h.2.1
+  have hs := deltaListBytes_injective _ (@deltaTagBytes_injective) _ _ h.2.2.1
+  have hns := deltaListBytes_injective _ (@deltaNodeBytes_injective) _ _ h.2.2.2.1
+  have hw := deltaListBytes_injective _ (@deltaWireBytes_injective) _ _ h.2.2.2.2
+  cases a; cases b; simp_all
 
 def deltaNetDigest (H : Obend.Digest.HashBytes.Hash) (net : DeltaNet) : List UInt8 :=
   H (deltaNetBytes net)
+
+theorem deltaNetDigest_binding (H : Obend.Digest.HashBytes.Hash) (a b : DeltaNet)
+    (h : deltaNetDigest H a = deltaNetDigest H b) :
+    a = b ∨ Obend.Digest.HashBytes.Collision H := by
+  if he : deltaNetBytes a = deltaNetBytes b then
+    exact .inl (deltaNetBytes_injective he)
+  else
+    exact .inr ⟨deltaNetBytes a, deltaNetBytes b, he,
+      congrArg Obend.Digest.HashBytes.ofBE h⟩
 
 /-- Render a `PortEnd` as a deterministic HVM2 wire variable identifier. -/
 def renderPortVar (p : PortEnd) : String :=
@@ -2270,16 +2344,17 @@ def stringToDeltaTag (s : String) : DeltaTag := .symbol s
     binder, variable occurrence, binary primitive, projection, and subterm (`rfl`-reducible). -/
 def lowerTermToLeafExpr : Obend.Core.Term.Term → LeafExpr
   | .nat n => .lit n
-  | .boolean b => .lit (if b then 1 else 0)
+  | .boolean b => .ctorPair 0x0330 (.lit (if b then 1 else 0)) (.lit 0)
   | .label s => .ctorPair (.label s) (.lit 0) (.lit 0)
   | .bound idx => .var idx
   | .lam body => .lam (lowerTermToLeafExpr body)
   | .app fn arg => .app (lowerTermToLeafExpr fn) (lowerTermToLeafExpr arg)
   | .binary prim l r => .binOp (primitiveToDeltaTag prim) (lowerTermToLeafExpr l) (lowerTermToLeafExpr r)
   | .get target nm => .proj (stringToDeltaTag nm) (lowerTermToLeafExpr target)
-  | .record fields => lowerFields fields
+  | .record fields => .ctorPair 0x0331 (lowerFields fields) (.lit 0)
   | .extend inh fields => .ctorPair 0x0301 (lowerTermToLeafExpr inh) (lowerFields fields)
-  | .inject tag payload => .ctorPair (stringToDeltaTag tag) (lowerTermToLeafExpr payload) (.lit 0)
+  | .inject tag payload => .ctorPair 0x0332
+      (.ctorPair (stringToDeltaTag tag) (lowerTermToLeafExpr payload) (.lit 0)) (.lit 0)
   | .ifZero v z s =>
     .binOp 0x0310 (lowerTermToLeafExpr v) (.ctorPair 0x0311 (lowerTermToLeafExpr z) (.lam (lowerTermToLeafExpr s)))
   | .ifBool c t f =>
@@ -2296,9 +2371,12 @@ def lowerTermToLeafExpr : Obend.Core.Term.Term → LeafExpr
   | .perform p => .proj 0x0327 (lowerTermToLeafExpr p)
   | .done p => .proj 0x0328 (lowerTermToLeafExpr p)
   | .split tgt fields fn =>
-    fields.foldl (fun acc f => .app acc (.proj (stringToDeltaTag f) (lowerTermToLeafExpr tgt)))
-      (lowerTermToLeafExpr fn)
+    .ctorPair 0x0333 (lowerTermToLeafExpr tgt)
+      (.ctorPair 0x0334 (lowerNames fields) (lowerTermToLeafExpr fn))
 where
+  lowerNames : List String → LeafExpr
+    | [] => .lit 0
+    | f :: fs => .ctorPair (stringToDeltaTag f) (.lit 0) (lowerNames fs)
   lowerFields : List (String × Obend.Core.Term.Term) → LeafExpr
     | [] => .lit 0
     | f :: rest => .ctorPair (stringToDeltaTag f.1) (lowerTermToLeafExpr f.2) (lowerFields rest)
@@ -2321,11 +2399,85 @@ theorem lowerTermToLeafExpr_split_field_sensitive
     (t f : Obend.Core.Term.Term) (a b : String) (h : a ≠ b) :
     lowerTermToLeafExpr (.split t [a] f) ≠ lowerTermToLeafExpr (.split t [b] f) := by
   intro e
-  have names := congrArg (fun x => match x with
-    | .app _ (.proj (.symbol name) _) => some name
-    | _ => none) e
-  simp [lowerTermToLeafExpr, stringToDeltaTag] at names
-  exact h names
+  simp only [lowerTermToLeafExpr, lowerTermToLeafExpr.lowerNames, LeafExpr.ctorPair.injEq,
+    stringToDeltaTag, DeltaTag.symbol.injEq] at e
+  exact h e.2.2.2.1.1
+
+/-- An empty field list still carries its target and function, in disjoint constructor tags. -/
+theorem lowerTermToLeafExpr_split_target_sensitive
+    (a b fn : Obend.Core.Term.Term) (fields : List String)
+    (h : lowerTermToLeafExpr a ≠ lowerTermToLeafExpr b) :
+    lowerTermToLeafExpr (.split a fields fn) ≠ lowerTermToLeafExpr (.split b fields fn) := by
+  intro he
+  exact h (LeafExpr.ctorPair.inj he).2.1
+
+theorem lowerTermToLeafExpr_nat_injective (a b : Nat)
+    (h : lowerTermToLeafExpr (.nat a) = lowerTermToLeafExpr (.nat b)) : a = b :=
+  LeafExpr.lit.inj h
+
+theorem lowerTermToLeafExpr_boolean_nat_distinct (b : Bool) (n : Nat) :
+    lowerTermToLeafExpr (.boolean b) ≠ lowerTermToLeafExpr (.nat n) := by
+  simp [lowerTermToLeafExpr]
+
+theorem lowerTermToLeafExpr_inject_record_distinct (tag : String) (payload : Obend.Core.Term.Term)
+    (fields : List (String × Obend.Core.Term.Term)) :
+    lowerTermToLeafExpr (.inject tag payload) ≠ lowerTermToLeafExpr (.record fields) := by
+  intro h
+  exact (by decide : (0x0332 : DeltaTag) ≠ 0x0331) (LeafExpr.ctorPair.inj h).1
+
+/-- The structural fragment whose inverse is proved below includes empty records,
+ordered fields, and empty splits, as well as higher-order application and injection. -/
+inductive LoweringSupported : Obend.Core.Term.Term → Prop where
+  | nat (n) : LoweringSupported (.nat n)
+  | boolean (b) : LoweringSupported (.boolean b)
+  | bound (n) : LoweringSupported (.bound n)
+  | lam {body} : LoweringSupported body → LoweringSupported (.lam body)
+  | app {fn arg} : LoweringSupported fn → LoweringSupported arg → LoweringSupported (.app fn arg)
+  | inject {tag payload} : LoweringSupported payload → LoweringSupported (.inject tag payload)
+  | recordNil : LoweringSupported (.record [])
+  | recordCons {name value fields} : LoweringSupported value → LoweringSupported (.record fields) →
+      LoweringSupported (.record ((name, value) :: fields))
+  | split {target fields fn} : LoweringSupported target → LoweringSupported fn →
+      LoweringSupported (.split target fields fn)
+
+private theorem lowerNames_injective (a b : List String)
+    (h : lowerTermToLeafExpr.lowerNames a = lowerTermToLeafExpr.lowerNames b) : a = b := by
+  induction a generalizing b with
+  | nil => cases b <;> simp_all [lowerTermToLeafExpr.lowerNames]
+  | cons x xs ih =>
+    cases b with
+    | nil => simp [lowerTermToLeafExpr.lowerNames] at h
+    | cons y ys =>
+      simp only [lowerTermToLeafExpr.lowerNames, LeafExpr.ctorPair.injEq, stringToDeltaTag,
+        DeltaTag.symbol.injEq, true_and] at h
+      have hx := h.1
+      have hxs := ih ys h.2
+      cases hx; cases hxs; rfl
+
+theorem lowerTermToLeafExpr_injective {a b : Obend.Core.Term.Term}
+    (ha : LoweringSupported a) (hb : LoweringSupported b)
+    (h : lowerTermToLeafExpr a = lowerTermToLeafExpr b) : a = b := by
+  induction ha generalizing b <;> cases hb <;>
+    simp_all [lowerTermToLeafExpr, lowerTermToLeafExpr.lowerFields, stringToDeltaTag,
+      ← UInt16.toNat_inj]
+  all_goals try omega
+  all_goals first
+    | solve_by_elim
+    | (constructor <;> solve_by_elim)
+    | skip
+  case boolean.recordNil => exact (by decide : (816 : DeltaTag) ≠ 817) h.1
+  case inject.recordCons => exact (by decide : (818 : DeltaTag) ≠ 817) h.1
+  case recordNil.boolean => exact (by decide : (817 : DeltaTag) ≠ 816) h.1
+  case recordCons.inject => exact (by decide : (817 : DeltaTag) ≠ 818) h.1
+  case boolean.boolean =>
+    rename_i b₁ b₂
+    cases b₁ <;> cases b₂ <;> simp_all
+  case recordCons.recordCons =>
+    rename_i name₁ value₁ fields₁ hv₁ hf₁ name₂ value₂ fields₂ ihv ihf hv₂ hf₂
+    exact ⟨ihv hv₂ rfl, Obend.Core.Term.Term.record.inj (ihf hf₂ rfl)⟩
+  case split.split =>
+    rename_i target₁ fields₁ fn₁ ht₁ hf₁ target₂ fields₂ fn₂ iht ihf ht₂ hf₂
+    exact ⟨iht ht₂ rfl, lowerNames_injective _ _ h.2.1, ihf hf₂ rfl⟩
 
 /-- A constructor's kind and payload are interned together, including every literal bit. -/
 def leafExprSymbols : LeafExpr → SymbolTable
@@ -2469,35 +2621,6 @@ private def buildLeafExprSubNet (symbols : SymbolTable) (depth : Nat) : LeafExpr
     , wires := vSub.wires ++ bSub.wires ++ shareWires
     , nextId := nextId' }
 
-/-- Compile a `LeafExpr` into a complete port-linear Salvadori `Δ`-Net. -/
-def compileLeafExprToDeltaNet (netName : String) (expr : LeafExpr) : DeltaNet :=
-  let symbols := leafExprSymbols expr
-  let sub := buildLeafExprSubNet symbols 0 expr 0
-  let (capNodes, capWires, _) := capFreeVarPorts sub.varPorts sub.nextId
-  { netName := netName
-  , symbols := symbols
-  , rootPort := sub.root
-  , nodes := sub.nodes ++ capNodes
-  , wires := sub.wires ++ capWires }
-
-/-- Translate an `Obend.Leaf.Book`'s slot method/cell definitions and static entries into a
-    single dispatcher `LeafExpr` preserving every entry's AST body. -/
-def bookItemsToLeafExpr : List Obend.Leaf.BookItem → LeafExpr
-  | [] => .lit 0
-  | .slot d :: rest =>
-    .ctorPair (stringToDeltaTag d.member) (lowerTermToLeafExpr d.code) (bookItemsToLeafExpr rest)
-  | .static m v :: rest =>
-    .ctorPair (stringToDeltaTag m) (lowerTermToLeafExpr v) (bookItemsToLeafExpr rest)
-
-/-- Lower an entire `Obend.Leaf.Book` (recursively compiling every method and static body)
-    into a Salvadori `Δ`-Net. -/
-def lowerLeafBookToDeltaNet (netName : String) (book : Obend.Leaf.Book) : DeltaNet :=
-  compileLeafExprToDeltaNet netName (bookItemsToLeafExpr book.items)
-
-/-- Lower the dispatcher query `.get book.link member` for a specific member of `book` into `DeltaNet`. -/
-def lowerLeafBookMemberToDeltaNet (netName : String) (book : Obend.Leaf.Book) (member : String) : DeltaNet :=
-  compileLeafExprToDeltaNet netName (.proj (stringToDeltaTag member) (bookItemsToLeafExpr book.items))
-
 /-- Find the opposite end of a wire incident on a port. -/
 def deltaNeighbor (net : DeltaNet) (p : PortEnd) : Option PortEnd :=
   (net.wires.find? (fun w => w.lhs == p || w.rhs == p)).map
@@ -2516,6 +2639,56 @@ def spliceDeltaPorts (net : DeltaNet) (p q : PortEnd) : Option DeltaNet :=
   | some x, none =>
     if net.rootPort == q then some { net with rootPort := x, wires := remaining } else none
   | none, none => none
+
+/-- Erase a variable's temporary relay and its unused auxiliary terminator.
+The result is a wire, so beta reduction cannot leave an opcode-FF root behind. -/
+private def eliminateVariableRelay (net : DeltaNet) (node : DeltaNetNode) : DeltaNet :=
+  match node with
+  | .con id tag =>
+    if net.symbols[tag.toNat]? == some (.opcode 0x00FF) then
+      match deltaNeighbor net ⟨id, 1⟩, spliceDeltaPorts net ⟨id, 0⟩ ⟨id, 2⟩ with
+      | some terminal, some out =>
+        if terminal.portSlot == 0 && decide (.era terminal.nodeId ∈ net.nodes) then
+          { out with
+            nodes := out.nodes.filter (fun n => n.nodeId != id && n.nodeId != terminal.nodeId)
+            wires := out.wires.filter (fun w => w.lhs.nodeId != id && w.rhs.nodeId != id &&
+              w.lhs.nodeId != terminal.nodeId && w.rhs.nodeId != terminal.nodeId) }
+        else net
+      | _, _ => net
+    else net
+  | _ => net
+
+/-- Compile a `LeafExpr` into a complete port-linear Salvadori `Δ`-Net. -/
+def compileLeafExprToDeltaNet (netName : String) (expr : LeafExpr) : DeltaNet :=
+  let symbols := leafExprSymbols expr
+  let sub := buildLeafExprSubNet symbols 0 expr 0
+  let (capNodes, capWires, _) := capFreeVarPorts sub.varPorts sub.nextId
+  let net : DeltaNet := {
+    netName := netName
+    symbols := symbols
+    rootPort := sub.root
+    nodes := sub.nodes ++ capNodes
+    wires := sub.wires ++ capWires }
+
+  net.nodes.foldl eliminateVariableRelay net
+
+/-- Translate an `Obend.Leaf.Book`'s slot method/cell definitions and static entries into a
+    single dispatcher `LeafExpr` preserving every entry's AST body. -/
+def bookItemsToLeafExpr : List Obend.Leaf.BookItem → LeafExpr
+  | [] => .lit 0
+  | .slot d :: rest =>
+    .ctorPair (stringToDeltaTag d.member) (lowerTermToLeafExpr d.code) (bookItemsToLeafExpr rest)
+  | .static m v :: rest =>
+    .ctorPair (stringToDeltaTag m) (lowerTermToLeafExpr v) (bookItemsToLeafExpr rest)
+
+/-- Lower an entire `Obend.Leaf.Book` (recursively compiling every method and static body)
+    into a Salvadori `Δ`-Net. -/
+def lowerLeafBookToDeltaNet (netName : String) (book : Obend.Leaf.Book) : DeltaNet :=
+  compileLeafExprToDeltaNet netName (bookItemsToLeafExpr book.items)
+
+/-- Lower the dispatcher query `.get book.link member` for a specific member of `book` into `DeltaNet`. -/
+def lowerLeafBookMemberToDeltaNet (netName : String) (book : Obend.Leaf.Book) (member : String) : DeltaNet :=
+  compileLeafExprToDeltaNet netName (.proj (stringToDeltaTag member) (bookItemsToLeafExpr book.items))
 
 def deltaAux (id : Nat) (slot : Fin 3) : PortEnd := ⟨id, slot⟩
 
@@ -2551,9 +2724,42 @@ def eraseDeltaPair (net : DeltaNet) (a b : Nat) : Option DeltaNet :=
     else none
   else none
 
+/-- Duplicate a literal at a sharing fan, cloning both auxiliary erasers.
+Fresh node identifiers keep the resulting graph linear. -/
+def duplicateDeltaLiteral (net : DeltaNet) (fan value : Nat) : Option DeltaNet := do
+  if !net.nodes.any (fun n => match n with
+      | .replicator id _ | .dup id _ => id == fan | _ => false) then none else do
+  if !(decide ((⟨deltaAux fan 0, deltaAux value 0⟩ : DeltaWire) ∈ net.wires) ||
+      decide ((⟨deltaAux value 0, deltaAux fan 0⟩ : DeltaWire) ∈ net.wires)) then none else do
+  let node ← net.nodes.find? (fun n => n.nodeId == value)
+  let tag ← match node with | .con _ tag => some tag | _ => none
+  match net.symbols[tag.toNat]? with
+  | some (.literal _) => do
+    let x ← deltaNeighbor net (deltaAux fan 1)
+    let y ← deltaNeighbor net (deltaAux fan 2)
+    let e₁ ← deltaNeighbor net (deltaAux value 1)
+    let e₂ ← deltaNeighbor net (deltaAux value 2)
+    if !decide (e₁.portSlot = 0 ∧ e₂.portSlot = 0 ∧
+        .era e₁.nodeId ∈ net.nodes ∧ .era e₂.nodeId ∈ net.nodes) then none else do
+    let fresh := (net.nodes.map DeltaNetNode.nodeId).foldl max 0 + 1
+    let dead := [fan, value, e₁.nodeId, e₂.nodeId]
+    pure { net with
+      nodes := [.con fresh tag, .era (fresh + 1), .era (fresh + 2),
+        .con (fresh + 3) tag, .era (fresh + 4), .era (fresh + 5)] ++
+        net.nodes.filter (fun n => !dead.contains n.nodeId)
+      wires := [⟨deltaAux fresh 0, x⟩, ⟨deltaAux (fresh + 3) 0, y⟩,
+        ⟨deltaAux fresh 1, deltaAux (fresh + 1) 0⟩,
+        ⟨deltaAux fresh 2, deltaAux (fresh + 2) 0⟩,
+        ⟨deltaAux (fresh + 3) 1, deltaAux (fresh + 4) 0⟩,
+        ⟨deltaAux (fresh + 3) 2, deltaAux (fresh + 5) 0⟩] ++
+        net.wires.filter (fun w => !dead.contains w.lhs.nodeId && !dead.contains w.rhs.nodeId) }
+  | _ => none
+
 /-- Graph interaction semantics: annihilate the active lambda/application pair and
 splice corresponding auxiliary wires. No source evaluator or target literal is used. -/
 inductive DeltaInteraction : DeltaNet → DeltaNet → Prop where
+  | duplicate {net out : DeltaNet} {a b : Nat}
+      (redex : duplicateDeltaLiteral net a b = some out) : DeltaInteraction net out
   | erase {net out : DeltaNet} {a b : Nat}
       (redex : eraseDeltaPair net a b = some out) : DeltaInteraction net out
   | beta {net first second : DeltaNet} {a b : Nat}
@@ -2576,7 +2782,10 @@ def reduceDeltaPair (net : DeltaNet) (a b : Nat) : Option DeltaNet :=
   else
     match eraseDeltaPair net a b with
     | some out => if checkNetPortLinearity out then some out else none
-    | none => none
+    | none =>
+      match duplicateDeltaLiteral net a b with
+      | some out => if checkNetPortLinearity out then some out else none
+      | none => none
 
 theorem reduceDeltaPair_sound (net out : DeltaNet) (a b : Nat)
     (h : reduceDeltaPair net a b = some out) :
@@ -2600,7 +2809,18 @@ theorem reduceDeltaPair_sound (net out : DeltaNet) (a b : Nat)
           exact ⟨.beta hp hl hr, hv⟩
         · cases h
   · cases he : eraseDeltaPair net a b with
-    | none => simp [he] at h
+    | none =>
+      rw [he] at h
+      cases hd : duplicateDeltaLiteral net a b with
+      | none => simp [hd] at h
+      | some result =>
+        rw [hd] at h
+        dsimp only at h
+        split at h
+        · rename_i hv
+          cases h
+          exact ⟨.duplicate hd, hv⟩
+        · cases h
     | some result =>
       rw [he] at h
       dsimp only at h
@@ -2657,6 +2877,39 @@ theorem memberReduction_inhabited : ∃ out,
   let net := lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer"
   refine ⟨(runDeltaReductions net [(7, 6), (8, 3), (8, 4), (3, 5)]).getD net, ?_, ?_⟩ <;>
     decide +kernel
+
+def identityApplicationNet : DeltaNet :=
+  compileLeafExprToDeltaNet "identity" (.app (.lam (.var 0)) (.lit 42))
+
+theorem identityApplication_normalizes : ∃ out,
+    runDeltaReductions identityApplicationNet [(6, 2)] = some out ∧
+    checkDeltaNormalForm out 42 = true := by
+  refine ⟨(runDeltaReductions identityApplicationNet [(6, 2)]).getD identityApplicationNet, ?_, ?_⟩ <;>
+    decide +kernel
+
+/-- The same identity reduction starts at a selected Leaf book member, including
+its dispatcher projection and the erasure of the unused dispatcher tail. -/
+theorem identityBookMember_normalizes : ∃ out,
+    runDeltaReductions (lowerLeafBookMemberToDeltaNet "identity_member"
+      ⟨[.static "answer" (.app (.lam (.bound 0)) (.nat 42))]⟩ "answer")
+      [(11, 10), (12, 7), (12, 8), (7, 9), (6, 2)] = some out ∧
+    checkDeltaNormalForm out 42 = true := by
+  let net := lowerLeafBookMemberToDeltaNet "identity_member"
+    ⟨[.static "answer" (.app (.lam (.bound 0)) (.nat 42))]⟩ "answer"
+  refine ⟨(runDeltaReductions net [(11, 10), (12, 7), (12, 8), (7, 9), (6, 2)]).getD net, ?_, ?_⟩ <;>
+    decide +kernel
+
+def duplicatedApplicationNet : DeltaNet :=
+  compileLeafExprToDeltaNet "duplicate" (.app (.lam (.binOp 0x0101 (.var 0) (.var 0))) (.lit 5))
+
+theorem duplicatedApplication_normalizes : ∃ out,
+    runDeltaReductions duplicatedApplicationNet [(10, 5), (6, 7)] = some out ∧
+    checkNetPortLinearity out = true ∧ activePrincipalRedexes out = [] ∧
+    (out.nodes.filter (fun n => match n with
+      | .con _ tag => out.symbols[tag.toNat]? == some (.literal 5)
+      | _ => false)).length = 2 := by
+  refine ⟨(runDeltaReductions duplicatedApplicationNet [(10, 5), (6, 7)]).getD duplicatedApplicationNet,
+    ?_, ?_, ?_, ?_⟩ <;> decide +kernel
 
 theorem reduceDeltaPair_inhabited : ∃ net out,
     reduceDeltaPair net 7 6 = some out := by
@@ -3125,10 +3378,61 @@ theorem multiNetPip_routing_sound (routes : List PipRoute) (signals : Nat → Bo
   have hc := h.1.2 r hr
   exact ⟨hc.1, pipChain_signal r.switches r.source signals hc.2⟩
 
-example : checkMultiNetPipDisjoint
-    [⟨0, [⟨Array.replicate 8 0, 0, 1⟩, ⟨Array.replicate 8 1, 7, 2⟩]⟩,
-     ⟨3, [⟨Array.replicate 8 3, 0, 4⟩, ⟨Array.replicate 8 4, 7, 5⟩]⟩] = true := by
-  decide +kernel
+private theorem pipSwitches_preserve (ps : List PipSwitch) (signals : Nat → Bool) (wire : Nat)
+    (h : wire ∉ ps.map PipSwitch.output) :
+    (ps.foldl evalPipSwitch signals) wire = signals wire := by
+  induction ps generalizing signals with
+  | nil => rfl
+  | cons p ps ih =>
+    simp only [List.map_cons, List.mem_cons, not_or] at h
+    rw [List.foldl_cons, ih _ h.2]
+    simp [evalPipSwitch, h.1]
+
+private theorem pipSink_mem (wire : Nat) (ps : List PipSwitch) :
+    pipSink wire ps ∈ wire :: ps.map PipSwitch.output := by
+  induction ps generalizing wire with
+  | nil => simp [pipSink]
+  | cons p ps ih =>
+    have h := ih p.output
+    simp only [pipSink, List.map_cons, List.mem_cons] at h ⊢
+    exact Or.inr h
+
+private theorem pipOutputs_mem_resources (rs : List PipRoute) (wire : Nat)
+    (h : wire ∈ (rs.flatMap PipRoute.switches).map PipSwitch.output) :
+    wire ∈ rs.flatMap pipRouteResources := by
+  simp only [List.mem_map, List.mem_flatMap] at h
+  obtain ⟨p, ⟨r, hr, hp⟩, rfl⟩ := h
+  exact List.mem_flatMap.mpr ⟨r, hr, List.mem_cons_of_mem _ (List.mem_map.mpr ⟨p, hp, rfl⟩)⟩
+
+/-- All active switches execute in one fold. Exclusive resources protect each source
+from preceding routes and each delivered sink from following routes, for arbitrary signals. -/
+theorem multiNetPip_joint_routing_sound (routes : List PipRoute) (signals : Nat → Bool)
+    (h : checkMultiNetPipDisjoint routes = true) :
+    ∀ r ∈ routes,
+      ((routes.flatMap PipRoute.switches).foldl evalPipSwitch signals)
+        (pipSink r.source r.switches) = signals r.source := by
+  have hc := h
+  simp only [checkMultiNetPipDisjoint, Bool.and_eq_true, List.all_eq_true,
+    decide_eq_true_eq] at hc
+  intro r hr
+  obtain ⟨pre, post, rfl⟩ := List.mem_iff_append.mp hr
+  have hn := hc.2
+  simp only [List.flatMap_append, List.flatMap_cons] at hn
+  obtain ⟨_, htail, hpre⟩ := List.nodup_append.mp hn
+  obtain ⟨_, _, hpost⟩ := List.nodup_append.mp htail
+  have hsrc : r.source ∈ pipRouteResources r := by simp [pipRouteResources]
+  have hsink := pipSink_mem r.source r.switches
+  change pipSink r.source r.switches ∈ pipRouteResources r at hsink
+  have hp : r.source ∉ (pre.flatMap PipRoute.switches).map PipSwitch.output := by
+    intro hm
+    exact (hpre _ (pipOutputs_mem_resources pre _ hm) _ (List.mem_append_left _ hsrc)) rfl
+  have ht : pipSink r.source r.switches ∉ (post.flatMap PipRoute.switches).map PipSwitch.output := by
+    intro hm
+    exact (hpost _ hsink _ (pipOutputs_mem_resources post _ hm)) rfl
+  have hchain := (hc.1.2 r (by simp)).2
+  simp only [List.flatMap_append, List.flatMap_cons, List.foldl_append]
+  rw [pipSwitches_preserve _ _ _ ht, pipChain_signal _ _ _ hchain,
+    pipSwitches_preserve _ _ _ hp]
 
 /-- Sample the tile after its register update: this is the LUT result produced by
 `evalFabulousTile.nextFf`, independent of initial FF state, with no bypass input. -/
@@ -3158,23 +3462,57 @@ theorem evalSettledDualTiles_eq_extract (frames : BitVec 32 × BitVec 32) (pt : 
   rw [hc] at he
   exact he
 
-/-- Routed tile evaluation, quantified over checked multi-net physical configurations.
-The only signal producer is the tile evaluator; muxes carry wire references, not answers. -/
+/-- Each tile's physical source is addressed by the DeltaNet output port and tile index. -/
+def tileSourceWire (net : DeltaNet) (tile : Nat) : Nat :=
+  6 * (3 * net.rootPort.nodeId + net.rootPort.portSlot.val) + 3 * tile
+
+/-- Both halves have independent LUT outputs. Unassigned physical wires start low. -/
+def tileWireSignals (net : DeltaNet) (frames : BitVec 32 × BitVec 32)
+    (pt : TernaryPt3) : Nat → Bool :=
+  let cfg := decodeDualBitstreamFrames frames
+  let idx := (FaceIdeal3.ternaryPointIdx pt).val
+  fun wire =>
+    if wire == tileSourceWire net 0 then
+      (evalFabulousTile cfg.loTile (BitVec.ofNat 4 idx) false (fun _ => false)).nextFf
+    else if wire == tileSourceWire net 1 then
+      (evalFabulousTile cfg.hiTile (BitVec.ofNat 4 (idx - 16)) false (fun _ => false)).nextFf
+    else false
+
+/-- The ordered routes bind the two output-port lanes and every mux select to the frames. -/
+def checkTileRouteBinding (net : DeltaNet) (frames : BitVec 32 × BitVec 32)
+    (routes : List PipRoute) : Bool :=
+  let cfg := decodeDualBitstreamFrames frames
+  match routes with
+  | [lo, hi] =>
+    decide (lo.source = tileSourceWire net 0 ∧ hi.source = tileSourceWire net 1 ∧
+      pipSink lo.source lo.switches = tileSourceWire net 0 + 2 ∧
+      pipSink hi.source hi.switches = tileSourceWire net 1 + 2) &&
+    lo.switches.all (fun p => p.select == cfg.loTile.pipMux) &&
+    hi.switches.all (fun p => p.select == cfg.hiTile.pipMux)
+  | _ => false
+
+/-- Joint evaluation transports independently computed tile outputs to their mapped sinks. -/
 def MultiTileRoutedCorrespondence (net : DeltaNet) (frames : BitVec 32 × BitVec 32)
     (pt : TernaryPt3) : Prop :=
   checkNetPortLinearity net = true ∧
+  evalSettledDualTiles frames pt =
+    (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames)).evalTernaryPoint pt ∧
   ∀ routes : List PipRoute, checkMultiNetPipDisjoint routes = true →
+    checkTileRouteBinding net frames routes = true →
     ∀ r ∈ routes,
-      evalPipRoute (fun _ => evalSettledDualTiles frames pt) r (pipSink r.source r.switches) =
-        (extractFaceIdealFromDualTiles (decodeDualBitstreamFrames frames)).evalTernaryPoint pt
+      ((routes.flatMap PipRoute.switches).foldl evalPipSwitch (tileWireSignals net frames pt))
+        (pipSink r.source r.switches) = tileWireSignals net frames pt r.source
 
 theorem routedDualTiles_sound (net : DeltaNet) (frames : BitVec 32 × BitVec 32) (pt : TernaryPt3)
     (hLin : checkNetPortLinearity net = true) (hCan : checkCanonicalDualFrames frames = true) :
     MultiTileRoutedCorrespondence net frames pt := by
-  refine ⟨hLin, ?_⟩
-  intro routes hr r hin
-  rw [((multiNetPip_routing_sound routes (fun _ => evalSettledDualTiles frames pt) hr).2 r hin).2]
-  exact evalSettledDualTiles_eq_extract frames pt hCan
+  refine ⟨hLin, evalSettledDualTiles_eq_extract frames pt hCan, ?_⟩
+  intro routes hr _hb
+  exact multiNetPip_joint_routing_sound routes (tileWireSignals net frames pt) hr
+
+/-- Domain-separated production commitment for the lowered graph in an FPGA turn. -/
+def fpgaNetHash : Obend.Digest.HashBytes.Hash :=
+  Obend.Digest.Cshake256.cshake256Bytes (ZkStripe.utf8Bytes "OBEND.FPGA.DELTANET/v1")
 
 /-- End-to-end Organ O7 pipeline bundle connecting Cubical `FaceIdeal3`, Rung-2 `DeltaNet`, and
     Rung-5 dual-tile `FABulous` DPR bitstream execution. -/
@@ -3186,6 +3524,8 @@ structure LeanFpgaTurn where
   deltaNet       : DeltaNet
   dualFrames     : BitVec 32 × BitVec 32
   dprFenceActive : Bool
+  routes : List PipRoute
+  deltaNetCommitment : List UInt8 := deltaNetDigest fpgaNetHash deltaNet
   deriving DecidableEq, Repr
 
 /-- Constructive named refusal for an Organ O7 `LeanFpgaTurn`. -/
@@ -3200,12 +3540,59 @@ def refuseLeanFpgaTurn (turn : LeanFpgaTurn) : Option String :=
       encodeDualBitstreamFrames
         (compileFaceIdealToDualTiles (turn.cofibLeft.meet turn.cofibRight) turn.loPipRoute turn.hiPipRoute) then
     some "refused: cofib-bitstream-mismatch"
+  else if !checkMultiNetPipDisjoint turn.routes then
+    some "refused: shared-or-invalid-pip-route"
+  else if !checkTileRouteBinding turn.deltaNet turn.dualFrames turn.routes then
+    some "refused: pip-frame-or-net-mapping"
+  else if turn.deltaNetCommitment != deltaNetDigest fpgaNetHash turn.deltaNet then
+    some "refused: delta-net-commitment-mismatch"
   else
     none
 
 /-- Executable Silver check for an Organ O7 `LeanFpgaTurn`. -/
 def checkLeanFpgaTurn (turn : LeanFpgaTurn) : Bool :=
   (refuseLeanFpgaTurn turn).isNone
+
+/-- The FPGA receipt commits to the exact lowered graph, under the verifier's hash. -/
+def LeanFpgaTurn.netDigest (turn : LeanFpgaTurn) (H : Obend.Digest.HashBytes.Hash) : List UInt8 :=
+  deltaNetDigest H turn.deltaNet
+
+/-- Verify a turn against a separately pinned graph commitment. -/
+def auditLeanFpgaTurn (H : Obend.Digest.HashBytes.Hash) (pinned : List UInt8)
+    (turn : LeanFpgaTurn) : Bool :=
+  checkLeanFpgaTurn turn && decide (turn.netDigest H = pinned)
+
+theorem auditLeanFpgaTurn_digest_binding (H : Obend.Digest.HashBytes.Hash) (pinned : List UInt8)
+    (a b : LeanFpgaTurn) (ha : auditLeanFpgaTurn H pinned a = true)
+    (hb : auditLeanFpgaTurn H pinned b = true) :
+    a.deltaNet = b.deltaNet ∨ Obend.Digest.HashBytes.Collision H := by
+  simp only [auditLeanFpgaTurn, Bool.and_eq_true, decide_eq_true_eq] at ha hb
+  exact deltaNetDigest_binding H a.deltaNet b.deltaNet (ha.2.trans hb.2.symm)
+
+theorem checkLeanFpgaTurn_digest (turn : LeanFpgaTurn)
+    (h : checkLeanFpgaTurn turn = true) :
+    turn.deltaNetCommitment = deltaNetDigest fpgaNetHash turn.deltaNet := by
+  unfold checkLeanFpgaTurn refuseLeanFpgaTurn at h
+  repeat' first | split at h | contradiction
+  simp_all
+
+theorem checkLeanFpgaTurn_routes (turn : LeanFpgaTurn)
+    (h : checkLeanFpgaTurn turn = true) :
+    checkMultiNetPipDisjoint turn.routes = true ∧
+    checkTileRouteBinding turn.deltaNet turn.dualFrames turn.routes = true := by
+  unfold checkLeanFpgaTurn refuseLeanFpgaTurn at h
+  repeat' first | split at h | contradiction
+  simp_all
+
+theorem checkLeanFpgaTurn_joint_routing (turn : LeanFpgaTurn) (pt : TernaryPt3)
+    (h : checkLeanFpgaTurn turn = true) :
+    checkTileRouteBinding turn.deltaNet turn.dualFrames turn.routes = true ∧
+    ∀ r ∈ turn.routes,
+      ((turn.routes.flatMap PipRoute.switches).foldl evalPipSwitch
+        (tileWireSignals turn.deltaNet turn.dualFrames pt)) (pipSink r.source r.switches) =
+      tileWireSignals turn.deltaNet turn.dualFrames pt r.source := by
+  obtain ⟨hr, hb⟩ := checkLeanFpgaTurn_routes turn h
+  exact ⟨hb, multiNetPip_joint_routing_sound _ _ hr⟩
 
 /-- **Organ O7 Apex Theorem (`apex_lean_fpga_rung2_to_rung5`)**:
     When `checkLeanFpgaTurn turn = true`, Lean's kernel certifies end-to-end that:
@@ -3290,7 +3677,10 @@ instance instSilverWorkflowLeanFpga : SilverWorkflow LeanFpgaTurn where
     turn.dprFenceActive = true ∧
     turn.dualFrames =
       encodeDualBitstreamFrames
-        (compileFaceIdealToDualTiles (turn.cofibLeft.meet turn.cofibRight) turn.loPipRoute turn.hiPipRoute)
+        (compileFaceIdealToDualTiles (turn.cofibLeft.meet turn.cofibRight) turn.loPipRoute turn.hiPipRoute) ∧
+    checkMultiNetPipDisjoint turn.routes = true ∧
+    checkTileRouteBinding turn.deltaNet turn.dualFrames turn.routes = true ∧
+    turn.deltaNetCommitment = deltaNetDigest fpgaNetHash turn.deltaNet
   runValid := checkLeanFpgaTurn
   refuseInvalid := refuseLeanFpgaTurn
   refuse_iff := by
@@ -3299,6 +3689,8 @@ instance instSilverWorkflowLeanFpga : SilverWorkflow LeanFpgaTurn where
     cases refuseLeanFpgaTurn turn <;> simp
   silverSound := by
     intro turn hRun
+    have hr := checkLeanFpgaTurn_routes turn hRun
+    have hd := checkLeanFpgaTurn_digest turn hRun
     unfold checkLeanFpgaTurn refuseLeanFpgaTurn at hRun
     split at hRun
     · cases hRun
@@ -3313,7 +3705,7 @@ instance instSilverWorkflowLeanFpga : SilverWorkflow LeanFpgaTurn where
           · rename_i hFrameNeg
             exact ⟨of_bool_not_eq_false (Bool.eq_false_iff.mpr hLinNeg),
                    of_bool_not_eq_false (Bool.eq_false_iff.mpr hFenceNeg),
-                   bne_eq_false_iff_eq.mp (Bool.eq_false_iff.mpr hFrameNeg)⟩
+                   bne_eq_false_iff_eq.mp (Bool.eq_false_iff.mpr hFrameNeg), hr.1, hr.2, hd⟩
   silverCompleteDomain := by
     intro turn hRun
     unfold checkLeanFpgaTurn refuseLeanFpgaTurn at hRun
@@ -3332,12 +3724,13 @@ instance instSilverWorkflowLeanFpga : SilverWorkflow LeanFpgaTurn where
       | cons _ _ =>
         rfl
   silverComplete := by
-    intro turn _hDom ⟨hLin, hFence, hFrames⟩
+    intro turn _hDom ⟨hLin, hFence, hFrames, hRoutes, hBinding, hDigest⟩
     have hCan : checkCanonicalDualFrames turn.dualFrames = true := by
       rw [hFrames]
       exact encodeDualFrames_compileFaceIdeal_canonical _ _ _
     unfold checkLeanFpgaTurn refuseLeanFpgaTurn
-    rw [hLin, hCan, hFence, hFrames, bne_self_eq_false]
+    rw [hLin, hCan, hFence, hRoutes, hBinding, hDigest, hFrames]
+    simp only [bne_self_eq_false, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
     rfl
 
 /-- Concrete multi-def `Obend.Leaf.Book` fixture exercising:
@@ -3381,6 +3774,15 @@ def sampleActiveBetaRedexNet : DeltaNet :=
   compileLeafExprToDeltaNet "active_beta_redex"
     (.app (.lam (.binOp 0x0101 (.var 0) (.var 0))) (.lit 5))
 
+def outputTileRoutes (net : DeltaNet) (lo hi : Fin 8) : List PipRoute :=
+  [0, 1].map fun tile =>
+    let source := tileSourceWire net tile
+    let select := if tile = 0 then lo else hi
+    let inputs := fun wire => ((List.range 8).map fun i =>
+      if i = select.val then wire else source + 100 + i).toArray
+    ⟨source, [⟨inputs source, select, source + 1⟩,
+      ⟨inputs (source + 1), select, source + 2⟩]⟩
+
 /-- Concrete valid Organ O7 `LeanFpgaTurn`: compiles `(i₀ = 0) ∧ (i₁ = 1)` over $\{0, 1, *\}^3$
     with PIP routes `(3, 5)` into a canonical 2-frame `FABulous` bitstream under an isolated DPR fence. -/
 def sampleValidFpgaTurn : LeanFpgaTurn :=
@@ -3394,7 +3796,17 @@ def sampleValidFpgaTurn : LeanFpgaTurn :=
   , hiPipRoute     := hiPip
   , deltaNet       := sampleLinearDeltaNet
   , dualFrames     := encodeDualBitstreamFrames (compileFaceIdealToDualTiles (φ.meet ψ) loPip hiPip)
-  , dprFenceActive := true }
+  , dprFenceActive := true
+  , routes := outputTileRoutes sampleLinearDeltaNet loPip hiPip }
+
+theorem sampleValidFpgaTurn_refusal : refuseLeanFpgaTurn sampleValidFpgaTurn = none := by
+  have hd : sampleValidFpgaTurn.deltaNetCommitment = deltaNetDigest fpgaNetHash sampleValidFpgaTurn.deltaNet := rfl
+  unfold refuseLeanFpgaTurn
+  rw [hd, bne_self_eq_false]
+  rfl
+
+theorem sampleValidFpgaTurn_admitted : checkLeanFpgaTurn sampleValidFpgaTurn = true := by
+  simp only [checkLeanFpgaTurn, sampleValidFpgaTurn_refusal, Option.isNone_none]
 
 /-- Planted bad turn 1: Rung-2 `DeltaNet` with a nonlinear fan-out collision (first wire duplicated). -/
 def plantedNonlinearNetTurn : LeanFpgaTurn :=
@@ -3454,7 +3866,9 @@ example : checkNetPortLinearity sampleLinearDeltaNet = true := rfl
 example : checkNetPortLinearity sampleSharedLetNet = true := rfl
 example : checkNetPortLinearity sampleActiveBetaRedexNet = true := rfl
 example : checkCanonicalDualFrames sampleValidFpgaTurn.dualFrames = true := rfl
-example : silverLeanFpgaSmoke = true := rfl
+theorem silverLeanFpgaSmoke_passes : silverLeanFpgaSmoke = true := by
+  simp only [silverLeanFpgaSmoke, sampleValidFpgaTurn_admitted, sampleValidFpgaTurn_refusal]
+  rfl
 
 end Obend.Trailblaze.LeanFpga
 
@@ -3814,12 +4228,9 @@ def canonicalStageBBiscuitRoot : Obend.Polis.Block where
     - **O7 (`LeanFpga`)**: `LeanFpgaTurn`. -/
 structure StageBSevenOrganTurn where
   newRevocations : List Nat := []
-  vaultMandate    : Obend.Vault.Mandate.Mandate
   vaultInvocation : Obend.Vault.Mandate.Invocation
   polisTurn       : ConcretePolisTurn
-  biscuitRevoked  : Obend.Polis.RevokedSet
   biscuitEnv      : Nat → Obend.Polis.KleenePred3
-  biscuitRoot     : Obend.Polis.Block
   biscuitHops     : Array Obend.Polis.Block
   requiredRights  : UInt64
   cathedralTurn   : CathedralGovernanceTurn
@@ -3836,14 +4247,6 @@ structure StageBSevenOrganState where
   vaultMandate : Obend.Vault.Mandate.Mandate := canonicalStageBMandate
   biscuitRoot : Obend.Polis.Block := canonicalStageBBiscuitRoot
   biscuitRevoked : Obend.Polis.RevokedSet := Obend.Polis.RevokedSet.empty
-
-/-- Check Organ O1 + Organ O4 authorization on a single `StageBSevenOrganTurn`. -/
-def checkTurnMandateAndBiscuit (turn : StageBSevenOrganTurn) : Bool :=
-  Obend.Vault.Mandate.checkInvocation turn.vaultMandate turn.vaultInvocation &&
-  match Obend.Polis.foldChain
-      turn.biscuitRevoked turn.biscuitEnv turn.biscuitRoot turn.biscuitHops with
-  | none => false
-  | some acc => Obend.Polis.authorize acc turn.requiredRights
 
 /-- Revocations accumulate before this turn's authorization. Authority is owned by the state. -/
 def sessionRevocations (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn) : Obend.Polis.RevokedSet :=
@@ -3882,9 +4285,7 @@ theorem checkPinnedSessionAuthority_revoked_prefix
 /-- Constructive named refusal for a 7-organ multi-turn Cathedral transition. -/
 def refuseStageBCathedralStep
     (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn) : Option String :=
-  if !checkTurnMandateAndBiscuit turn then
-    some "refused: vault-mandate-or-zkbiscuit-unauthorized"
-  else if !checkPinnedSessionAuthority st turn then
+  if !checkPinnedSessionAuthority st turn then
     some "refused: pinned-session-authority"
   else if !decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) then
     some "refused: vault-budget-exhausted"
@@ -3901,9 +4302,7 @@ def refuseStageBCathedralStep
 /-- Advance `StageBSevenOrganState` across one verified 7-organ turn. -/
 def stepStageBCathedral
     (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn) : Option StageBSevenOrganState :=
-  if !checkTurnMandateAndBiscuit turn then
-    none
-  else if !checkPinnedSessionAuthority st turn then
+  if !checkPinnedSessionAuthority st turn then
     none
   else if !decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) then
     none
@@ -3927,18 +4326,10 @@ theorem stepStageBCathedral_authority_persistent
     next.vaultMandate = st.vaultMandate ∧ next.biscuitRoot = st.biscuitRoot ∧
     next.biscuitRevoked = sessionRevocations st turn := by
   unfold stepStageBCathedral at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · split at h
-      · cases h
-      · split at h
-        · cases h
-        · cases hp : stepPolisSession st.polisState turn.polisTurn <;>
-            cases hc : stepCathedralTrace st.cathedralState turn.cathedralTurn <;>
-            simp_all
-          all_goals cases h; exact ⟨rfl, rfl, rfl⟩
+  repeat' first | split at h | contradiction
+  all_goals cases hp : stepPolisSession st.polisState turn.polisTurn <;>
+    cases hc : stepCathedralTrace st.cathedralState turn.cathedralTurn <;> simp_all
+  all_goals cases h; exact ⟨rfl, rfl, rfl⟩
 
 /-- Replay an arbitrary-length multi-turn 7-organ Cathedral trace `List StageBSevenOrganTurn`. -/
 def runStageBCathedralTrace
@@ -3996,51 +4387,44 @@ theorem stepStageBCathedral_skip_implies_violation
     (st : StageBSevenOrganState) (turn : StageBSevenOrganTurn)
     (hSkip : stepStageBCathedral st turn = none) :
     (refuseStageBCathedralStep st turn).isSome = true ∧
-    (checkTurnMandateAndBiscuit turn = false ∨
-     checkPinnedSessionAuthority st turn = false ∨
+    (checkPinnedSessionAuthority st turn = false ∨
      st.remVaultBudget < turn.vaultInvocation.cost ∨
      checkLeanFpgaTurn turn.fpgaTurn = false ∨
      stepPolisSession st.polisState turn.polisTurn = none ∨
      stepCathedralTrace st.cathedralState turn.cathedralTurn = none) := by
   unfold stepStageBCathedral at hSkip
   unfold refuseStageBCathedralStep
-  cases hMB : checkTurnMandateAndBiscuit turn with
-  | false =>
-    exact ⟨rfl, Or.inl rfl⟩
+  cases hPinned : checkPinnedSessionAuthority st turn with
+  | false => exact ⟨rfl, Or.inl rfl⟩
   | true =>
-    rw [hMB] at hSkip
+    rw [hPinned] at hSkip
     simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
-    cases hPinned : checkPinnedSessionAuthority st turn with
-    | false => exact ⟨rfl, Or.inr (Or.inl rfl)⟩
+    cases hVB : decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) with
+    | false =>
+      have hLt : st.remVaultBudget < turn.vaultInvocation.cost := by
+        have hNotLe := of_decide_eq_false hVB
+        omega
+      exact ⟨rfl, Or.inr (Or.inl hLt)⟩
     | true =>
-      rw [hPinned] at hSkip
+      rw [hVB] at hSkip
       simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
-      cases hVB : decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) with
+      cases hFpga : checkLeanFpgaTurn turn.fpgaTurn with
       | false =>
-        have hLt : st.remVaultBudget < turn.vaultInvocation.cost := by
-          have hNotLe := of_decide_eq_false hVB
-          omega
-        exact ⟨rfl, Or.inr (Or.inr (Or.inl hLt))⟩
+        exact ⟨rfl, Or.inr (Or.inr (Or.inl rfl))⟩
       | true =>
-        rw [hVB] at hSkip
+        rw [hFpga] at hSkip
         simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
-        cases hFpga : checkLeanFpgaTurn turn.fpgaTurn with
-        | false =>
+        cases hPol : stepPolisSession st.polisState turn.polisTurn with
+        | none =>
           exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inl rfl)))⟩
-        | true =>
-          rw [hFpga] at hSkip
-          simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
-          cases hPol : stepPolisSession st.polisState turn.polisTurn with
+        | some pNext =>
+          rw [hPol] at hSkip
+          cases hCath : stepCathedralTrace st.cathedralState turn.cathedralTurn with
           | none =>
-            exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl))))⟩
-          | some pNext =>
-            rw [hPol] at hSkip
-            cases hCath : stepCathedralTrace st.cathedralState turn.cathedralTurn with
-            | none =>
-              exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inr (Or.inr rfl))))⟩
-            | some cNext =>
-              rw [hCath] at hSkip
-              cases hSkip
+            exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inr rfl)))⟩
+          | some cNext =>
+            rw [hCath] at hSkip
+            cases hSkip
 
 /-- Converse step completeness: every 7-organ turn satisfying O1–O7 gates advances `stepStageBCathedral`. -/
 theorem stepStageBCathedral_complete
@@ -4048,7 +4432,6 @@ theorem stepStageBCathedral_complete
     (polisNext : PolisSessionState deosCapPCA.Code)
     (cathNext : CathedralTraceState)
     (hPinned : checkPinnedSessionAuthority st turn = true)
-    (hMB : checkTurnMandateAndBiscuit turn = true)
     (hVB : turn.vaultInvocation.cost ≤ st.remVaultBudget)
     (hFpga : checkLeanFpgaTurn turn.fpgaTurn = true)
     (hPol : stepPolisSession st.polisState turn.polisTurn = some polisNext)
@@ -4061,7 +4444,7 @@ theorem stepStageBCathedral_complete
         , vaultMandate := st.vaultMandate, biscuitRoot := st.biscuitRoot
         , biscuitRevoked := sessionRevocations st turn } := by
   unfold stepStageBCathedral
-  rw [hMB, hPinned, decide_eq_true hVB, hFpga, hPol, hCath]
+  rw [hPinned, decide_eq_true hVB, hFpga, hPol, hCath]
   rfl
 
 private theorem runStageBCathedralTrace_decompose
@@ -4073,7 +4456,9 @@ private theorem runStageBCathedralTrace_decompose
       some final.cathedralState ∧
     final.remVaultBudget + totalSevenOrganVaultCost turns = init.remVaultBudget ∧
     (∀ t ∈ turns,
-      checkTurnMandateAndBiscuit t = true ∧
+      (∃ st : StageBSevenOrganState,
+        st.vaultMandate = init.vaultMandate ∧ st.biscuitRoot = init.biscuitRoot ∧
+        checkPinnedSessionAuthority st t = true) ∧
       checkLeanFpgaTurn t.fpgaTurn = true) := by
   induction turns generalizing init with
   | nil =>
@@ -4089,53 +4474,48 @@ private theorem runStageBCathedralTrace_decompose
     | some st₁ =>
       rw [hStep] at hRun
       unfold stepStageBCathedral at hStep
-      cases hMB : checkTurnMandateAndBiscuit t with
-      | false => rw [hMB] at hStep; cases hStep
+      cases hPinned : checkPinnedSessionAuthority init t with
+      | false => rw [hPinned] at hStep; cases hStep
       | true =>
-        rw [hMB] at hStep
+        rw [hPinned] at hStep
         simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
-        cases hPinned : checkPinnedSessionAuthority init t with
-        | false => rw [hPinned] at hStep; cases hStep
+        cases hVB : decide (t.vaultInvocation.cost ≤ init.remVaultBudget) with
+        | false => rw [hVB] at hStep; cases hStep
         | true =>
-          rw [hPinned] at hStep
+          rw [hVB] at hStep
           simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
-          cases hVB : decide (t.vaultInvocation.cost ≤ init.remVaultBudget) with
-          | false => rw [hVB] at hStep; cases hStep
+          have hCostLe : t.vaultInvocation.cost ≤ init.remVaultBudget := of_decide_eq_true hVB
+          cases hFpga : checkLeanFpgaTurn t.fpgaTurn with
+          | false => rw [hFpga] at hStep; cases hStep
           | true =>
-            rw [hVB] at hStep
+            rw [hFpga] at hStep
             simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
-            have hCostLe : t.vaultInvocation.cost ≤ init.remVaultBudget := of_decide_eq_true hVB
-            cases hFpga : checkLeanFpgaTurn t.fpgaTurn with
-            | false => rw [hFpga] at hStep; cases hStep
-            | true =>
-              rw [hFpga] at hStep
-              simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hStep
-              cases hPol : stepPolisSession init.polisState t.polisTurn with
-              | none => rw [hPol] at hStep; cases hStep
-              | some pNext =>
-                rw [hPol] at hStep
-                cases hCath : stepCathedralTrace init.cathedralState t.cathedralTurn with
-                | none => rw [hCath] at hStep; cases hStep
-                | some cNext =>
-                  rw [hCath] at hStep
-                  injection hStep with hSt₁Eq
-                  subst hSt₁Eq
-                  obtain ⟨ihPol, ihCath, ihVault, ihAll⟩ := ih _ hRun
-                  refine ⟨?_, ?_, ?_, ?_⟩
-                  · unfold ValidTrace runPolisTrace
-                    dsimp only [List.map]
-                    rw [hPol]
-                    exact ihPol
-                  · unfold runCathedralTrace
-                    dsimp only [List.map]
-                    rw [hCath]
-                    exact ihCath
-                  · dsimp only [totalSevenOrganVaultCost] at ihVault ⊢
-                    omega
-                  · intro u hu
-                    rcases List.mem_cons.mp hu with rfl | huRest
-                    · exact ⟨hMB, hFpga⟩
-                    · exact ihAll u huRest
+            cases hPol : stepPolisSession init.polisState t.polisTurn with
+            | none => rw [hPol] at hStep; cases hStep
+            | some pNext =>
+              rw [hPol] at hStep
+              cases hCath : stepCathedralTrace init.cathedralState t.cathedralTurn with
+              | none => rw [hCath] at hStep; cases hStep
+              | some cNext =>
+                rw [hCath] at hStep
+                injection hStep with hSt₁Eq
+                subst hSt₁Eq
+                obtain ⟨ihPol, ihCath, ihVault, ihAll⟩ := ih _ hRun
+                refine ⟨?_, ?_, ?_, ?_⟩
+                · unfold ValidTrace runPolisTrace
+                  dsimp only [List.map]
+                  rw [hPol]
+                  exact ihPol
+                · unfold runCathedralTrace
+                  dsimp only [List.map]
+                  rw [hCath]
+                  exact ihCath
+                · dsimp only [totalSevenOrganVaultCost] at ihVault ⊢
+                  omega
+                · intro u hu
+                  rcases List.mem_cons.mp hu with rfl | huRest
+                  · exact ⟨⟨init, rfl, rfl, hPinned⟩, hFpga⟩
+                  · exact ihAll u huRest
 
 private theorem checkPolisTurn_microkitIsolation
     {P : PCA} {A B : Assembly P} {turn : PolisTurn A B}
@@ -4251,7 +4631,7 @@ private theorem polisTrace_constructive_invariants
     Certifies across any multi-turn trace `turns : List StageBSevenOrganTurn` with
     `runStageBCathedralTrace init turns = some final`:
     - **O1 (`VaultLedger`)**: Exact `Mandate` spend conservation `final.remVaultBudget + totalSevenOrganVaultCost turns = init.remVaultBudget`
-      and `Obend.Vault.Mandate.refusal t.vaultMandate t.vaultInvocation = none` at every turn;
+      and `Obend.Vault.Mandate.refusal init.vaultMandate t.vaultInvocation = none` at every turn;
     - **O2 (`RepairSpine`) & O5 (`ZkStripe`) & O6 (`ClusterGov`)**: Every `t ∈ turns` passes
       `checkCathedralTurn t.cathedralTurn = true` (`verifyZkStripeCallTree`, multi-hop `HopAudited`,
       `Sable` no-wrap, `Ozaki` `HyperLaw2`, 32-byte FPGA receipt), `WeightAndEpochChain` links
@@ -4281,7 +4661,7 @@ theorem stageB_cathedral_seven_organ_trace_sealed
     totalSevenOrganVaultCost turns ≤ init.vaultMandate.budget ∧
     -- O1 (`VaultLedger`)
     final.remVaultBudget + totalSevenOrganVaultCost turns = init.remVaultBudget ∧
-    (∀ t ∈ turns, Obend.Vault.Mandate.refusal t.vaultMandate t.vaultInvocation = none) ∧
+    (∀ t ∈ turns, Obend.Vault.Mandate.refusal init.vaultMandate t.vaultInvocation = none) ∧
     -- O3 (`PolisDeos`)
     (∀ c ∈ init.polisState.revokedCodes, c ∈ final.polisState.revokedCodes) ∧
     List.Nodup ((turns.map StageBSevenOrganTurn.polisTurn).map PolisTurn.inputCode) ∧
@@ -4301,8 +4681,9 @@ theorem stageB_cathedral_seven_organ_trace_sealed
       Obend.Digest.HashBytes.CollisionAmong Obend.Polis.lineageHash
         (fun x => Obend.Polis.LineageHashed g₁ hops₁ x ∨
                   Obend.Polis.LineageHashed g₂ hops₂ x)) ∧
-    (∀ t ∈ turns, ∃ acc : Obend.Polis.CapAccumulator,
-      Obend.Polis.foldChain t.biscuitRevoked t.biscuitEnv t.biscuitRoot t.biscuitHops = some acc ∧
+    (∀ t ∈ turns, ∃ (st : StageBSevenOrganState) (acc : Obend.Polis.CapAccumulator),
+      st.biscuitRoot = init.biscuitRoot ∧
+      Obend.Polis.foldChain (sessionRevocations st t) t.biscuitEnv st.biscuitRoot t.biscuitHops = some acc ∧
       Obend.Polis.authorize acc t.requiredRights = true) ∧
     -- O2 / O5 / O6 (`RepairSpine`, `ZkStripe`, `ClusterGov`)
     (∀ t ∈ turns, checkCathedralTurn t.cathedralTurn = true) ∧
@@ -4340,24 +4721,23 @@ theorem stageB_cathedral_seven_organ_trace_sealed
     refine ⟨hVaultCons, ?_, hRevMono, hNodup, hPolBudget, ?_, hPikku, hLinBinds, ?_,
             ?_, hChain, hFlopsLe, hHidLe, ?_⟩
     · intro t ht
-      have hMB := (hAllMBFpga t ht).1
-      unfold checkTurnMandateAndBiscuit at hMB
-      simp only [Bool.and_eq_true] at hMB
-      exact (Obend.Vault.Mandate.refusal_none_iff t.vaultMandate t.vaultInvocation).mpr hMB.1
+      obtain ⟨st, hm, _, hPinned⟩ := (hAllMBFpga t ht).1
+      simp only [checkPinnedSessionAuthority, Bool.and_eq_true] at hPinned
+      rw [← hm]
+      exact (Obend.Vault.Mandate.refusal_none_iff st.vaultMandate t.vaultInvocation).mpr hPinned.1.2
     · intro t ht
       exact hPolSafety t.polisTurn (List.mem_map_of_mem ht)
     · intro t ht
-      have hMB := (hAllMBFpga t ht).1
-      unfold checkTurnMandateAndBiscuit at hMB
-      simp only [Bool.and_eq_true] at hMB
+      obtain ⟨st, _, hr, hMB⟩ := (hAllMBFpga t ht).1
+      simp only [checkPinnedSessionAuthority, Bool.and_eq_true] at hMB
       cases hFold : Obend.Polis.foldChain
-          t.biscuitRevoked t.biscuitEnv t.biscuitRoot t.biscuitHops with
+          (sessionRevocations st t) t.biscuitEnv st.biscuitRoot t.biscuitHops with
       | none =>
         rw [hFold] at hMB
         cases hMB.2
       | some acc =>
         rw [hFold] at hMB
-        exact ⟨acc, rfl, hMB.2⟩
+        exact ⟨st, acc, hr, hFold, hMB.2⟩
     · intro t ht
       exact hAllCathOk t.cathedralTurn (List.mem_map_of_mem ht)
     · intro t ht pt vAxis
@@ -4401,12 +4781,9 @@ theorem stageB_cathedral_seven_organ_trace_sealed
 
 /-- First constructive 7-organ turn witness inhabiting `stepStageBCathedral` and `runStageBCathedralTrace`. -/
 def sampleStageBSevenOrganTurn1 : StageBSevenOrganTurn where
-  vaultMandate    := canonicalStageBMandate
   vaultInvocation := canonicalStageBInvocation
   polisTurn       := sampleValidPolisTurn
-  biscuitRevoked  := Obend.Polis.RevokedSet.empty
   biscuitEnv      := fun _ => .true3
-  biscuitRoot     := canonicalStageBBiscuitRoot
   biscuitHops     := #[{ rights := 0x07, caveat := .const true, holder := ByteArray.mk #[0xBB], channel := ByteArray.mk #[0x03] }]
   requiredRights  := 0x05
   cathedralTurn   := sampleCathedralTurn
@@ -4415,12 +4792,9 @@ def sampleStageBSevenOrganTurn1 : StageBSevenOrganTurn where
 /-- Second consecutive 7-organ turn witness advancing capability nullifiers, `UMem` timestamps,
     model weights `0x11112222 → 0x33334444 → 0x55556666`, and FPGA receipt epochs `1 → 2`. -/
 def sampleStageBSevenOrganTurn2 : StageBSevenOrganTurn where
-  vaultMandate    := canonicalStageBMandate
   vaultInvocation := { canonicalStageBInvocation with epoch := 2, cost := 15 }
   polisTurn       := sampleSecondPolisTurn
-  biscuitRevoked  := Obend.Polis.RevokedSet.empty
   biscuitEnv      := fun _ => .true3
-  biscuitRoot     := canonicalStageBBiscuitRoot
   biscuitHops     := #[{ rights := 0x07, caveat := .const true, holder := ByteArray.mk #[0xCC], channel := ByteArray.mk #[0x04] }]
   requiredRights  := 0x05
   cathedralTurn   := sampleSecondCathedralTurn
@@ -4473,6 +4847,11 @@ theorem runStageBCathedralTrace_two_turn_inhabited
         lastTimestamp := advanceMemHorizon sampleInitSessionState.lastTimestamp sampleValidPolisTurn.onlineMem
         ramLog := sampleValidPolisTurn.onlineMem.toArray
         memRoot := sampleValidPolisTurn.ramPostRoot } sampleSecondPolisTurn = true)
+    (ledger₁ ledger₂ : Obend.Judge.DecoAndCallTree.SessionLedger)
+    (hLedger₁ : consumeSessionNodes sampleCathedralTurn.zkPolicy.verifiers sampleInitTraceState.decoLedger
+      (allSessionNodes sampleCathedralTurn.batchCallTree) = some ledger₁)
+    (hLedger₂ : consumeSessionNodes sampleSecondCathedralTurn.zkPolicy.verifiers ledger₁
+      (allSessionNodes sampleSecondCathedralTurn.batchCallTree) = some ledger₂)
     (hCt₁ : checkCathedralTurn sampleCathedralTurn = true)
     (hCt₂ : checkCathedralTurn sampleSecondCathedralTurn = true) :
     ∃ final : StageBSevenOrganState,
@@ -4482,16 +4861,6 @@ theorem runStageBCathedralTrace_two_turn_inhabited
       final.remVaultBudget = initVaultBudget - 25 ∧
       final.cathedralState.weightsRoot = 0x55556666 ∧
       final.cathedralState.lastEpoch = 2 := by
-  have hBisc₁ : checkTurnMandateAndBiscuit sampleStageBSevenOrganTurn1 = true := by
-    unfold checkTurnMandateAndBiscuit sampleStageBSevenOrganTurn1
-    dsimp only
-    rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
-    decide
-  have hBisc₂ : checkTurnMandateAndBiscuit sampleStageBSevenOrganTurn2 = true := by
-    unfold checkTurnMandateAndBiscuit sampleStageBSevenOrganTurn2
-    dsimp only
-    rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
-    decide
   let p₁ : PolisSessionState deosCapPCA.Code :=
     { revokedCodes  := sampleValidPolisTurn.inputCode :: sampleInitSessionState.revokedCodes
     , mandateBudget := sampleInitSessionState.mandateBudget - turnMandateCost sampleValidPolisTurn
@@ -4505,9 +4874,9 @@ theorem runStageBCathedralTrace_two_turn_inhabited
     , ramLog := p₁.ramLog ++ sampleSecondPolisTurn.onlineMem.toArray
     , memRoot := sampleSecondPolisTurn.ramPostRoot }
   let c₁ : CathedralTraceState :=
-    { weightsRoot := 0x33334444, lastEpoch := 1, usedFlops := 7500000, remFlopsBudget := 12500000, remHiddenOpsBudget := 6 }
+    { weightsRoot := 0x33334444, lastEpoch := 1, usedFlops := 7500000, remFlopsBudget := 12500000, remHiddenOpsBudget := 6, decoLedger := ledger₁ }
   let c₂ : CathedralTraceState :=
-    { weightsRoot := 0x55556666, lastEpoch := 2, usedFlops := 13500000, remFlopsBudget := 6500000, remHiddenOpsBudget := 2 }
+    { weightsRoot := 0x55556666, lastEpoch := 2, usedFlops := 13500000, remFlopsBudget := 6500000, remHiddenOpsBudget := 2, decoLedger := ledger₂ }
   have hPol₁ : stepPolisSession sampleInitSessionState sampleValidPolisTurn = some p₁ := by
     have hf : sampleValidPolisTurn.inputCode ∉ sampleInitSessionState.revokedCodes := by
       change (DeosCapCode.capToken 3 1 25) ∉ [DeosCapCode.capToken 3 1 9]
@@ -4540,21 +4909,21 @@ theorem runStageBCathedralTrace_two_turn_inhabited
         decide_eq_true (by decide : sampleInitTraceState.lastEpoch < sampleCathedralTurn.fpgaReceipt.epoch),
         decide_eq_true (by decide : sampleCathedralTurn.clusterCtx.step.flopsUsed ≤ sampleInitTraceState.remFlopsBudget),
         decide_eq_true (by decide : sampleCathedralTurn.physicalEnvelope.hiddenOpsCap ≤ sampleInitTraceState.remHiddenOpsBudget)]
-    simp only [Bool.and_self, ↓reduceIte, hNext₁, hEp₁, hFl₁, hRemFl₁, hRemHid₁]
+    simp only [Bool.and_self, ↓reduceIte, hLedger₁, Option.map_some, hNext₁, hEp₁, hFl₁, hRemFl₁, hRemHid₁]
     rfl
   have hCath₂ : stepCathedralTrace c₁ sampleSecondCathedralTurn = some c₂ := by
     have hNext₂ : sampleSecondCathedralTurn.clusterCtx.step.nextWeightsRoot = 0x55556666 := by decide
     have hEp₂ : sampleSecondCathedralTurn.fpgaReceipt.epoch = 2 := by decide
-    have hFl₂ : c₁.usedFlops + sampleSecondCathedralTurn.clusterCtx.step.flopsUsed = 13500000 := by decide
-    have hRemFl₂ : c₁.remFlopsBudget - sampleSecondCathedralTurn.clusterCtx.step.flopsUsed = 6500000 := by decide
-    have hRemHid₂ : c₁.remHiddenOpsBudget - sampleSecondCathedralTurn.physicalEnvelope.hiddenOpsCap = 2 := by decide
+    have hFl₂ : c₁.usedFlops + sampleSecondCathedralTurn.clusterCtx.step.flopsUsed = 13500000 := by dsimp only [c₁]; decide
+    have hRemFl₂ : c₁.remFlopsBudget - sampleSecondCathedralTurn.clusterCtx.step.flopsUsed = 6500000 := by dsimp only [c₁]; decide
+    have hRemHid₂ : c₁.remHiddenOpsBudget - sampleSecondCathedralTurn.physicalEnvelope.hiddenOpsCap = 2 := by dsimp only [c₁]; decide
     unfold stepCathedralTrace
     rw [hCt₂,
-        decide_eq_true (by decide : sampleSecondCathedralTurn.clusterCtx.step.prevWeightsRoot = c₁.weightsRoot),
-        decide_eq_true (by decide : c₁.lastEpoch < sampleSecondCathedralTurn.fpgaReceipt.epoch),
-        decide_eq_true (by decide : sampleSecondCathedralTurn.clusterCtx.step.flopsUsed ≤ c₁.remFlopsBudget),
-        decide_eq_true (by decide : sampleSecondCathedralTurn.physicalEnvelope.hiddenOpsCap ≤ c₁.remHiddenOpsBudget)]
-    simp only [Bool.and_self, ↓reduceIte, hNext₂, hEp₂, hFl₂, hRemFl₂, hRemHid₂]
+        decide_eq_true (by dsimp only [c₁]; decide : sampleSecondCathedralTurn.clusterCtx.step.prevWeightsRoot = c₁.weightsRoot),
+        decide_eq_true (by dsimp only [c₁]; decide : c₁.lastEpoch < sampleSecondCathedralTurn.fpgaReceipt.epoch),
+        decide_eq_true (by dsimp only [c₁]; decide : sampleSecondCathedralTurn.clusterCtx.step.flopsUsed ≤ c₁.remFlopsBudget),
+        decide_eq_true (by dsimp only [c₁]; decide : sampleSecondCathedralTurn.physicalEnvelope.hiddenOpsCap ≤ c₁.remHiddenOpsBudget)]
+    simp only [c₁, Bool.and_self, ↓reduceIte, hLedger₂, Option.map_some, hNext₂, hEp₂, hFl₂, hRemFl₂, hRemHid₂]
     rfl
   have hVB₁ : sampleStageBSevenOrganTurn1.vaultInvocation.cost ≤ initVaultBudget := by
     change 10 ≤ initVaultBudget
@@ -4566,7 +4935,7 @@ theorem runStageBCathedralTrace_two_turn_inhabited
       { sampleStageBInitState with remVaultBudget := initVaultBudget } sampleStageBSevenOrganTurn1 = true := by
     unfold checkPinnedSessionAuthority sessionRevocations sampleStageBSevenOrganTurn1 sampleStageBInitState
     dsimp only [List.foldl_nil]
-    rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
+    rw [foldChain_emptyRevoked_oneHop _ _ _ (by dsimp only [c₁]; decide)]
     simp [canonicalStageBMandate, hPinnedBudget, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
       Obend.Vault.Mandate.Caveat.any, Obend.Polis.authorize, Obend.Polis.subMask,
       canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3] <;> decide
@@ -4575,7 +4944,7 @@ theorem runStageBCathedralTrace_two_turn_inhabited
       sampleStageBSevenOrganTurn2 = true := by
     unfold checkPinnedSessionAuthority sessionRevocations sampleStageBSevenOrganTurn2
     dsimp only [List.foldl_nil]
-    rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
+    rw [foldChain_emptyRevoked_oneHop _ _ _ (by dsimp only [c₁]; decide)]
     have hb : initVaultBudget - 10 ≤ 100 := by omega
     simp [canonicalStageBMandate, hb, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
       Obend.Vault.Mandate.Caveat.any, Obend.Polis.authorize, Obend.Polis.subMask,
@@ -4586,14 +4955,14 @@ theorem runStageBCathedralTrace_two_turn_inhabited
         sampleStageBSevenOrganTurn1 =
         some { polisState := p₁, cathedralState := c₁, remVaultBudget := initVaultBudget - 10 } :=
     stepStageBCathedral_complete _ sampleStageBSevenOrganTurn1 p₁ c₁
-      hPin₁ hBisc₁ hVB₁ rfl hPol₁ hCath₁
+      hPin₁ hVB₁ sampleValidFpgaTurn_admitted hPol₁ hCath₁
   have hStep₂ :
       stepStageBCathedral
         { polisState := p₁, cathedralState := c₁, remVaultBudget := initVaultBudget - 10 }
         sampleStageBSevenOrganTurn2 =
         some { polisState := p₂, cathedralState := c₂, remVaultBudget := (initVaultBudget - 10) - 15 } :=
     stepStageBCathedral_complete _ sampleStageBSevenOrganTurn2 p₂ c₂
-      hPin₂ hBisc₂ hVB₂ rfl hPol₂ hCath₂
+      hPin₂ hVB₂ sampleValidFpgaTurn_admitted hPol₂ hCath₂
   have hSub : (initVaultBudget - 10) - 15 = initVaultBudget - 25 := by omega
   refine ⟨{ polisState := p₂, cathedralState := c₂, remVaultBudget := (initVaultBudget - 10) - 15 },
           ?_, hSub, rfl, rfl⟩
