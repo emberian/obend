@@ -15,6 +15,7 @@ import all Obend.Hardware.Gpu.Rdna2.Semantics
 public import Obend.Run.HyperLaw
 
 public section
+set_option pp.maxDepth 2
 
 
 namespace Obend.Trailblaze
