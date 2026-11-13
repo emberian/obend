@@ -3635,6 +3635,18 @@ def checkDeltaNormalForm (net : DeltaNet) (value : Nat) : Bool :=
     | .con id tag => id == net.rootPort.nodeId && net.symbols[tag.toNat]? == some (.literal value)
     | _ => false)
 
+theorem memberReduction_inhabited : ∃ out,
+    runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer")
+      [(7, 6), (8, 3), (8, 4), (3, 5)] = some out ∧ checkDeltaNormalForm out 42 = true := by
+  let net := lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer"
+  refine ⟨(runDeltaReductions net [(7, 6), (8, 3), (8, 4), (3, 5)]).getD net, ?_, ?_⟩ <;>
+    decide +kernel
+
+theorem reduceDeltaPair_inhabited : ∃ net out,
+    reduceDeltaPair net 7 6 = some out := by
+  let net := lowerLeafBookMemberToDeltaNet "member" ⟨[.static "answer" (.nat 42)]⟩ "answer"
+  exact ⟨net, (reduceDeltaPair net 7 6).getD net, by decide +kernel⟩
+
 /-! ## 3. Rung 5 (`HARDWARE.md`): Single & Dual-Tile `FABulous` Frame Codec & Glitch-Free DPR -/
 
 /-- Configuration state of one `FABulous` `LUT4AB` BEL + 8-way switch-matrix PIP multiplexer:
@@ -4096,6 +4108,11 @@ theorem multiNetPip_routing_sound (routes : List PipRoute) (signals : Nat → Bo
   intro r hr
   have hc := h.1.2 r hr
   exact ⟨hc.1, pipChain_signal r.switches r.source signals hc.2⟩
+
+example : checkMultiNetPipDisjoint
+    [⟨0, [⟨Array.replicate 8 0, 0, 1⟩, ⟨Array.replicate 8 1, 7, 2⟩]⟩,
+     ⟨3, [⟨Array.replicate 8 3, 0, 4⟩, ⟨Array.replicate 8 4, 7, 5⟩]⟩] = true := by
+  decide +kernel
 
 /-- Sample the tile after its register update: this is the LUT result produced by
 `evalFabulousTile.nextFf`, independent of initial FF state, with no bypass input. -/
@@ -4966,19 +4983,45 @@ theorem stepStageBCathedral_skip_implies_violation
      checkLeanFpgaTurn turn.fpgaTurn = false ∨
      stepPolisSession st.polisState turn.polisTurn = none ∨
      stepCathedralTrace st.cathedralState turn.cathedralTurn = none) := by
-  unfold stepStageBCathedral refuseStageBCathedralStep at *
-  cases hMB : checkTurnMandateAndBiscuit turn <;>
-    cases hPin : checkPinnedSessionAuthority st turn <;>
-    cases hCost : decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) <;>
-    cases hFpga : checkLeanFpgaTurn turn.fpgaTurn <;>
-    simp_all only [Bool.not_true, Bool.not_false, Bool.true_eq_false, Bool.false_eq_true,
-      ↓reduceIte, Option.isSome_some, or_true, true_or, or_self]
-  · have := of_decide_eq_false hCost
-    omega
-  · have := of_decide_eq_false hCost
-    omega
-  · cases hPol : stepPolisSession st.polisState turn.polisTurn <;>
-      cases hCath : stepCathedralTrace st.cathedralState turn.cathedralTurn <;> simp_all
+  unfold stepStageBCathedral at hSkip
+  unfold refuseStageBCathedralStep
+  cases hMB : checkTurnMandateAndBiscuit turn with
+  | false =>
+    exact ⟨rfl, Or.inl rfl⟩
+  | true =>
+    rw [hMB] at hSkip
+    simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
+    cases hPinned : checkPinnedSessionAuthority st turn with
+    | false => exact ⟨rfl, Or.inr (Or.inl rfl)⟩
+    | true =>
+      rw [hPinned] at hSkip
+      simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
+      cases hVB : decide (turn.vaultInvocation.cost ≤ st.remVaultBudget) with
+      | false =>
+        have hLt : st.remVaultBudget < turn.vaultInvocation.cost := by
+          have hNotLe := of_decide_eq_false hVB
+          omega
+        exact ⟨rfl, Or.inr (Or.inr (Or.inl hLt))⟩
+      | true =>
+        rw [hVB] at hSkip
+        simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
+        cases hFpga : checkLeanFpgaTurn turn.fpgaTurn with
+        | false =>
+          exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inl rfl)))⟩
+        | true =>
+          rw [hFpga] at hSkip
+          simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hSkip ⊢
+          cases hPol : stepPolisSession st.polisState turn.polisTurn with
+          | none =>
+            exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl))))⟩
+          | some pNext =>
+            rw [hPol] at hSkip
+            cases hCath : stepCathedralTrace st.cathedralState turn.cathedralTurn with
+            | none =>
+              exact ⟨rfl, Or.inr (Or.inr (Or.inr (Or.inr (Or.inr rfl))))⟩
+            | some cNext =>
+              rw [hCath] at hSkip
+              cases hSkip
 
 /-- Converse step completeness: every 7-organ turn satisfying O1–O7 gates advances `stepStageBCathedral`. -/
 theorem stepStageBCathedral_complete
@@ -5259,7 +5302,7 @@ theorem stageB_cathedral_seven_organ_trace_sealed
   have hp := runStageBCathedralTrace_authority_persistent init final turns hRun
   have hb := (runStageBCathedralTrace_decompose init final turns hRun).2.2.1
   refine ⟨hp.2.2, (by omega), ?_⟩
-    obtain ⟨hPolValid, hCathRun, hVaultCons, hAllMBFpga⟩ :=
+  · obtain ⟨hPolValid, hCathRun, hVaultCons, hAllMBFpga⟩ :=
       runStageBCathedralTrace_decompose init final turns hRun
     obtain ⟨hRevMono, _hFresh, hNodup, hPolBudget, hPolSafety⟩ :=
       polisTrace_constructive_invariants init.polisState
