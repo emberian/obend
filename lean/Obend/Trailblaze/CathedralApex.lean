@@ -1881,13 +1881,46 @@ def rdna2DispatchInput (d : Rdna2WavefrontDispatch) : Obend.Hardware.Gpu.Rdna2.W
       Obend.Hardware.Gpu.Rdna2.writeVgpr wave worker lane
         (UInt32.ofNat ((d.workgroupSlices[worker]?.getD #[])[lane]?.getD 0).toNat)) st) initial
 
+/-- Total decoder over AMD's generated encoding tables. A list search keeps its
+logical body reducible in the kernel; entries use the same reverse insertion order as `instIndex`. -/
+def decodeRdnaSliceInst (words : List UInt32) : Option (Obend.Hardware.Gpu.Rdna2.Inst × Nat) :=
+  let open Obend.Hardware.Gpu.Rdna2 in
+  match words with
+  | [] => none
+  | first :: _ =>
+    let candidates := encodings.mergeSort (fun a b => a.order ≤ b.order)
+    candidates.findSome? fun enc =>
+      let count := enc.bitCount / 32
+      if !encodingMatches first enc || count == 0 || words.length < count then none else
+      let taken := words.take count
+      let fields := fieldsOf enc taken
+      match lookupField fields "OP" with
+      | none => none
+      | some opcode =>
+        let entries := (instructions.flatMap fun inst =>
+          inst.encodings.map fun ie => (inst, ie)).reverse
+        match entries.find? (fun (_, ie) => ie.encoding == enc.name && ie.opcode == opcode &&
+            match enc.conditions.find? (·.name == ie.condition) with
+            | some condition => condition.expr.eval fields
+            | none => false) with
+        | some (inst, ie) => some (⟨inst, enc, ie, fields, taken⟩, count)
+        | none => none
+
+def decodeRdnaSliceProgram : Nat → List UInt32 → Option (List (Option Obend.Hardware.Gpu.Rdna2.Inst))
+  | _, [] => some []
+  | 0, _ :: _ => none
+  | fuel + 1, words@(_ :: _) => do
+    let (inst, count) ← decodeRdnaSliceInst words
+    let rest ← decodeRdnaSliceProgram fuel (words.drop count)
+    pure (some inst :: (List.replicate (count - 1) none ++ rest))
+
 /-- Decode the supplied ISA and execute it with a bounded instruction budget.
 The result comes only from output VGPR 0; a failed decode, trap, or timeout refuses. -/
 def executeRdna2SliceReduction (d : Rdna2WavefrontDispatch) : Option (Array Int) :=
-  match Obend.Hardware.Gpu.Rdna2.decodeProgram d.shaderIsaWords with
-  | .error _ => none
-  | .ok program =>
-    let final := Obend.Hardware.Gpu.Rdna2.run program (d.shaderIsaWords.size * 4 + 1)
+  match decodeRdnaSliceProgram d.shaderIsaWords.size d.shaderIsaWords.toList with
+  | none => none
+  | some program =>
+    let final := Obend.Hardware.Gpu.Rdna2.run program.toArray (d.shaderIsaWords.size * 4 + 1)
       (rdna2DispatchInput d)
     if final.halted && !final.err.isSome then
       some ((List.range (ozakiSliceSumExec d.workgroupSlices).size).toArray.map
@@ -1989,6 +2022,8 @@ theorem sealedVramRandomOpening_sound (H : Obend.Digest.HashBytes.Hash)
   exact ⟨h.1.2.1 ▸ he.1.1, h.1.2.2.1, h.1.2.2.2, h.2⟩
 
 /-- Constructive execution fixture: one worker, two nonzero slices, decoded S_ENDPGM. -/
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
 theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
     checkRdna2DispatchEnvelope d = true := by
   exact ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, by
