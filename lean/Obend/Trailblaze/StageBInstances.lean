@@ -3165,7 +3165,7 @@ def emitHvmNetText (net : DeltaNet) : String :=
   let header := "@" ++ net.netName ++ " = " ++ renderPortVar net.rootPort
   let nodeLines := net.nodes.map (fun n => "  & " ++ emitNodeEquation net.symbols n)
   let wireLines := net.wires.map (fun w => "  & " ++ renderPortVar w.lhs ++ " ~ " ++ renderPortVar w.rhs)
-  String.intercalate "\n" (("// framed graph " ++ reprStr (deltaNetBytes net)) :: header :: (nodeLines ++ wireLines))
+  String.intercalate "\n" (header :: ("// framed graph " ++ reprStr (deltaNetBytes net)) :: (nodeLines ++ wireLines))
 
 /-- Flatten all ports declared across `net.nodes`. -/
 def declaredPorts (net : DeltaNet) : List PortEnd :=

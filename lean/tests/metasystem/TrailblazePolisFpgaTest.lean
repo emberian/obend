@@ -304,4 +304,22 @@ example :
 -- End-to-end Organ O7 Silver smoke witness
 example : silverLeanFpgaSmoke = true := rfl
 
+example : internSymbol [.symbol "x", .symbol "y"] (.symbol "x") ≠
+    internSymbol [.symbol "x", .symbol "y"] (.symbol "y") := by decide
+example : deltaTagBytes (.literal 32767) ≠ deltaTagBytes (.opcode 0) := by decide
+example : deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.lit 0) (.symbol "x"))) ≠
+    deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.lit 0) (.symbol "y"))) := by decide
+#tooth internSymbol_injective by
+  mutation internSymbol := fun _ _ => 0
+
+def twoHopRoute (source : Nat) : PipRoute :=
+  ⟨source, [⟨Array.replicate 8 source, 0, source + 1⟩,
+    ⟨Array.replicate 8 (source + 1), 7, source + 2⟩]⟩
+example : checkMultiNetPipDisjoint [twoHopRoute 0, twoHopRoute 3] = true := by decide
+example : checkMultiNetPipDisjoint [twoHopRoute 0, twoHopRoute 1] = false := by decide
+example : evalPipRoute (fun wire => wire == 3) (twoHopRoute 0) 2 = false ∧
+    evalPipRoute (fun wire => wire == 3) (twoHopRoute 3) 5 = true := by decide
+#tooth multiNetPip_routing_sound by
+  mutation checkMultiNetPipDisjoint := fun _ => true
+
 end Obend.Tests.TrailblazePolisFpgaTest
