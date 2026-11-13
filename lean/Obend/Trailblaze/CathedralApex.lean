@@ -2023,12 +2023,12 @@ theorem sealedVramRandomOpening_sound (H : Obend.Digest.HashBytes.Hash)
 
 set_option maxRecDepth 100000 in
 set_option maxHeartbeats 8000000 in
+set_option cbv.maxSteps 10000000 in
 /-- A decoded identity dispatch has two nonzero input and output slices. -/
 theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
     checkRdna2DispatchEnvelope d = true := by
   refine ⟨⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩, ?_⟩
-  simp only [checkRdna2DispatchEnvelope, ← Array.all_toList]
-  decide +kernel
+  cbv
 
 /-- An explicit Merkle-opening execution fixture, with a fixed test hash and a one-page tree. -/
 theorem vramChallengeOpening_inhabited : ∃ H root nonce c,
