@@ -1883,8 +1883,8 @@ def rdna2DispatchInput (d : Rdna2WavefrontDispatch) : Obend.Hardware.Gpu.Rdna2.W
 
 /-- Total decoder over AMD's generated encoding tables. A list search keeps its
 logical body reducible in the kernel; entries use the same reverse insertion order as `instIndex`. -/
+open Obend.Hardware.Gpu.Rdna2 in
 def decodeRdnaSliceInst (words : List UInt32) : Option (Obend.Hardware.Gpu.Rdna2.Inst × Nat) :=
-  let open Obend.Hardware.Gpu.Rdna2 in
   match words with
   | [] => none
   | first :: _ =>
