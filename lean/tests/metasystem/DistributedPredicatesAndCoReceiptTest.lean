@@ -1,7 +1,4 @@
 module
-import all Obend.Vault.Log
-import all Obend.Vault.WorldTree
-import all Obend.Vault.Replay
 public import Obend.Polis.PrivatePredicate
 public import Obend.Polis.JointCoReceipt
 public import Obend.Ledger.Floors

@@ -20,6 +20,7 @@ import all Obend.Run.Durable
 import all Obend.Core.Data
 
 public section
+set_option linter.unusedSimpArgs false
 set_option pp.maxDepth 6
 set_option pp.maxSteps 200
 

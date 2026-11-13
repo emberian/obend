@@ -1,5 +1,4 @@
 import Obend.Tactic.Tooth
-import all Obend.Polis.BlumRam
 import all Obend.Vault.Log
 import Obend.Vault.Log
 

@@ -1,5 +1,4 @@
 import all Obend.Polis.BlumRam
-import all Obend.Vault.Log
 import Obend.Polis.EvidencedOcap
 import Obend.Polis.ZkBiscuit
 import Obend.Polis.BlumRam
