@@ -20,8 +20,6 @@ import all Obend.Run.Durable
 import all Obend.Core.Data
 
 public section
-set_option linter.unusedSimpArgs false
-set_option pp.maxSteps 80
 
 /-
 # Obend.Vault.Replay — the deployed entry's world is the replay of its log
