@@ -341,15 +341,28 @@ def lratPlantedBadCert : Obend.Judge.Lrat.Cert :=
 theorem lratPlantedBad_refused :
     Obend.Judge.Lrat.check 1 lratContradictionCnf lratPlantedBadCert = .refused .noConflict [0] := by decide +kernel
 
-def decodeLratObj (s : String) : Except String Obend.Judge.Lrat.Cnf :=
-  match s with
-  | "[[1],[-1]]" | "p cnf 1 2\n1 0\n-1 0\n" => .ok lratContradictionCnf
-  | _ => Obend.Judge.Lrat.parseDimacs s
+/-- Accept DIMACS or a JSON array of clauses, deriving the variable bound from the literals. -/
+def decodeLratObj (s : String) : Except String Obend.Judge.Lrat.Cnf := do
+  if s.trimAscii.toString.startsWith "[" then
+    let rows ← (← Json.parse s).getArr?
+    let clauses ← rows.toList.mapM fun row => do
+      let lits ← row.getArr?
+      lits.toList.mapM (·.getInt?)
+    let vars := clauses.foldl (fun n clause => clause.foldl (fun n lit => max n lit.natAbs) n) 0
+    pure ⟨vars, clauses⟩
+  else Obend.Judge.Lrat.parseDimacs s
 
-def decodeLratCert (s : String) : Except String Obend.Judge.Lrat.Cert :=
-  match s with
-  | "[{\"id\":3,\"clause\":[],\"hints\":[1,2]}]" | "3 0 1 2 0\n" => .ok lratValidRefutationCert
-  | _ => Obend.Judge.Lrat.parseCert s
+/-- Accept LRAT text or JSON addition steps; both forms carry the complete proof. -/
+def decodeLratCert (s : String) : Except String Obend.Judge.Lrat.Cert := do
+  if s.trimAscii.toString.startsWith "[" then
+    let rows ← (← Json.parse s).getArr?
+    let steps ← rows.toList.mapM fun row => do
+      let id ← row.getObjValAs? Nat "id"
+      let clause ← (← (← row.getObjVal? "clause").getArr?).toList.mapM (·.getInt?)
+      let hints ← (← (← row.getObjVal? "hints").getArr?).toList.mapM (·.getInt?)
+      pure (Obend.Judge.Lrat.Step.add id clause hints)
+    pure (.refutation steps)
+  else Obend.Judge.Lrat.parseCert s
 
 /-- **The registered format `lrat@1` with kernel-exposed checker and decoders.** -/
 def lratFormat : Judge.Format where
@@ -390,53 +403,41 @@ theorem badClearing_refused :
   decide +kernel
 
 /-- Decode a `ClearingQuery` from JSON for `clearing@1`. -/
-def decodeClearingObj (s : String) : Except String Obend.Judge.ClearingQuery :=
-  match s with
-  | "{\"market\":{\"currency\":0,\"goods\":1,\"epsilon\":0},\"orders\":[],\"transfers\":[]}" =>
-    .ok validClearingQuery
-  | "{\"market\":{\"currency\":0,\"goods\":0,\"epsilon\":0},\"orders\":[],\"transfers\":[]}" =>
-    .ok badClearingQuery
-  | _ => do
-    let j ← Json.parse s
-    let mJson ← j.getObjVal? "market"
-    let currency ← mJson.getObjValAs? Nat "currency"
-    let goods ← mJson.getObjValAs? Nat "goods"
-    let epsilon ← mJson.getObjValAs? Nat "epsilon"
-    let ordersArr ← (← j.getObjVal? "orders").getArr?
-    let orders ← ordersArr.toList.mapM fun oJson => do
-      let account ← oJson.getObjValAs? Nat "account"
-      let sideStr ← oJson.getObjValAs? String "side"
-      let side ← match sideStr with
-        | "bid" => pure Obend.Judge.Side.bid
-        | "ask" => pure Obend.Judge.Side.ask
-        | _ => throw s!"unknown side {sideStr}"
-      let qty ← oJson.getObjValAs? Nat "qty"
-      let total ← oJson.getObjValAs? Nat "total"
-      pure { account, side, qty, total : Obend.Judge.Order }
-    let transfersArr ← (← j.getObjVal? "transfers").getArr?
-    let transfers ← transfersArr.toList.mapM fun tJson => do
-      let source ← tJson.getObjValAs? Nat "source"
-      let destination ← tJson.getObjValAs? Nat "destination"
-      let asset ← tJson.getObjValAs? Nat "asset"
-      let amount ← tJson.getObjValAs? Nat "amount"
-      pure { source, destination, asset, amount : Obend.Ledger.ResourcePosting }
-    pure { market := { currency, goods, epsilon }, orders, transfers }
+def decodeClearingObj (s : String) : Except String Obend.Judge.ClearingQuery := do
+  let j ← Json.parse s
+  let mJson ← j.getObjVal? "market"
+  let currency ← mJson.getObjValAs? Nat "currency"
+  let goods ← mJson.getObjValAs? Nat "goods"
+  let epsilon ← mJson.getObjValAs? Nat "epsilon"
+  let ordersArr ← (← j.getObjVal? "orders").getArr?
+  let orders ← ordersArr.toList.mapM fun oJson => do
+    let account ← oJson.getObjValAs? Nat "account"
+    let sideStr ← oJson.getObjValAs? String "side"
+    let side ← match sideStr with
+      | "bid" => pure Obend.Judge.Side.bid
+      | "ask" => pure Obend.Judge.Side.ask
+      | _ => throw s!"unknown side {sideStr}"
+    let qty ← oJson.getObjValAs? Nat "qty"
+    let total ← oJson.getObjValAs? Nat "total"
+    pure { account, side, qty, total : Obend.Judge.Order }
+  let transfersArr ← (← j.getObjVal? "transfers").getArr?
+  let transfers ← transfersArr.toList.mapM fun tJson => do
+    let source ← tJson.getObjValAs? Nat "source"
+    let destination ← tJson.getObjValAs? Nat "destination"
+    let asset ← tJson.getObjValAs? Nat "asset"
+    let amount ← tJson.getObjValAs? Nat "amount"
+    pure { source, destination, asset, amount : Obend.Ledger.ResourcePosting }
+  pure { market := { currency, goods, epsilon }, orders, transfers }
 
 /-- Decode a clearing `Certificate` from JSON for `clearing@1`. -/
-def decodeClearingCert (s : String) : Except String Obend.Judge.Certificate :=
-  match s with
-  | "{\"price\":10,\"potentialBid\":0,\"potentialAsk\":0,\"slacks\":[]}" =>
-    .ok validClearingCert
-  | "{\"price\":0,\"potentialBid\":0,\"potentialAsk\":0,\"slacks\":[]}" =>
-    .ok badClearingCert
-  | _ => do
-    let j ← Json.parse s
-    let price ← j.getObjValAs? Nat "price"
-    let p1 ← j.getObjValAs? Int "potentialBid"
-    let p2 ← j.getObjValAs? Int "potentialAsk"
-    let slacksArr ← (← j.getObjVal? "slacks").getArr?
-    let slacks ← slacksArr.toList.mapM (fun x => x.getInt?)
-    pure { price, potentials := (p1, p2), slacks }
+def decodeClearingCert (s : String) : Except String Obend.Judge.Certificate := do
+  let j ← Json.parse s
+  let price ← j.getObjValAs? Nat "price"
+  let p1 ← j.getObjValAs? Int "potentialBid"
+  let p2 ← j.getObjValAs? Int "potentialAsk"
+  let slacksArr ← (← j.getObjVal? "slacks").getArr?
+  let slacks ← slacksArr.toList.mapM (fun x => x.getInt?)
+  pure { price, potentials := (p1, p2), slacks }
 
 /-- **The registered format `clearing@1` wrapping `Obend.Judge.drexClearingJudge`.** -/
 def clearingFormat : Judge.Format where
@@ -1047,9 +1048,10 @@ theorem claimMeaning_of_layer_bEquiv {baseObj upgradedObj : ClaimObj}
 
 /-- **Executable / Certified Justification Combinator (`verifyByBisimRefinement`)**:
     Discharges an obligation on a refactored or upgraded claim `baseObj.withLhs lhs'` by checking
-    the base obligation's derivation `baseSteps` at grade `k` (combined with an observational
-    equivalence witness `lhs ≈b lhs'`). -/
-def verifyByBisimRefinement (k : Nat) (baseObj : ClaimObj) (baseSteps : List RStep) (_lhs' : Term) :
+    the base obligation's derivation `baseSteps` at grade `k`. The target term is a phantom
+    interface argument: its observational equivalence is supplied separately to the soundness
+    theorem, rather than decided by this checker. -/
+def verifyByBisimRefinement (k : Nat) (baseObj : ClaimObj) (baseSteps : List RStep) (_ : Term) :
     Judge.Verdict ClaimClause :=
   claimCheck k baseObj baseSteps
 
@@ -1067,8 +1069,8 @@ theorem verifyByBisimRefinement_sound {k : Nat} {baseObj : ClaimObj} {baseSteps 
     claimMeaning (baseObj.withLhs lhs') ∧
     (∀ ds : List Data, ds.length = baseObj.arity →
       HoldsEq (lhs'.substitute (argSubst (baseObj.args ds))) (rhs.substitute (argSubst (baseObj.args ds)))) := by
-  have hbase : claimMeaning baseObj := claim_sound hcheck
-  have href : claimMeaning (baseObj.withLhs lhs') := claimMeaning_of_bEquiv hbase hsides hbeq
+  have hbase : claimMeaning baseObj := claim_sound (k := k) (steps := baseSteps) hcheck
+  have href : claimMeaning (baseObj.withLhs lhs') := claimMeaning_of_bEquiv (kind := kind) (lhs := lhs) hbase hsides hbeq
   refine ⟨hbase, href, ?_⟩
   intro ds hlen
   unfold claimMeaning at href
