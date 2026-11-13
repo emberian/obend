@@ -5,21 +5,20 @@
 //! Matches `Obend.Crypto.Poseidon2Goldilocks` and `Obend.Crypto.ThresholdHashMpc` down to every
 //! round constant, `< 2^56` limb boundary, `10*1` sponge pad, and binomial identity.
 
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+
 use alloc::vec;
 use alloc::vec::Vec;
 
 use obend_crypto_exec::goldilocks::{
-    GOLDILOCKS_PRIME, POSEIDON2_INIT_STATE, Goldilocks, GoldilocksExt2,
-    bytes_to_limbs56 as exec_bytes_to_limbs56,
-    poseidon2_apply_me, poseidon2_apply_mi,
-    poseidon2_const_at as exec_poseidon2_const_at,
-    poseidon2_hash32 as exec_poseidon2_hash32,
-    poseidon2_pad as exec_poseidon2_pad,
-    poseidon2_perm12 as exec_poseidon2_perm12,
+    GOLDILOCKS_PRIME, Goldilocks, GoldilocksExt2, POSEIDON2_INIT_STATE,
+    bytes_to_limbs56 as exec_bytes_to_limbs56, poseidon2_apply_me, poseidon2_apply_mi,
+    poseidon2_const_at as exec_poseidon2_const_at, poseidon2_hash32 as exec_poseidon2_hash32,
+    poseidon2_pad as exec_poseidon2_pad, poseidon2_perm12 as exec_poseidon2_perm12,
     poseidon2_sbox7,
 };
 
-use crate::keccak_mpc::SlashingReceipt;
+use crate::keccak_mpc::{MpcCsprng, SlashingReceipt};
 
 // ============================================================================
 // 1. Exact Width-12 `Poseidon2Goldilocks` Permutation & 256-Bit Sponge (`poseidon2_hash32`)
@@ -121,26 +120,17 @@ pub fn lagrange_weights_zero_goldilocks(pts: &[Goldilocks]) -> Option<Vec<Goldil
     Some(weights)
 }
 
-#[inline]
-fn next_goldilocks_rand(seed: &mut u64) -> Goldilocks {
-    *seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *seed;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    Goldilocks::from_u64_reduced(z ^ (z >> 31))
-}
-
 /// Share a single `Goldilocks` secret across `eval_points` with threshold `t`.
 pub fn shamir_share_scalar_goldilocks(
     t: usize,
     eval_points: &[Goldilocks],
     secret: Goldilocks,
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) -> Vec<Goldilocks> {
     let mut coeffs = Vec::with_capacity(t);
     coeffs.push(secret);
     for _ in 1..t {
-        coeffs.push(next_goldilocks_rand(rng_seed));
+        coeffs.push(rng.next_goldilocks());
     }
     let out: Vec<Goldilocks> = eval_points
         .iter()
@@ -152,7 +142,7 @@ pub fn shamir_share_scalar_goldilocks(
 }
 
 /// Pre-shared 1-round Binomial Power-7 tuple `([r]_i, [r^2]_i, ..., [r^7]_i)` for party `i`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Power7Share {
     pub r_pows: [Goldilocks; 7],
 }
@@ -164,14 +154,22 @@ impl Drop for Power7Share {
     }
 }
 
+impl core::fmt::Debug for Power7Share {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Power7Share")
+            .field("r_pows", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Preprocess a correlated Power-7 tuple `(r, r^2, ..., r^7)` shared across `eval_points` at degree `< t`.
 pub fn deal_power7_tuple_shares(
     t: usize,
     eval_points: &[Goldilocks],
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) -> Vec<Power7Share> {
     let n = eval_points.len();
-    let r1 = next_goldilocks_rand(rng_seed);
+    let r1 = rng.next_goldilocks();
     let r2 = r1.square();
     let r3 = r2.const_mul(r1);
     let r4 = r2.square();
@@ -186,7 +184,7 @@ pub fn deal_power7_tuple_shares(
         })
         .collect();
     for (k, &pk) in pows.iter().enumerate() {
-        let mut sh = shamir_share_scalar_goldilocks(t, eval_points, pk, rng_seed);
+        let mut sh = shamir_share_scalar_goldilocks(t, eval_points, pk, rng);
         for p in 0..n {
             out[p].r_pows[k] = sh[p];
         }
@@ -235,11 +233,34 @@ pub fn mpc_poseidon2_perm12_shamir(
     t: usize,
     eval_points: &[Goldilocks],
     party_states: &mut [[Goldilocks; 12]],
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
     opened_deltas_log: &mut Vec<Goldilocks>,
+) -> Option<usize> {
+    mpc_poseidon2_perm12_shamir_with_party_shares(
+        t,
+        eval_points,
+        party_states,
+        offline_rng,
+        opened_deltas_log,
+        None,
+    )
+}
+
+pub fn mpc_poseidon2_perm12_shamir_with_party_shares(
+    t: usize,
+    eval_points: &[Goldilocks],
+    party_states: &mut [[Goldilocks; 12]],
+    offline_rng: &mut MpcCsprng,
+    opened_deltas_log: &mut Vec<Goldilocks>,
+    mut party_shares_out: Option<&mut AuthenticatedExt2Transcript<'_>>,
 ) -> Option<usize> {
     let n = party_states.len();
     if t == 0 || t > n || eval_points.len() != n {
+        return None;
+    }
+    if let Some(ref ps) = party_shares_out
+        && ps.len() != t
+    {
         return None;
     }
     let lambdas = lagrange_weights_zero_goldilocks(&eval_points[..t])?;
@@ -255,17 +276,18 @@ pub fn mpc_poseidon2_perm12_shamir(
         t: usize,
         eval_points: &[Goldilocks],
         lambdas: &[Goldilocks],
-        offline_seed: &mut u64,
+        offline_rng: &mut MpcCsprng,
         party_states: &mut [[Goldilocks; 12]],
         online_bytes: &mut usize,
         opened_deltas_log: &mut Vec<Goldilocks>,
+        mut party_shares_out: Option<&mut AuthenticatedExt2Transcript<'_>>,
         tag: u64,
         r: u64,
     ) {
         let n = eval_points.len();
         let mut tuples_per_lane: Vec<Vec<Power7Share>> = Vec::with_capacity(12);
         for _ in 0..12 {
-            tuples_per_lane.push(deal_power7_tuple_shares(t, eval_points, offline_seed));
+            tuples_per_lane.push(deal_power7_tuple_shares(t, eval_points, offline_rng));
         }
         let mut deltas = [Goldilocks::ZERO; 12];
         for lane in 0..12 {
@@ -273,15 +295,23 @@ pub fn mpc_poseidon2_perm12_shamir(
             for p in 0..n {
                 party_states[p][lane] = party_states[p][lane].const_add(rc);
             }
-            let mut delta = Goldilocks::ZERO;
+            let mut contributions = Vec::with_capacity(t);
             for (q, &lam) in lambdas.iter().enumerate() {
                 let diff = party_states[q][lane].const_sub(tuples_per_lane[lane][q].r_pows[0]);
-                delta = delta.const_add(lam.const_mul(diff));
+                let contrib = lam.const_mul(diff);
+                contributions.push(contrib);
             }
+            if let Some(ref mut recorder) = party_shares_out {
+                recorder.record(&contributions, offline_rng);
+            }
+            let delta = contributions
+                .iter()
+                .fold(Goldilocks::ZERO, |a, b| a.const_add(*b));
             deltas[lane] = delta;
         }
         *online_bytes += 12 * 8;
-        opened_deltas_log.push(deltas[0]);
+        // Record ALL 12 opened S-box deltas (`P1-03b` — never drop lanes 1..12)!
+        opened_deltas_log.extend_from_slice(&deltas);
         for p in 0..n {
             for lane in 0..12 {
                 party_states[p][lane] =
@@ -296,10 +326,11 @@ pub fn mpc_poseidon2_perm12_shamir(
             t,
             eval_points,
             &lambdas,
-            offline_seed,
+            offline_rng,
             party_states,
             &mut online_bytes,
             opened_deltas_log,
+            party_shares_out.as_deref_mut(),
             0,
             r,
         );
@@ -307,16 +338,23 @@ pub fn mpc_poseidon2_perm12_shamir(
 
     // 22 internal rounds (`1 * 8 = 8 B` online per round!)
     for r in 0..22u64 {
-        let tuples0 = deal_power7_tuple_shares(t, eval_points, offline_seed);
+        let tuples0 = deal_power7_tuple_shares(t, eval_points, offline_rng);
         let rc = poseidon2_const_at(1, r, 0);
         for p in 0..n {
             party_states[p][0] = party_states[p][0].const_add(rc);
         }
-        let mut delta = Goldilocks::ZERO;
+        let mut contributions = Vec::with_capacity(t);
         for (q, &lam) in lambdas.iter().enumerate() {
             let diff = party_states[q][0].const_sub(tuples0[q].r_pows[0]);
-            delta = delta.const_add(lam.const_mul(diff));
+            let contrib = lam.const_mul(diff);
+            contributions.push(contrib);
         }
+        if let Some(ref mut recorder) = party_shares_out {
+            recorder.record(&contributions, offline_rng);
+        }
+        let delta = contributions
+            .iter()
+            .fold(Goldilocks::ZERO, |a, b| a.const_add(*b));
         online_bytes += 8;
         opened_deltas_log.push(delta);
         for p in 0..n {
@@ -330,10 +368,11 @@ pub fn mpc_poseidon2_perm12_shamir(
             t,
             eval_points,
             &lambdas,
-            offline_seed,
+            offline_rng,
             party_states,
             &mut online_bytes,
             opened_deltas_log,
+            party_shares_out.as_deref_mut(),
             2,
             r,
         );
@@ -344,25 +383,34 @@ pub fn mpc_poseidon2_perm12_shamir(
 }
 
 /// Pre-dealt offline Power-7 correlation batch (`118` S-boxes = `4*12 + 22 + 4*12`) for one `poseidon2_perm12`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PredealtPoseidon2PermTuples {
     pub ext_first: [[Vec<Power7Share>; 12]; 4],
     pub internal: [Vec<Power7Share>; 22],
     pub ext_last: [[Vec<Power7Share>; 12]; 4],
 }
 
+impl core::fmt::Debug for PredealtPoseidon2PermTuples {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PredealtPoseidon2PermTuples")
+            .field("sboxes", &118usize)
+            .field("shares", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Deal all `118` offline Power-7 tuple sets for one `poseidon2_perm12` in the offline preprocessing phase.
 pub fn deal_poseidon2_perm12_tuples(
     t: usize,
     eval_points: &[Goldilocks],
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
 ) -> PredealtPoseidon2PermTuples {
     let ext_first = core::array::from_fn(|_| {
-        core::array::from_fn(|_| deal_power7_tuple_shares(t, eval_points, offline_seed))
+        core::array::from_fn(|_| deal_power7_tuple_shares(t, eval_points, offline_rng))
     });
-    let internal = core::array::from_fn(|_| deal_power7_tuple_shares(t, eval_points, offline_seed));
+    let internal = core::array::from_fn(|_| deal_power7_tuple_shares(t, eval_points, offline_rng));
     let ext_last = core::array::from_fn(|_| {
-        core::array::from_fn(|_| deal_power7_tuple_shares(t, eval_points, offline_seed))
+        core::array::from_fn(|_| deal_power7_tuple_shares(t, eval_points, offline_rng))
     });
     PredealtPoseidon2PermTuples {
         ext_first,
@@ -413,7 +461,7 @@ pub fn mpc_poseidon2_perm12_shamir_online(
             deltas[lane] = delta;
         }
         *online_bytes += 12 * 8;
-        opened_deltas_log.push(deltas[0]);
+        opened_deltas_log.extend_from_slice(&deltas);
         for p in 0..n {
             for lane in 0..12 {
                 party_states[p][lane] =
@@ -468,7 +516,7 @@ pub fn mpc_poseidon2_perm12_shamir_online(
 }
 
 /// One party's Shamir share of a 32-byte secret packed into `< 2^56` Goldilocks limbs (`5` limbs for 32 bytes: `5 * 7 = 35 >= 33`).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ShamirPoseidonSeedShare {
     pub eval_point: Goldilocks,
     pub byte_shares: [Goldilocks; 32],
@@ -477,10 +525,17 @@ pub struct ShamirPoseidonSeedShare {
 impl Drop for ShamirPoseidonSeedShare {
     fn drop(&mut self) {
         self.eval_point = Goldilocks::ZERO;
-        for s in &mut self.byte_shares {
-            *s = Goldilocks::ZERO;
-        }
+        self.byte_shares.fill(Goldilocks::ZERO);
         core::hint::black_box(&self.byte_shares);
+    }
+}
+
+impl core::fmt::Debug for ShamirPoseidonSeedShare {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ShamirPoseidonSeedShare")
+            .field("eval_point", &self.eval_point)
+            .field("byte_shares", &"<redacted>")
+            .finish()
     }
 }
 
@@ -490,7 +545,7 @@ pub fn shamir_share_seed32_goldilocks(
     t: usize,
     eval_points: &[Goldilocks],
     secret: &[u8; 32],
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) -> Vec<ShamirPoseidonSeedShare> {
     let n = eval_points.len();
     let mut out: Vec<ShamirPoseidonSeedShare> = eval_points
@@ -505,7 +560,7 @@ pub fn shamir_share_seed32_goldilocks(
             t,
             eval_points,
             Goldilocks::from_u64_reduced(byte_val as u64),
-            rng_seed,
+            rng,
         );
         for p in 0..n {
             out[p].byte_shares[b_idx] = sh[p];
@@ -515,7 +570,9 @@ pub fn shamir_share_seed32_goldilocks(
 }
 
 /// Reconstruct a 32-byte secret from `t` `ShamirPoseidonSeedShare` shares (used only in tests).
-pub fn shamir_reconstruct_seed32_goldilocks(shares: &[ShamirPoseidonSeedShare]) -> Option<[u8; 32]> {
+pub fn shamir_reconstruct_seed32_goldilocks(
+    shares: &[ShamirPoseidonSeedShare],
+) -> Option<[u8; 32]> {
     let pts: Vec<Goldilocks> = shares.iter().map(|s| s.eval_point).collect();
     let lambdas = lagrange_weights_zero_goldilocks(&pts)?;
     let mut out = [0u8; 32];
@@ -544,8 +601,31 @@ pub fn mpc_poseidon2_hash32_shamir(
     public_template: &[u8],
     secret_offset: usize,
     secret_shares: &[ShamirPoseidonSeedShare],
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
     opened_deltas_log: &mut Vec<Goldilocks>,
+) -> Option<([u8; 32], usize)> {
+    mpc_poseidon2_hash32_shamir_with_party_shares(
+        t,
+        eval_points,
+        public_template,
+        secret_offset,
+        secret_shares,
+        offline_rng,
+        opened_deltas_log,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn mpc_poseidon2_hash32_shamir_with_party_shares(
+    t: usize,
+    eval_points: &[Goldilocks],
+    public_template: &[u8],
+    secret_offset: usize,
+    secret_shares: &[ShamirPoseidonSeedShare],
+    offline_rng: &mut MpcCsprng,
+    opened_deltas_log: &mut Vec<Goldilocks>,
+    mut party_shares_out: Option<&mut AuthenticatedExt2Transcript<'_>>,
 ) -> Option<([u8; 32], usize)> {
     let n = eval_points.len();
     if t == 0 || t > n || secret_shares.len() != n {
@@ -599,12 +679,13 @@ pub fn mpc_poseidon2_hash32_shamir(
                 party_states[p][r] = party_states[p][r].const_add(party_limbs[p][off + r]);
             }
         }
-        total_online_bytes += mpc_poseidon2_perm12_shamir(
+        total_online_bytes += mpc_poseidon2_perm12_shamir_with_party_shares(
             t,
             eval_points,
             &mut party_states,
-            offline_seed,
+            offline_rng,
             opened_deltas_log,
+            party_shares_out.as_deref_mut(),
         )?;
     }
 
@@ -623,6 +704,7 @@ pub fn mpc_poseidon2_hash32_shamir(
 /// Evaluate `poseidon2_hash32` in $t$-of-$n$ Shamir MPC over `Goldilocks` returning the squeezed 4-lane
 /// shares `[Goldilocks; 4]` per party WITHOUT opening when `open_output == false` — used to keep
 /// intermediate WOTS+C chain states `[c^(s)]` secret-shared in signer RAM until `TSW` chooses `m_r`!
+#[allow(clippy::too_many_arguments)]
 pub fn mpc_poseidon2_wots_chain_shamir(
     t: usize,
     eval_points: &[Goldilocks],
@@ -633,8 +715,39 @@ pub fn mpc_poseidon2_wots_chain_shamir(
     chain: u32,
     w: usize,
     sk_seed_shares: &[ShamirPoseidonSeedShare],
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
     opened_deltas_log: &mut Vec<Goldilocks>,
+) -> Option<(Vec<Vec<ShamirPoseidonSeedShare>>, usize)> {
+    mpc_poseidon2_wots_chain_shamir_with_party_shares(
+        t,
+        eval_points,
+        pk_seed,
+        layer,
+        tree,
+        kp,
+        chain,
+        w,
+        sk_seed_shares,
+        offline_rng,
+        opened_deltas_log,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn mpc_poseidon2_wots_chain_shamir_with_party_shares(
+    t: usize,
+    eval_points: &[Goldilocks],
+    pk_seed: &[u8; 32],
+    layer: u32,
+    tree: u64,
+    kp: u32,
+    chain: u32,
+    w: usize,
+    sk_seed_shares: &[ShamirPoseidonSeedShare],
+    offline_rng: &mut MpcCsprng,
+    opened_deltas_log: &mut Vec<Goldilocks>,
+    mut party_shares_out: Option<&mut AuthenticatedExt2Transcript<'_>>,
 ) -> Option<(Vec<Vec<ShamirPoseidonSeedShare>>, usize)> {
     // Wait: in `Poseidon2`, squeezing outputs 4 `Goldilocks` field elements (`b0[0..4]`) serialized as 32 BE bytes.
     // To feed `c^(s-1)` (`32` bytes) into `th_chain_f` (`bytes_to_limbs56`) without reconstructing `c^(s-1)` in the clear,
@@ -659,12 +772,8 @@ pub fn mpc_poseidon2_wots_chain_shamir(
         chain_idx: chain,
         hash_step: 0,
     };
-    let mut tmpl0 = crate::adrs_tsw::th_preimage(
-        crate::adrs_tsw::TAG_PRF,
-        pk_seed,
-        &adrs0,
-        &[&[0u8; 32]],
-    );
+    let mut tmpl0 =
+        crate::adrs_tsw::th_preimage(crate::adrs_tsw::TAG_PRF, pk_seed, &adrs0, &[&[0u8; 32]]);
     let sec_off0 = tmpl0.len() - 32;
     for b in &mut tmpl0[sec_off0..] {
         *b = 0;
@@ -679,11 +788,19 @@ pub fn mpc_poseidon2_wots_chain_shamir(
         &tmpl0,
         sec_off0,
         sk_seed_shares,
-        offline_seed,
+        offline_rng,
         opened_deltas_log,
+        party_shares_out.as_deref_mut(),
     )?;
     total_bytes += b0;
-    let mut cur_byte_shares = reshare_lanes4_to_byte_shares(t, eval_points, &c0_lanes, offline_seed)?;
+    let mut cur_byte_shares = reshare_lanes4_to_byte_shares(
+        t,
+        eval_points,
+        &c0_lanes,
+        offline_rng,
+        opened_deltas_log,
+        party_shares_out.as_deref_mut(),
+    )?;
     total_bytes += 32; // 4 masked 64-bit words opened during masked byte-conversion
     chain_ram_shares.push(cur_byte_shares.clone());
 
@@ -712,11 +829,19 @@ pub fn mpc_poseidon2_wots_chain_shamir(
             &tmpl_s,
             sec_off_s,
             &cur_byte_shares,
-            offline_seed,
+            offline_rng,
             opened_deltas_log,
+            party_shares_out.as_deref_mut(),
         )?;
         total_bytes += bs;
-        cur_byte_shares = reshare_lanes4_to_byte_shares(t, eval_points, &cs_lanes, offline_seed)?;
+        cur_byte_shares = reshare_lanes4_to_byte_shares(
+            t,
+            eval_points,
+            &cs_lanes,
+            offline_rng,
+            opened_deltas_log,
+            party_shares_out.as_deref_mut(),
+        )?;
         total_bytes += 32;
         chain_ram_shares.push(cur_byte_shares.clone());
     }
@@ -725,14 +850,16 @@ pub fn mpc_poseidon2_wots_chain_shamir(
 }
 
 /// Internal helper returning un-opened `[Goldilocks; 4]` squeezed output lane shares per party!
-fn mpc_poseidon2_hash32_lane_shares(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn mpc_poseidon2_hash32_lane_shares(
     t: usize,
     eval_points: &[Goldilocks],
     public_template: &[u8],
     secret_offset: usize,
     secret_shares: &[ShamirPoseidonSeedShare],
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
     opened_deltas_log: &mut Vec<Goldilocks>,
+    mut party_shares_out: Option<&mut AuthenticatedExt2Transcript<'_>>,
 ) -> Option<(Vec<[Goldilocks; 4]>, usize)> {
     let n = eval_points.len();
     let msg_len = public_template.len();
@@ -779,12 +906,13 @@ fn mpc_poseidon2_hash32_lane_shares(
                 party_states[p][r] = party_states[p][r].const_add(party_limbs[p][off + r]);
             }
         }
-        total_online_bytes += mpc_poseidon2_perm12_shamir(
+        total_online_bytes += mpc_poseidon2_perm12_shamir_with_party_shares(
             t,
             eval_points,
             &mut party_states,
-            offline_seed,
+            offline_rng,
             opened_deltas_log,
+            party_shares_out.as_deref_mut(),
         )?;
     }
 
@@ -810,25 +938,40 @@ fn reshare_lanes4_to_byte_shares(
     t: usize,
     eval_points: &[Goldilocks],
     lane_shares: &[[Goldilocks; 4]],
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
+    opened_deltas_log: &mut Vec<Goldilocks>,
+    mut party_shares_out: Option<&mut AuthenticatedExt2Transcript<'_>>,
 ) -> Option<Vec<ShamirPoseidonSeedShare>> {
     let n = eval_points.len();
     let lambdas = lagrange_weights_zero_goldilocks(&eval_points[..t])?;
 
     // Helper: Beaver multiplication of two shared `Goldilocks` values across `n` parties (`0` plaintext leakage)
-    let beaver_mul = |a_sh: &[Goldilocks], b_sh: &[Goldilocks], seed: &mut u64| -> Vec<Goldilocks> {
-        let u = next_goldilocks_rand(seed);
-        let v = next_goldilocks_rand(seed);
+    let beaver_mul = |a_sh: &[Goldilocks],
+                      b_sh: &[Goldilocks],
+                      rng: &mut MpcCsprng,
+                      log: &mut Vec<Goldilocks>,
+                      mut p_out: Option<&mut AuthenticatedExt2Transcript<'_>>|
+     -> Vec<Goldilocks> {
+        let u = rng.next_goldilocks();
+        let v = rng.next_goldilocks();
         let uv = u.const_mul(v);
-        let u_sh = shamir_share_scalar_goldilocks(t, eval_points, u, seed);
-        let v_sh = shamir_share_scalar_goldilocks(t, eval_points, v, seed);
-        let uv_sh = shamir_share_scalar_goldilocks(t, eval_points, uv, seed);
-        let mut d = Goldilocks::ZERO;
-        let mut e = Goldilocks::ZERO;
+        let u_sh = shamir_share_scalar_goldilocks(t, eval_points, u, rng);
+        let v_sh = shamir_share_scalar_goldilocks(t, eval_points, v, rng);
+        let uv_sh = shamir_share_scalar_goldilocks(t, eval_points, uv, rng);
+        let mut ds = Vec::with_capacity(t);
+        let mut es = Vec::with_capacity(t);
         for (q, &lam) in lambdas.iter().enumerate() {
-            d = d.const_add(lam.const_mul(a_sh[q].const_sub(u_sh[q])));
-            e = e.const_add(lam.const_mul(b_sh[q].const_sub(v_sh[q])));
+            ds.push(lam.const_mul(a_sh[q].const_sub(u_sh[q])));
+            es.push(lam.const_mul(b_sh[q].const_sub(v_sh[q])));
         }
+        if let Some(ref mut recorder) = p_out {
+            recorder.record(&ds, rng);
+            recorder.record(&es, rng);
+        }
+        let d = ds.iter().fold(Goldilocks::ZERO, |a, b| a.const_add(*b));
+        let e = es.iter().fold(Goldilocks::ZERO, |a, b| a.const_add(*b));
+        log.push(d);
+        log.push(e);
         let de = d.const_mul(e);
         (0..n)
             .map(|p| {
@@ -850,12 +993,12 @@ fn reshare_lanes4_to_byte_shares(
 
     for lane in 0..4 {
         // 1. Sample canonical `< p` random 64-bit integer `r` in offline preprocessing and share its 64 bits
-        let r_val = next_goldilocks_rand(offline_seed).to_canonical_u64();
+        let r_val = offline_rng.next_goldilocks().to_canonical_u64();
         let mut r_bits_sh: Vec<Vec<Goldilocks>> = Vec::with_capacity(64);
         let mut r_field_sh = vec![Goldilocks::ZERO; n];
         for k in 0..64 {
             let bit_g = Goldilocks::from_u64_reduced((r_val >> k) & 1);
-            let sh = shamir_share_scalar_goldilocks(t, eval_points, bit_g, offline_seed);
+            let sh = shamir_share_scalar_goldilocks(t, eval_points, bit_g, offline_rng);
             let pow2 = Goldilocks::from_u64_reduced(1u64 << k);
             for p in 0..n {
                 r_field_sh[p] = r_field_sh[p].const_add(pow2.const_mul(sh[p]));
@@ -864,26 +1007,36 @@ fn reshare_lanes4_to_byte_shares(
         }
 
         // 2. Open ONLY masked `c = (x + r_field) mod p` (`x` is never reconstructed!)
-        let mut c_masked = Goldilocks::ZERO;
+        let mut contributions = Vec::with_capacity(t);
         for (q, &lam) in lambdas.iter().enumerate() {
             let sum_q = lane_shares[q][lane].const_add(r_field_sh[q]);
-            c_masked = c_masked.const_add(lam.const_mul(sum_q));
+            let contrib = lam.const_mul(sum_q);
+            contributions.push(contrib);
         }
+        if let Some(ref mut recorder) = party_shares_out {
+            recorder.record(&contributions, offline_rng);
+        }
+        let c_masked = contributions
+            .iter()
+            .fold(Goldilocks::ZERO, |a, b| a.const_add(*b));
+        opened_deltas_log.push(c_masked);
         let c_u128 = c_masked.to_canonical_u64() as u128;
         let cp_u128 = c_u128 + (GOLDILOCKS_PRIME as u128);
 
         // 3. Ripple-borrow `diff0 = c - r` (64 bits + final borrow `b_out ∈ {0, 1}` indicating `c < r`)
-        //    For public bit `cb ∈ {0, 1}`, secret bit `[rb]`, and secret borrow `[bw]`:
-        //    - `sub_bit = cb ⊕ rb ⊕ bw` (purely linear when `cb` is public and `rb, bw` have `rb*bw` via 1 Beaver mul!)
-        //    - Specifically: if `cb == 0`: `next_bw = rb + bw - rb*bw`, `bit = rb + bw - 2*rb*bw`.
-        //                    if `cb == 1`: `next_bw = rb * bw`,         `bit = 1 - rb - bw + 2*rb*bw`.
         let two = Goldilocks::TWO;
         let mut diff0_bits: Vec<Vec<Goldilocks>> = Vec::with_capacity(64);
         let mut bw = vec![Goldilocks::ZERO; n];
         for k in 0..64 {
             let cb = ((c_u128 >> k) & 1) == 1;
             let rb = &r_bits_sh[k];
-            let prod = beaver_mul(rb, &bw, offline_seed);
+            let prod = beaver_mul(
+                rb,
+                &bw,
+                offline_rng,
+                opened_deltas_log,
+                party_shares_out.as_deref_mut(),
+            );
             let mut bit_k = vec![Goldilocks::ZERO; n];
             let mut next_bw = vec![Goldilocks::ZERO; n];
             for p in 0..n {
@@ -910,7 +1063,13 @@ fn reshare_lanes4_to_byte_shares(
         for k in 0..64 {
             let cb = ((cp_u128 >> k) & 1) == 1;
             let rb = &r_bits_sh[k];
-            let prod = beaver_mul(rb, &bw1, offline_seed);
+            let prod = beaver_mul(
+                rb,
+                &bw1,
+                offline_rng,
+                opened_deltas_log,
+                party_shares_out.as_deref_mut(),
+            );
             let mut bit_k = vec![Goldilocks::ZERO; n];
             let mut next_bw = vec![Goldilocks::ZERO; n];
             for p in 0..n {
@@ -944,7 +1103,13 @@ fn reshare_lanes4_to_byte_shares(
             }
             // MUX: `b0 + flag * (b1 - b0)`
             let delta_b: Vec<Goldilocks> = (0..n).map(|p| b1_sh[p].const_sub(b0_sh[p])).collect();
-            let mux_term = beaver_mul(&c_lt_r_flag, &delta_b, offline_seed);
+            let mux_term = beaver_mul(
+                &c_lt_r_flag,
+                &delta_b,
+                offline_rng,
+                opened_deltas_log,
+                party_shares_out.as_deref_mut(),
+            );
             for p in 0..n {
                 out[p].byte_shares[8 * lane + byte_in_lane] = b0_sh[p].const_add(mux_term[p]);
             }
@@ -957,7 +1122,7 @@ fn reshare_lanes4_to_byte_shares(
 // 3. `GoldilocksExt2` SPDZ/BDOZ MAC Custody & Pre-Sign Custody Policy Gate
 // ============================================================================
 
-/// Non-cloneable, non-debug, non-serializable `GoldilocksExt2` (128-bit) MAC key share custody.
+/// Non-cloneable, non-serializable `GoldilocksExt2` (128-bit) MAC key share custody.
 pub struct Ext2MacKeyCustody {
     alpha: GoldilocksExt2,
 }
@@ -976,7 +1141,56 @@ impl Drop for Ext2MacKeyCustody {
     }
 }
 
+impl core::fmt::Debug for Ext2MacKeyCustody {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Ext2MacKeyCustody")
+            .field("alpha", &"<redacted>")
+            .finish()
+    }
+}
+
+#[inline]
+pub fn horner_poly_ext2(chal: GoldilocksExt2, vals: &[Goldilocks]) -> GoldilocksExt2 {
+    let mut acc = GoldilocksExt2::ZERO;
+    for &v in vals.iter().rev() {
+        acc = acc * chal + GoldilocksExt2::from_base(v);
+    }
+    acc
+}
+
+#[inline]
+pub fn horner_mac_poly_ext2(chal: GoldilocksExt2, macs: &[GoldilocksExt2]) -> GoldilocksExt2 {
+    let mut acc = GoldilocksExt2::ZERO;
+    for &m in macs.iter().rev() {
+        acc = acc * chal + m;
+    }
+    acc
+}
+
+/// Verify terminal `GoldilocksExt2` batch MAC check (`∑_i (α_i · P(chal) - M_i(chal)) == 0`),
+/// strictly rejecting empty party check slices (`P1-03b` — never vacuously `true` on `&[]`!).
+#[inline]
+pub fn verify_batch_ext2_mac(party_check_shares: &[GoldilocksExt2]) -> bool {
+    if party_check_shares.is_empty() {
+        return false;
+    }
+    let mut sum = GoldilocksExt2::ZERO;
+    for &sh in party_check_shares {
+        sum += sh;
+    }
+    sum == GoldilocksExt2::ZERO
+}
+
 impl Ext2MacKeyCustody {
+    #[inline]
+    pub fn compute_batch_check_share(
+        &self,
+        chal: GoldilocksExt2,
+        opened_vals: &[Goldilocks],
+        mac_shares: &[GoldilocksExt2],
+    ) -> GoldilocksExt2 {
+        self.alpha * horner_poly_ext2(chal, opened_vals) - horner_mac_poly_ext2(chal, mac_shares)
+    }
 
     #[inline]
     pub fn verify_pairwise_ext2_or_slash(
@@ -1011,19 +1225,164 @@ impl Ext2MacKeyCustody {
     }
 }
 
-/// 64-bit Ripple-Borrow `Poseidon2` Field-Pad Garbled Policy Circuit (`tx_amount <= secret_limit`),
+/// Deal `n` independent 128-bit `Ext2MacKeyCustody` shares (`alpha_i ∈ GoldilocksExt2`).
+pub fn deal_ext2_mac_custodies(n: usize, rng: &mut MpcCsprng) -> Vec<Ext2MacKeyCustody> {
+    (0..n)
+        .map(|_| {
+            Ext2MacKeyCustody::new_custody_share(GoldilocksExt2::new(
+                rng.next_goldilocks(),
+                rng.next_goldilocks(),
+            ))
+        })
+        .collect()
+}
+
+/// Online recorder of correlated MAC shares, fixed before masked-wire opening.
+pub struct AuthenticatedExt2Transcript<'a> {
+    custodies: &'a [Ext2MacKeyCustody],
+    pub(crate) shares: Vec<Vec<Goldilocks>>,
+    tags: Vec<Vec<GoldilocksExt2>>,
+}
+
+impl<'a> AuthenticatedExt2Transcript<'a> {
+    pub fn new(custodies: &'a [Ext2MacKeyCustody]) -> Self {
+        Self {
+            custodies,
+            shares: vec![Vec::new(); custodies.len()],
+            tags: vec![Vec::new(); custodies.len()],
+        }
+    }
+    fn len(&self) -> usize {
+        self.custodies.len()
+    }
+
+    fn record(&mut self, contributions: &[Goldilocks], rng: &mut MpcCsprng) {
+        let mut pad_sum = GoldilocksExt2::ZERO;
+        for (i, custody) in self.custodies.iter().enumerate() {
+            let pad = if i + 1 == self.len() {
+                GoldilocksExt2::ZERO - pad_sum
+            } else {
+                let pad = GoldilocksExt2::new(rng.next_goldilocks(), rng.next_goldilocks());
+                pad_sum += pad;
+                pad
+            };
+            self.shares[i].push(contributions[i]);
+            self.tags[i].push(contributions.iter().fold(pad, |tag, &share| {
+                tag + custody.alpha * GoldilocksExt2::from_base(share)
+            }));
+        }
+    }
+}
+
+/// Verify fixed pre-open tags with two independent polynomial checks.
+pub fn verify_authenticated_ext2_transcript(
+    custodies: &[Ext2MacKeyCustody],
+    context_binding: &[u8],
+    opened_deltas: &[Goldilocks],
+    transcript: &AuthenticatedExt2Transcript<'_>,
+    _cot_rng: &mut MpcCsprng,
+) -> bool {
+    let t = custodies.len();
+    if t == 0
+        || opened_deltas.is_empty()
+        || transcript.len() != t
+        || transcript
+            .shares
+            .iter()
+            .any(|s| s.len() != opened_deltas.len())
+        || transcript
+            .tags
+            .iter()
+            .any(|s| s.len() != opened_deltas.len())
+    {
+        return false;
+    }
+    for (index, &opened) in opened_deltas.iter().enumerate() {
+        if transcript
+            .shares
+            .iter()
+            .fold(Goldilocks::ZERO, |sum, shares| sum + shares[index])
+            != opened
+        {
+            return false;
+        }
+    }
+    let mut xof = obend_crypto_exec::transcript::Cshake256Xof::new(b"OBEND.PQ.EXT2.MAC/v2");
+    xof.absorb(&(context_binding.len() as u64).to_be_bytes());
+    xof.absorb(context_binding);
+    xof.absorb(&(opened_deltas.len() as u64).to_be_bytes());
+    for word in opened_deltas {
+        xof.absorb(&word.to_be_bytes());
+    }
+    for (shares, tags) in transcript.shares.iter().zip(&transcript.tags) {
+        let mut commitment =
+            obend_crypto_exec::transcript::Cshake256Xof::new(b"OBEND.PQ.EXT2.PREOPEN/v1");
+        for (share, tag) in shares.iter().zip(tags) {
+            commitment.absorb(&share.to_be_bytes());
+            commitment.absorb(&tag.to_be_bytes());
+        }
+        let mut digest = [0; 32];
+        commitment.squeeze(&mut digest);
+        xof.absorb(&digest);
+    }
+    for _ in 0..2 {
+        let mut bytes = [0; 16];
+        xof.squeeze(&mut bytes);
+        let chal = GoldilocksExt2::new(
+            Goldilocks::from_u64_reduced(u64::from_le_bytes(bytes[..8].try_into().unwrap())),
+            Goldilocks::from_u64_reduced(u64::from_le_bytes(bytes[8..].try_into().unwrap())),
+        );
+        let mut checks = Vec::with_capacity(t);
+        for (custody, tags) in custodies.iter().zip(&transcript.tags) {
+            let mut check = GoldilocksExt2::ZERO;
+            for (&word, &tag) in opened_deltas.iter().zip(tags) {
+                check = check * chal + tag - custody.alpha * GoldilocksExt2::from_base(word);
+            }
+            checks.push(check);
+        }
+        if !verify_batch_ext2_mac(&checks) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Single-use 64-bit Ripple-Borrow `Poseidon2` Field-Pad Garbled Policy Circuit (`tx_amount <= secret_limit`),
 /// matching `ThresholdHashMpc.garblePolicyGate` & `evalGarbledPolicyGate` (`policyGate_accepts_iff_within_limit`).
 ///
-/// Point-and-permute LSB wire labels (`32` bytes per wire) hide intermediate borrows `b_1..b_64`
-/// and `secret_limit` bits `s_0..s_63` completely: the evaluator walks ONLY the single active row
-/// per bit `k` for public `tx_amount` and **never reconstructs `secret_limit`!**
-#[derive(Clone, Debug)]
+/// Consumed by value in [`eval_garbled_custody_policy_gate`] and scrubbed on `Drop` (`P1-03d`) so an
+/// evaluator can NEVER replay a single garbled circuit across adaptive queries to binary-search `secret_limit`!
 pub struct GarbledPolicyCircuit64 {
-    pub policy_nonce: [u8; 32],
-    pub init_borrow_zero_label: [u8; 32],
-    pub gates: [[[u8; 32]; 4]; 64],
-    pub accept_tag: [u8; 32],
-    pub masked_release_share: Goldilocks,
+    policy_nonce: [u8; 32],
+    init_borrow_zero_label: [u8; 32],
+    gates: [[[u8; 32]; 4]; 64],
+    accept_tag: [u8; 32],
+    masked_release_share: Goldilocks,
+}
+
+impl core::fmt::Debug for GarbledPolicyCircuit64 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("GarbledPolicyCircuit64")
+            .field("gates", &"<redacted-one-shot>")
+            .finish()
+    }
+}
+
+impl Drop for GarbledPolicyCircuit64 {
+    fn drop(&mut self) {
+        self.policy_nonce.fill(0);
+        self.init_borrow_zero_label.fill(0);
+        self.gates.fill([[0u8; 32]; 4]);
+        self.accept_tag.fill(0);
+        self.masked_release_share = Goldilocks::ZERO;
+        core::hint::black_box((
+            &self.policy_nonce,
+            &self.init_borrow_zero_label,
+            &self.gates,
+            &self.accept_tag,
+            &self.masked_release_share,
+        ));
+    }
 }
 
 #[inline]
@@ -1038,7 +1397,10 @@ fn poseidon2_garble_pad(
     pre[32] = bit_idx;
     pre[33] = tx_bit;
     pre[34..66].copy_from_slice(in_label);
-    poseidon2_hash32(&pre)
+    let out = poseidon2_hash32(&pre);
+    pre.fill(0);
+    core::hint::black_box(&pre);
+    out
 }
 
 #[inline]
@@ -1057,20 +1419,22 @@ pub fn garble_custody_policy_limit(
     secret_limit: u64,
     raw_share: Goldilocks,
     pad_share: Goldilocks,
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) -> GarbledPolicyCircuit64 {
     let mut labels = [[[0u8; 32]; 2]; 65];
     for w in 0..=64 {
         let mut seed_buf = [0u8; 48];
         seed_buf[0..32].copy_from_slice(&policy_nonce);
         seed_buf[32..40].copy_from_slice(&(w as u64).to_be_bytes());
-        let r0 = next_goldilocks_rand(rng_seed).to_canonical_u64();
+        let r0 = rng.next_u64();
         seed_buf[40..48].copy_from_slice(&r0.to_be_bytes());
         let mut l0 = poseidon2_hash32(&seed_buf);
-        let r1 = next_goldilocks_rand(rng_seed).to_canonical_u64();
+        let r1 = rng.next_u64();
         seed_buf[40..48].copy_from_slice(&r1.to_be_bytes());
         let mut l1 = poseidon2_hash32(&seed_buf);
-        let perm_bit = (next_goldilocks_rand(rng_seed).to_canonical_u64() & 1) as u8;
+        seed_buf.fill(0);
+        core::hint::black_box(&seed_buf);
+        let perm_bit = rng.next_u8() & 1;
         l0[0] = (l0[0] & 0xFE) | perm_bit;
         l1[0] = (l1[0] & 0xFE) | (perm_bit ^ 1);
         labels[w] = [l0, l1];
@@ -1113,10 +1477,10 @@ pub fn garble_custody_policy_limit(
     }
 }
 
-/// Evaluate `GarbledPolicyCircuit64` on public `tx_amount` (`0` knowledge of `secret_limit`!).
+/// Evaluate and consume a one-time `GarbledPolicyCircuit64` on public `tx_amount` (`0` knowledge of `secret_limit`!).
 /// Returns `Some(unmasked_raw_share)` iff `tx_amount <= secret_limit`, and `None` iff `tx_amount > secret_limit`.
 pub fn eval_garbled_custody_policy_gate(
-    circuit: &GarbledPolicyCircuit64,
+    circuit: GarbledPolicyCircuit64,
     tx_amount: u64,
     pad_share: Goldilocks,
 ) -> Option<Goldilocks> {
@@ -1128,9 +1492,52 @@ pub fn eval_garbled_custody_policy_gate(
         let pad = poseidon2_garble_pad(&circuit.policy_nonce, k as u8, x_k, &cur_label);
         cur_label = xor32(ct, &pad);
     }
-    if poseidon2_hash32(&cur_label) == circuit.accept_tag {
+    let term_tag = poseidon2_hash32(&cur_label);
+    cur_label.fill(0);
+    core::hint::black_box(&cur_label);
+    if term_tag == circuit.accept_tag {
         Some(circuit.masked_release_share.const_sub(pad_share))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod preopen_mac_tests {
+    use super::*;
+
+    #[test]
+    fn preopen_mac_rejects_joint_forgery() {
+        let mut rng = MpcCsprng::from_seed([0x72; 32], b"preopen-regression");
+        let custodies = deal_ext2_mac_custodies(3, &mut rng);
+        let mut transcript = AuthenticatedExt2Transcript::new(&custodies);
+        transcript.record(
+            &[Goldilocks::ONE, Goldilocks::TWO, Goldilocks::ONE],
+            &mut rng,
+        );
+        let mut opened = [Goldilocks::from_u64_reduced(4)];
+        assert!(verify_authenticated_ext2_transcript(
+            &custodies,
+            b"context",
+            &opened,
+            &transcript,
+            &mut rng
+        ));
+        transcript.shares[0][0] += Goldilocks::ONE;
+        assert!(!verify_authenticated_ext2_transcript(
+            &custodies,
+            b"context",
+            &opened,
+            &transcript,
+            &mut rng
+        ));
+        opened[0] += Goldilocks::ONE;
+        assert!(!verify_authenticated_ext2_transcript(
+            &custodies,
+            b"context",
+            &opened,
+            &transcript,
+            &mut rng
+        ));
     }
 }

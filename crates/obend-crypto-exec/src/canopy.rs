@@ -765,8 +765,8 @@ pub fn canopy_verify(
         }
 
         let mut col_comb = GoldilocksExt2::ZERO;
-        for r in 0..num_rows {
-            col_comb += w_fold[r].mul_base(col_open.values[r]);
+        for (&wf, &cv) in w_fold.iter().zip(col_open.values.iter()).take(num_rows) {
+            col_comb += wf.mul_base(cv);
         }
         if col_comb != codeword_fold[expected_idx] {
             return Err(CanopyError::IfoldColumnConsistencyFailed {
@@ -895,8 +895,8 @@ pub fn verify_independent_merkle_baseline(
             return Err(CanopyError::IndependentPathLengthMismatch);
         }
         let mut col_comb = GoldilocksExt2::ZERO;
-        for r in 0..num_rows {
-            col_comb += w_fold[r].mul_base(col_open.values[r]);
+        for (&wf, &cv) in w_fold.iter().zip(col_open.values.iter()).take(num_rows) {
+            col_comb += wf.mul_base(cv);
         }
         if col_comb != codeword_fold[expected_idx] {
             return Err(CanopyError::IfoldColumnConsistencyFailed {
@@ -916,7 +916,7 @@ pub fn verify_independent_merkle_baseline(
             internal_hashes += 1;
             node >>= 1;
         }
-        if &cur != &comm.root {
+        if cur != comm.root {
             return Err(CanopyError::MerkleRootMismatch);
         }
     }

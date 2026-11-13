@@ -1245,11 +1245,13 @@ pub fn bytes_to_limbs56(msg: &[u8]) -> Vec<Goldilocks> {
     let mut marked: Vec<u8> = Vec::with_capacity(msg.len() + 7);
     marked.extend_from_slice(msg);
     marked.push(0x01);
-    while marked.len() % 7 != 0 {
+    while !marked.len().is_multiple_of(7) {
         marked.push(0x00);
     }
     marked
-        .chunks_exact(7)
+        .as_chunks::<7>()
+        .0
+        .iter()
         .map(|chunk| Goldilocks(chunk.iter().fold(0u64, |acc, byte| (acc << 8) | *byte as u64)))
         .collect()
 }
@@ -1262,7 +1264,7 @@ pub fn poseidon2_pad(limbs: &mut Vec<Goldilocks>) {
         limbs.push(Goldilocks((1u64 << 56) + 1));
     } else {
         limbs.push(Goldilocks::ONE);
-        limbs.extend(core::iter::repeat(Goldilocks::ZERO).take(z - 1));
+        limbs.extend(core::iter::repeat_n(Goldilocks::ZERO, z - 1));
         limbs.push(Goldilocks(1u64 << 56));
     }
 }
@@ -1282,7 +1284,7 @@ pub fn poseidon2_hash32(msg: &[u8]) -> [u8; 32] {
     let mut limbs = bytes_to_limbs56(msg);
     poseidon2_pad(&mut limbs);
     let mut st = POSEIDON2_INIT_STATE;
-    for block in limbs.chunks_exact(8) {
+    for block in limbs.as_chunks::<8>().0 {
         for (lane, limb) in block.iter().enumerate() {
             st[lane] += *limb;
         }

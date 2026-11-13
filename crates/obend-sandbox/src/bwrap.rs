@@ -1,9 +1,12 @@
 use std::io::Read;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::grain::{sha256, ReproducibilityTier};
+use crate::grain::{ReproducibilityTier, sha256};
 
 /// Default maximum combined stdout/stderr capture size (4 MiB) for a sandboxed child process.
 pub const DEFAULT_MAX_PROCESS_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -43,6 +46,16 @@ pub enum SandboxBackend {
     Bubblewrap,
     MacosSeatbelt,
     MeteredProcessFallback,
+}
+
+impl SandboxBackend {
+    pub fn tag_byte(&self) -> u8 {
+        match self {
+            Self::Bubblewrap => 1,
+            Self::MacosSeatbelt => 2,
+            Self::MeteredProcessFallback => 3,
+        }
+    }
 }
 
 /// Errors returned by live sandboxed process execution.
@@ -110,13 +123,38 @@ pub struct SandboxRunReceipt {
 }
 
 impl SandboxRunReceipt {
-    /// Compute a canonical SHA-256 commitment over the process run receipt.
+    /// Compute a canonical length-framed SHA-256 commitment over the full process run receipt,
+    /// including `command`, `args`, `backend`, `seatbelt_profile`, exit status, RSS, and I/O digests.
     pub fn receipt_digest(&self) -> [u8; 32] {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(b"OBEND-SANDBOX-RUN-RECEIPT-V1:");
-        buf.extend_from_slice(&self.exit_code.unwrap_or(-1).to_be_bytes());
+        let mut buf = Vec::with_capacity(256);
+        buf.extend_from_slice(b"OBEND-SANDBOX-RUN-RECEIPT-V2:");
+        buf.extend_from_slice(&(self.command.len() as u64).to_be_bytes());
+        buf.extend_from_slice(self.command.as_bytes());
+        buf.extend_from_slice(&(self.args.len() as u64).to_be_bytes());
+        for arg in &self.args {
+            buf.extend_from_slice(&(arg.len() as u64).to_be_bytes());
+            buf.extend_from_slice(arg.as_bytes());
+        }
+        buf.push(self.backend.tag_byte());
+        match &self.seatbelt_profile {
+            None => buf.push(0x00),
+            Some(prof) => {
+                buf.push(0x01);
+                buf.extend_from_slice(&(prof.len() as u64).to_be_bytes());
+                buf.extend_from_slice(prof.as_bytes());
+            }
+        }
+        buf.push(u8::from(self.success));
+        match self.exit_code {
+            None => buf.push(0x00),
+            Some(code) => {
+                buf.push(0x01);
+                buf.extend_from_slice(&code.to_be_bytes());
+            }
+        }
         buf.extend_from_slice(&self.wall_clock_usec.to_be_bytes());
         buf.extend_from_slice(&self.fuel_consumed.to_be_bytes());
+        buf.extend_from_slice(&(self.peak_rss_bytes as u64).to_be_bytes());
         buf.extend_from_slice(&self.stdout_digest);
         buf.extend_from_slice(&self.stderr_digest);
         buf.push(self.tier.tag_byte());
@@ -125,28 +163,130 @@ impl SandboxRunReceipt {
     }
 }
 
-/// Guard that ensures a spawned child process is killed and reaped on drop (`kill_on_drop`).
+/// Guard that ensures a spawned child process (and its process group) is killed and reaped
+/// exactly once if dropped before `wait4` reaps it.
 struct KillOnDropChild {
-    child: Option<Child>,
+    pid: libc::pid_t,
+    reaped: bool,
+    child: Child,
 }
 
 impl KillOnDropChild {
     fn new(child: Child) -> Self {
-        Self { child: Some(child) }
-    }
-
-    fn as_mut(&mut self) -> &mut Child {
-        self.child.as_mut().expect("child present")
+        let pid = child.id() as libc::pid_t;
+        Self {
+            pid,
+            reaped: false,
+            child,
+        }
     }
 }
 
 impl Drop for KillOnDropChild {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if !self.reaped && self.pid > 0 {
+            unsafe {
+                let _ = libc::kill(-self.pid, libc::SIGKILL);
+                let _ = libc::kill(self.pid, libc::SIGKILL);
+                let mut status: libc::c_int = 0;
+                let mut usage: libc::rusage = std::mem::zeroed();
+                loop {
+                    let rc = libc::wait4(self.pid, &mut status, 0, &mut usage);
+                    if rc >= 0 {
+                        break;
+                    }
+                    if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                        break;
+                    }
+                }
+            }
+            self.reaped = true;
         }
     }
+}
+
+fn escape_sbpl_string(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 8);
+    for ch in raw.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\0' => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+// A single deadline bounds both readers after the entire process group is killed.
+fn drain_pipe_readers(
+    out_done: &Receiver<()>,
+    err_done: &Receiver<()>,
+    deadline: Instant,
+) -> Result<(), SandboxError> {
+    for done in [out_done, err_done] {
+        match done.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return Err(SandboxError::WaitFailed(
+                    "output reader did not close after reap".into(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn spawn_bounded_pipe_reader<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    cap_limit: usize,
+) -> (Arc<Mutex<Vec<u8>>>, Receiver<()>) {
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let sink_clone = Arc::clone(&sink);
+    let (done_tx, done_rx) = sync_channel(1);
+    std::thread::spawn(move || {
+        if let Some(mut reader) = pipe {
+            let mut chunk = [0u8; 8192];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let mut guard = sink_clone
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let rem = cap_limit.saturating_sub(guard.len());
+                        let take_n = n.min(rem);
+                        guard.extend_from_slice(&chunk[..take_n]);
+                        if guard.len() >= cap_limit {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+        let _ = done_tx.send(());
+    });
+    (sink, done_rx)
+}
+
+#[cfg(target_os = "linux")]
+fn rusage_maxrss_to_bytes(ru_maxrss: libc::c_long) -> usize {
+    (ru_maxrss.max(0) as usize).saturating_mul(1024)
+}
+
+#[cfg(target_os = "macos")]
+fn rusage_maxrss_to_bytes(ru_maxrss: libc::c_long) -> usize {
+    ru_maxrss.max(0) as usize
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn rusage_maxrss_to_bytes(ru_maxrss: libc::c_long) -> usize {
+    (ru_maxrss.max(0) as usize).saturating_mul(1024)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -247,9 +387,10 @@ impl BubblewrapRunner {
     }
 
     /// Generate a macOS Seatbelt (`sandbox-exec -p`) SBPL confinement profile for `config`.
+    /// Escapes `\` before `"` so crafted workspace/runtime paths cannot break out of SBPL string literals.
     pub fn build_seatbelt_profile(config: &SandboxConfig) -> String {
-        let workspace = config.workspace_dir.to_string_lossy().replace('"', "\\\"");
-        let runtime_root = config.runtime_root.to_string_lossy().replace('"', "\\\"");
+        let workspace = escape_sbpl_string(&config.workspace_dir.to_string_lossy());
+        let runtime_root = escape_sbpl_string(&config.runtime_root.to_string_lossy());
         let net_rule = if config.allow_network {
             "(allow network*)"
         } else {
@@ -267,9 +408,11 @@ impl BubblewrapRunner {
         args: &[&str],
         timeout_ms: u64,
     ) -> Result<SandboxRunReceipt, SandboxError> {
-        let mut cfg = SandboxConfig::default();
-        cfg.program = PathBuf::from(command);
-        cfg.args = args.iter().map(|s| (*s).to_string()).collect();
+        let cfg = SandboxConfig {
+            program: PathBuf::from(command),
+            args: args.iter().map(|s| (*s).to_string()).collect(),
+            ..SandboxConfig::default()
+        };
         self.execute_sandboxed_with_config(
             &cfg,
             command,
@@ -280,6 +423,10 @@ impl BubblewrapRunner {
     }
 
     /// Execute `command` with custom `SandboxConfig`, wall-clock `timeout_ms`, and `max_output_bytes`.
+    ///
+    /// Security invariant: once a sandboxed child (`sandbox-exec` or `bwrap`) has been invoked,
+    /// its `stderr` content or exit code (`71`, `"Operation not permitted"`, `"bwrap:"`, etc.)
+    /// MUST NEVER trigger a second unsandboxed execution on the host.
     pub fn execute_sandboxed_with_config(
         &self,
         config: &SandboxConfig,
@@ -309,37 +456,23 @@ impl BubblewrapRunner {
                     vec!["-p".to_string(), profile.clone(), command.to_string()];
                 sb_args.extend(args.iter().map(|s| (*s).to_string()));
                 let sb_arg_refs: Vec<&str> = sb_args.iter().map(String::as_str).collect();
-                match Self::run_metered_child(
+                let mut receipt = Self::run_metered_child(
                     "/usr/bin/sandbox-exec",
                     &sb_arg_refs,
                     command,
                     args,
                     timeout_ms,
                     max_output_bytes,
+                    config.memory_max_mb,
                     SandboxBackend::MacosSeatbelt,
                     Some(profile.clone()),
-                ) {
-                    Ok(mut receipt) => {
-                        let stderr_text = String::from_utf8_lossy(&receipt.stderr);
-                        let nested_sandbox_denied = !receipt.success
-                            && (stderr_text.contains("sandbox_apply")
-                                || stderr_text.contains("Operation not permitted")
-                                || receipt.exit_code == Some(71));
-                        if !nested_sandbox_denied {
-                            receipt.seatbelt_profile = Some(profile);
-                            return Ok(receipt);
-                        }
-                    }
-                    Err(
-                        err @ (SandboxError::TimeoutExceeded { .. }
-                        | SandboxError::OutputLimitExceeded { .. }),
-                    ) => return Err(err),
-                    Err(_) => {}
-                }
+                )?;
+                receipt.seatbelt_profile = Some(profile);
+                return Ok(receipt);
             }
             if !config.allow_unsandboxed_fallback {
                 return Err(SandboxError::SandboxUnavailable(
-                    "macOS Seatbelt (sandbox-exec) confinement unavailable or denied and allow_unsandboxed_fallback is false".to_string(),
+                    "macOS Seatbelt (sandbox-exec) binary missing and allow_unsandboxed_fallback is false".to_string(),
                 ));
             }
             Self::run_metered_child(
@@ -349,6 +482,7 @@ impl BubblewrapRunner {
                 args,
                 timeout_ms,
                 max_output_bytes,
+                config.memory_max_mb,
                 SandboxBackend::MeteredProcessFallback,
                 Some(profile),
             )
@@ -366,32 +500,21 @@ impl BubblewrapRunner {
                 let flags = Self::build_flags(&bwrap_cfg);
                 let flag_refs: Vec<&str> = flags.iter().map(String::as_str).collect();
                 let bwrap_bin = config.bwrap_binary.to_string_lossy().to_string();
-                match Self::run_metered_child(
+                return Self::run_metered_child(
                     &bwrap_bin,
                     &flag_refs,
                     command,
                     args,
                     timeout_ms,
                     max_output_bytes,
+                    config.memory_max_mb,
                     SandboxBackend::Bubblewrap,
                     None,
-                ) {
-                    Ok(receipt) => {
-                        let stderr_text = String::from_utf8_lossy(&receipt.stderr);
-                        if receipt.success || !stderr_text.contains("bwrap:") {
-                            return Ok(receipt);
-                        }
-                    }
-                    Err(
-                        err @ (SandboxError::TimeoutExceeded { .. }
-                        | SandboxError::OutputLimitExceeded { .. }),
-                    ) => return Err(err),
-                    Err(_) => {}
-                }
+                );
             }
             if !config.allow_unsandboxed_fallback {
                 return Err(SandboxError::SandboxUnavailable(
-                    "Linux Bubblewrap (bwrap) confinement unavailable or failed and allow_unsandboxed_fallback is false".to_string(),
+                    "Linux Bubblewrap (bwrap) confinement unavailable and allow_unsandboxed_fallback is false".to_string(),
                 ));
             }
             Self::run_metered_child(
@@ -401,6 +524,7 @@ impl BubblewrapRunner {
                 args,
                 timeout_ms,
                 max_output_bytes,
+                config.memory_max_mb,
                 SandboxBackend::MeteredProcessFallback,
                 None,
             )
@@ -420,6 +544,7 @@ impl BubblewrapRunner {
                 args,
                 timeout_ms,
                 max_output_bytes,
+                config.memory_max_mb,
                 SandboxBackend::MeteredProcessFallback,
                 None,
             )
@@ -434,67 +559,113 @@ impl BubblewrapRunner {
         logical_args: &[&str],
         timeout_ms: u64,
         max_output_bytes: usize,
+        memory_max_mb: u32,
         backend: SandboxBackend,
         seatbelt_profile: Option<String>,
     ) -> Result<SandboxRunReceipt, SandboxError> {
         let start = Instant::now();
-        let child = Command::new(exec_bin)
-            .args(exec_args)
+        let mem_limit_bytes = (memory_max_mb as u64).saturating_mul(1024 * 1024);
+
+        let mut cmd = Command::new(exec_bin);
+        cmd.args(exec_args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0);
+
+        if mem_limit_bytes > 0 {
+            unsafe {
+                cmd.pre_exec(move || {
+                    let mut cur: libc::rlimit = std::mem::zeroed();
+                    let limit_result = libc::getrlimit(libc::RLIMIT_AS, &mut cur);
+                    #[cfg(target_os = "linux")]
+                    if limit_result != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if limit_result == 0 {
+                        let req = mem_limit_bytes as libc::rlim_t;
+                        let capped = if cur.rlim_max == libc::RLIM_INFINITY {
+                            req
+                        } else {
+                            req.min(cur.rlim_max)
+                        };
+                        let rlim = libc::rlimit {
+                            rlim_cur: capped,
+                            rlim_max: capped,
+                        };
+                        #[cfg(target_os = "linux")]
+                        if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            let _ = libc::setrlimit(libc::RLIMIT_AS, &rlim);
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
+
+        let child = cmd
             .spawn()
             .map_err(|e| SandboxError::SpawnFailed(format!("{exec_bin}: {e}")))?;
 
         let mut guard = KillOnDropChild::new(child);
-        let stdout_pipe = guard.as_mut().stdout.take();
-        let stderr_pipe = guard.as_mut().stderr.take();
+        let pid = guard.pid;
+        let stdout_pipe = guard.child.stdout.take();
+        let stderr_pipe = guard.child.stderr.take();
 
         let cap_limit = max_output_bytes.saturating_add(1);
-        let out_handle = std::thread::spawn(move || -> Vec<u8> {
-            let mut buf = Vec::new();
-            if let Some(pipe) = stdout_pipe {
-                let _ = pipe.take(cap_limit as u64).read_to_end(&mut buf);
-            }
-            buf
-        });
-        let err_handle = std::thread::spawn(move || -> Vec<u8> {
-            let mut buf = Vec::new();
-            if let Some(pipe) = stderr_pipe {
-                let _ = pipe.take(cap_limit as u64).read_to_end(&mut buf);
-            }
-            buf
-        });
+        let (out_buf, out_done) = spawn_bounded_pipe_reader(stdout_pipe, cap_limit);
+        let (err_buf, err_done) = spawn_bounded_pipe_reader(stderr_pipe, cap_limit);
 
         let timeout_dur = Duration::from_millis(timeout_ms);
-        let status = loop {
-            match guard.as_mut().try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    let elapsed = start.elapsed();
-                    if elapsed >= timeout_dur {
-                        drop(guard);
-                        let _ = out_handle.join();
-                        let _ = err_handle.join();
-                        return Err(SandboxError::TimeoutExceeded {
-                            timeout_ms,
-                            elapsed_usec: elapsed.as_micros().max(1) as u64,
-                        });
-                    }
-                    std::thread::sleep(Duration::from_millis(2));
+        let (status, rusage): (std::process::ExitStatus, libc::rusage) = loop {
+            let mut raw_status: libc::c_int = 0;
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            let rc = unsafe { libc::wait4(pid, &mut raw_status, libc::WNOHANG, &mut usage) };
+            if rc == pid {
+                guard.reaped = true;
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
                 }
-                Err(e) => {
-                    return Err(SandboxError::WaitFailed(e.to_string()));
+                break (std::process::ExitStatus::from_raw(raw_status), usage);
+            } else if rc == 0 {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout_dur {
+                    drop(guard);
+                    return Err(SandboxError::TimeoutExceeded {
+                        timeout_ms,
+                        elapsed_usec: elapsed.as_micros().max(1) as u64,
+                    });
                 }
+                std::thread::sleep(Duration::from_millis(2));
+            } else {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                return Err(SandboxError::WaitFailed(err.to_string()));
             }
         };
 
-        let wall_clock_usec = start.elapsed().as_micros().max(1) as u64;
-        // Disarm kill-on-drop since the child already exited cleanly
-        let _ = guard.child.take();
+        drain_pipe_readers(
+            &out_done,
+            &err_done,
+            Instant::now() + Duration::from_secs(1),
+        )?;
 
-        let stdout = out_handle.join().unwrap_or_default();
-        let stderr = err_handle.join().unwrap_or_default();
+        let wall_clock_usec = start.elapsed().as_micros().max(1) as u64;
+
+        let stdout = out_buf
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let stderr = err_buf
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let observed_bytes = stdout.len().saturating_add(stderr.len());
         if stdout.len() > max_output_bytes
             || stderr.len() > max_output_bytes
@@ -513,7 +684,7 @@ impl BubblewrapRunner {
         let cpu_fuel = (wall_clock_usec / 10_000).max(1);
         let io_fuel = (observed_bytes as u64) / 64;
         let fuel_consumed = cpu_fuel.saturating_add(io_fuel);
-        let peak_rss_bytes = (4096usize).saturating_add(observed_bytes);
+        let peak_rss_bytes = rusage_maxrss_to_bytes(rusage.ru_maxrss);
         let is_fallback = matches!(backend, SandboxBackend::MeteredProcessFallback);
 
         Ok(SandboxRunReceipt {
@@ -541,6 +712,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn post_reap_reader_timeout_fails_closed() {
+        for stuck_stdout in [false, true] {
+            let (out_tx, out_rx) = sync_channel(1);
+            let (err_tx, err_rx) = sync_channel(1);
+            if stuck_stdout {
+                err_tx.send(()).unwrap();
+            } else {
+                out_tx.send(()).unwrap();
+            }
+            assert!(matches!(
+                drain_pipe_readers(&out_rx, &err_rx, Instant::now() + Duration::from_millis(10)),
+                Err(SandboxError::WaitFailed(_))
+            ));
+            drop((out_tx, err_tx));
+            assert!(drain_pipe_readers(&out_rx, &err_rx, Instant::now()).is_ok());
+        }
+    }
+
+    #[test]
     fn test_bwrap_flags_default() {
         let config = SandboxConfig::default();
         assert!(!config.allow_unsandboxed_fallback);
@@ -557,8 +747,10 @@ mod tests {
 
     #[test]
     fn test_bwrap_flags_network_toggle() {
-        let mut config = SandboxConfig::default();
-        config.allow_network = true;
+        let config = SandboxConfig {
+            allow_network: true,
+            ..SandboxConfig::default()
+        };
         let flags = BubblewrapRunner::build_flags(&config);
 
         assert!(flags.contains(&"--share-net".to_string()));
@@ -584,11 +776,13 @@ mod tests {
     #[test]
     fn test_execute_sandboxed_fails_closed_without_fallback() {
         let runner = BubblewrapRunner::new();
-        let mut strict_cfg = SandboxConfig::default();
-        strict_cfg.bwrap_binary = PathBuf::from("/nonexistent/bwrap");
-        strict_cfg.workspace_dir = PathBuf::from("/nonexistent/workspace");
-        strict_cfg.runtime_root = PathBuf::from("/nonexistent/runtime");
-        strict_cfg.allow_unsandboxed_fallback = false;
+        let strict_cfg = SandboxConfig {
+            bwrap_binary: PathBuf::from("/nonexistent/bwrap"),
+            workspace_dir: PathBuf::from("/nonexistent/workspace"),
+            runtime_root: PathBuf::from("/nonexistent/runtime"),
+            allow_unsandboxed_fallback: false,
+            ..SandboxConfig::default()
+        };
 
         #[cfg(target_os = "linux")]
         {
@@ -604,6 +798,8 @@ mod tests {
                 "strict config without bwrap must fail closed, got {res:?}"
             );
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (&runner, &strict_cfg);
     }
 
     #[test]
@@ -615,8 +811,10 @@ mod tests {
                 receipt
             }
             Err(SandboxError::SandboxUnavailable(_)) => {
-                let mut fallback_cfg = SandboxConfig::default();
-                fallback_cfg.allow_unsandboxed_fallback = true;
+                let fallback_cfg = SandboxConfig {
+                    allow_unsandboxed_fallback: true,
+                    ..SandboxConfig::default()
+                };
                 let receipt = runner
                     .execute_sandboxed_with_config(
                         &fallback_cfg,
@@ -650,8 +848,205 @@ mod tests {
             flipped.receipt_digest(),
             "receipt_digest must bind is_fallback"
         );
+
+        let mut cmd_mutated = receipt.clone();
+        cmd_mutated.command = "/bin/true".to_string();
+        assert_ne!(
+            receipt.receipt_digest(),
+            cmd_mutated.receipt_digest(),
+            "receipt_digest must bind command"
+        );
+
+        let mut args_mutated = receipt.clone();
+        args_mutated.args.push("--extra".to_string());
+        assert_ne!(
+            receipt.receipt_digest(),
+            args_mutated.receipt_digest(),
+            "receipt_digest must bind args"
+        );
+
+        let mut backend_mutated = receipt.clone();
+        backend_mutated.backend = if receipt.backend == SandboxBackend::Bubblewrap {
+            SandboxBackend::MacosSeatbelt
+        } else {
+            SandboxBackend::Bubblewrap
+        };
+        assert_ne!(
+            receipt.receipt_digest(),
+            backend_mutated.receipt_digest(),
+            "receipt_digest must bind backend"
+        );
+        assert!(
+            receipt.peak_rss_bytes >= 64 * 1024,
+            "peak_rss_bytes must reflect real kernel ru_maxrss, got {}",
+            receipt.peak_rss_bytes
+        );
         #[cfg(target_os = "macos")]
         assert!(receipt.seatbelt_profile.is_some());
+    }
+
+    #[test]
+    fn test_sbpl_backslash_quote_injection_escaped() {
+        let cfg = SandboxConfig {
+            workspace_dir: PathBuf::from("/tmp/ws\\\") (allow file-write* (subpath \"/\")) ; "),
+            ..SandboxConfig::default()
+        };
+        let profile = BubblewrapRunner::build_seatbelt_profile(&cfg);
+        assert!(
+            profile.contains("\\\\\\\")"),
+            "backslash must be escaped before double-quote in SBPL: {profile}"
+        );
+        assert!(!profile.contains("(subpath \"/tmp/ws\\\")"));
+    }
+
+    #[test]
+    fn test_stderr_spoofing_never_triggers_second_unsandboxed_run() {
+        let runner = BubblewrapRunner::new();
+        let tmp = std::env::temp_dir().join(format!("obend_stderr_spoof_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let marker = tmp.join("invocations.log");
+        let fake_bwrap = tmp.join("fake_bwrap.sh");
+        let ws = tmp.join("ws");
+        let rt = tmp.join("rt");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&rt).unwrap();
+
+        // Fake bwrap wrapper records each invocation and prints attacker-controlled stderr + exits 71
+        let script = format!(
+            "#!/bin/sh\necho invoked >> '{}'\necho 'bwrap: Operation not permitted sandbox_apply' >&2\nexit 71\n",
+            marker.display()
+        );
+        std::fs::write(&fake_bwrap, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let cfg = SandboxConfig {
+            bwrap_binary: fake_bwrap,
+            workspace_dir: ws,
+            runtime_root: rt,
+            allow_unsandboxed_fallback: true,
+            ..SandboxConfig::default()
+        };
+
+        #[cfg(target_os = "linux")]
+        {
+            let receipt = runner
+                .execute_sandboxed_with_config(
+                    &cfg,
+                    "/bin/sh",
+                    &[
+                        "-c",
+                        &format!("echo HOST_FALLBACK >> '{}'", marker.display()),
+                    ],
+                    3000,
+                    DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+                )
+                .expect("sandbox wrapper ran once");
+            assert_eq!(receipt.exit_code, Some(71));
+            assert_eq!(receipt.backend, SandboxBackend::Bubblewrap);
+            assert!(!receipt.is_fallback);
+            let log = std::fs::read_to_string(&marker).unwrap_or_default();
+            assert_eq!(
+                log.lines().count(),
+                1,
+                "child stderr/exit-71 must NEVER trigger a second unsandboxed execution: {log}"
+            );
+            assert!(!log.contains("HOST_FALLBACK"));
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (&runner, &cfg);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_rlimit_as_enforced_and_background_pipe_descendant_bounded() {
+        let runner = BubblewrapRunner::new();
+        let cfg = SandboxConfig {
+            allow_unsandboxed_fallback: true,
+            ..SandboxConfig::default()
+        };
+
+        // 1. Background grandchild holding stdout pipe open must NOT hang past drain grace
+        let t0 = Instant::now();
+        let bg_receipt = runner
+            .execute_sandboxed_with_config(
+                &cfg,
+                "/bin/sh",
+                &["-c", "sleep 15 & echo parent-done"],
+                2000,
+                DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+            )
+            .expect("parent exits quickly while background sleep holds stdout");
+        let bg_ms = t0.elapsed().as_millis();
+        assert!(bg_receipt.success);
+        assert_eq!(bg_receipt.stdout, b"parent-done\n");
+        assert!(
+            bg_ms < 1000,
+            "bounded pipe reader must not wait 15s on background grandchild, took {bg_ms}ms"
+        );
+
+        // Descendants closing both pipes still belong to the killed process group.
+        let detached = BubblewrapRunner::run_metered_child(
+            "/bin/sh",
+            &["-c", "sleep 3600 >/dev/null 2>&1 & echo $!"],
+            "/bin/sh",
+            &[],
+            2000,
+            DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+            0,
+            SandboxBackend::MeteredProcessFallback,
+            None,
+        )
+        .unwrap();
+        let child_pid: i32 = String::from_utf8(detached.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        #[cfg(target_os = "linux")]
+        {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                let stat = std::fs::read_to_string(format!("/proc/{child_pid}/stat"));
+                if stat.as_ref().map_or(true, |s| {
+                    s.split_once(") ")
+                        .is_some_and(|(_, tail)| tail.starts_with('Z'))
+                }) {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "background descendant survived reap"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = child_pid;
+
+        // 2. RLIMIT_AS enforcement on Linux: 32 MiB cap rejects 128 MiB allocation
+        #[cfg(target_os = "linux")]
+        if std::path::Path::new("/usr/bin/python3").exists() {
+            let mut mem_cfg = cfg.clone();
+            mem_cfg.memory_max_mb = 32;
+            let oom_res = runner.execute_sandboxed_with_config(
+                &mem_cfg,
+                "/usr/bin/python3",
+                &["-c", "x = bytearray(128 * 1024 * 1024)"],
+                5000,
+                DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+            );
+            if let Ok(r) = oom_res {
+                assert!(
+                    !r.success,
+                    "128 MiB allocation under 32 MiB RLIMIT_AS must fail"
+                );
+            }
+        }
     }
 
     #[test]
@@ -664,8 +1059,10 @@ mod tests {
             Err(SandboxError::InvalidCommand(_))
         ));
 
-        let mut cfg = SandboxConfig::default();
-        cfg.allow_unsandboxed_fallback = true;
+        let cfg = SandboxConfig {
+            allow_unsandboxed_fallback: true,
+            ..SandboxConfig::default()
+        };
 
         // 2. Timeout enforcement with kill_on_drop
         let timeout_res = runner.execute_sandboxed_with_config(

@@ -4,6 +4,7 @@
 //! with strict per-instruction fuel charging, bounded linear memory pages, capability-checked
 //! hostcall slots (`ReadSlot`, `EmitSlot`, `HashDigest`), and cryptographic execution receipts.
 
+use obend_crypto_exec::transcript::cshake256_32;
 use sha2::{Digest, Sha256};
 
 /// Standard linear memory page size (4 KiB) for `Grain` bytecode execution.
@@ -151,7 +152,9 @@ impl GrainOp {
             | Self::JumpIfNonZero(_)
             | Self::Halt => 1,
             Self::Mul => 2,
-            Self::AllocPages(pages) => 2u64.saturating_add((*pages as u64).min(16).saturating_mul(4)),
+            Self::AllocPages(pages) => {
+                2u64.saturating_add((*pages as u64).min(16).saturating_mul(4))
+            }
             Self::StoreLinear { data, .. } => 2u64.saturating_add((data.len() as u64) / 32),
             Self::LoadLinear { len, .. } => 2u64.saturating_add((*len as u64) / 32),
             Self::ReadSlot(_) => 5,
@@ -430,6 +433,157 @@ impl Default for GrainCapabilities {
     }
 }
 
+/// Cryptographic kernel-session proof token required to promote a halted `GrainExecutionReceipt`
+/// to `ReproducibilityTier::R4KernelProved`. Fields are module-private so unprivileged callers
+/// cannot forge an `R4KernelProved` token via plain SHA-256 self-promotion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelProofToken {
+    verifier_id: [u8; 32],
+    session_id: [u8; 32],
+    kernel_receipt_digest: [u8; 32],
+    mac_tag: [u8; 32],
+}
+
+impl KernelProofToken {
+    pub fn verifier_id(&self) -> [u8; 32] {
+        self.verifier_id
+    }
+
+    pub fn session_id(&self) -> [u8; 32] {
+        self.session_id
+    }
+
+    pub fn kernel_receipt_digest(&self) -> [u8; 32] {
+        self.kernel_receipt_digest
+    }
+
+    pub fn mac_tag(&self) -> [u8; 32] {
+        self.mac_tag
+    }
+
+    fn encode_into(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.verifier_id);
+        buf.extend_from_slice(&self.session_id);
+        buf.extend_from_slice(&self.kernel_receipt_digest);
+        buf.extend_from_slice(&self.mac_tag);
+    }
+}
+
+/// Authenticated kernel session verifier capable of minting and verifying `KernelProofToken`s
+/// for halted deterministic `Grain` receipts.
+#[derive(Clone)]
+pub struct KernelSessionVerifier {
+    session_key: [u8; 32],
+    session_id: [u8; 32],
+    verifier_id: [u8; 32],
+}
+
+impl KernelSessionVerifier {
+    pub fn new(session_key: [u8; 32], session_id: [u8; 32]) -> Self {
+        let pub_key_tag = cshake256_32(b"OBEND.GRAIN.KERNEL_VERIFIER_PUB/v1", &session_key);
+        let mut id_preimage = Vec::with_capacity(64);
+        id_preimage.extend_from_slice(&session_id);
+        id_preimage.extend_from_slice(&pub_key_tag);
+        let verifier_id = cshake256_32(b"OBEND.GRAIN.KERNEL_VERIFIER_ID/v1", &id_preimage);
+        Self {
+            session_key,
+            session_id,
+            verifier_id,
+        }
+    }
+
+    pub fn verifier_id(&self) -> [u8; 32] {
+        self.verifier_id
+    }
+
+    pub fn session_id(&self) -> [u8; 32] {
+        self.session_id
+    }
+
+    fn compute_mac(&self, kernel_receipt_digest: &[u8; 32]) -> [u8; 32] {
+        let mut preimage = Vec::with_capacity(96);
+        preimage.extend_from_slice(&self.session_key);
+        preimage.extend_from_slice(&self.session_id);
+        preimage.extend_from_slice(kernel_receipt_digest);
+        cshake256_32(b"OBEND.GRAIN.R4_KERNEL_PROOF_MAC/v1", &preimage)
+    }
+
+    /// Issue a `KernelProofToken` for a halted, commitment-valid deterministic `GrainExecutionReceipt`.
+    pub fn attest_halted_receipt(
+        &self,
+        executor: &GrainExecutor,
+        program: &GrainProgram,
+        input_slots: &[(u64, Vec<u8>)],
+        receipt: &GrainExecutionReceipt,
+    ) -> Option<KernelProofToken> {
+        let actual = executor.execute(program, input_slots);
+        if !actual.termination.is_halted()
+            || actual.program_digest != receipt.program_digest
+            || actual.input_digest != receipt.input_digest
+            || actual.output_digest != receipt.output_digest
+            || actual.emitted_slots != receipt.emitted_slots
+            || actual.stack_top != receipt.stack_top
+            || actual.registers != receipt.registers
+            || actual.last_hash_digest != receipt.last_hash_digest
+            || actual.fuel_consumed != receipt.fuel_consumed
+            || actual.peak_memory_bytes != receipt.peak_memory_bytes
+        {
+            return None;
+        }
+        if !receipt.termination.is_halted()
+            || !receipt.tier.is_deterministic()
+            || !receipt.verify_commitment()
+        {
+            return None;
+        }
+        let expected_output = receipt.recomputed_output_digest();
+        let kernel_receipt_digest = GrainExecutionReceipt::compute_kernel_binding_digest(
+            &receipt.program_digest,
+            &receipt.input_digest,
+            &expected_output,
+            receipt.fuel_consumed,
+            receipt.peak_memory_bytes,
+        );
+        let mac_tag = self.compute_mac(&kernel_receipt_digest);
+        Some(KernelProofToken {
+            verifier_id: self.verifier_id,
+            session_id: self.session_id,
+            kernel_receipt_digest,
+            mac_tag,
+        })
+    }
+
+    /// Verify a `KernelProofToken` against both `receipt` and this kernel session's secret key.
+    pub fn verify_token(&self, receipt: &GrainExecutionReceipt, token: &KernelProofToken) -> bool {
+        if !receipt.termination.is_halted() {
+            return false;
+        }
+        let expected_output = receipt.recomputed_output_digest();
+        if receipt.output_digest != expected_output {
+            return false;
+        }
+        let expected_binding = GrainExecutionReceipt::compute_kernel_binding_digest(
+            &receipt.program_digest,
+            &receipt.input_digest,
+            &expected_output,
+            receipt.fuel_consumed,
+            receipt.peak_memory_bytes,
+        );
+        if token.verifier_id != self.verifier_id
+            || token.session_id != self.session_id
+            || token.kernel_receipt_digest != expected_binding
+        {
+            return false;
+        }
+        let expected_mac = self.compute_mac(&expected_binding);
+        let mut diff = 0u8;
+        for (a, b) in token.mac_tag.iter().zip(expected_mac.iter()) {
+            diff |= a ^ b;
+        }
+        diff == 0
+    }
+}
+
 /// Cryptographic commitment receipt over a deterministic `Grain` execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrainExecutionReceipt {
@@ -445,9 +599,71 @@ pub struct GrainExecutionReceipt {
     pub stack_top: Option<i64>,
     pub registers: [i64; 16],
     pub last_hash_digest: [u8; 32],
+    pub kernel_proof: Option<KernelProofToken>,
 }
 
 impl GrainExecutionReceipt {
+    /// Canonical SHA-256 digest over `(emitted_slots, stack_top, registers, last_hash_digest, termination)`.
+    pub fn compute_output_digest(
+        emitted_slots: &[(u64, Vec<u8>)],
+        stack_top: Option<i64>,
+        registers: &[i64; 16],
+        last_hash_digest: &[u8; 32],
+        termination: GrainTermination,
+    ) -> [u8; 32] {
+        let mut output_buf = Vec::with_capacity(224);
+        output_buf.extend_from_slice(b"OBEND-GRAIN-OUTPUT-STATE-V2:");
+        output_buf.extend_from_slice(&digest_slot_entries(
+            b"OBEND-GRAIN-OUTPUTS-V1:",
+            emitted_slots,
+        ));
+        match stack_top {
+            None => output_buf.push(0x00),
+            Some(v) => {
+                output_buf.push(0x01);
+                output_buf.extend_from_slice(&v.to_be_bytes());
+            }
+        }
+        for r in registers {
+            output_buf.extend_from_slice(&r.to_be_bytes());
+        }
+        output_buf.extend_from_slice(last_hash_digest);
+        output_buf.push(match termination {
+            GrainTermination::Halted => 0,
+            GrainTermination::OutOfFuel => 1,
+            GrainTermination::MemoryLimitExceeded => 2,
+            GrainTermination::CapabilityDenied => 3,
+        });
+        sha256(&output_buf)
+    }
+
+    fn recomputed_output_digest(&self) -> [u8; 32] {
+        Self::compute_output_digest(
+            &self.emitted_slots,
+            self.stack_top,
+            &self.registers,
+            &self.last_hash_digest,
+            self.termination,
+        )
+    }
+
+    fn compute_kernel_binding_digest(
+        program_digest: &[u8; 32],
+        input_digest: &[u8; 32],
+        output_digest: &[u8; 32],
+        fuel_consumed: u64,
+        peak_memory_bytes: usize,
+    ) -> [u8; 32] {
+        let mut buf = Vec::with_capacity(32 * 3 + 16 + 32);
+        buf.extend_from_slice(b"OBEND-GRAIN-R4-BINDING-V1:");
+        buf.extend_from_slice(program_digest);
+        buf.extend_from_slice(input_digest);
+        buf.extend_from_slice(output_digest);
+        buf.extend_from_slice(&fuel_consumed.to_be_bytes());
+        buf.extend_from_slice(&(peak_memory_bytes as u64).to_be_bytes());
+        sha256(&buf)
+    }
+
     /// Compute the SHA-256 commitment over `(program_digest, input_digest, output_digest, fuel_consumed, peak_memory_bytes, tier)`.
     pub fn compute_commitment(
         program_digest: &[u8; 32],
@@ -457,43 +673,142 @@ impl GrainExecutionReceipt {
         peak_memory_bytes: usize,
         tier: ReproducibilityTier,
     ) -> [u8; 32] {
-        let mut buf = Vec::with_capacity(32 * 3 + 8 + 8 + 1 + 28);
-        buf.extend_from_slice(b"OBEND-GRAIN-RECEIPT-COMMIT:");
+        Self::compute_commitment_with_proof(
+            program_digest,
+            input_digest,
+            output_digest,
+            fuel_consumed,
+            peak_memory_bytes,
+            tier,
+            None,
+        )
+    }
+
+    fn compute_commitment_with_proof(
+        program_digest: &[u8; 32],
+        input_digest: &[u8; 32],
+        output_digest: &[u8; 32],
+        fuel_consumed: u64,
+        peak_memory_bytes: usize,
+        tier: ReproducibilityTier,
+        kernel_proof: Option<&KernelProofToken>,
+    ) -> [u8; 32] {
+        let mut buf = Vec::with_capacity(32 * 3 + 8 + 8 + 2 + 128 + 28);
+        buf.extend_from_slice(b"OBEND-GRAIN-RECEIPT-COMMIT-V2:");
         buf.extend_from_slice(program_digest);
         buf.extend_from_slice(input_digest);
         buf.extend_from_slice(output_digest);
         buf.extend_from_slice(&fuel_consumed.to_be_bytes());
         buf.extend_from_slice(&(peak_memory_bytes as u64).to_be_bytes());
         buf.push(tier.tag_byte());
+        match kernel_proof {
+            None => buf.push(0x00),
+            Some(kp) => {
+                buf.push(0x01);
+                kp.encode_into(&mut buf);
+            }
+        }
         sha256(&buf)
     }
 
-    /// Verify that `self.commitment` matches the canonical SHA-256 commitment over the receipt fields.
+    /// Verify that `self.output_digest` matches `(emitted_slots, stack_top, registers, last_hash_digest, termination)`,
+    /// enforce kernel-proof presence invariants for `R4KernelProved`, and verify `self.commitment`.
     pub fn verify_commitment(&self) -> bool {
-        let expected = Self::compute_commitment(
+        let expected_output = self.recomputed_output_digest();
+        if self.output_digest != expected_output {
+            return false;
+        }
+        if self.tier == ReproducibilityTier::R4KernelProved {
+            if !self.termination.is_halted() {
+                return false;
+            }
+            let Some(ref kp) = self.kernel_proof else {
+                return false;
+            };
+            let expected_binding = Self::compute_kernel_binding_digest(
+                &self.program_digest,
+                &self.input_digest,
+                &expected_output,
+                self.fuel_consumed,
+                self.peak_memory_bytes,
+            );
+            if kp.kernel_receipt_digest != expected_binding {
+                return false;
+            }
+        } else if self.kernel_proof.is_some() {
+            return false;
+        }
+
+        let expected = Self::compute_commitment_with_proof(
             &self.program_digest,
             &self.input_digest,
-            &self.output_digest,
+            &expected_output,
             self.fuel_consumed,
             self.peak_memory_bytes,
             self.tier,
+            self.kernel_proof.as_ref(),
         );
         self.commitment == expected
     }
 
-    /// Promote a halted deterministic grain receipt to `R3ReceiptAttested` or `R4KernelProved` and refresh commitment.
+    /// Full cryptographic R4 verification against an active `KernelSessionVerifier`.
+    pub fn verify_kernel_proved(&self, verifier: &KernelSessionVerifier) -> bool {
+        if self.tier != ReproducibilityTier::R4KernelProved || !self.verify_commitment() {
+            return false;
+        }
+        let Some(ref kp) = self.kernel_proof else {
+            return false;
+        };
+        verifier.verify_token(self, kp)
+    }
+
+    /// Promote a halted deterministic grain receipt up to `R3ReceiptAttested` and refresh commitment.
+    /// Unauthenticated promotion to `R4KernelProved` is strictly refused; use `promote_to_r4_kernel_proved`.
     pub fn promote_tier(&mut self, new_tier: ReproducibilityTier) -> bool {
-        if !self.termination.is_halted() || new_tier < self.tier {
+        if new_tier >= ReproducibilityTier::R4KernelProved {
+            return false;
+        }
+        if !self.termination.is_halted() || new_tier < self.tier || !self.verify_commitment() {
             return false;
         }
         self.tier = new_tier;
-        self.commitment = Self::compute_commitment(
+        self.kernel_proof = None;
+        self.commitment = Self::compute_commitment_with_proof(
             &self.program_digest,
             &self.input_digest,
             &self.output_digest,
             self.fuel_consumed,
             self.peak_memory_bytes,
             self.tier,
+            None,
+        );
+        true
+    }
+
+    /// Promote a halted deterministic grain receipt to `R4KernelProved` after verifying `token`
+    /// against `verifier`.
+    pub fn promote_to_r4_kernel_proved(
+        &mut self,
+        verifier: &KernelSessionVerifier,
+        token: KernelProofToken,
+    ) -> bool {
+        if !self.termination.is_halted()
+            || !self.tier.is_deterministic()
+            || !self.verify_commitment()
+            || !verifier.verify_token(self, &token)
+        {
+            return false;
+        }
+        self.tier = ReproducibilityTier::R4KernelProved;
+        self.kernel_proof = Some(token);
+        self.commitment = Self::compute_commitment_with_proof(
+            &self.program_digest,
+            &self.input_digest,
+            &self.output_digest,
+            self.fuel_consumed,
+            self.peak_memory_bytes,
+            self.tier,
+            self.kernel_proof.as_ref(),
         );
         true
     }
@@ -750,10 +1065,13 @@ impl GrainExecutor {
                         break;
                     }
                     let mut hash_input = Vec::new();
-                    hash_input.extend_from_slice(b"OBEND-GRAIN-HOSTHASH:");
+                    hash_input.extend_from_slice(b"OBEND-GRAIN-HOSTHASH-V2:");
+                    hash_input.extend_from_slice(&(linear_memory.len() as u64).to_be_bytes());
                     hash_input.extend_from_slice(&linear_memory);
+                    hash_input.extend_from_slice(&(emitted_slots.len() as u64).to_be_bytes());
                     for (slot_id, bytes) in &emitted_slots {
                         hash_input.extend_from_slice(&slot_id.to_be_bytes());
+                        hash_input.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
                         hash_input.extend_from_slice(bytes);
                     }
                     let digest = sha256(&hash_input);
@@ -801,12 +1119,15 @@ impl GrainExecutor {
                         termination = GrainTermination::CapabilityDenied;
                         break;
                     }
-                    let cell_val =
-                        Self::eval_cell_expression(expression, &stack, &registers, input_slots);
-                    let cell_bytes = format!("cell:{}:{}:{}", slot_id, expression.trim(), cell_val)
-                        .into_bytes();
-                    let Some(next_output_bytes) =
-                        emitted_bytes_total.checked_add(cell_bytes.len())
+                    let Ok(cell_val) =
+                        Self::eval_cell_expression(expression, &stack, &registers, input_slots)
+                    else {
+                        termination = GrainTermination::CapabilityDenied;
+                        break;
+                    };
+                    let cell_bytes =
+                        format!("cell:{}:{}:{}", slot_id, expression.trim(), cell_val).into_bytes();
+                    let Some(next_output_bytes) = emitted_bytes_total.checked_add(cell_bytes.len())
                     else {
                         termination = GrainTermination::MemoryLimitExceeded;
                         break;
@@ -845,28 +1166,26 @@ impl GrainExecutor {
             }
         }
 
-        let mut output_buf = Vec::new();
-        output_buf.extend_from_slice(& digest_slot_entries(b"OBEND-GRAIN-OUTPUTS-V1:", &emitted_slots));
-        output_buf.extend_from_slice(&stack.last().copied().unwrap_or(0).to_be_bytes());
-        for r in &registers {
-            output_buf.extend_from_slice(&r.to_be_bytes());
-        }
-        output_buf.extend_from_slice(&last_hash_digest);
-        output_buf.push(match termination {
-            GrainTermination::Halted => 0,
-            GrainTermination::OutOfFuel => 1,
-            GrainTermination::MemoryLimitExceeded => 2,
-            GrainTermination::CapabilityDenied => 3,
-        });
-        let output_digest = sha256(&output_buf);
+        let stack_top = stack.last().copied();
+        let output_digest = GrainExecutionReceipt::compute_output_digest(
+            &emitted_slots,
+            stack_top,
+            &registers,
+            &last_hash_digest,
+            termination,
+        );
+        // Unauthenticated execution caps receipt tier at `R3ReceiptAttested`; `R4KernelProved`
+        // requires `promote_to_r4_kernel_proved` with an authenticated `KernelProofToken`.
+        let effective_tier = self.tier.min(ReproducibilityTier::R3ReceiptAttested);
 
-        let commitment = GrainExecutionReceipt::compute_commitment(
+        let commitment = GrainExecutionReceipt::compute_commitment_with_proof(
             &program_digest,
             &input_digest,
             &output_digest,
             fuel_consumed,
             peak_memory_bytes,
-            self.tier,
+            effective_tier,
+            None,
         );
 
         GrainExecutionReceipt {
@@ -875,13 +1194,14 @@ impl GrainExecutor {
             output_digest,
             fuel_consumed,
             peak_memory_bytes,
-            tier: self.tier,
+            tier: effective_tier,
             termination,
             commitment,
             emitted_slots,
-            stack_top: stack.last().copied(),
+            stack_top,
             registers,
             last_hash_digest,
+            kernel_proof: None,
         }
     }
 
@@ -890,28 +1210,76 @@ impl GrainExecutor {
         stack: &[i64],
         registers: &[i64; 16],
         inputs: &[(u64, Vec<u8>)],
-    ) -> i64 {
-        let mut acc = stack.last().copied().unwrap_or(0);
-        for token in expr.split_whitespace() {
-            if let Ok(imm) = token.parse::<i64>() {
-                acc = acc.wrapping_add(imm);
-            } else if let Some(reg_str) = token.strip_prefix('r') {
-                if let Ok(idx) = reg_str.parse::<usize>() {
-                    acc = acc.wrapping_add(registers[idx & 0x0F]);
-                }
-            } else if let Some(slot_str) = token.strip_prefix("slot:") {
-                if let Ok(slot_id) = slot_str.parse::<u64>() {
-                    if let Some((_, bytes)) = inputs.iter().find(|(id, _)| *id == slot_id) {
-                        acc = acc.wrapping_add(bytes.len() as i64);
-                    }
-                }
-            } else {
-                for b in token.bytes() {
-                    acc = acc.wrapping_mul(31).wrapping_add(b as i64);
-                }
-            }
+    ) -> Result<i64, ()> {
+        #[derive(Clone, Copy)]
+        enum CellOp {
+            Add,
+            Sub,
+            Mul,
+            Xor,
         }
-        acc
+        let mut acc = stack.last().copied().unwrap_or(0);
+        let mut pending_op = CellOp::Add;
+
+        for token in expr.split_whitespace() {
+            match token {
+                "+" | "add" => {
+                    pending_op = CellOp::Add;
+                    continue;
+                }
+                "-" | "sub" => {
+                    pending_op = CellOp::Sub;
+                    continue;
+                }
+                "*" | "mul" => {
+                    pending_op = CellOp::Mul;
+                    continue;
+                }
+                "^" | "xor" => {
+                    pending_op = CellOp::Xor;
+                    continue;
+                }
+                _ => {}
+            }
+
+            let val = if let Ok(imm) = token.parse::<i64>() {
+                imm
+            } else if let Some(nat_lit) = token.strip_suffix('n') {
+                nat_lit.parse::<i64>().map_err(|_| ())?
+            } else if token == "top" {
+                stack.last().copied().unwrap_or(0)
+            } else if let Some(reg_str) = token.strip_prefix('r') {
+                let idx = reg_str.parse::<usize>().map_err(|_| ())?;
+                if idx >= 16 {
+                    return Err(());
+                }
+                registers[idx]
+            } else if let Some(slot_str) = token.strip_prefix("slot:") {
+                let slot_id = slot_str.parse::<u64>().map_err(|_| ())?;
+                inputs
+                    .iter()
+                    .find(|(id, _)| *id == slot_id)
+                    .map(|(_, bytes)| {
+                        let mut folded = bytes.len() as i64;
+                        for &b in bytes {
+                            folded = folded.wrapping_mul(257).wrapping_add(b as i64);
+                        }
+                        folded
+                    })
+                    .unwrap_or(0)
+            } else {
+                return Err(());
+            };
+
+            acc = match pending_op {
+                CellOp::Add => acc.wrapping_add(val),
+                CellOp::Sub => acc.wrapping_sub(val),
+                CellOp::Mul => acc.wrapping_mul(val),
+                CellOp::Xor => acc ^ val,
+            };
+            pending_op = CellOp::Add;
+        }
+        Ok(acc)
     }
 }
 
@@ -1221,16 +1589,137 @@ mod tests {
         assert!(r1.peak_memory_bytes > 0 && r1.peak_memory_bytes <= budget.max_memory_bytes);
         assert!(r1.verify_commitment());
 
-        // Tier promotion R2 -> R3 -> R4 updates commitment deterministically
+        // Tier promotion R2 -> R3 updates commitment deterministically; unauthenticated R4 self-promotion MUST fail
         let mut attested = r1.clone();
         assert!(attested.promote_tier(ReproducibilityTier::R3ReceiptAttested));
         assert_eq!(attested.tier, ReproducibilityTier::R3ReceiptAttested);
         assert_ne!(attested.commitment, r1.commitment);
         assert!(attested.verify_commitment());
 
-        assert!(attested.promote_tier(ReproducibilityTier::R4KernelProved));
+        assert!(
+            !attested.promote_tier(ReproducibilityTier::R4KernelProved),
+            "unauthenticated SHA-256 self-promotion to R4KernelProved must be refused"
+        );
+        assert_eq!(attested.tier, ReproducibilityTier::R3ReceiptAttested);
+
+        // Authenticated kernel session proof token promotes R3 -> R4 and rejects cross-session or mutated tampering
+        let kernel_verifier = KernelSessionVerifier::new([0x42; 32], [0x99; 32]);
+        let wrong_verifier = KernelSessionVerifier::new([0x43; 32], [0x99; 32]);
+        let mut fabricated = attested.clone();
+        fabricated.emitted_slots[0].1.push(0xff);
+        fabricated.output_digest = fabricated.recomputed_output_digest();
+        fabricated.commitment = GrainExecutionReceipt::compute_commitment_with_proof(
+            &fabricated.program_digest,
+            &fabricated.input_digest,
+            &fabricated.output_digest,
+            fabricated.fuel_consumed,
+            fabricated.peak_memory_bytes,
+            fabricated.tier,
+            fabricated.kernel_proof.as_ref(),
+        );
+        assert!(fabricated.verify_commitment());
+        assert!(
+            kernel_verifier
+                .attest_halted_receipt(&exec, &prog, &inputs, &fabricated)
+                .is_none()
+        );
+        let token = kernel_verifier
+            .attest_halted_receipt(&exec, &prog, &inputs, &attested)
+            .expect("halted deterministic receipt receives kernel token");
+        assert!(!attested.promote_to_r4_kernel_proved(&wrong_verifier, token.clone()));
+        assert!(attested.promote_to_r4_kernel_proved(&kernel_verifier, token));
         assert_eq!(attested.tier, ReproducibilityTier::R4KernelProved);
         assert!(attested.verify_commitment());
+        assert!(attested.verify_kernel_proved(&kernel_verifier));
+        assert!(!attested.verify_kernel_proved(&wrong_verifier));
+
+        // In-place mutation of emitted_slots, stack_top, registers, or termination invalidates verify_commitment()
+        let mut mutated_slots = attested.clone();
+        mutated_slots.emitted_slots[0].1.push(0xFF);
+        assert!(!mutated_slots.verify_commitment());
+
+        let mut mutated_stack = attested.clone();
+        mutated_stack.stack_top = Some(999_999);
+        assert!(!mutated_stack.verify_commitment());
+
+        let mut mutated_reg = attested.clone();
+        mutated_reg.registers[3] = 43;
+        assert!(!mutated_reg.verify_commitment());
+
+        let mut mutated_term = attested.clone();
+        mutated_term.termination = GrainTermination::OutOfFuel;
+        assert!(!mutated_term.verify_commitment());
+    }
+
+    #[test]
+    fn test_grain_hash_digest_length_framing_prevents_boundary_collisions() {
+        let caps = GrainCapabilities::allow_all(&[1, 2]);
+        let exec = GrainExecutor::new(GrainBudget::default(), caps);
+
+        // Boundary shift between linear_memory and emitted_slots
+        let prog_a = GrainProgram::new(
+            "frame_a",
+            vec![
+                GrainOp::StoreLinear {
+                    offset: 0,
+                    data: b"AB".to_vec(),
+                },
+                GrainOp::EmitSlot {
+                    slot_id: 1,
+                    data: b"CD".to_vec(),
+                },
+                GrainOp::HashDigest,
+                GrainOp::Halt,
+            ],
+        );
+        let prog_b = GrainProgram::new(
+            "frame_b",
+            vec![
+                GrainOp::StoreLinear {
+                    offset: 0,
+                    data: b"AB\0\0\0\0\0\0\0\x01CD".to_vec(),
+                },
+                GrainOp::HashDigest,
+                GrainOp::Halt,
+            ],
+        );
+        let ra = exec.execute(&prog_a, &[]);
+        let rb = exec.execute(&prog_b, &[]);
+        assert_ne!(ra.last_hash_digest, rb.last_hash_digest);
+
+        // Boundary shift between two emitted_slots
+        let prog_c = GrainProgram::new(
+            "frame_c",
+            vec![
+                GrainOp::EmitSlot {
+                    slot_id: 1,
+                    data: b"X".to_vec(),
+                },
+                GrainOp::EmitSlot {
+                    slot_id: 2,
+                    data: b"Y".to_vec(),
+                },
+                GrainOp::HashDigest,
+                GrainOp::Halt,
+            ],
+        );
+        let mut forged_single = b"X".to_vec();
+        forged_single.extend_from_slice(&2u64.to_be_bytes());
+        forged_single.extend_from_slice(b"Y");
+        let prog_d = GrainProgram::new(
+            "frame_d",
+            vec![
+                GrainOp::EmitSlot {
+                    slot_id: 1,
+                    data: forged_single,
+                },
+                GrainOp::HashDigest,
+                GrainOp::Halt,
+            ],
+        );
+        let rc = exec.execute(&prog_c, &[]);
+        let rd = exec.execute(&prog_d, &[]);
+        assert_ne!(rc.last_hash_digest, rd.last_hash_digest);
     }
 
     #[test]
@@ -1262,10 +1751,8 @@ mod tests {
     #[test]
     fn test_grain_memory_and_output_limit_enforcement() {
         // 1. Linear page allocation exceeding max_memory_bytes
-        let alloc_prog = GrainProgram::new(
-            "oom_pages",
-            vec![GrainOp::AllocPages(4), GrainOp::Halt],
-        );
+        let alloc_prog =
+            GrainProgram::new("oom_pages", vec![GrainOp::AllocPages(4), GrainOp::Halt]);
         let budget = GrainBudget::new(1000, GRAIN_PAGE_SIZE * 2, 1024);
         let exec = GrainExecutor::new(budget, GrainCapabilities::allow_all(&[1]));
         let r_oom = exec.execute(&alloc_prog, &[]);
@@ -1484,4 +1971,3 @@ mod tests {
         assert!(side_channel_receipt.emitted_slots.is_empty());
     }
 }
-

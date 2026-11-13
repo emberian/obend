@@ -6,6 +6,8 @@
 //! Matches `Obend.Crypto.PqHashSignatures` byte-for-byte across all domain tags,
 //! `encodeAdrs`, `encodeMultiFrame`, `cshake256Suite`, and `poseidon2Suite`.
 
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+
 use alloc::vec::Vec;
 
 use obend_crypto_exec::goldilocks::Goldilocks;
@@ -524,14 +526,20 @@ pub struct PqSecretKey {
 
 impl Drop for PqSecretKey {
     fn drop(&mut self) {
-        for b in &mut self.sk_seed {
-            *b = 0;
-        }
-        for b in &mut self.sk_prf {
-            *b = 0;
-        }
+        self.sk_seed.fill(0);
+        self.sk_prf.fill(0);
         core::hint::black_box(&self.sk_seed);
         core::hint::black_box(&self.sk_prf);
+    }
+}
+
+impl core::fmt::Debug for PqSecretKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PqSecretKey")
+            .field("sk_seed", &"<redacted>")
+            .field("sk_prf", &"<redacted>")
+            .field("pk_seed", &self.pk_seed)
+            .finish()
     }
 }
 

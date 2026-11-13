@@ -77,15 +77,15 @@ fn test_hardware_projection_verifies_cam_witness_and_refuses_arbitrary_bytes() {
 fn test_receipt_verification() {
     let mut session = ObendSession::new().unwrap();
     let bare_root = vec![0xAB; 32];
-    assert_eq!(session.verify_receipt(&bare_root).unwrap(), false);
+    assert!(!session.verify_receipt(&bare_root).unwrap());
 
     let tid = session.propose_turn(b"turn_for_receipt").unwrap();
-    assert_eq!(session.verify_receipt(&tid).unwrap(), false);
+    assert!(!session.verify_receipt(&tid).unwrap());
     let valid_receipt = session.commit_payload(b"turn_for_receipt").unwrap();
-    assert_eq!(session.verify_receipt(&valid_receipt).unwrap(), true);
+    assert!(session.verify_receipt(&valid_receipt).unwrap());
 
     let invalid_receipt = vec![0xAB; 16];
-    assert_eq!(session.verify_receipt(&invalid_receipt).unwrap(), false);
+    assert!(!session.verify_receipt(&invalid_receipt).unwrap());
 }
 
 #[test]

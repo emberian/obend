@@ -202,17 +202,21 @@ unsafe fn invoke_lean_session_json(
     }
 }
 
+/// # Safety
+/// `session` must be a valid live `Session` pointer owned exclusively for the duration of the call.
 #[cfg(not(feature = "stub"))]
 pub unsafe fn call_workbook_step_json(session: *mut Session, req: &[u8]) -> Result<Vec<u8>, i32> {
-    invoke_lean_session_json(session, req, obend_workbook_step_json)
+    unsafe { invoke_lean_session_json(session, req, obend_workbook_step_json) }
 }
 
+/// # Safety
+/// `session` must be a valid live `Session` pointer owned exclusively for the duration of the call.
 #[cfg(not(feature = "stub"))]
 pub unsafe fn call_workbook_scrub_cell_json(
     session: *mut Session,
     req: &[u8],
 ) -> Result<Vec<u8>, i32> {
-    invoke_lean_session_json(session, req, obend_workbook_scrub_cell_json)
+    unsafe { invoke_lean_session_json(session, req, obend_workbook_scrub_cell_json) }
 }
 
 #[cfg(feature = "stub")]

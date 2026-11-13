@@ -84,7 +84,7 @@ pub fn keccak_f1600(a: &mut [u64; 25]) {
 }
 
 pub fn left_encode(value: u64, out: &mut [u8; 9]) -> usize {
-    let n = ((64 - value.leading_zeros()).max(1) as usize + 7) / 8;
+    let n = ((64 - value.leading_zeros()).max(1) as usize).div_ceil(8);
     out[0] = n as u8;
     for i in 0..n {
         out[i + 1] = (value >> (8 * (n - i - 1))) as u8;
@@ -293,6 +293,7 @@ impl Goldilocks {
         self.0.min(Self::P - self.0)
     }
 }
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl core::ops::Add for Goldilocks {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
@@ -300,6 +301,7 @@ impl core::ops::Add for Goldilocks {
         Self::new(s.wrapping_add(Self::EPS & 0u64.wrapping_sub(carry as u64)))
     }
 }
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl core::ops::Sub for Goldilocks {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
@@ -512,7 +514,7 @@ pub fn verify_canopy(
 pub fn kronecker_ternary(scratch: &mut [Goldilocks], factors: &[[i8; 3]]) -> Option<Goldilocks> {
     let mut len = scratch.len();
     for factor in factors {
-        if len == 0 || len % 3 != 0 || factor.iter().any(|x| !(-1..=1).contains(x)) {
+        if len == 0 || !len.is_multiple_of(3) || factor.iter().any(|x| !(-1..=1).contains(x)) {
             return None;
         }
         for i in 0..len / 3 {

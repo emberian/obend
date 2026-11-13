@@ -4,7 +4,7 @@
 # Edits are appended behind a marker and removed by the marker, so a concurrent edit to the same file
 # by another lane survives. One run; the record is EXPERIMENT-20261030.md, written by hand from
 # $OUT. Not a harness.
-set -u
+set -euo pipefail
 export LEAN_NUM_THREADS=2
 OUT=${OUT:?set OUT to a scratch directory for the logs}
 mkdir -p "$OUT"
@@ -26,17 +26,36 @@ if i >= 0:
     open(p, 'w').write(s[:i] + (s[j:] if j >= 0 else ''))
 PY
 }
-restore() { strip_marker "$ADEQ"; strip_marker "$TERM_"; }
+restore() {
+  set +e
+  strip_marker "$ADEQ"
+  strip_marker "$TERM_"
+  rm -f "$J"/env-exp-*.jsonl
+}
 trap restore EXIT
 
 build() {  # $1: label. Records the modules Lake built (not replayed), by name.
-  lake build > "$OUT/build-$1.log" 2>&1
-  echo "build $1: exit $?" | tee -a "$OUT/summary.txt"
-  grep -oE '(Built|Building) [A-Za-z0-9.]+' "$OUT/build-$1.log" | awk '{print $2}' | sort -u > "$OUT/rebuilt-$1.txt"
+  local rc=0
+  lake build > "$OUT/build-$1.log" 2>&1 || rc=$?
+  echo "build $1: exit $rc" | tee -a "$OUT/summary.txt"
+  if [ "$rc" -ne 0 ]; then
+    cat "$OUT/build-$1.log" >&2
+    return "$rc"
+  fi
+  { grep -oE '(Built|Building) [A-Za-z0-9.]+' "$OUT/build-$1.log" || true; } | awk '{print $2}' | sort -u > "$OUT/rebuilt-$1.txt"
   echo "  rebuilt ($(wc -l < "$OUT/rebuilt-$1.txt" | tr -d ' ')): $(tr '\n' ' ' < "$OUT/rebuilt-$1.txt")" | tee -a "$OUT/summary.txt"
 }
-export_as() { lake exe journal export --out "$J/env-$1.jsonl" 2>&1 | grep -E 'rows from' | tee -a "$OUT/summary.txt"; }
-journal() { lake exe journal diff "$J/env-$1.jsonl" "$J/env-$2.jsonl" 2>&1 | sed -n '/^journal:/,$p' | tee "$OUT/journal-$1-$2.txt"; }
+export_as() {
+  local log="$OUT/export-$1.log"
+  lake exe journal export --out "$J/env-$1.jsonl" > "$log" 2>&1
+  grep -E 'rows from' "$log" | tee -a "$OUT/summary.txt"
+}
+journal() {
+  local log="$OUT/journal-raw-$1-$2.log"
+  lake exe journal diff "$J/env-$1.jsonl" "$J/env-$2.jsonl" > "$log" 2>&1
+  sed -n '/^journal:/,$p' "$log" | tee "$OUT/journal-$1-$2.txt"
+  [ -s "$OUT/journal-$1-$2.txt" ]
+}
 tree_state() { echo "tree $1: $(git rev-parse --short HEAD) $(git status --porcelain -- Obend Obend.lean | tr '\n' ' ')" | tee -a "$OUT/summary.txt"; }
 
 : > "$OUT/summary.txt"

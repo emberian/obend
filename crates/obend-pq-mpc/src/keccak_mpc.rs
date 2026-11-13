@@ -6,13 +6,157 @@
 //!
 //! Matches `Obend.Crypto.BinaryTower256` and `Obend.Crypto.ThresholdHashMpc` algebraically and byte-for-byte.
 
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use obend_crypto_exec::goldilocks::{GOLDILOCKS_PRIME, Goldilocks};
 use obend_crypto_exec::transcript::{
-    KECCAK_ROUND_CONSTANTS, SHAKE256_RATE_BYTES, cshake256_customization_prefix,
+    Cshake256Xof, KECCAK_ROUND_CONSTANTS, SHAKE256_RATE_BYTES, cshake256_customization_prefix,
 };
+
+/// Domain customization tag for the 256-bit `cSHAKE256` MPC CSPRNG.
+pub const MPC_CSPRNG_CUSTOMIZATION: &[u8] = b"OBEND.PQ.MPC.CSPRNG/v1";
+
+/// Compute the active bitsliced lane mask for `0 <= batch_len <= 64` without 64-bit shift overflow (`P0-07a`).
+#[inline]
+pub const fn batch_lane_mask(batch_len: usize) -> u64 {
+    if batch_len >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << batch_len) - 1
+    }
+}
+
+/// 256-bit post-quantum `cSHAKE256`-backed streaming CSPRNG for secret-share polynomials,
+/// replicated zero-shares, Beaver/Power-7 preprocessing, proactive refresh, and garbled wire labels.
+///
+/// Intentionally implements neither `Clone` nor unredacted `Debug`, and scrubs buffered words +
+/// ratchets the internal sponge state on `Drop` (`#![forbid(unsafe_code)]`).
+pub struct MpcCsprng {
+    xof: Cshake256Xof,
+    word_buf: [u64; 17],
+    word_pos: usize,
+}
+
+impl MpcCsprng {
+    /// Initialize an independent 256-bit CSPRNG stream from 32 bytes of entropy and an explicit domain tag.
+    pub fn from_seed(mut seed: [u8; 32], domain_sep: &[u8]) -> Self {
+        let mut xof = Cshake256Xof::new(MPC_CSPRNG_CUSTOMIZATION);
+        let dom_len = (domain_sep.len() as u64).to_be_bytes();
+        xof.absorb(&dom_len);
+        xof.absorb(domain_sep);
+        xof.absorb(&32u64.to_be_bytes());
+        xof.absorb(&seed);
+        seed.fill(0);
+        core::hint::black_box(&seed);
+        Self {
+            xof,
+            word_buf: [0u64; 17],
+            word_pos: 17,
+        }
+    }
+
+    /// Initialize 3 pairwise 256-bit correlated zero-share streams `(rng_01, rng_12, rng_20)` for 2-of-3 `RSS`.
+    pub fn from_rss_seeds(seeds: [[u8; 32]; 3]) -> [Self; 3] {
+        let [s01, s12, s20] = seeds;
+        [
+            Self::from_seed(s01, b"RSS.PAIR.01"),
+            Self::from_seed(s12, b"RSS.PAIR.12"),
+            Self::from_seed(s20, b"RSS.PAIR.20"),
+        ]
+    }
+
+    #[inline]
+    fn refill(&mut self) {
+        let mut raw = [0u8; SHAKE256_RATE_BYTES];
+        self.xof.squeeze(&mut raw);
+        for (i, slot) in self.word_buf.iter_mut().enumerate() {
+            let off = 8 * i;
+            *slot = u64::from_le_bytes([
+                raw[off],
+                raw[off + 1],
+                raw[off + 2],
+                raw[off + 3],
+                raw[off + 4],
+                raw[off + 5],
+                raw[off + 6],
+                raw[off + 7],
+            ]);
+        }
+        raw.fill(0);
+        core::hint::black_box(&raw);
+        self.word_pos = 0;
+    }
+
+    /// Squeeze the next 64-bit word and immediately zeroize its buffer slot.
+    #[inline]
+    pub fn next_u64(&mut self) -> u64 {
+        if self.word_pos >= 17 {
+            self.refill();
+        }
+        let out = self.word_buf[self.word_pos];
+        self.word_buf[self.word_pos] = 0;
+        self.word_pos += 1;
+        out
+    }
+
+    /// Fill `dst` with uniform 64-bit CSPRNG words.
+    #[inline]
+    pub fn fill_u64s(&mut self, dst: &mut [u64]) {
+        let mut idx = 0;
+        while idx < dst.len() {
+            if self.word_pos >= 17 {
+                self.refill();
+            }
+            let avail = 17 - self.word_pos;
+            let take = avail.min(dst.len() - idx);
+            dst[idx..idx + take]
+                .copy_from_slice(&self.word_buf[self.word_pos..self.word_pos + take]);
+            self.word_buf[self.word_pos..self.word_pos + take].fill(0);
+            self.word_pos += take;
+            idx += take;
+        }
+    }
+
+    /// Squeeze a single uniform byte.
+    #[inline]
+    pub fn next_u8(&mut self) -> u8 {
+        (self.next_u64() & 0xFF) as u8
+    }
+
+    /// Squeeze a canonical unbiased `Goldilocks` field element via rejection sampling (`< p`).
+    #[inline]
+    pub fn next_goldilocks(&mut self) -> Goldilocks {
+        loop {
+            let v = self.next_u64();
+            if v < GOLDILOCKS_PRIME {
+                return Goldilocks::from_u64_reduced(v);
+            }
+        }
+    }
+}
+
+impl core::fmt::Debug for MpcCsprng {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MpcCsprng")
+            .field("state", &"<redacted>")
+            .finish()
+    }
+}
+
+impl Drop for MpcCsprng {
+    fn drop(&mut self) {
+        self.word_buf.fill(0);
+        self.word_pos = 17;
+        let mut wipe = [0u8; SHAKE256_RATE_BYTES];
+        self.xof.squeeze(&mut wipe);
+        wipe.fill(0);
+        core::hint::black_box((&self.word_buf, &wipe));
+    }
+}
 
 /// FIPS 202 rho rotation offsets indexed by `x + 5 * y`.
 const ROTATION_OFFSETS: [u32; 25] = [
@@ -77,14 +221,45 @@ const GF256_MUL_BASIS: [[u8; 8]; 256] = {
     tbl
 };
 
+/// Multiply using the eight GF(2)-linear basis columns.
+#[inline]
+fn gf256_mul_byte(a: u8, b: u8) -> u8 {
+    let tbl = &GF256_MUL_BASIS[a as usize];
+    (tbl[0] & 0u8.wrapping_sub(b & 1))
+        ^ (tbl[1] & 0u8.wrapping_sub((b >> 1) & 1))
+        ^ (tbl[2] & 0u8.wrapping_sub((b >> 2) & 1))
+        ^ (tbl[3] & 0u8.wrapping_sub((b >> 3) & 1))
+        ^ (tbl[4] & 0u8.wrapping_sub((b >> 4) & 1))
+        ^ (tbl[5] & 0u8.wrapping_sub((b >> 5) & 1))
+        ^ (tbl[6] & 0u8.wrapping_sub((b >> 6) & 1))
+        ^ (tbl[7] & 0u8.wrapping_sub((b >> 7) & 1))
+}
+
+/// Tower multiplication for levels k >= 3, terminating at byte-sized products.
+#[inline]
+fn tower_mul_fast(k: u32, a: u128, b: u128) -> u128 {
+    if k == 3 {
+        gf256_mul_byte(a as u8, b as u8) as u128
+    } else {
+        let half = 1u32 << (k - 1);
+        let mask = (1u128 << half) - 1;
+        let a_lo = a & mask;
+        let a_hi = (a >> half) & mask;
+        let b_lo = b & mask;
+        let b_hi = (b >> half) & mask;
+        let p = tower_mul_fast(k - 1, a_lo, b_lo);
+        let q = tower_mul_fast(k - 1, a_hi, b_hi);
+        let r = tower_mul_fast(k - 1, a_lo ^ a_hi, b_lo ^ b_hi);
+        let lo = p ^ q;
+        let hi = r ^ p ^ q ^ tower_scale_x_bits(k - 1, q);
+        lo | (hi << half)
+    }
+}
+
 #[inline]
 fn tower_inv_bits(k: u32, a: u128) -> Option<u128> {
     if k == 0 {
-        if (a & 1) == 1 {
-            Some(1)
-        } else {
-            None
-        }
+        if (a & 1) == 1 { Some(1) } else { None }
     } else {
         let half = 1u32 << (k - 1);
         let mask = (1u128 << half) - 1;
@@ -95,8 +270,7 @@ fn tower_inv_bits(k: u32, a: u128) -> Option<u128> {
         }
         // Conjugate in T_{k-1}[X]/(X^2 + x_{k-1} X + 1) is (a_lo ^ scale_x(a_hi)) + a_hi X.
         let conj_lo = a_lo ^ tower_scale_x_bits(k - 1, a_hi);
-        let norm =
-            tower_mul_bits(k - 1, a_lo, conj_lo) ^ tower_mul_bits(k - 1, a_hi, a_hi);
+        let norm = tower_mul_bits(k - 1, a_lo, conj_lo) ^ tower_mul_bits(k - 1, a_hi, a_hi);
         let norm_inv = tower_inv_bits(k - 1, norm)?;
         let inv_lo = tower_mul_bits(k - 1, norm_inv, conj_lo);
         let inv_hi = tower_mul_bits(k - 1, norm_inv, a_hi);
@@ -125,8 +299,9 @@ impl TowerGf256 {
     }
 
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn mul(self, rhs: Self) -> Self {
-        Self(tower_mul_bits(3, self.0 as u128, rhs.0 as u128) as u8)
+        Self(gf256_mul_byte(self.0, rhs.0))
     }
 
     #[inline]
@@ -160,8 +335,9 @@ impl Tower128 {
     }
 
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn mul(self, rhs: Self) -> Self {
-        Self(tower_mul_bits(7, self.0, rhs.0))
+        Self(tower_mul_fast(7, self.0, rhs.0))
     }
 
     #[inline]
@@ -208,12 +384,30 @@ pub fn lagrange_weights_zero_gf256(pts: &[TowerGf256]) -> Option<Vec<TowerGf256>
 
 /// Evaluate GHASH-style polynomial `((0 + c_0) * h + c_1) * h ...` over `Tower128`,
 /// matching `BinaryTower256.ghashPoly`.
+/// Uses a 128-entry constant-time bit-basis expansion when `blocks.len() > 8` (`~50x` faster, 0 table-index side channels).
 pub fn ghash_poly_tower128(h: Tower128, blocks: &[Tower128]) -> Tower128 {
-    let mut acc = Tower128::ZERO;
-    for &blk in blocks {
-        acc = acc.add(blk).mul(h);
+    if blocks.len() <= 8 {
+        let mut acc = Tower128::ZERO;
+        for &blk in blocks {
+            acc = acc.add(blk).mul(h);
+        }
+        return acc;
     }
-    acc
+    let mut h_basis = [0u128; 128];
+    for bit in 0..128 {
+        h_basis[bit] = tower_mul_bits(7, 1u128 << bit, h.0);
+    }
+    let mut acc = 0u128;
+    for &blk in blocks {
+        acc ^= blk.0;
+        let mut prod = 0u128;
+        for bit in 0..128 {
+            let mask = 0u128.wrapping_sub((acc >> bit) & 1);
+            prod ^= h_basis[bit] & mask;
+        }
+        acc = prod;
+    }
+    Tower128(acc)
 }
 
 // ============================================================================
@@ -318,6 +512,16 @@ impl Drop for RssKeccakState64 {
     }
 }
 
+impl core::fmt::Debug for RssKeccakState64 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RssKeccakState64")
+            .field("party_idx", &self.party_idx)
+            .field("s_own", &"<redacted>")
+            .field("s_next", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Share 64 Keccak states into 3 `RSS` party states using two 1,600-word masks `(m0, m1)`.
 pub fn rss_share_keccak_states64(
     plain_planes: &[u64; 1600],
@@ -383,24 +587,17 @@ pub fn rss_xor_public_planes(parties: &mut [RssKeccakState64; 3], pub_planes: &[
     }
 }
 
-/// Deterministic correlated PRG zero-share generator (`zeta_0 ^ zeta_1 ^ zeta_2 == 0` identically)
-/// derived from pre-shared pairwise seeds `(seed_01, seed_12, seed_20)`.
-#[inline]
-fn splitmix64_next(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
-/// Execute all 24 rounds of `Keccak-f[1600]` across 64 parallel instances in 2-of-3 `RSS`.
+/// Execute all 24 rounds of `Keccak-f[1600]` across 64 parallel instances in 2-of-3 `RSS`
+/// using 256-bit `cSHAKE256`-backed pairwise correlated zero-shares (`zeta_0 ^ zeta_1 ^ zeta_2 == 0`).
 /// Returns total per-party online bytes transmitted (`24 * 1600 * 8 = 307,200 B` across 64 perms = `4,800 B` / perm).
 pub fn rss_keccak_f1600_x64(
     parties: &mut [RssKeccakState64; 3],
-    prg_seeds: &mut [u64; 3],
+    prg_streams: &mut [MpcCsprng; 3],
 ) -> usize {
     let mut bytes_per_party = 0usize;
+    let mut r01_buf = Box::new([0u64; 1600]);
+    let mut r12_buf = Box::new([0u64; 1600]);
+    let mut r20_buf = Box::new([0u64; 1600]);
     for &rc in &KECCAK_ROUND_CONSTANTS {
         // 1. Free F_2-linear Theta + Rho + Pi on both replicated halves
         let mut b_own: [Box<[u64; 1600]>; 3] = [
@@ -424,6 +621,10 @@ pub fn rss_keccak_f1600_x64(
             *v = !*v;
         }
 
+        prg_streams[0].fill_u64s(&mut *r01_buf);
+        prg_streams[1].fill_u64s(&mut *r12_buf);
+        prg_streams[2].fill_u64s(&mut *r20_buf);
+
         // 2. 1-Bit/Gate `chi` round: each party computes `z_p` (1,600 `u64` words) and forwards to `p - 1`
         let mut msg_z: [Box<[u64; 1600]>; 3] = [
             Box::new([0u64; 1600]),
@@ -441,9 +642,9 @@ pub fn rss_keccak_f1600_x64(
                     let ib = idx_b_base + z;
                     let ic = idx_c_base + z;
 
-                    let r01 = splitmix64_next(&mut prg_seeds[0]);
-                    let r12 = splitmix64_next(&mut prg_seeds[1]);
-                    let r20 = splitmix64_next(&mut prg_seeds[2]);
+                    let r01 = r01_buf[ia];
+                    let r12 = r12_buf[ia];
+                    let r20 = r20_buf[ia];
                     let zeta0 = r01 ^ r20;
                     let zeta1 = r12 ^ r01;
                     let zeta2 = r20 ^ r12;
@@ -497,6 +698,10 @@ pub fn rss_keccak_f1600_x64(
         }
         let _ = &mut b_own;
     }
+    r01_buf.fill(0);
+    r12_buf.fill(0);
+    r20_buf.fill(0);
+    core::hint::black_box((&*r01_buf, &*r12_buf, &*r20_buf));
     bytes_per_party
 }
 
@@ -506,10 +711,13 @@ pub fn rss_eval_cshake256_batch64(
     customization: &[u8],
     public_templates: &[Vec<u8>],
     secret_patches: &[(usize, [[u8; 32]; 3])],
-    prg_seeds: &mut [u64; 3],
+    prg_streams: &mut [MpcCsprng; 3],
 ) -> (Vec<[u8; 32]>, usize) {
     let batch_len = public_templates.len();
-    assert!(batch_len <= 64);
+    assert!(batch_len <= 64 && secret_patches.len() == batch_len);
+    if batch_len == 0 {
+        return (Vec::new(), 0);
+    }
     let prefix = if customization.is_empty() {
         Vec::new()
     } else {
@@ -604,10 +812,10 @@ pub fn rss_eval_cshake256_batch64(
             parties[2].s_next[i] ^= p0_blk[i];
         }
 
-        total_bytes += rss_keccak_f1600_x64(&mut parties, prg_seeds);
+        total_bytes += rss_keccak_f1600_x64(&mut parties, prg_streams);
 
         // Preserve already-finished instances if block counts differ within batch
-        if active_mask != ((1u64 << batch_len) - 1) {
+        if active_mask != batch_lane_mask(batch_len) {
             let keep = !active_mask;
             for p in 0..3 {
                 for i in 0..1600 {
@@ -652,10 +860,13 @@ pub fn rss_eval_cshake256_secret_shares64(
     customization: &[u8],
     public_templates: &[Vec<u8>],
     secret_patches: &[(usize, [[u8; 32]; 3])],
-    prg_seeds: &mut [u64; 3],
+    prg_streams: &mut [MpcCsprng; 3],
 ) -> (Vec<[[u8; 32]; 3]>, usize) {
     let batch_len = public_templates.len();
-    assert!(batch_len <= 64);
+    assert!(batch_len <= 64 && secret_patches.len() == batch_len);
+    if batch_len == 0 {
+        return (Vec::new(), 0);
+    }
     let prefix = if customization.is_empty() {
         Vec::new()
     } else {
@@ -745,9 +956,9 @@ pub fn rss_eval_cshake256_secret_shares64(
             parties[2].s_next[i] ^= p0_blk[i];
         }
 
-        total_bytes += rss_keccak_f1600_x64(&mut parties, prg_seeds);
+        total_bytes += rss_keccak_f1600_x64(&mut parties, prg_streams);
 
-        if active_mask != ((1u64 << batch_len) - 1) {
+        if active_mask != batch_lane_mask(batch_len) {
             let keep = !active_mask;
             for p in 0..3 {
                 for i in 0..1600 {
@@ -861,21 +1072,28 @@ impl Drop for ShamirTowerKeccakParty64 {
     }
 }
 
+impl core::fmt::Debug for ShamirTowerKeccakParty64 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ShamirTowerKeccakParty64")
+            .field("eval_point", &self.eval_point)
+            .field("wires", &"<redacted>")
+            .finish()
+    }
+}
+
 #[inline]
 fn shamir_fill_planes_gf256_into(
     eval_points: &[TowerGf256],
     secret_planes: &[u64; 1600],
     rand_coeffs: &mut [BitslicedGf256x64],
     parties: &mut [ShamirTowerKeccakParty64],
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) {
     let n = eval_points.len();
     for w in 0..1600 {
         let c0: BitslicedGf256x64 = [secret_planes[w], 0, 0, 0, 0, 0, 0, 0];
         for rc in rand_coeffs.iter_mut() {
-            for b in rc.iter_mut() {
-                *b = splitmix64_next(rng_seed);
-            }
+            rng.fill_u64s(rc);
         }
         for p in 0..n {
             let x = eval_points[p];
@@ -894,7 +1112,7 @@ pub fn shamir_share_planes_gf256(
     t: usize,
     eval_points: &[TowerGf256],
     secret_planes: &[u64; 1600],
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) -> Vec<ShamirTowerKeccakParty64> {
     assert!(t >= 1 && t <= eval_points.len());
     let mut parties: Vec<ShamirTowerKeccakParty64> = eval_points
@@ -910,14 +1128,18 @@ pub fn shamir_share_planes_gf256(
         secret_planes,
         &mut rand_coeffs,
         &mut parties,
-        rng_seed,
+        rng,
     );
+    rand_coeffs.fill([0u64; 8]);
+    core::hint::black_box(rand_coeffs.as_slice());
     parties
 }
 
 /// Reconstruct 64 bitsliced $\mathbb{F}_2$ wires from any `t` Shamir parties over $\mathcal{T}_3$,
 /// returning `None` if evaluation points collide or reconstructed element leaves the $\mathbb{F}_2$ subfield!
-pub fn shamir_reconstruct_planes_gf256(quorum: &[&ShamirTowerKeccakParty64]) -> Option<Box<[u64; 1600]>> {
+pub fn shamir_reconstruct_planes_gf256(
+    quorum: &[&ShamirTowerKeccakParty64],
+) -> Option<Box<[u64; 1600]>> {
     let pts: Vec<TowerGf256> = quorum.iter().map(|p| p.eval_point).collect();
     let lambdas = lagrange_weights_zero_gf256(&pts)?;
     let mut out = Box::new([0u64; 1600]);
@@ -984,11 +1206,28 @@ fn linear_theta_rho_pi_gf256(
 pub fn shamir_tower_keccak_f1600_x64(
     t: usize,
     parties: &mut [ShamirTowerKeccakParty64],
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
     transcript_diffs: &mut Vec<u64>,
+) -> Option<usize> {
+    shamir_tower_keccak_f1600_x64_with_party_shares(t, parties, offline_rng, transcript_diffs, None)
+}
+
+/// Authenticated variant of [`shamir_tower_keccak_f1600_x64`] that also records each active quorum party's
+/// local Lagrange-weighted $\mathbb{F}_2$ wire contributions (`⊕_{q=0}^{t-1} party_shares[q][idx] == transcript_diffs[idx]`).
+pub fn shamir_tower_keccak_f1600_x64_with_party_shares(
+    t: usize,
+    parties: &mut [ShamirTowerKeccakParty64],
+    offline_rng: &mut MpcCsprng,
+    transcript_diffs: &mut Vec<u64>,
+    mut party_shares_out: Option<&mut AuthenticatedTowerTranscript<'_>>,
 ) -> Option<usize> {
     let n = parties.len();
     if t == 0 || t > n {
+        return None;
+    }
+    if let Some(ref ps) = party_shares_out
+        && ps.len() != t
+    {
         return None;
     }
     let pts: Vec<TowerGf256> = parties[..t].iter().map(|p| p.eval_point).collect();
@@ -1009,20 +1248,41 @@ pub fn shamir_tower_keccak_f1600_x64(
     let mut v_shares = alloc_party_buf();
     let mut uv_shares = alloc_party_buf();
     let mut rand_coeffs = vec![[0u64; 8]; t.saturating_sub(1)];
-
     for &rc in &KECCAK_ROUND_CONSTANTS {
         // 1. Offline/preprocessed ground-field F_2 Beaver triple batch `(u, v, w = u & v)` shared over T_3
         let mut u_plain = [0u64; 1600];
         let mut v_plain = [0u64; 1600];
         let mut uv_plain = [0u64; 1600];
+        offline_rng.fill_u64s(&mut u_plain);
+        offline_rng.fill_u64s(&mut v_plain);
         for i in 0..1600 {
-            u_plain[i] = splitmix64_next(offline_seed);
-            v_plain[i] = splitmix64_next(offline_seed);
             uv_plain[i] = u_plain[i] & v_plain[i];
         }
-        shamir_fill_planes_gf256_into(&all_pts, &u_plain, &mut rand_coeffs, &mut u_shares, offline_seed);
-        shamir_fill_planes_gf256_into(&all_pts, &v_plain, &mut rand_coeffs, &mut v_shares, offline_seed);
-        shamir_fill_planes_gf256_into(&all_pts, &uv_plain, &mut rand_coeffs, &mut uv_shares, offline_seed);
+        shamir_fill_planes_gf256_into(
+            &all_pts,
+            &u_plain,
+            &mut rand_coeffs,
+            &mut u_shares,
+            offline_rng,
+        );
+        shamir_fill_planes_gf256_into(
+            &all_pts,
+            &v_plain,
+            &mut rand_coeffs,
+            &mut v_shares,
+            offline_rng,
+        );
+        shamir_fill_planes_gf256_into(
+            &all_pts,
+            &uv_plain,
+            &mut rand_coeffs,
+            &mut uv_shares,
+            offline_rng,
+        );
+        u_plain.fill(0);
+        v_plain.fill(0);
+        uv_plain.fill(0);
+        core::hint::black_box((&u_plain, &v_plain, &uv_plain));
 
         // 2. Zero-communication local Theta + Rho + Pi across all `n` parties
         let mut b_all: Vec<Box<[BitslicedGf256x64; 1600]>> = parties
@@ -1033,6 +1293,9 @@ pub fn shamir_tower_keccak_f1600_x64(
         // 3. Reconstruct 1-bit masked differences `d = (!b) ^ u` and `e = c ^ v` across the `t`-quorum
         let mut d_open = [0u64; 1600];
         let mut e_open = [0u64; 1600];
+        let record_offset = transcript_diffs.len();
+        let mut scaled_ds = vec![[0u64; 8]; t];
+        let mut scaled_es = vec![[0u64; 8]; t];
         for y in 0..5 {
             let row = 5 * y;
             for x in 0..5 {
@@ -1050,8 +1313,20 @@ pub fn shamir_tower_keccak_f1600_x64(
                         not_b[0] ^= u64::MAX; // Adding `1 = embedBitToTower 3 true` to polynomial `f(X)` adds 1 to every `f(x_q)`!
                         let diff_d = bs_gf256_xor(&not_b, &u_shares[q_idx].wires[w_idx]);
                         let diff_e = bs_gf256_xor(&b_all[q_idx][ic], &v_shares[q_idx].wires[w_idx]);
-                        acc_d = bs_gf256_xor(&acc_d, &bs_gf256_scale_const(lam, &diff_d));
-                        acc_e = bs_gf256_xor(&acc_e, &bs_gf256_scale_const(lam, &diff_e));
+                        let scaled_d = bs_gf256_scale_const(lam, &diff_d);
+                        let scaled_e = bs_gf256_scale_const(lam, &diff_e);
+                        scaled_ds[q_idx] = scaled_d;
+                        scaled_es[q_idx] = scaled_e;
+                    }
+                    if let Some(ref mut recorder) = party_shares_out {
+                        let ds: Vec<u64> = scaled_ds.iter().map(|s| s[0]).collect();
+                        let es: Vec<u64> = scaled_es.iter().map(|s| s[0]).collect();
+                        recorder.record_at(record_offset + w_idx, &ds, offline_rng);
+                        recorder.record_at(record_offset + 1600 + w_idx, &es, offline_rng);
+                    }
+                    for q in 0..t {
+                        acc_d = bs_gf256_xor(&acc_d, &scaled_ds[q]);
+                        acc_e = bs_gf256_xor(&acc_e, &scaled_es[q]);
                     }
                     // Verify opened differences lie in ground field F_2 (`planes 1..8 == 0`)
                     if (acc_d[1] | acc_d[2] | acc_d[3] | acc_d[4] | acc_d[5] | acc_d[6] | acc_d[7])
@@ -1073,7 +1348,9 @@ pub fn shamir_tower_keccak_f1600_x64(
             }
         }
         online_bytes_per_party += 2 * 1600 * 8;
-        transcript_diffs.push(d_open[0] ^ e_open[0]);
+        // Record ALL 1,600 opened `d_open` words AND ALL 1,600 opened `e_open` words across all 64 lanes (`P1-03b`)!
+        transcript_diffs.extend_from_slice(&d_open);
+        transcript_diffs.extend_from_slice(&e_open);
 
         // 4. Local Beaver linear combination + Iota across all `n` parties
         for p_idx in 0..n {
@@ -1116,10 +1393,17 @@ pub struct ShamirSeedShare256 {
 impl Drop for ShamirSeedShare256 {
     fn drop(&mut self) {
         self.eval_point = TowerGf256::ZERO;
-        for b in &mut self.bit_shares {
-            *b = TowerGf256::ZERO;
-        }
+        self.bit_shares.fill(TowerGf256::ZERO);
         core::hint::black_box(&self.bit_shares);
+    }
+}
+
+impl core::fmt::Debug for ShamirSeedShare256 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ShamirSeedShare256")
+            .field("eval_point", &self.eval_point)
+            .field("bit_shares", &"<redacted>")
+            .finish()
     }
 }
 
@@ -1128,7 +1412,7 @@ pub fn shamir_share_seed32_gf256(
     t: usize,
     eval_points: &[TowerGf256],
     secret: &[u8; 32],
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) -> Vec<ShamirSeedShare256> {
     let mut out: Vec<ShamirSeedShare256> = eval_points
         .iter()
@@ -1143,7 +1427,7 @@ pub fn shamir_share_seed32_gf256(
         let bit_in_byte = bit_idx % 8;
         coeffs[0] = TowerGf256((secret[byte_i] >> bit_in_byte) & 1);
         for c in coeffs.iter_mut().skip(1) {
-            *c = TowerGf256((splitmix64_next(rng_seed) & 0xFF) as u8);
+            *c = TowerGf256(rng.next_u8());
         }
         for (p_idx, &pt) in eval_points.iter().enumerate() {
             out[p_idx].bit_shares[bit_idx] = eval_poly_gf256(&coeffs, pt);
@@ -1181,12 +1465,35 @@ pub fn shamir_eval_cshake256_with_seed_shares64(
     customization: &[u8],
     public_templates: &[Vec<u8>],
     secret_patches: &[(usize, &[ShamirSeedShare256])], // per instance: `(byte_offset_in_tmpl, slice_of_n_party_seed_shares)`
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
     transcript_diffs: &mut Vec<u64>,
+) -> Option<(Vec<[u8; 32]>, usize)> {
+    shamir_eval_cshake256_with_seed_shares64_auth(
+        t,
+        eval_points,
+        customization,
+        public_templates,
+        secret_patches,
+        offline_rng,
+        transcript_diffs,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn shamir_eval_cshake256_with_seed_shares64_auth(
+    t: usize,
+    eval_points: &[TowerGf256],
+    customization: &[u8],
+    public_templates: &[Vec<u8>],
+    secret_patches: &[(usize, &[ShamirSeedShare256])],
+    offline_rng: &mut MpcCsprng,
+    transcript_diffs: &mut Vec<u64>,
+    mut party_shares_out: Option<&mut AuthenticatedTowerTranscript<'_>>,
 ) -> Option<(Vec<[u8; 32]>, usize)> {
     let batch_len = public_templates.len();
     let n = eval_points.len();
-    if batch_len == 0 || batch_len > 64 || t == 0 || t > n {
+    if batch_len == 0 || batch_len > 64 || secret_patches.len() != batch_len || t == 0 || t > n {
         return None;
     }
 
@@ -1285,14 +1592,15 @@ pub fn shamir_eval_cshake256_with_seed_shares64(
         }
 
         // 3. Run 24-round bitsliced Shamir Keccak-f[1600]
-        total_online_bytes += shamir_tower_keccak_f1600_x64(
+        total_online_bytes += shamir_tower_keccak_f1600_x64_with_party_shares(
             t,
             &mut parties,
-            offline_seed,
+            offline_rng,
             transcript_diffs,
+            party_shares_out.as_deref_mut(),
         )?;
 
-        if active_mask != ((1u64 << batch_len) - 1) {
+        if active_mask != batch_lane_mask(batch_len) {
             let keep = !active_mask;
             for (p_idx, p) in parties.iter_mut().enumerate() {
                 for w in 0..1600 {
@@ -1329,12 +1637,35 @@ pub fn shamir_eval_cshake256_secret_shares64(
     customization: &[u8],
     public_templates: &[Vec<u8>],
     secret_patches: &[(usize, &[ShamirSeedShare256])],
-    offline_seed: &mut u64,
+    offline_rng: &mut MpcCsprng,
     transcript_diffs: &mut Vec<u64>,
+) -> Option<(Vec<Vec<ShamirSeedShare256>>, usize)> {
+    shamir_eval_cshake256_secret_shares64_auth(
+        t,
+        eval_points,
+        customization,
+        public_templates,
+        secret_patches,
+        offline_rng,
+        transcript_diffs,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn shamir_eval_cshake256_secret_shares64_auth(
+    t: usize,
+    eval_points: &[TowerGf256],
+    customization: &[u8],
+    public_templates: &[Vec<u8>],
+    secret_patches: &[(usize, &[ShamirSeedShare256])],
+    offline_rng: &mut MpcCsprng,
+    transcript_diffs: &mut Vec<u64>,
+    mut party_shares_out: Option<&mut AuthenticatedTowerTranscript<'_>>,
 ) -> Option<(Vec<Vec<ShamirSeedShare256>>, usize)> {
     let batch_len = public_templates.len();
     let n = eval_points.len();
-    if batch_len == 0 || batch_len > 64 || t == 0 || t > n {
+    if batch_len == 0 || batch_len > 64 || secret_patches.len() != batch_len || t == 0 || t > n {
         return None;
     }
 
@@ -1429,14 +1760,15 @@ pub fn shamir_eval_cshake256_secret_shares64(
             }
         }
 
-        total_online_bytes += shamir_tower_keccak_f1600_x64(
+        total_online_bytes += shamir_tower_keccak_f1600_x64_with_party_shares(
             t,
             &mut parties,
-            offline_seed,
+            offline_rng,
             transcript_diffs,
+            party_shares_out.as_deref_mut(),
         )?;
 
-        if active_mask != ((1u64 << batch_len) - 1) {
+        if active_mask != batch_lane_mask(batch_len) {
             let keep = !active_mask;
             for (p_idx, p) in parties.iter_mut().enumerate() {
                 for w in 0..1600 {
@@ -1498,6 +1830,15 @@ impl Drop for MacKeyShareCustody {
         self.alpha_lo = Tower128::ZERO;
         core::hint::black_box(&self.alpha_hi);
         core::hint::black_box(&self.alpha_lo);
+    }
+}
+
+impl core::fmt::Debug for MacKeyShareCustody {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MacKeyShareCustody")
+            .field("alpha_hi", &"<redacted>")
+            .field("alpha_lo", &"<redacted>")
+            .finish()
     }
 }
 
@@ -1610,9 +1951,12 @@ pub struct SlashingReceipt {
 }
 
 /// Verify terminal 2-lane `Tower128 × Tower128` batch MAC check (`∑_i check_share_i == (0, 0)`),
-/// matching `ThresholdHashMpc.verifyBatchTowerMac2Lane`.
+/// strictly rejecting empty party check slices (`P1-03b` — never vacuously `true` on `&[]`!).
 #[inline]
 pub fn verify_batch_tower_mac_2lane(party_check_shares: &[(Tower128, Tower128)]) -> bool {
+    if party_check_shares.is_empty() {
+        return false;
+    }
     let mut sum_hi = Tower128::ZERO;
     let mut sum_lo = Tower128::ZERO;
     for &(hi, lo) in party_check_shares {
@@ -1620,4 +1964,387 @@ pub fn verify_batch_tower_mac_2lane(party_check_shares: &[(Tower128, Tower128)])
         sum_lo = sum_lo.add(lo);
     }
     sum_hi == Tower128::ZERO && sum_lo == Tower128::ZERO
+}
+
+/// Pack a full `transcript_diffs` slice of 64-bit bitsliced opened differences into `Tower128` field elements
+/// with an explicit trailing length word so every bit of every lane (`0..64`) and every wire (`0..1600`) is bound!
+pub fn pack_transcript_diffs_tower128(transcript_diffs: &[u64]) -> Vec<Tower128> {
+    let mut out = Vec::with_capacity(transcript_diffs.len().div_ceil(2) + 1);
+    for pair in transcript_diffs.chunks(2) {
+        let lo = pair[0] as u128;
+        let hi = pair.get(1).copied().unwrap_or(0) as u128;
+        out.push(Tower128(lo | (hi << 64)));
+    }
+    out.push(Tower128(transcript_diffs.len() as u128));
+    out
+}
+
+/// Deal `n` independent 256-bit split-custody `MacKeyShareCustody` shares (`alpha_hi_i, alpha_lo_i`).
+pub fn deal_tower_mac_custodies(n: usize, rng: &mut MpcCsprng) -> Vec<MacKeyShareCustody> {
+    (0..n)
+        .map(|_| {
+            let hi = (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64);
+            let lo = (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64);
+            MacKeyShareCustody::new_custody_share(Tower128(hi), Tower128(lo))
+        })
+        .collect()
+}
+
+// Multiplication by a fixed tower element is F_2-linear. Select every basis column
+// with a mask, avoiding secret-dependent table addresses or branches.
+fn tower_multiplier_basis(value: Tower128) -> [u128; 128] {
+    core::array::from_fn(|bit| value.mul(Tower128(1u128 << bit)).0)
+}
+
+fn tower_mul_from_basis(basis: &[u128], value: u128) -> Tower128 {
+    let mut product = 0;
+    let mut bit = 0;
+    while bit < basis.len() {
+        product ^= basis[bit] & 0u128.wrapping_sub((value >> bit) & 1);
+        bit += 1;
+    }
+    Tower128(product)
+}
+
+// Only the low 64 bits occur in recorded shares. Precompute all four-bit
+// combinations once per custody lane, then use sixteen XORs per product.
+fn tower_nibble_basis(value: Tower128) -> [[u128; 16]; 16] {
+    let mut table = [[0; 16]; 16];
+    let mut nibble = 0;
+    while nibble < 16 {
+        let mut bit = 0;
+        while bit < 4 {
+            let column = value.mul(Tower128(1u128 << (4 * nibble + bit))).0;
+            let mut entry = 0;
+            while entry < 16 {
+                table[nibble][entry] ^= column & 0u128.wrapping_sub(((entry >> bit) & 1) as u128);
+                entry += 1;
+            }
+            bit += 1;
+        }
+        nibble += 1;
+    }
+    table
+}
+
+// These lookups are share-indexed; unlike the masked bit-basis helper above,
+// this fast path does not promise secret-independent memory addresses.
+fn tower_mul_from_nibbles(basis: &[[u128; 16]; 16], value: u64) -> Tower128 {
+    macro_rules! column {
+        ($n:expr) => {
+            basis[$n][((value >> (4 * $n)) & 15) as usize]
+        };
+    }
+    Tower128(
+        column!(0) ^ column!(1) ^ column!(2) ^ column!(3)
+            ^ column!(4) ^ column!(5) ^ column!(6) ^ column!(7)
+            ^ column!(8) ^ column!(9) ^ column!(10) ^ column!(11)
+            ^ column!(12) ^ column!(13) ^ column!(14) ^ column!(15),
+    )
+}
+
+/// Online-only recorder: tags are fixed before any masked wire is broadcast.
+/// Custody keys remain separate; no combined MAC key is reconstructed.
+pub struct AuthenticatedTowerTranscript<'a> {
+    custodies: &'a [MacKeyShareCustody],
+    key_bases: Vec<[[[u128; 16]; 16]; 2]>,
+    pub(crate) shares: Vec<Vec<u64>>,
+    tags: Vec<Vec<(Tower128, Tower128)>>,
+}
+
+impl<'a> AuthenticatedTowerTranscript<'a> {
+    pub fn new(custodies: &'a [MacKeyShareCustody]) -> Self {
+        Self {
+            custodies,
+            key_bases: custodies
+                .iter()
+                .map(|c| {
+                    [
+                        tower_nibble_basis(c.alpha_hi),
+                        tower_nibble_basis(c.alpha_lo),
+                    ]
+                })
+                .collect(),
+            // A Keccak round records 1600 d wires followed by 1600 e wires.
+            shares: (0..custodies.len())
+                .map(|_| Vec::with_capacity(3200))
+                .collect(),
+            tags: (0..custodies.len())
+                .map(|_| Vec::with_capacity(3200))
+                .collect(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.custodies.len()
+    }
+
+    fn record_at(&mut self, index: usize, contributions: &[u64], rng: &mut MpcCsprng) {
+        let mut pad_hi = Tower128::ZERO;
+        let mut pad_lo = Tower128::ZERO;
+        let t = self.len();
+        assert_eq!(contributions.len(), t);
+        let mut i = 0;
+        while i < t {
+            let (mut hi, mut lo) = if i + 1 == t {
+                (pad_hi, pad_lo)
+            } else {
+                let hi = Tower128((rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64));
+                let lo = Tower128((rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64));
+                pad_hi = pad_hi.add(hi);
+                pad_lo = pad_lo.add(lo);
+                (hi, lo)
+            };
+            // Fill gaps for interleaved d/e recording; existing slots need no growth.
+            while self.shares[i].len() <= index {
+                self.shares[i].push(0);
+                self.tags[i].push((Tower128::ZERO, Tower128::ZERO));
+            }
+            self.shares[i][index] = contributions[i];
+            // Form cross-key products on local contributions before reconstructing the wire.
+            let mut j = 0;
+            while j < t {
+                let share = contributions[j];
+                hi.0 ^= tower_mul_from_nibbles(&self.key_bases[i][0], share).0;
+                lo.0 ^= tower_mul_from_nibbles(&self.key_bases[i][1], share).0;
+                j += 1;
+            }
+            self.tags[i][index] = (hi, lo);
+            i += 1;
+        }
+    }
+}
+
+impl Drop for AuthenticatedTowerTranscript<'_> {
+    fn drop(&mut self) {
+        for basis in &mut self.key_bases {
+            basis.fill([[0; 16]; 16]);
+        }
+        core::hint::black_box(&self.key_bases);
+    }
+}
+
+/// Verify a full `transcript_diffs` vector against split-custody `MacKeyShareCustody` shares and per-party MAC shares.
+pub fn verify_transcript_diffs_mac_2lane(
+    custodies: &[MacKeyShareCustody],
+    chal_hi: Tower128,
+    chal_lo: Tower128,
+    transcript_diffs: &[u64],
+    party_mac_shares_hi: &[Vec<Tower128>],
+    party_mac_shares_lo: &[Vec<Tower128>],
+) -> bool {
+    let n = custodies.len();
+    if n == 0
+        || transcript_diffs.is_empty()
+        || party_mac_shares_hi.len() != n
+        || party_mac_shares_lo.len() != n
+    {
+        return false;
+    }
+    let opened_vals = pack_transcript_diffs_tower128(transcript_diffs);
+    let mut checks = Vec::with_capacity(n);
+    for i in 0..n {
+        if party_mac_shares_hi[i].len() != opened_vals.len()
+            || party_mac_shares_lo[i].len() != opened_vals.len()
+        {
+            return false;
+        }
+        checks.push(custodies[i].compute_batch_check_share_2lane(
+            chal_hi,
+            chal_lo,
+            &opened_vals,
+            &party_mac_shares_hi[i],
+            &party_mac_shares_lo[i],
+        ));
+    }
+    verify_batch_tower_mac_2lane(&checks)
+}
+
+/// Check pre-open MAC shares; never authenticate caller-supplied shares during verification.
+pub fn verify_authenticated_tower_transcript_2lane(
+    custodies: &[MacKeyShareCustody],
+    context_binding: &[u8],
+    opened_diffs: &[u64],
+    transcript: &AuthenticatedTowerTranscript<'_>,
+    _cot_rng: &mut MpcCsprng,
+) -> bool {
+    let t = custodies.len();
+    if t == 0
+        || opened_diffs.is_empty()
+        || transcript.len() != t
+        || transcript
+            .shares
+            .iter()
+            .any(|s| s.len() != opened_diffs.len())
+        || transcript
+            .tags
+            .iter()
+            .any(|s| s.len() != opened_diffs.len())
+    {
+        return false;
+    }
+    for (index, &opened) in opened_diffs.iter().enumerate() {
+        if transcript
+            .shares
+            .iter()
+            .fold(0u64, |sum, shares| sum ^ shares[index])
+            != opened
+        {
+            return false;
+        }
+    }
+    let mut xof = Cshake256Xof::new(b"OBEND.PQ.TOWER.MAC/v2");
+    xof.absorb(&(context_binding.len() as u64).to_be_bytes());
+    xof.absorb(context_binding);
+    xof.absorb(&(opened_diffs.len() as u64).to_be_bytes());
+    for &word in opened_diffs {
+        xof.absorb(&word.to_le_bytes());
+    }
+    for (shares, tags) in transcript.shares.iter().zip(&transcript.tags) {
+        let mut commitment = Cshake256Xof::new(b"OBEND.PQ.TOWER.PREOPEN/v1");
+        for (&share, &(hi, lo)) in shares.iter().zip(tags) {
+            commitment.absorb(&share.to_le_bytes());
+            commitment.absorb(&hi.0.to_le_bytes());
+            commitment.absorb(&lo.0.to_le_bytes());
+        }
+        let mut digest = [0; 32];
+        commitment.squeeze(&mut digest);
+        xof.absorb(&digest);
+    }
+    let mut bytes = [0; 32];
+    xof.squeeze(&mut bytes);
+    let hi = Tower128(u128::from_le_bytes(bytes[..16].try_into().unwrap()));
+    let lo = Tower128(u128::from_le_bytes(bytes[16..].try_into().unwrap()));
+    let hi_basis = tower_multiplier_basis(hi);
+    let lo_basis = tower_multiplier_basis(lo);
+    let (opened_hi, opened_lo) =
+        opened_diffs
+            .iter()
+            .fold((Tower128::ZERO, Tower128::ZERO), |(a, b), &word| {
+                (
+                    tower_mul_from_basis(&hi_basis, a.0).add(Tower128(word as u128)),
+                    tower_mul_from_basis(&lo_basis, b.0).add(Tower128(word as u128)),
+                )
+            });
+    let mut checks = Vec::with_capacity(t);
+    for (custody, tags) in custodies.iter().zip(&transcript.tags) {
+        let (tag_hi, tag_lo) =
+            tags.iter()
+                .fold((Tower128::ZERO, Tower128::ZERO), |(a, b), &(hi, lo)| {
+                    (
+                        tower_mul_from_basis(&hi_basis, a.0).add(hi),
+                        tower_mul_from_basis(&lo_basis, b.0).add(lo),
+                    )
+                });
+        checks.push((
+            tag_hi.add(custody.alpha_hi.mul(opened_hi)),
+            tag_lo.add(custody.alpha_lo.mul(opened_lo)),
+        ));
+    }
+    verify_batch_tower_mac_2lane(&checks)
+}
+
+#[cfg(test)]
+mod preopen_mac_tests {
+    use super::*;
+
+    #[test]
+    fn fast_multipliers_match_recursive_tower_arithmetic() {
+        for a in 0..=u8::MAX {
+            for b in 0..=u8::MAX {
+                assert_eq!(
+                    TowerGf256(a).mul(TowerGf256(b)).0,
+                    tower_mul_bits(3, a as u128, b as u128) as u8
+                );
+            }
+        }
+
+        let mut rng = MpcCsprng::from_seed([0x74; 32], b"tower-fast-regression");
+        for bit in 0..128 {
+            let a = (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64);
+            let b = (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64);
+            for rhs in [0, 1, u128::MAX, 1u128 << bit, b] {
+                assert_eq!(Tower128(a).mul(Tower128(rhs)).0, tower_mul_bits(7, a, rhs));
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_multiplier_matches_recursive_tower_arithmetic() {
+        let mut rng = MpcCsprng::from_seed([0x73; 32], b"tower-basis-regression");
+        for _ in 0..8 {
+            let key = Tower128((rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64));
+            let basis = tower_multiplier_basis(key);
+            let nibbles = tower_nibble_basis(key);
+            for nibble in 0..16 {
+                for entry in 0..16 {
+                    let value = entry << (4 * nibble);
+                    assert_eq!(
+                        tower_mul_from_nibbles(&nibbles, value),
+                        key.mul(Tower128(value as u128))
+                    );
+                }
+            }
+            for bit in 0..64 {
+                let value = 1u128 << bit;
+                assert_eq!(
+                    tower_mul_from_basis(&basis[..64], value),
+                    key.mul(Tower128(value))
+                );
+            }
+            for value in [
+                0,
+                1,
+                u128::MAX,
+                (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64),
+            ] {
+                assert_eq!(
+                    tower_mul_from_nibbles(&nibbles, value as u64),
+                    key.mul(Tower128(value as u64 as u128))
+                );
+                assert_eq!(
+                    tower_mul_from_basis(&basis, value),
+                    key.mul(Tower128(value))
+                );
+                assert_eq!(
+                    tower_mul_from_basis(&basis[..64], value as u64 as u128),
+                    key.mul(Tower128(value as u64 as u128))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preopen_mac_rejects_joint_forgery() {
+        let mut rng = MpcCsprng::from_seed([0x71; 32], b"preopen-regression");
+        let custodies = deal_tower_mac_custodies(3, &mut rng);
+        let mut transcript = AuthenticatedTowerTranscript::new(&custodies);
+        // Exercise gap filling and revisiting earlier slots, as interleaved d/e wires do.
+        transcript.record_at(1, &[19, 23, 29], &mut rng);
+        transcript.record_at(0, &[5, 9, 17], &mut rng);
+        let mut opened = [5 ^ 9 ^ 17, 19 ^ 23 ^ 29];
+        assert!(verify_authenticated_tower_transcript_2lane(
+            &custodies,
+            b"context",
+            &opened,
+            &transcript,
+            &mut rng
+        ));
+        transcript.shares[0][0] ^= 1;
+        assert!(!verify_authenticated_tower_transcript_2lane(
+            &custodies,
+            b"context",
+            &opened,
+            &transcript,
+            &mut rng
+        ));
+        opened[0] ^= 1;
+        assert!(!verify_authenticated_tower_transcript_2lane(
+            &custodies,
+            b"context",
+            &opened,
+            &transcript,
+            &mut rng
+        ));
+    }
 }

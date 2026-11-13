@@ -163,8 +163,9 @@ impl FastReceiptProfile {
         )
         .expect("valid PrimeField UDR CanopyParams");
         // 2^8 = 256 Goldilocks elements = 1024 16-bit limbs = 16 RingElems (degree 64)
-        let lattice_params = LatticeParams::expand_from_seed(*b"OBEND.AMEND.LATTICE.CRS.SEED/v01", 2, 16)
-            .expect("valid R_q64 LatticeParams (2x16)");
+        let lattice_params =
+            LatticeParams::expand_from_seed(*b"OBEND.AMEND.LATTICE.CRS.SEED/v01", 2, 16)
+                .expect("valid R_q64 LatticeParams (2x16)");
         Self {
             num_vars: 8,
             canopy_params,
@@ -176,8 +177,9 @@ impl FastReceiptProfile {
     pub fn query_128bit_v10() -> Self {
         let canopy_params = CanopyParams::default_128bit();
         // 2^10 = 1024 Goldilocks elements = 4096 16-bit limbs = 64 RingElems (degree 64)
-        let lattice_params = LatticeParams::expand_from_seed(*b"OBEND.AMEND.LATTICE.CRS.V10/v001", 2, 64)
-            .expect("valid R_q64 LatticeParams (2x64)");
+        let lattice_params =
+            LatticeParams::expand_from_seed(*b"OBEND.AMEND.LATTICE.CRS.V10/v001", 2, 64)
+                .expect("valid R_q64 LatticeParams (2x64)");
         Self {
             num_vars: 10,
             canopy_params,
@@ -224,7 +226,11 @@ fn decode_hash32(val: &CborValue, field: &'static str) -> Result<[u8; 32], DetCb
 
 /// Canonical finite Law clause: the same 16-configuration truth table as Lean.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LawClause { pub name: String, pub priority: u64, pub allowed: u16 }
+pub struct LawClause {
+    pub name: String,
+    pub priority: u64,
+    pub allowed: u16,
+}
 
 fn law_clauses_bytes(clauses: &[LawClause]) -> Vec<u8> {
     let mut out = leb128(clauses.len());
@@ -268,44 +274,130 @@ impl AmendmentExecution {
     pub fn prior_digest(&self) -> [u8; 32] {
         cshake256_32(b"OBEND.LAW.PRIOR/v1", &law_clauses_bytes(&self.old))
     }
+    /// Clauses from `self.old` satisfied at `self.selected` (`PointwiseRevise.retain`).
+    pub fn retained_clauses(&self) -> Vec<LawClause> {
+        if self.selected >= 16 {
+            return Vec::new();
+        }
+        let mask = 1u16 << self.selected;
+        self.old
+            .iter()
+            .filter(|c| (c.allowed & mask) != 0)
+            .cloned()
+            .collect()
+    }
+    /// Post-turn active clause list `proposed ++ retained` matching `PointwiseRevise.applyTurn`.
+    pub fn revised_clauses(&self) -> Vec<LawClause> {
+        let mut next = self.proposed.clone();
+        next.extend(self.retained_clauses());
+        next
+    }
+    /// Canonical `OBEND.LAW.PRIOR/v1` digest after accepting `self`.
+    pub fn next_prior_digest(&self) -> [u8; 32] {
+        cshake256_32(
+            b"OBEND.LAW.PRIOR/v1",
+            &law_clauses_bytes(&self.revised_clauses()),
+        )
+    }
+    pub fn to_det_cbor_bytes(&self) -> Result<Vec<u8>, DetCborError> {
+        encode_det_cbor(&self.to_cbor_value())
+    }
+    pub fn from_det_cbor_bytes(bytes: &[u8]) -> Result<Self, DetCborError> {
+        let val = decode_det_cbor(bytes)?;
+        let exec = Self::from_cbor_value(&val)?;
+        if exec.to_det_cbor_bytes()? != bytes {
+            return Err(DetCborError::UnsortedMapKeys);
+        }
+        Ok(exec)
+    }
     fn residuals(&self) -> Result<Vec<Goldilocks>, AmendRefusal> {
         if self.selected >= 16 || self.bedrock_seed >= 16 {
-            return Err(AmendRefusal::AmendmentBindingMismatch { field: "model_index" });
+            return Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "model_index",
+            });
         }
-        let admissible = |v: u8| self.bedrock & (1 << v) != 0 &&
-            self.proposed.iter().all(|c| c.allowed & (1 << v) != 0);
+        let admissible = |v: u8| {
+            self.bedrock & (1 << v) != 0 && self.proposed.iter().all(|c| c.allowed & (1 << v) != 0)
+        };
         // u128 prevents a single u64 priority from wrapping the loss comparison.
-        let loss = |v: u8| self.old.iter().filter(|c| c.allowed & (1 << v) == 0)
-            .map(|c| c.priority as u128 + 1).sum::<u128>();
-        let mut ok = vec![self.bedrock & (1 << self.bedrock_seed) != 0, admissible(self.selected)];
+        let loss = |v: u8| {
+            self.old
+                .iter()
+                .filter(|c| c.allowed & (1 << v) == 0)
+                .map(|c| c.priority as u128 + 1)
+                .sum::<u128>()
+        };
+        let mut ok = vec![
+            self.bedrock & (1 << self.bedrock_seed) != 0,
+            admissible(self.selected),
+        ];
         for v in 0..16 {
             ok.push(!admissible(v) || (loss(self.selected), self.selected) <= (loss(v), v));
         }
-        Ok(ok.into_iter().map(|b| if b { Goldilocks::ZERO } else { Goldilocks::ONE }).collect())
+        Ok(ok
+            .into_iter()
+            .map(|b| if b { Goldilocks::ZERO } else { Goldilocks::ONE })
+            .collect())
     }
     fn to_cbor_value(&self) -> CborValue {
-        let clauses = |cs: &[LawClause]| CborValue::Array(cs.iter().map(|c|
-            CborValue::Array(vec![CborValue::Text(c.name.clone()), CborValue::Unsigned(c.priority),
-                CborValue::Unsigned(c.allowed as u64)])).collect());
-        CborValue::Array(vec![CborValue::Unsigned(self.slot), clauses(&self.old), clauses(&self.proposed),
-            CborValue::Unsigned(self.bedrock as u64), CborValue::Unsigned(self.bedrock_seed as u64),
-            CborValue::Unsigned(self.selected as u64)])
+        let clauses = |cs: &[LawClause]| {
+            CborValue::Array(
+                cs.iter()
+                    .map(|c| {
+                        CborValue::Array(vec![
+                            CborValue::Text(c.name.clone()),
+                            CborValue::Unsigned(c.priority),
+                            CborValue::Unsigned(c.allowed as u64),
+                        ])
+                    })
+                    .collect(),
+            )
+        };
+        CborValue::Array(vec![
+            CborValue::Unsigned(self.slot),
+            clauses(&self.old),
+            clauses(&self.proposed),
+            CborValue::Unsigned(self.bedrock as u64),
+            CborValue::Unsigned(self.bedrock_seed as u64),
+            CborValue::Unsigned(self.selected as u64),
+        ])
     }
     fn from_cbor_value(v: &CborValue) -> Result<Self, DetCborError> {
         let a = v.as_array()?;
-        if a.len() != 6 { return Err(DetCborError::UnexpectedFieldCount { expected: 6, actual: a.len() }); }
+        if a.len() != 6 {
+            return Err(DetCborError::UnexpectedFieldCount {
+                expected: 6,
+                actual: a.len(),
+            });
+        }
         let clauses = |v: &CborValue| -> Result<Vec<LawClause>, DetCborError> {
-            v.as_array()?.iter().map(|v| {
-                let c = v.as_array()?;
-                if c.len() != 3 { return Err(DetCborError::UnexpectedFieldCount { expected: 3, actual: c.len() }); }
-                Ok(LawClause { name: String::from(c[0].as_text()?), priority: c[1].as_u64()?,
-                    allowed: u16::try_from(c[2].as_u64()?).map_err(|_| DetCborError::LengthOverflow)? })
-            }).collect()
+            v.as_array()?
+                .iter()
+                .map(|v| {
+                    let c = v.as_array()?;
+                    if c.len() != 3 {
+                        return Err(DetCborError::UnexpectedFieldCount {
+                            expected: 3,
+                            actual: c.len(),
+                        });
+                    }
+                    Ok(LawClause {
+                        name: String::from(c[0].as_text()?),
+                        priority: c[1].as_u64()?,
+                        allowed: u16::try_from(c[2].as_u64()?)
+                            .map_err(|_| DetCborError::LengthOverflow)?,
+                    })
+                })
+                .collect()
         };
-        Ok(Self { slot: a[0].as_u64()?, old: clauses(&a[1])?, proposed: clauses(&a[2])?,
+        Ok(Self {
+            slot: a[0].as_u64()?,
+            old: clauses(&a[1])?,
+            proposed: clauses(&a[2])?,
             bedrock: u16::try_from(a[3].as_u64()?).map_err(|_| DetCborError::LengthOverflow)?,
             bedrock_seed: u8::try_from(a[4].as_u64()?).map_err(|_| DetCborError::LengthOverflow)?,
-            selected: u8::try_from(a[5].as_u64()?).map_err(|_| DetCborError::LengthOverflow)? })
+            selected: u8::try_from(a[5].as_u64()?).map_err(|_| DetCborError::LengthOverflow)?,
+        })
     }
 }
 
@@ -329,16 +421,29 @@ impl LawReceipt {
         let mut rev = vec![u8::from(!self.accepted)];
         frame_bytes(&mut rev, &leb128(self.selected as usize));
         frame_bytes(&mut rev, &law_clauses_bytes(&self.retained));
-        if !self.accepted { frame_bytes(&mut rev, &leb128(self.refused_cost as usize)); }
+        if !self.accepted {
+            frame_bytes(&mut rev, &leb128(self.refused_cost as usize));
+        }
         let mut skipped = leb128(self.skipped.len());
-        for name in &self.skipped { frame_bytes(&mut skipped, name.as_bytes()); }
+        for name in &self.skipped {
+            frame_bytes(&mut skipped, name.as_bytes());
+        }
         let mut frames = leb128(self.frames.len());
         for (payload, crc) in &self.frames {
-            frame_bytes(&mut frames, &payload.to_be_bytes()); frame_bytes(&mut frames, &crc.to_be_bytes());
+            frame_bytes(&mut frames, &payload.to_be_bytes());
+            frame_bytes(&mut frames, &crc.to_be_bytes());
         }
         let mut pre = Vec::new();
-        for field in [&leb128(self.slot as usize), &rev, &law_clauses_bytes(&self.evicted),
-            &skipped, &frames, &self.turn_digest.to_vec(), &self.bedrock_digest.to_vec(), &self.support_digest.to_vec()] {
+        for field in [
+            &leb128(self.slot as usize),
+            &rev,
+            &law_clauses_bytes(&self.evicted),
+            &skipped,
+            &frames,
+            &self.turn_digest.to_vec(),
+            &self.bedrock_digest.to_vec(),
+            &self.support_digest.to_vec(),
+        ] {
             frame_bytes(&mut pre, field);
         }
         cshake256_32(b"OBEND.LAW.AMEND_RECEIPT/v1", &pre)
@@ -347,9 +452,170 @@ impl LawReceipt {
 
 /// Inhabited finite-law example used by the CLI and cross-language vectors.
 pub fn example_amendment_execution() -> AmendmentExecution {
-    AmendmentExecution { slot: 2, old: vec![LawClause { name: String::from("fee"), priority: 3, allowed: 0xaaaa }],
-        proposed: vec![LawClause { name: String::from("recover"), priority: 1, allowed: 0x00c0 }],
-        bedrock: 0x00c0, bedrock_seed: 6, selected: 7 }
+    AmendmentExecution {
+        slot: 2,
+        old: vec![LawClause {
+            name: String::from("fee"),
+            priority: 3,
+            allowed: 0xaaaa,
+        }],
+        proposed: vec![LawClause {
+            name: String::from("recover"),
+            priority: 1,
+            allowed: 0x00c0,
+        }],
+        bedrock: 0x00c0,
+        bedrock_seed: 6,
+        selected: 7,
+    }
+}
+
+/// Canonical RFC 8949 §4.2 Deterministic CBOR policy specification pinning `(bedrock, bedrock_seed)`,
+/// initial `prior_clauses`, `required_rights`, and `target_organ` for `obend-zk-receipt`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SerializedPolicySpec {
+    pub bedrock: u16,
+    pub bedrock_seed: u8,
+    pub prior_clauses: Vec<LawClause>,
+    pub required_rights: u64,
+    pub target_organ: String,
+}
+
+impl SerializedPolicySpec {
+    pub fn default_finite_law16() -> Self {
+        let ex = example_amendment_execution();
+        Self {
+            bedrock: ex.bedrock,
+            bedrock_seed: ex.bedrock_seed,
+            prior_clauses: ex.old,
+            required_rights: 0b0000_0101,
+            target_organ: String::from("Obend.Trailblaze.StageBInstances"),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), AmendRefusal> {
+        if self.bedrock_seed >= 16 || (self.bedrock & (1u16 << self.bedrock_seed)) == 0 {
+            return Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "bedrock_seed",
+            });
+        }
+        if self.target_organ.is_empty() {
+            return Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "target_organ",
+            });
+        }
+        Ok(())
+    }
+
+    pub fn policy_digest(&self) -> [u8; 32] {
+        let mut pre = Vec::new();
+        frame_bytes(&mut pre, &leb128(16));
+        frame_bytes(&mut pre, &self.bedrock.to_be_bytes());
+        frame_bytes(&mut pre, &leb128(self.bedrock_seed as usize));
+        cshake256_32(b"OBEND.LAW.BEDROCK/v1", &pre)
+    }
+
+    pub fn prior_digest(&self) -> [u8; 32] {
+        cshake256_32(
+            b"OBEND.LAW.PRIOR/v1",
+            &law_clauses_bytes(&self.prior_clauses),
+        )
+    }
+
+    pub fn to_cbor_value(&self) -> CborValue {
+        let clauses = CborValue::Array(
+            self.prior_clauses
+                .iter()
+                .map(|c| {
+                    CborValue::Array(vec![
+                        CborValue::Text(c.name.clone()),
+                        CborValue::Unsigned(c.priority),
+                        CborValue::Unsigned(c.allowed as u64),
+                    ])
+                })
+                .collect(),
+        );
+        CborValue::Map(vec![
+            (
+                CborValue::Text(String::from("bedrock")),
+                CborValue::Unsigned(self.bedrock as u64),
+            ),
+            (
+                CborValue::Text(String::from("bedrock_seed")),
+                CborValue::Unsigned(self.bedrock_seed as u64),
+            ),
+            (CborValue::Text(String::from("prior_clauses")), clauses),
+            (
+                CborValue::Text(String::from("required_rights")),
+                CborValue::Unsigned(self.required_rights),
+            ),
+            (
+                CborValue::Text(String::from("target_organ")),
+                CborValue::Text(self.target_organ.clone()),
+            ),
+        ])
+    }
+
+    pub fn from_cbor_value(val: &CborValue) -> Result<Self, DetCborError> {
+        let m = val.as_map()?;
+        if m.len() != 5 {
+            return Err(DetCborError::UnexpectedFieldCount {
+                expected: 5,
+                actual: m.len(),
+            });
+        }
+        let bedrock = u16::try_from(map_lookup(m, "bedrock")?.as_u64()?)
+            .map_err(|_| DetCborError::LengthOverflow)?;
+        let bedrock_seed = u8::try_from(map_lookup(m, "bedrock_seed")?.as_u64()?)
+            .map_err(|_| DetCborError::LengthOverflow)?;
+        let prior_clauses = map_lookup(m, "prior_clauses")?
+            .as_array()?
+            .iter()
+            .map(|v| {
+                let c = v.as_array()?;
+                if c.len() != 3 {
+                    return Err(DetCborError::UnexpectedFieldCount {
+                        expected: 3,
+                        actual: c.len(),
+                    });
+                }
+                Ok(LawClause {
+                    name: String::from(c[0].as_text()?),
+                    priority: c[1].as_u64()?,
+                    allowed: u16::try_from(c[2].as_u64()?)
+                        .map_err(|_| DetCborError::LengthOverflow)?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let required_rights = map_lookup(m, "required_rights")?.as_u64()?;
+        let target_organ = String::from(map_lookup(m, "target_organ")?.as_text()?);
+        if bedrock_seed >= 16 || (bedrock & (1u16 << bedrock_seed)) == 0 || target_organ.is_empty()
+        {
+            return Err(DetCborError::SchemaMismatch(String::from(
+                "invalid SerializedPolicySpec bedrock_seed or empty target_organ",
+            )));
+        }
+        Ok(Self {
+            bedrock,
+            bedrock_seed,
+            prior_clauses,
+            required_rights,
+            target_organ,
+        })
+    }
+
+    pub fn to_det_cbor_bytes(&self) -> Result<Vec<u8>, DetCborError> {
+        encode_det_cbor(&self.to_cbor_value())
+    }
+
+    pub fn from_det_cbor_bytes(bytes: &[u8]) -> Result<Self, DetCborError> {
+        let val = decode_det_cbor(bytes)?;
+        let spec = Self::from_cbor_value(&val)?;
+        if spec.to_det_cbor_bytes()? != bytes {
+            return Err(DetCborError::UnsortedMapKeys);
+        }
+        Ok(spec)
+    }
 }
 
 /// Governance/policy amendment commitment payload. Every field is length-framed into
@@ -381,7 +647,10 @@ impl AmendmentProposal {
 
     pub fn to_cbor_value(&self) -> CborValue {
         CborValue::Map(vec![
-            (CborValue::Text(String::from("prior_digest")), CborValue::Bytes(self.prior_digest.to_vec())),
+            (
+                CborValue::Text(String::from("prior_digest")),
+                CborValue::Bytes(self.prior_digest.to_vec()),
+            ),
             (
                 CborValue::Text(String::from("amendment_digest")),
                 CborValue::Bytes(self.amendment_digest.to_vec()),
@@ -420,7 +689,10 @@ impl AmendmentProposal {
         Ok(Self {
             prior_digest: decode_hash32(map_lookup(m, "prior_digest")?, "prior_digest")?,
             policy_digest: decode_hash32(map_lookup(m, "policy_digest")?, "policy_digest")?,
-            amendment_digest: decode_hash32(map_lookup(m, "amendment_digest")?, "amendment_digest")?,
+            amendment_digest: decode_hash32(
+                map_lookup(m, "amendment_digest")?,
+                "amendment_digest",
+            )?,
             epoch: map_lookup(m, "epoch")?.as_u64()?,
             nonce: map_lookup(m, "nonce")?.as_u64()?,
             required_rights: map_lookup(m, "required_rights")?.as_u64()?,
@@ -446,9 +718,15 @@ pub struct BiscuitHop {
 impl BiscuitHop {
     /// Exact Lean `Block.encode` and `rootPreimage`/`stepPreimage` schema.
     /// Epoch is an atom caveat; this execution profile interprets that atom as an epoch limit.
-    pub fn compute_lineage(root_authority_id: &[u8; 32], hop_index: u32,
-        channel_id: u64, rights_mask: u64, caveat_epoch_max: u64,
-        attenuation_note: &str, parent_lineage: &[u8; 32]) -> [u8; 32] {
+    pub fn compute_lineage(
+        root_authority_id: &[u8; 32],
+        hop_index: u32,
+        channel_id: u64,
+        rights_mask: u64,
+        caveat_epoch_max: u64,
+        attenuation_note: &str,
+        parent_lineage: &[u8; 32],
+    ) -> [u8; 32] {
         let mut holder = Vec::new();
         frame_bytes(&mut holder, root_authority_id);
         frame_bytes(&mut holder, &hop_index.to_be_bytes());
@@ -459,16 +737,31 @@ impl BiscuitHop {
         frame_bytes(&mut block, &holder);
         frame_bytes(&mut block, &channel_id.to_be_bytes());
         let mut pre = vec![if hop_index == 0 { 0 } else { 1 }];
-        if hop_index != 0 { frame_bytes(&mut pre, parent_lineage); }
+        if hop_index != 0 {
+            frame_bytes(&mut pre, parent_lineage);
+        }
         pre.extend_from_slice(&block);
         cshake256_32(BISCUIT_LINEAGE_CUSTOM, &pre)
     }
 
-    pub fn compute_nullifier(root_authority_id: &[u8; 32], hop_index: u32,
-        channel_id: u64, rights_mask: u64, caveat_epoch_max: u64,
-        attenuation_note: &str, parent_lineage: &[u8; 32]) -> [u8; 32] {
-        let lineage = Self::compute_lineage(root_authority_id, hop_index, channel_id, rights_mask,
-            caveat_epoch_max, attenuation_note, parent_lineage);
+    pub fn compute_nullifier(
+        root_authority_id: &[u8; 32],
+        hop_index: u32,
+        channel_id: u64,
+        rights_mask: u64,
+        caveat_epoch_max: u64,
+        attenuation_note: &str,
+        parent_lineage: &[u8; 32],
+    ) -> [u8; 32] {
+        let lineage = Self::compute_lineage(
+            root_authority_id,
+            hop_index,
+            channel_id,
+            rights_mask,
+            caveat_epoch_max,
+            attenuation_note,
+            parent_lineage,
+        );
         let mut pre = vec![1];
         pre.extend_from_slice(&lineage);
         cshake256_32(BISCUIT_NUL_CUSTOM, &pre)
@@ -476,8 +769,14 @@ impl BiscuitHop {
 
     pub fn to_cbor_value(&self) -> CborValue {
         CborValue::Map(vec![
-            (CborValue::Text(String::from("lineage_digest")), CborValue::Bytes(self.lineage_digest.to_vec())),
-            (CborValue::Text(String::from("authentication")), CborValue::Bytes(self.authentication.to_vec())),
+            (
+                CborValue::Text(String::from("lineage_digest")),
+                CborValue::Bytes(self.lineage_digest.to_vec()),
+            ),
+            (
+                CborValue::Text(String::from("authentication")),
+                CborValue::Bytes(self.authentication.to_vec()),
+            ),
             (
                 CborValue::Text(String::from("attenuation_note")),
                 CborValue::Text(self.attenuation_note.clone()),
@@ -615,8 +914,15 @@ impl ZkBiscuitChain {
                 attenuation_note: String::from(note),
                 parent_lineage,
                 hop_nullifier,
-                lineage_digest: BiscuitHop::compute_lineage(&root_authority_id, 0, channel_id,
-                    initial_rights, caveat_epoch_max, note, &parent_lineage),
+                lineage_digest: BiscuitHop::compute_lineage(
+                    &root_authority_id,
+                    0,
+                    channel_id,
+                    initial_rights,
+                    caveat_epoch_max,
+                    note,
+                    &parent_lineage,
+                ),
                 authentication: authenticate_hop(&root_secret, &hop_nullifier),
             }],
         }
@@ -652,10 +958,11 @@ impl ZkBiscuitChain {
                 reason: "caveat_epoch_max relaxation forbidden",
             });
         }
-        let hop_index = u32::try_from(next_idx).map_err(|_| AmendRefusal::ForgedAttenuationHop {
-            hop_index: next_idx,
-            reason: "hop index overflow",
-        })?;
+        let hop_index =
+            u32::try_from(next_idx).map_err(|_| AmendRefusal::ForgedAttenuationHop {
+                hop_index: next_idx,
+                reason: "hop index overflow",
+            })?;
         let parent_lineage = prev.lineage_digest;
         let hop_nullifier = BiscuitHop::compute_nullifier(
             &self.root_authority_id,
@@ -675,8 +982,15 @@ impl ZkBiscuitChain {
             attenuation_note: String::from(note),
             parent_lineage,
             hop_nullifier,
-            lineage_digest: BiscuitHop::compute_lineage(&self.root_authority_id, hop_index, channel_id,
-                attenuated_rights, caveat_epoch_max, note, &parent_lineage),
+            lineage_digest: BiscuitHop::compute_lineage(
+                &self.root_authority_id,
+                hop_index,
+                channel_id,
+                attenuated_rights,
+                caveat_epoch_max,
+                note,
+                &parent_lineage,
+            ),
             authentication: authenticate_hop(root_secret, &hop_nullifier),
         });
         Ok(next)
@@ -684,17 +998,25 @@ impl ZkBiscuitChain {
 
     /// Authenticate every delegation before accepting its rights. In this MAC profile
     /// delegation is authorized by the root; possession of public wire bytes grants no signing power.
-    pub fn verify_authenticated(&self, root_secret: &[u8; 32], revocations: &RevocationSet)
-        -> Result<VerifiedBiscuitLineage, AmendRefusal>
-    {
+    pub fn verify_authenticated(
+        &self,
+        root_secret: &[u8; 32],
+        revocations: &RevocationSet,
+    ) -> Result<VerifiedBiscuitLineage, AmendRefusal> {
         if self.root_authority_id != root_authority_id(root_secret) {
-            return Err(AmendRefusal::AmendmentBindingMismatch { field: "root_authority_id" });
+            return Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "root_authority_id",
+            });
         }
         let lineage = self.verify_chain(revocations)?;
         for (idx, hop) in self.hops.iter().enumerate() {
-            if !tags_equal(&hop.authentication, &authenticate_hop(root_secret, &hop.hop_nullifier)) {
+            if !tags_equal(
+                &hop.authentication,
+                &authenticate_hop(root_secret, &hop.hop_nullifier),
+            ) {
                 return Err(AmendRefusal::ForgedAttenuationHop {
-                    hop_index: idx, reason: "invalid authority MAC",
+                    hop_index: idx,
+                    reason: "invalid authority MAC",
                 });
             }
         }
@@ -752,9 +1074,18 @@ impl ZkBiscuitChain {
                 &hop.attenuation_note,
                 &hop.parent_lineage,
             );
-            if hop.hop_nullifier != expected_nullifier || hop.lineage_digest != BiscuitHop::compute_lineage(
-                &self.root_authority_id, hop.hop_index, hop.channel_id, hop.rights_mask,
-                hop.caveat_epoch_max, &hop.attenuation_note, &hop.parent_lineage) {
+            if hop.hop_nullifier != expected_nullifier
+                || hop.lineage_digest
+                    != BiscuitHop::compute_lineage(
+                        &self.root_authority_id,
+                        hop.hop_index,
+                        hop.channel_id,
+                        hop.rights_mask,
+                        hop.caveat_epoch_max,
+                        &hop.attenuation_note,
+                        &hop.parent_lineage,
+                    )
+            {
                 return Err(AmendRefusal::ForgedAttenuationHop {
                     hop_index: idx,
                     reason: "hop_nullifier cSHAKE256 mismatch",
@@ -866,12 +1197,20 @@ pub fn encode_amendment_circuit_desc(
             CborValue::Bytes(proposal.policy_digest.to_vec()),
         ),
         (
+            CborValue::Text(String::from("prior_digest")),
+            CborValue::Bytes(proposal.prior_digest.to_vec()),
+        ),
+        (
             CborValue::Text(String::from("proposal_commitment")),
             CborValue::Bytes(commit.to_vec()),
         ),
         (
             CborValue::Text(String::from("root_authority_id")),
             CborValue::Bytes(lineage.root_authority_id.to_vec()),
+        ),
+        (
+            CborValue::Text(String::from("target_organ")),
+            CborValue::Text(proposal.target_organ.clone()),
         ),
     ]);
     encode_det_cbor(&val)
@@ -888,18 +1227,32 @@ pub fn derive_amendment_witness_table(
     if !(8..=24).contains(&num_vars) {
         return Err(AmendRefusal::AmendmentBindingMismatch { field: "num_vars" });
     }
-    if proposal.policy_digest != execution.bedrock_digest() ||
-        proposal.amendment_digest != execution.turn_digest() || proposal.prior_digest != execution.prior_digest() {
-        return Err(AmendRefusal::AmendmentBindingMismatch { field: "law_commitments" });
+    if proposal.policy_digest != execution.bedrock_digest()
+        || proposal.amendment_digest != execution.turn_digest()
+        || proposal.prior_digest != execution.prior_digest()
+    {
+        return Err(AmendRefusal::AmendmentBindingMismatch {
+            field: "law_commitments",
+        });
     }
     let residuals = execution.residuals()?;
     if residuals.iter().any(|r| *r != Goldilocks::ZERO) {
-        return Err(AmendRefusal::AmendmentBindingMismatch { field: "pointwise_revision" });
+        return Err(AmendRefusal::AmendmentBindingMismatch {
+            field: "pointwise_revision",
+        });
     }
     let mut out = Vec::new();
     // Byte rows preserve all 256 bits without reduction modulo the Goldilocks prime.
-    for digest in [proposal.commitment_digest(), lineage.root_authority_id, lineage.leaf_nullifier] {
-        out.extend(digest.iter().map(|b| Goldilocks::from_u64_reduced(*b as u64)));
+    for digest in [
+        proposal.commitment_digest(),
+        lineage.root_authority_id,
+        lineage.leaf_nullifier,
+    ] {
+        out.extend(
+            digest
+                .iter()
+                .map(|b| Goldilocks::from_u64_reduced(*b as u64)),
+        );
     }
     out.extend(residuals);
     out.resize(1usize << num_vars, Goldilocks::ZERO);
@@ -920,7 +1273,10 @@ pub struct SignedAmendmentEnvelope {
 impl SignedAmendmentEnvelope {
     pub fn to_cbor_value(&self) -> CborValue {
         CborValue::Map(vec![
-            (CborValue::Text(String::from("execution")), self.execution.to_cbor_value()),
+            (
+                CborValue::Text(String::from("execution")),
+                self.execution.to_cbor_value(),
+            ),
             (
                 CborValue::Text(String::from("biscuit_chain")),
                 self.biscuit_chain.to_cbor_value(),
@@ -978,7 +1334,8 @@ impl SignedAmendmentEnvelope {
             encode_det_cbor(dual_receipt_val).map_err(AmendRefusal::NonCanonicalCbor)?;
         let dual_receipt = DualPcsReceipt::from_det_cbor_bytes(&dual_receipt_bytes)
             .map_err(AmendRefusal::NonCanonicalCbor)?;
-        let execution = map_lookup(m, "execution").and_then(AmendmentExecution::from_cbor_value)
+        let execution = map_lookup(m, "execution")
+            .and_then(AmendmentExecution::from_cbor_value)
             .map_err(AmendRefusal::NonCanonicalCbor)?;
         let env = Self {
             execution,
@@ -1015,7 +1372,8 @@ pub struct AmendmentVerifyReport {
 }
 
 /// Stateful verifier tracking sorted accepted nonces (`O(log N)` replay defense),
-/// pinned root authority & policy digests, and `RevocationSet`.
+/// pinned root authority, policy digest, target organ, advancing `expected_prior_digest`
+/// and `current_epoch` across accepted amendments, and `RevocationSet`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AmendmentVerifierState {
     pub expected_root_authority: [u8; 32],
@@ -1024,13 +1382,20 @@ pub struct AmendmentVerifierState {
     pub current_epoch: u64,
     pub expected_policy_digest: [u8; 32],
     pub expected_prior_digest: [u8; 32],
+    pub expected_target_organ: String,
     pub revocations: RevocationSet,
     accepted_nonces: Vec<u64>,
 }
 
 impl AmendmentVerifierState {
-    pub fn new(root_secret: [u8; 32], expected_policy_digest: [u8; 32],
-        required_rights: u64, current_epoch: u64, expected_prior_digest: [u8; 32]) -> Self {
+    pub fn new(
+        root_secret: [u8; 32],
+        expected_policy_digest: [u8; 32],
+        required_rights: u64,
+        current_epoch: u64,
+        expected_prior_digest: [u8; 32],
+        expected_target_organ: impl Into<String>,
+    ) -> Self {
         Self {
             expected_root_authority: root_authority_id(&root_secret),
             root_secret,
@@ -1038,6 +1403,7 @@ impl AmendmentVerifierState {
             current_epoch,
             expected_policy_digest,
             expected_prior_digest,
+            expected_target_organ: expected_target_organ.into(),
             revocations: RevocationSet::new(),
             accepted_nonces: Vec::new(),
         }
@@ -1051,7 +1417,14 @@ impl AmendmentVerifierState {
     }
 
     pub fn restore_spent_nullifiers(&mut self, nullifiers: &[[u8; 32]]) {
-        for n in nullifiers { self.revocations.revoke_nullifier(*n); }
+        for n in nullifiers {
+            self.revocations.revoke_nullifier(*n);
+        }
+    }
+
+    pub fn restore_state_cursor(&mut self, current_epoch: u64, expected_prior_digest: [u8; 32]) {
+        self.current_epoch = current_epoch;
+        self.expected_prior_digest = expected_prior_digest;
     }
 
     #[inline]
@@ -1059,8 +1432,9 @@ impl AmendmentVerifierState {
         &self.accepted_nonces
     }
 
-    /// Verify a already-decoded `SignedAmendmentEnvelope` and atomically record its `nonce`
-    /// only if every capability, commitment, and Dual-PCS opening gate passes.
+    /// Verify an already-decoded `SignedAmendmentEnvelope` and atomically record its `nonce`,
+    /// revoke its leaf nullifier, and advance `expected_prior_digest` + `current_epoch`
+    /// only if every capability, commitment, target-organ, and Dual-PCS opening gate passes.
     pub fn verify_and_record_envelope(
         &mut self,
         canopy_params: &CanopyParams,
@@ -1086,9 +1460,6 @@ impl AmendmentVerifierState {
                 field: "policy_digest",
             });
         }
-        if env.proposal.prior_digest != self.expected_prior_digest {
-            return Err(AmendRefusal::AmendmentBindingMismatch { field: "prior_digest" });
-        }
         if env.biscuit_chain.root_authority_id != self.expected_root_authority {
             return Err(AmendRefusal::AmendmentBindingMismatch {
                 field: "root_authority_id",
@@ -1096,25 +1467,48 @@ impl AmendmentVerifierState {
         }
 
         // 3. ZkBiscuit monotone attenuation & ancestor-cone revocation fold
-        let lineage = env.biscuit_chain.verify_authenticated(&self.root_secret, &self.revocations)?;
+        let lineage = env
+            .biscuit_chain
+            .verify_authenticated(&self.root_secret, &self.revocations)?;
 
-        // 4. Epoch caveat & attenuated rights authorization
-        if env.proposal.epoch != self.current_epoch || self.current_epoch > lineage.caveat_epoch_max {
-            return Err(AmendRefusal::ForgedAttenuationHop {
-                hop_index: lineage.hop_count - 1,
-                reason: "proposal epoch exceeds leaf caveat_epoch_max",
+        // 4. Pinned target_organ & prior_digest check
+        if self.expected_target_organ.is_empty()
+            || env.proposal.target_organ.is_empty()
+            || env.proposal.target_organ != self.expected_target_organ
+        {
+            return Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "target_organ",
             });
         }
-        let required_rights = self.required_rights | env.proposal.required_rights;
-        if (lineage.effective_rights & required_rights) != required_rights
+        if env.proposal.prior_digest != self.expected_prior_digest {
+            return Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "prior_digest",
+            });
+        }
+
+        // 5. Epoch caveat & attenuated rights authorization
+        if env.proposal.epoch != self.current_epoch || self.current_epoch > lineage.caveat_epoch_max
         {
+            return Err(AmendRefusal::ForgedAttenuationHop {
+                hop_index: lineage.hop_count - 1,
+                reason: "proposal epoch mismatch or exceeds leaf caveat_epoch_max",
+            });
+        }
+        let next_epoch =
+            self.current_epoch
+                .checked_add(1)
+                .ok_or(AmendRefusal::AmendmentBindingMismatch {
+                    field: "epoch_overflow",
+                })?;
+        let required_rights = self.required_rights | env.proposal.required_rights;
+        if (lineage.effective_rights & required_rights) != required_rights {
             return Err(AmendRefusal::InsufficientRights {
                 effective_rights: lineage.effective_rights,
                 required_rights,
             });
         }
 
-        // 5. Cryptographic relation binding (`protocol_id`, `vk_digest`, `circuit_desc`)
+        // 6. Cryptographic relation binding (`protocol_id`, `vk_digest`, `circuit_desc`)
         if env.dual_receipt.protocol_id != AMENDMENT_PROTOCOL_ID {
             return Err(AmendRefusal::AmendmentBindingMismatch {
                 field: "protocol_id",
@@ -1123,9 +1517,7 @@ impl AmendmentVerifierState {
         let expected_vk =
             derive_amendment_vk_digest(&self.expected_root_authority, &self.expected_policy_digest);
         if env.dual_receipt.vk_digest != expected_vk {
-            return Err(AmendRefusal::AmendmentBindingMismatch {
-                field: "vk_digest",
-            });
+            return Err(AmendRefusal::AmendmentBindingMismatch { field: "vk_digest" });
         }
         let expected_circuit_desc = encode_amendment_circuit_desc(&env.proposal, &lineage)
             .map_err(AmendRefusal::NonCanonicalCbor)?;
@@ -1135,29 +1527,37 @@ impl AmendmentVerifierState {
             });
         }
 
-        // 6. Dual-Track PCS verification (`Canopy` Track H + `PikkuFold`/`Akita` Track L + Sumcheck)
-        let hash_stats =
-            verify_dual_pcs_receipt(canopy_params, lattice_params, &env.dual_receipt).map_err(
-                |err| match err {
-                    DetCborError::CanopyFailure(ce) => AmendRefusal::TamperedCanopyOpening(ce),
-                    DetCborError::LatticeFailure(le) => AmendRefusal::TamperedPikkufoldOpening(le),
-                    other => AmendRefusal::TranscriptOrSumcheckMismatch(other),
-                },
-            )?;
+        // 7. Dual-Track PCS verification (`Canopy` Track H + `PikkuFold`/`Akita` Track L + Sumcheck)
+        let hash_stats = verify_dual_pcs_receipt(canopy_params, lattice_params, &env.dual_receipt)
+            .map_err(|err| match err {
+                DetCborError::CanopyFailure(ce) => AmendRefusal::TamperedCanopyOpening(ce),
+                DetCborError::LatticeFailure(le) => AmendRefusal::TamperedPikkufoldOpening(le),
+                other => AmendRefusal::TranscriptOrSumcheckMismatch(other),
+            })?;
 
-        let expected_table = derive_amendment_witness_table(&env.execution, &env.proposal,
-            &lineage, env.dual_receipt.num_vars as usize)?;
+        let expected_table = derive_amendment_witness_table(
+            &env.execution,
+            &env.proposal,
+            &lineage,
+            env.dual_receipt.num_vars as usize,
+        )?;
         let opened_table = crate::pikkufold::unpack_ring_witness_to_goldilocks(
-            &env.dual_receipt.lattice_opening, expected_table.len())
-            .map_err(AmendRefusal::TamperedPikkufoldOpening)?;
+            &env.dual_receipt.lattice_opening,
+            expected_table.len(),
+        )
+        .map_err(AmendRefusal::TamperedPikkufoldOpening)?;
         if opened_table != expected_table {
-            return Err(AmendRefusal::AmendmentBindingMismatch { field: "constraint_table" });
+            return Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "constraint_table",
+            });
         }
 
-        // 7. Commit nonce to anti-replay log only after full verification passes
+        // 8. Commit nonce, revoke leaf nullifier, and advance `(expected_prior_digest, current_epoch)`
         self.accepted_nonces
             .insert(nonce_insert_pos, env.proposal.nonce);
         self.revocations.revoke_nullifier(lineage.leaf_nullifier);
+        self.expected_prior_digest = env.execution.next_prior_digest();
+        self.current_epoch = next_epoch;
 
         Ok(AmendmentVerifyReport {
             proposal_commitment: env.proposal.commitment_digest(),
@@ -1242,6 +1642,11 @@ pub fn prove_amendment_envelope(
     })
 }
 
+/// Domain-separated identity used to isolate durable amendment state per organ.
+pub fn target_organ_digest(target_organ: &str) -> [u8; 32] {
+    crate::transcript::cshake256_32(b"OBEND.AMEND.TARGET_ORGAN/v1", target_organ.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1292,13 +1697,25 @@ mod tests {
         .unwrap();
 
         let wire = env.to_det_cbor_bytes().unwrap();
-        let mut verifier = AmendmentVerifierState::new(root_auth, policy_digest, 5, 25, example_amendment_execution().prior_digest());
+        let mut verifier = AmendmentVerifierState::new(
+            root_auth,
+            policy_digest,
+            5,
+            25,
+            example_amendment_execution().prior_digest(),
+            "CathedralApex.StageB",
+        );
         let report = verifier
             .verify_and_record_bytes(&profile.canopy_params, &profile.lattice_params, &wire)
             .unwrap();
         assert_eq!(report.hop_count, 3);
         assert_eq!(report.nonce, 7);
         assert_eq!(verifier.accepted_nonces(), &[7]);
+        assert_eq!(verifier.current_epoch, 26);
+        assert_eq!(
+            verifier.expected_prior_digest,
+            example_amendment_execution().next_prior_digest()
+        );
 
         // Replaying the exact same valid receipt is deterministically refused!
         let replay_err = verifier
@@ -1324,10 +1741,21 @@ mod tests {
         let wire = env.to_det_cbor_bytes().unwrap();
 
         // Case 1: Non-canonical CBOR map key order (`{ "z": 1, "a": 2 }`)
-        let mut verifier = AmendmentVerifierState::new(root_auth, policy_digest, 5, 25, example_amendment_execution().prior_digest());
+        let mut verifier = AmendmentVerifierState::new(
+            root_auth,
+            policy_digest,
+            5,
+            25,
+            example_amendment_execution().prior_digest(),
+            "CathedralApex.StageB",
+        );
         let raw_unsorted = [0xa2, 0x61, b'z', 0x01, 0x61, b'a', 0x02];
         let cbor_err = verifier
-            .verify_and_record_bytes(&profile.canopy_params, &profile.lattice_params, &raw_unsorted)
+            .verify_and_record_bytes(
+                &profile.canopy_params,
+                &profile.lattice_params,
+                &raw_unsorted,
+            )
             .unwrap_err();
         assert_eq!(cbor_err.code(), RefusalCode::NonCanonicalCbor);
 
@@ -1352,7 +1780,14 @@ mod tests {
         assert_eq!(hop_err.code(), RefusalCode::ForgedAttenuationHop);
 
         // Case 4: Ancestor revocation kills descendant cone (`revoke_ancestor_kills_cone`)
-        let mut rev_verifier = AmendmentVerifierState::new(root_auth, policy_digest, 5, 25, example_amendment_execution().prior_digest());
+        let mut rev_verifier = AmendmentVerifierState::new(
+            root_auth,
+            policy_digest,
+            5,
+            25,
+            example_amendment_execution().prior_digest(),
+            "CathedralApex.StageB",
+        );
         rev_verifier
             .revocations
             .revoke_nullifier(env.biscuit_chain.hops[1].hop_nullifier);
@@ -1411,53 +1846,326 @@ mod tests {
     fn test_authority_policy_constraints_and_domain_bounds() {
         let (profile, secret, policy, proposal, chain) = sample_fixture();
         let execution = example_amendment_execution();
-        let env = prove_amendment_envelope(&profile.canopy_params, &profile.lattice_params,
-            8, &execution, proposal.clone(), chain.clone(), &RevocationSet::new()).unwrap();
+        let env = prove_amendment_envelope(
+            &profile.canopy_params,
+            &profile.lattice_params,
+            8,
+            &execution,
+            proposal.clone(),
+            chain.clone(),
+            &RevocationSet::new(),
+        )
+        .unwrap();
         let public_id = root_authority_id(&secret);
         let mut stranger = ZkBiscuitChain::mint_root(public_id, 1, u64::MAX, u64::MAX, "forged");
         // Give the attacker all public framing/hash operations and the exact trusted label.
         stranger.root_authority_id = public_id;
         let hop = &mut stranger.hops[0];
-        hop.lineage_digest = BiscuitHop::compute_lineage(&public_id, 0, 1, u64::MAX,
-            u64::MAX, "forged", &[0; 32]);
-        hop.hop_nullifier = BiscuitHop::compute_nullifier(&public_id, 0, 1, u64::MAX,
-            u64::MAX, "forged", &[0; 32]);
+        hop.lineage_digest =
+            BiscuitHop::compute_lineage(&public_id, 0, 1, u64::MAX, u64::MAX, "forged", &[0; 32]);
+        hop.hop_nullifier =
+            BiscuitHop::compute_nullifier(&public_id, 0, 1, u64::MAX, u64::MAX, "forged", &[0; 32]);
         hop.authentication = authenticate_hop(&public_id, &hop.hop_nullifier);
         assert!(stranger.verify_chain(&RevocationSet::new()).is_ok());
-        assert!(matches!(stranger.verify_authenticated(&secret, &RevocationSet::new()),
-            Err(AmendRefusal::ForgedAttenuationHop { reason: "invalid authority MAC", .. })));
+        assert!(matches!(
+            stranger.verify_authenticated(&secret, &RevocationSet::new()),
+            Err(AmendRefusal::ForgedAttenuationHop {
+                reason: "invalid authority MAC",
+                ..
+            })
+        ));
 
         let mut forged = env.clone();
         forged.biscuit_chain = stranger;
         forged.proposal.required_rights = 0;
-        let mut verifier = AmendmentVerifierState::new(secret, policy, 5, 25, example_amendment_execution().prior_digest());
-        assert!(verifier.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &forged).is_err());
-        assert!(chain.attenuate(&public_id, 7, 1, 20, "unauthorized").is_err());
-        let mut policy_verifier = AmendmentVerifierState::new(secret, policy, 1 << 63, 25, example_amendment_execution().prior_digest());
-        assert_eq!(policy_verifier.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env)
-            .unwrap_err().code(), RefusalCode::InsufficientRights);
-        let mut wrong_prior = AmendmentVerifierState::new(secret, policy, 5, 25, [0; 32]);
-        assert!(matches!(wrong_prior.verify_and_record_envelope(&profile.canopy_params,
-            &profile.lattice_params, &env),
-            Err(AmendRefusal::AmendmentBindingMismatch { field: "prior_digest" })));
-        let mut expired = AmendmentVerifierState::new(secret, policy, 5, 31, example_amendment_execution().prior_digest());
-        assert!(expired.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env).is_err());
-        let mut bad = execution.clone(); bad.selected = 14;
-        assert!(derive_amendment_witness_table(&bad, &proposal, &chain.verify_chain(&RevocationSet::new()).unwrap(), 8).is_err());
+        let mut verifier = AmendmentVerifierState::new(
+            secret,
+            policy,
+            5,
+            25,
+            example_amendment_execution().prior_digest(),
+            "CathedralApex.StageB",
+        );
+        assert!(
+            verifier
+                .verify_and_record_envelope(
+                    &profile.canopy_params,
+                    &profile.lattice_params,
+                    &forged
+                )
+                .is_err()
+        );
+        assert!(
+            chain
+                .attenuate(&public_id, 7, 1, 20, "unauthorized")
+                .is_err()
+        );
+        let mut policy_verifier = AmendmentVerifierState::new(
+            secret,
+            policy,
+            1 << 63,
+            25,
+            example_amendment_execution().prior_digest(),
+            "CathedralApex.StageB",
+        );
+        assert_eq!(
+            policy_verifier
+                .verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env)
+                .unwrap_err()
+                .code(),
+            RefusalCode::InsufficientRights
+        );
+        let mut wrong_prior =
+            AmendmentVerifierState::new(secret, policy, 5, 25, [0; 32], "CathedralApex.StageB");
+        assert!(matches!(
+            wrong_prior.verify_and_record_envelope(
+                &profile.canopy_params,
+                &profile.lattice_params,
+                &env
+            ),
+            Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "prior_digest"
+            })
+        ));
+        let mut wrong_organ = AmendmentVerifierState::new(
+            secret,
+            policy,
+            5,
+            25,
+            example_amendment_execution().prior_digest(),
+            "OtherOrgan.Wrong",
+        );
+        assert!(matches!(
+            wrong_organ.verify_and_record_envelope(
+                &profile.canopy_params,
+                &profile.lattice_params,
+                &env
+            ),
+            Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "target_organ"
+            })
+        ));
+        let mut expired = AmendmentVerifierState::new(
+            secret,
+            policy,
+            5,
+            31,
+            example_amendment_execution().prior_digest(),
+            "CathedralApex.StageB",
+        );
+        assert!(
+            expired
+                .verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env)
+                .is_err()
+        );
+        let mut bad = execution.clone();
+        bad.selected = 14;
+        assert!(
+            derive_amendment_witness_table(
+                &bad,
+                &proposal,
+                &chain.verify_chain(&RevocationSet::new()).unwrap(),
+                8
+            )
+            .is_err()
+        );
         for vars in [0, 7, 25, usize::MAX] {
-            assert!(derive_amendment_witness_table(&execution, &proposal,
-                &chain.verify_chain(&RevocationSet::new()).unwrap(), vars).is_err());
+            assert!(
+                derive_amendment_witness_table(
+                    &execution,
+                    &proposal,
+                    &chain.verify_chain(&RevocationSet::new()).unwrap(),
+                    vars
+                )
+                .is_err()
+            );
         }
         let mut unrelated = env.clone();
-        unrelated.dual_receipt = prove_dual_pcs_receipt(AMENDMENT_PROTOCOL_ID, env.dual_receipt.vk_digest,
-            &env.dual_receipt.circuit_desc, &profile.canopy_params, &profile.lattice_params,
-            8, &vec![Goldilocks::ZERO; 256]).unwrap();
-        assert!(verifier.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &unrelated).is_err());
+        unrelated.dual_receipt = prove_dual_pcs_receipt(
+            AMENDMENT_PROTOCOL_ID,
+            env.dual_receipt.vk_digest,
+            &env.dual_receipt.circuit_desc,
+            &profile.canopy_params,
+            &profile.lattice_params,
+            8,
+            &vec![Goldilocks::ZERO; 256],
+        )
+        .unwrap();
+        assert!(
+            verifier
+                .verify_and_record_envelope(
+                    &profile.canopy_params,
+                    &profile.lattice_params,
+                    &unrelated
+                )
+                .is_err()
+        );
         assert!(verifier.accepted_nonces().is_empty());
-        verifier.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env).unwrap();
-        let mut changed_nonce = env.clone(); changed_nonce.proposal.nonce += 1;
-        assert_eq!(verifier.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params,
-            &changed_nonce).unwrap_err().code(), RefusalCode::RevokedLineage);
+        verifier
+            .verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env)
+            .unwrap();
+        let mut changed_nonce = env.clone();
+        changed_nonce.proposal.nonce += 1;
+        assert_eq!(
+            verifier
+                .verify_and_record_envelope(
+                    &profile.canopy_params,
+                    &profile.lattice_params,
+                    &changed_nonce
+                )
+                .unwrap_err()
+                .code(),
+            RefusalCode::RevokedLineage
+        );
+    }
+
+    #[test]
+    fn test_p2_04_serialized_policy_and_multiturn_state_advancement() {
+        let profile = FastReceiptProfile::sub5ms_default();
+        let secret = cshake256_32(b"TEST.P2_04", b"custom-policy-root");
+        let spec = SerializedPolicySpec {
+            bedrock: 0x00e0,
+            bedrock_seed: 5,
+            prior_clauses: vec![LawClause {
+                name: String::from("throughput"),
+                priority: 2,
+                allowed: 0x00c0,
+            }],
+            required_rights: 0b0000_0011,
+            target_organ: String::from("Obend.Hardware.SafePhysicalShield"),
+        };
+        let spec_bytes = spec.to_det_cbor_bytes().unwrap();
+        let decoded_spec = SerializedPolicySpec::from_det_cbor_bytes(&spec_bytes).unwrap();
+        assert_eq!(decoded_spec, spec);
+
+        let turn1_exec = AmendmentExecution {
+            slot: 1,
+            old: decoded_spec.prior_clauses.clone(),
+            proposed: vec![LawClause {
+                name: String::from("fence"),
+                priority: 4,
+                allowed: 0x0080,
+            }],
+            bedrock: decoded_spec.bedrock,
+            bedrock_seed: decoded_spec.bedrock_seed,
+            selected: 7,
+        };
+        let chain1 = ZkBiscuitChain::mint_root(secret, 10, 0xFF, 100, "root")
+            .attenuate(&secret, 11, 0x0F, 50, "turn-1")
+            .unwrap();
+        let prop1 = AmendmentProposal {
+            policy_digest: decoded_spec.policy_digest(),
+            amendment_digest: turn1_exec.turn_digest(),
+            prior_digest: decoded_spec.prior_digest(),
+            epoch: 10,
+            nonce: 1,
+            required_rights: decoded_spec.required_rights,
+            target_organ: decoded_spec.target_organ.clone(),
+        };
+        let env1 = prove_amendment_envelope(
+            &profile.canopy_params,
+            &profile.lattice_params,
+            8,
+            &turn1_exec,
+            prop1,
+            chain1,
+            &RevocationSet::new(),
+        )
+        .unwrap();
+
+        let mut verifier = AmendmentVerifierState::new(
+            secret,
+            decoded_spec.policy_digest(),
+            decoded_spec.required_rights,
+            10,
+            decoded_spec.prior_digest(),
+            decoded_spec.target_organ.clone(),
+        );
+        verifier
+            .verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env1)
+            .unwrap();
+        assert_eq!(verifier.current_epoch, 11);
+        assert_eq!(
+            verifier.expected_prior_digest,
+            turn1_exec.next_prior_digest()
+        );
+
+        // Turn 2 with stale `prior_digest` MUST be rejected, whereas updated `revised_clauses` + `epoch = 11` succeeds!
+        let chain2_stale = ZkBiscuitChain::mint_root(secret, 20, 0xFF, 100, "root")
+            .attenuate(&secret, 21, 0x0F, 50, "turn-2-stale")
+            .unwrap();
+        let stale_prop = AmendmentProposal {
+            policy_digest: decoded_spec.policy_digest(),
+            amendment_digest: turn1_exec.turn_digest(),
+            prior_digest: decoded_spec.prior_digest(),
+            epoch: 11,
+            nonce: 2,
+            required_rights: decoded_spec.required_rights,
+            target_organ: decoded_spec.target_organ.clone(),
+        };
+        let stale_env = prove_amendment_envelope(
+            &profile.canopy_params,
+            &profile.lattice_params,
+            8,
+            &turn1_exec,
+            stale_prop,
+            chain2_stale,
+            &RevocationSet::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            verifier.verify_and_record_envelope(
+                &profile.canopy_params,
+                &profile.lattice_params,
+                &stale_env
+            ),
+            Err(AmendRefusal::AmendmentBindingMismatch {
+                field: "prior_digest"
+            })
+        ));
+
+        let turn2_exec = AmendmentExecution {
+            slot: 1,
+            old: turn1_exec.revised_clauses(),
+            proposed: vec![LawClause {
+                name: String::from("audit"),
+                priority: 1,
+                allowed: 0x0080,
+            }],
+            bedrock: decoded_spec.bedrock,
+            bedrock_seed: decoded_spec.bedrock_seed,
+            selected: 7,
+        };
+        let chain2_ok = ZkBiscuitChain::mint_root(secret, 30, 0xFF, 100, "root")
+            .attenuate(&secret, 31, 0x0F, 50, "turn-2-ok")
+            .unwrap();
+        let prop2 = AmendmentProposal {
+            policy_digest: decoded_spec.policy_digest(),
+            amendment_digest: turn2_exec.turn_digest(),
+            prior_digest: turn2_exec.prior_digest(),
+            epoch: 11,
+            nonce: 3,
+            required_rights: decoded_spec.required_rights,
+            target_organ: decoded_spec.target_organ.clone(),
+        };
+        let env2 = prove_amendment_envelope(
+            &profile.canopy_params,
+            &profile.lattice_params,
+            8,
+            &turn2_exec,
+            prop2,
+            chain2_ok,
+            &RevocationSet::new(),
+        )
+        .unwrap();
+        verifier
+            .verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env2)
+            .unwrap();
+        assert_eq!(verifier.current_epoch, 12);
+        assert_eq!(
+            verifier.expected_prior_digest,
+            turn2_exec.next_prior_digest()
+        );
     }
 
     #[test]
@@ -1465,20 +2173,24 @@ mod tests {
         let (profile, secret, policy, proposal, chain) = sample_fixture();
         let execution = example_amendment_execution();
         // Zero-bit query parameters are refused directly by CanopyParams::new.
-        assert!(CanopyParams::new(
-            DomainKind::PrimeField,
-            ProximityRegime::UniqueDecodingRadius,
-            4,
-            1
-        )
-        .is_err());
-        assert!(CanopyParams::new(
-            DomainKind::PrimeField,
-            ProximityRegime::UniqueDecodingRadius,
-            2,
-            2
-        )
-        .is_err());
+        assert!(
+            CanopyParams::new(
+                DomainKind::PrimeField,
+                ProximityRegime::UniqueDecodingRadius,
+                4,
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            CanopyParams::new(
+                DomainKind::PrimeField,
+                ProximityRegime::UniqueDecodingRadius,
+                2,
+                2
+            )
+            .is_err()
+        );
         // Sub-128-bit profiles (8, 16, 32 queries at blowup 4 -> 4, 8, 16 bits) are refused by
         // new_with_min_soundness(128), validate_soundness(), prove_amendment_envelope, and verify_and_record_envelope.
         let valid_env = prove_amendment_envelope(
@@ -1492,14 +2204,16 @@ mod tests {
         )
         .unwrap();
         for q in [8, 16, 32] {
-            assert!(CanopyParams::new_with_min_soundness(
-                DomainKind::PrimeField,
-                ProximityRegime::UniqueDecodingRadius,
-                4,
-                q,
-                128
-            )
-            .is_err());
+            assert!(
+                CanopyParams::new_with_min_soundness(
+                    DomainKind::PrimeField,
+                    ProximityRegime::UniqueDecodingRadius,
+                    4,
+                    q,
+                    128
+                )
+                .is_err()
+            );
             let weak_cp = CanopyParams::new(
                 DomainKind::PrimeField,
                 ProximityRegime::UniqueDecodingRadius,
@@ -1529,6 +2243,7 @@ mod tests {
                 5,
                 25,
                 execution.prior_digest(),
+                "CathedralApex.StageB",
             );
             assert!(matches!(
                 verifier.verify_and_record_envelope(&weak_cp, &profile.lattice_params, &valid_env),
@@ -1551,12 +2266,26 @@ mod tests {
         let e = example_amendment_execution();
         let lineage = BiscuitHop::compute_lineage(&[3; 32], 0, 101, 255, 1000, "golden", &[0; 32]);
         let nul = BiscuitHop::compute_nullifier(&[3; 32], 0, 101, 255, 1000, "golden", &[0; 32]);
-        let receipt = LawReceipt { slot: 2, accepted: true, selected: 7, retained: e.old.clone(),
-            refused_cost: 0, evicted: vec![], skipped: vec![String::from("untouched")], frames: vec![(42, 99)],
-            turn_digest: e.turn_digest(), bedrock_digest: e.bedrock_digest(),
-            support_digest: cshake256_32(b"OBEND.LAW.SUPPORT/v1", &[0]) };
-        for (name, digest) in [("turn", e.turn_digest()), ("bedrock", e.bedrock_digest()),
-            ("receipt", receipt.digest()), ("lineage", lineage), ("nullifier", nul)] {
+        let receipt = LawReceipt {
+            slot: 2,
+            accepted: true,
+            selected: 7,
+            retained: e.old.clone(),
+            refused_cost: 0,
+            evicted: vec![],
+            skipped: vec![String::from("untouched")],
+            frames: vec![(42, 99)],
+            turn_digest: e.turn_digest(),
+            bedrock_digest: e.bedrock_digest(),
+            support_digest: cshake256_32(b"OBEND.LAW.SUPPORT/v1", &[0]),
+        };
+        for (name, digest) in [
+            ("turn", e.turn_digest()),
+            ("bedrock", e.bedrock_digest()),
+            ("receipt", receipt.digest()),
+            ("lineage", lineage),
+            ("nullifier", nul),
+        ] {
             let hex: String = digest.iter().map(|b| alloc::format!("{b:02x}")).collect();
             let expected = match name {
                 "turn" => "2431ea726b7b7030421d7278cbbf3570767930d00f0a439804c825148edb6b35",
@@ -1569,5 +2298,4 @@ mod tests {
             assert_eq!(hex, expected, "cross-language {name} vector");
         }
     }
-
 }

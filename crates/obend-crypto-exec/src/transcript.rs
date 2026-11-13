@@ -47,11 +47,7 @@ pub const KECCAK_ROUND_CONSTANTS: [u64; 24] = [
 
 /// FIPS 202 rho rotation offsets indexed by `x + 5 * y`.
 const ROTATION_OFFSETS: [u32; 25] = [
-    0, 1, 62, 28, 27,
-    36, 44, 6, 55, 20,
-    3, 10, 43, 25, 39,
-    41, 45, 15, 21, 8,
-    18, 2, 61, 56, 14,
+    0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
 ];
 
 /// Domain customization strings matching `Obend.Crypto.Transcript`.
@@ -68,41 +64,80 @@ pub const DUAL_JOIN_LABEL: &[u8] = b"DUAL.JOIN";
 
 /// Exact 24-round Keccak-f[1600] permutation over 25 little-endian 64-bit lanes.
 pub fn keccak_f1600(state: &mut [u64; 25]) {
-    for &rc in &KECCAK_ROUND_CONSTANTS {
+    // Fixed lane indices avoid debug-mode Range iterator calls and let the
+    // compiler resolve lane arithmetic and bounds checks even at opt-level=0.
+    macro_rules! lanes5 {
+        ($f:ident) => {
+            $f!(0);
+            $f!(1);
+            $f!(2);
+            $f!(3);
+            $f!(4);
+        };
+    }
+    let mut round = 0;
+    while round < 24 {
         // Theta
         let mut c = [0u64; 5];
-        for x in 0..5 {
-            c[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
+        macro_rules! parity {
+            ($x:expr) => {
+                c[$x] = state[$x] ^ state[$x + 5] ^ state[$x + 10]
+                    ^ state[$x + 15] ^ state[$x + 20];
+            };
         }
-        let mut d = [0u64; 5];
-        for x in 0..5 {
-            d[x] = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+        lanes5!(parity);
+        macro_rules! theta {
+            ($x:expr) => {
+                let d = c[($x + 4) % 5] ^ c[($x + 1) % 5].rotate_left(1);
+                state[$x] ^= d;
+                state[$x + 5] ^= d;
+                state[$x + 10] ^= d;
+                state[$x + 15] ^= d;
+                state[$x + 20] ^= d;
+            };
         }
-        for y in 0..5 {
-            for x in 0..5 {
-                state[x + 5 * y] ^= d[x];
-            }
-        }
+        lanes5!(theta);
 
         // Rho + Pi
         let mut b = [0u64; 25];
-        for source in 0..25 {
-            let x = source % 5;
-            let y = source / 5;
-            let target = y + 5 * ((2 * x + 3 * y) % 5);
-            b[target] = state[source].rotate_left(ROTATION_OFFSETS[source]);
+        macro_rules! rho_pi {
+            ($x:expr, $y:expr) => {
+                b[$y + 5 * ((2 * $x + 3 * $y) % 5)] =
+                    state[$x + 5 * $y].rotate_left(ROTATION_OFFSETS[$x + 5 * $y]);
+            };
         }
+        macro_rules! rho_row {
+            ($y:expr) => {
+                rho_pi!(0, $y);
+                rho_pi!(1, $y);
+                rho_pi!(2, $y);
+                rho_pi!(3, $y);
+                rho_pi!(4, $y);
+            };
+        }
+        lanes5!(rho_row);
 
         // Chi
-        for y in 0..5 {
-            let row = 5 * y;
-            for x in 0..5 {
-                state[row + x] = b[row + x] ^ ((!b[row + ((x + 1) % 5)]) & b[row + ((x + 2) % 5)]);
-            }
+        macro_rules! chi {
+            ($x:expr, $y:expr) => {
+                state[5 * $y + $x] = b[5 * $y + $x]
+                    ^ ((!b[5 * $y + (($x + 1) % 5)]) & b[5 * $y + (($x + 2) % 5)]);
+            };
         }
+        macro_rules! chi_row {
+            ($y:expr) => {
+                chi!(0, $y);
+                chi!(1, $y);
+                chi!(2, $y);
+                chi!(3, $y);
+                chi!(4, $y);
+            };
+        }
+        lanes5!(chi_row);
 
         // Iota
-        state[0] ^= rc;
+        state[0] ^= KECCAK_ROUND_CONSTANTS[round];
+        round += 1;
     }
 }
 
@@ -159,7 +194,7 @@ pub fn cshake256_customization_prefix(customization: &[u8]) -> Vec<u8> {
 
 #[inline]
 fn xor_rate_block(state: &mut [u64; 25], block: &[u8; SHAKE256_RATE_BYTES]) {
-    for lane_idx in 0..SHAKE256_RATE_LANES {
+    for (lane_idx, st_lane) in state.iter_mut().enumerate().take(SHAKE256_RATE_LANES) {
         let off = 8 * lane_idx;
         let lane = u64::from_le_bytes([
             block[off],
@@ -171,7 +206,7 @@ fn xor_rate_block(state: &mut [u64; 25], block: &[u8; SHAKE256_RATE_BYTES]) {
             block[off + 6],
             block[off + 7],
         ]);
-        state[lane_idx] ^= lane;
+        *st_lane ^= lane;
     }
 }
 
@@ -184,6 +219,24 @@ pub struct Cshake256Xof {
     suffix: u8,
     squeezing: bool,
     squeeze_offset: usize,
+}
+
+impl Drop for Cshake256Xof {
+    fn drop(&mut self) {
+        self.scrub();
+    }
+}
+
+impl Cshake256Xof {
+    fn scrub(&mut self) {
+        self.state.fill(0);
+        self.buf.fill(0);
+        self.buf_len = 0;
+        self.squeeze_offset = 0;
+        self.suffix = 0;
+        self.squeezing = false;
+        core::hint::black_box((&self.state, &self.buf));
+    }
 }
 
 impl Cshake256Xof {
@@ -207,7 +260,10 @@ impl Cshake256Xof {
 
     /// Absorb arbitrary bytes into the sponge prior to squeezing.
     pub fn absorb(&mut self, mut data: &[u8]) {
-        assert!(!self.squeezing, "cannot absorb into Cshake256Xof after squeezing began");
+        assert!(
+            !self.squeezing,
+            "cannot absorb into Cshake256Xof after squeezing began"
+        );
         while !data.is_empty() {
             let space = SHAKE256_RATE_BYTES - self.buf_len;
             let take = space.min(data.len());
@@ -465,9 +521,8 @@ impl FenziTranscript<RelationBound> {
             pt_bytes.extend_from_slice(&coord.to_be_bytes());
         }
         let inst_frame = encode_frame(comm_bytes, &sum_bytes, &pt_bytes);
-        let mut preimage = encode_list_field(&self.state);
-        preimage.extend_from_slice(&leb128_u64(self.step_count));
-        preimage.extend_from_slice(&inst_frame);
+        let step_bytes = leb128_u64(self.step_count);
+        let preimage = encode_frame(&self.state, &step_bytes, &inst_frame);
         let next_state = cshake256_32(FS_INSTANCE_CUSTOMIZATION, &preimage);
         FenziTranscript {
             state: next_state,
@@ -561,7 +616,10 @@ impl FenziTranscript<InstanceBound> {
     /// Squeeze a signed monomial challenge `(sign, exponent)` for $\pm X^{\text{exp}} \in R_{q_{\text{lat}}}$
     /// (`sign` in `{-1, +1}`, `exponent` in `0..ring_degree` where `ring_degree` is a power of two).
     pub fn squeeze_signed_monomial(&mut self, ring_degree: usize) -> (i64, usize) {
-        assert!(ring_degree.is_power_of_two(), "ring_degree must be a power of two");
+        assert!(
+            ring_degree.is_power_of_two(),
+            "ring_degree must be a power of two"
+        );
         let bytes = self.squeeze_challenge_256();
         let word = u64::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -573,8 +631,15 @@ impl FenziTranscript<InstanceBound> {
 
     /// Squeeze `count` distinct sorted query indices in `0..domain_size` (or all indices if
     /// `count >= domain_size`), used by `Canopy` proximity & evaluation column openings.
-    pub fn squeeze_distinct_query_indices(&mut self, count: usize, domain_size: usize) -> Vec<usize> {
-        assert!(domain_size.is_power_of_two(), "domain_size must be a power of two");
+    pub fn squeeze_distinct_query_indices(
+        &mut self,
+        count: usize,
+        domain_size: usize,
+    ) -> Vec<usize> {
+        assert!(
+            domain_size.is_power_of_two(),
+            "domain_size must be a power of two"
+        );
         let target = count.min(domain_size);
         let seed = self.squeeze_challenge_256();
         let mut xof = Cshake256Xof::new(b"OBEND.CRYPTO.FS.QUERIES/v1");
@@ -671,7 +736,56 @@ mod tests {
         let cd = tr_d.squeeze_ext2();
 
         assert_ne!(ca, cb, "changing claimed_sum must change challenge (F3)");
-        assert_ne!(ca, cc, "changing circuit_desc must change challenge (Fenzi 2026/1838)");
-        assert_ne!(ca, cd, "omitting evaluation point must change challenge (F5)");
+        assert_ne!(
+            ca, cc,
+            "changing circuit_desc must change challenge (Fenzi 2026/1838)"
+        );
+        assert_ne!(
+            ca, cd,
+            "omitting evaluation point must change challenge (F5)"
+        );
+    }
+
+    #[test]
+    fn test_bind_instance_matches_lean_instance_preimage_list_framing() {
+        let vk = [0x77u8; 32];
+        let pt = [GoldilocksExt2::from_canonical_u64_pair(13, 19).unwrap()];
+        let sum = GoldilocksExt2::from_canonical_u64_pair(42, 0).unwrap();
+        let rel = FenziTranscript::new(b"lean-align").bind_relation("PROTO.LEAN", &vk, b"circ");
+        let rel_state = *rel.state();
+
+        let sum_bytes = sum.to_be_bytes();
+        let mut pt_bytes = leb128(pt.len());
+        pt_bytes.extend_from_slice(&pt[0].to_be_bytes());
+        let inst_frame = encode_frame(b"comm-bytes", &sum_bytes, &pt_bytes);
+        let step_bytes = leb128_u64(1);
+        // Lean `Transcript.instancePreimageList`: `encodeFrameList relState (leb128 stepCount) instBytes`
+        let expected_lean_preimage = encode_frame(&rel_state, &step_bytes, &inst_frame);
+        let expected_state = cshake256_32(FS_INSTANCE_CUSTOMIZATION, &expected_lean_preimage);
+
+        let bound = rel.bind_instance(b"comm-bytes", sum, &pt);
+        assert_eq!(bound.state(), &expected_state);
+        assert_eq!(bound.instance_digest(), &expected_state);
+    }
+}
+
+#[cfg(test)]
+mod xof_drop_tests {
+    use super::*;
+    #[test]
+    fn drop_scrubs_sponge_and_buffer() {
+        for squeeze in [false, true] {
+            let mut xof = Cshake256Xof::new(b"scrub-test");
+            xof.absorb(&[0x5a; 200]);
+            if squeeze {
+                xof.squeeze(&mut [0; 17]);
+            }
+            // Invoke the same cleanup body through a helper; Rust forbids explicit Drop calls.
+            xof.scrub();
+            assert_eq!(xof.state, [0; 25]);
+            assert_eq!(xof.buf, [0; SHAKE256_RATE_BYTES]);
+            assert_eq!((xof.buf_len, xof.squeeze_offset), (0, 0));
+            assert!(!xof.squeezing);
+        }
     }
 }

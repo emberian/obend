@@ -4,6 +4,8 @@
 //!
 //! Matches `Obend.Crypto.ThresholdHashMpc` §4–§5 byte-for-byte.
 
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -11,7 +13,7 @@ use obend_crypto_exec::goldilocks::{Goldilocks, GoldilocksExt2};
 use obend_crypto_exec::transcript::FenziTranscript;
 
 use crate::adrs_tsw::{cshake256_hash32, encode_multi_frame};
-use crate::keccak_mpc::{ShamirSeedShare256, TowerGf256, eval_poly_gf256};
+use crate::keccak_mpc::{MpcCsprng, ShamirSeedShare256, TowerGf256, eval_poly_gf256};
 use crate::poseidon2_mpc::{
     ShamirPoseidonSeedShare, eval_poly_goldilocks, lagrange_weights_zero_goldilocks,
 };
@@ -105,7 +107,7 @@ pub struct DkgShareComplaint {
 
 /// Point-to-point private share packet sent exclusively from `dealer_idx` to `recv_idx` in Round 1
 /// (NEVER included in the public broadcast struct!).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DkgPrivateSharePacket {
     pub recv_idx: usize,
     pub f_share: Goldilocks,
@@ -113,13 +115,22 @@ pub struct DkgPrivateSharePacket {
     pub salt: [u8; 32],
 }
 
+impl core::fmt::Debug for DkgPrivateSharePacket {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DkgPrivateSharePacket")
+            .field("recv_idx", &self.recv_idx)
+            .field("f_share", &"<redacted>")
+            .field("m_share", &"<redacted>")
+            .field("salt", &"<redacted>")
+            .finish()
+    }
+}
+
 impl Drop for DkgPrivateSharePacket {
     fn drop(&mut self) {
         self.f_share = Goldilocks::ZERO;
         self.m_share = GoldilocksExt2::ZERO;
-        for b in &mut self.salt {
-            *b = 0;
-        }
+        self.salt.fill(0);
         core::hint::black_box(&self.f_share);
         core::hint::black_box(&self.m_share);
         core::hint::black_box(&self.salt);
@@ -193,11 +204,8 @@ impl GoldilocksDealerBroadcast {
             private_packets.push(pkt);
         }
 
-        let chal = derive_dkg_transcript_challenge(
-            dealer_idx,
-            &pk_seed_commitment,
-            &share_commitments,
-        );
+        let chal =
+            derive_dkg_transcript_challenge(dealer_idx, &pk_seed_commitment, &share_commitments);
         let deg_len = f_coeffs.len().max(m_coeffs.len());
         let mut masked_poly_coeffs = Vec::with_capacity(deg_len);
         for k in 0..deg_len {
@@ -368,7 +376,7 @@ pub fn proactive_refresh_seed32_gf256(
     t: usize,
     eval_points: &[TowerGf256],
     current_shares: &mut [ShamirSeedShare256],
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) -> bool {
     let n = eval_points.len();
     if t == 0 || t > n || current_shares.len() != n {
@@ -378,10 +386,7 @@ pub fn proactive_refresh_seed32_gf256(
     for bit_idx in 0..256 {
         coeffs[0] = TowerGf256::ZERO; // Enforced zero constant term!
         for c in coeffs.iter_mut().skip(1) {
-            *rng_seed = rng_seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = *rng_seed;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            *c = TowerGf256(((z >> 24) & 0xFF) as u8);
+            *c = TowerGf256(rng.next_u8());
         }
         let mut delta_evals: Vec<TowerGf256> = eval_points
             .iter()
@@ -410,7 +415,7 @@ pub fn proactive_refresh_seed32_goldilocks(
     t: usize,
     eval_points: &[Goldilocks],
     current_shares: &mut [ShamirPoseidonSeedShare],
-    rng_seed: &mut u64,
+    rng: &mut MpcCsprng,
 ) -> bool {
     let n = eval_points.len();
     if t == 0 || t > n || current_shares.len() != n {
@@ -420,10 +425,7 @@ pub fn proactive_refresh_seed32_goldilocks(
     for b_idx in 0..32 {
         coeffs[0] = Goldilocks::ZERO; // Enforced zero constant term!
         for c in coeffs.iter_mut().skip(1) {
-            *rng_seed = rng_seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = *rng_seed;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            *c = Goldilocks::from_u64_reduced(z);
+            *c = rng.next_goldilocks();
         }
         let mut delta_evals: Vec<Goldilocks> = eval_points
             .iter()
@@ -451,6 +453,10 @@ pub fn proactive_refresh_seed32_goldilocks(
 // Simplex Monotonic Persist-Before-Sign `EpochLatch` (`leanSig` Anti-Double-Sign)
 // ============================================================================
 
+/// Wire magic & format version for persisted `EpochLatchState` WAL records (`78` bytes with 256-bit checksum).
+pub const EPOCH_LATCH_MAGIC: [u8; 5] = *b"OBEL\x01";
+const TAG_LATCH_WAL: &[u8] = b"OBEND.PQ.LATCH.WAL/v1";
+
 /// Error returned when a signing request violates the monotonic anti-double-sign `EpochLatch`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EpochLatchError {
@@ -472,17 +478,119 @@ pub enum EpochLatchError {
         accepted: usize,
         required_latch_quorum: usize,
     },
+    CorruptPersistence,
+    IoFailure,
+}
+
+/// Non-cloneable persist-before-sign authorization token binding `(epoch, mu)` before stateful signing runs.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EpochLatchPermit {
+    epoch: u64,
+    mu: [u8; 32],
+}
+
+impl EpochLatchPermit {
+    #[inline]
+    pub const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    #[inline]
+    pub const fn mu(&self) -> &[u8; 32] {
+        &self.mu
+    }
+}
+
+/// Abstract quorum persist-before-sign latch backend (implemented by `QuorumEpochLatchCluster` and
+/// `fsync`-backed `DurableQuorumEpochLatchCluster`).
+pub trait EpochLatchQuorumBackend {
+    fn acquire_quorum_permit(
+        &mut self,
+        participating_signers: &[usize],
+        epoch: u64,
+        mu: [u8; 32],
+    ) -> Result<EpochLatchPermit, EpochLatchError>;
 }
 
 /// Durable per-signer monotonic epoch latch state (`ThresholdHashMpc.EpochLatchState`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Intentionally non-`Copy` with private `high_water` so callers cannot snapshot & roll back in-memory state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EpochLatchState {
-    pub high_water: Option<(u64, [u8; 32])>,
+    high_water: Option<(u64, [u8; 32])>,
+}
+
+impl Drop for EpochLatchState {
+    fn drop(&mut self) {
+        if let Some((ref mut ep, ref mut bound_mu)) = self.high_water {
+            *ep = 0;
+            bound_mu.fill(0);
+            core::hint::black_box((*ep, &*bound_mu));
+        }
+        self.high_water = None;
+    }
 }
 
 impl EpochLatchState {
     pub const fn new() -> Self {
         Self { high_water: None }
+    }
+
+    #[inline]
+    pub const fn high_water(&self) -> Option<(u64, [u8; 32])> {
+        self.high_water
+    }
+
+    /// Encode into a fixed 78-byte integrity-checked WAL record:
+    /// `magic(5) || tag(1) || epoch_be(8) || mu(32) || cshake256_mac(32)`.
+    pub fn to_durable_bytes(&self) -> [u8; 78] {
+        let mut out = [0u8; 78];
+        out[0..5].copy_from_slice(&EPOCH_LATCH_MAGIC);
+        match self.high_water {
+            None => {
+                out[5] = 0;
+            }
+            Some((ep, bound_mu)) => {
+                out[5] = 1;
+                out[6..14].copy_from_slice(&ep.to_be_bytes());
+                out[14..46].copy_from_slice(&bound_mu);
+            }
+        }
+        let checksum = cshake256_hash32(TAG_LATCH_WAL, &out[0..46]);
+        out[46..78].copy_from_slice(&checksum);
+        out
+    }
+
+    /// Decode and verify a 78-byte WAL record, rejecting truncated, magic-mismatched, or bit-rotted records.
+    pub fn from_durable_bytes(bytes: &[u8]) -> Result<Self, EpochLatchError> {
+        if bytes.len() != 78 || bytes[0..5] != EPOCH_LATCH_MAGIC {
+            return Err(EpochLatchError::CorruptPersistence);
+        }
+        let expected_checksum = cshake256_hash32(TAG_LATCH_WAL, &bytes[0..46]);
+        let mut diff = 0u8;
+        for i in 0..32 {
+            diff |= expected_checksum[i] ^ bytes[46 + i];
+        }
+        if diff != 0 {
+            return Err(EpochLatchError::CorruptPersistence);
+        }
+        match bytes[5] {
+            0 => {
+                if bytes[6..46].iter().any(|&b| b != 0) {
+                    return Err(EpochLatchError::CorruptPersistence);
+                }
+                Ok(Self { high_water: None })
+            }
+            1 => {
+                let mut ep_bytes = [0u8; 8];
+                ep_bytes.copy_from_slice(&bytes[6..14]);
+                let mut bound_mu = [0u8; 32];
+                bound_mu.copy_from_slice(&bytes[14..46]);
+                Ok(Self {
+                    high_water: Some((u64::from_be_bytes(ep_bytes), bound_mu)),
+                })
+            }
+            _ => Err(EpochLatchError::CorruptPersistence),
+        }
     }
 
     /// Atomic persist-before-sign state transition matching `ThresholdHashMpc.stepEpochLatch`:
@@ -501,7 +609,11 @@ impl EpochLatchState {
                     self.high_water = Some((epoch, mu));
                     Ok(())
                 } else if epoch == hw {
-                    if bound_mu == mu {
+                    let mut diff = 0u8;
+                    for i in 0..32 {
+                        diff |= bound_mu[i] ^ mu[i];
+                    }
+                    if diff == 0 {
                         Ok(())
                     } else {
                         Err(EpochLatchError::EquivocationRefused { epoch })
@@ -522,7 +634,7 @@ pub struct QuorumEpochLatchCluster {
     pub n: usize,
     pub max_faulty: usize,
     pub latch_quorum: usize,
-    pub signer_latches: Vec<EpochLatchState>,
+    signer_latches: Vec<EpochLatchState>,
 }
 
 impl QuorumEpochLatchCluster {
@@ -541,15 +653,20 @@ impl QuorumEpochLatchCluster {
         })
     }
 
-    /// Atomically acquire a persist-before-sign latch quorum across **distinct, in-range** `participating_signers`:
-    /// - Strictly rejects out-of-range (`InvalidParticipant`) or duplicate (`DuplicateParticipant`) IDs (blocking Sybil `&[0, 0, 0]` bypasses);
-    /// - Stages all per-node latch transitions on a copy and commits `self.signer_latches` **ONLY** if `accepted >= self.latch_quorum`!
-    pub fn acquire_latch_quorum(
-        &mut self,
+    /// Read-only inspection of signer `party`'s monotonic `(epoch, mu)` high-water mark.
+    #[inline]
+    pub fn signer_high_water(&self, party: usize) -> Option<(u64, [u8; 32])> {
+        self.signer_latches
+            .get(party)
+            .and_then(EpochLatchState::high_water)
+    }
+
+    fn stage_quorum_transition(
+        &self,
         participating_signers: &[usize],
         epoch: u64,
         mu: [u8; 32],
-    ) -> Result<(), EpochLatchError> {
+    ) -> Result<Vec<EpochLatchState>, EpochLatchError> {
         let mut seen = vec![false; self.n];
         for &p in participating_signers {
             if p >= self.n {
@@ -578,8 +695,7 @@ impl QuorumEpochLatchCluster {
             }
         }
         if accepted >= self.latch_quorum {
-            self.signer_latches = staged;
-            Ok(())
+            Ok(staged)
         } else if let Some(err) = first_err {
             Err(err)
         } else {
@@ -588,5 +704,226 @@ impl QuorumEpochLatchCluster {
                 required_latch_quorum: self.latch_quorum,
             })
         }
+    }
+
+    /// Atomically acquire a persist-before-sign latch quorum across **distinct, in-range** `participating_signers`:
+    /// - Strictly rejects out-of-range (`InvalidParticipant`) or duplicate (`DuplicateParticipant`) IDs (blocking Sybil `&[0, 0, 0]` bypasses);
+    /// - Stages all per-node latch transitions on a copy and commits `self.signer_latches` **ONLY** if `accepted >= self.latch_quorum`!
+    pub fn acquire_latch_quorum(
+        &mut self,
+        participating_signers: &[usize],
+        epoch: u64,
+        mu: [u8; 32],
+    ) -> Result<EpochLatchPermit, EpochLatchError> {
+        let staged = self.stage_quorum_transition(participating_signers, epoch, mu)?;
+        self.signer_latches = staged;
+        Ok(EpochLatchPermit { epoch, mu })
+    }
+}
+
+impl EpochLatchQuorumBackend for QuorumEpochLatchCluster {
+    #[inline]
+    fn acquire_quorum_permit(
+        &mut self,
+        participating_signers: &[usize],
+        epoch: u64,
+        mu: [u8; 32],
+    ) -> Result<EpochLatchPermit, EpochLatchError> {
+        self.acquire_latch_quorum(participating_signers, epoch, mu)
+    }
+}
+
+/// Durable `fsync`-backed committee epoch-latch cluster (`std` / crash-safe WAL persistence).
+/// Persists every signer's 78-byte integrity-checked WAL record via atomic `write_all` + `File::sync_all` +
+/// `fs::rename` + parent-directory `sync_all` BEFORE issuing an `EpochLatchPermit`!
+#[cfg(any(test, feature = "std"))]
+pub struct DurableQuorumEpochLatchCluster {
+    dir: std::path::PathBuf,
+    cluster: QuorumEpochLatchCluster,
+}
+
+#[cfg(any(test, feature = "std"))]
+impl DurableQuorumEpochLatchCluster {
+    fn lock(dir: &std::path::Path) -> Result<std::fs::File, EpochLatchError> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.join("cluster.lock"))
+            .map_err(|_| EpochLatchError::IoFailure)?;
+        file.lock().map_err(|_| EpochLatchError::IoFailure)?;
+        Ok(file)
+    }
+
+    fn manifest(cluster: &QuorumEpochLatchCluster) -> Vec<u8> {
+        let mut bytes = b"OBEND.LATCH.CLUSTER/v1".to_vec();
+        for value in [cluster.n, cluster.max_faulty, cluster.latch_quorum] {
+            bytes.extend_from_slice(&(value as u64).to_be_bytes());
+        }
+        bytes
+    }
+
+    fn reload(
+        dir: &std::path::Path,
+        cluster: &mut QuorumEpochLatchCluster,
+    ) -> Result<(), EpochLatchError> {
+        let expected = Self::manifest(cluster);
+        if std::fs::read(dir.join("cluster.manifest"))
+            .map_err(|_| EpochLatchError::CorruptPersistence)?
+            != expected
+        {
+            return Err(EpochLatchError::CorruptPersistence);
+        }
+        let mut states = Vec::with_capacity(cluster.n);
+        for p in 0..cluster.n {
+            let raw = std::fs::read(Self::signer_path(dir, p))
+                .map_err(|_| EpochLatchError::CorruptPersistence)?;
+            if !raw.starts_with(&expected) {
+                return Err(EpochLatchError::CorruptPersistence);
+            }
+            states.push(EpochLatchState::from_durable_bytes(&raw[expected.len()..])?);
+        }
+        cluster.signer_latches = states;
+        Ok(())
+    }
+
+    fn signer_path(dir: &std::path::Path, party: usize) -> std::path::PathBuf {
+        dir.join(alloc::format!("signer_{party}.latch"))
+    }
+
+    fn write_signer_atomic(
+        dir: &std::path::Path,
+        party: usize,
+        state: &EpochLatchState,
+    ) -> Result<(), EpochLatchError> {
+        use std::io::Write;
+        let final_path = Self::signer_path(dir, party);
+        let tmp_path = dir.join(alloc::format!("signer_{party}.latch.tmp"));
+        let bytes = state.to_durable_bytes();
+        let mut f = std::fs::File::create(&tmp_path).map_err(|_| EpochLatchError::IoFailure)?;
+        let manifest =
+            std::fs::read(dir.join("cluster.manifest")).map_err(|_| EpochLatchError::IoFailure)?;
+        f.write_all(&manifest)
+            .map_err(|_| EpochLatchError::IoFailure)?;
+        f.write_all(&bytes)
+            .map_err(|_| EpochLatchError::IoFailure)?;
+        f.sync_all().map_err(|_| EpochLatchError::IoFailure)?;
+        drop(f);
+        std::fs::rename(&tmp_path, &final_path).map_err(|_| EpochLatchError::IoFailure)?;
+        let dir_fd = std::fs::File::open(dir).map_err(|_| EpochLatchError::IoFailure)?;
+        dir_fd.sync_all().map_err(|_| EpochLatchError::IoFailure)?;
+        Ok(())
+    }
+
+    /// Open an existing durable latch directory (verifying every persisted WAL record's 256-bit checksum)
+    /// or initialize fresh durable latch records for all `n` committee members.
+    pub fn open_or_init(
+        dir: impl Into<std::path::PathBuf>,
+        n: usize,
+        max_faulty: usize,
+    ) -> Result<Self, EpochLatchError> {
+        let dir = dir.into();
+        let mut cluster =
+            QuorumEpochLatchCluster::new(n, max_faulty).ok_or(EpochLatchError::IoFailure)?;
+        std::fs::create_dir_all(&dir).map_err(|_| EpochLatchError::IoFailure)?;
+        let _lock = Self::lock(&dir)?;
+        let existing = dir.join("cluster.manifest").exists()
+            || std::fs::read_dir(&dir)
+                .map_err(|_| EpochLatchError::IoFailure)?
+                .try_fold(false, |found, entry| {
+                    entry.map(|e| found || e.path().extension().is_some_and(|ext| ext == "latch"))
+                })
+                .map_err(|_| EpochLatchError::IoFailure)?;
+        if existing {
+            Self::reload(&dir, &mut cluster)?;
+        } else {
+            use std::io::Write;
+            let mut manifest = std::fs::File::create(dir.join("cluster.manifest"))
+                .map_err(|_| EpochLatchError::IoFailure)?;
+            manifest
+                .write_all(&Self::manifest(&cluster))
+                .map_err(|_| EpochLatchError::IoFailure)?;
+            manifest
+                .sync_all()
+                .map_err(|_| EpochLatchError::IoFailure)?;
+            for p in 0..n {
+                Self::write_signer_atomic(&dir, p, &cluster.signer_latches[p])?;
+            }
+        }
+        Ok(Self { dir, cluster })
+    }
+
+    #[inline]
+    pub const fn latch_quorum(&self) -> usize {
+        self.cluster.latch_quorum
+    }
+
+    #[inline]
+    pub fn signer_high_water(&self, party: usize) -> Option<(u64, [u8; 32])> {
+        self.cluster.signer_high_water(party)
+    }
+
+    /// Stage quorum transition, `fsync` every updated signer WAL record + parent directory to disk,
+    /// and ONLY then commit in-memory state and return `EpochLatchPermit`.
+    pub fn acquire_latch_quorum(
+        &mut self,
+        participating_signers: &[usize],
+        epoch: u64,
+        mu: [u8; 32],
+    ) -> Result<EpochLatchPermit, EpochLatchError> {
+        let _lock = Self::lock(&self.dir)?;
+        Self::reload(&self.dir, &mut self.cluster)?;
+        let staged = self
+            .cluster
+            .stage_quorum_transition(participating_signers, epoch, mu)?;
+        for &p in participating_signers {
+            if staged[p] != self.cluster.signer_latches[p] {
+                Self::write_signer_atomic(&self.dir, p, &staged[p])?;
+            }
+        }
+        self.cluster.signer_latches = staged;
+        Ok(EpochLatchPermit { epoch, mu })
+    }
+}
+
+#[cfg(any(test, feature = "std"))]
+impl EpochLatchQuorumBackend for DurableQuorumEpochLatchCluster {
+    #[inline]
+    fn acquire_quorum_permit(
+        &mut self,
+        participating_signers: &[usize],
+        epoch: u64,
+        mu: [u8; 32],
+    ) -> Result<EpochLatchPermit, EpochLatchError> {
+        self.acquire_latch_quorum(participating_signers, epoch, mu)
+    }
+}
+
+#[cfg(test)]
+mod durable_regression_tests {
+    use super::*;
+    #[test]
+    fn cross_instance_reload_and_partial_rollback_fail_closed() {
+        let dir = std::env::temp_dir().join(alloc::format!(
+            "latch-lock-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut a = DurableQuorumEpochLatchCluster::open_or_init(&dir, 5, 1).unwrap();
+        let mut b = DurableQuorumEpochLatchCluster::open_or_init(&dir, 5, 1).unwrap();
+        a.acquire_latch_quorum(&[0, 1, 2, 3], 8, [1; 32]).unwrap();
+        assert!(matches!(
+            b.acquire_latch_quorum(&[0, 1, 2, 3], 8, [2; 32]),
+            Err(EpochLatchError::EquivocationRefused { .. })
+        ));
+        assert!(DurableQuorumEpochLatchCluster::open_or_init(&dir, 4, 1).is_err());
+        std::fs::remove_file(dir.join("signer_0.latch")).unwrap();
+        assert!(DurableQuorumEpochLatchCluster::open_or_init(&dir, 5, 1).is_err());
+        assert!(b.acquire_latch_quorum(&[0, 1, 2, 3], 9, [1; 32]).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

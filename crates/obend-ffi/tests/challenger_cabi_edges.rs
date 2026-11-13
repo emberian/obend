@@ -37,7 +37,7 @@ fn test_cabi_zero_length_and_non_obend_buffers() {
 
     assert!(session.propose_turn(&[]).is_err());
     assert!(session.project_hardware(&[]).is_err());
-    assert_eq!(session.verify_receipt(&[]).unwrap(), false);
+    assert!(!session.verify_receipt(&[]).unwrap());
     assert!(session.commit_turn(&[]).is_err());
 }
 
@@ -67,21 +67,21 @@ fn test_cabi_truncated_receipts() {
 
     for len in [1, 15, 31] {
         let malformed = vec![0xCC; len];
-        assert_eq!(session.verify_receipt(&malformed).unwrap(), false);
+        assert!(!session.verify_receipt(&malformed).unwrap());
     }
 
-    assert_eq!(session.verify_receipt(&vec![0xDD; 32]).unwrap(), false);
-    assert_eq!(session.verify_receipt(&vec![0xEE; 128]).unwrap(), false);
+    assert!(!session.verify_receipt(&[0xDD; 32]).unwrap());
+    assert!(!session.verify_receipt(&[0xEE; 128]).unwrap());
 
     let tid = session.propose_turn(b"receipt_payload").expect("propose_turn");
-    assert_eq!(session.verify_receipt(&tid).unwrap(), false);
+    assert!(!session.verify_receipt(&tid).unwrap());
     let committed = session
         .commit_payload(b"receipt_payload")
         .expect("commit_payload");
-    assert_eq!(session.verify_receipt(&committed).unwrap(), true);
+    assert!(session.verify_receipt(&committed).unwrap());
     let mut extended = committed.clone();
     extended.extend_from_slice(&[0xEE; 96]);
-    assert_eq!(session.verify_receipt(&extended).unwrap(), false);
+    assert!(!session.verify_receipt(&extended).unwrap());
 }
 
 #[test]

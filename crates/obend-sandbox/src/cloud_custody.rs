@@ -428,7 +428,7 @@ pub fn compute_var_data_root(entries: &BTreeMap<Vec<u8>, Vec<u8>>) -> Digest {
     merkle_root(
         &entries
             .iter()
-            .map(|(path, bytes)| fields(&[path.clone(), hash("OBEND.CUSTODY.CONTENT/v1", &[bytes.clone()]).to_vec()]))
+            .map(|(path, bytes)| fields(&[path.clone(), hash("OBEND.CUSTODY.CONTENT/v1", std::slice::from_ref(bytes)).to_vec()]))
             .collect::<Vec<_>>(),
     )
 }

@@ -8,11 +8,13 @@ use std::path::PathBuf;
 
 #[test]
 fn test_adversarial_bwrap_strict_isolation_flags() {
-    let mut config = SandboxConfig::default();
-    config.allow_network = false;
-    config.scratch_mib = Some(512);
-    config.workspace_dir = PathBuf::from("/srv/obend/workspace");
-    config.runtime_root = PathBuf::from("/srv/obend/runtime");
+    let config = SandboxConfig {
+        allow_network: false,
+        scratch_mib: Some(512),
+        workspace_dir: PathBuf::from("/srv/obend/workspace"),
+        runtime_root: PathBuf::from("/srv/obend/runtime"),
+        ..SandboxConfig::default()
+    };
 
     let flags = BubblewrapRunner::build_flags(&config);
 
@@ -47,14 +49,18 @@ fn test_adversarial_bwrap_strict_isolation_flags() {
 
 #[test]
 fn test_adversarial_bwrap_network_isolation_toggle() {
-    let mut no_net = SandboxConfig::default();
-    no_net.allow_network = false;
+    let no_net = SandboxConfig {
+        allow_network: false,
+        ..SandboxConfig::default()
+    };
     let flags_no_net = BubblewrapRunner::build_flags(&no_net);
     assert!(flags_no_net.contains(&"--unshare-net".to_string()));
     assert!(!flags_no_net.contains(&"--share-net".to_string()));
 
-    let mut with_net = SandboxConfig::default();
-    with_net.allow_network = true;
+    let with_net = SandboxConfig {
+        allow_network: true,
+        ..SandboxConfig::default()
+    };
     let flags_with_net = BubblewrapRunner::build_flags(&with_net);
     assert!(flags_with_net.contains(&"--share-net".to_string()));
     assert!(!flags_with_net.contains(&"--unshare-net".to_string()));

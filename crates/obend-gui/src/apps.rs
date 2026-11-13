@@ -637,7 +637,7 @@ pub fn vcd_bits_to_hex(bits: &[u8]) -> String {
     let first_one = bits.iter().position(|&b| b != b'0').unwrap_or(bits.len() - 1);
     let trimmed = &bits[first_one..];
     let rem = trimmed.len() % 4;
-    let mut hex = String::with_capacity(2 + (trimmed.len() + 3) / 4);
+    let mut hex = String::with_capacity(2 + trimmed.len().div_ceil(4));
     hex.push_str("0x");
 
     if rem > 0 {
@@ -647,7 +647,7 @@ pub fn vcd_bits_to_hex(bits: &[u8]) -> String {
         }
         let _ = write!(&mut hex, "{nib:x}");
     }
-    for chunk in trimmed[rem..].chunks_exact(4) {
+    for chunk in trimmed[rem..].as_chunks::<4>().0 {
         let mut nib = 0u8;
         for &b in chunk {
             nib = (nib << 1) | u8::from(b == b'1');

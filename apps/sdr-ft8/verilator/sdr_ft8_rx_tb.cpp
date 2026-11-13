@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
                                         (long long)ciRtl[m], (long long)cqRtl[m], (long long)refI[m], (long long)refQ[m]);
             ++cicBad;
         }
-        cicMax = std::max({cicMax, std::llabs(ciRtl[m]), std::llabs(cqRtl[m])});
+        cicMax = std::max({cicMax, static_cast<int64_t>(std::llabs(ciRtl[m])), static_cast<int64_t>(std::llabs(cqRtl[m]))});
     }
     dut->final();
     delete dut;

@@ -120,10 +120,8 @@ fn test_challenger_pool_reentrant_deadlock() {
 }
 
 #[test]
-fn test_challenger_pool_zero_workers_hang() {
-    let pool = LeanWorkerPool::new(0);
-    let rx = pool.execute(|| 123);
-    let res = rx.recv_timeout(Duration::from_millis(100));
-    assert!(res.is_err(), "0-worker pool has no threads to consume jobs");
+#[should_panic(expected = "num_threads >= 1")]
+fn test_challenger_pool_zero_workers_rejected() {
+    let _pool = LeanWorkerPool::new(0);
 }
 

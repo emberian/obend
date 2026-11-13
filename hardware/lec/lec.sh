@@ -86,9 +86,10 @@ solver_verdict() {
 # width W, in both halves, becomes the same free function |lec_mul_W|. An `unsat` there is a proof
 # for every interpretation of multiplication, so for the real one; z3 then needs only to see that the
 # two sides multiply equal operands, not to bit-blast two multipliers. A `sat` there is reported as
-# undecided, never as a pass; so is a timeout of this second query, which has no limit unless
-# LEC_ABS_SECS is set (the square gate's tooth sets it). Sets `verdict` (unsat, sat, undecided or z3's own words), `answer` (z3's
-# whole output) and `how`; `$3` = 1 keeps the counterexample query.
+# undecided, never as a pass; so is a timeout of this second query, bounded by LEC_ABS_SECS
+# (default 15s when Bitwuzla is available as fallback, 30s otherwise) so Z3 never hangs forever.
+# Sets `verdict` (unsat, sat, undecided or z3's own words), `answer` (z3's whole output) and `how`;
+# `$3` = 1 keeps the counterexample query.
 decide() {  # $1 = yosys .smt2, $2 = lean half, $3 = with get-value (0/1)
   local lean="${work}/lean.smt2"
   if [[ "$3" == 1 ]]; then cp "$2" "${lean}"; else sed '/^; --- counterexample/,$d' "$2" > "${lean}"; fi
@@ -128,14 +129,14 @@ decide() {  # $1 = yosys .smt2, $2 = lean half, $3 = with get-value (0/1)
   { grep -ohE 'lec_mul_[0-9]+' "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2" | sort -u \
       | sed -E 's/lec_mul_([0-9]+)/(declare-fun |&| ((_ BitVec \1) (_ BitVec \1)) (_ BitVec \1))/'
     cat "${work}/abs.yosys.smt2" "${work}/abs.lean.smt2"; } > "${work}/abs.combined.smt2"
-  local z3_abs_t="${LEC_ABS_SECS:-$([[ -n "${BITWUZLA}" && -x "${BITWUZLA}" ]] && echo 15 || true)}"
-  answer="$(run_query ${z3_abs_t:+-T:"${z3_abs_t}"} < "${work}/abs.combined.smt2" 2>&1 || true)"
+  local z3_abs_t="${LEC_ABS_SECS:-$([[ -n "${BITWUZLA}" && -x "${BITWUZLA}" ]] && echo 15 || echo 30)}"
+  answer="$(run_query -T:"${z3_abs_t}" < "${work}/abs.combined.smt2" 2>&1 || true)"
   how="multiplication uninterpreted"; verdict="$(solver_verdict "${answer}")"
   if [[ "${verdict}" != "unsat" && "${verdict}" != error && -n "${BITWUZLA}" && -x "${BITWUZLA}" ]]; then
     if python3 "${SCRIPT_DIR}/smt_share.py" "${work}/abs.combined.smt2" "${work}/abs.bw.smt2" \
         --yosys "${YOSYS}" --keep-defines >"${work}/query.prepare.log" 2>&1; then
-      local bw_answer bw_verdict
-      bw_answer="$("${BITWUZLA}" ${LEC_ABS_SECS:+--time-limit=$((LEC_ABS_SECS * 1000))} "${work}/abs.bw.smt2" 2>&1 || true)"
+      local bw_answer bw_verdict bw_secs="${LEC_ABS_SECS:-30}"
+      bw_answer="$("${BITWUZLA}" --time-limit="$((bw_secs * 1000))" "${work}/abs.bw.smt2" 2>&1 || true)"
       bw_verdict="$(solver_verdict "${bw_answer}")"
       if [[ "${bw_verdict}" == "unsat" || "${bw_verdict}" == error ]]; then
         answer="${bw_answer}"; verdict="${bw_verdict}"

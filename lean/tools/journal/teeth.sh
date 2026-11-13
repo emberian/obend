@@ -11,7 +11,7 @@
 # Each edit is applied and inverted by exact text, so the files are as they were when this exits.
 # The teeth live in the `Obend.Slot` subtree: only its modules are built and exported (`--only`), so a
 # red module elsewhere in the tree (another lane's proof in progress) does not stop them.
-set -u
+set -euo pipefail
 export LEAN_NUM_THREADS=2
 OUT=${OUT:?set OUT to a scratch directory for the logs}
 mkdir -p "$OUT"
@@ -40,14 +40,19 @@ open(p, 'w').write(s.replace(old, new))
 PY
 }
 restore() {
-  grep -qF "$A_NEW" "$PROT" && replace_once "$PROT" "$A_NEW" "$A_OLD"
-  grep -qF "$(printf '%s' "$B_SECOND" | head -1)" "$SLOT" && python3 - "$SLOT" "$B_FIRST" "$B_SECOND" <<'PY'
+  set +e
+  if grep -qF "$A_NEW" "$PROT"; then
+    replace_once "$PROT" "$A_NEW" "$A_OLD"
+  fi
+  if grep -qF "$(printf '%s' "$B_SECOND" | head -1)" "$SLOT"; then
+    python3 - "$SLOT" "$B_FIRST" "$B_SECOND" <<'PY'
 import sys
 p, first, second = sys.argv[1:4]
 s = open(p).read()
 if s.count(second + '\n' + first) == 1:
     open(p, 'w').write(s.replace(second + '\n' + first, first + '\n' + second))
 PY
+  fi
   rm -f "$J"/env-teeth-*.jsonl
 }
 trap restore EXIT
@@ -65,10 +70,18 @@ section() {  # $1 report file, $2 section title: the names listed under it (inde
 SLOT_TARGETS="+Obend.Slot +Obend.Slot.Protocol +Obend.Slot.Calculus +Obend.Slot.Core4 +Obend.Slot.Proofs.ProtocolTyping +Obend.Slot.Proofs.Protocol +Obend.Slot.Proofs.Negotiation journal"
 build() { lake build $SLOT_TARGETS > "$1" 2>&1; }
 export_only() { lake env .lake/build/bin/journal export --only Obend.Slot --out "$1"; }
+diff_journal() {
+  local raw="$1" out="$2"
+  shift 2
+  lake env .lake/build/bin/journal diff "$@" > "$raw" 2>/dev/null
+  sed -n '/^journal:/,$p' "$raw" > "$out"
+  [ -s "$out" ]
+}
 
 echo "== (c) closure completeness on Kimi's seven-row graph"
 lake build Journal.Journal > "$OUT/teeth-build-c.log" 2>&1 || { echo "Journal.Journal not green; see $OUT/teeth-build-c.log"; exit 1; }
-lake env lean "$J/ClosureTooth.lean" > "$OUT/teeth-c.log" 2>&1; check "(c) old closure refuted, new closure complete (ClosureTooth.lean)" $?
+rc=0; lake env lean "$J/ClosureTooth.lean" > "$OUT/teeth-c.log" 2>&1 || rc=$?
+check "(c) old closure refuted, new closure complete (ClosureTooth.lean)" "$rc"
 
 echo "== Slot subtree green, export before"
 build "$OUT/teeth-build-0.log" || { echo "Slot subtree not green; see $OUT/teeth-build-0.log"; exit 1; }
@@ -79,13 +92,16 @@ replace_once "$PROT" "$A_OLD" "$A_NEW" || exit 1
 build "$OUT/teeth-build-a.log" || { echo "build (a) failed; see $OUT/teeth-build-a.log"; exit 1; }
 export_only "$J/env-teeth-a.jsonl" > "$OUT/teeth-export-a.log" 2>&1 || exit 1
 replace_once "$PROT" "$A_NEW" "$A_OLD" || exit 1
-lake env .lake/build/bin/journal diff "$J/env-teeth-before.jsonl" "$J/env-teeth-a.jsonl" 2>/dev/null | sed -n '/^journal:/,$p' > "$OUT/teeth-a.txt"
+diff_journal "$OUT/teeth-a.raw" "$OUT/teeth-a.txt" "$J/env-teeth-before.jsonl" "$J/env-teeth-a.jsonl" || { echo "journal diff (a) failed"; exit 1; }
 T=Obend.Slot.Protocol.Coin.no_foresight
-section "$OUT/teeth-a.txt" "PROOF-CITED" | grep -qxF "$T"; check "(a) $T under PROOF-CITED" $?
+rc=0; { section "$OUT/teeth-a.txt" "PROOF-CITED" | grep -qxF "$T"; } || rc=$?
+check "(a) $T under PROOF-CITED" "$rc"
 for s in "STATEMENT-CITED" "revised theorems (own statement meaning changed)" "reproved (supports hold, proof hash differs)" "added theorems" "removed theorems"; do
-  section "$OUT/teeth-a.txt" "$s" | grep -qxF "$T"; [ $? -ne 0 ]; check "(a) $T not under $s" $?
+  rc=0; { ! (section "$OUT/teeth-a.txt" "$s" | grep -qxF "$T"); } || rc=$?
+  check "(a) $T not under $s" "$rc"
 done
-grep -q 'Obend.Slot.Protocol.Coin.answer  meaning changed' "$OUT/teeth-a.txt"; check "(a) Coin.answer is a withdrawn support" $?
+rc=0; grep -q 'Obend.Slot.Protocol.Coin.answer  meaning changed' "$OUT/teeth-a.txt" || rc=$?
+check "(a) Coin.answer is a withdrawn support" "$rc"
 echo "--- (a) report:"; cat "$OUT/teeth-a.txt"
 
 echo "== (b) dead_eq_nil_iff and mem_dead_iff swapped"
@@ -97,12 +113,18 @@ export_only "$J/env-teeth-b.jsonl" > "$OUT/teeth-export-b.log" 2>&1 || exit 1
 replace_once "$SLOT" "$B_SECOND
 $B_FIRST" "$B_FIRST
 $B_SECOND" || exit 1
-lake env .lake/build/bin/journal diff "$J/env-teeth-before.jsonl" "$J/env-teeth-b.jsonl" 2>/dev/null | sed -n '/^journal:/,$p' > "$OUT/teeth-b.txt"
+diff_journal "$OUT/teeth-b.raw" "$OUT/teeth-b.txt" "$J/env-teeth-before.jsonl" "$J/env-teeth-b.jsonl" || { echo "journal diff (b) failed"; exit 1; }
 for s in "withdrawn supports" "revised theorems (own statement meaning changed)" "STATEMENT-CITED" "PROOF-CITED" "reproved (supports hold, proof hash differs)" "added theorems" "removed theorems"; do
-  grep -qF "$s (0)" "$OUT/teeth-b.txt"; check "(b) $s (0)" $?
+  rc=0; grep -qF "$s (0)" "$OUT/teeth-b.txt" || rc=$?
+  check "(b) $s (0)" "$rc"
 done
 echo "--- (b) report:"; cat "$OUT/teeth-b.txt"
 
 echo "== restored; rebuilding the subtree as it was"
-build "$OUT/teeth-build-restore.log"; echo "restore build exit $?"
+restore_rc=0; build "$OUT/teeth-build-restore.log" || restore_rc=$?
+echo "restore build exit $restore_rc"
+check "restore build green" "$restore_rc"
+if [ "$restore_rc" -ne 0 ]; then
+  cat "$OUT/teeth-build-restore.log" >&2
+fi
 exit $fail

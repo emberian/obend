@@ -13,8 +13,8 @@
 //!   folding and `iacc` shared-subtree pruning (`>= 30%` fewer hashes than independent Merkle paths).
 //! - [`pikkufold`]: `PikkuFold` (`2026/1809`) + `Akita` (`2026/1983`) Track L Lattice-SIS over
 //!   partially-splitting $R_{q_{\text{lat}}} = \mathbb{Z}_{q_{\text{lat}}}[X]/(X^{64} + 1)$
-//!   ($q_{\text{lat}} = 2^{48} - 59 \equiv 5 \pmod 8$), 0-mul Kronecker ternary projection,
-//!   constructive `extract_sis_collision`, and salted `SameOpening` Dark Bazaar clearing (`K7`).
+//!   ($q_{\text{lat}} = 2^{60} - 107 \equiv 5 \pmod 8$), 0-mul Kronecker ternary projection,
+//!   constructive `extract_sis_collision`, and salted zero-knowledge `SameOpening` Dark Bazaar clearing (`K7`).
 //! - [`det_cbor`]: Strict RFC 8949 §4.2 Deterministic CBOR codec & `DualPcsReceipt` wire format.
 
 #![no_std]
@@ -52,6 +52,7 @@ pub enum DualExtractError {
 
 /// Constructive L0 witness-carrying dual extractor (`K6`): maps a simultaneous Track H + Track L
 /// double-opening discrepancy directly to concrete `(CanopyHashCollision, SisCollisionWitness)` data.
+#[allow(clippy::too_many_arguments)]
 pub fn extract_dual_forgery_with<H>(
     hash_fn: H,
     codeword_cols: usize,
@@ -316,7 +317,7 @@ mod redteam_and_bench_tests {
 
         // Attempting `max_bits = 64` in Dark Bazaar `commit_private_order` is rejected (`<= 63` enforced!)
         let cp = CanopyParams::default_128bit();
-        let lp = LatticeParams::expand_from_seed([0x31u8; 32], 2, 2).unwrap();
+        let lp = LatticeParams::expand_from_seed([0x31u8; 32], 2, 4).unwrap();
         let wit = PrivateOrderWitness {
             qty_bits: to_bits_le(0, 64),
             total_bits: to_bits_le(0, 8),
@@ -452,9 +453,11 @@ mod redteam_and_bench_tests {
         )
         .unwrap();
 
-        // Tamper 1: wrong salt in witness -> rejected!
+        // Tamper 1: corrupted salted Canopy binding limbs in opening -> rejected!
         let mut bad_salt_prf = bazaar_prf.clone();
-        bad_salt_prf.order_openings[0].opened_witness.salt = OrderSalt::from_entropy([0xFFu8; 32]);
+        bad_salt_prf.order_openings[0].canopy_bind_limbs[0] = Goldilocks::from_u64_reduced(
+            bad_salt_prf.order_openings[0].canopy_bind_limbs[0].to_canonical_u64() ^ 1,
+        );
         assert!(verify_dark_bazaar_same_opening(
             &vk,
             &cp,
@@ -466,21 +469,34 @@ mod redteam_and_bench_tests {
         )
         .is_err());
 
-        // Tamper 2: non-zero primal-dual KKT gap (`fills = [5, 5]` while crossing `slacks = [1, 1]`) -> rejected!
-        let mut subopt_prf = bazaar_prf;
-        subopt_prf.order_fills = vec![5, 5];
+        // Tamper 2: non-zero primal-dual KKT gap (`fills = [5, 5]` or `[0, 0]`) -> rejected!
         assert!(matches!(
-            verify_dark_bazaar_same_opening(
+            prove_dark_bazaar_same_opening(
                 &vk,
                 &cp,
                 &lp,
                 &market,
                 &smudge,
                 &committed_orders,
-                &subopt_prf
+                &witnesses,
+                48,
+                vec![5, 5],
+                vec![1, 1],
             ),
             Err(LatticeError::NonZeroPrimalDualKktGap { .. })
         ));
+        let mut subopt_prf = bazaar_prf;
+        subopt_prf.order_fills = vec![5, 5];
+        assert!(verify_dark_bazaar_same_opening(
+            &vk,
+            &cp,
+            &lp,
+            &market,
+            &smudge,
+            &committed_orders,
+            &subopt_prf
+        )
+        .is_err());
     }
 
     /// **Red-Team `F7`**: `Choe–Kang–Stehlé (2026/2546)` unsmudged decryption, `< 40`-bit drowning,

@@ -7,8 +7,8 @@
 #                                 under `hvm run` (Rust) and `hvm run-c` (C) with the slots evalBookAt shows
 #                                 (each probe run on the demand machine) and with the Lean model's own run,
 #                                 [4] each planted rule makes at least one vector of each book disagree
-#   verify_hvm.sh --plant NAME    only the comparison, on nets emitted with the planted rule NAME
-#                                 (swapSwitch, addAsSub); it fails, and says where
+#   verify_hvm.sh --plant NAME    tooth check on nets emitted with the planted rule NAME
+#                                 (swapSwitch, addAsSub); passes (exit 0) iff every book catches it
 #   verify_hvm.sh --stage N       only stage N of the gate (1-4)
 #
 # Every `hvm` run is bounded: 120 s for the real books (a timeout fails the gate), 30 s for a planted
@@ -25,6 +25,22 @@ TIMEOUT="${TIMEOUT_BIN:-$(command -v timeout || command -v gtimeout || echo time
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/verify_hvm.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 BOOKS=(arith rec data)
+
+STAGE=""
+if [[ $# -gt 0 && "${1:-}" != "--plant" ]]; then
+  if [[ "${1:-}" == "--stage" && $# -eq 2 ]]; then
+    case "$2" in
+      1|2|3|4) STAGE="$2" ;;
+      *) echo "[FAIL] unknown --stage '$2' (expected 1, 2, 3, or 4)" >&2; exit 2 ;;
+    esac
+  else
+    echo "[FAIL] usage: verify_hvm.sh [--plant NAME | --stage 1|2|3|4]" >&2
+    exit 2
+  fi
+fi
+if [[ "${1:-}" == "--plant" ]]; then
+  [[ $# -eq 2 && -n "${2:-}" ]] || { echo "[FAIL] usage: verify_hvm.sh --plant NAME" >&2; exit 2; }
+fi
 
 [[ -x "${EMIT}" ]] || { echo "[FAIL] ${EMIT} missing: run \`lake build obend-emit-hvm\` in lean/" >&2; exit 1; }
 [[ -x "${HVM}" ]] || { echo "[FAIL] no hvm binary (cargo install hvm, or set HVM_BIN)" >&2; exit 1; }
@@ -45,26 +61,30 @@ compare() {
       fi
     done
   done < "${dir}/expected.tsv"
+  return 0
 }
 
 if [[ "${1:-}" == "--plant" ]]; then
-  plant="${2:?--plant NAME}"
+  [[ $# -eq 2 && -n "${2:-}" ]] || { echo "[FAIL] usage: verify_hvm.sh --plant NAME" >&2; exit 2; }
+  plant="$2"
   total=0
+  missed=0
   for book in "${BOOKS[@]}"; do
     "${EMIT}" "${book}" --vectors "${WORK}/${book}" --plant "${plant}"
     compare 30 "${WORK}/${book}" run
+    if (( MISMATCHES == 0 )); then
+      echo "[FAIL] planted ${plant} went unnoticed on ${book}: the comparison has no teeth" >&2
+      missed=$((missed + 1))
+    fi
     total=$((total + MISMATCHES))
   done
-  if (( total > 0 )); then
-    echo "[FAIL] planted ${plant}: ${total} runs disagree with evalBookAt" >&2
+  if (( missed > 0 || total == 0 )); then
     exit 1
   fi
-  echo "[PASS] planted ${plant} went unnoticed (the comparison has no teeth here)"
+  echo "[PASS] planted ${plant} caught across all ${#BOOKS[@]} books (${total} disagreeing runs)"
   exit 0
 fi
 
-STAGE=""
-if [[ "${1:-}" == "--stage" ]]; then STAGE="${2:?--stage N}"; fi
 run_stage() { [[ -z "${STAGE}" || "${STAGE}" == "$1" ]]; }
 
 if run_stage 1; then

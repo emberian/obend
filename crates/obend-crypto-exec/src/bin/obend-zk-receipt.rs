@@ -1,9 +1,9 @@
-//! `obend-zk-receipt`: Executable finite-law example and authority verification CLI for `Obend`'s
+//! `obend-zk-receipt`: Executable finite-law policy and authority verification CLI for `Obend`'s
 //! Dual-Track (`Canopy` Track H + `PikkuFold`/`Akita` Track L) + `ZkBiscuit` + `DetCbor` receipts.
 //!
 //! Subcommands:
-//! - `prove --root-secret <file> [--out <file>] [--nonce <u64>] [--epoch <u64>]`
-//! - `verify --root-secret <file> --current-epoch <u64> [--in <file>] [--nullifier-log <file>]`
+//! - `prove --root-secret <file> [--policy <policy.cbor>] [--amendment <exec.cbor>] [--target-organ <name>] [--out <file>] [--nonce <u64>] [--epoch <u64>]`
+//! - `verify --root-secret <file> --current-epoch <u64> --in <file> [--policy <policy.cbor>] [--target-organ <name>] [--required-rights <u64>] [--nullifier-log <file>]`
 //! - `tamper-test`
 //! - `bench [--iters <usize>]`
 
@@ -11,14 +11,15 @@
 
 use std::env;
 use std::fs;
-use std::io::{Read, Write, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
 use obend_crypto_exec::amend_cli::{
-    AmendmentProposal, AmendmentVerifierState, FastReceiptProfile, RefusalCode, RevocationSet,
-    SignedAmendmentEnvelope, ZkBiscuitChain, prove_amendment_envelope, example_amendment_execution,
+    AmendmentExecution, AmendmentProposal, AmendmentVerifierState, FastReceiptProfile, RefusalCode,
+    RevocationSet, SerializedPolicySpec, SignedAmendmentEnvelope, ZkBiscuitChain,
+    example_amendment_execution, prove_amendment_envelope,
 };
 use obend_crypto_exec::goldilocks::Goldilocks;
 use obend_crypto_exec::pikkufold::RingElem;
@@ -27,7 +28,10 @@ use obend_crypto_exec::transcript::cshake256_32;
 const DEFAULT_ROOT_LABEL: &[u8] = b"polis-cathedral-root-authority-v1";
 const DEFAULT_POLICY_LABEL: &str = "finite-law16-bedrock";
 const DEFAULT_AMENDMENT_LABEL: &str = "recover";
+const DEFAULT_TARGET_ORGAN: &str = "Obend.Trailblaze.StageBInstances";
 
+const REPLAY_LOG_MAGIC: &[u8; 8] = b"OBNUL004";
+const REPLAY_RECORD_LEN: usize = 176;
 
 fn hex32(bytes: &[u8; 32]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -54,103 +58,226 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-fn build_demo_inputs(
-    root_secret: [u8; 32],
-    _policy_label: &str,
-    _amendment_label: &str,
-    nonce: u64,
-    epoch: u64,
-) -> ([u8; 32], [u8; 32], AmendmentProposal, ZkBiscuitChain) {
-    let root_authority_id = root_secret;
-    let policy_digest =
-        example_amendment_execution().bedrock_digest();
-    let amendment_digest =
-        example_amendment_execution().turn_digest();
+fn load_policy_spec(
+    policy_arg: &str,
+    target_organ_override: Option<&str>,
+) -> Result<SerializedPolicySpec, String> {
+    let mut spec = if policy_arg == DEFAULT_POLICY_LABEL {
+        SerializedPolicySpec::default_finite_law16()
+    } else {
+        let raw = fs::read(policy_arg)
+            .map_err(|e| format!("cannot read serialized policy file `{policy_arg}`: {e}"))?;
+        SerializedPolicySpec::from_det_cbor_bytes(&raw)
+            .map_err(|e| format!("invalid canonical DetCbor policy `{policy_arg}`: {e}"))?
+    };
+    if let Some(organ) = target_organ_override {
+        if organ.is_empty() {
+            return Err(String::from("--target-organ cannot be empty"));
+        }
+        spec.target_organ = String::from(organ);
+    }
+    spec.validate()
+        .map_err(|e| format!("invalid policy specification: {e:?}"))?;
+    Ok(spec)
+}
 
-    let chain = ZkBiscuitChain::mint_root(
-        root_authority_id,
+fn load_amendment_execution(
+    amendment_arg: &str,
+    policy_spec: &SerializedPolicySpec,
+) -> Result<AmendmentExecution, String> {
+    if amendment_arg == DEFAULT_AMENDMENT_LABEL {
+        let mut ex = example_amendment_execution();
+        ex.bedrock = policy_spec.bedrock;
+        ex.bedrock_seed = policy_spec.bedrock_seed;
+        ex.old = policy_spec.prior_clauses.clone();
+        Ok(ex)
+    } else {
+        let raw = fs::read(amendment_arg)
+            .map_err(|e| format!("cannot read serialized amendment file `{amendment_arg}`: {e}"))?;
+        AmendmentExecution::from_det_cbor_bytes(&raw)
+            .map_err(|e| format!("invalid canonical DetCbor amendment `{amendment_arg}`: {e}"))
+    }
+}
+
+fn mint_default_chain(root_secret: [u8; 32], nonce: u64, epoch: u64) -> ZkBiscuitChain {
+    let root_max = epoch.saturating_add(1_000);
+    let mid_max = epoch.saturating_add(500);
+    let leaf_max = epoch.saturating_add(250);
+    ZkBiscuitChain::mint_root(
+        root_secret,
         101,
         0b1111_1111,
-        1_000,
+        root_max,
         "genesis:polis-council",
     )
-    .attenuate(&root_authority_id, 202, 0b0011_1111, 500, "delegate:clustergov-quorum")
+    .attenuate(
+        &root_secret,
+        202,
+        0b0011_1111,
+        mid_max,
+        "delegate:clustergov-quorum",
+    )
     .expect("valid hop 1 attenuation")
-    .attenuate(&root_authority_id, 303, 0b0000_1111, 250, &format!("leaf:amendment-prover:{nonce}"))
-    .expect("valid hop 2 attenuation");
+    .attenuate(
+        &root_secret,
+        303,
+        0b0000_1111,
+        leaf_max,
+        &format!("leaf:amendment-prover:{nonce}"),
+    )
+    .expect("valid hop 2 attenuation")
+}
 
+fn build_demo_inputs(
+    root_secret: [u8; 32],
+    nonce: u64,
+    epoch: u64,
+) -> (
+    [u8; 32],
+    [u8; 32],
+    AmendmentExecution,
+    AmendmentProposal,
+    ZkBiscuitChain,
+) {
+    let exec = example_amendment_execution();
+    let policy_digest = exec.bedrock_digest();
+    let amendment_digest = exec.turn_digest();
+    let chain = mint_default_chain(root_secret, nonce, epoch);
     let proposal = AmendmentProposal {
         policy_digest,
         amendment_digest,
-        prior_digest: example_amendment_execution().prior_digest(),
+        prior_digest: exec.prior_digest(),
         epoch,
         nonce,
         required_rights: 0b0000_0101,
-        target_organ: String::from("Obend.Trailblaze.StageBInstances"),
+        target_organ: String::from(DEFAULT_TARGET_ORGAN),
     };
-
-    (root_authority_id, policy_digest, proposal, chain)
+    (root_secret, policy_digest, exec, proposal, chain)
 }
 
 fn read_root_secret(path: Option<&str>) -> Result<[u8; 32], String> {
     let path = path.ok_or("--root-secret <32-byte key file> is required")?;
     let bytes = fs::read(path).map_err(|_| String::from("cannot read root-secret file"))?;
-    bytes.try_into().map_err(|_| String::from("root-secret file must contain exactly 32 bytes"))
+    bytes
+        .try_into()
+        .map_err(|_| String::from("root-secret file must contain exactly 32 bytes"))
 }
 
 fn default_nullifier_log() -> PathBuf {
-    let base = env::var_os("XDG_STATE_HOME").map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".local/state")
-    });
+    let base = env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".local/state")
+        });
     base.join("obend/amendment-nullifiers")
+}
+
+struct DurableReplaySnapshot {
+    file: fs::File,
+    nonces: Vec<u64>,
+    nullifiers: Vec<[u8; 32]>,
+    cursor: Option<(u64, [u8; 32])>,
 }
 
 // Exclusive OS file lock spans read, verify, append, and fsync. A partial record is
 // corruption, never an empty replay set. Failed receipts never consume a nonce.
-fn open_replay_log(path: &std::path::Path, root: &[u8; 32], policy: &[u8; 32])
-    -> std::io::Result<(fs::File, Vec<u64>, Vec<[u8; 32]>)> {
+fn open_replay_log(
+    path: &std::path::Path,
+    root: &[u8; 32],
+    policy: &[u8; 32],
+    target_organ: &str,
+) -> std::io::Result<DurableReplaySnapshot> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
     }
-    let mut file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)?;
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
     file.lock()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    const MAGIC: &[u8; 8] = b"OBNUL002";
     if bytes.is_empty() {
-        file.write_all(MAGIC)?;
+        file.write_all(REPLAY_LOG_MAGIC)?;
         file.sync_all()?;
-        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(REPLAY_LOG_MAGIC);
     }
-    if !bytes.starts_with(MAGIC) || (bytes.len() - MAGIC.len()) % 104 != 0 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid or partial nullifier log"));
+    if !bytes.starts_with(REPLAY_LOG_MAGIC)
+        || !(bytes.len() - REPLAY_LOG_MAGIC.len()).is_multiple_of(REPLAY_RECORD_LEN)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid or partial nullifier log",
+        ));
     }
-    let records = &bytes[MAGIC.len()..];
-    let nonces = records.chunks_exact(104).filter(|r| &r[..32] == root && &r[32..64] == policy)
-        .map(|r| u64::from_be_bytes(r[64..72].try_into().unwrap())).collect();
-    // Nullifiers are consumed across every policy under the same authority.
-    let nullifiers = records.chunks_exact(104).filter(|r| &r[..32] == root)
-        .map(|r| r[72..104].try_into().unwrap()).collect();
+    let target = obend_crypto_exec::amend_cli::target_organ_digest(target_organ);
+    let records = &bytes[REPLAY_LOG_MAGIC.len()..];
+    let mut nonces = Vec::new();
+    let mut nullifiers = Vec::new();
+    let mut cursor: Option<(u64, [u8; 32])> = None;
+
+    for r in records.as_chunks::<REPLAY_RECORD_LEN>().0 {
+        if &r[..32] == root {
+            nullifiers.push(r[72..104].try_into().unwrap());
+            if &r[32..64] == policy && r[144..176] == target {
+                nonces.push(u64::from_be_bytes(r[64..72].try_into().unwrap()));
+                let next_epoch = u64::from_be_bytes(r[104..112].try_into().unwrap());
+                let next_prior: [u8; 32] = r[112..144].try_into().unwrap();
+                cursor = Some((next_epoch, next_prior));
+            }
+        }
+    }
     file.seek(SeekFrom::End(0))?;
-    Ok((file, nonces, nullifiers))
+    Ok(DurableReplaySnapshot {
+        file,
+        nonces,
+        nullifiers,
+        cursor,
+    })
 }
 
-fn append_replay_log(file: &mut fs::File, root: &[u8; 32], policy: &[u8; 32], nonce: u64,
-    nullifier: &[u8; 32]) -> std::io::Result<()> {
-    let mut record = Vec::with_capacity(104);
+#[allow(clippy::too_many_arguments)]
+fn append_replay_log(
+    file: &mut fs::File,
+    root: &[u8; 32],
+    policy: &[u8; 32],
+    target_organ: &str,
+    nonce: u64,
+    nullifier: &[u8; 32],
+    next_epoch: u64,
+    next_prior_digest: &[u8; 32],
+) -> std::io::Result<()> {
+    let mut record = Vec::with_capacity(REPLAY_RECORD_LEN);
     record.extend_from_slice(root);
     record.extend_from_slice(policy);
     record.extend_from_slice(&nonce.to_be_bytes());
     record.extend_from_slice(nullifier);
+    record.extend_from_slice(&next_epoch.to_be_bytes());
+    record.extend_from_slice(next_prior_digest);
+    record.extend_from_slice(&obend_crypto_exec::amend_cli::target_organ_digest(
+        target_organ,
+    ));
     file.write_all(&record)?;
     file.sync_all()
+}
+
+#[inline]
+fn bench_gate_exit_code(sub_5ms_gate: bool) -> ExitCode {
+    if sub_5ms_gate {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 fn cmd_prove(args: &[String]) -> ExitCode {
     let mut root_secret_path: Option<String> = None;
     let mut out_path: Option<String> = None;
-    let mut policy_label = String::from(DEFAULT_POLICY_LABEL);
-    let mut amendment_label = String::from(DEFAULT_AMENDMENT_LABEL);
+    let mut policy_arg = String::from(DEFAULT_POLICY_LABEL);
+    let mut amendment_arg = String::from(DEFAULT_AMENDMENT_LABEL);
+    let mut target_organ_override: Option<String> = None;
     let mut nonce: u64 = 1;
     let mut epoch: u64 = 42;
 
@@ -158,18 +285,23 @@ fn cmd_prove(args: &[String]) -> ExitCode {
     while i < args.len() {
         match args[i].as_str() {
             "--root-secret" if i + 1 < args.len() => {
-                root_secret_path = Some(args[i + 1].clone()); i += 2;
+                root_secret_path = Some(args[i + 1].clone());
+                i += 2;
             }
             "--out" if i + 1 < args.len() => {
                 out_path = Some(args[i + 1].clone());
                 i += 2;
             }
             "--policy" if i + 1 < args.len() => {
-                policy_label = args[i + 1].clone();
+                policy_arg = args[i + 1].clone();
                 i += 2;
             }
             "--amendment" if i + 1 < args.len() => {
-                amendment_label = args[i + 1].clone();
+                amendment_arg = args[i + 1].clone();
+                i += 2;
+            }
+            "--target-organ" if i + 1 < args.len() => {
+                target_organ_override = Some(args[i + 1].clone());
                 i += 2;
             }
             "--nonce" if i + 1 < args.len() => {
@@ -199,19 +331,43 @@ fn cmd_prove(args: &[String]) -> ExitCode {
         }
     }
 
-    if policy_label != DEFAULT_POLICY_LABEL {
-        eprintln!("this CLI supports only the built-in finite-law policy; use the library for other laws");
-        return ExitCode::from(2);
-    }
     let root_secret = match read_root_secret(root_secret_path.as_deref()) {
-        Ok(key) => key, Err(e) => { eprintln!("{e}"); return ExitCode::from(2); }
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
     };
-    let profile = FastReceiptProfile::sub5ms_default();
-    if amendment_label != DEFAULT_AMENDMENT_LABEL {
-        eprintln!("this CLI supports only the built-in amendment; use the library for other amendments");
+    let policy_spec = match load_policy_spec(&policy_arg, target_organ_override.as_deref()) {
+        Ok(spec) => spec,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let execution = match load_amendment_execution(&amendment_arg, &policy_spec) {
+        Ok(exec) => exec,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    if execution.bedrock_digest() != policy_spec.policy_digest() {
+        eprintln!("amendment execution bedrock does not match serialized policy bedrock");
         return ExitCode::from(2);
     }
-    let (_, _, proposal, chain) = build_demo_inputs(root_secret, &policy_label, &amendment_label, nonce, epoch);
+
+    let profile = FastReceiptProfile::sub5ms_default();
+    let chain = mint_default_chain(root_secret, nonce, epoch);
+    let proposal = AmendmentProposal {
+        policy_digest: policy_spec.policy_digest(),
+        amendment_digest: execution.turn_digest(),
+        prior_digest: execution.prior_digest(),
+        epoch,
+        nonce,
+        required_rights: policy_spec.required_rights,
+        target_organ: policy_spec.target_organ.clone(),
+    };
     let revocations = RevocationSet::new();
 
     let t_prove = Instant::now();
@@ -219,7 +375,7 @@ fn cmd_prove(args: &[String]) -> ExitCode {
         &profile.canopy_params,
         &profile.lattice_params,
         profile.num_vars,
-        &example_amendment_execution(),
+        &execution,
         proposal,
         chain,
         &revocations,
@@ -256,7 +412,7 @@ fn cmd_prove(args: &[String]) -> ExitCode {
         .unwrap_or([0u8; 32]);
 
     println!(
-        "{{\n  \"command\": \"prove\",\n  \"status\": \"OK\",\n  \"num_vars\": {},\n  \"prove_us\": {},\n  \"cbor_encode_us\": {},\n  \"receipt_bytes\": {},\n  \"hop_count\": {},\n  \"nonce\": {},\n  \"epoch\": {},\n  \"proposal_commitment_hex\": \"{}\",\n  \"leaf_nullifier_hex\": \"{}\",\n  \"canopy_root_hex\": \"{}\",\n  \"transcript_digest_hex\": \"{}\",\n  \"out_path\": {}\n}}",
+        "{{\n  \"command\": \"prove\",\n  \"status\": \"OK\",\n  \"num_vars\": {},\n  \"prove_us\": {},\n  \"cbor_encode_us\": {},\n  \"receipt_bytes\": {},\n  \"hop_count\": {},\n  \"nonce\": {},\n  \"epoch\": {},\n  \"target_organ\": \"{}\",\n  \"proposal_commitment_hex\": \"{}\",\n  \"leaf_nullifier_hex\": \"{}\",\n  \"canopy_root_hex\": \"{}\",\n  \"transcript_digest_hex\": \"{}\",\n  \"out_path\": {}\n}}",
         profile.num_vars,
         prove_us,
         cbor_encode_us,
@@ -264,6 +420,7 @@ fn cmd_prove(args: &[String]) -> ExitCode {
         env.biscuit_chain.hops.len(),
         env.proposal.nonce,
         env.proposal.epoch,
+        json_escape(&env.proposal.target_organ),
         hex32(&prop_commit),
         hex32(&leaf_null),
         hex32(&env.dual_receipt.canopy_commitment.root),
@@ -279,25 +436,36 @@ fn cmd_prove(args: &[String]) -> ExitCode {
 fn cmd_verify(args: &[String]) -> ExitCode {
     let mut root_secret_path: Option<String> = None;
     let mut nullifier_log = default_nullifier_log();
-    let mut required_rights = 5u64;
+    let mut required_rights_override: Option<u64> = None;
     let mut current_epoch: Option<u64> = None;
     let mut in_path: Option<String> = None;
-    let mut policy_label = String::from(DEFAULT_POLICY_LABEL);
+    let mut policy_arg = String::from(DEFAULT_POLICY_LABEL);
+    let mut target_organ_override: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--root-secret" if i + 1 < args.len() => {
-                root_secret_path = Some(args[i + 1].clone()); i += 2;
+                root_secret_path = Some(args[i + 1].clone());
+                i += 2;
             }
             "--nullifier-log" if i + 1 < args.len() => {
-                nullifier_log = PathBuf::from(&args[i + 1]); i += 2;
+                nullifier_log = PathBuf::from(&args[i + 1]);
+                i += 2;
             }
             "--required-rights" | "--current-epoch" if i + 1 < args.len() => {
                 let value = match args[i + 1].parse::<u64>() {
-                    Ok(v) => v, Err(_) => { eprintln!("invalid integer policy flag"); return ExitCode::from(2); }
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("invalid integer policy flag");
+                        return ExitCode::from(2);
+                    }
                 };
-                if args[i] == "--required-rights" { required_rights = value; } else { current_epoch = Some(value); }
+                if args[i] == "--required-rights" {
+                    required_rights_override = Some(value);
+                } else {
+                    current_epoch = Some(value);
+                }
                 i += 2;
             }
             "--in" if i + 1 < args.len() => {
@@ -305,7 +473,11 @@ fn cmd_verify(args: &[String]) -> ExitCode {
                 i += 2;
             }
             "--policy" if i + 1 < args.len() => {
-                policy_label = args[i + 1].clone();
+                policy_arg = args[i + 1].clone();
+                i += 2;
+            }
+            "--target-organ" if i + 1 < args.len() => {
+                target_organ_override = Some(args[i + 1].clone());
                 i += 2;
             }
             other => {
@@ -315,50 +487,72 @@ fn cmd_verify(args: &[String]) -> ExitCode {
         }
     }
 
-    if policy_label != DEFAULT_POLICY_LABEL {
-        eprintln!("this CLI supports only the built-in finite-law policy; use the library for other laws");
+    let Some(ref receipt_path) = in_path else {
+        eprintln!("--in <receipt.cbor> is required for `verify`");
         return ExitCode::from(2);
-    }
+    };
     let root_secret = match read_root_secret(root_secret_path.as_deref()) {
-        Ok(key) => key, Err(e) => { eprintln!("{e}"); return ExitCode::from(2); }
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
     };
-    let Some(current_epoch) = current_epoch else {
-        eprintln!("--current-epoch is required from the verifier"); return ExitCode::from(2);
+    let Some(cli_epoch) = current_epoch else {
+        eprintln!("--current-epoch is required from the verifier");
+        return ExitCode::from(2);
     };
-    let profile = FastReceiptProfile::sub5ms_default();
-    let (root_authority_id, policy_digest, demo_prop, demo_chain) =
-        build_demo_inputs(root_secret, &policy_label, DEFAULT_AMENDMENT_LABEL, 1, 42);
-
-    let wire_bytes = match in_path {
-        Some(ref path) => match fs::read(path) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("failed to read {path}: {e}");
-                return ExitCode::from(1);
-            }
-        },
-        None => {
-            let env = prove_amendment_envelope(
-                &profile.canopy_params,
-                &profile.lattice_params,
-                profile.num_vars,
-                &example_amendment_execution(),
-                demo_prop,
-                demo_chain,
-                &RevocationSet::new(),
-            )
-            .expect("self-contained demo prove succeeds");
-            env.to_det_cbor_bytes().expect("DetCbor encode succeeds")
+    let policy_spec = match load_policy_spec(&policy_arg, target_organ_override.as_deref()) {
+        Ok(spec) => spec,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let wire_bytes = match fs::read(receipt_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("failed to read {receipt_path}: {e}");
+            return ExitCode::from(1);
         }
     };
 
-    let mut verifier = AmendmentVerifierState::new(root_authority_id, policy_digest, required_rights, current_epoch, example_amendment_execution().prior_digest());
-    let (mut replay_file, nonces, nullifiers) = match open_replay_log(&nullifier_log,
-        &verifier.expected_root_authority, &policy_digest) {
-        Ok(log) => log, Err(e) => { eprintln!("cannot load nullifier log: {e}"); return ExitCode::from(1); }
+    let profile = FastReceiptProfile::sub5ms_default();
+    let policy_digest = policy_spec.policy_digest();
+    let required_rights = required_rights_override.unwrap_or(policy_spec.required_rights);
+    let mut verifier = AmendmentVerifierState::new(
+        root_secret,
+        policy_digest,
+        required_rights,
+        cli_epoch,
+        policy_spec.prior_digest(),
+        policy_spec.target_organ.clone(),
+    );
+
+    let mut snap = match open_replay_log(
+        &nullifier_log,
+        &verifier.expected_root_authority,
+        &policy_digest,
+        &verifier.expected_target_organ,
+    ) {
+        Ok(log) => log,
+        Err(e) => {
+            eprintln!("cannot load nullifier log: {e}");
+            return ExitCode::from(1);
+        }
     };
-    verifier.restore_accepted_nonces(&nonces);
-    verifier.restore_spent_nullifiers(&nullifiers);
+    verifier.restore_accepted_nonces(&snap.nonces);
+    verifier.restore_spent_nullifiers(&snap.nullifiers);
+    if let Some((log_epoch, log_prior)) = snap.cursor {
+        if cli_epoch != log_epoch {
+            eprintln!(
+                "--current-epoch {cli_epoch} mismatches durable verifier cursor epoch {log_epoch}"
+            );
+            return ExitCode::from(1);
+        }
+        verifier.restore_state_cursor(log_epoch, log_prior);
+    }
+
     let t_dec = Instant::now();
     let decoded = match SignedAmendmentEnvelope::from_det_cbor_bytes(&wire_bytes) {
         Ok(e) => e,
@@ -382,13 +576,22 @@ fn cmd_verify(args: &[String]) -> ExitCode {
         &decoded,
     ) {
         Ok(report) => {
-            if let Err(e) = append_replay_log(&mut replay_file, &verifier.expected_root_authority,
-                &policy_digest, report.nonce, &report.leaf_nullifier) {
-                eprintln!("cannot persist accepted nonce: {e}"); return ExitCode::from(1);
+            if let Err(e) = append_replay_log(
+                &mut snap.file,
+                &verifier.expected_root_authority,
+                &policy_digest,
+                &verifier.expected_target_organ,
+                report.nonce,
+                &report.leaf_nullifier,
+                verifier.current_epoch,
+                &verifier.expected_prior_digest,
+            ) {
+                eprintln!("cannot persist accepted nonce: {e}");
+                return ExitCode::from(1);
             }
             let verify_us = t_ver.elapsed().as_micros();
             println!(
-                "{{\n  \"command\": \"verify\",\n  \"status\": \"ACCEPTED\",\n  \"cbor_decode_us\": {},\n  \"verify_us\": {},\n  \"receipt_bytes\": {},\n  \"hop_count\": {},\n  \"effective_rights\": {},\n  \"nonce\": {},\n  \"epoch\": {},\n  \"canopy_hashes\": {},\n  \"proposal_commitment_hex\": \"{}\",\n  \"leaf_nullifier_hex\": \"{}\",\n  \"canopy_root_hex\": \"{}\",\n  \"transcript_digest_hex\": \"{}\"\n}}",
+                "{{\n  \"command\": \"verify\",\n  \"status\": \"ACCEPTED\",\n  \"cbor_decode_us\": {},\n  \"verify_us\": {},\n  \"receipt_bytes\": {},\n  \"hop_count\": {},\n  \"effective_rights\": {},\n  \"nonce\": {},\n  \"epoch\": {},\n  \"next_epoch\": {},\n  \"target_organ\": \"{}\",\n  \"canopy_hashes\": {},\n  \"proposal_commitment_hex\": \"{}\",\n  \"leaf_nullifier_hex\": \"{}\",\n  \"next_prior_digest_hex\": \"{}\",\n  \"canopy_root_hex\": \"{}\",\n  \"transcript_digest_hex\": \"{}\"\n}}",
                 cbor_decode_us,
                 verify_us,
                 wire_bytes.len(),
@@ -396,9 +599,12 @@ fn cmd_verify(args: &[String]) -> ExitCode {
                 report.effective_rights,
                 report.nonce,
                 report.epoch,
+                verifier.current_epoch,
+                json_escape(&verifier.expected_target_organ),
                 report.hash_stats.total_hashes,
                 hex32(&report.proposal_commitment),
                 hex32(&report.leaf_nullifier),
+                hex32(&verifier.expected_prior_digest),
                 hex32(&report.canopy_root),
                 hex32(&report.final_transcript_digest),
             );
@@ -420,13 +626,16 @@ fn cmd_verify(args: &[String]) -> ExitCode {
 
 fn cmd_tamper_test() -> ExitCode {
     let profile = FastReceiptProfile::sub5ms_default();
-    let (root_auth, policy_digest, proposal, chain) =
-        build_demo_inputs(cshake256_32(b"OBEND.CLI.BENCH_KEY/v1", DEFAULT_ROOT_LABEL), DEFAULT_POLICY_LABEL, DEFAULT_AMENDMENT_LABEL, 99, 42);
+    let (root_auth, policy_digest, exec, proposal, chain) = build_demo_inputs(
+        cshake256_32(b"OBEND.CLI.BENCH_KEY/v1", DEFAULT_ROOT_LABEL),
+        99,
+        42,
+    );
     let env = prove_amendment_envelope(
         &profile.canopy_params,
         &profile.lattice_params,
         profile.num_vars,
-        &example_amendment_execution(),
+        &exec,
         proposal,
         chain,
         &RevocationSet::new(),
@@ -434,11 +643,21 @@ fn cmd_tamper_test() -> ExitCode {
     .expect("baseline envelope proves cleanly");
     let wire = env.to_det_cbor_bytes().expect("DetCbor encode");
 
+    let make_verifier = || {
+        AmendmentVerifierState::new(
+            root_auth,
+            policy_digest,
+            5,
+            42,
+            exec.prior_digest(),
+            DEFAULT_TARGET_ORGAN,
+        )
+    };
     let mut results: Vec<(&'static str, RefusalCode, u128, bool)> = Vec::new();
 
     // 1. Non-canonical CBOR map keys ({ "z": 1, "a": 2 })
     {
-        let mut st = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+        let mut st = make_verifier();
         let bad_cbor = [0xa2, 0x61, b'z', 0x01, 0x61, b'a', 0x02];
         let t = Instant::now();
         let err = st
@@ -455,7 +674,7 @@ fn cmd_tamper_test() -> ExitCode {
 
     // 2. Replayed nonce
     {
-        let mut st = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+        let mut st = make_verifier();
         st.verify_and_record_bytes(&profile.canopy_params, &profile.lattice_params, &wire)
             .expect("first nonce accepted");
         let t = Instant::now();
@@ -473,7 +692,7 @@ fn cmd_tamper_test() -> ExitCode {
 
     // 3. Forged attenuation hop (rights escalation)
     {
-        let mut st = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+        let mut st = make_verifier();
         let mut forged = env.clone();
         forged.biscuit_chain.hops[2].rights_mask = 0xFF;
         let forged_wire = forged.to_det_cbor_bytes().unwrap();
@@ -496,7 +715,7 @@ fn cmd_tamper_test() -> ExitCode {
 
     // 4. Revoked ancestor hop nullifier (`revoke_ancestor_kills_cone`)
     {
-        let mut st = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+        let mut st = make_verifier();
         st.revocations
             .revoke_nullifier(env.biscuit_chain.hops[1].hop_nullifier);
         let t = Instant::now();
@@ -514,7 +733,7 @@ fn cmd_tamper_test() -> ExitCode {
 
     // 5. Swapped amendment digest (breaks circuit_desc binding)
     {
-        let mut st = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+        let mut st = make_verifier();
         let mut swapped = env.clone();
         swapped.proposal.amendment_digest[0] ^= 0x80;
         let swapped_wire = swapped.to_det_cbor_bytes().unwrap();
@@ -537,7 +756,7 @@ fn cmd_tamper_test() -> ExitCode {
 
     // 6. Tampered Canopy Track H column evaluation
     {
-        let mut st = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+        let mut st = make_verifier();
         let mut bad_canopy = env.clone();
         bad_canopy.dual_receipt.canopy_proof.opened_columns[0].values[0] += Goldilocks::ONE;
         let bad_wire = bad_canopy.to_det_cbor_bytes().unwrap();
@@ -556,7 +775,7 @@ fn cmd_tamper_test() -> ExitCode {
 
     // 7. Tampered PikkuFold/Akita Track L witness
     {
-        let mut st = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+        let mut st = make_verifier();
         let mut bad_lat = env.clone();
         let mut coeffs = *bad_lat.dual_receipt.lattice_proof.final_witness.coeffs();
         coeffs[0] += 1;
@@ -615,29 +834,54 @@ struct ProfileBenchStats {
     canopy_hashes: usize,
 }
 
+// Retention is derived from satisfaction in this execution format. Alternate
+// incompatible clauses so each real amendment evicts its predecessor in place.
+fn benchmark_execution() -> AmendmentExecution {
+    let mut exec = example_amendment_execution();
+    exec.old = exec.proposed.clone();
+    exec.old[0].allowed = 1 << 6;
+    exec.proposed[0].allowed = 1 << 7;
+    exec
+}
+
+fn advance_benchmark_execution(exec: &mut AmendmentExecution) {
+    exec.old = exec.revised_clauses();
+    exec.selected ^= 1;
+    exec.proposed[0].allowed = 1 << exec.selected;
+}
+
 fn bench_profile(
     label: &'static str,
     profile: &FastReceiptProfile,
     iters: usize,
 ) -> ProfileBenchStats {
-    let (root_auth, policy_digest, base_prop, chain) =
-        build_demo_inputs(cshake256_32(b"OBEND.CLI.BENCH_KEY/v1", DEFAULT_ROOT_LABEL), DEFAULT_POLICY_LABEL, DEFAULT_AMENDMENT_LABEL, 1, 42);
+    let root_auth = cshake256_32(b"OBEND.CLI.BENCH_KEY/v1", DEFAULT_ROOT_LABEL);
+    let init_exec = benchmark_execution();
+    let policy_digest = init_exec.bedrock_digest();
     let revocations = RevocationSet::new();
 
     // Warm-up pass
     {
+        let (_, _, warm_exec, warm_prop, warm_chain) = build_demo_inputs(root_auth, 1, 42);
         let warm_env = prove_amendment_envelope(
             &profile.canopy_params,
             &profile.lattice_params,
             profile.num_vars,
-            &example_amendment_execution(),
-            base_prop.clone(),
-            chain.clone(),
+            &warm_exec,
+            warm_prop,
+            warm_chain,
             &revocations,
         )
         .expect("warmup prove");
         let warm_wire = warm_env.to_det_cbor_bytes().expect("warmup encode");
-        let mut warm_st = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+        let mut warm_st = AmendmentVerifierState::new(
+            root_auth,
+            policy_digest,
+            5,
+            42,
+            warm_exec.prior_digest(),
+            DEFAULT_TARGET_ORGAN,
+        );
         warm_st
             .verify_and_record_bytes(&profile.canopy_params, &profile.lattice_params, &warm_wire)
             .expect("warmup verify");
@@ -652,18 +896,36 @@ fn bench_profile(
     let mut wire_bytes: usize = 0;
     let mut canopy_hashes: usize = 0;
 
-    let mut verifier = AmendmentVerifierState::new(root_auth, policy_digest, 5, 42, example_amendment_execution().prior_digest());
+    let mut cur_exec = init_exec.clone();
+    let start_epoch: u64 = 42;
+    let mut verifier = AmendmentVerifierState::new(
+        root_auth,
+        policy_digest,
+        5,
+        start_epoch,
+        cur_exec.prior_digest(),
+        DEFAULT_TARGET_ORGAN,
+    );
 
-    for iter in 0..iters {
-        let (_, _, prop, iter_chain) = build_demo_inputs(root_auth, DEFAULT_POLICY_LABEL,
-            DEFAULT_AMENDMENT_LABEL, (iter as u64) + 1, 42);
+    for (cur_epoch_iter, iter) in (start_epoch..).zip(0..iters) {
+        let nonce = (iter as u64) + 1;
+        let iter_chain = mint_default_chain(root_auth, nonce, cur_epoch_iter);
+        let prop = AmendmentProposal {
+            policy_digest,
+            amendment_digest: cur_exec.turn_digest(),
+            prior_digest: cur_exec.prior_digest(),
+            epoch: cur_epoch_iter,
+            nonce,
+            required_rights: 0b0000_0101,
+            target_organ: String::from(DEFAULT_TARGET_ORGAN),
+        };
 
         let t_p = Instant::now();
         let env = prove_amendment_envelope(
             &profile.canopy_params,
             &profile.lattice_params,
             profile.num_vars,
-            &example_amendment_execution(),
+            &cur_exec,
             prop,
             iter_chain,
             &revocations,
@@ -686,11 +948,7 @@ fn bench_profile(
 
         let t_v = Instant::now();
         let rep = verifier
-            .verify_and_record_envelope(
-                &profile.canopy_params,
-                &profile.lattice_params,
-                &decoded,
-            )
+            .verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &decoded)
             .expect("bench verify");
         let v_us = t_v.elapsed().as_micros();
         sum_ver_us += v_us;
@@ -698,6 +956,8 @@ fn bench_profile(
             min_ver_us = v_us;
         }
         canopy_hashes = rep.hash_stats.total_hashes;
+
+        advance_benchmark_execution(&mut cur_exec);
     }
 
     let n = iters as u128;
@@ -770,15 +1030,15 @@ fn cmd_bench(args: &[String]) -> ExitCode {
     println!("  ]");
     println!("}}");
 
-    ExitCode::SUCCESS
+    bench_gate_exit_code(sub_5ms_gate)
 }
 
 fn print_usage() {
     eprintln!(
         "Usage: obend-zk-receipt <prove|verify|tamper-test|bench> [options]\n\
          Commands:\n  \
-           prove --root-secret <32-byte file> [--out <path>] [--nonce <u64>] [--epoch <u64>]\n  \
-           verify --root-secret <32-byte file> --current-epoch <u64> [--in <path>] [--required-rights <u64>] [--nullifier-log <path>]\n  \
+           prove --root-secret <32-byte file> [--policy <policy.cbor>] [--amendment <exec.cbor>] [--target-organ <name>] [--out <path>] [--nonce <u64>] [--epoch <u64>]\n  \
+           verify --root-secret <32-byte file> --current-epoch <u64> --in <path> [--policy <policy.cbor>] [--target-organ <name>] [--required-rights <u64>] [--nullifier-log <path>]\n  \
            tamper-test\n  \
            bench [--iters <usize>]"
     );
@@ -811,35 +1071,378 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod replay_tests {
     use super::*;
+    use obend_crypto_exec::amend_cli::LawClause;
+
+    #[test]
+    fn organs_advance_independent_durable_cursors() {
+        let path = env::temp_dir().join(format!(
+            "organ-cursors-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = [1; 32];
+        let policy = [2; 32];
+        {
+            let mut a = open_replay_log(&path, &root, &policy, "a").unwrap();
+            append_replay_log(&mut a.file, &root, &policy, "a", 1, &[3; 32], 7, &[4; 32]).unwrap();
+        }
+        {
+            let mut b = open_replay_log(&path, &root, &policy, "b").unwrap();
+            assert_eq!(b.cursor, None);
+            assert!(b.nonces.is_empty());
+            append_replay_log(&mut b.file, &root, &policy, "b", 1, &[5; 32], 11, &[6; 32]).unwrap();
+        }
+        assert_eq!(
+            open_replay_log(&path, &root, &policy, "a").unwrap().cursor,
+            Some((7, [4; 32]))
+        );
+        assert_eq!(
+            open_replay_log(&path, &root, &policy, "b").unwrap().cursor,
+            Some((11, [6; 32]))
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn benchmark_turns_keep_constant_clause_count_and_exact_cursor() {
+        let mut exec = benchmark_execution();
+        let size = exec.revised_clauses().len();
+        for _ in 0..1000 {
+            let expected_prior = exec.next_prior_digest();
+            advance_benchmark_execution(&mut exec);
+            assert_eq!(exec.prior_digest(), expected_prior);
+            assert_eq!(exec.revised_clauses().len(), size);
+            assert_eq!(exec.proposed.len(), 1);
+            assert!(exec.retained_clauses().is_empty());
+        }
+        let stats = bench_profile("regression", &FastReceiptProfile::sub5ms_default(), 3);
+        assert_eq!(stats.iters, 3);
+    }
+
+    #[test]
+    fn hvm_argument_validation_and_final_mismatch_status() {
+        let script = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../hardware/hvm/verify_hvm.sh"
+        );
+        let status = std::process::Command::new("bash")
+            .args([script, "--stage", "99"])
+            .env("OBEND_EMIT_HVM", "/nonexistent")
+            .env("HVM_BIN", "/nonexistent")
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(2));
+        let source = fs::read_to_string(script).unwrap();
+        let compare = source
+            .split("compare() {")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        let dir = env::temp_dir().join(format!("hvm-compare-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        fs::write(
+            dir.join("expected.tsv"),
+            "a.hvm\tmember\targs\texpected\tmodel\n",
+        )
+        .unwrap();
+        let code = format!(
+            "set -eu; TIMEOUT=env; HVM=false; compare() {{{compare}\n}}; compare 1 \"$1\" run; test \"$MISMATCHES\" = 1"
+        );
+        let status = std::process::Command::new("bash")
+            .args(["-c", &code, "test"])
+            .arg(&dir)
+            .status()
+            .unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(status.success());
+    }
+
     #[test]
     fn durable_log_rejects_replay_after_reopening() {
-        let path = env::temp_dir().join(format!("obend-replay-{}-{}.log", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        let (secret, policy, prop, chain) = build_demo_inputs([17; 32], "", "", 7, 42);
+        let path = env::temp_dir().join(format!(
+            "obend-replay-{}-{}.log",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (secret, policy, exec, prop, chain) = build_demo_inputs([17; 32], 7, 42);
         let profile = FastReceiptProfile::sub5ms_default();
-        let env = prove_amendment_envelope(&profile.canopy_params, &profile.lattice_params, 8,
-            &example_amendment_execution(), prop, chain, &RevocationSet::new()).unwrap();
+        let env = prove_amendment_envelope(
+            &profile.canopy_params,
+            &profile.lattice_params,
+            8,
+            &exec,
+            prop,
+            chain,
+            &RevocationSet::new(),
+        )
+        .unwrap();
         {
-            let mut verifier = AmendmentVerifierState::new(secret, policy, 5, 42, example_amendment_execution().prior_digest());
-            let (mut file, nonces, nullifiers) = open_replay_log(&path, &verifier.expected_root_authority, &policy).unwrap();
-            verifier.restore_accepted_nonces(&nonces);
-            verifier.restore_spent_nullifiers(&nullifiers);
-            let report = verifier.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env).unwrap();
-            append_replay_log(&mut file, &verifier.expected_root_authority, &policy, 7, &report.leaf_nullifier).unwrap();
+            let mut verifier = AmendmentVerifierState::new(
+                secret,
+                policy,
+                5,
+                42,
+                exec.prior_digest(),
+                DEFAULT_TARGET_ORGAN,
+            );
+            let mut snap = open_replay_log(
+                &path,
+                &verifier.expected_root_authority,
+                &policy,
+                &verifier.expected_target_organ,
+            )
+            .unwrap();
+            verifier.restore_accepted_nonces(&snap.nonces);
+            verifier.restore_spent_nullifiers(&snap.nullifiers);
+            let report = verifier
+                .verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env)
+                .unwrap();
+            append_replay_log(
+                &mut snap.file,
+                &verifier.expected_root_authority,
+                &policy,
+                &verifier.expected_target_organ,
+                7,
+                &report.leaf_nullifier,
+                verifier.current_epoch,
+                &verifier.expected_prior_digest,
+            )
+            .unwrap();
         }
         {
-            let mut verifier = AmendmentVerifierState::new(secret, policy, 5, 42, example_amendment_execution().prior_digest());
-            let (_file, nonces, nullifiers) = open_replay_log(&path, &verifier.expected_root_authority, &policy).unwrap();
-            verifier.restore_accepted_nonces(&nonces);
-            verifier.restore_spent_nullifiers(&nullifiers);
-            assert_eq!(verifier.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &env)
-                .unwrap_err().code(), RefusalCode::ReplayedNonce);
-            let mut next_proposal = env.proposal.clone(); next_proposal.nonce = 8;
-            let next = prove_amendment_envelope(&profile.canopy_params, &profile.lattice_params, 8,
-                &env.execution, next_proposal, env.biscuit_chain.clone(), &RevocationSet::new()).unwrap();
-            assert_eq!(verifier.verify_and_record_envelope(&profile.canopy_params, &profile.lattice_params, &next)
-                .unwrap_err().code(), RefusalCode::RevokedLineage);
+            let mut verifier = AmendmentVerifierState::new(
+                secret,
+                policy,
+                5,
+                42,
+                exec.prior_digest(),
+                DEFAULT_TARGET_ORGAN,
+            );
+            let snap = open_replay_log(
+                &path,
+                &verifier.expected_root_authority,
+                &policy,
+                &verifier.expected_target_organ,
+            )
+            .unwrap();
+            verifier.restore_accepted_nonces(&snap.nonces);
+            verifier.restore_spent_nullifiers(&snap.nullifiers);
+            if let Some((ep, pr)) = snap.cursor {
+                verifier.restore_state_cursor(ep, pr);
+            }
+            assert_eq!(
+                verifier
+                    .verify_and_record_envelope(
+                        &profile.canopy_params,
+                        &profile.lattice_params,
+                        &env
+                    )
+                    .unwrap_err()
+                    .code(),
+                RefusalCode::ReplayedNonce
+            );
+            let mut next_proposal = env.proposal.clone();
+            next_proposal.nonce = 8;
+            let next = prove_amendment_envelope(
+                &profile.canopy_params,
+                &profile.lattice_params,
+                8,
+                &env.execution,
+                next_proposal,
+                env.biscuit_chain.clone(),
+                &RevocationSet::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                verifier
+                    .verify_and_record_envelope(
+                        &profile.canopy_params,
+                        &profile.lattice_params,
+                        &next
+                    )
+                    .unwrap_err()
+                    .code(),
+                RefusalCode::RevokedLineage
+            );
         }
-        fs::remove_file(path).unwrap();
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn cli_verify_requires_in_flag_supports_serialized_policy_and_gates_bench() {
+        let dir = env::temp_dir().join(format!(
+            "obend-cli-p204-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let key_path = dir.join("root.key");
+        let policy_path = dir.join("custom_policy.cbor");
+        let exec1_path = dir.join("exec1.cbor");
+        let exec2_path = dir.join("exec2.cbor");
+        let rcpt1_path = dir.join("rcpt1.cbor");
+        let rcpt2_path = dir.join("rcpt2.cbor");
+        let log_path = dir.join("nullifiers.log");
+
+        fs::write(&key_path, [0x42u8; 32]).unwrap();
+
+        // 1. `verify` WITHOUT `--in` MUST fail with ExitCode(2) and NEVER self-manufacture a receipt!
+        let missing_in_rc = cmd_verify(&[
+            String::from("--root-secret"),
+            key_path.to_string_lossy().into_owned(),
+            String::from("--current-epoch"),
+            String::from("10"),
+            String::from("--nullifier-log"),
+            log_path.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(missing_in_rc, ExitCode::from(2));
+        assert!(!log_path.exists(), "missing --in must not touch replay log");
+
+        // 2. Real serialized CBOR policy + multi-turn serialized executions prove & verify cleanly!
+        let custom_policy = SerializedPolicySpec {
+            bedrock: 0x00c0,
+            bedrock_seed: 6,
+            prior_clauses: vec![LawClause {
+                name: String::from("baseline-safety"),
+                priority: 5,
+                allowed: 0x00c0,
+            }],
+            required_rights: 0b0000_0011,
+            target_organ: String::from("Obend.Hardware.SafePhysicalShield"),
+        };
+        fs::write(&policy_path, custom_policy.to_det_cbor_bytes().unwrap()).unwrap();
+
+        let exec1 = AmendmentExecution {
+            slot: 1,
+            old: custom_policy.prior_clauses.clone(),
+            proposed: vec![LawClause {
+                name: String::from("clamp-fence"),
+                priority: 2,
+                allowed: 0x0080,
+            }],
+            bedrock: custom_policy.bedrock,
+            bedrock_seed: custom_policy.bedrock_seed,
+            selected: 7,
+        };
+        fs::write(&exec1_path, exec1.to_det_cbor_bytes().unwrap()).unwrap();
+
+        assert_eq!(
+            cmd_prove(&[
+                String::from("--root-secret"),
+                key_path.to_string_lossy().into_owned(),
+                String::from("--policy"),
+                policy_path.to_string_lossy().into_owned(),
+                String::from("--amendment"),
+                exec1_path.to_string_lossy().into_owned(),
+                String::from("--nonce"),
+                String::from("101"),
+                String::from("--epoch"),
+                String::from("10"),
+                String::from("--out"),
+                rcpt1_path.to_string_lossy().into_owned(),
+            ]),
+            ExitCode::SUCCESS
+        );
+
+        // Wrong `--target-organ` MUST fail verification!
+        assert_eq!(
+            cmd_verify(&[
+                String::from("--root-secret"),
+                key_path.to_string_lossy().into_owned(),
+                String::from("--policy"),
+                policy_path.to_string_lossy().into_owned(),
+                String::from("--target-organ"),
+                String::from("Obend.Wrong.Organ"),
+                String::from("--current-epoch"),
+                String::from("10"),
+                String::from("--in"),
+                rcpt1_path.to_string_lossy().into_owned(),
+                String::from("--nullifier-log"),
+                log_path.to_string_lossy().into_owned(),
+            ]),
+            ExitCode::from(1)
+        );
+
+        // Matching policy & target organ accepts Turn 1 and advances durable cursor to epoch 11!
+        assert_eq!(
+            cmd_verify(&[
+                String::from("--root-secret"),
+                key_path.to_string_lossy().into_owned(),
+                String::from("--policy"),
+                policy_path.to_string_lossy().into_owned(),
+                String::from("--current-epoch"),
+                String::from("10"),
+                String::from("--in"),
+                rcpt1_path.to_string_lossy().into_owned(),
+                String::from("--nullifier-log"),
+                log_path.to_string_lossy().into_owned(),
+            ]),
+            ExitCode::SUCCESS
+        );
+
+        // Turn 2 advancing from `exec1.revised_clauses()` at epoch 11 succeeds!
+        let exec2 = AmendmentExecution {
+            slot: 1,
+            old: exec1.revised_clauses(),
+            proposed: vec![LawClause {
+                name: String::from("telemetry"),
+                priority: 1,
+                allowed: 0x0080,
+            }],
+            bedrock: custom_policy.bedrock,
+            bedrock_seed: custom_policy.bedrock_seed,
+            selected: 7,
+        };
+        fs::write(&exec2_path, exec2.to_det_cbor_bytes().unwrap()).unwrap();
+
+        assert_eq!(
+            cmd_prove(&[
+                String::from("--root-secret"),
+                key_path.to_string_lossy().into_owned(),
+                String::from("--policy"),
+                policy_path.to_string_lossy().into_owned(),
+                String::from("--amendment"),
+                exec2_path.to_string_lossy().into_owned(),
+                String::from("--nonce"),
+                String::from("102"),
+                String::from("--epoch"),
+                String::from("11"),
+                String::from("--out"),
+                rcpt2_path.to_string_lossy().into_owned(),
+            ]),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            cmd_verify(&[
+                String::from("--root-secret"),
+                key_path.to_string_lossy().into_owned(),
+                String::from("--policy"),
+                policy_path.to_string_lossy().into_owned(),
+                String::from("--current-epoch"),
+                String::from("11"),
+                String::from("--in"),
+                rcpt2_path.to_string_lossy().into_owned(),
+                String::from("--nullifier-log"),
+                log_path.to_string_lossy().into_owned(),
+            ]),
+            ExitCode::SUCCESS
+        );
+
+        // 3. `bench_gate_exit_code` returns non-zero when `sub_5ms_gate` fails!
+        assert_eq!(bench_gate_exit_code(true), ExitCode::SUCCESS);
+        assert_eq!(bench_gate_exit_code(false), ExitCode::from(1));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

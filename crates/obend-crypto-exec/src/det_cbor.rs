@@ -104,10 +104,9 @@ pub enum CborValue {
     Array(Vec<CborValue>),
     /// Major type 5: definite-length map (sorted in bytewise lexicographic order of encoded keys).
     Map(Vec<(CborValue, CborValue)>),
-    /// Major type 7 (`20` / `21`): boolean.
+    /// Major type 7 (`20` / `21`): boolean (matching `Obend.Codec.DetCbor.CborVal.simpleBool`;
+    /// `0xf6` `Null` and floats are forbidden).
     Bool(bool),
-    /// Major type 7 (`22`): null.
-    Null,
 }
 
 impl CborValue {
@@ -261,7 +260,6 @@ fn encode_value_into(val: &CborValue, out: &mut Vec<u8>, depth: usize) -> Result
         }
         CborValue::Bool(false) => out.push((7 << 5) | 20),
         CborValue::Bool(true) => out.push((7 << 5) | 21),
-        CborValue::Null => out.push((7 << 5) | 22),
     }
     Ok(())
 }
@@ -415,7 +413,6 @@ fn decode_item(
         7 => match ai {
             20 => Ok(CborValue::Bool(false)),
             21 => Ok(CborValue::Bool(true)),
-            22 => Ok(CborValue::Null),
             25..=27 => Err(DetCborError::FloatForbidden { initial_byte: head }),
             31 => Err(DetCborError::IndefiniteLengthForbidden),
             other => Err(DetCborError::UnsupportedSimpleValue(other)),
@@ -628,7 +625,7 @@ impl DualPcsReceipt {
                 .map(|col| {
                     let salt_val = match col.salt {
                         Some(s) => CborValue::Bytes(s.to_vec()),
-                        None => CborValue::Null,
+                        None => CborValue::Bytes(Vec::new()),
                     };
                     CborValue::Map(vec![
                         (
@@ -892,9 +889,19 @@ impl DualPcsReceipt {
             }
             let col_idx = usize::try_from(map_lookup(cm, "col_idx")?.as_u64()?)
                 .map_err(|_| DetCborError::LengthOverflow)?;
-            let salt = match map_lookup(cm, "salt")? {
-                CborValue::Null => None,
-                other => Some(other.as_fixed_bytes::<32>()?),
+            let salt_bytes = map_lookup(cm, "salt")?.as_bytes()?;
+            let salt = match salt_bytes.len() {
+                0 => None,
+                32 => {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(salt_bytes);
+                    Some(arr)
+                }
+                _ => {
+                    return Err(DetCborError::SchemaMismatch(String::from(
+                        "column salt must be 0 bytes (unsalted) or 32 bytes (salted)",
+                    )));
+                }
             };
             let values: Vec<Goldilocks> = map_lookup(cm, "values")?
                 .as_array()?
@@ -1245,12 +1252,18 @@ mod tests {
             (CborValue::Text(String::from("aa")), CborValue::Unsigned(1)),
             (CborValue::Text(String::from("b")), CborValue::Unsigned(2)),
             (CborValue::from_i64(-1), CborValue::Bool(true)),
-            (CborValue::Unsigned(0), CborValue::Null),
+            (CborValue::Unsigned(0), CborValue::Bytes(vec![])),
         ]);
         let bytes = encode_det_cbor(&unsorted).unwrap();
         let decoded = decode_det_cbor(&bytes).unwrap();
         let reencoded = encode_det_cbor(&decoded).unwrap();
         assert_eq!(bytes, reencoded, "re-encoding must be byte-for-byte identical");
+
+        // Reject CBOR Null (0xf6 = major 7, ai 22) to match Lean `Obend.Codec.DetCbor`
+        assert_eq!(
+            decode_det_cbor(&[0xf6]),
+            Err(DetCborError::UnsupportedSimpleValue(22))
+        );
 
         // Reject non-minimal integer: 5 encoded as [0x18, 0x05] instead of [0x05]
         assert!(matches!(

@@ -154,7 +154,7 @@ pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
         for i in 0..16 {
             w[i] = u32::from_be_bytes([
@@ -428,9 +428,8 @@ impl NotebookRunner {
             ObendError::WithDetail(Box::new(ObendError::DecodeFailed), e.to_string())
         })?;
         let resp_bytes = self.session.step_workbook(&payload)?;
-        serde_json::from_slice(&resp_bytes).map_err(|e| {
-            ObendError::WithDetail(Box::new(ObendError::DecodeFailed), e.to_string())
-        })
+        serde_json::from_slice(&resp_bytes)
+            .map_err(|e| ObendError::WithDetail(Box::new(ObendError::DecodeFailed), e.to_string()))
     }
 
     /// Drive the Lean kernel's Putnam/Foster lens scrubber (`obend_workbook_scrub_cell_json`).
@@ -439,72 +438,120 @@ impl NotebookRunner {
             ObendError::WithDetail(Box::new(ObendError::DecodeFailed), e.to_string())
         })?;
         let resp_bytes = self.session.scrub_projection_cell(&payload)?;
-        serde_json::from_slice(&resp_bytes).map_err(|e| {
-            ObendError::WithDetail(Box::new(ObendError::DecodeFailed), e.to_string())
-        })
+        serde_json::from_slice(&resp_bytes)
+            .map_err(|e| ObendError::WithDetail(Box::new(ObendError::DecodeFailed), e.to_string()))
     }
 
-    fn compute_section_transitive_digest(
-        &self,
-        owner: &str,
-        visiting: &mut HashSet<String>,
-    ) -> [u8; 32] {
-        if !visiting.insert(owner.to_string()) {
-            return sha256_bytes(format!("cycle::{owner}").as_bytes());
-        }
-        let mut buf = Vec::new();
-        if let Some(md) = self.sections.get(owner) {
-            buf.extend_from_slice(b"sec:present:");
-            buf.extend_from_slice(&(owner.len() as u64).to_be_bytes());
-            buf.extend_from_slice(owner.as_bytes());
-            buf.extend_from_slice(&(md.len() as u64).to_be_bytes());
-            buf.extend_from_slice(md.as_bytes());
-            for cited in extract_wikilink_owners(md) {
-                let child = self.compute_section_transitive_digest(&cited, visiting);
-                buf.extend_from_slice(&child);
-            }
-        } else {
-            buf.extend_from_slice(b"sec:missing:");
-            buf.extend_from_slice(&(owner.len() as u64).to_be_bytes());
-            buf.extend_from_slice(owner.as_bytes());
-        }
-        visiting.remove(owner);
-        sha256_bytes(&buf)
+    /// Compute the memoized transitive 256-bit SHA-256 digest of a literate markdown section
+    /// (`O(V + E)` on arbitrary diamond wikilink DAGs; cycle-safe on self/mutual citations).
+    pub fn section_transitive_digest(&self, owner: &str) -> [u8; 32] {
+        let mut visiting = HashSet::new();
+        let mut memo = HashMap::new();
+        compute_section_transitive_digest_map(&self.sections, owner, &mut visiting, &mut memo).0
     }
 
     /// Execute a `.obnb` cell slice incrementally over `Backlinks ∪ CellDeps`:
-    /// - Rejects dependency cycles and self-citations fail-closed (`ObendError::EvalFailed`).
+    /// - Rejects empty or duplicate `cell.id`s, ambiguous duplicate `# @module:` declarations,
+    ///   dependency cycles, and self-citations fail-closed (`ObendError::EvalFailed`).
     /// - Recomputes **only** cells in the dirty cone whose 256-bit effective input/dependency
     ///   digest changed, reusing clean cells' cached `ElaborationSummary` and 256-bit digests.
     pub fn execute_workbook_incremental(
         &mut self,
         cells: &[NotebookCell],
     ) -> WorkbookExecutionReport {
-        let mut id_to_idx: HashMap<String, usize> = HashMap::new();
-        let mut mod_to_id: HashMap<String, String> = HashMap::new();
-        for (idx, cell) in cells.iter().enumerate() {
-            id_to_idx.insert(cell.id.clone(), idx);
-            if let Some(mname) = extract_declared_module_name(&cell.source) {
-                mod_to_id.insert(mname, cell.id.clone());
+        let n = cells.len();
+        let mut id_counts: HashMap<&str, usize> = HashMap::with_capacity(n);
+        let mut mod_counts: HashMap<String, usize> = HashMap::new();
+        let mut declared_mods: Vec<Option<String>> = Vec::with_capacity(n);
+
+        for cell in cells {
+            *id_counts.entry(cell.id.as_str()).or_insert(0) += 1;
+            let m = extract_declared_module_name(&cell.source);
+            if let Some(ref mname) = m {
+                *mod_counts.entry(mname.clone()).or_insert(0) += 1;
             }
+            declared_mods.push(m);
         }
 
-        let mut direct_cell_deps: Vec<Vec<usize>> = vec![Vec::new(); cells.len()];
-        let mut cell_section_cites: Vec<Vec<String>> = vec![Vec::new(); cells.len()];
-        let mut has_self_or_forward_cycle: Vec<bool> = vec![false; cells.len()];
+        let mut invalid_reason: Vec<Option<String>> = vec![None; n];
+        let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(n);
+        let mut mod_to_id: HashMap<String, String> = HashMap::new();
 
         for (idx, cell) in cells.iter().enumerate() {
+            if cell.id.trim().is_empty() {
+                invalid_reason[idx] = Some("Workbook cell has empty cell.id (refused)".to_string());
+                continue;
+            }
+            if id_counts.get(cell.id.as_str()).copied().unwrap_or(0) > 1 {
+                self.cache.remove(&cell.id);
+                invalid_reason[idx] = Some(format!(
+                    "Duplicate workbook cell.id '{}' refused (status aliasing forbidden)",
+                    cell.id
+                ));
+                continue;
+            }
+            if let Some(ref mname) = declared_mods[idx] {
+                if mod_counts.get(mname).copied().unwrap_or(0) > 1 {
+                    self.cache.remove(&cell.id);
+                    invalid_reason[idx] = Some(format!(
+                        "Duplicate workbook # @module '{}' on cell '{}' refused",
+                        mname, cell.id
+                    ));
+                    continue;
+                }
+                mod_to_id.insert(mname.clone(), cell.id.clone());
+            }
+            id_to_idx.insert(cell.id.clone(), idx);
+        }
+
+        let mut direct_cell_deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut cell_section_cites: Vec<Vec<String>> = vec![Vec::new(); n];
+        let mut has_self_or_forward_cycle: Vec<bool> = vec![false; n];
+
+        for (idx, cell) in cells.iter().enumerate() {
+            if invalid_reason[idx].is_some() {
+                continue;
+            }
             let (mut raw_deps, cites) = extract_cell_dependencies(&cell.source, &mod_to_id);
+            // Detect imports targeting a duplicated # @module name
+            for line in cell.source.lines() {
+                if let Some(rest) = line.trim().strip_prefix("import ") {
+                    let path_tok = rest.split_whitespace().next().unwrap_or("").trim();
+                    if let Some(mod_stem) = path_tok
+                        .strip_prefix("./")
+                        .and_then(|s| s.strip_suffix(".obend"))
+                    {
+                        if mod_counts.get(mod_stem).copied().unwrap_or(0) > 1 {
+                            invalid_reason[idx] = Some(format!(
+                                "Cell '{}' imports ambiguous duplicated module '{}'",
+                                cell.id, mod_stem
+                            ));
+                        }
+                    }
+                }
+            }
             for owner in &cites {
-                if id_to_idx.contains_key(owner) && !raw_deps.iter().any(|x| x == owner) {
+                if id_counts.contains_key(owner.as_str()) && !raw_deps.iter().any(|x| x == owner) {
                     raw_deps.push(owner.clone());
                 }
             }
             for dep_id in &raw_deps {
                 if dep_id == &cell.id {
                     has_self_or_forward_cycle[idx] = true;
+                } else if id_counts.get(dep_id.as_str()).copied().unwrap_or(0) > 1 {
+                    invalid_reason[idx] = Some(format!(
+                        "Cell '{}' depends on duplicated cell.id '{}'",
+                        cell.id, dep_id
+                    ));
                 } else if let Some(&dep_idx) = id_to_idx.get(dep_id) {
-                    direct_cell_deps[idx].push(dep_idx);
+                    if invalid_reason[dep_idx].is_some() {
+                        invalid_reason[idx] = Some(format!(
+                            "Cell '{}' depends on invalid upstream cell '{}'",
+                            cell.id, dep_id
+                        ));
+                    } else {
+                        direct_cell_deps[idx].push(dep_idx);
+                    }
                 }
             }
             cell_section_cites[idx] = cites;
@@ -512,24 +559,29 @@ impl NotebookRunner {
 
         // Topological sort (Kahn's algorithm) to evaluate upstream producers before downstream readers
         // and detect any cycle in `CellDeps ∪ CellWikilinks`.
-        let n = cells.len();
         let mut indegree = vec![0usize; n];
         let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
         for u in 0..n {
+            if invalid_reason[u].is_some() {
+                continue;
+            }
             for &p in &direct_cell_deps[u] {
                 dependents[p].push(u);
                 indegree[u] += 1;
             }
         }
         let mut queue: std::collections::VecDeque<usize> = (0..n)
-            .filter(|&i| indegree[i] == 0 && !has_self_or_forward_cycle[i])
+            .filter(|&i| {
+                invalid_reason[i].is_none() && indegree[i] == 0 && !has_self_or_forward_cycle[i]
+            })
             .collect();
         let mut topo_order: Vec<usize> = Vec::with_capacity(n);
         while let Some(u) = queue.pop_front() {
             topo_order.push(u);
             for &v in &dependents[u] {
                 indegree[v] -= 1;
-                if indegree[v] == 0 && !has_self_or_forward_cycle[v] {
+                if indegree[v] == 0 && invalid_reason[v].is_none() && !has_self_or_forward_cycle[v]
+                {
                     queue.push_back(v);
                 }
             }
@@ -543,6 +595,7 @@ impl NotebookRunner {
         let mut effective_digests: Vec<[u8; 32]> = vec![[0u8; 32]; n];
         let mut dirty_cone = Vec::new();
         let mut clean_reused = Vec::new();
+        let mut section_memo: HashMap<String, [u8; 32]> = HashMap::new();
 
         for &idx in &topo_order {
             let cell = &cells[idx];
@@ -567,9 +620,15 @@ impl NotebookRunner {
                 hasher_input.extend_from_slice(&effective_digests[dep_idx]);
             }
             for sec_owner in &cell_section_cites[idx] {
-                if !id_to_idx.contains_key(sec_owner) {
+                if !id_counts.contains_key(sec_owner.as_str()) {
                     let mut vis = HashSet::new();
-                    let sec_d = self.compute_section_transitive_digest(sec_owner, &mut vis);
+                    let sec_d = compute_section_transitive_digest_map(
+                        &self.sections,
+                        sec_owner,
+                        &mut vis,
+                        &mut section_memo,
+                    )
+                    .0;
                     hasher_input.extend_from_slice(b"cite:");
                     hasher_input.extend_from_slice(&sec_d);
                 }
@@ -581,7 +640,7 @@ impl NotebookRunner {
             let is_clean = self
                 .cache
                 .get(&cell.id)
-                .map_or(false, |entry| entry.input_digest == digest);
+                .is_some_and(|entry| entry.input_digest == digest);
 
             if is_clean {
                 clean_reused.push(cell.id.clone());
@@ -606,7 +665,17 @@ impl NotebookRunner {
         let mut results = Vec::with_capacity(n);
 
         for (idx, cell) in cells.iter().enumerate() {
-            if !in_topo[idx] {
+            if let Some(ref reason) = invalid_reason[idx] {
+                dirty_cone.push(cell.id.clone());
+                let inv_err = Err(ObendError::WithDetail(
+                    Box::new(ObendError::EvalFailed),
+                    reason.clone(),
+                ));
+                let inv_digest = sha256_bytes(format!("invalid::{idx}::{}", cell.id).as_bytes());
+                cell_digests.insert(cell.id.clone(), inv_digest);
+                cell_digest_hex.insert(cell.id.clone(), hex_encode_32(&inv_digest));
+                results.push((cell.id.clone(), inv_err));
+            } else if !in_topo[idx] {
                 dirty_cone.push(cell.id.clone());
                 let cyc_err = Err(ObendError::WithDetail(
                     Box::new(ObendError::EvalFailed),
@@ -638,7 +707,7 @@ impl NotebookRunner {
 
     /// Scrub a bidirectional parameter on `cell_id` ("No Dead Pixels"), updating its `.obend` source
     /// binding and recomputing **only** the reachable downstream dirty cone.
-    /// Attempts to scrub a read-only proof badge fail closed (`ObendError::TurnRefused`).
+    /// Attempts to scrub a read-only proof badge or duplicate-ID workbook fail closed.
     pub fn scrub_cell_parameter(
         &mut self,
         cells: &mut [NotebookCell],
@@ -646,6 +715,8 @@ impl NotebookRunner {
         field_name: &str,
         new_value: u64,
     ) -> Result<WorkbookExecutionReport, ObendError> {
+        validate_workbook_cells(cells)?;
+
         let cell_pos = cells.iter().position(|c| c.id == cell_id).ok_or_else(|| {
             ObendError::WithDetail(
                 Box::new(ObendError::EvalFailed),
@@ -700,30 +771,389 @@ impl NotebookRunner {
     }
 }
 
-/// Update `# @param <field_name>=...` in place or append a canonical parameter pin comment.
-pub fn rewrite_obend_parameter(source: &str, field_name: &str, new_value: u64) -> String {
-    let marker_prefix = format!("# @param {field_name}=");
-    let mut replaced = false;
-    let mut updated_lines: Vec<String> = source
-        .lines()
-        .map(|line| {
-            if line.trim().starts_with(&marker_prefix) {
-                replaced = true;
-                format!("# @param {field_name}={new_value}")
-            } else {
-                line.to_string()
+/// Validate that every `NotebookCell` has a non-empty, unique `id`.
+pub fn validate_workbook_cells(cells: &[NotebookCell]) -> Result<(), ObendError> {
+    let mut seen = HashSet::with_capacity(cells.len());
+    for cell in cells {
+        if cell.id.trim().is_empty() {
+            return Err(ObendError::WithDetail(
+                Box::new(ObendError::EvalFailed),
+                "Workbook cell has empty cell.id".to_string(),
+            ));
+        }
+        if !seen.insert(cell.id.as_str()) {
+            return Err(ObendError::WithDetail(
+                Box::new(ObendError::EvalFailed),
+                format!("Duplicate workbook cell.id '{}' refused", cell.id),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn compute_section_transitive_digest_map(
+    sections: &BTreeMap<String, String>,
+    owner: &str,
+    visiting: &mut HashSet<String>,
+    memo: &mut HashMap<String, [u8; 32]>,
+) -> ([u8; 32], bool) {
+    if visiting.contains(owner) {
+        return (sha256_bytes(format!("cycle::{owner}").as_bytes()), true);
+    }
+    if let Some(&cached) = memo.get(owner) {
+        return (cached, false);
+    }
+
+    visiting.insert(owner.to_string());
+    let mut depended_on_active = false;
+    let mut buf = Vec::new();
+    if let Some(md) = sections.get(owner) {
+        buf.extend_from_slice(b"sec:present:");
+        buf.extend_from_slice(&(owner.len() as u64).to_be_bytes());
+        buf.extend_from_slice(owner.as_bytes());
+        buf.extend_from_slice(&(md.len() as u64).to_be_bytes());
+        buf.extend_from_slice(md.as_bytes());
+        for cited in extract_wikilink_owners(md) {
+            let (child, child_active) =
+                compute_section_transitive_digest_map(sections, &cited, visiting, memo);
+            depended_on_active |= child_active;
+            buf.extend_from_slice(&child);
+        }
+    } else {
+        buf.extend_from_slice(b"sec:missing:");
+        buf.extend_from_slice(&(owner.len() as u64).to_be_bytes());
+        buf.extend_from_slice(owner.as_bytes());
+    }
+    visiting.remove(owner);
+
+    let digest = sha256_bytes(&buf);
+    if !depended_on_active {
+        memo.insert(owner.to_string(), digest);
+    }
+    (digest, depended_on_active)
+}
+
+fn is_valid_obend_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_ident_boundary_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+fn split_code_and_comment(line: &str) -> (&str, &str) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut escaped = false;
+    while i < bytes.len() {
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if in_str && bytes[i] == b'\\' {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'"' {
+            in_str = !in_str;
+            i += 1;
+            continue;
+        }
+        if !in_str {
+            if bytes[i] == b'#' {
+                return (&line[..i], &line[i..]);
             }
+            if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
+                return (&line[..i], &line[i..]);
+            }
+        }
+        i += 1;
+    }
+    (line, "")
+}
+
+fn rewrite_numeric_rhs(rhs_raw: &str, new_value: u64) -> Option<String> {
+    let lead_len = rhs_raw.len() - rhs_raw.trim_start().len();
+    let lead = &rhs_raw[..lead_len];
+    let trimmed_end = rhs_raw[lead_len..].trim_end();
+    let trail = &rhs_raw[lead_len + trimmed_end.len()..];
+
+    let (core, semi) = if let Some(stripped) = trimmed_end.strip_suffix(';') {
+        (stripped.trim_end(), ";")
+    } else {
+        (trimmed_end, "")
+    };
+    if core.is_empty() {
+        return None;
+    }
+    let (digits_part, nat_suffix) = if let Some(d) = core.strip_suffix('n') {
+        (d, "n")
+    } else {
+        (core, "")
+    };
+    let digits_clean = digits_part.strip_prefix('-').unwrap_or(digits_part);
+    if digits_clean.is_empty() || !digits_clean.chars().all(|c| c.is_ascii_digit() || c == '_') {
+        return None;
+    }
+    if !digits_clean.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("{lead}{new_value}{nat_suffix}{semi}{trail}"))
+}
+
+enum LineRewriteOutcome {
+    Unchanged,
+    Replaced(String),
+    MatchNextIndentedBody(String),
+}
+
+fn try_rewrite_executable_line(line: &str, field_name: &str, new_value: u64) -> LineRewriteOutcome {
+    if field_name.is_empty() {
+        return LineRewriteOutcome::Unchanged;
+    }
+    let trimmed_all = line.trim();
+    if trimmed_all.is_empty() || trimmed_all.starts_with('#') || trimmed_all.starts_with("--") {
+        return LineRewriteOutcome::Unchanged;
+    }
+    let (code_part, comment_part) = split_code_and_comment(line);
+    let indent_len = code_part.len() - code_part.trim_start().len();
+    let indent = &code_part[..indent_len];
+    let code = code_part.trim_start();
+
+    // 1. Check `let <field_name> ...`, `def <field_name> ...`, or `<field_name> := / = ...`
+    let (kw_prefix, after_kw) = if let Some(rest) = code.strip_prefix("let ") {
+        let ws = rest.len() - rest.trim_start().len();
+        (&code[..4 + ws], rest.trim_start())
+    } else if let Some(rest) = code.strip_prefix("def ") {
+        let ws = rest.len() - rest.trim_start().len();
+        (&code[..4 + ws], rest.trim_start())
+    } else if let Some(rest) = code.strip_prefix("pub def ") {
+        let ws = rest.len() - rest.trim_start().len();
+        (&code[..8 + ws], rest.trim_start())
+    } else {
+        ("", code)
+    };
+
+    if let Some(after_ident) = after_kw.strip_prefix(field_name) {
+        let boundary_ok = after_ident
+            .chars()
+            .next()
+            .is_none_or(|c| !is_ident_boundary_char(c));
+        if boundary_ok {
+            // Check `def <field_name>() -> <Type>:` (ObjectiveBend zero-arg def)
+            let trimmed_after = after_ident.trim_start();
+            if kw_prefix.contains("def") && trimmed_after.starts_with("()") {
+                if let Some(colon_pos) = after_ident.rfind(':') {
+                    let after_colon = &after_ident[colon_pos + 1..];
+                    if after_colon.trim().is_empty() {
+                        return LineRewriteOutcome::MatchNextIndentedBody(line.to_string());
+                    }
+                    if let Some(new_rhs) = rewrite_numeric_rhs(after_colon, new_value) {
+                        return LineRewriteOutcome::Replaced(format!(
+                            "{indent}{kw_prefix}{field_name}{}{new_rhs}{comment_part}",
+                            &after_ident[..=colon_pos]
+                        ));
+                    }
+                }
+            }
+
+            // Check `:=` or `=` assignment (excluding `==`, `!=`, `<=`, `>=`)
+            if let Some(walrus_idx) = after_ident.find(":=") {
+                let lhs_tail = &after_ident[..walrus_idx + 2];
+                let rhs = &after_ident[walrus_idx + 2..];
+                if let Some(new_rhs) = rewrite_numeric_rhs(rhs, new_value) {
+                    return LineRewriteOutcome::Replaced(format!(
+                        "{indent}{kw_prefix}{field_name}{lhs_tail}{new_rhs}{comment_part}"
+                    ));
+                }
+            } else {
+                let bytes = after_ident.as_bytes();
+                for idx in 0..bytes.len() {
+                    if bytes[idx] == b'=' {
+                        let prev = if idx > 0 { bytes[idx - 1] } else { b' ' };
+                        let next = if idx + 1 < bytes.len() {
+                            bytes[idx + 1]
+                        } else {
+                            b' '
+                        };
+                        if prev != b'='
+                            && prev != b'!'
+                            && prev != b'<'
+                            && prev != b'>'
+                            && prev != b':'
+                            && next != b'='
+                            && next != b'>'
+                        {
+                            let lhs_tail = &after_ident[..=idx];
+                            let rhs = &after_ident[idx + 1..];
+                            if let Some(new_rhs) = rewrite_numeric_rhs(rhs, new_value) {
+                                return LineRewriteOutcome::Replaced(format!(
+                                    "{indent}{kw_prefix}{field_name}{lhs_tail}{new_rhs}{comment_part}"
+                                ));
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Check record field literal `{..., <field_name>: <digits>[n], ...}`
+    let mut quoted = false;
+    let mut escaped = false;
+    let outside: Vec<bool> = code_part
+        .bytes()
+        .map(|b| {
+            let visible = !quoted && b != b'"';
+            if escaped {
+                escaped = false;
+            } else if quoted && b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                quoted = !quoted;
+            }
+            visible
         })
         .collect();
-    if !replaced {
+    if code_part
+        .bytes()
+        .enumerate()
+        .any(|(i, b)| b == b'{' && outside[i])
+        && code_part
+            .bytes()
+            .enumerate()
+            .any(|(i, b)| b == b'}' && outside[i])
+    {
+        let mut out = String::with_capacity(code_part.len() + 8);
+        let mut cursor = 0usize;
+        let mut changed = false;
+        while let Some(rel) = code_part[cursor..].find(field_name) {
+            let start = cursor + rel;
+            let end = start + field_name.len();
+            let prev_ok = start == 0
+                || !code_part[..start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(is_ident_boundary_char);
+            let rest = &code_part[end..];
+            let rest_ws = rest.len() - rest.trim_start().len();
+            let after_ws = &rest[rest_ws..];
+            if outside[start] && prev_ok && after_ws.starts_with(':') && !after_ws.starts_with(":=")
+            {
+                let val_region = &after_ws[1..];
+                let delim_pos = val_region.find([',', '}']).unwrap_or(val_region.len());
+                let candidate = &val_region[..delim_pos];
+                if let Some(new_val) = rewrite_numeric_rhs(candidate, new_value) {
+                    out.push_str(&code_part[cursor..end + rest_ws + 1]);
+                    out.push_str(&new_val);
+                    cursor = end + rest_ws + 1 + delim_pos;
+                    changed = true;
+                    continue;
+                }
+            }
+            out.push_str(&code_part[cursor..end]);
+            cursor = end;
+        }
+        if changed {
+            out.push_str(&code_part[cursor..]);
+            out.push_str(comment_part);
+            return LineRewriteOutcome::Replaced(out);
+        }
+    }
+
+    LineRewriteOutcome::Unchanged
+}
+
+/// Rewrite executable `.obend` bindings (`k := v`, `let k = v`, `def k = v`,
+/// `def k() -> Nat:\n  vn`, `{..., k: vn, ...}`) AND `# @param <field_name>=...` in place.
+/// For `ObjectiveBend` modules that carried only `# @param` without a live binding, emits an
+/// executable `def <field_name>() -> Nat:` binding so kernel elaboration reflects scrubbed values.
+pub fn rewrite_obend_parameter(source: &str, field_name: &str, new_value: u64) -> String {
+    if field_name.is_empty() {
+        return source.to_string();
+    }
+    let marker_prefix = format!("# @param {field_name}=");
+    let mut replaced_marker = false;
+    let mut replaced_binding = false;
+    let mut pending_def_body = false;
+    let is_objective_bend = source
+        .lines()
+        .any(|l| l.trim().starts_with("edition ObjectiveBend"));
+
+    let mut updated_lines: Vec<String> = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(&marker_prefix) {
+            replaced_marker = true;
+            updated_lines.push(format!("# @param {field_name}={new_value}"));
+            continue;
+        }
+
+        if pending_def_body
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with("--")
+        {
+            pending_def_body = false;
+            let (code_part, comment_part) = split_code_and_comment(line);
+            if let Some(rewritten) = rewrite_numeric_rhs(code_part, new_value) {
+                replaced_binding = true;
+                updated_lines.push(format!("{rewritten}{comment_part}"));
+                continue;
+            }
+        }
+
+        match try_rewrite_executable_line(line, field_name, new_value) {
+            LineRewriteOutcome::Unchanged => updated_lines.push(line.to_string()),
+            LineRewriteOutcome::Replaced(new_line) => {
+                replaced_binding = true;
+                updated_lines.push(new_line);
+            }
+            LineRewriteOutcome::MatchNextIndentedBody(hdr_line) => {
+                pending_def_body = true;
+                updated_lines.push(hdr_line);
+            }
+        }
+    }
+
+    if !replaced_marker {
         updated_lines.push(format!("# @param {field_name}={new_value}"));
     }
+    if !replaced_binding && is_objective_bend && is_valid_obend_ident(field_name) {
+        updated_lines.push(format!("def {field_name}() -> Nat:"));
+        updated_lines.push(format!("  {new_value}n"));
+    }
+
     updated_lines.join("\n") + "\n"
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn parameter_rewrite_ignores_empty_names_and_strings() {
+        let source = r#"let label = "{traceWidthUm: 150n}""#;
+        assert_eq!(rewrite_obend_parameter(source, "", 9), source);
+        assert!(matches!(
+            try_rewrite_executable_line(source, "traceWidthUm", 9),
+            LineRewriteOutcome::Unchanged
+        ));
+        let mixed = r#"let x = {label: "\\\"{traceWidthUm: 150n}", traceWidthUm: 200n}"#;
+        let updated = rewrite_obend_parameter(mixed, "traceWidthUm", 9);
+        assert!(updated.contains("traceWidthUm: 150n"));
+        assert!(updated.contains("traceWidthUm: 9n"));
+    }
 
     #[test]
     fn test_rewrite_obend_parameter_idempotent_put_put() {
@@ -735,5 +1165,167 @@ mod tests {
         let twice = rewrite_obend_parameter(&once, "traceWidthUm", 200);
         assert_eq!(twice.matches("# @param traceWidthUm=").count(), 1);
         assert!(twice.contains("# @param traceWidthUm=200"));
+    }
+
+    #[test]
+    fn test_rewrite_obend_parameter_rewrites_executable_bindings() {
+        // 1. `k := v` and `let k = v` and `def k = v`
+        let src_assign = "traceWidthUm := 120\nlet clearanceUm = 80\ndef layers : Nat := 4n\ntraceWidthUmOther := 999\n";
+        let r1 = rewrite_obend_parameter(src_assign, "traceWidthUm", 175);
+        assert!(r1.contains("traceWidthUm := 175\n"));
+        assert!(r1.contains("traceWidthUmOther := 999\n"));
+
+        let r2 = rewrite_obend_parameter(&r1, "clearanceUm", 95);
+        assert!(r2.contains("let clearanceUm = 95\n"));
+
+        let r3 = rewrite_obend_parameter(&r2, "layers", 6);
+        assert!(r3.contains("def layers : Nat := 6n\n"));
+
+        // 2. ObjectiveBend multiline `def k() -> Nat:\n  150n` + record literal `{k: 150n}`
+        let src_ob = "edition ObjectiveBend 1\ndef traceWidthUm() -> Nat:\n  150n\ndef rec() -> Board:\n  {traceWidthUm: 150n, other: 7n}\n";
+        let rob1 = rewrite_obend_parameter(src_ob, "traceWidthUm", 240);
+        assert!(rob1.contains("def traceWidthUm() -> Nat:\n  240n\n"));
+        assert!(rob1.contains("{traceWidthUm: 240n, other: 7n}"));
+        assert_eq!(rob1.matches("def traceWidthUm()").count(), 1);
+
+        // 3. Legacy `# @param`-only ObjectiveBend cell gains executable `def` idempotently
+        let legacy_ob =
+            "edition ObjectiveBend 1\n# @param traceWidthUm=150\ndef unrelated() -> Nat:\n  1n\n";
+        let promoted_1 = rewrite_obend_parameter(legacy_ob, "traceWidthUm", 220);
+        assert!(promoted_1.contains("def traceWidthUm() -> Nat:\n  220n\n"));
+        let promoted_2 = rewrite_obend_parameter(&promoted_1, "traceWidthUm", 310);
+        assert!(promoted_2.contains("def traceWidthUm() -> Nat:\n  310n\n"));
+        assert_eq!(promoted_2.matches("def traceWidthUm()").count(), 1);
+    }
+
+    #[test]
+    fn test_diamond_dag_30_layers_memoized_linear_time() {
+        // 30-layer diamond DAG: L0 -> {A1, B1} -> L1 -> {A2, B2} -> ... -> L30
+        // Unmemoized tree traversal visits L30 2^30 = 1,073,741,824 times and hangs;
+        // memoized `compute_section_transitive_digest_map` visits each of the 91 nodes once.
+        let mut sections = BTreeMap::new();
+        sections.insert("L30".to_string(), "Leaf payload v1".to_string());
+        for d in (0..30).rev() {
+            let next = format!("L{}", d + 1);
+            let left = format!("A{}", d + 1);
+            let right = format!("B{}", d + 1);
+            sections.insert(left.clone(), format!("Left hop {d} -> [[{next}]]"));
+            sections.insert(right.clone(), format!("Right hop {d} -> ![[{next}#sec]]"));
+            sections.insert(
+                format!("L{d}"),
+                format!("Diamond layer {d}: [[{left}]] and [[{right}]]"),
+            );
+        }
+
+        let start = Instant::now();
+        let mut vis = HashSet::new();
+        let mut memo = HashMap::new();
+        let (d1, cyc1) =
+            compute_section_transitive_digest_map(&sections, "L0", &mut vis, &mut memo);
+        let elapsed = start.elapsed();
+        assert!(!cyc1);
+        assert_eq!(memo.len(), 91);
+        assert!(
+            elapsed.as_millis() < 250,
+            "30-layer diamond DAG must finish in milliseconds, took {elapsed:?}"
+        );
+
+        // Mutating the bottom leaf L30 propagates through all 30 diamond layers deterministically
+        sections.insert("L30".to_string(), "Leaf payload v2".to_string());
+        let mut vis2 = HashSet::new();
+        let mut memo2 = HashMap::new();
+        let (d2, cyc2) =
+            compute_section_transitive_digest_map(&sections, "L0", &mut vis2, &mut memo2);
+        assert!(!cyc2);
+        assert_ne!(d1, d2);
+    }
+
+    #[test]
+    fn test_validate_workbook_cells_rejects_duplicate_and_empty_ids() {
+        let ok_cells = vec![
+            NotebookCell {
+                id: "c1".to_string(),
+                kind: "obendCode".to_string(),
+                source: String::new(),
+                status: "ready".to_string(),
+            },
+            NotebookCell {
+                id: "c2".to_string(),
+                kind: "obendCode".to_string(),
+                source: String::new(),
+                status: "ready".to_string(),
+            },
+        ];
+        assert!(validate_workbook_cells(&ok_cells).is_ok());
+
+        let dup_cells = vec![
+            NotebookCell {
+                id: "dup".to_string(),
+                kind: "obendCode".to_string(),
+                source: "invalid".to_string(),
+                status: "ready".to_string(),
+            },
+            NotebookCell {
+                id: "dup".to_string(),
+                kind: "obendCode".to_string(),
+                source: "edition ObjectiveBend 1\ndef x() -> Nat:\n  1n\n".to_string(),
+                status: "ready".to_string(),
+            },
+        ];
+        assert!(validate_workbook_cells(&dup_cells).is_err());
+
+        let empty_id_cells = vec![NotebookCell {
+            id: "   ".to_string(),
+            kind: "obendCode".to_string(),
+            source: String::new(),
+            status: "ready".to_string(),
+        }];
+        assert!(validate_workbook_cells(&empty_id_cells).is_err());
+
+        if obend_ffi::kernel_is_native() {
+            let mut runner = NotebookRunner::new().expect("init NotebookRunner");
+            let report = runner.execute_workbook_incremental(&dup_cells);
+            assert_eq!(report.results.len(), 2);
+            assert!(
+                report.results[0].1.is_err(),
+                "failing cell must never inherit passing duplicate cell's status"
+            );
+            assert!(
+                report.results[1].1.is_err(),
+                "duplicated cell.id must be refused fail-closed"
+            );
+            assert_eq!(runner.cell_eval_count("dup"), 0);
+
+            // Live scrub must change kernel elaboration sha256 (not just strip comments!)
+            let mut p = BTreeMap::new();
+            p.insert("traceW".to_string(), 150);
+            runner.register_cell_lens("c_live", "pcbMultiphysicsDfm", p, &[]);
+            let mut live_cells = vec![NotebookCell {
+                id: "c_live".to_string(),
+                kind: "pcbMultiphysicsDfm".to_string(),
+                source: "edition ObjectiveBend 1\ndef traceW() -> Nat:\n  150n\n".to_string(),
+                status: "ready".to_string(),
+            }];
+            let rep_before = runner.execute_workbook_incremental(&live_cells);
+            let sha_before = rep_before.results[0]
+                .1
+                .as_ref()
+                .expect("before elaborates")
+                .sha256
+                .clone();
+            let rep_after = runner
+                .scrub_cell_parameter(&mut live_cells, "c_live", "traceW", 275)
+                .expect("scrub traceW");
+            let sha_after = rep_after.results[0]
+                .1
+                .as_ref()
+                .expect("after elaborates")
+                .sha256
+                .clone();
+            assert_ne!(
+                sha_before, sha_after,
+                "parameter scrub must update executable .obend AST and kernel elaboration sha256"
+            );
+        }
     }
 }
