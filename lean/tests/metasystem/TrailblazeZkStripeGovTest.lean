@@ -25,7 +25,8 @@ import all Obend.Judge.SymbolicRegexBisim
 import all Obend.Trailblaze.CathedralApex
 
 public section
-set_option maxErrors 1
+set_option maxRecDepth 10000
+set_option maxHeartbeats 4000000
 namespace Obend.Tests.Metasystem.TrailblazeZkStripeGovTest
 
 open Obend.Digest.HashBytes (be)
@@ -400,18 +401,18 @@ example : ∃ t : HttpsSessionNode,
 /-- One-worker identity reduction executes S_ENDPGM and reads the loaded VGPR. -/
 def executedDispatch : Rdna2WavefrontDispatch :=
   ⟨#[0xbf810000], 32, #[#[7, 11]], #[7, 11], false⟩
-example : checkRdna2DispatchEnvelope executedDispatch = true := by decide
-example : checkRdna2DispatchEnvelope { executedDispatch with hwReducedOut := #[99, 11] } = false := by decide
-example : checkRdna2DispatchEnvelope { executedDispatch with shaderIsaWords := #[0xffffffff] } = false := by decide
+example : checkRdna2DispatchEnvelope executedDispatch = true := by decide +kernel
+example : checkRdna2DispatchEnvelope { executedDispatch with hwReducedOut := #[99, 11] } = false := by decide +kernel
+example : checkRdna2DispatchEnvelope { executedDispatch with shaderIsaWords := #[0xffffffff] } = false := by decide +kernel
 
 
 def openingHash : Obend.Digest.HashBytes.Hash := fun _ => Obend.Digest.HashBytes.be 32 1
 def validOpening : SealedVramOpeningClaim :=
   ⟨1, 1, 1, Array.replicate 8 0, Array.replicate 8 1, Array.replicate 8 ⟨[]⟩, 0⟩
-example : checkVramChallengeOpening openingHash 1 42 validOpening = true := by decide
-example : checkVramChallengeOpening openingHash 1 42 { validOpening with sealedRoot256 := 0 } = false := by decide
-example : checkVramChallengeOpening openingHash 1 42 { validOpening with challengeSeed256 := 2 } = false := by decide
-example : checkVramChallengeOpening openingHash 1 42 { validOpening with openedPageDigests := Array.replicate 8 2 } = false := by decide
+example : checkVramChallengeOpening openingHash 1 42 validOpening = true := by decide +kernel
+example : checkVramChallengeOpening openingHash 1 42 { validOpening with sealedRoot256 := 0 } = false := by decide +kernel
+example : checkVramChallengeOpening openingHash 1 42 { validOpening with challengeSeed256 := 2 } = false := by decide +kernel
+example : checkVramChallengeOpening openingHash 1 42 { validOpening with openedPageDigests := Array.replicate 8 2 } = false := by decide +kernel
 
 end Obend.Tests.Metasystem.TrailblazeZkStripeGovTest
 end

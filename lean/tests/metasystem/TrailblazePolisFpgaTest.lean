@@ -305,20 +305,20 @@ example :
 example : silverLeanFpgaSmoke = true := rfl
 
 example : internSymbol [.symbol "x", .symbol "y"] (.symbol "x") ≠
-    internSymbol [.symbol "x", .symbol "y"] (.symbol "y") := by decide
-example : deltaTagBytes (.literal 32767) ≠ deltaTagBytes (.opcode 0) := by decide
+    internSymbol [.symbol "x", .symbol "y"] (.symbol "y") := by decide +kernel
+example : deltaTagBytes (.literal 32767) ≠ deltaTagBytes (.opcode 0) := by decide +kernel
 example : deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.symbol "x") (.lit 0))) ≠
-    deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.symbol "y") (.lit 0))) := by decide
+    deltaNetBytes (compileLeafExprToDeltaNet "symbol" (.proj (.symbol "y") (.lit 0))) := by decide +kernel
 #tooth internSymbol_injective by
   mutation internSymbol := fun _ _ => 0
 
 def twoHopRoute (source : Nat) : PipRoute :=
   ⟨source, [⟨Array.replicate 8 source, 0, source + 1⟩,
     ⟨Array.replicate 8 (source + 1), 7, source + 2⟩]⟩
-example : checkMultiNetPipDisjoint [twoHopRoute 0, twoHopRoute 3] = true := by decide
-example : checkMultiNetPipDisjoint [twoHopRoute 0, twoHopRoute 1] = false := by decide
+example : checkMultiNetPipDisjoint [twoHopRoute 0, twoHopRoute 3] = true := by decide +kernel
+example : checkMultiNetPipDisjoint [twoHopRoute 0, twoHopRoute 1] = false := by decide +kernel
 example : evalPipRoute (fun wire => wire == 3) (twoHopRoute 0) 2 = false ∧
-    evalPipRoute (fun wire => wire == 3) (twoHopRoute 3) 5 = true := by decide
+    evalPipRoute (fun wire => wire == 3) (twoHopRoute 3) 5 = true := by decide +kernel
 #tooth multiNetPip_routing_sound by
   mutation checkMultiNetPipDisjoint := fun _ => true
 
@@ -328,11 +328,11 @@ def reducedMemberNet : DeltaNet :=
   (runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
     memberReductionTrace).getD (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
 example : runDeltaReductions (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer")
-    memberReductionTrace = some reducedMemberNet := by decide
-example : checkDeltaNormalForm reducedMemberNet 42 = true := by decide
-example : checkDeltaNormalForm reducedMemberNet 43 = false := by decide
+    memberReductionTrace = some reducedMemberNet := by decide +kernel
+example : checkDeltaNormalForm reducedMemberNet 42 = true := by decide +kernel
+example : checkDeltaNormalForm reducedMemberNet 43 = false := by decide +kernel
 example : DeltaNetSteps (lowerLeafBookMemberToDeltaNet "member" literalMemberBook "answer") reducedMemberNet :=
-  runDeltaReductions_sound _ _ _ (by decide)
+  runDeltaReductions_sound _ _ _ (by decide +kernel)
 #tooth Obend.Trailblaze.StageB.stageB_leaf_book_deltanet_normal_form by
   mutation checkDeltaNormalForm := fun _ _ => true
 #tooth lowerTermToLeafExpr_split_field_sensitive by

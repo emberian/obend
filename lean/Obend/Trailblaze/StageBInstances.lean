@@ -16,6 +16,7 @@ public import Obend.Hardware.Gpu.Rdna2.Certified
 
 public section
 set_option maxErrors 3
+set_option pp.maxDepth 4
 
 
 namespace Obend.Trailblaze.Polis
@@ -5206,10 +5207,13 @@ theorem stageB_cathedral_seven_organ_trace_sealed
     (proj : List (List Obend.Crypto.TernaryCoeff))
     (witnessVec : List Int) (rowWeightCap normBeta : Nat)
     (g₁ g₂ : Obend.Polis.Block) (hops₁ hops₂ : List Obend.Polis.Block)
+    (hPinnedBudget : init.remVaultBudget ≤ init.vaultMandate.budget)
     (hRun : runStageBCathedralTrace init turns = some final)
     (hRows : ∀ row ∈ proj, Obend.Crypto.ternaryRowWeight row ≤ rowWeightCap)
     (hShort : Obend.Crypto.ShortNormBound normBeta witnessVec)
     (hSameLineage : Obend.Polis.lineageOf g₁ hops₁ = Obend.Polis.lineageOf g₂ hops₂) :
+    (∀ id, init.biscuitRevoked.contains id = true → final.biscuitRevoked.contains id = true) ∧
+    totalSevenOrganVaultCost turns ≤ init.vaultMandate.budget ∧
     -- O1 (`VaultLedger`)
     final.remVaultBudget + totalSevenOrganVaultCost turns = init.remVaultBudget ∧
     (∀ t ∈ turns, Obend.Vault.Mandate.refusal t.vaultMandate t.vaultInvocation = none) ∧
@@ -5252,76 +5256,79 @@ theorem stageB_cathedral_seven_organ_trace_sealed
         (t.fpgaTurn.cofibLeft.evalTernaryPoint pt && t.fpgaTurn.cofibRight.evalTernaryPoint pt) ∧
       (FaceIdeal3.varEq0 vAxis).join (FaceIdeal3.varEq1 vAxis) ≠ FaceIdeal3.top ∧
       MultiTileRoutedCorrespondence t.fpgaTurn.deltaNet t.fpgaTurn.dualFrames pt) := by
-  obtain ⟨hPolValid, hCathRun, hVaultCons, hAllMBFpga⟩ :=
-    runStageBCathedralTrace_decompose init final turns hRun
-  obtain ⟨hRevMono, _hFresh, hNodup, hPolBudget, hPolSafety⟩ :=
-    polisTrace_constructive_invariants init.polisState
-      (turns.map StageBSevenOrganTurn.polisTurn) final.polisState hPolValid
-  obtain ⟨hAllCathOk, hChain, _hEpLe, _hUsedEq, _hConsEq, hFlopsLe, hHidLe⟩ :=
-    cathedralTrace_sound init.cathedralState final.cathedralState
-      (turns.map StageBSevenOrganTurn.cathedralTurn) hCathRun
-  have hPikku :=
-    Obend.Crypto.normInf_ternaryProj_le proj witnessVec rowWeightCap normBeta hRows hShort
-  have hLinBinds :=
-    Obend.Polis.lineageOf_binds hSameLineage
-  refine ⟨hVaultCons, ?_, hRevMono, hNodup, hPolBudget, ?_, hPikku, hLinBinds, ?_,
-          ?_, hChain, hFlopsLe, hHidLe, ?_⟩
-  · intro t ht
-    have hMB := (hAllMBFpga t ht).1
-    unfold checkTurnMandateAndBiscuit at hMB
-    simp only [Bool.and_eq_true] at hMB
-    exact (Obend.Vault.Mandate.refusal_none_iff t.vaultMandate t.vaultInvocation).mpr hMB.1
-  · intro t ht
-    exact hPolSafety t.polisTurn (List.mem_map_of_mem ht)
-  · intro t ht
-    have hMB := (hAllMBFpga t ht).1
-    unfold checkTurnMandateAndBiscuit at hMB
-    simp only [Bool.and_eq_true] at hMB
-    cases hFold : Obend.Polis.foldChain
-        t.biscuitRevoked t.biscuitEnv t.biscuitRoot t.biscuitHops with
-    | none =>
-      rw [hFold] at hMB
-      cases hMB.2
-    | some acc =>
-      rw [hFold] at hMB
-      exact ⟨acc, rfl, hMB.2⟩
-  · intro t ht
-    exact hAllCathOk t.cathedralTurn (List.mem_map_of_mem ht)
-  · intro t ht pt vAxis
-    have hFpgaOk := (hAllMBFpga t ht).2
-    unfold checkLeanFpgaTurn refuseLeanFpgaTurn at hFpgaOk
-    split at hFpgaOk
-    · cases hFpgaOk
-    · rename_i hLinNeg
+  have hp := runStageBCathedralTrace_authority_persistent init final turns hRun
+  have hb := (runStageBCathedralTrace_decompose init final turns hRun).2.2.1
+  refine ⟨hp.2.2, (by omega), ?_⟩
+    obtain ⟨hPolValid, hCathRun, hVaultCons, hAllMBFpga⟩ :=
+      runStageBCathedralTrace_decompose init final turns hRun
+    obtain ⟨hRevMono, _hFresh, hNodup, hPolBudget, hPolSafety⟩ :=
+      polisTrace_constructive_invariants init.polisState
+        (turns.map StageBSevenOrganTurn.polisTurn) final.polisState hPolValid
+    obtain ⟨hAllCathOk, hChain, _hEpLe, _hUsedEq, _hConsEq, hFlopsLe, hHidLe⟩ :=
+      cathedralTrace_sound init.cathedralState final.cathedralState
+        (turns.map StageBSevenOrganTurn.cathedralTurn) hCathRun
+    have hPikku :=
+      Obend.Crypto.normInf_ternaryProj_le proj witnessVec rowWeightCap normBeta hRows hShort
+    have hLinBinds :=
+      Obend.Polis.lineageOf_binds hSameLineage
+    refine ⟨hVaultCons, ?_, hRevMono, hNodup, hPolBudget, ?_, hPikku, hLinBinds, ?_,
+            ?_, hChain, hFlopsLe, hHidLe, ?_⟩
+    · intro t ht
+      have hMB := (hAllMBFpga t ht).1
+      unfold checkTurnMandateAndBiscuit at hMB
+      simp only [Bool.and_eq_true] at hMB
+      exact (Obend.Vault.Mandate.refusal_none_iff t.vaultMandate t.vaultInvocation).mpr hMB.1
+    · intro t ht
+      exact hPolSafety t.polisTurn (List.mem_map_of_mem ht)
+    · intro t ht
+      have hMB := (hAllMBFpga t ht).1
+      unfold checkTurnMandateAndBiscuit at hMB
+      simp only [Bool.and_eq_true] at hMB
+      cases hFold : Obend.Polis.foldChain
+          t.biscuitRevoked t.biscuitEnv t.biscuitRoot t.biscuitHops with
+      | none =>
+        rw [hFold] at hMB
+        cases hMB.2
+      | some acc =>
+        rw [hFold] at hMB
+        exact ⟨acc, rfl, hMB.2⟩
+    · intro t ht
+      exact hAllCathOk t.cathedralTurn (List.mem_map_of_mem ht)
+    · intro t ht pt vAxis
+      have hFpgaOk := (hAllMBFpga t ht).2
+      unfold checkLeanFpgaTurn refuseLeanFpgaTurn at hFpgaOk
       split at hFpgaOk
       · cases hFpgaOk
-      · rename_i hCanNeg
+      · rename_i hLinNeg
         split at hFpgaOk
         · cases hFpgaOk
-        · split at hFpgaOk
+        · rename_i hCanNeg
+          split at hFpgaOk
           · cases hFpgaOk
-          · rename_i _ hFrameNeg
-            have hLin : checkNetPortLinearity t.fpgaTurn.deltaNet = true :=
-              bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hLinNeg)
-            have hCan : checkCanonicalDualFrames t.fpgaTurn.dualFrames = true :=
-              bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hCanNeg)
-            have hFrameEq :
-                t.fpgaTurn.dualFrames =
-                  encodeDualBitstreamFrames
-                    (compileFaceIdealToDualTiles (t.fpgaTurn.cofibLeft.meet t.fpgaTurn.cofibRight)
-                      t.fpgaTurn.loPipRoute t.fpgaTurn.hiPipRoute) :=
-              bne_eq_false_iff_eq.mp (Bool.eq_false_iff.mpr hFrameNeg)
-            have hEval :
-                evalDualFabulousCofib (decodeDualBitstreamFrames t.fpgaTurn.dualFrames)
-                  pt false false (fun _ => false) (fun _ => false) =
-                  (t.fpgaTurn.cofibLeft.evalTernaryPoint pt &&
-                   t.fpgaTurn.cofibRight.evalTernaryPoint pt) := by
-              rw [hFrameEq, decode_encode_dualFabulousFrames,
-                  evalDualFabulousCofib_eq_evalTernaryPoint]
-              exact FaceIdeal3.evalTernaryPoint_meet t.fpgaTurn.cofibLeft t.fpgaTurn.cofibRight pt
-            exact ⟨hEval,
-                   FaceIdeal3.varEq0_join_varEq1_ne_top vAxis,
-                   stageB_nextpnr_dual_tile_routing_sound t.fpgaTurn.deltaNet t.fpgaTurn.dualFrames pt hLin hCan⟩
+          · split at hFpgaOk
+            · cases hFpgaOk
+            · rename_i _ hFrameNeg
+              have hLin : checkNetPortLinearity t.fpgaTurn.deltaNet = true :=
+                bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hLinNeg)
+              have hCan : checkCanonicalDualFrames t.fpgaTurn.dualFrames = true :=
+                bool_eq_true_of_not_eq_false (Bool.eq_false_iff.mpr hCanNeg)
+              have hFrameEq :
+                  t.fpgaTurn.dualFrames =
+                    encodeDualBitstreamFrames
+                      (compileFaceIdealToDualTiles (t.fpgaTurn.cofibLeft.meet t.fpgaTurn.cofibRight)
+                        t.fpgaTurn.loPipRoute t.fpgaTurn.hiPipRoute) :=
+                bne_eq_false_iff_eq.mp (Bool.eq_false_iff.mpr hFrameNeg)
+              have hEval :
+                  evalDualFabulousCofib (decodeDualBitstreamFrames t.fpgaTurn.dualFrames)
+                    pt false false (fun _ => false) (fun _ => false) =
+                    (t.fpgaTurn.cofibLeft.evalTernaryPoint pt &&
+                     t.fpgaTurn.cofibRight.evalTernaryPoint pt) := by
+                rw [hFrameEq, decode_encode_dualFabulousFrames,
+                    evalDualFabulousCofib_eq_evalTernaryPoint]
+                exact FaceIdeal3.evalTernaryPoint_meet t.fpgaTurn.cofibLeft t.fpgaTurn.cofibRight pt
+              exact ⟨hEval,
+                     FaceIdeal3.varEq0_join_varEq1_ne_top vAxis,
+                     stageB_nextpnr_dual_tile_routing_sound t.fpgaTurn.deltaNet t.fpgaTurn.dualFrames pt hLin hCan⟩
 
 
 /-! ## §5. Constructive Non-Vacuity & Multi-Turn Inhabitedness Witnesses -/
@@ -5467,7 +5474,7 @@ theorem runStageBCathedralTrace_two_turn_inhabited
     rw [foldChain_emptyRevoked_oneHop _ _ _ (by decide)]
     simp [canonicalStageBMandate, hPinnedBudget, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
       Obend.Vault.Mandate.Caveat.any, Obend.Polis.authorize, Obend.Polis.subMask,
-      canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3]
+      canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3] <;> decide
   have hPin₂ : checkPinnedSessionAuthority
       { polisState := p₁, cathedralState := c₁, remVaultBudget := initVaultBudget - 10 }
       sampleStageBSevenOrganTurn2 = true := by
@@ -5477,7 +5484,7 @@ theorem runStageBCathedralTrace_two_turn_inhabited
     have hb : initVaultBudget - 10 ≤ 100 := by omega
     simp [canonicalStageBMandate, hb, canonicalStageBInvocation, Obend.Vault.Mandate.checkInvocation,
       Obend.Vault.Mandate.Caveat.any, Obend.Polis.authorize, Obend.Polis.subMask,
-      canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3]
+      canonicalStageBBiscuitRoot, Obend.Polis.Caveat.eval, Obend.Polis.KleenePred3.and3] <;> decide
   have hStep₁ :
       stepStageBCathedral
         { sampleStageBInitState with remVaultBudget := initVaultBudget }

@@ -330,6 +330,24 @@ example :
 #tooth Obend.Trailblaze.StageB.stageB_cathedral_seven_organ_trace_sealed by
   mutation Obend.Trailblaze.StageB.checkTurnMandateAndBiscuit := fun _ => true
 
+#tooth Obend.Trailblaze.StageB.checkPinnedSessionAuthority_revoked_prefix by
+  mutation Obend.Trailblaze.StageB.checkPinnedSessionAuthority := fun _ _ => true
+
+example (init later : StageBSevenOrganState) (turns : List StageBSevenOrganTurn)
+    (h : runStageBCathedralTrace init turns = some later) :
+    later.vaultMandate = init.vaultMandate ∧ later.biscuitRoot = init.biscuitRoot ∧
+    ∀ id, init.biscuitRevoked.contains id = true → later.biscuitRevoked.contains id = true :=
+  runStageBCathedralTrace_authority_persistent init later turns h
+
+example (st : StageBSevenOrganState) (t : StageBSevenOrganTurn)
+    (pre ext : Array Obend.Polis.Block) (hh : t.biscuitHops = pre ++ ext) :
+    checkPinnedSessionAuthority
+      { st with biscuitRevoked := st.biscuitRevoked.insert
+          (Obend.Polis.credNul (Obend.Polis.lineageOf st.biscuitRoot pre.toList)) }
+      { t with biscuitRevoked := Obend.Polis.RevokedSet.empty } = false := by
+  apply checkPinnedSessionAuthority_revoked_prefix _ _ pre ext hh
+  exact Obend.Polis.RevokedSet.contains_insert_self _ _
+
 end Obend.Tests.Metasystem.TrailblazeStageBSealTest
 
 end
