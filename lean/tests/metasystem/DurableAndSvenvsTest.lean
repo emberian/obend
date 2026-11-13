@@ -686,6 +686,48 @@ theorem test_forged_and_tampered_refused :
     dehydrate sampleIdentityHash sampleSealKey 9 1 yieldCustodyEnv (.natural 0) = .error (.droppedCustody 101) :=
   ⟨by decide, by decide, rfl, rfl⟩
 
+/-- A seal made by one authority must fail under a different host key. -/
+def forgedAuthorityRejected : Bool :=
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
+  | .error _ => false
+  | .ok (wire, frame) =>
+    rehydrate sampleIdentityHash (sampleSealKey.set! 0 0x5b) 9 wire frame == .error .unsealedFrame
+
+def staleEpochRejected : Bool :=
+  match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
+  | .error _ => false
+  | .ok (wire, frame) =>
+    rehydrate sampleIdentityHash sampleSealKey 10 wire frame == .error .unsealedFrame
+
+/-- Even a correctly sealed table cannot restore two capabilities in one slot. -/
+def duplicateSlotsRejected : Bool :=
+  let tbl : CapTable := ⟨[⟨0, ⟨101, 7, [1]⟩⟩, ⟨1, ⟨101, 8, [2]⟩⟩]⟩
+  let frame : CapSealFrame := ⟨99, 9, tbl,
+    computeCapFrameSeal sampleIdentityHash sampleSealKey 9 99 tbl⟩
+  rehydrate sampleIdentityHash sampleSealKey 9
+    (.record [("a", .sealedCap 0 7), ("b", .sealedCap 1 8)]) frame ==
+      .error (.missingOrDuplicateSlot 101)
+
+theorem authority_epoch_slots_refused :
+    forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
+  decide
+
+#tooth authority_epoch_slots_refused by mutation
+  Obend.Run.VaultDurableBridge.capFramePreimage := fun _ epoch nonce tbl =>
+    Obend.Crypto.leb128 epoch.toNat ++ encodeCapTableBytes nonce tbl
+
+#tooth authority_epoch_slots_refused by mutation
+  Obend.Run.VaultDurableBridge.CapSealFrame.sealValid := fun Hb key _ frame =>
+    decide (key.size = 32 ∧ frame.sealBytes =
+      computeCapFrameSeal Hb key frame.epoch frame.nonce frame.table)
+
+#tooth Obend.Run.VaultDurableBridge.rehydrate_restores_nodup_slots by mutation
+  Obend.Run.VaultDurableBridge.duplicateSlot := fun _ => none
+
+-- Full-width natural identifiers have distinct encodings past the former 64-bit wrap boundary.
+example : encodeCapTableBytes 0 ⟨[⟨0, ⟨1, 2, []⟩⟩]⟩ ≠
+    encodeCapTableBytes 0 ⟨[⟨0, ⟨1 + 2^64, 2, []⟩⟩]⟩ := by decide
+
 -- ============================================================================
 -- 3. `Genealogy.Habitat` Governed by 3-Tier `SpecNeg` + $B$-Corrigibility + `PcaEnvelope`
 -- ============================================================================
