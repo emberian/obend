@@ -768,7 +768,7 @@ theorem cap_transfer_roundtrip_passes :
     checkCapTransferRoundtrip = true :=
   by
   refine ⟨by decide, by decide, by decide, ?_⟩
-  simp [checkCapTransferRoundtrip, dehydrate, sampleSealKey, ByteArray.size, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
+  simp [checkCapTransferRoundtrip, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
 def forgedIndexRejected : Bool :=
   match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
@@ -795,14 +795,14 @@ theorem test_forged_and_tampered_refused :
     dehydrate sampleIdentityHash sampleSealKey 9 1 yieldCustodyEnv (.natural 0) = .error (.droppedCustody 101) :=
   by
   refine ⟨?_, ?_, rfl, rfl⟩ <;>
-    simp [forgedIndexRejected, tamperedSealRejected, dehydrate, sampleSealKey, ByteArray.size, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
+    simp [forgedIndexRejected, tamperedSealRejected, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
 /-- A seal made by one authority must fail under a different host key. -/
 def forgedAuthorityRejected : Bool :=
   match dehydrate sampleIdentityHash sampleSealKey 9 99 yieldCustodyEnv yieldPlanVal with
   | .error _ => false
   | .ok (wire, frame) =>
-    match rehydrate sampleIdentityHash (sampleSealKey.set! 0 0x5b) 9 wire frame with
+    match rehydrate sampleIdentityHash (⟨(List.replicate 32 (0x5b : UInt8)).toArray⟩ : ByteArray) 9 wire frame with
     | .error .unsealedFrame => true
     | _ => false
 
@@ -826,7 +826,7 @@ def duplicateSlotsRejected : Bool :=
 
 theorem authority_epoch_slots_refused :
     forgedAuthorityRejected = true ∧ staleEpochRejected = true ∧ duplicateSlotsRejected = true := by
-  simp [forgedAuthorityRejected, staleEpochRejected, duplicateSlotsRejected, dehydrate, sampleSealKey, ByteArray.size, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
+  simp [forgedAuthorityRejected, staleEpochRejected, duplicateSlotsRejected, dehydrate, sampleSealKey, ByteArray.size, -ByteArray.size_data, yieldPlanVal, yieldCustodyEnv, dehydrateVal, dehydrateFields, takeCapAtSlot, duplicateSlot, rehydrate, CapSealFrame.sealValid, indexedFromBool, rehydrateVal, rehydrateFields, takeSealedAtIndex, DataWire.toData, dataWireToData, dataWireFieldsToData, DataWire.ofData?, dataWireOfData?, dataWireFieldsOfData?, dataWireBeq, dataWireFieldsBeq, tvalBeq, tvalFieldsBeq] <;> decide
 
 -- Full-width natural identifiers have distinct encodings past the former 64-bit wrap boundary.
 example : encodeCapTableBytes 0 ⟨[⟨0, ⟨1, 2, []⟩⟩]⟩ ≠

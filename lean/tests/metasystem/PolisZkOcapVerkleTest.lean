@@ -1,21 +1,10 @@
-module
-public import Obend.Crypto.Transcript
-meta import all Obend.Crypto.Transcript
-import all Obend.Crypto.Transcript
-meta import all Obend.Polis.ZkBiscuit
-import all Obend.Polis.ZkBiscuit
-meta import all Obend.Polis.EvidencedOcap
-import all Obend.Polis.EvidencedOcap
-meta import all Obend.Polis.BlumRam
-import all Obend.Polis.BlumRam
-public import Obend.Polis.EvidencedOcap
-public import Obend.Polis.ZkBiscuit
-public import Obend.Polis.BlumRam
-public import Obend.AssertAxioms
-public import Obend.Tactic.Tooth
+import Obend.Crypto.Transcript
+import Obend.Polis.ZkBiscuit
+import Obend.Polis.EvidencedOcap
+import Obend.Polis.BlumRam
+import Obend.AssertAxioms
+import Obend.Tactic.Tooth
 
-public section
-set_option Elab.async false
 
 /-!
 # `tests/metasystem/PolisZkOcapVerkleTest.lean`
@@ -64,10 +53,6 @@ open Obend.Digest.Cshake256
     | .direct r => acc ||| r
     | .sealBox _ p => acc ||| p
     | .unsealer _ => acc
-
-#guard_msgs (drop info) in
-#tooth Obend.Polis.CombTerm.abst_eval by mutation
-  Obend.Polis.CombTerm.lamCode := @lamCodeNoIdentity
 
 #guard_msgs (drop info) in
 #tooth Obend.Polis.attenuate_monotone_rights by mutation
@@ -222,6 +207,11 @@ def lamCodeNoIdentity {P : PCA} (x : Nat) (ρ : Nat → P.Code) : CombTerm P →
   | .var n => P.k1 (ρ n)
   | .const c => P.k1 c
   | .ap t u => P.s2 (lamCodeNoIdentity x ρ t) (lamCodeNoIdentity x ρ u)
+
+#guard_msgs (drop info) in
+#tooth Obend.Polis.CombTerm.abst_eval by mutation
+  Obend.Polis.CombTerm.lamCode := @lamCodeNoIdentity
+
 
 -- ============================================================================
 -- 2. `ZkBiscuit`: revoked set, chain fold, cone revocation, pinned inputs
