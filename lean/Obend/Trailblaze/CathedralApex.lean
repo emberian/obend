@@ -1881,6 +1881,17 @@ The accepted fragment is unsigned, exact 32-bit sums, at most 256 workers. -/
       Obend.Hardware.Gpu.Rdna2.writeVgpr wave worker lane
         (UInt32.ofNat ((d.workgroupSlices[worker]?.getD #[])[lane]?.getD 0).toNat)) st) initial
 
+@[expose] def insertRdnaEncoding (entry : Obend.Hardware.Gpu.Rdna2.Encoding) :
+    List Obend.Hardware.Gpu.Rdna2.Encoding → List Obend.Hardware.Gpu.Rdna2.Encoding
+  | [] => [entry]
+  | first :: rest => if entry.order ≤ first.order then entry :: first :: rest
+    else first :: insertRdnaEncoding entry rest
+
+@[expose] def orderedRdnaEncodings : List Obend.Hardware.Gpu.Rdna2.Encoding →
+    List Obend.Hardware.Gpu.Rdna2.Encoding
+  | [] => []
+  | first :: rest => insertRdnaEncoding first (orderedRdnaEncodings rest)
+
 open Obend.Hardware.Gpu.Rdna2 in
 /-- Total decoder over AMD's generated encoding tables. A list search keeps its
 logical body reducible in the kernel; entries use the same reverse insertion order as `instIndex`. -/
@@ -1888,7 +1899,7 @@ logical body reducible in the kernel; entries use the same reverse insertion ord
   match words with
   | [] => none
   | first :: _ =>
-    let candidates := encodings.mergeSort (fun a b => a.order ≤ b.order)
+    let candidates := orderedRdnaEncodings encodings
     candidates.findSome? fun enc =>
       let count := enc.bitCount / 32
       if !encodingMatches first enc || count == 0 || words.length < count then none else
