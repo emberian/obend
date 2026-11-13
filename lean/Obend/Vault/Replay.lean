@@ -21,7 +21,6 @@ import all Obend.Core.Data
 
 public section
 set_option linter.unusedSimpArgs false
-set_option pp.maxDepth 3
 set_option pp.maxSteps 80
 
 /-
@@ -1426,6 +1425,7 @@ theorem judge_by_identity (w : World) (name digest : String) (hops : List Grant)
       | .error e => .error e
       | .ok (w', o, l) => .ok ({ w' with landed := w.landed ++ [{ l with intent := i }] }, o) := by
   simp only [stepTurn, judgeTurn, h]
+  cases judgeNew w name digest hops a <;> rfl
 
 theorem judge_content_alike (w : World) (name digest : String) (hops : List Grant) (a : Assignment) {i j : String}
     (hi : Transport.duplicateOf w.landed i = none) (hj : Transport.duplicateOf w.landed j = none) :
@@ -2747,7 +2747,10 @@ theorem duplicateSlot_eq_none_iff (slots : List Nat) :
     duplicateSlot slots = none ↔ slots.Nodup := by
   induction slots with
   | nil => simp [duplicateSlot]
-  | cons x xs ih => simp [duplicateSlot, List.nodup_cons, ih]
+  | cons x xs ih =>
+    by_cases hx : x ∈ xs
+    · simp [duplicateSlot, hx]
+    · simp [duplicateSlot, hx, ih]
 
 /-- Check consecutive 0-based indices starting at `start`. -/
 def indexedFromBool (start : Nat) : List SealedCapEntry → Bool
