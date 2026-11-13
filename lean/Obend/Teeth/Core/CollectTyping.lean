@@ -4,7 +4,7 @@
 Not a `module`, for the reason `Obend.Core.Teeth.Collect` gives: `decide +kernel` evaluates `collect`,
 which runs `Array` functions whose bodies Lean v4.30.0's `Init` does not expose to `module` files.
 -/
-import Obend.Core.Proofs.Collect
+import Obend.Core.Proofs.Collect.Statements
 
 namespace Obend.Core.Collect
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Data Obend.Core.Ty Obend.Core.Check

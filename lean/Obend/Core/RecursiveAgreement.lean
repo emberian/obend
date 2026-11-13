@@ -1,7 +1,6 @@
 module
 /- Public checker agreement: structural, equi-recursive and decided by a
-finite visited-pair procedure. The historical head-chain relation and its
-finite proofs remain available as legacySameType for the extension theorem. -/
+finite visited-pair procedure. -/
 public import Obend.Core.EquiRecursiveAgreement
 public import Obend.Core.TypeGraphHead
 @[expose] public section
@@ -30,18 +29,6 @@ theorem sameType_trans {assumptions : Assumptions} {first middle last : Ty}
 theorem sameType_equivalence (assumptions : Assumptions) :
     Equivalence (fun actual expected => sameType assumptions actual expected = true) :=
   EquiRecursiveAgreement.agrees_equivalence assumptions
-
-theorem sameType_extends {assumptions : Assumptions} {actual expected : Ty}
-    (old : legacySameType assumptions actual expected = true) : sameType assumptions actual expected = true :=
-  EquiRecursiveAgreement.legacy_sameType_extends old
-
-theorem sameStep_sameType {assumptions : Assumptions} {actual expected : Ty}
-    (step : sameStep assumptions actual expected = true) : sameType assumptions actual expected = true :=
-  sameType_extends (sameStep_legacySameType step)
-
-theorem SameChain.sameType {assumptions : Assumptions} {first last : Ty}
-    (chain : SameChain assumptions first last) : sameType assumptions first last = true :=
-  sameType_extends chain.legacySameType
 
 theorem sameType_isComputation {assumptions : Assumptions} {actual expected : Ty}
     (agreement : sameType assumptions actual expected = true) :

@@ -45,29 +45,26 @@ What is here, and what is not.
   model's output is the pip's source whenever the decoder says so.
   The tile models meet: `smModule_eval_eq_SmPrim_eval` (`Obend.Hardware.Fabulous.TileEval`) says the
   LEC'd `smModule` computes `SmPrim.eval`, and `lut4c_O`/`lut4c_next` (`Cell`) read `lut4cModule` as
-  Booleans. `Obend.Hardware.Fabulous.Readback`: `obend fabric cert` writes `Mac8Cert.lean`, a table with
+  Booleans. `Obend.Hardware.Fabulous.Readback`: `obend fabric cert` emits the readback cone certificate, a table with
   one entry per wire the extraction followed (6,143, chunked by tile, no wire twice), each with its driving
   hop and the entry it reads, ranked so the table is acyclic. Its equations (`ConeConsistent`: switch
   matrices through `smModule`, cells through `lut4cModule`, fixed wires, pads) are the cone's semantics,
   implied by the whole grid's (`Consistent.cone`). `consistent_exists_unique`: for every pin input and flop
   state the cone has exactly one assignment (`Cert.solve`), so loops through unused multiplexer inputs,
   outside the cone, do not make anything vacuous; `cone_sound` and `cone_run_eq`: every run of the cone
-  shows `Net.run`, and `Cert.runFrom_run` gives one. `Mac8CertCheck.lean` (generated) decides
-  `mac8Cert_check` through `Cert.checkF` (the table, switch matrices and frame positions read through balanced
-  trees, names compared as numbers, each entry's path end from a witness checked one hop at a time;
-  `Cert.checkF_sound`), a few blocks per `decide +kernel`, and `mac8_bin_required`: the committed bitstream, as the
-  Lean number `Mac8Bin.lean` and read through `binBits` (FABulous's bit_gen frame layout, header and frame-select
-  words checked by `mac8Bin_framed`), has every bit the certificate requires (11,267).
-  `Obend.Hardware.Fabulous.mac8_bitstream_realizes_module` (in `lean/Obend/Hardware/Fabulous/Mac8Tiles.lean`) is the MAC theorem for that configuration with no hypothesis
-  on the bits. Those modules build on hbox (`swarm-build`, `SWARM_MEM_MAX=16G`); on the Mac,
-  `verify_fabric.sh` regenerates the three files byte for byte. Taken as given: the tiles' top-level
+  shows `Net.run`, and `Cert.runFrom_run` gives one. `Cert.checkF` decides certificate validity (the table,
+  switch matrices and frame positions read through balanced trees, names compared as numbers, each entry's
+  path end from a witness checked one hop at a time; `Cert.checkF_sound`), and `binBits` (FABulous's `bit_gen`
+  frame layout, header and frame-select words checked by `binFramed`) checks every bit the certificate requires (11,267).
+  `Obend.Hardware.Fabulous.mac8_fabric_realizes_module_from_reset` (in `lean/Obend/Hardware/Fabulous/Mac8.lean`) is the
+  verified MAC theorem over `mac8Net` (`lean/Obend/Hardware/Fabulous/Mac8Net.lean`), which `verify_fabric.sh`
+  regenerates byte for byte from `obend_ice40_mac8.bin`. Taken as given: the tiles' top-level
   wiring (`LUT4AB.v`'s jump and nested wires, as `pips.txt` fixed pips, which `obend fabric check` checks),
   the configuration latches' index-to-frame map (`*_ConfigMem.v`), `binBits` as FABulous's bit_gen layout, and
   the IO pad as a pass-through.
   Not modelled, and refused by name if a bitstream uses them: the carry chain, `MUX8LUT`, the IO's
   registered output, block RAM, DSP and register-file tiles. The link from `.bin` to `mac8Net` is
-  `obend fabric check` (compiled evaluation of the decoder); `mac8_fabric_tiles_realize_module` needs
-  from that check only the frame bits, wires and tile types it lists.
+  `obend fabric check` (compiled evaluation of the decoder, checking frame bits, fixed wires and tile types).
 
 - `hvm/` — rung 2: Leaf books lowered to HVM2 interaction nets (`Obend.Hardware.Hvm`), run by HVM2
   itself (first-order bodies, records, sums, recursion). See below.
@@ -150,7 +147,7 @@ Two standalone Z3 `QF_BV` property sheets, `apps/foc-hil/verilator/foc_drive_pro
 `apps/sdr-ft8/verilator/sdr_ft8_props.smt2`, run inside their app `verify_*.sh` scripts: the FOC
 sheet checks safety-barrier formulas alongside the `foc_drive_top.sv` `RtlModule` LEC, and the SDR
 sheet checks formulas transcribed from the hand-written `sdr_ft8_top.sv` reference datapath. All
-other app hardware modules (`obend-risc`, `zk-ntt`, `fidget-cam`, `quantum-photonic-matter`,
+other app hardware modules (`zk-ntt`, `fidget-cam`, `quantum-photonic-matter`,
 `sovereign-drex`) are emitted directly from an `RtlModule` and verified on their `.sv` by `lec.sh`.
 
 `rust-ffi/` is unrelated to the FPGA path (CBOR codec, FEMM/octree engines) and is owned by the

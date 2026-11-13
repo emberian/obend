@@ -26,7 +26,7 @@ inductive TailKind where
   | nominal (index : Nat)
   | unproductive (representative : Nat)
   | nonRow
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 inductive Label where
   | nominal (index : Nat)
@@ -145,7 +145,7 @@ theorem nodes_closed (assumptions : Assumptions) (left right : Ty) :
       · rw [tailChild]
         exact (stream_mem_nodes_iff _ _ _ _ _ _).mpr ⟨tailPresent,listed⟩
 
-@[expose] def presentation (assumptions : Assumptions) (left right : Ty) :
+abbrev presentation (assumptions : Assumptions) (left right : Ty) :
     FP.ClosedSupport (graph assumptions) :=
   ⟨nodes assumptions left right,nodes_closed assumptions left right⟩
 
@@ -157,7 +157,7 @@ theorem right_mem_nodes (assumptions : Assumptions) (left right : Ty) :
     Node.type right ∈ (presentation assumptions left right).nodes :=
   (type_mem_nodes_iff _ _ _ _).mpr (right_mem_support _ _ _)
 
-@[expose] def Equivalent (assumptions : Assumptions) (left right : Ty) : Prop :=
+abbrev Equivalent (assumptions : Assumptions) (left right : Ty) : Prop :=
   FP.Bisimilar (graph assumptions) (.type left) (.type right)
 
 @[expose] def candidate (assumptions : Assumptions) (left right : Ty) : Bool :=

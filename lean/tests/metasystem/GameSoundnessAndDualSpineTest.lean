@@ -1,4 +1,10 @@
-import Obend.Crypto
+import Obend.Crypto.Multilinear
+import Obend.Crypto.Transcript
+import Obend.Crypto.Sumcheck
+import Obend.Crypto.PCS
+import Obend.Crypto.DualSpine
+import Obend.Crypto.SameOpening
+import Obend.Crypto.FastRing
 import Obend.Crypto.GameSoundness
 import Obend.Crypto.PikkuFoldLayered
 import Obend.Crypto.CanopyReduce

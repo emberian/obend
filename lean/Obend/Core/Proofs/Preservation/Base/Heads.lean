@@ -39,28 +39,6 @@ public theorem callable_arrow_not_computation {type : Ty} {reuse : Reuse} {quant
     (callable : callable type = .arrow reuse quantity domain codomain) : type.isComputation = false := by
   obend_cases type with [Obend.Core.Check.callable,Ty.isComputation]
 
-theorem sameStep_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
-    (agreement : sameStep assumptions actual expected = true)
-    (equal : actual.canonical = (Ty.computation plan response produced).canonical) :
-    expected.canonical = (Ty.computation plan response produced).canonical := by
-  have activity : actual.isComputation = true := by
-    rw [← Ty.canonical_isComputation,equal]; rfl
-  simp only [sameStep,Bool.or_eq_true] at agreement
-  rcases agreement with (canonical | aliasActual) | aliasExpected
-  · rw [← equal]; exact (by simpa using canonical : actual.canonical = expected.canonical).symm
-  · cases actual <;> simp_all [Ty.isComputation]
-  · cases expected <;> simp at aliasExpected
-    simp_all [Ty.isComputation]
-
-public theorem legacy_sameType_activity_canonical {assumptions : Assumptions} {actual expected plan response produced : Ty}
-    (agreement : legacySameType assumptions actual expected = true)
-    (equal : actual.canonical = (Ty.computation plan response produced).canonical) :
-    expected.canonical = (Ty.computation plan response produced).canonical :=
-  legacySameType_lift (fun a e => a.canonical = (Ty.computation plan response produced).canonical →
-      e.canonical = (Ty.computation plan response produced).canonical)
-    (fun _ h => h) (fun one two h => two (one h)) (fun step h => sameStep_activity_canonical step h)
-    agreement equal
-
 public theorem argumentAllowed_not_computation {assumptions : Assumptions} {quantity : Quantity}
     {context : Context} {type : Ty} {uses : Uses}
     (allowed : argumentAllowed assumptions quantity context type uses = true) : type.isComputation = false := by
@@ -416,36 +394,6 @@ public theorem canonical_lookup_transport (bounds : Bounds) (actual expected : T
     obtain ⟨fuel,actualLookup⟩ := alias_tail_lookup_realizes bounds actual name member actualAbsent index bound depth actualTail found next
     exact ⟨fuel,member,actualLookup,rfl⟩
 
-theorem same_step_lookup_transport {assumptions : Assumptions} {actual expected : Ty}
-    (agreement : sameStep assumptions actual expected = true) (fuel : Nat) (name : String) (member : Ty)
-    (lookup : expected.lookup assumptions.bounds fuel name = some member) :
-    ∃ depth actualMember, actual.lookup assumptions.bounds depth name = some actualMember ∧
-      actualMember.canonical = member.canonical := by
-  simp only [sameStep,Bool.or_eq_true] at agreement
-  rcases agreement with (canonical | aliasActual) | aliasExpected
-  · exact canonical_lookup_transport assumptions.bounds actual expected (by simpa using canonical) fuel name member lookup
-  · cases actual <;> simp at aliasActual
-    rename_i index
-    cases aliased : assumptions.alias index with
-    | none => simp [aliased] at aliasActual
-    | some bound =>
-      have found := Assumptions.alias_bound aliased
-      obtain ⟨-,equal⟩ : _ ∧ bound.canonical = expected.canonical := by simpa [aliased] using aliasActual
-      obtain ⟨depth,actualMember,actualLookup,memberEq⟩ := canonical_lookup_transport assumptions.bounds bound expected equal fuel name member lookup
-      exact ⟨depth+1,actualMember,by simpa [Ty.lookup,found] using actualLookup,memberEq⟩
-  · cases expected <;> simp at aliasExpected
-    rename_i index
-    cases aliased : assumptions.alias index with
-    | none => simp [aliased] at aliasExpected
-    | some bound =>
-      have found := Assumptions.alias_bound aliased
-      obtain ⟨-,equal⟩ : _ ∧ bound.canonical = actual.canonical := by simpa [aliased] using aliasExpected
-      cases fuel with
-      | zero => simp [Ty.lookup] at lookup
-      | succ fuel =>
-        have next : bound.lookup assumptions.bounds fuel name = some member := by simpa [Ty.lookup,found] using lookup
-        exact canonical_lookup_transport assumptions.bounds actual bound equal.symm fuel name member next
-
 public theorem same_type_lookup_transport {assumptions : Assumptions} {actual expected : Ty}
     (related : sameType assumptions actual expected = true) (fuel : Nat) (name : String) (member : Ty)
     (lookup : expected.lookup assumptions.bounds fuel name = some member) :
@@ -488,48 +436,6 @@ theorem canonical_agreement_normalizes {bounds : Bounds} {first second result : 
       have equal := canonical_variable_inverse agreement.symm
       rw [equal]
       exact .alias found prior
-
-/-- Every successful checker's SAME finite type agreement preserves any head
-normalization witness. Thus a row/alias conversion cannot turn a Nat value into
-Bool/String or a scalar into a callable/record. Cyclic aliases remain partial. -/
-theorem same_step_preserves_head {assumptions : Assumptions} {first second result : Ty}
-    (agreement : sameStep assumptions first second = true)
-    (normal : HeadNormalizes assumptions.bounds first result) :
-    HeadNormalizes assumptions.bounds second result := by
-  simp only [sameStep,Bool.or_eq_true] at agreement
-  rcases agreement with (canonical | aliasFirst) | aliasSecond
-  · exact canonical_agreement_normalizes (by simpa using canonical) normal
-  · cases first <;> simp at aliasFirst
-    rename_i index
-    cases aliased : assumptions.alias index with
-    | none => simp [aliased] at aliasFirst
-    | some bound =>
-      have found := Assumptions.alias_bound aliased
-      obtain ⟨-,equal⟩ : _ ∧ bound.canonical = second.canonical := by simpa [aliased] using aliasFirst
-      cases normal with
-      | direct type terminal => simp [isVariable] at terminal
-      | alias found' prior =>
-        have same := Option.some.inj (found'.symm.trans found)
-        subst same
-        exact canonical_agreement_normalizes equal prior
-  · cases second <;> simp at aliasSecond
-    rename_i index
-    cases aliased : assumptions.alias index with
-    | none => simp [aliased] at aliasSecond
-    | some bound =>
-      have found := Assumptions.alias_bound aliased
-      obtain ⟨-,equal⟩ : _ ∧ bound.canonical = first.canonical := by simpa [aliased] using aliasSecond
-      exact .alias found (canonical_agreement_normalizes equal.symm normal)
-
-/-- Exact head normalization belongs to the legacy head-only closure. It is
-false for structural equality; runtime consumers now use component agreement. -/
-public theorem legacy_same_type_preserves_head {assumptions : Assumptions} {first second result : Ty}
-    (agreement : legacySameType assumptions first second = true)
-    (normal : HeadNormalizes assumptions.bounds first result) :
-    HeadNormalizes assumptions.bounds second result :=
-  legacySameType_lift (fun a e => ∀ result, HeadNormalizes assumptions.bounds a result → HeadNormalizes assumptions.bounds e result)
-    (fun _ _ h => h) (fun one two result h => two result (one result h))
-    (fun step result h => same_step_preserves_head step h) agreement result normal
 
 public inductive HeadKind where
   | natural | boolean | label | function | row | specification | prototype | custody | variable | variant

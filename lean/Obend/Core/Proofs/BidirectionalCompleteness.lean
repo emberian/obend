@@ -1544,9 +1544,9 @@ the agreement relation is strengthened to structural congruence. -/
   ⟨.record [("a", .lam (.bound 0)), ("a", .nat 0)], shadowAnnotations, shadowAssumptions⟩
 
 public theorem arrow_alias_agrees :
-    sameType shadowAssumptions (.arrow .reusable .unrestricted .natural .natural) (.variable 0) = true := by
-  apply sameType_extends
-  decide
+    sameType shadowAssumptions (.arrow .reusable .unrestricted .natural .natural) (.variable 0) = true :=
+  sameType_symm (Obend.Core.EquiRecursiveAgreement.agrees_alias shadowAssumptions 0
+    (.arrow .reusable .unrestricted .natural .natural) rfl rfl)
 
 /-- A record literal that repeats a label is refused (lane C2: a repeated label is a field no `get`
 reaches and no destructor passes; it was accepted, `shadow_record_now_checks`, before records named

@@ -5,7 +5,7 @@ Not a `module`, for the reason `Obend.Core.Teeth.Collect` gives: these theorems 
 (`runBounded`, `yieldedPlan`) and `collect` on a concrete term by `rfl`/`decide +kernel`, through `Array`
 functions whose bodies Lean v4.30.0's `Init` does not expose to `module` files.
 -/
-import Obend.Core.Proofs.Collect
+import Obend.Core.Proofs.Collect.Statements
 
 namespace Obend.Core.Collect
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Data

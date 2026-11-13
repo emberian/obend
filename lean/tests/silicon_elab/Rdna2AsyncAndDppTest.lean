@@ -57,8 +57,6 @@ import all Obend.Core.TypeGraphAlias
 import all Obend.Core.RowCongruence
 import all Obend.Core.FieldCongruence
 import all Obend.Core.FiniteRowLaws
-import all Obend.Core.LegacyAgreement
-import all Obend.Core.CanonicalExtension
 import all Obend.Core.EquiRecursiveAgreement
 import all Obend.Core.TypeGraphHead
 import all Obend.Core.RecursiveAgreement

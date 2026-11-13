@@ -129,7 +129,7 @@ Surface `.obend` packages (`lean/Obend/Spec/Syntax.lean`, `lean/Obend/Spec/Elabo
 - **Flattening (`lean/Obend/Leaf/Flatten.lean`)**: `flatten_object` and `flatten_sound` prove that a flattened vtable is observationally equivalent (`≈b`) to dynamic `mix` prototype inheritance on closed compositions.
 - **Super-Elimination (`lean/Obend/Leaf/Residual.lean`)**: `vtable_clean` and `no_residual_super` guarantee that flattened methods contain zero residual super-layer lookups.
 - **Book Emission (`lean/Obend/Leaf/Emit.lean`)**: `emit` extracts slotted methods into a `Book` (`LeafDef`, `BookItem`), with `emit_sound` and `book_sound` establishing behavioral equivalence and `emit_of_digest` tying compilation deterministically to `Cshake256` code digests.
-- **Futamura Specialization (`lean/Obend/Leaf/Specialize.lean`, `lean/Obend/Leaf/Static.lean`, `lean/Obend/Leaf/Futamura.lean`)**: `dataPinSpecialize` and `specializeBook` inline pinned cross-package values (`link_bequiv_specializeBook`, `specializeBook_member_sound`), guarded by `specSlot` so any mutated upstream pin immediately blocks stale specialized code (`moved_pin_blocks`, `specialized_moved_pin_blocks`).
+- **Futamura Specialization (`lean/Obend/Leaf/Specialize.lean`, `lean/Obend/Leaf/Static.lean`)**: `dataPinSpecialize` and `specializeBook` inline pinned cross-package values (`link_bequiv_specializeBook`, `specializeBook_member_sound`), guarded by `specSlot` so any mutated upstream pin immediately blocks stale specialized code (`moved_pin_blocks`, `specialized_moved_pin_blocks`).
 
 ---
 

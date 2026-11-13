@@ -1,47 +1,114 @@
 module
-/- Compatibility and public Boolean laws for equi-recursive agreement. This
-comparison module imports the legacy checker through CanonicalExtension. -/
+/- Public Boolean laws and head-chase unfolding for equi-recursive agreement,
+defined directly from the finite type-graph bisimulation (`TypeGraph.candidate`). -/
 public import Obend.Core.TypeGraphAlias
 public import Obend.Core.FieldCongruence
 public import Obend.Core.FiniteRowLaws
-public import Obend.Core.CanonicalExtension
-@[expose] public section
+public section
+
+namespace Obend.Core.Check
+open Obend.Core.Ty
+set_option autoImplicit false
+
+/-- A canonical type with its declared alias head unfolded once: a transparent alias
+variable whose bound is not an activity becomes its bound's canonical form; every
+other type (rigid, unbound, any non-variable) is a fixed point. -/
+@[expose] def Assumptions.unfoldHead (assumptions : Assumptions) : Ty → Ty
+  | .variable index => match assumptions.alias index with
+    | some bound => if bound.isComputation then .variable index else bound.canonical
+    | none => .variable index
+  | other => other
+
+/-- `k` head unfoldings. -/
+@[expose] def Assumptions.chase (assumptions : Assumptions) : Nat → Ty → Ty
+  | 0, type => type
+  | k + 1, type => assumptions.chase k (assumptions.unfoldHead type)
+
+end Obend.Core.Check
+
 namespace Obend.Core.EquiRecursiveAgreement
 open Obend.Core.Ty Obend.Core.Check Obend.Core.TypeGraph
 set_option autoImplicit false
 
-/-- Accept proved legacy positives before constructing the finite graph decision. -/
-def agrees (assumptions : Assumptions) (actual expected : Ty) : Bool :=
-  legacySameType assumptions actual expected || candidate assumptions actual expected
+private theorem insertCanonical_equivalent (assumptions : Assumptions) (row : Ty) (name : String) (member : Ty) :
+    Equivalent assumptions (.field name member row) (row.insertCanonical name member) := by
+  have eqv := equivalent_equivalence assumptions
+  induction row with
+  | field prior old tail _ ih =>
+    simp only [Ty.insertCanonical]
+    split
+    · rename_i he
+      subst prior
+      split
+      · rename_i hs
+        exact finite_field_shadow assumptions name member old tail hs
+      · exact eqv.refl _
+    · rename_i hne
+      split
+      · exact eqv.refl _
+      · exact eqv.trans (finite_field_commute assumptions name prior member old tail hne)
+          (field_congruence (eqv.refl old) ih)
+  | _ => exact eqv.refl _
 
-/-- All finite equations used by the former canonical agreement are actual
-equations of the recursive graph meaning. -/
-theorem canonical_laws (assumptions : Assumptions) :
-    Obend.Core.CanonicalExtension.Laws (Equivalent assumptions) where
-  refl := (equivalent_equivalence assumptions).refl
-  symm := (equivalent_equivalence assumptions).symm
-  trans := (equivalent_equivalence assumptions).trans
-  arrow := by intro _ _ _ _ _ _ h k; exact arrow_congruence h k
-  field := by intro _ _ _ _ _ h k; exact field_congruence h k
-  specification := fun h k => specification_congruence h k
-  prototype := fun h k => prototype_congruence h k
-  variant := fun h => variant_congruence h
-  computation := fun h k l => computation_congruence h k l
-  commute := finite_field_commute assumptions
-  shadow := finite_field_shadow assumptions
+private theorem canonical_equivalent (assumptions : Assumptions) (type : Ty) :
+    Equivalent assumptions type type.canonical := by
+  have eqv := equivalent_equivalence assumptions
+  induction type with
+  | arrow _ _ _ _ ia ib => exact arrow_congruence ia ib
+  | field name _ _ im it =>
+    exact eqv.trans (field_congruence im it) (insertCanonical_equivalent assumptions _ name _)
+  | specification _ _ ia ib => exact specification_congruence ia ib
+  | prototype _ _ ia ib => exact prototype_congruence ia ib
+  | variant _ ia => exact variant_congruence ia
+  | computation _ _ _ ia ib ic => exact computation_congruence ia ib ic
+  | _ => exact eqv.refl _
+
+private theorem unfoldHead_equivalent (assumptions : Assumptions) (type : Ty) :
+    Equivalent assumptions type (assumptions.unfoldHead type) := by
+  have eqv := equivalent_equivalence assumptions
+  cases type with
+  | «variable» index =>
+    simp only [Assumptions.unfoldHead]
+    cases ha : assumptions.alias index with
+    | none => exact eqv.refl _
+    | some bound =>
+      simp only
+      cases hc : bound.isComputation with
+      | true => exact eqv.refl _
+      | false =>
+        exact eqv.trans (alias_equivalent assumptions index bound ha hc)
+          (canonical_equivalent assumptions bound)
+  | _ => exact eqv.refl _
+
+private theorem chase_equivalent (assumptions : Assumptions) : ∀ (k : Nat) (type : Ty),
+    Equivalent assumptions type (assumptions.chase k type)
+  | 0, type => (equivalent_equivalence assumptions).refl type
+  | k + 1, type =>
+    (equivalent_equivalence assumptions).trans (unfoldHead_equivalent assumptions type)
+      (chase_equivalent assumptions k (assumptions.unfoldHead type))
+
+/-- Head-chased canonical fast-path followed by the finite visited-pair type-graph decision. -/
+@[expose] def agrees (assumptions : Assumptions) (actual expected : Ty) : Bool :=
+  (assumptions.chase assumptions.bounds.length actual.canonical ==
+    assumptions.chase assumptions.bounds.length expected.canonical) ||
+    candidate assumptions actual expected
 
 theorem agrees_iff (assumptions : Assumptions) (actual expected : Ty) :
     agrees assumptions actual expected = true ↔ Equivalent assumptions actual expected := by
-  simp only [agrees, Bool.or_eq_true]
+  have eqv := equivalent_equivalence assumptions
+  simp only [agrees, Bool.or_eq_true, beq_iff_eq]
   constructor
-  · rintro (old | graph)
-    · exact Obend.Core.CanonicalExtension.legacySameType_extends
-        (canonical_laws assumptions) assumptions (alias_equivalent assumptions) old
-    · exact (candidate_iff assumptions actual expected).mp graph
-  · intro agreement
-    exact Or.inr ((candidate_iff assumptions actual expected).mpr agreement)
+  · rintro (hch | hcand)
+    · have ha := eqv.trans (canonical_equivalent assumptions actual)
+        (chase_equivalent assumptions assumptions.bounds.length actual.canonical)
+      have he := eqv.trans (canonical_equivalent assumptions expected)
+        (chase_equivalent assumptions assumptions.bounds.length expected.canonical)
+      rw [hch] at ha
+      exact eqv.trans ha (eqv.symm he)
+    · exact (candidate_iff assumptions actual expected).mp hcand
+  · intro h
+    exact Or.inr ((candidate_iff assumptions actual expected).mpr h)
 
-/-- The shortcut changes evaluation cost, while preserving the graph decision exactly. -/
 theorem agrees_eq_candidate (assumptions : Assumptions) (actual expected : Ty) :
     agrees assumptions actual expected = candidate assumptions actual expected := by
   cases fast : agrees assumptions actual expected <;>
@@ -52,20 +119,6 @@ theorem agrees_eq_candidate (assumptions : Assumptions) (actual expected : Ty) :
   · have accepted := (candidate_iff assumptions actual expected).mpr
       ((agrees_iff assumptions actual expected).mp fast)
     simp only [graph, Bool.false_eq_true] at accepted
-
-theorem canonical_sound (assumptions : Assumptions) (type : Ty) :
-    agrees assumptions type type.canonical = true :=
-  (agrees_iff _ _ _).mpr
-    (Obend.Core.CanonicalExtension.canonical_sound (canonical_laws assumptions) type)
-
-/-- Every previously accepted equality remains accepted, including transitive
-alias chains and syntactically shareable shadow erasure. -/
-theorem legacy_sameType_extends {assumptions : Assumptions} {actual expected : Ty}
-    (old : Obend.Core.Check.legacySameType assumptions actual expected = true) :
-    agrees assumptions actual expected = true :=
-  (agrees_iff _ _ _).mpr
-    (Obend.Core.CanonicalExtension.legacySameType_extends (canonical_laws assumptions) assumptions
-      (alias_equivalent assumptions) old)
 
 theorem agrees_equivalence (assumptions : Assumptions) :
     Equivalence (fun actual expected => agrees assumptions actual expected = true) := by
@@ -153,4 +206,17 @@ theorem agrees_shadow (assumptions : Assumptions) (name : String) (member old ta
     agrees assumptions (.field name member (.field name old tail)) (.field name member tail) = true :=
   (agrees_iff _ _ _).mpr (finite_field_shadow assumptions name member old tail share)
 
+theorem canonical_sound (assumptions : Assumptions) (type : Ty) :
+    agrees assumptions type type.canonical = true :=
+  (agrees_iff _ _ _).mpr (canonical_equivalent assumptions type)
+
+theorem agrees_unfoldHead (assumptions : Assumptions) (type : Ty) :
+    agrees assumptions type (assumptions.unfoldHead type) = true :=
+  (agrees_iff _ _ _).mpr (unfoldHead_equivalent assumptions type)
+
+theorem agrees_chase (assumptions : Assumptions) (k : Nat) (type : Ty) :
+    agrees assumptions type (assumptions.chase k type) = true :=
+  (agrees_iff _ _ _).mpr (chase_equivalent assumptions k type)
+
 end Obend.Core.EquiRecursiveAgreement
+end

@@ -1,7 +1,7 @@
 /-
 # `obend-emit-sv` — regenerate every checked-in SystemVerilog file from its Lean definition
 
-    obend-emit-sv <target> [--out FILE]      targets: risc golden-risc zk golden-zk fidget fidget-ngc
+    obend-emit-sv <target> [--out FILE]      targets: zk golden-zk fidget fidget-ngc
                                                       foc-hil drex quantum silicon-elab mac2
                                                       ice40-mac8 tcad stator mill golden-silicon-kernel
                                                       width-probe sdr-nco sdr-cic sdr-disc
@@ -13,8 +13,8 @@
     obend-emit-sv <target> --lec [--out FILE]  the Lean half of the LEC of an `RtlModule` target
                                              (`Obend.Hardware.YosysLec.emitYosysLecSmt2`), appended to
                                              Yosys `write_smt2` of the emitted .sv; `unsat` = equivalent
-    obend-emit-sv check-risc | check-zk      the native checks the Apps modules name (gates, corners,
-                                             the firmware state); exit 3 with the failing check
+    obend-emit-sv check-zk                   the native checks `Obend.Apps.ZkNtt` names (gates, corners,
+                                             the transcript round); exit 3 with the failing check
     obend-emit-sv list
 
 This executable lives outside the `Obend` library tier because it imports `Obend.Apps.*` (tier 2).
@@ -31,7 +31,6 @@ import Obend.Hardware.VerilateRunner
 import Obend.Hardware.Cli
 import Obend.Hardware.YosysLec
 import Obend.Hardware.SquareGraphs
-import Obend.Apps.ObendRisc
 import Obend.Apps.ZkNtt
 import Obend.Apps.FidgetCam
 import Obend.Apps.FocHil
@@ -73,20 +72,6 @@ def goldenSiliconKernel : String :=
   s!"tooth_mutant_refused={if t.toothMutantRefused then 1 else 0}\n" ++
   s!"sorry_refused={if t.sorryRefused then 1 else 0}\n"
 
-/-- `check-risc`: the gates on both RISC cores and the recorded end state of the firmware run
-(`Obend.Apps.ObendRisc.riscFirmwareExpected*`). -/
-def checkRisc : Except String String :=
-  let b := Obend.Apps.ObendRisc.baseRiscCpuRtlModule
-  let m := Obend.Apps.ObendRisc.obendRiscCpuRtlModule
-  let st := Obend.Apps.ObendRisc.riscFinalState
-  let regsOk := Obend.Apps.ObendRisc.riscFirmwareExpectedRegs.all fun (slot, v) => (st.1 slot).toNat == v
-  let dmemOk := Obend.Apps.ObendRisc.riscFirmwareExpectedDmem.all fun (a, v) => (st.2 a).toNat == v
-  if !checkRtlModule b then .error "check-risc: base_risc_cpu fails checkRtlModule"
-  else if !checkRtlModuleW m then .error "check-risc: obend_risc_cpu fails checkRtlModuleW"
-  else if m.regs.length != 36 then .error s!"check-risc: {m.regs.length} registers, expected 36"
-  else if !(regsOk && dmemOk) then .error "check-risc: the 21-cycle firmware run does not reach the recorded state"
-  else .ok "check-risc: gates ok, 36 registers, firmware end state as recorded\n"
-
 /-- `check-zk`: the three checks `Obend.Apps.ZkNtt` documents (gate, carry/borrow corners, one transcript round). -/
 def checkZk : Except String String :=
   if !Obend.Apps.ZkNtt.zkCheckGate then .error "check-zk: zk_ntt_coproc fails checkRtlModule/checkRtlModuleW/BEL validity"
@@ -95,9 +80,7 @@ def checkZk : Except String String :=
   else .ok s!"check-zk: gate ok ({Obend.Apps.ZkNtt.zkNttCoprocRtlModule.wires.length} wires), 6 boundary vectors, transcript round ok\n"
 
 def targets : List (String × String) :=
-  [ ("risc", "apps/obend-risc/verilator/obend_risc_cpu.sv")
-  , ("golden-risc", "apps/obend-risc/verilator/risc_golden.txt")
-  , ("zk", "apps/zk-ntt/verilator/zk_ntt_coproc.sv")
+  [ ("zk", "apps/zk-ntt/verilator/zk_ntt_coproc.sv")
   , ("golden-zk", "apps/zk-ntt/verilator/zk_ntt_golden.txt")
   , ("fidget", "apps/fidget-cam/verilator/fidget_impeller_voxel_cam.sv")
   , ("fidget-ngc", "apps/fidget-cam/build/impeller_5axis.ngc")
@@ -131,7 +114,6 @@ def squareTarget (t : String) : Option (Except String SquareGraph) :=
 /-- The targets that are one `RtlModule` printed by `emitModuleSV`: the qualified name of the Lean
 definition and the module. `render` prints these with `emitWithHeader`; `--lec` prints their LEC half. -/
 def moduleTarget : String → Option (Except String (String × RtlModule))
-  | "risc"    => some (.ok ("Obend.Apps.ObendRisc.obendRiscCpuRtlModule", Obend.Apps.ObendRisc.obendRiscCpuRtlModule))
   | "zk"      => some (.ok ("Obend.Apps.ZkNtt.zkNttCoprocRtlModule", Obend.Apps.ZkNtt.zkNttCoprocRtlModule))
   | "fidget"  => some (.ok ("Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule", Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule))
   | "foc-hil" => some (.ok ("Obend.Apps.FocHil.focHilSequentialRtlModule", Obend.Apps.FocHil.focHilSequentialRtlModule))
@@ -158,7 +140,7 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
 
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
 def moduleTargetNames : List String :=
-  ["risc", "zk", "fidget", "foc-hil", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "sdr-nco", "sdr-cic", "sdr-disc", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"] ++
+  ["zk", "fidget", "foc-hil", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "sdr-nco", "sdr-cic", "sdr-disc", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"] ++
   squarePlan.map fun (name, _) => s!"square-{name}"
 
 /-- `--tb`: the Verilator harness of a square target: every vector of the graph on the module's input
@@ -202,8 +184,6 @@ def renderLec (target : String) : Except String String :=
            Obend.Hardware.YosysLec.emitYosysLecSmt2 m)
 
 def render : String → Except String String
-  -- 21 cycles of firmware/test_prog.hex on the Lean model; risc_soc_tb.cpp compares every register and dmem word.
-  | "golden-risc" => .ok (Obend.Apps.ObendRisc.riscFirmwareGolden 21)
   -- The 8-round sumcheck with the transcript, run at the Nat level; zk_ntt_tb.cpp compares the RTL per round.
   | "golden-zk" => .ok Obend.Apps.ZkNtt.zkSumcheckGolden
   -- The posted program is a Lean string (`postNgc` over the certified passes); the Verilator
@@ -212,7 +192,6 @@ def render : String → Except String String
   | "quantum" => emitWithHeader "Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule" Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule
   | "silicon-elab" => .ok Obend.Hardware.Cli.siliconElabTopSvText
   | "golden-silicon-kernel" => .ok goldenSiliconKernel
-  | "check-risc" => checkRisc
   | "check-zk" => checkZk
   | other     =>
     match moduleTarget other with

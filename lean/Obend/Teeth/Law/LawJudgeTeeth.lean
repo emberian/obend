@@ -2,7 +2,7 @@
 # Obend.Law.Proofs.LawJudgeTeeth — the law-judged runner at a real object (a legacy leaf)
 
 Not a `module`: the runner here judges by running the demand machine, by `decide +kernel`, through
-`Array` functions whose bodies `Init` does not expose to `module` files (as `Obend.Run.Core4Example`).
+`Array` functions whose bodies `Init` does not expose to `module` files.
 Nothing imports this file.
 
 The object holds a natural `total`; its one operation writes a new total. Its effective law is

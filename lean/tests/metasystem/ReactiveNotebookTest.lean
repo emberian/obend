@@ -9,7 +9,6 @@ import all Obend.Core.AliasExposure
 import all Obend.Core.Assumptions
 import all Obend.Core.Bidirectional
 import all Obend.Core.Brand
-import all Obend.Core.CanonicalExtension
 import all Obend.Core.Capacity
 import all Obend.Core.Check
 import all Obend.Core.Code
@@ -22,7 +21,6 @@ import all Obend.Core.FiniteBisimulation
 import all Obend.Core.FinitePresentation
 import all Obend.Core.FiniteRowLaws
 import all Obend.Core.Invariant
-import all Obend.Core.LegacyAgreement
 import all Obend.Core.Machine
 import all Obend.Core.MachineFast
 import all Obend.Core.MachineTyping
@@ -171,6 +169,44 @@ import all Obend.Vault.Law
 import all Obend.Vault.Page
 import all Obend.Vault.Rehydration
 import all Obend.Vault.Store
+import all Obend.Core.Collect
+import all Obend.Core.Proofs.Collect.Compact
+import all Obend.Core.Proofs.Collect.Extract
+import all Obend.Core.Proofs.Collect.Lockstep
+import all Obend.Core.Proofs.Collect.Mark
+import all Obend.Core.Proofs.Collect.Rename
+import all Obend.Core.Proofs.Collect.Runs
+import all Obend.Core.Proofs.Collect.Segment
+import all Obend.Core.Proofs.Collect.Statements
+import all Obend.Core.Proofs.Collect.Typing
+import all Obend.Core.Proofs.Force
+import all Obend.Core.Proofs.Preservation
+import all Obend.Core.Proofs.Preservation.Base.Focus
+import all Obend.Core.Proofs.Preservation.Cases.Activities
+import all Obend.Core.Proofs.Preservation.Cases.Arithmetic
+import all Obend.Core.Proofs.Preservation.Cases.Functions
+import all Obend.Core.Proofs.Preservation.Cases.Pairs
+import all Obend.Core.Proofs.Preservation.Cases.Records
+import all Obend.Core.Proofs.Preservation.Cases.Split
+import all Obend.Core.Proofs.Preservation.Cases.Sums
+import all Obend.Core.Proofs.Settle
+import all Obend.Core.RangeSafe
+import all Obend.Hardware.Compiler
+import all Obend.Hardware.HDL
+import all Obend.Hardware.Types
+import all Obend.Leaf.BytecodeRegisterJit
+import all Obend.Leaf.Emit
+import all Obend.Leaf.Flatten
+import all Obend.Leaf.Served
+import all Obend.Leaf.Specialize
+import all Obend.Leaf.Static
+import all Obend.Leaf.UpTo
+import all Obend.Lower.Lower
+import all Obend.Lower.Proofs.Book
+import all Obend.Lower.Proofs.Sound
+import all Obend.Lower.Proofs.Subst
+import all Obend.Lower.Semantics
+import all Obend.Lower.Syntax
 
 public section
 namespace Obend.Doc.Reactive.Tests

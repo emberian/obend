@@ -4,8 +4,7 @@ module
 
 `Obend.Run.Core4` runs an emitted Core4 activity through the guarded runner, with four gaps
 (`lean/docs/REPORT-RUNNER-20261031.md` §9). Here each is closed by an adapter over the runner, with
-the clause it adds to what an accepted log satisfies and a fixture the bare adapter got wrong
-(`Obend.Run.Core4Example`):
+the clause it adds to what an accepted log satisfies:
 
 - **Response typing.** A reply is accepted only if it conforms to the activity's declared response
   type (`Data.conforms`, as `Spec.Preview.runTurns` checks): `ResponsesTyped`.

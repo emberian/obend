@@ -916,7 +916,7 @@ impl GrainExecutor {
 }
 
 // =========================================================================
-// Policy-to-Grain Automata Confinement Compiler & VM (`Obend.Lower.PolicyToGrain`)
+// Policy-to-Grain Automata Confinement Compiler & VM (`Obend.Judge.AutomataConfinement` / `Obend.Polis.GrainCustodyHost`)
 // =========================================================================
 
 /// Deterministic Table-DFA transcript policy matching `Obend.Judge.TableDfa` (`AutomataConfinement.lean`).
@@ -979,7 +979,7 @@ impl PolicyTableDfa {
 }
 
 /// Deterministic register/stack `Grain` bytecode instructions for transcript policy evaluation
-/// matching `Obend.Lower.GrainInstr` (`PolicyToGrain.lean`).
+/// over `PolicyTableDfa` (`Obend.Judge.AutomataConfinement` / `Obend.Polis.GrainCustodyHost`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyGrainInstr {
     /// Initialize `state_reg := start_state` and `fuel_reg := fuel_budget`.
@@ -1001,14 +1001,14 @@ pub enum PolicyGrainInstr {
     Halt,
 }
 
-/// Explicit linear fuel budget `2 * max_tokens + 4` matching `Obend.Lower.grainPolicyFuelBudget`.
+/// Explicit linear fuel budget `2 * max_tokens + 4` for `PolicyGrainInstr` execution.
 #[inline]
 pub fn grain_policy_fuel_budget(max_tokens: usize) -> usize {
     2 * max_tokens + 4
 }
 
 /// Compile a `PolicyTableDfa` transcript policy with token budget `max_tokens` into a
-/// `Vec<PolicyGrainInstr>` bytecode program matching `Obend.Lower.compilePolicyToGrainProg`.
+/// `Vec<PolicyGrainInstr>` bytecode program.
 pub fn compile_policy_to_grain_prog(
     policy: &PolicyTableDfa,
     max_tokens: usize,
@@ -1167,8 +1167,7 @@ pub fn run_policy_grain_instrs<S: AsRef<str>>(
     Some(vm)
 }
 
-/// Evaluate a `PolicyGrainInstr` bytecode program on `tokens`, returning `Some(verdict)` on clean halt
-/// matching `Obend.Lower.evalGrainProg` (`compilePolicyToGrainProg_sound`).
+/// Evaluate a `PolicyGrainInstr` bytecode program on `tokens`, returning `Some(verdict)` on clean halt.
 pub fn eval_policy_grain_prog<S: AsRef<str>>(
     prog: &[PolicyGrainInstr],
     tokens: &[S],

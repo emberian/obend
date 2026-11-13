@@ -4,7 +4,6 @@ import Obend.Vault.Projection
 import Obend.Vault.CheckedCarry
 import Obend.Vault.UnifiedDeos
 import Obend.Judge.TranscriptPolicy
-import Obend.Lower.PolicyToGrain
 import Obend.Tactic.Tooth
 
 /-!
@@ -35,7 +34,6 @@ open Obend.Vault.Projection
 open Obend.Vault.CheckedCarry
 open Obend.Vault.UnifiedDeos
 open Obend.Judge
-open Obend.Lower
 
 -- ============================================================================
 -- 1. `Contract` Goal Binding & Relawing

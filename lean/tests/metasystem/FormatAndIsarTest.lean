@@ -4,7 +4,6 @@ import Obend.Spec.Syntax
 import Obend.Spec.Parse
 import Obend.Spec.Elaborate
 import Obend.Spec.FrontEnd
-import Obend.Format.Reader
 
 open Obend.Core.Data (Data)
 open Obend.Law
@@ -14,12 +13,11 @@ open Obend.Spec.Syntax
 open Obend.Spec.Elaborate
 open Obend.Logic
 open Obend.Vault.Escrow
-open Obend.Format
 
 set_option autoImplicit false
 
 /-!
-# Metasystem Verification Suite: Pluggable `FormatReader`, Isar Proof Blocks & Escrow Seam Closure
+# Metasystem Verification Suite: Isar Proof Blocks & Escrow Seam Closure
 
 Covers:
 1. `Obend.Vault.Escrow` non-trivial `escrowLaw` & `prepaidLeaseLaw`, `escrowCellContract` &
@@ -28,9 +26,6 @@ Covers:
 2. Isar-style `claim ... by ...`, `law ... by ...`, and `contract ... for ... by ...` surface syntax,
    parser, `ObligationTree` elaboration (`elaborateIsarProofTree`), and `CellContract` elaboration
    (`elaborateCellContract`).
-3. All 4 verified `FormatReader` instances (`obnb@1`, `usd-stage@1`, `dfa-policy@1`,
-   `dreggnet-deploy@1`), their `data_roundtrip` theorems, `lowerToObend` elaboration through
-   `Obend.Spec.Elaborate` & `Obend.Spec.FrontEnd.accept`, and `#tooth` mutation tests.
 -/
 
 /-! ## Part 1: `Escrow.lean` Seam Closure & Non-Trivial `LawExpr` / `CellContract` Verification -/
@@ -260,204 +255,18 @@ spec S for Box:
 
 #guard (elaborateIsarSource "BadIsar" badIsarMethodSource).isOk == false
 
-/-! ## Part 3: Concrete `FormatReader` Instances, Roundtrips & FrontEnd Acceptance -/
-
-/-! ### 3.1 `obnbReader` (`"obnb@1"`) -/
-
-def sampleObnbText : String :=
-"---
-format: obnb@1
-title: QuantumWalkWorkbook
-law: walkProgressLaw
-field: progress
-maxBound: 50
----
-# Introduction
-cell-obend: initStep:progress:3
-cell-lean: walk_monotone_bridge:WorkbookSpec"
-
-def sampleObnbAST : ObnbWorkbook where
-  title := "QuantumWalkWorkbook"
-  lawName := "walkProgressLaw"
-  boundField := "progress"
-  maxBound := 50
-  cells := [
-    .prose "Introduction" "Introduction",
-    .obend "initStep" "progress" 3,
-    .leanBridge "walk_monotone_bridge" "WorkbookSpec"
-  ]
-
-theorem obnb_roundtrip_concrete :
-    obnbOfCoreData (obnbToCoreData sampleObnbAST) = some sampleObnbAST :=
-  obnb_data_roundtrip sampleObnbAST
-
 theorem sampleElaboratedCellContract_holds_top (d : Data) :
     Holds (elaborateCellContractFromFields "VaultIsarSpec" [("count", "Nat"), ("limit", "Nat")] sampleContractDecl).invariant d :=
   holds_top_invariant d
 
-#guard obnbReader.ofCoreData (obnbReader.toCoreData sampleObnbAST) == some sampleObnbAST
-#guard (obnbReader.parse sampleObnbText).toOption == some sampleObnbAST
-#guard acceptsReaderAST obnbReader sampleObnbAST == true
-#guard (elaborateLoweredModule (obnbReader.lowerToObend sampleObnbAST)).isOk == true
-#guard (obnbReader.parse "format: wrong@1\ntitle: X").isOk == false
+/-! ## Part 3: Parameterized Isar Methods (`lean(...)` & `judge(...)`) & Axiom Audit -/
 
-#tooth obnb_data_roundtrip by mutation
-  Obend.Format.obnbToCoreData := fun _ => Data.record []
-
-/-! ### 3.2 `usdStageReader` (`"usd-stage@1"`) -/
-
-def sampleUsdText : String :=
-"#usda 1.0
-stage: CryoPackageStage
-subLayers:substrate.usda,interposer.usda
-maxThermalMk: 300000
-def Xform Die0 10 20 5 1 2 4000
-over Die0_ThermalOverride 3 0 0 1 0 4200"
-
-def sampleUsdAST : UsdStage where
-  stageName := "CryoPackageStage"
-  subLayers := ["substrate.usda", "interposer.usda"]
-  maxThermalMk := 300000
-  baseXform := {
-    layerName := "Die0"
-    isOver := false
-    posX := 10
-    posY := 20
-    posZ := 5
-    velX := 1
-    velY := 2
-    thermalMk := 4000
-  }
-  overrides := [{
-    layerName := "Die0_ThermalOverride"
-    isOver := true
-    posX := 3
-    posY := 0
-    posZ := 0
-    velX := 1
-    velY := 0
-    thermalMk := 4200
-  }]
-
-theorem usdStage_roundtrip_concrete :
-    usdStageOfCoreData (usdStageToCoreData sampleUsdAST) = some sampleUsdAST :=
-  usdStage_data_roundtrip sampleUsdAST
-
-#guard usdStageReader.ofCoreData (usdStageReader.toCoreData sampleUsdAST) == some sampleUsdAST
-#guard (usdStageReader.parse sampleUsdText).toOption == some sampleUsdAST
-#guard (usdStageReader.parse (usdStageReader.render sampleUsdAST)).toOption == some sampleUsdAST
-#guard acceptsReaderAST usdStageReader sampleUsdAST == true
-#guard (elaborateLoweredModule (usdStageReader.lowerToObend sampleUsdAST)).isOk == true
-#guard (usdStageReader.parse "stage: NoHeader\ndef Xform A 0 0 0 0 0 0").isOk == false
-
-#tooth usdStage_data_roundtrip by mutation
-  Obend.Format.usdStageToCoreData := fun _ => Data.record []
-
-/-! ### 3.3 `dfaPolicyReader` (`"dfa-policy@1"`) -/
-
-def sampleDfaText : String :=
-"format: dfa-policy@1
-policy: PromptTranscriptConfinement
-initial: 0
-accepting: 2,3
-transition: 0 1 2
-transition: 2 1 3
-hole: systemPromptSlot 77 0"
-
-def sampleDfaAST : DfaPolicy where
-  policyName := "PromptTranscriptConfinement"
-  initialState := 0
-  acceptingStates := [2, 3]
-  transitions := [⟨0, 1, 2⟩, ⟨2, 1, 3⟩]
-  holes := [⟨"systemPromptSlot", 77, 0⟩]
-
-theorem dfaPolicy_roundtrip_concrete :
-    dfaPolicyOfCoreData (dfaPolicyToCoreData sampleDfaAST) = some sampleDfaAST :=
-  dfaPolicy_data_roundtrip sampleDfaAST
-
-#guard dfaPolicyReader.ofCoreData (dfaPolicyReader.toCoreData sampleDfaAST) == some sampleDfaAST
-#guard (dfaPolicyReader.parse sampleDfaText).toOption == some sampleDfaAST
-#guard (dfaPolicyReader.parse (dfaPolicyReader.render sampleDfaAST)).toOption == some sampleDfaAST
-#guard acceptsReaderAST dfaPolicyReader sampleDfaAST == true
-#guard (elaborateLoweredModule (dfaPolicyReader.lowerToObend sampleDfaAST)).isOk == true
-#guard (dfaPolicyReader.parse "policy: MissingHeader\ninitial: 0").isOk == false
-
-#tooth dfaPolicy_data_roundtrip by mutation
-  Obend.Format.dfaPolicyToCoreData := fun _ => Data.record []
-
-/-! ### 3.4 `deploymentTopologyReader` (`"dreggnet-deploy@1"`) -/
-
-def sampleDeployText : String :=
-"format: dreggnet-deploy@1
-topology: EnclaveVaultMesh
-totalMandateCap: 5000
-requiredTeePin: 9001
-grain: IngressGrain 9001 1000
-grain: SettlementGrain 9001 4000
-channel: sturdySettle IngressGrain SettlementGrain 12"
-
-def sampleDeployAST : DeploymentTopology where
-  topologyName := "EnclaveVaultMesh"
-  totalMandateCap := 5000
-  requiredTeePin := 9001
-  grains := [
-    ⟨"IngressGrain", 9001, 1000⟩,
-    ⟨"SettlementGrain", 9001, 4000⟩
-  ]
-  channels := [
-    ⟨"sturdySettle", "IngressGrain", "SettlementGrain", 12⟩
-  ]
-
-theorem deploymentTopology_roundtrip_concrete :
-    deploymentOfCoreData (deploymentToCoreData sampleDeployAST) = some sampleDeployAST :=
-  deploymentTopology_data_roundtrip sampleDeployAST
-
-#guard deploymentTopologyReader.ofCoreData (deploymentTopologyReader.toCoreData sampleDeployAST) == some sampleDeployAST
-#guard (deploymentTopologyReader.parse sampleDeployText).toOption == some sampleDeployAST
-#guard (deploymentTopologyReader.parse (deploymentTopologyReader.render sampleDeployAST)).toOption == some sampleDeployAST
-#guard acceptsReaderAST deploymentTopologyReader sampleDeployAST == true
-#guard (elaborateLoweredModule (deploymentTopologyReader.lowerToObend sampleDeployAST)).isOk == true
-#guard (deploymentTopologyReader.parse "topology: NoHeader\ntotalMandateCap: 10").isOk == false
-
-#tooth deploymentTopology_data_roundtrip by mutation
-  Obend.Format.deploymentToCoreData := fun _ => Data.record []
-
-/-! ## Part 4: Edge Cases (Empty Inputs, Boundary Values, `lean(...)` & `judge(...)` Methods) & Axiom Audit -/
-
--- Empty input rejection across all 4 FormatReaders
-#guard (obnbReader.parse "").isOk == false
-#guard (usdStageReader.parse "").isOk == false
-#guard (dfaPolicyReader.parse "").isOk == false
-#guard (deploymentTopologyReader.parse "").isOk == false
-
--- Corrupt Data decoding returns `none` cleanly
-#guard obnbReader.ofCoreData (.natural 0) == none
-#guard usdStageReader.ofCoreData (.natural 0) == none
-#guard dfaPolicyReader.ofCoreData (.natural 0) == none
-#guard deploymentTopologyReader.ofCoreData (.natural 0) == none
-
--- Boundary ASTs with empty collections / zero bounds pass roundtrip and FrontEnd.accept
-def emptyCollectionsUsdAST : UsdStage :=
-  { sampleUsdAST with subLayers := [], overrides := [], maxThermalMk := 0 }
-def emptyCollectionsDfaAST : DfaPolicy :=
-  { sampleDfaAST with acceptingStates := [], transitions := [], holes := [] }
-def emptyCollectionsDeployAST : DeploymentTopology :=
-  { sampleDeployAST with grains := [], channels := [], totalMandateCap := 0 }
-
-#guard (usdStageReader.ofCoreData (usdStageReader.toCoreData emptyCollectionsUsdAST)) == some emptyCollectionsUsdAST
-#guard acceptsReaderAST usdStageReader emptyCollectionsUsdAST == true
-#guard (dfaPolicyReader.ofCoreData (dfaPolicyReader.toCoreData emptyCollectionsDfaAST)) == some emptyCollectionsDfaAST
-#guard acceptsReaderAST dfaPolicyReader emptyCollectionsDfaAST == true
-#guard (deploymentTopologyReader.ofCoreData (deploymentTopologyReader.toCoreData emptyCollectionsDeployAST)) == some emptyCollectionsDeployAST
-#guard acceptsReaderAST deploymentTopologyReader emptyCollectionsDeployAST == true
-
--- Parameterized Isar methods (`lean(...)` and `judge(...)`) and rejection of empty arguments
 #guard (parseIsarMethod "lean(escrow_solvent)").toOption == some (IsarMethod.lean "escrow_solvent")
 #guard (parseIsarMethod "judge(Slot.usable)").toOption == some (IsarMethod.judge "Slot.usable")
 #guard (Obend.Spec.Parse.checkIsarMethod "lean()").isOk == false
 #guard (Obend.Spec.Parse.checkIsarMethod "judge()").isOk == false
 
--- Axiom audit: verify 0 sorryAx and 0 Classical.choice on all constructive CellContract, FormatReader & Isar theorems
+-- Axiom audit: verify 0 sorryAx and 0 Classical.choice on all constructive CellContract & Isar theorems
 #print axioms escrow_and_lease_kinds_nontrivial
 #print axioms escrowOp_admitted_by_contract
 #print axioms lease_advance_admitted_by_contract
@@ -466,12 +275,4 @@ def emptyCollectionsDeployAST : DeploymentTopology :=
 #print axioms escrow_rollback_contract_refused
 #print axioms sampleContractProofTree_properties
 #print axioms sampleElaboratedCellContract_holds_top
-#print axioms obnb_data_roundtrip
-#print axioms usdStage_data_roundtrip
-#print axioms dfaPolicy_data_roundtrip
-#print axioms deploymentTopology_data_roundtrip
-#print axioms obnb_roundtrip_concrete
-#print axioms usdStage_roundtrip_concrete
-#print axioms dfaPolicy_roundtrip_concrete
-#print axioms deploymentTopology_roundtrip_concrete
 

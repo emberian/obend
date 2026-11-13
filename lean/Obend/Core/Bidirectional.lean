@@ -160,10 +160,9 @@ theorem whnf_canonical (assumptions : Assumptions) (type : Ty) :
 
 /-- Every type agrees with its weak-head form. -/
 theorem sameType_whnf (assumptions : Assumptions) (type : Ty) :
-    sameType assumptions type (whnf assumptions type) = true := by
-  apply sameType_extends
-  refine (legacySameType_iff _ _ _).2 ⟨assumptions.bounds.length, 0, Nat.le_refl _, Nat.zero_le _, ?_⟩
-  rw [whnf_canonical]; rfl
+    sameType assumptions type (whnf assumptions type) = true :=
+  sameType_trans (sameType_canonical assumptions type)
+    (EquiRecursiveAgreement.agrees_chase assumptions assumptions.bounds.length type.canonical)
 
 theorem whnf_sameType (assumptions : Assumptions) (type : Ty) :
     sameType assumptions (whnf assumptions type) type = true :=

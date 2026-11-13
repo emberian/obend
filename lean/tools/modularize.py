@@ -9,7 +9,7 @@ DEF_MODULES={'Obend/AxiomPin.lean','Obend/AssertAxioms.lean','Obend/AssertCompil
  'Obend/Digest/Cshake256/Seam.lean','Obend/Digest/Cshake256.lean',
  'Obend/Core/Term.lean','Obend/Core/Ty.lean','Obend/Core/Check.lean','Obend/Core/Machine.lean',
  'Obend/Core/MachineFast.lean','Obend/Core/Invariant.lean','Obend/Core/Data.lean','Obend/Core/Capacity.lean',
- 'Obend/Core/Collect.lean','Obend/Core/Checkpoint.lean','Obend/Core/Extensions.lean',
+ 'Obend/Core/Collect.lean','Obend/Core/Checkpoint.lean',
  'Obend/Core/MachineTyping.lean','Obend/Core/Interaction.lean','Obend/Core/Digest.lean',
  'Obend/Slot.lean','Obend/Slot/Protocol.lean','Obend/Slot/Proofs/ProtocolTyping.lean'}
 DECL=re.compile(r'^(?P<attrs>(?:@\[[^\]]*\]\s*)*)(?P<mods>(?:(?:noncomputable|protected|unsafe|partial)\s+)*)(?P<kind>theorem|lemma|def|abbrev|inductive|structure|class|instance|opaque|axiom)\s+(?P<name>[^\s:(\[{]+)')

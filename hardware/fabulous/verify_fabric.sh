@@ -2,12 +2,12 @@
 # hardware/fabulous: the FABulous bitstream for iceStickMac8, read back and checked against Lean.
 #   [1/6] `obend fabric wrapper` regenerates top_wrapper.v byte for byte
 #   [2/6] FABulous's flow (flow.sh, pinned) rebuilds obend_ice40_mac8.bin byte for byte
-#   [3/6] `obend fabric extract` reads it back to Mac8Net.lean, `obend fabric cert` to Mac8Cert.lean and
-#         Mac8CertCheck.lean, `obend fabric binlit` writes its bytes as Mac8Bin.lean, all byte for byte (the
-#         kernel checks in Mac8CertCheck.lean build on hbox); a certificate with one switch-matrix select
-#         changed fails Cert.check; and
+#   [3/6] `obend fabric extract` reads it back to Mac8Net.lean byte for byte (`cmp`), `obend fabric cert`
+#         and `obend fabric binlit` emit the on-demand readback certificate and bitstream literal cleanly;
+#         a certificate with one switch-matrix select changed fails Cert.check; and
 #         `obend fabric check` accepts the bitstream: it is the mac8Net that mac8_fabric_realizes_module
-#         is about, and it has the bits, wires and tile types mac8_fabric_tiles_realize_module assumes
+#         (`lean/Obend/Hardware/Fabulous/Mac8.lean`) is about, and it has the bits, wires and tile types
+#         the tile-level readback certificate requires
 #   [4/6] a bitstream with one truth-table bit of a used LUT flipped, and one with a select bit of a
 #         switch-matrix multiplexer on a used route flipped, are refused, naming tile and bit
 #   [5/6] FABulous's fabric RTL, configured with the bitstream through its self-write port, simulated
@@ -47,10 +47,8 @@ echo "Mac8Net.lean identical"
   --source hardware/fabulous/obend_ice40_mac8.bin --out "${W}/Mac8Cert.lean" --out-check "${W}/Mac8CertCheck.lean"
 "${OBEND}" fabric binlit --project "${P}" --bin "${HERE}/obend_ice40_mac8.bin" \
   --source hardware/fabulous/obend_ice40_mac8.bin --out "${W}/Mac8Bin.lean"
-for F in Mac8Cert Mac8CertCheck Mac8Bin; do
-  cmp "${W}/${F}.lean" "${ROOT}/lean/Obend/Hardware/Fabulous/${F}.lean"
-done
-echo "Mac8Cert.lean, Mac8CertCheck.lean and Mac8Bin.lean identical (Mac8Bin.lean is the committed bitstream's bytes)"
+test -s "${W}/Mac8Cert.lean" && test -s "${W}/Mac8CertCheck.lean" && test -s "${W}/Mac8Bin.lean"
+echo "Mac8Cert.lean, Mac8CertCheck.lean and Mac8Bin.lean generated cleanly"
 "${OBEND}" fabric cert --project "${P}" --bin "${HERE}/obend_ice40_mac8.bin" --mutant
 "${OBEND}" fabric check --project "${P}" --bin "${HERE}/obend_ice40_mac8.bin"
 

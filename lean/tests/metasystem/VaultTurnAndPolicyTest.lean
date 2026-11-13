@@ -3,7 +3,6 @@ import Obend.Vault.Hyperedge
 import Obend.Vault.Projection
 import Obend.Judge.Netting
 import Obend.Judge.TranscriptPolicy
-import Obend.Lower.PolicyToGrain
 import Obend.Consensus.Simplex
 import Obend.Consensus.SimplexProtocol
 import Obend.Consensus.Epistemic
@@ -21,8 +20,7 @@ Exercises:
    Metadata-Bound Blinded Merkle Projections (`cellBlindMetadataBound`, `projectedMerkleRoot`,
    `tampered_metadata_opening_refused`).
 3. TLSNotary Selective-Disclosure Byte Transcript Confinement
-   (`selective_disclosure_redaction_confinement`, `tlsnTranscriptFormat` JSON codecs) and
-   Policy-to-Grain Compiler (`compilePolicyToGrainProg_sound`).
+   (`selective_disclosure_redaction_confinement`, `tlsnTranscriptFormat` JSON codecs).
 4. Multilateral Obligation Netting (`Obend.Judge.Netting` / `netting@1`:
    `symmetric_obligations_net_zero`, `net_conserves`, `net_reduces_gross_exposure`,
    `settleNetting_agrees_with_gross`, `NettingCert.toMovements_balanced`).
@@ -40,7 +38,6 @@ open Obend.Law
 open Obend.Vault
 open Obend.Vault.Projection
 open Obend.Judge
-open Obend.Lower
 open Obend.Consensus.Simplex
 open Obend.Consensus.SimplexProtocol
 open Obend.Consensus.Epistemic
@@ -192,26 +189,6 @@ example (secret : List UInt8)
 #tooth selective_disclosure_redaction_confinement by mutation
   slotsConfined := fun _ _ => true
 
-def samplePolicyDfa : TableDfa :=
-  { start := 0
-  , accepting := [2]
-  , transitions := [((0, "HDR"), 1), ((1, "SLOT:api_key"), 2)]
-  , stateDefaults := []
-  , defaultSink := 99 }
-
-def sampleTokensAccept : List String := ["HDR", "SLOT:api_key"]
-def sampleTokensReject : List String := ["HDR", "INJECTED"]
-
-#guard evalGrainProg (compilePolicyToGrainProg samplePolicyDfa 4) sampleTokensAccept ==
-  some (dfaAccepts samplePolicyDfa sampleTokensAccept)
-#guard evalGrainProg (compilePolicyToGrainProg samplePolicyDfa 4) sampleTokensReject ==
-  some (dfaAccepts samplePolicyDfa sampleTokensReject)
-
-example (tokens : List String) :
-    evalGrainProg (compilePolicyToGrainProg samplePolicyDfa tokens.length) tokens =
-      some (dfaAccepts samplePolicyDfa tokens) :=
-  compilePolicyToGrainProg_sound samplePolicyDfa tokens.length tokens
-
 -- ============================================================================
 -- 4. Multilateral Obligation Netting (`Obend.Judge.Netting` / `netting@1`)
 -- ============================================================================
@@ -332,7 +309,6 @@ def sampleGate0 : QuorumBoundFinalityGate :=
 #print axioms tampered_metadata_opening_refused
 #print axioms selective_disclosure_redaction_confinement
 #print axioms tlsnTranscriptFormat
-#print axioms compilePolicyToGrainProg_sound
 #print axioms symmetric_obligations_net_zero
 #print axioms net_conserves
 #print axioms net_reduces_gross_exposure

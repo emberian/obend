@@ -94,17 +94,17 @@ theorem materialize_ground (limits : Limits) (o : Observation) (budget : Budget)
   | natural k =>
       simp only [materialBytes] at bytes
       simp only [materializeWith, observationRuntime]
-      rw [if_neg (by omega), if_neg (by omega)]
+      rw [ite_cond_eq_false _ _ (eq_false (by omega)), ite_cond_eq_false _ _ (eq_false (by omega))]
       exact ⟨_, rfl, rfl, rfl⟩
   | boolean b =>
       simp only [materialBytes] at bytes
       simp only [materializeWith, observationRuntime]
-      rw [if_neg (by omega), if_neg (by omega)]
+      rw [ite_cond_eq_false _ _ (eq_false (by omega)), ite_cond_eq_false _ _ (eq_false (by omega))]
       exact ⟨_, rfl, rfl, rfl⟩
   | label s =>
       simp only [materialBytes] at bytes
       simp only [materializeWith, observationRuntime]
-      rw [if_neg (by omega), if_neg (by omega)]
+      rw [ite_cond_eq_false _ _ (eq_false (by omega)), ite_cond_eq_false _ _ (eq_false (by omega))]
       exact ⟨_, rfl, rfl, rfl⟩
 
 theorem encoded_ground (o : Observation) {depth : Nat} (h : 1 ≤ depth) :
@@ -149,15 +149,15 @@ public theorem execute_ground_complete {term : Term} {o : Observation} (closed :
     split
     · rename_i failure hc
       exfalso
-      simp only [completeWith, Bool.not_true, Bool.false_eq_true, if_false, complete, emptyStack,
+      simp only [completeWith, Bool.not_true, Bool.false_eq_true, ite_false, complete, emptyStack,
         hr, bind, Except.bind, hval, enc, hbs] at hc
-      rw [if_neg (by omega)] at hc
+      rw [ite_cond_eq_false _ _ (eq_false (by omega))] at hc
       cases hc
     · rename_i result hc
       refine ⟨_, rfl, ?_⟩
-      simp only [completeWith, Bool.not_true, Bool.false_eq_true, if_false, complete, emptyStack,
+      simp only [completeWith, Bool.not_true, Bool.false_eq_true, ite_false, complete, emptyStack,
         hr, bind, Except.bind, hval, enc, hbs] at hc
-      rw [if_neg (by omega)] at hc
+      rw [ite_cond_eq_false _ _ (eq_false (by omega))] at hc
       cases hc
       exact hval
   all_goals

@@ -120,7 +120,6 @@ import Obend.Analysis.Worlds
 import Obend.Apps.FidgetCam
 import Obend.Apps.FidgetCamCert
 import Obend.Apps.FocHil
-import Obend.Apps.ObendRisc
 import Obend.Apps.QuantumPhotonicMatter
 import Obend.Apps.SdrFt8
 import Obend.Apps.SdrFt8Rx
@@ -129,20 +128,17 @@ import Obend.Apps.SovereignDrex
 import Obend.Apps.ZkNtt
 import Obend.AssertAxioms
 import Obend.AssertCompiled
-import Obend.Category
 import Obend.Category.GradedLogic
 import Obend.Category.OpenSystem
 import Obend.Category.Refines
 import Obend.ClusterGov.PhysicalEnvelope
 import Obend.Codec.DetCbor
-import Obend.Consensus
 import Obend.Consensus.Epistemic
 import Obend.Consensus.Finality
 import Obend.Consensus.Simplex
 import Obend.Consensus.SimplexLiveness
 import Obend.Consensus.SimplexProtocol
 import Obend.Consensus.SimplexTrace
-import Obend.Crypto
 import Obend.Crypto.BinarySpartanAndShout
 import Obend.Crypto.BinaryTower256
 import Obend.Crypto.CanopyReduce
@@ -165,7 +161,6 @@ import Obend.Core.AliasExposure
 import Obend.Core.Assumptions
 import Obend.Core.Bidirectional
 import Obend.Core.Brand
-import Obend.Core.CanonicalExtension
 import Obend.Core.Capacity
 import Obend.Core.Check
 import Obend.Core.Checkpoint
@@ -177,7 +172,6 @@ import Obend.Core.Digest
 import Obend.Core.EquiRecursiveAgreement
 import Obend.Core.EquiRecursiveLookup
 import Obend.Core.EquiRecursiveSubstitutionTransport
-import Obend.Core.Extensions
 import Obend.Core.FieldCongruence
 import Obend.Core.Fill
 import Obend.Core.Proofs.FillTyping
@@ -191,20 +185,17 @@ import Obend.Core.FiniteRowLaws
 import Obend.Core.GradedSessionMetatheory
 import Obend.Core.Interaction
 import Obend.Core.Invariant
-import Obend.Core.LegacyAgreement
 import Obend.Core.Machine
 import Obend.Core.MachineFast
 import Obend.Core.MachineReify
 import Obend.Core.MachineTyping
 import Obend.Core.Nominal
 import Obend.Core.Packet
-import Obend.Core.Proofs.Adequacy
 import Obend.Core.Proofs.Adequacy.Birth
 import Obend.Core.Proofs.Adequacy.CasesControl
 import Obend.Core.Proofs.Adequacy.CasesEval
 import Obend.Core.Proofs.Adequacy.CasesReturn
 import Obend.Core.Proofs.Adequacy.Defs
-import Obend.Core.Proofs.Adequacy.Examples
 import Obend.Core.Proofs.Adequacy.Graph
 import Obend.Core.Proofs.Adequacy.Meaning
 import Obend.Core.Proofs.Adequacy.Origins
@@ -219,10 +210,8 @@ import Obend.Core.Proofs.Adequacy.Source
 import Obend.Core.Proofs.Adequacy.StepRaw
 import Obend.Core.Proofs.Aggregate
 import Obend.Core.Proofs.BidirectionalCompleteness
-import Obend.Core.Proofs.CheckCompletenessObstruction
 import Obend.Core.Proofs.CheckerTransport
 import Obend.Core.Proofs.CheckpointRoundTrip
-import Obend.Core.Proofs.Collect
 import Obend.Core.Proofs.Collect.Compact
 import Obend.Core.Proofs.Collect.Extract
 import Obend.Core.Proofs.Collect.Lockstep
@@ -235,8 +224,6 @@ import Obend.Core.Proofs.Collect.Typing
 import Obend.Core.Proofs.Completeness
 import Obend.Core.Proofs.Conservation
 import Obend.Core.Proofs.DataSoundness
-import Obend.Core.Proofs.EquiRecursiveBoundary
-import Obend.Core.Proofs.EquiRecursiveSubstitution
 import Obend.Core.Proofs.Force
 import Obend.Core.Proofs.Forcing.Agree
 import Obend.Core.Proofs.Forcing.Back
@@ -254,9 +241,7 @@ import Obend.Core.Proofs.GradedRecord
 import Obend.Core.Proofs.GroundExecution
 import Obend.Core.Proofs.Hole
 import Obend.Core.Proofs.JoinReading
-import Obend.Core.Proofs.LedgerPoles
 import Obend.Core.Proofs.Preservation
-import Obend.Core.Proofs.Preservation.Base
 import Obend.Core.Proofs.Preservation.Base.Focus
 import Obend.Core.Proofs.Preservation.Base.Heads
 import Obend.Core.Proofs.Preservation.Base.Insert
@@ -275,14 +260,10 @@ import Obend.Core.Proofs.Splice
 import Obend.Core.Proofs.StepCases
 import Obend.Core.Proofs.SubjectReduction
 import Obend.Core.Proofs.SubjectReduction.Substitution
-import Obend.Core.Proofs.Substitution
 import Obend.Core.Proofs.Substitution.Defs
 import Obend.Core.Proofs.Substitution.Uses
 import Obend.Core.Proofs.Templates
-import Obend.Core.Proofs.TickCost
-import Obend.Core.Proofs.TickTrace
 import Obend.Core.Proofs.TypedSubstitution
-import Obend.Core.PrototypeProvenance
 import Obend.Core.RangeSafe
 import Obend.Core.RecursiveAgreement
 import Obend.Core.RecursiveRows
@@ -305,7 +286,6 @@ import Obend.Core.SubstitutionResidualTransport
 import Obend.Core.SubstitutionResourceCongruence
 import Obend.Core.SubstitutionRows
 import Obend.Core.SubstitutionStreamSteps
-import Obend.Core.TemplateDischarge
 import Obend.Core.Term
 import Obend.Core.TermTraverse
 import Obend.Core.Traverse
@@ -331,7 +311,6 @@ import Obend.Doc.Render
 import Obend.Doc.Section
 import Obend.Doc.Structured
 import Obend.Doc.WorkbookEngine
-import Obend.Elab
 import Obend.Elab.AutoCertTaylorSound
 import Obend.Elab.Coerce
 import Obend.Elab.Gate
@@ -361,10 +340,8 @@ import Obend.FFI.Bridge
 import Obend.FFI.BridgeTypes
 import Obend.Fold
 import Obend.Fold.Collapse
-import Obend.Format.Reader
 import Obend.Geometry.CochainAndGauge
 import Obend.Geometry.DiracDoubleCat
-import Obend.Hardware
 import Obend.Hardware.Accelerators
 import Obend.Hardware.AgenticEDA
 import Obend.Hardware.Analog
@@ -376,10 +353,7 @@ import Obend.Hardware.Cli
 import Obend.Hardware.Codec
 import Obend.Hardware.Compiler
 import Obend.Hardware.CurrentLoop
-import Obend.Hardware.Fabulous.Mac8Bin
-import Obend.Hardware.Fabulous.Mac8Cert
-import Obend.Hardware.Fabulous.Mac8CertCheck
-import Obend.Hardware.Fabulous.Mac8Tiles
+import Obend.Hardware.Fabulous.Mac8
 import Obend.Hardware.DRC
 import Obend.Hardware.DSP
 import Obend.Hardware.Datasheet
@@ -389,12 +363,10 @@ import Obend.Hardware.Device.DriftDiffusion
 import Obend.Hardware.Device.Enclosure
 import Obend.Hardware.Device.Sky130Diode
 import Obend.Hardware.Device.Wafer
-import Obend.Hardware.FSM
 import Obend.Hardware.Fabric
 import Obend.Hardware.GeometryCAM
 import Obend.Hardware.GlitchAndTempestSafe
 import Obend.Hardware.Gpu.CollectiveImport
-import Obend.Hardware.Gpu.CollectiveWorkBuild
 import Obend.Hardware.Gpu.NttCorrect
 import Obend.Hardware.Gpu.Rdna2.AsyncRefinement
 import Obend.Hardware.Gpu.Rdna2.DppShuffle
@@ -424,7 +396,6 @@ import Obend.Hardware.QuantumMatter
 import Obend.Hardware.ReductionMachine
 import Obend.Hardware.ReductionMachine.Arena
 import Obend.Hardware.Retiming
-import Obend.Hardware.Rules
 import Obend.Hardware.SafePhysicalShield
 import Obend.Hardware.Silicon
 import Obend.Hardware.SiliconOuroboros
@@ -467,7 +438,6 @@ import Obend.Law
 import Obend.Law.AmendCli
 import Obend.Law.Claim
 import Obend.Law.Contract
-import Obend.Law.Fold
 import Obend.Law.Inherit
 import Obend.Law.Machine
 import Obend.Law.PointwiseRevise
@@ -485,7 +455,6 @@ import Obend.Law.Syntax
 import Obend.Leaf.BytecodeRegisterJit
 import Obend.Leaf.Emit
 import Obend.Leaf.Flatten
-import Obend.Leaf.Futamura
 import Obend.Leaf.LinkSpecialize
 import Obend.Leaf.Residual
 import Obend.Leaf.SelfApplicableMix
@@ -493,7 +462,6 @@ import Obend.Leaf.SelfApplicableMixCore
 import Obend.Leaf.Specialize
 import Obend.Leaf.Static
 import Obend.Leaf.UpTo
-import Obend.Ledger
 import Obend.Ledger.Book
 import Obend.Ledger.Cli
 import Obend.Ledger.Commit
@@ -526,9 +494,7 @@ import Obend.Lower.LCNF
 import Obend.Lower.LeanKernel
 import Obend.Lower.Lower
 import Obend.Lower.MetaUnify
-import Obend.Lower.PolicyToGrain
 import Obend.Lower.Proofs.Book
-import Obend.Lower.Proofs.Checks
 import Obend.Lower.Proofs.Complete
 import Obend.Lower.Proofs.Hardware
 import Obend.Lower.Proofs.SiliconKernel
@@ -570,18 +536,15 @@ import Obend.Receipt.Cli
 import Obend.Receipt.Export
 import Obend.Receipt.Merkle
 import Obend.Receipt.Negotiation
-import Obend.Repair
 import Obend.Repair.AlgConfig
 import Obend.Repair.CoalgConfig
 import Obend.Repair.DeltaLensRenew
 import Obend.Repair.DeriveConfig
 import Obend.Repair.QuotAssembly
-import Obend.Run
 import Obend.Run.Adapter
 import Obend.Run.Control
 import Obend.Run.ControlExample
 import Obend.Run.Core4
-import Obend.Run.Core4Example
 import Obend.Run.Durable
 import Obend.Run.DurableExample
 import Obend.Run.Fold
@@ -615,7 +578,6 @@ import Obend.Slot.Protocol
 import Obend.Slot.Selection
 import Obend.Slot.SupportSheaf
 import Obend.Slot.World
-import Obend.Spec
 import Obend.Spec.Annotated
 import Obend.Spec.BidirectionalSurfaceElab
 import Obend.Spec.C4
@@ -727,7 +689,6 @@ import Obend.Teeth.Spec.LawCompileTeeth
 import Obend.Teeth.Spec.TermWire
 import Obend.Teeth.Tactic.ToothChecks
 import Obend.Teeth.Vault
-import Obend.Vault
 import Obend.Vault.Affordance
 import Obend.Vault.Branch
 import Obend.Vault.BranchCli
@@ -852,7 +813,6 @@ run_cmd do
     , ("Obend/Core/Proofs/Adequacy/Origins.lean", [800000])
     , ("Obend/Core/Proofs/Adequacy/Source.lean", [600000, 600000])
     , ("Obend/Core/Proofs/Adequacy/StepRaw.lean", [800000])
-    , ("Obend/Core/Proofs/EquiRecursiveSubstitution.lean", [4000000])
     , ("Obend/Digest/Cshake256/Fast.lean", [4000000, 4000000, 4000000, 4000000])
     , ("Obend/Equiv/Reduction.lean", [600000])
     , ("Obend/Hardware/Judge.lean", [800000, 800000, 1600000])

@@ -6,7 +6,6 @@ import all Obend.Core.AliasExposure
 import all Obend.Core.Assumptions
 import all Obend.Core.Bidirectional
 import all Obend.Core.Brand
-import all Obend.Core.CanonicalExtension
 import all Obend.Core.Capacity
 import all Obend.Core.Check
 import all Obend.Core.Code
@@ -19,7 +18,6 @@ import all Obend.Core.FiniteBisimulation
 import all Obend.Core.FinitePresentation
 import all Obend.Core.FiniteRowLaws
 import all Obend.Core.Invariant
-import all Obend.Core.LegacyAgreement
 import all Obend.Core.Machine
 import all Obend.Core.MachineFast
 import all Obend.Core.MachineTyping

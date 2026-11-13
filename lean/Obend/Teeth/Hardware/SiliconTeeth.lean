@@ -3,21 +3,27 @@ module
 # Obend.Teeth.Hardware.SiliconTeeth — Refusal Poles, HDL/Compiler/EDA/AMS Verification & `#tooth` Mutations
 
 Tests both the positive and negative poles of `Obend.Hardware` across surviving hardware & physical
-modules (`Silicon`, `Process`, `Fabric`, `HDL`, `Types`, `Rules`, `FSM`, `Compiler`, `Synth`,
+modules (`Silicon`, `Process`, `Fabric`, `HDL`, `Types`, `Compiler`, `Synth`,
 `Retiming`, `PlaceRoute`, `DRC`, `Analog`, `Datasheet`, `Circuits`, `Device.Wafer`, `Photonics`,
 `PCB`, `ReductionMachine`, `DSP`, `AgenticEDA`, `Magnetics`, `CurrentLoop`, `ThermalPassivity`,
 `Accelerators`, `GeometryCAM`, `Kinematics`, `OpenUSD`, `UserspacePhysical`, `OpenHypergraph`,
-`QuantumMatter`, `Codec`, `Judge`).
+`QuantumMatter`, `Codec`, `Judge`, and `Apps.SiliconKernelVerilator`).
 -/
 public import Obend.Tactic.Tooth
 public import Obend.Teeth.Leaf.ReviewTeeth
+public import Obend.Hardware.Fabric
+public import Obend.Apps.SiliconKernelVerilator
+import all Obend.Apps.SiliconKernelVerilator
+import all Obend.Lower.Inductive
+import all Obend.Lower.LeanKernel
+import all Obend.Lower.ExprCAM
+import all Obend.Lower.DiscrTreeLUT
+import all Obend.Lower.SiliconElabFabric
 import all Obend.Hardware.Silicon
 import all Obend.Hardware.Process
 import all Obend.Hardware.Fabric
 import all Obend.Hardware.HDL
 import all Obend.Hardware.Types
-import all Obend.Hardware.Rules
-import all Obend.Hardware.FSM
 import all Obend.Hardware.Compiler
 import all Obend.Hardware.Synth
 import all Obend.Hardware.Retiming
@@ -46,13 +52,11 @@ import all Obend.Analysis.Equitable
 import all Obend.Analysis.QuantumWalk
 import all Obend.Hardware.Codec
 import all Obend.Hardware.Judge
-public import Obend.Hardware
-@[expose] public section
 
 namespace Obend.Teeth.Hardware
 open Obend.Core.Term Obend.Logic Obend.Leaf Obend.Slot Obend.Slot.World
 open Obend.Hardware.Silicon Obend.Hardware.Process Obend.Hardware.Fabric
-open Obend.Hardware.HDL Obend.Hardware.Types Obend.Hardware.Rules Obend.Hardware.FSM
+open Obend.Hardware.HDL Obend.Hardware.Types
 open Obend.Hardware.Compiler Obend.Hardware.Synth Obend.Hardware.Retiming Obend.Hardware.PlaceRoute
 open Obend.Hardware.DRC Obend.Hardware.Analog
 open Obend.Hardware.Datasheet Obend.Hardware.Circuits
@@ -109,16 +113,6 @@ theorem pnr_bel_collision_and_pip_short_refused :
     checkPnrCertificate validAdderBelNetlist corner7nm_SS 2000 shortedWirePnrCert = false ∧
     checkPnrCertificate { validAdderBelNetlist with cells := [] } corner7nm_SS 2000 validAdderPnrCert = false :=
   ⟨rfl, rfl, rfl⟩
-
-/-- Kôika-style action log refuses both `read0` after `write0` and double `write0` on register `3`,
-and `checkConflictFreeSchedule` refuses two rules that write to the same target register `0`. -/
-example :
-    runActionTrace emptyActionLog [.write .port0 3 42#64, .read .port0 3] =
-      .error (.read0AfterWrite 3) ∧
-    checkConflictFreeSchedule
-      [ ⟨"r1", .const 1#64, 0, .const 10#64⟩
-      , ⟨"r2", .const 1#64, 0, .const 20#64⟩ ] = false :=
-  ⟨rfl, rfl⟩
 
 /-- DRC cleanroom lattice refuses returning a gold-contaminated wafer (`Au`) to `.feolCmosClean`,
 and refuses directional PVD trench fill (`4:1` aspect ratio) due to keyhole void pinch-off. -/
@@ -274,22 +268,6 @@ def updateStructSliceNoOp (s : PackedStructWord) (_fieldIdx _w : Nat) (_newVal :
   s
 
 #tooth Obend.Hardware.Types.struct_slice_extract_sound by mutation Obend.Hardware.Types.updateStructSlice := updateStructSliceNoOp
-
-/-- 12. Broken `checkActionStep` in `Obend.Hardware.Rules` that forgets to reject `read0` after `write0`. -/
-def checkActionStepPermissive (log : ActionLog) (_act : ActionKind) : Except LogConflict ActionLog :=
-  .ok log
-
-#tooth Obend.Hardware.Rules.write0_before_read0_refused by mutation Obend.Hardware.Rules.checkActionStep := checkActionStepPermissive
-
-/-- 13. Broken `decodeFsmOutputs` in `Obend.Hardware.FSM` that asserts `inReady = true` even when `.busy`. -/
-def decodeFsmOutputsAlwaysReady (st : FsmState) : FsmOutputs :=
-  { inReady    := true
-  , outValid   := st.phase == .done
-  , outData    := st.accReg
-  , yieldValid := st.phase == .yielded
-  , yieldPlan  := st.yieldPlan }
-
-#tooth Obend.Hardware.FSM.fsm_no_overwrite_while_busy by mutation Obend.Hardware.FSM.decodeFsmOutputs := decodeFsmOutputsAlwaysReady
 
 /-- 14. Broken `stepRetimedMac` in `Obend.Hardware.Retiming` that forgets to add the pipelined `cReg`. -/
 def stepRetimedMacDropC (st : RetimedMacState) (a b c : BitVec 64) : RetimedMacState :=
@@ -590,5 +568,23 @@ def evalPhotonicArray4LayerEvenDuplicatePort
 
 #tooth Obend.Hardware.QuantumMatter.photonic_ctqw_array_power_conserved by mutation Obend.Hardware.QuantumMatter.evalPhotonicArray4LayerEven := evalPhotonicArray4LayerEvenDuplicatePort
 
+/-- 53. Broken mutant of `runVerilatorCoSimModel` in `Obend.Apps.SiliconKernelVerilator` that fails to refuse `#tooth` mutants (`toothMutantRefused := false`). -/
+def runVerilatorCoSimModelAcceptMutant : Obend.Apps.SiliconKernelVerilator.VerilatorCoSimTrace :=
+  { status               := "FAIL"
+  , cycles               := 45
+  , camHits              := 18
+  , betaBypasses         := 2
+  , nocFlits             := 6
+  , lutHits              := 2
+  , epoch1LutOut         := 42#64
+  , epoch2LutOut         := 70#64
+  , movedPinFallback1Cyc := true
+  , dprGlitchFreeClamped := true
+  , toothMutantRefused   := false
+  , sorryRefused         := true
+  , vcdPath              := "silicon_elab_wave.vcd" }
+
+#tooth Obend.Apps.SiliconKernelVerilator.silicon_kernel_verilator_cosim_verified
+  by mutation Obend.Apps.SiliconKernelVerilator.runVerilatorCoSimModel := runVerilatorCoSimModelAcceptMutant
+
 end Obend.Teeth.Hardware
-end

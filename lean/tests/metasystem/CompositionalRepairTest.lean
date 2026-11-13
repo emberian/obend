@@ -28,8 +28,12 @@ End-to-end verification of Groundwork Shard G2 across:
      and lawful bitstring wire `Codec` + `Format.ofCodec`.
 8. `#tooth` kernel mutation probes on universal theorems & compile-time `0 sorryAx` / `0 _native` audit.
 -/
-public import Obend.Category
-public import Obend.Repair
+public import Obend.Category.Refines
+public import Obend.Category.OpenSystem
+public import Obend.Category.GradedLogic
+public import Obend.Repair.AlgConfig
+public import Obend.Repair.CoalgConfig
+public import Obend.Repair.QuotAssembly
 public import Obend.Tactic.Compositional
 public import Obend.Tactic.Tooth
 public import Obend.AssertAxioms

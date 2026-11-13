@@ -2,13 +2,12 @@ import Obend.Vault.Rehydration
 import Obend.Consensus.Simplex
 import Obend.Consensus.SimplexProtocol
 import Obend.Analysis.Hybrid
-import Obend.Core.PrototypeProvenance
 import Obend.Tactic.Tooth
 
 /-!
 # `tests/metasystem/InnerSeamWeldTest.lean` — Inner-System Seam Weld Verification & Axiom Audit
 
-End-to-end verification of the four inner-system welds:
+End-to-end verification of the inner-system welds:
 1. **`Obend.Vault.Rehydration`** — `AttestedRoot`, `confined`, `classify`, `witnessChainOf`,
    `MembraneViewer`, `Membrane.reshare`, `Sturdyref`, `rehydrateSturdyref`, and `ReactiveAffordance`.
 2. **`Obend.Consensus.Simplex` & `Obend.Consensus.SimplexProtocol`** — `Config`, `viewTimeout`,
@@ -17,8 +16,6 @@ End-to-end verification of the four inner-system welds:
 3. **`Obend.Analysis.Hybrid`** — `HybridProblem` / `HybridCert` `Core.Data` codecs,
    `stepHybrid`, `verifyFlowpipe` + unsafe-zone disjointness check, and
    `hybridFlowpipeFormat : Obend.Judge.Format` (`"hybrid-flowpipe@1"`).
-4. **`Obend.Core.PrototypeProvenance` (`LT4`)** — `PrototypeProvenance`, `HasPrototypeProvenance`,
-   `checkPrototypeWithProvenance`, `checkPrototypeWithProvenance_sound`, and `forged_prototype_refused`.
 -/
 
 namespace Obend.Tests.InnerSeamWeldTest
@@ -29,7 +26,6 @@ open Obend.Vault.Rehydration
 open Obend.Consensus.Simplex
 open Obend.Consensus.SimplexProtocol
 open Obend.Analysis
-open Obend.Core.PrototypeProvenance
 
 -- ============================================================================
 -- 1. Vault Rehydration Inner-System Weld Tests
@@ -218,48 +214,7 @@ theorem test_badHybridCert_rejected :
   verifyFlowpipe := fun _ _ => true
 
 -- ============================================================================
--- 4. LT4 Intrinsic Prototype Fixpoint Provenance (`PrototypeProvenance`) Tests
--- ============================================================================
-
--- `PrototypeProvenance` accepts genuine unfolding of `Term.fix constSpec42 zeroSeed` (2 steps)
--- and multi-step `Term.fix branchingSpec42 branchingSeed11` (4 steps: beta -> beta -> ifZero -> add),
--- and rejects forged targets (`forgedTarget999`) or insufficient-fuel checks.
-#guard PrototypeProvenance 2 constSpec42 zeroSeed genuineTarget42 == true
-#guard PrototypeProvenance 4 branchingSpec42 branchingSeed11 genuineTarget42 == true
-#guard PrototypeProvenance 3 branchingSpec42 branchingSeed11 genuineTarget42 == false
-#guard PrototypeProvenance 5 constSpec42 zeroSeed forgedTarget999 == false
-#guard PrototypeProvenance 0 constSpec42 zeroSeed genuineTarget42 == false
-
--- `checkPrototypeWithProvenance` accepts the genuine prototypes and refuses forged targets or ill-typed seeds.
-#guard (checkPrototypeWithProvenance 2 constSpec42Env [] constSpec42 zeroSeed genuineTarget42).isOk == true
-#guard (checkPrototypeWithProvenance 4 constSpec42Env [] branchingSpec42 branchingSeed11 genuineTarget42).isOk == true
-#guard (checkPrototypeWithProvenance 2 constSpec42Env [] constSpec42 (.bound 999) genuineTarget42).isOk == false
-#guard (checkPrototypeWithProvenance 5 constSpec42Env [] constSpec42 zeroSeed forgedTarget999).isOk == false
-
-example :
-    HasPrototypeProvenance constSpec42 zeroSeed genuineTarget42 ∧
-    Term.PositiveSteps (.fix constSpec42 zeroSeed) genuineTarget42 ∧
-    ProtoTyping constSpec42Env [] (.prototype constSpec42 genuineTarget42)
-      (.prototype
-        (.arrow .reusable .unrestricted .natural (.arrow .reusable .unrestricted .natural .natural))
-        .natural) :=
-  checkPrototypeWithProvenance_sound genuine_prototype_accepted
-
-example (env : Env) (ctx : Ctx) :
-    checkPrototypeWithProvenance 5 env ctx constSpec42 zeroSeed forgedTarget999 =
-      .error (.forgedPrototypeProvenance constSpec42 zeroSeed forgedTarget999) :=
-  forged_prototype_refused env ctx
-
--- `#tooth` probe: `PrototypeProvenance` rejects `forgedTarget999`.
-theorem test_forged_prototype_provenance_false :
-    PrototypeProvenance 5 constSpec42 zeroSeed forgedTarget999 = false := by
-  decide +kernel
-
-#tooth test_forged_prototype_provenance_false by mutation
-  PrototypeProvenance := fun _ _ _ _ => true
-
--- ============================================================================
--- 5. Axiom Audit (`0 sorryAx`, `0 Classical.choice`)
+-- 4. Axiom Audit (`0 sorryAx`, `0 Classical.choice`)
 -- ============================================================================
 
 #print axioms replayedDeterministic_iff_confined
@@ -273,10 +228,5 @@ theorem test_forged_prototype_provenance_false :
 #print axioms HybridProblem.ofData_toData
 #print axioms HybridCert.ofData_toData
 #print axioms hybridFlowpipeFormat
-#print axioms checkPrototypeWithProvenance_sound
-#print axioms genuine_prototype_accepted
-#print axioms branching_prototype_accepted
-#print axioms illTyped_seed_refused
-#print axioms forged_prototype_refused
 
 end Obend.Tests.InnerSeamWeldTest

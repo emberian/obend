@@ -81,8 +81,8 @@ def checkTiles (fab : Fabric) (cfg : HashMap String Nat) (dir : String) (binPath
       | .ok C => pure C
       | .error e => IO.eprintln s!"refused: no readback certificate: {e}"; return 1
     | .error e => IO.eprintln s!"refused: {e}"; return 1
-  -- that `C` is `mac8Cert` is `Mac8Cert.lean` regenerating byte for byte (`verify_fabric.sh`)
-  -- the same bits through `binBits`, the frame layout `Mac8CertCheck.mac8_bin_required` uses
+  -- `verify_fabric.sh` also exercises `obend fabric cert` and `obend fabric binlit` on demand
+  -- and verifies the same required bits through `binBits` / `binFramed`
   let bin := binNat (← IO.FS.readBinFile binPathT)
   if !binFramed fab.cols fab.rows bin (← IO.FS.readBinFile binPathT).size then
     IO.eprintln "refused: the bitstream is not laid out as binBits reads it"; return 1

@@ -7,8 +7,8 @@ at an expected type): programs it accepts and programs it refuses, by
 name (captures, custody, affine use, rows, sums, shadowing, activities), the template fixtures
 (`futureRowSource` and its instantiations), and the classification teeth on
 `Obend.Elab.Gate.refusalKind`. Moved out of `Obend.Core.Check` on 2026-10-30: a tooth edit
-rebuilt every importer of the checker; here nothing imports this module. Historical refusal of arrow congruence is retained
-explicitly for legacySameType and replaced by a positive public-agreement tooth.
+rebuilt every importer of the checker; here nothing imports this module. Positive public-agreement
+teeth cover equi-recursive arrow and row congruence (`EquiRecursiveAgreement`).
 -/
 public import Obend.Core.Ty
 public import Obend.Core.Term
@@ -44,7 +44,7 @@ attribute [local simp]
   Ty.shareable Ty.shareableUnder Ty.isComputation Ty.isData Ty.isPlan
   Ty.isRow Ty.lookup Ty.supports Ty.canonical Ty.insertCanonical Ty.put Ty.tail
   Quantity.fits linearFree joinUses branchesAgree Quantity.agrees ExtensionFamilies.functionType
-  sameStep legacySameType Assumptions.orbit Assumptions.unfoldHead
+  Assumptions.unfoldHead
   relaxQuantities unrestrictedTy
   planType planRow responseType
   List.range_succ List.replicate_succ List.zipWith List.lookup
@@ -58,7 +58,7 @@ attribute [local simp ↓] Option.bind_eq_bind
 -- the checker. Matching reflexivity after its arguments simplify is cheap.
 attribute [local irreducible] sameType Obend.Core.EquiRecursiveAgreement.agrees
   Obend.Core.TypeGraph.candidate
-attribute [local simp] sameType_refl sameType_extends
+attribute [local simp] sameType_refl
 
 /-- Every checker tooth is a closed run the kernel evaluates. The type-graph worklist recurses on
 one `Nat` measure (`FiniteBisimulation.worklist`), so `decide +kernel` reduces it like the rest of
@@ -543,15 +543,9 @@ theorem closure_response_refused :
 
 @[local simp] def siblingAliases : Assumptions := ⟨[(1, .natural), (2, .natural)], [], [], []⟩
 
-/-- Two aliases of the same type: no single step relates them, the closure does. -/
+/-- Two aliases of the same type agree through the equi-recursive closure. -/
 theorem sibling_aliases_agree :
-    sameStep siblingAliases (.variable 1) (.variable 2) = false ∧
     sameType siblingAliases (.variable 1) (.variable 2) = true := by check_reduce
-
-/-- The historical head-chain agreement did not descend into constructors. -/
-theorem agreement_does_not_descend :
-    legacySameType siblingAliases (.arrow .reusable .unrestricted (.variable 1) .boolean)
-      (.arrow .reusable .unrestricted .natural .boolean) = false := by check_reduce
 
 /-- Recursive agreement follows aliases below matching constructors. -/
 theorem agreement_descends_into_constructors :

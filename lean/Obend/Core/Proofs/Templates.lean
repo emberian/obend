@@ -8,7 +8,6 @@ lifts it through the typing relation (`Discharges.partialTyping_instantiate`). D
 fields. Agreement and checker transport require validated instance assumptions,
 which connect declared nominal shareability to semantic resource safety. -/
 public import Obend.Core.Ty
-public import Obend.Core.TemplateDischarge
 public import Obend.Core.EquiRecursiveSubstitutionTransport
 public import Obend.Core.Check
 public import Obend.Tactic.Cases
@@ -377,45 +376,6 @@ theorem Discharges.isRow_instantiate : ∀ (fuel : Nat) (type : Ty),
           have := Discharges.isRow_instantiate fuel bound h
           rwa [D.closed j bound rigid found] at this
     | _ => simp [Ty.isRow] at h
-
-theorem Discharges.sameStep_instantiate {actual expected : Ty}
-    (agreement : sameStep template actual expected = true) :
-    sameStep instance_ (actual.instantiate σ) (expected.instantiate σ) = true := by
-  simp only [sameStep, Bool.or_eq_true] at agreement ⊢
-  rcases agreement with (canonical | aliasActual) | aliasExpected
-  · exact .inl (.inl (by simpa using canonical_eq_instantiate σ (by simpa using canonical)))
-  · cases actual with
-    | «variable» j =>
-      left; right
-      cases aliased : template.alias j with
-      | none => simp [aliased] at aliasActual
-      | some bound =>
-        have rigid := alias_not_rigid aliased
-        have closed := D.closed j bound rigid (Assumptions.alias_bound aliased)
-        obtain ⟨pure, equal⟩ : expected.isComputation = false ∧ bound.canonical = expected.canonical := by
-          simpa [aliased] using aliasActual
-        have equal' : bound.canonical = (expected.instantiate σ).canonical := by
-          have := canonical_eq_instantiate σ equal
-          rwa [closed] at this
-        simp [Ty.instantiate, D.fixed j rigid, D.aliases j rigid, aliased, equal',
-          instantiate_isComputation D.pure, pure]
-    | _ => simp at aliasActual
-  · cases expected with
-    | «variable» j =>
-      right
-      cases aliased : template.alias j with
-      | none => simp [aliased] at aliasExpected
-      | some bound =>
-        have rigid := alias_not_rigid aliased
-        have closed := D.closed j bound rigid (Assumptions.alias_bound aliased)
-        obtain ⟨pure, equal⟩ : actual.isComputation = false ∧ bound.canonical = actual.canonical := by
-          simpa [aliased] using aliasExpected
-        have equal' : bound.canonical = (actual.instantiate σ).canonical := by
-          have := canonical_eq_instantiate σ equal
-          rwa [closed] at this
-        simp [Ty.instantiate, D.fixed j rigid, D.aliases j rigid, aliased, equal',
-          instantiate_isComputation D.pure, pure]
-    | _ => simp at aliasExpected
 
 /-- Recursive equality is stable at valid discharging instances. Validity
 supplies the instance's declared resource premises during substitution. -/

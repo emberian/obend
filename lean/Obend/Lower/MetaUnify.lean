@@ -36,7 +36,6 @@ open Obend.Core.Term
 open Obend.Core.Ty (Ty)
 open Obend.Equiv
 open Obend.Leaf
-open Obend.Leaf.Futamura
 open Obend.Lower
 open Obend.Lower.Inductive
 open Obend.Lower.LeanKernel

@@ -114,9 +114,8 @@ theorem operand_callable (T : Ty) (b : Bool) :
     callable (coreOperandTy T b) = .arrow .reusable .unrestricted T (.arrow .reusable .unrestricted T T) := by
   cases b <;> rfl
 
-theorem meta_conversion : sameType metaAssumptions (.variant specMetaRow) (.variable metaVariable) = true := by
-  apply sameType_extends
-  decide
+theorem meta_conversion : sameType metaAssumptions (.variant specMetaRow) (.variable metaVariable) = true :=
+  sameType_symm (Obend.Core.EquiRecursiveAgreement.agrees_alias metaAssumptions metaVariable (.variant specMetaRow) rfl rfl)
 
 /-- An operand's provenance has type `SpecMeta` (the bounded variable), with the operand's uses when it
 is a specification and none otherwise. -/

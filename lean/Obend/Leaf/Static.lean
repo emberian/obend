@@ -30,8 +30,7 @@ Futamura projections" (`quoteMixTerm`, `quoteBookMixTerm`, `quoteMetaCogenTerm`,
 `futamura2BookCompiler`, `inCoreBookCompiler`). Those terms were a three-arm arithmetic function and
 the `apply` combinator, not a specializer; the folder that did the work was this Lean function,
 never a `Core4` term, so nothing was self-applied. They were deleted, not renamed
-(`review/EXPERT-compiler-runtime-20261103.md` §2.1). `Obend/Leaf/Futamura.lean` remains as an alias
-table so importers compile; new code imports this module.
+(`review/EXPERT-compiler-runtime-20261103.md` §2.1); all callers now import this module directly.
 -/
 public import Obend.Leaf.Flatten
 public import Obend.Leaf.Emit

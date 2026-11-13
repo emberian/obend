@@ -2,8 +2,8 @@ edition ObjectiveBend 1
 # Flagship App #1 (Layer 3): Custom Opcode 0x2B (43) SIMD/ZK Multiply-Accumulate & Goldilocks Fold Layer
 # The claims that executed an instruction (execInstruction/execStep) were removed on 2026-11-04: the importer proves
 # each claim by kernel evaluation of the Core4 interpreter and these took most of the module's budget
-# (review/DECISIONS-20261031.md, second round); the same instructions run on the emitted core in
-# apps/obend-risc/verilator against the Lean golden. The decode and pc claims stay.
+# (review/DECISIONS-20261031.md, second round); RV64I pipeline RTL execution is verified in
+# Obend.Hardware.PipelinedRisc. The decode and pc claims stay.
 
 import ./BaseRiscCore.obend as Base
 import ./PrivilegeCsrOverride.obend as Priv

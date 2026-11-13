@@ -20,10 +20,8 @@ section StructuralRuntime
 variable {assumptions : Assumptions}
 
 public theorem canonical_same_type (assumptions : Assumptions) (first second : Ty)
-    (agreement : first.canonical = second.canonical) : sameType assumptions first second = true := by
-  exact (sameType_iff assumptions first second).mpr
-    (Obend.Core.CanonicalExtension.of_canonical_eq
-      (Obend.Core.EquiRecursiveAgreement.canonical_laws assumptions) agreement)
+    (agreement : first.canonical = second.canonical) : sameType assumptions first second = true :=
+  sameType_of_canonical assumptions agreement
 
 public abbrev CapturedFunction := Obend.Core.MachineTyping.Next.FunctionOrigin
 

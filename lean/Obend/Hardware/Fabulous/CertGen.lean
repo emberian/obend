@@ -5,7 +5,7 @@ module
 `buildCert` turns the paths `extractS` followed into a `Cert` (`Obend.Hardware.Fabulous.Readback`): each
 pip into a switch-matrix output of a modelled tile becomes `Hop.sm k i`, with `i` the select the tile
 model computes from the decoded bits (and refused unless that input is the pip's source), every other pip
-a `Hop.wire`. `certLean` writes it as Lean; `obend fabric cert` writes `Mac8Cert.lean`.
+a `Hop.wire`. `certLean` writes it as Lean (`obend fabric cert --out ...`, generated on demand).
 -/
 public import Obend.Hardware.Fabulous.Bitstream
 public import Obend.Hardware.Fabulous.Readback

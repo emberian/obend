@@ -20,7 +20,7 @@ Obend's metatheory connects surface elaboration, graded/linear row typing, conte
 ### 1.3 Subject Reduction and Bounded Machine Adequacy
 
 - **Preservation (`lean/Obend/Core/Proofs/SubjectReduction.lean`, `lean/Obend/Core/Proofs/Aggregate.lean`, `lean/Obend/Core/Proofs/Preservation.lean`)**: Small-step reduction preserves graded typing (`step_preserves_typing`, `steps_preserve_typing`, `split_accounts`, `custody_conserved`). Across the heap-and-frame machine (`lean/Obend/Core/Machine.lean`), `typed_stepRaw_preserved` and `checked_runBounded_no_refusal` prove that closed checked terms never fault with missing-field, wrong-tag, or internal machine refusals.
-- **Garbage Collection Preservation (`lean/Obend/Core/Collect.lean`, `lean/Obend/Core/Proofs/Collect.lean`)**: Mark-compact heap collection preserves reachability, typing, and lockstep machine evaluation (`lean/Obend/Core/Proofs/Collect/Lockstep.lean`, `lean/Obend/Core/Proofs/Collect/Typing.lean`).
+- **Garbage Collection Preservation (`lean/Obend/Core/Collect.lean`, `lean/Obend/Core/Proofs/Collect/Statements.lean`)**: Mark-compact heap collection preserves reachability, typing, and lockstep machine evaluation (`lean/Obend/Core/Proofs/Collect/Lockstep.lean`, `lean/Obend/Core/Proofs/Collect/Typing.lean`).
 
 ---
 

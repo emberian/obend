@@ -31,8 +31,12 @@ Boilerplate-slashing proof engineering and metaprogramming infrastructure over `
 public import Lean
 public import Obend.Judge.Class
 import all Obend.Judge.Class
-public import Obend.Category
-public import Obend.Repair
+public import Obend.Category.Refines
+public import Obend.Category.OpenSystem
+public import Obend.Category.GradedLogic
+public import Obend.Repair.AlgConfig
+public import Obend.Repair.CoalgConfig
+public import Obend.Repair.QuotAssembly
 
 public section
 namespace Obend

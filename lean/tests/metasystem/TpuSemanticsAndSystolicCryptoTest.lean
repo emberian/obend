@@ -55,8 +55,6 @@ import all Obend.Core.TypeGraphAlias
 import all Obend.Core.RowCongruence
 import all Obend.Core.FieldCongruence
 import all Obend.Core.FiniteRowLaws
-import all Obend.Core.LegacyAgreement
-import all Obend.Core.CanonicalExtension
 import all Obend.Core.EquiRecursiveAgreement
 import all Obend.Core.TypeGraphHead
 import all Obend.Core.RecursiveAgreement
@@ -147,6 +145,8 @@ import all Obend.Crypto.Sumcheck
 import all Obend.Crypto.PCS
 import all Obend.Crypto.DualSpine
 import all Obend.Hardware.Tpu.CryptoSystolic
+import all Obend.Category.Refines
+import all Obend.Crypto.GameSoundness
 
 public section
 namespace Obend.Tests.TpuSemanticsAndSystolicCrypto

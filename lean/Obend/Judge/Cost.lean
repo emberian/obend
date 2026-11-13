@@ -20,7 +20,7 @@ public import Obend.Judge.Class
 public import Obend.Equiv.Cost
 public import Obend.Equiv.Demand
 public import Obend.Core.TermTraverse
-public import Obend.Core.Proofs.TickCost
+public import Obend.Run.Ticks
 
 @[expose] public section
 namespace Obend.Judge.Cost
@@ -394,7 +394,7 @@ theorem badRound_refused : check 1 (pairOriginal, pairCandidate) badRound = .ref
 /-! ## The cost judge: a demand run as the certificate -/
 
 open Obend.Equiv.Demand (FE obj demand demand_exists demand_minimal)
-open Obend.Core.Proofs.TickCost (Finishes fragment_within)
+open Obend.Run.Ticks (Finishes fragment_within)
 
 /-- A certificate that `t` costs at most `k`: `t` is the selection of `field` from the object with
 these fields, whose demand run is total. -/
@@ -427,7 +427,7 @@ def costRefutes : CostClause → Bool
 def TicksAtMost (t : Term) (T : Nat) : Prop := ∃ n, Finishes t T n
 
 /-- What an accepted cost certificate establishes: `t` costs at most `k`, and the raw machine
-completes it within `4·k` transitions (`Obend.Core.Proofs.TickCost.ticks_within_fragment`). -/
+completes it within `4·k` transitions (`Obend.Run.Ticks.fragment_within`). -/
 def CostMeaning (o : Term × Nat) : Prop := CostAtMost o.1 o.2 ∧ TicksAtMost o.1 (4 * o.2)
 
 theorem cost_sound {r : Nat} {o : Term × Nat} {c : DemandCert} (h : costCheck r o c = .ok) : CostMeaning o := by

@@ -22,7 +22,7 @@ Exercises and mutation-tests all 4 `SiliconElab` & `LCNF` engineering layers (`0
      `jpDecl`/`jmp` de Bruijn depth (`mkShiftedJpCode_runs`), and `compileLcnfFunDeclToBook`.
 -/
 public import Obend.Tactic.Tooth
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Lower.LCNF
 import all Obend.Lower.LCNF
 public import Obend.Lower.Inductive
@@ -41,7 +41,7 @@ open Obend.Core.Term
 open Obend.Core.Ty (Ty)
 open Obend.Equiv
 open Obend.Leaf
-open Obend.Leaf.Futamura
+open Obend.Leaf.Static
 open Obend.Lower
 open Obend.Lower.LCNF
 open Obend.Lower.Inductive

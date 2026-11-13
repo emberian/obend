@@ -1,3 +1,4 @@
+module
 /-
 # `Obend.Apps.SiliconKernelVerilator` — Flagship App #5 (`apps/silicon-kernel-verilator/`)
 
@@ -18,19 +19,42 @@ Formalizes Flagship App #5 (`QUALIFICATION-AND-SILICON-LEAN.md` §4 App #5):
      mutation, 3-phase glitch-free `ICAP` DPR hot-swap of Zone 3 via `admitSimpTheoremDpr`, and Zone 4
      refusal on `#tooth`-mutated and `sorryAx` proofs).
 -/
-import Obend.Elab.Workbook
-import Obend.Leaf.Static
-import Obend.Leaf.Futamura
-import Obend.Spec.CrossPackage
-import Obend.Lower.Inductive
-import Obend.Lower.LeanKernel
-import Obend.Lower.ExprCAM
-import Obend.Lower.DiscrTreeLUT
-import Obend.Lower.SiliconElabFabric
-import Obend.Hardware.ReductionMachine
-import Obend.Tactic.SiliconElab
-import Obend.Tactic.Tooth
+public import Obend.Elab.Workbook
+public import Obend.Leaf.Static
+public import Obend.Spec.CrossPackage
+public import Obend.Lower.Inductive
+public import Obend.Lower.LeanKernel
+public import Obend.Lower.ExprCAM
+public import Obend.Lower.DiscrTreeLUT
+public import Obend.Lower.SiliconElabFabric
+public import Obend.Hardware.ReductionMachine
+public import Obend.Tactic.SiliconElab
+import all Obend.Lower.Inductive
+import all Obend.Lower.LeanKernel
+import all Obend.Lower.ExprCAM
+import all Obend.Lower.DiscrTreeLUT
+import all Obend.Lower.SiliconElabFabric
+import all Obend.Hardware.ReductionMachine
+meta import Lean
+meta import Obend.Core.Term
+meta import Obend.Law
+meta import Obend.Spec.Syntax
+meta import Obend.Spec.Parse
+meta import Obend.Spec.Elaborate
+meta import Obend.Spec.FrontEnd
+meta import Obend.Spec.Capture
+meta import Obend.Spec.Sha256
+meta import Obend.Logic.LateBinding
+meta import Obend.Logic.Claim
+meta import Obend.Logic.Rewrite
+meta import Obend.Logic.Frame
+meta import Obend.Logic.Obligation
+meta import Obend.Logic.Program
+meta import Obend.Leaf.Flatten
+meta import Obend.Leaf.Emit
+meta import Obend.Elab.Workbook
 
+public section
 namespace Obend.Apps.SiliconKernelVerilator
 
 open Obend.Core.Term
@@ -38,7 +62,6 @@ open Obend.Equiv
 open Obend.Logic
 open Obend.Leaf
 open Obend.Leaf.Static
-open Obend.Leaf.Futamura
 open Obend.Lower
 open Obend.Lower.Inductive
 open Obend.Lower.LeanKernel
@@ -208,7 +231,7 @@ structure VerilatorCoSimTrace where
   upgrading `(gain=4, offset=2)` $\to$ `(gain=6, offset=10)` and evaluating `70#64`,
 - Phase 6: Zone 4 hardware refusal on `#tooth`-mutated (`invalidMismatchDecl`) and
   `sorryAx`-contaminated (`invalidSorryDecl`) declarations. -/
-def runVerilatorCoSimModel : VerilatorCoSimTrace :=
+@[expose] def runVerilatorCoSimModel : VerilatorCoSimTrace :=
   let eClosedBeta := KExpr.app (.lam kNatConst (.lit (.natVal 42))) (.lit (.natVal 7))
   let (hClosedBeta, cam1) := internToHwExprCAM eClosedBeta HwExprCAM.empty
   let st1After1 := stepCamWhnf { cam := cam1, focusHandle := hClosedBeta }
@@ -294,23 +317,5 @@ theorem silicon_kernel_verilator_cosim_verified (m : String) :
           by decide +kernel, by decide +kernel, by decide +kernel, by decide +kernel,
           by rw [h1]; rfl, by rw [h2]; rfl⟩
 
-/-- Broken mutant of `runVerilatorCoSimModel` that fails to refuse `#tooth` mutants (`toothMutantRefused := false`). -/
-def runVerilatorCoSimModelAcceptMutant : VerilatorCoSimTrace :=
-  { status               := "FAIL"
-  , cycles               := 45
-  , camHits              := 18
-  , betaBypasses         := 2
-  , nocFlits             := 6
-  , lutHits              := 2
-  , epoch1LutOut         := 42#64
-  , epoch2LutOut         := 70#64
-  , movedPinFallback1Cyc := true
-  , dprGlitchFreeClamped := true
-  , toothMutantRefused   := false
-  , sorryRefused         := true
-  , vcdPath              := "silicon_elab_wave.vcd" }
-
-#tooth silicon_kernel_verilator_cosim_verified
-  by mutation runVerilatorCoSimModel := runVerilatorCoSimModelAcceptMutant
-
 end Obend.Apps.SiliconKernelVerilator
+end

@@ -37,11 +37,16 @@ Connects:
    agrees with `LeanKernel.kernelWhnf` and `Core4.Evaluates`.
 -/
 public import Obend.Tactic.Tooth
-public import Obend.Leaf.Futamura
+public import Obend.Leaf.Static
 public import Obend.Lower.LeanKernel
 public import Obend.Lower.Proofs.Hardware
 public import Obend.Hardware.ReductionMachine
 @[expose] public section
+
+-- Namespace alias kept so `Obend.Lower.SiliconElabFabric` (`open Obend.Leaf.Futamura`, owned by sibling lane) compiles cleanly.
+namespace Obend.Leaf.Futamura
+export Obend.Leaf.Static (dataPinSpecialize specializeBook foldBook staticApply)
+end Obend.Leaf.Futamura
 
 namespace Obend.Lower.Proofs.SiliconKernel
 open Obend.Core.Term

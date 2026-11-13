@@ -2,8 +2,7 @@
 # Obend.Law.Proofs.MachineTeeth — the machine judging real laws (a legacy leaf)
 
 Not a `module`: these run the demand machine (`execute`) on concrete probes by `rfl`, through
-`Array` functions whose bodies `Init` does not expose to `module` files (`Obend.Run.Core4Example`
-gives the same reason). Nothing imports this file.
+`Array` functions whose bodies `Init` does not expose to `module` files. Nothing imports this file.
 
 The machine's verdicts on `bounded` and on the effective law of `boardLaws` are read back through
 `judge_sound`/`judgeEffective_names`, so each instance inhabits a premise of the general theorems,
