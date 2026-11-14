@@ -304,6 +304,9 @@ def TurnRelation (c : TurnCommitments) (v : InnerVerifier) (p : FullPinnedPublic
   ∃ s t, execTurnSymbolic v s t = true ∧ RootBindings c s ∧
     materializeInputs c s t p.height = p
 
+def turnChallengeTranscript (p : FullPinnedPublicInputs) : Transcript .instanceBound :=
+  (bindInstance (encodePublicInputs p) (turnTranscript p)).transcript
+
 structure TurnProofSystem (c : TurnCommitments) (v : InnerVerifier) where
   Receipt : Type
   verify : FullPinnedPublicInputs → ByteArray → Receipt → Bool
@@ -313,7 +316,7 @@ structure TurnProofSystem (c : TurnCommitments) (v : InnerVerifier) where
     TurnRelation c v p
   complete : ∀ s t height hs hr,
     verify (materializeInputs c s t height)
-      (squeezeChallenge256 (turnTranscript (materializeInputs c s t height))).1.val
+      (squeezeChallenge256 (turnChallengeTranscript (materializeInputs c s t height))).1.val
       (prove s t height hs hr) = true
 
 /-- A transparent opening carries the state and turn as data, plus a genuine dual PCS
@@ -340,7 +343,7 @@ def verifyDualPcsTurn (c : TurnCommitments) (v : InnerVerifier) (p : FullPinnedP
     (challenge : ByteArray) (r : DualPcsTurnReceipt) : Bool :=
   execTurnSymbolic v r.state r.turn && decide (RootBindings c r.state) &&
   decide (encodePublicInputs (materializeInputs c r.state r.turn p.height) = encodePublicInputs p) &&
-  decide (challenge = (squeezeChallenge256 (turnTranscript p)).1.val) &&
+  decide (challenge = (squeezeChallenge256 (turnChallengeTranscript p)).1.val) &&
   let pcs := DualPCS (R := Goldilocks) (canopyMerklePCS deployedCanopyHash32)
     (ajtaiLatticePCS (inhabitedAjtaiParams 5))
   verifyDualSumcheckPIOP (canopyMerklePCS deployedCanopyHash32)
@@ -387,7 +390,7 @@ def verifyCipherclerkBundle {c : TurnCommitments} {v : InnerVerifier}
     (ps : TurnProofSystem c v) (b : SovereignTurnBundle ps) : Bool :=
   decide (b.boundPrefix = relationPrefix b.publicInputs) && wellFormedInputs b.publicInputs &&
   liveRevokedRoot b.publicInputs.revokedRoot &&
-  TurnProofSystem.verify (c := c) (v := v) ps b.publicInputs (squeezeChallenge256 (turnTranscript b.publicInputs)).1.val b.receipt
+  TurnProofSystem.verify (c := c) (v := v) ps b.publicInputs (squeezeChallenge256 (turnChallengeTranscript b.publicInputs)).1.val b.receipt
 
 def collapseTurn {c : TurnCommitments} {v : InnerVerifier} (ps : TurnProofSystem c v)
     (s : CellState) (t : StructuredTurn) (height : Nat)

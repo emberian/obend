@@ -1,3 +1,4 @@
+module
 /-
 # Automatic Certificate Synthesis (`AutoCert`) & Module-Mode Workbook Test Suite (`WS-4A-2`)
 
@@ -34,20 +35,34 @@ Exercises Foundation C (`lean/Obend/Elab/AutoCert.lean`) across `Obend.Elab.Work
      and unregistered judges.
 7. **`#tooth` Mutation Tests & Compile-Time `0 sorryAx` Audit (`#verify_autocert_axioms`)**.
 -/
-import Obend.Analysis.RealAnalysis
-import Obend.Elab.AutoCert
-import Obend.Elab.Workbook
-import Obend.Stdlib
-import Obend.Tactic.DocsCensus
-import Obend.Tactic.Tooth
-import Obend.AssertAxioms
+public import Obend.Analysis.RealAnalysis
+public import Obend.Judge.Class
+public import Obend.Logic.Obligation
+public import Obend.Elab.AutoCert
+public import Obend.Elab.Workbook
+public import Obend.Tactic.DocsCensus
+public import Obend.Tactic.Tooth
+public import Obend.AssertAxioms
+meta import Lean
+meta import Obend.Elab.AutoCert
+meta import Obend.Elab.Workbook
+meta import Obend.Hardware.Judge
+meta import Obend.Analysis.SosLyapunov
+meta import Obend.Spec.FrontEnd
+meta import Obend.Tactic.DocsCensus
+meta import Obend.Tactic.Tooth
+meta import Obend.AssertAxioms
+import all Obend.Judge.Class
+import all Obend.Logic.Obligation
+import all Obend.Hardware.Judge
+import all Obend.Elab.AutoCert
 
 open Obend.Core.Term (Primitive Term)
 open Obend.Judge (Verdict Format IntervalQuery)
 open Obend.Judge.SOS (Poly)
 open Obend.Analysis
   (CanonicalRat polyVarPow polyConst SosLyapunovProblem SosLyapunovCert
-   goldenSosProblem goldenSosCert badSosCert
+   goldenSosProblem goldenSosCert badSosCert checkSosLyapunovProblem
    renderSosLyapunovProblemJson renderSosLyapunovCertJson
    decodeSosLyapunovProblem decodeSosLyapunovCert sosLyapunovFormat)
 open Obend.Hardware.HDL (RtlModule)
@@ -64,10 +79,11 @@ open Obend.Spec.FrontEnd
   (defaultAutoCertAdmitsTag elaborateContractsWithCerts elaborateContractsWithAutoCerts)
 open Obend.Elab.AutoCert
 open Obend.Elab.Workbook
-open Obend.Stdlib
 
 set_option autoImplicit false
 set_option maxHeartbeats 800000
+
+#import_obend "stdlib/core/Cell.obend" as StdlibCell
 
 /-! ## 1. Judge 1: `"interval@1"` (Adaptive Bisection, Wire Roundtrip, Soundness & Refusals) -/
 
@@ -143,6 +159,15 @@ theorem taylor_model_semantic_sound :
   checkTaylorModelJudge_sound 0 goldenTaylorModelQuery synthesizedTaylorCert
     taylor_model_synthesizes_and_checks.2.1
 
+/-- `taylorModelJudge` establishes mathematical `TaylorModelMeaning` (polynomial + remainder range
+    enclosure without restating `verifyTaylorModelCert`) and certifies genuine `refuted` witnesses. -/
+theorem taylor_model_judge_meaning_and_refusal :
+    TaylorModelMeaning goldenTaylorModelQuery synthesizedTaylorCert ∧
+    ¬ TaylorModelMeaning badTaylorModelQuery badTaylorModelCert :=
+  ⟨taylorModelJudge.sound (r := 0) taylor_model_synthesizes_and_checks.2.1,
+   fun h => taylorModelJudge.refuted (r := 0) (o := badTaylorModelQuery) (c := badTaylorModelCert)
+     badTaylorModelCert_refused rfl badTaylorModelCert h⟩
+
 /-- Negative refusal tests for `"taylor-model@1"`: `badTaylorModelCert`, empty JSON `"{}"`,
     `cos(x) + 5n <= 2n`, `sin(x) <= 0n` (since `sin(0.1) > 0` on `[-1/10, 1/10]`), and the
     composite domain-confusion attack `0 - sin(1) ∈ [-0.01, 0.01]` on `domain = [0, 0]` all fail closed. -/
@@ -176,28 +201,77 @@ theorem taylor_model_negative_refusals :
 
 theorem sos_lyapunov_synthesizes_and_checks :
     synthesizeSosLyapunovCert goldenSosProblem = some goldenSosCert ∧
-    sosLyapunovFormat.checkBytes 0
-      (renderSosLyapunovProblemJson goldenSosProblem) (renderSosLyapunovCertJson goldenSosCert) = Verdict.ok ∧
-    autoSosLyapunovFormat.checkBytes 0
-      (encodeSosLyapunovProblem goldenSosProblem) (encodeSosLyapunovCert goldenSosCert) = Verdict.ok :=
+    checkSosLyapunovProblem 0 goldenSosProblem goldenSosCert = Verdict.ok ∧
+    encodeSosLyapunovProblem goldenSosProblem = renderSosLyapunovProblemJson goldenSosProblem ∧
+    encodeSosLyapunovCert goldenSosCert = renderSosLyapunovCertJson goldenSosCert ∧
+    (∀ r rawObj rawCert,
+      (autoSosLyapunovFormat.checkBytes r rawObj rawCert).isOk =
+        (sosLyapunovFormat.checkBytes r rawObj rawCert).isOk) :=
   ⟨by decide +kernel,
    verdict_eq_ok_of_isOk (by decide +kernel),
-   verdict_eq_ok_of_isOk (by decide +kernel)⟩
+   rfl,
+   rfl,
+   fun _ _ _ => rfl⟩
 
 /-- Exercise the full general AST JSON wire encoder/decoder path (`renderSosLyapunovProblemJson` /
     `renderSosLyapunovCertJson`) through `decodeSosLyapunovProblem`, `decodeSosLyapunovCert`,
-    and `sosLyapunovFormat.checkBytes`, alongside `autoSosLyapunovFormat` structured JSON. -/
-def checkStructuredSosJsonRoundtrip : Bool :=
+    `autoDecodeSosLyapunovProblem`, `autoDecodeSosLyapunovCert`, and `checkSosLyapunovProblem`. -/
+private def checkStructuredSosJsonRoundtrip : Bool :=
   let probJson := renderSosLyapunovProblemJson goldenSosProblem
   let certJson := renderSosLyapunovCertJson goldenSosCert
   let autoProbJson := encodeSosLyapunovProblemJson goldenSosProblem
   let autoCertJson := encodeSosLyapunovCertJson goldenSosCert
+  let verdictOk :=
+    match checkSosLyapunovProblem 0 goldenSosProblem goldenSosCert with
+    | .ok => true
+    | _ => false
   (decodeSosLyapunovProblem probJson == .ok goldenSosProblem) &&
   (decodeSosLyapunovCert certJson == .ok goldenSosCert) &&
-  (sosLyapunovFormat.checkBytes 0 probJson certJson).isOk &&
-  (autoSosLyapunovFormat.checkBytes 0 autoProbJson autoCertJson).isOk
+  (autoDecodeSosLyapunovProblem autoProbJson == .ok goldenSosProblem) &&
+  (autoDecodeSosLyapunovCert autoCertJson == .ok goldenSosCert) &&
+  verdictOk
 
 #guard checkStructuredSosJsonRoundtrip == true
+
+/-- Custom non-golden `SosLyapunovProblem` with negative and non-integer rational coefficients
+    (`-3/2`, `-5/4`, `1/3`, `1/7`) and multi-variable monomials (`x0 * x1`), verifying lossless JSON
+    roundtrip (`P0 #23`: zero `c.num.toNat` truncation, zero `goldenLyapunovSpec2D` injection)
+    and fail-closed refusal of removed preset wire strings (`"golden-cubic-cbf-dae"`, `"valid-sos-cert"`,
+    `"bad-sos-cert"`). -/
+def customNonGoldenSosProblem : SosLyapunovProblem :=
+  { goldenSosProblem with
+    lyapunov :=
+      { goldenSosProblem.lyapunov with
+        vectorField :=
+          [ Poly.scale (CanonicalRat.mk (-3) 2) (polyVarPow 0 1)
+          , Poly.scale (CanonicalRat.mk (-5) 4) (polyVarPow 1 1) ]
+        lyapunovV :=
+          Poly.add
+            (Poly.scale (CanonicalRat.mk 1 3) (Poly.sqr (polyVarPow 0 1)))
+            (Poly.mul (polyVarPow 0 1) (polyVarPow 1 1))
+        radialEps := CanonicalRat.mk 1 7 } }
+
+def checkCustomNonGoldenSosRoundtrip : Bool :=
+  let wire := encodeSosLyapunovProblem customNonGoldenSosProblem
+  (decodeSosLyapunovProblem wire == .ok customNonGoldenSosProblem) &&
+  (autoDecodeSosLyapunovProblem wire == .ok customNonGoldenSosProblem)
+
+#guard checkCustomNonGoldenSosRoundtrip == true
+
+theorem sos_lyapunov_lossless_and_no_presets :
+    customNonGoldenSosProblem.lyapunov ≠ goldenSosProblem.lyapunov ∧
+    encodeSosLyapunovProblem customNonGoldenSosProblem =
+      renderSosLyapunovProblemJson customNonGoldenSosProblem ∧
+    (autoDecodeSosLyapunovProblem "golden-cubic-cbf-dae").isOk = false ∧
+    (autoDecodeSosLyapunovCert "valid-sos-cert").isOk = false ∧
+    (autoDecodeSosLyapunovCert "bad-sos-cert").isOk = false ∧
+    (autoSosLyapunovFormat.checkBytes 0 "golden-cubic-cbf-dae" "valid-sos-cert").isOk = false :=
+  ⟨by decide +kernel,
+   rfl,
+   by decide +kernel,
+   by decide +kernel,
+   by decide +kernel,
+   by decide +kernel⟩
 
 /-- `"sos-lyapunov-cbf@1"` has no claim or step surface (2026-11-04): nothing in a `.obend` claim states a
     Lyapunov/CBF/DAE problem, so every syntax extraction fails closed; polynomial inequalities go to
@@ -265,13 +339,29 @@ def samplePsatzGroebnerQuery : GroebnerQuery where
 def synthesizedPsatzGroebnerCert : GroebnerCert :=
   (synthesizeGroebnerCert samplePsatzGroebnerQuery).getD badGroebnerCert
 
-theorem groebner_psatz_nonneg_synthesizes_and_sound :
+theorem groebner_psatz_nonneg_checks :
     synthesizeGroebnerCert samplePsatzGroebnerQuery = some synthesizedPsatzGroebnerCert ∧
     verifyGroebnerCert samplePsatzGroebnerQuery synthesizedPsatzGroebnerCert = true :=
   have hOk : checkGroebnerJudge 0 samplePsatzGroebnerQuery synthesizedPsatzGroebnerCert = Verdict.ok :=
     verdict_eq_ok_of_isOk (by decide +kernel)
   ⟨by decide +kernel,
    (checkGroebnerJudge_sound 0 samplePsatzGroebnerQuery synthesizedPsatzGroebnerCert hOk).1⟩
+
+/-- `groebnerJudge` establishes mathematical `GroebnerQuery.SemanticMeaning` and certifies genuine
+    counterexample `refuted` witnesses (`1 ∉ ⟨x0⟩`), while receiver-qualified `.member` extraction
+    refuses `a.val == b.val` (`P0 #8`) and certifies `a.val == a.val`. -/
+theorem groebner_judge_meaning_and_refusal :
+    goldenGroebnerQuery.SemanticMeaning ∧
+    ¬ forgedUnitBasisQuery.SemanticMeaning ∧
+    (synthesizeJudgeWirePair "groebner@1" "Mod"
+      (some (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))) none).isNone = true ∧
+    (synthesizeJudgeWirePair "groebner@1" "Mod"
+      (some (.binary "==" (.member (.var "a") "val") (.member (.var "a") "val"))) none).isSome = true :=
+  ⟨groebnerJudge.sound (r := 0) groebner_buchberger_synthesizes_and_checks.2.1,
+   fun h => groebnerJudge.refuted (r := 0) (o := forgedUnitBasisQuery) (c := badGroebnerCert)
+     badGroebnerCert_refused rfl badGroebnerCert h,
+   by decide +kernel,
+   by decide +kernel⟩
 
 /-- Negative refusal tests for `"groebner@1"`: `badGroebnerCert`, forged unit basis `[Poly.one]`
     claiming `1 ∈ ⟨x0⟩`, empty JSON `"{}"`, and false polynomial identity `(x + 1n) * (x + 1n) == x * x + 1n`
@@ -422,7 +512,7 @@ contract FocContract for FocState by frame:
 /-- `#obend_decl AutoCertSuite` passed `FrontEnd.accept` and `verifyWorkbookObligationsWithLean`
     verified its seven external-judge claims (`interval@1` over `given` boxes, `groebner@1` for the
     two sums of squares, the ring identity and the Buchberger claim under `given` equations). -/
-theorem autoCertSuite_accepted_and_obligations_verified :
+theorem autoCertSuite_obligations_pass :
     verifyWorkbookObligationsWithLean AutoCertSuite.package = true := by
   decide +kernel
 
@@ -583,6 +673,28 @@ contract Unreg for Box by frame:
    | .ok (_, dm) => (elaborateContractsWithCerts defaultAutoCertAdmitsTag dm).isOk == false
    | .error _ => false) == true
 
+/-- Fail-closed negative test 5 (`P0 #8`): distinct member receivers `a.val == b.val` inside a
+    `contract` Isar step never collapse to `"val" - "val" = 0` and are strictly refused by both
+    `Workbook.elaborateObendSource` AND `FrontEnd.elaborateContractsWithCerts`! -/
+def falseDistinctMemberContractSrc : String :=
+"edition ObjectiveBend 1
+record Box:
+  val: Nat
+def idBox(b: Box) -> Box:
+  b
+contract BadReceiverCollapse for Box by frame:
+  invariant: self.val <= 10n
+  law: monotone(val)
+  have hCollapse: a.val == b.val by judge(\"groebner@1\")
+  show self.val <= 10n by frame
+"
+
+#guard (elaborateObendSource falseDistinctMemberContractSrc "BadRecvMod").isOk == false
+#guard
+  (match parseAndCheckObendModule falseDistinctMemberContractSrc "BadRecvMod" [] with
+   | .ok (_, dm) => (elaborateContractsWithCerts defaultAutoCertAdmitsTag dm).isOk == false
+   | .error _ => false) == true
+
 /-! ## 7. `#check_docs_census`, `#tooth` Mutation Tests & Compile-Time `0 sorryAx` Audit -/
 
 #check_docs_census
@@ -593,44 +705,63 @@ contract Unreg for Box by frame:
 #tooth checkTaylorModelJudge_sound by
   mutation Obend.Elab.AutoCert.checkTaylorModelJudge := fun _ _ _ => Verdict.ok
 
+#tooth checkTaylorModelJudge_refuted by
+  mutation Obend.Elab.AutoCert.checkTaylorModelJudge := fun _ _ _ => Verdict.refused "forged" []
+
 #tooth checkGroebnerJudge_sound by
   mutation Obend.Elab.AutoCert.checkGroebnerJudge := fun _ _ _ => Verdict.ok
+
+#tooth checkGroebnerJudge_refuted by
+  mutation Obend.Elab.AutoCert.checkGroebnerJudge := fun _ _ _ => Verdict.refused "forged" []
+
+#tooth distinct_member_receivers_refused by
+  mutation Obend.Elab.AutoCert.syntaxVarName? :=
+    fun
+      | .var v => some v
+      | .member _ f => some f
+      | _ => none
 
 #tooth synthesizeClaimExternalJudge_sound by
   mutation Obend.Elab.AutoCert.synthesizeClaimJudgeTag :=
     fun _ _ _ _ _ _ tag => some (Justification.byExternalJudge tag ByteArray.empty)
 
-#tooth rtl_synth_wire_roundtrips by
-  mutation Obend.Hardware.Judge.encodeRtlSynthObj := fun _ => "{}"
+#tooth Obend.Hardware.Judge.rtlSynthFormat_sound by
+  mutation Obend.Hardware.Judge.checkRtlSynth := fun _ _ _ => Verdict.ok
 
 open Lean Elab Command in
-elab "#verify_autocert_axioms" : command => do
+run_cmd do
   let targets : List Name := [
     ``Obend.Hardware.Judge.decodeRtlSynthObj_encodeRtlSynthObj_roundtrip,
     ``Obend.Hardware.Judge.decodeRtlSynthCert_encodeRtlSynthCert_roundtrip,
     ``Obend.Hardware.Judge.rtlSynthFormat_sound,
     ``Obend.Elab.AutoCert.checkIntervalAutoCert_sound,
     ``Obend.Elab.AutoCert.checkTaylorModelJudge_sound,
+    ``Obend.Elab.AutoCert.checkTaylorModelJudge_refuted,
     ``Obend.Elab.AutoCert.checkGroebnerJudge_sound,
+    ``Obend.Elab.AutoCert.checkGroebnerJudge_refuted,
+    ``Obend.Elab.AutoCert.distinct_member_receivers_refused,
     ``Obend.Elab.AutoCert.synthesizeClaimExternalJudge_sound,
-    ``Obend.Stdlib.stdlib_all_claims_hold,
+    ``StdlibCell.claim_next_value_open_recursion_holds,
     ``interval_bisect_synthesizes_and_checks,
     ``interval_bisect_semantic_sound,
     ``interval_negative_refusals,
     ``taylor_model_synthesizes_and_checks,
     ``taylor_model_semantic_sound,
+    ``taylor_model_judge_meaning_and_refusal,
     ``taylor_model_negative_refusals,
     ``sos_lyapunov_synthesizes_and_checks,
+    ``sos_lyapunov_lossless_and_no_presets,
     ``sos_lyapunov_ast_and_negative_refusals,
     ``groebner_direct_division_insufficient,
     ``groebner_buchberger_synthesizes_and_checks,
     ``groebner_buchberger_semantic_sound,
-    ``groebner_psatz_nonneg_synthesizes_and_sound,
+    ``groebner_psatz_nonneg_checks,
+    ``groebner_judge_meaning_and_refusal,
     ``groebner_negative_and_positive_ast,
     ``rtl_synth_wire_roundtrips,
     ``rtl_synth_from_stdlib_book_checks,
     ``rtl_synth_negative_refusals,
-    ``autoCertSuite_accepted_and_obligations_verified,
+    ``autoCertSuite_obligations_pass,
     ``autoCertSuite_all_external_judges_hold,
     ``autoCertSuite_wave4_primitives_elaborated
   ]
@@ -650,5 +781,3 @@ elab "#verify_autocert_axioms" : command => do
       else if !allowedStandard.contains a then
         throwError m!"AXIOM AUDIT FAILED: {t} depends on non-standard axiom {a}"
   logInfo m!"[PASS] AutoCert axiom audit verified: {targets.length} theorems & obligations have 0 sorryAx and no axiom outside the standard three and the compiled trust; resting on compiled trust (an imported claim's `_check`, re-run by `#assert_compiled`): {trusted}"
-
-#verify_autocert_axioms

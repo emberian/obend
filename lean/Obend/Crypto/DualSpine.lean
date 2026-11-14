@@ -857,8 +857,8 @@ structure DualDoubleOpenForgery (H : Hash32) (pp : AjtaiParams) (v : Nat) where
   c₂ : EvalClaim Goldilocks v
   π₁ : CanopyOpeningProof × AjtaiOpeningProof
   π₂ : CanopyOpeningProof × AjtaiOpeningProof
-  tr₁ : Transcript .relationBound
-  tr₂ : Transcript .relationBound
+  tr₁ : Transcript .instanceBound
+  tr₂ : Transcript .instanceBound
   samePoint : c₁.point = c₂.point
   disagree : c₁.expectedVal ≠ c₂.expectedVal
   acc₁ : ((canopyAjtaiDualPCS H pp).verifyEval ((), ()) v comm c₁ π₁ tr₁).1 = true
@@ -881,7 +881,7 @@ inductive DualForgery (H : Hash32) (pp : AjtaiParams) (v : Nat) : Type where
       (hVer : verifyMerklePath H (2 ^ v) idx val path (canopyCommit H v tbl).root = true)
   | crossTableMismatch (tblMerkle tblAjtai : List Goldilocks) (hLenM : tblMerkle.length = 2 ^ v)
       (hLenA : tblAjtai.length = 2 ^ v) (hCols : pp.cols = 4 * (2 ^ v)) (claim : EvalClaim Goldilocks v)
-      (π : CanopyOpeningProof × AjtaiOpeningProof) (tr : Transcript .relationBound)
+      (π : CanopyOpeningProof × AjtaiOpeningProof) (tr : Transcript .instanceBound)
       (hAcc : ((canopyAjtaiDualPCS H pp).verifyEval ((), ()) v (canopyCommit H v tblMerkle, ajtaiLatticeCommit pp v tblAjtai) claim π tr).1 = true)
       (hDisagree : claim.expectedVal ≠ mleEval tblMerkle claim.point ∨ claim.expectedVal ≠ mleEval tblAjtai claim.point)
   | doubleOpening (f : DualDoubleOpenForgery H pp v)

@@ -119,7 +119,7 @@ def zeroStatement : CredentialStatement :=
   committedStateRoot commitments (nextState cell0 { turn1.structured with deltas := #[0, 0] })
 #guard !execTurnSymbolic verifier (nextState cell0 turn1.structured) turn1.structured
 #guard verifyDualPcsTurn commitments verifier (materializeInputs commitments cell0 turn1.structured 0)
-  (squeezeChallenge256 (turnTranscript (materializeInputs commitments cell0 turn1.structured 0))).1.val
+  (squeezeChallenge256 (turnChallengeTranscript (materializeInputs commitments cell0 turn1.structured 0))).1.val
   (proveDualPcsTurn commitments cell0 turn1.structured 0)
 end CredentialCases
 end Obend.Tests.LawSymbolicZkDualPcsSeam

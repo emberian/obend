@@ -66,9 +66,11 @@ example : normInfFast extracted.z.coeffs ≤ 2 := extracted.short
 
 @[expose] def boundFold := foldTranscript ByteArray.empty (encodeInts (matVec sumMatrix openA)) ByteArray.empty
   (encodeInts (matVec sumMatrix openB)) ByteArray.empty
+@[expose] def instFold : Transcript .instanceBound := (bindInstance ByteArray.empty boundFold).transcript
 #guard boundFold.stepCount == 1
-#guard (foldFromTranscript boundFold openA openB).2.stepCount == 2
-#guard (foldFromTranscript boundFold openA openB).1.coeffs.size == 2
+#guard instFold.stepCount == 2
+#guard (foldFromTranscript instFold openA openB).2.stepCount == 3
+#guard (foldFromTranscript instFold openA openB).1.coeffs.size == 2
 
 @[expose] def cfg : Config := ⟨2, 2, by decide +kernel, 2, .primeField, .uniqueDecodingRadius, .primeUDR⟩
 @[expose] def table : Table cfg := Sized.ofFn fun i =>

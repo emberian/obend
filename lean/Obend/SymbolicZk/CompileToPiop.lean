@@ -873,7 +873,7 @@ private theorem beforeResidualList_compile_all_zero :
 theorem compileSymbolicTraceToSumcheck_complete
     (stmt : SymbolicZkStmt) (maxDeg : Nat) (hDeg : 1 ≤ maxDeg)
     (γLin γLup : Goldilocks) (τ : List Goldilocks) (hτ : τ.length = stmt.numVars)
-    (tr : Transcript .relationBound)
+    (tr : Transcript .instanceBound)
     (hBef : ∀ c ∈ stmt.beforeConstraints.toList,
       beforeWidthSafe c.bitWidth = true ∧ c.lhs < 2 ^ c.bitWidth ∧ c.rhs ≤ 2 ^ c.bitWidth ∧ c.lhs < c.rhs)
     (hLin : (stmt.linmemInit.toList ++ stmt.linmemProd.toList).Perm
@@ -1089,12 +1089,21 @@ def symbolicChallenges (s : SymbolicZkStmt) (witComm : ByteArray)
   (γLin, γLup, τ, tr)
 
 /-- This verifier binds `witComm` to `symbolicWitnessCommit w` before squeezing any challenge,
-accepting no caller-selected identity/batching challenge and no post-challenge witness grinding. -/
+folds the sumcheck rounds, and verifies the final `claim.expectedVal` against `mleEval tbl claim.point`,
+refusing all-zero round-polynomial forgeries on false witnesses. -/
 def verifySymbolicSumcheck (s : SymbolicZkStmt) (w : SymbolicZkWitness)
     (witComm : ByteArray) (maxDeg : Nat) (rounds : List (RoundPoly Goldilocks))
-    (seed : Transcript .relationBound) :=
+    (seed : Transcript .relationBound) : Option (EvalClaim Goldilocks s.numVars × Transcript .instanceBound) :=
   if stmtWitnessStructValid s w && decide (witComm = symbolicWitnessCommit w) then
-    verifySumcheck maxDeg s.numVars CommRingOps.zero rounds (symbolicChallenges s witComm seed).2.2.2
+    let chals := symbolicChallenges s witComm seed
+    let tbl := batchedSymbolicPiopTable s w chals.1 chals.2.1 chals.2.2.1
+    match verifySumcheck maxDeg s.numVars CommRingOps.zero rounds chals.2.2.2 with
+    | some (claim, trFinal) =>
+      if decide (claim.expectedVal = mleEval tbl claim.point) then
+        some (claim, trFinal)
+      else
+        none
+    | none => none
   else none
 
 /-- Honest prover completeness after binding the statement and witness commitment. -/
@@ -1106,12 +1115,23 @@ theorem verifySymbolicSumcheck_complete (s : SymbolicZkStmt) (w : SymbolicZkWitn
       (symbolicChallenges s witComm seed).1 (symbolicChallenges s witComm seed).2.1
       (symbolicChallenges s witComm seed).2.2.1) = CommRingOps.zero) :
     ∃ rounds claim tr, verifySymbolicSumcheck s w witComm maxDeg rounds seed = some (claim, tr) := by
-  let tbl := batchedSymbolicPiopTable s w (symbolicChallenges s witComm seed).1
-    (symbolicChallenges s witComm seed).2.1 (symbolicChallenges s witComm seed).2.2.1
-  have h := (honestSumcheckProver_completeness hDeg s.numVars tbl
-    (symbolicChallenges s witComm seed).2.2.2).1
-  rw [hZero] at h
-  exact ⟨_, _, _, by simpa only [verifySymbolicSumcheck, hStruct, hWit, decide_true, Bool.and_self, ite_true] using h⟩
+  let chals := symbolicChallenges s witComm seed
+  let tbl := batchedSymbolicPiopTable s w chals.1 chals.2.1 chals.2.2.1
+  obtain ⟨hVer, hEval⟩ := honestSumcheckProver_completeness hDeg s.numVars tbl chals.2.2.2
+  rw [hZero] at hVer
+  refine ⟨(honestSumcheckProver s.numVars tbl chals.2.2.2).1,
+          (honestSumcheckProver s.numVars tbl chals.2.2.2).2.1,
+          (honestSumcheckProver s.numVars tbl chals.2.2.2).2.2, ?_⟩
+  unfold verifySymbolicSumcheck
+  have hWitDec : decide (witComm = symbolicWitnessCommit w) = true := decide_eq_true hWit
+  simp only [hStruct, hWitDec, Bool.and_self, ↓reduceIte]
+  change (match verifySumcheck maxDeg s.numVars CommRingOps.zero
+              (honestSumcheckProver s.numVars tbl chals.2.2.2).1 chals.2.2.2 with
+          | some (claim, trFinal) =>
+            if decide (claim.expectedVal = mleEval tbl claim.point) then some (claim, trFinal) else none
+          | none => none) = _
+  rw [hVer]
+  simp [hEval]
 
 /-- **Cryptographic SymbolicZkVM-to-Sumcheck Soundness Weld (`compileSymbolicTraceToSumcheck_sound`)**. -/
 theorem compileSymbolicTraceToSumcheck_sound
@@ -1139,12 +1159,13 @@ theorem compileSymbolicTraceToSumcheck_sound
           wit.lookupMults.toList[i] = stmt.lookupQueries.toList.count stmt.lookupTable.toList[i])) ∧
       CommRingOps.mul (nT.eval γLup) (dQ.eval γLup) = CommRingOps.mul (nQ.eval γLup) (dT.eval γLup)) ∨
     ((∃ r ∈ resVec, r ≠ CommRingOps.zero) ∧ mleEval resVec τ = CommRingOps.zero) ∨
-    ExistsRoundRootHit stmt.numVars tbl rounds tr ∨
-    claim.expectedVal ≠ mleEval tbl claim.point) := by
+    ExistsRoundRootHit stmt.numVars tbl rounds tr) := by
   let γLin := (symbolicChallenges stmt witComm seed).1
   let γLup := (symbolicChallenges stmt witComm seed).2.1
   let τ := (symbolicChallenges stmt witComm seed).2.2.1
   let tr := (symbolicChallenges stmt witComm seed).2.2.2
+  let resVec := symbolicResidualVector stmt wit γLin γLup
+  let tbl := batchedSymbolicPiopTable stmt wit γLin γLup τ
   have hτ : τ.length = stmt.numVars := squeezeSymbolicPoint_length _ _
   have hWitBind : witComm = symbolicWitnessCommit wit := by
     unfold verifySymbolicSumcheck at hAcc
@@ -1152,14 +1173,35 @@ theorem compileSymbolicTraceToSumcheck_sound
     split at hAcc
     · rename_i hw; exact of_decide_eq_true hw
     · cases hAcc
-  have hAcc : verifySumcheck maxDeg stmt.numVars CommRingOps.zero rounds tr = some (claim, trFinal) := by
+  have hUnpack :
+      verifySumcheck maxDeg stmt.numVars CommRingOps.zero rounds tr = some (claim, trFinal) ∧
+      claim.expectedVal = mleEval tbl claim.point := by
     unfold verifySymbolicSumcheck at hAcc
     rw [hStruct, decide_eq_true hWitBind, Bool.and_self] at hAcc
-    simpa only [↓reduceIte] using hAcc
+    dsimp only [↓reduceIte] at hAcc
+    cases hVer : verifySumcheck maxDeg stmt.numVars CommRingOps.zero rounds tr with
+    | none =>
+      change (match verifySumcheck maxDeg stmt.numVars CommRingOps.zero rounds tr with
+              | some (claim, trFinal) =>
+                if decide (claim.expectedVal = mleEval tbl claim.point) then some (claim, trFinal) else none
+              | none => none) = some (claim, trFinal) at hAcc
+      rw [hVer] at hAcc; cases hAcc
+    | some p =>
+      rcases p with ⟨cl0, tr0⟩
+      change (match verifySumcheck maxDeg stmt.numVars CommRingOps.zero rounds tr with
+              | some (claim, trFinal) =>
+                if decide (claim.expectedVal = mleEval tbl claim.point) then some (claim, trFinal) else none
+              | none => none) = some (claim, trFinal) at hAcc
+      rw [hVer] at hAcc
+      dsimp only at hAcc
+      split at hAcc
+      · rename_i hEvB
+        cases hAcc
+        exact ⟨rfl, of_decide_eq_true hEvB⟩
+      · cases hAcc
+  obtain ⟨hSumAcc, hEvalEq⟩ := hUnpack
   dsimp only
   refine ⟨hWitBind, ?_⟩
-  let resVec := symbolicResidualVector stmt wit γLin γLup
-  let tbl := batchedSymbolicPiopTable stmt wit γLin γLup τ
   by_cases hSumEq0 : hypercubeSum stmt.numVars tbl = CommRingOps.zero
   · have hMle0 : mleEval resVec τ = CommRingOps.zero := by
       have hs := hSumEq0; rw [← hτ] at hs
@@ -1223,9 +1265,9 @@ theorem compileSymbolicTraceToSumcheck_sound
           rw [hSubTrue, hMultTrue] at hLupB; cases hLupB
       · exact .inr (.inl ⟨fun hp => hCharEq (charPoly_perm hp), hLinEvalEq⟩)
   · rcases verifySumcheck_sound_dichotomy maxDeg stmt.numVars tbl CommRingOps.zero rounds tr claim trFinal
-        hAcc (Ne.symm hSumEq0) with hEvalNe | hHit
-    · exact .inr (.inr (.inr (.inr (.inr hEvalNe))))
-    · exact .inr (.inr (.inr (.inr (.inl hHit))))
+        hSumAcc (Ne.symm hSumEq0) with hEvalNe | hHit
+    · exact absurd hEvalEq hEvalNe
+    · exact .inr (.inr (.inr (.inr hHit)))
 
 /-- A chase atom is lowered to its dictionary index; a missing atom receives the
 out-of-table sentinel `dictionary.length`. No hash truncation or field alias is used. -/

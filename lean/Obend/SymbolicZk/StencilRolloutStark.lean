@@ -743,15 +743,17 @@ theorem zkPdeRolloutStmtBytes_injective (s t : ZkPdeRolloutStmt) (h : zkPdeRollo
   rcases he with ⟨rfl, rfl, rfl, rfl, rfl, ⟨rfl, rfl⟩, rfl, rfl, rfl⟩; rfl
 def zkPdeTranscript (s : ZkPdeRolloutStmt) : Transcript .relationBound :=
   bindRelation "maxwell-q32-rollout@1" physicsRelationBytes (zkPdeRolloutStmtBytes s) (Transcript.newUnseeded ByteArray.empty)
-def initChallenges : Nat → Transcript .relationBound → List Goldilocks
+def zkPdeInitTranscript (s : ZkPdeRolloutStmt) : Transcript .instanceBound :=
+  (bindInstance s.initCommitment (zkPdeTranscript s)).transcript
+def initChallenges : Nat → Transcript .instanceBound → List Goldilocks
   | 0, _ => []
   | k + 1, tr => let (r, tr') := squeezeGoldilocks tr; r :: initChallenges k tr'
-theorem initChallenges_length (k : Nat) (tr : Transcript .relationBound) : (initChallenges k tr).length = k := by
+theorem initChallenges_length (k : Nat) (tr : Transcript .instanceBound) : (initChallenges k tr).length = k := by
   induction k generalizing tr with
   | zero => rfl
   | succ k ih => simp [initChallenges, ih]
 def zkInitClaim (s : ZkPdeRolloutStmt) (value : Goldilocks) : EvalClaim Goldilocks (s.gridVars + 1) :=
-  ⟨initChallenges (s.gridVars + 1) (zkPdeTranscript s), initChallenges_length _ _, value⟩
+  ⟨initChallenges (s.gridVars + 1) (zkPdeInitTranscript s), initChallenges_length _ _, value⟩
 def encodeMaxwellInit (p m : WordGrid) : List Goldilocks := (p ++ m).map fun x => Goldilocks.ofNat x.toNat
 /-- Succinct commitments with transparent openings: this backend is not statistically
 hiding. The receipt exposes the initial table and range-checked arithmetic trace. -/
@@ -826,7 +828,7 @@ def verifyZkPdeRolloutReceipt (H : Hash32) (ppInit ppRes : AjtaiParams) (s : ZkP
   decide (commitPhysicsTable H ppInit (s.gridVars + 1) (r.initOpening.1.entries.map Prod.fst) = s.initCommitment ∧
     r.initOpening.2.shortLimbs = gadgetDecomposeTable (r.initOpening.1.entries.map Prod.fst) ∧
     gadgetRecomposeTable r.initOpening.2.shortLimbs = some (r.initOpening.1.entries.map Prod.fst)) &&
-  ((canopyAjtaiDualPCS H ppInit).verifyEval ((), ()) (s.gridVars + 1) s.initCommitment (zkInitClaim s r.initClaimVal) r.initOpening (zkPdeTranscript s)).1 &&
+  ((canopyAjtaiDualPCS H ppInit).verifyEval ((), ()) (s.gridVars + 1) s.initCommitment (zkInitClaim s r.initClaimVal) r.initOpening (zkPdeInitTranscript s)).1 &&
   decide ((rolloutResiduals s r).length ≤ 2^s.resVars) &&
   decide (r.residualPadding = paddedResiduals s r) && r.residualPadding.all (· == CommRingOps.zero) &&
   decide (commitPhysicsTable H ppRes s.resVars r.residualPadding = s.residualCommitment) &&
@@ -868,7 +870,7 @@ theorem dualOpen_tables (H : Hash32) (pp : AjtaiParams) (v : Nat) (tbl : List Go
 def rolloutReceiptData (H : Hash32) (pp : AjtaiParams) (s : ZkPdeRolloutStmt) (p m : WordGrid) : ZkPdeRolloutReceipt :=
   let tbl := encodeMaxwellInit p m
   let value := mleEval tbl (zkInitClaim s CommRingOps.zero).point
-  let op := ((canopyAjtaiDualPCS H pp).openEval ((), ()) (s.gridVars+1) tbl (zkInitClaim s value) (zkPdeTranscript s)).1
+  let op := ((canopyAjtaiDualPCS H pp).openEval ((), ()) (s.gridVars+1) tbl (zkInitClaim s value) (zkPdeInitTranscript s)).1
   ⟨p, m, proveInitBits p, proveInitBits m, value, op, proveWaveTrace false s.steps p,
     proveWaveTrace true s.steps m, [], ⟨[], ⟨⟨[]⟩, ⟨[]⟩⟩⟩⟩
 /-- Honest transparent rollout prover. The statement supplies the two public
@@ -941,7 +943,7 @@ theorem proveZkPdeRolloutReceipt_complete (H : Hash32) (ppInit ppRes : AjtaiPara
   have htlen : (encodeMaxwellInit p m).length = 2^(s.gridVars+1) := by
     simp [encodeMaxwellInit, hlen.1, hlen.2, Nat.pow_succ, Nat.mul_two]
   have hop := (canopyAjtaiDualPCS H ppInit).completeness ((), ()) (s.gridVars+1) (encodeMaxwellInit p m)
-    (zkInitClaim s CommRingOps.zero).point (zkInitClaim s CommRingOps.zero).point_len (zkPdeTranscript s) ⟨trivial, hcols.1⟩ htlen
+    (zkInitClaim s CommRingOps.zero).point (zkInitClaim s CommRingOps.zero).point_len (zkPdeInitTranscript s) ⟨trivial, hcols.1⟩ htlen
   have hsum : hypercubeSum s.resVars (List.replicate (2^s.resVars) (CommRingOps.zero : Goldilocks)) = CommRingOps.zero := by
     unfold hypercubeSum
     generalize (hypercube s.resVars).map (fun _ => (CommRingOps.one : Goldilocks)) = ws
@@ -1038,7 +1040,7 @@ def extractZkPdeRolloutAgainstCommitted_or_dualBreak (H : Hash32) (ppInit ppRes 
     if latticeFirst then .inr (.inr (extractPhysicsCommitmentBreaks H ppInit _ _ _ hwlen hlen hcols heq hboth)) else
     have hacc : (canopyVerifyEval H (s.gridVars+1) (canopyCommit H (s.gridVars+1) committedInit)
         (zkInitClaim s r.initClaimVal) r.initOpening.1
-        (absorbMsg dualTrack1Label ByteArray.empty (zkPdeTranscript s))).1 = true := by
+        (absorbMsg dualTrack1Label ByteArray.empty (zkPdeInitTranscript s))).1 = true := by
       simp only [verifyZkPdeRolloutReceipt, Bool.and_eq_true, decide_eq_true_eq] at h
       have hd := h.1.1.1.1.1.1.2
       rw [hcomm] at hd
