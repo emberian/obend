@@ -309,11 +309,11 @@ example : evalLcnfCodeVal 10
     (.jpDecl 0 0 (.return (.lit 99))
       (.letValue (.app (.bvar 0) (.lit 1)) (.return (.bvar 0)))) = none := by rfl
 
-example : evalLcnfModule 32 sampleLcnfRecModule = some (42, []) :=
-  sampleLcnfRecModule_eval_agreed.1
+-- The full three-layer agreement (`sampleLcnfRecModule_eval_agreed`) is a tier-2 fixture in
+-- `Obend/Teeth/Lower/LcnfRecModule.lean`; the interpreter layer is checked here directly.
+example : evalLcnfModule 32 sampleLcnfRecModule = some (42, []) := by rfl
 
 #print axioms lcnf_jp_lexical_capture_sound
-#print axioms sampleLcnfRecModule_eval_agreed
 
 /-! ## 4. Axiom Footprint Audit (`0 sorryAx`, `0 custom axioms`) -/
 

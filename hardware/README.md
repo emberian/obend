@@ -254,7 +254,7 @@ The frontend accepts exported scalar book files and serialized integer catgrad m
 [`gpu/catgrad/README.md`](gpu/catgrad/README.md) describes the upstream MLP and explicit integer adaptation;
 [`gpu/SOAC.md`](gpu/SOAC.md) describes segmented folds and their current sequential schedule.
 The lexical fragment does not express workgroup-indexed register networks, shared-memory phases or
-barriers. The sole NTT builder is `Gpu.Ntt`, in the block language described below; the lexical
+barriers. The sole NTT builder is `Gpu.NttKernel`, in the block language described below; the lexical
 encoded-source theorem does not claim to cover it.
 
 The emitted scalar representation is `vec2<u32>`. `Gpu.Limbs`, `LimbsShift` and
@@ -263,7 +263,7 @@ The bounded 32×32 widening primitive currently uses Naga/wgpu's SHADER_INT64 sy
 to native `v_mul_lo_u32`/`v_mul_hi_u32`. General emulated 64×64 shader multiplication is removed.
 See [the arithmetic proof boundary](../review/GPU-LIMBS-20261106.md).
 
-`Gpu.Ntt` builds Stockham NTTs in that general source language: radix-4 register butterflies,
+`Gpu.NttKernel` builds Stockham NTTs in that general source language: radix-4 register butterflies,
 multiple shared-memory phases, balanced uploads, and packed small tiles. The 1,024 / 65,536 / 1,048,576
 point transforms use 3 / 2 / 3 dispatches. Each input vector is canonicalized in registers. The emitter
 checks source evaluation against an independent recursive NTT and, through 1,024 points, a direct DFT.

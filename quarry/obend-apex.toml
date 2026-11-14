@@ -1690,60 +1690,95 @@ theorem = "ofCodec_encode_sound"
 description = "Compositional `Judge.ofSoundCheck` iterative deepening (`deepenVerdict_mono`), `Format.ofCodec` byte-level roundtrip soundness, and `gradedTriple_of_symExec` VCG."
 
 [[apex]]
-id = "core-splice-contextual-msubst-uses"
+id = "core-forcing-completeness-yielded-plan"
 subsystem = "Core"
-module = "Obend.Core.Proofs.Splice"
-theorem = "contextual_msubst_uses"
-description = "Linear and graded usage conservation across open multi-hole contextual code splicing under binders (`splice_typed`, `contextual_msubst_uses`)."
+module = "Obend.Core.Proofs.Forcing.Completeness"
+theorem = "yieldedPlan_forces"
+description = "Demand-driven heap forcing completeness (`yieldedPlan_forces`, `Chain.back`, `settleSim`) across bounded extraction, resume, and settled GC checkpoints."
 
 [[apex]]
-id = "equiv-yields-mix-assoc-interaction"
+id = "core-checker-transport-instantiate"
+subsystem = "Core"
+module = "Obend.Core.Proofs.CheckerTransport"
+theorem = "Discharges.checked_instantiate"
+description = "Equi-recursive template discharge and bidirectional `checkAgainst` instantiation transport (`Discharges.checked_instantiate`, `Discharges.checkAgainst_instantiate`)."
+
+[[apex]]
+id = "core-splice-graded-typing"
+subsystem = "Core"
+module = "Obend.Core.Proofs.Splice"
+theorem = "splice_typed"
+description = "Quoted multi-hole splice typing preservation (`splice_typed`) consolidated with hole/aggregate/graded-record/join-reading resource accounting."
+
+[[apex]]
+id = "elab-prepare-checks-complete"
+subsystem = "Elab"
+module = "Obend.Elab.Proofs.PrepareChecks"
+theorem = "prepare_checks"
+description = "Bidirectional annotation preparation completeness (`prepare_checks`, `prepareChecked_complete`) over `ShareableComplete` equi-recursive `Assumptions` covering `.extend`, `.mix`, `.fix`, and `.case`."
+
+[[apex]]
+id = "elab-pde-solver-spec-sound"
+subsystem = "Elab"
+module = "Obend.Elab.PdeSolverElab"
+theorem = "checkPdeSolverSpec_sound"
+description = "Compile-time `#pde_solver` conservation-law specification gate soundness (`checkPdeSolverSpec_sound`, `validatePdeSolverSexpr_certified`) and CFL/malformed refusal."
+
+[[apex]]
+id = "spec-ecosystem-closure-law-inherited"
+subsystem = "Spec"
+module = "Obend.Spec.Proofs.Ecosystem"
+theorem = "closure_law_inherited"
+description = "Cross-package C4 release closure law inheritance (`closure_law_inherited`), stale-pin monotonicity (`turn_stale_forever`), and `Spec.Contract` / `Spec.PackageLaw` adequacy."
+
+[[apex]]
+id = "spec-frontend-accepted-execution-semantics"
+subsystem = "Spec"
+module = "Obend.Spec.Proofs.FrontEndAdequacy"
+theorem = "accepted_execution_semantics"
+description = "End-to-end `.obend` source front-end acceptance adequacy (`accepted_execution_semantics`, `accepted_never_refused`) connecting parsed surface modules to refusal-free machine execution."
+
+[[apex]]
+id = "spec-closure-compose-typed"
+subsystem = "Spec"
+module = "Obend.Spec.Proofs.SpecificationClosure"
+theorem = "compose_typed"
+description = "Generic `Specification<T>` closure under `compose` (`compose_typed`, `compose_step_typed`, `composeTy_closed`) constructing `PartialTyping` derivations across all shareable target types `T`."
+
+[[apex]]
+id = "equiv-yields-interaction-bequiv"
 subsystem = "Equiv"
 module = "Obend.Equiv.Yields"
-theorem = "mix_assoc_interaction"
-description = "Multi-turn `Yields` suspension-trace contextual equivalence (`IEquiv.bequiv`) and `.mix` associativity across interactive sessions."
+theorem = "IEquiv.bequiv"
+description = "Coinductive multi-turn `.perform` interaction equivalence implies contextual behavioural equivalence (`IEquiv.bequiv`)."
 
 [[apex]]
 id = "leaf-residual-vtable-clean"
 subsystem = "Leaf"
 module = "Obend.Leaf.Residual"
 theorem = "vtable_clean"
-description = "Flattened `Leaf` vtables contain zero residual `super` literals (`openVtable_no_residual_super`), justifying flat vtable emission in `Leaf.Emit`."
+description = "Open-recursive vtable specialization cleanliness (`vtable_clean`, `openVtable_no_residual_super`) proving zero residual unspecialized `super` indirections survive flattening."
 
 [[apex]]
 id = "run-reflect-forged-descriptor-refused"
 subsystem = "Run"
 module = "Obend.Run.Reflect"
 theorem = "forged_descriptor_refused"
-description = "Capability-gated runtime reflection refuses forged descriptors and metadata-only grants while admitting verified runner descriptors."
+description = "Capability-gated reflection soundness (`forged_descriptor_refused`, `runner_reflect_admitted`) refusing forged descriptors and metadata-only quotation escalation."
 
 [[apex]]
-id = "run-ticks-deepen-bounded-refinement"
+id = "run-ticks-cost-indexed-completeness"
 subsystem = "Run"
 module = "Obend.Run.Ticks"
-theorem = "deepenBounded_eq_deepen"
-description = "O(k) `Spec <-> Exec` iterative-deepening tick refinement (`deepenBounded_eq_deepen`) and cost-indexed runner completeness (`cost_indexed_completeness`)."
+theorem = "cost_indexed_completeness"
+description = "Cost-indexed `MachineFast` tick completeness (`cost_indexed_completeness`) wiring `runBoundedFast` / `forceWithFast` into the `Obend.Run` cost judge."
 
 [[apex]]
-id = "run-adapter-session-reachable-inv"
+id = "run-adapter-checkpoint-settled-typed"
 subsystem = "Run"
 module = "Obend.Run.Proofs.Adapter"
-theorem = "areachable_inv"
-description = "Multi-turn interactive `AReachable` session invariant preservation (`areachable_inv`, `asession_reachable`) over `Run.Adapter` and `Run.Proofs.Core4`."
-
-[[apex]]
-id = "spec-ecosystem-turn-pins-every-root"
-subsystem = "Spec"
-module = "Obend.Spec.Proofs.Ecosystem"
-theorem = "turn_pins_every_root"
-description = "Workspace lockfile pin coverage (`turn_pins_every_root`) and monotonic stale-pin refusal (`moved_pin_stale_forever`) across multi-package turns."
-
-[[apex]]
-id = "elab-prepare-checks-sound"
-subsystem = "Elab"
-module = "Obend.Elab.Proofs.PrepareChecks"
-theorem = "prepare_checks"
-description = "End-to-end elaboration preparation soundness (`prepare_checks`, `prepareChecked_complete`) bridging surface tree annotations into `Core.Check`."
+theorem = "checkpointReachable_settled_typed"
+description = "Live O(T) `Checkpoint` multi-turn simulation (`checkpointSession_eq_replay`), protocol legality (`areachable_legal`), and GC-settled `StateTyping` preservation (`checkpointReachable_settled_typed`)."
 
 [[apex]]
 id = "hardware-silicon-chip-computes-demand"

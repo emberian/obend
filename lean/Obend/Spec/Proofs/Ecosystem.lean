@@ -1,38 +1,192 @@
 module
 /-
-# Obend.Spec.Proofs.Ecosystem — a turn pins every root it resolved; a moved pin is stale by name
+# Obend.Spec.Proofs.Ecosystem — Layer Composition Contracts, Package-Law Narrowing, and Ecosystem Turn Pinning
 
-About `Obend.Spec.Ecosystem`:
-
-* `turn_pins_every_root`: a closure that `close` returns pins every package on its precedence list
-  except the entry, puts every release it chose on that list, and every pin it holds is current at
-  the view it was closed at.
-* `resolve_fill`: resolving an intention is a fill of its slot (`intentionSlot`): the pin it returns
-  passes the slot's judge and its one support holds at that view.
-* `stale_iff_blocked`: an intention pin is not current exactly when its slot's read, at that view,
-  is BLOCKED naming its support ("the record names v at p"): staleness is the slot vocabulary's
-  dead support, nothing new.
-* `extension_current`: an extension pin is current at every view (a hash is fixed forever), so
-  `admit_never_stale_extensions`: a turn whose pins are all extensions is never stale.
-* `admit_stale_names_moved` / `admit_refuses_moved`: admission refuses `stale p` only for a pin `p`
-  of the turn that is not current, and refuses so whenever one is; `admit_admitted` re-derives:
-  an admitted turn's closure is `close` at the view, with the turn's pins and order.
-* `moved_pin_stale_forever` / `retired_stale_forever`: along record steps (pins never go back, a
-  retirement is terminal) a pin the record has moved past, or a retired line, is stale at every
-  later view, and so is every turn that pins it (`turn_stale_forever`).
-* `closure_law_inherited`: the effective package law of a closure (`Obend.Spec.PackageLaw.effectivePackages`
-  over its precedence list) admits a write only if every clause of every chosen package does: a
-  parent's package law is an ancestor of the child's, across the package boundary.
-
-`ecosystem_tooth` runs `close` and `admit` on a concrete diamond (a base, two independent
-extensions, a fourth extending both) and a record step that moves the base's pin.
+Consolidates (`Wave C2-Core`, `3 → 1`):
+1. `Obend.Spec.Contract`: `run_append`, `run_assoc`, `checkLayer_ok`, `missing_nil_get`, `discharge_ok`.
+2. `Obend.Spec.PackageLaw`: `package_law_eval`, `package_never_widens`, `package_refusal_names`, `packages_tooth`.
+3. `Obend.Spec.Ecosystem`: `turn_pins_every_root`, `resolve_fill`, `stale_iff_blocked`,
+   `admit_stale_names_moved`, `admit_refuses_moved`, `admit_admitted`, `moved_pin_stale_forever`,
+   `retired_stale_forever`, `turn_stale_forever`, `closure_law_inherited`.
 -/
-public import Obend.Spec.Ecosystem
-import all Obend.Spec.Ecosystem
-public import Obend.Slot.World
+public import Obend.Spec.Contract
 public import Obend.Spec.PackageLaw
-public import Obend.Spec.Proofs.PackageLaw
+public import Obend.Spec.Ecosystem
+public import Obend.Slot.World
+public import Obend.Law.Proofs.Inherit
+public import Obend.Law.Proofs.Eval
+public import Obend.Law.Std
 public import Obend.Tactic.Tooth
+import all Obend.Spec.Ecosystem
+import all Obend.Law.Proofs.Inherit
+import all Obend.Law.Proofs.Std
+import all Obend.Law.Proofs.Claim
+import all Obend.Law.Proofs.Run
+import all Obend.Law.Proofs.Eval
+
+/-! ## Consolidated from `lean/Obend/Spec/Proofs/Contract.lean` -/
+namespace Obend.Spec.Contract
+set_option autoImplicit false
+
+variable {τ : Type} [BEq τ]
+
+/-! ## The composition law -/
+
+/-- **`C_{A;B}(S,I) = C_A(S,I) ∧ C_B(S, F_A(S,I))` and `F_{A;B} = F_B ∘ F_A`**: checking the
+composition of two chains is checking the first from the seed, then the second from the row the
+first leaves. Associativity of composition is therefore the associativity of `++` on chains:
+`run_assoc`. -/
+public theorem run_append (self : Row τ) (seed : Row τ) (first second : List (Layer τ)) :
+    run self seed (first ++ second) = (run self seed first).bind fun mid => run self mid second := by
+  induction first generalizing seed with
+  | nil => rfl
+  | cons layer rest ih =>
+    simp only [List.cons_append, run]
+    cases checkLayer self seed layer with
+    | error _ => rfl
+    | ok next => exact ih next
+
+public theorem run_assoc (self seed : Row τ) (a b c : List (Layer τ)) :
+    run self seed ((a ++ b) ++ c) = run self seed (a ++ (b ++ c)) := by
+  rw [List.append_assoc]
+
+/-- An admitted layer met every clause of its contract, and left `F_L(S, I)`. -/
+public theorem checkLayer_ok {self beneath next : Row τ} {layer : Layer τ}
+    (admitted : checkLayer self beneath layer = .ok next) :
+    missing self layer.assumes = [] ∧ missing beneath layer.consumes = [] ∧
+      replaced beneath layer.provides = [] ∧ next = layer.leaves beneath := by
+  unfold checkLayer checkBounds checkProvides at admitted
+  by_cases a : (missing self layer.assumes).isEmpty
+  · by_cases b : (missing beneath layer.consumes).isEmpty
+    · by_cases r : (replaced beneath layer.provides).isEmpty
+      · simp only [a, b, r, Bool.not_true, Bool.false_eq_true, if_false, Except.bind] at admitted
+        cases admitted
+        exact ⟨List.isEmpty_iff.mp a, List.isEmpty_iff.mp b, List.isEmpty_iff.mp r, rfl⟩
+      · simp [a, b, r, Except.bind] at admitted
+    · simp [a, b, Except.bind] at admitted
+  · simp [a, Except.bind] at admitted
+
+public theorem missing_nil_get {actual required : Row τ} (h : missing actual required = []) :
+    ∀ n t, (n, t) ∈ required → get? actual n == some t := by
+  intro n t mem
+  unfold missing at h
+  have := List.filterMap_eq_nil_iff.mp h (n, t) mem
+  by_cases e : (get? actual n == some t) = true
+  · exact e
+  · simp [e] at this
+
+/-- A discharged composition: every layer's assumptions hold in the final self, and the row the
+chain leaves gives every member of the final self its declared type and declares nothing else. -/
+public theorem discharge_ok {self seed : Row τ} {chain : List (Layer τ)}
+    (admitted : discharge self seed chain = .ok ()) :
+    ∃ final, run self seed chain = .ok final ∧
+      (∀ n t, (n, t) ∈ self → get? final n == some t) ∧
+      (∀ n, n ∈ names final → (get? self n).isSome) := by
+  unfold discharge at admitted
+  cases h : run self seed chain with
+  | error e => rw [h] at admitted; cases admitted
+  | ok final =>
+    rw [h] at admitted
+    refine ⟨final, rfl, ?_⟩
+    simp only [Except.bind] at admitted
+    unfold close at admitted
+    by_cases m : (missing final self).isEmpty
+    · simp only [m, if_true] at admitted
+      by_cases x : (names final).all (fun n => (get? self n).isSome)
+      · refine ⟨missing_nil_get (List.isEmpty_iff.mp m), fun n mem => ?_⟩
+        exact (List.all_eq_true.mp x) n mem
+      · simp [x] at admitted
+    · revert admitted
+      simp only [m, Bool.false_eq_true, if_false]
+      split <;> (try split) <;> simp
+
+end Obend.Spec.Contract
+
+/-! ## Consolidated from `lean/Obend/Spec/Proofs/PackageLaw.lean` -/
+namespace Obend.Spec.PackageLaw
+open Obend.Law
+open Obend.Core.Term
+open Obend.Core.Data (Data)
+set_option autoImplicit false
+
+theorem mem_packageClauses {laws : String → List (String × Term)} {order : List String} {q : String × Term} :
+    q ∈ packageClauses laws order ↔ ∃ pkg ∈ order, ∃ c ∈ laws pkg, q = (clauseName pkg c.1, c.2) := by
+  simp only [packageClauses, List.mem_flatMap, List.mem_map]
+  constructor
+  · rintro ⟨pkg, hp, c, hc, rfl⟩
+    exact ⟨pkg, hp, c, hc, rfl⟩
+  · rintro ⟨pkg, hp, c, hc, rfl⟩
+    exact ⟨pkg, hp, c, hc, rfl⟩
+
+theorem effectivePackages_ok {laws : String → List (String × Term)} {order : List String} {law : Term}
+    (h : effectivePackages laws order = .ok law) :
+    law = effective (packageClauses laws order) ∧ ∀ p ∈ packageClauses laws order, closedB p.2 = true := by
+  unfold effectivePackages at h
+  dsimp only at h
+  split at h
+  · cases h
+  · rename_i hf
+    cases h
+    refine ⟨rfl, fun p hp => ?_⟩
+    rw [List.find?_eq_none] at hf
+    simpa using hf p hp
+
+/-- **The effective package law is the conjunction of every package's clauses.** -/
+public theorem package_law_eval {laws : String → List (String × Term)} {order : List String} {law : Term}
+    (h : effectivePackages laws order = .ok law) (o n rq : Data) :
+    Admits law o n rq ↔ ∀ pkg ∈ order, ∀ c ∈ laws pkg, Admits c.2 o n rq := by
+  obtain ⟨rfl, hc⟩ := effectivePackages_ok h
+  rw [effective_law_eval hc]
+  constructor
+  · intro hall pkg hp c hcl
+    exact hall (clauseName pkg c.1, c.2) (mem_packageClauses.2 ⟨pkg, hp, c, hcl, rfl⟩)
+  · intro hall q hq
+    obtain ⟨pkg, hp, c, hcl, rfl⟩ := mem_packageClauses.1 hq
+    exact hall pkg hp c hcl
+
+/-- **A child package only narrows**: a write an ancestor package's clause refuses is refused. -/
+public theorem package_never_widens {laws : String → List (String × Term)} {order : List String} {law : Term}
+    (h : effectivePackages laws order = .ok law) {pkg : String} (hp : pkg ∈ order) {c : String × Term}
+    (hcl : c ∈ laws pkg) {o n rq : Data} (hn : ¬ Admits c.2 o n rq) : ¬ Admits law o n rq :=
+  fun ha => hn ((package_law_eval h o n rq).1 ha pkg hp c hcl)
+
+/-- **A refusal names the ancestor package and its clause.** -/
+public theorem package_refusal_names {laws : String → List (String × Term)} {order : List String} {law : Term}
+    (h : effectivePackages laws order = .ok law) {o n rq : Data} {r : Term}
+    (hr : Evaluates (applyLaw law o n rq) (.inject "refused" r)) :
+    ∃ pkg ∈ order, ∃ c ∈ laws pkg, ∃ why, Evaluates (applyLaw c.2 o n rq) (.inject "refused" why) ∧
+      RefusedBy law o n rq (clauseName pkg c.1) why := by
+  obtain ⟨rfl, hc⟩ := effectivePackages_ok h
+  obtain ⟨pre, name, L, post, why, hlin, _, hL, hby⟩ := effective_refusal_names hc hr
+  have hmem : (name, L) ∈ packageClauses laws order := by rw [hlin]; simp
+  obtain ⟨pkg, hp, c, hcl, heq⟩ := mem_packageClauses.1 hmem
+  simp only [Prod.mk.injEq] at heq
+  obtain ⟨rfl, rfl⟩ := heq
+  exact ⟨pkg, hp, c, hcl, why, hL, hby⟩
+
+/-! ## Teeth: a report and its reviewer, as packages -/
+
+/-- `papers/report` bounds `total`; `lab/review`, extending it, admits only its members. -/
+def reportLaws (pkg : String) : List (String × Term) :=
+  if pkg = "papers/report" then [("bounded", bounded unitTy "total" 5)]
+  else if pkg = "lab/review" then [("members", allowlistLaw unitTy ["ann", "bob"])]
+  else []
+
+-- fixture kept in place (2026-11-04): a 10-line closed evaluation; worth a pre-push run, but its fixture data is private to this module, so it cannot move to Obend/Teeth/
+theorem packages_tooth :
+    (effectivePackages reportLaws ["lab/review", "papers/report"]).toOption.isSome = true ∧
+      (match effectivePackages reportLaws ["lab/review", "papers/report"] with
+        | .ok law => blameOf (run 500 (applyLaw law (totalIs 0) (totalIs 9) (rqBy "ann" "ann" writeO))) ==
+            some ("papers/report law bounded", "total over the bound") &&
+          blameOf (run 500 (applyLaw law (totalIs 0) (totalIs 3) (rqBy "eve" "eve" writeO))) ==
+            some ("lab/review law members", "not on the allowlist") &&
+          okB (run 500 (applyLaw law (totalIs 0) (totalIs 3) (rqBy "ann" "ann" writeO)))
+        | .error _ => false) = true := by
+  decide +kernel
+
+end Obend.Spec.PackageLaw
+
+/-! ## Consolidated from `lean/Obend/Spec/Proofs/Ecosystem.lean` -/
 namespace Obend.Spec.Ecosystem
 open Obend.Slot
 set_option autoImplicit false

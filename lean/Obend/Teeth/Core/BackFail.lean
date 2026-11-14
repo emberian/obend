@@ -5,7 +5,7 @@ Not a `module`, for the reason `Obend.Core.Teeth.Collect` gives: `suspendedCheck
 `yieldedPlan` by `decide +kernel`, through `Array` functions whose bodies Lean v4.30.0's `Init` does not
 expose to `module` files; `suspended_is_resource` consumes it and moves with it.
 -/
-import Obend.Core.Proofs.Forcing.BackFail
+import Obend.Core.Proofs.Forcing.Completeness
 
 namespace Obend.Core.Proofs.Forcing
 open Obend.Core.Term Obend.Core.Machine Obend.Core.Collect Obend.Core.Data

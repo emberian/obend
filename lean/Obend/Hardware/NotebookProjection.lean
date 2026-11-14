@@ -916,7 +916,7 @@ theorem physical_cnc_abbe_projection_sound (spec : CncToolpathViewportSpec) :
       (evalAbbeCompensatedCmd3D spec.pTarget spec.linErr spec.angErr spec.abbeArm)
       spec.linErr spec.angErr spec.abbeArm = spec.pTarget ∧
     spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist = 0 ∧
-    (emit cnc5AxisMillComp).closedB = true := by
+    (emit goldenCnc5AxisMillComp).closedB = true := by
   refine ⟨abbe_volumetric_compensation_exact spec.pTarget spec.linErr spec.angErr spec.abbeArm,
     rnea_gyroscopic_coriolis_power_zero spec.twist spec.momentum,
     by decide +kernel⟩
@@ -933,7 +933,7 @@ theorem physical_openusd_lifecycle_fixture :
     checkPartLifecycleInvariant usd.minWallUm usd.maxTempMilliC
       (finalUsdState usd.initSample usd.timeSamples) = true ∧
     verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true ∧
-    (emit lcDrivesStatorUsdComp).closedB = true := by
+    (emit goldenLcDrivesStatorComp).closedB = true := by
   decide +kernel
 
 /-- **Theorem (`physical_projection_doc_noninterference`)**:

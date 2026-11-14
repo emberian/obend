@@ -42,6 +42,7 @@ open Obend.Consensus.Simplex
 open Obend.Consensus.SimplexProtocol
 open Obend.Consensus.Epistemic
 open Obend.Consensus.Finality
+open Obend.Digest.Cshake256.Native (bytesOfList)
 
 -- ============================================================================
 -- 1. `CellContract` Relawing, Trace Preservation & `goalEq_sound`

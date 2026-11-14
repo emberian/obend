@@ -29,7 +29,7 @@ public import Obend.Core.Bidirectional
 public import Obend.Core.Proofs.BidirectionalCompleteness
 public import Obend.Elab.Work
 
-@[expose] public section
+public section
 namespace Obend.Elab.Prepare
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check Obend.Core.Bidirectional
 open Obend.Core.Proofs.BidirectionalCompleteness
@@ -77,6 +77,12 @@ def exposeCallable (assumptions : Assumptions) : Nat → Ty → Ty
     match whnf assumptions type with
     | .specification metadata extension => .specification metadata (exposeCallable assumptions fuel extension)
     | other => other
+
+/-- Replace the underlying target of a `callable` specification spine with `arrow`, keeping its
+metadata wrappers intact. -/
+def retargetCallable : Ty → Ty → Ty
+  | .specification metadata extension, arrow => .specification metadata (retargetCallable extension arrow)
+  | _, arrow => arrow
 
 /-- The quantity a let-bound parameter gets: unrestricted when the argument may be
 shared (its type is shareable and every capture it uses is), affine when it uses no `linear`
@@ -128,9 +134,11 @@ def applyPrepared (assumptions : Assumptions) (_hints : Annotations) (_context :
   | _ => throw (.shape (path ++ [0]) "function" functionType)
 
 /-- The row a case's arms are typed against, from the scrutinee type's weak head. -/
-def caseRow : Ty → Option Ty
+def caseRow (assumptions : Assumptions) : Ty → Option Ty
   | .variant row => some row
-  | .computation _ _ (.variant row) => some row
+  | .computation _ _ inner => match whnf assumptions inner with
+    | .variant row => some row
+    | _ => none
   | _ => none
 
 /-- The type every arm is checked against: the expected type, or for an activity scrutinee
@@ -243,26 +251,49 @@ def prepare (assumptions : Assumptions) (hints : Annotations) (context : Context
   | .mix lower upper, mode => do
     let (lowerTree, lowerType) ← prepare assumptions hints context (path ++ [0]) lower .synth
     let (upperTree, upperType) ← prepare assumptions hints context (path ++ [1]) upper .synth
-    match callable (whnf assumptions lowerType), callable (whnf assumptions upperType) with
-    | .arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inherited _),
-      .arrow .reusable .unrestricted _ (.arrow .reusable .unrestricted _ provided) =>
-      pure (.node none [lowerTree, upperTree], match mode with
-        | .synth => .arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inherited provided)
-        | .check expected => expected)
+    let lowerDeeper := exposeCallable assumptions
+      (tyNodes lowerType + (assumptions.bounds.map (tyNodes ·.2)).sum + 1) lowerType
+    let upperDeeper := exposeCallable assumptions
+      (tyNodes upperType + (assumptions.bounds.map (tyNodes ·.2)).sum + 1) upperType
+    match callable lowerDeeper, callable upperDeeper with
+    | .arrow .reusable .unrestricted self lowerInner,
+      .arrow .reusable .unrestricted _ upperInner =>
+      match whnf assumptions lowerInner, whnf assumptions upperInner with
+      | .arrow .reusable .unrestricted inherited middle,
+        .arrow .reusable .unrestricted _ provided =>
+        let lowerRep := retargetCallable lowerDeeper
+          (.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inherited middle))
+        let upperRep := retargetCallable upperDeeper
+          (.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted middle provided))
+        let mixType := Ty.arrow .reusable .unrestricted self (.arrow .reusable .unrestricted inherited provided)
+        let predicted := if sameType assumptions mixType upperRep then upperRep else mixType
+        pure (.node (some (hint lowerRep upperRep)) [lowerTree, upperTree], match mode with
+          | .synth => predicted
+          | .check expected => expected)
+      | _, _ => throw (.shape path "mixable pair" lowerType)
     | _, _ => throw (.shape path "mixable pair" lowerType)
-  | .fix spec inheritedTerm, mode => do
-    let (inheritedTree, inheritedType) ← prepare assumptions hints context (path ++ [1]) inheritedTerm .synth
+  | .fix spec inheritedTerm, mode =>
     match spec, hints (path ++ [0]), mode with
-    | .lam _, none, .check expected =>
+    | .lam _, none, .check expected => do
       -- the specification is a bare lambda: its type is `target → inherited → target`
+      let (inheritedTree, inheritedType) ← prepare assumptions hints context (path ++ [1]) inheritedTerm .synth
       let specType := Ty.arrow .reusable .unrestricted expected (.arrow .reusable .unrestricted inheritedType expected)
       let (specTree, _) ← prepare assumptions hints context (path ++ [0]) spec (.check specType)
       pure (.node (some (hint specType expected)) [specTree, inheritedTree], expected)
     | _, _, _ => do
       let (specTree, specType) ← prepare assumptions hints context (path ++ [0]) spec .synth
-      match callable (whnf assumptions specType) with
-      | .arrow .reusable .unrestricted target (.arrow .reusable .unrestricted _ _) =>
-        pure (.node none [specTree, inheritedTree], match mode with | .synth => target | .check expected => expected)
+      let deeper := exposeCallable assumptions
+        (tyNodes specType + (assumptions.bounds.map (tyNodes ·.2)).sum + 1) specType
+      match callable deeper with
+      | .arrow .reusable .unrestricted target inner =>
+        match whnf assumptions inner with
+        | .arrow .reusable .unrestricted inherited _ =>
+          let fixedSpec := retargetCallable deeper
+            (.arrow .reusable .unrestricted target (.arrow .reusable .unrestricted inherited target))
+          let (inheritedTree, _) ← prepare assumptions hints context (path ++ [1]) inheritedTerm (.check inherited)
+          pure (.node (some (hint fixedSpec target)) [specTree, inheritedTree],
+            match mode with | .synth => target | .check expected => expected)
+        | _ => throw (.shape (path ++ [0]) "fixable specification" specType)
       | _ => throw (.shape (path ++ [0]) "fixable specification" specType)
   | .inject tag payload, mode =>
     let body (annotation? : Option LambdaAnnotation) (sum : Ty) : Prepared :=
@@ -388,38 +419,49 @@ def prepare (assumptions : Assumptions) (hints : Annotations) (context : Context
   | .case scrutinee [], mode => do
     let (scrutineeTree, scrutineeType) ← prepare assumptions hints context (path ++ [0]) scrutinee .synth
     let head := whnf assumptions scrutineeType
-    match caseRow head with
+    match caseRow assumptions head with
     | none => throw (.shape (path ++ [0]) "sum or activity" scrutineeType)
     | some _ =>
       match mode with
       | .check expected => do
-        let _ ← armResult path head expected (whnf assumptions expected)
-        pure (.node none [scrutineeTree, .node none []], expected)
+        let expectedHead := whnf assumptions expected
+        let _ ← armResult path head expected expectedHead
+        let scrutineeRep := match head with
+          | .computation planType response _ => .computation planType response (.variant .emptyRow)
+          | _ => .variant .emptyRow
+        let q := caseQuantity assumptions context (occurrences context.length scrutinee) true
+        pure (.node (some ⟨scrutineeRep, expectedHead, q, .reusable⟩) [scrutineeTree, .node none []], expected)
       | .synth => throw (.silent path "empty case")
   | .case scrutinee ((name, body) :: rest), mode => do
     let (scrutineeTree, scrutineeType) ← prepare assumptions hints context (path ++ [0]) scrutinee .synth
     let head := whnf assumptions scrutineeType
-    match caseRow head with
+    match caseRow assumptions head with
     | none => throw (.shape (path ++ [0]) "sum or activity" scrutineeType)
-    | some row =>
-      -- the payload quantity the checker computes for an unannotated case (`caseQuantityAt`)
+    | some rawRow =>
+      let row := (lookupRow assumptions rawRow ((name, body) :: rest)).getD rawRow
+      let scrutineeRep := match head with
+        | .computation planType response _ => .computation planType response (.variant row)
+        | _ => .variant row
+      -- the payload quantity the checker computes for the resolved arm row (`caseQuantityAt`)
       let q := caseQuantity assumptions context (occurrences context.length scrutinee)
         (armsShareable assumptions row ((name, body) :: rest))
       match mode with
       | .check expected => do
-        let result ← armResult path head expected (whnf assumptions expected)
+        let expectedHead := whnf assumptions expected
+        let result ← armResult path head expectedHead expectedHead
         let trees ← prepareArms assumptions hints context q (path ++ [1]) 0 row result ((name, body) :: rest)
-        pure (.node none [scrutineeTree, .node none trees], expected)
+        pure (.node (some ⟨scrutineeRep, expectedHead, q, .reusable⟩) [scrutineeTree, .node none trees], expected)
       | .synth =>
         match rowMember row name with
-        | none => throw (.unknownLabel (path ++ [1]) name row)
+        | none => throw (.unknownLabel (path ++ [1]) name rawRow)
         | some payload => do
           -- the first arm's synthesis tree also checks at its own type; the case is annotated
-          -- with its scrutinee's head and that type, so every arm is checked against it
+          -- with its scrutinee's resolved row representative and that type's weak head
           let (firstTree, first) ← prepare assumptions hints (⟨payload, q⟩ :: context) (path ++ [1, 0]) body .synth
-          let result ← armResult path head first first
+          let firstHead := whnf assumptions first
+          let result ← armResult path head firstHead firstHead
           let trees ← prepareArms assumptions hints context q (path ++ [1]) 1 row result rest
-          pure (.node (some ⟨head, first, q, .reusable⟩) [scrutineeTree, .node none (firstTree :: trees)], first)
+          pure (.node (some ⟨scrutineeRep, firstHead, q, .reusable⟩) [scrutineeTree, .node none (firstTree :: trees)], firstHead)
 
 def prepareFieldsSynth (assumptions : Assumptions) (hints : Annotations) (context : Context) (path : List Nat)
     (index : Nat) : List (String × Term) → Except PrepareRefusal (List AnnotationTree × Ty)
@@ -432,7 +474,7 @@ def prepareFieldsSynth (assumptions : Assumptions) (hints : Annotations) (contex
 def prepareFieldsCheck (assumptions : Assumptions) (hints : Annotations) (context : Context) (path : List Nat)
     (index : Nat) : List (String × Term) → Ty → Except PrepareRefusal (List AnnotationTree)
   | [], _ => pure []
-  | (name, body) :: rest, .field _ member tail => do
+  | (_name, body) :: rest, .field _ member tail => do
     let (tree, _) ← prepare assumptions hints context (path ++ [index]) body (.check member)
     let trees ← prepareFieldsCheck assumptions hints context path (index + 1) rest tail
     pure (tree :: trees)

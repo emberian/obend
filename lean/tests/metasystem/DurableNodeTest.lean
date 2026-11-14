@@ -23,6 +23,8 @@ public import Obend.FFI.Bridge
 public import Obend.Tactic.Tooth
 import all Obend.Consensus.Simplex
 import all Obend.Consensus.SimplexProtocol
+import all Obend.Consensus.Finality
+import all Obend.Digest.Cshake256.Seam
 import all Obend.Vault.UnifiedDeos
 import all Obend.Hardware.AgenticEDA
 import all Obend.FFI.Bridge
@@ -41,6 +43,7 @@ open Obend.Hardware.AgenticEDA
 open Obend.Run.Durable
 open Obend.Fold.Collapse
 open Obend.FFI
+open Obend.Digest.Cshake256.Native (bytesOfList)
 
 set_option autoImplicit false
 

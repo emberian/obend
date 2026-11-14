@@ -228,7 +228,6 @@ import all Obend.Core.Proofs.Preservation.Cases.Pairs
 import all Obend.Core.Proofs.Preservation.Cases.Records
 import all Obend.Core.Proofs.Preservation.Cases.Split
 import all Obend.Core.Proofs.Preservation.Cases.Sums
-import all Obend.Core.Proofs.Settle
 import all Obend.Core.RangeSafe
 import all Obend.Hardware.Accelerators
 import all Obend.Hardware.GeometryCAM

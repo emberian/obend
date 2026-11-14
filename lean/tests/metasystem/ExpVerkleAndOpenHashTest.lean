@@ -219,7 +219,6 @@ import all Obend.Core.Proofs.Preservation.Cases.Activities
 import all Obend.Core.Proofs.Preservation.Cases.Arithmetic
 import all Obend.Core.Proofs.Preservation.Cases.Pairs
 import all Obend.Core.Proofs.Preservation.Cases.Split
-import all Obend.Core.Proofs.Settle
 import all Obend.Core.RangeSafe
 import all Obend.Crypto.GameSoundness
 import all Obend.Hardware.Compiler

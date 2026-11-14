@@ -21,7 +21,6 @@ namespace Obend.Hardware.AgenticEDA
 open Obend.Vault
 open Obend.Spec.Law (LawExpr Facts)
 open Obend.Hardware.Datasheet
-open Obend.Hardware.PCB
 /-- Theorem (`goldenAgenticBomSwap_admitted_and_overbudget_refused`):
 1. `goldenEdaLaws` enforces 4 `.obend` smart-contract invariants (`drc_zero`, `thermal_cap`,
    `rf_vswr_cap`, `bom_budget`),

@@ -1162,44 +1162,12 @@ theorem lcnf_jp_lexical_capture_sound (captured shadowed arg : Nat) :
   refine ⟨rfl, lexicalCaptureCode_runs captured shadowed arg, ?_⟩
   simpa [compileLcnfToCore4, lowerT] using lower_sound_nat (lexicalCaptureCode_runs captured shadowed arg)
 
-/-- Entry through the public module API, including two recursive self applications. -/
+/-- Entry through the public module API, including two recursive self applications. Its closed
+end-to-end run (`sampleLcnfRecModule_runs`, `sampleLcnfRecModule_eval_agreed`) is a tier-2 fixture in
+`Obend/Teeth/Lower/LcnfRecModule.lean`; the universal contract is `lcnf_jp_lexical_capture_sound`. -/
 def sampleLcnfRecModule : LcnfModule :=
   { decls := [sampleLcnfRecDecl],
     entry := .letValue (.app (.bvar 0) (.lit 2)) (.return (.bvar 0)) }
-
-set_option maxRecDepth 4096 in
-set_option maxHeartbeats 800000 in
-theorem sampleLcnfRecModule_runs :
-    SSteps (compileLcnfModuleToLExpr sampleLcnfRecModule) (.lit 42) := by
-  simp only [compileLcnfModuleToLExpr, sampleLcnfRecModule,
-    compileLcnfModuleToLExpr.bindDecls, lcnfFunDeclToLExpr, sampleLcnfRecDecl,
-    compileLcnfToLExpr, codeUsesState, letValueUsesState, compileLcnfWithCtx,
-    lcnfLetValueToLExprCtx, lcnfArgToLExprCtx, LcnfLowerCtx.pushVar,
-    LcnfLowerCtx.lookupVar, wrapMinorBvars, List.map_cons, List.map_nil,
-    List.getElem?_cons_zero, List.getElem?_cons_succ, List.getElem?_nil,
-    Bool.false_or, Bool.or_false, Bool.false_eq_true, ite_false, Nat.add_zero]
-  repeat
-    first
-    | exact .refl _
-    | (refine .next (.zeta _ _ _) ?_)
-    | (refine .next (.beta _ _ _) ?_)
-    | (refine .next (.appFun _ (.unfold _ _ _)) ?_)
-    | (refine .next (.boolRecTrue _ _ _) ?_)
-    | (refine .next (.boolRecFalse _ _ _) ?_)
-    | (refine .next (.boolRecMajor _ _ _ (.binLit _ _ _)) ?_)
-    | (refine .next (.boolRecMajor _ _ _ (.binLeft _ _ (.binLit _ _ _))) ?_)
-    | (refine .next (.boolRecMajor _ _ _ (.binLeft _ _ (.binLeft _ _ (.binLit _ _ _)))) ?_)
-    | simp [LExpr.inst, LExpr.subst, LExpr.single, LExpr.liftSubst,
-        LExpr.rename, liftRename, NatOp.eval]
-
-/-- The same closed recursive module evaluates to 42 through the interpreter,
-source reduction, and Core4. -/
-theorem sampleLcnfRecModule_eval_agreed :
-    evalLcnfModule 32 sampleLcnfRecModule = some (42, []) ∧
-    SSteps (compileLcnfModuleToLExpr sampleLcnfRecModule) (.lit 42) ∧
-    Evaluates (compileLcnfModuleToCore4 sampleLcnfRecModule) (.nat 42) := by
-  refine ⟨rfl, sampleLcnfRecModule_runs, ?_⟩
-  simpa [compileLcnfModuleToCore4, lowerT] using lower_sound_nat sampleLcnfRecModule_runs
 
 mutual
 /-- State-free runtime values are related to source expressions by weak-head

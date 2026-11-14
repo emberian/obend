@@ -15,23 +15,17 @@ accepts:
   of that term (`deepEvaluates_unique`): a Data deep-evaluates the term exactly when it is the
   extracted Data, under every policy and budget.
 
-`accept_inhabited` exhibits a real `.obend` program the front end accepts, so the premises are
-inhabited. What is NOT stated (no surface semantics exists): that the Core4 term means what the
-surface program means. Statements as in minidregg `Compiler/ObjectiveBendFrontEndAdequacy.lean`
-(commit 092027a2); the publication/receiver binding (`example_package`, `replay_inhabited`,
-`admitted_front_end`) is Mini's `ObjectiveBendPublication`, not ported. `Accepted.sound` (Mini kept
-it in its identity module so a theorem would not rotate the fingerprint) is in
-`Obend.Spec.Proofs.TermWire` with `packetTerm`, which it cites. An exposed-section leaf: nothing imports it.
+The compiled surface `.obend` acceptance vector (`accept_inhabited`) lives in Tier-2A
+`tests/extracted/SpecLawVectorsTest.lean`. Statements as in minidregg
+`Compiler/ObjectiveBendFrontEndAdequacy.lean` (commit 092027a2); `Accepted.sound` is in
+`Obend.Spec.Proofs.TermWire` with `packetTerm`, which it cites.
 -/
 public import Obend.Spec.FrontEnd
-public meta import Obend.Spec.FrontEnd
 public import Obend.Core.Proofs.Preservation
 public import Obend.Core.Proofs.DataSoundness
 public import Obend.Core.MachineTyping
-public import Obend.AssertCompiled
 public section
 namespace Obend.Spec.Proofs.FrontEndAdequacy
-open Lean (Json toJson)
 open Obend.Spec.FrontEnd
 open Obend.Core.Check
 open Obend.Core.Machine
@@ -61,35 +55,6 @@ theorem accepted_execution_semantics (l : Lowering) (a : Accepted l) {policy : S
     runBounded limits budget.ticks (initial a.erased) = .finished execution.value execution.state ∧
       ∀ data, DeepEvaluates a.erased data ↔ data = execution.extraction.result.value :=
   execution_source_semantics (accepted_typed l a).2.2 execution
-
-/-! ## Inhabitant: a surface program the front end accepts -/
-
-/-- Even/odd by open recursion over two specifications, tied by `fix`, and a `let`
-(surface `.obend`). -/
-def example_source : String :=
-  "edition ObjectiveBend 1\n" ++
-  "record Parity:\n  even(n: Nat) -> Bool\n  odd(n: Nat) -> Bool\n" ++
-  "spec Even for Parity:\n  requires odd(n: Nat) -> Bool\n  def even(n: Nat) -> Bool:\n" ++
-  "    match n:\n      case 0n: true\n      case 1n+p: self.odd(p)\n" ++
-  "spec Odd for Parity:\n  requires even(n: Nat) -> Bool\n  def odd(n: Nat) -> Bool:\n" ++
-  "    match n:\n      case 0n: false\n      case 1n+p: self.even(p)\n" ++
-  "def ten(seed: Parity) -> Bool:\n  let parity = fix(compose(Even, Odd), seed)\n  parity.even(10n)\n"
-
-def example_module : SourceModule := ⟨"Example", example_source, Sha256.hexString example_source, []⟩
-
-def example_lowering : Except Diagnostic Lowering :=
-  FrontEnd.lower [example_module] 0 "ten" (Json.arr #[]) (Json.arr #[])
-    (Json.mkObj [("heap", toJson "100000"), ("stack", toJson "100000"), ("ticks", toJson "100000")]) "definition"
-
-/-- The front end accepts the example: its packet decodes to the elaborator's erased term
-and the checker returns a derivation. -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem accept_inhabited :
-    (match example_lowering with
-      | .ok l => (FrontEnd.accept l).toBool
-      | .error _ => false) = true := by
-  native_decide
-#assert_compiled accept_inhabited
 
 end Obend.Spec.Proofs.FrontEndAdequacy
 

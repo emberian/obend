@@ -24,8 +24,8 @@ kernel forms in `Kernel.ObjectiveResumeContract`): whatever a normalized state (
 checkpoint) commits, under any resources, is the reference node of the lazy state it is in a
 chain with; after a yield, for EVERY response, the resumed checkpoint is in a chain with
 `k r`; and if the reference spins, the normalized state commits nothing, ever. -/
-public import Obend.Core.Proofs.Forcing.Converse
-@[expose] public section
+public import Obend.Core.Proofs.Forcing.ForwardSim
+public section
 namespace Obend.Core.Interaction
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -135,41 +135,6 @@ theorem node_spin_iff (b : Budget) (s : State) : node b s = .spin ↔ ∀ n, ¬ 
     · intro h n halts; rw [if_pos ⟨n, halts⟩] at h; cases h
     · intro never; rw [if_neg (fun ⟨n, h⟩ => never n h)]
 
-/-! ## The machine against the reference -/
-
-/-- **What a normalized state commits is the reference node** of the lazy state in a chain
-with it: under ANY resources, an ending of the normalized state is the lazy state's node. -/
-theorem node_of_chain {s t : State} (h : Chain s t) {L' : Limits} {T' : Nat} {b : Budget} {e : Ending}
-    {y' : State} (ran : endsWith L' T' b t = some (e, y')) :
-    node b s = Node.ofEnding e ∧ ∃ y, ending b s = some (e, y) ∧ Chain y y' := by
-  obtain ⟨y, c, above⟩ := h.back ran
-  exact ⟨node_of_above above, y, ending_of_above above, c⟩
-
-/-- **The machine/reference yield theorem.** A normalized state yields Plan `d` (under any
-resources) and the kernel stores the checkpoint of that yield's extraction. Then the
-reference node is `Vis(d, k)`, and for EVERY response `r` the kernel accepts, resuming the
-stored checkpoint corresponds to `k r` (they are in a chain: every later ending agrees,
-resources only, and spinning is preserved). -/
-theorem node_of_chain_vis {s t : State} (h : Chain s t) {L' : Limits} {T' : Nat} {b : Budget} {d : Data}
-    {y' : State} (ran : endsWith L' T' b t = some (.yielded d, y')) (valid : AddrValid y') {r' : Result}
-    (found : Obend.Core.Data.yieldedPlan L' b y' = .ok r') :
-    node b s = .vis d ∧ ∀ (response : Term) (stored : State),
-      resume response (checkpoint r'.state) = some stored →
-      ∃ next, continuation b s response = some next ∧ Chain next stored := by
-  obtain ⟨y, above, chain⟩ := h.next ran valid found
-  refine ⟨node_of_above above, fun response stored resumed => ?_⟩
-  obtain ⟨next, again, c⟩ := chain.resume_back response resumed
-  refine ⟨next, ?_, c⟩
-  unfold continuation
-  rw [ending_of_above above]
-  exact again
-
-/-- **Spinning is never a visible ending**: if the reference spins, the normalized state ends
-no segment under any resources. -/
-theorem chain_spin {s t : State} (h : Chain s t) {b : Budget} (spin : node b s = .spin) (L : Limits) (T : Nat)
-    (b' : Budget) : endsWith L T b' t = none :=
-  h.spins ((node_spin_iff b s).mp spin) L T b'
 
 end Obend.Core.Interaction
-
 end

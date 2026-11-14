@@ -2,7 +2,7 @@ import Obend.Ledger.Floors
 import Obend.Ledger.Seat
 import Obend.Ledger.Vault
 import Obend.Run.Durable
-import Obend.Run.DurableExample
+import Obend.Teeth.RunExamplesTeeth
 import Obend.Run.Shared
 import Obend.Run.Fork
 import Obend.Slot.Selection

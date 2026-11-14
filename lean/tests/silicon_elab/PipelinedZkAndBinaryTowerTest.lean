@@ -189,6 +189,7 @@ import all Obend.Lower.Inductive
 import all Obend.Lower.Judge
 import all Obend.Lower.LCNF
 import all Obend.Lower.Proofs.Book
+import all Obend.Lower.Proofs.Complete
 import all Obend.Lower.Proofs.Hardware
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
@@ -251,7 +252,6 @@ import all Obend.Core.Proofs.Preservation.Cases.Pairs
 import all Obend.Core.Proofs.Preservation.Cases.Records
 import all Obend.Core.Proofs.Preservation.Cases.Split
 import all Obend.Core.Proofs.Preservation.Cases.Sums
-import all Obend.Core.Proofs.Settle
 import all Obend.Core.RangeSafe
 import all Obend.Hardware.Accelerators
 import all Obend.Hardware.GeometryCAM

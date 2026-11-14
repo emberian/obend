@@ -1,5 +1,6 @@
 module
 import all Obend.Hardware.NotebookProjection
+meta import all Obend.Hardware.NotebookProjection
 import Obend.Doc.Structured
 import Obend.Doc.Graph
 import Obend.Hardware.HDL
@@ -8,6 +9,14 @@ import Obend.Hardware.PlaceRoute
 import Obend.Hardware.DRC
 import Obend.Hardware.Synth
 import Obend.Hardware.Circuits
+meta import Obend.Doc.Structured
+meta import Obend.Doc.Graph
+meta import Obend.Hardware.HDL
+meta import Obend.Hardware.Process
+meta import Obend.Hardware.PlaceRoute
+meta import Obend.Hardware.DRC
+meta import Obend.Hardware.Synth
+meta import Obend.Hardware.Circuits
 
 open Obend.Vault.HardwareProjection
 open Obend.Doc

@@ -119,7 +119,6 @@ elab "#verify_revival_zero_choice_axioms" : command => do
     ``Obend.Stdlib.stdlib_inherited_laws_count,
     ``Obend.Stdlib.stdlib_open_recursion_eval,
     ``Obend.Stdlib.stdlib_compositions_closed,
-    ``Obend.Stdlib.stdlib_quantum_photonic_compositions_closed,
     ``Obend.Stdlib.stdlib_pcb_and_spacecraft_compositions_closed,
     ``Obend.Stdlib.stdlib_pcb_and_spacecraft_laws_and_eval,
     ``revival_stdlib_all_values_rfl
@@ -135,8 +134,6 @@ elab "#verify_revival_zero_choice_axioms" : command => do
     ``Obend.Stdlib.stdlib_flatten_and_book_sound,
     ``Obend.Stdlib.stdlib_cell_crossPackage_nextValue_pin_survives,
     ``Obend.Stdlib.stdlib_account_crossPackage_availableAfterFee_cone_survives,
-    ``Obend.Stdlib.stdlib_quantum_photonic_flatten_and_book_sound,
-    ``Obend.Stdlib.stdlib_quantum_photonic_crossPackage_cone_survives,
     ``Obend.Stdlib.stdlib_revival_flagship_claims_hold,
     ``Obend.Stdlib.stdlib_pcb_and_spacecraft_flatten_and_book_sound,
     ``Obend.Stdlib.stdlib_pcb_and_spacecraft_crossPackage_cone_survives,

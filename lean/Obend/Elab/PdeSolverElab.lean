@@ -48,6 +48,170 @@ elab "pde_spec_from_sexpr% " s:str : term => do
   | .error msg => throwError "[#pde_solver] {msg}"
   | .ok spec => return quoteConservationLawSpec spec
 
+/-- Pure compile-time gate checking structural/domain/CFL validity, reflective `CanonPoly`
+two-state fluctuation conservation, and topological SSA DAG well-formedness across every axis. -/
+def checkPdeSolverSpec (spec : ConservationLawSpec) : Bool :=
+  spec.checkValid &&
+  verifyFluctuationsReflective spec &&
+  (List.range spec.numDims).all fun d =>
+    checkFluxSsaDag (getOr (specializeFluxSweep spec).axisFluxDags d ⟨[], []⟩)
+
+/-- Pure S-expression parser and compile-time conservation/SSA gate backing `elabConservationLaw`. -/
+def validatePdeSolverSexpr (rawText : String) :
+    Except String (ConservationLawSpec × SpecializedSweepPlan) := do
+  let parsedSpec ← parseConservationLawSexprWithDiag rawText
+  if !parsedSpec.checkValid then
+    .error "invalid conservation-law specification"
+  else if !verifyFluctuationsReflective parsedSpec then
+    .error "reflective CanonPoly fluctuation conservation check failed"
+  else
+    let plan := specializeFluxSweep parsedSpec
+    if !(List.range parsedSpec.numDims).all (fun d =>
+        checkFluxSsaDag (getOr plan.axisFluxDags d ⟨[], []⟩)) then
+      .error "internal SSA DAG topological check failed"
+    else
+      .ok (parsedSpec, plan)
+
+theorem checkPdeSolverSpec_valid (spec : ConservationLawSpec)
+    (h : checkPdeSolverSpec spec = true) :
+    spec.checkValid = true ∧
+    verifyFluctuationsReflective spec = true ∧
+    ∀ d, d < spec.numDims →
+      checkFluxSsaDag (getOr (specializeFluxSweep spec).axisFluxDags d ⟨[], []⟩) = true := by
+  unfold checkPdeSolverSpec at h
+  simp only [Bool.and_eq_true, List.all_eq_true, List.mem_range] at h
+  exact ⟨h.1.1, h.1.2, h.2⟩
+
+/-- **Kernel Soundness of `checkPdeSolverSpec` (`checkPdeSolverSpec_sound`)**:
+Every `ConservationLawSpec` accepted by `checkPdeSolverSpec` satisfies:
+1. Structural, domain-positivity, and CFL bounds (`0 < aMax`, `0 ≤ cfl`, `cfl * aMax ≤ 1`),
+2. Exact nonlinear Rusanov fluctuation conservation across every coordinate axis and component,
+3. Multi-dimensional Lie & Strang total integral conservation + multi-turn rollout CFL safety,
+4. Certified Futamura/CSE SSA DAG lowering (`specializedTotalFlops ≤ naiveTotalFlops` & topological
+   DAG well-formedness) and Q32.32 systolic RTL module validity on every axis. -/
+theorem checkPdeSolverSpec_sound (spec : ConservationLawSpec) (dims : List Nat)
+    (hCheck : checkPdeSolverSpec spec = true) (hPos : ∀ N ∈ dims, 0 < N) :
+    spec.checkValid = true ∧
+    (0 < spec.aMax ∧ 0 ≤ spec.cfl ∧ spec.cfl * spec.aMax ≤ 1) ∧
+    (∀ d i, d < spec.numDims → i < spec.numVars →
+      ∀ uL uR : Vec,
+        DomainValid spec.domain ⟨uL, spec.paramEnv⟩ →
+        DomainValid spec.domain ⟨uR, spec.paramEnv⟩ →
+        let fluxD := getOr spec.fluxes d []
+        rusanovFluctMinus fluxD spec.paramEnv spec.aMax uL uR i +
+          rusanovFluctPlus fluxD spec.paramEnv spec.aMax uL uR i =
+          evalFlux (getOr fluxD i (.const 0)) ⟨uR, spec.paramEnv⟩ -
+          evalFlux (getOr fluxD i (.const 0)) ⟨uL, spec.paramEnv⟩) ∧
+    (let axisFlux := fun d =>
+        rusanovNonlinearFlux (getOr spec.fluxes d []) spec.paramEnv spec.aMax
+      ∀ ν : Rat, ∀ U : MultiDGrid, ∀ c : Nat,
+        totalGridIntegral dims (evalMultiDSweep dims ν axisFlux U) c = totalGridIntegral dims U c ∧
+        totalGridIntegral dims (evalStrangSweep dims ν axisFlux U) c = totalGridIntegral dims U c) ∧
+    ((specializeFluxSweep spec).specializedTotalFlops ≤ (specializeFluxSweep spec).naiveTotalFlops ∧
+      ∀ d, d < spec.numDims →
+        checkFluxSsaDag (getOr (specializeFluxSweep spec).axisFluxDags d ⟨[], []⟩) = true ∧
+        checkRtlModule (buildSpecSystolicRtl spec d) = true) := by
+  obtain ⟨hVal, hRefl, hDags⟩ := checkPdeSolverSpec_valid spec hCheck
+  refine ⟨hVal, checkValid_cfl_bounds spec hVal, ?_, ?_, ?_⟩
+  · intro d i hd hi uL uR hL hR
+    exact (fluctuationConservation_of_reflective spec hRefl d i hd hi uL uR hL hR).1
+  · exact (spec_sweep_conserves_integral spec dims hPos).1
+  · exact ⟨(specializeFluxSweep_sound spec).1,
+      fun d hd => ⟨hDags d hd, spec_systolicRtl_ok spec d⟩⟩
+
+theorem validatePdeSolverSexpr_checks (rawText : String)
+    (spec : ConservationLawSpec) (plan : SpecializedSweepPlan)
+    (h : validatePdeSolverSexpr rawText = .ok (spec, plan)) :
+    parseConservationLawSexprWithDiag rawText = .ok spec ∧
+    checkPdeSolverSpec spec = true ∧
+    plan = specializeFluxSweep spec := by
+  unfold validatePdeSolverSexpr at h
+  cases hParse : parseConservationLawSexprWithDiag rawText with
+  | error _ => simp [hParse, bind, Except.bind] at h
+  | ok parsed =>
+    simp only [hParse, bind, Except.bind] at h
+    cases hValid : parsed.checkValid with
+    | false => simp [hValid] at h
+    | true =>
+      simp only [hValid, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+      cases hFluct : verifyFluctuationsReflective parsed with
+      | false => simp [hFluct] at h
+      | true =>
+        simp only [hFluct, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+        cases hDag : ((List.range parsed.numDims).all fun d =>
+            checkFluxSsaDag (getOr (specializeFluxSweep parsed).axisFluxDags d ⟨[], []⟩)) with
+        | false => simp [hDag] at h
+        | true =>
+          simp only [hDag, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Except.ok.injEq,
+            Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨rfl, by simp [checkPdeSolverSpec, hValid, hFluct, hDag], rfl⟩
+
+theorem validatePdeSolverSexpr_of_valid (rawText : String) (spec : ConservationLawSpec)
+    (hParse : parseConservationLawSexprWithDiag rawText = .ok spec)
+    (hCheck : checkPdeSolverSpec spec = true) :
+    validatePdeSolverSexpr rawText = .ok (spec, specializeFluxSweep spec) := by
+  obtain ⟨hVal, hRefl, hDags⟩ := checkPdeSolverSpec_valid spec hCheck
+  have hAll : ((List.range spec.numDims).all fun d =>
+      checkFluxSsaDag (getOr (specializeFluxSweep spec).axisFluxDags d ⟨[], []⟩)) = true := by
+    rw [List.all_eq_true]
+    intro d hd
+    exact hDags d (List.mem_range.mp hd)
+  simp [validatePdeSolverSexpr, bind, Except.bind, hParse, hVal, hRefl, hAll]
+
+theorem validatePdeSolverSexpr_iff (rawText : String)
+    (spec : ConservationLawSpec) (plan : SpecializedSweepPlan) :
+    validatePdeSolverSexpr rawText = .ok (spec, plan) ↔
+    (parseConservationLawSexprWithDiag rawText = .ok spec ∧
+     checkPdeSolverSpec spec = true ∧
+     plan = specializeFluxSweep spec) := by
+  constructor
+  · exact validatePdeSolverSexpr_checks rawText spec plan
+  · rintro ⟨hParse, hCheck, rfl⟩
+    exact validatePdeSolverSexpr_of_valid rawText spec hParse hCheck
+
+/-- **End-to-End S-Expression Validation Corollary (`validatePdeSolverSexpr_certified`)**:
+Any raw S-expression text accepted by `validatePdeSolverSexpr` parses to a valid
+`ConservationLawSpec` passing `checkPdeSolverSpec`, inheriting CFL safety, exact Rusanov
+fluctuation conservation, multi-D Lie/Strang integral conservation, SSA DAG FLOP monotonicity,
+and verified systolic RTL emission. -/
+theorem validatePdeSolverSexpr_certified (rawText : String)
+    (spec : ConservationLawSpec) (plan : SpecializedSweepPlan) (dims : List Nat)
+    (hOk : validatePdeSolverSexpr rawText = .ok (spec, plan))
+    (hPos : ∀ N ∈ dims, 0 < N) :
+    checkPdeSolverSpec spec = true ∧
+    plan = specializeFluxSweep spec ∧
+    spec.checkValid = true ∧
+    (0 < spec.aMax ∧ 0 ≤ spec.cfl ∧ spec.cfl * spec.aMax ≤ 1) ∧
+    plan.specializedTotalFlops ≤ plan.naiveTotalFlops ∧
+    (∀ d, d < spec.numDims → checkRtlModule (buildSpecSystolicRtl spec d) = true) := by
+  obtain ⟨_, hCheck, rfl⟩ := validatePdeSolverSexpr_checks rawText spec plan hOk
+  have hSound := checkPdeSolverSpec_sound spec dims hCheck hPos
+  exact ⟨hCheck, rfl, hSound.1, hSound.2.1, hSound.2.2.2.2.1,
+    fun d hd => (hSound.2.2.2.2.2 d hd).2⟩
+
+/-- **CFL Violation Refusal (`checkPdeSolverSpec_refuses_cfl_violation`)**:
+Any specification violating `cfl * aMax ≤ 1` is deterministically refused by `checkPdeSolverSpec`. -/
+theorem checkPdeSolverSpec_refuses_cfl_violation (spec : ConservationLawSpec)
+    (hViol : ¬ (spec.cfl * spec.aMax ≤ 1)) :
+    checkPdeSolverSpec spec = false := by
+  cases h : checkPdeSolverSpec spec with
+  | false => rfl
+  | true =>
+    have hCfl := (checkValid_cfl_bounds spec (checkPdeSolverSpec_valid spec h).1).2.2
+    exact False.elim (hViol hCfl)
+
+/-- **Malformed / Non-Conservative Input Refusal (`validatePdeSolverSexpr_refuses_invalid`)**:
+Whenever `parseConservationLawSexprWithDiag` fails or produces a specification rejected by
+`checkPdeSolverSpec`, `validatePdeSolverSexpr` refuses with `.error`. -/
+theorem validatePdeSolverSexpr_refuses_invalid (rawText : String)
+    (hBad : ∀ spec, parseConservationLawSexprWithDiag rawText = .ok spec → checkPdeSolverSpec spec = false) :
+    ∀ p, validatePdeSolverSexpr rawText ≠ .ok p := by
+  intro ⟨spec, plan⟩ hOk
+  obtain ⟨hParse, hCheck, _⟩ := validatePdeSolverSexpr_checks rawText spec plan hOk
+  rw [hBad spec hParse] at hCheck
+  cases hCheck
+
 /-- Human-readable summary of compile-time Futamura specialization and CSE FLOP savings. -/
 meta def summarizeConservationLawSynthesis (spec : ConservationLawSpec) : String :=
   let plan := specializeFluxSweep spec

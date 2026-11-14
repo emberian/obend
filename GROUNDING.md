@@ -34,7 +34,7 @@ Identity across packages, specialization pins, document cells, and vault logs re
 
 Both persistent vaults (`lean/Obend/Vault/Replay.lean`, `lean/Obend/Vault/Log.lean`, `lean/Obend/Vault/WorldTree.lean`) and interactive FFI sessions (`lean/Obend/FFI/Bridge.lean`) derive their in-memory world from an append-only turn log:
 
-- **Single Source of Truth & Sharded Persistence**: `state_eq_replay_log` proves that the live store of a `Replay.World` equals the fold of its hash-linked log (`log_wellLinked`), `checkpoint_is_cache` ensures snapshots never introduce unlogged state, and `Obend.Vault.ChunkedWorld` (`FastCodec.decodeExactArray_eq`, `dig_eq_unbe_logHashArray`, `writeShardedWorld`, `loadShardedWorld`) grounds O(1)-bucket world snapshots to exact `ByteArray` round-trips and 256-bit digest anchors.
+- **Single Source of Truth & Sharded Persistence**: `state_eq_replay_log` proves that the live store of a `Replay.World` equals the fold of its hash-linked log (`log_wellLinked`), `checkpoint_is_cache` ensures snapshots never introduce unlogged state, and `lean/Obend/Vault/WorldTree.lean` (`FastCodec.decodeExactArray_eq`, `dig_eq_unbe_logHashArray`, `writeShardedWorld`, `loadShardedWorld`) grounds O(1)-bucket world snapshots to exact `ByteArray` round-trips and 256-bit digest anchors.
 - **Thread-Pinned FFI Session Binding**: `Obend.FFI.SessionState` (`lean/Obend/FFI/Bridge.lean`, `!Send` `ObendSession` in `crates/obend-ffi/src/session.rs`) embeds `Obend.Vault.Replay.Session`. `turnCommitCore_preserves_reachable` proves that every FFI commit advances the underlying `Replay.World` along a valid `Log.Session.admit` step, and `verifyReceiptCore_sound` checks 56-byte Merkle receipts exclusively against `committedRoots`.
 
 ---

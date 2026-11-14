@@ -23,6 +23,7 @@ import all Obend.Tactic.DataRefinement
 import all Obend.Repair.AlgConfig
 import all Obend.Elab.DeriveRepair
 import all Obend.Repair.DeltaLensRenew
+import all Obend.Logic.Frame
 public section
 namespace Obend.Tests.Metasystem.DataRefinementAndDeriveTest
 open Obend Obend.Repair Obend.Logic Obend.Tactic.DataRefinement

@@ -145,7 +145,6 @@ import all Obend.Core.Proofs.Preservation.Cases.Pairs
 import all Obend.Core.Proofs.Preservation.Cases.Records
 import all Obend.Core.Proofs.Preservation.Cases.Split
 import all Obend.Core.Proofs.Preservation.Cases.Sums
-import all Obend.Core.Proofs.Settle
 import all Obend.Core.Proofs.StepCases
 import all Obend.Core.RangeSafe
 import all Obend.Core.RuntimeOrigins

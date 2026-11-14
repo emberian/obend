@@ -130,7 +130,6 @@ import all Obend.Spec.Parse
 import all Obend.Spec.Preview
 import all Obend.Spec.Proofs.C4
 import all Obend.Spec.Proofs.Ecosystem
-import all Obend.Spec.Proofs.PackageLaw
 import all Obend.Spec.Sha256
 import all Obend.Spec.Syntax
 import all Obend.Spec.Types

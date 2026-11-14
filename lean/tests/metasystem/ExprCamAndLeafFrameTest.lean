@@ -25,6 +25,7 @@ public import Obend.Lower.Inductive
 public import Obend.Lower.ExprCAM
 public import Obend.Leaf.Emit
 public import Obend.Tactic.Tooth
+import all Obend.Lower.Inductive
 import all Obend.Lower.ExprCAM
 import all Obend.Leaf.Emit
 

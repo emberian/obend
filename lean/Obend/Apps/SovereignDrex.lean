@@ -28,6 +28,9 @@ public import Obend.Leaf.Static
 public import Obend.Spec.CrossPackage
 public import Obend.Tactic.Tooth
 public import Obend.Elab.Workbook
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Consensus.Finality
 meta import Lean
 public meta import Obend.Elab.Workbook
 
@@ -199,7 +202,7 @@ def drexProtocol4 : Protocol :=
 
 /-- Canonical 32-byte vault root digest for Epoch 3 finality promotion. -/
 def drexVaultRoot : ByteArray :=
-  bytesOfList (List.replicate 32 0xA5)
+  ByteArray.mk (List.replicate 32 0xA5).toArray
 
 /-- Canonical 3-of-4 `FinCert` (`[0, 1, 2]` finalizing `[.block 3 227]`) for Epoch 3. -/
 def drexFinCert : FinCert :=
@@ -213,7 +216,7 @@ def drexFinalizedSent : Sent :=
 
 /-- Attested Simplex finality gate for Epoch 3 (`vaultRoot = drexVaultRoot`). -/
 def drexAttestedGate : SimplexFinalityGate :=
-  { turnId      := bytesOfList (List.replicate 32 0x03)
+  { turnId      := ByteArray.mk (List.replicate 32 0x03).toArray
     currentTier := .attested
     vaultRoot   := some drexVaultRoot }
 

@@ -16,7 +16,6 @@ import all Obend.Core.Proofs.Collect.Statements
 import all Obend.Core.Proofs.Force
 import all Obend.Core.Proofs.GroundExecution
 import all Obend.Core.Proofs.Preservation
-import all Obend.Core.Proofs.Settle
 import all Obend.Core.Term
 import all Obend.Core.TermTraverse
 import all Obend.Core.Traverse
@@ -52,13 +51,10 @@ import all Obend.Reasons
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
 import all Obend.Run.Control
-import all Obend.Run.ControlExample
 import all Obend.Run.Core4
 import all Obend.Run.Durable
-import all Obend.Run.DurableExample
 import all Obend.Run.Fold
 import all Obend.Run.Fork
-import all Obend.Run.ForkExample
 import all Obend.Run.HyperLaw
 import all Obend.Run.LawJudge
 import all Obend.Run.Negotiation
@@ -70,8 +66,8 @@ import all Obend.Run.Proofs.Invariant
 import all Obend.Run.Proofs.Shared
 import all Obend.Run.Runner
 import all Obend.Run.Shared
-import all Obend.Run.SharedExample
 import all Obend.Run.Spec
+import all Obend.Teeth.RunExamplesTeeth
 import all Obend.Slot
 import all Obend.Slot.Integrity
 import all Obend.Slot.Proofs.Negotiation

@@ -731,7 +731,12 @@ def lazyROPackage {In Out : Type} [DecidableEq In] (dom : List Out) (hne : dom �
     match roLookup x log with
     | some y => FinDist.pure (y, log)
     | none => (FinDist.uniform dom hne).map (fun y => (y, (x, y) :: log))
-def lazyRO256 : CryptoPackage ROLog256 ByteArray (BitVec 256) := lazyROPackage (bitVecEnum 256) (bitVecEnum_ne_nil 256)
+def lazyRO256 : CryptoPackage ROLog256 ByteArray (BitVec 256) where
+  init := []
+  step := fun log x =>
+    match roLookup x log with
+    | some y => FinDist.pure (y, log)
+    | none => (FinDist.uniform (bitVecEnum 256) (bitVecEnum_ne_nil 256)).map (fun y => (y, (x, y) :: log))
 def hasLogCollision {In Out : Type} [DecidableEq In] [DecidableEq Out] : ROLog In Out → Bool
   | [] => false
   | (x, y) :: rest => rest.any (fun (x', y') => (x != x') && (y == y')) || hasLogCollision rest
@@ -862,7 +867,12 @@ theorem lazyRO_collision_prob_le_birthday_dom {In Out α : Type} [DecidableEq In
 /-- **Constructive Birthday Collision Bound (`lazyRO_collision_prob_le_birthday`)**: Any $q$-query adaptive adversary against `lazyRO256` produces distinct inputs with equal 256-bit digest in its query log with probability $\le \frac{q(q-1)}{2 \cdot 2^{256}}$. -/
 theorem lazyRO_collision_prob_le_birthday {α : Type} {q : Nat} (adv : QueryProg ByteArray (BitVec 256) α q) : RatProb.le ((runProg lazyRO256 adv []).probEvent (fun (_, lf) => hasLogCollision lf))
       ⟨q * (q - 1), 2 * (2 ^ 256), Nat.mul_pos (by decide) (Nat.pow_pos (by decide))⟩ := by
-  simpa only [lazyRO256, bitVecEnum_length] using
+  have hPkg : lazyRO256 = lazyROPackage (bitVecEnum 256) (bitVecEnum_ne_nil 256) := by
+    unfold lazyRO256 lazyROPackage
+    congr 1
+    funext log x
+    cases roLookup x log <;> rfl
+  simpa only [hPkg, bitVecEnum_length] using
     lazyRO_collision_prob_le_birthday_dom (bitVecEnum 256) (bitVecEnum_ne_nil 256) (bitVecEnum_nodup 256) adv
 def extractFromROLog {In Out W : Type} [DecidableEq Out] (decode : In → Option W) (targetDigest : Out) : ROLog In Out → Option (In × W)
   | [] => none

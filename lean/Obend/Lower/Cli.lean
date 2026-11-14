@@ -119,7 +119,7 @@ def lowerCommand (name : String) (o : Options) : IO UInt32 := do
   let digest := Obend.Lower.sourceDigest src
   IO.println s!"source digest: {digest}"
   let cert : Obend.Lower.Cert := ⟨digest, term⟩
-  match Obend.Lower.format.judge.check 0 src cert with
+  match Obend.Lower.judge.check 0 src cert with
   | .ok => IO.println "lower@1: accepted"
   | _ => IO.println "lower@1: refused"
   if let some dir := o.out then

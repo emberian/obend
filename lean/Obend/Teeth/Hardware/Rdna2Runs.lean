@@ -14,6 +14,7 @@ semantics to their external reference. Tier 2: `lake build Teeth`.
 -/
 import Obend.Hardware.Gpu.Rdna2.Certified
 import Obend.AssertCompiled
+import Obend.Trailblaze.CathedralApex
 
 namespace Obend.Teeth.Hardware.Rdna2Runs
 open Obend.Hardware.Gpu.Rdna2
@@ -171,3 +172,88 @@ theorem gem5_agrees : checkGem5 gem5Vectors = true := by native_decide
 #assert_compiled gem5_agrees
 
 end Obend.Teeth.Hardware.Rdna2Runs
+
+-- from Obend/Trailblaze/CathedralApex.lean (Wave C2): the inhabitedness witness of
+-- `checkRdna2DispatchEnvelope`, real RDNA2 decode of `rdna2AddDispatch` plus slice reduction. Its
+-- kernel `rfl` decodes need `maxHeartbeats 8000000`, outside the tier-1 baseline, so it lives here.
+namespace Obend.Trailblaze.ClusterGov
+set_option autoImplicit false
+
+private def rdnaEndProgram : Obend.Hardware.Gpu.Rdna2.Inst :=
+  ⟨⟨"S_ENDPGM", false, false, true, false, [⟨"ENC_SOPP", "default", 1, []⟩]⟩,
+    Obend.Hardware.Gpu.Rdna2.enc_ENC_SOPP, ⟨"ENC_SOPP", "default", 1, []⟩,
+    [("ENCODING", 383), ("OP", 1), ("SIMM16", 0)], [0xbf810000]⟩
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
+private theorem decodeRdnaEndProgram :
+    decodeRdnaSliceInst [0xbf810000] = some (rdnaEndProgram, 1) := by
+  rfl
+
+private def rdnaAddProgram : Obend.Hardware.Gpu.Rdna2.Inst :=
+  ⟨⟨"V_ADD_NC_U32", false, false, false, false,
+    [
+      ⟨"ENC_VOP2", "default", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_INST_LITERAL", "has_lit", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_SDWA", "has_sdwa", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_SRC_SIMPLE", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_SRC_SIMPLE", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_DPP8", "has_dpp8", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP2_VOP_DPP16", "has_dpp16", 37,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"VSRC0", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"ENC_VOP3", "default", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SRC1", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_0", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"SRC1", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_1", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+      ⟨"VOP3_INST_LITERAL", "has_lit_0_has_lit_1", 293,
+        [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩, ⟨"LITERAL", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩, ⟨"LITERAL", "OPR_SRC_NOLDS", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩
+    ]⟩,
+    Obend.Hardware.Gpu.Rdna2.enc_ENC_VOP2,
+    ⟨"ENC_VOP2", "default", 37,
+      [⟨"VDST", "OPR_VGPR", "FMT_NUM_U32", 32, false, true, false, true⟩,
+       ⟨"SRC0", "OPR_SRC", "FMT_NUM_U32", 32, true, false, false, true⟩,
+       ⟨"VSRC1", "OPR_VGPR", "FMT_NUM_U32", 32, true, false, false, true⟩]⟩,
+    [("ENCODING", 0), ("OP", 37), ("SRC0", 256), ("VDST", 0), ("VSRC1", 1)], [0x4a000300]⟩
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
+private theorem decodeRdnaAddProgram :
+    decodeRdnaSliceInst [0x4a000300, 0xbf810000] = some (rdnaAddProgram, 1) := by rfl
+
+private theorem rdnaStartsWith_eval (s p : String) :
+    s.startsWith p = decide (p.toList <+: s.toList) := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [String.startsWith_string_iff, decide_eq_true_eq]
+
+private theorem rdnaDrop_eval (s : String) (n : Nat) :
+    (s.drop n).toString = String.ofList (s.toList.drop n) := by
+  rw [String.Slice.toString_eq]
+  apply String.toList_injective
+  exact String.toList_copy_drop.trans String.toList_ofList.symm
+
+attribute [local cbv_eval] rdnaStartsWith_eval rdnaDrop_eval
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 8000000 in
+/-- Real decoded addition produces an output different from either worker's input. -/
+theorem rdna2Dispatch_inhabited : ∃ d : Rdna2WavefrontDispatch,
+    checkRdna2DispatchEnvelope d = true ∧ 2 ≤ d.workgroupSlices.size ∧
+    d.hwReducedOut ≠ d.workgroupSlices[0]! ∧ d.hwReducedOut ≠ d.workgroupSlices[1]! := by
+  refine ⟨rdna2AddDispatch, ?_⟩
+  simp only [checkRdna2DispatchEnvelope, Bool.and_eq_true, decide_eq_true_eq, ← Array.all_toList]
+  repeat' apply And.intro
+  all_goals try decide +kernel
+  have hd : decodeRdnaSliceProgram rdna2AddDispatch.shaderIsaWords.size
+      rdna2AddDispatch.shaderIsaWords.toList = some [some rdnaAddProgram, some rdnaEndProgram] := by
+    change decodeRdnaSliceProgram 2 [0x4a000300, 0xbf810000] = _
+    simp only [decodeRdnaSliceProgram, decodeRdnaAddProgram, decodeRdnaEndProgram,
+      List.drop, List.replicate, List.nil_append, List.append_nil, Option.bind, pure]
+    rfl
+  rw [executeRdna2SliceReduction, hd]
+  set_option cbv.maxSteps 1000000 in cbv
+
+end Obend.Trailblaze.ClusterGov

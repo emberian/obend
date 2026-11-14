@@ -8,7 +8,7 @@ lifts it through the typing relation (`Discharges.partialTyping_instantiate`). D
 fields. Agreement and checker transport require validated instance assumptions,
 which connect declared nominal shareability to semantic resource safety. -/
 public import Obend.Core.Ty
-public import Obend.Core.EquiRecursiveSubstitutionTransport
+public import Obend.Core.EquiRecursiveSubstitution
 public import Obend.Core.Check
 public import Obend.Tactic.Cases
 import all Obend.Core.Check
