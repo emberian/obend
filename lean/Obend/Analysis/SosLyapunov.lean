@@ -43,7 +43,7 @@ set_option autoImplicit false
 /-! ## 1. Multivariate Polynomial Embedding into `RealExpr`, Partial Derivatives & Lie Derivatives -/
 
 /-- Canonical variable name `"x"`, `"x'"`, `"x''"`, ... for variable index `v : Nat`. -/
-@[expose] def polyVarName (v : Nat) : String :=
+def polyVarName (v : Nat) : String :=
   String.ofList ('x' :: List.replicate v '\'')
 
 /-- `polyVarName` is injective (`polyVarName v = polyVarName j → v = j`). -/
@@ -68,7 +68,7 @@ theorem polyVarName_inj {v j : Nat} (h : polyVarName v = polyVarName j) : v = j 
 
 /-- Lift a variable assignment `env : Nat → CanonicalRat` to a named `RealExpr` assignment
 `String → CanonicalRat` such that `polyEnvToRho env (polyVarName v) = env v`. -/
-@[expose] def polyEnvToRho (env : Nat → CanonicalRat) (name : String) : CanonicalRat :=
+def polyEnvToRho (env : Nat → CanonicalRat) (name : String) : CanonicalRat :=
   env (name.toList.length - 1)
 
 @[simp] theorem polyEnvToRho_polyVarName (env : Nat → CanonicalRat) (v : Nat) :
@@ -78,22 +78,22 @@ theorem polyVarName_inj {v j : Nat} (h : polyVarName v = polyVarName j) : v = j 
   exact congrArg env (Nat.add_sub_cancel v 1)
 
 /-- Convert a single variable power $x_j^e$ into a `RealExpr`. -/
-@[expose] def varPowerToRealExpr (j : Nat) : Nat → RealExpr
+def varPowerToRealExpr (j : Nat) : Nat → RealExpr
   | 0 => .const 1
   | e + 1 => .mul (.var (polyVarName j)) (varPowerToRealExpr j e)
 
 /-- Convert a sparse `Monomial` $\prod_{(j, e) \in m} x_j^e$ into a `RealExpr`. -/
-@[expose] def monomialToRealExpr : Monomial → RealExpr
+def monomialToRealExpr : Monomial → RealExpr
   | [] => .const 1
   | (j, e) :: rest => .mul (varPowerToRealExpr j e) (monomialToRealExpr rest)
 
 /-- Convert a list of `(Monomial × CanonicalRat)` terms into a `RealExpr`. -/
-@[expose] def polyTermsToRealExpr : List (Monomial × CanonicalRat) → RealExpr
+def polyTermsToRealExpr : List (Monomial × CanonicalRat) → RealExpr
   | [] => .const 0
   | (m, c) :: rest => .add (.mul (.const c) (monomialToRealExpr m)) (polyTermsToRealExpr rest)
 
 /-- Embed a multivariate polynomial `p : Poly` into `RealExpr`. -/
-@[expose] def polyToRealExpr (p : Poly) : RealExpr :=
+def polyToRealExpr (p : Poly) : RealExpr :=
   polyTermsToRealExpr p.terms
 
 /-- Evaluating `varPowerToRealExpr j e` under `polyEnvToRho env` equals `ratPow (env j) e`. -/
@@ -128,7 +128,7 @@ theorem polyToRealExpr_eval (env : Nat → CanonicalRat) (p : Poly) :
   evalPointPure_polyTermsToRealExpr env p.terms
 
 /-- Constant polynomial $c \in \mathbb{Q}[x_0, \dots, x_{n-1}]$. -/
-@[expose] def polyConst (c : CanonicalRat) : Poly :=
+def polyConst (c : CanonicalRat) : Poly :=
   polyOfTerm [] c
 
 @[simp] theorem polyConst_eval (env : Nat → CanonicalRat) (c : CanonicalRat) :
@@ -147,7 +147,7 @@ theorem polyToRealExpr_eval (env : Nat → CanonicalRat) (p : Poly) :
   | e + 1 => Poly.mul (polyOfTerm [(j, 1)] 1) (varPowerPoly j e)
 
 /-- Partial derivative $\frac{\partial}{\partial x_v}(x_j^e)$ as a normalized `Poly`. -/
-@[expose] def derivVarPowerPoly (v j : Nat) : Nat → Poly
+def derivVarPowerPoly (v j : Nat) : Nat → Poly
   | 0 => Poly.zero
   | e + 1 =>
     let dHead : Poly := if j == v then Poly.one else Poly.zero
@@ -156,12 +156,12 @@ theorem polyToRealExpr_eval (env : Nat → CanonicalRat) (p : Poly) :
       (Poly.mul (polyOfTerm [(j, 1)] 1) (derivVarPowerPoly v j e))
 
 /-- Convert a `Monomial` into a normalized `Poly`. -/
-@[expose] def monomialToPoly : Monomial → Poly
+def monomialToPoly : Monomial → Poly
   | [] => Poly.one
   | (j, e) :: rest => Poly.mul (varPowerPoly j e) (monomialToPoly rest)
 
 /-- Partial derivative $\frac{\partial}{\partial x_v}\left(\prod_{(j, e) \in m} x_j^e\right)$ via Leibniz product rule. -/
-@[expose] def derivMonomialPoly (v : Nat) : Monomial → Poly
+def derivMonomialPoly (v : Nat) : Monomial → Poly
   | [] => Poly.zero
   | (j, e) :: rest =>
     Poly.add
@@ -169,7 +169,7 @@ theorem polyToRealExpr_eval (env : Nat → CanonicalRat) (p : Poly) :
       (Poly.mul (varPowerPoly j e) (derivMonomialPoly v rest))
 
 /-- Partial derivative of a list of `(Monomial × CanonicalRat)` terms with respect to variable `v`. -/
-@[expose] def derivTermsPoly (v : Nat) : List (Monomial × CanonicalRat) → Poly
+def derivTermsPoly (v : Nat) : List (Monomial × CanonicalRat) → Poly
   | [] => Poly.zero
   | (m, c) :: rest =>
     Poly.add
@@ -178,16 +178,16 @@ theorem polyToRealExpr_eval (env : Nat → CanonicalRat) (p : Poly) :
 
 /-- **Formal Partial Derivative of a Multivariate Polynomial (`polyPartialDeriv`)**:
 Computes $\frac{\partial p}{\partial x_v} \in \mathbb{Q}[x_0, \dots, x_{n-1}]$. -/
-@[expose] def polyPartialDeriv (v : Nat) (p : Poly) : Poly :=
+def polyPartialDeriv (v : Nat) (p : Poly) : Poly :=
   derivTermsPoly v p.terms
 
 /-- **Polynomial Gradient Vector (`polyGradient`)**:
 Computes $\nabla p = \left[\frac{\partial p}{\partial x_0}, \dots, \frac{\partial p}{\partial x_{\text{dim}-1}}\right]$. -/
-@[expose] def polyGradient (dim : Nat) (p : Poly) : List Poly :=
+def polyGradient (dim : Nat) (p : Poly) : List Poly :=
   (List.range dim).map (fun i => polyPartialDeriv i p)
 
 /-- Auxiliary accumulator for the polynomial Lie derivative $\sum_{k} \frac{\partial p}{\partial x_{\text{idx}+k}} f_k$. -/
-@[expose] def lieDerivativePolyAux (idx : Nat) (p : Poly) : List Poly → Poly
+def lieDerivativePolyAux (idx : Nat) (p : Poly) : List Poly → Poly
   | [] => Poly.zero
   | f_i :: rest =>
     Poly.add (Poly.mul (polyPartialDeriv idx p) f_i) (lieDerivativePolyAux (idx + 1) p rest)
@@ -195,7 +195,7 @@ Computes $\nabla p = \left[\frac{\partial p}{\partial x_0}, \dots, \frac{\partia
 /-- **Polynomial Lie Derivative (`lieDerivativePoly`)**:
 Computes $\mathcal{L}_f V(x) = \nabla V(x) \cdot f(x) = \sum_{i=0}^{n-1} \frac{\partial V}{\partial x_i}(x) \cdot f_i(x)$
 along the polynomial vector field `vectorField = [f_0, ..., f_{n-1}]`. -/
-@[expose] def lieDerivativePoly (p : Poly) (vectorField : List Poly) : Poly :=
+def lieDerivativePoly (p : Poly) (vectorField : List Poly) : Poly :=
   lieDerivativePolyAux 0 p vectorField
 
 theorem eval_polyOfTerm_var1 (env : Nat → CanonicalRat) (j : Nat) :
@@ -297,7 +297,7 @@ theorem polyPartialDeriv_agrees_with_symbolicDeriv_and_reverseAD
 /-- Check that `goal(x) ≥ 0` on the semialgebraic set $\{x \mid \forall g \in \text{ineqs}, g(x) \ge 0 \;\wedge\; \forall h \in \text{eqs}, h(x) = 0\}$
 via a `PositivstellensatzCert` verifying the exact polynomial identity:
 $$\text{goal}(x) = \sigma_0(x) + \sum_{(s_j, j)} s_j(x) g_j(x) + \sum_{(\lambda_\ell, \ell)} \lambda_\ell(x) h_\ell(x).$$ -/
-@[expose] def checkPsatzNonneg
+def checkPsatzNonneg
     (goal : Poly)
     (ineqs eqs : List Poly)
     (cert : PositivstellensatzCert) : Bool :=
@@ -347,24 +347,24 @@ theorem checkPsatzNonneg_sound
 /-! ## 3. Sum-of-Squares (SOS) Nonlinear Lyapunov Stability (`checkSosLyapunov`, `checkSosLyapunov_sound`) -/
 
 /-- Zero origin assignment `originEnv : Nat → CanonicalRat := fun _ => 0`. -/
-@[expose] def originEnv : Nat → CanonicalRat := fun _ => 0
+def originEnv : Nat → CanonicalRat := fun _ => 0
 
 /-- Check that every active variable factor `(v, e)` (`e ≠ 0`) in monomial `m` satisfies `v < dim`. -/
-@[expose] def monomialVarsBounded (dim : Nat) : Monomial → Bool
+def monomialVarsBounded (dim : Nat) : Monomial → Bool
   | [] => true
   | (v, e) :: rest => (decide (e = 0) || decide (v < dim)) && monomialVarsBounded dim rest
 
 /-- Check that every nonzero term in `p` only references state variables `v < dim`. -/
-@[expose] def polyTermsVarsBounded (dim : Nat) : List (Monomial × CanonicalRat) → Bool
+def polyTermsVarsBounded (dim : Nat) : List (Monomial × CanonicalRat) → Bool
   | [] => true
   | (m, c) :: rest => (decide (c = 0) || monomialVarsBounded dim m) && polyTermsVarsBounded dim rest
 
 /-- Check that polynomial `p` only references state variables `0 ≤ v < dim`. -/
-@[expose] def polyVarsBounded (dim : Nat) (p : Poly) : Bool :=
+def polyVarsBounded (dim : Nat) (p : Poly) : Bool :=
   polyTermsVarsBounded dim p.terms
 
 /-- Check pairwise distinctness of a `List Nat` (used for Index-1 algebraic variable lists). -/
-@[expose] def natListNodupB : List Nat → Bool
+def natListNodupB : List Nat → Bool
   | [] => true
   | x :: xs => !(xs.contains x) && natListNodupB xs
 
@@ -427,7 +427,7 @@ theorem sos_list_all_iff_forall {α : Type} (p : α → Bool) :
       exact ⟨h x (Or.inl rfl), fun y hy => h y (Or.inr hy)⟩
 
 /-- Squared Euclidean norm polynomial $\|x\|^2 = \sum_{i=0}^{\text{dim}-1} x_i^2$. -/
-@[expose] def sumVarSquaresPoly : Nat → Poly
+def sumVarSquaresPoly : Nat → Poly
   | 0 => Poly.zero
   | i + 1 => Poly.add (sumVarSquaresPoly i) (Poly.sqr (polyOfTerm [(i, 1)] 1))
 
@@ -455,7 +455,7 @@ structure SosLyapunovSpec where
   lyapunovV   : Poly
   radialEps   : CanonicalRat
   decayGamma  : CanonicalRat
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- SOS Positivstellensatz witness for `SosLyapunovSpec`:
 * `posDefCert`: certifies $V(x) - \varepsilon \|x\|^2 \ge 0$ on `domainIneqs`,
@@ -463,10 +463,10 @@ structure SosLyapunovSpec where
 structure SosLyapunovWitness where
   posDefCert   : PositivstellensatzCert
   lieDecayCert : PositivstellensatzCert
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Structural dimension and variable-index well-formedness check for `SosLyapunovSpec`. -/
-@[expose] def checkSosLyapunovDims (spec : SosLyapunovSpec) : Bool :=
+def checkSosLyapunovDims (spec : SosLyapunovSpec) : Bool :=
   decide (0 < spec.dim) &&
   decide (spec.vectorField.length = spec.dim) &&
   polyVarsBounded spec.dim spec.lyapunovV &&
@@ -480,7 +480,7 @@ Verifies:
 1. $\varepsilon > 0$, $\gamma \ge 0$, and $V(0) = 0$,
 2. **Strict Positive Definiteness**: $V(x) - \varepsilon \|x\|^2 \ge 0$ via `checkPsatzNonneg`,
 3. **Negative-Definite Lie Derivative Decay**: $-\mathcal{L}_f V(x) - \gamma V(x) \ge 0$ via `checkPsatzNonneg`. -/
-@[expose] def checkSosLyapunov (spec : SosLyapunovSpec) (w : SosLyapunovWitness) : Bool :=
+def checkSosLyapunov (spec : SosLyapunovSpec) (w : SosLyapunovWitness) : Bool :=
   let posDefGoal := Poly.sub spec.lyapunovV (Poly.scale spec.radialEps (sumVarSquaresPoly spec.dim))
   let lieV := lieDerivativePoly spec.lyapunovV spec.vectorField
   let lieDecayGoal := Poly.sub (Poly.neg lieV) (Poly.scale spec.decayGamma spec.lyapunovV)
@@ -564,7 +564,7 @@ structure SosCbfSpec where
   barrierB    : Poly
   unsafePoly  : Poly
   classKAlpha : CanonicalRat
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- SOS Positivstellensatz witness for `SosCbfSpec`:
 * `unsafeRefuteCert`: Stengle Positivstellensatz refutation of $\{B(x) \ge 0, u_{\text{unsafe}}(x) \ge 0\}$,
@@ -572,10 +572,10 @@ structure SosCbfSpec where
 structure SosCbfWitness where
   unsafeRefuteCert     : PositivstellensatzCert
   nagumoInvarianceCert : PositivstellensatzCert
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Structural dimension and variable-index well-formedness check for `SosCbfSpec`. -/
-@[expose] def checkSosCbfDims (spec : SosCbfSpec) : Bool :=
+def checkSosCbfDims (spec : SosCbfSpec) : Bool :=
   let dim := spec.vectorField.length
   decide (0 < dim) &&
   polyVarsBounded dim spec.barrierB &&
@@ -591,7 +591,7 @@ Verifies:
    certifying that $B(x) \ge 0$ and $u_{\text{unsafe}}(x) \ge 0$ are mutually infeasible on the domain, and
 2. **Nagumo / Ames Barrier Forward Invariance**: $\mathcal{L}_f B(x) + \alpha B(x) \ge 0$ on
    $B(x) \ge 0$ and `domainIneqs` via `checkPsatzNonneg`. -/
-@[expose] def checkSosCbf (spec : SosCbfSpec) (w : SosCbfWitness) : Bool :=
+def checkSosCbf (spec : SosCbfSpec) (w : SosCbfWitness) : Bool :=
   let qUnsafe : PositivstellensatzQuery :=
     { strictPos := []
     , nonneg    := spec.barrierB :: spec.unsafePoly :: spec.domainIneqs
@@ -676,7 +676,7 @@ structure DaeManifoldSpec where
   algVars        : List Nat := [1]
   algJacobianDet : Poly
   regDelta       : CanonicalRat
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Witness for `DaeManifoldSpec`:
 * `tangencyCert`: primary Gröbner/Buchberger ideal membership witness certifying $\mathcal{L}_f h_r \in \langle h_1, \dots, h_m \rangle$,
@@ -687,10 +687,10 @@ structure DaeManifoldWitness where
   tangencyCert   : IdealMembershipCert
   tangencyCerts  : List IdealMembershipCert := []
   regularityCert : PositivstellensatzCert
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Remove the `k`-th element of a list (used for Laplace cofactor expansion). -/
-@[expose] def listEraseIdx' {α : Type} : List α → Nat → List α
+def listEraseIdx' {α : Type} : List α → Nat → List α
   | [], _ => []
   | _ :: xs, 0 => xs
   | x :: xs, k + 1 => x :: listEraseIdx' xs k
@@ -699,7 +699,7 @@ structure DaeManifoldWitness where
 first row: $\det M = \sum_j (-1)^j M_{0,j} \det M^{(0,j)}$. Structural recursion on the row list;
 a ragged or empty matrix has determinant `Poly.one` for `[]` (the empty product) and the expansion
 is over whatever entries the first row has. -/
-@[expose] def polyMatrixDet : List (List Poly) → Poly
+def polyMatrixDet : List (List Poly) → Poly
   | [] => Poly.one
   | row :: rest =>
     (List.range row.length).foldl
@@ -713,19 +713,19 @@ termination_by rows => rows.length
 decreasing_by all_goals simp_wf
 
 /-- The symbolic algebraic Jacobian matrix $J_{i,j} = \partial h_i / \partial x_{v_j}$ as rows. -/
-@[expose] def symbolicAlgJacobian (algConstraints : List Poly) (algVars : List Nat) : List (List Poly) :=
+def symbolicAlgJacobian (algConstraints : List Poly) (algVars : List Nat) : List (List Poly) :=
   algConstraints.map (fun h => algVars.map (fun v => polyPartialDeriv v h))
 
 /-- Compute the symbolic algebraic Jacobian determinant $\det\left(\frac{\partial h_i}{\partial x_{v_j}}\right)$
 by Laplace expansion of `symbolicAlgJacobian` (`Poly.zero` when the system is not square). -/
-@[expose] def computeSymbolicAlgJacobianDet (algConstraints : List Poly) (algVars : List Nat) : Poly :=
+def computeSymbolicAlgJacobianDet (algConstraints : List Poly) (algVars : List Nat) : Poly :=
   if algConstraints.length != algVars.length then
     Poly.zero
   else
     polyMatrixDet (symbolicAlgJacobian algConstraints algVars)
 
 /-- Structural dimension and variable-index well-formedness check for `DaeManifoldSpec`. -/
-@[expose] def checkDaeManifoldDims (spec : DaeManifoldSpec) : Bool :=
+def checkDaeManifoldDims (spec : DaeManifoldSpec) : Bool :=
   let dim := spec.vectorField.length
   decide (0 < dim) &&
   decide (spec.algConstraints.length = spec.algVars.length) &&
@@ -742,7 +742,7 @@ by Laplace expansion of `symbolicAlgJacobian` (`Poly.zero` when the system is no
    `computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars`,
 3. `0 < spec.regDelta`, and
 4. $(\det J_{\text{alg}}(x))^2 - \delta_{\text{reg}} \ge 0$ on $\mathcal{M}$ via `checkPsatzNonneg`. -/
-@[expose] def checkDaeIndex1Regularity (spec : DaeManifoldSpec) (regCert : PositivstellensatzCert) : Bool :=
+def checkDaeIndex1Regularity (spec : DaeManifoldSpec) (regCert : PositivstellensatzCert) : Bool :=
   let symDet := computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars
   let regGoal := Poly.sub (Poly.sqr spec.algJacobianDet) (polyConst spec.regDelta)
   checkDaeManifoldDims spec &&
@@ -769,7 +769,7 @@ theorem sos_list_any_iff_exists (p : IdealMembershipCert → Bool) :
 
 /-- Check ideal membership of $\mathcal{L}_f h_r$ in $\langle h_1, \dots, h_m \rangle$ using either
 the primary `w.tangencyCert` or any per-constraint witness in `w.tangencyCerts`. -/
-@[expose] def checkConstraintTangency (spec : DaeManifoldSpec) (w : DaeManifoldWitness) (h_r : Poly) : Bool :=
+def checkConstraintTangency (spec : DaeManifoldSpec) (w : DaeManifoldWitness) (h_r : Poly) : Bool :=
   let lieH := lieDerivativePoly h_r spec.vectorField
   checkIdealMembershipCert lieH spec.algConstraints w.tangencyCert ||
   w.tangencyCerts.any (fun c => checkIdealMembershipCert lieH spec.algConstraints c)
@@ -779,7 +779,7 @@ Verifies:
 1. **Dimension, Variable-Scope & Symbolic Index-1 Jacobian Regularity** (`checkDaeIndex1Regularity`), and
 2. **Algebraic Manifold Tangency**: for every constraint $h_r \in \text{algConstraints}$, its Lie
    derivative $\mathcal{L}_f h_r$ is certified in $\langle h_1, \dots, h_m \rangle$ via `checkConstraintTangency`. -/
-@[expose] def checkDaeManifold (spec : DaeManifoldSpec) (w : DaeManifoldWitness) : Bool :=
+def checkDaeManifold (spec : DaeManifoldSpec) (w : DaeManifoldWitness) : Bool :=
   spec.algConstraints.all (checkConstraintTangency spec w) &&
   checkDaeIndex1Regularity spec w.regularityCert
 
@@ -870,14 +870,14 @@ structure SosLyapunovProblem where
   lyapunov : SosLyapunovSpec
   cbf      : SosCbfSpec
   dae      : DaeManifoldSpec
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Unified certificate bundle for `"sos-lyapunov-cbf@1"`. -/
 structure SosLyapunovCert where
   lyapunovWitness : SosLyapunovWitness
   cbfWitness      : SosCbfWitness
   daeWitness      : DaeManifoldWitness
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Refusal clause for `sosLyapunovJudge`. -/
 inductive SosLyapunovClause where
@@ -885,10 +885,10 @@ inductive SosLyapunovClause where
   | lyapunovFailed
   | cbfFailed
   | daeManifoldFailed
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Structural well-formedness check across all three components of `SosLyapunovProblem`. -/
-@[expose] def checkSosProblemWellFormed (prob : SosLyapunovProblem) : Bool :=
+def checkSosProblemWellFormed (prob : SosLyapunovProblem) : Bool :=
   checkSosLyapunovDims prob.lyapunov &&
   decide (0 < prob.lyapunov.radialEps) &&
   decide (0 ≤ prob.lyapunov.decayGamma) &&
@@ -928,7 +928,7 @@ def SosLyapunovProblem.SemanticMeaning (prob : SosLyapunovProblem) : Prop :=
      prob.dae.algJacobianDet.eval env ≠ 0)
 
 /-- Verdict checker for `sosLyapunovJudge`. -/
-@[expose] def checkSosLyapunovProblem
+def checkSosLyapunovProblem
     (_grade : Nat)
     (prob : SosLyapunovProblem)
     (cert : SosLyapunovCert) : Judge.Verdict SosLyapunovClause :=
@@ -1035,21 +1035,21 @@ instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
 /-! ## 7. Canonical Showcase Models: 2D Nonlinear Cubic Damping, Barrier Safety & Index-1 DAE Manifold -/
 
 /-- Variable $x_0$ as `Poly`. -/
-@[expose] def x0Poly : Poly := polyOfTerm [(0, 1)] 1
+def x0Poly : Poly := polyOfTerm [(0, 1)] 1
 
 /-- Variable $x_1$ as `Poly`. -/
-@[expose] def x1Poly : Poly := polyOfTerm [(1, 1)] 1
+def x1Poly : Poly := polyOfTerm [(1, 1)] 1
 
 /-- 2D nonlinear cubic-damped oscillator vector field:
 $$\dot{x}_0 = -x_0 - x_0^3 + x_1, \qquad \dot{x}_1 = -x_0 - x_1 - x_1^3.$$ -/
-@[expose] def cubicDampedVectorField2D : List Poly :=
+def cubicDampedVectorField2D : List Poly :=
   [ Poly.add (Poly.neg x0Poly) (Poly.add (Poly.neg (Poly.mul x0Poly (Poly.sqr x0Poly))) x1Poly)
   , Poly.sub (Poly.neg x0Poly) (Poly.add x1Poly (Poly.mul x1Poly (Poly.sqr x1Poly))) ]
 
 /-- Candidate Lyapunov function $V(x_0, x_1) = x_0^2 + x_1^2$ with $\varepsilon = 1/2$, $\gamma = 2$:
 $$\mathcal{L}_f V = 2 x_0(-x_0 - x_0^3 + x_1) + 2 x_1(-x_0 - x_1 - x_1^3) = -2(x_0^2 + x_1^2) - 2(x_0^4 + x_1^4),$$
 so $-\mathcal{L}_f V - 2 V = 2 x_0^4 + 2 x_1^4 = 2(x_0^2)^2 + 2(x_1^2)^2 \ge 0$! -/
-@[expose] def goldenLyapunovSpec2D : SosLyapunovSpec where
+def goldenLyapunovSpec2D : SosLyapunovSpec where
   dim         := 2
   vectorField := cubicDampedVectorField2D
   domainIneqs := []
@@ -1060,7 +1060,7 @@ so $-\mathcal{L}_f V - 2 V = 2 x_0^4 + 2 x_1^4 = 2(x_0^2)^2 + 2(x_1^2)^2 \ge 0$!
 /-- SOS witness for `goldenLyapunovSpec2D`:
 * $V - \frac{1}{2}(x_0^2 + x_1^2) = \frac{1}{2} x_0^2 + \frac{1}{2} x_1^2$,
 * $-\mathcal{L}_f V - 2 V = 2 (x_0^2)^2 + 2 (x_1^2)^2$. -/
-@[expose] def goldenLyapunovWitness2D : SosLyapunovWitness where
+def goldenLyapunovWitness2D : SosLyapunovWitness where
   posDefCert :=
     { monoidIndices := []
     , sigma0        := { terms := [(CanonicalRat.mk 1 2, x0Poly), (CanonicalRat.mk 1 2, x1Poly)] }
@@ -1077,7 +1077,7 @@ so $-\mathcal{L}_f V - 2 V = 2 x_0^4 + 2 x_1^4 = 2(x_0^2)^2 + 2(x_1^2)^2 \ge 0$!
 * Unsafe set $u_{\text{unsafe}}(x) = x_0^2 + x_1^2 - 2 \ge 0$ (exterior of radius $\sqrt{2}$),
 * Class-$\mathcal{K}$ parameter $\alpha = 2$:
   $\mathcal{L}_f B + 2 B = 2(x_0^2 + x_1^2) + 2(1 - x_0^2 - x_1^2) = 2 \cdot 1^2 \ge 0$! -/
-@[expose] def goldenCbfSpec2D : SosCbfSpec where
+def goldenCbfSpec2D : SosCbfSpec where
   vectorField := [Poly.neg x0Poly, Poly.neg x1Poly]
   domainIneqs := []
   barrierB    := Poly.sub Poly.one (Poly.add (Poly.sqr x0Poly) (Poly.sqr x1Poly))
@@ -1087,7 +1087,7 @@ so $-\mathcal{L}_f V - 2 V = 2 x_0^4 + 2 x_1^4 = 2(x_0^2)^2 + 2(x_1^2)^2 \ge 0$!
 /-- SOS witness for `goldenCbfSpec2D`:
 * Stengle refutation: $1 + 1 \cdot B(x) + 1 \cdot u_{\text{unsafe}}(x) = 0$,
 * Nagumo invariance: $\mathcal{L}_f B + 2 B = 2 \cdot 1^2$. -/
-@[expose] def goldenCbfWitness2D : SosCbfWitness where
+def goldenCbfWitness2D : SosCbfWitness where
   unsafeRefuteCert :=
     { monoidIndices := []
     , sigma0        := { terms := [] }
@@ -1105,7 +1105,7 @@ under tangent flow $\dot{x}_0 = -x_0, \dot{x}_1 = 2 x_0^2$:
 * $\mathcal{L}_f h_1 = 2 x_0(-x_0) + 1 \cdot (2 x_0^2) = 0 \in \langle h_1 \rangle$,
 * Exact symbolic algebraic Jacobian $\frac{\partial h_1}{\partial x_1} = 1 = \text{Poly.one}$,
   so $(\det J_{\text{alg}})^2 - \frac{1}{2} = \frac{1}{2} \cdot 1^2 \ge 0$ everywhere! -/
-@[expose] def goldenCircleDaeSpec : DaeManifoldSpec where
+def goldenCircleDaeSpec : DaeManifoldSpec where
   vectorField    := [Poly.neg x0Poly, Poly.scale 2 (Poly.sqr x0Poly)]
   domainIneqs    := []
   algConstraints := [Poly.sub (Poly.add (Poly.sqr x0Poly) x1Poly) Poly.one]
@@ -1114,7 +1114,7 @@ under tangent flow $\dot{x}_0 = -x_0, \dot{x}_1 = 2 x_0^2$:
   regDelta       := CanonicalRat.mk 1 2
 
 /-- Witness for `goldenCircleDaeSpec`. -/
-@[expose] def goldenCircleDaeWitness : DaeManifoldWitness where
+def goldenCircleDaeWitness : DaeManifoldWitness where
   tangencyCert  := { quotients := [] }
   tangencyCerts := [{ quotients := [] }]
   regularityCert :=
@@ -1124,19 +1124,19 @@ under tangent flow $\dot{x}_0 = -x_0, \dot{x}_1 = 2 x_0^2$:
     , idealTerms    := [] }
 
 /-- Canonical problem bundle for `"sos-lyapunov-cbf@1"`. -/
-@[expose] def goldenSosProblem : SosLyapunovProblem where
+def goldenSosProblem : SosLyapunovProblem where
   lyapunov := goldenLyapunovSpec2D
   cbf      := goldenCbfSpec2D
   dae      := goldenCircleDaeSpec
 
 /-- Canonical valid certificate bundle for `"sos-lyapunov-cbf@1"`. -/
-@[expose] def goldenSosCert : SosLyapunovCert where
+def goldenSosCert : SosLyapunovCert where
   lyapunovWitness := goldenLyapunovWitness2D
   cbfWitness      := goldenCbfWitness2D
   daeWitness      := goldenCircleDaeWitness
 
 /-- Planted bad certificate bundle for `"sos-lyapunov-cbf@1"` (empty SOS witness for $V - \varepsilon\|x\|^2$). -/
-@[expose] def badSosCert : SosLyapunovCert where
+def badSosCert : SosLyapunovCert where
   lyapunovWitness :=
     { goldenLyapunovWitness2D with
       posDefCert := { monoidIndices := [], sigma0 := { terms := [] }, coneTerms := [], idealTerms := [] } }
@@ -1163,9 +1163,9 @@ inductive SosJson where
 
 namespace SosJson
 
-@[expose] def ofInt (n : Int) : SosJson := .num n 0
+def ofInt (n : Int) : SosJson := .num n 0
 def ofNat (n : Nat) : SosJson := .num (Int.ofNat n) 0
-@[expose] def ofNatList (ns : List Nat) : SosJson := .arr (ns.map ofNat)
+def ofNatList (ns : List Nat) : SosJson := .arr (ns.map ofNat)
 def mkObj (kvs : List (String × SosJson)) : SosJson :=
   .obj (kvs.map fun (k, v) => (k.toList, v))
 
@@ -1173,7 +1173,7 @@ def mkObj (kvs : List (String × SosJson)) : SosJson :=
   | [], _ => none
   | (k0, v0) :: rest, k => if k0 == k then some v0 else lookupField rest k
 
-@[expose] def getObjVal? (j : SosJson) (k : String) : Except String SosJson :=
+abbrev getObjVal? (j : SosJson) (k : String) : Except String SosJson :=
   match j with
   | .obj fields =>
     match lookupField fields k.toList with
@@ -1181,42 +1181,42 @@ def mkObj (kvs : List (String × SosJson)) : SosJson :=
     | none   => .error s!"property not found: {k}"
   | _ => .error s!"object expected for key '{k}'"
 
-@[expose] def getStr? (j : SosJson) : Except String String :=
+abbrev getStr? (j : SosJson) : Except String String :=
   match j with
   | .str cs => .ok (String.ofList cs)
   | _       => .error "string expected"
 
-@[expose] def getInt? (j : SosJson) : Except String Int :=
+abbrev getInt? (j : SosJson) : Except String Int :=
   match j with
   | .num m 0 => .ok m
   | _        => .error "integer expected"
 
-@[expose] def getNat? (j : SosJson) : Except String Nat :=
+abbrev getNat? (j : SosJson) : Except String Nat :=
   match j with
   | .num (.ofNat n) 0 => .ok n
   | _                 => .error "natural number expected"
 
-@[expose] def getArr? (j : SosJson) : Except String (List SosJson) :=
+abbrev getArr? (j : SosJson) : Except String (List SosJson) :=
   match j with
   | .arr xs => .ok xs
   | _       => .error "array expected"
 
-@[expose] def getObjStr? (j : SosJson) (k : String) : Except String String :=
+abbrev getObjStr? (j : SosJson) (k : String) : Except String String :=
   j.getObjVal? k >>= getStr?
 
-@[expose] def getObjInt? (j : SosJson) (k : String) : Except String Int :=
+abbrev getObjInt? (j : SosJson) (k : String) : Except String Int :=
   j.getObjVal? k >>= getInt?
 
-@[expose] def getObjNat? (j : SosJson) (k : String) : Except String Nat :=
+abbrev getObjNat? (j : SosJson) (k : String) : Except String Nat :=
   j.getObjVal? k >>= getNat?
 
-@[expose] def getObjNatList? (j : SosJson) (k : String) : Except String (List Nat) := do
+abbrev getObjNatList? (j : SosJson) (k : String) : Except String (List Nat) := do
   let xs ← j.getObjVal? k >>= getArr?
   xs.mapM getNat?
 
 end SosJson
 
-@[expose] def sosJsonNatWriteCore : Nat → Nat → List Char → List Char
+def sosJsonNatWriteCore : Nat → Nat → List Char → List Char
   | 0, _, acc => acc
   | fuel + 1, n, acc =>
     let d : Char :=
@@ -1230,14 +1230,14 @@ end SosJson
 /-- Unbounded decimal `Nat` serializer: guarantees at least `n.log2 + 2` digits of fuel
 (`digits_10(n) ≤ bits_2(n) < n.log2 + 2`), eliminating the `fuel = 24` leading-digit truncation
 bug (`10^24 -> "000...0" -> 0`). -/
-@[expose] def sosJsonNatWrite (fuel n : Nat) (acc : List Char) : List Char :=
+def sosJsonNatWrite (fuel n : Nat) (acc : List Char) : List Char :=
   sosJsonNatWriteCore (Nat.max fuel (n.log2 + 2)) n acc
 
-@[expose] def sosJsonIntWrite : Int → List Char → List Char
+def sosJsonIntWrite : Int → List Char → List Char
   | .ofNat n, acc   => sosJsonNatWrite (n.log2 + 2) n acc
   | .negSucc n, acc => '-' :: sosJsonNatWrite ((n + 1).log2 + 2) (n + 1) acc
 
-@[expose] def sosJsonEscapeWrite : List Char → List Char → List Char
+def sosJsonEscapeWrite : List Char → List Char → List Char
   | [], acc => acc
   | '"' :: cs, acc  => '\\' :: '"' :: sosJsonEscapeWrite cs acc
   | '\\' :: cs, acc => '\\' :: '\\' :: sosJsonEscapeWrite cs acc
@@ -1246,16 +1246,16 @@ bug (`10^24 -> "000...0" -> 0`). -/
   | '\t' :: cs, acc => '\\' :: 't' :: sosJsonEscapeWrite cs acc
   | c :: cs, acc    => c :: sosJsonEscapeWrite cs acc
 
-@[expose] def sosJsonQuoteCharsWrite (cs : List Char) (acc : List Char) : List Char :=
+def sosJsonQuoteCharsWrite (cs : List Char) (acc : List Char) : List Char :=
   '"' :: sosJsonEscapeWrite cs ('"' :: acc)
 
-@[expose] def sosJsonWriteArrElems (writeVal : SosJson → List Char → List Char) :
+def sosJsonWriteArrElems (writeVal : SosJson → List Char → List Char) :
     List SosJson → List Char → List Char
   | [], acc => acc
   | [x], acc => writeVal x acc
   | x :: xs, acc => writeVal x (',' :: sosJsonWriteArrElems writeVal xs acc)
 
-@[expose] def sosJsonWriteObjFields (writeVal : SosJson → List Char → List Char) :
+def sosJsonWriteObjFields (writeVal : SosJson → List Char → List Char) :
     List (List Char × SosJson) → List Char → List Char
   | [], acc => acc
   | [(k, v)], acc => sosJsonQuoteCharsWrite k (':' :: writeVal v acc)
@@ -1263,7 +1263,7 @@ bug (`10^24 -> "000...0" -> 0`). -/
     sosJsonQuoteCharsWrite k (':' :: writeVal v (',' :: sosJsonWriteObjFields writeVal rest acc))
 
 mutual
-@[expose] def sosJsonWriteVal : SosJson → List Char → List Char
+def sosJsonWriteVal : SosJson → List Char → List Char
   | .null, acc => 'n' :: 'u' :: 'l' :: 'l' :: acc
   | .bool true, acc => 't' :: 'r' :: 'u' :: 'e' :: acc
   | .bool false, acc => 'f' :: 'a' :: 'l' :: 's' :: 'e' :: acc
@@ -1275,13 +1275,13 @@ mutual
   | .obj fields, acc => '{' :: sosJsonWriteObj fields ('}' :: acc)
 termination_by structural j => j
 
-@[expose] def sosJsonWriteArr : List SosJson → List Char → List Char
+def sosJsonWriteArr : List SosJson → List Char → List Char
   | [], acc => acc
   | [x], acc => sosJsonWriteVal x acc
   | x :: xs, acc => sosJsonWriteVal x (',' :: sosJsonWriteArr xs acc)
 termination_by structural xs => xs
 
-@[expose] def sosJsonWriteObj : List (List Char × SosJson) → List Char → List Char
+def sosJsonWriteObj : List (List Char × SosJson) → List Char → List Char
   | [], acc => acc
   | [(k, v)], acc => sosJsonQuoteCharsWrite k (':' :: sosJsonWriteVal v acc)
   | (k, v) :: rest, acc =>
@@ -1290,10 +1290,10 @@ termination_by structural fs => fs
 end
 
 /-- Structural difference-list serializer for `SosJson` (never clamps deep JSON to `"null"`). -/
-@[expose] def sosJsonWriteAux (_fuel : Nat) (j : SosJson) (acc : List Char) : List Char :=
+def sosJsonWriteAux (_fuel : Nat) (j : SosJson) (acc : List Char) : List Char :=
   sosJsonWriteVal j acc
 
-@[expose] def sosJsonCompress (j : SosJson) : String :=
+def sosJsonCompress (j : SosJson) : String :=
   String.ofList (sosJsonWriteVal j [])
 
 @[expose] def sosJsonSkipWs : List Char → List Char
@@ -1315,7 +1315,7 @@ end
   | '\\' :: _, _ => none
   | c :: rest, rev => sosJsonParseStrBody rest (c :: rev)
 
-@[expose] def sosJsonDigitVal? : Char → Option Nat
+abbrev sosJsonDigitVal? : Char → Option Nat
   | '0' => some 0 | '1' => some 1 | '2' => some 2 | '3' => some 3 | '4' => some 4
   | '5' => some 5 | '6' => some 6 | '7' => some 7 | '8' => some 8 | '9' => some 9
   | _   => none
@@ -1334,7 +1334,7 @@ end
     | some d => sosJsonParseFracDigits rest (acc * 10 + d) (exp + 1)
     | none   => (acc, exp, c :: rest)
 
-@[expose] def sosJsonParseSciExp (m : Int) (fracExp : Nat) (cs : List Char) : Option ((Int × Nat) × List Char) :=
+abbrev sosJsonParseSciExp (m : Int) (fracExp : Nat) (cs : List Char) : Option ((Int × Nat) × List Char) :=
   match cs with
   | 'e' :: expCs | 'E' :: expCs =>
     let (expNeg, expDigitsCs) :=
@@ -1353,7 +1353,7 @@ end
       some ((m, fracExp - sciExp), rest)
   | _ => some ((m, fracExp), cs)
 
-@[expose] def sosJsonParseNum (cs : List Char) : Option ((Int × Nat) × List Char) :=
+abbrev sosJsonParseNum (cs : List Char) : Option ((Int × Nat) × List Char) :=
   let (neg, cs1) :=
     match cs with
     | '-' :: r => (true, r)
@@ -1400,7 +1400,7 @@ end
     | _ => none
 
 /-- Kernel-reducible recursive-descent JSON AST parser with input-length-proportional fuel. -/
-@[expose] def sosJsonParseAux : Nat → List Char → Option (SosJson × List Char)
+def sosJsonParseAux : Nat → List Char → Option (SosJson × List Char)
   | 0, _ => none
   | fuel + 1, cs =>
     match sosJsonSkipWs cs with
@@ -1427,7 +1427,7 @@ end
       let ((m, e), rest) ← sosJsonParseNum numCs
       some (.num m e, rest)
 
-@[expose] def sosJsonParse (s : String) : Except String SosJson :=
+def sosJsonParse (s : String) : Except String SosJson :=
   let cs := s.toList
   match sosJsonParseAux (cs.length + 1) cs with
   | some (j, rest) =>
@@ -1436,13 +1436,13 @@ end
   | none => .error "malformed JSON"
 
 /-- Encode a `CanonicalRat` as an integer when `den = 1` or `{"num": n, "den": d}` otherwise. -/
-@[expose] def sosJsonEncodeRat (q : CanonicalRat) : SosJson :=
+def sosJsonEncodeRat (q : CanonicalRat) : SosJson :=
   if q.den == 1 then .ofInt q.num
   else SosJson.mkObj [("num", .ofInt q.num), ("den", .ofNat q.den)]
 
 /-- Decode a `CanonicalRat` from an arbitrary-precision JSON integer, decimal/scientific number
 (`.num m e` = $m / 10^e$), or `{"num": n, "den": d}` object. -/
-@[expose] def decodeRatJson (j : SosJson) : Except String CanonicalRat :=
+def decodeRatJson (j : SosJson) : Except String CanonicalRat :=
   match j with
   | .num m 0 => .ok (CanonicalRat.mk m 1)
   | .num m e =>
@@ -1458,16 +1458,16 @@ end
     | _, _ => .error "invalid rational JSON: expected number or {num, den}"
 
 /-- Structural polynomial exponentiation $p^k$. -/
-@[expose] def sosPolyPow (p : Poly) : Nat → Poly
+def sosPolyPow (p : Poly) : Nat → Poly
   | 0     => Poly.one
   | k + 1 => Poly.mul p (sosPolyPow p k)
 
 /-- Encode a sparse `Monomial` as a JSON array of `[v, e]` variable-power pairs. -/
-@[expose] def sosJsonEncodeMonomial (m : Monomial) : SosJson :=
+def sosJsonEncodeMonomial (m : Monomial) : SosJson :=
   .arr <| m.map fun (v, e) => .arr [.ofNat v, .ofNat e]
 
 /-- Decode a single `(var, exp)` factor from `[v, e]` or `{"var": v, "exp": e}`. -/
-@[expose] def decodeMonomialFactorJson (j : SosJson) : Except String (Nat × Nat) :=
+def decodeMonomialFactorJson (j : SosJson) : Except String (Nat × Nat) :=
   match j.getArr? with
   | .ok [vJ, eJ] => do
     let v ← vJ.getNat?
@@ -1479,18 +1479,18 @@ end
     | _, _ => .error "invalid monomial factor JSON: expected [var, exp] or {var, exp}"
 
 /-- Decode a sparse `Monomial` from a JSON array of variable-power factors. -/
-@[expose] def decodeMonomialJson (j : SosJson) : Except String Monomial := do
+def decodeMonomialJson (j : SosJson) : Except String Monomial := do
   let arr ← j.getArr?
   arr.mapM decodeMonomialFactorJson
 
 /-- Encode a multivariate polynomial `p : Poly` as a JSON array of `[monomial, coeff]` terms. -/
-@[expose] def sosJsonEncodePoly (p : Poly) : SosJson :=
+def sosJsonEncodePoly (p : Poly) : SosJson :=
   .arr <| p.terms.map fun (m, c) =>
     .arr [sosJsonEncodeMonomial m, sosJsonEncodeRat c]
 
 /-- Decode a single polynomial term from `[monomial, coeff]`, `{"monomial": [...], "coeff": c}`,
 `{"vars": [...], "coeff": c}`, or univariate shorthand `{"var": v, "exp": e, "coeff": c}`. -/
-@[expose] def decodePolyTermItemJson (item : SosJson) : Except String Poly :=
+def decodePolyTermItemJson (item : SosJson) : Except String Poly :=
   match item.getArr? with
   | .ok [monJ, coeffJ] => do
     let mon ← decodeMonomialJson monJ
@@ -1514,32 +1514,32 @@ end
         | _, _ => .error "invalid polynomial term JSON: expected [monomial, coeff] or {monomial, coeff}"
 
 /-- Decode a polynomial from a JSON list of monomial term objects. -/
-@[expose] def decodePolyTermsJson (arr : List SosJson) : Except String Poly :=
+def decodePolyTermsJson (arr : List SosJson) : Except String Poly :=
   arr.foldlM (fun acc item => do
     let termPoly ← decodePolyTermItemJson item
     pure (Poly.add acc termPoly)
   ) Poly.zero
 
 mutual
-@[expose] def sosJsonAstSize : SosJson → Nat
+def sosJsonAstSize : SosJson → Nat
   | .arr xs => 1 + sosJsonAstArrSize xs
   | .obj fs => 1 + sosJsonAstObjSize fs
   | _ => 1
 termination_by structural j => j
 
-@[expose] def sosJsonAstArrSize : List SosJson → Nat
+def sosJsonAstArrSize : List SosJson → Nat
   | [] => 0
   | x :: xs => sosJsonAstSize x + sosJsonAstArrSize xs
 termination_by structural xs => xs
 
-@[expose] def sosJsonAstObjSize : List (List Char × SosJson) → Nat
+def sosJsonAstObjSize : List (List Char × SosJson) → Nat
   | [] => 0
   | (_, v) :: fs => sosJsonAstSize v + sosJsonAstObjSize fs
 termination_by structural fs => fs
 end
 
 /-- Structural JSON AST decoder for `Poly`. -/
-@[expose] def decodePolyJsonAux : Nat → SosJson → Except String Poly
+def decodePolyJsonAux : Nat → SosJson → Except String Poly
   | 0, _ => .error "invalid polynomial AST JSON: nesting depth exceeded"
   | fuel + 1, j =>
     match j with
@@ -1601,17 +1601,17 @@ end
 /-- Decode an arbitrary multivariate polynomial `Poly` from `SosJson`:
 supports integer/decimal constants, sparse multivariate monomial arrays, and recursive polynomial AST
 operators (`const`, `var`, `add`, `sub`, `mul`, `neg`, `sqr`, `pow`, `scale`). -/
-@[expose] def decodePolyJson (j : SosJson) : Except String Poly :=
+def decodePolyJson (j : SosJson) : Except String Poly :=
   decodePolyJsonAux (sosJsonAstSize j + 1) j
 
-@[expose] def decodePolyListJson (j : SosJson) : Except String (List Poly) := do
+def decodePolyListJson (j : SosJson) : Except String (List Poly) := do
   let arr ← j.getArr?
   arr.mapM decodePolyJson
 
 /-- Convert a rational $L^\top D L$ Gram matrix factorization
 $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `SOSPoly`
 (requiring positive diagonal weights $d_i > 0$ or dropping zero-weight rows while rejecting $d_i < 0$). -/
-@[expose] def buildSOSPolyFromGram
+def buildSOSPolyFromGram
     (diag : List CanonicalRat)
     (basis : List Poly)
     (factors : List (List CanonicalRat)) : Except String SOSPoly := do
@@ -1634,11 +1634,11 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
     let optTerms ← (diag.zip factors).mapM buildRow
     pure { terms := optTerms.filterMap id }
 
-@[expose] def sosJsonEncodeSOSPoly (s : SOSPoly) : SosJson :=
+def sosJsonEncodeSOSPoly (s : SOSPoly) : SosJson :=
   .arr <| s.terms.map fun (w, p) =>
     .arr [sosJsonEncodeRat w, sosJsonEncodePoly p]
 
-@[expose] def decodeSOSTermEntryJson (j : SosJson) : Except String (CanonicalRat × Poly) :=
+def decodeSOSTermEntryJson (j : SosJson) : Except String (CanonicalRat × Poly) :=
   match j.getArr? with
   | .ok [wJ, pJ] => do
     let w ← decodeRatJson wJ
@@ -1655,7 +1655,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
 1. a JSON array `[[w, p], ...]` or `[{"weight": w, "poly": p}, ...]`,
 2. an object `{"terms": [...]}`, or
 3. a rational $L^\top D L$ Gram matrix object `{"gramDiag": [...], "gramBasis": [...], "gramFactors": [[...], ...]}`. -/
-@[expose] def decodeSOSPolyJson (j : SosJson) : Except String SOSPoly :=
+def decodeSOSPolyJson (j : SosJson) : Except String SOSPoly :=
   match j.getArr? with
   | .ok arr => do
     let terms ← arr.mapM decodeSOSTermEntryJson
@@ -1679,7 +1679,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
         rArr.mapM decodeRatJson
       buildSOSPolyFromGram diag basis factors
 
-@[expose] def sosJsonEncodePsatzCert (c : PositivstellensatzCert) : SosJson :=
+def sosJsonEncodePsatzCert (c : PositivstellensatzCert) : SosJson :=
   SosJson.mkObj
     [ ("monoidIndices", .ofNatList c.monoidIndices)
     , ("sigma0", sosJsonEncodeSOSPoly c.sigma0)
@@ -1688,7 +1688,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
     , ("idealTerms", .arr <| c.idealTerms.map fun (p, idx) =>
         .arr [sosJsonEncodePoly p, .ofNat idx]) ]
 
-@[expose] def decodePsatzCertJson (j : SosJson) : Except String PositivstellensatzCert := do
+def decodePsatzCertJson (j : SosJson) : Except String PositivstellensatzCert := do
   let monoidIndices ← j.getObjNatList? "monoidIndices"
   let sig0J ← j.getObjVal? "sigma0"
   let sigma0 ← decodeSOSPolyJson sig0J
@@ -1720,12 +1720,12 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
       pure (p, idx)
   pure { monoidIndices, sigma0, coneTerms, idealTerms }
 
-@[expose] def sosJsonEncodeIdealCert (c : IdealMembershipCert) : SosJson :=
+def sosJsonEncodeIdealCert (c : IdealMembershipCert) : SosJson :=
   SosJson.mkObj
     [ ("quotients", .arr <| c.quotients.map fun (q, idx) =>
         .arr [sosJsonEncodePoly q, .ofNat idx]) ]
 
-@[expose] def decodeIdealCertJson (j : SosJson) : Except String IdealMembershipCert := do
+def decodeIdealCertJson (j : SosJson) : Except String IdealMembershipCert := do
   let qJ ← j.getObjVal? "quotients"
   let qArr ← qJ.getArr?
   let quotients ← qArr.mapM fun item =>
@@ -1741,7 +1741,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
       pure (p, idx)
   pure { quotients }
 
-@[expose] def sosJsonEncodeLyapunovSpec (s : SosLyapunovSpec) : SosJson :=
+def sosJsonEncodeLyapunovSpec (s : SosLyapunovSpec) : SosJson :=
   SosJson.mkObj
     [ ("dim", .ofNat s.dim)
     , ("vectorField", .arr <| s.vectorField.map sosJsonEncodePoly)
@@ -1750,7 +1750,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
     , ("radialEps", sosJsonEncodeRat s.radialEps)
     , ("decayGamma", sosJsonEncodeRat s.decayGamma) ]
 
-@[expose] def decodeSosLyapunovSpecJson (j : SosJson) : Except String SosLyapunovSpec := do
+def decodeSosLyapunovSpecJson (j : SosJson) : Except String SosLyapunovSpec := do
   let dim ← j.getObjNat? "dim"
   let vfJ ← j.getObjVal? "vectorField"
   let vectorField ← decodePolyListJson vfJ
@@ -1764,7 +1764,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
   let decayGamma ← decodeRatJson gamJ
   pure { dim, vectorField, domainIneqs, lyapunovV, radialEps, decayGamma }
 
-@[expose] def sosJsonEncodeCbfSpec (s : SosCbfSpec) : SosJson :=
+def sosJsonEncodeCbfSpec (s : SosCbfSpec) : SosJson :=
   SosJson.mkObj
     [ ("vectorField", .arr <| s.vectorField.map sosJsonEncodePoly)
     , ("domainIneqs", .arr <| s.domainIneqs.map sosJsonEncodePoly)
@@ -1772,7 +1772,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
     , ("unsafePoly", sosJsonEncodePoly s.unsafePoly)
     , ("classKAlpha", sosJsonEncodeRat s.classKAlpha) ]
 
-@[expose] def decodeSosCbfSpecJson (j : SosJson) : Except String SosCbfSpec := do
+def decodeSosCbfSpecJson (j : SosJson) : Except String SosCbfSpec := do
   let vfJ ← j.getObjVal? "vectorField"
   let vectorField ← decodePolyListJson vfJ
   let domJ ← j.getObjVal? "domainIneqs"
@@ -1785,7 +1785,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
   let classKAlpha ← decodeRatJson aJ
   pure { vectorField, domainIneqs, barrierB, unsafePoly, classKAlpha }
 
-@[expose] def sosJsonEncodeDaeSpec (s : DaeManifoldSpec) : SosJson :=
+def sosJsonEncodeDaeSpec (s : DaeManifoldSpec) : SosJson :=
   SosJson.mkObj
     [ ("vectorField", .arr <| s.vectorField.map sosJsonEncodePoly)
     , ("domainIneqs", .arr <| s.domainIneqs.map sosJsonEncodePoly)
@@ -1794,7 +1794,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
     , ("algJacobianDet", sosJsonEncodePoly s.algJacobianDet)
     , ("regDelta", sosJsonEncodeRat s.regDelta) ]
 
-@[expose] def decodeDaeManifoldSpecJson (j : SosJson) : Except String DaeManifoldSpec := do
+def decodeDaeManifoldSpecJson (j : SosJson) : Except String DaeManifoldSpec := do
   let vfJ ← j.getObjVal? "vectorField"
   let vectorField ← decodePolyListJson vfJ
   let domJ ← j.getObjVal? "domainIneqs"
@@ -1809,7 +1809,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
   pure { vectorField, domainIneqs, algConstraints, algVars, algJacobianDet, regDelta }
 
 /-- Render an `SosLyapunovProblem` deterministically as a complete JSON AST string. -/
-@[expose] def renderSosLyapunovProblemJson (p : SosLyapunovProblem) : String :=
+def renderSosLyapunovProblemJson (p : SosLyapunovProblem) : String :=
   sosJsonCompress <| SosJson.mkObj
     [ ("lyapunov", sosJsonEncodeLyapunovSpec p.lyapunov)
     , ("cbf", sosJsonEncodeCbfSpec p.cbf)
@@ -1817,7 +1817,7 @@ $\sum_{i=0}^{r-1} d_i \left(\sum_{j=0}^{m-1} L_{i,j} b_j(x)\right)^2$ into an `S
 
 /-- General JSON AST decoder for `SosLyapunovProblem` parsing arbitrary multivariate polynomial
 vector fields, domain inequalities, Lyapunov functions, CBF barriers, and Index-1 DAE manifolds. -/
-@[expose] def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
+def decodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
   match sosJsonParse s with
   | .error err => .error s!"invalid SosLyapunovProblem JSON: {err}"
   | .ok j =>
@@ -1830,37 +1830,37 @@ vector fields, domain inequalities, Lyapunov functions, CBF barriers, and Index-
     | _, _, _ =>
       .error "invalid SosLyapunovProblem JSON: missing required fields"
 
-@[expose] def sosJsonEncodeLyapunovWitness (w : SosLyapunovWitness) : SosJson :=
+def sosJsonEncodeLyapunovWitness (w : SosLyapunovWitness) : SosJson :=
   SosJson.mkObj
     [ ("posDefCert", sosJsonEncodePsatzCert w.posDefCert)
     , ("lieDecayCert", sosJsonEncodePsatzCert w.lieDecayCert) ]
 
-@[expose] def decodeSosLyapunovWitnessJson (j : SosJson) : Except String SosLyapunovWitness := do
+def decodeSosLyapunovWitnessJson (j : SosJson) : Except String SosLyapunovWitness := do
   let posJ ← j.getObjVal? "posDefCert"
   let lieJ ← j.getObjVal? "lieDecayCert"
   let posDefCert ← decodePsatzCertJson posJ
   let lieDecayCert ← decodePsatzCertJson lieJ
   pure { posDefCert, lieDecayCert }
 
-@[expose] def sosJsonEncodeCbfWitness (w : SosCbfWitness) : SosJson :=
+def sosJsonEncodeCbfWitness (w : SosCbfWitness) : SosJson :=
   SosJson.mkObj
     [ ("unsafeRefuteCert", sosJsonEncodePsatzCert w.unsafeRefuteCert)
     , ("nagumoInvarianceCert", sosJsonEncodePsatzCert w.nagumoInvarianceCert) ]
 
-@[expose] def decodeSosCbfWitnessJson (j : SosJson) : Except String SosCbfWitness := do
+def decodeSosCbfWitnessJson (j : SosJson) : Except String SosCbfWitness := do
   let uJ ← j.getObjVal? "unsafeRefuteCert"
   let nJ ← j.getObjVal? "nagumoInvarianceCert"
   let unsafeRefuteCert ← decodePsatzCertJson uJ
   let nagumoInvarianceCert ← decodePsatzCertJson nJ
   pure { unsafeRefuteCert, nagumoInvarianceCert }
 
-@[expose] def sosJsonEncodeDaeWitness (w : DaeManifoldWitness) : SosJson :=
+def sosJsonEncodeDaeWitness (w : DaeManifoldWitness) : SosJson :=
   SosJson.mkObj
     [ ("tangencyCert", sosJsonEncodeIdealCert w.tangencyCert)
     , ("tangencyCerts", .arr <| w.tangencyCerts.map sosJsonEncodeIdealCert)
     , ("regularityCert", sosJsonEncodePsatzCert w.regularityCert) ]
 
-@[expose] def decodeDaeManifoldWitnessJson (j : SosJson) : Except String DaeManifoldWitness := do
+def decodeDaeManifoldWitnessJson (j : SosJson) : Except String DaeManifoldWitness := do
   let tcJ ← j.getObjVal? "tangencyCert"
   let tangencyCert ← decodeIdealCertJson tcJ
   let tcsJ ← j.getObjVal? "tangencyCerts"
@@ -1871,7 +1871,7 @@ vector fields, domain inequalities, Lyapunov functions, CBF barriers, and Index-
   pure { tangencyCert, tangencyCerts, regularityCert }
 
 /-- Render an `SosLyapunovCert` deterministically as a complete JSON AST string. -/
-@[expose] def renderSosLyapunovCertJson (c : SosLyapunovCert) : String :=
+def renderSosLyapunovCertJson (c : SosLyapunovCert) : String :=
   sosJsonCompress <| SosJson.mkObj
     [ ("lyapunovWitness", sosJsonEncodeLyapunovWitness c.lyapunovWitness)
     , ("cbfWitness", sosJsonEncodeCbfWitness c.cbfWitness)
@@ -1879,7 +1879,7 @@ vector fields, domain inequalities, Lyapunov functions, CBF barriers, and Index-
 
 /-- General JSON AST decoder for `SosLyapunovCert` parsing arbitrary SOS / Gram matrix
 Positivstellensatz witnesses and Gröbner ideal membership certificates. -/
-@[expose] def decodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
+def decodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
   match sosJsonParse s with
   | .error err => .error s!"invalid SosLyapunovCert JSON: {err}"
   | .ok j =>
@@ -1893,7 +1893,7 @@ Positivstellensatz witnesses and Gröbner ideal membership certificates. -/
       .error "invalid SosLyapunovCert JSON: missing required fields"
 
 /-- Registered `Obend.Judge.Format` for `"sos-lyapunov-cbf@1"`. -/
-@[expose] def sosLyapunovFormat : Format where
+def sosLyapunovFormat : Format where
   name        := "sos-lyapunov-cbf"
   version     := "1"
   Obj         := SosLyapunovProblem

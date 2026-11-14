@@ -112,7 +112,7 @@ namespace Obend.Analysis.Interval
 open Obend.Hardware.Device
 
 /-- `I ^ k` by repeated multiplication. -/
-@[expose] def powNat (I : Interval) : Nat → Interval
+def powNat (I : Interval) : Nat → Interval
   | 0 => Interval.ofPoint 1
   | k + 1 => Interval.mul (Interval.powNat I k) I
 
@@ -153,7 +153,7 @@ theorem inv_le_inv_of_le {a b : CanonicalRat} (ha : 0 < a) (hab : a ≤ b) : b�
   exact h1
 
 /-- The reciprocal of an interval that lies strictly above zero: `[1/hi, 1/lo]`. -/
-@[expose] def invPos (I : Interval) : Interval :=
+abbrev invPos (I : Interval) : Interval :=
   ⟨I.hi⁻¹, I.lo⁻¹⟩
 
 theorem invPos_mem {x : CanonicalRat} {I : Interval} (hlo : 0 < I.lo) (hx : x ∈ I) :
@@ -165,8 +165,8 @@ theorem invPos_mem {x : CanonicalRat} {I : Interval} (hlo : 0 < I.lo) (hx : x �
 
 /-- `A / B` when `B` lies strictly above zero; `none` otherwise (a checker that needs the quotient
 refuses rather than divide through zero). -/
-@[expose] def divPos? (A B : Interval) : Option Interval :=
-  if 0 < B.lo then some (Interval.mul A ⟨B.hi⁻¹, B.lo⁻¹⟩) else none
+abbrev divPos? (A B : Interval) : Option Interval :=
+  if 0 < B.lo then some (Interval.mul A (Interval.invPos B)) else none
 
 theorem divPos?_mem {x y : CanonicalRat} {A B J : Interval}
     (hx : x ∈ A) (hy : y ∈ B) (hJ : Interval.divPos? A B = some J) : x / y ∈ J := by
@@ -179,7 +179,7 @@ theorem divPos?_mem {x y : CanonicalRat} {A B J : Interval}
   · cases hJ
 
 /-- Round the endpoints outward to multiples of `1/s`: `[⌊lo·s⌋/s, ⌈hi·s⌉/s]`. -/
-@[expose] def roundOut (s : Nat) (I : Interval) : Interval :=
+abbrev roundOut (s : Nat) (I : Interval) : Interval :=
   ⟨(((I.lo * (s : CanonicalRat)).floor : Int) : CanonicalRat) / (s : CanonicalRat),
    (((I.hi * (s : CanonicalRat)).ceil : Int) : CanonicalRat) / (s : CanonicalRat)⟩
 
@@ -246,20 +246,18 @@ theorem ratAbs_nonneg (t : CanonicalRat) : 0 ≤ ratAbs t := by
   (List.range deg).reverse.foldl (fun p j => 1 + t / (((j + 1 : Nat) : CanonicalRat)) * p) 1
 
 /-- The degree of the Taylor polynomial used on `[−1/2, 1/2]`. -/
-@[expose] def expDeg : Nat := 12
+abbrev expDeg : Nat := 12
 
 /-- `13! = 6227020800`. -/
-@[expose] def fact13 : CanonicalRat := 6227020800
+abbrev fact13 : CanonicalRat := 6227020800
 
 /-- The Lagrange remainder bound `2|t|¹³/13!` for `|t| ≤ 1/2` (`e^{1/2} < 2`). -/
-@[expose] def expHalfRem (t : CanonicalRat) : CanonicalRat :=
+abbrev expHalfRem (t : CanonicalRat) : CanonicalRat :=
   2 * ratPow (ratAbs t) 13 / fact13
 
 /-- **Assumed fact `expHalf`**: for `|t| ≤ 1/2`, `eᵗ` lies in this interval. -/
-@[expose] def expHalfEnclosure (t : CanonicalRat) : Interval :=
-  let tay := (List.range 12).reverse.foldl (fun p j => 1 + t / (((j + 1 : Nat) : CanonicalRat)) * p) 1
-  let rem := 2 * ratPow (ratAbs t) 13 / 6227020800
-  ⟨tay - rem, tay + rem⟩
+abbrev expHalfEnclosure (t : CanonicalRat) : Interval :=
+  ⟨expTaylor expDeg t - expHalfRem t, expTaylor expDeg t + expHalfRem t⟩
 
 /-- Dynamic halving count bringing `|x / 2ᵏ|` into `[0, 1/2]` for **all** `x : CanonicalRat`
 (including `|x| > 2⁶³` up to arbitrary rational magnitudes): uses dynamic fuel
@@ -346,7 +344,7 @@ theorem halvings_arg_abs_le_half (x : CanonicalRat) :
 half-enclosure, square `k` times. -/
 @[expose] def expEnclosure (x : CanonicalRat) : Interval :=
   let k := halvings x
-  Interval.sqrIterRound (10 ^ 60) (Interval.roundOut (10 ^ 60) (expHalfEnclosure (x / ratPow 2 k))) k
+  Interval.sqrIterRound roundScale (Interval.roundOut roundScale (expHalfEnclosure (x / ratPow 2 k))) k
 
 theorem roundScale_pos : 0 < roundScale := by
   unfold roundScale; exact Nat.pow_pos (by decide)
@@ -400,16 +398,16 @@ theorem expEnclosure_sound
 /-! ## 4. The Bernoulli function -/
 
 /-- `1 − x/2 + x²/12 − x⁴/720 + x⁶/30240 − x⁸/1209600 + x¹⁰/47900160`. -/
-@[expose] def bernSeries (x : CanonicalRat) : CanonicalRat :=
+abbrev bernSeries (x : CanonicalRat) : CanonicalRat :=
   let x2 := x * x
   1 - x / 2 + x2 * (1/12 + x2 * (-1/720 + x2 * (1/30240 + x2 * (-1/1209600 + x2 * (1/47900160)))))
 
 /-- The series' remainder bound `x¹²/10⁹` for `|x| ≤ 1/8`. -/
-@[expose] def bernSeriesRem (x : CanonicalRat) : CanonicalRat :=
+abbrev bernSeriesRem (x : CanonicalRat) : CanonicalRat :=
   ratPow (ratAbs x) 12 / 1000000000
 
 /-- **Assumed fact `bernSmall`**: for `|x| ≤ 1/8`, `B(x) = x/(eˣ − 1)` lies in this interval. -/
-@[expose] def bernSmallEnclosure (x : CanonicalRat) : Interval :=
+abbrev bernSmallEnclosure (x : CanonicalRat) : Interval :=
   ⟨bernSeries x - bernSeriesRem x, bernSeries x + bernSeriesRem x⟩
 
 /-- The Bernoulli function of `x` computed from a value `e` standing for `eˣ`, in the form the
@@ -422,11 +420,7 @@ quotient `x/(eˣ − 1)` by interval division beyond, `none` when the exponentia
 separate `eˣ` from `1` (it always does for `|x| > 1/8`; the `none` is the checker's refusal, not a
 case the arithmetic reaches). -/
 @[expose] def bernEnclosure? (x : CanonicalRat) : Option Interval :=
-  if ratAbs x ≤ 1/8 then
-    let x2 := x * x
-    let ser := 1 - x / 2 + x2 * (1/12 + x2 * (-1/720 + x2 * (1/30240 + x2 * (-1/1209600 + x2 * (1/47900160)))))
-    let rem := ratPow (ratAbs x) 12 / 1000000000
-    some ⟨ser - rem, ser + rem⟩
+  if ratAbs x ≤ 1/8 then some (bernSmallEnclosure x)
   else
     let E := expEnclosure x
     if 0 < x then Interval.divPos? (Interval.ofPoint x) (Interval.sub E (Interval.ofPoint 1))
@@ -475,7 +469,7 @@ theorem powBracket_agree {y₁ y₂ r : CanonicalRat} {num den : Nat} {δ : Cano
   · exact le_of_ratPow_le (Rat.mul_nonneg hy₁ h1δ') (Rat.le_trans hlo₂ hhi₁)
 
 /-- A square root bracket is the power bracket with `num/den = 1/2`. -/
-@[expose] def sqrtBracket (s x δ : CanonicalRat) : Bool :=
+abbrev sqrtBracket (s x δ : CanonicalRat) : Bool :=
   powBracket s x 1 2 δ
 
 /-- A bracketed root is pinned: `(s(1−δ))² ≤ x ≤ (s(1+δ))²`. -/

@@ -18,7 +18,7 @@ import all Obend.Analysis.QuantumWalk
 # Metasystem Test Suite — Wave C3 Numerics, ODE/Hybrid Reachability, Epistemic Width & Unitary Szegedy Walk (`P0` #22, #24, #25, #26, #27, #28)
 
 Comprehensive regression checks, universal soundness instantiations, negative refusal witnesses,
-`#tooth` kernel mutation-killing probes, and `#print axioms` checks (`0 sorryAx`, `0 Classical.choice`)
+`#tooth` kernel mutation-killing probes, and `#print axioms` checks (`0 sorryAx`, `0` custom axioms)
 across all 6 Wave C3 `c3-numerics` Stage-1 repairs:
 1. **P0 #22 (`Obend.Hardware.Device.Enclosure`)**:
    - Dynamic `halvings` fuel for `|x| > 2^63` (`halvings_arg_abs_le_half`, `expEnclosure_sound`).
@@ -189,7 +189,7 @@ def quadraticTimeRho0 : String → CanonicalRat
 4. `verifyTrajectorySafety` accepts safe envelope `[-1, 2]` and rejects `[0, 1/4]` (which misses `1/3`). -/
 theorem flowpipe_quadratic_time_encloses_one_third :
     trapezoidalQuadrature 1 1 = [(CanonicalRat.mk 1 2, 0), (CanonicalRat.mk 1 2, 1)] ∧
-    buildTaylorPicardDiscrete quadraticTimeOde 2 quadraticTimeRho0 1 "x" = CanonicalRat.mk 1 3 ∧
+    buildTaylorPicardDiscrete quadraticTimeOde 2 quadraticTimeRho0 1 (CanonicalRat.mk 1 3) "x" = CanonicalRat.mk 1 3 ∧
     (match stepFlowpipe quadraticTimeOde quadraticTimeInitBox with
      | some nextBox =>
        match nextBox.lookup "x" with
@@ -202,11 +202,71 @@ theorem flowpipe_quadratic_time_encloses_one_third :
       [("t", ⟨-1, 2⟩), ("x", ⟨0, CanonicalRat.mk 1 4⟩)] = false := by
   decide +kernel
 
+/-- Adversarial quartic vector field `t' = 1, x' = t^2 * (t - 1/3)^2` over `dt = 1` from `(0, 0)`:
+at the single interior point `τ = 1/3`, `f_x(1/3) = 0` and `L_f f_x(1/3) = 0`, whereas the true
+trajectory drifts to `x(1) = ∫_0^1 t^2 (t - 1/3)^2 dt = 19/270 > 0`. Full rough-box enclosure
+(`stepFlowpipe` / `verifyTrajectorySafety`) encloses `19/270` across `[0, 1]` and rejects `[0, 1/20]`! -/
+def quarticBlindSpotOde : OdeSystem where
+  fields :=
+    [ ("t", .const 1)
+    , ("x", .mul (.mul (.var "t") (.var "t"))
+                 (.mul (.sub (.var "t") (.const (CanonicalRat.mk 1 3)))
+                       (.sub (.var "t") (.const (CanonicalRat.mk 1 3))))) ]
+  dt           := 1
+  remainderPad := Interval.ofPoint 0
+
+theorem flowpipe_quartic_blind_spot_encloses_19_over_270 :
+    (match stepFlowpipe quarticBlindSpotOde quadraticTimeInitBox with
+     | some nextBox =>
+       match nextBox.lookup "x" with
+       | some xIv => decide (xIv.lo ≤ CanonicalRat.mk 19 270 ∧ CanonicalRat.mk 19 270 ≤ xIv.hi)
+       | none => false
+     | none => false) = true ∧
+    verifyTrajectorySafety quarticBlindSpotOde quadraticTimeInitBox 1
+      [("t", ⟨-1, 2⟩), ("x", ⟨-1, 2⟩)] = true ∧
+    verifyTrajectorySafety quarticBlindSpotOde quadraticTimeInitBox 1
+      [("t", ⟨-1, 2⟩), ("x", ⟨0, CanonicalRat.mk 1 20⟩)] = false := by
+  decide +kernel
+
+/-- Universal instantiation of `picardIteratedTrajectory_safety_sound` across **every** fractional
+Lagrange–Lie remainder coordinate `θ ∈ Interval.mk 0 1` (never tied to a single interior point). -/
+theorem flowpipe_picard_iterated_all_theta_bridge
+    (m : Nat) (rho0 : String → CanonicalRat)
+    (hInit : BoxMem rho0 quadraticTimeInitBox)
+    (θ : CanonicalRat) (hθ : θ ∈ Interval.mk 0 1) :
+    ∃ tube,
+      runFlowpipe quadraticTimeOde quadraticTimeInitBox 1 = some tube ∧
+      tube.length = 2 ∧
+      (∀ k, k ≤ 1 →
+        BoxMem (buildTaylorPicardDiscrete quadraticTimeOde m rho0 k θ) (tube.getD k []) ∧
+        BoxMem (buildTaylorPicardDiscrete quadraticTimeOde m rho0 k θ) [("t", ⟨-1, 2⟩), ("x", ⟨-1, 2⟩)]) ∧
+      (∀ k, k < 1 → ∀ τ ∈ Interval.mk 0 quadraticTimeOde.dt,
+        BoxMem (buildTaylorPicardTrajectory quadraticTimeOde m rho0 k τ θ) [("t", ⟨-1, 2⟩), ("x", ⟨-1, 2⟩)]) :=
+  picardIteratedTrajectory_safety_sound
+    quadraticTimeOde quadraticTimeInitBox [("t", ⟨-1, 2⟩), ("x", ⟨-1, 2⟩)]
+    1 m rho0 (by decide) (Interval.ofPoint_mem 0) (by decide) (by decide +kernel) hInit θ hθ
+
 def brokenZeroLieRemainder (_ : Interval) (_ : CanonicalRat) : Interval :=
   Interval.ofPoint 0
 
 #tooth Obend.Analysis.verifyTrajectorySafety_c2_ode_sound
   by mutation Obend.Analysis.derivePicardLieRemainder := brokenZeroLieRemainder
+
+def brokenStepPicardDropLieRem
+    (sys : OdeSystem)
+    (x0Box xTildeBox : List (String × Interval))
+    (h : CanonicalRat) : Option (List (String × Interval)) :=
+  if !verifyPicardAPriori sys x0Box xTildeBox h then
+    none
+  else
+    sys.fields.mapM fun (name, rhsExpr) => do
+      let curBox ← x0Box.lookup name
+      let velBox ← evalInterval x0Box rhsExpr
+      let _ ← evalOdeLieDerivComponent sys xTildeBox rhsExpr
+      pure (name, stepFlowpipe1D curBox velBox h sys.remainderPad)
+
+#tooth Obend.Analysis.verifyTrajectorySafety_c2_ode_sound
+  by mutation Obend.Analysis.stepPicardValidated := brokenStepPicardDropLieRem
 
 
 /-! ## 4. P0 #26: `Obend.Analysis.Hybrid` — Exact Rational `.num / .den` Preservation in `stepHybrid` -/
@@ -330,6 +390,25 @@ theorem quantumWalk_unitary_iter_bridge
     (checkNormalizedRatProjector_sound dim projB hB)
     k ψ
 
+/-- Bridge instantiation: any scaled symmetric integer projector `M` (`M^2 = d M`, `0 < d`) normalizes
+to an exact rational projector `normalizeScaledProjector M d` whose Szegedy walk preserves `‖ψ‖²`. -/
+theorem quantumWalk_scaled_to_normalized_projector_bridge
+    (dim k : Nat) (M_A M_B : Nat → Nat → Int) (dA dB : Int)
+    (hA : checkScaledSymmetricProjectorFn dim M_A dA = true)
+    (hB : checkScaledSymmetricProjectorFn dim M_B dB = true)
+    (ψ : Nat → CanonicalRat) :
+    IsNormalizedRatProjector (normalizeScaledProjector M_A dA) (List.range dim) ∧
+    vecNormSqRat (List.range dim)
+      (iterateRatVecOp
+        (szegedyWalkRatStep (normalizeScaledProjector M_A dA) (normalizeScaledProjector M_B dB) (List.range dim))
+        k ψ) =
+      vecNormSqRat (List.range dim) ψ := by
+  have hpA := normalizeScaledProjector_isNormalizedRatProjector M_A (List.range dim) dA
+    (checkScaledSymmetricProjectorFn_sound dim M_A dA hA)
+  have hpB := normalizeScaledProjector_isNormalizedRatProjector M_B (List.range dim) dB
+    (checkScaledSymmetricProjectorFn_sound dim M_B dB hB)
+  exact ⟨hpA, szegedyWalkRatIter_unitary_norm_preserved (List.range dim) _ _ hpA hpB k ψ⟩
+
 def brokenSzegedyReflectRatPlus
     (proj : Nat → Nat → CanonicalRat) (indices : List Nat) (ψ : Nat → CanonicalRat) (u : Nat) : CanonicalRat :=
   2 * matVecRat indices proj ψ u + ψ u
@@ -346,7 +425,7 @@ def brokenSzegedyReflectIntPlus
   by mutation Obend.Analysis.szegedyReflectVec := brokenSzegedyReflectIntPlus
 
 
-/-! ## 7. Axiom Audit (`0 sorryAx`, `0 Classical.choice`) -/
+/-! ## 7. Axiom Audit (`0 sorryAx`, `0` custom axioms) -/
 
 #print axioms Obend.Hardware.Device.halvings_arg_abs_le_half
 #print axioms Obend.Hardware.Device.expEnclosure_sound
@@ -356,11 +435,13 @@ def brokenSzegedyReflectIntPlus
 #print axioms Obend.Analysis.trapezoidalQuadrature_valid
 #print axioms Obend.Analysis.simpsonQuadrature_valid
 #print axioms Obend.Analysis.verifyTrajectorySafety_c2_ode_sound
+#print axioms Obend.Analysis.picardIteratedTrajectory_safety_sound
 #print axioms Obend.Analysis.stepHybrid_sound
 #print axioms Obend.Consensus.Epistemic.IntervalRace.intervalRace_tighter_enclosure_wins
 #print axioms Obend.Analysis.faddeevLeVerrier_charPoly_and_p4_obstruction_sound
 #print axioms Obend.Analysis.szegedyReflectVec_norm_sq_preserved
 #print axioms Obend.Analysis.szegedyWalkStep_norm_sq_preserved
+#print axioms Obend.Analysis.normalizeScaledProjector_isNormalizedRatProjector
 #print axioms Obend.Analysis.szegedyReflectRatVec_involution
 #print axioms Obend.Analysis.szegedyReflectRatVec_unitary_norm_preserved
 #print axioms Obend.Analysis.szegedyWalkRatStep_unitary_norm_preserved
