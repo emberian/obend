@@ -45,15 +45,15 @@ structure OdeSystem where
   fields       : List (String × RealExpr)
   dt           : CanonicalRat
   remainderPad : Interval := Interval.ofPoint 0
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Propositional membership of a point assignment `rho : String → CanonicalRat` in a multi-variable
 interval box `box : List (String × Interval)`. -/
-@[expose] def BoxMem (rho : String → CanonicalRat) (box : List (String × Interval)) : Prop :=
+abbrev BoxMem (rho : String → CanonicalRat) (box : List (String × Interval)) : Prop :=
   ∀ v I, box.lookup v = some I → rho v ∈ I
 
 /-- Check whether interval `inner` is a sub-interval of `outer` (`outer.lo ≤ inner.lo ∧ inner.hi ≤ outer.hi`). -/
-@[expose] def Interval.isSubintervalOf (inner outer : Interval) : Bool :=
+abbrev Interval.isSubintervalOf (inner outer : Interval) : Bool :=
   decide (outer.lo ≤ inner.lo ∧ inner.hi ≤ outer.hi)
 
 /-- Validated component Euler–Taylor / Picard–Lindelöf flowpipe step:
@@ -84,13 +84,13 @@ over a multi-variable interval box `xTildeBox` via forward-mode interval AD (`ev
 /-- Evaluate the $N$-dimensional directional Lie derivative
 $$(\mathcal{L}_f f_i)(\tilde{X}) = \sum_{j=1}^N \frac{\partial f_i}{\partial x_j}(\tilde{X}) \otimes F_j(\tilde{X})$$
 for component expression `rhsExpr` of `sys : OdeSystem` over `xTildeBox`. -/
-@[expose] def evalOdeLieDerivComponent
+abbrev evalOdeLieDerivComponent
     (sys : OdeSystem) (xTildeBox : List (String × Interval)) (rhsExpr : RealExpr) : Option Interval :=
   evalLieDerivSum xTildeBox rhsExpr sys.fields
 
 /-- Exact point evaluation of the directional Lie derivative sum
 $\sum_{(x_j, f_j) \in \text{varFields}} \frac{\partial \text{rhsExpr}}{\partial x_j}(\rho) \cdot f_j(\rho)$. -/
-@[expose] def evalPointLieDerivSum (rho : String → CanonicalRat) (rhsExpr : RealExpr) :
+def evalPointLieDerivSum (rho : String → CanonicalRat) (rhsExpr : RealExpr) :
     List (String × RealExpr) → CanonicalRat
   | [] => 0
   | (varName, varRhs) :: rest =>
@@ -99,13 +99,13 @@ $\sum_{(x_j, f_j) \in \text{varFields}} \frac{\partial \text{rhsExpr}}{\partial 
 
 /-- Exact point evaluation of the $N$-dimensional directional Lie derivative $(\mathcal{L}_f f_i)(\rho)$
 for component `rhsExpr` of `sys : OdeSystem`. -/
-@[expose] def evalOdePointLieDerivComponent
+def evalOdePointLieDerivComponent
     (sys : OdeSystem) (rho : String → CanonicalRat) (rhsExpr : RealExpr) : CanonicalRat :=
   evalPointLieDerivSum rho rhsExpr sys.fields
 
 /-- Evaluate a single row $\left[\frac{\partial \text{rhsExpr}}{\partial x_1}(\tilde{X}), \dots, \frac{\partial \text{rhsExpr}}{\partial x_N}(\tilde{X})\right]$
 of the $N \times N$ interval Jacobian over `xTildeBox`. -/
-@[expose] def evalOdeJacobianRow
+def evalOdeJacobianRow
     (sys : OdeSystem) (xTildeBox : List (String × Interval)) (rhsExpr : RealExpr) :
     Option (List (String × Interval)) :=
   sys.fields.mapM fun (varName, _) => do
@@ -114,7 +114,7 @@ of the $N \times N$ interval Jacobian over `xTildeBox`. -/
 
 /-- Evaluate the full $N \times N$ interval Jacobian matrix $J_{i,j}(\tilde{X}) = \frac{\partial f_i}{\partial x_j}(\tilde{X})$
 of `sys : OdeSystem` over `xTildeBox`. -/
-@[expose] def evalOdeJacobian
+def evalOdeJacobian
     (sys : OdeSystem) (xTildeBox : List (String × Interval)) :
     Option (List (String × List (String × Interval))) :=
   sys.fields.mapM fun (name, rhsExpr) => do
@@ -152,7 +152,7 @@ from the directional Lie derivative enclosure `lieDerivIv`. -/
 
 /-- Derive the 2nd-order Lagrange remainder $\left[\frac{h^2}{2}, \frac{h^2}{2}\right] \otimes (L \otimes \text{fBound})$
 from a Jacobian factor `L` and vector-field bound `fBound`. -/
-@[expose] def derivePicardRemainder (L : Interval) (fBound : Interval) (h : CanonicalRat) : Interval :=
+def derivePicardRemainder (L : Interval) (fBound : Interval) (h : CanonicalRat) : Interval :=
   derivePicardLieRemainder (Interval.mul L fBound) h
 
 /-- Compute a single validated $N$-dimensional Picard–Taylor step (`stepPicardValidated`):
@@ -200,7 +200,7 @@ abbrev stepPicardValidated1D := stepPicardValidated
 
 /-- Symmetrically widen an interval `[lo, hi]` by scaling its half-width by `scale` ($1.1\times$ or $2\times$)
 plus a small floor pad `minPad` when `lo = hi`. -/
-@[expose] def widenIntervalSymmetric (iv : Interval) (scale minPad : CanonicalRat) : Interval :=
+abbrev widenIntervalSymmetric (iv : Interval) (scale minPad : CanonicalRat) : Interval :=
   let mid := (iv.lo + iv.hi) / 2
   let half := (iv.hi - iv.lo) / 2
   let paddedHalf := if decide (half ≤ 0) then minPad else half * scale + minPad
@@ -241,19 +241,19 @@ Euler–Picard seeding followed by `inflatePicardLoop` ($1.1\times$ / $2\times$ 
 
 /-- Construct a certified $N$-dimensional Picard a-priori rough enclosure $\tilde{X}$ from `box`
 with default inflation fuel `8`. -/
-@[expose] def inferPicardAPrioriBox
+abbrev inferPicardAPrioriBox
     (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) :=
   inferPicardAPrioriBoxWithFuel sys box 8
 
 /-- Advance an $N$-dimensional interval box `box` by one validated Picard–Lindelöf flowpipe step under `sys`:
 infers an a-priori enclosure `xTildeBox`, checks `verifyPicardAPriori sys box xTildeBox sys.dt`, and
 computes the $N$-dimensional Lie-derivative remainder enclosure via `stepPicardValidated`. -/
-@[expose] def stepFlowpipe (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) := do
+def stepFlowpipe (sys : OdeSystem) (box : List (String × Interval)) : Option (List (String × Interval)) := do
   let xTildeBox ← inferPicardAPrioriBox sys box
   stepPicardValidated sys box xTildeBox sys.dt
 
 /-- Structural recursion helper for `runFlowpipe`. -/
-@[expose] def runFlowpipeLoop (sys : OdeSystem) : Nat → List (String × Interval) → Option (List (List (String × Interval)))
+def runFlowpipeLoop (sys : OdeSystem) : Nat → List (String × Interval) → Option (List (List (String × Interval)))
   | 0, curBox => some [curBox]
   | k + 1, curBox => do
     let nextBox ← stepFlowpipe sys curBox
@@ -261,11 +261,11 @@ computes the $N$-dimensional Lie-derivative remainder enclosure via `stepPicardV
     pure (curBox :: restTube)
 
 /-- Compute a `steps`-step validated $N$-dimensional flowpipe tube `[X_0, X_1, ..., X_steps]` starting from `initBox`. -/
-@[expose] def runFlowpipe (sys : OdeSystem) (initBox : List (String × Interval)) (steps : Nat) : Option (List (List (String × Interval))) :=
+def runFlowpipe (sys : OdeSystem) (initBox : List (String × Interval)) (steps : Nat) : Option (List (List (String × Interval))) :=
   runFlowpipeLoop sys steps initBox
 
 /-- Check whether every variable in `box` is enclosed within its corresponding interval in `safeBounds`. -/
-@[expose] def checkBoxInEnvelope (box safeBounds : List (String × Interval)) : Bool :=
+abbrev checkBoxInEnvelope (box safeBounds : List (String × Interval)) : Bool :=
   safeBounds.all fun (name, safeIv) =>
     match box.find? (·.1 == name) with
     | some (_, curIv) => Interval.isSubintervalOf curIv safeIv
@@ -294,7 +294,7 @@ computes the $N$-dimensional Lie-derivative remainder enclosure via `stepPicardV
 /-- Verify that an entire `steps`-step continuous-time ODE flowpipe tube starting from `initBox` stays
 inside `safeBounds`: checks BOTH every discrete slice $X_k$ AND every continuous-time rough enclosure
 $\tilde{X}_k$ covering $t \in [t_k, t_{k+1}]$, preventing any inter-step barrier tunneling! -/
-@[expose] def verifyTrajectorySafety
+abbrev verifyTrajectorySafety
     (sys : OdeSystem)
     (initBox : List (String × Interval))
     (steps : Nat)
@@ -305,21 +305,21 @@ $\tilde{X}_k$ covering $t \in [t_k, t_{k+1}]$, preventing any inter-step barrier
 
 /-- Damped thermal RC relaxation ODE:
 $\dot{T} = 20 - T$ with step size $\Delta t = \frac{1}{2}$ and model uncertainty pad $[-\frac{1}{10}, \frac{1}{10}]$. -/
-@[expose] def thermalCoolingOde : OdeSystem where
+abbrev thermalCoolingOde : OdeSystem where
   fields       := [("T", .sub (.const 20) (.var "T"))]
   dt           := CanonicalRat.mk 1 2
   remainderPad := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
 
 /-- Unstable positive-feedback thermal runaway ODE:
 $\dot{T} = T + 10$ with step size $\Delta t = 1$ and remainder pad $[0, 1]$. -/
-@[expose] def thermalRunawayOde : OdeSystem where
+def thermalRunawayOde : OdeSystem where
   fields       := [("T", .add (.var "T") (.const 10))]
   dt           := 1
   remainderPad := ⟨0, 1⟩
 
 /-- Coupled 2D damped harmonic oscillator ODE system:
 $\dot{x} = v,\; \dot{v} = -x - v$ with step size $\Delta t = \frac{1}{10}$. -/
-@[expose] def coupledOscillatorOde : OdeSystem where
+abbrev coupledOscillatorOde : OdeSystem where
   fields       := [("x", .var "v"), ("v", .sub (.sub (.const 0) (.var "x")) (.var "v"))]
   dt           := CanonicalRat.mk 1 10
   remainderPad := Interval.ofPoint 0
@@ -362,11 +362,11 @@ theorem flowpipe_step_encloses_euler :
 /-- Exact Core4 `Data` record encoding of a rational number $q = \frac{\text{posNum} - \text{negNum}}{\text{den}}$
 with positive denominator `den = q.den`, allowing branch-free exact cross-multiplied rational comparison
 in Core4 `Term`. -/
-@[expose] def ratToCellData (q : CanonicalRat) : Data :=
+def ratToCellData (q : CanonicalRat) : Data :=
   .record [("den", .natural q.den), ("negNum", .natural (-q.num).toNat), ("posNum", .natural q.num.toNat)]
 
 /-- Decode a rational cell field back from `Data`. -/
-@[expose] def decodeRatCellData? (d : Data) : Option CanonicalRat := do
+def decodeRatCellData? (d : Data) : Option CanonicalRat := do
   let .natural den ← d.field "den" | none
   let .natural negN ← d.field "negNum" | none
   let .natural posN ← d.field "posNum" | none
@@ -374,11 +374,11 @@ in Core4 `Term`. -/
   else some (CanonicalRat.mk ((posN : Int) - (negN : Int)) den)
 
 /-- Encode a discrete time-step index `stepIdx` and multi-variable rational state `rho` as Core4 `Data`. -/
-@[expose] def stateToCellData (stepIdx : Nat) (vars : List String) (rho : String → CanonicalRat) : Data :=
+def stateToCellData (stepIdx : Nat) (vars : List String) (rho : String → CanonicalRat) : Data :=
   .record (("step", .natural stepIdx) :: vars.map (fun v => (v, ratToCellData (rho v))))
 
 /-- Core4 natural multiplication `a * b`. -/
-@[expose] def mulNat (a b : Term) : Term :=
+def mulNat (a b : Term) : Term :=
   .binary .multiply a b
 
 @[simp] theorem subst_mulNat (σ : Nat → Term) (a b : Term) :
@@ -394,7 +394,7 @@ theorem mulNat_val {a b v : Term} (h : Evaluates (mulNat a b) v) :
 /-- Exact Core4 `Term` predicate checking that rational field `valTerm` has positive denominator `0 < den`
 and lies inside closed rational interval `iv = [iv.lo, iv.hi]` via exact cross-multiplication:
 $$\frac{\text{lo}_+ - \text{lo}_-}{\text{lo}_d} \le \frac{p - m}{d} \le \frac{\text{hi}_+ - \text{hi}_-}{\text{hi}_d}.$$ -/
-@[expose] def intervalContainsTerm (iv : Interval) (valTerm : Term) : Term :=
+def intervalContainsTerm (iv : Interval) (valTerm : Term) : Term :=
   let p := .get valTerm "posNum"
   let m := .get valTerm "negNum"
   let d := .get valTerm "den"
@@ -416,7 +416,7 @@ $$\frac{\text{lo}_+ - \text{lo}_-}{\text{lo}_d} \le \frac{p - m}{d} \le \frac{\t
   simp [intervalContainsTerm]
 
 /-- Core4 `Term` predicate checking that every variable `(v, iv) ∈ box` of `stTerm` lies in `iv`. -/
-@[expose] def boxContainsStateTerm : List (String × Interval) → Term → Term
+def boxContainsStateTerm : List (String × Interval) → Term → Term
   | [], _ => trueT
   | (v, iv) :: rest, stTerm =>
     andT (intervalContainsTerm iv (.get stTerm v)) (boxContainsStateTerm rest stTerm)
@@ -431,7 +431,7 @@ $$\frac{\text{lo}_+ - \text{lo}_-}{\text{lo}_d} \le \frac{p - m}{d} \le \frac{\t
 
 /-- Core4 `Term` predicate checking that `stTerm.step = k` and `stTerm` lies inside slice `X_k`
 for some slice `(k, X_k)` in the computed `OdeSystem` flowpipe tube starting at index `idx`. -/
-@[expose] def tubeSliceTerms (stTerm : Term) : Nat → List (List (String × Interval)) → List Term
+def tubeSliceTerms (stTerm : Term) : Nat → List (List (String × Interval)) → List Term
   | _, [] => []
   | idx, slice :: rest =>
     andT (eqNat (.get stTerm "step") (natT idx)) (boxContainsStateTerm slice stTerm) ::
@@ -450,7 +450,7 @@ for some slice `(k, X_k)` in the computed `OdeSystem` flowpipe tube starting at 
 requires `verifyTrajectorySafety sys initBox horizon safeBounds = true`, every variable in `safeBounds`
 within its safe interval, and `(st.step, st)` enclosed in the exact `k`-th slice `X_k` of
 `runFlowpipe sys initBox horizon`! -/
-@[expose] def odeFlowpipeInvariant
+def odeFlowpipeInvariant
     (sys : OdeSystem) (initBox : List (String × Interval))
     (horizon : Nat) (safeBounds : List (String × Interval)) : Term :=
   let tube := (runFlowpipe sys initBox horizon).getD []
@@ -478,7 +478,7 @@ admits `(old, new, req)` iff:
 3. `new.step = old.step + 1` (`"invalid_ode_step_counter"` otherwise), and
 4. `new` satisfies `odeFlowpipeInvariant` (`new ∈ X_{k+1} ∩ safeBounds` at step `k + 1`, where
    `X_{k+1} = stepFlowpipe sys X_k`!). -/
-@[expose] def odeFlowpipeTransitionLaw
+def odeFlowpipeTransitionLaw
     (sys : OdeSystem) (initBox : List (String × Interval))
     (horizon : Nat) (safeBounds : List (String × Interval)) : Term :=
   let inv := odeFlowpipeInvariant sys initBox horizon safeBounds
@@ -493,7 +493,7 @@ admits `(old, new, req)` iff:
 /-- Verified `CellContract` genuinely encoding `OdeSystem` validated flowpipe evolution:
 enforces both `verifyTrajectorySafety sys initBox horizon safeBounds = true` and exact slice-to-slice
 rational flowpipe progression `old ∈ X_k ↦ new ∈ X_{k+1} = stepFlowpipe sys X_k` inside `safeBounds`. -/
-@[expose] def odeSafetyCellContract
+def odeSafetyCellContract
     (sys : OdeSystem) (initBox : List (String × Interval))
     (horizon : Nat) (safeBounds : List (String × Interval)) : CellContract where
   law       := odeFlowpipeTransitionLaw sys initBox horizon safeBounds
@@ -819,8 +819,9 @@ theorem evalOdeLieDerivComponent_sound
     (hBox : BoxMem rho xTildeBox)
     (rhsExpr : RealExpr) (lieIv : Interval)
     (hEval : evalOdeLieDerivComponent sys xTildeBox rhsExpr = some lieIv) :
-    evalOdePointLieDerivComponent sys rho rhsExpr ∈ lieIv :=
-  evalLieDerivSum_sound xTildeBox rho hBox rhsExpr sys.fields lieIv hEval
+    evalOdePointLieDerivComponent sys rho rhsExpr ∈ lieIv := by
+  unfold evalOdeLieDerivComponent at hEval
+  exact evalLieDerivSum_sound xTildeBox rho hBox rhsExpr sys.fields lieIv hEval
 
 /-- Alias `evalOdeJacobian_sound` pointing to `evalOdeLieDerivComponent_sound`. -/
 abbrev evalOdeJacobian_sound := evalOdeLieDerivComponent_sound
@@ -910,7 +911,7 @@ theorem verifyPicardAPriori_encloses :
 Euler–Picard trajectory segment from `rho0` over $\tau \in [0, h]$: for every variable `v` in `xTildeBox`,
 there exist `(v, rhs) ∈ sys.fields`, time $\tau \in [0, h]$, and intermediate velocity `vel` enclosed in
 `evalInterval xTildeBox rhs` such that `rhoXi v = rho0 v + τ * vel`. -/
-@[expose] def IsPicardSegmentState
+abbrev IsPicardSegmentState
     (sys : OdeSystem) (x0Box xTildeBox : List (String × Interval)) (h : CanonicalRat)
     (rho0 rhoXi : String → CanonicalRat) : Prop :=
   ∀ v xTildeIv, xTildeBox.lookup v = some xTildeIv →
@@ -1030,7 +1031,7 @@ theorem picard_step_encloses_trajectory :
 /-! ## 5. Discrete/Rational-Time Lipschitz Picard Contraction on $[0, h]$ (`L * h < 1`) -/
 
 /-- Exact rational absolute value $|q|$. -/
-@[expose] def ratAbs (q : CanonicalRat) : CanonicalRat :=
+abbrev ratAbs (q : CanonicalRat) : CanonicalRat :=
   if decide (q < 0) then -q else q
 
 theorem ratAbs_nonneg (q : CanonicalRat) : 0 ≤ ratAbs q := by
@@ -1064,7 +1065,7 @@ theorem ratAbs_mul_of_nonneg {w a : CanonicalRat} (hw : 0 ≤ w) :
     · grind
 
 /-- Natural power $r^n$ over `CanonicalRat` for geometric contraction rates $(L \cdot h)^n$. -/
-@[expose] def powRatFlow (r : CanonicalRat) : Nat → CanonicalRat
+def powRatFlow (r : CanonicalRat) : Nat → CanonicalRat
   | 0 => 1
   | n + 1 => r * powRatFlow r n
 
@@ -1078,7 +1079,7 @@ theorem powRatFlow_nonneg {r : CanonicalRat} (hr : 0 ≤ r) (n : Nat) :
     grind
 
 /-- $\ell_\infty$ seminorm distance $\max_{v \in \text{vars}} |\rho_1(v) - \rho_2(v)|$ over state variables `vars`. -/
-@[expose] def boxDistInf : List String → (String → CanonicalRat) → (String → CanonicalRat) → CanonicalRat
+def boxDistInf : List String → (String → CanonicalRat) → (String → CanonicalRat) → CanonicalRat
   | [], _, _ => 0
   | v :: vs, rho1, rho2 => max (ratAbs (rho1 v - rho2 v)) (boxDistInf vs rho1 rho2)
 
@@ -1116,13 +1117,13 @@ theorem boxDistInf_le_of_all {vars : List String} {rho1 rho2 : String → Canoni
     grind
 
 /-- State variable names of an `OdeSystem`. -/
-@[expose] def odeStateVars (sys : OdeSystem) : List String :=
+def odeStateVars (sys : OdeSystem) : List String :=
   sys.fields.map (·.1)
 
 /-- Box-Lipschitz condition with constant $L \ge 0$ in the $\ell_\infty$ norm over `xTildeBox`:
 for all $\rho_1, \rho_2 \in \tilde{X}$ and every component `(name, rhs) ∈ sys.fields`,
 $|f_i(\rho_1) - f_i(\rho_2)| \le L \cdot \|\rho_1 - \rho_2\|_\infty$. -/
-@[expose] def IsOdeBoxLipschitz
+def IsOdeBoxLipschitz
     (sys : OdeSystem) (xTildeBox : List (String × Interval)) (L : CanonicalRat) : Prop :=
   0 ≤ L ∧
     ∀ rho1 rho2, BoxMem rho1 xTildeBox → BoxMem rho2 xTildeBox →
@@ -1131,7 +1132,7 @@ $|f_i(\rho_1) - f_i(\rho_2)| \le L \cdot \|\rho_1 - \rho_2\|_\infty$. -/
 
 /-- Computable interval-Jacobian induced $\ell_\infty$ Lipschitz bound $\max_i \sum_j \max(|\text{lo}_{i,j}|, |\text{hi}_{i,j}|)$
 over `xTildeBox`. -/
-@[expose] def computeOdeLipschitzBound
+def computeOdeLipschitzBound
     (sys : OdeSystem) (xTildeBox : List (String × Interval)) : Option CanonicalRat := do
   let jac ← evalOdeJacobian sys xTildeBox
   pure <| jac.foldl (fun maxRow (_, row) =>
@@ -1142,7 +1143,7 @@ over `xTildeBox`. -/
 /-- Computable Picard–Lindelöf Banach contraction verifier on $[0, h]$:
 checks BOTH self-mapping $X_0 \oplus [0, h] F(\tilde{X}) \subseteq \tilde{X}$ (`verifyPicardAPriori`)
 AND strict Jacobian contraction factor $L \cdot h < 1$! -/
-@[expose] def verifyPicardContraction
+def verifyPicardContraction
     (sys : OdeSystem) (x0Box xTildeBox : List (String × Interval)) (h : CanonicalRat) : Bool :=
   verifyPicardAPriori sys x0Box xTildeBox h &&
     match computeOdeLipschitzBound sys xTildeBox with
@@ -1150,19 +1151,19 @@ AND strict Jacobian contraction factor $L \cdot h < 1$! -/
     | none => false
 
 /-- Sum of quadrature weights $\sum_{(w, \tau) \in \text{qs}} w$. -/
-@[expose] def quadWeightSum : List (CanonicalRat × CanonicalRat) → CanonicalRat
+def quadWeightSum : List (CanonicalRat × CanonicalRat) → CanonicalRat
   | [] => 0
   | (w, _) :: rest => w + quadWeightSum rest
 
 /-- Quadrature sum $\sum_{(w, \tau) \in \text{qs}} w \cdot f_i(\gamma(\tau))$ approximating $\int_0^t f_i(\gamma(\tau))\,d\tau$. -/
-@[expose] def evalPicardQuadSum
+def evalPicardQuadSum
     (rhs : RealExpr) (gamma : CanonicalRat → String → CanonicalRat) :
     List (CanonicalRat × CanonicalRat) → CanonicalRat
   | [] => 0
   | (w, τ) :: rest => w * evalExpr (gamma τ) rhs + evalPicardQuadSum rhs gamma rest
 
 /-- Rational-time / discrete quadrature Picard operator $\Phi(\gamma)(t)(v) = x_0(v) + \sum_{(w, \tau) \in \text{nodes}(t)} w \cdot f_v(\gamma(\tau))$. -/
-@[expose] def picardOperator
+def picardOperator
     (sys : OdeSystem) (rho0 : String → CanonicalRat)
     (nodes : CanonicalRat → List (CanonicalRat × CanonicalRat))
     (gamma : CanonicalRat → String → CanonicalRat)
@@ -1172,7 +1173,7 @@ AND strict Jacobian contraction factor $L \cdot h < 1$! -/
   | none => rho0 v
 
 /-- $n$-fold Picard iteration $\Phi^{[n]}(\gamma_0)$ starting from the constant curve $\gamma_0(t) = \rho_0$. -/
-@[expose] def iteratePicardOperator
+def iteratePicardOperator
     (sys : OdeSystem) (rho0 : String → CanonicalRat)
     (nodes : CanonicalRat → List (CanonicalRat × CanonicalRat)) :
     Nat → (CanonicalRat → String → CanonicalRat)
@@ -1181,14 +1182,14 @@ AND strict Jacobian contraction factor $L \cdot h < 1$! -/
 
 /-- Valid nonnegative rational quadrature family on $[0, h]$:
 for every $t \in [0, h]$, weights are nonnegative, sample times lie in $[0, h]$, and weights sum to $t$. -/
-@[expose] def ValidQuadratureOn
+def ValidQuadratureOn
     (h : CanonicalRat) (nodes : CanonicalRat → List (CanonicalRat × CanonicalRat)) : Prop :=
   ∀ t, t ∈ Interval.mk 0 h →
     quadWeightSum (nodes t) = t ∧
     ∀ p ∈ nodes t, 0 ≤ p.1 ∧ p.2 ∈ Interval.mk 0 h
 
 /-- Supremum $\ell_\infty$ distance $\max_{t \in \text{times}} \|\gamma_1(t) - \gamma_2(t)\|_\infty$ over a finite rational time grid. -/
-@[expose] def curveSupDist
+def curveSupDist
     (vars : List String) : List CanonicalRat →
     (CanonicalRat → String → CanonicalRat) → (CanonicalRat → String → CanonicalRat) → CanonicalRat
   | [], _, _ => 0
@@ -1986,8 +1987,9 @@ theorem inferPicardAPrioriBox_encloses_init_and_fields
     verifyPicardAPriori sys box xTildeBox sys.dt = true ∧
     0 ≤ sys.dt ∧
     BoxMem rho0 xTildeBox ∧
-    (∀ v iv, xTildeBox.lookup v = some iv → ∃ rhs, (v, rhs) ∈ sys.fields) :=
-  inferPicardAPrioriBoxWithFuel_encloses_init_and_fields hInfer hBox0
+    (∀ v iv, xTildeBox.lookup v = some iv → ∃ rhs, (v, rhs) ∈ sys.fields) := by
+  unfold inferPicardAPrioriBox at hInfer
+  exact inferPicardAPrioriBoxWithFuel_encloses_init_and_fields hInfer hBox0
 
 /-- Single-step $N$-dimensional enclosure theorem for `stepPicardValidated`:
 Whenever `stepPicardValidated sys curBox xTildeBox h = some nextBox` and `BoxMem rho0 curBox`,
@@ -2067,7 +2069,7 @@ theorem stepPicardValidated_encloses_step
    `(name, rhsExpr) ∈ sys.fields`, there exist an intermediate time `ζ ∈ [0, sys.dt]` and additive
    remainder `r_pad ∈ sys.remainderPad` such that
    $$x_{k+1,i}(0) = x_{k,i}(0) + \Delta t \cdot f_i(x_k(0)) + \frac{\Delta t^2}{2}(\mathcal{L}_f f_i)(x_k(\zeta)) + r_{\text{pad}}.$$ -/
-@[expose] def IsValidOdeFlowTrajectory
+def IsValidOdeFlowTrajectory
     (sys : OdeSystem) (steps : Nat)
     (traj : Nat → CanonicalRat → String → CanonicalRat) : Prop :=
   ∀ k, k < steps →
@@ -2187,63 +2189,200 @@ theorem verifyTrajectorySafety_sound :
         (∀ k, k ≤ steps → BoxMem (traj k 0) (tube.getD k []) ∧ BoxMem (traj k 0) safeBounds) ∧
         (∀ k, k < steps → ∀ τ ∈ Interval.mk 0 sys.dt, BoxMem (traj k τ) safeBounds) := by
   intro sys initBox safeBounds steps traj hVer hInit hFlow
+  unfold verifyTrajectorySafety at hVer
   exact verifyTrajectorySafetyLoop_sound steps sys initBox safeBounds traj hVer hInit hFlow
 
-/-- Canonical rational trapezoidal / Euler quadrature rule on $[0, h]$:
-uses trapezoidal nodes $[(h/2, 0), (h/2, h)]$ at $t = h$ and Euler node $[(t, 0)]$ for $t \in [0, h)$. -/
-@[expose] def trapezoidalQuadrature (h : CanonicalRat) (t : CanonicalRat) :
+/-- Quadrature-free characterization of a true $C^2$ continuous-time ODE trajectory over `steps`
+horizons (`IsTrueC2OdeTrajectory`):
+1. **Mean-Value Continuous Enclosure (`k < steps`, `τ ∈ [0, sys.dt]`)**: whenever `curBox` encloses
+   `traj k 0` and `xTildeBox` passes `verifyPicardAPriori sys curBox xTildeBox sys.dt = true`, every
+   inter-step state `traj k τ` (`τ ∈ [0, sys.dt]`) satisfies the Mean-Value / Euler–Picard segment
+   inclusion `IsPicardSegmentState sys curBox xTildeBox sys.dt (traj k 0) (traj k τ)` (hence lies in
+   `xTildeBox` over the entire step $[t_k, t_k + \Delta t]$),
+2. **2nd-Order Lagrange–Lie Remainder Over `[0, sys.dt]` (`k < steps`)**: for every state component
+   `(name, rhsExpr) ∈ sys.fields`, there exist an intermediate time `ζ ∈ [0, sys.dt]` across the full
+   step and `r_pad ∈ sys.remainderPad` such that
+   $$x_{k+1,i}(0) = x_{k,i}(0) + \Delta t \cdot f_i(x_k(0)) + \frac{\Delta t^2}{2}(\mathcal{L}_f f_i)(x_k(\zeta)) + r_{\text{pad}}.$$ -/
+def IsTrueC2OdeTrajectory
+    (sys : OdeSystem) (steps : Nat)
+    (traj : Nat → CanonicalRat → String → CanonicalRat) : Prop :=
+  ∀ k, k < steps →
+    (∀ curBox xTildeBox,
+      verifyPicardAPriori sys curBox xTildeBox sys.dt = true →
+      BoxMem (traj k 0) curBox →
+      ∀ τ ∈ Interval.mk 0 sys.dt,
+        IsPicardSegmentState sys curBox xTildeBox sys.dt (traj k 0) (traj k τ)) ∧
+    (∀ name rhsExpr, (name, rhsExpr) ∈ sys.fields →
+      ∃ ζ r_pad,
+        ζ ∈ Interval.mk 0 sys.dt ∧
+        r_pad ∈ sys.remainderPad ∧
+        traj (k + 1) 0 name = traj k 0 name + sys.dt * evalExpr (traj k 0) rhsExpr +
+          (((sys.dt * sys.dt) / 2) * evalOdePointLieDerivComponent sys (traj k ζ) rhsExpr + r_pad))
+
+private theorem verifyTrajectorySafetyLoop_c2_ode_sound :
+    ∀ (steps : Nat) (sys : OdeSystem) (curBox safeBounds : List (String × Interval))
+      (traj : Nat → CanonicalRat → String → CanonicalRat),
+      verifyTrajectorySafetyLoop sys safeBounds steps curBox = true →
+      BoxMem (traj 0 0) curBox →
+      IsTrueC2OdeTrajectory sys steps traj →
+      ∃ tube,
+        runFlowpipeLoop sys steps curBox = some tube ∧
+        tube.length = steps + 1 ∧
+        (∀ k, k ≤ steps → BoxMem (traj k 0) (tube.getD k []) ∧ BoxMem (traj k 0) safeBounds) ∧
+        (∀ k, k < steps → ∀ τ ∈ Interval.mk 0 sys.dt, BoxMem (traj k τ) safeBounds)
+  | 0, sys, curBox, safeBounds, traj, hVer, hInit, _ => by
+    unfold verifyTrajectorySafetyLoop at hVer
+    refine ⟨[curBox], rfl, rfl, ?_, ?_⟩
+    · intro k hk
+      have hk0 : k = 0 := by omega
+      subst hk0
+      exact ⟨hInit, checkBoxInEnvelope_sound hVer hInit⟩
+    · intro k hk; omega
+  | steps + 1, sys, curBox, safeBounds, traj, hVer, hInit, hFlow => by
+    unfold verifyTrajectorySafetyLoop at hVer
+    cases hEnv0 : checkBoxInEnvelope curBox safeBounds with
+    | false => rw [hEnv0] at hVer; simp at hVer
+    | true =>
+      rw [hEnv0] at hVer
+      simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hVer
+      cases hInfer : inferPicardAPrioriBox sys curBox with
+      | none => rw [hInfer] at hVer; simp at hVer
+      | some xTildeBox =>
+        rw [hInfer] at hVer
+        dsimp only at hVer
+        cases hEnvTilde : checkBoxInEnvelope xTildeBox safeBounds with
+        | false => rw [hEnvTilde] at hVer; simp at hVer
+        | true =>
+          rw [hEnvTilde] at hVer
+          simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hVer
+          cases hStep : stepPicardValidated sys curBox xTildeBox sys.dt with
+          | none => rw [hStep] at hVer; simp at hVer
+          | some nextBox =>
+            rw [hStep] at hVer
+            dsimp only at hVer
+            obtain ⟨hPic, _, _, _⟩ :=
+              inferPicardAPrioriBox_encloses_init_and_fields hInfer hInit
+            obtain ⟨hMvt0, hTaylor0⟩ := hFlow 0 (Nat.zero_lt_succ steps)
+            have hSegTilde : ∀ τ ∈ Interval.mk 0 sys.dt, BoxMem (traj 0 τ) xTildeBox := by
+              intro τ hτ
+              exact verifyPicardAPriori_discharges_rough_enclosure
+                sys curBox xTildeBox sys.dt (traj 0 0) (traj 0 τ)
+                hPic hInit (hMvt0 curBox xTildeBox hPic hInit τ hτ)
+            have hNextInit : BoxMem (traj 1 0) nextBox := by
+              apply stepPicardValidated_encloses_step hStep hInit
+              intro name rhsExpr hMemField
+              obtain ⟨ζ, r_pad, hζ, hrPad, hEq⟩ := hTaylor0 name rhsExpr hMemField
+              exact ⟨traj 0 ζ, r_pad, hSegTilde ζ hζ, hrPad, hEq⟩
+            let trajShift : Nat → CanonicalRat → String → CanonicalRat := fun k => traj (k + 1)
+            have hFlowShift : IsTrueC2OdeTrajectory sys steps trajShift := by
+              intro k hk
+              exact hFlow (k + 1) (Nat.succ_lt_succ hk)
+            obtain ⟨restTube, hRestRun, hRestLen, hRestDisc, hRestCont⟩ :=
+              verifyTrajectorySafetyLoop_c2_ode_sound steps sys nextBox safeBounds trajShift
+                hVer hNextInit hFlowShift
+            have hRunSucc : runFlowpipeLoop sys (steps + 1) curBox = some (curBox :: restTube) := by
+              unfold runFlowpipeLoop stepFlowpipe
+              simp [bind, Option.bind, pure, hInfer, hStep, hRestRun]
+            refine ⟨curBox :: restTube, hRunSucc, by simp [hRestLen], ?_, ?_⟩
+            · intro k hk
+              cases k with
+              | zero => exact ⟨hInit, checkBoxInEnvelope_sound hEnv0 hInit⟩
+              | succ j => simpa [trajShift, List.getD] using hRestDisc j (Nat.le_of_succ_le_succ hk)
+            · intro k hk τ hτ
+              cases k with
+              | zero => exact checkBoxInEnvelope_sound hEnvTilde (hSegTilde τ hτ)
+              | succ j => exact hRestCont j (Nat.lt_of_succ_lt_succ hk) τ hτ
+
+/-- **Quadrature-Free True $C^2$ ODE Trajectory Containment (`verifyTrajectorySafety_c2_ode_sound`)**:
+Whenever `verifyTrajectorySafety sys initBox steps safeBounds = true`, **every** true $C^2$ ODE
+trajectory (`IsTrueC2OdeTrajectory`, including non-autonomous systems such as $\dot{t} = 1, \dot{x} = t^2$
+whose exact drift $\Delta t^3 / 3$ comes from interior $\zeta \in (0, \Delta t)$ rather than $\tau = 0$)
+is enclosed in every discrete slice `tube[k]` and stays inside `safeBounds` across the entire
+continuous step $[t_k, t_k + \Delta t]$. -/
+theorem verifyTrajectorySafety_c2_ode_sound
+    (sys : OdeSystem) (initBox safeBounds : List (String × Interval))
+    (steps : Nat) (traj : Nat → CanonicalRat → String → CanonicalRat)
+    (hVer : verifyTrajectorySafety sys initBox steps safeBounds = true)
+    (hInit : BoxMem (traj 0 0) initBox)
+    (hFlow : IsTrueC2OdeTrajectory sys steps traj) :
+    ∃ tube,
+      runFlowpipe sys initBox steps = some tube ∧
+      tube.length = steps + 1 ∧
+      (∀ k, k ≤ steps → BoxMem (traj k 0) (tube.getD k []) ∧ BoxMem (traj k 0) safeBounds) ∧
+      (∀ k, k < steps → ∀ τ ∈ Interval.mk 0 sys.dt, BoxMem (traj k τ) safeBounds) := by
+  unfold verifyTrajectorySafety at hVer
+  exact verifyTrajectorySafetyLoop_c2_ode_sound steps sys initBox safeBounds traj hVer hInit hFlow
+
+/-- Continuous rational trapezoidal quadrature rule on $[0, h]$:
+uniformly assigns weights $[(t/2, 0), (t/2, t)]$ across **all** $t \in [0, h]$ (with zero boundary jump at $t = h$). -/
+def trapezoidalQuadrature (_h : CanonicalRat) (t : CanonicalRat) :
     List (CanonicalRat × CanonicalRat) :=
-  if t == h then [(h / 2, 0), (h / 2, h)] else [(t, 0)]
+  [(t / 2, 0), (t / 2, t)]
 
 theorem trapezoidalQuadrature_valid {h : CanonicalRat} (hNonneg : 0 ≤ h) :
     ValidQuadratureOn h (trapezoidalQuadrature h) := by
   intro t ht
   rw [Interval.mem_iff] at ht
   unfold trapezoidalQuadrature
-  cases hEq : t == h
-  · simp only [Bool.false_eq_true, ↓reduceIte]
-    refine ⟨?_, ?_⟩
-    · simp only [quadWeightSum]
-      grind
-    · intro p hp
-      simp only [List.mem_singleton] at hp
-      subst hp
-      rw [Interval.mem_iff]
-      exact ⟨ht.1, ⟨by grind, hNonneg⟩⟩
-  · simp only [beq_iff_eq] at hEq
-    subst hEq
-    simp only [↓reduceIte]
-    refine ⟨?_, ?_⟩
-    · simp only [quadWeightSum]
-      grind
-    · intro p hp
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
-      rcases hp with rfl | rfl
-      · rw [Interval.mem_iff]; exact ⟨by grind, ⟨by grind, hNonneg⟩⟩
-      · rw [Interval.mem_iff]; exact ⟨by grind, ⟨hNonneg, by grind⟩⟩
+  refine ⟨?_, ?_⟩
+  · simp only [quadWeightSum]
+    grind
+  · intro p hp
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
+    rcases hp with rfl | rfl
+    · rw [Interval.mem_iff]; exact ⟨by grind, ⟨by grind, hNonneg⟩⟩
+    · rw [Interval.mem_iff]; exact ⟨by grind, ht⟩
 
-/-- Constructive multi-step 2nd-order Taylor–Picard trajectory seeded at `rho0`:
+/-- Simpson's 3-node rational quadrature rule $[(t/6, 0), (2t/3, t/2), (t/6, t)]$ on $[0, h]$:
+exact for all polynomial integrands up to degree $3$ (so $\dot{t} = 1, \dot{x} = t^2$ integrates to
+the exact analytical trajectory $x(t) = t^3 / 3$ at $m = 2$). -/
+def simpsonQuadrature (_h : CanonicalRat) (t : CanonicalRat) :
+    List (CanonicalRat × CanonicalRat) :=
+  [(t / 6, 0), (2 * t / 3, t / 2), (t / 6, t)]
+
+theorem simpsonQuadrature_valid {h : CanonicalRat} (hNonneg : 0 ≤ h) :
+    ValidQuadratureOn h (simpsonQuadrature h) := by
+  intro t ht
+  rw [Interval.mem_iff] at ht
+  unfold simpsonQuadrature
+  refine ⟨?_, ?_⟩
+  · simp only [quadWeightSum]
+    grind
+  · intro p hp
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
+    rcases hp with rfl | rfl | rfl
+    · rw [Interval.mem_iff]; exact ⟨by grind, ⟨by grind, hNonneg⟩⟩
+    · rw [Interval.mem_iff]; exact ⟨by grind, ⟨by grind, by grind⟩⟩
+    · rw [Interval.mem_iff]; exact ⟨by grind, ht⟩
+
+/-- Constructive multi-step 2nd-order Taylor–Picard trajectory seeded at `rho0` and parameterized
+over any fractional Lagrange–Lie remainder coordinate `θ ∈ [0, 1]` (defaulting to `1/3`):
 on each step $k$, evolves continuously across $\tau \in [0, \Delta t]$ via the $m$-th Picard iterate
-`iteratePicardOperator sys (rhoStep k) (trapezoidalQuadrature sys.dt) m τ`, and advances the discrete
-horizon state `rhoStep (k + 1)` by the exact 2nd-order Taylor–Lie map with $r_{\text{pad}} = 0$. -/
-@[expose] def buildTaylorPicardStep
-    (sys : OdeSystem) (m : Nat) (rho : String → CanonicalRat) (v : String) : CanonicalRat :=
+`iteratePicardOperator sys (rhoStep k) (simpsonQuadrature sys.dt) m τ`, and advances the discrete
+horizon state `rhoStep (k + 1)` by evaluating the 2nd-order Taylor–Lie remainder at
+$\zeta = \theta \cdot \Delta t \in [0, \Delta t]$ (`picardIteratedTrajectory_safety_sound` proves
+containment simultaneously for **every** $\theta \in [0, 1]$!). -/
+def buildTaylorPicardStep
+    (sys : OdeSystem) (m : Nat) (rho : String → CanonicalRat)
+    (v : String) (θ : CanonicalRat := CanonicalRat.mk 1 3) : CanonicalRat :=
   match sys.fields.lookup v with
   | some rhsExpr =>
-    let zeta := iteratePicardOperator sys rho (trapezoidalQuadrature sys.dt) m 0
+    let zeta := iteratePicardOperator sys rho (simpsonQuadrature sys.dt) m (θ * sys.dt)
     rho v + sys.dt * evalExpr rho rhsExpr +
       (((sys.dt * sys.dt) / 2) * evalOdePointLieDerivComponent sys zeta rhsExpr + 0)
   | none => rho v
 
-@[expose] def buildTaylorPicardDiscrete
-    (sys : OdeSystem) (m : Nat) (rho0 : String → CanonicalRat) : Nat → String → CanonicalRat
-  | 0 => rho0
-  | k + 1 => buildTaylorPicardStep sys m (buildTaylorPicardDiscrete sys m rho0 k)
-
-@[expose] def buildTaylorPicardTrajectory
+def buildTaylorPicardDiscrete
     (sys : OdeSystem) (m : Nat) (rho0 : String → CanonicalRat)
-    (k : Nat) (τ : CanonicalRat) : String → CanonicalRat :=
-  iteratePicardOperator sys (buildTaylorPicardDiscrete sys m rho0 k) (trapezoidalQuadrature sys.dt) m τ
+    (k : Nat) (θ : CanonicalRat := CanonicalRat.mk 1 3) : String → CanonicalRat :=
+  match k with
+  | 0 => rho0
+  | k' + 1 => fun v => buildTaylorPicardStep sys m (buildTaylorPicardDiscrete sys m rho0 k' θ) v θ
+
+def buildTaylorPicardTrajectory
+    (sys : OdeSystem) (m : Nat) (rho0 : String → CanonicalRat)
+    (k : Nat) (τ : CanonicalRat) (θ : CanonicalRat := CanonicalRat.mk 1 3) : String → CanonicalRat :=
+  iteratePicardOperator sys (buildTaylorPicardDiscrete sys m rho0 k θ) (simpsonQuadrature sys.dt) m τ
 
 theorem lookup_of_mem_nodup_keys :
     ∀ {fields : List (String × RealExpr)} {name : String} {rhs : RealExpr},
@@ -2269,8 +2408,9 @@ theorem lookup_of_mem_nodup_keys :
 
 /-- **Theorem (`picardIteratedTrajectory_safety_sound`)**:
 Connects arbitrary-order Picard iteration (`buildTaylorPicardTrajectory sys m rho0`) directly to
-$K$-step flowpipe safety (`verifyTrajectorySafety`) with purely structural hypotheses (`0 ≤ sys.dt`,
-`0 ∈ sys.remainderPad`, distinct field names, and `BoxMem rho0 initBox`). -/
+$K$-step flowpipe safety (`verifyTrajectorySafety`) uniformly across **every** fractional remainder
+node `θ ∈ Interval.mk 0 1` (`ζ = θ * sys.dt ∈ [0, sys.dt]`, defaulting to `θ = 1/3`) with purely
+structural hypotheses (`0 ≤ sys.dt`, `0 ∈ sys.remainderPad`, distinct field names, and `BoxMem rho0 initBox`). -/
 theorem picardIteratedTrajectory_safety_sound
     (sys : OdeSystem) (initBox safeBounds : List (String × Interval))
     (steps m : Nat) (rho0 : String → CanonicalRat)
@@ -2278,53 +2418,54 @@ theorem picardIteratedTrajectory_safety_sound
     (hZeroPad : (0 : CanonicalRat) ∈ sys.remainderPad)
     (hNodup : (sys.fields.map Prod.fst).Nodup)
     (hVer : verifyTrajectorySafety sys initBox steps safeBounds = true)
-    (hInit : BoxMem rho0 initBox) :
+    (hInit : BoxMem rho0 initBox)
+    (θ : CanonicalRat := CanonicalRat.mk 1 3)
+    (hθ : θ ∈ Interval.mk 0 1 := by decide) :
     ∃ tube,
       runFlowpipe sys initBox steps = some tube ∧
       tube.length = steps + 1 ∧
       (∀ k, k ≤ steps →
-        BoxMem (buildTaylorPicardDiscrete sys m rho0 k) (tube.getD k []) ∧
-        BoxMem (buildTaylorPicardDiscrete sys m rho0 k) safeBounds) ∧
+        BoxMem (buildTaylorPicardDiscrete sys m rho0 k θ) (tube.getD k []) ∧
+        BoxMem (buildTaylorPicardDiscrete sys m rho0 k θ) safeBounds) ∧
       (∀ k, k < steps → ∀ τ ∈ Interval.mk 0 sys.dt,
-        BoxMem (buildTaylorPicardTrajectory sys m rho0 k τ) safeBounds) := by
-  let traj := buildTaylorPicardTrajectory sys m rho0
-  have hAtZero : ∀ k v, traj k 0 v = buildTaylorPicardDiscrete sys m rho0 k v := by
+        BoxMem (buildTaylorPicardTrajectory sys m rho0 k τ θ) safeBounds) := by
+  let traj : Nat → CanonicalRat → String → CanonicalRat :=
+    fun k τ => buildTaylorPicardTrajectory sys m rho0 k τ θ
+  have hAtZero : ∀ k v, traj k 0 v = buildTaylorPicardDiscrete sys m rho0 k θ v := by
     intro k v
     unfold traj buildTaylorPicardTrajectory
     cases m with
     | zero => rfl
     | succ m' =>
-      unfold iteratePicardOperator picardOperator trapezoidalQuadrature
-      cases hEq : (0 : CanonicalRat) == sys.dt
-      · simp only [Bool.false_eq_true, ↓reduceIte, evalPicardQuadSum]
-        cases sys.fields.find? (·.1 == v) <;> grind
-      · simp only [beq_iff_eq] at hEq
-        have hDtZero : sys.dt = 0 := hEq.symm
-        simp only [hDtZero, ↓reduceIte, evalPicardQuadSum]
-        cases sys.fields.find? (·.1 == v) <;> grind
-  have hFunZero : ∀ k, traj k 0 = buildTaylorPicardDiscrete sys m rho0 k := by
+      unfold iteratePicardOperator picardOperator simpsonQuadrature
+      simp only [evalPicardQuadSum]
+      cases sys.fields.find? (·.1 == v) <;> grind
+  have hFunZero : ∀ k, traj k 0 = buildTaylorPicardDiscrete sys m rho0 k θ := by
     intro k; funext u; exact hAtZero k u
   have hInitTraj : BoxMem (traj 0 0) initBox := by
     rw [hFunZero 0]
     exact hInit
+  have hZetaMem : (θ * sys.dt) ∈ Interval.mk 0 sys.dt := by
+    rw [Interval.mem_iff] at hθ ⊢
+    dsimp only [Interval.mk] at hθ ⊢
+    have hLo : 0 ≤ θ * sys.dt := Rat.mul_nonneg hθ.1 hDtNonneg
+    have hHi : θ * sys.dt ≤ 1 * sys.dt := Rat.mul_le_mul_of_nonneg_right hθ.2 hDtNonneg
+    exact ⟨hLo, by grind⟩
   have hValid : IsValidOdeFlowTrajectory sys steps traj := by
     intro k _
-    refine ⟨⟨trapezoidalQuadrature sys.dt, trapezoidalQuadrature_valid hDtNonneg, ?_⟩, ?_⟩
+    refine ⟨⟨simpsonQuadrature sys.dt, simpsonQuadrature_valid hDtNonneg, ?_⟩, ?_⟩
     · intro τ _
       refine ⟨m, fun u => ?_⟩
       rw [hFunZero k]
       rfl
     · intro name rhsExpr hMemField
-      refine ⟨0, 0, ⟨by grind, hDtNonneg⟩, hZeroPad, ?_⟩
+      refine ⟨θ * sys.dt, 0, hZetaMem, hZeroPad, ?_⟩
       rw [hAtZero (k + 1) name]
       unfold buildTaylorPicardDiscrete buildTaylorPicardStep
       rw [lookup_of_mem_nodup_keys hNodup hMemField]
       dsimp only
-      have hZetaEq :
-          iteratePicardOperator sys (buildTaylorPicardDiscrete sys m rho0 k)
-            (trapezoidalQuadrature sys.dt) m 0 =
-          buildTaylorPicardDiscrete sys m rho0 k := hFunZero k
-      rw [hZetaEq, hFunZero k]
+      rw [hFunZero k]
+      rfl
   obtain ⟨tube, hRun, hLen, hDisc, hCont⟩ :=
     verifyTrajectorySafety_sound sys initBox safeBounds steps traj hVer hInitTraj hValid
   refine ⟨tube, hRun, hLen, ?_, hCont⟩

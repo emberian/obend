@@ -53,6 +53,7 @@ public import Obend.Spec.Elaborate
 import all Obend.Judge.Class
 import all Obend.Judge.RealAnalysis
 import all Obend.Analysis.Groebner
+import all Obend.Analysis.SosLyapunov
 import all Obend.Logic.Obligation
 import all Obend.Spec.Syntax
 

@@ -35,6 +35,8 @@ public import Obend.Analysis.Equitable
 public import Obend.Analysis.TaylorModel
 public import Obend.Analysis.Flowpipe
 public import Obend.Analysis.Hybrid
+import all Obend.Analysis.Flowpipe
+import all Obend.Analysis.Hybrid
 public section
 
 namespace Obend.Analysis
@@ -96,7 +98,7 @@ theorem orthogonal_idempotents_sum_sq
 /-- Evaluate the scaled CTQW transition amplitude $(s \cdot U(t))_{w, u} = \sum_{k \in \text{modes}} \phi_k \cdot (E_k)_{w, u}$
 in $\mathbb{Z}[i]$ from source vertex `u` to target vertex `w`, given scaled spectral projectors
 `E k` and mode phase factors `phase k` ($\phi_k = e^{-i \lambda_k t}$). -/
-@[expose] def evalSpectralPropagatorEntry
+def evalSpectralPropagatorEntry
     (modes : List Nat)
     (E : Nat → Nat → Nat → Int)
     (phase : Nat → GaussianInt)
@@ -175,7 +177,7 @@ theorem godsil_cospectral_parity_implies_pst
 /-- Check strong cospectrality between vertices `u` and `v` across a list of scaled projectors `projectors`:
 for every $E_k$, either column $u$ equals column $v$ ($E_k e_u = +E_k e_v$) or column $u$ equals
 minus column $v$ ($E_k e_u = -E_k e_v$). -/
-@[expose] def checkStrongCospectrality (projectors : List IntMatrix) (u v : Nat) : Bool :=
+def checkStrongCospectrality (projectors : List IntMatrix) (u v : Nat) : Bool :=
   projectors.all (fun E =>
     let indices := List.range E.dim
     let isEven := indices.all (fun w => decide (E.entry w u = E.entry w v))
@@ -186,7 +188,7 @@ minus column $v$ ($E_k e_u = -E_k e_v$). -/
 Given matrix `A`, current auxiliary matrix `B_{k-1}`, previous coefficient `c_{n-k+1}`,
 current step `k`, and remaining steps `rem`, computes the list of lower coefficients
 `[c_{n-k}, ..., c_0]`. -/
-@[expose] def faddeevLeVerrierAux (A B : IntMatrix) (cPrev : Int) (k : Nat) : Nat → List Int
+def faddeevLeVerrierAux (A B : IntMatrix) (cPrev : Int) (k : Nat) : Nat → List Int
   | 0 => []
   | rem + 1 =>
     let bNext := A.mul (B.add (IntMatrix.scaledIdentity A.dim cPrev))
@@ -196,11 +198,11 @@ current step `k`, and remaining steps `rem`, computes the list of lower coeffici
 /-- Compute the descending coefficient list `[1, c_{n-1}, ..., c_1, c_0]` of the monic
 characteristic polynomial $\det(\lambda I - A) = \lambda^n + c_{n-1}\lambda^{n-1} + \dots + c_0$
 via the Faddeev–LeVerrier trace recurrence. -/
-@[expose] def faddeevLeVerrierCoeffs (A : IntMatrix) : List Int :=
+def faddeevLeVerrierCoeffs (A : IntMatrix) : List Int :=
   1 :: faddeevLeVerrierAux A (IntMatrix.zero A.dim) 1 1 A.dim
 
 /-- Convert a list of descending polynomial coefficients `[c_d, ..., c_0]` into a `Poly` in variable `0` ($\lambda$). -/
-@[expose] def coeffsToPolyDesc : List Int → Poly
+def coeffsToPolyDesc : List Int → Poly
   | [] => Poly.zero
   | c :: cs =>
     let deg := cs.length
@@ -212,28 +214,28 @@ via the Faddeev–LeVerrier trace recurrence. -/
 
 /-- **Faddeev–LeVerrier Characteristic Polynomial Synthesis** (`faddeevLeVerrier`):
 Computes $\det(\lambda I - A) \in \mathbb{Q}[\lambda]$ directly from the matrix entries of `A`. -/
-@[expose] def faddeevLeVerrier (A : IntMatrix) : Poly :=
+def faddeevLeVerrier (A : IntMatrix) : Poly :=
   coeffsToPolyDesc (faddeevLeVerrierCoeffs A)
 
 /-- Characteristic polynomial $\det(\lambda I - A)$ for $2 \times 2$ integer matrices via Faddeev–LeVerrier. -/
-@[expose] def charPoly2x2 (A : IntMatrix) : Poly :=
+def charPoly2x2 (A : IntMatrix) : Poly :=
   faddeevLeVerrier A
 
 /-- Characteristic polynomial $\det(\lambda I - A)$ for $3 \times 3$ integer matrices via Faddeev–LeVerrier. -/
-@[expose] def charPoly3x3 (A : IntMatrix) : Poly :=
+def charPoly3x3 (A : IntMatrix) : Poly :=
   faddeevLeVerrier A
 
 /-- Characteristic polynomial $\det(\lambda I - A)$ for $4 \times 4$ integer matrices via Faddeev–LeVerrier. -/
-@[expose] def charPoly4x4 (A : IntMatrix) : Poly :=
+def charPoly4x4 (A : IntMatrix) : Poly :=
   faddeevLeVerrier A
 
 /-- Sum a list of `dim × dim` integer matrices: $\sum_{P \in \text{ms}} P$. -/
-@[expose] def sumIntMatrices (dim : Nat) : List IntMatrix → IntMatrix
+def sumIntMatrices (dim : Nat) : List IntMatrix → IntMatrix
   | [] => IntMatrix.zero dim
   | P :: Ps => P.add (sumIntMatrices dim Ps)
 
 /-- Weighted linear combination of `dim × dim` integer matrices: $\sum_{i} \lambda_i P_i$. -/
-@[expose] def weightedSumIntMatrices (dim : Nat) : List Int → List IntMatrix → IntMatrix
+def weightedSumIntMatrices (dim : Nat) : List Int → List IntMatrix → IntMatrix
   | [], _ => IntMatrix.zero dim
   | _, [] => IntMatrix.zero dim
   | c :: cs, P :: Ps => (P.scale c).add (weightedSumIntMatrices dim cs Ps)
@@ -241,7 +243,7 @@ Computes $\det(\lambda I - A) \in \mathbb{Q}[\lambda]$ directly from the matrix 
 /-- **Lagrange–Sylvester Spectral Projector Synthesis over $\mathbb{Z}$** (`synthesizeSylvesterProjector`):
 Constructs the scaled spectral projector for eigenvalue index `i`:
 $$P_i(Q) = \text{cofactor} \cdot \prod_{j \neq i} (Q - \lambda_j I).$$ -/
-@[expose] def synthesizeSylvesterProjector
+def synthesizeSylvesterProjector
     (Q : IntMatrix)
     (eigs : List Int)
     (i : Nat)
@@ -260,7 +262,7 @@ $$P_i(Q) = \text{cofactor} \cdot \prod_{j \neq i} (Q - \lambda_j I).$$ -/
 2. **Scaled Idempotence**: $\forall P \in \text{projs},\; P^2 = s \cdot P$,
 3. **Pairwise Orthogonality**: $\forall i \neq j,\; P_i P_j = 0$,
 4. **Spectral Reconstruction**: $\sum_i \lambda_i P_i = s \cdot Q$. -/
-@[expose] def checkSpectralDecomposition
+def checkSpectralDecomposition
     (Q : IntMatrix)
     (scale : Int)
     (eigs : List Int)
@@ -313,18 +315,18 @@ theorem checkSpectralDecomposition_sound
 /-! ## 3. Exact $K_2$ Antipodal PST (`ctqw_k2_antipodal_pst_exact`) -/
 
 /-- Adjacency matrix of $K_2$ ($H_{K_2} = X = \begin{pmatrix} 0 & 1 \\ 1 & 0 \end{pmatrix}$). -/
-@[expose] def k2Matrix : IntMatrix where
+def k2Matrix : IntMatrix where
   dim  := 2
   rows := [[0, 1], [1, 0]]
 
 /-- Scaled symmetric projector $2 E_+ = Q + I = \begin{pmatrix} 1 & 1 \\ 1 & 1 \end{pmatrix}$ ($\lambda_+ = +1$),
 synthesized via `synthesizeSylvesterProjector`. -/
-@[expose] def k2ProjPlus : IntMatrix :=
+def k2ProjPlus : IntMatrix :=
   synthesizeSylvesterProjector k2Matrix [1, -1] 0 1
 
 /-- Scaled antisymmetric projector $2 E_- = -(Q - I) = \begin{pmatrix} 1 & -1 \\ -1 & 1 \end{pmatrix}$ ($\lambda_- = -1$),
 synthesized via `synthesizeSylvesterProjector`. -/
-@[expose] def k2ProjMinus : IntMatrix :=
+def k2ProjMinus : IntMatrix :=
   synthesizeSylvesterProjector k2Matrix [1, -1] 1 (-1)
 
 /-- **Theorem (`ctqw_k2_antipodal_pst_exact`)**:
@@ -362,12 +364,12 @@ operators over the algebraic number field $\mathbb{Q}(\alpha)/\langle m(\alpha) 
 structure PolyMatrix where
   dim  : Nat
   rows : List (List Poly)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 namespace PolyMatrix
 
 /-- Look up polynomial entry $(u, v)$ in a `PolyMatrix` (defaulting to `Poly.zero`). -/
-@[expose] def entry (m : PolyMatrix) (u v : Nat) : Poly :=
+def entry (m : PolyMatrix) (u v : Nat) : Poly :=
   match m.rows[u]? with
   | some row =>
     match row[v]? with
@@ -376,33 +378,33 @@ namespace PolyMatrix
   | none => Poly.zero
 
 /-- Reduce every entry of `m` modulo a Gröbner basis `basis` with `fuel` reduction steps. -/
-@[expose] def reduceMod (basis : List Poly) (fuel : Nat) (m : PolyMatrix) : PolyMatrix :=
+def reduceMod (basis : List Poly) (fuel : Nat) (m : PolyMatrix) : PolyMatrix :=
   { dim  := m.dim
   , rows := m.rows.map (fun row => row.map (fun p => polyReduceFuel basis fuel p)) }
 
 /-- Add two `PolyMatrix` instances of dimension `dim`. -/
-@[expose] def add (A B : PolyMatrix) : PolyMatrix :=
+def add (A B : PolyMatrix) : PolyMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => Poly.add (A.entry u v) (B.entry u v))) }
 
 /-- Subtract two `PolyMatrix` instances (`A - B`). -/
-@[expose] def sub (A B : PolyMatrix) : PolyMatrix :=
+def sub (A B : PolyMatrix) : PolyMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => Poly.sub (A.entry u v) (B.entry u v))) }
 
 /-- Multiply a `PolyMatrix` by a scalar polynomial `c : Poly` modulo `basis`. -/
-@[expose] def scalePolyMod (basis : List Poly) (fuel : Nat) (c : Poly) (A : PolyMatrix) : PolyMatrix :=
+def scalePolyMod (basis : List Poly) (fuel : Nat) (c : Poly) (A : PolyMatrix) : PolyMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
       indices.map (fun v => polyReduceFuel basis fuel (Poly.mul c (A.entry u v)))) }
 
 /-- Multiply two `PolyMatrix` instances modulo the algebraic minimal-polynomial ideal `basis`. -/
-@[expose] def mulMod (basis : List Poly) (fuel : Nat) (A B : PolyMatrix) : PolyMatrix :=
+def mulMod (basis : List Poly) (fuel : Nat) (A B : PolyMatrix) : PolyMatrix :=
   let indices := List.range A.dim
   { dim  := A.dim
   , rows := indices.map (fun u =>
@@ -412,17 +414,17 @@ namespace PolyMatrix
         polyReduceFuel basis fuel rawDot)) }
 
 /-- Check whether every entry of `m` reduces to `Poly.zero` modulo `basis`. -/
-@[expose] def isZeroMod (basis : List Poly) (fuel : Nat) (m : PolyMatrix) : Bool :=
+def isZeroMod (basis : List Poly) (fuel : Nat) (m : PolyMatrix) : Bool :=
   (m.reduceMod basis fuel).rows.all (fun row => row.all (fun p => p.isZero))
 
 /-- Embed an `IntMatrix` into `PolyMatrix` as constant polynomials. -/
-@[expose] def ofIntMatrix (m : IntMatrix) : PolyMatrix :=
+def ofIntMatrix (m : IntMatrix) : PolyMatrix :=
   { dim  := m.dim
   , rows := m.rows.map (fun row =>
       row.map (fun c => polyOfTerm [] (CanonicalRat.ofInt c))) }
 
 /-- Scaled $n \times n$ polynomial identity matrix $c \cdot I_n$. -/
-@[expose] def scaledIdentity (dim : Nat) (c : Poly) : PolyMatrix :=
+def scaledIdentity (dim : Nat) (c : Poly) : PolyMatrix :=
   let indices := List.range dim
   { dim  := dim
   , rows := indices.map (fun u =>
@@ -434,7 +436,7 @@ end PolyMatrix
 (`synthesizeSylvesterProjectorPoly`):
 Constructs the scaled spectral projector for eigenvalue index `i`:
 $$P_i(Q) \equiv \text{cofactor} \cdot \prod_{j \neq i} (Q - \lambda_j I) \pmod{\text{basis}}.$$ -/
-@[expose] def synthesizeSylvesterProjectorPoly
+def synthesizeSylvesterProjectorPoly
     (basis : List Poly)
     (fuel : Nat)
     (Q : PolyMatrix)
@@ -452,33 +454,33 @@ $$P_i(Q) \equiv \text{cofactor} \cdot \prod_{j \neq i} (Q - \lambda_j I) \pmod{\
   PolyMatrix.scalePolyMod basis fuel cofactor prodMat
 
 /-- Minimal polynomial $m(\alpha) = \alpha^2 - 2$ of $\alpha = \sqrt{2}$ (using variable $0$ for $\alpha$). -/
-@[expose] def p3MinPolyAlphaSqMinus2 : Poly :=
+def p3MinPolyAlphaSqMinus2 : Poly :=
   Poly.sub ( polyVarPow 0 2 ) ( polyOfTerm [] 2 )
 
 /-- Eigenvalue list $[\lambda_0, \lambda_+, \lambda_-] = [0, +\alpha, -\alpha]$ of $P_3$ over $\mathbb{Q}(\alpha)/\langle \alpha^2 - 2 \rangle$. -/
-@[expose] def p3AlgebraicEigenvalues : List Poly :=
+def p3AlgebraicEigenvalues : List Poly :=
   [Poly.zero, polyVarPow 0 1, polyOfTerm [(0, 1)] (-1)]
 
 /-- Scaled spectral projector $4 P_0 = -2 (H_{P_3} - \alpha I)(H_{P_3} + \alpha I) = \begin{pmatrix} 2 & 0 & -2 \\ 0 & 0 & 0 \\ -2 & 0 & 2 \end{pmatrix}$
 for eigenvalue $\lambda_0 = 0$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
-@[expose] def p3AlgebraicProj0 : PolyMatrix :=
+def p3AlgebraicProj0 : PolyMatrix :=
   synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
     (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 0 (polyOfTerm [] (-2))
 
 /-- Scaled spectral projector $4 P_+ = (H_{P_3} - 0 I)(H_{P_3} + \alpha I) = \begin{pmatrix} 1 & \alpha & 1 \\ \alpha & 2 & \alpha \\ 1 & \alpha & 1 \end{pmatrix}$
 for eigenvalue $\lambda_+ = +\alpha = +\sqrt{2}$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
-@[expose] def p3AlgebraicProjPlus : PolyMatrix :=
+def p3AlgebraicProjPlus : PolyMatrix :=
   synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
     (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 1 Poly.one
 
 /-- Scaled spectral projector $4 P_- = (H_{P_3} - 0 I)(H_{P_3} - \alpha I) = \begin{pmatrix} 1 & -\alpha & 1 \\ -\alpha & 2 & -\alpha \\ 1 & -\alpha & 1 \end{pmatrix}$
 for eigenvalue $\lambda_- = -\alpha = -\sqrt{2}$ of $P_3$, synthesized via `synthesizeSylvesterProjectorPoly`. -/
-@[expose] def p3AlgebraicProjMinus : PolyMatrix :=
+def p3AlgebraicProjMinus : PolyMatrix :=
   synthesizeSylvesterProjectorPoly [p3MinPolyAlphaSqMinus2] 6
     (PolyMatrix.ofIntMatrix path3Matrix) p3AlgebraicEigenvalues 2 Poly.one
 
 /-- $4 \times 4$ adjacency matrix of the 4-vertex path graph $P_4$ ($0 - 1 - 2 - 3$). -/
-@[expose] def path4Matrix : IntMatrix where
+def path4Matrix : IntMatrix where
   dim  := 4
   rows :=
     [ [0, 1, 0, 0]
@@ -488,28 +490,28 @@ for eigenvalue $\lambda_- = -\alpha = -\sqrt{2}$ of $P_3$, synthesized via `synt
 
 /-- Antipodal reflection-even $2 \times 2$ quotient block of $P_4$ on $\{e_0 + e_3, e_1 + e_2\}$:
 $$Q_{\text{even}}(P_4) = \begin{pmatrix} 0 & 1 \\ 1 & 1 \end{pmatrix}, \qquad \det(\lambda I - Q_{\text{even}}) = \lambda^2 - \lambda - 1.$$ -/
-@[expose] def p4EvenQuotient2x2 : IntMatrix where
+def p4EvenQuotient2x2 : IntMatrix where
   dim  := 2
   rows := [[0, 1], [1, 1]]
 
 /-- Antipodal reflection-odd $2 \times 2$ quotient block of $P_4$ on $\{e_0 - e_3, e_1 - e_2\}$:
 $$Q_{\text{odd}}(P_4) = \begin{pmatrix} 0 & 1 \\ 1 & -1 \end{pmatrix}, \qquad \det(\lambda I - Q_{\text{odd}}) = \lambda^2 + \lambda - 1.$$ -/
-@[expose] def p4OddQuotient2x2 : IntMatrix where
+def p4OddQuotient2x2 : IntMatrix where
   dim  := 2
   rows := [[0, 1], [1, -1]]
 
 /-- Signed antipodal $2 \times 2$ block $\begin{pmatrix} -1 & 1 \\ 1 & 1 \end{pmatrix}$ with trace $0$ and determinant $-2$. -/
-@[expose] def p4AntipodalOddBlock2x2 : IntMatrix where
+def p4AntipodalOddBlock2x2 : IntMatrix where
   dim  := 2
   rows := [[-1, 1], [1, 1]]
 
 /-- Polynomial power $p^k$ in $\mathbb{Q}[x]$. -/
-@[expose] def polyPow (p : Poly) : Nat → Poly
+def polyPow (p : Poly) : Nat → Poly
   | 0 => Poly.one
   | k + 1 => Poly.mul p (polyPow p k)
 
 /-- Substitute $\lambda \mapsto q$ into a polynomial given by descending coefficients `[c_d, ..., c_0]`. -/
-@[expose] def evalCoeffsAtPoly ( q : Poly ) : List Int → Poly
+def evalCoeffsAtPoly ( q : Poly ) : List Int → Poly
   | [] => Poly.zero
   | c :: cs =>
     let deg := cs.length
@@ -518,7 +520,7 @@ $$Q_{\text{odd}}(P_4) = \begin{pmatrix} 0 & 1 \\ 1 & -1 \end{pmatrix}, \qquad \d
 
 /-- Multiply two polynomials given by descending integer coefficient lists `[c_d, ..., c_0]`
 via exact Cauchy convolution over `Int` (zero `Rat` and zero `Classical.choice` dependency). -/
-@[expose] def intPolyMulDesc (p q : List Int) : List Int :=
+def intPolyMulDesc (p q : List Int) : List Int :=
   match p, q with
   | [], _ => []
   | _, [] => []
@@ -534,20 +536,20 @@ via exact Cauchy convolution over `Int` (zero `Rat` and zero `Classical.choice` 
 
 /-- Pad the shorter of two descending integer coefficient lists on the left with leading zeros
 and add them termwise over `Int`. -/
-@[expose] def intPolyAddDesc (p q : List Int) : List Int :=
+def intPolyAddDesc (p q : List Int) : List Int :=
   let len := max p.length q.length
   let padP := List.replicate (len - p.length) (0 : Int) ++ p
   let padQ := List.replicate (len - q.length) (0 : Int) ++ q
   List.zipWith (· + ·) padP padQ
 
 /-- Exact polynomial power $q^k$ over descending integer coefficient lists `List Int`. -/
-@[expose] def intPolyPowDesc (q : List Int) : Nat → List Int
+def intPolyPowDesc (q : List Int) : Nat → List Int
   | 0 => [1]
   | k + 1 => intPolyMulDesc q (intPolyPowDesc q k)
 
 /-- Substitute $\lambda \mapsto q(\lambda_+)$ into a polynomial given by descending integer coefficients
 `[c_d, ..., c_0]` over `List Int`. -/
-@[expose] def evalIntPolyAtPolyDesc (q : List Int) : List Int → List Int
+def evalIntPolyAtPolyDesc (q : List Int) : List Int → List Int
   | [] => []
   | c :: cs =>
     let deg := cs.length
@@ -555,14 +557,14 @@ and add them termwise over `Int`. -/
     intPolyAddDesc term (evalIntPolyAtPolyDesc q cs)
 
 /-- Evaluate a polynomial with descending integer coefficients `[c_d, ..., c_0]` at `x : Int` via Horner's rule. -/
-@[expose] def evalIntPolyDesc (coeffs : List Int) (x : Int) : Int :=
+def evalIntPolyDesc (coeffs : List Int) (x : Int) : Int :=
   coeffs.foldl (fun acc c => acc * x + c) 0
 
 /-- Synthesize the descending integer coefficients `[1, -3, 1]` ($r^2 - 3r + 1$) of $P_4$'s
 eigenvalue ratio minimal polynomial directly from `faddeevLeVerrierCoeffs p4EvenQuotient2x2`
 ($[c_2, c_1, c_0] = [1, -1, -1]$ for $\lambda^2 - \lambda - 1$) via the substitution $\lambda = r - 1$:
 $$c_2 (r - 1)^2 + c_1 (r - 1) + c_0 = c_2 r^2 + (-2 c_2 + c_1) r + (c_2 - c_1 + c_0).$$ -/
-@[expose] def synthesizeP4RatioMinPolyCoeffs : List Int :=
+def synthesizeP4RatioMinPolyCoeffs : List Int :=
   let cs := faddeevLeVerrierCoeffs p4EvenQuotient2x2
   let c2 := listGetInt cs 0
   let c1 := listGetInt cs 1
@@ -574,17 +576,17 @@ from the Faddeev–LeVerrier characteristic polynomial of `p4EvenQuotient2x2`:
 Since $\lambda_+ \lambda_- = 1$, $r = \lambda_+ / \lambda_- = \lambda_+^2 = \lambda_+ + 1$, so $\lambda_+ = r - 1$.
 Substituting $\lambda = r - 1$ into `faddeevLeVerrierCoeffs p4EvenQuotient2x2` ($\lambda^2 - \lambda - 1$)
 synthesizes $r^2 - 3r + 1$ directly from $P_4$'s matrix entries! -/
-@[expose] def synthesizeP4RatioMinPoly : Poly :=
+def synthesizeP4RatioMinPoly : Poly :=
   coeffsToPolyDesc synthesizeP4RatioMinPolyCoeffs
 
 /-- Backwards-compatible alias for `synthesizeP4RatioMinPoly`. -/
-@[expose] abbrev p4RatioMinPolyR2Minus3RPlus1 : Poly :=
+abbrev p4RatioMinPolyR2Minus3RPlus1 : Poly :=
   synthesizeP4RatioMinPoly
 
 /-- Check Godsil's eigenvalue parity-ratio condition for antipodal PST on $P_4$ by synthesizing
 the ratio minimal polynomial `synthesizeP4RatioMinPoly` via Faddeev–LeVerrier from $P_4$'s quotient
 and verifying that $r = 1$ (and rational parity ratios) cannot divide $r^2 - 3r + 1$. -/
-@[expose] def checkP4IrrationalRatioObstruction : Bool :=
+def checkP4IrrationalRatioObstruction : Bool :=
   let rVar := polyVarPow 0 1
   let p4RatioMinPoly := synthesizeP4RatioMinPoly
   let linearFactorRMinus1 := Poly.sub rVar Poly.one
@@ -666,10 +668,10 @@ theorem faddeevLeVerrier_2x2_exact_and_cayley_hamilton (a b c d : Int) :
      * $\lambda_+ \lambda_- - 1 = \lambda_+(\lambda_+ - 1) - 1 = \chi(Q_{\text{even}})(\lambda_+)$, so $\lambda_+ \lambda_- = 1$,
      * The eigenvalue ratio $r = \lambda_+ / \lambda_- = \lambda_+^2$ (`ratioRCoeffs = [1, 0, 0]`) satisfies
        $r^2 - 3r + 1 = (\lambda_+^2)^2 - 3(\lambda_+^2) + 1 = \chi(Q_{\text{odd}})(\lambda_+) \cdot \chi(Q_{\text{even}})(\lambda_+)$!
-   - `synthesizeP4RatioMinPolyCoeffs` equals $[1, -3, 1]$ ($r^2 - 3r + 1$), which has no rational
-     parity roots at $r = \pm 1$ (`evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs 1 = -1` and
-     `evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs (-1) = 5`). -/
-theorem faddeevLeVerrier_charPoly_and_p4_obstruction_sound :
+   - `synthesizeP4RatioMinPolyCoeffs` equals $[1, -3, 1]$ ($r^2 - 3r + 1$), which vanishes at **no**
+     integer $r \in \mathbb{Z}$ (`evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs r ≠ 0` for all $r \in \mathbb{Z}$,
+     including $r = 1 \mapsto -1$ and $r = -1 \mapsto 5$). -/
+theorem faddeevLeVerrier_charPoly_and_p4_obstruction_sound (r : Int) :
     let chiEvenCoeffs := faddeevLeVerrierCoeffs p4EvenQuotient2x2
     let chiOddCoeffs := faddeevLeVerrierCoeffs p4OddQuotient2x2
     let lamPlusCoeffs : List Int := [1, 0]
@@ -688,8 +690,24 @@ theorem faddeevLeVerrier_charPoly_and_p4_obstruction_sound :
       intPolyMulDesc chiOddCoeffs chiEvenCoeffs ∧
     synthesizeP4RatioMinPolyCoeffs = [1, -3, 1] ∧
     evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs 1 = -1 ∧
-    evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs (-1) = 5 := by
-  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs (-1) = 5 ∧
+    evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs r ≠ 0 := by
+  have hNoIntRoot : evalIntPolyDesc synthesizeP4RatioMinPolyCoeffs r ≠ 0 := by
+    have hCoeffs : synthesizeP4RatioMinPolyCoeffs = [1, -3, 1] := rfl
+    rw [hCoeffs]
+    dsimp only [evalIntPolyDesc, List.foldl]
+    rw [Int.zero_mul, Int.zero_add, Int.one_mul]
+    by_cases hle0 : r ≤ 0
+    · have hNegProd : (r + -3) * r = (-(r + -3)) * (-r) := (Int.neg_mul_neg (r + -3) r).symm
+      have hNonneg : 0 ≤ (-(r + -3)) * (-r) := Int.mul_nonneg (by omega) (by omega)
+      omega
+    · by_cases hr1 : r = 1
+      · subst hr1; decide
+      · by_cases hr2 : r = 2
+        · subst hr2; decide
+        · have hNonneg : 0 ≤ (r + -3) * r := Int.mul_nonneg (by omega) (by omega)
+          omega
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, hNoIntRoot⟩
 
 /-! ## 5. Hypercube $Q_d$ Krawtchouk Quotient, Bachman–Tamon PST & Continuous-Time Taylor Propagator Intertwining -/
 
@@ -724,7 +742,7 @@ $C_0 = \{0\}$, $C_1 = \{1, 2, 4\}$, $C_2 = \{3, 5, 6\}$, $C_3 = \{7\}$. -/
 /-- $4 \times 4$ Krawtchouk / Ehrenfest tridiagonal quotient matrix of $Q_3$:
 $$Q(Q_3) = \begin{pmatrix} 0 & 3 & 0 & 0 \\ 1 & 0 & 2 & 0 \\ 0 & 2 & 0 & 1 \\ 0 & 0 & 3 & 0 \end{pmatrix},$$
 where row $j$ has lower degree $j$ (into $C_{j-1}$) and upper degree $3 - j$ (into $C_{j+1}$). -/
-@[expose] def hypercubeQ3Quotient : Nat → Nat → Int
+def hypercubeQ3Quotient : Nat → Nat → Int
   | 0, 1 => 3
   | 1, 0 => 1
   | 1, 2 => 2
@@ -746,7 +764,7 @@ where row $j$ has lower degree $j$ (into $C_{j-1}$) and upper degree $3 - j$ (in
 (cofactors $[1, -3, 3, -1]$ for eigenvalues $[3, 1, -1, -3]$ since
 $\prod_{j \neq 0}(\lambda_0 - \lambda_j) = 2 \cdot 4 \cdot 6 = 48$ and
 $\prod_{j \neq 1}(\lambda_1 - \lambda_j) = (-2) \cdot 2 \cdot 4 = -16$). -/
-@[expose] def q3QuotientSylvesterProjectors : List IntMatrix :=
+def q3QuotientSylvesterProjectors : List IntMatrix :=
   let eigs := [3, 1, -1, -3]
   [ synthesizeSylvesterProjector hypercubeQ3QuotientMatrix eigs 0 1
   , synthesizeSylvesterProjector hypercubeQ3QuotientMatrix eigs 1 (-3)
@@ -755,7 +773,7 @@ $\prod_{j \neq 1}(\lambda_1 - \lambda_j) = (-2) \cdot 2 \cdot 4 = -16$). -/
 
 /-- General $(d+1) \times (d+1)$ Krawtchouk / Ehrenfest tridiagonal quotient entry for the $d$-cube $Q_d$:
 for cell $i \in \{0, \dots, d\}$, $Q_{i, i-1} = i$ and $Q_{i, i+1} = d - i$. -/
-@[expose] def krawtchoukQuotientEntry (d i j : Nat) : Int :=
+def krawtchoukQuotientEntry (d i j : Nat) : Int :=
   if decide (i ≤ d) && decide (j ≤ d) then
     if i + 1 == j then (d - i : Nat)
     else if j + 1 == i then (i : Nat)
@@ -764,7 +782,7 @@ for cell $i \in \{0, \dots, d\}$, $Q_{i, i-1} = i$ and $Q_{i, i+1} = d - i$. -/
 
 /-- Tensor-power antipodal transition amplitude $(-i)^d \in \mathbb{Z}[i]$ for $Q_d = K_2^{\square d}$
 at transfer time $\tau = \pi/2$, where each $K_2$ factor contributes $-i = \langle 0, -1 \rangle$. -/
-@[expose] def hypercubeAntipodalPhase : Nat → GaussianInt
+def hypercubeAntipodalPhase : Nat → GaussianInt
   | 0 => GaussianInt.one
   | d + 1 => GaussianInt.mul ⟨0, -1⟩ (hypercubeAntipodalPhase d)
 
@@ -833,13 +851,13 @@ theorem bachman_tamon_quotient_pst_iff
 
 /-- Integer-scaled Taylor coefficient $N! \cdot \frac{(-i t)^k}{k!} \in \mathbb{Z}[i]$ for the
 $N$-th order unitary propagator truncation $N! \sum_{k=0}^N \frac{(-i H t)^k}{k!}$. -/
-@[expose] def taylorScaledWeight (t : Int) (tOrder k : Nat) : GaussianInt :=
+def taylorScaledWeight (t : Int) (tOrder k : Nat) : GaussianInt :=
   GaussianInt.scale ((natFactorial tOrder / natFactorial k : Nat) : Int) (negITimePow t k)
 
 /-- Evaluate the $N$-th order truncated continuous-time Taylor propagator
 $$U_N(t) v = \sum_{k=0}^N \left(N! \frac{(-i t)^k}{k!}\right) A^k v$$
 of a linear operator `op` at time `t`, truncation order `tOrder`, vector `v`, and index `u`. -/
-@[expose] def evalTaylorPropagator
+def evalTaylorPropagator
     (op : (Nat → Int) → (Nat → Int))
     (t : Int)
     (tOrder : Nat)
@@ -850,7 +868,7 @@ of a linear operator `op` at time `t`, truncation order `tOrder`, vector `v`, an
     (List.range (tOrder + 1))
 
 /-- Full-space vs. quotient-space $N$-th order Taylor propagator step (`propagatorTaylorStep`). -/
-@[expose] def propagatorTaylorStep
+def propagatorTaylorStep
     (H Q : Nat → Nat → Int)
     (part : Nat → Nat)
     (cellIndices : List Nat)
@@ -926,21 +944,21 @@ theorem continuous_time_taylor_propagator_intertwines_unpartitioned
 /-- Construct the validated degree-4/5 Taylor model pair $(\cos(\theta), -\sin(\theta))$ for the
 unitary Schrödinger eigenmode phase factor $e^{-i \theta} = \cos(\theta) - i \sin(\theta)$ over
 $\theta \in \text{dom}$ via domain-guarded `tmCosCertified` and `tmSinCertified`. -/
-@[expose] def tmUnitaryPhasePair (dom : Interval) : TaylorModel × TaylorModel :=
+def tmUnitaryPhasePair (dom : Interval) : TaylorModel × TaylorModel :=
   let cosTM := tmCosCertified dom
   let negSinTM := tmScale (-1) (tmSinCertified dom)
   (cosTM, negSinTM)
 
 /-- Construct the validated degree-4 Taylor model for the unitary probability norm
 $|e^{-i\theta}|^2 = \cos^2(\theta) + (-\sin(\theta))^2$ over $\theta \in \text{dom}$. -/
-@[expose] def tmUnitaryNormSq (dom : Interval) : TaylorModel :=
+def tmUnitaryNormSq (dom : Interval) : TaylorModel :=
   let (cosTM, negSinTM) := tmUnitaryPhasePair dom
   tmAdd (tmMul 4 cosTM cosTM) (tmMul 4 negSinTM negSinTM)
 
 /-- Real-symplectic Schrödinger `OdeSystem` for a single eigenmode $\psi_k(t) = x(t) + i y(t)$ with
 eigenvalue $\lambda$:
 $$\dot{x} = \lambda y, \qquad \dot{y} = -\lambda x.$$ -/
-@[expose] def schrodingerEigenmodeOde (lambda dt : CanonicalRat) (remPad : Interval) : OdeSystem where
+def schrodingerEigenmodeOde (lambda dt : CanonicalRat) (remPad : Interval) : OdeSystem where
   fields :=
     [ ("x", .mul (.const lambda) (.var "y"))
     , ("y", .mul (.const (-lambda)) (.var "x")) ]
@@ -949,7 +967,7 @@ $$\dot{x} = \lambda y, \qquad \dot{y} = -\lambda x.$$ -/
 
 /-- Real-symplectic Schrödinger `OdeSystem` for the coupled 2-site $K_2$ quantum walk
 ($H = \begin{pmatrix} 0 & 1 \\ 1 & 0 \end{pmatrix}$, $\dot{x}_0 = y_1, \dot{y}_0 = -x_1, \dot{x}_1 = y_0, \dot{y}_1 = -x_0$). -/
-@[expose] def schrodingerK2CoupledOde (dt : CanonicalRat) (remPad : Interval) : OdeSystem where
+def schrodingerK2CoupledOde (dt : CanonicalRat) (remPad : Interval) : OdeSystem where
   fields :=
     [ ("x0", .var "y1")
     , ("y0", .sub (.const 0) (.var "x1"))
@@ -960,14 +978,14 @@ $$\dot{x} = \lambda y, \qquad \dot{y} = -\lambda x.$$ -/
 
 /-- Open-system Lindblad dephasing ODE for off-diagonal coherence $c(t)$ with decoherence rate $\gamma > 0$:
 $\dot{c} = -\gamma c$. -/
-@[expose] def lindbladDephasingOde (gamma dt : CanonicalRat) (remPad : Interval) : OdeSystem where
+def lindbladDephasingOde (gamma dt : CanonicalRat) (remPad : Interval) : OdeSystem where
   fields       := [("c", .mul (.const (-gamma)) (.var "c"))]
   dt           := dt
   remainderPad := remPad
 
 /-- Unphysical non-Hermitian anti-damped ODE ($\dot{x} = +2 x + 1$) that violates unitary norm
 conservation and blows up outside the probability envelope $[-2, 2]$. -/
-@[expose] def nonHermitianGainRunawayOde : OdeSystem where
+def nonHermitianGainRunawayOde : OdeSystem where
   fields       := [("x", .add (.mul (.const 2) (.var "x")) (.const 1))]
   dt           := 1
   remainderPad := ⟨0, CanonicalRat.mk 1 10⟩
@@ -979,7 +997,7 @@ conservation and blows up outside the probability envelope $[-2, 2]$. -/
   readout with $\Delta t = 1$, invariant $p \in [0, 1]$.
 * Guarded transition `"rabi_drive" → "idle_readout"` enabled when population reaches the target
   excited window $p \in [4/5, 1]$. -/
-@[expose] def quantumPulseHybridAutomaton : HybridAutomaton where
+def quantumPulseHybridAutomaton : HybridAutomaton where
   modes :=
     [ { modeId := "rabi_drive"
       , ode :=
@@ -1005,14 +1023,14 @@ conservation and blows up outside the probability envelope $[-2, 2]$. -/
 /-- Compute the list of scaled Lagrange–Sylvester spectral projectors
 $$E_k = \frac{s}{d_k} \tilde{E}_k = \frac{s}{\prod_{j \neq k} (\lambda_k - \lambda_j)} \prod_{j \neq k} (Q - \lambda_j I)$$
 directly from `Q`, `eigs`, and a common denominator `commonScale : Int` (no hand-supplied cofactors). -/
-@[expose] def computeScaledLagrangeProjectors (Q : IntMatrix) (eigs : List Int) (commonScale : Int) : List IntMatrix :=
+def computeScaledLagrangeProjectors (Q : IntMatrix) (eigs : List Int) (commonScale : Int) : List IntMatrix :=
   (List.range eigs.length).map (fun k =>
     let (num, denom) := computeLagrangeProjector Q eigs k
     num.scale (commonScale / denom))
 
 /-- Compute the Lagrange–Sylvester denominator $d_k(\alpha) = \prod_{j \neq k} (\lambda_k - \lambda_j) \pmod{\text{basis}}$
 over the algebraic number field $\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$. -/
-@[expose] def computeLagrangeDenominatorPoly
+def computeLagrangeDenominatorPoly
     (basis : List Poly)
     (fuel : Nat)
     (eigs : List Poly)
@@ -1029,7 +1047,7 @@ over the algebraic number field $\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$. 
 $\mathbb{Q}(\alpha)/\langle m(\alpha) \rangle$ directly from $Q$ and `eigs` (zero hand-supplied cofactors):
 - Numerator: $\tilde{E}_k(Q) = \prod_{j \neq k} (Q - \lambda_j I) \pmod{\text{basis}}$,
 - Denominator: $d_k = \prod_{j \neq k} (\lambda_k - \lambda_j) \pmod{\text{basis}}$. -/
-@[expose] def computeLagrangeProjectorPoly
+def computeLagrangeProjectorPoly
     (basis : List Poly)
     (fuel : Nat)
     (Q : PolyMatrix)
@@ -1086,11 +1104,12 @@ theorem computed_lagrange_projectors_k2_p3_q3_exact :
       (computeScaledLagrangeProjectors hypercubeQ3QuotientMatrix [3, 1, -1, -3] 48) = true := by
   decide +kernel
 
-/-- Full $N$-state discrete-time Szegedy / Grover reflection operator
-$$R_M = 2 M - d_M I$$
-evaluated across partition cells `cellIndices` and `cellOf`, where $M / d_M$ is the normalized
-transition/projection operator ($\Pi_M$). -/
-@[expose] def szegedyReflectVec
+/-- Full $N$-state discrete-time integer-scaled Szegedy / Grover reflection operator
+$$d_M R_{\Pi_M} = 2 M - d_M I$$
+evaluated across partition cells `cellIndices` and `cellOf`, where $M = d_M \Pi_M$ is an
+integer-scaled symmetric orthogonal projector ($M^\top = M$, $M^2 = d_M M$, so $\Pi_M = \frac{1}{d_M} M$
+satisfies $\Pi_M^2 = \Pi_M$). -/
+def szegedyReflectVec
     (M : Nat → Nat → Int)
     (cellIndices : List Nat)
     (cellOf : Nat → List Nat)
@@ -1099,10 +1118,10 @@ transition/projection operator ($\Pi_M$). -/
     (u : Nat) : Int :=
   2 * partitionedMatVec M cellIndices cellOf v u - dM * v u
 
-/-- Quotient $r$-cell discrete-time Szegedy / Grover reflection operator
-$$R_{Q_M} = 2 Q_M - d_M I_r$$
+/-- Quotient $r$-cell discrete-time integer-scaled Szegedy / Grover reflection operator
+$$d_M R_{Q_M} = 2 Q_M - d_M I_r$$
 evaluated on an $r$-cell quotient state $w : \text{Nat} \to \text{Int}$. -/
-@[expose] def szegedyQuotientReflectVec
+def szegedyQuotientReflectVec
     (QM : Nat → Nat → Int)
     (cellIndices : List Nat)
     (dM : Int)
@@ -1110,11 +1129,10 @@ evaluated on an $r$-cell quotient state $w : \text{Nat} \to \text{Int}$. -/
     (i : Nat) : Int :=
   2 * quotientMatVec QM cellIndices w i - dM * w i
 
-/-- One full clock cycle of the $N$-state **Discrete-Time Szegedy Quantum Walk**
-$$U_{\text{Sz}} = R_B \cdot R_A = (2 B - d_B I)(2 A - d_A I),$$
-which composes the first reflection $R_A$ with the second reflection $R_B$ (connecting continuous-time
-photonic walks `CTQW` to synchronous clocked digital FPGA/ASIC quantum walks `DTQW`). -/
-@[expose] def szegedyWalkStep
+/-- One full clock cycle of the $N$-state integer-scaled **Discrete-Time Szegedy Quantum Walk**
+$$(d_A d_B) U_{\text{Sz}} = (2 B - d_B I)(2 A - d_A I),$$
+composing reflection across scaled projector $A = d_A \Pi_A$ with reflection across $B = d_B \Pi_B$. -/
+def szegedyWalkStep
     (A B : Nat → Nat → Int)
     (cellIndices : List Nat)
     (cellOf : Nat → List Nat)
@@ -1123,15 +1141,116 @@ photonic walks `CTQW` to synchronous clocked digital FPGA/ASIC quantum walks `DT
     (u : Nat) : Int :=
   szegedyReflectVec B cellIndices cellOf dB (szegedyReflectVec A cellIndices cellOf dA v) u
 
-/-- One full clock cycle of the $r$-cell **Quotient Discrete-Time Szegedy Quantum Walk**
-$$Q_{\text{Sz}} = R_{Q_B} \cdot R_{Q_A} = (2 Q_B - d_B I_r)(2 Q_A - d_A I_r).$$ -/
-@[expose] def szegedyQuotientWalkStep
+/-- One full clock cycle of the $r$-cell integer-scaled **Quotient Discrete-Time Szegedy Quantum Walk**
+$$(d_A d_B) Q_{\text{Sz}} = (2 Q_B - d_B I_r)(2 Q_A - d_A I_r).$$ -/
+def szegedyQuotientWalkStep
     (QA QB : Nat → Nat → Int)
     (cellIndices : List Nat)
     (dA dB : Int)
     (w : Nat → Int)
     (i : Nat) : Int :=
   szegedyQuotientReflectVec QB cellIndices dB (szegedyQuotientReflectVec QA cellIndices dA w) i
+
+/-- First Szegedy bipartite directed-edge scaled projector $P_A = d \cdot \Pi_A$ on $\mathbb{Z}^{n^2}$
+(indexed by vertex pairs $u = x_1 n + y_1$, $v = x_2 n + y_2$ for $n = G.\text{dim}$):
+$$(P_A)_{(x_1, y_1), (x_2, y_2)} = \begin{cases} G_{x_1, y_1} \cdot G_{x_2, y_2} & \text{if } x_1 = x_2 < n \text{ and } y_1, y_2 < n, \\ 0 & \text{otherwise.} \end{cases}$$
+For any $d$-regular $\{0, 1\}$-graph $G$, $\Pi_A = \frac{1}{d} P_A = \sum_{x=0}^{n-1} |\psi_x\rangle\langle\psi_x|$
+with $|\psi_x\rangle = \frac{1}{\sqrt{d}} \sum_{y \sim x} |x, y\rangle$ satisfies $\Pi_A^\top = \Pi_A$ and $\Pi_A^2 = \Pi_A$
+($P_A^2 = d P_A$). -/
+def szegedyEdgeProjAEntry (G : IntMatrix) (u v : Nat) : Int :=
+  let n := G.dim
+  if n == 0 then 0
+  else
+    let x1 := u / n
+    let y1 := u % n
+    let x2 := v / n
+    let y2 := v % n
+    if decide (x1 < n) && decide (x2 < n) && decide (x1 = x2) then
+      G.entry x1 y1 * G.entry x2 y2
+    else 0
+
+/-- Second Szegedy bipartite directed-edge scaled projector $P_B = d \cdot \Pi_B$ on $\mathbb{Z}^{n^2}$
+(indexed by vertex pairs $u = x_1 n + y_1$, $v = x_2 n + y_2$ for $n = G.\text{dim}$):
+$$(P_B)_{(x_1, y_1), (x_2, y_2)} = \begin{cases} G_{x_1, y_1} \cdot G_{x_2, y_2} & \text{if } y_1 = y_2 < n \text{ and } x_1, x_2 < n, \\ 0 & \text{otherwise.} \end{cases}$$
+For any $d$-regular symmetric $\{0, 1\}$-graph $G$, $\Pi_B = \frac{1}{d} P_B = \sum_{y=0}^{n-1} |\phi_y\rangle\langle\phi_y|$
+with $|\phi_y\rangle = \frac{1}{\sqrt{d}} \sum_{x \sim y} |x, y\rangle$ satisfies $\Pi_B^\top = \Pi_B$ and $\Pi_B^2 = \Pi_B$
+($P_B^2 = d P_B$). -/
+def szegedyEdgeProjBEntry (G : IntMatrix) (u v : Nat) : Int :=
+  let n := G.dim
+  if n == 0 then 0
+  else
+    let x1 := u / n
+    let y1 := u % n
+    let x2 := v / n
+    let y2 := v % n
+    if decide (x1 < n) && decide (x2 < n) && decide (y1 = y2) then
+      G.entry x1 y1 * G.entry x2 y2
+    else 0
+
+/-- Materialize `szegedyEdgeProjAEntry G` as an `n^2 × n^2` `IntMatrix`. -/
+def szegedyEdgeProjAMatrix (G : IntMatrix) : IntMatrix :=
+  let dim := G.dim * G.dim
+  let indices := List.range dim
+  { dim  := dim
+  , rows := indices.map (fun u => indices.map (fun v => szegedyEdgeProjAEntry G u v)) }
+
+/-- Materialize `szegedyEdgeProjBEntry G` as an `n^2 × n^2` `IntMatrix`. -/
+def szegedyEdgeProjBMatrix (G : IntMatrix) : IntMatrix :=
+  let dim := G.dim * G.dim
+  let indices := List.range dim
+  { dim  := dim
+  , rows := indices.map (fun u => indices.map (fun v => szegedyEdgeProjBEntry G u v)) }
+
+/-- 7-cell simultaneous equitable partition of $Q_3$'s $64$-state bipartite vertex-pair space
+(`pairIdx = 8 * x + y`) for both Szegedy edge projectors $P_A = 3 \Pi_A$ and $P_B = 3 \Pi_B$:
+* Cell `0`: $3$ directed edges $(000 \to \text{wt } 1)$,
+* Cell `1`: $3$ directed edges $(\text{wt } 1 \to 000)$,
+* Cell `2`: $6$ directed edges $(\text{wt } 1 \to \text{wt } 2)$,
+* Cell `3`: $6$ directed edges $(\text{wt } 2 \to \text{wt } 1)$,
+* Cell `4`: $3$ antipodal incoming edges $(\text{wt } 2 \to 111)$ (`u ∈ {31, 47, 55}`),
+* Cell `5`: $3$ antipodal outgoing edges $(111 \to \text{wt } 2)$,
+* Cell `6`: $40$ non-edge pairs ($G_{x, y} = 0$). -/
+def q3SzegedyEdgePart (pairIdx : Nat) : Nat :=
+  let x := pairIdx / 8
+  let y := pairIdx % 8
+  if decide (8 ≤ x) || hypercubeQ3Matrix.entry x y == 0 then 6
+  else
+    match hypercubeQ3Part x, hypercubeQ3Part y with
+    | 0, 1 => 0
+    | 1, 0 => 1
+    | 1, 2 => 2
+    | 2, 1 => 3
+    | 2, 3 => 4
+    | 3, 2 => 5
+    | _, _ => 6
+
+/-- $7 \times 7$ quotient matrix $Q_A$ of `szegedyEdgeProjAEntry hypercubeQ3Matrix` ($3 \Pi_A$) on `q3SzegedyEdgePart`. -/
+def q3SzegedyQuotientA : Nat → Nat → Int
+  | 0, 0 => 3
+  | 1, 1 => 1
+  | 1, 2 => 2
+  | 2, 1 => 1
+  | 2, 2 => 2
+  | 3, 3 => 2
+  | 3, 4 => 1
+  | 4, 3 => 2
+  | 4, 4 => 1
+  | 5, 5 => 3
+  | _, _ => 0
+
+/-- $7 \times 7$ quotient matrix $Q_B$ of `szegedyEdgeProjBEntry hypercubeQ3Matrix` ($3 \Pi_B$) on `q3SzegedyEdgePart`. -/
+def q3SzegedyQuotientB : Nat → Nat → Int
+  | 0, 0 => 1
+  | 0, 3 => 2
+  | 1, 1 => 3
+  | 2, 2 => 2
+  | 2, 5 => 1
+  | 3, 0 => 1
+  | 3, 3 => 2
+  | 4, 4 => 3
+  | 5, 2 => 2
+  | 5, 5 => 1
+  | _, _ => 0
 
 /-- Helper lemma: a single reflection operator $R_M = 2 M - d_M I$ intertwines exactly with the
 quotient reflection $R_{Q_M} = 2 Q_M - d_M I_r$ over any equitable partition. -/
@@ -1154,9 +1273,8 @@ theorem szegedy_reflect_intertwining
 /-- **Theorem (`szegedy_intertwining_step`)**:
 **Single-Step Discrete-Time Szegedy Quantum Walk Intertwining ($U_{\text{Sz}} P = P Q_{\text{Sz}}$)**:
 For ANY equitable partition `(part, cellIndices, cellOf)` shared by the reflection generators
-$(A, Q_A)$ and $(B, Q_B)$ (including the single-generator coin/Grover reflection case $B = A$),
-any degree scales $d_A, d_B \in \mathbb{Z}$, any quotient state $w : \text{Nat} \to \text{Int}$,
-and any vertex $u \in \mathbb{N}$:
+$(A, Q_A)$ and $(B, Q_B)$, any degree scales $d_A, d_B \in \mathbb{Z}$, any quotient state
+$w : \text{Nat} \to \text{Int}$, and any state index $u \in \mathbb{N}$:
 $$(U_{\text{Sz}} (P w))_u = (P (Q_{\text{Sz}} w))_u = (Q_{\text{Sz}} w)_{\text{part}(u)}.$$ -/
 theorem szegedy_intertwining_step
     (A B QA QB : Nat → Nat → Int)
@@ -1214,17 +1332,20 @@ theorem szegedy_intertwining_power
 /-- **Theorem (`cellUniformSzegedyPST_iff_quotient`)**:
 **Discrete-Time Szegedy State Transfer Equivalence Theorem**:
 Let $(A, B, \text{part}, Q_A, Q_B)$ be an equitable partition over `cellIndices` and `cellOf`:
-1. **Pointwise Vertex Equivalence**: For EVERY step count $k \in \mathbb{N}$, EVERY initial quotient
-   state $w_0 : \text{Nat} \to \text{Int}$, EVERY target vertex $v \in \mathbb{N}$, and EVERY target
+1. **Pointwise State Equivalence**: For EVERY step count $k \in \mathbb{N}$, EVERY initial quotient
+   state $w_0 : \text{Nat} \to \text{Int}$, EVERY target state $v \in \mathbb{N}$, and EVERY target
    amplitude $A_{\text{target}} \in \mathbb{Z}$,
    $$(U_{\text{Sz}}^k (P w_0))_v = A_{\text{target}} \iff (Q_{\text{Sz}}^k w_0)_{\text{part}(v)} = A_{\text{target}}.$$
 2. **Cell-Uniform Target Equivalence**: For any target cell $c_{\text{target}} \in \text{cellIndices}$
-   with witness vertex $v_0 \in \text{cellOf } c_{\text{target}}$, cell-uniform state transfer across
-   ALL vertices $v \in \text{cellOf } c_{\text{target}}$ holds if and only if the quotient walk reaches
+   with witness state $v_0 \in \text{cellOf } c_{\text{target}}$, cell-uniform state transfer across
+   ALL states $x \in \text{cellOf } c_{\text{target}}$ holds if and only if the quotient walk reaches
    $A_{\text{target}}$ at cell $c_{\text{target}}$.
-3. **Concrete $Q_3$ & $K_2$ Discrete-Time Szegedy Walk Verification**: On the 8-vertex hypercube $Q_3$
-   (with $d_A = d_B = 3$) and on $K_2$ (with $d_A = d_B = 1$), the $N$-vertex Szegedy walk starting
-   from $|0\rangle$ matches the $r$-cell quotient Szegedy walk at every step $k = 1, 2, 3$. -/
+3. **Unitary Bipartite Directed-Edge Szegedy Walk on $Q_3$ (`64` states $\to$ `7` shells)**:
+   Reflecting across the true bipartite directed-edge projectors $P_A = 3 \Pi_A$
+   (`szegedyEdgeProjAEntry hypercubeQ3Matrix`) and $P_B = 3 \Pi_B$ (`szegedyEdgeProjBEntry hypercubeQ3Matrix`)
+   with $d_A = d_B = 3$, two steps from the outgoing source shell $C_0$ reach exact scaled amplitude
+   `fullSz2 = quotSz2 = 72` ($72 / 3^4 = 8 / 9$, antipodal transfer probability $64 / 81 \le 1$ with
+   exact $\ell_2$-norm conservation) at antipodal incoming edge `31` (`011 → 111`, cell `4`). -/
 theorem cellUniformSzegedyPST_iff_quotient
     (A B QA QB : Nat → Nat → Int)
     (part : Nat → Nat)
@@ -1247,14 +1368,16 @@ theorem cellUniformSzegedyPST_iff_quotient
     ((∀ x, x ∈ cellOf cTarget →
         iterateVecOp (szegedyWalkStep A B cellIndices cellOf dA dB) k (liftQuotientVec part w0) x = targetAmp) ↔
       iterateVecOp (szegedyQuotientWalkStep QA QB cellIndices dA dB) k w0 cTarget = targetAmp) ∧
-    (let q3Cells := [0, 1, 2, 3]
-     let q3CellOf := fun j => cellMembers (List.range 8) hypercubeQ3Part j
+    (let q3EdgeCells := [0, 1, 2, 3, 4, 5, 6]
+     let q3EdgeCellOf := fun j => cellMembers (List.range 64) q3SzegedyEdgePart j
      let wSource : Nat → Int := fun i => if i == 0 then 1 else 0
-     let fullSz2 := iterateVecOp (szegedyWalkStep hypercubeQ3Matrix.entry hypercubeQ3Matrix.entry q3Cells q3CellOf 3 3)
-                      2 (liftQuotientVec hypercubeQ3Part wSource) 7
-     let quotSz2 := iterateVecOp (szegedyQuotientWalkStep hypercubeQ3Quotient hypercubeQ3Quotient q3Cells 3 3)
-                      2 wSource 3
-     fullSz2 = quotSz2 ∧ fullSz2 = -576) := by
+     let projA := szegedyEdgeProjAEntry hypercubeQ3Matrix
+     let projB := szegedyEdgeProjBEntry hypercubeQ3Matrix
+     let fullSz2 := iterateVecOp (szegedyWalkStep projA projB q3EdgeCells q3EdgeCellOf 3 3)
+                      2 (liftQuotientVec q3SzegedyEdgePart wSource) 31
+     let quotSz2 := iterateVecOp (szegedyQuotientWalkStep q3SzegedyQuotientA q3SzegedyQuotientB q3EdgeCells 3 3)
+                      2 wSource 4
+     fullSz2 = quotSz2 ∧ fullSz2 = 72) := by
   have hPow : ∀ x,
       iterateVecOp (szegedyWalkStep A B cellIndices cellOf dA dB) k (liftQuotientVec part w0) x =
         iterateVecOp (szegedyQuotientWalkStep QA QB cellIndices dA dB) k w0 (part x) :=
@@ -1270,21 +1393,620 @@ theorem cellUniformSzegedyPST_iff_quotient
       rw [hPow x, hCells cTarget hcMem x hxMem]
       exact hQuot
 
+/-! ### 7.2 Bipartite Edge-Space Szegedy Projectors & Exact Unitary $\ell_2$-Norm Conservation (`‖R ψ‖₂² = ‖ψ‖₂²`) -/
+
+/-- Exact integer $\ell_2$ inner product $\langle u, v \rangle = \sum_{i \in \text{indices}} u_i v_i$. -/
+def vecDotInt (indices : List Nat) (u v : Nat → Int) : Int :=
+  sumIntOver (fun i => u i * v i) indices
+
+/-- Exact integer squared $\ell_2$ norm $\|v\|_2^2 = \sum_{i \in \text{indices}} v_i^2$. -/
+def vecNormSqInt (indices : List Nat) (v : Nat → Int) : Int :=
+  vecDotInt indices v v
+
+/-- Predicate certifying that $M : \mathbb{N} \to \mathbb{N} \to \mathbb{Z}$ is an integer-scaled
+symmetric orthogonal projector of positive scale $d > 0$ over `indices` ($M^\top = M$ and $M^2 = d M$,
+so $\Pi = \frac{1}{d} M$ satisfies $\Pi^\top = \Pi$ and $\Pi^2 = \Pi$). -/
+def IsScaledSymmetricProjector (M : Nat → Nat → Int) (indices : List Nat) (d : Int) : Prop :=
+  0 < d ∧
+  (∀ u, u ∈ indices → ∀ v, v ∈ indices → M u v = M v u) ∧
+  (∀ u, u ∈ indices → ∀ v, v ∈ indices → matMulEntry indices M M u v = d * M u v)
+
+/-- Computable checker for `IsScaledSymmetricProjector M (List.range dim) d`. -/
+def checkScaledSymmetricProjectorFn (dim : Nat) (M : Nat → Nat → Int) (d : Int) : Bool :=
+  let indices := List.range dim
+  decide (0 < d) &&
+  indices.all (fun u =>
+    indices.all (fun v =>
+      decide (M u v = M v u) &&
+      decide (matMulEntry indices M M u v = d * M u v)))
+
+/-- Computable checker for `IsScaledSymmetricProjector proj.entry (List.range proj.dim) d` on an `IntMatrix`. -/
+def checkScaledSymmetricProjector (proj : IntMatrix) (d : Int) : Bool :=
+  checkScaledSymmetricProjectorFn proj.dim proj.entry d
+
+/-- Soundness of `checkScaledSymmetricProjectorFn`: passing the boolean check certifies
+$0 < d$, symmetry $M^\top = M$, and scaled idempotence $M^2 = d M$ across `List.range dim`. -/
+theorem checkScaledSymmetricProjectorFn_sound
+    (dim : Nat) (M : Nat → Nat → Int) (d : Int)
+    (hCheck : checkScaledSymmetricProjectorFn dim M d = true) :
+    IsScaledSymmetricProjector M (List.range dim) d := by
+  unfold checkScaledSymmetricProjectorFn at hCheck
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hCheck
+  rcases hCheck with ⟨hd, hAll⟩
+  rw [list_all_iff_forall] at hAll
+  refine ⟨hd, ?_, ?_⟩
+  · intro u hu v hv
+    have hRow := (list_all_iff_forall _ (List.range dim)).mp (hAll u hu) v hv
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hRow
+    exact hRow.1
+  · intro u hu v hv
+    have hRow := (list_all_iff_forall _ (List.range dim)).mp (hAll u hu) v hv
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hRow
+    exact hRow.2
+
+/-- Soundness of `checkScaledSymmetricProjector` on `IntMatrix`. -/
+theorem checkScaledSymmetricProjector_sound
+    (proj : IntMatrix) (d : Int)
+    (hCheck : checkScaledSymmetricProjector proj d = true) :
+    IsScaledSymmetricProjector proj.entry (List.range proj.dim) d :=
+  checkScaledSymmetricProjectorFn_sound proj.dim proj.entry d hCheck
+
+/-- Self-adjointness of `matVec indices M` with respect to `vecDotInt` for symmetric $M$:
+$\langle M x, y \rangle = \langle x, M y \rangle$. -/
+theorem matVec_selfAdjoint_int
+    (indices : List Nat)
+    (M : Nat → Nat → Int)
+    (hSym : ∀ u, u ∈ indices → ∀ v, v ∈ indices → M u v = M v u)
+    (x y : Nat → Int) :
+    vecDotInt indices (matVec indices M x) y = vecDotInt indices x (matVec indices M y) := by
+  dsimp only [vecDotInt, matVec]
+  have hLeft :
+      sumIntOver (fun i => sumIntOver (fun j => M i j * x j) indices * y i) indices =
+        sumIntOver (fun i => sumIntOver (fun j => (M i j * x j) * y i) indices) indices := by
+    apply sumIntOver_congr
+    intro i _
+    exact (sumIntOver_mul_right (fun j => M i j * x j) (y i) indices).symm
+  rw [hLeft, doubleSum_swap (fun i j => (M i j * x j) * y i) indices indices]
+  apply sumIntOver_congr
+  intro j hj
+  rw [← sumIntOver_mul_left (x j) (fun i => M j i * y i) indices]
+  apply sumIntOver_congr
+  intro i hi
+  rw [hSym i hi j hj, Int.mul_comm (M j i) (x j), Int.mul_assoc (x j) (M j i) (y i)]
+
+/-- Scaled idempotence of `matVec indices M` when $M^2 = d M$:
+for every $u \in \text{indices}$, $(M (M x))_u = d \cdot (M x)_u$. -/
+theorem matVec_projector_idempotent_int
+    (indices : List Nat)
+    (M : Nat → Nat → Int)
+    (d : Int)
+    (hIdemp : ∀ u, u ∈ indices → ∀ v, v ∈ indices → matMulEntry indices M M u v = d * M u v)
+    (x : Nat → Int)
+    (u : Nat)
+    (hu : u ∈ indices) :
+    matVec indices M (matVec indices M x) u = d * matVec indices M x u := by
+  dsimp only [matVec]
+  have hIn :
+      sumIntOver (fun j => M u j * sumIntOver (fun k => M j k * x k) indices) indices =
+        sumIntOver (fun j => sumIntOver (fun k => (M u j * M j k) * x k) indices) indices := by
+    apply sumIntOver_congr
+    intro j _
+    rw [← sumIntOver_mul_left (M u j) (fun k => M j k * x k) indices]
+    apply sumIntOver_congr
+    intro k _
+    exact (Int.mul_assoc (M u j) (M j k) (x k)).symm
+  rw [hIn, doubleSum_swap (fun j k => (M u j * M j k) * x k) indices indices]
+  rw [← sumIntOver_mul_left d (fun k => M u k * x k) indices]
+  apply sumIntOver_congr
+  intro k hk
+  rw [sumIntOver_mul_right (fun j => M u j * M j k) (x k) indices]
+  change matMulEntry indices M M u k * x k = d * (M u k * x k)
+  rw [hIdemp u hu k hk, Int.mul_assoc d (M u k) (x k)]
+
+/-- **Theorem (`szegedyUnpartitionedReflect_normSq_int`)**:
+For ANY scaled symmetric projector $M$ ($M^\top = M$, $M^2 = d M$) over `indices` and ANY integer
+vector $v : \mathbb{N} \to \mathbb{Z}$, the reflection $(2 M - d I) v$ preserves squared $\ell_2$
+norm up to the exact projector scale $d^2$:
+$$\|(2 M - d I) v\|_2^2 = d^2 \|v\|_2^2.$$ -/
+theorem szegedyUnpartitionedReflect_normSq_int
+    (indices : List Nat)
+    (M : Nat → Nat → Int)
+    (d : Int)
+    (hProj : IsScaledSymmetricProjector M indices d)
+    (v : Nat → Int) :
+    vecNormSqInt indices (fun u => 2 * matVec indices M v u - d * v u) =
+      (d * d) * vecNormSqInt indices v := by
+  rcases hProj with ⟨_, hSym, hIdemp⟩
+  have hPiSq :
+      vecNormSqInt indices (matVec indices M v) =
+        d * vecDotInt indices v (matVec indices M v) := by
+    change vecDotInt indices (matVec indices M v) (matVec indices M v) = _
+    rw [matVec_selfAdjoint_int indices M hSym v (matVec indices M v)]
+    dsimp only [vecDotInt]
+    rw [← sumIntOver_mul_left d (fun i => v i * matVec indices M v i) indices]
+    apply sumIntOver_congr
+    intro i hi
+    rw [matVec_projector_idempotent_int indices M d hIdemp v i hi]
+    rw [← Int.mul_assoc (v i) d (matVec indices M v i), Int.mul_comm (v i) d,
+        Int.mul_assoc d (v i) (matVec indices M v i)]
+  dsimp only [vecNormSqInt, vecDotInt]
+  have hPt : ∀ u,
+      (2 * matVec indices M v u - d * v u) * (2 * matVec indices M v u - d * v u) =
+        (4 * (matVec indices M v u * matVec indices M v u) +
+          (-4 * d) * (v u * matVec indices M v u)) +
+        (d * d) * (v u * v u) := by
+    intro u
+    have hSub : 2 * matVec indices M v u - d * v u = 2 * matVec indices M v u + (-d) * v u := by
+      rw [Int.sub_eq_add_neg, Int.neg_mul]
+    rw [hSub, int_add_mul_add_expand]
+    have h1 : (2 * matVec indices M v u) * (2 * matVec indices M v u) =
+        4 * (matVec indices M v u * matVec indices M v u) := by
+      rw [equitable_int_mul_four_swap 2 (matVec indices M v u) 2 (matVec indices M v u)]
+      rfl
+    have h2 : (2 * matVec indices M v u) * ((-d) * v u) =
+        (-2 * d) * (v u * matVec indices M v u) := by
+      rw [Int.mul_comm (2 * matVec indices M v u) ((-d) * v u)]
+      rw [equitable_int_mul_four_swap (-d) (v u) 2 (matVec indices M v u)]
+      have hd2 : -d * 2 = -2 * d := by omega
+      rw [hd2]
+    have h3 : ((-d) * v u) * (2 * matVec indices M v u) =
+        (-2 * d) * (v u * matVec indices M v u) := by
+      rw [equitable_int_mul_four_swap (-d) (v u) 2 (matVec indices M v u)]
+      have hd2 : -d * 2 = -2 * d := by omega
+      rw [hd2]
+    have h4 : ((-d) * v u) * ((-d) * v u) = (d * d) * (v u * v u) := by
+      rw [equitable_int_mul_four_swap (-d) (v u) (-d) (v u), Int.neg_mul_neg d d]
+    rw [h1, h2, h3, h4]
+    have hCoeff : -2 * d + -2 * d = -4 * d := by omega
+    rw [← Int.add_assoc,
+        Int.add_assoc (4 * (matVec indices M v u * matVec indices M v u))
+          ((-2 * d) * (v u * matVec indices M v u)) ((-2 * d) * (v u * matVec indices M v u)),
+        ← Int.add_mul (-2 * d) (-2 * d) (v u * matVec indices M v u), hCoeff]
+  have hCongr := sumIntOver_congr _ _ indices (fun u _ => hPt u)
+  rw [hCongr, sumIntOver_add, sumIntOver_add, sumIntOver_mul_left, sumIntOver_mul_left, sumIntOver_mul_left]
+  change (4 * vecNormSqInt indices (matVec indices M v) +
+            (-4 * d) * vecDotInt indices v (matVec indices M v)) +
+          (d * d) * vecNormSqInt indices v = _
+  rw [hPiSq, ← Int.mul_assoc 4 d, ← Int.add_mul (4 * d) (-4 * d)]
+  have hZero4d : 4 * d + (-4 * d) = 0 := by omega
+  rw [hZero4d, Int.zero_mul, Int.zero_add]
+  rfl
+
+/-- **Theorem (`szegedyReflectVec_norm_sq_preserved`)**:
+For ANY scaled symmetric projector $M$ ($M^\top = M$, $M^2 = d M$) over `indices` and ANY partition
+`part` mapping `indices` into `0 .. numCells - 1`, `szegedyReflectVec` preserves squared $\ell_2$
+norm up to the exact projector scale $d^2$:
+$$\|\text{szegedyReflectVec } M\; [0..\text{numCells})\; \text{cellOf}\; d\; v\|_2^2 = d^2 \|v\|_2^2.$$ -/
+theorem szegedyReflectVec_norm_sq_preserved
+    (indices : List Nat)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (M : Nat → Nat → Int)
+    (d : Int)
+    (hPart : ∀ x, x ∈ indices → part x < numCells)
+    (hProj : IsScaledSymmetricProjector M indices d)
+    (v : Nat → Int) :
+    vecNormSqInt indices (szegedyReflectVec M (List.range numCells) (cellMembers indices part) d v) =
+      (d * d) * vecNormSqInt indices v := by
+  have hEq :
+      szegedyReflectVec M (List.range numCells) (cellMembers indices part) d v =
+        (fun u => 2 * matVec indices M v u - d * v u) := by
+    funext u
+    dsimp only [szegedyReflectVec]
+    rw [partitionedMatVec_eq_matVec M indices numCells part v u hPart]
+  rw [hEq]
+  exact szegedyUnpartitionedReflect_normSq_int indices M d hProj v
+
+/-- **Theorem (`szegedyWalkStep_norm_sq_preserved`)**:
+One full discrete-time Szegedy step composing scaled symmetric projectors $(A, d_A)$ and $(B, d_B)$
+preserves squared $\ell_2$ norm up to $(d_A d_B)^2$:
+$$\|\text{szegedyWalkStep } A\; B\; \dots\; v\|_2^2 = (d_A d_B)^2 \|v\|_2^2.$$ -/
+theorem szegedyWalkStep_norm_sq_preserved
+    (indices : List Nat)
+    (numCells : Nat)
+    (part : Nat → Nat)
+    (A B : Nat → Nat → Int)
+    (dA dB : Int)
+    (hPart : ∀ x, x ∈ indices → part x < numCells)
+    (hProjA : IsScaledSymmetricProjector A indices dA)
+    (hProjB : IsScaledSymmetricProjector B indices dB)
+    (v : Nat → Int) :
+    vecNormSqInt indices (szegedyWalkStep A B (List.range numCells) (cellMembers indices part) dA dB v) =
+      ((dA * dB) * (dA * dB)) * vecNormSqInt indices v := by
+  change vecNormSqInt indices
+    (szegedyReflectVec B (List.range numCells) (cellMembers indices part) dB
+      (szegedyReflectVec A (List.range numCells) (cellMembers indices part) dA v)) = _
+  rw [szegedyReflectVec_norm_sq_preserved indices numCells part B dB hPart hProjB]
+  rw [szegedyReflectVec_norm_sq_preserved indices numCells part A dA hPart hProjA]
+  rw [← Int.mul_assoc (dB * dB) (dA * dA) (vecNormSqInt indices v)]
+  rw [Int.mul_comm (dB * dB) (dA * dA), equitable_int_mul_four_swap dA dA dB dB]
+
+/-- Sum a `CanonicalRat`-valued function over a finite index list `xs`. -/
+def sumRatOver (f : Nat → CanonicalRat) : List Nat → CanonicalRat
+  | [] => 0
+  | x :: xs => f x + sumRatOver f xs
+
+/-- Exact rational $\ell_2$ inner product $\langle u, v \rangle = \sum_{i \in \text{indices}} u_i v_i \in \mathbb{Q}$. -/
+def vecDotRat (indices : List Nat) (u v : Nat → CanonicalRat) : CanonicalRat :=
+  sumRatOver (fun i => u i * v i) indices
+
+/-- Exact rational squared $\ell_2$ norm $\|\psi\|_2^2 = \sum_{i \in \text{indices}} \psi_i^2 \in \mathbb{Q}$. -/
+def vecNormSqRat (indices : List Nat) (ψ : Nat → CanonicalRat) : CanonicalRat :=
+  vecDotRat indices ψ ψ
+
+/-- Exact rational matrix-vector product $(\Pi \psi)_u = \sum_{j \in \text{indices}} \Pi_{u, j} \psi_j$. -/
+def matVecRat (indices : List Nat) (proj : Nat → Nat → CanonicalRat) (ψ : Nat → CanonicalRat) (u : Nat) : CanonicalRat :=
+  sumRatOver (fun j => proj u j * ψ j) indices
+
+/-- Exact rational matrix product entry $(A B)_{u, v} = \sum_{w \in \text{indices}} A_{u, w} B_{w, v}$. -/
+def matMulRatEntry (indices : List Nat) (A B : Nat → Nat → CanonicalRat) (u v : Nat) : CanonicalRat :=
+  sumRatOver (fun w => A u w * B w v) indices
+
+/-- Normalize an integer-scaled projector $M$ ($M^2 = d M$) by $d$ into an exact rational projector
+$\Pi_{u, v} = M_{u, v} / d$ satisfying $\Pi^2 = \Pi$. -/
+def normalizeScaledProjector (M : Nat → Nat → Int) (d : Int) (u v : Nat) : CanonicalRat :=
+  CanonicalRat.ofInt (M u v) / CanonicalRat.ofInt d
+
+/-- Normalized rational Szegedy bipartite edge-space projector $\Pi_A = \frac{1}{d} P_A$ ($\Pi_A^2 = \Pi_A$). -/
+def szegedyNormalizedEdgeProjA (G : IntMatrix) (d : Int) : Nat → Nat → CanonicalRat :=
+  normalizeScaledProjector (szegedyEdgeProjAEntry G) d
+
+/-- Normalized rational Szegedy bipartite edge-space projector $\Pi_B = \frac{1}{d} P_B$ ($\Pi_B^2 = \Pi_B$). -/
+def szegedyNormalizedEdgeProjB (G : IntMatrix) (d : Int) : Nat → Nat → CanonicalRat :=
+  normalizeScaledProjector (szegedyEdgeProjBEntry G) d
+
+/-- Predicate certifying that $\Pi : \mathbb{N} \to \mathbb{N} \to \mathbb{Q}$ is an exact normalized
+symmetric orthogonal projector over `indices`: $\Pi^\top = \Pi$ and $\Pi^2 = \Pi$. -/
+def IsNormalizedRatProjector (proj : Nat → Nat → CanonicalRat) (indices : List Nat) : Prop :=
+  (∀ u, u ∈ indices → ∀ v, v ∈ indices → proj u v = proj v u) ∧
+  (∀ u, u ∈ indices → ∀ v, v ∈ indices → matMulRatEntry indices proj proj u v = proj u v)
+
+/-- Computable checker for `IsNormalizedRatProjector proj (List.range dim)`. -/
+def checkNormalizedRatProjector (dim : Nat) (proj : Nat → Nat → CanonicalRat) : Bool :=
+  let indices := List.range dim
+  indices.all (fun u =>
+    indices.all (fun v =>
+      decide (proj u v = proj v u) &&
+      decide (matMulRatEntry indices proj proj u v = proj u v)))
+
+/-- Soundness of `checkNormalizedRatProjector`: passing the boolean check certifies
+$\Pi^\top = \Pi$ and $\Pi^2 = \Pi$ across `List.range dim`. -/
+theorem checkNormalizedRatProjector_sound
+    (dim : Nat) (proj : Nat → Nat → CanonicalRat)
+    (hCheck : checkNormalizedRatProjector dim proj = true) :
+    IsNormalizedRatProjector proj (List.range dim) := by
+  unfold checkNormalizedRatProjector at hCheck
+  rw [list_all_iff_forall] at hCheck
+  refine ⟨?_, ?_⟩
+  · intro u hu v hv
+    have hRow := (list_all_iff_forall _ (List.range dim)).mp (hCheck u hu) v hv
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hRow
+    exact hRow.1
+  · intro u hu v hv
+    have hRow := (list_all_iff_forall _ (List.range dim)).mp (hCheck u hu) v hv
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hRow
+    exact hRow.2
+
+/-- Non-vacuity / inhabitedness witnesses for `checkScaledSymmetricProjectorFn`,
+`checkScaledSymmetricProjector`, and `checkNormalizedRatProjector` on the bipartite directed-edge
+projectors of $K_2$ ($d = 1$, $4$ vertex pairs) and $Q_3$ ($d = 3$, $64$ vertex pairs). -/
+theorem szegedy_edge_projectors_inhabited :
+    (∃ dim M d, checkScaledSymmetricProjectorFn dim M d = true) ∧
+    (∃ proj d, checkScaledSymmetricProjector proj d = true) ∧
+    (∃ dim proj, checkNormalizedRatProjector dim proj = true) :=
+  ⟨⟨64, szegedyEdgeProjAEntry hypercubeQ3Matrix, 3, by decide +kernel⟩,
+   ⟨szegedyEdgeProjAMatrix k2Matrix, 1, by decide +kernel⟩,
+   ⟨4, szegedyNormalizedEdgeProjA k2Matrix 1, by decide +kernel⟩⟩
+
+/-- Exact normalized **Unitary Szegedy Reflection** $R_\Pi = 2 \Pi - I$ over `CanonicalRat`:
+$$(R_\Pi \psi)_u = 2 (\Pi \psi)_u - \psi_u.$$
+When $\Pi$ is a symmetric orthogonal projector ($\Pi^\top = \Pi$, $\Pi^2 = \Pi$), $R_\Pi$ is an
+exact involution ($R_\Pi^2 = I$) and strictly preserves $\ell_2$ norm ($\|R_\Pi \psi\|_2^2 = \|\psi\|_2^2$). -/
+def szegedyReflectRatVec
+    (proj : Nat → Nat → CanonicalRat)
+    (indices : List Nat)
+    (ψ : Nat → CanonicalRat)
+    (u : Nat) : CanonicalRat :=
+  2 * matVecRat indices proj ψ u - ψ u
+
+/-- One full clock cycle of the exact normalized **Unitary Discrete-Time Szegedy Quantum Walk**
+$$U_{\text{Sz}} = R_{\Pi_B} \cdot R_{\Pi_A} = (2 \Pi_B - I)(2 \Pi_A - I)$$
+over `CanonicalRat`. -/
+def szegedyWalkRatStep
+    (projA projB : Nat → Nat → CanonicalRat)
+    (indices : List Nat)
+    (ψ : Nat → CanonicalRat)
+    (u : Nat) : CanonicalRat :=
+  szegedyReflectRatVec projB indices (szegedyReflectRatVec projA indices ψ) u
+
+/-- Iterate a rational vector operator `op` for `k` discrete steps. -/
+def iterateRatVecOp (op : (Nat → CanonicalRat) → (Nat → CanonicalRat)) :
+    Nat → (Nat → CanonicalRat) → (Nat → CanonicalRat)
+  | 0, ψ => ψ
+  | k + 1, ψ => op (iterateRatVecOp op k ψ)
+
+private theorem rat_neg_eq_neg_one_mul (x : CanonicalRat) :
+    -x = (-1 : CanonicalRat) * x := by
+  grind
+
+private theorem sumRatOver_congr (f g : Nat → CanonicalRat) :
+    ∀ (xs : List Nat), (∀ x, x ∈ xs → f x = g x) → sumRatOver f xs = sumRatOver g xs
+  | [], _ => rfl
+  | x :: xs, h => by
+    dsimp only [sumRatOver]
+    rw [h x (List.Mem.head xs), sumRatOver_congr f g xs (fun y hy => h y (List.Mem.tail x hy))]
+
+private theorem sumRatOver_zero : ∀ (xs : List Nat), sumRatOver (fun _ => 0) xs = 0
+  | [] => rfl
+  | _ :: xs => by dsimp only [sumRatOver]; rw [sumRatOver_zero xs, Rat.add_zero]
+
+private theorem sumRatOver_add (f g : Nat → CanonicalRat) :
+    ∀ (xs : List Nat), sumRatOver (fun x => f x + g x) xs = sumRatOver f xs + sumRatOver g xs
+  | [] => by dsimp only [sumRatOver]; rw [Rat.add_zero]
+  | x :: xs => by
+    dsimp only [sumRatOver]
+    rw [sumRatOver_add f g xs]
+    rw [← Rat.add_assoc, Rat.add_assoc (f x) (g x) (sumRatOver f xs),
+        Rat.add_comm (g x) (sumRatOver f xs), ← Rat.add_assoc, Rat.add_assoc]
+
+private theorem sumRatOver_mul_left (c : CanonicalRat) (f : Nat → CanonicalRat) :
+    ∀ (xs : List Nat), sumRatOver (fun x => c * f x) xs = c * sumRatOver f xs
+  | [] => by dsimp only [sumRatOver]; rw [Rat.mul_zero]
+  | x :: xs => by dsimp only [sumRatOver]; rw [sumRatOver_mul_left c f xs, Rat.mul_add]
+
+private theorem sumRatOver_mul_right (f : Nat → CanonicalRat) (c : CanonicalRat) :
+    ∀ (xs : List Nat), sumRatOver (fun x => f x * c) xs = sumRatOver f xs * c
+  | [] => by dsimp only [sumRatOver]; rw [Rat.zero_mul]
+  | x :: xs => by dsimp only [sumRatOver]; rw [sumRatOver_mul_right f c xs, Rat.add_mul]
+
+private theorem doubleSumRat_swap (H : Nat → Nat → CanonicalRat) :
+    ∀ (xs ys : List Nat),
+      sumRatOver (fun u => sumRatOver (fun v => H u v) ys) xs =
+      sumRatOver (fun v => sumRatOver (fun u => H u v) xs) ys
+  | [], ys => by dsimp only [sumRatOver]; exact (sumRatOver_zero ys).symm
+  | u :: xs, ys => by
+    dsimp only [sumRatOver]
+    rw [doubleSumRat_swap H xs ys]
+    exact (sumRatOver_add (fun v => H u v) (fun v => sumRatOver (fun u' => H u' v) xs) ys).symm
+
+private theorem canonicalRat_ofInt_eq_cast (z : Int) :
+    CanonicalRat.ofInt z = (z : Rat) := rfl
+
+private theorem sumRatOver_ofInt (f : Nat → Int) :
+    ∀ (xs : List Nat),
+      sumRatOver (fun x => CanonicalRat.ofInt (f x)) xs = CanonicalRat.ofInt (sumIntOver f xs)
+  | [] => rfl
+  | x :: xs => by
+    dsimp only [sumRatOver, sumIntOver]
+    rw [sumRatOver_ofInt f xs,
+        canonicalRat_ofInt_eq_cast, canonicalRat_ofInt_eq_cast, canonicalRat_ofInt_eq_cast,
+        ← Rat.intCast_add]
+
+/-- **Bridge Lemma (`normalizeScaledProjector_isNormalizedRatProjector`)**:
+Dividing any integer-scaled symmetric orthogonal projector $M$ ($0 < d$, $M^\top = M$, $M^2 = d M$)
+by its positive scale $d$ yields an exact normalized rational orthogonal projector
+$\Pi = \frac{1}{d} M$ satisfying $\Pi^\top = \Pi$ and $\Pi^2 = \Pi$ (`IsNormalizedRatProjector`). -/
+theorem normalizeScaledProjector_isNormalizedRatProjector
+    (M : Nat → Nat → Int) (indices : List Nat) (d : Int)
+    (hProj : IsScaledSymmetricProjector M indices d) :
+    IsNormalizedRatProjector (normalizeScaledProjector M d) indices := by
+  rcases hProj with ⟨hd, hSym, hIdemp⟩
+  refine ⟨?_, ?_⟩
+  · intro u hu v hv
+    dsimp only [normalizeScaledProjector]
+    rw [hSym u hu v hv]
+  · intro u hu v hv
+    dsimp only [matMulRatEntry, normalizeScaledProjector]
+    let dq : CanonicalRat := CanonicalRat.ofInt d
+    have hTerm :
+        ∀ w, w ∈ indices →
+          (CanonicalRat.ofInt (M u w) / dq) * (CanonicalRat.ofInt (M w v) / dq) =
+            CanonicalRat.ofInt (M u w * M w v) * (dq⁻¹ * dq⁻¹) := by
+      intro w _
+      rw [Rat.div_def, Rat.div_def,
+          canonicalRat_ofInt_eq_cast (M u w), canonicalRat_ofInt_eq_cast (M w v),
+          canonicalRat_ofInt_eq_cast (M u w * M w v), Rat.intCast_mul]
+      rw [Rat.mul_assoc (M u w : Rat) dq⁻¹ ((M w v : Rat) * dq⁻¹),
+          ← Rat.mul_assoc dq⁻¹ (M w v : Rat) dq⁻¹,
+          Rat.mul_comm dq⁻¹ (M w v : Rat),
+          Rat.mul_assoc (M w v : Rat) dq⁻¹ dq⁻¹,
+          ← Rat.mul_assoc (M u w : Rat) (M w v : Rat) (dq⁻¹ * dq⁻¹)]
+    rw [sumRatOver_congr _ _ indices hTerm]
+    rw [sumRatOver_mul_right (fun w => CanonicalRat.ofInt (M u w * M w v)) (dq⁻¹ * dq⁻¹) indices]
+    rw [sumRatOver_ofInt (fun w => M u w * M w v) indices]
+    change CanonicalRat.ofInt (matMulEntry indices M M u v) * (dq⁻¹ * dq⁻¹) =
+      CanonicalRat.ofInt (M u v) / dq
+    rw [hIdemp u hu v hv]
+    have hdPos : (0 : Rat) < (d : Rat) := Rat.intCast_pos.mpr hd
+    have hdNe : dq ≠ 0 := by
+      rw [show dq = (d : Rat) from rfl]
+      exact Rat.ne_of_gt hdPos
+    rw [canonicalRat_ofInt_eq_cast (d * M u v), canonicalRat_ofInt_eq_cast (M u v),
+        Rat.intCast_mul, show (d : Rat) = dq from rfl, Rat.div_def]
+    rw [Rat.mul_comm dq (M u v : Rat),
+        Rat.mul_assoc (M u v : Rat) dq (dq⁻¹ * dq⁻¹),
+        ← Rat.mul_assoc dq dq⁻¹ dq⁻¹,
+        Rat.mul_inv_cancel dq hdNe,
+        Rat.one_mul]
+
+/-- Self-adjointness of `matVecRat indices proj` for symmetric $\Pi$:
+$\langle \Pi x, y \rangle = \langle x, \Pi y \rangle$. -/
+theorem matVecRat_selfAdjoint
+    (indices : List Nat)
+    (proj : Nat → Nat → CanonicalRat)
+    (hSym : ∀ u, u ∈ indices → ∀ v, v ∈ indices → proj u v = proj v u)
+    (x y : Nat → CanonicalRat) :
+    vecDotRat indices (matVecRat indices proj x) y = vecDotRat indices x (matVecRat indices proj y) := by
+  dsimp only [vecDotRat, matVecRat]
+  have hLeft :
+      sumRatOver (fun i => sumRatOver (fun j => proj i j * x j) indices * y i) indices =
+        sumRatOver (fun i => sumRatOver (fun j => (proj i j * x j) * y i) indices) indices := by
+    apply sumRatOver_congr
+    intro i _
+    exact (sumRatOver_mul_right (fun j => proj i j * x j) (y i) indices).symm
+  rw [hLeft, doubleSumRat_swap (fun i j => (proj i j * x j) * y i) indices indices]
+  apply sumRatOver_congr
+  intro j hj
+  rw [← sumRatOver_mul_left (x j) (fun i => proj j i * y i) indices]
+  apply sumRatOver_congr
+  intro i hi
+  rw [hSym i hi j hj, Rat.mul_comm (proj j i) (x j), Rat.mul_assoc (x j) (proj j i) (y i)]
+
+/-- Idempotence of `matVecRat indices proj` when $\Pi^2 = \Pi$:
+for every $u \in \text{indices}$, $(\Pi (\Pi \psi))_u = (\Pi \psi)_u$. -/
+theorem matVecRat_projector_idempotent
+    (indices : List Nat)
+    (proj : Nat → Nat → CanonicalRat)
+    (hIdemp : ∀ u, u ∈ indices → ∀ v, v ∈ indices → matMulRatEntry indices proj proj u v = proj u v)
+    (ψ : Nat → CanonicalRat)
+    (u : Nat)
+    (hu : u ∈ indices) :
+    matVecRat indices proj (matVecRat indices proj ψ) u = matVecRat indices proj ψ u := by
+  dsimp only [matVecRat]
+  have hIn :
+      sumRatOver (fun j => proj u j * sumRatOver (fun k => proj j k * ψ k) indices) indices =
+        sumRatOver (fun j => sumRatOver (fun k => (proj u j * proj j k) * ψ k) indices) indices := by
+    apply sumRatOver_congr
+    intro j _
+    rw [← sumRatOver_mul_left (proj u j) (fun k => proj j k * ψ k) indices]
+    apply sumRatOver_congr
+    intro k _
+    exact (Rat.mul_assoc (proj u j) (proj j k) (ψ k)).symm
+  rw [hIn, doubleSumRat_swap (fun j k => (proj u j * proj j k) * ψ k) indices indices]
+  apply sumRatOver_congr
+  intro k hk
+  rw [sumRatOver_mul_right (fun j => proj u j * proj j k) (ψ k) indices]
+  change matMulRatEntry indices proj proj u k * ψ k = proj u k * ψ k
+  rw [hIdemp u hu k hk]
+
+/-- **Theorem (`szegedyReflectRatVec_involution`)**:
+For ANY normalized symmetric projector $\Pi$ ($\Pi^\top = \Pi$, $\Pi^2 = \Pi$) over `indices`,
+the Szegedy reflection $R_\Pi = 2 \Pi - I$ is an exact involution ($R_\Pi^2 = I$):
+$$\forall u \in \text{indices},\quad (R_\Pi (R_\Pi \psi))_u = \psi_u.$$ -/
+theorem szegedyReflectRatVec_involution
+    (indices : List Nat)
+    (proj : Nat → Nat → CanonicalRat)
+    (hProj : IsNormalizedRatProjector proj indices)
+    (ψ : Nat → CanonicalRat)
+    (u : Nat)
+    (hu : u ∈ indices) :
+    szegedyReflectRatVec proj indices (szegedyReflectRatVec proj indices ψ) u = ψ u := by
+  rcases hProj with ⟨_, hIdemp⟩
+  have hPiRefl :
+      matVecRat indices proj (szegedyReflectRatVec proj indices ψ) u = matVecRat indices proj ψ u := by
+    dsimp only [matVecRat, szegedyReflectRatVec]
+    have hLin :
+        sumRatOver (fun j => proj u j * (2 * sumRatOver (fun k => proj j k * ψ k) indices - ψ j)) indices =
+          sumRatOver (fun j => 2 * (proj u j * sumRatOver (fun k => proj j k * ψ k) indices) +
+            (-1 : CanonicalRat) * (proj u j * ψ j)) indices := by
+      apply sumRatOver_congr
+      intro j _
+      rw [Rat.sub_eq_add_neg, rat_neg_eq_neg_one_mul (ψ j), Rat.mul_add]
+      rw [← Rat.mul_assoc, Rat.mul_comm (proj u j) 2, Rat.mul_assoc]
+      rw [← Rat.mul_assoc (proj u j) (-1 : CanonicalRat) (ψ j),
+          Rat.mul_comm (proj u j) (-1 : CanonicalRat), Rat.mul_assoc]
+    rw [hLin, sumRatOver_add, sumRatOver_mul_left, sumRatOver_mul_left]
+    change 2 * matVecRat indices proj (matVecRat indices proj ψ) u +
+             (-1 : CanonicalRat) * matVecRat indices proj ψ u = _
+    rw [matVecRat_projector_idempotent indices proj hIdemp ψ u hu]
+    rw [← Rat.add_mul]
+    have hCoeff : (2 : CanonicalRat) + (-1 : CanonicalRat) = 1 := by grind
+    rw [hCoeff, Rat.one_mul]
+    rfl
+  dsimp only [szegedyReflectRatVec]
+  rw [hPiRefl]
+  grind
+
+/-- **Theorem (`szegedyReflectRatVec_unitary_norm_preserved`)**:
+**Exact Unitarity / $\ell_2$-Norm Preservation of Normalized Szegedy Reflection**:
+For ANY normalized symmetric orthogonal projector $\Pi$ ($\Pi^\top = \Pi$, $\Pi^2 = \Pi$) over `indices`
+and ANY rational state vector $\psi : \mathbb{N} \to \mathbb{Q}$, $R_\Pi = 2 \Pi - I$ strictly
+conserves the exact $\ell_2$ norm:
+$$\|R_\Pi \psi\|_2^2 = \|\psi\|_2^2.$$ -/
+theorem szegedyReflectRatVec_unitary_norm_preserved
+    (indices : List Nat)
+    (proj : Nat → Nat → CanonicalRat)
+    (hProj : IsNormalizedRatProjector proj indices)
+    (ψ : Nat → CanonicalRat) :
+    vecNormSqRat indices (szegedyReflectRatVec proj indices ψ) = vecNormSqRat indices ψ := by
+  rcases hProj with ⟨hSym, hIdemp⟩
+  have hPiSq :
+      vecNormSqRat indices (matVecRat indices proj ψ) =
+        vecDotRat indices ψ (matVecRat indices proj ψ) := by
+    change vecDotRat indices (matVecRat indices proj ψ) (matVecRat indices proj ψ) = _
+    rw [matVecRat_selfAdjoint indices proj hSym ψ (matVecRat indices proj ψ)]
+    dsimp only [vecDotRat]
+    apply sumRatOver_congr
+    intro i hi
+    rw [matVecRat_projector_idempotent indices proj hIdemp ψ i hi]
+  dsimp only [vecNormSqRat, vecDotRat, szegedyReflectRatVec]
+  have hPt : ∀ u,
+      (2 * matVecRat indices proj ψ u - ψ u) * (2 * matVecRat indices proj ψ u - ψ u) =
+        (4 * (matVecRat indices proj ψ u * matVecRat indices proj ψ u) +
+          (-4 : CanonicalRat) * (ψ u * matVecRat indices proj ψ u)) +
+        (ψ u * ψ u) := by
+    intro u
+    grind
+  have hCongr := sumRatOver_congr _ _ indices (fun u _ => hPt u)
+  rw [hCongr, sumRatOver_add, sumRatOver_add, sumRatOver_mul_left, sumRatOver_mul_left]
+  change (4 * vecNormSqRat indices (matVecRat indices proj ψ) +
+            (-4 : CanonicalRat) * vecDotRat indices ψ (matVecRat indices proj ψ)) +
+          vecNormSqRat indices ψ = _
+  rw [hPiSq, ← Rat.add_mul]
+  have hZero : (4 : CanonicalRat) + (-4 : CanonicalRat) = 0 := by grind
+  rw [hZero, Rat.zero_mul, Rat.zero_add]
+  rfl
+
+/-- **Theorem (`szegedyWalkRatStep_unitary_norm_preserved`)**:
+One full discrete-time Szegedy quantum walk cycle $U_{\text{Sz}} = (2 \Pi_B - I)(2 \Pi_A - I)$
+across ANY two normalized symmetric orthogonal projectors $\Pi_A, \Pi_B$ ($\Pi_A^2 = \Pi_A$,
+$\Pi_B^2 = \Pi_B$) strictly preserves the exact $\ell_2$ norm:
+$$\|U_{\text{Sz}} \psi\|_2^2 = \|\psi\|_2^2.$$ -/
+theorem szegedyWalkRatStep_unitary_norm_preserved
+    (indices : List Nat)
+    (projA projB : Nat → Nat → CanonicalRat)
+    (hProjA : IsNormalizedRatProjector projA indices)
+    (hProjB : IsNormalizedRatProjector projB indices)
+    (ψ : Nat → CanonicalRat) :
+    vecNormSqRat indices (szegedyWalkRatStep projA projB indices ψ) = vecNormSqRat indices ψ := by
+  change vecNormSqRat indices (szegedyReflectRatVec projB indices (szegedyReflectRatVec projA indices ψ)) = _
+  rw [szegedyReflectRatVec_unitary_norm_preserved indices projB hProjB]
+  exact szegedyReflectRatVec_unitary_norm_preserved indices projA hProjA ψ
+
+/-- **Theorem (`szegedyWalkRatIter_unitary_norm_preserved`)**:
+For EVERY step count $k \in \mathbb{N}$ and EVERY rational state $\psi : \mathbb{N} \to \mathbb{Q}$,
+$k$ synchronous steps of the normalized bipartite Szegedy quantum walk strictly preserve the exact
+$\ell_2$ norm:
+$$\|U_{\text{Sz}}^k \psi\|_2^2 = \|\psi\|_2^2.$$ -/
+theorem szegedyWalkRatIter_unitary_norm_preserved
+    (indices : List Nat)
+    (projA projB : Nat → Nat → CanonicalRat)
+    (hProjA : IsNormalizedRatProjector projA indices)
+    (hProjB : IsNormalizedRatProjector projB indices) :
+    ∀ (k : Nat) (ψ : Nat → CanonicalRat),
+      vecNormSqRat indices (iterateRatVecOp (szegedyWalkRatStep projA projB indices) k ψ) =
+        vecNormSqRat indices ψ
+  | 0, _ => rfl
+  | k + 1, ψ => by
+    dsimp only [iterateRatVecOp]
+    rw [szegedyWalkRatStep_unitary_norm_preserved indices projA projB hProjA hProjB]
+    exact szegedyWalkRatIter_unitary_norm_preserved indices projA projB hProjA hProjB k ψ
+
 /-! ## 8. Matrix Taylor-Model Unitary Propagator $\exp(-i Q t)$ & Quotient Remainder Enclosure -/
 
 /-- Sum of absolute entry magnitudes $\sum_{j \in \text{cols}} |A_{i, j}| \in \mathbb{N}$ along row `i`. -/
-@[expose] def intRowAbsSum (A : IntMatrix) (i : Nat) : List Nat → Nat
+def intRowAbsSum (A : IntMatrix) (i : Nat) : List Nat → Nat
   | [] => 0
   | j :: js => (A.entry i j).natAbs + intRowAbsSum A i js
 
 /-- Maximum absolute row sum $\max_{i \in \text{rows}} \sum_{j \in \text{cols}} |A_{i, j}| \in \mathbb{N}$. -/
-@[expose] def maxRowAbsSum (A : IntMatrix) (cols : List Nat) : List Nat → Nat
+def maxRowAbsSum (A : IntMatrix) (cols : List Nat) : List Nat → Nat
   | [] => 0
   | i :: is => Nat.max (intRowAbsSum A i cols) (maxRowAbsSum A cols is)
 
 /-- Matrix $\ell_\infty$ induced operator norm (maximum absolute row sum)
 $$\|A\|_\infty = \max_{0 \le i < \text{dim}} \sum_{0 \le j < \text{dim}} |A_{i, j}| \in \mathbb{N}.$$ -/
-@[expose] def intMatrixInfNorm (A : IntMatrix) (dim : Nat) : Nat :=
+def intMatrixInfNorm (A : IntMatrix) (dim : Nat) : Nat :=
   let indices := List.range dim
   maxRowAbsSum A indices indices
 
@@ -1375,7 +2097,7 @@ theorem intMatrixInfNorm_submultiplicative_vec
   refine ⟨hAbs, by omega, by omega⟩
 
 /-- Compute $b^e \in \mathbb{N}$ by structural recursion. -/
-@[expose] def natPow (b : Nat) : Nat → Nat
+def natPow (b : Nat) : Nat → Nat
   | 0 => 1
   | k + 1 => b * natPow b k
 
@@ -1397,7 +2119,7 @@ $$\operatorname{Re}\left(d! \, t_{\text{den}}^d \sum_{k=0}^{d} \frac{(-i t)^k}{k
   = d! \, t_{\text{den}}^d \left(\left(I - \frac{t^2}{2!} A^2 + \frac{t^4}{4!} A^4 - \dots\right) v\right)_u$$
 evaluated on an `IntMatrix` $A$ at rational time $t = t_{\text{num}} / t_{\text{den}}$, truncation
 order `order`, vector `v`, and vertex/cell index `u`. -/
-@[expose] def evalScaledMatrixTaylorReal
+def evalScaledMatrixTaylorReal
     (A : IntMatrix)
     (tNum tDen : Int)
     (order : Nat)
@@ -1429,7 +2151,7 @@ order `order`, vector `v`, and vertex/cell index `u`. -/
 /-- Cauchy–Lagrange $\ell_\infty$ matrix-norm Taylor remainder radius
 $$R_d(Q, t) = \frac{(\|Q\|_\infty \cdot t_{\text{num}})^{d + 1}}{(d + 1)! \cdot t_{\text{den}}^{d + 1}} \in \mathbb{Q}$$
 for the degree-`order` Matrix Taylor Propagator of $\exp\left(-i Q \frac{t_{\text{num}}}{t_{\text{den}}}\right)$. -/
-@[expose] def matrixTaylorRemainderBound
+def matrixTaylorRemainderBound
     (Q : IntMatrix)
     (dim : Nat)
     (tNum tDen order : Nat) : CanonicalRat :=
@@ -1440,7 +2162,7 @@ for the degree-`order` Matrix Taylor Propagator of $\exp\left(-i Q \frac{t_{\tex
 
 /-- Certified interval enclosure of the real component $\operatorname{Re}((e^{-i Q t} v)_u)$
 combining `evalScaledMatrixTaylorReal` with `[-matrixTaylorRemainderBound, +matrixTaylorRemainderBound]`. -/
-@[expose] def evalMatrixTaylorRealInterval
+def evalMatrixTaylorRealInterval
     (Q : IntMatrix)
     (tNum tDen order : Nat)
     (v : Nat → Int)
@@ -1453,7 +2175,7 @@ combining `evalScaledMatrixTaylorReal` with `[-matrixTaylorRemainderBound, +matr
 
 /-- Certified interval enclosure of the imaginary component $\operatorname{Im}((e^{-i Q t} v)_u)$
 combining `evalScaledMatrixTaylorImag` with `[-matrixTaylorRemainderBound, +matrixTaylorRemainderBound]`. -/
-@[expose] def evalMatrixTaylorImagInterval
+def evalMatrixTaylorImagInterval
     (Q : IntMatrix)
     (tNum tDen order : Nat)
     (v : Nat → Int)
@@ -1511,7 +2233,7 @@ with domain-guarded `tmSinCertified` / `tmCosCertified` interval enclosures:
 When $|t| > 1$ (such as $t = 157/100 \approx \pi/2$), applies exact half-angle range reduction
 $\sin(t) = 2 \sin(t/2) \cos(t/2)$ with $t/2 \in [-1, 1]$ before computing the Krawtchouk tensor-power
 antipodal probability enclosure $\sin^6(t)$. -/
-@[expose] def evalQ3KrawtchoukAntipodalProbTube (tNum tDen : Nat) : Interval :=
+def evalQ3KrawtchoukAntipodalProbTube (tNum tDen : Nat) : Interval :=
   let tRat := CanonicalRat.mk (tNum : Int) tDen
   let tDom := Interval.ofPoint tRat
   let sinIv :=

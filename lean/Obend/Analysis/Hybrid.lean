@@ -21,6 +21,7 @@ Implements `WS 29.3` (`NEXT-MATHEMATICA.md` §3.3 & §5):
 public import Obend.Analysis.TaylorModel
 public import Obend.Judge.Class
 public import Obend.Tactic.Tooth
+import all Obend.Analysis.Flowpipe
 public section
 
 namespace Obend.Analysis
@@ -38,12 +39,12 @@ structure HybridMode where
   modeId          : String
   ode             : OdeSystem
   invariantBounds : List (String × Interval)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Affine discrete reset map $x'_i := \alpha_i x_i + \beta_i$ applied across a discrete mode switch. -/
 structure AffineResetMap where
   resets : List (String × CanonicalRat × CanonicalRat)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Guarded discrete transition between two `HybridMode`s:
 * `fromMode`, `toMode`: source and target discrete mode identifiers,
@@ -54,41 +55,41 @@ structure HybridJump where
   toMode      : String
   guardBounds : List (String × Interval)
   resetMap    : AffineResetMap
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Complete hybrid automaton coupling continuous `OdeSystem` modes with discrete guarded jumps. -/
 structure HybridAutomaton where
   modes        : List HybridMode
   jumps        : List HybridJump
   safeEnvelope : List (String × Interval)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Hybrid state pairing a discrete `modeId` with a continuous interval enclosure `box`. -/
 structure HybridState where
   modeId : String
   box    : List (String × Interval)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Discrete or continuous action in a hybrid execution schedule. -/
 inductive HybridAction where
   | flowStep
   | jumpTo (targetMode : String)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Look up a `HybridMode` by `modeId` via direct structural recursion. -/
-@[expose] def findHybridMode? (targetId : String) : List HybridMode → Option HybridMode
+def findHybridMode? (targetId : String) : List HybridMode → Option HybridMode
   | [] => none
   | m :: ms => if m.modeId == targetId then some m else findHybridMode? targetId ms
 
 /-- Look up a `HybridJump` from `srcMode` to `dstMode` via direct structural recursion. -/
-@[expose] def findHybridJump? (srcMode dstMode : String) : List HybridJump → Option HybridJump
+def findHybridJump? (srcMode dstMode : String) : List HybridJump → Option HybridJump
   | [] => none
   | j :: js =>
     if j.fromMode == srcMode && j.toMode == dstMode then some j
     else findHybridJump? srcMode dstMode js
 
 /-- Apply an `AffineResetMap` ($X'_i = \alpha_i X_i \oplus [\beta_i, \beta_i]$) to a continuous box. -/
-@[expose] def applyAffineReset (rm : AffineResetMap) : List (String × Interval) → List (String × Interval)
+def applyAffineReset (rm : AffineResetMap) : List (String × Interval) → List (String × Interval)
   | [] => []
   | (name, iv) :: rest =>
     let iv' :=
@@ -99,13 +100,13 @@ inductive HybridAction where
     (name, iv') :: applyAffineReset rm rest
 
 /-- Check that every interval in `box` is non-inverted (`iv.lo ≤ iv.hi`). -/
-@[expose] def checkBoxNonInverted (box : List (String × Interval)) : Bool :=
+def checkBoxNonInverted (box : List (String × Interval)) : Bool :=
   box.all (fun (_, iv) => decide (iv.lo ≤ iv.hi))
 
 /-- Execute one continuous flowpipe step inside the active mode `st.modeId`, verifying that the
 pre-state `st.box`, the continuous-time rough enclosure `xTildeBox` (covering all $t \in [0, \Delta t]$),
 and the post-state `nextBox` all satisfy the mode invariant and global `safeEnvelope`. -/
-@[expose] def stepHybridFlow (aut : HybridAutomaton) (st : HybridState) : Option HybridState := do
+def stepHybridFlow (aut : HybridAutomaton) (st : HybridState) : Option HybridState := do
   let mode ← findHybridMode? st.modeId aut.modes
   if !checkBoxNonInverted st.box ||
      !checkBoxInEnvelope st.box mode.invariantBounds ||
@@ -127,7 +128,7 @@ and the post-state `nextBox` all satisfy the mode invariant and global `safeEnve
 1. `st.box` is non-inverted and lies inside `jump.guardBounds`,
 2. the post-reset box `applyAffineReset jump.resetMap st.box` lies inside the target mode's
    `invariantBounds` and `aut.safeEnvelope`. -/
-@[expose] def stepHybridJump? (aut : HybridAutomaton) (st : HybridState) (targetMode : String) : Option HybridState := do
+def stepHybridJump? (aut : HybridAutomaton) (st : HybridState) (targetMode : String) : Option HybridState := do
   let jump ← findHybridJump? st.modeId targetMode aut.jumps
   let dstMode ← findHybridMode? targetMode aut.modes
   if !checkBoxNonInverted st.box || !checkBoxInEnvelope st.box jump.guardBounds then
@@ -140,12 +141,12 @@ and the post-state `nextBox` all satisfy the mode invariant and global `safeEnve
       none
 
 /-- Execute a single `HybridAction` (`.flowStep` or `.jumpTo targetMode`). -/
-@[expose] def stepHybridAction (aut : HybridAutomaton) (st : HybridState) : HybridAction → Option HybridState
+def stepHybridAction (aut : HybridAutomaton) (st : HybridState) : HybridAction → Option HybridState
   | .flowStep          => stepHybridFlow aut st
   | .jumpTo targetMode => stepHybridJump? aut st targetMode
 
 /-- Structural recursion helper for `runHybridSchedule`. -/
-@[expose] def runHybridScheduleLoop (aut : HybridAutomaton) : List HybridAction → HybridState → Option (List HybridState)
+def runHybridScheduleLoop (aut : HybridAutomaton) : List HybridAction → HybridState → Option (List HybridState)
   | [], st =>
     match findHybridMode? st.modeId aut.modes with
     | some mode =>
@@ -162,11 +163,11 @@ and the post-state `nextBox` all satisfy the mode invariant and global `safeEnve
 
 /-- Run a sequence of `HybridAction`s from `initState`, returning the full hybrid state tube
 if every continuous flow step and discrete jump is safe and guard-enabled. -/
-@[expose] def runHybridSchedule (aut : HybridAutomaton) (initState : HybridState) (schedule : List HybridAction) : Option (List HybridState) :=
+def runHybridSchedule (aut : HybridAutomaton) (initState : HybridState) (schedule : List HybridAction) : Option (List HybridState) :=
   runHybridScheduleLoop aut schedule initState
 
 /-- Verify that a hybrid execution schedule from `initState` is valid and stays within `aut.safeEnvelope`. -/
-@[expose] def verifyHybridScheduleSafety
+def verifyHybridScheduleSafety
     (aut : HybridAutomaton)
     (initState : HybridState)
     (schedule : List HybridAction) : Bool :=
@@ -181,7 +182,7 @@ if every continuous flow step and discrete jump is safe and guard-enabled. -/
 * Mode `"cooling"`: damped cooling `thermalCoolingOde` ($\dot{T} = 20 - T$, $\Delta t = 1/2$), invariant $T \in [15, 35]^\circ\text{C}$.
 * Guarded jump `"heating" → "cooling"`: enabled when $T \in [27, 32]^\circ\text{C}$, with reset map $T' := T - 1$ (active coolant valve purge).
 * Global safety envelope: $T \in [15, 35]^\circ\text{C}$. -/
-@[expose] def thermostatHybridAutomaton : HybridAutomaton where
+def thermostatHybridAutomaton : HybridAutomaton where
   modes :=
     [ { modeId := "heating"
       , ode :=
@@ -204,7 +205,7 @@ if every continuous flow step and discrete jump is safe and guard-enabled. -/
 * Mode `"cooling"`: $\dot{T} = -2$ with $\Delta t = 1$, invariant $T \in [15, 35]^\circ\text{C}$.
 * Guarded jump `"heating" → "cooling"`: guard $T \in [27, 32]^\circ\text{C}$, affine reset $T' := T - 1$.
 * Global safety envelope: $T \in [15, 35]^\circ\text{C}$. -/
-@[expose] def thermostatLinearAutomaton : HybridAutomaton where
+def thermostatLinearAutomaton : HybridAutomaton where
   modes :=
     [ { modeId := "heating"
       , ode :=
@@ -265,12 +266,12 @@ theorem hybrid_flowpipe_safety_admits_contract
 /-! ## 3. Inner-System Seam Weld: `HybridProblem` / `HybridCert` `Core.Data` Codecs & `hybridFlowpipeFormat` (`"hybrid-flowpipe@1"`) -/
 
 /-- Encode an `Int` deterministically as `Obend.Core.Data`. -/
-@[expose] def intToData : Int → Data
+def intToData : Int → Data
   | .ofNat n   => .variant "pos" (.natural n)
   | .negSucc n => .variant "neg" (.natural n)
 
 /-- Decode an `Int` deterministically from `Obend.Core.Data`. -/
-@[expose] def intOfData? : Data → Option Int
+def intOfData? : Data → Option Int
   | .variant "pos" (.natural n) => some (.ofNat n)
   | .variant "neg" (.natural n) => some (.negSucc n)
   | _                           => none
@@ -279,11 +280,11 @@ theorem intOfData_toData (i : Int) : intOfData? (intToData i) = some i := by
   cases i <;> rfl
 
 /-- Encode a `CanonicalRat` deterministically as `Obend.Core.Data`. -/
-@[expose] def ratToData (q : CanonicalRat) : Data :=
+def ratToData (q : CanonicalRat) : Data :=
   .record [("num", intToData q.num), ("den", .natural q.den)]
 
 /-- Decode a `CanonicalRat` deterministically from `Obend.Core.Data` (requiring reduced positive `den`). -/
-@[expose] def ratOfData? : Data → Option CanonicalRat
+def ratOfData? : Data → Option CanonicalRat
   | .record [("num", numData), ("den", .natural den)] => do
     let num ← intOfData? numData
     if den == 0 then none
@@ -304,11 +305,11 @@ theorem ratOfData_toData (q : CanonicalRat) : ratOfData? (ratToData q) = some q 
   simp [hDenNe, hMk]
 
 /-- Deterministic `Obend.Core.Data` encoding of `Interval`. -/
-@[expose] def Interval.toData (iv : Interval) : Data :=
+def Interval.toData (iv : Interval) : Data :=
   .record [("lo", ratToData iv.lo), ("hi", ratToData iv.hi)]
 
 /-- Deterministic `Obend.Core.Data` decoding of `Interval`. -/
-@[expose] def Interval.ofData? : Data → Option Interval
+def Interval.ofData? : Data → Option Interval
   | .record [("lo", loD), ("hi", hiD)] => do
     let lo ← ratOfData? loD
     let hi ← ratOfData? hiD
@@ -321,7 +322,7 @@ theorem Interval.ofData_toData (iv : Interval) :
   simp [Interval.toData, Interval.ofData?, ratOfData_toData]
 
 /-- Deterministic `Obend.Core.Data` encoding of `RealExpr`. -/
-@[expose] def RealExpr.toData : RealExpr → Data
+def RealExpr.toData : RealExpr → Data
   | .const c => .variant "const" (ratToData c)
   | .var v   => .variant "var" (.label v)
   | .add l r => .variant "add" (.record [("lhs", l.toData), ("rhs", r.toData)])
@@ -330,7 +331,7 @@ theorem Interval.ofData_toData (iv : Interval) :
   | .sqr a   => .variant "sqr" a.toData
 
 /-- Deterministic `Obend.Core.Data` decoding of `RealExpr`. -/
-@[expose] def RealExpr.ofData? : Data → Option RealExpr
+def RealExpr.ofData? : Data → Option RealExpr
   | .variant "const" cD => do
     let c ← ratOfData? cD
     pure (.const c)
@@ -362,12 +363,12 @@ theorem RealExpr.ofData_toData (e : RealExpr) :
   | mul l r ihl ihr => simp [RealExpr.toData, RealExpr.ofData?, ihl, ihr]
   | sqr a iha => simp [RealExpr.toData, RealExpr.ofData?, iha]
 
-@[expose] def fieldExprListToData : List (String × RealExpr) → Data
+def fieldExprListToData : List (String × RealExpr) → Data
   | [] => .variant "nil" (.record [])
   | (name, rhs) :: rest =>
     .variant "cons" (.record [("name", .label name), ("rhs", rhs.toData), ("tail", fieldExprListToData rest)])
 
-@[expose] def fieldExprListOfData? : Data → Option (List (String × RealExpr))
+def fieldExprListOfData? : Data → Option (List (String × RealExpr))
   | .variant "nil" (.record []) => some []
   | .variant "cons" (.record [("name", .label name), ("rhs", rhsD), ("tail", tailD)]) => do
     let rhs ← RealExpr.ofData? rhsD
@@ -383,12 +384,12 @@ theorem fieldExprListOfData_toData (fs : List (String × RealExpr)) :
     rcases hd with ⟨name, rhs⟩
     simp [fieldExprListToData, fieldExprListOfData?, RealExpr.ofData_toData, ih]
 
-@[expose] def boxListToData : List (String × Interval) → Data
+def boxListToData : List (String × Interval) → Data
   | [] => .variant "nil" (.record [])
   | (name, iv) :: rest =>
     .variant "cons" (.record [("name", .label name), ("iv", iv.toData), ("tail", boxListToData rest)])
 
-@[expose] def boxListOfData? : Data → Option (List (String × Interval))
+def boxListOfData? : Data → Option (List (String × Interval))
   | .variant "nil" (.record []) => some []
   | .variant "cons" (.record [("name", .label name), ("iv", ivD), ("tail", tailD)]) => do
     let iv ← Interval.ofData? ivD
@@ -404,7 +405,7 @@ theorem boxListOfData_toData (bx : List (String × Interval)) :
     rcases hd with ⟨name, iv⟩
     simp [boxListToData, boxListOfData?, Interval.ofData_toData, ih]
 
-@[expose] def resetListToData : List (String × CanonicalRat × CanonicalRat) → Data
+def resetListToData : List (String × CanonicalRat × CanonicalRat) → Data
   | [] => .variant "nil" (.record [])
   | (name, scale, offset) :: rest =>
     .variant "cons"
@@ -414,7 +415,7 @@ theorem boxListOfData_toData (bx : List (String × Interval)) :
         , ("offset", ratToData offset)
         , ("tail", resetListToData rest) ])
 
-@[expose] def resetListOfData? : Data → Option (List (String × CanonicalRat × CanonicalRat))
+def resetListOfData? : Data → Option (List (String × CanonicalRat × CanonicalRat))
   | .variant "nil" (.record []) => some []
   | .variant "cons"
       (.record
@@ -437,14 +438,14 @@ theorem resetListOfData_toData (rs : List (String × CanonicalRat × CanonicalRa
     simp [resetListToData, resetListOfData?, ratOfData_toData, ih]
 
 /-- Deterministic `Obend.Core.Data` encoding of `OdeSystem`. -/
-@[expose] def OdeSystem.toData (sys : OdeSystem) : Data :=
+def OdeSystem.toData (sys : OdeSystem) : Data :=
   .record
     [ ("fields", fieldExprListToData sys.fields)
     , ("dt", ratToData sys.dt)
     , ("remainderPad", sys.remainderPad.toData) ]
 
 /-- Deterministic `Obend.Core.Data` decoding of `OdeSystem`. -/
-@[expose] def OdeSystem.ofData? : Data → Option OdeSystem
+def OdeSystem.ofData? : Data → Option OdeSystem
   | .record [("fields", fsD), ("dt", dtD), ("remainderPad", padD)] => do
     let fields ← fieldExprListOfData? fsD
     let dt ← ratOfData? dtD
@@ -459,14 +460,14 @@ theorem OdeSystem.ofData_toData (sys : OdeSystem) :
     ratOfData_toData, Interval.ofData_toData]
 
 /-- Deterministic `Obend.Core.Data` encoding of `HybridMode`. -/
-@[expose] def HybridMode.toData (m : HybridMode) : Data :=
+def HybridMode.toData (m : HybridMode) : Data :=
   .record
     [ ("modeId", .label m.modeId)
     , ("ode", m.ode.toData)
     , ("invariantBounds", boxListToData m.invariantBounds) ]
 
 /-- Deterministic `Obend.Core.Data` decoding of `HybridMode`. -/
-@[expose] def HybridMode.ofData? : Data → Option HybridMode
+def HybridMode.ofData? : Data → Option HybridMode
   | .record [("modeId", .label modeId), ("ode", odeD), ("invariantBounds", invD)] => do
     let ode ← OdeSystem.ofData? odeD
     let invariantBounds ← boxListOfData? invD
@@ -479,11 +480,11 @@ theorem HybridMode.ofData_toData (m : HybridMode) :
   simp [HybridMode.toData, HybridMode.ofData?, OdeSystem.ofData_toData, boxListOfData_toData]
 
 /-- Deterministic `Obend.Core.Data` encoding of `AffineResetMap`. -/
-@[expose] def AffineResetMap.toData (rm : AffineResetMap) : Data :=
+def AffineResetMap.toData (rm : AffineResetMap) : Data :=
   resetListToData rm.resets
 
 /-- Deterministic `Obend.Core.Data` decoding of `AffineResetMap`. -/
-@[expose] def AffineResetMap.ofData? (d : Data) : Option AffineResetMap := do
+def AffineResetMap.ofData? (d : Data) : Option AffineResetMap := do
   let resets ← resetListOfData? d
   pure { resets }
 
@@ -493,7 +494,7 @@ theorem AffineResetMap.ofData_toData (rm : AffineResetMap) :
   simp [AffineResetMap.toData, AffineResetMap.ofData?, resetListOfData_toData]
 
 /-- Deterministic `Obend.Core.Data` encoding of `HybridJump`. -/
-@[expose] def HybridJump.toData (j : HybridJump) : Data :=
+def HybridJump.toData (j : HybridJump) : Data :=
   .record
     [ ("fromMode", .label j.fromMode)
     , ("toMode", .label j.toMode)
@@ -501,7 +502,7 @@ theorem AffineResetMap.ofData_toData (rm : AffineResetMap) :
     , ("resetMap", j.resetMap.toData) ]
 
 /-- Deterministic `Obend.Core.Data` decoding of `HybridJump`. -/
-@[expose] def HybridJump.ofData? : Data → Option HybridJump
+def HybridJump.ofData? : Data → Option HybridJump
   | .record
       [ ("fromMode", .label fromMode)
       , ("toMode", .label toMode)
@@ -517,11 +518,11 @@ theorem HybridJump.ofData_toData (j : HybridJump) :
   cases j
   simp [HybridJump.toData, HybridJump.ofData?, boxListOfData_toData, AffineResetMap.ofData_toData]
 
-@[expose] def modeListToData : List HybridMode → Data
+def modeListToData : List HybridMode → Data
   | [] => .variant "nil" (.record [])
   | m :: rest => .variant "cons" (.record [("head", m.toData), ("tail", modeListToData rest)])
 
-@[expose] def modeListOfData? : Data → Option (List HybridMode)
+def modeListOfData? : Data → Option (List HybridMode)
   | .variant "nil" (.record []) => some []
   | .variant "cons" (.record [("head", hD), ("tail", tD)]) => do
     let m ← HybridMode.ofData? hD
@@ -536,11 +537,11 @@ theorem modeListOfData_toData (ms : List HybridMode) :
   | cons m rest ih =>
     simp [modeListToData, modeListOfData?, HybridMode.ofData_toData, ih]
 
-@[expose] def jumpListToData : List HybridJump → Data
+def jumpListToData : List HybridJump → Data
   | [] => .variant "nil" (.record [])
   | j :: rest => .variant "cons" (.record [("head", j.toData), ("tail", jumpListToData rest)])
 
-@[expose] def jumpListOfData? : Data → Option (List HybridJump)
+def jumpListOfData? : Data → Option (List HybridJump)
   | .variant "nil" (.record []) => some []
   | .variant "cons" (.record [("head", hD), ("tail", tD)]) => do
     let j ← HybridJump.ofData? hD
@@ -556,14 +557,14 @@ theorem jumpListOfData_toData (js : List HybridJump) :
     simp [jumpListToData, jumpListOfData?, HybridJump.ofData_toData, ih]
 
 /-- Deterministic `Obend.Core.Data` encoding of `HybridAutomaton`. -/
-@[expose] def HybridAutomaton.toData (aut : HybridAutomaton) : Data :=
+def HybridAutomaton.toData (aut : HybridAutomaton) : Data :=
   .record
     [ ("modes", modeListToData aut.modes)
     , ("jumps", jumpListToData aut.jumps)
     , ("safeEnvelope", boxListToData aut.safeEnvelope) ]
 
 /-- Deterministic `Obend.Core.Data` decoding of `HybridAutomaton`. -/
-@[expose] def HybridAutomaton.ofData? : Data → Option HybridAutomaton
+def HybridAutomaton.ofData? : Data → Option HybridAutomaton
   | .record [("modes", msD), ("jumps", jsD), ("safeEnvelope", safeD)] => do
     let modes ← modeListOfData? msD
     let jumps ← jumpListOfData? jsD
@@ -578,12 +579,12 @@ theorem HybridAutomaton.ofData_toData (aut : HybridAutomaton) :
     jumpListOfData_toData, boxListOfData_toData]
 
 /-- Deterministic `Obend.Core.Data` encoding of `HybridAction`. -/
-@[expose] def HybridAction.toData : HybridAction → Data
+def HybridAction.toData : HybridAction → Data
   | .flowStep          => .variant "flowStep" (.record [])
   | .jumpTo targetMode => .variant "jumpTo" (.label targetMode)
 
 /-- Deterministic `Obend.Core.Data` decoding of `HybridAction`. -/
-@[expose] def HybridAction.ofData? : Data → Option HybridAction
+def HybridAction.ofData? : Data → Option HybridAction
   | .variant "flowStep" (.record [])     => some .flowStep
   | .variant "jumpTo" (.label targetMode) => some (.jumpTo targetMode)
   | _                                    => none
@@ -593,12 +594,12 @@ theorem HybridAction.ofData_toData (act : HybridAction) :
   cases act <;> rfl
 
 /-- Encode a schedule `List HybridAction` as `Obend.Core.Data`. -/
-@[expose] def actionListToData : List HybridAction → Data
+def actionListToData : List HybridAction → Data
   | [] => .variant "nil" (.record [])
   | a :: rest => .variant "cons" (.record [("head", a.toData), ("tail", actionListToData rest)])
 
 /-- Decode a schedule `List HybridAction` from `Obend.Core.Data`. -/
-@[expose] def actionListOfData? : Data → Option (List HybridAction)
+def actionListOfData? : Data → Option (List HybridAction)
   | .variant "nil" (.record []) => some []
   | .variant "cons" (.record [("head", h), ("tail", t)]) => do
     let a ← HybridAction.ofData? h
@@ -623,10 +624,10 @@ structure HybridProblem where
   initHi    : Int
   unsafeLo  : Int
   unsafeHi  : Int
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Deterministic `Obend.Core.Data` encoding of `HybridProblem`. -/
-@[expose] def HybridProblem.toData (p : HybridProblem) : Data :=
+def HybridProblem.toData (p : HybridProblem) : Data :=
   .record
     [ ("automaton", p.automaton.toData)
     , ("varName", .label p.varName)
@@ -637,7 +638,7 @@ structure HybridProblem where
     , ("unsafeHi", intToData p.unsafeHi) ]
 
 /-- Deterministic `Obend.Core.Data` decoding of `HybridProblem`. -/
-@[expose] def HybridProblem.ofData? : Data → Option HybridProblem
+def HybridProblem.ofData? : Data → Option HybridProblem
   | .record
       [ ("automaton", automatonData)
       , ("varName", .label varName)
@@ -665,17 +666,17 @@ structure HybridCert where
   schedule          : List HybridAction
   expectedFinalMode : String
   claimedSteps      : Nat
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Deterministic `Obend.Core.Data` encoding of `HybridCert`. -/
-@[expose] def HybridCert.toData (c : HybridCert) : Data :=
+def HybridCert.toData (c : HybridCert) : Data :=
   .record
     [ ("schedule", actionListToData c.schedule)
     , ("expectedFinalMode", .label c.expectedFinalMode)
     , ("claimedSteps", .natural c.claimedSteps) ]
 
 /-- Deterministic `Obend.Core.Data` decoding of `HybridCert`. -/
-@[expose] def HybridCert.ofData? : Data → Option HybridCert
+def HybridCert.ofData? : Data → Option HybridCert
   | .record
       [ ("schedule", scheduleData)
       , ("expectedFinalMode", .label expectedFinalMode)
@@ -691,30 +692,30 @@ theorem HybridCert.ofData_toData (c : HybridCert) :
   simp [HybridCert.toData, HybridCert.ofData?, actionListOfData_toData]
 
 /-- Construct the initial `HybridState` from a `HybridProblem`. -/
-@[expose] def HybridProblem.initState (p : HybridProblem) : HybridState :=
+def HybridProblem.initState (p : HybridProblem) : HybridState :=
   { modeId := p.initMode
   , box    := [(p.varName, ⟨Rat.ofInt p.initLo, Rat.ofInt p.initHi⟩)] }
 
 /-- Construct the unsafe `Interval` from a `HybridProblem`. -/
-@[expose] def HybridProblem.unsafeInterval (p : HybridProblem) : Interval :=
+def HybridProblem.unsafeInterval (p : HybridProblem) : Interval :=
   ⟨Rat.ofInt p.unsafeLo, Rat.ofInt p.unsafeHi⟩
 
 /-- Check whether two rational intervals `iv₁` and `iv₂` are valid (`lo ≤ hi`) and strictly disjoint. -/
-@[expose] def intervalStrictlyDisjoint (iv₁ iv₂ : Interval) : Bool :=
+def intervalStrictlyDisjoint (iv₁ iv₂ : Interval) : Bool :=
   decide (iv₁.lo ≤ iv₁.hi) && decide (iv₂.lo ≤ iv₂.hi) &&
   (decide (iv₁.hi < iv₂.lo) || decide (iv₂.hi < iv₁.lo))
 
 /-- Check whether two integer interval bounds `[lo₁, hi₁]` and `[lo₂, hi₂]` are valid and strictly disjoint. -/
-@[expose] def intIntervalDisjoint (lo₁ hi₁ lo₂ hi₂ : Int) : Bool :=
+def intIntervalDisjoint (lo₁ hi₁ lo₂ hi₂ : Int) : Bool :=
   intervalStrictlyDisjoint ⟨Rat.ofInt lo₁, Rat.ofInt hi₁⟩ ⟨Rat.ofInt lo₂, Rat.ofInt hi₂⟩
 
 /-- Check whether `[lo, hi]` is a non-inverted interval (`lo ≤ hi`) lying inside `[envLo, envHi]`. -/
-@[expose] def intIntervalInBounds (lo hi envLo envHi : Int) : Bool :=
+def intIntervalInBounds (lo hi envLo envHi : Int) : Bool :=
   decide (lo ≤ hi) && decide (envLo ≤ lo) && decide (hi ≤ envHi)
 
 /-- Check that a continuous box `box` satisfies its `HybridMode` invariant, the global `safeEnvelope`,
 and is strictly disjoint from `unsafeIv` on `varName`. -/
-@[expose] def checkBoxModeAndDisjoint
+def checkBoxModeAndDisjoint
     (aut : HybridAutomaton) (modeId varName : String)
     (box : List (String × Interval)) (unsafeIv : Interval) : Bool :=
   match findHybridMode? modeId aut.modes, box.lookup varName with
@@ -725,20 +726,29 @@ and is strictly disjoint from `unsafeIv` on `varName`. -/
     intervalStrictlyDisjoint curIv unsafeIv
   | _, _ => false
 
-/-- Mode invariant check for `modeId` over `[lo, hi]` against `thermostatLinearAutomaton`. -/
-@[expose] def modeInvariantHolds (modeId : String) (lo hi : Int) : Bool :=
-  match findHybridMode? modeId thermostatLinearAutomaton.modes with
+/-- Mode invariant check for `modeId` over exact rational `[lo, hi]` against `aut`
+(defaulting to `thermostatLinearAutomaton` on `"T"`). -/
+def modeInvariantHolds
+    (modeId : String) (lo hi : CanonicalRat)
+    (aut : HybridAutomaton := thermostatLinearAutomaton)
+    (varName : String := "T") : Bool :=
+  match findHybridMode? modeId aut.modes with
   | some mode =>
     decide (lo ≤ hi) &&
-    checkBoxInEnvelope [("T", ⟨Rat.ofInt lo, Rat.ofInt hi⟩)] mode.invariantBounds
+    checkBoxInEnvelope [(varName, ⟨lo, hi⟩)] mode.invariantBounds
   | none => false
 
-/-- Execute a single hybrid transition on `thermostatLinearAutomaton` via `stepHybridAction`. -/
-@[expose] def stepHybrid (modeId : String) (lo hi : Int) (act : HybridAction) : Option (String × Int × Int) := do
-  let st : HybridState := { modeId := modeId, box := [("T", ⟨Rat.ofInt lo, Rat.ofInt hi⟩)] }
-  let nextSt ← stepHybridAction thermostatLinearAutomaton st act
-  let nextIv ← nextSt.box.lookup "T"
-  pure (nextSt.modeId, nextIv.lo.num, nextIv.hi.num)
+/-- Execute a single hybrid transition via `stepHybridAction`, preserving exact rational
+`CanonicalRat` interval endpoints (`nextIv.lo`, `nextIv.hi` with full `.num / .den` precision)
+so sub-unit intervals such as `[1/100, 3/100]` are never corrupted to `[1, 3]`. -/
+def stepHybrid
+    (modeId : String) (lo hi : CanonicalRat) (act : HybridAction)
+    (aut : HybridAutomaton := thermostatLinearAutomaton)
+    (varName : String := "T") : Option (String × CanonicalRat × CanonicalRat) := do
+  let st : HybridState := { modeId := modeId, box := [(varName, ⟨lo, hi⟩)] }
+  let nextSt ← stepHybridAction aut st act
+  let nextIv ← nextSt.box.lookup varName
+  pure (nextSt.modeId, nextIv.lo, nextIv.hi)
 
 /-- Execute a hybrid schedule on `aut : HybridAutomaton` from `st : HybridState`, checking at every
 continuous `.flowStep` and discrete `.jumpTo`:
@@ -747,7 +757,7 @@ continuous `.flowStep` and discrete `.jumpTo`:
 2. For `.flowStep`, the continuous-time rough flowpipe enclosure `xTildeBox` (from `inferPicardAPrioriBox`)
    is ALSO strictly disjoint from `unsafeIv` and stays inside `mode.invariantBounds` and `aut.safeEnvelope`,
 3. Advances `st` via `stepHybridFlow aut st` / `stepHybridJump? aut st targetMode`, returning the terminal mode. -/
-@[expose] def runHybridAutomatonTube
+def runHybridAutomatonTube
     (aut : HybridAutomaton) (varName : String) (unsafeIv : Interval) :
     List HybridAction → HybridState → Option String
   | [], st =>
@@ -771,11 +781,11 @@ continuous `.flowStep` and discrete `.jumpTo`:
         let nextSt ← stepHybridJump? aut st targetMode
         runHybridAutomatonTube aut varName unsafeIv rest nextSt
 
-/-- Execute a hybrid schedule from `(modeId, lo, hi)` on `thermostatLinearAutomaton`. -/
-@[expose] def runFlowpipeTube (modeId : String) (lo hi unsafeLo unsafeHi : Int)
+/-- Execute a hybrid schedule from exact rational `(modeId, lo, hi)` on `thermostatLinearAutomaton`. -/
+def runFlowpipeTube (modeId : String) (lo hi unsafeLo unsafeHi : CanonicalRat)
     (schedule : List HybridAction) : Option String :=
-  let st : HybridState := { modeId := modeId, box := [("T", ⟨Rat.ofInt lo, Rat.ofInt hi⟩)] }
-  let unsafeIv : Interval := ⟨Rat.ofInt unsafeLo, Rat.ofInt unsafeHi⟩
+  let st : HybridState := { modeId := modeId, box := [("T", ⟨lo, hi⟩)] }
+  let unsafeIv : Interval := ⟨unsafeLo, unsafeHi⟩
   runHybridAutomatonTube thermostatLinearAutomaton "T" unsafeIv schedule st
 
 /-- Verify a hybrid flowpipe certificate `c` against problem `p`:
@@ -786,18 +796,21 @@ continuous `.flowStep` and discrete `.jumpTo`:
    discrete slices AND continuous-time rough enclosures `xTildeBox` against mode invariants,
    `safeEnvelope`, and `p.unsafeInterval`),
 4. The terminal hybrid state reaches `c.expectedFinalMode`. -/
-@[expose] def verifyFlowpipe (p : HybridProblem) (c : HybridCert) : Bool :=
+def verifyFlowpipe (p : HybridProblem) (c : HybridCert) : Bool :=
+  let unsafeIv : Interval := ⟨Rat.ofInt p.unsafeLo, Rat.ofInt p.unsafeHi⟩
+  let initSt : HybridState :=
+    { modeId := p.initMode, box := [(p.varName, ⟨Rat.ofInt p.initLo, Rat.ofInt p.initHi⟩)] }
   decide (p.initLo ≤ p.initHi) &&
   decide (p.unsafeLo ≤ p.unsafeHi) &&
   decide (c.claimedSteps = c.schedule.length) &&
-  match runHybridAutomatonTube p.automaton p.varName p.unsafeInterval c.schedule p.initState with
+  match runHybridAutomatonTube p.automaton p.varName unsafeIv c.schedule initSt with
   | some finalMode => decide (finalMode = c.expectedFinalMode)
   | none           => false
 
 /-! ## 4. Semantic Multi-Hop Hybrid Trajectory Safety (`HybridTrajectorySafe` & `verifyFlowpipe_sound`) -/
 
 /-- Exact pointwise affine reset map $x'_v := \alpha_v x_v + \beta_v$ corresponding to `applyAffineReset`. -/
-@[expose] def evalAffineResetPoint
+def evalAffineResetPoint
     (rm : AffineResetMap) (rho : String → CanonicalRat) (v : String) : CanonicalRat :=
   match rm.resets.find? (fun (n, _, _) => n == v) with
   | some (_, scale, offset) => scale * rho v + offset
@@ -878,6 +891,10 @@ theorem checkBoxModeAndDisjoint_sound
     | none => rw [hLookVar] at hChk; simp at hChk
     | some curIv =>
       rw [hLookVar] at hChk
+      change (checkBoxNonInverted box &&
+        checkBoxInEnvelope box mode.invariantBounds &&
+        checkBoxInEnvelope box aut.safeEnvelope &&
+        intervalStrictlyDisjoint curIv unsafeIv) = true at hChk
       simp only [Bool.and_eq_true] at hChk
       obtain ⟨⟨⟨_, hInv⟩, hSafe⟩, hDisj⟩ := hChk
       refine ⟨⟨mode, rfl, checkBoxInEnvelope_sound hInv hBox⟩,
@@ -953,7 +970,7 @@ private theorem stepHybridJump_unpack
   obeys the 2nd-order Taylor–Lie ODE evolution bound over `[0, mode.ode.dt]`.
 * On `.jumpTo targetMode`: discrete mode switches to `dstMode = targetMode` and `nextRho` is obtained
   by applying the active jump's affine reset map `evalAffineResetPoint jump.resetMap (seg 0)`. -/
-@[expose] def IsValidHybridStep
+def IsValidHybridStep
     (aut : HybridAutomaton) (act : HybridAction)
     (srcMode dstMode : String)
     (seg : CanonicalRat → String → CanonicalRat)
@@ -977,9 +994,158 @@ private theorem stepHybridJump_unpack
     ∀ jump, findHybridJump? srcMode targetMode aut.jumps = some jump →
       ∀ v, nextRho v = evalAffineResetPoint jump.resetMap (seg 0) v
 
+/-- **Exact Rational Enclosure Soundness for `stepHybrid` (`stepHybrid_sound`)**:
+Whenever `stepHybrid modeId lo hi act aut varName = some (nextMode, nextLo, nextHi)`, for **every**
+continuous/discrete transition `(seg, nextRho)` starting from `seg 0 varName ∈ [lo, hi]` and obeying
+`IsValidHybridStep`, the post-transition value `nextRho varName` lies inside the exact rational
+interval `[nextLo, nextHi]` (preserving `.num / .den` without integer truncation) and stays inside
+`aut.safeEnvelope`. -/
+theorem stepHybrid_sound
+    {aut : HybridAutomaton} {varName modeId nextMode : String}
+    {lo hi nextLo nextHi : CanonicalRat} {act : HybridAction}
+    {seg : CanonicalRat → String → CanonicalRat}
+    {nextRho : String → CanonicalRat}
+    (hStep : stepHybrid modeId lo hi act aut varName = some (nextMode, nextLo, nextHi))
+    (hInit : seg 0 varName ∈ Interval.mk lo hi)
+    (hValid : IsValidHybridStep aut act modeId nextMode seg nextRho) :
+    lo ≤ hi ∧
+    nextRho varName ∈ Interval.mk nextLo nextHi ∧
+    BoxMem nextRho aut.safeEnvelope := by
+  unfold stepHybrid at hStep
+  simp only [bind, Option.bind] at hStep
+  let st : HybridState := { modeId := modeId, box := [(varName, ⟨lo, hi⟩)] }
+  have hBox0 : BoxMem (seg 0) st.box := by
+    intro v iv hLook
+    simp only [st, List.lookup] at hLook
+    cases hEq : v == varName
+    · rw [hEq] at hLook; simp at hLook
+    · rw [hEq, Option.some.injEq] at hLook
+      simp only [beq_iff_eq] at hEq
+      subst hEq; subst hLook
+      exact hInit
+  have hLoLeHi : lo ≤ hi := by
+    rw [Interval.mem_iff] at hInit
+    exact Rat.le_trans hInit.1 hInit.2
+  cases act with
+  | flowStep =>
+    simp only [stepHybridAction] at hStep
+    cases hFlow : stepHybridFlow aut st with
+    | none => rw [hFlow] at hStep; simp at hStep
+    | some nextSt =>
+      rw [hFlow] at hStep
+      dsimp only at hStep
+      cases hLookNext : nextSt.box.lookup varName with
+      | none => rw [hLookNext] at hStep; simp at hStep
+      | some nextIv =>
+        rw [hLookNext] at hStep
+        simp only [pure, Option.some.injEq, Prod.mk.injEq] at hStep
+        obtain ⟨_, hNextLo, hNextHi⟩ := hStep
+        have hFlowUnf := hFlow
+        unfold stepHybridFlow at hFlowUnf
+        simp only [bind, Option.bind] at hFlowUnf
+        cases hMode : findHybridMode? st.modeId aut.modes with
+        | none => rw [hMode] at hFlowUnf; simp at hFlowUnf
+        | some mode =>
+          rw [hMode] at hFlowUnf
+          dsimp only at hFlowUnf
+          split at hFlowUnf
+          · simp at hFlowUnf
+          · cases hInfer : inferPicardAPrioriBox mode.ode st.box with
+            | none => rw [hInfer] at hFlowUnf; simp at hFlowUnf
+            | some xTildeBox =>
+              rw [hInfer] at hFlowUnf
+              dsimp only at hFlowUnf
+              split at hFlowUnf
+              · simp at hFlowUnf
+              · cases hPic : stepPicardValidated mode.ode st.box xTildeBox mode.ode.dt with
+                | none => rw [hPic] at hFlowUnf; simp at hFlowUnf
+                | some nextBox =>
+                  rw [hPic] at hFlowUnf
+                  dsimp only at hFlowUnf
+                  cases hEnvOk : (checkBoxInEnvelope nextBox mode.invariantBounds &&
+                      checkBoxInEnvelope nextBox aut.safeEnvelope) with
+                  | false => rw [hEnvOk] at hFlowUnf; simp at hFlowUnf
+                  | true =>
+                    rw [hEnvOk] at hFlowUnf
+                    simp only [↓reduceIte, Option.some.injEq] at hFlowUnf
+                    simp only [Bool.and_eq_true] at hEnvOk
+                    obtain ⟨hPicVer, _, hInitTilde, hFieldsCover⟩ :=
+                      inferPicardAPrioriBox_encloses_init_and_fields hInfer hBox0
+                    unfold IsValidHybridStep at hValid
+                    obtain ⟨_, hFlowSpec⟩ := hValid
+                    obtain ⟨⟨nodes, hValidQuad, hIterEq⟩, hLieStep⟩ := hFlowSpec mode hMode
+                    have hSegTilde : ∀ τ ∈ Interval.mk 0 mode.ode.dt, BoxMem (seg τ) xTildeBox := by
+                      intro τ hτ
+                      obtain ⟨m, hmEq⟩ := hIterEq τ hτ
+                      have hIterMem := iteratePicardOperator_stays_in_apriori
+                        mode.ode st.box xTildeBox mode.ode.dt (seg 0) nodes
+                        hPicVer hBox0 hInitTilde hFieldsCover hValidQuad m τ hτ
+                      intro u uIv huLook
+                      rw [hmEq u]
+                      exact hIterMem u uIv huLook
+                    have hBoxNext : BoxMem nextRho nextBox :=
+                      stepPicardValidated_encloses_step hPic hBox0 (fun name rhsExpr hMemF => by
+                        obtain ⟨τ_mid, hτMid, r_pad, hrPad, hEq1⟩ := hLieStep name rhsExpr hMemF
+                        exact ⟨seg τ_mid, r_pad, hSegTilde τ_mid hτMid, hrPad, hEq1⟩)
+                    have hBoxNextSt : BoxMem nextRho nextSt.box := by
+                      rw [← hFlowUnf]; exact hBoxNext
+                    have hVarMem : nextRho varName ∈ Interval.mk nextLo nextHi := by
+                      have hm := hBoxNextSt varName nextIv hLookNext
+                      cases nextIv
+                      dsimp only at hNextLo hNextHi
+                      subst hNextLo; subst hNextHi
+                      exact hm
+                    exact ⟨hLoLeHi, hVarMem, checkBoxInEnvelope_sound hEnvOk.2 hBoxNext⟩
+  | jumpTo targetMode =>
+    simp only [stepHybridAction] at hStep
+    cases hJumpStep : stepHybridJump? aut st targetMode with
+    | none => rw [hJumpStep] at hStep; simp at hStep
+    | some nextSt =>
+      rw [hJumpStep] at hStep
+      dsimp only at hStep
+      cases hLookNext : nextSt.box.lookup varName with
+      | none => rw [hLookNext] at hStep; simp at hStep
+      | some nextIv =>
+        rw [hLookNext] at hStep
+        simp only [pure, Option.some.injEq, Prod.mk.injEq] at hStep
+        obtain ⟨_, hNextLo, hNextHi⟩ := hStep
+        obtain ⟨jump, _, hJumpFind, _, _, hNextStEq⟩ := stepHybridJump_unpack hJumpStep
+        unfold IsValidHybridStep at hValid
+        obtain ⟨_, hResetSpec⟩ := hValid
+        have hResetFun : nextRho = evalAffineResetPoint jump.resetMap (seg 0) := by
+          funext u
+          exact hResetSpec jump hJumpFind u
+        have hBoxNextSt : BoxMem nextRho nextSt.box := by
+          rw [hNextStEq, hResetFun]
+          exact applyAffineReset_sound hBox0
+        have hSafeEnv : checkBoxInEnvelope nextSt.box aut.safeEnvelope = true := by
+          unfold stepHybridJump? at hJumpStep
+          simp only [bind, Option.bind, hJumpFind] at hJumpStep
+          cases hDst : findHybridMode? targetMode aut.modes with
+          | none => rw [hDst] at hJumpStep; simp at hJumpStep
+          | some dstMode =>
+            rw [hDst] at hJumpStep
+            dsimp only at hJumpStep
+            split at hJumpStep
+            · simp at hJumpStep
+            · cases hEnvOk : (checkBoxInEnvelope (applyAffineReset jump.resetMap st.box) dstMode.invariantBounds &&
+                  checkBoxInEnvelope (applyAffineReset jump.resetMap st.box) aut.safeEnvelope) with
+              | false => rw [hEnvOk] at hJumpStep; simp at hJumpStep
+              | true =>
+                simp only [Bool.and_eq_true] at hEnvOk
+                rw [hNextStEq]
+                exact hEnvOk.2
+        have hVarMem : nextRho varName ∈ Interval.mk nextLo nextHi := by
+          have hm := hBoxNextSt varName nextIv hLookNext
+          cases nextIv
+          dsimp only at hNextLo hNextHi
+          subst hNextLo; subst hNextHi
+          exact hm
+        exact ⟨hLoLeHi, hVarMem, checkBoxInEnvelope_sound hSafeEnv hBoxNextSt⟩
+
 /-- Multi-hop semantic hybrid execution of `aut` along `schedule : List HybridAction` over discrete
 mode trace `modes : Nat → String` and continuous segments `segs : Nat → CanonicalRat → String → CanonicalRat`. -/
-@[expose] def IsValidHybridExecution
+def IsValidHybridExecution
     (aut : HybridAutomaton) (schedule : List HybridAction)
     (modes : Nat → String) (segs : Nat → CanonicalRat → String → CanonicalRat) : Prop :=
   ∀ k (hk : k < schedule.length),
@@ -995,7 +1161,7 @@ continuous point `segs 0 0 ∈ p.initState.box` and evolving according to `IsVal
 3. Satisfies the active mode invariant, global `safeEnvelope`, and strict avoidance of `p.unsafeInterval`
    at **every** continuous intermediate time `τ ∈ [0, mode.ode.dt]` during every `.flowStep`, and
 4. Satisfies `jump.guardBounds` prior to **every** discrete `.jumpTo targetMode` switch! -/
-@[expose] def HybridTrajectorySafe (p : HybridProblem) (c : HybridCert) : Prop :=
+def HybridTrajectorySafe (p : HybridProblem) (c : HybridCert) : Prop :=
   p.initLo ≤ p.initHi ∧
   p.unsafeLo ≤ p.unsafeHi ∧
   c.claimedSteps = c.schedule.length ∧
@@ -1157,6 +1323,10 @@ theorem runHybridAutomatonTube_sound
                       | none => rw [hLv] at hChkTilde; simp at hChkTilde
                       | some cIv =>
                         rw [hLv] at hChkTilde
+                        change (checkBoxNonInverted xTildeBox &&
+                          checkBoxInEnvelope xTildeBox mode.invariantBounds &&
+                          checkBoxInEnvelope xTildeBox aut.safeEnvelope &&
+                          intervalStrictlyDisjoint cIv unsafeIv) = true at hChkTilde
                         simp only [Bool.and_eq_true] at hChkTilde
                         exact checkBoxInEnvelope_sound hChkTilde.1.1.2 (hSegTilde τ hτ)
                     exact ⟨hInvτ, hSafeτ, hDisjτ⟩
@@ -1215,6 +1385,9 @@ theorem verifyFlowpipe_sound :
   unfold verifyFlowpipe at hVer
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hVer
   obtain ⟨⟨⟨hInitLe, hUnsafeLe⟩, hStepsEq⟩, hTubeOk⟩ := hVer
+  change (match runHybridAutomatonTube p.automaton p.varName p.unsafeInterval c.schedule p.initState with
+    | some finalMode => decide (finalMode = c.expectedFinalMode)
+    | none => false) = true at hTubeOk
   cases hRun : runHybridAutomatonTube p.automaton p.varName p.unsafeInterval c.schedule p.initState with
   | none => rw [hRun] at hTubeOk; simp at hTubeOk
   | some finalMode =>
@@ -1228,7 +1401,7 @@ theorem verifyFlowpipe_sound :
       p.initState c.expectedFinalMode modes segs hRun hMode0 hBox0 hExec
 
 /-- Concrete valid and invalid hybrid flowpipe problem/certificate fixtures. -/
-@[expose] def demoHybridProblem : HybridProblem :=
+def demoHybridProblem : HybridProblem :=
   { automaton := thermostatLinearAutomaton
   , varName   := "T"
   , initMode  := "heating"
@@ -1237,17 +1410,17 @@ theorem verifyFlowpipe_sound :
   , unsafeLo  := 36
   , unsafeHi  := 50 }
 
-@[expose] def validHybridCert : HybridCert :=
+def validHybridCert : HybridCert :=
   { schedule          := [.flowStep, .jumpTo "cooling", .flowStep, .flowStep]
   , expectedFinalMode := "cooling"
   , claimedSteps      := 4 }
 
-@[expose] def badHybridCert : HybridCert :=
+def badHybridCert : HybridCert :=
   { schedule          := [.flowStep, .flowStep, .flowStep]
   , expectedFinalMode := "heating"
   , claimedSteps      := 3 }
 
-@[expose] def badStepCountHybridCert : HybridCert :=
+def badStepCountHybridCert : HybridCert :=
   { schedule          := [.flowStep, .jumpTo "cooling"]
   , expectedFinalMode := "cooling"
   , claimedSteps      := 99 }
@@ -1269,7 +1442,7 @@ example :
       { schedule := [], expectedFinalMode := "bogus", claimedSteps := 0 } = false := by decide +kernel
 
 /-- Decision procedure returning `Obend.Judge.Verdict String` for `(HybridProblem, HybridCert)`. -/
-@[expose] def checkHybridFlowpipe (_grade : Nat) (p : HybridProblem) (c : HybridCert) : Obend.Judge.Verdict String :=
+def checkHybridFlowpipe (_grade : Nat) (p : HybridProblem) (c : HybridCert) : Obend.Judge.Verdict String :=
   if verifyFlowpipe p c then .ok
   else .refused "flowpipe_invariant_or_unsafe_zone_violation" []
 
@@ -1307,23 +1480,23 @@ theorem hybridFlowpipe_bad_refused :
 /-! ## 5. General `Lean.Json` AST Encoders & Decoders for `HybridProblem` and `HybridCert` -/
 
 /-- Decode a `HybridProblem` from `Obend.Core.Data` via `HybridProblem.ofData?`. -/
-@[expose] def decodeHybridProblemData (d : Data) : Except String HybridProblem :=
+def decodeHybridProblemData (d : Data) : Except String HybridProblem :=
   match HybridProblem.ofData? d with
   | some p => .ok p
   | none   => .error "malformed HybridProblem Core.Data payload"
 
 /-- Decode a `HybridCert` from `Obend.Core.Data` via `HybridCert.ofData?`. -/
-@[expose] def decodeHybridCertData (d : Data) : Except String HybridCert :=
+def decodeHybridCertData (d : Data) : Except String HybridCert :=
   match HybridCert.ofData? d with
   | some c => .ok c
   | none   => .error "malformed HybridCert Core.Data payload"
 
 /-- Encode a `CanonicalRat` as a `Lean.Json` object `{"num": ..., "den": ...}`. -/
-@[expose] def encodeHybridRatJson (q : CanonicalRat) : Lean.Json :=
+def encodeHybridRatJson (q : CanonicalRat) : Lean.Json :=
   Lean.Json.mkObj [("num", Lean.toJson q.num), ("den", Lean.toJson q.den)]
 
 /-- Decode a `CanonicalRat` from `Lean.Json` (accepts integer `n` or `{"num": n, "den": d}`). -/
-@[expose] def decodeHybridRatJson (j : Lean.Json) : Except String CanonicalRat :=
+def decodeHybridRatJson (j : Lean.Json) : Except String CanonicalRat :=
   match j.getInt? with
   | .ok n => .ok (Rat.ofInt n)
   | .error _ =>
@@ -1334,11 +1507,11 @@ theorem hybridFlowpipe_bad_refused :
     | _, _ => .error "invalid rational JSON"
 
 /-- Encode an `Interval` as `Lean.Json`. -/
-@[expose] def encodeIntervalJson (iv : Interval) : Lean.Json :=
+def encodeIntervalJson (iv : Interval) : Lean.Json :=
   Lean.Json.mkObj [("lo", encodeHybridRatJson iv.lo), ("hi", encodeHybridRatJson iv.hi)]
 
 /-- Decode an `Interval` from `Lean.Json` (`{"lo": ..., "hi": ...}`). -/
-@[expose] def decodeIntervalJson (j : Lean.Json) : Except String Interval := do
+def decodeIntervalJson (j : Lean.Json) : Except String Interval := do
   let loJ ← j.getObjVal? "lo"
   let hiJ ← j.getObjVal? "hi"
   let lo ← decodeHybridRatJson loJ
@@ -1346,7 +1519,7 @@ theorem hybridFlowpipe_bad_refused :
   pure ⟨lo, hi⟩
 
 /-- Encode a `RealExpr` AST as `Lean.Json`. -/
-@[expose] def encodeRealExprJson : RealExpr → Lean.Json
+def encodeRealExprJson : RealExpr → Lean.Json
   | .const c => Lean.Json.mkObj [("op", Lean.toJson "const"), ("val", encodeHybridRatJson c)]
   | .var v   => Lean.Json.mkObj [("op", Lean.toJson "var"), ("name", Lean.toJson v)]
   | .add l r => Lean.Json.mkObj [("op", Lean.toJson "add"), ("lhs", encodeRealExprJson l), ("rhs", encodeRealExprJson r)]
@@ -1355,7 +1528,7 @@ theorem hybridFlowpipe_bad_refused :
   | .sqr a   => Lean.Json.mkObj [("op", Lean.toJson "sqr"), ("arg", encodeRealExprJson a)]
 
 /-- Structural fuel-bounded JSON AST decoder for `RealExpr`. -/
-@[expose] def decodeRealExprJsonAux : Nat → Lean.Json → Except String RealExpr
+def decodeRealExprJsonAux : Nat → Lean.Json → Except String RealExpr
   | 0, _ => .error "RealExpr JSON nesting depth exceeded"
   | fuel + 1, j =>
     match j.getInt? with
@@ -1399,14 +1572,14 @@ theorem hybridFlowpipe_bad_refused :
 
 /-- Decode an arbitrary `RealExpr` AST from `Lean.Json` (supports integer literals, variable strings,
 and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
-@[expose] def decodeRealExprJson (j : Lean.Json) : Except String RealExpr :=
+def decodeRealExprJson (j : Lean.Json) : Except String RealExpr :=
   decodeRealExprJsonAux 64 j
 
-@[expose] def encodeNamedBoxJson (box : List (String × Interval)) : Lean.Json :=
+def encodeNamedBoxJson (box : List (String × Interval)) : Lean.Json :=
   Lean.Json.arr <| box.toArray.map fun (v, iv) =>
     Lean.Json.mkObj [("var", Lean.toJson v), ("lo", encodeHybridRatJson iv.lo), ("hi", encodeHybridRatJson iv.hi)]
 
-@[expose] def decodeNamedIntervalEntryJson (j : Lean.Json) : Except String (String × Interval) := do
+def decodeNamedIntervalEntryJson (j : Lean.Json) : Except String (String × Interval) := do
   let v ← j.getObjValAs? String "var"
   match j.getObjVal? "interval" with
   | .ok ivJ =>
@@ -1416,24 +1589,24 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
     let iv ← decodeIntervalJson j
     pure (v, iv)
 
-@[expose] def decodeNamedBoxJson (j : Lean.Json) : Except String (List (String × Interval)) := do
+def decodeNamedBoxJson (j : Lean.Json) : Except String (List (String × Interval)) := do
   let arr ← j.getArr?
   arr.toList.mapM decodeNamedIntervalEntryJson
 
-@[expose] def encodeOdeSystemJson (sys : OdeSystem) : Lean.Json :=
+def encodeOdeSystemJson (sys : OdeSystem) : Lean.Json :=
   Lean.Json.mkObj
     [ ("fields", Lean.Json.arr <| sys.fields.toArray.map fun (v, e) =>
         Lean.Json.mkObj [("var", Lean.toJson v), ("rhs", encodeRealExprJson e)])
     , ("dt", encodeHybridRatJson sys.dt)
     , ("remainderPad", encodeIntervalJson sys.remainderPad) ]
 
-@[expose] def decodeOdeFieldEntryJson (j : Lean.Json) : Except String (String × RealExpr) := do
+def decodeOdeFieldEntryJson (j : Lean.Json) : Except String (String × RealExpr) := do
   let v ← j.getObjValAs? String "var"
   let rhsJ ← j.getObjVal? "rhs"
   let rhs ← decodeRealExprJson rhsJ
   pure (v, rhs)
 
-@[expose] def decodeOdeSystemJson (j : Lean.Json) : Except String OdeSystem := do
+def decodeOdeSystemJson (j : Lean.Json) : Except String OdeSystem := do
   let fsJ ← j.getObjVal? "fields"
   let fsArr ← fsJ.getArr?
   let fields ← fsArr.toList.mapM decodeOdeFieldEntryJson
@@ -1443,13 +1616,13 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
   let remainderPad ← decodeIntervalJson padJ
   pure { fields, dt, remainderPad }
 
-@[expose] def encodeHybridModeJson (m : HybridMode) : Lean.Json :=
+def encodeHybridModeJson (m : HybridMode) : Lean.Json :=
   Lean.Json.mkObj
     [ ("modeId", Lean.toJson m.modeId)
     , ("ode", encodeOdeSystemJson m.ode)
     , ("invariantBounds", encodeNamedBoxJson m.invariantBounds) ]
 
-@[expose] def decodeHybridModeJson (j : Lean.Json) : Except String HybridMode := do
+def decodeHybridModeJson (j : Lean.Json) : Except String HybridMode := do
   let modeId ← j.getObjValAs? String "modeId"
   let odeJ ← j.getObjVal? "ode"
   let ode ← decodeOdeSystemJson odeJ
@@ -1457,14 +1630,14 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
   let invariantBounds ← decodeNamedBoxJson invJ
   pure { modeId, ode, invariantBounds }
 
-@[expose] def encodeAffineResetMapJson (rm : AffineResetMap) : Lean.Json :=
+def encodeAffineResetMapJson (rm : AffineResetMap) : Lean.Json :=
   Lean.Json.arr <| rm.resets.toArray.map fun (v, scale, offset) =>
     Lean.Json.mkObj
       [ ("var", Lean.toJson v)
       , ("scale", encodeHybridRatJson scale)
       , ("offset", encodeHybridRatJson offset) ]
 
-@[expose] def decodeAffineResetEntryJson (j : Lean.Json) : Except String (String × CanonicalRat × CanonicalRat) := do
+def decodeAffineResetEntryJson (j : Lean.Json) : Except String (String × CanonicalRat × CanonicalRat) := do
   let v ← j.getObjValAs? String "var"
   let sJ ← j.getObjVal? "scale"
   let oJ ← j.getObjVal? "offset"
@@ -1472,19 +1645,19 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
   let offset ← decodeHybridRatJson oJ
   pure (v, scale, offset)
 
-@[expose] def decodeAffineResetMapJson (j : Lean.Json) : Except String AffineResetMap := do
+def decodeAffineResetMapJson (j : Lean.Json) : Except String AffineResetMap := do
   let arr ← j.getArr?
   let resets ← arr.toList.mapM decodeAffineResetEntryJson
   pure { resets }
 
-@[expose] def encodeHybridJumpJson (jmp : HybridJump) : Lean.Json :=
+def encodeHybridJumpJson (jmp : HybridJump) : Lean.Json :=
   Lean.Json.mkObj
     [ ("fromMode", Lean.toJson jmp.fromMode)
     , ("toMode", Lean.toJson jmp.toMode)
     , ("guardBounds", encodeNamedBoxJson jmp.guardBounds)
     , ("resetMap", encodeAffineResetMapJson jmp.resetMap) ]
 
-@[expose] def decodeHybridJumpJson (j : Lean.Json) : Except String HybridJump := do
+def decodeHybridJumpJson (j : Lean.Json) : Except String HybridJump := do
   let fromMode ← j.getObjValAs? String "fromMode"
   let toMode ← j.getObjValAs? String "toMode"
   let guardJ ← j.getObjVal? "guardBounds"
@@ -1493,13 +1666,13 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
   let resetMap ← decodeAffineResetMapJson resetJ
   pure { fromMode, toMode, guardBounds, resetMap }
 
-@[expose] def encodeHybridAutomatonJson (aut : HybridAutomaton) : Lean.Json :=
+def encodeHybridAutomatonJson (aut : HybridAutomaton) : Lean.Json :=
   Lean.Json.mkObj
     [ ("modes", Lean.Json.arr <| aut.modes.toArray.map encodeHybridModeJson)
     , ("jumps", Lean.Json.arr <| aut.jumps.toArray.map encodeHybridJumpJson)
     , ("safeEnvelope", encodeNamedBoxJson aut.safeEnvelope) ]
 
-@[expose] def decodeHybridAutomatonJson (j : Lean.Json) : Except String HybridAutomaton := do
+def decodeHybridAutomatonJson (j : Lean.Json) : Except String HybridAutomaton := do
   let modesJ ← j.getObjVal? "modes"
   let modesArr ← modesJ.getArr?
   let modes ← modesArr.toList.mapM decodeHybridModeJson
@@ -1510,7 +1683,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
   let safeEnvelope ← decodeNamedBoxJson safeJ
   pure { modes, jumps, safeEnvelope }
 
-@[expose] def hybridJsonNatToChars : Nat → Nat → List Char → List Char
+def hybridJsonNatToChars : Nat → Nat → List Char → List Char
   | 0, _, acc => if acc.isEmpty then ['0'] else acc
   | fuel + 1, n, acc =>
     let d := Char.ofNat (48 + (n % 10))
@@ -1518,16 +1691,16 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
     if q == 0 then d :: acc
     else hybridJsonNatToChars fuel q (d :: acc)
 
-@[expose] def hybridJsonIntToStr : Int → String
+def hybridJsonIntToStr : Int → String
   | .ofNat n   => String.ofList (hybridJsonNatToChars 32 n [])
   | .negSucc n => "-" ++ String.ofList (hybridJsonNatToChars 32 (n + 1) [])
 
-@[expose] def hybridJsonJoinSep (sep : String) : List String → String
+def hybridJsonJoinSep (sep : String) : List String → String
   | []      => ""
   | [x]     => x
   | x :: xs => x ++ sep ++ hybridJsonJoinSep sep xs
 
-@[expose] def hybridJsonEscapeChars : List Char → List Char
+def hybridJsonEscapeChars : List Char → List Char
   | [] => []
   | '"' :: cs  => '\\' :: '"' :: hybridJsonEscapeChars cs
   | '\\' :: cs => '\\' :: '\\' :: hybridJsonEscapeChars cs
@@ -1536,11 +1709,11 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
   | '\t' :: cs => '\\' :: 't' :: hybridJsonEscapeChars cs
   | c :: cs    => c :: hybridJsonEscapeChars cs
 
-@[expose] def hybridJsonQuoteStr (s : String) : String :=
+def hybridJsonQuoteStr (s : String) : String :=
   String.ofList ('"' :: (hybridJsonEscapeChars s.toList ++ ['"']))
 
 /-- Kernel-reducible structural serializer for `Lean.Json` (zero `partial def`). -/
-@[expose] def hybridJsonCompressAux : Nat → Lean.Json → String
+def hybridJsonCompressAux : Nat → Lean.Json → String
   | 0, _ => "null"
   | _ + 1, .null => "null"
   | _ + 1, .bool true => "true"
@@ -1554,15 +1727,15 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
     let pairs := kvs.foldl (fun acc k v => (hybridJsonQuoteStr k ++ ":" ++ hybridJsonCompressAux fuel v) :: acc) []
     "{" ++ hybridJsonJoinSep "," pairs.reverse ++ "}"
 
-@[expose] def hybridJsonCompress (j : Lean.Json) : String :=
+def hybridJsonCompress (j : Lean.Json) : String :=
   hybridJsonCompressAux 32 j
 
-@[expose] def hybridJsonSkipWs : List Char → List Char
+def hybridJsonSkipWs : List Char → List Char
   | [] => []
   | c :: cs =>
     if c == ' ' || c == '\n' || c == '\r' || c == '\t' then hybridJsonSkipWs cs else c :: cs
 
-@[expose] def hybridJsonParseStrBody : List Char → List Char → Option (String × List Char)
+def hybridJsonParseStrBody : List Char → List Char → Option (String × List Char)
   | [], _ => none
   | '"' :: rest, rev => some (String.ofList rev.reverse, rest)
   | '\\' :: '"' :: rest, rev => hybridJsonParseStrBody rest ('"' :: rev)
@@ -1574,7 +1747,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
   | '\\' :: _, _ => none
   | c :: rest, rev => hybridJsonParseStrBody rest (c :: rev)
 
-@[expose] def hybridJsonParseDigits : List Char → Nat → Bool → Nat × Bool × List Char
+def hybridJsonParseDigits : List Char → Nat → Bool → Nat × Bool × List Char
   | [], acc, has => (acc, has, [])
   | c :: rest, acc, has =>
     if '0' ≤ c && c ≤ '9' then
@@ -1582,7 +1755,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
     else
       (acc, has, c :: rest)
 
-@[expose] def hybridJsonParseFracDigits : List Char → Nat → Nat → Nat × Nat × List Char
+def hybridJsonParseFracDigits : List Char → Nat → Nat → Nat × Nat × List Char
   | [], acc, exp => (acc, exp, [])
   | c :: rest, acc, exp =>
     if '0' ≤ c && c ≤ '9' then
@@ -1590,7 +1763,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
     else
       (acc, exp, c :: rest)
 
-@[expose] def hybridJsonParseNum (cs : List Char) : Option (Lean.JsonNumber × List Char) :=
+def hybridJsonParseNum (cs : List Char) : Option (Lean.JsonNumber × List Char) :=
   let (neg, cs1) :=
     match cs with
     | '-' :: r => (true, r)
@@ -1609,7 +1782,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
       let m : Int := if neg then -(Int.ofNat intPart) else Int.ofNat intPart
       some (⟨m, 0⟩, cs2)
 
-@[expose] def hybridJsonParseArrAux (parseElem : List Char → Option (Lean.Json × List Char)) :
+def hybridJsonParseArrAux (parseElem : List Char → Option (Lean.Json × List Char)) :
     Nat → List Char → List Lean.Json → Option (List Lean.Json × List Char)
   | 0, _, _ => none
   | itemFuel + 1, cs, rev => do
@@ -1619,7 +1792,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
     | ',' :: rest => hybridJsonParseArrAux parseElem itemFuel (hybridJsonSkipWs rest) (v :: rev)
     | _ => none
 
-@[expose] def hybridJsonParseObjAux (parseElem : List Char → Option (Lean.Json × List Char)) :
+def hybridJsonParseObjAux (parseElem : List Char → Option (Lean.Json × List Char)) :
     Nat → List Char → List (String × Lean.Json) → Option (List (String × Lean.Json) × List Char)
   | 0, _, _ => none
   | itemFuel + 1, cs, rev =>
@@ -1637,7 +1810,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
     | _ => none
 
 /-- Kernel-reducible structural recursive-descent `Lean.Json` parser (zero `partial def`). -/
-@[expose] def hybridJsonParseAux : Nat → List Char → Option (Lean.Json × List Char)
+def hybridJsonParseAux : Nat → List Char → Option (Lean.Json × List Char)
   | 0, _ => none
   | fuel + 1, cs =>
     match hybridJsonSkipWs cs with
@@ -1664,7 +1837,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
       let (n, rest) ← hybridJsonParseNum numCs
       some (.num n, rest)
 
-@[expose] def hybridJsonParse (s : String) : Except String Lean.Json :=
+def hybridJsonParse (s : String) : Except String Lean.Json :=
   match hybridJsonParseAux 32 s.toList with
   | some (j, rest) =>
     if (hybridJsonSkipWs rest).isEmpty then .ok j
@@ -1672,7 +1845,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
   | none => .error "malformed JSON"
 
 /-- Render a `HybridProblem` deterministically as a general AST JSON string. -/
-@[expose] def renderHybridProblemJson (p : HybridProblem) : String :=
+def renderHybridProblemJson (p : HybridProblem) : String :=
   hybridJsonCompress <| Lean.Json.mkObj
     [ ("automaton", encodeHybridAutomatonJson p.automaton)
     , ("varName", Lean.toJson p.varName)
@@ -1684,7 +1857,7 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
 
 /-- Decode a `HybridProblem` from a general JSON AST string representation
 (`{"automaton":{...},"varName":...,"initMode":...,"initLo":...,"initHi":...,"unsafeLo":...,"unsafeHi":...}`). -/
-@[expose] def decodeHybridProblem (s : String) : Except String HybridProblem :=
+def decodeHybridProblem (s : String) : Except String HybridProblem :=
   match hybridJsonParse s with
   | .error _ => .error "invalid HybridProblem JSON"
   | .ok j =>
@@ -1702,14 +1875,14 @@ and structured operator nodes `const`, `var`, `add`, `sub`, `mul`, `sqr`). -/
     | _, _, _, _, _, _, _ => .error "invalid HybridProblem JSON: missing required fields"
 
 /-- Encode a `HybridAction` as `Lean.Json`. -/
-@[expose] def encodeHybridActionJson : HybridAction → Lean.Json
+def encodeHybridActionJson : HybridAction → Lean.Json
   | .flowStep          => Lean.Json.mkObj [("action", Lean.toJson "flowStep")]
   | .jumpTo targetMode => Lean.Json.mkObj [("action", Lean.toJson "jumpTo"), ("targetMode", Lean.toJson targetMode)]
 
 /-- Decode an arbitrary `HybridAction` from `Lean.Json` (supports structured objects
 `{"action": "flowStep"}` / `{"action": "jumpTo", "targetMode": mode}` / `{"jumpTo": mode}` as well
 as string shorthand `"flowStep"` or `"jumpTo:<mode>"` for any mode identifier). -/
-@[expose] def decodeHybridActionJson (j : Lean.Json) : Except String HybridAction :=
+def decodeHybridActionJson (j : Lean.Json) : Except String HybridAction :=
   match j.getStr? with
   | .ok str =>
     if str == "flowStep" then
@@ -1735,7 +1908,7 @@ as string shorthand `"flowStep"` or `"jumpTo:<mode>"` for any mode identifier). 
       | _ => .error "invalid HybridAction JSON"
 
 /-- Render a `HybridCert` deterministically as a general AST JSON string. -/
-@[expose] def renderHybridCertJson (c : HybridCert) : String :=
+def renderHybridCertJson (c : HybridCert) : String :=
   hybridJsonCompress <| Lean.Json.mkObj
     [ ("schedule", Lean.Json.arr <| c.schedule.toArray.map encodeHybridActionJson)
     , ("expectedFinalMode", Lean.toJson c.expectedFinalMode)
@@ -1743,7 +1916,7 @@ as string shorthand `"flowStep"` or `"jumpTo:<mode>"` for any mode identifier). 
 
 /-- Decode a `HybridCert` from a general JSON AST string representation
 (`{"schedule":[...],"expectedFinalMode":...,"claimedSteps":...}`). -/
-@[expose] def decodeHybridCert (s : String) : Except String HybridCert :=
+def decodeHybridCert (s : String) : Except String HybridCert :=
   match hybridJsonParse s with
   | .error _ => .error "invalid HybridCert JSON"
   | .ok j =>
@@ -1757,7 +1930,7 @@ as string shorthand `"flowStep"` or `"jumpTo:<mode>"` for any mode identifier). 
     | _, _, _ => .error "invalid HybridCert JSON: missing required fields"
 
 /-- Registered `Obend.Judge.Format` for `"hybrid-flowpipe@1"`. -/
-@[expose] def hybridFlowpipeFormat : Obend.Judge.Format where
+def hybridFlowpipeFormat : Obend.Judge.Format where
   name := "hybrid-flowpipe@1"
   version := "1"
   Obj := HybridProblem

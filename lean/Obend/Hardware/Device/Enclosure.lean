@@ -112,7 +112,7 @@ namespace Obend.Analysis.Interval
 open Obend.Hardware.Device
 
 /-- `I ^ k` by repeated multiplication. -/
-@[expose] def powNat (I : Interval) : Nat → Interval
+def powNat (I : Interval) : Nat → Interval
   | 0 => Interval.ofPoint 1
   | k + 1 => Interval.mul (Interval.powNat I k) I
 
@@ -153,7 +153,7 @@ theorem inv_le_inv_of_le {a b : CanonicalRat} (ha : 0 < a) (hab : a ≤ b) : b�
   exact h1
 
 /-- The reciprocal of an interval that lies strictly above zero: `[1/hi, 1/lo]`. -/
-@[expose] def invPos (I : Interval) : Interval :=
+abbrev invPos (I : Interval) : Interval :=
   ⟨I.hi⁻¹, I.lo⁻¹⟩
 
 theorem invPos_mem {x : CanonicalRat} {I : Interval} (hlo : 0 < I.lo) (hx : x ∈ I) :
@@ -165,7 +165,7 @@ theorem invPos_mem {x : CanonicalRat} {I : Interval} (hlo : 0 < I.lo) (hx : x �
 
 /-- `A / B` when `B` lies strictly above zero; `none` otherwise (a checker that needs the quotient
 refuses rather than divide through zero). -/
-@[expose] def divPos? (A B : Interval) : Option Interval :=
+abbrev divPos? (A B : Interval) : Option Interval :=
   if 0 < B.lo then some (Interval.mul A (Interval.invPos B)) else none
 
 theorem divPos?_mem {x y : CanonicalRat} {A B J : Interval}
@@ -179,7 +179,7 @@ theorem divPos?_mem {x y : CanonicalRat} {A B J : Interval}
   · cases hJ
 
 /-- Round the endpoints outward to multiples of `1/s`: `[⌊lo·s⌋/s, ⌈hi·s⌉/s]`. -/
-@[expose] def roundOut (s : Nat) (I : Interval) : Interval :=
+abbrev roundOut (s : Nat) (I : Interval) : Interval :=
   ⟨(((I.lo * (s : CanonicalRat)).floor : Int) : CanonicalRat) / (s : CanonicalRat),
    (((I.hi * (s : CanonicalRat)).ceil : Int) : CanonicalRat) / (s : CanonicalRat)⟩
 
@@ -246,27 +246,96 @@ theorem ratAbs_nonneg (t : CanonicalRat) : 0 ≤ ratAbs t := by
   (List.range deg).reverse.foldl (fun p j => 1 + t / (((j + 1 : Nat) : CanonicalRat)) * p) 1
 
 /-- The degree of the Taylor polynomial used on `[−1/2, 1/2]`. -/
-@[expose] def expDeg : Nat := 12
+abbrev expDeg : Nat := 12
 
 /-- `13! = 6227020800`. -/
-@[expose] def fact13 : CanonicalRat := 6227020800
+abbrev fact13 : CanonicalRat := 6227020800
 
 /-- The Lagrange remainder bound `2|t|¹³/13!` for `|t| ≤ 1/2` (`e^{1/2} < 2`). -/
-@[expose] def expHalfRem (t : CanonicalRat) : CanonicalRat :=
+abbrev expHalfRem (t : CanonicalRat) : CanonicalRat :=
   2 * ratPow (ratAbs t) 13 / fact13
 
 /-- **Assumed fact `expHalf`**: for `|t| ≤ 1/2`, `eᵗ` lies in this interval. -/
-@[expose] def expHalfEnclosure (t : CanonicalRat) : Interval :=
+abbrev expHalfEnclosure (t : CanonicalRat) : Interval :=
   ⟨expTaylor expDeg t - expHalfRem t, expTaylor expDeg t + expHalfRem t⟩
 
-/-- The number of halvings that bring `|x|` to at most `1/2` (fuel 64: beyond `|x| > 2⁶³` the
-enclosure is `expHalfEnclosure` of a large argument, still an interval, no longer tight). -/
+/-- Dynamic halving count bringing `|x / 2ᵏ|` into `[0, 1/2]` for **all** `x : CanonicalRat`
+(including `|x| > 2⁶³` up to arbitrary rational magnitudes): uses dynamic fuel
+`(2 * ratAbs x).ceil.toNat`, terminating structurally as soon as `a ≤ 1/2`. -/
 @[expose] def halvings (x : CanonicalRat) : Nat :=
-  go (ratAbs x) 64
+  go (ratAbs x) (2 * ratAbs x).ceil.toNat
 where
   go : CanonicalRat → Nat → Nat
     | _, 0 => 0
     | a, fuel + 1 => if a ≤ 1/2 then 0 else go (a / 2) fuel + 1
+
+private theorem halvings_go_two_mul_le :
+    ∀ (fuel : Nat) (a : CanonicalRat),
+      0 ≤ a → 2 * a ≤ (fuel : CanonicalRat) + 1 →
+      2 * a ≤ ratPow 2 (halvings.go a fuel)
+  | 0, a, _, hbound => by
+    simp only [halvings.go, ratPow]
+    grind
+  | fuel + 1, a, ha, hbound => by
+    unfold halvings.go
+    split
+    · rename_i hle
+      simp only [ratPow]
+      grind
+    · rename_i hgt
+      have ha2_nonneg : 0 ≤ a / 2 := by grind
+      have ha2_bound : 2 * (a / 2) ≤ (fuel : CanonicalRat) + 1 := by grind
+      have ih := halvings_go_two_mul_le fuel (a / 2) ha2_nonneg ha2_bound
+      rw [ratPow_succ]
+      grind
+
+private theorem ratAbs_div_of_pos {x s : CanonicalRat} (hs : 0 < s) :
+    ratAbs (x / s) = ratAbs x / s := by
+  unfold ratAbs
+  by_cases hx : x < 0
+  · have hxs : x / s < 0 := by
+      rw [Rat.div_def]
+      have hpos : 0 < (-x) * s⁻¹ := Rat.mul_pos (by grind) (Rat.inv_pos.2 hs)
+      rw [Rat.neg_mul] at hpos
+      grind
+    simp only [hx, hxs, ↓reduceIte]
+    simp only [Rat.div_def]
+    exact (Rat.neg_mul x s⁻¹).symm
+  · have hxs : ¬ (x / s < 0) := by
+      have hx0 : 0 ≤ x := by grind
+      have h0 : 0 ≤ x / s := by
+        rw [Rat.div_def]
+        exact Rat.mul_nonneg hx0 (Rat.le_of_lt (Rat.inv_pos.2 hs))
+      grind
+    simp only [hx, hxs, ↓reduceIte]
+
+/-- **Unconditional Halving Bound (`halvings_arg_abs_le_half`)**:
+For **every** `x : CanonicalRat` (including `|x| > 2⁶³`), `halvings x` halves `x` into `[−1/2, 1/2]`. -/
+theorem halvings_arg_abs_le_half (x : CanonicalRat) :
+    ratAbs (x / ratPow 2 (halvings x)) ≤ 1 / 2 := by
+  unfold halvings
+  let a := ratAbs x
+  let fuel := (2 * a).ceil.toNat
+  have ha : 0 ≤ a := ratAbs_nonneg x
+  have h2a_nonneg : (0 : Int) ≤ (2 * a).ceil := by
+    have h0 : (0 : CanonicalRat) ≤ 2 * a := by grind
+    have h1 : (0 : CanonicalRat) ≤ ((2 * a).ceil : CanonicalRat) :=
+      Rat.le_trans h0 Rat.le_ceil
+    exact_mod_cast h1
+  have hceil_eq : (((fuel : Nat) : Int) : CanonicalRat) = ((2 * a).ceil : CanonicalRat) := by
+    have hto : ((fuel : Nat) : Int) = (2 * a).ceil := Int.toNat_of_nonneg h2a_nonneg
+    rw [hto]
+  have hfuel_bound : 2 * a ≤ (fuel : CanonicalRat) + 1 := by
+    have hc : 2 * a ≤ ((2 * a).ceil : CanonicalRat) := Rat.le_ceil
+    have hcast : (((fuel : Nat) : Int) : CanonicalRat) = (fuel : CanonicalRat) := by exact_mod_cast (rfl : fuel = fuel)
+    grind
+  have hpow : 2 * a ≤ ratPow 2 (halvings.go a fuel) :=
+    halvings_go_two_mul_le fuel a ha hfuel_bound
+  have hs : (0 : CanonicalRat) < ratPow 2 (halvings.go a fuel) :=
+    ratPow_pos (by decide) _
+  rw [ratAbs_div_of_pos hs]
+  apply Interval.div_le_of_le_mul hs
+  grind
 
 /-- Outward rounding scale: endpoints to multiples of `10⁻⁶⁰`. -/
 @[expose] def roundScale : Nat := 10 ^ 60
@@ -288,19 +357,57 @@ theorem expEnclosure_of_half {x e₀ : CanonicalRat}
   unfold expEnclosure
   exact Interval.sqrIterRound_mem roundScale_pos (Interval.roundOut_mem roundScale_pos h) _
 
+private theorem expFn_mul_pow_two
+    (expFn : CanonicalRat → CanonicalRat)
+    (hDouble : ∀ t : CanonicalRat, expFn (2 * t) = expFn t * expFn t)
+    (t : CanonicalRat) :
+    ∀ k : Nat, expFn (t * ratPow 2 k) = ratPow (expFn t) (2 ^ k)
+  | 0 => by simp [ratPow]
+  | k + 1 => by
+    have harg : t * ratPow 2 (k + 1) = 2 * (t * ratPow 2 k) := by
+      rw [ratPow_succ]
+      grind
+    have hpow : ratPow (expFn t) (2 ^ (k + 1)) =
+        ratPow (expFn t) (2 ^ k) * ratPow (expFn t) (2 ^ k) := by
+      rw [Nat.pow_succ, Nat.mul_two, ratPow_add]
+    rw [harg, hDouble, expFn_mul_pow_two expFn hDouble t k, hpow]
+
+/-- **Unconditional Exponential Enclosure Soundness (`expEnclosure_sound`)**:
+For any exponential map `expFn` satisfying the local `[−1/2, 1/2]` Taylor–Lagrange enclosure `hHalf`
+and functional squaring law `hDouble` (`exp(2t) = exp(t)²`), `expFn x ∈ expEnclosure x` holds
+**unconditionally for every `x : CanonicalRat`** (with zero `|x| ≤ 2⁶³` restriction). -/
+theorem expEnclosure_sound
+    (expFn : CanonicalRat → CanonicalRat)
+    (hHalf : ∀ t : CanonicalRat, ratAbs t ≤ 1 / 2 → expFn t ∈ expHalfEnclosure t)
+    (hDouble : ∀ t : CanonicalRat, expFn (2 * t) = expFn t * expFn t)
+    (x : CanonicalRat) :
+    expFn x ∈ expEnclosure x := by
+  let k := halvings x
+  let s := ratPow 2 k
+  have hs : (0 : CanonicalRat) < s := ratPow_pos (by decide) k
+  have hmem : expFn (x / s) ∈ expHalfEnclosure (x / s) :=
+    hHalf (x / s) (halvings_arg_abs_le_half x)
+  have hpow : ratPow (expFn (x / s)) (2 ^ k) ∈ expEnclosure x :=
+    expEnclosure_of_half hmem
+  have hx : (x / s) * s = x := by
+    rw [Rat.div_def, Rat.mul_assoc, Rat.inv_mul_cancel s (Rat.ne_of_gt hs), Rat.mul_one]
+  have heq : expFn x = ratPow (expFn (x / s)) (2 ^ k) :=
+    (congrArg expFn hx.symm).trans (expFn_mul_pow_two expFn hDouble (x / s) k)
+  exact heq ▸ hpow
+
 /-! ## 4. The Bernoulli function -/
 
 /-- `1 − x/2 + x²/12 − x⁴/720 + x⁶/30240 − x⁸/1209600 + x¹⁰/47900160`. -/
-@[expose] def bernSeries (x : CanonicalRat) : CanonicalRat :=
+abbrev bernSeries (x : CanonicalRat) : CanonicalRat :=
   let x2 := x * x
   1 - x / 2 + x2 * (1/12 + x2 * (-1/720 + x2 * (1/30240 + x2 * (-1/1209600 + x2 * (1/47900160)))))
 
 /-- The series' remainder bound `x¹²/10⁹` for `|x| ≤ 1/8`. -/
-@[expose] def bernSeriesRem (x : CanonicalRat) : CanonicalRat :=
+abbrev bernSeriesRem (x : CanonicalRat) : CanonicalRat :=
   ratPow (ratAbs x) 12 / 1000000000
 
 /-- **Assumed fact `bernSmall`**: for `|x| ≤ 1/8`, `B(x) = x/(eˣ − 1)` lies in this interval. -/
-@[expose] def bernSmallEnclosure (x : CanonicalRat) : Interval :=
+abbrev bernSmallEnclosure (x : CanonicalRat) : Interval :=
   ⟨bernSeries x - bernSeriesRem x, bernSeries x + bernSeriesRem x⟩
 
 /-- The Bernoulli function of `x` computed from a value `e` standing for `eˣ`, in the form the
@@ -362,7 +469,7 @@ theorem powBracket_agree {y₁ y₂ r : CanonicalRat} {num den : Nat} {δ : Cano
   · exact le_of_ratPow_le (Rat.mul_nonneg hy₁ h1δ') (Rat.le_trans hlo₂ hhi₁)
 
 /-- A square root bracket is the power bracket with `num/den = 1/2`. -/
-@[expose] def sqrtBracket (s x δ : CanonicalRat) : Bool :=
+abbrev sqrtBracket (s x δ : CanonicalRat) : Bool :=
   powBracket s x 1 2 δ
 
 /-- A bracketed root is pinned: `(s(1−δ))² ≤ x ≤ (s(1+δ))²`. -/

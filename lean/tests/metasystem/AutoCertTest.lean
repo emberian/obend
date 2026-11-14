@@ -55,6 +55,7 @@ meta import Obend.AssertAxioms
 import all Obend.Judge.Class
 import all Obend.Logic.Obligation
 import all Obend.Hardware.Judge
+import all Obend.Analysis.SosLyapunov
 import all Obend.Elab.AutoCert
 
 open Obend.Core.Term (Primitive Term)
