@@ -29,7 +29,7 @@ public import Obend.Judge.Clearing
 public import Obend.Judge.RealAnalysis
 public import Obend.Analysis.RealAnalysis
 
-@[expose] public section
+public section
 namespace Obend.Consensus.Epistemic
 
 open Obend.Core.Data
@@ -209,26 +209,31 @@ theorem byteArrayLt_trichotomous (a b : ByteArray) :
 class VerifiableRace (Q Cert : Type) where
   /-- Verification check: does certificate `c` validly discharge query `q`? -/
   isValid : Q → Cert → Bool
-  /-- Cost metric: lower cost indicates a superior certificate. -/
-  cost : Q → Cert → Nat
+  /-- Discrete cost metric: lower cost indicates a superior certificate (used by default in `exactCost`). -/
+  cost : Q → Cert → Nat := fun _ _ => 0
+  /-- Exact rational cost metric preserving denominators (`a.num * b.den < b.num * a.den`);
+      defaults to `(cost q c : CanonicalRat)` so discrete `Nat`-cost instances work unchanged
+      while continuous/interval races never drop `.den`. -/
+  exactCost : Q → Cert → Obend.Analysis.CanonicalRat :=
+    fun q c => Obend.Analysis.CanonicalRat.ofNat (cost q c)
   /-- Deterministic canonical tie-breaker digest (e.g. cSHAKE256 hash). -/
   digest : Cert → ByteArray
 
 variable {Q Cert : Type} [instRace : VerifiableRace Q Cert]
 
-def certCost (q : Q) (c : Cert) : Nat :=
-  instRace.cost q c
+@[expose] def certCost (q : Q) (c : Cert) : Obend.Analysis.CanonicalRat :=
+  instRace.exactCost q c
 
-def certDigest (_ : Q) (c : Cert) : ByteArray :=
+@[expose] def certDigest (_ : Q) (c : Cert) : ByteArray :=
   instRace.digest c
 
-def certValid (q : Q) (c : Cert) : Bool :=
+@[expose] def certValid (q : Q) (c : Cert) : Bool :=
   instRace.isValid q c
 
 /-- Strict preference comparison between two candidate certificates:
-    First compares cost (lower is strictly better).
+    First compares exact rational cost (lower is strictly better).
     Breaks ties using canonical lexical hash digest. -/
-def betterCert (q : Q) (c₁ c₂ : Cert) : Bool :=
+@[expose] def betterCert (q : Q) (c₁ c₂ : Cert) : Bool :=
   let k1 := certCost q c₁
   let k2 := certCost q c₂
   if k1 < k2 then true
@@ -237,14 +242,14 @@ def betterCert (q : Q) (c₁ c₂ : Cert) : Bool :=
 
 theorem betterCert_irreflexive (q : Q) (c : Cert) : betterCert q c c = false := by
   unfold betterCert
-  have hnot : ¬ (certCost q c < certCost q c) := Nat.lt_irrefl _
+  have hnot : ¬ (certCost q c < certCost q c) := by grind
   simp [hnot, byteArrayLt_irreflexive (certDigest q c)]
 
 theorem betterCert_asymmetric {q : Q} {c₁ c₂ : Cert} (h : betterCert q c₁ c₂ = true) :
     betterCert q c₂ c₁ = false := by
   unfold betterCert at h ⊢
   by_cases h12 : certCost q c₁ < certCost q c₂
-  · have h21 : ¬ (certCost q c₂ < certCost q c₁) := by omega
+  · have h21 : ¬ (certCost q c₂ < certCost q c₁) := by grind
     simp [h21, h12]
   · by_cases h21 : certCost q c₂ < certCost q c₁
     · simp [h12, h21] at h
@@ -257,26 +262,26 @@ theorem betterCert_trans {q : Q} {a b c : Cert}
   unfold betterCert at hab hbc ⊢
   by_cases hab_cost : certCost q a < certCost q b
   · by_cases hbc_cost : certCost q b < certCost q c
-    · have hac : certCost q a < certCost q c := Nat.lt_trans hab_cost hbc_cost
+    · have hac : certCost q a < certCost q c := by grind
       simp [hac]
     · by_cases hcb_cost : certCost q c < certCost q b
       · simp [hbc_cost, hcb_cost] at hbc
-      · have hbc_eq : certCost q b = certCost q c := by omega
+      · have hbc_eq : certCost q b = certCost q c := by grind
         have hac : certCost q a < certCost q c := hbc_eq ▸ hab_cost
         simp [hac]
   · by_cases hba_cost : certCost q b < certCost q a
     · simp [hab_cost, hba_cost] at hab
     · simp only [hab_cost, hba_cost, ↓reduceIte] at hab
-      have hab_eq : certCost q a = certCost q b := by omega
+      have hab_eq : certCost q a = certCost q b := by grind
       by_cases hbc_cost : certCost q b < certCost q c
       · have hac : certCost q a < certCost q c := hab_eq ▸ hbc_cost
         simp [hac]
       · by_cases hcb_cost : certCost q c < certCost q b
         · simp [hbc_cost, hcb_cost] at hbc
         · simp only [hbc_cost, hcb_cost, ↓reduceIte] at hbc
-          have hbc_eq : certCost q b = certCost q c := by omega
-          have hnot1 : ¬ (certCost q a < certCost q c) := by omega
-          have hnot2 : ¬ (certCost q c < certCost q a) := by omega
+          have hbc_eq : certCost q b = certCost q c := by grind
+          have hnot1 : ¬ (certCost q a < certCost q c) := by grind
+          have hnot2 : ¬ (certCost q c < certCost q a) := by grind
           simp only [hnot1, hnot2, ↓reduceIte]
           exact byteArrayLt_trans hab hbc
 
@@ -305,7 +310,7 @@ theorem trichotomousOn_of_digestInj {q : Q} {l : List Cert}
 /-! ## §3. Deterministic Winner Selection -/
 
 /-- Structural helper finding the best candidate in a list. -/
-def pickBest (q : Q) : List Cert → Option Cert
+@[expose] def pickBest (q : Q) : List Cert → Option Cert
   | [] => none
   | c :: cs =>
     match pickBest q cs with
@@ -323,7 +328,7 @@ def pickBest (q : Q) : List Cert → Option Cert
     1. Filter candidates for validity (`isValid q c`).
     2. If no valid candidates exist, return `none`.
     3. Otherwise pick the best valid candidate. -/
-def selectWinner (q : Q) (candidates : List Cert) : Option Cert :=
+@[expose] def selectWinner (q : Q) (candidates : List Cert) : Option Cert :=
   pickBest q (candidates.filter (certValid q))
 
 /-! ## §4. Consensus & `List.Perm` Order-Insensitivity Metatheorems -/
@@ -584,17 +589,17 @@ structure EpistemicFrame (Ω Agent : Type) where
   Faulty : Agent → Prop
 
 /-- The world-independent proposition that certificate `c` validly discharges query `q`. -/
-def dischargedProp {Ω : Type} (q : Q) (c : Cert) : Ω → Prop :=
+@[expose] def dischargedProp {Ω : Type} (q : Q) (c : Cert) : Ω → Prop :=
   fun _ => certValid q c = true
 
 namespace EpistemicFrame
 
 variable {Ω Agent : Type} (F : EpistemicFrame Ω Agent)
 
-def Honest (a : Agent) : Prop := ¬ F.Faulty a
+@[expose] def Honest (a : Agent) : Prop := ¬ F.Faulty a
 
 /-- Single-agent knowledge modality `Kₐ φ` at world `w`. -/
-def Knows (a : Agent) (φ : Ω → Prop) (w : Ω) : Prop :=
+@[expose] def Knows (a : Agent) (φ : Ω → Prop) (w : Ω) : Prop :=
   ∀ w', F.Indist a w' w → φ w'
 
 /-- Group mutual knowledge `E_B φ` at world `w`: every member of `B` knows `φ`. -/
@@ -603,7 +608,7 @@ def EveryoneKnows (B : Agent → Prop) (φ : Ω → Prop) (w : Ω) : Prop :=
 
 /-- Distributed knowledge `D_B φ` at world `w`: `φ` holds at every world that *every*
     member of `B` confuses with `w`. -/
-def DistKnows (B : Agent → Prop) (φ : Ω → Prop) (w : Ω) : Prop :=
+@[expose] def DistKnows (B : Agent → Prop) (φ : Ω → Prop) (w : Ω) : Prop :=
   ∀ w', (∀ a, B a → F.Indist a w' w) → φ w'
 
 /-! ### S5 Modal Laws (K, T, 4, 5) -/
@@ -878,6 +883,18 @@ structure IntervalCertWrapper where
 def intervalCertDigest (c : IntervalCertWrapper) : ByteArray :=
   cshake256Kernel (ByteArray.mk #[0x49, 0x4E, 0x54, 0x56]) c.boundDigest
 
+/-- Extract the effective certified enclosure interval of `c` for `q`. -/
+@[expose] def effectiveEnclosure (q : IntervalQuery) (c : IntervalCertWrapper) : Interval :=
+  match c.refinedBound with
+  | some refIv => refIv
+  | none => (evalInterval q.env q.expr).getD q.claimedBound
+
+/-- Exact non-negative rational enclosure width `max(0, iv.hi - iv.lo)` preserving `.num / .den`. -/
+@[expose] def intervalExactWidth (q : IntervalQuery) (c : IntervalCertWrapper) : CanonicalRat :=
+  let iv := effectiveEnclosure q c
+  let w := iv.hi - iv.lo
+  if w < 0 then 0 else w
+
 instance : VerifiableRace IntervalQuery IntervalCertWrapper where
   isValid q c :=
     let baseOk :=
@@ -893,12 +910,42 @@ instance : VerifiableRace IntervalQuery IntervalCertWrapper where
         decide (q.claimedBound.lo ≤ refIv.lo ∧ refIv.lo ≤ comp.lo ∧
                 comp.hi ≤ refIv.hi ∧ refIv.hi ≤ q.claimedBound.hi)
       | none => false
-  cost q c :=
-    let iv := match c.refinedBound with
-      | some refIv => refIv
-      | none => (evalInterval q.env q.expr).getD q.claimedBound
-    (iv.hi - iv.lo).num.natAbs
+  cost q c := (intervalExactWidth q c).ceil.toNat
+  exactCost q c := intervalExactWidth q c
   digest c := intervalCertDigest c
+
+/-- **Exact Rational Interval Width Soundness (`intervalRace_tighter_enclosure_wins`)**:
+Whenever valid candidate `c₁` achieves a strictly tighter rational enclosure width than `c₂`
+(`iv₁.hi - iv₁.lo < iv₂.hi - iv₂.lo` with `iv₁.lo ≤ iv₁.hi` — e.g. `[0, 3/100]` vs `[0, 1]`),
+`betterCert q c₁ c₂ = true` and `selectWinner` deterministically selects `c₁` in either arrival order. -/
+theorem intervalRace_tighter_enclosure_wins
+    (q : IntervalQuery) (c₁ c₂ : IntervalCertWrapper)
+    (hVal₁ : certValid q c₁ = true)
+    (hNonInv₁ : (effectiveEnclosure q c₁).lo ≤ (effectiveEnclosure q c₁).hi)
+    (hTighter :
+      (effectiveEnclosure q c₁).hi - (effectiveEnclosure q c₁).lo <
+        (effectiveEnclosure q c₂).hi - (effectiveEnclosure q c₂).lo) :
+    betterCert q c₁ c₂ = true ∧
+    selectWinner q [c₁, c₂] = some c₁ ∧
+    selectWinner q [c₂, c₁] = some c₁ := by
+  have hCostLt : certCost q c₁ < certCost q c₂ := by
+    change intervalExactWidth q c₁ < intervalExactWidth q c₂
+    unfold intervalExactWidth
+    grind
+  have hBetter : betterCert q c₁ c₂ = true := by
+    unfold betterCert
+    simp [hCostLt]
+  have hWin12 : selectWinner q [c₁, c₂] = some c₁ :=
+    frontrunning_resistant_pair hVal₁ hBetter
+  have hWin21 : selectWinner q [c₂, c₁] = some c₁ := by
+    unfold selectWinner
+    by_cases hVal₂ : certValid q c₂ = true
+    · have hNot21 : betterCert q c₂ c₁ = false := betterCert_asymmetric hBetter
+      simp [hVal₁, hVal₂, hNot21]
+    · have hFalse₂ : certValid q c₂ = false := by
+        cases h : certValid q c₂ <;> simp_all
+      simp [hVal₁, hFalse₂]
+  exact ⟨hBetter, hWin12, hWin21⟩
 
 end IntervalRace
 

@@ -349,6 +349,83 @@ theorem checkPsatzNonneg_sound
 /-- Zero origin assignment `originEnv : Nat → CanonicalRat := fun _ => 0`. -/
 @[expose] def originEnv : Nat → CanonicalRat := fun _ => 0
 
+/-- Check that every active variable factor `(v, e)` (`e ≠ 0`) in monomial `m` satisfies `v < dim`. -/
+@[expose] def monomialVarsBounded (dim : Nat) : Monomial → Bool
+  | [] => true
+  | (v, e) :: rest => (decide (e = 0) || decide (v < dim)) && monomialVarsBounded dim rest
+
+/-- Check that every nonzero term in `p` only references state variables `v < dim`. -/
+@[expose] def polyTermsVarsBounded (dim : Nat) : List (Monomial × CanonicalRat) → Bool
+  | [] => true
+  | (m, c) :: rest => (decide (c = 0) || monomialVarsBounded dim m) && polyTermsVarsBounded dim rest
+
+/-- Check that polynomial `p` only references state variables `0 ≤ v < dim`. -/
+@[expose] def polyVarsBounded (dim : Nat) (p : Poly) : Bool :=
+  polyTermsVarsBounded dim p.terms
+
+/-- Check pairwise distinctness of a `List Nat` (used for Index-1 algebraic variable lists). -/
+@[expose] def natListNodupB : List Nat → Bool
+  | [] => true
+  | x :: xs => !(xs.contains x) && natListNodupB xs
+
+theorem monomialVarsBounded_eval_congr
+    (dim : Nat) (env₁ env₂ : Nat → CanonicalRat)
+    (hAgree : ∀ v, v < dim → env₁ v = env₂ v) :
+    ∀ (m : Monomial),
+      monomialVarsBounded dim m = true →
+      Monomial.eval env₁ m = Monomial.eval env₂ m
+  | [], _ => rfl
+  | (v, e) :: rest, hB => by
+    dsimp only [monomialVarsBounded, Monomial.eval] at hB ⊢
+    rcases (Bool.and_eq_true _ _).mp hB with ⟨hHead, hRest⟩
+    rw [monomialVarsBounded_eval_congr dim env₁ env₂ hAgree rest hRest]
+    rcases (Bool.or_eq_true _ _).mp hHead with he0 | hvLt
+    · have he : e = 0 := of_decide_eq_true he0
+      subst he
+      rfl
+    · have hv : v < dim := of_decide_eq_true hvLt
+      rw [hAgree v hv]
+
+theorem polyTermsVarsBounded_eval_congr
+    (dim : Nat) (env₁ env₂ : Nat → CanonicalRat)
+    (hAgree : ∀ v, v < dim → env₁ v = env₂ v) :
+    ∀ (terms : List (Monomial × CanonicalRat)),
+      polyTermsVarsBounded dim terms = true →
+      evalTerms env₁ terms = evalTerms env₂ terms
+  | [], _ => rfl
+  | (m, c) :: rest, hB => by
+    dsimp only [polyTermsVarsBounded, evalTerms] at hB ⊢
+    rcases (Bool.and_eq_true _ _).mp hB with ⟨hHead, hRest⟩
+    rw [polyTermsVarsBounded_eval_congr dim env₁ env₂ hAgree rest hRest]
+    rcases (Bool.or_eq_true _ _).mp hHead with hc0 | hmB
+    · have hc : c = 0 := of_decide_eq_true hc0
+      subst hc
+      grind
+    · rw [monomialVarsBounded_eval_congr dim env₁ env₂ hAgree m hmB]
+
+/-- **Theorem (`polyVarsBounded_eval_congr`)**:
+Whenever `polyVarsBounded dim p = true`, evaluating `p` depends exclusively on state coordinates
+`0 ≤ v < dim` (`(∀ v < dim, env₁ v = env₂ v) → p.eval env₁ = p.eval env₂`). -/
+theorem polyVarsBounded_eval_congr
+    (dim : Nat) (p : Poly) (env₁ env₂ : Nat → CanonicalRat)
+    (hB : polyVarsBounded dim p = true)
+    (hAgree : ∀ v, v < dim → env₁ v = env₂ v) :
+    p.eval env₁ = p.eval env₂ :=
+  polyTermsVarsBounded_eval_congr dim env₁ env₂ hAgree p.terms hB
+
+/-- Helper lemma: `List.all` is `true` iff the predicate holds for all members of the list. -/
+theorem sos_list_all_iff_forall {α : Type} (p : α → Bool) :
+    ∀ (xs : List α), xs.all p = true ↔ ∀ x, x ∈ xs → p x = true
+  | [] => ⟨fun _ _ h => (nomatch h), fun _ => rfl⟩
+  | x :: xs => by
+    simp only [List.all_cons, Bool.and_eq_true, sos_list_all_iff_forall p xs, List.mem_cons]
+    constructor
+    · rintro ⟨hx, hxs⟩ y (rfl | hy)
+      · exact hx
+      · exact hxs y hy
+    · intro h
+      exact ⟨h x (Or.inl rfl), fun y hy => h y (Or.inr hy)⟩
+
 /-- Squared Euclidean norm polynomial $\|x\|^2 = \sum_{i=0}^{\text{dim}-1} x_i^2$. -/
 @[expose] def sumVarSquaresPoly : Nat → Poly
   | 0 => Poly.zero
@@ -388,8 +465,18 @@ structure SosLyapunovWitness where
   lieDecayCert : PositivstellensatzCert
   deriving @[expose] DecidableEq, Repr
 
+/-- Structural dimension and variable-index well-formedness check for `SosLyapunovSpec`. -/
+@[expose] def checkSosLyapunovDims (spec : SosLyapunovSpec) : Bool :=
+  decide (0 < spec.dim) &&
+  decide (spec.vectorField.length = spec.dim) &&
+  polyVarsBounded spec.dim spec.lyapunovV &&
+  spec.vectorField.all (polyVarsBounded spec.dim) &&
+  spec.domainIneqs.all (polyVarsBounded spec.dim)
+
 /-- Computable **SOS Lyapunov Stability Checker** (`checkSosLyapunov`):
 Verifies:
+0. **Dimension & Variable-Scope Well-Formedness**: `0 < spec.dim`, `spec.vectorField.length = spec.dim`,
+   and all polynomials in `spec` reference only variables `0 ≤ v < spec.dim`,
 1. $\varepsilon > 0$, $\gamma \ge 0$, and $V(0) = 0$,
 2. **Strict Positive Definiteness**: $V(x) - \varepsilon \|x\|^2 \ge 0$ via `checkPsatzNonneg`,
 3. **Negative-Definite Lie Derivative Decay**: $-\mathcal{L}_f V(x) - \gamma V(x) \ge 0$ via `checkPsatzNonneg`. -/
@@ -397,6 +484,7 @@ Verifies:
   let posDefGoal := Poly.sub spec.lyapunovV (Poly.scale spec.radialEps (sumVarSquaresPoly spec.dim))
   let lieV := lieDerivativePoly spec.lyapunovV spec.vectorField
   let lieDecayGoal := Poly.sub (Poly.neg lieV) (Poly.scale spec.decayGamma spec.lyapunovV)
+  checkSosLyapunovDims spec &&
   decide (0 < spec.radialEps) &&
   decide (0 ≤ spec.decayGamma) &&
   decide (spec.lyapunovV.eval originEnv = 0) &&
@@ -404,18 +492,22 @@ Verifies:
   checkPsatzNonneg lieDecayGoal spec.domainIneqs [] w.lieDecayCert
 
 /-- **Theorem (`checkSosLyapunov_sound`)**:
-Whenever `checkSosLyapunov spec w = true`, the candidate Lyapunov function $V(x)$ is a certified
-Lyapunov function on the domain $\{x \mid \forall g \in \text{spec.domainIneqs}, g(x) \ge 0\}$:
-1. $V(0) = 0$, $\varepsilon > 0$, and $\gamma \ge 0$,
+Whenever `checkSosLyapunov spec w = true`, the ODE $\dot{x} = f(x)$ has verified state dimension
+`0 < spec.dim` with `spec.vectorField.length = spec.dim` and variable scope bounded by `spec.dim`,
+and $V(x)$ is a certified Lyapunov function on $\{x \mid \forall g \in \text{spec.domainIneqs}, g(x) \ge 0\}$:
+1. $0 < \text{spec.dim}$, $\text{spec.vectorField.length} = \text{spec.dim}$, $V(0) = 0$, $\varepsilon > 0$, $\gamma \ge 0$,
 2. For every state `env` in the domain, $V(\text{env}) \ge \varepsilon \|x\|^2 \ge 0$, and
-3. For every state `env` in the domain, the Lie derivative satisfies
-   $\mathcal{L}_f V(\text{env}) \le -\gamma V(\text{env}) \le 0$! -/
+3. For every state `env` in the domain, $\mathcal{L}_f V(\text{env}) \le -\gamma V(\text{env}) \le 0$! -/
 theorem checkSosLyapunov_sound
     (spec : SosLyapunovSpec)
     (w : SosLyapunovWitness)
     (env : Nat → CanonicalRat)
     (hCheck : checkSosLyapunov spec w = true)
     (hDom : ∀ g, g ∈ spec.domainIneqs → 0 ≤ g.eval env) :
+    0 < spec.dim ∧
+    spec.vectorField.length = spec.dim ∧
+    polyVarsBounded spec.dim spec.lyapunovV = true ∧
+    (∀ f, f ∈ spec.vectorField → polyVarsBounded spec.dim f = true) ∧
     0 < spec.radialEps ∧
     0 ≤ spec.decayGamma ∧
     spec.lyapunovV.eval originEnv = 0 ∧
@@ -423,12 +515,20 @@ theorem checkSosLyapunov_sound
     0 ≤ spec.lyapunovV.eval env ∧
     (lieDerivativePoly spec.lyapunovV spec.vectorField).eval env ≤ -spec.decayGamma * spec.lyapunovV.eval env ∧
     (lieDerivativePoly spec.lyapunovV spec.vectorField).eval env ≤ 0 := by
-  unfold checkSosLyapunov at hCheck
+  unfold checkSosLyapunov checkSosLyapunovDims at hCheck
   dsimp only at hCheck
-  rcases (Bool.and_eq_true _ _).mp hCheck with ⟨h1234, hLieCert⟩
-  rcases (Bool.and_eq_true _ _).mp h1234 with ⟨h123, hPosCert⟩
-  rcases (Bool.and_eq_true _ _).mp h123 with ⟨h12, hOriginB⟩
-  rcases (Bool.and_eq_true _ _).mp h12 with ⟨hEpsB, hGammaB⟩
+  rcases (Bool.and_eq_true _ _).mp hCheck with ⟨h12345, hLieCert⟩
+  rcases (Bool.and_eq_true _ _).mp h12345 with ⟨h1234, hPosCert⟩
+  rcases (Bool.and_eq_true _ _).mp h1234 with ⟨h123, hOriginB⟩
+  rcases (Bool.and_eq_true _ _).mp h123 with ⟨h12, hGammaB⟩
+  rcases (Bool.and_eq_true _ _).mp h12 with ⟨hDims, hEpsB⟩
+  rcases (Bool.and_eq_true _ _).mp hDims with ⟨hD1234, _hDomVars⟩
+  rcases (Bool.and_eq_true _ _).mp hD1234 with ⟨hD123, hVfVars⟩
+  rcases (Bool.and_eq_true _ _).mp hD123 with ⟨hD12, hVVars⟩
+  rcases (Bool.and_eq_true _ _).mp hD12 with ⟨hDimPosB, hVfLenB⟩
+  have hDimPos : 0 < spec.dim := of_decide_eq_true hDimPosB
+  have hVfLen : spec.vectorField.length = spec.dim := of_decide_eq_true hVfLenB
+  rw [sos_list_all_iff_forall] at hVfVars
   have hEps : 0 < spec.radialEps := of_decide_eq_true hEpsB
   have hGamma : 0 ≤ spec.decayGamma := of_decide_eq_true hGammaB
   have hOrigin : spec.lyapunovV.eval originEnv = 0 := of_decide_eq_true hOriginB
@@ -447,7 +547,7 @@ theorem checkSosLyapunov_sound
   have hVNonneg : 0 ≤ spec.lyapunovV.eval env := by grind
   have hGammaVNonneg0 := Rat.mul_le_mul_of_nonneg_left hVNonneg hGamma
   have hGammaVNonneg : 0 ≤ spec.decayGamma * spec.lyapunovV.eval env := by grind
-  refine ⟨hEps, hGamma, hOrigin, by grind, hVNonneg, by grind, by grind⟩
+  refine ⟨hDimPos, hVfLen, hVVars, hVfVars, hEps, hGamma, hOrigin, by grind, hVNonneg, by grind, by grind⟩
 
 /-! ## 4. Sum-of-Squares Control Barrier Functions (`checkSosCbf`, `checkSosCbf_sound`) -/
 
@@ -474,8 +574,19 @@ structure SosCbfWitness where
   nagumoInvarianceCert : PositivstellensatzCert
   deriving @[expose] DecidableEq, Repr
 
+/-- Structural dimension and variable-index well-formedness check for `SosCbfSpec`. -/
+@[expose] def checkSosCbfDims (spec : SosCbfSpec) : Bool :=
+  let dim := spec.vectorField.length
+  decide (0 < dim) &&
+  polyVarsBounded dim spec.barrierB &&
+  polyVarsBounded dim spec.unsafePoly &&
+  spec.vectorField.all (polyVarsBounded dim) &&
+  spec.domainIneqs.all (polyVarsBounded dim)
+
 /-- Computable **SOS Control Barrier Function Checker** (`checkSosCbf`):
 Verifies:
+0. **Dimension & Variable-Scope Well-Formedness**: `0 < spec.vectorField.length` and all polynomials
+   in `spec` reference only variables `< spec.vectorField.length`,
 1. **Stengle Unsafe Set Refutation**: `positivstellensatzCheck 0 qUnsafe w.unsafeRefuteCert = .ok`,
    certifying that $B(x) \ge 0$ and $u_{\text{unsafe}}(x) \ge 0$ are mutually infeasible on the domain, and
 2. **Nagumo / Ames Barrier Forward Invariance**: $\mathcal{L}_f B(x) + \alpha B(x) \ge 0$ on
@@ -487,6 +598,7 @@ Verifies:
     , eqs       := [] }
   let lieB := lieDerivativePoly spec.barrierB spec.vectorField
   let nagumoGoal := Poly.add lieB (Poly.scale spec.classKAlpha spec.barrierB)
+  checkSosCbfDims spec &&
   decide (0 ≤ spec.classKAlpha) &&
   decide (positivstellensatzCheck 0 qUnsafe w.unsafeRefuteCert = .ok) &&
   checkPsatzNonneg nagumoGoal (spec.barrierB :: spec.domainIneqs) [] w.nagumoInvarianceCert
@@ -510,8 +622,9 @@ theorem checkSosCbf_sound
         spec.classKAlpha * spec.barrierB.eval env := by
   unfold checkSosCbf at hCheck
   dsimp only at hCheck
-  rcases (Bool.and_eq_true _ _).mp hCheck with ⟨h12, hNagumo⟩
-  rcases (Bool.and_eq_true _ _).mp h12 with ⟨_hAlphaB, hRefuteB⟩
+  rcases (Bool.and_eq_true _ _).mp hCheck with ⟨h123, hNagumo⟩
+  rcases (Bool.and_eq_true _ _).mp h123 with ⟨h12, hRefuteB⟩
+  rcases (Bool.and_eq_true _ _).mp h12 with ⟨_hDims, _hAlphaB⟩
   have hRefute : positivstellensatzCheck 0
       { strictPos := [], nonneg := spec.barrierB :: spec.unsafePoly :: spec.domainIneqs, eqs := [] }
       w.unsafeRefuteCert = .ok := of_decide_eq_true hRefuteB
@@ -604,18 +717,27 @@ decreasing_by all_goals simp_wf
   algConstraints.map (fun h => algVars.map (fun v => polyPartialDeriv v h))
 
 /-- Compute the symbolic algebraic Jacobian determinant $\det\left(\frac{\partial h_i}{\partial x_{v_j}}\right)$
-by Laplace expansion of `symbolicAlgJacobian` (`Poly.zero` when the system is not square). The
-$1 \times 1$ and $2 \times 2$ cases agree with the direct formulas; for $m \ge 3$ this is the full
-determinant, not the product of the diagonal partials (which is what this function computed before
-2026-11-04 and which is wrong for any non-triangular Jacobian). -/
+by Laplace expansion of `symbolicAlgJacobian` (`Poly.zero` when the system is not square). -/
 @[expose] def computeSymbolicAlgJacobianDet (algConstraints : List Poly) (algVars : List Nat) : Poly :=
   if algConstraints.length != algVars.length then
     Poly.zero
   else
     polyMatrixDet (symbolicAlgJacobian algConstraints algVars)
 
+/-- Structural dimension and variable-index well-formedness check for `DaeManifoldSpec`. -/
+@[expose] def checkDaeManifoldDims (spec : DaeManifoldSpec) : Bool :=
+  let dim := spec.vectorField.length
+  decide (0 < dim) &&
+  decide (spec.algConstraints.length = spec.algVars.length) &&
+  natListNodupB spec.algVars &&
+  spec.algVars.all (fun v => decide (v < dim)) &&
+  polyVarsBounded dim spec.algJacobianDet &&
+  spec.algConstraints.all (polyVarsBounded dim) &&
+  spec.vectorField.all (polyVarsBounded dim) &&
+  spec.domainIneqs.all (polyVarsBounded dim)
+
 /-- Verify Index-1 DAE regularity (`checkDaeIndex1Regularity`):
-1. `spec.algConstraints.length == spec.algVars.length`,
+1. `checkDaeManifoldDims spec`,
 2. `spec.algJacobianDet` equals the symbolic Jacobian determinant
    `computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars`,
 3. `0 < spec.regDelta`, and
@@ -623,23 +745,10 @@ determinant, not the product of the diagonal partials (which is what this functi
 @[expose] def checkDaeIndex1Regularity (spec : DaeManifoldSpec) (regCert : PositivstellensatzCert) : Bool :=
   let symDet := computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars
   let regGoal := Poly.sub (Poly.sqr spec.algJacobianDet) (polyConst spec.regDelta)
-  decide (spec.algConstraints.length = spec.algVars.length) &&
+  checkDaeManifoldDims spec &&
   (Poly.sub spec.algJacobianDet symDet).isZero &&
   decide (0 < spec.regDelta) &&
   checkPsatzNonneg regGoal spec.domainIneqs spec.algConstraints regCert
-
-/-- Helper lemma: `List.all` is `true` iff the predicate holds for all members of the list. -/
-theorem sos_list_all_iff_forall (p : Poly → Bool) :
-    ∀ (xs : List Poly), xs.all p = true ↔ ∀ x, x ∈ xs → p x = true
-  | [] => ⟨fun _ _ h => (nomatch h), fun _ => rfl⟩
-  | x :: xs => by
-    simp only [List.all_cons, Bool.and_eq_true, sos_list_all_iff_forall p xs, List.mem_cons]
-    constructor
-    · rintro ⟨hx, hxs⟩ y (rfl | hy)
-      · exact hx
-      · exact hxs y hy
-    · intro h
-      exact ⟨h x (Or.inl rfl), fun y hy => h y (Or.inr hy)⟩
 
 /-- Helper lemma: `List.any` is `true` iff the predicate holds for some member of the list. -/
 theorem sos_list_any_iff_exists (p : IdealMembershipCert → Bool) :
@@ -667,10 +776,7 @@ the primary `w.tangencyCert` or any per-constraint witness in `w.tangencyCerts`.
 
 /-- Computable **Index-1 DAE Manifold Invariance & Regularity Checker** (`checkDaeManifold`):
 Verifies:
-1. **Symbolic Index-1 Jacobian Regularity** (`checkDaeIndex1Regularity`):
-   `spec.algJacobianDet` matches `computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars`,
-   $\delta_{\text{reg}} > 0$, and $(\det J_{\text{alg}}(x))^2 - \delta_{\text{reg}} \ge 0$ on $\mathcal{M}$
-   via `checkPsatzNonneg`, and
+1. **Dimension, Variable-Scope & Symbolic Index-1 Jacobian Regularity** (`checkDaeIndex1Regularity`), and
 2. **Algebraic Manifold Tangency**: for every constraint $h_r \in \text{algConstraints}$, its Lie
    derivative $\mathcal{L}_f h_r$ is certified in $\langle h_1, \dots, h_m \rangle$ via `checkConstraintTangency`. -/
 @[expose] def checkDaeManifold (spec : DaeManifoldSpec) (w : DaeManifoldWitness) : Bool :=
@@ -775,27 +881,45 @@ structure SosLyapunovCert where
 
 /-- Refusal clause for `sosLyapunovJudge`. -/
 inductive SosLyapunovClause where
+  | malformedDimensionOrParam
   | lyapunovFailed
   | cbfFailed
   | daeManifoldFailed
   deriving @[expose] DecidableEq, Repr
 
+/-- Structural well-formedness check across all three components of `SosLyapunovProblem`. -/
+@[expose] def checkSosProblemWellFormed (prob : SosLyapunovProblem) : Bool :=
+  checkSosLyapunovDims prob.lyapunov &&
+  decide (0 < prob.lyapunov.radialEps) &&
+  decide (0 ≤ prob.lyapunov.decayGamma) &&
+  decide (prob.lyapunov.lyapunovV.eval originEnv = 0) &&
+  checkSosCbfDims prob.cbf &&
+  decide (0 ≤ prob.cbf.classKAlpha) &&
+  checkDaeManifoldDims prob.dae &&
+  decide (0 < prob.dae.regDelta)
+
 /-- Independent semantic meaning of `SosLyapunovProblem`. -/
 def SosLyapunovProblem.SemanticMeaning (prob : SosLyapunovProblem) : Prop :=
-  (0 < prob.lyapunov.radialEps ∧
+  (checkSosLyapunovDims prob.lyapunov = true ∧
+   0 < prob.lyapunov.dim ∧
+   prob.lyapunov.vectorField.length = prob.lyapunov.dim ∧
+   0 < prob.lyapunov.radialEps ∧
    0 ≤ prob.lyapunov.decayGamma ∧
    prob.lyapunov.lyapunovV.eval originEnv = 0 ∧
    ∀ env : Nat → CanonicalRat,
      (∀ g, g ∈ prob.lyapunov.domainIneqs → 0 ≤ g.eval env) →
      0 ≤ prob.lyapunov.lyapunovV.eval env ∧
      (lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField).eval env ≤ 0) ∧
-  (∀ env : Nat → CanonicalRat,
+  (checkSosCbfDims prob.cbf = true ∧
+   0 ≤ prob.cbf.classKAlpha ∧
+   ∀ env : Nat → CanonicalRat,
      (∀ g, g ∈ prob.cbf.domainIneqs → 0 ≤ g.eval env) →
      0 ≤ prob.cbf.barrierB.eval env →
      prob.cbf.unsafePoly.eval env < 0 ∧
      0 ≤ (lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField).eval env +
          prob.cbf.classKAlpha * prob.cbf.barrierB.eval env) ∧
-  (0 < prob.dae.regDelta ∧
+  (checkDaeManifoldDims prob.dae = true ∧
+   0 < prob.dae.regDelta ∧
    ∀ env : Nat → CanonicalRat,
      (∀ g, g ∈ prob.dae.domainIneqs → 0 ≤ g.eval env) →
      (∀ h, h ∈ prob.dae.algConstraints → h.eval env = 0) →
@@ -808,7 +932,9 @@ def SosLyapunovProblem.SemanticMeaning (prob : SosLyapunovProblem) : Prop :=
     (_grade : Nat)
     (prob : SosLyapunovProblem)
     (cert : SosLyapunovCert) : Judge.Verdict SosLyapunovClause :=
-  if !checkSosLyapunov prob.lyapunov cert.lyapunovWitness then
+  if !checkSosProblemWellFormed prob then
+    .refused .malformedDimensionOrParam []
+  else if !checkSosLyapunov prob.lyapunov cert.lyapunovWitness then
     .refused .lyapunovFailed []
   else if !checkSosCbf prob.cbf cert.cbfWitness then
     .refused .cbfFailed []
@@ -826,40 +952,65 @@ theorem checkSosLyapunovProblem_sound
     (hOk : checkSosLyapunovProblem fuel prob cert = .ok) :
     prob.SemanticMeaning := by
   unfold checkSosLyapunovProblem at hOk
+  by_cases hWf : checkSosProblemWellFormed prob = true
+  · simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+    by_cases hL : checkSosLyapunov prob.lyapunov cert.lyapunovWitness = true
+    · simp only [hL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+      by_cases hC : checkSosCbf prob.cbf cert.cbfWitness = true
+      · simp only [hC, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+        by_cases hD : checkDaeManifold prob.dae cert.daeWitness = true
+        · unfold checkSosProblemWellFormed at hWf
+          rcases (Bool.and_eq_true _ _).mp hWf with ⟨hWf1_7, hDeltaB⟩
+          rcases (Bool.and_eq_true _ _).mp hWf1_7 with ⟨hWf1_6, hDaeDims⟩
+          rcases (Bool.and_eq_true _ _).mp hWf1_6 with ⟨hWf1_5, hAlphaB⟩
+          rcases (Bool.and_eq_true _ _).mp hWf1_5 with ⟨hWf1_4, hCbfDims⟩
+          rcases (Bool.and_eq_true _ _).mp hWf1_4 with ⟨hWf1_3, hOriginB⟩
+          rcases (Bool.and_eq_true _ _).mp hWf1_3 with ⟨hWf1_2, hGammaB⟩
+          rcases (Bool.and_eq_true _ _).mp hWf1_2 with ⟨hLyapDims, hEpsB⟩
+          have hLyapDimsCopy := hLyapDims
+          unfold checkSosLyapunovDims at hLyapDimsCopy
+          rcases (Bool.and_eq_true _ _).mp hLyapDimsCopy with ⟨hLD1_4, _⟩
+          rcases (Bool.and_eq_true _ _).mp hLD1_4 with ⟨hLD1_3, _⟩
+          rcases (Bool.and_eq_true _ _).mp hLD1_3 with ⟨hLD1_2, _⟩
+          rcases (Bool.and_eq_true _ _).mp hLD1_2 with ⟨hDimPosB, hVfLenB⟩
+          refine ⟨?_, ?_, ?_⟩
+          · refine ⟨hLyapDims, of_decide_eq_true hDimPosB, of_decide_eq_true hVfLenB,
+                    of_decide_eq_true hEpsB, of_decide_eq_true hGammaB, of_decide_eq_true hOriginB, ?_⟩
+            intro env hDom
+            have hEnv := checkSosLyapunov_sound prob.lyapunov cert.lyapunovWitness env hL hDom
+            exact ⟨hEnv.2.2.2.2.2.2.2.2.1, hEnv.2.2.2.2.2.2.2.2.2.2⟩
+          · refine ⟨hCbfDims, of_decide_eq_true hAlphaB, ?_⟩
+            intro env hDom hSafe
+            exact checkSosCbf_sound prob.cbf cert.cbfWitness env hC hDom hSafe
+          · refine ⟨hDaeDims, of_decide_eq_true hDeltaB, ?_⟩
+            intro env hDom hMan
+            have hEnv := checkDaeManifold_sound prob.dae cert.daeWitness env hD hDom hMan
+            exact ⟨hEnv.2.1, hEnv.2.2.2⟩
+        · simp [hD] at hOk
+      · simp [hC] at hOk
+    · simp [hL] at hOk
+  · simp [hWf] at hOk
+
+theorem checkSosLyapunovProblem_refuted
+    {r : Nat} {prob : SosLyapunovProblem} {cert : SosLyapunovCert} {p : List Nat}
+    (hRef : checkSosLyapunovProblem r prob cert = .refused .malformedDimensionOrParam p) :
+    ¬ prob.SemanticMeaning := by
+  intro hMean
+  rcases hMean with ⟨⟨hLyapDims, _hDimPos, _hVfLen, hEps, hGamma, hOrigin, _⟩,
+                     ⟨hCbfDims, hAlpha, _⟩,
+                     ⟨hDaeDims, hDelta, _⟩⟩
+  have hWf : checkSosProblemWellFormed prob = true := by
+    unfold checkSosProblemWellFormed
+    simp [hLyapDims, hEps, hGamma, hOrigin, hCbfDims, hAlpha, hDaeDims, hDelta]
+  unfold checkSosLyapunovProblem at hRef
+  simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
   by_cases hL : checkSosLyapunov prob.lyapunov cert.lyapunovWitness = true
-  · simp only [hL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+  · simp only [hL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
     by_cases hC : checkSosCbf prob.cbf cert.cbfWitness = true
-    · simp only [hC, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-      by_cases hD : checkDaeManifold prob.dae cert.daeWitness = true
-      · refine ⟨?_, ?_, ?_⟩
-        · have hBase : 0 < prob.lyapunov.radialEps ∧ 0 ≤ prob.lyapunov.decayGamma ∧ prob.lyapunov.lyapunovV.eval originEnv = 0 := by
-            unfold checkSosLyapunov at hL
-            dsimp only at hL
-            rcases (Bool.and_eq_true _ _).mp hL with ⟨h1234, _⟩
-            rcases (Bool.and_eq_true _ _).mp h1234 with ⟨h123, _⟩
-            rcases (Bool.and_eq_true _ _).mp h123 with ⟨h12, hOriginB⟩
-            rcases (Bool.and_eq_true _ _).mp h12 with ⟨hEpsB, hGammaB⟩
-            exact ⟨of_decide_eq_true hEpsB, of_decide_eq_true hGammaB, of_decide_eq_true hOriginB⟩
-          refine ⟨hBase.1, hBase.2.1, hBase.2.2, ?_⟩
-          intro env hDom
-          have hEnv := checkSosLyapunov_sound prob.lyapunov cert.lyapunovWitness env hL hDom
-          exact ⟨hEnv.2.2.2.2.1, hEnv.2.2.2.2.2.2⟩
-        · intro env hDom hSafe
-          exact checkSosCbf_sound prob.cbf cert.cbfWitness env hC hDom hSafe
-        · have hDelta : 0 < prob.dae.regDelta := by
-            unfold checkDaeManifold checkDaeIndex1Regularity at hD
-            dsimp only at hD
-            rcases (Bool.and_eq_true _ _).mp hD with ⟨_, hRegAll⟩
-            rcases (Bool.and_eq_true _ _).mp hRegAll with ⟨hReg123, _⟩
-            rcases (Bool.and_eq_true _ _).mp hReg123 with ⟨_, hDeltaB⟩
-            exact of_decide_eq_true hDeltaB
-          refine ⟨hDelta, ?_⟩
-          intro env hDom hMan
-          have hEnv := checkDaeManifold_sound prob.dae cert.daeWitness env hD hDom hMan
-          exact ⟨hEnv.2.1, hEnv.2.2.2⟩
-      · simp [hD] at hOk
-    · simp [hC] at hOk
-  · simp [hL] at hOk
+    · simp only [hC, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
+      by_cases hD : checkDaeManifold prob.dae cert.daeWitness = true <;> simp [hD] at hRef
+    · simp [hC] at hRef
+  · simp [hL] at hRef
 
 /-- Universal Judge instance for `"sos-lyapunov-cbf@1"`. -/
 instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
@@ -867,8 +1018,16 @@ instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
   Meaning prob _cert := prob.SemanticMeaning
   check := checkSosLyapunovProblem
   sound := by intro r prob cert h; exact checkSosLyapunovProblem_sound r prob cert h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
+  refutes
+    | .malformedDimensionOrParam => true
+    | _ => false
+  refuted := by
+    intro r prob cert k p hCheck hRefutes _c'
+    cases k with
+    | malformedDimensionOrParam => exact checkSosLyapunovProblem_refuted hCheck
+    | lyapunovFailed => cases hRefutes
+    | cbfFailed => cases hRefutes
+    | daeManifoldFailed => cases hRefutes
   Fragment prob := ∃ cert r, checkSosLyapunovProblem r prob cert = .ok
   complete := by rintro prob ⟨cert, r, h⟩ _; exact ⟨cert, r, h⟩
   mono := by intro r r' o c le hne; rfl
@@ -1005,9 +1164,9 @@ inductive SosJson where
 namespace SosJson
 
 @[expose] def ofInt (n : Int) : SosJson := .num n 0
-@[expose] def ofNat (n : Nat) : SosJson := .num (Int.ofNat n) 0
+def ofNat (n : Nat) : SosJson := .num (Int.ofNat n) 0
 @[expose] def ofNatList (ns : List Nat) : SosJson := .arr (ns.map ofNat)
-@[expose] def mkObj (kvs : List (String × SosJson)) : SosJson :=
+def mkObj (kvs : List (String × SosJson)) : SosJson :=
   .obj (kvs.map fun (k, v) => (k.toList, v))
 
 @[expose] def lookupField : List (List Char × SosJson) → List Char → Option SosJson
@@ -1022,19 +1181,23 @@ namespace SosJson
     | none   => .error s!"property not found: {k}"
   | _ => .error s!"object expected for key '{k}'"
 
-@[expose] def getStr? : SosJson → Except String String
+@[expose] def getStr? (j : SosJson) : Except String String :=
+  match j with
   | .str cs => .ok (String.ofList cs)
   | _       => .error "string expected"
 
-@[expose] def getInt? : SosJson → Except String Int
+@[expose] def getInt? (j : SosJson) : Except String Int :=
+  match j with
   | .num m 0 => .ok m
   | _        => .error "integer expected"
 
-@[expose] def getNat? : SosJson → Except String Nat
+@[expose] def getNat? (j : SosJson) : Except String Nat :=
+  match j with
   | .num (.ofNat n) 0 => .ok n
   | _                 => .error "natural number expected"
 
-@[expose] def getArr? : SosJson → Except String (List SosJson)
+@[expose] def getArr? (j : SosJson) : Except String (List SosJson) :=
+  match j with
   | .arr xs => .ok xs
   | _       => .error "array expected"
 
@@ -1053,7 +1216,7 @@ namespace SosJson
 
 end SosJson
 
-@[expose] def sosJsonNatWrite : Nat → Nat → List Char → List Char
+@[expose] def sosJsonNatWriteCore : Nat → Nat → List Char → List Char
   | 0, _, acc => acc
   | fuel + 1, n, acc =>
     let d : Char :=
@@ -1062,11 +1225,17 @@ end SosJson
       | 5 => '5' | 6 => '6' | 7 => '7' | 8 => '8' | _ => '9'
     let q := n / 10
     if q == 0 then d :: acc
-    else sosJsonNatWrite fuel q (d :: acc)
+    else sosJsonNatWriteCore fuel q (d :: acc)
+
+/-- Unbounded decimal `Nat` serializer: guarantees at least `n.log2 + 2` digits of fuel
+(`digits_10(n) ≤ bits_2(n) < n.log2 + 2`), eliminating the `fuel = 24` leading-digit truncation
+bug (`10^24 -> "000...0" -> 0`). -/
+@[expose] def sosJsonNatWrite (fuel n : Nat) (acc : List Char) : List Char :=
+  sosJsonNatWriteCore (Nat.max fuel (n.log2 + 2)) n acc
 
 @[expose] def sosJsonIntWrite : Int → List Char → List Char
-  | .ofNat n, acc   => sosJsonNatWrite 24 n acc
-  | .negSucc n, acc => '-' :: sosJsonNatWrite 24 (n + 1) acc
+  | .ofNat n, acc   => sosJsonNatWrite (n.log2 + 2) n acc
+  | .negSucc n, acc => '-' :: sosJsonNatWrite ((n + 1).log2 + 2) (n + 1) acc
 
 @[expose] def sosJsonEscapeWrite : List Char → List Char → List Char
   | [], acc => acc
@@ -1093,22 +1262,39 @@ end SosJson
   | (k, v) :: rest, acc =>
     sosJsonQuoteCharsWrite k (':' :: writeVal v (',' :: sosJsonWriteObjFields writeVal rest acc))
 
-/-- Linear-time difference-list serializer for `SosJson` (zero `partial def`, zero intermediate `String` allocations). -/
-@[expose] def sosJsonWriteAux : Nat → SosJson → List Char → List Char
-  | 0, _, acc => 'n' :: 'u' :: 'l' :: 'l' :: acc
-  | _ + 1, .null, acc => 'n' :: 'u' :: 'l' :: 'l' :: acc
-  | _ + 1, .bool true, acc => 't' :: 'r' :: 'u' :: 'e' :: acc
-  | _ + 1, .bool false, acc => 'f' :: 'a' :: 'l' :: 's' :: 'e' :: acc
-  | _ + 1, .num m 0, acc => sosJsonIntWrite m acc
-  | _ + 1, .num m e, acc => ((Lean.JsonNumber.mk m e).toString).toList ++ acc
-  | _ + 1, .str cs, acc => sosJsonQuoteCharsWrite cs acc
-  | fuel + 1, .arr elems, acc =>
-    '[' :: sosJsonWriteArrElems (sosJsonWriteAux fuel) elems (']' :: acc)
-  | fuel + 1, .obj fields, acc =>
-    '{' :: sosJsonWriteObjFields (sosJsonWriteAux fuel) fields ('}' :: acc)
+mutual
+@[expose] def sosJsonWriteVal : SosJson → List Char → List Char
+  | .null, acc => 'n' :: 'u' :: 'l' :: 'l' :: acc
+  | .bool true, acc => 't' :: 'r' :: 'u' :: 'e' :: acc
+  | .bool false, acc => 'f' :: 'a' :: 'l' :: 's' :: 'e' :: acc
+  | .num m 0, acc => sosJsonIntWrite m acc
+  | .num m e, acc =>
+    sosJsonIntWrite m ('e' :: '-' :: sosJsonNatWrite (e.log2 + 2) e acc)
+  | .str cs, acc => sosJsonQuoteCharsWrite cs acc
+  | .arr elems, acc => '[' :: sosJsonWriteArr elems (']' :: acc)
+  | .obj fields, acc => '{' :: sosJsonWriteObj fields ('}' :: acc)
+termination_by structural j => j
+
+@[expose] def sosJsonWriteArr : List SosJson → List Char → List Char
+  | [], acc => acc
+  | [x], acc => sosJsonWriteVal x acc
+  | x :: xs, acc => sosJsonWriteVal x (',' :: sosJsonWriteArr xs acc)
+termination_by structural xs => xs
+
+@[expose] def sosJsonWriteObj : List (List Char × SosJson) → List Char → List Char
+  | [], acc => acc
+  | [(k, v)], acc => sosJsonQuoteCharsWrite k (':' :: sosJsonWriteVal v acc)
+  | (k, v) :: rest, acc =>
+    sosJsonQuoteCharsWrite k (':' :: sosJsonWriteVal v (',' :: sosJsonWriteObj rest acc))
+termination_by structural fs => fs
+end
+
+/-- Structural difference-list serializer for `SosJson` (never clamps deep JSON to `"null"`). -/
+@[expose] def sosJsonWriteAux (_fuel : Nat) (j : SosJson) (acc : List Char) : List Char :=
+  sosJsonWriteVal j acc
 
 @[expose] def sosJsonCompress (j : SosJson) : String :=
-  String.ofList (sosJsonWriteAux 24 j [])
+  String.ofList (sosJsonWriteVal j [])
 
 @[expose] def sosJsonSkipWs : List Char → List Char
   | ' ' :: cs => sosJsonSkipWs cs
@@ -1148,6 +1334,25 @@ end SosJson
     | some d => sosJsonParseFracDigits rest (acc * 10 + d) (exp + 1)
     | none   => (acc, exp, c :: rest)
 
+@[expose] def sosJsonParseSciExp (m : Int) (fracExp : Nat) (cs : List Char) : Option ((Int × Nat) × List Char) :=
+  match cs with
+  | 'e' :: expCs | 'E' :: expCs =>
+    let (expNeg, expDigitsCs) :=
+      match expCs with
+      | '-' :: r => (true, r)
+      | '+' :: r => (false, r)
+      | _ => (false, expCs)
+    let (sciExp, hasExp, rest) := sosJsonParseDigits expDigitsCs 0 false
+    if !hasExp || decide (4096 < sciExp) then none
+    else if expNeg then
+      some ((m, fracExp + sciExp), rest)
+    else if decide (fracExp ≤ sciExp) then
+      let scale : Int := Int.ofNat (10 ^ (sciExp - fracExp))
+      some ((m * scale, 0), rest)
+    else
+      some ((m, fracExp - sciExp), rest)
+  | _ => some ((m, fracExp), cs)
+
 @[expose] def sosJsonParseNum (cs : List Char) : Option ((Int × Nat) × List Char) :=
   let (neg, cs1) :=
     match cs with
@@ -1162,10 +1367,10 @@ end SosJson
       if fracExp == 0 then none
       else
         let m : Int := if neg then -(Int.ofNat fracAcc) else Int.ofNat fracAcc
-        some ((m, fracExp), cs3)
+        sosJsonParseSciExp m fracExp cs3
     | _ =>
       let m : Int := if neg then -(Int.ofNat intPart) else Int.ofNat intPart
-      some ((m, 0), cs2)
+      sosJsonParseSciExp m 0 cs2
 
 @[expose] def sosJsonParseArrAux (parseElem : List Char → Option (SosJson × List Char)) :
     Nat → List Char → List SosJson → Option (List SosJson × List Char)
@@ -1194,7 +1399,7 @@ end SosJson
       | _ => none
     | _ => none
 
-/-- Linear-time kernel-reducible recursive-descent JSON AST parser (zero `partial def`, zero `List.length` scans). -/
+/-- Kernel-reducible recursive-descent JSON AST parser with input-length-proportional fuel. -/
 @[expose] def sosJsonParseAux : Nat → List Char → Option (SosJson × List Char)
   | 0, _ => none
   | fuel + 1, cs =>
@@ -1210,20 +1415,21 @@ end SosJson
       match sosJsonSkipWs arrCs with
       | ']' :: rest => some (.arr [], rest)
       | arrCs' => do
-        let (items, rest) ← sosJsonParseArrAux (sosJsonParseAux fuel) 256 arrCs' []
+        let (items, rest) ← sosJsonParseArrAux (sosJsonParseAux fuel) (arrCs'.length + 1) arrCs' []
         some (.arr items, rest)
     | '{' :: objCs =>
       match sosJsonSkipWs objCs with
       | '}' :: rest => some (.obj [], rest)
       | objCs' => do
-        let (fields, rest) ← sosJsonParseObjAux (sosJsonParseAux fuel) 256 objCs' []
+        let (fields, rest) ← sosJsonParseObjAux (sosJsonParseAux fuel) (objCs'.length + 1) objCs' []
         some (.obj fields, rest)
     | numCs => do
       let ((m, e), rest) ← sosJsonParseNum numCs
       some (.num m e, rest)
 
 @[expose] def sosJsonParse (s : String) : Except String SosJson :=
-  match sosJsonParseAux 24 s.toList with
+  let cs := s.toList
+  match sosJsonParseAux (cs.length + 1) cs with
   | some (j, rest) =>
     if (sosJsonSkipWs rest).isEmpty then .ok j
     else .error "trailing characters in JSON"
@@ -1234,16 +1440,22 @@ end SosJson
   if q.den == 1 then .ofInt q.num
   else SosJson.mkObj [("num", .ofInt q.num), ("den", .ofNat q.den)]
 
-/-- Decode a `CanonicalRat` from a JSON integer or `{"num": n, "den": d}` object. -/
+/-- Decode a `CanonicalRat` from an arbitrary-precision JSON integer, decimal/scientific number
+(`.num m e` = $m / 10^e$), or `{"num": n, "den": d}` object. -/
 @[expose] def decodeRatJson (j : SosJson) : Except String CanonicalRat :=
-  match j.getInt? with
-  | .ok n => .ok (CanonicalRat.mk n 1)
-  | .error _ =>
+  match j with
+  | .num m 0 => .ok (CanonicalRat.mk m 1)
+  | .num m e =>
+    if decide (e ≤ 4096) then
+      .ok (CanonicalRat.mk m (10 ^ e))
+    else
+      .error "invalid rational JSON: decimal exponent exceeds 4096"
+  | _ =>
     match j.getObjInt? "num", j.getObjNat? "den" with
     | .ok n, .ok d =>
       if d == 0 then .error "invalid rational JSON: zero denominator"
       else .ok (CanonicalRat.mk n d)
-    | _, _ => .error "invalid rational JSON: expected integer or {num, den}"
+    | _, _ => .error "invalid rational JSON: expected number or {num, den}"
 
 /-- Structural polynomial exponentiation $p^k$. -/
 @[expose] def sosPolyPow (p : Poly) : Nat → Poly
@@ -1308,13 +1520,33 @@ end SosJson
     pure (Poly.add acc termPoly)
   ) Poly.zero
 
-/-- Structural fuel-bounded JSON AST decoder for `Poly`. -/
+mutual
+@[expose] def sosJsonAstSize : SosJson → Nat
+  | .arr xs => 1 + sosJsonAstArrSize xs
+  | .obj fs => 1 + sosJsonAstObjSize fs
+  | _ => 1
+termination_by structural j => j
+
+@[expose] def sosJsonAstArrSize : List SosJson → Nat
+  | [] => 0
+  | x :: xs => sosJsonAstSize x + sosJsonAstArrSize xs
+termination_by structural xs => xs
+
+@[expose] def sosJsonAstObjSize : List (List Char × SosJson) → Nat
+  | [] => 0
+  | (_, v) :: fs => sosJsonAstSize v + sosJsonAstObjSize fs
+termination_by structural fs => fs
+end
+
+/-- Structural JSON AST decoder for `Poly`. -/
 @[expose] def decodePolyJsonAux : Nat → SosJson → Except String Poly
   | 0, _ => .error "invalid polynomial AST JSON: nesting depth exceeded"
   | fuel + 1, j =>
-    match j.getInt? with
-    | .ok n => .ok (polyConst (CanonicalRat.mk n 1))
-    | .error _ =>
+    match j with
+    | .num _ _ => do
+      let q ← decodeRatJson j
+      pure (polyConst q)
+    | _ =>
       match j.getArr? with
       | .ok arr => decodePolyTermsJson arr
       | .error _ => do
@@ -1367,10 +1599,10 @@ end SosJson
           .error s!"invalid polynomial AST JSON: unknown op '{op}'"
 
 /-- Decode an arbitrary multivariate polynomial `Poly` from `SosJson`:
-supports integer constants, sparse multivariate monomial arrays, and recursive polynomial AST
+supports integer/decimal constants, sparse multivariate monomial arrays, and recursive polynomial AST
 operators (`const`, `var`, `add`, `sub`, `mul`, `neg`, `sqr`, `pow`, `scale`). -/
 @[expose] def decodePolyJson (j : SosJson) : Except String Poly :=
-  decodePolyJsonAux 64 j
+  decodePolyJsonAux (sosJsonAstSize j + 1) j
 
 @[expose] def decodePolyListJson (j : SosJson) : Except String (List Poly) := do
   let arr ← j.getArr?
@@ -1697,16 +1929,23 @@ theorem sosLyapunovFormat_refuses_empty_json :
   rw [decodeSosLyapunovProblem_refuses_empty_json]
   rfl
 
-/-- **Theorem (`sos_lyapunov_cbf_dae_showcase_sound`)**:
-Verifies that the 2D cubic nonlinear Lyapunov certificate, 2D disk Control Barrier Function certificate,
-Index-1 algebraic manifold DAE certificate, and unified `"sos-lyapunov-cbf@1"` judge all pass! -/
--- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean
-theorem sos_lyapunov_cbf_dae_showcase_sound :
+/-- Concrete verification of the 2D cubic nonlinear Lyapunov certificate, 2D disk Control Barrier
+Function certificate, Index-1 algebraic manifold DAE certificate, and `"sos-lyapunov-cbf@1"` judge. -/
+theorem cubic_lyapunov_cbf_dae_2d_accepted :
     checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
     checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true ∧
     checkDaeManifold goldenCircleDaeSpec goldenCircleDaeWitness = true ∧
     checkSosLyapunovProblem 1 goldenSosProblem goldenSosCert = .ok := by
   decide +kernel
+
+-- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean and Obend/Apps/FocHil.lean
+set_option linter.defProp false in
+def sos_lyapunov_cbf_dae_showcase_sound :
+    checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
+    checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true ∧
+    checkDaeManifold goldenCircleDaeSpec goldenCircleDaeWitness = true ∧
+    checkSosLyapunovProblem 1 goldenSosProblem goldenSosCert = .ok :=
+  cubic_lyapunov_cbf_dae_2d_accepted
 
 end Obend.Analysis
 end
