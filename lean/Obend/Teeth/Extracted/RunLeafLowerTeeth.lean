@@ -44,13 +44,9 @@ import all Obend.Lower.Inductive
 import all Obend.Lower.Judge
 import all Obend.Lower.LCNF
 import all Obend.Lower.LeanKernel
-import all Obend.Lower.Lower
 import all Obend.Lower.Proofs.Book
 import all Obend.Lower.Proofs.Complete
-import all Obend.Lower.Proofs.Sound
 import all Obend.Lower.Reflect
-import all Obend.Lower.Semantics
-import all Obend.Lower.Syntax
 import all Obend.Lower.Transport
 import all Obend.Reasons
 import all Obend.Receipt

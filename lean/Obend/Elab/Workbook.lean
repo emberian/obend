@@ -69,8 +69,8 @@ without manual de Bruijn transcription:
    `<def>_lowerTerm_eq`, `<def>_comp`, `<def>_book`, `<def>_reflected`, and per-claim obligations
    (`claim_<name>_obj`, `_just`, `_check` by compiled evaluation with its `#assert_compiled`, `_holds`
    the meaning; a claim the importer cannot discharge fails the import, 2026-11-04)
-   with machine-checked proofs). This is the one `#import_obend`: `Obend.Stdlib`,
-   `Obend.Hardware.UserspacePhysical` and every `Obend.Apps.*` module call it (2026-11-04).
+   with machine-checked proofs). This is the one `#import_obend`: `Obend.Stdlib`
+   and every `Obend.Apps.*` module call it (2026-11-04).
 3. `verifyWorkbookObligationsWithLean` (+ soundness theorems):
    Exports verified Lean `TransportCert`, `LawExpr`, and `Justification` certificates back into
    an `.obend` `WorkbookPackage`'s obligation checker.
@@ -1788,7 +1788,7 @@ elab "#obend_decl " nsId:ident srcLit:str : command => do
     registerAndEmitWorkbook nsId.getId pkg
 
 /-- `#obend_decl Ns named "ModName" "..."`: as `#obend_decl`, with the `.obend` module name given
-    explicitly (the inline sources of `Obend.Hardware.UserspacePhysical` name their modules). -/
+    explicitly. -/
 elab "#obend_decl " nsId:ident " named " modLit:str srcLit:str : command => do
   let srcStr := srcLit.getString
   let modName := metaSanitizeModuleName modLit.getString

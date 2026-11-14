@@ -48,7 +48,7 @@ Continuous enclosures rest on exact dyadic/canonical rational arithmetic (`lean/
 
 ## 4. Mixed-Signal Quadrature SDR Verification (`lean/Obend/Apps/SdrFt8Rx.lean`)
 
-`lean/Obend/Apps/SdrFt8.lean` and `lean/Obend/Apps/SdrFt8Rx.lean` combine bit-accurate RTL semantics with continuous Taylor-model and interval judges for a digital FT8 shortwave receiver:
+`lean/Obend/Apps/SdrFt8Rx.lean` combines bit-accurate RTL semantics with continuous Taylor-model and interval judges for a digital FT8 shortwave receiver:
 
 - **Fixed-Point NCO Phasor Bound**: `nco_fixed_point_ok` and `nco_phasor_error` bound quantized lookup-table phasor error across every phase accumulator state of `sdrNcoModule` (`nco_tt_le`).
 - **Image-Rejection Ratio ($\ge 63\,\text{dB}$)**: `irrCos_judge_ok` (`checkTaylorModelJudge`) and `irr_judge_ok` (`Obend.Judge.intervalCheck`) discharge the trigonometric and rational inequalities required by `sdr_irr_ge_63dB` over any `AnalyticModel`.

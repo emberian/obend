@@ -161,7 +161,7 @@ theorem test_physical_projections_verified (spec : CncToolpathViewportSpec) :
       (evalAbbeCompensatedCmd3D spec.pTarget spec.linErr spec.angErr spec.abbeArm)
       spec.linErr spec.angErr spec.abbeArm = spec.pTarget ∧
      spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist = 0 ∧
-     (Obend.Leaf.emit Obend.Hardware.UserspacePhysical.cnc5AxisMillComp).closedB = true) ∧
+     (Obend.Leaf.emit Obend.Hardware.VerilateRunner.goldenCnc5AxisMillComp).closedB = true) ∧
     (let usd := goldenOpenUsdViewportSpec
      let stator := goldenStatorMultiphysicsSpec
      Obend.Hardware.OpenUSD.applyUsdRelocate usd.relocateDst usd.relocateSrc
@@ -170,7 +170,7 @@ theorem test_physical_projections_verified (spec : CncToolpathViewportSpec) :
      Obend.Hardware.OpenUSD.checkPartLifecycleInvariant usd.minWallUm usd.maxTempMilliC
        (Obend.Hardware.OpenUSD.finalUsdState usd.initSample usd.timeSamples) = true ∧
      Obend.Analysis.verifyTrajectorySafety stator.ode stator.initBox stator.steps stator.safeBounds = true ∧
-     (Obend.Leaf.emit Obend.Hardware.UserspacePhysical.lcDrivesStatorUsdComp).closedB = true) :=
+     (Obend.Leaf.emit Obend.Hardware.VerilateRunner.goldenLcDrivesStatorComp).closedB = true) :=
   ⟨physical_cnc_abbe_projection_sound spec, physical_openusd_lifecycle_fixture⟩
 
 /-! ## 4. `#tooth` Mutation-Killing Probes & `#print axioms` Verification (`0 sorryAx`) -/

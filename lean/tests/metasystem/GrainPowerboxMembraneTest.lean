@@ -73,7 +73,7 @@ import all Obend.Law.Std
 import all Obend.Law.Syntax
 import all Obend.Polis.CapTP
 import all Obend.Polis.EvidencedOcap
-import all Obend.Polis.VerkleUmem
+import all Obend.Polis.BlumRam
 import all Obend.Polis.ZkBiscuit
 import all Obend.Run.Core4
 import all Obend.Run.Runner
@@ -171,12 +171,8 @@ import all Obend.Leaf.Static
 import all Obend.Leaf.UpTo
 import all Obend.Logic.Claim
 import all Obend.Logic.LateBinding
-import all Obend.Lower.Lower
+import all Obend.Lower.Fragment
 import all Obend.Lower.Proofs.Book
-import all Obend.Lower.Proofs.Sound
-import all Obend.Lower.Proofs.Subst
-import all Obend.Lower.Semantics
-import all Obend.Lower.Syntax
 import all Obend.Slot.Core4
 import all Obend.Slot.Selection
 import all Obend.Tactic.MonadicReduction

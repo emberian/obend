@@ -6,7 +6,7 @@ This document specifies Obend's distributed and persistent state stack: log-repl
 
 ## 1. Durable Worlds by Log Replay (`lean/Obend/Vault/Replay.lean`)
 
-`Obend.Vault.Replay.World` models a node's persistent store as a deterministic projection of an append-only, hash-chained turn log (`lean/Obend/Vault/Log.lean`, `lean/Obend/Vault/LogBytes.lean`, `lean/Obend/Vault/SegmentLog.lean`):
+`Obend.Vault.Replay.World` models a node's persistent store as a deterministic projection of an append-only, hash-chained turn log (`lean/Obend/Vault/Log.lean`):
 
 - **Replay Equivalence**: `state_eq_replay_log` proves that the in-memory store equals the fold of its committed turns; `recover_eq_replay_prefix` proves crash recovery reconstructs the exact prefix of durable turns; `checkpoint_is_cache` proves checkpoints never diverge from log replay.
 - **Turn Identity & Deduplication**: `log_wellLinked` enforces cryptographic parent linkage, while `judge_refuses_duplicate` and `judge_by_identity` reject duplicate or colliding turn submissions.

@@ -14,7 +14,6 @@ import all Obend.Analysis.Hybrid
 import all Obend.Analysis.QuantumWalk
 import all Obend.Analysis.RealAnalysis
 import all Obend.Analysis.TaylorModel
-import all Obend.Apps.QuantumPhotonicMatter
 import all Obend.Apps.SovereignDrex
 import all Obend.AssertCompiled
 import all Obend.Consensus.Epistemic
@@ -37,9 +36,9 @@ import all Obend.Hardware.Photonics
 import all Obend.Hardware.Process
 import all Obend.Hardware.QuantumMatter
 import all Obend.Hardware.Silicon
+import all Obend.Hardware.Compiler
 import all Obend.Hardware.Synth
 import all Obend.Hardware.Types
-import all Obend.Hardware.UserspacePhysical
 import all Obend.Judge.AutomataConfinement
 import all Obend.Judge.Class
 import all Obend.Judge.Clearing
@@ -60,11 +59,10 @@ import all Obend.Logic.LateBinding
 import all Obend.Logic.Obligation
 import all Obend.Logic.Program
 import all Obend.Logic.Rewrite
+import all Obend.Lower.Fragment
 import all Obend.Lower.Proofs.Book
 import all Obend.Lower.Reflect
-import all Obend.Lower.Syntax
 import all Obend.Lower.Transport
-import all Obend.Polis.ZoeSeatSettlement
 import all Obend.Run.Durable
 import all Obend.Spec.Capture
 import all Obend.Spec.CrossPackage
@@ -89,47 +87,6 @@ public section
 end
 
 namespace Obend.Teeth.Extracted.AppsTeeth
-/-! ## Extracted from `Obend.Apps.QuantumPhotonicMatter` (2 teeth) -/
-section Obend_Apps_QuantumPhotonicMatter
-open Obend.Apps.QuantumPhotonicMatter
-open Lean (Json toJson Name Ident Syntax TSyntax Quote quote mkIdent)
-open Lean.Elab.Command (CommandElabM elabCommand)
-open Obend.Core.Term
-open Obend.Equiv
-open Obend.Logic
-open Obend.Leaf
-open Obend.Leaf.Static
-open Obend.Lower
-open Obend.Slot
-open Obend.Slot.World
-open Obend.Spec.CrossPackage
-open Obend.Analysis
-open Obend.Hardware.HDL
-open Obend.Hardware.Synth
-open Obend.Hardware.Compiler
-open Obend.Hardware.Accelerators
-open Obend.Hardware.OpenHypergraph
-open Obend.Hardware.QuantumMatter
-open Obend.Hardware.Photonics
-open Obend.Hardware.UserspacePhysical
-
-private def brokenQ3PointSourceSeed : Nat → Nat := fun _ => 0
-
-#tooth quantumPhotonicMatter_wl_quotient_clements_and_cmt_sound by mutation
-  q3PointSourceSeed := brokenQ3PointSourceSeed
-
-private def brokenQpmRtlModule : RtlModule :=
-  { name := "quantum_photonic_coproc_top"
-  , inputNames := ["in_batch_vectors"]
-  , wires := []
-  , regs := []
-  , outputs := [{ name := "out_artin_braid_verified", expr := .const 0#64 }] }
-
-#tooth quantumPhotonicCoprocTopRtlModule_verified by mutation
-  quantumPhotonicCoprocTopRtlModule := brokenQpmRtlModule
-
-end Obend_Apps_QuantumPhotonicMatter
-
 /-! ## Extracted from `Obend.Apps.SovereignDrex` (2 teeth) -/
 section Obend_Apps_SovereignDrex
 open Obend.Apps.SovereignDrex

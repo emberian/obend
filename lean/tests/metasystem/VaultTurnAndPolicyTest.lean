@@ -26,7 +26,7 @@ Exercises:
    `settleNetting_agrees_with_gross`, `NettingCert.toMovements_balanced`).
 5. S5 Epistemic Consensus (`EpistemicFrame`, `knows_truth`, `knows_pos_introspection`,
    `knows_neg_introspection`, `epistemic_quorum_agreement`, `order_insensitive_perm`),
-   Accountable `Simplex` (`simplex_accountable_safety`), and `SimplexFinalityGate` / `QuorumBoundFinalityGate`.
+   Accountable `Simplex` (`accountable`), and `SimplexFinalityGate`.
 -/
 
 namespace Obend.Tests.VaultTurnAndPolicyTest
@@ -283,20 +283,35 @@ example : Keystone.frame.DistKnows Keystone.everyoneGroup Keystone.actualWorldPr
 example : ¬ Keystone.frame.DistKnows Keystone.frame.Faulty Keystone.actualWorldProp Keystone.frame.actual :=
   Keystone.faulty_alone_not_distKnows
 
--- Quorum-bound finality gate:
-def sampleGate0 : QuorumBoundFinalityGate :=
-  { turnId := 1
-  , currentTier := .attested
-  , faults := 1
-  , stateRoot := 0xCAFE
-  , attestSigners := [0]
-  , qcSigners := []
-  , qcDigest := none
-  , merkleRoot := none }
+-- Simplex finality gate:
+def sampleProto4 : Protocol :=
+  ⟨[0, 1, 2, 3], 1, (· == 3), by decide +kernel, by decide +kernel, by decide +kernel⟩
 
-#guard (advanceQuorumBoundGate sampleGate0 (.formQC 999 [0, 1, 2] 0xCAFE)).isSome == true
-#guard advanceQuorumBoundGate sampleGate0 (.formQC 999 [] 0xCAFE) == none
-#guard advanceQuorumBoundGate sampleGate0 (.formQC 999 [0, 1, 2] 0xDEAD) == none
+def sampleVaultRoot : ByteArray :=
+  bytesOfList (List.replicate 32 0xCA)
+
+def wrongVaultRoot : ByteArray :=
+  bytesOfList (List.replicate 32 0xDE)
+
+def sampleCert999 : FinCert :=
+  ⟨1, [.block 1 999], [0, 1, 2]⟩
+
+def emptyCert999 : FinCert :=
+  ⟨1, [.block 1 999], []⟩
+
+def sampleSent999 : Sent :=
+  [ ⟨0, 1, .finalize, .block [.block 1 999]⟩
+  , ⟨1, 1, .finalize, .block [.block 1 999]⟩
+  , ⟨2, 1, .finalize, .block [.block 1 999]⟩ ]
+
+def sampleGate0 : SimplexFinalityGate :=
+  { turnId := bytesOfList (List.replicate 32 0x01)
+  , currentTier := .attested
+  , vaultRoot := some sampleVaultRoot }
+
+#guard (advanceSimplexGate sampleProto4 sampleSent999 sampleGate0 (.finalizeWithCert sampleCert999 sampleVaultRoot)).isSome == true
+#guard advanceSimplexGate sampleProto4 sampleSent999 sampleGate0 (.finalizeWithCert emptyCert999 sampleVaultRoot) == none
+#guard advanceSimplexGate sampleProto4 sampleSent999 sampleGate0 (.finalizeWithCert sampleCert999 wrongVaultRoot) == none
 
 -- ============================================================================
 -- 6. Axiom Audit (`0 sorryAx`, `0 Classical.choice`)
@@ -319,7 +334,7 @@ def sampleGate0 : QuorumBoundFinalityGate :=
 #print axioms SlashingReceipt.checks_sound
 #print axioms epistemic_quorum_agreement
 #print axioms order_insensitive_perm
-#print axioms advanceQuorumBoundGate_formQC_sound
+#print axioms advanceSimplexGate_quorum_final_sound
 #print axioms quorum_final_gates_unique_per_height
 
 

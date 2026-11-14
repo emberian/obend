@@ -9,8 +9,8 @@ Majorana modes. Each is a universal statement over `Fin 4` or `Fin 16`, proved b
 over every case: 29 s, 13 s and 10 s of kernel type checking on bb2, which put the module at 102 s
 against the 60 s tier-1 budget (review/DECISIONS-20261031.md). They are theorems, not fixtures, and
 keep their names; they build with the teeth (`lake build Teeth`) until a structural proof exists. The
-physics lane owns the mathematics; `Obend/Apps/QuantumPhotonicMatter.lean` and
-`tests/metasystem/QuantumCliffordClementsTest.lean` import this module for them. A `module`, so a module
+physics lane owns the mathematics; `tests/metasystem/QuantumCliffordClementsTest.lean` imports this
+module for them. A `module`, so a module
 may import it.
 -/
 public import Obend.Hardware.QuantumMatter

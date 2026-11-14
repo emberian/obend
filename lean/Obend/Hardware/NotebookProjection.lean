@@ -24,7 +24,7 @@ public import Obend.Leaf.Emit
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.Magnetics
 public import Obend.Hardware.OpenUSD
-public import Obend.Hardware.UserspacePhysical
+public import Obend.Hardware.VerilateRunner
 public import Obend.Analysis.Hybrid
 public import Obend.Receipt.Merkle
 public section
@@ -652,7 +652,7 @@ open Obend.Vault.HardwareProjection (dInt)
 open Obend.Hardware.Kinematics
 open Obend.Hardware.Magnetics
 open Obend.Hardware.OpenUSD
-open Obend.Hardware.UserspacePhysical
+open Obend.Hardware.VerilateRunner
 open Obend.Logic
 open Obend.Leaf
 open Obend.Analysis
@@ -712,7 +712,7 @@ def cncToolpathToData (spec : CncToolpathViewportSpec) : Data :=
   let coriolisPower := spatialPower (spatialCrossForce spec.twist spec.momentum) spec.twist
   let rStep1 := stepRuckigSegment spec.ruckigInit spec.jerkPulse spec.pulseDt
   let rStep2 := stepRuckigSegment rStep1 (-spec.jerkPulse) spec.pulseDt
-  let millBook := emit cnc5AxisMillComp
+  let millBook := emit goldenCnc5AxisMillComp
   .record [
     ("kind", .label "physical_cnc_5axis"),
     ("machine_name", .label spec.machineName),
@@ -821,7 +821,7 @@ structure StatorMultiphysicsViewportSpec where
 
 /-- Project a `StatorMultiphysicsViewportSpec` into canonical `Core.Data`. -/
 def statorMultiphysicsToData (spec : StatorMultiphysicsViewportSpec) : Data :=
-  let statorBook := emit lcDrivesStatorUsdComp
+  let statorBook := emit goldenLcDrivesStatorComp
   let femmCoEnergy := evalElementMagneticEnergyAreaScaled 1000000 spec.statorTriangle 10 (-4) 6
   let flowpipeSafe := verifyTrajectorySafety spec.ode spec.initBox spec.steps spec.safeBounds
   .record [

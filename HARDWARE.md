@@ -1,6 +1,6 @@
 # Hardware, FPGA, and GPU Architecture
 
-Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`, `lean/Obend/Trailblaze/LeanFpga.lean`) compiles functional specifications, open hypergraphs, and array kernels to synthesizable RTL, interaction nets, FABulous FPGA bitstreams, WGSL compute shaders, and validated AMD RDNA2 machine code.
+Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`, `lean/Obend/Trailblaze/StageBInstances.lean`) compiles functional specifications, open hypergraphs, and array kernels to synthesizable RTL, interaction nets, FABulous FPGA bitstreams, WGSL compute shaders, and validated AMD RDNA2 machine code.
 
 ---
 
@@ -20,7 +20,7 @@ Obend's hardware stack (`lean/Obend/Hardware`, `lean/Obend/Apps`, `lean/Obend/Tr
 
 For graph-reduction workloads, `lean/Obend/Hardware/Hvm.lean` lowers `Obend.Leaf.Book` definitions to interaction combinator nets (`lean/Obend/Hardware/Hvm/Inet.lean`, `lean/Obend/Hardware/Hvm/Model.lean`, `lean/Obend/Hardware/Hvm/Net.lean`, `lean/Obend/Hardware/Hvm/Lower.lean`):
 - `comp_reduces` and `main_reduces` (`lean/Obend/Hardware/Hvm/Net.lean`) prove fuel-indexed reduction soundness from functional intermediate definitions (`FExp`, `FDef`) to active redex nets (`Cfg`, `HTree`).
-- `lowerBookToHvm_sound` (`lean/Obend/Hardware/Hvm/Lower.lean`) proves that compiling an `Obend.Leaf.Book` into an `HvmBook` preserves evaluation over scalar arguments, complemented by `CofibLUT16` / linear delta-net FPGA synthesis in `lean/Obend/Trailblaze/LeanFpga.lean` (`apex_lean_fpga_rung2_to_rung5`).
+- `lowerBookToHvm_sound` (`lean/Obend/Hardware/Hvm/Lower.lean`) proves that compiling an `Obend.Leaf.Book` into an `HvmBook` preserves evaluation over scalar arguments, complemented by `CofibLUT16` / linear delta-net FPGA synthesis in `lean/Obend/Trailblaze/StageBInstances.lean` (`apex_lean_fpga_rung2_to_rung5`).
 
 ---
 
@@ -54,7 +54,7 @@ Rather than trusting place-and-route and bitstream packing tools blindly, `lean/
 ### 5.2 AMD RDNA2 Binary Translation Validator (`lean/Obend/Hardware/Gpu/Rdna2`)
 
 To eliminate shader-compiler bugs between WGSL/kernel IR and GPU silicon, `lean/Obend/Hardware/Gpu/Rdna2` validates compiled AMD RDNA2 (gfx1030) machine binaries directly:
-- **Instruction Decoder & Symbolic Semantics (`lean/Obend/Hardware/Gpu/Rdna2/Decode.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Semantics.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Waitcnt.lean`)**: Decodes scalar, vector, LDS, and `s_waitcnt` encodings (`lean/Obend/Hardware/Gpu/Rdna2/Insts/C0.lean`–`lean/Obend/Hardware/Gpu/Rdna2/Insts/C12.lean`) into wavefront machine transitions.
+- **Instruction Decoder & Symbolic Semantics (`lean/Obend/Hardware/Gpu/Rdna2/Decode.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Semantics.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Waitcnt.lean`)**: Decodes scalar, vector, LDS, and `s_waitcnt` encodings (`lean/Obend/Hardware/Gpu/Rdna2/Insts/Scalar.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Insts/Vector.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Insts/Memory.lean`) into wavefront machine transitions.
 - **Translation Validation (`lean/Obend/Hardware/Gpu/Rdna2/Certified.lean`, `lean/Obend/Hardware/Gpu/Rdna2/CertSound.lean`, `lean/Obend/Hardware/Gpu/Rdna2/Schedule.lean`)**:
   - `certifyDump_sound`: proves a disassembled RDNA2 binary implements an `ArrayGraph`.
   - `certifyBlockDump_sound`: proves workgroup block-kernel equivalence including shared LDS memory (`parseDumpLds`).
@@ -63,7 +63,7 @@ To eliminate shader-compiler bugs between WGSL/kernel IR and GPU silicon, `lean/
 ### 5.3 Workgroup Blelloch Collectives and Stockham Goldilocks NTT
 
 - **Blelloch Scans & Reductions (`lean/Obend/Hardware/Gpu/CollectiveBuildCorrect.lean`, `lean/Obend/Hardware/Gpu/CollectiveCorrect.lean`)**: Proves workgroup upsweep/downsweep scan and tree-reduction value correctness and memory framing (`scanGroup_value`, `scanGroup_frame`, `reduceGroup_value`, `reduceGroup_frame`).
-- **Stockham Goldilocks NTT (`lean/Obend/Hardware/Gpu/Ntt.lean`, `lean/Obend/Hardware/Gpu/NttEndToEnd.lean`, `lean/Obend/Hardware/Gpu/GoldilocksSourceCorrect.lean`)**: Verifies 64-bit Goldilocks prime ($p = 2^{64} - 2^{32} + 1$) modular multiplication (`glMul_sound`) and multi-stage Stockham DIF/DIT number-theoretic transforms (`nttBlockProgram`, `encoded_dft_of_uploads`).
+- **Stockham Goldilocks NTT (`lean/Obend/Hardware/Gpu/NttSpec.lean`, `lean/Obend/Hardware/Gpu/NttKernel.lean`, `lean/Obend/Hardware/Gpu/GoldilocksSourceCorrect.lean`)**: Verifies 64-bit Goldilocks prime ($p = 2^{64} - 2^{32} + 1$) modular multiplication (`glMul_sound`) and multi-stage Stockham DIF/DIT number-theoretic transforms (`nttBlockProgram`, `encoded_dft_of_uploads`).
 
 ---
 
@@ -73,5 +73,5 @@ To eliminate shader-compiler bugs between WGSL/kernel IR and GPU silicon, `lean/
 - **`Obend.Apps.FocHil` (`lean/Obend/Apps/FocHil.lean`)**: Closed-loop 20 kHz salient IPM field-oriented motor drive and 6-level SiC flying-capacitor multilevel inverter (`focHilSequentialRtlModule`, `foc_hil_flatten_and_book_sound`), emitted via `obend-emit-sv foc-hil` with 1-cycle overtemperature fault dominance and Yosys SMT-LIB2 LEC verification.
 - **`Obend.Apps.ZkNtt` (`lean/Obend/Apps/ZkNtt.lean`, `lean/Obend/Apps/ZkNtt/Goldilocks.lean`)**: Hardware Goldilocks NTT butterfly and Fiat–Shamir sumcheck transcript coprocessor (`zkNttCoprocRtlModule`).
 - **`Obend.Apps.SovereignDrex` (`lean/Obend/Apps/SovereignDrex.lean`)**: Hardware batch-auction clearing datapath (`sovereignDrexBatchTopRtlModule`) paired with `Obend.Vault.UnifiedDeos`.
-- **`Obend.Apps.SdrFt8Rx` (`lean/Obend/Apps/SdrFt8.lean`, `lean/Obend/Apps/SdrFt8Rx.lean`)**: Numerically controlled oscillator and quadrature FT8 receiver pipeline with proved phasor error and $\ge 63\,\text{dB}$ image-rejection ratio (`nco_phasor_error`, `sdr_irr_ge_63dB`).
+- **`Obend.Apps.SdrFt8Rx` (`lean/Obend/Apps/SdrFt8Rx.lean`)**: Numerically controlled oscillator and quadrature FT8 receiver pipeline with proved phasor error and $\ge 63\,\text{dB}$ image-rejection ratio (`nco_phasor_error`, `sdr_irr_ge_63dB`).
 - **Waveform & Geometry Inspection (`crates/obend-gui`)**: Streaming `.vcd` value-change-dump parser (`VcdWaveform`), binary/ASCII `.stl` mesh parser (`StlMesh`), and `.ngc` RS-274 G-code parser (`NgcToolpath`) in `crates/obend-gui/src/apps.rs`.

@@ -8,7 +8,7 @@ Verifies:
    `durable_outbox_dispatch_once_across_crashes`; its concrete run is in
    `DeosSimplexOutboxSeamTest`).
 2. 4-Tier Finality Promotion (`SimplexFinalityGate`, `advanceSimplexGate`, `quorum_final_gates_unique_per_height`,
-   `advanceSimplexGate_collapsed_binds_cshake`, `QuorumBoundFinalityGate`, `simplex_accountable_safety`).
+   `advanceSimplexGate_collapsed_binds_cshake`, `accountable`).
 3. Bernstein-Disjoint Fast-Path Commutativity & Collapsed Root Convergence
    (`unifiedDeos_fastpath_and_simplex_finality_sound`).
 4. `AgenticEDA` Epistemic Winner Selection (`goldenEdaSwarmRace_selects_valid_winner`,
@@ -65,26 +65,27 @@ example :
          (castSimplexVote restoredSt 1 chainB == restoredSt)) = true := by
   decide +kernel
 
-/-- 2. Concrete verification of Tier 2 `QuorumBoundFinalityGate` promotion + accountable slashing receipt extraction. -/
+/-- 2. Concrete verification of Tier 2 `SimplexFinalityGate` promotion + accountable slashing receipt extraction. -/
 example :
-    let gate0 : QuorumBoundFinalityGate :=
-      { turnId := 1
+    let proto4 : Protocol := ⟨[0, 1, 2, 3], 1, (· == 3), by decide +kernel, by decide +kernel, by decide +kernel⟩
+    let vRoot : ByteArray := bytesOfList (List.replicate 32 0xCA)
+    let cert99 : FinCert := ⟨1, [.block 1 99], [0, 1, 2]⟩
+    let sentFin : Sent :=
+      [ ⟨0, 1, .finalize, .block [.block 1 99]⟩
+      , ⟨1, 1, .finalize, .block [.block 1 99]⟩
+      , ⟨2, 1, .finalize, .block [.block 1 99]⟩ ]
+    let gate0 : SimplexFinalityGate :=
+      { turnId := bytesOfList (List.replicate 32 0x01)
         currentTier := .attested
-        faults := 1
-        stateRoot := 0xCAFE
-        attestSigners := [0]
-        qcSigners := []
-        qcDigest := none
-        merkleRoot := none }
-    let ev := QuorumBoundPromotionEvent.formQC 99 [0, 1, 2] 0xCAFE
+        vaultRoot := some vRoot }
     let tA : Target := .block [.block 1 100]
     let tB : Target := .block [.block 1 200]
     let sentSlash : Sent :=
       [ ⟨0, 1, .vote, tA⟩, ⟨1, 1, .vote, tA⟩, ⟨2, 1, .vote, tA⟩
       , ⟨1, 1, .vote, tB⟩, ⟨2, 1, .vote, tB⟩, ⟨3, 1, .vote, tB⟩ ]
     let slash := extractReceipt [0, 1, 2, 3] sentSlash 1 tA tB
-    (match advanceQuorumBoundGate gate0 ev with
-     | some next => next.currentTier == .quorum_final && decide (next.qcSigners.length = 3)
+    (match advanceSimplexGate proto4 sentFin gate0 (.finalizeWithCert cert99 vRoot) with
+     | some next => next.currentTier == .quorum_final && (next.finCert == some cert99)
      | none => false) = true ∧
     slash.checks sentSlash = true ∧
     slash.signers = [1, 2] ∧

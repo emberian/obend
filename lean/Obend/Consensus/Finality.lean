@@ -494,97 +494,7 @@ theorem advanceSimplexGate_collapsed_binds_cshake
   rcases h with ⟨⟨rfl, _⟩, rfl⟩
   exact ⟨cert, rfl, rfl, rfl, foldCollapsedRoot_eq_spec (chainDigest cert.chain) vRoot⟩
 
-/-! ## §7. Committee-Bound Quorum Gate (`QuorumBoundFinalityGate`) -/
-
-inductive QuorumBoundPromotionEvent where
-  | attestTurn (signer : Nat) (stateRoot : Nat)
-  | formQC (qcDigest : Nat) (signers : List Nat) (stateRoot : Nat)
-  | collapseRoot (merkleRoot : Nat) (signers : List Nat)
-  deriving Repr, Inhabited
-
-deriving instance @[expose] DecidableEq, BEq for QuorumBoundPromotionEvent
-
-structure QuorumBoundFinalityGate where
-  turnId        : Nat
-  currentTier   : FinalityTier
-  faults        : Nat
-  stateRoot     : Nat
-  attestSigners : List Nat
-  qcSigners     : List Nat
-  qcDigest      : Option Nat
-  merkleRoot    : Option Nat
-  committee     : List Nat := [0, 1, 2, 3]
-  deriving Inhabited
-
-deriving instance @[expose] DecidableEq for QuorumBoundFinalityGate
-
-@[expose] def advanceQuorumBoundGate
-    (gate : QuorumBoundFinalityGate)
-    (ev : QuorumBoundPromotionEvent) : Option QuorumBoundFinalityGate :=
-  match gate.currentTier, ev with
-  | .speculative, .attestTurn signer root =>
-    if decide (signer ∈ gate.committee ∧ root = gate.stateRoot ∧ root ≠ 0) then
-      some { gate with currentTier := .attested, attestSigners := [signer] }
-    else
-      none
-  | .attested, .formQC qcDigest signers root =>
-    if decide (signers ≠ [] ∧ signers.Nodup ∧ (∀ s ∈ signers, s ∈ gate.committee) ∧
-               2 * gate.faults + 1 ≤ signers.length ∧ root = gate.stateRoot ∧ root ≠ 0) then
-      some
-        { gate with
-          currentTier := .quorum_final
-          qcSigners   := signers
-          qcDigest    := some qcDigest }
-    else
-      none
-  | .quorum_final, .collapseRoot root signers =>
-    if decide (signers ≠ [] ∧ signers.Nodup ∧ (∀ s ∈ signers, s ∈ gate.committee) ∧
-               2 * gate.faults + 1 ≤ signers.length ∧ root = gate.stateRoot ∧ root ≠ 0) then
-      some
-        { gate with
-          currentTier := .collapsed
-          qcSigners   := signers
-          merkleRoot  := some root }
-    else
-      none
-  | _, _ => none
-
-theorem advanceQuorumBoundGate_formQC_sound
-    (gate next : QuorumBoundFinalityGate)
-    (qcDigest : Nat) (signers : List Nat) (root : Nat)
-    (h : advanceQuorumBoundGate gate (.formQC qcDigest signers root) = some next) :
-    next.currentTier = .quorum_final ∧
-    next.qcSigners = signers ∧
-    next.qcSigners ≠ [] ∧
-    next.qcSigners.Nodup ∧
-    (∀ s ∈ next.qcSigners, s ∈ gate.committee) ∧
-    2 * gate.faults + 1 ≤ next.qcSigners.length ∧
-    root = gate.stateRoot ∧
-    next.stateRoot ≠ 0 := by
-  cases h_tier : gate.currentTier <;>
-    simp [advanceQuorumBoundGate, h_tier] at h
-  rcases h with ⟨⟨h_ne, h_nodup, h_comm, h_quorum, h_root, h_nz⟩, rfl⟩
-  refine ⟨rfl, rfl, h_ne, h_nodup, h_comm, h_quorum, h_root, ?_⟩
-  simpa [h_root] using h_nz
-
-theorem advanceQuorumBoundGate_refuses_duplicate_signers
-    (gate : QuorumBoundFinalityGate) (qcDigest root : Nat) (signers : List Nat)
-    (h_dup : ¬ signers.Nodup) :
-    advanceQuorumBoundGate gate (.formQC qcDigest signers root) = none := by
-  cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier, h_dup]
-
-theorem advanceQuorumBoundGate_refuses_empty_signers
-    (gate : QuorumBoundFinalityGate) (qcDigest root : Nat) :
-    advanceQuorumBoundGate gate (.formQC qcDigest [] root) = none := by
-  cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier]
-
-theorem advanceQuorumBoundGate_refuses_mismatched_root
-    (gate : QuorumBoundFinalityGate) (qcDigest : Nat) (signers : List Nat) (root : Nat)
-    (h_mismatch : root ≠ gate.stateRoot) :
-    advanceQuorumBoundGate gate (.formQC qcDigest signers root) = none := by
-  cases h_tier : gate.currentTier <;> simp [advanceQuorumBoundGate, h_tier, h_mismatch]
-
-/-! ## §8. The promotions above are inhabited -/
+/-! ## §7. The promotions above are inhabited -/
 
 example : promoteStep .speculative (.attestTurn ByteArray.empty) = some .attested := rfl
 
@@ -596,13 +506,6 @@ example :
         vaultRoot := some (bytesOfList (List.replicate 32 0)) }
       (.finalizeWithCert ⟨1, [.block 1 7], [0, 1, 2]⟩ (bytesOfList (List.replicate 32 0)))).isSome
       = true := by
-  decide
-
-example :
-    (advanceQuorumBoundGate
-      { turnId := 1, currentTier := .attested, faults := 1, stateRoot := 9, attestSigners := [0],
-        qcSigners := [], qcDigest := none, merkleRoot := none }
-      (.formQC 5 [0, 1, 2] 9)).isSome = true := by
   decide
 
 end Obend.Consensus.Finality

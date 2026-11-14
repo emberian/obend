@@ -52,6 +52,8 @@ import all Obend.Slot.Selection
 import all Obend.Slot.World
 import all Obend.Tactic.Cases
 import all Obend.Tactic.Tooth
+import all Obend.Category.Refines
+import all Obend.Crypto.GameSoundness
 
 public section
 namespace Obend.Tests.BinarySpartanAndShout

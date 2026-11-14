@@ -143,6 +143,15 @@ import all Obend.Tactic.Cases
 import all Obend.Tactic.MonadicReduction
 import all Obend.Tactic.Tooth
 import all Init.Data.Rat.Basic
+import all Obend.Apps.ZkNtt.Goldilocks
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Crypto.Multilinear
+import all Obend.Crypto.Transcript
+import all Obend.Judge.Computational
+import all Obend.Logic.SeparationFrame
+import all Obend.Polis.CapTP
+import all Obend.Vault.Mandate
 public section
 namespace Obend.Tests.SymplecticVehicle6DofTest
 open Obend Obend.Hardware.SymplecticVehicle6Dof

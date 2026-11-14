@@ -38,6 +38,7 @@ public import Obend.Judge.ReflectiveGate
 public import Obend.Judge.SymbolicRegexBisim
 public import Obend.Judge.VpaComplementAndJson
 public import Obend.Judge.DecoAndCallTree
+public import Obend.Judge.Cost
 public import Obend.Receipt
 public import Obend.Reasons
 public import Obend.Reasons.UnifiedEquilibrium
@@ -53,6 +54,7 @@ public import Obend.Elab.Prepare
 public import Obend.Elab.Coerce
 public import Obend.Elab.Gate
 public import Obend.Elab.PdeSolverElab
+public import Obend.Elab.DeriveRepair
 public import Obend.Spec.Law
 public import Obend.Spec.LawCompile
 public import Obend.Spec.Syntax
@@ -98,7 +100,6 @@ public import Obend.Run.ForkExample
 public import Obend.Run.Reflect
 public import Obend.Run.HyperLaw
 public import Obend.Run.Ticks
-public import Obend.Run.VaultDurableBridge
 public import Obend.Ledger.Register
 public import Obend.Ledger.Vault
 public import Obend.Ledger.Json
@@ -119,7 +120,6 @@ public import Obend.Vault.Replay
 public import Obend.Vault.Transport
 public import Obend.Vault.Retention
 public import Obend.Vault.Cost
-public import Obend.Vault.LogBytes
 public import Obend.Vault.Hyperedge
 public import Obend.Vault.Escrow
 public import Obend.Vault.Affordance
@@ -129,9 +129,7 @@ public import Obend.Vault.Rehydration
 public import Obend.Vault.Form
 public import Obend.Vault.FormCheck
 public import Obend.Vault.CheckedCarry
-public import Obend.Vault.ChunkedWorld
-public import Obend.Vault.HardwareProjection
-public import Obend.Vault.PhysicalProjection
+public import Obend.Vault.WorldTree
 public import Obend.Vault.UnifiedDeos
 public import Obend.Vault.SwarmLedgerSeams
 public import Obend.Vault.Branch
@@ -140,12 +138,9 @@ public import Obend.Vault.Merge
 public import Obend.Vault.Cli
 public import Obend.Vault.Lsafe
 public import Obend.Vault.IrreversibleOutbox
-public import Obend.Vault.VerkleSnapshotBridge
 public import Obend.Vault.FrustumMembrane
 public import Obend.Vault.TransclusionAndMirror
 public import Obend.Vault.SurviveFirePor
-public import Obend.Vault.PortableContinuation
-public import Obend.Vault.ExpVerkleAndOpenHash
 public import Obend.Codec.DetCbor
 public import Obend.Consensus.Simplex
 public import Obend.Consensus.SimplexProtocol
@@ -156,7 +151,7 @@ public import Obend.Consensus.SimplexLiveness
 public import Obend.ClusterGov.PhysicalEnvelope
 public import Obend.Hardware.Silicon
 public import Obend.Hardware.Process
-public import Obend.Hardware.Fabric
+public import Obend.Hardware.NotebookProjection
 public import Obend.Hardware.HDL
 public import Obend.Hardware.Types
 public import Obend.Hardware.Compiler
@@ -184,7 +179,6 @@ public import Obend.Hardware.Accelerators
 public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.Kinematics
 public import Obend.Hardware.OpenUSD
-public import Obend.Hardware.UserspacePhysical
 public import Obend.Hardware.OpenHypergraph
 public import Obend.Hardware.Gpu
 public import Obend.Hardware.Square
@@ -198,7 +192,7 @@ public import Obend.Hardware.ArrayKernelUnique
 public import Obend.Hardware.ArrayKernelOwnership
 public import Obend.Hardware.Gpu.LayoutChecks
 public import Obend.Hardware.Gpu.Workgroup
-public import Obend.Hardware.Gpu.Ntt
+public import Obend.Hardware.Gpu.NttKernel
 public import Obend.Hardware.Gpu.BlockLower
 public import Obend.Hardware.Gpu.BlockEmit
 public import Obend.Hardware.Gpu.BookImport
@@ -237,16 +231,11 @@ public import Obend.Leaf.Static
 public import Obend.Leaf.SelfApplicableMixCore
 public import Obend.Leaf.SelfApplicableMix
 public import Obend.Leaf.BytecodeRegisterJit
-public import Obend.Logic.SuperRefines
 public import Obend.Logic.GuardedLob
 public import Obend.Logic.MultiTurnHoare
 public import Obend.Logic.SeparationFrame
 public import Obend.Equiv.ClairvoyantBook
 public import Obend.Paco.GPaco
-public import Obend.Lower.Syntax
-public import Obend.Lower.Semantics
-public import Obend.Lower.Typing
-public import Obend.Lower.Lower
 public import Obend.Lower.Transport
 public import Obend.Lower.Fragment
 public import Obend.Lower.Inductive
@@ -277,7 +266,6 @@ public import Obend.Category.GradedLogic
 public import Obend.Repair.AlgConfig
 public import Obend.Repair.CoalgConfig
 public import Obend.Repair.QuotAssembly
-public import Obend.Repair.DeriveConfig
 public import Obend.Repair.DeltaLensRenew
 public import Obend.Core.Cubical2LTT
 public import Obend.Tactic.Compositional
@@ -306,7 +294,8 @@ public import Obend.Crypto.PqHashSignatures
 public import Obend.Crypto.ThresholdHashMpc
 public import Obend.Polis.EvidencedOcap
 public import Obend.Polis.ZkBiscuit
-public import Obend.Polis.VerkleUmem
+public import Obend.Polis.BlumRam
+public import Obend.Polis.PqThresholdCustody
 public import Obend.Polis.CapTP
 public import Obend.Polis.HouyhnhnmTurn
 public import Obend.Polis.HouyhnhnmMonitor
@@ -314,13 +303,11 @@ public import Obend.Metatheory.PinsAndQuiescence
 public import Obend.Metatheory.SponsorAndMigration
 public import Obend.Metatheory.StratifiedCut
 public import Obend.Metatheory.LiveEvolutionAndLink
-public import Obend.Polis.ZoeSeatSettlement
 public import Obend.Polis.GrainPowerbox
 public import Obend.Polis.EpistemicVouchMarket
 public import Obend.Polis.VerifiableCredentials
 public import Obend.Polis.PrivatePredicate
 public import Obend.Polis.JointCoReceipt
-public import Obend.Polis.PrepaidLeaseAndFork
 public import Obend.Polis.GrainCustodyHost
 public import Obend.Core.GradedSessionMetatheory
 public import Obend.OS.Sel4MicrokitKernelCore
@@ -333,11 +320,5 @@ public import Obend.SymbolicZk.CompileToPiopCore
 public import Obend.SymbolicZk.CompileToPiop
 public import Obend.SymbolicZk.SkolemChaseCore
 public import Obend.SymbolicZk.StencilRolloutStark
-public import Obend.Trailblaze.Obligations
-public import Obend.Trailblaze.PolisBlum
-public import Obend.Trailblaze.Polis
-public import Obend.Trailblaze.LeanFpga
-public import Obend.Trailblaze.ZkStripe
-public import Obend.Trailblaze.ClusterGov
 public import Obend.Trailblaze.CathedralApex
 public import Obend.Trailblaze.StageBInstances

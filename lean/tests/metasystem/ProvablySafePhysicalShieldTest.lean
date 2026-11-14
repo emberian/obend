@@ -181,6 +181,15 @@ import all Obend.Analysis.SosLyapunov
 import all Obend.Hardware.CircuitDae
 import all Obend.Hardware.CurrentLoop
 import all Obend.Judge.RealAnalysis
+import all Obend.Apps.ZkNtt.Goldilocks
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Crypto.Multilinear
+import all Obend.Crypto.Transcript
+import all Obend.Judge.Computational
+import all Obend.Logic.SeparationFrame
+import all Obend.Polis.CapTP
+import all Obend.Vault.Mandate
 
 /-!
 # The sampled hardware gatekeeper and the quasi-Fermi device certificate, exercised

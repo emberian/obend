@@ -15,14 +15,13 @@ set_option autoImplicit false
 # Metasystem Verification Suite: Revived `.obend` `Obend.Stdlib` & Flagship CAE Modules
 
 Verifies:
-1. Compile-time elaboration, law inheritance, and open-recursive evaluation across all 11
+1. Compile-time elaboration, law inheritance, and open-recursive evaluation across all 10
    `stdlib/{core,ledger,usd,physical}/*.obend` modules (`StdlibCell`, `StdlibWord64`,
-   `StdlibAccount`, `StdlibScenePrim`, `StdQuantumPhotonic`, `StdMultiphysicsPcb`,
+   `StdlibAccount`, `StdlibScenePrim`, `StdMultiphysicsPcb`,
    `StdSymplecticSpacecraft`, `StdLcDrivesStator`, `StdMs350FcmlPhaseLeg`,
    `StdCleanroomTcadStack`, `StdCnc5AxisMill`).
-2. 8 `#tooth` mutation kills rejecting unbound composition mutations across every flattened/emitted
-   `Obend.Stdlib` composition (`stdlib_flatten_and_book_sound`,
-   `stdlib_quantum_photonic_flatten_and_book_sound`, and
+2. 6 `#tooth` mutation kills rejecting unbound composition mutations across flattened/emitted
+   `Obend.Stdlib` compositions (`stdlib_flatten_and_book_sound` and
    `stdlib_pcb_and_spacecraft_flatten_and_book_sound`).
 3. Cross-package `OB5`/`LT5` cone-pin invariance (`stdlib_pcb_and_spacecraft_crossPackage_cone_survives`)
    and zero-`sorryAx` / zero-`Classical.choice` axiom hygiene.
@@ -45,8 +44,6 @@ theorem revival_stdlib_all_values_rfl :
     StdlibAccount.escrowSettlementAt100_val = .nat 270 ∧
     StdlibScenePrim.composedWorldTransformAt100_val = .nat 140 ∧
     StdlibScenePrim.composedVoxelCostAt5_val = .nat 28 ∧
-    StdQuantumPhotonic.clementsPowerAt20Mw_val = .nat 90 ∧
-    StdQuantumPhotonic.tetronBraidPhaseAt2_val = .nat 420 ∧
     StdMultiphysicsPcb.tempestDiffImpedanceMohm_val = .nat 100000 ∧
     StdMultiphysicsPcb.tempestEtchedWidthAt120Um_val = .nat 156 ∧
     StdMultiphysicsPcb.tempestCutoffAt12Ghz_val = .nat 96500 ∧
@@ -58,7 +55,7 @@ theorem revival_stdlib_all_values_rfl :
     StdCleanroomTcadStack.q3PowerAt20Mw_val = .nat 143 ∧
     StdCnc5AxisMill.compensatedErrorAt6Dm_val = .nat 26 ∧
     StdCnc5AxisMill.compensatedCommandAt6Dm_val = .nat 10024 :=
-  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
    rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-! ## Part 2: `#tooth` Mutation Kills on Open `Obend.Stdlib` Soundness Theorems -/
@@ -78,18 +75,6 @@ theorem revival_stdlib_all_values_rfl :
 #tooth stdlib_flatten_and_book_sound by mutation
   StdlibScenePrim.composedUsdPrim_comp :=
     { top := { name := "BadPrim", flat := false, metadata := .record [], fields := [("bad", .bound 99)] }
-      below := []
-      seed := [] }
-
-#tooth stdlib_quantum_photonic_flatten_and_book_sound by mutation
-  StdQuantumPhotonic.compensatedClementsArray_comp :=
-    { top := { name := "BadClements", flat := false, metadata := .record [], fields := [("bad", .bound 99)] }
-      below := []
-      seed := [] }
-
-#tooth stdlib_quantum_photonic_flatten_and_book_sound by mutation
-  StdQuantumPhotonic.cooledTetronCell_comp :=
-    { top := { name := "BadTetron", flat := false, metadata := .record [], fields := [("bad", .bound 99)] }
       below := []
       seed := [] }
 

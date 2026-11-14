@@ -173,6 +173,10 @@ import all Obend.Tactic.MonadicReduction
 import all Obend.Tactic.Tooth
 import all Obend.Category.Refines
 import all Obend.Crypto.GameSoundness
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Polis.CapTP
+import all Obend.Vault.Mandate
 
 public section
 

@@ -21,7 +21,7 @@ directly to the unified DeOS vault, markets, checked carry, and 4-validator Simp
     universally verified synchronous batch-clearing + WAL anti-replay `RtlModule` (`sovereignDrexBatchTopRtlModule`).
 -/
 public import Lean
-public import Obend.Hardware.UserspacePhysical
+public import Obend.Hardware.Compiler
 public import Obend.Hardware.Synth
 public import Obend.Vault.UnifiedDeos
 public import Obend.Leaf.Static
@@ -29,7 +29,6 @@ public import Obend.Spec.CrossPackage
 public import Obend.Tactic.Tooth
 public import Obend.Elab.Workbook
 meta import Lean
-public meta import Obend.Hardware.UserspacePhysical
 public meta import Obend.Elab.Workbook
 
 @[expose] public section
@@ -194,33 +193,45 @@ theorem sovereignDrex_carry_netting_and_hyperedge_sound
 /-- 4-validator committee (`V0..V3`, $N = 4, f = 1$, quorum $2f + 1 = 3$) for `apps/sovereign-drex/`. -/
 def drexCommittee4 : List Nat := [0, 1, 2, 3]
 
-/-- Attested finality gate for Epoch 3 (`faults = 1`, `stateRoot = 118`). -/
-def drexAttestedGate : QuorumBoundFinalityGate :=
-  { turnId        := 3
-    currentTier   := .attested
-    faults        := 1
-    stateRoot     := 118
-    attestSigners := [0]
-    qcSigners     := []
-    qcDigest      := none
-    merkleRoot    := none
-    committee     := drexCommittee4 }
+/-- Canonical 4-validator Simplex protocol (`N = 4, f = 1`, node `3` faulty) for `apps/sovereign-drex/`. -/
+def drexProtocol4 : Protocol :=
+  ⟨[0, 1, 2, 3], 1, (· == 3), by decide +kernel, by decide +kernel, by decide +kernel⟩
 
-/-- Promoted `.quorum_final` gate signed by 3-of-4 validators `[0, 1, 2]` (`qcDigest = 227`). -/
-def drexQuorumFinalGate : QuorumBoundFinalityGate :=
+/-- Canonical 32-byte vault root digest for Epoch 3 finality promotion. -/
+def drexVaultRoot : ByteArray :=
+  bytesOfList (List.replicate 32 0xA5)
+
+/-- Canonical 3-of-4 `FinCert` (`[0, 1, 2]` finalizing `[.block 3 227]`) for Epoch 3. -/
+def drexFinCert : FinCert :=
+  ⟨3, [.block 3 227], [0, 1, 2]⟩
+
+/-- Canonical 3-of-4 finalize votes in `Sent` matching `drexFinCert`. -/
+def drexFinalizedSent : Sent :=
+  [ ⟨0, 3, .finalize, .block [.block 3 227]⟩
+  , ⟨1, 3, .finalize, .block [.block 3 227]⟩
+  , ⟨2, 3, .finalize, .block [.block 3 227]⟩ ]
+
+/-- Attested Simplex finality gate for Epoch 3 (`vaultRoot = drexVaultRoot`). -/
+def drexAttestedGate : SimplexFinalityGate :=
+  { turnId      := bytesOfList (List.replicate 32 0x03)
+    currentTier := .attested
+    vaultRoot   := some drexVaultRoot }
+
+/-- Promoted `.quorum_final` Simplex gate certified by `drexFinCert`. -/
+def drexQuorumFinalGate : SimplexFinalityGate :=
   { drexAttestedGate with
     currentTier := .quorum_final
-    qcSigners   := [0, 1, 2]
-    qcDigest    := some 227 }
+    finCert     := some drexFinCert
+    vaultRoot   := some drexVaultRoot }
 
 /-- **`sovereignDrex_engine_and_bft_finality_sound`**:
     1. Every admitted `stepUnifiedTurn S stateAssets turn postings = some S'` from a floor-valid
        `FloorBook` preserves `FloorsHold` (all non-issuer floors ≥ 0), conserves per-asset supply,
        realizes exact `Register.Reg` deltas, enforces ZoE `safeAt` across `S'.seats`, and refuses
        stale read footprints (`stepUnifiedTurn_refuses_stale_pin`),
-    2. On `drexCommittee4` ($N = 4, f = 1$), `drexAttestedGate` promotes to `.quorum_final`, and
-       any two conflicting 3-of-4 quorums `blockA ≠ blockB` yield a constructive `SlashingReceipt`
-       catching `≥ 2` equivocating validators (`simplex_accountable_safety`),
+    2. On `drexCommittee4` ($N = 4, f = 1$), `drexAttestedGate` promotes to `.quorum_final` via
+       `advanceSimplexGate`, and any two conflicting 3-of-4 quorums `targetA ≠ targetB` yield a
+       constructive `SlashingReceipt` catching `≥ 2` equivocating validators (`accountable`),
     3. Over any reachable `Reach P sent`, any two `.quorum_final` `SimplexFinalityGate`s
        at the same chain height certify identical blocks and identical cSHAKE256 `chainDigest`s. -/
 theorem sovereignDrex_engine_and_bft_finality_sound
@@ -234,7 +245,8 @@ theorem sovereignDrex_engine_and_bft_finality_sound
     (∀ staleTurn stalePostings,
       (admitFootprint S.store staleTurn.readPins).isOk = false →
       stepUnifiedTurn S stateAssets staleTurn stalePostings = none) ∧
-    advanceQuorumBoundGate drexAttestedGate (.formQC 227 [0, 1, 2] 118) = some drexQuorumFinalGate ∧
+    advanceSimplexGate drexProtocol4 drexFinalizedSent drexAttestedGate
+      (.finalizeWithCert drexFinCert drexVaultRoot) = some drexQuorumFinalGate ∧
     (∀ (sent : Sent) (view : Nat) (targetA targetB : Target),
       targetA ≠ targetB →
       3 ≤ (drexCommittee4.filter fun n => voted sent n view targetA).length →
@@ -254,7 +266,8 @@ theorem sovereignDrex_engine_and_bft_finality_sound
         c₁.chain.blocks = c₂.chain.blocks ∧ chainDigest c₁.chain = chainDigest c₂.chain) := by
   have hSpine := unifiedDeos_ledger_and_turn_sound hFloors hStep
   have hGatePromote :
-      advanceQuorumBoundGate drexAttestedGate (.formQC 227 [0, 1, 2] 118) = some drexQuorumFinalGate := by
+      advanceSimplexGate drexProtocol4 drexFinalizedSent drexAttestedGate
+        (.finalizeWithCert drexFinCert drexVaultRoot) = some drexQuorumFinalGate := by
     decide +kernel
   have hCommLen : drexCommittee4.length ≤ 3 * 1 + 1 := by decide +kernel
   refine ⟨hSpine.2.1,

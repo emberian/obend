@@ -39,7 +39,7 @@ name = "Teeth"
 globs = [
   "Obend.Teeth.+", "Obend.Stdlib", "Obend.Census",
   "Obend.Apps.FidgetCam", "Obend.Apps.FidgetCamCert", "Obend.Apps.FocHil",
-  "Obend.Apps.QuantumPhotonicMatter", "Obend.Apps.SdrFt8", "Obend.Apps.SdrFt8Rx",
+  "Obend.Apps.SdrFt8Rx",
   "Obend.Apps.SiliconKernelVerilator", "Obend.Apps.SovereignDrex", "Obend.Apps.ZkNtt",
 ]
 

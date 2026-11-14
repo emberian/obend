@@ -7,7 +7,7 @@ Tier-1 `Obend` modules so `lake build Obend` elaborates pure definitions and pro
 mutation replay overhead. Uses `import all` to preserve `LAW-M1` `.olean.private` encapsulation.
 -/
 public import Obend.Tactic.Tooth
-import all Obend.Analysis.Format
+import all Obend.Analysis.Impact
 import all Obend.Analysis.Hybrid
 import all Obend.Analysis.SosLyapunov
 import all Obend.Consensus.SimplexTrace
@@ -136,7 +136,7 @@ import all Obend.Spec.Syntax
 import all Obend.Spec.Types
 import all Obend.Tactic.Cases
 import all Obend.Tactic.MonadicReduction
-import all Obend.Vault.ChunkedWorld
+import all Obend.Vault.WorldTree
 import all Obend.Vault.Form
 import all Obend.Vault.FormCheckCache
 import all Obend.Vault.Hyperedge

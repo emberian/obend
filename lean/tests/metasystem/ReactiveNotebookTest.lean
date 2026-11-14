@@ -127,8 +127,7 @@ import all Obend.Logic.Obligation
 import all Obend.Logic.Program
 import all Obend.Logic.Receipt
 import all Obend.Logic.Rewrite
-import all Obend.Logic.SuperRefines
-import all Obend.Polis.VerkleUmem
+import all Obend.Polis.BlumRam
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
 import all Obend.Run.Control
@@ -201,12 +200,13 @@ import all Obend.Leaf.Served
 import all Obend.Leaf.Specialize
 import all Obend.Leaf.Static
 import all Obend.Leaf.UpTo
-import all Obend.Lower.Lower
+import all Obend.Lower.Fragment
 import all Obend.Lower.Proofs.Book
-import all Obend.Lower.Proofs.Sound
-import all Obend.Lower.Proofs.Subst
-import all Obend.Lower.Semantics
-import all Obend.Lower.Syntax
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Logic.SeparationFrame
+import all Obend.Polis.CapTP
+import all Obend.Vault.Mandate
 
 public section
 namespace Obend.Doc.Reactive.Tests

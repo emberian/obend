@@ -14,7 +14,8 @@ What is not here: blades (the part is a hub, a lug and a bore), the holder, simu
 motion, and a theorem relating the RTL to `evalFRepPoint` for every input.
 -/
 public import Lean
-public import Obend.Hardware.UserspacePhysical
+public import Obend.Hardware.Compiler
+public import Obend.Hardware.Accelerators
 public import Obend.Hardware.Synth
 public import Obend.Hardware.GeometryCAM
 public import Obend.Hardware.OpenUSD
@@ -24,7 +25,6 @@ public import Obend.Leaf.Flatten
 public import Obend.Tactic.Tooth
 public import Obend.Elab.Workbook
 meta import Lean
-public meta import Obend.Hardware.UserspacePhysical
 public meta import Obend.Elab.Workbook
 public import Obend.Hardware.Kinematics
 public meta import Obend.Hardware.GeometryCAM
@@ -50,7 +50,6 @@ open Obend.Hardware.Compiler
 open Obend.Hardware.Accelerators
 open Obend.Hardware.GeometryCAM
 open Obend.Hardware.OpenUSD
-open Obend.Hardware.UserspacePhysical
 open Obend.Hardware.Kinematics
 
 set_option autoImplicit false

@@ -4,15 +4,14 @@ public import Obend.Elab.Workbook
 public meta import Obend.Elab.Workbook
 public import Obend.Leaf.Static
 public import Obend.Spec.CrossPackage
-public import Obend.Hardware.UserspacePhysical
 import all Init.Data.String.Defs
 import all Init.Data.ByteArray.Basic
 
 /-!
 # Obend.Stdlib — Multi-File `.obend` Domain Standard Library (`stdlib/{core,ledger,usd,physical}/*.obend`)
 
-Imports and certifies the complete 11-module `.obend` domain standard library at compile time via
-`#import_obend`, including the 4 Tier-1 hardware physical modules:
+Imports and certifies the complete 10-module `.obend` domain standard library at compile time via
+`#import_obend`, including the 4 physical engineering modules:
 1. `stdlib/core/Cell.obend` (`StdlibCell`): capability-guarded state cell with `BaseCellSpec`,
    `VersionedCellOverride`, monotonicity/open-recursion/override claims, and `monotone_epoch` /
    `write_once_owner` laws.
@@ -23,17 +22,13 @@ Imports and certifies the complete 11-module `.obend` domain standard library at
    `../core/Cell.obend as Cell`, with double-entry transfer conservation, fee-cap envelope, and escrow override claims.
 4. `stdlib/usd/ScenePrim.obend` (`StdlibScenePrim`): OpenUSD LIVRPS scene primitive importing
    `../core/Cell.obend as Cell`, with xformOp stack composition and LIVRPS local-opinion override claims.
-5. `stdlib/physical/QuantumPhotonicMatter.obend` (`StdQuantumPhotonic`): planar Clements photonic
-   CTQW array (with unitary MZI Cauchy–Schwarz bound) and Majorana tetron Lindblad code cell
-   (with braid-exchange norm doubling and parity involution claims).
-6. `stdlib/physical/MultiphysicsPcbTempest.obend` (`StdMultiphysicsPcb`): differential stripline
+5. `stdlib/physical/MultiphysicsPcbTempest.obend` (`StdMultiphysicsPcb`): differential stripline
    AM-GM bound & mode-impedance product, copper-etch DFM undercut margin, sub-cutoff
    (`λ_min / 20`) Faraday via-fence rule, and dual-rail WDDL constant-weight balance invariants.
-7. `stdlib/physical/SymplecticSpacecraft6Dof.obend` (`StdSymplecticSpacecraft`): rational Cayley
+6. `stdlib/physical/SymplecticSpacecraft6Dof.obend` (`StdSymplecticSpacecraft`): rational Cayley
    attitude norm preservation & 3D Lagrange orthogonality, multi-stage impulse/mass conservation,
    and radiative-ablative TPS thermal margin laws.
-8. Tier-1 hardware physical standard library (`Obend.Hardware.UserspacePhysical`:
-   `LcDrivesStator`, `Ms350FcmlPhaseLeg`, `CleanroomTcadStack`, `Cnc5AxisMill`).
+7. Physical standard library (`LcDrivesStator`, `Ms350FcmlPhaseLeg`, `CleanroomTcadStack`, `Cnc5AxisMill`).
 
 Proves compile-time gate acceptance (`FrontEnd.accept`), relational engineering claim verification,
 `flatten_sound` / `book_sound`, and `OB5`/`LT5` cross-package cone-pin invariance
@@ -58,17 +53,18 @@ open Obend.Elab.Workbook
 set_option autoImplicit false
 set_option maxHeartbeats 800000
 
-/-! ## 1. Multi-File `#import_obend` of All 11 `stdlib/{core,ledger,usd,physical}/*.obend` Modules -/
+/-! ## 1. Multi-File `#import_obend` of All 10 `stdlib/{core,ledger,usd,physical}/*.obend` Modules -/
 
 #import_obend "stdlib/core/Cell.obend" as StdlibCell
 #import_obend "stdlib/core/Word64.obend" as StdlibWord64
 #import_obend "stdlib/ledger/Account.obend" as StdlibAccount
 #import_obend "stdlib/usd/ScenePrim.obend" as StdlibScenePrim
-#import_obend "stdlib/physical/QuantumPhotonicMatter.obend" as StdQuantumPhotonic
 #import_obend "stdlib/physical/MultiphysicsPcbTempest.obend" as StdMultiphysicsPcb
 #import_obend "stdlib/physical/SymplecticSpacecraft6Dof.obend" as StdSymplecticSpacecraft
--- `StdLcDrivesStator`, `StdMs350FcmlPhaseLeg`, `StdCleanroomTcadStack`, and `StdCnc5AxisMill`
--- are elaborated once in Tier-1 `Obend.Hardware.UserspacePhysical` and re-exported here.
+#import_obend "stdlib/physical/LcDrivesStator.obend" as StdLcDrivesStator
+#import_obend "stdlib/physical/Ms350FcmlPhaseLeg.obend" as StdMs350FcmlPhaseLeg
+#import_obend "stdlib/physical/CleanroomTcadStack.obend" as StdCleanroomTcadStack
+#import_obend "stdlib/physical/Cnc5AxisMill.obend" as StdCnc5AxisMill
 
 /-- All open-recursion claims across `Cell.obend`, `Account.obend`, and `ScenePrim.obend`
 are discharged and their semantic obligation meanings hold. -/
@@ -167,124 +163,7 @@ theorem stdlib_account_crossPackage_availableAfterFee_cone_survives :
   have hdisj : ∀ m ∈ slotReadCone C "availableAfterFee", m ∉ overlayModifiedFields L := by decide +kernel
   exact coneSupports_linkComposition_of_disjoint C L (slotReadCone C "availableAfterFee") hflat hdisj
 
-/-! ## 4. Quantum Photonic Matter Standard Library (`stdlib/physical/QuantumPhotonicMatter.obend`) -/
-
-/-- Values the `#import_obend` elaboration of `StdQuantumPhotonic` produced. -/
-example :
-    StdQuantumPhotonic.clementsPowerAt20Mw_val = .nat 90 ∧
-    StdQuantumPhotonic.clementsPhaseAtStep4_val = .nat 150 ∧
-    StdQuantumPhotonic.tetronBraidPhaseAt2_val = .nat 420 ∧
-    StdQuantumPhotonic.tetronResetRateAt10_val = .nat 72 :=
-  ⟨rfl, rfl, rfl, rfl⟩
-
-theorem stdlib_quantum_photonic_compositions_closed :
-    StdQuantumPhotonic.compensatedClementsArray_comp.closedB = true ∧
-    StdQuantumPhotonic.cooledTetronCell_comp.closedB = true := by
-  decide +kernel
-
-/-- **`stdlib_quantum_photonic_flatten_and_book_sound`**:
-For every member `m`, both composed quantum/photonic objects (`compensatedClementsArray_comp` and
-`cooledTetronCell_comp`) are observationally equivalent (`≈b`) to their flattened objects and
-emitted `Leaf.Book`s. -/
-theorem stdlib_quantum_photonic_flatten_and_book_sound (m : String) :
-    (.get StdQuantumPhotonic.compensatedClementsArray_comp.flatten m ≈b
-      .get StdQuantumPhotonic.compensatedClementsArray_comp.object m) ∧
-    (.get (emit StdQuantumPhotonic.compensatedClementsArray_comp).link m ≈b
-      .get StdQuantumPhotonic.compensatedClementsArray_comp.object m) ∧
-    (.get StdQuantumPhotonic.cooledTetronCell_comp.flatten m ≈b
-      .get StdQuantumPhotonic.cooledTetronCell_comp.object m) ∧
-    (.get (emit StdQuantumPhotonic.cooledTetronCell_comp).link m ≈b
-      .get StdQuantumPhotonic.cooledTetronCell_comp.object m) := by
-  have ⟨hc1, hc2⟩ := stdlib_quantum_photonic_compositions_closed
-  exact ⟨flatten_sound _ hc1 m, book_sound _ hc1 m,
-         flatten_sound _ hc2 m, book_sound _ hc2 m⟩
-
-/-- Disjoint Faddeev–LeVerrier thermal-only override layer modifying only
-`["faddeevThermalResidualPpm", "szegedyQuotientStepPhaseMrad"]` (leaving `krawtchoukRatioWeight`
-and `transferredOpticalPowerMw` untouched). -/
-def faddeevThermalOnlyLayer : Layer where
-  name := "QuantumPhotonicMatter.FaddeevThermalOnlyOverride"
-  flat := false
-  metadata := .record []
-  fields := [
-    ("faddeevThermalResidualPpm", .nat 0),
-    ("szegedyQuotientStepPhaseMrad", .lam (.binary .add (.bound 0) (.nat 50)))
-  ]
-
-/-- Disjoint Lindblad cooling-only override layer modifying only
-`["breakingScoreFloor", "lindbladResetRateKhz"]` (leaving `cliffordParityGapUeV`
-and `ivanovBraidPhaseMrad` untouched). -/
-def lindbladCoolingOnlyLayer : Layer where
-  name := "QuantumPhotonicMatter.LindbladCoolingOnlyOverride"
-  flat := false
-  metadata := .record []
-  fields := [
-    ("breakingScoreFloor", .nat 0),
-    ("lindbladResetRateKhz", .lam (.binary .add (.bound 0) (.nat 30)))
-  ]
-
-/-- **`stdlib_quantum_photonic_crossPackage_cone_survives`**:
-Proves via `coneSupports_linkComposition_of_disjoint` that:
-1. `KrawtchoukFaddeevCompensatedOverride` preserves the unmodified cone pin `["transferredOpticalPowerMw"]`,
-   and `faddeevThermalOnlyLayer` preserves the full `slotReadCone` of `"transferredOpticalPowerMw"` on `planarWaveguideMesh_comp`.
-2. `LindbladCooledTetronOverride` preserves the unmodified cone pin `["ivanovBraidPhaseMrad"]`,
-   and `lindbladCoolingOnlyLayer` preserves the full `slotReadCone` of `"ivanovBraidPhaseMrad"` on `baseTetronCell_comp`.
-3. Under an observationally equivalent refactor `cert : EquivOverrideCert`, `rebindEquivPin` and
-   `crossPackage_bEquiv_rebinds_slot_usable` re-bind the overridden cone pin cleanly while preserving
-   `specSlot.usable = true`, `transportSlot.usable = true`, `TransportMeaning`, and observational equivalence (`≈b`). -/
-theorem stdlib_quantum_photonic_crossPackage_cone_survives :
-    let Cc := StdQuantumPhotonic.planarWaveguideMesh_comp
-    let Lc := StdQuantumPhotonic.compensatedClementsArray_comp.top
-    let Ct := StdQuantumPhotonic.baseTetronCell_comp
-    let Lt := StdQuantumPhotonic.cooledTetronCell_comp.top
-    coneSupports (linkComposition Cc Lc) ["transferredOpticalPowerMw"] =
-      coneSupports Cc ["transferredOpticalPowerMw"] ∧
-    coneSupports (linkComposition Cc faddeevThermalOnlyLayer) (slotReadCone Cc "transferredOpticalPowerMw") =
-      coneSupports Cc (slotReadCone Cc "transferredOpticalPowerMw") ∧
-    coneSupports (linkComposition Ct Lt) ["ivanovBraidPhaseMrad"] =
-      coneSupports Ct ["ivanovBraidPhaseMrad"] ∧
-    coneSupports (linkComposition Ct lindbladCoolingOnlyLayer) (slotReadCone Ct "ivanovBraidPhaseMrad") =
-      coneSupports Ct (slotReadCone Ct "ivanovBraidPhaseMrad") ∧
-    (∀ {objectName target m : String} {L : Layer} {defItem : LeafDef}
-       {v' : LeafView} {o : TransportObj} {c : TransportCert} {s : Nat}
-       (cert : EquivOverrideCert Ct L m) (Frame : Term),
-      (.get Ct.object target ≈b instantiate Frame (.get Ct.object m)) →
-      (.get (linkComposition Ct L).object target ≈b instantiate Frame (.get (linkComposition Ct L).object m)) →
-      (linkComposition Ct L).closedB = true →
-      holdsAt v' (rebindEquivPin cert (memberConePin Ct m)) = true →
-      (∀ m' ∈ slotReadCone (linkComposition Ct L) target, m' ≠ m →
-        holdsAt v' (memberConePin (linkComposition Ct L) m') = true) →
-      (transportSlot o).usable (Support.holds Ct s) c = true →
-      (∀ sp ∈ c.supports, sp.member ≠ m →
-        Obend.Logic.symUnfold (linkComposition Ct L) s sp.member = Obend.Logic.symUnfold Ct s sp.member) →
-      rebindEquivPin cert (memberConePin Ct m) = memberConePin (linkComposition Ct L) m ∧
-      specSlot.usable (holdsAt v') (rebindEquivSlotCandidate objectName target cert defItem) = true ∧
-      (transportSlot o).usable (Support.holds (linkComposition Ct L) s) (rebindEquivTransportCert cert s c) = true ∧
-      TransportMeaning o (rebindEquivTransportCert cert s c) ∧
-      (.get (linkComposition Ct L).object target ≈b .get Ct.object target)) := by
-  intro Cc Lc Ct Lt
-  have hflat_c : Lc.flat = false := by decide +kernel
-  have hdisj_c1 : ∀ m ∈ ["transferredOpticalPowerMw"], m ∉ overlayModifiedFields Lc := by decide +kernel
-  have hflat_ft : faddeevThermalOnlyLayer.flat = false := rfl
-  have hdisj_c2 : ∀ m ∈ slotReadCone Cc "transferredOpticalPowerMw", m ∉ overlayModifiedFields faddeevThermalOnlyLayer := by
-    decide +kernel
-  have hflat_t : Lt.flat = false := by decide +kernel
-  have hdisj_t1 : ∀ m ∈ ["ivanovBraidPhaseMrad"], m ∉ overlayModifiedFields Lt := by decide +kernel
-  have hflat_lt : lindbladCoolingOnlyLayer.flat = false := rfl
-  have hdisj_t2 : ∀ m ∈ slotReadCone Ct "ivanovBraidPhaseMrad", m ∉ overlayModifiedFields lindbladCoolingOnlyLayer := by
-    decide +kernel
-  refine ⟨coneSupports_linkComposition_of_disjoint Cc Lc ["transferredOpticalPowerMw"] hflat_c hdisj_c1,
-          coneSupports_linkComposition_of_disjoint Cc faddeevThermalOnlyLayer
-            (slotReadCone Cc "transferredOpticalPowerMw") hflat_ft hdisj_c2,
-          coneSupports_linkComposition_of_disjoint Ct Lt ["ivanovBraidPhaseMrad"] hflat_t hdisj_t1,
-          coneSupports_linkComposition_of_disjoint Ct lindbladCoolingOnlyLayer
-            (slotReadCone Ct "ivanovBraidPhaseMrad") hflat_lt hdisj_t2, ?_⟩
-  intro objectName target m L defItem v' o c s cert Frame htb htl hcl hpin hrest htu htr
-  have hreb := @crossPackage_bEquiv_rebinds_slot_usable objectName target m Ct L defItem v' o c s
-    cert Frame htb htl hcl hpin hrest htu htr
-  exact ⟨rebindEquivPin_memberConePin cert, hreb.2.1, hreb.2.2.1, hreb.2.2.2.1, hreb.2.2.2.2⟩
-
-/-! ## 5. Revived `Word64`, `MultiphysicsPcbTempest`, `SymplecticSpacecraft6Dof`, and Tier-1 Physical Claims -/
+/-! ## 4. Revived `Word64`, `MultiphysicsPcbTempest`, `SymplecticSpacecraft6Dof`, and Physical Claims -/
 
 /-- All flagship relational engineering claims across `Word64.obend`,
 `MultiphysicsPcbTempest.obend`, `SymplecticSpacecraft6Dof.obend`, and the 4 Tier-1 physical

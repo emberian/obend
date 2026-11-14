@@ -18,10 +18,10 @@
 
 ## 2. Lowering Lean Expressions to `Obend` Books (`lean/Obend/Lower`)
 
-The lowering pipeline (`lean/Obend/Lower/Lower.lean`, `lean/Obend/Lower/LCNF.lean`, `lean/Obend/Lower/Inductive.lean`, `lean/Obend/Lower/Reflect.lean`) compiles Lean expressions into `Obend.Core.Term` and `Obend.Leaf.Book`:
+The lowering pipeline (`lean/Obend/Lower/Fragment.lean`, `lean/Obend/Lower/LCNF.lean`, `lean/Obend/Lower/Inductive.lean`, `lean/Obend/Lower/Reflect.lean`) compiles Lean expressions into `Obend.Core.Term` and `Obend.Leaf.Book`:
 
 - **Book Packaging (`lean/Obend/Lower/Proofs/Book.lean`)**: `leanComposition` wraps lowered terms into closed `Obend.Logic.Composition` prototypes; `book_member` and `lean_to_book` prove member lookup equivalence through `Obend.Leaf.emit`.
-- **Semantic Preservation (`lean/Obend/Lower/Proofs/Sound.lean`, `lean/Obend/Lower/Proofs/Complete.lean`, `lean/Obend/Lower/Proofs/Subst.lean`)**: Establishes substitution commutation and operational agreement between source `LExpr` reduction and lowered `Obend.Core.Term` execution.
+- **Semantic Preservation (`lean/Obend/Lower/Fragment.lean`, `lean/Obend/Lower/Proofs/Complete.lean`)**: Establishes substitution commutation and operational agreement between source `LExpr` reduction and lowered `Obend.Core.Term` execution.
 - **Certificate Judge (`lean/Obend/Lower/Judge.lean`)**: Registers lowering equivalence verification in `Obend.Judge.registry` (`Obend.Lower.format`).
 
 ---

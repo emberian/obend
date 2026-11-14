@@ -6,7 +6,7 @@ Tests both the positive and negative poles of `Obend.Hardware` across surviving 
 modules (`Silicon`, `Process`, `HDL`, `Types`, `Compiler`, `Synth`,
 `Retiming`, `PlaceRoute`, `DRC`, `Analog`, `Datasheet`, `Circuits`, `Device.Wafer`, `Photonics`,
 `PCB`, `ReductionMachine`, `DSP`, `AgenticEDA`, `Magnetics`, `CurrentLoop`, `ThermalPassivity`,
-`Accelerators`, `GeometryCAM`, `Kinematics`, `OpenUSD`, `UserspacePhysical`, `OpenHypergraph`,
+`Accelerators`, `GeometryCAM`, `Kinematics`, `OpenUSD`, `OpenHypergraph`,
 `QuantumMatter`, `Codec`, `Judge`, and `Apps.SiliconKernelVerilator`).
 -/
 public import Obend.Tactic.Tooth
@@ -45,7 +45,6 @@ import all Obend.Hardware.Accelerators
 import all Obend.Hardware.GeometryCAM
 import all Obend.Hardware.Kinematics
 import all Obend.Hardware.OpenUSD
-import all Obend.Hardware.UserspacePhysical
 import all Obend.Hardware.OpenHypergraph
 import all Obend.Hardware.QuantumMatter
 import all Obend.Analysis.Equitable
@@ -64,7 +63,7 @@ open Obend.Hardware.Photonics Obend.Hardware.PCB
 open Obend.Hardware.ReductionMachine Obend.Hardware.DSP Obend.Hardware.AgenticEDA
 open Obend.Hardware.Magnetics Obend.Hardware.CurrentLoop Obend.Hardware.ThermalPassivity
 open Obend.Hardware.Accelerators Obend.Hardware.GeometryCAM
-open Obend.Hardware.Kinematics Obend.Hardware.OpenUSD Obend.Hardware.UserspacePhysical
+open Obend.Hardware.Kinematics Obend.Hardware.OpenUSD
 open Obend.Hardware.OpenHypergraph Obend.Hardware.QuantumMatter Obend.Analysis
 open Obend.Hardware.Codec Obend.Hardware.Judge
 open Obend.Teeth.Leaf.Review (comp overridden view deadCells)
@@ -409,18 +408,6 @@ def affineToIntervalCollapsed (af : AffineForm1D) : FloatInterval where
   hi := af.c0 + af.radius
 
 #tooth Obend.Hardware.OpenUSD.affine_to_interval_encloses_eval by mutation Obend.Hardware.OpenUSD.AffineForm1D.toInterval := affineToIntervalCollapsed
-
-/-- 43. Broken `lcDrivesInSlotUpgradeLayer` in `Obend.Hardware.UserspacePhysical` that keeps outer-jacket `thermalResistance = 29` instead of `9`. -/
-def lcDrivesInSlotUpgradeBrokenLayer : Layer where
-  name := "LcDrivesStatorUsd.LcDrivesInSlotUpgrade"
-  metadata := .label "LcDrivesStatorUsd.LcDrivesInSlotUpgrade"
-  fields :=
-    [ ("thermalResistance", .nat 29)
-    , ("sdfMargin",
-        .lam (.binary .add (.app (.get (.bound 1) "sdfMargin") (.bound 0)) (.nat 6)))
-    ]
-
-#tooth Obend.Hardware.UserspacePhysical.stator_in_slot_peak_temp_forall by mutation Obend.Hardware.UserspacePhysical.lcDrivesInSlotUpgradeLayer := lcDrivesInSlotUpgradeBrokenLayer
 
 /-- 44. Broken `compileOpticAdjoint` in `Obend.Hardware.OpenHypergraph` that maps every `OpticOp` to `.add`. -/
 def compileOpticAdjointAlwaysAdd (_op : OpticOp) : OpticAdjoint :=

@@ -37,19 +37,17 @@ import all Obend.Leaf.Flatten
 import all Obend.Leaf.Specialize
 import all Obend.Leaf.UpTo
 import all Obend.Lower.ExprCAM
+import all Obend.Lower.Fragment
 import all Obend.Lower.LeanKernel
-import all Obend.Lower.Lower
 import all Obend.Lower.Proofs.SiliconKernel
-import all Obend.Lower.Semantics
+import all Obend.Polis.BlumRam
 import all Obend.Reasons
 import all Obend.Reasons.UnifiedEquilibrium
 import all Obend.Slot.Selection
 import all Obend.SymbolicZk.CamUnifyArith
 import all Obend.SymbolicZk.RankedFixpointArith
 import all Obend.SymbolicZk.SemiringDatalog
-import all Obend.Trailblaze.LeanFpga
-import all Obend.Trailblaze.Obligations
-import all Obend.Trailblaze.PolisBlum
+import all Obend.Trailblaze.StageBInstances
 
 public section
 end

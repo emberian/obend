@@ -491,7 +491,7 @@ def goldenCordic4Stages : List CordicMicroStage :=
 Starting from $(x_0, y_0, z_0) = (1000, 0, 442)$ ($442\,\text{mrad} \approx 25.3^\circ$), the 4-stage
 unrolled CORDIC pipeline `goldenCordic4Stages` converges to `(1484, 704, 0)` with zero residual
 angle error (`z4 = 0`) and processing norm gain $x_4^2 + y_4^2 = 2697872 > x_0^2 + y_0^2 = 1000000$. -/
--- fixture kept (2026-11-04): would delete (one evaluation of the CORDIC pipeline on literal inputs) but cited by Obend/Apps/SdrFt8.lean:573
+-- fixture kept (2026-11-04): one evaluation of the CORDIC pipeline on literal inputs (`goldenCordic4Stages`)
 theorem cordic_4stage_pipeline_verified :
     runCordicMicroPipeline 1000 0 442 goldenCordic4Stages = (1484, 704, 0) ∧
     (let (x4, y4, z4) := runCordicMicroPipeline 1000 0 442 goldenCordic4Stages

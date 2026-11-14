@@ -188,14 +188,8 @@ import all Obend.Lower.Fragment
 import all Obend.Lower.Inductive
 import all Obend.Lower.Judge
 import all Obend.Lower.LCNF
-import all Obend.Lower.Lower
 import all Obend.Lower.Proofs.Book
 import all Obend.Lower.Proofs.Hardware
-import all Obend.Lower.Proofs.Sound
-import all Obend.Lower.Proofs.Subst
-import all Obend.Lower.Semantics
-import all Obend.Lower.Syntax
-import all Obend.Lower.Typing
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
 import all Obend.Run.Control
@@ -264,6 +258,14 @@ import all Obend.Hardware.GeometryCAM
 import all Obend.Leaf.BytecodeRegisterJit
 import all Obend.Leaf.Served
 import all Obend.Leaf.Static
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Crypto.Multilinear
+import all Obend.Crypto.Transcript
+import all Obend.Judge.Computational
+import all Obend.Logic.SeparationFrame
+import all Obend.Polis.CapTP
+import all Obend.Vault.Mandate
 
 public section
 namespace Obend.Tests.PipelinedZkAndBinaryTowerTest

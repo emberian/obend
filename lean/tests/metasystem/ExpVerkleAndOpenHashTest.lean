@@ -1,6 +1,6 @@
 module
 import all Init.Data.Array.Basic
-public import Obend.Vault.ExpVerkleAndOpenHash
+public import Obend.Vault.WorldTree
 import all Obend.Analysis.Coverage
 import all Obend.Apps.ZkNtt.Goldilocks
 import all Obend.AssertAxioms
@@ -146,7 +146,7 @@ import all Obend.Logic.Obligation
 import all Obend.Logic.Program
 import all Obend.Logic.Receipt
 import all Obend.Logic.Rewrite
-import all Obend.Polis.VerkleUmem
+import all Obend.Polis.BlumRam
 import all Obend.Reasons
 import all Obend.Receipt
 import all Obend.Receipt.Merkle
@@ -184,10 +184,8 @@ import all Obend.Tactic.MonadicReduction
 import all Obend.Tactic.Tooth
 import all Obend.Vault.Affordance
 import all Obend.Vault.Branch
-import all Obend.Vault.ChunkedWorld
 import all Obend.Vault.Cost
 import all Obend.Vault.DecodeCache
-import all Obend.Vault.ExpVerkleAndOpenHash
 import all Obend.Vault.Form
 import all Obend.Vault.FormCheck
 import all Obend.Vault.FormCheckCache
@@ -196,16 +194,14 @@ import all Obend.Vault.Index
 import all Obend.Vault.Json
 import all Obend.Vault.Law
 import all Obend.Vault.Log
-import all Obend.Vault.LogBytes
 import all Obend.Vault.Merge
 import all Obend.Vault.Page
 import all Obend.Vault.Rehydration
 import all Obend.Vault.Replay
 import all Obend.Vault.Retention
-import all Obend.Vault.SegmentLog
 import all Obend.Vault.Store
 import all Obend.Vault.Transport
-import all Obend.Vault.VerkleSnapshotBridge
+import all Obend.Vault.WorldTree
 import all Obend.Category.Refines
 import all Obend.Core.Collect
 import all Obend.Core.Proofs.Collect.Compact
@@ -236,12 +232,15 @@ import all Obend.Leaf.Served
 import all Obend.Leaf.Specialize
 import all Obend.Leaf.Static
 import all Obend.Leaf.UpTo
-import all Obend.Lower.Lower
+import all Obend.Lower.Fragment
 import all Obend.Lower.Proofs.Book
-import all Obend.Lower.Proofs.Sound
-import all Obend.Lower.Proofs.Subst
-import all Obend.Lower.Semantics
-import all Obend.Lower.Syntax
+import all Obend.Consensus.Simplex
+import all Obend.Consensus.SimplexProtocol
+import all Obend.Logic.SeparationFrame
+import all Obend.Polis.CapTP
+import all Obend.Run.Durable
+import all Obend.Run.Proofs.Durable
+import all Obend.Vault.Mandate
 
 public section
 namespace Obend.Tests.Metasystem.ExpVerkleAndOpenHashTest

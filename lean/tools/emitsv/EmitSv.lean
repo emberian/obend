@@ -2,7 +2,7 @@
 # `obend-emit-sv` — regenerate every checked-in SystemVerilog file from its Lean definition
 
     obend-emit-sv <target> [--out FILE]      targets: zk golden-zk fidget fidget-ngc
-                                                      foc-hil drex quantum silicon-elab mac2
+                                                      foc-hil drex silicon-elab mac2
                                                       ice40-mac8 tcad stator mill golden-silicon-kernel
                                                       width-probe sdr-nco sdr-cic sdr-disc
     obend-emit-sv square-<graph> [--out FILE] the RTL lowering of a graph of `Obend.Hardware.SquareGraphs`
@@ -35,7 +35,6 @@ import Obend.Apps.ZkNtt
 import Obend.Apps.FidgetCam
 import Obend.Apps.FocHil
 import Obend.Apps.SovereignDrex
-import Obend.Apps.QuantumPhotonicMatter
 import Obend.Apps.SiliconKernelVerilator
 import Obend.Apps.SdrFt8Rx
 
@@ -86,7 +85,6 @@ def targets : List (String × String) :=
   , ("fidget-ngc", "apps/fidget-cam/build/impeller_5axis.ngc")
   , ("foc-hil", "apps/foc-hil/verilator/foc_drive_top.sv")
   , ("drex", "apps/sovereign-drex/verilator/sovereign_drex_batch_top.sv")
-  , ("quantum", "apps/quantum-photonic-matter/verilator/quantum_photonic_coproc_top.sv")
   , ("silicon-elab", "apps/silicon-kernel-verilator/verilator/silicon_elab_top.sv")
   , ("golden-silicon-kernel", "apps/silicon-kernel-verilator/verilator/silicon_elab_golden.txt")
   , ("mac2", "hardware/sim/obend_retimed_mac2.sv")
@@ -117,7 +115,6 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
   | "zk"      => some (.ok ("Obend.Apps.ZkNtt.zkNttCoprocRtlModule", Obend.Apps.ZkNtt.zkNttCoprocRtlModule))
   | "fidget"  => some (.ok ("Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule", Obend.Apps.FidgetCam.fidgetImpellerVoxelCamRtlModule))
   | "foc-hil" => some (.ok ("Obend.Apps.FocHil.focHilSequentialRtlModule", Obend.Apps.FocHil.focHilSequentialRtlModule))
-  | "quantum" => some (.ok ("Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule", Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule))
   | "mac2"    => some (.ok ("Obend.Hardware.Synth.goldenRetimedMacRtl", Obend.Hardware.Synth.goldenRetimedMacRtl))
   | "ice40-mac8" => some (.ok ("Obend.Hardware.iceStickMac8 (lean/Obend/Hardware/Mac8.lean)", Obend.Hardware.iceStickMac8))
   | "tcad"    => some (builtInModule "cleanroom_tcad_stack")
@@ -140,7 +137,7 @@ def moduleTarget : String → Option (Except String (String × RtlModule))
 
 /-- The names `moduleTarget` answers, for `list` (which must not build the modules to print them). -/
 def moduleTargetNames : List String :=
-  ["zk", "fidget", "foc-hil", "quantum", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "sdr-nco", "sdr-cic", "sdr-disc", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"] ++
+  ["zk", "fidget", "foc-hil", "drex", "mac2", "ice40-mac8", "tcad", "stator", "mill", "width-probe", "sdr-nco", "sdr-cic", "sdr-disc", "lut4ab-sm", "wio-sm", "lut4c", "mux8lut"] ++
   squarePlan.map fun (name, _) => s!"square-{name}"
 
 /-- `--tb`: the Verilator harness of a square target: every vector of the graph on the module's input
@@ -189,7 +186,6 @@ def render : String → Except String String
   -- The posted program is a Lean string (`postNgc` over the certified passes); the Verilator
   -- testbench reads this file and re-checks its waypoints against the RTL, it does not write one.
   | "fidget-ngc" => .ok Obend.Apps.FidgetCam.impeller5AxisNgc
-  | "quantum" => emitWithHeader "Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule" Obend.Apps.QuantumPhotonicMatter.quantumPhotonicCoprocTopRtlModule
   | "silicon-elab" => .ok Obend.Hardware.Cli.siliconElabTopSvText
   | "golden-silicon-kernel" => .ok goldenSiliconKernel
   | "check-zk" => checkZk

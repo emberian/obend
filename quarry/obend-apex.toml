@@ -148,7 +148,7 @@ description = "Whole-book link specialization (`LinkSpecialize`) and `GPaco` up-
 [[apex]]
 id = "logic-super-refines-frame"
 subsystem = "Logic"
-module = "Obend.Logic.SuperRefines"
+module = "Obend.Logic.Obligation"
 theorem = "superClaim_sound"
 description = "Vertical `super.m` unfolding (`SuperRefines`) and `SupportSheaf` overlay transport preserve open-recursive claims across outer overrides."
 
@@ -180,14 +180,14 @@ description = "Vault world checkpoint + suffix log recovery equals full genesis 
 [[apex]]
 id = "vault-segment-log-window"
 subsystem = "Vault"
-module = "Obend.Vault.SegmentLog"
+module = "Obend.Vault.Log"
 theorem = "holds_window"
 description = "Segmented/chunked world log assembly preserves invariant validity across window splits and byte-framed log segments."
 
 [[apex]]
 id = "vault-chunked-world-manifest"
 subsystem = "Vault"
-module = "Obend.Vault.ChunkedWorld"
+module = "Obend.Vault.WorldTree"
 theorem = "dig_eq_unbe_logHashArray"
 description = "256-bucket chunked world storage and incremental manifest updates match monolithic world digest commitment."
 
@@ -222,7 +222,7 @@ description = "Swarm ledger seam synthesis and LawDial repair find passing delta
 [[apex]]
 id = "vault-durable-bridge-custody"
 subsystem = "Vault"
-module = "Obend.Run.VaultDurableBridge"
+module = "Obend.Vault.Replay"
 theorem = "transfer_conserves_custody_exact"
 description = "Segmented OBL1 log durable simulation and linear capability-carrying `.perform` plans strictly conserve custody and refuse forgery."
 
@@ -446,8 +446,8 @@ description = "Multi-tier Unified DeOS finality composes disjoint fast-path comm
 id = "consensus-quorum-bound-gate"
 subsystem = "Consensus"
 module = "Obend.Consensus.Finality"
-theorem = "advanceQuorumBoundGate_formQC_sound"
-description = "Quorum-bound finality gate enforces deduplicated validator weight thresholds, `cSHAKE256` domain binding, and per-height uniqueness."
+theorem = "quorum_final_gates_unique_per_height"
+description = "Simplex quorum-finality gate enforces deduplicated validator weight thresholds, `FinCert` signature verification, `cSHAKE256` domain binding, and per-height uniqueness."
 
 [[apex]]
 id = "consensus-simplex-trace-sound"
@@ -531,14 +531,14 @@ description = "Cross-domain `SameOpening` verifier binds quantized inference wit
 [[apex]]
 id = "trailblaze-polis-deos-turn"
 subsystem = "Trailblaze"
-module = "Obend.Trailblaze.Polis"
+module = "Obend.Trailblaze.StageBInstances"
 theorem = "apex_polis_deos_turn_safe"
 description = "End-to-end Polis DeOS turn composes Blum offline memory checking, seL4 Microkit SPSC copy-before-verify isolation, and `SameOpening` clearing."
 
 [[apex]]
 id = "trailblaze-lean-fpga-spine"
 subsystem = "Trailblaze"
-module = "Obend.Trailblaze.LeanFpga"
+module = "Obend.Trailblaze.StageBInstances"
 theorem = "apex_lean_fpga_rung2_to_rung5"
 description = "End-to-end Lean-to-FPGA Rung 2..5 spine composes multi-valued cube evaluation, linear port wiring, FABulous bitstream roundtrip, and DPR isolation."
 
@@ -552,14 +552,14 @@ description = "End-to-end Cathedral composition from `ZkStripe` VPA call-tree au
 [[apex]]
 id = "trailblaze-polis-deos-trace"
 subsystem = "Trailblaze"
-module = "Obend.Trailblaze.Polis"
+module = "Obend.Trailblaze.StageBInstances"
 theorem = "apex_polis_deos_trace_safe"
 description = "Multi-turn Polis DeOS trace safety across revocation accumulation, Verkle UMem transitions, Blum memory checking, and seL4 Microkit SPSC isolation."
 
 [[apex]]
 id = "trailblaze-polis-blum-memory"
-subsystem = "Trailblaze"
-module = "Obend.Trailblaze.PolisBlum"
+subsystem = "Polis"
+module = "Obend.Polis.BlumRam"
 theorem = "verifyBlumMemory_sound"
 description = "Offline Blum memory-checking verifier implies exact read-follows-latest-write consistency over sorted online/offline memory logs."
 
@@ -573,14 +573,14 @@ description = "Multi-turn Cathedral governance trace verifier enforces domain-bo
 [[apex]]
 id = "trailblaze-zkstripe-calltree-audit"
 subsystem = "Trailblaze"
-module = "Obend.Trailblaze.ZkStripe"
+module = "Obend.Trailblaze.CathedralApex"
 theorem = "apex_zkstripe_calltree_audit"
 description = "Domain-bound recursive HTTPS call-tree commitment binding and string-aware ByteArray VPA audit across all session hops."
 
 [[apex]]
 id = "trailblaze-verifiable-cluster-step"
 subsystem = "Trailblaze"
-module = "Obend.Trailblaze.ClusterGov"
+module = "Obend.Trailblaze.CathedralApex"
 theorem = "apex_verifiable_ai_cluster_step"
 description = "Schedule-invariant Ozaki radix-slice all-reduce collectives and lower-curve physical energy conservation bounding covert operations."
 
@@ -671,7 +671,7 @@ description = "Domain-framed ZK-Biscuit capability lineage binds full public tur
 [[apex]]
 id = "polis-verkle-umem-binding"
 subsystem = "Polis"
-module = "Obend.Polis.VerkleUmem"
+module = "Obend.Polis.BlumRam"
 theorem = "verifyUpdate_binds"
 description = "Wide-arity Verkle universal memory (`UMem`) opening and update verifiers cryptographically bind address-value transitions."
 
@@ -878,8 +878,8 @@ description = "Topological dirty-cone incremental reactive notebook evaluation m
 
 [[apex]]
 id = "polis-zoe-offer-safety-unconditional"
-subsystem = "Polis"
-module = "Obend.Polis.ZoeSeatSettlement"
+subsystem = "Ledger"
+module = "Obend.Ledger.Seat"
 theorem = "zoe_offer_safety_unconditional"
 description = "Escrow-staged ZoE seat settlement guarantees unconditional offer safety and conservation across arbitrary untrusted guest reallocations and multi-turn exits."
 
@@ -942,7 +942,7 @@ description = "Pillar-6 seL4 Microkit SPSC copy-before-verify ring isolation + 3
 [[apex]]
 id = "vault-verkle-snapshot-incremental-commit"
 subsystem = "Vault"
-module = "Obend.Vault.VerkleSnapshotBridge"
+module = "Obend.Vault.WorldTree"
 theorem = "incrementalVerkleSnapshot_eq_fullCommit"
 description = "O(1) dirty-chunk `ChunkedWorld` COW snapshots match monolithic Ajtai/Dual Verkle commitments with idempotent torn-tail WAL crash recovery."
 
@@ -1052,8 +1052,8 @@ description = "256-bit DECO selective-disclosure TLS session attestations with n
 
 [[apex]]
 id = "polis-prepaid-lease-fork-conservation"
-subsystem = "Polis"
-module = "Obend.Polis.PrepaidLeaseAndFork"
+subsystem = "Vault"
+module = "Obend.Vault.Escrow"
 theorem = "multi_fork_tree_conservation"
 description = "256-bit committed `PrepaidLease` metered draw conservation and sovereign `ConfinedSession.forkTwo` attenuation refusing egress/capability amplification."
 
@@ -1074,7 +1074,7 @@ description = "GF(256) Reed-Solomon $k$-of-$n$ Proof-of-Retrievability shards, $
 [[apex]]
 id = "vault-portable-continuation-migration"
 subsystem = "Vault"
-module = "Obend.Vault.PortableContinuation"
+module = "Obend.Vault.Escrow"
 theorem = "migrationHistory_preserves_home_or_collision"
 description = "Canonical DetCBOR `HomeArchive` export/import tombstones stale source hosts, refuses replay, and preserves pages, membranes, and balances across migrations."
 
@@ -1151,9 +1151,9 @@ description = "Wiedemann `GF(2^128)` Binary Spartan R1CS sumcheck soundness (`bi
 [[apex]]
 id = "vault-exp-verkle-openhash-snapshot"
 subsystem = "Vault"
-module = "Obend.Vault.ExpVerkleAndOpenHash"
+module = "Obend.Vault.WorldTree"
 theorem = "verifyExpVerkleOpening_binds_or_collision"
-description = "Exponential-arity Verkle forest (`O(log log N)` opening depth) + elastic bounded-probe open-addressed hash table (`verifyAbsenceCert_sound`, `ChunkedWorld` snapshot refusal)."
+description = "Exponential-arity Verkle forest (`O(log log N)` opening depth) + elastic bounded-probe open-addressed hash table (`verifyAbsence_sound_or_collision`, `ChunkedWorld` snapshot refusal)."
 
 [[apex]]
 id = "hardware-symplectic-vehicle-6dof"
@@ -1500,8 +1500,8 @@ description = "Zero-constant polynomial proactive share refresh (`proactive_refr
 
 [[apex]]
 id = "crypto-pq-threshold-custody-multi-turn-safe"
-subsystem = "Crypto"
-module = "Obend.Crypto.ThresholdHashMpc"
+subsystem = "Polis"
+module = "Obend.Polis.PqThresholdCustody"
 theorem = "pq_threshold_custody_multi_turn_safe"
 description = "Multi-turn post-quantum threshold custody safety (`pq_threshold_custody_multi_turn_safe`) enforcing one-time epoch latch uniqueness, quorum non-double-signing, and revoked-membrane blocking."
 
@@ -1628,6 +1628,136 @@ subsystem = "ClusterGov"
 module = "Obend.ClusterGov.PhysicalEnvelope"
 theorem = "auditSwarmComputeMeterDedup_sound"
 description = "Deduplicated physical compute-energy receipt metering (`auditSwarmComputeMeterDedup_sound`) rejecting duplicate receipt rows and undermetered energy claims across multi-node logs."
+
+# ==============================================================================
+# 26. Wave C2 Consolidated Organs & Bucket-4 Zero-Blocker Keepers
+# ==============================================================================
+
+[[apex]]
+id = "hardware-gpu-ntt-dft-encoded"
+subsystem = "Hardware"
+module = "Obend.Hardware.Gpu.NttKernel"
+theorem = "NttSource.source_to_gpu_dft_encoded"
+description = "End-to-end Stockham/DIF GPU NTT block kernel refinement proving Core4 source and lowered flat-memory GPU dispatches compute the exact Goldilocks DFT across all supported power-of-two sizes."
+
+[[apex]]
+id = "lower-lcnf-eval-simulates-core4"
+subsystem = "Lower"
+module = "Obend.Lower.LCNF"
+theorem = "evalLcnfCode_simulates_core4"
+description = "Operational LCNF evaluator (`LcnfVal`, lexical join-point closures, constructor-tag cases, and named record projection) simulates `compileLcnfToCore4` Core4 evaluation."
+
+[[apex]]
+id = "hardware-notebook-projection-binding"
+subsystem = "Hardware"
+module = "Obend.Hardware.NotebookProjection"
+theorem = "pnrRouteFrameDigest_binding"
+description = "Reactive notebook hardware/physical projection binds full length-framed routed nets and bitstream frames up to collision (`projectGdsii_injective_on_nets_and_frames`)."
+
+[[apex]]
+id = "hardware-sky130-diode-recipe-valid"
+subsystem = "Hardware"
+module = "Obend.Hardware.Device.Sky130Diode"
+theorem = "sky130DiodeRecipe_wellFormed"
+description = "SKY130 p-n junction diode process recipe step well-formedness and distinct p/n implant dose invariants (`sky130Diode_implant_doses_distinct`)."
+
+[[apex]]
+id = "elab-derive-repair-fincons-ext"
+subsystem = "Elab"
+module = "Obend.Elab.DeriveRepair"
+theorem = "finCons_ext"
+description = "Metaprogrammed `AlgConfig` / `CoalgConfig` / `EffectiveQuotient` repair derivation (`LAW-M2` isolated in `Obend.Elab`) and finite product tuple extensionality."
+
+[[apex]]
+id = "judge-sharing-cost-cert-sound"
+subsystem = "Judge"
+module = "Obend.Judge.Cost"
+theorem = "verifyLayeredSharingCostCert_sound"
+description = "Flat and layered clairvoyant sharing-cost certificate soundness (`verifySharingCostCert_sound`, `verifyLayeredSharingCostCert_sound`) with inhabited fragment and refusal."
+
+[[apex]]
+id = "tactic-docs-census-clean-iff"
+subsystem = "Tactic"
+module = "Obend.Tactic.DocsCensus"
+theorem = "censusReport_isClean_iff"
+description = "Environment-grounded documentation and census auditor (`#docs_census`, `#census_environment`) characterizing clean multi-document identifier resolution."
+
+[[apex]]
+id = "tactic-compositional-judge-codec-sound"
+subsystem = "Tactic"
+module = "Obend.Tactic.Compositional"
+theorem = "ofCodec_encode_sound"
+description = "Compositional `Judge.ofSoundCheck` iterative deepening (`deepenVerdict_mono`), `Format.ofCodec` byte-level roundtrip soundness, and `gradedTriple_of_symExec` VCG."
+
+[[apex]]
+id = "core-splice-contextual-msubst-uses"
+subsystem = "Core"
+module = "Obend.Core.Proofs.Splice"
+theorem = "contextual_msubst_uses"
+description = "Linear and graded usage conservation across open multi-hole contextual code splicing under binders (`splice_typed`, `contextual_msubst_uses`)."
+
+[[apex]]
+id = "equiv-yields-mix-assoc-interaction"
+subsystem = "Equiv"
+module = "Obend.Equiv.Yields"
+theorem = "mix_assoc_interaction"
+description = "Multi-turn `Yields` suspension-trace contextual equivalence (`IEquiv.bequiv`) and `.mix` associativity across interactive sessions."
+
+[[apex]]
+id = "leaf-residual-vtable-clean"
+subsystem = "Leaf"
+module = "Obend.Leaf.Residual"
+theorem = "vtable_clean"
+description = "Flattened `Leaf` vtables contain zero residual `super` literals (`openVtable_no_residual_super`), justifying flat vtable emission in `Leaf.Emit`."
+
+[[apex]]
+id = "run-reflect-forged-descriptor-refused"
+subsystem = "Run"
+module = "Obend.Run.Reflect"
+theorem = "forged_descriptor_refused"
+description = "Capability-gated runtime reflection refuses forged descriptors and metadata-only grants while admitting verified runner descriptors."
+
+[[apex]]
+id = "run-ticks-deepen-bounded-refinement"
+subsystem = "Run"
+module = "Obend.Run.Ticks"
+theorem = "deepenBounded_eq_deepen"
+description = "O(k) `Spec <-> Exec` iterative-deepening tick refinement (`deepenBounded_eq_deepen`) and cost-indexed runner completeness (`cost_indexed_completeness`)."
+
+[[apex]]
+id = "run-adapter-session-reachable-inv"
+subsystem = "Run"
+module = "Obend.Run.Proofs.Adapter"
+theorem = "areachable_inv"
+description = "Multi-turn interactive `AReachable` session invariant preservation (`areachable_inv`, `asession_reachable`) over `Run.Adapter` and `Run.Proofs.Core4`."
+
+[[apex]]
+id = "spec-ecosystem-turn-pins-every-root"
+subsystem = "Spec"
+module = "Obend.Spec.Proofs.Ecosystem"
+theorem = "turn_pins_every_root"
+description = "Workspace lockfile pin coverage (`turn_pins_every_root`) and monotonic stale-pin refusal (`moved_pin_stale_forever`) across multi-package turns."
+
+[[apex]]
+id = "elab-prepare-checks-sound"
+subsystem = "Elab"
+module = "Obend.Elab.Proofs.PrepareChecks"
+theorem = "prepare_checks"
+description = "End-to-end elaboration preparation soundness (`prepare_checks`, `prepareChecked_complete`) bridging surface tree annotations into `Core.Check`."
+
+[[apex]]
+id = "hardware-silicon-chip-computes-demand"
+subsystem = "Hardware"
+module = "Obend.Hardware.Silicon"
+theorem = "chip_computes_demand"
+description = "Synchronous register-bank and skid-buffered silicon demand evaluation (`chip_computes_demand`, `runNamed_sound`, `checkAllChannelHops_sound`)."
+
+[[apex]]
+id = "hardware-quantum-matter-hypergraph-intertwiner"
+subsystem = "Hardware"
+module = "Obend.Hardware.QuantumMatter"
+theorem = "quotientOpenHypergraph_intertwines_eval_and_adjoint"
+description = "Equitable open-hypergraph symmetry quotient intertwining (`quotientOpenHypergraph_intertwines_eval_and_adjoint`), Clifford parity-sector protection, and planar Clements optical power conservation."
 
 # ==============================================================================
 # Planned Wave 5+ Vertical Spine Apex Theorems (`master_interface_and_systems_architecture.md`)

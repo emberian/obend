@@ -4,7 +4,6 @@
 # 2. Multi-Limb ($K$-Limb) Ozaki Base-13 `FP4` integer identities (`Obend.Hardware.Accelerators`)
 # 3. Octree pruning regimes (`GeometryCAM.ivMinChoice`)
 # 4. Grounded Sampled-Data ZOH Current-Loop ISS Ball (`Obend.Hardware.CurrentLoop`)
-# 5. `stdlib/physical/*.obend` Elaborated via `#import_obend` in `Obend.Hardware.UserspacePhysical`
 -/
 import Lean
 import Obend.Hardware.Accelerators
@@ -15,20 +14,13 @@ import Obend.Hardware.OpenHypergraph
 import Obend.Hardware.CurrentLoop
 import Obend.Hardware.Analog
 import Obend.Hardware.DSP
-import Obend.Hardware.UserspacePhysical
 import Obend.Tactic.Tooth
 
 namespace Obend.Tests.CoupledPhysicalTest
 
 open Obend.Core.Term (Primitive Term Step Steps Evaluates)
-open Obend.Equiv
-open Obend.Logic
-open Obend.Leaf
-open Obend.Leaf.Static
-open Obend.Lower
 open Obend.Analysis (CanonicalRat)
 open Obend.Hardware.HDL
-open Obend.Hardware.Compiler
 open Obend.Hardware.Accelerators
 open Obend.Hardware.GeometryCAM
 open Obend.Hardware.OpenUSD
@@ -37,7 +29,6 @@ open Obend.Hardware.OpenHypergraph
 open Obend.Hardware.CurrentLoop
 open Obend.Hardware.Analog
 open Obend.Hardware.DSP
-open Obend.Hardware.UserspacePhysical
 
 set_option autoImplicit false
 set_option maxHeartbeats 800000
@@ -134,46 +125,7 @@ theorem test_quantized_current_loop_lsb_and_iss_ball
    hIss.2.2.1, hIss.2.2.2⟩
 
 -- ============================================================================
--- 5. `stdlib/physical/*.obend` Elaborated via `#import_obend` in `UserspacePhysical`
--- ============================================================================
-
-theorem test_stdlib_physical_obend_packages_and_compositions :
-    lcDrivesStatorUsdComp = StdLcDrivesStator.lcDrivesProductionStator_comp ∧
-    statorInSlotComp = StdLcDrivesStator.statorInSlot_comp ∧
-    ms350PhaseLegComp = StdMs350FcmlPhaseLeg.ms350ProtectedPhaseLeg_comp ∧
-    q3PhotonicComp = StdCleanroomTcadStack.q3KrawtchoukArray_comp ∧
-    cleanroomTcadStackComp = StdCleanroomTcadStack.cleanroomTcadStack_comp ∧
-    cnc5AxisMillComp = StdCnc5AxisMill.compensated5AxisMill_comp :=
-  ⟨lcDrivesStatorUsdComp_eq_imported,
-   statorInSlotComp_eq_imported,
-   ms350PhaseLegComp_eq_imported,
-   q3PhotonicComp_eq_imported,
-   cleanroomTcadStackComp_eq_imported,
-   cnc5AxisMillComp_eq_imported⟩
-
-theorem test_four_stdlib_physical_domain_objects_universal
-    (loss r currentA diDt margin pIn modeIdx vov fanout : Nat) :
-    Evaluates (.app (.get statorInSlotCore4Object "peakWindingTemp") (.nat loss)) (.nat (50 + loss * 9)) ∧
-    Evaluates (.app (.get statorInSlotCore4Object "sdfMargin") (.nat r)) (.nat ((r + 10) + 6)) ∧
-    Evaluates (.app (.get ms350PhaseLegCore4Object "switchingLossUj") (.nat currentA)) (.nat (currentA * 3 + 120)) ∧
-    Evaluates (.app (.get ms350PhaseLegCore4Object "shootThroughSafe") (.nat diDt)) (.boolean (decide (diDt ≤ 80))) ∧
-    Evaluates (.app (.get ms350PhaseLegCore4Object "effectiveGateDelayNs") (.nat margin)) (.nat ((margin + 12) + 25)) ∧
-    Evaluates (.app (.get q3PhotonicCore4Object "transferredPowerMw") (.nat pIn)) (.nat (pIn * 7 + 3)) ∧
-    Evaluates (.app (.get q3PhotonicCore4Object "krawtchoukPhaseShiftMrad") (.nat modeIdx)) (.nat (modeIdx * 15 + 45)) ∧
-    Evaluates (.app (.get cleanroomTcadCore4Object "drainCurrentUa") (.nat vov)) (.nat (vov * 5 + 250)) ∧
-    Evaluates (.app (.get cleanroomTcadCore4Object "gateDelayPs") (.nat fanout)) (.nat ((fanout * 8 + 20) + 4)) :=
-  ⟨stator_in_slot_peak_temp_forall loss,
-   stator_in_slot_sdf_margin_forall r,
-   ms350_switching_loss_forall currentA,
-   ms350_shoot_through_safe_forall diDt,
-   ms350_gate_delay_forall margin,
-   q3_photonic_transferred_power_forall pIn,
-   q3_photonic_phase_shift_forall modeIdx,
-   cleanroom_tcad_drain_current_forall vov,
-   cleanroom_tcad_gate_delay_forall fanout⟩
-
--- ============================================================================
--- 6. `#tooth` Mutation Proofs
+-- 5. `#tooth` Mutation Proofs
 -- ============================================================================
 
 #tooth Obend.Hardware.Accelerators.ozaki_base13_klimb_mul_exact by
@@ -183,7 +135,7 @@ theorem test_four_stdlib_physical_domain_objects_universal
   mutation Obend.Hardware.CurrentLoop.rtlPiStep := fun _ _ _ intMv => (intMv + 2, intMv + 2)
 
 -- ============================================================================
--- 7. Compile-Time Axiom Audit (`0 sorryAx`, `0 custom axioms`, `0 Classical.choice`)
+-- 6. Compile-Time Axiom Audit (`0 sorryAx`, `0 custom axioms`, `0 Classical.choice`)
 -- ============================================================================
 
 open Lean Elab Command in
@@ -192,17 +144,7 @@ elab "#verify_coupled_physical_axioms" : command => do
     ``Obend.Hardware.Accelerators.evalBase13Limbs_add_exact,
     ``Obend.Hardware.Accelerators.evalBase13Limbs_scale_exact,
     ``Obend.Hardware.Accelerators.ozaki_base13_klimb_mul_exact,
-    ``Obend.Hardware.Accelerators.ozaki_base13_klimb_dot_exact,
-    ``Obend.Hardware.UserspacePhysical.stator_in_slot_peak_temp_forall,
-    ``Obend.Hardware.UserspacePhysical.stator_in_slot_sdf_margin_forall,
-    ``Obend.Hardware.UserspacePhysical.ms350_switching_loss_forall,
-    ``Obend.Hardware.UserspacePhysical.ms350_shoot_through_safe_forall,
-    ``Obend.Hardware.UserspacePhysical.ms350_gate_delay_forall,
-    ``Obend.Hardware.UserspacePhysical.q3_photonic_transferred_power_forall,
-    ``Obend.Hardware.UserspacePhysical.q3_photonic_phase_shift_forall,
-    ``Obend.Hardware.UserspacePhysical.cleanroom_tcad_drain_current_forall,
-    ``Obend.Hardware.UserspacePhysical.cleanroom_tcad_gate_delay_forall,
-    ``test_four_stdlib_physical_domain_objects_universal
+    ``Obend.Hardware.Accelerators.ozaki_base13_klimb_dot_exact
   ]
   let standardTargets : List Name := [
     ``Obend.Hardware.CurrentLoop.rtlPiStep_within_lsb,
