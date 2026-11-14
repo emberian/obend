@@ -11,25 +11,22 @@ neither a claim nor a composition changes the public type. Two levels are stated
 * the Core4 typing relation: `compose_typed` — the term the elaborator lowers one `compose` step to,
   `specification (composed{inherited, wrapping}) (mix lower upper)` with no binder (`composeLowering`),
   has a `PartialTyping` derivation at every shareable target `T` and every operand kind, built
-  generically in `T`; `compose_step_typed` is the first step of a chain, provenance read off each operand. So the no-refusal theorem
-  (`Obend.Spec.Proofs.FrontEndAdequacy.accepted_never_refused`, statement unchanged) covers every
-  program built from it; `twice_accepted` and `claim_spec_accepted` exhibit the surface programs the
-  old metadata typing refused, and the teeth after them the refusals that stay.
+  generically in `T`; `compose_step_typed` is the first step of a chain, provenance read off each
+  operand. So the no-refusal theorem (`Obend.Spec.Proofs.FrontEndAdequacy.accepted_never_refused`)
+  covers every program built from it.
 
-Statements as in minidregg `Compiler/ObjectiveBendSpecificationClosure.lean` (commit 092027a2); the
-reflection contract is minidregg docs/objective-bend/REFLECTION.md. An exposed-section leaf: nothing
-imports it.
+The compiled surface `.obend` acceptance and refusal vectors live in Tier-2A
+`tests/extracted/SpecLawVectorsTest.lean`. Statements as in minidregg
+`Compiler/ObjectiveBendSpecificationClosure.lean` (commit 092027a2).
 -/
-public import Obend.Spec.FrontEnd
-public meta import Obend.Spec.FrontEnd
+public import Obend.Spec.Types
+public import Obend.Spec.Elaborate
 public import Obend.Core.Ty
 public import Obend.Core.Check
 public import Obend.Core.Term
-public import Obend.AssertCompiled
 public import Obend.Core.Proofs.Preservation.Base.Insert
 public section
 namespace Obend.Spec.Proofs.SpecificationClosure
-open Lean (Json toJson)
 open Obend.Core.Ty
 open Obend.Core.Check
 open Obend.Core.Term
@@ -90,6 +87,7 @@ def specTy (T : Ty) : Ty := .specification (.variable metaVariable) (extTy T)
 def coreOperandTy (T : Ty) : Bool → Ty
   | true => specTy T
   | false => extTy T
+
 /-- An operand's provenance, as the elaborator lowers it. -/
 def provenance (isSpecification : Bool) (operand : Obend.Core.Term.Term) : Obend.Core.Term.Term :=
   if isSpecification then .metadata operand else .inject "extension" (.record [])
@@ -184,155 +182,29 @@ theorem compose_step_typed (T : Ty) (shareable : T.shareable = true) {context : 
     | exact reusable_add_uses _ _ _ _ lowerCaptures (reusable_add_uses _ _ _ _ zero zero)
     | exact reusable_add_uses _ _ _ _ zero (reusable_add_uses _ _ _ _ zero zero)
 
-/-! ## Surface programs the old metadata typing refused, now accepted -/
+/-- Pure kernel inhabitedness witness for `compose_step_typed` (`T := .natural`, `left := false`,
+`right := false`, identity extension `λ self super => super`). -/
+theorem compose_step_typed_inhabited :
+    let idExt : Term := .lam (.lam (.bound 0))
+    ∃ uses, PartialTyping metaAssumptions []
+      (composeLowering (provenance false idExt) (provenance false idExt) idExt idExt)
+      (specTy .natural) uses := by
+  let idExt : Term := .lam (.lam (.bound 0))
+  let innerAnn : LambdaAnnotation :=
+    { reuse := .reusable, parameter := .unrestricted, domain := .natural, codomain := .natural }
+  let outerAnn : LambdaAnnotation :=
+    { reuse := .reusable, parameter := .unrestricted, domain := .natural,
+      codomain := .arrow .reusable .unrestricted .natural .natural }
+  have hInner : PartialTyping metaAssumptions [⟨.natural, .unrestricted⟩, ⟨.natural, .unrestricted⟩]
+      (.bound 0) .natural [1, 0] :=
+    .bound (binding := ⟨.natural, .unrestricted⟩) rfl
+  have hMid : PartialTyping metaAssumptions [⟨.natural, .unrestricted⟩]
+      (.lam (.bound 0)) (.arrow .reusable .unrestricted .natural .natural) [0] :=
+    .lambda (annotation := innerAnn) hInner rfl rfl rfl rfl
+  have hId : PartialTyping metaAssumptions [] idExt (coreOperandTy .natural false) [] :=
+    .lambda (annotation := outerAnn) hMid rfl rfl rfl rfl
+  exact compose_step_typed .natural rfl false false hId hId rfl rfl
 
-open Obend.Spec.FrontEnd in
-def acceptsSource (source entry : String) : Bool :=
-  let m : SourceModule := ⟨"Probe", source, Sha256.hexString source, []⟩
-  match FrontEnd.lower [m] 0 entry (Json.arr #[]) (Json.arr #[])
-      (Json.mkObj [("heap", toJson "100000"), ("stack", toJson "100000"), ("ticks", toJson "100000")]) "definition" with
-  | .ok l => (FrontEnd.accept l).toBool
-  | .error _ => false
-
-/-- The audit's witness (LTUO probe W01): `Specification<Nat>` is closed under compose. -/
-def twiceSource : String :=
-  "edition ObjectiveBend 1\n" ++
-  "def twice(e: Extension<Nat>) -> Specification<Nat>:\n  compose(e, e)\n"
-
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem twice_accepted : acceptsSource twiceSource "twice" = true := by native_decide
-
-/-- LTUO probe W02: a spec with a claim inhabits `Specification<T>`. -/
-def claimSpecSource : String :=
-  "edition ObjectiveBend 1\nrecord Counter:\n  n: Nat\n" ++
-  "spec Start for Counter:\n  claim positive: self.n == 41n\n  def n() -> Nat:\n    41n\n" ++
-  "def asSpecification() -> Specification<Counter>:\n  Start\n"
-
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem claim_spec_accepted : acceptsSource claimSpecSource "asSpecification" = true := by native_decide
-
-/-- Teeth: the refusal is not gone wholesale — a claim that is not Bool is still refused
-(claims are checked code in their own knot field), and a spec at another target is
-not a `Specification<Counter>`. -/
-def badClaimSource : String :=
-  "edition ObjectiveBend 1\nrecord Counter:\n  n: Nat\n" ++
-  "spec Start for Counter:\n  claim positive: self.n + 1n\n  def n() -> Nat:\n    41n\n" ++
-  "def asSpecification() -> Specification<Counter>:\n  Start\n"
-
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem non_boolean_claim_refused : acceptsSource badClaimSource "asSpecification" = false := by native_decide
-
-/-- `law` is no longer a spec clause: it names an ENFORCED predicate (GPT-6 row G), and a
-property nothing checks is a `claim`. The old spelling refuses at parse, never reinterpreted. -/
-def lawKeywordSource : String :=
-  "edition ObjectiveBend 1\nrecord Counter:\n  n: Nat\n" ++
-  "spec Start for Counter:\n  law positive: self.n == 41n\n  def n() -> Nat:\n    41n\n" ++
-  "def asSpecification() -> Specification<Counter>:\n  Start\n"
-
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem law_keyword_refused : acceptsSource lawKeywordSource "asSpecification" = false := by native_decide
-
-def wrongTargetSource : String :=
-  "edition ObjectiveBend 1\nrecord Counter:\n  n: Nat\nrecord Other:\n  n: Nat\n  m: Nat\n" ++
-  "spec Start for Counter:\n  def n() -> Nat:\n    41n\n" ++
-  "def asSpecification() -> Specification<Other>:\n  Start\n"
-
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem wrong_target_refused : acceptsSource wrongTargetSource "asSpecification" = false := by native_decide
-
-/-! ## The open inherited row of a closed spec (OB-LTUO LT2 D3)
-
-`fix` over declared plain specs with a seed that is not a whole target instantiates each
-layer at the row actually beneath it and discharges the target at the end. -/
-
-def reviewSpecs : String :=
-  "edition ObjectiveBend 1\nrecord Review:\n  review(value: Nat) -> Nat\n  twice(value: Nat) -> Nat\n" ++
-  "spec Base for Review:\n  def review(value: Nat) -> Nat:\n    value + 1n\n" ++
-  "spec Twice for Review:\n  requires review(value: Nat) -> Nat\n  def twice(value: Nat) -> Nat:\n    self.review(self.review(value))\n" ++
-  "spec Augmented for Review:\n  def review(value: Nat) -> Nat:\n    super.review(value) + 1n\n"
-
-/-- LTUO probe W05: no placeholder seed. -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem empty_seed_accepted :
-    acceptsSource (reviewSpecs ++ "def run() -> Nat:\n  fix(compose(Base, Twice, Augmented), {}).twice(3n)\n") "run" = true := by
-  native_decide
-
-/-- A target member nobody provides is refused (W06's shape: Twice's requirement unmet). -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem unprovided_requirement_refused :
-    acceptsSource (reviewSpecs ++ "def run() -> Nat:\n  fix(compose(Twice, Augmented), {}).twice(3n)\n") "run" = false := by
-  native_decide
-
-/-- A `super` read with nothing beneath it is refused. -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem inherited_unprovided_refused :
-    acceptsSource (reviewSpecs ++ "def run() -> Nat:\n  fix(compose(Augmented, Base, Twice), {}).twice(3n)\n") "run" = false := by
-  native_decide
-
-/-- A requirement at another type than the target's member is refused (W07). -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem requires_signature_refused :
-    acceptsSource ("edition ObjectiveBend 1\nrecord R:\n  review(value: Nat) -> Nat\n" ++
-      "spec S for R:\n  requires review(value: String) -> Nat\n  def review(value: Nat) -> Nat:\n    value\n" ++
-      "def run() -> Nat:\n  fix(S, {}).review(1n)\n") "run" = false := by
-  native_decide
-
-/-! ## Open declarations over Self and Super (OB-LTUO LT2 step 3b) -/
-
-def fourthFieldSource : String :=
-  "edition ObjectiveBend 1\nrecord X:\n  x: Nat\nrecord XY:\n  x: Nat\n  y: Nat\n" ++
-  "record XYZW:\n  x: Nat\n  y: Nat\n  z: Nat\n  w: Nat\n" ++
-  "extension AddY[Self has {x: Nat}, Super has {x: Nat}](self: Self, super: Super) -> Super with {y: Nat}:\n" ++
-  "  extend(super, {y: 2n * self.x})\n" ++
-  "extension AddZW(self: XYZW, super: XY) -> XYZW:\n  extend(super, {z: self.y, w: self.z + 1n})\n" ++
-  "def run() -> Nat:\n  fix(compose(AddY, AddZW), {x: 5n}).w\n"
-
-/-- An extension written over what it uses is reused at a self it never named (W09b). -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem open_extension_reused_accepted : acceptsSource fourthFieldSource "run" = true := by native_decide
-
-def heavierSpec : String :=
-  "spec Heavier[Self has {weight: Nat, heavier(other: Self) -> Self}, Super has {weight: Nat}]:\n" ++
-  "  def heavier(other: Self) -> Self:\n    if other.weight <= self.weight then self else other\n"
-
-/-- An F-bounded binary method closes at a recursive record (W10). -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem binary_self_accepted :
-    acceptsSource ("edition ObjectiveBend 1\nrecord Node:\n  weight: Nat\n  heavier(other: Node) -> Node\n" ++
-      heavierSpec ++ "def node(n: Nat) -> Node:\n  fix(Heavier, {weight: n})\n") "node" = true := by native_decide
-
-/-- ... and is refused where the self's method has another type (the F-bound is discharged). -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem f_bound_mismatch_refused :
-    acceptsSource ("edition ObjectiveBend 1\nrecord Pair:\n  weight: Nat\n  heavier(other: Nat) -> Pair\n" ++
-      heavierSpec ++ "def pair(n: Nat) -> Pair:\n  fix(Heavier, {weight: n})\n") "pair" = false := by native_decide
-
-/-- A template is checked against its binder alone: reading an undeclared self member refuses. -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem unbound_self_member_refused :
-    acceptsSource ("edition ObjectiveBend 1\n" ++
-      "extension Bad[Self has {x: Nat}, Super has {x: Nat}](self: Self, super: Super) -> Super with {y: Nat}:\n" ++
-      "  extend(super, {y: self.z})\ndef zero() -> Nat:\n  0n\n") "zero" = false := by native_decide
-
-/-- The built-in module declaring `SpecMeta`/`SpecClaims` is Objective Bend source the
-front end's own parser reads. -/
--- fixture kept (2026-11-04): compiled-trust vector, re-run by #assert_compiled
-theorem builtin_parses : Elaborate.builtinModule.toBool = true := by native_decide
-
-#assert_compiled twice_accepted
-#assert_compiled claim_spec_accepted
-#assert_compiled non_boolean_claim_refused
-#assert_compiled law_keyword_refused
-#assert_compiled wrong_target_refused
-#assert_compiled builtin_parses
-#assert_compiled empty_seed_accepted
-#assert_compiled unprovided_requirement_refused
-#assert_compiled inherited_unprovided_refused
-#assert_compiled requires_signature_refused
-#assert_compiled open_extension_reused_accepted
-#assert_compiled binary_self_accepted
-#assert_compiled f_bound_mismatch_refused
-#assert_compiled unbound_self_member_refused
 end Obend.Spec.Proofs.SpecificationClosure
 
 end
