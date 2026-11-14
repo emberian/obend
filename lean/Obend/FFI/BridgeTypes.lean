@@ -242,13 +242,13 @@ private def encodeRedactedWorkbookJson (rwb : RedactedWorkbook) (verified : Bool
         ("values", toJson c.result.values),
         ("commitmentHex", toJson (bitVec256ToHex cm))
       ]
-    | .redacted cid ck kind bindings cm _ =>
+    | .redacted cid ck kind defs cm _ =>
       Json.mkObj [
         ("mode", toJson "redacted"),
         ("cellKey", toJson ck),
         ("id", toJson cid),
         ("kind", toJson kind.toLabel),
-        ("exportedDefs", Json.arr (bindings.toArray.map fun (s, v) => Json.arr #[toJson s, toJson v])),
+        ("exportedDefs", Json.arr (defs.toArray.map toJson)),
         ("commitmentHex", toJson (bitVec256ToHex cm))
       ]
   let resp := Json.mkObj [

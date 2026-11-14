@@ -50,6 +50,11 @@ public import Obend.Logic.Obligation
 public import Obend.Lower.Judge
 public import Obend.Spec.Syntax
 public import Obend.Spec.Elaborate
+import all Obend.Judge.Class
+import all Obend.Judge.RealAnalysis
+import all Obend.Analysis.Groebner
+import all Obend.Logic.Obligation
+import all Obend.Spec.Syntax
 
 public section
 
@@ -71,8 +76,8 @@ set_option autoImplicit false
 
 /-! ## 1. Kernel-Reducible Structural String/Wire Helpers & JSON Helpers -/
 
-/-- Fuel-bounded structural `Nat → List Char` decimal conversion (100% `@[expose]`). -/
-@[expose] def natToCharsFuel : Nat → Nat → List Char → List Char
+/-- Fuel-bounded structural `Nat → List Char` decimal conversion. -/
+def natToCharsFuel : Nat → Nat → List Char → List Char
   | 0, _, acc => if acc.isEmpty then ['0'] else acc
   | fuel + 1, n, acc =>
     let d := Char.ofNat (48 + (n % 10))
@@ -80,28 +85,28 @@ set_option autoImplicit false
     if q == 0 then d :: acc
     else natToCharsFuel fuel q (d :: acc)
 
-/-- Structural `Nat → String` conversion (kernel-reducible by `rfl` in `module` mode). -/
-@[expose] def autoNatToStr (n : Nat) : String :=
+/-- Structural `Nat → String` conversion. -/
+def autoNatToStr (n : Nat) : String :=
   String.ofList (natToCharsFuel 32 n [])
 
-/-- Structural `Int → String` conversion (kernel-reducible by `rfl` in `module` mode). -/
-@[expose] def autoIntToStr (i : Int) : String :=
+/-- Structural `Int → String` conversion. -/
+def autoIntToStr (i : Int) : String :=
   match i with
   | .ofNat n   => autoNatToStr n
   | .negSucc n => "-" ++ autoNatToStr (n + 1)
 
 /-- Structural `Bool → String` conversion. -/
-@[expose] def autoBoolToStr (b : Bool) : String :=
+def autoBoolToStr (b : Bool) : String :=
   if b then "true" else "false"
 
 /-- Structural list join with a custom separator `sep`. -/
-@[expose] def autoJoinSep (sep : String) : List String → String
+def autoJoinSep (sep : String) : List String → String
   | [] => ""
   | [x] => x
   | x :: xs => x ++ sep ++ autoJoinSep sep xs
 
-/-- Structural single-character string splitter (100% `@[expose]`, avoids `String.splitOn`). -/
-@[expose] def autoSplitCharAux (sep : Char) : List Char → List Char → List String
+/-- Structural single-character string splitter (avoids `String.splitOn`). -/
+def autoSplitCharAux (sep : Char) : List Char → List Char → List String
   | [], cur => [String.ofList cur.reverse]
   | c :: cs, cur =>
     if c == sep then
@@ -109,24 +114,24 @@ set_option autoImplicit false
     else
       autoSplitCharAux sep cs (c :: cur)
 
-@[expose] def autoSplitChar (sep : Char) (s : String) : List String :=
+def autoSplitChar (sep : Char) (s : String) : List String :=
   autoSplitCharAux sep s.toList []
 
-@[expose] def autoStartsWithChars : List Char → List Char → Bool
+def autoStartsWithChars : List Char → List Char → Bool
   | _, [] => true
   | [], _ :: _ => false
   | c :: cs, p :: ps => (c == p) && autoStartsWithChars cs ps
 
-@[expose] def autoContainsChars (needle : List Char) : List Char → Bool
+def autoContainsChars (needle : List Char) : List Char → Bool
   | [] => needle.isEmpty
   | c :: cs => autoStartsWithChars (c :: cs) needle || autoContainsChars needle cs
 
-/-- Structural substring check (`100% @[expose]`, avoids `String.splitOn`). -/
-@[expose] def autoContainsSubstr (haystack needle : String) : Bool :=
+/-- Structural substring check (avoids `String.splitOn`). -/
+def autoContainsSubstr (haystack needle : String) : Bool :=
   autoContainsChars needle.toList haystack.toList
 
 /-- Parse a `Nat` from a `List Char` structurally. -/
-@[expose] def autoParseNatChars : List Char → Nat → Bool → Option Nat
+def autoParseNatChars : List Char → Nat → Bool → Option Nat
   | [], acc, true => some acc
   | [], _, false => none
   | c :: cs, acc, _ =>
@@ -136,20 +141,20 @@ set_option autoImplicit false
       none
 
 /-- Parse a `Nat` from a decimal string structurally. -/
-@[expose] def autoParseNat? (s : String) : Option Nat :=
+def autoParseNat? (s : String) : Option Nat :=
   autoParseNatChars s.toList 0 false
 
 /-- Parse an `Int` from a decimal string structurally. -/
-@[expose] def autoParseInt? (s : String) : Option Int :=
+def autoParseInt? (s : String) : Option Int :=
   match s.toList with
   | '-' :: cs => (autoParseNatChars cs 0 false).map fun n => -(Int.ofNat n)
   | cs        => (autoParseNatChars cs 0 false).map Int.ofNat
 
 /-- Parse a `CanonicalRat` from `"num/den"` or `"num"`. -/
-@[expose] def autoEncodeRatWire (q : CanonicalRat) : String :=
+def autoEncodeRatWire (q : CanonicalRat) : String :=
   autoIntToStr q.num ++ "/" ++ autoNatToStr q.den
 
-@[expose] def autoDecodeRatWire? (s : String) : Option CanonicalRat :=
+def autoDecodeRatWire? (s : String) : Option CanonicalRat :=
   match autoSplitChar '/' s with
   | [nStr, dStr] => do
     let n ← autoParseInt? nStr
@@ -160,10 +165,10 @@ set_option autoImplicit false
     some (Rat.ofInt n)
   | _ => none
 
-@[expose] def autoEncodeIntervalWire (iv : Interval) : String :=
+def autoEncodeIntervalWire (iv : Interval) : String :=
   autoEncodeRatWire iv.lo ++ ":" ++ autoEncodeRatWire iv.hi
 
-@[expose] def autoDecodeIntervalWire? (s : String) : Option Interval :=
+def autoDecodeIntervalWire? (s : String) : Option Interval :=
   match autoSplitChar ':' s with
   | [loStr, hiStr] => do
     let lo ← autoDecodeRatWire? loStr
@@ -172,7 +177,7 @@ set_option autoImplicit false
   | _ => none
 
 /-- Scan `autoSplitChar '"' raw` for `"key"` followed by `":"` and return the quoted value. -/
-@[expose] def findQuotedJsonFieldAux (key : String) : List String → Option String
+def findQuotedJsonFieldAux (key : String) : List String → Option String
   | k :: sep :: val :: rest =>
     if k == key && sep == ":" then
       some val
@@ -181,23 +186,29 @@ set_option autoImplicit false
   | _ => none
 
 /-- Extract a string field `"\"<key>\":\""` ... `"\""` from a compact JSON object structurally. -/
-@[expose] def extractJsonStringField? (key : String) (raw : String) : Option String :=
+def extractJsonStringField? (key : String) (raw : String) : Option String :=
   findQuotedJsonFieldAux key (autoSplitChar '"' raw)
 
+/-- True when `s` parses structurally via `sosJsonParse` as a JSON object with at least one field. -/
+def hasNonEmptyJsonFields (s : String) : Bool :=
+  match Obend.Analysis.sosJsonParse s with
+  | .ok (.obj (_ :: _)) => true
+  | _ => false
+
 /-- Encode a `CanonicalRat` as a compact JSON object string `{"num":n,"den":d}`. -/
-@[expose] def encodeRatJsonStr (q : CanonicalRat) : String :=
+def encodeRatJsonStr (q : CanonicalRat) : String :=
   "{\"num\":" ++ autoIntToStr q.num ++ ",\"den\":" ++ autoNatToStr q.den ++ "}"
 
 /-- Encode an `Interval` as a compact JSON object string `{"lo":...,"hi":...}`. -/
-@[expose] def encodeIntervalJsonStr (iv : Interval) : String :=
+def encodeIntervalJsonStr (iv : Interval) : String :=
   "{\"lo\":" ++ encodeRatJsonStr iv.lo ++ ",\"hi\":" ++ encodeRatJsonStr iv.hi ++ "}"
 
 /-- Encode a `CanonicalRat` as a `Lean.Json` object `{"num": n, "den": d}`. -/
-@[expose] def encodeRatJson (q : CanonicalRat) : Json :=
+def encodeRatJson (q : CanonicalRat) : Json :=
   Json.mkObj [("num", toJson q.num), ("den", toJson q.den)]
 
 /-- Decode a `CanonicalRat` from a `Lean.Json` object `{"num": n, "den": d}` or integer literal. -/
-@[expose] def decodeRatJson (j : Json) : Except String CanonicalRat :=
+def decodeRatJson (j : Json) : Except String CanonicalRat :=
   match j.getInt? with
   | .ok n => .ok (Rat.ofInt n)
   | .error _ => do
@@ -209,11 +220,11 @@ set_option autoImplicit false
       .ok (CanonicalRat.mk num den)
 
 /-- Encode an `Interval` as a `Lean.Json` object `{"lo": ..., "hi": ...}`. -/
-@[expose] def encodeIntervalJson (iv : Interval) : Json :=
+def encodeIntervalJson (iv : Interval) : Json :=
   Json.mkObj [("lo", encodeRatJson iv.lo), ("hi", encodeRatJson iv.hi)]
 
 /-- Decode an `Interval` from a `Lean.Json` object `{"lo": ..., "hi": ...}`. -/
-@[expose] def decodeIntervalJson (j : Json) : Except String Interval := do
+def decodeIntervalJson (j : Json) : Except String Interval := do
   let loJson ← j.getObjVal? "lo"
   let hiJson ← j.getObjVal? "hi"
   let lo ← decodeRatJson loJson
@@ -221,7 +232,7 @@ set_option autoImplicit false
   return ⟨lo, hi⟩
 
 /-- Decode a variable box `List (String × Interval)` from a `Lean.Json` array. -/
-@[expose] def decodeIntervalEnvJson (j : Json) : Except String (List (String × Interval)) := do
+def decodeIntervalEnvJson (j : Json) : Except String (List (String × Interval)) := do
   let arr ← j.getArr?
   arr.toList.mapM fun item => do
     let v ← item.getObjValAs? String "var"
@@ -230,7 +241,7 @@ set_option autoImplicit false
     return (v, iv)
 
 /-- Fuel-bounded decoder for `RealExpr` from `Lean.Json`. -/
-@[expose] def decodeRealExprJsonAux : Nat → Json → Except String RealExpr
+def decodeRealExprJsonAux : Nat → Json → Except String RealExpr
   | 0, _ => .error "RealExpr JSON recursion limit exceeded"
   | fuel + 1, j => do
     let op ← j.getObjValAs? String "op"
@@ -262,7 +273,7 @@ set_option autoImplicit false
     else
       .error s!"unknown RealExpr op '{op}'"
 
-@[expose] def decodeRealExprJson (j : Json) : Except String RealExpr :=
+def decodeRealExprJson (j : Json) : Except String RealExpr :=
   decodeRealExprJsonAux 64 j
 
 /-! ## 2. Judge 1: `"interval@1"` (`IntervalObj`, `IntervalCert` with Bisection, `intervalFormat`) -/
@@ -272,14 +283,14 @@ structure IntervalObj where
   expr         : RealExpr
   env          : List (String × Interval)
   claimedBound : Interval
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Convert `IntervalObj` to `Obend.Judge.IntervalQuery`. -/
 @[expose] def IntervalObj.toQuery (o : IntervalObj) : IntervalQuery :=
   { expr := o.expr, env := o.env, claimedBound := o.claimedBound }
 
 /-- Convert `Obend.Judge.IntervalQuery` to `IntervalObj`. -/
-@[expose] def IntervalObj.ofQuery (q : IntervalQuery) : IntervalObj :=
+def IntervalObj.ofQuery (q : IntervalQuery) : IntervalObj :=
   { expr := q.expr, env := q.env, claimedBound := q.claimedBound }
 
 /-- Certificate for `"interval@1"`, supporting direct interval evaluation, recursive variable-box
@@ -288,10 +299,10 @@ inductive IntervalCert where
   | direct
   | bisect (varName : String) (left right : IntervalCert)
   | counterexample (point : List (String × CanonicalRat))
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Update the first binding for `varName` in `env` to `newIv`. -/
-@[expose] def replaceVarInterval (varName : String) (newIv : Interval) :
+def replaceVarInterval (varName : String) (newIv : Interval) :
     List (String × Interval) → List (String × Interval)
   | [] => []
   | (k, v) :: rest =>
@@ -343,7 +354,7 @@ theorem rho_mem_left_or_right (x : CanonicalRat) (iv : Interval) (hMem : x ∈ i
   · exact .inr ⟨by grind, hMem.2⟩
 
 /-- Kernel checker for `IntervalObj` and recursive `IntervalCert` (including `.bisect`). -/
-@[expose] def checkIntervalAutoCert (q : IntervalObj) : IntervalCert → Verdict IntervalClause
+def checkIntervalAutoCert (q : IntervalObj) : IntervalCert → Verdict IntervalClause
   | .direct =>
     intervalCheck 0 q.toQuery .direct
   | .counterexample pt =>
@@ -401,7 +412,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
       | refused _ _ => rw [hL] at h; contradiction
       | uncovered => rw [hL] at h; contradiction
 
-@[expose] instance intervalAutoJudge : Judge IntervalObj IntervalCert where
+instance intervalAutoJudge : Judge IntervalObj IntervalCert where
   Clause := IntervalClause
   Meaning q _c := IntervalQuery.SemanticMeaning q.toQuery
   check _ q c := checkIntervalAutoCert q c
@@ -413,7 +424,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
   mono := by intro _ _ _ _ _ _; rfl
 
 /-- Pick the variable with the largest interval width `iv.hi - iv.lo` in `env`. -/
-@[expose] def widestIntervalVar? : List (String × Interval) → Option (String × Interval)
+def widestIntervalVar? : List (String × Interval) → Option (String × Interval)
   | [] => none
   | [x] => some x
   | (v, iv) :: rest =>
@@ -426,7 +437,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
         some (vBest, ivBest)
 
 /-- Untrusted adaptive bisection witness synthesizer for `"interval@1"`. -/
-@[expose] def synthesizeIntervalCert : Nat → IntervalObj → Option IntervalCert
+def synthesizeIntervalCert : Nat → IntervalObj → Option IntervalCert
   | 0, q =>
     if (checkIntervalAutoCert q .direct).isOk then some .direct else none
   | depth + 1, q =>
@@ -446,7 +457,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
           if (checkIntervalAutoCert q cert).isOk then some cert else none
 
 /-- Prefix-token serializer for `RealExpr` (tokens separated by `"~"`, no quotes). -/
-@[expose] def encodeRealExprTokens : RealExpr → List String
+def encodeRealExprTokens : RealExpr → List String
   | .const q  => ["C", autoEncodeRatWire q]
   | .var name => ["V", name]
   | .add a b  => "A" :: (encodeRealExprTokens a ++ encodeRealExprTokens b)
@@ -454,7 +465,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
   | .mul a b  => "M" :: (encodeRealExprTokens a ++ encodeRealExprTokens b)
   | .sqr a    => "Q" :: encodeRealExprTokens a
 
-@[expose] def decodeRealExprTokens : Nat → List String → Option (RealExpr × List String)
+def decodeRealExprTokens : Nat → List String → Option (RealExpr × List String)
   | 0, _ => none
   | _ + 1, "C" :: qStr :: rest => do
     let q ← autoDecodeRatWire? qStr
@@ -478,12 +489,11 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
     some (.sqr a, r1)
   | _, _ => none
 
-@[expose] def encodeIntervalEnvWire (env : List (String × Interval)) : String :=
-  if env.isEmpty then "-"
-  else autoJoinSep "," (env.map fun (v, iv) => v ++ "=" ++ autoEncodeIntervalWire iv)
+def encodeIntervalEnvWire (env : List (String × Interval)) : String :=
+  autoJoinSep "," (env.map fun (v, iv) => v ++ "=" ++ autoEncodeIntervalWire iv)
 
-@[expose] def decodeIntervalEnvWire? (s : String) : Option (List (String × Interval)) :=
-  if s == "-" || s == "" then some []
+def decodeIntervalEnvWire? (s : String) : Option (List (String × Interval)) :=
+  if s.isEmpty then some []
   else
     (autoSplitChar ',' s).mapM fun item =>
       match autoSplitChar '=' item with
@@ -493,7 +503,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
       | _ => none
 
 /-- Encode an `IntervalObj` to a compact JSON wire string. -/
-@[expose] def encodeIntervalObj (o : IntervalObj) : String :=
+def encodeIntervalObj (o : IntervalObj) : String :=
   let exprWire := autoJoinSep "~" (encodeRealExprTokens o.expr)
   let envWire  := encodeIntervalEnvWire o.env
   let bndWire  := autoEncodeIntervalWire o.claimedBound
@@ -502,22 +512,22 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
     ",\"wire\":\"" ++ wire ++ "\"}"
 
 /-- Decode an `IntervalObj` from a JSON wire string. -/
-@[expose] def decodeIntervalObj (s : String) : Except String IntervalObj :=
-  if s == "{}" || s == "" then
-    .error "invalid IntervalObj JSON: missing required fields"
-  else
-    match extractJsonStringField? "wire" s with
-    | some wire =>
-      match autoSplitChar '|' wire with
-      | [exprWire, envWire, bndWire] =>
-        match decodeRealExprTokens 64 (autoSplitChar '~' exprWire),
-              decodeIntervalEnvWire? envWire,
-              autoDecodeIntervalWire? bndWire with
-        | some (expr, []), some env, some claimedBound =>
-          .ok { expr, env, claimedBound }
-        | _, _, _ => .error "invalid IntervalObj wire field"
-      | _ => .error "invalid IntervalObj wire format"
-    | none => do
+def decodeIntervalObj (s : String) : Except String IntervalObj :=
+  match extractJsonStringField? "wire" s with
+  | some wire =>
+    match autoSplitChar '|' wire with
+    | [exprWire, envWire, bndWire] =>
+      match decodeRealExprTokens 64 (autoSplitChar '~' exprWire),
+            decodeIntervalEnvWire? envWire,
+            autoDecodeIntervalWire? bndWire with
+      | some (expr, []), some env, some claimedBound =>
+        .ok { expr, env, claimedBound }
+      | _, _, _ => .error "invalid IntervalObj wire field"
+    | _ => .error "invalid IntervalObj wire format"
+  | none =>
+    if !hasNonEmptyJsonFields s then
+      .error "invalid IntervalObj JSON: missing required fields"
+    else do
       let j ← Json.parse s
       let expr ← j.getObjVal? "expr" >>= decodeRealExprJson
       let env ← j.getObjVal? "env" >>= decodeIntervalEnvJson
@@ -525,14 +535,14 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
       return { expr, env, claimedBound }
 
 /-- Prefix-token serializer for `IntervalCert`. -/
-@[expose] def encodeIntervalCertTokens : IntervalCert → List String
+def encodeIntervalCertTokens : IntervalCert → List String
   | .direct => ["D"]
   | .bisect v l r => ["B", v] ++ encodeIntervalCertTokens l ++ encodeIntervalCertTokens r
   | .counterexample pt =>
-    let ptStr := if pt.isEmpty then "-" else autoJoinSep "," (pt.map fun (v, q) => v ++ "=" ++ autoEncodeRatWire q)
+    let ptStr := autoJoinSep "," (pt.map fun (v, q) => v ++ "=" ++ autoEncodeRatWire q)
     ["X", ptStr]
 
-@[expose] def decodeIntervalCertTokens : Nat → List String → Option (IntervalCert × List String)
+def decodeIntervalCertTokens : Nat → List String → Option (IntervalCert × List String)
   | 0, _ => none
   | _ + 1, "D" :: rest => some (.direct, rest)
   | fuel + 1, "B" :: v :: rest => do
@@ -541,7 +551,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
     some (.bisect v l r, r2)
   | _ + 1, "X" :: ptStr :: rest => do
     let pt ←
-      if ptStr == "-" || ptStr == "" then some []
+      if ptStr.isEmpty then some []
       else
         (autoSplitChar ',' ptStr).mapM fun item =>
           match autoSplitChar '=' item with
@@ -553,7 +563,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
   | _, _ => none
 
 /-- Fuel-bounded decoder for `IntervalCert` from `Lean.Json`. -/
-@[expose] def decodeIntervalCertJsonAux : Nat → Json → Except String IntervalCert
+def decodeIntervalCertJsonAux : Nat → Json → Except String IntervalCert
   | 0, _ => .error "IntervalCert JSON recursion limit exceeded"
   | fuel + 1, j => do
     let kind ← j.getObjValAs? String "kind"
@@ -575,7 +585,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
       .error s!"unknown IntervalCert kind '{kind}'"
 
 /-- Encode an `IntervalCert` to a compact JSON wire string. -/
-@[expose] def encodeIntervalCert (c : IntervalCert) : String :=
+def encodeIntervalCert (c : IntervalCert) : String :=
   let kindStr := match c with
     | .direct => "direct"
     | .bisect .. => "bisect"
@@ -584,23 +594,23 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
   "{\"kind\":\"" ++ kindStr ++ "\",\"wire\":\"" ++ wire ++ "\"}"
 
 /-- Decode an `IntervalCert` from a JSON wire string. -/
-@[expose] def decodeIntervalCert (s : String) : Except String IntervalCert :=
-  if s == "{}" || s == "" then
-    .error "invalid IntervalCert JSON: missing required fields"
-  else
-    match extractJsonStringField? "wire" s with
-    | some wire =>
-      match decodeIntervalCertTokens 64 (autoSplitChar '~' wire) with
-      | some (c, []) => .ok c
-      | _ => .error "invalid IntervalCert wire field"
-    | none => do
+def decodeIntervalCert (s : String) : Except String IntervalCert :=
+  match extractJsonStringField? "wire" s with
+  | some wire =>
+    match decodeIntervalCertTokens 64 (autoSplitChar '~' wire) with
+    | some (c, []) => .ok c
+    | _ => .error "invalid IntervalCert wire field"
+  | none =>
+    if !hasNonEmptyJsonFields s then
+      .error "invalid IntervalCert JSON: missing required fields"
+    else do
       let j ← Json.parse s
       decodeIntervalCertJsonAux 32 j
 
 /-- Accumulator for `given` interval bounds `(varName, hasLo, lo, hasHi, hi)`. -/
 abbrev GivenBoundAcc := List (String × Bool × CanonicalRat × Bool × CanonicalRat)
 
-@[expose] def updateGivenLower (v : String) (c : CanonicalRat) : GivenBoundAcc → GivenBoundAcc
+def updateGivenLower (v : String) (c : CanonicalRat) : GivenBoundAcc → GivenBoundAcc
   | [] => [(v, true, c, false, 0)]
   | (w, hasLo, lo, hasHi, hi) :: rest =>
     if w == v then
@@ -609,7 +619,7 @@ abbrev GivenBoundAcc := List (String × Bool × CanonicalRat × Bool × Canonica
     else
       (w, hasLo, lo, hasHi, hi) :: updateGivenLower v c rest
 
-@[expose] def updateGivenUpper (v : String) (c : CanonicalRat) : GivenBoundAcc → GivenBoundAcc
+def updateGivenUpper (v : String) (c : CanonicalRat) : GivenBoundAcc → GivenBoundAcc
   | [] => [(v, false, 0, true, c)]
   | (w, hasLo, lo, hasHi, hi) :: rest =>
     if w == v then
@@ -620,7 +630,7 @@ abbrev GivenBoundAcc := List (String × Bool × CanonicalRat × Bool × Canonica
 
 /-- Compute a sound dynamic lower endpoint `≤ -10000` for an upper-bound interval query `diff ≤ ub`
 so valid large margins (e.g. `120 + 400*x - 600000 ≤ 0`) never fail `-10000 ≤ diff`. -/
-@[expose] def computeIntervalSafeLo (env : List (String × Interval)) (diff : RealExpr) : CanonicalRat :=
+def computeIntervalSafeLo (env : List (String × Interval)) (diff : RealExpr) : CanonicalRat :=
   match evalInterval env diff with
   | some iv =>
     let margin := iv.lo - 1
@@ -640,27 +650,27 @@ what makes the judge's rational meaning bear on the claim. -/
 
 /-- Name of claim parameter `i` (de Bruijn, counted from the innermost lambda): `p0` is the first
 declared parameter. -/
-@[expose] def claimParamName (arity i : Nat) : String := "p" ++ autoNatToStr (arity - 1 - i)
+def claimParamName (arity i : Nat) : String := "p" ++ autoNatToStr (arity - 1 - i)
 
 /-- The body of claim code `claim` of arity `arity` under its `λself. λsuper. λp₁ … λpₖ.` binders. -/
-@[expose] def claimBodyOf? (claim : Term) (arity : Nat) : Option Term := unlams (arity + 2) claim
+def claimBodyOf? (claim : Term) (arity : Nat) : Option Term := unlams (arity + 2) claim
 
 /-- The claim's body under its `λself. λsuper. λp₁ … λpₖ.` binders. -/
-@[expose] def claimBody? (o : ClaimObj) : Option Term := claimBodyOf? o.claim o.arity
+def claimBody? (o : ClaimObj) : Option Term := claimBodyOf? o.claim o.arity
 
 /-- Split an optional `given` guard: `ifBool c t (boolean true)` is `(some c, t)`. -/
-@[expose] def splitClaimGuard : Term → Option Term × Term
+def splitClaimGuard : Term → Option Term × Term
   | .ifBool c t (.boolean true) => (some c, t)
   | t => (none, t)
 
 /-- Conjuncts of a guard. -/
-@[expose] def claimGuardConjuncts : Term → List Term
+def claimGuardConjuncts : Term → List Term
   | .binary .conjunction a b => claimGuardConjuncts a ++ claimGuardConjuncts b
   | .boolean true => []
   | t => [t]
 
 /-- The `+`/`*`/literal fragment of a claim body as a `RealExpr`. -/
-@[expose] def claimTermToRealExpr (arity : Nat) : Term → Option RealExpr
+def claimTermToRealExpr (arity : Nat) : Term → Option RealExpr
   | .nat k => some (.const (Rat.ofInt (Int.ofNat k)))
   | .bound i => if i < arity then some (.var (claimParamName arity i)) else none
   | .binary .add a b => do
@@ -670,7 +680,7 @@ declared parameter. -/
   | _ => none
 
 /-- One `given` conjunct as a bound on a parameter (`<` is read exactly on `Nat`). -/
-@[expose] def claimGuardBound (arity : Nat) (acc : GivenBoundAcc) : Term → Option GivenBoundAcc
+def claimGuardBound (arity : Nat) (acc : GivenBoundAcc) : Term → Option GivenBoundAcc
   | .binary .lessEqual (.bound i) (.nat c) =>
     if i < arity then some (updateGivenUpper (claimParamName arity i) (Rat.ofInt (Int.ofNat c)) acc) else none
   | .binary .lessEqual (.nat c) (.bound i) =>
@@ -694,7 +704,7 @@ declared parameter. -/
 /-- The box of a claim: every parameter needs an upper bound from the guard (fail closed otherwise);
 the lower bound is at least `0` because parameters are `Nat`. Deterministic in the parameter order,
 so synthesis and binding compute the same object. -/
-@[expose] def claimBox? (arity : Nat) (guard? : Option Term) : Option (List (String × Interval)) := do
+def claimBox? (arity : Nat) (guard? : Option Term) : Option (List (String × Interval)) := do
   let conj := match guard? with
     | some g => claimGuardConjuncts g
     | none => []
@@ -712,7 +722,7 @@ so synthesis and binding compute the same object. -/
 /-- The `interval@1` object of a claim: `lhs <= rhs` is `lhs - rhs ∈ [lo, 0]`; `lhs < rhs` is
 `lhs + 1 - rhs ∈ [lo, 0]` (exact on `Nat`); `lhs == rhs` is `lhs - rhs ∈ [0, 0]`; all over the
 claim's box. `none` when the body is outside the fragment or a parameter is unbounded. -/
-@[expose] def claimIntervalObjOf? (claim : Term) (arity : Nat) : Option IntervalObj := do
+def claimIntervalObjOf? (claim : Term) (arity : Nat) : Option IntervalObj := do
   let body ← claimBodyOf? claim arity
   let (guard?, core) := splitClaimGuard body
   let env ← claimBox? arity guard?
@@ -734,12 +744,12 @@ claim's box. `none` when the body is outside the fragment or a parameter is unbo
   | _ => none
 
 /-- `claimIntervalObjOf?` at a `ClaimObj`. -/
-@[expose] def claimIntervalObj? (o : ClaimObj) : Option IntervalObj :=
+def claimIntervalObj? (o : ClaimObj) : Option IntervalObj :=
   claimIntervalObjOf? o.claim o.arity
 
 /-- `interval@1` claim binding (`Judge.Format.bindsClaim`): the object wire decodes to exactly the
 object `claimIntervalObjOf?` derives from the claim's code. Kernel-reducible (no `Json.parse`). -/
-@[expose] def intervalBindsClaim (claim : Term) (arity : Nat) (objWire : String) : Bool :=
+def intervalBindsClaim (claim : Term) (arity : Nat) (objWire : String) : Bool :=
   match decodeIntervalObj objWire with
   | .ok q => claimIntervalObjOf? claim arity == some q
   | .error _ => false
@@ -747,19 +757,19 @@ object `claimIntervalObjOf?` derives from the claim's code. Kernel-reducible (no
 /-- Canonical valid and invalid fixtures for `intervalFormat` (`"interval@1"`).
 Note: $x - x = 0 \in [-1/4, 1/4]$ on $x \in [0, 1]$ fails naive single-box evaluation
 (`evalInterval` gives $[-1, 1]$ due to interval dependency) but succeeds at bisection depth 2! -/
-@[expose] def goldenBisectIntervalObj : IntervalObj where
+def goldenBisectIntervalObj : IntervalObj where
   expr         := .sub (.var "x") (.var "x")
   env          := [("x", ⟨0, 1⟩)]
   claimedBound := ⟨CanonicalRat.mk (-1) 4, CanonicalRat.mk 1 4⟩
 
-@[expose] def badIntervalObj : IntervalObj where
+def badIntervalObj : IntervalObj where
   expr         := .var "x"
   env          := [("x", ⟨0, 10⟩)]
   claimedBound := ⟨0, 2⟩
 
 theorem badIntervalCert_refused :
     checkIntervalAutoCert badIntervalObj .direct =
-      .refused (.boundViolated ⟨0, 10⟩ ⟨0, 2⟩) [] := rfl
+      .refused (.boundViolated ⟨0, 10⟩ ⟨0, 2⟩) [] := by rfl
 
 /-- Registered `Obend.Judge.Format` for `"interval@1"`. -/
 @[expose] def intervalFormat : Format where
@@ -800,7 +810,7 @@ inductive TaylorModelExpr where
   | cos    (arg : TaylorModelExpr)
   | ln1p   (arg : TaylorModelExpr)
   | sqrt1p (arg : TaylorModelExpr)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Query for `"taylor-model@1"`. -/
 structure TaylorModelQuery where
@@ -809,7 +819,7 @@ structure TaylorModelQuery where
   center       : CanonicalRat := 0
   degree       : Nat := 4
   claimedBound : Interval
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Validated domain $[-1, 1]$ for `tmExpCertified`, `tmSinCertified`, `tmCosCertified`. -/
 @[expose] def tmUnitDomain : Interval := ⟨-1, 1⟩
@@ -914,12 +924,36 @@ checks that `evalTaylorModelExpr` produces `tm`, `tm` aligns with `(q.domain, q.
    | some compTm => (compTm == tm) && (evalTaylorModelRange tm).isSubintervalOf q.claimedBound
    | none => false)
 
-/-- Kernel judge checker for `"taylor-model@1"`. -/
+/-- Kernel judge checker for `"taylor-model@1"`:
+returns `.ok` when `verifyTaylorModelCert q tm` holds, `.refused` when the query itself is
+unsatisfiable across all Taylor-model certificates (inverted domain, expression outside analytic
+domain, or computed Taylor-model enclosure exceeding `q.claimedBound`), and `.uncovered` when `tm`
+does not match the query's canonical Taylor model on a non-refuted query. -/
 @[expose] def checkTaylorModelJudge (_grade : Nat) (q : TaylorModelQuery) (tm : TaylorModel) : Verdict String :=
   if verifyTaylorModelCert q tm then
     .ok
-  else
-    .refused "taylor_model_enclosure_or_domain_violation" []
+  else if !decide (q.domain.lo ≤ q.domain.hi) then
+    .refused "taylor_model_empty_domain" []
+  else match evalTaylorModelExpr q.domain q.center q.degree q.expr with
+    | none => .refused "taylor_model_outside_analytic_domain" []
+    | some compTm =>
+      if !(evalTaylorModelRange compTm).isSubintervalOf q.claimedBound then
+        .refused "taylor_model_range_exceeds_claimed_bound" []
+      else
+        .uncovered
+
+/-- Independent mathematical enclosure meaning for `(TaylorModelQuery, TaylorModel)`:
+`q.domain` is non-inverted, `tm` is the certified Taylor model over `(q.domain, q.center)` whose
+range enclosure lies inside `q.claimedBound`, and every function `f` modeled by `tm`
+(`TaylorModel.Models f tm`) maps every point `x ∈ q.domain` into `q.claimedBound`. -/
+def TaylorModelMeaning (q : TaylorModelQuery) (tm : TaylorModel) : Prop :=
+  q.domain.lo ≤ q.domain.hi ∧
+  tm.domain = q.domain ∧
+  tm.center = q.center ∧
+  evalTaylorModelExpr q.domain q.center q.degree q.expr = some tm ∧
+  (evalTaylorModelRange tm).isSubintervalOf q.claimedBound = true ∧
+  ∀ (f : CanonicalRat → CanonicalRat), TaylorModel.Models f tm →
+    ∀ x, x ∈ q.domain → f x ∈ q.claimedBound
 
 theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : TaylorModel)
     (h : checkTaylorModelJudge grade q tm = .ok) :
@@ -927,7 +961,14 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
     (evalTaylorModelRange tm).isSubintervalOf q.claimedBound = true := by
   unfold checkTaylorModelJudge at h
   cases hV : verifyTaylorModelCert q tm with
-  | false => rw [hV] at h; contradiction
+  | false =>
+    rw [hV] at h
+    simp only [Bool.false_eq_true, ↓reduceIte] at h
+    split at h
+    · contradiction
+    · split at h
+      · contradiction
+      · split at h <;> contradiction
   | true =>
     refine ⟨rfl, ?_⟩
     unfold verifyTaylorModelCert at hV
@@ -938,28 +979,67 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
       rw [hEval] at hMatch
       exact ((Bool.and_eq_true _ _).mp hMatch).2
 
-@[expose] instance taylorModelJudge : Judge TaylorModelQuery TaylorModel where
+theorem checkTaylorModelJudge_meaning (grade : Nat) (q : TaylorModelQuery) (tm : TaylorModel)
+    (h : checkTaylorModelJudge grade q tm = .ok) :
+    TaylorModelMeaning q tm := by
+  have ⟨hV, hRange⟩ := checkTaylorModelJudge_sound grade q tm h
+  unfold verifyTaylorModelCert at hV
+  rcases (Bool.and_eq_true _ _).mp hV with ⟨h123, hMatch⟩
+  rcases (Bool.and_eq_true _ _).mp h123 with ⟨h12, hCtrB⟩
+  rcases (Bool.and_eq_true _ _).mp h12 with ⟨hLoHiB, hDomB⟩
+  have hLoHi : q.domain.lo ≤ q.domain.hi := of_decide_eq_true hLoHiB
+  have hDom : tm.domain = q.domain := beq_iff_eq.mp hDomB
+  have hCtr : tm.center = q.center := beq_iff_eq.mp hCtrB
+  cases hEval : evalTaylorModelExpr q.domain q.center q.degree q.expr with
+  | none => rw [hEval] at hMatch; contradiction
+  | some compTm =>
+    rw [hEval] at hMatch
+    have hCompEq : compTm = tm := beq_iff_eq.mp ((Bool.and_eq_true _ _).mp hMatch).1
+    subst hCompEq
+    refine ⟨hLoHi, hDom, hCtr, hEval, hRange, ?_⟩
+    intro f hMod x hxQ
+    have hx : x ∈ compTm.domain := hDom ▸ hxQ
+    have hIn := evalTaylorModelRange_encloses hMod hx
+    exact Interval.subset_sound (by simpa [Interval.isSubintervalOf, Interval.subset] using hRange) hIn
+
+theorem checkTaylorModelJudge_refuted (grade : Nat) (q : TaylorModelQuery) (tm : TaylorModel)
+    (k : String) (p : List Nat)
+    (hRef : checkTaylorModelJudge grade q tm = .refused k p) :
+    ∀ tm', ¬ TaylorModelMeaning q tm' := by
+  intro tm' ⟨hLoHi, _, _, hEval', hRange', _⟩
+  unfold checkTaylorModelJudge at hRef
+  cases hV : verifyTaylorModelCert q tm with
+  | true => rw [hV] at hRef; contradiction
+  | false =>
+    rw [hV] at hRef
+    have hLoHiB : decide (q.domain.lo ≤ q.domain.hi) = true := decide_eq_true hLoHi
+    simp only [Bool.false_eq_true, ↓reduceIte, hLoHiB, Bool.not_true, hEval', hRange'] at hRef
+    contradiction
+
+instance taylorModelJudge : Judge TaylorModelQuery TaylorModel where
   Clause := String
-  Meaning q tm :=
-    verifyTaylorModelCert q tm = true ∧
-    (evalTaylorModelRange tm).isSubintervalOf q.claimedBound = true
+  Meaning := TaylorModelMeaning
   check := checkTaylorModelJudge
-  sound := by intro r q tm h; exact checkTaylorModelJudge_sound r q tm h
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment q := ∃ tm, verifyTaylorModelCert q tm = true
+  sound := by intro r q tm h; exact checkTaylorModelJudge_meaning r q tm h
+  refutes _ := true
+  refuted := by intro r q tm k p hRef _ tm'; exact checkTaylorModelJudge_refuted r q tm k p hRef tm'
+  Fragment q := q.domain.lo ≤ q.domain.hi
   complete := by
-    intro q _ ⟨tm, htm⟩
-    exact ⟨tm, 0, by simp [checkTaylorModelJudge, htm]⟩
+    intro q _ ⟨tm, hLoHi, hDom, hCtr, hEval, hRange, _⟩
+    have hV : verifyTaylorModelCert q tm = true := by
+      unfold verifyTaylorModelCert
+      have hLoHiB : decide (q.domain.lo ≤ q.domain.hi) = true := decide_eq_true hLoHi
+      simp [hLoHiB, hDom, hCtr, hEval, hRange]
+    exact ⟨tm, 0, by simp [checkTaylorModelJudge, hV]⟩
   mono := by intro _ _ _ _ _ _; rfl
 
 /-- Untrusted witness synthesizer for `"taylor-model@1"`. -/
-@[expose] def synthesizeTaylorModelCert (q : TaylorModelQuery) : Option TaylorModel := do
+def synthesizeTaylorModelCert (q : TaylorModelQuery) : Option TaylorModel := do
   let tm ← evalTaylorModelExpr q.domain q.center q.degree q.expr
   if verifyTaylorModelCert q tm then some tm else none
 
 /-- Prefix-token serializer for `TaylorModelExpr`. -/
-@[expose] def encodeTaylorModelExprTokens : TaylorModelExpr → List String
+def encodeTaylorModelExprTokens : TaylorModelExpr → List String
   | .var       => ["V"]
   | .const c   => ["C", autoEncodeRatWire c]
   | .add a b   => "A" :: (encodeTaylorModelExprTokens a ++ encodeTaylorModelExprTokens b)
@@ -972,7 +1052,7 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
   | .ln1p a    => "L" :: encodeTaylorModelExprTokens a
   | .sqrt1p a  => "R" :: encodeTaylorModelExprTokens a
 
-@[expose] def decodeTaylorModelExprTokens : Nat → List String → Option (TaylorModelExpr × List String)
+def decodeTaylorModelExprTokens : Nat → List String → Option (TaylorModelExpr × List String)
   | 0, _ => none
   | _ + 1, "V" :: rest => some (.var, rest)
   | _ + 1, "C" :: cStr :: rest => do
@@ -1012,7 +1092,7 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
   | _, _ => none
 
 /-- Fuel-bounded decoder for `TaylorModelExpr` from `Lean.Json`. -/
-@[expose] def decodeTaylorModelExprJsonAux : Nat → Json → Except String TaylorModelExpr
+def decodeTaylorModelExprJsonAux : Nat → Json → Except String TaylorModelExpr
   | 0, _ => .error "TaylorModelExpr JSON recursion limit exceeded"
   | fuel + 1, j => do
     let op ← j.getObjValAs? String "op"
@@ -1055,7 +1135,7 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
       .error s!"unknown TaylorModelExpr op '{op}'"
 
 /-- Encode a `TaylorModelQuery` to a compact JSON wire string. -/
-@[expose] def encodeTaylorModelQuery (q : TaylorModelQuery) : String :=
+def encodeTaylorModelQuery (q : TaylorModelQuery) : String :=
   let exprWire := autoJoinSep "~" (encodeTaylorModelExprTokens q.expr)
   let domWire  := autoEncodeIntervalWire q.domain
   let ctrWire  := autoEncodeRatWire q.center
@@ -1065,24 +1145,24 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
   "{\"kind\":\"taylor-model@1\",\"degree\":" ++ degWire ++ ",\"wire\":\"" ++ wire ++ "\"}"
 
 /-- Decode a `TaylorModelQuery` from a JSON wire string. -/
-@[expose] def decodeTaylorModelQuery (s : String) : Except String TaylorModelQuery :=
-  if s == "{}" || s == "" then
-    .error "invalid TaylorModelQuery JSON: missing required fields"
-  else
-    match extractJsonStringField? "wire" s with
-    | some wire =>
-      match autoSplitChar '|' wire with
-      | [exprWire, domWire, ctrWire, degWire, bndWire] =>
-        match decodeTaylorModelExprTokens 64 (autoSplitChar '~' exprWire),
-              autoDecodeIntervalWire? domWire,
-              autoDecodeRatWire? ctrWire,
-              autoParseNat? degWire,
-              autoDecodeIntervalWire? bndWire with
-        | some (expr, []), some domain, some center, some degree, some claimedBound =>
-          .ok { expr, domain, center, degree, claimedBound }
-        | _, _, _, _, _ => .error "invalid TaylorModelQuery wire field"
-      | _ => .error "invalid TaylorModelQuery wire format"
-    | none => do
+def decodeTaylorModelQuery (s : String) : Except String TaylorModelQuery :=
+  match extractJsonStringField? "wire" s with
+  | some wire =>
+    match autoSplitChar '|' wire with
+    | [exprWire, domWire, ctrWire, degWire, bndWire] =>
+      match decodeTaylorModelExprTokens 64 (autoSplitChar '~' exprWire),
+            autoDecodeIntervalWire? domWire,
+            autoDecodeRatWire? ctrWire,
+            autoParseNat? degWire,
+            autoDecodeIntervalWire? bndWire with
+      | some (expr, []), some domain, some center, some degree, some claimedBound =>
+        .ok { expr, domain, center, degree, claimedBound }
+      | _, _, _, _, _ => .error "invalid TaylorModelQuery wire field"
+    | _ => .error "invalid TaylorModelQuery wire format"
+  | none =>
+    if !hasNonEmptyJsonFields s then
+      .error "invalid TaylorModelQuery JSON: missing required fields"
+    else do
       let j ← Json.parse s
       let expr ← j.getObjVal? "expr" >>= decodeTaylorModelExprJsonAux 64
       let domain ← j.getObjVal? "domain" >>= decodeIntervalJson
@@ -1092,10 +1172,8 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
       return { expr, domain, center, degree, claimedBound }
 
 /-- Encode a `TaylorModel` certificate to a compact JSON wire string. -/
-@[expose] def encodeTaylorModelCert (tm : TaylorModel) : String :=
-  let coeffsWire :=
-    if tm.coeffs.isEmpty then "-"
-    else autoJoinSep "," (tm.coeffs.map autoEncodeRatWire)
+def encodeTaylorModelCert (tm : TaylorModel) : String :=
+  let coeffsWire := autoJoinSep "," (tm.coeffs.map autoEncodeRatWire)
   let ctrWire := autoEncodeRatWire tm.center
   let domWire := autoEncodeIntervalWire tm.domain
   let remWire := autoEncodeIntervalWire tm.rem
@@ -1103,23 +1181,23 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
   "{\"kind\":\"taylor-model-cert@1\",\"wire\":\"" ++ wire ++ "\"}"
 
 /-- Decode a `TaylorModel` certificate from a JSON wire string. -/
-@[expose] def decodeTaylorModelCert (s : String) : Except String TaylorModel :=
-  if s == "{}" || s == "" then
-    .error "invalid TaylorModel JSON: missing required fields"
-  else
-    match extractJsonStringField? "wire" s with
-    | some wire =>
-      match autoSplitChar '|' wire with
-      | [coeffsWire, ctrWire, domWire, remWire] =>
-        let coeffsOpt : Option (List CanonicalRat) :=
-          if coeffsWire == "-" || coeffsWire == "" then some []
-          else (autoSplitChar ',' coeffsWire).mapM autoDecodeRatWire?
-        match coeffsOpt, autoDecodeRatWire? ctrWire, autoDecodeIntervalWire? domWire, autoDecodeIntervalWire? remWire with
-        | some coeffs, some center, some domain, some rem =>
-          .ok { coeffs, center, domain, rem }
-        | _, _, _, _ => .error "invalid TaylorModel wire field"
-      | _ => .error "invalid TaylorModel wire format"
-    | none => do
+def decodeTaylorModelCert (s : String) : Except String TaylorModel :=
+  match extractJsonStringField? "wire" s with
+  | some wire =>
+    match autoSplitChar '|' wire with
+    | [coeffsWire, ctrWire, domWire, remWire] =>
+      let coeffsOpt : Option (List CanonicalRat) :=
+        if coeffsWire.isEmpty then some []
+        else (autoSplitChar ',' coeffsWire).mapM autoDecodeRatWire?
+      match coeffsOpt, autoDecodeRatWire? ctrWire, autoDecodeIntervalWire? domWire, autoDecodeIntervalWire? remWire with
+      | some coeffs, some center, some domain, some rem =>
+        .ok { coeffs, center, domain, rem }
+      | _, _, _, _ => .error "invalid TaylorModel wire field"
+    | _ => .error "invalid TaylorModel wire format"
+  | none =>
+    if !hasNonEmptyJsonFields s then
+      .error "invalid TaylorModel JSON: missing required fields"
+    else do
       let j ← Json.parse s
       let coeffsArr ← (← j.getObjVal? "coeffs").getArr?
       let coeffs ← coeffsArr.toList.mapM decodeRatJson
@@ -1130,14 +1208,17 @@ theorem checkTaylorModelJudge_sound (grade : Nat) (q : TaylorModelQuery) (tm : T
 
 /-- Golden and planted-bad fixtures for `"taylor-model@1"`:
 $\cos(x) + \sin(x) \in [4/5, 6/5]$ over $x \in [-1/10, 1/10]$. -/
-@[expose] def goldenTaylorModelQuery : TaylorModelQuery where
+def goldenTaylorModelQuery : TaylorModelQuery where
   expr         := .add (.cos .var) (.sin .var)
   domain       := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
   center       := 0
   degree       := 4
   claimedBound := ⟨CanonicalRat.mk 4 5, CanonicalRat.mk 6 5⟩
 
-@[expose] def badTaylorModelCert : TaylorModel where
+def badTaylorModelQuery : TaylorModelQuery :=
+  { goldenTaylorModelQuery with claimedBound := ⟨5, 6⟩ }
+
+def badTaylorModelCert : TaylorModel where
   coeffs := [0]
   center := 0
   domain := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
@@ -1145,8 +1226,8 @@ $\cos(x) + \sin(x) \in [4/5, 6/5]$ over $x \in [-1/10, 1/10]$. -/
 
 -- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badTaylorModelCert_refused :
-    checkTaylorModelJudge 0 goldenTaylorModelQuery badTaylorModelCert =
-      .refused "taylor_model_enclosure_or_domain_violation" [] := by
+    checkTaylorModelJudge 0 badTaylorModelQuery badTaylorModelCert =
+      .refused "taylor_model_range_exceeds_claimed_bound" [] := by
   decide +kernel
 
 /-- Registered `Obend.Judge.Format` for `"taylor-model@1"`. -/
@@ -1160,7 +1241,7 @@ theorem badTaylorModelCert_refused :
   decodeCert  := decodeTaylorModelCert
   trust       := .kernel
   regime      := .decidable
-  bad         := (goldenTaylorModelQuery, badTaylorModelCert)
+  bad         := (badTaylorModelQuery, badTaylorModelCert)
   badGrade    := 0
   bad_refused := ⟨_, _, badTaylorModelCert_refused⟩
 
@@ -1176,7 +1257,7 @@ example :
 
 /-- Attempt a single leading-term reduction step of `f` against `basis`, returning
 `(reducedPoly, generatorIdx, quotientTermPoly)`. -/
-@[expose] def polyReduceStepWithIdx? (f : Poly) (basis : List Poly) : Option (Poly × Nat × Poly) :=
+def polyReduceStepWithIdx? (f : Poly) (basis : List Poly) : Option (Poly × Nat × Poly) :=
   let rec go (idx : Nat) : List Poly → Option (Poly × Nat × Poly)
     | [] => none
     | g :: gs =>
@@ -1193,7 +1274,7 @@ example :
   go 0 basis
 
 /-- Accumulate a quotient contribution `(qPoly, idx)` into `List (Poly × Nat)`. -/
-@[expose] def addQuotientByIdx (idx : Nat) (qPoly : Poly) : List (Poly × Nat) → List (Poly × Nat)
+def addQuotientByIdx (idx : Nat) (qPoly : Poly) : List (Poly × Nat) → List (Poly × Nat)
   | [] => [(qPoly, idx)]
   | (qOld, i) :: rest =>
     if i == idx then
@@ -1204,7 +1285,7 @@ example :
 /-- Fuel-bounded multi-divisor polynomial division with cofactor tracking:
 reduces `f` modulo `basis` and returns `(remainder, quotients)` where `quotients : List (Poly × Nat)`
 satisfies $f = \sum_{(q_i, i)} q_i g_i + \text{remainder}$. -/
-@[expose] def polyDivModWithQuotients : Nat → Poly → List Poly → Poly × List (Poly × Nat)
+def polyDivModWithQuotients : Nat → Poly → List Poly → Poly × List (Poly × Nat)
   | 0, f, _ => (f, [])
   | fuel + 1, f, basis =>
     if f.isZero then (f, [])
@@ -1226,17 +1307,17 @@ satisfies $f = \sum_{(q_i, i)} q_i g_i + \text{remainder}$. -/
         | none => (f, [])
 
 /-- Halve all variable exponents of `m` when every exponent is even. -/
-@[expose] def halfMonomial? (m : Monomial) : Option Monomial :=
+def halfMonomial? (m : Monomial) : Option Monomial :=
   m.mapM fun (v, d) =>
     if d % 2 == 0 then some (v, d / 2) else none
 
 /-- Total degree $\sum_i d_i$ of a monomial. -/
-@[expose] def monomialTotalDeg (m : Monomial) : Nat :=
+def monomialTotalDeg (m : Monomial) : Nat :=
   m.foldl (fun acc (_, d) => acc + d) 0
 
 /-- Construct a diagonal square-completion `SOSPoly` from a polynomial `p` whose terms have
 even exponents and positive coefficients ($c_i x_{v_i}^{2 k_i} = c_i (x_{v_i}^{k_i})^2$). -/
-@[expose] def completeDiagonalSquaresToSos (p : Poly) : Option SOSPoly :=
+def completeDiagonalSquaresToSos (p : Poly) : Option SOSPoly :=
   if p.isZero then
     some { terms := [] }
   else
@@ -1258,7 +1339,7 @@ even exponents and positive coefficients ($c_i x_{v_i}^{2 k_i} = c_i (x_{v_i}^{k
 
 /-- Fuel-bounded exact rational Lagrange square-completion loop handling cross terms
 (such as $(x + y)^2 = x^2 + 2xy + y^2$ or $2x^2 - 2xy + y^2$). -/
-@[expose] def completeLagrangeSosAux : Nat → Poly → List (CanonicalRat × Poly) → Option (List (CanonicalRat × Poly))
+def completeLagrangeSosAux : Nat → Poly → List (CanonicalRat × Poly) → Option (List (CanonicalRat × Poly))
   | 0, p, acc =>
     if p.isZero then some acc.reverse
     else (completeDiagonalSquaresToSos p).map fun diag => acc.reverse ++ diag.terms
@@ -1307,7 +1388,7 @@ even exponents and positive coefficients ($c_i x_{v_i}^{2 k_i} = c_i (x_{v_i}^{k
 
 /-- Complete `p` into a verified sum-of-squares `SOSPoly` (diagonal fast path + rational Lagrange
 cross-term square completion), strictly gated by `sos.allCoeffsPos && (Poly.sub p sos.expand).isZero`. -/
-@[expose] def completeSquaresToSos (p : Poly) : Option SOSPoly :=
+def completeSquaresToSos (p : Poly) : Option SOSPoly :=
   match completeDiagonalSquaresToSos p with
   | some sos => some sos
   | none =>
@@ -1319,13 +1400,13 @@ cross-term square completion), strictly gated by `sos.allCoeffsPos && (Poly.sub 
 
 /-- Synthesize a `PositivstellensatzCert` proving `goal ≥ 0` modulo `domainIneqs` and `eqs`
 via `polyDivModWithQuotients` and `completeSquaresToSos` (with cone-generator fallback). -/
-@[expose] def synthesizePsatzNonnegCert (goal : Poly) (domainIneqs : List Poly) (eqs : List Poly) :
+def synthesizePsatzNonnegCert (goal : Poly) (domainIneqs : List Poly) (eqs : List Poly) :
     Option PositivstellensatzCert :=
   let (rem, quots) := polyDivModWithQuotients 32 goal eqs
   match completeSquaresToSos rem with
   | some remSos =>
     let cert : PositivstellensatzCert :=
-      { monoidIndices := [0]
+      { monoidIndices := []
       , sigma0        := remSos
       , coneTerms     := []
       , idealTerms    := quots }
@@ -1336,7 +1417,7 @@ via `polyDivModWithQuotients` and `completeSquaresToSos` (with cone-generator fa
         match completeSquaresToSos (Poly.sub rem hIneq) with
         | some remSos =>
           let cert : PositivstellensatzCert :=
-            { monoidIndices := [0]
+            { monoidIndices := []
             , sigma0        := remSos
             , coneTerms     := [({ terms := [(1, Poly.one)] }, idx)]
             , idealTerms    := quots }
@@ -1345,12 +1426,12 @@ via `polyDivModWithQuotients` and `completeSquaresToSos` (with cone-generator fa
     coneTry?
 
 /-- Structural wire serializer for `Monomial` (`v1^d1.v2^d2` or `_` for empty). -/
-@[expose] def autoEncodeMonomialWire (m : Monomial) : String :=
+def autoEncodeMonomialWire (m : Monomial) : String :=
   if m.isEmpty then "_"
   else autoJoinSep "." (m.map fun (v, d) => autoNatToStr v ++ "^" ++ autoNatToStr d)
 
-@[expose] def autoDecodeMonomialWire? (s : String) : Option Monomial :=
-  if s == "_" || s == "" then some []
+def autoDecodeMonomialWire? (s : String) : Option Monomial :=
+  if s == "_" || s.isEmpty then some []
   else
     (autoSplitChar '.' s).mapM fun item =>
       match autoSplitChar '^' item with
@@ -1361,12 +1442,12 @@ via `polyDivModWithQuotients` and `completeSquaresToSos` (with cone-generator fa
       | _ => none
 
 /-- Structural wire serializer for `Poly` (`m1*c1+m2*c2` or `0` for empty). -/
-@[expose] def autoEncodePolyWire (p : Poly) : String :=
+def autoEncodePolyWire (p : Poly) : String :=
   if p.terms.isEmpty then "0"
   else autoJoinSep "+" (p.terms.map fun (m, c) => autoEncodeMonomialWire m ++ "*" ++ autoEncodeRatWire c)
 
-@[expose] def autoDecodePolyWire? (s : String) : Option Poly :=
-  if s == "0" || s == "" then some ⟨[]⟩
+def autoDecodePolyWire? (s : String) : Option Poly :=
+  if s == "0" || s.isEmpty then some ⟨[]⟩
   else do
     let ts ← (autoSplitChar '+' s).mapM fun item =>
       match autoSplitChar '*' item with
@@ -1377,20 +1458,18 @@ via `polyDivModWithQuotients` and `completeSquaresToSos` (with cone-generator fa
       | _ => none
     some ⟨ts⟩
 
-@[expose] def autoEncodePolyListWire (ps : List Poly) : String :=
-  if ps.isEmpty then "-"
-  else autoJoinSep ";" (ps.map autoEncodePolyWire)
+def autoEncodePolyListWire (ps : List Poly) : String :=
+  autoJoinSep ";" (ps.map autoEncodePolyWire)
 
-@[expose] def autoDecodePolyListWire? (s : String) : Option (List Poly) :=
-  if s == "-" || s == "" then some []
+def autoDecodePolyListWire? (s : String) : Option (List Poly) :=
+  if s.isEmpty then some []
   else (autoSplitChar ';' s).mapM autoDecodePolyWire?
 
-@[expose] def autoEncodeSOSPolyWire (sos : SOSPoly) : String :=
-  if sos.terms.isEmpty then "-"
-  else autoJoinSep "," (sos.terms.map fun (w, p) => autoEncodeRatWire w ++ "@" ++ autoEncodePolyWire p)
+def autoEncodeSOSPolyWire (sos : SOSPoly) : String :=
+  autoJoinSep "," (sos.terms.map fun (w, p) => autoEncodeRatWire w ++ "@" ++ autoEncodePolyWire p)
 
-@[expose] def autoDecodeSOSPolyWire? (s : String) : Option SOSPoly :=
-  if s == "-" || s == "" then some ⟨[]⟩
+def autoDecodeSOSPolyWire? (s : String) : Option SOSPoly :=
+  if s.isEmpty then some ⟨[]⟩
   else do
     let ts ← (autoSplitChar ',' s).mapM fun item =>
       match autoSplitChar '@' item with
@@ -1401,162 +1480,100 @@ via `polyDivModWithQuotients` and `completeSquaresToSos` (with cone-generator fa
       | _ => none
     some ⟨ts⟩
 
-/-- Encode `lyapunovCoeffs` JSON array `[{\"var\":v,\"exp\":e,\"coeff\":c},...]` for `decodeSosLyapunovProblem`. -/
-@[expose] def encodeSosLyapunovCoeffsJsonStr (p : Poly) : String :=
-  let entries : List String := p.terms.filterMap fun (m, c) =>
-    if c.num ≤ 0 then none
-    else
-      match m with
-      | [] =>
-        some ("{\"var\":0,\"exp\":0,\"coeff\":" ++ autoNatToStr c.num.toNat ++ "}")
-      | (v, e) :: _ =>
-        some ("{\"var\":" ++ autoNatToStr v ++ ",\"exp\":" ++ autoNatToStr e ++
-          ",\"coeff\":" ++ autoNatToStr c.num.toNat ++ "}")
-  "[" ++ autoJoinSep "," entries ++ "]"
+/-- Lossless structured JSON wire encoder for `SosLyapunovProblem`, delegating to
+`Obend.Analysis.renderSosLyapunovProblemJson` (preserving exact rational numerators/denominators,
+signs, multi-variable monomials, vector fields, CBF barriers, and DAE manifolds). -/
+def encodeSosLyapunovProblemJson (p : SosLyapunovProblem) : String :=
+  Obend.Analysis.renderSosLyapunovProblemJson p
 
-/-- Encode an `SosLyapunovProblem` into the structured JSON format parsed by
-`Obend.Analysis.decodeSosLyapunovProblem` and `autoDecodeSosLyapunovProblem`. -/
-@[expose] def encodeSosLyapunovProblemJson (p : SosLyapunovProblem) : String :=
-  let dimVal   := if p.lyapunov.dim == 0 then 2 else p.lyapunov.dim
-  let dimStr   := autoNatToStr dimVal
-  let epsStr   := encodeRatJsonStr p.lyapunov.radialEps
-  let gammaStr := encodeRatJsonStr p.lyapunov.decayGamma
-  let alphaStr := encodeRatJsonStr p.cbf.classKAlpha
-  let deltaStr := encodeRatJsonStr p.dae.regDelta
-  let coeffsStr := encodeSosLyapunovCoeffsJsonStr p.lyapunov.lyapunovV
-  let wire :=
-    autoNatToStr dimVal ++ "|" ++
-    autoEncodePolyWire p.lyapunov.lyapunovV ++ "|" ++
-    autoEncodeRatWire p.lyapunov.radialEps ++ "|" ++
-    autoEncodeRatWire p.lyapunov.decayGamma ++ "|" ++
-    autoEncodePolyListWire p.lyapunov.domainIneqs
-  "{\"kind\":\"sos-lyapunov-cbf\",\"dim\":" ++ dimStr ++
-    ",\"epsilon\":" ++ epsStr ++
-    ",\"gamma\":" ++ gammaStr ++
-    ",\"alpha\":" ++ alphaStr ++
-    ",\"deltaReg\":" ++ deltaStr ++
-    ",\"lyapunovCoeffs\":" ++ coeffsStr ++
-    ",\"wire\":\"" ++ wire ++ "\"}"
+/-- Lossless structured JSON wire encoder for `SosLyapunovCert`, delegating to
+`Obend.Analysis.renderSosLyapunovCertJson`. -/
+def encodeSosLyapunovCertJson (c : SosLyapunovCert) : String :=
+  Obend.Analysis.renderSosLyapunovCertJson c
 
-/-- Encode an `SosLyapunovCert` into the structured JSON format parsed by
-`Obend.Analysis.decodeSosLyapunovCert` and `autoDecodeSosLyapunovCert`. -/
-@[expose] def encodeSosLyapunovCertJson (c : SosLyapunovCert) : String :=
-  let posCoeffs : List Nat :=
-    c.lyapunovWitness.lieDecayCert.sigma0.terms.filterMap fun (w, _) =>
-      if w.num ≤ 0 then none else some w.num.toNat
-  let safeCoeffs := if posCoeffs.isEmpty then [2, 2] else posCoeffs
-  let wire :=
-    autoEncodeSOSPolyWire c.lyapunovWitness.posDefCert.sigma0 ++ "|" ++
-    autoEncodeSOSPolyWire c.lyapunovWitness.lieDecayCert.sigma0
-  "{\"kind\":\"sos-lyapunov-cbf\",\"sigma0Coeffs\":[" ++
-    autoJoinSep "," (safeCoeffs.map autoNatToStr) ++ "],\"wire\":\"" ++ wire ++ "\"}"
+/-- Lossless fail-closed JSON wire decoder for `SosLyapunovProblem`, delegating directly to
+`Obend.Analysis.decodeSosLyapunovProblem` with zero preset-string shortcuts. -/
+def autoDecodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
+  Obend.Analysis.decodeSosLyapunovProblem s
 
-/-- Kernel-reducible wire decoder for `SosLyapunovProblem` (falling back to `Obend.Analysis.decodeSosLyapunovProblem`). -/
-@[expose] def autoDecodeSosLyapunovProblem (s : String) : Except String SosLyapunovProblem :=
-  if decide (s = "golden-cubic-cbf-dae") then
-    .ok goldenSosProblem
-  else if decide (s = "{}" ∨ s = "") then
-    .error "invalid SosLyapunovProblem JSON: missing required fields"
-  else
-    match extractJsonStringField? "wire" s with
-    | some wire =>
-      match autoSplitChar '|' wire with
-      | [dimStr, vWire, epsWire, gammaWire, ineqsWire] =>
-        match autoParseNat? dimStr,
-              autoDecodePolyWire? vWire,
-              autoDecodeRatWire? epsWire,
-              autoDecodeRatWire? gammaWire,
-              autoDecodePolyListWire? ineqsWire with
-        | some dim, some lyapV, some eps, some gamma, some ineqs =>
-          .ok { goldenSosProblem with
-            lyapunov := { goldenLyapunovSpec2D with
-              dim        := dim
-              domainIneqs := ineqs
-              lyapunovV  := lyapV
-              radialEps  := eps
-              decayGamma := gamma } }
-        | _, _, _, _, _ => Obend.Analysis.decodeSosLyapunovProblem s
-      | _ => Obend.Analysis.decodeSosLyapunovProblem s
-    | none => Obend.Analysis.decodeSosLyapunovProblem s
+/-- Lossless fail-closed JSON wire decoder for `SosLyapunovCert`, delegating directly to
+`Obend.Analysis.decodeSosLyapunovCert` with zero preset-string shortcuts. -/
+def autoDecodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
+  Obend.Analysis.decodeSosLyapunovCert s
 
-/-- Kernel-reducible wire decoder for `SosLyapunovCert` (falling back to `Obend.Analysis.decodeSosLyapunovCert`). -/
-@[expose] def autoDecodeSosLyapunovCert (s : String) : Except String SosLyapunovCert :=
-  if decide (s = "golden-cubic-cbf-dae" ∨ s = "valid-sos-cert") then
-    .ok goldenSosCert
-  else if decide (s = "bad-sos-cert") then
-    .ok badSosCert
-  else if decide (s = "{}" ∨ s = "") then
-    .error "invalid SosLyapunovCert JSON: missing required fields (kind, sigma0Coeffs)"
-  else
-    match extractJsonStringField? "wire" s with
-    | some wire =>
-      match autoSplitChar '|' wire with
-      | [posWire, lieWire] =>
-        match autoDecodeSOSPolyWire? posWire, autoDecodeSOSPolyWire? lieWire with
-        | some posSos, some lieSos =>
-          .ok { goldenSosCert with
-            lyapunovWitness := {
-              posDefCert := { goldenLyapunovWitness2D.posDefCert with sigma0 := posSos }
-              lieDecayCert := { goldenLyapunovWitness2D.lieDecayCert with sigma0 := lieSos }
-            } }
-        | _, _ => Obend.Analysis.decodeSosLyapunovCert s
-      | _ => Obend.Analysis.decodeSosLyapunovCert s
-    | none => Obend.Analysis.decodeSosLyapunovCert s
+/-- `"sos-lyapunov-cbf@1"` format registered in `autoCertFormats`, backed directly by the lossless
+`Obend.Analysis.sosLyapunovFormat` JSON codec and `sosLyapunovJudge`. -/
+def autoSosLyapunovFormat : Format :=
+  Obend.Analysis.sosLyapunovFormat
 
-/-- Kernel-reducible `"sos-lyapunov-cbf@1"` format registered in `autoCertFormats`. -/
-@[expose] def autoSosLyapunovFormat : Format where
-  name        := "sos-lyapunov-cbf"
-  version     := "1"
-  Obj         := SosLyapunovProblem
-  Cert        := SosLyapunovCert
-  judge       := Obend.Analysis.sosLyapunovJudge
-  decodeObj   := autoDecodeSosLyapunovProblem
-  decodeCert  := autoDecodeSosLyapunovCert
-  trust       := .kernel
-  regime      := .decidable
-  bad         := (goldenSosProblem, badSosCert)
-  badGrade    := 0
-  bad_refused := ⟨.lyapunovFailed, [], Obend.Analysis.sosLyapunov_bad_refused⟩
+/-- Canonical lossless JSON wire encoder for `SosLyapunovProblem`. -/
+def encodeSosLyapunovProblem (p : SosLyapunovProblem) : String :=
+  Obend.Analysis.renderSosLyapunovProblemJson p
 
-/-- Canonical wire encoder for `SosLyapunovProblem`: uses `"golden-cubic-cbf-dae"` when `p == goldenSosProblem`
-(so `decodeSosLyapunovProblem` reduces by `rfl` in the kernel) and structured JSON otherwise. -/
-@[expose] def encodeSosLyapunovProblem (p : SosLyapunovProblem) : String :=
-  if p == goldenSosProblem then
-    "golden-cubic-cbf-dae"
-  else
-    encodeSosLyapunovProblemJson p
+/-- Canonical lossless JSON wire encoder for `SosLyapunovCert`. -/
+def encodeSosLyapunovCert (c : SosLyapunovCert) : String :=
+  Obend.Analysis.renderSosLyapunovCertJson c
 
-/-- Canonical wire encoder for `SosLyapunovCert`: uses `"valid-sos-cert"` when `c == goldenSosCert`
-(so `decodeSosLyapunovCert` reduces by `rfl` in the kernel) and structured JSON otherwise. -/
-@[expose] def encodeSosLyapunovCert (c : SosLyapunovCert) : String :=
-  if c == goldenSosCert then
-    "valid-sos-cert"
-  else
-    encodeSosLyapunovCertJson c
+/-- Synthesize a Stengle safety-separation `PositivstellensatzCert` refuting
+`{x | barrierB(x) ≥ 0 ∧ unsafePoly(x) ≥ 0 ∧ domainIneqs(x) ≥ 0}` via conical combination of
+`barrierB` and `unsafePoly` plus SOS completion. -/
+def synthesizeCbfUnsafeRefuteCert (cbf : SosCbfSpec) : Option PositivstellensatzCert :=
+  let qUnsafe : PositivstellensatzQuery :=
+    { strictPos := [], nonneg := cbf.barrierB :: cbf.unsafePoly :: cbf.domainIneqs, eqs := [] }
+  let sumBU := Poly.add cbf.barrierB cbf.unsafePoly
+  let directTry? : Option PositivstellensatzCert :=
+    match completeSquaresToSos (Poly.neg (Poly.add Poly.one sumBU)) with
+    | some sig0 =>
+      let cert : PositivstellensatzCert :=
+        { monoidIndices := []
+        , sigma0        := sig0
+        , coneTerms     := [({ terms := [(1, Poly.one)] }, 0), ({ terms := [(1, Poly.one)] }, 1)]
+        , idealTerms    := [] }
+      if positivstellensatzCheck 0 qUnsafe cert == .ok then some cert else none
+    | none => none
+  match directTry? with
+  | some cert => some cert
+  | none =>
+    match sumBU.terms with
+    | [([], c0)] =>
+      if decide (c0 < 0) then
+        let w : CanonicalRat := 1 / (-c0)
+        let cert : PositivstellensatzCert :=
+          { monoidIndices := []
+          , sigma0        := { terms := [] }
+          , coneTerms     := [({ terms := [(w, Poly.one)] }, 0), ({ terms := [(w, Poly.one)] }, 1)]
+          , idealTerms    := [] }
+        if positivstellensatzCheck 0 qUnsafe cert == .ok then some cert else none
+      else none
+    | _ => none
 
-/-- Synthesize an `SosLyapunovCert` for an `SosLyapunovProblem` `p`, gated by
+/-- Synthesize an `SosLyapunovCert` algebraically for an `SosLyapunovProblem` `p` (from `p`'s actual
+ODE vector fields, Lyapunov function, CBF barrier, and DAE algebraic manifold), strictly gated by
 `checkSosLyapunovProblem 0 p cert == .ok`. -/
-@[expose] def synthesizeSosLyapunovCert (p : SosLyapunovProblem) : Option SosLyapunovCert :=
-  if (checkSosLyapunovProblem 0 p goldenSosCert).isOk then
-    some goldenSosCert
-  else
-    let vPosGoal := Poly.sub p.lyapunov.lyapunovV (Poly.scale p.lyapunov.radialEps (sumVarSquaresPoly p.lyapunov.dim))
-    let lieV := lieDerivativePoly p.lyapunov.lyapunovV p.lyapunov.vectorField
-    let vDecGoal := Poly.sub (Poly.neg lieV) (Poly.scale p.lyapunov.decayGamma p.lyapunov.lyapunovV)
-    let lieB := lieDerivativePoly p.cbf.barrierB p.cbf.vectorField
-    let nagumoGoal := Poly.add lieB (Poly.scale p.cbf.classKAlpha p.cbf.barrierB)
-    let regGoal := Poly.sub (Poly.sqr p.dae.algJacobianDet) (polyConst p.dae.regDelta)
-    match synthesizePsatzNonnegCert vPosGoal p.lyapunov.domainIneqs [],
-          synthesizePsatzNonnegCert vDecGoal p.lyapunov.domainIneqs [],
-          synthesizePsatzNonnegCert nagumoGoal (p.cbf.barrierB :: p.cbf.domainIneqs) [],
-          synthesizePsatzNonnegCert regGoal p.dae.domainIneqs p.dae.algConstraints with
-    | some posCert, some decCert, some nagCert, some regCert =>
-      let cand : SosLyapunovCert :=
-        { lyapunovWitness := { posDefCert := posCert, lieDecayCert := decCert }
-        , cbfWitness      := { goldenCbfWitness2D with nagumoInvarianceCert := nagCert }
-        , daeWitness      := { tangencyCert := { quotients := [] }, regularityCert := regCert } }
-      if (checkSosLyapunovProblem 0 p cand).isOk then some cand else none
-    | _, _, _, _ => none
+def synthesizeSosLyapunovCert (p : SosLyapunovProblem) : Option SosLyapunovCert :=
+  let vPosGoal := Poly.sub p.lyapunov.lyapunovV (Poly.scale p.lyapunov.radialEps (sumVarSquaresPoly p.lyapunov.dim))
+  let lieV := lieDerivativePoly p.lyapunov.lyapunovV p.lyapunov.vectorField
+  let vDecGoal := Poly.sub (Poly.neg lieV) (Poly.scale p.lyapunov.decayGamma p.lyapunov.lyapunovV)
+  let lieB := lieDerivativePoly p.cbf.barrierB p.cbf.vectorField
+  let nagumoGoal := Poly.add lieB (Poly.scale p.cbf.classKAlpha p.cbf.barrierB)
+  let regGoal := Poly.sub (Poly.sqr p.dae.algJacobianDet) (polyConst p.dae.regDelta)
+  let tangencyCerts : List IdealMembershipCert :=
+    p.dae.algConstraints.map fun h_r =>
+      let (_, quots) := polyDivModWithQuotients 32 (lieDerivativePoly h_r p.dae.vectorField) p.dae.algConstraints
+      { quotients := quots }
+  let tangencyCert : IdealMembershipCert := tangencyCerts.headD { quotients := [] }
+  match synthesizePsatzNonnegCert vPosGoal p.lyapunov.domainIneqs [],
+        synthesizePsatzNonnegCert vDecGoal p.lyapunov.domainIneqs [],
+        synthesizeCbfUnsafeRefuteCert p.cbf,
+        synthesizePsatzNonnegCert nagumoGoal (p.cbf.barrierB :: p.cbf.domainIneqs) [],
+        synthesizePsatzNonnegCert regGoal p.dae.domainIneqs p.dae.algConstraints with
+  | some posCert, some decCert, some unsafeCert, some nagCert, some regCert =>
+    let cand : SosLyapunovCert :=
+      { lyapunovWitness := { posDefCert := posCert, lieDecayCert := decCert }
+      , cbfWitness      := { unsafeRefuteCert := unsafeCert, nagumoInvarianceCert := nagCert }
+      , daeWitness      := { tangencyCert := tangencyCert, tangencyCerts := tangencyCerts, regularityCert := regCert } }
+    if (checkSosLyapunovProblem 0 p cand).isOk then some cand else none
+  | _, _, _, _, _ => none
 
 /-! ## 5. Judge 4: `"groebner@1"` (`GroebnerQuery`, `GroebnerCert`, `groebnerFormat`) -/
 
@@ -1569,17 +1586,17 @@ structure GroebnerQuery where
   ineqGens : List Poly := []
   isNonneg : Bool := false
   divFuel  : Nat := 32
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Certificate for `"groebner@1"`, carrying the completed Gröbner `basis` and an explicit
 cofactor `IdealMembershipCert` / `PositivstellensatzCert` directly over `q.eqGens`. -/
 inductive GroebnerCert where
   | membership (basis : List Poly) (cert : IdealMembershipCert)
   | positivstellensatz (basis : List Poly) (cert : PositivstellensatzCert)
-  deriving @[expose] DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 /-- Multiply every cofactor polynomial in `cofs` by `factor`, dropping zero terms. -/
-@[expose] def scaleCofactors (factor : Poly) (cofs : List (Poly × Nat)) : List (Poly × Nat) :=
+def scaleCofactors (factor : Poly) (cofs : List (Poly × Nat)) : List (Poly × Nat) :=
   if factor.isZero then []
   else
     cofs.filterMap fun (c, idx) =>
@@ -1587,15 +1604,15 @@ inductive GroebnerCert where
       if p.isZero then none else some (p, idx)
 
 /-- Merge two cofactor lists `(q_j, j)` over `q.eqGens` by summing matching generator indices. -/
-@[expose] def addCofactors (xs ys : List (Poly × Nat)) : List (Poly × Nat) :=
+def addCofactors (xs ys : List (Poly × Nat)) : List (Poly × Nat) :=
   ys.foldl (fun acc (q, idx) => if q.isZero then acc else addQuotientByIdx idx q acc) xs
 
 /-- Subtract cofactor list `ys` from `xs` (`xs - ys`). -/
-@[expose] def subCofactors (xs ys : List (Poly × Nat)) : List (Poly × Nat) :=
+def subCofactors (xs ys : List (Poly × Nat)) : List (Poly × Nat) :=
   addCofactors xs (ys.map fun (q, idx) => (Poly.neg q, idx))
 
 /-- Compose quotients over a cofactor-tracked basis `G` into direct cofactors over `q.eqGens`. -/
-@[expose] def composeCofactors (G : List (Poly × List (Poly × Nat))) (quots : List (Poly × Nat)) :
+def composeCofactors (G : List (Poly × List (Poly × Nat))) (quots : List (Poly × Nat)) :
     List (Poly × Nat) :=
   quots.foldl
     (fun acc (qPoly, gIdx) =>
@@ -1605,7 +1622,7 @@ inductive GroebnerCert where
     []
 
 /-- Compute Buchberger's S-polynomial $S(f, g)$ together with its exact cofactor combination over `q.eqGens`. -/
-@[expose] def sPolynomialWithCofactors
+def sPolynomialWithCofactors
     (f : Poly) (cofsF : List (Poly × Nat))
     (g : Poly) (cofsG : List (Poly × Nat)) : Poly × List (Poly × Nat) :=
   match polyLeadTerm? f, polyLeadTerm? g with
@@ -1623,7 +1640,7 @@ inductive GroebnerCert where
 
 /-- Find the first non-zero S-polynomial remainder among pairs in `G`, returning `(rem, remCofs)`
 where `rem = ∑_{(c, j) ∈ remCofs} c * eqGens[j]`. -/
-@[expose] def findNonZeroSPolyRemainderWithCofactors
+def findNonZeroSPolyRemainderWithCofactors
     (divFuel : Nat)
     (G : List (Poly × List (Poly × Nat))) : Option (Poly × List (Poly × Nat)) :=
   let basis := G.map Prod.fst
@@ -1639,7 +1656,7 @@ where `rem = ∑_{(c, j) ∈ remCofs} c * eqGens[j]`. -/
           some (rem, remCofs)
 
 /-- Fuel-bounded Buchberger completion loop tracking exact cofactors over `eqGens`. -/
-@[expose] def completeGroebnerBasisWithCofactorsAux :
+def completeGroebnerBasisWithCofactorsAux :
     Nat → Nat → List (Poly × List (Poly × Nat)) → List (Poly × List (Poly × Nat))
   | 0, _, G => G
   | stepFuel + 1, divFuel, G =>
@@ -1649,13 +1666,13 @@ where `rem = ∑_{(c, j) ∈ remCofs} c * eqGens[j]`. -/
 
 /-- Complete `eqGens` via up to `stepFuel` Buchberger S-polynomial reductions while tracking exact
 cofactor representations over `eqGens`. -/
-@[expose] def completeGroebnerBasisWithCofactors (stepFuel divFuel : Nat) (eqGens : List Poly) :
+def completeGroebnerBasisWithCofactors (stepFuel divFuel : Nat) (eqGens : List Poly) :
     List (Poly × List (Poly × Nat)) :=
   let initG := eqGens.zipIdx.map fun (g, idx) => (g, [(Poly.one, idx)])
   completeGroebnerBasisWithCofactorsAux stepFuel divFuel initG
 
 /-- Bounded S-polynomial Buchberger completion loop returning the basis polynomials. -/
-@[expose] def completeGroebnerBasis (stepFuel divFuel : Nat) (eqGens : List Poly) : List Poly :=
+def completeGroebnerBasis (stepFuel divFuel : Nat) (eqGens : List Poly) : List Poly :=
   (completeGroebnerBasisWithCofactors stepFuel divFuel eqGens).map Prod.fst
 
 /-- Boolean checker for `(GroebnerQuery, GroebnerCert)`:
@@ -1665,7 +1682,7 @@ verifies that:
 2. Every generator `g ∈ q.eqGens` reduces to `0` modulo `basis` ($\langle \text{eqGens} \rangle \subseteq \langle \text{basis} \rangle$), AND
 3. `cert` directly certifies `checkIdealMembership q.target q.eqGens cert` (for `.membership`) or
    `checkPsatzNonneg q.target q.ineqGens q.eqGens cert` (for `.positivstellensatz`) over `q.eqGens`. -/
-@[expose] def verifyGroebnerCert (q : GroebnerQuery) (c : GroebnerCert) : Bool :=
+def verifyGroebnerCert (q : GroebnerQuery) (c : GroebnerCert) : Bool :=
   let completedBasis := completeGroebnerBasis 8 q.divFuel q.eqGens
   match c with
   | .membership basis cert =>
@@ -1679,12 +1696,81 @@ verifies that:
     q.eqGens.all (fun g => (polyReduceFuel basis q.divFuel g).isZero) &&
     checkPsatzNonneg q.target q.ineqGens q.eqGens cert
 
-/-- Kernel judge checker for `"groebner@1"`. -/
-@[expose] def checkGroebnerJudge (_grade : Nat) (q : GroebnerQuery) (c : GroebnerCert) : Verdict String :=
+/-- Independent algebraic root / Positivstellensatz meaning of a `GroebnerQuery`:
+- When `q.isNonneg = false`, `q.target` vanishes at every common rational root `ρ` of `q.eqGens`.
+- When `q.isNonneg = true`, `0 ≤ q.target.eval ρ` at every common rational root `ρ` of `q.eqGens`
+  satisfying `0 ≤ h.eval ρ` for all `h ∈ q.ineqGens`. -/
+def GroebnerQuery.SemanticMeaning (q : GroebnerQuery) : Prop :=
+  if q.isNonneg then
+    ∀ (ρ : Nat → CanonicalRat),
+      (∀ hIneq, hIneq ∈ q.ineqGens → 0 ≤ hIneq.eval ρ) →
+      (∀ g, g ∈ q.eqGens → g.eval ρ = 0) →
+      0 ≤ q.target.eval ρ
+  else
+    ∀ (ρ : Nat → CanonicalRat),
+      (∀ g, g ∈ q.eqGens → g.eval ρ = 0) →
+      q.target.eval ρ = 0
+
+/-- Test whether rational assignment `ρ` is an explicit counterexample refuting `q.SemanticMeaning`. -/
+def groebnerRefutesAtPoint (q : GroebnerQuery) (ρ : Nat → CanonicalRat) : Bool :=
+  if q.isNonneg then
+    (q.ineqGens.all fun h => decide (0 ≤ h.eval ρ)) &&
+    (q.eqGens.all fun g => decide (g.eval ρ = 0)) &&
+    decide (q.target.eval ρ < 0)
+  else
+    (q.eqGens.all fun g => decide (g.eval ρ = 0)) &&
+    decide (q.target.eval ρ ≠ 0)
+
+def groebnerSamplePoints : List (Nat → CanonicalRat) :=
+  [ fun _ => 0
+  , fun _ => 1
+  , fun _ => -1
+  , fun i => if i == 0 then 1 else 0
+  , fun i => if i == 0 then 0 else 1
+  , fun i => Rat.ofInt (Int.ofNat (i + 2)) ]
+
+def groebnerHasCounterexample (q : GroebnerQuery) : Bool :=
+  groebnerSamplePoints.any (groebnerRefutesAtPoint q)
+
+theorem groebnerRefutesAtPoint_sound (q : GroebnerQuery) (ρ : Nat → CanonicalRat)
+    (h : groebnerRefutesAtPoint q ρ = true) :
+    ¬ q.SemanticMeaning := by
+  intro hSem
+  unfold groebnerRefutesAtPoint at h
+  unfold GroebnerQuery.SemanticMeaning at hSem
+  cases hN : q.isNonneg with
+  | false =>
+    simp only [hN, Bool.false_eq_true, ↓reduceIte, Bool.and_eq_true, List.all_eq_true] at h hSem
+    have hEqs : ∀ g ∈ q.eqGens, g.eval ρ = 0 := fun g hg => of_decide_eq_true (h.1 g hg)
+    have hNe : q.target.eval ρ ≠ 0 := of_decide_eq_true h.2
+    exact hNe (hSem ρ hEqs)
+  | true =>
+    simp only [hN, ↓reduceIte, Bool.and_eq_true, List.all_eq_true] at h hSem
+    have hIneqs : ∀ hIneq ∈ q.ineqGens, 0 ≤ hIneq.eval ρ :=
+      fun hIneq hh => of_decide_eq_true (h.1.1 hIneq hh)
+    have hEqs : ∀ g ∈ q.eqGens, g.eval ρ = 0 :=
+      fun g hg => of_decide_eq_true (h.1.2 g hg)
+    have hLt : q.target.eval ρ < 0 := of_decide_eq_true h.2
+    have hGe : 0 ≤ q.target.eval ρ := hSem ρ hIneqs hEqs
+    grind
+
+theorem groebnerHasCounterexample_sound (q : GroebnerQuery)
+    (h : groebnerHasCounterexample q = true) :
+    ¬ q.SemanticMeaning := by
+  unfold groebnerHasCounterexample at h
+  rcases List.any_eq_true.mp h with ⟨ρ, _, hPt⟩
+  exact groebnerRefutesAtPoint_sound q ρ hPt
+
+/-- Kernel judge checker for `"groebner@1"`:
+returns `.ok` when `verifyGroebnerCert q c` holds, `.refused` when a concrete rational assignment
+refutes `q.SemanticMeaning` across all certificates, and `.uncovered` otherwise. -/
+def checkGroebnerJudge (_grade : Nat) (q : GroebnerQuery) (c : GroebnerCert) : Verdict String :=
   if verifyGroebnerCert q c then
     .ok
+  else if groebnerHasCounterexample q then
+    .refused "groebner_counterexample_witness" []
   else
-    .refused "groebner_ideal_or_positivstellensatz_violation" []
+    .uncovered
 
 /-- **Soundness of `checkGroebnerJudge` (`checkGroebnerJudge_sound`)**:
 1. When `c = .membership basis cert` is accepted, `q.target.eval ρ = 0` at every common root `ρ`
@@ -1704,7 +1790,10 @@ theorem checkGroebnerJudge_sound (grade : Nat) (q : GroebnerQuery) (c : Groebner
          0 ≤ q.target.eval ρ) := by
   unfold checkGroebnerJudge at h
   cases hV : verifyGroebnerCert q c with
-  | false => rw [hV] at h; contradiction
+  | false =>
+    rw [hV] at h
+    simp only [Bool.false_eq_true, ↓reduceIte] at h
+    split at h <;> contradiction
   | true =>
     refine ⟨rfl, ?_⟩
     cases c with
@@ -1716,6 +1805,41 @@ theorem checkGroebnerJudge_sound (grade : Nat) (q : GroebnerQuery) (c : Groebner
       intro ρ hIneqs hEqs
       simp only [verifyGroebnerCert, Bool.and_eq_true] at hV
       exact checkPsatzNonneg_sound q.target q.ineqGens q.eqGens cert ρ hV.2 hIneqs hEqs
+
+theorem checkGroebnerJudge_meaning (grade : Nat) (q : GroebnerQuery) (c : GroebnerCert)
+    (h : checkGroebnerJudge grade q c = .ok) :
+    q.SemanticMeaning := by
+  have ⟨hV, hEval⟩ := checkGroebnerJudge_sound grade q c h
+  unfold GroebnerQuery.SemanticMeaning
+  cases c with
+  | membership basis cert =>
+    have hNotNonneg : q.isNonneg = false := by
+      unfold verifyGroebnerCert at hV
+      simp only [Bool.and_eq_true, Bool.not_eq_true'] at hV
+      exact hV.1.1.1
+    simp only [hNotNonneg, Bool.false_eq_true, ↓reduceIte]
+    exact hEval
+  | positivstellensatz basis cert =>
+    have hIsNonneg : q.isNonneg = true := by
+      unfold verifyGroebnerCert at hV
+      simp only [Bool.and_eq_true] at hV
+      exact hV.1.1.1
+    simp only [hIsNonneg, ↓reduceIte]
+    exact hEval
+
+theorem checkGroebnerJudge_refuted (grade : Nat) (q : GroebnerQuery) (c : GroebnerCert)
+    (k : String) (p : List Nat)
+    (hRef : checkGroebnerJudge grade q c = .refused k p) :
+    ∀ (_c' : GroebnerCert), ¬ q.SemanticMeaning := by
+  intro _c'
+  unfold checkGroebnerJudge at hRef
+  cases hV : verifyGroebnerCert q c with
+  | true => rw [hV] at hRef; contradiction
+  | false =>
+    rw [hV] at hRef
+    cases hCex : groebnerHasCounterexample q with
+    | false => rw [hCex] at hRef; contradiction
+    | true => exact groebnerHasCounterexample_sound q hCex
 
 /-- `checkGroebnerJudge_sound` for an ideal-membership query (`q.isNonneg = false`), without the
 `match` on the certificate: `verifyGroebnerCert` refuses a Positivstellensatz certificate on such a
@@ -1735,11 +1859,11 @@ theorem checkGroebnerJudge_sound_membership (grade : Nat) (q : GroebnerQuery) (c
     simp [verifyGroebnerCert, hq] at hv
 
 /-- Forged `"groebner@1"` query attempting to prove `1 = 0` over the empty ideal `eqGens = []`. -/
-@[expose] def forgedUnitBasisQuery : GroebnerQuery :=
+def forgedUnitBasisQuery : GroebnerQuery :=
   { target := Poly.one, eqGens := [], ineqGens := [], isNonneg := false, divFuel := 16 }
 
 /-- Forged `"groebner@1"` certificate supplying `basis = [Poly.one]` on `forgedUnitBasisQuery`. -/
-@[expose] def forgedUnitBasisCert (cert : IdealMembershipCert) : GroebnerCert :=
+def forgedUnitBasisCert (cert : IdealMembershipCert) : GroebnerCert :=
   .membership [Poly.one] cert
 
 /-- **Unit-Basis Ideal-Inversion Refusal Theorem (`checkGroebnerJudge_refuses_unit_basis_on_empty_ideal`)**:
@@ -1757,23 +1881,33 @@ theorem checkGroebnerJudge_refuses_unit_basis_on_empty_ideal (cert : IdealMember
   rw [hBasis] at hV
   exact Bool.false_ne_true hV.1.1.2
 
-@[expose] instance groebnerJudge : Judge GroebnerQuery GroebnerCert where
+instance groebnerJudge : Judge GroebnerQuery GroebnerCert where
   Clause := String
-  Meaning q c := verifyGroebnerCert q c = true
+  Meaning q _c := q.SemanticMeaning
   check := checkGroebnerJudge
-  sound := by intro r q c h; exact (checkGroebnerJudge_sound r q c h).1
-  refutes _ := false
-  refuted := by intro _ _ _ _ _ _ h; cases h
-  Fragment q := ∃ c, verifyGroebnerCert q c = true
+  sound := by intro r q c h; exact checkGroebnerJudge_meaning r q c h
+  refutes _ := true
+  refuted := by intro r q c k p hRef _ c'; exact checkGroebnerJudge_refuted r q c k p hRef c'
+  Fragment q := q.isNonneg = false ∧ q.eqGens = [] ∧ ∃ c0 : CanonicalRat, q.target = polyConst c0
   complete := by
-    intro q _ ⟨c, hc⟩
-    exact ⟨c, 0, by simp [checkGroebnerJudge, hc]⟩
+    rintro q ⟨hqN, hqEq, ⟨c0, hqT⟩⟩ ⟨_, hSem⟩
+    have hc0 : c0 = 0 := by
+      unfold GroebnerQuery.SemanticMeaning at hSem
+      simp only [hqN, Bool.false_eq_true, ↓reduceIte, hqEq, hqT] at hSem
+      have h0 := hSem (fun _ => 0) (by intro _ hg; cases hg)
+      simpa [polyConst_eval] using h0
+    have hV : verifyGroebnerCert q (.membership [] { quotients := [] }) = true := by
+      subst hc0
+      have hIdeal : checkIdealMembership (polyConst 0) [] { quotients := [] } = true := by
+        decide +kernel
+      simp [verifyGroebnerCert, hqN, hqEq, hqT, hIdeal]
+    exact ⟨.membership [] { quotients := [] }, 0, by simp [checkGroebnerJudge, hV]⟩
   mono := by intro _ _ _ _ _ _; rfl
 
 /-- Untrusted witness synthesizer for `"groebner@1"`:
 runs cofactor-tracked Buchberger completion `completeGroebnerBasisWithCofactors`, reduces `q.target`
 modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors back over `q.eqGens`. -/
-@[expose] def synthesizeGroebnerCert (q : GroebnerQuery) : Option GroebnerCert :=
+def synthesizeGroebnerCert (q : GroebnerQuery) : Option GroebnerCert :=
   let G := completeGroebnerBasisWithCofactors 8 q.divFuel q.eqGens
   let basis := G.map Prod.fst
   let (rem, quots) := polyDivModWithQuotients q.divFuel q.target basis
@@ -1790,19 +1924,18 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
       if verifyGroebnerCert q cert then some cert else none
     | none =>
       let psatz0 : PositivstellensatzCert :=
-        { monoidIndices := [0]
+        { monoidIndices := []
         , sigma0        := { terms := [] }
         , coneTerms     := q.ineqGens.zipIdx.map fun (_, idx) => ({ terms := [(1, Poly.one)] }, idx)
         , idealTerms    := origQuots }
       let cert0 := GroebnerCert.positivstellensatz basis psatz0
       if verifyGroebnerCert q cert0 then some cert0 else none
 
-@[expose] def autoEncodeQuotientsWire (qs : List (Poly × Nat)) : String :=
-  if qs.isEmpty then "-"
-  else autoJoinSep ";" (qs.map fun (p, idx) => autoEncodePolyWire p ++ "#" ++ autoNatToStr idx)
+def autoEncodeQuotientsWire (qs : List (Poly × Nat)) : String :=
+  autoJoinSep ";" (qs.map fun (p, idx) => autoEncodePolyWire p ++ "#" ++ autoNatToStr idx)
 
-@[expose] def autoDecodeQuotientsWire? (s : String) : Option (List (Poly × Nat)) :=
-  if s == "-" || s == "" then some []
+def autoDecodeQuotientsWire? (s : String) : Option (List (Poly × Nat)) :=
+  if s.isEmpty then some []
   else
     (autoSplitChar ';' s).mapM fun item =>
       match autoSplitChar '#' item with
@@ -1813,7 +1946,7 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
       | _ => none
 
 /-- Decode a `Monomial` from `Lean.Json`. -/
-@[expose] def decodeMonomialJson (j : Json) : Except String Monomial := do
+def decodeMonomialJson (j : Json) : Except String Monomial := do
   let arr ← j.getArr?
   arr.toList.mapM fun item => do
     let v ← item.getObjValAs? Nat "v"
@@ -1821,7 +1954,7 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
     return (v, d)
 
 /-- Decode a `Poly` from `Lean.Json`. -/
-@[expose] def decodePolyJson (j : Json) : Except String Poly := do
+def decodePolyJson (j : Json) : Except String Poly := do
   let arr ← j.getArr?
   let ts ← arr.toList.mapM fun item => do
     let m ← item.getObjVal? "m" >>= decodeMonomialJson
@@ -1830,7 +1963,7 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
   return ⟨ts⟩
 
 /-- Encode a `GroebnerQuery` to a compact JSON wire string. -/
-@[expose] def encodeGroebnerQuery (q : GroebnerQuery) : String :=
+def encodeGroebnerQuery (q : GroebnerQuery) : String :=
   let wire :=
     autoEncodePolyWire q.target ++ "|" ++
     autoEncodePolyListWire q.eqGens ++ "|" ++
@@ -1841,24 +1974,24 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
     ",\"divFuel\":" ++ autoNatToStr q.divFuel ++ ",\"wire\":\"" ++ wire ++ "\"}"
 
 /-- Decode a `GroebnerQuery` from a JSON wire string. -/
-@[expose] def decodeGroebnerQuery (s : String) : Except String GroebnerQuery :=
-  if s == "{}" || s == "" then
-    .error "invalid GroebnerQuery JSON: missing required fields"
-  else
-    match extractJsonStringField? "wire" s with
-    | some wire =>
-      match autoSplitChar '|' wire with
-      | [tWire, eqWire, ineqWire, nonnegWire, fuelWire] =>
-        match autoDecodePolyWire? tWire,
-              autoDecodePolyListWire? eqWire,
-              autoDecodePolyListWire? ineqWire,
-              autoParseNat? fuelWire with
-        | some target, some eqGens, some ineqGens, some divFuel =>
-          let isNonneg := nonnegWire == "true"
-          .ok { target, eqGens, ineqGens, isNonneg, divFuel }
-        | _, _, _, _ => .error "invalid GroebnerQuery wire field"
-      | _ => .error "invalid GroebnerQuery wire format"
-    | none => do
+def decodeGroebnerQuery (s : String) : Except String GroebnerQuery :=
+  match extractJsonStringField? "wire" s with
+  | some wire =>
+    match autoSplitChar '|' wire with
+    | [tWire, eqWire, ineqWire, nonnegWire, fuelWire] =>
+      match autoDecodePolyWire? tWire,
+            autoDecodePolyListWire? eqWire,
+            autoDecodePolyListWire? ineqWire,
+            autoParseNat? fuelWire with
+      | some target, some eqGens, some ineqGens, some divFuel =>
+        let isNonneg := nonnegWire == "true"
+        .ok { target, eqGens, ineqGens, isNonneg, divFuel }
+      | _, _, _, _ => .error "invalid GroebnerQuery wire field"
+    | _ => .error "invalid GroebnerQuery wire format"
+  | none =>
+    if !hasNonEmptyJsonFields s then
+      .error "invalid GroebnerQuery JSON: missing required fields"
+    else do
       let j ← Json.parse s
       let target ← j.getObjVal? "target" >>= decodePolyJson
       let eqArr ← (← j.getObjVal? "eqGens").getArr?
@@ -1870,15 +2003,14 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
       return { target, eqGens, ineqGens, isNonneg, divFuel }
 
 /-- Encode a `GroebnerCert` to a compact JSON wire string. -/
-@[expose] def encodeGroebnerCert : GroebnerCert → String
+def encodeGroebnerCert : GroebnerCert → String
   | .membership basis cert =>
     let wire := "M|" ++ autoEncodePolyListWire basis ++ "|" ++ autoEncodeQuotientsWire cert.quotients
     "{\"kind\":\"membership\",\"wire\":\"" ++ wire ++ "\"}"
   | .positivstellensatz basis psatz =>
-    let monWire := if psatz.monoidIndices.isEmpty then "-" else autoJoinSep "," (psatz.monoidIndices.map autoNatToStr)
+    let monWire := autoJoinSep "," (psatz.monoidIndices.map autoNatToStr)
     let coneWire :=
-      if psatz.coneTerms.isEmpty then "-"
-      else autoJoinSep ";" (psatz.coneTerms.map fun (s, idx) => autoEncodeSOSPolyWire s ++ "#" ++ autoNatToStr idx)
+      autoJoinSep ";" (psatz.coneTerms.map fun (s, idx) => autoEncodeSOSPolyWire s ++ "#" ++ autoNatToStr idx)
     let wire :=
       "P|" ++ autoEncodePolyListWire basis ++ "|" ++
       monWire ++ "|" ++
@@ -1888,43 +2020,40 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
     "{\"kind\":\"positivstellensatz\",\"wire\":\"" ++ wire ++ "\"}"
 
 /-- Decode a `GroebnerCert` from a JSON wire string. -/
-@[expose] def decodeGroebnerCert (s : String) : Except String GroebnerCert :=
-  if s == "{}" || s == "" then
-    .error "invalid GroebnerCert JSON: missing required fields"
-  else
-    match extractJsonStringField? "wire" s with
-    | some wire =>
-      match autoSplitChar '|' wire with
-      | ["M", basisWire, quotsWire] =>
-        match autoDecodePolyListWire? basisWire, autoDecodeQuotientsWire? quotsWire with
-        | some basis, some quotients => .ok (.membership basis { quotients })
-        | _, _ => .error "invalid GroebnerCert membership wire"
-      | ["P", basisWire, monWire, sigWire, coneWire, idealWire] =>
-        let monOpt : Option (List Nat) :=
-          if monWire == "-" || monWire == "" then some []
-          else (autoSplitChar ',' monWire).mapM autoParseNat?
-        let coneOpt : Option (List (SOSPoly × Nat)) :=
-          if coneWire == "-" || coneWire == "" then some []
-          else
-            (autoSplitChar ';' coneWire).mapM fun item =>
-              match autoSplitChar '#' item with
-              | [sosStr, idxStr] => do
-                let sos ← autoDecodeSOSPolyWire? sosStr
-                let idx ← autoParseNat? idxStr
-                some (sos, idx)
-              | _ => none
-        match autoDecodePolyListWire? basisWire, monOpt, autoDecodeSOSPolyWire? sigWire, coneOpt, autoDecodeQuotientsWire? idealWire with
-        | some basis, some monoidIndices, some sigma0, some coneTerms, some idealTerms =>
-          .ok (.positivstellensatz basis { monoidIndices, sigma0, coneTerms, idealTerms })
-        | _, _, _, _, _ => .error "invalid GroebnerCert positivstellensatz wire"
-      | _ => .error "invalid GroebnerCert wire format"
-    | none =>
-      .error "invalid GroebnerCert JSON: missing wire payload"
+def decodeGroebnerCert (s : String) : Except String GroebnerCert :=
+  match extractJsonStringField? "wire" s with
+  | some wire =>
+    match autoSplitChar '|' wire with
+    | ["M", basisWire, quotsWire] =>
+      match autoDecodePolyListWire? basisWire, autoDecodeQuotientsWire? quotsWire with
+      | some basis, some quotients => .ok (.membership basis { quotients })
+      | _, _ => .error "invalid GroebnerCert membership wire"
+    | ["P", basisWire, monWire, sigWire, coneWire, idealWire] =>
+      let monOpt : Option (List Nat) :=
+        if monWire.isEmpty then some []
+        else (autoSplitChar ',' monWire).mapM autoParseNat?
+      let coneOpt : Option (List (SOSPoly × Nat)) :=
+        if coneWire.isEmpty then some []
+        else
+          (autoSplitChar ';' coneWire).mapM fun item =>
+            match autoSplitChar '#' item with
+            | [sosStr, idxStr] => do
+              let sos ← autoDecodeSOSPolyWire? sosStr
+              let idx ← autoParseNat? idxStr
+              some (sos, idx)
+            | _ => none
+      match autoDecodePolyListWire? basisWire, monOpt, autoDecodeSOSPolyWire? sigWire, coneOpt, autoDecodeQuotientsWire? idealWire with
+      | some basis, some monoidIndices, some sigma0, some coneTerms, some idealTerms =>
+        .ok (.positivstellensatz basis { monoidIndices, sigma0, coneTerms, idealTerms })
+      | _, _, _, _, _ => .error "invalid GroebnerCert positivstellensatz wire"
+    | _ => .error "invalid GroebnerCert wire format"
+  | none =>
+    .error "invalid GroebnerCert JSON: missing wire payload"
 
 /-! ## 5b. The `groebner@1` object of a claim (see §2b for the reading of claim bodies) -/
 
 /-- The `+`/`*`/literal fragment of a claim body as a `Poly` (variable `k` is parameter `k`). -/
-@[expose] def claimTermToPoly (arity : Nat) : Term → Option Poly
+def claimTermToPoly (arity : Nat) : Term → Option Poly
   | .nat k => some (polyConst (Rat.ofInt (Int.ofNat k)))
   | .bound i => if i < arity then some (polyVarPow (arity - 1 - i) 1) else none
   | .binary .add a b => do
@@ -1935,7 +2064,7 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
 
 /-- `given` conjuncts as Positivstellensatz generators: `a == b` gives `a - b = 0`, `a <= b` gives
 `b - a ≥ 0`, `a < b` gives `b - a - 1 ≥ 0` (exact on `Nat`). -/
-@[expose] def claimGuardPolyGens (arity : Nat) : List Term → Option (List Poly × List Poly)
+def claimGuardPolyGens (arity : Nat) : List Term → Option (List Poly × List Poly)
   | [] => some ([], [])
   | h :: rest => do
     let (eqs, ineqs) ← claimGuardPolyGens arity rest
@@ -1957,7 +2086,7 @@ modulo the completed basis via `polyDivModWithQuotients`, and composes cofactors
 /-- The `groebner@1` object of a claim: `lhs == rhs` is ideal membership of `lhs - rhs` in the
 guard's equalities; `lhs <= rhs` / `lhs < rhs` is Positivstellensatz non-negativity of `rhs - lhs`
 (resp. `rhs - lhs - 1`) over the guard's inequalities together with `pₖ ≥ 0` for every `Nat` parameter. -/
-@[expose] def claimGroebnerQueryOf? (claim : Term) (arity : Nat) : Option GroebnerQuery := do
+def claimGroebnerQueryOf? (claim : Term) (arity : Nat) : Option GroebnerQuery := do
   let body ← claimBodyOf? claim arity
   let (guard?, core) := splitClaimGuard body
   let conj := match guard? with
@@ -1982,11 +2111,11 @@ guard's equalities; `lhs <= rhs` / `lhs < rhs` is Positivstellensatz non-negativ
   | _ => none
 
 /-- `claimGroebnerQueryOf?` at a `ClaimObj`. -/
-@[expose] def claimGroebnerQuery? (o : ClaimObj) : Option GroebnerQuery :=
+def claimGroebnerQuery? (o : ClaimObj) : Option GroebnerQuery :=
   claimGroebnerQueryOf? o.claim o.arity
 
 /-- `groebner@1` claim binding (`Judge.Format.bindsClaim`); kernel-reducible. -/
-@[expose] def groebnerBindsClaim (claim : Term) (arity : Nat) (objWire : String) : Bool :=
+def groebnerBindsClaim (claim : Term) (arity : Nat) (objWire : String) : Bool :=
   match decodeGroebnerQuery objWire with
   | .ok q => claimGroebnerQueryOf? claim arity == some q
   | .error _ => false
@@ -1994,7 +2123,7 @@ guard's equalities; `lhs <= rhs` / `lhs < rhs` is Positivstellensatz non-negativ
 /-- Golden and planted-bad fixtures for `"groebner@1"`:
 Ideal generators $g_1 = x_1^2 - x_0$, $g_2 = x_0 x_1 - 1$ and target $f = x_1 - x_0^2$
 (which is the Buchberger S-polynomial $S(g_1, g_2) = x_1 - x_0^2$ produced by `completeGroebnerBasis`!). -/
-@[expose] def goldenGroebnerQuery : GroebnerQuery :=
+def goldenGroebnerQuery : GroebnerQuery :=
   let x0 : Poly := polyVarPow 0 1
   let x1 : Poly := polyVarPow 1 1
   let g1 : Poly := Poly.sub (Poly.sqr x1) x0
@@ -2002,13 +2131,19 @@ Ideal generators $g_1 = x_1^2 - x_0$, $g_2 = x_0 x_1 - 1$ and target $f = x_1 - 
   let target : Poly := Poly.sub x1 (Poly.sqr x0)
   { target := target, eqGens := [g1, g2], ineqGens := [], isNonneg := false, divFuel := 16 }
 
-@[expose] def badGroebnerCert : GroebnerCert :=
+def badGroebnerCert : GroebnerCert :=
   .membership [polyVarPow 0 1] { quotients := [] }
 
 -- fixture kept (2026-11-04): consumed by a proof in this file
+example : groebnerRefutesAtPoint forgedUnitBasisQuery (fun _ => 0) = true := by
+  decide +kernel
+
+example : groebnerHasCounterexample forgedUnitBasisQuery = true := by
+  decide +kernel
+
 theorem badGroebnerCert_refused :
-    checkGroebnerJudge 0 goldenGroebnerQuery badGroebnerCert =
-      .refused "groebner_ideal_or_positivstellensatz_violation" [] := by
+    checkGroebnerJudge 0 forgedUnitBasisQuery badGroebnerCert =
+      .refused "groebner_counterexample_witness" [] := by
   decide +kernel
 
 /-- Registered `Obend.Judge.Format` for `"groebner@1"`. -/
@@ -2023,7 +2158,7 @@ theorem badGroebnerCert_refused :
   decodeCert  := decodeGroebnerCert
   trust       := .kernel
   regime      := .decidable
-  bad         := (goldenGroebnerQuery, badGroebnerCert)
+  bad         := (forgedUnitBasisQuery, badGroebnerCert)
   badGrade    := 0
   bad_refused := ⟨_, _, badGroebnerCert_refused⟩
 
@@ -2033,7 +2168,7 @@ theorem decodeGroebnerQuery_encodeGroebnerQuery_golden :
   decide +kernel
 
 example :
-    decodeGroebnerCert "{}" = .error "invalid GroebnerCert JSON: missing required fields" := rfl
+    decodeGroebnerCert "{}" = .error "invalid GroebnerCert JSON: missing wire payload" := rfl
 
 /-! ## 6. Judge 5: `"rtl-synth@1"` / `"hw-rtl-synth@1"` (`Leaf.Book` → `RtlModule` Synthesizer) -/
 
@@ -2042,7 +2177,7 @@ example :
 `checkRtlSynth 0 modName rtlMod == .ok`.
 When `book? = some B`, strictly synthesizes from `B` and returns `none` if `B` cannot be lowered to
 a valid loop-free `RtlModule`; only uses `goldenFlatRtlModule` when `book? = none` (syntactic check). -/
-@[expose] def synthesizeRtlSynthCert (modName : String) (book? : Option Book) : Option RtlModule :=
+def synthesizeRtlSynthCert (modName : String) (book? : Option Book) : Option RtlModule :=
   match book? with
   | some B =>
     if B.defs.isEmpty then
@@ -2067,7 +2202,7 @@ a valid loop-free `RtlModule`; only uses `goldenFlatRtlModule` when `book? = non
 @[expose] def autoCertFormats : List Format :=
   [ intervalFormat
   , taylorModelFormat
-  , autoSosLyapunovFormat
+  , Obend.Analysis.sosLyapunovFormat
   , groebnerFormat
   , rtlSynthFormat
   , hwSynthFormat
@@ -2076,51 +2211,72 @@ a valid loop-free `RtlModule`; only uses `goldenFlatRtlModule` when `book? = non
   hardwareFormats
 
 /-- Split a conjunction `a && b && c` in `.obend` `given` preconditions into atomic conjuncts. -/
-@[expose] def splitSyntaxConjuncts : Syntax.Expr → List Syntax.Expr
-  | .binary "&&" a b => splitSyntaxConjuncts a ++ splitSyntaxConjuncts b
-  | .bool true       => []
-  | e                => [e]
+def splitSyntaxConjuncts : Syntax.Expr → List Syntax.Expr
+  | .binary op a b =>
+    if op == "&&" then splitSyntaxConjuncts a ++ splitSyntaxConjuncts b else [.binary op a b]
+  | .bool b => if b then [] else [.bool false]
+  | e => [e]
+termination_by structural e => e
 
 /-- Unwrap `.obend` `claim ... given COND: BODY` (decoded by `Syntax.decodeDecl` into
 `Syntax.Expr.ite COND BODY (.bool true)`), returning `(givenConjuncts, innerBody)`. -/
-@[expose] def unwrapSyntaxGiven : Syntax.Expr → List Syntax.Expr × Syntax.Expr
-  | .ite cond body (.bool true) =>
-    let (moreHyps, inner) := unwrapSyntaxGiven body
-    (splitSyntaxConjuncts cond ++ moreHyps, inner)
+def unwrapSyntaxGiven : Syntax.Expr → List Syntax.Expr × Syntax.Expr
+  | .ite cond body els =>
+    match els with
+    | .bool true =>
+      let (moreHyps, inner) := unwrapSyntaxGiven body
+      (splitSyntaxConjuncts cond ++ moreHyps, inner)
+    | _ => ([], .ite cond body els)
   | e => ([], e)
+termination_by structural e => e
 
-/-- Extract an identifier / member field variable name from a `Syntax.Expr`. -/
-@[expose] def syntaxVarName? : Syntax.Expr → Option String
+/-- Extract a receiver-qualified identifier / member field path from a `Syntax.Expr`
+(e.g. `.var "a"` -> `"a"`, `.member (.var "a") "val"` -> `"a.val"`, failing closed on
+computed non-path receivers so `a.val` and `b.val` never collapse to `"val"`). -/
+def syntaxVarName? : Syntax.Expr → Option String
   | .var v      => some v
-  | .member _ f => some f
+  | .member r f => (syntaxVarName? r).map fun base => base ++ "." ++ f
   | _           => none
+termination_by structural e => e
 
 /-- Extract a rational constant literal (or `0n - c` negative literal) from a `Syntax.Expr`. -/
-@[expose] def syntaxRatConst? : Syntax.Expr → Option CanonicalRat
+def syntaxRatConst? : Syntax.Expr → Option CanonicalRat
   | .nat s => (autoParseNat? s).map fun n => Rat.ofInt (Int.ofNat n)
   | .binary "-" (.nat "0") (.nat s) => (autoParseNat? s).map fun n => Rat.ofInt (-Int.ofNat n)
   | _ => none
 
 /-- True if `fn` is a known univariate transcendental intrinsic in `TaylorModelExpr`. -/
-@[expose] def isTranscendentalIntrinsicName (fn : String) : Bool :=
+def isTranscendentalIntrinsicName (fn : String) : Bool :=
   fn == "sin" || fn == "cos" || fn == "exp" || fn == "ln1p" || fn == "sqrt1p"
 
-/-- Collect distinct variable/member names appearing in a `Syntax.Expr` (excluding transcendental callees). -/
-@[expose] def collectSyntaxVars : Syntax.Expr → List String
+mutual
+/-- Collect distinct variable / receiver-qualified member paths appearing in a `Syntax.Expr`
+(excluding transcendental callees). -/
+def collectSyntaxVars : Syntax.Expr → List String
   | .var v => [v]
-  | .member _ f => [f]
-  | .call (.var fn) args =>
-    if isTranscendentalIntrinsicName fn then
-      args.flatMap collectSyntaxVars
-    else
-      fn :: args.flatMap collectSyntaxVars
-  | .call callee args => collectSyntaxVars callee ++ args.flatMap collectSyntaxVars
+  | .member r f =>
+    match syntaxVarName? (.member r f) with
+    | some q => [q]
+    | none => collectSyntaxVars r
+  | .call callee args =>
+    let rest := collectSyntaxVarsList args
+    match callee with
+    | .var fn =>
+      if isTranscendentalIntrinsicName fn then rest else fn :: rest
+    | _ => collectSyntaxVars callee ++ rest
   | .binary _ a b => collectSyntaxVars a ++ collectSyntaxVars b
   | .ite c t f => collectSyntaxVars c ++ collectSyntaxVars t ++ collectSyntaxVars f
   | _ => []
+termination_by structural e => e
+
+def collectSyntaxVarsList : List Syntax.Expr → List String
+  | [] => []
+  | a :: as => collectSyntaxVars a ++ collectSyntaxVarsList as
+termination_by structural xs => xs
+end
 
 /-- Collect variable names referenced in a `RealExpr`. -/
-@[expose] def realExprVars : RealExpr → List String
+def realExprVars : RealExpr → List String
   | .const _ => []
   | .var v   => [v]
   | .add a b => realExprVars a ++ realExprVars b
@@ -2128,64 +2284,88 @@ a valid loop-free `RtlModule`; only uses `goldenFlatRtlModule` when `book? = non
   | .mul a b => realExprVars a ++ realExprVars b
   | .sqr a   => realExprVars a
 
-/-- Convert an `.obend` `Syntax.Expr` into a `RealExpr` when it lies in the algebraic fragment. -/
-@[expose] def syntaxExprToRealExpr : Syntax.Expr → Option RealExpr
+/-- Convert an `.obend` `Syntax.Expr` into a `RealExpr` when it lies in the algebraic fragment,
+preserving receiver-qualified member paths and failing closed on non-path receivers. -/
+def syntaxExprToRealExpr : Syntax.Expr → Option RealExpr
   | .nat s => (autoParseNat? s).map fun n => .const (Rat.ofInt (Int.ofNat n))
   | .var v => some (.var v)
-  | .member _ f => some (.var f)
-  | .binary "+" a b => do
-    let la ← syntaxExprToRealExpr a
-    let rb ← syntaxExprToRealExpr b
-    pure (.add la rb)
-  | .binary "-" a b => do
-    let la ← syntaxExprToRealExpr a
-    let rb ← syntaxExprToRealExpr b
-    pure (.sub la rb)
-  | .binary "*" a b => do
-    let la ← syntaxExprToRealExpr a
-    let rb ← syntaxExprToRealExpr b
-    pure (.mul la rb)
+  | .member r f => (syntaxVarName? (.member r f)).map .var
+  | .binary op a b =>
+    if op == "+" then do
+      let la ← syntaxExprToRealExpr a
+      let rb ← syntaxExprToRealExpr b
+      pure (.add la rb)
+    else if op == "-" then do
+      let la ← syntaxExprToRealExpr a
+      let rb ← syntaxExprToRealExpr b
+      pure (.sub la rb)
+    else if op == "*" then do
+      let la ← syntaxExprToRealExpr a
+      let rb ← syntaxExprToRealExpr b
+      pure (.mul la rb)
+    else
+      none
   | _ => none
+termination_by structural e => e
 
 /-- Parse a single `given` bound hypothesis (`v <= c`, `c <= v`, `v >= c`, `c >= v`, `v < c`, `c < v`, `v == c`)
 into `GivenBoundAcc`; fails closed (`none`) on unrecognized or non-box hypotheses. -/
-@[expose] def parseSingleIntervalHyp (acc : GivenBoundAcc) (h : Syntax.Expr) : Option GivenBoundAcc :=
+def parseSingleIntervalHyp (acc : GivenBoundAcc) (h : Syntax.Expr) : Option GivenBoundAcc :=
   match h with
-  | .binary "<=" a b | .binary "<" a b =>
-    match syntaxVarName? a, syntaxRatConst? b with
-    | some v, some c => some (updateGivenUpper v c acc)
-    | _, _ =>
-      match syntaxRatConst? a, syntaxVarName? b with
-      | some c, some v => some (updateGivenLower v c acc)
-      | _, _ => none
-  | .binary ">=" a b | .binary ">" a b =>
-    match syntaxVarName? a, syntaxRatConst? b with
-    | some v, some c => some (updateGivenLower v c acc)
-    | _, _ =>
-      match syntaxRatConst? a, syntaxVarName? b with
-      | some c, some v => some (updateGivenUpper v c acc)
-      | _, _ => none
-  | .binary "==" a b =>
-    match syntaxVarName? a, syntaxRatConst? b with
-    | some v, some c => some (updateGivenUpper v c (updateGivenLower v c acc))
-    | _, _ =>
-      match syntaxRatConst? a, syntaxVarName? b with
-      | some c, some v => some (updateGivenUpper v c (updateGivenLower v c acc))
-      | _, _ => none
+  | .binary op a b =>
+    if op == "<=" || op == "<" then
+      match syntaxVarName? a, syntaxRatConst? b with
+      | some v, some c => some (updateGivenUpper v c acc)
+      | _, _ =>
+        match syntaxRatConst? a, syntaxVarName? b with
+        | some c, some v => some (updateGivenLower v c acc)
+        | _, _ => none
+    else if op == ">=" || op == ">" then
+      match syntaxVarName? a, syntaxRatConst? b with
+      | some v, some c => some (updateGivenLower v c acc)
+      | _, _ =>
+        match syntaxRatConst? a, syntaxVarName? b with
+        | some c, some v => some (updateGivenUpper v c acc)
+        | _, _ => none
+    else if op == "==" then
+      match syntaxVarName? a, syntaxRatConst? b with
+      | some v, some c => some (updateGivenUpper v c (updateGivenLower v c acc))
+      | _, _ =>
+        match syntaxRatConst? a, syntaxVarName? b with
+        | some c, some v => some (updateGivenUpper v c (updateGivenLower v c acc))
+        | _, _ => none
+    else
+      none
   | _ => none
 
-/-- Build a verified variable box `List (String × Interval)` from `given` hypotheses `hyps`.
-**Fails closed**: a variable the hypotheses do not bound above has no box and the claim is not
-synthesizable (until 2026-11-04 such a variable was silently boxed to `[0, 1]`, so a claim quantified
-over all `Nat` was "certified" on `[0, 1]`). Unbounded rays `[lo, +∞)` and contradictory boxes
-`lo > hi` are refused likewise; the lower bound defaults to `0` because claim parameters are `Nat`. -/
-@[expose] def extractIntervalEnvFromHyps
-    (envVars : List String)
-    (hyps : List Syntax.Expr) : Option (List (String × Interval)) := do
-  let acc ← hyps.foldlM parseSingleIntervalHyp []
-  -- Ensure every variable constrained in `hyps` is included even if cancelled in the goal expression
-  let allVars := (envVars ++ acc.map Prod.fst).eraseDups
-  allVars.mapM fun v =>
+def autoEraseDupsAux : List String → List String → List String
+  | [], acc => acc.reverse
+  | x :: xs, acc =>
+    if acc.any (· == x) then
+      autoEraseDupsAux xs acc
+    else
+      autoEraseDupsAux xs (x :: acc)
+
+def autoEraseDups (xs : List String) : List String :=
+  autoEraseDupsAux xs []
+
+def autoZipIdxAux : List String → Nat → List (String × Nat)
+  | [], _ => []
+  | x :: xs, k => (x, k) :: autoZipIdxAux xs (k + 1)
+
+def autoZipIdx (xs : List String) : List (String × Nat) :=
+  autoZipIdxAux xs 0
+
+def foldIntervalHyps : GivenBoundAcc → List Syntax.Expr → Option GivenBoundAcc
+  | acc, [] => some acc
+  | acc, h :: hs =>
+    match parseSingleIntervalHyp acc h with
+    | some acc' => foldIntervalHyps acc' hs
+    | none => none
+
+def mapIntervalVars (acc : GivenBoundAcc) : List String → Option (List (String × Interval))
+  | [] => some []
+  | v :: vs =>
     match acc.find? (fun (w, _) => w == v) with
     | none => none
     | some (_, hasLo, lo, hasHi, hi) =>
@@ -2194,9 +2374,22 @@ over all `Nat` was "certified" on `[0, 1]`). Unbounded rays `[lo, +∞)` and con
       else
         let finalLo : CanonicalRat := if hasLo then lo else 0
         if decide (finalLo ≤ hi) then
-          some (v, ⟨finalLo, hi⟩)
+          (mapIntervalVars acc vs).map fun rest => (v, ⟨finalLo, hi⟩) :: rest
         else
           none
+
+/-- Build a verified variable box `List (String × Interval)` from `given` hypotheses `hyps`.
+**Fails closed**: a variable the hypotheses do not bound above has no box and the claim is not
+synthesizable (until 2026-11-04 such a variable was silently boxed to `[0, 1]`, so a claim quantified
+over all `Nat` was "certified" on `[0, 1]`). Unbounded rays `[lo, +∞)` and contradictory boxes
+`lo > hi` are refused likewise; the lower bound defaults to `0` because claim parameters are `Nat`. -/
+def extractIntervalEnvFromHyps
+    (envVars : List String)
+    (hyps : List Syntax.Expr) : Option (List (String × Interval)) := do
+  let acc ← foldIntervalHyps [] hyps
+  -- Ensure every variable constrained in `hyps` is included even if cancelled in the goal expression
+  let allVars := autoEraseDups (envVars ++ acc.map Prod.fst)
+  mapIntervalVars acc allVars
 
 /-- Extract an `IntervalObj` from an optional `Syntax.Expr` (an Isar step's proposition, including
 `given COND: BODY` box hypotheses over `lhs <= rhs`, `lhs >= rhs`, `lhs < rhs`, or `lhs == rhs`).
@@ -2204,44 +2397,46 @@ Fails closed (`none`) when there is no proposition, on `.bool true`/`.bool false
 contradictory `given` guards, and on syntax outside the `+`/`*`/literal fragment. A step without
 variables (`4n * 2n <= 9n`) has the empty environment; it is not given a phantom variable. Claims (which have
 a `ClaimObj`) do not come through here: see `claimIntervalObj?`. -/
-@[expose] def extractIntervalObjFromSyntax : Option Syntax.Expr → Option IntervalObj
+def extractIntervalObjFromSyntax : Option Syntax.Expr → Option IntervalObj
   | none => none
-  | some (.bool true) => none
-  | some (.bool false) => none
+  | some (.bool _) => none
   | some rawExpr =>
     let (hyps, body) := unwrapSyntaxGiven rawExpr
     match body with
-    | .binary "<=" lhs rhs => do
-      let rl ← syntaxExprToRealExpr lhs
-      let rr ← syntaxExprToRealExpr rhs
-      let diff := RealExpr.sub rl rr
-      let vs := (realExprVars diff).eraseDups
-      let env ← extractIntervalEnvFromHyps vs hyps
-      let safeLo := computeIntervalSafeLo env diff
-      some { expr := diff, env := env, claimedBound := ⟨safeLo, 0⟩ }
-    | .binary ">=" lhs rhs => do
-      let rl ← syntaxExprToRealExpr lhs
-      let rr ← syntaxExprToRealExpr rhs
-      let diff := RealExpr.sub rr rl
-      let vs := (realExprVars diff).eraseDups
-      let env ← extractIntervalEnvFromHyps vs hyps
-      let safeLo := computeIntervalSafeLo env diff
-      some { expr := diff, env := env, claimedBound := ⟨safeLo, 0⟩ }
-    | .binary "<" lhs rhs => do
-      let rl ← syntaxExprToRealExpr lhs
-      let rr ← syntaxExprToRealExpr rhs
-      let diff := RealExpr.sub rl rr
-      let vs := (realExprVars diff).eraseDups
-      let env ← extractIntervalEnvFromHyps vs hyps
-      let safeLo := computeIntervalSafeLo env diff
-      some { expr := diff, env := env, claimedBound := ⟨safeLo, CanonicalRat.mk (-1) 1000⟩ }
-    | .binary "==" lhs rhs => do
-      let rl ← syntaxExprToRealExpr lhs
-      let rr ← syntaxExprToRealExpr rhs
-      let diff := RealExpr.sub rl rr
-      let vs := (realExprVars diff).eraseDups
-      let env ← extractIntervalEnvFromHyps vs hyps
-      some { expr := diff, env := env, claimedBound := ⟨0, 0⟩ }
+    | .binary op lhs rhs =>
+      if op == "<=" then do
+        let rl ← syntaxExprToRealExpr lhs
+        let rr ← syntaxExprToRealExpr rhs
+        let diff := RealExpr.sub rl rr
+        let vs := autoEraseDups (realExprVars diff)
+        let env ← extractIntervalEnvFromHyps vs hyps
+        let safeLo := computeIntervalSafeLo env diff
+        some { expr := diff, env := env, claimedBound := ⟨safeLo, 0⟩ }
+      else if op == ">=" then do
+        let rl ← syntaxExprToRealExpr lhs
+        let rr ← syntaxExprToRealExpr rhs
+        let diff := RealExpr.sub rr rl
+        let vs := autoEraseDups (realExprVars diff)
+        let env ← extractIntervalEnvFromHyps vs hyps
+        let safeLo := computeIntervalSafeLo env diff
+        some { expr := diff, env := env, claimedBound := ⟨safeLo, 0⟩ }
+      else if op == "<" then do
+        let rl ← syntaxExprToRealExpr lhs
+        let rr ← syntaxExprToRealExpr rhs
+        let diff := RealExpr.sub rl rr
+        let vs := autoEraseDups (realExprVars diff)
+        let env ← extractIntervalEnvFromHyps vs hyps
+        let safeLo := computeIntervalSafeLo env diff
+        some { expr := diff, env := env, claimedBound := ⟨safeLo, CanonicalRat.mk (-1) 1000⟩ }
+      else if op == "==" then do
+        let rl ← syntaxExprToRealExpr lhs
+        let rr ← syntaxExprToRealExpr rhs
+        let diff := RealExpr.sub rl rr
+        let vs := autoEraseDups (realExprVars diff)
+        let env ← extractIntervalEnvFromHyps vs hyps
+        some { expr := diff, env := env, claimedBound := ⟨0, 0⟩ }
+      else
+        none
     | _ => none
 
 /-! `taylor-model@1` has no claim surface. The `.obend` language has no transcendental functions:
@@ -2250,45 +2445,58 @@ model of the real sine certifies nothing about that claim, so nothing is synthes
 or from a `ClaimObj`; the format stays usable on the wire (`taylorModelFormat`). Until 2026-11-04 a
 fixed query (`cos + sin` on `[-1/10, 1/10]`) was substituted for the claim. -/
 
-/-- Convert an `.obend` `Syntax.Expr` into a multivariate `Poly` under variable table `varEnv`. -/
-@[expose] def syntaxExprToPolyWithEnv (varEnv : List (String × Nat)) : Syntax.Expr → Option Poly
+/-- Convert an `.obend` `Syntax.Expr` into a multivariate `Poly` under variable table `varEnv`,
+preserving receiver-qualified member paths and failing closed on non-path receivers. -/
+def syntaxExprToPolyWithEnv (varEnv : List (String × Nat)) : Syntax.Expr → Option Poly
   | .nat s => (autoParseNat? s).map fun n => polyConst (Rat.ofInt (Int.ofNat n))
   | .var v => (varEnv.lookup v).map fun idx => polyVarPow idx 1
-  | .member _ f => (varEnv.lookup f).map fun idx => polyVarPow idx 1
-  | .binary "+" a b => do
-    pure (Poly.add (← syntaxExprToPolyWithEnv varEnv a) (← syntaxExprToPolyWithEnv varEnv b))
-  | .binary "-" a b => do
-    pure (Poly.sub (← syntaxExprToPolyWithEnv varEnv a) (← syntaxExprToPolyWithEnv varEnv b))
-  | .binary "*" a b => do
-    pure (Poly.mul (← syntaxExprToPolyWithEnv varEnv a) (← syntaxExprToPolyWithEnv varEnv b))
+  | .member r f => do
+    let q ← syntaxVarName? (.member r f)
+    (varEnv.lookup q).map fun idx => polyVarPow idx 1
+  | .binary op a b =>
+    if op == "+" then do
+      pure (Poly.add (← syntaxExprToPolyWithEnv varEnv a) (← syntaxExprToPolyWithEnv varEnv b))
+    else if op == "-" then do
+      pure (Poly.sub (← syntaxExprToPolyWithEnv varEnv a) (← syntaxExprToPolyWithEnv varEnv b))
+    else if op == "*" then do
+      pure (Poly.mul (← syntaxExprToPolyWithEnv varEnv a) (← syntaxExprToPolyWithEnv varEnv b))
+    else
+      none
   | _ => none
+termination_by structural e => e
 
-/-- Default 3-variable compatibility wrapper for `syntaxExprToPolyWithEnv`. -/
-@[expose] def syntaxExprToPoly (e : Syntax.Expr) : Option Poly :=
-  let vars := (collectSyntaxVars e).eraseDups
-  syntaxExprToPolyWithEnv vars.zipIdx e
+/-- Default variable-table wrapper for `syntaxExprToPolyWithEnv`. -/
+def syntaxExprToPoly (e : Syntax.Expr) : Option Poly :=
+  let vars := autoEraseDups (collectSyntaxVars e)
+  syntaxExprToPolyWithEnv (autoZipIdx vars) e
+
+def parsePolyGivenHypsAux (varEnv : List (String × Nat)) :
+    (List Poly × List Poly) → List Syntax.Expr → Option (List Poly × List Poly)
+  | acc, [] => some acc
+  | (eqs, ineqs), h :: rest =>
+    match h with
+    | .binary op lhs rhs =>
+      if op == "==" then do
+        let pl ← syntaxExprToPolyWithEnv varEnv lhs
+        let pr ← syntaxExprToPolyWithEnv varEnv rhs
+        parsePolyGivenHypsAux varEnv (eqs ++ [Poly.sub pl pr], ineqs) rest
+      else if op == "<=" then do
+        let pl ← syntaxExprToPolyWithEnv varEnv lhs
+        let pr ← syntaxExprToPolyWithEnv varEnv rhs
+        parsePolyGivenHypsAux varEnv (eqs, ineqs ++ [Poly.sub pr pl]) rest
+      else if op == ">=" then do
+        let pl ← syntaxExprToPolyWithEnv varEnv lhs
+        let pr ← syntaxExprToPolyWithEnv varEnv rhs
+        parsePolyGivenHypsAux varEnv (eqs, ineqs ++ [Poly.sub pl pr]) rest
+      else
+        none
+    | _ => none
 
 /-- Parse polynomial equality (`a == b`) and inequality (`a <= b`, `a >= b`) `given` hypotheses
 into `(eqGens, ineqGens)`; fails closed (`none`) on unrecognized hypotheses. -/
-@[expose] def parsePolyGivenHyps (varEnv : List (String × Nat)) (hyps : List Syntax.Expr) :
+def parsePolyGivenHyps (varEnv : List (String × Nat)) (hyps : List Syntax.Expr) :
     Option (List Poly × List Poly) :=
-  hyps.foldlM
-    (fun (eqs, ineqs) h =>
-      match h with
-      | .binary "==" lhs rhs => do
-        let pl ← syntaxExprToPolyWithEnv varEnv lhs
-        let pr ← syntaxExprToPolyWithEnv varEnv rhs
-        some (eqs ++ [Poly.sub pl pr], ineqs)
-      | .binary "<=" lhs rhs => do
-        let pl ← syntaxExprToPolyWithEnv varEnv lhs
-        let pr ← syntaxExprToPolyWithEnv varEnv rhs
-        some (eqs, ineqs ++ [Poly.sub pr pl])
-      | .binary ">=" lhs rhs => do
-        let pl ← syntaxExprToPolyWithEnv varEnv lhs
-        let pr ← syntaxExprToPolyWithEnv varEnv rhs
-        some (eqs, ineqs ++ [Poly.sub pl pr])
-      | _ => none)
-    ([], [])
+  parsePolyGivenHypsAux varEnv ([], []) hyps
 
 /-! `sos-lyapunov-cbf@1` has no claim surface either. Its object is a Lyapunov / barrier / DAE
 specification (a vector field, `V`, `B`, constraint manifold), which no `.obend` claim states; until
@@ -2300,30 +2508,32 @@ judge verified a problem unrelated to the claim. Polynomial inequalities in a cl
 `lhs <= rhs` / `lhs >= rhs` Positivstellensatz non-negativity over arbitrary distinct variables,
 including `given` polynomial equality/inequality generators!).
 Fails closed (`none`) on `.bool false` or unparseable syntax. -/
-@[expose] def extractGroebnerQueryFromSyntax : Option Syntax.Expr → Option GroebnerQuery
+def extractGroebnerQueryFromSyntax : Option Syntax.Expr → Option GroebnerQuery
   | none => none
-  | some (.bool true) => none
-  | some (.bool false) => none
+  | some (.bool _) => none
   | some rawExpr =>
     let (hyps, body) := unwrapSyntaxGiven rawExpr
-    let vars := (hyps.flatMap collectSyntaxVars ++ collectSyntaxVars body).eraseDups
-    let varEnv := vars.zipIdx
+    let vars := autoEraseDups (collectSyntaxVarsList hyps ++ collectSyntaxVars body)
+    let varEnv := autoZipIdx vars
     match parsePolyGivenHyps varEnv hyps with
     | none => none
     | some (eqGens, ineqGens) =>
       match body with
-      | .binary "==" lhs rhs => do
-        let pl ← syntaxExprToPolyWithEnv varEnv lhs
-        let pr ← syntaxExprToPolyWithEnv varEnv rhs
-        some { target := Poly.sub pl pr, eqGens := eqGens, ineqGens := ineqGens, isNonneg := false, divFuel := 32 }
-      | .binary "<=" lhs rhs => do
-        let pl ← syntaxExprToPolyWithEnv varEnv lhs
-        let pr ← syntaxExprToPolyWithEnv varEnv rhs
-        some { target := Poly.sub pr pl, eqGens := eqGens, ineqGens := ineqGens, isNonneg := true, divFuel := 32 }
-      | .binary ">=" lhs rhs => do
-        let pl ← syntaxExprToPolyWithEnv varEnv lhs
-        let pr ← syntaxExprToPolyWithEnv varEnv rhs
-        some { target := Poly.sub pl pr, eqGens := eqGens, ineqGens := ineqGens, isNonneg := true, divFuel := 32 }
+      | .binary op lhs rhs =>
+        if op == "==" then do
+          let pl ← syntaxExprToPolyWithEnv varEnv lhs
+          let pr ← syntaxExprToPolyWithEnv varEnv rhs
+          some { target := Poly.sub pl pr, eqGens := eqGens, ineqGens := ineqGens, isNonneg := false, divFuel := 32 }
+        else if op == "<=" then do
+          let pl ← syntaxExprToPolyWithEnv varEnv lhs
+          let pr ← syntaxExprToPolyWithEnv varEnv rhs
+          some { target := Poly.sub pr pl, eqGens := eqGens, ineqGens := ineqGens, isNonneg := true, divFuel := 32 }
+        else if op == ">=" then do
+          let pl ← syntaxExprToPolyWithEnv varEnv lhs
+          let pr ← syntaxExprToPolyWithEnv varEnv rhs
+          some { target := Poly.sub pl pr, eqGens := eqGens, ineqGens := ineqGens, isNonneg := true, divFuel := 32 }
+        else
+          none
       | _ => none
 
 /-- Synthesize the `(objWire, certWire)` pair for a judge format tag. For a claim (`co? = some co`)
@@ -2333,7 +2543,7 @@ what `bindsClaim` re-derives at check time; for an Isar step (`co? = none`) from
 `hw-rtl-synth@1` certify that the module's book synthesizes, which is a proposition about the book
 and not about a claim, so they accept only the step proposition `true` and no claim. Fails closed
 (`none`) whenever the extracted query is invalid or has no valid witness. -/
-@[expose] def synthesizeJudgeWirePair
+def synthesizeJudgeWirePair
     (tag : String)
     (modName : String)
     (expr? : Option Syntax.Expr)
@@ -2362,11 +2572,59 @@ and not about a claim, so they accept only the step proposition `true` and no cl
   else
     none
 
+/-- **Receiver-Qualification Non-Collapse (`distinct_member_receivers_refused`)**:
+For every module name `modName` and optional `book?`, distinct receiver paths (`a.val` vs `b.val`)
+map to distinct variables (`"a.val"` vs `"b.val"`), so `a.val == b.val` extracts `x_0 - x_1`
+(never collapsing to `0`) and is strictly refused by both `groebner@1` and `interval@1`. -/
+theorem distinct_member_receivers_refused (modName : String) (book? : Option Book) :
+    extractGroebnerQueryFromSyntax
+      (some (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))) =
+      some { target := Poly.sub (polyVarPow 0 1) (polyVarPow 1 1)
+           , eqGens := [], ineqGens := [], isNonneg := false, divFuel := 32 } ∧
+    synthesizeJudgeWirePair "groebner@1" modName
+      (some (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))) book? = none ∧
+    synthesizeJudgeWirePair "interval@1" modName
+      (some (.ite (.binary "&&"
+          (.binary "<=" (.member (.var "a") "val") (.nat "10"))
+          (.binary "<=" (.member (.var "b") "val") (.nat "10")))
+        (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))
+        (.bool true))) book? = none := by
+  have h1 : extractGroebnerQueryFromSyntax
+      (some (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))) =
+      some { target := Poly.sub (polyVarPow 0 1) (polyVarPow 1 1)
+           , eqGens := [], ineqGens := [], isNonneg := false, divFuel := 32 } := by
+    decide +kernel
+  have h2 : synthesizeJudgeWirePair "groebner@1" modName
+      (some (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))) book? = none := by
+    change (do
+      let q ← extractGroebnerQueryFromSyntax
+        (some (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val")))
+      let cert ← synthesizeGroebnerCert q
+      some (encodeGroebnerQuery q, encodeGroebnerCert cert)) = none
+    decide +kernel
+  have h3 : synthesizeJudgeWirePair "interval@1" modName
+      (some (.ite (.binary "&&"
+          (.binary "<=" (.member (.var "a") "val") (.nat "10"))
+          (.binary "<=" (.member (.var "b") "val") (.nat "10")))
+        (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))
+        (.bool true))) book? = none := by
+    change (do
+      let q ← extractIntervalObjFromSyntax
+        (some (.ite (.binary "&&"
+            (.binary "<=" (.member (.var "a") "val") (.nat "10"))
+            (.binary "<=" (.member (.var "b") "val") (.nat "10")))
+          (.binary "==" (.member (.var "a") "val") (.member (.var "b") "val"))
+          (.bool true)))
+      let cert ← synthesizeIntervalCert 4 q
+      some (encodeIntervalObj q, encodeIntervalCert cert)) = none
+    decide +kernel
+  exact ⟨h1, h2, h3⟩
+
 /-- Infer which external judge format tags a claim requests:
 - When `claimDecl? = some cd`, strictly returns ONLY explicit `by judge(fmt)` tags declared on `cd`
   (never falling through to unrelated judges or overriding `by weave` / untagged claims).
 - When `claimDecl? = none` (programmatic invocation), uses name hints or registered `AutoCert` tags. -/
-@[expose] def inferClaimJudgeTags (claimName : String) (claimDecl? : Option Syntax.Claim) : List String :=
+def inferClaimJudgeTags (claimName : String) (claimDecl? : Option Syntax.Claim) : List String :=
   match claimDecl? with
   | some cd =>
     let mTag := match cd.method with
@@ -2393,7 +2651,7 @@ and not about a claim, so they accept only the step proposition `true` and no cl
 
 /-- Attempt to synthesize a kernel-verified `Justification.byExternalJudge` for a `ClaimObj` `co`
 from tag `tag`, strictly gated by `obligationCheckWithJudges formats grade co just == .ok`. -/
-@[expose] def synthesizeClaimJudgeTag
+def synthesizeClaimJudgeTag
     (formats : List Format)
     (grade : Nat)
     (modName : String)
@@ -2410,7 +2668,7 @@ from tag `tag`, strictly gated by `obligationCheckWithJudges formats grade co ju
 
 /-- Attempt to synthesize a kernel-verified `Justification.byExternalJudge` for a `ClaimObj` `co`,
 strictly gated by `obligationCheckWithJudges formats grade co just == .ok`. -/
-@[expose] def synthesizeClaimExternalJudge
+def synthesizeClaimExternalJudge
     (formats : List Format := autoCertFormats)
     (grade : Nat := 4096)
     (modName : String := "obend_rtl_top")
@@ -2499,7 +2757,7 @@ theorem synthesizeClaimExternalJudge_sound
   exact ⟨hOk, obligationWithJudges_sound formats hOk⟩
 
 /-- True when `tag` is one of the 5 automatically synthesized external judge formats in `Obend.Elab.AutoCert`. -/
-@[expose] def isSynthesizableAutoCertTag (tag : String) : Bool :=
+def isSynthesizableAutoCertTag (tag : String) : Bool :=
   tag == "interval@1" ||
   tag == "taylor-model@1" ||
   tag == "sos-lyapunov-cbf@1" ||
@@ -2508,7 +2766,7 @@ theorem synthesizeClaimExternalJudge_sound
   tag == "hw-rtl-synth@1"
 
 /-- Extract `(tag, prop?)` pairs from all `by judge(tag)` steps and header method of a `Syntax.ContractDecl`. -/
-@[expose] def extractContractJudgeRequests (c : Syntax.ContractDecl) : List (String × Option Syntax.Expr) :=
+def extractContractJudgeRequests (c : Syntax.ContractDecl) : List (String × Option Syntax.Expr) :=
   let hdrReq : List (String × Option Syntax.Expr) :=
     match c.method with
     | some (.judge tag) => [(tag, c.invariant)]
@@ -2526,7 +2784,7 @@ theorem synthesizeClaimExternalJudge_sound
 /-- Synthesize and verify external judge certificates for all `by judge(tag)` steps in a
 `Syntax.ContractDecl`, returning the list of `(tag, objWire, certWire)` witnesses that pass
 `F.checkBytes 0 objWire certWire == .ok`. -/
-@[expose] def synthesizeContractExternalJudges
+def synthesizeContractExternalJudges
     (formats : List Format := autoCertFormats)
     (modName : String := "obend_rtl_top")
     (book? : Option Book := none)
@@ -2548,7 +2806,7 @@ theorem synthesizeClaimExternalJudge_sound
 `c.method` and every Isar step in `c.steps`) synthesizes a `(objWire, certWire)` certificate
 accepted by its kernel `Judge.Format` (`F.checkBytes 0 objWire certWire == .ok`).
 Fails closed (`false`) if any synthesizable judge request fails synthesis or check! -/
-@[expose] def verifyContractAutoCertSteps
+def verifyContractAutoCertSteps
     (formats : List Format := autoCertFormats)
     (modName : String := "obend_rtl_top")
     (book? : Option Book := none)
@@ -2566,7 +2824,7 @@ Fails closed (`false`) if any synthesizable judge request fails synthesis or che
       true
 
 /-- Check whether a judge format tag is supported by `AutoCert` or `autoCertFormats`. -/
-@[expose] def isAutoCertAdmittedJudgeTag (formats : List Format := autoCertFormats) (tag : String) : Bool :=
+def isAutoCertAdmittedJudgeTag (formats : List Format := autoCertFormats) (tag : String) : Bool :=
   (findFormat formats tag).isSome
 
 end Obend.Elab.AutoCert

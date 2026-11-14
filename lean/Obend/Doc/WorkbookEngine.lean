@@ -1043,8 +1043,15 @@ theorem cellSaltedCommitment_lt {H : Hash} (hb : Bounded H) (c : CachedWorkbookC
 inductive ExportedWorkbookCell where
   | visible (cached : CachedWorkbookCell) (commitment : BitVec 256) (opening : Opening)
   | redacted (cellId : CellId) (cellKey : String) (kind : ProjectionKind)
-      (exportedDefs : List (SymbolName × Int)) (commitment : BitVec 256) (opening : Opening)
+      (exportedDefs : List SymbolName) (commitment : BitVec 256) (opening : Opening)
   deriving DecidableEq, Repr
+inductive ExportedCellCleartext where
+  | visible (cached : CachedWorkbookCell)
+  | redacted (cellId : CellId) (cellKey : String) (kind : ProjectionKind) (exportedDefs : List SymbolName)
+  deriving DecidableEq, Repr
+def ExportedWorkbookCell.cleartextView : ExportedWorkbookCell → ExportedCellCleartext
+  | .visible c _ _ => .visible c
+  | .redacted cid ck kind defs _ _ => .redacted cid ck kind defs
 def ExportedWorkbookCell.openingOf : ExportedWorkbookCell → Opening
   | .visible _ _ o | .redacted _ _ _ _ _ o => o
 def ExportedWorkbookCell.commitmentOf : ExportedWorkbookCell → BitVec 256
@@ -1052,9 +1059,6 @@ def ExportedWorkbookCell.commitmentOf : ExportedWorkbookCell → BitVec 256
 structure RedactedWorkbook where
   (title : String) (sections : List WorkbookSection) (merkleRoot : Nat) (entries : List ExportedWorkbookCell)
   deriving DecidableEq, Repr
-def exportedBindingsOfCell (c : CachedWorkbookCell) : List (SymbolName × Int) :=
-  let effDefs := (effectiveReactiveCell c.entry).defs
-  effDefs.map fun sym => (sym, c.result.values[effDefs.idxOf sym]?.getD 0)
 @[expose] def projectWorkbookForViewer (H : Hash) (viewerClearances : List String)
     (wb : Workbook) : RedactedWorkbook :=
   let leafValues := wb.cells.map (cellSaltedCommitment H)
@@ -1066,72 +1070,126 @@ def exportedBindingsOfCell (c : CachedWorkbookCell) : List (SymbolName × Int) :
         ExportedWorkbookCell.visible c cmBv op
       else
         ExportedWorkbookCell.redacted c.entry.reactive.id c.entry.cellKey
-          c.entry.structured.kind (exportedBindingsOfCell c) cmBv op }
+          c.entry.structured.kind (effectiveReactiveCell c.entry).defs cmBv op }
+def nextTaintedAfterExported : ExportedWorkbookCell → List SymbolName → List SymbolName
+  | .visible c _ _, tainted =>
+    tainted.filter fun s => !decide (s ∈ (effectiveReactiveCell c.entry).defs)
+  | .redacted _ _ _ defs _ _, tainted =>
+    defs ++ tainted
 def publishExportedCell : ExportedWorkbookCell → Environment → Environment
   | .visible c _ _, env => publishWorkbookCell c.entry c.result env
-  | .redacted _ _ _ bindings _ _, env =>
-    fun s => match bindings.lookup s with | some v => v | none => env s
-private theorem lookup_map_pair_self (xs : List SymbolName) (f : SymbolName → Int) (s : SymbolName) :
-    (xs.map fun x => (x, f x)).lookup s = if s ∈ xs then some (f s) else none := by
-  induction xs with
-  | nil => simp
-  | cons x rest ih =>
-    by_cases hs : s = x
-    · subst hs; simp
-    · simp [List.lookup, beq_eq_false_iff_ne.mpr hs, hs, ih]
-theorem publishExportedCell_eq_publishWorkbookCell (viewerClearances : List String)
-    (c : CachedWorkbookCell) (cm : BitVec 256) (op : Opening) (env : Environment) :
-    publishExportedCell
-      (if isCellVisibleToViewer viewerClearances c.entry.visibility then
-        ExportedWorkbookCell.visible c cm op
-      else
-        ExportedWorkbookCell.redacted c.entry.reactive.id c.entry.cellKey
-          c.entry.structured.kind (exportedBindingsOfCell c) cm op) env =
-    publishWorkbookCell c.entry c.result env := by
-  split
-  · rfl
-  · funext s
-    dsimp only [publishExportedCell, exportedBindingsOfCell, publishWorkbookCell, publish]
-    rw [lookup_map_pair_self]
-    by_cases hs : s ∈ (effectiveReactiveCell c.entry).defs <;> simp [hs]
+  | .redacted _ _ _ _ _ _, env => env
+private theorem agreeOutside_visible_step (w : WorkbookCell) (r : CellResult)
+    (tainted : List SymbolName) (envVer envFull : Environment)
+    (hAgree : AgreeOutside tainted envVer envFull) :
+    AgreeOutside (tainted.filter fun s => !decide (s ∈ (effectiveReactiveCell w).defs))
+      (publishWorkbookCell w r envVer) (publishWorkbookCell w r envFull) := by
+  intro s hs
+  simp only [publishWorkbookCell, publish]
+  by_cases hDef : s ∈ (effectiveReactiveCell w).defs
+  · simp [hDef]
+  · simp only [hDef, ↓reduceIte]
+    apply hAgree s
+    intro hMem
+    apply hs
+    exact List.mem_filter.mpr ⟨hMem, by simp [hDef]⟩
+private theorem agreeOutside_redacted_step (w : WorkbookCell) (r : CellResult)
+    (tainted : List SymbolName) (envVer envFull : Environment)
+    (hAgree : AgreeOutside tainted envVer envFull) :
+    AgreeOutside ((effectiveReactiveCell w).defs ++ tainted)
+      envVer (publishWorkbookCell w r envFull) := by
+  intro s hs
+  simp only [List.mem_append, not_or] at hs
+  simp only [publishWorkbookCell, publish, hs.1, ↓reduceIte]
+  exact hAgree s hs.2
+private theorem evalWorkbookCell_eq_of_reads_clean (k : CellKernel) (w : WorkbookCell)
+    (tainted : List SymbolName) (envVer envFull : Environment)
+    (hAgree : AgreeOutside tainted envVer envFull)
+    (hClean : ((effectiveReactiveCell w).reads.all fun r => !decide (r ∈ tainted)) = true) :
+    evalWorkbookCell k w envVer = evalWorkbookCell k w envFull := by
+  apply evalCell_frame
+  intro s hs
+  have hNotMemB := List.all_eq_true.mp hClean s hs
+  have hNotMem : s ∉ tainted := by
+    intro hm; simp [hm] at hNotMemB
+  exact hAgree s hNotMem
 def verifyExportedSchedule (k : CellKernel) (H : Hash) (merkleRoot : Nat) :
-    List ExportedWorkbookCell → Environment → Bool
-  | [], _ => true
-  | e :: es, env =>
+    List ExportedWorkbookCell → List SymbolName → Environment → Bool
+  | [], _, _ => true
+  | e :: es, tainted, env =>
     let merkleOk := opens H e.openingOf merkleRoot && decide (e.openingOf.value = e.commitmentOf.toNat)
     let cellOk := match e with
       | .visible c cm _ =>
-        decide (evalWorkbookCell k c.entry env = c.result) && decide (cellSaltedCommitment H c = cm.toNat)
+        let readsClean := (effectiveReactiveCell c.entry).reads.all fun r => !decide (r ∈ tainted)
+        (if readsClean then decide (evalWorkbookCell k c.entry env = c.result) else true) &&
+          decide (cellSaltedCommitment H c = cm.toNat)
       | .redacted _ _ _ _ _ _ => true
-    merkleOk && cellOk && verifyExportedSchedule k H merkleRoot es (publishExportedCell e env)
+    merkleOk && cellOk &&
+      verifyExportedSchedule k H merkleRoot es (nextTaintedAfterExported e tainted) (publishExportedCell e env)
 @[expose] def verifyRedactedWorkbook (k : CellKernel) (H : Hash) (rwb : RedactedWorkbook) : Bool :=
-  verifyExportedSchedule k H rwb.merkleRoot rwb.entries
+  verifyExportedSchedule k H rwb.merkleRoot rwb.entries []
     (sectionEnvironment rwb.sections (rwb.sections.length + 1))
-/-- **Confidentiality / Sealed-Payload Erasure (`projectWorkbookForViewer_hides_sealed`)**. -/
+/-- **Confidentiality & Secret-Value Non-Interference (`projectWorkbookForViewer_hides_sealed`)**:
+    1. Every sealed cell lacking viewer clearance projects to `.redacted` carrying ONLY symbol names
+       `(effectiveReactiveCell c₁.entry).defs` (zero cleartext `Int` values, ASTs, or cell bodies).
+    2. **True Value-Hiding / Non-Interference**: any two sealed cells `c₁, c₂` with identical public
+       metadata `(id, cellKey, kind, defs)` — even with distinct secret `result.values`, distinct
+       `structured.ast`, distinct `reactive.body`, and distinct salts — produce **identical**
+       cleartext `.redacted` projections! -/
 theorem projectWorkbookForViewer_hides_sealed (H : Hash) (viewerClearances : List String)
-    (wb : Workbook) (idx : Nat) (c : CachedWorkbookCell) (tag : String) (salt : BitVec 256)
-    (hIdx : wb.cells[idx]? = some c)
-    (hVis : c.entry.visibility = .sealedPrivate tag salt)
-    (hNotCleared : tag ∉ viewerClearances) :
-    ∃ bindings cm op,
-      (projectWorkbookForViewer H viewerClearances wb).entries[idx]? =
-        some (.redacted c.entry.reactive.id c.entry.cellKey c.entry.structured.kind bindings cm op) := by
-  have hVisFalse : isCellVisibleToViewer viewerClearances c.entry.visibility = false := by
-    rw [hVis]; exact list_contains_false_of_not_mem hNotCleared
-  refine ⟨exportedBindingsOfCell c, BitVec.ofNat 256 (cellSaltedCommitment H c),
-    mapOpening H (wb.cells.map (cellSaltedCommitment H)) idx, ?_⟩
-  unfold projectWorkbookForViewer
-  simp [List.getElem?_map, List.getElem?_zipIdx, hIdx, hVisFalse]
+    (wb₁ wb₂ : Workbook) (idx₁ idx₂ : Nat) (c₁ c₂ : CachedWorkbookCell)
+    (tag₁ tag₂ : String) (salt₁ salt₂ : BitVec 256)
+    (hIdx₁ : wb₁.cells[idx₁]? = some c₁)
+    (hIdx₂ : wb₂.cells[idx₂]? = some c₂)
+    (hVis₁ : c₁.entry.visibility = .sealedPrivate tag₁ salt₁)
+    (hVis₂ : c₂.entry.visibility = .sealedPrivate tag₂ salt₂)
+    (hNotCleared₁ : tag₁ ∉ viewerClearances)
+    (hNotCleared₂ : tag₂ ∉ viewerClearances)
+    (hSameId : c₁.entry.reactive.id = c₂.entry.reactive.id)
+    (hSameKey : c₁.entry.cellKey = c₂.entry.cellKey)
+    (hSameKind : c₁.entry.structured.kind = c₂.entry.structured.kind)
+    (hSameDefs : (effectiveReactiveCell c₁.entry).defs = (effectiveReactiveCell c₂.entry).defs) :
+    (projectWorkbookForViewer H viewerClearances wb₁).entries[idx₁]? =
+      some (.redacted c₁.entry.reactive.id c₁.entry.cellKey c₁.entry.structured.kind
+        (effectiveReactiveCell c₁.entry).defs
+        (BitVec.ofNat 256 (cellSaltedCommitment H c₁))
+        (mapOpening H (wb₁.cells.map (cellSaltedCommitment H)) idx₁)) ∧
+    ((projectWorkbookForViewer H viewerClearances wb₁).entries[idx₁]?.map ExportedWorkbookCell.cleartextView) =
+      ((projectWorkbookForViewer H viewerClearances wb₂).entries[idx₂]?.map ExportedWorkbookCell.cleartextView) := by
+  have hVisFalse₁ : isCellVisibleToViewer viewerClearances c₁.entry.visibility = false := by
+    rw [hVis₁]; exact list_contains_false_of_not_mem hNotCleared₁
+  have hVisFalse₂ : isCellVisibleToViewer viewerClearances c₂.entry.visibility = false := by
+    rw [hVis₂]; exact list_contains_false_of_not_mem hNotCleared₂
+  have hProj₁ :
+      (projectWorkbookForViewer H viewerClearances wb₁).entries[idx₁]? =
+        some (.redacted c₁.entry.reactive.id c₁.entry.cellKey c₁.entry.structured.kind
+          (effectiveReactiveCell c₁.entry).defs
+          (BitVec.ofNat 256 (cellSaltedCommitment H c₁))
+          (mapOpening H (wb₁.cells.map (cellSaltedCommitment H)) idx₁)) := by
+    unfold projectWorkbookForViewer
+    simp [List.getElem?_map, List.getElem?_zipIdx, hIdx₁, hVisFalse₁]
+  have hProj₂ :
+      (projectWorkbookForViewer H viewerClearances wb₂).entries[idx₂]? =
+        some (.redacted c₂.entry.reactive.id c₂.entry.cellKey c₂.entry.structured.kind
+          (effectiveReactiveCell c₂.entry).defs
+          (BitVec.ofNat 256 (cellSaltedCommitment H c₂))
+          (mapOpening H (wb₂.cells.map (cellSaltedCommitment H)) idx₂)) := by
+    unfold projectWorkbookForViewer
+    simp [List.getElem?_map, List.getElem?_zipIdx, hIdx₂, hVisFalse₂]
+  refine ⟨hProj₁, ?_⟩
+  rw [hProj₁, hProj₂]
+  simp [ExportedWorkbookCell.cleartextView, hSameId, hSameKey, hSameKind, hSameDefs]
 private theorem verifyExportedSchedule_complete_aux (k : CellKernel) {H : Hash} (hb : Bounded H)
     (viewerClearances : List String) (allLeaves : List Nat) :
-    ∀ (cs : List WorkbookCell) (idx : Nat) (env : Environment),
+    ∀ (cs : List WorkbookCell) (idx : Nat) (tainted : List SymbolName) (envVer envFull : Environment),
+      AgreeOutside tainted envVer envFull →
       idx + cs.length ≤ allLeaves.length →
       allLeaves.length < 2 ^ 256 →
       (∀ j (hj : j < cs.length),
         allLeaves.getD (idx + j) 0 =
-          cellSaltedCommitment H ((evalWorkbookSchedule k cs env)[j]'(by
+          cellSaltedCommitment H ((evalWorkbookSchedule k cs envFull)[j]'(by
             rw [evalWorkbookSchedule_length]; exact hj))) →
-      let evaluated := evalWorkbookSchedule k cs env
+      let evaluated := evalWorkbookSchedule k cs envFull
       let exported := (evaluated.zipIdx idx).map fun (c, j) =>
         let cmBv := BitVec.ofNat 256 (cellSaltedCommitment H c)
         let op := mapOpening H allLeaves j
@@ -1139,14 +1197,14 @@ private theorem verifyExportedSchedule_complete_aux (k : CellKernel) {H : Hash} 
           ExportedWorkbookCell.visible c cmBv op
         else
           ExportedWorkbookCell.redacted c.entry.reactive.id c.entry.cellKey
-            c.entry.structured.kind (exportedBindingsOfCell c) cmBv op
-      verifyExportedSchedule k H (mapRoot H allLeaves) exported env = true
-  | [], _, _, _, _, _ => rfl
-  | w :: ws, idx, env, hBound, hSmallLen, hLeavesAt => by
+            c.entry.structured.kind (effectiveReactiveCell c.entry).defs cmBv op
+      verifyExportedSchedule k H (mapRoot H allLeaves) exported tainted envVer = true
+  | [], _, _, _, _, _, _, _, _ => rfl
+  | w :: ws, idx, tainted, envVer, envFull, hAgree, hBound, hSmallLen, hLeavesAt => by
     intro evaluated exported
     have hIdxLt : idx < allLeaves.length := by simp at hBound; omega
     have hIdxSmall : idx < 2 ^ 256 := Nat.lt_trans hIdxLt hSmallLen
-    let r := evalWorkbookCell k w env
+    let r := evalWorkbookCell k w envFull
     let c0 : CachedWorkbookCell := ⟨w, r⟩
     have hLeaf0 : allLeaves[idx]?.getD 0 = cellSaltedCommitment H c0 := by
       have h0 : allLeaves.getD idx 0 = cellSaltedCommitment H c0 := by
@@ -1155,32 +1213,48 @@ private theorem verifyExportedSchedule_complete_aux (k : CellKernel) {H : Hash} 
     have hBvToNat : (BitVec.ofNat 256 (cellSaltedCommitment H c0)).toNat = cellSaltedCommitment H c0 :=
       Nat.mod_eq_of_lt (cellSaltedCommitment_lt hb c0)
     have hOpens0 := opens_complete hb allLeaves idx hIdxLt hIdxSmall
-    have hPubEq := publishExportedCell_eq_publishWorkbookCell viewerClearances c0
-      (BitVec.ofNat 256 (cellSaltedCommitment H c0)) (mapOpening H allLeaves idx) env
-    have hTail := verifyExportedSchedule_complete_aux k hb viewerClearances allLeaves ws (idx + 1)
-      (publishWorkbookCell w r env) (by simp at hBound ⊢; omega) hSmallLen (fun j hj => by
-        have hStep := hLeavesAt (j + 1) (by simp; omega)
-        rw [show idx + (j + 1) = (idx + 1) + j by omega] at hStep
-        simpa [evalWorkbookSchedule, c0, r] using hStep)
+    have hLeavesTail : ∀ j (hj : j < ws.length),
+        allLeaves.getD ((idx + 1) + j) 0 =
+          cellSaltedCommitment H ((evalWorkbookSchedule k ws (publishWorkbookCell w r envFull))[j]'(by
+            rw [evalWorkbookSchedule_length]; exact hj)) := by
+      intro j hj
+      have hStep := hLeavesAt (j + 1) (by simp; omega)
+      rw [show idx + (j + 1) = (idx + 1) + j by omega] at hStep
+      simpa [evalWorkbookSchedule, c0, r] using hStep
     change verifyExportedSchedule k H (mapRoot H allLeaves)
       ((if isCellVisibleToViewer viewerClearances c0.entry.visibility then
           ExportedWorkbookCell.visible c0 (BitVec.ofNat 256 (cellSaltedCommitment H c0)) (mapOpening H allLeaves idx)
         else
           ExportedWorkbookCell.redacted c0.entry.reactive.id c0.entry.cellKey
-            c0.entry.structured.kind (exportedBindingsOfCell c0)
+            c0.entry.structured.kind (effectiveReactiveCell c0.entry).defs
             (BitVec.ofNat 256 (cellSaltedCommitment H c0)) (mapOpening H allLeaves idx)) ::
-        List.map _ ((evalWorkbookSchedule k ws (publishWorkbookCell w r env)).zipIdx (idx + 1))) env = true
+        List.map _ ((evalWorkbookSchedule k ws (publishWorkbookCell w r envFull)).zipIdx (idx + 1))) tainted envVer = true
     unfold verifyExportedSchedule
-    rw [hPubEq]
     dsimp only [c0, r] at hLeaf0 hBvToNat ⊢
     by_cases hVis : isCellVisibleToViewer viewerClearances w.visibility = true
-    · simp only [hVis, ↓reduceIte, ExportedWorkbookCell.openingOf,
-        ExportedWorkbookCell.commitmentOf, Bool.and_eq_true, decide_eq_true_eq]
-      exact ⟨⟨⟨hOpens0, by rw [show (mapOpening H allLeaves idx).value = allLeaves[idx]?.getD 0 from rfl, hLeaf0, hBvToNat]⟩,
-        ⟨trivial, hBvToNat.symm⟩⟩, hTail⟩
+    · have hTail := verifyExportedSchedule_complete_aux k hb viewerClearances allLeaves ws (idx + 1)
+        (tainted.filter fun s => !decide (s ∈ (effectiveReactiveCell w).defs))
+        (publishWorkbookCell w r envVer) (publishWorkbookCell w r envFull)
+        (agreeOutside_visible_step w r tainted envVer envFull hAgree)
+        (by simp at hBound ⊢; omega) hSmallLen hLeavesTail
+      simp only [hVis, ↓reduceIte, ExportedWorkbookCell.openingOf,
+        ExportedWorkbookCell.commitmentOf, nextTaintedAfterExported, publishExportedCell,
+        Bool.and_eq_true, decide_eq_true_eq]
+      refine ⟨⟨⟨hOpens0, by rw [show (mapOpening H allLeaves idx).value = allLeaves[idx]?.getD 0 from rfl, hLeaf0, hBvToNat]⟩,
+        ⟨?_, hBvToNat.symm⟩⟩, hTail⟩
+      cases hClean : ((effectiveReactiveCell w).reads.all fun s => !decide (s ∈ tainted)) with
+      | false => simp
+      | true =>
+        simp [evalWorkbookCell_eq_of_reads_clean k w tainted envVer envFull hAgree hClean]
     · simp only [Bool.not_eq_true] at hVis
+      have hTail := verifyExportedSchedule_complete_aux k hb viewerClearances allLeaves ws (idx + 1)
+        ((effectiveReactiveCell w).defs ++ tainted)
+        envVer (publishWorkbookCell w r envFull)
+        (agreeOutside_redacted_step w r tainted envVer envFull hAgree)
+        (by simp at hBound ⊢; omega) hSmallLen hLeavesTail
       simp only [hVis, Bool.false_eq_true, ↓reduceIte, ExportedWorkbookCell.openingOf,
-        ExportedWorkbookCell.commitmentOf, Bool.and_eq_true, decide_eq_true_eq]
+        ExportedWorkbookCell.commitmentOf, nextTaintedAfterExported, publishExportedCell,
+        Bool.and_eq_true, decide_eq_true_eq]
       exact ⟨⟨⟨hOpens0, by rw [show (mapOpening H allLeaves idx).value = allLeaves[idx]?.getD 0 from rfl, hLeaf0, hBvToNat]⟩,
         trivial⟩, hTail⟩
 /-- **Collaborator Downstream Verification Completeness (`verifyRedactedWorkbook_complete`)**. -/
@@ -1191,14 +1265,15 @@ theorem verifyRedactedWorkbook_complete (k : CellKernel) (title : String)
       (projectWorkbookForViewer deployed viewerClearances (evalWorkbookFull k title secs cs)) = true := by
   unfold verifyRedactedWorkbook projectWorkbookForViewer evalWorkbookFull
   dsimp only
-  have hSchedLen := evalWorkbookSchedule_length k cs (sectionEnvironment secs (secs.length + 1))
+  let seedEnv := sectionEnvironment secs (secs.length + 1)
+  have hSchedLen := evalWorkbookSchedule_length k cs seedEnv
   refine verifyExportedSchedule_complete_aux k deployed_bounded viewerClearances
-    ((evalWorkbookSchedule k cs (sectionEnvironment secs (secs.length + 1))).map (cellSaltedCommitment deployed))
-    cs 0 (sectionEnvironment secs (secs.length + 1)) ?_ ?_ ?_
+    ((evalWorkbookSchedule k cs seedEnv).map (cellSaltedCommitment deployed))
+    cs 0 [] seedEnv seedEnv (fun _ _ => rfl) ?_ ?_ ?_
   · simp [hSchedLen]
   · simpa [hSchedLen] using hLen
   · intro j hj
-    have hjEval : j < (evalWorkbookSchedule k cs (sectionEnvironment secs (secs.length + 1))).length := by
+    have hjEval : j < (evalWorkbookSchedule k cs seedEnv).length := by
       rwa [hSchedLen]
     simp [List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_eq_getElem hjEval]
 /-- **256-Bit Merkle Commitment Binding (`verifyRedactedWorkbook_binds_or_collides`)**. -/

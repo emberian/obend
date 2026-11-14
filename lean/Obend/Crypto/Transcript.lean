@@ -12,8 +12,8 @@ Eliminates critical 2026 Fiat–Shamir and field-aliasing vulnerabilities at the
      is the **sole entry constructor** producing `Transcript .instanceBound` and `BoundTranscript ι`,
      preventing commitment/sum `0`-grinding before challenge squeezing.
    - `absorbMsg`, `squeezeChallenge256`, `squeezeGoldilocks`, and `squeezeGoldilocksExt2` require
-     `[CanSqueezeTranscript phase]` (inhabited ONLY for `.relationBound` and `.instanceBound`;
-     squeezing from `.unseeded` is a compile-time Lean type error).
+     `[CanSqueezeTranscript phase]` (inhabited ONLY for `.instanceBound`;
+     squeezing from `.unseeded` or `.relationBound` before `bindInstance` is a compile-time Lean type error).
 2. **Canonical Goldilocks Field Lift (`CanonicalLift`, `canonicalLift?`)**:
    Rejects non-canonical `n ≥ goldilocksPrime` witnesses (`0` vs `p = 2^64 - 2^32 + 1` alias).
 3. **Bounded Collision Carrier (`BoundedCollision`) & Constructive Collision Extraction**:
@@ -570,16 +570,29 @@ inductive TranscriptPhase where
   | instanceBound
   deriving DecidableEq, Repr
 
-/-- Typeclass witnessing that a `TranscriptPhase` has completed Fenzi relation binding.
-    `.unseeded` intentionally has NO instance, rejecting premature challenge squeezes at compile time. -/
+/-- Typeclass witnessing that a `TranscriptPhase` has completed BOTH Fenzi relation binding
+    AND public-instance/initial-commitment binding (`phase = .instanceBound`).
+    Both `.unseeded` and `.relationBound` intentionally have NO instance, rejecting premature
+    Fiat–Shamir challenge squeezes before `bindInstance` at compile time. -/
 class CanSqueezeTranscript (phase : TranscriptPhase) : Type where
-  not_unseeded : phase ≠ .unseeded
-
-instance : CanSqueezeTranscript .relationBound where
-  not_unseeded := by decide
+  is_instanceBound : phase = .instanceBound
 
 instance : CanSqueezeTranscript .instanceBound where
-  not_unseeded := by decide
+  is_instanceBound := rfl
+
+/-- Squeeze capability is held by **exactly** the `.instanceBound` phase: every earlier phase
+    (`.unseeded`, `.relationBound`) is refused, closing the premature Fiat–Shamir squeeze
+    (pre-instance-binding grinding) channel. -/
+theorem canSqueeze_nonempty_iff (phase : TranscriptPhase) :
+    Nonempty (CanSqueezeTranscript phase) ↔ phase = .instanceBound := by
+  constructor
+  · rintro ⟨⟨h⟩⟩; exact h
+  · intro h; exact ⟨⟨h⟩⟩
+
+/-- Any phase other than `.instanceBound` refuses challenge squeezes. -/
+theorem not_canSqueeze_of_ne {phase : TranscriptPhase} (hp : phase ≠ .instanceBound) :
+    ¬ Nonempty (CanSqueezeTranscript phase) :=
+  fun h => hp ((canSqueeze_nonempty_iff phase).1 h)
 
 /-! ## 5. Phase-Indexed Fenzi-Safe `Transcript` & `BoundTranscript` (Constructor-Sealed Boundary) -/
 

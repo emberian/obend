@@ -241,11 +241,12 @@ def sampleWit : SymbolicZkWitness :=
 def tau4 : List Goldilocks :=
   [Goldilocks.ofNat 13, Goldilocks.ofNat 29, Goldilocks.ofNat 37, Goldilocks.ofNat 53]
 
-def boundPiopTr : Transcript .relationBound :=
-  bindRelation "obend.symboliczk.piop/v1"
-    (Native.bytesOfList [0xca, 0xfe])
-    (Native.bytesOfList [0x01, 0x02])
-    (Transcript.newUnseeded (Native.bytesOfList [0x42]))
+def boundPiopTr : Transcript .instanceBound :=
+  (bindInstance ByteArray.empty
+    (bindRelation "obend.symboliczk.piop/v1"
+      (Native.bytesOfList [0xca, 0xfe])
+      (Native.bytesOfList [0x01, 0x02])
+      (Transcript.newUnseeded (Native.bytesOfList [0x42])))).transcript
 
 #guard stmtWitnessStructValid sampleStmt sampleWit == true
 #guard (symbolicResidualVector sampleStmt sampleWit chalLin chalLup).all (fun r => r == CommRingOps.zero)
@@ -275,8 +276,14 @@ def sampleBoundProver := honestSumcheckProver sampleStmt.numVars sampleBoundTbl 
 #guard (verifySymbolicSumcheck sampleStmt sampleWit sampleWitComm 1 sampleBoundProver.1 sampleSeed).isSome
 #guard (verifySymbolicSumcheck sampleStmt sampleWit ByteArray.empty 1 sampleBoundProver.1 sampleSeed).isNone
 
+-- Regression guard for P0 #1: all-zero round polynomials on false witness (`invalidStmt`: `12 < 5`) are refused!
+def allZeroRoundForgery : List (RoundPoly Goldilocks) :=
+  List.replicate invalidStmt.numVars ⟨[]⟩
+
+#guard (verifySymbolicSumcheck invalidStmt sampleWit sampleWitComm 1 allZeroRoundForgery sampleSeed).isNone
+
 -- ============================================================================
--- 4. `#tooth` Mutation Kills Across All 3 Primitives & Sumcheck Weld (6 Kills)
+-- 4. `#tooth` Mutation Kills Across All 3 Primitives & Sumcheck Weld (7 Kills)
 -- ============================================================================
 
 -- Kill 1: Dropping the `RangeSafe` width guard (`2 * 2^w ≤ p`) allows 63-bit mod-p wraparound
@@ -309,6 +316,20 @@ def sampleBoundProver := honestSumcheckProver sampleStmt.numVars sampleBoundTbl 
 #tooth Obend.SymbolicZk.CompileToPiop.compileSymbolicTraceToSumcheck_sound by mutation
   Obend.SymbolicZk.CompileToPiop.verifySymbolicSumcheck := fun s w witComm maxDeg rounds seed =>
     if stmtWitnessStructValid s w then
+      let chals := symbolicChallenges s witComm seed
+      let tbl := batchedSymbolicPiopTable s w chals.1 chals.2.1 chals.2.2.1
+      match verifySumcheck maxDeg s.numVars CommRingOps.zero rounds chals.2.2.2 with
+      | some (claim, trFinal) =>
+        if decide (claim.expectedVal = mleEval tbl claim.point) then some (claim, trFinal) else none
+      | none => none
+    else none
+
+-- Kill 7: Skipping the final `claim.expectedVal = mleEval tbl claim.point` check in
+-- `verifySymbolicSumcheck` admits all-zero round-polynomial forgeries and breaks
+-- `compileSymbolicTraceToSumcheck_sound`!
+#tooth Obend.SymbolicZk.CompileToPiop.compileSymbolicTraceToSumcheck_sound by mutation
+  Obend.SymbolicZk.CompileToPiop.verifySymbolicSumcheck := fun s w witComm maxDeg rounds seed =>
+    if stmtWitnessStructValid s w && decide (witComm = symbolicWitnessCommit w) then
       verifySumcheck maxDeg s.numVars CommRingOps.zero rounds (symbolicChallenges s witComm seed).2.2.2
     else none
 

@@ -131,10 +131,12 @@ def sampleForkTree : TranscriptTree 1 :=
 def pcsTable2 : List Goldilocks :=
   [Goldilocks.ofNat 11, Goldilocks.ofNat 22, Goldilocks.ofNat 33, Goldilocks.ofNat 44]
 def pcsPt2 : List Goldilocks := [Goldilocks.ofNat 5, Goldilocks.ofNat 9]
-def pcsSeedTr : Transcript .relationBound :=
-  bindRelation "test.pcs/v1" ByteArray.empty ByteArray.empty (Transcript.newUnseeded ByteArray.empty)
-
 def pcsComm2 := canopyCommit deployedCanopyHash32 2 pcsTable2
+def pcsRelTr : Transcript .relationBound :=
+  bindRelation "test.pcs/v1" ByteArray.empty ByteArray.empty (Transcript.newUnseeded ByteArray.empty)
+-- Fenzi anti-grinding: the PCS commitment is absorbed (`bindInstance`) BEFORE any challenge squeeze
+-- (`CanSqueezeTranscript .relationBound` is uninhabited).
+def pcsSeedTr : Transcript .instanceBound := (bindInstance pcsComm2 pcsRelTr).transcript
 def pcsClaim2 : EvalClaim Goldilocks 2 := ⟨pcsPt2, rfl, mleEval pcsTable2 pcsPt2⟩
 def pcsOpen2 := (canopyOpenEval deployedCanopyHash32 2 pcsTable2 pcsClaim2 pcsSeedTr).1
 

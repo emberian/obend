@@ -271,10 +271,10 @@ def foldTranscript (descriptor cm₁ y₁ cm₂ y₂ : ByteArray) : Transcript .
     (encodeFrame (encodeFrame cm₁ y₁ ByteArray.empty) (encodeFrame cm₂ y₂ ByteArray.empty) ByteArray.empty)
     (Transcript.newUnseeded ByteArray.empty)
 
-/-- Full-field Goldilocks fold helper for ring-level transcript callers; use `boundedFoldFromTranscript`
-    and `verifyBoundedChallengeFold` for norm-controlled lattice folding (`|c| ≤ bChal`). -/
-def foldFromTranscript {n : Nat} (tr : Transcript .relationBound) (u v : FastIntPoly n) :
-    FastIntPoly n × Transcript .relationBound :=
+/-- Full-field Goldilocks fold helper for instance-bound ring-level transcript callers; use
+    `boundedFoldFromTranscript` and `verifyBoundedChallengeFold` for norm-controlled lattice folding (`|c| ≤ bChal`). -/
+def foldFromTranscript {n : Nat} (tr : Transcript .instanceBound) (u v : FastIntPoly n) :
+    FastIntPoly n × Transcript .instanceBound :=
   let (c, tr') := squeezeGoldilocks tr
   (foldWitness (c.val : Int) u v, tr')
 

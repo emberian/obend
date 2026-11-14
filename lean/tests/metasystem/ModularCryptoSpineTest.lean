@@ -73,14 +73,21 @@ def boundTrB   : Transcript .relationBound := bindRelation "obend.piop/v1" relBy
 -- Sign-injective `encodeSignedIntBytes` distinguishes `+1` and `-1`
 #guard encodeSignedIntBytes [1, -5] != encodeSignedIntBytes [-1, 5]
 
--- Deterministic challenge squeezing in 256-bit bytes, Goldilocks, and 128-bit GoldilocksExt2
-def squeezed256 := squeezeChallenge256 boundTrA
+-- Deterministic challenge squeezing requires `.instanceBound` (`CanSqueezeTranscript .relationBound` is uninhabited!)
+example : ¬ Nonempty (CanSqueezeTranscript .unseeded) := not_canSqueeze_of_ne (by decide)
+example : ¬ Nonempty (CanSqueezeTranscript .relationBound) := not_canSqueeze_of_ne (by decide)
+example : Nonempty (CanSqueezeTranscript .instanceBound) := (canSqueeze_nonempty_iff _).2 rfl
+
+def instTrA : Transcript .instanceBound := (bindInstance ByteArray.empty boundTrA).transcript
+def instTrB : Transcript .instanceBound := (bindInstance ByteArray.empty boundTrB).transcript
+
+def squeezed256 := squeezeChallenge256 instTrA
 #guard squeezed256.1.val.size == 32
 #guard squeezed256.2.state.size == 32
 #guard squeezed256.1.val != squeezed256.2.state
 
-def squeezedExt2A := squeezeGoldilocksExt2 boundTrA
-def squeezedExt2B := squeezeGoldilocksExt2 boundTrB
+def squeezedExt2A := squeezeGoldilocksExt2 instTrA
+def squeezedExt2B := squeezeGoldilocksExt2 instTrB
 #guard squeezedExt2A.1 != squeezedExt2B.1
 
 -- Mutation probe: raw concatenation without LEB128 length prefixes breaks `encodeFrame_injective`
@@ -122,15 +129,15 @@ def sampleExt2Elem : GoldilocksExt2 := ⟨Goldilocks.ofNat 123456789, Goldilocks
 def sumClaim3 : Goldilocks := hypercubeSum 3 sampleTable3
 #guard sumClaim3 == Goldilocks.ofNat 83
 
-def proverRun3 := honestSumcheckProver 3 sampleTable3 boundTrA
-#guard match verifySumcheck 1 3 sumClaim3 proverRun3.1 boundTrA with
+def proverRun3 := honestSumcheckProver 3 sampleTable3 instTrA
+#guard match verifySumcheck 1 3 sumClaim3 proverRun3.1 instTrA with
        | some (claim, _) =>
          claim == proverRun3.2.1 &&
          claim.expectedVal == mleEval sampleTable3 claim.point
        | none => false
 
 -- Forged hypercube sum (84 != 83) is rejected
-#guard match verifySumcheck 1 3 (Goldilocks.ofNat 84) proverRun3.1 boundTrA with
+#guard match verifySumcheck 1 3 (Goldilocks.ofNat 84) proverRun3.1 instTrA with
        | none => true
        | some _ => false
 
@@ -138,8 +145,8 @@ def proverRun3 := honestSumcheckProver 3 sampleTable3 boundTrA
 def sampleTableExt2 : List GoldilocksExt2 :=
   sampleTable3.map GoldilocksExt2.ofBase
 
-def proverRunExt2 := honestSumcheckProver 3 sampleTableExt2 boundTrA
-#guard match verifySumcheck 1 3 (hypercubeSum 3 sampleTableExt2) proverRunExt2.1 boundTrA with
+def proverRunExt2 := honestSumcheckProver 3 sampleTableExt2 instTrA
+#guard match verifySumcheck 1 3 (hypercubeSum 3 sampleTableExt2) proverRunExt2.1 instTrA with
        | some (claim, _) => claim.expectedVal == mleEval sampleTableExt2 claim.point
        | none => false
 
@@ -180,14 +187,14 @@ def canopyClaim3 : EvalClaim Goldilocks 3 :=
   ⟨challengePt3, rfl, mleEval sampleTable3 challengePt3⟩
 
 def canopyOpen3 :=
-  (canopyMerklePCS).openEval () 3 sampleTable3 canopyClaim3 boundTrA
+  (canopyMerklePCS).openEval () 3 sampleTable3 canopyClaim3 instTrA
 
-#guard ((canopyMerklePCS).verifyEval () 3 canopyComm3 canopyClaim3 canopyOpen3.1 boundTrA).1 == true
+#guard ((canopyMerklePCS).verifyEval () 3 canopyComm3 canopyClaim3 canopyOpen3.1 instTrA).1 == true
 
 def badCanopyClaim3 : EvalClaim Goldilocks 3 :=
   ⟨challengePt3, rfl, Goldilocks.add canopyClaim3.expectedVal Goldilocks.one⟩
 
-#guard ((canopyMerklePCS).verifyEval () 3 canopyComm3 badCanopyClaim3 canopyOpen3.1 boundTrA).1 == false
+#guard ((canopyMerklePCS).verifyEval () 3 canopyComm3 badCanopyClaim3 canopyOpen3.1 instTrA).1 == false
 
 #tooth Obend.Crypto.verifyMerklePath_completeness by mutation
   Obend.Crypto.verifyMerklePath := fun _ _ _ _ _ _ => false
@@ -334,13 +341,13 @@ def sampleSameTableForgery : DualForgery brokenConstHash32 brokenZeroAjtai 0 :=
 def crossClaimOne0 : EvalClaim Goldilocks 0 := ⟨[], rfl, mleEval [Goldilocks.one] []⟩
 def crossPrfOne0 :=
   (canopyAjtaiDualPCS brokenConstHash32 brokenZeroAjtai).openEval
-    ((), ()) 0 [Goldilocks.one] crossClaimOne0 boundTrA
+    ((), ()) 0 [Goldilocks.one] crossClaimOne0 instTrA
 
 def sampleCrossMerkleForgery : DualForgery brokenConstHash32 brokenZeroAjtai 0 :=
   .crossTableMismatch [Goldilocks.zero] [Goldilocks.one] rfl rfl rfl
-    crossClaimOne0 crossPrfOne0.1 boundTrA
+    crossClaimOne0 crossPrfOne0.1 instTrA
     (dualPCS_completeness (canopyMerklePCS brokenConstHash32) (ajtaiLatticePCS brokenZeroAjtai)
-      ((), ()) 0 [Goldilocks.one] [] rfl boundTrA ⟨trivial, rfl⟩ rfl)
+      ((), ()) 0 [Goldilocks.one] [] rfl instTrA ⟨trivial, rfl⟩ rfl)
     (.inl (by decide))
 
 #guard match dualExtract sampleCrossMerkleForgery with
@@ -350,13 +357,13 @@ def sampleCrossMerkleForgery : DualForgery brokenConstHash32 brokenZeroAjtai 0 :
 -- Branch 3: `crossTableMismatch` (Ajtai SIS branch) -> extracts short kernel vector `[1, 0, 0, 0]`!
 def sampleCrossAjtaiForgery : DualForgery brokenConstHash32 brokenZeroAjtai 0 :=
   .crossTableMismatch [Goldilocks.one] [Goldilocks.zero] rfl rfl rfl
-    crossClaimOne0 crossPrfOne0.1 boundTrA
+    crossClaimOne0 crossPrfOne0.1 instTrA
     (by
       have hAjEq : ajtaiLatticeCommit brokenZeroAjtai 0 [Goldilocks.zero] =
           ajtaiLatticeCommit brokenZeroAjtai 0 [Goldilocks.one] := by decide
       rw [hAjEq]
       exact dualPCS_completeness (canopyMerklePCS brokenConstHash32) (ajtaiLatticePCS brokenZeroAjtai)
-        ((), ()) 0 [Goldilocks.one] [] rfl boundTrA ⟨trivial, rfl⟩ rfl)
+        ((), ()) 0 [Goldilocks.one] [] rfl instTrA ⟨trivial, rfl⟩ rfl)
     (.inr (by decide))
 
 #guard match dualExtract sampleCrossAjtaiForgery with

@@ -235,13 +235,13 @@ theorem relay_5000km_rejected (claim : LocationClaim) (verifierHardwareId : Byte
 are explicit (no assertion of independent uniform offsets or full residency). -/
 def digestNat (bytes : ByteArray) : Nat := bytes.data.foldl (fun n b => 256*n + b.toNat) 0
 
-def challengeOffsets : Nat → Nat → Transcript .relationBound → Array Nat
+def challengeOffsets : Nat → Nat → Transcript .instanceBound → Array Nat
   | 0, _, _ => #[]
   | k+1, pages, tr =>
       let (out, next) := squeezeChallenge256 tr
       #[digestNat out.val % pages] ++ challengeOffsets k pages next
 
-theorem challengeOffsets_size (count pages : Nat) (tr : Transcript .relationBound) :
+theorem challengeOffsets_size (count pages : Nat) (tr : Transcript .instanceBound) :
     (challengeOffsets count pages tr).size = count := by
   induction count generalizing tr with
   | zero => rfl
@@ -249,7 +249,8 @@ theorem challengeOffsets_size (count pages : Nat) (tr : Transcript .relationBoun
 
 def deriveVramChallengeOffsets (policy : HardwareClassPolicy) (challenge : VramChallenge)
     (claim : LocationClaim) : Array Nat :=
-  challengeOffsets policy.challengeCount policy.pageCount (vramTranscript challenge claim)
+  challengeOffsets policy.challengeCount policy.pageCount
+    (bindInstance challenge.sealedRoot (vramTranscript challenge claim)).transcript
 
 structure VramPageOpening where
   page : ByteArray

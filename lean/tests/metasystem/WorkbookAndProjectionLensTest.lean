@@ -171,6 +171,20 @@ example :
   let redacted := projectWorkbookForViewer Obend.Core.Digest.deployed ["public-guest"] wb1
   if verifyRedactedWorkbook scientificKernel Obend.Core.Digest.deployed redacted ≠ true then
     throw (IO.userError "redacted workbook collaborator verification failed")
+  -- Verify P0 #7 non-interference: two workbooks with distinct secret values in `cellSealedCustody`
+  -- produce identical cleartext `.redacted` projections and leak zero secret integers in JSON!
+  let cellSealedAlt : WorkbookCell :=
+    { cellSealedCustody with reactive := { cellSealedCustody.reactive with
+        body := [[⟨.literal, 999999⟩]] } }
+  let wbAlt := evalWorkbookFull scientificKernel "TestWorkbook" (applyEditToSections secs secEdit)
+    [cellVehicle, cellSealedAlt, cellFeecMesh]
+  let redactedAlt := projectWorkbookForViewer Obend.Core.Digest.deployed ["public-guest"] wbAlt
+  if (redacted.entries[1]?.map ExportedWorkbookCell.cleartextView) ≠
+     (redactedAlt.entries[1]?.map ExportedWorkbookCell.cleartextView) then
+    throw (IO.userError "sealed cells with distinct secret values must have identical cleartext projections")
+  let redactedJson := String.fromUTF8! (encodeRedactedWorkbookJson redactedAlt true)
+  if (redactedJson.splitOn "999999").length > 1 then
+    throw (IO.userError "redacted workbook JSON leaked secret cell value")
   let corruptJson := "{corrupted".toUTF8
   match stepWorkbookJsonBytes wb0 corruptJson with
   | .error (-3, _) => pure ()
@@ -235,9 +249,17 @@ example :
 #tooth mergeWorkbookBranches_preserves_unconflicted_receipts by
   mutation mergeWorkbookBranches := fun _ lg rg _ _ _ => ⟨Graph.merge lg rg, [], []⟩
 
--- Tooth 12: Capability-scoped sealed cell redaction sensitivity
+-- Tooth 12: Capability-scoped sealed cell redaction & value non-interference sensitivity
 #tooth projectWorkbookForViewer_hides_sealed by
   mutation isCellVisibleToViewer := fun _ _ => true
+
+-- Tooth 12b: Leaking cleartext `c.result.values` inside `cleartextView` breaks non-interference!
+#tooth projectWorkbookForViewer_hides_sealed by
+  mutation ExportedWorkbookCell.cleartextView := fun e =>
+    match e with
+    | .visible c _ _ => .visible c
+    | .redacted cid ck kind defs cm _ =>
+      .redacted (cid + cm.toNat) ck kind defs
 
 -- Tooth 13: Redacted workbook collaborator verification completeness sensitivity
 #tooth verifyRedactedWorkbook_complete by
