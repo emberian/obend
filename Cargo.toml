@@ -6,5 +6,7 @@ members = [
     "crates/obend-crypto-exec",
     "crates/obend-sel4-verifier",
     "crates/obend-pq-mpc",
+    "crates/obend-surfaces",
+    "crates/obend-lightclients",
 ]
 resolver = "2"

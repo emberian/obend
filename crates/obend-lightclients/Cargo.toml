@@ -1,0 +1,9 @@
+[package]
+name = "obend-lightclients"
+version = "0.1.0"
+edition = "2021"
+description = "S11-hardened Ethereum Electra and CometBFT light-client header admission gates, SSZ Merkle & two-level ICS-23 bank-balance envelope verification, and sealed ProvenForeignHolding"
+license = "Apache-2.0"
+
+[dependencies]
+# Zero external dependencies: pure-Rust FIPS 180-4 SHA-256 and verified S11 admission rules.
