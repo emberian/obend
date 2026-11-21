@@ -677,7 +677,7 @@ theorem mem_honestMembers_iff (P : Protocol) (n : NodeId) :
   rw [List.mem_filter]
   simp
 
-/-- **Honest Quorum Sufficiency**: at least `2f + 1 = P.quorum` committee members are honest. -/
+/-- **Honest Quorum Sufficiency**: at least `n - f = P.quorum` committee members are honest. -/
 theorem honestMembers_length_ge_quorum (P : Protocol) :
     P.quorum ≤ (honestMembers P).length := by
   have hSub := list_filter_sub (fun _ => true) P.faulty P.committee
@@ -689,7 +689,7 @@ theorem honestMembers_length_ge_quorum (P : Protocol) :
     simp [honestMembers]
   have hFaultEq : P.committee.filter (fun x => true && P.faulty x) = P.committee.filter P.faulty := by
     simp
-  rw [hTrue, hHonEq, hFaultEq, P.size] at hSub
+  rw [hTrue, hHonEq, hFaultEq] at hSub
   have hFb := P.faultBound
   unfold Protocol.quorum
   omega

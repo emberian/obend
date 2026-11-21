@@ -600,10 +600,10 @@ theorem simplexProtocolRefutes_exact (refutes : TraceClause → Bool)
   complete := by intro P _ _; exact ⟨[], 0, rfl⟩
   mono := by intro _ _ _ _ _ _; rfl
 
-/-- A committee of `3f+1` distinct nodes with the declared faulty ones bounded by `f`. -/
+/-- A committee of at least `3f+1` distinct nodes with the declared faulty ones bounded by `f`. -/
 def mkProtocol? (committee : List Nat) (f : Nat) (faultyL : List Nat) : Option Protocol :=
   let faulty := fun n => faultyL.contains n
-  if h : committee.Nodup ∧ committee.length = 3 * f + 1 ∧ (committee.filter faulty).length ≤ f then
+  if h : committee.Nodup ∧ 3 * f + 1 ≤ committee.length ∧ (committee.filter faulty).length ≤ f then
     some ⟨committee, f, faulty, h.1, h.2.1, h.2.2⟩
   else none
 
@@ -614,7 +614,7 @@ def decodeProtocol (s : String) : Except String Protocol := do
   let faultyL ← (← (← j.getObjVal? "faulty").getArr?).toList.mapM (·.getNat?)
   match mkProtocol? committee f faultyL with
   | some P => pure P
-  | none => throw "the committee must be 3f+1 distinct nodes with at most f declared faulty"
+  | none => throw "the committee must be at least 3f+1 distinct nodes with at most f declared faulty"
 
 def decodeEntry (j : Json) : Except String Entry := do
   match j.getObjVal? "dummy" with
@@ -776,7 +776,7 @@ theorem traceVerdict_refutes_trace {P : Protocol} {tr : List Msg} {k : TraceClau
   rw [traceVerdict_complete hm] at h
   cases h
 
-/-- A committee is never empty: it has `3f+1` members. So `simplexRunJudge`'s fragment is every
+/-- A committee is never empty: it has at least `3f+1` members. So `simplexRunJudge`'s fragment is every
 run, and its completeness is unconditional. -/
 theorem committee_ne_nil (P : Protocol) : P.committee ≠ [] := by
   intro h

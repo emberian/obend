@@ -6,6 +6,9 @@ Mathlib-free quorum combinatorics and view-timing primitives backing
 `Obend.Consensus.SimplexProtocol` and `Obend.Consensus.SimplexTrace`:
 - `honest_quorum_intersection`: any two `2f + 1` quorums in a `3f + 1` committee with at most
   `f` faulty members share at least one honest member.
+- `honest_quorum_intersection_nf` (with `quorum_overlap_nf`): any two `n - f` quorums in a
+  committee of `n ≥ 3f + 1` with at most `f` faulty members overlap in `≥ n - 2f ≥ f + 1` members
+  and share an honest one. `SimplexProtocol` uses this threshold.
 - `qc_same_view_unique`: two `2f + 1` quorums in the same view whose honest voters vote once
   must agree on the certified value.
 - `nodup_filter_simplex`: filtering a duplicate-free committee preserves `Nodup`.
@@ -61,7 +64,7 @@ theorem list_filter_add_card {α : Type} (p q : α → Bool) (l : List α) :
   | nil => rfl
   | cons x xs ih =>
     simp only [List.filter_cons]
-    cases hp : p x <;> cases hq : q x <;> simp [hp, hq] <;> omega
+    cases hp : p x <;> cases hq : q x <;> simp <;> omega
 
 theorem list_filter_length_le {α : Type} (p : α → Bool) (l : List α) :
     (l.filter p).length ≤ l.length := by
@@ -78,7 +81,7 @@ theorem list_filter_sub {α : Type} (p q : α → Bool) (l : List α) :
   | nil => rfl
   | cons x xs ih =>
     simp only [List.filter_cons]
-    cases hp : p x <;> cases hq : q x <;> simp [hp, hq] <;> omega
+    cases hp : p x <;> cases hq : q x <;> simp <;> omega
 
 theorem list_filter_and_le {α : Type} (p q : α → Bool) (l : List α) :
     (l.filter (fun x => p x && q x)).length ≤ (l.filter q).length := by
@@ -86,7 +89,7 @@ theorem list_filter_and_le {α : Type} (p q : α → Bool) (l : List α) :
   | nil => simp
   | cons x xs ih =>
     simp only [List.filter_cons]
-    cases hp : p x <;> cases hq : q x <;> simp [hp, hq] <;> omega
+    cases hp : p x <;> cases hq : q x <;> simp <;> omega
 
 /-- Filtering a `Nodup` list preserves `Nodup`. -/
 theorem nodup_filter_simplex {α : Type} (p : α → Bool) :
@@ -103,37 +106,50 @@ theorem nodup_filter_simplex {α : Type} (p : α → Bool) :
           (fun y hy => h_not_mem y (List.mem_filter.mp hy).1)
           (nodup_filter_simplex p h_xs)
 
+/-- Two `n - f` quorums of an `n`-element list overlap in at least `n - 2f` positions: by
+inclusion–exclusion, `|p| + |q| = |p ∨ q| + |p ∧ q|` and `|p ∨ q| ≤ n`. No `Nodup` is needed, since
+every count is over the same list. -/
+theorem quorum_overlap_nf {α : Type} (l : List α) (f : Nat) (p q : α → Bool)
+    (h_p : l.length - f ≤ (l.filter p).length)
+    (h_q : l.length - f ≤ (l.filter q).length) :
+    l.length - 2 * f ≤ (l.filter (fun x => p x && q x)).length := by
+  have h_sum := list_filter_add_card p q l
+  have h_union := list_filter_length_le (fun x => p x || q x) l
+  omega
+
+/-- **Metatheorem 1′: Quorum Intersection at `n - f`** (gate G5, 2026-11-21).
+    In a committee of `n ≥ 3f + 1` with at most `f` faulty members, any two quorums of size
+    `≥ n - f` overlap in `≥ n - 2f ≥ f + 1` members (`quorum_overlap_nf`), so they share an honest
+    one. At `n = 3f + 1` the threshold `n - f` is `2f + 1` and this is `honest_quorum_intersection`;
+    for `n > 3f + 1` a fixed `2f + 1` threshold no longer intersects honestly (`n = 5, f = 1`). -/
+theorem honest_quorum_intersection_nf {α : Type} (l : List α) (f : Nat)
+    (p q faulty : α → Bool)
+    (h_size : 3 * f + 1 ≤ l.length)
+    (h_p : l.length - f ≤ (l.filter p).length)
+    (h_q : l.length - f ≤ (l.filter q).length)
+    (h_faulty : (l.filter faulty).length ≤ f) :
+    ∃ x ∈ l, p x = true ∧ q x = true ∧ faulty x = false := by
+  have h_overlap := quorum_overlap_nf l f p q h_p h_q
+  have h_sub := list_filter_sub (fun x => p x && q x) faulty l
+  have h_le := list_filter_and_le (fun x => p x && q x) faulty l
+  have h_honest_pos : 0 < (l.filter (fun x => (p x && q x) && !faulty x)).length := by
+    omega
+  obtain ⟨x, hx⟩ := List.exists_mem_of_length_pos h_honest_pos
+  have ⟨h_in_l, h_cond⟩ := List.mem_filter.mp hx
+  simp only [Bool.and_eq_true, Bool.not_eq_true'] at h_cond
+  exact ⟨x, h_in_l, h_cond.1.1, h_cond.1.2, h_cond.2⟩
+
 /-- **Metatheorem 1: Quorum Intersection**.
-    Any two quorums of size `≥ 2f + 1` in a `3f + 1` committee share an honest validator. -/
+    Any two quorums of size `≥ 2f + 1` in a `3f + 1` committee share an honest validator: the
+    `n = 3f + 1` instance of `honest_quorum_intersection_nf`, where `n - f = 2f + 1`. -/
 theorem honest_quorum_intersection {α : Type} (l : List α) (f : Nat)
     (p q faulty : α → Bool)
     (h_size : l.length = 3 * f + 1)
     (h_p : 2 * f + 1 ≤ (l.filter p).length)
     (h_q : 2 * f + 1 ≤ (l.filter q).length)
     (h_faulty : (l.filter faulty).length ≤ f) :
-    ∃ x ∈ l, p x = true ∧ q x = true ∧ faulty x = false := by
-  have h_sum := list_filter_add_card p q l
-  have h_union := list_filter_length_le (fun x => p x || q x) l
-  have h_inter : f + 1 ≤ (l.filter (fun x => p x && q x)).length := by
-    rw [h_size] at h_union
-    omega
-  have h_sub := list_filter_sub (fun x => p x && q x) faulty l
-  have h_faulty_inter : (l.filter (fun x => (p x && q x) && faulty x)).length ≤ f := by
-    have h_le := list_filter_and_le (fun x => p x && q x) faulty l
-    omega
-  have h_honest_pos : 0 < (l.filter (fun x => (p x && q x) && !faulty x)).length := by
-    omega
-  match h_match : l.filter (fun x => (p x && q x) && !faulty x) with
-  | [] =>
-    rw [h_match] at h_honest_pos
-    contradiction
-  | head :: rest =>
-    have h_mem : head ∈ l.filter (fun x => (p x && q x) && !faulty x) := by
-      rw [h_match]
-      exact List.Mem.head rest
-    have ⟨h_in_l, h_cond⟩ := (List.mem_filter.mp h_mem)
-    simp only [Bool.and_eq_true, Bool.not_eq_true'] at h_cond
-    exact ⟨head, h_in_l, h_cond.1.1, h_cond.1.2, h_cond.2⟩
+    ∃ x ∈ l, p x = true ∧ q x = true ∧ faulty x = false :=
+  honest_quorum_intersection_nf l f p q faulty (by omega) (by omega) (by omega) h_faulty
 
 /-- **Metatheorem 2: Same-View QC Uniqueness**.
     Two QCs formed for the same view must agree on their value. -/

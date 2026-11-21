@@ -16,18 +16,24 @@ it holds no protocol. This module is the protocol, as a relation (2026-11-04):
   extends a chain whose every entry is notarized) and `finalize` (only a block the node voted for
   in that view and has seen notarized). `Reach` closes the steps from the empty message list.
 - `Inv` is what every reachable message list satisfies (`reach_inv`); the theorems below take
-  `Inv` and the `Protocol`'s bounds (`committee.length = 3f+1`, at most `f` faulty, `Nodup`).
+  `Inv` and the `Protocol`'s bounds (`3f+1 ≤ committee.length`, at most `f` faulty, `Nodup`).
+- The QUORUM for notarizing (vote) and finalizing is `n - f` of the `n = committee.length`
+  members (`Protocol.quorum`; gate G5, 2026-11-21). At `n = 3f+1` that is the familiar `2f+1`;
+  for `n > 3f+1` a fixed `2f+1` would let two quorums meet only in faulty nodes (at `n = 5, f = 1`
+  two 3-member quorums can share one node), while two `n - f` quorums share `n - 2f ≥ f+1`.
 
-What is proved, all from `Simplex.honest_quorum_intersection`:
+What is proved, all from `Simplex.honest_quorum_intersection_nf`:
 - `notarized_block_unique`: one view notarizes one block.
 - `finalized_no_dummy`: a view that finalized a block did not notarize its dummy.
 - `finalized_prefix_of_notarized`: a finalized chain is a prefix of every notarized chain that
   reaches its view; hence `finalized_consistent` (two finalized chains, one is a prefix of the
   other) and `fin_cert_unique_per_height` (two finalized chains of one height carry the same
   blocks).
-- `accountable`: two conflicting quorums in one view name at least `f+1` signers, each with its
-  two votes in the message list, which `SlashingReceipt.checks` re-reads; none of them kept the
-  vote-once rule, and under the fault bound each is faulty (`signers_faulty`).
+- `accountable_of_threshold`: two conflicting quorums of `q` votes in one view, with
+  `n + f + 1 ≤ 2q`, name at least `f+1` signers, each with its two votes in the message list,
+  which `SlashingReceipt.checks` re-reads; none of them kept the vote-once rule, and under the
+  fault bound each is faulty (`signers_faulty`). `accountable_nf` and `accountable_protocol` are
+  the `n - f` instances (`n ≥ 3f+1`); `accountable` is the `2f+1`-in-at-most-`3f+1` instance.
 
 `Entry.encode` is the one wire form of an entry (tag, 8-byte view, 32-byte payload): a block's
 payload is a 256-bit digest, and `Entry.encode_injective` reads every canonical entry back. The
@@ -79,7 +85,7 @@ end Obend.Digest.HashBytes
 
 namespace Obend.Consensus.SimplexProtocol
 
-open Obend.Consensus.Simplex (NodeId honest_quorum_intersection list_filter_add_card
+open Obend.Consensus.Simplex (NodeId honest_quorum_intersection_nf list_filter_add_card
   list_filter_length_le nodup_filter_simplex)
 open Obend.Digest
 
@@ -140,16 +146,18 @@ imported abbreviation. -/
 
 /-! ## 2. The committee and the adversary -/
 
-/-- A committee of `3f+1` distinct nodes of which at most `f` are faulty. -/
+/-- A committee of `n ≥ 3f+1` distinct nodes of which at most `f` are faulty. -/
 structure Protocol where
   committee : List NodeId
   f : Nat
   faulty : NodeId → Bool
   nodup : committee.Nodup
-  size : committee.length = 3 * f + 1
+  size : 3 * f + 1 ≤ committee.length
   faultBound : (committee.filter faulty).length ≤ f
 
-abbrev Protocol.quorum (P : Protocol) : Nat := 2 * P.f + 1
+/-- The vote and finalize quorum: `n - f` of the `n` committee members (`2f+1` when `n = 3f+1`).
+Two such quorums overlap in `n - 2f ≥ f+1` members (`Simplex.quorum_overlap_nf`). -/
+abbrev Protocol.quorum (P : Protocol) : Nat := P.committee.length - P.f
 
 abbrev Protocol.honest (P : Protocol) (n : NodeId) : Prop := n ∈ P.committee ∧ P.faulty n = false
 
@@ -472,7 +480,7 @@ theorem honest_of_quorum (P : Protocol) (p : NodeId → Bool)
     (h : P.quorum ≤ (P.committee.filter p).length) :
     ∃ n ∈ P.committee, p n = true ∧ P.faulty n = false := by
   obtain ⟨n, hn, hp, _, hf⟩ :=
-    honest_quorum_intersection P.committee P.f p p P.faulty P.size h h P.faultBound
+    honest_quorum_intersection_nf P.committee P.f p p P.faulty P.size h h P.faultBound
   exact ⟨n, hn, hp, hf⟩
 
 /-- **One view notarizes one block.** Two notarizing quorums share an honest member, who voted
@@ -481,7 +489,7 @@ theorem notarized_block_unique {P : Protocol} {sent : Sent} (hI : Inv P sent) {v
     {c₁ c₂ : Chain} (h₁ : NotarizedBlock P sent v c₁) (h₂ : NotarizedBlock P sent v c₂) :
     c₁ = c₂ := by
   obtain ⟨n, hn, hv₁, hv₂, hf⟩ :=
-    honest_quorum_intersection P.committee P.f (fun n => voted sent n v (.block c₁))
+    honest_quorum_intersection_nf P.committee P.f (fun n => voted sent n v (.block c₁))
       (fun n => voted sent n v (.block c₂)) P.faulty P.size h₁ h₂ P.faultBound
   have hm₁ := (voted_iff sent n v (.block c₁)).1 hv₁
   have hm₂ := (voted_iff sent n v (.block c₂)).1 hv₂
@@ -494,7 +502,7 @@ theorem finalized_no_dummy {P : Protocol} {sent : Sent} (hI : Inv P sent) {v : N
     (hf : Finalized P sent v c) : ¬ NotarizedDummy P sent v := by
   intro hd
   obtain ⟨n, hn, hfin, hdum, hfault⟩ :=
-    honest_quorum_intersection P.committee P.f (fun n => finalizeVoted sent n v c)
+    honest_quorum_intersection_nf P.committee P.f (fun n => finalizeVoted sent n v c)
       (fun n => voted sent n v (.dummy v)) P.faulty P.size hf hd P.faultBound
   have hmf := (finalizeVoted_iff sent n v c).1 hfin
   have hvb := (hI.finRule _ hmf ⟨hn, hfault⟩ rfl c rfl).1
@@ -632,13 +640,14 @@ def extractReceipt (committee : List NodeId) (sent : Sent) (v : Nat) (a b : Targ
     SlashingReceipt :=
   ⟨v, a, b, committee.filter fun n => voted sent n v a && voted sent n v b⟩
 
-/-- **Accountability**: two conflicting quorums of `2f+1` in a committee of at most `3f+1` name at
-least `f+1` signers, each with both votes in the message list (`checks`), none of whom kept the
-vote-once rule. No fault bound is assumed: this is what a stranger learns when the bound failed. -/
-theorem accountable (committee : List NodeId) (f : Nat) (sent : Sent) (v : Nat) (a b : Target)
-    (hsize : committee.length ≤ 3 * f + 1) (hne : a ≠ b)
-    (ha : 2 * f + 1 ≤ (committee.filter fun n => voted sent n v a).length)
-    (hb : 2 * f + 1 ≤ (committee.filter fun n => voted sent n v b).length) :
+/-- **Accountability**, at any threshold: two conflicting quorums of `q` votes in a committee of
+`n` with `n + f + 1 ≤ 2q` name at least `f+1` signers, each with both votes in the message list
+(`checks`), none of whom kept the vote-once rule. No fault bound is assumed: this is what a
+stranger learns when the bound failed. -/
+theorem accountable_of_threshold (committee : List NodeId) (f q : Nat) (sent : Sent) (v : Nat)
+    (a b : Target) (hq : committee.length + f + 1 ≤ 2 * q) (hne : a ≠ b)
+    (ha : q ≤ (committee.filter fun n => voted sent n v a).length)
+    (hb : q ≤ (committee.filter fun n => voted sent n v b).length) :
     let r := extractReceipt committee sent v a b
     r.checks sent = true ∧ f + 1 ≤ r.signers.length ∧
       ∀ n ∈ r.signers, n ∈ committee ∧ ¬ VoteOnce sent n v := by
@@ -654,6 +663,37 @@ theorem accountable (committee : List NodeId) (f : Nat) (sent : Sent) (v : Nat) 
   refine ⟨hchecks, hbound, fun n hn => ?_⟩
   have hmem := List.mem_filter.1 hn
   exact ⟨hmem.1, ((SlashingReceipt.checks_sound hchecks).2 n hn).2.2⟩
+
+/-- **Accountability at `2f+1`**: two conflicting quorums of `2f+1` in a committee of at most
+`3f+1` name at least `f+1` signers (the `q = 2f+1` instance of `accountable_of_threshold`). -/
+theorem accountable (committee : List NodeId) (f : Nat) (sent : Sent) (v : Nat) (a b : Target)
+    (hsize : committee.length ≤ 3 * f + 1) (hne : a ≠ b)
+    (ha : 2 * f + 1 ≤ (committee.filter fun n => voted sent n v a).length)
+    (hb : 2 * f + 1 ≤ (committee.filter fun n => voted sent n v b).length) :
+    let r := extractReceipt committee sent v a b
+    r.checks sent = true ∧ f + 1 ≤ r.signers.length ∧
+      ∀ n ∈ r.signers, n ∈ committee ∧ ¬ VoteOnce sent n v :=
+  accountable_of_threshold committee f (2 * f + 1) sent v a b (by omega) hne ha hb
+
+/-- **Accountability at `n - f`**: two conflicting quorums of `n - f` in a committee of
+`n ≥ 3f+1` name at least `f+1` signers (`2(n - f) - n = n - 2f ≥ f+1`). -/
+theorem accountable_nf (committee : List NodeId) (f : Nat) (sent : Sent) (v : Nat) (a b : Target)
+    (hsize : 3 * f + 1 ≤ committee.length) (hne : a ≠ b)
+    (ha : committee.length - f ≤ (committee.filter fun n => voted sent n v a).length)
+    (hb : committee.length - f ≤ (committee.filter fun n => voted sent n v b).length) :
+    let r := extractReceipt committee sent v a b
+    r.checks sent = true ∧ f + 1 ≤ r.signers.length ∧
+      ∀ n ∈ r.signers, n ∈ committee ∧ ¬ VoteOnce sent n v :=
+  accountable_of_threshold committee f (committee.length - f) sent v a b (by omega) hne ha hb
+
+/-- **Accountability for a `Protocol`**: two conflicting quorums (`P.quorum = n - f`) in one view
+name at least `f+1` double-signers. Only the committee size bound is used, not the fault bound. -/
+theorem accountable_protocol (P : Protocol) (sent : Sent) (v : Nat) (a b : Target) (hne : a ≠ b)
+    (ha : P.quorum ≤ votesFor P sent v a) (hb : P.quorum ≤ votesFor P sent v b) :
+    let r := extractReceipt P.committee sent v a b
+    r.checks sent = true ∧ P.f + 1 ≤ r.signers.length ∧
+      ∀ n ∈ r.signers, n ∈ P.committee ∧ ¬ VoteOnce sent n v :=
+  accountable_nf P.committee P.f sent v a b P.size hne ha hb
 
 /-- Under the fault bound and the invariant, every signer of an extracted receipt is faulty: an
 honest node votes once. -/
@@ -733,7 +773,7 @@ structure FinCert where
 deriving instance @[expose] DecidableEq for SlashingReceipt, FinCert
 
 /-- Verify a `FinCert` against committee `P` and message history `sent`:
-    `signers` are duplicate-free, meet `P.quorum` (`2f + 1`), belong to `P.committee`,
+    `signers` are duplicate-free, meet `P.quorum` (`n - f`), belong to `P.committee`,
     and each cast a `finalize` vote for `chain` in `view`. -/
 @[expose] def FinCert.checks (c : FinCert) (P : Protocol) (sent : Sent) : Bool :=
   decide c.signers.Nodup &&

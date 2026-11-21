@@ -121,7 +121,7 @@ def demoProtocol : Protocol where
   f := 1
   faulty := fun n => n == 3
   nodup := by decide
-  size := rfl
+  size := by decide
   faultBound := by decide
 
 def demoSentFinalized : Sent :=

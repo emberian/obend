@@ -9,7 +9,7 @@ Binds Obend's 4-tier finality ladder directly to `SimplexProtocol` (`Protocol`, 
 1. `speculative`  (Tier 0): Local turn proposal, optimistic execution, read uncommitted.
 2. `attested`     (Tier 1): Leader proposal attested in `SimplexProtocol.Sent`, read-only preview.
 3. `quorum_final` (Tier 2): `SimplexProtocol.FinCert` verified (`cert.checks P sent = true`),
-                            witnessing `2f + 1` committee `finalize` votes (`Finalized P sent`),
+                            witnessing `n - f` committee `finalize` votes (`Finalized P sent`),
                             state-write committed.
 4. `collapsed`    (Tier 3): Finalized chain digest + vault Merkle state root folded via
                             domain-separated `cshake256Kernel` into canonical `collapsedRoot`.
@@ -374,7 +374,7 @@ def SimplexFinalityGate.init (turnId : Digest) : SimplexFinalityGate :=
 /-- Advance `SimplexFinalityGate` against `SimplexProtocol`:
     - Tier 0 → Tier 1 (`attestProposal`): verifies `leader ∈ P.committee`, `leader = P.leader view`,
       the leader's `.propose` message is in `sent`, and `vaultRoot` is a 32-byte digest.
-    - Tier 1 → Tier 2 (`finalizeWithCert`): verifies `cert.checks P sent = true` (`2f + 1` distinct
+    - Tier 1 → Tier 2 (`finalizeWithCert`): verifies `cert.checks P sent = true` (`n - f` distinct
       committee `finalize` votes in `sent`) and matching 32-byte `vaultRoot`.
     - Tier 2 → Tier 3 (`collapseArchive`): requires `gate.finCert = some cert` and matching
       `gate.vaultRoot = some vaultRoot`, folding `chainDigest cert.chain` and `vaultRoot` via
