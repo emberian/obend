@@ -769,7 +769,7 @@ theorem stepJoint_refines_floorBook {n : Nat} {s s' : LedgerState} {shared : Byt
   obtain ⟨hfl', hsum⟩ := FloorBook.admitBatch_preserves_floors _ hfl hb
   exact ⟨hb, hfl', hsum, stepJoint_balances h, fun v =>
     Obend.Ledger.nonIssuer_balance_nonneg_of_floorsHold hfl' (.user v) s'.asset
-      (by simp [AccountAddr.user])⟩
+      (by simp [AccountAddr.user]) (by simp [AccountAddr.user])⟩
 /-- **The step is complete.** On a book whose floors hold, a turn that passes the guard is applied
 unless it takes a vat below a floor the book configures: guard and floors are the only refusals. -/
 theorem stepJoint_complete {n : Nat} {s : LedgerState} {shared : ByteArray}
@@ -876,7 +876,7 @@ theorem jointTrace_preserves_floors (n : Nat) (trace : List (ByteArray × List L
     trace s s' h hfl
   exact ⟨hR.1, hR.2, fun v =>
     Obend.Ledger.nonIssuer_balance_nonneg_of_floorsHold hR.1 (.user v) s'.asset
-      (by simp [AccountAddr.user])⟩
+      (by simp [AccountAddr.user]) (by simp [AccountAddr.user])⟩
 /-- Every turn of a valid trace was new when the trace began. -/
 theorem jointTrace_fresh (n : Nat) (trace : List (ByteArray × List LocalTurn)) :
     ∀ s s' : LedgerState, ValidJointTrace n s trace s' →

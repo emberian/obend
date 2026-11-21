@@ -531,7 +531,7 @@ example (env : WireEnv) (shared : ByteArray) (a b : CoReceipt) (f g : FulfillPor
 -- A later debit fails its configured floor after an earlier debit would have succeeded.
 def threeBook : FloorBook := book0.applyRaw ⟨.issuerWell 0, .user 2, 0, 10⟩
 def floorLedger : LedgerState :=
-  ⟨{ threeBook with nonIssuerMin := [((.user 1, 0), 10)] }, 0, RevokedSet.empty, 0⟩
+  ⟨{ threeBook with policies := [((.user 1, 0), .minReserve 10)] }, 0, RevokedSet.empty, 0⟩
 def lateFailure := sealTurn
   [demoLeg 0 (-1) .empty, demoLeg 1 (-1) .empty, demoLeg 2 2 .empty]
 #guard checkJoint lateFailure.1 lateFailure.2

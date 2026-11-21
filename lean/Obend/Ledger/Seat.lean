@@ -1357,6 +1357,13 @@ theorem addrOf_seat_kind {a : AccountId} (hlo : protectedBase ≤ a) (hhi : a < 
   unfold addrOf
   rw [ite_eq_right (Nat.not_lt.mpr hlo), ite_eq_left hhi]
   intro h; cases h
+/-- No `Book` coordinate is a credit-capable `member`, so none holds a credit line
+(`FloorBook.policyOf_creditLimit`). -/
+theorem addrOf_not_member (a : AccountId) : (addrOf a).kind ≠ .member := by
+  unfold addrOf
+  split
+  · intro h; cases h
+  · split <;> (intro h; cases h)
 theorem addrOf_user_kind {a : AccountId} (h : a < protectedBase) :
     (addrOf a).kind ≠ .issuerWell := by
   unfold addrOf
@@ -1966,7 +1973,8 @@ theorem zoe_offer_safety_unconditional (H : Hash) (guest : GuestContract)
   obtain ⟨⟨hfl, _, _, hbd, hsafe⟩, hc, _⟩ :=
     trace_invariant H guest turns _ f (fundedHost_invariant grants) ht
   exact ⟨hfl, hc, hsafe, fun s hs ast =>
-    nonIssuer_balance_nonneg_of_floorsHold hfl _ ast (addrOf_seat_kind s.h_protected (hbd s hs).1)⟩
+    nonIssuer_balance_nonneg_of_floorsHold hfl _ ast (addrOf_seat_kind s.h_protected (hbd s hs).1)
+      (addrOf_not_member _)⟩
 
 /-! ## 8. What entering, reallocating and exiting do to the `FloorBook` -/
 
@@ -1999,6 +2007,7 @@ theorem enterOffer_escrows {h f : ZoeHost} {invId : Nat} {offerer payee : Accoun
       hag (protectedBase + seatId) ast]
     simp [Ne.symm hne]
   have h0 := nonIssuer_balance_nonneg_of_floorsHold hfl' (addrOf offerer) ast (addrOf_user_kind ho)
+    (addrOf_not_member offerer)
   exact ⟨h1, h2, by omega, hg, hspent⟩
 
 /-- An unmarked donation (zero `want`, `donate = false`) is refused by name, whatever the books
@@ -2033,7 +2042,7 @@ theorem exit_pays_payee {H : Hash} {h f : ZoeHost} {seatId : SeatId} {cap : List
   have hnn : ∀ ast, 0 ≤ h.seatBook.balance s.account ast := fun ast => by
     rw [hag s.account ast]
     exact nonIssuer_balance_nonneg_of_floorsHold hfl _ ast
-      (addrOf_seat_kind s.h_protected (hbd s hs).1)
+      (addrOf_seat_kind s.h_protected (hbd s hs).1) (addrOf_not_member _)
   obtain ⟨hzero, hpaid, _⟩ := exit_sweeps_all_assets h.seatBook s hnn
   have hb'' : f.seatBook = exitSeat h.seatBook s := hb'
   refine ⟨s, hs, hacc, fun ast => ?_, fun ast => ?_, fun t ht => ?_⟩

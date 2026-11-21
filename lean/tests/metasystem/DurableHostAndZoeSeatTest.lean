@@ -77,7 +77,7 @@ example (fb' : FloorBook) (g' : Reg)
       g'.accountBalance (addr.toRegAccount ast) = fb'.balance addr ast) ∧
     FloorsHold fb' ∧
     (∀ (addr : AccountAddr) (ast : AssetId), addr.kind ≠ AccountKind.issuerWell →
-      0 ≤ g'.accountBalance (addr.toRegAccount ast)) ∧
+      addr.kind ≠ AccountKind.member → 0 ≤ g'.accountBalance (addr.toRegAccount ast)) ∧
     (∀ ast, fb'.assetSum ast = FloorBook.empty.assetSum ast) :=
   realizeBatchOnReg_sound floorsHold_empty (fun _ _ => rfl) hrun
 

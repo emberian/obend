@@ -17,7 +17,7 @@ Simplex BFT Finality stack — with zero shadow worlds and zero tautological cer
      `seats` (`UnifiedDeosSpine.zoeHost`, `unifiedDeos_zoe_trace_on_spine`): every Zoe trace keeps
      the floors, conserves each asset, and hands back seats that pass `checkUnifiedTurn`'s seat
      clause.
-   - Connects finite-support typed-account `FloorBook` (`AccountKind`: `user | issuerWell | seat | escrow | feePool`)
+   - Connects finite-support typed-account `FloorBook` (`AccountKind`: `user | issuerWell | seat | escrow | feePool | member`)
      to `Register.Reg` + `Movement` (`realizeBatchOnReg_sound`), one-time `Invitation` spending
      (`InvitationRegistry.no_double_redeem`), `donate` gift guards (`admitOffer_donationUnmarked_refused`),
      full-support `exitSeat` (`exit_sweeps_all_assets`), and `EscrowReachable` no-theft (`sealedescrow_no_theft`).
@@ -327,7 +327,7 @@ theorem unifiedDeos_ledger_and_turn_sound
         (∀ (addr : AccountAddr) (ast : AssetId),
           reg'.accountBalance (addr.toRegAccount ast) = S'.floorBook.balance addr ast) ∧
         (∀ (addr : AccountAddr) (ast : AssetId), addr.kind ≠ AccountKind.issuerWell →
-          0 ≤ reg'.accountBalance (addr.toRegAccount ast))) ∧
+          addr.kind ≠ AccountKind.member → 0 ≤ reg'.accountBalance (addr.toRegAccount ast))) ∧
     (∀ ast ∈ stateAssets,
       (turn.writeCells.map (fun d => extractCellAssetBalance d.postState ast)).foldl (· + ·) 0 =
         (turn.writeCells.map (fun d => extractCellAssetBalance d.preState ast)).foldl (· + ·) 0) ∧
