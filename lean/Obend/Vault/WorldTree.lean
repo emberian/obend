@@ -5076,8 +5076,8 @@ theorem slotBytes_injective {a b : Slot} (h : slotBytes a = slotBytes b) : a = b
       have hv := be_injective (by simpa using a.2.isLt) (by simpa using b.2.isLt) he.2
       exact congrArg some (Prod.ext (BitVec.eq_of_toNat_eq hk) (BitVec.eq_of_toNat_eq hv))
 
-/-- Row forests hold all 256 bits of each framed slot digest. -/
-def digestWord (d : Digest) : Val := BitVec.ofNat 256 (ofBE d.val.data.toList)
+/-- Row forests hold all 256 bits of each framed slot digest (canonical LE wire order, Gate `G4`). -/
+def digestWord (d : Digest) : Val := BitVec.ofNat 256 (ofBE d.val.data.toList.reverse)
 
 theorem digestWord_injective {a b : Digest} (h : digestWord a = digestWord b) : a = b := by
   open Obend.Crypto.BinaryTower256 in
