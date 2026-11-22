@@ -48,10 +48,24 @@ theorem round_trip_accepts_iff_linear (q : Quantity) :
 
 #tooth round_trip_accepts_iff_linear by mutation checkAgainst := fun _ _ _ => .error .invalidAssumptions
 
-/-- TOOTH (the destructor binds a `linear` record's field `linear`): binding it `affine`, which may
-drop it, is refused, naming hypothesis `0`. -/
+/-- TOOTH (Gate G1 `mustBeLinear` + destructor quantity): binding a `custody` field `affine` is
+already refused as `.invalidContext [0, 1]`, while for a custody-free `linear` binding (`roundTripLinearNat`),
+the destructor itself refuses `affine` with `.linearArgumentDropped [0] 0 .affine`. -/
+def linearNatType : Ty := .arrow .once .linear .natural .natural
+
+def roundTripLinearNat (q : Quantity) : AnnotatedTerm :=
+  ⟨.lam (.split (.record [("held", .bound 0)]) ["held"] (.lam (.bound 0))), fun path =>
+    if path = [] then some ⟨.natural, .natural, .linear, .once⟩
+    else if path = [0, 1] then some ⟨.natural, .natural, q, .once⟩
+    else none, {}⟩
+
 example :
     (match checkAgainst (roundTrip .affine) [] handleType with
+      | .error (.invalidContext [0, 1]) => true
+      | _ => false) = true := by decide
+
+example :
+    (match checkAgainst (roundTripLinearNat .affine) [] linearNatType with
       | .error (.linearArgumentDropped [0] 0 .affine) => true
       | _ => false) = true := by decide
 
@@ -120,10 +134,26 @@ def nested (q : Quantity) : AnnotatedTerm :=
 
 example : (checkAgainst (nested .linear) [] handleType).toBool = true := by decide
 
-/-- TOOTH (a nested aggregate is consumed whole at each level): the outer field bound `affine` is
-refused. -/
+/-- TOOTH (a nested aggregate is consumed whole at each level): on `custody`, Gate G1 rejects the
+`affine` outer binder context (`.invalidContext [0, 1, 0, 1]`), and on a custody-free `linear` binding
+(`nestedLinearNat`), the outer destructor rejects `affine` with `.linearArgumentDropped [0] 0 .affine`. -/
+def innerNatRow : Ty := .field "inner" .natural .emptyRow
+
+def nestedLinearNat (q : Quantity) : AnnotatedTerm :=
+  ⟨.lam (.split (.record [("outer", .record [("inner", .bound 0)])]) ["outer"]
+      (.lam (.split (.bound 0) ["inner"] (.lam (.bound 0))))), fun path =>
+    if path = [] then some ⟨.natural, .natural, .linear, .once⟩
+    else if path = [0, 1] then some ⟨innerNatRow, .natural, q, .once⟩
+    else if path = [0, 1, 0, 1] then some ⟨.natural, .natural, .linear, .once⟩
+    else none, {}⟩
+
 example :
     (match checkAgainst (nested .affine) [] handleType with
+      | .error (.invalidContext [0, 1, 0, 1]) => true
+      | _ => false) = true := by decide
+
+example :
+    (match checkAgainst (nestedLinearNat .affine) [] linearNatType with
       | .error (.linearArgumentDropped [0] 0 .affine) => true
       | _ => false) = true := by decide
 
@@ -144,9 +174,27 @@ def matched (q : Quantity) : AnnotatedTerm :=
 /-- A `linear` sum's payload is bound `linear`, and the destructor consumes it. -/
 example : (checkAgainst (matched .linear) [] handleType).toBool = true := by decide
 
-/-- TOOTH (the matched payload is a `linear` hypothesis; its destructor binds its field `linear`). -/
+/-- TOOTH (the matched payload is a `linear` hypothesis; its destructor binds its field `linear`):
+Gate G1 refuses `affine` on `custody` (`.invalidContext [0, 1, 0, 1]`), and on a custody-free `linear`
+payload (`matchedLinearNat`), the inner destructor refuses `.linearArgumentDropped [0, 1, 0] 0 .affine`. -/
+def heldNatRow : Ty := .field "held" .natural .emptyRow
+def wrappedNat : Ty := .variant (.field "l" heldNatRow .emptyRow)
+
+def matchedLinearNat (q : Quantity) : AnnotatedTerm :=
+  ⟨.lam (.case (.inject "l" (.record [("held", .bound 0)]))
+      [("l", .split (.bound 0) ["held"] (.lam (.bound 0)))]), fun path =>
+    if path = [] then some ⟨.natural, .natural, .linear, .once⟩
+    else if path = [0, 0] then some ⟨heldNatRow, wrappedNat, .linear, .once⟩
+    else if path = [0, 1, 0, 1] then some ⟨.natural, .natural, q, .once⟩
+    else none, {}⟩
+
 example :
     (match checkAgainst (matched .affine) [] handleType with
+      | .error (.invalidContext [0, 1, 0, 1]) => true
+      | _ => false) = true := by decide
+
+example :
+    (match checkAgainst (matchedLinearNat .affine) [] linearNatType with
       | .error (.linearArgumentDropped [0, 1, 0] 0 .affine) => true
       | _ => false) = true := by decide
 

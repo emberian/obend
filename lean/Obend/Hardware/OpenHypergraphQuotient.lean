@@ -447,8 +447,7 @@ private theorem accumWireCotangent_preserves_invariant
           first
           | exact ⟨hSeedLt, by simp [addSpecCotangent, hInv.lookup_none w look, hSeedVal]⟩
           | obtain ⟨_, val⟩ := hInv.lookup_some _ _ look; dsimp only at val
-            exact ⟨by dsimp only; omega, by simp [evalHyperEdgesComb_append, evalHyperEdgesComb_cons, evalHyperEdgesComb_nil,
-              stepHyperEdge, evalHypergraphOp, addSpecCotangent, val, hSeedVal]⟩
+            exact ⟨by dsimp only; omega, by simp [stepHyperEdge, evalHypergraphOp, addSpecCotangent, val, hSeedVal]⟩
         · rw [← updated, other u (beq_false_of_ne h)] at hs; obtain ⟨hlt, val⟩ := hInv.lookup_some u cw hs
           exact ⟨Nat.lt_of_lt_of_le hlt inc, by simpa [addSpecCotangent, h] using (below cw hlt).trans val⟩
 
@@ -781,8 +780,7 @@ private theorem singleLaneEdges_bwd (W : Int) (op2 : OpticOp) (base : Nat) (fwd 
     cot' base = rev.1 ∧ cot' (base + 1) = rev.2 ∧ (∀ w, w < base ∨ base + 6 ≤ w → cot' w = cot w) := by
   cases op2 <;> simp only [singleLaneEdges, opticFwdHyperEdges, List.cons_append, List.nil_append,
     List.reverse_cons, List.reverse_nil, specGradRevOrder_cons, specGradRevOrder_nil, specGradEdgeStep,
-    specEdgeLocalPullback, accumSpecCotangents_cons, accumSpecCotangents_nil, addSpecCotangent, wireAt,
-    evalOpticChain2Rev, evalOpticChain2Fwd, evalOpticFwd, evalOpticRev, compileOpticAdjoint] <;>
+    specEdgeLocalPullback, accumSpecCotangents_cons, accumSpecCotangents_nil, addSpecCotangent, wireAt] <;>
     refine ⟨?_, ?_, fun w hw => ?_⟩ <;>
     simp (disch := omega) [beq_iff_eq, hc0, hc1, hc2, hc3, hc5, hy, hm] <;> grind
 
@@ -829,7 +827,7 @@ private theorem redEdges_bwd (K : Nat) (fwd : Nat → Int) (d : Int) (m : Nat) (
     specGradRevOrder fwd (redEdgesOf K m).reverse (addSpecCotangent (if m == 0 then 3 else 6*K+(m-1)) d c) w =
       c w + (if w % 6 = 3 ∧ w / 6 ≤ m then d else 0) := by
   induction m generalizing c with
-  | zero => simp [redEdgesOf, specGradRevOrder_nil, addSpecCotangent]; grind
+  | zero => simp [redEdgesOf, addSpecCotangent]; grind
   | succ m ih =>
     let right := 6*(m+1)+3
     let tailCot := addSpecCotangent right d (addSpecCotangent (6*K+m) d c)
@@ -910,7 +908,7 @@ private theorem specGradRevOrder_reindex (fwd : Nat → Int) (es : List HyperEdg
   suffices h : ∀ (idx : Nat) (xs : List HyperEdge) (cot : Nat → Int), specGradRevOrder fwd (reindexHyperEdgesAux idx xs).reverse cot = specGradRevOrder fwd xs.reverse cot from h 0 es c
   intro idx xs; induction xs generalizing idx with
   | nil => intro _; rfl
-  | cons e rest ih => intro cot; rcases e with ⟨_, op, s, d⟩; simp only [reindexHyperEdgesAux, List.reverse_cons, specGradRevOrder_append, specGradRevOrder_cons, specGradRevOrder_nil]; rw [ih (idx + 1)]; rfl
+  | cons e rest ih => intro cot; rcases e with ⟨_, op, s, d⟩; simp only [reindexHyperEdgesAux, List.reverse_cons, specGradRevOrder_append, specGradRevOrder_cons, specGradRevOrder_nil]; rw [ih (idx + 1)]
 
 /-- Summing `K ≥ 1` identical lanes agrees with scaling one lane by `K`, in forward and reverse mode. -/
 theorem kLane_reduction_tree_intertwines_eval_and_adjoint
@@ -941,10 +939,10 @@ theorem kLane_reduction_tree_intertwines_eval_and_adjoint
   have quotient : evalHypergraphComb qK envQ = [(K : Int) * z] ∧
       evalHypergraphComb (compileGraphAdjoint qK) envQ = [(K : Int) * z, (K : Int) * rev1.1, (K : Int) * rev1.2] := by
     rw [small]; simp only [evalHypergraphComb, qK, quotientKLaneReductionHypergraph, extractHyperEdges_mkStrictOpenHypergraph]
-    cases op2 <;> simp [envQ, z, rev1, res, quotientKLaneInitEnv, mkStrictOpenHypergraph, reindexHyperEdges, reindexHyperEdgesAux,
+    cases op2 <;> simp [envQ, z, rev1, res, quotientKLaneInitEnv, reindexHyperEdges, reindexHyperEdgesAux,
         opticFwdHyperEdges, evalHyperEdgesComb, stepHyperEdge, evalHypergraphOp, specGradEdges, specGradRevOrder,
         specGradEdgeStep, specEdgeLocalPullback, accumSpecCotangents, addSpecCotangent, seedCotangentSpec,
-        wireAt, evalOpticChain2Rev, evalOpticChain2Fwd, evalOpticFwd, evalOpticRev, compileOpticAdjoint] <;> grind
+        wireAt] <;> grind
   have hLanesFwd := allLanesEdges_fwd K W op2 x y dOut K (Nat.le_refl K)
   have hRedFwd := redEdges_fwd K z (evalHyperEdgesComb envK ((List.range K).flatMap (fun u => singleLaneEdges W op2 (6 * u)))) (fun u hu => (hLanesFwd.1 u hu).2.2.2) (K - 1) (Nat.le_refl _)
   have hExtEqK : extractHyperEdges gK = reindexHyperEdges (((List.range K).flatMap (fun u => singleLaneEdges W op2 (6 * u))) ++ redEdgesOf K (K - 1)) :=
