@@ -444,8 +444,8 @@ theorem resolve_open (t : GuardedHole) (k : PendingId) (isOpen : t.openPromises.
   have h₁ : t.spentNullifiers.contains k = false := by
     cases hc : t.spentNullifiers.contains k with
     | false => rfl
-    | true => exact absurd ((SortedU64Set.contains_eq_spec _ _).mp hc) unspent
-  have h₂ : t.openPromises.contains k = true := (SortedU64Set.contains_eq_spec _ _).mpr isOpen
+    | true => exact absurd ((SortedDigestSet.contains_eq_spec _ _).mp hc) unspent
+  have h₂ : t.openPromises.contains k = true := (SortedDigestSet.contains_eq_spec _ _).mpr isOpen
   simp [resolvePromise, h₁, h₂]
 
 theorem session_capTP_settlement (s : GuardedHole) (k : PendingId)
@@ -454,7 +454,7 @@ theorem session_capTP_settlement (s : GuardedHole) (k : PendingId)
   have unspent : s.spentNullifiers.contains k = false := by
     cases hc : s.spentNullifiers.contains k with
     | false => rfl
-    | true => exact absurd ((SortedU64Set.contains_eq_spec _ _).mp hc) fresh
+    | true => exact absurd ((SortedDigestSet.contains_eq_spec _ _).mp hc) fresh
   have allocated : allocatePromise s k = { s with openPromises := s.openPromises.insert k } := by
     simp [allocatePromise, unspent]
   have head : countResolved s (sessionEvents k actions final) k =
@@ -466,7 +466,7 @@ theorem session_capTP_settlement (s : GuardedHole) (k : PendingId)
   | false => rfl
   | true =>
     obtain ⟨t', resolved⟩ := resolve_open (allocatePromise s k) k
-      (by rw [allocated]; exact (SortedU64Set.spec_insert _ _ _).mpr (.inl rfl))
+      (by rw [allocated]; exact (SortedDigestSet.spec_insert _ _ _).mpr (.inl rfl))
       (by rw [allocated]; exact fresh)
     simp [countResolved, promiseStep, resolved]
 
@@ -866,7 +866,7 @@ private theorem queueIdsOpen_snoc {R : Type} {hole : GuardedHole} {q : List (Asy
   have hUnspentBool : hole.spentNullifiers.contains m.msgId = false := by
     cases hc : hole.spentNullifiers.contains m.msgId with
     | false => rfl
-    | true => exact absurd ((SortedU64Set.contains_eq_spec _ _).mp hc) hNotSpent
+    | true => exact absurd ((SortedDigestSet.contains_eq_spec _ _).mp hc) hNotSpent
   have hAlloc : allocatePromise hole m.msgId =
       { hole with openPromises := hole.openPromises.insert m.msgId } := by
     simp [allocatePromise, hUnspentBool]
@@ -879,9 +879,9 @@ private theorem queueIdsOpen_snoc {R : Type} {hole : GuardedHole} {q : List (Asy
   rw [hAlloc]
   rcases List.mem_append.mp hx with hxin | hxlast
   · obtain ⟨ho, hs⟩ := hq.2 x hxin
-    exact ⟨(SortedU64Set.spec_insert _ _ _).mpr (.inr ho), hs⟩
+    exact ⟨(SortedDigestSet.spec_insert _ _ _).mpr (.inr ho), hs⟩
   · simp only [List.mem_singleton] at hxlast; subst hxlast
-    exact ⟨(SortedU64Set.spec_insert _ _ _).mpr (.inl rfl), hNotSpent⟩
+    exact ⟨(SortedDigestSet.spec_insert _ _ _).mpr (.inl rfl), hNotSpent⟩
 
 private theorem queueIdsOpen_empty_alloc {R : Type} (hole : GuardedHole) (k : PendingId) :
     QueueIdsOpen (R := R) (allocatePromise hole k) [] :=
@@ -901,8 +901,8 @@ private theorem queueIdsOpen_tail_resolve {R : Type} {hole hole' : GuardedHole}
     refine ⟨hRestNodup, fun x hx => ?_⟩
     have hne : x.msgId ≠ m.msgId := fun heq => hNotIn (heq ▸ List.mem_map_of_mem hx)
     obtain ⟨ho, hs⟩ := hMem x (List.mem_cons_of_mem _ hx)
-    exact ⟨(SortedU64Set.spec_erase _ _ _).mpr ⟨ho, hne⟩,
-      fun hsp => (SortedU64Set.spec_insert _ _ _).mp hsp |>.elim hne hs⟩
+    exact ⟨(SortedDigestSet.spec_erase _ _ _).mpr ⟨ho, hne⟩,
+      fun hsp => (SortedDigestSet.spec_insert _ _ _).mp hsp |>.elim hne hs⟩
 
 private theorem resolve_preserves_spent {hole hole' : GuardedHole} {k x : PendingId}
     (hRes : resolvePromise hole k = some hole') (hx : hole.spentNullifiers.spec x) :
@@ -1174,11 +1174,11 @@ theorem sync_send_refines_to_async_captp {R : Type} [DecidableEq R]
   have hUnspent : hole.spentNullifiers.contains k = false := by
     cases hc : hole.spentNullifiers.contains k with
     | false => rfl
-    | true => exact absurd ((SortedU64Set.contains_eq_spec _ _).mp hc) hNoSpent
+    | true => exact absurd ((SortedDigestSet.contains_eq_spec _ _).mp hc) hNoSpent
   have hAlloc : allocatePromise hole k = { hole with openPromises := hole.openPromises.insert k } := by
     simp [allocatePromise, hUnspent]
   obtain ⟨hole', hRes⟩ := resolve_open (allocatePromise hole k) k
-    (by rw [hAlloc]; exact (SortedU64Set.spec_insert _ _ _).mpr (.inl rfl))
+    (by rw [hAlloc]; exact (SortedDigestSet.spec_insert _ _ _).mpr (.inl rfl))
     (by rw [hAlloc]; exact hNoSpent)
   exact ⟨hole', hRes, resolve_spends _ _ k hRes,
     .step (.enqueuePosVal (payload := payload) rfl rfl rfl hNoOpen hNoSpent)

@@ -188,7 +188,125 @@ theorem SortedU64Set.contains_list (s : SortedU64Set) (k : UInt64) :
   rw [contains_eq_spec]
   simp only [spec, List.contains_iff_mem]
 
-abbrev SwissNum := UInt64
+/-! ## 256-bit keys
+
+Bearer secrets, handoff nonces and pending ids are full 256-bit values: a 64-bit key admits a
+birthday collision after about 2^32 draws. `Digest256` is the tree's fixed-width commitment
+(`Obend.Core.Digest.Digest256 = BitVec 256`; its big-endian 4 x `UInt64` limb view is
+`Obend.Core.Digest.DigestWords4`, a proved bijection). Its numeric literals are `BitVec.ofNat`,
+and `BitVec.toNat` is the injective key, so `SortedBy`/`search`/`search_eq_spec` are reused. -/
+open Obend.Core.Digest (Digest256)
+
+theorem digest256_toNat_injective {a b : Digest256} (h : a.toNat = b.toNat) : a = b :=
+  BitVec.toNat_inj.mp h
+
+/-- Sorted digest-set insertion deduplicates and preserves the order (`insertKey` at 256 bits). -/
+def insertDigest (k : Digest256) : List Digest256 → List Digest256
+  | [] => [k]
+  | x :: xs => if k.toNat < x.toNat then k :: x :: xs
+    else if k = x then x :: xs else x :: insertDigest k xs
+
+@[simp] theorem mem_insertDigest (k x : Digest256) (xs : List Digest256) :
+    x ∈ insertDigest k xs ↔ x = k ∨ x ∈ xs := by
+  induction xs with
+  | nil => simp [insertDigest]
+  | cons y ys ih =>
+    simp only [insertDigest]
+    split
+    · simp only [List.mem_cons] <;> grind
+    · split
+      · simp_all
+      · simp only [List.mem_cons, ih] <;> grind
+
+theorem insertDigest_sorted (k : Digest256) (xs : List Digest256)
+    (h : xs.Pairwise (fun a b => a.toNat < b.toNat)) :
+    (insertDigest k xs).Pairwise (fun a b => a.toNat < b.toNat) := by
+  induction xs with
+  | nil => simp [insertDigest]
+  | cons x xs ih =>
+    obtain ⟨hx, ht⟩ := List.pairwise_cons.mp h
+    simp only [insertDigest]
+    split
+    · apply List.pairwise_cons.mpr
+      refine ⟨?_, List.pairwise_cons.mpr ⟨hx, ht⟩⟩
+      intro y hy
+      rcases List.mem_cons.mp hy with he | hm
+      · subst y; assumption
+      · have := hx y hm; omega
+    · split
+      · exact List.pairwise_cons.mpr ⟨hx, ht⟩
+      · apply List.pairwise_cons.mpr
+        refine ⟨?_, ih ht⟩
+        intro y hy
+        rcases (mem_insertDigest k y xs).mp hy with he | hm
+        · subst y
+          have hne : k.toNat ≠ x.toNat := by
+            intro he; have : k = x := digest256_toNat_injective he; contradiction
+          omega
+        · exact hx y hm
+
+/-- A strictly sorted set of 256-bit keys with logarithmic membership. -/
+structure SortedDigestSet where
+  data : Array Digest256
+  sorted : data.toList.Pairwise (fun a b => a.toNat < b.toNat)
+
+def SortedDigestSet.empty : SortedDigestSet := ⟨#[], by simp⟩
+def SortedDigestSet.spec (s : SortedDigestSet) (k : Digest256) : Prop := k ∈ s.data.toList
+
+def SortedDigestSet.contains (s : SortedDigestSet) (k : Digest256) : Bool :=
+  (search BitVec.toNat s.data k.toNat (s.data.size + 1) 0 s.data.size).isSome
+
+def SortedDigestSet.insert (s : SortedDigestSet) (k : Digest256) : SortedDigestSet :=
+  ⟨(insertDigest k s.data.toList).toArray, by simpa using insertDigest_sorted k _ s.sorted⟩
+
+theorem SortedDigestSet.contains_eq_spec (s : SortedDigestSet) (k : Digest256) :
+    s.contains k = true ↔ s.spec k := by
+  have hs : SortedBy BitVec.toNat s.data := by
+    intro i j hi hj hij
+    exact (List.pairwise_iff_getElem.mp s.sorted) i j (by simpa) (by simpa) hij
+  unfold contains
+  rw [search_eq_spec _ _ hs]
+  simp only [findSpec, List.isSome_find?, List.any_eq_true, beq_iff_eq, spec]
+  constructor
+  · rintro ⟨x, hx, he⟩; have : x = k := digest256_toNat_injective he; simpa [this] using hx
+  · intro hk; exact ⟨k, hk, rfl⟩
+
+@[simp] theorem SortedDigestSet.spec_insert (s : SortedDigestSet) (k x : Digest256) :
+    (s.insert k).spec x ↔ x = k ∨ s.spec x := by simp [insert, spec]
+
+theorem SortedDigestSet.contains_list (s : SortedDigestSet) (k : Digest256) :
+    s.contains k = s.data.toList.contains k := by
+  apply Bool.eq_iff_iff.mpr
+  rw [contains_eq_spec]
+  simp only [spec, List.contains_iff_mem]
+
+/-- Removal only filters existing keys, preserving strict ordering. -/
+def SortedDigestSet.erase (s : SortedDigestSet) (k : Digest256) : SortedDigestSet :=
+  ⟨(s.data.toList.filter (· != k)).toArray, by
+    simpa using s.sorted.filter (fun x => x != k)⟩
+
+@[simp] theorem SortedDigestSet.spec_erase (s : SortedDigestSet) (k x : Digest256) :
+    (s.erase k).spec x ↔ s.spec x ∧ x ≠ k := by
+  simp [erase, spec]
+
+/-- Sorted union by insertion; linear membership specification. The persistent arrays
+are rebuilt at writes, whereas all online membership queries are logarithmic. -/
+def SortedDigestSet.merge (a b : SortedDigestSet) : SortedDigestSet :=
+  b.data.toList.foldl SortedDigestSet.insert a
+
+theorem SortedDigestSet.merge_spec (a b : SortedDigestSet) (k : Digest256) :
+    (a.merge b).spec k ↔ a.spec k ∨ b.spec k := by
+  unfold merge
+  have aux : ∀ (xs : List Digest256) (s : SortedDigestSet),
+      (xs.foldl SortedDigestSet.insert s).spec k ↔ s.spec k ∨ k ∈ xs := by
+    intro xs
+    induction xs with
+    | nil => intro s; simp
+    | cons x xs ih => intro s; simp only [List.foldl_cons, ih, SortedDigestSet.spec_insert,
+        List.mem_cons]; grind
+  exact aux _ _
+
+abbrev SwissNum := Digest256
 structure SturdyEntry where
   swissNum : SwissNum
   mandate : Mandate
@@ -265,23 +383,9 @@ theorem swissTable_observational_equivalence (a b : SwissTableExec)
     lookupSwissExec_invalid_denied b hb k now nonce ib]
 
 
+/-- Gift nullifiers of `Obend.Polis.GrainPowerbox` (64-bit gift ids). Promise ids and their
+spends use `SortedDigestSet` (`GuardedHole`). -/
 abbrev NullifierSet := SortedU64Set
-/-- Sorted union by insertion; linear membership specification. The persistent arrays
-are rebuilt at writes, whereas all online membership queries are logarithmic. -/
-def mergeNullifierSets (a b : NullifierSet) : NullifierSet :=
-  b.data.toList.foldl SortedU64Set.insert a
-
-theorem merge_spec (a b : NullifierSet) (k : UInt64) :
-    (mergeNullifierSets a b).spec k ↔ a.spec k ∨ b.spec k := by
-  unfold mergeNullifierSets
-  have aux : ∀ (xs : List UInt64) (s : SortedU64Set),
-      (xs.foldl SortedU64Set.insert s).spec k ↔ s.spec k ∨ k ∈ xs := by
-    intro xs
-    induction xs with
-    | nil => intro s; simp
-    | cons x xs ih => intro s; simp only [List.foldl_cons, ih, SortedU64Set.spec_insert,
-        List.mem_cons]; grind
-  exact aux _ _
 
 
 structure HybridIdentity where
@@ -332,10 +436,13 @@ def DelegationRequest.bytes (r : DelegationRequest) : ByteArray :=
     (encodeStringCodepoints r.recipient.name)
     (encodeFrame (encodeNats (r.rights.map authCode)) (encodeNats r.cells) (encodeNats r.methods))
 
+/-- `handoffNonce` is a 256-bit replay key. `msgEpoch` is the sender's message epoch; it is bound
+inside both signed messages and must be nonzero (epoch 0 is the unauthenticated default). -/
 structure HybridHandoffCert where
   vatId : ByteArray
   sessionId : ByteArray
-  handoffNonce : UInt64
+  handoffNonce : Digest256
+  msgEpoch : UInt64
   introducer : HybridIdentity
   recipient : HybridIdentity
   request : DelegationRequest
@@ -343,76 +450,102 @@ structure HybridHandoffCert where
   acceptSig : HybridSignature
 
 /-- The held capability commitment is supplied by Bob's authenticated capability
-store; it is not a digest asserted by the certificate. Both roles bind both identities. -/
+store; it is not a digest asserted by the certificate. Both roles bind both identities,
+the full 256-bit nonce, and the message epoch. -/
 def handoffMessage (role : String) (heldCommitment : ByteArray) (c : HybridHandoffCert) : ByteArray :=
   encodeFrame role.toUTF8
-    (encodeFrame c.vatId c.sessionId (encodeNats [c.handoffNonce.toNat]))
+    (encodeFrame c.vatId c.sessionId (encodeNats [c.handoffNonce.toNat, c.msgEpoch.toNat]))
     (encodeFrame heldCommitment c.request.bytes
       (encodeFrame (hybridIdentityDigest c.introducer) (hybridIdentityDigest c.recipient) ByteArray.empty))
+
+theorem leb128_injective {a b : Nat} (h : leb128 a = leb128 b) : a = b :=
+  (leb128_prefix_inj (r₁ := []) (r₂ := []) (by simpa using h)).1
+
+/-- The signed handoff bytes determine the full 256-bit nonce and the message epoch. -/
+theorem handoffMessage_binds_nonce_epoch {role : String} {hc : ByteArray}
+    {c₁ c₂ : HybridHandoffCert} (h : handoffMessage role hc c₁ = handoffMessage role hc c₂) :
+    c₁.handoffNonce = c₂.handoffNonce ∧ c₁.msgEpoch = c₂.msgEpoch := by
+  obtain ⟨-, h2, -⟩ := encodeFrame_injective h
+  obtain ⟨-, -, h3⟩ := encodeFrame_injective h2
+  have hl := congrArg (fun x : ByteArray => x.data.toList) h3
+  simp only [encodeNats, Obend.Digest.Cshake256.Native.bytesOfList_toList, List.flatMap_cons,
+    List.flatMap_nil, List.append_nil] at hl
+  obtain ⟨-, hl⟩ := leb128_prefix_inj hl
+  obtain ⟨hn, he⟩ := encodeListField_prefix_inj hl
+  obtain ⟨he, -⟩ := encodeListField_prefix_inj (r₁ := []) (r₂ := []) (by simpa using he)
+  exact ⟨digest256_toNat_injective (leb128_injective hn), UInt64.toNat_inj.mp (leb128_injective he)⟩
 
 def requestFits (r : DelegationRequest) (held : Mandate) : Bool :=
   r.rights.all held.rights.contains && decide (r.quota ≤ held.budget) &&
     r.cells.all held.cells.contains && decide (r.expiresAt ≤ held.expiresAt)
 
 @[expose] def verifyHybridHandoff (v : HybridSigVerifier) (held : Mandate)
-    (heldCommitment introducerDigest recipientDigest : ByteArray) (seen : SortedU64Set)
+    (heldCommitment introducerDigest recipientDigest : ByteArray) (seen : SortedDigestSet)
     (c : HybridHandoffCert) : Bool :=
   decide (hybridIdentityDigest c.introducer = introducerDigest) &&
   decide (hybridIdentityDigest c.recipient = recipientDigest) &&
   verifyBoth v c.introducer (handoffMessage "HandoffGive" heldCommitment c) c.giveSig &&
   verifyBoth v c.recipient (handoffMessage "HandoffAccept" heldCommitment c) c.acceptSig &&
-  !seen.contains c.handoffNonce && requestFits c.request held
+  !seen.contains c.handoffNonce && requestFits c.request held && c.msgEpoch != 0
 
 def acceptHandoff (v : HybridSigVerifier) (held : Mandate)
-    (hc ai ci : ByteArray) (seen : SortedU64Set) (c : HybridHandoffCert) :
-    Option (Mandate × SortedU64Set) :=
+    (hc ai ci : ByteArray) (seen : SortedDigestSet) (c : HybridHandoffCert) :
+    Option (Mandate × SortedDigestSet) :=
   if verifyHybridHandoff v held hc ai ci seen c then
     some (c.request.granted held, seen.insert c.handoffNonce) else none
 
 theorem verifyHybridHandoff_sound (v : HybridSigVerifier) (held : Mandate)
-    (hc ai ci : ByteArray) (seen : SortedU64Set) (c : HybridHandoffCert)
+    (hc ai ci : ByteArray) (seen : SortedDigestSet) (c : HybridHandoffCert)
     (h : verifyHybridHandoff v held hc ai ci seen c = true) :
     hybridIdentityDigest c.introducer = ai ∧ hybridIdentityDigest c.recipient = ci ∧
     v.classical c.introducer.classicalKey (handoffMessage "HandoffGive" hc c) c.giveSig.classical = true ∧
     v.mlDsa65 c.introducer.mlDsa65Key (handoffMessage "HandoffGive" hc c) c.giveSig.mlDsa65 = true ∧
     v.classical c.recipient.classicalKey (handoffMessage "HandoffAccept" hc c) c.acceptSig.classical = true ∧
     v.mlDsa65 c.recipient.mlDsa65Key (handoffMessage "HandoffAccept" hc c) c.acceptSig.mlDsa65 = true ∧
-    ¬ seen.spec c.handoffNonce ∧ attenuates (c.request.granted held) held := by
+    ¬ seen.spec c.handoffNonce ∧ c.msgEpoch ≠ 0 ∧ attenuates (c.request.granted held) held := by
   simp only [verifyHybridHandoff, verifyBoth, Bool.and_eq_true, decide_eq_true_eq,
-    Bool.not_eq_true'] at h
-  refine ⟨h.1.1.1.1.1, h.1.1.1.1.2, h.1.1.1.2.1, h.1.1.1.2.2,
-    h.1.1.2.1, h.1.1.2.2, ?_, ?_⟩
+    Bool.not_eq_true', bne_iff_ne] at h
+  refine ⟨h.1.1.1.1.1.1, h.1.1.1.1.1.2, h.1.1.1.1.2.1, h.1.1.1.1.2.2,
+    h.1.1.1.2.1, h.1.1.1.2.2, ?_, h.2, ?_⟩
   · intro hm
     have := (seen.contains_eq_spec _).mpr hm
-    rw [h.1.2] at this; cases this
+    rw [h.1.1.2] at this; cases this
   · exact delegate_child_attenuates _ _ _ _ _ _ _ _
 
 theorem verifyHybridHandoff_complete (v : HybridSigVerifier) (held : Mandate)
-    (hc : ByteArray) (seen : SortedU64Set) (c : HybridHandoffCert)
+    (hc : ByteArray) (seen : SortedDigestSet) (c : HybridHandoffCert)
     (hg : verifyBoth v c.introducer (handoffMessage "HandoffGive" hc c) c.giveSig = true)
     (ha : verifyBoth v c.recipient (handoffMessage "HandoffAccept" hc c) c.acceptSig = true)
-    (hf : ¬seen.spec c.handoffNonce) (hr : requestFits c.request held = true) :
+    (hf : ¬seen.spec c.handoffNonce) (hr : requestFits c.request held = true)
+    (he : c.msgEpoch ≠ 0) :
     verifyHybridHandoff v held hc (hybridIdentityDigest c.introducer)
       (hybridIdentityDigest c.recipient) seen c = true := by
   have hn : seen.contains c.handoffNonce = false := by
     cases h : seen.contains c.handoffNonce
     · rfl
     · exact False.elim (hf ((seen.contains_eq_spec _).mp h))
-  simp only [verifyHybridHandoff, decide_true, hg, ha, hn, hr,
+  have hb : (c.msgEpoch != 0) = true := bne_iff_ne.mpr he
+  simp only [verifyHybridHandoff, decide_true, hg, ha, hn, hr, hb,
     Bool.not_false, Bool.and_true, eq_self]
 
+/-- A certificate at the default epoch 0 is refused whatever its signatures. -/
+theorem verifyHybridHandoff_rejects_epoch_zero (v : HybridSigVerifier) (held : Mandate)
+    (hc ai ci : ByteArray) (seen : SortedDigestSet) (c : HybridHandoffCert)
+    (h0 : c.msgEpoch = 0) : verifyHybridHandoff v held hc ai ci seen c = false := by
+  simp [verifyHybridHandoff, h0]
+
 theorem verifyHybridHandoff_no_replay (v : HybridSigVerifier) (held : Mandate)
-    (hc ai ci : ByteArray) (seen : SortedU64Set) (c : HybridHandoffCert) :
+    (hc ai ci : ByteArray) (seen : SortedDigestSet) (c : HybridHandoffCert) :
     verifyHybridHandoff v held hc ai ci (seen.insert c.handoffNonce) c = false := by
   have hm : (seen.insert c.handoffNonce).contains c.handoffNonce = true :=
     ((seen.insert c.handoffNonce).contains_eq_spec _).mpr (by simp)
   simp [verifyHybridHandoff, hm]
 
 theorem handoff_authorizedBy_held (v : HybridSigVerifier) (held : Mandate)
-    (hc ai ci : ByteArray) (seen : SortedU64Set) (c : HybridHandoffCert) (inv : Invocation)
+    (hc ai ci : ByteArray) (seen : SortedDigestSet) (c : HybridHandoffCert) (inv : Invocation)
     (hv : verifyHybridHandoff v held hc ai ci seen c = true)
     (ha : authorizedBy (c.request.granted held) inv = true) : authorizedBy held inv = true :=
-  authorizedBy_attenuates (verifyHybridHandoff_sound v held hc ai ci seen c hv).2.2.2.2.2.2.2 ha
+  authorizedBy_attenuates (verifyHybridHandoff_sound v held hc ai ci seen c hv).2.2.2.2.2.2.2.2 ha
 
 
 theorem hybridHandoff_fails_closed_classical_or_pq (v : HybridSigVerifier)
@@ -421,19 +554,11 @@ theorem hybridHandoff_fails_closed_classical_or_pq (v : HybridSigVerifier)
       v.mlDsa65 id.mlDsa65Key msg sig.mlDsa65 = false) : verifyBoth v id msg sig = false := by
   rcases h with h | h <;> simp [verifyBoth, h]
 
-abbrev PendingId := UInt64
+abbrev PendingId := Digest256
+/-- Promise ids and their spend nullifiers are 256-bit (`PendingId = Digest256`). -/
 structure GuardedHole where
-  openPromises : SortedU64Set
-  spentNullifiers : NullifierSet
-
-/-- Removal only filters existing keys, preserving strict ordering. -/
-def SortedU64Set.erase (s : SortedU64Set) (k : UInt64) : SortedU64Set :=
-  ⟨(s.data.toList.filter (· != k)).toArray, by
-    simpa using s.sorted.filter (fun x => x != k)⟩
-
-@[simp] theorem SortedU64Set.spec_erase (s : SortedU64Set) (k x : UInt64) :
-    (s.erase k).spec x ↔ s.spec x ∧ x ≠ k := by
-  simp [erase, spec]
+  openPromises : SortedDigestSet
+  spentNullifiers : SortedDigestSet
 
 def GuardedHole.WellFormed (s : GuardedHole) : Prop :=
   ∀ k, s.openPromises.spec k → ¬s.spentNullifiers.spec k
@@ -450,7 +575,7 @@ theorem allocate_preserves_disjoint (s : GuardedHole) (k : PendingId) (h : s.Wel
   · exact h
   · rename_i hn
     intro x hx hs
-    rcases (SortedU64Set.spec_insert _ _ _).mp hx with he | hm
+    rcases (SortedDigestSet.spec_insert _ _ _).mp hx with he | hm
     · subst x
       exact hn ((s.spentNullifiers.contains_eq_spec k).mpr hs)
     · exact h x hm hs
@@ -475,8 +600,8 @@ theorem resolve_preserves_disjoint (s t : GuardedHole) (k : PendingId)
   · cases h
   · cases Option.some.inj h
     intro x hx hs
-    obtain ⟨hm, hn⟩ := (SortedU64Set.spec_erase _ _ _).mp hx
-    rcases (SortedU64Set.spec_insert _ _ _).mp hs with he | hs
+    obtain ⟨hm, hn⟩ := (SortedDigestSet.spec_erase _ _ _).mp hx
+    rcases (SortedDigestSet.spec_insert _ _ _).mp hs with he | hs
     · exact hn he
     · exact hw x hm hs
 
@@ -485,29 +610,29 @@ theorem resolve_refuses_spent (s : GuardedHole) (k : PendingId)
     (h : s.spentNullifiers.spec k) : resolvePromise s k = none := by
   simp [resolvePromise, (s.spentNullifiers.contains_eq_spec k).mpr h]
 
-def pushout (s : GuardedHole) (remote : NullifierSet) : GuardedHole :=
-  let spent := mergeNullifierSets s.spentNullifiers remote
+def pushout (s : GuardedHole) (remote : SortedDigestSet) : GuardedHole :=
+  let spent := s.spentNullifiers.merge remote
   ⟨⟨(s.openPromises.data.toList.filter (fun k => !spent.contains k)).toArray,
       by simpa using s.openPromises.sorted.filter (fun k => !spent.contains k)⟩, spent⟩
 
-theorem pushout_disjoint (s : GuardedHole) (remote : NullifierSet) :
+theorem pushout_disjoint (s : GuardedHole) (remote : SortedDigestSet) :
     (pushout s remote).WellFormed := by
   intro k hk hs
-  have hc := ((mergeNullifierSets s.spentNullifiers remote).contains_eq_spec k).mpr hs
-  simp only [pushout, SortedU64Set.spec, List.toList_toArray, List.mem_filter] at hk
+  have hc := ((s.spentNullifiers.merge remote).contains_eq_spec k).mpr hs
+  simp only [pushout, SortedDigestSet.spec, List.toList_toArray, List.mem_filter] at hk
   simp [hc] at hk
 
 
-theorem pushout_refuses_replay (s : GuardedHole) (remote : NullifierSet) (k : PendingId)
+theorem pushout_refuses_replay (s : GuardedHole) (remote : SortedDigestSet) (k : PendingId)
     (h : s.spentNullifiers.spec k ∨ remote.spec k) :
     resolvePromise (pushout s remote) k = none :=
-  resolve_refuses_spent _ _ ((merge_spec _ _ _).mpr h)
+  resolve_refuses_spent _ _ ((SortedDigestSet.merge_spec _ _ _).mpr h)
 
 inductive PromiseEvent where
   | allocate (id : PendingId)
   | deliver (dependency : PendingId)
   | resolve (id : PendingId)
-  | merge (spent : NullifierSet)
+  | merge (spent : SortedDigestSet)
 
 def promiseStep (s : GuardedHole) : PromiseEvent → GuardedHole × Option PendingId
   | .allocate k => (allocatePromise s k, none)
@@ -531,7 +656,7 @@ theorem step_preserves_spent (s : GuardedHole) (e : PromiseEvent) (k : PendingId
   cases e with
   | allocate j => simp only [promiseStep, allocatePromise]; split <;> exact h
   | deliver j => exact h
-  | merge r => exact (merge_spec _ _ _).mpr (.inl h)
+  | merge r => exact (SortedDigestSet.merge_spec _ _ _).mpr (.inl h)
   | resolve j =>
     simp only [promiseStep]
     split
@@ -541,7 +666,7 @@ theorem step_preserves_spent (s : GuardedHole) (e : PromiseEvent) (k : PendingId
       split at ht
       · cases ht
       · cases Option.some.inj ht
-        exact (SortedU64Set.spec_insert _ _ _).mpr (.inr h)
+        exact (SortedDigestSet.spec_insert _ _ _).mpr (.inr h)
 
 theorem step_resolution (s : GuardedHole) (e : PromiseEvent) (k : PendingId)
     (h : (promiseStep s e).2 = some k) :

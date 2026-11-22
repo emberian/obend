@@ -16,7 +16,7 @@ open Obend.Vault.Mandate Obend.Crypto
 @[expose] def carol : Principal := ⟨"Carol", 3⟩
 @[expose] def held : Mandate :=
   ⟨1, .root alice "Bob", alice, "Bob", [.read, .call], 20, [1,2], 100, .any⟩
-@[expose] def entry (key : UInt64) (expires : Nat) (revoked : Bool) : SturdyEntry :=
+@[expose] def entry (key : SwissNum) (expires : Nat) (revoked : Bool) : SturdyEntry :=
   ⟨key, held, 42, expires, revoked⟩
 @[expose] def table : SwissTableExec := ⟨#[entry 3 100 false, entry 8 5 false, entry 12 100 true], SortedU64Set.empty⟩
 
@@ -43,7 +43,7 @@ example : lookupSwissExec table 3 10 42 = .granted held := by rfl
 @[expose] def testSignatures : HybridSigVerifier :=
   ⟨fun key _ sig => decide (key = sig), fun key _ sig => decide (key = sig)⟩
 @[expose] def cert : HybridHandoffCert :=
-  ⟨"Bob".toUTF8, "Alice-Carol".toUTF8, 17, identity, identity, request, signatures, signatures⟩
+  ⟨"Bob".toUTF8, "Alice-Carol".toUTF8, 17, 1, identity, identity, request, signatures, signatures⟩
 
 example : attenuates (request.granted held) held := delegate_child_attenuates _ _ _ _ _ _ _ _
 example : verifyBoth testSignatures identity ByteArray.empty signatures = true := by rfl
@@ -55,20 +55,43 @@ example : requestFits { request with quota := 21 } held = false := by rfl
 example : requestFits { request with rights := [.control] } held = false := by rfl
 
 example : verifyHybridHandoff testSignatures held ByteArray.empty
-    (hybridIdentityDigest identity) (hybridIdentityDigest identity) SortedU64Set.empty cert = true := by
+    (hybridIdentityDigest identity) (hybridIdentityDigest identity) SortedDigestSet.empty cert = true := by
   simp only [verifyHybridHandoff, cert, eq_self, decide_true, Bool.true_and, verifyBoth, testSignatures,
     identity, signatures, Bool.and_true]
   rfl
 
 example : verifyHybridHandoff testSignatures held ByteArray.empty
     (hybridIdentityDigest identity) (hybridIdentityDigest identity)
-    (SortedU64Set.empty.insert 17) cert = false :=
+    (SortedDigestSet.empty.insert 17) cert = false :=
   verifyHybridHandoff_no_replay _ _ _ _ _ _ _
 
-@[expose] def holes : GuardedHole := ⟨SortedU64Set.empty, SortedU64Set.empty⟩
+/-- The same certificate at the default epoch 0 is refused (G3: authenticated message epoch). -/
+example : verifyHybridHandoff testSignatures held ByteArray.empty
+    (hybridIdentityDigest identity) (hybridIdentityDigest identity) SortedDigestSet.empty
+    { cert with msgEpoch := 0 } = false :=
+  verifyHybridHandoff_rejects_epoch_zero _ _ _ _ _ _ _ rfl
+
+/-- The epoch is inside the signed bytes: distinct epochs give distinct handoff messages. -/
+example (e : UInt64) (he : cert.msgEpoch ≠ e) :
+    handoffMessage "HandoffGive" ByteArray.empty cert ≠
+      handoffMessage "HandoffGive" ByteArray.empty { cert with msgEpoch := e } :=
+  fun h => he (handoffMessage_binds_nonce_epoch h).2
+
+/-- The low 64 bits of a 256-bit key: what a 64-bit replay table would have stored. -/
+@[expose] def lowLimb (d : SwissNum) : UInt64 := UInt64.ofNat d.toNat
+@[expose] def nonceA : SwissNum := 1
+@[expose] def nonceB : SwissNum := BitVec.ofNat 256 (2 ^ 64 + 1)
+-- Two distinct nonces with one 64-bit truncation: the 256-bit replay set keeps them apart.
+example : nonceA ≠ nonceB := by decide
+example : lowLimb nonceA = lowLimb nonceB := by decide
+example : (SortedDigestSet.empty.insert nonceA).contains nonceB = false := by decide
+example : (SortedDigestSet.empty.insert nonceA).contains nonceA = true := by decide
+example : (SortedU64Set.empty.insert (lowLimb nonceA)).contains (lowLimb nonceB) = true := by decide
+
+@[expose] def holes : GuardedHole := ⟨SortedDigestSet.empty, SortedDigestSet.empty⟩
 example : countResolved holes [.allocate 7, .deliver 7, .resolve 7,
-    .merge (SortedU64Set.empty.insert 7), .allocate 7, .resolve 7] 7 = 1 := by rfl
-example : (resolvePromise (pushout (allocatePromise holes 7) (SortedU64Set.empty.insert 7)) 7).isNone = true := by rfl
+    .merge (SortedDigestSet.empty.insert 7), .allocate 7, .resolve 7] 7 = 1 := by rfl
+example : (resolvePromise (pushout (allocatePromise holes 7) (SortedDigestSet.empty.insert 7)) 7).isNone = true := by rfl
 
 @[expose] def root32 : ByteArray := ⟨Array.replicate 32 1⟩
 @[expose] def cell : CellState := ⟨#[10,5], root32, root32, root32, 1, SortedU64Set.empty, #[request.granted held]⟩
@@ -129,7 +152,23 @@ example : (encodePublicInputs framingVector).data =
     #[37,2,172,2,32] ++ Array.replicate 32 8 ++ #[0] := by decide
 
 #tooth lookupSwissExec_eq_spec by mutation search := fun _ _ _ _ _ _ => none
-#tooth pushout_refuses_replay by mutation mergeNullifierSets := fun a _ => a
+#tooth pushout_refuses_replay by mutation SortedDigestSet.merge := fun a _ => a
+#tooth verifyHybridHandoff_sound by mutation verifyHybridHandoff :=
+  fun v held heldCommitment introducerDigest recipientDigest seen c =>
+    decide (hybridIdentityDigest c.introducer = introducerDigest) &&
+    decide (hybridIdentityDigest c.recipient = recipientDigest) &&
+    verifyBoth v c.introducer (handoffMessage "HandoffGive" heldCommitment c) c.giveSig &&
+    verifyBoth v c.recipient (handoffMessage "HandoffAccept" heldCommitment c) c.acceptSig &&
+    !seen.contains c.handoffNonce && requestFits c.request held
+#tooth handoffMessage_binds_nonce_epoch by mutation handoffMessage :=
+  fun role heldCommitment c =>
+    encodeFrame role.toUTF8
+      (encodeFrame c.vatId c.sessionId (encodeNats [c.handoffNonce.toNat]))
+      (encodeFrame heldCommitment c.request.bytes
+        (encodeFrame (hybridIdentityDigest c.introducer) (hybridIdentityDigest c.recipient)
+          ByteArray.empty))
+#tooth SortedDigestSet.contains_eq_spec by mutation SortedDigestSet.contains :=
+  fun s k => (s.data.toList.map lowLimb).contains (lowLimb k)
 #tooth invert_cancel by mutation ReversibleTurn.invert := fun t => t
 
 #tooth swissTable_no_membership_oracle by mutation authorizeEntry :=

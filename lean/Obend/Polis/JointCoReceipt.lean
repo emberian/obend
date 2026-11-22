@@ -1203,12 +1203,12 @@ theorem composeCoReceipts_ports_linear (env : WireEnv) (shared : ByteArray) (rs 
   constructor
   · have h1 := ((sortByKey_perm AwaitEntry.key (awaitTable rs)).map AwaitEntry.key).nodup_iff.1
       (tableOk_nodup AwaitEntry.key hlin.1)
-    refine nodup_of_map_nodup UInt64.toNat ?_
+    refine nodup_of_map_nodup BitVec.toNat ?_
     rw [List.map_map]
     exact h1
   · have h1 := ((sortByKey_perm FulfillEntry.key (fulfillTable rs)).map FulfillEntry.key).nodup_iff.1
       (tableOk_nodup FulfillEntry.key hlin.2)
-    refine nodup_of_map_nodup UInt64.toNat ?_
+    refine nodup_of_map_nodup BitVec.toNat ?_
     rw [List.map_map]
     exact h1
 
@@ -1307,7 +1307,7 @@ theorem composeCoReceipts_closed_sound (env : WireEnv) (shared : ByteArray) (rs 
     | some e =>
       obtain ⟨he, hk⟩ := lookup_some AwaitEntry.key hlin'.1 hl
       obtain ⟨b, hb, w, hwm, rfl⟩ := mem_awaitTable.1 ((sortByKey_perm _ _).mem_iff.1 he)
-      have hport : f.port = w.port := (UInt64.toNat_inj.1 hk).symm
+      have hport : f.port = w.port := (BitVec.toNat_inj.1 hk).symm
       exact ⟨b, w, hb, hwm, hport, wire_checked env rs hlin hw ha hb hf hwm hport⟩
   · intro b w hb hwm
     have hwe : (⟨b.rank, w⟩ : AwaitEntry) ∈ (sortedAwaits rs).toList :=
@@ -1318,7 +1318,7 @@ theorem composeCoReceipts_closed_sound (env : WireEnv) (shared : ByteArray) (rs 
     | some e =>
       obtain ⟨he, hk⟩ := lookup_some FulfillEntry.key hlin'.2 hl
       obtain ⟨a, ha, f, hf, rfl⟩ := mem_fulfillTable.1 ((sortByKey_perm _ _).mem_iff.1 he)
-      have hport : f.port = w.port := UInt64.toNat_inj.1 hk
+      have hport : f.port = w.port := BitVec.toNat_inj.1 hk
       exact ⟨a, f, ha, hf, hport, wire_checked env rs hlin hw ha hb hf hwm hport⟩
 
 /-- Promise settlement publishes a batch only after all ports close. An abort, missing leg,

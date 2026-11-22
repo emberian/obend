@@ -1412,13 +1412,18 @@ structure SturdyMembraneEntry where
   revoked : Bool
   deriving DecidableEq
 
-/-- The 64-bit key of CapTP's sorted swiss table: the leading eight bytes of the secret. It locates
-an entry; it does not authenticate a bearer (`SovereignHome.lookupMembrane` compares all 32 bytes). -/
+/-- The leading eight bytes of the secret, a 64-bit locator. It is no longer CapTP's table key
+(`swissKey` is) and it does not authenticate a bearer (`SovereignHome.lookupMembrane` compares all
+32 bytes). -/
 def swissLocator (d : Digest256) : UInt64 :=
   UInt64.ofNat (Obend.Digest.HashBytes.ofBE (d.val.data.toList.take 8))
 
+/-- The key of CapTP's sorted swiss table: all 32 bytes of the secret, read big-endian. -/
+def swissKey (d : Digest256) : Obend.Polis.CapTP.SwissNum :=
+  BitVec.ofNat 256 (Obend.Digest.HashBytes.ofBE d.val.data.toList)
+
 def SturdyMembraneEntry.toSturdyEntry (e : SturdyMembraneEntry) : Obend.Polis.CapTP.SturdyEntry :=
-  ⟨swissLocator e.swissNum, e.mandate.toMandate, e.expectedNonce, e.expiresAt, e.revoked⟩
+  ⟨swissKey e.swissNum, e.mandate.toMandate, e.expectedNonce, e.expiresAt, e.revoked⟩
 
 /-- Both escrow legs are serializable; natural-valued amounts cannot be negative. -/
 structure EscrowSnapshot where

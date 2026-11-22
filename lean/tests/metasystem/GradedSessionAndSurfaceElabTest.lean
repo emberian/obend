@@ -94,13 +94,13 @@ def proto : SessionTy G :=
 theorem proto_wellFormed : proto.WellFormed := by
   simp [proto, SessionTy.WellFormed, Branches.WellFormed]
 
-def freshHole : GuardedHole := ⟨SortedU64Set.empty, SortedU64Set.empty⟩
+def freshHole : GuardedHole := ⟨SortedDigestSet.empty, SortedDigestSet.empty⟩
 
 theorem freshHole_unspent (k : PendingId) : ¬ freshHole.spentNullifiers.spec k := by
-  simp [freshHole, SortedU64Set.spec, SortedU64Set.empty]
+  simp [freshHole, SortedDigestSet.spec, SortedDigestSet.empty]
 
 theorem freshHole_unopen (k : PendingId) : ¬ freshHole.openPromises.spec k := by
-  simp [freshHole, SortedU64Set.spec, SortedU64Set.empty]
+  simp [freshHole, SortedDigestSet.spec, SortedDigestSet.empty]
 
 theorem freshHole_wf : freshHole.WellFormed := by
   intro k ho _; exact freshHole_unopen k ho
@@ -114,7 +114,7 @@ theorem rendezvousCoreTrace_inhabited :
        h0, h0, 1, 1, false⟩
     s0.WellFormed ∧ ∃ turns s1, turns.length = 1 ∧ RendezvousCoreTrace s0 turns s1 ∧ s1.WellFormed := by
   dsimp only
-  have hUnsp0 : freshHole.spentNullifiers.contains 1 = false := rfl
+  have hUnsp0 : freshHole.spentNullifiers.contains 1#256 = false := rfl
   have hOpen : (allocatePromise freshHole 1).openPromises.spec 1 := by
     simp [allocatePromise, hUnsp0]
   have hUnsp : ¬ (allocatePromise freshHole 1).spentNullifiers.spec 1 := by
