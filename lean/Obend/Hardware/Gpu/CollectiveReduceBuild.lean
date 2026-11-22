@@ -1,6 +1,17 @@
 module
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.PhaseSemantics
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveTrace
+import all Obend.Hardware.Gpu.CollectiveHierarchy
+import all Obend.Hardware.Gpu.CollectiveCompose
+import all Obend.Hardware.Gpu.CollectiveBuildFacts
+import all Obend.Hardware.Gpu.CollectiveExecute
+import all Obend.Hardware.Gpu.CollectiveReduceExec
 public import Obend.Hardware.Gpu.CollectiveReduceExec
-@[expose] public section
+public section
 
 /-! Public reduction correctness. All descriptor and allocation premises of the
 recursive proof are discharged from the successful executable builder. -/
@@ -62,7 +73,7 @@ theorem build_reduce_correct (op : ReduceOp) (shape : FoldShape) (depth : Nat) (
   obtain ⟨state,hrun,hp⟩ := build_success op shape depth p
     (build_tile_bounds op shape depth p hbuild) hbuild
   rw [buildAction_initial,hmode] at hrun
-  simp only [Option.isSome_none,ite_false] at hrun
+  simp only [Option.isSome_none] at hrun
   let before := initialBuild shape.inputLen shape.segments.length depth
   have hs0 : 0 < before.buffers.size := by simp [before]; omega
   have hs1 : 1 < before.buffers.size := by simp [before]; omega
@@ -89,7 +100,7 @@ theorem build_reduce_boundaries (op : ReduceOp) (shape : FoldShape) (depth : Nat
   obtain ⟨state,hrun,hp⟩ := build_success op shape depth p
     (build_tile_bounds op shape depth p hbuild) hbuild
   rw [buildAction_initial,hmode] at hrun
-  simp only [Option.isSome_none,ite_false] at hrun
+  simp only [Option.isSome_none] at hrun
   let before := initialBuild shape.inputLen shape.segments.length depth
   have he := reduceInto_extends op (initialTree depth) (2^depth) 0 1 shape.segments
     (Nat.log2 (max 1 shape.inputLen)+2) before state hrun

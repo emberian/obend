@@ -1,7 +1,21 @@
 module
+import all Obend.Hardware.ArrayFold
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.PhaseSemantics
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveTrace
+import all Obend.Hardware.Gpu.CollectiveHierarchy
+import all Obend.Hardware.Gpu.CollectiveCompose
+import all Obend.Hardware.Gpu.CollectiveBuildFacts
+import all Obend.Hardware.Gpu.CollectiveExecute
+import all Obend.Hardware.Gpu.CollectiveReduceExec
+import all Obend.Hardware.Gpu.CollectiveScanExec
+import all Obend.Hardware.Gpu.CollectiveReduceBuild
 public import Obend.Hardware.Gpu.CollectiveReduceBuild
 public import Obend.Hardware.Gpu.CollectiveScanExec
-@[expose] public section
+public section
 
 /-! Public collective correctness: successful source construction and source
 admission imply the existing segmented fold semantics under the actual
@@ -97,7 +111,7 @@ theorem build_boundaries (op : ReduceOp) (shape : FoldShape) (depth : Nat) (p : 
   have he : Extends before state := by
     cases hm : shape.mode with
     | none =>
-      simp only [hm,Option.isSome_none,ite_false] at hrun
+      simp only [hm,Option.isSome_none] at hrun
       have h := reduceInto_extends op (initialTree depth) (2^depth) 0 1 shape.segments
         (Nat.log2 (max 1 shape.inputLen)+2) _ state hrun
       simpa only [before,hm,Option.isSome_none,ite_false] using h
@@ -139,7 +153,7 @@ theorem build_noConstants (op : ReduceOp) (shape : FoldShape) (depth : Nat) (p :
   have hn : NoConstants state := by
     cases hm : shape.mode with
     | none =>
-      simp only [hm,Option.isSome_none,ite_false] at hrun
+      simp only [hm,Option.isSome_none] at hrun
       exact reduceChunks_noConstants op (initialTree depth) (2^depth) 0 1 (segments shape.segments)
         _ _ state hrun (initialBuild_noConstants _ _ _)
     | some mode =>

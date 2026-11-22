@@ -1,8 +1,15 @@
 module
+import all Obend.Hardware.Gpu.ArrayEmit
+import all Obend.Hardware.Gpu.ArraySchedule
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.BlockEmit
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.PhaseSemantics
 import all Obend.Hardware.ArrayKernel
 public import Obend.Hardware.Gpu.ArrayEmit
 public import Obend.Hardware.Gpu.PhaseSemantics
-@[expose] public section
+public section
 
 /-! Buffer renaming is a simulation of the actual ArrayKernel evaluator.
 The arena's unused rows frame unrelated live graph storage; scratch contents are
@@ -15,7 +22,7 @@ open Obend.Hardware.Gpu.PhaseSemantics
 set_option autoImplicit false
 
 /-- Source cells and their renamed destination cells contain the same words. -/
-def Renames (p : Program) (f : Nat → Nat) (source target : Memory) : Prop :=
+@[expose] def Renames (p : Program) (f : Nat → Nat) (source target : Memory) : Prop :=
   ∀ a i, Valid p a i → valueAt target (f a) i = valueAt source a i
 
 def renameWrite (f : Nat → Nat) (w : Nat × Nat × Word) : Nat × Nat × Word :=
@@ -33,7 +40,7 @@ theorem applyWrite_rename (p q : Program) (f : Nat → Nat) (hf : Function.Injec
   rw [applyWrite_value q target (renameWrite f w) hgt (hvmap _ _ hw),
     applyWrite_value p source w hgs hw]
   simp only [renameWrite, writeLoc, Prod.mk.injEq, hf.eq_iff]
-  split <;> simp_all [Renames]
+  by_cases he : w.1 = a ∧ w.2.1 = i <;> simp [he, hr a i hai]
 
 theorem loadRegisters_rename (p : Program) (f : Nat → Nat) (ph : Phase) (g l : Nat)
     (source target : Memory) (hr : Renames p f source target)
@@ -217,7 +224,7 @@ theorem placement_buffer (p q : Program) (words src dst : Nat) (first : Bool)
   · rcases a with _ | a
     · cases first <;> simp [arenaIndex,arenaBuffers,buffer]
     · simp [arenaIndex,arenaBuffers,buffer,List.getD_eq_getElem?_getD,
-        List.getElem?_append_right, List.getElem?_drop, Nat.add_assoc]
+        List.getElem?_drop, Nat.add_assoc]
       congr 2 <;> omega
 
 theorem placement_valid (p q : Program) (words src dst : Nat) (first : Bool)
@@ -241,7 +248,7 @@ theorem placement_bases (p q : Program) (words src dst : Nat) (first : Bool)
   have h1 := placement_buffer p q words src dst first h 1 (by have := h.size; omega)
   unfold bufferBase
   rw [h0,h1,h.input_device,h.output_device]
-  simp only [lengths,h.buffers]
+  simp only [h.buffers]
   have hs := h.separated
   cases first <;> simp [arenaIndex,arenaBuffers,wirePrefix,h.input_device,h.output_device] at * <;> omega
 
@@ -312,7 +319,7 @@ theorem placement_device_tail (p q : Program) (words src dst : Nat) (first : Boo
     cases first <;>
       simp [lengths,h.buffers,arenaBuffers,wirePrefix,h.input_device,h.output_device] at * <;> omega
   rw [hsum] at hm
-  simpa [bufferBase,hmap,hd] using hm
+  simpa [bufferBase,lengths,hmap,hd] using hm
 
 /-- Below the scratch arena, a renamed device address belongs to a boundary. -/
 theorem placement_live_address (p q : Program) (words src dst : Nat) (first : Bool)
@@ -324,10 +331,9 @@ theorem placement_live_address (p q : Program) (words src dst : Nat) (first : Bo
   have ha2 : 2 ≤ a := by omega
   have hstorage : (buffer p a).storage = .device := by
     have hh := congrArg Prod.fst he
-    simpa [address,placement_buffer p q words src dst first h a ha] using hh
+    simpa [placement_buffer p q words src dst first h a ha] using hh
   have hb := placement_device_tail p q words src dst first h a ha ha2 hstorage
-  have hix := congrArg Prod.snd he
-  simp only [address] at hix
+  have hix : bufferBase q (arenaIndex first a) + i = j := congrArg Prod.snd he
   omega
 
 /-- Every non-boundary live cell is framed by arena execution. Bounds on actual
@@ -347,8 +353,7 @@ theorem placement_live_frame (p q : Program) (words src dst : Nat) (first : Bool
   have hv := (boundsSafe_sound p (p.check_boundsSafe hc) d0 hd0 g hg ph0 hp0).2 l hl w0 hw0
   have he' : address q (arenaIndex first w0.array) (w0.index.eval g l) = (.device,j) := he
   have cases := placement_live_address p q words src dst first h w0.array (w0.index.eval g l) j hv.1 hj he'
-  have hix := congrArg Prod.snd he'
-  simp only [address] at hix
+  have hix : bufferBase q (arenaIndex first w0.array) + w0.index.eval g l = j := congrArg Prod.snd he'
   rcases cases with hzero | hone
   · rw [hzero, (placement_bases p q words src dst first h).1] at hix
     have hbound := hv.2
@@ -375,8 +380,7 @@ theorem placement_output_frame (p q : Program) (words src dst : Nat) (first : Bo
   have hv := (boundsSafe_sound p (p.check_boundsSafe hc) d0 hd0 g hg ph0 hp0).2 l hl w0 hw0
   have he' : address q (arenaIndex first w0.array) (w0.index.eval g l) = (.device,j) := he
   have cases := placement_live_address p q words src dst first h w0.array (w0.index.eval g l) j hv.1 hj he'
-  have hix := congrArg Prod.snd he'
-  simp only [address] at hix
+  have hix : bufferBase q (arenaIndex first w0.array) + w0.index.eval g l = j := congrArg Prod.snd he'
   rcases cases with hzero | hone
   · exact hinput d0 hd0 ph0 hp0 w0 hw0 hzero
   · rw [hone, (placement_bases p q words src dst first h).2] at hix

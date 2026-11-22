@@ -1,8 +1,15 @@
 module
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.PhaseSemantics
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveTrace
+import all Obend.Hardware.Gpu.CollectiveHierarchy
 public import Obend.Hardware.Gpu.CollectiveCorrect
 public import Obend.Hardware.Gpu.CollectiveTrace
 public import Obend.Hardware.Gpu.CollectiveHierarchy
-@[expose] public section
+public section
 
 /-! Composition of actual collective dispatches and builder traces. The generic
 fold lemmas lift local execution contracts; all local contracts are discharged
@@ -68,7 +75,7 @@ theorem foldl_point {α β γ : Type}
 /-- Lift a concrete group's readback to its complete dispatch. Source-buffer
 invariants supply the same input values before every group, while nonowner
 groups frame the selected output location. -/
-theorem dispatch_point (p : Program) (d : Dispatch) (mem : Memory)
+theorem dispatch_point (d : Dispatch) (mem : Memory)
     (P : Memory → Prop) (hp : P mem) (g a i : Nat) (value : Word) (hg : g < d.groups)
     (hstep : ∀ k < d.groups, ∀ m, P m → P (evalGroup d k m))
     (hwrite : ∀ m, P m → valueAt (evalGroup d g m) a i = value)
@@ -113,7 +120,7 @@ theorem reduceBucket_value (p : Program) (op : ReduceOp) (tree : Trees)
         (descriptor cs (·.start)) (descriptor cs (·.result)) m hm.1 (hb k hk)
         src i hsrc (by intro he; exact False.elim (hne he))
       exact hf.trans (hm.2 i)
-  apply dispatch_point p dispatch mem P hp g dst cs[g].result _ hgl hstep
+  apply dispatch_point dispatch mem P hp g dst cs[g].result _ hgl hstep
   · intro m hm
     have hh := reduceGroup_value p op tree src dst valid depth g cs[g].start
       (descriptor cs (·.start)) (descriptor cs (·.result)) m hm.1 hv
@@ -229,7 +236,7 @@ theorem scanBucket_value (p : Program) (op : ReduceOp) (mode : ScanMode) (tree :
     · intro a ha j
       have hpa := hpre a ha
       exact (frame k hk m hm.1 a hpa.2.1 hpa.2.2 hpa.1 j).trans (hm.2.2 a ha j)
-  apply dispatch_point p dispatch mem P hp g dst (cs[g].start+i) _ hgl hstep
+  apply dispatch_point dispatch mem P hp g dst (cs[g].start+i) _ hgl hstep
   · intro m hm
     have hs : ∀ a ix, seed = some (a,ix) → ∀ k ≤ depth, tree.up+k ≠ a := by
       intro a ix he
@@ -467,7 +474,7 @@ theorem localScan_trace_value (p : Program) (op : ReduceOp) (mode : ScanMode) (t
       | none => rfl
       | some a => exact hm.2.2 a hpref _
     rw [hseed] at hh
-    simpa only [step,key,if_pos hpos] using hh
+    simpa only [step,key,ite_eq_left hpos] using hh
   have hframe : ∀ b ∈ buckets cs, b ≠ key → ∀ m, P m →
       valueAt (step m b) dst (c.start+i) = valueAt m dst (c.start+i) := by
     intro b hb' hnekey m hm

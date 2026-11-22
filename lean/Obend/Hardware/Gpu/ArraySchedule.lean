@@ -1,6 +1,6 @@
 module
 public import Obend.Hardware.Gpu
-@[expose] public section
+public section
 
 /-! Structural serialization of an array frontier. Every premise describes
 declared physical reads/writes, never the values produced by a collective.
@@ -41,7 +41,7 @@ abbrev Interval := Nat × Nat
 
 def InInterval (range : Interval) (a : Nat) : Prop := range.1 ≤ a ∧ a < range.1+range.2
 
-def maxIndex : List Nat → Nat
+@[expose] def maxIndex : List Nat → Nat
   | [] => 0
   | n::ns => max n (maxIndex ns)
 
@@ -53,13 +53,13 @@ theorem getD_le_maxIndex (xs : List Nat) (i : Nat) : xs.getD i 0 ≤ maxIndex xs
     | zero => exact Nat.le_max_left _ _
     | succ i => exact Nat.le_trans (ih i) (Nat.le_max_right _ _)
 
-def gatherExtent (ix : List Nat) (base count : Nat) : Nat :=
+@[expose] def gatherExtent (ix : List Nat) (base count : Nat) : Nat :=
   if count == 0 then 0 else maxIndex ((ix.drop base).take count)+1
 
 theorem gatherIndex_bound (ix : List Nat) (base count e : Nat) (he : e < count) :
     ix.getD (base+e) 0 < gatherExtent ix base count := by
   have heq : ((ix.drop base).take count).getD e 0 = ix.getD (base+e) 0 := by
-    simp [List.getD_eq_getElem?_getD,List.getElem?_take,he,List.getElem?_drop]
+    simp [List.getD_eq_getElem?_getD,he,List.getElem?_drop]
   have hm := getD_le_maxIndex ((ix.drop base).take count) e
   rw [heq] at hm
   have hc : count ≠ 0 := by omega
@@ -67,7 +67,7 @@ theorem gatherIndex_bound (ix : List Nat) (base count e : Nat) (he : e < count) 
 
 /-- Compact read ranges. A gather visits only its own immutable index slice;
 folds require one interval regardless of their input length. -/
-def readIntervals (ix : List Nat) (k : Kernel) : List Interval :=
+@[expose] def readIntervals (ix : List Nat) (k : Kernel) : List Interval :=
   match k.body with
   | .prog code _ => code.flatMap fun ins => ins.args.filterMap fun arg =>
       match arg with
@@ -110,7 +110,7 @@ theorem kernelReads_covered (ix : List Nat) (k : Kernel) (a : Nat)
     obtain ⟨i,hi,rfl⟩ := h
     exact ⟨(base,shape.inputLen),by simp [readIntervals,hb],by simp [InInterval]; omega⟩
 
-def intervalSeparated (a b : Interval) : Bool :=
+@[expose] def intervalSeparated (a b : Interval) : Bool :=
   a.2 == 0 || b.2 == 0 || a.1+a.2 ≤ b.1 || b.1+b.2 ≤ a.1
 
 theorem intervalSeparated_sound (a b : Interval) (h : intervalSeparated a b = true)
@@ -119,7 +119,19 @@ theorem intervalSeparated_sound (a b : Interval) (h : intervalSeparated a b = tr
   unfold InInterval at ha hb
   omega
 
-def checkIndependent (ix : List Nat) (a b : Kernel) : Bool :=
+/-- The interval check is exact: ranges with no common address are always accepted. -/
+theorem intervalSeparated_complete (a b : Interval)
+    (h : ∀ x, InInterval a x → InInterval b x → False) : intervalSeparated a b = true := by
+  simp only [intervalSeparated,Bool.or_eq_true,beq_iff_eq,decide_eq_true_eq]
+  by_cases hab : a.1 ≤ b.1
+  · have hx : ¬(b.1 < a.1+a.2 ∧ b.1 < b.1+b.2) :=
+      fun hin => h b.1 ⟨hab,hin.1⟩ ⟨Nat.le_refl _,hin.2⟩
+    omega
+  · have hx : ¬(a.1 < a.1+a.2 ∧ a.1 < b.1+b.2) :=
+      fun hin => h a.1 ⟨Nat.le_refl _,hin.1⟩ ⟨by omega,hin.2⟩
+    omega
+
+@[expose] def checkIndependent (ix : List Nat) (a b : Kernel) : Bool :=
   intervalSeparated (a.dstBase,a.count) (b.dstBase,b.count) &&
     (readIntervals ix b).all (intervalSeparated (a.dstBase,a.count)) &&
     (readIntervals ix a).all (intervalSeparated (b.dstBase,b.count))
@@ -141,7 +153,7 @@ theorem checkIndependent_sound (ix : List Nat) (a b : Kernel)
     exact intervalSeparated_sound _ _ (h.2 range hm) x
       (by simpa [InInterval,Kernel.owns] using hb) hx
 
-def checkKernels (ix : List Nat) : List Kernel → Bool
+@[expose] def checkKernels (ix : List Nat) : List Kernel → Bool
   | [] => true
   | k::ks => ks.all (checkIndependent ix k) && checkKernels ix ks
 
@@ -155,7 +167,7 @@ theorem checkKernels_sound (ix : List Nat) (ks : List Kernel)
 
 /-- Value-independent admission for the actual ordinary-then-collectives
 schedule. It permits each kernel's self-aliasing and checks only other kernels. -/
-def checkStage (ix : List Nat) (stage : GpuStage) : Bool := checkKernels ix stage.kernels
+@[expose] def checkStage (ix : List Nat) (stage : GpuStage) : Bool := checkKernels ix stage.kernels
 
 theorem checkStage_sound (ix : List Nat) (stage : GpuStage) (h : checkStage ix stage = true) :
     stage.kernels.Pairwise (Independent ix) := checkKernels_sound ix stage.kernels h
@@ -163,7 +175,7 @@ theorem checkStage_sound (ix : List Nat) (stage : GpuStage) (h : checkStage ix s
 def KernelBounded (words : Nat) (ix : List Nat) (k : Kernel) : Prop :=
   k.dstBase+k.count ≤ words ∧ ∀ a, KernelReads ix k a → a < words
 
-def checkBounds (words : Nat) (ix : List Nat) (stage : GpuStage) : Bool :=
+@[expose] def checkBounds (words : Nat) (ix : List Nat) (stage : GpuStage) : Bool :=
   stage.kernels.all fun k => k.dstBase+k.count ≤ words &&
     (readIntervals ix k).all (fun range => range.1+range.2 ≤ words)
 
@@ -179,7 +191,39 @@ theorem checkBounds_sound (words : Nat) (ix : List Nat) (stage : GpuStage)
   unfold InInterval at hx
   omega
 
-def AgreeBelow (words : Nat) (a b : Nat → Word) : Prop := ∀ i < words, a i = b i
+/-! ## Admission witnesses
+
+One frontier over eight words with gather table `[1, 0]`. Kernel `⟨4, 2, .concat 0 1 1⟩` writes
+`[4, 6)` from words `0` and `1`; kernel `⟨6, 2, .gather 0 2⟩` writes `[6, 8)` from `[2, 4)`.
+Each check accepts the frontier and refuses one planted fault. -/
+
+example : intervalSeparated (4, 2) (6, 2) = true := by decide
+
+/-- Ranges sharing word `5` are refused. -/
+example : intervalSeparated (4, 2) (5, 2) = false := by decide
+
+example : checkIndependent [1, 0] ⟨4, 2, .concat 0 1 1⟩ ⟨6, 2, .gather 0 2⟩ = true := by decide
+
+/-- A gather whose source is the concat's destination `[4, 6)` is refused. -/
+example : checkIndependent [1, 0] ⟨4, 2, .concat 0 1 1⟩ ⟨6, 2, .gather 0 4⟩ = false := by decide
+
+example : checkKernels [1, 0] [⟨4, 2, .concat 0 1 1⟩, ⟨6, 2, .gather 0 2⟩] = true := by decide
+
+/-- The first kernel is independent of both later kernels, but those two both write word `7`. -/
+example : checkKernels [1, 0]
+    [⟨4, 2, .concat 0 1 1⟩, ⟨6, 2, .gather 0 2⟩, ⟨7, 1, .const 0⟩] = false := by decide
+
+example : checkStage [1, 0] ⟨[⟨4, 2, .concat 0 1 1⟩, ⟨6, 2, .gather 0 2⟩]⟩ = true := by decide
+
+/-- Two kernels writing word `5` are refused. -/
+example : checkStage [1, 0] ⟨[⟨4, 2, .concat 0 1 1⟩, ⟨5, 2, .gather 0 2⟩]⟩ = false := by decide
+
+example : checkBounds 8 [1, 0] ⟨[⟨4, 2, .concat 0 1 1⟩, ⟨6, 2, .gather 0 2⟩]⟩ = true := by decide
+
+/-- The same frontier in seven words writes past the end. -/
+example : checkBounds 7 [1, 0] ⟨[⟨4, 2, .concat 0 1 1⟩, ⟨6, 2, .gather 0 2⟩]⟩ = false := by decide
+
+@[expose] def AgreeBelow (words : Nat) (a b : Nat → Word) : Prop := ∀ i < words, a i = b i
 
 theorem runKCode_congr (c : List Word) (entry other : Nat → Word) (e : Nat)
     (loc : Nat → Word) (code : List KInstr)
@@ -219,9 +263,9 @@ theorem kernelValue_congr (c : List Word) (ix : List Nat) (entry other : Nat →
   | concat base len otherBase =>
     simp only [kernelValue,hb]
     by_cases hl : e < len
-    · rw [if_pos hl,if_pos hl]
+    · rw [ite_eq_left hl,ite_eq_left hl]
       exact h _ (by simp only [KernelReads,hb]; exact ⟨e,he,Or.inl ⟨hl,rfl⟩⟩)
-    · rw [if_neg hl,if_neg hl]
+    · rw [ite_eq_right hl,ite_eq_right hl]
       exact h _ (by simp only [KernelReads,hb]; exact ⟨e,he,Or.inr ⟨hl,rfl⟩⟩)
   | const base => simp only [kernelValue,hb]
   | fold op shape base =>
@@ -242,7 +286,7 @@ def runKernel (c : List Word) (ix : List Nat) (entry : Nat → Word) (k : Kernel
 @[simp] theorem runKernel_apply (c : List Word) (ix : List Nat) (entry : Nat → Word)
     (k : Kernel) (a : Nat) : runKernel c ix entry k a =
       if k.owns a then kernelValue c ix entry k (a-k.dstBase) else entry a := by
-  cases h : k.owns a <;> simp [runKernel,runStage,List.find?_cons,h]
+  cases h : k.owns a <;> simp [runKernel,runStage,h]
 
 theorem owns_offset (k : Kernel) (a : Nat) (ha : k.owns a = true) : a-k.dstBase < k.count := by
   simp only [Kernel.owns,decide_eq_true_eq] at ha
@@ -292,7 +336,7 @@ theorem runStage_cons (c : List Word) (ix : List Nat) (entry : Nat → Word)
     (k : Kernel) (ks : List Kernel) (a : Nat) :
     runStage c ix entry ⟨k::ks⟩ a =
       if k.owns a then kernelValue c ix entry k (a-k.dstBase) else runStage c ix entry ⟨ks⟩ a := by
-  cases h : k.owns a <;> simp [runStage,List.find?_cons,h]
+  cases h : k.owns a <;> simp [runStage,h]
 
 /-- One kernel can execute before the rest exactly when its stores neither
 clobber their reads nor overlap their destination words. -/
@@ -310,7 +354,7 @@ theorem runStage_split_head (c : List Word) (ix : List Nat) (entry : Nat → Wor
     rw [runStage_frame c ix _ ks a hrest,runKernel_apply]
     simp [hk]
   · have hk' : k.owns a = false := by cases hh : k.owns a <;> simp_all
-    simp only [hk',Bool.false_eq_true,if_false]
+    simp only [hk',Bool.false_eq_true,ite_false]
     cases hf : ks.find? (fun r => r.owns a) with
     | none => simp [runStage,hf,runKernel_apply,hk']
     | some r =>
@@ -378,7 +422,7 @@ theorem runSequential_append (c : List Word) (ix : List Nat) (entry : Nat → Wo
       runSequential c ix (runSequential c ix entry as) bs := by
   simp [runSequential,List.foldl_append]
 
-def ordinary (k : Kernel) : Bool := match k.body with
+@[expose] def ordinary (k : Kernel) : Bool := match k.body with
   | .fold _ _ _ => false
   | _ => true
 

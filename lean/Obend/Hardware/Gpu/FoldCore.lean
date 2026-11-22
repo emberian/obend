@@ -1,9 +1,10 @@
 module
+import all Obend.Hardware.Gpu.SourceOps
 /- Compact Core4 folds: one bounded recursive accumulator, shared by every range.
 The shape selects ranges at run time; scan prefixes are never expanded in syntax. -/
 public import Obend.Hardware.Gpu.SourceElem
 public import Obend.Hardware.ArrayFold
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.ArraySource.Core
 open Obend.Core.Term Obend.Equiv Obend.Core.TermTraverse
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.Gpu.Source

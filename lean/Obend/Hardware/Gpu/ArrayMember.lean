@@ -1,4 +1,5 @@
 module
+import all Obend.Hardware.Gpu.ArraySourceCore
 /- Leaf composition members whose method bodies are the compact Core4 encoding of
 lexical array programs. Acceptance checks syntax and scope, never the desired output.
 The theorem composes the existing book theorem, Core4 observation semantics, lexical
@@ -6,7 +7,7 @@ array compilation, and GPU dispatch semantics. -/
 public import Obend.Hardware.Gpu.ArraySourceCore
 public import Obend.Leaf.Emit
 public import Obend.Hardware.ArrayTyping
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.ArrayMember
 open Obend.Core.Term Obend.Core.TermTraverse Obend.Equiv Obend.Leaf
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.ArrayTyping
@@ -35,7 +36,7 @@ theorem body_substitute (p : Program) (ls : List Nat) (σ : Nat → Term) :
   simp only [body, substitute_comp]
   congr 1
   funext i
-  simp [projection_substitute, Term.substitute]
+  simp [projection_substitute]
 
 theorem method_closed (p : Program) (ls : List Nat) (self : Term) :
     instantiate (.lam (body p ls)) self = .lam (body p ls) := by
@@ -143,16 +144,7 @@ def encodeInputs (inputs : List Vec) : Term := pack (inputs.map encodeVec)
 def inputValues (inputs : List Vec) : Env :=
   fun i => if i < inputs.length then inputs.getD (wire inputs.length i) [] else []
 
-theorem encodeVec_denotes (xs : Vec) : ArrayDenotes (encodeVec xs) xs := by
-  intro i
-  have heq : (xs.map (·.toNat)).getD i 0 = (xs.getD i 0#64).toNat := by
-    induction xs generalizing i with
-    | nil => cases i <;> rfl
-    | cons x xs ih =>
-      cases i with
-      | zero => rfl
-      | succ i => exact ih i
-  simpa only [encodeVec, heq] using encodeNats_apply (xs.map (·.toNat)) i
+theorem encodeVec_denotes (xs : Vec) : ArrayDenotes (encodeVec xs) xs := literal_denotes xs
 
 theorem encodeInputs_denotes (inputs : List Vec) (i : Nat) :
     ArrayDenotes (inputProjection inputs.length (encodeInputs inputs) i) (inputValues inputs i) := by

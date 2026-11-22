@@ -1,7 +1,13 @@
 module
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.PhaseSemantics
+import all Obend.Hardware.Gpu.CollectiveCorrect
+import all Obend.Hardware.Gpu.CollectiveTrace
 public import Obend.Hardware.Gpu.CollectiveTrace
 public import Obend.Hardware.Gpu.CollectiveCorrect
-@[expose] public section
+public section
 
 /-! Metadata invariants of the actual collective builder. Allocation receipts
 name concrete buffer ranges; no execution-result premise is used. -/
@@ -21,7 +27,7 @@ set_option autoImplicit false
 @[simp] theorem allocateTrees_run (depth : Nat) (s : Build) :
     (allocateTrees depth).run s = .ok
       (⟨s.buffers.size,s.buffers.size+depth+1,depth⟩,
-        {s with buffers := s.buffers ++ (treeRows depth).toArray ++ (treeRows depth).toArray}) := rfl
+        {s with buffers := s.buffers ++ (treeRows depth).toArray ++ (treeRows depth).toArray}) := by rfl
 
 theorem allocateTrees_success (depth : Nat) (before after : Build) (tree : Trees)
     (h : (allocateTrees depth).run before = .ok (tree,after)) :
@@ -196,7 +202,7 @@ theorem boundary_allocations (inputSize outputSize : Nat) :
       let src ← allocate inputSize
       let dst ← allocate outputSize
       pure (src,dst)) : BuildM (Nat × Nat)).run {} =
-      .ok ((0,1), {buffers := #[⟨inputSize,.device,[]⟩,⟨outputSize,.device,[]⟩]}) := rfl
+      .ok ((0,1), {buffers := #[⟨inputSize,.device,[]⟩,⟨outputSize,.device,[]⟩]}) := by rfl
 
 /-- Exact prefix construction of every public collective, independent of hierarchy depth. -/
 def initialBuild (inputSize outputSize depth : Nat) : Build :=
@@ -211,7 +217,7 @@ theorem initial_allocations (inputSize outputSize depth : Nat) :
       let dst ← allocate outputSize
       let tree ← allocateTrees depth
       pure (src,dst,tree)) : BuildM (Nat × Nat × Trees)).run {} =
-      .ok ((0,1,initialTree depth),initialBuild inputSize outputSize depth) := rfl
+      .ok ((0,1,initialTree depth),initialBuild inputSize outputSize depth) := by rfl
 
 /-- The actual build action starts its recursive algorithm in this exact metadata state. -/
 theorem buildAction_initial (op : ReduceOp) (shape : FoldShape) (depth : Nat) :
@@ -295,7 +301,7 @@ theorem localScan_noConstants (op : ReduceOp) (mode : ScanMode) (tree : Trees) (
 theorem initialBuild_noConstants (inputSize outputSize depth : Nat) :
     NoConstants (initialBuild inputSize outputSize depth) := by
   intro b hb
-  simp only [initialBuild,Array.toList_append,List.toList_toArray,
+  simp only [initialBuild,Array.toList_append,
     List.mem_append,List.mem_cons,List.not_mem_nil,or_false] at hb
   rcases hb with ((rfl | rfl) | ht) | ht
   · simp

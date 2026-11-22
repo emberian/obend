@@ -1,9 +1,13 @@
 module
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.BlockEmit
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.ArraySchedule
 public import Obend.Hardware.Gpu.CollectiveBlock
 public import Obend.Hardware.Gpu.BlockEmit
 public import Obend.Hardware.Gpu.SourceProtocol
 public import Obend.Hardware.Gpu.ArraySchedule
-@[expose] public section
+public section
 
 /-! One emission route for array programs. Ordinary map/routing stages keep their
 checked live layout. Every fold is scheduled as ArrayKernel collectives. Temporary
@@ -66,7 +70,7 @@ inductive Action where
   | elementwise (stage : Nat) (kernels : GpuStage)
   | collective (program : Program)
 
-def Action.eval (c : List Word) (ix : List Nat) (action : Action)
+@[expose] def Action.eval (c : List Word) (ix : List Nat) (action : Action)
     (flat : BlockLower.FlatMemory) : BlockLower.FlatMemory :=
   match action with
   | .elementwise _ stage => fun address =>
@@ -74,7 +78,7 @@ def Action.eval (c : List Word) (ix : List Nat) (action : Action)
       else flat address
   | .collective p => BlockLower.lowerProgram p flat
 
-def evalActions (p : GpuProgram) (actions : List Action)
+@[expose] def evalActions (p : GpuProgram) (actions : List Action)
     (flat : BlockLower.FlatMemory) : BlockLower.FlatMemory :=
   actions.foldl (fun m a => a.eval p.consts p.tables m) flat
 
@@ -85,7 +89,7 @@ structure Schedule where
 /-- Only fold kernels expand here; ordinary kernels remain in their one frontier
 action. Both source and renamed programs are structurally admitted. The source
 check is also the premise used by the universal collective/arena simulation. -/
-def compileKernel (p : GpuProgram) (kern : Kernel) : Except String (List Action) := do
+@[expose] def compileKernel (p : GpuProgram) (kern : Kernel) : Except String (List Action) := do
   match kern.body with
   | .fold op shape src =>
     unless kern.count == shape.outLen do throw "collective output shape differs from kernel"
@@ -98,14 +102,14 @@ def compileKernel (p : GpuProgram) (kern : Kernel) : Except String (List Action)
     return [.collective block]
   | _ => return []
 
-def ordinaryActions (stage : GpuStage) (index : Nat) : List Action :=
+@[expose] def ordinaryActions (stage : GpuStage) (index : Nat) : List Action :=
   let ordinary := stage.kernels.filter ArraySchedule.ordinary
   if ordinary.isEmpty then [] else [.elementwise index ⟨ordinary⟩]
 
 /-- Expand a frontier in precisely its emitted order: the ordinary snapshot,
 then folds in source order. Interval checks justify both serialization and use
 of temporary storage beyond the graph's original live allocation. -/
-def compileStage (p : GpuProgram) (stage : GpuStage) (index : Nat) : Except String (List Action) := do
+@[expose] def compileStage (p : GpuProgram) (stage : GpuStage) (index : Nat) : Except String (List Action) := do
   unless ArraySchedule.checkStage p.tables stage do
     throw "array frontier: serialized collective ranges interfere"
   unless ArraySchedule.checkBounds p.words p.tables stage do
@@ -113,35 +117,35 @@ def compileStage (p : GpuProgram) (stage : GpuStage) (index : Nat) : Except Stri
   let folds ← stage.kernels.mapM (compileKernel p)
   return ordinaryActions stage index ++ folds.flatten
 
-def compileStages (p : GpuProgram) (stages : List (GpuStage × Nat)) : Except String (List Action) := do
+@[expose] def compileStages (p : GpuProgram) (stages : List (GpuStage × Nat)) : Except String (List Action) := do
   let actions ← stages.mapM fun (stage,index) => compileStage p stage index
   return actions.flatten
 
-def requiredWords (p : GpuProgram) (actions : List Action) : Nat :=
+@[expose] def requiredWords (p : GpuProgram) (actions : List Action) : Nat :=
   actions.foldl (fun words action => match action with
     | .elementwise _ _ => words
     | .collective block => max words (BlockEmit.spaceSize block .device)) p.words
 
 /-- Boundary identifiers must exist even when their vectors are empty. Every
 boundary's declared interval lies in the original graph allocation. -/
-def checkBoundaries (p : GpuProgram) : Bool :=
+@[expose] def checkBoundaries (p : GpuProgram) : Bool :=
   (p.inputs ++ p.outputs).all fun w =>
     w < p.wireBase.length && w < p.wireLen.length &&
       p.wireBase.getD w 0 + p.wireLen.getD w 0 ≤ p.words
 
-def compile (p : GpuProgram) : Except String Schedule := do
+@[expose] def compile (p : GpuProgram) : Except String Schedule := do
   unless checkBoundaries p do throw "array boundary: unknown wire or range outside live allocation"
   let actions ← compileStages p p.stages.zipIdx
   return ⟨requiredWords p actions,actions.toArray⟩
 
 /-- The index buffer after an action: a collective's descriptor tables are appended after
 everything before it (its `indexBase` is the length before). -/
-def actionTables (tables : List Nat) : Action → List Nat
+@[expose] def actionTables (tables : List Nat) : Action → List Nat
   | .elementwise _ _ => tables
   | .collective block => tables ++ (BlockEmit.indexTables block).flatMap (·.toList)
 
 /-- The index buffer the host uploads for a schedule. -/
-def scheduleTables (p : GpuProgram) (actions : List Action) : List Nat :=
+@[expose] def scheduleTables (p : GpuProgram) (actions : List Action) : List Nat :=
   actions.foldl actionTables p.tables
 
 /-- Text generation consumes precisely the expanded semantic action list. -/

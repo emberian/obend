@@ -18,7 +18,7 @@ https://eprints.gla.ac.uk/146596/.
 -/
 public import Obend.Hardware.Gpu
 public import Obend.Core.Term
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.ArraySource
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.OpenHypergraph
 set_option autoImplicit false
@@ -42,13 +42,13 @@ inductive Program where
 
 abbrev Env := Nat → Vec
 
-def push (v : Vec) (env : Env) : Env
+@[expose] def push (v : Vec) (env : Env) : Env
   | 0 => v
   | i + 1 => env i
 
 /-- Denotation before graph allocation. Out-of-range array elements are zero, as
 in the word-array backend; scoping and shape checks reject invalid variable/index use. -/
-def Rhs.eval (env : Env) : Rhs → Vec
+@[expose] def Rhs.eval (env : Env) : Rhs → Vec
   | .map n op args => (List.range n).map fun i =>
       evalElemOp op (args.map fun a => (env a).getD i 0#64)
   | .gather f a => f.table.map fun i => (env a).getD i 0#64
@@ -56,20 +56,20 @@ def Rhs.eval (env : Env) : Rhs → Vec
   | .literal vs => vs
   | .fold op shape a => evalFold op shape (fun i => (env a).getD i 0#64)
 
-def Program.eval (env : Env) : Program → List Vec
+@[expose] def Program.eval (env : Env) : Program → List Vec
   | .ret arrays => arrays.map env
   | .letE value body => body.eval (push (value.eval env) env)
 
-def Rhs.vars : Rhs → List Nat
+@[expose] def Rhs.vars : Rhs → List Nat
   | .map _ _ args => args
   | .gather _ a => [a]
   | .concat a b => [a, b]
   | .literal _ => []
   | .fold _ _ a => [a]
 
-def Rhs.Scoped (n : Nat) (r : Rhs) : Prop := ∀ i ∈ r.vars, i < n
+@[expose] def Rhs.Scoped (n : Nat) (r : Rhs) : Prop := ∀ i ∈ r.vars, i < n
 
-def Program.Scoped (n : Nat) : Program → Prop
+@[expose] def Program.Scoped (n : Nat) : Program → Prop
   | .ret arrays => ∀ i ∈ arrays, i < n
   | .letE value body => value.Scoped n ∧ body.Scoped (n + 1)
 
@@ -88,7 +88,7 @@ theorem Program.scopedB_sound (p : Program) (n : Nat) (h : p.scopedB n = true) :
     exact ⟨by simpa [Rhs.Scoped, List.all_eq_true] using h.1, ih (n + 1) h.2⟩
 
 /-- Lexical variable to allocated storage; only used under `i < next`. -/
-def wire (next i : Nat) : Nat := next - 1 - i
+@[expose] def wire (next i : Nat) : Nat := next - 1 - i
 
 def Rhs.edge (next : Nat) : Rhs → ArrayEdge
   | .map n op args =>
@@ -126,8 +126,18 @@ def compile (inputLengths : List Nat) (p : Program) : ArrayGraph :=
   ⟨inputLengths ++ p.lengths inputLengths.reverse, List.range inputLengths.length,
     p.outputs inputLengths.length, p.edges inputLengths.length⟩
 
-def Represents (next : Nat) (source target : Env) : Prop :=
+@[expose] def Represents (next : Nat) (source target : Env) : Prop :=
   ∀ i, i < next → target (wire next i) = source i
+
+/-- `Represents` is inhabited at every allocation height and source environment, by the target
+that stores lexical variable `i` on wire `next - 1 - i`. -/
+theorem represents_inhabited (next : Nat) (source : Env) :
+    ∃ target, Represents next source target := by
+  refine ⟨fun w => source (next - 1 - w), ?_⟩
+  intro i hi
+  have hw : next - 1 - wire next i = i := by unfold wire; omega
+  show source (next - 1 - wire next i) = source i
+  rw [hw]
 
 @[simp] theorem Rhs.edge_dst (r : Rhs) (next : Nat) : (r.edge next).dstWire = next := by
   cases r <;> rfl
@@ -192,6 +202,20 @@ theorem compile_sound (inputLengths : List Nat) (p : Program) (source target : E
     (hs : p.Scoped inputLengths.length) (hr : Represents inputLengths.length source target) :
     evalGraph (compile inputLengths p) target = p.eval source :=
   p.lower_sound inputLengths.length source target hs hr
+
+-- Two two-lane arrays in scope: the most recent binding (lexical 0) sits on wire 1, the older on
+-- wire 0, and `compile_sound` applies to a program that binds their concatenation.
+example : ∃ target,
+    Represents 2 (push [3#64, 8#64] (push [5#64, 1#64] fun _ => [])) target ∧
+    target 1 = [3#64, 8#64] ∧ target 0 = [5#64, 1#64] ∧
+    evalGraph (compile [2, 2] (.letE (.concat 1 0) (.ret [0]))) target =
+      [[5#64, 1#64, 3#64, 8#64]] := by
+  obtain ⟨target, h⟩ := represents_inhabited 2 (push [3#64, 8#64] (push [5#64, 1#64] fun _ => []))
+  have hs : (Program.letE (.concat 1 0) (.ret [0])).Scoped 2 :=
+    Program.scopedB_sound (.letE (.concat 1 0) (.ret [0])) 2 rfl
+  exact ⟨target, h, h 0 (by decide), h 1 (by decide),
+    compile_sound [2, 2] (.letE (.concat 1 0) (.ret [0]))
+      (push [3#64, 8#64] (push [5#64, 1#64] fun _ => [])) target hs h⟩
 
 /-- A closed indexed array observation. The finite array is represented by its
 length and a mathematical index function; this does not extend Core4's syntax. -/

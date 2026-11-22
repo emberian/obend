@@ -3,7 +3,7 @@ module
 one unchanged index against a static offset, so syntax has linear size and
 logarithmic depth. The public wrapper supplies the out-of-bounds zero. -/
 public import Obend.Hardware.Gpu.ArrayProduct
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.ArraySource.Core
 open Obend.Core.Term Obend.Equiv
 set_option autoImplicit false

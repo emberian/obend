@@ -1,7 +1,16 @@
 module
+import all Obend.Hardware.Gpu.ArrayEmit
+import all Obend.Hardware.Gpu.ArraySchedule
+import all Obend.Hardware.Gpu.BlockLower
+import all Obend.Hardware.Gpu.BlockEmit
+import all Obend.Hardware.Gpu.CollectiveBlock
+import all Obend.Hardware.Gpu.CollectiveArena
+import all Obend.Hardware.Gpu.CollectiveArenaCorrect
+import all Obend.Hardware.Gpu.CollectiveBuildCorrect
+import all Obend.Hardware.Gpu.PhaseSemantics
 public import Obend.Hardware.Gpu.ArrayEmit
 public import Obend.Hardware.Gpu.CollectiveArenaCorrect
-@[expose] public section
+public section
 
 /-! Receipts and composition for the actual semantic action compiler.
 Receipts retain source construction, both admission checks, arena placement and
@@ -83,27 +92,27 @@ theorem compileKernel_fold_success (p : GpuProgram) (k : Kernel)
     simp only [compileKernel,hb] at h
     simp [hc,bind,Except.bind,pure,Except.pure] at h
     cases hs : CollectiveBlock.build op shape with
-    | error err => simp [hs,bind,Except.bind] at h
+    | error err => simp [hs] at h
     | ok source =>
-      simp only [hs,bind,Except.bind] at h
+      simp only [hs] at h
       cases hsc : source.check with
-      | error err => simp [hsc,bind,Except.bind] at h
-      | ok unit =>
-        cases unit
-        simp only [hsc,bind,Except.bind] at h
+      | error err => simp [hsc] at h
+      | ok u =>
+        cases u
+        simp only [hsc] at h
         cases ha : inArena source p.words src k.dstBase with
-        | error err => simp [ha,bind,Except.bind] at h
+        | error err => simp [ha] at h
         | ok block =>
-          simp only [ha,bind,Except.bind] at h
+          simp only [ha] at h
           cases hbc : block.check with
-          | error err => simp [hbc,bind,Except.bind] at h
-          | ok unit =>
-            cases unit
-            simp only [hbc,bind,Except.bind] at h
+          | error err => simp [hbc] at h
+          | ok u =>
+            cases u
+            simp only [hbc] at h
             by_cases hp : SourceProtocol.checkProgram block workgroupSize = true
             · exact ⟨source,block,rfl,hsc,ha,hbc,hp,
                 by simpa [hp,pure,Except.pure,bind,Except.bind] using h.symm⟩
-            · simp [hp,pure,Except.pure,bind,Except.bind] at h
+            · simp [hp] at h
   · simp [compileKernel,hb,hc,bind,Except.bind,pure,Except.pure] at h
 
 theorem compileStage_success (p : GpuProgram) (stage : GpuStage) (index : Nat)
@@ -359,7 +368,7 @@ theorem compile_correct (p : GpuProgram) (compiled : Schedule)
 
 /-- Read the graph output boundaries after the exact semantic action list used
 by text emission. -/
-def compiledOutputs (p : GpuProgram) (compiled : Schedule) (flat : BlockLower.FlatMemory) : List Vec :=
+@[expose] def compiledOutputs (p : GpuProgram) (compiled : Schedule) (flat : BlockLower.FlatMemory) : List Vec :=
   p.outputs.map fun w => (List.range (p.wireLen.getD w 0)).map fun e =>
     evalActions p compiled.actions.toList flat (.device,p.wireBase.getD w 0+e)
 

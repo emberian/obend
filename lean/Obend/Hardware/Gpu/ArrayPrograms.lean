@@ -1,11 +1,16 @@
 module
+import all Obend.Hardware.Gpu.ArrayMember
+import all Obend.Hardware.Gpu.ArrayReify
+import all Obend.Hardware.Gpu.ArraySource
+import all Obend.Hardware.Gpu.ArraySourceCore
+import all Obend.Hardware.Gpu.FoldCore
 /- Source programs used by the GPU workload gate. Public constructors produce
 lexical array syntax, directly or by checked reification of shared arithmetic.
 GPU emission selects the actual Core4 member before compiling that source. -/
 public import Obend.Hardware.Gpu.ArrayMember
 public import Obend.Hardware.Gpu.ArrayReify
 public import Obend.Hardware.Gpu.GoldilocksSource
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.ArrayPrograms
 open Obend.Hardware.OpenHypergraph Obend.Hardware.ArrayHypergraph
 

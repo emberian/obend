@@ -1,6 +1,9 @@
 module
+import all Obend.Hardware.ArrayFold
+import all Obend.Hardware.Gpu.CollectiveTree
+import all Obend.Hardware.Gpu.CollectiveBlock
 public import Obend.Hardware.Gpu.CollectiveBlock
-@[expose] public section
+public section
 
 /-! Mathematical composition of the actual chunk hierarchy. These definitions
 name descriptor values and invariants; execution remains `CollectiveBlock.build`.
@@ -755,7 +758,7 @@ theorem splitChunksFrom_disjoint (tile result : Nat) (cs : List Chunk) (htile : 
 
 /-- Length-only certificate for the actual pruned recursion: completed short
 descriptors leave the hierarchy before the remaining summaries recur. -/
-def EnoughChunkFuel (tile : Nat) (cs : List Chunk) : Nat → Prop
+@[expose] def EnoughChunkFuel (tile : Nat) (cs : List Chunk) : Nat → Prop
   | 0 => False
   | fuel+1 => (cs.filter (tile < ·.length)) = [] ∨
       EnoughChunkFuel tile (summaryChunks tile (cs.filter (tile < ·.length))) fuel
