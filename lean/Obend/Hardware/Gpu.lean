@@ -801,7 +801,7 @@ theorem find_kernel (ls : List Nat) (b : Nat → Nat) (c : List Word) (ix : List
     (hOk : ∀ d ∈ stage, d.dstWire < ls.length)
     (after : List Nat)
     (hSep : ∀ d ∈ stage, ∀ w ∈ after, d.dstWire ≠ w → separated ls b d.dstWire w = true)
-    (w e : Nat) (hlive : w ∈ after) (_hw : w < ls.length) (he : e < ls.getD w 0) :
+    (w e : Nat) (hlive : w ∈ after) (he : e < ls.getD w 0) :
     (kernels.find? (fun k => k.owns (b w + e)) = none ↔
       stage.find? (fun d => d.dstWire == w) = none) ∧
     (∀ k, kernels.find? (fun k => k.owns (b w + e)) = some k →
@@ -852,7 +852,7 @@ theorem runStage_sound (ls : List Nat) (b : Nat → Nat) (c : List Word) (ix : L
     (env : Nat → Vec) (flat : Nat → Word) (hGood : Good ls env) (hFlat : Flat ls b (liveBefore stage after) env flat) :
     Flat ls b after (evalStageSync env stage) (runStage c ix flat ⟨kernels⟩) := by
   intro w e hlive hw he
-  have hFind := find_kernel ls b c ix stage kernels hRel hNodup hOk after hSep w e hlive hw he
+  have hFind := find_kernel ls b c ix stage kernels hRel hNodup hOk after hSep w e hlive he
   simp only [runStage, evalStageSync]
   rw [evalStageAux_find env env stage hNodup w]
   rcases hk : kernels.find? (fun k => k.owns (b w + e)) with _ | k
