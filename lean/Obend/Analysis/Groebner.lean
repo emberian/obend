@@ -28,7 +28,7 @@ Implements `WS 29.2` (`NEXT-MATHEMATICA.md` §3.4):
      set the checker accepts a certificate for.
 -/
 public import Obend.Judge.RealAnalysis
-import Obend.Tactic.Tooth
+import all Obend.Judge.Class
 import all Obend.Judge.RealAnalysis
 import all Obend.Analysis.RealAnalysis
 public section
@@ -313,18 +313,47 @@ structure PositivstellensatzCert where
 
 /-- Refusal clauses for `positivstellensatzJudge`. -/
 inductive PositivstellensatzClause where
-  | feasibleAtOrigin
+  | feasibleWitness (point : List CanonicalRat)
   | negativeSosWeight
   | invalidGeneratorIndex
   | nonZeroResidual (residual : Poly)
   deriving @[expose] DecidableEq, Repr
 
-/-- Check whether the origin `ρ₀ := fun _ => 0` simultaneously satisfies all strict-positivity,
-non-negativity, and equality constraints of `q`, directly refuting `PositivstellensatzQuery.Infeasible q`. -/
-def queryFeasibleAtOrigin (q : PositivstellensatzQuery) : Bool :=
-  (q.strictPos.all fun f => decide (0 < f.eval (fun _ => 0))) &&
-  (q.nonneg.all fun g => decide (0 ≤ g.eval (fun _ => 0))) &&
-  (q.eqs.all fun h => decide (h.eval (fun _ => 0) = 0))
+/-- Variable-index bound across all strict-positivity, non-negativity, and equality polynomials of `q`. -/
+def psatzQueryVarBound (q : PositivstellensatzQuery) : Nat :=
+  polyListVarBound (q.strictPos ++ (q.nonneg ++ q.eqs))
+
+/-- Check whether the rational point `pt : List CanonicalRat` (`ratPointEnv pt : Nat → CanonicalRat`)
+simultaneously satisfies all strict-positivity, non-negativity, and equality constraints of `q`,
+directly refuting `PositivstellensatzQuery.Infeasible q`. -/
+def evalFeasibleWitness (q : PositivstellensatzQuery) (pt : List CanonicalRat) : Bool :=
+  let ρ := ratPointEnv pt
+  (q.strictPos.all fun f => decide (0 < f.eval ρ)) &&
+  (q.nonneg.all fun g => decide (0 ≤ g.eval ρ)) &&
+  (q.eqs.all fun h => decide (h.eval ρ = 0))
+
+def findFeasibleAtShell (shell : Nat) (q : PositivstellensatzQuery) : Option (List CanonicalRat) :=
+  let dim := psatzQueryVarBound q
+  let cands :=
+    if shell == 0 then polyListSeedPoints dim (q.strictPos ++ (q.nonneg ++ q.eqs))
+    else ratTuplesOfDim dim shell
+  cands.find? (evalFeasibleWitness q)
+
+/-- Grade-indexed multi-dimensional rational lattice + univariate root/vertex feasible-point search
+for `PositivstellensatzQuery`, monotonically deepened across `0 .. grade` via `Judge.deepen`. -/
+def findFeasibleRationalWitness (grade : Nat) (q : PositivstellensatzQuery) : Option (List CanonicalRat) :=
+  Judge.deepen (fun g => findFeasibleAtShell g q) grade
+
+/-- Canonical empty refutation-search probe certificate (`⟨[], ⟨[]⟩, [], []⟩`) for unbounded
+grade-indexed rational feasibility search under `positivstellensatzJudge`. -/
+def positivstellensatzSearchProbe : PositivstellensatzCert where
+  monoidIndices := []
+  sigma0        := ⟨[]⟩
+  coneTerms     := []
+  idealTerms    := []
+
+def positivstellensatzIsSearchProbe (c : PositivstellensatzCert) : Bool :=
+  c.monoidIndices.isEmpty && c.sigma0.terms.isEmpty && c.coneTerms.isEmpty && c.idealTerms.isEmpty
 
 /-- Expand the multiplicative monoid product $\prod_{idx \in \text{indices}} f_{idx}$ (defaulting to $1$ when empty). -/
 def expandMonoidProduct (strictPos : List Poly) : List Nat → Option Poly
@@ -344,14 +373,11 @@ def expandConeSum (nonneg : List Poly) : List (SOSPoly × Nat) → Option Poly
       | some g, some restSum => some (Poly.add (Poly.mul sos.expand g) restSum)
       | _, _ => none
 
-/-- Verify a Stengle Positivstellensatz certificate `c` for query `q`. -/
-def positivstellensatzCheck
-    (_fuel : Nat)
+/-- Pure algebraic Stengle certificate check (grade-independent). -/
+def positivstellensatzAlgCheck
     (q : PositivstellensatzQuery)
     (c : PositivstellensatzCert) : Judge.Verdict PositivstellensatzClause :=
-  if queryFeasibleAtOrigin q then
-    .refused .feasibleAtOrigin []
-  else if !c.sigma0.allCoeffsPos then
+  if !c.sigma0.allCoeffsPos then
     .refused .negativeSosWeight []
   else
     match expandMonoidProduct q.strictPos c.monoidIndices,
@@ -363,64 +389,107 @@ def positivstellensatzCheck
       else .refused (.nonZeroResidual total) []
     | _, _, _ => .refused .invalidGeneratorIndex []
 
-/-- What an acceptance of `positivstellensatzCheck` consists of: the origin is not a feasible point,
-the free SOS term has positive weights, the three expansions are in bounds, and their sum with the
-SOS term cancels identically. -/
+/-- Verify a Stengle Positivstellensatz certificate `c` or search for a feasible witness:
+* On `positivstellensatzSearchProbe`, searches across rational shells `0..grade` via `Judge.deepen`
+  (`judge_mono_probe_dichotomy`), returning `.uncovered` until a feasible witness is found;
+* On non-probe certificates whose algebraic check fails, checks the fixed grade-0 rational seed
+  shell first (preserving grade-invariant `Judge.mono` on explicit certificates) before reporting
+  `algRefusal`. -/
+def positivstellensatzCheck
+    (grade : Nat)
+    (q : PositivstellensatzQuery)
+    (c : PositivstellensatzCert) : Judge.Verdict PositivstellensatzClause :=
+  match positivstellensatzAlgCheck q c with
+  | .ok => .ok
+  | algRefusal =>
+    if positivstellensatzIsSearchProbe c then
+      match findFeasibleRationalWitness grade q with
+      | some pt => .refused (.feasibleWitness pt) []
+      | none    => .uncovered
+    else
+      match findFeasibleRationalWitness 0 q with
+      | some pt => .refused (.feasibleWitness pt) []
+      | none    => algRefusal
+
+theorem positivstellensatzAlgCheck_ne_uncovered (q : PositivstellensatzQuery) (c : PositivstellensatzCert) :
+    positivstellensatzAlgCheck q c ≠ .uncovered := by
+  unfold positivstellensatzAlgCheck
+  split
+  · exact fun h => nomatch h
+  · split
+    · dsimp only
+      split <;> exact fun h => nomatch h
+    · exact fun h => nomatch h
+
+theorem positivstellensatzCheck_eq_ok_iff_alg (grade : Nat) (q : PositivstellensatzQuery)
+    (c : PositivstellensatzCert) :
+    positivstellensatzCheck grade q c = .ok ↔ positivstellensatzAlgCheck q c = .ok := by
+  unfold positivstellensatzCheck
+  cases hAlg : positivstellensatzAlgCheck q c with
+  | ok => exact ⟨fun _ => rfl, fun _ => rfl⟩
+  | uncovered => exact False.elim (positivstellensatzAlgCheck_ne_uncovered q c hAlg)
+  | refused k p =>
+    simp only
+    constructor
+    · intro hOk
+      split at hOk
+      · split at hOk <;> contradiction
+      · split at hOk <;> contradiction
+    · intro h; cases h
+
+/-- What an acceptance of `positivstellensatzCheck` consists of: the free SOS term has positive
+weights, the three expansions are in bounds, and their sum with the SOS term cancels identically. -/
 theorem positivstellensatzCheck_ok_elim (fuel : Nat) (q : PositivstellensatzQuery) (c : PositivstellensatzCert)
     (hOk : positivstellensatzCheck fuel q c = .ok) :
-    queryFeasibleAtOrigin q = false ∧
     c.sigma0.allCoeffsPos = true ∧
     ∃ monoidPoly conePoly idealPoly,
       expandMonoidProduct q.strictPos c.monoidIndices = some monoidPoly ∧
       expandConeSum q.nonneg c.coneTerms = some conePoly ∧
       expandIdealCombination? q.eqs c.idealTerms = some idealPoly ∧
       (Poly.add monoidPoly (Poly.add c.sigma0.expand (Poly.add conePoly idealPoly))).isZero = true := by
-  unfold positivstellensatzCheck at hOk
-  by_cases hFeas : queryFeasibleAtOrigin q = true
-  · simp [hFeas] at hOk
-  · simp only [hFeas, Bool.false_eq_true, ↓reduceIte] at hOk
-    by_cases hPos0 : c.sigma0.allCoeffsPos = true
-    · simp only [hPos0, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-      rcases Option.eq_none_or_eq_some (expandMonoidProduct q.strictPos c.monoidIndices) with hMon | ⟨monoidPoly, hMon⟩
-      · rw [hMon] at hOk; contradiction
-      · rw [hMon] at hOk
-        rcases Option.eq_none_or_eq_some (expandConeSum q.nonneg c.coneTerms) with hCone | ⟨conePoly, hCone⟩
-        · rw [hCone] at hOk; contradiction
-        · rw [hCone] at hOk
-          rcases Option.eq_none_or_eq_some (expandIdealCombination? q.eqs c.idealTerms) with hIdeal | ⟨idealPoly, hIdeal⟩
-          · rw [hIdeal] at hOk; contradiction
-          · rw [hIdeal] at hOk
-            dsimp only at hOk
-            split at hOk
-            · rename_i hTotalZero
-              exact ⟨Bool.eq_false_of_ne_true hFeas, hPos0, monoidPoly, conePoly, idealPoly,
-                hMon, hCone, hIdeal, hTotalZero⟩
-            · contradiction
-    · simp [hPos0] at hOk
+  have hAlg := (positivstellensatzCheck_eq_ok_iff_alg fuel q c).mp hOk
+  unfold positivstellensatzAlgCheck at hAlg
+  by_cases hPos0 : c.sigma0.allCoeffsPos = true
+  · simp only [hPos0, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hAlg
+    rcases Option.eq_none_or_eq_some (expandMonoidProduct q.strictPos c.monoidIndices) with hMon | ⟨monoidPoly, hMon⟩
+    · rw [hMon] at hAlg; contradiction
+    · rw [hMon] at hAlg
+      rcases Option.eq_none_or_eq_some (expandConeSum q.nonneg c.coneTerms) with hCone | ⟨conePoly, hCone⟩
+      · rw [hCone] at hAlg; contradiction
+      · rw [hCone] at hAlg
+        rcases Option.eq_none_or_eq_some (expandIdealCombination? q.eqs c.idealTerms) with hIdeal | ⟨idealPoly, hIdeal⟩
+        · rw [hIdeal] at hAlg; contradiction
+        · rw [hIdeal] at hAlg
+          dsimp only at hAlg
+          split at hAlg
+          · rename_i hTotalZero
+            exact ⟨hPos0, monoidPoly, conePoly, idealPoly, hMon, hCone, hIdeal, hTotalZero⟩
+          · contradiction
+  · simp [hPos0] at hAlg
 
-/-- The converse of `positivstellensatzCheck_ok_elim`: those four facts make the checker accept. -/
+/-- The converse of `positivstellensatzCheck_ok_elim`: those algebraic facts make the checker accept. -/
 theorem positivstellensatzCheck_ok_intro (fuel : Nat) (q : PositivstellensatzQuery) (c : PositivstellensatzCert)
     (monoidPoly conePoly idealPoly : Poly)
-    (hFeas : queryFeasibleAtOrigin q = false)
     (hPos0 : c.sigma0.allCoeffsPos = true)
     (hMon : expandMonoidProduct q.strictPos c.monoidIndices = some monoidPoly)
     (hCone : expandConeSum q.nonneg c.coneTerms = some conePoly)
     (hIdeal : expandIdealCombination? q.eqs c.idealTerms = some idealPoly)
     (hZero : (Poly.add monoidPoly (Poly.add c.sigma0.expand (Poly.add conePoly idealPoly))).isZero = true) :
     positivstellensatzCheck fuel q c = .ok := by
-  unfold positivstellensatzCheck
-  simp only [hFeas, hPos0, hMon, hCone, hIdeal, hZero, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+  apply (positivstellensatzCheck_eq_ok_iff_alg fuel q c).mpr
+  unfold positivstellensatzAlgCheck
+  simp only [hPos0, hMon, hCone, hIdeal, hZero, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
 
-/-- The grade is not consulted: the checker decides every certificate at grade `0`. -/
-theorem positivstellensatzCheck_fuel_irrelevant (r r' : Nat) (q : PositivstellensatzQuery)
+/-- Acceptance (`.ok`) is invariant across all grades `r, r'`. -/
+theorem positivstellensatzCheck_ok_grade_irrelevant (r r' : Nat) (q : PositivstellensatzQuery)
     (c : PositivstellensatzCert) :
-    positivstellensatzCheck r q c = positivstellensatzCheck r' q c := by
-  rfl
+    positivstellensatzCheck r q c = .ok ↔ positivstellensatzCheck r' q c = .ok := by
+  rw [positivstellensatzCheck_eq_ok_iff_alg, positivstellensatzCheck_eq_ok_iff_alg]
 
 theorem positivstellensatzCheck_sigma0_pos (fuel : Nat) (q : PositivstellensatzQuery) (c : PositivstellensatzCert)
     (h : positivstellensatzCheck fuel q c = .ok) :
     c.sigma0.allCoeffsPos = true :=
-  (positivstellensatzCheck_ok_elim fuel q c h).2.1
+  (positivstellensatzCheck_ok_elim fuel q c h).1
 
 theorem expandMonoidProduct_eval_pos
     (ρ : Nat → CanonicalRat) (strictPos : List Poly)
@@ -544,7 +613,7 @@ theorem positivstellensatz_general_eval_infeasible
     (fuel : Nat) (q : PositivstellensatzQuery) (c : PositivstellensatzCert)
     (hOk : positivstellensatzCheck fuel q c = .ok) :
     PositivstellensatzQuery.Infeasible q := by
-  obtain ⟨_, hPos0, monoidPoly, conePoly, idealPoly, hMon, hCone, hIdeal, hZero⟩ :=
+  obtain ⟨hPos0, monoidPoly, conePoly, idealPoly, hMon, hCone, hIdeal, hZero⟩ :=
     positivstellensatzCheck_ok_elim fuel q c hOk
   exact stengle_identity_infeasible q c.sigma0 c.monoidIndices c.coneTerms c.idealTerms
     monoidPoly conePoly idealPoly hPos0 hMon hCone hIdeal hZero
@@ -562,47 +631,36 @@ theorem positivstellensatz_eval_infeasible
     (hNonneg : ∀ g ∈ q.nonneg, 0 ≤ g.eval ρ)
     (hEqs : ∀ h ∈ q.eqs, h.eval ρ = 0) :
     False := by
-  unfold positivstellensatzCheck at hOk
-  by_cases hFeas : queryFeasibleAtOrigin q = true
-  · simp [hFeas] at hOk
-  · simp only [hFeas, Bool.false_eq_true, ↓reduceIte] at hOk
-    by_cases hPos0 : c.sigma0.allCoeffsPos = true
-    · simp only [hPos0, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hMonoidOne,
-        expandMonoidProduct] at hOk
-      cases hCone : expandConeSum q.nonneg c.coneTerms with
-      | none => rw [hCone] at hOk; contradiction
-      | some conePoly =>
-        rw [hCone] at hOk
-        cases hIdeal : expandIdealCombination? q.eqs c.idealTerms with
-        | none => rw [hIdeal] at hOk; contradiction
-        | some idealPoly =>
-          rw [hIdeal] at hOk
-          dsimp only at hOk
-          split at hOk
-          · rename_i hTotalZero
-            have hEvalTotal := Poly.eval_isZero ρ _ hTotalZero
-            rw [Poly.eval_add, Poly.eval_add, Poly.eval_add, Poly.eval_one] at hEvalTotal
-            have hSig0 := SOSPoly.eval_expand_nonneg ρ c.sigma0 hPos0
-            have hConeNonneg := expandConeSum_eval_nonneg ρ q.nonneg hNonneg c.coneTerms conePoly hCone
-            have hIdealZero := expandIdealCombination?_eval_eq_zero ρ q.eqs hEqs c.idealTerms idealPoly hIdeal
-            grind
-          · contradiction
-    · simp [hPos0] at hOk
+  obtain ⟨hPos0, monoidPoly, conePoly, idealPoly, hMon, hCone, hIdeal, hZero⟩ :=
+    positivstellensatzCheck_ok_elim fuel q c hOk
+  rw [hMonoidOne, expandMonoidProduct] at hMon
+  injection hMon with hMonEq
+  subst hMonEq
+  have hEvalTotal := Poly.eval_isZero ρ _ hZero
+  rw [Poly.eval_add, Poly.eval_add, Poly.eval_add, Poly.eval_one] at hEvalTotal
+  have hSig0 := SOSPoly.eval_expand_nonneg ρ c.sigma0 hPos0
+  have hConeNonneg := expandConeSum_eval_nonneg ρ q.nonneg hNonneg c.coneTerms conePoly hCone
+  have hIdealZero := expandIdealCombination?_eval_eq_zero ρ q.eqs hEqs c.idealTerms idealPoly hIdeal
+  grind
 
-/-- Refuting clauses of `positivstellensatzJudge`: `.feasibleAtOrigin` constructively exhibits
-the feasible point `ρ₀ = fun _ => 0`, refuting `PositivstellensatzQuery.Infeasible q`. -/
+/-- Refuting clauses of `positivstellensatzJudge`: `.feasibleWitness pt` constructively exhibits
+a rational point `pt` (`ratPointEnv pt`) satisfying every constraint of `q`, refuting
+`PositivstellensatzQuery.Infeasible q`. -/
 def positivstellensatzRefutes : PositivstellensatzClause → Bool
-  | .feasibleAtOrigin => true
+  | .feasibleWitness _ => true
   | _ => false
 
-theorem queryFeasibleAtOrigin_refutes (q : PositivstellensatzQuery)
-    (hFeas : queryFeasibleAtOrigin q = true) :
+/-- **Theorem (`feasibleWitness_refutes`)**:
+Any rational witness point `pt : List CanonicalRat` passing `evalFeasibleWitness q pt = true`
+genuinely refutes `PositivstellensatzQuery.Infeasible q`. -/
+theorem feasibleWitness_refutes (q : PositivstellensatzQuery) (pt : List CanonicalRat)
+    (hFeas : evalFeasibleWitness q pt = true) :
     ¬ PositivstellensatzQuery.Infeasible q := by
   intro hInfeas
-  unfold queryFeasibleAtOrigin at hFeas
+  unfold evalFeasibleWitness at hFeas
   rcases (Bool.and_eq_true _ _).mp hFeas with ⟨hStrictNonneg, hEqsB⟩
   rcases (Bool.and_eq_true _ _).mp hStrictNonneg with ⟨hStrictB, hNonnegB⟩
-  apply hInfeas (fun _ => 0)
+  apply hInfeas (ratPointEnv pt)
   · intro f hf
     exact of_decide_eq_true (List.all_eq_true.mp hStrictB f hf)
   · intro g hg
@@ -610,27 +668,200 @@ theorem queryFeasibleAtOrigin_refutes (q : PositivstellensatzQuery)
   · intro h hh
     exact of_decide_eq_true (List.all_eq_true.mp hEqsB h hh)
 
+theorem findFeasibleAtShell_sound {shell : Nat} {q : PositivstellensatzQuery} {pt : List CanonicalRat}
+    (h : findFeasibleAtShell shell q = some pt) :
+    evalFeasibleWitness q pt = true := by
+  unfold findFeasibleAtShell at h
+  exact list_find?_some_prop (evalFeasibleWitness q) h
+
+theorem findFeasibleRationalWitness_sound {grade : Nat} {q : PositivstellensatzQuery} {pt : List CanonicalRat}
+    (h : findFeasibleRationalWitness grade q = some pt) :
+    evalFeasibleWitness q pt = true := by
+  obtain ⟨_, _, hi⟩ := Judge.deepen_some _ h
+  exact findFeasibleAtShell_sound hi
+
+private theorem findFeasibleRationalWitness_inhabited :
+    ∃ pt1 pt2,
+      findFeasibleAtShell 0 { strictPos := [polyOfTerm [] 1], nonneg := [], eqs := [] } = some pt1 ∧
+      findFeasibleRationalWitness 0 { strictPos := [polyOfTerm [] 1], nonneg := [], eqs := [] } = some pt2 := by
+  have h1 : (findFeasibleAtShell 0 { strictPos := [polyOfTerm [] 1], nonneg := [], eqs := [] }).isSome = true := by
+    decide +kernel
+  have h2 : (findFeasibleRationalWitness 0 { strictPos := [polyOfTerm [] 1], nonneg := [], eqs := [] }).isSome = true := by
+    decide +kernel
+  cases hs1 : findFeasibleAtShell 0 { strictPos := [polyOfTerm [] 1], nonneg := [], eqs := [] } with
+  | none => rw [hs1] at h1; cases h1
+  | some pt1 =>
+    cases hs2 : findFeasibleRationalWitness 0 { strictPos := [polyOfTerm [] 1], nonneg := [], eqs := [] } with
+    | none => rw [hs2] at h2; cases h2
+    | some pt2 => exact ⟨pt1, pt2, rfl, rfl⟩
+
+theorem evalFeasibleWitness_of_env (q : PositivstellensatzQuery) (ρ : Nat → CanonicalRat)
+    (hStrict : ∀ f ∈ q.strictPos, 0 < f.eval ρ)
+    (hNonneg : ∀ g ∈ q.nonneg, 0 ≤ g.eval ρ)
+    (hEqs : ∀ h ∈ q.eqs, h.eval ρ = 0) :
+    evalFeasibleWitness q ((List.range (psatzQueryVarBound q)).map ρ) = true := by
+  let dim := psatzQueryVarBound q
+  let pref := (List.range dim).map ρ
+  have hAgree : ∀ v, v < dim → ratPointEnv pref v = ρ v :=
+    fun v hv => ratPointEnv_map_range dim ρ hv
+  simp only [evalFeasibleWitness, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq]
+  refine ⟨⟨?_, ?_⟩, ?_⟩
+  · intro f hf
+    have hfB : polyVarBound f ≤ dim :=
+      polyVarBound_le_polyListVarBound (List.mem_append_left _ hf)
+    rw [polyVarBound_eval_congr hfB hAgree]
+    exact hStrict f hf
+  · intro g hg
+    have hgB : polyVarBound g ≤ dim :=
+      polyVarBound_le_polyListVarBound (List.mem_append_right _ (List.mem_append_left _ hg))
+    rw [polyVarBound_eval_congr hgB hAgree]
+    exact hNonneg g hg
+  · intro h hh
+    have hhB : polyVarBound h ≤ dim :=
+      polyVarBound_le_polyListVarBound (List.mem_append_right _ (List.mem_append_right _ hh))
+    rw [polyVarBound_eval_congr hhB hAgree]
+    exact hEqs h hh
+
+theorem evalFeasibleWitness_envPrefix {q : PositivstellensatzQuery} {pt : List CanonicalRat}
+    (hFeas : evalFeasibleWitness q pt = true) :
+    evalFeasibleWitness q ((List.range (psatzQueryVarBound q)).map (ratPointEnv pt)) = true := by
+  simp only [evalFeasibleWitness, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hFeas
+  exact evalFeasibleWitness_of_env q (ratPointEnv pt) hFeas.1.1 hFeas.1.2 hFeas.2
+
+/-- **Rational Open-Cone & Finite-Height Completeness of Refutation (`positivstellensatz_rational_witness_complete`)**:
+Any feasible rational point `ρ : List CanonicalRat` (`evalFeasibleWitness q ρ = true`) whose
+coordinates have height `|num| ≤ B ∧ den ≤ B` (`1 ≤ B`) is discovered at `grade = B` and emits a
+verified `.refused (.feasibleWitness w) []` verdict refuting `PositivstellensatzQuery.Infeasible q`. -/
+theorem positivstellensatz_rational_witness_complete
+    (q : PositivstellensatzQuery) (ρ : List CanonicalRat) (B : Nat)
+    (hB1 : 1 ≤ B)
+    (hCoords : ∀ x ∈ ρ, x.num.natAbs ≤ B ∧ x.den ≤ B)
+    (hFeas : evalFeasibleWitness q ρ = true) :
+    ∃ w, findFeasibleRationalWitness B q = some w ∧
+         evalFeasibleWitness q w = true ∧
+         positivstellensatzCheck B q positivstellensatzSearchProbe = .refused (.feasibleWitness w) [] ∧
+         positivstellensatzRefutes (.feasibleWitness w) = true ∧
+         ¬ PositivstellensatzQuery.Infeasible q := by
+  have hPrefFeas := evalFeasibleWitness_envPrefix hFeas
+  have hPrefMem := envPrefix_mem_ratTuplesOfDim (psatzQueryVarBound q) B ρ hB1 hCoords
+  have hShell : ∃ w0, findFeasibleAtShell B q = some w0 ∧ evalFeasibleWitness q w0 = true := by
+    unfold findFeasibleAtShell
+    have hNe0 : (B == 0) = false := beq_false_of_ne (by omega)
+    rw [hNe0]
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    exact list_find?_exists_of_mem (evalFeasibleWitness q) _ hPrefMem hPrefFeas
+  obtain ⟨w0, hw0, _⟩ := hShell
+  obtain ⟨w, hwDeep⟩ := Judge.deepen_isSome (fun g => findFeasibleAtShell g q) hw0
+  change findFeasibleRationalWitness B q = some w at hwDeep
+  have hwFeas := findFeasibleRationalWitness_sound hwDeep
+  have hCheck : positivstellensatzCheck B q positivstellensatzSearchProbe = .refused (.feasibleWitness w) [] := by
+    unfold positivstellensatzCheck
+    have hAlg : positivstellensatzAlgCheck q positivstellensatzSearchProbe =
+        .refused (.nonZeroResidual Poly.one) [] := by
+      unfold positivstellensatzAlgCheck positivstellensatzSearchProbe
+      simp [SOSPoly.allCoeffsPos, expandMonoidProduct, expandConeSum, expandIdealCombination?,
+        SOSPoly.expand, Poly.sumBy, Poly.add, Poly.zero, Poly.one, Poly.isZero]
+    have hProbe : positivstellensatzIsSearchProbe positivstellensatzSearchProbe = true := by
+      unfold positivstellensatzIsSearchProbe positivstellensatzSearchProbe
+      rfl
+    rw [hAlg, hProbe]
+    simp only [↓reduceIte, hwDeep]
+  exact ⟨w, hwDeep, hwFeas, hCheck, by unfold positivstellensatzRefutes; rfl, feasibleWitness_refutes q w hwFeas⟩
+
+/-- **Rational Open-Cone Completeness of Refutation (`positivstellensatz_open_cone_refutation_complete`)**:
+For any semi-algebraic open-cone / feasible rational assignment `ρ : Nat → CanonicalRat` satisfying
+`∀ f ∈ q.strictPos, 0 < f.eval ρ`, `∀ g ∈ q.nonneg, 0 ≤ g.eval ρ`, and `∀ h ∈ q.eqs, h.eval ρ = 0`,
+there exist a finite `grade : Nat` and rational witness `w : List CanonicalRat` at which
+`positivstellensatzJudge` refutes `q`. -/
+theorem positivstellensatz_open_cone_refutation_complete
+    (q : PositivstellensatzQuery) (ρ : Nat → CanonicalRat)
+    (hStrict : ∀ f ∈ q.strictPos, 0 < f.eval ρ)
+    (hNonneg : ∀ g ∈ q.nonneg, 0 ≤ g.eval ρ)
+    (hEqs : ∀ h ∈ q.eqs, h.eval ρ = 0) :
+    ∃ grade w,
+      positivstellensatzCheck grade q positivstellensatzSearchProbe = .refused (.feasibleWitness w) [] ∧
+      positivstellensatzRefutes (.feasibleWitness w) = true ∧
+      ¬ PositivstellensatzQuery.Infeasible q := by
+  let pt := (List.range (psatzQueryVarBound q)).map ρ
+  let B := ratTupleHeightBound pt
+  have hFeas : evalFeasibleWitness q pt = true := evalFeasibleWitness_of_env q ρ hStrict hNonneg hEqs
+  obtain ⟨w, _, _, hCheck, hRefutes, hNotInfeas⟩ :=
+    positivstellensatz_rational_witness_complete q pt B
+      (one_le_ratTupleHeightBound pt)
+      (fun _ hx => coord_le_ratTupleHeightBound hx)
+      hFeas
+  exact ⟨B, w, hCheck, hRefutes, hNotInfeas⟩
+
+theorem positivstellensatzAlgCheck_not_feasibleWitness
+    {q : PositivstellensatzQuery} {c : PositivstellensatzCert}
+    {pt : List CanonicalRat} {p : List Nat} :
+    positivstellensatzAlgCheck q c ≠ .refused (.feasibleWitness pt) p := by
+  unfold positivstellensatzAlgCheck
+  split
+  · exact fun h => nomatch h
+  · split
+    · dsimp only
+      split <;> exact fun h => nomatch h
+    · exact fun h => nomatch h
+
 theorem positivstellensatzCheck_refuted
     {r : Nat} {q : PositivstellensatzQuery} {c : PositivstellensatzCert}
     {k : PositivstellensatzClause} {p : List Nat}
     (hRef : positivstellensatzCheck r q c = .refused k p)
     (hRefutes : positivstellensatzRefutes k = true) :
     ¬ PositivstellensatzQuery.Infeasible q := by
-  have hk : k = .feasibleAtOrigin := by
-    cases k <;> simp [positivstellensatzRefutes] at hRefutes ⊢
-  subst hk
-  unfold positivstellensatzCheck at hRef
-  by_cases hFeas : queryFeasibleAtOrigin q = true
-  · exact queryFeasibleAtOrigin_refutes q hFeas
-  · simp only [hFeas, Bool.false_eq_true, ↓reduceIte] at hRef
-    by_cases hPos0 : c.sigma0.allCoeffsPos = true
-    · simp only [hPos0, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
-      cases hMon : expandMonoidProduct q.strictPos c.monoidIndices <;>
-        cases hCone : expandConeSum q.nonneg c.coneTerms <;>
-        cases hIdeal : expandIdealCombination? q.eqs c.idealTerms <;>
-        simp [hMon, hCone, hIdeal] at hRef
-      split at hRef <;> simp at hRef
-    · simp [hPos0] at hRef
+  cases k with
+  | negativeSosWeight | invalidGeneratorIndex | nonZeroResidual _ =>
+    cases hRefutes
+  | feasibleWitness pt =>
+    unfold positivstellensatzCheck at hRef
+    cases hAlg : positivstellensatzAlgCheck q c with
+    | ok => rw [hAlg] at hRef; cases hRef
+    | uncovered => exact False.elim (positivstellensatzAlgCheck_ne_uncovered q c hAlg)
+    | refused kAlg pAlg =>
+      rw [hAlg] at hRef
+      dsimp only at hRef
+      split at hRef
+      · cases hw : findFeasibleRationalWitness r q with
+        | none => rw [hw] at hRef; cases hRef
+        | some w =>
+          rw [hw] at hRef
+          injection hRef with hClause _
+          injection hClause with hEq
+          subst hEq
+          exact feasibleWitness_refutes q w (findFeasibleRationalWitness_sound hw)
+      · cases hw0 : findFeasibleRationalWitness 0 q with
+        | none =>
+          rw [hw0] at hRef
+          exact False.elim (positivstellensatzAlgCheck_not_feasibleWitness (hAlg.trans hRef))
+        | some w =>
+          rw [hw0] at hRef
+          injection hRef with hClause _
+          injection hClause with hEq
+          subst hEq
+          exact feasibleWitness_refutes q w (findFeasibleRationalWitness_sound hw0)
+
+theorem positivstellensatzCheck_mono
+    {r r' : Nat} {q : PositivstellensatzQuery} {c : PositivstellensatzCert}
+    (le : r ≤ r') (hne : positivstellensatzCheck r q c ≠ .uncovered) :
+    positivstellensatzCheck r' q c = positivstellensatzCheck r q c := by
+  unfold positivstellensatzCheck at hne ⊢
+  cases hAlg : positivstellensatzAlgCheck q c with
+  | ok => rfl
+  | uncovered => exact False.elim (positivstellensatzAlgCheck_ne_uncovered q c hAlg)
+  | refused kAlg pAlg =>
+    rw [hAlg] at hne
+    dsimp only at hne ⊢
+    split
+    · rename_i hProbe
+      simp only [hProbe, ↓reduceIte] at hne
+      cases hw : findFeasibleRationalWitness r q with
+      | none => rw [hw] at hne; exact False.elim (hne rfl)
+      | some pt =>
+        have hw' : findFeasibleRationalWitness r' q = some pt :=
+          Judge.deepen_mono _ hw le
+        simp only [hw']
+    · rfl
 
 /-! ### The certificate as algebra: Stengle's identity stated over the polynomial ring
 
@@ -842,27 +1073,23 @@ theorem stenglePositivstellensatzRefutable_infeasible (q : PositivstellensatzQue
     ((polyTermsNil_iff_isZero _).mp hZero)
 
 /-- **Theorem (`stenglePositivstellensatzRefutable_iff_check_ok`)**: the checker accepts some
-certificate for `q` exactly when `q` has a Stengle identity. The origin test of the checker costs
-nothing here: an identity already rules the origin out (`stenglePositivstellensatzRefutable_infeasible`). -/
+certificate for `q` exactly when `q` has a Stengle identity. -/
 theorem stenglePositivstellensatzRefutable_iff_check_ok (q : PositivstellensatzQuery) :
     StenglePositivstellensatzRefutable q ↔ ∃ c r, positivstellensatzCheck r q c = .ok := by
   constructor
   · intro hRef
-    have hInfeas := stenglePositivstellensatzRefutable_infeasible q hRef
-    have hFeas : queryFeasibleAtOrigin q = false :=
-      Bool.eq_false_of_ne_true (fun hF => queryFeasibleAtOrigin_refutes q hF hInfeas)
     obtain ⟨monoidIndices, sigma0, coneTerms, idealTerms, monoidPoly, conePoly, idealPoly,
       hPos, hMon, hCone, hIdeal, hZero⟩ := hRef
     exact ⟨⟨monoidIndices, sigma0, coneTerms, idealTerms⟩, 0,
       positivstellensatzCheck_ok_intro 0 q ⟨monoidIndices, sigma0, coneTerms, idealTerms⟩
-        monoidPoly conePoly idealPoly hFeas
+        monoidPoly conePoly idealPoly
         ((posSosWeights_iff sigma0).mp hPos)
         ((monoidProdRel_iff q.strictPos monoidIndices monoidPoly).mp hMon)
         ((coneSumRel_iff q.nonneg coneTerms conePoly).mp hCone)
         ((idealCombRel_iff q.eqs idealTerms idealPoly).mp hIdeal)
         ((polyTermsNil_iff_isZero _).mp hZero)⟩
   · rintro ⟨c, r, hOk⟩
-    obtain ⟨_, hPos0, monoidPoly, conePoly, idealPoly, hMon, hCone, hIdeal, hZero⟩ :=
+    obtain ⟨hPos0, monoidPoly, conePoly, idealPoly, hMon, hCone, hIdeal, hZero⟩ :=
       positivstellensatzCheck_ok_elim r q c hOk
     exact ⟨c.monoidIndices, c.sigma0, c.coneTerms, c.idealTerms, monoidPoly, conePoly, idealPoly,
       (posSosWeights_iff c.sigma0).mpr hPos0,
@@ -870,21 +1097,6 @@ theorem stenglePositivstellensatzRefutable_iff_check_ok (q : PositivstellensatzQ
       (coneSumRel_iff q.nonneg c.coneTerms conePoly).mpr hCone,
       (idealCombRel_iff q.eqs c.idealTerms idealPoly).mpr hIdeal,
       (polyTermsNil_iff_isZero _).mpr hZero⟩
-
--- Omitting the positive monoid term lets the empty sum refute even a feasible query.
-#tooth stenglePositivstellensatzRefutable_infeasible by mutation StenglePositivstellensatzRefutable :=
-  fun q => ∃ sigma0 coneTerms idealTerms conePoly idealPoly,
-    PosSosWeights sigma0 ∧ ConeSumRel q.nonneg coneTerms conePoly ∧
-    IdealCombRel q.eqs idealTerms idealPoly ∧
-    (Poly.add sigma0.expand (Poly.add conePoly idealPoly)).terms = []
-
--- Ignoring the selected strict generators loses identities that need a vanishing factor.
-#tooth stenglePositivstellensatzRefutable_iff_check_ok by mutation expandMonoidProduct :=
-  fun _ _ => some Poly.one
-
--- An invalid generator index disqualifies this certificate only.
-#tooth positivstellensatzCheck_refuted by mutation positivstellensatzRefutes :=
-  fun k => k == .feasibleAtOrigin || k == .invalidGeneratorIndex
 
 instance positivstellensatzJudge : Judge PositivstellensatzQuery PositivstellensatzCert where
   Clause := PositivstellensatzClause
@@ -897,7 +1109,24 @@ instance positivstellensatzJudge : Judge PositivstellensatzQuery Positivstellens
   complete := by
     intro q hFrag _
     exact (stenglePositivstellensatzRefutable_iff_check_ok q).mp hFrag
-  mono := by intro _ _ _ _ _ _; rfl
+  mono := fun le hne => positivstellensatzCheck_mono le hne
+
+/-- Non-origin shifted semi-algebraic system $x_0 - 4 > 0 \;\wedge\; 25 - x_0^2 \ge 0$:
+the origin $x_0 = 0$ violates $x_0 - 4 > 0$ (`evalFeasibleWitness q [] = false`), yet
+`positivstellensatzCheck` extracts the shifted rational witness $x_0 = 9/2$ (`9/2 > 4` and
+`25 - 81/4 = 19/4 ≥ 0`) and refutes `PositivstellensatzQuery.Infeasible` at grade `0`! -/
+example :
+    let x0 := polyVarPow 0 1
+    let qShifted : PositivstellensatzQuery :=
+      { strictPos := [Poly.sub x0 (polyOfTerm [] 4)]
+      , nonneg    := [Poly.sub (polyOfTerm [] 25) (Poly.sqr x0)]
+      , eqs       := [] }
+    evalFeasibleWitness qShifted [] = false ∧
+    evalFeasibleWitness qShifted [5] = true ∧
+    positivstellensatzCheck 0 qShifted positivstellensatzSearchProbe =
+      .refused (.feasibleWitness [CanonicalRat.mk 9 2]) [] ∧
+    positivstellensatzRefutes (.feasibleWitness [CanonicalRat.mk 9 2]) = true := by
+  decide +kernel
 
 /-- **Theorem (`stengle_positivstellensatz_sound`)**:
 1. **Universal Soundness**:

@@ -39,7 +39,6 @@ import all Obend.Analysis.RealAnalysis
 public import Obend.Analysis.Groebner
 import all Obend.Analysis.Groebner
 public import Obend.Analysis.Diff
-public import Obend.Tactic.Tooth
 public section
 
 namespace Obend.Analysis
@@ -585,6 +584,35 @@ theorem sumVarSquaresPoly_eval_nonneg (env : Nat → CanonicalRat) :
     have hSq := Poly.eval_sq_nonneg env (polyOfTerm [(i, 1)] 1)
     grind
 
+theorem rat_sq_pos_of_ne_zero {x : CanonicalRat} (hx : x ≠ 0) : 0 < x * x := by
+  by_cases hPos : 0 < x
+  · exact Rat.mul_pos hPos hPos
+  · have hNegPos : 0 < -x := by grind
+    have hProd := Rat.mul_pos hNegPos hNegPos
+    grind
+
+/-- Strictly positive squared Euclidean norm `0 < ‖x‖²` whenever any state coordinate
+`v < dim` is non-zero (`env v ≠ 0`). -/
+theorem sumVarSquaresPoly_eval_pos_of_coord_ne_zero
+    (env : Nat → CanonicalRat) :
+    ∀ (dim v : Nat), v < dim → env v ≠ 0 → 0 < (sumVarSquaresPoly dim).eval env
+  | 0, _, hv, _ => nomatch hv
+  | i + 1, v, hv, hNe => by
+    dsimp only [sumVarSquaresPoly]
+    rw [Poly.eval_add, Poly.eval_sqr, eval_polyOfTerm_var1]
+    by_cases hvi : v = i
+    · subst hvi
+      have hNonneg := sumVarSquaresPoly_eval_nonneg env v
+      have hSqPos := rat_sq_pos_of_ne_zero hNe
+      grind
+    · have hvLt : v < i := by omega
+      have hIH := sumVarSquaresPoly_eval_pos_of_coord_ne_zero env i v hvLt hNe
+      have hSqNonneg : 0 ≤ env i * env i := by
+        by_cases hz : env i = 0
+        · rw [hz]; grind
+        · have hp := rat_sq_pos_of_ne_zero hz; grind
+      grind
+
 /-- Specification of a nonlinear polynomial ODE $\dot{x} = f(x)$ and candidate Lyapunov function $V(x)$:
 * `dim`: state space dimension $n$,
 * `vectorField`: polynomial vector field $f = [f_0, \dots, f_{n-1}]$,
@@ -1023,9 +1051,15 @@ structure SosLyapunovCert where
   daeWitness      : DaeManifoldWitness
   deriving DecidableEq, Repr
 
-/-- Refusal clause for `sosLyapunovJudge`. -/
+/-- Refusal clause for `sosLyapunovJudge`, distinguishing structural/witness-carrying counterexamples
+(which genuinely refute `SosLyapunovProblem.SemanticMeaning`) from certificate-only diagnostics. -/
 inductive SosLyapunovClause where
   | malformedDimensionOrParam
+  | lyapunovRadialNonpos (witness : List CanonicalRat)
+  | lyapunovLieAscent (witness : List CanonicalRat)
+  | cbfUnsafeOverlap (witness : List CanonicalRat)
+  | cbfNagumoViolation (witness : List CanonicalRat)
+  | daeManifoldViolation (witness : List CanonicalRat)
   | lyapunovFailed
   | cbfFailed
   | daeManifoldFailed
@@ -1042,130 +1076,7 @@ def checkSosProblemWellFormed (prob : SosLyapunovProblem) : Bool :=
   checkDaeManifoldDims prob.dae &&
   decide (0 < prob.dae.regDelta)
 
-/-- Independent semantic meaning of `SosLyapunovProblem`. -/
-def SosLyapunovProblem.SemanticMeaning (prob : SosLyapunovProblem) : Prop :=
-  (checkSosLyapunovDims prob.lyapunov = true ∧
-   0 < prob.lyapunov.dim ∧
-   prob.lyapunov.vectorField.length = prob.lyapunov.dim ∧
-   0 < prob.lyapunov.radialEps ∧
-   0 ≤ prob.lyapunov.decayGamma ∧
-   prob.lyapunov.lyapunovV.eval originEnv = 0 ∧
-   ∀ env : Nat → CanonicalRat,
-     (∀ g, g ∈ prob.lyapunov.domainIneqs → 0 ≤ g.eval env) →
-     0 ≤ prob.lyapunov.lyapunovV.eval env ∧
-     (lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField).eval env ≤ 0) ∧
-  (checkSosCbfDims prob.cbf = true ∧
-   0 ≤ prob.cbf.classKAlpha ∧
-   ∀ env : Nat → CanonicalRat,
-     (∀ g, g ∈ prob.cbf.domainIneqs → 0 ≤ g.eval env) →
-     0 ≤ prob.cbf.barrierB.eval env →
-     prob.cbf.unsafePoly.eval env < 0 ∧
-     0 ≤ (lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField).eval env +
-         prob.cbf.classKAlpha * prob.cbf.barrierB.eval env) ∧
-  (checkDaeManifoldDims prob.dae = true ∧
-   0 < prob.dae.regDelta ∧
-   ∀ env : Nat → CanonicalRat,
-     (∀ g, g ∈ prob.dae.domainIneqs → 0 ≤ g.eval env) →
-     (∀ h, h ∈ prob.dae.algConstraints → h.eval env = 0) →
-     (∀ h_r, h_r ∈ prob.dae.algConstraints →
-       (lieDerivativePoly h_r prob.dae.vectorField).eval env = 0) ∧
-     prob.dae.algJacobianDet.eval env ≠ 0)
-
-/-- Verdict checker for `sosLyapunovJudge`. -/
-def checkSosLyapunovProblem
-    (_grade : Nat)
-    (prob : SosLyapunovProblem)
-    (cert : SosLyapunovCert) : Judge.Verdict SosLyapunovClause :=
-  if !checkSosProblemWellFormed prob then
-    .refused .malformedDimensionOrParam []
-  else if !checkSosLyapunov prob.lyapunov cert.lyapunovWitness then
-    .refused .lyapunovFailed []
-  else if !checkSosCbf prob.cbf cert.cbfWitness then
-    .refused .cbfFailed []
-  else if !checkDaeManifold prob.dae cert.daeWitness then
-    .refused .daeManifoldFailed []
-  else
-    .ok
-
-/-- **Theorem (`checkSosLyapunovProblem_sound`)**:
-Whenever `checkSosLyapunovProblem fuel prob cert = .ok`, `prob.SemanticMeaning` holds! -/
-theorem checkSosLyapunovProblem_sound
-    (fuel : Nat)
-    (prob : SosLyapunovProblem)
-    (cert : SosLyapunovCert)
-    (hOk : checkSosLyapunovProblem fuel prob cert = .ok) :
-    prob.SemanticMeaning := by
-  unfold checkSosLyapunovProblem at hOk
-  by_cases hWf : checkSosProblemWellFormed prob = true
-  · simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-    by_cases hL : checkSosLyapunov prob.lyapunov cert.lyapunovWitness = true
-    · simp only [hL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-      by_cases hC : checkSosCbf prob.cbf cert.cbfWitness = true
-      · simp only [hC, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-        by_cases hD : checkDaeManifold prob.dae cert.daeWitness = true
-        · unfold checkSosProblemWellFormed at hWf
-          rcases (Bool.and_eq_true _ _).mp hWf with ⟨hWf1_7, hDeltaB⟩
-          rcases (Bool.and_eq_true _ _).mp hWf1_7 with ⟨hWf1_6, hDaeDims⟩
-          rcases (Bool.and_eq_true _ _).mp hWf1_6 with ⟨hWf1_5, hAlphaB⟩
-          rcases (Bool.and_eq_true _ _).mp hWf1_5 with ⟨hWf1_4, hCbfDims⟩
-          rcases (Bool.and_eq_true _ _).mp hWf1_4 with ⟨hWf1_3, hOriginB⟩
-          rcases (Bool.and_eq_true _ _).mp hWf1_3 with ⟨hWf1_2, hGammaB⟩
-          rcases (Bool.and_eq_true _ _).mp hWf1_2 with ⟨hLyapDims, hEpsB⟩
-          have hLyapDimsCopy := hLyapDims
-          unfold checkSosLyapunovDims at hLyapDimsCopy
-          rcases (Bool.and_eq_true _ _).mp hLyapDimsCopy with ⟨hLD1_4, _⟩
-          rcases (Bool.and_eq_true _ _).mp hLD1_4 with ⟨hLD1_3, _⟩
-          rcases (Bool.and_eq_true _ _).mp hLD1_3 with ⟨hLD1_2, _⟩
-          rcases (Bool.and_eq_true _ _).mp hLD1_2 with ⟨hDimPosB, hVfLenB⟩
-          refine ⟨?_, ?_, ?_⟩
-          · refine ⟨hLyapDims, of_decide_eq_true hDimPosB, of_decide_eq_true hVfLenB,
-                    of_decide_eq_true hEpsB, of_decide_eq_true hGammaB, of_decide_eq_true hOriginB, ?_⟩
-            intro env hDom
-            have hEnv := checkSosLyapunov_sound prob.lyapunov cert.lyapunovWitness env hL hDom
-            exact ⟨hEnv.2.2.2.2.2.2.2.2.1, hEnv.2.2.2.2.2.2.2.2.2.2⟩
-          · refine ⟨hCbfDims, of_decide_eq_true hAlphaB, ?_⟩
-            intro env hDom hSafe
-            exact checkSosCbf_sound prob.cbf cert.cbfWitness env hC hDom hSafe
-          · refine ⟨hDaeDims, of_decide_eq_true hDeltaB, ?_⟩
-            intro env hDom hMan
-            have hEnv := checkDaeManifold_sound prob.dae cert.daeWitness env hD hDom hMan
-            exact ⟨hEnv.2.1, hEnv.2.2.2⟩
-        · simp [hD] at hOk
-      · simp [hC] at hOk
-    · simp [hL] at hOk
-  · simp [hWf] at hOk
-
-theorem checkSosLyapunovProblem_refuted
-    {r : Nat} {prob : SosLyapunovProblem} {cert : SosLyapunovCert} {p : List Nat}
-    (hRef : checkSosLyapunovProblem r prob cert = .refused .malformedDimensionOrParam p) :
-    ¬ prob.SemanticMeaning := by
-  intro hMean
-  rcases hMean with ⟨⟨hLyapDims, _hDimPos, _hVfLen, hEps, hGamma, hOrigin, _⟩,
-                     ⟨hCbfDims, hAlpha, _⟩,
-                     ⟨hDaeDims, hDelta, _⟩⟩
-  have hWf : checkSosProblemWellFormed prob = true := by
-    unfold checkSosProblemWellFormed
-    simp [hLyapDims, hEps, hGamma, hOrigin, hCbfDims, hAlpha, hDaeDims, hDelta]
-  unfold checkSosLyapunovProblem at hRef
-  simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
-  by_cases hL : checkSosLyapunov prob.lyapunov cert.lyapunovWitness = true
-  · simp only [hL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
-    by_cases hC : checkSosCbf prob.cbf cert.cbfWitness = true
-    · simp only [hC, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
-      by_cases hD : checkDaeManifold prob.dae cert.daeWitness = true <;> simp [hD] at hRef
-    · simp [hC] at hRef
-  · simp [hL] at hRef
-
-/-! ### The certifiable fragment, stated over the polynomial ring
-
-What it is for a problem to have a certificate, said without running a checker: scope conditions
-as quantified statements over terms, positivity claims as memberships in a quadratic module
-(`PsatzNonnegCertifiable`), the unsafe-set separation as a Stengle identity
-(`StenglePositivstellensatzRefutable`), and manifold tangency as an ideal combination
-(`IdealCombRel`). `sosLyapunovProblemCertifiable_iff_check_ok` proves this is exactly the set of
-problems the checker accepts some certificate for. -/
-
-/-- Dimension and variable scope of a Lyapunov specification. -/
+/-- Dimension and variable scope of a Lyapunov specification (stated over the polynomial ring). -/
 def LyapunovSpecWellScoped (spec : SosLyapunovSpec) : Prop :=
   0 < spec.dim ∧
   spec.vectorField.length = spec.dim ∧
@@ -1179,7 +1090,7 @@ theorem lyapunovSpecWellScoped_iff (spec : SosLyapunovSpec) :
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, polyVarsBoundedProp_iff,
     and_assoc]
 
-/-- Dimension and variable scope of a barrier specification. -/
+/-- Dimension and variable scope of a barrier specification (stated over the polynomial ring). -/
 def CbfSpecWellScoped (spec : SosCbfSpec) : Prop :=
   0 < spec.vectorField.length ∧
   PolyVarsBoundedProp spec.vectorField.length spec.barrierB ∧
@@ -1194,7 +1105,7 @@ theorem cbfSpecWellScoped_iff (spec : SosCbfSpec) :
     and_assoc]
 
 /-- Dimension, squareness, distinct algebraic variables and variable scope of a DAE manifold
-specification. -/
+specification (stated over the polynomial ring). -/
 def DaeSpecWellScoped (spec : DaeManifoldSpec) : Prop :=
   0 < spec.vectorField.length ∧
   spec.algConstraints.length = spec.algVars.length ∧
@@ -1210,6 +1121,567 @@ theorem daeSpecWellScoped_iff (spec : DaeManifoldSpec) :
   unfold DaeSpecWellScoped checkDaeManifoldDims
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, polyVarsBoundedProp_iff,
     natListNodupB_iff, and_assoc]
+
+/-- Independent semantic validity of a nonlinear polynomial Lyapunov specification `spec`:
+well-scoped dimensions, `ε > 0`, `γ ≥ 0`, `V(0) = 0`, strict radial positive-definiteness
+`ε ‖x‖² ≤ V(x)` (hence `V(x) > 0` for all `x ≠ 0` in the domain), and exponential Lie-derivative
+decay `L_f V(x) ≤ -γ V(x) ≤ 0` across `{g_k(x) ≥ 0}`. -/
+def ValidSosLyapunovSpec (spec : SosLyapunovSpec) : Prop :=
+  LyapunovSpecWellScoped spec ∧
+  0 < spec.dim ∧
+  spec.vectorField.length = spec.dim ∧
+  0 < spec.radialEps ∧
+  0 ≤ spec.decayGamma ∧
+  spec.lyapunovV.eval originEnv = 0 ∧
+  ∀ env : Nat → CanonicalRat,
+    (∀ g, g ∈ spec.domainIneqs → 0 ≤ g.eval env) →
+    spec.radialEps * (sumVarSquaresPoly spec.dim).eval env ≤ spec.lyapunovV.eval env ∧
+    0 ≤ spec.lyapunovV.eval env ∧
+    (lieDerivativePoly spec.lyapunovV spec.vectorField).eval env ≤ -spec.decayGamma * spec.lyapunovV.eval env ∧
+    (lieDerivativePoly spec.lyapunovV spec.vectorField).eval env ≤ 0
+
+/-- Independent semantic meaning of `SosLyapunovProblem`. -/
+def SosLyapunovProblem.SemanticMeaning (prob : SosLyapunovProblem) : Prop :=
+  ValidSosLyapunovSpec prob.lyapunov ∧
+  (CbfSpecWellScoped prob.cbf ∧
+   0 ≤ prob.cbf.classKAlpha ∧
+   ∀ env : Nat → CanonicalRat,
+     (∀ g, g ∈ prob.cbf.domainIneqs → 0 ≤ g.eval env) →
+     0 ≤ prob.cbf.barrierB.eval env →
+     prob.cbf.unsafePoly.eval env < 0 ∧
+     0 ≤ (lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField).eval env +
+         prob.cbf.classKAlpha * prob.cbf.barrierB.eval env) ∧
+  (DaeSpecWellScoped prob.dae ∧
+   0 < prob.dae.regDelta ∧
+   ∀ env : Nat → CanonicalRat,
+     (∀ g, g ∈ prob.dae.domainIneqs → 0 ≤ g.eval env) →
+     (∀ h, h ∈ prob.dae.algConstraints → h.eval env = 0) →
+     (∀ h_r, h_r ∈ prob.dae.algConstraints →
+       (lieDerivativePoly h_r prob.dae.vectorField).eval env = 0) ∧
+     prob.dae.algJacobianDet.eval env =
+       (computeSymbolicAlgJacobianDet prob.dae.algConstraints prob.dae.algVars).eval env ∧
+     prob.dae.regDelta ≤ (Poly.sqr prob.dae.algJacobianDet).eval env ∧
+     prob.dae.algJacobianDet.eval env ≠ 0)
+
+/-- True iff `pt` has at least one non-zero state coordinate `0 ≤ v < dim` (`ρ ≠ 0`). -/
+def pointHasNonZeroCoord (dim : Nat) (pt : List CanonicalRat) : Bool :=
+  (List.range dim).any fun v => decide (ratPointEnv pt v ≠ 0)
+
+/-- Non-origin radial positive-definiteness violation witness (`ρ ≠ 0`, `g_k(ρ) ≥ 0`, and either
+`V(ρ) ≤ 0` or `V(ρ) < ε ‖ρ‖²`). -/
+def evalLyapunovRadialNonpos (spec : SosLyapunovSpec) (pt : List CanonicalRat) : Bool :=
+  let ρ := ratPointEnv pt
+  pointHasNonZeroCoord spec.dim pt &&
+  (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+  (decide (spec.lyapunovV.eval ρ ≤ 0) ||
+   decide (spec.lyapunovV.eval ρ < spec.radialEps * (sumVarSquaresPoly spec.dim).eval ρ))
+
+/-- Lie-derivative ascent or decay-rate violation witness (`g_k(ρ) ≥ 0` and
+`L_f V(ρ) > 0` or `L_f V(ρ) > -γ V(ρ)`) with precomputed `lieV`. -/
+def evalLyapunovLieAscentWithLie (spec : SosLyapunovSpec) (lieV : Poly) (pt : List CanonicalRat) : Bool :=
+  let ρ := ratPointEnv pt
+  (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+  (decide (0 < lieV.eval ρ) ||
+   decide (-spec.decayGamma * spec.lyapunovV.eval ρ < lieV.eval ρ))
+
+/-- Lie-derivative ascent or decay-rate violation witness (`g_k(ρ) ≥ 0`,
+`L_f V(ρ) > 0` or `L_f V(ρ) > -γ V(ρ)`). -/
+def evalLyapunovLieAscent (spec : SosLyapunovSpec) (pt : List CanonicalRat) : Bool :=
+  evalLyapunovLieAscentWithLie spec (lieDerivativePoly spec.lyapunovV spec.vectorField) pt
+
+/-- Control Barrier Function unsafe-set overlap witness (`B(ρ) ≥ 0 ∧ u_unsafe(ρ) ≥ 0` on `{g_k(ρ) ≥ 0}`). -/
+def evalCbfUnsafeOverlap (spec : SosCbfSpec) (pt : List CanonicalRat) : Bool :=
+  let ρ := ratPointEnv pt
+  decide (0 ≤ spec.barrierB.eval ρ) &&
+  decide (0 ≤ spec.unsafePoly.eval ρ) &&
+  (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ))
+
+/-- Control Barrier Function Nagumo forward-invariance violation witness
+(`B(ρ) ≥ 0 ∧ L_f B(ρ) + α B(ρ) < 0` on `{g_k(ρ) ≥ 0}`) with precomputed `lieB`. -/
+def evalCbfNagumoViolationWithLie (spec : SosCbfSpec) (lieB : Poly) (pt : List CanonicalRat) : Bool :=
+  let ρ := ratPointEnv pt
+  decide (0 ≤ spec.barrierB.eval ρ) &&
+  (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+  decide (lieB.eval ρ + spec.classKAlpha * spec.barrierB.eval ρ < 0)
+
+/-- Control Barrier Function Nagumo forward-invariance violation witness
+(`B(ρ) ≥ 0 ∧ L_f B(ρ) + α B(ρ) < 0` on `{g_k(ρ) ≥ 0}`). -/
+def evalCbfNagumoViolation (spec : SosCbfSpec) (pt : List CanonicalRat) : Bool :=
+  evalCbfNagumoViolationWithLie spec (lieDerivativePoly spec.barrierB spec.vectorField) pt
+
+/-- Index-1 DAE manifold tangency, symbolic Jacobian mismatch, `regDelta` regularity shortfall,
+or algebraic Jacobian singularity violation witness on `{h_r(ρ) = 0 ∧ g_k(ρ) ≥ 0}`. -/
+def evalDaeManifoldViolation (spec : DaeManifoldSpec) (pt : List CanonicalRat) : Bool :=
+  let ρ := ratPointEnv pt
+  (spec.algConstraints.all fun h => decide (h.eval ρ = 0)) &&
+  (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+  ((spec.algConstraints.any fun h_r => decide ((lieDerivativePoly h_r spec.vectorField).eval ρ ≠ 0)) ||
+   decide (spec.algJacobianDet.eval ρ ≠
+     (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval ρ) ||
+   decide ((Poly.sqr spec.algJacobianDet).eval ρ < spec.regDelta) ||
+   decide (spec.algJacobianDet.eval ρ = 0))
+
+/-- Polynomials inspected to seed quadratic-vertex and linear-root rational candidates at grade `0`. -/
+def sosLyapunovSeedPolys (prob : SosLyapunovProblem) (lieV lieB : Poly) : List Poly :=
+  prob.lyapunov.lyapunovV :: lieV :: prob.cbf.barrierB :: lieB :: prob.cbf.unsafePoly ::
+  prob.dae.algJacobianDet ::
+  (prob.lyapunov.domainIneqs ++ prob.cbf.domainIneqs ++ prob.dae.algConstraints ++ prob.dae.domainIneqs)
+
+/-- Complete polynomial list evaluated across `evalSosLyapunovCandidate` (used to bound active state variables). -/
+def sosLyapunovAllPolys (prob : SosLyapunovProblem) : List Poly :=
+  let lieV := lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField
+  let lieB := lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField
+  let symDet := computeSymbolicAlgJacobianDet prob.dae.algConstraints prob.dae.algVars
+  let sumSq := sumVarSquaresPoly prob.lyapunov.dim
+  let lieHs := prob.dae.algConstraints.map (fun h_r => lieDerivativePoly h_r prob.dae.vectorField)
+  sumSq :: symDet :: (lieHs ++ sosLyapunovSeedPolys prob lieV lieB)
+
+/-- State-space search dimension across all three components and derived polynomials of `prob`. -/
+def sosLyapunovSearchDim (prob : SosLyapunovProblem) : Nat :=
+  max (polyListVarBound (sosLyapunovAllPolys prob))
+    (max prob.lyapunov.dim (max prob.cbf.vectorField.length prob.dae.vectorField.length))
+
+def evalSosLyapunovCandidateWithLie
+    (prob : SosLyapunovProblem) (lieV lieB : Poly) (pt : List CanonicalRat) :
+    Option SosLyapunovClause :=
+  if evalLyapunovRadialNonpos prob.lyapunov pt then
+    some (.lyapunovRadialNonpos pt)
+  else if evalLyapunovLieAscentWithLie prob.lyapunov lieV pt then
+    some (.lyapunovLieAscent pt)
+  else if evalCbfUnsafeOverlap prob.cbf pt then
+    some (.cbfUnsafeOverlap pt)
+  else if evalCbfNagumoViolationWithLie prob.cbf lieB pt then
+    some (.cbfNagumoViolation pt)
+  else if evalDaeManifoldViolation prob.dae pt then
+    some (.daeManifoldViolation pt)
+  else
+    none
+
+/-- Evaluate whether rational point `pt` is a concrete refuting counterexample to `prob`. -/
+def evalSosLyapunovCandidate (prob : SosLyapunovProblem) (pt : List CanonicalRat) :
+    Option SosLyapunovClause :=
+  evalSosLyapunovCandidateWithLie prob
+    (lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField)
+    (lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField) pt
+
+def findSosLyapunovRefutationAtShell (shell : Nat) (prob : SosLyapunovProblem) :
+    Option SosLyapunovClause :=
+  let dim := sosLyapunovSearchDim prob
+  let lieV := lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField
+  let lieB := lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField
+  let cands :=
+    if shell == 0 then
+      let rawSeeds := polyListSeedPoints dim (sosLyapunovSeedPolys prob lieV lieB)
+      rawSeeds.filter (pointHasNonZeroCoord dim) ++ [[]]
+    else
+      ratTuplesOfDim dim shell
+  cands.findSome? (evalSosLyapunovCandidateWithLie prob lieV lieB)
+
+/-- Grade-indexed multi-point rational counterexample search for `SosLyapunovProblem`.
+Uses `Judge.deepen` so refutation verdicts remain monotonically stable across `r ≤ r'`. -/
+def findSosLyapunovRefutation (grade : Nat) (prob : SosLyapunovProblem) :
+    Option SosLyapunovClause :=
+  Judge.deepen (fun g => findSosLyapunovRefutationAtShell g prob) grade
+
+/-- Canonical empty refutation-probe certificate bundle triggering unbounded grade-indexed
+rational counterexample search when algebraic checks do not accept. -/
+def sosLyapunovSearchProbe : SosLyapunovCert where
+  lyapunovWitness :=
+    { posDefCert   := positivstellensatzSearchProbe
+    , lieDecayCert := positivstellensatzSearchProbe }
+  cbfWitness :=
+    { unsafeRefuteCert     := positivstellensatzSearchProbe
+    , nagumoInvarianceCert := positivstellensatzSearchProbe }
+  daeWitness :=
+    { tangencyCert   := ⟨[]⟩
+    , tangencyCerts  := []
+    , regularityCert := positivstellensatzSearchProbe }
+
+def sosLyapunovIsSearchProbe (cert : SosLyapunovCert) : Bool :=
+  decide (cert = sosLyapunovSearchProbe)
+
+/-- Clauses that constructively refute `prob.SemanticMeaning` for ALL candidate certificates. -/
+def sosLyapunovRefutes : SosLyapunovClause → Bool
+  | .malformedDimensionOrParam => true
+  | .lyapunovRadialNonpos _    => true
+  | .lyapunovLieAscent _       => true
+  | .cbfUnsafeOverlap _        => true
+  | .cbfNagumoViolation _      => true
+  | .daeManifoldViolation _    => true
+  | .lyapunovFailed            => false
+  | .cbfFailed                 => false
+  | .daeManifoldFailed         => false
+
+/-- Verdict checker for `sosLyapunovJudge`:
+* Checks structural well-formedness first (`.malformedDimensionOrParam`),
+* Accepts (`.ok`) iff all three algebraic component witnesses verify,
+* On the canonical probe `sosLyapunovSearchProbe`, searches rational shells `0..grade` via `Judge.deepen`
+  for non-origin Lyapunov / CBF / DAE counterexample witnesses (`judge_mono_probe_dichotomy`),
+* On non-probe certificates, reports the failing component diagnostic. -/
+def checkSosLyapunovProblem
+    (grade : Nat)
+    (prob : SosLyapunovProblem)
+    (cert : SosLyapunovCert) : Judge.Verdict SosLyapunovClause :=
+  if !checkSosProblemWellFormed prob then
+    .refused .malformedDimensionOrParam []
+  else if checkSosLyapunov prob.lyapunov cert.lyapunovWitness &&
+          checkSosCbf prob.cbf cert.cbfWitness &&
+          checkDaeManifold prob.dae cert.daeWitness then
+    .ok
+  else if sosLyapunovIsSearchProbe cert then
+    match findSosLyapunovRefutation grade prob with
+    | some clause => .refused clause []
+    | none        => .uncovered
+  else if !checkSosLyapunov prob.lyapunov cert.lyapunovWitness then
+    .refused .lyapunovFailed []
+  else if !checkSosCbf prob.cbf cert.cbfWitness then
+    .refused .cbfFailed []
+  else
+    .refused .daeManifoldFailed []
+
+/-- **Theorem (`checkSosLyapunovProblem_sound`)**:
+Whenever `checkSosLyapunovProblem fuel prob cert = .ok`, `prob.SemanticMeaning` holds! -/
+theorem checkSosLyapunovProblem_sound
+    (fuel : Nat)
+    (prob : SosLyapunovProblem)
+    (cert : SosLyapunovCert)
+    (hOk : checkSosLyapunovProblem fuel prob cert = .ok) :
+    prob.SemanticMeaning := by
+  unfold checkSosLyapunovProblem at hOk
+  by_cases hWf : checkSosProblemWellFormed prob = true
+  · simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
+    by_cases hAll : (checkSosLyapunov prob.lyapunov cert.lyapunovWitness &&
+        checkSosCbf prob.cbf cert.cbfWitness &&
+        checkDaeManifold prob.dae cert.daeWitness) = true
+    · rcases (Bool.and_eq_true _ _).mp hAll with ⟨hLC, hD⟩
+      rcases (Bool.and_eq_true _ _).mp hLC with ⟨hL, hC⟩
+      unfold checkSosProblemWellFormed at hWf
+      rcases (Bool.and_eq_true _ _).mp hWf with ⟨hWf1_7, hDeltaB⟩
+      rcases (Bool.and_eq_true _ _).mp hWf1_7 with ⟨hWf1_6, hDaeDims⟩
+      rcases (Bool.and_eq_true _ _).mp hWf1_6 with ⟨hWf1_5, hAlphaB⟩
+      rcases (Bool.and_eq_true _ _).mp hWf1_5 with ⟨hWf1_4, hCbfDims⟩
+      rcases (Bool.and_eq_true _ _).mp hWf1_4 with ⟨hWf1_3, hOriginB⟩
+      rcases (Bool.and_eq_true _ _).mp hWf1_3 with ⟨hWf1_2, hGammaB⟩
+      rcases (Bool.and_eq_true _ _).mp hWf1_2 with ⟨hLyapDims, hEpsB⟩
+      have hLyapDimsCopy := hLyapDims
+      unfold checkSosLyapunovDims at hLyapDimsCopy
+      rcases (Bool.and_eq_true _ _).mp hLyapDimsCopy with ⟨hLD1_4, _⟩
+      rcases (Bool.and_eq_true _ _).mp hLD1_4 with ⟨hLD1_3, _⟩
+      rcases (Bool.and_eq_true _ _).mp hLD1_3 with ⟨hLD1_2, _⟩
+      rcases (Bool.and_eq_true _ _).mp hLD1_2 with ⟨hDimPosB, hVfLenB⟩
+      refine ⟨?_, ?_, ?_⟩
+      · refine ⟨(lyapunovSpecWellScoped_iff prob.lyapunov).mpr hLyapDims,
+                of_decide_eq_true hDimPosB, of_decide_eq_true hVfLenB,
+                of_decide_eq_true hEpsB, of_decide_eq_true hGammaB, of_decide_eq_true hOriginB, ?_⟩
+        intro env hDom
+        have hEnv := checkSosLyapunov_sound prob.lyapunov cert.lyapunovWitness env hL hDom
+        exact ⟨hEnv.2.2.2.2.2.2.2.1, hEnv.2.2.2.2.2.2.2.2.1, hEnv.2.2.2.2.2.2.2.2.2.1, hEnv.2.2.2.2.2.2.2.2.2.2⟩
+      · refine ⟨(cbfSpecWellScoped_iff prob.cbf).mpr hCbfDims, of_decide_eq_true hAlphaB, ?_⟩
+        intro env hDom hSafe
+        exact checkSosCbf_sound prob.cbf cert.cbfWitness env hC hDom hSafe
+      · refine ⟨(daeSpecWellScoped_iff prob.dae).mpr hDaeDims, of_decide_eq_true hDeltaB, ?_⟩
+        intro env hDom hMan
+        have hEnv := checkDaeManifold_sound prob.dae cert.daeWitness env hD hDom hMan
+        have hSym := checkDaeManifold_symbolic_jacobian_sound prob.dae cert.daeWitness env hD hDom hMan
+        exact ⟨hEnv.2.1, hSym.1, hEnv.2.2.1, hEnv.2.2.2⟩
+    · simp only [hAll, Bool.false_eq_true, ↓reduceIte] at hOk
+      split at hOk
+      · split at hOk <;> contradiction
+      · split at hOk
+        · contradiction
+        · split at hOk <;> contradiction
+  · simp [hWf] at hOk
+
+theorem pointHasNonZeroCoord_iff (dim : Nat) (pt : List CanonicalRat) :
+    pointHasNonZeroCoord dim pt = true ↔ ∃ v, v < dim ∧ ratPointEnv pt v ≠ 0 := by
+  unfold pointHasNonZeroCoord
+  rw [List.any_eq_true]
+  constructor
+  · rintro ⟨v, hvMem, hvNe⟩
+    exact ⟨v, List.mem_range.mp hvMem, of_decide_eq_true hvNe⟩
+  · rintro ⟨v, hvLt, hvNe⟩
+    exact ⟨v, List.mem_range.mpr hvLt, decide_eq_true hvNe⟩
+
+/-- **Theorem (`lyapunovRadialNonpos_refutes_spec`)**:
+Any non-zero rational witness `pt` (`ρ ≠ 0` on `0..dim-1`) in `{g_k(ρ) ≥ 0}` with `V(ρ) ≤ 0` or
+`V(ρ) < ε ‖ρ‖²` strictly refutes `ValidSosLyapunovSpec spec`. -/
+theorem lyapunovRadialNonpos_refutes_spec
+    {spec : SosLyapunovSpec} {pt : List CanonicalRat}
+    (hRad : evalLyapunovRadialNonpos spec pt = true) :
+    ¬ ValidSosLyapunovSpec spec := by
+  intro hValid
+  unfold evalLyapunovRadialNonpos at hRad
+  rcases (Bool.and_eq_true _ _).mp hRad with ⟨hNzDom, hViolB⟩
+  rcases (Bool.and_eq_true _ _).mp hNzDom with ⟨hNz, hDomB⟩
+  obtain ⟨v, hvLt, hvNe⟩ := (pointHasNonZeroCoord_iff spec.dim pt).mp hNz
+  have hDom : ∀ g, g ∈ spec.domainIneqs → 0 ≤ g.eval (ratPointEnv pt) :=
+    fun g hg => of_decide_eq_true (List.all_eq_true.mp hDomB g hg)
+  obtain ⟨_, _, _, hEpsPos, _, _, hAll⟩ := hValid
+  have hSpecPt := (hAll (ratPointEnv pt) hDom).1
+  rcases (Bool.or_eq_true _ _).mp hViolB with hVLeB | hMarginLtB
+  · have hVLe : spec.lyapunovV.eval (ratPointEnv pt) ≤ 0 := of_decide_eq_true hVLeB
+    have hNormPos := sumVarSquaresPoly_eval_pos_of_coord_ne_zero (ratPointEnv pt) spec.dim v hvLt hvNe
+    have hProdPos : 0 < spec.radialEps * (sumVarSquaresPoly spec.dim).eval (ratPointEnv pt) :=
+      Rat.mul_pos hEpsPos hNormPos
+    grind
+  · have hMarginLt : spec.lyapunovV.eval (ratPointEnv pt) <
+        spec.radialEps * (sumVarSquaresPoly spec.dim).eval (ratPointEnv pt) :=
+      of_decide_eq_true hMarginLtB
+    grind
+
+/-- **Theorem (`lyapunovLieAscent_refutes_spec`)**:
+Any rational witness `pt` in `{g_k(ρ) ≥ 0}` with `L_f V(ρ) > 0` or `L_f V(ρ) > -γ V(ρ)`
+strictly refutes `ValidSosLyapunovSpec spec`. -/
+theorem lyapunovLieAscent_refutes_spec
+    {spec : SosLyapunovSpec} {pt : List CanonicalRat}
+    (hAsc : evalLyapunovLieAscent spec pt = true) :
+    ¬ ValidSosLyapunovSpec spec := by
+  intro hValid
+  unfold evalLyapunovLieAscent evalLyapunovLieAscentWithLie at hAsc
+  rcases (Bool.and_eq_true _ _).mp hAsc with ⟨hDomB, hViolB⟩
+  have hDom : ∀ g, g ∈ spec.domainIneqs → 0 ≤ g.eval (ratPointEnv pt) :=
+    fun g hg => of_decide_eq_true (List.all_eq_true.mp hDomB g hg)
+  obtain ⟨_, _, _, _, _, _, hAll⟩ := hValid
+  have hSpecPt := hAll (ratPointEnv pt) hDom
+  rcases (Bool.or_eq_true _ _).mp hViolB with hLiePosB | hDecayViolB
+  · have hLiePos : 0 < (lieDerivativePoly spec.lyapunovV spec.vectorField).eval (ratPointEnv pt) :=
+      of_decide_eq_true hLiePosB
+    have hLieLe := hSpecPt.2.2.2
+    grind
+  · have hDecayViol : -spec.decayGamma * spec.lyapunovV.eval (ratPointEnv pt) <
+        (lieDerivativePoly spec.lyapunovV spec.vectorField).eval (ratPointEnv pt) :=
+      of_decide_eq_true hDecayViolB
+    have hDecayLe := hSpecPt.2.2.1
+    grind
+
+/-- **Theorem (`cbfUnsafeOverlap_refutes_problem`)**:
+Any rational witness `pt` in `{g_k(ρ) ≥ 0}` satisfying `B(ρ) ≥ 0 ∧ u_unsafe(ρ) ≥ 0`
+strictly refutes `prob.SemanticMeaning`. -/
+theorem cbfUnsafeOverlap_refutes_problem
+    {prob : SosLyapunovProblem} {pt : List CanonicalRat}
+    (hCbf : evalCbfUnsafeOverlap prob.cbf pt = true) :
+    ¬ prob.SemanticMeaning := by
+  intro hMean
+  unfold evalCbfUnsafeOverlap at hCbf
+  rcases (Bool.and_eq_true _ _).mp hCbf with ⟨hBU, hDomB⟩
+  rcases (Bool.and_eq_true _ _).mp hBU with ⟨hSafeB, hUnsafeB⟩
+  have hSafe : 0 ≤ prob.cbf.barrierB.eval (ratPointEnv pt) := of_decide_eq_true hSafeB
+  have hUnsafe : 0 ≤ prob.cbf.unsafePoly.eval (ratPointEnv pt) := of_decide_eq_true hUnsafeB
+  have hDom : ∀ g, g ∈ prob.cbf.domainIneqs → 0 ≤ g.eval (ratPointEnv pt) :=
+    fun g hg => of_decide_eq_true (List.all_eq_true.mp hDomB g hg)
+  have hSep := (hMean.2.1.2.2 (ratPointEnv pt) hDom hSafe).1
+  grind
+
+/-- **Theorem (`cbfNagumoViolation_refutes_problem`)**:
+Any rational witness `pt` in `{g_k(ρ) ≥ 0}` satisfying `B(ρ) ≥ 0 ∧ L_f B(ρ) + α B(ρ) < 0`
+strictly refutes `prob.SemanticMeaning`. -/
+theorem cbfNagumoViolation_refutes_problem
+    {prob : SosLyapunovProblem} {pt : List CanonicalRat}
+    (hNag : evalCbfNagumoViolation prob.cbf pt = true) :
+    ¬ prob.SemanticMeaning := by
+  intro hMean
+  unfold evalCbfNagumoViolation evalCbfNagumoViolationWithLie at hNag
+  rcases (Bool.and_eq_true _ _).mp hNag with ⟨hSafeDom, hNegB⟩
+  rcases (Bool.and_eq_true _ _).mp hSafeDom with ⟨hSafeB, hDomB⟩
+  have hSafe : 0 ≤ prob.cbf.barrierB.eval (ratPointEnv pt) := of_decide_eq_true hSafeB
+  have hDom : ∀ g, g ∈ prob.cbf.domainIneqs → 0 ≤ g.eval (ratPointEnv pt) :=
+    fun g hg => of_decide_eq_true (List.all_eq_true.mp hDomB g hg)
+  have hNeg : (lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField).eval (ratPointEnv pt) +
+      prob.cbf.classKAlpha * prob.cbf.barrierB.eval (ratPointEnv pt) < 0 :=
+    of_decide_eq_true hNegB
+  have hNagSem := (hMean.2.1.2.2 (ratPointEnv pt) hDom hSafe).2
+  grind
+
+/-- **Theorem (`daeManifoldViolation_refutes_problem`)**:
+Any rational witness `pt` on `{h_r(ρ) = 0 ∧ g_k(ρ) ≥ 0}` where `L_f h_r(ρ) ≠ 0`,
+`det J_alg(ρ) ≠ symDet(ρ)`, `(det J_alg(ρ))^2 < regDelta`, or `det J_alg(ρ) = 0`
+strictly refutes `prob.SemanticMeaning`. -/
+theorem daeManifoldViolation_refutes_problem
+    {prob : SosLyapunovProblem} {pt : List CanonicalRat}
+    (hDae : evalDaeManifoldViolation prob.dae pt = true) :
+    ¬ prob.SemanticMeaning := by
+  intro hMean
+  unfold evalDaeManifoldViolation at hDae
+  rcases (Bool.and_eq_true _ _).mp hDae with ⟨hManDom, hViol⟩
+  rcases (Bool.and_eq_true _ _).mp hManDom with ⟨hManB, hDomB⟩
+  have hMan : ∀ h, h ∈ prob.dae.algConstraints → h.eval (ratPointEnv pt) = 0 :=
+    fun h hh => of_decide_eq_true (List.all_eq_true.mp hManB h hh)
+  have hDom : ∀ g, g ∈ prob.dae.domainIneqs → 0 ≤ g.eval (ratPointEnv pt) :=
+    fun g hg => of_decide_eq_true (List.all_eq_true.mp hDomB g hg)
+  have hDaeSem := hMean.2.2.2.2 (ratPointEnv pt) hDom hMan
+  rcases (Bool.or_eq_true _ _).mp hViol with hLeft2 | hDetZeroB
+  · rcases (Bool.or_eq_true _ _).mp hLeft2 with hLeft1 | hRegLtB
+    · rcases (Bool.or_eq_true _ _).mp hLeft1 with hTangViol | hSymMismatchB
+      · obtain ⟨h_r, hMem, hNeB⟩ := List.any_eq_true.mp hTangViol
+        exact (of_decide_eq_true hNeB) (hDaeSem.1 h_r hMem)
+      · exact (of_decide_eq_true hSymMismatchB) hDaeSem.2.1
+    · have hRegLt := of_decide_eq_true hRegLtB
+      have hRegGe := hDaeSem.2.2.1
+      grind
+  · exact hDaeSem.2.2.2 (of_decide_eq_true hDetZeroB)
+
+theorem list_findSome?_some {α β : Type} (f : α → Option β) :
+    ∀ {xs : List α} {b : β}, xs.findSome? f = some b → ∃ a, a ∈ xs ∧ f a = some b
+  | [], _, h => nomatch h
+  | x :: xs, b, h => by
+    simp only [List.findSome?] at h
+    cases hx : f x with
+    | some b0 =>
+      rw [hx] at h
+      injection h with hEq
+      subst hEq
+      exact ⟨x, List.Mem.head xs, hx⟩
+    | none =>
+      rw [hx] at h
+      obtain ⟨a, haMem, haEq⟩ := list_findSome?_some f h
+      exact ⟨a, List.Mem.tail x haMem, haEq⟩
+
+theorem list_findSome?_exists_of_mem {α β : Type} (f : α → Option β)
+    (xs : List α) {x : α} {b : β} (hx : x ∈ xs) (hfx : f x = some b) :
+    ∃ w, xs.findSome? f = some w := by
+  induction xs with
+  | nil => nomatch hx
+  | cons hd tl ih =>
+    simp only [List.findSome?]
+    cases hhd : f hd with
+    | some w => exact ⟨w, rfl⟩
+    | none =>
+      rcases List.mem_cons.mp hx with rfl | htl
+      · rw [hfx] at hhd; cases hhd
+      · exact ih htl
+
+theorem evalSosLyapunovCandidate_refutes
+    {prob : SosLyapunovProblem} {pt : List CanonicalRat} {k : SosLyapunovClause}
+    (hCand : evalSosLyapunovCandidate prob pt = some k) :
+    sosLyapunovRefutes k = true ∧ ¬ prob.SemanticMeaning := by
+  unfold evalSosLyapunovCandidate evalSosLyapunovCandidateWithLie at hCand
+  by_cases h1 : evalLyapunovRadialNonpos prob.lyapunov pt = true
+  · rw [h1] at hCand
+    simp only [↓reduceIte, Option.some.injEq] at hCand
+    subst hCand
+    exact ⟨by unfold sosLyapunovRefutes; rfl, fun hMean => lyapunovRadialNonpos_refutes_spec h1 hMean.1⟩
+  · simp only [h1, Bool.false_eq_true, ↓reduceIte] at hCand
+    by_cases h2 : evalLyapunovLieAscent prob.lyapunov pt = true
+    · change evalLyapunovLieAscentWithLie prob.lyapunov
+        (lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField) pt = true at h2
+      rw [h2] at hCand
+      simp only [↓reduceIte, Option.some.injEq] at hCand
+      subst hCand
+      exact ⟨by unfold sosLyapunovRefutes; rfl, fun hMean => lyapunovLieAscent_refutes_spec h2 hMean.1⟩
+    · change ¬ evalLyapunovLieAscentWithLie prob.lyapunov
+        (lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField) pt = true at h2
+      simp only [h2, Bool.false_eq_true, ↓reduceIte] at hCand
+      by_cases h3 : evalCbfUnsafeOverlap prob.cbf pt = true
+      · rw [h3] at hCand
+        simp only [↓reduceIte, Option.some.injEq] at hCand
+        subst hCand
+        exact ⟨by unfold sosLyapunovRefutes; rfl, cbfUnsafeOverlap_refutes_problem h3⟩
+      · simp only [h3, Bool.false_eq_true, ↓reduceIte] at hCand
+        by_cases h3n : evalCbfNagumoViolation prob.cbf pt = true
+        · change evalCbfNagumoViolationWithLie prob.cbf
+            (lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField) pt = true at h3n
+          rw [h3n] at hCand
+          simp only [↓reduceIte, Option.some.injEq] at hCand
+          subst hCand
+          exact ⟨by unfold sosLyapunovRefutes; rfl, cbfNagumoViolation_refutes_problem h3n⟩
+        · change ¬ evalCbfNagumoViolationWithLie prob.cbf
+            (lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField) pt = true at h3n
+          simp only [h3n, Bool.false_eq_true, ↓reduceIte] at hCand
+          by_cases h4 : evalDaeManifoldViolation prob.dae pt = true
+          · rw [h4] at hCand
+            simp only [↓reduceIte, Option.some.injEq] at hCand
+            subst hCand
+            exact ⟨by unfold sosLyapunovRefutes; rfl, daeManifoldViolation_refutes_problem h4⟩
+          · simp only [h4, Bool.false_eq_true, ↓reduceIte] at hCand
+            cases hCand
+
+theorem findSosLyapunovRefutationAtShell_sound
+    {shell : Nat} {prob : SosLyapunovProblem} {k : SosLyapunovClause}
+    (hShell : findSosLyapunovRefutationAtShell shell prob = some k) :
+    sosLyapunovRefutes k = true ∧ ¬ prob.SemanticMeaning := by
+  unfold findSosLyapunovRefutationAtShell at hShell
+  obtain ⟨pt, _, hCand⟩ := list_findSome?_some _ hShell
+  exact evalSosLyapunovCandidate_refutes hCand
+
+theorem findSosLyapunovRefutation_sound
+    {grade : Nat} {prob : SosLyapunovProblem} {k : SosLyapunovClause}
+    (hFind : findSosLyapunovRefutation grade prob = some k) :
+    sosLyapunovRefutes k = true ∧ ¬ prob.SemanticMeaning := by
+  obtain ⟨_, _, hi⟩ := Judge.deepen_some _ hFind
+  exact findSosLyapunovRefutationAtShell_sound hi
+
+theorem checkSosLyapunovProblem_refuted
+    {r : Nat} {prob : SosLyapunovProblem} {cert : SosLyapunovCert}
+    {k : SosLyapunovClause} {p : List Nat}
+    (hRef : checkSosLyapunovProblem r prob cert = .refused k p)
+    (hRefutes : sosLyapunovRefutes k = true) :
+    ¬ prob.SemanticMeaning := by
+  unfold checkSosLyapunovProblem at hRef
+  by_cases hWf : checkSosProblemWellFormed prob = true
+  · simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hRef
+    by_cases hAll : (checkSosLyapunov prob.lyapunov cert.lyapunovWitness &&
+        checkSosCbf prob.cbf cert.cbfWitness &&
+        checkDaeManifold prob.dae cert.daeWitness) = true
+    · simp only [hAll, ↓reduceIte] at hRef
+      cases hRef
+    · simp only [hAll, Bool.false_eq_true, ↓reduceIte] at hRef
+      split at hRef
+      · cases hFind : findSosLyapunovRefutation r prob with
+        | none => rw [hFind] at hRef; cases hRef
+        | some k0 =>
+          rw [hFind] at hRef
+          injection hRef with hEq _
+          subst hEq
+          exact (findSosLyapunovRefutation_sound hFind).2
+      · split at hRef
+        · injection hRef with hEq _; subst hEq; cases hRefutes
+        · split at hRef
+          · injection hRef with hEq _; subst hEq; cases hRefutes
+          · injection hRef with hEq _; subst hEq; cases hRefutes
+  · intro hMean
+    rcases hMean with ⟨⟨hLyapScoped, _hDimPos, _hVfLen, hEps, hGamma, hOrigin, _⟩,
+                       ⟨hCbfScoped, hAlpha, _⟩,
+                       ⟨hDaeScoped, hDelta, _⟩⟩
+    have hLyapDims := (lyapunovSpecWellScoped_iff prob.lyapunov).mp hLyapScoped
+    have hCbfDims := (cbfSpecWellScoped_iff prob.cbf).mp hCbfScoped
+    have hDaeDims := (daeSpecWellScoped_iff prob.dae).mp hDaeScoped
+    have hWfTrue : checkSosProblemWellFormed prob = true := by
+      unfold checkSosProblemWellFormed
+      simp [hLyapDims, hEps, hGamma, hOrigin, hCbfDims, hAlpha, hDaeDims, hDelta]
+    exact hWf hWfTrue
+
+theorem checkSosLyapunovProblem_mono
+    {r r' : Nat} {prob : SosLyapunovProblem} {cert : SosLyapunovCert}
+    (le : r ≤ r') (hne : checkSosLyapunovProblem r prob cert ≠ .uncovered) :
+    checkSosLyapunovProblem r' prob cert = checkSosLyapunovProblem r prob cert := by
+  unfold checkSosLyapunovProblem at hne ⊢
+  split
+  · rfl
+  · split
+    · rfl
+    · split
+      · rename_i hWf hAll hProbe
+        simp only [hWf, hAll, Bool.false_eq_true, ↓reduceIte, hProbe] at hne
+        cases hFind : findSosLyapunovRefutation r prob with
+        | none =>
+          rw [hFind] at hne
+          exact False.elim (hne rfl)
+        | some clause =>
+          have hFind' : findSosLyapunovRefutation r' prob = some clause :=
+            Judge.deepen_mono _ hFind le
+          simp only [hFind']
+      · split
+        · rfl
+        · split <;> rfl
+
+/-! ### The certifiable fragment, stated over the polynomial ring
+
+What it is for a problem to have a certificate, said without running a checker: scope conditions
+as quantified statements over terms (`LyapunovSpecWellScoped`, `CbfSpecWellScoped`, `DaeSpecWellScoped`),
+positivity claims as memberships in a quadratic module (`PsatzNonnegCertifiable`), the unsafe-set
+separation as a Stengle identity (`StenglePositivstellensatzRefutable`), and manifold tangency as
+an ideal combination (`IdealCombRel`). `sosLyapunovProblemCertifiable_iff_check_ok` proves this is
+exactly the set of problems the checker accepts some certificate for. -/
 
 /-- **A Lyapunov function with algebraic certificates**: well scoped, `ε > 0`, `γ ≥ 0`, `V(0) = 0`,
 and both `V - ε‖x‖²` and `-L_f V - γ V` lie in the quadratic module of the domain. -/
@@ -1267,7 +1739,7 @@ theorem cbfAlgebraicallyCertifiable_iff (spec : SosCbfSpec) :
   constructor
   · rintro ⟨hDims, hAlpha, hRef, hNag⟩
     obtain ⟨c1, r, hc1⟩ := (stenglePositivstellensatzRefutable_iff_check_ok _).mp hRef
-    have hc1' := (positivstellensatzCheck_fuel_irrelevant 0 r _ c1).trans hc1
+    have hc1' := (positivstellensatzCheck_ok_grade_irrelevant r 0 _ c1).mp hc1
     obtain ⟨c2, hc2⟩ := (psatzNonnegCertifiable_iff _ _ _).mp hNag
     refine ⟨⟨c1, c2⟩, ?_⟩
     unfold checkSosCbf
@@ -1379,18 +1851,21 @@ theorem checkSosLyapunovProblem_ok_iff (r : Nat) (prob : SosLyapunovProblem) (ce
   · intro hOk
     by_cases hWf : checkSosProblemWellFormed prob = true
     · simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-      by_cases hL : checkSosLyapunov prob.lyapunov cert.lyapunovWitness = true
-      · simp only [hL, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-        by_cases hC : checkSosCbf prob.cbf cert.cbfWitness = true
-        · simp only [hC, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hOk
-          by_cases hD : checkDaeManifold prob.dae cert.daeWitness = true
-          · exact ⟨hWf, hL, hC, hD⟩
-          · simp [hD] at hOk
-        · simp [hC] at hOk
-      · simp [hL] at hOk
+      by_cases hAll : (checkSosLyapunov prob.lyapunov cert.lyapunovWitness &&
+          checkSosCbf prob.cbf cert.cbfWitness &&
+          checkDaeManifold prob.dae cert.daeWitness) = true
+      · rcases (Bool.and_eq_true _ _).mp hAll with ⟨hLC, hD⟩
+        rcases (Bool.and_eq_true _ _).mp hLC with ⟨hL, hC⟩
+        exact ⟨hWf, hL, hC, hD⟩
+      · simp only [hAll, Bool.false_eq_true, ↓reduceIte] at hOk
+        split at hOk
+        · split at hOk <;> contradiction
+        · split at hOk
+          · contradiction
+          · split at hOk <;> contradiction
     · simp [hWf] at hOk
   · rintro ⟨hWf, hL, hC, hD⟩
-    simp only [hWf, hL, hC, hD, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    simp only [hWf, hL, hC, hD, Bool.not_true, Bool.and_self, Bool.false_eq_true, ↓reduceIte]
 
 /-- The three component checks already contain every clause of the well-formedness gate. -/
 theorem checkSosProblemWellFormed_of_checks (prob : SosLyapunovProblem) (cert : SosLyapunovCert)
@@ -1428,16 +1903,195 @@ theorem sosLyapunovProblemCertifiable_iff_check_ok (prob : SosLyapunovProblem) :
       (cbfAlgebraicallyCertifiable_iff prob.cbf).mpr ⟨cert.cbfWitness, hC⟩,
       (daeAlgebraicallyCertifiable_iff prob.dae).mpr ⟨cert.daeWitness, hD⟩⟩
 
--- Forgetting DAE tangency and regularity enlarges the claimed fragment.
-#tooth sosLyapunovProblemCertifiable_iff_check_ok by mutation SosLyapunovProblemCertifiable :=
-  fun prob => LyapunovAlgebraicallyCertifiable prob.lyapunov ∧ CbfAlgebraicallyCertifiable prob.cbf
+/-- **Finite-Height Rational Counterexample Completeness (`sosLyapunov_rational_counterexample_complete`)**:
+Whenever `prob` is well-formed and has a rational state counterexample `pt : List CanonicalRat`
+(`pt.length = sosLyapunovSearchDim prob`, coordinate height `≤ B`, `1 ≤ B`) detected by
+`evalSosLyapunovCandidate prob pt = some k0`, `checkSosLyapunovProblem B prob sosLyapunovSearchProbe`
+discovers a concrete refuting witness `k` (`sosLyapunovRefutes k = true`) and refutes `prob.SemanticMeaning`. -/
+theorem sosLyapunov_rational_counterexample_complete
+    (prob : SosLyapunovProblem) (pt : List CanonicalRat) (k0 : SosLyapunovClause) (B : Nat)
+    (hWf : checkSosProblemWellFormed prob = true)
+    (hB1 : 1 ≤ B)
+    (hLen : pt.length = sosLyapunovSearchDim prob)
+    (hCoords : ∀ x ∈ pt, x.num.natAbs ≤ B ∧ x.den ≤ B)
+    (hCand : evalSosLyapunovCandidate prob pt = some k0) :
+    ∃ k, checkSosLyapunovProblem B prob sosLyapunovSearchProbe = .refused k [] ∧
+         sosLyapunovRefutes k = true ∧
+         ¬ prob.SemanticMeaning := by
+  have hMem : pt ∈ ratTuplesOfDim (sosLyapunovSearchDim prob) B := by
+    rw [← hLen]
+    exact mem_ratTuplesOfDim B pt hCoords
+  have hShell : ∃ w0, findSosLyapunovRefutationAtShell B prob = some w0 := by
+    unfold findSosLyapunovRefutationAtShell
+    have hNe0 : (B == 0) = false := beq_false_of_ne (by omega)
+    rw [hNe0]
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    exact list_findSome?_exists_of_mem _ _ hMem hCand
+  obtain ⟨w0, hw0⟩ := hShell
+  obtain ⟨k, hkDeep⟩ := Judge.deepen_isSome (fun g => findSosLyapunovRefutationAtShell g prob) hw0
+  change findSosLyapunovRefutation B prob = some k at hkDeep
+  obtain ⟨hkRefutes, hNotMean⟩ := findSosLyapunovRefutation_sound hkDeep
+  have hNotAll : (checkSosLyapunov prob.lyapunov sosLyapunovSearchProbe.lyapunovWitness &&
+      checkSosCbf prob.cbf sosLyapunovSearchProbe.cbfWitness &&
+      checkDaeManifold prob.dae sosLyapunovSearchProbe.daeWitness) = false := by
+    cases hAll : (checkSosLyapunov prob.lyapunov sosLyapunovSearchProbe.lyapunovWitness &&
+        checkSosCbf prob.cbf sosLyapunovSearchProbe.cbfWitness &&
+        checkDaeManifold prob.dae sosLyapunovSearchProbe.daeWitness) with
+    | false => rfl
+    | true =>
+      rcases (Bool.and_eq_true _ _).mp hAll with ⟨hLC, hD⟩
+      rcases (Bool.and_eq_true _ _).mp hLC with ⟨hL, hC⟩
+      have hOk : checkSosLyapunovProblem B prob sosLyapunovSearchProbe = .ok :=
+        (checkSosLyapunovProblem_ok_iff B prob sosLyapunovSearchProbe).mpr ⟨hWf, hL, hC, hD⟩
+      exact False.elim (hNotMean (checkSosLyapunovProblem_sound B prob sosLyapunovSearchProbe hOk))
+  have hProbe : sosLyapunovIsSearchProbe sosLyapunovSearchProbe = true :=
+    decide_eq_true rfl
+  refine ⟨k, ?_, hkRefutes, hNotMean⟩
+  unfold checkSosLyapunovProblem
+  simp only [hWf, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hNotAll, hProbe, hkDeep]
 
--- A bad Lyapunov witness cannot establish that the problem is malformed.
-#tooth checkSosLyapunovProblem_refuted by mutation checkSosLyapunovProblem :=
-  fun _ prob cert =>
-    if !checkSosLyapunov prob.lyapunov cert.lyapunovWitness then
-      .refused .malformedDimensionOrParam []
-    else .ok
+/-- **Semantic Rational State-Space Counterexample Completeness (`sosLyapunov_semantic_violation_complete`)**:
+For **any** `prob : SosLyapunovProblem` and **any** rational state assignment `env : Nat → CanonicalRat`
+(with no well-formedness or support restriction), if `env` exhibits any radial positive-definiteness
+violation, Lie-derivative ascent/decay violation, CBF unsafe-set overlap, CBF Nagumo invariance
+violation, or Index-1 DAE manifold violation, there exist a finite `grade` and refuting clause `k` at
+which `checkSosLyapunovProblem grade prob sosLyapunovSearchProbe` refutes `prob.SemanticMeaning`. -/
+theorem sosLyapunov_semantic_violation_complete
+    (prob : SosLyapunovProblem) (env : Nat → CanonicalRat)
+    (hViol :
+      ((∃ v < prob.lyapunov.dim, env v ≠ 0) ∧
+       (∀ g ∈ prob.lyapunov.domainIneqs, 0 ≤ g.eval env) ∧
+       (prob.lyapunov.lyapunovV.eval env ≤ 0 ∨
+        prob.lyapunov.lyapunovV.eval env < prob.lyapunov.radialEps * (sumVarSquaresPoly prob.lyapunov.dim).eval env)) ∨
+      ((∀ g ∈ prob.lyapunov.domainIneqs, 0 ≤ g.eval env) ∧
+       (0 < (lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField).eval env ∨
+        -prob.lyapunov.decayGamma * prob.lyapunov.lyapunovV.eval env <
+          (lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField).eval env)) ∨
+      (0 ≤ prob.cbf.barrierB.eval env ∧ 0 ≤ prob.cbf.unsafePoly.eval env ∧
+       ∀ g ∈ prob.cbf.domainIneqs, 0 ≤ g.eval env) ∨
+      (0 ≤ prob.cbf.barrierB.eval env ∧
+       (∀ g ∈ prob.cbf.domainIneqs, 0 ≤ g.eval env) ∧
+       (lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField).eval env +
+         prob.cbf.classKAlpha * prob.cbf.barrierB.eval env < 0) ∨
+      ((∀ h ∈ prob.dae.algConstraints, h.eval env = 0) ∧
+       (∀ g ∈ prob.dae.domainIneqs, 0 ≤ g.eval env) ∧
+       ((∃ h_r ∈ prob.dae.algConstraints, (lieDerivativePoly h_r prob.dae.vectorField).eval env ≠ 0) ∨
+        prob.dae.algJacobianDet.eval env ≠
+          (computeSymbolicAlgJacobianDet prob.dae.algConstraints prob.dae.algVars).eval env ∨
+        (Poly.sqr prob.dae.algJacobianDet).eval env < prob.dae.regDelta ∨
+        prob.dae.algJacobianDet.eval env = 0))) :
+    ∃ grade k,
+      checkSosLyapunovProblem grade prob sosLyapunovSearchProbe = .refused k [] ∧
+      sosLyapunovRefutes k = true ∧
+      ¬ prob.SemanticMeaning := by
+  cases hWf : checkSosProblemWellFormed prob with
+  | false =>
+    have hRef0 : checkSosLyapunovProblem 0 prob sosLyapunovSearchProbe = .refused .malformedDimensionOrParam [] := by
+      unfold checkSosLyapunovProblem; simp [hWf]
+    exact ⟨0, .malformedDimensionOrParam, hRef0, rfl, checkSosLyapunovProblem_refuted hRef0 rfl⟩
+  | true =>
+    let dim := sosLyapunovSearchDim prob
+    let pt := (List.range dim).map env
+    let B := ratTupleHeightBound pt
+    have hAgree : ∀ v, v < dim → ratPointEnv pt v = env v :=
+      fun v hv => ratPointEnv_map_range dim env hv
+    have hAllEq : ∀ p ∈ sosLyapunovAllPolys prob, p.eval (ratPointEnv pt) = p.eval env := by
+      intro p hp
+      have hLe1 : polyVarBound p ≤ polyListVarBound (sosLyapunovAllPolys prob) :=
+        polyVarBound_le_polyListVarBound hp
+      have hLe2 : polyListVarBound (sosLyapunovAllPolys prob) ≤ dim := by
+        unfold dim sosLyapunovSearchDim; omega
+      exact polyVarBound_eval_congr (Nat.le_trans hLe1 hLe2) hAgree
+    let lieV := lieDerivativePoly prob.lyapunov.lyapunovV prob.lyapunov.vectorField
+    let lieB := lieDerivativePoly prob.cbf.barrierB prob.cbf.vectorField
+    have hSeedEq : ∀ p ∈ sosLyapunovSeedPolys prob lieV lieB, p.eval (ratPointEnv pt) = p.eval env :=
+      fun p hp => hAllEq p (List.Mem.tail _ (List.Mem.tail _ (List.mem_append_right _ hp)))
+    have hVEq : prob.lyapunov.lyapunovV.eval (ratPointEnv pt) = prob.lyapunov.lyapunovV.eval env :=
+      hSeedEq _ (List.Mem.head _)
+    have hLieVEq : lieV.eval (ratPointEnv pt) = lieV.eval env :=
+      hSeedEq _ (List.Mem.tail _ (List.Mem.head _))
+    have hBEq : prob.cbf.barrierB.eval (ratPointEnv pt) = prob.cbf.barrierB.eval env :=
+      hSeedEq _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _)))
+    have hLieBEq : lieB.eval (ratPointEnv pt) = lieB.eval env :=
+      hSeedEq _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _))))
+    have hUEq : prob.cbf.unsafePoly.eval (ratPointEnv pt) = prob.cbf.unsafePoly.eval env :=
+      hSeedEq _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _)))))
+    have hDetEq : prob.dae.algJacobianDet.eval (ratPointEnv pt) = prob.dae.algJacobianDet.eval env :=
+      hSeedEq _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _))))))
+    have hSumSqEq : (sumVarSquaresPoly prob.lyapunov.dim).eval (ratPointEnv pt) =
+        (sumVarSquaresPoly prob.lyapunov.dim).eval env :=
+      hAllEq _ (List.Mem.head _)
+    have hSymDetEq : (computeSymbolicAlgJacobianDet prob.dae.algConstraints prob.dae.algVars).eval (ratPointEnv pt) =
+        (computeSymbolicAlgJacobianDet prob.dae.algConstraints prob.dae.algVars).eval env :=
+      hAllEq _ (List.Mem.tail _ (List.Mem.head _))
+    have hTailMem : ∀ p ∈ prob.lyapunov.domainIneqs ++ prob.cbf.domainIneqs ++
+        prob.dae.algConstraints ++ prob.dae.domainIneqs, p.eval (ratPointEnv pt) = p.eval env :=
+      fun p hp => hSeedEq p (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ hp))))))
+    have hCandSome : ∃ k0, evalSosLyapunovCandidate prob pt = some k0 := by
+      change ∃ k0, evalSosLyapunovCandidateWithLie prob lieV lieB pt = some k0
+      unfold evalSosLyapunovCandidateWithLie
+      by_cases h1 : evalLyapunovRadialNonpos prob.lyapunov pt = true
+      · exact ⟨.lyapunovRadialNonpos pt, by simp [h1]⟩
+      · by_cases h2 : evalLyapunovLieAscentWithLie prob.lyapunov lieV pt = true
+        · exact ⟨.lyapunovLieAscent pt, by simp [h1, h2]⟩
+        · by_cases h3 : evalCbfUnsafeOverlap prob.cbf pt = true
+          · exact ⟨.cbfUnsafeOverlap pt, by simp [h1, h2, h3]⟩
+          · by_cases h4 : evalCbfNagumoViolationWithLie prob.cbf lieB pt = true
+            · exact ⟨.cbfNagumoViolation pt, by simp [h1, h2, h3, h4]⟩
+            · by_cases h5 : evalDaeManifoldViolation prob.dae pt = true
+              · exact ⟨.daeManifoldViolation pt, by simp [h1, h2, h3, h4, h5]⟩
+              · exfalso
+                rcases hViol with ⟨⟨v, hvLt, hvNe⟩, hDom, hRad⟩ | ⟨hDom, hLie⟩ | ⟨hB, hU, hDom⟩ | ⟨hB, hDom, hNag⟩ | ⟨hMan, hDom, hDae⟩
+                · apply h1; unfold evalLyapunovRadialNonpos
+                  have hvDim : v < dim := by unfold dim sosLyapunovSearchDim; omega
+                  have hNz : pointHasNonZeroCoord prob.lyapunov.dim pt = true :=
+                    (pointHasNonZeroCoord_iff _ _).mpr ⟨v, hvLt, by rw [hAgree v hvDim]; exact hvNe⟩
+                  simp only [hNz, Bool.true_and, Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true, decide_eq_true_eq]
+                  refine ⟨fun g hg => ?_, ?_⟩
+                  · rw [hTailMem g (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ hg)))]
+                    exact hDom g hg
+                  · rw [hVEq, hSumSqEq]; exact hRad
+                · apply h2; unfold evalLyapunovLieAscentWithLie
+                  simp only [Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true, decide_eq_true_eq]
+                  refine ⟨fun g hg => ?_, ?_⟩
+                  · rw [hTailMem g (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ hg)))]
+                    exact hDom g hg
+                  · rw [hLieVEq, hVEq]; exact hLie
+                · apply h3; unfold evalCbfUnsafeOverlap
+                  simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq]
+                  refine ⟨⟨by rw [hBEq]; exact hB, by rw [hUEq]; exact hU⟩, fun g hg => ?_⟩
+                  rw [hTailMem g (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ hg)))]
+                  exact hDom g hg
+                · apply h4; unfold evalCbfNagumoViolationWithLie
+                  simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq]
+                  refine ⟨⟨by rw [hBEq]; exact hB, fun g hg => ?_⟩, ?_⟩
+                  · rw [hTailMem g (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ hg)))]
+                    exact hDom g hg
+                  · rw [hLieBEq, hBEq]; exact hNag
+                · apply h5; unfold evalDaeManifoldViolation
+                  simp only [Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true, List.any_eq_true, decide_eq_true_eq]
+                  refine ⟨⟨fun h hh => ?_, fun g hg => ?_⟩, ?_⟩
+                  · rw [hTailMem h (List.mem_append_left _ (List.mem_append_right _ hh))]; exact hMan h hh
+                  · rw [hTailMem g (List.mem_append_right _ hg)]; exact hDom g hg
+                  · rcases hDae with ⟨h_r, hm, hne⟩ | hSym | hReg | hZero
+                    · refine Or.inl (Or.inl (Or.inl ⟨h_r, hm, ?_⟩))
+                      have hLieHEq := hAllEq (lieDerivativePoly h_r prob.dae.vectorField)
+                        (List.Mem.tail _ (List.Mem.tail _ (List.mem_append_left _ (List.mem_map.mpr ⟨h_r, hm, rfl⟩))))
+                      rw [hLieHEq]; exact hne
+                    · refine Or.inl (Or.inl (Or.inr ?_))
+                      rw [hDetEq, hSymDetEq]; exact hSym
+                    · refine Or.inl (Or.inr ?_)
+                      rw [Poly.eval_sqr, hDetEq, ← Poly.eval_sqr]; exact hReg
+                    · refine Or.inr ?_
+                      rw [hDetEq]; exact hZero
+    obtain ⟨k0, hk0⟩ := hCandSome
+    obtain ⟨k, hCheck, hkRefutes, hNotMean⟩ :=
+      sosLyapunov_rational_counterexample_complete prob pt k0 B hWf
+        (one_le_ratTupleHeightBound pt)
+        (by simp [pt, dim])
+        (fun _ hx => coord_le_ratTupleHeightBound hx)
+        hk0
+    exact ⟨B, k, hCheck, hkRefutes, hNotMean⟩
 
 /-- Universal Judge instance for `"sos-lyapunov-cbf@1"`. -/
 instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
@@ -1445,23 +2099,17 @@ instance sosLyapunovJudge : Judge SosLyapunovProblem SosLyapunovCert where
   Meaning prob _cert := prob.SemanticMeaning
   check := checkSosLyapunovProblem
   sound := by intro r prob cert h; exact checkSosLyapunovProblem_sound r prob cert h
-  refutes
-    | .malformedDimensionOrParam => true
-    | _ => false
+  refutes := sosLyapunovRefutes
   refuted := by
     intro r prob cert k p hCheck hRefutes _c'
-    cases k with
-    | malformedDimensionOrParam => exact checkSosLyapunovProblem_refuted hCheck
-    | lyapunovFailed => cases hRefutes
-    | cbfFailed => cases hRefutes
-    | daeManifoldFailed => cases hRefutes
+    exact checkSosLyapunovProblem_refuted hCheck hRefutes
   Fragment := SosLyapunovProblemCertifiable
   complete := by
     intro prob hFrag _
     exact (sosLyapunovProblemCertifiable_iff_check_ok prob).mp hFrag
-  mono := by intro r r' o c le hne; rfl
+  mono := fun le hne => checkSosLyapunovProblem_mono le hne
 
-/-! ## 7. Canonical Showcase Models: 2D Nonlinear Cubic Damping, Barrier Safety & Index-1 DAE Manifold -/
+/-! ## 7. Reference 2D Nonlinear Cubic Damping, Barrier Safety, Index-1 DAE & Non-Origin Counterexample Refutations -/
 
 /-- Variable $x_0$ as `Poly`. -/
 def x0Poly : Poly := polyOfTerm [(0, 1)] 1
@@ -1478,7 +2126,7 @@ def cubicDampedVectorField2D : List Poly :=
 /-- Candidate Lyapunov function $V(x_0, x_1) = x_0^2 + x_1^2$ with $\varepsilon = 1/2$, $\gamma = 2$:
 $$\mathcal{L}_f V = 2 x_0(-x_0 - x_0^3 + x_1) + 2 x_1(-x_0 - x_1 - x_1^3) = -2(x_0^2 + x_1^2) - 2(x_0^4 + x_1^4),$$
 so $-\mathcal{L}_f V - 2 V = 2 x_0^4 + 2 x_1^4 = 2(x_0^2)^2 + 2(x_1^2)^2 \ge 0$! -/
-def goldenLyapunovSpec2D : SosLyapunovSpec where
+def cubicDampedLyapunovSpec2D : SosLyapunovSpec where
   dim         := 2
   vectorField := cubicDampedVectorField2D
   domainIneqs := []
@@ -1486,10 +2134,10 @@ def goldenLyapunovSpec2D : SosLyapunovSpec where
   radialEps   := CanonicalRat.mk 1 2
   decayGamma  := 2
 
-/-- SOS witness for `goldenLyapunovSpec2D`:
+/-- SOS witness for `cubicDampedLyapunovSpec2D`:
 * $V - \frac{1}{2}(x_0^2 + x_1^2) = \frac{1}{2} x_0^2 + \frac{1}{2} x_1^2$,
 * $-\mathcal{L}_f V - 2 V = 2 (x_0^2)^2 + 2 (x_1^2)^2$. -/
-def goldenLyapunovWitness2D : SosLyapunovWitness where
+def cubicDampedLyapunovWitness2D : SosLyapunovWitness where
   posDefCert :=
     { monoidIndices := []
     , sigma0        := { terms := [(CanonicalRat.mk 1 2, x0Poly), (CanonicalRat.mk 1 2, x1Poly)] }
@@ -1506,17 +2154,17 @@ def goldenLyapunovWitness2D : SosLyapunovWitness where
 * Unsafe set $u_{\text{unsafe}}(x) = x_0^2 + x_1^2 - 2 \ge 0$ (exterior of radius $\sqrt{2}$),
 * Class-$\mathcal{K}$ parameter $\alpha = 2$:
   $\mathcal{L}_f B + 2 B = 2(x_0^2 + x_1^2) + 2(1 - x_0^2 - x_1^2) = 2 \cdot 1^2 \ge 0$! -/
-def goldenCbfSpec2D : SosCbfSpec where
+def unitDiskCbfSpec2D : SosCbfSpec where
   vectorField := [Poly.neg x0Poly, Poly.neg x1Poly]
   domainIneqs := []
   barrierB    := Poly.sub Poly.one (Poly.add (Poly.sqr x0Poly) (Poly.sqr x1Poly))
   unsafePoly  := Poly.sub (Poly.add (Poly.sqr x0Poly) (Poly.sqr x1Poly)) (polyConst 2)
   classKAlpha := 2
 
-/-- SOS witness for `goldenCbfSpec2D`:
+/-- SOS witness for `unitDiskCbfSpec2D`:
 * Stengle refutation: $1 + 1 \cdot B(x) + 1 \cdot u_{\text{unsafe}}(x) = 0$,
 * Nagumo invariance: $\mathcal{L}_f B + 2 B = 2 \cdot 1^2$. -/
-def goldenCbfWitness2D : SosCbfWitness where
+def unitDiskCbfWitness2D : SosCbfWitness where
   unsafeRefuteCert :=
     { monoidIndices := []
     , sigma0        := { terms := [] }
@@ -1534,7 +2182,7 @@ under tangent flow $\dot{x}_0 = -x_0, \dot{x}_1 = 2 x_0^2$:
 * $\mathcal{L}_f h_1 = 2 x_0(-x_0) + 1 \cdot (2 x_0^2) = 0 \in \langle h_1 \rangle$,
 * Exact symbolic algebraic Jacobian $\frac{\partial h_1}{\partial x_1} = 1 = \text{Poly.one}$,
   so $(\det J_{\text{alg}})^2 - \frac{1}{2} = \frac{1}{2} \cdot 1^2 \ge 0$ everywhere! -/
-def goldenCircleDaeSpec : DaeManifoldSpec where
+def parabolicManifoldDaeSpec2D : DaeManifoldSpec where
   vectorField    := [Poly.neg x0Poly, Poly.scale 2 (Poly.sqr x0Poly)]
   domainIneqs    := []
   algConstraints := [Poly.sub (Poly.add (Poly.sqr x0Poly) x1Poly) Poly.one]
@@ -1542,8 +2190,8 @@ def goldenCircleDaeSpec : DaeManifoldSpec where
   algJacobianDet := Poly.one
   regDelta       := CanonicalRat.mk 1 2
 
-/-- Witness for `goldenCircleDaeSpec`. -/
-def goldenCircleDaeWitness : DaeManifoldWitness where
+/-- Witness for `parabolicManifoldDaeSpec2D`. -/
+def parabolicManifoldDaeWitness2D : DaeManifoldWitness where
   tangencyCert  := { quotients := [] }
   tangencyCerts := [{ quotients := [] }]
   regularityCert :=
@@ -1552,30 +2200,153 @@ def goldenCircleDaeWitness : DaeManifoldWitness where
     , coneTerms     := []
     , idealTerms    := [] }
 
-/-- Canonical problem bundle for `"sos-lyapunov-cbf@1"`. -/
-def goldenSosProblem : SosLyapunovProblem where
-  lyapunov := goldenLyapunovSpec2D
-  cbf      := goldenCbfSpec2D
-  dae      := goldenCircleDaeSpec
+/-- Reference 2D cubic-damped Lyapunov + unit-disk CBF + parabolic DAE problem bundle for `"sos-lyapunov-cbf@1"`. -/
+def cubicDampedCbfDaeProblem2D : SosLyapunovProblem where
+  lyapunov := cubicDampedLyapunovSpec2D
+  cbf      := unitDiskCbfSpec2D
+  dae      := parabolicManifoldDaeSpec2D
 
-/-- Canonical valid certificate bundle for `"sos-lyapunov-cbf@1"`. -/
-def goldenSosCert : SosLyapunovCert where
-  lyapunovWitness := goldenLyapunovWitness2D
-  cbfWitness      := goldenCbfWitness2D
-  daeWitness      := goldenCircleDaeWitness
+/-- Valid SOS/Gröbner certificate bundle for `cubicDampedCbfDaeProblem2D`. -/
+def cubicDampedCbfDaeCert2D : SosLyapunovCert where
+  lyapunovWitness := cubicDampedLyapunovWitness2D
+  cbfWitness      := unitDiskCbfWitness2D
+  daeWitness      := parabolicManifoldDaeWitness2D
 
 /-- Planted bad certificate bundle for `"sos-lyapunov-cbf@1"` (empty SOS witness for $V - \varepsilon\|x\|^2$). -/
 def badSosCert : SosLyapunovCert where
   lyapunovWitness :=
-    { goldenLyapunovWitness2D with
+    { cubicDampedLyapunovWitness2D with
       posDefCert := { monoidIndices := [], sigma0 := { terms := [] }, coneTerms := [], idealTerms := [] } }
-  cbfWitness      := goldenCbfWitness2D
-  daeWitness      := goldenCircleDaeWitness
+  cbfWitness      := unitDiskCbfWitness2D
+  daeWitness      := parabolicManifoldDaeWitness2D
 
--- fixture kept (2026-11-04): consumed by a proof in this file, Obend/Elab/AutoCert.lean
 theorem sosLyapunov_bad_refused :
-    checkSosLyapunovProblem 0 goldenSosProblem badSosCert = .refused .lyapunovFailed [] := by
+    checkSosLyapunovProblem 0 cubicDampedCbfDaeProblem2D badSosCert = .refused .lyapunovFailed [] := by
   decide +kernel
+
+/-- Outside-basin reverse-cubic system $\dot{x}_0 = -x_0 + x_0^3, \dot{x}_1 = -x_1$ with $V = x_0^2 + x_1^2$
+and exponential decay rate $\gamma = 1$: locally exponentially decaying inside the basin (`x_0 = 1/2`,
+where $\mathcal{L}_f V = -3/8 \le -1/4$), but escaping outside the basin (`x_0 = 2`, $\mathcal{L}_f V = +24 > 0$). -/
+def reverseCubicEscapeProblem2D : SosLyapunovProblem :=
+  { cubicDampedCbfDaeProblem2D with
+    lyapunov :=
+      { cubicDampedLyapunovSpec2D with
+        decayGamma  := 1
+        vectorField :=
+          [ Poly.add (Poly.neg x0Poly) (Poly.mul x0Poly (Poly.sqr x0Poly))
+          , Poly.neg x1Poly ] } }
+
+theorem reverseCubicEscape_refuted_outside_basin :
+    evalLyapunovLieAscent reverseCubicEscapeProblem2D.lyapunov [CanonicalRat.mk 1 2, 0] = false ∧
+    evalLyapunovLieAscent reverseCubicEscapeProblem2D.lyapunov [2, 0] = true ∧
+    (match checkSosLyapunovProblem 0 reverseCubicEscapeProblem2D sosLyapunovSearchProbe with
+     | .refused (.lyapunovLieAscent w) [] =>
+       pointHasNonZeroCoord 2 w && evalLyapunovLieAscent reverseCubicEscapeProblem2D.lyapunov w
+     | _ => false) = true ∧
+    ¬ ValidSosLyapunovSpec reverseCubicEscapeProblem2D.lyapunov ∧
+    ¬ reverseCubicEscapeProblem2D.SemanticMeaning := by
+  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel, ?_, ?_⟩
+  · exact lyapunovLieAscent_refutes_spec (pt := [2, 0]) (by decide +kernel)
+  · intro hMean
+    exact lyapunovLieAscent_refutes_spec (pt := [2, 0]) (by decide +kernel) hMean.1
+
+private theorem findSosLyapunovRefutation_inhabited :
+    ∃ k1 k2,
+      findSosLyapunovRefutationAtShell 0 reverseCubicEscapeProblem2D = some k1 ∧
+      findSosLyapunovRefutation 0 reverseCubicEscapeProblem2D = some k2 := by
+  have h1 : (findSosLyapunovRefutationAtShell 0 reverseCubicEscapeProblem2D).isSome = true := by
+    decide +kernel
+  have h2 : (findSosLyapunovRefutation 0 reverseCubicEscapeProblem2D).isSome = true := by
+    decide +kernel
+  cases hs1 : findSosLyapunovRefutationAtShell 0 reverseCubicEscapeProblem2D with
+  | none => rw [hs1] at h1; cases h1
+  | some k1 =>
+    cases hs2 : findSosLyapunovRefutation 0 reverseCubicEscapeProblem2D with
+    | none => rw [hs2] at h2; cases h2
+    | some k2 => exact ⟨k1, k2, rfl, rfl⟩
+
+/-- Indefinite saddle energy $V(x_0, x_1) = x_0^2 - x_1^2$: passes `V(0) = 0` and is positive along
+the $x_0$-axis, yet `sosLyapunovJudge` refutes it off-origin along the $x_1$-axis (`V(0, 1) = -1 ≤ 0`). -/
+def indefiniteEnergyProblem2D : SosLyapunovProblem :=
+  { cubicDampedCbfDaeProblem2D with
+    lyapunov :=
+      { cubicDampedLyapunovSpec2D with
+        lyapunovV := Poly.sub (Poly.sqr x0Poly) (Poly.sqr x1Poly) } }
+
+theorem indefiniteEnergy_refuted_off_origin :
+    indefiniteEnergyProblem2D.lyapunov.lyapunovV.eval originEnv = 0 ∧
+    (match checkSosLyapunovProblem 0 indefiniteEnergyProblem2D sosLyapunovSearchProbe with
+     | .refused (.lyapunovRadialNonpos w) [] =>
+       pointHasNonZeroCoord 2 w && evalLyapunovRadialNonpos indefiniteEnergyProblem2D.lyapunov w
+     | _ => false) = true ∧
+    ¬ ValidSosLyapunovSpec indefiniteEnergyProblem2D.lyapunov :=
+  ⟨by decide +kernel,
+   by decide +kernel,
+   lyapunovRadialNonpos_refutes_spec (pt := [0, 1]) (by decide +kernel)⟩
+
+/-- Shifted non-origin CBF unsafe-set overlap: safe disk $B(x) = 1 - (x_0 - 3)^2 - x_1^2 \ge 0$
+centered at $(3, 0)$ (so $B(0, 0) = -8 < 0$ at the origin!) overlapping $u_{\text{unsafe}}(x) = x_0 - 3 \ge 0$.
+Quadratic-vertex seeding discovers the non-origin overlap witness at grade `0`. -/
+def shiftedDiskOverlapProblem2D : SosLyapunovProblem :=
+  let dx := Poly.sub x0Poly (polyConst 3)
+  { cubicDampedCbfDaeProblem2D with
+    cbf :=
+      { unitDiskCbfSpec2D with
+        barrierB   := Poly.sub Poly.one (Poly.add (Poly.sqr dx) (Poly.sqr x1Poly))
+        unsafePoly := dx } }
+
+theorem shiftedDiskOverlap_refuted_away_from_origin :
+    evalCbfUnsafeOverlap shiftedDiskOverlapProblem2D.cbf [] = false ∧
+    (match checkSosLyapunovProblem 0 shiftedDiskOverlapProblem2D sosLyapunovSearchProbe with
+     | .refused (.cbfUnsafeOverlap w) [] =>
+       pointHasNonZeroCoord 2 w && evalCbfUnsafeOverlap shiftedDiskOverlapProblem2D.cbf w
+     | _ => false) = true ∧
+    ¬ shiftedDiskOverlapProblem2D.SemanticMeaning :=
+  ⟨by decide +kernel,
+   by decide +kernel,
+   cbfUnsafeOverlap_refutes_problem (pt := [3, 0]) (by decide +kernel)⟩
+
+/-- Non-origin CBF Nagumo forward-invariance violation: unit-disk safe set $B(x) = 1 - x_0^2 - x_1^2 \ge 0$
+with disjoint unsafe set $x_0^2 + x_1^2 - 2 \ge 0$ and $\alpha = 1$, under outward drift $\dot{x}_0 = 2 x_0, \dot{x}_1 = 0$.
+At the origin $(0, 0)$, $\mathcal{L}_f B + B = +1 \ge 0$ holds (`evalCbfNagumoViolation ... [] = false`),
+yet on the boundary $(1, 0)$, $B(1, 0) = 0 \ge 0$ while $\mathcal{L}_f B(1, 0) + B(1, 0) = -4 < 0$! -/
+def outwardDriftNagumoProblem2D : SosLyapunovProblem :=
+  { cubicDampedCbfDaeProblem2D with
+    cbf :=
+      { unitDiskCbfSpec2D with
+        vectorField := [Poly.scale 2 x0Poly, Poly.zero]
+        classKAlpha := 1 } }
+
+theorem outwardDriftNagumo_refuted_off_origin :
+    evalCbfNagumoViolation outwardDriftNagumoProblem2D.cbf [] = false ∧
+    (match checkSosLyapunovProblem 0 outwardDriftNagumoProblem2D sosLyapunovSearchProbe with
+     | .refused (.cbfNagumoViolation w) [] =>
+       pointHasNonZeroCoord 2 w && evalCbfNagumoViolation outwardDriftNagumoProblem2D.cbf w
+     | _ => false) = true ∧
+    ¬ outwardDriftNagumoProblem2D.SemanticMeaning :=
+  ⟨by decide +kernel,
+   by decide +kernel,
+   cbfNagumoViolation_refutes_problem (pt := [1, 0]) (by decide +kernel)⟩
+
+/-- Non-origin Index-1 DAE manifold tangency violation on $h_1(x_0, x_1) = x_0^2 + x_1 - 1 = 0$
+under non-tangent flow $\dot{x}_0 = -x_0, \dot{x}_1 = 0$: the origin $(0, 0)$ is not on the manifold
+(`evalDaeManifoldViolation ... [] = false`), yet at $(1, 0) \in \mathcal{M}$, $\mathcal{L}_f h_1(1, 0) = -2 \ne 0$! -/
+def nonTangentParabolicDaeProblem2D : SosLyapunovProblem :=
+  { cubicDampedCbfDaeProblem2D with
+    dae :=
+      { parabolicManifoldDaeSpec2D with
+        vectorField := [Poly.neg x0Poly, Poly.zero] } }
+
+theorem nonTangentParabolicDae_refuted_off_origin :
+    evalDaeManifoldViolation nonTangentParabolicDaeProblem2D.dae [] = false ∧
+    (match checkSosLyapunovProblem 0 nonTangentParabolicDaeProblem2D sosLyapunovSearchProbe with
+     | .refused (.daeManifoldViolation w) [] =>
+       pointHasNonZeroCoord 2 w && evalDaeManifoldViolation nonTangentParabolicDaeProblem2D.dae w
+     | _ => false) = true ∧
+    ¬ nonTangentParabolicDaeProblem2D.SemanticMeaning :=
+  ⟨by decide +kernel,
+   by decide +kernel,
+   daeManifoldViolation_refutes_problem (pt := [1, 0]) (by decide +kernel)⟩
 
 /-! ## 8. General Kernel-Reducible JSON AST Encoders & Decoders (`SosJson`, Multivariate Polynomials, Gram Matrices, `SosLyapunovProblem`, and `SosLyapunovCert`) -/
 
@@ -2331,7 +3102,7 @@ def sosLyapunovFormat : Format where
   decodeCert  := decodeSosLyapunovCert
   trust       := .kernel
   regime      := .decidable
-  bad         := (goldenSosProblem, badSosCert)
+  bad         := (cubicDampedCbfDaeProblem2D, badSosCert)
   badGrade    := 0
   bad_refused := ⟨SosLyapunovClause.lyapunovFailed, [], sosLyapunov_bad_refused⟩
 
@@ -2361,20 +3132,11 @@ theorem sosLyapunovFormat_refuses_empty_json :
 /-- Concrete verification of the 2D cubic nonlinear Lyapunov certificate, 2D disk Control Barrier
 Function certificate, Index-1 algebraic manifold DAE certificate, and `"sos-lyapunov-cbf@1"` judge. -/
 theorem cubic_lyapunov_cbf_dae_2d_accepted :
-    checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
-    checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true ∧
-    checkDaeManifold goldenCircleDaeSpec goldenCircleDaeWitness = true ∧
-    checkSosLyapunovProblem 1 goldenSosProblem goldenSosCert = .ok := by
+    checkSosLyapunov cubicDampedLyapunovSpec2D cubicDampedLyapunovWitness2D = true ∧
+    checkSosCbf unitDiskCbfSpec2D unitDiskCbfWitness2D = true ∧
+    checkDaeManifold parabolicManifoldDaeSpec2D parabolicManifoldDaeWitness2D = true ∧
+    checkSosLyapunovProblem 1 cubicDampedCbfDaeProblem2D cubicDampedCbfDaeCert2D = .ok := by
   decide +kernel
-
--- fixture kept (2026-11-04): consumed by Obend/Tactic/SiliconElab.lean and Obend/Apps/FocHil.lean
-set_option linter.defProp false in
-def sos_lyapunov_cbf_dae_showcase_sound :
-    checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
-    checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true ∧
-    checkDaeManifold goldenCircleDaeSpec goldenCircleDaeWitness = true ∧
-    checkSosLyapunovProblem 1 goldenSosProblem goldenSosCert = .ok :=
-  cubic_lyapunov_cbf_dae_2d_accepted
 
 end Obend.Analysis
 end

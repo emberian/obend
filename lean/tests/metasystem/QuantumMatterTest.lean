@@ -64,10 +64,10 @@ theorem test_block_equitable_intertwining_poly
 /-! ## 2. Thermo-Optic Crosstalk Cancellation & 2-Boson Hong–Ou–Mandel Photonics -/
 
 theorem test_thermo_optic_crosstalk_and_hom_bunching (phi0 phi1 phi2 phi3 : Int) :
-    (faddeevAdjugateAndDet goldenThermalCrosstalk4x4).1.mul goldenThermalCrosstalk4x4 =
+    (faddeevAdjugateAndDet bandedThermalCrosstalk4x4).1.mul bandedThermalCrosstalk4x4 =
       IntMatrix.scaledIdentity 4 8769 ∧
-    goldenThermalCrosstalk4x4.mulVec
-      (compensateThermalCrosstalk goldenThermalCrosstalk4x4 [phi0, phi1, phi2, phi3]).1 =
+    bandedThermalCrosstalk4x4.mulVec
+      (compensateThermalCrosstalk bandedThermalCrosstalk4x4 [phi0, phi1, phi2, phi3]).1 =
       [8769 * phi0, 8769 * phi1, 8769 * phi2, 8769 * phi3] ∧
     twoBosonPermanent (beamSplitter5050 ⟨0, by decide⟩ ⟨1, by decide⟩)
       ⟨0, by decide⟩ ⟨1, by decide⟩ ⟨0, by decide⟩ ⟨1, by decide⟩ = GaussianInt.zero ∧
@@ -110,16 +110,16 @@ theorem test_lindblad_parity_cooling (a : Fin 4) (rho : GaussianMatrix) :
 
 theorem test_sos_lyapunov_cbf_dae_format_and_registry :
     (Format.find? "sos-lyapunov-cbf" "1").isSome = true ∧
-    checkSosLyapunov goldenLyapunovSpec2D goldenLyapunovWitness2D = true ∧
-    checkSosCbf goldenCbfSpec2D goldenCbfWitness2D = true ∧
-    checkDaeManifold goldenCircleDaeSpec goldenCircleDaeWitness = true ∧
+    checkSosLyapunov cubicDampedLyapunovSpec2D cubicDampedLyapunovWitness2D = true ∧
+    checkSosCbf unitDiskCbfSpec2D unitDiskCbfWitness2D = true ∧
+    checkDaeManifold parabolicManifoldDaeSpec2D parabolicManifoldDaeWitness2D = true ∧
     checkSosLyapunovProblem 1
-      { lyapunov := goldenLyapunovSpec2D, cbf := goldenCbfSpec2D, dae := goldenCircleDaeSpec }
-      { lyapunovWitness := goldenLyapunovWitness2D, cbfWitness := goldenCbfWitness2D, daeWitness := goldenCircleDaeWitness } = Verdict.ok :=
+      { lyapunov := cubicDampedLyapunovSpec2D, cbf := unitDiskCbfSpec2D, dae := parabolicManifoldDaeSpec2D }
+      { lyapunovWitness := cubicDampedLyapunovWitness2D, cbfWitness := unitDiskCbfWitness2D, daeWitness := parabolicManifoldDaeWitness2D } = Verdict.ok :=
   ⟨by decide,
-   sos_lyapunov_cbf_dae_showcase_sound.1,
-   sos_lyapunov_cbf_dae_showcase_sound.2.1,
-   sos_lyapunov_cbf_dae_showcase_sound.2.2.1,
-   sos_lyapunov_cbf_dae_showcase_sound.2.2.2⟩
+   cubic_lyapunov_cbf_dae_2d_accepted.1,
+   cubic_lyapunov_cbf_dae_2d_accepted.2.1,
+   cubic_lyapunov_cbf_dae_2d_accepted.2.2.1,
+   cubic_lyapunov_cbf_dae_2d_accepted.2.2.2⟩
 
 end Obend.Tests.QuantumMatterTest

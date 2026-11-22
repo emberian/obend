@@ -15,7 +15,7 @@ Implements Pillar 3A (`NEXT-MATHEMATICA.md` / `AMBITION.md`):
 3. **Clairvoyant Cost-Optimal Hypergraph Extraction (`HyperCostModel`, `defaultRtlCostModel`, `evalHypergraphCost`, `extractMinCostHypergraph`, `optimizeAdjointHypergraph`)**:
    - Extracts minimum-cost `HyperENode`s per E-Class and prunes dead intermediate cotangent hyperedges.
    - Proves universal cost monotonicity **`extractMinCost_improves_cost`**, strict cost reduction on the
-     diamond adjoint **`goldenDiamondAdjoint_eqSat_strict_cost_reduction`**, semantic & cotangent
+     diamond adjoint **`diamondAdjoint_eqSat_strict_cost_reduction`**, semantic & cotangent
      preservation **`eqSat_preserves_eval_and_adjoint`** & **`optimizeAdjointHypergraph_preserves_cotangents`**,
      pipelined RTL lowering **`eqSat_pipelined_rtl_sound`**, and coupled discrete Pontryagin flowpipe
      adjoint sensitivity **`pontryagin_flowpipe_adjoint_eqSat_sound`**.
@@ -2154,18 +2154,18 @@ theorem optimizeAdjointHypergraph_sound_universal
   saturate_and_extract_preserves_eval_ssa costModel (compileGraphAdjoint g)
     1 [ .mulOneRight, .scaleFuse, .fuseAddMulToMac ] initEnv hCheck
 
-/-- **Theorem (`goldenDiamondAdjoint_eqSat_strict_cost_reduction`)**:
-On `compileGraphAdjoint goldenDiamondHypergraph` ($f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$),
-`optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph`:
+/-- **Theorem (`diamondAdjoint_eqSat_strict_cost_reduction`)**:
+On `compileGraphAdjoint diamondAddMulConstHypergraph` ($f(x_0, x_1, x_2, x_3) = (x_0 + x_1)(x_2 + x_3) + 10$),
+`optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph`:
 1. Strictly reduces the hardware RTL cost (`36 < 40`) and reduces the hyperedge count from `13` to `11`
    (bypassing wire `10` via `.mulOneRight` and eliminating both redundant `.scale 1` cotangent edges on
    wires `10` and `11`),
 2. Preserves structural well-formedness (`wf = true`),
 3. Preserves exact combinational, sequential wavefront, and synchronous wavefront evaluation
    (`[87, 11, 11, 7, 7]` at `(3, 4, 5, 6)` with `dOut = 1`)! -/
-theorem goldenDiamondAdjoint_eqSat_strict_cost_reduction :
-    let gAdj := compileGraphAdjoint goldenDiamondHypergraph
-    let gOpt := optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph
+theorem diamondAdjoint_eqSat_strict_cost_reduction :
+    let gAdj := compileGraphAdjoint diamondAddMulConstHypergraph
+    let gOpt := optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph
     let env : Nat → Int := fun w =>
       match w with | 0 => 3 | 1 => 4 | 2 => 5 | 3 => 6 | 9 => 1 | _ => 0
     evalHypergraphCost defaultRtlCostModel gOpt < evalHypergraphCost defaultRtlCostModel gAdj ∧
@@ -2178,7 +2178,7 @@ theorem goldenDiamondAdjoint_eqSat_strict_cost_reduction :
     evalHypergraphLayeredSync gOpt env = [87, 11, 11, 7, 7] := by
   decide +kernel
 
-/-- Explicit 13-edge list of `compileGraphAdjoint goldenDiamondHypergraph`. -/
+/-- Explicit 13-edge list of `compileGraphAdjoint diamondAddMulConstHypergraph`. -/
 private def diamondAdjEdgesLiteral : List HyperEdge :=
   [ { opIdx := 0,  op := .add,     srcWires := [0, 1],  dstWire := 4 }
   , { opIdx := 1,  op := .add,     srcWires := [2, 3],  dstWire := 5 }
@@ -2194,7 +2194,7 @@ private def diamondAdjEdgesLiteral : List HyperEdge :=
   , { opIdx := 11, op := .scale 1, srcWires := [12],    dstWire := 16 }
   , { opIdx := 12, op := .scale 1, srcWires := [12],    dstWire := 17 } ]
 
-/-- Explicit 11-edge list of `optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph`
+/-- Explicit 11-edge list of `optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph`
 after equality saturation (`.mulOneRight` wire-forwarding + dead-cotangent pruning of wires `10` and `11`). -/
 private def diamondOptEdgesLiteral : List HyperEdge :=
   [ { opIdx := 0,  op := .add,     srcWires := [0, 1], dstWire := 4 }
@@ -2210,31 +2210,31 @@ private def diamondOptEdgesLiteral : List HyperEdge :=
   , { opIdx := 10, op := .scale 1, srcWires := [12],   dstWire := 17 } ]
 
 private theorem extractHyperEdges_diamondAdj :
-    extractHyperEdges (compileGraphAdjoint goldenDiamondHypergraph) = diamondAdjEdgesLiteral := by
+    extractHyperEdges (compileGraphAdjoint diamondAddMulConstHypergraph) = diamondAdjEdgesLiteral := by
   decide +kernel
 
 private theorem extractHyperEdges_diamondOpt :
-    extractHyperEdges (optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph) =
+    extractHyperEdges (optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph) =
       diamondOptEdgesLiteral := by
   decide +kernel
 
 private theorem boundaryOut_diamondAdj :
-    (compileGraphAdjoint goldenDiamondHypergraph).boundaryOut.table = [8, 16, 17, 14, 15] := by
+    (compileGraphAdjoint diamondAddMulConstHypergraph).boundaryOut.table = [8, 16, 17, 14, 15] := by
   decide +kernel
 
 private theorem boundaryOut_diamondOpt :
-    (optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph).boundaryOut.table =
+    (optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph).boundaryOut.table =
       [8, 16, 17, 14, 15] := by
   decide +kernel
 
 /-- **Theorem (`optimizeAdjointHypergraph_preserves_cotangents`)**:
-For EVERY symbolic input assignment `(x0, x1, x2, x3, dOut : Int)` to `goldenDiamondHypergraph`,
-`optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph` computes the exact same
-symbolic forward output and all 4 reverse-mode input cotangents as `compileGraphAdjoint goldenDiamondHypergraph`:
+For EVERY symbolic input assignment `(x0, x1, x2, x3, dOut : Int)` to `diamondAddMulConstHypergraph`,
+`optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph` computes the exact same
+symbolic forward output and all 4 reverse-mode input cotangents as `compileGraphAdjoint diamondAddMulConstHypergraph`:
 $$[(x_0 + x_1)(x_2 + x_3) + 10,\; (x_2 + x_3)\,\text{dOut},\; (x_2 + x_3)\,\text{dOut},\; (x_0 + x_1)\,\text{dOut},\; (x_0 + x_1)\,\text{dOut}]$$ -/
 theorem optimizeAdjointHypergraph_preserves_cotangents (x0 x1 x2 x3 dOut : Int) :
-    let gAdj := compileGraphAdjoint goldenDiamondHypergraph
-    let gOpt := optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph
+    let gAdj := compileGraphAdjoint diamondAddMulConstHypergraph
+    let gOpt := optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph
     let env : Nat → Int := fun w =>
       match w with
       | 0 => x0
@@ -2273,9 +2273,9 @@ theorem eqSat_preserves_eval_and_adjoint
     evalHypergraphCost costModel
       (extractMinCostHypergraph costModel (saturateHyperEGraph fuel rules (hypergraphToEGraph g))) ≤
       evalHypergraphCost costModel g ∧
-    evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph)
+    evalHypergraphComb (optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph)
       (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0) =
-    evalHypergraphComb (compileGraphAdjoint goldenDiamondHypergraph)
+    evalHypergraphComb (compileGraphAdjoint diamondAddMulConstHypergraph)
       (fun w => match w with | 0 => x0 | 1 => x1 | 2 => x2 | 3 => x3 | 9 => dOut | _ => 0) :=
   ⟨ saturateHyperEGraph_preserves_consistency fuel rules eg env hCons
   , extractMinCost_improves_cost costModel g fuel rules
@@ -2313,8 +2313,8 @@ theorem eqSat_pipelined_rtl_sound
 
 /-- Concrete 4-cycle vs 5-cycle pipelined RTL stage/register reduction witness (`72 < 90` registers). -/
 example :
-    let gAdj  := compileGraphAdjoint goldenDiamondHypergraph
-    let gOpt  := optimizeAdjointHypergraph defaultRtlCostModel goldenDiamondHypergraph
+    let gAdj  := compileGraphAdjoint diamondAddMulConstHypergraph
+    let gOpt  := optimizeAdjointHypergraph defaultRtlCostModel diamondAddMulConstHypergraph
     let mAdj  := compileHypergraphToRtlPipelined "diamond_adj_raw" gAdj
     let mOpt  := compileHypergraphToRtlPipelined "diamond_adj_opt" gOpt
     let insBv : Nat → BitVec 64 := fun u =>

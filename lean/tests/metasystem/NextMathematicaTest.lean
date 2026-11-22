@@ -20,7 +20,7 @@ Tests:
    - `emitAndAccum_preserves_invariant`, `pullbackHyperEdge_sound`, `compileGraphAdjoint_dag_sound`.
 5. **Equality Saturation & Cost-Optimal Adjoint / RTL Extraction (`Obend.Analysis.EqSatHypergraph`)**:
    - `applyEqSatRule_preserves_consistency`, `saturateHyperEGraph_preserves_consistency`,
-   - `extractMinCost_improves_cost`, `goldenDiamondAdjoint_eqSat_strict_cost_reduction`,
+   - `extractMinCost_improves_cost`, `diamondAdjoint_eqSat_strict_cost_reduction`,
    - `optimizeAdjointHypergraph_preserves_cotangents`, `eqSat_preserves_eval_and_adjoint`,
    - `eqSat_pipelined_rtl_sound`, `pontryagin_flowpipe_adjoint_eqSat_sound`.
 -/
@@ -88,7 +88,7 @@ example := @extractMinCostHypergraph_sound
 example := @saturate_and_extract_preserves_eval
 example := @saturate_and_extract_preserves_eval_ssa
 example := @optimizeAdjointHypergraph_sound_universal
-example := goldenDiamondAdjoint_eqSat_strict_cost_reduction
+example := diamondAdjoint_eqSat_strict_cost_reduction
 example := @optimizeAdjointHypergraph_preserves_cotangents
 example := @eqSat_preserves_eval_and_adjoint
 example := eqSat_pipelined_rtl_sound

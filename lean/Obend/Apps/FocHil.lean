@@ -72,7 +72,7 @@ Formalizes and verifies **Flagship Application #2** (`apps/foc-hil/`) from
    - `Obend.Hardware.DigitalTwin.sampled_data_closed_loop_powertrain_safety_invariant`
    - `Obend.Hardware.PowerElectronics.fcml_active_balancing_lyapunov_contraction`
    - `Obend.Analysis.statorCoupledLoss_adjoint_eqSat_sound`
-   - `Obend.Analysis.sos_lyapunov_cbf_dae_showcase_sound` (`"sos-lyapunov-cbf@1"`)
+   - `Obend.Analysis.cubic_lyapunov_cbf_dae_2d_accepted` (`"sos-lyapunov-cbf@1"`)
    in the master theorem `foc_hil_closed_loop_iss_and_thermal_safe`.
 
 4. **Sequential `always_ff` Hardware Synthesis & Live Mid-Run ICAP DPR Hot-Swap**:
@@ -570,7 +570,7 @@ example :
        from $96 \to 76$ while preserving exact forward peak temperature and all 4 reverse-mode adjoint
        sensitivities.
     5. **SOS Lyapunov, Control Barrier & DAE Certificate (`"sos-lyapunov-cbf@1"`)**:
-       `checkSosLyapunovProblem 1 goldenSosProblem goldenSosCert = .ok`. -/
+       `checkSosLyapunovProblem 1 cubicDampedCbfDaeProblem2D cubicDampedCbfDaeCert2D = .ok`. -/
 theorem foc_hil_closed_loop_iss_and_thermal_safe :
     (∀ (d : ZohRl),
       d.a ∈ (⟨CanonicalRat.mk 249 250, CanonicalRat.mk 124501 125000⟩ : Interval) →
@@ -609,8 +609,8 @@ theorem foc_hil_closed_loop_iss_and_thermal_safe :
       let env := statorCoupledLossAdjointEnv currentA toothWidthUm channelAspect fcmlFreqKhz dOut
       evalHypergraphCost defaultRtlCostModel gOpt < evalHypergraphCost defaultRtlCostModel gAdj ∧
       evalHypergraphComb gOpt env = evalHypergraphComb gAdj env) ∧
-    checkSosLyapunovProblem 1 goldenSosProblem goldenSosCert = .ok := by
-  refine ⟨?_, ?_, ?_, ?_, sos_lyapunov_cbf_dae_showcase_sound.2.2.2⟩
+    checkSosLyapunovProblem 1 cubicDampedCbfDaeProblem2D cubicDampedCbfDaeCert2D = .ok := by
+  refine ⟨?_, ?_, ?_, ?_, cubic_lyapunov_cbf_dae_2d_accepted.2.2.2⟩
   · intro d ha hb hbR rMa vffMv qs0
     exact lc_drives_quantized_current_loop_iss_ball d ha hb hbR rMa vffMv qs0
   · intro kpQ32 kiQ32 errMa intMv bits vInMv vLsbMv hLsbPos

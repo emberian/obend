@@ -1689,10 +1689,10 @@ def compensateThermalCrosstalk (G_th : IntMatrix) (phiTarget : List Int) : List 
   let res := faddeevAdjugateAndDet G_th
   (res.1.mulVec phiTarget, res.2)
 
-/-- Canonical $4 \times 4$ tridiagonal nearest-neighbor silicon thermo-optic crosstalk matrix $G_{\text{th}}$
+/-- Banded $4 \times 4$ pentadiagonal (bandwidth-2) silicon thermo-optic crosstalk matrix $G_{\text{th}}$
 (diagonal self-heating gain $10$, nearest-neighbor diffusive thermal coupling $2$, next-nearest $1$):
 $$G_{\text{th}} = \begin{pmatrix} 10 & 2 & 1 & 0 \\ 2 & 10 & 2 & 1 \\ 1 & 2 & 10 & 2 \\ 0 & 1 & 2 & 10 \end{pmatrix}.$$ -/
-def goldenThermalCrosstalk4x4 : IntMatrix where
+def bandedThermalCrosstalk4x4 : IntMatrix where
   dim  := 4
   rows :=
     [ [10, 2, 1, 0]
@@ -1700,10 +1700,9 @@ def goldenThermalCrosstalk4x4 : IntMatrix where
     , [1, 2, 10, 2]
     , [0, 1, 2, 10] ]
 
-/-- Explicit Faddeev–LeVerrier adjugate and determinant of `goldenThermalCrosstalk4x4`. -/
--- fixture kept (2026-11-04): consumed by a proof in this file
-theorem goldenThermalCrosstalk4x4_adj_eq :
-    faddeevAdjugateAndDet goldenThermalCrosstalk4x4 =
+/-- Explicit Faddeev–LeVerrier adjugate and determinant of `bandedThermalCrosstalk4x4`. -/
+theorem bandedThermalCrosstalk4x4_adj_eq :
+    faddeevAdjugateAndDet bandedThermalCrosstalk4x4 =
       ({ dim := 4
        , rows :=
            [ [918, -174, -63, 30]
@@ -1713,32 +1712,31 @@ theorem goldenThermalCrosstalk4x4_adj_eq :
   decide +kernel
 
 /-- **Theorem (`faddeevAdjugate_cancels_crosstalk_4x4`)**:
-For the $4 \times 4$ thermo-optic crosstalk matrix `goldenThermalCrosstalk4x4`, `faddeevAdjugateAndDet`
+For the $4 \times 4$ thermo-optic crosstalk matrix `bandedThermalCrosstalk4x4`, `faddeevAdjugateAndDet`
 synthesizes `(adjG, detG)` with $\det(G_{\text{th}}) = 8769 > 0$ such that both left and right
 matrix products cancel all off-diagonal thermal crosstalk identically:
 $$G_{\text{th}} \cdot \operatorname{adj}(G_{\text{th}}) = \operatorname{adj}(G_{\text{th}}) \cdot G_{\text{th}} = \det(G_{\text{th}}) \cdot I_4.$$ -/
--- fixture kept (2026-11-04): the 4x4 crosstalk adjugate cancels; consumed by Photonics and the QPM app
 theorem faddeevAdjugate_cancels_crosstalk_4x4 :
-    let res := faddeevAdjugateAndDet goldenThermalCrosstalk4x4
+    let res := faddeevAdjugateAndDet bandedThermalCrosstalk4x4
     res.2 = 8769 ∧
-    goldenThermalCrosstalk4x4.mul res.1 = IntMatrix.scaledIdentity 4 res.2 ∧
-    res.1.mul goldenThermalCrosstalk4x4 = IntMatrix.scaledIdentity 4 res.2 := by
+    bandedThermalCrosstalk4x4.mul res.1 = IntMatrix.scaledIdentity 4 res.2 ∧
+    res.1.mul bandedThermalCrosstalk4x4 = IntMatrix.scaledIdentity 4 res.2 := by
   decide +kernel
 
 /-- **Theorem (`compensateThermalCrosstalk_exact_4x4`)**:
 For ANY 4-channel target phase vector $\phi_{\text{target}} = [\phi_0, \phi_1, \phi_2, \phi_3] \in \mathbb{Z}^4$,
-applying `goldenThermalCrosstalk4x4` to the pre-distorted heater drive
-`u_comp = (compensateThermalCrosstalk goldenThermalCrosstalk4x4 [phi0, phi1, phi2, phi3]).1`
+applying `bandedThermalCrosstalk4x4` to the pre-distorted heater drive
+`u_comp = (compensateThermalCrosstalk bandedThermalCrosstalk4x4 [phi0, phi1, phi2, phi3]).1`
 recovers the exact crosstalk-free scaled target phase vector
 `[detG * phi0, detG * phi1, detG * phi2, detG * phi3]`! -/
 theorem compensateThermalCrosstalk_exact_4x4 (phi0 phi1 phi2 phi3 : Int) :
     let target := [phi0, phi1, phi2, phi3]
-    let res := compensateThermalCrosstalk goldenThermalCrosstalk4x4 target
-    goldenThermalCrosstalk4x4.mulVec res.1 =
+    let res := compensateThermalCrosstalk bandedThermalCrosstalk4x4 target
+    bandedThermalCrosstalk4x4.mulVec res.1 =
       [res.2 * phi0, res.2 * phi1, res.2 * phi2, res.2 * phi3] := by
   dsimp only [compensateThermalCrosstalk]
-  rw [goldenThermalCrosstalk4x4_adj_eq]
-  dsimp only [IntMatrix.mulVec, goldenThermalCrosstalk4x4, IntMatrix.entry, listGetInt,
+  rw [bandedThermalCrosstalk4x4_adj_eq]
+  dsimp only [IntMatrix.mulVec, bandedThermalCrosstalk4x4, IntMatrix.entry, listGetInt,
     sumIntOver, List.range, List.range.loop, List.map,
     List.getElem?_cons_zero, List.getElem?_cons_succ]
   congr 1

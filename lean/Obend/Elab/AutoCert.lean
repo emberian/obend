@@ -51,7 +51,6 @@ public import Obend.Lower.Judge
 public import Obend.Spec.Syntax
 public import Obend.Spec.Elaborate
 import all Obend.Judge.Class
-import Obend.Tactic.Tooth
 import all Obend.Analysis.RealAnalysis
 import all Obend.Judge.RealAnalysis
 import all Obend.Analysis.Groebner
@@ -358,12 +357,13 @@ theorem rho_mem_left_or_right (x : CanonicalRat) (iv : Interval) (hMem : x ∈ i
   · exact .inl ⟨hMem.1, hle⟩
   · exact .inr ⟨by grind, hMem.2⟩
 
-/-- Kernel checker for `IntervalObj` and recursive `IntervalCert` (including `.bisect`). -/
-def checkIntervalAutoCert (q : IntervalObj) : IntervalCert → Verdict IntervalClause
+/-- Grade-indexed kernel checker for `IntervalObj` and recursive `IntervalCert` (including `.bisect`),
+forwarding `grade` into `intervalCheck` so `.counterexample []` deepens rational subdivision search. -/
+def checkIntervalAutoCertAt (grade : Nat) (q : IntervalObj) : IntervalCert → Verdict IntervalClause
   | .direct =>
-    intervalCheck 0 q.toQuery .direct
+    intervalCheck grade q.toQuery .direct
   | .counterexample pt =>
-    intervalCheck 0 q.toQuery (.counterexample pt)
+    intervalCheck grade q.toQuery (.counterexample pt)
   | .bisect varName leftCert rightCert =>
     match q.env.lookup varName with
     | none => .refused .domainUndefined []
@@ -371,23 +371,26 @@ def checkIntervalAutoCert (q : IntervalObj) : IntervalCert → Verdict IntervalC
       let mid : CanonicalRat := (iv.lo + iv.hi) / 2
       let leftQ  : IntervalObj := { q with env := replaceVarInterval varName ⟨iv.lo, mid⟩ q.env }
       let rightQ : IntervalObj := { q with env := replaceVarInterval varName ⟨mid, iv.hi⟩ q.env }
-      match checkIntervalAutoCert leftQ leftCert with
-      | .ok => checkIntervalAutoCert rightQ rightCert
+      match checkIntervalAutoCertAt grade leftQ leftCert with
+      | .ok => checkIntervalAutoCertAt grade rightQ rightCert
       | v   => v
 
-/-- **Soundness of `checkIntervalAutoCert` (`checkIntervalAutoCert_sound`)**:
-Whenever `checkIntervalAutoCert q c = .ok`, the independent semantic interval enclosure
-`IntervalQuery.SemanticMeaning q.toQuery` holds for every point assignment `rho` in `q.env`. -/
-theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
-    (h : checkIntervalAutoCert q c = .ok) :
+/-- Default grade-0 kernel checker for `IntervalObj` and recursive `IntervalCert`. -/
+abbrev checkIntervalAutoCert (q : IntervalObj) (c : IntervalCert) : Verdict IntervalClause :=
+  checkIntervalAutoCertAt 0 q c
+
+/-- **Soundness of `checkIntervalAutoCertAt` (`checkIntervalAutoCertAt_sound`)**:
+Whenever `checkIntervalAutoCertAt grade q c = .ok`, `IntervalQuery.SemanticMeaning q.toQuery` holds. -/
+theorem checkIntervalAutoCertAt_sound (grade : Nat) (q : IntervalObj) (c : IntervalCert)
+    (h : checkIntervalAutoCertAt grade q c = .ok) :
     IntervalQuery.SemanticMeaning q.toQuery := by
   induction c generalizing q with
   | direct =>
-    exact intervalCheck_sound 0 q.toQuery .direct h
+    exact intervalCheck_sound grade q.toQuery .direct h
   | counterexample pt =>
-    exact intervalCheck_sound 0 q.toQuery (.counterexample pt) h
+    exact intervalCheck_sound grade q.toQuery (.counterexample pt) h
   | bisect varName leftCert rightCert ihLeft ihRight =>
-    unfold checkIntervalAutoCert at h
+    unfold checkIntervalAutoCertAt at h
     cases hLook : q.env.lookup varName with
     | none => rw [hLook] at h; contradiction
     | some iv =>
@@ -396,7 +399,7 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
       let mid : CanonicalRat := (iv.lo + iv.hi) / 2
       let leftQ  : IntervalObj := { q with env := replaceVarInterval varName ⟨iv.lo, mid⟩ q.env }
       let rightQ : IntervalObj := { q with env := replaceVarInterval varName ⟨mid, iv.hi⟩ q.env }
-      cases hL : checkIntervalAutoCert leftQ leftCert with
+      cases hL : checkIntervalAutoCertAt grade leftQ leftCert with
       | ok =>
         rw [hL] at h
         have hSemL := ihLeft leftQ hL
@@ -416,6 +419,11 @@ theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
           · exact hEnv v iv' hOrig
       | refused _ _ => rw [hL] at h; contradiction
       | uncovered => rw [hL] at h; contradiction
+
+theorem checkIntervalAutoCert_sound (q : IntervalObj) (c : IntervalCert)
+    (h : checkIntervalAutoCert q c = .ok) :
+    IntervalQuery.SemanticMeaning q.toQuery :=
+  checkIntervalAutoCertAt_sound 0 q c h
 
 /-- The first binding for a variable, including in boxes with shadowed names. -/
 inductive VarLookupRel (v : String) (iv : Interval) : List (String × Interval) → Prop where
@@ -484,24 +492,24 @@ theorem bisectBoxEnclosed_iff_check_ok (q : IntervalObj) :
   · intro deriv
     induction deriv with
     | direct hb hlo hhi =>
-      exact ⟨.direct, by simp [checkIntervalAutoCert, intervalCheck, IntervalObj.toQuery,
-        autoExprBounds_iff.mp hb, hlo, hhi]⟩
+      exact ⟨.direct, by simp [checkIntervalAutoCert, checkIntervalAutoCertAt, intervalCheck,
+        IntervalObj.toQuery, autoExprBounds_iff.mp hb, hlo, hhi]⟩
     | bisect v iv hv _ _ il ir =>
       obtain ⟨l, hl⟩ := il
       obtain ⟨r, hr⟩ := ir
-      exact ⟨.bisect v l r, by simp [checkIntervalAutoCert, varLookup_iff.mp hv, hl, hr]⟩
+      exact ⟨.bisect v l r, by simp [checkIntervalAutoCert, checkIntervalAutoCertAt, varLookup_iff.mp hv, hl, hr]⟩
   · rintro ⟨c, h⟩
     induction c generalizing q with
     | direct =>
-      simp only [checkIntervalAutoCert, intervalCheck, IntervalObj.toQuery] at h
+      simp only [checkIntervalAutoCert, checkIntervalAutoCertAt, intervalCheck, IntervalObj.toQuery] at h
       split at h <;> try contradiction
       split at h <;> try contradiction
       exact .direct (autoExprBounds_iff.mpr (by assumption)) (by grind) (by grind)
     | counterexample =>
-      simp only [checkIntervalAutoCert, intervalCheck] at h
+      simp only [checkIntervalAutoCert, checkIntervalAutoCertAt, intervalCheck] at h
       repeat split at h <;> try contradiction
     | bisect v l r il ir =>
-      simp only [checkIntervalAutoCert] at h
+      simp only [checkIntervalAutoCert, checkIntervalAutoCertAt] at h
       split at h <;> try contradiction
       rename_i iv hv
       split at h
@@ -517,8 +525,6 @@ theorem lookup_replaceVarInterval_eq {env : List (String × Interval)} {v : Stri
   induction hb with
   | head => simp [replaceVarInterval]
   | tail hn _ ih => simpa [replaceVarInterval, List.lookup, hn, beq_eq_false_iff_ne.mpr (Ne.symm hn)] using ih
-
-#tooth lookup_replaceVarInterval_eq by mutation replaceVarInterval := fun _ _ env => env
 
 private theorem lookup_replaceVarInterval_other {v w : String} (hne : w ≠ v) (b : Interval)
     (env : List (String × Interval)) : (replaceVarInterval v b env).lookup w = env.lookup w := by
@@ -546,44 +552,22 @@ private theorem semantic_restrict {q : IntervalObj} {v : String} {iv b : Interva
     exact sub _ (hbox v b (lookup_replaceVarInterval_eq hv b))
   · exact hbox w a (by simpa [IntervalObj.toQuery, lookup_replaceVarInterval_other hw] using ha)
 
-private theorem counterexample_refuted (q : IntervalQuery) (pt witness : List (String × CanonicalRat))
-    (path : List Nat) (h : intervalCheck 0 q (.counterexample pt) = .refused (.refutationWitness witness) path) :
-    ¬ IntervalQuery.SemanticMeaning q := by
-  let rho (s : String) : CanonicalRat := match pt.find? (·.1 == s) with
-    | some (_, x) => x
-    | none => 0
-  simp only [intervalCheck, evalPoint_eq_some_evalExpr] at h
-  split at h <;> try contradiction
-  rename_i hdom
-  simp only [Bool.not_eq_true', Bool.not_eq_false, List.all_eq_true] at hdom
-  split at h <;> try contradiction
-  rename_i hout
-  intro hm
-  have hin := hm rho (by
-    intro v b hv
-    obtain ⟨before, after, he, _⟩ := List.lookup_eq_some_iff.mp hv
-    have mem : (v, b) ∈ q.env := by simp [he]
-    have hp := hdom (v, b) mem
-    change (match pt.find? (·.1 == v) with
-      | some (_, x) => b.containsRat x
-      | none => false) = true at hp
-    cases he : pt.find? (·.1 == v) with
-    | none => simp [he] at hp
-    | some pair => simpa [rho, he, Interval.containsRat] using hp)
-  rw [Interval.mem_iff] at hin
-  change decide (evalExpr rho q.expr < q.claimedBound.lo ∨ q.claimedBound.hi < evalExpr rho q.expr) = true at hout
-  grind
+private theorem counterexample_refuted (grade : Nat) (q : IntervalQuery) (pt witness : List (String × CanonicalRat))
+    (path : List Nat) (h : intervalCheck grade q (.counterexample pt) = .refused (.refutationWitness witness) path) :
+    ¬ IntervalQuery.SemanticMeaning q :=
+  intervalCheck_refuted h
 
-theorem checkIntervalAutoCert_refuted {q : IntervalObj} {c : IntervalCert} {pt : List (String × CanonicalRat)}
-    {p : List Nat} (h : checkIntervalAutoCert q c = .refused (.refutationWitness pt) p) :
+theorem checkIntervalAutoCertAt_refuted {grade : Nat} {q : IntervalObj} {c : IntervalCert}
+    {pt : List (String × CanonicalRat)} {p : List Nat}
+    (h : checkIntervalAutoCertAt grade q c = .refused (.refutationWitness pt) p) :
     ¬ IntervalQuery.SemanticMeaning q.toQuery := by
   induction c generalizing q with
   | direct =>
-    simp only [checkIntervalAutoCert, intervalCheck] at h
+    simp only [checkIntervalAutoCertAt, intervalCheck] at h
     split at h <;> (try split at h) <;> cases h
-  | counterexample point => exact counterexample_refuted _ _ _ _ h
+  | counterexample point => exact counterexample_refuted grade _ _ _ _ h
   | bisect v l r il ir =>
-    simp only [checkIntervalAutoCert] at h
+    simp only [checkIntervalAutoCertAt] at h
     split at h
     · cases h
     rename_i iv hv
@@ -595,22 +579,69 @@ theorem checkIntervalAutoCert_refuted {q : IntervalObj} {c : IntervalCert} {pt :
       exact semantic_restrict hv (by
         intro x hx; simp only [Interval.mem_iff] at hx ⊢; grind) hm
 
+theorem checkIntervalAutoCert_refuted {q : IntervalObj} {c : IntervalCert} {pt : List (String × CanonicalRat)}
+    {p : List Nat} (h : checkIntervalAutoCert q c = .refused (.refutationWitness pt) p) :
+    ¬ IntervalQuery.SemanticMeaning q.toQuery :=
+  checkIntervalAutoCertAt_refuted h
+
+theorem checkIntervalAutoCertAt_mono {r r' : Nat} {q : IntervalObj} {c : IntervalCert}
+    (le : r ≤ r') (hne : checkIntervalAutoCertAt r q c ≠ .uncovered) :
+    checkIntervalAutoCertAt r' q c = checkIntervalAutoCertAt r q c := by
+  induction c generalizing q with
+  | direct =>
+    exact intervalCheck_mono le hne
+  | counterexample pt =>
+    exact intervalCheck_mono le hne
+  | bisect varName leftCert rightCert ihLeft ihRight =>
+    unfold checkIntervalAutoCertAt at hne ⊢
+    cases hLook : q.env.lookup varName with
+    | none => rfl
+    | some iv =>
+      rw [hLook] at hne
+      dsimp only at hne ⊢
+      let mid : CanonicalRat := (iv.lo + iv.hi) / 2
+      let leftQ  : IntervalObj := { q with env := replaceVarInterval varName ⟨iv.lo, mid⟩ q.env }
+      let rightQ : IntervalObj := { q with env := replaceVarInterval varName ⟨mid, iv.hi⟩ q.env }
+      cases hL : checkIntervalAutoCertAt r leftQ leftCert with
+      | uncovered =>
+        rw [hL] at hne
+        exact False.elim (hne rfl)
+      | refused k path =>
+        have hL' : checkIntervalAutoCertAt r' leftQ leftCert = .refused k path := by
+          rw [ihLeft (q := leftQ) (by rw [hL]; exact fun h => nomatch h), hL]
+        rw [hL']
+      | ok =>
+        have hL' : checkIntervalAutoCertAt r' leftQ leftCert = .ok := by
+          rw [ihLeft (q := leftQ) (by rw [hL]; exact fun h => nomatch h), hL]
+        rw [hL] at hne
+        rw [hL']
+        exact ihRight (q := rightQ) hne
+
 instance intervalAutoJudge : Judge IntervalObj IntervalCert where
   Clause := IntervalClause
   Meaning q _c := IntervalQuery.SemanticMeaning q.toQuery
-  check _ q c := checkIntervalAutoCert q c
-  sound := by intro _ q c h; exact checkIntervalAutoCert_sound q c h
+  check := checkIntervalAutoCertAt
+  sound := by intro grade q c h; exact checkIntervalAutoCertAt_sound grade q c h
   refutes | .refutationWitness _ => true | _ => false
   refuted := by
-    intro _ q c k p h hk _ hm
+    intro _ q c k p h _ _ hm
     cases k <;> try contradiction
-    exact checkIntervalAutoCert_refuted h hm
+    exact checkIntervalAutoCertAt_refuted h hm
   Fragment := BisectBoxEnclosed
   complete := by
     intro q h _
     obtain ⟨c, hc⟩ := (bisectBoxEnclosed_iff_check_ok q).mp h
     exact ⟨c, 0, hc⟩
-  mono := by intro _ _ _ _ _ _; rfl
+  mono := fun le hne => checkIntervalAutoCertAt_mono le hne
+
+example :
+    let qSpike : IntervalObj :=
+      ⟨.sub (.const 1) (.mul (.const 36) (.sqr (.sub (.var "x") (.const (CanonicalRat.mk 1 3))))),
+       [("x", ⟨0, 1⟩)], ⟨-100, 0⟩⟩
+    checkIntervalAutoCertAt 0 qSpike (.counterexample []) = .uncovered ∧
+    checkIntervalAutoCertAt 2 qSpike (.counterexample []) =
+      .refused (.refutationWitness [("x", CanonicalRat.mk 1 3)]) [] := by
+  decide +kernel
 
 /-- Pick the variable with the largest interval width `iv.hi - iv.lo` in `env`. -/
 def widestIntervalVar? : List (String × Interval) → Option (String × Interval)
@@ -633,7 +664,7 @@ def synthesizeIntervalCert : Nat → IntervalObj → Option IntervalCert
     if (checkIntervalAutoCert q .direct).isOk then
       some .direct
     else
-      match widestIntervalVar? q.env with
+      match widestIntervalVar? (dedupEnvAux [] q.env) with
       | none => none
       | some (varName, iv) =>
         let mid : CanonicalRat := (iv.lo + iv.hi) / 2
@@ -943,10 +974,10 @@ def intervalBindsClaim (claim : Term) (arity : Nat) (objWire : String) : Bool :=
   | .ok q => claimIntervalObjOf? claim arity == some q
   | .error _ => false
 
-/-- Canonical valid and invalid fixtures for `intervalFormat` (`"interval@1"`).
+/-- Interval dependency benchmark and invalid fixture for `intervalFormat` (`"interval@1"`).
 Note: $x - x = 0 \in [-1/4, 1/4]$ on $x \in [0, 1]$ fails naive single-box evaluation
 (`evalInterval` gives $[-1, 1]$ due to interval dependency) but succeeds at bisection depth 2! -/
-def goldenBisectIntervalObj : IntervalObj where
+def dependencyBisectIntervalObj : IntervalObj where
   expr         := .sub (.var "x") (.var "x")
   env          := [("x", ⟨0, 1⟩)]
   claimedBound := ⟨CanonicalRat.mk (-1) 4, CanonicalRat.mk 1 4⟩
@@ -966,7 +997,8 @@ theorem bisect_left_refused {q : IntervalObj} {v : String} {iv : Interval} {l : 
     (hl : checkIntervalAutoCert
       { q with env := replaceVarInterval v ⟨iv.lo, (iv.lo + iv.hi) / 2⟩ q.env } l = .refused clause path)
     (r : IntervalCert) : checkIntervalAutoCert q (.bisect v l r) = .refused clause path := by
-  unfold checkIntervalAutoCert
+  unfold checkIntervalAutoCert at hl
+  unfold checkIntervalAutoCert checkIntervalAutoCertAt
   rw [hv]
   dsimp only
   rw [hl]
@@ -994,9 +1026,8 @@ theorem bisectCounterexample_refused (right : IntervalCert) :
   badGrade    := 0
   bad_refused := ⟨_, _, badIntervalCert_refused⟩
 
--- fixture kept (2026-11-04): used by tests/metasystem/AutoCertTest.lean
-theorem decodeIntervalObj_encodeIntervalObj_golden :
-    decodeIntervalObj (encodeIntervalObj goldenBisectIntervalObj) = .ok goldenBisectIntervalObj := by
+theorem decodeIntervalObj_encodeIntervalObj_bisect :
+    decodeIntervalObj (encodeIntervalObj dependencyBisectIntervalObj) = .ok dependencyBisectIntervalObj := by
   decide +kernel
 
 example :
@@ -1413,9 +1444,9 @@ def decodeTaylorModelCert (s : String) : Except String TaylorModel :=
       let rem ← j.getObjVal? "rem" >>= decodeIntervalJson
       return { coeffs, center, domain, rem }
 
-/-- Golden and planted-bad fixtures for `"taylor-model@1"`:
+/-- Transcendental enclosure query and planted-bad fixtures for `"taylor-model@1"`:
 $\cos(x) + \sin(x) \in [4/5, 6/5]$ over $x \in [-1/10, 1/10]$. -/
-def goldenTaylorModelQuery : TaylorModelQuery where
+def cosAddSinTaylorQuery : TaylorModelQuery where
   expr         := .add (.cos .var) (.sin .var)
   domain       := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
   center       := 0
@@ -1423,7 +1454,7 @@ def goldenTaylorModelQuery : TaylorModelQuery where
   claimedBound := ⟨CanonicalRat.mk 4 5, CanonicalRat.mk 6 5⟩
 
 def badTaylorModelQuery : TaylorModelQuery :=
-  { goldenTaylorModelQuery with claimedBound := ⟨5, 6⟩ }
+  { cosAddSinTaylorQuery with claimedBound := ⟨5, 6⟩ }
 
 def badTaylorModelCert : TaylorModel where
   coeffs := [0]
@@ -1431,7 +1462,6 @@ def badTaylorModelCert : TaylorModel where
   domain := ⟨CanonicalRat.mk (-1) 10, CanonicalRat.mk 1 10⟩
   rem    := ⟨0, 0⟩
 
--- fixture kept (2026-11-04): consumed by a proof in this file
 theorem badTaylorModelCert_refused :
     checkTaylorModelJudge 0 badTaylorModelQuery badTaylorModelCert =
       .refused "taylor_model_range_exceeds_claimed_bound" [] := by
@@ -1452,9 +1482,8 @@ theorem badTaylorModelCert_refused :
   badGrade    := 0
   bad_refused := ⟨_, _, badTaylorModelCert_refused⟩
 
--- fixture kept (2026-11-04): used by tests/metasystem/AutoCertTest.lean
-theorem decodeTaylorModelQuery_encodeTaylorModelQuery_golden :
-    decodeTaylorModelQuery (encodeTaylorModelQuery goldenTaylorModelQuery) = .ok goldenTaylorModelQuery := by
+theorem decodeTaylorModelQuery_encodeTaylorModelQuery_cosAddSin :
+    decodeTaylorModelQuery (encodeTaylorModelQuery cosAddSinTaylorQuery) = .ok cosAddSinTaylorQuery := by
   decide +kernel
 
 example :
@@ -2327,10 +2356,10 @@ def groebnerBindsClaim (claim : Term) (arity : Nat) (objWire : String) : Bool :=
   | .ok q => claimGroebnerQueryOf? claim arity == some q
   | .error _ => false
 
-/-- Golden and planted-bad fixtures for `"groebner@1"`:
+/-- Binomial syzygy and planted-bad queries for `"groebner@1"`:
 Ideal generators $g_1 = x_1^2 - x_0$, $g_2 = x_0 x_1 - 1$ and target $f = x_1 - x_0^2$
 (which is the Buchberger S-polynomial $S(g_1, g_2) = x_1 - x_0^2$ produced by `completeGroebnerBasis`!). -/
-def goldenGroebnerQuery : GroebnerQuery :=
+def binomialSyzygyGroebnerQuery : GroebnerQuery :=
   let x0 : Poly := polyVarPow 0 1
   let x1 : Poly := polyVarPow 1 1
   let g1 : Poly := Poly.sub (Poly.sqr x1) x0
@@ -2341,7 +2370,6 @@ def goldenGroebnerQuery : GroebnerQuery :=
 def badGroebnerCert : GroebnerCert :=
   .membership [polyVarPow 0 1] { quotients := [] }
 
--- fixture kept (2026-11-04): consumed by a proof in this file
 example : groebnerRefutesAtPoint forgedUnitBasisQuery (fun _ => 0) = true := by
   decide +kernel
 
@@ -2369,9 +2397,8 @@ theorem badGroebnerCert_refused :
   badGrade    := 0
   bad_refused := ⟨_, _, badGroebnerCert_refused⟩
 
--- fixture kept (2026-11-04): consumed by a proof in this file
-theorem decodeGroebnerQuery_encodeGroebnerQuery_golden :
-    decodeGroebnerQuery (encodeGroebnerQuery goldenGroebnerQuery) = .ok goldenGroebnerQuery := by
+theorem decodeGroebnerQuery_encodeGroebnerQuery_binomialSyzygy :
+    decodeGroebnerQuery (encodeGroebnerQuery binomialSyzygyGroebnerQuery) = .ok binomialSyzygyGroebnerQuery := by
   decide +kernel
 
 example :
@@ -2383,7 +2410,7 @@ example :
 `compileRichBookToRtl`, or `compileBookToPipelinedRtl`, gated by `checkRtlModule` and
 `checkRtlSynth 0 modName rtlMod == .ok`.
 When `book? = some B`, strictly synthesizes from `B` and returns `none` if `B` cannot be lowered to
-a valid loop-free `RtlModule`; only uses `goldenFlatRtlModule` when `book? = none` (syntactic check). -/
+a valid loop-free `RtlModule`; only uses `flatMulAddRtlModule` when `book? = none` (syntactic check). -/
 def synthesizeRtlSynthCert (modName : String) (book? : Option Book) : Option RtlModule :=
   match book? with
   | some B =>
@@ -2400,7 +2427,7 @@ def synthesizeRtlSynthCert (modName : String) (book? : Option Book) : Option Rtl
           let cand := normalizeRtlModuleForWire m
           if (checkRtlSynth 0 modName cand).isOk then some cand else none
   | none =>
-    let fallback := { goldenFlatRtlModule with name := modName }
+    let fallback := { flatMulAddRtlModule with name := modName }
     if (checkRtlSynth 0 modName fallback).isOk then some fallback else none
 
 /-! ## 7. Registered `autoCertFormats` & `.obend` AST Query Extractors -/
@@ -2707,9 +2734,9 @@ def parsePolyGivenHyps (varEnv : List (String × Nat)) (hyps : List Syntax.Expr)
 
 /-! `sos-lyapunov-cbf@1` has no claim surface either. Its object is a Lyapunov / barrier / DAE
 specification (a vector field, `V`, `B`, constraint manifold), which no `.obend` claim states; until
-2026-11-04 `goldenSosProblem` with a rescaled `V` was substituted for the claim's polynomial, so the
-judge verified a problem unrelated to the claim. Polynomial inequalities in a claim go to
-`groebner@1` (Positivstellensatz non-negativity). -/
+2026-11-04 a hardcoded reference `SosLyapunovProblem` with a rescaled `V` was substituted for the
+claim's polynomial, so the judge verified a problem unrelated to the claim. Polynomial inequalities
+in a claim go to `groebner@1` (Positivstellensatz non-negativity). -/
 
 /-- Extract a `GroebnerQuery` from an optional `Syntax.Expr` (`lhs == rhs` ideal membership or
 `lhs <= rhs` / `lhs >= rhs` Positivstellensatz non-negativity over arbitrary distinct variables,

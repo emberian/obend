@@ -8,6 +8,9 @@ public import Obend.Analysis.Hybrid
 public import Obend.Consensus.Epistemic
 public import Obend.Analysis.QuantumWalk
 import all Obend.Hardware.Device.Enclosure
+import all Obend.Judge.Class
+import all Obend.Judge.RealAnalysis
+import all Obend.Analysis.Groebner
 import all Obend.Analysis.SosLyapunov
 import all Obend.Analysis.Flowpipe
 import all Obend.Analysis.Hybrid
@@ -129,32 +132,37 @@ theorem sos_json_10pow24_and_deep_roundtrip :
 /-- Mismatched `vectorField.length ≠ dim` (`dim = 2`, `vectorField = [-x_0]`) is fail-closed refused
 with `.malformedDimensionOrParam`. -/
 def mismatchedDimSosProblem : SosLyapunovProblem :=
-  { goldenSosProblem with
-    lyapunov := { goldenLyapunovSpec2D with dim := 2, vectorField := [Poly.neg x0Poly] } }
+  { cubicDampedCbfDaeProblem2D with
+    lyapunov := { cubicDampedLyapunovSpec2D with dim := 2, vectorField := [Poly.neg x0Poly] } }
 
 /-- Out-of-scope variable index `x_2` inside a `dim = 2` specification is fail-closed refused. -/
 def outOfScopeVarSosProblem : SosLyapunovProblem :=
-  { goldenSosProblem with
+  { cubicDampedCbfDaeProblem2D with
     lyapunov :=
-      { goldenLyapunovSpec2D with
-        lyapunovV := Poly.add goldenLyapunovSpec2D.lyapunovV (Poly.sqr (polyOfTerm [(2, 1)] 1)) } }
+      { cubicDampedLyapunovSpec2D with
+        lyapunovV := Poly.add cubicDampedLyapunovSpec2D.lyapunovV (Poly.sqr (polyOfTerm [(2, 1)] 1)) } }
 
-/-- Unstable ODE `x'_0 = +x_0, x'_1 = -x_1` is refused by `checkSosLyapunovProblem`. -/
+/-- Unstable ODE `x'_0 = +x_0, x'_1 = -x_1` is refuted with a non-origin Lie-derivative ascent witness
+by `checkSosLyapunovProblem`. -/
 def unstableOdeSosProblem : SosLyapunovProblem :=
-  { goldenSosProblem with
-    lyapunov := { goldenLyapunovSpec2D with vectorField := [x0Poly, Poly.neg x1Poly] } }
+  { cubicDampedCbfDaeProblem2D with
+    lyapunov := { cubicDampedLyapunovSpec2D with vectorField := [x0Poly, Poly.neg x1Poly] } }
 
 theorem sos_dimension_and_unstable_ode_refused :
     checkSosLyapunovDims mismatchedDimSosProblem.lyapunov = false ∧
     checkSosLyapunovDims outOfScopeVarSosProblem.lyapunov = false ∧
-    (match checkSosLyapunovProblem 0 mismatchedDimSosProblem goldenSosCert with
+    (match checkSosLyapunovProblem 0 mismatchedDimSosProblem cubicDampedCbfDaeCert2D with
      | .refused .malformedDimensionOrParam _ => true
      | _ => false) = true ∧
-    (match checkSosLyapunovProblem 0 outOfScopeVarSosProblem goldenSosCert with
+    (match checkSosLyapunovProblem 0 outOfScopeVarSosProblem cubicDampedCbfDaeCert2D with
      | .refused .malformedDimensionOrParam _ => true
      | _ => false) = true ∧
-    (match checkSosLyapunovProblem 0 unstableOdeSosProblem goldenSosCert with
+    (match checkSosLyapunovProblem 0 unstableOdeSosProblem cubicDampedCbfDaeCert2D with
      | .refused .lyapunovFailed _ => true
+     | _ => false) = true ∧
+    (match checkSosLyapunovProblem 0 unstableOdeSosProblem sosLyapunovSearchProbe with
+     | .refused (.lyapunovLieAscent w) _ =>
+       pointHasNonZeroCoord 2 w && sosLyapunovJudge.refutes (.lyapunovLieAscent w)
      | _ => false) = true := by
   decide +kernel
 

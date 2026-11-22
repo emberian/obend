@@ -2,7 +2,7 @@ module
 /-
 # `Obend.Teeth.Extracted.AnalysisTeeth` — Analysis & AutoCert Mutation Teeth
 
-On-demand Tier-2B `#tooth` mutation suite (24 mutation witnesses) extracted from
+On-demand Tier-2B `#tooth` mutation suite (47 mutation witnesses) extracted from
 Tier-1 `Obend` modules so `lake build Obend` elaborates pure definitions and proofs without
 mutation replay overhead. Uses `import all` to preserve `LAW-M1` `.olean.private` encapsulation.
 -/
@@ -102,7 +102,7 @@ private def extractClassEdgeBroken (_costModel : HyperCostModel) (c : EClass) : 
 private def pruneDeadEdgesBroken (_boundaryOut : List Nat) (edges : List HyperEdge) : List HyperEdge :=
   edges
 
-#tooth goldenDiamondAdjoint_eqSat_strict_cost_reduction by mutation
+#tooth diamondAdjoint_eqSat_strict_cost_reduction by mutation
   pruneDeadEdges := pruneDeadEdgesBroken
 
 #tooth rnea2Link_adjoint_eqSat_sound by mutation
@@ -252,14 +252,135 @@ open Obend.Slot
 
 end Obend_Analysis_Setup
 
-/-! ## Extracted from `Obend.Analysis.SosLyapunov` (1 teeth) -/
+/-! ## Extracted from `Obend.Analysis.Groebner` & `Obend.Judge.RealAnalysis` (11 teeth) -/
+section Obend_Analysis_RefutationTeeth
+open Obend.Analysis
+open Obend.Judge
+open Obend.Judge.SOS
+
+#tooth declarativeIntervalEnclosed_iff_intervalCheck_ok by mutation intervalCheck := fun _ _ _ => .ok
+#tooth intervalCheck_refuted by mutation intervalCheck := fun _ _ _ => .refused (.refutationWitness []) []
+#tooth validIntervalWitness_refutes by mutation validIntervalWitness :=
+  fun q pt =>
+    decide (evalExpr (pointAssignment pt) q.expr < q.claimedBound.lo ∨
+            q.claimedBound.hi < evalExpr (pointAssignment pt) q.expr)
+#tooth intervalCheck_subdivision_complete by mutation dedupEnvAux :=
+  fun _ env => env.reverse
+
+#tooth declarativeSosDecomposable_iff_sosCheck_ok by mutation sosCheck := fun _ _ _ => .ok
+#tooth sosCheck_refuted by mutation sosCheck := fun _ _ _ => .refused (.violatedAt []) []
+
+#tooth evalSosViolation_refutes by mutation evalSosViolation :=
+  fun q pt =>
+    let ρ := ratPointEnv pt
+    (q.ineqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+    (q.eqs.all fun h => decide (h.eval ρ = 0))
+
+#tooth stenglePositivstellensatzRefutable_infeasible by mutation StenglePositivstellensatzRefutable :=
+  fun q => ∃ sigma0 coneTerms idealTerms conePoly idealPoly,
+    PosSosWeights sigma0 ∧ ConeSumRel q.nonneg coneTerms conePoly ∧
+    IdealCombRel q.eqs idealTerms idealPoly ∧
+    (Poly.add sigma0.expand (Poly.add conePoly idealPoly)).terms = []
+
+#tooth stenglePositivstellensatzRefutable_iff_check_ok by mutation expandMonoidProduct :=
+  fun _ _ => some Poly.one
+
+#tooth positivstellensatzCheck_refuted by mutation positivstellensatzRefutes :=
+  fun k => match k with | .feasibleWitness _ | .invalidGeneratorIndex => true | _ => false
+
+#tooth feasibleWitness_refutes by mutation evalFeasibleWitness :=
+  fun q pt =>
+    let ρ := ratPointEnv pt
+    (q.nonneg.all fun g => decide (0 ≤ g.eval ρ)) &&
+    (q.eqs.all fun h => decide (h.eval ρ = 0))
+
+end Obend_Analysis_RefutationTeeth
+
+/-! ## Extracted from `Obend.Analysis.SosLyapunov` (11 teeth) -/
 section Obend_Analysis_SosLyapunov
 open Obend.Analysis Obend.Analysis.SosJson
 open Obend.Judge
 open Obend.Judge.SOS
 
 #tooth sosLyapunovFormat_refuses_empty_json by mutation
-  decodeSosLyapunovProblem := fun _ => .ok goldenSosProblem
+  decodeSosLyapunovProblem := fun _ => .ok cubicDampedCbfDaeProblem2D
+
+#tooth sosLyapunovProblemCertifiable_iff_check_ok by mutation SosLyapunovProblemCertifiable :=
+  fun prob => LyapunovAlgebraicallyCertifiable prob.lyapunov ∧ CbfAlgebraicallyCertifiable prob.cbf
+
+#tooth checkSosLyapunovProblem_refuted by mutation checkSosLyapunovProblem :=
+  fun _ prob cert =>
+    if !checkSosLyapunov prob.lyapunov cert.lyapunovWitness then
+      .refused .malformedDimensionOrParam []
+    else .ok
+
+#tooth lyapunovRadialNonpos_refutes_spec by mutation evalLyapunovRadialNonpos :=
+  fun spec pt =>
+    let ρ := ratPointEnv pt
+    (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+    decide (spec.lyapunovV.eval ρ ≤ 0)
+
+#tooth lyapunovLieAscent_refutes_spec by mutation evalLyapunovLieAscentWithLie :=
+  fun spec _lieV pt =>
+    let ρ := ratPointEnv pt
+    (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ))
+
+#tooth cbfUnsafeOverlap_refutes_problem by mutation evalCbfUnsafeOverlap :=
+  fun spec pt =>
+    let ρ := ratPointEnv pt
+    decide (0 ≤ spec.barrierB.eval ρ) &&
+    (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ))
+
+#tooth cbfNagumoViolation_refutes_problem by mutation evalCbfNagumoViolationWithLie :=
+  fun spec lieB pt =>
+    let ρ := ratPointEnv pt
+    decide (0 ≤ spec.barrierB.eval ρ) &&
+    (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+    decide (0 ≤ lieB.eval ρ + spec.classKAlpha * spec.barrierB.eval ρ)
+
+#tooth daeManifoldViolation_refutes_problem by mutation evalDaeManifoldViolation :=
+  fun spec pt =>
+    let ρ := ratPointEnv pt
+    (spec.algConstraints.all fun h => decide (h.eval ρ = 0)) &&
+    (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+    ((spec.algConstraints.any fun h_r => decide ((lieDerivativePoly h_r spec.vectorField).eval ρ = 0)) ||
+     decide (spec.algJacobianDet.eval ρ ≠
+       (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval ρ) ||
+     decide ((Poly.sqr spec.algJacobianDet).eval ρ < spec.regDelta) ||
+     decide (spec.algJacobianDet.eval ρ = 0))
+
+#tooth daeManifoldViolation_refutes_problem by mutation evalDaeManifoldViolation :=
+  fun spec pt =>
+    let ρ := ratPointEnv pt
+    (spec.algConstraints.all fun h => decide (h.eval ρ = 0)) &&
+    (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+    ((spec.algConstraints.any fun h_r => decide ((lieDerivativePoly h_r spec.vectorField).eval ρ ≠ 0)) ||
+     decide (spec.algJacobianDet.eval ρ =
+       (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval ρ) ||
+     decide ((Poly.sqr spec.algJacobianDet).eval ρ < spec.regDelta) ||
+     decide (spec.algJacobianDet.eval ρ = 0))
+
+#tooth daeManifoldViolation_refutes_problem by mutation evalDaeManifoldViolation :=
+  fun spec pt =>
+    let ρ := ratPointEnv pt
+    (spec.algConstraints.all fun h => decide (h.eval ρ = 0)) &&
+    (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+    ((spec.algConstraints.any fun h_r => decide ((lieDerivativePoly h_r spec.vectorField).eval ρ ≠ 0)) ||
+     decide (spec.algJacobianDet.eval ρ ≠
+       (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval ρ) ||
+     decide (spec.regDelta ≤ (Poly.sqr spec.algJacobianDet).eval ρ) ||
+     decide (spec.algJacobianDet.eval ρ = 0))
+
+#tooth daeManifoldViolation_refutes_problem by mutation evalDaeManifoldViolation :=
+  fun spec pt =>
+    let ρ := ratPointEnv pt
+    (spec.algConstraints.all fun h => decide (h.eval ρ = 0)) &&
+    (spec.domainIneqs.all fun g => decide (0 ≤ g.eval ρ)) &&
+    ((spec.algConstraints.any fun h_r => decide ((lieDerivativePoly h_r spec.vectorField).eval ρ ≠ 0)) ||
+     decide (spec.algJacobianDet.eval ρ ≠
+       (computeSymbolicAlgJacobianDet spec.algConstraints spec.algVars).eval ρ) ||
+     decide ((Poly.sqr spec.algJacobianDet).eval ρ < spec.regDelta) ||
+     decide (spec.algJacobianDet.eval ρ ≠ 0))
 
 end Obend_Analysis_SosLyapunov
 
@@ -272,7 +393,7 @@ open Obend.Analysis Obend.Analysis.TaylorModel
 
 end Obend_Analysis_TaylorModel
 
-/-! ## Extracted from `Obend.Elab.AutoCert` (1 teeth) -/
+/-! ## Extracted from `Obend.Elab.AutoCert` (3 teeth) -/
 section Obend_Elab_AutoCert
 open Obend.Elab.AutoCert
 open Lean (Json toJson)
@@ -286,6 +407,11 @@ open Obend.Leaf
 open Obend.Logic
 open Obend.Spec
 open Obend.Core.Term (Term)
+
+#tooth lookup_replaceVarInterval_eq by mutation replaceVarInterval := fun _ _ env => env
+
+#tooth checkIntervalAutoCertAt_refuted by mutation checkIntervalAutoCertAt :=
+  fun _ _ _ => .refused (.refutationWitness []) []
 
 #tooth checkGroebnerJudge_refuses_unit_basis_on_empty_ideal by mutation
   checkGroebnerJudge := fun _ _ _ => .ok

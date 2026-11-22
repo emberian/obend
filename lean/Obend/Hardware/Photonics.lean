@@ -185,7 +185,7 @@ export Obend.Analysis (
   faddeevAdjugateAndDet
   ThermoOpticPhaseShifter
   compensateThermalCrosstalk
-  goldenThermalCrosstalk4x4
+  bandedThermalCrosstalk4x4
   faddeevAdjugate_cancels_crosstalk_4x4
   compensateThermalCrosstalk_exact_4x4
   twoBosonPermanent
