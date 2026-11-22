@@ -7,10 +7,10 @@ set_option autoImplicit false
 /-- Quantities are obligations of this edition. -/
 inductive Quantity where
   | erased | affine | linear | unrestricted
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 inductive Reuse where
   | once | reusable
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 
 /-- Rigid variables stand for future self/super types. A row tail is retained,
 not flattened to the currently known methods. Ordinary arrows and scalar targets
@@ -49,7 +49,7 @@ Custody is never hidden by a record/prototype/specification wrapper. -/
 /-- Rigid variables may be quantified over shareable future types explicitly.
 Every instantiation must discharge this finite premise; an unknown row is never
 implicitly pure merely because its currently visible fields are immutable. -/
-@[expose] def Ty.shareableUnder (variables : List Nat) : Ty → Bool
+abbrev Ty.shareableUnder (variables : List Nat) : Ty → Bool
   | .variable index => variables.contains index
   | .field _ member tail => member.shareableUnder variables && tail.shareableUnder variables
   | .specification metadata extension => metadata.shareableUnder variables && extension.shareableUnder variables
@@ -70,14 +70,14 @@ so this is invariant under every checked type agreement. -/
 /-- First-order data: what a Plan, a response and a checkpointed reply can be.
 No closures, specifications, prototypes, custody, rigid variables (so no
 recursive sums yet) and no activities. -/
-@[expose] def Ty.isData : Ty → Bool
+abbrev Ty.isData : Ty → Bool
   | .natural | .label | .boolean | .emptyRow => true
   | .field _ member tail => member.isData && tail.isData
   | .variant row => row.isData
   | _ => false
 
 /-- A Plan is a sum of typed actions over first-order data. -/
-@[expose] def Ty.isPlan : Ty → Bool
+abbrev Ty.isPlan : Ty → Bool
   | .variant row => row.isData
   | _ => false
 
@@ -97,7 +97,7 @@ def Ty.put (row : Ty) (name : String) (member : Ty) : Ty :=
       if prior = name then .field name member tail else .field prior old (tail.put name member)
   | tail => .field name member tail
 
-@[expose] def Ty.tail : Ty → Ty
+abbrev Ty.tail : Ty → Ty
   | .field _ _ rest => rest.tail
   | other => other
 
@@ -115,7 +115,7 @@ A shadowed member is forgotten only when it is `shareable`: a custody, a once
 closure or any other non-shareable member stays in the canonical row behind the
 member that shadows it, so canonical equality never hides what shareability
 sees (`Ty.shareableUnder_canonical`). -/
-@[expose] def Ty.insertCanonical (row : Ty) (name : String) (member : Ty) : Ty :=
+abbrev Ty.insertCanonical (row : Ty) (name : String) (member : Ty) : Ty :=
   match row with
   | .field prior old tail =>
       if name = prior then (if old.shareable then .field name member tail else .field name member row)
@@ -199,12 +199,12 @@ theorem Ty.shareable_canonical (type : Ty) : type.canonical.shareable = type.sha
 
 /-- The label relation between a row entry and the row after it in canonical form:
 labels ascend, and a label repeats only before a non-shareable shadowed member. -/
-@[expose] def Ty.headOk (name : String) : Ty → Prop
+abbrev Ty.headOk (name : String) : Ty → Prop
   | .field next member _ => name < next ∨ (name = next ∧ member.shareable = false)
   | _ => True
 
 /-- The shape `Ty.canonical` produces. -/
-@[expose] def Ty.isCanonical : Ty → Prop
+abbrev Ty.isCanonical : Ty → Prop
   | .arrow _ _ domain codomain => domain.isCanonical ∧ codomain.isCanonical
   | .field name member tail => member.isCanonical ∧ tail.isCanonical ∧ Ty.headOk name tail
   | .specification metadata extension => metadata.isCanonical ∧ extension.isCanonical
@@ -280,7 +280,7 @@ theorem Ty.canonical_of_isCanonical : ∀ {type : Ty}, type.isCanonical → type
 /-- Explicit finite bounds disclose the members available on a rigid self/super
 variable. Recursive bounds are explored only to the requested finite depth. -/
 abbrev Bounds := List (Nat × Ty)
-@[expose] def Ty.lookup (bounds : Bounds) : Nat → Ty → String → Option Ty
+abbrev Ty.lookup (bounds : Bounds) : Nat → Ty → String → Option Ty
   | 0, _, _ => none
   | fuel + 1, .field prior member tail, name =>
       if prior = name then some member else tail.lookup bounds fuel name
@@ -289,7 +289,7 @@ abbrev Bounds := List (Nat × Ty)
       bound.lookup bounds fuel name
   | _, _, _ => none
 
-@[expose] def Ty.isRow (bounds : Bounds) : Nat → Ty → Bool
+abbrev Ty.isRow (bounds : Bounds) : Nat → Ty → Bool
   | 0, _ => false
   | _ + 1, .emptyRow => true
   | fuel + 1, .field _ _ tail => tail.isRow bounds fuel
@@ -320,14 +320,14 @@ rule (`PartialTyping.lambda`) requires it of the parameter's count. -/
 structure Binding where
   type : Ty
   quantity : Quantity
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 abbrev Context := List Binding
 abbrev Uses := List Nat
 
-@[expose] def zeroUses (context : Context) : Uses := List.replicate context.length 0
+abbrev zeroUses (context : Context) : Uses := List.replicate context.length 0
 @[expose] def variableUses (context : Context) (index : Nat) : Uses :=
   (List.range context.length).map (fun position => if position = index then 1 else 0)
-@[expose] def addUses (first second : Uses) : Uses := List.zipWith (· + ·) first second
+abbrev addUses (first second : Uses) : Uses := List.zipWith (· + ·) first second
 
 /-- At most once for `affine` and `linear`, never for `erased`. A partial computation may still
 retain a linear obligation forever (a divergent body never reaches its use); the checker's part of
@@ -349,7 +349,7 @@ scrutinee allows (`caseAllowed`: `linear` for a scrutinee that uses a `linear` h
 /-- No `linear` hypothesis is used: what an argument must satisfy unless the parameter it is
 passed to is itself `linear`. A `linear` hypothesis flows only into a `linear` slot, so a callee
 that may drop its argument (`erased`, `affine`) or share it (`unrestricted`) never receives one. -/
-@[expose] def linearFree (context : Context) (uses : Uses) : Bool :=
+abbrev linearFree (context : Context) (uses : Uses) : Bool :=
   (context.zip uses).all (fun pair => pair.2 == 0 || pair.1.quantity != .linear)
 
 /-- The uses of two branches of which exactly one runs (`ifBool`, `ifZero`, the arms of a `case`):
@@ -357,7 +357,7 @@ pointwise maximum. With `branchesAgree` this is the additive rule: a `linear` hy
 equally often on every branch and the join is that common count; an `affine` one at most once on
 each branch, so at most once; an `unrestricted` one any number of times. The join is the same `max`
 at every quantity, so the uses of a term stay a function of the term alone (`uses_determined`). -/
-@[expose] def joinUses (first second : Uses) : Uses := List.zipWith max first second
+abbrev joinUses (first second : Uses) : Uses := List.zipWith max first second
 
 /-- What a binder of this quantity demands of two branches: a `linear` one the same count on both. -/
 @[expose] def Quantity.agrees : Quantity → Nat → Nat → Bool
@@ -365,7 +365,7 @@ at every quantity, so the uses of a term stay a function of the term alone (`use
   | _, _, _ => true
 
 /-- The branches agree on every `linear` hypothesis: the premise `joinUses` needs at a join. -/
-@[expose] def branchesAgree : Context → Uses → Uses → Bool
+abbrev branchesAgree : Context → Uses → Uses → Bool
   | binding :: context, first :: firsts, second :: seconds =>
       binding.quantity.agrees first second && branchesAgree context firsts seconds
   | _, _, _ => true
@@ -424,7 +424,7 @@ theorem Ty.bearsCustody_of_shareableUnder {variables : List Nat} :
 
 /-- Custody is held `linear`: a binder of a custody-bearing type is neither droppable (`erased`,
 `affine`) nor shareable (`unrestricted`). -/
-@[expose, simp] def mustBeLinear (binding : Binding) : Bool :=
+@[simp] abbrev mustBeLinear (binding : Binding) : Bool :=
   !binding.type.bearsCustody || binding.quantity == .linear
 
 /-- A context is valid when every `unrestricted` binding is shareable and every custody-bearing
@@ -508,7 +508,7 @@ structure LambdaAnnotation where
   codomain : Ty
   parameter : Quantity
   reuse : Reuse
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 
 /-- Type substitution instantiates future row/type parameters, including their
 negative occurrences in binary methods. No variance/subtype oracle is hidden. -/
@@ -532,7 +532,7 @@ structure ExtensionFamilies where
   inherited : Ty
   required : Ty
   provided : Ty
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 
 def ExtensionFamilies.functionType (family : ExtensionFamilies) (futureSelf : Ty) : Ty :=
   .arrow .reusable .unrestricted futureSelf

@@ -30,25 +30,25 @@ there; with `σ` as long as the filler's scope it never arises.
 -/
 public import Obend.Core.TermTraverse
 public import Obend.Law.Proofs.Run
-@[expose] public section
+public section
 set_option autoImplicit false
 
 namespace Obend.Core.TermTraverse
 open Obend.Core.Term Obend.Core.Traverse
 
 /-- The shape a hole's substitution gives index `i`: its `i`-th entry. -/
-def listSubstS (cs : List Shape) (i : Nat) : Shape := cs.getD i (.var i)
+@[expose] def listSubstS (cs : List Shape) (i : Nat) : Shape := cs.getD i (.var i)
 
 /-- A node with its children already filled: a hole with a filler is the filler under the hole's
 substitution; anything else is itself. -/
-def fillNode (θ : Nat → Option Shape) (tag : Tag) (cs : List Shape) : Shape :=
+@[expose] def fillNode (θ : Nat → Option Shape) (tag : Tag) (cs : List Shape) : Shape :=
   match tag with
   | .hole n => match θ n with
     | some u => Tree.substitute (listSubstS cs) u
     | none => .node (.hole n) cs
   | _ => .node tag cs
 
-def fillS (θ : Nat → Option Shape) : Shape → Shape
+@[expose] def fillS (θ : Nat → Option Shape) : Shape → Shape
   | .var i => .var i
   | .bind b => .bind (fillS θ b)
   | .node tag cs => fillNode θ tag (cs.map (fillS θ))
@@ -59,13 +59,13 @@ def tagArity (Δ : Nat → Nat) (tag : Tag) (k : Nat) : Prop :=
   | _ => True
 
 /-- Every hole `n` carries a substitution of length `Δ n`. -/
-def ArityS (Δ : Nat → Nat) : Shape → Prop
+@[expose] def ArityS (Δ : Nat → Nat) : Shape → Prop
   | .var _ => True
   | .bind b => ArityS Δ b
   | .node tag cs => tagArity Δ tag cs.length ∧ ∀ c ∈ cs, ArityS Δ c
 
 /-- Every filler of hole `n` mentions only the `Δ n` variables its hole's substitution gives. -/
-def FillersS (Δ : Nat → Nat) (θ : Nat → Option Shape) : Prop :=
+@[expose] def FillersS (Δ : Nat → Nat) (θ : Nat → Option Shape) : Prop :=
   ∀ n u, θ n = some u → Tree.Scoped (Δ n) u
 
 theorem rename_var' (f : Nat → Nat) (i : Nat) : Tree.rename f (.var i : Shape) = .var (f i) := by
@@ -236,12 +236,12 @@ namespace Obend.Core.Term
 open Obend.Core.Traverse Obend.Core.TermTraverse
 
 /-- The term a hole's substitution gives index `i`: its `i`-th entry. -/
-def listSubst (σ : List Term) (i : Nat) : Term := σ.getD i (.bound i)
+@[expose] def listSubst (σ : List Term) (i : Nat) : Term := σ.getD i (.bound i)
 
 /-- Fill the holes `θ` has fillers for: `.hole n σ` becomes `θ n` with its variables replaced by
 `σ`'s entries, filled first. A hole carries its context as `σ`, so filling crosses binders without
 shifting. Fillers are not filled again. -/
-def Term.fill (θ : Nat → Option Term) : Term → Term
+@[expose] def Term.fill (θ : Nat → Option Term) : Term → Term
   | .hole n σ => match θ n with
     | some u => u.substitute (listSubst (σ.map fun t => t.fill θ))
     | none => .hole n (σ.map fun t => t.fill θ)
@@ -286,10 +286,10 @@ decreasing_by
        omega)
 
 /-- Every hole `n` in `t` carries a substitution of length `Δ n`: its context has `Δ n` variables. -/
-def HoleArity (Δ : Nat → Nat) (t : Term) : Prop := ArityS Δ (encode t)
+@[expose] def HoleArity (Δ : Nat → Nat) (t : Term) : Prop := ArityS Δ (encode t)
 
 /-- Every filler of hole `n` mentions only the `Δ n` variables of the hole's context. -/
-def FillersScoped (Δ : Nat → Nat) (θ : Nat → Option Term) : Prop :=
+@[expose] def FillersScoped (Δ : Nat → Nat) (θ : Nat → Option Term) : Prop :=
   ∀ n u, θ n = some u → TermTraverse.Scoped (Δ n) u
 
 theorem encode_listSubst (σ : List Term) (i : Nat) :
@@ -497,7 +497,7 @@ theorem value_fill (θ : Nat → Option Term) {t : Term} (h : Value t) : Value (
   cases h <;> simp only [Term.fill] <;> constructor
 
 /-- A scalar literal: what a primitive reads and writes. -/
-def IsLiteral : Term → Prop
+@[expose] def IsLiteral : Term → Prop
   | .nat _ => True
   | .boolean _ => True
   | .label _ => True

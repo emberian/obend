@@ -4,6 +4,7 @@ public import Obend.Tactic.Cases
 public import Obend.Core.Invariant
 public import Obend.Core.TermTraverse
 public import Obend.Core.Proofs.StepCases
+public section
 namespace Obend.Core.Proofs.Adequacy
 open Obend.Core.Term
 open Obend.Core.Machine
@@ -79,9 +80,9 @@ public inductive SourceDerivation : Term → Term → Nat → Prop where
 /-- The assignment gives each address a finite source computation; it does NOT
 recursively unfold its pointers. In particular a recursive address can denote a
 source Fix while its origin denotes the one-step expansion of that same Fix. -/
-@[expose] public abbrev AddressMeaning := Address → Term
+public abbrev AddressMeaning := Address → Term
 
-@[expose] public def environmentSubstitution (meaning : AddressMeaning) (environment : Environment) (index : Nat) : Term :=
+public abbrev environmentSubstitution (meaning : AddressMeaning) (environment : Environment) (index : Nat) : Term :=
   match environment[index]? with
   | some address => meaning address
   | none => .bound index
@@ -91,7 +92,7 @@ source Fix while its origin denotes the one-step expansion of that same Fix. -/
   | [] => term
   | _::_ => term.substitute (environmentSubstitution meaning environment)
 
-@[expose] public def closeOrigin (meaning : AddressMeaning) (origin : Closure) : Term :=
+public abbrev closeOrigin (meaning : AddressMeaning) (origin : Closure) : Term :=
   closeTerm meaning origin.environment origin.term
 
 @[expose] public def valueMeaning (meaning : AddressMeaning) : RuntimeValue → Term
@@ -109,16 +110,16 @@ an actual independent reference evaluation, rather than an arbitrary cached
 scalar. Stable origins let the same relation survive the phase change. -/
 /-- Each allocated graph name denotes a closed source computation. The
 assignment remains finite syntax even when these computations contain Fix. -/
-@[expose] public def MeaningsScoped (bound : Nat) (meaning : AddressMeaning) : Prop :=
+public abbrev MeaningsScoped (bound : Nat) (meaning : AddressMeaning) : Prop :=
   ∀ address, address < bound → Scoped 0 (meaning address)
 
-@[expose] public def CellRealizes (meaning : AddressMeaning) (address : Address) (cell : Cell) : Prop :=
+public abbrev CellRealizes (meaning : AddressMeaning) (address : Address) (cell : Cell) : Prop :=
   Steps (meaning address) (closeOrigin meaning (cellOrigin cell)) ∧
     match cell with
     | .cached _ value => Evaluates (meaning address) (valueMeaning meaning value)
     | _ => True
 
-@[expose] public def HeapRealizes (meaning : AddressMeaning) (heap : Array Cell) : Prop :=
+public abbrev HeapRealizes (meaning : AddressMeaning) (heap : Array Cell) : Prop :=
   ∀ (address : Nat) (cell : Cell), heap[address]? = some cell → CellRealizes meaning address cell
 
 @[expose] public def frameMeaning (meaning : AddressMeaning) (frame : Frame) (hole : Term) : Term :=
@@ -142,7 +143,7 @@ assignment remains finite syntax even when these computations contain Fix. -/
       (closeTerm meaning environment whenTrue) (closeTerm meaning environment whenFalse)
   | .split names function environment => .split hole names (closeTerm meaning environment function)
 
-@[expose] public def stackMeaning (meaning : AddressMeaning) (stack : List Frame) (hole : Term) : Term :=
+public abbrev stackMeaning (meaning : AddressMeaning) (stack : List Frame) (hole : Term) : Term :=
   stack.foldl (fun prior frame => frameMeaning meaning frame prior) hole
 
 @[expose] public def controlMeaning (meaning : AddressMeaning) : Control → Option Term
@@ -176,7 +177,7 @@ a whole-program reduction alone cannot justify that heap-cell result. -/
 addresses and local provenance for every active update. Initialization,
 running/finished transition preservation and ground soundness are proved
 below; no source-evaluator oracle is a field of this relation. -/
-@[expose] public def GraphRepresents (state : State) (source : Term) : Prop :=
+public abbrev GraphRepresents (state : State) (source : Term) : Prop :=
   LexicalInvariant state ∧ BusyInvariant state ∧ FinalStackInvariant state ∧ ∃ meaning, MeaningsScoped state.heap.size meaning ∧ HeapRealizes meaning state.heap ∧
     ∃ residual, controlMeaning meaning state.control = some residual ∧
       StackRealizes meaning source residual state.stack
@@ -194,7 +195,7 @@ public inductive DemandContext where
   | ifBool (whenTrue whenFalse : Term)
   | split (names : List String) (function : Term)
 
-@[expose] public def DemandContext.term : DemandContext → Term → Term
+public abbrev DemandContext.term : DemandContext → Term → Term
   | .argument arg, hole => .app hole arg
   | .field name, hole => .get hole name
   | .reflect, hole => .reflect hole
@@ -207,7 +208,7 @@ public inductive DemandContext where
   | .ifBool whenTrue whenFalse, hole => .ifBool hole whenTrue whenFalse
   | .split names function, hole => .split hole names function
 
-@[expose] public def DemandContext.frame : DemandContext → Environment → Frame
+public abbrev DemandContext.frame : DemandContext → Environment → Frame
   | .argument arg, environment => .argument arg environment
   | .field name, _ => .field name
   | .reflect, _ => .reflect
@@ -226,13 +227,13 @@ public inductive ImmediateValue where
   | boolean (value : Bool)
   | label (name : String)
 
-@[expose] public def ImmediateValue.term : ImmediateValue → Term
+public abbrev ImmediateValue.term : ImmediateValue → Term
   | .closure body => .lam body
   | .natural number => .nat number
   | .boolean value => .boolean value
   | .label name => .label name
 
-@[expose] public def ImmediateValue.runtime : ImmediateValue → Environment → RuntimeValue
+public abbrev ImmediateValue.runtime : ImmediateValue → Environment → RuntimeValue
   | .closure body, environment => .closure body environment
   | .natural number, _ => .natural number
   | .boolean value, _ => .boolean value
@@ -243,45 +244,45 @@ public inductive ImmediateValue where
 public inductive ObjectAccess where
   | reflect | metadata | project
 
-@[expose] public def ObjectAccess.frame : ObjectAccess → Frame
+public abbrev ObjectAccess.frame : ObjectAccess → Frame
   | .reflect => .reflect | .metadata => .metadata | .project => .project
 
-@[expose] public def ObjectAccess.value : ObjectAccess → Address → Address → RuntimeValue
+public abbrev ObjectAccess.value : ObjectAccess → Address → Address → RuntimeValue
   | .reflect, first, second => .prototype first second
   | .metadata, first, second => .specification first second
   | .project, first, second => .prototype first second
 
-@[expose] public def ObjectAccess.address : ObjectAccess → Address → Address → Address
+public abbrev ObjectAccess.address : ObjectAccess → Address → Address → Address
   | .reflect, first, _ => first | .metadata, first, _ => first | .project, _, second => second
 
 
 
 
 
-@[expose] public def extendMeaning (meaning : AddressMeaning) (address : Address) (term : Term) : AddressMeaning :=
+public abbrev extendMeaning (meaning : AddressMeaning) (address : Address) (term : Term) : AddressMeaning :=
   fun index => if index = address then term else meaning index
 
 public inductive PairObject where
   | specification | prototype
 
-@[expose] public def PairObject.term : PairObject → Term → Term → Term
+public abbrev PairObject.term : PairObject → Term → Term → Term
   | .specification, first, second => .specification first second
   | .prototype, first, second => .prototype first second
 
-@[expose] public def PairObject.value : PairObject → Address → Address → RuntimeValue
+public abbrev PairObject.value : PairObject → Address → Address → RuntimeValue
   | .specification, first, second => .specification first second
   | .prototype, first, second => .prototype first second
 
 
 
-@[expose] public def allocationLoop (environment : Environment) (fields : List (String × Term))
+public abbrev allocationLoop (environment : Environment) (fields : List (String × Term))
     (heap : Array Cell) (prior : List (String × Address)) : Array Cell × List (String × Address) :=
   fields.foldl (fun pair field =>
     (pair.1.push (.suspended ⟨field.2,environment⟩),(field.1,pair.1.size)::pair.2)) (heap,prior)
 
 /-- Running and finished controls have a source focus. Faults and blackholes
 are retained operational outcomes and are deliberately not source values. -/
-@[expose] public def ResultControl : Control → Prop
+public abbrev ResultControl : Control → Prop
   | .evaluate _ _ | .enter _ | .returned _ | .complete _ => True
   -- A yield is not a pure result: it is a whole-program step taken only by a
   -- resume, so (like a fault) it never appears on a terminating pure trace.
@@ -290,29 +291,29 @@ are retained operational outcomes and are deliberately not source values. -/
 /-- Actual thunk birth provenance: ordinary captures precede their address;
 the sole same-address capture is the exact body installed by tied Fix. Cached
 RESULT edges may point forward; the permanent SOURCE origin obeys this law. -/
-@[expose] public def OriginBorn (address : Address) (origin : Closure) : Prop :=
+public abbrev OriginBorn (address : Address) (origin : Closure) : Prop :=
   EnvironmentValid address origin.environment ∨
     ∃ (spec inherited : Term) (captured : Environment),
       origin.environment = address::captured ∧ EnvironmentValid address captured ∧
       origin.term = .app (.app (spec.rename Nat.succ) (.bound 0)) (inherited.rename Nat.succ)
 
-@[expose] public def HeapOriginsBorn (heap : Array Cell) : Prop :=
+public abbrev HeapOriginsBorn (heap : Array Cell) : Prop :=
   ∀ address cell, heap[address]? = some cell → OriginBorn address (cellOrigin cell)
 
 /-- A graph representation at a specified permanent source assignment. This
 interface retains address-name identity for reachability and update budgets. -/
-@[expose] public def GraphRepresentsBy (meaning : AddressMeaning) (state : State) (source : Term) : Prop :=
+public abbrev GraphRepresentsBy (meaning : AddressMeaning) (state : State) (source : Term) : Prop :=
   LexicalInvariant state ∧ BusyInvariant state ∧ FinalStackInvariant state ∧
     MeaningsScoped state.heap.size meaning ∧ HeapRealizes meaning state.heap ∧
     ∃ residual, controlMeaning meaning state.control = some residual ∧
       StackRealizes meaning source residual state.stack
 
-@[expose] public def SourceNamesAgree (before : State) (meaning next : AddressMeaning) : Prop :=
+public abbrev SourceNamesAgree (before : State) (meaning next : AddressMeaning) : Prop :=
   ∀ address, address < before.heap.size → meaning address = next address
 
 /-- The actual semantic transition consumes a continuation prefix and one
 independent source reduction; remaining heap names retain their prefix. -/
-@[expose] public def SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
+public abbrev SourceDispatch (meaning next : AddressMeaning) (state : State) : Prop :=
   ∃ consumed before after,
     controlMeaning meaning state.control = some before ∧
     controlMeaning next (stepRaw state).control = some after ∧
@@ -330,15 +331,15 @@ assert that a source computation terminates. -/
 The endpoint can be a genuine source constructor, returned/cache value, or an
 explicit fault/blackhole; terminating this segment does not label a blackhole
 as source divergence. -/
-@[expose] public def DemandAdministrative (state : State) : Prop :=
+public abbrev DemandAdministrative (state : State) : Prop :=
   match state.control with
   | .enter _ | .evaluate (.bound _) _ => True
   | _ => False
 
-@[expose] public def DemandAdministrationHalts (state : State) : Prop :=
+public abbrev DemandAdministrationHalts (state : State) : Prop :=
   ∃ ticks, ¬ DemandAdministrative (rawRun ticks state)
 
-@[expose] public def AdministrativeBudget (cost cap : Nat) : Prop :=
+public abbrev AdministrativeBudget (cost cap : Nat) : Prop :=
   ∀ (meaning : AddressMeaning) (state : State), HeapRealizes meaning state.heap → HeapOriginsBorn state.heap →
     (∀ (address : Address) (result : Term), state.control = .enter address → address+1 ≤ cap →
       SourceDerivation (meaning address) result cost → DemandAdministrationHalts state) ∧
@@ -346,7 +347,7 @@ as source divergence. -/
       EnvironmentValid cap environment → SourceDerivation (closeTerm meaning environment term) result cost →
       DemandAdministrationHalts state)
 
-@[expose] public def retainedState : Outcome → State
+public abbrev retainedState : Outcome → State
   | .finished _ state | .suspended _ state | .divergent _ state | .refused _ state
   | .yielded _ state => state
 
@@ -366,12 +367,12 @@ exact resumable state; this maximum is a semantic bound, not a native allocator.
       let later := traceLimits ticks next
       ⟨max next.heap.size later.heap,max next.stack.length later.stack⟩
 
-@[expose] public def observationTerm : Observation → Term
+public abbrev observationTerm : Observation → Term
   | .natural number => .nat number
   | .boolean value => .boolean value
   | .label name => .label name
 
-@[expose] public def observationRuntime : Observation → RuntimeValue
+public abbrev observationRuntime : Observation → RuntimeValue
   | .natural number => .natural number
   | .boolean value => .boolean value
   | .label name => .label name
@@ -414,7 +415,7 @@ omitting the blackhole-producing state. -/
 /-- Universal partial-budget invariant: undemanded divergent names need no
 finite evaluation. Every FINITE pending-name/current-demand pair satisfies
 strict semantic decrease or equal-cost lexical cap confinement. -/
-@[expose] public def DemandSafety (meaning : AddressMeaning) (state : State) : Prop :=
+public abbrev DemandSafety (meaning : AddressMeaning) (state : State) : Prop :=
   ∀ (address : Address) (origin : Closure), state.heap[address]? = some (.evaluating origin) →
     ∀ (nameValue : Term) (nameCost : Nat), SourceDerivation (meaning address) nameValue nameCost →
       ∀ focus, budgetFocus meaning state = some focus →
@@ -422,6 +423,7 @@ strict semantic decrease or equal-cost lexical cap confinement. -/
           focusCost < nameCost ∨ (focusCost = nameCost ∧ budgetCap state ≤ address)
 
 /-- The closed lazy Fix program of `lazy_fixed_function`. -/
-@[expose] public def lazyFixedSource : Term := .fix (.lam (.lam (.lam (.bound 0)))) (.nat 7)
+public abbrev lazyFixedSource : Term := .fix (.lam (.lam (.lam (.bound 0)))) (.nat 7)
 
 end Obend.Core.Proofs.Adequacy
+end

@@ -15,7 +15,7 @@ set_option autoImplicit false
 /- Structural conversion preserves graph head classes and relates actual
 components. Exact canonical-head conversion is intentionally not asserted. -/
 
-@[expose] public section
+public section
 section StructuralRuntime
 variable {assumptions : Assumptions}
 
@@ -29,7 +29,7 @@ public abbrev CapturedFunction := Obend.Core.MachineTyping.Next.FunctionOrigin
     {body : Term} {environment : Environment} (captured : CapturedFunction assumptions types body environment) : Ty :=
   Obend.Core.MachineTyping.Next.FunctionOrigin.arrow captured
 
-public def RuntimeHead (assumptions : Assumptions) (value : RuntimeValue) (type : Ty) : Prop :=
+@[expose] public def RuntimeHead (assumptions : Assumptions) (value : RuntimeValue) (type : Ty) : Prop :=
   match value with
   | .natural _ => TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary .natural
   | .boolean _ => TypeGraph.labelHead ((TypeGraph.graph assumptions).label (.type type)) = .ordinary .boolean
@@ -73,7 +73,7 @@ theorem value_head_correct {types : AddressTypes} {value : RuntimeValue} {type :
 
 /-- This syntactic discriminator is used only for direct runtime constructors,
 not to normalize aliases or decide semantic row equality. -/
-public def rowSyntax : Ty → Bool
+@[expose] public def rowSyntax : Ty → Bool
   | .variable _ | .field _ _ _ | .emptyRow => true
   | _ => false
 

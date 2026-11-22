@@ -173,11 +173,11 @@ structure ExecutionWith (policy : State → Bool) (limits : Limits) (budget : Bu
 /-- Existing clear preview behavior remains the unrestricted raw language. -/
 def force := forceWith (fun _ => true)
 def materialize := materializeWith (fun _ => true)
-@[expose] def complete := completeWith (fun _ => true)
+abbrev complete := completeWith (fun _ => true)
 abbrev Extraction := ExtractionWith (fun _ => true)
 def extract := extractWith (fun _ => true)
 abbrev Execution := ExecutionWith (fun _ => true)
-@[expose] def execute := executeWith (fun _ => true)
+abbrev execute := executeWith (fun _ => true)
 
 /-! ## Activities: the yielded Plan is data; the response is typed data -/
 
@@ -244,7 +244,7 @@ materialization as every other Data: enter its cell with an empty stack. -/
     | (.refused _ retained,ticks) => .error (.refused,retained,{budget with ticks := ticks})
     | (.yielded _ retained,ticks) => .error (.yielded,retained,{budget with ticks := ticks})
   | _ => .error (.suspended,state,budget)
-@[expose] def yieldedPlan := yieldedPlanWith (fun _ => true)
+abbrev yieldedPlan := yieldedPlanWith (fun _ => true)
 
 end Obend.Core.Data
 

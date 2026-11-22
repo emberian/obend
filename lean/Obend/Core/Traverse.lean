@@ -1,6 +1,6 @@
 module
 public import Obend.Core.Term
-@[expose] public section
+public section
 namespace Obend.Core.Traverse
 open Obend.Core.Term
 set_option autoImplicit false
@@ -17,7 +17,7 @@ variable {Tag : Type}
 
 /-- The sole recursive rebuilding traversal. The environment's action and lift
 are parameters, so renaming and substitution share the same recursion. -/
-def traverse {Env : Type} (onVar : Env → Nat → Tree Tag) (lift : Env → Env)
+@[expose] def traverse {Env : Type} (onVar : Env → Nat → Tree Tag) (lift : Env → Env)
     (env : Env) : Tree Tag → Tree Tag
   | .var i => onVar env i
   | .bind body => .bind (traverse onVar lift (lift env) body)
@@ -44,7 +44,7 @@ decreasing_by
 abbrev rename (f : Nat → Nat) (t : Tree Tag) : Tree Tag :=
   traverse (fun f i => .var (f i)) liftRename f t
 
-def liftSubst (σ : Nat → Tree Tag) : Nat → Tree Tag
+@[expose] def liftSubst (σ : Nat → Tree Tag) : Nat → Tree Tag
   | 0 => .var 0
   | i+1 => rename Nat.succ (σ i)
 
@@ -122,7 +122,7 @@ theorem substitute_comp (t : Tree Tag) (σ τ : Nat → Tree Tag) :
     exact List.map_congr_left (fun child member => ih child member σ τ)
 
 /-- All free indices satisfy a predicate. Bound indices satisfy it automatically. -/
-def All (p : Nat → Prop) : Tree Tag → Prop
+@[expose] def All (p : Nat → Prop) : Tree Tag → Prop
   | .var i => p i
   | .bind body => All (fun i => match i with | 0 => True | j+1 => p j) body
   | .node _ children => ∀ child ∈ children, All p child
@@ -130,13 +130,13 @@ def All (p : Nat → Prop) : Tree Tag → Prop
 abbrev Scoped (n : Nat) (t : Tree Tag) : Prop := All (fun i => i < n) t
 
 /-- Boolean counterpart of `All`, sharing exactly its binder policy. -/
-def all (p : Nat → Bool) : Tree Tag → Bool
+@[expose] def all (p : Nat → Bool) : Tree Tag → Bool
   | .var i => p i
   | .bind body => all (fun i => match i with | 0 => true | j+1 => p j) body
   | .node _ children => (children.map (all p)).all id
 
 /-- Whether a free de Bruijn index occurs (not the type checker's usage grades). -/
-def uses (i : Nat) (t : Tree Tag) : Bool := !all (fun j => j != i) t
+@[expose] def uses (i : Nat) (t : Tree Tag) : Bool := !all (fun j => j != i) t
 
 theorem all_eq_true (t : Tree Tag) (p : Nat → Bool) : all p t = true ↔ All (fun i => p i = true) t := by
   induction t using inductionOn generalizing p with

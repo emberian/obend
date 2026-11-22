@@ -593,13 +593,13 @@ theorem inferRange_sound
 /-! ## 4. Unified `RangeSafe` Checker & End-to-End `Core.Term` → `evalTermHw` → `RtlExpr` Bridge -/
 
 /-- Primitives compiled by `Obend.Hardware.Compiler.compilePrim`. -/
-@[expose] def isHwPrim : Primitive → Bool
+def isHwPrim : Primitive → Bool
   | .add | .multiply | .subtract | .equal | .conjunction | .less | .lessEqual
   | .bitAnd | .bitOr | .bitXor | .shl | .lshr | .ashr | .slt | .qmul32 => true
   | .divide | .modulo | .labelEqual => false
 
 /-- Primitives in the Sable `F_O` integer/boolean arithmetic circuit fragment over `ℤ/Mℤ`. -/
-@[expose] def isModPrim : Primitive → Bool
+def isModPrim : Primitive → Bool
   | .add | .multiply | .subtract | .equal | .conjunction | .less | .lessEqual => true
   | _ => false
 
@@ -1064,9 +1064,9 @@ theorem compileTerm_evaluates_sound
 /-! ## 5. Sable `F_O` ZK No-Wrap Prime-Field Bridge (`evalMod`, `evaluates_mod_prime_exact_of_rangeSafe`) -/
 
 /-- The 31-bit KoalaBear STARK prime `p = 2^31 - 2^24 + 1 = 2130706433` (`Sable` `arXiv:2611.14083`). -/
-@[expose] def koalaBearPrime : Nat := 2130706433
+abbrev koalaBearPrime : Nat := 2130706433
 /-- The 31-bit BabyBear STARK prime `p = 2^31 - 2^27 + 1 = 2013265921`. -/
-@[expose] def babyBearPrime : Nat := 2013265921
+abbrev babyBearPrime : Nat := 2013265921
 
 theorem koalaBearPrime_spec :
     koalaBearPrime = 2 ^ 31 - 2 ^ 24 + 1 ∧ 1 < koalaBearPrime ∧

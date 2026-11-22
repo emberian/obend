@@ -23,7 +23,7 @@ domain for the lower operand and codomain for the upper operand. -/
 public import Obend.Core.Check
 import all Obend.Core.Check
 
-@[expose] public section
+public section
 namespace Obend.Core.Bidirectional
 open Obend.Core.Ty Obend.Core.Term Obend.Core.Check
 set_option autoImplicit false
@@ -76,46 +76,46 @@ inductive CheckRefusal where
   | undeclaredHole (path : List Nat) (hole : Nat)
   /-- The hole `hole` at `path` is declared over `declared` variables and given `supplied` arguments. -/
   | holeArity (path : List Nat) (hole : Nat) (declared supplied : Nat)
-  deriving Repr, DecidableEq
+  deriving Repr, @[expose] DecidableEq
 
 /-- A Boolean premise as evidence, or the named refusal. -/
-def need (premise : Bool) (refusal : CheckRefusal) : Except CheckRefusal (PLift (premise = true)) :=
+@[expose] def need (premise : Bool) (refusal : CheckRefusal) : Except CheckRefusal (PLift (premise = true)) :=
   if h : premise = true then .ok ⟨h⟩ else .error refusal
 
 theorem need_ok {premise : Bool} {refusal : CheckRefusal} (h : premise = true) :
     need premise refusal = .ok ⟨h⟩ := by simp [need, h]
 
 /-- The first binder a usage vector uses more often than its quantity allows, with that quantity. -/
-def firstOveruse (context : Context) (uses : Uses) : Option (Nat × Quantity × Nat) :=
+abbrev firstOveruse (context : Context) (uses : Uses) : Option (Nat × Quantity × Nat) :=
   ((context.zip uses).zipIdx.find? (fun entry => !safeQuantity entry.1.1.quantity entry.1.2)).map
     (fun entry => (entry.2, entry.1.1.quantity, entry.1.2))
 
 /-- Why `safeUses` failed: the first overused binder, named with its own quantity. -/
-def overuse (path : List Nat) (context : Context) (uses : Uses) : CheckRefusal :=
+abbrev overuse (path : List Nat) (context : Context) (uses : Uses) : CheckRefusal :=
   match firstOveruse context uses with
   | some (index, quantity, count) => .binderOverused path index quantity count
   | none => .invalidContext path
 
 /-- The first `linear` hypothesis a usage vector uses. -/
-def firstLinearUse (context : Context) (uses : Uses) : Option Nat :=
+abbrev firstLinearUse (context : Context) (uses : Uses) : Option Nat :=
   ((context.zip uses).zipIdx.find? (fun entry => entry.1.2 != 0 && entry.1.1.quantity == .linear)).map
     (fun entry => entry.2)
 
 /-- The first `linear` hypothesis two branches use unequally (`branchesAgree` fails there). -/
-def firstDisagreement : Context → Uses → Uses → Nat → Option Nat
+@[expose] def firstDisagreement : Context → Uses → Uses → Nat → Option Nat
   | binding :: context, first :: firsts, second :: seconds, index =>
       if binding.quantity.agrees first second then firstDisagreement context firsts seconds (index + 1)
       else some index
   | _, _, _, _ => none
 
-def disagreement (path : List Nat) (context : Context) (first second : Uses) : CheckRefusal :=
+abbrev disagreement (path : List Nat) (context : Context) (first second : Uses) : CheckRefusal :=
   .linearBranchesDisagree path ((firstDisagreement context first second 0).getD 0)
 
-def projected (path : List Nat) (context : Context) (uses : Uses) : CheckRefusal :=
+abbrev projected (path : List Nat) (context : Context) (uses : Uses) : CheckRefusal :=
   .linearProjected path ((firstLinearUse context uses).getD 0)
 
 /-- A refusal naming the first `linear` hypothesis `uses` uses (where `linearFree` failed). -/
-def linearRefusal (refusal : List Nat → Nat → CheckRefusal) (path : List Nat) (context : Context)
+abbrev linearRefusal (refusal : List Nat → Nat → CheckRefusal) (path : List Nat) (context : Context)
     (uses : Uses) : CheckRefusal :=
   refusal path ((firstLinearUse context uses).getD 0)
 
@@ -123,7 +123,7 @@ def linearRefusal (refusal : List Nat → Nat → CheckRefusal) (path : List Nat
 (`activityMisplaced`); a `linear` hypothesis passed to a non-`linear` parameter
 (`linearArgumentDropped`); for an `unrestricted` parameter, a type that is not shareable
 (`notShareable`) or captures that are not reusable (`capturesNotShareable`). -/
-def argumentRefusal (assumptions : Assumptions) (path : List Nat) (quantity : Quantity) (context : Context)
+abbrev argumentRefusal (assumptions : Assumptions) (path : List Nat) (quantity : Quantity) (context : Context)
     (type : Ty) (uses : Uses) : CheckRefusal :=
   if type.isComputation then .activityMisplaced path type
   else match quantity, firstLinearUse context uses with
@@ -134,7 +134,7 @@ def argumentRefusal (assumptions : Assumptions) (path : List Nat) (quantity : Qu
 
 /-- A type with its declared alias head unfolded as far as it goes: the canonical
 point of its orbit after as many steps as there are bounds. -/
-def whnf (assumptions : Assumptions) (type : Ty) : Ty :=
+abbrev whnf (assumptions : Assumptions) (type : Ty) : Ty :=
   assumptions.chase assumptions.bounds.length type.canonical
 
 theorem unfoldHead_isCanonical (assumptions : Assumptions) {type : Ty} (canonical : type.isCanonical) :
@@ -171,7 +171,7 @@ theorem whnf_sameType (assumptions : Assumptions) (type : Ty) :
 /-- With a local annotation, the parent selected an exact raw rule
 representative. Do not canonicalize its payloads or binder contexts. Unannotated
 calls retain the original weak-head fallback. -/
-def representativeHead (assumptions : Assumptions) (annotations : Annotations)
+abbrev representativeHead (assumptions : Assumptions) (annotations : Annotations)
     (path : List Nat) (type : Ty) : Ty :=
   if (annotations path).isSome then type else whnf assumptions type
 
@@ -192,7 +192,7 @@ theorem representativeHead_sameType (assumptions : Assumptions) (annotations : A
 when that is a sum; an annotation naming the sum through an alias (the front end's
 convention for a recursive sum) is unfolded to its weak head, and the injection is then
 converted back to the alias, so the synthesized type stays the name the annotation gave. -/
-def injectionHead (assumptions : Assumptions) (annotations : Annotations)
+abbrev injectionHead (assumptions : Assumptions) (annotations : Annotations)
     (path : List Nat) (type : Ty) : Ty :=
   match representativeHead assumptions annotations path type with
   | .variant row => .variant row
@@ -208,24 +208,24 @@ theorem injectionHead_sameType (assumptions : Assumptions) (annotations : Annota
   · exact sameType_trans (whnf_sameType assumptions _) (representativeHead_sameType assumptions annotations path type)
 
 /-- The first entry of a label in a row's explicit fields. -/
-def rowMember : Ty → String → Option Ty
+@[expose] def rowMember : Ty → String → Option Ty
   | .field prior member tail, name => if prior = name then some member else rowMember tail name
   | _, _ => none
 
 /-- Every arm's payload, as `rowMember` finds it, is shareable: what an `unrestricted` payload needs. -/
-def armsShareable (assumptions : Assumptions) (row : Ty) (arms : List (String × Term)) : Bool :=
+@[expose] def armsShareable (assumptions : Assumptions) (row : Ty) (arms : List (String × Term)) : Bool :=
   arms.all fun arm => match rowMember row arm.1 with
     | some payload => payload.shareableUnder assumptions.shareableVariables
     | none => true
 
 /-- Any arm whose resolved payload bears custody forces a `linear` payload binding (`mustBeLinear`). -/
-def armsCustody (row : Ty) (arms : List (String × Term)) : Bool :=
+@[expose] def armsCustody (row : Ty) (arms : List (String × Term)) : Bool :=
   arms.any fun arm => match rowMember row arm.1 with
     | some payload => payload.bearsCustody
     | none => false
 
 /-- The case's payload quantity: its annotation's, else `caseQuantity`. -/
-def caseQuantityAt (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) (context : Context)
+abbrev caseQuantityAt (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) (context : Context)
     (uses : Uses) (row : Ty) (arms : List (String × Term)) : Quantity :=
   match annotations path with
   | some annotation => annotation.parameter
@@ -239,14 +239,14 @@ theorem caseQuantityAt_some {assumptions : Assumptions} {annotations : Annotatio
 
 /-- Why `caseAllowed` failed for an annotated quantity: the scrutinee's `linear` hypothesis would be
 bound at `quantity`, or its captures are not reusable for an `unrestricted` payload. -/
-def caseRefusal (path : List Nat) (quantity : Quantity) (context : Context) (uses : Uses) : CheckRefusal :=
+abbrev caseRefusal (path : List Nat) (quantity : Quantity) (context : Context) (uses : Uses) : CheckRefusal :=
   match quantity, firstLinearUse context uses with
   | .linear, _ | _, none => .capturesNotShareable path
   | _, some index => .linearArgumentDropped path index quantity
 
 /-- A destructor's parameters checked against its target's row, name by name (`SplitSpine`): the
 function's type is read as given (its annotation is the parent's codomain), so the walk is exact. -/
-def checkSpine (assumptions : Assumptions) (context : Context) (path : List Nat) (uses : Uses) (row : Ty) :
+@[expose] def checkSpine (assumptions : Assumptions) (context : Context) (path : List Nat) (uses : Uses) (row : Ty) :
     (names : List String) → (functionType : Ty) →
       Except CheckRefusal ((result : Ty) ×' SplitSpine assumptions context uses row names functionType result)
   | [], functionType => pure ⟨functionType, rfl⟩
@@ -269,7 +269,7 @@ def checkSpine (assumptions : Assumptions) (context : Context) (path : List Nat)
     | _ => throw (.shapeMismatch (path ++ [1]) "function" functionType)
 
 /-- The first label on the row's spine a destructor does not name (`""` if the spine is not closed). -/
-def uncoveredLabel (row : Ty) (names : List String) : String :=
+abbrev uncoveredLabel (row : Ty) (names : List String) : String :=
   ((spineLabels row).find? fun name => !names.contains name).getD ""
 
 /-- A synthesized type. -/
@@ -315,12 +315,12 @@ abbrev Result (assumptions : Assumptions) (context : Context) (term : Term) : Mo
 /-- Package a checked operand at the exact representative selected by its
 parent's annotation. This prevents nominal resource tests from observing an
 arbitrary equivalent type chosen by synthesis. -/
-def checkedSynth {assumptions : Assumptions} {context : Context} {term : Term} {expected : Ty}
+abbrev checkedSynth {assumptions : Assumptions} {context : Context} {term : Term} {expected : Ty}
     (checked : Against assumptions context term expected) : Synth assumptions context term :=
   ⟨expected, checked.uses, checked.derivation⟩
 
 /-- An elimination form's synthesized type, or its ascription when the two agree. -/
-def ascribe (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) {context : Context}
+abbrev ascribe (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) {context : Context}
     {term : Term} (synthesized : Synth assumptions context term) : Synth assumptions context term :=
   match annotations path with
   | some annotation =>
@@ -330,7 +330,7 @@ def ascribe (assumptions : Assumptions) (annotations : Annotations) (path : List
   | none => synthesized
 
 /-- An elimination form finishes: ascription in synthesis, the mode switch in checking. -/
-def finish (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) {context : Context}
+abbrev finish (assumptions : Assumptions) (annotations : Annotations) (path : List Nat) {context : Context}
     {term : Term} (synthesized : Synth assumptions context term) :
     (mode : Mode) → Except CheckRefusal (Result assumptions context term mode)
   | .synth => .ok (ascribe assumptions annotations path synthesized)
@@ -341,7 +341,7 @@ def finish (assumptions : Assumptions) (annotations : Annotations) (path : List 
 
 /-- An introduction form finishes: checking as given; in synthesis, its ascription
 (the annotation's codomain) is checked, and without one `unannotated` is tried. -/
-def introduce (annotations : Annotations) (path : List Nat) {assumptions : Assumptions} {context : Context}
+abbrev introduce (annotations : Annotations) (path : List Nat) {assumptions : Assumptions} {context : Context}
     {term : Term} (against : (expected : Ty) → Except CheckRefusal (Against assumptions context term expected))
     (unannotated : Except CheckRefusal (Synth assumptions context term)) :
     (mode : Mode) → Except CheckRefusal (Result assumptions context term mode)
@@ -359,7 +359,7 @@ def introduce (annotations : Annotations) (path : List Nat) {assumptions : Assum
 
 mutual
 /-- Synthesis and checking, by the term's shape. -/
-def elaborate (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat) :
+@[expose] def elaborate (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat) :
     (term : Term) → (mode : Mode) → Except CheckRefusal (Result assumptions context term mode)
   | .hole n σ, mode =>
     match found : assumptions.holes.lookup n with
@@ -828,7 +828,7 @@ def elaborate (assumptions : Assumptions) (annotations : Annotations) (context :
         | none => throw (.shapeMismatch (path ++ [0]) "sum or activity" value.type)
 
 /-- Record fields, synthesized; positions `path ++ [index]`, `path ++ [index + 1]`, …. -/
-def synthFields (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
+@[expose] def synthFields (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
     (index : Nat) : (fields : List (String × Term)) → Except CheckRefusal (InferredFields assumptions context fields)
   | [] => pure ⟨.emptyRow, zeroUses context, .nil context⟩
   | (name, body) :: rest => do
@@ -839,7 +839,7 @@ def synthFields (assumptions : Assumptions) (annotations : Annotations) (context
       .cons first.derivation later.derivation (by simpa using hc)⟩
 
 /-- Record fields checked against a row in field order. -/
-def checkFields (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
+@[expose] def checkFields (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
     (index : Nat) : (fields : List (String × Term)) → (row : Ty) → Except CheckRefusal (FieldsAgainst assumptions context fields row)
   | [], .emptyRow => pure ⟨zeroUses context, .nil context⟩
   | [], row => throw (.typeMismatch path row .emptyRow)
@@ -853,7 +853,7 @@ def checkFields (assumptions : Assumptions) (annotations : Annotations) (context
   | (name, _) :: _, row => throw (.unknownLabel (path ++ [index]) name row)
 
 /-- Record fields checked against a row's members by label (labels distinct). -/
-def checkFieldsByLabel (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
+@[expose] def checkFieldsByLabel (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
     (index : Nat) (row : Ty) : (fields : List (String × Term)) → Except CheckRefusal (InferredFields assumptions context fields)
   | [] => pure ⟨.emptyRow, zeroUses context, .nil context⟩
   | (name, body) :: rest =>
@@ -868,7 +868,7 @@ def checkFieldsByLabel (assumptions : Assumptions) (annotations : Annotations) (
 
 /-- A hole's arguments, each checked at its parameter's type and passed as `argumentAllowed`
 allows; positions `path ++ [index]`, `path ++ [index + 1]`, …. -/
-def checkArgs (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
+@[expose] def checkArgs (assumptions : Assumptions) (annotations : Annotations) (context : Context) (path : List Nat)
     (hole index : Nat) : (σ : List Term) → (Δ : Context) → Except CheckRefusal (ArgsAgainst assumptions context σ Δ)
   | [], [] => pure ⟨[], rfl, rfl, by simp, by simp⟩
   | t :: σ, b :: Δ => do
@@ -888,7 +888,7 @@ def checkArgs (assumptions : Assumptions) (annotations : Annotations) (context :
   | σ, Δ => throw (.holeArity path hole (index + Δ.length) (index + σ.length))
 
 /-- Arms checked against one result type, each under its label's payload in `row`. -/
-def checkArms (assumptions : Assumptions) (annotations : Annotations) (context : Context) (q : Quantity)
+@[expose] def checkArms (assumptions : Assumptions) (annotations : Annotations) (context : Context) (q : Quantity)
     (path : List Nat) (index : Nat) (row result : Ty) :
     (arms : List (String × Term)) → Except CheckRefusal (ArmsAgainst assumptions context arms result)
   | [] => pure ⟨.emptyRow, zeroUses context, q, .nil context q result⟩
@@ -923,7 +923,7 @@ abbrev checkAt (assumptions : Assumptions) (annotations : Annotations) (context 
 
 /-- The top-level check: the term at the expected type, with every top-level premise
 `Checked` carries. -/
-def checkAgainst (source : AnnotatedTerm) (context : Context) (expected : Ty) :
+abbrev checkAgainst (source : AnnotatedTerm) (context : Context) (expected : Ty) :
     Except CheckRefusal (Checked source context) := do
   let result ← checkAt source.assumptions source.annotations context [] source.term expected
   let ⟨hs⟩ ← need (safeUses context result.uses) (overuse [] context result.uses)
@@ -932,7 +932,7 @@ def checkAgainst (source : AnnotatedTerm) (context : Context) (expected : Ty) :
   pure ⟨expected, result.uses, result.derivation, hs, hv, ha⟩
 
 /-- The top-level synthesis. -/
-def infer (source : AnnotatedTerm) (context : Context) : Except CheckRefusal (Checked source context) := do
+abbrev infer (source : AnnotatedTerm) (context : Context) : Except CheckRefusal (Checked source context) := do
   let result ← synthAt source.assumptions source.annotations context [] source.term
   let ⟨hs⟩ ← need (safeUses context result.uses) (overuse [] context result.uses)
   let ⟨hv⟩ ← need (validContext source.assumptions.shareableVariables context) (.invalidContext [])
@@ -956,6 +956,16 @@ theorem checkAgainst_sound {source : AnnotatedTerm} {context : Context} {expecte
       by_cases h3 : source.assumptions.valid = true <;>
       simp [h1, h2, h3, pure, Except.pure] at accepted
     cases accepted; rfl
+
+/-- Satisfiability witness for `checkAgainst` (`HypothesisLedger` anti-vacuity). -/
+theorem checkAgainst_inhabited :
+    ∃ (source : AnnotatedTerm) (context : Context) (expected : Ty) (checked : Checked source context),
+      checkAgainst source context expected = .ok checked := by
+  have h : (match checkAgainst ⟨.nat 7, fun _ => none, {}⟩ [] .natural with
+      | .ok _ => true | .error _ => false) = true := by decide
+  cases hEq : checkAgainst ⟨.nat 7, fun _ => none, {}⟩ [] .natural with
+  | error _ => rw [hEq] at h; cases h
+  | ok checked => exact ⟨_, [], .natural, checked, hEq⟩
 
 /-- The checker refuses an undeclared hole in any mode. Proved through `elaborate.eq_def`, so the
 unfolding equation is generated here once, not again in each of the modules that unfold `elaborate`. -/

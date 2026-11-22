@@ -5,13 +5,13 @@ This is a frontend scaffold, NOT a replacement for `sameType`. In particular,
 raw fields are exposed as syntax constructors, NOT row equality observations.
 No consumer may interpret this raw graph as canonical row equality. -/
 public import Obend.Core.Assumptions
-@[expose] public section
+public section
 namespace Obend.Core.AliasExposure
 open Obend.Core.Ty Obend.Core.Check
 set_option autoImplicit false
 
 /-- Original syntax is retained, including hidden fields and alias tails. -/
-def subterms : Ty → List Ty
+@[expose] def subterms : Ty → List Ty
   | t@(.arrow _ _ a b) | t@(.field _ a b) | t@(.specification a b)
   | t@(.prototype a b) => t :: (subterms a ++ subterms b)
   | t@(.variant a) => t :: subterms a
@@ -50,7 +50,7 @@ theorem subterms_trans (t s c : Ty) (hs : s ∈ subterms t) (hc : c ∈ subterms
 
 /-- A finite (not necessarily duplicate-free) support. Avoiding deduplication
 also avoids imposing an incidental node numbering on semantic observations. -/
-def support (assumptions : Assumptions) (left right : Ty) : List Ty :=
+@[expose] def support (assumptions : Assumptions) (left right : Ty) : List Ty :=
   subterms left ++ subterms right ++ assumptions.bounds.flatMap (fun b => subterms b.2)
 
 theorem left_mem_support (assumptions : Assumptions) (left right : Ty) :
@@ -97,12 +97,12 @@ inductive Tag where
   | specification | prototype | variant | computation
   | custody (identity : Nat)
   | field (name : String)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 structure Constructor where
   tag : Tag
   children : List Ty
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 inductive Head where
   | constructor (observation : Constructor)
@@ -110,9 +110,9 @@ inductive Head where
   /-- The minimum variable in the actual head-only cycle, excluding a prefix
   that merely leads into it. A head-only SCC never proves arbitrary equality. -/
   | unproductive (representative : Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
-def constructorHead : Ty → Head
+@[expose] def constructorHead : Ty → Head
   | .natural => .constructor ⟨.natural, []⟩
   | .label => .constructor ⟨.label, []⟩
   | .boolean => .constructor ⟨.boolean, []⟩
@@ -132,12 +132,12 @@ theorem constructorHead_children (t : Ty) (observation : Constructor) (found : c
   all_goals try cases found
   all_goals simp [subterms, self_mem_subterms]
 
-def cycleRepresentative (index : Nat) (visited : List Nat) : Nat :=
+@[expose] def cycleRepresentative (index : Nat) (visited : List Nat) : Nat :=
   (visited.takeWhile (fun prior => prior != index)).foldl min index
 
 /-- Every alias still available is either already visited or in the finite
 remaining support. This makes exhaustion impossible by construction. -/
-def Covers (assumptions : Assumptions) (visited remaining : List Nat) : Prop :=
+@[expose] def Covers (assumptions : Assumptions) (visited remaining : List Nat) : Prop :=
   ∀ index body, assumptions.alias index = some body → index ∈ visited ∨ index ∈ remaining
 
 theorem covers_step {assumptions : Assumptions} {visited remaining : List Nat}
@@ -152,7 +152,7 @@ theorem covers_step {assumptions : Assumptions} {visited remaining : List Nat}
 
 /-- Each fresh alias removes one available key. The invariant ensures that a
 fresh alias can always be removed, so this walk needs no arbitrary fuel case. -/
-def exposeWalk (assumptions : Assumptions) (remaining visited : List Nat)
+@[expose] def exposeWalk (assumptions : Assumptions) (remaining visited : List Nat)
     (covers : Covers assumptions visited remaining) (t : Ty) : Head :=
   match t with
   | .variable index =>
@@ -181,7 +181,7 @@ theorem initial_covers (assumptions : Assumptions) :
   simp
 
 /-- No caller-supplied fuel: the walk consumes the finite bound-key support. -/
-def expose (assumptions : Assumptions) (t : Ty) : Head :=
+@[expose] def expose (assumptions : Assumptions) (t : Ty) : Head :=
   exposeWalk assumptions (assumptions.bounds.map Prod.fst) [] (initial_covers assumptions) t
 
 theorem expose_rigid (assumptions : Assumptions) (index : Nat)
@@ -398,7 +398,7 @@ public inductive AliasChain (assumptions : Assumptions) : Ty → List Nat → Ty
       AliasChain assumptions body path finish →
       AliasChain assumptions (.variable index) (index :: path) finish
 
-@[expose] public def erasePath (remaining : List Nat) : List Nat → List Nat
+public def erasePath (remaining : List Nat) : List Nat → List Nat
   | [] => remaining
   | index :: path => erasePath (remaining.erase index) path
 
@@ -406,7 +406,7 @@ public inductive AliasChain (assumptions : Assumptions) : Ty → List Nat → Ty
   | [] => visited
   | index :: path => visitPath (index :: visited) path
 
-@[expose] public def pathCovers (assumptions : Assumptions) (remaining visited : List Nat)
+public def pathCovers (assumptions : Assumptions) (remaining visited : List Nat)
     (covers : Covers assumptions visited remaining) :
     (path : List Nat) → Covers assumptions (visitPath visited path) (erasePath remaining path)
   | [] => covers
