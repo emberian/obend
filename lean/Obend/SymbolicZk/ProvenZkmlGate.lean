@@ -1136,5 +1136,10 @@ theorem validZkmlSessionTrace_inhabited :
     simp [verifyZkmlSessionTrace, verifyZkmlSessionStep, init, hChk]
   exact ⟨init, [(q, c)], _, List.cons_ne_nil _ _, hStep, (verifyZkmlSessionTrace_sound hStep).1⟩
 
+theorem verifyZkmlSessionTrace_inhabited :
+    ∃ init trace finalSt, 0 < trace.length ∧ verifyZkmlSessionTrace 2 init trace = .ok finalSt := by
+  obtain ⟨init, trace, finalSt, hne, hStep, _⟩ := validZkmlSessionTrace_inhabited
+  exact ⟨init, trace, finalSt, List.length_pos_of_ne_nil hne, hStep⟩
+
 end Obend.SymbolicZk.ProvenZkmlGate
 end
