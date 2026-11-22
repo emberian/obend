@@ -14,7 +14,7 @@ GPU lowering apply. Translation validation compares symbolic *syntax*, not sampl
 or a proposition asserting the desired semantics. The validator's soundness is universal.
 -/
 public import Obend.Hardware.Gpu.SourceElem
-@[expose] public section
+public section
 namespace Obend.Hardware.Gpu.Source
 open Obend.Core.Term Obend.Equiv Obend.Leaf
 open Obend.Hardware.ArrayHypergraph Obend.Hardware.OpenHypergraph
@@ -127,6 +127,22 @@ def Represents (n : Nat) (xs : Nat → Vec) (σ : Nat → Scalar) (env : Nat →
 theorem denote_get (n : Nat) (xs : Nat → Vec) (s : Scalar) (i : Nat) (hi : i < n) :
     (denote n xs s).getD i 0#64 = s.eval (fun w => (xs w).getD i 0#64) :=
   getD_range_map n _ _ i hi
+
+/-- `Represents` is inhabited at every size, input family and symbolic store, by the environment
+that evaluates the store. `MapPlan.eval_sound` enters `run_sound` through this inhabitant, taken
+at `inputSymbols`. -/
+theorem represents_inhabited (n : Nat) (xs : Nat → Vec) (σ : Nat → Scalar) :
+    ∃ env, Represents n xs σ env :=
+  ⟨fun w => denote n xs (σ w), fun _ => rfl⟩
+
+-- A two-lane input exercises both the argument read and the literal in the symbolic store.
+example :
+    let xs : Nat → Vec := fun _ => [3#64, 8#64]
+    let σ : Nat → Scalar := fun _ => .bin .add (.arg 0) (.lit 1#64)
+    ∃ env, Represents 2 xs σ env ∧ env 0 = [4#64, 9#64] := by
+  intro xs σ
+  obtain ⟨env, h⟩ := represents_inhabited 2 xs σ
+  exact ⟨env, h, (h 0).trans (by rfl)⟩
 
 theorem Node.value_sound (n : Nat) (xs : Nat → Vec) (σ : Nat → Scalar) (env : Nat → Vec)
     (h : Represents n xs σ env) (d : Node) :

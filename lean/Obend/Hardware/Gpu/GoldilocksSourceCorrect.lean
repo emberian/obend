@@ -1,6 +1,7 @@
 module
 public import Obend.Hardware.Gpu.GoldilocksSource
-@[expose] public section
+import all Obend.Hardware.Gpu.GoldilocksSource
+public section
 
 /-! Universal field semantics of the shared source builder. Every theorem below
 interprets the actual ArrayBuild.registerCode/evalBuild; the arithmetic network
@@ -36,7 +37,7 @@ theorem old_ne_fresh (st : Build) (a : Nat) (ha : a < st.lengths.size) (k : Nat)
     a ≠ st.lengths.size+k := by omega
 
 theorem glAdd_run (st : Build) (env : Nat → Word) (n : Nat) (k : GlConsts) (a b : Nat)
-    (ha : a < st.lengths.size) (hb : b < st.lengths.size) (hp : k.p < st.lengths.size) :
+    (ha : a < st.lengths.size) (hb : b < st.lengths.size) :
     let out := (glAdd n k a b).run st
     evalBuild out.2 env out.1 =
       if (evalBuild st env a).ult (evalBuild st env k.p-evalBuild st env b) then
@@ -52,9 +53,8 @@ theorem glAdd_run (st : Build) (env : Nat → Word) (n : Nat) (k : GlConsts) (a 
   simp only [mapN_run,Array.size_push]
   have hA0 : a ≠ st.lengths.size := by omega
   have hB0 : b ≠ st.lengths.size := by omega
-  have hP0 : k.p ≠ st.lengths.size := by omega
   simp [stepInstr,evalElemOp,evalHypergraphOpBv,old_ne_fresh st a ha,
-    old_ne_fresh st b hb,old_ne_fresh st k.p hp,hA0,hB0,hP0,Nat.add_assoc]
+    old_ne_fresh st b hb,hA0,hB0,Nat.add_assoc]
 
 theorem glSub_run (st : Build) (env : Nat → Word) (n : Nat) (k : GlConsts) (a b : Nat)
     (ha : a < st.lengths.size) (hb : b < st.lengths.size) (hp : k.p < st.lengths.size) :
@@ -75,7 +75,7 @@ theorem glSub_run (st : Build) (env : Nat → Word) (n : Nat) (k : GlConsts) (a 
   have hB0 : b ≠ st.lengths.size := by omega
   have hP0 : k.p ≠ st.lengths.size := by omega
   simp [stepInstr,evalElemOp,evalHypergraphOpBv,old_ne_fresh st a ha,
-    old_ne_fresh st b hb,old_ne_fresh st k.p hp,hA0,hB0,hP0,Nat.add_assoc]
+    old_ne_fresh st b hb,hA0,hB0,hP0,Nat.add_assoc]
 
 /-- Receipt for the concrete constant registers consumed by every field builder. -/
 structure ConstsAt (st : Build) (env : Nat → Word) (k : GlConsts) : Prop where
@@ -123,6 +123,16 @@ theorem glConsts_sound (st : Build) (env : Nat → Word) (n : Nat) (hn : 0 < n) 
     simp only [r3,evalBuild_broadcast _ _ _ _ hn,r2,r1]
     simp only [broadcast_run,Array.size_push]
     simp [stepInstr,evalElemOp,evalHypergraphOpBv,Nat.add_assoc]
+
+/-- The premises of the field theorems below are jointly satisfiable under every load
+environment: `glConsts` on the empty builder yields a `ConstsAt` receipt, and its mask register
+is an allocated canonical operand, usable as both `a` and `b`. -/
+theorem constsAt_inhabited (env : Nat → Word) :
+    ∃ st k a, ConstsAt st env k ∧ a < st.lengths.size ∧
+      (evalBuild st env a).toNat < goldilocksPrime :=
+  have hk : ConstsAt ((glConsts 1).run ({} : Build)).2 env ((glConsts 1).run ({} : Build)).1 :=
+    glConsts_sound {} env 1 Nat.zero_lt_one
+  ⟨_, _, _, hk, hk.mask_lt, by rw [hk.mask_value]; decide⟩
 
 /-- Constants do not overwrite any preceding register in the actual code. -/
 theorem glConsts_frame (st : Build) (env : Nat → Word) (n : Nat) (hn : 0 < n)
@@ -184,7 +194,7 @@ theorem glAdd_limbs (st : Build) (env : Nat → Word) (n : Nat) (k : GlConsts) (
     evalBuild out.2 env out.1 =
       (Limbs.Goldilocks.addCanonical (limbs (evalBuild st env a)) (limbs (evalBuild st env b))).bits := by
   dsimp only
-  rw [glAdd_run st env n k a b ha hb hk.p_lt,addCanonical_bits,limbs_bits,limbs_bits,hk.p_value]
+  rw [glAdd_run st env n k a b ha hb,addCanonical_bits,limbs_bits,limbs_bits,hk.p_value]
 
 theorem glSub_limbs (st : Build) (env : Nat → Word) (n : Nat) (k : GlConsts) (a b : Nat)
     (ha : a < st.lengths.size) (hb : b < st.lengths.size) (hk : ConstsAt st env k) :
@@ -344,7 +354,7 @@ theorem glMulWide_extends (st : Build) (n : Nat) (k : GlConsts) (a b : Nat) :
   obtain ⟨r21,hr21⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r8.1,r18.1]).run r20.2 = r := ⟨_,rfl⟩
   obtain ⟨r22,hr22⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r21.1,r19.1]).run r21.2 = r := ⟨_,rfl⟩
   obtain ⟨r23,hr23⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r22.1,r20.1]).run r22.2 = r := ⟨_,rfl⟩
-  simp only [glMulWide,map2,map3,bind_run,pure_run,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17,hr18,hr19,hr20,hr21,hr22,hr23]
+  simp only [glMulWide,map2,bind_run,pure_run,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17,hr18,hr19,hr20,hr21,hr22,hr23]
   change BuildExtends st r23.2
   have he1 : BuildExtends st r1.2 := by
     rw [← hr1]; exact mapN_extends st n .band [a,k.mask]
@@ -447,7 +457,7 @@ theorem glMulWide_coordinates (st : Build) (n : Nat) (k : GlConsts) (a b : Nat) 
   obtain ⟨r21,hr21⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r8.1,r18.1]).run r20.2 = r := ⟨_,rfl⟩
   obtain ⟨r22,hr22⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r21.1,r19.1]).run r21.2 = r := ⟨_,rfl⟩
   obtain ⟨r23,hr23⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r22.1,r20.1]).run r22.2 = r := ⟨_,rfl⟩
-  simp only [glMulWide,map2,map3,bind_run,pure_run,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17,hr18,hr19,hr20,hr21,hr22,hr23]
+  simp only [glMulWide,map2,bind_run,pure_run,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17,hr18,hr19,hr20,hr21,hr22,hr23]
   change r17.1 = st.lengths.size+16 ∧ r23.1 = st.lengths.size+22 ∧ r23.2.lengths.size = st.lengths.size+23
   have hc1 : r1.1 = st.lengths.size ∧ r1.2.lengths.size = st.lengths.size+1 := by
     rw [← hr1,mapN_run]; simp
@@ -527,7 +537,7 @@ theorem glMulWide_limbs (st : Build) (env : Nat → Word) (n : Nat) (k : GlConst
   obtain ⟨r21,hr21⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r8.1,r18.1]).run r20.2 = r := ⟨_,rfl⟩
   obtain ⟨r22,hr22⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r21.1,r19.1]).run r21.2 = r := ⟨_,rfl⟩
   obtain ⟨r23,hr23⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r22.1,r20.1]).run r22.2 = r := ⟨_,rfl⟩
-  simp only [glMulWide,map2,map3,bind_run,pure_run,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17,hr18,hr19,hr20,hr21,hr22,hr23]
+  simp only [glMulWide,map2,bind_run,pure_run,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17,hr18,hr19,hr20,hr21,hr22,hr23]
   change evalBuild r23.2 env r17.1 = _ ∧ evalBuild r23.2 env r23.1 = _
   have hc1 : r1.1 = st.lengths.size ∧ r1.2.lengths.size = st.lengths.size+1 := by
     rw [← hr1,mapN_run]; simp
@@ -717,7 +727,7 @@ theorem glMulWide_limbs (st : Build) (env : Nat → Word) (n : Nat) (k : GlConst
   have hB0 : b ≠ st.lengths.size := by omega
   have hM0 : k.mask ≠ st.lengths.size := by have := hk.mask_lt; omega
   have hS0 : k.s32 ≠ st.lengths.size := by have := hk.s32_lt; omega
-  simp [hv23,hv22,hv21,hv20,hv19,hv18,hv17,hv16,hv15,hv14,hv13,hv12,hv11,hv10,hv9,hv8,hv7,hv6,hv5,hv4,hv3,hv2,hv1,hc23.1,hc23.2,hc22.1,hc22.2,hc21.1,hc21.2,hc20.1,hc20.2,hc19.1,hc19.2,hc18.1,hc18.2,hc17.1,hc17.2,hc16.1,hc16.2,hc15.1,hc15.2,hc14.1,hc14.2,hc13.1,hc13.2,hc12.1,hc12.2,hc11.1,hc11.2,hc10.1,hc10.2,hc9.1,hc9.2,hc8.1,hc8.2,hc7.1,hc7.2,hc6.1,hc6.2,hc5.1,hc5.2,hc4.1,hc4.2,hc3.1,hc3.2,hc2.1,hc2.2,hc1.1,hc1.2,Nat.add_assoc,stepInstr,evalElemOp,evalHypergraphOpBv,old_ne_fresh st a ha,
+  simp [hv23,hv22,hv21,hv20,hv19,hv18,hv17,hv16,hv15,hv14,hv13,hv12,hv11,hv10,hv9,hv8,hv7,hv6,hv5,hv4,hv3,hv2,hv1,hc23.1,hc22.1,hc22.2,hc21.1,hc21.2,hc20.1,hc20.2,hc19.1,hc19.2,hc18.1,hc18.2,hc17.1,hc17.2,hc16.1,hc16.2,hc15.1,hc15.2,hc14.1,hc14.2,hc13.1,hc13.2,hc12.1,hc12.2,hc11.1,hc11.2,hc10.1,hc10.2,hc9.1,hc9.2,hc8.1,hc8.2,hc7.1,hc7.2,hc6.1,hc6.2,hc5.1,hc5.2,hc4.1,hc4.2,hc3.1,hc3.2,hc2.1,hc2.2,hc1.1,hc1.2,Nat.add_assoc,evalElemOp,evalHypergraphOpBv,
     old_ne_fresh st b hb,old_ne_fresh st k.mask hk.mask_lt,
     old_ne_fresh st k.s32 hk.s32_lt,hA0,hB0,hM0,hS0,
     hk.mask_value,hk.s32_value,wordShr_eq,wordShl_eq,
@@ -743,7 +753,7 @@ theorem glReduceWide_extends (st : Build) (n : Nat) (k : GlConsts) (lo hi : Nat)
   obtain ⟨r15,hr15⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r14.1,r12.1]).run r14.2 = r := ⟨_,rfl⟩
   obtain ⟨r16,hr16⟩ : ∃ r : Nat × Build, (mapN n (.scalar .sub) [r12.1,r2.1]).run r15.2 = r := ⟨_,rfl⟩
   obtain ⟨r17,hr17⟩ : ∃ r : Nat × Build, (mapN n (.scalar .mux) [r13.1,r15.1,r16.1]).run r16.2 = r := ⟨_,rfl⟩
-  simp only [glReduceWide,map2,map3,bind_run,pure_run,glCanon,glAdd,glSub,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17]
+  simp only [glReduceWide,map2,map3,bind_run,glCanon,glAdd,glSub,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17]
   change BuildExtends st r17.2
   have he1 : BuildExtends st r1.2 := by
     rw [← hr1]; exact mapN_extends st n .band [hi,k.mask]
@@ -801,7 +811,7 @@ theorem glReduceWide_coordinates (st : Build) (n : Nat) (k : GlConsts) (lo hi : 
   obtain ⟨r15,hr15⟩ : ∃ r : Nat × Build, (mapN n (.scalar .add) [r14.1,r12.1]).run r14.2 = r := ⟨_,rfl⟩
   obtain ⟨r16,hr16⟩ : ∃ r : Nat × Build, (mapN n (.scalar .sub) [r12.1,r2.1]).run r15.2 = r := ⟨_,rfl⟩
   obtain ⟨r17,hr17⟩ : ∃ r : Nat × Build, (mapN n (.scalar .mux) [r13.1,r15.1,r16.1]).run r16.2 = r := ⟨_,rfl⟩
-  simp only [glReduceWide,map2,map3,bind_run,pure_run,glCanon,glAdd,glSub,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17]
+  simp only [glReduceWide,map2,map3,bind_run,glCanon,glAdd,glSub,hr1,hr2,hr3,hr4,hr5,hr6,hr7,hr8,hr9,hr10,hr11,hr12,hr13,hr14,hr15,hr16,hr17]
   change r17.1 = st.lengths.size+16 ∧ r17.2.lengths.size = st.lengths.size+17
   have hc1 : r1.1 = st.lengths.size ∧ r1.2.lengths.size = st.lengths.size+1 := by
     rw [← hr1,mapN_run]; simp
@@ -879,7 +889,7 @@ theorem glReduceWide_limbs (st : Build) (env : Nat → Word) (n : Nat) (k : GlCo
     simp only [r4,evalBuild_mapN,r3,r2,r1]
     simp only [mapN_run,Array.size_push]
     simp [stepInstr,evalElemOp,evalHypergraphOpBv,
-      old_ne_fresh st hi hhi,old_ne_fresh st k.s32 hk.s32_lt,
+      old_ne_fresh st k.s32 hk.s32_lt,
       show hi ≠ st.lengths.size by omega,
       show k.s32 ≠ st.lengths.size by have := hk.s32_lt; omega,
       hk.s32_value,wordShr_eq,upper,Limbs.shr32_bits,limbs_bits,Nat.add_assoc]
@@ -887,10 +897,8 @@ theorem glReduceWide_limbs (st : Build) (env : Nat → Word) (n : Nat) (k : GlCo
     simp only [r4,evalBuild_mapN,r3,r2,r1]
     simp only [mapN_run,Array.size_push]
     simp [stepInstr,evalElemOp,evalHypergraphOpBv,
-      old_ne_fresh st hi hhi,old_ne_fresh st k.mask hk.mask_lt,
       old_ne_fresh st k.s32 hk.s32_lt,
       show hi ≠ st.lengths.size by omega,
-      show k.mask ≠ st.lengths.size by have := hk.mask_lt; omega,
       show k.s32 ≠ st.lengths.size by have := hk.s32_lt; omega,
       hk.mask_value,hk.s32_value,wordShl_eq,middle,upper,Limbs.sub_bits,
       Limbs.shl32_bits,Limbs.mask32_bits,limbs_bits,masked_shl32,Nat.add_assoc]

@@ -16,12 +16,24 @@ the certificate over every dispatch with `BlockLower.lowerProgram`.
 -/
 module
 import all Obend.Hardware.ArrayKernel
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+import all Obend.Hardware.Gpu.Rdna2.Term
+import all Obend.Hardware.Gpu.Rdna2.Natural
+import all Obend.Hardware.Gpu.Rdna2.Sym
+import all Obend.Hardware.Gpu.Rdna2.Join
+import all Obend.Hardware.Gpu.Rdna2.Host
+import all Obend.Hardware.Gpu.Rdna2.Lower
+import all Obend.Hardware.Gpu.Rdna2.Equiv
+import all Obend.Hardware.Gpu.Rdna2.Cert
+import all Obend.Hardware.Gpu.Rdna2.CertSound
+meta import Obend.Hardware.Gpu.Rdna2.CertSound
+meta import Obend.Hardware.Gpu.BlockEmit
 
 public import Obend.Hardware.Gpu.Rdna2.CertSound
 public import Obend.Hardware.Gpu.BlockLower
 public import Obend.Hardware.Gpu.BlockEmit
 
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2.Block
 
@@ -380,10 +392,10 @@ theorem sDispatch_sound {p : ArrayKernel.Program} {phs : List Phase} {words : Na
 /-! ## 4. The stage -/
 
 /-- The wire buffer of a flat memory: the device space's words, `0` past the buffer. -/
-def projB (words : Nat) (f : FlatMemory) (j : Nat) : Word := if j < words then f (.device, j) else 0
+@[expose] def projB (words : Nat) (f : FlatMemory) (j : Nat) : Word := if j < words then f (.device, j) else 0
 
 /-- The host binds the constants `cv` as the constant space. -/
-def ConstsOk (cv : Array Word) (f : FlatMemory) : Prop := ∀ j (h : j < cv.size), f (.constant, j) = cv[j]
+@[expose] def ConstsOk (cv : Array Word) (f : FlatMemory) : Prop := ∀ j (h : j < cv.size), f (.constant, j) = cv[j]
 
 /-! ### The dispatch's table in parts -/
 
@@ -515,7 +527,7 @@ def blockTable (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (cv : Arra
   sDispatch p d.phases words cv rd (List.range d.groups) {}
 
 /-- A block dispatch as a certificate stage: one wave per group with `lds` dwords of LDS. -/
-def blockSpec (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (cv : Array Word) (lds : Nat) : Spec FlatMemory where
+@[expose] def blockSpec (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (cv : Array Word) (lds : Nat) : Spec FlatMemory where
   threads := d.groups * lanes
   lds := lds
   table := blockTable p d words cv
@@ -561,9 +573,9 @@ theorem blockSpec_sound (p : ArrayKernel.Program) (d : Dispatch) (words : Nat) (
 /-! ## 5. Every dispatch of a block program -/
 
 /-- The wire buffer's words and the constants, as the plan gives them to the host (`BlockEmit.emitPlan`). -/
-def blockWords (p : ArrayKernel.Program) : Nat := BlockEmit.spaceSize p .device
+@[expose] def blockWords (p : ArrayKernel.Program) : Nat := BlockEmit.spaceSize p .device
 
-def blockSpecs (p : ArrayKernel.Program) (ldss : List Nat) : List (Spec FlatMemory) :=
+@[expose] def blockSpecs (p : ArrayKernel.Program) (ldss : List Nat) : List (Spec FlatMemory) :=
   (p.dispatches.zip ldss).map fun x => blockSpec p x.1 (blockWords p) (BlockEmit.constWords p).toArray x.2
 
 /-- The certificate of a block program's dumps `progs` (dispatch `k` with `ldss[k]` dwords of LDS): every
@@ -647,5 +659,95 @@ theorem certifyBlock_eval (p : ArrayKernel.Program) (hchk : p.check = .ok ()) (l
   have := checkedProgram_sound p mem flat hg hf hchk a i hv
   simp only [address, hs] at this
   exact this
+
+/-! ## 6. Witnesses for the symbolic execution and certificate premises -/
+
+/-- The view that answers every address with the literal `7` is right, whatever memory its terms are read
+in, for the flat memory that holds `7` everywhere. -/
+example : ∃ (look : Address → Option TP) (flat : FlatMemory),
+    look (.device, 0) = some (pLit 7) ∧ ∀ env : UInt64 → UInt32, LookOk env look flat :=
+  ⟨fun _ => some (pLit 7), fun _ => 7, rfl, fun _ _ _ ht => by
+    have e := Option.some.inj ht; subst e; exact ev_lit _ 7⟩
+
+/-- One lane of a phase, symbolically: it loads device word `lane` (the view gives the literal `7`), adds
+it to itself, and writes the sum back; the phase of one such lane writes device word `0`. -/
+example : ∃ (p : ArrayKernel.Program) (ph : Phase) (look : Address → Option TP) (m m' : Regs) (t : TP),
+    sLoads p look 0 0 ph.reads {} = some m ∧ sRegs ph.code m = some m' ∧
+    sLane p ph look 0 0 = some [((.device, 0), t)] ∧ sPhase p ph look 0 = some [((.device, 0), t)] ∧
+    look (.device, 0) = some (pLit 7) ∧ ∀ env, t.ev env = 14 :=
+  ⟨⟨[⟨1, .device, []⟩], [], [], []⟩, ⟨1, [⟨0, 0, .lane⟩], [⟨.scalar .add, [0, 0], 1⟩], [⟨0, .lane, 1⟩]⟩,
+    fun _ => some (pLit 7), _, _, _, rfl, rfl, rfl, rfl, rfl, fun env => by
+      simp [rget, argP, ev_add, ev_lit]⟩
+
+/-- A group starting from zero stores the constant `7` at device word `0`. -/
+example : ∃ (base : Address → Option TP) (f0 : FlatMemory) (p : ArrayKernel.Program) (phs : List Phase) (wr' : WMap),
+    f0 (.device, 0) = 0 ∧ (∀ env : UInt64 → UInt32, GInv env base f0 {} f0) ∧
+    sGroup p base 0 phs {} = some wr' ∧ wr'[key (.device, 0)]? = some (pLit 7) :=
+  ⟨fun _ => some (pLit 0), fun _ => 0, ⟨[⟨64, .device, []⟩], [], [], []⟩,
+    [⟨1, [], [⟨.scalar (.const 7), [], 0⟩], [⟨0, .lane, 0⟩]⟩], _,
+    rfl, fun _ => ⟨fun _ _ h => (by simp at h), fun _ _ _ h => (by have e := Option.some.inj h; subst e; exact ev_lit _ 0),
+      fun _ _ => rfl⟩,
+    rfl, by
+      change (({} : WMap).insert (key (.device, 0)) (rget (({} : Regs).insert 0 (pLit 7)) 0))[_]? = _
+      simp [rget]⟩
+
+/-- After group zero writes the first of two device words, the dispatch invariant describes the
+new value and preserves the neighbouring word. -/
+example : let p : ArrayKernel.Program := ⟨[⟨2, .device, []⟩], [], [], []⟩
+    let ph : Phase := ⟨1, [], [⟨.scalar (.const 7), [], 0⟩], [⟨0, .lane, 0⟩]⟩
+    let f0 : FlatMemory := fun _ => 3
+    ∃ D, sDispatch p [ph] 2 #[] (fun _ => pLit 3) [0] {} = some D ∧
+      D[0]? = some (pLit 7) ∧ D[1]? = none ∧
+      ∀ env : UInt64 → UInt32, DInv env 2 f0 D (lowerPhases p [ph] 0 f0) := by
+  intro p ph f0
+  let k := key (.device, 0)
+  have entries : (({} : WMap).insert k (pLit 7)).toList = [(k, pLit 7)] := by
+    apply List.Perm.eq_singleton
+    simpa only [Std.HashMap.toList_empty, List.filter_nil] using
+      (Std.HashMap.toList_insert_perm (m := ({} : WMap)) (k := k) (v := pLit 7))
+  have ran : sDispatch p [ph] 2 #[] (fun _ => pLit 3) [0] {} =
+      some (({} : Std.HashMap Nat TP).insert 0 (pLit 7)) := by
+    change (merge 2 ((({} : WMap).insert k (rget (({} : Regs).insert 0 (pLit 7)) 0)).toList) {}).bind _ = _
+    simp only [rget, Std.HashMap.getD_insert_self, entries]
+    simp [k, key, scode, merge, sDispatch]
+  refine ⟨_, ran, by simp, by simp, fun env => ?_⟩
+  have start : DInv env 2 f0 {} f0 :=
+    ⟨fun _ _ _ => rfl, fun _ => rfl, fun _ _ h => by simp at h, fun _ _ => rfl⟩
+  exact sDispatch_sound (p := p) (phs := [ph]) (cv := #[]) (rd := fun _ => pLit 3)
+    (fun _ _ => ev_lit env 3) (fun _ h => by simp at h) [0] {} _ f0 start ran
+
+/-- Every constant vector is bound by some flat memory: the one that holds it as its constant space. -/
+example : ∀ cv : Array Word, ∃ f : FlatMemory, ConstsOk cv f :=
+  fun cv => ⟨fun a => cv.getD a.2 0, fun j h => by
+    show cv.getD j 0 = cv[j]
+    rw [Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem h]; rfl⟩
+
+/-- One group produces a 64-thread stage with the supplied 16 dwords of LDS. -/
+example : ∃ (p : ArrayKernel.Program) (ldss : List Nat),
+    (blockSpecs p ldss).map (fun s => (s.threads, s.lds)) = [(64, 16)] :=
+  ⟨⟨[⟨64, .device, []⟩], [], [], [⟨1, [⟨1, [], [⟨.scalar (.const 7), [], 0⟩], [⟨0, .lane, 0⟩]⟩]⟩]⟩, [16], by decide⟩
+
+/-- With no dispatch, the accepted certificate preserves a device word for every initial value. -/
+example : ∃ p : ArrayKernel.Program, blockWords p = 1 ∧ p.check = .ok () ∧
+    certifyBlock p [] [] [] = true ∧ ∀ flat : FlatMemory,
+      ∃ m, runDispatch (dispatchesOf (blockSpecs p []) []) (memOf (blockWords p) [] [] (fun j => flat (.device, j))) = some m ∧
+        wordAt m 0 = flat (.device, 0) := by
+  let p : ArrayKernel.Program := ⟨[⟨1, .device, []⟩], [], [], []⟩
+  have hc : certifyBlock p [] [] [] = true := by
+    change (true && ({} : Std.HashSet Residual).toList.all ([] : List Residual).contains) = true
+    rw [Std.HashSet.toList_empty]
+    rfl
+  refine ⟨p, rfl, by rfl, hc, fun flat => ?_⟩
+  have bound : ConstsOk (BlockEmit.constWords p).toArray flat := fun j hj => (Nat.not_lt_zero j hj).elim
+  obtain ⟨m, hr, hw⟩ := certifyBlock_sound p [] [] [] hc (by simp) flat bound
+  exact ⟨m, hr, hw 0 (by decide)⟩
+
+/- A single wave with no source writes accepts a dump containing just `S_ENDPGM`.
+Removing that instruction makes the wave fail on its first fetch. -/
+#guard
+  let p : ArrayKernel.Program := ⟨[⟨1, .device, []⟩], [], [], [⟨1, []⟩]⟩
+  match decodeProgram #[0xbf810000] with
+  | .ok prog => certifyBlock p [0] [prog] [] && !certifyBlock p [0] [#[]] []
+  | .error _ => false
 
 end Obend.Hardware.Gpu.Rdna2.Block

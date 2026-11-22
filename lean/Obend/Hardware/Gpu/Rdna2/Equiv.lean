@@ -17,7 +17,9 @@ module
 public import Obend.Hardware.Gpu.Rdna2.Term
 public import Std.Data.HashSet
 import all Init.ShareCommon
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Term
+
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 namespace Tm
@@ -35,7 +37,7 @@ partial def collect (t : Tm) (seen : Std.HashSet Tm) : Std.HashSet Tm :=
 
 /-- The leaves both sides are cut at, in first-occurrence order: memory words, and the maximal subterms
 of one side that occur in the other, never a literal or a 0/1 term. An unverified search: soundness never depends on it. -/
-partial def findLeaves (other : Std.HashSet Tm) (t : Tm) (acc : Array Tm × Std.HashSet Tm) : Array Tm × Std.HashSet Tm :=
+def findLeaves (other : Std.HashSet Tm) (t : Tm) (acc : Array Tm × Std.HashSet Tm) : Array Tm × Std.HashSet Tm :=
   if acc.2.contains t then acc
   else
     let acc := (acc.1, acc.2.insert t)
@@ -45,7 +47,10 @@ partial def findLeaves (other : Std.HashSet Tm) (t : Tm) (acc : Array Tm × Std.
     -- the cut descends to its operands
     else if (other.contains t && !isBool t) || (match t.op with | .var _ => true | _ => false) then
       if acc.1.contains t then acc else (acc.1.push t, acc.2)
-    else t.args.foldl (fun a c => findLeaves other c a) acc
+    else match t with
+      | .mk _ _ as => as.attach.foldl (fun a ⟨c, _⟩ => findLeaves other c a) acc
+termination_by sizeOf t
+decreasing_by have := List.sizeOf_lt_of_mem ‹_›; simp_wf; omega
 
 /-- The environment of leaf variables: leaf `k` is what `leaves[k]` evaluates to. -/
 def leafEnv (env : UInt64 → UInt32) (leaves : Array Tm) : UInt64 → UInt32 :=
@@ -82,6 +87,16 @@ def absM (leaves : Array Tm) : Nat → Tm → Std.HashMap Tm Tm → Option (Tm �
               (absM leaves fuel a acc.2).map fun (r, m) => (acc.1 ++ [r], m)) ([], memo)).map
             fun (rs, m) => let r := node t.op rs; (r, m.insert t r)
         else none
+
+/-- A term that is a leaf is cut to its leaf variable (the `leaves.findIdx?` branch of `absM`). -/
+private theorem absM_leaf (fuel : Nat) (t : Tm) :
+    absM #[t] (fuel + 1) t {} =
+      some (var (0 : Nat).toUInt64, ({} : Std.HashMap Tm Tm).insert t (var (0 : Nat).toUInt64)) := by
+  rw [absM]; simp
+
+/-- `absM` succeeds on a real cut: the memory word `var 9`, the one leaf, becomes leaf variable 0. -/
+example : ∃ leaves fuel t memo r memo', 0 < leaves.size ∧ absM leaves fuel t memo = some (r, memo') :=
+  ⟨#[var 9], 1, var 9, {}, _, _, Nat.zero_lt_one, absM_leaf 0 (var 9)⟩
 
 theorem leaf_sound (env : UInt64 → UInt32) (leaves : Array Tm) (t : Tm) (k : Nat)
     (hk : leaves.findIdx? (· == t) = some k) (h32 : k < 2 ^ 32) :
@@ -239,6 +254,13 @@ def rebuildM : Nat → Tm → Std.HashMap Tm Tm → Option (Tm × Std.HashMap Tm
           (rebuildM fuel a acc.2).map fun (r, m) => (acc.1 ++ [r], m)) ([], memo)).map
         fun (rs, m) => let r := smartNode t.op rs; (r, m.insert t r)
 
+private theorem rebuildM_var (fuel : Nat) (a : UInt64) :
+    rebuildM (fuel + 1) (var a) {} = some (var a, ({} : Std.HashMap Tm Tm).insert (var a) (var a)) := by
+  simp [rebuildM, smartNode, var, node, op, args]
+
+example : ∃ fuel t memo r memo', rebuildM fuel t memo = some (r, memo') :=
+  ⟨1, var 0, {}, _, _, rebuildM_var 0 0⟩
+
 theorem rebuildM_sound (env : UInt64 → UInt32) :
     ∀ (fuel : Nat) (t : Tm) (memo : Std.HashMap Tm Tm) (r : Tm) (memo' : Std.HashMap Tm Tm),
       MemoOk env env memo → rebuildM fuel t memo = some (r, memo') →
@@ -281,17 +303,33 @@ theorem rebuildM_sound (env : UInt64 → UInt32) :
 
 /-- Leaf indices in order of first occurrence, each shared node visited once (unverified; only chooses a
 numbering). -/
-partial def occurrences (t : Tm) (acc : Array UInt64 × Std.HashSet Tm) : Array UInt64 × Std.HashSet Tm :=
+def occurrences (t : Tm) (acc : Array UInt64 × Std.HashSet Tm) : Array UInt64 × Std.HashSet Tm :=
   if acc.2.contains t then acc else
   let acc := (acc.1, acc.2.insert t)
   match t.op with
   | .var k => if acc.1.contains k then acc else (acc.1.push k, acc.2)
-  | _ => t.args.foldl (fun a c => occurrences c a) acc
+  | _ => match t with
+    | .mk _ _ as => as.attach.foldl (fun a ⟨c, _⟩ => occurrences c a) acc
+termination_by sizeOf t
+decreasing_by have := List.sizeOf_lt_of_mem ‹_›; simp_wf; omega
 
 /-- The two sides abstracted over `leaves` and rebuilt. -/
 def abstractPair (leaves : Array Tm) (impl spec : Tm) : Option (Tm × Tm) :=
   (absM leaves 4096 impl {}).bind fun (l, m) => (absM leaves 4096 spec m).bind fun (r, _) =>
     (rebuildM 4096 l {}).bind fun (l', m2) => (rebuildM 4096 r m2).map fun (r', _) => (l', r')
+
+/-- Both sides the one leaf: each is cut to leaf variable 0 (the second from the memo) and rebuilt. -/
+private theorem abstractPair_leaf (t : Tm) :
+    abstractPair #[t] t t = some (var (0 : Nat).toUInt64, var (0 : Nat).toUInt64) := by
+  simp only [abstractPair, show 4096 = 4095 + 1 from rfl, absM_leaf, Option.bind_some,
+    rebuildM_var]
+  rw [absM]
+  simp
+  rw [rebuildM]
+  simp
+
+example : ∃ leaves impl spec l r, 0 < leaves.size ∧ abstractPair leaves impl spec = some (l, r) :=
+  ⟨#[var 9], var 9, var 9, _, _, Nat.zero_lt_one, abstractPair_leaf (var 9)⟩
 
 /-- Renumber the leaves by first occurrence in the rebuilt residual, a round at a time (unverified). -/
 def canonLeaves (impl spec : Tm) (leaves : Array Tm) : Nat → Array Tm
@@ -328,7 +366,7 @@ structure Residual where
   rhs : Tm
   deriving DecidableEq, Inhabited
 
-def Residual.Holds (r : Residual) : Prop := ∀ env : UInt64 → UInt32, r.lhs.eval env = r.rhs.eval env
+@[expose] def Residual.Holds (r : Residual) : Prop := ∀ env : UInt64 → UInt32, r.lhs.eval env = r.rhs.eval env
 
 /-- The leaves of a pair, by the unverified search. -/
 def leavesOf (impl spec : Tm) : Array Tm :=
@@ -340,8 +378,8 @@ def leavesOf (impl spec : Tm) : Array Tm :=
 def wordLeaves (impl spec : Tm) : Array Tm :=
   (findLeaves {} spec ((findLeaves {} impl (#[], {})).1, {})).1
 
-/-- Environments a residual is tried on before it is kept. -/
-def sampleEnvs : List (UInt64 → UInt32) :=
+/-- Environments a residual is tried on before it is kept (eight fixed hash-derived memories). -/
+def probeEnvs : List (UInt64 → UInt32) :=
   [1, 2, 3, 4, 5, 6, 7, 8].map fun s => fun a => (mixHash (hash a) s).toUInt32
 
 /-- A term's value with each shared node evaluated once (a residual is a DAG; `eval` unfolds its tree). -/
@@ -354,12 +392,12 @@ partial def evalMemo (env : UInt64 → UInt32) (t : Tm) (m : Std.HashMap Tm UInt
     let v := t.op.sem env vs.toList
     (v, m.insert t v)
 
-/-- Some sample environment tells the two sides apart: the residual is false. -/
+/-- One of the probe environments tells the two sides apart: the residual is false. -/
 def refuted (l r : Tm) : Bool :=
-  sampleEnvs.any fun env => let (a, m) := evalMemo env l {}; a != (evalMemo env r m).1
+  probeEnvs.any fun env => let (a, m) := evalMemo env l {}; a != (evalMemo env r m).1
 
 /-- The residual of an implementation term against a specification term: cut at the maximal common
-subterms; when a sample refutes that, a cut hid a relation the two sides need (a compiler's `2y`
+subterms; when a probe environment refutes that, a cut hid a relation the two sides need (a compiler's `2y`
 computed apart from `y`, cut at `y`), and the pair is cut at its memory words alone (counterexample-guided
 refinement of the cutpoints, as in combinational equivalence checking). -/
 def residual (impl spec : Tm) : Option Residual :=
@@ -378,6 +416,27 @@ private theorem shareCommon_eq' {α : Type} (a : α) : ShareCommon.shareCommon' 
 /-- `shareCommon'` only changes which equal objects are shared (its definition is the identity; the
 runtime implementation is Lean's `lean_sharecommon_quick`). -/
 theorem shareCommon_eq {α : Type} (a : α) : ShareCommon.shareCommon' a = a := shareCommon_eq' a
+
+/-- `residual` succeeds with a leaf cut, and its result meets `residual_sound`'s premise: the memory word
+`var 9` on both sides is found as the one leaf (`findLeaves`), renumbered (`canonLeaves`, `occurrences`) and
+cut to leaf variable 0, leaving the residual `var 0 = var 0`. -/
+example : ∃ impl spec r, residual impl spec = some r ∧ r.lhs = r.rhs := by
+  refine ⟨var 9, var 9, ⟨var (0 : Nat).toUInt64, var (0 : Nat).toUInt64⟩, ?_, rfl⟩
+  have hf0 (other : Std.HashSet Tm) : (findLeaves other (var 9) (#[], {})).1 = #[var 9] := by
+    rw [findLeaves]; simp [var, node, op]
+  have hf1 (other : Std.HashSet Tm) : (findLeaves other (var 9) (#[var 9], {})).1 = #[var 9] := by
+    rw [findLeaves]; simp [var, node, op]
+  have hl : leavesOf (var 9) (var 9) = #[var 9] := by simp only [leavesOf, hf0, hf1]
+  have hw : wordLeaves (var 9) (var 9) = #[var 9] := by simp only [wordLeaves, hf0, hf1]
+  have ho0 (k : UInt64) : occurrences (var k) (#[], {}) = (#[k], ({} : Std.HashSet Tm).insert (var k)) := by
+    rw [occurrences]; simp [var, node, op]
+  have ho1 (k : UInt64) : occurrences (var k) (#[k], ({} : Std.HashSet Tm).insert (var k)) =
+      (#[k], ({} : Std.HashSet Tm).insert (var k)) := by
+    rw [occurrences]; simp [var, node]
+  have hc : canonLeaves (var 9) (var 9) #[var 9] 1 = #[var 9] := by
+    simp [canonLeaves, abstractPair_leaf, ho0, ho1]
+  simp only [residual, shareCommon_eq, hl, hw, hc, abstractPair_leaf]
+  split <;> rfl
 
 theorem abstractPair_sound (env : UInt64 → UInt32) (leaves : Array Tm) (impl spec l r : Tm)
     (h : abstractPair leaves impl spec = some (l, r)) :

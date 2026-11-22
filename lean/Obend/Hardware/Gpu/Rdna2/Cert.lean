@@ -16,8 +16,8 @@ says the model run of the dumps succeeds and leaves the wire buffer as the stage
 composes it with the emitter's correctness and `lowerArrayToGpu_sound`: the model's outputs from the
 machine code are `evalGraph`'s, with no vectors.
 
-The certificate is checked by running `certify` (compiled, `native_decide`) and by proving each residual
-with `bv_decide` in a generated module: compiled trust, counted by the census, checked once per artifact.
+Each artifact runs the compiled `certify` checker and uses the residual proofs from the generated
+library. The census tracks trust in the compiled check.
 The waits are checked alongside (`Waitcnt`): the model completes a load when it issues, and the
 `s_waitcnt` check is what makes that reading the device's (see `waits_needed` in the header of
 `Obend.Hardware.Gpu.Rdna2.Waitcnt`).
@@ -30,7 +30,15 @@ public import Obend.Hardware.Gpu.Rdna2.Join
 public import Obend.Hardware.Gpu.Rdna2.Lower
 public import Obend.Hardware.Gpu.Rdna2.Equiv
 
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Host
+import all Obend.Hardware.Gpu.Rdna2.Join
+import all Obend.Hardware.Gpu.Rdna2.Lower
+import all Obend.Hardware.Gpu.Rdna2.Equiv
+import all Obend.Hardware.Gpu.Rdna2.Sym
+import all Obend.Hardware.Gpu.Rdna2.Term
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 
@@ -55,7 +63,7 @@ def viewStart (words : Nat) (lay : Memory) (known : Known) (a : UInt64) : Option
 def baseView (words : Nat) (lay : Memory) (known : Known) (ex : UInt64 → Bool) (a : UInt64) : Option Tm :=
   if ex a then none else viewStart words lay known a
 
-def dwLo (j : Nat) : UInt64 := wDw + UInt64.ofNat (2 * j)
+@[expose] def dwLo (j : Nat) : UInt64 := wDw + UInt64.ofNat (2 * j)
 
 /-- Word `j` of the wire buffer at the start of a dispatch, as a pair of terms; past the buffer, `0`. -/
 def readWord (words : Nat) (lay : Memory) (known : Known) (j : Nat) : TP :=
@@ -152,18 +160,18 @@ def checkWaves (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (prog : Pro
       (checkStoresX (sharedStores words T st.mem.stores.toList) acc).bind (checkWaves words lay T prog lds known gs)
     else none
 
-def applyUpdates (known : Known) (us : List (UInt64 × Option UInt32)) : Known :=
+@[expose] def applyUpdates (known : Known) (us : List (UInt64 × Option UInt32)) : Known :=
   us.foldr (fun (a, v?) kn => match v? with | some v => kn.insert a v | none => kn.erase a) known
 
 /-- Every word of the table stored, both dwords. -/
-def tableStored (T : Std.HashMap Nat TP) (stored : Std.HashSet UInt64) : Bool :=
+@[expose] def tableStored (T : Std.HashMap Nat TP) (stored : Std.HashSet UInt64) : Bool :=
   T.toList.all fun (i, _) => stored.contains (dwLo i) && stored.contains (dwLo i + 1)
 
 /-! ## 4. A stage in parts: two passes, the waves in parallel -/
 
 /-- Word `j` lies in the part of a wave before `g`, read from the owners `O` (each word of a part with the
 wave whose part it is). -/
-def hasOf (O : Std.HashMap Nat Nat) (g j : Nat) : Bool :=
+@[expose] def hasOf (O : Std.HashMap Nat Nat) (g j : Nat) : Bool :=
   match O[j]? with
   | some h => decide (h < g)
   | none => false
@@ -220,7 +228,7 @@ def waveOut (words : Nat) (lay : Memory) (part : (Nat → Bool) → Nat → Opti
   else none
 
 /-- The waves' results in order, every dword stored once. -/
-def mergeWaves : List (Option (List (UInt64 × Option UInt32 × Option (Option Residual)))) → Acc → Option Acc
+@[expose] def mergeWaves : List (Option (List (UInt64 × Option UInt32 × Option (Option Residual)))) → Acc → Option Acc
   | [], acc => some acc
   | o :: os, acc => o.bind fun L => (checkStoresY L acc).bind (mergeWaves os)
 
@@ -234,7 +242,7 @@ def waveOutT (words : Nat) (lay : Memory) (T : Std.HashMap Nat TP) (prog : Progr
 
 /-- One dispatch against its whole table: the known constants after it and the residuals it needs. Every
 wave on its own task (`waveOutT`), merged in order; if one is refused there, the waves in order. -/
-def checkStageW {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
+@[expose] def checkStageW {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
     Option (Known × Std.HashSet Residual) :=
   (s.table (readWord words lay known)).bind fun T =>
   let gs := List.range (groupsOf s.threads)
@@ -249,7 +257,7 @@ def ownedStored (O : Std.HashMap Nat Nat) (stored : Std.HashSet UInt64) : Bool :
 /-- One dispatch: the known constants after it and the residuals it needs. A stage with parts is checked
 in two passes, each wave on its own task: a guess at each word's owner (`ownersGuess`), then every wave
 against its part (`waveOut`), merged in order. -/
-def checkStage {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
+@[expose] def checkStage {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Program) (known : Known) :
     Option (Known × Std.HashSet Residual) :=
   match s.part with
   | none => checkStageW words lay s prog known
@@ -263,7 +271,7 @@ def checkStage {σ : Type} (words : Nat) (lay : Memory) (s : Spec σ) (prog : Pr
     else none
 
 /-- Every dispatch; the residuals they need. -/
-def checkProgram {σ : Type} (words : Nat) (lay : Memory) : List (Spec σ) → List Program → Known → Std.HashSet Residual →
+@[expose] def checkProgram {σ : Type} (words : Nat) (lay : Memory) : List (Spec σ) → List Program → Known → Std.HashSet Residual →
     Option (Std.HashSet Residual)
   | [], [], _, need => some need
   | s :: ss, prog :: progs, known, need =>
@@ -271,7 +279,7 @@ def checkProgram {σ : Type} (words : Nat) (lay : Memory) : List (Spec σ) → L
   | _, _, _, _ => none
 
 /-- The host's dispatches of certified stages: program, threads, LDS. -/
-def dispatchesOf {σ : Type} (specs : List (Spec σ)) (progs : List Program) : List (Program × Nat × Nat) :=
+@[expose] def dispatchesOf {σ : Type} (specs : List (Spec σ)) (progs : List Program) : List (Program × Nat × Nat) :=
   progs.zip (specs.map fun s => (s.threads, s.lds))
 
 /-! ## 5. A stage of a plan -/
@@ -288,7 +296,7 @@ def foldCache (rd : Nat → TP) (stage : GpuStage) : List (Kernel × Array TP) :
   stage.kernels.filterMap fun k => (foldValues rd k).map (k, ·)
 
 /-- Words `i < n` of a stage's table: each word's first owning kernel's value there (`runStage`). -/
-def gpuTableUpTo (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (rd : Nat → TP) (kc : List (Kernel × Array TP)) :
+@[expose] def gpuTableUpTo (cs : Array Word) (ix : Array Nat) (stage : GpuStage) (rd : Nat → TP) (kc : List (Kernel × Array TP)) :
     Nat → Option (Std.HashMap Nat TP)
   | 0 => some {}
   | n + 1 => (gpuTableUpTo cs ix stage rd kc n).bind fun T =>

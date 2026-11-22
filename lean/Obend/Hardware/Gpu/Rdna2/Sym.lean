@@ -15,7 +15,10 @@ holds `u`, and leaves every other dword as it found it.
 module
 public import Obend.Hardware.Gpu.Rdna2.Natural
 public import Obend.Hardware.Gpu.Rdna2.Term
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+import all Obend.Hardware.Gpu.Rdna2.Natural
+import all Obend.Hardware.Gpu.Rdna2.Term
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 
@@ -25,7 +28,7 @@ structure SymMem where
   stores : Std.HashMap UInt64 Tm
   base : UInt64 → Option Tm
 
-def SymMem.load (m : SymMem) (a : UInt64) : Option Tm :=
+@[expose] def SymMem.load (m : SymMem) (a : UInt64) : Option Tm :=
   match m.stores.get? a with
   | some t => some t
   | none => m.base a

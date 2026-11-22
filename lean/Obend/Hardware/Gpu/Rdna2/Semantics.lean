@@ -47,7 +47,7 @@ public import Obend.Hardware.Gpu.Rdna2.Decode
 public import Std.Data.HashMap
 public import Std.Tactic.BVDecide
 public meta import Std.Tactic.BVDecide.Reflect
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 
@@ -77,8 +77,8 @@ def mulHi (a b : UInt32) : UInt32 := UInt32.ofNat ((a.toNat * b.toNat) >>> 32)
 def lshlrev32 (count val : UInt32) : UInt32 := val <<< (count &&& 31)
 
 /-- V_LSHLREV_B64 / V_LSHRREV_B64 (manual 12.12): `D.u64 = S1.u64 << S0.u[5:0]`, `>>` logical. -/
-def lshlrev64 (count : UInt32) (val : UInt64) : UInt64 := val <<< (count.toUInt64 &&& 63)
-def lshrrev64 (count : UInt32) (val : UInt64) : UInt64 := val >>> (count.toUInt64 &&& 63)
+@[expose] def lshlrev64 (count : UInt32) (val : UInt64) : UInt64 := val <<< (count.toUInt64 &&& 63)
+@[expose] def lshrrev64 (count : UInt32) (val : UInt64) : UInt64 := val >>> (count.toUInt64 &&& 63)
 
 /-- V_LSHL_ADD_U32 (manual 12.12): `D.u = (S0.u << S1.u[4:0]) + S2.u`. -/
 def lshlAdd (a sh c : UInt32) : UInt32 := (a <<< (sh &&& 31)) + c
@@ -144,11 +144,11 @@ theorem subCo_spec (a b : UInt32) :
     exact UInt32.toNat_sub_of_le a b (UInt32.le_iff_toNat_le.mpr (by omega))
 
 /-- A bit as a word, `0` or `1`, and a word as a bit, nonzero (the convention of every mask bit below). -/
-@[inline] def b2w (b : Bool) : UInt32 := if b then 1 else 0
-@[inline] def w2b (x : UInt32) : Bool := x != 0
+@[expose, inline] def b2w (b : Bool) : UInt32 := if b then 1 else 0
+@[expose, inline] def w2b (x : UInt32) : Bool := x != 0
 
 /-- The 64-bit value of a register pair, low dword first. -/
-@[inline] def join64 (lo hi : UInt32) : UInt64 := lo.toUInt64 ||| (hi.toUInt64 <<< 32)
+@[expose, inline] def join64 (lo hi : UInt32) : UInt64 := lo.toUInt64 ||| (hi.toUInt64 <<< 32)
 
 /-! ## 2. The value domain
 
@@ -198,7 +198,7 @@ class MemDom (M : Type) (V : Type) where
   store : M → UInt64 → V → M
 
 /-- Bit packing on words: bit `i` of the result is `bs[i] ≠ 0` (least significant first). -/
-def packWord : List UInt32 → UInt32
+@[expose] def packWord : List UInt32 → UInt32
   | [] => 0
   | b :: bs => b2w (w2b b) ||| (packWord bs <<< 1)
 
@@ -238,10 +238,23 @@ instance : MemDom Memory UInt32 where
 
 /-! ## 3. State -/
 
-def lanes : Nat := 64
+@[expose] def lanes : Nat := 64
+
+-- Elaborate the RHS again in the public equation. Matches in a sealed definition can use
+-- private matchers, which a downstream `cbv` cannot reduce through an ordinary import.
+local macro "with_cbv_eq " eqn:ident " for " lhs:term " in " d:command : command => do
+  let `(command| $_mods:declModifiers def $_id:declId $bs:bracketedBinder* : $ty:term := $body:term) := d
+    | Lean.Macro.throwUnsupported
+  `(section
+    $d:command
+    @[cbv_eval] theorem $eqn $bs* : ($lhs : $ty) = ($body : $ty) := by rfl
+    end)
+
+with_cbv_eq sgprCount_eq for sgprCount in
 /-- SGPRs 0..105, then VCC_LO and VCC_HI at 106 and 107 (manual 3.9: "VCC physically resides in the
 SGPR register file"). -/
 def sgprCount : Nat := 108
+with_cbv_eq vgprCount_eq for vgprCount in
 def vgprCount : Nat := 256
 
 structure GWave (V M : Type) where
@@ -269,14 +282,20 @@ structure GWave (V M : Type) where
 
 variable {V M : Type} [Dom V] [MemDom M V]
 
+omit [MemDom M V] in
+with_cbv_eq GWave.init_eq for GWave.init mem ldsBase ldsDwords in
 def GWave.init (mem : M) (ldsBase : UInt64) (ldsDwords : Nat) : GWave V M :=
   { sgpr := Array.replicate sgprCount (Dom.lit 0), exec := (Dom.lit 0xFFFFFFFF, Dom.lit 0xFFFFFFFF), scc := Dom.lit 0,
     m0 := Dom.lit 0, vgpr := Array.replicate (vgprCount * lanes) (Dom.lit 0), pc := 0, mem := mem,
     halted := false, err := none, ldsBase := ldsBase, ldsDwords := ldsDwords }
 
+omit [Dom V] [MemDom M V] in
+with_cbv_eq GWave.fail_eq for GWave.fail s msg in
 def GWave.fail (s : GWave V M) (msg : String) : GWave V M :=
   if s.err.isSome then s else { s with err := some s!"pc {s.pc}: {msg}" }
 
+omit [Dom V] [MemDom M V] in
+with_cbv_eq GWave.withSome_eq for GWave.withSome s o msg k in
 /-- Continue with the value, or fail with `msg`: every refusal of the model on a value it does not know
 goes through here (so that `Natural` can treat refusals once). -/
 @[inline] def GWave.withSome {α : Type} (s : GWave V M) (o : Option α) (msg : String) (k : α → GWave V M) : GWave V M :=
@@ -284,18 +303,31 @@ goes through here (so that `Natural` can treat refusals once). -/
   | some v => k v
   | none => s.fail msg
 
+omit [MemDom M V] in
+with_cbv_eq readSgpr_eq for readSgpr s n in
 def readSgpr (s : GWave V M) (n : Nat) : V := s.sgpr.getD n (Dom.lit 0)
+omit [Dom V] [MemDom M V] in
+with_cbv_eq writeSgpr_eq for writeSgpr s n v in
 def writeSgpr (s : GWave V M) (n : Nat) (v : V) : GWave V M :=
   if n < sgprCount then { s with sgpr := s.sgpr.set! n v } else s
+omit [MemDom M V] in
+with_cbv_eq readVgpr_eq for readVgpr s r lane in
 def readVgpr (s : GWave V M) (r lane : Nat) : V := s.vgpr.getD (r * lanes + lane) (Dom.lit 0)
+omit [Dom V] [MemDom M V] in
+with_cbv_eq writeVgpr_eq for writeVgpr s r lane v in
 def writeVgpr (s : GWave V M) (r lane : Nat) (v : V) : GWave V M :=
   if r < vgprCount then { s with vgpr := s.vgpr.set! (r * lanes + lane) v } else s
+with_cbv_eq maskBit_eq for maskBit m lane in
 /-- A lane's bit of a mask pair. -/
 def maskBit (m : V × V) (lane : Nat) : V := if lane < 32 then Dom.bit m.1 lane else Dom.bit m.2 (lane - 32)
 
+omit [MemDom M V] in
+with_cbv_eq execBit_eq for execBit s lane in
 /-- A lane's EXEC bit, `0` or `1`. -/
 def execBit (s : GWave V M) (lane : Nat) : V := maskBit s.exec lane
 
+omit [MemDom M V] in
+with_cbv_eq laneOff_eq for laneOff s lane in
 /-- The lane is known to be off (its EXEC bit is known and `0`). -/
 def laneOff (s : GWave V M) (lane : Nat) : Bool := Dom.conc (execBit s lane) == some 0
 
@@ -318,6 +350,7 @@ inductive SrcKind where
   | sgpr (n : Nat) | m0 | lit (v : UInt32) | execLo | execHi | vccz | execz | scc | literal | none
   deriving DecidableEq, Repr
 
+with_cbv_eq srcKind_eq for srcKind code in
 def srcKind (code : Nat) : SrcKind :=
   if code ≤ 107 then .sgpr code
   else if code == 124 then .m0
@@ -333,6 +366,8 @@ def srcKind (code : Nat) : SrcKind :=
   else if code == 255 then .literal
   else .none
 
+omit [MemDom M V] in
+with_cbv_eq scalarSource_eq for scalarSource s code lit in
 /-- The scalar value a source code names, at the SALU or as a VALU broadcast; VCCZ only when VCC is
 known. -/
 def scalarSource (s : GWave V M) (code : Nat) (lit : Option UInt32) : Option V :=
@@ -348,6 +383,8 @@ def scalarSource (s : GWave V M) (code : Nat) (lit : Option UInt32) : Option V :
   | .literal => lit.map Dom.lit
   | .none => none
 
+omit [MemDom M V] in
+with_cbv_eq vectorSource_eq for vectorSource s code lit lane in
 /-- A 32-bit VALU source: a VGPR (codes 256..511) per lane, else the scalar broadcast. -/
 def vectorSource (s : GWave V M) (code : Nat) (lit : Option UInt32) (lane : Nat) : Option V :=
   if 256 ≤ code && code ≤ 511 then some (readVgpr s (code - 256) lane) else scalarSource s code lit
@@ -427,14 +464,18 @@ where
 
 /-! ## 5. Executing one instruction -/
 
+with_cbv_eq Inst.fam_eq for Inst.fam i in
 def Inst.fam (i : Inst) : String := family i.enc.name
 
+with_cbv_eq isSdwa_eq for isSdwa i in
 /-- An SDWA form (manual 6.8: `SRC0` is the SDWA marker, the sources and selects are in the second dword). -/
-def isSdwa (i : Inst) : Bool := (i.enc.name.splitOn "SDWA").length > 1
+def isSdwa (i : Inst) : Bool := i.enc.name.contains "SDWA"
 
+with_cbv_eq sdwaCode_eq for sdwaCode i src sbit in
 /-- An SDWA source (manual 13.3 Table 88): `VSRCk` is a VGPR unless the `Sk` bit makes it a scalar code. -/
 def sdwaCode (i : Inst) (src sbit : String) : Nat := if i.field sbit == 1 then i.field src else 256 + i.field src
 
+with_cbv_eq sdwaClear_eq for sdwaClear i in
 /-- The SDWA fields the model reads are the selects (Table 88: 0..3 a byte, 4 and 5 a word, 6 the dword)
 and `DST_UNUSED = 0` (pad with zeros); sign extension, negation, absolute value, clamp, output modifiers
 and the reserved select are refused rather than interpreted. -/
@@ -443,6 +484,7 @@ def sdwaClear (i : Inst) : Bool :=
     + i.field "SRC1_ABS" + i.field "CLAMP" + i.field "OMOD" + i.field "DST_UNUSED" == 0 &&
   i.field "SRC0_SEL" ≤ 6 && i.field "SRC1_SEL" ≤ 6 && i.field "DST_SEL" ≤ 6
 
+with_cbv_eq srcCode_eq for srcCode i k in
 /-- The source codes of a VALU instruction as the encoding carries them: VOP2's and VOPC's `VSRC1` is a
 VGPR number, made a 256+ code here so that every family reads through `vectorSource`. -/
 def srcCode (i : Inst) (k : Nat) : Nat :=
@@ -461,19 +503,27 @@ def maskDst (i : Inst) : Nat :=
 /-- The mask a carry-in or CNDMASK reads: VCC in VOP2, `SRC2`'s pair in VOP3. -/
 def maskSrcCode (i : Inst) : Nat := if i.fam == "VOP3" then i.field "SRC2" else 106
 
+with_cbv_eq modifiersClear_eq for modifiersClear i in
 /-- VOP3 modifiers are floating-point operations' (manual 6.2.1/6.2.2); on the integer subset they are
 refused rather than interpreted. -/
 def modifiersClear (i : Inst) : Bool :=
   i.fam != "VOP3" || (i.field "NEG" == 0 && i.field "ABS" == 0 && i.field "CLAMP" == 0 && i.field "OMOD" == 0 && i.field "OP_SEL" == 0)
 
+omit [MemDom M V] in
+with_cbv_eq laneSources_eq for laneSources i s n lane in
 /-- The first `n` sources of a VALU instruction at a lane. -/
 def laneSources (i : Inst) (s : GWave V M) (n : Nat) (lane : Nat) : Option (List V) :=
   (List.range n).mapM fun k => vectorSource s (srcCode i k) i.literal lane
 
+with_cbv_eq src0_eq for src0 src in
 def src0 (src : List V) : V := src.getD 0 (Dom.lit 0)
+with_cbv_eq src1_eq for src1 src in
 def src1 (src : List V) : V := src.getD 1 (Dom.lit 0)
+with_cbv_eq src2_eq for src2 src in
 def src2 (src : List V) : V := src.getD 2 (Dom.lit 0)
 
+omit [Dom V] [MemDom M V] in
+with_cbv_eq writeLanes_eq for writeLanes s dst rs in
 /-- Write `(lane, value)` results to VGPR `dst`. -/
 def writeLanes (s : GWave V M) (dst : Nat) (rs : List (Nat × V)) : GWave V M :=
   rs.foldl (fun st (lane, v) => writeVgpr st dst lane v) s
@@ -502,6 +552,8 @@ def sdwaLift (i : Inst) (f : List V → Nat → V) (src : List V) (lane : Nat) :
   sdwaDst (f [sdwaSelV (src.getD 0 (Dom.lit 0)) (i.field "SRC0_SEL"), sdwaSelV (src.getD 1 (Dom.lit 0)) (i.field "SRC1_SEL")] lane)
     (i.field "DST_SEL")
 
+omit [MemDom M V] in
+with_cbv_eq laneStep_eq for laneStep s lane srcs off k sel in
 /-- One lane of a VALU operation (manual 6.2.2: a thread writes only if its EXEC bit is set): a lane known
 to be off is not computed and keeps `off`; any other lane computes `k` from its sources, and its result
 is the select on its EXEC bit of that and `off` (the result itself when the bit is known to be set). A
@@ -511,6 +563,8 @@ def laneStep {α : Type} (s : GWave V M) (lane : Nat) (srcs : Option (List V)) (
   if laneOff s lane then some (lane, off) else
   srcs.map fun src => (lane, sel (execBit s lane) (k src) off)
 
+omit [MemDom M V] in
+with_cbv_eq valuLanes_eq for valuLanes i s nSrc f in
 /-- A per-lane 32-bit VALU operation. The results are computed from `s` first and then written, so the
 register file updates in place. -/
 def valuLanes (i : Inst) (s : GWave V M) (nSrc : Nat) (f : List V → Nat → V) : GWave V M :=
@@ -761,6 +815,7 @@ inductive InstOp where
   | unknown
   deriving DecidableEq, Repr
 
+with_cbv_eq instOp_eq for instOp name in
 def instOp (name : String) : InstOp :=
   match name with
   | "S_MOV_B32" => .s_mov_b32 | "S_MOV_B64" => .s_mov_b64 | "S_MOVK_I32" => .s_movk_i32
@@ -800,6 +855,7 @@ def instOp (name : String) : InstOp :=
   | "S_AND_B32" => .s_and_b32 | "V_SUBREV_NC_U32" => .v_subrev_nc_u32
   | _ => .unknown
 
+with_cbv_eq execInst_eq for execInst i s in
 /-- One instruction. `s.pc` already points past it (branches add their offset to that, manual 12.5:
 `PC = PC + signext(SIMM16 * 4) + 4`). Each case cites the manual and its gem5 twin (see the header). -/
 def execInst (i : Inst) (s : GWave V M) : GWave V M :=
@@ -1033,6 +1089,7 @@ theorem lshr32_spec (c x : UInt32) : (lshrrev64 (c &&& 31) (join64 x 0)).toUInt3
 /-- A decoded program: `prog[d]` is the instruction at dword `d`. -/
 abbrev Program := Array (Option Inst)
 
+with_cbv_eq step_eq for step prog s in
 def step (prog : Program) (s : GWave V M) : GWave V M :=
   if s.halted || s.err.isSome then s else
   match prog[s.pc]? with
@@ -1044,6 +1101,12 @@ def step (prog : Program) (s : GWave V M) : GWave V M :=
 def run (prog : Program) : Nat → GWave V M → GWave V M
   | 0, s => if s.halted || s.err.isSome then s else s.fail "the wave did not halt within its step budget"
   | n + 1, s => if s.halted || s.err.isSome then s else run prog n (step prog s)
+
+@[cbv_eval] theorem run_zero (prog : Program) (s : GWave V M) :
+    run prog 0 s = (if s.halted || s.err.isSome then s else s.fail "the wave did not halt within its step budget") := by rfl
+
+@[cbv_eval] theorem run_succ (prog : Program) (n : Nat) (s : GWave V M) :
+    run prog (n + 1) s = (if s.halted || s.err.isSome then s else run prog n (step prog s)) := by rfl
 
 /-- A wave as RADV launches one of our compute dispatches (manual 3.12; `Obend.Hardware.Gpu.Rdna2.Check`
 cites the host side): `s2` the descriptor set's low address `setLo`, `s3` the workgroup id, `v0` the

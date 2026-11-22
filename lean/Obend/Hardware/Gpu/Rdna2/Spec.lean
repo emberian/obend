@@ -11,7 +11,7 @@ trees over the base encoding's fields (`Cond`), evaluated by the decoder, so tha
 is (literal, DPP, SDWA) is the XML's decision and not ours.
 -/
 module
-@[expose] public section
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 
@@ -103,7 +103,7 @@ structure OperandType where
   deriving Repr, DecidableEq
 
 /-- The name of a predefined value, if the type has one for `v`. -/
-def OperandType.nameOf (t : OperandType) (v : Nat) : Option String :=
+@[expose] def OperandType.nameOf (t : OperandType) (v : Nat) : Option String :=
   match t.specials.find? (·.2 == v) with
   | some (n, _) => some n
   | none =>

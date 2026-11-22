@@ -20,7 +20,9 @@ The buffers sit at fixed addresses (`wAddr`, `cAddr`, `ixAddr`); a 64-bit word `
 module
 public import Obend.Hardware.Gpu.Rdna2.Semantics
 public import Obend.Hardware.Gpu
-@[expose] public section
+import all Obend.Hardware.Gpu.Rdna2.Semantics
+
+public section
 
 namespace Obend.Hardware.Gpu.Rdna2
 open Obend.Hardware.Gpu Obend.Hardware.ArrayHypergraph
@@ -32,7 +34,7 @@ def wAddr : UInt64 := 0x100000000
 def cAddr : UInt64 := 0x200000000
 def ixAddr : UInt64 := 0x300000000
 /-- The dword address of word 0 of `w`. -/
-def wDw : UInt64 := wAddr >>> 2
+@[expose] def wDw : UInt64 := wAddr >>> 2
 
 /-- `ac_build_raw_buffer_descriptor` (Mesa 24.2.8): `desc[0] = va`, `desc[1] = BASE_ADDRESS_HI(va >> 32) |
 STRIDE(0)`, `desc[2] = size`, `desc[3]` with `OOB_SELECT_RAW` (3, bits 29:28) and `RESOURCE_LEVEL` (bit 24);
@@ -64,14 +66,14 @@ def memOf (words : Nat) (consts : List Word) (tables : List Nat) (flat : Nat →
     (layoutMem words consts tables)
 
 /-- Word `i` of the wire buffer as memory holds it. -/
-def wordAt (m : Memory) (i : Nat) : Word :=
+@[expose] def wordAt (m : Memory) (i : Nat) : Word :=
   (join64 ((m.get? (wDw + UInt64.ofNat (2 * i))).getD 0) ((m.get? (wDw + UInt64.ofNat (2 * i) + 1)).getD 0)).toBitVec
 
 /-- The steps a wave may take: the program's straight-line length many times over, and room for the
 loops a compiler keeps for a fold (a 65536-element reduce iterates in one invocation). A wave that has not
 halted within it is refused; the bound is an allowance, not a termination argument. -/
 def fuelOf (prog : Program) : Nat := 16 * prog.size + 2 ^ 28
-def groupsOf (threads : Nat) : Nat := (threads + lanes - 1) / lanes
+@[expose] def groupsOf (threads : Nat) : Nat := (threads + lanes - 1) / lanes
 
 /-- Workgroup `g`'s LDS as a region of memory: dword `2^40 + g * 2^16` on, above every buffer the host
 binds (an RDNA2 workgroup has at most 64 KiB of LDS, 2^14 dwords). -/
