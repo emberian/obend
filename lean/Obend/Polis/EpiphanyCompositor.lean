@@ -1139,5 +1139,8 @@ theorem epiphanyScanoutJudge_refutes_nonconstant :
     epiphanyScanoutJudge.refutes .unredactedPrivateRoi = true ∧
     epiphanyScanoutJudge.refutes .sealMismatch = true ∧
     epiphanyScanoutJudge.refutes .certWitnessMismatch = false := ⟨rfl, rfl, rfl, rfl, rfl⟩
+theorem validEpiphanySessionTrace_inhabited :
+    ∃ st₀ turns stEnd, 0 < turns.length ∧ ValidEpiphanySessionTrace canonicalDisplayPolicy st₀ turns stEnd :=
+  ⟨⟨[(7, 41)]⟩, [⟨10, canonicalFrameQuery, canonicalScanoutCert⟩], ⟨[(7, 42)]⟩, by decide, .cons (by decide) (.nil _)⟩
 end Obend.Polis.EpiphanyCompositor
 end
