@@ -29,10 +29,10 @@ in-silico evolutionary physical design** within `Obend.Hardware`:
      subtractive machining never adds material) and **`voxel_no_gouge_sound`** (if a target part voxel
      $B$ has `(evalFRepInterval B fSwept).lo > 0`, the cutter is guaranteed never to gouge any interior
      point of the finished part in $B$).
-4. **Simulating the Machine Better Than the Tool Runs Itself: Servo Lag, End-Mill Deflection & Altintas Chatter**:
-   - Models the true physical cutter trajectory under ballscrew/servo tracking lag $\tau_{\text{servo}} v_{\text{feed}}$
-     and cantilever end-mill deflection $c_{\text{compliance}} \cdot (k_r a_p h_{\text{chip}})$ alongside
-     Yusuf Altintas's regenerative chatter stability boundary $a_p k_{\text{cut}} |\operatorname{Re}[G(\omega_c)]| \le c_{\text{chatter}}$,
+4. **Linearized First-Order Servo-Lag, Static Deflection & Chatter Threshold Bounds**:
+   - Models first-order lumped algebraic bounds for tracking lag $\tau_{\text{servo}} v_{\text{feed}}$,
+     static cantilever compliance $c_{\text{compliance}} \cdot (k_r a_p h_{\text{chip}})$, and
+     threshold chatter margin $a_p k_{\text{cut}} |\operatorname{Re}[G(\omega_c)]| \le c_{\text{chatter}}$,
    - Proves **`machining_dimensional_error_bound`** and **`altintas_chatter_depth_monotone`**.
 5. **In-Silico Evolutionary Physical Design Search (`DesignCandidate`, `filterVerifiedDesigns`)**:
    - Proves **`evolutionary_search_emits_only_verified_designs`**: any candidate surviving the kernel

@@ -1,9 +1,10 @@
 module
 /-
-# Obend.Hardware.Circuits — Classic `74LS00` Totem-Pole TTL, Pt100 RTD Bridge + 3-Op-Amp Instrumentation Amplifier & Synchronous Buck Power Converter
+# Obend.Hardware.Circuits — Discrete Lumped-Parameter `74LS00` TTL Noise-Margin,INA Common-Mode & Buck CCM Design-Rule Checks
 
-Formalizes classic **digital TTL, precision sensor analog instrumentation, and switched-mode power
-electronics** within `Obend.Hardware`:
+Formalizes **first-order integer/rational datasheet design-rule checks** (DC static voltage thresholds,
+linear resistor-ratio matching, and steady-state duty-cycle ripple arithmetic — not SPICE transistor
+or transient electrothermal simulation) within `Obend.Hardware`:
 
 1. **Classic `SN74LS00` Schottky TTL Totem-Pole 2-Input NAND Gate (`TtlTotemPoleParams`, `evalTtlNandMv`)**:
    - Models the Schottky diode input AND array, phase-splitter BJT $Q_2$, Darlington high-side pull-up
