@@ -11,7 +11,7 @@ public import Obend.Vault.Law
 public import Obend.Spec.LawDial
 public import Obend.Spec.Law
 
-@[expose] public section
+public section
 
 namespace Obend.Vault.Affordance
 
@@ -36,7 +36,7 @@ inductive Auth where
   | notify
 deriving DecidableEq, Repr
 
-def fireGate (required held : List Auth) : Bool :=
+@[expose] def fireGate (required held : List Auth) : Bool :=
   required.all (fun a => held.contains a)
 
 theorem fireGate_iff_subset (required held : List Auth) :
@@ -83,7 +83,7 @@ structure AffordanceIntent (φ : Type) where
   surface     : FiredSurface φ
   effectsHash : Nat
 
-def fire (aff : CellAffordance φ) (held : List Auth) (fc : FireCtx φ) : Option (AffordanceIntent φ) :=
+@[expose] def fire (aff : CellAffordance φ) (held : List Auth) (fc : FireCtx φ) : Option (AffordanceIntent φ) :=
   if fireGate aff.required held then
     some { surface := { firedEffect := aff.effect, boundRoot := fc.postCommit },
            effectsHash := fc.effectDigest aff.effect }

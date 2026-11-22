@@ -70,7 +70,7 @@ theorem k1_app_iff (a b r : P.Code) : P.App (P.k1 a) b r ↔ r = a :=
   ⟨fun h => P.app_det h (P.k1_app a b), fun h => h ▸ P.k1_app a b⟩
 
 /-- The identity code `S K K`. -/
-@[expose] def i : P.Code := P.s2 P.k P.k
+def i : P.Code := P.s2 P.k P.k
 
 theorem i_app (a r : P.Code) : P.App P.i a r ↔ r = a := by
   unfold i
@@ -83,7 +83,7 @@ theorem i_app (a r : P.Code) : P.App P.i a r ↔ r = a := by
     exact ⟨P.k1 r, P.k1 r, P.k_app r, P.k_app r, P.k1_app r _⟩
 
 /-- An environment with `x` rebound to `a`. -/
-@[expose] def update {P : PCA} (ρ : Nat → P.Code) (x : Nat) (a : P.Code) : Nat → P.Code :=
+def update {P : PCA} (ρ : Nat → P.Code) (x : Nat) (a : P.Code) : Nat → P.Code :=
   fun y => if y = x then a else ρ y
 
 theorem update_same {P : PCA} (ρ : Nat → P.Code) (x : Nat) (a : P.Code) : update ρ x a x = a := by
@@ -105,7 +105,7 @@ namespace CombTerm
 variable {P : PCA}
 
 /-- Big-step evaluation of a term in an environment. -/
-@[expose] def Eval (ρ : Nat → P.Code) : CombTerm P → P.Code → Prop
+def Eval (ρ : Nat → P.Code) : CombTerm P → P.Code → Prop
   | .var n, r => r = ρ n
   | .const c, r => r = c
   | .ap t u, r => ∃ f a, Eval ρ t f ∧ Eval ρ u a ∧ P.App f a r
@@ -124,14 +124,14 @@ theorem eval_det (ρ : Nat → P.Code) (t : CombTerm P) {r r' : P.Code}
     exact P.app_det hr hr'
 
 /-- Bracket abstraction `λ*x. t` as a term: `S K K` at `x`, `K y` at other leaves, `S` at nodes. -/
-@[expose] def abst (x : Nat) : CombTerm P → CombTerm P
+def abst (x : Nat) : CombTerm P → CombTerm P
   | .var n =>
     if n = x then .ap (.ap (.const P.s) (.const P.k)) (.const P.k) else .ap (.const P.k) (.var n)
   | .const c => .ap (.const P.k) (.const c)
   | .ap t u => .ap (.ap (.const P.s) (abst x t)) (abst x u)
 
 /-- The code `λ*x. t` denotes in `ρ`, computed without evaluating anything. -/
-@[expose] def lamCode (x : Nat) (ρ : Nat → P.Code) : CombTerm P → P.Code
+def lamCode (x : Nat) (ρ : Nat → P.Code) : CombTerm P → P.Code
   | .var n => if n = x then P.i else P.k1 (ρ n)
   | .const c => P.k1 c
   | .ap t u => P.s2 (lamCode x ρ t) (lamCode x ρ u)
@@ -186,7 +186,7 @@ theorem lamCode_update (x : Nat) (ρ : Nat → P.Code) (b : P.Code) (t : CombTer
 
 /-- The term pairing `A` with `B`: `S (S I (K A)) (K B)`, built by application so that it can sit
 under an abstraction. -/
-@[expose] def pairT (A B : CombTerm P) : CombTerm P :=
+def pairT (A B : CombTerm P) : CombTerm P :=
   .ap (.ap (.const P.s) (.ap (.ap (.const P.s) (.const P.i)) (.ap (.const P.k) A)))
     (.ap (.const P.k) B)
 
@@ -199,7 +199,7 @@ variable (P : PCA)
 open CombTerm
 
 /-- The pair of `a` and `b`: `λ*z. z a b`. -/
-@[expose] def pairCode (a b : P.Code) : P.Code := P.s2 (P.s2 P.i (P.k1 a)) (P.k1 b)
+def pairCode (a b : P.Code) : P.Code := P.s2 (P.s2 P.i (P.k1 a)) (P.k1 b)
 
 /-- `λ*p. p c`. -/
 theorem selfApp_iff (c p r : P.Code) : P.App (P.s2 P.i (P.k1 c)) p r ↔ P.App p c r := by
@@ -223,10 +223,10 @@ theorem pairCode_app (a b z r : P.Code) :
     exact ⟨fx, b, (P.selfApp_iff a z fx).2 h1, P.k1_app b z, h3⟩
 
 /-- First projection `λ*p. p K`. -/
-@[expose] def fstCode : P.Code := P.s2 P.i (P.k1 P.k)
+def fstCode : P.Code := P.s2 P.i (P.k1 P.k)
 
 /-- Second projection `λ*p. p (K I)`. -/
-@[expose] def sndCode : P.Code := P.s2 P.i (P.k1 (P.k1 P.i))
+def sndCode : P.Code := P.s2 P.i (P.k1 (P.k1 P.i))
 
 theorem fst_pair (a b : P.Code) : P.App P.fstCode (P.pairCode a b) a :=
   (P.selfApp_iff P.k (P.pairCode a b) a).2
@@ -247,14 +247,14 @@ theorem eval_pairT {ρ : Nat → P.Code} {A B : CombTerm P} {a b : P.Code}
     ⟨P.k, b, rfl, hB, P.k_app _⟩, P.s1_app _ _⟩
 
 /-- Sequential composition `λ*x. e' (e x)`. -/
-@[expose] def seqCode (e e' : P.Code) : P.Code := P.s2 (P.k1 e') e
+def seqCode (e e' : P.Code) : P.Code := P.s2 (P.k1 e') e
 
 theorem seqCode_app {e e' x y z : P.Code} (h : P.App e x y) (h' : P.App e' y z) :
     P.App (P.seqCode e e') x z :=
   (P.s2_app _ _ _ _).2 ⟨e', y, P.k1_app e' x, h, h'⟩
 
 /-- Pairing of evidence `λ*x. ⟨e₁ x, e₂ x⟩`. -/
-@[expose] def pairEv (e₁ e₂ : P.Code) : P.Code :=
+def pairEv (e₁ e₂ : P.Code) : P.Code :=
   (pairT (.ap (.const e₁) (.var 0)) (.ap (.const e₂) (.var 0))).lamCode 0 (fun _ => P.k)
 
 theorem pairEv_app {e₁ e₂ x a b : P.Code} (h₁ : P.App e₁ x a) (h₂ : P.App e₂ x b) :
@@ -268,13 +268,13 @@ theorem pairEv_app {e₁ e₂ x a b : P.Code} (h₁ : P.App e₁ x a) (h₂ : P.
     exact ⟨e₂, x, rfl, (update_same _ 0 x).symm, h₂⟩
 
 /-- The body of a curried evidence: `e ⟨x₀, x₁⟩`. -/
-@[expose] def curryBody (e : P.Code) : CombTerm P := .ap (.const e) (pairT (.var 0) (.var 1))
+def curryBody (e : P.Code) : CombTerm P := .ap (.const e) (pairT (.var 0) (.var 1))
 
 /-- Currying of evidence `λ*a. λ*b. e ⟨a, b⟩`. -/
-@[expose] def lamEv (e : P.Code) : P.Code := ((P.curryBody e).abst 1).lamCode 0 (fun _ => P.k)
+def lamEv (e : P.Code) : P.Code := ((P.curryBody e).abst 1).lamCode 0 (fun _ => P.k)
 
 /-- The closure `lamEv e` returns on `a`. -/
-@[expose] def lamEvAt (e a : P.Code) : P.Code :=
+def lamEvAt (e a : P.Code) : P.Code :=
   (P.curryBody e).lamCode 1 (update (fun _ => P.k) 0 a)
 
 theorem lamEv_app (e a : P.Code) : P.App (P.lamEv e) a (P.lamEvAt e a) := by
@@ -294,7 +294,7 @@ theorem lamEvAt_app {e a b r : P.Code} (h : P.App e (P.pairCode a b) r) :
     rw [update_same]
 
 /-- Evaluation evidence `λ*p. (fst p) (snd p)`. -/
-@[expose] def evalCode : P.Code := P.s2 P.fstCode P.sndCode
+def evalCode : P.Code := P.s2 P.fstCode P.sndCode
 
 theorem evalCode_app {f a r : P.Code} (h : P.App f a r) :
     P.App P.evalCode (P.pairCode f a) r :=
@@ -483,7 +483,7 @@ theorem CapApp.det {f a r r' : CapCode} (h : CapApp f a r) (h' : CapApp f a r') 
      fun ⟨_, _, h1, h2, h3⟩ => .s2 h1 h2 h3⟩
 
 /-- Fuel-bounded application: the evaluator a host runs. -/
-@[expose] def capApply : Nat → CapCode → CapCode → Option CapCode
+def capApply : Nat → CapCode → CapCode → Option CapCode
   | 0, _, _ => none
   | _ + 1, .k, a => some (.k1 a)
   | _ + 1, .k1 a, _ => some a
@@ -584,7 +584,7 @@ theorem capApply_complete {f a r : CapCode} (h : CapApp f a r) :
     simp [capApply, hd]
 
 /-- The proposition "is the token with exactly these rights". -/
-@[expose] def holdsCap (rights : UInt64) : CapCode → Prop := fun c => c = .cap rights
+def holdsCap (rights : UInt64) : CapCode → Prop := fun c => c = .cap rights
 
 /-- Attenuation is evidence in the realizability frame of `capPCA`, and it only narrows. -/
 theorem attenuate_leads (rights mask : UInt64) :
@@ -605,7 +605,7 @@ theorem attenuate_seq_leads (rights m₁ m₂ : UInt64) :
 /-! ## 5. Morris sealer/unsealer: authority is not additive -/
 
 /-- Bit `i` of a rights mask. -/
-@[expose] def hasRight (m : UInt64) (i : Nat) : Prop := m.toBitVec.getLsbD i = true
+def hasRight (m : UInt64) (i : Nat) : Prop := m.toBitVec.getLsbD i = true
 
 theorem hasRight_or (a b : UInt64) (i : Nat) : hasRight (a ||| b) i ↔ hasRight a i ∨ hasRight b i := by
   simp [hasRight]
@@ -624,7 +624,7 @@ inductive SealCap where
   deriving @[expose] DecidableEq, Repr
 
 /-- One step of the authority fold, against the whole holding `h`. -/
-@[expose] def authorityStep (h : List SealCap) (acc : UInt64) : SealCap → UInt64
+def authorityStep (h : List SealCap) (acc : UInt64) : SealCap → UInt64
   | .direct r => acc ||| r
   | .sealBox b p => if h.contains (.unsealer b) then acc ||| p else acc
   | .unsealer _ => acc
@@ -632,7 +632,7 @@ inductive SealCap where
 /-- The authority of a holding: its direct rights, and the payload of every box whose unsealer is
 also held. The unsealer lookup is a scan of the holding, so this is quadratic in the number of
 boxes times unsealers. -/
-@[expose] def authority (h : List SealCap) : UInt64 := h.foldl (authorityStep h) 0
+def authority (h : List SealCap) : UInt64 := h.foldl (authorityStep h) 0
 
 private theorem authority_fold_spec (h l : List SealCap) (acc : UInt64) (i : Nat) :
     hasRight (l.foldl (authorityStep h) acc) i ↔

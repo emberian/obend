@@ -37,7 +37,7 @@ three more things of a page, and this module is them:
   same edit name it the same and their merge is clean (`compatible_of_addressed`).
 -/
 public import Obend.Doc
-@[expose] public section
+public section
 
 namespace Obend.Vault
 
@@ -494,7 +494,7 @@ theorem deletions_apply_eq_zero (G : Graph) (p : Patch) (hf : Patch.forward p = 
   rw [deletions_apply G p hf, List.countP_eq_zero]
   constructor
   · intro h a ha hd hm
-    exact h a ha (by simp [hd, List.contains_iff_mem, hm])
+    exact h a ha (by simp [hd, hm])
   · intro h a ha hc
     simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true, List.contains_iff_mem] at hc
     exact h a ha hc.1 hc.2

@@ -47,7 +47,7 @@ posting): the proof that posting once is kept no longer checks.
 public import Obend.Fold
 public import Obend.Run.Fork
 public import Obend.Tactic.Tooth
-@[expose] public section
+public section
 
 namespace Obend.Ledger
 
@@ -154,7 +154,7 @@ theorem template_balanced (t : Template) (h : (t.debits.map (·.2)).Perm (t.cred
 /-- Debit and credit totals per account. -/
 abbrev Totals := List (String × Nat × Nat)
 
-def Totals.get (t : Totals) (a : String) : Nat × Nat := (t.lookup a).getD (0, 0)
+@[expose] def Totals.get (t : Totals) (a : String) : Nat × Nat := (t.lookup a).getD (0, 0)
 
 /-- Add a debit and a credit to an account. -/
 def bump : Totals → String → Nat → Nat → Totals
@@ -368,7 +368,7 @@ theorem step_post_ok {law : Law} {w : Nat} {g : Reg} {p : Posting} {b : Nat × R
 
 /-- **The register as an audited fold.** The world is the closed-through period; a posting reads
 whether its period is open; a close is the move, allowed when it does not decrease the period. -/
-def register (law : Law) : Obend.Fold.Admission Nat Reg Row Fact Clause where
+@[expose] def register (law : Law) : Obend.Fold.Admission Nat Reg Row Fact Clause where
   step := step law
   reads _ r := match r with
     | .post p => [.isOpen p.period]
@@ -581,10 +581,14 @@ theorem net_conserved (p : Posting) (hb : p.debits = p.credits) (accts : List St
 
 /-! ## Posted once -/
 
-@[simp] theorem numbered_doc (p : Posting) (i : String) : (p.numbered i).doc = p.doc := rfl
-@[simp] theorem numbered_origin (p : Posting) (i : String) : (p.numbered i).origin = p.origin := rfl
-@[simp] theorem numbered_reverses (p : Posting) (i : String) : (p.numbered i).reverses = p.reverses := rfl
-@[simp] theorem numbered_id (p : Posting) (i : String) : (p.numbered i).id = i := rfl
+@[simp] theorem numbered_doc (p : Posting) (i : String) : (p.numbered i).doc = p.doc := by
+  simp only [Posting.numbered]
+@[simp] theorem numbered_origin (p : Posting) (i : String) : (p.numbered i).origin = p.origin := by
+  simp only [Posting.numbered]
+@[simp] theorem numbered_reverses (p : Posting) (i : String) : (p.numbered i).reverses = p.reverses := by
+  simp only [Posting.numbered]
+@[simp] theorem numbered_id (p : Posting) (i : String) : (p.numbered i).id = i := by
+  simp only [Posting.numbered]
 
 /-- **A second posting of a document is refused by name**, naming its live posting. -/
 theorem twice_refused (w : Nat) (g : Reg) (p q : Posting) (hopen : w < p.period)
@@ -781,7 +785,8 @@ def Reg.accountBalance (g : Reg) (a : String) : Int :=
   (g.postings.map (·.accountDelta a)).sum
 
 @[simp] theorem Reg.accountBalance_empty (a : String) :
-    (⟨[]⟩ : Reg).accountBalance a = 0 := rfl
+    (⟨[]⟩ : Reg).accountBalance a = 0 := by
+  simp only [Reg.accountBalance, List.map_nil, List.sum_nil]
 
 @[simp] theorem Reg.accountBalance_append (g : Reg) (p : Posting) (a : String) :
     (⟨g.postings ++ [p]⟩ : Reg).accountBalance a = g.accountBalance a + p.accountDelta a := by

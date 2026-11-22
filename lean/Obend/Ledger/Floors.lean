@@ -26,9 +26,10 @@ Mathlib-free port of `minidregg/Theory/CanonicalResourceKernel.lean` unified dir
      balance agreement, register debit/credit conservation, and floor preservation on `Reg`.
 -/
 public import Obend.Ledger.Register
+import all Obend.Ledger.Register
 import Obend.Tactic.Tooth
 
-@[expose] public section
+public section
 namespace Obend.Ledger
 
 set_option autoImplicit false
@@ -41,14 +42,14 @@ abbrev LeaseId := Nat
 abbrev Epoch := Nat
 
 /-- Floor of the protected numeric coordinate space (`≥ 2^256`). -/
-def protectedBase : Nat := 2 ^ 256
+abbrev protectedBase : Nat := 2 ^ 256
 
 theorem protectedBase_pos : 0 < protectedBase :=
   Nat.two_pow_pos 256
 
 /-- Issuer-well coordinate in the `AccountId` space (`≥ 2 * protectedBase`), disjoint from
     both ordinary user accounts (`< protectedBase`) and seat/escrow accounts (`[protectedBase, 2 * protectedBase)`). -/
-def issuerWellAccount (ast : AssetId) : AccountId :=
+abbrev issuerWellAccount (ast : AssetId) : AccountId :=
   2 * protectedBase + ast
 
 theorem issuerWellAccount_ne_ordinary {u : AccountId} (hu : u < protectedBase) (ast : AssetId) :
@@ -66,16 +67,16 @@ inductive AccountKind where
   | feePool
   /-- A credit-capable member account: the only kind whose `creditLimit` policy is honoured. -/
   | member
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Typed account address pairing an `AccountKind` namespace with a numeric identifier. -/
 structure AccountAddr where
   kind : AccountKind
   id   : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- Pure Lean 4 duplicate-free deduplication (`dedupLocal`) with constructive `mem` and `Nodup` proofs. -/
-def dedupLocal {α : Type} [DecidableEq α] : List α → List α
+@[expose] def dedupLocal {α : Type} [DecidableEq α] : List α → List α
   | [] => []
   | x :: xs => if decide (x ∈ xs) then dedupLocal xs else x :: dedupLocal xs
 
@@ -168,10 +169,10 @@ theorem takeWhile_append_sep : ∀ (xs ys : List Char),
 
 namespace AccountAddr
 
-def user (id : Nat) : AccountAddr := ⟨.user, id⟩
-def issuerWell (ast : AssetId) : AccountAddr := ⟨.issuerWell, ast⟩
-def seat (id : Nat) : AccountAddr := ⟨.seat, id⟩
-def escrow (id : Nat) : AccountAddr := ⟨.escrow, id⟩
+@[expose] def user (id : Nat) : AccountAddr := ⟨.user, id⟩
+abbrev issuerWell (ast : AssetId) : AccountAddr := ⟨.issuerWell, ast⟩
+abbrev seat (id : Nat) : AccountAddr := ⟨.seat, id⟩
+abbrev escrow (id : Nat) : AccountAddr := ⟨.escrow, id⟩
 def feePool (id : Nat) : AccountAddr := ⟨.feePool, id⟩
 def member (id : Nat) : AccountAddr := ⟨.member, id⟩
 
@@ -301,20 +302,20 @@ end AccountAddr
     Supports `DecidableEq` and `Repr` with zero function closures. -/
 structure FinMap (K : Type) where
   entries : List (K × Int)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 namespace FinMap
 
-def empty {K : Type} : FinMap K := ⟨[]⟩
+abbrev empty {K : Type} : FinMap K := ⟨[]⟩
 
-def get {K : Type} [DecidableEq K] (m : FinMap K) (k : K) : Int :=
+@[expose] def get {K : Type} [DecidableEq K] (m : FinMap K) (k : K) : Int :=
   ((m.entries.filter (fun p => p.1 == k)).map Prod.snd).sum
 
 @[simp] theorem get_empty {K : Type} [DecidableEq K] (k : K) :
     (empty : FinMap K).get k = 0 := rfl
 
 /-- Add signed delta `d` at key `k` (skipping zero deltas to keep logs compact). -/
-def addDelta {K : Type} (m : FinMap K) (k : K) (d : Int) : FinMap K :=
+@[expose] def addDelta {K : Type} (m : FinMap K) (k : K) (d : Int) : FinMap K :=
   if d == 0 then m else ⟨(k, d) :: m.entries⟩
 
 @[simp] theorem get_addDelta {K : Type} [DecidableEq K] (m : FinMap K) (k k' : K) (d : Int) :
@@ -385,7 +386,8 @@ theorem zero_of_not_mem_support {K : Type} [DecidableEq K] (m : FinMap K) {k : K
 def totalSum {K : Type} (m : FinMap K) : Int :=
   (m.entries.map Prod.snd).sum
 
-@[simp] theorem totalSum_empty {K : Type} : (empty : FinMap K).totalSum = 0 := rfl
+@[simp] theorem totalSum_empty {K : Type} : (empty : FinMap K).totalSum = 0 := by
+  simp only [totalSum, List.map_nil, List.sum_nil]
 
 @[simp] theorem totalSum_addDelta {K : Type} (m : FinMap K) (k : K) (d : Int) :
     (m.addDelta k d).totalSum = m.totalSum + d := by
@@ -419,19 +421,19 @@ structure TypedPosting where
   destination : AccountAddr
   asset       : AssetId
   amount      : Nat
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 /-- A floor with its sign carried by the constructor, never inferred from a bare `Nat`. -/
 inductive FloorPolicy where
   | creditLimit (limit : Nat)
   | minReserve (reserve : Nat)
   | issuerWell (cap : Option Nat)
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
 namespace FloorPolicy
 
 /-- The least admitted balance, or `none` when unbounded below. -/
-def floor? : FloorPolicy → Option Int
+@[expose] def floor? : FloorPolicy → Option Int
   | .creditLimit limit => some (-(limit : Int))
   | .minReserve reserve => some (reserve : Int)
   | .issuerWell (some cap) => some (-(cap : Int))
@@ -455,7 +457,8 @@ theorem issuerWell_capped_admits_iff (cap : Nat) (bal : Int) :
     (issuerWell (some cap)).admits bal = true ↔ -(cap : Int) ≤ bal := by
   simp [admits, floor?]
 
-theorem issuerWell_uncapped_admits (bal : Int) : (issuerWell none).admits bal = true := rfl
+theorem issuerWell_uncapped_admits (bal : Int) : (issuerWell none).admits bal = true := by
+  simp only [admits, floor?]
 
 /-- Polarity is observable: for `0 < n` the balance `-n` is admitted by the credit line `n` and
 refused by the reserve `n`. A kernel that reads one as the other admits or refuses that balance
@@ -475,11 +478,11 @@ structure FloorBook where
   balances   : FinMap (AccountAddr × AssetId) := FinMap.empty
   policies   : List ((AccountAddr × AssetId) × FloorPolicy) := []
   issuerCaps : List (AssetId × Nat) := []
-  deriving DecidableEq, Repr
+  deriving @[expose] DecidableEq, Repr
 
-def FloorBook.empty : FloorBook := {}
+abbrev FloorBook.empty : FloorBook := {}
 
-def FloorBook.balance (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : Int :=
+abbrev FloorBook.balance (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : Int :=
   fb.balances.get (addr, ast)
 
 /-- The policy in force at `(addr, ast)`:
@@ -489,7 +492,7 @@ def FloorBook.balance (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : In
       `issuerWell` entry on an account that is not that asset's well, it falls back to the
       reserve `0`;
     - a `minReserve` entry is honoured on every account but an asset's own issuer well. -/
-def FloorBook.policyOf (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : FloorPolicy :=
+@[expose] def FloorBook.policyOf (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : FloorPolicy :=
   if addr.kind = .issuerWell ∧ addr.id = ast then .issuerWell (fb.issuerCaps.lookup ast)
   else
     match fb.policies.lookup (addr, ast) with
@@ -499,7 +502,7 @@ def FloorBook.policyOf (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : F
     | none => .minReserve 0
 
 /-- Minimum allowed balance for `(addr, ast)`: the floor of the policy in force. -/
-def FloorBook.minBalance? (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : Option Int :=
+abbrev FloorBook.minBalance? (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : Option Int :=
   (fb.policyOf addr ast).floor?
 
 /-- Only an asset's own issuer well is ever unbounded or issuer-capped. -/
@@ -530,13 +533,13 @@ theorem FloorBook.nonIssuer_floor_nonneg (fb : FloorBook) (addr : AccountAddr) (
   | issuerWell cap => exact absurd (fb.policyOf_issuerWell hp).1 hkind
 
 /-- Predicate that a single `(addr, ast)` balance respects its floor. -/
-def FloorBook.accountFloorHoldsB (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : Bool :=
+@[expose] def FloorBook.accountFloorHoldsB (fb : FloorBook) (addr : AccountAddr) (ast : AssetId) : Bool :=
   match fb.minBalance? addr ast with
   | none   => true
   | some f => decide (f ≤ fb.balance addr ast)
 
 /-- Global floor invariant: every account and asset in the universe respects its floor. -/
-def FloorsHold (fb : FloorBook) : Prop :=
+@[expose] def FloorsHold (fb : FloorBook) : Prop :=
   ∀ (addr : AccountAddr) (ast : AssetId),
     match fb.minBalance? addr ast with
     | none   => True
@@ -592,10 +595,11 @@ def FloorBook.assetSum (fb : FloorBook) (ast : AssetId) : Int :=
   ((fb.balances.entries.filter (fun p => p.1.2 == ast)).map Prod.snd).sum
 
 @[simp] theorem FloorBook.assetSum_empty (ast : AssetId) :
-    FloorBook.empty.assetSum ast = 0 := rfl
+    FloorBook.empty.assetSum ast = 0 := by
+  simp only [FloorBook.assetSum, List.filter_nil, List.map_nil, List.sum_nil]
 
 /-- Raw posting application (debiting `source` and crediting `destination`). -/
-def FloorBook.applyRaw (fb : FloorBook) (p : TypedPosting) : FloorBook :=
+@[expose] def FloorBook.applyRaw (fb : FloorBook) (p : TypedPosting) : FloorBook :=
   { fb with
     balances :=
       (fb.balances.addDelta (p.source, p.asset) (-(p.amount : Int))).addDelta
@@ -618,7 +622,8 @@ theorem FloorBook.balance_applyRaw (fb : FloorBook) (p : TypedPosting)
 
 @[simp] theorem FloorBook.minBalance?_applyRaw (fb : FloorBook) (p : TypedPosting)
     (addr : AccountAddr) (ast : AssetId) :
-    (fb.applyRaw p).minBalance? addr ast = fb.minBalance? addr ast := rfl
+    (fb.applyRaw p).minBalance? addr ast = fb.minBalance? addr ast := by
+  simp only [FloorBook.minBalance?, FloorBook.policyOf, FloorBook.applyRaw]
 
 theorem assetSum_addDelta (m : FinMap (AccountAddr × AssetId))
     (addr : AccountAddr) (pAst ast : AssetId) (d : Int) :
@@ -651,7 +656,7 @@ theorem FloorBook.applyRaw_conserves_asset (fb : FloorBook) (p : TypedPosting) (
 
 /-- Floor-checked posting admission: verifies that after applying `p`, `p.source` still satisfies
     its floor (`accountFloorHoldsB`). -/
-def FloorBook.admitPosting (fb : FloorBook) (p : TypedPosting) : Option FloorBook :=
+@[expose] def FloorBook.admitPosting (fb : FloorBook) (p : TypedPosting) : Option FloorBook :=
   if (fb.applyRaw p).accountFloorHoldsB p.source p.asset then
     some (fb.applyRaw p)
   else
@@ -695,7 +700,7 @@ theorem FloorBook.admitPosting_preserves_floors {fb fb' : FloorBook} (p : TypedP
   · cases hadm
 
 /-- Batch floor-checked posting execution. -/
-def FloorBook.admitBatch : FloorBook → List TypedPosting → Option FloorBook
+@[expose] def FloorBook.admitBatch : FloorBook → List TypedPosting → Option FloorBook
   | fb, [] => some fb
   | fb, p :: ps =>
     match fb.admitPosting p with
@@ -760,7 +765,7 @@ def Reg.appendTypedPosting (g : Reg) (p : TypedPosting) (doc origin : String) (p
   ⟨g.postings ++ [p.toRegPosting g.number doc origin period]⟩
 
 /-- Fold a batch of `(TypedPosting, doc, origin)` items onto both `FloorBook` and `Register.Reg`. -/
-def realizeBatchOnReg : List (TypedPosting × String × String) → FloorBook → Reg → Option (FloorBook × Reg)
+@[expose] def realizeBatchOnReg : List (TypedPosting × String × String) → FloorBook → Reg → Option (FloorBook × Reg)
   | [], fb, g => some (fb, g)
   | (p, doc, orig) :: rest, fb, g =>
     match fb.admitPosting p with
@@ -816,6 +821,17 @@ theorem realizeBatchOnReg_sound {items : List (TypedPosting × String × String)
       obtain ⟨hag', hfl', hnonneg', hcons'⟩ := ih hfl1 h_agree1 hrun
       exact ⟨hag', hfl', hnonneg', fun ast => (hcons' ast).trans (hcons1 ast)⟩
     · cases hrun
+
+/-- Non-vacuity witness for `realizeBatchOnReg_sound`: an empty `FloorBook` and empty `Reg`
+    admit a concrete issuer-well minting batch while satisfying all soundness premises. -/
+theorem realizeBatchOnReg_inhabited :
+    ∃ (items : List (TypedPosting × String × String)) (fb fb' : FloorBook) (g g' : Reg),
+      FloorsHold fb ∧
+      (∀ (addr : AccountAddr) (ast : AssetId),
+        g.accountBalance (addr.toRegAccount ast) = fb.balance addr ast) ∧
+      realizeBatchOnReg items fb g = some (fb', g') := by
+  refine ⟨[(⟨.issuerWell 0, .user 1, 0, 10⟩, "mint-1", "orig-1")],
+    FloorBook.empty, _, ⟨[]⟩, _, floorsHold_empty, fun _ _ => rfl, rfl⟩
 
 /-! ## 5. Teeth: floor polarity (gate G2) -/
 
