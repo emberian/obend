@@ -433,6 +433,20 @@ module = "Obend.Lower.Proofs.Complete"
 theorem = "ltyped_iff_checkL"
 description = "Executable Lean-fragment checker `checkL` is both sound and complete with respect to inductive typing `ltyped`."
 
+[[apex]]
+id = "lower-lcnf-pancake-batch-sound"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake"
+theorem = "runCompiledLcnfBatch_sound"
+description = "Multi-turn first-order `LcnfCode` batch compilation to CakeML Pancake `PStmt` refines `evalLcnfCode` and `Core4` under path-sensitive `CondSClk` fuel with zero `TimeOut`/`Error`."
+
+[[apex]]
+id = "lower-pancake-sclk-refinement"
+subsystem = "Lower"
+module = "Obend.Lower.Pancake.RefinesClkPan"
+theorem = "sclk_refinesClkPan"
+description = "Path-sensitive `SClk` (`cond` max-branching, clock-consuming `loop`, intra-module `call`) implies non-vacuous entry-preconditioned `RefinesClkPan` over HOL4-faithful `PanSem.evaluate`."
+
 # ==============================================================================
 # 8. `Consensus` — Multi-Tier Finality, Simplex BFT & Unified DeOS Settlement
 # ==============================================================================

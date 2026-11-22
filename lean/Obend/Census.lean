@@ -474,6 +474,12 @@ import Obend.Lower.Fragment
 import Obend.Lower.Inductive
 import Obend.Lower.Judge
 import Obend.Lower.LCNF
+import Obend.Lower.Pancake
+import Obend.Lower.Pancake.CondSClk
+import Obend.Lower.Pancake.LcnfEmit
+import Obend.Lower.Pancake.LcnfSimHelpers
+import Obend.Lower.Pancake.PanSem
+import Obend.Lower.Pancake.RefinesClkPan
 import Obend.Lower.LeanKernel
 import Obend.Lower.MetaUnify
 import Obend.Lower.Proofs.Book
@@ -654,6 +660,7 @@ import Obend.Teeth.Logic.GroundTeeth
 import Obend.Teeth.Logic.LateBindingTeeth
 import Obend.Teeth.Lower.Fixtures
 import Obend.Teeth.Lower.LowerTeeth
+import Obend.Teeth.Lower.PancakeTeeth
 import Obend.Teeth.Spec.C4Teeth
 import Obend.Teeth.Spec.LawCompileTeeth
 import Obend.Teeth.Spec.TermWire
