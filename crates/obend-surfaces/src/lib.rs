@@ -8,6 +8,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod epiphany;
+
 /// Maximum nesting depth permitted by the canonical codec (matches `deos-view/src/tree.rs:1103`).
 pub const MAX_VIEW_DEPTH: usize = 16;
 /// Maximum total nodes permitted by the canonical codec (matches `deos-view/src/tree.rs:1105`).
