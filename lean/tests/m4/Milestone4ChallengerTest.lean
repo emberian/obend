@@ -295,34 +295,37 @@ def testMultiCellTurnLatticeJoins : IO Unit := do
   let q := FinalityTier.quorum_final
   let c := FinalityTier.collapsed
 
+  -- turns without a pushout witness (custody / bounded-budget writes) floor at quorum_final
+  let tc := fun (cells : List FinalityTier) => turnCommitTier (⟨id, cells, none⟩ : TurnOp maxNat (· ≤ 100))
+
   -- 6.1 Floor rule: empty and below-quorum lists commit at quorum_final
-  assertChallenger "turnCommitTier [] = quorum_final" (turnCommitTier [] == q)
-  assertChallenger "turnCommitTier [s] = quorum_final" (turnCommitTier [s] == q)
-  assertChallenger "turnCommitTier [s, s, s] = quorum_final" (turnCommitTier [s, s, s] == q)
-  assertChallenger "turnCommitTier [s, a] = quorum_final" (turnCommitTier [s, a] == q)
-  assertChallenger "turnCommitTier [a, a] = quorum_final" (turnCommitTier [a, a] == q)
-  assertChallenger "turnCommitTier [a, q] = quorum_final" (turnCommitTier [a, q] == q)
-  assertChallenger "turnCommitTier [q, q] = quorum_final" (turnCommitTier [q, q] == q)
+  assertChallenger "turnCommitTier [] = quorum_final" (tc [] == q)
+  assertChallenger "turnCommitTier [s] = quorum_final" (tc [s] == q)
+  assertChallenger "turnCommitTier [s, s, s] = quorum_final" (tc [s, s, s] == q)
+  assertChallenger "turnCommitTier [s, a] = quorum_final" (tc [s, a] == q)
+  assertChallenger "turnCommitTier [a, a] = quorum_final" (tc [a, a] == q)
+  assertChallenger "turnCommitTier [a, q] = quorum_final" (tc [a, q] == q)
+  assertChallenger "turnCommitTier [q, q] = quorum_final" (tc [q, q] == q)
 
   -- 6.2 Collapsed promotion: any collapsed cell lifts entire turn to collapsed
-  assertChallenger "turnCommitTier [c] = collapsed" (turnCommitTier [c] == c)
-  assertChallenger "turnCommitTier [s, c] = collapsed" (turnCommitTier [s, c] == c)
-  assertChallenger "turnCommitTier [c, s] = collapsed" (turnCommitTier [c, s] == c)
-  assertChallenger "turnCommitTier [a, c] = collapsed" (turnCommitTier [a, c] == c)
-  assertChallenger "turnCommitTier [q, c] = collapsed" (turnCommitTier [q, c] == c)
-  assertChallenger "turnCommitTier [s, a, q, c] = collapsed" (turnCommitTier [s, a, q, c] == c)
+  assertChallenger "turnCommitTier [c] = collapsed" (tc [c] == c)
+  assertChallenger "turnCommitTier [s, c] = collapsed" (tc [s, c] == c)
+  assertChallenger "turnCommitTier [c, s] = collapsed" (tc [c, s] == c)
+  assertChallenger "turnCommitTier [a, c] = collapsed" (tc [a, c] == c)
+  assertChallenger "turnCommitTier [q, c] = collapsed" (tc [q, c] == c)
+  assertChallenger "turnCommitTier [s, a, q, c] = collapsed" (tc [s, a, q, c] == c)
 
   -- 6.3 Commutativity and order invariance
   let p1 := [s, a, c]
   let p2 := [c, a, s]
   let p3 := [a, c, s]
   assertChallenger "turnCommitTier is order-invariant across cell permutations"
-    (turnCommitTier p1 == turnCommitTier p2 && turnCommitTier p2 == turnCommitTier p3)
+    (tc p1 == tc p2 && tc p2 == tc p3)
 
   -- 6.4 State write admission invariant: all turnCommitTier results admit stateWrite
   let testLists := [[], [s], [a], [q], [c], [s, a], [s, q], [s, c], [a, q, c]]
   for cellList in testLists do
-    let tier := turnCommitTier cellList
+    let tier := tc cellList
     assertChallenger s!"turnCommitTier admits stateWrite for tier {tier.rank}"
       (admitsOp tier .stateWrite == true)
 

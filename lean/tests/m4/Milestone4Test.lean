@@ -73,8 +73,8 @@ def test_finality_ladder : Bool :=
   (promoteStep q (.collapseRoot ByteArray.empty) == some c) &&
   (promoteStep q (.attestTurn ByteArray.empty) == none) &&
   -- Multi-cell turn commit lattice join
-  (turnCommitTier [s, a] == q) &&
-  (turnCommitTier [s, c] == c)
+  (turnCommitTier (⟨id, [s, a], none⟩ : TurnOp maxNat (· ≤ 100)) == q) &&
+  (turnCommitTier (⟨id, [s, c], none⟩ : TurnOp maxNat (· ≤ 100)) == c)
 
 #guard test_finality_ladder == true
 

@@ -32,7 +32,7 @@ set_option autoImplicit false
 #print axioms collapsed_is_terminal
 #print axioms joinTier_dominates
 #print axioms turnCommitTier_dominates_cells
-#print axioms turnCommitTier_admits_stateWrite
+#print axioms turnCommitTier_admits_write
 #print axioms FinalityGate.init_wf
 #print axioms advanceGate_advances
 

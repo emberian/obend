@@ -17,7 +17,18 @@ Binds Obend's 4-tier finality ladder directly to `SimplexProtocol` (`Protocol`, 
 ## Core Metatheorems:
 - `rank_injective`, `speculative_bot`, `collapsed_top`, `admitsOp_mono`, `reachable_no_downgrade`,
   `downgrade_not_a_step`, `downgrade_unreachable`, `collapsed_is_terminal`.
-- `joinTier_dominates`, `turnCommitTier_dominates_cells`, `turnCommitTier_admits_stateWrite`.
+- `joinTier_dominates`, `turnCommitTier_dominates_cells`, `turnCommitTier_admits_write`.
+- `D5` (two-mode coordination): a write commits below the BFT floor only with a verified
+  I-confluence pushout witness (`PushoutWitness`: the operation is the join with a delta under an
+  I-confluent invariant). `admitAtTier_sound`: admitted below `quorum_final` means witnessed;
+  `admitAtGate_sound`: admitted at a `SimplexFinalityGate` means witnessed or a checking `FinCert`
+  (`n - f` finalize votes, `Finalized`). Witnessed operations commute and keep the invariant along
+  any order of any number of them (`confluent_diamond`, `applyWitnessed_perm`,
+  `applyWitnessed_keeps`); `docMerge_tombstones_join`: `Doc.Merge`'s pushout is that join on
+  tombstones. `nonconfluent_debit_refused_below_byzantine`: a balance debit carries no witness in
+  any semilattice (`PushoutWitness.idempotent`), so it is refused at Tier 0 and Tier 1.
+  Policy names (`minidregg` `Theory/Finality.lean`): `speculative` is `LocalOptimistic`,
+  `attested` `EquivocationBounded`, `quorum_final` `Byzantine`.
 - `advanceSimplexGate_quorum_final_sound`: `.quorum_final` promotion requires a checking
   `SimplexProtocol.FinCert` and implies `SimplexProtocol.Finalized`.
 - `quorum_final_gates_unique_per_height`: over any reachable `SimplexProtocol.Reach P sent`,
@@ -33,8 +44,17 @@ public import Obend.Core.Data
 public import Obend.Vault.Hyperedge
 public import Obend.Consensus.SimplexProtocol
 public import Obend.Digest.Cshake256.Seam
+import Obend.Doc.Merge
+import Obend.Tactic.Tooth
 
 public section
+
+/- `Obend.Doc.Graph` (imported privately, for the `Doc.Merge` bridge only, so its instances do not
+reach this module's importers) declares its own `DecidableEq ByteArray`, whose body the kernel does
+not see from here; the gates below decide byte equality by core's instance, so their decisions
+reduce (`§7`). -/
+attribute [-instance] Obend.Doc.instDecidableEqByteArray_obend
+
 namespace Obend.Consensus.Finality
 
 open Obend.Core.Data
@@ -133,6 +153,7 @@ inductive Operation where
   | readUncommitted   -- Dirty read / optimistic query
   | executeReadOnly   -- Deterministic preview / dry run without state mutation
   | stateWrite        -- Mutate cell state / commit deltas to VaultStore
+  | confluentWrite    -- Join a pushout-witnessed delta into merged state: no BFT message
   | immutableArchive  -- Fold into cSHAKE256 Merkle root / historical archive
   deriving Repr
 
@@ -143,6 +164,7 @@ deriving instance @[expose] DecidableEq for Operation
   | .readUncommitted  => .speculative
   | .executeReadOnly  => .attested
   | .stateWrite       => .quorum_final
+  | .confluentWrite   => .speculative
   | .immutableArchive => .collapsed
 
 /-- Check if an operation is permitted at a given finality tier. -/
@@ -231,20 +253,214 @@ theorem joinTier_dominates (ts : List FinalityTier) (t : FinalityTier) (h : t �
       have hle_max := FinalityTier.le_max_right x (joinTier xs)
       exact FinalityTier.le_trans hle_tail hle_max
 
-def turnCommitTier (cells : List FinalityTier) : FinalityTier :=
-  FinalityTier.max .quorum_final (joinTier cells)
+/-! ### The coordination class of a write (`D5`, two-mode coordination)
 
-theorem turnCommitTier_dominates_cells (cells : List FinalityTier) (t : FinalityTier) (h : t ∈ cells) :
-    t ≤ turnCommitTier cells := by
-  have h1 := joinTier_dominates cells t h
-  have h2 := FinalityTier.le_max_right .quorum_final (joinTier cells)
-  exact FinalityTier.le_trans h1 h2
+A write commits at the BFT floor unless it carries a verified pushout witness: the operation is the
+join with a delta in a semilattice replicas merge in, under an invariant that survives the join
+(I-confluence, Bailis et al., VLDB 2014). Two replicas that apply witnessed operations from one state
+reach one state and keep the invariant, so such a write needs no BFT message. -/
 
-theorem turnCommitTier_admits_stateWrite (cells : List FinalityTier) :
-    admitsOp (turnCommitTier cells) .stateWrite = true := by
-  have hq : FinalityTier.quorum_final ≤ turnCommitTier cells :=
-    FinalityTier.le_max_left .quorum_final (joinTier cells)
-  exact admitsOp_mono hq quorum_final_admits_stateWrite
+/-- A join-semilattice replicas merge in. -/
+structure JoinSemilattice (S : Type) where
+  join : S → S → S
+  comm : ∀ a b, join a b = join b a
+  assoc : ∀ a b c, join (join a b) c = join a (join b c)
+  idem : ∀ a, join a a = a
+
+/-- **I-confluence**: the invariant survives the join of any two states that satisfy it. -/
+def IConfluent {S : Type} (L : JoinSemilattice S) (I : S → Prop) : Prop :=
+  ∀ a b, I a → I b → I (L.join a b)
+
+/-- **A pushout witness** for an operation: it is the join with a delta that satisfies an
+I-confluent invariant. -/
+structure PushoutWitness {S : Type} (L : JoinSemilattice S) (I : S → Prop) (apply : S → S) where
+  delta : S
+  apply_eq : ∀ s, apply s = L.join s delta
+  delta_inv : I delta
+  iconf : IConfluent L I
+
+/-- An operation a turn commits: its effect on the merged state, the tiers of the cells it writes,
+and the pushout witness it carries, if any. -/
+structure TurnOp {S : Type} (L : JoinSemilattice S) (I : S → Prop) where
+  apply : S → S
+  cells : List FinalityTier
+  pushout : Option (PushoutWitness L I apply)
+
+section Coordination
+
+variable {S : Type} {L : JoinSemilattice S} {I : S → Prop}
+
+/-- The tier a write cannot commit below: Tier 0 with a pushout witness, the BFT floor without. -/
+def TurnOp.floor (op : TurnOp L I) : FinalityTier :=
+  match op.pushout with
+  | some _ => .speculative
+  | none => .quorum_final
+
+/-- The operation class a write is admitted as. -/
+def TurnOp.writeOp (op : TurnOp L I) : Operation :=
+  match op.pushout with
+  | some _ => .confluentWrite
+  | none => .stateWrite
+
+/-- A turn commits at the join of the cells it writes, floored by its coordination class. -/
+def turnCommitTier (op : TurnOp L I) : FinalityTier :=
+  FinalityTier.max op.floor (joinTier op.cells)
+
+/-- Commit admission at a tier. -/
+def admitAtTier (t : FinalityTier) (op : TurnOp L I) : Bool :=
+  decide (turnCommitTier op ≤ t)
+
+theorem turnCommitTier_dominates_cells (op : TurnOp L I) (t : FinalityTier) (h : t ∈ op.cells) :
+    t ≤ turnCommitTier op :=
+  FinalityTier.le_trans (joinTier_dominates op.cells t h) (FinalityTier.le_max_right _ _)
+
+theorem turnCommitTier_floor (op : TurnOp L I) : op.floor ≤ turnCommitTier op :=
+  FinalityTier.le_max_left _ _
+
+/-- An operation without a pushout witness commits at the BFT floor or above. -/
+theorem turnCommitTier_unwitnessed (op : TurnOp L I) (h : op.pushout = none) :
+    FinalityTier.quorum_final ≤ turnCommitTier op := by
+  have hf : op.floor = .quorum_final := by
+    simp only [TurnOp.floor, h]
+  have := turnCommitTier_floor op
+  rwa [hf] at this
+
+/-- Every commit tier admits the write as its class: a state write at the BFT floor, a confluent
+write at Tier 0. -/
+theorem turnCommitTier_admits_write (op : TurnOp L I) :
+    admitsOp (turnCommitTier op) op.writeOp = true := by
+  cases hp : op.pushout with
+  | none =>
+    have hw : op.writeOp = .stateWrite := by simp only [TurnOp.writeOp, hp]
+    rw [hw]
+    exact admitsOp_mono (turnCommitTier_unwitnessed op hp) quorum_final_admits_stateWrite
+  | some _ =>
+    have hw : op.writeOp = .confluentWrite := by simp only [TurnOp.writeOp, hp]
+    rw [hw]
+    exact admitsOp_mono (FinalityTier.speculative_bot _) (by decide)
+
+/-- **Soundness of the relaxation**: a write admitted below the BFT floor carries a pushout witness. -/
+theorem admitAtTier_sound {t : FinalityTier} {op : TurnOp L I} (h : admitAtTier t op = true)
+    (ht : t < .quorum_final) : ∃ w, op.pushout = some w := by
+  cases hp : op.pushout with
+  | some w => exact ⟨w, rfl⟩
+  | none =>
+    have ha : turnCommitTier op ≤ t := of_decide_eq_true h
+    exact absurd (FinalityTier.le_trans (turnCommitTier_unwitnessed op hp) ha) (Nat.not_le.mpr ht)
+
+/-- A witnessed operation keeps the invariant. -/
+theorem PushoutWitness.keeps {f : S → S} (w : PushoutWitness L I f) {s : S} (hs : I s) : I (f s) := by
+  rw [w.apply_eq]
+  exact w.iconf _ _ hs w.delta_inv
+
+/-- A witnessed operation is idempotent: joining a delta twice joins it once. -/
+theorem PushoutWitness.idempotent {f : S → S} (w : PushoutWitness L I f) (s : S) : f (f s) = f s := by
+  rw [w.apply_eq (f s), w.apply_eq s, L.assoc, L.idem]
+
+/-- **Witnessed operations commute**: replicas that apply two witnessed operations from one state
+reach one state in either order, and it is the join of the two branches (the pushout of the span). -/
+theorem confluent_diamond {f g : S → S} (wf : PushoutWitness L I f) (wg : PushoutWitness L I g)
+    (s : S) : f (g s) = g (f s) ∧ L.join (f s) (g s) = g (f s) := by
+  rw [wf.apply_eq (g s), wg.apply_eq s, wg.apply_eq (f s), wf.apply_eq s]
+  constructor
+  · rw [L.assoc s wg.delta wf.delta, L.comm wg.delta wf.delta, ← L.assoc s wf.delta wg.delta]
+  · have hab : L.join (L.join s wf.delta) s = L.join s wf.delta := by
+      rw [L.assoc, L.comm wf.delta s, ← L.assoc, L.idem]
+    rw [← L.assoc (L.join s wf.delta) s wg.delta, hab]
+
+/-- Witnessed operations applied in order. -/
+def applyWitnessed : List ((f : S → S) × PushoutWitness L I f) → S → S
+  | [], s => s
+  | x :: xs, s => applyWitnessed xs (x.1 s)
+
+/-- **Any number of witnessed operations keep the invariant**, in the order a replica applied them. -/
+theorem applyWitnessed_keeps : ∀ (ops : List ((f : S → S) × PushoutWitness L I f)) {s : S},
+    I s → I (applyWitnessed ops s)
+  | [], _, hs => hs
+  | x :: xs, _, hs => applyWitnessed_keeps xs (x.2.keeps hs)
+
+/-- **Replicas converge whatever the order**: two replicas that apply the same witnessed operations
+in any two orders reach the same state. -/
+theorem applyWitnessed_perm {ops ops' : List ((f : S → S) × PushoutWitness L I f)}
+    (h : ops.Perm ops') (s : S) : applyWitnessed ops s = applyWitnessed ops' s := by
+  induction h generalizing s with
+  | nil => rfl
+  | cons x _ ih => simp only [applyWitnessed]; exact ih _
+  | swap x y l => simp only [applyWitnessed]; rw [(confluent_diamond x.2 y.2 s).1]
+  | trans _ _ ih₁ ih₂ => exact (ih₁ s).trans (ih₂ s)
+
+end Coordination
+
+/-! ### The semilattices the merge layers join in -/
+
+/-- Pointwise disjunction: the semilattice of tombstone and edge sets of `Obend.Doc` pages. -/
+def pointwiseOr (α : Type) : JoinSemilattice (α → Bool) where
+  join f g := fun a => f a || g a
+  comm f g := funext fun a => Bool.or_comm (f a) (g a)
+  assoc f g h := funext fun a => Bool.or_assoc (f a) (g a) (h a)
+  idem f := funext fun a => Bool.or_self (f a)
+
+/-- **`Doc.Merge`'s pushout is that join on tombstones**: the merge of two pages kills exactly the
+atoms either killed (`Obend.Doc.Graph.merge_isPushout`). Private: `Doc.Merge` is a private import. -/
+private theorem docMerge_tombstones_join (A B : Obend.Doc.Graph) :
+    (Obend.Doc.Graph.merge A B).isDead = (pointwiseOr _).join A.isDead B.isDead :=
+  funext fun a => Obend.Doc.Graph.isDead_merge A B a
+
+/-- Tombstones only within an allowed set: I-confluent under `pointwiseOr`. -/
+def KillsWithin {α : Type} (allowed : α → Prop) (t : α → Bool) : Prop :=
+  ∀ a, t a = true → allowed a
+
+theorem killsWithin_iconfluent {α : Type} (allowed : α → Prop) :
+    IConfluent (pointwiseOr α) (KillsWithin allowed) := by
+  intro f g hf hg a ha
+  simp only [pointwiseOr, Bool.or_eq_true] at ha
+  exact ha.elim (hf a) (hg a)
+
+/-- A tombstoning of the atoms `δ` kills, all within `allowed`: a witnessed write. -/
+def tombstoneOp {α : Type} (allowed : α → Prop) (δ : α → Bool) (hδ : KillsWithin allowed δ) :
+    TurnOp (pointwiseOr α) (KillsWithin allowed) where
+  apply t := (pointwiseOr α).join t δ
+  cells := []
+  pushout := some ⟨δ, fun _ => rfl, hδ, killsWithin_iconfluent allowed⟩
+
+/-- `max` on naturals: high-water marks, version counters. -/
+def maxNat : JoinSemilattice Nat where
+  join := max
+  comm := Nat.max_comm
+  assoc := Nat.max_assoc
+  idem a := Nat.max_eq_left (Nat.le_refl a)
+
+/-! ### A balance debit is never confluent -/
+
+/-- A balance debit of `k` units: one leg of a bounded-budget or custody transfer. -/
+def balanceDebit (k b : Nat) : Nat := b - k
+
+/-- **A debit has no pushout witness, in any semilattice**: a witnessed operation is idempotent
+(`PushoutWitness.idempotent`), and debiting `k > 0` twice from `2k` leaves `0`, not `k`. -/
+theorem balanceDebit_no_pushout {L : JoinSemilattice Nat} {I : Nat → Prop} {k : Nat} (hk : 0 < k)
+    (w : PushoutWitness L I (balanceDebit k)) : False := by
+  have h := w.idempotent (2 * k)
+  simp only [balanceDebit] at h
+  omega
+
+/-- **A non-confluent balance debit is refused at Tier 0 and Tier 1**: whatever semilattice and
+invariant it is presented under, a write whose effect debits `k > 0` carries no pushout witness, so
+it commits at the BFT floor, and `admitAtTier` refuses it at `speculative` (`LocalOptimistic`) and
+at `attested` (`EquivocationBounded`). -/
+theorem nonconfluent_debit_refused_below_byzantine {L : JoinSemilattice Nat} {I : Nat → Prop} {k : Nat}
+    (hk : 0 < k) (op : TurnOp L I) (hop : op.apply = balanceDebit k) :
+    admitAtTier .speculative op = false ∧ admitAtTier .attested op = false := by
+  have hnone : op.pushout = none := by
+    cases hp : op.pushout with
+    | none => rfl
+    | some w => exact (balanceDebit_no_pushout hk (hop ▸ w)).elim
+  have hq := turnCommitTier_unwitnessed op hnone
+  constructor
+  · exact decide_eq_false fun h => absurd (FinalityTier.le_trans hq h) (by decide)
+  · exact decide_eq_false fun h => absurd (FinalityTier.le_trans hq h) (by decide)
+
+#tooth nonconfluent_debit_refused_below_byzantine by mutation TurnOp.floor :=
+  fun _ => FinalityTier.speculative
 
 /-! ## §5. Basic Finality Gate Record -/
 
@@ -494,6 +710,61 @@ theorem advanceSimplexGate_collapsed_binds_cshake
   rcases h with ⟨⟨rfl, _⟩, rfl⟩
   exact ⟨cert, rfl, rfl, rfl, foldCollapsedRoot_eq_spec (chainDigest cert.chain) vRoot⟩
 
+/-! ## §6b. Commit admission at a Simplex gate -/
+
+section GateAdmission
+
+variable {S : Type} {L : JoinSemilattice S} {I : S → Prop}
+
+/-- **Commit admission at a Simplex finality gate**: a witnessed write is admitted at any tier its
+cells allow, with no BFT message; any other write needs the gate's `FinCert` to check against the
+protocol and the messages sent (`n - f` distinct committee finalize votes). -/
+def admitAtGate (P : Protocol) (sent : Sent) (gate : SimplexFinalityGate) (op : TurnOp L I) : Bool :=
+  admitAtTier gate.currentTier op &&
+    match op.pushout with
+    | some _ => true
+    | none =>
+      match gate.finCert with
+      | some cert => cert.checks P sent
+      | none => false
+
+/-- **A write without a pushout witness is admitted only on a checking `FinCert`**: the gate is at
+the BFT floor or above and its certificate witnesses `n - f` finalize votes (`Finalized`). -/
+theorem admitAtGate_unwitnessed_sound {P : Protocol} {sent : Sent} {gate : SimplexFinalityGate}
+    {op : TurnOp L I} (h : admitAtGate P sent gate op = true) (hp : op.pushout = none) :
+    FinalityTier.quorum_final ≤ gate.currentTier ∧
+      ∃ cert, gate.finCert = some cert ∧ cert.checks P sent = true ∧
+        Finalized P sent cert.view cert.chain := by
+  unfold admitAtGate at h
+  rw [Bool.and_eq_true] at h
+  obtain ⟨ha, hc⟩ := h
+  refine ⟨FinalityTier.le_trans (turnCommitTier_unwitnessed op hp) (of_decide_eq_true ha), ?_⟩
+  rw [hp] at hc
+  cases hcert : gate.finCert with
+  | none => simp [hcert] at hc
+  | some cert =>
+    rw [hcert] at hc
+    have hchk : cert.checks P sent = true := hc
+    exact ⟨cert, rfl, hchk, FinCert.checks_implies_finalized hchk⟩
+
+/-- **Universal soundness of gate admission**: an admitted write either carries a pushout witness
+(and commutes with every other witnessed write, `confluent_diamond`) or was finalized by `n - f`
+committee votes. -/
+theorem admitAtGate_sound {P : Protocol} {sent : Sent} {gate : SimplexFinalityGate} {op : TurnOp L I}
+    (h : admitAtGate P sent gate op = true) :
+    (∃ w, op.pushout = some w) ∨
+      (FinalityTier.quorum_final ≤ gate.currentTier ∧
+        ∃ cert, gate.finCert = some cert ∧ cert.checks P sent = true ∧
+          Finalized P sent cert.view cert.chain) := by
+  cases hp : op.pushout with
+  | some w => exact .inl ⟨w, rfl⟩
+  | none => exact .inr (admitAtGate_unwitnessed_sound h hp)
+
+end GateAdmission
+
+#tooth admitAtGate_unwitnessed_sound by mutation admitAtGate :=
+  fun _ _ gate op => admitAtTier gate.currentTier op
+
 /-! ## §7. The promotions above are inhabited -/
 
 example : promoteStep .speculative (.attestTurn ByteArray.empty) = some .attested := rfl
@@ -506,6 +777,33 @@ example :
         vaultRoot := some (bytesOfList (List.replicate 32 0)) }
       (.finalizeWithCert ⟨1, [.block 1 7], [0, 1, 2]⟩ (bytesOfList (List.replicate 32 0)))).isSome
       = true := by
+  decide
+
+/-- A witnessed tombstoning commits at Tier 0. -/
+example : admitAtTier .speculative
+    (tombstoneOp (fun n : Nat => n = 3) (fun n => n == 3)
+      (fun a h => by simpa using h)) = true := by
+  decide
+
+/-- A debit of 7 under the bounded high-water invariant: no witness, so refused at Tier 0 and admitted
+at a gate whose `FinCert` checks (3 of 4 finalize votes, `n - f` with `f = 1`). -/
+def sampleDebit : TurnOp maxNat (· ≤ 100) := ⟨balanceDebit 7, [], none⟩
+
+example : admitAtTier .speculative sampleDebit = false := by decide
+
+example :
+    admitAtGate ⟨[0, 1, 2, 3], 1, (· == 3), by decide, by decide, by decide⟩
+      [⟨0, 1, .finalize, .block [.block 1 7]⟩, ⟨1, 1, .finalize, .block [.block 1 7]⟩,
+       ⟨2, 1, .finalize, .block [.block 1 7]⟩]
+      { turnId := ByteArray.empty, currentTier := .quorum_final,
+        finCert := some ⟨1, [.block 1 7], [0, 1, 2]⟩ }
+      sampleDebit = true := by
+  decide
+
+/-- The same gate without its certificate refuses the debit. -/
+example :
+    admitAtGate ⟨[0, 1, 2, 3], 1, (· == 3), by decide, by decide, by decide⟩ []
+      { turnId := ByteArray.empty, currentTier := .quorum_final } sampleDebit = false := by
   decide
 
 end Obend.Consensus.Finality

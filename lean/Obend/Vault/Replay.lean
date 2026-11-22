@@ -16,6 +16,7 @@ public import Obend.Run.Durable
 public import Obend.Run.Proofs.Durable
 public import Obend.Core.Ty
 public import Obend.Core.Data
+import Obend.Tactic.Tooth
 import all Obend.Run.Durable
 import all Obend.Core.Data
 
@@ -37,7 +38,7 @@ replay of the log step the same bytes the same way. The turns:
   replica's world, as read, merged by `Obend.Vault.Merge.mergeVault`), `resolved` (a merge conflict
   the store keeps, `Store.conflicts`, resolved by `Merge.resolveIn`); each is the store function its
   command always called, then `settle`;
-* `captured`, `abstracted`, `judged`, `filled`: the forms (`Obend.Vault.Form`). The forms a vault
+* `captured`, `abstracted`, `judged`, and the registered `fill`: the forms (`Obend.Vault.Form`). The forms a vault
   issued, the receipt chain of the proposals it judged, and the forms it received and the proposals it
   sent are fields of the world; `.obend/forms/*.json` are exports of them, written after the turn;
 * `issued`, `offered`, `granted`, `revoked`, `transported`, `proposed`, `confirmed`: the transport of
@@ -67,7 +68,12 @@ replay of the log step the same bytes the same way. The turns:
 * `rows`: rows committed to the register, all or none (`Obend.Ledger.Cli.commitRows`): the journal is
   part of the world, and the log is its only record (it was `.obend/ledger.json`);
 * `base`: a world from before the log (`.obend/world.json` and `.obend/ledger.json` of a vault opened by
-  an earlier `obend`), adopted as the log's first record.
+  an earlier `obend`), adopted as the log's first record;
+* `ext`: a record of a registered extension (`LawfulTurnRegistry`, the open waist): the tag names an
+  extension whose codec round-trips, whose step conserves the journal, grants, obligations, landings
+  and intent counter, and which writes only the pages it declares (`ext_replays`, `stepExt_conserves`,
+  `stepTurns_ext_conserves`); an unregistered tag is refused (`stepExt_unregistered_refused`). `fill`
+  is the first (`fillExt`); a domain adds a turn by registering one, never by adding a constructor.
 
 `.obend/checkpoint` holds the world after the log's first records, anchored to the last of them: a
 cache (`checkpoint_is_cache`). The theorems are `Obend.Vault.Log`'s at the deployed machine:
@@ -122,7 +128,6 @@ inductive Turn
   | abstracted (name value hole : String)
   | briefed (page name : String) (g : Grant) (lits : List (String × String)) (holes : List (String × String))
   | judged (name digest : String) (hops : List Grant) (a : Assignment) (intent : Option String := none)
-  | filled (name received sent : String)
   | issued (name : String)
   | offered (name : String) (K : Contract)
   | granted (id : String) (g : Grant)
@@ -139,6 +144,10 @@ inductive Turn
   | forked (name : String) (member : Option String := none)
   | reasoned (e : Obend.Reasons.Event)
   | justified (name digest : String) (hops : List Grant) (a : Assignment) (intent : Option String) (because : String)
+  /-- a registered extension's record (`LawfulTurnRegistry`, the open waist): the extension's tag and
+  its operation, in the extension's own JSON; `stepTurn` resolves the tag (2026-11-22: `fill`, a
+  closed constructor before, is the first registered extension, `fillExt`) -/
+  | ext (tag : String) (op : Json)
 
 /-- What a turn says beside the world it leaves (a command's store before `settle`, where it reports
 on it, as it always did). -/
@@ -777,9 +786,174 @@ theorem afterMerge_landed (w0 w : World) (o : Outcome) (label : String) (other :
     (afterMerge w0 w o label other rs held).1.landed = w.landed := by
   unfold afterMerge; rfl
 
+/-! ## The open turn waist: registered extensions
+
+A domain adds a turn by registering a `LawfulTurnExt`, never by adding a constructor to `Turn`: the
+record (`Turn.ext`) carries the extension's tag and its operation in the extension's own JSON, and
+`stepTurn` resolves the tag in a `LawfulTurnRegistry`. The registry has the shape of `minidregg`'s
+`LawfulRegistry` (`Effects/Revival/Engine.lean:274`): tags unique, and every entry's laws are proof
+fields. The laws are those replay rests on:
+
+* `roundtrip`: the operation's codec round-trips, so a record replays as the operation that was
+  stepped (`ext_replays`);
+* `conserves`: the step keeps the ledger journal, the standing grants, the outstanding obligations,
+  the landings and the intent counter (`Conserves`). Value moves only through `rows`, under the
+  registered ledger laws; an extension moves none, along any trace (`stepTurns_ext_conserves`);
+* `frame`: the step touches no page outside the footprint the operation declares.
+
+An unregistered tag is refused by name (`stepExt_unregistered_refused`), and registration never
+changes how a core turn steps (`stepTurn_core_registry_free`). -/
+
+/-- What a registered step keeps: the ledger journal, the standing grants, the outstanding
+obligations, the landings, and the intent counter. -/
+structure Conserves (w w' : World) : Prop where
+  journal : w'.journal = w.journal
+  grants : w'.grants = w.grants
+  outstanding : w'.outstanding = w.outstanding
+  landed : w'.landed = w.landed
+  minted : w'.minted = w.minted
+
+theorem Conserves.refl (w : World) : Conserves w w := ⟨rfl, rfl, rfl, rfl, rfl⟩
+
+theorem Conserves.trans {a b c : World} (h₁ : Conserves a b) (h₂ : Conserves b c) : Conserves a c :=
+  ⟨h₂.journal.trans h₁.journal, h₂.grants.trans h₁.grants, h₂.outstanding.trans h₁.outstanding,
+    h₂.landed.trans h₁.landed, h₂.minted.trans h₁.minted⟩
+
+/-- **A registered turn extension**: its tag, its operation and that operation's codec, its step on
+the world and the pages an operation writes, with its laws as proof fields. -/
+structure LawfulTurnExt : Type 1 where
+  tag : String
+  Op : Type
+  encode : Op → Json
+  decode : Json → Except String Op
+  step : World → Op → Except String World
+  footprint : Op → List String
+  roundtrip : ∀ x, decode (encode x) = .ok x
+  conserves : ∀ w x w', step w x = .ok w' → Conserves w w'
+  frame : ∀ w x w', step w x = .ok w' → ∀ n, n ∉ footprint x → w'.store.page? n = w.store.page? n
+
+/-- **The open registry**: its extensions, tags unique (a shadowed duplicate would be a silent twin). -/
+structure LawfulTurnRegistry : Type 1 where
+  entries : List LawfulTurnExt
+  nodup : (entries.map (·.tag)).Nodup
+
+/-- The tags a registry answers to. -/
+def LawfulTurnRegistry.tags (R : LawfulTurnRegistry) : List String := R.entries.map (·.tag)
+
+/-- The extension registered under a tag. -/
+def LawfulTurnRegistry.find? (R : LawfulTurnRegistry) (tag : String) : Option LawfulTurnExt :=
+  R.entries.find? fun e => decide (e.tag = tag)
+
+theorem LawfulTurnRegistry.find?_eq_none {R : LawfulTurnRegistry} {tag : String} (h : tag ∉ R.tags) :
+    R.find? tag = none := by
+  unfold LawfulTurnRegistry.find?
+  rw [List.find?_eq_none]
+  intro e he hd
+  exact h (List.mem_map.mpr ⟨e, he, of_decide_eq_true hd⟩)
+
+private theorem find?_of_mem_nodup {e : LawfulTurnExt} :
+    ∀ {l : List LawfulTurnExt}, (l.map (·.tag)).Nodup → e ∈ l →
+      l.find? (fun x => decide (x.tag = e.tag)) = some e
+  | [], _, h => by cases h
+  | x :: xs, hnd, h => by
+    rw [List.map_cons, List.nodup_cons] at hnd
+    by_cases hx : x.tag = e.tag
+    · have hxe : x = e := by
+        rcases List.mem_cons.mp h with hxe | hm
+        · exact hxe.symm
+        · exact absurd (by rw [hx]; exact List.mem_map.mpr ⟨e, hm, rfl⟩) hnd.1
+      subst hxe
+      simp
+    · have hm : e ∈ xs := by
+        rcases List.mem_cons.mp h with hxe | hm
+        · exact absurd (congrArg LawfulTurnExt.tag hxe).symm hx
+        · exact hm
+      rw [List.find?_cons_of_neg (by simpa using hx)]
+      exact find?_of_mem_nodup hnd.2 hm
+
+/-- An extension a registry holds is the one its tag finds: tags are unique. -/
+theorem LawfulTurnRegistry.find?_of_mem (R : LawfulTurnRegistry) {e : LawfulTurnExt} (he : e ∈ R.entries) :
+    R.find? e.tag = some e :=
+  find?_of_mem_nodup R.nodup he
+
+/-- A world step, said as a turn's: an admitted step says nothing beside the world. -/
+def liftStep : Except String World → Except String (World × Outcome)
+  | .error err => .error err
+  | .ok w' => .ok (w', .quiet)
+
+/-- **The step of a registered record**: the extension the tag names decodes its operation and steps
+the world; an unregistered tag, or an operation that does not decode, is refused by name. -/
+def stepExt (R : LawfulTurnRegistry) (w : World) (tag : String) (op : Json) :
+    Except String (World × Outcome) :=
+  match R.find? tag with
+  | none => .error ("refused: no turn extension is registered under " ++ tag)
+  | some e =>
+    match e.decode op with
+    | .error err => .error (tag ++ ": malformed: " ++ err)
+    | .ok x => liftStep (e.step w x)
+
+/-- **An unregistered tag is refused**, whatever its operation and whatever the world. -/
+theorem stepExt_unregistered_refused (R : LawfulTurnRegistry) (w : World) {tag : String} (op : Json)
+    (h : tag ∉ R.tags) : ∃ err, stepExt R w tag op = .error err :=
+  ⟨"refused: no turn extension is registered under " ++ tag, by
+    unfold stepExt
+    rw [LawfulTurnRegistry.find?_eq_none h]⟩
+
+/-- **A registered record conserves**: an admitted step of a registered record keeps the journal,
+the grants, the obligations, the landings and the intent counter (the extension's `conserves`). -/
+theorem stepExt_conserves {R : LawfulTurnRegistry} {w w' : World} {tag : String} {op : Json} {o : Outcome}
+    (h : stepExt R w tag op = .ok (w', o)) : Conserves w w' := by
+  unfold stepExt at h
+  cases hf : R.find? tag with
+  | none => simp [hf] at h
+  | some e =>
+    simp only [hf] at h
+    cases hd : e.decode op with
+    | error err => simp [hd] at h
+    | ok x =>
+      simp only [hd] at h
+      cases hs : e.step w x with
+      | error err => simp [hs, liftStep] at h
+      | ok w1 =>
+        simp only [hs, liftStep, Except.ok.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, -⟩ := h
+        exact e.conserves w x w1 hs
+
+/-- **The fill extension**: the form a vault received and the fill it sent, by the form's name. It
+was the closed constructor `filled`; a record of it in an earlier log (`"turn": "fill"`) decodes to
+this extension's record (`turnOf`) and replays as it always did. -/
+def fillExt : LawfulTurnExt where
+  tag := "fill"
+  Op := String × String × String
+  encode := fun (x : String × String × String) => Json.arr #[Json.str x.1, Json.str x.2.1, Json.str x.2.2]
+  decode := fun j => match j with
+    | .arr a => match a.toList with
+      | [.str name, .str received, .str sent] => .ok (name, received, sent)
+      | _ => .error "a fill is [name, received, sent]"
+    | _ => .error "a fill is [name, received, sent]"
+  step := fun w (x : String × String × String) =>
+    .ok { w with received := (w.received.filter (·.1 != x.1)) ++ [(x.1, x.2.1)],
+                 sent := (w.sent.filter (·.1 != x.1)) ++ [(x.1, x.2.2)] }
+  footprint := fun _ => []
+  roundtrip := by intro ⟨name, received, sent⟩; rfl
+  conserves := by
+    intro w x w' h
+    cases h
+    exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+  frame := by
+    intro w x w' h n _
+    cases h
+    rfl
+
+/-- **The registry the deployed machine steps**: the extensions this tree registers. -/
+def LawfulTurnRegistry.core : LawfulTurnRegistry where
+  entries := [fillExt]
+  nodup := by simp
+
 /-- **The step of a turn**: the store function its command calls, or a refusal (a refused turn is
 never logged). -/
-def stepTurn (w : World) : Turn → Except String (World × Outcome)
+def stepTurn (w : World) (t : Turn) (R : LawfulTurnRegistry := .core) : Except String (World × Outcome) :=
+  match t with
   | .base w' => .ok (w', .quiet)
   | .opened files env =>
     let V := reconstruct w.store files
@@ -868,9 +1042,6 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
                       checked := w.checked.filter (·.form != name) ++ (g.checksAt H w.store).map (·.record) }, .form g 0)
       | .error e => .error ("refused: " ++ e)
   | .judged name digest hops a intent => judgeTurn w name digest hops a intent
-  | .filled name received sent =>
-    .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
-                  sent := (w.sent.filter (·.1 != name)) ++ [(name, sent)] }, .quiet)
   | .issued name =>
     match w.forms.find? (·.name == name) with
     | none => .error ("refused: no form named " ++ name)
@@ -978,6 +1149,7 @@ def stepTurn (w : World) : Turn → Except String (World × Outcome)
       match commitRows laws w.journal rs with
       | .ok (J, fs) => .ok ({ w with journal := J }, .rows fs)
       | .error e => .error e
+  | .ext tag op => stepExt R w tag op
 
 /-- **An open's record replays as that open**: the turn an open of the files `V`, with the
 environment `env`, appends steps the world exactly as the open of `V` under `env`. -/
@@ -995,6 +1167,83 @@ theorem reopen_replays (w : World) (V : List (String × String)) (env : Environm
     stepTurn w (.reopened (changedOf w.store V) (envOf w.store env)) =
       stepTurn w (.opened (readingOf w.store V) (envOf w.store env)) := by
   simp only [stepTurn, reconstruct_readingOf, reconstructSeen_changedOf w.store V hV hnd]
+
+/-! ## The open waist at the step -/
+
+/-- Whether a turn is a registered extension's record. -/
+def Turn.isExt : Turn → Bool
+  | .ext .. => true
+  | _ => false
+
+/-- **A registered record replays as its operation**: under any registry that holds `e`, the record
+of `e`'s tag and `e.encode x` steps the world exactly as `e` steps `x` (the codec round-trips and the
+tag finds `e`, tags being unique). -/
+theorem ext_replays (R : LawfulTurnRegistry) {e : LawfulTurnExt} (he : e ∈ R.entries) (w : World)
+    (x : e.Op) : stepTurn w (.ext e.tag (e.encode x)) R = liftStep (e.step w x) := by
+  show stepExt R w e.tag (e.encode x) = _
+  unfold stepExt
+  rw [R.find?_of_mem he]
+  simp only [e.roundtrip]
+
+/-- **Registration never changes a core turn**: a turn that is not a registered record steps the
+same under every registry, so adding an extension adds no arm to the turns already there. -/
+theorem stepTurn_core_registry_free (w : World) (t : Turn) (ht : t.isExt = false)
+    (R R' : LawfulTurnRegistry) : stepTurn w t R = stepTurn w t R' := by
+  cases t <;> first | rfl | simp [Turn.isExt] at ht
+
+/-- Turns stepped in order under a registry: the world after them all, or the first refusal. -/
+def stepTurns (R : LawfulTurnRegistry) : World → List Turn → Except String World
+  | w, [] => .ok w
+  | w, t :: ts =>
+    match stepTurn w t R with
+    | .error err => .error err
+    | .ok (w', _) => stepTurns R w' ts
+
+/-- **Registered records conserve along any trace**: a sequence of registered records, however long
+and from however many extensions, keeps the journal, the grants, the obligations, the landings and
+the intent counter of the world it starts from. -/
+theorem stepTurns_ext_conserves (R : LawfulTurnRegistry) : ∀ (ts : List Turn) {w w' : World},
+    (∀ t ∈ ts, ∃ tag op, t = .ext tag op) → stepTurns R w ts = .ok w' → Conserves w w'
+  | [], w, w', _, h => by
+    simp only [stepTurns, Except.ok.injEq] at h
+    subst h
+    exact Conserves.refl w
+  | t :: ts, w, w', hts, h => by
+    obtain ⟨tag, op, rfl⟩ := hts t (List.mem_cons.mpr (Or.inl rfl))
+    simp only [stepTurns] at h
+    cases hs : stepTurn w (.ext tag op) R with
+    | error err => simp [hs] at h
+    | ok p =>
+      obtain ⟨w1, o1⟩ := p
+      simp only [hs] at h
+      exact (stepExt_conserves (show stepExt R w tag op = .ok (w1, o1) from hs)).trans
+        (stepTurns_ext_conserves R ts (fun t ht => hts t (List.mem_cons.mpr (Or.inr ht))) h)
+
+/-- **A fill record replays as the fill**: the registered fill steps the received and sent copies of
+the form it names, as the closed `filled` turn did. -/
+theorem fill_replays (w : World) (name received sent : String) :
+    stepTurn w (.ext "fill" (Json.arr #[Json.str name, Json.str received, Json.str sent])) =
+      .ok ({ w with received := (w.received.filter (·.1 != name)) ++ [(name, received)],
+                    sent := (w.sent.filter (·.1 != name)) ++ [(name, sent)] }, .quiet) :=
+  ext_replays .core (e := fillExt) (List.mem_singleton.mpr rfl) w (name, received, sent)
+
+/-- The refusal's premise is inhabited: under a registry without extensions every tag is refused. -/
+theorem unregistered_tag_refused_empty (w : World) (tag : String) (op : Json) :
+    ∃ err, stepTurn w (.ext tag op) ⟨[], List.nodup_nil⟩ = .error err :=
+  stepExt_unregistered_refused ⟨[], List.nodup_nil⟩ w op (by simp [LawfulTurnRegistry.tags])
+
+/-- A step that drops an outstanding obligation is not conserving: no `LawfulTurnExt` carries it. -/
+theorem dropping_obligations_not_conserving :
+    ¬ ∀ w : World, Conserves w { w with outstanding := [] } := by
+  intro h
+  have := (h { outstanding := [⟨"i", "f", "d", "v", "h", {}⟩] }).outstanding
+  simp at this
+
+#tooth stepExt_conserves by mutation stepExt :=
+  fun _ w _ _ => .ok ({ w with outstanding := [] }, .quiet)
+
+#tooth stepExt_unregistered_refused by mutation LawfulTurnRegistry.find? :=
+  fun R _ => R.entries.head?
 
 /-! ## Bytes -/
 
@@ -1114,8 +1363,6 @@ def turnJson : Turn → Json
   | .judged name digest hops a intent => Json.mkObj ([("turn", Json.str "judge"), ("name", Json.str name),
       ("digest", Json.str digest), ("hops", Json.arr (hops.map Form.grantJson).toArray),
       ("fill", Form.assignmentJson a)] ++ (match intent with | some i => [("intent", Json.str i)] | none => []))
-  | .filled name received sent => Json.mkObj [("turn", "fill"), ("name", Json.str name),
-      ("received", Json.str received), ("sent", Json.str sent)]
   | .issued name => Json.mkObj [("turn", "issue"), ("name", Json.str name)]
   | .offered name K => Json.mkObj [("turn", "offer"), ("name", Json.str name), ("contract", Transport.contractJson K)]
   | .granted id g => Json.mkObj [("turn", "grant"), ("id", Json.str id), ("grant", Form.grantJson g)]
@@ -1137,6 +1384,7 @@ def turnJson : Turn → Json
       ("digest", Json.str digest), ("hops", Json.arr (hops.map Form.grantJson).toArray),
       ("fill", Form.assignmentJson a), ("because", Json.str because)] ++
       (match intent with | some i => [("intent", Json.str i)] | none => []))
+  | .ext tag op => Json.mkObj [("turn", "ext"), ("tag", Json.str tag), ("op", op)]
 
 def turnOf (j : Json) : Except String Turn := do
   match ← j.getObjValAs? String "turn" with
@@ -1212,7 +1460,9 @@ def turnOf (j : Json) : Except String Turn := do
   | "fill" =>
     let name ← j.getObjValAs? String "name"
     let received ← j.getObjValAs? String "received"
-    return .filled name received (← j.getObjValAs? String "sent")
+    let sent ← j.getObjValAs? String "sent"
+    return .ext fillExt.tag (Json.arr #[Json.str name, Json.str received, Json.str sent])
+  | "ext" => return .ext (← j.getObjValAs? String "tag") (← j.getObjVal? "op")
   | "issue" => return .issued (← j.getObjValAs? String "name")
   | "offer" => return .offered (← j.getObjValAs? String "name") (← Transport.contractOf (← j.getObjVal? "contract"))
   | "grant" => return .granted (← j.getObjValAs? String "id") (← Form.grantOf (← j.getObjVal? "grant"))
@@ -1288,7 +1538,6 @@ def Turn.kind : Turn → String
   | .abstracted .. => "abstract"
   | .briefed .. => "brief"
   | .judged .. => "judge"
-  | .filled .. => "fill"
   | .issued .. => "issue"
   | .offered .. => "offer"
   | .granted .. => "grant"
@@ -1302,6 +1551,7 @@ def Turn.kind : Turn → String
   | .forked .. => "fork"
   | .reasoned .. => "reason"
   | .justified .. => "justified"
+  | .ext tag _ => tag
 
 /-! ## The deployed machine and its theorems -/
 
@@ -1567,13 +1817,20 @@ theorem merged_keeps {w w' : World} {o : Outcome} {label : String} {other : Stor
 judgment or a crash's recovery (which replays turns) keeps every proposal sent and not yet confirmed;
 only `confirmed` takes one away, and `released`, its sender's release of it by name, and `base` and `compacted` stand only first in a log, for the world
 of what came before. -/
-theorem outstanding_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w t = .ok (w', o))
+theorem outstanding_kept {R : LawfulTurnRegistry} {w w' : World} {o : Outcome} {t : Turn}
+    (h : stepTurn w t R = .ok (w', o))
     (hb : ∀ w0, t ≠ .base w0) (hk : ∀ n d a w0, t ≠ .compacted n d a w0) (hc : ∀ i e, t ≠ .confirmed i e)
     (hr : ∀ i, t ≠ .released i) :
     ∀ x ∈ w.outstanding, x ∈ w'.outstanding := by
   intro x hx
+  cases hte : t.isExt
+  case true =>
+    cases t <;> simp [Turn.isExt] at hte
+    rw [(stepExt_conserves h).outstanding]; exact hx
+  rw [stepTurn_core_registry_free w t hte R .core] at h
   cases t
   all_goals first
+    | (simp [Turn.isExt] at hte; done)
     | exact (hb _ rfl).elim
     | exact (hk _ _ _ _ rfl).elim
     | exact (hc _ _ rfl).elim
@@ -1593,11 +1850,18 @@ theorem outstanding_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w
 
 /-- **A landing is never forgotten**: every turn but `base` keeps every proposal landed, so a duplicate
 stays a duplicate. -/
-theorem landed_kept {w w' : World} {o : Outcome} {t : Turn} (h : stepTurn w t = .ok (w', o))
+theorem landed_kept {R : LawfulTurnRegistry} {w w' : World} {o : Outcome} {t : Turn}
+    (h : stepTurn w t R = .ok (w', o))
     (hb : ∀ w0, t ≠ .base w0) (hk : ∀ n d a w0, t ≠ .compacted n d a w0) : ∀ x ∈ w.landed, x ∈ w'.landed := by
   intro x hx
+  cases hte : t.isExt
+  case true =>
+    cases t <;> simp [Turn.isExt] at hte
+    rw [(stepExt_conserves h).landed]; exact hx
+  rw [stepTurn_core_registry_free w t hte R .core] at h
   cases t
   all_goals first
+    | (simp [Turn.isExt] at hte; done)
     | exact (hb _ rfl).elim
     | exact (hk _ _ _ _ rfl).elim
     | exact (judged_keeps h).2 x hx
