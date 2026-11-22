@@ -36,7 +36,10 @@ public import Obend.Law.Proofs.Claim
 public import Obend.Law.Proofs.Machine
 public import Obend.Core.Data
 public import Obend.Core.Code
-@[expose] public section
+import all Obend.Law.Syntax
+import all Obend.Law.Claim
+import all Obend.Logic.LateBinding
+public section
 namespace Obend.Logic
 open Obend.Core.Term
 open Obend.Core.Data (Data)
@@ -46,19 +49,19 @@ set_option autoImplicit false
 /-! ## Application to a list of arguments -/
 
 /-- `c a₁ … aₙ`. -/
-def apps (c : Term) (args : List Term) : Term := args.foldl .app c
+@[expose] def apps (c : Term) (args : List Term) : Term := args.foldl .app c
 
 /-- **The judgment.** The closed claim `c`, applied to the data `ds`, evaluates to `true`. -/
-def Holds (c : Term) (ds : List Data) : Prop :=
+@[expose] def Holds (c : Term) (ds : List Data) : Prop :=
   Evaluates (apps c (ds.map Data.term)) (.boolean true)
 
 /-- `n` binders around a body. -/
-def lams : Nat → Term → Term
+@[expose] def lams : Nat → Term → Term
   | 0, b => b
   | n + 1, b => .lam (lams n b)
 
 /-- Strip `n` binders. -/
-def unlams : Nat → Term → Option Term
+@[expose] def unlams : Nat → Term → Option Term
   | 0, b => some b
   | n + 1, .lam b => unlams n b
   | _ + 1, _ => none
@@ -76,7 +79,7 @@ theorem unlams_some : ∀ {n : Nat} {t b : Term}, unlams n t = some b → t = la
   | _ + 1, .done _, _, h => by simp [unlams] at h
 
 /-- The substitution `n` β steps leave: the last argument at index 0, the first at `n - 1`. -/
-def argSubst (args : List Term) (i : Nat) : Term :=
+@[expose] def argSubst (args : List Term) (i : Nat) : Term :=
   if i < args.length then args.getD (args.length - 1 - i) (.bound 0) else .bound (i - args.length)
 
 /-- `n` lifts of a substitution. -/
@@ -195,7 +198,7 @@ theorem data_obsFree (d : Data) : ObsFree d.term := obsFree_of_observes _ (data_
 /-! ## Obligations -/
 
 /-- A claim of a layer instantiated at an object: `c O (superAt j)`. -/
-def instantiateClaim (c : Term) (C : Composition) (j : Nat) : Term := .app (.app c C.object) (C.superAt j)
+@[expose] def instantiateClaim (c : Term) (C : Composition) (j : Nat) : Term := .app (.app c C.object) (C.superAt j)
 
 /-- An obligation: the claim's code, the object it is about, the `super` its layer sees there, and
 the types of its data parameters. -/
@@ -206,14 +209,14 @@ structure Obligation where
   params : List Obend.Core.Ty.Ty
 
 /-- The claim's code at the object. -/
-def Obligation.term (o : Obligation) : Term := .app (.app o.claim o.object) o.superAt
+@[expose] def Obligation.term (o : Obligation) : Term := .app (.app o.claim o.object) o.superAt
 
 /-- The obligation of claim `c` of layer `j` of `C`. -/
 def Obligation.ofLayer (c : Term) (C : Composition) (j : Nat) (params : List Obend.Core.Ty.Ty) : Obligation :=
   ⟨c, C.object, C.superAt j, params⟩
 
 theorem Obligation.ofLayer_term (c : Term) (C : Composition) (j : Nat) (params : List Obend.Core.Ty.Ty) :
-    (Obligation.ofLayer c C j params).term = instantiateClaim c C j := rfl
+    (Obligation.ofLayer c C j params).term = instantiateClaim c C j := by rfl
 
 /-- The obligation is met: at every data instance of its arity, the claim holds. -/
 def Obligation.Met (o : Obligation) : Prop := ∀ ds : List Data, ds.length = o.params.length → Holds o.term ds
@@ -227,7 +230,7 @@ theorem observed_sameRuns {l r : Term} (h : l ≈[.b] r) : SameRuns l r := by
 
 
 /-- **The equation judgment**: the two sides have the same completed runs. -/
-def HoldsEq (l r : Term) : Prop := ∀ o, Halts l o ↔ Halts r o
+@[expose] def HoldsEq (l r : Term) : Prop := ∀ o, Halts l o ↔ Halts r o
 
 theorem holdsEq_of_observed {l r : Term} (h : l ≈[.b] r) : HoldsEq l r :=
   (observed_sameRuns h).halts
@@ -238,7 +241,7 @@ inductive EqKind where
   deriving DecidableEq, Repr
 
 /-- The ground observations the `==` of this kind compares. -/
-def EqKind.accepts : EqKind → Observation → Bool
+@[expose] def EqKind.accepts : EqKind → Observation → Bool
   | .nat, .natural _ => true
   | .label, .label _ => true
   | .bool, .boolean _ => true
@@ -248,11 +251,11 @@ def EqKind.accepts : EqKind → Observation → Bool
 def notTerm (x : Term) : Term := .ifBool x (.boolean false) (.boolean true)
 
 /-- Undo the shift past one binder: `some l` when `l'` is `l` renamed past it. -/
-def unshiftSubst : Nat → Term
+@[expose] def unshiftSubst : Nat → Term
   | 0 => .bound 0
   | k + 1 => .bound k
 
-def unshift (l' : Term) : Option Term :=
+@[expose] def unshift (l' : Term) : Option Term :=
   if Obend.Law.termEq ((l'.substitute unshiftSubst).rename Nat.succ) l'
   then some (l'.substitute unshiftSubst) else none
 
@@ -263,7 +266,7 @@ theorem unshift_some {l' l : Term} (h : unshift l' = some l) : l' = l.rename Nat
   · cases h
 
 /-- The sides of an elaborated `==`, and its kind. -/
-def equationSides : Term → Option (EqKind × Term × Term)
+@[expose] def equationSides : Term → Option (EqKind × Term × Term)
   | .binary .equal l r => some (.nat, l, r)
   | .binary .labelEqual l r => some (.label, l, r)
   | .app (.lam (.ifBool l' (.bound 0) (.ifBool (.bound 0) (.boolean false) (.boolean true)))) r =>

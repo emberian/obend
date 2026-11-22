@@ -20,7 +20,10 @@ supports are recomputed and compared, and each ground row is re-run. A refuted r
 its instance and must run to `false`.
 -/
 public import Obend.Logic.Program
-@[expose] public section
+import all Obend.Logic.Program
+import all Obend.Logic.Claim
+import all Obend.Logic.Ground
+public section
 namespace Obend.Logic.Receipt
 open Obend.Core.Term
 open Obend.Core.Data (Data)

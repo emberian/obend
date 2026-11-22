@@ -17,8 +17,11 @@ public import Obend.Core.Ty
 public import Obend.Law.Syntax
 public import Obend.Law.Claim
 public import Obend.Logic.Receipt
+import all Obend.Law.Syntax
+import all Obend.Law.Claim
+import all Obend.Logic.Receipt
 
-@[expose] public section
+public section
 namespace Obend.Law
 
 open Obend.Core.Term (Term Evaluates Value Steps)
@@ -31,7 +34,7 @@ set_option autoImplicit false
 
 /-- Semantic predicate satisfaction on `Data`.
     A Core4 predicate term `P` holds on `d : Data` iff `P (Data.term d)` evaluates to `.boolean true`. -/
-def Holds (P : Term) (d : Data) : Prop :=
+@[expose] def Holds (P : Term) (d : Data) : Prop :=
   Evaluates (.app P d.term) (.boolean true)
 
 /-- Definitional equivalence with the single-state `Keeps` predicate. -/
@@ -43,7 +46,7 @@ theorem keeps_eq_holds (I : Term) (d : Data) : Keeps I d ↔ Holds I d := by
 /-- Law refinement preorder (Forever-Crown / Monotone Attenuation):
     `law₂` narrows `law₁` (`law₂ ⊑ law₁`) iff every transition admitted by `law₂`
     is also admitted by `law₁`. -/
-def Narrows (law₂ law₁ : Term) : Prop :=
+@[expose] def Narrows (law₂ law₁ : Term) : Prop :=
   ∀ (old new req : Data), Admits law₂ old new req → Admits law₁ old new req
 
 /-- `Narrows` is reflexive. -/
@@ -78,7 +81,7 @@ structure CellContract where
     If cell contract `C₁` is active, and a transition updates the law to `law₂`
     such that `Narrows law₂ C₁.law`, then `law₂` inherits invariant preservation and step soundness
     for the exact same invariant and step specification. -/
-def cellContract_relaw_sound (C₁ : CellContract) (law₂ : Term) (h_nar : Narrows law₂ C₁.law) :
+@[expose] def cellContract_relaw_sound (C₁ : CellContract) (law₂ : Term) (h_nar : Narrows law₂ C₁.law) :
     CellContract where
   law := law₂
   invariant := C₁.invariant
@@ -97,6 +100,24 @@ inductive CellTrace (law : Term) : Data → List (Data × Data) → Data → Pro
       CellTrace law s₀ steps s_curr →
       Admits law s_curr s_next req →
       CellTrace law s₀ (steps ++ [(req, s_next)]) s_next
+
+/-- Constructive non-empty inhabitedness witness for `CellTrace`. -/
+theorem cellTrace_inhabited :
+    ∃ (law : Term) (s₀ s_final : Data) (steps : List (Data × Data)),
+      0 < steps.length ∧ CellTrace law s₀ steps s_final := by
+  refine ⟨law3 okT, .record [], .record [], [(writeO, .record [])], by decide, ?_⟩
+  refine .snoc (.nil (.record [])) ⟨.record [], ?_⟩
+  refine ⟨?_, .inject _ (.record [])⟩
+  have h1 : Obend.Core.Term.Step (.app (.lam (.lam (.lam okT))) (Data.record []).term) (.lam (.lam okT)) := by
+    simpa [Obend.Core.Term.instantiate, Term.substitute] using
+      Obend.Core.Term.Step.beta (.lam (.lam okT)) (Data.record []).term
+  have h2 : Obend.Core.Term.Step (.app (.lam (.lam okT)) (Data.record []).term) (.lam okT) := by
+    simpa [Obend.Core.Term.instantiate, Term.substitute] using
+      Obend.Core.Term.Step.beta (.lam okT) (Data.record []).term
+  have h3 : Obend.Core.Term.Step (.app (.lam okT) writeO.term) okT := by
+    simpa [Obend.Core.Term.instantiate, Term.substitute] using
+      Obend.Core.Term.Step.beta okT writeO.term
+  exact .next (.application _ (.application _ h1)) (.next (.application _ h2) (.next h3 (.refl _)))
 
 /-- **Inductive Trace Soundness Theorem**:
     Along any execution history where each step is admitted by `C.law`,
@@ -119,7 +140,7 @@ inductive ContractGoal where
   deriving Repr
 
 /-- Semantic meaning of a contract goal. -/
-def GoalMeaning : ContractGoal → Prop
+@[expose] def GoalMeaning : ContractGoal → Prop
   | .preserves law inv =>
       ∀ old new req, Holds inv old → Admits law old new req → Holds inv new
   | .stepSound law inv stepRel =>
@@ -164,31 +185,31 @@ theorem termEq_sound_local {a b : Term} (h : termEq a b = true) : a = b :=
   treeEq_refl_local _
 
 /-- Canonical kind tag of a `ContractGoal`. -/
-def ContractGoal.kind : ContractGoal → String
+@[expose] def ContractGoal.kind : ContractGoal → String
   | .preserves _ _ => "preserves"
   | .stepSound _ _ _ => "stepSound"
   | .narrows _ _ => "narrows"
 
 /-- Authoritative `law` operand of a `ContractGoal`. -/
-def ContractGoal.law : ContractGoal → Term
+@[expose] def ContractGoal.law : ContractGoal → Term
   | .preserves l _ => l
   | .stepSound l _ _ => l
   | .narrows l2 _ => l2
 
 /-- Authoritative `invariant` (or parent law for `narrows`) operand of a `ContractGoal`. -/
-def ContractGoal.invariant : ContractGoal → Term
+@[expose] def ContractGoal.invariant : ContractGoal → Term
   | .preserves _ i => i
   | .stepSound _ i _ => i
   | .narrows _ l1 => l1
 
 /-- Authoritative `step` operand of a `ContractGoal` (equals `invariant` when no separate `stepRel` is present). -/
-def ContractGoal.step : ContractGoal → Term
+@[expose] def ContractGoal.step : ContractGoal → Term
   | .preserves _ i => i
   | .stepSound _ _ s => s
   | .narrows _ l1 => l1
 
 /-- Syntactic equality of two `ContractGoal` values via `(kind, law, invariant, step)`. -/
-def goalEq (a b : ContractGoal) : Bool :=
+@[expose] def goalEq (a b : ContractGoal) : Bool :=
   (a.kind == b.kind) &&
   termEq a.law b.law &&
   termEq a.invariant b.invariant &&
@@ -199,6 +220,11 @@ instance : BEq ContractGoal where
 
 @[simp] theorem goalEq_refl (g : ContractGoal) : goalEq g g = true := by
   simp [goalEq]
+
+/-- Constructive inhabitedness witness for `goalEq`. -/
+theorem goalEq_inhabited :
+    ∃ g : ContractGoal, goalEq g g = true :=
+  ⟨.narrows (law3 okT) (law3 okT), goalEq_refl _⟩
 
 theorem goalEq_sound {a b : ContractGoal} (h : goalEq a b = true) : a = b := by
   unfold goalEq at h
@@ -219,7 +245,7 @@ instance : DecidableEq ContractGoal := fun a b =>
     isFalse (fun heq => by subst heq; exact h (goalEq_refl a))
 
 /-- Canonical Core4 `Term` encoding of a `ContractGoal`. -/
-def ContractGoal.toTerm : ContractGoal → Term
+@[expose] def ContractGoal.toTerm : ContractGoal → Term
   | .preserves l i =>
     .record [("kind", .label "preserves"), ("law", l), ("invariant", i), ("step", i)]
   | .stepSound l i s =>
@@ -228,7 +254,7 @@ def ContractGoal.toTerm : ContractGoal → Term
     .record [("kind", .label "narrows"), ("law", l2), ("invariant", l1), ("step", l1)]
 
 /-- Decode a `ContractGoal` from its canonical Core4 `Term` encoding. -/
-def ContractGoal.ofTerm? : Term → Option ContractGoal
+@[expose] def ContractGoal.ofTerm? : Term → Option ContractGoal
   | .record [("kind", .label "preserves"), ("law", l), ("invariant", i), ("step", s)] =>
     if termEq i s then some (.preserves l i) else none
   | .record [("kind", .label "stepSound"), ("law", l), ("invariant", i), ("step", s)] =>

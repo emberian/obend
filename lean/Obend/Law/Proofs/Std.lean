@@ -15,6 +15,8 @@ hypothesis is inhabited) and one where it refuses with the named reason (so the 
 -/
 public import Obend.Law.Std
 public import Obend.Law.Proofs.Eval
+import all Obend.Law.Syntax
+import all Obend.Law.Std
 namespace Obend.Law
 open Obend.Core.Term
 open Obend.Core.Ty (Ty)
@@ -94,14 +96,14 @@ set_option autoImplicit false
 @[simp] public theorem armEnv_2 (x o n rq : Term) : armEnv x o n rq 2 = n := rfl
 @[simp] public theorem armEnv_3 (x o n rq : Term) : armEnv x o n rq 3 = o := rfl
 
-@[simp] public theorem at1_old : (⟨1⟩ : At).old = .bound 3 := rfl
-@[simp] public theorem at1_new : (⟨1⟩ : At).new = .bound 2 := rfl
-@[simp] public theorem at1_req : (⟨1⟩ : At).req = .bound 1 := rfl
-@[simp] public theorem at1_payload : (⟨1⟩ : At).payload = .bound 0 := rfl
-@[simp] public theorem at_under (d : Nat) : (⟨d⟩ : At).under = ⟨d + 1⟩ := rfl
-@[simp] public theorem at_oldF (a : At) (f : String) : a.oldF f = .get a.old f := rfl
-@[simp] public theorem at_newF (a : At) (f : String) : a.newF f = .get a.new f := rfl
-@[simp] public theorem at_reqF (a : At) (f : String) : a.reqF f = .get a.req f := rfl
+public theorem at1_old : (⟨1⟩ : At).old = .bound 3 := rfl
+public theorem at1_new : (⟨1⟩ : At).new = .bound 2 := rfl
+public theorem at1_req : (⟨1⟩ : At).req = .bound 1 := rfl
+public theorem at1_payload : (⟨1⟩ : At).payload = .bound 0 := rfl
+public theorem at_under (d : Nat) : (⟨d⟩ : At).under = ⟨d + 1⟩ := rfl
+public theorem at_oldF (a : At) (f : String) : a.oldF f = .get a.old f := rfl
+public theorem at_newF (a : At) (f : String) : a.newF f = .get a.new f := rfl
+public theorem at_reqF (a : At) (f : String) : a.reqF f = .get a.req f := rfl
 
 /-! ## The combinators -/
 
@@ -111,7 +113,7 @@ public theorem okT_value {v : Term} (h : Evaluates okT v) : v = okT :=
 public theorem refusedT_not_ok {why : String} {w : Term} : ¬ Evaluates (refusedT why) (.inject "ok" w) := by
   intro h
   have := evaluates_value (.inject _ _) h
-  simp [refusedT] at this
+  simp at this
 
 public theorem guard_ok {c rest w : Term} {why : String}
     (h : Evaluates (guard c why rest) (.inject "ok" w)) :
@@ -142,7 +144,7 @@ public theorem anyOf_true : ∀ {cs : List Term}, Evaluates (anyOf cs) (.boolean
     ∃ c ∈ cs, Evaluates c (.boolean true)
   | [], h => by
     have := evaluates_value (.boolean _) h
-    simp [anyOf, falseT] at this
+    simp at this
   | c :: cs, h => by
     obtain ⟨b, hc, hr⟩ := ifBool_inv h
     cases b
@@ -154,7 +156,7 @@ public theorem andT_true {a b : Term} (h : Evaluates (andT a b) (.boolean true))
     Evaluates a (.boolean true) ∧ Evaluates b (.boolean true) := by
   obtain ⟨x, ha, hr⟩ := ifBool_inv h
   cases x
-  · have := evaluates_value (.boolean _) hr; simp [falseT] at this
+  · have := evaluates_value (.boolean _) hr; simp at this
   · exact ⟨ha, hr⟩
 
 public theorem notT_true {a : Term} (h : Evaluates (notT a) (.boolean true)) :
@@ -162,13 +164,13 @@ public theorem notT_true {a : Term} (h : Evaluates (notT a) (.boolean true)) :
   obtain ⟨x, ha, hr⟩ := ifBool_inv h
   cases x
   · exact ha
-  · have := evaluates_value (.boolean _) hr; simp [falseT] at this
+  · have := evaluates_value (.boolean _) hr; simp at this
 
 public theorem notT_false {a : Term} (h : Evaluates (notT a) (.boolean false)) :
     Evaluates a (.boolean true) := by
   obtain ⟨x, ha, hr⟩ := ifBool_inv h
   cases x
-  · have := evaluates_value (.boolean _) hr; simp [trueT] at this
+  · have := evaluates_value (.boolean _) hr; simp at this
   · exact ha
 
 /-! ## Primitive conditions -/
@@ -620,20 +622,21 @@ public theorem quorum_relaw_needs_k {S T : Ty} {ms : List String} {k : Nat} {g :
       ∃ L, x = .label L ∧ ∃ y, o.field "proposal" = some (.variant "laws" y) ∧ y = .label L := by
   obtain ⟨w, hw⟩ := lawOf_admits (S := S) h
   have hb := lawCase6_relaw ho hw
-  simp only [subst_guards, subst_allOf, List.map_cons, List.map_nil] at hb
+  simp only [subst_guards, List.map_cons, List.map_nil] at hb
   obtain ⟨hm, hrest⟩ := guards_ok hb
   have hmem := member_true rfl (hm _ (List.mem_singleton_self _))
   obtain ⟨m, hmm, _⟩ := id hmem
   have hpos : 0 < ms.length := List.length_pos_of_mem hmm
-  refine ⟨hmem, quorate_true rfl hpos (allOf_ok hrest _ (List.mem_cons_self ..)), ?_⟩
-  have hp := allOf_ok hrest _ (List.mem_cons_of_mem _ (List.mem_singleton_self _))
+  have hrest' := (guards_ok hrest).1
+  refine ⟨hmem, quorate_true rfl hpos (hrest' _ (List.mem_cons_self ..)), ?_⟩
+  have hp := hrest' _ (List.mem_cons_of_mem _ (List.mem_singleton_self _))
   obtain ⟨l, p, body, hs, hf, hbody⟩ := case_subst_inv hp
   simp at hs
   obtain ⟨y, hy, rfl⟩ := get_inject hs
   have hmem2 := List.mem_of_find?_eq_some hf
   simp at hmem2
   rcases hmem2 with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-  · simp [proposedLaws, At.payload] at hbody
+  · simp [At.payload] at hbody
     obtain ⟨L, h1, h2⟩ := eqLabel_true hbody
     have e1 := data_term_label (evaluates_data h1).symm
     have e2 := data_term_label (evaluates_data h2).symm
@@ -644,15 +647,15 @@ public theorem quorum_relaw_needs_k {S T : Ty} {ms : List String} {k : Nat} {g :
 
 theorem subst_eqAt (σ : Nat → Term) (T : Ty) (a b : Term) :
     (eqAt T a b).substitute σ = eqAt T (a.substitute σ) (b.substitute σ) := by
-  induction T generalizing a b <;> simp_all [eqAt, trueT, Term.substitute]
+  induction T generalizing a b <;> simp_all [eqAt, trueT]
 
 /-- `T` is a record type (a row). -/
-@[expose] public def rowTy : Ty → Bool
+public def rowTy : Ty → Bool
   | .field .. | .emptyRow => true
   | _ => false
 
 /-- The labels of a row, in order. -/
-@[expose] public def rowLabels : Ty → List String
+public def rowLabels : Ty → List String
   | .field f _ tail => f :: rowLabels tail
   | _ => []
 
@@ -757,7 +760,7 @@ theorem assoc_ext : ∀ {fs gs : List (String × Data)}, fs.map Prod.fst = gs.ma
 
 /-- What `eqAt` at a row says of two records whose fields fit it: every field the row names is
 equal. -/
-@[expose] public def RowEqStmt (R : Ty) : Prop :=
+public def RowEqStmt (R : Ty) : Prop :=
   ∀ {x y : Term} {fs gs : List (String × Data)}, Evaluates x (Data.record fs).term →
     Evaluates y (Data.record gs).term → (rowLabels R).Nodup →
     (∀ f ∈ rowLabels R, f ∈ fs.map Prod.fst ∧ f ∈ gs.map Prod.fst) →
@@ -766,7 +769,7 @@ equal. -/
     Evaluates (eqAt R x y) (.boolean true) → ∀ f M, rowMember R f = some M → fieldsLookup f fs = fieldsLookup f gs
 
 /-- What `eqAt` says of two terms whose data fit the type: they are equal. -/
-@[expose] public def EqDataStmt (T : Ty) : Prop :=
+public def EqDataStmt (T : Ty) : Prop :=
   ∀ {x y : Term} {d e : Data}, Evaluates x d.term → Evaluates y e.term → EqFits T d → EqFits T e →
     Evaluates (eqAt T x y) (.boolean true) → d = e
 
@@ -897,14 +900,15 @@ public theorem quorum_change_needs_k {S T : Ty} {ms : List String} {k : Nat} {g 
   have hmem := member_true rfl (hm _ (List.mem_cons_self ..))
   obtain ⟨m, hmm, _⟩ := id hmem
   have hpos : 0 < ms.length := List.length_pos_of_mem hmm
-  simp only [subst_ifBool, subst_notT, subst_eqAt] at hrest
+  simp only [subst_ifBool, subst_falseT, subst_trueT, subst_eqAt] at hrest
   obtain ⟨b, hb, hr⟩ := ifBool_inv hrest
   cases b
   · have := eqAt_fields_true hfn hfo (by simpa using notT_false hb)
     exact (hne this).elim
-  · simp only [↓reduceIte, subst_allOf, List.map_cons, List.map_nil] at hr
-    refine ⟨hmem, quorate_true rfl hpos (allOf_ok hr _ (List.mem_cons_self ..)), ?_⟩
-    have hz := allOf_ok hr _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))
+  · simp only [↓reduceIte, subst_guards, List.map_cons, List.map_nil] at hr
+    have hr' := (guards_ok hr).1
+    refine ⟨hmem, quorate_true rfl hpos (hr' _ (List.mem_cons_self ..)), ?_⟩
+    have hz := hr' _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))
     simp at hz
     obtain ⟨z, ha, hb⟩ := eqNat_true hz
     have := natT_eval hb; subst this
@@ -1034,36 +1038,36 @@ example :
   ⟨admits_of_run 200 (by decide +kernel), refuses_of_run 200 (by decide +kernel)⟩
 
 /-- A door: `shut --open--> open --close--> shut`, methods `open` (0) and `close` (1). -/
-@[expose] public def doorLaw : Term :=
+public def doorLaw : Term :=
   machineLaw unitTy "door" ["open", "shut"] "shut" [("shut", 0, "open"), ("open", 1, "shut")]
 
-@[expose] public def door (s : String) : Data := .record [("door", .variant s (.record []))]
+public def door (s : String) : Data := .record [("door", .variant s (.record []))]
 
 /-- Three members, two approvals needed, guarding `total`. -/
-@[expose] public def councilLaw : Term := quorumLaw unitTy .natural ["ann", "bob", "cy"] 2 "total"
+public def councilLaw : Term := quorumLaw unitTy .natural ["ann", "bob", "cy"] 2 "total"
 
-@[expose] public def council (total approvals : Nat) (proposal : Data) : Data :=
+public def council (total approvals : Nat) (proposal : Data) : Data :=
   .record [("approvals", .natural approvals), ("proposal", proposal), ("total", .natural total)]
 
 /-- At most one change of `total` per epoch of 10 heights. -/
-@[expose] public def rateLaw : Term := windowedLaw unitTy .natural 10 1 "total"
+public def rateLaw : Term := windowedLaw unitTy .natural 10 1 "total"
 
-@[expose] public def rated (total count epoch : Nat) : Data :=
+public def rated (total count epoch : Nat) : Data :=
   .record [("count", .natural count), ("epoch", .natural epoch), ("total", .natural total)]
 
 /-! ### A record-guarded quorum -/
 
 /-- A pair of naturals, as a record type and as data. -/
-@[expose] public def pairT : Ty := .field "hi" .natural (.field "lo" .natural .emptyRow)
-@[expose] public def pairD (h l : Nat) : Data := .record [("hi", .natural h), ("lo", .natural l)]
+public def pairT : Ty := .field "hi" .natural (.field "lo" .natural .emptyRow)
+public def pairD (h l : Nat) : Data := .record [("hi", .natural h), ("lo", .natural l)]
 
-@[expose] public def pairCouncilLaw : Term := quorumLaw unitTy pairT ["ann", "bob", "cy"] 2 "total"
+public def pairCouncilLaw : Term := quorumLaw unitTy pairT ["ann", "bob", "cy"] 2 "total"
 
-@[expose] public def pairCouncil (total : Data) (approvals : Nat) (proposal : Data) : Data :=
+public def pairCouncil (total : Data) (approvals : Nat) (proposal : Data) : Data :=
   .record [("approvals", .natural approvals), ("proposal", proposal), ("total", total)]
 
 /-- The run's boolean, if it ends in one. -/
-@[expose] public def runBool : Option Term → Option Bool
+public def runBool : Option Term → Option Bool
   | some (.boolean b) => some b
   | _ => none
 

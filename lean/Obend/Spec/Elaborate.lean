@@ -28,6 +28,10 @@ public import Obend.Law.Contract
 public import Obend.Law.Proofs.Std
 public import Obend.Spec.LawCompile
 public import Obend.Logic.Obligation
+import all Obend.Spec.C4
+import all Obend.Law.Contract
+import all Obend.Law.Proofs.Std
+import all Obend.Spec.LawCompile
 public section
 namespace Obend.Spec.Elaborate
 open Lean (Json toJson)
@@ -2516,11 +2520,11 @@ end ProofStep
 
 /-- The target conclusion proposition of a `ContractDecl` (its declared `invariant`,
     defaulting to `.bool true` when omitted). -/
-@[expose] def _root_.Obend.Spec.Syntax.ContractDecl.conclusion (c : ContractDecl) : Expr :=
+abbrev _root_.Obend.Spec.Syntax.ContractDecl.conclusion (c : ContractDecl) : Expr :=
   c.invariant.getD (.bool true)
 
 /-- Constructive boolean equality on `String` (`0 Classical.choice`). -/
-@[expose] def strEq (a b : String) : Bool :=
+abbrev strEq (a b : String) : Bool :=
   decide (a = b)
 
 theorem strEq_eq_true {a b : String} (h : strEq a b = true) : a = b := by
@@ -2538,7 +2542,7 @@ theorem strEq_eq_false {a b : String} (h : strEq a b = false) : a ≠ b := by
   cases h
 
 /-- Constructive boolean equality for `Param` (`0 Classical.choice`). -/
-@[expose] def paramEq (a b : Param) : Bool :=
+abbrev paramEq (a b : Param) : Bool :=
   strEq a.name b.name && strEq a.type b.type && strEq a.quantity b.quantity
 
 theorem paramEq_eq_true {a b : Param} (h : paramEq a b = true) : a = b := by
@@ -2558,7 +2562,8 @@ theorem paramListEq_eq_true : ∀ {a b : List Param}, paramListEq a b = true →
   | [], _ :: _, h => by cases h
   | _ :: _, [], h => by cases h
   | _ :: _, _ :: _, h => by
-    simp only [paramListEq, Bool.and_eq_true] at h
+    dsimp only [paramListEq] at h
+    rw [Bool.and_eq_true] at h
     rw [paramEq_eq_true h.1, paramListEq_eq_true h.2]
 
 mutual
@@ -2761,7 +2766,7 @@ theorem allStepsValid_mem : ∀ {steps : List IsarStep} {s : IsarStep},
 
 /-- Verify an Isar step list against target `conclusion`: `steps` must be non-empty, every step
     must have a valid non-empty justification, and the terminal step must discharge `conclusion`. -/
-@[expose] def verifyIsarSteps (conclusion : Expr) (steps : List IsarStep) : Bool :=
+abbrev verifyIsarSteps (conclusion : Expr) (steps : List IsarStep) : Bool :=
   match lastStepOf steps with
   | none => false
   | some lastStep => allStepsValid steps && isTerminalDischargeStep conclusion lastStep
@@ -2771,16 +2776,18 @@ theorem allStepsValid_mem : ∀ {steps : List IsarStep} {s : IsarStep},
   verifyIsarSteps c.conclusion c.steps
 
 /-- Executable Isar Proof-Script Verifier for a `Claim`. -/
-@[expose] def verifyClaimProofScript (c : Claim) : Bool :=
+abbrev verifyClaimProofScript (c : Claim) : Bool :=
   verifyIsarSteps c.body c.steps
 
 /-- Extract the external judge format tag from an `IsarMethod`, if any. -/
-@[expose] def isarMethodJudgeTag? : IsarMethod → Option String
+abbrev isarMethodJudgeTag? (m : IsarMethod) : Option String :=
+  match m with
   | .judge tag => some tag
   | _ => none
 
 /-- Extract the external judge format tag from a single `ProofStep` / `IsarStep`, if any. -/
-@[expose] def isarStepJudgeTag? : IsarStep → Option String
+abbrev isarStepJudgeTag? (s : IsarStep) : Option String :=
+  match s with
   | .haveStep _ _ m => isarMethodJudgeTag? m
   | .showStep _ m => isarMethodJudgeTag? m
   | .obtainStep _ _ m => isarMethodJudgeTag? m
@@ -2808,7 +2815,7 @@ structure ElaboratedIsarCert where
   claim        : Obend.Law.Claim
 
 /-- Elaborate a `ContractDecl` into an `ElaboratedIsarCert` (`0 Classical.choice`). -/
-@[expose] def elaborateContractIsarCert (_m : Module) (c : ContractDecl) : ElaboratedIsarCert :=
+abbrev elaborateContractIsarCert (_m : Module) (c : ContractDecl) : ElaboratedIsarCert :=
   { contractName := c.name
     targetType   := c.targetType
     conclusion   := c.conclusion
@@ -2818,7 +2825,7 @@ structure ElaboratedIsarCert where
     claim        := .keeps c.targetType c.name }
 
 /-- Elaborate all `ContractDecl`s in a `Syntax.Module` into `ElaboratedIsarCert`s. -/
-@[expose] def elaborateModuleIsarCerts (m : Module) : List ElaboratedIsarCert :=
+abbrev elaborateModuleIsarCerts (m : Module) : List ElaboratedIsarCert :=
   m.contracts.map (elaborateContractIsarCert m)
 
 /-- Soundness of `isTerminalDischargeStep` on a `showStep`: the shown proposition equals `conclusion`
@@ -2949,6 +2956,19 @@ theorem verifyIsarProofScript_sound (c : ContractDecl)
       exact allStepsValid_mem h.1 hs
     · intro label prop m hmem
       exact validIsarStep_haveStep (allStepsValid_mem h.1 hmem)
+
+/-- Constructive inhabitedness witness for `isTerminalDischargeStep`. -/
+theorem isTerminalDischargeStep_inhabited :
+    ∃ (conclusion : Expr) (s : IsarStep),
+      isTerminalDischargeStep conclusion s = true :=
+  ⟨.bool true, .byMethod .decide, rfl⟩
+
+/-- Constructive inhabitedness witness for `verifyIsarProofScript`. -/
+theorem verifyIsarProofScript_inhabited :
+    ∃ c : ContractDecl, 0 < c.steps.length ∧ verifyIsarProofScript c = true :=
+  ⟨{ name := "inv_ok", targetType := "State", invariant := some (.bool true),
+     steps := [.byMethod .decide] },
+   by decide, rfl⟩
 
 end Obend.Spec.Elaborate
 

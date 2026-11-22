@@ -43,6 +43,9 @@ public import Obend.Law.Std
 public import Obend.Law.Claim
 public import Obend.Law.Proofs.Claim
 public import Obend.Core.Bidirectional
+import all Obend.Law.Syntax
+import all Obend.Law.Std
+import all Obend.Law.Claim
 public section
 namespace Obend.Spec.LawCompile
 open Obend.Law
@@ -61,7 +64,7 @@ inductive Kind where
   deriving DecidableEq, Repr
 
 /-- How field `f` of the state type `S` reads: a natural, a boolean, or not at all. -/
-@[expose] def fieldKind (S : Ty) (f : String) : Option Kind :=
+abbrev fieldKind (S : Ty) (f : String) : Option Kind :=
   match Obend.Core.Bidirectional.rowMember S f with
   | some .natural => some .nat
   | some .boolean => some .bool
@@ -79,9 +82,9 @@ structure Read where
   value : Term
 
 /-- `t : optNatTy` is `some`. -/
-@[expose] def isSomeT (t : Term) : Term := .case t [("none", falseT), ("some", trueT)]
+abbrev isSomeT (t : Term) : Term := .case t [("none", falseT), ("some", trueT)]
 /-- The payload of `t : optNatTy` (`0` at `none`). -/
-@[expose] def payloadT (t : Term) : Term := .case t [("none", natT 0), ("some", .bound 0)]
+abbrev payloadT (t : Term) : Term := .case t [("none", natT 0), ("some", .bound 0)]
 
 /-- A field read at the type `S` gives it. -/
 @[expose] def fieldRead (S : Ty) (f : String) (t : Term) : Read :=
@@ -90,7 +93,7 @@ structure Read where
   | none => ⟨falseT, natT 0⟩
 
 /-- An optional request fact. -/
-@[expose] def optRead (t : Term) : Read := ⟨isSomeT t, payloadT t⟩
+abbrev optRead (t : Term) : Read := ⟨isSomeT t, payloadT t⟩
 
 /-- What a reference reads at cursor `a`, as a natural (a label reads as absent). -/
 @[expose] def refRead (S : Ty) (a : At) : LawRef → Read
@@ -114,11 +117,11 @@ constant. -/
   | .labelConst s => some (.label s)
   | _ => none
 
-@[expose] def orT (a b : Term) : Term := .ifBool a trueT b
-@[expose] def impliesT (a b : Term) : Term := .ifBool a b trueT
+abbrev orT (a b : Term) : Term := .ifBool a trueT b
+abbrev impliesT (a b : Term) : Term := .ifBool a b trueT
 
 /-- Both readings present, and `cmp` of their values. -/
-@[expose] def both (x y : Read) (cmp : Term → Term → Term) : Term :=
+abbrev both (x y : Read) (cmp : Term → Term → Term) : Term :=
   andT x.present (andT y.present (cmp x.value y.value))
 
 /-! ## The condition and the law -/
@@ -179,19 +182,19 @@ from (`monotone`, `writeOnce` read it). -/
   guard (cond S src a e) name okT
 
 /-- Why a relaw of a package law is refused: it names the package, whose upgrade is the path. -/
-@[expose] def relawRefusal (pkg : String) : String :=
+abbrev relawRefusal (pkg : String) : String :=
   "package law of " ++ pkg ++ ": changed by a package upgrade, not a relaw"
 
 /-- **The compiled law** `name` of package `pkg` over the state type `S`: a write or an invoke is
 judged with the old state, a birth as a first write, an adoption as the identity write; a relaw is
 refused naming the package; a retirement is admitted. -/
-@[expose] def compile (S : Ty) (pkg name : String) (e : LawExpr) : Term :=
+abbrev compile (S : Ty) (pkg name : String) (e : LawExpr) : Term :=
   lawOf6 (clause S name e .none) (clause S name e .same) (fun _ => refusedT (relawRefusal pkg))
     (fun _ => okT) (clause S name e .prior) (clause S name e .prior)
 
 /-- A package's laws, each compiled, by name (the kernel installs every one: an act is admitted
 when each admits). -/
-@[expose] def compilePackage (S : Ty) (pkg : String) (laws : List (String × LawExpr)) : List (String × Term) :=
+abbrev compilePackage (S : Ty) (pkg : String) (laws : List (String × LawExpr)) : List (String × Term) :=
   laws.map fun (name, e) => (name, compile S pkg name e)
 
 /-- The old state an act is judged with, as `denote` takes it. -/
@@ -204,7 +207,7 @@ when each admits). -/
 /-! ## What the theorems quantify over -/
 
 /-- The request a kernel builds for an act with the fragment's facts. -/
-@[expose] def reqOf (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) (facts : Facts) : Data :=
+abbrev reqOf (agent principal : String) (notBefore validUntil : Nat) (occasion : Data) (facts : Facts) : Data :=
   requestAt agent principal notBefore validUntil occasion facts.subject facts.caller ⟨facts.height⟩ facts.turn
 
 /-- The state's fields fit `S` at field `f`: a natural or boolean field of `S` holds a natural or
@@ -235,29 +238,29 @@ that name; a field `S` does not read at all holds neither a scalar nor a label. 
 
 /-- Construct the canonical `Term.record [("step", stepTerm), ("inv", invTerm)]` layout
     for a `Claim.keeps` obligation pairing a transition/law `stepTerm` with an invariant `invTerm`. -/
-@[expose] def compileKeepsClaim (stepTerm invTerm : Term) : Term :=
+def compileKeepsClaim (stepTerm invTerm : Term) : Term :=
   .record [("step", stepTerm), ("inv", invTerm)]
 
 /-- Extract the named field list from a `compileKeepsClaim` record term for `Obend.Law.checkClaim`. -/
-@[expose] def fieldsOfKeepsRecord : Term → List (String × Term)
+def fieldsOfKeepsRecord : Term → List (String × Term)
   | .record fs => fs
   | _ => []
 
 /-- Check a `compileKeepsClaim` record term against `Claim.keeps "inv" "step"`. -/
-@[expose] def checkKeepsClaimRecord (r : Term) (claim : Claim := .keeps "inv" "step") : Bool :=
+def checkKeepsClaimRecord (r : Term) (claim : Claim := .keeps "inv" "step") : Bool :=
   checkClaim (fieldsOfKeepsRecord r) claim
 
 /-- Compile a `LawExpr` predicate over state type `S` into a closed `S → boolean` invariant term. -/
-@[expose] def compileKeepsInvariant (S : Ty) (e : LawExpr) : Term :=
+def compileKeepsInvariant (S : Ty) (e : LawExpr) : Term :=
   .lam ((cond S .none ⟨0⟩ e).rename (fun i => i - 1))
 
 /-- Compile a closed invariant `invTerm` over state type `S` into a certifying-shape `keeps` law. -/
-@[expose] def compileKeepsLaw (S : Ty) (invTerm : Term) : Term :=
+def compileKeepsLaw (S : Ty) (invTerm : Term) : Term :=
   keeps S invTerm
 
 /-- Compile a closed invariant `invTerm` over `S` directly into the `compileKeepsClaim` record
     `Term.record [("step", keeps S invTerm), ("inv", invTerm)]`. -/
-@[expose] def compileKeeps (S : Ty) (invTerm : Term) : Term :=
+def compileKeeps (S : Ty) (invTerm : Term) : Term :=
   compileKeepsClaim (keeps S invTerm) invTerm
 
 /-- Projecting `"step"` from `compileKeepsClaim stepTerm invTerm` steps in one `Core.Term.Step` to `stepTerm`. -/

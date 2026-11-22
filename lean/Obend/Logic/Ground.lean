@@ -13,7 +13,8 @@ any regime proves it for all data (`ground_refutes`). Running out of fuel is `un
 -/
 public import Obend.Logic.Claim
 public import Obend.Judge.Class
-@[expose] public section
+import all Obend.Logic.Claim
+public section
 namespace Obend.Logic
 open Obend.Core.Term
 open Obend.Core.Data (Data)
@@ -26,15 +27,15 @@ structure ClaimProblem where
   args : List Data
 
 /-- The run of the claim at the instance. -/
-def ClaimProblem.term (p : ClaimProblem) : Term := apps p.claim (p.args.map Data.term)
+@[expose] def ClaimProblem.term (p : ClaimProblem) : Term := apps p.claim (p.args.map Data.term)
 
 /-- A Boolean read back from a run. -/
-def readBool : Option Term → Option Bool
+@[expose] def readBool : Option Term → Option Bool
   | some (.boolean b) => some b
   | _ => none
 
 /-- The Boolean the run reaches within `fuel` steps. -/
-def groundAt (p : ClaimProblem) (fuel : Nat) : Option Bool := readBool (Obend.Law.run fuel p.term)
+@[expose] def groundAt (p : ClaimProblem) (fuel : Nat) : Option Bool := readBool (Obend.Law.run fuel p.term)
 
 theorem groundAt_eval {p : ClaimProblem} {fuel : Nat} {b : Bool} (h : groundAt p fuel = some b) :
     Evaluates p.term (.boolean b) := by
@@ -48,7 +49,7 @@ inductive GroundClause where
   | falseAt
   deriving DecidableEq, Repr
 
-def groundCheck (k : Nat) (p : ClaimProblem) (_ : Unit) : Judge.Verdict GroundClause :=
+@[expose] def groundCheck (k : Nat) (p : ClaimProblem) (_ : Unit) : Judge.Verdict GroundClause :=
   match groundAt p k with
   | some true => .ok
   | some false => .refused .falseAt []
